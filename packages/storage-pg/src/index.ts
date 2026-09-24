@@ -11,6 +11,7 @@ import type { Db } from './db.js';
 import { PgInboxStore } from './inbox.js';
 import { PgJobStore } from './jobs.js';
 import { PgJournalStore } from './journal.js';
+import { PgMcpServerStore } from './mcp-servers.js';
 import { migrate } from './migrate.js';
 import { PgPersonaStore } from './persona.js';
 import { PgPermissionGrantStore } from './permission-grants.js';
@@ -29,6 +30,7 @@ export { PgPracticeStore } from './practices.js';
 export { PgInboxStore } from './inbox.js';
 export { PgJobStore } from './jobs.js';
 export { PgJournalStore } from './journal.js';
+export { PgMcpServerStore } from './mcp-servers.js';
 export { PgPersonaStore } from './persona.js';
 export { PgPermissionGrantStore } from './permission-grants.js';
 export { PgCredentialVaultStore } from './credentials.js';
@@ -130,6 +132,7 @@ export function createPgStoresFromDb(db: Db, close?: () => Promise<void>): PgSto
     permissionGrants: new PgPermissionGrantStore(db),
     profile: new PgProfileStore(db),
     credentials: new PgCredentialVaultStore(db),
+    mcpServers: new PgMcpServerStore(db),
     tokens: new PgTokenPoolStore(db),
     usage: new PgUsageStore(db),
     ...sessionStores(db),

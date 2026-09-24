@@ -170,8 +170,8 @@ function Credentials({ runner }: { runner: RunnerSummary }) {
  * （`packages/core/src/manager.ts` の `RunnerOverview.pushHealth` の doc）。
  *
  * **`pushHealth` 自体が無ければ何も描かない**（一度も押し込みを試みていない
- * ＝AGENTS.md「取れない軸に0の行を作らない」）。3種類（プロファイル・環境変数・
- * 認証トークン）は独立の軸なので、1つでも失敗していれば個別に赤く出す
+ * ＝AGENTS.md「取れない軸に0の行を作らない」）。4種類（プロファイル・環境変数・
+ * 認証トークン・MCP の登録）は独立の軸なので、1つでも失敗していれば個別に赤く出す
  * ——1つの成否へ畳まない。
  */
 function PushHealth({ runner }: { runner: RunnerSummary }) {
@@ -182,6 +182,8 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
     ['プロファイル', pushHealth.profile],
     ['環境変数', pushHealth.credentials],
     ['認証トークン', pushHealth.agentToken],
+    // #325 段4。ラベルはクローンの `runner_list`（`packages/core/src/tools.ts`）と揃える。
+    ['MCP の登録', pushHealth.mcpServers],
   ];
   const attempted = items.filter(
     (item): item is [string, RunnerPushOutcome] => item[1] !== undefined,

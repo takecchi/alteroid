@@ -1044,6 +1044,29 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 構造化するかどうかはこの Issue の項目1の範囲外）。
      */
     approvalId: z.string().optional(),
+    /**
+     * このターンが承認待ち（`ask_human`）への回答（`human_answer`）から起きた
+     * ものであれば、その承認の id（issue #847 の案B）。**答えと、その後にクローンが
+     * 取った行動を対で読むための印である。**
+     *
+     * **上の `approvalId` とは別の欄である。** あちらは「人間の会話へ返した
+     * outbound がどの承認への返答か」だけを言い、`with: 'self'` には意図して
+     * 立てない（その doc）。こちらは会話の有無を問わず、**答えのターンの中で
+     * クローン自身が書いた行**（`decision` / `memory_update` / 自分の
+     * `tool_use` / outbound の `exchange`）と、そのターンの入口の行
+     * （`ターンの入力: human_answer …` の inbound）に立つ。同じ欄を
+     * `decision` / `memory_update` / `tool_use` にも置いてある（意味は同じ）。
+     *
+     * **一般化した「基準」はここに書かない**（issue #847 の受け入れ基準）。
+     * 残すのは「どの答えの後に、何をしたか」の対だけで、そこから何を学ぶかは
+     * 人間とクローンの会話の側が決める。
+     *
+     * **optional である（後方互換）。** この欄が入る前の行には無い。⟹ 古い答えで
+     * 対が0件なのは「行動が無い」ではなく「記録していない」である。読む側
+     * （`approval-trace.ts` の `traceApproval`）は、ターンの入口の行にこの欄が
+     * 在るかどうかで2つを分ける。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('decision'),
@@ -1128,6 +1151,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         workKind: z.string().optional(),
       })
       .optional(),
+    /**
+     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
+     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
+     * の doc に在る——ここに写さない。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   /**
    * 認証トークンのプールが回った / 回らなかった（Issue #393）。
@@ -1475,6 +1504,16 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * `TOOL_USE_ERROR_EXCERPT`）で切り詰める。
      */
     error: z.string().optional(),
+    /**
+     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
+     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
+     * の doc に在る——ここに写さない。
+     *
+     * **立つのは本セッションの actor の行だけである**（`clone.ts` の
+     * `#journalToolUse`）。蒸留のサイドクエリの道具（`clone-distill`）は
+     * 答えのターンと並行して走りうるので立てない。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('memory_update'),
@@ -1596,6 +1635,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      */
     bytesAfter: z.number().int().nonnegative().optional(),
     summary: z.string(),
+    /**
+     * 承認への回答（`human_answer`）から起きたターンの中で書いた行なら、その
+     * 承認の id（issue #847 の案B）。意味と読み方は `exchange.answeredApprovalId`
+     * の doc に在る——ここに写さない。
+     */
+    answeredApprovalId: z.string().optional(),
   }),
   z.object({
     type: z.literal('daily_report'),
@@ -3263,26 +3308,41 @@ export type JobLease = z.infer<typeof jobLeaseSchema>;
  * `manager_stop`（running・非 force）が `pool.unpushedWork()` から取った、
  * 作業ツリー1本ぶんの枝名の写し（Issue #1228 候補(1)）。
  *
- * **`relativePath` / `branch` の意味は `runner-protocol.ts` の
+ * **`relativePath` / `branch` / `remoteOrigin` の意味は `runner-protocol.ts` の
  * `unpushedWorkTreeSchema` と同一だが、同じ zod スキーマの参照ではない。**
  * `runner-protocol.ts` は `schema.ts` から `jobStatusSchema` 等を import して
  * いる（`grep -Fn -- "from './schema.js'" packages/core/src/runner-protocol.ts`
  * で当たる）ので、逆向きの import（ここから `unpushedWorkTreeSchema` を
  * 引く）は循環参照になる。**だから形だけを独立して複製する。** 複製が
- * 二重管理の実害を生むとしても、この2欄（`relativePath` / `branch`）が
- * 単体で変わることはまず無いと判断した——変えるなら両方を見比べながら
- * 直すこと。
+ * 二重管理の実害を生むとしても、この3欄（`relativePath` / `branch` /
+ * `remoteOrigin`）が単体で変わることはまず無いと判断した——変えるなら
+ * 両方を見比べながら直すこと。
  *
  * 出してよい範囲（有無・件数・枝名まで。ファイル名・差分の中身・
  * コミットメッセージ・author は含まない）は `unpushedWorkTreeSchema` の doc
  * が引いた線をそのまま継ぐ——ここは既に線の内側に在る値を運ぶだけで、
- * 新しい調べものはしない。
+ * 新しい調べものはしない。**Issue #1376 B2 でその線に開けた1点の穴
+ * （origin remote の host/path。userinfo・クエリ・フラグメント・資格・
+ * 生の URL 文字列は落とす）も、同じく `unpushedWorkTreeSchema.remoteOrigin`
+ * の doc をそのまま継ぐ。**
  */
 export const observedWorktreeBranchSchema = z.object({
   /** 探索の起点（`unpushedWorkResultSchema.cwd`）からの相対パス。 */
   relativePath: z.string(),
   /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
   branch: z.string().nullable(),
+  /**
+   * origin remote の host と path（Issue #1376 B2）。取れなかった・
+   * 解釈できなかったときは省く——`unpushedWorkTreeSchema.remoteOrigin` の
+   * doc（落とすもの: userinfo・クエリ・フラグメント・資格・生の URL）を
+   * そのまま継ぐ。
+   */
+  remoteOrigin: z
+    .object({
+      host: z.string(),
+      path: z.string(),
+    })
+    .optional(),
 });
 
 export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema>;

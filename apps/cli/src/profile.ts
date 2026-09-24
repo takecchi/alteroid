@@ -208,6 +208,16 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     if (response.status === 403) {
       const body = await response.json().catch(() => ({}));
       const kind = forbiddenKindOf(body);
+      // **2026-09-24（#1122）に `/profile` の門は `requireOwner` へ移った** ⟹ 宣言して
+      // いないアカウントの 403 はこの本文で返る。案内は `credential.ts` と同じ
+      // （`alteroid access owner <id>`）。下の `not_operator` の枝は、移す前の
+      // デーモンと繋いだときのために残してある。
+      if (kind === 'not_declared_owner') {
+        throw new Error(
+          describeAuthFailure(403, target, kind) ??
+            '実行環境の持ち主として宣言されたアカウントだけが操作できます。',
+        );
+      }
       if (kind === 'not_operator') {
         throw new Error(
           '実行環境プロファイルを触れるのは、その実行環境の持ち主だけです。\n' +

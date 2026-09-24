@@ -58,6 +58,13 @@ export interface AlteroidPaths {
    * `PUT /credentials` を経由する）。
    */
   credentials: string;
+  /**
+   * 人間の MCP 連携の登録: JSON（0600。`.mcp.json` と同じ形。#325 段1）。
+   *
+   * `credentials` と同じ理由で `memory/` には置かない —— `env` / `headers` に
+   * 鍵が入りうる。
+   */
+  mcpServers: string;
 }
 
 export const ALTEROID_HOME_ENV = 'ALTEROID_HOME';
@@ -81,5 +88,6 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     usage: join(root, 'usage'),
     tokens: join(root, 'tokens.json'),
     credentials: join(root, 'credentials.json'),
+    mcpServers: join(root, 'mcp-servers.json'),
   };
 }

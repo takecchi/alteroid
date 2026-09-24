@@ -36,6 +36,7 @@ import type { ManagerActivityInput } from './manager-activity.js';
 import { codeSpan } from './markdown-span.js';
 import { JournalFoldWindow, foldedRunText } from './journal-fold.js';
 import type { CredentialService } from './credential-service.js';
+import type { McpServerService } from './mcp-server-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap, type RecentMap } from './recent.js';
 import { reportRunnerRevision, resolveBuildRevision } from './revision.js';
@@ -45,6 +46,7 @@ import {
   isFencedRunnerError,
   isRetryableRunnerError,
   RunnerHttpError,
+  RunnerMcpServersUnsupportedError,
 } from './runner-protocol.js';
 import type {
   RunnerClient,
@@ -53,6 +55,7 @@ import type {
   RunnerExecutionResources,
   RunnerLegState,
   RunnerLiveness,
+  RunnerMcpServersFingerprint,
   RunnerProfileFingerprint,
   RunnerRegistry,
   RunnerRevisionStatus,
@@ -536,6 +539,47 @@ export interface ManagerSummary {
    * はもう走っていない。詳しくは `schema.ts` の `lastSystemError` の doc。
    */
   lastSystemError?: NonNullable<Job['lastSystemError']>;
+  /**
+   * この委譲が**枠（利用上限）で止まった**印が立った時刻
+   * （`jobSchema.usageStoppedAt` の写し。Issue #1212 残件2）。
+   *
+   * **台帳に載っているのに要約へ載っていなかった。** `lastFailure`（#714）と
+   * 同じ穴で、`Job.usageStoppedAt` は台帳にはあるのに `ManagerSummary` を
+   * 経由しないと外へ出ない——人間の面（CLI・Web）にも `manager_list` の
+   * 行にもこの印は出せなかった。
+   *
+   * ## 値は `#usageStopped`（`Set`）で門を通してから運ぶ
+   *
+   * **真の参照は `#usageStopped` である**（この欄のすぐ下、`#usageStopped`
+   * の doc「**`Set` が真の参照で、台帳側はデーモンの寿命を跨ぐための写し
+   * である**」）。`summaryOf` はプレーン関数で `this` を持たないので、
+   * `live` / `runnerLostSince` などと同じ作法——Pool 側のメソッドが
+   * `this.#usageStopped.has(managerId)` で門を通した後の値だけを引数で渡す。
+   * **`record.job.usageStoppedAt` をそのまま素通しにしない**——素通しにすると、
+   * `#clearUsageStoppedMark` が `Set` を先に下ろしてから台帳を非同期に
+   * 下ろす窓（同メソッドの doc）で、`Set` はもう「止まっていない」と
+   * 言っているのに要約だけがまだ古い時刻を運ぶ、という食い違いが起きうる。
+   *
+   * ## `lastFailure` とは別の軸——重なりは許す。排他にしない
+   *
+   * `usage_notice`（`kind: 'reached'`）だけが立てる狭い印で、`lastFailure`
+   * （理由を問わずターンが失敗で終わったこと）より狭い。**この委譲の最後の
+   * 報告が利用上限そのもので終わった回は、通常どちらも立つ**——`case
+   * 'report'` は `event.failure` が在るとき `lastFailure` だけを書き
+   * `usageStoppedAt` には触れず、`event.failure` が無い（成功した）ときだけ
+   * 両方を同じ分岐で一緒に下ろす（このファイルの `case 'report'` の該当箇所）。
+   * ⟹ `done` に落ち着いた時点でこの欄が残っているなら、直前の報告は必ず
+   * 失敗だった、という関係になる。**ただし走行中は重ならないことがある**
+   * ——`usage_notice` はターンの途中でも届くので、まだ `report` が来ていない
+   * 回では `usageStoppedAt` だけが先に立ちうる。**どちらか一方だけを見て
+   * もう一方を推測しない**（`situation.ts` の `countManagerSituation` は
+   * この2つを独立に数える）。
+   *
+   * **`undefined` の意味は2つある**（`schema.ts` の `usageStoppedAt` の doc と
+   * 同じ）——止まっていないことと、この欄より前に作られたジョブであること。
+   * 見分ける必要は無い。
+   */
+  usageStoppedAt?: string;
   /** どの runner で走っているか（`manager_id → runner_id` の対応）。 */
   runnerId?: string;
   workspace?: WorkspaceLocator;
@@ -927,6 +971,14 @@ export interface RunnerPushHealth {
   profile?: RunnerPushOutcome;
   credentials?: RunnerPushOutcome;
   agentToken?: RunnerPushOutcome;
+  /**
+   * 人間の MCP 連携の登録（#325 段3。`#pushMcpServers`）。
+   *
+   * **口を持たない古い runner へは `status: 'failed'` で記録するが、挑み直しには
+   * 数えない**（`RunnerMcpServersUnsupportedError` の doc。`#settlePushRetry`）。
+   * 理由の文言（`error`）がその旨を名乗る。
+   */
+  mcpServers?: RunnerPushOutcome;
 }
 
 /**
@@ -973,6 +1025,12 @@ export interface RunnerOverview {
   credentials?: RunnerCredentialFingerprint[];
   /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
   profile?: RunnerProfileFingerprint;
+  /**
+   * 置かれている MCP の登録の指紋と名前（#325 段3）。`fingerprints: true` を渡した
+   * ときだけ載る。**値は運ばない。** 置いていない・口を持たない・訊けなかった場合は
+   * 無い（3つを区別する材料は `pushHealth.mcpServers` のほうにある）。
+   */
+  mcpServers?: RunnerMcpServersFingerprint;
   /**
    * 実行環境の資源。`resources: true` を渡したときだけ載る（#315。`fingerprints`
    * と同じ opt-in の形——`ManagerPool.runners()` の doc を参照）。
@@ -2064,6 +2122,14 @@ export interface ManagerPoolOptions {
    * **降ろし直しも更新（`apply`）と同じ列を通す。**
    */
   credentials?: CredentialService;
+  /**
+   * 人間の MCP 連携の登録の1本道（#325 段3）。
+   *
+   * **プロファイル・環境変数とまったく同じ理由でここに要る** — runner は記憶
+   * ストアを読めないので、器が作り直されたときに降ろすのはデーモンの責任である。
+   * **降ろし直しも更新（`apply`）と同じ列を通す。**
+   */
+  mcpServers?: McpServerService;
   /**
    * いまの時刻（既定は `Date.now`）。**貸し出し期限の判定のために口を開けてある。**
    *
@@ -3593,6 +3659,13 @@ class Pool implements ManagerPool {
   readonly #runners: RunnerRegistry;
   readonly #profile: ProfileService | undefined;
   readonly #credentials: CredentialService | undefined;
+  readonly #mcpServers: McpServerService | undefined;
+  /**
+   * MCP の登録を受け取る口を持たないと分かった runner（#325 段3）。**挑み直しの
+   * 予約から外すためだけに持つ**（`#settlePushRetry`）。名乗り直しのたびに
+   * `#pushMcpServers` がもう一度試すので、runner を上げれば自然に外れる。
+   */
+  readonly #mcpServersUnsupported = new Set<string>();
   readonly #records = new Map<string, ManagerRecord>();
   /**
    * いまの時刻。**器の時計を直に読まない**（テストが判定の時刻を持てるようにする）。
@@ -4072,6 +4145,7 @@ class Pool implements ManagerPool {
     runners,
     profile,
     credentials,
+    mcpServers,
     now,
     leaseTtlMs,
     withheldReportFlushMs,
@@ -4087,6 +4161,7 @@ class Pool implements ManagerPool {
     this.#runners = runners;
     this.#profile = profile;
     this.#credentials = credentials;
+    this.#mcpServers = mcpServers;
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
@@ -4292,6 +4367,9 @@ class Pool implements ManagerPool {
       this.#tokenIdentity?.()?.generation,
       this.#tokenIdentity !== undefined,
       this.#resetTimeSkewMatches.get(record.job.id),
+      // **門を通す（Issue #1212 残件2）。** `record.job.usageStoppedAt` を
+      // 直接渡さない——`ManagerSummary.usageStoppedAt` の doc のとおり。
+      this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
     );
   }
 
@@ -4469,7 +4547,9 @@ class Pool implements ManagerPool {
       const resumed = await this.#resumeOnce(
         record,
         runner,
-        swapped ? `${runnerSwapNudge(record.job.workspace)}\n\n${message}` : message,
+        swapped
+          ? `${runnerSwapNudge(record.job.workspace, record.job.lastUnpushedWorkObservation)}\n\n${message}`
+          : message,
       );
       if (resumed !== 'resumed') {
         /*
@@ -4758,6 +4838,8 @@ class Pool implements ManagerPool {
           activeTokenGeneration,
           tokenGenerationPoolWired,
           this.#resetTimeSkewMatches.get(record.job.id),
+          // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
+          this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
         ),
       );
     }
@@ -4787,6 +4869,8 @@ class Pool implements ManagerPool {
           activeTokenGeneration,
           tokenGenerationPoolWired,
           this.#resetTimeSkewMatches.get(job.id),
+          // **門を通す（Issue #1212 残件2）。** `ManagerSummary.usageStoppedAt` の doc。
+          this.#usageStopped.has(job.id) ? job.usageStoppedAt : undefined,
         ),
       );
     }
@@ -4939,12 +5023,14 @@ class Pool implements ManagerPool {
         const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
         const pushHealth =
           entry.runnerId === undefined ? undefined : this.#pushHealth.get(entry.runnerId);
-        const [credentials, profile] =
+        const [credentials, profile, mcpServers] =
           client === undefined || !options.fingerprints
-            ? [undefined, undefined]
+            ? [undefined, undefined, undefined]
             : await Promise.all([
                 client.credentials().catch(() => undefined),
                 client.profile().catch(() => undefined),
+                // 口を持たない実装・古い runner では `undefined`（#325 段3）。
+                client.mcpServers?.().catch(() => undefined),
               ]);
         // **`resources` 自体が `undefined` = 訊けなかった。** `resources` が在って
         // `pids` が無い = 訊けたが読めなかった。この2つを区別するために、失敗も
@@ -4992,6 +5078,7 @@ class Pool implements ManagerPool {
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
           ...(profile === undefined ? {} : { profile }),
+          ...(mcpServers === undefined ? {} : { mcpServers }),
           ...(resources === undefined ? {} : { resources }),
           revision: entry.revision,
           // **`credentials`/`profile` と違い、`fingerprints` の要否を見ない。**
@@ -5236,10 +5323,15 @@ class Pool implements ManagerPool {
             cwd: outcome.result.cwd,
             // **出してよい範囲を継ぐ**（`observedWorktreeBranchSchema` の doc）。
             // `unpushedCommitCount` 等は書き写さない——この欄が答えるのは
-            // 「どの枝を見ればよいか」までである。
+            // 「どの枝を見ればよいか」までである。`remoteOrigin` は
+            // Issue #1376 B2 でその線に開けた1点の穴（host/path のみ）を
+            // そのまま写す。
             worktrees: outcome.result.worktrees.map((worktree) => ({
               relativePath: worktree.relativePath,
               branch: worktree.branch,
+              ...(worktree.remoteOrigin === undefined
+                ? {}
+                : { remoteOrigin: worktree.remoteOrigin }),
             })),
           }
         : { kind: 'unavailable', at, reason: outcome.reason };
@@ -6144,6 +6236,9 @@ class Pool implements ManagerPool {
             this.#tokenIdentity?.()?.generation,
             this.#tokenIdentity !== undefined,
             this.#resetTimeSkewMatches.get(record.job.id),
+            // **門を通す（Issue #1212 残件2）。** この直前で `#usageStopped` は
+            // 台帳の写しから組み直し済み（このループ冒頭の doc）。
+            this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
           ),
         );
         continue;
@@ -6177,7 +6272,12 @@ class Pool implements ManagerPool {
       const runner = await this.#runnerOf(record);
       if (!runner) continue;
 
-      const nudge = restartNudge(job.status, 'daemon', job.workspace);
+      const nudge = restartNudge(
+        job.status,
+        'daemon',
+        job.workspace,
+        job.lastUnpushedWorkObservation,
+      );
       // **1本が戻せなくても、残りを道連れにしない。** ここで抜けると、後ろに
       // 並んでいた仕事が誰にも拾われないまま `running` として残る。
       //
@@ -6252,6 +6352,9 @@ class Pool implements ManagerPool {
             this.#tokenIdentity?.()?.generation,
             this.#tokenIdentity !== undefined,
             this.#resetTimeSkewMatches.get(record.job.id),
+            // **門を通す（Issue #1212 残件2）。** 同上——このループ冒頭で
+            // `#usageStopped` は組み直し済み。
+            this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
           ),
         );
       } catch (error) {
@@ -6843,6 +6946,47 @@ class Pool implements ManagerPool {
   }
 
   /**
+   * 名乗ってきた runner へ、いま正本に在る MCP の登録を降ろす（#325 段3）。
+   *
+   * **`#pushProfile` / `#pushCredentials` と同じ位置・同じ理由・同じ倒れ方である。**
+   * runner は記憶ストアを読めないので降ろすのはデーモンの責任で、失敗しても委譲は
+   * 止めず、降りていないことは日誌に残す（黙って連携0本で走ると、「連携が
+   * 届いていない」のか「連携そのものが壊れている」のかを誰も切り分けられない）。
+   * **別の呼びにしてあるのも同じ理由**（片方が落ちても片方は降りるべき）。
+   *
+   * **日誌には値を書かない。** 失敗の理由は runner の文言をそのまま運ぶが、その
+   * 文言は `parseMcpServers` が値を載せない形で作っている（欄の位置だけ）。
+   *
+   * **古い runner（口を持たない）は挑み直しに数えない**（`#mcpServersUnsupported`）。
+   */
+  async #pushMcpServers(runner: RunnerClient): Promise<void> {
+    if (this.#stopped || this.#mcpServers === undefined) return;
+    const runnerId = runner.runnerId;
+    try {
+      // **更新と同じ列に入れる**（`#pushProfile` と同じ）。
+      await this.#mcpServers.syncRunner(runner);
+      this.#mcpServersUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'mcpServers', { status: 'ok', at: this.#nowIso() });
+    } catch (error) {
+      const unsupported = error instanceof RunnerMcpServersUnsupportedError;
+      if (unsupported) this.#mcpServersUnsupported.add(runnerId);
+      else this.#mcpServersUnsupported.delete(runnerId);
+      this.#notePushOutcome(runnerId, 'mcpServers', {
+        status: 'failed',
+        at: this.#nowIso(),
+        error: String(error),
+      });
+      // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${String(error)}`,
+      });
+    }
+  }
+
+  /**
    * イベントの受け口を開く。**繋ぎに行くのはデーモン側**である。
    *
    * **一度きりにしない。** 名簿は動的で、runner は後から載る（roadmap M5）。
@@ -6906,6 +7050,10 @@ class Pool implements ManagerPool {
       // **名前→値の袋も同じ位置で降ろす。** 器が作り直されていれば置いた鍵は
       // 消えているので、ここで降ろさないと最初のマネージャーが鍵無しで走り出す。
       await this.#pushCredentials(runner);
+      // **MCP の登録も同じ位置で降ろす（#325 段3）。** 器が作り直されていれば
+      // runner のメモリに置いた登録は消えているので、ここで降ろさないと最初の
+      // マネージャーが連携0本で走り出す。
+      await this.#pushMcpServers(runner);
       // **認証トークンも同じ位置で降ろす。** プロファイルと同じ理由——名乗り
       // 任せにすると、最初のマネージャーが古いトークンで走り出しうる。
       await this.#pushAgentToken(runner);
@@ -7039,6 +7187,10 @@ class Pool implements ManagerPool {
         // きた runner は器ごと入れ替わっていることがあり、そのとき置いた鍵は
         // 消えている。
         await this.#pushCredentials(runner);
+        // **MCP の登録も同じ位置で降ろす（#325 段3。#connectTo と同じ）。** runner は
+        // 登録をメモリにしか持たないので、器ごと入れ替わった runner では消えている。
+        // 降ろし直さないと、再デプロイのたびにマネージャー・作業者の連携が0本へ戻る。
+        await this.#pushMcpServers(runner);
         // **認証トークンも同じ位置で降ろす（Issue #393）。** 直上の理由がそのまま
         // 効く —— **器が入れ替わっていれば置いた鍵も消えている。** この経路にだけ
         // 無かったので、繋ぎ直してきた runner は`#connectTo`と違って鍵が降りず、
@@ -7159,7 +7311,12 @@ class Pool implements ManagerPool {
         // 並んでいた仕事が誰にも拾われないまま `running` として残る。
         try {
           const cause: RestartCause = relocating ? 'relocated' : 'runner';
-          const message = restartNudge(status, cause, record.job.workspace);
+          const message = restartNudge(
+            status,
+            cause,
+            record.job.workspace,
+            record.job.lastUnpushedWorkObservation,
+          );
           // 断りが「新しく起きたこと」かを、挑む前の状態で覚えておく（下の日誌の条件）。
           const refusedBefore = record.leaseRefusal !== undefined;
           // 上の doc の順序。**戻れたら下で消す。**
@@ -9838,8 +9995,16 @@ class Pool implements ManagerPool {
    */
   #settlePushRetry(runnerId: string): void {
     const health = this.#pushHealth.get(runnerId);
+    // **口を持たない古い runner への MCP の登録（#325 段3）は数えない。** 挑み直しても
+    // 同じ 404 が返るだけで、`PUSH_RETRY_MAX_MS` ごとに同じ失敗が日誌へ積まれ続ける
+    // （`RunnerMcpServersUnsupportedError` の doc）。runner を上げれば次の名乗りで降りる。
     const stillFailing =
-      health !== undefined && Object.values(health).some((outcome) => outcome?.status === 'failed');
+      health !== undefined &&
+      Object.entries(health).some(
+        ([kind, outcome]) =>
+          outcome?.status === 'failed' &&
+          !(kind === 'mcpServers' && this.#mcpServersUnsupported.has(runnerId)),
+      );
     if (!stillFailing) {
       // 直った。次に失敗したときは最初の間隔からやり直す（`#reattach` が
       // `retry === false` のときに `#reattachDelays` を消すのと同じ形）。
@@ -9899,6 +10064,9 @@ class Pool implements ManagerPool {
     if (health.profile?.status === 'failed') await this.#pushProfile(runner);
     if (health.credentials?.status === 'failed') await this.#pushCredentials(runner);
     if (health.agentToken?.status === 'failed') await this.#pushAgentToken(runner);
+    if (health.mcpServers?.status === 'failed' && !this.#mcpServersUnsupported.has(runnerId)) {
+      await this.#pushMcpServers(runner);
+    }
     this.#settlePushRetry(runnerId);
   }
 
@@ -10144,7 +10312,11 @@ class Pool implements ManagerPool {
         // **`'daemon'` 以外はどちらも器が入れ替わっている**（runner 入れ替え／
         // 移送）ので、workspace の1行は同じ判定で出す。`'daemon'` の挙動は
         // 変えない（1バイトも変えないこと）。
-        cause !== 'daemon' ? cloneWorkspaceAfterSwapLine(workspaceAfterSwap(job.workspace)) : '',
+        cause !== 'daemon'
+          ? cloneWorkspaceAfterSwapLine(
+              workspaceAfterSwap(job.workspace, job.lastUnpushedWorkObservation),
+            )
+          : '',
       ]
         .filter((line) => line !== '')
         .join('\n'),
@@ -10920,6 +11092,27 @@ function sendFailureDetail(managerId: string, resumeDetail: string, missing: boo
 type RestartCause = 'daemon' | 'runner' | 'relocated';
 
 /**
+ * `unverified` の locator（`unknown`）について、台帳の最後の未 push 観測
+ * （`job.lastUnpushedWorkObservation`）から作業ツリーごとの clone 先を
+ * 言えるときの1本（Issue #1376 B2）。
+ *
+ * - `clone` — 枝名と origin の host/path の両方が取れた。移送先はここに
+ *   書かれた host/path の branch を clone し直せばよい。
+ * - `unresolved` — この作業ツリーだけは枝名か origin URL のどちらかが
+ *   取れなかった（理由付き）。**この1本だけを「確かめよ」に倒す**——
+ *   他のツリーが取れているなら、そちらまで道連れにしない。
+ */
+type WorkspaceCloneHint =
+  | {
+      readonly kind: 'clone';
+      readonly relativePath: string;
+      readonly host: string;
+      readonly path: string;
+      readonly branch: string;
+    }
+  | { readonly kind: 'unresolved'; readonly relativePath: string; readonly reason: string };
+
+/**
  * 器が入れ替わった後、台帳の locator が作業ディレクトリについて何を言えるか。
  *
  * **言い方の持ち主を1つにする**（`resumeFailureDetail` と同じ理由）。マネージャー
@@ -10930,8 +11123,61 @@ type RestartCause = 'daemon' | 'runner' | 'relocated';
 type WorkspaceAfterSwap =
   | { kind: 'kept'; path: string }
   | { kind: 'rebuild'; repository: string; ref: string }
-  | { kind: 'unverified'; path: string }
+  | {
+      kind: 'unverified';
+      path: string;
+      /**
+       * locator が `unknown` で、かつ観測（`lastUnpushedWorkObservation`）が
+       * `kind: 'observed'` で1本以上の作業ツリーを持つときだけ載る
+       * （Issue #1376 B2）。`undefined` のときの文言は今日と1バイトも
+       * 違わない——情報が無いなら新しい主張をしない。
+       */
+      cloneHints?: readonly WorkspaceCloneHint[];
+      /** `cloneHints` が載るときだけ載る、観測した時刻（ISO8601）。 */
+      observedAt?: string;
+    }
   | { kind: 'unrecorded' };
+
+/**
+ * `job.lastUnpushedWorkObservation` から {@link WorkspaceCloneHint} の一覧を
+ * 作る。観測が無い・`unavailable`・作業ツリー0本のいずれかなら `undefined`
+ * を返し、呼び出し元は今日どおりの文言（`unverified` の cloneHints 無し）へ
+ * 倒す——**観測が無いことを新しい主張の材料にしない。**
+ */
+function workspaceCloneHintsFrom(
+  observation: LastUnpushedWorkObservation | undefined,
+): { readonly at: string; readonly hints: readonly WorkspaceCloneHint[] } | undefined {
+  if (observation === undefined || observation.kind !== 'observed') return undefined;
+  if (observation.worktrees.length === 0) return undefined;
+  const hints: WorkspaceCloneHint[] = observation.worktrees.map((worktree) => {
+    if (worktree.branch !== null && worktree.remoteOrigin !== undefined) {
+      return {
+        kind: 'clone',
+        relativePath: worktree.relativePath,
+        host: worktree.remoteOrigin.host,
+        path: worktree.remoteOrigin.path,
+        branch: worktree.branch,
+      };
+    }
+    const reason =
+      worktree.branch === null
+        ? '枝名を確かめられなかった（detached HEAD、または取得時に失敗した）'
+        : 'origin remote の URL を確認できなかった（未設定、または解釈できない形式）';
+    return { kind: 'unresolved', relativePath: worktree.relativePath, reason };
+  });
+  return { at: observation.at, hints };
+}
+
+/** {@link WorkspaceCloneHint} の一覧を、作業ツリーごとに1行へ描く。 */
+function formatWorkspaceCloneHintLines(hints: readonly WorkspaceCloneHint[]): string {
+  return hints
+    .map((hint) =>
+      hint.kind === 'clone'
+        ? `- ${hint.relativePath}: ${hint.host}/${hint.path} の ${hint.branch} を clone し直せ。`
+        : `- ${hint.relativePath}: 確かめよ（${hint.reason}）。`,
+    )
+    .join('\n');
+}
 
 /**
  * `locator` から `WorkspaceAfterSwap` を出す。
@@ -10942,16 +11188,28 @@ type WorkspaceAfterSwap =
  * 読む側に区別する手が無い——区別できないまま「volume に在るので残っている」と
  * 読むと、`unknown` 変種が消したはずの嘘（存在しない永続性の主張）を読む側から
  * 再開することになる。だから保守的な側（`unverified`）へ倒す。
+ *
+ * **`observation` を読むのは `locator.kind === 'unknown'` のときだけ**
+ * （Issue #1376 B2）。`runner-volume` / `shared-volume` / `git` の出力は
+ * `observation` の値に関わらず1バイトも変わらない——clone の指示を出すのは
+ * `unknown` に限る、という決定をここで強制する。
  */
-function workspaceAfterSwap(locator: WorkspaceLocator | undefined): WorkspaceAfterSwap {
+function workspaceAfterSwap(
+  locator: WorkspaceLocator | undefined,
+  observation?: LastUnpushedWorkObservation,
+): WorkspaceAfterSwap {
   if (locator === undefined) return { kind: 'unrecorded' };
   switch (locator.kind) {
     case 'shared-volume':
       return { kind: 'kept', path: locator.path };
     case 'git':
       return { kind: 'rebuild', repository: locator.repository, ref: locator.ref };
-    case 'unknown':
-      return { kind: 'unverified', path: locator.path };
+    case 'unknown': {
+      const found = workspaceCloneHintsFrom(observation);
+      return found === undefined
+        ? { kind: 'unverified', path: locator.path }
+        : { kind: 'unverified', path: locator.path, cloneHints: found.hints, observedAt: found.at };
+    }
     case 'runner-volume':
       return { kind: 'unverified', path: locator.path };
     default: {
@@ -10970,9 +11228,17 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
     case 'unrecorded':
       return '作業ディレクトリが残っているとは限らないので、続きに入る前に手元の状態を確かめよ。';
     case 'unverified':
+      if (after.cloneHints === undefined || after.observedAt === undefined) {
+        return (
+          `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
+          '続きに入る前に手元の状態を確かめよ。'
+        );
+      }
       return (
-        `作業ディレクトリ（${after.path}）が残っているとは限らないので、` +
-        '続きに入る前に手元の状態を確かめよ。'
+        `作業ディレクトリ（${after.path}）が残っているとは限らない。` +
+        `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        '見つかった作業ツリーごとに次のとおり進めよ:\n' +
+        formatWorkspaceCloneHintLines(after.cloneHints)
       );
     case 'kept':
       return (
@@ -10998,10 +11264,22 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
 function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
   switch (after.kind) {
     case 'unrecorded':
-    case 'unverified':
       return (
         '器に永続化が無ければ、コミット前の変更は失われている。' +
         '同じ結果を期待せず、手元の状態から組み立て直させること。'
+      );
+    case 'unverified':
+      if (after.cloneHints === undefined || after.observedAt === undefined) {
+        return (
+          '器に永続化が無ければ、コミット前の変更は失われている。' +
+          '同じ結果を期待せず、手元の状態から組み立て直させること。'
+        );
+      }
+      return (
+        `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        'コミット前の変更は失われている前提で、見つかった作業ツリーごとに' +
+        '次のとおり組み立て直させること:\n' +
+        formatWorkspaceCloneHintLines(after.cloneHints)
       );
     case 'kept':
       return (
@@ -11039,10 +11317,13 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
  * **判定は `workspaceAfterSwap` に委ねる**（`restartNudge` / `#notifyRestored` と
  * 同じ1つ）。ここに別の判定を書くと、直したつもりが片方だけになる。
  */
-function runnerSwapNudge(locator: WorkspaceLocator | undefined): string {
+function runnerSwapNudge(
+  locator: WorkspaceLocator | undefined,
+  observation?: LastUnpushedWorkObservation,
+): string {
   return (
     '[system] この委譲を最後に走らせていた器は、もう居ない（別の器がこの宛先に応えている）。' +
-    workspaceAfterSwapClause(workspaceAfterSwap(locator))
+    workspaceAfterSwapClause(workspaceAfterSwap(locator, observation))
   );
 }
 
@@ -11076,16 +11357,17 @@ function restartNudge(
   status: JobStatus,
   cause: RestartCause,
   locator: WorkspaceLocator | undefined,
+  observation?: LastUnpushedWorkObservation,
 ): string {
   // **runner が入れ替わったことを「デーモンが再起動した」と伝えない。** 手元が
   // 残っている前提で続きを書き始めると、消えた作業を書いたつもりで進む。
   const head =
     cause === 'runner'
       ? '[system] runner の器が作り直された。' +
-        workspaceAfterSwapClause(workspaceAfterSwap(locator))
+        workspaceAfterSwapClause(workspaceAfterSwap(locator, observation))
       : cause === 'relocated'
         ? '[system] 走らせていた runner が黙ったので、別の器で続きを開いた。' +
-          workspaceAfterSwapClause(workspaceAfterSwap(locator))
+          workspaceAfterSwapClause(workspaceAfterSwap(locator, observation))
         : '[system] デーモンが再起動した。';
   if (status === 'waiting_human') {
     return (
@@ -11380,6 +11662,11 @@ function summaryOf(
   // `#resetTimeSkewMatches`——`record` からは読めないプロセス内の状態なので、
   // 呼ぶ側に必ず書かせる。
   resetTimeSkewMatch: NoticeResetMatch | undefined,
+  // **`live` と同じ作法で引数にする（Issue #1212 残件2）。** 真の参照は
+  // `#usageStopped`（`Set`）で、`record` からは（門を通さずには）読めない
+  // プロセス内の状態——呼ぶ側が `this.#usageStopped.has(id)` で門を通した
+  // 後の値（時刻）だけをここへ渡す。`ManagerSummary.usageStoppedAt` の doc。
+  usageStoppedAt: string | undefined,
 ): ManagerSummary {
   const { job } = record;
   const tokenGenerationUnknownReason = tokenGenerationUnknownReasonOf(
@@ -11458,6 +11745,11 @@ function summaryOf(
     // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
     // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
+    // **門を通した後の値をそのまま運ぶ（Issue #1212 残件2）。** `job` からでは
+    // なく引数から取る——`ManagerSummary.usageStoppedAt` の doc「真の参照は
+    // `#usageStopped`」のとおり、呼ぶ側（Pool のメソッド）が `Set` で門を
+    // 通した値だけをここへ渡している。
+    ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
     /*
      * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と

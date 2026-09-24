@@ -30,6 +30,14 @@ import type { Stores } from './store.js';
  * 生ログの退避先） / `sessions`（`SessionRegistry`。クローンのセッション id・
  * 墓標） / `profile`（実行環境プロファイル） / `usage`（利用状況の台帳）。
  *
+ * ## ⚠️ まだ決めていないもの: `mcpServers`（人間の MCP 連携の登録。#325 段1）
+ *
+ * **いまは消さない（上の3つと同じく触らない）。** 2026-09-14 の決定は「トークン
+ * 情報以外を全部消す」で、登録は `env` / `headers` に鍵を持ちうる**接続の設定**
+ * —— `credentials` に近いが、`profile`（消す側）にも近い。どちらへ倒すかは人間の
+ * 判断であり、消す側へ倒すなら `WorkspaceResetSummary` に欄を足し、CLI・Web UI の
+ * 表示（`reset-summary-shape.test.ts` が突き合わせる）まで同じ PR で揃えること。
+ *
  * pg 構成では、これに加えて SDK が使う生ログの預け先（`session_entries` /
  * `sessions` テーブル。fs 構成には無い）も消える——`options.clearSessionLog`
  * を渡した場合のみ（`apps/daemon/src/storage.ts` の doc）。

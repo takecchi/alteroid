@@ -6,6 +6,7 @@ import type {
   ChatStreamEvent,
   CloneHost,
   CredentialService,
+  McpServerService,
   Exchange,
   JobStatus,
   JournalEntry,
@@ -20,6 +21,9 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  MCP_SERVER_NAME,
+  mcpServerNames,
+  mcpServersFingerprintOf,
   RESERVED_SCHEDULE_KINDS,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
@@ -88,6 +92,7 @@ import {
   startSseHeartbeat,
   summarizeUsage,
   tokenRotationSettingsSchema,
+  traceApproval,
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
@@ -110,11 +115,13 @@ import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-op
 import { z } from 'zod';
 
 import {
+  cloneInterruptResponseSchema,
   accessAccountResponseSchema,
   accessListResponseSchema,
   appraisalStatsResponseSchema,
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
+  approvalTraceResponseSchema,
   archiveListResponseSchema,
   archiveRemoveManyRequestSchema,
   archiveRemoveManyResponseSchema,
@@ -155,6 +162,9 @@ import {
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
+  mcpServersResponseSchema,
+  mcpServersUpdateRequestSchema,
+  mcpServersUpdateResponseSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
   profileUpdateRequestSchema,
@@ -287,6 +297,14 @@ export interface AppDeps {
    * 残る。
    */
   credentials?: CredentialService;
+  /**
+   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
+   *
+   * **マネージャーのプール（名乗りのたびの降ろし直し）と同じインスタンスを渡すこと**
+   * （`profile` と同じ理由）。渡さなければ `PUT /mcp-servers` は保存だけして
+   * runner へは配らない（`runners: []`）—— 配らなかったことは応答から分かる。
+   */
+  mcpServers?: McpServerService;
   /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
    * 生やすのは器の読み書きの口だけで、検知・切替は無い。
@@ -1729,6 +1747,45 @@ export function createApp(deps: AppDeps) {
       },
     )
 
+    /**
+     * **いま走っているクローンのターンを止める**（#1398 c23-1）。
+     *
+     * それまで人間が走行中のクローンのターンを止める口は、どの入口にも無かった。
+     * 止めるのはいまのターンだけで、セッション（会話の続き）と受信箱には触らない
+     * （`Clone#interruptTurn` の doc）。資格は `/chat/:conversationId/end` と同じ
+     * （会話を持てる人は、自分が起こしたターンを止められる）。
+     */
+    .post(
+      '/clone/interrupt',
+      describeRoute({
+        tags: ['chat'],
+        summary: 'いま走っているクローンのターンを止める',
+        description:
+          'セッションと受信箱はそのまま残る（次の合図で次のターンが始まる）。' +
+          '走っているターンが無ければ outcome: idle。止めたことは日誌に [判断] の1行で残る。' +
+          '運ぶ情報は無い（`{}` を送る）。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** `content-type: application/json` が要る' +
+            '（ブラウザの単純リクエストでターンを止められないため）。',
+        ),
+        responses: {
+          200: {
+            description: '止めた・止めるものが無かった・この器では止められない、のどれか。',
+            content: { 'application/json': { schema: resolver(cloneInterruptResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        if (clone.interruptTurn === undefined) {
+          return c.json(cloneInterruptResponseSchema.parse({ outcome: 'unsupported' }));
+        }
+        const outcome = await clone.interruptTurn();
+        return c.json(cloneInterruptResponseSchema.parse({ outcome }));
+      },
+    )
+
     // --- 会話（続きから話せること自体が要件） -------------------------------
     /**
      * 会話の一覧。
@@ -2794,6 +2851,44 @@ export function createApp(deps: AppDeps) {
           }
         }
         return c.json(approvalsResponseSchema.parse(responseBody));
+      },
+    )
+
+    /**
+     * 承認の答えと、その後にクローンが取った行動を対で読む（issue #847 の案B）。
+     *
+     * **資格は他の承認の読み口（`GET /approvals`）と同じく `authenticate` だけ。**
+     * 中身は `/approvals` と `/journal` で既に読めるものの串刺しで、新しく
+     * 外へ出すものは無い。クローンの `approval_trace` と CLI の
+     * `/approval-trace` が同じ `traceApproval` を通る（PRD「インターフェース」）。
+     */
+    .get(
+      '/approvals/:id/trace',
+      describeRoute({
+        tags: ['approvals'],
+        summary: '承認の答えとその後の行動を対で読む',
+        description:
+          '問い・答え（日誌の行と承認待ちの器）と、答えを受けたターンでクローンが書いた行' +
+          '（`answeredApprovalId` がこの承認を指すもの）を古い順に返す。対が無いときは `state` が' +
+          '理由を分ける（`unanswered` / `withdrawn` / `no_turn_start` / ' +
+          '`turn_before_recording`＝この記録を始める前の答えなので記録していない / ' +
+          '`unstamped_actions`＝記録が動いていない疑い / `no_actions`）。' +
+          '一般化した基準は返さない（issue #847）。',
+        responses: {
+          200: {
+            description: '対（無ければ理由つき）。',
+            content: { 'application/json': { schema: resolver(approvalTraceResponseSchema) } },
+          },
+          404: {
+            description: '該当する承認待ちが無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => {
+        const trace = await traceApproval(stores, c.req.param('id'));
+        if (trace === null) return c.json({ error: 'not found' as const }, 404);
+        return c.json(approvalTraceResponseSchema.parse(trace));
       },
     )
 
@@ -4437,6 +4532,15 @@ export function createApp(deps: AppDeps) {
     /**
      * 人間が置いた実行環境プロファイル（`.zprofile` 相当）。
      *
+     * **⚠️ 2026-09-24 のオーナー決定（#1122）で `requireOperator` から `requireOwner`
+     * （持ち主として宣言されたアカウント）へ移した。** ブラウザは `requireOperator` を
+     * 構造的に通れないので、Web UI にプロファイルの画面を置いても誰も開けなかった
+     * （入口の等価性の穴）。`PUT /credentials` / `POST /reset` が #1198 で同じ門へ
+     * 移ったのと同じ強さである —— 宣言は operator トークンだけが立てられる旗なので、
+     * 通れるのは常にホストへ到達できる者が名指ししたアカウントに限られる。
+     * 「alteroid を使ってよい」（許可されただけ）のアカウントは今も通らない。
+     * 以下の段落はその決定より前の理由として残す。
+     *
      * **実行環境の持ち主だけ**（`requireOperator`）。**⚠️ 2026-09-06 のオーナー決定
      * （alteroid を使う許可＝ `access grant` 済みのアカウントを実行環境の持ち主と
      * 同格にする）の対象外——`/tokens` `/access/*` はその決定で `authenticate` だけに
@@ -4472,12 +4576,12 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
+      requireOwner,
       async (c) => {
         const stored = await deps.stores.profile.read();
         if (stored === null) return c.json(profileResponseSchema.parse({ script: '' }));
@@ -4498,6 +4602,15 @@ export function createApp(deps: AppDeps) {
      * これが無いと、道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して
      * 器を焼き直すことになる＝「環境を直す」と「走行中の仕事を失う」が同じ操作に
      * なる。鍵の差し替え（`POST /runners/credentials`）と同じ理由で口を開けてある。
+     *
+     * **⚠️ 2026-09-24 のオーナー決定（#1122）で `requireOperator` から `requireOwner`
+     * （持ち主として宣言されたアカウント）へ移した。** ブラウザは `requireOperator` を
+     * 構造的に通れないので、Web UI にプロファイルの画面を置いても誰も開けなかった
+     * （入口の等価性の穴）。`PUT /credentials` / `POST /reset` が #1198 で同じ門へ
+     * 移ったのと同じ強さである —— 宣言は operator トークンだけが立てられる旗なので、
+     * 通れるのは常にホストへ到達できる者が名指ししたアカウントに限られる。
+     * 「alteroid を使ってよい」（許可されただけ）のアカウントは今も通らない。
+     * 以下の段落はその決定より前の理由として残す。
      *
      * **実行環境の持ち主だけ**（`requireOperator`）。ここは「alteroid を使ってよい」
      * より一段強い口である — 受け取った本文はデーモンの `process.env` を土台に
@@ -4538,12 +4651,12 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
           },
           403: {
-            description: '実行環境の持ち主ではない。',
+            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      requireOperator,
+      requireOwner,
       /**
        * **既定の 400 を使わない。** `hook` を渡さないと `@hono/standard-validator`
        * は `c.json({ data: <リクエスト本文そのもの>, error, success: false }, 400)`
@@ -4591,6 +4704,178 @@ export function createApp(deps: AppDeps) {
               : { sha256: result.sha256, bytes: result.bytes as number }),
             clone: result.clone,
             runners: result.runners,
+          }),
+        );
+      },
+    )
+
+    // --- 人間の MCP 連携の登録（/mcp-servers。#325 段1） ----------------------
+
+    /**
+     * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を読む。
+     *
+     * **なぜ口が要るか。** Railway には volume が無く、`.mcp.json` をファイルで
+     * 置いても器と一緒に消える（#325 本文）。⟹ 記憶ストアへ置き、SDK の
+     * `Options.mcpServers` で渡す（`packages/core/src/mcp-servers.ts` の doc）。
+     * 置き場が器の外にある以上、人間が置く口がここに要る。
+     *
+     * **宣言済み owner だけ**（`requireOwner`。`PUT /credentials` と同じ強さ）。
+     * 登録の `env` / `headers` には鍵が丸ごと入りうるので、`GET` も `PUT` と同じ
+     * 門にする（読み側が緩ければ書き側を締めても意味が無い —— `/profile` と同じ
+     * 理由）。
+     *
+     * **⚠️ `/profile`（`requireOperator`）より一段緩い門を選んでいる。** #325 の
+     * 2026-09-24 のコメント（段の計画）が `requireOwner` を指定しているのに従った。
+     * 違いは「Web UI にログインした、持ち主として宣言されたアカウント」を通すか
+     * どうかで、`/profile` はそこも通さない（`auth.test.ts` の ④）。**stdio の登録は
+     * クローンの SDK 子プロセスが起こすコマンドであり、クローンの env（記憶ストアの
+     * 鍵を含む）を継承する** —— つまりここは「次のセッションで任意のコマンドを
+     * 走らせる」口でもある。`PUT /credentials`（同じく owner）も `NODE_OPTIONS` の
+     * ような名前でクローンの env へ届くので、強さとしては同じ段に置いた。**門を
+     * `requireOperator` へ締めるかどうかは人間の判断である**（締めるなら
+     * `scripts/require-operator-routes.test.ts` の一覧を付け替える）。
+     */
+    .get(
+      '/mcp-servers',
+      describeRoute({
+        tags: ['mcp-servers'],
+        summary: 'MCP サーバの登録（.mcp.json 相当）を読む',
+        description:
+          '人間の MCP 連携の登録を記憶ストアから返す。クローンの本セッションと蒸留に' +
+          '（次のセッションから）、マネージャー・作業者に（runner へ降ろしたうえで、次に開く' +
+          'セッションから）効く。',
+        responses: {
+          200: {
+            description: '登録そのもの（値を含む）。置かれていなければ空の `mcpServers`。',
+            content: { 'application/json': { schema: resolver(mcpServersResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主として宣言されたアカウントではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        const stored = await deps.stores.mcpServers.read();
+        if (stored === null) return c.json(mcpServersResponseSchema.parse({ mcpServers: {} }));
+        return c.json(mcpServersResponseSchema.parse(stored));
+      },
+    )
+
+    /**
+     * 登録を差し替える（全文置換。空の `mcpServers` は「登録を外す」）。
+     *
+     * **runner へも降ろす（#325 段3）。** 保存したあと、いま繋がっている runner の
+     * すべてへ配り、結果を runner ごとに返す（`PUT /profile` と同じ形。**名前と指紋
+     * だけで、値は返さない**）。繋がっていない runner・配り損ねた runner へは、次の
+     * 名乗り（`hello`）でマネージャーのプールが降ろし直す（`#pushMcpServers`）。
+     * **保存と配布は同じ列を通す**（`mcp-server-service.ts`）—— 名乗り直しの降ろし直しと
+     * 混ざって古い登録で上書きしないため。
+     *
+     * **マネージャーには、次に開くセッションから効く**（新しい委譲と、resume・開き直し）。
+     * 走っているマネージャーのセッションには届かない（`buildManagerSessionOptions` の
+     * `mcpServers` の doc）。
+     *
+     * **いつ効くか: クローンの次のセッションから。** SDK の `mcpServers` は
+     * セッションを組むとき（`clone.ts` の `#buildOptions`）に1度だけ渡るので、
+     * 走行中のセッションには届かない —— 実行環境プロファイルがクローンへ効く
+     * 時機と同じである（`#childEnv()` もセッションを組むときに1度だけ読む）。
+     * 蒸留のサイドクエリは起こすたびに読み直すので、次の蒸留から効く。
+     *
+     * **日誌には名前だけを書く**（値には鍵が入りうる）。人間が明示的に置いた
+     * 操作でも、何がいつ変わったかを可観測性の外に置かない（`POST /reset` と同じ）。
+     *
+     * 門の選び方は `GET /mcp-servers` の doc。
+     */
+    .put(
+      '/mcp-servers',
+      describeRoute({
+        tags: ['mcp-servers'],
+        summary: 'MCP サーバの登録を差し替える',
+        description:
+          '`.mcp.json` をそのまま貼れる形（`{ "mcpServers": { … } }`）。置く前に形を' +
+          '検査し、通らなければ保存しない（前のものが残る）。保存したら繋がっている runner へ' +
+          '降ろし、runner ごとの結果（名前と指紋だけ）を返す。' +
+          `「${MCP_SERVER_NAME}」は alteroid 自身の MCP サーバの名前なので使えない。`,
+        responses: {
+          200: {
+            description: '差し替えた後の登録の名前と指紋、runner ごとの配布結果（値は返さない）。',
+            content: {
+              'application/json': { schema: resolver(mcpServersUpdateResponseSchema) },
+            },
+          },
+          400: {
+            description:
+              '形が不正（保存していない）。**送られてきた値は応答に載せない**' +
+              '（どの欄が不正かだけを返す）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主として宣言されたアカウントではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      /**
+       * **既定の 400 を使わない**（`PUT /profile` の同名の hook と同じ理由）。
+       * 既定は本文をそのまま `data` に載せて返すので、欄の綴りを1つ間違えただけで
+       * `env` / `headers` の鍵が応答へ載る。返すのは不正な欄の位置だけである。
+       */
+      jsonBody(mcpServersUpdateRequestSchema, (where) => ({
+        error: 'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const previous = await deps.stores.mcpServers.read();
+        const servers = c.req.valid('json').mcpServers;
+        // **1本道を通す**（渡されていない構成＝テストや配布先を持たない器では、
+        // 保存だけして配らない。配らなかったことは `runners: []` で見える）。
+        const applied =
+          deps.mcpServers === undefined
+            ? await (async () => {
+                const stored = await deps.stores.mcpServers.write(servers);
+                const storedNames = mcpServerNames(stored.mcpServers);
+                return {
+                  updatedAt: stored.updatedAt,
+                  names: storedNames,
+                  ...(storedNames.length === 0
+                    ? {}
+                    : { sha256: mcpServersFingerprintOf(stored.mcpServers) }),
+                  runners: [],
+                };
+              })()
+            : await deps.mcpServers.apply(servers);
+        const names = applied.names;
+        const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
+        // 配布の結果も日誌へ（名前と成否だけ。値は書かない）。
+        const delivered = applied.runners
+          .map(
+            (r) =>
+              `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
+          )
+          .join(', ');
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision:
+            names.length === 0
+              ? 'MCP サーバの登録を外した'
+              : `MCP サーバの登録を差し替えた（${names.join(', ')}）`,
+          grounds:
+            `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
+            `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
+            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
+            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+            '（マネージャーには次に開くセッションから効く）。',
+        });
+        return c.json(
+          mcpServersUpdateResponseSchema.parse({
+            names,
+            updatedAt: applied.updatedAt,
+            ...(applied.sha256 === undefined ? {} : { sha256: applied.sha256 }),
+            appliesFrom:
+              'クローンの次のセッションから。マネージャー・作業者は、配布できた runner で次に開くセッションから',
+            runners: applied.runners,
           }),
         );
       },
@@ -5682,7 +5967,7 @@ export function createApp(deps: AppDeps) {
      *
      * **資格は `authenticate` だけ（`requireOperator` は付けない）。** 理由は
      * `/journal` `/managers` `/conversations` `/tokens` `/access/*` と同じ強さに
-     * してあることで、**`/profile`（`requireOperator`。実行環境の持ち主だけ）**
+     * してあることで、**`/profile`（`requireOwner`。持ち主と、持ち主として宣言されたアカウントだけ）**
      * とは違う扱いにしている。（`/tokens` `/access/*` は 2026-09-06 のオーナー
      * 決定——alteroid を使う許可を実行環境の持ち主と同格にする——より前は
      * `requireOperator` 側にいたが、いまはここと同じ側である。）この跡は本文を

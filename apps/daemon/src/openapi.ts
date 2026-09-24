@@ -2,6 +2,7 @@ import {
   accountUsageStateSchema,
   agentTokenInputSchema,
   agentTokenViewSchema,
+  APPROVAL_TRACE_STATES,
   appraisalSchema,
   commitmentSchema,
   createMemoryStores,
@@ -10,6 +11,7 @@ import {
   jobStatusSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
+  mcpServersSchema,
   memoryDocumentSchema,
   pendingApprovalSchema,
   permissionGrantSchema,
@@ -20,6 +22,7 @@ import {
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerLivenessSchema,
+  runnerMcpServersFingerprintSchema,
   runnerProfileFingerprintSchema,
   scheduleSpecSchema,
   tokenRotationPolicySchema,
@@ -403,7 +406,37 @@ export const approvalsAnswerResponseSchema = z.object({
   results: z.array(z.object({ id: z.string(), ok: z.boolean(), error: z.string().optional() })),
 });
 
+/**
+ * `GET /approvals/:id/trace` の応答（issue #847 の案B）。**形は core の
+ * `ApprovalTrace`（`packages/core/src/approval-trace.ts`）そのもの**で、承認と
+ * 日誌の行は core の schema をそのまま使う（このファイル冒頭の約束）。
+ *
+ * `actions` は抜粋ではなく日誌の行の全文である（人間へ返す口なので切らない）。
+ * 件数は core の `APPROVAL_TRACE_ACTION_LIMIT` で締め、超えた分は
+ * `actionsOmitted` に数だけ載る。
+ */
+export const approvalTraceResponseSchema = z.object({
+  approval: pendingApprovalSchema,
+  state: z.enum(APPROVAL_TRACE_STATES),
+  questionEntry: journalEntrySchema.nullable(),
+  answerEntry: journalEntrySchema.nullable(),
+  turnStarts: z.array(journalEntrySchema),
+  actions: z.array(journalEntrySchema),
+  actionsOmitted: z.number().int().nonnegative(),
+  unstampedInTurn: z.number().int().nonnegative(),
+  scanned: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+});
+
 export const okResponseSchema = z.object({ ok: z.literal(true) });
+
+/**
+ * `POST /clone/interrupt` の応答（#1398 c23-1）。`interrupted` は止めた、`idle` は
+ * 走っているターンが無かった、`unsupported` はこの器のクローンが止める口を持たない。
+ */
+export const cloneInterruptResponseSchema = z.object({
+  outcome: z.enum(['interrupted', 'idle', 'unsupported']),
+});
 
 // ---------------------------------------------------------------------------
 // 許可の記録（/permission-grants。Issue #863）
@@ -816,6 +849,30 @@ export const managerSummarySchema = z.object({
    * （`lastReport` / 受信箱）を見る。
    */
   lastSystemError: jobSchema.shape.lastSystemError,
+  /**
+   * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #1212 残件2。
+   * `packages/core/src/manager.ts` の `ManagerSummary.usageStoppedAt`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * / `lastSystemError` と同じ理由——`packages/core/src/schema.ts` の
+   * `usageStoppedAt` が持つ ISO 時刻の形が片方だけ増えた日に spec が黙って
+   * 古びる。
+   *
+   * **`lastFailure` とは別の軸。重なりは許すが同一ではない。** あちらは
+   * 理由を問わずターンが失敗で終わったことを指す広い印、こちらは
+   * `usage_notice`（`kind: 'reached'`）——利用上限そのものに当たったこと
+   * だけを指す狭い印。**`status` は置き換えない**——支出上限に当たった回も
+   * セッションは生きているので `done`（終えて待機中）のままである
+   * （`lastFailure` の doc と同じ断り）。
+   *
+   * **止まっている回だけ載る（`optional`）。** 常に載せると「止まっていない」
+   * と「この器では見ていない」が同じ形になる。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastSystemError`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になり、クローンの
+   * `manager_list` にだけ出る形になる）。
+   */
+  usageStoppedAt: jobSchema.shape.usageStoppedAt,
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   /**
@@ -1107,6 +1164,8 @@ const runnerPushHealthSchema = z.object({
   profile: runnerPushOutcomeSchema.optional(),
   credentials: runnerPushOutcomeSchema.optional(),
   agentToken: runnerPushOutcomeSchema.optional(),
+  /** 人間の MCP 連携の登録（#325 段3）。口を持たない古い runner へは `failed` で残る。 */
+  mcpServers: runnerPushOutcomeSchema.optional(),
 });
 
 const runnerSummarySchema = z.object({
@@ -1279,6 +1338,71 @@ export const profileUpdateResponseSchema = z.object({
       output: z.string().optional(),
       names: z.array(z.string()).optional(),
       profile: runnerProfileFingerprintSchema.optional(),
+    }),
+  ),
+});
+
+// ---------------------------------------------------------------------------
+// 人間の MCP 連携の登録（/mcp-servers。#325 段1）
+// ---------------------------------------------------------------------------
+
+/**
+ * 登録そのもの（`.mcp.json` と同じ形）。**値を返す。** 人間が自分で書いたものを
+ * 読み直せないと typo ひとつ直せない（`profileResponseSchema` と同じ理由）。
+ * `env` / `headers` に鍵が入りうるので、口は持ち主だけに絞ってある
+ * （`app.ts` の `/mcp-servers`）。
+ */
+export const mcpServersResponseSchema = z.object({
+  mcpServers: mcpServersSchema,
+  /** 置かれていなければ欠ける。 */
+  updatedAt: z.string().optional(),
+});
+
+/**
+ * 全文置換。`.mcp.json` をそのまま貼れる形にしてある。空の `mcpServers` は
+ * 「登録を外す」。**未知の欄は拒む**（`mcp-servers.ts` の doc —— 捨てると
+ * 綴りを間違えた欄が「保存できたのに効かない」になる）。
+ */
+export const mcpServersUpdateRequestSchema = z.strictObject({
+  mcpServers: mcpServersSchema,
+});
+
+/**
+ * 差し替えた結果。**名前だけを返す**（値は送った本人が持っている。応答に載せる
+ * 理由が無い口で鍵を往復させない）。
+ */
+export const mcpServersUpdateResponseSchema = z.object({
+  names: z.array(z.string()),
+  updatedAt: z.string(),
+  /**
+   * 保存した登録の指紋（#325 段3。`mcpServersFingerprintOf`）。各 runner の
+   * `mcpServers.sha256` と突き合わせれば、届いた版が同じかが値を見ずに言える。
+   * 空の登録（外した）なら欠ける。
+   */
+  sha256: z.string().optional(),
+  /**
+   * いつから効くか。**クローンの次のセッションから・マネージャーは次に開く
+   * セッションから**であって、走行中のセッションには届かない
+   * （`claude-provider.ts` の `cloneMcpServers` / `buildManagerSessionOptions` の doc）。
+   */
+  appliesFrom: z.string(),
+  /**
+   * 各 runner へ降ろした結果（#325 段3。`PUT /profile` の `runners` と同じ位置づけ）。
+   * **名前と指紋だけで、値は載せない。** 保存は済んでいるので、ここに失敗が
+   * 在っても 200 である —— 失敗した runner へは次の名乗り（`hello`）で降ろし直す。
+   */
+  runners: z.array(
+    z.object({
+      runnerId: z.string(),
+      ok: z.boolean(),
+      /** 置いた後の指紋と名前。外した（空の登録）なら欠ける。 */
+      mcpServers: runnerMcpServersFingerprintSchema.optional(),
+      /**
+       * 相手が MCP の登録を受け取る口を持たない古い runner だった。一時障害と
+       * 区別する（疑う先が「待てば直る」ではなく「runner の版」だから）。
+       */
+      unsupported: z.literal(true).optional(),
+      error: z.string().optional(),
     }),
   ),
 });
@@ -1952,6 +2076,12 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },
     { name: 'archive', description: 'セッション生ログ（可観測性の最下段）' },
+    {
+      name: 'mcp-servers',
+      description:
+        '人間の MCP 連携の登録（.mcp.json 相当。#325）。記憶ストアに置き、クローンの' +
+        'セッションへ SDK の mcpServers として渡す。env / headers に鍵が入りうる',
+    },
     {
       name: 'auth',
       description:

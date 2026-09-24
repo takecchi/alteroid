@@ -27,6 +27,7 @@ description: クラウド構成（docker compose、PostgreSQL、daemon / manager
   - **ポートは公開していない。** 待ち受けは既定で 127.0.0.1（`ALTEROID_BIND` で開けられるが、開けるなら手前に境界を置くのが先）。runner だけは `ALTEROID_RUNNER_BIND=0.0.0.0` でデーモンから届かせるが、公開はしない
   - ネットワークも分けてある（`data`: daemon↔db / `control`: daemon↔runner）。**runner から db は名前解決すらできない**。ここを1つに戻すと、鍵を持たないという境界が「鍵を渡していないだけ」に薄まる
   - マネージャーへ渡す MCP 設定・プロジェクト設定は `workspace/`（＝runner コンテナの `/workspace`）に置く。cwd がそこなので `settingSources: ['project','local']` がそのまま拾う
+  - **MCP の登録は器に置かなくても届く**（#325 段3）。正本は記憶ストア（`PUT /mcp-servers`）で、**runner が名乗る（`hello`）たびにデーモンが降ろし直す**（`manager.ts` の `#pushMcpServers`、`POST /mcp-servers` は制御面）。runner はメモリにしか持たず、`buildManagerSessionOptions` の `mcpServers` へ渡す（作業者は親から継承）。**runner に読みに行かせない**のはプロファイルと同じ。効くのは次に開くセッションから。口を持たない古い runner（404）は「口なし」と記録して挑み直さない
   - 境界の確認は `docker compose exec runner env | grep ALTEROID_DATABASE_URL`（出ないこと）、`docker compose exec runner tr '\0' '\n' < /proc/1/environ | grep '^ALTEROID_RUNNER_TOKEN='`（出ないこと。sha256 だけが残る）、`docker compose exec runner getent hosts db`（引けないこと）
   - **マネージャーへ降ろす環境変数は、器に足さずに正本へ置ける**（`alteroid credential set <名前> -f <path>` / `PUT /credentials`）。正本は記憶ストア（fs は `credentials.json`、pg は `manager_credentials`）で、**runner が名乗り直すたびにデーモンが降ろし直す** ⟹ 器を作り直しても痩せない。名前は任意（英大文字・数字・`_`）で、**用途が増えても実装も器も直さない**
   - **runner に読みに行かせない**のはプロファイルと同じ（読みに行けるということは記憶ストアの鍵が在るということ）。降ろすのはデーモンで、`ManagerPool` が `#pushProfile` と同じ位置で呼ぶ

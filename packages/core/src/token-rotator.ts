@@ -393,6 +393,21 @@ export type TokenRotationOutcome =
         cooldownSource?: CooldownSource;
       };
       /**
+       * **現役のほうが `earliest` より早く戻るので撒き直さなかった**とき（上の
+       * `parked` の条件4で落ちた回）だけ付く、現役の側の見込み。
+       *
+       * **`earliest` は現役を除いた候補の中での最速であって、全体の最速ではない。**
+       * この欄が無いと、文言が「いちばん早く戻るのは『候補』」とだけ言い、現役の
+       * ほうが早いのに候補が全体の最速に読めた（実測 2026-09-24: 現役が 10:50Z に
+       * 戻るのに、日誌は 12:40Z の候補を「いちばん早く戻る」と書いた）。
+       */
+      current?: {
+        tokenId: string;
+        label: string;
+        cooldownUntil: number;
+        cooldownSource?: CooldownSource;
+      };
+      /**
        * **候補を試し切る前に打ち切ったか**（Issue #393）。付くのは
        * `'budget'`（壁時計の持ち時間を使い切った）のときだけである。
        *
@@ -1446,8 +1461,25 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
      * と同じ判断である（あちらの doc）。
      */
 
+    // `parked` の条件4で落ちた回だけ、現役の見込みを添える（`current` の doc）。
+    // 条件3（候補が現役自身）では `earliest` がもう現役なので添えない。
+    const current =
+      earliest !== undefined &&
+      earliest.tokenId !== active?.tokenId &&
+      activeRow?.cooldownUntil !== undefined
+        ? {
+            tokenId: activeRow.id,
+            label: activeRow.label,
+            cooldownUntil: activeRow.cooldownUntil,
+            ...(activeRow.cooldownSource === undefined
+              ? {}
+              : { cooldownSource: activeRow.cooldownSource }),
+          }
+        : undefined;
+
     return {
       kind: 'exhausted' as const,
+      ...(current === undefined ? {} : { current }),
       // **打ち切ったときは `earliest` を出さない。** 出せる材料が無い
       // （まだ試していない候補は冷却中ではないので、`selectNextToken` の
       // 見立てが取れていない）。**無いものを埋めない。**
@@ -1468,7 +1500,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             // 読む側が次に確かめるものが違う。
             earliest.tokenId === active?.tokenId
             ? `いちばん早く戻る候補が現役自身だった（撒き直しても同じ鍵なので、世代だけ増やすことはしない）${skipped}`
-            : `いま撒いてある鍵のほうが早く戻る（いちばん早い候補「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
+            : `いま撒いてある${current === undefined ? '鍵' : `「${current.label}」`}のほうが早く戻る（現役を除いた候補の中でいちばん早い「${earliest.label}」は ${new Date(earliest.cooldownUntil).toISOString()}）。遅い鍵へ移すのは改善ではないので撒き直さない${skipped}`
           : sweep.unusableLabels.length > 0
             ? `試せる候補を使い切った${skipped}`
             : (sweep.ranOut?.why ?? '候補が無い'),
@@ -2203,7 +2235,10 @@ export function describeTokenRotation(
         ? '**まだ試していない候補が残っている**（戻る見込みは測っていない）'
         : outcome.earliest === undefined
           ? '**戻る見込みの立っている候補が1本も無い**'
-          : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}${describeCooldownSource(outcome.earliest.cooldownSource)}）`;
+          : outcome.current !== undefined
+            ? // **候補を全体の最速として書かない**（`current` の doc）。
+              `いちばん早く戻るのは現役の「${outcome.current.label}」（${new Date(outcome.current.cooldownUntil).toISOString()}${describeCooldownSource(outcome.current.cooldownSource)}）`
+            : `いちばん早く戻るのは「${outcome.earliest.label}」（${new Date(outcome.earliest.cooldownUntil).toISOString()}${describeCooldownSource(outcome.earliest.cooldownSource)}）`;
     return `認証トークン: **回せなかった**（${outcome.signal}）。${outcome.why}。${earliest}${tail}`;
   }
 

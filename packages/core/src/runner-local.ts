@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { query } from '@anthropic-ai/claude-agent-sdk';
 
 import type { CredentialStore } from './credentials.js';
+import type { McpServers } from './mcp-servers.js';
 import type { ProfileVessel } from './profile.js';
 import type {
   RunnerAnswerCommand,
@@ -10,6 +11,7 @@ import type {
   RunnerClient,
   RunnerCredentialFingerprint,
   RunnerEvent,
+  RunnerMcpServersFingerprint,
   RunnerPlacementResources,
   RunnerProfileFingerprint,
   RunnerProfileResult,
@@ -202,6 +204,19 @@ class LocalRunner implements RunnerClient {
 
   async setProfile(script: string): Promise<RunnerProfileResult> {
     return this.#host.setProfile(script);
+  }
+
+  /**
+   * MCP の登録（#325 段3）。**同一プロセスでも同じ口を通す** —— ローカルだけ記憶
+   * ストアを直に読ませると、HTTP の runner と「いつ届くか・何が届くか」が別物になる
+   * （入口の等価性。north_star 禁止1）。降ろすのはデーモン（`#pushMcpServers`）である。
+   */
+  async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
+    return this.#host.mcpServers();
+  }
+
+  async setMcpServers(servers: McpServers): Promise<RunnerMcpServersFingerprint | undefined> {
+    return this.#host.setMcpServers(servers);
   }
 
   /** 同じプロセスが消えるので、セッションごと畳む（HTTP 実装とはここが違う）。 */

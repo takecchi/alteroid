@@ -2829,6 +2829,27 @@ describe('park し直すのは、より早く戻る鍵のときだけ', () => {
     expect(outcome.why).toContain('遅い鍵へ移すのは改善ではない');
   });
 
+  it('現役のほうが早いとき、候補を「いちばん早く戻る」と書かない（現役を名指す）', async () => {
+    // 実測 2026-09-24: 現役が 10:50Z に戻るのに、日誌の末尾は 12:40Z の候補を
+    // 「いちばん早く戻るのは」と書いていた（候補の中の最速を全体の最速に見せていた）。
+    const h = harness();
+    const activeUntil = Date.parse(AT) + 10 * 60_000;
+    const candidateUntil = Date.parse(AT) + 60 * 60_000;
+    await parked(h, activeUntil, candidateUntil);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    if (outcome.kind !== 'exhausted') throw new Error(`exhausted ではない: ${outcome.kind}`);
+    expect(outcome.current).toMatchObject({ tokenId: 'tok-a', cooldownUntil: activeUntil });
+    expect(outcome.why).toContain('いま撒いてある「parked-key」のほうが早く戻る');
+    expect(outcome.why).toContain('現役を除いた候補の中でいちばん早い「later-key」');
+    const line = describeTokenRotation(outcome);
+    expect(line).toContain(
+      `いちばん早く戻るのは現役の「parked-key」（${new Date(activeUntil).toISOString()}`,
+    );
+    expect(line).not.toContain('いちばん早く戻るのは「later-key」');
+  });
+
   it('目盛りを何回回しても世代は動かない（延々と増える形が塞がっている）', async () => {
     const h = harness();
     await parked(h, Date.parse(AT) + 10 * 60_000, Date.parse(AT) + 60 * 60_000);

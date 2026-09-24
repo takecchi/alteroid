@@ -13,6 +13,7 @@ import {
   runnerMessageCommandSchema,
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
+  runnerSetMcpServersCommandSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
 } from '@alteroid/core';
@@ -728,6 +729,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
     .use('/managers/*', control)
     .use('/credentials', control)
     .use('/profile', control)
+    .use('/mcp-servers', control)
 
     .get('/health', async (c) => {
       /**
@@ -794,6 +796,13 @@ export function createRunnerApp(deps: RunnerAppDeps) {
         /** 置いてある実行環境プロファイルの**指紋だけ**。本文は出さない。 */
         profile: host.profile(),
         /**
+         * 置いてある MCP の登録の**指紋と名前だけ**（#325 段3）。値は出さない。
+         * 置いていなければ欄ごと出ない（JSON は `undefined` を落とす）—— 古い runner も
+         * この欄を持たないので、デーモン側は「無い」を「置いていない」と読まない
+         * （`RunnerClient.mcpServers` の doc）。
+         */
+        mcpServers: host.mcpServers(),
+        /**
          * 自分がどのコミットで走っているか。
          *
          * **デーモンと runner は別 Service で別々にビルド・デプロイされる**
@@ -836,6 +845,44 @@ export function createRunnerApp(deps: RunnerAppDeps) {
       const result = await host.setProfile(c.req.valid('json').script);
       return c.json(result);
     })
+
+    /**
+     * 人間の MCP 連携の登録の差し替え（#325 段3）。
+     *
+     * **鍵の差し替えと同じく制御面である**（門番を外さないこと）。登録の stdio は
+     * マネージャーの SDK 子プロセスが起こすコマンドなので、マネージャーがここを
+     * 叩けると、自分に効くコマンドを自分で差し替えられる。
+     *
+     * **形が不正なら 400 で理由を返し、前の登録が残る。** 理由の文言に値は載らない
+     * （`parseMcpServers` の doc）。`zValidator` の既定の 400 は本文をそのまま返す
+     * ので（デーモン側 `PUT /profile` の hook の doc）、ここでは形の袋だけを
+     * `runnerSetMcpServersCommandSchema`（`z.unknown()` の値）で受け、中身の検査は
+     * `host.setMcpServers` に任せる。袋の形すら崩れていたときも本文は返さない。
+     */
+    .get('/mcp-servers', (c) => c.json({ ok: true, mcpServers: host.mcpServers() }))
+    .post(
+      '/mcp-servers',
+      zValidator('json', runnerSetMcpServersCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json(
+            { ok: false, error: 'MCP サーバの登録の袋の形が不正（置いていない）' },
+            400,
+          );
+        }
+        return undefined;
+      }),
+      (c) => {
+        try {
+          const placed = host.setMcpServers(c.req.valid('json').mcpServers);
+          return c.json({ ok: true, ...(placed === undefined ? {} : { mcpServers: placed }) });
+        } catch (error) {
+          return c.json(
+            { ok: false, error: error instanceof Error ? error.message : '理由不明' },
+            400,
+          );
+        }
+      },
+    )
 
     /**
      * 出来事のストリーム。**接続を張るのはデーモン側**である。

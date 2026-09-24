@@ -13,10 +13,12 @@ import {
   ListChecks,
   Menu,
   MessageSquare,
+  Plug,
   Route as RouteIcon,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  SquareTerminal,
   Users,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -47,6 +49,12 @@ const NAV = [
   { to: '/tokens', label: '認証トークン', icon: KeyRound, end: false },
   { to: '/access', label: 'アクセス許可', icon: ShieldCheck, end: false },
   { to: '/env-vars', label: '環境変数', icon: SlidersHorizontal, end: false },
+  // 環境変数の隣。どちらも「器を焼き直さずに実行環境を直す」口で、こちらは
+  // シェルスクリプト1本を丸ごと置く太い口である（issue #1122）。
+  { to: '/profile', label: '実行環境プロファイル', icon: SquareTerminal, end: false },
+  // プロファイルの隣。同じく「器を焼き直さずに実行環境を直す」口で、こちらは
+  // `.mcp.json` に当たる連携の登録である（#325 段4）。
+  { to: '/mcp-servers', label: 'MCP 連携', icon: Plug, end: false },
   { to: '/dropped', label: '握り潰しの跡', icon: Footprints, end: false },
   // 可観測性の最下段——`/dropped` の隣（#776）。
   { to: '/archive', label: 'アーカイブ', icon: ArchiveIcon, end: false },

@@ -202,6 +202,10 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'approvals_list',
     why: '実装側に一覧が無い。並び順の主張（作成時刻の昇順か）はふるまいの歯を tools.test.ts に置いた',
   },
+  {
+    tool: 'approval_trace',
+    why: '説明文が名乗る状態の言い方（まだ答えが無い／記録を始める前／記録が動いていない疑い）は approval-trace.ts の ApprovalTraceState の値だが、説明文は字面ではなく日本語で言う。ふるまいの歯は approval-trace.test.ts に置いた（#847）',
+  },
   { tool: 'approval_withdraw', why: '実装側に、説明文が数え直すような一覧が無い（#963）' },
   { tool: 'daily_report_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'schedule_remove', why: '実装側に、説明文が数え直すような一覧が無い' },

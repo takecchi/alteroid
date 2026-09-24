@@ -26,6 +26,25 @@ import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js'
  *    未コミットの変更の件数まで。**⛔ ファイル名・差分の中身・コミット
  *    メッセージ・author は一切出さない。**
  *
+ * ## 3.5. Issue #1376 B2 で、上の境界に1点だけ穴を開けた
+ *
+ * workspace locator が `unknown` の委譲が別の runner へ移送されたとき、
+ * 枝名だけでは移送先が「どの repo を clone し直せばよいか」を言えなかった
+ * （移送先は元のマネージャーとは別の repo で動いているかもしれない）。
+ * だから、**origin remote の URL から host と path だけ**を追加で取る
+ * （`git remote get-url origin`。ネットワークは使わない——読むだけで
+ * `fetch` も `ls-remote` もしない）。**広げたのはこの1点だけである。**
+ *
+ * 落とすもの（⛔ 一切出さない）:
+ * - userinfo（`https://<token>@host/…`・`https://user:pass@host/…`・
+ *   `ssh://git@host/…`・scp 形式 `git@host:owner/repo.git` のどれも、
+ *   `@` より前は一切含めない）
+ * - クエリ文字列（`?token=…` 等）・フラグメント
+ * - 資格情報そのもの、および生の URL 文字列
+ *
+ * 解釈できない・上記を確実に落とせない形は、値ごと省く（`undefined`）
+ * ——**生の文字列を出すくらいなら、何も出さない**（`parseRemoteOriginUrl`）。
+ *
  * ## テスト可能にするための切り出しである
  *
  * `git` の起動そのものは呼び出し側（`packages/core/src/runner.ts` の
@@ -207,7 +226,10 @@ async function runGit(
 }
 
 /**
- * ⛔ 出してよいのは有無・件数・枝名までである。ファイル名・差分の中身・
+ * ⛔ 出してよいのは有無・件数・枝名と、origin remote の host/path まで
+ * である（host/path は Issue #1376 B2 で足した。userinfo・クエリ・
+ * フラグメント・資格・生の URL 文字列は出さない——冒頭の doc「3.5.」と
+ * `parseRemoteOriginUrl`）。ファイル名・差分の中身・
  * コミットメッセージ・author は一切含めない（Issue #1039。
  * `apps/runner/src/tasks.ts` が生きているプロセスの素性について引いている線
  * ——`cmdline` / `cwd` / `environ` を読まない——と同じ強さの線をここに引く）。
@@ -268,6 +290,94 @@ async function probeUnpushedCommitCount(
     };
   }
   return { unpushedCommitCount: parsed };
+}
+
+/**
+ * `git remote get-url origin` の出力から host と path だけを取り出す
+ * （Issue #1376 B2）。**userinfo・クエリ・フラグメントは必ず落とす。**
+ * 解釈できない・落とし切れる自信が無い形は `undefined` を返す——**生の
+ * 文字列の断片を1バイトも漏らさないことを、この関数の外側の呼び出し元が
+ * 信じられる形にする**（このファイル冒頭の doc「3.5.」を見よ）。
+ *
+ * 対応する2形:
+ * 1. **`scheme://…` 形**（`https://` / `ssh://` / `git://` 等） — `URL` で
+ *    解く。`URL#hostname` は userinfo（`username`/`password`）を含まない
+ *    ので、そこだけを host として使えば userinfo は自動的に落ちる。
+ *    `URL#pathname` はクエリ・フラグメントを含まないので、同様に自動で
+ *    落ちる。
+ * 2. **scp 形式**（`[user@]host:path`、例 `git@github.com:acme/widgets.git`）
+ *    — `://` を持たない。`@` より前（あれば）は読み捨て、`:` の前後だけを
+ *    host / path として使う。
+ *
+ *    ⚠️ **レビューで見つかった2つの漏れ（塞いだ）**:
+ *    - **host の文字クラスから `@` も除く。** 除く前は `tok@en@github.com:…`
+ *      のような（壊れた、または細工された）入力で、1個目の `@` までを
+ *      userinfo として読み捨てた後、`en@github.com` を丸ごと host として
+ *      拾ってしまっていた——`en@` は本来 userinfo の断片で、漏れていた。
+ *      `@` を host の文字クラスからも除くと、`@` が2個以上ある形は
+ *      正規表現そのものが一致しなくなり（userinfo 側で1個消費した残りに
+ *      また `@` が挟まると host が `:` まで届かない）、`undefined` に
+ *      自然に倒れる——「2個以上は undefined」を別条件で書き足す必要は
+ *      無かった。
+ *    - **scp 形式でもクエリ・フラグメントを落とす。** `scheme://` 形は
+ *      `URL#pathname` が自動でクエリ・フラグメントを除くが、scp 形式は
+ *      `:` の後ろを丸ごと path として読んでいたため、
+ *      `git@host:owner/repo.git?token=…` のような形で漏れていた。
+ *      **「undefined にする」ではなく「`?`/`#` 以降を切り落とす」を選んだ**
+ *      ——scp 形式に本来クエリ・フラグメントの構文は無い（git 自身も
+ *      構文として解釈しない）ので、後ろに付いた分は同じ文字列の続きとして
+ *      巻き込まれただけの可能性が高く、`scheme://` 形と同じ「host/path は
+ *      残し、クエリ・フラグメントだけ削る」という挙動に揃えるほうが
+ *      一貫する。
+ *
+ * どちらにも当たらない（コロンが無い・`URL` が投げる等）ローカルパスや
+ * 壊れた文字列は `undefined`。
+ */
+export function parseRemoteOriginUrl(raw: string): { host: string; path: string } | undefined {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      return undefined;
+    }
+    if (url.hostname.length === 0) return undefined;
+    const path = url.pathname.replace(/^\/+/, '');
+    if (path.length === 0) return undefined;
+    return { host: url.hostname, path };
+  }
+
+  // scp 形式: `[user@]host:path`。host に `/` を含む場合はローカルパス
+  // （例 `/a/b:c`）との誤認を避けるため対象にしない。**host の文字クラスから
+  // `@` も除く** — `@` が2個以上ある入力で userinfo の断片が host へ漏れるのを
+  // 防ぐ（上の doc の「レビューで見つかった2つの漏れ」を見よ）。
+  const scpMatch = /^(?:[^@\s/]+@)?([^@:\s/]+):(.+)$/.exec(trimmed);
+  if (scpMatch !== null) {
+    const host = scpMatch[1] ?? '';
+    // クエリ・フラグメントを落とす（`scheme://` 形の `URL#pathname` と
+    // 挙動を揃える。上の doc を見よ）。
+    const rawPath = (scpMatch[2] ?? '').split(/[?#]/)[0] ?? '';
+    const path = rawPath.replace(/^\/+/, '');
+    if (host.length > 0 && path.length > 0) {
+      return { host, path };
+    }
+  }
+
+  return undefined;
+}
+
+async function probeRemoteOrigin(
+  spawnFn: ProcessSpawnFn,
+  repoRoot: string,
+  env: Record<string, string | undefined>,
+  timeoutMs: number,
+): Promise<{ host: string; path: string } | undefined> {
+  const result = await runGit(spawnFn, ['remote', 'get-url', 'origin'], repoRoot, env, timeoutMs);
+  if (result.timedOut || result.exitCode !== 0) return undefined;
+  return parseRemoteOriginUrl(result.stdout.trim());
 }
 
 async function probeUncommittedChangeCount(
@@ -345,12 +455,19 @@ export async function computeUnpushedWork(
       });
       continue;
     }
-    const [branch, unpushed, uncommitted] = await Promise.all([
+    const [branch, unpushed, uncommitted, remoteOrigin] = await Promise.all([
       probeBranch(options.spawn, repoRoot, options.env, timeoutMs),
       probeUnpushedCommitCount(options.spawn, repoRoot, options.env, timeoutMs),
       probeUncommittedChangeCount(options.spawn, repoRoot, options.env, timeoutMs),
+      probeRemoteOrigin(options.spawn, repoRoot, options.env, timeoutMs),
     ]);
-    worktrees.push({ relativePath: relative, branch, ...unpushed, ...uncommitted });
+    worktrees.push({
+      relativePath: relative,
+      branch,
+      ...unpushed,
+      ...uncommitted,
+      ...(remoteOrigin === undefined ? {} : { remoteOrigin }),
+    });
   }
   return {
     cwd,

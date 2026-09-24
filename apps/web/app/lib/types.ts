@@ -190,6 +190,30 @@ export type EnvVarView = CredentialsState['credentials'][number];
 export type EnvVarScope = EnvVarView['scope'];
 
 /**
+ * 実行環境プロファイル（`GET /profile`。issue #1122）。
+ *
+ * **`script` は本文そのもの**で、鍵が丸ごと入りうる（`credentials` と違って指紋に
+ * 畳まれていない）。置かれていなければ `script: ''` で、他の欄は載らない。
+ */
+export type ProfileState = Ok<paths['/profile']['get']>;
+/** `PUT /profile` が 200 で返す、クローンと各 runner への反映結果。 */
+export type ProfileUpdateResult = Ok<paths['/profile']['put']>;
+
+/**
+ * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
+ *
+ * **値を丸ごと含む**（`env` / `headers` / `args` に鍵が入りうる）。置かれていなければ
+ * `mcpServers: {}` で、`updatedAt` は載らない。
+ */
+export type McpServersState = Ok<paths['/mcp-servers']['get']>;
+/** 登録（名前 → 1件。`.mcp.json` の `mcpServers` の値と同じ形）。 */
+export type McpServers = McpServersState['mcpServers'];
+/** 登録の1件。 */
+export type McpServerEntry = McpServers[string];
+/** `PUT /mcp-servers` が 200 で返す、名前・指紋と runner ごとの配布結果（値は載らない）。 */
+export type McpServersUpdateResult = Ok<paths['/mcp-servers']['put']>;
+
+/**
  * 握り潰しの跡（`GET /dropped`）。CLI（`alteroid dropped`）・クローンの MCP
  * 道具 `self_dropped` と同じ帳面を読む（`packages/core/src/dropped-record.ts`）。
  *

@@ -3,6 +3,7 @@ import { open, readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
+  McpServerConfig,
   Options,
   PostToolUseFailureHookInput,
   PostToolUseHookInput,
@@ -40,6 +41,7 @@ import {
   describeDistillGap,
   distillSucceededEntry,
 } from './distill-gap.js';
+import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { excerptLine } from './excerpt.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -86,6 +88,13 @@ import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
 import { describeAppraisalTargets } from './appraisal.js';
+import { computeAppraisalReconciliation } from './appraisal-stats.js';
+import {
+  describePracticeCandidates,
+  practiceCandidateKindKeys,
+  type PracticeCandidateMaterial,
+  type PracticeCandidateReconciliation,
+} from './practice-candidates.js';
 import {
   describeMemorySessionDelta,
   describeMemoryTidyTargets,
@@ -101,6 +110,7 @@ import {
 } from './permission-mode.js';
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
+import type { McpServerService } from './mcp-server-service.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -121,11 +131,14 @@ import {
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
+  COMMITMENT_APPRAISAL_DECISION_PREFIX,
   commitmentClosedBySchema,
   isDailyReport,
   isWrittenDailyReport,
+  JOB_APPRAISAL_DECISION_PREFIX,
   PERMISSION_GRANT_CONSENT_PHRASE,
 } from './schema.js';
+import { workKindGroupKey } from './work-kind.js';
 import type {
   ChatStreamEvent,
   Commitment,
@@ -1146,6 +1159,15 @@ export interface CloneOptions {
    * 正本を素通りし、変更前の `#childEnv()` と同じ挙動になる。
    */
   credentialService?: CredentialService;
+  /**
+   * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
+   *
+   * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ理由）。
+   * ここに渡すのは、runner が名乗るたびの降ろし直しがマネージャーのプールを通る
+   * ためである。**クローン自身はこれを読まない** —— クローンは記憶ストアの登録を
+   * セッションを組むたびに直に読む（段2。`#buildOptions`）。
+   */
+  mcpServerService?: McpServerService;
   /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
@@ -2364,6 +2386,7 @@ class Clone implements CloneHost {
       profile,
       profileService,
       credentialService,
+      mcpServerService,
       accountUsage,
       scheduler,
       self,
@@ -2406,6 +2429,7 @@ class Clone implements CloneHost {
         stores,
         ...(profileService === undefined ? {} : { profile: profileService }),
         ...(credentialService === undefined ? {} : { credentials: credentialService }),
+        ...(mcpServerService === undefined ? {} : { mcpServers: mcpServerService }),
         // マネージャーからの報告・質問も、人間の発言と同じ受信箱を通る。
         post: (event) => this.post(event),
         runners: runners ?? createRunnerRegistry([]),
@@ -2864,6 +2888,40 @@ class Clone implements CloneHost {
         this.#listeners.delete(conversationId);
       }
     };
+  }
+
+  /**
+   * **人間の求めで、いま走っているクローンのターンを止める**（#1398 c23-1）。
+   *
+   * それまで人間が走行中のクローンのターンを止める口は、HTTP・CLI・Web UI の
+   * どこにも無く、SDK の `Query.interrupt()` も呼ばれていなかった。長い1ターン
+   * （道具を延々と回している・誤った方向へ進んでいる）を人間が見ていても、
+   * 待つかデーモンごと止めるしか無かった。
+   *
+   * - 走っているターンが無ければ何もせず `'idle'` を返す（止めるものが無い）
+   * - 止めるのは**いまのターンだけ**である。セッションは畳まない（会話の続きは
+   *   残る）。受信箱の待ち行列にも触らない —— 次の合図が来れば次のターンが始まる
+   * - 止めたことは `[判断]` の1行として日誌に残す（人間が後から「誰が止めたか」を
+   *   読めるように）。**先に書いてから止める** —— 止めた後に書くと、止めたことで
+   *   起きた失敗の記録より後ろに並んで、順序が逆に読める
+   * - 止めた後、SDK はそのターンを失敗として終える。それは既存の失敗の経路
+   *   （`#reportFailure`）がそのまま記録する
+   */
+  async interruptTurn(): Promise<'interrupted' | 'idle'> {
+    const turn = this.#turn;
+    const q = this.#query;
+    if (turn === null || q === null) return 'idle';
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}人間の求めで、走っているターンを止めた（` +
+        `${turn.kind === 'distill' ? '蒸留' : '通常'}のターン）。セッションと受信箱はそのまま残る`,
+      ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+    });
+    await q.interrupt();
+    return 'interrupted';
   }
 
   async endConversation(conversationId: string): Promise<void> {
@@ -7609,11 +7667,77 @@ class Clone implements CloneHost {
             appraisalTargets = `評定の的: 測れなかった（理由: ${String(error)}）。commitment_list / manager_list から自分で探すこと。`;
           }
         }
+        // **段4: やり方の候補の材料（#1055）。同じ定期の棚卸しに相乗りする**
+        // （`prompt.ts` の `DistillPromptOptions.practiceCandidates`）。
+        //
+        // ⛔ **ここは材料を読んで文字列にするだけで、`practice_write` を呼ばない。**
+        // 書くかどうかはこの後のターンでクローンが決める（`practice-candidates.ts`
+        // 冒頭の ⛔）。
+        //
+        // try/catch は段2 と別に掛ける（片方が投げてももう片方を巻き込まない）。
+        // 台帳・委譲は段2 と同じ読みをもう1度するが、共有すると段2 の失敗が
+        // こちらへ伝播する形になるので、独立に読む。**食い違いの数え上げはさらに
+        // 内側で別に受ける** —— 日誌の全期間を `asc` で読む重い走査
+        // （`computeAppraisalReconciliation` の doc。ページ送りで有界）なので、
+        // それだけが落ちたときに候補の群まで消さない。
+        let practiceCandidates: string | undefined;
+        if (event.reason === 'scheduled') {
+          try {
+            const commitments = await this.#stores.commitments.list({ includeClosed: true });
+            const jobs = await this.#stores.jobs.listJobs();
+            // **本文と版を読むのは、候補の的になった種類のやり方だけである**
+            // （`practiceCandidateKindKeys` の doc）。
+            const kindKeys = practiceCandidateKindKeys({ commitments, jobs });
+            const practices: PracticeCandidateMaterial[] = [];
+            if (kindKeys.size > 0) {
+              for (const meta of await this.#stores.practices.list()) {
+                if (!kindKeys.has(workKindGroupKey(meta.kind) ?? '')) continue;
+                const found = await this.#stores.practices.read(meta.slug);
+                if (found === null) continue; // 一覧と読みの間に消えた
+                let versions: number | undefined;
+                try {
+                  versions = (await this.#stores.practices.listVersions(meta.slug)).length;
+                } catch {
+                  versions = undefined; // 0 にしない（「版が無い」と「数えられない」は別）
+                }
+                practices.push({
+                  slug: found.slug,
+                  kind: found.kind,
+                  title: found.title,
+                  updatedAt: found.updatedAt,
+                  content: found.content,
+                  ...(versions === undefined ? {} : { versions }),
+                });
+              }
+            }
+            let reconciliation: PracticeCandidateReconciliation;
+            try {
+              reconciliation = {
+                measured: true,
+                stats: await computeAppraisalReconciliation(this.#stores.journal, {
+                  commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+                  jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
+                }),
+              };
+            } catch (error) {
+              reconciliation = { measured: false, reason: String(error) };
+            }
+            practiceCandidates = describePracticeCandidates({
+              commitments,
+              jobs,
+              practices,
+              reconciliation,
+            });
+          } catch (error) {
+            practiceCandidates = `やり方の候補の材料: 測れなかった（理由: ${String(error)}）。commitment_list / manager_list / practice_list から自分で見ること。`;
+          }
+        }
         const distillPrompt = buildDistillPrompt(
           event.reason === 'shutdown' ? 'conversation_end' : event.reason,
           {
             ...(tidyTargets === undefined ? {} : { tidyTargets }),
             ...(appraisalTargets === undefined ? {} : { appraisalTargets }),
+            ...(practiceCandidates === undefined ? {} : { practiceCandidates }),
           },
         );
         // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ
@@ -7664,12 +7788,20 @@ class Clone implements CloneHost {
           'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
         // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
         // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。
+        // **入口の行にも印を立てる（issue #847 の案B）。** 答えと行動を対で読む
+        // 口（`approval-trace.ts` の `traceApproval`）の錨で、印の有無で
+        // 「この記録を始める前のターン」と「記録が動いていない」を分ける。本文の
+        // `approvalId=<id>` は64字で切られうる（`turn-input.ts` の `TAG_LIMIT`）ので、
+        // 錨は本文ではなく構造化した欄に持たせる。
+        const turnStart = turnInputEntry({
+          type: 'human_answer',
+          approvalId: event.approvalId,
+          text: answerPrompt,
+        });
         await this.#journal(
-          turnInputEntry({
-            type: 'human_answer',
-            approvalId: event.approvalId,
-            text: answerPrompt,
-          }),
+          turnStart.type === 'exchange'
+            ? { ...turnStart, answeredApprovalId: event.approvalId }
+            : turnStart,
         );
         // **`#runInternal`（常に `null`）ではなく `#runTurn` を直接呼ぶ（#768）。**
         // `#conversationOf(event)` は、元の承認が会話 id を持っていればそれを
@@ -8848,6 +8980,35 @@ class Clone implements CloneHost {
     this.#reader = this.#read(q);
   }
 
+  /**
+   * 人間の MCP 連携の登録を読む（#325 段2）。**本セッションを組むときと、蒸留を
+   * 起こすたびに呼ぶ** ⟹ 登録の差し替えは「次のセッション／次の蒸留」から効く
+   * （`claude-provider.ts` の `cloneMcpServers` の doc）。
+   *
+   * **読めなくてもセッションは起こす。** 登録は人間が手で書き換えられる器に在る
+   * ので（`FsMcpServerStore` の doc）、壊れた1ファイルでクローンが丸ごと起きなく
+   * なる形にはしない —— 外部の連携なしで起き、**そのことを日誌に残す**（黙って
+   * 空で起きると「登録したのに0本」が原因の出ない形で起きる）。理由の文言には
+   * 値を載せない（`parseMcpServers` と `FsMcpServerStore#read` が名前と欄の
+   * 位置しか出さない）。
+   */
+  async #externalMcpServers(): Promise<Record<string, McpServerConfig>> {
+    try {
+      return (await this.#stores.mcpServers.read())?.mcpServers ?? {};
+    } catch (error) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}MCP サーバの登録が読めなかったので、人間の MCP 連携なしで` +
+          `このセッションを起こした（理由: ${reasonOf(error)}）。` +
+          '登録を直すには人間に PUT /mcp-servers で置き直してもらう。',
+      });
+      return {};
+    }
+  }
+
   async #buildOptions(resume: string | null): Promise<Options> {
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
@@ -8876,6 +9037,7 @@ class Clone implements CloneHost {
       model: this.#model,
       permissionMode: this.#permissionMode,
       mcpServer: this.#mcpServerFactory(this.#toolContext()),
+      externalMcpServers: await this.#externalMcpServers(),
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
@@ -8959,7 +9121,16 @@ class Clone implements CloneHost {
    */
   #toolContext(): ToolContext {
     return {
-      stores: this.#stores,
+      // **日誌だけを包む（issue #847 の案B）。** 答えのターンの中で道具が書く
+      // `decision` / `memory_update` / outbound の `exchange` へ、その承認の id を
+      // 立てる。道具を1本ずつ直さない理由は `approval-trace.ts` の
+      // `stampingJournal` の doc。**蒸留のサイドクエリの context
+      // （`#distillFromTranscript`）には包まない**——あちらは答えのターンと
+      // 並行して走りうる。
+      stores: {
+        ...this.#stores,
+        journal: stampingJournal(this.#stores.journal, () => this.#turn?.approvalId ?? null),
+      },
       emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
       managers: this.#managers,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
@@ -9267,12 +9438,29 @@ class Clone implements CloneHost {
       await this.#journalSelfJournalingToolValidationFailure(tool, raw, mainThreadActor);
       return;
     }
-    await this.#journal({
-      type: 'tool_use',
-      actor: cloneToolActor(raw, mainThreadActor),
-      tool,
-      input: raw?.tool_input,
-    });
+    await this.#journal(
+      stampAnsweredApproval(
+        {
+          type: 'tool_use',
+          actor: cloneToolActor(raw, mainThreadActor),
+          tool,
+          input: raw?.tool_input,
+        },
+        this.#answeredApprovalFor(mainThreadActor),
+      ),
+    );
+  }
+
+  /**
+   * いま走っているターンが承認への回答から起きたものなら、その承認の id
+   * （issue #847 の案B。`approval-trace.ts` の doc）。
+   *
+   * **本セッションの actor の行だけに返す。** 蒸留のサイドクエリ
+   * （`CLONE_DISTILL_ACTOR_ID`）は答えのターンと並行して走りうる別の
+   * セッションなので、`#turn` を読むと答えと無関係な行へ印が付く。
+   */
+  #answeredApprovalFor(mainThreadActor: string): string | null {
+    return mainThreadActor === CLONE_ACTOR_ID ? (this.#turn?.approvalId ?? null) : null;
   }
 
   /**
@@ -9320,24 +9508,29 @@ class Clone implements CloneHost {
       validation.fields.length > 0 ? validation.fields.join(', ') : '（取れなかった）';
     const secretBearing = cloneToolCarriesSecrets(tool);
 
-    await this.#journal({
-      type: 'tool_use',
-      actor: cloneToolActor(raw, mainThreadActor),
-      tool,
-      outcome: 'failed',
-      ...(secretBearing
-        ? {
-            error: excerptLine(
-              `入力検証で落ちた（この道具は実行環境の秘密を運びうるため、値は日誌へ写さない。` +
-                `欠けた/不正な引数: ${fieldList}）`,
-              TOOL_USE_ERROR_EXCERPT,
-            ),
-          }
-        : {
-            input: raw?.tool_input,
-            error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
-          }),
-    });
+    await this.#journal(
+      stampAnsweredApproval(
+        {
+          type: 'tool_use',
+          actor: cloneToolActor(raw, mainThreadActor),
+          tool,
+          outcome: 'failed',
+          ...(secretBearing
+            ? {
+                error: excerptLine(
+                  `入力検証で落ちた（この道具は実行環境の秘密を運びうるため、値は日誌へ写さない。` +
+                    `欠けた/不正な引数: ${fieldList}）`,
+                  TOOL_USE_ERROR_EXCERPT,
+                ),
+              }
+            : {
+                input: raw?.tool_input,
+                error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
+              }),
+        },
+        this.#answeredApprovalFor(mainThreadActor),
+      ),
+    );
 
     if (tool === JOURNAL_WRITE_QUALIFIED_TOOL_NAME) {
       noteDroppedRecord(
@@ -9446,25 +9639,30 @@ class Clone implements CloneHost {
     // 名前が読めない扱いも成功側と揃える（`#journalToolUse` と同じ理由）。
     const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
     if (cloneToolJournalsItself(tool)) return;
-    await this.#journal({
-      type: 'tool_use',
-      actor: cloneToolActor(raw, mainThreadActor),
-      tool,
-      input: raw?.tool_input,
-      // **`is_interrupt` が `true` のときだけ `'interrupted'`。** それ以外
-      // （`false` または欠け）は `'failed'` とする——`is_interrupt` は
-      // optional なので SDK が付けてこないことがあるが、そのときは「中断だと
-      // 分かっていない」であって「中断ではないと確定している」ではない。
-      // 欠けを第3の値にはせず、安全側（failed）に倒す
-      // （`schema.ts` の `tool_use.outcome` の doc と同じ判断）。
-      outcome: raw?.is_interrupt === true ? 'interrupted' : 'failed',
-      // `error` は無制限長の自由文なので切り詰める（`TOOL_USE_ERROR_EXCERPT`
-      // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
-      // 省く——作り物の文言で埋めない。
-      ...(typeof raw?.error === 'string'
-        ? { error: excerptLine(raw.error, TOOL_USE_ERROR_EXCERPT) }
-        : {}),
-    });
+    await this.#journal(
+      stampAnsweredApproval(
+        {
+          type: 'tool_use',
+          actor: cloneToolActor(raw, mainThreadActor),
+          tool,
+          input: raw?.tool_input,
+          // **`is_interrupt` が `true` のときだけ `'interrupted'`。** それ以外
+          // （`false` または欠け）は `'failed'` とする——`is_interrupt` は
+          // optional なので SDK が付けてこないことがあるが、そのときは「中断だと
+          // 分かっていない」であって「中断ではないと確定している」ではない。
+          // 欠けを第3の値にはせず、安全側（failed）に倒す
+          // （`schema.ts` の `tool_use.outcome` の doc と同じ判断）。
+          outcome: raw?.is_interrupt === true ? 'interrupted' : 'failed',
+          // `error` は無制限長の自由文なので切り詰める（`TOOL_USE_ERROR_EXCERPT`
+          // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
+          // 省く——作り物の文言で埋めない。
+          ...(typeof raw?.error === 'string'
+            ? { error: excerptLine(raw.error, TOOL_USE_ERROR_EXCERPT) }
+            : {}),
+        },
+        this.#answeredApprovalFor(mainThreadActor),
+      ),
+    );
   }
 
   /**
@@ -9777,6 +9975,9 @@ class Clone implements CloneHost {
       transcriptTail,
     ].join('\n');
 
+    // **蒸留のたびに読み直す**（`#externalMcpServers` の doc）。本セッションと同じ
+    // 人間の連携を渡す——片方だけに見えると、人格の書き手だけが別の手を持つ。
+    const externalMcpServers = await this.#externalMcpServers();
     const side = this.#queryFn({
       prompt,
       options: buildCloneDistillOptions({
@@ -9816,6 +10017,7 @@ class Clone implements CloneHost {
           // 関数は渡すが常に `undefined` を返す。
           conversationId: () => undefined,
         }),
+        externalMcpServers,
         systemPrompt: buildCloneSystemPrompt({
           memory,
           ...(this.#self === undefined ? {} : { self: this.#self }),
@@ -10541,6 +10743,9 @@ class Clone implements CloneHost {
             ...(turn.conversationId === null || turn.approvalId === null
               ? {}
               : { approvalId: turn.approvalId }),
+            // **issue #847 の案B。** 上の `approvalId` と違い、会話の有無を問わず
+            // 立てる（`schema.ts` の `exchange.answeredApprovalId` の doc）。
+            ...(turn.approvalId === null ? {} : { answeredApprovalId: turn.approvalId }),
           });
         }
 

@@ -754,6 +754,79 @@ describe('buildDistillPrompt — 段2: 横断の蒸留（appraisalTargets）', (
 });
 
 /**
+ * ⭐ 段4: やり方の候補の材料（`DistillPromptOptions.practiceCandidates`）。
+ *
+ * **段2 の歯と同じ手法で測る**（共通の接頭辞・接尾辞から挿入ブロックを機械的に
+ * 取り出す）。加えて、枠の文面が**材料であること・決めるのはクローンであること・
+ * やり方は実行される定義ではないこと**を言っているかを見る —— ここが落ちると、
+ * 評定 → やり方の更新が指示文の側で機械的に流れる形になる（段4 の設計決定）。
+ */
+describe('buildDistillPrompt — 段4: やり方の候補の材料（practiceCandidates）', () => {
+  function extractChunk(baseline: string, withTarget: string): string {
+    let prefix = 0;
+    while (prefix < baseline.length && baseline[prefix] === withTarget[prefix]) prefix++;
+    let suffix = 0;
+    while (
+      suffix < baseline.length - prefix &&
+      baseline[baseline.length - 1 - suffix] === withTarget[withTarget.length - 1 - suffix]
+    ) {
+      suffix++;
+    }
+    return withTarget.slice(prefix, withTarget.length - suffix);
+  }
+
+  it('⭐ 渡さない呼び手の出力は1文字も変わらず、渡すと payload ごと連続した1ブロックが入る', () => {
+    const MARKER = 'PRACTICE-CANDIDATES-PAYLOAD-MARKER';
+    expect(buildDistillPrompt('conversation_end', {})).toBe(buildDistillPrompt('conversation_end'));
+    expect(buildDistillPrompt('pre_compact', {})).toBe(buildDistillPrompt('pre_compact'));
+    const baseline = buildDistillPrompt('scheduled');
+    expect(buildDistillPrompt('scheduled', {})).toBe(baseline);
+    // 段2 だけを渡した出力も、段4 の追加で変わっていない（相乗りした別の節を汚さない）。
+    expect(buildDistillPrompt('scheduled', { appraisalTargets: 'A' })).not.toContain(
+      'practice_history',
+    );
+
+    const withCandidates = buildDistillPrompt('scheduled', { practiceCandidates: MARKER });
+    const chunk = extractChunk(baseline, withCandidates);
+    expect(withCandidates.replace(chunk, '')).toBe(baseline);
+    expect(chunk).toContain(MARKER);
+    expect(chunk.length).toBeGreaterThan(MARKER.length);
+  });
+
+  it('⛔ 枠は「材料である」「決めるのはクローン」「やり方は実行される定義ではない」を言い、構造の制約を禁止として出さない', () => {
+    const baseline = buildDistillPrompt('scheduled');
+    const chunk = extractChunk(
+      baseline,
+      buildDistillPrompt('scheduled', { practiceCandidates: 'MARK' }),
+    );
+    expect(chunk).toContain('材料であって、指示ではない');
+    expect(chunk).toContain('採るかどうかはあなたが決める');
+    expect(chunk).toContain('実行される定義ではない');
+    expect(chunk).toContain('何もしない');
+    expect(chunk).toContain('構造の材料（禁止ではない）');
+    // 「付けるべき」「書け」の類を言わない。
+    expect(chunk).not.toMatch(/付けるべき|practice_write` で書け|書き換えよ/);
+  });
+
+  it('段2 と段4 を両方渡すと、片方ずつのブロックがそのまま連結して出る', () => {
+    const baseline = buildDistillPrompt('scheduled');
+    const appraisalChunk = extractChunk(
+      baseline,
+      buildDistillPrompt('scheduled', { appraisalTargets: 'APPRAISAL-M' }),
+    );
+    const practiceChunk = extractChunk(
+      baseline,
+      buildDistillPrompt('scheduled', { practiceCandidates: 'PRACTICE-M' }),
+    );
+    const both = buildDistillPrompt('scheduled', {
+      appraisalTargets: 'APPRAISAL-M',
+      practiceCandidates: 'PRACTICE-M',
+    });
+    expect(both.replace(appraisalChunk + practiceChunk, '')).toBe(baseline);
+  });
+});
+
+/**
  * auto-memory は既定で塞いである（`claude-provider.ts` の
  * `buildManagerSessionOptions` が `settings.autoMemoryEnabled: false` を渡す、
  * `runner.ts` の `resolveManagerAutoMemoryEnabled`）。**それでも本文の告知は削らない**

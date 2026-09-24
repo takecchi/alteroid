@@ -233,6 +233,9 @@ describe('403（本文で理由を分ける）', () => {
    */
   const NOT_OPERATOR = { error: '実行環境の持ち主だけが操作できる' };
   const NOT_GRANTED = { error: 'このアカウントには alteroid を使う許可が無い' };
+  const NOT_DECLARED_OWNER = {
+    error: '実行環境の持ち主として宣言されたアカウントだけが操作できる',
+  };
 
   /** 投げられた文言そのものを取る（どちらの手順が出たかを両側から見るため）。 */
   async function messageOf(run: () => Promise<unknown>): Promise<string> {
@@ -251,6 +254,20 @@ describe('403（本文で理由を分ける）', () => {
     expect(message).toContain('実行環境の持ち主だけです');
     expect(message).toContain('docker compose exec');
     expect(message).not.toContain('access grant');
+  });
+
+  /**
+   * **2026-09-24（#1122）に `/profile` の門が `requireOwner` へ移った**ので、
+   * 宣言していないアカウントはこの本文で 403 になる。「理由を判別できなかった」に
+   * 倒さず、`access owner` を案内する。
+   */
+  it('宣言していないアカウントのときは access owner を促す', async () => {
+    setReply('GET', '/profile', { status: 403, body: NOT_DECLARED_OWNER });
+
+    const message = await messageOf(() => profileShowCommand());
+    expect(message).toContain('access owner');
+    expect(message).not.toContain('理由を判別でき');
+    expect(message).not.toContain('docker compose exec');
   });
 
   it('未 grant のときは access grant を促す（器の中で実行しろ、と言わない）', async () => {

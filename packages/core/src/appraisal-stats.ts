@@ -556,7 +556,15 @@ function renderReconciliationValue(value: AppraisalValue | 'other'): string {
   return known.success ? appraisalTallyLabel(known.data) : value;
 }
 
-function renderReconciliation(rec: AppraisalReconciliation): string[] {
+/**
+ * 1つの軸の (b)/(c) の食い違いを行へ組む。
+ *
+ * **export してあるのは、段4 の候補の材料（`practice-candidates.ts`）が同じ字面で
+ * 出すためである。** `appraisal_stats` と蒸留の指示文とで別々に組むと、同じ数が
+ * 2つの面で違う言い方になり、片方だけ直す穴ができる（`describeAppraisal` を3面が
+ * 呼ぶのと同じ理由）。
+ */
+export function renderReconciliation(rec: AppraisalReconciliation): string[] {
   const lines: string[] = [];
   if (rec.totalPairs === 0) {
     lines.push('（クローンが付けた評定を人間が付け直した対は無い）');

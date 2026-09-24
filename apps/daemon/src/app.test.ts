@@ -27,7 +27,9 @@ import {
   createAuthProviderRegistry,
   createAuthService,
   createCredentialService,
+  createLocalRunner,
   createManagerPool,
+  createMcpServerService,
   createMemoryStores,
   createProfileApplier,
   createProfileService,
@@ -36,7 +38,9 @@ import {
   createTokenPoolService,
   droppedTraceLedgerSince,
   fingerprintOf,
+  mcpServersFingerprintOf,
   noteDroppedRecord,
+  RunnerMcpServersUnsupportedError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
   recentDroppedTraces,
@@ -555,6 +559,25 @@ describe('HTTP API', () => {
 
     expect(response.status).toBe(200);
     expect(fake.ended).toEqual(['conv-x']);
+  });
+
+  it('走っているターンを止める口（#1398 c23-1）: 口を持たないクローンは unsupported と申告する', async () => {
+    const response = await app.request('/clone/interrupt', post);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: 'unsupported' });
+  });
+
+  it('走っているターンを止める口（#1398 c23-1）: クローンの答え（interrupted / idle）をそのまま返す', async () => {
+    const outcomes: ('interrupted' | 'idle')[] = ['interrupted', 'idle'];
+    let calls = 0;
+    fake.clone.interruptTurn = async () => outcomes[calls++] ?? 'idle';
+
+    const first = await app.request('/clone/interrupt', post);
+    expect(await first.json()).toEqual({ outcome: 'interrupted' });
+    const second = await app.request('/clone/interrupt', post);
+    expect(await second.json()).toEqual({ outcome: 'idle' });
+    expect(calls).toBe(2);
   });
 
   it('記憶を API から読んで書き換えられる（人間の制御手段1）', async () => {
@@ -1162,6 +1185,71 @@ describe('HTTP API', () => {
 
   it('存在しない承認待ちへの回答は 404', async () => {
     expect((await app.request('/approvals/nope/answer', json({ answer: 'x' }))).status).toBe(404);
+  });
+
+  /**
+   * 答えとその後の行動の対（issue #847 の案B）。クローンの `approval_trace` と
+   * 同じ `traceApproval` を通ることは、同じ日誌から同じ行が返ることで測る
+   * （状態の分け方そのものの歯は `packages/core/src/approval-trace.test.ts`）。
+   */
+  it('GET /approvals/:id/trace は答えと、その承認の印を持つ行動を返し、知らない id は 404', async () => {
+    const answeredAt = new Date(Date.now() - 1_000).toISOString();
+    await stores.jobs.putApproval({
+      id: 'ap-trace',
+      createdAt: new Date(Date.now() - 2_000).toISOString(),
+      question: '本番へ出してよいか',
+      answeredAt,
+      answer: '(b) で',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'inbound',
+      text: 'ターンの入力: human_answer approvalId=ap-trace',
+      answeredApprovalId: 'ap-trace',
+    });
+    await stores.journal.append({
+      type: 'decision',
+      decision: '(b) に沿って進めた',
+      grounds: 'g',
+      answeredApprovalId: 'ap-trace',
+    });
+    await stores.journal.append({ type: 'decision', decision: '無関係', grounds: 'g' });
+
+    const response = await app.request('/approvals/ap-trace/trace');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      state: string;
+      approval: { answer: string };
+      actions: { decision?: string }[];
+    };
+    expect(body.state).toBe('paired');
+    expect(body.approval.answer).toBe('(b) で');
+    expect(body.actions.map((entry) => entry.decision)).toEqual(['(b) に沿って進めた']);
+
+    expect((await app.request('/approvals/nope/trace')).status).toBe(404);
+  });
+
+  it('GET /approvals/:id/trace は印を持つ入口の後に行動が無ければ no_actions を返す（「無い」を黙って落とさない）', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-none',
+      createdAt: new Date(Date.now() - 2_000).toISOString(),
+      question: 'q',
+      answeredAt: new Date(Date.now() - 1_000).toISOString(),
+      answer: 'よい',
+    });
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'self',
+      role: 'inbound',
+      text: 'ターンの入力: human_answer approvalId=ap-none',
+      answeredApprovalId: 'ap-none',
+    });
+    const body = (await (await app.request('/approvals/ap-none/trace')).json()) as {
+      state: string;
+      actions: unknown[];
+    };
+    expect(body).toMatchObject({ state: 'no_actions', actions: [] });
   });
 
   /**
@@ -6871,8 +6959,8 @@ describe('認証トークンのプール', () => {
    * `POST /access/:id/revoke` の6経路から `requireOperator` を外し、資格は
    * `authenticate` だけにした。**上のコメントが書いていた「許可されたアカウントでも
    * 403」は、いまこの6経路には当てはまらない**——`/profile` の GET/PUT だけは
-   * 変えていない（`auth.test.ts`「実行環境プロファイルは持ち主だけ」が固定してい
-   * て、ここでは触らない）。この describe がいま測るのは次の4つである:
+   * 変えていない（`auth.test.ts`「実行環境プロファイルは宣言済み owner まで」が固定してい
+   * て、ここでは触らない。2026-09-24 に門は `requireOwner` へ移った。#1122）。この describe がいま測るのは次の4つである:
    * ①実行環境の持ち主は今日どおり6経路とも通る ②許可されたアカウントも同格に
    * 通る（新しく足したもの） ③境界そのもの（未ログイン＝401、ログイン済みだが
    * 未 grant＝403）は変わっていない ④同格になった側から grant を叩くと、2人目も通る。
@@ -8741,5 +8829,192 @@ describe('GET /usage: 応答本文に tokenSource の生値が1文字も出な�
     expect(text).not.toContain(marker);
 
     poller.stop();
+  });
+});
+
+/**
+ * 人間の MCP 連携の登録（`/mcp-servers`。#325 段1）。
+ *
+ * 固定しているのは3つ —— ①`.mcp.json` をそのまま貼れる形で往復する
+ * ②**値（鍵が入りうる）を、応答の 400・`PUT` の応答・日誌のどこにも載せない**
+ * ③alteroid 自身の名前と未知の欄は保存しない（前のものが残る）。門（`requireOwner`）
+ * は `auth.test.ts` が撃つ。
+ */
+describe('MCP サーバの登録（/mcp-servers）', () => {
+  const put = (body: unknown) =>
+    app.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('置いていなければ空の mcpServers を返す', async () => {
+    const response = await app.request('/mcp-servers');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ mcpServers: {} });
+  });
+
+  it('.mcp.json の形で置いて読み直せる。PUT の応答と日誌には名前だけが載る', async () => {
+    const mcpServers = {
+      github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
+      remote: {
+        type: 'http',
+        url: 'https://example.invalid/mcp',
+        headers: { Authorization: 'Bearer SECRET-IN-HEADER' },
+      },
+    };
+    const response = await put({ mcpServers });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain('SECRET');
+    const body = JSON.parse(text) as { names: string[]; updatedAt: string; appliesFrom: string };
+    expect(body.names).toEqual(['github', 'remote']);
+    expect(Number.isNaN(Date.parse(body.updatedAt))).toBe(false);
+
+    const read = (await (await app.request('/mcp-servers')).json()) as {
+      mcpServers: unknown;
+      updatedAt?: string;
+    };
+    expect(read.mcpServers).toEqual(mcpServers);
+    expect(read.updatedAt).toBe(body.updatedAt);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('MCP サーバの登録'),
+    );
+    expect(entry).toBeDefined();
+    expect(JSON.stringify(entry)).toContain('github, remote');
+    expect(JSON.stringify(entry)).not.toContain('SECRET');
+  });
+
+  it('空の mcpServers で外れる', async () => {
+    await put({ mcpServers: { github: { command: 'gh-mcp' } } });
+    const response = await put({ mcpServers: {} });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { names: string[] }).names).toEqual([]);
+    expect(await stores.mcpServers.read()).toBeNull();
+  });
+
+  /**
+   * **既定の 400 は本文をそのまま `data` に載せて返す**（`PUT /profile` の hook の
+   * doc）。ここで値が返ると、欄の綴りを1つ間違えただけで鍵が応答へ載る。
+   */
+  it('形が不正なら保存せず、400 の本文に送られた値を載せない', async () => {
+    await put({ mcpServers: { github: { command: 'gh-mcp' } } });
+
+    for (const bad of [
+      { mcpServers: { alteroid: { command: 'x', env: { K: 'SECRET-RESERVED' } } } },
+      { mcpServers: { ok: { command: 'x', enviroment: { K: 'SECRET-TYPO' } } } },
+      { mcpServers: { ok: { type: 'http', url: 'https://x', headers: { K: 1 } } }, x: 'SECRET' },
+      { servers: { ok: { command: 'SECRET-WRONG-KEY' } } },
+    ]) {
+      const response = await put(bad);
+      expect(response.status).toBe(400);
+      expect(await response.text()).not.toContain('SECRET');
+    }
+    // 前のものが残る。
+    expect((await stores.mcpServers.read())?.mcpServers).toEqual({
+      github: { command: 'gh-mcp' },
+    });
+  });
+});
+
+/**
+ * `PUT /mcp-servers` が runner へも降ろし、runner ごとの結果を返す（#325 段3）。
+ *
+ * 固定しているのは3つ —— ①保存した登録が繋がっている runner へ届く（指紋が正本と
+ * 一致する） ②**応答にも日誌にも値を載せない**（名前・指紋・成否だけ） ③古い
+ * runner（口が無い）は `unsupported` として一時障害と分けて返し、保存そのものは
+ * 成功する（次の名乗りで降ろし直す）。
+ */
+describe('MCP サーバの登録を runner へ降ろす（PUT /mcp-servers。#325 段3）', () => {
+  const REGISTRATION = {
+    github: { command: 'gh-mcp', env: { GITHUB_TOKEN: 'SECRET-IN-ENV' } },
+  };
+
+  function withRunners() {
+    const fresh = createLocalRunner({
+      runnerId: 'runner-new',
+      workspacePath: '/work',
+      queryFn: (() => {
+        throw new Error('この検証では SDK を起こさない');
+      }) as never,
+      env: {},
+    });
+    const old = createLocalRunner({
+      runnerId: 'runner-old',
+      workspacePath: '/work',
+      queryFn: (() => {
+        throw new Error('この検証では SDK を起こさない');
+      }) as never,
+      env: {},
+    });
+    old.setMcpServers = async () => {
+      throw new RunnerMcpServersUnsupportedError('runner-old');
+    };
+    const registry = createRunnerRegistry([fresh, old]);
+    const withService = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      mcpServers: createMcpServerService({ stores, runners: registry }),
+    });
+    return { withService, fresh };
+  }
+
+  it('保存して runner へ配り、runner ごとの結果（名前と指紋だけ）を返す', async () => {
+    const { withService, fresh } = withRunners();
+    const response = await withService.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mcpServers: REGISTRATION }),
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).not.toContain('SECRET');
+    expect(text).not.toContain('gh-mcp');
+
+    const body = JSON.parse(text) as {
+      names: string[];
+      sha256?: string;
+      runners: { runnerId: string; ok: boolean; unsupported?: true; mcpServers?: unknown }[];
+    };
+    const want = mcpServersFingerprintOf(REGISTRATION);
+    expect(body.names).toEqual(['github']);
+    expect(body.sha256).toBe(want);
+    const byId = new Map(body.runners.map((r) => [r.runnerId, r]));
+    expect(byId.get('runner-new')).toMatchObject({
+      ok: true,
+      mcpServers: { sha256: want, names: ['github'] },
+    });
+    // 古い runner は一時障害と分けて返す。保存そのものは成功している（200）。
+    expect(byId.get('runner-old')).toMatchObject({ ok: false, unsupported: true });
+
+    // 実際に届いている（指紋は正本と一致する）。
+    expect((await fresh.mcpServers?.())?.sha256).toBe(want);
+
+    // 日誌には配布の成否まで残り、値は書かない。
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('MCP サーバの登録'),
+    );
+    const serialized = JSON.stringify(entry);
+    expect(serialized).toContain('runner-new=ok');
+    expect(serialized).toContain('runner-old=口なし');
+    expect(serialized).not.toContain('SECRET');
+    expect(serialized).not.toContain('gh-mcp');
+  });
+
+  it('1本道を渡していない構成では保存だけして、配らなかったことを runners: [] で返す', async () => {
+    const response = await app.request('/mcp-servers', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mcpServers: REGISTRATION }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { runners: unknown[]; sha256?: string };
+    expect(body.runners).toEqual([]);
+    expect(body.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
   });
 });

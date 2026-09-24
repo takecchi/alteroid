@@ -10,8 +10,10 @@ import {
   describeManagerState,
   describeSessionMissingKind,
   jobStatusSchema,
+  renderApprovalTrace,
   usageLayerSchema,
   usageSiteSchema,
+  type ApprovalTrace,
   type Commitment,
   type UnreadableCommitment,
   type UsageLayer,
@@ -276,6 +278,8 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /approvals           承認待ち（番号付き）
 /approvals all       回答済み・取り下げ済みも含めて見る
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/approval-trace <番号|id>  その承認の答えと、答えを受けてクローンが取った行動を対で見る
+                     （番号は /approvals の並び。答えが無い・対が無いときは理由が出る）
 /answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
                      （回答は1語。複数語なら "..." で囲む。1件が駄目でも残りは進み、
                       結果は id ごとに出る）
@@ -1387,6 +1391,45 @@ export async function runSlashCommand(
         );
       });
       stdout.write('  /answer <番号> <回答> で答えられます（答えた仕事だけが再開します）\n');
+      return 'ok';
+    }
+
+    /**
+     * 承認の答えと、その後にクローンが取った行動を対で見る（issue #847 の案B）。
+     *
+     * **デーモンの `GET /approvals/:id/trace` を読み、クローンの `approval_trace` と
+     * 同じ `renderApprovalTrace` で文字にする**——口ごとに出す中身を違えない。
+     * 違うのは切らないことだけ（人間へ返す口なので、抜粋にすれば能力を削る。
+     * north_star 禁止1）。
+     */
+    case '/approval-trace': {
+      const [reference] = rest;
+      if (!reference) {
+        stdout.write('使い方: /approval-trace <番号|id>\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.approvals);
+      if (id === null) {
+        stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
+        return 'ok';
+      }
+      const response = await client.approvals[':id'].trace.$get({ param: { id } });
+      if (response.status === 404) {
+        stdout.write(`承認 ${id} はありません\n`);
+        return 'ok';
+      }
+      if (!response.ok) {
+        stdout.write('承認の答えと行動の対を読めませんでした\n');
+        return 'ok';
+      }
+      const trace = (await response.json()) as ApprovalTrace;
+      stdout.write(
+        `${renderApprovalTrace(trace, {
+          budget: null,
+          summaryLimit: null,
+          detailHint: '（行動は日誌の行の全文。前後の文脈は /journal で読めます）',
+        })}\n`,
+      );
       return 'ok';
     }
 

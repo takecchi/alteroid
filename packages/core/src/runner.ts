@@ -36,6 +36,8 @@ import {
 import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
 import { excerptLine } from './excerpt.js';
+import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
+import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -59,6 +61,7 @@ import type {
   RunnerEvent,
   RunnerLease,
   RunnerManagerState,
+  RunnerMcpServersFingerprint,
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerResumeCommand,
@@ -364,6 +367,25 @@ export interface RunnerHost {
   profile(): RunnerProfileFingerprint | undefined;
   /** 実行環境プロファイルを差し替える。**置く前に評価して、結果を返す。** */
   setProfile(script: string): Promise<RunnerProfileResult>;
+  /**
+   * いま置いてある MCP の登録の指紋（#325 段3）。**値は出さない。** 置いていなければ
+   * `undefined`（空の登録を置いた＝外した場合も同じ）。
+   */
+  mcpServers(): RunnerMcpServersFingerprint | undefined;
+  /**
+   * MCP の登録を差し替える（#325 段3）。**置く前に `parseMcpServers` を通す** ——
+   * 不正なら投げ、前の登録が残る。空の `{}` は「外す」。
+   *
+   * **メモリにだけ持つ。** プロファイルや鍵と違ってファイルへ落とさないのは、
+   * 走行中のプロセスが読み直す経路（`gh` シム・`BASH_ENV`）が無く、効くのは
+   * セッションを組む瞬間だけだからである。器を作り直せば消えるが、デーモンが
+   * 名乗りのたびに降ろし直す（`manager.ts` の `#pushMcpServers`）。
+   *
+   * **走っているセッションには届かない**（SDK の `mcpServers` は `query()` の
+   * 起動時に1度だけ渡る）。次に開くセッション —— 新しい委譲と、resume・開き直し ——
+   * から効く。
+   */
+  setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
   start(command: RunnerStartCommand): Promise<void>;
   /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
   resume(command: RunnerResumeCommand): Promise<void>;
@@ -380,8 +402,9 @@ export interface RunnerHost {
    * この managerId の作業ツリーが抱えている、未 push の実装と未コミットの
    * 変更を数える（Issue #1039）。セッションが無ければ `undefined`。
    *
-   * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名まで
-   * （`unpushedWorkResultSchema` の doc）。
+   * ⛔ ネットワークを一切使わない。出す粒度は有無・件数・枝名と、origin
+   * remote の host/path まで（host/path は Issue #1376 B2。userinfo・クエリ・
+   * 資格は出さない。`unpushedWorkResultSchema` の doc）。
    */
   unpushedWork(
     managerId: string,
@@ -458,6 +481,11 @@ class Host implements RunnerHost {
    */
   readonly #profile: ProfileApplier | undefined;
   readonly #sessions = new Map<string, RunnerSession>();
+  /**
+   * デーモンから降りてきた MCP の登録（#325 段3）と、その指紋。**置いていなければ
+   * `undefined`。** 値は `#buildOptions` へ渡す以外に外へ出さない。
+   */
+  #mcpServers: { servers: McpServers; fingerprint: RunnerMcpServersFingerprint } | undefined;
   readonly #enforceLease: boolean;
   /**
    * 制御面（認証済みの呼び）から最後に接触があった時刻。
@@ -600,6 +628,30 @@ class Host implements RunnerHost {
     return this.#profile.apply(script);
   }
 
+  mcpServers(): RunnerMcpServersFingerprint | undefined {
+    return this.#mcpServers?.fingerprint;
+  }
+
+  setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined {
+    // **検査の正本を1つにする。** デーモンの器（`McpServerStore.write`）も同じ関数を
+    // 通しているが、ここは制御面の入口なので、届いたものを信じずにもう一度通す
+    // （文言に値は載らない —— `parseMcpServers` の doc）。
+    const servers = parseMcpServers(input);
+    if (Object.keys(servers).length === 0) {
+      this.#mcpServers = undefined;
+      return undefined;
+    }
+    this.#mcpServers = {
+      servers,
+      fingerprint: {
+        sha256: mcpServersFingerprintOf(servers),
+        names: mcpServerNames(servers),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    return this.#mcpServers.fingerprint;
+  }
+
   /**
    * プロファイルを重ねる前の env。鍵まで載せた状態で評価する。
    *
@@ -640,6 +692,7 @@ class Host implements RunnerHost {
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
       profileEnv: () => this.#profile?.env() ?? {},
+      mcpServers: () => this.#mcpServers?.servers,
       onClosed: () => this.#sessions.delete(managerId),
     });
     this.#sessions.set(managerId, session);
@@ -754,6 +807,12 @@ const RESOLVED_MEMORY_LIMIT = 512;
  * 件数の蓋は1本が異常に多く拒否されたときのため。達したら `note` で上へ言う。
  */
 const DENIED_MEMORY_LIMIT = 512;
+
+/**
+ * `#cutOffWorkers`（起こし直しの上限で打ち切った作業者）を控える件数の上限（#901）。
+ * 長寿のセッションで表が際限なく育たないための蓋。
+ */
+const CUT_OFF_WORKERS_LIMIT = 500;
 
 /**
  * `#onSubagentStop` が `note` の `text` へ積む文字数の上限（#357）。
@@ -944,6 +1003,13 @@ interface RunnerSessionOptions {
    * マネージャーだけが古い環境で走る。
    */
   profileEnv: () => Record<string, string>;
+  /**
+   * デーモンから降りてきた MCP の登録（#325 段3）。置いていなければ `undefined`。
+   *
+   * **関数で受ける**（`profileEnv` と同じ理由）。値で渡すと、セッションを作った後に
+   * 降りた登録が、そのセッションの resume・開き直しにも届かない。
+   */
+  mcpServers: () => McpServers | undefined;
   onClosed: () => void;
 }
 
@@ -959,6 +1025,7 @@ class RunnerSession {
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
   readonly #profileEnv: () => Record<string, string>;
+  readonly #mcpServers: () => McpServers | undefined;
   readonly #onClosed: () => void;
 
   readonly #input: SDKUserMessage[] = [];
@@ -1154,6 +1221,15 @@ class RunnerSession {
    * 消える。
    */
   #toolsSinceResult = 0;
+  /**
+   * 起こし直しの上限で打ち切った作業者の `agent_id`（#901）。
+   *
+   * `Task` の結果（`AgentOutput`）は打ち切りも正常な完了も同じ `status: 'completed'`
+   * の顔で返る（#901 の段0の実測）。打ち切ったのは alteroid 自身（`#onSubagentStop`）
+   * なので、その事実をここに控え、マネージャー側の `PostToolUse` で結果の `agentId`
+   * と突き合わせて注記する（`#annotateCutOffWorker`）。**注記したら消す**（1回だけ）。
+   */
+  readonly #cutOffWorkers = new Set<string>();
   /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
   #submitsSinceResult = 0;
   /**
@@ -1368,6 +1444,7 @@ class RunnerSession {
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode;
     this.#profileEnv = options.profileEnv;
+    this.#mcpServers = options.mcpServers;
     this.#onClosed = options.onClosed;
   }
 
@@ -1714,6 +1791,12 @@ class RunnerSession {
       // 既定は閉じる。人間が `ALTEROID_MANAGER_AUTO_MEMORY=true` を置いたときだけ
       // 開く（north_star 禁止2「方針は設定で開けられなければならない」）。
       managerAutoMemoryEnabled: resolveManagerAutoMemoryEnabled(this.#env),
+      // 人間の MCP 連携の登録（#325 段3）。**開くたびに読む** —— 走行中に降りた登録は
+      // このセッションには届かないが、次の resume・開き直しからは効く。
+      ...(() => {
+        const mcpServers = this.#mcpServers();
+        return mcpServers === undefined ? {} : { mcpServers };
+      })(),
       // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
       // 鍵を runner に置かないため）。
       sessionStore: this.#sessionStore(),
@@ -3357,7 +3440,10 @@ class RunnerSession {
    * 無く、作業者の生ログ側にも構造化された形では出ないためである（実測: 生ログ
    * に出るのは `Command running in background with ID: …` という**自由文**だけ）。
    */
-  async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
+  async #onPostToolUse(input: unknown): Promise<{
+    continue: true;
+    hookSpecificOutput?: { hookEventName: 'PostToolUse'; additionalContext: string };
+  }> {
     const hook = input as {
       tool_name?: string;
       tool_input?: unknown;
@@ -3388,7 +3474,60 @@ class RunnerSession {
 
     this.#recordBackgroundTaskOwner(hook.tool_response, hook.agent_id);
 
-    return { continue: true };
+    // マネージャー自身の呼び出しだけを見る（`Task` を呼ぶのはマネージャーなので
+    // `agent_id` が付かない。#901）。
+    const additionalContext =
+      hook.agent_id === undefined ? this.#annotateCutOffWorker(hook.tool_response) : null;
+    if (additionalContext === null) return { continue: true };
+    return {
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext },
+    };
+  }
+
+  /** 起こし直しの上限で打ち切った作業者を控える（#901。`#cutOffWorkers`）。 */
+  #recordCutOffWorker(agentId: string): void {
+    this.#cutOffWorkers.delete(agentId);
+    this.#cutOffWorkers.add(agentId);
+    while (this.#cutOffWorkers.size > CUT_OFF_WORKERS_LIMIT) {
+      const oldest = this.#cutOffWorkers.values().next().value;
+      if (oldest === undefined) break;
+      this.#cutOffWorkers.delete(oldest);
+    }
+  }
+
+  /**
+   * `Task` の結果が、起こし直しの上限で打ち切った作業者のものなら、マネージャーへ
+   * 渡す注記を返す（#901）。そうでなければ `null`。
+   *
+   * **結び目は `tool_response.agentId`（`AgentOutput` の欄）と `SubagentStop` の
+   * `agent_id` である。** フックの `agent_id` どうしでは結べない（`Task` の
+   * `PostToolUse` はマネージャー側で発火するので `agent_id` が付かない。#901 本文）。
+   *
+   * ⚠️ **2つの id が同じ値であることは、本物の `query()` では測っていない**（型定義が
+   * どちらも作業者の id と読める形をしているだけである）。違っていたら注記が
+   * 出ないだけで、挙動は今までと同じ側へ倒れる。
+   *
+   * ⚠️ **同期の `Task`（`status: 'completed'`）にしか効かない。** 背景で起こした委譲
+   * （`async_launched`）の完了は `PostToolUse` を通らない。その経路では
+   * `manager.ts` の `case 'note'`（`escalate`）がクローンへ上げるだけである。
+   */
+  #annotateCutOffWorker(toolResponse: unknown): string | null {
+    if (typeof toolResponse !== 'object' || toolResponse === null) return null;
+    const response = toolResponse as { status?: unknown; agentId?: unknown };
+    if (response.status !== 'completed' || typeof response.agentId !== 'string') return null;
+    if (!this.#cutOffWorkers.delete(response.agentId)) return null;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: `Task の結果に注記した（#901）: agent_id=${response.agentId} は起こし直しの上限で打ち切られていた`,
+    });
+    return (
+      `⚠️ この作業者（agent_id=${response.agentId}）は、自分で起こした背景処理を残したまま` +
+      '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+      '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
+      'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。'
+    );
   }
 
   /**
@@ -3931,6 +4070,7 @@ class RunnerSession {
           outcome: 'limit_reached',
         },
       });
+      this.#recordCutOffWorker(agentId);
 
       return { continue: true };
     } catch (error: unknown) {

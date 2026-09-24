@@ -11,6 +11,7 @@ import {
   computeUnpushedWork,
   DEFAULT_MAX_DEPTH,
   findGitDirs,
+  parseRemoteOriginUrl,
   type ProcessSpawnFn,
 } from './unpushed-work.js';
 
@@ -250,7 +251,7 @@ describe('computeUnpushedWork — 出す粒度（ファイル名・差分の中�
     }
   });
 
-  it('unpushedWorkTreeSchema が持つ欄は、有無・件数・枝名までに限られる（形そのものの固定）', () => {
+  it('unpushedWorkTreeSchema が持つ欄は、有無・件数・枝名・origin の host/path までに限られる（形そのものの固定。Issue #1376 B2 で remoteOrigin を1つだけ広げた）', () => {
     expect(Object.keys(unpushedWorkTreeSchema.shape).sort()).toEqual(
       [
         'relativePath',
@@ -259,8 +260,114 @@ describe('computeUnpushedWork — 出す粒度（ファイル名・差分の中�
         'unpushedCommitCountUnknown',
         'uncommittedChangeCount',
         'uncommittedChangeCountUnknown',
+        'remoteOrigin',
       ].sort(),
     );
+  });
+});
+
+describe('parseRemoteOriginUrl — host/path だけを取り出す（userinfo・クエリ・フラグメント・資格は落とす。Issue #1376 B2）', () => {
+  it('userinfo（トークン形）を落とす: https://<token>@host/path', () => {
+    expect(parseRemoteOriginUrl('https://ghp_abc123XYZ@github.com/acme/widgets.git')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('userinfo（user:pass 形）を落とす: https://user:pass@host/path', () => {
+    expect(parseRemoteOriginUrl('https://user:pass@github.com/acme/widgets.git')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('userinfo（ssh scheme 形）を落とす: ssh://git@host/path', () => {
+    expect(parseRemoteOriginUrl('ssh://git@github.com/acme/widgets.git')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('scp 形式（git@host:owner/repo.git）も host/path だけにする', () => {
+    expect(parseRemoteOriginUrl('git@github.com:acme/widgets.git')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('scp 形式で userinfo に "@" が2個以上（壊れた／細工された入力）なら undefined（host に断片を漏らさない）', () => {
+    expect(parseRemoteOriginUrl('tok@en@github.com:acme/w.git')).toBeUndefined();
+  });
+
+  it('scp 形式でもクエリ文字列を落とす', () => {
+    expect(parseRemoteOriginUrl('git@github.com:acme/widgets.git?token=abc123XYZ')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('scp 形式でもフラグメントを落とす', () => {
+    expect(parseRemoteOriginUrl('git@github.com:acme/widgets.git#readme')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('クエリ文字列（?token=…）を落とす', () => {
+    expect(parseRemoteOriginUrl('https://github.com/acme/widgets.git?token=abc123XYZ')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('フラグメントを落とす', () => {
+    expect(parseRemoteOriginUrl('https://github.com/acme/widgets.git#readme')).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+  });
+
+  it('落とせない・解釈できない形は undefined（値を作らない。生の文字列は出さない）', () => {
+    expect(parseRemoteOriginUrl('')).toBeUndefined();
+    expect(parseRemoteOriginUrl('   ')).toBeUndefined();
+    expect(parseRemoteOriginUrl('/local/bare/repo.git')).toBeUndefined();
+    expect(parseRemoteOriginUrl('not a url at all')).toBeUndefined();
+  });
+});
+
+describe('computeUnpushedWork — remoteOrigin（origin の host/path。Issue #1376 B2）', () => {
+  it('origin remote の URL から userinfo を落とした host/path を返す', async () => {
+    initRepo(root);
+    commitFile(root, 'a.txt', 'first\n', 'first');
+    git(root, ['remote', 'add', 'origin', 'https://ghp_secretToken@github.com/acme/widgets.git']);
+
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+
+    expect(result.worktrees[0]?.remoteOrigin).toEqual({
+      host: 'github.com',
+      path: 'acme/widgets.git',
+    });
+    expect(JSON.stringify(result)).not.toContain('ghp_secretToken');
+  });
+
+  it('origin remote が無ければ remoteOrigin は省かれる（0 と混ぜない）', async () => {
+    initRepo(root);
+    commitFile(root, 'a.txt', 'first\n', 'first');
+
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+
+    expect(result.worktrees[0]?.remoteOrigin).toBeUndefined();
+  });
+
+  it('origin remote の URL が解釈できない形なら remoteOrigin は省かれ、生の文字列も出ない', async () => {
+    initRepo(root);
+    commitFile(root, 'a.txt', 'first\n', 'first');
+    git(root, ['remote', 'add', 'origin', 'not a url at all']);
+
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+
+    expect(result.worktrees[0]?.remoteOrigin).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('not a url at all');
   });
 });
 

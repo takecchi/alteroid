@@ -184,6 +184,27 @@ describe('知らせるべき変化', () => {
     expect(usageTransitionOf(same, same)).toBeUndefined();
   });
 
+  it('rejected が続いていても、課金枠が使えない理由が変わった回は知らせる（#1222）', () => {
+    const before = {
+      kind: 'five_hour',
+      status: 'rejected' as const,
+      overageDisabledReason: 'member_zero_credit_limit',
+    };
+    const after = { ...before, overageDisabledReason: 'org_level_disabled_until' };
+    expect(usageTransitionOf(before, after)).toBe('rejected');
+    // 同じ理由のままなら知らせない。
+    expect(usageTransitionOf(after, after)).toBeUndefined();
+    // 理由を運ばない観測は「変わった」に数えない。
+    expect(usageTransitionOf(after, { kind: 'five_hour', status: 'rejected' })).toBeUndefined();
+    // allowed のあいだに理由だけ変わっても知らせない（追い返されていない）。
+    expect(
+      usageTransitionOf(
+        { status: 'allowed', overageDisabledReason: 'a' },
+        { status: 'allowed', overageDisabledReason: 'b' },
+      ),
+    ).toBeUndefined();
+  });
+
   it('追い返されたことを課金枠の話より優先する', () => {
     expect(usageTransitionOf(undefined, { status: 'rejected', usingOverage: true })).toBe(
       'rejected',

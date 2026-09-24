@@ -69,6 +69,8 @@ function stubApprovals(
      * を叩く経路が無ければこの分岐には一度も入らない。
      */
     conversation?: (id: string) => Response | Promise<Response>;
+    /** `GET /approvals/:id/trace` の応答（issue #847 の案B）。渡さなければ繋がらない。 */
+    trace?: (id: string) => Response | Promise<Response>;
   } = {},
 ): ApprovalsStub {
   const calls: string[] = [];
@@ -93,6 +95,11 @@ function stubApprovals(
     }
 
     if (/^\/approvals\/[^/]+\/answer$/.test(path)) return json({ ok: true });
+
+    const traced = /^\/approvals\/([^/]+)\/trace$/.exec(path);
+    if (traced !== null && options.trace !== undefined) {
+      return options.trace(decodeURIComponent(traced[1]!));
+    }
 
     if (path.startsWith('/conversations/') && options.conversation !== undefined) {
       return options.conversation(decodeURIComponent(path.slice('/conversations/'.length)));
@@ -318,6 +325,67 @@ describe('折り返しの付け忘れ（本2）', () => {
     // ここは CSS 既定の `white-space: normal` で描かれていた — 人間が改行を
     // 入れて答えても1行に潰れていた。
     expect(tokens).toContain('whitespace-pre-wrap');
+  });
+});
+
+/**
+ * 答えの後の行動（issue #847 の案B）。**開いたときだけ読む**ことと、対が無いときに
+ * 理由を黙って落とさないことを測る。
+ */
+describe('答えの後の行動（issue #847）', () => {
+  const answered = approval({
+    id: 'a-1',
+    question: '質問1',
+    answeredAt: '2026-08-19T11:00:00.000Z',
+    answer: '(b) で',
+  });
+  const traceBody = (over: Record<string, unknown>) => ({
+    approval: answered,
+    questionEntry: null,
+    answerEntry: null,
+    turnStarts: [],
+    actions: [],
+    actionsOmitted: 0,
+    unstampedInTurn: 0,
+    scanned: 1,
+    truncated: false,
+    ...over,
+  });
+
+  it('ボタンを押すまで読まず、押すと印を持つ行動を出す', async () => {
+    const stub = stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'decision',
+                id: 'j-1',
+                at: '2026-08-19T11:00:01.000Z',
+                decision: 'b に沿って進めた',
+                grounds: '人間の答え',
+                answeredApprovalId: 'a-1',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+
+    const button = await screen.findByText('答えの後の行動を見る');
+    expect(stub.calls.some((url) => url.includes('/trace'))).toBe(false);
+    fireEvent.click(button);
+    expect(await screen.findByText(/判断: b に沿って進めた/)).not.toBeNull();
+  });
+
+  it('対が無ければ理由を出す（記録を始める前の答え）', async () => {
+    stubApprovals([answered], {
+      trace: () => json(traceBody({ state: 'turn_before_recording' })),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/行動が無いのではなく、記録していない/)).not.toBeNull();
   });
 });
 

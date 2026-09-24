@@ -222,6 +222,20 @@ export {
   APPRAISAL_TARGETS_REASON_LIMIT,
 } from './appraisal.js';
 /**
+ * 段4: やり方の候補を材料として差し出す（#1055）。**採否の機構ではない** ——
+ * `practice_write` を呼ぶ経路は持たない（`practice-candidates.ts` 冒頭の ⛔）。
+ */
+export {
+  describePracticeCandidates,
+  practiceCandidateKindKeys,
+  PRACTICE_CANDIDATES_BUDGET,
+  PRACTICE_CANDIDATE_EVIDENCE_BUDGET,
+} from './practice-candidates.js';
+export type {
+  PracticeCandidateMaterial,
+  PracticeCandidateReconciliation,
+} from './practice-candidates.js';
+/**
  * 評定の内訳を要るときに数える口（#1278）。`appraisal.ts`（段2）とは別の軸——
  * あちらは「いま台帳・委譲に載っている行」、こちらは「日誌に残る全期間の総数」
  * と「終端した委譲の評定の有無」を数える。
@@ -379,6 +393,23 @@ export {
   type JournalScanResult,
 } from './journal-scan.js';
 /**
+ * 承認の答えとその後の行動を対で読む口（issue #847 の案B）。デーモンの
+ * `GET /approvals/:id/trace` と CLI が、クローンの `approval_trace` と同じ
+ * 関数を通るために公開する（`approval-trace.ts` の doc）。
+ */
+export {
+  APPROVAL_TRACE_ACTION_LIMIT,
+  APPROVAL_TRACE_SCAN_LIMIT,
+  APPROVAL_TRACE_STATES,
+  describeTraceAction,
+  renderApprovalTrace,
+  stampAnsweredApproval,
+  traceApproval,
+  type ApprovalTrace,
+  type ApprovalTraceRenderOptions,
+  type ApprovalTraceState,
+} from './approval-trace.js';
+/**
  * 蒸留が間に合わなかった区間（＝記憶へ移らなかった区間）の検出（issue #564 の (b)）。
  * **「蒸留を始めた」ではなく「蒸留が成功で終わった」記録で数える** — 開始で数えると、
  * 始めたが完了しなかった回（まさに検出したい形）が「蒸留した」として落ちる
@@ -414,6 +445,7 @@ export {
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
+export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyPracticeStoreContract } from './practice-contract.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**
@@ -716,6 +748,35 @@ export {
   type ProfileVesselOptions,
   type StagedProfile,
 } from './profile.js';
+/**
+ * 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）。記憶ストアに置き、
+ * SDK の `Options.mcpServers` で渡す（#325。`mcp-servers.ts`）。
+ */
+export {
+  isReservedMcpServerName,
+  mcpHttpServerConfigSchema,
+  mcpServerConfigSchema,
+  mcpServerNames,
+  mcpServerNameSchema,
+  mcpServersFingerprintOf,
+  mcpServersSchema,
+  mcpSseServerConfigSchema,
+  mcpStdioServerConfigSchema,
+  parseMcpServers,
+  type McpServerEntryConfig,
+  type McpServers,
+  type StoredMcpServers,
+} from './mcp-servers.js';
+/**
+ * MCP の登録を置いて runner へ配る1本道（#325 段3。`profile-service.ts` の写し）。
+ */
+export {
+  createMcpServerService,
+  type ApplyMcpServersResult,
+  type McpServerService,
+  type McpServerServiceOptions,
+  type McpServersRunnerResult,
+} from './mcp-server-service.js';
 export {
   createProfileService,
   type ApplyProfileResult,
@@ -804,6 +865,7 @@ export {
   isRetryableRunnerError,
   RunnerFenceError,
   RunnerHttpError,
+  RunnerMcpServersUnsupportedError,
   runnerAnswerCommandSchema,
   runnerAnswerResultSchema,
   runnerCredentialFingerprintSchema,
@@ -815,12 +877,14 @@ export {
   runnerLeaseSchema,
   runnerLivenessSchema,
   runnerManagerStateSchema,
+  runnerMcpServersFingerprintSchema,
   runnerMessageCommandSchema,
   runnerPlacementResourcesSchema,
   runnerProfileFingerprintSchema,
   runnerProfileResultSchema,
   runnerResumeCommandSchema,
   runnerSetCredentialsCommandSchema,
+  runnerSetMcpServersCommandSchema,
   runnerSetProfileCommandSchema,
   runnerStartCommandSchema,
   runnerWaitingSchema,
@@ -839,6 +903,7 @@ export {
   type RunnerLegState,
   type RunnerLiveness,
   type RunnerManagerState,
+  type RunnerMcpServersFingerprint,
   type RunnerPlacementResources,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
@@ -848,6 +913,7 @@ export {
   type RunnerSource,
   type RunnerResumeCommand,
   type RunnerSetCredentialsCommand,
+  type RunnerSetMcpServersCommand,
   type RunnerSetProfileCommand,
   type RunnerStartCommand,
   type RunnerWaiting,

@@ -60,6 +60,7 @@ import {
   recentDroppedTraces,
 } from './dropped-record.js';
 import { collapseErrorCause } from './error-cause.js';
+import { renderApprovalTrace, traceApproval } from './approval-trace.js';
 import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
@@ -626,6 +627,7 @@ export const CLONE_TOOL_NAMES = [
   'ask_human',
   'request_permission',
   'approvals_list',
+  'approval_trace',
   'approval_withdraw',
   'daily_report_write',
   'usage_read',
@@ -733,6 +735,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'journal_read',
   'conversation_read',
   'approvals_list',
+  'approval_trace',
   'usage_read',
   'schedule_list',
   'commitment_list',
@@ -1856,6 +1859,17 @@ const TOKEN_COOLDOWN_SOURCE_LABEL: Record<CooldownSource | 'unrecorded', string>
 const APPROVAL_QUESTION_EXCERPT = 200;
 /** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const APPROVAL_PAGE = 8_000;
+/**
+ * `approval_trace` の行動の一覧の予算と、1件ぶんの要旨の厚み（issue #847 の案B）。
+ *
+ * **答えのターンの `tool_use` は1ターンで数百行になりうる**ので、件数ではなく
+ * 文字数で締める（`.claude/skills/listing-and-detail/SKILL.md`）。各行の全文は
+ * 日誌の id を `journal_read id=<id>` へ渡して取る——一覧が抜粋なのはそのため。
+ * `APPROVAL_LIST_BUDGET` と値が同じでも使い回さない（片方だけ直したくなったとき
+ * 一緒に動くので）。
+ */
+const APPROVAL_TRACE_BUDGET = 8_000;
+const APPROVAL_TRACE_SUMMARY_EXCERPT = 200;
 
 /**
  * 一覧の先頭行に置く「名前」＝質問の1行目の長さ。
@@ -5579,6 +5593,42 @@ export function createCloneTools(context: ToolContext) {
             // 「並べ直しは1行も持たない」と申告していたが、いまは持つ。
             '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
           ].join('\n'),
+        );
+      },
+    ),
+
+    /**
+     * 承認の答えと、その後に自分が取った行動を対で読む（issue #847 の案B）。
+     *
+     * **読むだけの道具である**（`TRACELESS_CLONE_TOOLS`）。材料と状態の分け方は
+     * `approval-trace.ts` の doc に在る——ここは出し方（予算と抜粋）だけを持つ。
+     * `GET /approvals/:id/trace` と CLI の `/approval-trace` が同じ
+     * `traceApproval` / `renderApprovalTrace` を通る。
+     *
+     * **`approvals_list` の `id` モードへ相乗りさせない。** issue #847 が
+     * 「承認の口（`ask_human` / `approvals_list`）の形を変えない」と決めている
+     * ——足すのは記録と読み口の側だけ。
+     */
+    tool(
+      'approval_trace',
+      [
+        '承認への人間の答えと、その答えを受けたターンで自分が取った行動（判断・記憶の更新・道具・返答）を対で並べる。',
+        '答えの後で自分が何をしたか、答えと行動が食い違っていないかを確かめるための口で、解釈や一般化は足さない。',
+        '対が無いときは、まだ答えが無い／ターンが無い／記録を始める前の答え／記録が動いていない疑い、を分けて言う。',
+        '行動は抜粋で、全文は日誌の id を journal_read に渡して取る。',
+      ].join(' '),
+      {
+        id: z.string().describe('承認の id（approvals_list や日誌の escalation に出ている id）'),
+      },
+      async ({ id }) => {
+        const trace = await traceApproval(stores, id);
+        if (trace === null) return text(`承認 ${id} は無い（id が違う）。`);
+        return text(
+          renderApprovalTrace(trace, {
+            budget: APPROVAL_TRACE_BUDGET,
+            summaryLimit: APPROVAL_TRACE_SUMMARY_EXCERPT,
+            detailHint: '（行動は抜粋。全文は journal_read id=<日誌の id> で取れる）',
+          }),
         );
       },
     ),
@@ -10765,6 +10815,14 @@ export function createCloneTools(context: ToolContext) {
           if (fingerprints === true && runner.profile !== undefined) {
             lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
           }
+          // **MCP の登録（#325 段3）は名前も出す**（名前は秘密ではない。値は運んでいない —
+          // `runnerMcpServersFingerprintSchema` の doc）。無いことは「置いていない・口を持たない・
+          // 訊けなかった」のどれとも言えないので、行を作らない（区別は直近の押し込みの行が持つ）。
+          if (fingerprints === true && runner.mcpServers !== undefined) {
+            lines.push(
+              `  MCP の登録: ${excerptLine(runner.mcpServers.names.join(', '), RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT)}（指紋 ${runner.mcpServers.sha256}）`,
+            );
+          }
           /*
            * **押し込みの結果（`pushHealth`）は `fingerprints` を見ない。**
            * `credentials`/`profile` と違い runner への新しい往復を払わない
@@ -10784,6 +10842,7 @@ export function createCloneTools(context: ToolContext) {
               outcomeText('プロファイル', runner.pushHealth.profile),
               outcomeText('環境変数', runner.pushHealth.credentials),
               outcomeText('認証トークン', runner.pushHealth.agentToken),
+              outcomeText('MCP の登録', runner.pushHealth.mcpServers),
             ].filter((line): line is string => line !== undefined);
             if (pushLines.length > 0) {
               lines.push(`  直近の押し込み: ${pushLines.join(' / ')}`);
@@ -11484,7 +11543,11 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
             ? ''
             : entry.earliestAt === undefined
               ? '\n⚠ 戻る見込みの立っている候補が1本も無い（プールが空か、全部外されている）'
-              : `\nいちばん早く戻るのは ${entry.earliestAt}`;
+              : // **全体の最速として書かない。** `exhausted` に `earliestAt` が
+                // 付くのは「候補が現役自身だった」か「現役のほうが早い」回
+                // だけで（`token-rotator.ts` の `exhausted` の doc）、どちらも
+                // 現役はこの時刻かそれより前に戻る見込みである。
+                `\n撒き直す候補のうちいちばん早く戻るのは ${entry.earliestAt}（現役はこれと同時かより早く戻る見込みなので撒き直していない）`;
       // **`recoveredSource` を潰さない**（#681 (1)）。`event: 'recovered'` の
       // 行にだけ付く——どちらの生産者（`account_probe` / `turn_success`）が
       // 「通る」と観測したかを、見出しから引ける形で出す。

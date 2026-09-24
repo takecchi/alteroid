@@ -119,6 +119,13 @@ async function attack(env: NodeJS.ProcessEnv, socketPath: string, managerId: str
           '/credentials',
           JSON.stringify({ credentials: [{ name: 'GH_TOKEN', value: 'attacker' }] }),
         ),
+        // 自分に効く MCP の登録（stdio＝自分の子として起こすコマンド）を自分で差し替えられないこと（#325 段3）
+        setMcpServers: await call(
+          'POST',
+          '/mcp-servers',
+          JSON.stringify({ mcpServers: { evil: { command: 'attacker' } } }),
+        ),
+        getMcpServers: await call('GET', '/mcp-servers'),
         // 環境から鍵を拾えるか（runner と同じ UID なら /proc も読める前提で見る）
         token: process.env.ALTEROID_RUNNER_TOKEN ?? null,
         hash: process.env.ALTEROID_RUNNER_TOKEN_SHA256 ?? null,
@@ -193,7 +200,11 @@ describe('制御面の境界', () => {
       stop: 401,
       transcript: 401,
       setCredentials: 401,
+      setMcpServers: 401,
+      getMcpServers: 401,
     });
+    // 差し替えは1文字も効いていない。
+    expect(host.mcpServers()).toBeUndefined();
 
     // 鍵は環境から拾えない（記憶ストアの鍵も、制御面の鍵も、ソケットの所在も）
     expect(result.token).toBeNull();
