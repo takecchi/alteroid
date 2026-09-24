@@ -13,6 +13,7 @@ import {
   EXIT_ZERO_PASSED,
   ROOT,
   collectMatchingTestFiles,
+  dropBareDashDash,
   findObservationDebts,
   findUnconditionalSkips,
   formatObservationGuardMessage,
@@ -62,6 +63,56 @@ function chainSuffix(...segments: string[]): string {
 function dotSkip(each = false) {
   return chainSuffix('skip', ...(each ? ['each'] : []));
 }
+
+/**
+ * `dropBareDashDash`。
+ *
+ * **確定している欠陥**: `package.json` の `test` は `node ./scripts/test.mjs`
+ * で、`test.mjs` の `main()` は `process.argv.slice(2)` をそのまま
+ * `spawn('vitest', ['run', ...args])` へ渡していた。pnpm は
+ * `pnpm test -- --maxWorkers=4 a.test.ts` の `--` をそのまま script の引数へ
+ * 渡す（使い捨てのディレクトリで argv を出すスクリプトを置いて確かめた:
+ * `['--', '--maxWorkers=4', 'a.test.ts']`）。vitest は `--` より後ろを
+ * フィルタとしても option としても読まないため、絞り込みが1つも効かず
+ * スイート全体が走る（実測 2026-09-24T01:05:57Z、`pnpm test --
+ * --maxWorkers=4 <4ファイル>` で `Test Files 343 passed (343)` が出た——
+ * 343 は当時のリポジトリ全体のファイル数であって、渡した4ファイルではない）。
+ *
+ * 同じ形は `pnpm verify` 側では `verify-core.mjs` の `splitVerifyArgs` が
+ * 既に塞いでいる。`dropBareDashDash` はその規則に揃えたもの——**位置を
+ * 問わず、文字列としてちょうど `'--'` に等しい要素だけを落とす**。
+ */
+describe('dropBareDashDash（pnpm 経由の素の `--` を vitest へ渡す前に落とす）', () => {
+  it('陽性: 先頭の `--` を落とす（pnpm が付けてくる形そのもの）', () => {
+    expect(dropBareDashDash(['--', '--maxWorkers=4', 'a.test.ts'])).toEqual([
+      '--maxWorkers=4',
+      'a.test.ts',
+    ]);
+  });
+
+  it('やりすぎの対照: `--` を含まない引数は1つも変えない（option 付き）', () => {
+    const argv = ['--maxWorkers=4', 'a.test.ts'];
+    expect(dropBareDashDash(argv)).toEqual(argv);
+  });
+
+  it('やりすぎの対照: `--` を含まない引数は1つも変えない（reporter option だけ）', () => {
+    const argv = ['--reporter=verbose'];
+    expect(dropBareDashDash(argv)).toEqual(argv);
+  });
+
+  it('やりすぎの対照: 引数が空なら空のまま', () => {
+    expect(dropBareDashDash([])).toEqual([]);
+  });
+
+  it('やりすぎの対照: `--` で始まるが `--` そのものではない option は落とさない（`--maxWorkers` を握り潰さない）', () => {
+    const argv = ['--maxWorkers', '4'];
+    expect(dropBareDashDash(argv)).toEqual(argv);
+  });
+
+  it('`--` が途中や複数回に現れても、素の `--` 要素だけを全部落とす（splitVerifyArgs と同じ規則）', () => {
+    expect(dropBareDashDash(['a.test.ts', '--', '--bail', '--'])).toEqual(['a.test.ts', '--bail']);
+  });
+});
 
 describe('parseAggregateLines / parsePassedCount', () => {
   it('Test Files / Tests の集計行を両方読める', () => {
@@ -1167,5 +1218,53 @@ describe('scripts/test.mjs は vitest を1回しか起こさない（test-guard-
     ].join('\n');
 
     expect(matches.length, message).toBe(1);
+  });
+});
+
+/**
+ * 配線の歯: `main()` が実際に `dropBareDashDash` を通していることを、
+ * `scripts/test.mjs` の実物のソースに対して確かめる。
+ *
+ * **なぜ実行時の計装（実際に子プロセスとして起こして vitest を偽装する等）
+ * ではなく静的な確認にしたか。** 直上の describe（`vitest を1回しか起こさない`）
+ * が同じ理由（`### この歯が測っていないもの` の節）で採っているのと同じ選択
+ * である——`scripts/test.mjs` を実際に子プロセスとして起こすには `vitest` を
+ * 偽装するダミー実行ファイルを `PATH` へ差し込む必要があり、`main()` は
+ * 歯A→歯B→歯C（`runStaticSkipGuard` / `runObservationGuard`）まで実リポジトリ
+ * に対して走らせる作りなので、単体の「配線」を確かめるためだけに毎回この
+ * 一式を回すのは重い。ここでは `dropBareDashDash(process.argv.slice(2))` の
+ * 呼び出し結果が `runVitest` の引数として使われている、という**式の形**を
+ * 見る——`args` という中間変数を経由しても、直接式として渡しても、どちらの
+ * 書き方でも通る（`process.argv.slice(2)` を `dropBareDashDash` へ通さずに
+ * `runVitest` へ渡す退行だけを狙う。それ以外の書き換えまで縛らない）。
+ */
+describe('scripts/test.mjs の main() は dropBareDashDash を実際に通す（配線の歯）', () => {
+  const testMjsSource = readFileSync(join(import.meta.dirname, 'test.mjs'), 'utf8');
+
+  it('`process.argv.slice(2)` は `dropBareDashDash` を経由せずに直接 `runVitest` / `spawn` へは渡っていない', () => {
+    // main() の中で `process.argv.slice(2)` を読んでいる箇所が、そのまま
+    // `runVitest(...)` の実引数として使われていない（＝ 間に
+    // `dropBareDashDash` を挟んでいる）ことを確かめる。同じ行に両方の呼び出し
+    // が現れる素直な書き方（`dropBareDashDash(process.argv.slice(2))`）を
+    // 前提にした軽い検査であって、完全なパーサではない。
+    const rawArgvUsage = (testMjsSource.match(/.*process\.argv\.slice\(2\).*/g) ?? []).filter(
+      (line) => !/^\s*(\*|\/\/)/.test(line),
+    );
+    const message = [
+      '`process.argv.slice(2)` を読んでいる行が見つからない、または複数ある。',
+      'この歯は `main()` が argv を読む箇所が1行であることを前提にしている——',
+      '書き方が変わったなら、この歯も測り直すこと。',
+      `実測: ${JSON.stringify(rawArgvUsage)}`,
+    ].join('\n');
+    expect(rawArgvUsage.length, message).toBe(1);
+    expect(rawArgvUsage[0], message).toMatch(/dropBareDashDash\(process\.argv\.slice\(2\)\)/);
+  });
+
+  it('`dropBareDashDash` を `test-guard-core.mjs` から import している（別の同名関数を自前で持っていない）', () => {
+    const importBlock = testMjsSource.match(
+      /import\s*\{[^}]*\}\s*from\s*'\.\/test-guard-core\.mjs'/,
+    );
+    expect(importBlock, 'test-guard-core.mjs からの import ブロックが見つからない').not.toBeNull();
+    expect(importBlock?.[0]).toContain('dropBareDashDash');
   });
 });

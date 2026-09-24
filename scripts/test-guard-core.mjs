@@ -67,6 +67,39 @@ export const ROOT = fileURLToPath(new URL('..', import.meta.url));
 /** 変異試験や本物のビルド成果物と同じ理由で、走査から外すもの。 */
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router']);
 
+// ── 引数の正規化（vitest へ渡す前） ──────────────────────────────
+
+/**
+ * `pnpm test -- <flags>` の素の `--` を落とす。
+ *
+ * pnpm は `pnpm test -- --maxWorkers=4 a.test.ts` と打つと、`--` を含めた
+ * 右側をそのまま `test.mjs` の引数へ渡す（実測: 使い捨てのディレクトリで
+ * argv を出すスクリプトを置いて確かめた。渡ってくるのは
+ * `['--', '--maxWorkers=4', 'a.test.ts']`）。`test.mjs` はこれをそのまま
+ * `vitest run` の後ろへ足していたため、vitest 側には
+ * `vitest run -- --maxWorkers=4 a.test.ts` が渡っていた。**vitest は `--`
+ * より後ろをフィルタとしても option としても読まない**ので、絞り込みが
+ * 1つも効かずスイート全体が走る（実測 2026-09-24T01:05:57Z、`pnpm test --
+ * --maxWorkers=4 <4ファイル>` で `Test Files 343 passed (343)` が出た——
+ * 343 は当時のリポジトリ全体のファイル数で、渡した4ファイルには絞られて
+ * いない）。
+ *
+ * `pnpm verify` 側では同じ形の `--` を `verify-core.mjs` の
+ * `splitVerifyArgs` が既に落としている（`grep -Fn -- "arg === '--'" scripts/verify-core.mjs`）。
+ * ここも同じ規則に揃える——**位置を問わず、すべての素の `--` 要素を落とす**
+ * （先頭だけを見る形にしない）。`splitVerifyArgs` が先頭以外の `--` も
+ * ループの中で無条件に読み飛ばしているのと同じ理由で、`--` が複数回や
+ * 途中に現れても同じように扱う。
+ *
+ * **`--` そのもの以外は1文字も変えない。** `--maxWorkers=4` のような
+ * option や、テストファイルのパスによる絞り込みはそのまま残る——落とすのは
+ * 文字列としてちょうど `'--'` に等しい要素だけで、`--maxWorkers` のように
+ * `--` で始まるが `--` そのものではない引数は対象外である。
+ */
+export function dropBareDashDash(argv) {
+  return argv.filter((arg) => arg !== '--');
+}
+
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────
 
 /**

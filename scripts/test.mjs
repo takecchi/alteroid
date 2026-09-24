@@ -23,11 +23,27 @@
  * `spawnSync` で待つ形と食い合わさったときに壊れやすい。**data イベントの
  * たびにそのまま `process.stdout` / `process.stderr` へ書く。**
  *
- * ## 引数は全部素通し
+ * ## 引数は素の `--` を除いて全部素通し
  *
- * `process.argv.slice(2)` をそのまま `vitest run` の後ろへ渡す。
- * `pnpm test --maxWorkers=4` も `pnpm test <パスの一部>` も
- * `pnpm test --reporter=verbose` も、これまでどおり動く。
+ * `process.argv.slice(2)` を `vitest run` の後ろへ渡す。ただし素の `--`
+ * （文字列としてちょうど `'--'` の要素）だけは、渡す前に
+ * `test-guard-core.mjs` の `dropBareDashDash` で落とす。
+ *
+ * **なぜ落とすのか。** pnpm は `pnpm test -- --maxWorkers=4 a.test.ts` と
+ * 打つと `--` をそのままここへ渡してくる。落とさずに足すと vitest 側は
+ * `vitest run -- --maxWorkers=4 a.test.ts` を受け取るが、**vitest は `--`
+ * より後ろをフィルタとしても option としても読まない**ため絞り込みが1つも
+ * 効かず、スイート全体が走る（実測 2026-09-24T01:05:57Z、`pnpm test --
+ * --maxWorkers=4 <4ファイル>` で `Test Files 343 passed (343)` が出た。343
+ * は絞ったつもりの4ファイルではなく当時のリポジトリ全体の件数）。
+ * `pnpm verify` はこの形を `verify-core.mjs` の `splitVerifyArgs` で既に
+ * 塞いでいる（`grep -Fn -- "arg === '--'" scripts/verify-core.mjs`）ので、
+ * ここも同じ規則に揃える。
+ *
+ * **`--` 以外は変えない。** `pnpm test --maxWorkers=4` も
+ * `pnpm test <パスの一部>` も `pnpm test --reporter=verbose` も、
+ * `pnpm test -- --maxWorkers=4 a.test.ts`（`--` を落とした残り）も、
+ * これまでどおり動く。
  *
  * ## exit code（7値。混ぜない）
  *
@@ -53,6 +69,7 @@ import process from 'node:process';
 
 import {
   ROOT,
+  dropBareDashDash,
   judgeExecution,
   runObservationGuard,
   runStaticSkipGuard,
@@ -85,7 +102,7 @@ function runVitest(args) {
 }
 
 async function main() {
-  const args = process.argv.slice(2);
+  const args = dropBareDashDash(process.argv.slice(2));
   const { code, combined } = await runVitest(args);
 
   if (code !== 0) {
