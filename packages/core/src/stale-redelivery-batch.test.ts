@@ -698,16 +698,12 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     // 行が名乗る算術（総数 − 処理した = 残り）がそのまま整合している。
     expect(reportedRemaining).toBe(total - processed);
 
-    // **ストアの実際の残りと突き合わせる。** `processed` は「ループの本体を
-    // 最後まで終えた件数」で数えている（`#journalRestoreUnreadPassEnd` の
-    // doc「『処理した』の定義を1つに統一する」）——2箇所ある早期 return の
-    // うち後段（stale の消し込みまで済ませた直後）で止まった回は、その1件が
-    // 実際にはストアから消えているのに `processed` にはまだ数えていない。
-    // ⟹ **ストアの実際の残りは、報告した残りと一致するか、ちょうど1件
-    // 少ないかのどちらかになる**（多く見せることはあっても、少なく見せる
-    // ことは無い——安全側に倒れていることをここで実測する）。
+    // **ストアの実際の残りと突き合わせる。** `processed` は「ストアから
+    // 消えた件数」で数えている（`#journalRestoreUnreadPassEnd` の doc
+    // 「『処理した』の定義を1つに統一する」）ので、行が名乗る残りは
+    // ストアの実際の残りと1件もずれない。この回は stale の消し込みの直後に
+    // 止めている（後段の早期 return を通る）ので、ずれるならここで出る。
     const actualRemaining = (await base.inbox.peekPending()).length;
-    expect(actualRemaining).toBeLessThanOrEqual(reportedRemaining);
-    expect(actualRemaining).toBeGreaterThanOrEqual(reportedRemaining - 1);
+    expect(actualRemaining).toBe(reportedRemaining);
   }, 30_000);
 });

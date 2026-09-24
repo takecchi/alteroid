@@ -6101,17 +6101,16 @@ class Clone implements CloneHost {
         await flushGatedFoldHeadline();
         // **計器: 終わりの1行（中断）**（issue #903）。stale の record は
         // ここに来る前に `#dropStaleRedelivery` と `staleBuffer.push` を
-        // 済ませている（`flushStaleRemovalBuffer` が上で拾う）ので、この
-        // 周の record は「消し込みまでは終わっている」——それでも
-        // `restoreUnreadPassIndex` はまだ進めていない（`for…of.entries()` の
-        // 仕様どおり、このループの本体を最後まで終えていないため）。**その
-        // 食い違いをここで数え直して隠さない**——今回止まった1件を
-        // 「処理済み」に含めるかどうかより、`processed` の定義を「ループが
-        // 最後まで到達した件数」に統一するほうが、次に読む人が両方の早期
-        // return を同じ規則で読める。
-        await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
-          interrupted: true,
-        });
+        // 済ませ、直上の `flushStaleRemovalBuffer` でストアから消えている
+        // ので、この周の1件も「処理した」に入れる。live の record はまだ
+        // `#inbox.push` しておらずストアに残るので入れない
+        // （`#journalRestoreUnreadPassEnd` の doc「『処理した』の定義を1つに
+        // 統一する」）。
+        await this.#journalRestoreUnreadPassEnd(
+          decided,
+          restoreUnreadPassIndex + (verdict === 'stale' ? 1 : 0),
+          { interrupted: true },
+        );
         return;
       }
 
@@ -6362,12 +6361,12 @@ class Clone implements CloneHost {
    * ある——1箇所目は record を1件も触る前、2箇所目は stale の record なら
    * 既に `#dropStaleRedelivery`（消し込みの journal・`staleBuffer` への
    * 積み込み）まで済ませた後。**どちらで止まっても、`processed` は
-   * 「ループの本体を最後まで終えた件数」で統一する**——2箇所目で止まった
-   * 周の record 自身は `processed` に含めない。stale の場合その record は
-   * 実際には消し込みの対象として既に確定している（`flushStaleRemovalBuffer`
-   * が拾う）ので、この数え方はその1件を「残り」の側に含めて過大に見せる
-   * 向きに倒れる——**過小に見せる（実際は途中で終わっていないのに
-   * 「終わった」と数える）よりは安全な向きである。**
+   * 「ストアから消えた（次の起動で拾い直されない）件数」で統一する**——
+   * 行が「残り N 件は次の起動で拾い直す」と名乗る以上、N はストアの実際の
+   * 残りと一致していなければならない。⟹ 2箇所目で止まった周の record は、
+   * stale なら `processed` に含める（直前の `flushStaleRemovalBuffer` で
+   * 消えている）。live なら含めない（まだ `#inbox.push` しておらず、ストアに
+   * 残って次の起動で拾い直される）。
    *
    * ## 内訳（stale / live）は専用のカウンタを持たず、都度数え直す
    *
