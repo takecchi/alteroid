@@ -478,22 +478,34 @@ export function ChatPane({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   /**
-   * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。
+   * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
    *
-   * **押した／投函した時点の会話 id（`conversationId`）を一緒に持つ（#1576）。**
-   * `ChatPane` は会話を切り替えても作り直されない（doc 冒頭）ので、この失敗を
-   * 会話に依らず立てると、切り替えた後に届いた分が別の会話の画面に出る
-   * ——`interruptNotice`/`interruptFailure`（#1570）と同じ形の穴だった。
+   * PR #1579（#1576）は `{ conversationId, error }` を1つだけ持つ形にして、
+   * 描画の時点の `shownId` と一致するときだけ出すようにした——「別の会話の
+   * 画面に出る」（#1576 の穴）はそれで直った。**だが `ChatPane` は会話を切り替える
+   * たびに、どの会話へ向かうかを見ずにこの1つだけの `failure` を消していた**
+   * （旧・下の `routeId !== lastRouteId` の同期リセット）。A で追送した発言が
+   * B を見ている間に失敗すると、A に戻ってももう消えた後——「出す会話を間違える」
+   * バグが「言えるはずの失敗が消える」バグに変わっていた（#1585）。
+   *
+   * **直し方: 1つの `{ conversationId, error }` ではなく、会話 id ごとの Map で持つ。**
+   * キーは失敗を積む時点の `stream.id`/`running.id`。**新しい会話でまだ id が
+   * 確定していない失敗は、キー `undefined` に積む**——その時点の `shownId` も
+   * 同じく `undefined` なので、いま見えている「新しい会話」の画面にはそのまま出る。
+   * その後ストリームが `open` を見て `stream.id` が確定したら、キー `undefined` の
+   * 失敗をその確定した id へ移す（下の `if (message.event === 'open')` の分岐参照）——移さないと、
+   * 「まだ id が無かった頃に投函が失敗した、同じ新規会話」の画面から id が
+   * 確定した瞬間に失敗が消える。
+   *
+   * **消えるときは「その会話で次の送信・追送を始めたとき」だけ。** 会話の
+   * 切り替えでは消さない——切り替えても Map から他の会話のエントリを触らない
+   * ので、A に戻れば A のぶんがそのまま出る。`send`/`followUp` の冒頭で、
+   * これから送ろうとしている会話のキーだけを消す（他の会話のキーは残す）。
+   *
    * 出すかどうかはここでは決めない——描画する側（下の `visibleFailure`）が、
-   * **その描画の時点で決まっている `shownId`** と突き合わせてから決める。
-   *
-   * 新しい会話でまだ id が確定していない失敗は `conversationId: undefined`
-   * を持つ——その時点の `shownId` も同じく `undefined` なので、いま見えている
-   * 「新しい会話」の画面にはそのまま出る。
+   * **その描画の時点で決まっている `shownId`** をキーに引いてから決める。
    */
-  const [failure, setFailure] = useState<
-    { conversationId: string | undefined; error: unknown } | undefined
-  >(undefined);
+  const [failures, setFailures] = useState<Map<string | undefined, unknown>>(new Map());
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
    * ボタンの二重打鍵を防ぐためだけの、この画面だけの状態——サーバ側の状態には
@@ -526,10 +538,19 @@ export function ChatPane({
    * `handleInterrupt` の呼べなかった失敗（ネットワーク断・403 等）。`interruptNotice`
    * と同じ理由・同じ形で会話 id を持つ（#1570）。
    *
-   * **送信経路の `failure`（上）へは合流させない。** どちらも会話 id を持つように
+   * **送信経路の `failures`（上）へは合流させない。** どちらも会話 id を持つように
    * なった（#1576）が、発生源（`handleInterrupt` と `send`/`followUp`）が別なので
    * state は分けたまま持ち、描画する場所（下の `ErrorNote`）で `visibleFailure` /
    * `visibleInterruptFailure` として同じ形の突き合わせをしてから合流させる。
+   *
+   * **`failures` と違って会話 id ごとの Map にはしていない（#1585 で検討して
+   * 見送った）。** 揃えるなら「B で『止める』が失敗した後 A へ戻ったら出す」に
+   * なるが、`interruptNotice`（呼べた側）は今回も切り替えで消す判断のままで
+   * ——`interruptFailure`（呼べなかった側）だけ Map にすると、同じボタンの
+   * 応答なのに「呼べた」と「呼べなかった」で切り替え後の扱いが割れる。
+   * 「止める」は会話ごとの人間の入力（送れていない発言）ではなく、押した
+   * その場で結果が分かる操作なので、`interruptNotice` と同じ「切り替えたら
+   * 消える」で揃えたままにする。
    */
   const [interruptFailure, setInterruptFailure] = useState<
     { conversationId: string; error: unknown } | undefined
@@ -698,18 +719,29 @@ export function ChatPane({
        * **⟹ 前の会話の中身を出さないことは `ownedBy`（持ち主で絞る）が持つ。**
        * あちらは選ぶだけで何も壊さないので、どちらの経路でも結果が変わらない。
        *
-       * **`setFailure(undefined)` は残す。** 失敗の表示は次の送信で立て直せる
-       * （消えても情報が失われない）ので、`lines` とは事情が違う。
+       * **`failures` はここでは触らない（#1585。以前はここで `setFailure(undefined)`
+       * を呼んで1つだけの `failure` を丸ごと消していた）。** `failures` は会話 id
+       * ごとの Map（上の doc）なので、切り替えでは何も消さなくても、別の会話の
+       * 画面に他の会話の失敗が出ることはない——出すかどうかは描画の時点の
+       * `shownId` で引く `visibleFailure` が決める。むしろここで消すと、A で
+       * 追送が B を見ている間に失敗した後に A へ戻っても、その失敗がもう
+       * どこにも出せなくなる（#1585 の本体）。**消えるときは、その会話で次の
+       * 送信・追送を始めたとき**（`send`/`followUp` の冒頭がそのキーだけ消す）。
        *
        * **`lines` 自体が増え続けないことは、下の不変条件チェック（`retainedBy`）
        * が別に持つ（#446）。** ここは「出す/出さない」だけで「保つ/捨てる」を
        * 持たないので、会話を行き来するたびに手元へ積まれた行そのものは、
        * この render リセットだけでは減らない。
        */
-      setFailure(undefined);
       // 前の会話で出した「止めた」を持ち越さない。クローンのターンは会話ごとではない
       // ので、A へ戻ったときに古い表示を出し直さない（#1548）。応答がこの後に届いた
       // 場合は、会話 id の突き合わせ（`visibleInterruptNotice`）が別の会話へ出すのを防ぐ（#1570）。
+      //
+      // `interruptFailure`（呼べなかった失敗）も同じ理由で一緒に消す。`failures`
+      // （送信経路）とは発生源が違うので分けて持っているが（下の `interruptFailure`
+      // の doc）、ここでの扱いは #1585 でも変えていない——「止める」を押した事実
+      // そのものは会話ごとの操作であり、A へ戻ったときに B で押した「止めた」を
+      // 出し直す理由が無い（`interruptNotice` と同じ判断）。
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
       // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
@@ -1099,7 +1131,18 @@ export function ChatPane({
      * 通常の追送では渡らない。
      */
     async (text: string, running: Stream, supersedes?: string) => {
-      setFailure(undefined);
+      /*
+       * **この追送が向かう会話（`running.id`）ぶんの失敗だけを消す（#1585）。**
+       * 前回この会話で失敗していても、次に送ろうとしたのだから立て直しの
+       * 機会は今回に移る——他の会話のキーは触らないので、別の会話で見えている
+       * 失敗はここでは消えない。
+       */
+      setFailures((prev) => {
+        if (!prev.has(running.id)) return prev;
+        const next = new Map(prev);
+        next.delete(running.id);
+        return next;
+      });
       setDraft('');
       showOwnLine(text);
 
@@ -1125,10 +1168,13 @@ export function ChatPane({
         recordOwnMessage(conversationId, text);
       } catch (caught) {
         /*
-         * **投函先の会話 id を持たせる（#1576）。** ここは投函先を見ずに
-         * `failure` を立てていた——`ChatPane` は会話を切り替えても作り直され
-         * ないので、A で追送を打って B へ切り替えた後に投函が失敗すると、
-         * B の画面に出ていた。
+         * **投函先の会話 id をキーに積む（#1576 / #1585）。** ここは投函先を
+         * 見ずに1つだけの `failure` を立てていた——`ChatPane` は会話を切り替え
+         * ても作り直されないので、A で追送を打って B へ切り替えた後に投函が
+         * 失敗すると、B の画面に出ていた（#1576）。#1579 でキーを持たせて
+         * 「B に出る」は直したが、会話ごとの Map にする前は、切り替えるたびに
+         * その1つだけの `failure` を丸ごと消していたので、今度は A に戻っても
+         * 出なくなっていた（#1585）。Map なら他の会話のエントリを消さずに済む。
          *
          * `running.id` を読む。`send()` が渡す `running`（＝ `streamRef.current`）
          * は、受信中のメインのストリームが `open` を見た時点で `stream.id` を
@@ -1136,9 +1182,11 @@ export function ChatPane({
          * は「いま分かっている投函先」を指す——新しい会話でまだ確定していなければ
          * `undefined`。`running.opened` が解決しないまま失敗した場合も、
          * `running.id` は作成時の値（既存の会話ならその id、新しい会話ならまだ
-         * `undefined`）のままなので、そのまま使える。
+         * `undefined`）のままなので、そのまま使える。**`undefined` キーで積んだ
+         * 失敗は、後でそのストリームが `open` を見て id が確定したら、確定した
+         * id へ移す**（`send` の `if (message.event === 'open')` の分岐参照）。
          */
-        setFailure({ conversationId: running.id, error: caught });
+        setFailures((prev) => new Map(prev).set(running.id, caught));
       }
     },
     [api, recordOwnMessage, showOwnLine],
@@ -1170,7 +1218,14 @@ export function ChatPane({
       const stream = createStream(controller, shownId);
       streamRef.current = stream;
       setSending(true);
-      setFailure(undefined);
+      // この会話（`shownId` == `stream.id` の初期値）ぶんの失敗だけを消す（#1585）。
+      // followUp と同じ理由——次の送信に立て直しの機会が移るのはこの会話だけ。
+      setFailures((prev) => {
+        if (!prev.has(shownId)) return prev;
+        const next = new Map(prev);
+        next.delete(shownId);
+        return next;
+      });
       setDraft('');
       showOwnLine(text);
 
@@ -1328,6 +1383,25 @@ export function ChatPane({
                     )
                   : previous,
               );
+              /*
+               * **キー `undefined`（id 未確定だった頃）に積まれた失敗を、確定した
+               * id へ移す（#1585）。** この会話でまだ id が無かった間に投函
+               * （`followUp`）やこのストリーム自身が失敗していれば、`failures`
+               * には `undefined` キーで積まれている。ここで移さないと、この
+               * `open` で `shownId` が `undefined` から `settled` へ進んだ瞬間、
+               * 同じ会話の画面のままなのに `visibleFailure` の突き合わせ
+               * （`failures.get(shownId)`）が外れて失敗が消える——見えている
+               * 画面自体は変わっていないのに、id が後から決まっただけで
+               * 表示が落ちるのはおかしい。
+               */
+              setFailures((prev) => {
+                if (!prev.has(undefined)) return prev;
+                const next = new Map(prev);
+                const pending = next.get(undefined);
+                next.delete(undefined);
+                next.set(settled, pending);
+                return next;
+              });
               setShownId(stream.id);
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
@@ -1433,9 +1507,13 @@ export function ChatPane({
              * B の画面が commit された直後の窓——に A のこの `error` が届くと、
              * 以前は無条件に `failure` を立てていたので B の画面に A のエラーが
              * 出ていた。
+             *
+             * **`stream.id` をキーに Map へ積む（#1585）。** 会話ごとに持つので、
+             * 切り替えて A に戻っても消えていない——上と同じく出すかどうかは
+             * `visibleFailure` が `shownId` で引いて決める。
              */
             case 'error':
-              setFailure({ conversationId: stream.id, error: new Error(event.message) });
+              setFailures((prev) => new Map(prev).set(stream.id, new Error(event.message)));
               break;
             case 'done':
               setLines((previous) => previous.filter((line) => line.transient !== true));
@@ -1450,7 +1528,7 @@ export function ChatPane({
          * の突き合わせで二重に守る。
          */
         if (!controller.signal.aborted) {
-          setFailure({ conversationId: stream.id, error: caught });
+          setFailures((prev) => new Map(prev).set(stream.id, caught));
         }
       } finally {
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
@@ -1565,7 +1643,19 @@ export function ChatPane({
   const handleInterrupt = useCallback(
     async (pressedConversationId: string) => {
       setInterrupting(true);
-      setFailure(undefined);
+      /*
+       * **送信経路の `failures` はここで触らない（#1585）。** 前はここでも
+       * `setFailure(undefined)` を呼んで1つだけの `failure` を消していた——
+       * 「止める」を押しただけの操作が、無条件に別の会話（送信中に切り替えた
+       * 先が B なら A）の「送れていない」まで消していた。
+       *
+       * **「止める」は「送り直す」ではない。** `send`/`followUp` の冒頭で
+       * その会話ぶんの `failures` を消すのは、そこで立て直しの機会が実際に
+       * 生まれるからである。`handleInterrupt` はクローンのターンを止める
+       * だけで、`pressedConversationId` で送れていない発言を何も変えない
+       * ——押した会話の送信失敗が解決したわけでも、再送されたわけでもない。
+       * 消す理由が無いので、消さない。
+       */
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
       try {
@@ -1599,12 +1689,17 @@ export function ChatPane({
       ? interruptFailure.error
       : undefined;
   /**
-   * `failure`（送信経路: `send`/`followUp`）を**いま出してよいか**の判断（#1576）。
-   * 上の2つと同じ形——判断するのはここだけで、`failure` を立てる側
-   * （`case 'error'`・outer `catch`・`followUp` の `catch`）はもう判断しない。
+   * `failures`（送信経路: `send`/`followUp`）から**いま見せている会話ぶんだけ**
+   * 引く（#1576 / #1585）。上の2つと同じ形——判断するのはここだけで、
+   * `failures` に積む側（`if (message.event === 'error')` の分岐・outer
+   * `catch`・`followUp` の `catch`）はもう判断しない。
+   *
+   * **`failures.has(shownId)` で存在を確かめてから読む。** `caught` は
+   * `throw undefined` のような普通ではない例外だと値そのものが `undefined`
+   * になりうるので、`failures.get(shownId)` が `undefined` を返しただけでは
+   * 「無い」と「積まれている値が `undefined`」を区別できない。
    */
-  const visibleFailure =
-    failure !== undefined && failure.conversationId === shownId ? failure.error : undefined;
+  const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
