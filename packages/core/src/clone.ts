@@ -61,7 +61,6 @@ import {
   inboxBacklogDedupeKey,
   inboxCollapseKey,
   INBOX_BACKLOG_LOUD_THRESHOLD,
-  INBOX_EVENT_TYPE_ORDER,
   isHumanOriginated,
   removeInboxEventsAndStopDelivery,
   summarizeInboxBacklog,
@@ -164,6 +163,7 @@ import {
   qualifiedToolName,
   type ToolContext,
 } from './tools.js';
+import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -341,33 +341,6 @@ export function resolveCloneHumanPriority(env: NodeJS.ProcessEnv = process.env):
   const raw = env[CLONE_HUMAN_PRIORITY_ENV_KEY]?.trim().toLowerCase();
   if (raw === undefined || raw === '') return true;
   return !['0', 'false', 'off', 'no'].includes(raw);
-}
-
-/**
- * 受信箱の流量（Issue #783 段0）の生カウンタを、日誌の `inbox_flow` が持つ
- * `{ total, byType }` の形に整える純関数。
- *
- * **0件の型は載せない。足すと必ず `total` に一致する**
- * （`inbox-backlog.ts` の `byType` と同じ作法——`counts` に無い型を作らないので、
- * 算術で「省いた型は0だった」と読める）。
- *
- * **並びは `order` が決める。** 呼び出し側（`Clone#writeInboxFlow`）は
- * `INBOX_EVENT_TYPE_ORDER`（`inbox-backlog.ts`）を渡し、`journal_read` で
- * 複数行を並べたときに型の順序が揺れないようにする。
- *
- * 副作用を持たない——数える場所（`#remember` / `#inbox.push` / `#forget`）
- * とここを分けてあるので、足場を組まずにこの整形だけを直接検算できる
- * （`inbox-backlog.ts` と同じ「判定と副作用を分ける」作法）。
- */
-export function buildInboxFlowCount(
-  counts: ReadonlyMap<InboxEvent['type'], number>,
-  order: readonly InboxEvent['type'][],
-): { total: number; byType: { type: InboxEvent['type']; count: number }[] } {
-  const byType = order
-    .map((type) => ({ type, count: counts.get(type) ?? 0 }))
-    .filter((entry) => entry.count > 0);
-  const total = byType.reduce((sum, entry) => sum + entry.count, 0);
-  return { total, byType };
 }
 
 /** 環境変数を見てクローンの権限モードを決める。空・空白なら既定（`auto`）。 */
@@ -1743,19 +1716,11 @@ class Clone implements CloneHost {
 
   /**
    * 受信箱の到着・配達・消し込みの窓を測るカウンタ（Issue #783 段0）。
-   *
-   * **永続化しない。** 器が入れ替わると0から始まる——`#writeInboxFlow` が
-   * 書く `windowStartedAt` が、いつからの数かを常に添えるので、写した先で
-   * 「この窓の長さ」が消えることはない。
-   *
-   * 3本に分けているのは、数える場所がそれぞれ別だからである
-   * （`arrived` は `#remember`、`delivered` は `#inbox.push` の3箇所、
-   * `settled` は `#forget`。`schema.ts` の `inbox_flow` の doc）。
+   * 状態と doc の本体は `clone-inbox-flow.ts` の `CloneInboxFlow` へ移した
+   * （Issue #1190 の続き）——**永続化しない理由・3本に分けている理由は
+   * そちらの doc に在る。**
    */
-  #inboxFlowWindowStartedAt = new Date().toISOString();
-  readonly #inboxFlowArrived = new Map<InboxEvent['type'], number>();
-  readonly #inboxFlowDelivered = new Map<InboxEvent['type'], number>();
-  readonly #inboxFlowSettled = new Map<InboxEvent['type'], number>();
+  readonly #inboxFlow = new CloneInboxFlow();
 
   /**
    * 枠（利用上限）が閉じていると分かっているときの理由。`null` なら閉じていない。
@@ -2774,7 +2739,7 @@ class Clone implements CloneHost {
     // **`delivered`（Issue #783 段0）はここで数える。** メモリ上の待ち行列へ
     // 実際に載った回であり、`arrived` とは別の軸（`schema.ts` の `inbox_flow`
     // の doc）。
-    this.#bumpInboxFlow(this.#inboxFlowDelivered, event.type);
+    this.#inboxFlow.delivered(event.type);
     this.#inbox.push(
       event,
       this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
@@ -3257,7 +3222,7 @@ class Clone implements CloneHost {
       // を通らないので、この event は `arrived` には数えられない——蒸留は
       // `stores.inbox.put` の対象ですらない（`#forget` の doc「器に置いて
       // いない合図（`#postAndWait` の蒸留）は消すものが無い」）。
-      this.#bumpInboxFlow(this.#inboxFlowDelivered, event.type);
+      this.#inboxFlow.delivered(event.type);
       this.#inbox.push(
         event,
         interrupt && this.#humanPriority
@@ -4470,7 +4435,7 @@ class Clone implements CloneHost {
           if (this.#pendingTokenPoolNotice?.id === record.event.id) {
             this.#pendingTokenPoolNotice = null;
           }
-          this.#bumpInboxFlow(this.#inboxFlowSettled, record.event.type);
+          this.#inboxFlow.settled(record.event.type);
         }
         return;
       } catch (error) {
@@ -4668,11 +4633,6 @@ class Clone implements CloneHost {
   // -------------------------------------------------------------------------
   // 未読の永続化（プロセスが死んでも判断の材料を失わない）
   // -------------------------------------------------------------------------
-
-  /** `#inboxFlow*` の Map を1件だけ増やす（Issue #783 段0）。 */
-  #bumpInboxFlow(counter: Map<InboxEvent['type'], number>, type: InboxEvent['type']): void {
-    counter.set(type, (counter.get(type) ?? 0) + 1);
-  }
 
   /**
    * `post()` が受理した合図を、`#pendingCollapse`（同アイテムの doc）に
@@ -5007,7 +4967,7 @@ class Clone implements CloneHost {
    * を体現している場所そのもの——拾い直しの結果を待たず関数の入口で数える。
    */
   #remember(event: InboxEvent, options: { readonly canQueue: boolean }): void {
-    this.#bumpInboxFlow(this.#inboxFlowArrived, event.type);
+    this.#inboxFlow.arrived(event.type);
     this.#unread.set(event.id, this.#persistUnread(event, options));
   }
 
@@ -6029,7 +5989,7 @@ class Clone implements CloneHost {
         // `for` は失敗を再試行するが、`return` するのはここだけなので、
         // 同じ event で2回数えることは無い（`schema.ts` の `inbox_flow` の
         // doc「`settled` を数える場所は1箇所」）。
-        this.#bumpInboxFlow(this.#inboxFlowSettled, event.type);
+        this.#inboxFlow.settled(event.type);
         return;
       } catch (error) {
         last = error;
@@ -6475,7 +6435,7 @@ class Clone implements CloneHost {
         continue;
       }
 
-      this.#bumpInboxFlow(this.#inboxFlowDelivered, record.event.type);
+      this.#inboxFlow.delivered(record.event.type);
       this.#inbox.push(
         record.event,
         this.#humanPriority && isHumanOriginated(record.event) ? isHumanOriginated : undefined,
@@ -10919,12 +10879,17 @@ class Clone implements CloneHost {
       return;
     }
 
+    // **`#journal` の引数を組み立てるこの時点でカウンタを読む。** `snapshot()`
+    // は読むだけで何も変えない（`CloneInboxFlow.snapshot` の doc）ので、この
+    // 1行を分けても「`#journal` を待つ間に届いた bump がスナップショットに
+    // 入らない」という元の挙動は変わらない。
+    const flow = this.#inboxFlow.snapshot();
     await this.#journal({
       type: 'inbox_flow',
-      windowStartedAt: this.#inboxFlowWindowStartedAt,
-      arrived: buildInboxFlowCount(this.#inboxFlowArrived, INBOX_EVENT_TYPE_ORDER),
-      delivered: buildInboxFlowCount(this.#inboxFlowDelivered, INBOX_EVENT_TYPE_ORDER),
-      settled: buildInboxFlowCount(this.#inboxFlowSettled, INBOX_EVENT_TYPE_ORDER),
+      windowStartedAt: flow.windowStartedAt,
+      arrived: flow.arrived,
+      delivered: flow.delivered,
+      settled: flow.settled,
       pending,
       // **窓の終わりの1点（Issue #1264、案1a）。** `arrived` / `delivered` /
       // `settled`（直上）と違って `.clear()` しない——時点の値であって
@@ -10937,10 +10902,10 @@ class Clone implements CloneHost {
       },
     });
 
-    this.#inboxFlowArrived.clear();
-    this.#inboxFlowDelivered.clear();
-    this.#inboxFlowSettled.clear();
-    this.#inboxFlowWindowStartedAt = new Date().toISOString();
+    // **`#journal` を待った後にだけ、3本を空にして窓を進める。** `pending()`
+    // が失敗して上で return した回はここへ来ないので、カウンタは戻らず次の
+    // 窓へ持ち越される（`#writeInboxFlow` の doc）。
+    this.#inboxFlow.reset();
   }
 
   /** 日誌の書き込み失敗でクローンのセッションを殺さない。 */
