@@ -65,6 +65,11 @@ import {
   SUBAGENT_WAKEUP_LIMIT_PER_AGENT,
   SUBAGENT_WAKEUP_LIMIT_PER_TASK,
 } from './runner-subagent-stop-state.js';
+import {
+  recoverFromFailedResume,
+  type ResumeRecoveryHost,
+  type ResumeRecoveryOutcome,
+} from './runner-resume-recovery.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import type {
   RunnerAnswerCommand,
@@ -1267,7 +1272,7 @@ type FinishUnpushedWorkOutcome =
   | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
-class RunnerSession {
+class RunnerSession implements ResumeRecoveryHost {
   readonly #id: string;
   readonly #request: string;
   readonly #cwd: string;
@@ -2496,51 +2501,66 @@ class RunnerSession {
    * 上がり、台帳には `done`（＝待機中。話しかければ続く）が残る。器を作り直すと
    * プロセス内の諦めは消えるので、腐った session_id しか無いマネージャーが
    * 「まだ続けられるもの」としてクローンへ見え続ける。
+   *
+   * **手順そのものは `runner-resume-recovery.ts` へ切り出した**（Issue #1190
+   * 案Z）。ここは {@link ResumeRecoveryHost} を実装した `this` を渡すだけの薄い
+   * 口である——触るフィールドの持ち主は変わっていない（切り出しの理由・限界・
+   * 順序の約束の逐語は `recoverFromFailedResume`（`runner-resume-recovery.ts`）
+   * 自身の doc を見よ）。
    */
-  #recoverFromFailedResume(reason: string): 'recovered' | 'unresumable' | 'not-a-resume-failure' {
+  #recoverFromFailedResume(reason: string): ResumeRecoveryOutcome {
+    return recoverFromFailedResume(this, reason);
+  }
+
+  // -------------------------------------------------------------------------
+  // `ResumeRecoveryHost`（`runner-resume-recovery.ts`）の実装。
+  //
+  // **ここに書いてあるのは委譲だけで、判断は無い。** 何を・どの順で呼ぶかは
+  // `recoverFromFailedResume`（`runner-resume-recovery.ts`）が持つ。各メソッドの
+  // doc は `ResumeRecoveryHost` 側にあるので、ここでは繰り返さない。
+  // -------------------------------------------------------------------------
+
+  takeResumeAttempt(): { sessionId: string } | null {
     const attempt = this.#resumeAttempt;
-    if (attempt === null) return 'not-a-resume-failure';
     this.#resumeAttempt = null;
+    return attempt;
+  }
 
-    // **手が動いた後の失敗は resume の失敗ではない。** そこで作り直すと、既に
-    // 済ませた作業（コミットや PR）を記録から二度走らせることになる。判定は
-    // `init` が来たかではなく、**このセッションが何かをしたか**で見る。
-    if (this.#progressed) return 'not-a-resume-failure';
+  hasProgressed(): boolean {
+    return this.#progressed;
+  }
 
+  renderSeedRecord(): string | null {
+    return renderSessionLog(this.#seed);
+  }
+
+  closeWorkerWaitWindow(): void {
+    this.#closeWorkerWaitWindow();
+  }
+
+  discardCarriedOverWork(): void {
     // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
     // 前のセッションが開いていた作業者の `task_id` を一切知らない。持ち越すと
     // 二度と来ない `task_notification` を待ち続けて区間が永久に閉じない。
-    // ここで開いていれば畳む（`#finish` と同じ理由。`recovered` で終わる経路には
-    // `#finish` を通らないので、ここで閉じないと一生閉じない）。`unresumable` で
-    // 終わる経路は直後に呼ばれる `#finish` が同じ関数を呼ぶが、既に閉じている
-    // ので二重には emit しない。
-    //
-    // **`close()` を先に、`clear()` を後に。** `#closeWorkerWaitWindow` は
-    // `settled` を「その時点の `#openTasks` が空か」から導く。先に `clear()`
-    // すると、`task-2` が開いたまま resume に失敗した回まで「全員から完了通知を
-    // 受け切った」（`settled: true`）に化ける — 開いたままの委譲を握り潰して
-    // 帳消しにする形になり、`settled: false` の意味（受け切る前に畳まれた）が
-    // 崩れる。先に読ませてから、読み終わった後で捨てる。
-    this.#closeWorkerWaitWindow();
     this.#openTasks.clear();
     // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
     // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
     // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
     // 次のセッションの最初のターンの数に入る。
     this.#turnTally.discardOpenedWorkersAndRejections();
+  }
 
-    const record = renderSessionLog(this.#seed);
-    if (record === null) {
-      this.#emit({
-        type: 'resume_failed',
-        managerId: this.#id,
-        sessionId: attempt.sessionId,
-        reason,
-        recovered: false,
-      });
-      return 'unresumable';
-    }
+  emitResumeFailed(input: { sessionId: string; reason: string; recovered: boolean }): void {
+    this.#emit({
+      type: 'resume_failed',
+      managerId: this.#id,
+      sessionId: input.sessionId,
+      reason: input.reason,
+      recovered: input.recovered,
+    });
+  }
 
+  teardownForRecreate(): string[] {
     // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
     // 引き継ぎの一言を横取りする。
     this.#generation += 1;
@@ -2556,21 +2576,23 @@ class RunnerSession {
     this.#seed = undefined;
     // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
     // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
-    const carried = this.#input
+    return this.#input
       .splice(0)
       .map((message) => String(message.message.content))
       .filter((text) => text.length > 0);
+  }
 
-    this.#emit({
-      type: 'resume_failed',
-      managerId: this.#id,
-      sessionId: attempt.sessionId,
-      reason,
-      recovered: true,
-    });
-    this.push(handoffPrompt({ sessionId: attempt.sessionId, reason, record, carried }));
+  pushHandoff(input: {
+    sessionId: string;
+    reason: string;
+    record: string;
+    carried: readonly string[];
+  }): void {
+    this.push(handoffPrompt(input));
+  }
+
+  openSession(): void {
     this.#open();
-    return 'recovered';
   }
 
   /**
