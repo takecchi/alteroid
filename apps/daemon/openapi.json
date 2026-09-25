@@ -3351,10 +3351,10 @@
         "operationId": "getJournal",
         "tags": ["journal"],
         "summary": "日誌を読む",
-        "description": "日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— `tool_use` の `input`・`worker_wait`・`turn_usage` は探す対象に入っていない。`q=`（空）は絞らない。既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が既に載っているのでそこから組み立てる）。**`after` は返る順序の意味であって時間の意味ではない** —— `order:desc`（既定）では、指した行より**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。`since`/`until` のどちらかを指定すると、応答に `oldestAt`（日誌の地平。日誌が空なら `null`）と `crossesHorizon`（窓の始点が地平より前にかかるか）を足す——真なら「その窓には無かった」のか「日誌がそこまで遡れないだけ」なのかを、この応答だけからは区別できない。",
+        "description": "日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— `tool_use` の `input`・`worker_wait`・`turn_usage` は探す対象に入っていない。`q=`（空）は絞らない。既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ（＝返る順序における次）を返す（可視の複合キー。応答に `id`/`at` が既に載っているのでそこから組み立てる）。**`after` は返る順序の意味であって時間の意味ではない** —— `order:desc`（既定）では、指した行より**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。`since`/`until` のどちらかを指定すると、応答に `oldestAt`（日誌の地平。日誌が空なら `null`）と `crossesHorizon`（窓の始点が地平より前にかかるか）を足す——真なら「その窓には無かった」のか「日誌がそこまで遡れないだけ」なのかを、この応答だけからは区別できない。`since`/`until` を省略した呼びでも、`horizon=true` を渡せば同じ2欄が付く（issue #1530）——窓は絞らないまま、地平の情報だけを明示に求める口。`horizon` を渡さない呼びの応答は1バイトも変わらない。",
         "responses": {
           "200": {
-            "description": "日誌エントリの一覧。`since`/`until` を指定した呼びには `oldestAt`/`crossesHorizon` が付く（指定しない呼びには付かない）。",
+            "description": "日誌エントリの一覧。`since`/`until` のどちらかを指定した呼び、または `horizon=true` を渡した呼びには `oldestAt`/`crossesHorizon` が付く（どちらも渡さない呼びには付かない）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4605,6 +4605,14 @@
             "name": "afterAt",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "horizon",
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
             }
           }
         ]

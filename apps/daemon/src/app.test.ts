@@ -4892,6 +4892,74 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
     expect(body.oldestAt).toBeNull();
     expect(body.crossesHorizon).toBe(false);
   });
+
+  /**
+   * `horizon=true`（issue #1530）。**「絞らずに地平だけ欲しい」を明示する口**
+   * ——Web の初期読み込みは `since`/`until` を送らないので、この口が無いと
+   * 日誌が1ページに収まるほど短いストアでは地平の注記の材料が最初の1回で
+   * 二度と届かない（「もっと遡る」を撃つ機会自体が無い）。
+   */
+  describe('horizon=true（since/until 省略でも地平を返す。issue #1530）', () => {
+    it('horizon を渡さなければ、既存の呼びと1バイトも変わらない（応答の欄が増えない）', async () => {
+      await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+      const body = (await (await app.request('/journal')).json()) as Record<string, unknown>;
+      expect(Object.keys(body)).toEqual(['entries']);
+    });
+
+    it('horizon=false は horizon を渡さないのと同じ（欄が付かない）', async () => {
+      await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+      const body = (await (await app.request('/journal?horizon=false')).json()) as Record<
+        string,
+        unknown
+      >;
+      expect(Object.keys(body)).toEqual(['entries']);
+    });
+
+    it('since/until を両方省略しても、horizon=true なら oldestAt/crossesHorizon が付く', async () => {
+      const entry = await stores.journal.append({
+        type: 'decision',
+        decision: '最古の判断',
+        grounds: '記憶',
+      });
+
+      const body = (await (await app.request('/journal?horizon=true')).json()) as {
+        entries: unknown[];
+        oldestAt: string | null;
+        crossesHorizon: boolean;
+      };
+
+      // **判定は `journalWindowCrossesHorizon` をそのまま使う——`since` が
+      // 無ければ始点は `-∞`** なので、日誌が非空なら必ず真になる（窓が
+      // まるごと地平より後ろになりようがない）。
+      expect(body.oldestAt).toBe(entry.at);
+      expect(body.crossesHorizon).toBe(true);
+    });
+
+    it('horizon=true でも日誌そのものが空なら oldestAt: null / crossesHorizon: false', async () => {
+      const body = (await (await app.request('/journal?horizon=true')).json()) as {
+        oldestAt: string | null;
+        crossesHorizon: boolean;
+      };
+      expect(body.oldestAt).toBeNull();
+      expect(body.crossesHorizon).toBe(false);
+    });
+
+    it('since と horizon=true を両方渡しても、since が地平より前なら crossesHorizon は真のまま', async () => {
+      const entry = await stores.journal.append({
+        type: 'decision',
+        decision: '最古の判断',
+        grounds: '記憶',
+      });
+      const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
+
+      const body = (await (
+        await app.request(`/journal?horizon=true&since=${encodeURIComponent(since)}`)
+      ).json()) as { oldestAt: string | null; crossesHorizon: boolean };
+
+      expect(body.oldestAt).toBe(entry.at);
+      expect(body.crossesHorizon).toBe(true);
+    });
+  });
 });
 
 /**

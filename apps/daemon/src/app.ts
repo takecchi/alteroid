@@ -515,6 +515,25 @@ const journalQuery = z.object({
   afterId: z.string().optional(),
   /** ISO 8601。`afterId` と組で渡す（上の注意を見よ）。 */
   afterAt: z.string().optional(),
+  /**
+   * 「絞らずに地平だけ欲しい」（issue #1530）。**`z.coerce.boolean()` を
+   * 使わない**——`conversationQuery.includeSuperseded` と同じ理由
+   * （`?horizon=false` が true になってしまう）。`.enum(['true', 'false'])`
+   * に揃える。
+   *
+   * `since`/`until` を指定した呼びは、指定しているという事実だけで
+   * `oldestAt`/`crossesHorizon` が付く（この欄が無くても付く）。この欄が
+   * 要るのは**その両方を省略した呼び**——Web の初期読み込みがそれで、
+   * 日誌が1ページに収まるほど短いと「もっと遡る」を一度も撃たないまま
+   * 終端に達し、地平の注記の材料がいつまでも届かない（issue #1530）。
+   * `horizon=true` を渡せば、`since`/`until` が無くても
+   * `oldestAt`/`crossesHorizon` を返す——判定は `journalWindowCrossesHorizon`
+   * をそのまま使う（`since` が無ければ始点は `-∞`。関数の doc）。
+   *
+   * **既定は付けない（`.optional()`）。** 渡さない呼びの応答は1バイトも
+   * 変えない——この欄の追加そのものが、その約束の上に成り立っている。
+   */
+  horizon: z.enum(['true', 'false']).optional(),
 });
 /**
  * `order` / `limit` / `cursor`（issue #432）。
@@ -2501,12 +2520,16 @@ export function createApp(deps: AppDeps) {
           '`since`/`until` のどちらかを指定すると、応答に `oldestAt`（日誌の地平。' +
           '日誌が空なら `null`）と `crossesHorizon`（窓の始点が地平より前に' +
           'かかるか）を足す——真なら「その窓には無かった」のか「日誌がそこまで' +
-          '遡れないだけ」なのかを、この応答だけからは区別できない。',
+          '遡れないだけ」なのかを、この応答だけからは区別できない。' +
+          '`since`/`until` を省略した呼びでも、`horizon=true` を渡せば同じ2欄が' +
+          '付く（issue #1530）——窓は絞らないまま、地平の情報だけを明示に求める口。' +
+          '`horizon` を渡さない呼びの応答は1バイトも変わらない。',
         responses: {
           200: {
             description:
-              '日誌エントリの一覧。`since`/`until` を指定した呼びには ' +
-              '`oldestAt`/`crossesHorizon` が付く（指定しない呼びには付かない）。',
+              '日誌エントリの一覧。`since`/`until` のどちらかを指定した呼び、' +
+              'または `horizon=true` を渡した呼びには `oldestAt`/`crossesHorizon` ' +
+              'が付く（どちらも渡さない呼びには付かない）。',
             content: { 'application/json': { schema: resolver(journalListResponseSchema) } },
           },
           400: {
@@ -2524,7 +2547,8 @@ export function createApp(deps: AppDeps) {
       }),
       validator('query', journalQuery),
       async (c) => {
-        const { limit, since, until, type, q, order, afterId, afterAt } = c.req.valid('query');
+        const { limit, since, until, type, q, order, afterId, afterAt, horizon } =
+          c.req.valid('query');
         const types = type?.split(',').filter((value) => value.length > 0) as
           JournalEntryType[] | undefined;
 
@@ -2570,14 +2594,16 @@ export function createApp(deps: AppDeps) {
               : { after: { id: afterId, at: afterAt } }),
           });
 
-          // **日誌の地平（issue #1510 の積み残し）。** `journal_read`
-          // （`tools.ts`）と同じ条件——`since`/`until` のどちらかを指定した
+          // **日誌の地平（issue #1510 の積み残し、#1530 で `horizon` を足した）。**
+          // `journal_read`（`tools.ts`）と同じ条件——`since`/`until` の
+          // どちらかを指定したとき、または `horizon=true` で明示に求められた
           // ときだけ引く（索引1行なので安く引ける）。0件かどうかでは決めない
           // （窓がまるごと地平より後ろなら、0件でも「本当に無かった」と
-          // 言い切れるため）。**既存の応答の形は壊さない**——この2つは
-          // `since`/`until` を指定したときだけ現れる、足すだけの欄である。
+          // 言い切れるため）。**既存の応答の形は壊さない**——`horizon` を
+          // 渡さない呼びでは `since`/`until` を指定したときだけ現れる、
+          // 足すだけの欄のままである。
           const oldestAt =
-            normalizedSince !== undefined || normalizedUntil !== undefined
+            normalizedSince !== undefined || normalizedUntil !== undefined || horizon === 'true'
               ? await stores.journal.oldestAt()
               : undefined;
           // **判定条件は `journal_read` の `describeJournalHorizonNote` と

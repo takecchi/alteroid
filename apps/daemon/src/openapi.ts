@@ -351,10 +351,11 @@ export const practiceVersionReadResponseSchema = z.object({ version: practiceVer
 /**
  * `oldestAt` / `crossesHorizon`（issue #1510 の積み残し）。
  *
- * **`since`/`until` のどちらかを指定した呼びにだけ現れる**（`journal_read`
- * の `describeJournalHorizonNote` と同じ gate。`apps/daemon/src/app.ts` の
- * `GET /journal` ハンドラの doc）。既存の呼び（`since`/`until` を指定しない）
- * の応答は1バイトも変わらない——足すだけである。
+ * **`since`/`until` のどちらかを指定した呼び、または `horizon=true` を渡した
+ * 呼びにだけ現れる**（`journal_read` の `describeJournalHorizonNote` と同じ
+ * gate に `horizon` を足したもの。issue #1530。`apps/daemon/src/app.ts` の
+ * `GET /journal` ハンドラの doc）。どれも渡さない既存の呼びの応答は1バイトも
+ * 変わらない——足すだけである。
  *
  * - `oldestAt`: 日誌の地平（`JournalStore.oldestAt()`）。日誌が空なら `null`
  * - `crossesHorizon`: 窓の始点（`since`。無指定なら `-∞`）が `oldestAt` より

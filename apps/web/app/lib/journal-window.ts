@@ -164,6 +164,40 @@ export interface PageApplication {
 }
 
 /**
+ * 初期読み込み（`since`/`until` を送らない、窓を持たない1回目の呼び）の
+ * 1ページを適用する（issue #1530）。
+ *
+ * **`applyOlderPage`/`pageOutcome` の「同じ境界を再送したら freshCount で
+ * 見分ける」という二段構えの確認は、ここには要らない。** あの二段構えが
+ * 存在する理由は `since`/`until` が inclusive であることに由来する
+ * 「境界の同じ行が撃ち直すたびに再度返ってきて `freshCount` を0に見せる」
+ * という曖昧さで（`pageOutcome` の doc）、**窓を持たない初期読み込みには
+ * そもそも境界が無いので、この曖昧さが最初から存在しない。** だから
+ * `limit` 未満で返った時点で、`freshCount` を待たずに「日誌の全件を読み
+ * 切った」と言い切れる（`JournalStore.list` は「取れるだけ取ってから返す」
+ * という契約——`pageOutcome` の doc がすでに言っている前提そのもの）。
+ *
+ * **これが無いと何が起きるか。** 日誌の総数が `JOURNAL_PAGE` に収まる
+ * ほど短いとき、`applyOlderPage([], page, JOURNAL_PAGE)` を使うと
+ * `mergeBack([], page)` の `freshCount` は常に `page.length`（既存が空
+ * なので届いた分が丸ごと「新規」になる）で、`page.length > 0` である限り
+ * `pageOutcome` は無条件に `'progress'` を返す——**総数がどれだけ短くても、
+ * 初期読み込みだけでは `'end'` にならない。** 利用者が「もっと遡る」を
+ * 1回押して初めて `'end'` が確定し、地平の注記もそこで初めて出る
+ * （`until` が付くので `GET /journal` は元々地平を返せる）。**「初期読み込み
+ * だけで地平の注記が出ること」を成り立たせるには、`horizon=true`
+ * （`use-journal-window.ts` の初期 `useEffect`）だけでは足りず、この関数で
+ * 初期読み込み自身が `'end'` を言い切れるようにする必要がある。**
+ */
+export function applyInitialPage(page: JournalEntry[], limit: number): PageApplication {
+  return {
+    entries: page,
+    outcome: page.length < limit ? 'end' : 'progress',
+    freshCount: page.length,
+  };
+}
+
+/**
  * `until` で撃った1ページを末尾へ適用する（マージ＋判定を1回で行う）。
  * `use-journal-window.ts` が使う、フック側の複雑さを減らすための合成。
  */
@@ -199,13 +233,15 @@ export function applyOlderPage(
  * 本当に終端に達したときの目印にならない（`reachedStart`/`hiddenByLimit`
  * と同じ「常に出ているものは情報でなくなる」判断。`chat.tsx` の doc）。
  *
- * **⚠️ 既知の非対称。** 初期読み込みは `since`/`until` を送らないので、
- * 最初の1ページだけで日誌全体が尽きる（`entries.length < JOURNAL_PAGE`）
- * ほど小さいストアでは、この注記の材料（`oldestAt`/`crossesHorizon`）が
- * 応答に載らない——`journal_read` の既定呼び（`since`/`until` 省略）が
- * 地平を引かないのと同じ gate である（`journal-time.ts` 相当の判断を
- * ここでも踏襲した）。「もっと遡る」を1回でも撃てば（`until` が付くので）
- * 材料が届く。
+ * **⚠️ 直っていた非対称（issue #1530）。** 初期読み込みは `since`/`until` を
+ * 送らないので、最初の1ページだけで日誌全体が尽きる
+ * （`entries.length < JOURNAL_PAGE`）ほど小さいストアでは、`GET /journal` が
+ * 素通しの gate（`since`/`until` のどちらかを指定した呼びにだけ材料を足す）
+ * のままだと、この注記の材料（`oldestAt`/`crossesHorizon`）が応答に載らない
+ * ——過去に一度、これが実際に起きていた。**いまは初期読み込みが
+ * `horizon=true` を渡す**（`use-journal-window.ts` の初期 `useEffect`）ので、
+ * `since`/`until` を省略していても材料は届く。「もっと遡る」を1回でも撃てば
+ * （`until` が付くので）以降も同じく材料が届く。
  */
 export function journalHorizonNote(
   outcome: PageOutcome,

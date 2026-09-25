@@ -563,6 +563,45 @@ describe('日誌の地平（issue #1510 の積み残し）', () => {
     expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
     expect(screen.queryByText(/区別できない/)).toBeNull();
   });
+
+  /**
+   * **issue #1530。** 日誌が `JOURNAL_PAGE` に収まるほど短いと、初期読み込み
+   * だけで終端（`olderStatus === 'end'`）に達し、「もっと遡る」を一度も
+   * 撃たない——直った形では、初期読み込みが `horizon=true` を送るので、
+   * その1回だけで地平の注記の材料が届く。直す前（`horizon` を送らない）は
+   * この応答に `oldestAt`/`crossesHorizon` が乗らないので、この歯は
+   * 実装を外すと落ちる。
+   */
+  it('初期読み込みだけで日誌が尽きるとき（1ページに収まる）でも、地平の注記が出る（issue #1530）', async () => {
+    const OLDEST_AT = '2026-08-14T00:00:00.000Z';
+    const SHORT_PAGE = PAGE.slice(0, 3); // JOURNAL_PAGE（100）未満＝初回で終端。
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      // **初期読み込みは `until` を送らない。** ここで `horizon=true` が
+      // 付いていなければ地平は返さない——直す前の挙動を再現する分岐。
+      if (new URL(url).searchParams.get('horizon') !== 'true') {
+        return json({ entries: SHORT_PAGE });
+      }
+      return json({ entries: SHORT_PAGE, oldestAt: OLDEST_AT, crossesHorizon: true });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    // 「もっと遡る」ボタンを一度も押していない。
+    expect(screen.queryByRole('button', { name: /もっと遡る/ })).toBeNull();
+
+    expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(OLDEST_AT))).toBeTruthy();
+    expect(screen.getByText(/区別できない/)).toBeTruthy();
+
+    // 初期読み込みの1回目の呼びに horizon=true が乗っていたことも確かめる
+    // （応答の中身だけでなく、実際に送ったクエリを見る）。
+    const firstCall = stub.calls.filter((url) => url.includes('/journal'))[0]!;
+    expect(new URL(firstCall).searchParams.get('horizon')).toBe('true');
+    expect(new URL(firstCall).searchParams.has('until')).toBe(false);
+    expect(new URL(firstCall).searchParams.has('since')).toBe(false);
+  });
 });
 
 /**

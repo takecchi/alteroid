@@ -28,6 +28,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useJournalFeed } from '~/hooks/journal-feed';
 import { unwrap, useApi } from '~/lib/api';
 import {
+  applyInitialPage,
   applyNewerPage,
   applyOlderPage,
   filterRecent,
@@ -48,6 +49,7 @@ interface JournalQueryParams {
   q?: string;
   since?: string;
   until?: string;
+  horizon?: 'true';
 }
 
 export interface JournalWindow {
@@ -157,7 +159,10 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   }, [entries]);
 
   const buildQuery = useCallback(
-    (limit: number, extra?: { since?: string; until?: string }): JournalQueryParams => ({
+    (
+      limit: number,
+      extra?: { since?: string; until?: string; horizon?: 'true' },
+    ): JournalQueryParams => ({
       limit,
       ...(joined === '' ? {} : { type: joined }),
       // **空のときは渡さない。** デーモン側は `q=`（空）も「絞らない」に
@@ -175,20 +180,30 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   useEffect(() => {
     let cancelled = false;
     api.api
-      .GET('/journal', { params: { query: buildQuery(JOURNAL_PAGE) } })
+      .GET('/journal', { params: { query: buildQuery(JOURNAL_PAGE, { horizon: 'true' }) } })
       .then(unwrap)
       .then((data) => {
         if (cancelled) return;
-        const applied = applyOlderPage([], data.entries, JOURNAL_PAGE);
+        // **`applyOlderPage` ではなく `applyInitialPage` を使う**（issue
+        // #1530）。初期読み込みは窓（`since`/`until`）を持たないので
+        // `applyOlderPage`/`pageOutcome` の境界の曖昧さ（同じ行の再送）が
+        // 最初から起こらない——`limit` 未満で返った時点で `'end'` と
+        // 言い切れる（`applyInitialPage` の doc）。これが無いと、日誌が
+        // 短くても初期読み込みは常に `'progress'` になり、「もっと遡る」を
+        // 1回押すまで `'end'`（と地平の注記）が出ない。
+        const applied = applyInitialPage(data.entries, JOURNAL_PAGE);
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
         setOlderStatus(applied.outcome);
-        // **初期読み込みは since/until を送らないので、通常は
-        // `data.oldestAt`/`data.crossesHorizon` が無い**（`buildQuery` の
-        // 既定引数。`journalHorizonNote` の doc「既知の非対称」）。それでも
-        // 常に上書きしておく——省略時は `undefined` になり、
-        // `journalHorizonNote` はそれを「地平にかかっていない」と同じ扱いで
-        // 注記を出さない。
+        // **初期読み込みは since/until を送らないが、`horizon: 'true'` を
+        // 渡すので `data.oldestAt`/`data.crossesHorizon` は付く**（issue
+        // #1530。`apps/daemon/src/app.ts` の `GET /journal` の `horizon`
+        // クエリの doc）。日誌が `JOURNAL_PAGE` に収まるほど短いと、
+        // 「もっと遡る」を一度も撃たないまま最初の1回で終端に達する——
+        // その場合でも地平の注記の材料が届くのは、この `horizon: 'true'`
+        // のおかげである（以前はここを送らず、その形だけ注記が出ない
+        // 非対称があった）。常に上書きしておく——`journalHorizonNote` は
+        // `undefined` を「地平にかかっていない」と同じ扱いで注記を出さない。
         setHorizonNote(journalHorizonNote(applied.outcome, data.oldestAt, data.crossesHorizon));
         setLoadingInitial(false);
       })

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { JournalEntry } from '~/lib/types';
 
 import {
+  applyInitialPage,
   applyNewerPage,
   applyOlderPage,
   filterByType,
@@ -145,6 +146,46 @@ describe('applyOlderPage / applyNewerPage（マージと判定を1回で行う�
     expect(result.entries.map((e) => e.id)).toEqual(['fresher', 'newest', 'a']);
     expect(result.outcome).toBe('progress');
     expect(result.freshCount).toBe(1);
+  });
+});
+
+/**
+ * `applyInitialPage`（issue #1530）。**`applyOlderPage`/`pageOutcome` の
+ * 二段構え（`freshCount` で境界の再送を見分ける）を、初期読み込みには
+ * 掛けない**——窓（`since`/`until`）が無い呼びには境界そのものが無いので、
+ * `limit` 未満で返った時点で `freshCount` を待たずに `'end'` と言い切れる
+ * （`applyInitialPage` の doc）。
+ */
+describe('applyInitialPage（窓の無い初期読み込み1回の適用。issue #1530）', () => {
+  it('page.length が limit 未満なら、中身がいくつあっても end（freshCount を待たない）', () => {
+    const page = [entry('a', '2026-08-20T00:02:00.000Z'), entry('b', '2026-08-20T00:01:00.000Z')];
+    const result = applyInitialPage(page, 100);
+    expect(result.entries).toBe(page);
+    expect(result.outcome).toBe('end');
+    expect(result.freshCount).toBe(2);
+  });
+
+  it('page.length が0でも end（空の日誌）', () => {
+    const result = applyInitialPage([], 100);
+    expect(result.outcome).toBe('end');
+    expect(result.freshCount).toBe(0);
+  });
+
+  it('page.length が limit ちょうどなら progress（まだ続きがあるかもしれない）', () => {
+    const base = new Date('2026-08-20T00:00:00.000Z').getTime();
+    const page = Array.from({ length: 100 }, (_, i) =>
+      entry(`p${i}`, new Date(base - i * 60_000).toISOString()),
+    );
+    const result = applyInitialPage(page, 100);
+    expect(result.outcome).toBe('progress');
+  });
+
+  it('applyOlderPage との違い——既存が空でも freshCount>0 なら applyOlderPage は progress のまま', () => {
+    // 同じ入力（既存なし・短いページ）に対して、この2つの関数が違う答えを
+    // 返すことそのものが、issue #1530 の直しの中身である。
+    const page = [entry('a', '2026-08-20T00:02:00.000Z')];
+    expect(applyOlderPage([], page, 100).outcome).toBe('progress');
+    expect(applyInitialPage(page, 100).outcome).toBe('end');
   });
 });
 
