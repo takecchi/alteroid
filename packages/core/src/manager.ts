@@ -5574,10 +5574,7 @@ class Pool implements ManagerPool {
           grounds: 'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
         });
         this.#autoFoldSkipJournalWritten.set(managerId, memoKey);
-        pruneOldestEntries(
-          this.#autoFoldSkipJournalWritten,
-          AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT,
-        );
+        pruneOldestEntries(this.#autoFoldSkipJournalWritten, AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT);
       }
       return {
         managerId,
