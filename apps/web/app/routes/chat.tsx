@@ -1,5 +1,5 @@
 import { OctagonPause, PanelLeft, Pencil, Plus, Send, Square } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Drawer } from '~/components/drawer';
@@ -982,30 +982,48 @@ export function ChatPane({
   }, [all.length, lines, shownId]);
 
   /**
+   * `shownIdRef.current` を `shownId` へ追従させる。
+   *
+   * **`useLayoutEffect` にしてある（#1570）。** 元は下の abort() と同じ
+   * 受動的 `useEffect` の中で一緒に進めていたが、それだと commit してから
+   * 受動的 effect が走るまでの短い窓で `shownIdRef.current` が**古い会話の
+   * まま**残る——画面（DOM）は既に新しい会話を出しているのに、ref だけが
+   * 遅れる。`handleInterrupt` の `stillShown()`（下）はこの ref を「いま
+   * 見えている会話」の代わりに読むので、その窓の中で `interruptClone()` の
+   * 応答が返ると、切り替え後の画面に前の会話の「止めた」が出た（#1548 が
+   * 塞いだはずの症状が、この順序でだけ残っていた）。**`useLayoutEffect` は
+   * commit と同じ同期区間、ブラウザが描くより前に走る**ので、
+   * `shownIdRef.current` と画面の内容が食い違う窓が無くなる。
+   *
+   * 更新をここへ切り出したことで、`shownIdRef.current` は abort()（下の
+   * 別の `useEffect`）より**先に**進むようになった。`owns()`（下の送信
+   * 経路）にとっては、切り替え後に abort() が実際に走るまでの間も
+   * `shownIdRef.current` が既に新しい会話を指すので、`owns()` 単独で
+   * 「別の会話へ移った」を早く言えるようになる——`stopped()` が遅れて
+   * `false` のままの窓があっても、`writable() = owns() && !stopped()` は
+   * 変わらず偽のままなので、書き込みを許してしまう向きの結果は生まれない。
+   * （この窓での `owns()` 単独の効きは、今回はコードを直しただけで測っては
+   * いない——下の `owns()`/`stopped()` の doc にある #363 の変異試験は
+   * 再実行していない。）
+   */
+  useLayoutEffect(() => {
+    shownIdRef.current = shownId;
+  }, [shownId]);
+
+  /**
    * 別の会話へ移ったら、**前の会話の**ストリームだけを止める。
    *
    * `open` で自分が採番した id へ同期したときは、ストリームの所属も同時に
    * その id へ移してあるので、ここは何もしない（止めると、続く text / done が
    * 画面に出ないまま会話が終わったように見える）。
    *
-   * **`shownIdRef.current` の更新と `abort()` は、この1つの効果の中で
-   * 同じ同期実行の中にある。** これが下の `owns()`/`stopped()` の関係を
-   * 決めている——`owns()` は `shownIdRef.current` を、`stopped()` は
-   * `controller.signal.aborted` を見るが、**この効果が走った後は、両方が
-   * 同時に切り替わる。** `owns()` が「別の会話へ移った」と言えるようになる
-   * 瞬間には、`stopped()` も既に「止まった」と言えるようになっている
-   * （順序ではなく同一関数呼び出しの中での事実）。**`owns()` だけを壊しても
-   * `stopped()` が代わりに `writable()` を締める、が起きる構造的な理由は
-   * ここにある。**
-   *
-   * 加えて、この効果は React の受動的 effect なので **render の commit より
-   * 後に走る**。commit そのもの（`routeId` の変化を見て `setLines([])` を
-   * 呼ぶ、上の「捨てる」ブロック）と、この効果が走るまでの短い窓では
-   * `shownIdRef.current`・`controller.signal.aborted` のどちらも**まだ
-   * 古い値のまま**である。詳細と実測は下の `owns()`/`stopped()` の doc。
+   * この効果は React の受動的 effect なので **render の commit より後に
+   * 走る**。`shownIdRef.current` の更新（直上の `useLayoutEffect`）は
+   * それより先に済んでいるので、ここで見る `shownId` と、既に切り替わって
+   * いる `shownIdRef.current` の間に食い違いは無い——止めるかどうかの
+   * 判定そのものは変えていない。
    */
   useEffect(() => {
-    shownIdRef.current = shownId;
     const stream = streamRef.current;
     if (stream !== undefined && stream.id !== shownId) stream.controller.abort();
   }, [shownId]);
@@ -1174,6 +1192,26 @@ export function ChatPane({
        * 対象にできなかった、というだけである。** 歯を追加で書けば
        * 「この性質は測って確認した」と嘘をつくことになるので、足していない
        * （同 SKILL.md「2 と判断しても、歯を無理に生やさないこと」）。
+       *
+       * **追記（#1570）**: 上の「`shownIdRef.current` の更新と `abort()` は
+       * 同じ effect の中で同期している」という前提が変わった。
+       * `handleInterrupt` の `stillShown()`（`shownIdRef.current` を「いま
+       * 見えている会話」の代わりに読む）が、効果の実行順に依存して別の
+       * 会話へ「止めた」を漏らす実害を起こしたため、`shownIdRef.current`
+       * の更新だけを `useLayoutEffect` へ切り出した（上の該当 doc 参照）。
+       * ⟹ 切り替え後、abort() を持つこの `useEffect`（受動的）が実際に
+       * 走るまでの間、`shownIdRef.current` は既に新しい会話を指す一方
+       * `controller.signal.aborted` はまだ `false` のままという**新しい
+       * 窓**ができている。この窓では `owns()` 単独が `false` を返すので、
+       * 直上の「`owns()` が単独で効く窓はいまの実装には無い」という結論は
+       * 厳密にはこの窓については成り立たなくなった可能性がある——ただし
+       * `writable() = owns() && !stopped()` の結果自体（書き込みを許すか
+       * どうか）は変わらない（`owns()` が先に締めるか `stopped()` が締める
+       * かの違いでしかない）ので、この doc が実際に守っている性質
+       * （append()/setTransient() が漏れないこと）は崩れていない。
+       * **#363 の変異試験は #1570 の変更後に再実行していない**——この窓が
+       * 実際に `owns()` 単独の生存/検出を変えるかどうかは未測定のまま
+       * 残っている。
        */
       const owns = () => stream.id === shownIdRef.current;
       const stopped = () => controller.signal.aborted;
@@ -1466,6 +1504,13 @@ export function ChatPane({
    * 事実なので、B へ何かを新しく出す理由も無い**——何も出さないことが、
    * 何も起きていないと見せることにはならない（クローンのターンは会話ごとの
    * ものではなく、いま見ている会話に何が起きたかを主張していないだけ）。
+   * **#1570**: この判定の正しさは `shownIdRef.current` が画面（DOM）と食い違わずに
+   * 進むことに依存する。`shownIdRef.current` を進める効果を `useLayoutEffect`
+   * にしてある理由（上の該当 doc）はこの `stillShown()` を正しく保つためで
+   * あり、受動的 `useEffect` のままだと、切り替え後・その効果が走る前の窓に
+   * 応答が返ると `pressedConversationId`（旧い会話）と `shownIdRef.current`
+   * （まだ旧いまま）が一致してしまい、切り替え後の画面に前の会話の「止めた」
+   * が出た。
    * `failure` 側も同じ理由で揃える——上の送信経路も `stopped()`（＝別の会話へ
    * 移った）を見て `catch` の `setFailure` を抑えており、ここだけ例外にする
    * 理由は無い。

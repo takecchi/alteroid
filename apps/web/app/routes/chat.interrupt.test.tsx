@@ -282,6 +282,68 @@ describe('会話を切り替えた後に届いた応答（#1548）', () => {
     expect(screen.queryByText(/いま走っていたクローンのターンを止めた/)).toBeNull();
   });
 
+  /**
+   * #1570 の再現と固定。
+   *
+   * 直上のテストは `router.navigate` の後に `await act(async () => {})` を
+   * 挟んで、`shownIdRef.current` を進める効果を確実に走らせてから応答を
+   * 返している——これは「効果が走った後」を確かめるテストであって、
+   * 「navigate 直後・効果が走る前」を確かめるテストではない。この窓
+   * （render の commit から、`shownIdRef.current` を進める効果が走るまでの
+   * 短い間）に応答が返ると、`stillShown()` が比べる `shownIdRef.current` が
+   * まだ会話 A のままなので、画面は既に会話 B を出しているのに A の
+   * 「止めた」が B の画面に出てしまう。ここでは `await act(async () => {})`
+   * を挟まずに、DOM が B を出した直後の tick で応答を返す。
+   *
+   * **⚠️ この窓の幅は実時間の巡り合わせに依存し、決定的ではない。** 直しを
+   * 戻した（`shownIdRef.current` の更新を abort() と同じ受動的 `useEffect`
+   * へ戻した）状態で `--repeat` 相当（手でループさせる形）で20回走らせた
+   * ところ、18回緑・2回赤だった（vitest 4.1.11 / jsdom、2026-09-26 実測）。
+   * 直した状態（`useLayoutEffect` 分離）では同じ20回がすべて緑だった。
+   * ⟹ **この歯は「壊れていれば必ず赤」ではない**——壊れていても大半は
+   * 実際の受動効果のほうが先に走ってしまい見逃す（issue #1570 自身が
+   * 「実機では効果のほうが先に走ることが多い」と書いているのと同じ理由）。
+   * それでも、直した側が20/20緑を保つ一方で壊れた側だけに赤が出ることは
+   * 確かめてあるので、回帰の検出力はゼロではない。**タイマーを模擬して
+   * 窓を毎回強制的に作る**（`vi.useFakeTimers()` 等）形も試したが、この
+   * 環境では `router.navigate` の再描画と対象の受動効果が同じタイマーの
+   * 山でまとめて片付いてしまい、窓そのものを再現できなかった——組んだ形は
+   * 残さず、この doc にだけ結果を残す。
+   */
+  it('navigate 直後、効果が走る前に応答が返っても、B の画面に A の「止めた」は出ない', async () => {
+    let releaseInterrupt: () => void = () => {};
+    const interruptReleased = new Promise<void>((resolve) => {
+      releaseInterrupt = resolve;
+    });
+    const route: Route = (url) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/clone/interrupt')) {
+        return interruptReleased.then(() => json({ outcome: 'interrupted' }));
+      }
+      return undefined;
+    };
+    const stub = stubFetch(route);
+
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    fireEvent.click(await findInterruptButton());
+
+    await waitFor(() => {
+      expect(stub.entries.some((entry) => entry.url.endsWith('/clone/interrupt'))).toBe(true);
+    });
+
+    await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
+    expect(await screen.findByText(OTHER_CONVERSATION_ID)).toBeTruthy();
+
+    // `act()` で効果を先に流さず、B の画面が出た直後にそのまま応答を返す。
+    releaseInterrupt();
+
+    await waitFor(() => {
+      expect((interruptButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(screen.queryByText(/いま走っていたクローンのターンを止めた/)).toBeNull();
+  });
+
   it('同じ会話のまま応答が返れば、今までどおり出る（切り替えていない対照）', async () => {
     let releaseInterrupt: () => void = () => {};
     const interruptReleased = new Promise<void>((resolve) => {
