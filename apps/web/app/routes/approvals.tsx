@@ -1,3 +1,4 @@
+import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import { useMemo, useState } from 'react';
 
 import { Markdown } from '~/components/markdown';
@@ -296,9 +297,13 @@ function ApprovalCard({
             **回答経路（Issue #1479）。** 記録が無い（`answeredVia` を持たない古い
             経路で答えられた）行では出さない——「わからない」を「operator では
             ない」に化けさせない（`packages/core/src/schema.ts` の
-            `answeredViaSchema` の doc）。`describeAnsweredVia` はこの画面が
-            `@alteroid/core` を import できないため独立に持つ
-            （`describeAction` と同じ理由・同じパターン）。
+            `answeredViaSchema` の doc）。`describeAnsweredVia` は
+            `@alteroid/core/answered-via`（ブラウザが読む軽い口。
+            `packages/core/tsup.config.ts` の doc）から import する——
+            `@alteroid/core` バレルからの値 import はサーバ専用のドメイン層を
+            引き込むので禁じている（`describeAction` と同じ理由・同じ
+            パターンだが、こちらは正本を1つに揃えられた——理由の違いは
+            `describeAction` の doc を見よ）。
           */}
           {approval.answeredVia && (
             <p className="mt-1 text-[11px] text-muted">
@@ -457,16 +462,26 @@ const TRACE_MISSING: Record<string, string> = {
 };
 
 /**
- * `approval.answeredVia`（Issue #1479）を人間が読む1行にする（core の
- * `describeAnsweredVia` と同じ規則。画面は `@alteroid/core` の値を import
- * しない——`~/lib/types.ts` 冒頭の約束——ので、ここで独立に持つ）。
+ * 行動1件の要旨（core の `describeTraceAction`——`packages/core/src/approval-trace.ts`
+ * ——と同じ欄を読む）。
+ *
+ * **`describeAnsweredVia` と違い、これは軽い口へ移していない。** 検討した
+ * うえで見送った——理由は3つ。(1) `describeTraceAction` の引数は
+ * `JournalEntry`（`schema.ts` の12種の判別可能ユニオン。`answeredViaSchema`
+ * の2種・数欄とは桁が違う）で、`AnsweredViaLike` と同じ手法（構造的に
+ * 一致する型をここへ手で書き写す）を採ると、その12種を丸ごと複製する
+ * ことになり「複製をやめる」という目的そのものに反する。(2) `journal-search.ts`
+ * の doc が既に同じ壁を指摘している——`apps/web` が持つ `JournalEntry` は
+ * `@alteroid/core` のものではなく `@alteroid/api-client`（OpenAPI 生成）の
+ * 別の型なので、正本の関数をそのまま受けると画面側でキャストが要る。
+ * (3) **そして最も重い理由——2つの実装は既に文言が違う。** core 版は
+ * `tool_use` に `outcome` を括弧で足し、`exchange` の前に
+ * 「人間への返答/発言: 」を付けるが、この画面の実装はどちらも持たない
+ * （このファイルの実測、2026-09-25）。揃えるなら画面の表示文言を変える
+ * ことになり、それは「文言を変えない」小さな refactor の範囲を超える
+ * 判断（表示を変えてよいか）を要る。**この差分自体は Issue へ上げて
+ * 報告した**（このファイルを直した PR の本文を見よ）。
  */
-function describeAnsweredVia(via: NonNullable<PendingApproval['answeredVia']>): string {
-  if (via.kind === 'account') return `account（${via.accountId}）`;
-  return via.auth === 'disabled' ? 'operator（認証無効）' : 'operator（operator token）';
-}
-
-/** 行動1件の要旨（core の `describeTraceAction` と同じ欄を読む。画面は core を import しない）。 */
 function describeAction(entry: { type: string } & Record<string, unknown>): string {
   const str = (key: string) => (typeof entry[key] === 'string' ? (entry[key] as string) : '');
   switch (entry.type) {

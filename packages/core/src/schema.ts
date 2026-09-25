@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { AnsweredViaLike } from './answered-via.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import { systemErrorFactsSchema } from './system-error.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
@@ -440,14 +441,35 @@ export const answeredViaSchema = z.discriminatedUnion('kind', [
 export type AnsweredVia = z.infer<typeof answeredViaSchema>;
 
 /**
- * {@link AnsweredVia} を人間が読む1行にする（短く。`renderApprovalTrace` の
- * 出力や `human_answer` のターン入力はクローンのプロンプトへそのまま載るので、
- * 定型文に近い短さを保つ）。
+ * {@link AnsweredVia} を人間が読む1行にする関数の正本は `answered-via.ts`
+ * （`@alteroid/core/answered-via`）へ移した——理由はそちらの doc を見よ。
+ * `schema.ts` はここから再輸出するだけで、`describeAnsweredVia` を
+ * import している既存の呼び手（`clone.ts` / `approval-trace.ts` /
+ * `apps/cli/src/chat.ts`）は変更不要である。
  */
-export function describeAnsweredVia(via: AnsweredVia): string {
-  if (via.kind === 'account') return `account（${via.accountId}）`;
-  return via.auth === 'disabled' ? 'operator（認証無効）' : 'operator（operator token）';
-}
+export { describeAnsweredVia } from './answered-via.js';
+
+/** `T` が `true` でなければ、この型別名の定義そのものが `typecheck` を落とす（`tools.ts` の `AssertTrue` と同じ形）。 */
+type AssertTrue<T extends true> = T;
+
+/**
+ * `answered-via.ts` の {@link AnsweredViaLike}（手書き）が、この zod スキーマ
+ * から推論した {@link AnsweredVia} と構造的に一致することの強制。
+ *
+ * 軽い口（`answered-via.ts`）は zod を import できないので、`AnsweredVia` を
+ * そのまま使えず、同じ形を手で書き写している。**ここが崩れると、両者は
+ * 静かにずれうる**——`answeredViaSchema` に分岐を足しても `AnsweredViaLike`
+ * を書き換え忘れれば、web の表示だけが古いままになる。相互に
+ * `extends` させ、片方でも欠けたら `false` になって
+ * `AssertTrue<false>` が `typecheck` を落とす。
+ */
+export type _AssertAnsweredViaMatchesLikeType = AssertTrue<
+  [AnsweredVia] extends [AnsweredViaLike]
+    ? [AnsweredViaLike] extends [AnsweredVia]
+      ? true
+      : false
+    : false
+>;
 
 /**
  * 仕事の起点（PRD「自律」の4つ）。M1 で届くのは `human` だけだが、

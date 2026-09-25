@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 6つ出す。
+   * 7つ出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -39,6 +39,14 @@ export default defineConfig({
    *   揃えるための唯一の正本。ファイル自身がもともと import を1つも
    *   持たない（ストア・時刻・乱数のどれにも触れない設計——ファイル冒頭の
    *   doc）ので、分離のために書き換えた行は無い。
+   * - `answered-via.ts` — 承認への回答経路（`answeredVia`）の表示（issue
+   *   #1479。`@alteroid/core/answered-via`）。**`permission-rule.ts` と同じ
+   *   形**——Web UI（`apps/web/app/routes/approvals.tsx`）はこれが無かった
+   *   間、CLI（`apps/cli/src/chat.ts`）と同じ `describeAnsweredVia` を画面へ
+   *   手で複製していた（#1514）。複製をやめてここへ寄せた。ファイル自身は
+   *   import を1つも持たない——zod スキーマから推論した型と構造的に一致する
+   *   ことは `schema.ts` の型レベルの検査（`_AssertAnsweredViaMatchesLikeType`）
+   *   が保証する。
    */
   entry: [
     'src/index.ts',
@@ -47,6 +55,7 @@ export default defineConfig({
     'src/journal-search.ts',
     'src/clone-tool-relay-child.ts',
     'src/permission-rule.ts',
+    'src/answered-via.ts',
   ],
   format: ['esm'],
   dts: true,
