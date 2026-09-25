@@ -189,7 +189,11 @@ RUN install -d -m 0711 /run/alteroid/profile
 # `createCloneToolRelayHost` が同じ mode で作り直す**（このイメージのぶんは
 # volume の初回コピー用の下地であって、実際の絞り込みは実行時にも重ねて
 # 効く）。
-RUN install -d -m 0700 /run/alteroid/clone-tool-relay
+#
+# **持ち主は node（デーモンが降りた先の主体、uid 1000）にする。** root の持ち物の
+# 0700 だと、デーモンは中へ入れず、`createCloneToolRelayHost` の listen も chmod も
+# 失敗する（落ちるのは stdio のときだけ。既定の sdk ではこの置き場を使わない）。
+RUN install -d -m 0700 -o node -g node /run/alteroid/clone-tool-relay
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

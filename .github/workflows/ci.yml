@@ -679,6 +679,26 @@ jobs:
               || { echo "降りた先で HOME へ書けない" >&2; exit 1; }
           '
 
+      # **クローンの道具の中継（#486 48(a)）のソケットの置き場を、デーモンが降りた先の
+      # 主体（node）で実際に使えるか。** 持ち主が root のままだと、stdio のときだけ
+      # listen が EACCES で落ちる。別 UID（uid 1001 ＝マネージャーの主体）からは中が
+      # 見えないこと（0700）も見る。
+      - name: デーモンの主体でクローンの道具の中継のソケットを開けるか
+        run: |
+          docker run --rm -u 0 alteroid:ci sh -eu -c '
+            d=/run/alteroid/clone-tool-relay
+            got=$(stat -c %U:%a "$d")
+            test "$got" = node:700 || { echo "置き場の持ち主か mode が違う: $got" >&2; exit 1; }
+
+            printf "%s\n" "require(\"node:net\").createServer().listen(process.argv[2], () => process.exit(0));" > /tmp/probe.cjs
+            su -s /bin/sh node -c "node /tmp/probe.cjs $d/probe.sock" \
+              || { echo "node の主体で listen できない" >&2; exit 1; }
+
+            if su -s /bin/sh worker -c "ls $d" >/dev/null 2>&1; then
+              echo "別 UID から中が見える" >&2; exit 1
+            fi
+          '
+
       # **別 UID の子プロセスは runner の制御面ソケットへ繋げないことを実物で見る。**
       # `apps/runner/src/boundary.test.ts`（vitest）はこれを in-process では確かめ
       # られない — vitest プロセスは非 root で `CAP_SETUID` を持たず、`pnpm test` が
