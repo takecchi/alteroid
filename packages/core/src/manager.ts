@@ -9291,11 +9291,64 @@ class Pool implements ManagerPool {
       }
 
       case 'settled': {
+        // **消える前に取る（Issue #1586）。** `record.waiting` から外す前に
+        // 該当行の `summary` を控えておく——`withdrawn` の journal に「何の
+        // 確認だったか」を残すのに要る。`stopped` の後に届いた回は `abort()`
+        // が既に `record.waiting = []` で空にしていることがあり、そのときは
+        // 拾えない（拾えなかったことも journal に書く）。
+        const pendingSummary = record.waiting.find(
+          (item) => item.requestId === event.requestId,
+        )?.summary;
+
+        // **止めたマネージャーの `waiting`/`status` を、遅れて届いた `settled`
+        // で動かしてしまわないか——ここは `case 'report'` / `case 'ask'` と
+        // 違って、専用のガードを足していない。理由: `record.job.status` が
+        // `'stopped'` のとき（＝ `abort()` 経由）、`abort()` は同じ呼びの中で
+        // `record.waiting` も `[]` にしている（このファイルの `abort()` の
+        // 該当箇所）。**`'stopped'` と `'waiting_human'` は同じ欄の別の値な
+        // ので同時に成り立たない**——下の `record.job.status === 'waiting_human'`
+        // という条件そのものが、`'stopped'` から `'running'` へ甦らせる余地を
+        // 持たない。`case 'ask'` に専用ガードが要るのは「押し込む」操作
+        // （`waiting` を増やす）を止める必要があるからで、こちらは「外す」
+        // 操作（減らす／変えない）しかしないので、同じ形のガードを足しても
+        // 観測できる差が無い（足しても検出できないテストしか書けない、と
+        // いう歯を書いて確かめた——Issue #1586 の PR 本文に記載）。
+        //
+        // **ただし `withdrawn` の記録は、この判定と無関係に残す**——「答えが
+        // 届いていない」という事実は、止めた後に分かったのでも変わらない
+        // （`case 'report'` の R4 分岐が「日誌にだけは残す」のと同じ考え方）。
         record.waiting = record.waiting.filter((item) => item.requestId !== event.requestId);
         if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
           record.job.status = 'running';
         }
         await this.#persist(record);
+
+        // **`withdrawn` が付いた回だけ日誌へ残す（Issue #1586）。**
+        // `#settleAll`（畳むときに未決の確認を deny で解く経路）だけがこれを
+        // 立てる——`answer()`（クローンの回答）はここへ来ない
+        // （`runner.ts` の `#settleAll` の doc）。
+        //
+        // **`escalation` を再利用し、新しい種別は作らない。** `case 'ask'` が
+        // 開いたときの1行と同じ `approvalId`（＝ `event.requestId`）へ、
+        // 「取り下げ」という終端を**別の新しい行**として積む——
+        // `withdrawnAt`/`withdrawnReason` は元々クローン自身の
+        // `approval_withdraw`（`tools.ts`）向けだったが、`schema.ts` の
+        // `escalation.approvalId` の doc が言うとおり「承認待ちキューの項目
+        // id、またはマネージャーの確認1件の id」の両方を受ける欄なので、
+        // 形はそのまま流用できる（`escalation.withdrawnAt` の doc に、この
+        // 2つ目の書き手を追記した）。
+        if (event.withdrawn !== undefined) {
+          await this.#journal({
+            type: 'escalation',
+            question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
+            approvalId: event.requestId,
+            managerId: event.managerId,
+            withdrawnAt: new Date().toISOString(),
+            withdrawnReason:
+              `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
+              `理由: ${event.withdrawn.reason}`,
+          });
+        }
         return;
       }
 
