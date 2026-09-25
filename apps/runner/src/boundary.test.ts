@@ -334,6 +334,15 @@ describe('世代（fencing token）と自己失効', () => {
         queryFn: fake.fn,
         env: { PATH: process.env.PATH ?? '' },
         enforceLease: true,
+        // **cgroup の実ファイルを読ませない（Issue #1517）。** この一式は
+        // `vi.useFakeTimers()` の下で走る一方、`readCgroupEventCounters` の
+        // 既定実装は本物の `fs.readFile`（実 I/O）——フェイクタイマーが進める
+        // のは fake timer のコールバックだけで、実 I/O の完了は実時間でしか
+        // 進まない。既定のままだと `#finish()` がその完了を待つ分だけ
+        // `vi.advanceTimersByTimeAsync` 直後の assertion より遅れて解決し、
+        // `list()` がまだ委譲を持ったままの状態を拾う（`packages/core/src/
+        // runner-fence.test.ts` と同じ実測・同じ理由）。
+        readCgroupEventCountersFn: async () => ({}),
       });
       const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
 
@@ -374,6 +383,8 @@ describe('世代（fencing token）と自己失効', () => {
         queryFn: fake.fn,
         env: { PATH: process.env.PATH ?? '' },
         enforceLease: true,
+        // 同上（Issue #1517）。
+        readCgroupEventCountersFn: async () => ({}),
       });
       const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
 
