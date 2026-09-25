@@ -1113,6 +1113,81 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(calls).toEqual([{ pid: 270, signal: 'SIGTERM' }]); // SIGKILL は送られていない
   });
 
+  /**
+   * **#1544 の再現を固定する。** 帳を pid だけで引いていた頃は、SIGTERM を送った
+   * P が消えて同じ pid を Q が使うと、Q を P と取り違えた——Q は SIGTERM を1度も
+   * 受けずに、P の SIGTERM から数えた猶予で SIGKILL された。
+   */
+  describe('pid が別のプロセスへ使い回されたとき（#1544。帳は pid と starttime の組で引く）', () => {
+    function reapingReader(now: () => number) {
+      const { fn: killFn, calls } = fakeKillFn();
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        ttlMs: 0,
+        now,
+        reclaim: {
+          childUid: OWN_UID,
+          reap: {
+            liveSessionPidsOf: () => new Set(),
+            knownTerminatedSessionPidsOf: () => new Set(),
+            anyTrackedDelegationsOf: () => false,
+            graceMs: 10_000,
+          },
+        },
+      });
+      return { reader, calls };
+    }
+
+    it('P の猶予を過ぎてから Q を見ても、Q は SIGTERM から始まり、いきなり SIGKILL されない', async () => {
+      placeProcess(root, 500, 'old-process-P', 'S', 2, 100, 1, 999);
+      placeUptime(root, 1000);
+      let now = 0;
+      const { reader, calls } = reapingReader(() => now);
+
+      const first = await reader.read();
+      expect(first?.reclaim?.signalled).toBe(1);
+
+      // P が消え、pid 500 を starttime の違う Q が使う。Q も回収の条件を満たす。
+      placeProcess(root, 500, 'new-unrelated-process-Q', 'S', 3, 5000, 1, 999);
+      now = 10_500; // P の SIGTERM から猶予を過ぎた
+      const second = await reader.read();
+
+      expect(second?.reclaim?.signalled).toBe(1); // Q へ SIGTERM
+      expect(second?.reclaim?.killed).toBe(0); // Q の猶予はまだ始まったばかり
+      expect(second?.reclaim?.freedThreads).toBe(2); // P は返ったと数える
+
+      now = 21_000; // Q の SIGTERM から猶予を過ぎた
+      const third = await reader.read();
+      expect(third?.reclaim?.killed).toBe(1);
+
+      expect(calls).toEqual([
+        { pid: 500, signal: 'SIGTERM' }, // P
+        { pid: 500, signal: 'SIGTERM' }, // Q
+        { pid: 500, signal: 'SIGKILL' }, // Q（自分の猶予の後）
+      ]);
+    });
+
+    it('P の猶予の内側で Q に替わっても、Q は見過ごされずに SIGTERM を受ける', async () => {
+      placeProcess(root, 500, 'old-process-P', 'S', 2, 100, 1, 999);
+      placeUptime(root, 1000);
+      let now = 0;
+      const { reader, calls } = reapingReader(() => now);
+
+      await reader.read();
+
+      placeProcess(root, 500, 'new-unrelated-process-Q', 'S', 3, 5000, 1, 999);
+      now = 1_000; // P の猶予の内側
+      const second = await reader.read();
+
+      expect(second?.reclaim?.signalled).toBe(1);
+      expect(calls).toEqual([
+        { pid: 500, signal: 'SIGTERM' },
+        { pid: 500, signal: 'SIGTERM' },
+      ]);
+    });
+  });
+
   it('reap を渡していなければ mode は observe のまま、reap があれば候補0本でも reclaim を名乗る', async () => {
     placeProcess(root, 280, 'node', 'S', 1, 0, 999); // 孤児ではない＝候補0本
     placeUptime(root, 1000);
