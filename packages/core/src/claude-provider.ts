@@ -660,18 +660,16 @@ export interface ManagerSessionOptionsRequest {
   spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
   canUseTool: CanUseTool;
   /**
-   * **中立の型に載せていない（`HookCallback` のまま）。** `runner.ts` の
-   * `#onPostToolUse` は観測（日誌・所有者控え）に加えて、`#901` の打ち切り
-   * 注記を `hookSpecificOutput.additionalContext` として返す経路を持つ——
-   * これは「起きたことをただ記録する」を超えた判断であり、いまの
-   * `AgentObservationHook`（`void` しか返せない）には載らない。**クローン側
-   * の `onPostToolUse`（`CloneSessionOptionsRequest` / `CloneDistillOptionsRequest`）
-   * は常に `{ continue: true }` だけを返すことを実装で確認しており、そちらは
-   * 中立の型へ移してある。** この欄を中立化するのは、`AgentObservationHook`
-   * に返り値を持たせる（または専用の型を別に起こす）判断とセットで次の PR に
-   * 送る（#486）。
+   * **`AgentObservationHook` ではなく `AgentContextHook` に載せる（#486 中立の口の
+   * 4本目）。** `runner.ts` の `#onPostToolUse` は観測（日誌・所有者控え）に
+   * 加えて、`#901` の打ち切り注記を追加の文脈として返す経路を持つ——`void`
+   * しか返せない `AgentObservationHook` には載らない。返すのは `continue` か
+   * `addContext` だけで、`wrapContextHook` が SDK の
+   * `hookSpecificOutput.additionalContext` へ包み直す。**クローン側の
+   * `onPostToolUse`（`CloneSessionOptionsRequest` / `CloneDistillOptionsRequest`）
+   * は常に `{ continue: true }` だけを返すので `AgentObservationHook` のまま。**
    */
-  onPostToolUse: HookCallback;
+  onPostToolUse: AgentContextHook<AgentToolAuditRecord>;
   /**
    * 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #929
    * （クローン側の同じ形は `onPostToolUse` の doc の `buildCloneSessionOptions`
@@ -705,23 +703,17 @@ export interface ManagerSessionOptionsRequest {
    * 作業者セッションが停止した瞬間の背景処理の在り高を観測する専用フック
    * （#357 の実測口）。
    *
-   * **中立の型に載せていない（`HookCallback` のまま）。** `runner.ts` の
+   * **`AgentContextHook` に載せる（#486 中立の口の4本目）。** `runner.ts` の
    * `#onSubagentStop` は、当人が起こした背景処理が残っていて通し上限・
-   * 1本あたりの上限のどちらも超えていない回に、作業者を起こし直す
-   * `hookSpecificOutput.additionalContext` を返す——これは「起きたことを
-   * ただ記録する」を超えた判断であり、いまの `AgentObservationHook`
-   * （`void` しか返せない）には載らない。**⚠️ 同ファイルの doc・呼び出し側の
-   * コメントは「観測専用」と名乗っているが、これは PR #594 時点の記述が
-   * 後続の PR（起こし直しを足した側）で更新されないまま残ったものである
-   * （`agent-hooks.ts` のファイル doc「⚠️ ここは観測専用ではない」の節）。
-   * ⟹ この欄を中立化するには `onPostToolUse` と同様、`AgentObservationHook`
-   * に返り値を持たせる（または専用の型を別に起こす）判断とセットで次の PR に
-   * 送る（#486）。** optional にしない。理由は直上の `onUserPromptSubmit` と
+   * 1本あたりの上限のどちらも超えていない回に、作業者を起こし直す文脈を
+   * 返す（`addContext`）——「起きたことをただ記録する」を超えた判断なので
+   * `AgentObservationHook` には載らない。`wrapContextHook` が SDK の
+   * `hookSpecificOutput.additionalContext` へ包み直す。optional にしない。理由は直上の `onUserPromptSubmit` と
    * 同じ——省略できる形にすると、provider を足す側が「渡さない」ことで観測を
    * 静かに落とせる（可観測性は要件である。PRD「可観測性」）。中身は
    * `runner.ts` の `#onSubagentStop` の doc を見よ。
    */
-  onSubagentStop: HookCallback;
+  onSubagentStop: AgentContextHook<AgentSubagentStopRecord>;
   /**
    * **マネージャー自身のターンが閉じる瞬間**の背景処理の在り高を観測する専用
    * フック（#861 の実測口）。
@@ -922,9 +914,10 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // `#onPreToolUse` の doc を見よ。`wrapPreToolHook` が中立の判断を
       // SDK の `HookCallback` へ包み直す。
       PreToolUse: [{ hooks: [wrapPreToolHook(onPreToolUse)] }],
-      // **`HookCallback` のまま渡す**（`ManagerSessionOptionsRequest.onPostToolUse`
-      // の doc）。中立の口を経由しないので、ここでは包み直さない。
-      PostToolUse: [{ hooks: [onPostToolUse] }],
+      // 観測に加えて #901 の打ち切り注記を追加の文脈として返しうる
+      // （`ManagerSessionOptionsRequest.onPostToolUse` の doc）。`wrapContextHook` が
+      // 中立の `continue` / `addContext` を SDK の形へ包み直す。
+      PostToolUse: [{ hooks: [wrapContextHook('PostToolUse', onPostToolUse, toAgentToolAuditRecord)] }],
       // **`PostToolUse` とは排他で発火する**（Issue #924 が出荷済みの SDK
       // 実行体を実測して確認した排他分岐。`buildCloneSessionOptions` の
       // `PostToolUseFailure` の doc と同じ）。⟹ 道具呼び出し1回につきどちらか
@@ -938,9 +931,11 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。
       UserPromptSubmit: [{ hooks: [wrapUserPromptSubmitHook(onUserPromptSubmit)] }],
       // **観測専用ではない**（#357）。当人が起こした背景処理が残っていれば
-      // 起こし直しの `additionalContext` を返すことがある——`HookCallback` の
-      // まま渡す（`ManagerSessionOptionsRequest.onSubagentStop` の doc）。
-      SubagentStop: [{ hooks: [onSubagentStop] }],
+      // 起こし直しの文脈を返すことがある（`ManagerSessionOptionsRequest.onSubagentStop`
+      // の doc）。`wrapContextHook` が SDK の形へ包み直す。
+      SubagentStop: [
+        { hooks: [wrapContextHook('SubagentStop', onSubagentStop, toAgentSubagentStopRecord)] },
+      ],
       // **観測専用**（#861）。`{ continue: true }` を返すだけで、`decision` も
       // `hookSpecificOutput` も返さない —— 直上の `SubagentStop` は起こし直し
       // （`additionalContext`）を返す側へ変わっているが、**こちらは記録だけで

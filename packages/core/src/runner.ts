@@ -23,11 +23,14 @@ import type {
   AgentTurnEnded,
 } from './agent-events.js';
 import type {
+  AgentContextOutcome,
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
   AgentStopRecord,
+  AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
+  AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
@@ -2002,7 +2005,7 @@ class RunnerSession {
       // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
       // 理由は `#onPreToolUse` の doc を見よ。
       onPreToolUse: (record) => this.#onPreToolUse(record),
-      onPostToolUse: (input) => this.#onPostToolUse(input),
+      onPostToolUse: (record) => this.#onPostToolUse(record),
       // **`PostToolUse` と排他**（Issue #924 の実測分岐。#929）。理由は
       // `#onPostToolUseFailure` の doc を見よ。
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
@@ -2013,7 +2016,7 @@ class RunnerSession {
       // **観測専用ではない**（#357）。当人が起こした背景処理が残っていれば
       // 起こし直しの `additionalContext` を返すことがある。理由は
       // `#onSubagentStop` の doc を見よ。
-      onSubagentStop: (input) => this.#onSubagentStop(input),
+      onSubagentStop: (record) => this.#onSubagentStop(record),
       // **観測専用**（#861）。`{ continue: true }` を返すだけで、**何も判断せず、
       // 何も抑制しない。** 理由は `#onStop` の doc を見よ。
       onStop: (record) => this.#onStop(record),
@@ -3657,39 +3660,27 @@ class RunnerSession {
    * 無く、作業者の生ログ側にも構造化された形では出ないためである（実測: 生ログ
    * に出るのは `Command running in background with ID: …` という**自由文**だけ）。
    */
-  async #onPostToolUse(input: unknown): Promise<{
-    continue: true;
-    hookSpecificOutput?: { hookEventName: 'PostToolUse'; additionalContext: string };
-  }> {
-    const hook = input as {
-      tool_name?: string;
-      tool_input?: unknown;
-      tool_response?: unknown;
-      transcript_path?: string;
-      agent_id?: string;
-      agent_type?: string;
-    };
-
-    if (typeof hook.transcript_path === 'string') this.#transcriptPath = hook.transcript_path;
+  async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
+    if (typeof record.transcriptPath === 'string') this.#transcriptPath = record.transcriptPath;
     // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
     this.#markProgressed();
 
     // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
     // （`hook.agent_id` が付いているものは作業者の分なので混ぜない）。
-    if (hook.agent_id === undefined) this.#turnTally.incrementToolsSinceResult();
+    if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 
     this.#emit({
       type: 'tool_use',
       managerId: this.#id,
       actor:
-        hook.agent_id === undefined
+        record.agentId === undefined
           ? `manager:${this.#id}`
-          : `worker:${this.#id}:${hook.agent_type ?? WORKER_AGENT_NAME}`,
-      tool: hook.tool_name ?? '(不明)',
-      input: hook.tool_input,
+          : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+      tool: record.toolName ?? '(不明)',
+      input: record.toolInput,
     });
 
-    this.#recordBackgroundTaskOwner(hook.tool_response, hook.agent_id);
+    this.#recordBackgroundTaskOwner(record.toolResponse, record.agentId);
 
     // マネージャー自身の呼び出しだけを見る（`Task` を呼ぶのはマネージャーなので
     // `agent_id` が付かない。#901）。**道具の種類は問わない** — 同期の `Task`
@@ -3698,12 +3689,9 @@ class RunnerSession {
     // 呼び出しにでも相乗りする（先に届いた別の完了通知を配達するだけなので、
     // いまの `tool_response` の中身とは無関係）。
     const additionalContext =
-      hook.agent_id === undefined ? this.#annotateCutOffWorkers(hook.tool_response) : null;
-    if (additionalContext === null) return { continue: true };
-    return {
-      continue: true,
-      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext },
-    };
+      record.agentId === undefined ? this.#annotateCutOffWorkers(record.toolResponse) : null;
+    if (additionalContext === null) return { kind: 'continue' };
+    return { kind: 'addContext', text: additionalContext };
   }
 
   /** 起こし直しの上限で打ち切った作業者を控える（#901。`#cutOffWorkers`）。 */
@@ -4119,25 +4107,16 @@ class RunnerSession {
    * 相当を返す。`#markProgressed()` などの既存の副作用は呼ばない
    * （挙動を変えるのは継続の合図だけで、それ以外の観測は変えない）。
    */
-  async #onSubagentStop(input: unknown): Promise<{
-    continue: true;
-    hookSpecificOutput?: { hookEventName: 'SubagentStop'; additionalContext: string };
-  }> {
+  async #onSubagentStop(record: AgentSubagentStopRecord): Promise<AgentContextOutcome> {
     try {
-      const hook = input as {
-        background_tasks?: unknown;
-        session_crons?: unknown;
-        agent_type?: string;
-        agent_id?: string;
-        stop_hook_active?: unknown;
-      };
-      const tasks = Array.isArray(hook.background_tasks) ? hook.background_tasks : [];
-      const crons = Array.isArray(hook.session_crons) ? hook.session_crons : [];
-      const agentId = hook.agent_id;
+      // 配列でない・真偽値でない欄は `toAgentSubagentStopRecord`（`claude-provider.ts`）
+      // が省いて渡す。ここでの読み方は、中立化する前に生入力から読んでいた形と同じ。
+      const tasks = record.backgroundTasks ?? [];
+      const crons = record.sessionCrons ?? [];
+      const agentId = record.agentId;
       // **取れたときだけ載せる。** 取れない回に既定値の行を作らない
       // （AGENTS.md 地雷「取れない軸に0の行を作る」）。
-      const stopHookActive =
-        typeof hook.stop_hook_active === 'boolean' ? hook.stop_hook_active : undefined;
+      const stopHookActive = record.stopHookActive;
 
       // **当人が起こしたものだけを残す。** `id` が表に在り、その所有者が
       // いま畳もうとしている作業者と一致するものだけを数える。
@@ -4149,11 +4128,11 @@ class RunnerSession {
 
       if (mine.length === 0) {
         this.#noteOwnerLookupFailure(tasks);
-        return { continue: true };
+        return { kind: 'continue' };
       }
       // **型のためのガード。** `mine.length > 0` は上の filter の条件から
       // `agentId` が文字列であることを含意するので、実際にはここへは来ない。
-      if (agentId === undefined) return { continue: true };
+      if (agentId === undefined) return { kind: 'continue' };
 
       // **`status` で言い分ける。** ここが無かったのが直した穴である ——
       // `mine` は「**当人が起こしたもの**」であって「**まだ走っているもの**」では
@@ -4184,7 +4163,7 @@ class RunnerSession {
       // 1回だけ日誌へ出す（`#noteSettledOnly`）。
       if (remaining.length === 0) {
         this.#noteSettledOnly(settled);
-        return { continue: true };
+        return { kind: 'continue' };
       }
 
       const stopHookActiveText =
@@ -4245,7 +4224,7 @@ class RunnerSession {
         const taskLines = this.#renderSubagentStopTaskLines(agentId, remaining);
 
         const noteLines = [
-          `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
+          `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
             `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした**` +
             settledText +
             `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
@@ -4262,9 +4241,9 @@ class RunnerSession {
           stall: {
             agentId,
             // **取れたときだけ載せる**（AGENTS.md 地雷「取れない軸に0の行を
-            // 作る」。`hook.agent_type` は SDK 側の事情で無いことがある —
+            // 作る」。`record.agentType` は SDK 側の事情で無いことがある —
             // `runner-protocol.ts` の `note.stall.agentType` の doc）。
-            ...(hook.agent_type === undefined ? {} : { agentType: hook.agent_type }),
+            ...(record.agentType === undefined ? {} : { agentType: record.agentType }),
             ownedTaskCount: remaining.length,
             sessionTaskCount: tasks.length,
             // **スキーマは変えていない**（`runner-protocol.ts` /
@@ -4296,10 +4275,7 @@ class RunnerSession {
         ];
         const additionalContext = this.#truncateSubagentStopText(contextLines.join('\n'));
 
-        return {
-          continue: true,
-          hookSpecificOutput: { hookEventName: 'SubagentStop', additionalContext },
-        };
+        return { kind: 'addContext', text: additionalContext };
       }
 
       // **起こし直さない —— 理由は2つに割れる（`limitReason`）。**
@@ -4330,7 +4306,7 @@ class RunnerSession {
         `上限に達してから ${limitNoteCount}回目（1・3・9…回目だけクローンへ上げる）。` +
         (shouldEscalateLimitNote ? '' : ' この回はクローンの受信箱へは上げない — 日誌には残る。');
       const noteLines = [
-        `SubagentStop（作業者: ${hook.agent_type ?? '(不明)'} / agent_id=${agentId}）: ` +
+        `SubagentStop（作業者: ${record.agentType ?? '(不明)'} / agent_id=${agentId}）: ` +
           `**この作業者が自分で起こした背景処理が ${remaining.length}件 残ったまま畳もうとした**` +
           settledText +
           `（この瞬間のセッション全体の在庫=${tasks.length}件、session_crons=${crons.length}件）。` +
@@ -4349,7 +4325,7 @@ class RunnerSession {
         stall: {
           agentId,
           // 同上（「取れたときだけ載せる」）。
-          ...(hook.agent_type === undefined ? {} : { agentType: hook.agent_type }),
+          ...(record.agentType === undefined ? {} : { agentType: record.agentType }),
           ownedTaskCount: remaining.length,
           sessionTaskCount: tasks.length,
           // 起こし直していないので、このイベント自身は積算に足されない
@@ -4364,7 +4340,7 @@ class RunnerSession {
       });
       this.#recordCutOffWorker(agentId);
 
-      return { continue: true };
+      return { kind: 'continue' };
     } catch (error: unknown) {
       // フックが例外でセッションを止めてはいけない。記録そのものが失敗した
       // ことだけを、握れる範囲でもう一度 note として上げる。
@@ -4381,7 +4357,7 @@ class RunnerSession {
         // ここまで失敗したら、もう上げる手段が無い。黙って諦める
         // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
       }
-      return { continue: true };
+      return { kind: 'continue' };
     }
   }
 
