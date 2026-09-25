@@ -14,6 +14,22 @@ function count(value: number): string {
 }
 
 /**
+ * `end` の位置で切ると2コード単位の文字（補助面の文字。絵文字の多く）を半分に
+ * 割るなら、1つ手前へ戻した位置を返す（issue #1549）。
+ *
+ * 長さはこの repo のほかの予算と同じく UTF-16 のコード単位で数える（`length`）。
+ * **ただし切り口だけはコードポイントの境界へ寄せる。** そうしないと、高サロゲート
+ * だけが残った壊れた文字列ができ、UTF-8 へ変える経路では黙って U+FFFD に化ける。
+ * 結合文字（合成のアクセント等）の途中で切ることは防がない——無効な列には
+ * ならないため。
+ */
+function codePointBoundary(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
+  const last = text.charCodeAt(end - 1);
+  return last >= 0xd800 && last <= 0xdbff ? end - 1 : end;
+}
+
+/**
  * 先頭 `limit` 文字に抜粋し、省いた分量を明示する。
  *
  * 短ければ何も足さない（毎回の出力に注記が付くと、本当に切れているときの
@@ -21,8 +37,9 @@ function count(value: number): string {
  */
 export function excerpt(text: string, limit: number): string {
   if (text.length <= limit) return text;
-  const omitted = text.length - limit;
-  return `${text.slice(0, limit)}…（${count(omitted)} 文字省略。全 ${count(text.length)} 文字）`;
+  const end = codePointBoundary(text, limit);
+  const omitted = text.length - end;
+  return `${text.slice(0, end)}…（${count(omitted)} 文字省略。全 ${count(text.length)} 文字）`;
 }
 
 /** 改行を潰したうえで抜粋する（1行に収めたい一覧用）。 */
@@ -282,7 +299,11 @@ export function renderListingFromEnd(
 
 export function page(text: string, offset: number, limit: number): Page {
   const from = Math.max(0, Math.min(Math.trunc(offset), text.length));
-  const body = text.slice(from, from + limit);
+  // **ページの境目もコードポイントの境界へ寄せる**（issue #1549）。1文字ぶん
+  // 戻した分は次のページの頭に回るので、続けて読めば1文字も欠けない。ただし
+  // 1文字も進めなくなる（`limit` が1で先頭が補助面の文字）ときは戻さない。
+  const cut = codePointBoundary(text, Math.min(from + limit, text.length));
+  const body = text.slice(from, cut > from ? cut : from + limit);
   const to = from + body.length;
   return { body, from, to, total: text.length, more: to < text.length };
 }

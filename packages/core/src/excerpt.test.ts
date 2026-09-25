@@ -206,3 +206,46 @@ describe('renderListingEntry（実体の一覧の1件を決まった順で組む
     expect(renderListingEntry(base).split('\n')).toHaveLength(3);
   });
 });
+
+describe('サロゲートペアを割らない（issue #1549）', () => {
+  const isLoneHighSurrogateAtEnd = (text: string): boolean => {
+    const last = text.charCodeAt(text.length - 1);
+    return last >= 0xd800 && last <= 0xdbff;
+  };
+
+  it('🔴 excerpt: 切り口が絵文字の途中なら1つ手前で切り、省いた量はその位置で数える', () => {
+    const text = 'A'.repeat(9) + '😀' + 'BBBB';
+    const result = excerpt(text, 10);
+    const body = result.slice(0, result.indexOf('…'));
+    expect(body).toBe('A'.repeat(9));
+    expect(isLoneHighSurrogateAtEnd(body)).toBe(false);
+    // 全 15 コード単位のうち、先頭 9 を出したので 6 を省いた。
+    expect(result).toContain('…（6 文字省略。全 15 文字）');
+  });
+
+  it('excerpt: 切り口が絵文字の後ろなら従来どおり（1文字も変えない）', () => {
+    const text = 'A'.repeat(8) + '😀' + 'BBBB';
+    expect(excerpt(text, 10)).toBe(`${'A'.repeat(8)}😀…（4 文字省略。全 14 文字）`);
+  });
+
+  it('🔴 page: 境目が絵文字の途中なら次のページへ回し、続けて読むと元の文字列に戻る', () => {
+    const text = 'A'.repeat(9) + '😀' + 'B'.repeat(9) + '😀' + 'C';
+    const first = page(text, 0, 10);
+    expect(isLoneHighSurrogateAtEnd(first.body)).toBe(false);
+    expect(first.to).toBe(9);
+    let offset = 0;
+    let joined = '';
+    for (let i = 0; i < 20 && offset < text.length; i += 1) {
+      const part = page(text, offset, 10);
+      expect(isLoneHighSurrogateAtEnd(part.body)).toBe(false);
+      joined += part.body;
+      offset = part.to;
+    }
+    expect(joined).toBe(text);
+  });
+
+  it('page: limit が1で先頭が絵文字でも、止まらずに1コード単位は進む', () => {
+    const part = page('😀X', 0, 1);
+    expect(part.to).toBe(1);
+  });
+});
