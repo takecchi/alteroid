@@ -217,7 +217,7 @@ minimumReleaseAgeExclude:
 overrides:
   fast-uri: ^3.1.6
   hono: ^4.13.5
-  js-yaml: ^4.3.2
+  js-yaml: ^5.0.0
   qs: ^6.16.0
 
 # #246: `pnpm --filter <存在しないパッケージ名>` が黙って exit 0 を返す穴を塞ぐ。
