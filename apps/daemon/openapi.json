@@ -4495,7 +4495,7 @@
             }
           },
           "400": {
-            "description": "クエリが不正、または `afterId` / `afterAt` の片方だけが渡された・`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。",
+            "description": "クエリが不正、または `since` / `until` が日時として読めない・`afterId` / `afterAt` の片方だけが渡された・`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。",
             "content": {
               "application/json": {
                 "schema": {

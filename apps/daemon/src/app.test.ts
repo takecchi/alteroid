@@ -4739,6 +4739,75 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
 });
 
 /**
+ * `GET /journal` の `since`/`until` の正規化（issue #1515）。
+ *
+ * **クローンの道具（`journal_read`）と同じ穴を、HTTP の口としても持っていた。**
+ * fs・インメモリは文字列比較なので、秒省略（`…T20:21Z`）やオフセット付き
+ * （`+09:00`）の `since`/`until` で pg と答えが割れる（`journal-time.ts` の
+ * doc）。ここでは `createMemoryStores`（インメモリ実装）に対して同じ壊れ方を
+ * 固定する（修正前は赤くなる）。読めない値は `afterAt` と同じ形で 400。
+ */
+describe('GET /journal の since/until の正規化（issue #1515）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('秒を省いた since（…T20:21Z）でも、その分内に積まれた行を正しく含める', async () => {
+    vi.useFakeTimers();
+    // issue #1515 の実例そのもの。
+    vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: '20時21分5秒123に積んだ判断',
+      grounds: '記憶',
+    });
+    expect(entry.at).toBe('2026-09-12T20:21:05.123Z');
+
+    const res = await app.request(`/journal?since=${encodeURIComponent('2026-09-12T20:21Z')}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: { id: string }[] };
+    expect(body.entries.map((e) => e.id)).toEqual([entry.id]);
+  });
+
+  it('オフセット付きの until（+09:00）でも、境界より後の行を正しく除く', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: 'until の境界より後に積んだ判断',
+      grounds: '記憶',
+    });
+
+    // `2026-09-13T05:21:00+09:00` は UTC で `2026-09-12T20:21:00.000Z`
+    // ——上の entry の瞬間 (.123Z) より前。正規化していないと日付の桁
+    // （12 と 13）が食い違う文字列比較になり、この行を含めてしまう
+    // （日付が違う分、秒省略の食い違いよりさらに大きくずれる）。
+    const res = await app.request(
+      `/journal?until=${encodeURIComponent('2026-09-13T05:21:00+09:00')}`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: { id: string }[] };
+    expect(body.entries.map((e) => e.id)).not.toContain(entry.id);
+  });
+
+  it('since が日時として読めなければ400（afterAt と同じ形）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    const res = await app.request('/journal?since=not-a-datetime');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('since に渡された「not-a-datetime」は日時として読めない');
+  });
+
+  it('until が日時として読めなければ400（afterAt と同じ形）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    const res = await app.request('/journal?until=not-a-datetime');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('until に渡された「not-a-datetime」は日時として読めない');
+  });
+});
+
+/**
  * `GET /managers` の `status` / `limit` / 錨（issue #670）。
  *
  * **台帳（`jobs`）に行を消す口が無いので、一覧の件数はその環境で今までに

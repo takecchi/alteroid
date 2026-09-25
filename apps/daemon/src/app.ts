@@ -57,6 +57,7 @@ import {
   reachedStart,
   droppedTraceLedgerSince,
   findUnrecordedManagers,
+  describeUnreadableJournalTimeBoundary,
   guardArchiveRemoval,
   INBOX_EVENT_TYPE_ORDER,
   isAccountGranted,
@@ -66,6 +67,7 @@ import {
   journalEntrySchema,
   localDayRange,
   matchesInboxRemoveManyFilter,
+  normalizeJournalTimeBoundary,
   removeInboxEventsAndStopDelivery,
   summarizeInboxBacklog,
   memorySlugSchema,
@@ -464,13 +466,23 @@ const reportsQuery = z.object({
  */
 const journalQuery = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(50),
-  /** ISO 8601。ここより古いエントリまで遡って読むための足がかり。 */
+  /**
+   * ISO 8601。ここより古いエントリまで遡って読むための足がかり。
+   *
+   * **形はここでは縛らない（`z.string()` のまま）。** 読めるかどうかの検査と
+   * `toISOString()` への正規化はハンドラの中で行う（`afterAt` の検査と同じ
+   * 形——`normalizeJournalTimeBoundary` の doc、issue #1515）。ここで
+   * `z.string().datetime()` 等を課さないのは、`Date.parse` が読める形
+   * （秒の省略・オフセット付きなど）をそのまま受けたいからである。
+   */
   since: z.string().optional(),
   /**
    * ISO 8601。窓の終端。
    *
    * **`since` だけでは過去の一区間を取れない。** 新しい順に返すので、手前に
    * 積まれた最新のものが `limit` を食い尽くし、狙った時刻には届かない。
+   *
+   * 形の検査・正規化は `since` と同じ（すぐ上の doc）。
    */
   until: z.string().optional(),
   /** カンマ区切りの日誌エントリ種別。 */
@@ -2492,7 +2504,8 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description:
-              'クエリが不正、または `afterId` / `afterAt` の片方だけが渡された・' +
+              'クエリが不正、または `since` / `until` が日時として読めない・' +
+              '`afterId` / `afterAt` の片方だけが渡された・' +
               '`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。',
             content: {
               'application/json': {
@@ -2521,13 +2534,29 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'afterAt は ISO 8601 で指定する' as const }, 400);
         }
 
+        // **`since`/`until` を正規化する（issue #1515）。** `Date.parse` で
+        // 読めなければ 400（`afterAt` の検査と同じ形）。読めれば `toISOString()`
+        // へ正規化してからストアへ渡す——pg は時刻で比べるが fs・インメモリは
+        // 文字列比較なので、正規化しないと秒の省略（`…T20:21Z`）やオフセット
+        // （`+09:00`）で3実装の答えが割れる（`journal-time.ts` の doc）。
+        if (since !== undefined && normalizeJournalTimeBoundary(since) === null) {
+          return c.json({ error: describeUnreadableJournalTimeBoundary('since', since) }, 400);
+        }
+        if (until !== undefined && normalizeJournalTimeBoundary(until) === null) {
+          return c.json({ error: describeUnreadableJournalTimeBoundary('until', until) }, 400);
+        }
+        const normalizedSince =
+          since === undefined ? undefined : normalizeJournalTimeBoundary(since)!;
+        const normalizedUntil =
+          until === undefined ? undefined : normalizeJournalTimeBoundary(until)!;
+
         try {
           return c.json({
             entries: await stores.journal.list({
               limit,
               order,
-              ...(since === undefined ? {} : { since }),
-              ...(until === undefined ? {} : { until }),
+              ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
+              ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
               ...(types === undefined || types.length === 0 ? {} : { types }),
               ...(q === undefined ? {} : { q }),
               ...(afterId === undefined || afterAt === undefined

@@ -394,6 +394,17 @@ export {
   type JournalStoreHorizonContractSubject,
 } from './journal-horizon-contract.js';
 /**
+ * `journal_read` / `conversation_read` / `GET /journal` の `since` / `until` を
+ * 正規化する唯一の共通の口（issue #1515）。3実装（インメモリ / `storage-fs` /
+ * `storage-pg`）の `JournalQuery.since`/`.until` の扱いが食い違っていた
+ * （pg は時刻比較、fs・インメモリは文字列比較）ことへの、入口側の直し方。
+ */
+export {
+  isReadableJournalTimeBoundary,
+  normalizeJournalTimeBoundary,
+  describeUnreadableJournalTimeBoundary,
+} from './journal-time.js';
+/**
  * 日誌を語で探す（`JournalQuery.q`。issue #250）ときの、照合の唯一の正本。
  * **どの欄を本文と見るか**を `journal-search.ts` が持ち、3実装（インメモリ /
  * `storage-fs` は `matchesJournalSearch`、`storage-pg` は

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -326,5 +326,107 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     const reply = await call('journal_read', {});
     expect(reply).toContain('トマトの水やり');
     expect(reply).toContain('ナスの支柱');
+  });
+});
+
+/**
+ * `journal_read` の `since`/`until` の正規化（issue #1515）。
+ *
+ * **何を固定するか。** `since`/`until` は `Date.parse` して読めなければ拒否し、
+ * 読めれば `toISOString()`（UTC・ミリ秒3桁・`Z` 終端——`entry.at` と同じ固定
+ * 形式）へ正規化してからストアへ渡す（`journal-time.ts` の doc）。
+ *
+ * インメモリ実装（`testing.ts`）は `entry.at >= since` という**文字列比較**
+ * なので、正規化しないと秒を省いた形（`…T20:21Z`）やオフセット付き
+ * （`+09:00`）の `since` で、辞書順と時刻の前後関係が食い違う——
+ * pg（時刻で比べる）と答えが割れる。ここではその食い違いをインメモリ実装
+ * 自身の挙動として固定する（修正前は両方とも赤くなる）。
+ */
+describe('journal_read — since/until の正規化（issue #1515）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('秒を省いた since（…T20:21Z）でも、その分内に積まれた行を正しく含める', async () => {
+    vi.useFakeTimers();
+    // issue #1515 の実例そのもの——`2026-09-12T20:21Z` は辞書順では
+    // `2026-09-12T20:21:05.123Z` より**後ろ**になる（':' の文字コードが
+    // 'Z' より小さいため）。正規化していないと、この行は since より古いと
+    // 誤判定されて窓の外へ落ちる。
+    vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
+    const stores = createMemoryStores();
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: '20時21分5秒123に積んだ判断',
+      grounds: '記憶',
+    });
+    expect(entry.at).toBe('2026-09-12T20:21:05.123Z');
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { since: '2026-09-12T20:21Z' });
+    expect(reply).toContain('20時21分5秒123に積んだ判断');
+  });
+
+  it('オフセット付きの since（+09:00）でも、同じ瞬間以降の行を正しく含める', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
+    const stores = createMemoryStores();
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: 'オフセット越しに掘り当てたい判断',
+      grounds: '記憶',
+    });
+    const call = tools(stores);
+
+    // `2026-09-13T05:21:05+09:00` は UTC で `2026-09-12T20:21:05.000Z`
+    // ——上の entry の瞬間 (.123Z) の120ミリ秒前。正規化していないと、
+    // 日付の桁（12 と 13）が食い違う文字列比較になり、この行を
+    // 「since より古い」と誤判定して窓の外へ落とす。
+    const reply = await call('journal_read', { since: '2026-09-13T05:21:05+09:00' });
+    expect(reply).toContain('オフセット越しに掘り当てたい判断');
+  });
+
+  it('秒を省いた until（…T20:21Z）は、実際には正規化した瞬間より後の行を正しく除く', async () => {
+    vi.useFakeTimers();
+    // `until: '2026-09-12T20:21Z'` は「20:21:00.000Z まで」の意味だが、
+    // 正規化していないと辞書順では逆に働く——短い形（'Z' で終わる）は
+    // 同じ分内のどんな秒・ミリ秒付きの文字列よりも**辞書順で大きい**
+    // （':' の文字コードが 'Z' より小さいため、続きが在る文字列のほうが
+    // 辞書順で手前に来る）。⟹ 正規化していないと、20:21:00.000Z より
+    // **後**（20:21:05.123Z）に積まれたこの行を、文字列比較は
+    // 「until 以前」と誤判定して**含めてしまう**（must-exclude が
+    // 含まれる、という逆向きの壊れ方）。
+    vi.setSystemTime(new Date('2026-09-12T20:21:05.123Z'));
+    const stores = createMemoryStores();
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: 'until の境界より後に積んだ判断',
+      grounds: '記憶',
+    });
+    expect(entry.at).toBe('2026-09-12T20:21:05.123Z');
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { until: '2026-09-12T20:21Z' });
+    expect(reply).not.toContain('until の境界より後に積んだ判断');
+  });
+
+  it('since に読めない文字列を渡すと、日誌を読まずに分かる言葉で断る', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({ type: 'decision', decision: '積んだ判断', grounds: '記憶' });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { since: 'not-a-datetime' });
+    expect(reply).toContain('since に渡された「not-a-datetime」は日時として読めない');
+    expect(reply).not.toContain('積んだ判断');
+  });
+
+  it('until に読めない文字列を渡すと、日誌を読まずに分かる言葉で断る', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({ type: 'decision', decision: '積んだ判断', grounds: '記憶' });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { until: 'not-a-datetime' });
+    expect(reply).toContain('until に渡された「not-a-datetime」は日時として読めない');
+    expect(reply).not.toContain('積んだ判断');
   });
 });

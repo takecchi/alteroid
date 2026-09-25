@@ -19,6 +19,10 @@ import {
 } from './commitment-cursor.js';
 import { isCronExpression } from './cron.js';
 import {
+  describeUnreadableJournalTimeBoundary,
+  normalizeJournalTimeBoundary,
+} from './journal-time.js';
+import {
   compareManagerPosition,
   encodeManagerCursor,
   normalizeManagerCursorStatus,
@@ -5275,12 +5279,32 @@ export function createCloneTools(context: ToolContext) {
           return text(`${entry.at} ${head}（${describePage(part)}）\n\n${part.body}${tail}`);
         }
 
+        // **since/until を正規化する（issue #1515）。** 読めなければ拒否し、
+        // 読めれば `toISOString()` へ正規化してからストアへ渡す——pg は時刻で
+        // 比べるが fs・インメモリは文字列比較なので、正規化しないと秒の省略
+        // （`…T20:21Z`）やオフセット（`+09:00`）で3実装の答えが割れる
+        // （`journal-time.ts` の doc）。
+        if (since !== undefined && normalizeJournalTimeBoundary(since) === null) {
+          return text(
+            describeUnreadableJournalTimeBoundary('since', since) + '**日誌は読んでいない。**',
+          );
+        }
+        if (until !== undefined && normalizeJournalTimeBoundary(until) === null) {
+          return text(
+            describeUnreadableJournalTimeBoundary('until', until) + '**日誌は読んでいない。**',
+          );
+        }
+        const normalizedSince =
+          since === undefined ? undefined : (normalizeJournalTimeBoundary(since) ?? undefined);
+        const normalizedUntil =
+          until === undefined ? undefined : (normalizeJournalTimeBoundary(until) ?? undefined);
+
         // --- 一覧モード ---
         const requested = limit ?? 20;
         const entries = await stores.journal.list({
           limit: requested,
-          ...(since === undefined ? {} : { since }),
-          ...(until === undefined ? {} : { until }),
+          ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
+          ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
           // **`[]`（空配列）もそのまま転送する。** `types: []` は
           // `store.ts` の `JournalQuery.types` の doc で「0件」に決まっている
           // 契約である（#425）。`length === 0` を `{}` へ落とすと、その契約を
@@ -5306,8 +5330,14 @@ export function createCloneTools(context: ToolContext) {
         // （窓がまるごと地平より後ろなら、0件でも「本当に無かった」と
         // 言い切れるため）。
         const oldestAt =
-          since !== undefined || until !== undefined ? await stores.journal.oldestAt() : null;
-        const horizonNote = describeJournalHorizonNote(oldestAt, since, entries.length === 0);
+          normalizedSince !== undefined || normalizedUntil !== undefined
+            ? await stores.journal.oldestAt()
+            : null;
+        const horizonNote = describeJournalHorizonNote(
+          oldestAt,
+          normalizedSince,
+          entries.length === 0,
+        );
         const horizonNoteLines = horizonNote === undefined ? [] : [horizonNote];
 
         if (entries.length === 0) {
@@ -9919,8 +9949,8 @@ export function createCloneTools(context: ToolContext) {
         conversationId,
         q,
         speaker = 'both',
-        since,
-        until,
+        since: sinceInput,
+        until: untilInput,
         scan,
         limit,
         id,
@@ -9945,6 +9975,28 @@ export function createCloneTools(context: ToolContext) {
               `\n\n${part.body}${tail}`,
           );
         }
+
+        // **since/until を正規化する（issue #1515）。** `journal_read` と同じ
+        // 理由——`readConversationWindow` を経由して同じ `JournalQuery` へ渡る
+        // ので、同じ穴を持つ（`journal-time.ts` の doc）。
+        if (sinceInput !== undefined && normalizeJournalTimeBoundary(sinceInput) === null) {
+          return text(
+            describeUnreadableJournalTimeBoundary('since', sinceInput) + '**会話は読んでいない。**',
+          );
+        }
+        if (untilInput !== undefined && normalizeJournalTimeBoundary(untilInput) === null) {
+          return text(
+            describeUnreadableJournalTimeBoundary('until', untilInput) + '**会話は読んでいない。**',
+          );
+        }
+        const since =
+          sinceInput === undefined
+            ? undefined
+            : (normalizeJournalTimeBoundary(sinceInput) ?? undefined);
+        const until =
+          untilInput === undefined
+            ? undefined
+            : (normalizeJournalTimeBoundary(untilInput) ?? undefined);
 
         // --- ここから一覧系。まず窓を取り、遡った件数と先頭到達を毎回言う ---
         const scanLimit = scan ?? 2000;

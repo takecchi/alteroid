@@ -186,6 +186,63 @@ describe('conversation_read — since / until の伝播', () => {
   });
 });
 
+/**
+ * `conversation_read` の `since`/`until` の正規化（issue #1515）。
+ *
+ * **`journal_read` と同じ穴を持つ。** `since`/`until` は `readConversationWindow`
+ * （`conversation.ts`）を経由して `journal_read` と同じ `JournalQuery` へ渡る
+ * ので、正規化されていないとインメモリ実装（`entry.at >= since` の文字列比較）
+ * が pg（時刻比較）と違う答えを返す（`journal-time.ts` の doc）。ここでは
+ * 「ストアへ渡る前に正規化されていること」を `spyOnList` で直接検算する
+ * （`journal-read.test.ts` は最終的な返り値の中身で検算しており、ここは
+ * それと違う角度——渡された引数そのもの——で同じ契約を測る）。
+ */
+describe('conversation_read — since/until の正規化（issue #1515）', () => {
+  it('秒を省いた since は toISOString へ正規化されてから stores.journal.list へ渡る', async () => {
+    const stores = createMemoryStores();
+    const calls = spyOnList(stores);
+    const call = tools(stores);
+
+    await call('conversation_read', { since: '2026-08-01T00:00Z' });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.since).toBe('2026-08-01T00:00:00.000Z');
+  });
+
+  it('オフセット付きの until も toISOString（UTC）へ正規化されてから渡る', async () => {
+    const stores = createMemoryStores();
+    const calls = spyOnList(stores);
+    const call = tools(stores);
+
+    await call('conversation_read', { until: '2026-08-01T09:00:00+09:00' });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.until).toBe('2026-08-01T00:00:00.000Z');
+  });
+
+  it('since に読めない文字列を渡すと、日誌を読まずに分かる言葉で断る', async () => {
+    const stores = createMemoryStores();
+    const calls = spyOnList(stores);
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { since: 'not-a-datetime' });
+
+    expect(reply).toContain('since に渡された「not-a-datetime」は日時として読めない');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('until に読めない文字列を渡すと、日誌を読まずに分かる言葉で断る', async () => {
+    const stores = createMemoryStores();
+    const calls = spyOnList(stores);
+    const call = tools(stores);
+
+    const reply = await call('conversation_read', { until: 'not-a-datetime' });
+
+    expect(reply).toContain('until に渡された「not-a-datetime」は日時として読めない');
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe('conversation_read — 予算を超えたら省略した件数を言う', () => {
   it('黙って切らない（省略した件数が本文に出る）', async () => {
     const stores = createMemoryStores();
