@@ -284,18 +284,18 @@ const USAGE_STOPPED_NOTICE =
  * 数えられず `manager_list status: ["lost"]` の絞りにも掛からない。この軸が
  * 名指しするのは、まさにその「`lost` の絞りで拾えない」集合である
  * （`manager.ts` の `vanishedRunnerBacklog` / `ManagerSummary.
- * runnerVanishedSince` の doc）。
+ * runnerVanished` の doc）。
  *
  * **`usageStopped` / `lastTurnFailed` と違い、`idle` には現れない。**
- * `ManagerSummary.runnerVanishedSince` は `status !== 'running'` のとき
- * 常に `undefined` になる（`manager.ts` の `vanishedSinceOf` の doc）ので、
+ * `ManagerSummary.runnerVanished` は `status !== 'running'` のとき
+ * 常に `undefined` になる（`manager.ts` の `vanishedOf` の doc）ので、
  * この本数は必ず「走行中」の内側に座る——`lastTurnFailedIdle` /
  * `usageStoppedIdle` のような部分集合の欄は要らない。
  */
 const RUNNER_VANISHED_LABEL = '宛先の runner が名簿から entry ごと消えている';
 
 /**
- * `runnerVanishedSince` が立っている委譲が1本以上あるときだけ出す1行
+ * `runnerVanished` が立っている委譲が1本以上あるときだけ出す1行
  * （Issue #1212 running 側。段1）。**`LOST_NOTICE` / `USAGE_STOPPED_NOTICE`
  * と同じ作法**——本数の直後に置き、指図は書かない。
  *
@@ -439,13 +439,13 @@ export interface ManagerSituationCounts {
   readonly usageStoppedIdle: number;
   /**
    * **`status: 'running'` のまま、宛先の runner が名簿から entry ごと消えて
-   * いるもの**（`ManagerSummary.runnerVanishedSince` が立っている本数。
+   * いるもの**（`ManagerSummary.runnerVanished` が立っている本数。
    * Issue #1212 running 側。段1）。**`lastTurnFailed` / `usageStopped` と
    * 同じく、6つの区分とは足し合わせない横断する軸である。**
    *
    * **ただし他の2つと違い、`idle` 側の部分集合は無い。** この欄は
    * `status === 'running'` のときしか立たない（`manager.ts` の
-   * `vanishedSinceOf` の doc）ので、`lastTurnFailedIdle` /
+   * `vanishedOf` の doc）ので、`lastTurnFailedIdle` /
    * `usageStoppedIdle` のような「うち idle に入ったもの」の欄は作っていない
    * ——作っても値は常に 0 になり、取れない軸に 0 の行を作ることになる
    * （AGENTS.md の地雷表）。
@@ -490,12 +490,12 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
     if (manager.live) reachable += 1;
     // **区分の分岐より前に数える（#1212 / 残件2 / running 側 段1）。** 横断
     // する軸なので `else if` の鎖に混ぜない——混ぜると、どの区分に入ったかで
-    // この軸が落ちる。`runnerVanishedSince` は `status === 'running'` の
-    // ときしか立たない（`vanishedSinceOf` の doc）ので、実際には `running`
+    // この軸が落ちる。`runnerVanished` は `status === 'running'` の
+    // ときしか立たない（`vanishedOf` の doc）ので、実際には `running`
     // の枝でしか加算されないが、他の横断する軸と同じ場所に置いて揃える。
     if (manager.lastFailure !== undefined) lastTurnFailed += 1;
     if (manager.usageStoppedAt !== undefined) usageStopped += 1;
-    if (manager.runnerVanishedSince !== undefined) runnerVanished += 1;
+    if (manager.runnerVanished !== undefined) runnerVanished += 1;
     if (manager.awaitingBackground !== undefined) awaitingBackground += 1;
     else if (manager.status === 'running') running += 1;
     else if (manager.status === 'waiting_human') waitingHuman += 1;

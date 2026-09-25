@@ -6366,26 +6366,29 @@ describe('クローンの道具', () => {
   });
 
   /**
-   * `runnerVanishedSince`（`ManagerSummary`。Issue #1212 running 側。段1）を
+   * `runnerVanished`（`ManagerSummary`。Issue #1212 running 側。段1）を
    * `manager_list` が専用行で出す。**`usageStoppedAt` の専用行（すぐ上の歯）と
    * 並べ方・書式を揃えた**——`usageStoppedLine` の直後に置き、`  ⚠ …` の形で
    * 1行だけ増やす。
    *
    * 測るのは2つ:
-   * 1. `runnerVanishedSince` が在る回には専用行が出る（時刻がそのまま読める）
-   * 2. **`runnerVanishedSince` が無い回には1文字も足さない**（次の歯）
+   * 1. `runnerVanished` が在る回には専用行が出る（時刻がそのまま読める）
+   * 2. **`runnerVanished` が無い回には1文字も足さない**（次の歯）
    */
-  it('manager_list は runnerVanishedSince を専用行で出す（Issue #1212 running 側。段1）', async () => {
+  it('manager_list は runnerVanished を専用行で出す（Issue #1212 running 側。段1）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    target.runnerVanishedSince = '2026-09-25T01:23:45.000Z';
+    target.runnerVanished = true;
 
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('⚠ 宛先の runner が名簿から消えている');
-    expect(reply).toContain('2026-09-25T01:23:45.000Z');
+    // **時刻は走り始め（`startedAt`）として名乗り、消えた時刻とは言わない**
+    // （`ManagerSummary.runnerVanished` の doc「時刻を持たない」）。
+    expect(reply).toContain(`この委譲の走り始めは ${target.startedAt}`);
+    expect(reply).toContain('消えた時刻は名簿に残っていないので分からない');
     // **`isLive()` の返り値は動かさない**——`live` の判定は別の歯が持つので
     // ここでは status が動いていないことだけ確かめる。
     expect(reply).toContain('running');
@@ -6394,10 +6397,10 @@ describe('クローンの道具', () => {
   });
 
   /**
-   * ⭐ **陰性対照**。`runnerVanishedSince` が無ければ専用行は1文字も足さない
+   * ⭐ **陰性対照**。`runnerVanished` が無ければ専用行は1文字も足さない
    * （予算を食わない。`usageStoppedAt` の陰性対照と同じ形）。
    */
-  it('manager_list は runnerVanishedSince が無ければ1文字も足さない（Issue #1212 running 側。段1）', async () => {
+  it('manager_list は runnerVanished が無ければ1文字も足さない（Issue #1212 running 側。段1）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
@@ -6413,12 +6416,12 @@ describe('クローンの道具', () => {
    * **`usageStoppedAt` / `lastFailure` と同じ委譲で両方（3つとも）出ることを
    * 許す**（`usageStoppedLine` の doc と同じ理由。片方がもう片方を隠さない）。
    */
-  it('manager_list: runnerVanishedSince と usageStoppedAt と lastFailure が同じ委譲で全部出る', async () => {
+  it('manager_list: runnerVanished と usageStoppedAt と lastFailure が同じ委譲で全部出る', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
     const target = h.running[0];
     if (!target) throw new Error('準備に失敗');
-    target.runnerVanishedSince = '2026-09-25T01:00:00.000Z';
+    target.runnerVanished = true;
     target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
     target.lastFailure = {
       code: 'billing_error',
@@ -10390,9 +10393,9 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
    */
   it('件数の行が「宛先の runner が名簿から消えている」本数と、横断する軸である断りを出す', async () => {
     const running1 = entry('mgr-run-00', 'running', 10);
-    running1.runnerVanishedSince = minutesBefore(3);
+    running1.runnerVanished = true;
     const running2 = entry('mgr-run-01', 'running', 11);
-    running2.runnerVanishedSince = minutesBefore(4);
+    running2.runnerVanished = true;
     const healthy = entry('mgr-run-02', 'running', 12);
     const h = pool([running1, running2, healthy]);
 
@@ -10429,7 +10432,7 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
    */
   it('⭐ lost が 0 本でも、runnerVanished が在れば辿る綴りが出る（#1414 が running 側に作らなかった穴）', async () => {
     const running = entry('mgr-run-00', 'running', 10);
-    running.runnerVanishedSince = minutesBefore(3);
+    running.runnerVanished = true;
     const healthy = entry('mgr-run-01', 'running', 11);
     const h = pool([running, healthy]);
 

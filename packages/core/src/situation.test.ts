@@ -81,14 +81,13 @@ function withUsageStopped(manager: ManagerSummary): ManagerSummary {
 
 /**
  * **`running` のまま、宛先の runner が名簿から entry ごと消えている**委譲に
- * する形（Issue #1212 running 側。段1）。`manager.ts` の `vanishedSinceOf`
+ * する形（Issue #1212 running 側。段1）。`manager.ts` の `vanishedOf`
  * が返す値そのもの——本番では `status !== 'running'` のとき欄自体が立たない
- * （`vanishedSinceOf` の doc）ので、既定の呼び方は `summary(id, 'running',
+ * （`vanishedOf` の doc）ので、既定の呼び方は `summary(id, 'running',
  * live)` に対して使う。
  */
-const RUNNER_VANISHED_SINCE = '2026-09-20T10:00:00.000Z';
 function withRunnerVanished(manager: ManagerSummary): ManagerSummary {
-  return { ...manager, runnerVanishedSince: RUNNER_VANISHED_SINCE };
+  return { ...manager, runnerVanished: true };
 }
 
 describe('countManagerSituation', () => {
@@ -392,10 +391,10 @@ describe('countManagerSituation', () => {
   });
 
   /**
-   * ⭐ **陰性対照。** `runnerVanishedSince` が無ければ本数は増えない
+   * ⭐ **陰性対照。** `runnerVanished` が無ければ本数は増えない
    * ——`usageStopped` の陰性対照と同じ形。
    */
-  it('⭐ runnerVanishedSince が無ければ runnerVanished は増えない', () => {
+  it('⭐ runnerVanished が無ければ runnerVanished は増えない', () => {
     const counts = countManagerSituation([summary('a', 'running', true)]);
     expect(counts.runnerVanished).toBe(0);
   });
@@ -868,10 +867,10 @@ describe('describeSituation', () => {
   });
 
   /**
-   * ⭐ **陰性対照。** `runnerVanishedSince` が無ければ本数の行も断り書きも
+   * ⭐ **陰性対照。** `runnerVanished` が無ければ本数の行も断り書きも
    * 1文字も出ない——`usageStoppedAt` の陰性対照と同じ形。
    */
-  it('⭐ （陰性対照）runnerVanishedSince が無ければ本数も断り書きも1文字も出ない', () => {
+  it('⭐ （陰性対照）runnerVanished が無ければ本数も断り書きも1文字も出ない', () => {
     const withVanished = describeSituation({
       managers: [withRunnerVanished(summary('a', 'running', true))],
       runners: [],
@@ -883,7 +882,7 @@ describe('describeSituation', () => {
     const lineWith = withVanished.split('\n').find((l) => l.startsWith('委譲 全 '));
     const lineWithout = withoutVanished.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
-    // 区分の本数は変わらない（`runnerVanishedSince` は `status` を動かさない）。
+    // 区分の本数は変わらない（`runnerVanished` は `status` を動かさない）。
     expect(lineWith).toContain('走行中 1');
     expect(lineWithout).toContain('走行中 1');
     expect(lineWith).not.toBe(lineWithout);

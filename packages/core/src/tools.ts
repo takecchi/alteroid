@@ -2748,12 +2748,12 @@ function usageStoppedLine(manager: ManagerSummary): string | null {
  * 前のセッションへ戻れなかったという**確かめた事実**——ここが名指しするのは
  * その手前、器が黙って名簿から entry ごと消えたのに `status` はまだ `running`
  * のまま残っている委譲である（`manager.ts` の `ManagerSummary.
- * runnerVanishedSince` の doc）。**`manager_list status: ["lost"]` の絞りでは
+ * runnerVanished` の doc）。**`manager_list status: ["lost"]` の絞りでは
  * 拾えない**——`status` の値ではないので絞りにも掛からない。
  *
  * **`status` を置き換えない。** entry が消えていても `sessionId` が残って
  * いれば `manager_send` は resume から入り直せることがある——`isLive()` は
- * この行があっても動かさない（`runnerVanishedSince` の doc「`isLive()` の
+ * この行があっても動かさない（`runnerVanished` の doc「`isLive()` の
  * 返り値は動かさない」）。
  *
  * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
@@ -2764,11 +2764,10 @@ function usageStoppedLine(manager: ManagerSummary): string | null {
  * の doc と同じ理由）。
  */
 function describeRunnerVanished(manager: ManagerSummary): string | null {
-  if (manager.runnerVanishedSince === undefined) return null;
+  if (manager.runnerVanished === undefined) return null;
   return (
-    `⚠ 宛先の runner が名簿から消えている（走り始めは ${manager.runnerVanishedSince}。` +
-    'ただし消えた正確な時刻ではなく、この委譲が走り始めた時刻の近似——名簿は entry が' +
-    'いつ消えたかを記録していない）。resume を試したわけではないので lost ではない' +
+    `⚠ 宛先の runner が名簿から消えている（この委譲の走り始めは ${manager.startedAt}。` +
+    '消えた時刻は名簿に残っていないので分からない）。resume を試したわけではないので lost ではない' +
     '——manager_list status: ["lost"] の絞りには掛からない。'
   );
 }
@@ -11495,13 +11494,13 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
     parts.push(
       `枠(利用上限)で止まっている ${usageStopped} 本（横断する軸。他の区分とは足し合わせない）`,
     );
-  // **横断する軸である（Issue #1212 running 側。段1）。** `runnerVanishedSince`
+  // **横断する軸である（Issue #1212 running 側。段1）。** `runnerVanished`
   // は `status === 'running'` のときしか立たない（`manager.ts` の
-  // `vanishedSinceOf` の doc）ので `running` の内側にしか現れないが、
+  // `vanishedOf` の doc）ので `running` の内側にしか現れないが、
   // `status` の分割そのものではない（`lost` の絞りでは拾えない集合を名指し
   // するための別軸）——`usageStopped` と同じ扱いで、上の内訳には足し合わせ
   // ない。0 の行は作らない（同じ理由）。
-  const runnerVanished = managers.filter((m) => m.runnerVanishedSince !== undefined).length;
+  const runnerVanished = managers.filter((m) => m.runnerVanished !== undefined).length;
   if (runnerVanished > 0)
     parts.push(
       `宛先の runner が名簿から消えている ${runnerVanished} 本（横断する軸。他の区分とは足し合わせない）`,

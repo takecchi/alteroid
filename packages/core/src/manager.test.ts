@@ -10380,13 +10380,10 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     // **`status` は動かしていない。** running のまま残る（isLive の返り値も
     // 動かしていないので、ここでは踏み込んで検算しない——段0はそれを見ない）。
     expect(listed.find((m) => m.managerId === 'mgr-vanished')?.status).toBe('running');
-    // **段1: 委譲ごとに `ManagerSummary.runnerVanishedSince` が立つ。** 値は
-    // 消失時刻ではなくこの委譲の `startedAt`（＝ `job.createdAt`）そのもの
-    // ——`vanishedSinceOf` の doc に書いた近似（正確な消失時刻は名簿が
-    // 記録していない）。
-    expect(listed.find((m) => m.managerId === 'mgr-vanished')?.runnerVanishedSince).toBe(
-      '2026-09-24T00:00:00.000Z',
-    );
+    // **段1: 委譲ごとに `ManagerSummary.runnerVanished` が立つ。** 時刻は
+    // 載せない（消えた時刻は名簿が記録していない。`ManagerSummary.runnerVanished`
+    // の doc「時刻を持たない」）。
+    expect(listed.find((m) => m.managerId === 'mgr-vanished')?.runnerVanished).toBe(true);
 
     const entries = await stores.journal.list({ order: 'asc' });
     const lines = vanishedRunnerGaugeLines(entries);
@@ -10409,10 +10406,10 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
 
     const listed = await pool.list();
 
-    // **段1: entry が名簿に残っていれば、`runnerVanishedSince` は立たない。**
+    // **段1: entry が名簿に残っていれば、`runnerVanished` は立たない。**
     // `vanishedRunnerBacklog`（本数の行）と同じ集合を委譲ごとに見ている
     // ——本数の行が0行のとき、個々の委譲の欄も立っていないはずである。
-    expect(listed.find((m) => m.managerId === 'mgr-listed')?.runnerVanishedSince).toBeUndefined();
+    expect(listed.find((m) => m.managerId === 'mgr-listed')?.runnerVanished).toBeUndefined();
 
     const entries = await stores.journal.list({ order: 'asc' });
     expect(vanishedRunnerGaugeLines(entries)).toHaveLength(0);
@@ -10441,9 +10438,9 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     const listed = await pool.list();
 
     // **段1: `status !== 'running'` なら entry が消えていても欄は立たない**
-    // ——`vanishedSinceOf` は `status` を先に見る（`done` に落ち着いた委譲の
+    // ——`vanishedOf` は `status` を先に見る（`done` に落ち着いた委譲の
     // 宛先が後から消えても「running のまま残っている」症状ではない）。
-    expect(listed.find((m) => m.managerId === 'mgr-done')?.runnerVanishedSince).toBeUndefined();
+    expect(listed.find((m) => m.managerId === 'mgr-done')?.runnerVanished).toBeUndefined();
 
     const entries = await stores.journal.list({ order: 'asc' });
     expect(vanishedRunnerGaugeLines(entries)).toHaveLength(0);

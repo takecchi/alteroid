@@ -280,9 +280,8 @@ export interface ManagerSummary {
   runnerLostSince?: string;
   /**
    * **`status: 'running'` のまま、宛先の runner が名簿から entry ごと消えている**
-   * と判定したとき、その委譲が走り始めた時刻（ISO8601 = `startedAt` の写し）を
-   * 転用して立てる（Issue #1212 running 側。段1）。判定していなければ
-   * **欄ごと消える**。
+   * と判定したときだけ `true` で立てる（Issue #1212 running 側。段1）。
+   * 判定していなければ**欄ごと消える**。
    *
    * ## `runnerLostSince` とは材料が違う——両者は排他ではない
    *
@@ -294,13 +293,15 @@ export interface ManagerSummary {
    * `vanishedRunnerBacklog`（このファイル）が runnerId ごとに数えている集合を、
    * 委譲ごとにばらして運ぶのがこの欄である。
    *
-   * ## 値は「消えた時刻」ではなく「この委譲が走り始めた時刻」——近似である
+   * ## 時刻を持たない——消えた時刻は取れないので作らない
    *
-   * 名簿は entry がいつ消えたかを記録していない（在るか無いかしか分からない）
-   * ので、正確な消失時刻は取れない。{@link vanishedRunnerBacklog} が
-   * `oldestStartedAt`（＝対象委譲の `startedAt` の最小値）で経過を近似して
-   * いるのと**同じ近似・同じ理由**——単一の委譲について見れば、この欄の値は
-   * その委譲自身の `startedAt` と常に一致する。
+   * 名簿は entry がいつ消えたかを記録していない（在るか無いかしか分からない）。
+   * **`…Since` の形で時刻を載せると、読み手（CLI・Web・クローン）はそれを
+   * 消えた時刻として読む**——実際に入れられるのは走り始めた時刻の近似だけで、
+   * 取れない値を作ることになる（AGENTS.md の地雷「取れない軸に 0 の行を
+   * 作る」と同じ向き）。⟹ 欄は印だけにし、経過の目安が要る読み手は同じ行の
+   * `startedAt` を「走り始め」として名乗って使う（`vanishedRunnerBacklog` の
+   * `oldestStartedAt` と同じ近似を、近似だと分かる名前のまま渡す）。
    *
    * ## `isLive()` の返り値は動かさない（#1442 の判断を踏襲）
    *
@@ -311,7 +312,7 @@ export interface ManagerSummary {
    * この欄は `live` / `status` のどちらにも触れず、独立した集合に**添える**
    * だけである。
    */
-  runnerVanishedSince?: string;
+  runnerVanished?: true;
   /**
    * **宛先の runner が応答したうえで、この委譲のセッションを一覧に載せなかったと
    * 観測した時刻**（ISO8601）。観測していなければ**欄ごと消える**。
@@ -4606,7 +4607,7 @@ class Pool implements ManagerPool {
       record,
       isLive(record, silent),
       lostSinceOf(record, silent),
-      vanishedSinceOf(record, registeredRunnerIds),
+      vanishedOf(record, registeredRunnerIds),
       record.sessionMissingSince,
       record.turnEndedAt,
       record.turnEndReason,
@@ -5083,7 +5084,7 @@ class Pool implements ManagerPool {
           record,
           isLive(record, silent),
           lostSinceOf(record, silent),
-          vanishedSinceOf(record, registeredRunnerIds),
+          vanishedOf(record, registeredRunnerIds),
           record.sessionMissingSince,
           record.turnEndedAt,
           record.turnEndReason,
@@ -5115,7 +5116,7 @@ class Pool implements ManagerPool {
           fallback,
           isLive(fallback, silent),
           lostSinceOf(fallback, silent),
-          vanishedSinceOf(fallback, registeredRunnerIds),
+          vanishedOf(fallback, registeredRunnerIds),
           fallback.sessionMissingSince,
           fallback.turnEndedAt,
           fallback.turnEndReason,
@@ -6673,7 +6674,7 @@ class Pool implements ManagerPool {
             record,
             isLive(record, silent),
             lostSinceOf(record, silent),
-            vanishedSinceOf(record, registeredRunnerIds),
+            vanishedOf(record, registeredRunnerIds),
             record.sessionMissingSince,
             record.turnEndedAt,
             record.turnEndReason,
@@ -6790,7 +6791,7 @@ class Pool implements ManagerPool {
             record,
             isLive(record, silent),
             lostSinceOf(record, silent),
-            vanishedSinceOf(record, registeredRunnerIds),
+            vanishedOf(record, registeredRunnerIds),
             record.sessionMissingSince,
             record.turnEndedAt,
             record.turnEndReason,
@@ -11920,7 +11921,7 @@ function lostSinceOf(
 }
 
 /**
- * {@link ManagerSummary.runnerVanishedSince} の値を1件ぶん計算する
+ * {@link ManagerSummary.runnerVanished} を1件ぶん判定する
  * （Issue #1212 running 側。段1）。`lostSinceOf` と対になる関数だが材料が
  * 違う——あちらは `#silentRunners()`、こちらは `#registeredRunnerIds()`
  * （entry の有無だけを見る。{@link Pool.#registeredRunnerIds} の doc）を引く。
@@ -11930,20 +11931,17 @@ function lostSinceOf(
  * 畳まれた委譲の宛先が後から消えても、それは「running のまま残っている」
  * 症状ではない。
  *
- * **返す値は消失時刻ではなく `record.job.createdAt`（＝この委譲の
- * `startedAt`）。** 名簿は entry がいつ消えたかを記録していないので、正確な
- * 消失時刻は取れない——`vanishedRunnerBacklog` の `oldestStartedAt` と同じ
- * 近似である（`ManagerSummary.runnerVanishedSince` の doc）。
+ * **時刻は返さない**（`ManagerSummary.runnerVanished` の doc「時刻を持たない」）。
  */
-function vanishedSinceOf(
+function vanishedOf(
   record: ManagerRecord,
   registeredRunnerIds: ReadonlySet<string>,
-): string | undefined {
+): true | undefined {
   if (record.job.status !== 'running') return undefined;
   const runnerId = record.job.runnerId;
   if (runnerId === undefined) return undefined;
   if (registeredRunnerIds.has(runnerId)) return undefined;
-  return record.job.createdAt;
+  return true;
 }
 
 function isLive(record: ManagerRecord, silentRunners: ReadonlyMap<string, string>): boolean {
@@ -12193,10 +12191,10 @@ function summaryOf(
   runnerLostSince: string | undefined,
   // **`live` と同じ作法で引数にする（Issue #1212 running 側。段1）。** 材料は
   // `#registeredRunnerIds()`——`record` からは（`this` を持たない `summaryOf`
-  // からは）読めないプロセス内の状態なので、呼ぶ側が `vanishedSinceOf(record,
+  // からは）読めないプロセス内の状態なので、呼ぶ側が `vanishedOf(record,
   // registeredRunnerIds)` で計算した値だけをここへ渡す。
-  // `ManagerSummary.runnerVanishedSince` の doc。
-  runnerVanishedSince: string | undefined,
+  // `ManagerSummary.runnerVanished` の doc。
+  runnerVanished: true | undefined,
   sessionMissingSince: string | undefined,
   turnEndedAt: string | undefined,
   turnEndReason: string | undefined,
@@ -12235,8 +12233,8 @@ function summaryOf(
     ...(runnerLostSince === undefined ? {} : { runnerLostSince }),
     // **同上（Issue #1212 running 側。段1）。** 既定を置くと、足す人が考えなかった
     // ことが「entry は名簿に残っている」という主張になって外へ出る。呼ぶ側は
-    // `vanishedSinceOf(record, registeredRunnerIds)` の返り値をそのまま渡せばよい。
-    ...(runnerVanishedSince === undefined ? {} : { runnerVanishedSince }),
+    // `vanishedOf(record, registeredRunnerIds)` の返り値をそのまま渡せばよい。
+    ...(runnerVanished === undefined ? {} : { runnerVanished }),
     // **同上（#563）。** 既定を置くと、足す人が考えなかったことが「runner はこの
     // 委譲のセッションを持っている」という主張になって外へ出る。呼ぶ側は
     // `record.sessionMissingSince` をそのまま渡せばよい（像が正本である）。
