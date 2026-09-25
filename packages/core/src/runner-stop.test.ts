@@ -473,6 +473,39 @@ describe('Stop は何も判断せず、何も抑制しない（#861 の段1。�
     const result = await fireStop(started.options, null as unknown as Record<string, unknown>);
     expect(result).toEqual({ continue: true });
   });
+
+  /**
+   * **入力の読み取りそのものが例外を投げても、セッションを止めずに note へ倒す**
+   * （`#onStop` の `catch`）。読み取りは #486（中立の口の4本目）で
+   * `claude-provider.ts` の `toAgentStopRecord` へ移り、失敗は
+   * `AgentStopRecord.readError` で運ばれて `#onStop` の `try` の中で投げ直される。
+   * **数えるのは読み取りより先**なので、読めなかった回も通算に入る——次の回の
+   * note が「通算 2回目」を名乗る（中立化する前と同じ順序）。
+   */
+  it('入力の読み取りで例外が出ても { continue: true } を返し、失敗が note に残り、通算にも入る', async () => {
+    const { started, events } = await startSession();
+
+    const throwing: Record<string, unknown> = { ...STOP_BASE };
+    Object.defineProperty(throwing, 'background_tasks', {
+      enumerable: true,
+      get(): never {
+        throw new Error('boom-test-stop-read');
+      },
+    });
+
+    const result = await fireStop(started.options, throwing);
+
+    expect(result).toEqual({ continue: true });
+    const failures = noteEvents(events).filter((note) =>
+      note.text.includes('Stop の観測に失敗した'),
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.text).toContain('boom-test-stop-read');
+
+    await fireStop(started.options, { ...STOP_BASE, background_tasks: [] });
+    const notes = stopNotes(events);
+    expect(notes.at(-1)?.text).toContain('通算 2回目');
+  });
 });
 
 /**

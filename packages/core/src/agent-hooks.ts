@@ -198,6 +198,15 @@ export interface AgentStopRecord {
   sessionCrons?: unknown[];
   /** Stop hook が既に一度発火して継続させた印。読めなければ省く。 */
   stopHookActive?: boolean;
+  /**
+   * 生入力の読み取りそのものが例外を投げたときの例外（#486 中立の口の4本目）。
+   * **在るときは他の欄は1つも載っていない。** `runner.ts` の `#onStop` は、
+   * 中立化する前は生入力を自分の `try` の中で読んでおり、読み取りの失敗も
+   * 「観測に失敗した」note へ倒していた（#570）。読み取りが `claude-provider.ts`
+   * へ移ったので、その失敗をここで運び、`#onStop` が同じ `try` の中で投げ直す
+   * ——どの時点で投げるかも中立化する前と同じにする。
+   */
+  readError?: unknown;
 }
 
 /**
@@ -297,6 +306,15 @@ export interface AgentSubagentStopRecord {
   agentType?: string;
   /** Stop hook が既に一度発火して継続させた印。読めなければ省く。 */
   stopHookActive?: boolean;
+  /**
+   * 生入力の読み取りそのものが例外を投げたときの例外（#486 中立の口の4本目）。
+   * **在るときは他の欄は1つも載っていない。** `runner.ts` の `#onSubagentStop` は、
+   * 中立化する前は生入力を自分の `try` の中で読んでおり、読み取りの失敗も
+   * 「観測に失敗した」note へ倒していた（#570）。読み取りが `claude-provider.ts`
+   * へ移ったので、その失敗をここで運び、`#onSubagentStop` が同じ `try` の中で投げ直す
+   * ——どの時点で投げるかも中立化する前と同じにする。
+   */
+  readError?: unknown;
 }
 
 /**

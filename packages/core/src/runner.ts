@@ -4111,6 +4111,9 @@ class RunnerSession {
     try {
       // 配列でない・真偽値でない欄は `toAgentSubagentStopRecord`（`claude-provider.ts`）
       // が省いて渡す。ここでの読み方は、中立化する前に生入力から読んでいた形と同じ。
+      // 生入力の読み取りの失敗は、中立化する前と同じくこの時点で投げ、下の
+      // `catch` の note へ倒す（`AgentSubagentStopRecord.readError` の doc）。
+      if (record.readError !== undefined) throw record.readError;
       const tasks = record.backgroundTasks ?? [];
       const crons = record.sessionCrons ?? [];
       const agentId = record.agentId;
@@ -4601,6 +4604,9 @@ class RunnerSession {
       // この数そのものが #861 の問い「`Stop` はいつ来て、いつ来ないか」への材料である。
       const stopFirings = this.#stopState.incrementStopFirings();
 
+      // 生入力の読み取りの失敗は、中立化する前と同じくこの時点で投げ、下の
+      // `catch` の note へ倒す（`AgentStopRecord.readError` の doc）。
+      if (record.readError !== undefined) throw record.readError;
       const tasks = record.backgroundTasks ?? [];
       const crons = record.sessionCrons ?? [];
       const stopHookActive = record.stopHookActive;

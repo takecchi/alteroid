@@ -181,12 +181,19 @@ function toAgentUserPromptSubmitRecord(input: unknown): AgentUserPromptSubmitRec
 
 /** `Stop` の生入力を {@link AgentStopRecord} へ写す。無い欄は省く。 */
 function toAgentStopRecord(input: unknown): AgentStopRecord {
-  const raw = input as Partial<StopHookInput> | null | undefined;
-  return {
-    ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
-    ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
-    ...(typeof raw?.stop_hook_active === 'boolean' ? { stopHookActive: raw.stop_hook_active } : {}),
-  };
+  // **読み取りの失敗は投げずに `readError` で運ぶ**（`AgentStopRecord.readError` の doc）。
+  try {
+    const raw = input as Partial<StopHookInput> | null | undefined;
+    return {
+      ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
+      ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
+      ...(typeof raw?.stop_hook_active === 'boolean'
+        ? { stopHookActive: raw.stop_hook_active }
+        : {}),
+    };
+  } catch (error: unknown) {
+    return { readError: error };
+  }
 }
 
 /**
@@ -308,14 +315,21 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
  * 落ち、何も起こし直さない。
  */
 function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
-  const raw = input as Partial<SubagentStopHookInput> | null | undefined;
-  return {
-    ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
-    ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
-    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
-    ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
-    ...(typeof raw?.stop_hook_active === 'boolean' ? { stopHookActive: raw.stop_hook_active } : {}),
-  };
+  // **読み取りの失敗は投げずに `readError` で運ぶ**（`AgentSubagentStopRecord.readError` の doc）。
+  try {
+    const raw = input as Partial<SubagentStopHookInput> | null | undefined;
+    return {
+      ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
+      ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
+      ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+      ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+      ...(typeof raw?.stop_hook_active === 'boolean'
+        ? { stopHookActive: raw.stop_hook_active }
+        : {}),
+    };
+  } catch (error: unknown) {
+    return { readError: error };
+  }
 }
 
 /**
