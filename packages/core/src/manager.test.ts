@@ -10539,7 +10539,9 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     await seedRunning(stores, 'mgr-vanished', 'runner-gone', '2026-09-24T00:00:00.000Z');
     // **`runner-gone` を1本も登録しない。** 「消えた」を作るのに `unregister()`
     // を呼ぶ必要は無い——最初から名簿に entry が無い状態が、まさに「entry ごと
-    // 消えている」と区別が付かない状態である（本番では daemon 再起動でこの形になる）。
+    // 消えている」と区別が付かない状態である。⚠️ **daemon の再起動直後の形では
+    // ない**（#1547）: 再起動直後の名簿には、まだ名乗っていない `connecting` の
+    // entry が載っている。その形は下の「判定できない」の歯が持つ。
     const registry = createRunnerRegistry([]);
     const pool = createManagerPool({
       stores,
@@ -10565,6 +10567,51 @@ describe('running のまま、宛先の runner が名簿から entry ごと消�
     expect(lines[0]).toContain('running のまま残っている委譲が 1 本ある');
     // 2026-09-24T00:00Z → 01:05Z の経過（`now` で固定した1時間5分）。
     expect(lines[0]).toContain('最古の委譲は1時間5分経過');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * #1547: daemon の再起動直後、runner は `register()` から最初の `#open()` が
+   * 成功するまで `connecting` で、`runnerId` を名乗っていない。その間に
+   * 「名簿から消えた」と出すと、数秒後に繋がる runner の委譲まで全部に
+   * 「起こし直す前に確かめよ」が付く。
+   */
+  it('🔴 #1547: 宛先の runner がまだ繋がる途中（connecting・名乗る前）なら、印も計器も立てない', async () => {
+    const stores = createMemoryStores();
+    await seedRunning(stores, 'mgr-a', 'runner-a', '2026-09-24T00:00:00.000Z');
+    const registry = createRunnerRegistry([]);
+    let resolveOpen: (client: RunnerClient) => void = () => {};
+    const openGate = new Promise<RunnerClient>((resolve) => {
+      resolveOpen = resolve;
+    });
+    void registry.register({ label: 'runner-a', open: () => openGate });
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const duringConnect = await pool.list();
+    expect(duringConnect.find((m) => m.managerId === 'mgr-a')?.runnerVanished).toBeUndefined();
+    expect(vanishedRunnerGaugeLines(await stores.journal.list({ order: 'asc' }))).toHaveLength(0);
+
+    resolveOpen(new FakePoolRunner('runner-a', { managers: 0 }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const afterConnect = await pool.list();
+    expect(afterConnect.find((m) => m.managerId === 'mgr-a')?.runnerVanished).toBeUndefined();
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('#1547: 別の runner が名乗る前でも「判定できない」に倒す（その entry が宛先そのものかもしれない）', async () => {
+    const stores = createMemoryStores();
+    await seedRunning(stores, 'mgr-a', 'runner-gone', '2026-09-24T00:00:00.000Z');
+    const registry = createRunnerRegistry([]);
+    void registry.register({ label: 'runner-x', open: () => new Promise<RunnerClient>(() => {}) });
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const listed = await pool.list();
+    expect(listed.find((m) => m.managerId === 'mgr-a')?.runnerVanished).toBeUndefined();
+    expect(vanishedRunnerGaugeLines(await stores.journal.list({ order: 'asc' }))).toHaveLength(0);
 
     await pool.stop();
     await registry.stop();

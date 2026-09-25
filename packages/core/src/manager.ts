@@ -5090,11 +5090,30 @@ class Pool implements ManagerPool {
    *
    * **ここで新たに runner を叩かない。** `#silentRunners()` と同じく、名簿
    * （`RunnerRegistry#entries()`）に既に立っている観測を同期に読むだけである。
+   *
+   * ## ⚠️ 名乗っていない entry が1本でも在れば `null`（判定できない）を返す（#1547）
+   *
+   * entry の `runnerId` は、その器が名乗ったとき（`heardRunnerIdOf`）にしか
+   * 入らない。**デーモンを起動し直した直後は、`register()` から最初の `#open()`
+   * が成功するまで entry は `connecting` で `runnerId` を持たない。** かつては
+   * そういう entry を読み飛ばしていたので、数秒後には繋がる runner の委譲まで
+   * 全部「名簿から消えた」と出て、しかも「起こし直す前に確かめよ」と行動を
+   * 止める文言が付いた。
+   *
+   * 名乗っていない entry は、**委譲の宛先そのものである可能性を消せない。**
+   * ⟹ そういう entry が在る間は「名簿に無い」とは言えないので、集合ではなく
+   * `null` を返し、呼ぶ側は印も計器も立てない（`vanishedOf` /
+   * `#noteVanishedRunnerGauge`）。**偽の「消えた」より、黙っているほうが安全側**
+   * である——本当に消えていれば、名乗っていない entry が畳まれるか名乗った後の
+   * 呼びで立つ。
+   *
+   * **代償**: 名乗らない runner（`identity()` を持たない実装・古い器）が名簿に
+   * 常駐する構成では、この判定は常に「判定できない」になり、印は一度も立たない。
    */
-  #registeredRunnerIds(): ReadonlySet<string> {
+  #registeredRunnerIds(): ReadonlySet<string> | null {
     const ids = new Set<string>();
     for (const entry of this.#runners.entries()) {
-      if (entry.runnerId === undefined) continue;
+      if (entry.runnerId === undefined) return null;
       ids.add(entry.runnerId);
     }
     return ids;
@@ -5320,8 +5339,12 @@ class Pool implements ManagerPool {
    */
   async #noteVanishedRunnerGauge(
     summaries: readonly ManagerSummary[],
-    registeredRunnerIds: ReadonlySet<string>,
+    registeredRunnerIds: ReadonlySet<string> | null,
   ): Promise<void> {
+    // **判定できない回は何も書かず、前回の本数も動かさない**（#1547。
+    // `#registeredRunnerIds` の doc）。次に判定できた回に、変わったかどうかを
+    // いまの記憶のまま比べる。
+    if (registeredRunnerIds === null) return;
     try {
       const backlog = vanishedRunnerBacklog(summaries, registeredRunnerIds);
       for (const runnerId of this.#vanishedRunnerGaugeLastCount.keys()) {
@@ -12223,9 +12246,11 @@ function lostSinceOf(
  */
 function vanishedOf(
   record: ManagerRecord,
-  registeredRunnerIds: ReadonlySet<string>,
+  registeredRunnerIds: ReadonlySet<string> | null,
 ): true | undefined {
   if (record.job.status !== 'running') return undefined;
+  // **判定できない回は立てない**（#1547。`Pool.#registeredRunnerIds` の doc）。
+  if (registeredRunnerIds === null) return undefined;
   const runnerId = record.job.runnerId;
   if (runnerId === undefined) return undefined;
   if (registeredRunnerIds.has(runnerId)) return undefined;
