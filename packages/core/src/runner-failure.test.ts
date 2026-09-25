@@ -733,19 +733,32 @@ describe("失敗で終わったターンの本文に、task_notification の sta
 
     await session.taskStarted('task-1');
     await session.taskStarted('task-2');
-    // task-1 は実機観測どおりの文言（USAGE_LIMIT_ERROR_PREFIXES の「You've hit
-    // your」に当たる）。task-2 はそれと無関係な失敗理由。
+    await session.taskStarted('task-3');
+    // task-1・task-2 は実機観測どおりの文言（USAGE_LIMIT_ERROR_PREFIXES の
+    // 「You've hit your」に当たる）。task-3 はそれと無関係な失敗理由。
+    // **2件を「名乗った」側、1件だけを「名乗らない」側にする**——枠を名乗る
+    // 判定を丸ごと反転する変異（`classifyUsageNotice(...) !== undefined` を
+    // `=== undefined` にする）を当てると、名乗った/名乗らないの内訳が
+    // 「2件中1件が名乗った」から「1件中1件（＝逆側）が名乗った」に変わり、
+    // 件数（2→1）で食い違いが出る。**旧版（1体だけを名乗る側にする作り）だと、
+    // 反転しても「1件中1件」のまま件数が変わらず、この歯がすり抜けた**
+    // （実測——変異試験で「宣言した歯ではなく別の歯が落ちる（身代わり）」と
+    // 判定された。以前はここが task-1 だけ枠を名乗る2体構成だった）。
     await session.taskNotification('task-1', {
       status: 'failed',
       summary: `Agent terminated early due to an API error: ${ORG_SPEND_LIMIT} (error type rate_limit, HTTP 429, request id req_1, model sent to the API: claude-sonnet-5)`,
     });
-    await session.taskNotification('task-2', { status: 'failed', summary: 'ネットワークが切れた' });
+    await session.taskNotification('task-2', {
+      status: 'failed',
+      summary: `Agent terminated early due to an API error: ${ORG_SPEND_LIMIT} (error type rate_limit, HTTP 429, request id req_2, model sent to the API: claude-sonnet-5)`,
+    });
+    await session.taskNotification('task-3', { status: 'failed', summary: 'ネットワークが切れた' });
     await session.finish('', { isError: true });
 
     const texts = await reportTexts(s.inbox, 1);
     const text = texts[0] ?? '';
     expect(text).toBe(
-      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者 2 体が失敗で終わった（うち 1 体は枠(429)を名乗った）。本体も当たったかは SDK からは分からない）`,
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者 3 体が失敗で終わった（うち 2 体は枠(429)を名乗った）。本体も当たったかは SDK からは分からない）`,
     );
 
     await s.pool.stop();
