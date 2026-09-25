@@ -37,6 +37,12 @@ interface FakeSession {
    * ヘルパーと同じ形（`task_id` を持つ `system` メッセージ）を踏襲する。
    */
   taskStarted(taskId: string): Promise<void>;
+  /**
+   * `system/task_notification` を流す（#1373 続き）。`status` の既定は
+   * `'completed'`（陽性対照側の既定に寄せる——`'failed'` を試すテストは
+   * 明示で渡す）。
+   */
+  taskNotification(taskId: string, options?: { status?: string; summary?: string }): Promise<void>;
 }
 
 function fakeSdk() {
@@ -88,6 +94,19 @@ function fakeSdk() {
           task_id: taskId,
           description: '作業者への委譲',
           uuid: `uuid-task-started-${taskId}`,
+          session_id: 'sess-mgr',
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async taskNotification(taskId, notificationOptions = {}) {
+        push({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: notificationOptions.status ?? 'completed',
+          summary: notificationOptions.summary ?? '',
+          output_file: '/tmp/fake-output',
+          uuid: `uuid-task-notification-${taskId}-${Math.random()}`,
           session_id: 'sess-mgr',
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -651,6 +670,156 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     await session.finish('', { isError: true });
     const texts = await reportTexts(s.inbox, 2);
     expect(texts[1]).toBe(BASELINE_FAILURE_TEXT);
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **#1373 続き: `task_notification` の `status` / `summary` を状況証拠として
+ * 数える。** `claude-provider.ts` が捨てていた `status`（`'completed' |
+ * 'failed' | 'stopped'`）と `summary` を運ぶようにしたので、`#onTaskNotification`
+ * がそれを使って「このターンで `status: 'failed'` として終わった作業者の数」と
+ * 「そのうち要旨が枠(429)を名乗っていた数」を数える。
+ *
+ * 5本の歯で固定する:
+ * 1. `status: 'failed'` の通知が1件でもあると、状況証拠の行が
+ *    「作業者が開いていた」の行から「作業者が失敗で終わった」の行へ変わる
+ * 2. 要旨が枠(429)を名乗っていれば、その件数も添える
+ * 3. 陽性対照: `status: 'completed'` の通知だけなら、失敗ターンの本文は
+ *    従来どおり「開いていた」の行のまま（`status` を見ていないと壊れる歯）
+ * 4. 優先順位: 作業者自身の発言に拒否の印（#1466 の経路）が付いていれば、
+ *    そちらの行が最優先で残る（`task_notification` の失敗の行は出ない）
+ * 5. ターンをまたいで数が持ち越されない
+ */
+describe("失敗で終わったターンの本文に、task_notification の status:'failed' を状況証拠として添える（#1373 続き）", () => {
+  const BASELINE_FAILURE_TEXT =
+    '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
+
+  it("作業者2体の通知が status:'failed' で終わると、状況証拠の行が「作業者が2体開いていた」から「作業者が2体、失敗で終わった」へ変わる（枠を名乗る文言が無ければ内訳は付けない）", async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskStarted('task-2');
+    await session.taskNotification('task-1', { status: 'failed', summary: '何か失敗した' });
+    await session.taskNotification('task-2', { status: 'failed', summary: '別の失敗' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者 2 体が失敗で終わった。本体も当たったかは SDK からは分からない）`,
+    );
+    expect(text).not.toContain('体開いていた');
+    expect(text).not.toContain('枠(429)');
+
+    await s.pool.stop();
+  });
+
+  it('failed の通知の要旨が枠(429)を名乗っていれば、その件数も添える（classifyUsageNotice が拾う文言だけを名乗ったと数える）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskStarted('task-2');
+    // task-1 は実機観測どおりの文言（USAGE_LIMIT_ERROR_PREFIXES の「You've hit
+    // your」に当たる）。task-2 はそれと無関係な失敗理由。
+    await session.taskNotification('task-1', {
+      status: 'failed',
+      summary: `Agent terminated early due to an API error: ${ORG_SPEND_LIMIT} (error type rate_limit, HTTP 429, request id req_1, model sent to the API: claude-sonnet-5)`,
+    });
+    await session.taskNotification('task-2', { status: 'failed', summary: 'ネットワークが切れた' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者 2 体が失敗で終わった（うち 1 体は枠(429)を名乗った）。本体も当たったかは SDK からは分からない）`,
+    );
+
+    await s.pool.stop();
+  });
+
+  it("陽性対照: status が 'completed' の通知だけなら、失敗ターンの本文は従来どおり「作業者が開いていた」の行のまま", async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1', { status: 'completed', summary: '完了した' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者が 1 体開いていた。どちらが当たったかは SDK からは分からない）`,
+    );
+    expect(text).not.toContain('失敗で終わった');
+
+    await s.pool.stop();
+  });
+
+  it('優先順位: 作業者自身の発言に拒否の印（#1466 の経路）が付いていれば、task_notification 側の行より優先される', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    await session.taskNotification('task-1', { status: 'failed', summary: ORG_SPEND_LIMIT });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: rate_limit ×1。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`,
+    );
+    expect(text).not.toContain('失敗で終わった');
+
+    await s.pool.stop();
+  });
+
+  it('ターンをまたいで数が持ち越されない（前のターンの failed 通知は、次のターンの本文に出ない）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    // 1ターン目: 作業者が失敗で終わるが、ターン自体は成功で畳む。
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1', { status: 'failed', summary: ORG_SPEND_LIMIT });
+    await session.finish('1ターン目は成功した');
+    await reportTexts(s.inbox, 1);
+
+    // 2ターン目: 作業者を1体も開かずに失敗する。
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 2);
+    const text = texts[1] ?? '';
+    expect(text).toBe(BASELINE_FAILURE_TEXT);
+    expect(text).not.toContain('失敗で終わった');
 
     await s.pool.stop();
   });

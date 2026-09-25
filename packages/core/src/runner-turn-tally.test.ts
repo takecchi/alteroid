@@ -26,7 +26,7 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(tally.hasSaid).toBe(true);
   });
 
-  it('takeAtResult は said・rejected を含む10フィールド全部を読み出して畳む（以後は初期状態に戻る）', () => {
+  it('takeAtResult は said・rejected を含む12フィールド全部を読み出して畳む（以後は初期状態に戻る）', () => {
     const tally = new RunnerTurnTally();
     tally.recordSaid('本文1', 'uuid-1');
     tally.recordSaid('本文2', 'uuid-2');
@@ -41,6 +41,8 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     tally.addOpenedWorker('task-1');
     tally.addOpenedWorker('task-2');
     tally.pushWorkerRejection('billing_error');
+    tally.recordFailedWorkerNotification(true);
+    tally.recordFailedWorkerNotification(false);
 
     const taken = tally.takeAtResult();
     expect(taken.said).toEqual(['本文1', '本文2']);
@@ -52,6 +54,8 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(taken.sourcesThisTurn.get('cli')).toBe(2);
     expect(taken.openedWorkersThisTurn).toBe(2);
     expect(taken.workerRejectionsThisTurn).toEqual(['billing_error']);
+    expect(taken.failedWorkerNotificationsThisTurn).toBe(2);
+    expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(1);
 
     // **畳んだ後は初期状態に戻る。** 二度目の takeAtResult は全部ゼロ／空を返す
     // ——`turn_ended` を跨いで前のターンの値が漏れないことを保証する形。
@@ -65,6 +69,8 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(second.sourcesThisTurn.size).toBe(0);
     expect(second.openedWorkersThisTurn).toBe(0);
     expect(second.workerRejectionsThisTurn).toEqual([]);
+    expect(second.failedWorkerNotificationsThisTurn).toBe(0);
+    expect(second.failedWorkerNotificationsNamingLimitThisTurn).toBe(0);
     expect(tally.hasSaid).toBe(false);
   });
 
@@ -77,7 +83,17 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(taken.openedWorkersThisTurn).toBe(2);
   });
 
-  it('takeSaid は said/reportId の2本だけを読み出して畳み、rejected と残り8本には触れない', () => {
+  it('recordFailedWorkerNotification は limitNamed が false の回を枠を名乗った件数に数えない', () => {
+    const tally = new RunnerTurnTally();
+    tally.recordFailedWorkerNotification(false);
+    tally.recordFailedWorkerNotification(false);
+    tally.recordFailedWorkerNotification(true);
+    const taken = tally.takeAtResult();
+    expect(taken.failedWorkerNotificationsThisTurn).toBe(3);
+    expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(1);
+  });
+
+  it('takeSaid は said/reportId の2本だけを読み出して畳み、rejected と残り10本には触れない', () => {
     const tally = new RunnerTurnTally();
     tally.recordSaid('未報告の本文', 'uuid-said');
     tally.setRejected(failureOf('rate_limit'));
@@ -88,6 +104,7 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     tally.recordSubmitSource('cli');
     tally.addOpenedWorker('task-1');
     tally.pushWorkerRejection('billing_error');
+    tally.recordFailedWorkerNotification(true);
 
     const { said, reportId } = tally.takeSaid();
     expect(said).toEqual(['未報告の本文']);
@@ -95,7 +112,7 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     // **`said`/`saidUuid` は畳まれる。** 2度目は空。
     expect(tally.hasSaid).toBe(false);
 
-    // **残り8本（rejected を含む）は takeSaid では触れない。**
+    // **残り10本（rejected を含む）は takeSaid では触れない。**
     // takeAtResult で読み出して初めて畳まれていることを確認する。
     const taken = tally.takeAtResult();
     expect(taken.rejected).toEqual(failureOf('rate_limit'));
@@ -106,6 +123,8 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(taken.sourcesThisTurn.get('cli')).toBe(1);
     expect(taken.openedWorkersThisTurn).toBe(1);
     expect(taken.workerRejectionsThisTurn).toEqual(['billing_error']);
+    expect(taken.failedWorkerNotificationsThisTurn).toBe(1);
+    expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(1);
   });
 
   it('said が空のまま takeSaid を呼ぶと、reportId も undefined のまま返る（呼び出し側は hasSaid で先に見る想定）', () => {
@@ -115,7 +134,7 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     expect(reportId).toBeUndefined();
   });
 
-  it('discardOpenedWorkersAndRejections は openedWorkersThisTurn / workerRejectionsThisTurn の2本だけを読み出さずに捨て、残り8本には触れない', () => {
+  it('discardOpenedWorkersAndRejections は openedWorkersThisTurn / workerRejectionsThisTurn / failedWorkerNotifications系2欄の3本だけを読み出さずに捨て、残り9本には触れない', () => {
     const tally = new RunnerTurnTally();
     tally.recordSaid('本文', 'uuid-x');
     tally.setRejected(failureOf('rate_limit'));
@@ -126,15 +145,18 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     tally.recordSubmitSource('cli');
     tally.addOpenedWorker('task-1');
     tally.pushWorkerRejection('billing_error');
+    tally.recordFailedWorkerNotification(true);
 
     tally.discardOpenedWorkersAndRejections();
 
-    // 捨てた2本は空に戻っている。
+    // 捨てた3本は空に戻っている。
     const taken = tally.takeAtResult();
     expect(taken.openedWorkersThisTurn).toBe(0);
     expect(taken.workerRejectionsThisTurn).toEqual([]);
+    expect(taken.failedWorkerNotificationsThisTurn).toBe(0);
+    expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(0);
 
-    // **残り8本は影響を受けない。** said/saidUuid/rejected/inputs/notifications/
+    // **残り9本は影響を受けない。** said/saidUuid/rejected/inputs/notifications/
     // tools/submits/sources は discardOpenedWorkersAndRejections を呼ぶ前の
     // 値のまま、takeAtResult で読み出せる。
     expect(taken.said).toEqual(['本文']);
