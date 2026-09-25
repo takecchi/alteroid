@@ -29,7 +29,7 @@ import type {
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
-import { cgroupEventsDeltaOf, type CgroupEventsDelta } from './cgroup-events.js';
+import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
