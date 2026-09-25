@@ -17,11 +17,11 @@ catalog:
   '@types/node': ^22.20.1
   '@anthropic-ai/claude-agent-sdk': ^0.3.282
   # `@anthropic-ai/claude-agent-sdk` の peerDependency（`^1.29.0`）と同じ実体
-  # （現に解決されている版は 1.30.0。`pnpm why @modelcontextprotocol/sdk -r` で
+  # （現に解決されている版は 1.30.1。`pnpm why @modelcontextprotocol/sdk -r` で
   # 引き直せる）。#486 48(a) 案D — クローンの道具の中継（relay）host が
   # `StdioServerTransport` を直接使うため、`packages/core` の直接依存として
   # 明示する（今日までは claude-agent-sdk 経由の peer 解決だけだった）。
-  '@modelcontextprotocol/sdk': ^1.30.0
+  '@modelcontextprotocol/sdk': ^1.30.1
   hono: ^4.13.5
   '@hono/node-server': ^2.1.0
   '@hono/zod-validator': ^0.9.0
@@ -79,7 +79,8 @@ catalog:
   # 通すのではなく**、枯れている 2.4 系を採る（除外リストは Claude 本体＝SDK を
   # 遅らせないためのものであって、一般の依存の新しい版を素通しするための場所では
   # ない。理由はファイル末尾の注記）
-  # `^` だと 2.5 系まで入ってしまうので `~` で 2.4 系に留める
+  # `^` だと次の minor まで入ってしまうので `~` で minor を留める（2026-09-26 に
+  # Renovate の3日待ちを通った 2.5 系へ上げた。上の「2.4 系を採る」は導入時の記録）
   swr: ~2.5.0
   clsx: ^2.1.1
   # Web UI（apps/web）で AI の応答・日報・マネージャーの報告を Markdown として
@@ -143,7 +144,8 @@ catalog:
   # **`minimumReleaseAgeExclude` に足して通すのは採らない** — あの除外リストは
   # Claude 本体（SDK）を遅らせないためのものであって、一般の依存の新しい版を
   # 素通しするための場所ではない（同ファイル末尾の注記）。上の `swr` が
-  # 同じ理由で枯れた版に留めている先例に揃える。
+  # 同じ理由で枯れた版に留めている先例に揃える。（2026-09-26 に Renovate の3日待ちを
+  # 通った 0.52 系へ上げた。上の「0.50.3 を採る」は導入時の記録）
   virtua: ^0.52.0
 
 # **Claude 本体（SDK）だけは、公開直後でも取りに行く。**
