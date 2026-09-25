@@ -87,7 +87,7 @@ function nonNegativeDeltaOf(
  * `SYSTEM_ERROR_UNKNOWN_NOTE` と同じ作法で1箇所にまとめる）。
  */
 export const CGROUP_EVENTS_UNKNOWN_NOTE =
-  'この委譲が走っていた間に器で pids 上限・OOM による強制終了が起きたかは、この欄では判定できなかった';
+  'この委譲が走っていた間に器で pids 上限による fork の拒否・OOM kill が起きたかは、この欄では判定できなかった';
 
 /**
  * 差分を、人が読む一文へ整形する。
@@ -101,7 +101,7 @@ export const CGROUP_EVENTS_UNKNOWN_NOTE =
  */
 export function formatCgroupEventsNote(delta: CgroupEventsDelta): string {
   if (delta.pidsMaxDelta === 0 && delta.oomKillDelta === 0) {
-    return 'この委譲が走っていた間、器で pids 上限・OOM による強制終了は起きていなかった';
+    return 'この委譲が走っていた間、器で pids 上限による fork の拒否も OOM kill も起きていなかった';
   }
   const pidsPart =
     delta.pidsMaxDelta === undefined
