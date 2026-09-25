@@ -280,7 +280,10 @@ export async function runTokenTrial(
             const deadline = cooldownDeadlineFrom(facts);
             rejected = {
               reason: 'rate_limit_event が rejected を運んだ',
-              ...(deadline === undefined ? {} : { retryAt: deadline.at }),
+              // **枠の `resetsAt` から採れたときだけ持ち帰る。** 受け手
+              // （`TokenRotator.recordTrialVerdict`）はこの期限を `quota_reset` と
+              // して書くので、課金枠の期限（`overage_reset`）を渡すと出所を偽る。
+              ...(deadline?.source === 'quota_reset' ? { retryAt: deadline.at } : {}),
             };
           }
           continue;

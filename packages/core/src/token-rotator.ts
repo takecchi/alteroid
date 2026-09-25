@@ -635,6 +635,26 @@ export interface TokenRotator {
     current?: { verdict: TokenCandidateVerdict; origin: TokenVerdictOrigin };
   }): Promise<TokenRotationOutcome>;
   /**
+   * **ダメ元の試し（Issue #1501）の結果を、その行の記録へ写す。回さない。撒かない。**
+   *
+   * - `usable`: 冷却の記録を消す（`markTokenUsable`）。回すのは呼ぶ側が続けて
+   *   呼ぶ {@link TokenRotator.reconsider}（`reason: 'trial_succeeded'`）である
+   * - `unusable` で `retryAt` が在り、記録と違う: 権威ある期限（`quota_reset`）で
+   *   冷却を書き直す
+   * - それ以外: 何も書かない（`unchanged`）
+   *
+   * ## なぜ回し手の中に置くか
+   *
+   * **書く操作はすべて1本の列（`serial`）を通る**（このファイルの冒頭の doc）。
+   * 見張りが自分で `stores.tokens.replace` を打つと、同じ瞬間に `observe` が
+   * 書いた冷却を、読んだ時点の古い一覧で丸ごと踏み消しうる（プール全体を
+   * 置き換える口なので、無関係な行まで巻き戻る）。
+   */
+  recordTrialVerdict(input: {
+    tokenId: string;
+    verdict: TokenCandidateVerdict;
+  }): Promise<'written' | 'unchanged' | 'missing'>;
+  /**
    * **起動時に1度だけ**、記憶ストアが「現役」と言っているトークンを撒き直す。
    *
    * ## なぜ要るか
@@ -1725,6 +1745,36 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           freshness,
           whyHead: decision.why,
         });
+      }),
+
+    recordTrialVerdict: (input: { tokenId: string; verdict: TokenCandidateVerdict }) =>
+      serial(async () => {
+        const tokens = await stores.tokens.list();
+        const row = tokens.find((token) => token.id === input.tokenId);
+        if (row === undefined) return 'missing' as const;
+        const at = now().toISOString();
+        let next: AgentToken;
+        const { verdict } = input;
+        if (verdict.verdict === 'usable') {
+          if (row.cooldownUntil === undefined && row.lastRejectedAt === undefined) {
+            return 'unchanged' as const;
+          }
+          next = markTokenUsable(row, at);
+        } else if (verdict.verdict === 'unusable' && verdict.retryAt !== undefined) {
+          // **書く必要が無ければ書かない**（同じ期限なら `updatedAt` も動かさない）。
+          if (row.cooldownUntil === verdict.retryAt) return 'unchanged' as const;
+          const settings = await stores.tokens.readSettings();
+          next = markTokenUnusable(row, {
+            at,
+            message: verdict.reason,
+            resets: { at: verdict.retryAt, source: 'quota_reset' },
+            fallbackCooldownMs: settings.cooldownMs,
+          });
+        } else {
+          return 'unchanged' as const;
+        }
+        await stores.tokens.replace(tokens.map((token) => (token.id === row.id ? next : token)));
+        return 'written' as const;
       }),
 
     reconsider: (input: {

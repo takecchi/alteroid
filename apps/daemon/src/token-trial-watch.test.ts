@@ -2,6 +2,7 @@ import {
   TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS,
   TOKEN_TRIAL_INTERVAL_MS,
   createMemoryStores,
+  createTokenRotator,
   type AgentToken,
   type Stores,
   type TokenCandidateVerdict,
@@ -32,6 +33,21 @@ async function seedToken(
     ...existing,
     { label: overrides.id, value: `value-${overrides.id}`, ...overrides },
   ]);
+}
+
+/**
+ * 記録を書く口は**本物の回し手**のものを使う（`TokenRotator.recordTrialVerdict`）。
+ * 見張りは記録を1行も書かない設計なので、偽物にすると「書き直した／書かなかった」の
+ * 歯が見張りではなく偽物を測ることになる。probe / spread は呼ばれない。
+ */
+function realRecordTrialVerdict(stores: Stores): TokenRotator['recordTrialVerdict'] {
+  const rotator = createTokenRotator({
+    stores,
+    probe: { probe: () => Promise.reject(new Error('probe は呼ばれない')) },
+    spread: { spread: () => Promise.reject(new Error('spread は呼ばれない')) },
+    now: () => new Date(AT),
+  });
+  return (input) => rotator.recordTrialVerdict(input);
 }
 
 /** マイクロタスクを回し切る。 */
@@ -88,6 +104,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
     const outcomes: TokenRotationOutcome[] = [];
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(ROTATED),
       onOutcome: async (outcome) => {
@@ -109,6 +126,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
     const trial = fakeTrial({ verdict: 'usable' });
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(ROTATED),
       onOutcome: () => Promise.resolve(),
@@ -127,6 +145,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
     const trial = fakeTrial({ verdict: 'usable' });
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
@@ -151,6 +170,7 @@ describe('token-trial-watch: 試す条件と対象', () => {
     };
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
@@ -180,6 +200,7 @@ describe('token-trial-watch: 通ったら', () => {
     let nowMs = AT;
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider,
       onOutcome: async (outcome) => {
@@ -235,6 +256,7 @@ describe('token-trial-watch: 通ったら', () => {
     };
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: port,
       reconsider,
       onOutcome: async (outcome) => {
@@ -263,6 +285,7 @@ describe('token-trial-watch: 失敗したら', () => {
     const outcomes: TokenRotationOutcome[] = [];
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: async (outcome) => {
@@ -289,6 +312,7 @@ describe('token-trial-watch: 失敗したら', () => {
     });
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
@@ -319,6 +343,7 @@ describe('token-trial-watch: 失敗したら', () => {
     });
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
@@ -349,6 +374,7 @@ describe('token-trial-watch: 偽陽性の退き方（設計点8）', () => {
     const trial = fakeTrial({ verdict: 'usable' });
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),
@@ -382,6 +408,7 @@ describe('token-trial-watch: 偽陽性の退き方（設計点8）', () => {
     const trial = fakeTrial({ verdict: 'usable' });
     const watch = startTokenTrialWatch({
       stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
       trial: trial.port,
       reconsider: () => Promise.resolve(RECOVERED),
       onOutcome: () => Promise.resolve(),

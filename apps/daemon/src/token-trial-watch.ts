@@ -1,12 +1,9 @@
 import {
-  DEFAULT_TOKEN_COOLDOWN_MS,
   TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS,
   TOKEN_TRIAL_INTERVAL_MS,
   credentialOf,
   describeTrialFailureFold,
   doubledTrialIntervalMs,
-  markTokenUnusable,
-  markTokenUsable,
   selectTokenForTrial,
   type AgentToken,
   type Stores,
@@ -61,6 +58,11 @@ export interface TokenTrialWatchOptions {
   trial: TokenTrialPort;
   /** `TokenRotator.reconsider` そのもの。この見張りは回し手の判断を1つも持たない。 */
   reconsider: TokenRotator['reconsider'];
+  /**
+   * `TokenRotator.recordTrialVerdict` そのもの。**記録を書くのは回し手の列の中だけ**
+   * （あちらの doc）——この見張りは `stores` を読むだけで、1行も書かない。
+   */
+  recordTrialVerdict: TokenRotator['recordTrialVerdict'];
   /** 結果の行き先。`apps/daemon/src/index.ts` の `settleTokenOutcome` と同じ1本。 */
   onOutcome: (outcome: TokenRotationOutcome) => Promise<void>;
   /** 主にテスト用。 */
@@ -130,32 +132,6 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     }
   }
 
-  /** `unusable` で `retryAt` が取れて記録と違えば、権威ある値で冷却を書き直す。 */
-  async function rewriteCooldownIfNeeded(
-    tokenId: string,
-    verdict: Extract<TokenCandidateVerdict, { verdict: 'unusable' }>,
-  ): Promise<void> {
-    if (verdict.retryAt === undefined) return;
-    const tokens = await options.stores.tokens.list();
-    const row = tokens.find((token) => token.id === tokenId);
-    if (row === undefined) return;
-    // **書く必要が無ければストアを書かない。**
-    if (row.cooldownUntil === verdict.retryAt) return;
-    const updated = tokens.map((token) =>
-      token.id === tokenId
-        ? markTokenUnusable(token, {
-            at: new Date(now()).toISOString(),
-            message: verdict.reason,
-            resets: { at: verdict.retryAt as number, source: 'quota_reset' },
-            // **使われない。** `resets` が在るので `nextCooldownUntil` は
-            // フォールバックの枝へ入らない——それでも型が要求するので既定を渡す。
-            fallbackCooldownMs: DEFAULT_TOKEN_COOLDOWN_MS,
-          })
-        : token,
-    );
-    await options.stores.tokens.replace(updated);
-  }
-
   async function handleFailure(
     token: AgentToken,
     verdict: Exclude<TokenCandidateVerdict, { verdict: 'usable' }>,
@@ -163,7 +139,8 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     const count = (failureCount.get(token.id) ?? 0) + 1;
     failureCount.set(token.id, count);
     if (verdict.verdict === 'unusable') {
-      await rewriteCooldownIfNeeded(token.id, verdict);
+      // `retryAt` が取れて記録と違うときだけ、回し手の列の中で書き直す。
+      await options.recordTrialVerdict({ tokenId: token.id, verdict });
       process.stderr.write(
         `alteroidd: 認証トークンの試し（id ${token.id} / 「${token.label}」）は通らなかった` +
           `（${verdict.reason}）。連続不通過: ${String(count)}\n`,
@@ -202,14 +179,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
 
     // **現役ではない。** 冷却の記録を消して、通常の見直しに委ねる
     // （`selectNextToken` が `ready` になったこの行を拾う）。
-    const tokens = await options.stores.tokens.list();
-    const row = tokens.find((t) => t.id === token.id);
-    if (row !== undefined) {
-      const updated = tokens.map((t) =>
-        t.id === token.id ? markTokenUsable(t, new Date(now()).toISOString()) : t,
-      );
-      await options.stores.tokens.replace(updated);
-    }
+    await options.recordTrialVerdict({ tokenId: token.id, verdict: { verdict: 'usable' } });
     const outcome = await options.reconsider({ reason: 'trial_succeeded' });
     await options.onOutcome(annotateOutcome(outcome, fold));
   }

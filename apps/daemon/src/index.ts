@@ -2079,6 +2079,7 @@ export async function main(): Promise<void> {
         }),
     },
     reconsider: (input) => tokenRotator.reconsider(input),
+    recordTrialVerdict: (input) => tokenRotator.recordTrialVerdict(input),
     onOutcome: (outcome) => settleTokenOutcome(outcome),
   });
 
