@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from './agent-events.js';
 import type {
   AgentPreCompactRecord,
+  AgentPreToolDecision,
+  AgentPreToolRecord,
   AgentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
@@ -23,6 +25,7 @@ import {
 } from './claude-provider.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { WORKER_AGENT_NAME } from './runner.js';
+import { captureStderr } from './testing.js';
 
 /**
  * `foldClaudeMessage` —— Claude のメッセージを中立イベントへ写す1本（#486）。
@@ -1220,5 +1223,280 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     });
 
     expect(options.hooks?.SubagentStop?.[0]?.hooks[0]).toBe(raw);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 書き側 —— PreToolUse の中立の判断の包み直し（#486「中立の口」3本目）
+// ---------------------------------------------------------------------------
+
+/**
+ * `wrapPreToolHook`（`claude-provider.ts` 内の private 関数）を、
+ * `buildCloneSessionOptions` / `buildManagerSessionOptions` が組み立てる
+ * `Options.hooks` 経由で固定する。
+ *
+ * ## ここで固定したいこと
+ *
+ * 1. **SDK の `PreToolUse` の生入力が、同じ値のまま中立の記録
+ *    （`AgentPreToolRecord`）として中立のフックへ届くこと**
+ * 2. **中立の判断（`AgentPreToolDecision`）の3つの `kind` が、それぞれ
+ *    `clone.ts` / `runner.ts` の実装が今日返している形とちょうど同じ
+ *    SDK の出力へ写ること**（`continue` → `{ continue: true }`、
+ *    `allow` / `deny` → 同じ形の `hookSpecificOutput`）
+ * 3. **実行時に未知の `kind` が渡ったら、安全側（`{ continue: true }`）へ
+ *    倒し、跡を1本残すこと**（型で塞いだ分岐の実行時の倒れ先。AGENTS.md
+ *    「テストを弱めずに直す」の「型で塞いだ分岐にも、実行時の倒れ先の歯を
+ *    足す」）
+ *
+ * **`clone.test.ts`「issue #863」/ `runner-pre-tool-use.test.ts` は、この
+ * 包み直しを経由した SDK 境界での挙動をすでに固定している**（実物の
+ * `#onPreToolUse` を配線した状態で、生の SDK 入出力を確かめる歯——今回は
+ * 1文字も変えていない）。ここではそれとは違う層——`wrapPreToolHook` 自身が
+ * 中立の記録・判断を正しく写すことを、単体で固定する。
+ *
+ * ## ⚠️ 型の網羅性そのものはここでは測れない
+ *
+ * `switch` の `default` 節で `never` への代入が効くこと（＝ `kind` を1つ
+ * 足すと `tsc` が落ちること）は、実行時の歯では固定できない——これは
+ * ビルド時の保証であって、`typecheck` が守る（AGENTS.md 同上）。ここで
+ * 固定するのは「実行時にその節へ来たときの倒れ先が安全か」だけである。
+ */
+describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3本目）', () => {
+  it('buildCloneSessionOptions: PreToolUse の生入力を同じ値のまま中立の記録として渡す', async () => {
+    let captured: AgentPreToolRecord | undefined;
+    const options = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: (record) => {
+        captured = record;
+        return { kind: 'continue' };
+      },
+    });
+
+    const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PreToolUse',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/tmp/t.jsonl',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_use_id: 'tu-1',
+      agent_id: 'agent-1',
+      agent_type: 'general-purpose',
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      toolName: 'Bash',
+      toolInput: { command: 'echo hi' },
+      agentId: 'agent-1',
+      agentType: 'general-purpose',
+    } satisfies AgentPreToolRecord);
+  });
+
+  it('buildCloneSessionOptions: 読めない・無い欄は作り物を出さずに省く', async () => {
+    let captured: AgentPreToolRecord | undefined;
+    const options = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: (record) => {
+        captured = record;
+        return { kind: 'continue' };
+      },
+    });
+
+    await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PreToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Bash',
+      tool_use_id: 'tu-1',
+    });
+
+    expect(captured).toEqual({ toolName: 'Bash' });
+    expect(captured).not.toHaveProperty('agentId');
+    expect(captured).not.toHaveProperty('agentType');
+  });
+
+  it('buildCloneSessionOptions: allow を返すと、clone.ts の実装と同じ形の hookSpecificOutput になる', async () => {
+    const options = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPreToolUse: () => ({
+        kind: 'allow',
+        reason: '人間が承認した許可に一致した（Bash(gh release edit:*)）',
+      }),
+    });
+
+    const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PreToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Bash',
+      tool_input: { command: 'gh release edit' },
+      tool_use_id: 'tu-2',
+    });
+
+    expect(result).toEqual({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: '人間が承認した許可に一致した（Bash(gh release edit:*)）',
+      },
+    });
+  });
+
+  it('buildManagerSessionOptions: PreToolUse の生入力を同じ値のまま中立の記録として渡す', async () => {
+    let captured: AgentPreToolRecord | undefined;
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: async () => ({ continue: true }),
+      onStop: () => {},
+      onPreToolUse: (record) => {
+        captured = record;
+        return { kind: 'continue' };
+      },
+      managerAutoMemoryEnabled: false,
+    });
+
+    const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PreToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Bash',
+      tool_input: { command: 'while true; do sleep 1; done', run_in_background: true },
+      tool_use_id: 'tu-3',
+      agent_id: 'agent-9',
+      agent_type: 'worker',
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      toolName: 'Bash',
+      toolInput: { command: 'while true; do sleep 1; done', run_in_background: true },
+      agentId: 'agent-9',
+      agentType: 'worker',
+    } satisfies AgentPreToolRecord);
+  });
+
+  it('buildManagerSessionOptions: deny を返すと、runner.ts の実装と同じ形の hookSpecificOutput になる', async () => {
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: async () => ({ continue: true }),
+      onStop: () => {},
+      onPreToolUse: () => ({
+        kind: 'deny',
+        reason: '無限に待つだけの形（代替: timeout でラップする）',
+      }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PreToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Bash',
+      tool_input: { command: 'until true; do sleep 1; done' },
+      tool_use_id: 'tu-4',
+    });
+
+    expect(result).toEqual({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: '無限に待つだけの形（代替: timeout でラップする）',
+      },
+    });
+  });
+
+  it('未知の kind が渡ったら安全側（{ continue: true }）へ倒し、跡を1本残す（実行時の倒れ先。型では弾かれるはずの値が渡ったときの防御）', async () => {
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: async () => ({ continue: true }),
+      onStop: () => {},
+      // **型では作れない値をわざと渡す** —— 将来 provider を足す側が
+      // `AgentPreToolDecision` に無い `kind` を返す実装ミスを模す
+      // （`memory.test.ts` の `bogus` と同じ流儀。`wrapPreToolHook` の doc
+      // 「実行時にここへ来るのは型で弾かれたはずの値が渡ったとき」）。
+      onPreToolUse: () => ({ kind: 'ask' } as unknown as AgentPreToolDecision),
+      managerAutoMemoryEnabled: false,
+    });
+
+    let result: unknown;
+    const lines = await captureStderr(async () => {
+      result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
+        hook_event_name: 'PreToolUse',
+        session_id: 's',
+        cwd: '/work',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hi' },
+        tool_use_id: 'tu-5',
+      });
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(lines.some((line) => line.includes('未知の AgentPreToolDecision.kind'))).toBe(true);
   });
 });
