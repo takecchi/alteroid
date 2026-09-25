@@ -15343,6 +15343,89 @@ describe('クローン — 同じマネージャーの連続する report をま
     await s.clone.stop();
   }, 15_000);
 
+  /**
+   * issue #955: 巨大な報告が束になると、束のターン入力そのものが文脈窓を
+   * 溢れさせうる（`MERGED_BATCH_SIZE_LIMIT` は件数しか締めていなかった）。
+   *
+   * **歯が測るのは3つ**——(a) 束のターン入力が予算に収まる (b) 切ったことと
+   * 全文の取り方（`journal_read`）を名乗る (c) その取り方が実際に全文を返す
+   * （`#journalIncomingBody` が束の全件を個別に日誌へ書いているので、
+   * `journal_read` 相当の条件で引き直せば見つかるはずである——「取り方が
+   * 分かる体裁のまま実際には取れない」を作っていないことを検算する）。
+   */
+  it(
+    '巨大な報告5件（各1.5万字。件ごとは予算未満だが合計は予算超過）の束は予算に収まり、' +
+      '切った件数と journal_read での取り方を名乗る。省いた分の全文は journal_read で実際に引ける（issue #955）',
+    async () => {
+      const s = setup();
+
+      s.clone.post(humanMessage('先客'));
+      await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+
+      // **1件は予算（47,500）未満だが、5件の合計（約7.5万字）は予算を超える**
+      // ように選んだ大きさ——「最新1件だけでも予算を超える」ケースは
+      // `renderListingFromEnd` 自身の歯が別に持っているので、ここでは
+      // 「複数件の合計が締まる」ほうを測る。
+      const huge = (label: string): string => `${label}先頭` + 'x'.repeat(15_000) + `${label}末尾`;
+      for (let i = 1; i <= 5; i += 1) {
+        s.clone.post(managerMessage(`huge${i}`, 'mgr-huge', huge(`報告${i}`)));
+      }
+
+      const batchHeadline = 'マネージャー mgr-huge から届いた報告を、処理待ちのあいだに続けて';
+      await waitFor(
+        () => (s.calls[0]?.inputs ?? []).some((input) => input.includes(batchHeadline)),
+        'まとめたターンが投げられる',
+      );
+      await settle();
+
+      const inputs = (s.calls[0] as FakeCall).inputs;
+      // **束ねられたターンを内容で探す**（固定 index を使わない）。ほかの
+      // 周期処理（`引き受けたまま終わっていない仕事は…` 等）が同じターンの
+      // 中に前置されることがあるため（`composeTurnInputText` は commitment /
+      // situation の断り書きを body の前に連結する）、見出し（`batchHeadline`）
+      // はこの束の本文にしか出ない逐語なので、これで検索すれば取り違えない。
+      const merged = inputs.find((input) => input.includes(batchHeadline)) ?? '';
+      expect(merged).not.toBe('');
+
+      // (a) 5件 × 1.5万字強（合計約7.5万字）を束ねているのに、束のターン入力
+      // （前置される commitment/situation の断り書きを含む）は
+      // 予算（MANAGER_REPORT_BATCH_BODY_BUDGET=47,500）＋構造の分にとどまる。
+      expect(merged.length).toBeLessThan(60_000);
+
+      // **末尾（最新）が優先して残る。** 「後の報告が前の報告を補足・訂正して
+      // いる」ため、最新の報告5本目は全文が残っているはずである。
+      expect(merged).toContain(huge('報告5'));
+      // 最も古い報告1本目は本文ごと省かれている（全文は含まれない）。
+      expect(merged).not.toContain(huge('報告1'));
+
+      // (b) 切ったことと、全文の取り方（journal_read）を名乗る。
+      const noticeLine = lineStartingWith(merged, '⚠ 本文の合計が文字数の予算');
+      expect(noticeLine).toContain('journal_read');
+      expect(noticeLine).toContain('types: ["exchange"]');
+      expect(noticeLine).toMatch(
+        /古い \d+ 件（5 件中、新しい \d+ 件だけを本文つきで出した）は本文を省いた/,
+      );
+
+      // `since` に埋め込まれた時刻を取り出す。
+      const sinceMatch = /since: "([^"]+)"/.exec(noticeLine);
+      expect(sinceMatch).not.toBeNull();
+      const since = sinceMatch?.[1] ?? '';
+
+      // (c) その取り方で、実際に省かれた報告1本目の全文が引けることを検算する。
+      const exchanges = (await s.stores.journal.list({
+        types: ['exchange'],
+        with: ['manager'],
+        since,
+        limit: 200,
+      })) as { text: string }[];
+      expect(exchanges.some((entry) => entry.text.includes(huge('報告1')))).toBe(true);
+      expect(exchanges.some((entry) => entry.text.includes(huge('報告5')))).toBe(true);
+
+      await s.clone.stop();
+    },
+    20_000,
+  );
+
   // **束ねられる報告は、定義上いちばん長く待った報告である。** 単発の経路
   // （`managerPrompt`）にだけ「受け取ってからの経過」が載って、こちらに載らないと、
   // **待った証拠がいちばん要る場所でだけ消える**（#562 PR-1 が入れたもの）。
