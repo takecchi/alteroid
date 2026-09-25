@@ -5224,20 +5224,30 @@ class Pool implements ManagerPool {
         // （このコメントの上、直近30行の `resources` はこの呼び出しが
         // `options.resources` 付きで呼ばれたときにしか払わない往復であり、
         // それは既存の opt-in のままである）。
-        const autoFolded =
+        // **`undefined` ＝ この runner の pids は見ていない（`resources` を
+        // 訊けなかった・pids が読めなかった・逼迫していなかった）。`[]` ＝
+        // 見たが候補が無かった（または全部見送った）。この2つを混ぜない**
+        // （AGENTS.md「取れない軸に0の行を作る」）——`autoFolded.length===0`
+        // で畳んだ結果全体を測ろうとすると、「逼迫していたが候補が0件だった」
+        // 回と「そもそも逼迫を見なかった」回が同じ形に潰れる。
+        const autoFolded: AutoFoldOutcome[] | undefined =
           entry.runnerId !== undefined && resources?.pids !== undefined
             ? await this.#autoFoldIdleOnRunnerIfUnderPressure(
                 entry.runnerId,
                 resources.pids,
                 managers,
               )
-            : [];
+            : undefined;
 
         return { overview, autoFolded };
       }),
     );
     const runners = placed.map((p) => p.overview);
-    const autoFolded = placed.flatMap((p) => p.autoFolded);
+    // **1台でも「見た」なら欄を出す。** 全台が `undefined`（誰も逼迫を見て
+    // いない）のときだけ欄そのものを省く——`autoFolded` の doc の3値
+    // （見なかった／見て0件／見て畳んだ・見送った）をここで潰さない。
+    const autoFoldedChecked = placed.some((p) => p.autoFolded !== undefined);
+    const autoFolded = placed.flatMap((p) => p.autoFolded ?? []);
 
     // デーモン自身の版。**自分のことなので取りに行く必要が無い**——runner のように
     // ネットワーク越しに訊く経路が無く、`resolveBuildRevision()` を直に呼べば
@@ -5249,13 +5259,15 @@ class Pool implements ManagerPool {
       runners,
       unassigned,
       daemonRevision,
-      ...(autoFolded.length === 0 ? {} : { autoFolded }),
+      ...(autoFoldedChecked ? { autoFolded } : {}),
     };
   }
 
   /**
    * Issue #1394 段④ 契機の門。`runnerId` の pids が逼迫していなければ、
-   * 候補すら見ない——`[]` を返すだけで、`managers` を1回も読まない。
+   * 候補すら見ない——`undefined` を返すだけで、`managers` を1回も読まない。
+   * **`undefined`（見ていない）と `[]`（見たが0件）を区別する**
+   * （呼び出し元 `runners()` の doc）。
    *
    * 逼迫していれば、その runner に割り当てられた委譲だけを対象に、段⑤の
    * 判定（`isManagerFoldCandidate`）を通し、候補になったものだけ
@@ -5265,8 +5277,8 @@ class Pool implements ManagerPool {
     runnerId: string,
     pids: { readonly current: number; readonly max: number },
     managers: readonly ManagerSummary[],
-  ): Promise<AutoFoldOutcome[]> {
-    if (!isPidsUnderPressure(pids)) return [];
+  ): Promise<AutoFoldOutcome[] | undefined> {
+    if (!isPidsUnderPressure(pids)) return undefined;
 
     const now = new Date(this.#now());
     // **段⑤と同じ判定を1回だけ計算する。** `runnerHasCapability` は runnerId

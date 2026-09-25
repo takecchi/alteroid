@@ -26,6 +26,7 @@ import {
   WITHHELD_ENV_KEYS,
   createManagerPool,
   guardArchiveRemoval,
+  type AutoFoldOutcome,
   type ManagerPool,
   type RunnerFleetOverview,
 } from './manager.js';
@@ -42,6 +43,7 @@ import { createProfileService } from './profile-service.js';
 import { createLocalRunner } from './runner-local.js';
 import {
   createRunnerRegistry,
+  RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RunnerHttpError,
   type RunnerAnswerOutcome,
   type RunnerClient,
@@ -54,6 +56,7 @@ import {
   type RunnerProfileResult,
   type RunnerRegistry,
   type RunnerResumeCommand,
+  type UnpushedWorkResult,
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus, JournalEntry } from './schema.js';
 import { workspaceLocatorSchema } from './schema.js';
@@ -2462,6 +2465,27 @@ function swappableRunner(runnerId = 'runner-primary') {
     held: new Map<string, string>(),
     /** 降ろしの呼びごとの中身（何回・何を降ろしたか）。 */
     credentialPushes: [] as { name: string; value: string }[][],
+    /**
+     * `resources()` が返す値（#1394 段④のテスト用）。**既定は `undefined`
+     * ——「訊けなかった」と同じ形。**
+     */
+    resources: undefined as RunnerPlacementResources | undefined,
+    /**
+     * `unpushedWork()` が返す値（#1394 段⑥のテスト用）。
+     *
+     * **`enableUnpushedWork()` を呼ぶまで、`runner.unpushedWork` は
+     * `undefined` のまま（メソッドそのものが無い）。** 既存の歯
+     * 「runner がこの口を持たないときは unavailable + reason が残り」
+     * （このファイル内）が `swappableRunner()` の既定を「未実装」と明記して
+     * 固定しているので、無条件にメソッドを生やすとその歯を壊す——常に生やす
+     * のではなく、opt-in の口を別に用意する。
+     */
+    unpushedWorkResult: undefined as UnpushedWorkResult | undefined,
+    /**
+     * `transcript()` が返す生ログ（#1394 段④のテスト用。`probeTurnEnds()` が
+     * 読む）。**既定は `null`——「本文が無い」と同じ形（従来どおり）。**
+     */
+    transcript: null as string | null,
   };
   const runner: RunnerClient = {
     runnerId,
@@ -2525,7 +2549,10 @@ function swappableRunner(runnerId = 'runner-primary') {
       return [...state.alive];
     },
     async transcript() {
-      return null;
+      return state.transcript;
+    },
+    async resources() {
+      return state.resources;
     },
     async credentials() {
       return [...state.held].map(([name, value]) => ({
@@ -2568,6 +2595,23 @@ function swappableRunner(runnerId = 'runner-primary') {
     /** ストリームだけが切れて繋ぎ直す（器はそのまま）。 */
     reconnect() {
       emit?.({ type: 'hello', runnerId });
+    },
+    /**
+     * 能力付きで名乗り直す（#1394 段(C)/段④のテスト用）。`swap()` /
+     * `reconnect()` は capabilities を持たない旧い runner の形を保つため
+     * 触っていない——これは能力を名乗る版を模す別口。
+     */
+    helloWithCapabilities(capabilities: string[]) {
+      emit?.({ type: 'hello', runnerId, capabilities });
+    },
+    /**
+     * `unpushedWork()` を持つ版へ変える（#1394 段⑥のテスト用）。**呼ぶまでは
+     * この口そのものが無い**（`state.unpushedWorkResult` の doc）。
+     */
+    enableUnpushedWork(result: UnpushedWorkResult | undefined) {
+      state.unpushedWorkResult = result;
+      (runner as { unpushedWork?: RunnerClient['unpushedWork'] }).unpushedWork = () =>
+        Promise.resolve(state.unpushedWorkResult);
     },
     /** SDK のセッションが立った、と伝える（本物は `start` の直後に上がってくる）。 */
     session(managerId: string, sessionId: string) {
@@ -7121,6 +7165,20 @@ class FakePoolRunner implements RunnerClient {
   /** 呼ばれた回数。**`resources()` は呼ばれないことを確かめるために数える。** */
   resourcesCalls = 0;
   credentialsCalls = 0;
+  /**
+   * `connect()` が受け取った合図の受け口（#1394 段(C)/段④のテスト用）。
+   * **既定は `null`——`connect()` を1回も呼ばれていない・もしくは呼ばれても
+   * この値を読まない限り、`hello()` を呼んでも何も起きない**（実物の
+   * `connect()` と同じく、名乗りは繋いだ相手にしか届かない）。
+   */
+  onEvent: ((event: RunnerEvent) => void) | null = null;
+  /**
+   * `unpushedWork()` が返す値（#1394 段⑥のテスト用）。**既定は `undefined`
+   * ——「確かめられなかった」を模す。** 自動畳みが未 push を理由に見送る
+   * ことをテストしたいときはこのままにし、実際に畳まれることを確かめたい
+   * ときは呼び出し側で「未 push 0・未コミット 0」の値を代入すること。
+   */
+  unpushedWorkResult: UnpushedWorkResult | undefined = undefined;
   profileCalls = 0;
   fakeCredentials: RunnerCredentialFingerprint[] = [];
   fakeProfile: RunnerProfileFingerprint | undefined;
@@ -7142,7 +7200,20 @@ class FakePoolRunner implements RunnerClient {
     this.resourcesCalls += 1;
     return this.report;
   }
-  async connect(): Promise<void> {}
+  async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+  }
+  /**
+   * 名乗り（hello）を模す。`capabilities` を省くと旧い runner の形
+   * （欄そのものが無い）になる。
+   */
+  hello(capabilities?: string[]): void {
+    this.onEvent?.({
+      type: 'hello',
+      runnerId: this.runnerId,
+      ...(capabilities === undefined ? {} : { capabilities }),
+    });
+  }
   async start(command: { managerId: string }): Promise<void> {
     this.started.push(command.managerId);
   }
@@ -7157,6 +7228,9 @@ class FakePoolRunner implements RunnerClient {
   async list(): Promise<RunnerManagerState[]> {
     this.listCalls += 1;
     return [];
+  }
+  async unpushedWork(): Promise<UnpushedWorkResult | undefined> {
+    return this.unpushedWorkResult;
   }
   async transcript(): Promise<string | null> {
     return null;
@@ -7854,6 +7928,325 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     expect(byLabel.get('runner-unreachable')?.resources).toBeUndefined();
     expect(byLabel.get('runner-no-cgroup')?.resources).toBeDefined();
     expect(byLabel.get('runner-no-cgroup')?.resources?.pids).toBeUndefined();
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
+
+/**
+ * Issue #1394 段④⑥⑦ — pids 逼迫を受けて `ManagerPool.runners({ resources: true })`
+ * が自動で畳む（か、見送る）ことを確かめる。
+ *
+ * **契機はこの呼び出し自身である。** 新しい `setInterval` は1本も足していない
+ * ——`resources()` が pids を実際に受け取った、まさにこの呼び出しの中で判定
+ * まで完結する（`#autoFoldIdleOnRunnerIfUnderPressure` の doc）。
+ */
+describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 段④⑥⑦）', () => {
+  /**
+   * 段⑤の5条件のうち、`status`/`awaitingBackground`/`runnerId` 以外
+   * （条件4: activityKind、条件5: 経過時間の起点）は「本当に走って `done` に
+   * 着地した」委譲でなければ自然には作れない——`turnEndReason` は
+   * `ManagerPool#probeTurnEnds()` が生ログの末尾を読んで計算する値で、`Job`
+   * には永続化されない（`ManagerRecord` だけが持つ）。台帳へ直接ジョブを
+   * 置くだけでは `activityKind: 'unknown'` のままになり、候補にならない。
+   *
+   * ⟹ ここでは `swappableRunner` で本物に近い経路（`restore()` →
+   * `probeTurnEnds()` → `report()`）を通し、実際に `activityKind: 'active'`
+   * かつ `status: 'done'` へ着地させてから pids 逼迫を起こす。
+   */
+  const TURN_END_TS = '2026-08-31T23:00:00.000Z';
+  const REPORT_AT = '2026-09-01T00:00:00.000Z';
+  const SEVEN_HOURS_LATER = Date.parse(REPORT_AT) + 7 * 3_600_000;
+
+  function transcriptWithEndTurn(): string {
+    return `${JSON.stringify({
+      type: 'assistant',
+      timestamp: TURN_END_TS,
+      message: { content: [{ type: 'text', text: '直した' }], stop_reason: 'end_turn' },
+    })}\n`;
+  }
+
+  /**
+   * 実際に `status: 'done'` かつ `activityKind: 'active'` へ着地した委譲を
+   * 1本作る。返り値の `clock` を進めれば、条件5（経過時間）の起点をまたげる。
+   */
+  async function setupActiveDoneCandidate(options: {
+    unpushedWorkResult?: UnpushedWorkResult;
+    pids?: { current: number; max: number };
+    capabilities?: string[];
+  }) {
+    const id = 'mgr-idle';
+    const fake = swappableRunner('runner-a');
+    fake.state.alive.push({
+      managerId: id,
+      status: 'running',
+      cwd: '/work/project',
+      request: 'バグを直して',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    });
+    fake.state.transcript = transcriptWithEndTurn();
+    // **`enableUnpushedWork` を呼ばなければ、この口そのものが無い版のまま**
+    // （＝ `kind: 'unavailable'`。「未pushが確かめられなかった」テストが使う）。
+    if (options.unpushedWorkResult !== undefined) {
+      fake.enableUnpushedWork(options.unpushedWorkResult);
+    }
+    if (options.pids !== undefined) {
+      fake.state.resources = { managers: 1, pids: options.pids };
+    }
+
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      id,
+      managerId: id,
+      createdAt: '2026-08-31T00:00:00.000Z',
+      // **`TURN_END_PROBE_QUIET_MS`（10分）より前にしておく**——`probeTurnEnds()`
+      // が「動いているものを叩かない」門で弾かないため。
+      updatedAt: '2026-08-31T23:30:00.000Z',
+      status: 'running',
+      summary: '走らせておいて',
+      request: 'バグを直して',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-a',
+    });
+
+    let clock = Date.parse(REPORT_AT);
+    const posted: unknown[] = [];
+    // **`swappableRunner()` の既定の `stop()` は no-op**（「abort() で外れても」
+    // の歯と同じ理由）——実際に畳まれたことを `abort()` の `sessionGone` 判定
+    // （`runner.list()` が空になったか）で確かめたいので、他の歯と同じ形で
+    // `state.alive` を実際に落とす `stop` を上乗せする。
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async stop(managerId: string) {
+        fake.state.alive = fake.state.alive.filter((s) => s.managerId !== managerId);
+      },
+    };
+    const registry = createRunnerRegistry([runner]);
+    const pool = createManagerPool({
+      stores,
+      post: (event) => posted.push(event),
+      runners: registry,
+      now: () => clock,
+    });
+
+    await pool.restore();
+    // **`restore()` 自体が `#persist()` を通して `updatedAt` を「いま」へ
+    // 進める。** そのままだと `probeTurnEnds()` の「動いているものを叩かない」
+    // 費用の門（`TURN_END_PROBE_QUIET_MS`＝10分）に即座に引っかかり、探りが
+    // 一度も走らない——`updatedAt` からの経過を作ってから呼ぶ。
+    clock += 20 * 60_000;
+    await pool.probeTurnEnds();
+    if (options.capabilities !== undefined) fake.helloWithCapabilities(options.capabilities);
+
+    fake.report(id, '直した', 'done');
+    await expect
+      .poll(async () => (await pool.list()).find((m) => m.managerId === id)?.status, {
+        timeout: 2000,
+      })
+      .toBe('done');
+
+    // 条件5（経過時間）をまたぐ——段⑤の閾値（6時間）を超える。
+    clock = SEVEN_HOURS_LATER;
+
+    // **ここまでの下準備（`restore()` の起こし直し通知・`report()` の配達）が
+    // 積んだ分は捨てる。** テストが見たいのは「pids 逼迫の判定そのものが
+    // 何を配ったか」だけである——下準備自体も `#post` を使うので、クリアしない
+    // と「何も配っていない」を確かめるテストが常に失敗する。
+    posted.length = 0;
+
+    return { id, fake, stores, pool, registry, posted, setClock: (ms: number) => (clock = ms) };
+  }
+
+  it('pids が逼迫していなければ、候補が居ても見ない（autoFolded 欄そのものが無い）', async () => {
+    const { id, pool, registry, posted } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 100, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    expect(overview.autoFolded).toBeUndefined();
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+    expect(posted).toEqual([]);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('pids が逼迫し、候補の5条件と未push安全弁をすべて満たせば自動で畳む', async () => {
+    const { id, pool, registry, posted, stores } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ managerId: id, runnerId: 'runner-a', outcome: 'folded' });
+
+    // 台帳が stopped へ進んでいる。
+    const after = (await pool.list()).find((m) => m.managerId === id);
+    expect(after?.status).toBe('stopped');
+
+    // 日誌に decision として残っている。
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    const foldDecision = decisions.find(
+      (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
+    );
+    expect(foldDecision).toBeDefined();
+    expect(foldDecision && 'decision' in foldDecision ? foldDecision.decision : '').toContain(id);
+
+    // クローンへ知らせている（`by !== 'clone'` なので #post される）。
+    expect(
+      posted.some(
+        (event) =>
+          typeof event === 'object' &&
+          event !== null &&
+          'managerId' in event &&
+          (event as { managerId?: string }).managerId === id,
+      ),
+    ).toBe(true);
+
+    // #315 の前提「畳んでも後から話しかけられる」が今日の main でも成り立つ
+    // ことは `manager.test.ts` の別の歯
+    // 「stopped の仕事でも、明示的な manager_send なら resume 経路を通って続く」
+    // が既に固定している——ここでは重複させない。
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('capabilities を名乗っていない runner では畳まない（条件3が偽のまま）', async () => {
+    const { id, pool, registry } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 900, max: 1000 },
+      // **`capabilities` を渡さない。** 旧い runner・まだ名乗っていない runner
+      // を模す——`runnerHasCapability` は `false` のままになる。
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    expect(overview.autoFolded).toEqual([]);
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('未 push の実装があれば畳まず、見送った理由を decision で残す', async () => {
+    const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+      unpushedWorkResult: {
+        cwd: '/work/project',
+        worktrees: [
+          { relativePath: '.', branch: 'work', unpushedCommitCount: 2, uncommittedChangeCount: 0 },
+        ],
+      },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
+
+    // 畳んでいない。
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    const skipDecision = decisions.find(
+      (entry) => 'decision' in entry && entry.decision.includes('[auto-fold-skip]'),
+    );
+    expect(skipDecision).toBeDefined();
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('未pushが確かめられなかった（unavailable）ときも安全側で畳まない', async () => {
+    const { id, pool, registry } = await setupActiveDoneCandidate({
+      // **`unpushedWorkResult` を渡さない——`undefined` のまま。**
+      // 「確かめられなかった」を模す（既定値）。
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.outcome).toBe('blocked-unpushed-work');
+    expect((await pool.list()).find((m) => m.managerId === id)?.status).toBe('done');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('候補になった直後に誰かが先に状態を変えていたら、安全側に倒して畳まない（raced）', async () => {
+    const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+      unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+    // **候補と判定された後、実際に畳む前の再読みで見える状態を変える。**
+    // 台帳を直接 `stopped` へ書き換える——「既に誰かが（例えば別の経路が）
+    // 先に畳んでいた」を模す。
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === id);
+    if (!job) throw new Error('準備に失敗');
+    await stores.jobs.putJob({ ...job, status: 'stopped' });
+
+    const overview = await pool.runners({ resources: true });
+
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.outcome).toBe('raced');
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('runnerId が違う委譲は、その runner が逼迫していても対象にしない', async () => {
+    // **逼迫している器は `runner-a`。委譲の `runnerId` は別の `runner-c`。**
+    // 両者を混同しないことを確かめる——同じ名前だと「対象にしない」ことの
+    // 検算にならない。
+    const pressured = new FakePoolRunner('runner-a', {
+      managers: 0,
+      pids: { current: 900, max: 1000 },
+    });
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({
+      id: 'mgr-other',
+      managerId: 'mgr-other',
+      createdAt: '2026-08-31T00:00:00.000Z',
+      updatedAt: '2026-08-31T00:00:00.000Z',
+      status: 'done',
+      summary: '直した',
+      request: 'バグを直して',
+      cwd: '/work/project',
+      sessionId: 'sess-mgr-other',
+      runnerId: 'runner-c',
+    });
+    const registry = createRunnerRegistry([pressured]);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => SEVEN_HOURS_LATER,
+    });
+
+    const overview = await pool.runners({ resources: true });
+
+    // **逼迫している `runner-a` 側では「見て0件」（`autoFolded: []`）。**
+    // `runner-c` の委譲はどのエントリの走査にも入らない——対象にすらしない。
+    expect(overview.autoFolded).toEqual([]);
+    expect((await pool.list()).find((m) => m.managerId === 'mgr-other')?.status).toBe('done');
 
     await pool.stop();
     await registry.stop();
