@@ -241,6 +241,62 @@ describe('foldClaudeMessage — system', () => {
     });
   });
 
+  it('task_notification の status / summary を捨てずに運ぶ（Issue #1373 続き）', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          status: 'failed',
+          summary: '枠(429)で打ち切られた',
+        }),
+      ),
+    ).toEqual({
+      type: 'delegation_notified',
+      taskId: 't-1',
+      status: 'failed',
+      summary: '枠(429)で打ち切られた',
+    });
+
+    // **未知の `status` も握り潰さず string のまま運ぶ**（`agent-events.ts` の
+    // `AgentDelegationNotified.status` の doc）。SDK が版で値を増やしても、
+    // 読み手（`runner.ts`）は `=== 'failed'` の一致だけを見るので安全側へ倒れる。
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-2',
+          status: 'some_future_status',
+        }),
+      ),
+    ).toEqual({ type: 'delegation_notified', taskId: 't-2', status: 'some_future_status' });
+
+    // **`summary` が長ければ `excerpt()` で切る。** 切った跡（`…`・省略した
+    // 文字数・全文字数）が付くことまでは固定するが、桁の正本は `excerpt.ts`
+    // 側の歯が持つので、ここでは「切られたこと」だけを見る。
+    const longSummary = 'あ'.repeat(1000);
+    const cut = only(
+      sdk({
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 't-3',
+        status: 'failed',
+        summary: longSummary,
+      }),
+    ) as { summary?: string };
+    expect(cut.summary).toBeDefined();
+    expect(cut.summary!.length).toBeLessThan(longSummary.length);
+    expect(cut.summary).toContain('省略');
+
+    // **`status` / `summary` が無ければキーごと省く**（代用値を作らない）。
+    expect(only(sdk({ type: 'system', subtype: 'task_notification', task_id: 't-4' }))).toEqual({
+      type: 'delegation_notified',
+      taskId: 't-4',
+    });
+  });
+
   it('**見ないと決めてある種類は0個になる**（間引きではなく判断である）', () => {
     // **`background_tasks_changed` はここに含めない**（#630 で「見ないと
     // 決めてある」から外れた——読んで `background_tasks` へ畳む。下の
