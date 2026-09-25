@@ -8720,11 +8720,6 @@ class Pool implements ManagerPool {
       }
 
       case 'report': {
-        if (process.env.DEBUG_AUTOFOLD === '1') {
-          process.stderr.write(
-            `DEBUG report event managerId=${event.managerId} status_before=${record.job.status} text=${event.text}\n`,
-          );
-        }
         // **止めたマネージャーを、後から届く出来事で甦らせない。** `abort()` が
         // `#retire()` しても、`#onEvent` は台帳から像を作り直す（`#load()`）ので、
         // 止めた後に届く `report` を無条件に処理すると `record.job.status` を
