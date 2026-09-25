@@ -220,6 +220,38 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
     expect((await stores.commitments.get(entry.id))?.closedAt).toBeUndefined();
   });
 
+  // **until の書き方の揺れで断らない**（PR #1561 で zod 4.6 が秒を省いた形を
+  // 落とすようになったのを受けて、読み方を日誌の since / until と同じ `Date.parse`
+  // に揃えた）。秒あり・秒なし（Z / +09:00）は同じ瞬間として読んで境界の行まで
+  // 閉じ、1ms 後の行は閉じない。壊れた値は1件も閉じない。
+  describe.each([
+    { label: '秒あり', until: '2026-02-01T00:00:00.000Z', closes: true },
+    { label: '秒なし（Z）', until: '2026-02-01T00:00Z', closes: true },
+    { label: '秒なし（+09:00）', until: '2026-02-01T09:00+09:00', closes: true },
+    { label: '壊れた値', until: '2026-02-01T25:99Z', closes: false },
+  ])('7b. until の書き方: $label', ({ until, closes }) => {
+    it(closes ? '境界ちょうどの行まで閉じ、1ms 後の行は閉じない' : '1件も閉じない', async () => {
+      const stores = createMemoryStores();
+      const atBoundary = entryAt(0, 'external', { at: '2026-02-01T00:00:00.000Z' });
+      const afterBoundary = entryAt(1, 'external', { at: '2026-02-01T00:00:00.001Z' });
+      await openAll(stores, [atBoundary, afterBoundary]);
+
+      const reply = await closer(stores)({
+        origin: ['external'],
+        until,
+        reason: 'until の書き方',
+        dryRun: false,
+      });
+
+      // 断ったことは戻り値でも見る——検査を消しても `Date.parse` が NaN を返して
+      // 何も当たらないので、閉じた件数だけでは「断った」と「0件だった」を区別できない。
+      expect(reply.includes(`until に渡された「${until}」は ISO8601 として読めない`)).toBe(!closes);
+
+      expect((await stores.commitments.get(atBoundary.id))?.closedAt !== undefined).toBe(closes);
+      expect((await stores.commitments.get(afterBoundary.id))?.closedAt).toBeUndefined();
+    });
+  });
+
   it('8. 0件の3つの区別は互いに異なる文言で、該当する段の実数を含む', async () => {
     // ① 台帳が空。
     const emptyStores = createMemoryStores();

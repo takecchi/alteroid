@@ -21,6 +21,7 @@ import { isCronExpression } from './cron.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
 import {
   describeUnreadableJournalTimeBoundary,
+  isReadableJournalTimeBoundary,
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
 import {
@@ -7268,12 +7269,15 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         // **読めない `until` を「絞り込みが当たらなかった」に混ぜない。** 混ぜると
-        // 打ち間違いが「0件だった」に化けて静かに通る。受ける形は器の他所と同じ
-        // ISO8601（`schema.ts` の `isoDateTime`、逐語: `z.string().datetime({ offset: true })`）。
-        if (
-          until !== undefined &&
-          !z.string().datetime({ offset: true }).safeParse(until).success
-        ) {
+        // 打ち間違いが「0件だった」に化けて静かに通る。
+        //
+        // **読めるかは `Date.parse` で見る**（日誌の `since` / `until` と同じ。
+        // `journal-time.ts` の `isReadableJournalTimeBoundary`）。以前は
+        // `z.string().datetime({ offset: true })` で見ていたが、zod 4.6 から秒を省いた
+        // 形（`2026-09-25T10:00Z`）を落とすようになり（PR #1561）、書き方の揺れだけで
+        // 断るようになった。絞り込みはもともと `Date.parse` で比べている（下の
+        // `untilMs`）ので、判定と比較の読み方がこれで1つに揃う。
+        if (until !== undefined && !isReadableJournalTimeBoundary(until)) {
           return text(
             `until に渡された「${until}」は ISO8601 として読めない` +
               '（例 2026-09-11T19:00:00.000Z）。**1件も閉じていない。**',
@@ -7609,11 +7613,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         // **読めない `before` を「絞り込みが当たらなかった」に混ぜない**
-        // （`commitment_close_many` の `until` と同じ理由）。
-        if (
-          before !== undefined &&
-          !z.string().datetime({ offset: true }).safeParse(before).success
-        ) {
+        // （`commitment_close_many` の `until` と同じ理由・同じ読み方。比較は
+        // `matchesInboxRemoveManyFilter` が `Date.parse` で行う）。
+        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
           return text(
             `before に渡された「${before}」は ISO8601 として読めない` +
               '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',

@@ -422,6 +422,41 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(await stores.inbox.pending()).toMatchObject({ count: 1 });
   });
 
+  // **before の書き方の揺れで断らない**（`commitment_close_many` の until と同じ。
+  // PR #1561 で zod 4.6 が秒を省いた形を落とすようになったのを受けて、読み方を
+  // `Date.parse` に揃えた）。秒あり・秒なし（Z / +09:00）は同じ瞬間として読んで
+  // 境界の行まで消し、1ms 後の行は残す。壊れた値は1件も消さない。
+  describe.each([
+    { label: '秒あり', before: '2026-02-01T00:00:00.000Z', removes: true },
+    { label: '秒なし（Z）', before: '2026-02-01T00:00Z', removes: true },
+    { label: '秒なし（+09:00）', before: '2026-02-01T09:00+09:00', removes: true },
+    { label: '壊れた値', before: '2026-02-01T25:99Z', removes: false },
+  ])('7b. before の書き方: $label', ({ before, removes }) => {
+    it(removes ? '境界ちょうどの行まで消し、1ms 後の行は残す' : '1件も消さない', async () => {
+      const stores = createMemoryStores();
+      const atBoundary = managerEvent(0, { at: '2026-02-01T00:00:00.000Z' } as Partial<InboxEvent>);
+      const afterBoundary = managerEvent(1, {
+        at: '2026-02-01T00:00:00.001Z',
+      } as Partial<InboxEvent>);
+      await putAll(stores, [atBoundary, afterBoundary]);
+
+      const reply = await remover(stores)({
+        types: ['manager_message'],
+        before,
+        reason: 'before の書き方',
+        dryRun: false,
+      });
+
+      // 断ったことは戻り値でも見る（`commitment_close_many` の 7b と同じ理由）。
+      expect(reply.includes(`before に渡された「${before}」は ISO8601 として読めない`)).toBe(
+        !removes,
+      );
+
+      const rest = await stores.inbox.peekPending();
+      expect(rest.map((r) => r.event.id)).toEqual(removes ? ['evt-1'] : ['evt-0', 'evt-1']);
+    });
+  });
+
   it('8. limit は古い側から limit 件だけを消し、残りは残す。戻り値に残件数が出る', async () => {
     const stores = createMemoryStores();
     const events = [0, 1, 2, 3, 4].map((i) => managerEvent(i));
