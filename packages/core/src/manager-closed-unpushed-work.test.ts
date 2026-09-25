@@ -60,8 +60,7 @@ interface ManualRunner {
     status: 'done' | 'lost' | 'failed',
     reason: string,
     unpushedWork?:
-      | { kind: 'ok'; result: UnpushedWorkResult }
-      | { kind: 'unavailable'; reason: string },
+      { kind: 'ok'; result: UnpushedWorkResult } | { kind: 'unavailable'; reason: string },
   ): void;
 }
 

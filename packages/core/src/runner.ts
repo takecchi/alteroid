@@ -372,9 +372,7 @@ export interface RunnerHostOptions {
    * （`readCgroupEventCountersFn` と同じ理由）。
    * `RunnerSessionOptions.finishUnpushedWorkFn` の doc を見よ。
    */
-  finishUnpushedWorkFn?: (options?: {
-    signal?: AbortSignal;
-  }) => Promise<UnpushedWorkResult>;
+  finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
 
 export interface RunnerHost {
@@ -589,8 +587,7 @@ class Host implements RunnerHost {
     ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #finishUnpushedWorkFn:
-    | ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>)
-    | undefined;
+    ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
 
   constructor(options: RunnerHostOptions) {
     this.runnerId = options.runnerId;
@@ -1240,9 +1237,7 @@ interface RunnerSessionOptions {
    * （`readCgroupEventCountersFn` の doc・`runner-fence.test.ts` の同じ注記と
    * 同型の実測）——そちらはこれを速い偽物へ差し替える。
    */
-  finishUnpushedWorkFn?: (options?: {
-    signal?: AbortSignal;
-  }) => Promise<UnpushedWorkResult>;
+  finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
 }
 
 /**
@@ -1688,7 +1683,8 @@ class RunnerSession {
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
     this.#finishUnpushedWorkFn =
-      options.finishUnpushedWorkFn ?? ((unpushedWorkOptions) => this.unpushedWork(unpushedWorkOptions));
+      options.finishUnpushedWorkFn ??
+      ((unpushedWorkOptions) => this.unpushedWork(unpushedWorkOptions));
     // **いま読み始める。** 「開いたとき」を指すのはこの瞬間でなければならない
     // ——`#finish()` の時点で読み直すと、それは「畳んだとき」の値でしかなく
     // 差分が取れない。`.catch` は付けない——`readCgroupEventCounters` は
@@ -3561,12 +3557,10 @@ class RunnerSession {
       signal: AbortSignal.timeout(FINISH_UNPUSHED_WORK_TIMEOUT_MS),
     })
       .then((result): FinishUnpushedWorkOutcome => ({ kind: 'ok', result }))
-      .catch(
-        (error: unknown): FinishUnpushedWorkOutcome => ({
-          kind: 'unavailable',
-          reason: `確かめようとして例外が飛んだ: ${String(error)}`,
-        }),
-      );
+      .catch((error: unknown): FinishUnpushedWorkOutcome => ({
+        kind: 'unavailable',
+        reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+      }));
     // **「畳んだとき」の1点を、ここで初めて読む（Issue #1517「最小の形」1）。**
     // `#openedCgroupEvents` は構築時（＝「開いたとき」）に読み始めた
     // `Promise` で、ここで初めて await する——構築からここまでの間に

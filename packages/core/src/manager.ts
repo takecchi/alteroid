@@ -5955,7 +5955,9 @@ class Pool implements ManagerPool {
   ): Promise<void> {
     const at = new Date(this.#now()).toISOString();
     const observation = unpushedWorkObservationOf(outcome, at);
-    if (!isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)) {
+    if (
+      !isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
+    ) {
       return;
     }
     record.job.lastUnpushedWorkObservation = observation;
@@ -10457,7 +10459,10 @@ class Pool implements ManagerPool {
           const at = new Date(this.#now()).toISOString();
           const observation = unpushedWorkObservationOf(event.unpushedWork, at);
           if (
-            isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
+            isUnpushedWorkObservationAtLeastAsNewAs(
+              observation,
+              record.job.lastUnpushedWorkObservation,
+            )
           ) {
             record.job.lastUnpushedWorkObservation = observation;
           }

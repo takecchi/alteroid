@@ -51,9 +51,7 @@ afterEach(async () => {
 
 function hostThatThrows(
   error: unknown,
-  finishUnpushedWorkFn?: (options?: {
-    signal?: AbortSignal;
-  }) => Promise<UnpushedWorkResult>,
+  finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>,
 ): {
   host: RunnerHost;
   waitForClosed: () => Promise<Extract<RunnerEvent, { type: 'closed' }>>;
@@ -87,9 +85,7 @@ function hostThatThrows(
 
 async function closedAfterThrowing(
   error: unknown,
-  finishUnpushedWorkFn?: (options?: {
-    signal?: AbortSignal;
-  }) => Promise<UnpushedWorkResult>,
+  finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>,
 ): Promise<Extract<RunnerEvent, { type: 'closed' }>> {
   const { host, waitForClosed } = hostThatThrows(error, finishUnpushedWorkFn);
   await host.start({ managerId: 'mgr-1', request: '最初の依頼', cwd: '/work/project' });
