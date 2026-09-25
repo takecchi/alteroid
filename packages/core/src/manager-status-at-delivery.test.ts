@@ -38,6 +38,16 @@ interface ManualRunner {
     fields?: { awaitingBackground?: { count: number; breakdown: string } },
   ): void;
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
+  /**
+   * マネージャーが確認を上げる。**`report(..., 'waiting_human')` の前に呼ぶ
+   * ためだけの足場**（`manager.ts` の `case 'report'` が `event.status ===
+   * 'waiting_human'` かつ `record.waiting` が空のときは `running` へ補正する
+   * ようになった——Issue #1592 の副作用の疑いの直し。この歯が確かめたいのは
+   * 「`text` を読まずに構造化欄が付くか」であって「`waiting` が空でも
+   * `waiting_human` を名乗れるか」ではないので、`waiting_human` を使う歯では
+   * 実際に確認を1件積んでから報告する）。
+   */
+  ask(managerId: string, requestId: string, summary: string): void;
 }
 
 function manualRunner(runnerId = 'runner-primary'): ManualRunner {
@@ -102,6 +112,16 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
       if (at !== -1) alive.splice(at, 1);
       emit?.({ type: 'closed', managerId, status, reason });
+    },
+    ask(managerId, requestId, summary) {
+      emit?.({
+        type: 'ask',
+        managerId,
+        requestId,
+        kind: 'permission',
+        summary,
+        askedAt: new Date().toISOString(),
+      });
     },
   };
 }
@@ -177,6 +197,18 @@ describe('manager.ts の producer 側: statusAtDelivery（issue #870）', () => 
   it('プレーンな report でも、text に status= の飾りが無いまま statusAtDelivery が付く', async () => {
     const { pool, inbox, fake } = await runningManualSetup();
     const before = managerMessages(inbox).length;
+
+    // **確認を1件積んでから報告する（Issue #1592 の副作用の疑いの直し以降は
+    // 必須）。** `case 'report'` は `event.status === 'waiting_human'` かつ
+    // `record.waiting` が空なら `running` へ補正するので、`waiting_human` を
+    // 名乗るこの歯では実際に確認を先に上げて `record.waiting` を非空にする
+    // ——この歯が確かめたいのは「text を読まずに構造化欄が付くか」であって
+    // 「waiting が空でも waiting_human を名乗れるか」ではない。
+    fake.ask('mgr-sad', 'req-sad-1', '確認したいことがある');
+    await vi.waitFor(async () => {
+      const summary = (await pool.list()).find((entry) => entry.managerId === 'mgr-sad');
+      if ((summary?.waiting.length ?? 0) === 0) throw new Error('ask がまだ届いていない');
+    });
 
     fake.report('mgr-sad', 'ただの報告です', 'waiting_human');
 

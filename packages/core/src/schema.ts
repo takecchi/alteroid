@@ -3749,14 +3749,25 @@ export const jobSchema = z.object({
    * ## 何を書くか——「書いた瞬間」は前ではなく後
    *
    * `case 'report':`（`manager.ts`）はこの欄と同じ瞬間に `record.job.status`
-   * を `event.status` へ書き換える。**ここに書くのは書き換え後の値
-   * （＝`event.status`）である**——書き換え前の値（この report が届く直前
+   * を `event.status` へ書き換える。**ここに書くのは `event.status`（報告が
+   * 名乗った値）そのものである**——書き換え前の値（この report が届く直前
    * まで台帳が名乗っていた status。多くは `running`）ではない。理由は、
    * 突き合わせたい問いが「この報告が運んだ内容は、どの status に対応する
    * ものか」だからである。`report` イベントの `status` は「このターンを
    * 終えて、いまはこの状態で待っている」を意味する。前者（書き換え前）を
    * 採ると、この欄はほぼ常に `running` になり、比較はほぼ常に「違う」から
    * 始まってしまう。
+   *
+   * **⚠️ 例外が1つある（Issue #1592 の副作用の疑い）。** `event.status ===
+   * 'waiting_human'` かつ `record.waiting` が空（＝待っている確認が実際には
+   * 無い）なら、`record.job.status` は `event.status` をそのまま採らず
+   * `'running'` へ補正する（`manager.ts` の `case 'report'` の該当コメント）。
+   * **この欄（`lastReportStatus`）は補正しない**——`event.status` を
+   * そのまま残す。だから、この例外に当たった回だけ、この欄と
+   * `record.job.status` が同じ瞬間に別の値を持つ。**これは壊れではなく
+   * `describeReportDrift` の入力そのもの**——「報告が名乗った前提（この
+   * 欄）と、いまの状態（`status`）が違う」を言うための欄なので、ここでだけ
+   * 両者が一致しないのは設計どおりである。
    *
    * ## 何のために読まれるか
    *

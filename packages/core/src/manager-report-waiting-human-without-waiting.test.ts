@@ -85,7 +85,12 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
           throw new Error('canUseTool が登録されていない');
         }
         // fire-and-forget。settle するのは `#settleAll()` だけ。
-        void options.canUseTool(toolName, input, { signal: new AbortController().signal });
+        // `extra` の完全な型（`suggestions` 等）はこの歯では使わないので、
+        // `shutdown-report.test.ts` の `postToolUse` と同じく `as never` で
+        // 縮める。
+        void options.canUseTool(toolName, input, {
+          signal: new AbortController().signal,
+        } as never);
       },
     });
 
@@ -237,7 +242,10 @@ async function firstSession(sessions: readonly FakeSession[]): Promise<FakeSessi
   });
 }
 
-async function summaryOf(pool: ManagerPool, managerId: string): Promise<ManagerSummary | undefined> {
+async function summaryOf(
+  pool: ManagerPool,
+  managerId: string,
+): Promise<ManagerSummary | undefined> {
   const list = await pool.list();
   return list.find((entry) => entry.managerId === managerId);
 }

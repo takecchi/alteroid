@@ -8936,10 +8936,43 @@ class Pool implements ManagerPool {
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
         record.job.status = event.status;
+        // **`waiting` が空なら `waiting_human` を名乗らせない（Issue #1592
+        // の副作用の疑い、結合テストで再現・確認した）。**
+        //
+        // `runner.ts` の `RunnerSession#stop()`（#1533 のオーナー判断）は
+        // `#settleAll(reason)`（未決の確認を解く。`settled` を emit して
+        // `record.waiting` を空にする）→ … →
+        // `#flushUnreported(reason, statusAtStop)`（`statusAtStop` は
+        // `#settleAll` より**前**に控えた値）という順で畳む。喋った本文が
+        // 在れば、この `report` は「解かれる前」の状態（`waiting_human`）を
+        // 名乗ったまま届く——直上の代入がそれをそのまま `record.job.status`
+        // へ書くと、`settled` が空にした直後を「解かれる前」の値で上書き
+        // することになる。**器の入れ替え**（`Host#shutdown` → `stop('runner
+        // が停止した。')`）はデーモンが stop を指示していないので、
+        // `abort()` の `record.job.status = 'stopped'`（無条件の上書き）に
+        // 頼れず、この食い違いが台帳に残ったままになる（`manager_stop` の
+        // 経路は `abort()` の上書きで最終的には正しくなる——結合テストで
+        // 両経路とも実測した）。
+        //
+        // **`case 'settled'` が空のとき `running` に戻すのと同じ判断へ
+        // 揃える。** 待っている確認が無いのに `waiting_human` を名乗る
+        // ことはできない——「解けた後」の事実（`record.waiting`）を
+        // `event.status` より優先する。
+        //
+        // **`event.status` そのものは書き換えない。** 報告が名乗った値は
+        // `lastReportStatus`（この少し下）にそのまま残す——「何を名乗ったか」
+        // の記録と「いまの状態をどう数えるか」の判断を1つに畳まない。
+        if (event.status === 'waiting_human' && record.waiting.length === 0) {
+          record.job.status = 'running';
+        }
         // **「書いた瞬間」は書き換え後の値（Issue #1036）。** `event.status`
         // を直接使う——`record.job.status` を読み直しても同じ値だが、直上の
         // 代入と同じ値であることを1目で分かるようにするため直接使う。
         // **既定値は作らない**（`schema.ts` の `lastReportStatus` の doc）。
+        // **`record.job.status` とは意図して別の値になりうる**（直上の
+        // `waiting` が空のときの補正）——`lastReportStatus` は「報告が何を
+        // 名乗ったか」を残す欄で、「いまの状態をどう数えるか」の欄ではない
+        // （`schema.ts` の `lastReportStatus` の doc）。
         record.job.lastReportStatus = event.status;
         // **止めた後に畳んだ本文（Issue #1038）は、応答として終わった回では
         // 消す。** ここへ来られたのは `record.job.status === 'stopped'` の
