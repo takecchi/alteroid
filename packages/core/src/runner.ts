@@ -1272,7 +1272,7 @@ type FinishUnpushedWorkOutcome =
   | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
-class RunnerSession implements ResumeRecoveryHost {
+class RunnerSession {
   readonly #id: string;
   readonly #request: string;
   readonly #cwd: string;
@@ -2503,97 +2503,96 @@ class RunnerSession implements ResumeRecoveryHost {
    * 「まだ続けられるもの」としてクローンへ見え続ける。
    *
    * **手順そのものは `runner-resume-recovery.ts` へ切り出した**（Issue #1190
-   * 案Z）。ここは {@link ResumeRecoveryHost} を実装した `this` を渡すだけの薄い
-   * 口である——触るフィールドの持ち主は変わっていない（切り出しの理由・限界・
-   * 順序の約束の逐語は `recoverFromFailedResume`（`runner-resume-recovery.ts`）
-   * 自身の doc を見よ）。
+   * 案Z）。ここは {@link ResumeRecoveryHost} を実装した `#resumeRecoveryHost`
+   * （private フィールド。下の宣言を見よ）を渡すだけの薄い口である——触る
+   * フィールドの持ち主は変わっていない（切り出しの理由・限界・順序の約束の
+   * 逐語は `recoverFromFailedResume`（`runner-resume-recovery.ts`）自身の
+   * doc を見よ）。
+   *
+   * **`ResumeRecoveryHost` は `class … implements` にしない。** 実装すると
+   * 9本のメソッド（`teardownForRecreate` 等）が `RunnerSession` の**公開面**に
+   * 生える——`runner.ts` の中の誰でも、手順の断片を順序を無視して呼べるように
+   * なってしまい、案Zの動機（「順序の約束が関数の境界の内側に入り、呼び出し側
+   * から破れなくなる」）と正反対になる。代わりに、`#resumeRecoveryHost` を
+   * private フィールドとしてオブジェクトリテラルで組み立てる——各メソッドは
+   * private フィールドを閉じ込めたアロー関数で、`RunnerSession` の外はおろか
+   * **同じクラスの他のメソッドからも名指しで呼べない**（フィールドとしてしか
+   * 参照できず、しかも `ResumeRecoveryHost` 型を知っているのは
+   * `recoverFromFailedResume` の呼び出し1箇所だけ）。
    */
   #recoverFromFailedResume(reason: string): ResumeRecoveryOutcome {
-    return recoverFromFailedResume(this, reason);
+    return recoverFromFailedResume(this.#resumeRecoveryHost, reason);
   }
 
-  // -------------------------------------------------------------------------
-  // `ResumeRecoveryHost`（`runner-resume-recovery.ts`）の実装。
-  //
-  // **ここに書いてあるのは委譲だけで、判断は無い。** 何を・どの順で呼ぶかは
-  // `recoverFromFailedResume`（`runner-resume-recovery.ts`）が持つ。各メソッドの
-  // doc は `ResumeRecoveryHost` 側にあるので、ここでは繰り返さない。
-  // -------------------------------------------------------------------------
-
-  takeResumeAttempt(): { sessionId: string } | null {
-    const attempt = this.#resumeAttempt;
-    this.#resumeAttempt = null;
-    return attempt;
-  }
-
-  hasProgressed(): boolean {
-    return this.#progressed;
-  }
-
-  renderSeedRecord(): string | null {
-    return renderSessionLog(this.#seed);
-  }
-
-  closeWorkerWaitWindow(): void {
-    this.#closeWorkerWaitWindow();
-  }
-
-  discardCarriedOverWork(): void {
-    // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
-    // 前のセッションが開いていた作業者の `task_id` を一切知らない。持ち越すと
-    // 二度と来ない `task_notification` を待ち続けて区間が永久に閉じない。
-    this.#openTasks.clear();
-    // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
-    // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
-    // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
-    // 次のセッションの最初のターンの数に入る。
-    this.#turnTally.discardOpenedWorkersAndRejections();
-  }
-
-  emitResumeFailed(input: { sessionId: string; reason: string; recovered: boolean }): void {
-    this.#emit({
-      type: 'resume_failed',
-      managerId: this.#id,
-      sessionId: input.sessionId,
-      reason: input.reason,
-      recovered: input.recovered,
-    });
-  }
-
-  teardownForRecreate(): string[] {
-    // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
-    // 引き継ぎの一言を横取りする。
-    this.#generation += 1;
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
-    this.#query = null;
-    this.#reader = null;
-    this.#sessionId = undefined;
-    // 新しいセッションは resume しないので、素材は本文へ畳んで渡す。
-    this.#seed = undefined;
-    // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
-    // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
-    return this.#input
-      .splice(0)
-      .map((message) => String(message.message.content))
-      .filter((text) => text.length > 0);
-  }
-
-  pushHandoff(input: {
-    sessionId: string;
-    reason: string;
-    record: string;
-    carried: readonly string[];
-  }): void {
-    this.push(handoffPrompt(input));
-  }
-
-  openSession(): void {
-    this.#open();
-  }
+  /**
+   * `ResumeRecoveryHost`（`runner-resume-recovery.ts`）の実装。
+   *
+   * **ここに書いてあるのは委譲だけで、判断は無い。** 何を・どの順で呼ぶかは
+   * `recoverFromFailedResume`（`runner-resume-recovery.ts`）が持つ。各メソッドの
+   * doc は `ResumeRecoveryHost` 側にあるので、ここでは繰り返さない。
+   *
+   * **`RunnerSession` の構築時に1回だけ組み立てる。** 呼ぶたびに作り直しても
+   * 実害は無い（9個のアロー関数を包むオブジェクト1つ、コストは無視できる）が、
+   * `#recoverFromFailedResume` は3箇所から呼ばれるだけの低頻度経路なので、
+   * どちらでも良い——フィールドとして1回だけ作る形を採った。
+   */
+  readonly #resumeRecoveryHost: ResumeRecoveryHost = {
+    takeResumeAttempt: () => {
+      const attempt = this.#resumeAttempt;
+      this.#resumeAttempt = null;
+      return attempt;
+    },
+    hasProgressed: () => this.#progressed,
+    renderSeedRecord: () => renderSessionLog(this.#seed),
+    closeWorkerWaitWindow: () => this.#closeWorkerWaitWindow(),
+    discardCarriedOverWork: () => {
+      // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
+      // 前のセッションが開いていた作業者の `task_id` を一切知らない。持ち越すと
+      // 二度と来ない `task_notification` を待ち続けて区間が永久に閉じない。
+      this.#openTasks.clear();
+      // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
+      // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
+      // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
+      // 次のセッションの最初のターンの数に入る。
+      this.#turnTally.discardOpenedWorkersAndRejections();
+    },
+    emitResumeFailed: (input) => {
+      this.#emit({
+        type: 'resume_failed',
+        managerId: this.#id,
+        sessionId: input.sessionId,
+        reason: input.reason,
+        recovered: input.recovered,
+      });
+    },
+    teardownForRecreate: () => {
+      // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
+      // 引き継ぎの一言を横取りする。
+      this.#generation += 1;
+      try {
+        this.#query?.close();
+      } catch {
+        // 既に閉じている
+      }
+      this.#query = null;
+      this.#reader = null;
+      this.#sessionId = undefined;
+      // 新しいセッションは resume しないので、素材は本文へ畳んで渡す。
+      this.#seed = undefined;
+      // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
+      // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
+      return this.#input
+        .splice(0)
+        .map((message) => String(message.message.content))
+        .filter((text) => text.length > 0);
+    },
+    pushHandoff: (input) => {
+      this.push(handoffPrompt(input));
+    },
+    openSession: () => {
+      this.#open();
+    },
+  };
 
   /**
    * 中立イベント1件へ反応する（`agent-events.ts` の表の (ii)）。

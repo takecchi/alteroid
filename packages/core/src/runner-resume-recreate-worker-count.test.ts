@@ -254,3 +254,57 @@ describe('#1373: resume に失敗して作り直す経路でも、そのター�
     expect(sessions).toHaveLength(1);
   });
 });
+
+type WorkerWaitEvent = Extract<RunnerEvent, { type: 'worker_wait' }>;
+
+function workerWaitEvents(events: readonly RunnerEvent[]): WorkerWaitEvent[] {
+  return events.filter((event): event is WorkerWaitEvent => event.type === 'worker_wait');
+}
+
+/**
+ * **Issue #1190（案Z）の順序の約束の黒箱の歯。** 逐語は
+ * `packages/core/src/runner-resume-recovery.ts` 冒頭 doc（元は `runner.ts` の
+ * `#recoverFromFailedResume` に在った）の「`close()` を先に、`clear()` を
+ * 後に。」——`#closeWorkerWaitWindow` が `settled` を「その時点の `#openTasks`
+ * が空か」から導くので、`#openTasks.clear()` より前に読ませないと、開いた
+ * ままの区間が `settled: true`（＝全員から受け切った）に化ける。
+ *
+ * 上の「前のセッションで開いた作業者は…」の歯と**同じ組み立て**（resume に
+ * 失敗する瞬間に作業者を2体開いたまま `recovered` 枝へ入る）を使うが、あちらは
+ * 作り直した後の**報告の本文**しか見ていない。ここで見るのは、resume が
+ * 失敗した**その瞬間**に降りる `worker_wait` イベントの `settled` である。
+ */
+describe('#1190 案Z: resume に失敗した瞬間の worker_wait は、開いたままの区間を settled: false のまま降ろす', () => {
+  it('task_started が2件・task_notification が0件のまま resume に失敗しても、settled: false が上がる', async () => {
+    const { host, events, sessions } = setup();
+
+    await host.resume({
+      managerId: 'mgr-settled',
+      sessionId: 'sess-dead-settled',
+      cwd: '/work/project',
+      request: '最初の依頼',
+      entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
+    });
+
+    const first = await nthSession(sessions, 0);
+    // 作業者を2体開いたまま、結果を1つも返さずに閉じる
+    // （`#recoverFromFailedResume` の `recovered` 枝へ入る）。
+    await first.taskStarted('task-1');
+    await first.taskStarted('task-2');
+    first.endStream();
+
+    // 作り直した2本目のセッションが立ち上がるまで待つ
+    // （`recovered` で終わったことの確認——`unresumable` なら立たない）。
+    await nthSession(sessions, 1);
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.tasks).toBe(2);
+    expect(event.settled).toBe(false);
+  });
+});
