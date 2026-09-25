@@ -53,6 +53,35 @@ import {
 
 export const TOKEN_TRIAL_WATCH_TICK_MS = 60_000;
 
+/**
+ * セッション由来の観測が、偽陽性の退き方（設計点8）の材料になる「本物の拒否」か
+ * （issue #1543）。
+ *
+ * **状態の変化（`transition === 'rejected'`）だけを見てはいけない。** 試しは
+ * デーモンの中の1ターンなので、マネージャーの `#rateLimits` の記憶は書き換わら
+ * ない ⟹ その鍵が前に拒否されていた記憶が残ったまま、層が同じ鍵ですぐまた
+ * 拒否されると、`usageTransitionOf(rejected → rejected)` は `undefined` を
+ * 返し、観測は `transition` 無し・`statusNow: 'rejected'` で届く。**まさに
+ * 設計点8が防ぐ場面（試しは通るが層は通らない）で、間隔が倍にならなかった。**
+ * 回し手は同じ観測を拒否として扱っている（`decideTokenRotation` の
+ * `transition === 'rejected' || statusNow === 'rejected'`。#668）ので、ここも
+ * いまの状態を見る。
+ *
+ * **世代の照合（`freshness === 'current'`）は要求しない。** 回し手がそれを
+ * 要求するのは「古い観測で鍵を回さない」ためだが、ここで起きるのは間隔を
+ * 伸ばすことだけで、しかも `noteRejection` は試しで通した直後の窓のあいだに
+ * 同じ鍵へ届いた拒否しか数えない ⟹ 古い観測が紛れても、倒れる向きは安全側
+ * （試す回数が減る）である。
+ */
+export function isRejectionForTrialBackoff(observation: {
+  transition?: 'entered_overage' | 'rejected';
+  statusNow?: string;
+  observedBy?: { tokenId?: string };
+}): observation is { observedBy: { tokenId: string } } & typeof observation {
+  if (observation.observedBy?.tokenId === undefined) return false;
+  return observation.transition === 'rejected' || observation.statusNow === 'rejected';
+}
+
 export interface TokenTrialWatchOptions {
   stores: Stores;
   trial: TokenTrialPort;

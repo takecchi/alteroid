@@ -3,6 +3,7 @@ import {
   TOKEN_TRIAL_INTERVAL_MS,
   createMemoryStores,
   createTokenRotator,
+  usageTransitionOf,
   type AgentToken,
   type Stores,
   type TokenCandidateVerdict,
@@ -12,7 +13,7 @@ import {
 } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { startTokenTrialWatch } from './token-trial-watch.js';
+import { isRejectionForTrialBackoff, startTokenTrialWatch } from './token-trial-watch.js';
 
 /**
  * ダメ元の試し（Issue #1501）の目盛り（`token-trial-watch.ts`）。
@@ -428,5 +429,40 @@ describe('token-trial-watch: 偽陽性の退き方（設計点8）', () => {
     await tickFor(20);
     watch.stop();
     expect(trial.calls).toEqual(['a', 'a']);
+  });
+});
+
+describe('isRejectionForTrialBackoff（issue #1543）', () => {
+  it('🔴 前に拒否されていた鍵がすぐまた拒否された回（transition 無し・statusNow: rejected）も本物の拒否と数える', () => {
+    // マネージャーの記憶が rejected のまま、次の観測も rejected なら状態の変化は立たない。
+    const transition = usageTransitionOf(
+      { status: 'rejected', kind: 'five_hour' },
+      { status: 'rejected', kind: 'five_hour' },
+    );
+    expect(transition).toBeUndefined();
+    expect(
+      isRejectionForTrialBackoff({
+        transition,
+        statusNow: 'rejected',
+        observedBy: { tokenId: 'b' },
+      }),
+    ).toBe(true);
+  });
+
+  it('状態の変化として拒否が立った回も数える', () => {
+    expect(
+      isRejectionForTrialBackoff({ transition: 'rejected', observedBy: { tokenId: 'b' } }),
+    ).toBe(true);
+  });
+
+  it('拒否でない観測・鍵の身元が無い観測は数えない', () => {
+    expect(isRejectionForTrialBackoff({ statusNow: 'allowed', observedBy: { tokenId: 'b' } })).toBe(
+      false,
+    );
+    expect(
+      isRejectionForTrialBackoff({ transition: 'entered_overage', observedBy: { tokenId: 'b' } }),
+    ).toBe(false);
+    expect(isRejectionForTrialBackoff({ statusNow: 'rejected' })).toBe(false);
+    expect(isRejectionForTrialBackoff({ statusNow: 'rejected', observedBy: {} })).toBe(false);
   });
 });

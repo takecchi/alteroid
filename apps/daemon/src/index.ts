@@ -56,7 +56,11 @@ import {
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
-import { startTokenTrialWatch, type TokenTrialWatch } from './token-trial-watch.js';
+import {
+  isRejectionForTrialBackoff,
+  startTokenTrialWatch,
+  type TokenTrialWatch,
+} from './token-trial-watch.js';
 import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
@@ -1682,7 +1686,9 @@ export async function main(): Promise<void> {
       // 直後の窓のあいだに届いたら、その鍵の試しの間隔を倍にする。ここは
       // 材料を渡すだけで、日誌にも受信箱にも触らない——それは直後の
       // `tokenRotator.observe` → `settleTokenOutcome` が普段どおり行う。
-      if (observation.transition === 'rejected' && observation.observedBy?.tokenId !== undefined) {
+      // **状態の変化だけでなく、いまの状態も見る**（issue #1543。
+      // `isRejectionForTrialBackoff` の doc）。
+      if (isRejectionForTrialBackoff(observation)) {
         tokenTrialWatch?.noteRejection(observation.observedBy.tokenId);
       }
       const outcome = await tokenRotator.observe(observation);
