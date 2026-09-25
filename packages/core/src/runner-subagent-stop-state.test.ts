@@ -53,6 +53,44 @@ describe('RunnerSubagentStopState — 背景タスクの所有者表', () => {
     // 新しく積んだものは引ける。
     expect(state.backgroundTaskOwner(`t${BACKGROUND_TASK_OWNER_LIMIT}`)).toBe('agent-overflow');
   });
+
+  /**
+   * Issue #1554: `command`（3番目の任意引数）は所有者と同じ呼び出しで一緒に
+   * 控える。読めなければ何も持たない——空文字と混ぜない（他の任意欄と同じ
+   * 作法。`backgroundTaskCommand` の doc）。
+   */
+  it('command を渡すと backgroundTaskCommand で引ける。渡さなければ undefined', () => {
+    const state = new RunnerSubagentStopState();
+    expect(state.backgroundTaskCommand('t1')).toBeUndefined();
+
+    state.setBackgroundTaskOwner('t1', 'agent-a', 'pnpm test');
+    expect(state.backgroundTaskOwner('t1')).toBe('agent-a');
+    expect(state.backgroundTaskCommand('t1')).toBe('pnpm test');
+
+    // command を渡さなかった呼び出しでは、command は控えられない。
+    state.setBackgroundTaskOwner('t2', 'agent-b');
+    expect(state.backgroundTaskOwner('t2')).toBe('agent-b');
+    expect(state.backgroundTaskCommand('t2')).toBeUndefined();
+  });
+
+  it('command は所有者と同じ枝刈り（FIFO）を受ける——所有者が捨てられれば command も一緒に消える', () => {
+    const state = new RunnerSubagentStopState();
+    for (let n = 0; n < BACKGROUND_TASK_OWNER_LIMIT; n += 1) {
+      state.setBackgroundTaskOwner(`t${n}`, `agent-${n}`, `cmd-${n}`);
+    }
+    expect(state.backgroundTaskCommand('t0')).toBe('cmd-0');
+
+    state.setBackgroundTaskOwner(
+      `t${BACKGROUND_TASK_OWNER_LIMIT}`,
+      'agent-overflow',
+      'cmd-overflow',
+    );
+    // t0 は所有者ごと捨てられているので、command も引けない。
+    expect(state.hasBackgroundTaskOwner('t0')).toBe(false);
+    expect(state.backgroundTaskCommand('t0')).toBeUndefined();
+    // 新しく積んだものは command も引ける。
+    expect(state.backgroundTaskCommand(`t${BACKGROUND_TASK_OWNER_LIMIT}`)).toBe('cmd-overflow');
+  });
 });
 
 describe('RunnerSubagentStopState — 1セッションに1回だけの診断フラグ', () => {

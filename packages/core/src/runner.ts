@@ -60,7 +60,11 @@ import {
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
-import { RunnerCutOffWorkers } from './runner-cut-off-workers.js';
+import {
+  RunnerCutOffWorkers,
+  type CutOffBackgroundTaskSummary,
+  type PendingBackgroundTaskOutput,
+} from './runner-cut-off-workers.js';
 import { RunnerFenceError } from './runner-protocol.js';
 import { readCgroupEventCounters, type CgroupEventCounters } from './runner-resources.js';
 import {
@@ -3069,6 +3073,19 @@ class RunnerSession {
    * `usage-limits.ts`）に `summary` を通した結果で決める** —— この関数は
    * このメソッドの少し下（`turn_ended` の枝）で `usage_notice` の判定にも
    * 使われているのと同じ関数である。
+   *
+   * **併せて #1554 も見る（上とは別の id 空間の相関）。** 上の分岐が見る
+   * `task_id` は「作業者（subagent）自身の完了」（`task_id === agentId`）
+   * だが、この `task_notification` は**背景の Bash 処理そのものの完了**
+   * （`task_id === background_tasks[].id`）でも同じ形で届く——`BackgroundTaskSummary.type`
+   * の doc が挙げる `'shell'` 等がそれである。この2つの id 空間は別物
+   * なので、上の分岐と独立に、`RunnerSubagentStopState#backgroundTaskOwner`
+   * で「この背景処理の所有者」を引く。所有者が在り（マネージャー自身の
+   * 分＝空文字は除く）、かつその所有者が {@link RunnerCutOffWorkers.isCutOff}
+   * なら、「打ち切った作業者が残した背景処理が終わった」という配達待ちを
+   * 積む（`#annotateCutOffWorkers` が次のマネージャー自身の道具呼び出しで
+   * 配達する）。**`output_file` が読めなければ `null` を渡す**（作り物の
+   * パスを主張しない——配達側が「取れなかった」と書く）。
    */
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
@@ -3090,6 +3107,23 @@ class RunnerSession {
     // ここで「未配達の打ち切り注記」として控える。
     if (taskId !== undefined && this.#cutOffWorkers.consumeCutOff(taskId)) {
       this.#cutOffWorkers.recordPendingNotification(taskId);
+    }
+
+    // #1554: 背景処理そのものの完了。所有者が打ち切られたことのある
+    // 作業者なら、出力の在り処を配達待ちへ積む（「打ち切られていない
+    // 作業者の処理には載らない」「持ち主が分からない処理には載らない」の
+    // 2つの歯はここで成立する——`owner` が undefined／`''`（マネージャー
+    // 自身）なら早期 return し、`isCutOff` が false でも積まない）。
+    if (taskId !== undefined) {
+      const owner = this.#stopState.backgroundTaskOwner(taskId);
+      if (owner !== undefined && owner !== '' && this.#cutOffWorkers.isCutOff(owner)) {
+        this.#cutOffWorkers.recordPendingBackgroundTaskOutput({
+          agentId: owner,
+          taskId,
+          command: this.#stopState.backgroundTaskCommand(taskId),
+          outputFile: typeof event.outputFile === 'string' ? event.outputFile : null,
+        });
+      }
     }
   }
 
@@ -3768,7 +3802,7 @@ class RunnerSession {
       input: record.toolInput,
     });
 
-    this.#recordBackgroundTaskOwner(record.toolResponse, record.agentId);
+    this.#recordBackgroundTaskOwner(record.toolResponse, record.agentId, record.toolInput);
 
     // マネージャー自身の呼び出しだけを見る（`Task` を呼ぶのはマネージャーなので
     // `agent_id` が付かない。#901）。**道具の種類は問わない** — 同期の `Task`
@@ -3783,12 +3817,12 @@ class RunnerSession {
   }
 
   /**
-   * マネージャー自身の次の `PostToolUse` に載せる #901 の注記をまとめる。
+   * マネージャー自身の次の `PostToolUse` に載せる #901 / #1554 の注記をまとめる。
    * 何も無ければ `null`。
    *
-   * 2つの経路を両方見て、両方あれば連結する（同じ呼び出しの結果に両方載っても
-   * 壊れない——1回のツール呼び出しの背後で、複数の作業者がそれぞれ別の理由で
-   * 打ち切られていることはありうる）:
+   * 3つの経路を両方（すべて）見て、在るものだけ連結する（同じ呼び出しの結果に
+   * 複数載っても壊れない——1回のツール呼び出しの背後で、複数の作業者がそれぞれ
+   * 別の理由で打ち切られていることはありうる）:
    *
    * 1. **同期の `Task`** — この呼び出し自身の `tool_response` が
    *    `status:'completed'` かつ `agentId` が `RunnerCutOffWorkers` に控えられて
@@ -3797,6 +3831,9 @@ class RunnerSession {
    *    「未配達の打ち切り注記」として控えられている分
    *    （`#drainPendingCutOffNotifications`）。**道具の種類・`tool_response` の
    *    中身を問わない** — 先に届いた別の完了通知を配達するだけだからである
+   * 3. **打ち切った作業者が残した背景処理そのものの完了（#1554）** —
+   *    `task_notification` の `output_file` を配達する
+   *    （`#drainFinishedBackgroundTaskOutputs`）。同じく道具の種類を問わない
    */
   #annotateCutOffWorkers(toolResponse: unknown): string | null {
     const parts: string[] = [];
@@ -3804,7 +3841,79 @@ class RunnerSession {
     if (sync !== null) parts.push(sync);
     const pending = this.#drainPendingCutOffNotifications();
     if (pending !== null) parts.push(pending);
+    const finished = this.#drainFinishedBackgroundTaskOutputs();
+    if (finished !== null) parts.push(finished);
     return parts.length === 0 ? null : parts.join('\n\n');
+  }
+
+  /**
+   * 打ち切られた瞬間に残っていた背景処理の一覧を、人間が読める行へ変換する
+   * （Issue #1554。`#annotateCutOffWorker` / `#drainPendingCutOffNotifications`
+   * の両方が使う）。1件も控えていなければ空配列。
+   *
+   * **`#renderSubagentStopTaskLines` を使い回さない。** あちらは
+   * `BackgroundTaskSummary`（`unknown` のまま渡された生の要素）を読むが、
+   * こちらは `RunnerCutOffWorkers.cutOffTasks` が返す、既に防御的に読み
+   * 切ってある {@link CutOffBackgroundTaskSummary}（`id` / `command?` の2欄
+   * だけ）を読む——型も出所も違うので、同じ関数にしない。
+   */
+  #renderCutOffTaskLines(agentId: string): string[] {
+    return this.#cutOffWorkers
+      .cutOffTasks(agentId)
+      .map(
+        (task) => `- id=${task.id}${task.command === undefined ? '' : ` command=${task.command}`}`,
+      );
+  }
+
+  /**
+   * 続きを頼む案内（Issue #1554）。上限に達した note と、打ち切りが判明した
+   * 注記（#901 の2経路）と、背景処理そのものの完了（#1554）の**全部**で
+   * 同じ文面を使う——マネージャーが読む場所によって案内が変わると、どの
+   * 場所で読んでも同じ手を思い出せるという利点が消える。
+   *
+   * **`SendMessage` は遅延読み込みの道具なので、まず `ToolSearch` で読み
+   * 込む必要があると明記する**（手順1 の調査結果）。**即時に届くとは
+   * 書かない** — 届くのはその作業者の次の道具の区切りであり、作業者は
+   * 読む前に動くことがある（同じ調査結果の留保）。
+   */
+  #resumeGuidance(agentId: string): string {
+    return (
+      `続きを頼むなら、\`ToolSearch\` を \`select:SendMessage\` で読み込んでから ` +
+      `agentId=${agentId} へ送ること——同じ文脈のまま再開できる。` +
+      '届くのはその作業者の次の道具の区切りで、即時ではない（読む前に動くことがある）。'
+    );
+  }
+
+  /**
+   * 打ち切った作業者が残した背景処理そのものの完了（Issue #1554）を、
+   * マネージャーへ全件配達する。1件も無ければ `null`。
+   *
+   * `#drainPendingCutOffNotifications` と同じ形——note は配達時点で1本ずつ
+   * 出し（日誌に残す）、マネージャーへ渡す文面は連結して返す。
+   */
+  #drainFinishedBackgroundTaskOutputs(): string | null {
+    const items = this.#cutOffWorkers.drainPendingBackgroundTaskOutputs();
+    if (items.length === 0) return null;
+    const describe = (item: PendingBackgroundTaskOutput): string =>
+      `agent_id=${item.agentId} が残した背景処理（id=${item.taskId}` +
+      `${item.command === undefined ? '' : `・command=${item.command}`}）`;
+    for (const item of items) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `打ち切った作業者の背景処理が終わった（#1554）: ${describe(item)}が完了した。` +
+          `出力は${item.outputFile === null ? '取れなかった' : ` ${item.outputFile}`}`,
+      });
+    }
+    return items
+      .map(
+        (item) =>
+          `⚠️ ${describe(item)}が終わった。出力は` +
+          `${item.outputFile === null ? '取れなかった' : ` ${item.outputFile}`}。 ` +
+          this.#resumeGuidance(item.agentId),
+      )
+      .join('\n\n');
   }
 
   /**
@@ -3831,17 +3940,24 @@ class RunnerSession {
     const response = toolResponse as { status?: unknown; agentId?: unknown };
     if (response.status !== 'completed' || typeof response.agentId !== 'string') return null;
     if (!this.#cutOffWorkers.consumeCutOff(response.agentId)) return null;
+    const agentId = response.agentId;
     this.#emit({
       type: 'note',
       managerId: this.#id,
-      text: `Task の結果に注記した（#901）: agent_id=${response.agentId} は起こし直しの上限で打ち切られていた`,
+      text: `Task の結果に注記した（#901）: agent_id=${agentId} は起こし直しの上限で打ち切られていた`,
     });
-    return (
-      `⚠️ この作業者（agent_id=${response.agentId}）は、自分で起こした背景処理を残したまま` +
-      '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
-      '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
-      'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。'
-    );
+    return [
+      `⚠️ この作業者（agent_id=${agentId}）は、自分で起こした背景処理を残したまま` +
+        '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+        '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
+        'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
+      // **Issue #1554: 打ち切られた瞬間に残っていた背景処理を id / command で
+      // 名乗る。** 出力の在り処はこの時点では分からない——`task_notification`
+      // が届いた後で `#drainFinishedBackgroundTaskOutputs` が別に配達する。
+      ...this.#renderCutOffTaskLines(agentId),
+      '出力の置き場所は、処理が終わったら知らせる（#1554）。',
+      this.#resumeGuidance(agentId),
+    ].join('\n');
   }
 
   /**
@@ -3869,13 +3985,18 @@ class RunnerSession {
       });
     }
     return agentIds
-      .map(
-        (agentId) =>
+      .map((agentId) =>
+        [
           `⚠️ 作業者（agent_id=${agentId}）は、自分で起こした背景処理を残したまま` +
-          '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
-          '**先に届いたその完了通知（task-notification）の報告は完結していない可能性がある**' +
-          '（最後の発言が「待っています」の類でも、その待ちはもう誰も続けない）。' +
-          '成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
+            '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+            '**先に届いたその完了通知（task-notification）の報告は完結していない可能性がある**' +
+            '（最後の発言が「待っています」の類でも、その待ちはもう誰も続けない）。' +
+            '成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
+          // Issue #1554: 同上（`#annotateCutOffWorker` と同じ2行）。
+          ...this.#renderCutOffTaskLines(agentId),
+          '出力の置き場所は、処理が終わったら知らせる（#1554）。',
+          this.#resumeGuidance(agentId),
+        ].join('\n'),
       )
       .join('\n\n');
   }
@@ -3992,16 +4113,38 @@ class RunnerSession {
    * return するのは異常ではなく、`Task` / `Monitor` / `Workflow` を含む `Bash` 以外の
    * すべての道具で通る正常な経路である。** 「引けなかった」を診断する側
    * （`#noteOwnerLookupFailure` / `#stopTaskOwnerKind`）は、この非対称を名簿で受けている。
+   *
+   * **併せて `command` も控える（Issue #1554）。** 所有者と同じ呼び出し
+   * （同じ `PostToolUse`）が道具の入力（`tool_input.command`）も持っている
+   * ので、ここで一緒に読む——`toolInput` は防御的に読み、文字列の `command`
+   * が無ければ何も渡さない（`RunnerSubagentStopState.setBackgroundTaskOwner`
+   * 側で「読めなかった」を空文字と混ぜない）。**用途は、打ち切った作業者が
+   * 残した背景処理の完了（`task_notification`）をマネージャーへ配達すると
+   * き、id と一緒に command も名乗れるようにすること**（`#onTaskNotification`
+   * の Issue #1554 の節）。
    */
-  #recordBackgroundTaskOwner(toolResponse: unknown, agentId: string | undefined): void {
+  #recordBackgroundTaskOwner(
+    toolResponse: unknown,
+    agentId: string | undefined,
+    toolInput?: unknown,
+  ): void {
     if (typeof toolResponse !== 'object' || toolResponse === null) return;
     const taskId = (toolResponse as { backgroundTaskId?: unknown }).backgroundTaskId;
     if (typeof taskId !== 'string' || taskId.length === 0) return;
 
+    const command =
+      typeof toolInput === 'object' && toolInput !== null
+        ? (toolInput as { command?: unknown }).command
+        : undefined;
+
     // マネージャー自身の分は空文字で控える（「引けなかった」と混ぜないため）。
     // 上限を超えたら古い側から捨てる（`RunnerSubagentStopState.setBackgroundTaskOwner`
     // の中。理由は `BACKGROUND_TASK_OWNER_LIMIT`）。
-    this.#stopState.setBackgroundTaskOwner(taskId, agentId ?? '');
+    this.#stopState.setBackgroundTaskOwner(
+      taskId,
+      agentId ?? '',
+      typeof command === 'string' ? command : undefined,
+    );
   }
 
   /**
@@ -4384,6 +4527,12 @@ class RunnerSession {
         ...taskLines,
         ...(unknownText === '' ? [] : [unknownText]),
         disclaimer,
+        // **Issue #1554: ここから下が新設した2行。** `#truncateSubagentStopText`
+        // が切るのは末尾からなので、必ず `taskLines`（id / command。読み手が
+        // いちばん要る具体的な材料）より後ろに置く——切られるならこちらが
+        // 先に切られる側に倒す。
+        '出力の置き場所は、処理が終わったら知らせる（#1554）。',
+        this.#resumeGuidance(agentId),
       ];
       this.#emit({
         type: 'note',
@@ -4406,7 +4555,17 @@ class RunnerSession {
           outcome: 'limit_reached',
         },
       });
-      this.#cutOffWorkers.recordCutOff(agentId);
+      // **Issue #1554: 残っていた背景処理の id / command を、後で #1475 /
+      // #1502 の注記（`#annotateCutOffWorker` / `#drainPendingCutOffNotifications`）
+      // が名乗れるよう控える。** `remaining` の各要素は `mine` の filter を
+      // 通っているので `id` は既に文字列のはず（防御的にもう一度 `typeof` で
+      // 絞る——このファイルの他の箇所と同じ作法）。
+      const cutOffTasks: CutOffBackgroundTaskSummary[] = remaining.flatMap((task) => {
+        const t = task as { id?: unknown; command?: unknown };
+        if (typeof t.id !== 'string') return [];
+        return [{ id: t.id, ...(typeof t.command === 'string' ? { command: t.command } : {}) }];
+      });
+      this.#cutOffWorkers.recordCutOff(agentId, cutOffTasks);
 
       return { kind: 'continue' };
     } catch (error: unknown) {
@@ -4446,6 +4605,18 @@ class RunnerSession {
    * `id` が取れない（`mine` の filter を通っているので実際には起きない
    * はずだが、防御的に想定する）要素には回数を付けない——取れない軸に
    * 0の行を作らないため。
+   *
+   * **先頭に `id=` を付け、`command` も先頭寄りへ動かす（Issue #1554）。**
+   * 打ち切った後、この背景処理の完了（`task_notification`）をマネージャー
+   * へ配達するとき、この `id` が結び目になる——note に出ていなければ、
+   * 読んだ人間はどの行がどの完了に対応するかを確かめる手段が無い。
+   * `command` も同じ理由で先頭寄りに置く——**`description` は長さの上限が
+   * 無い任意欄**（`type=shell` 以外では空、`shell` でも SDK 側で長さを
+   * 切っていない）のに対し、`id` / `command` は結び目として要る具体的な
+   * 材料である。`#truncateSubagentStopText` は末尾から切るので、
+   * `description` より**前**に置けば、切られるのは
+   * `description` の側になる（AGENTS.md「stall の note は長さの上限で
+   * 切られる。id と command が切られて消えないようにする」）。
    */
   #renderSubagentStopTaskLines(agentId: string, tasks: readonly unknown[]): string[] {
     return tasks.map((task) => {
@@ -4460,6 +4631,7 @@ class RunnerSession {
         // のに command が最も効くためで、全体の上限（呼び出し側）で二重に守る。
         command?: unknown;
       };
+      const id = typeof t.id === 'string' ? t.id : '(不明)';
       const type = typeof t.type === 'string' ? t.type : '(不明)';
       const status = typeof t.status === 'string' ? t.status : '(不明)';
       const description = typeof t.description === 'string' ? t.description : '(不明)';
@@ -4469,7 +4641,8 @@ class RunnerSession {
           ? `（この背景処理では ${this.#stopState.subagentWakeupCount(agentId, t.id)}` +
             `回目 / 1本あたりの上限 ${SUBAGENT_WAKEUP_LIMIT_PER_TASK}）`
           : '';
-      return `- type=${type} status=${status} description=${description}${command}${perTaskSuffix}`;
+      // **`id` と `command` を `description` より前に置く**（直上の doc）。
+      return `- id=${id}${command} type=${type} status=${status} description=${description}${perTaskSuffix}`;
     });
   }
 

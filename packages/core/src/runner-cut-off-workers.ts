@@ -28,6 +28,41 @@
  * 古い側から捨てる——長寿のセッションで表が際限なく育たないための蓋
  * （`runner.ts` に元々在った doc のまま。意味は変えていない）。
  *
+ * ## Issue #1554 で足した3本（「打ち切り」を消費し切った後でも要る記憶）
+ *
+ * 上の2本（`#cutOffWorkers` / `#pendingCutOffNotifications`）は、**注記を
+ * 1回配達したら消える**——`#annotateCutOffWorker` / `#drainPendingCutOffNotifications`
+ * が読んだ瞬間に控えが尽きる作り（#901 の設計そのもの）。だが #1554 が
+ * 要る場面（打ち切った作業者が残した**背景処理そのもの**が、注記を配達
+ * した後で完了する）では、「この `agent_id` は打ち切られたことがある」
+ * という事実を、注記を配達した後も持ち続けないと、後から届く
+ * `task_notification`（背景処理自身の完了）を誰の分か結べない。
+ *
+ * - **`#cutOffAgentIds`**——「打ち切られたことがある」を**消費しない**まま
+ *   持ち続ける `agent_id` の集合（{@link RunnerCutOffWorkers.recordCutOff}
+ *   で追加、{@link RunnerCutOffWorkers.isCutOff} で「在るか」だけを見る——
+ *   `consumeCutOff` のような消費 API は持たない）。件数は
+ *   {@link CUT_OFF_AGENT_TASKS_LIMIT} で `#cutOffWorkers` と同じ FIFO の
+ *   蓋を掛ける。
+ * - **`#cutOffTasks`**——打ち切られた瞬間（`SubagentStop` の
+ *   `background_tasks[]`）に残っていた背景処理の `id` / `command` の一覧を
+ *   `agent_id` ごとに控える（{@link RunnerCutOffWorkers.recordCutOff} の
+ *   `tasks` 引数、{@link RunnerCutOffWorkers.cutOffTasks} で読む）。**用途は
+ *   表示だけ**——`#annotateCutOffWorker` / `#drainPendingCutOffNotifications`
+ *   が「残っていた背景処理は id=… command=… だった」を名乗れるようにする
+ *   （手順2 の要求）。同じ `agent_id` が複数回打ち切られたら、直近の一覧で
+ *   上書きする（古い一覧を保持する理由が無い）。
+ * - **`#pendingBackgroundTaskOutputs`**——打ち切った作業者が残した背景処理
+ *   自身の `task_notification`（`output_file` 付き）が届いたが、まだ配達
+ *   していない一覧（{@link RunnerCutOffWorkers.recordPendingBackgroundTaskOutput}
+ *   / {@link RunnerCutOffWorkers.drainPendingBackgroundTaskOutputs}）。
+ *   `#pendingCutOffNotifications` と同じ理由で要る——「背景処理そのものの
+ *   完了通知」に `additionalContext` を注げるフックは無いので、次に
+ *   マネージャー自身の道具が動いたときに相乗りする。件数は
+ *   {@link PENDING_BACKGROUND_TASK_OUTPUT_LIMIT} で蓋を掛ける。**配達したら
+ *   消える**（`drain` が全件取り出して空にする——`#pendingCutOffNotifications`
+ *   と同じ FIFO の蓋の考え方）。
+ *
  * ## なぜ切り出したか、そして切り出しの限界（PR #1359 / #1433 / #1523 / #1532 と同じ形の申告）
  *
  * **この節を読まずに「無駄な間接層だ」と思って `RunnerSession` へ戻さないこと。**
@@ -156,6 +191,30 @@ export class RunnerCutOffWorkers {
   readonly #pendingCutOffNotifications = new Set<string>();
 
   /**
+   * 「打ち切られたことがある」を**消費しないまま**持ち続ける `agent_id` の
+   * 集合（Issue #1554）。{@link recordCutOff} と一緒に追加し、
+   * {@link isCutOff} で「在るか」だけを見る——`#cutOffWorkers` とは違い、
+   * 消費 API を持たない。クラス doc の「Issue #1554 で足した3本」を見よ。
+   */
+  readonly #cutOffAgentIds = new Set<string>();
+
+  /**
+   * `agentId` → 打ち切られた瞬間に残っていた背景処理の一覧（Issue #1554）。
+   * {@link recordCutOff} の `tasks` 引数をそのまま控え、{@link cutOffTasks}
+   * で読む。クラス doc の「Issue #1554 で足した3本」を見よ。
+   */
+  readonly #cutOffTasks = new Map<string, readonly CutOffBackgroundTaskSummary[]>();
+
+  /**
+   * 打ち切った作業者が残した背景処理自身の完了（`task_notification` の
+   * `output_file`）で、まだマネージャーへ配達していない一覧（Issue #1554）。
+   * {@link recordPendingBackgroundTaskOutput} で積み、
+   * {@link drainPendingBackgroundTaskOutputs} で全件まとめて取り出す。
+   * クラス doc の「Issue #1554 で足した3本」を見よ。
+   */
+  readonly #pendingBackgroundTaskOutputs: PendingBackgroundTaskOutput[] = [];
+
+  /**
    * `agentId` を「起こし直しの上限で打ち切った」と記録する
    * （`RunnerSession#onSubagentStop` の上限到達の分岐から呼ぶ）。
    *
@@ -163,8 +222,15 @@ export class RunnerCutOffWorkers {
    * 「いま記録した」側（末尾）へ動かすため。件数が
    * {@link CUT_OFF_WORKERS_LIMIT} を超えたら、いちばん古いもの（`Set` の
    * 挿入順の先頭）から捨てる。
+   *
+   * **`tasks`（Issue #1554）—— 打ち切られた瞬間に残っていた背景処理の
+   * `id` / `command` の一覧。** 省略時は空配列。`#cutOffAgentIds` /
+   * `#cutOffTasks` にも同じ `agentId` を記録する——こちらは
+   * {@link consumeCutOff} で消費されず、{@link CUT_OFF_AGENT_TASKS_LIMIT}
+   * の FIFO でだけ枝刈りされる（`#cutOffWorkers` とは寿命が違う。クラス
+   * doc「Issue #1554 で足した3本」）。
    */
-  recordCutOff(agentId: string): void {
+  recordCutOff(agentId: string, tasks: readonly CutOffBackgroundTaskSummary[] = []): void {
     this.#cutOffWorkers.delete(agentId);
     this.#cutOffWorkers.add(agentId);
     while (this.#cutOffWorkers.size > CUT_OFF_WORKERS_LIMIT) {
@@ -172,6 +238,67 @@ export class RunnerCutOffWorkers {
       if (oldest === undefined) break;
       this.#cutOffWorkers.delete(oldest);
     }
+
+    this.#cutOffAgentIds.delete(agentId);
+    this.#cutOffAgentIds.add(agentId);
+    this.#cutOffTasks.delete(agentId);
+    this.#cutOffTasks.set(agentId, tasks);
+    while (this.#cutOffAgentIds.size > CUT_OFF_AGENT_TASKS_LIMIT) {
+      const oldest = this.#cutOffAgentIds.values().next().value;
+      if (oldest === undefined) break;
+      this.#cutOffAgentIds.delete(oldest);
+      this.#cutOffTasks.delete(oldest);
+    }
+  }
+
+  /**
+   * `agentId` が「打ち切られたことがある」かどうか（Issue #1554）。
+   *
+   * **消費しない**（`consumeCutOff` と違い、何度呼んでも値は変わらない）。
+   * 打ち切った作業者が残した背景処理自身の `task_notification` が届いた
+   * ときに、その所有者（`RunnerSubagentStopState.backgroundTaskOwner`）が
+   * 「打ち切られたことがある」かを確かめるために使う——注記の配達
+   * （`#annotateCutOffWorker` / `#drainPendingCutOffNotifications`）が
+   * `#cutOffWorkers` / `#pendingCutOffNotifications` を消費し切った*後*でも、
+   * ずっと後に届く背景処理の完了を正しく結べるようにするための、
+   * 消費されない側の記録である。
+   */
+  isCutOff(agentId: string): boolean {
+    return this.#cutOffAgentIds.has(agentId);
+  }
+
+  /**
+   * `agentId` が打ち切られた瞬間に残っていた背景処理の一覧（Issue #1554）。
+   * 控えていなければ空配列。
+   */
+  cutOffTasks(agentId: string): readonly CutOffBackgroundTaskSummary[] {
+    return this.#cutOffTasks.get(agentId) ?? [];
+  }
+
+  /**
+   * 打ち切った作業者が残した背景処理自身の完了を、配達待ちとして積む
+   * （Issue #1554。`RunnerSession#onTaskNotification` から呼ぶ）。
+   *
+   * 件数が {@link PENDING_BACKGROUND_TASK_OUTPUT_LIMIT} を超えたら、
+   * いちばん古いものから捨てる（FIFO。配列の先頭が最古）。
+   */
+  recordPendingBackgroundTaskOutput(item: PendingBackgroundTaskOutput): void {
+    this.#pendingBackgroundTaskOutputs.push(item);
+    while (this.#pendingBackgroundTaskOutputs.length > PENDING_BACKGROUND_TASK_OUTPUT_LIMIT) {
+      this.#pendingBackgroundTaskOutputs.shift();
+    }
+  }
+
+  /**
+   * 控えている「配達待ちの背景処理の完了」を全件取り出し、控えを空にする
+   * （Issue #1554。`RunnerSession#drainPendingCutOffNotifications` 相当の
+   * 経路から呼ぶ）。1件も無ければ空配列を返す。
+   */
+  drainPendingBackgroundTaskOutputs(): PendingBackgroundTaskOutput[] {
+    if (this.#pendingBackgroundTaskOutputs.length === 0) return [];
+    const items = [...this.#pendingBackgroundTaskOutputs];
+    this.#pendingBackgroundTaskOutputs.length = 0;
+    return items;
   }
 
   /**
@@ -241,3 +368,50 @@ export const CUT_OFF_WORKERS_LIMIT = 500;
  * 考え方——長寿のセッションで表が際限なく育たないための蓋。
  */
 export const PENDING_CUT_OFF_NOTIFICATIONS_LIMIT = 500;
+
+/**
+ * `#cutOffAgentIds` / `#cutOffTasks`（Issue #1554。「打ち切られたことがある」を
+ * 消費せず持ち続ける記録）を控える件数の上限。`CUT_OFF_WORKERS_LIMIT` と同じ
+ * 考え方・同じ値——長寿のセッションで表が際限なく育たないための蓋。
+ *
+ * **`CUT_OFF_WORKERS_LIMIT` とは別の定数にしてある。** 意味も寿命も違う
+ * （こちらは消費されないので、`#cutOffWorkers` より長く生き残る）表なので、
+ * 値がたまたま同じでも同じ定数を共有しない——次にどちらかの値を変えたく
+ * なったとき、もう片方まで巻き込まないため。
+ */
+export const CUT_OFF_AGENT_TASKS_LIMIT = 500;
+
+/**
+ * `#pendingBackgroundTaskOutputs`（Issue #1554。打ち切った作業者が残した
+ * 背景処理自身の完了で、まだ配達していない一覧）を控える件数の上限。
+ * `PENDING_CUT_OFF_NOTIFICATIONS_LIMIT` と同じ考え方——長寿のセッションで
+ * 表が際限なく育たないための蓋。**こちらは配列の FIFO**（`Set` ではなく
+ * `Array` なので、先頭が最古のまま——同じ `agentId` の複数件が別々に積まれ
+ * うる。1つの作業者が複数の背景処理を残していれば、それぞれ別の要素になる）。
+ */
+export const PENDING_BACKGROUND_TASK_OUTPUT_LIMIT = 500;
+
+/**
+ * 打ち切られた瞬間に残っていた背景処理1件ぶんの要約（Issue #1554）。
+ * `SubagentStop` の `background_tasks[]` から、表示に要る2欄だけを写す
+ * （型は `unknown` のまま渡さず、この時点で防御的に読み切っておく——
+ * `runner.ts` の `#renderSubagentStopTaskLines` と同じ判断）。
+ */
+export interface CutOffBackgroundTaskSummary {
+  readonly id: string;
+  /** `BackgroundTaskSummary.command` はshellタスクにしか付かない任意欄。読めなければ省く。 */
+  readonly command?: string;
+}
+
+/**
+ * 打ち切った作業者が残した背景処理自身の完了1件ぶん（Issue #1554）。
+ * `outputFile` は `task_notification.output_file` が読めなかったときは
+ * `null`（「取れなかった」——作り物のパスを主張しない。`agent-events.ts` の
+ * `AgentDelegationNotified.outputFile` の doc と同じ作法）。
+ */
+export interface PendingBackgroundTaskOutput {
+  readonly agentId: string;
+  readonly taskId: string;
+  readonly command?: string;
+  readonly outputFile: string | null;
+}

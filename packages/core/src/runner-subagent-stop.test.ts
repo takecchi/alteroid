@@ -90,8 +90,11 @@ interface Started {
    * 済み——`runner.ts` の `#pendingCutOffNotifications` の doc）ので、
    * `PostToolUse`/`SubagentStop` のようにフックを直接叩く形では再現できない。
    * `restart` と同じ要領で、生の `SDKMessage` をストリームへ流す。
+   *
+   * **`extra`（Issue #1554）——既定の欄を上書きする。** `output_file` を
+   * 落とした形（`{ output_file: undefined }`）を確かめる歯で使う。
    */
-  notify: (taskId: string) => void;
+  notify: (taskId: string, extra?: Record<string, unknown>) => void;
 }
 
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
@@ -108,7 +111,7 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
           session_id: sessionId,
           uuid: `uuid-restart-${sessionId}`,
         } as unknown as SDKMessage),
-      notify: (taskId: string) =>
+      notify: (taskId: string, extra: Record<string, unknown> = {}) =>
         emit?.({
           type: 'system',
           subtype: 'task_notification',
@@ -118,6 +121,7 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
           summary: '完了',
           session_id: `sess-${started.length}`,
           uuid: `uuid-task-notification-${taskId}`,
+          ...extra,
         } as unknown as SDKMessage),
     };
     started.push(record);
@@ -189,8 +193,12 @@ async function registerBackgroundTask(
  * メッセージループが1周してから戻す一呼吸を入れる（`runner-wakeup.test.ts` の
  * `taskNotification` と同じ形）。
  */
-async function fireTaskNotification(started: Started, taskId: string): Promise<void> {
-  started.notify(taskId);
+async function fireTaskNotification(
+  started: Started,
+  taskId: string,
+  extra?: Record<string, unknown>,
+): Promise<void> {
+  started.notify(taskId, extra);
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
@@ -355,6 +363,8 @@ describe('SubagentStop の観測（#357 / #570）', () => {
     const notes = noteEvents(s.events);
     expect(notes).toHaveLength(1);
     const text = notes[0]?.text ?? '';
+    // Issue #1554: 行の先頭に id= が載る（打ち切り後の完了通知の結び目）。
+    expect(text).toContain('id=bg-1');
     expect(text).toContain('type=shell');
     expect(text).toContain('status=running');
     expect(text).toContain('command=pnpm verify');
@@ -582,6 +592,61 @@ describe('SubagentStop の観測（#357 / #570）', () => {
   });
 
   /**
+   * Issue #1554: 上限に達した note へ足した2行（「出力の置き場所は、処理が
+   * 終わったら知らせる」・続きを頼む案内）は、`id=` / `command=`（`taskLines`）
+   * より**後ろ**に置いてある——切られるなら、読み手がいちばん要る具体的な
+   * 材料（id / command）ではなく、この2行が先に切られる側へ倒す設計である
+   * ことを、実際に上限を超える長さの入力で確かめる。
+   */
+  it('上限に達した note が長すぎて切られても、id / command は生き残り、切られるのは末尾の案内文である', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
+    for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
+      await fireSubagentStop(started.options, {
+        ...STOP_BASE,
+        agent_id: 'agent-1',
+        background_tasks: [
+          selfEntry('agent-1'),
+          { id: 'bg-1', type: 'monitor', status: 'running', command: 'pnpm test' },
+        ],
+      });
+    }
+
+    // 上限+1回目 —— この回の description を長くして、note 全体を
+    // `SUBAGENT_STOP_NOTE_TEXT_LIMIT` より確実に超えさせる。
+    const longDescription = 'あ'.repeat(5_000);
+    const overLimitResult = await fireSubagentStop(started.options, {
+      ...STOP_BASE,
+      agent_id: 'agent-1',
+      background_tasks: [
+        selfEntry('agent-1'),
+        {
+          id: 'bg-1',
+          type: 'monitor',
+          status: 'running',
+          command: 'pnpm test',
+          description: longDescription,
+        },
+      ],
+    });
+    expect(overLimitResult).toEqual({ continue: true });
+
+    const escalated = noteEvents(s.events).at(-1);
+    expect(escalated?.text).toContain('文字で切った');
+    // **生き残る側 —— id / command は taskLines の一部で、末尾の案内文より
+    // 前に置いてあるので切られない。**
+    expect(escalated?.text).toContain('id=bg-1');
+    expect(escalated?.text).toContain('command=pnpm test');
+    // **切られる側 —— 末尾に置いた2行は、この長さでは残らない。**
+    expect(escalated?.text).not.toContain('出力の置き場所は');
+    expect(escalated?.text).not.toContain('SendMessage');
+  });
+
+  /**
    * **この1本が無いと、条件1（当人の分が在れば毎回）が固定されない。**
    * 「最初の1回だけ出す」だけの実装でも上は緑になりうるので、ここで撃ち分ける。
    *
@@ -792,6 +857,8 @@ describe('SubagentStop の観測（#357 / #570）', () => {
       if (started === undefined) throw new Error('セッションが開いていない');
 
       // **同じ背景処理（bg-1）** を1本あたりの上限ちょうどまで残し続ける。
+      // **command 付き**（Issue #1554 —— 上限に達した note に id / command が
+      // 載ることを、この歯でも確かめる）。
       await registerBackgroundTask(started.options, 'bg-1', 'agent-1');
       for (let n = 1; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
         const result = await fireSubagentStop(started.options, {
@@ -799,7 +866,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
           agent_id: 'agent-1',
           background_tasks: [
             selfEntry('agent-1'),
-            { id: 'bg-1', type: 'monitor', status: 'running' },
+            { id: 'bg-1', type: 'monitor', status: 'running', command: 'pnpm test' },
           ],
         });
         expect(result).toHaveProperty('hookSpecificOutput');
@@ -812,7 +879,7 @@ describe('SubagentStop の観測（#357 / #570）', () => {
         agent_id: 'agent-1',
         background_tasks: [
           selfEntry('agent-1'),
-          { id: 'bg-1', type: 'monitor', status: 'running' },
+          { id: 'bg-1', type: 'monitor', status: 'running', command: 'pnpm test' },
         ],
       });
 
@@ -831,6 +898,16 @@ describe('SubagentStop の観測（#357 / #570）', () => {
         `残っている背景処理はどれも1本あたりの上限（${SUBAGENT_WAKEUP_LIMIT_PER_TASK}回）に達したため`,
       );
       expect(escalated?.text).not.toContain('この作業者の通し上限');
+      // **Issue #1554: 上限に達した note にも id / command が載る。**
+      expect(escalated?.text).toContain('id=bg-1');
+      expect(escalated?.text).toContain('command=pnpm test');
+      expect(escalated?.text).toContain('出力の置き場所は、処理が終わったら知らせる（#1554）');
+      // **続きを頼む案内。** `SendMessage` は遅延読み込みの道具なので
+      // `ToolSearch` で先に読み込む案内を含む（手順1 の調査結果）。
+      expect(escalated?.text).toContain('ToolSearch');
+      expect(escalated?.text).toContain('select:SendMessage');
+      expect(escalated?.text).toContain('agentId=agent-1');
+      expect(escalated?.text).toContain('即時ではない');
       // それより前の回は escalate していない。
       for (const note of notes.slice(0, -1)) expect(note.escalate).toBeUndefined();
 
@@ -1952,7 +2029,10 @@ async function cutOff(options: Options, agentId: string): Promise<void> {
       agent_id: agentId,
       background_tasks: [
         selfEntry(agentId),
-        { id: `bg-${agentId}`, type: 'monitor', status: 'running' },
+        // **command 付き**（Issue #1554）——打ち切られた瞬間に控える
+        // `RunnerCutOffWorkers.cutOffTasks` の内容を、この helper を使う
+        // #901 のテスト群からも確かめられるようにする。
+        { id: `bg-${agentId}`, type: 'monitor', status: 'running', command: 'sleep 90' },
       ],
     });
   }
@@ -1993,6 +2073,14 @@ describe('打ち切った作業者の Task の結果に注記する（#901）', 
       .hookSpecificOutput?.additionalContext;
     expect(context).toContain('agent_id=agent-1');
     expect(context).toContain('完結していない可能性がある');
+    // **Issue #1554: 打ち切られた瞬間に残っていた背景処理の id / command と、
+    // 出力の置き場所・続きを頼む案内が載る。**
+    expect(context).toContain('id=bg-agent-1');
+    expect(context).toContain('command=sleep 90');
+    expect(context).toContain('出力の置き場所は、処理が終わったら知らせる（#1554）');
+    expect(context).toContain('ToolSearch');
+    expect(context).toContain('select:SendMessage');
+    expect(context).toContain('agentId=agent-1');
     expect(noteEvents(s.events).at(-1)?.text).toContain('Task の結果に注記した（#901）');
   });
 
@@ -2096,6 +2184,14 @@ describe('task_notification 経由で判明した打ち切りにも注記する�
     expect(context).toContain('agent_id=agent-1');
     expect(context).toContain('task-notification');
     expect(context).toContain('完結していない可能性がある');
+    // **Issue #1554: こちら（task_notification 経由）にも id / command と、
+    // 出力の置き場所・続きを頼む案内が載る。**
+    expect(context).toContain('id=bg-agent-1');
+    expect(context).toContain('command=sleep 90');
+    expect(context).toContain('出力の置き場所は、処理が終わったら知らせる（#1554）');
+    expect(context).toContain('ToolSearch');
+    expect(context).toContain('select:SendMessage');
+    expect(context).toContain('agentId=agent-1');
     expect(noteEvents(s.events).at(-1)?.text).toContain(
       'Task の結果に注記した（#901・task_notification 経由）',
     );
@@ -2161,5 +2257,205 @@ describe('task_notification 経由で判明した打ち切りにも注記する�
     expect(await firePostToolUse(started.options, anyManagerTool())).toHaveProperty(
       'hookSpecificOutput',
     );
+  });
+});
+
+/**
+ * Issue #1554: 打ち切った後も背景処理そのものは走り続け、いずれ終わる。
+ * その完了（`task_notification` の `output_file`）は、上の2つの経路
+ * （#901 —— 作業者〈subagent〉自身の完了）とは**別の id 空間**で届く——
+ * `task_id` が `background_tasks[].id`（`RunnerSession#recordBackgroundTaskOwner`
+ * が控える id）と同じ値になる。ここで固定するのは「その完了を、打ち切った
+ * 作業者の分だとどう結び、どう配達するか」である。
+ */
+describe('打ち切った作業者が残した背景処理そのものの完了を配達する（Issue #1554）', () => {
+  /** マネージャー自身の、任意の道具呼び出し。道具の種類を問わないことを示す。 */
+  function anyManagerTool(extra: Record<string, unknown> = {}) {
+    return {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/x' },
+      tool_response: { content: 'ok' },
+      ...extra,
+    };
+  }
+
+  /** 作業者 `agentId` が背景の Bash（`command`）を起こしたことを登録する。 */
+  async function registerWorkerBash(
+    options: Options,
+    taskId: string,
+    agentId: string,
+    command: string,
+  ): Promise<void> {
+    await firePostToolUse(options, {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command, run_in_background: true },
+      tool_response: { stdout: '', stderr: '', backgroundTaskId: taskId },
+      agent_id: agentId,
+      agent_type: 'worker',
+    });
+  }
+
+  it('打ち切った作業者が起こした背景の Bash が終わると、次のマネージャー自身の道具呼び出しに id・command・出力の在り処と再開の案内が載る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    // 打ち切られた agent-1 は、起こし直しの予算に使った bg-agent-1 とは
+    // **別の**背景処理（`pnpm test`）も残していた。
+    await registerWorkerBash(started.options, 'bg-test-1', 'agent-1', 'pnpm test');
+
+    // その背景処理自身が完了した（output_file 付き）。
+    await fireTaskNotification(started, 'bg-test-1');
+
+    const result = await firePostToolUse(started.options, anyManagerTool());
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'PostToolUse' },
+    });
+    const context = (result as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext;
+    expect(context).toContain('agent_id=agent-1');
+    expect(context).toContain('id=bg-test-1');
+    expect(context).toContain('command=pnpm test');
+    expect(context).toContain('/tmp/does-not-exist.txt');
+    expect(context).toContain('ToolSearch');
+    expect(context).toContain('select:SendMessage');
+    expect(context).toContain('agentId=agent-1');
+    expect(context).toContain('即時ではない');
+    expect(noteEvents(s.events).at(-1)?.text).toContain(
+      '打ち切った作業者の背景処理が終わった（#1554）',
+    );
+  });
+
+  it('1回だけ（配達したら控えは空になる）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await registerWorkerBash(started.options, 'bg-test-1', 'agent-1', 'pnpm test');
+    await fireTaskNotification(started, 'bg-test-1');
+
+    await firePostToolUse(started.options, anyManagerTool());
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('output_file が読めない task_notification では、パスを作らず「取れなかった」と書く', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await registerWorkerBash(started.options, 'bg-test-1', 'agent-1', 'pnpm test');
+    // `output_file` を落とした形で届く（読めなかった、を再現する）。
+    await fireTaskNotification(started, 'bg-test-1', { output_file: undefined });
+
+    const result = await firePostToolUse(started.options, anyManagerTool());
+    const context = (result as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext;
+    expect(context).toContain('id=bg-test-1');
+    expect(context).toContain('取れなかった');
+    expect(context).not.toContain('/tmp/does-not-exist.txt');
+  });
+
+  it('打ち切られていない作業者の背景処理が終わっても、何も配達されない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    // agent-2 は起こし直しの上限に達していない（打ち切られていない）。
+    await registerWorkerBash(started.options, 'bg-test-2', 'agent-2', 'pnpm test');
+    await fireTaskNotification(started, 'bg-test-2');
+
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('所有者を控えていない背景処理（id を登録していない）が終わっても、何も配達されない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    // `bg-unknown` は一度も `PostToolUse` で登録していない——所有者を引けない。
+    await fireTaskNotification(started, 'bg-unknown');
+
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('マネージャー自身が起こした背景処理（所有者が空文字）が終わっても、何も配達されない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    // `agent_id` を渡さない = マネージャー自身が起こした背景処理。
+    await firePostToolUse(started.options, {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'pnpm test', run_in_background: true },
+      tool_response: { stdout: '', stderr: '', backgroundTaskId: 'bg-manager-1' },
+    });
+    await fireTaskNotification(started, 'bg-manager-1');
+
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('作業者内（agent_id あり）の PostToolUse には配達されない（控えは残ったまま）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await registerWorkerBash(started.options, 'bg-test-1', 'agent-1', 'pnpm test');
+    await fireTaskNotification(started, 'bg-test-1');
+
+    expect(
+      await firePostToolUse(started.options, {
+        ...anyManagerTool(),
+        agent_id: 'agent-9',
+        agent_type: 'worker',
+      }),
+    ).toEqual({ continue: true });
+    expect(await firePostToolUse(started.options, anyManagerTool())).toHaveProperty(
+      'hookSpecificOutput',
+    );
+  });
+
+  it('#901（作業者自身の完了）と #1554（背景の Bash の完了）が同じ配達に両方載る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await registerWorkerBash(started.options, 'bg-test-1', 'agent-1', 'pnpm test');
+    // 順序は問わないことを示すため、背景の Bash の完了を先に、
+    // 作業者自身（agent-1）の完了を後に届ける。
+    await fireTaskNotification(started, 'bg-test-1');
+    await fireTaskNotification(started, 'agent-1');
+
+    const result = await firePostToolUse(started.options, anyManagerTool());
+    const context = (result as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext;
+    // #901（同じ agent_id の「打ち切られていた」注記）と #1554（背景処理の
+    // 完了）が両方、同じ additionalContext に連結されて載る。
+    expect(context).toContain('task-notification');
+    expect(context).toContain('が残した背景処理');
+    expect(context).toContain('id=bg-test-1');
+    expect(
+      noteEvents(s.events).some((note) =>
+        note.text.includes('打ち切った作業者の背景処理が終わった'),
+      ),
+    ).toBe(true);
   });
 });

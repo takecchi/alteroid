@@ -297,6 +297,47 @@ describe('foldClaudeMessage — system', () => {
     });
   });
 
+  /**
+   * Issue #1554: `task_notification` だけが `output_file` を運ぶ
+   * （`SDKTaskNotificationMessage.output_file`。`task_started` には無い）。
+   * 読めたときだけ `outputFile` を足し、読めなければキーごと省く
+   * （代用値を作らない——`agent-events.ts` の
+   * `AgentDelegationNotified.outputFile` の doc と同じ作法）。
+   */
+  it('task_notification の output_file を outputFile として写す（task_started には無い欄）', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          output_file: '/tmp/out.txt',
+        }),
+      ),
+    ).toEqual({
+      type: 'delegation_notified',
+      taskId: 't-1',
+      outputFile: '/tmp/out.txt',
+    });
+
+    // `output_file` が読めない（無い・文字列でない）ときはキーごと省く。
+    expect(
+      only(sdk({ type: 'system', subtype: 'task_notification', task_id: 't-2', output_file: 42 })),
+    ).toEqual({ type: 'delegation_notified', taskId: 't-2' });
+
+    // `task_started` には output_file の欄そのものが無いので、渡っても写さない。
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-3',
+          output_file: '/tmp/should-not-appear.txt',
+        }),
+      ),
+    ).toEqual({ type: 'delegation_started', taskId: 't-3' });
+  });
+
   it('**見ないと決めてある種類は0個になる**（間引きではなく判断である）', () => {
     // **`background_tasks_changed` はここに含めない**（#630 で「見ないと
     // 決めてある」から外れた——読んで `background_tasks` へ畳む。下の

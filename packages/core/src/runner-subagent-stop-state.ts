@@ -79,6 +79,28 @@ export class RunnerSubagentStopState {
   #backgroundTaskOwners = new Map<string, string>();
 
   /**
+   * 背景タスクの id → **それを起こした道具呼び出しの `command`**（Issue #1554）。
+   *
+   * `#backgroundTaskOwners` と常に同じ呼び出し（`setBackgroundTaskOwner`）で
+   * 一緒に控える——**別の枝刈りにはしない**（`#backgroundTaskOwners` が
+   * 忘れた id はこちらも忘れる。所有者を引けない id にだけ command が
+   * 残っても使い道が無いため）。**任意欄。** `tool_input.command` が文字列で
+   * 読めたときだけ控え、読めなければ何も持たない——「取れなかった」を
+   * 空文字と混ぜない（他の任意欄と同じ作法）。
+   *
+   * **用途は1つ——打ち切った作業者が残した背景処理の `task_notification`
+   * （`output_file` 付き）をマネージャーへ配達するとき、id と一緒に
+   * command も名乗れるようにする**（`RunnerSession#onTaskNotification` の
+   * Issue #1554 の節）。SubagentStop の `background_tasks[].command` から
+   * その場で組み立てられる `#renderSubagentStopTaskLines` / 打ち切り時点の
+   * 控え（`RunnerCutOffWorkers.recordCutOff` の `tasks`）とは別の出所——
+   * こちらは背景処理が**始まった**瞬間（`PostToolUse`）の値で、あちらは
+   * **打ち切られた**瞬間（`SubagentStop`）の値である。実運用では同じ値の
+   * はずだが、結び目が違うので同じ変数に統合していない。
+   */
+  #backgroundTaskCommands = new Map<string, string>();
+
+  /**
    * 「所有者を引けなかった」診断を、このセッションで既に出したか（#570）。
    *
    * 診断は**1セッションに1回だけ**出す。毎回出すと、壊れていることの通知が
@@ -213,18 +235,30 @@ export class RunnerSubagentStopState {
    * 範囲外）——同じ形だが、共有はしていない」と明記している。**この段（#1190
    * 段1）でも挙動を変えないことを優先し、共有化はしない。**
    */
-  setBackgroundTaskOwner(taskId: string, owner: string): void {
+  setBackgroundTaskOwner(taskId: string, owner: string, command?: string): void {
     this.#backgroundTaskOwners.set(taskId, owner);
+    // **任意の3番目の引数（Issue #1554）。** 読めたときだけ控え、読めなければ
+    // 何もしない——既に控えている値を空文字や `undefined` で上書きしない
+    // （呼び出し側が毎回 `command` を渡せるとは限らないため。実際に呼ぶのは
+    // `RunnerSession#recordBackgroundTaskOwner` の1箇所だけなので、いまは
+    // 同じ id を2度書く経路は無いが、将来2度目の呼び出しが増えても安全側に倒す）。
+    if (typeof command === 'string') this.#backgroundTaskCommands.set(taskId, command);
     while (this.#backgroundTaskOwners.size > BACKGROUND_TASK_OWNER_LIMIT) {
       const oldest = this.#backgroundTaskOwners.keys().next();
       if (oldest.done === true) break;
       this.#backgroundTaskOwners.delete(oldest.value);
+      this.#backgroundTaskCommands.delete(oldest.value);
     }
   }
 
   /** 背景タスク `taskId` の所有者（控えていなければ `undefined`）。 */
   backgroundTaskOwner(taskId: string): string | undefined {
     return this.#backgroundTaskOwners.get(taskId);
+  }
+
+  /** 背景タスク `taskId` を起こした道具呼び出しの `command`（控えていなければ `undefined`）。 */
+  backgroundTaskCommand(taskId: string): string | undefined {
+    return this.#backgroundTaskCommands.get(taskId);
   }
 
   /** 背景タスク `taskId` の所有者を控えているか。 */

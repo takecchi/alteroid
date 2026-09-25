@@ -230,6 +230,17 @@ export interface AgentDelegationNotified {
    * `excerpt()` 自身が付ける。**取れなければ省く**（代用値を作らない）。
    */
   summary?: string;
+  /**
+   * この委譲（背景処理）が書き出した出力の在り処（Issue #1554）。
+   *
+   * **`SDKTaskNotificationMessage.output_file` からそのまま写す。** provider
+   * が名乗らなかった・読めなかったときは省く（代用値は作らない——
+   * `taskId` と同じ作法）。**この欄が在るからといって、この委譲が「打ち切った
+   * 作業者」のものとは限らない**——`task_notification` は打ち切りと無関係な
+   * 完了でも同じ形で届く。どの完了が誰の分だったかを結ぶ判断は
+   * `runner.ts`（`#recordBackgroundTaskOwner` の控えとの突き合わせ）が持つ。
+   */
+  outputFile?: string;
 }
 
 /**

@@ -1186,6 +1186,10 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
     // で切ってから運ぶ**——作業者の打ち切り文言は英語の生文言で長さが読めない。
     const status = (message as { status?: unknown }).status;
     const summary = (message as { summary?: unknown }).summary;
+    // **`task_notification` だけが `output_file` を運ぶ**（`SDKTaskNotificationMessage`。
+    // Issue #1554 の手順1の調査）。読めなかったら省く——作り物のパスを
+    // 主張しない（`agent-events.ts` の `AgentDelegationNotified.outputFile` の doc）。
+    const outputFile = (message as { output_file?: unknown }).output_file;
     return [
       {
         type: 'delegation_notified',
@@ -1194,6 +1198,7 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
         ...(typeof summary === 'string'
           ? { summary: excerpt(summary, TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT) }
           : {}),
+        ...(typeof outputFile === 'string' ? { outputFile } : {}),
       },
     ];
   }
