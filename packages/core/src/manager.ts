@@ -50,6 +50,7 @@ import {
   RunnerMcpServersUnsupportedError,
 } from './runner-protocol.js';
 import {
+  classifyAutoFoldUnpushedWorkProbe,
   describeAutoFoldUnpushedWorkProbe,
   evaluateAutoFoldUnpushedWork,
   isPidsUnderPressure,
@@ -2412,6 +2413,39 @@ const PUSH_RETRY_MAX_MS = 60_000;
 const UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS = 5_000;
 
 /**
+ * `#autoFoldSkipJournalWritten`（Issue #1394 の留保 — 同じ委譲・同じ理由の
+ * 見送りを日誌へ積み続けない帳）が持つ件数の上限。
+ *
+ * `runner-subagent-stop-state.ts` の `SUBAGENT_WAKEUP_TRACKING_LIMIT` と
+ * 同じ理由・同じ形——`managerId` は使い回されないので放置すると増え続ける。
+ * 超えたら挿入順の先頭（いちばん古いもの）から捨てる FIFO
+ * （{@link pruneOldestEntries} が実装を持つ）。捨てられた鍵は次に
+ * 見送られたときに「初回」として扱われ、もう一度1回だけ書く——デーモンの
+ * 作り直しで帳が空に戻るのと同じ帰結なので許容する。500 という値そのものに
+ * 実測の根拠は無い（`SUBAGENT_WAKEUP_TRACKING_LIMIT` と同じく「大きく、
+ * 無限ではない」だけ）。
+ */
+const AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT = 500;
+
+/**
+ * `map` が `limit` 件を超えたら、いちばん古いもの（`Map` の挿入順の先頭）
+ * から捨てる。**FIFO であって LRU ではない**——既存の鍵への再 `set` は
+ * 挿入順を動かさないので、書き込むたびに若返るわけではない。
+ *
+ * `runner-subagent-stop-state.ts` の同名の関数（module-local）と同じ形だが
+ * **共有はしていない**——あちらの doc が言うとおり、同じ形をした枝刈りが
+ * この codebase には複数箇所に独立して存在してよい、という既存の判断を
+ * ここでも継ぐ（`#autoFoldSkipJournalWritten` 専用に、ここでも1本持つ）。
+ */
+function pruneOldestEntries<V>(map: Map<string, V>, limit: number): void {
+  while (map.size > limit) {
+    const oldest = map.keys().next();
+    if (oldest.done === true) break;
+    map.delete(oldest.value);
+  }
+}
+
+/**
  * 預かってある生ログを引いた結果。
  *
  * **`unknown[] | null` にしない。** `null` にすると「預かっていない」と
@@ -4251,6 +4285,55 @@ class Pool implements ManagerPool {
    * `#retire()` が**畳み残しを吐き出してから**外す（上限が要らないのはこのため）。
    */
   readonly #rateLimitJournalFolds = new Map<string, JournalFoldWindow>();
+  /**
+   * Issue #1394 の留保 — `#autoFoldOne` が未pushの安全弁で畳めなかったとき、
+   * 同じ委譲・同じ理由の見送りを日誌へ積み続けないための帳
+   * （`managerId` → 前回書いたときの `lastReportAt` ＋ 理由の分類
+   * {@link classifyAutoFoldUnpushedWorkProbe}）。
+   *
+   * **`JournalFoldWindow`（時間窓、issue #1311。すぐ上の
+   * `#rateLimitJournalFolds`）は使わない。** 契機（`runner_list
+   * resources:true`）が呼ばれる間隔は決まっていない——クローンが何分おきに
+   * 見に来るかも、pids 逼迫がどれだけ続くかも保証が無いので、時間窓に
+   * 意味のある長さを与えられない。代わりに「前回と同じ組か」という**状態**
+   * で判定する。
+   *
+   * **書くのは組が変わったときだけ。** (1) 初回 (2) `lastReportAt`
+   * （`ManagerSummary.lastReportAt`。`#autoFoldOne` の `candidateLastReportAt`
+   * の doc）が進んだ——委譲が新しいターンを回した (3) 理由の分類が変わった、
+   * のいずれか。
+   *
+   * **⚠️ `Job.updatedAt` ではなく `lastReportAt` を使う。** 当初
+   * `Job.updatedAt` で試したところ、この安全弁自身が呼ぶ
+   * `unpushedWork()` → `#persist()` が `updatedAt` を無条件に「いま」へ
+   * 進めてしまい（`#persist` の doc）、**2回目の評価で必ず「変わった」と
+   * 誤判定する**うえ、経過時間の起点（段⑤条件5）まで一緒に動いて候補
+   * 判定自体が抜けることを、テストで実際に確認した（`manager.test.ts` の
+   * 該当コメント）。`lastReportAt` は `case 'report'` でしか進まないので、
+   * この安全弁の実行そのものには汚染されない。
+   *
+   * **畳めたら（`'folded'` に至ったら）消える。** 専用の delete はここには
+   * 無い——`abort()` が `outcome: 'stopped'` のときに呼ぶ `#retire()` が、
+   * 他の同種の帳（`#withheldReports` / `#synthesizedNoticeStreaks` /
+   * `#rateLimitJournalFolds`）と同じ契機でここも一緒に畳む
+   * （`#retire()` の該当箇所）。
+   *
+   * **有界にする（{@link AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT}）。**
+   * `managerId` は使い回されないので、このまま放置すると増え続ける——
+   * `runner-subagent-stop-state.ts` の `SUBAGENT_WAKEUP_TRACKING_LIMIT` と
+   * 同じ理由・同じ形（挿入順の先頭＝いちばん古いものから捨てる FIFO）で
+   * 蓋を掛ける。捨てられた鍵は次に見送られたときに「初回」として扱われ、
+   * もう一度1回だけ書く——**デーモンを再起動したときと同じ帰結なので
+   * 許容する**（どちらも「帳が空に戻って1回書き直す」という同じ形）。
+   *
+   * **揮発してよい。** デーモンを作り直せば空になり、次に同じ委譲が同じ
+   * 理由で見送られたときにもう一度1回だけ書く。恒久の台帳（job store）
+   * には写さない。
+   */
+  readonly #autoFoldSkipJournalWritten = new Map<
+    string,
+    { readonly lastReportAt: string | undefined; readonly reasonKey: string }
+  >();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -5399,7 +5482,9 @@ class Pool implements ManagerPool {
         now,
       );
       if (!isCandidate) continue;
-      outcomes.push(await this.#autoFoldOne(manager.managerId, runnerId, pids));
+      outcomes.push(
+        await this.#autoFoldOne(manager.managerId, runnerId, pids, manager.lastReportAt),
+      );
     }
     return outcomes;
   }
@@ -5415,12 +5500,30 @@ class Pool implements ManagerPool {
    *    `status` が `done` でなくなっているかもしれない。読み直して違って
    *    いたら、安全側に倒して何もしない（`'raced'`）。
    * 2. **未 push の安全弁**（`evaluateAutoFoldUnpushedWork`）。`'blocked'` なら
-   *    畳まず、日誌に見送った理由を残す。
+   *    畳まず、日誌に見送った理由を残す。**ただし同じ委譲・同じ理由の見送りを
+   *    繰り返し書かない**（Issue #1394 の留保。`candidateLastReportAt` の doc）。
+   *
+   * @param candidateLastReportAt 呼び出し元（段⑤の候補判定）が読んだ時点の
+   *   `ManagerSummary.lastReportAt`。**`fresh.updatedAt`（`Job.updatedAt`）
+   *   ではなくこちらを「委譲が新しいターンを回したか」の鍵にする。** 理由は
+   *   実測——`unpushedWork()` は呼ぶたびに `#recordUnpushedWorkObservation` →
+   *   `#persist()` を経由し、`#persist()` は無条件に `record.job.updatedAt` を
+   *   「いま」へ進める（`#persist` の doc）。**この安全弁自身がすぐ下で
+   *   `unpushedWork()` を呼ぶので、`Job.updatedAt` は「新しいターンを回したか」
+   *   ではなく「直前にこの安全弁を評価したか」を表してしまい、鍵として使うと
+   *   毎回「変わった」と誤判定して重複除去が機能しない**（実測: 同じ委譲へ
+   *   `runners({resources:true})` を続けて2回呼ぶだけで `Job.updatedAt` が
+   *   動き、かつ経過時間の起点も一緒に動くので段⑤の候補判定自体が2回目には
+   *   落ちる——`manager.test.ts` の変異観測で見つかった）。**`lastReportAt`
+   *   は `case 'report'`（本物の新しいターン）でしか書き換わらない**
+   *   （書き込み箇所は1つだけ。`grep -Fn -- 'record.job.lastReportAt = new Date' packages/core/src/manager.ts`）
+   *   ので、この安全弁の実行そのものには汚染されない。
    */
   async #autoFoldOne(
     managerId: string,
     runnerId: string,
     pids: { readonly current: number; readonly max: number },
+    candidateLastReportAt: string | undefined,
   ): Promise<AutoFoldOutcome> {
     const pidsNote = `pids ${String(pids.current)}/${String(pids.max)}`;
 
@@ -5448,13 +5551,34 @@ class Pool implements ManagerPool {
     const verdict = evaluateAutoFoldUnpushedWork(unpushed);
     if (verdict !== 'clear') {
       const reason = describeAutoFoldUnpushedWorkProbe(unpushed);
-      await this.#journal({
-        type: 'decision',
-        decision:
-          `[auto-fold-skip] ${managerId} は pids 逼迫（runner=${runnerId}、${pidsNote}）で` +
-          `畳む候補だったが、畳まなかった: ${reason}。`,
-        grounds: 'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
-      });
+      // **Issue #1394 の留保 — 同じ委譲・同じ理由の見送りを日誌へ積み続け
+      // ない。** 鍵は「候補判定時点の `lastReportAt`（新しいターンを回した
+      // か。`candidateLastReportAt` の doc——`Job.updatedAt` は使わない）」
+      // ＋「理由の分類（{@link classifyAutoFoldUnpushedWorkProbe}。表示用の
+      // `reason` 本文そのものではない——文言だけ直っても別の理由と誤読しない
+      // ため）」の組。前回書いた組と同じなら日誌には書かない
+      // （`#autoFoldSkipJournalWritten` の doc）。
+      const reasonKey = classifyAutoFoldUnpushedWorkProbe(unpushed);
+      const memoKey = { lastReportAt: candidateLastReportAt, reasonKey };
+      const previous = this.#autoFoldSkipJournalWritten.get(managerId);
+      const unchanged =
+        previous !== undefined &&
+        previous.lastReportAt === memoKey.lastReportAt &&
+        previous.reasonKey === memoKey.reasonKey;
+      if (!unchanged) {
+        await this.#journal({
+          type: 'decision',
+          decision:
+            `[auto-fold-skip] ${managerId} は pids 逼迫（runner=${runnerId}、${pidsNote}）で` +
+            `畳む候補だったが、畳まなかった: ${reason}。`,
+          grounds: 'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
+        });
+        this.#autoFoldSkipJournalWritten.set(managerId, memoKey);
+        pruneOldestEntries(
+          this.#autoFoldSkipJournalWritten,
+          AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT,
+        );
+      }
       return {
         managerId,
         runnerId,
@@ -8599,6 +8723,11 @@ class Pool implements ManagerPool {
       }
 
       case 'report': {
+        if (process.env.DEBUG_AUTOFOLD === '1') {
+          process.stderr.write(
+            `DEBUG report event managerId=${event.managerId} status_before=${record.job.status} text=${event.text}\n`,
+          );
+        }
         // **止めたマネージャーを、後から届く出来事で甦らせない。** `abort()` が
         // `#retire()` しても、`#onEvent` は台帳から像を作り直す（`#load()`）ので、
         // 止めた後に届く `report` を無条件に処理すると `record.job.status` を
@@ -11296,6 +11425,12 @@ class Pool implements ManagerPool {
       });
     }
     this.#rateLimitJournalFolds.delete(managerId);
+    // **`#autoFoldSkipJournalWritten` も同じ契機で外す**（Issue #1394 の
+    // 留保）。上の2つと違って、ここは「記録」ではなく「前回書いた組の
+    // 控え」でしかない——委譲が終端した以上、この managerId 宛てに
+    // `#autoFoldOne` が再び呼ばれることは無いので、吐き出す残りは無い
+    // （`#rateLimitJournalFolds` の `flush()` のような後始末は不要）。
+    this.#autoFoldSkipJournalWritten.delete(managerId);
   }
 
   /**

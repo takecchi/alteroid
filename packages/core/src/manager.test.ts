@@ -8373,6 +8373,179 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
     await registry.stop();
   });
 
+  /**
+   * Issue #1394 の留保 — `runner_list resources:true` は、クローンが手を
+   * 空けているかを見に来るたびに叩かれる契機で、同じ委譲が同じ理由で見送られ
+   * 続けるあいだ何度も呼ばれうる。**日誌へ同じ本文を積み続けない**ことを、
+   * 以下の3本で確かめる:
+   *
+   * 1. 同じ委譲・同じ理由で複数回呼んでも `decision` は1件だけ
+   * 2. `lastReportAt`（委譲が新しいターンを回した印）が進んだら、もう1件書く
+   * 3. 見送りの理由の分類が変わったら、`lastReportAt` が同じでももう1件書く
+   *
+   * どの回でも `autoFolded`（`runner_list` の応答）は毎回 `blocked-unpushed-work`
+   * を返す——**畳むのは日誌だけで、応答の欄は今までどおり**。
+   *
+   * **⚠️ 呼ぶたびに時計を6時間+1分進める。** 段⑤条件5（経過時間の起点＝
+   * `manager.updatedAt`）は、この安全弁自身が呼ぶ `unpushedWork()` の
+   * `#persist()`（`#autoFoldOne` の `candidateLastReportAt` の doc）で
+   * 呼ぶたびに「いま」へ進む——時計を進めずに2回連続で呼ぶと、2回目は
+   * 経過時間が0になり候補から外れてしまう（実測。このコメントの直前まで
+   * 赤くなっていた）。**これは鍵の判定（`lastReportAt` ＋ 理由の分類）とは
+   * 無関係な、候補判定（段⑤）側の制約**——実運用でも、同じ委譲が
+   * 「手が空いてから6時間以上」経つたびにしか再評価されないので、時計を
+   * 進めて呼び直す形がここでの現実に近い。
+   */
+  const RECANDIDATE_GAP_MS = 6 * 3_600_000 + 60_000;
+
+  it('同じ委譲・同じ理由での見送りは、間隔を空けて何度呼んでも decision を1件しか書かない', async () => {
+    const { id, pool, registry, stores, setClock } = await setupActiveDoneCandidate({
+      unpushedWorkResult: {
+        cwd: '/work/project',
+        worktrees: [
+          { relativePath: '.', branch: 'work', unpushedCommitCount: 2, uncommittedChangeCount: 0 },
+        ],
+      },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    let clock = SEVEN_HOURS_LATER;
+    // 同じ委譲・同じ理由で3回、間隔を空けて呼ぶ——`autoFolded` は毎回 blocked を返す。
+    for (let i = 0; i < 3; i += 1) {
+      setClock(clock);
+      const overview = await pool.runners({ resources: true });
+      const outcomes = overview.autoFolded as AutoFoldOutcome[];
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
+      clock += RECANDIDATE_GAP_MS;
+    }
+
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    const skipDecisions = decisions.filter(
+      (entry) => 'decision' in entry && entry.decision.includes('[auto-fold-skip]'),
+    );
+    expect(skipDecisions).toHaveLength(1);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('委譲が新しいターンを回す（lastReportAt が進む）と、同じ理由の見送りでももう1件 decision を書く', async () => {
+    const { id, pool, registry, stores, fake, setClock } = await setupActiveDoneCandidate({
+      unpushedWorkResult: {
+        cwd: '/work/project',
+        worktrees: [
+          { relativePath: '.', branch: 'work', unpushedCommitCount: 2, uncommittedChangeCount: 0 },
+        ],
+      },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    setClock(SEVEN_HOURS_LATER);
+    await pool.runners({ resources: true }); // 1件目。
+
+    // **新しいターンを回す。** `report()` は `record.job.lastReportAt` を
+    // 実時計（`new Date().toISOString()`。`this.#now()` ではない）で進め、
+    // `record.job.status` を書き直す（`case 'report'`）。委譲が実際にもう
+    // 一度動いて `done` へ戻った、という形を模す——`unpushedWorkResult` は
+    // そのまま（理由は変えない）。
+    //
+    // **⚠️ 実時計を先に進めておく。** このテストの実行はすべて同期的な
+    // microtask の連なりで、1件目（`setupActiveDoneCandidate` の中の
+    // `直した`）と2件目（この呼び出し）の `new Date().toISOString()` が
+    // 実時間としてほぼ同時に走る——**その回だけ `lastReportAt` が偶然
+    // 同じミリ秒の文字列になり**、鍵が「変わっていない」と誤判定されて
+    // `decision` が2件目を書かない（実測。このコメントの直前まで、まとめて
+    // 流すと数回に1回この形で赤くなっていた——単体では再現しない、実行
+    // 速度に依存する flake だった）。⟹ 実際に real timer で数ミリ秒待って
+    // から呼ぶ。
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fake.report(id, '2巡目もまだ push していない', 'done');
+    // **`emit()` は `void this.#onEvent(event)` で並行に走る**（`#onEvent`
+    // の doc）——`fake.report()` 自体は待たないので、処理が終わるまで poll
+    // する。**`lastReport`（本文そのもの）で判定する**——`lastReportAt`
+    // （タイムスタンプ）はまさに上の理由で衝突しうる値なので検出条件には
+    // 使わない。
+    await expect
+      .poll(
+        async () => (await stores.jobs.listJobs()).find((entry) => entry.id === id)?.lastReport,
+        { timeout: 2000 },
+      )
+      .toBe('2巡目もまだ push していない');
+
+    // **`case 'report'` は、報告を受けるたびに `#observeUnpushedWorkOnce`
+    // も `void` で起こす（Issue #1266 の (4)）。** あちらも `unpushedWork()`
+    // 経由で `#persist()` を呼び、`updatedAt` を「その時点の clock」へ
+    // 進める——**先に clock を進めてしまうと、この fire-and-forget が
+    // 後から着地して `updatedAt` を新しい clock 値で上書きし、経過時間の
+    // 起点をもう一度リセットしてしまう**（実測。このコメントの直前まで
+    // 2回目の候補判定が毎回落ちていた）。⟹ 直前の poll の後、さらに
+    // 1マクロタスクぶん待ってこの fire-and-forget を着地させてから
+    // 初めて clock を進める。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 段⑤条件5（経過時間）を満たすため、時計をもう一度進める。
+    setClock(SEVEN_HOURS_LATER + RECANDIDATE_GAP_MS);
+    const overview = await pool.runners({ resources: true }); // lastReportAt が進んだので2件目。
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
+
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    const skipDecisions = decisions.filter(
+      (entry) => 'decision' in entry && entry.decision.includes('[auto-fold-skip]'),
+    );
+    expect(skipDecisions).toHaveLength(2);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('見送りの理由の分類が変わったら、lastReportAt が同じでももう1件 decision を書く', async () => {
+    const { id, pool, registry, stores, fake, setClock } = await setupActiveDoneCandidate({
+      unpushedWorkResult: {
+        cwd: '/work/project',
+        worktrees: [
+          { relativePath: '.', branch: 'work', unpushedCommitCount: 2, uncommittedChangeCount: 0 },
+        ],
+      },
+      pids: { current: 900, max: 1000 },
+      capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+    });
+
+    setClock(SEVEN_HOURS_LATER);
+    await pool.runners({ resources: true }); // 1件目。
+
+    // **理由の分類だけを動かす。** 未pushコミット数を 2 → 5 に変える——
+    // `describeAutoFoldUnpushedWorkProbe` の本文も動くが、ここで確かめたいのは
+    // 「本文が動いたから」ではなく「分類（`classifyAutoFoldUnpushedWorkProbe`）
+    // が動いたから」書き直すこと。`report()` は呼ばない——`lastReportAt` は
+    // 一切触っていない。
+    fake.enableUnpushedWork({
+      cwd: '/work/project',
+      worktrees: [
+        { relativePath: '.', branch: 'work', unpushedCommitCount: 5, uncommittedChangeCount: 0 },
+      ],
+    });
+
+    setClock(SEVEN_HOURS_LATER + RECANDIDATE_GAP_MS);
+    const overview = await pool.runners({ resources: true }); // 理由が変わったので2件目。
+    const outcomes = overview.autoFolded as AutoFoldOutcome[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ managerId: id, outcome: 'blocked-unpushed-work' });
+
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    const skipDecisions = decisions.filter(
+      (entry) => 'decision' in entry && entry.decision.includes('[auto-fold-skip]'),
+    );
+    expect(skipDecisions).toHaveLength(2);
+
+    await pool.stop();
+    await registry.stop();
+  });
+
   it('未pushが確かめられなかった（unavailable）ときも安全側で畳まない', async () => {
     const { id, pool, registry } = await setupActiveDoneCandidate({
       // **`unpushedWorkResult` を渡さない——`undefined` のまま。**

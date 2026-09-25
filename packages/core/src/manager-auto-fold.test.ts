@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTO_FOLD_PIDS_PRESSURE_RATIO,
+  classifyAutoFoldUnpushedWorkProbe,
   describeAutoFoldUnpushedWorkProbe,
   evaluateAutoFoldUnpushedWork,
   isPidsUnderPressure,
@@ -167,5 +168,102 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
       },
     });
     expect(text).toContain('1本');
+  });
+});
+
+/**
+ * Issue #1394 の留保 — `manager.ts` の `#autoFoldOne` が「同じ委譲・同じ理由の
+ * 見送りを日誌へ積み続けない」ための鍵。`describeAutoFoldUnpushedWorkProbe`
+ * の表示文言とは独立に、`probe` の構造だけで決まることを確かめる。
+ */
+describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌の重複除去の鍵）', () => {
+  it('同じ内容の probe は同じ鍵を返す（構造が同じなら安定）', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe(cleanProbe);
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }] },
+    });
+    expect(a).toBe(b);
+  });
+
+  it('unavailable はどんな result を持っていても同じ鍵になる', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({ kind: 'unavailable' });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'unavailable',
+      // `AutoFoldUnpushedWorkProbe` の型上 `result` は `kind` に関わらず
+      // optional で持てる——`kind: 'unavailable'` のときは中身を無視する
+      // 実装（`describeAutoFoldUnpushedWorkProbe` と同じ判定）になっている
+      // ことをここでも確かめる。
+      result: { worktrees: [{ unpushedCommitCount: 9, uncommittedChangeCount: 9 }] },
+    });
+    expect(a).toBe(b);
+  });
+
+  it('未pushの件数が動けば鍵も変わる（迷ったら書く側に倒す）', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [{ unpushedCommitCount: 2, uncommittedChangeCount: 0 }] },
+    });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [{ unpushedCommitCount: 5, uncommittedChangeCount: 0 }] },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('未コミットの件数が動けば鍵も変わる', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 1 }] },
+    });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 2 }] },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('打ち切り件数（truncatedAtCount）が動けば鍵も変わる', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], truncatedAtCount: 10 },
+    });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], truncatedAtCount: 20 },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('stoppedEarly の有無が違えば鍵も変わる', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({ kind: 'ok', result: { worktrees: [] } });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], stoppedEarly: true },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('unavailable と ok（clean）は別の鍵になる', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({ kind: 'unavailable' });
+    const b = classifyAutoFoldUnpushedWorkProbe(cleanProbe);
+    expect(a).not.toBe(b);
+  });
+
+  it('作業ツリーの本数が違えば鍵も変わる（1本増えただけでも別扱い）', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }] },
+    });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: {
+        worktrees: [
+          { unpushedCommitCount: 0, uncommittedChangeCount: 0 },
+          { unpushedCommitCount: 0, uncommittedChangeCount: 0 },
+        ],
+      },
+    });
+    expect(a).not.toBe(b);
   });
 });

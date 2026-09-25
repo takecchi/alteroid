@@ -138,3 +138,35 @@ export function describeAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkPro
   if (flagged.length === 0) return '未pushの作業は無かった（この行が出ること自体が想定外）';
   return `未pushの実装・未コミットの変更、または確認できなかった作業ツリーが${String(flagged.length)}本あった`;
 }
+
+/**
+ * {@link evaluateAutoFoldUnpushedWork} が `'blocked'` を返した理由を、
+ * **同じ委譲・同じ理由の見送りを日誌へ積み続けないための、揺れない鍵**に
+ * する（Issue #1394 の留保。呼び出し元 `manager.ts` の `#autoFoldOne` が、
+ * 前回書いた鍵と比べて日誌へ書くかどうかを決める）。
+ *
+ * **{@link describeAutoFoldUnpushedWorkProbe} の本文そのものは鍵にしない。**
+ * あちらは表示用の日本語の文で、文言だけを直しても呼び出し元は「理由が
+ * 変わった」と誤読し、直しただけで再び書き始める。こちらは `probe` の
+ * 構造だけから鍵を組み立てる、表示に依存しない値である。
+ *
+ * **未pushの件数・未コミットの件数もそのまま鍵に含める。** 「件数が動いても
+ * `blocked` のままなら同じ理由」と丸めることもできるが、件数が動いたのに
+ * 日誌へ何も残らないと、増えている／減っている経過が追えなくなる。
+ * **迷ったら書く側に倒す**——件数が1つでも動けば鍵も変わり、もう一度書く。
+ */
+export function classifyAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkProbe): string {
+  if (probe.kind === 'unavailable' || probe.result === undefined) {
+    return JSON.stringify({ kind: 'unavailable' });
+  }
+  const { result } = probe;
+  return JSON.stringify({
+    kind: 'ok',
+    truncatedAtCount: result.truncatedAtCount ?? null,
+    stoppedEarly: result.stoppedEarly === true,
+    worktrees: result.worktrees.map((worktree) => ({
+      unpushedCommitCount: worktree.unpushedCommitCount ?? null,
+      uncommittedChangeCount: worktree.uncommittedChangeCount ?? null,
+    })),
+  });
+}
