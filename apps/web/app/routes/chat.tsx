@@ -477,7 +477,23 @@ export function ChatPane({
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [failure, setFailure] = useState<unknown>(undefined);
+  /**
+   * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。
+   *
+   * **押した／投函した時点の会話 id（`conversationId`）を一緒に持つ（#1576）。**
+   * `ChatPane` は会話を切り替えても作り直されない（doc 冒頭）ので、この失敗を
+   * 会話に依らず立てると、切り替えた後に届いた分が別の会話の画面に出る
+   * ——`interruptNotice`/`interruptFailure`（#1570）と同じ形の穴だった。
+   * 出すかどうかはここでは決めない——描画する側（下の `visibleFailure`）が、
+   * **その描画の時点で決まっている `shownId`** と突き合わせてから決める。
+   *
+   * 新しい会話でまだ id が確定していない失敗は `conversationId: undefined`
+   * を持つ——その時点の `shownId` も同じく `undefined` なので、いま見えている
+   * 「新しい会話」の画面にはそのまま出る。
+   */
+  const [failure, setFailure] = useState<
+    { conversationId: string | undefined; error: unknown } | undefined
+  >(undefined);
   /**
    * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
    * ボタンの二重打鍵を防ぐためだけの、この画面だけの状態——サーバ側の状態には
@@ -510,13 +526,10 @@ export function ChatPane({
    * `handleInterrupt` の呼べなかった失敗（ネットワーク断・403 等）。`interruptNotice`
    * と同じ理由・同じ形で会話 id を持つ（#1570）。
    *
-   * **画面全体で共有している `failure`（上）へは合流させない。** `failure` は
-   * 送信経路（`send`/`followUp`、ストリームの `error` イベント）など会話に
-   * 依らない複数の発生源を1つの表示枠へ集約したもので、`failure` 自体は
-   * どの会話由来かを持たない。そこへ会話スコープを混ぜると他の発生源まで
-   * 巻き込むことになるので、interrupt 由来の失敗だけをここで別に持ち、
-   * 描画する場所（下の `ErrorNote`）で `interruptNotice` と同じ形の突き合わせを
-   * してから合流させる。
+   * **送信経路の `failure`（上）へは合流させない。** どちらも会話 id を持つように
+   * なった（#1576）が、発生源（`handleInterrupt` と `send`/`followUp`）が別なので
+   * state は分けたまま持ち、描画する場所（下の `ErrorNote`）で `visibleFailure` /
+   * `visibleInterruptFailure` として同じ形の突き合わせをしてから合流させる。
    */
   const [interruptFailure, setInterruptFailure] = useState<
     { conversationId: string; error: unknown } | undefined
@@ -1111,7 +1124,21 @@ export function ChatPane({
         }
         recordOwnMessage(conversationId, text);
       } catch (caught) {
-        setFailure(caught);
+        /*
+         * **投函先の会話 id を持たせる（#1576）。** ここは投函先を見ずに
+         * `failure` を立てていた——`ChatPane` は会話を切り替えても作り直され
+         * ないので、A で追送を打って B へ切り替えた後に投函が失敗すると、
+         * B の画面に出ていた。
+         *
+         * `running.id` を読む。`send()` が渡す `running`（＝ `streamRef.current`）
+         * は、受信中のメインのストリームが `open` を見た時点で `stream.id` を
+         * その場で書き換える（`send` の doc）ので、ここで読む時点の `running.id`
+         * は「いま分かっている投函先」を指す——新しい会話でまだ確定していなければ
+         * `undefined`。`running.opened` が解決しないまま失敗した場合も、
+         * `running.id` は作成時の値（既存の会話ならその id、新しい会話ならまだ
+         * `undefined`）のままなので、そのまま使える。
+         */
+        setFailure({ conversationId: running.id, error: caught });
       }
     },
     [api, recordOwnMessage, showOwnLine],
@@ -1392,8 +1419,23 @@ export function ChatPane({
                 },
               ]);
               break;
+            /*
+             * **`writable()` では締めない（#1576）。** `append`/`setTransient`
+             * と違い、ここは同じ会話の中で一度しか起きない終端の事実であって、
+             * 積み足す・差し替える対象の行を持たない——`writable()` で弾いて
+             * 握り潰すと、人間に一度も見せないまま消える。**その代わり、下の
+             * `conversationId: stream.id` で会話を持たせ、出すかどうかは描画の
+             * 時点の `shownId` との突き合わせ（`visibleFailure`）に任せる**
+             * （`interruptNotice`/`interruptFailure` と同じ形、#1570）。
+             *
+             * この形が要る理由: 会話を切り替えたときにストリームを止める効果
+             * （`shownIdRef.current = shownId; ...abort()...`）が走るより前——
+             * B の画面が commit された直後の窓——に A のこの `error` が届くと、
+             * 以前は無条件に `failure` を立てていたので B の画面に A のエラーが
+             * 出ていた。
+             */
             case 'error':
-              setFailure(new Error(event.message));
+              setFailure({ conversationId: stream.id, error: new Error(event.message) });
               break;
             case 'done':
               setLines((previous) => previous.filter((line) => line.transient !== true));
@@ -1401,7 +1443,15 @@ export function ChatPane({
           }
         }
       } catch (caught) {
-        if (!controller.signal.aborted) setFailure(caught);
+        /*
+         * `!controller.signal.aborted` は「人間が受信をやめた／会話を切り替えて
+         * 止めた」を除くためのものだが、それだけでは #1576 の窓（効果が走る
+         * 前）を締めきれない——ここも `conversationId` を持たせ、`visibleFailure`
+         * の突き合わせで二重に守る。
+         */
+        if (!controller.signal.aborted) {
+          setFailure({ conversationId: stream.id, error: caught });
+        }
       } finally {
         // `open` を一度も見ないまま終わったなら、追送は投函先を持てない。
         // 待たせたままにすると、続けて打った発言が永久に返ってこない
@@ -1548,6 +1598,13 @@ export function ChatPane({
     interruptFailure !== undefined && interruptFailure.conversationId === shownId
       ? interruptFailure.error
       : undefined;
+  /**
+   * `failure`（送信経路: `send`/`followUp`）を**いま出してよいか**の判断（#1576）。
+   * 上の2つと同じ形——判断するのはここだけで、`failure` を立てる側
+   * （`case 'error'`・outer `catch`・`followUp` の `catch`）はもう判断しない。
+   */
+  const visibleFailure =
+    failure !== undefined && failure.conversationId === shownId ? failure.error : undefined;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -1895,13 +1952,14 @@ export function ChatPane({
 
       <div className="shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         {/*
-          `failure`（送信経路など会話に依らない発生源）と
-          `visibleInterruptFailure`（interrupt 由来、会話が一致するときだけ）を
-          同じ枠へ合流させる。両方立つことは無い想定だが、立っても `failure` を
-          優先する——どちらが先でも「何かの失敗が出ている」という事実自体は
-          変わらないので、優先順位そのものに強い意味は無い。
+          `visibleFailure`（送信経路: `send`/`followUp`、会話が一致するときだけ、
+          #1576）と `visibleInterruptFailure`（interrupt 由来、同じく会話が
+          一致するときだけ、#1570）を同じ枠へ合流させる。両方立つことは無い
+          想定だが、立っても `visibleFailure` を優先する——どちらが先でも
+          「何かの失敗が出ている」という事実自体は変わらないので、優先順位
+          そのものに強い意味は無い。
         */}
-        <ErrorNote error={failure ?? visibleInterruptFailure} className="mb-2" />
+        <ErrorNote error={visibleFailure ?? visibleInterruptFailure} className="mb-2" />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
             {/*
