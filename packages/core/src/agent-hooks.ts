@@ -11,25 +11,37 @@
  * ない」（AGENTS.md「実装の前提」）に反する——次の provider を足すとき、
  * 同じ形のフック入力を持たない provider は、この欄を埋められない。
  *
- * **この PR の範囲は `PostToolUse` / `PostToolUseFailure` の2本だけ**
- * （19個の SDK 型の欄のうち13個が `HookCallback` で、そのうち最大の内訳が
- * この2本の3 Request 型ぶんである）。他のフック（`PreToolUse` /
- * `PreCompact` / `UserPromptSubmit` / `SubagentStop` / `Stop`）は次の PR 群
- * に残す。
+ * **1本目の PR（#1527）の範囲は `PostToolUse` / `PostToolUseFailure` の
+ * 2本だけだった**（19個の SDK 型の欄のうち13個が `HookCallback` で、その
+ * うち最大の内訳がこの2本の3 Request 型ぶんである）。**この2本目の PR
+ * （#486 中立の口の2本目）では、残りのうち観測専用と確かめられたもの
+ * ——`PreCompact`（クローン・マネージャー）/ `UserPromptSubmit` /
+ * `Stop`（どちらもマネージャー）——を足す。** `PreToolUse`（判断を返す
+ * 唯一のフック）と `runner.ts` 側の `PostToolUse`（下の理由で対象外）は
+ * 触っていない。**`SubagentStop` も対象外にした** — 見た目の doc・
+ * コメントは「観測専用」と名乗っていたが、`runner.ts` の `#onSubagentStop`
+ * の実装を読むと `remaining.length > 0` かつ `shouldWake` が立った回に
+ * `hookSpecificOutput.additionalContext` を返し、作業者を実際に起こし直す
+ * （PR #594 で観測専用にしたのを、後の PR が判断つきへ戻した——同ファイルの
+ * `#onSubagentStop` の doc 内「⚠️ ここは観測専用ではない」が経緯を持つ）。
+ * ⟹ **doc やコメントの「観測専用」という自己申告を鵜呑みにせず、実装の
+ * 返り値を読んで確かめること。**
  *
  * ## 観測専用のフックだけを対象にする
  *
- * ここに置く2つの記録型は、**判断を返さないフック**の入力を写す。
+ * ここに置く記録型は、**判断を返さないフック**の入力を写す。
  * `clone.ts` 側（本セッション・蒸留の両方）の `PostToolUse` /
  * `PostToolUseFailure` ハンドラは、実装を読むと常に `{ continue: true }`
  * だけを返す——観測（日誌へ残す・`effort` や生ログの場所を控える）しか
- * していない。
+ * していない。`clone.ts` / `runner.ts` の `PreCompact`、`runner.ts` の
+ * `UserPromptSubmit` / `Stop` も同様に、実装のすべての分岐で
+ * `{ continue: true }` だけを返すことを確かめてある。
  *
  * **`runner.ts` 側の `PostToolUse` は対象外である。** `#onPostToolUse` は
  * `#annotateCutOffWorkers` の結果を `hookSpecificOutput.additionalContext`
  * として返す経路を持ち、これは「起きたことをただ記録する」を超えた判断
  * （モデルへ追加の文脈を注ぎ込むかどうか）である。`ManagerSessionOptionsRequest`
- * の `onPostToolUse` 欄は、このため今回は `HookCallback` のまま残す
+ * の `onPostToolUse` 欄は、このため今回も `HookCallback` のまま残す
  * （`claude-provider.ts` の同欄の doc に理由を書いてある）。**`runner.ts` 側の
  * `PostToolUseFailure`（`#onPostToolUseFailure`）は `{ continue: true }` だけ
  * を返すので、こちらは対象に含む。**
@@ -37,11 +49,14 @@
  * ## 欄は「いま実際に読まれているもの」だけ
  *
  * 新しい語彙を作らない——`clone.ts` の `#journalToolUse` /
- * `#journalToolUseFailure` / `cloneToolActor` と `runner.ts` の
- * `#onPostToolUseFailure` が実際に読んでいる欄だけを、同じ意味のまま
- * camelCase へ写した。SDK の snake_case な入力からこの形へ写す処理
- * （`toAgentToolAuditRecord` / `toAgentToolAuditFailureRecord`）は
- * `claude-provider.ts` 側に置く——ここは「届いた後の形」だけを知っている。
+ * `#journalToolUseFailure` / `cloneToolActor` / `#onPreCompact` と
+ * `runner.ts` の `#onPostToolUseFailure` / `#onPreCompact` /
+ * `#onUserPromptSubmit` / `#onStop` が実際に読んでいる欄だけを、同じ意味の
+ * まま camelCase へ写した。SDK の snake_case な入力からこの形へ写す処理
+ * （`toAgentToolAuditRecord` / `toAgentToolAuditFailureRecord` /
+ * `toAgentPreCompactRecord` / `toAgentUserPromptSubmitRecord` /
+ * `toAgentStopRecord`）は `claude-provider.ts` 側に置く——ここは「届いた後の
+ * 形」だけを知っている。
  *
  * ## ⛔ このファイルは Claude Agent SDK を import してはいけない
  *
@@ -101,6 +116,56 @@ export interface AgentToolAuditFailureRecord {
   error?: string;
   /** 中断（キャンセル）によって終わった呼び出しか。省かれていれば「分かっていない」——中断ではないと確定しているのではない（`clone.ts` の `#journalToolUseFailure` の同じ判断）。 */
   isInterrupt?: boolean;
+}
+
+/**
+ * `PreCompact`（生ログを要約に潰す直前）1件の中立の記録。
+ *
+ * **すべて任意である。** `clone.ts` の `#onPreCompact` と `runner.ts` の
+ * `#onPreCompact` の両方が使うが、読む欄は違う——クローン側は3欄すべて、
+ * マネージャー側は `transcriptPath` だけを読む（マネージャー側は蒸留を
+ * 持たず退避だけなので、`sessionId` も `signal` も要らない）。
+ */
+export interface AgentPreCompactRecord {
+  /** 生ログ（transcript）の置き場所。読めなければ省く。 */
+  transcriptPath?: string;
+  /** セッションの識別子。読めなければ省く。 */
+  sessionId?: string;
+  /**
+   * 後続処理を打ち切ってよいかの合図。SDK の `HookCallback` が渡す
+   * `options.signal` をそのまま運ぶ——`clone.ts` の `#onPreCompact` だけが
+   * 読む（蒸留の中断判定。「中断の合図は蒸留にだけ掛かる」）。
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * `UserPromptSubmit`（ターンの開始）1件の中立の記録。マネージャー専用
+ * （`worker_wait` の観測口。`runner.ts` の `#onUserPromptSubmit`）。
+ */
+export interface AgentUserPromptSubmitRecord {
+  /** 呼び出しが作業者（サブエージェント）からのものだったときの id。本体のターンなら省く。 */
+  agentId?: string;
+  /** このプロンプトを起こした主体（`user` / `sdk` / `system` など。provider の自由文字列）。読めなければ省く。 */
+  source?: string;
+}
+
+/**
+ * `Stop`（マネージャー自身のターンが閉じる瞬間）1件の中立の記録
+ * （#861 の観測口。`runner.ts` の `#onStop`）。
+ */
+export interface AgentStopRecord {
+  /**
+   * 走行中・待機中の背景処理。中身の形は provider ごとに違いうるので
+   * `unknown` のまま運ぶ——`runner.ts` 側は各要素をさらに `unknown` として
+   * 扱っている（`#stopTaskOwnerKind` / `classifyBackgroundTaskStatus`）。
+   * 読めなければ省く。
+   */
+  backgroundTasks?: unknown[];
+  /** このセッションを起こす予約（cron・`/loop`）。読めなければ省く。 */
+  sessionCrons?: unknown[];
+  /** Stop hook が既に一度発火して継続させた印。読めなければ省く。 */
+  stopHookActive?: boolean;
 }
 
 /**

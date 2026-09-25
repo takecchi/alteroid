@@ -20,7 +20,11 @@ import type {
   AgentTurnEnded,
   AgentTurnUsage,
 } from './agent-events.js';
-import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
+import type {
+  AgentPreCompactRecord,
+  AgentToolAuditFailureRecord,
+  AgentToolAuditRecord,
+} from './agent-hooks.js';
 import {
   buildCloneDistillOptions,
   buildCloneSessionOptions,
@@ -9109,7 +9113,7 @@ class Clone implements CloneHost {
       // `#onPreToolUse` の doc、配線の理由は `claude-provider.ts` の
       // `CloneSessionOptionsRequest.onPreToolUse` の doc。
       onPreToolUse: (input) => this.#onPreToolUse(input),
-      onPreCompact: (input, _toolUseId, extra) => this.#onPreCompact(input, extra?.signal),
+      onPreCompact: (record) => this.#onPreCompact(record),
       // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
       // （後者は `#onPostToolUse` のコメント）。
       //
@@ -10027,11 +10031,8 @@ class Clone implements CloneHost {
    * 蒸留は生存条件であり、後回しにしてよい機能ではない。ここで記憶へ移し損ねた
    * ものは、compaction のたびに人格の一部として失われる。
    */
-  async #onPreCompact(input: unknown, signal?: AbortSignal): Promise<{ continue: true }> {
-    const { session_id: sessionId, transcript_path: transcriptPath } = input as {
-      session_id?: string;
-      transcript_path?: string;
-    };
+  async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
+    const { sessionId, transcriptPath, signal } = record;
 
     // **いちばん先に印を立てる**（`#memoryIndexRefreshPending`）。compaction は
     // このフックが何を返しても起きるので、生ログのパスが取れない回でも
@@ -10040,7 +10041,7 @@ class Clone implements CloneHost {
     this.#memoryIndexRefreshPending = true;
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
-      return { continue: true };
+      return;
     }
 
     // **(i) 退避と (ii) 蒸留を別の `try` に割る**（`#salvageTranscript` と同じ形）。
@@ -10083,7 +10084,7 @@ class Clone implements CloneHost {
     }
 
     // **中断の合図は蒸留にだけ掛かる**（直す前と同じ。退避は中断で飛ばさない）。
-    if (signal?.aborted === true) return { continue: true };
+    if (signal?.aborted === true) return;
 
     try {
       await this.#distillFromTranscript(tailOf(await readTranscriptTail(transcriptPath)));
@@ -10095,8 +10096,6 @@ class Clone implements CloneHost {
         text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${String(error)}`,
       });
     }
-
-    return { continue: true };
   }
 
   /**

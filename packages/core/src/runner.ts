@@ -22,7 +22,12 @@ import type {
   AgentPermissionDenial,
   AgentTurnEnded,
 } from './agent-events.js';
-import type { AgentToolAuditFailureRecord } from './agent-hooks.js';
+import type {
+  AgentPreCompactRecord,
+  AgentStopRecord,
+  AgentToolAuditFailureRecord,
+  AgentUserPromptSubmitRecord,
+} from './agent-hooks.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
@@ -1955,16 +1960,17 @@ class RunnerSession {
       // **`PostToolUse` と排他**（Issue #924 の実測分岐。#929）。理由は
       // `#onPostToolUseFailure` の doc を見よ。
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
-      onPreCompact: (input) => this.#onPreCompact(input),
+      onPreCompact: (record) => this.#onPreCompact(record),
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `#onUserPromptSubmit` の doc を見よ。
-      onUserPromptSubmit: (input) => this.#onUserPromptSubmit(input),
-      // **観測専用**（#357）。`{ continue: true }` を返すだけで何もブロック
-      // しない。理由は `#onSubagentStop` の doc を見よ。
+      onUserPromptSubmit: (record) => this.#onUserPromptSubmit(record),
+      // **観測専用ではない**（#357）。当人が起こした背景処理が残っていれば
+      // 起こし直しの `additionalContext` を返すことがある。理由は
+      // `#onSubagentStop` の doc を見よ。
       onSubagentStop: (input) => this.#onSubagentStop(input),
       // **観測専用**（#861）。`{ continue: true }` を返すだけで、**何も判断せず、
       // 何も抑制しない。** 理由は `#onStop` の doc を見よ。
-      onStop: (input) => this.#onStop(input),
+      onStop: (record) => this.#onStop(record),
     });
   }
 
@@ -3918,9 +3924,8 @@ class RunnerSession {
    * `hook.agent_id === undefined` のときだけ数える（`#onPostToolUse` と同じ
    * 判定。作業者の分を混ぜない）。
    */
-  async #onUserPromptSubmit(input: unknown): Promise<{ continue: true }> {
-    const hook = input as { agent_id?: string; source?: unknown };
-    if (hook.agent_id === undefined) {
+  async #onUserPromptSubmit(record: AgentUserPromptSubmitRecord): Promise<void> {
+    if (record.agentId === undefined) {
       this.#turnTally.incrementSubmitsSinceResult();
       // **取れた分だけ載せる。** SDK の JSDoc
       // （`UserPromptSubmitHookInput.source`）曰く、この値は「system = 他の
@@ -3930,11 +3935,10 @@ class RunnerSession {
       // それでも割れない問いは `RunnerTurnTally` の `#submitSources` の doc）。
       // 取れない回に `'unknown': 1` のような行を作らない（AGENTS.md 地雷
       // 「取れない軸に0の行を作る」）。
-      if (typeof hook.source === 'string') {
-        this.#turnTally.recordSubmitSource(hook.source);
+      if (typeof record.source === 'string') {
+        this.#turnTally.recordSubmitSource(record.source);
       }
     }
-    return { continue: true };
   }
 
   /**
@@ -4575,28 +4579,20 @@ class RunnerSession {
    * いけない。`#markProgressed()` などの既存の副作用は呼ばない（この PR は観測を
    * 足すだけで、既存の挙動を1つも変えない）。
    */
-  async #onStop(input: unknown): Promise<{ continue: true }> {
+  async #onStop(record: AgentStopRecord): Promise<void> {
     try {
       // **数えるのは何より先。** 下のどの枝を通っても（間引かれても）通算は進む ——
       // この数そのものが #861 の問い「`Stop` はいつ来て、いつ来ないか」への材料である。
       const stopFirings = this.#stopState.incrementStopFirings();
 
-      const hook = input as {
-        background_tasks?: unknown;
-        session_crons?: unknown;
-        stop_hook_active?: unknown;
-      };
-      const tasks = Array.isArray(hook.background_tasks) ? hook.background_tasks : [];
-      const crons = Array.isArray(hook.session_crons) ? hook.session_crons : [];
-      // **取れたときだけ載せる。** 取れない回に既定値の行を作らない
-      // （AGENTS.md 地雷「取れない軸に0の行を作る」）。
-      const stopHookActive =
-        typeof hook.stop_hook_active === 'boolean' ? hook.stop_hook_active : undefined;
+      const tasks = record.backgroundTasks ?? [];
+      const crons = record.sessionCrons ?? [];
+      const stopHookActive = record.stopHookActive;
 
       // **在庫も予約も無い ＝ SDK の言う「session is done」の側。**
       if (tasks.length === 0 && crons.length === 0) {
         this.#noteStopIdle();
-        return { continue: true };
+        return;
       }
 
       // 所有者と `status` で数え上げる。**どちらの内訳も合計が `tasks.length` に
@@ -4660,8 +4656,6 @@ class RunnerSession {
         // まだ無い（割り込むかどうかは実データを見てから決める。#861 の段2）。
         text: this.#truncateStopNoteText(noteLines.join('\n')),
       });
-
-      return { continue: true };
     } catch (error: unknown) {
       // フックが例外でセッションを止めてはいけない。記録そのものが失敗したことだけを、
       // 握れる範囲でもう一度 note として上げる（`#onSubagentStop` の `catch` と同じ
@@ -4676,7 +4670,6 @@ class RunnerSession {
         // ここまで失敗したら、もう上げる手段が無い。黙って諦める
         // （挙動は変えない＝必ず continue: true を返すことのほうを優先する）。
       }
-      return { continue: true };
     }
   }
 
@@ -4794,11 +4787,10 @@ class RunnerSession {
   }
 
   /** 要約に潰される前に全文を上げる（監査は日誌＋アーカイブで担保する）。 */
-  async #onPreCompact(input: unknown): Promise<{ continue: true }> {
-    const { transcript_path: path } = input as { transcript_path?: string };
+  async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
+    const path = record.transcriptPath;
     if (typeof path === 'string' && path.length > 0) this.#transcriptPath = path;
     await this.#shipArchive();
-    return { continue: true };
   }
 
   /**

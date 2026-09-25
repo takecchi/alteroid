@@ -5,10 +5,13 @@ import type {
   Options,
   PostToolUseFailureHookInput,
   PostToolUseHookInput,
+  PreCompactHookInput,
   SDKMessage,
   SessionStore,
   SpawnedProcess,
   SpawnOptions,
+  StopHookInput,
+  UserPromptSubmitHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
@@ -21,8 +24,11 @@ import type {
 import type { AgentProvider } from './agent-ports.js';
 import type {
   AgentObservationHook,
+  AgentPreCompactRecord,
+  AgentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
+  AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
@@ -137,6 +143,75 @@ function wrapToolAuditFailureHook(
   };
 }
 
+/**
+ * `PreCompact` の生入力を {@link AgentPreCompactRecord} へ写す。
+ *
+ * **`signal` だけは `input` ではなく `HookCallback` の第3引数
+ * （`options.signal`）から来る。** SDK の型では常に渡るので `undefined` には
+ * ならないが、この関数の呼び出し側（`wrapPreCompactHook`）がそのまま渡した
+ * ものをここへ通すだけで、値そのものの意味は変えない。
+ */
+function toAgentPreCompactRecord(input: unknown, signal: AbortSignal): AgentPreCompactRecord {
+  const raw = input as Partial<PreCompactHookInput> | null | undefined;
+  return {
+    ...(typeof raw?.transcript_path === 'string' ? { transcriptPath: raw.transcript_path } : {}),
+    ...(typeof raw?.session_id === 'string' ? { sessionId: raw.session_id } : {}),
+    signal,
+  };
+}
+
+/** `UserPromptSubmit` の生入力を {@link AgentUserPromptSubmitRecord} へ写す。無い欄は省く。 */
+function toAgentUserPromptSubmitRecord(input: unknown): AgentUserPromptSubmitRecord {
+  const raw = input as Partial<UserPromptSubmitHookInput> | null | undefined;
+  return {
+    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+    ...(typeof raw?.source === 'string' ? { source: raw.source } : {}),
+  };
+}
+
+/** `Stop` の生入力を {@link AgentStopRecord} へ写す。無い欄は省く。 */
+function toAgentStopRecord(input: unknown): AgentStopRecord {
+  const raw = input as Partial<StopHookInput> | null | undefined;
+  return {
+    ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
+    ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
+    ...(raw?.stop_hook_active === undefined ? {} : { stopHookActive: raw.stop_hook_active }),
+  };
+}
+
+/**
+ * 中立の `PreCompact` 観測フックを SDK の `HookCallback` へ包み直す。
+ *
+ * **`{ continue: true }` 固定で返す**（観測専用フックなので判断を返す余地は
+ * 無い）。**`await` を保つ** —— `clone.ts` 側の実装は退避・蒸留の完了を
+ * 待ってから `continue: true` を返しており（compaction はこのフックの
+ * 返り値を待つ）、包み直しでその待ち合わせの意味を変えない。
+ */
+function wrapPreCompactHook(hook: AgentObservationHook<AgentPreCompactRecord>): HookCallback {
+  return async (input, _toolUseId, options) => {
+    await hook(toAgentPreCompactRecord(input, options.signal));
+    return { continue: true };
+  };
+}
+
+/** `UserPromptSubmit` 版の {@link wrapPreCompactHook}。同じ理由で `{ continue: true }` 固定・`await` 保持。 */
+function wrapUserPromptSubmitHook(
+  hook: AgentObservationHook<AgentUserPromptSubmitRecord>,
+): HookCallback {
+  return async (input) => {
+    await hook(toAgentUserPromptSubmitRecord(input));
+    return { continue: true };
+  };
+}
+
+/** `Stop` 版の {@link wrapPreCompactHook}。同じ理由で `{ continue: true }` 固定・`await` 保持。 */
+function wrapStopHook(hook: AgentObservationHook<AgentStopRecord>): HookCallback {
+  return async (input) => {
+    await hook(toAgentStopRecord(input));
+    return { continue: true };
+  };
+}
+
 // ---------------------------------------------------------------------------
 // A. クローン本セッション
 // ---------------------------------------------------------------------------
@@ -189,7 +264,14 @@ export interface CloneSessionOptionsRequest {
   /** `#stores.sessions.getCloneSessionId()` の結果そのまま。`null` なら resume 素材が無い。 */
   resume: string | null;
   sessionStore?: SessionStore;
-  onPreCompact: HookCallback;
+  /**
+   * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`clone.ts` の
+   * `#onPreCompact` は退避（生ログの保存）と蒸留（記憶への書き戻し）を行うが、
+   * SDK へ返す値はどの分岐でも `{ continue: true }` だけ——compaction を止め
+   * たり遅らせたりする判断は返さない（`wrapPreCompactHook` が包む。`await` は
+   * 保つので、退避・蒸留の完了を待ってから compaction が進む順序は変わらない）。
+   */
+  onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   /**
    * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`clone.ts` の
    * `#onPostToolUse` は日誌へ書く・`effort` や生ログの場所を控えるだけで、
@@ -295,7 +377,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       PreCompact: [
         {
           timeout: PRE_COMPACT_HOOK_TIMEOUT_SECONDS,
-          hooks: [onPreCompact],
+          hooks: [wrapPreCompactHook(onPreCompact)],
         },
       ],
       // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
@@ -438,22 +520,42 @@ export interface ManagerSessionOptionsRequest {
    * だけを返す観測専用フックなので、中立の型へ移してある。**
    */
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
-  onPreCompact: HookCallback;
+  /**
+   * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`runner.ts` の
+   * `#onPreCompact` は退避（`#shipArchive`）だけを行い、どの分岐でも
+   * `{ continue: true }` だけを返す。`wrapPreCompactHook` が包む（クローン側の
+   * `CloneSessionOptionsRequest.onPreCompact` と同じ関数を使うが、マネージャー
+   * 側は `AgentPreCompactRecord.sessionId` / `.signal` を読まない）。
+   */
+  onPreCompact: AgentObservationHook<AgentPreCompactRecord>;
   /**
    * ターンの開始を数える観測専用のフック（`worker_wait`）。
    *
    * **optional にしない。** 省略できる形にすると、provider を足す側が「渡さない」
    * ことで観測を静かに落とせる（可観測性は要件である。PRD「可観測性」）。
+   * `runner.ts` の `#onUserPromptSubmit` はどの分岐でも `{ continue: true }`
+   * だけを返すので中立の型へ移してある（`wrapUserPromptSubmitHook` が包む）。
    */
-  onUserPromptSubmit: HookCallback;
+  onUserPromptSubmit: AgentObservationHook<AgentUserPromptSubmitRecord>;
   /**
    * 作業者セッションが停止した瞬間の背景処理の在り高を観測する専用フック
    * （#357 の実測口）。
    *
-   * **optional にしない。理由は直上の `onUserPromptSubmit` と同じ** —
-   * 省略できる形にすると、provider を足す側が「渡さない」ことで観測を静かに
-   * 落とせる（可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の
-   * `#onSubagentStop` の doc を見よ。
+   * **中立の型に載せていない（`HookCallback` のまま）。** `runner.ts` の
+   * `#onSubagentStop` は、当人が起こした背景処理が残っていて通し上限・
+   * 1本あたりの上限のどちらも超えていない回に、作業者を起こし直す
+   * `hookSpecificOutput.additionalContext` を返す——これは「起きたことを
+   * ただ記録する」を超えた判断であり、いまの `AgentObservationHook`
+   * （`void` しか返せない）には載らない。**⚠️ 同ファイルの doc・呼び出し側の
+   * コメントは「観測専用」と名乗っているが、これは PR #594 時点の記述が
+   * 後続の PR（起こし直しを足した側）で更新されないまま残ったものである
+   * （`agent-hooks.ts` のファイル doc「⚠️ ここは観測専用ではない」の節）。
+   * ⟹ この欄を中立化するには `onPostToolUse` と同様、`AgentObservationHook`
+   * に返り値を持たせる（または専用の型を別に起こす）判断とセットで次の PR に
+   * 送る（#486）。** optional にしない。理由は直上の `onUserPromptSubmit` と
+   * 同じ——省略できる形にすると、provider を足す側が「渡さない」ことで観測を
+   * 静かに落とせる（可観測性は要件である。PRD「可観測性」）。中身は
+   * `runner.ts` の `#onSubagentStop` の doc を見よ。
    */
   onSubagentStop: HookCallback;
   /**
@@ -467,10 +569,12 @@ export interface ManagerSessionOptionsRequest {
    *
    * **optional にしない。理由は直上の `onSubagentStop` と同じ** —— 省略できる
    * 形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせる
-   * （可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の `#onStop`
-   * の doc を見よ。
+   * （可観測性は要件である。PRD「可観測性」）。**`runner.ts` の `#onStop` は
+   * どの分岐でも `{ continue: true }` だけを返す**（`#onSubagentStop` とは
+   * 違い、こちらは実際に観測専用のまま）ので、中立の型へ移してある
+   * （`wrapStopHook` が包む）。中身は `runner.ts` の `#onStop` の doc を見よ。
    */
-  onStop: HookCallback;
+  onStop: AgentObservationHook<AgentStopRecord>;
   /**
    * **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
    *
@@ -656,18 +760,21 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // 一方だけが呼ばれる。**片方だけ登録しない道は無い** — 失敗・中断した
       // 道具呼び出しが日誌に1件も残らなくなる（Issue #929）。
       PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
-      PreCompact: [{ hooks: [onPreCompact] }],
+      // **観測専用**。`{ continue: true }` を返すだけで compaction を止めない
+      // （`ManagerSessionOptionsRequest.onPreCompact` の doc）。
+      PreCompact: [{ hooks: [wrapPreCompactHook(onPreCompact)] }],
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。
-      UserPromptSubmit: [{ hooks: [onUserPromptSubmit] }],
-      // **観測専用**（#357）。`{ continue: true }` を返すだけで何もブロック
-      // しない。理由は `runner.ts` の `#onSubagentStop` の doc を見よ。
+      UserPromptSubmit: [{ hooks: [wrapUserPromptSubmitHook(onUserPromptSubmit)] }],
+      // **観測専用ではない**（#357）。当人が起こした背景処理が残っていれば
+      // 起こし直しの `additionalContext` を返すことがある——`HookCallback` の
+      // まま渡す（`ManagerSessionOptionsRequest.onSubagentStop` の doc）。
       SubagentStop: [{ hooks: [onSubagentStop] }],
       // **観測専用**（#861）。`{ continue: true }` を返すだけで、`decision` も
       // `hookSpecificOutput` も返さない —— 直上の `SubagentStop` は起こし直し
       // （`additionalContext`）を返す側へ変わっているが、**こちらは記録だけで
       // ある。** 理由は `runner.ts` の `#onStop` の doc を見よ。
-      Stop: [{ hooks: [onStop] }],
+      Stop: [{ hooks: [wrapStopHook(onStop)] }],
     },
   };
 }

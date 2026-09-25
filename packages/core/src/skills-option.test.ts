@@ -7,7 +7,13 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
-import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
+import type {
+  AgentPreCompactRecord,
+  AgentStopRecord,
+  AgentToolAuditFailureRecord,
+  AgentToolAuditRecord,
+  AgentUserPromptSubmitRecord,
+} from './agent-hooks.js';
 import {
   buildCloneDistillOptions,
   buildCloneSessionOptions,
@@ -28,12 +34,16 @@ import { WORKER_AGENT_NAME } from './runner.js';
  */
 
 const noopHook: HookCallback = async () => ({});
-// **観測専用フックへ渡す中立の noop。** `onPostToolUse` / `onPostToolUseFailure`
-// のうち中立の型（`AgentObservationHook`）へ移した欄はこちらを渡す
-// （`ManagerSessionOptionsRequest.onPostToolUse` は移していないので `noopHook`
+// **観測専用フックへ渡す中立の noop。** `onPostToolUse` / `onPostToolUseFailure` /
+// `onPreCompact` / `onUserPromptSubmit` / `onStop` のうち中立の型
+// （`AgentObservationHook`）へ移した欄はこちらを渡す（`onSubagentStop` と
+// `ManagerSessionOptionsRequest.onPostToolUse` は移していないので `noopHook`
 // のまま——`claude-provider.ts` の同欄の doc を見よ）。
 const noopAuditHook: (record: AgentToolAuditRecord) => void = () => undefined;
 const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () => undefined;
+const noopPreCompactHook: (record: AgentPreCompactRecord) => void = () => undefined;
+const noopUserPromptSubmitHook: (record: AgentUserPromptSubmitRecord) => void = () => undefined;
+const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
@@ -46,7 +56,7 @@ function cloneOptions(): Options {
     systemPrompt: 'システムプロンプト',
     env: {},
     resume: null,
-    onPreCompact: noopHook,
+    onPreCompact: noopPreCompactHook,
     onPostToolUse: noopAuditHook,
     onPostToolUseFailure: noopAuditFailureHook,
     onPreToolUse: noopHook,
@@ -67,10 +77,10 @@ function managerOptions(): Options {
     canUseTool,
     onPostToolUse: noopHook,
     onPostToolUseFailure: noopAuditFailureHook,
-    onPreCompact: noopHook,
-    onUserPromptSubmit: noopHook,
+    onPreCompact: noopPreCompactHook,
+    onUserPromptSubmit: noopUserPromptSubmitHook,
     onSubagentStop: noopHook,
-    onStop: noopHook,
+    onStop: noopStopHook,
     onPreToolUse: noopHook,
     managerAutoMemoryEnabled: false,
   });
