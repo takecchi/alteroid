@@ -2268,6 +2268,20 @@ class RunnerSession {
       // 既存の受け手（受信箱・日誌・`closed_failed` の合成通知）が一斉に変わる。
       const systemError = systemErrorFactsOf(error);
       const reason = String(error);
+      // **`#stopped` なら、ここから下は何もしない（#1589）。** 止めているのは
+      // `stop()` であり、畳むのも `stop()` の仕事である —— `stop()` は
+      // `#query.close()` の後に `await this.#reader` でこの `#read` を待って
+      // おり、そのあいだにストリームが例外で抜けても、`stop()` が
+      // `#closeWorkerWaitWindow` / `#shipArchive` / `#flushUnreported` /
+      // `#settleAll` / `onClosed()` まで一式を畳み終える。ここで
+      // `#finish('failed', …)` を呼ぶと、`stop()` が畳んだ直後に同じ一式を
+      // 二重に走らせたうえ、`stop()` は出さないと決めている `closed` を
+      // 「マネージャーのセッションが落ちた」という嘘の理由で出してしまう
+      // （人間が止めたセッションが `failed` として記録される）。
+      // **作り直しの判定（`#recoverFromFailedResume`）も同じ理由で止める** ——
+      // 止めた後のセッションを新しい世代へ作り直す意味が無い。
+      // これは自然終了側の `if (this.#stopped || generation !== this.#generation)
+      // return;` と同じ向きの門を、例外側にも揃えるものである。
       if (!this.#stopped) {
         switch (this.#recoverFromFailedResume(reason)) {
           case 'recovered':
@@ -2283,10 +2297,10 @@ class RunnerSession {
           default:
             break;
         }
+        await this.#finish('failed', `マネージャーのセッションが落ちた: ${reason}`, {
+          systemError,
+        });
       }
-      await this.#finish('failed', `マネージャーのセッションが落ちた: ${reason}`, {
-        systemError,
-      });
     }
   }
 

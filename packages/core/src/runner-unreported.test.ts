@@ -202,6 +202,10 @@ function reportEventsSync(events: readonly RunnerEvent[]): ReportEvent[] {
   return events.filter((event): event is ReportEvent => event.type === 'report');
 }
 
+function closedEventsSync(events: readonly RunnerEvent[]): ClosedEvent[] {
+  return events.filter((event): event is ClosedEvent => event.type === 'closed');
+}
+
 async function reportEvents(events: readonly RunnerEvent[], expected: number) {
   return vi.waitFor(() => {
     const found = reportEventsSync(events);
@@ -324,6 +328,38 @@ describe('#flushUnreported — result を受け取らないまま畳んだ回の
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(reportEventsSync(s.events)).toHaveLength(1);
     expect(reportEventsSync(s.events)[0]?.text).toContain('二度畳まれる前の本文');
+  });
+
+  it('stop() の後に #read の catch から例外で抜けても closed(failed) は出ない（#1589）', async () => {
+    // `close()` が例外を投げる偽 SDK — `stop()` が `this.#query?.close()` を
+    // 呼んだ後、`#read` の catch 節がここを通る。止めたのは `stop()`（人間・
+    // デーモンの指示）であって、ストリームの側の故障ではないので、
+    // `#finish('failed', …)` が「マネージャーのセッションが落ちた」という
+    // 嘘の理由で `closed` を出してはいけない（Issue #1589）。
+    const s = setup({ closeThrows: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: '/work/project' });
+    const session = await firstSession(s.sessions);
+
+    await session.say('止められる前の本文');
+    // `host.stop()` は `#read` の catch 節が走り終えるまで待ってから戻る
+    // （`stop()` 内の `await this.#reader?.catch(...)`）。
+    await s.host.stop('mgr-1');
+
+    // 念のため、非同期の取りこぼしが無いか一呼吸置いてからも数える。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // **`closed` が1本も出ない。** `stop()` はもともと `closed` を出さない
+    // 設計であり（`runner.ts` の `stop()` の doc）、その後の例外がそれを
+    // 覆してはいけない。
+    expect(closedEventsSync(s.events)).toHaveLength(0);
+
+    // report は `stop()` 自身が出した1本のまま —— reason/status も `stop()`
+    // が受け取った理由・`running` のままで、`#finish('failed', …)` の理由に
+    // すり替わっていない。
+    const reports = reportEventsSync(s.events);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.status).toBe('running');
+    expect(reports[0]?.unreported).toEqual({ reason: 'デーモンから停止を指示された。' });
   });
 
   it('通常の経路（say → finish）では #flushUnreported の本文が混ざらず、その後さらに畳んでも余分な report は出ない', async () => {
