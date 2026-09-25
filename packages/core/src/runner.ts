@@ -1803,6 +1803,19 @@ class RunnerSession {
     if (this.#stopped) return;
     this.#stopped = true;
 
+    // **オーナー判断（2026-09-26、Issue #1533）。報告は「stop が指示された
+    // 時点の状態」を名乗る——`#settleAll` より前でここに控える。**
+    // `#shipArchive` / `#flushUnreported` を `#reader` の後ろへ動かした結果、
+    // 下の `#settleAll` が先に走るようになった。`settle()`（`#pending` の
+    // `settle:` コールバック）は「`waiting_human` かつ `#pending` が空になった」
+    // 時点で `#status` を `running` に戻す既存の仕組みを持つので、控えずに
+    // `this.#status` をそのまま読むと、確認が解放された**後**の値
+    // （`running`）を報告が名乗ってしまう——`#settleAll` が
+    // `#flushUnreported` より後だった以前には無かった状態変化で、報告の
+    // 意味が変わってしまう。**ここで控えるのは、その変化を打ち消し、以前
+    // どおり「stop が指示された瞬間の状態」を報告に載せるためである。**
+    const statusAtStop = this.#status;
+
     // **器の入れ替えと `manager_stop` はここを通る**（`Host#shutdown` / `Host#stop`
     // → `stop()`）。`result` を待っていると、この経路で畳まれたぶんは台帳に1行も
     // 残らない。生ログと同じで、渡し損ねたら二度と取れない。
@@ -1855,7 +1868,11 @@ class RunnerSession {
     // 出さないので、置かないと「マネージャーが既に書いた本文」が器と一緒に消える
     // — 直上の `#shipArchive` / `#flushUsage` / `#closeWorkerWaitWindow` が
     // ここに並んでいるのと同じ穴である。
-    this.#flushUnreported(reason, this.#status);
+    //
+    // **`this.#status`（いまの値）ではなく `statusAtStop`（入口で控えた値）を
+    // 渡す。** 上の断りのとおり——`#settleAll` が確認を解いた後の `#status` を
+    // 読むと、報告の意味が変わってしまう。
+    this.#flushUnreported(reason, statusAtStop);
     this.#onClosed();
   }
 

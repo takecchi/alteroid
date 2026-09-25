@@ -420,13 +420,21 @@ describe('#1533: stop() と #finish の畳みの順序を、現状のまま固�
     // deny で解いてから `#flushUnreported` が走るので、報告の時点ではもう
     // `running` に戻っている——クローンへ届く報告としては、むしろこちらの方が
     // 「もう確認は待っていない」という実情に合っている。
+    //
+    // **2026-09-26 追記: オーナーはこの判断を採らなかった。** 「報告は
+    // stop が指示された時点の状態を名乗る」という以前の挙動を保つ方を選び、
+    // `stop()` の入口（`#stopped = true` の直後、`#settleAll` より前）で
+    // `this.#status` を `statusAtStop` として控え、`#flushUnreported` には
+    // その控えた値を渡す形に直した（`runner.ts` の `stop()` 冒頭のコメントを
+    // 見よ）。だから `status` は `waiting_human` のまま——上の「むしろ実情に
+    // 合っている」という判断は、実装のログとして残すが不採用である。
     expect(s.timeline).toEqual([
       'emit:usage',
       'emit:worker_wait(settled=false)',
       'emit:settled(requestId=req-1)',
       'query.close()',
       'emit:archive(len=9)',
-      'emit:report(status=running,unreported=true)',
+      'emit:report(status=waiting_human,unreported=true)',
     ]);
 
     // stop() は closed を emit しない（doc「あちらは closed すら出さない」）。
