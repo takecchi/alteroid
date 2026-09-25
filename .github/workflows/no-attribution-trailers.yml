@@ -78,7 +78,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
       - run: pnpm check:no-attribution-trailers
         env:
