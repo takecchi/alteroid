@@ -90,6 +90,17 @@ interface FakeSession {
    * 「未確認の前提」）。この呼び出しで初めてストリームを終える。
    */
   endAfterClose(): void;
+  /**
+   * `deferCloseEnd: true` のときだけ意味を持つ。`endAfterClose()` の代わりに
+   * ——ストリームを**例外で**終わらせる。`close()` を呼んだこと自体とは
+   * 独立の、transport 側の故障（壊れた pipe 等）を模す（Issue #1533 の
+   * SDK 調査コメント: 本物の `Query#close()` は `inputStream.done()` で
+   * 正常終了させるだけで、例外にするのは `readMessages()` の別ループの
+   * catch である）。Issue #1589 / PR #1590 が固定した「`stop()` の後にこれが
+   * 起きても `#finish('failed', …)` は呼ばれない」を、#1533 の並べ替え後の
+   * 形（生ログ・報告が `#reader` の後ろ）でも保つことを確かめる歯専用。
+   */
+  crashAfterClose(reason: string): void;
 }
 
 /**
@@ -113,12 +124,14 @@ function fakeSdk(
   const fn = ((params: { prompt: unknown; options?: Options }) => {
     const options = params.options ?? {};
     let emit: ((message: SDKMessage | null) => void) | null = null;
+    let fail: ((error: unknown) => void) | null = null;
     const buffered: SDKMessage[] = [];
 
     const push = (message: SDKMessage | null) => {
       if (emit) {
         const resolve = emit;
         emit = null;
+        fail = null;
         resolve(message);
       } else if (message !== null) {
         buffered.push(message);
@@ -172,6 +185,14 @@ function fakeSdk(
       endAfterClose() {
         push(null);
       },
+      crashAfterClose(reason) {
+        if (fail) {
+          const reject = fail;
+          emit = null;
+          fail = null;
+          reject(new Error(reason));
+        }
+      },
     };
     sessions.push(session);
 
@@ -193,10 +214,12 @@ function fakeSdk(
           yield next;
           continue;
         }
-        const message = await new Promise<SDKMessage | null>((resolve) => {
+        const message = await new Promise<SDKMessage | null>((resolve, reject) => {
           emit = resolve;
+          fail = reject;
         });
         emit = null;
+        fail = null;
         if (message === null) return;
         yield message;
       }
@@ -768,5 +791,84 @@ describe('#1533 新しい歯: stop() の生ログの送り出しは #reader の�
     const closeIdx = s.timeline.indexOf('query.close()');
     const archiveIdx = s.timeline.findIndex((l) => l.startsWith('emit:archive'));
     expect(archiveIdx).toBeGreaterThan(closeIdx);
+  });
+});
+
+/**
+ * **新しい歯（Issue #1533 + #1589、置き場所はここに決めた）。** `stop()` が
+ * `query.close()` した後、`#reader` が例外で抜ける経路（Issue #1589 / PR #1590
+ * が「`#finish('failed', …)` を呼ばない」で塞いだ経路）を、**#1533 の並べ替え
+ * （生ログ・報告を `#reader` の後ろへ動かした形）の上で**もう一度確かめる。
+ *
+ * `runner-unreported.test.ts` にも `fakeSdk({ closeThrows: true })` を使った
+ * 同種の歯（#1590 が足したもの）があるが、あちらは `close()` が呼ばれた瞬間に
+ * 即座にストリームを例外で終わらせる作りで、「`#reader` がまだ終わっていない
+ * 間は report/closed が出ていない」という**時間的な余白**までは見れない。
+ * ここは `deferCloseEnd` + `crashAfterClose` で「`close()` は呼ばれたが
+ * `#reader` はまだ生きている」→「そこで初めて例外が起きる」という2段階を
+ * 作れる、この `timeline` 付きの足場でしか測れない——だからここに置いた。
+ *
+ * `primeState` で未決の確認を1件開いたまま（`#status = 'waiting_human'`）
+ * `stop()` を呼ぶ——`statusAtStop` の断り（`runner.ts` の `stop()` 冒頭）が
+ * 効いていることも同時に確かめる（`#settleAll` が確認を deny で解いて
+ * `#status` が `running` に戻った**後**でも、report は `waiting_human` を
+ * 名乗り続けるはず）。
+ */
+describe('#1533 + #1589 新しい歯: stop() の後に #reader が例外で抜けても、報告は stop() からの1本だけ', () => {
+  it('report は1本だけ・reason/status は stop() のもの・closed は出ない・報告は #reader の終わりの後', async () => {
+    const s = setup({ deferCloseEnd: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+
+    const transcriptPath = join(dir, 'transcript-crash.jsonl');
+    writeFileSync(transcriptPath, '例外経路の生ログ', 'utf8');
+    const { askPromise } = await primeState(session, transcriptPath);
+    s.resetTimeline();
+
+    const stopPromise = s.host.stop('mgr-1');
+
+    // close() は呼ばれるが、deferCloseEnd により #reader はまだ終わらない
+    // ——この時点では report も closed もまだ出ていないはず。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(s.timeline).toContain('query.close()');
+    expect(s.timeline.some((l) => l.startsWith('emit:report'))).toBe(false);
+    expect(s.timeline.some((l) => l.startsWith('emit:closed'))).toBe(false);
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(true);
+
+    // #reader をここで初めて例外で抜けさせる——`close()` を呼んだこと自体とは
+    // 独立の transport 障害を模す（Issue #1533 の SDK 調査コメント: 本物の
+    // `close()` は `inputStream.done()` で正常終了させるだけで、例外にする
+    // のは `readMessages()` の別ループの catch である）。
+    session.crashAfterClose('SDK が close 時に例外を投げた');
+    await stopPromise;
+    const settledAnswer = await askPromise;
+
+    // ⭐ closed は1本も出ない（Issue #1589 / PR #1590 が固定した挙動が、
+    // #1533 の並べ替え後もそのまま効いている）。
+    expect(s.events.some((e) => e.type === 'closed')).toBe(false);
+
+    // ⭐ report はちょうど1本、stop() のもの。
+    const reports = s.events.filter(
+      (e): e is Extract<RunnerEvent, { type: 'report' }> => e.type === 'report',
+    );
+    expect(reports).toHaveLength(1);
+    // reason は stop() の reason（#finish が合成する
+    // 「マネージャーのセッションが落ちた: …」ではない）。
+    expect(reports[0]?.unreported).toEqual({ reason: 'デーモンから停止を指示された。' });
+    // status は stop が指示された時点の値（`waiting_human`）。`#settleAll` が
+    // 確認を deny で解いた後の `running` ではない——`statusAtStop` の断りが
+    // 効いている証拠。
+    expect(reports[0]?.status).toBe('waiting_human');
+
+    // ⭐ その report は #reader の終わりの後に出る（timeline 上でも close より後）。
+    const reportIdx = s.timeline.findIndex((l) => l.startsWith('emit:report'));
+    const closeIdx = s.timeline.indexOf('query.close()');
+    expect(reportIdx).toBeGreaterThan(closeIdx);
+
+    // settleAll は deny で解決する。
+    expect(settledAnswer).toEqual({
+      behavior: 'deny',
+      message: 'デーモンから停止を指示された。',
+    });
   });
 });
