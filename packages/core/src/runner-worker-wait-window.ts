@@ -78,7 +78,7 @@
  *    1回の呼び出しへまとめた）と同じ判断である。
  * 4. **`close()` と `clear()` の順序の約束はこの器の外にある。** 「**`close()`
  *    を先に、`clear()` を後に。**」（`runner-resume-recovery.ts` 冒頭の逐語。
- *    `grep -Fn -- '\`close()\` を先に、\`clear()\` を後に。' packages/core/src/runner-resume-recovery.ts`
+ *    `grep -Fn -- '`close()` を先に、`clear()` を後に。' packages/core/src/runner-resume-recovery.ts`
  *    で当たる）は、`recoverFromFailedResume` が
  *    `host.closeWorkerWaitWindow()` → `host.discardCarriedOverWork()` の順に
  *    ハードコードしている箇所に在り、**この切り出しは1文字も触っていない**。
