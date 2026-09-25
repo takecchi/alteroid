@@ -27,16 +27,27 @@
  * ⟹ **doc やコメントの「観測専用」という自己申告を鵜呑みにせず、実装の
  * 返り値を読んで確かめること。**
  *
- * **この3本目の PR（#486 中立の口の3本目）で `PreToolUse` を足す。**
+ * **3本目の PR（#486 中立の口の3本目）で `PreToolUse` を足した。**
  * `clone.ts` の `#onPreToolUse`（人間が承認した Bash 許可に一致したら
  * `allow`。Issue #863）と `runner.ts` の `#onPreToolUse`
  * （`bash-wait-guard.ts` が「無限に待つだけの形」と判定したら `deny`。
  * Issue #894）は、どちらも `PostToolUse` 等とは違って**実際に判断を返す**
  * ——`AgentObservationHook`（`void` しか返せない）には載らない。だから
- * 判断を運べる専用の型（{@link AgentPreToolDecision}）を別に起こす。
+ * 判断を運べる専用の型（{@link AgentPreToolDecision}）を別に起こした。
  * `runner.ts` 側の `PostToolUse`（`#onPostToolUse` の doc）と
- * `SubagentStop`（`#onSubagentStop` の doc）は、このため今回も対象外に
- * 残す——次の PR に送る（#486）。
+ * `SubagentStop`（`#onSubagentStop` の doc）は、そのときは対象外のまま
+ * 残した——次の項。
+ *
+ * **この4本目（最後）の PR（#486 中立の口の4本目）で、残っていた2欄
+ * （`ManagerSessionOptionsRequest.onPostToolUse` / `.onSubagentStop`）を
+ * 中立化する。** どちらも「観測を超えて判断を返す」フックだが、`PreToolUse`
+ * とは形が違う——`allow` / `deny` / `continue` のような分岐ではなく、
+ * 「モデルへ追加の文脈を注ぐか、何も注がないか」の二択でしかない
+ * （`runner.ts` の `#onPostToolUse` は #901 の打ち切りの注記、
+ * `#onSubagentStop` は #357 / #570 の起こし直しを、どちらも
+ * `hookSpecificOutput.additionalContext` 1本で運ぶ）。⟹ `AgentPreToolDecision`
+ * を使い回さず、この形専用の {@link AgentContextOutcome} /
+ * {@link AgentContextHook} を別に起こす。
  *
  * ## 観測専用のフックだけを対象にする（`PreToolUse` を除く）
  *
@@ -51,25 +62,32 @@
  * `AgentPreToolDecision` はこの限りではない** — 上の「この3本目の PR」の節を
  * 見よ。
  *
- * **`runner.ts` 側の `PostToolUse` は対象外である。** `#onPostToolUse` は
- * `#annotateCutOffWorkers` の結果を `hookSpecificOutput.additionalContext`
- * として返す経路を持ち、これは「起きたことをただ記録する」を超えた判断
- * （モデルへ追加の文脈を注ぎ込むかどうか）である。`ManagerSessionOptionsRequest`
- * の `onPostToolUse` 欄は、このため今回も `HookCallback` のまま残す
- * （`claude-provider.ts` の同欄の doc に理由を書いてある）。**`runner.ts` 側の
+ * **`runner.ts` 側の `PostToolUse` / `SubagentStop` は `AgentObservationHook`
+ * には載らない（載せない）が、対象外ではない。** `#onPostToolUse` は
+ * `#annotateCutOffWorkers` の結果を、`#onSubagentStop` は起こし直しの判断を、
+ * どちらも `hookSpecificOutput.additionalContext` として返す経路を持ち、
+ * これは「起きたことをただ記録する」を超えた判断（モデル・作業者へ追加の
+ * 文脈を注ぎ込むかどうか）である——`void` しか返せない
+ * `AgentObservationHook` には載らない。**この4本目の PR で
+ * {@link AgentContextHook} を起こし、`ManagerSessionOptionsRequest` の
+ * `onPostToolUse` / `onSubagentStop` の両方をそちらへ移した**
+ * （`claude-provider.ts` の同欄の doc に経緯を書いてある）。**`runner.ts` 側の
  * `PostToolUseFailure`（`#onPostToolUseFailure`）は `{ continue: true }` だけ
- * を返すので、こちらは対象に含む。**
+ * を返すので、こちらは元から `AgentObservationHook` の対象に含めてある。**
  *
  * ## 欄は「いま実際に読まれているもの」だけ
  *
  * 新しい語彙を作らない——`clone.ts` の `#journalToolUse` /
  * `#journalToolUseFailure` / `cloneToolActor` / `#onPreCompact` /
- * `#onPreToolUse` と `runner.ts` の `#onPostToolUseFailure` / `#onPreCompact` /
- * `#onUserPromptSubmit` / `#onStop` / `#onPreToolUse` が実際に読んでいる欄
- * だけを、同じ意味のまま camelCase へ写した。SDK の snake_case な入力から
- * この形へ写す処理（`toAgentToolAuditRecord` / `toAgentToolAuditFailureRecord` /
+ * `#onPreToolUse` と `runner.ts` の `#onPostToolUse` / `#onPostToolUseFailure` /
+ * `#onPreCompact` / `#onUserPromptSubmit` / `#onStop` / `#onPreToolUse` /
+ * `#onSubagentStop` が実際に読んでいる欄だけを、同じ意味のまま camelCase へ
+ * 写した。**`#onPostToolUse` が読む欄は `AgentToolAuditRecord` の和集合に
+ * 収まる**（新しい欄は増やしていない）。SDK の snake_case な入力からこの形へ
+ * 写す処理（`toAgentToolAuditRecord` / `toAgentToolAuditFailureRecord` /
  * `toAgentPreCompactRecord` / `toAgentUserPromptSubmitRecord` /
- * `toAgentStopRecord` / `toAgentPreToolRecord`）は `claude-provider.ts` 側に
+ * `toAgentStopRecord` / `toAgentPreToolRecord` / `toAgentSubagentStopRecord`）
+ * は `claude-provider.ts` 側に
  * 置く——ここは「届いた後の形」だけを知っている。
  *
  * ## ⛔ このファイルは Claude Agent SDK を import してはいけない
@@ -248,3 +266,65 @@ export type AgentPreToolDecision =
 export type AgentPreToolHook = (
   record: AgentPreToolRecord,
 ) => AgentPreToolDecision | Promise<AgentPreToolDecision>;
+
+/**
+ * `SubagentStop`（作業者セッションが停止した瞬間）1件の中立の記録
+ * （#486 中立の口の4本目）。
+ *
+ * **すべて任意である。** 無い欄は作り物を出さずに省く（上の Record 型と
+ * 同じ作法）。
+ *
+ * **欄は「いま実際に読まれているもの」の和集合だけ。** `runner.ts` の
+ * `#onSubagentStop`（#357 / #570）が読む欄——`background_tasks` /
+ * `session_crons` / `agent_id` / `agent_type` / `stop_hook_active`——を、
+ * 同じ意味のまま camelCase へ写した。**読み方も変えていない** ——
+ * `backgroundTasks` / `sessionCrons` は配列でなければ省き、`stopHookActive`
+ * は真偽値でなければ省く（`AgentStopRecord.stopHookActive` と同じ作法。
+ * `claude-provider.ts` の `toAgentSubagentStopRecord` を見よ）。
+ */
+export interface AgentSubagentStopRecord {
+  /**
+   * 走行中・待機中の背景処理。`AgentStopRecord.backgroundTasks` と同じ理由で
+   * `unknown` のまま運ぶ——`runner.ts` 側は各要素をさらに `unknown` として
+   * 扱っている。読めなければ省く。
+   */
+  backgroundTasks?: unknown[];
+  /** このセッションを起こす予約（cron・`/loop`）。読めなければ省く。 */
+  sessionCrons?: unknown[];
+  /** 畳もうとしている作業者（サブエージェント）の id。読めなければ省く。 */
+  agentId?: string;
+  /** 作業者の型名。**`agentId` が無ければ意味を持たない。** */
+  agentType?: string;
+  /** Stop hook が既に一度発火して継続させた印。読めなければ省く。 */
+  stopHookActive?: boolean;
+}
+
+/**
+ * 「判断」ではなく「モデル・作業者へ追加の文脈を注ぐか、何も注がないか」の
+ * 二択だけを返すフックの中立の判断（#486 中立の口の4本目）。
+ *
+ * **`AgentPreToolDecision` とは別の型にする。** あちらが包む `PreToolUse` は
+ * 実行そのものを許可・拒否できる（`allow` / `deny`）が、ここで包む2つの
+ * フック——`runner.ts` の `#onPostToolUse`（#901）と `#onSubagentStop`
+ * （#357 / #570）——はどちらもブロックする口を持たない。SDK がこの2つの
+ * フックへ許すのは `hookSpecificOutput.additionalContext`（非エラーの
+ * フィードバック）だけで、実行・継続を止める `decision` はどちらの実装も
+ * 一度も使っていない（`runner.ts` の `#onSubagentStop` の doc「`decision:
+ * 'block'` ではなく `additionalContext` を使う理由」）。
+ *
+ * - `continue`: 何も注がない（SDK へは `{ continue: true }` だけを返す）。
+ * - `addContext`: `text` を `hookSpecificOutput.additionalContext` として
+ *   注ぐ（`wrapContextHook` が SDK の形へ包み直す。`claude-provider.ts`）。
+ */
+export type AgentContextOutcome = { kind: 'continue' } | { kind: 'addContext'; text: string };
+
+/**
+ * 判断（`continue` / `addContext`）を返すフックの中立の関数型。
+ * `PostToolUse`（`runner.ts` の `#onPostToolUse`。記録は
+ * {@link AgentToolAuditRecord}）と `SubagentStop`（`runner.ts` の
+ * `#onSubagentStop`。記録は {@link AgentSubagentStopRecord}）の両方が
+ * この型を使う——記録の型（`T`）が違うだけで、返せる判断の形は同じである。
+ */
+export type AgentContextHook<T> = (
+  record: T,
+) => AgentContextOutcome | Promise<AgentContextOutcome>;

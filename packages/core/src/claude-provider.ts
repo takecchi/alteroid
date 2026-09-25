@@ -12,6 +12,7 @@ import type {
   SpawnedProcess,
   SpawnOptions,
   StopHookInput,
+  SubagentStopHookInput,
   UserPromptSubmitHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -24,11 +25,14 @@ import type {
 } from './agent-events.js';
 import type { AgentProvider } from './agent-ports.js';
 import type {
+  AgentContextHook,
+  AgentContextOutcome,
   AgentObservationHook,
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentPreToolRecord,
   AgentStopRecord,
+  AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
@@ -280,6 +284,86 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
           'PreToolUse の中立な判断の包み直し',
           '',
           new Error(`未知の AgentPreToolDecision.kind が渡った: ${JSON.stringify(unreachable)}`),
+        );
+        return { continue: true };
+      }
+    }
+  };
+}
+
+/**
+ * `SubagentStop` の生入力を {@link AgentSubagentStopRecord} へ写す。無い欄は
+ * 省く（他の `toAgent*Record` と同じ作法）。
+ *
+ * **読み方は `runner.ts` の `#onSubagentStop` が今日読んでいる形と揃える。**
+ * `backgroundTasks` / `sessionCrons` は配列でなければ省き、`stopHookActive`
+ * は真偽値でなければ省く（`toAgentStopRecord` と同じ作法。SDK の型
+ * （`SubagentStopHookInput`）ではどちらも必須だが、`#onSubagentStop` は
+ * 「入力は防御的に読む」の方針で `as` で受けて型を仮定しない——ここも同じ
+ * 方針を保つ）。**`agentId` / `agentType` は他の `toAgent*Record`
+ * （`toAgentPreToolRecord` 等）と揃えて `typeof === 'string'` で絞る** ——
+ * `#onSubagentStop` 自身はこの2欄を素通しで信頼していたが、SDK の型は
+ * どちらも必須の `string` なので実質は変わらない。**万一値が崩れていても
+ * 安全側に倒れる**——`agentId` が省かれれば `#onSubagentStop` は
+ * `mine.length === 0` の枝（「当人が起こしたものが無い」と同じ扱い）へ
+ * 落ち、何も起こし直さない。
+ */
+function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
+  const raw = input as Partial<SubagentStopHookInput> | null | undefined;
+  return {
+    ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
+    ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
+    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+    ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+    ...(typeof raw?.stop_hook_active === 'boolean'
+      ? { stopHookActive: raw.stop_hook_active }
+      : {}),
+  };
+}
+
+/**
+ * 中立の {@link AgentContextHook} を SDK の `HookCallback` へ包み直す
+ * （#486 中立の口の4本目）。`ManagerSessionOptionsRequest.onPostToolUse`
+ * （記録は {@link AgentToolAuditRecord}）と `.onSubagentStop`（記録は
+ * {@link AgentSubagentStopRecord}）の両方がこの関数を通す——`hookEventName` /
+ * `toRecord` だけを呼び出し側から渡し分ける。
+ *
+ * **`continue` → `{ continue: true }`、`addContext` → 同じ `hookEventName` を
+ * 持つ `hookSpecificOutput.additionalContext`。** `runner.ts` の
+ * `#onPostToolUse`（#901）・`#onSubagentStop`（#357 / #570）が今日すでに
+ * 返している形と1文字も変えていない（`runner-subagent-stop.test.ts` の
+ * 既存の歯がこれを固定している）。
+ *
+ * **`never` で網羅性を検査する。** `wrapPreToolHook` と同じ形——
+ * `AgentContextOutcome` に3つ目の `kind` が増えたら、この `switch` の
+ * `default` 節で `tsc` が落ちる。**ただし投げない**——理由も同じ
+ * （このフックはツール実行・作業者継続の経路に載っており、ここで例外を
+ * 投げるとそのターン・作業者のターンが壊れる）。実行時にここへ来るのは
+ * 型で弾かれたはずの値が渡ったときだけなので、安全側
+ * （`{ continue: true }` ＝ 何も注がない）へ倒し、`noteBackgroundFailure` で
+ * 跡だけ残す。
+ */
+function wrapContextHook<T>(
+  hookEventName: 'PostToolUse' | 'SubagentStop',
+  hook: AgentContextHook<T>,
+  toRecord: (input: unknown) => T,
+): HookCallback {
+  return async (input) => {
+    const outcome = await hook(toRecord(input));
+    switch (outcome.kind) {
+      case 'continue':
+        return { continue: true };
+      case 'addContext':
+        return {
+          continue: true,
+          hookSpecificOutput: { hookEventName, additionalContext: outcome.text },
+        };
+      default: {
+        const unreachable: never = outcome;
+        noteBackgroundFailure(
+          `${hookEventName} の中立な文脈の包み直し`,
+          '',
+          new Error(`未知の AgentContextOutcome.kind が渡った: ${JSON.stringify(unreachable)}`),
         );
         return { continue: true };
       }
