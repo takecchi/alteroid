@@ -540,8 +540,7 @@ class Host implements RunnerHost {
   readonly #liveDelegationPids = new Set<number>();
   readonly #knownTerminatedDelegationPids = new Set<number>();
   readonly #spawnClaudeCodeProcessFn:
-    | ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle)
-    | undefined;
+    ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle) | undefined;
 
   constructor(options: RunnerHostOptions) {
     this.runnerId = options.runnerId;

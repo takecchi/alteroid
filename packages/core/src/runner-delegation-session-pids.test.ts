@@ -83,7 +83,7 @@ class FakeDelegationProcess {
     this.pid = pid;
   }
 
-  kill(_signal: NodeJS.Signals): boolean {
+  kill(): boolean {
     return true;
   }
 

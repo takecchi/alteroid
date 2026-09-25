@@ -461,7 +461,11 @@ export async function main(): Promise<void> {
       // **切ってあることを起動時に名乗る。** 切った本人が「切れているか」を
       // `/health` を叩かずに確かめられる唯一の場所である（#315 段0 / #1334 段1）。
       ` / 孤児の観測: ${
-        reclaimScan === undefined ? '切' : reclaimScan.reap === undefined ? '観測のみ（撃たない）' : '回収（撃つ）'
+        reclaimScan === undefined
+          ? '切'
+          : reclaimScan.reap === undefined
+            ? '観測のみ（撃たない）'
+            : '回収（撃つ）'
       }` +
       ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
   );

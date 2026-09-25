@@ -669,7 +669,8 @@ async function observeReclaim(
   // 呼ぶたびに現在値を返す関数なので、同じ回のあいだは1つの値で揃える
   // （BFS の途中で値が動くと、同じ回の中で判定がぶれる）。
   const liveSessionPids = reclaim.reap?.liveSessionPidsOf() ?? new Set<number>();
-  const knownTerminatedSessionPids = reclaim.reap?.knownTerminatedSessionPidsOf() ?? new Set<number>();
+  const knownTerminatedSessionPids =
+    reclaim.reap?.knownTerminatedSessionPidsOf() ?? new Set<number>();
 
   let candidates = 0;
   let candidateThreads = 0;
