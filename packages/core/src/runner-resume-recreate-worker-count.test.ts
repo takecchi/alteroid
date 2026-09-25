@@ -31,6 +31,8 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
 interface FakeSession {
   finish(text: string, options?: { isError?: boolean }): Promise<void>;
   taskStarted(taskId: string): Promise<void>;
+  /** `system/task_notification` を流す（#1373 続き）。 */
+  taskNotification(taskId: string, options?: { status?: string; summary?: string }): Promise<void>;
   /** ストリームを畳む（SDK 側が結果を1つも返さずに黙って落ちた形を模す）。 */
   endStream(): void;
 }
@@ -66,6 +68,19 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
           task_id: taskId,
           description: '作業者への委譲',
           uuid: `uuid-task-started-${taskId}-${String(Math.random())}`,
+          session_id: 'sess-mgr',
+        } as unknown as SDKMessage);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      async taskNotification(taskId, options = {}) {
+        push({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: options.status ?? 'completed',
+          summary: options.summary ?? '',
+          output_file: '/tmp/fake-output',
+          uuid: `uuid-task-notification-${taskId}-${String(Math.random())}`,
           session_id: 'sess-mgr',
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -252,6 +267,38 @@ describe('#1373: resume に失敗して作り直す経路でも、そのター�
       'このターンでは作業者が 2 体開いていた。どちらが当たったかは SDK からは分からない',
     );
     expect(sessions).toHaveLength(1);
+  });
+
+  it('前のセッションで failed の task_notification を受けていても、作り直した後の最初の失敗の本文には出ない（#1373 続き）', async () => {
+    const { host, events, sessions } = setup();
+
+    await host.resume({
+      managerId: 'mgr-4',
+      sessionId: 'sess-dead-4',
+      cwd: '/work/project',
+      request: '最初の依頼',
+      entries: [{ type: 'user', message: { role: 'user', content: '前回の続き' } }],
+    });
+
+    const first = await nthSession(sessions, 0);
+    // 前のセッションで作業者が枠(429)を名乗って failed で終わったまま、
+    // 結果を1つも返さずに閉じる。
+    await first.taskStarted('task-1');
+    await first.taskNotification('task-1', {
+      status: 'failed',
+      summary: "You've hit your org's monthly spend limit",
+    });
+    first.endStream();
+
+    const second = await nthSession(sessions, 1);
+    // 作り直した後の最初のターンは、作業者の通知を1つも受けずに失敗する。
+    await second.finish('', { isError: true });
+
+    const report = await nthReport(events, 0);
+    expect(report.managerId).toBe('mgr-4');
+    expect(report.text).not.toContain('失敗で終わった');
+    expect(report.text).not.toContain('枠(429)');
+    expect(report.text).toBe(BASELINE_FAILURE_TEXT);
   });
 });
 
