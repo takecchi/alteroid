@@ -15,12 +15,21 @@
  *    単体試験と、画面を通した結合試験の両方で見る
  * 3. 呼べなかった失敗（ネットワーク断・403 等）は結果ではなく `ErrorNote` に
  *    出ること——「止めた」と誤読させない
- * 4. **#1548**: 会話 A で押した後、応答が返るより先に会話 B へ切り替えたら、
+ * 4. **#1548 / #1570**: 会話 A で押した後、応答が返るより先に会話 B へ切り替えたら、
  *    遅れて届いた「止めた」の表示は B の画面に出ないこと。`ChatPane` は
  *    会話を切り替えても作り直されない（`chat.tsx` の doc）ので、この経路は
- *    `handleInterrupt` 自身が「押したときの会話」を覚えていないと守れない
- *    ——同じファイルの送信経路が `owns()`/`stopped()` で持つのと同じ形の
- *    守りを、応答が遅れて届くこちらの経路にも入れた
+ *    `handleInterrupt` 自身が「押したときの会話」を覚えていないと守れない。
+ *
+ *    **#1548 は `shownIdRef.current`（`useEffect` の中でしか進まない ref）を
+ *    比べる形で直したが、#1570 はその ref が進む前の窓（会話を切り替えた
+ *    render から、`useEffect(() => { shownIdRef.current = shownId; ... },
+ *    [shownId])` が走るまでの間）で応答が返ると、判定が誤って「まだ同じ
+ *    会話」と読むことを見つけた。** いまは ref にも効果の順序にも依らない
+ *    形（`interruptNotice`/`interruptFailure` に押した時点の会話 id を積み、
+ *    出すかどうかは描画する時点の `shownId` と突き合わせて決める）に直っている
+ *    ので、下の3本はどれも緑になる——**1本目（act で効果を先に流す）・
+ *    3本目（act を挟まず、#1570 の Issue 本文の再現をそのまま足したもの）の
+ *    どちらでも**同じ理由で緑になることを見る。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
@@ -215,7 +224,7 @@ describe('「ターンを止める」ボタン', () => {
 });
 
 /**
- * #1548 の再現と固定。
+ * #1548 / #1570 の再現と固定。
  *
  * `ChatPane` は会話を切り替えても作り直されない（`chat.tsx` の doc）ので、
  * `handleInterrupt` が「押したときの会話」を覚えていないと、応答が遅れて
@@ -223,9 +232,25 @@ describe('「ターンを止める」ボタン', () => {
  * テスト側が明示的に許可するまで返らない形にして（`test-support.tsx` の
  * `Route` の doc が想定する「まだ返事が来ていない要求」）、時計に頼らず
  * 「B へ切り替えた後で応答が届く」という順序を作る。
+ *
+ * **3本ある理由。** #1548 の直し（`shownIdRef.current` を比べる）は、
+ * 「切り替えの render から `useEffect` が走るまでの窓」の中で応答が返ると
+ * 判定を誤る（#1570）。その窓を挟むかどうかで2つの経路があるので、両方を
+ * 別のテストとして固定する——片方だけを直すと、直っていないほうが緑のまま
+ * 隠れる。
+ *
+ * 1. **`await act(async () => {})` で効果を先に流してから応答を返す**
+ *    （窓を挟まない経路）——#1548 の直しだけでも緑になっていた
+ * 2. **B の DOM が commit された直後、受動効果が走る前に応答を返す**（窓の中の
+ *    経路）。MutationObserver のコールバック（マイクロタスク）で応答を返して窓を
+ *    確実に突く。#1570 の本文の再現（`act()` を挟まずに返す形）は、`findBy` が
+ *    待つ間に効果まで流れてしまい、この環境では直す前の main でも緑だった。
+ *    この形は直す前の main で赤、直した後で緑になることを確かめてある
+ * 3. 同じ会話のまま応答が返る対照（切り替えていない）——1・2 のどちらでも
+ *    「出るべきときにまで消してしまっていないか」を確かめる
  */
-describe('会話を切り替えた後に届いた応答（#1548）', () => {
-  it('A で押した後 B へ切り替えると、遅れて届いた「止めた」の表示は B に出ない', async () => {
+describe('会話を切り替えた後に届いた応答（#1548 / #1570）', () => {
+  it('A で押した後 B へ切り替え、効果が走ってから応答が返っても B に出ない（act で効果を先に流す）', async () => {
     let releaseInterrupt: () => void = () => {};
     const interruptReleased = new Promise<void>((resolve) => {
       releaseInterrupt = resolve;
@@ -271,11 +296,68 @@ describe('会話を切り替えた後に届いた応答（#1548）', () => {
      * 『出ない』は `findBy`/`waitFor` では直接待てない（出る方向にしか
      * 待てない）ので、必ず起きるはずの別の事実――`finally` の
      * `setInterrupting(false)` でボタンの `disabled` が外れること――を待つ。
-     * `stillShown()` の判定と `setInterruptMessage` は、`await
-     * interruptClone()` が解決した後の同じ同期区間で `finally` の直前に
-     * 済んでいるので、`disabled` が外れた時点では出す/出さないの判断は
-     * 確定している（React 18 の自動バッチで同じ render にまとまる）。
+     * `interruptNotice`/`interruptFailure` への set と `setInterrupting(false)`
+     * は、`await interruptClone()` が解決した後の同じ同期区間で済んでいるので、
+     * `disabled` が外れた時点では出す/出さないの判断（描画時の `shownId` との
+     * 突き合わせ）はもう確定している（React 18 の自動バッチで同じ render に
+     * まとまる）。
      */
+    await waitFor(() => {
+      expect((interruptButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(screen.queryByText(/いま走っていたクローンのターンを止めた/)).toBeNull();
+  });
+
+  /**
+   * #1570 の Issue 本文の再現をそのまま足したもの。
+   *
+   * 上のテストとの唯一の違いは `await act(async () => {})` が無いこと——
+   * つまり「切り替えの render から `useEffect` が走るまでの窓」を **挟んだ
+   * まま** 応答を返す。#1548 の直し（`shownIdRef.current` を比べる）は、
+   * この窓の中でだけ判定を誤っていた（`shownIdRef.current` は効果の中でしか
+   * 進まないため、切り替え後もまだ古い会話 A を指していた）。
+   *
+   * `main` 258c1b2 ではこのテストだけが赤く、上の（act で効果を先に流す）
+   * テストと下の対照は緑のままだった、と Issue 本文に書かれている。
+   */
+  it('B の画面が commit された直後（効果が走る前）に応答が返っても、B に A の「止めた」が出ない（#1570）', async () => {
+    let releaseInterrupt: () => void = () => {};
+    const interruptReleased = new Promise<void>((resolve) => {
+      releaseInterrupt = resolve;
+    });
+    const route: Route = (url) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/clone/interrupt')) {
+        return interruptReleased.then(() => json({ outcome: 'interrupted' }));
+      }
+      return undefined;
+    };
+    const stub = stubFetch(route);
+    const { router } = renderChat(`/chat/${CONVERSATION_ID}`);
+    fireEvent.click(await findInterruptButton());
+    await waitFor(() => {
+      expect(stub.entries.some((entry) => entry.url.endsWith('/clone/interrupt'))).toBe(true);
+    });
+
+    /*
+     * 窓を確実に突く。`findBy` や `act()` で待つと、その間に受動効果まで流れてしまい
+     * 窓を越える（#1570 の本文の再現が、この環境では直す前の main でも緑だった）。
+     * MutationObserver のコールバックはマイクロタスクなので、B の DOM が commit
+     * された直後、受動効果（別のタスク）より前に走る。そこで応答を返すと、
+     * `interruptClone()` の続きもマイクロタスクの連鎖で同じ窓の中で走る。
+     */
+    let releasedInWindow = false;
+    const observer = new MutationObserver(() => {
+      if (releasedInWindow || screen.queryByText(OTHER_CONVERSATION_ID) === null) return;
+      releasedInWindow = true;
+      observer.disconnect();
+      releaseInterrupt();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    await router.navigate(`/chat/${OTHER_CONVERSATION_ID}`);
+    expect(await screen.findByText(OTHER_CONVERSATION_ID)).toBeTruthy();
+    expect(releasedInWindow).toBe(true);
     await waitFor(() => {
       expect((interruptButton() as HTMLButtonElement).disabled).toBe(false);
     });

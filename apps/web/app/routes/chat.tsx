@@ -486,10 +486,41 @@ export function ChatPane({
   const [interrupting, setInterrupting] = useState(false);
   /**
    * `POST /clone/interrupt` の応答を人間の言葉にしたもの（`describeCloneInterruptOutcome`）。
-   * 失敗（ネットワーク断・403 等）は `failure`（既存の `ErrorNote`）へ回すので、
+   * 失敗（ネットワーク断・403 等）は `interruptFailure`（下）へ回すので、
    * ここに乗るのは3値のどれかに正しく応答が返った場合だけである。
+   *
+   * **押した時点の会話 id（`conversationId`）を一緒に持つ（#1570）。** 出すかどうかは
+   * ここでは決めない——描画する側（下の `interruptNotice` の読み出し）が、
+   * **その描画の時点で決まっている `shownId`** と突き合わせてから決める。
+   *
+   * ⚠️ 以前は `shownIdRef.current === pressedConversationId`（#1548）で判定していた。
+   * `shownIdRef.current` は `useEffect(() => { shownIdRef.current = shownId; ... },
+   * [shownId])`（下）という**受動効果の中でしか進まない**ため、会話を切り替えた
+   * render から効果が走るまでの窓の中で応答が返ると、切り替え後もまだ古い会話の
+   * ままの `shownIdRef.current` と比べてしまい、別の会話の画面に前の会話の
+   * 「止めた」を出していた（#1570）。**この形は効果の順序にもう依らない** ——
+   * `conversationId` は「押した」という事実にくっついた、変わらないデータであり、
+   * 一致判定は毎 render 同期的に決まる `shownId` に対して行うので、効果が
+   * いつ走るかに一切関係が無い。
    */
-  const [interruptMessage, setInterruptMessage] = useState<string | undefined>(undefined);
+  const [interruptNotice, setInterruptNotice] = useState<
+    { conversationId: string; text: string } | undefined
+  >(undefined);
+  /**
+   * `handleInterrupt` の呼べなかった失敗（ネットワーク断・403 等）。`interruptNotice`
+   * と同じ理由・同じ形で会話 id を持つ（#1570）。
+   *
+   * **画面全体で共有している `failure`（上）へは合流させない。** `failure` は
+   * 送信経路（`send`/`followUp`、ストリームの `error` イベント）など会話に
+   * 依らない複数の発生源を1つの表示枠へ集約したもので、`failure` 自体は
+   * どの会話由来かを持たない。そこへ会話スコープを混ぜると他の発生源まで
+   * 巻き込むことになるので、interrupt 由来の失敗だけをここで別に持ち、
+   * 描画する場所（下の `ErrorNote`）で `interruptNotice` と同じ形の突き合わせを
+   * してから合流させる。
+   */
+  const [interruptFailure, setInterruptFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
   /**
    * いま編集中の行の `key`（チャットのメッセージ編集、#1010）。無ければ
    * `undefined`。**`Line.key`（サーバ確定済みの発言では日誌エントリ id と
@@ -663,9 +694,11 @@ export function ChatPane({
        * この render リセットだけでは減らない。
        */
       setFailure(undefined);
-      // ターンを止めた結果の表示も同じ理由で持ち越さない——前の会話で見た
-      // 「止めた」の表示が、別の会話の画面にそのまま居座るのはおかしい。
-      setInterruptMessage(undefined);
+      // 前の会話で出した「止めた」を持ち越さない。クローンのターンは会話ごとではない
+      // ので、A へ戻ったときに古い表示を出し直さない（#1548）。応答がこの後に届いた
+      // 場合は、会話 id の突き合わせ（`visibleInterruptNotice`）が別の会話へ出すのを防ぐ（#1570）。
+      setInterruptNotice(undefined);
+      setInterruptFailure(undefined);
       // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
       // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
       setEditingKey(undefined);
@@ -1446,45 +1479,75 @@ export function ChatPane({
    * と同じ経路（`useInterruptClone` の doc）。
    *
    * **成功と失敗を別の場所に出す。** 3値（`interrupted`/`idle`/`unsupported`）
-   * はどれも「呼べた」ので `interruptMessage` へ、ネットワーク断・403 等の
-   * 呼べなかった失敗は既存の `failure`（`ErrorNote`）へ——このパターンは
-   * `settings.tsx` の `ResetWorkspace`（`failure` と結果表示を分ける）と同じ。
+   * はどれも「呼べた」ので `interruptNotice` へ、ネットワーク断・403 等の
+   * 呼べなかった失敗は `interruptFailure` へ——このパターンは `settings.tsx` の
+   * `ResetWorkspace`（成功と失敗の結果表示を分ける）と同じ。
    *
-   * **押したときの会話と、応答が返ったときの会話が同じかを確かめる（#1548）。**
-   * `ChatPane` は会話を切り替えても作り直されない（doc 冒頭）ので、`await
-   * interruptClone()` の間に別の会話へ `navigate` されうる。ここは受信中の
+   * **押したときの会話と、応答が返ったときの会話が同じかを確かめる（#1548 /
+   * #1570）。** `ChatPane` は会話を切り替えても作り直されない（doc 冒頭）ので、
+   * `await interruptClone()` の間に別の会話へ `navigate` されうる。ここは受信中の
    * ストリームとは違って `AbortController` を持たない——止めたいのはサーバ側の
    * ターンそのものであって、切り替えたからといって「止めた」という事実が
    * 消えるわけではないので、リクエスト自体は最後まで送る。**変えるのは
-   * 表示だけ。** 送った時点の `shownIdRef.current` を `pressedConversationId`
-   * として閉じ込め、応答が返った時点の `shownIdRef.current` と比べる——
-   * `owns()`（上の送信経路）が `stream.id === shownIdRef.current` で持ち主を
-   * 見るのと同じ形。**一致しなければ何も出さない**（成功メッセージも
-   * `failure` も）。「切り替えたら前の会話の表示を持ち越さない」という画面の
-   * 約束（直上の `setInterruptMessage(undefined)`）を、応答が遅れて届いた
-   * この経路にも揃えるとそうなる。**止めたこと自体は B の画面には無関係な
-   * 事実なので、B へ何かを新しく出す理由も無い**——何も出さないことが、
-   * 何も起きていないと見せることにはならない（クローンのターンは会話ごとの
-   * ものではなく、いま見ている会話に何が起きたかを主張していないだけ）。
-   * `failure` 側も同じ理由で揃える——上の送信経路も `stopped()`（＝別の会話へ
-   * 移った）を見て `catch` の `setFailure` を抑えており、ここだけ例外にする
-   * 理由は無い。
+   * 表示だけ。**
+   *
+   * ⚠️ **#1548 はここを `shownIdRef.current === pressedConversationId`（送った
+   * 時点の `shownIdRef.current` を閉じ込め、応答が返った時点の値と比べる）で
+   * 直したが、#1570 でその判定が抜けることが分かった。** `shownIdRef.current`
+   * は `useEffect(() => { shownIdRef.current = shownId; ... }, [shownId])`
+   * （上）という**受動効果の中でしか進まない**。会話を切り替えた render から
+   * その効果が走るまでの短い窓があり、窓の中で応答が返ると
+   * `shownIdRef.current` はまだ古い会話のままなので、一致判定が誤って真になり
+   * 別の会話の画面に前の会話の「止めた」が出ていた（`chat.interrupt.test.tsx`
+   * の `act()` で効果を流さずに応答を返す回帰）。
+   *
+   * **#1570 の直し方: 判定を ref にも効果の順序にも依らせない。** `pressedConversationId`
+   * は呼び出し元（下の `onClick`）が**その render で決まっている `shownId`**
+   * （state。render の同期処理でしか進まないため、効果を待たずに毎 render
+   * 正しい）から直接渡す。応答が返ったら会話 id を必ず `interruptNotice` /
+   * `interruptFailure` へ積む——**ここでは出す/出さないを判断しない。**
+   * 判断するのは描画する側で、**その描画の時点の `shownId`** と
+   * `conversationId` を突き合わせてから出す（下のヘッダー・`ErrorNote` の
+   * 読み出し）。ref の更新タイミングに依存する窓がそもそも存在しない——
+   * render は常に最新の `shownId` を見るので、いつ effect が走ったかは
+   * 関係が無くなる。
    */
-  const handleInterrupt = useCallback(async () => {
-    const pressedConversationId = shownIdRef.current;
-    const stillShown = () => shownIdRef.current === pressedConversationId;
-    setInterrupting(true);
-    setFailure(undefined);
-    setInterruptMessage(undefined);
-    try {
-      const outcome = await interruptClone();
-      if (stillShown()) setInterruptMessage(describeCloneInterruptOutcome(outcome));
-    } catch (caught) {
-      if (stillShown()) setFailure(caught);
-    } finally {
-      setInterrupting(false);
-    }
-  }, [interruptClone]);
+  const handleInterrupt = useCallback(
+    async (pressedConversationId: string) => {
+      setInterrupting(true);
+      setFailure(undefined);
+      setInterruptNotice(undefined);
+      setInterruptFailure(undefined);
+      try {
+        const outcome = await interruptClone();
+        setInterruptNotice({
+          conversationId: pressedConversationId,
+          text: describeCloneInterruptOutcome(outcome),
+        });
+      } catch (caught) {
+        setInterruptFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setInterrupting(false);
+      }
+    },
+    [interruptClone],
+  );
+
+  /**
+   * `interruptNotice`/`interruptFailure` を**いま出してよいか**の判断（#1570）。
+   *
+   * ここだけが判断する場所である——`handleInterrupt` 側はもう判断しない
+   * （上の doc）。`shownId` はこの render の同期処理でしか進まない state
+   * なので、この比較は常に「この render の時点で正しい」答えを返す。
+   */
+  const visibleInterruptNotice =
+    interruptNotice !== undefined && interruptNotice.conversationId === shownId
+      ? interruptNotice.text
+      : undefined;
+  const visibleInterruptFailure =
+    interruptFailure !== undefined && interruptFailure.conversationId === shownId
+      ? interruptFailure.error
+      : undefined;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -1525,7 +1588,7 @@ export function ChatPane({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => void handleInterrupt()}
+              onClick={() => void handleInterrupt(shownId)}
               loading={interrupting}
               title="いま走っているクローンのターンだけを止める。会話とセッションはそのまま残り、次の合図で次のターンが始まる"
               aria-label="クローンのターンを止める"
@@ -1548,12 +1611,14 @@ export function ChatPane({
 
       {/*
         「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
-        （ネットワーク断・403 等）は下の `ErrorNote`（`failure`）に出るので、
-        ここに乗るのは正しく応答が返った場合だけである。
+        （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
+        出るので、ここに乗るのは正しく応答が返った場合だけである。**いま出している
+        会話（`shownId`）が押した時点の会話と一致するときだけ出す**
+        （`visibleInterruptNotice` の doc）。
       */}
-      {interruptMessage !== undefined && (
+      {visibleInterruptNotice !== undefined && (
         <p className="shrink-0 border-b border-border py-2 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] text-[11px] text-muted md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
-          {interruptMessage}
+          {visibleInterruptNotice}
         </p>
       )}
 
@@ -1829,7 +1894,14 @@ export function ChatPane({
       </div>
 
       <div className="shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
-        <ErrorNote error={failure} className="mb-2" />
+        {/*
+          `failure`（送信経路など会話に依らない発生源）と
+          `visibleInterruptFailure`（interrupt 由来、会話が一致するときだけ）を
+          同じ枠へ合流させる。両方立つことは無い想定だが、立っても `failure` を
+          優先する——どちらが先でも「何かの失敗が出ている」という事実自体は
+          変わらないので、優先順位そのものに強い意味は無い。
+        */}
+        <ErrorNote error={failure ?? visibleInterruptFailure} className="mb-2" />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
             {/*
