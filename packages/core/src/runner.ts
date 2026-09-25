@@ -56,6 +56,7 @@ import {
   SUBAGENT_WAKEUP_LIMIT_PER_AGENT,
   SUBAGENT_WAKEUP_LIMIT_PER_TASK,
 } from './runner-subagent-stop-state.js';
+import { RunnerTurnTally } from './runner-turn-tally.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
@@ -1313,39 +1314,6 @@ class RunnerSession {
    * （`#markProgressed` 参照）。
    */
   #progressed = false;
-  /**
-   * このターンでマネージャーが出した本文（人間が Claude Code の画面で読むもの）。
-   *
-   * **報告を `result` 1本から作らない。** `result` はそのターンの最後の一片で
-   * しかなく、道具を挟むたびに本文は切れる。`result` だけを渡すと、クローンには
-   * 末尾だけが届き、**欠けていることが誰にも見えない**。人間は全部読めるのだから、
-   * 受信側だけが読めないのは能力の削除である（north_star 禁止1）。
-   */
-  #said: string[] = [];
-  /**
-   * `#said` へ最後に積んだ assistant メッセージの `uuid`（SDK が払う id）。
-   *
-   * **`#flushUnreported()` が `reportId` として運ぶためだけに持つ。**
-   * 通常の報告は `result` メッセージの `message.uuid` を `reportId` に使う
-   * （`runner-protocol.ts` の `report.reportId` の doc — 「runner が新しい値を
-   * 毎回振るのではなく、SDK 側の識別子をそのまま運ぶ」）。**`result` が来ない
-   * まま畳む回には、その id が存在しない。** そこで `randomUUID()` を振ると
-   * その作法を破ることになるので、**同じ本文を運んできた assistant メッセージの
-   * id をそのまま使う** — SDK 側の識別子であることは変わらず、再送しても
-   * 同じ値になる。
-   *
-   * **`#said` と同じ区切りで畳む**（持ち越すと、前のターンの id が次の報告に
-   * 付く）。
-   */
-  #saidUuid: string | undefined;
-  /**
-   * このターンで SDK が「これは応答ではない」と印を付けたメッセージ
-   * （`assistant.error`）。
-   *
-   * **`#said` と同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
-   * 報告されることになる。
-   */
-  #rejected: SdkFailure | null = null;
 
   /**
    * いま開いている作業者への委譲（Task）の `task_id` 集合。
@@ -1387,19 +1355,6 @@ class RunnerSession {
    */
   #windowClosing = false;
 
-  /** このターンで `#inputStream` が実際に消費した入力の件数（`result` で畳む）。 */
-  #inputsSinceResult = 0;
-  /** このターンで受けた `task_notification` の件数（`result` で畳む）。 */
-  #notificationsSinceResult = 0;
-  /**
-   * このターンでマネージャー自身の道具が動いた回数（`result` で畳む）。
-   *
-   * **作業者の道具は数えない**（`hook.agent_id` が付いているものは除く。
-   * `#onPostToolUse` の判定と同じ）。混ぜると「マネージャーは何もしていない
-   * ターン」＝事故（「残り5体を待ちます」だけのターン）の再現条件そのものが
-   * 消える。
-   */
-  #toolsSinceResult = 0;
   /**
    * 起こし直しの上限で打ち切った作業者の `agent_id`（#901）。
    *
@@ -1473,48 +1428,6 @@ class RunnerSession {
    * 使う。
    */
   readonly #pendingCutOffNotifications = new Set<string>();
-  /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
-  #submitsSinceResult = 0;
-  /**
-   * このターンの中で1度でも `task_started`（`delegation_started`）を観測した
-   * 作業者の taskId（`result` で畳む。#1373）。
-   *
-   * **`#openTasks`（`worker_wait` の区間の在り高）とは別の数え方である。**
-   * `result` が来る時点では作業者はもう終わっていることが多く、「ターンの
-   * 終わりに開いている数」ではなく「ターンの中で1度でも開いたことがある数」を
-   * 数える —— 委譲の下で動く作業者が枠（429）に当たったとき、デーモンが
-   * それを委譲本体（マネージャー）のターンの失敗として名乗ってしまう問題
-   * （Issue #1373）に、状況証拠を1つ足すための数である。
-   *
-   * **同じ taskId を2度数えない**（`Set`。`#onTaskStarted` が provider の
-   * 名乗った id、無ければ `randomUUID()` の代用値をそのまま足す）。
-   *
-   * `failedReportText` はこの値（`.size`）が1以上のときだけ「このターンでは
-   * 作業者が N 体開いていた」という1行を本文に添える。**これは判定ではない**
-   * —— SDK の `result` は「誰の言葉が最後だったか」を運べる形をしていないので
-   * （Issue #1373 の調査）、どちらの層が枠に当たったかは決められない。断定を
-   * 増やさず、状況証拠だけを渡す。
-   */
-  #openedWorkersThisTurn = new Set<string>();
-  /**
-   * このターンの中で、**作業者の発言**（`parentToolUseId` が非 null の
-   * assistant メッセージ）に付いていた SDK の拒否の印（`errorCode`。
-   * `rate_limit` / `billing_error` 等）。`result` で畳む（#1373 案 (a) の
-   * 本文だけの形）。
-   *
-   * **`#openedWorkersThisTurn` との違いは、状況証拠か直接の証拠かである。**
-   * あちらは「作業者が開いていた」までしか言えず、当たったのが本体か作業者かは
-   * 決められない。こちらは**作業者自身の発言に拒否の印が付いていた**ので、
-   * 「作業者が当たった」ことは確かである。⚠ **ただし「本体は当たっていない」
-   * とは言えない** —— 同じ鍵・同じ枠なら本体も続けて当たりうる。
-   *
-   * **ターンの失敗にはしない。** 本体の `#rejected` へは入れない —— 作業者が
-   * 1体枠に当たっても、本体は作業者を立て直して進めることがある（#1373 の
-   * 実例 `mgr-4f6859d5`）。ここで持つのは、失敗で終わったターンの本文に添える
-   * 材料だけである。構造化した欄（`runner-protocol.ts` の `failure`）には
-   * 足していない —— 台帳と公開 API の形を変えることになる（#1373 のコメント）。
-   */
-  #workerRejectionsThisTurn: string[] = [];
   /**
    * `SubagentStop` / `Stop` の観測が使う8フィールドの器（Issue #1190 段1で
    * `runner-subagent-stop-state.ts` へ切り出した。前例は PR #1359
@@ -1525,46 +1438,17 @@ class RunnerSession {
    */
   readonly #stopState = new RunnerSubagentStopState();
   /**
-   * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
-   *
-   * **取れた分だけ載せる。** 取れない回に `'unknown': 1` のような行を作らない
-   * （AGENTS.md 地雷「取れない軸に0の行を作る」）。
-   *
-   * ## **「外部には付かない」は SDK 0.3.239 で消えた。この軸はもう死んでいない**
-   *
-   * ここには元々「いまは Anthropic 内部のセッションでしか付かない見込みで、
-   * 外部のペイロードには付かない」と書いてあった。**それは SDK 0.3.237 の
-   * JSDoc の正しい引き写しだったが、`1ce97ed`（0.3.239 への自動更新）で
-   * 前提のほうが変わった。** 実物の差分（2026-08-22 観測）:
-   *
-   * - 0.3.237: `Currently only set for Anthropic-internal sessions while the
-   *   field is trialed; external payloads omit it.`
-   * - 0.3.239: `Payloads may omit it while the field rolls out.`
-   *
-   * **「必ず付かない」から「付かないこともある」へ変わった** ので、alteroid の
-   * ような外部セッションでも `sources` が埋まりうる。**取れない前提で読み飛ばす
-   * と、いちばん知りたい内訳を見落とす** — 同じ JSDoc は `system` を
-   * 「他の機械が起こしたターン（peer/channel messages・task notifications・
-   * auto-continuation）」と定義しており、これは `byCause` が
-   * `notification`（通知の直後）と `continuation`（消去法の残り）に分けて
-   * *推定*している当のものを、**SDK 自身が名指しで分類した値**である。
-   *
-   * ## それでも `sources` が答えない問い
-   *
-   * - **`system` は3つを畳んでいる。** peer/channel messages と
-   *   task notifications と auto-continuation は同じ `'system'` に落ちる。
-   *   「通知で起きたのか、SDK が自分で続けたのか」は**この値では割れない**
-   * - **付かない回は今も在る**（「may omit」）。`sources` の合計は `submits`
-   *   と一致するとは限らず、**一致しない分が「どの source だったか」は不明**で
-   *   あって「source が無い契機だった」ではない
-   *
-   * **この JSDoc がまた変わったら `sdk-source-field.test.ts` が落ちる。**
-   * 落ちたら、この doc と `runner-protocol.ts` の `sources` の doc と
-   * `#onUserPromptSubmit` のコメントの3か所を読み直すこと（SDK の更新は
-   * `.github/workflows/update-claude-sdk.yml` が自動で PR にするので、
-   * **黙って腐る。実際に一度腐った**）。
+   * **ターン区切りで畳む集計10フィールドの器**（Issue #1190の続きで
+   * `runner-turn-tally.ts` へ切り出した。前例は PR #1433 / #1359）。喋った本文
+   * （`said` / `saidUuid`）・SDK の拒否の印（`rejected`）・`worker_wait` の
+   * 契機カウンタ4本（入力・通知・道具・submit）・`source` 別内訳・#1373の
+   * 状況証拠2本（開いた作業者数・作業者の拒否の印）を持つ。**畳む場所は3つ
+   * あり、それぞれ畳む範囲が違う**（`RunnerTurnTally.takeAtResult` /
+   * `.takeSaid` / `.discardOpenedWorkersAndRejections`）——何を持っているか・
+   * 切り出しの理由と限界・3箇所の差の詳細は `RunnerTurnTally` 自身の doc を
+   * 見よ。
    */
-  #submitSources = new Map<string, number>();
+  readonly #turnTally = new RunnerTurnTally();
   readonly #inputWaiters = new Set<() => void>();
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
@@ -2228,7 +2112,7 @@ class RunnerSession {
       if (next !== undefined) {
         // **`worker_wait` の `byCause.input` の材料。** 実際に消費した入力だけを
         // 数える（積んだ時点ではなく、SDK が読み取った時点）。
-        this.#inputsSinceResult += 1;
+        this.#turnTally.incrementInputsSinceResult();
         yield next;
         continue;
       }
@@ -2528,8 +2412,7 @@ class RunnerSession {
     // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
     // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
     // 次のセッションの最初のターンの数に入る。
-    this.#openedWorkersThisTurn = new Set();
-    this.#workerRejectionsThisTurn = [];
+    this.#turnTally.discardOpenedWorkersAndRejections();
 
     const record = renderSessionLog(this.#seed);
     if (record === null) {
@@ -2689,20 +2572,20 @@ class RunnerSession {
           // （`sdk-failure.ts` の doc。クローン側の穴と同じ形である）。
           const rejected = assistantFailureOf(event.errorCode, said);
           if (rejected !== undefined) {
-            this.#rejected = rejected;
+            this.#turnTally.setRejected(rejected);
             return;
           }
           if (said.length > 0) {
-            this.#said.push(said);
-            // **`#flushUnreported()` のための材料**（`#saidUuid` の doc）。
-            // 通常の経路（`result` が来る回）はこの値を1度も読まない。
-            this.#saidUuid = event.id;
+            // **`#flushUnreported()` のための材料**（`RunnerTurnTally` の
+            // `#saidUuid` の doc）。通常の経路（`result` が来る回）はこの値を
+            // 1度も読まない。
+            this.#turnTally.recordSaid(said, event.id);
           }
         } else {
           // **作業者の発言に付いた拒否の印は、ターンの失敗にはせず数えるだけ**
-          // （`#workerRejectionsThisTurn` の doc。#1373）。
+          // （`RunnerTurnTally` の `#workerRejectionsThisTurn` の doc。#1373）。
           const rejected = assistantFailureOf(event.errorCode, '');
-          if (rejected !== undefined) this.#workerRejectionsThisTurn.push(rejected.code);
+          if (rejected !== undefined) this.#turnTally.pushWorkerRejection(rejected.code);
         }
         return;
       }
@@ -2782,34 +2665,20 @@ class RunnerSession {
         }
 
         // ターンの区切りで必ず畳む。持ち越すと、前のターンの本文が次の報告に
-        // 混ざって「言っていないことを言った」ことになる。
-        const said = this.#said;
-        this.#said = [];
-        // **`#said` と同じ区切りで畳む**（`#saidUuid` の doc）。
-        this.#saidUuid = undefined;
-        // **印も同じ区切りで畳む。** 持ち越すと、次のターンが成功しても失敗として
-        // 報告されることになる（`#said` を持ち越してはいけないのと同じ理由）。
-        const rejected = this.#rejected;
-        this.#rejected = null;
-
-        // **委譲の契機を数える（`worker_wait`）。** ターンの区切りで必ず畳む —
-        // 持ち越すと次のターンへ漏れる（`#said` を畳むのと同じ理由）。
-        const inputsThisTurn = this.#inputsSinceResult;
-        const notificationsThisTurn = this.#notificationsSinceResult;
-        const toolsThisTurn = this.#toolsSinceResult;
-        const submitsThisTurn = this.#submitsSinceResult;
-        const sourcesThisTurn = this.#submitSources;
-        // **#1373: 同じ区切りで畳む。** `#openedWorkersThisTurn` の doc の
-        // とおり、持ち越すと前のターンで開いた作業者が次のターンの N に混ざる。
-        const openedWorkersThisTurn = this.#openedWorkersThisTurn.size;
-        const workerRejectionsThisTurn = this.#workerRejectionsThisTurn;
-        this.#inputsSinceResult = 0;
-        this.#notificationsSinceResult = 0;
-        this.#toolsSinceResult = 0;
-        this.#submitsSinceResult = 0;
-        this.#submitSources = new Map();
-        this.#openedWorkersThisTurn = new Set();
-        this.#workerRejectionsThisTurn = [];
+        // 混ざって「言っていないことを言った」ことになる。印（`rejected`）も
+        // 委譲の契機（`worker_wait` の材料）も同じ区切りで、まとめて1回で畳む
+        // （`RunnerTurnTally.takeAtResult` の doc）。
+        const {
+          said,
+          rejected,
+          inputsThisTurn,
+          notificationsThisTurn,
+          toolsThisTurn,
+          submitsThisTurn,
+          sourcesThisTurn,
+          openedWorkersThisTurn,
+          workerRejectionsThisTurn,
+        } = this.#turnTally.takeAtResult();
 
         // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
         // 閉じ待ち（`#windowClosing`）のときだけ**である。委譲の外で起きたターン
@@ -3081,8 +2950,8 @@ class RunnerSession {
     // 何で埋めるかが層の判断だからである**（`agent-events.ts` の doc）。
     const taskId = event.taskId ?? randomUUID();
     // **#1373: `#openTasks` の開閉とは無関係に、このターンで開いた作業者を
-    // 別勘定で数える。** `#openedWorkersThisTurn` の doc を参照。
-    this.#openedWorkersThisTurn.add(taskId);
+    // 別勘定で数える。** `RunnerTurnTally` の `#openedWorkersThisTurn` の doc を参照。
+    this.#turnTally.addOpenedWorker(taskId);
     if (this.#openTasks.size === 0 && this.#window !== null) {
       // 閉じ待ちの間に次の委譲が始まった。**同じ区間として続ける** — ここで
       // 新しい区間を開き直すと、閉じていない集計を上書きして消してしまう。
@@ -3119,7 +2988,7 @@ class RunnerSession {
     const had = taskId !== undefined && this.#openTasks.delete(taskId);
     // **`worker_wait.notifications` の材料。** 対応する `task_started` を見て
     // いなくても（`had` が false でも）数える — 通知そのものは事実である。
-    this.#notificationsSinceResult += 1;
+    this.#turnTally.incrementNotificationsSinceResult();
     // **本当に 1→0 の遷移のときだけ閉じ待ちにする。** 対応の無い通知（本来
     // 起きない想定だが防御的に見る）で誤って閉じ待ちを立てない。
     if (had && this.#openTasks.size === 0) this.#windowClosing = true;
@@ -3148,8 +3017,9 @@ class RunnerSession {
    * 委譲した全員から通知を受け切っているか」をそのまま表すので、これを直接
    * 使う（呼び出し側の意図の言い換えを挟まない）。
    *
-   * `sources` は**取れた分だけ載せる**。`#submitSources` が1件も無ければ
-   * フィールドごと省く — 取れない軸に0の行を作らない（AGENTS.md 地雷）。
+   * `sources` は**取れた分だけ載せる**。`RunnerTurnTally` の `#submitSources`
+   * が1件も無ければフィールドごと省く — 取れない軸に0の行を作らない
+   * （AGENTS.md 地雷）。
    */
   #closeWorkerWaitWindow(): void {
     const window = this.#window;
@@ -3434,8 +3304,8 @@ class RunnerSession {
    * **`result` を受け取らないまま畳むとき、既に喋られていた本文を報告として出す（#323）。**
    *
    * 報告は `#dispatch` の `message.type === 'result'` の枝でしか作られない。
-   * assistant のメッセージは（`stop_reason` が `end_turn` でも）`#said` に
-   * 積まれるだけで、畳むのは `result` の到来だけである。**だから `result` が
+   * assistant のメッセージは（`stop_reason` が `end_turn` でも）`RunnerTurnTally`
+   * の `#said` に積まれるだけで、畳むのは `result` の到来だけである。**だから `result` が
    * 来ないまま終わる回は、マネージャーが書き終えた本文が丸ごと消えていた** —
    * 生ログ（`manager_transcript`）にだけ残り、台帳にも日誌にもクローンの
    * 受信箱にも1文字も出ない。これは #323 が「生ログには `end_turn` まで在り、
@@ -3454,7 +3324,8 @@ class RunnerSession {
    * **畳んでから出す。** 二度呼ばれても二度は出ない（`stop()` の後に
    * `#read` の catch から `#finish` が来る経路が実在する）。
    *
-   * **`#rejected`（SDK が「応答ではない」と印を付けた事実）はここでは読まない。**
+   * **`RunnerTurnTally` の `#rejected`（SDK が「応答ではない」と印を付けた
+   * 事実）はここでは読まない。**
    * あれはターンの終わり方を言う印で、その確定は `result` が運ぶ。
    * `result` が来ていないこの経路では「失敗として終わった」と名乗れない
    * ——名乗れないものを名乗らない（`AGENTS.md`「取れない軸に0の行を作る」）。
@@ -3465,11 +3336,8 @@ class RunnerSession {
    * 詳しい。値は `reason` をそのまま運ぶ（言い換えない）。
    */
   #flushUnreported(reason: string, status: JobStatus): void {
-    if (this.#said.length === 0) return;
-    const said = this.#said;
-    this.#said = [];
-    const reportId = this.#saidUuid;
-    this.#saidUuid = undefined;
+    if (!this.#turnTally.hasSaid) return;
+    const { said, reportId } = this.#turnTally.takeSaid();
     this.#emit({
       type: 'report',
       managerId: this.#id,
@@ -3762,7 +3630,7 @@ class RunnerSession {
 
     // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
     // （`hook.agent_id` が付いているものは作業者の分なので混ぜない）。
-    if (hook.agent_id === undefined) this.#toolsSinceResult += 1;
+    if (hook.agent_id === undefined) this.#turnTally.incrementToolsSinceResult();
 
     this.#emit({
       type: 'tool_use',
@@ -3969,8 +3837,9 @@ class RunnerSession {
    * （`clone.ts` の `cloneToolJournalsItself` 相当）が無いため——除外規則は
    * 成功側と揃えることにしており、無い規則を失敗側にだけ新設しない。
    *
-   * **`transcript_path` と `#toolsSinceResult` / `#markProgressed` は成功側と
-   * 同じ理由で拾う** —— `BaseHookInput` の欄で両方のフック入力に載るので、
+   * **`transcript_path` と `RunnerTurnTally` の `#toolsSinceResult` /
+   * `#markProgressed` は成功側と同じ理由で拾う** —— `BaseHookInput` の欄で
+   * 両方のフック入力に載るので、
    * 直近の道具呼び出しが失敗した回だけこれらを拾わずにいると、次に成功する
    * 道具呼び出しが来るまでのあいだ生ログの在り処や「自分で手を動かした
    * 回数」が古いまま取り残される（`#onPostToolUse` の同じ2行と同じ理由）。
@@ -3984,7 +3853,7 @@ class RunnerSession {
 
     // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
     // （成功側の `#onPostToolUse` と同じ理由・同じ判定）。
-    if (hook?.agent_id === undefined) this.#toolsSinceResult += 1;
+    if (hook?.agent_id === undefined) this.#turnTally.incrementToolsSinceResult();
 
     const actor =
       hook?.agent_id === undefined
@@ -4056,17 +3925,17 @@ class RunnerSession {
   async #onUserPromptSubmit(input: unknown): Promise<{ continue: true }> {
     const hook = input as { agent_id?: string; source?: unknown };
     if (hook.agent_id === undefined) {
-      this.#submitsSinceResult += 1;
+      this.#turnTally.incrementSubmitsSinceResult();
       // **取れた分だけ載せる。** SDK の JSDoc
       // （`UserPromptSubmitHookInput.source`）曰く、この値は「system = 他の
       // 機械が起こしたターン（peer/channel messages・task notifications・
       // auto-continuation）」等を表す。**取れる見込みは 0.3.239 で変わった**
       // （「外部のペイロードには付かない」→「付かないこともある」。経緯と、
-      // それでも割れない問いは `#submitSources` の doc）。取れない回に
-      // `'unknown': 1` のような行を作らない（AGENTS.md 地雷「取れない軸に0の
-      // 行を作る」）。
+      // それでも割れない問いは `RunnerTurnTally` の `#submitSources` の doc）。
+      // 取れない回に `'unknown': 1` のような行を作らない（AGENTS.md 地雷
+      // 「取れない軸に0の行を作る」）。
       if (typeof hook.source === 'string') {
-        this.#submitSources.set(hook.source, (this.#submitSources.get(hook.source) ?? 0) + 1);
+        this.#turnTally.recordSubmitSource(hook.source);
       }
     }
     return { continue: true };
@@ -5162,7 +5031,7 @@ function unreportedText(said: readonly string[], reason: string): string {
  * 付くと、無関係な失敗まで作業者絡みに見える）。
  *
  * **`workerRejections` が1件以上なら、状況証拠の行を直接の証拠の行へ差し替える**
- * （`#workerRejectionsThisTurn` の doc）。作業者自身の発言に拒否の印が付いて
+ * （`RunnerTurnTally` の `#workerRejectionsThisTurn` の doc）。作業者自身の発言に拒否の印が付いて
  * いたので「作業者が当たった」とは言える。「本体は当たっていない」とは言わない。
  * 印は種類ごとに件数で畳む（同じ `rate_limit` が何件も並ぶと本文が太る）。
  */
