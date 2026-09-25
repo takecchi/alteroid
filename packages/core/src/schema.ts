@@ -3471,27 +3471,53 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  *
  * ## 残る族（⛔ この欄が更新されない回）
  *
- * 更新するのは、`pool.unpushedWork()` が呼ばれた回だけである。呼び出し元は
- * 3つ: `manager_stop`（`before.status === 'running' && force !== true`）の
- * 分岐、**委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
- * Issue #1266 の (4)。本番で1つ目が一度も発火していなかったため足した）、
- * そして **Bash で `git push` か、新しい枝を作る操作（`git checkout -b`／
- * `git switch -c`／`git worktree add`／`git branch <名前>` 等。
- * `bashCommandLooksLikeGitBranchCreate` の doc を見よ）を検出したとき**
- * （`manager.ts` の `case 'tool_use'`。前者は Issue #1376 の続き——器の
- * 入れ替え・枠落ちで、最初の報告より前に落ちた委譲は枝名が引けない、という
- * 残っていた穴を、その委譲が一度でも `git push` を打っていれば埋める。後者は
- * 2026-09-24T14:40Z のコメントが名指しした「枝ができたとき」を足したもので、
- * `git push` を一度も打たずに落ちた委譲でも、枝さえ作っていれば埋まる
- * ようにする）。
- * **`force: true` で止めたとき・`manager_list`・止めた委譲の報告・器の入れ替え
- * （redeploy・枠落ちでセッションを失う経路）では、この欄は更新されない。**
+ * 更新するのは、`pool.unpushedWork()` が呼ばれた回（下の1〜3）と、runner が
+ * 自分で先取りして運んだ観測を `manager.ts` の `case 'closed'` が台帳へ写す
+ * 回（下の4）の、合わせて4つの経路だけである:
+ *
+ * 1. `manager_stop`（`before.status === 'running' && force !== true`）の断り
+ * 2. **委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
+ *    Issue #1266 の (4)。本番でこの経路が一度も発火していなかったため足した）
+ * 3. **Bash で `git push` か、新しい枝を作る操作（`git checkout -b`／
+ *    `git switch -c`／`git worktree add`／`git branch <名前>` 等。
+ *    `bashCommandLooksLikeGitBranchCreate` の doc を見よ）を検出したとき**
+ *    （`manager.ts` の `case 'tool_use'`。前者は Issue #1376 の続き——器の
+ *    入れ替え・枠落ちで、最初の報告より前に落ちた委譲は枝名が引けない、
+ *    という残っていた穴を、その委譲が一度でも `git push` を打っていれば
+ *    埋める。後者は 2026-09-24T14:40Z のコメントが名指しした「枝ができた
+ *    とき」を足したもので、`git push` を一度も打たずに落ちた委譲でも、
+ *    枝さえ作っていれば埋まるようにする）
+ * 4. **セッションが `closed`（`done` / `lost` / `failed`）で終わるとき**
+ *    （`manager.ts` の `case 'closed'`。Issue #1266 候補(2)）。上の1〜3は
+ *    どれも「セッションがまだ生きていて、次のターンか道具の実行が起きた
+ *    とき」にしか発火しないので、**枠落ち（429）や失敗でセッションが
+ *    `closed` になる経路（1〜3のどれも届く前に器を失う回）は、以前は
+ *    この欄が一度も更新されなかった。** `runner.ts` の `RunnerSession#finish()`
+ *    が `closed` を emit する直前に `unpushedWork()` を1回取り、
+ *    `runnerEventSchema` の `closed.unpushedWork`（optional。古い runner の
+ *    `closed` は壊さない）として運ぶ——デーモン側が `closed` を受けてから
+ *    改めて runner へ問い合わせても、`#finish()` は emit と同じ同期区間で
+ *    `#onClosed()`（セッションの削除）を呼ぶのでほぼ空振りする、という
+ *    理由による（`closed.unpushedWork` の doc）。**上書きガード**
+ *    （`manager.ts` の `isUnpushedWorkObservationAtLeastAsNewAs`）——2〜3の
+ *    fire-and-forget（`#observeUnpushedWorkOnce`）と4は同じ委譲について
+ *    非同期に競走することがあるため、`at` を比べて古い観測では上書きしない。
+ *
+ * **それでも更新されない回が残る。** `force: true` で止めたとき・
+ * `manager_list`・止めた委譲の報告・器の入れ替え（redeploy・
+ * `manager_stop`）は `runner.ts` の `stop()` を通り、**`stop()` は `closed`
+ * イベント自体を出さない設計**（デーモン側は自分が起こした `stop()` の結果を
+ * `runner.list()` で確かめられるので、知らせが要らない）なので、上の4も
+ * 発火しない。**runner プロセスそのものが `#finish()` を実行する前に落ちた
+ * 回**（コンテナごと OOM-killed・SIGKILL 等）も、`closed` イベント自体が
+ * 届かないので同様に拾えない。
  * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打たず、新しい
- * 枝も作っていなければ拾えない**（最後の報告か、最後に検出した `git push`／
- * 枝作成のうちいちばん遅い時点の観測が残るだけである）。`git push` や
- * 枝作成の実行そのものの最中に器が落ちた回も拾えない——検出は runner の
- * `PostToolUse` フック経由なので、コマンドの完了後にしか届かない
- * （`manager.ts` の `case 'tool_use'` のコメントを見よ）。呼び出し元は
+ * 枝も作っておらず、かつ `closed`（4）も届かなかった場合にだけ拾えない**
+ * （最後の報告か、最後に検出した `git push`／枝作成／`closed` のうち
+ * いちばん遅い時点の観測が残るだけである）。`git push` や枝作成の実行その
+ * ものの最中に器が落ちた回も拾えない——検出は runner の `PostToolUse`
+ * フック経由なので、コマンドの完了後にしか届かない（`manager.ts` の
+ * `case 'tool_use'` のコメントを見よ）。呼び出し元は
  * `grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる。
  * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
  *

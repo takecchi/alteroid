@@ -815,6 +815,53 @@ export type ManagerUnpushedWork =
   | { readonly kind: 'unavailable'; readonly reason: string };
 
 /**
+ * `ManagerUnpushedWork` を台帳の形（`LastUnpushedWorkObservation`）へ変換
+ * するだけ（副作用なし）。`#recordUnpushedWorkObservation`（既存4つの
+ * 呼び出し元）と `case 'closed'`（Issue #1266 候補(2)、5つ目の呼び出し元
+ * ——`runner.ts` の `#finish()` が先取りして運ぶ）の両方から使う——変換
+ * ロジックを2箇所で手で合わせない。
+ */
+function unpushedWorkObservationOf(
+  outcome: ManagerUnpushedWork,
+  at: string,
+): LastUnpushedWorkObservation {
+  return outcome.kind === 'ok'
+    ? {
+        kind: 'observed',
+        at,
+        // **出してよい範囲を継ぐ**（`observedWorktreeBranchSchema` の doc）。
+        // `unpushedCommitCount` 等は書き写さない——この欄が答えるのは
+        // 「どの枝を見ればよいか」までである。`remoteOrigin` は
+        // Issue #1376 B2 でその線に開けた1点の穴（host/path のみ）を
+        // そのまま写す。
+        cwd: outcome.result.cwd,
+        worktrees: outcome.result.worktrees.map((worktree) => ({
+          relativePath: worktree.relativePath,
+          branch: worktree.branch,
+          ...(worktree.remoteOrigin === undefined ? {} : { remoteOrigin: worktree.remoteOrigin }),
+        })),
+      }
+    : { kind: 'unavailable', at, reason: outcome.reason };
+}
+
+/**
+ * `candidate` は `existing`（既に台帳に乗っている観測。無ければ何でも通す）
+ * より古くないか——**古ければ `false`**（＝上書きしない。Issue #1266
+ * 候補(2)）。
+ *
+ * `at`（ISO8601・UTC・`Z` 終端）の辞書式比較がそのまま時系列の比較になる
+ * ——`runnerBacklog()` の `observedAt` 比較（`candidate.observedAt >
+ * existing.observedAt`）と同じ作法。**同点は勝たせる**（`existing.at`
+ * が `candidate.at` より**厳密に**新しいときだけ弾く）。
+ */
+function isUnpushedWorkObservationAtLeastAsNewAs(
+  candidate: LastUnpushedWorkObservation,
+  existing: LastUnpushedWorkObservation | undefined,
+): boolean {
+  return existing === undefined || !(existing.at > candidate.at);
+}
+
+/**
  * 「確認へ上がらずに止められた」件数（道具・層ごと）。
  *
  * **`status` では表せない。** 分類器か deny 規則がその場で拒否したとき、その仕事は
@@ -1931,7 +1978,12 @@ export interface ManagerPool {
    *    ではなく移すためで、終端にすると `#reattach()` の
    *    `status !== 'running' && status !== 'waiting_human'` の関門に引っかかり、
    *    二度と移送されなくなる（`#confirmStoppedAndReleaseLease` の doc「呼び
-   *    出し元が決めること」）。
+   *    出し元が決めること」）。**その握手の直前に `unpushedWork()` を1回取る**
+   *    （Issue #1266 候補(2)）——生きて答えられる最後の機会だからで、
+   *    失敗しても握手の判定は変えない（`vacate()` 実装側のコメントに詳しい）。
+   *    ⚠️ **これが効くのは、この drain を実際に呼んだときだけである。**
+   *    日常の Railway redeploy は `vacate()` を通らないので、この観測は
+   *    効かない。
    * 3. `relocateFrom(runnerId)` を呼ぶ。貸し出しを先に返してあるので、期限を
    *    待たずに他の `connected` な runner へ移る。
    *
@@ -5879,33 +5931,33 @@ class Pool implements ManagerPool {
    * （redeploy・枠落ちでセッションを失う経路。`report` も `git push` の
    * `tool_use` も届く前に器を失えば拾えない）は、どの呼び出し元からも
    * `unpushedWork()` 自体が呼ばれないので、この関数にも来ない**
-   * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意）。
+   * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意——
+   * ただし `case 'closed'`（`runner.ts` の `#finish()` が先取りして運ぶ、
+   * Issue #1266 候補(2)）は、この関数を経由せず自分で同じ変換
+   * （{@link unpushedWorkObservationOf}）と同じ上書きガードを直接使う。
+   * 理由は下の「上書きガード」を見よ）。
+   *
+   * ## 上書きガード（Issue #1266 候補(2)）
+   *
+   * `record.job.lastUnpushedWorkObservation` に既に**より新しい**観測が
+   * 乗っているなら、ここでは古い値で上書きしない——`case 'report'` /
+   * `case 'tool_use'` の fire-and-forget（`#observeUnpushedWorkOnce`）と
+   * `case 'closed'` の直接書き込みは、同じ委譲について非同期に競走する
+   * ことがある（`report` は `closed` より先に届くが、その fire-and-forget
+   * は runner との往復を含むので `closed` の処理より後に解決しうる）。
+   * 比較は `at`（ISO8601・UTC・`Z` 終端）の辞書式比較——`runnerBacklog()` の
+   * `observedAt` 比較と同じ作法。同点は新しいほうを勝たせる（`>`
+   * 厳密な超過だけを弾く条件にする）。
    */
   async #recordUnpushedWorkObservation(
     record: ManagerRecord,
     outcome: ManagerUnpushedWork,
   ): Promise<void> {
     const at = new Date(this.#now()).toISOString();
-    const observation: LastUnpushedWorkObservation =
-      outcome.kind === 'ok'
-        ? {
-            kind: 'observed',
-            at,
-            cwd: outcome.result.cwd,
-            // **出してよい範囲を継ぐ**（`observedWorktreeBranchSchema` の doc）。
-            // `unpushedCommitCount` 等は書き写さない——この欄が答えるのは
-            // 「どの枝を見ればよいか」までである。`remoteOrigin` は
-            // Issue #1376 B2 でその線に開けた1点の穴（host/path のみ）を
-            // そのまま写す。
-            worktrees: outcome.result.worktrees.map((worktree) => ({
-              relativePath: worktree.relativePath,
-              branch: worktree.branch,
-              ...(worktree.remoteOrigin === undefined
-                ? {}
-                : { remoteOrigin: worktree.remoteOrigin }),
-            })),
-          }
-        : { kind: 'unavailable', at, reason: outcome.reason };
+    const observation = unpushedWorkObservationOf(outcome, at);
+    if (!isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)) {
+      return;
+    }
     record.job.lastUnpushedWorkObservation = observation;
     await this.#persist(record);
   }
@@ -6636,6 +6688,40 @@ class Pool implements ManagerPool {
         if (status !== 'running' && status !== 'waiting_human') continue;
         const record = known ?? (await this.#load(job.id));
         if (record === null) continue;
+        /*
+         * **未 push の観測を、`runner.stop()` の直前に1回取って記録する**
+         * （Issue #1266 候補(2)。`pool.vacate()` — #1453 / #1472）。
+         * `#confirmStoppedAndReleaseLease` がこの数行後で `runner.stop()`
+         * を呼ぶ——このセッションが生きて答えられる最後の機会である。
+         *
+         * ⚠️ **これが効くのは、runner を意図して空けるとき（drain）だけ
+         * である。** 日常の Railway redeploy はプロセスごと差し替わるだけで
+         * `vacate()`（`POST /runners/vacate`）を誰も呼ばない
+         * （`railway/README.md`「デプロイは走行中の仕事を畳む操作である」）
+         * ——だから、あちらの経路の欠落（`schema.ts` の
+         * `lastUnpushedWorkObservationSchema` の doc「残る族」）はこれでは
+         * 埋まらない。埋まるのは、オペレーターが明示的にこの runner を
+         * 空けたい（移送したい）と決めて `vacate` を呼んだ回だけである。
+         *
+         * **要求と応答なので outbox は通らない。** `stop()` 経路
+         * （器の入れ替え・`manager_stop`）に新しい outbox イベントを足すと
+         * #629 と同じ喪失の窓を持つ——ここは `unpushedWork()` が台帳
+         * （`job.lastUnpushedWorkObservation`）へ直接書く既存の経路
+         * （`#recordUnpushedWorkObservation`）に乗るだけで、新しい配達経路は
+         * 作らない。
+         *
+         * **観測に失敗しても vacate 本体の判定は変えない。** `unpushedWork()`
+         * 自体は例外を投げない設計（interface の doc）で、`{kind:
+         * 'unavailable', reason}` に畳んで台帳へ残すところまでが仕事だが、
+         * それでも `.catch()` を添えてある——設計が将来守られなくなっても、
+         * この観測1回の失敗が `#confirmStoppedAndReleaseLease` の判定
+         * （`outcome` / 貸し出しの解放）を巻き添えにしないことを、ここの形で
+         * 保証するため（`#observeUnpushedWorkOnce` の doc と同じ理由）。
+         * 戻り値は見ない——記録は `unpushedWork()` 自身が行う。
+         */
+        await this.unpushedWork(job.id, {
+          signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+        }).catch(() => undefined);
         const { outcome } = await this.#confirmStoppedAndReleaseLease(record, runner, job.id);
         /*
          * **`record.job.status` は書かない。`#retire` も呼ばない。** drain は
@@ -10342,6 +10428,39 @@ class Pool implements ManagerPool {
          */
         if (event.status === 'failed' && event.cgroupEvents !== undefined) {
           record.job.lastCgroupEvents = { ...event.cgroupEvents, at: new Date().toISOString() };
+        }
+        /*
+         * **台帳へも残す（Issue #1266 候補(2) — `unpushedWork` の5つ目の
+         * 呼び出し元）。** `event.unpushedWork` は `runner.ts` の `#finish()`
+         * が `closed` を emit する直前に先取りした1回分——`lastSystemError` /
+         * `lastCgroupEvents` と違い `status` では絞らない（`done` を含む
+         * すべての `closed` で運ばれてくる。この欄自体は失敗特有の事実
+         * ではなく「どの枝を見ればよいか」を答えるものなので、`status` に
+         * 関わらず残す価値がある——`done` の回は既に `case 'report'` の
+         * fire-and-forget が同じ内容を残しているはずだが、二重に書いても
+         * 実害は無い）。
+         *
+         * **`#recordUnpushedWorkObservation`（既存4呼び出し元）と同じ変換
+         * （{@link unpushedWorkObservationOf}）・同じ上書きガード
+         * （{@link isUnpushedWorkObservationAtLeastAsNewAs}）を通す**——
+         * `case 'report'` / `case 'tool_use'` の fire-and-forget
+         * （`#observeUnpushedWorkOnce`）が同じ委譲について非同期に競走して
+         * いることがあるため（`report` は `closed` より先に届くが、その
+         * fire-and-forget は runner との往復を含むので `closed` の処理より
+         * 後に解決しうる）。**ここでは `#recordUnpushedWorkObservation` を
+         * 直接呼ばない**——あれは自分で `#persist` するので、直後の
+         * `await this.#persist(record)` と二重に書き込むことになる
+         * （`lastSystemError` / `lastCgroupEvents` と同じ「直接代入して、
+         * 持ち回りの `#persist` に任せる」形に揃える）。
+         */
+        if (event.unpushedWork !== undefined) {
+          const at = new Date(this.#now()).toISOString();
+          const observation = unpushedWorkObservationOf(event.unpushedWork, at);
+          if (
+            isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
+          ) {
+            record.job.lastUnpushedWorkObservation = observation;
+          }
         }
         await this.#persist(record);
         // **`event.reason` を包まずに渡す（issue #287）。**

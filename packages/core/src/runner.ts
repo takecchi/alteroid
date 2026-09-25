@@ -366,6 +366,15 @@ export interface RunnerHostOptions {
    * `RunnerSessionOptions.readCgroupEventCountersFn` の doc を見よ。
    */
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
+  /**
+   * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体を
+   * テストから差し替える（Issue #1266 候補(2)）。**主にテスト用**
+   * （`readCgroupEventCountersFn` と同じ理由）。
+   * `RunnerSessionOptions.finishUnpushedWorkFn` の doc を見よ。
+   */
+  finishUnpushedWorkFn?: (options?: {
+    signal?: AbortSignal;
+  }) => Promise<UnpushedWorkResult>;
 }
 
 export interface RunnerHost {
@@ -579,6 +588,9 @@ class Host implements RunnerHost {
   readonly #spawnClaudeCodeProcessFn:
     ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
+  readonly #finishUnpushedWorkFn:
+    | ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>)
+    | undefined;
 
   constructor(options: RunnerHostOptions) {
     this.runnerId = options.runnerId;
@@ -593,6 +605,7 @@ class Host implements RunnerHost {
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnClaudeCodeProcessFn = options.spawnClaudeCodeProcessFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
+    this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
       // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
@@ -839,6 +852,9 @@ class Host implements RunnerHost {
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
+      ...(this.#finishUnpushedWorkFn === undefined
+        ? {}
+        : { finishUnpushedWorkFn: this.#finishUnpushedWorkFn }),
     });
     this.#sessions.set(managerId, session);
     return session;
@@ -1212,7 +1228,47 @@ interface RunnerSessionOptions {
    * `/sys/fs/cgroup` を読む）。
    */
   readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
+  /**
+   * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体を
+   * テストから差し替える（Issue #1266 候補(2)）。**主にテスト用**
+   * （`readCgroupEventCountersFn` と同じ理由——既定は本物の
+   * `this.unpushedWork(options)` で、内側の `computeUnpushedWork` は
+   * `cwd` の下を実際に読みに行く実 I/O（`fs`）を含む。`vi.useFakeTimers()`
+   * の下で走る歯は、フェイクタイマーが進めるのは fake timer のコールバック
+   * だけで実 I/O の完了は実時間でしか進まないため、`vi.advanceTimersByTimeAsync`
+   * 直後の assertion が `#finish()` の完了より先に走ってしまう
+   * （`readCgroupEventCountersFn` の doc・`runner-fence.test.ts` の同じ注記と
+   * 同型の実測）——そちらはこれを速い偽物へ差し替える。
+   */
+  finishUnpushedWorkFn?: (options?: {
+    signal?: AbortSignal;
+  }) => Promise<UnpushedWorkResult>;
 }
+
+/**
+ * `RunnerSession#finish()` が `closed` を emit する直前に取る未 push の観測
+ * （Issue #1266 候補(2)）へ渡す期限。
+ *
+ * `manager.ts` の `UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS`（Issue #1266 の
+ * (4)）と同じ値・同じ理由——実測に基づく値ではなく、安全側に短く取った
+ * 未検証の既定値である。**値を共有する定数にはしていない**——`manager.ts`
+ * から `runner.ts` を import する既存の向き（`tools.ts` が `manager.ts` を
+ * import する側なのと同じ形。あちらの `MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS`
+ * も同じ理由で値を重複させている）を、逆向きの import を増やさずに守る
+ * ための重複であって、新しい値の判断ではない。
+ */
+const FINISH_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
+
+/**
+ * `RunnerSession#finish()` が `closed` イベントへ運ぶ、未 push の観測1回分の
+ * 結果（Issue #1266 候補(2)）。`manager.ts` の `ManagerUnpushedWork` と同じ
+ * 形——`runner-protocol.ts` の `closed.unpushedWork` のワイヤー形にそのまま
+ * 対応する（`manager.ts` を import せずに同じ形を作るため、ここで独立に
+ * 定義している。`runner.ts` → `manager.ts` の逆向き import を増やさない）。
+ */
+type FinishUnpushedWorkOutcome =
+  | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
+  | { readonly kind: 'unavailable'; readonly reason: string };
 
 class RunnerSession {
   readonly #id: string;
@@ -1234,6 +1290,15 @@ class RunnerSession {
     options: SpawnClaudeCodeProcessOptions,
   ) => DelegationProcessHandle;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
+  /**
+   * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体
+   * （Issue #1266 候補(2)）。既定は `this.unpushedWork(options)`（本物の
+   * `computeUnpushedWork`）——`RunnerSessionOptions.finishUnpushedWorkFn` の
+   * doc を見よ。
+   */
+  readonly #finishUnpushedWorkFn: (options?: {
+    signal?: AbortSignal;
+  }) => Promise<UnpushedWorkResult>;
   /**
    * このセッションが**この runner プロセスの中で**開いたときの cgroup の
    * 累計カウンタ（Issue #1517「最小の形」1）。**コンストラクタで一度だけ
@@ -1622,6 +1687,8 @@ class RunnerSession {
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
     this.#readCgroupEventCountersFn =
       options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
+    this.#finishUnpushedWorkFn =
+      options.finishUnpushedWorkFn ?? ((unpushedWorkOptions) => this.unpushedWork(unpushedWorkOptions));
     // **いま読み始める。** 「開いたとき」を指すのはこの瞬間でなければならない
     // ——`#finish()` の時点で読み直すと、それは「畳んだとき」の値でしかなく
     // 差分が取れない。`.catch` は付けない——`readCgroupEventCounters` は
@@ -3449,6 +3516,57 @@ class RunnerSession {
     // `#shipArchive()` の後に置いてあるのは、この報告を読んだクローンが
     // すぐ `manager_transcript` で裏を取れるようにするためである。
     this.#flushUnreported(reason, status);
+    // **未 push の観測を、`closed` を emit する前に1回取って運ぶ
+    // （Issue #1266 候補(2)）。**
+    //
+    // `schema.ts` の `lastUnpushedWorkObservationSchema` の doc「残る族」が
+    // 挙げる3つの呼び出し元（`manager_stop` の断り・`case 'report'`・
+    // `case 'tool_use'`）は、どれも「セッションがまだ生きていて、次の
+    // ターンか道具の実行が起きたとき」にしか発火しない——枠落ち（429）や
+    // 失敗でこのセッションが `closed`（`lost` / `failed`）になる経路では、
+    // 一度も呼ばれない。
+    //
+    // **デーモン側が `closed` を受けてから `pool.unpushedWork()` を呼んでも
+    // 手遅れである。** この関数はこの直後で `#onClosed()`（`Host` 側の
+    // `#sessions.delete` に繋がる）を同じ同期区間で呼ぶので、デーモンが
+    // `closed` を受信してから改めて runner へ問い合わせる頃には、ほぼ確実に
+    // セッションが消えていて空振りする。**だから runner が自分で先取りして
+    // 運ぶ**（`systemError` / `cgroupEvents`——直下の Issue #1517「最小の形」
+    // 1——と同じ形。台帳への書き込みは `manager.ts` の `case 'closed'` が
+    // 持つ）。
+    //
+    // **`FINISH_UNPUSHED_WORK_TIMEOUT_MS` は `manager.ts` の
+    // `UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS` と同じ値・同じ理由**
+    // （安全側に短く取った未検証の既定値。`manager.ts` 側の doc の
+    // 「⚠️ 実測に基づく値ではない」をそのまま継ぐ）。**値を共有する定数には
+    // していない**——`manager.ts` が `runner.ts` を import する既存の向き
+    // （`tools.ts` が `manager.ts` を import する側なのと同じ形。あちらも
+    // 同じ理由で値を重複させている）を守るための重複であって、新しい値の
+    // 判断ではない。
+    //
+    // **`#finishUnpushedWorkFn` は既定で `this.unpushedWork(options)`
+    // （本物の `computeUnpushedWork`）を呼ぶ**——テストから差し替えられる
+    // （`RunnerSessionOptions.finishUnpushedWorkFn` の doc。フェイクタイマー
+    // の下で実 I/O を待つ歯が `readCgroupEventCountersFn` と同じ理由で
+    // これも差し替える）。
+    //
+    // **この呼び出し自体は例外を投げない設計**（`computeUnpushedWork` の
+    // doc「この関数自体は例外を投げない」）だが、**それでも `.catch()` を
+    // 添えてある**——設計が将来守られなくなっても、この1回の観測の失敗が
+    // `#finish()` 自体（＝委譲が終わる経路そのもの）を巻き添えにしないことを、
+    // ここの形で保証するため（`#observeUnpushedWorkOnce` の doc と同じ理由）。
+    // 取れなかったときは `kind: 'unavailable'` と理由を載せる——欄を省く
+    // （＝古い runner）のと混ぜない。
+    const unpushedWork = await this.#finishUnpushedWorkFn({
+      signal: AbortSignal.timeout(FINISH_UNPUSHED_WORK_TIMEOUT_MS),
+    })
+      .then((result): FinishUnpushedWorkOutcome => ({ kind: 'ok', result }))
+      .catch(
+        (error: unknown): FinishUnpushedWorkOutcome => ({
+          kind: 'unavailable',
+          reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+        }),
+      );
     // **「畳んだとき」の1点を、ここで初めて読む（Issue #1517「最小の形」1）。**
     // `#openedCgroupEvents` は構築時（＝「開いたとき」）に読み始めた
     // `Promise` で、ここで初めて await する——構築からここまでの間に
@@ -3468,6 +3586,7 @@ class RunnerSession {
       ...(options.selfFenced === undefined ? {} : { selfFenced: options.selfFenced }),
       ...(options.systemError === undefined ? {} : { systemError: options.systemError }),
       ...(cgroupEvents === undefined ? {} : { cgroupEvents }),
+      unpushedWork,
     });
     this.#onClosed();
   }

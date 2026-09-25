@@ -610,6 +610,116 @@ export const RUNNER_CAPABILITIES: readonly string[] = [
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
 ];
 
+/**
+ * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
+ *
+ * ⛔ **出してよいのは有無・件数・枝名と、origin remote の host/path まで
+ * である（host/path は Issue #1376 B2 で足した `remoteOrigin`。userinfo・
+ * クエリ・フラグメント・資格・生の URL 文字列は出さない）。ファイル名・
+ * 差分の中身・コミットメッセージ・author は一切含めない。** `apps/runner/src/tasks.ts` が
+ * 生きているプロセスの素性について引いている線（`cmdline` / `cwd` / `environ`
+ * を絶対に読まない）と同じ強さで、ここにも線を引く——**本人の情報を、本人を
+ * 止める文脈で、本人を止めようとしている側へ出す。それ以外の口からは引けない。**
+ *
+ * **`runnerEventSchema`（このすぐ下）より前に置いてある。** `closed.unpushedWork`
+ * （Issue #1266 候補(2)）が {@link unpushedWorkResultSchema} を参照するため——
+ * `const` の実行順は宣言順であり、後ろに置いたままでは `runnerEventSchema` の
+ * 評価時点で未初期化（TDZ）になる。以前はここより後ろ（`RunnerClient`
+ * インターフェース定義の隣）に置いてあった——中身は1文字も変えていない、
+ * 位置だけの移動である。
+ */
+export const unpushedWorkTreeSchema = z.object({
+  /**
+   * 探索の起点（`job.cwd`）からの相対パス。
+   *
+   * **⚠️ 2026-09-24、クローンの決定で例外を1つ足した（オーナーの決定では
+   * ない）**——`job.cwd` に加えて、その委譲自身の id で名前が付いた `/tmp`
+   * 直下のディレクトリも探索の起点にするようになった
+   * （`packages/core/src/unpushed-work.ts` 冒頭の doc「3.6.」）ため、
+   * `job.cwd` の外で見つかった作業ツリーはここへ**絶対パス**が入る
+   * （`describeWorktreePath`）。`job.cwd` の下で見つかったツリーはこれまで
+   * どおり相対パスのままである。
+   */
+  relativePath: z.string(),
+  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
+  branch: z.string().nullable(),
+  /**
+   * `git rev-list --count HEAD --not --remotes=origin`。
+   *
+   * **`@{u}` ではなくこの式を使う。** upstream 未設定の枝（一度も push
+   * されていない枝）でも検出できる——実測（#1039）で8本中2本が該当し、
+   * `@{u}` 方式は `fatal` で落ちていた。
+   *
+   * ⚠️ **多めに出る側の誤差である。** このプローブは `fetch` も
+   * `git ls-remote` もしない（ネットワークを一切使わない）ので、`origin/*` の
+   * remote-tracking ref は古びうる——実際には push 済みのコミットが「未 push」
+   * と数えられることがある。安全側（失われるものを多めに言う）の誤りであって、
+   * その逆（実際に未 push なのに 0 と出る）は起きない。
+   */
+  unpushedCommitCount: z.number().int().nonnegative().optional(),
+  /** `unpushedCommitCount` を確かめられなかった理由（省略 = 確かめられた）。 */
+  unpushedCommitCountUnknown: z.string().optional(),
+  /** `git status --porcelain` の行数（＝未コミットの変更の件数）。 */
+  uncommittedChangeCount: z.number().int().nonnegative().optional(),
+  /** `uncommittedChangeCount` を確かめられなかった理由（省略 = 確かめられた）。 */
+  uncommittedChangeCountUnknown: z.string().optional(),
+  /**
+   * `git remote get-url origin` から取り出した host と path（Issue #1376
+   * B2）。移送先で clone し直すには、`workspace locator` が `unknown` の
+   * ときに残る唯一の手がかりが元の枝名だけでは足りなかった——移送先が
+   * 元のマネージャーとは別の repo で動いているかもしれないため。
+   *
+   * **広げたのはこの1点（host と path）だけである。** `unpushedWorkTreeSchema`
+   * の線（有無・件数・枝名まで）にこの1点だけを足した——ファイル名・差分の
+   * 中身・コミットメッセージ・author を出さないことは変わらない。この欄は
+   * 次を必ず落とす:
+   *
+   * - userinfo（`https://<token>@host/…`・`https://user:pass@host/…`・
+   *   `ssh://git@host/…`・scp 形式 `git@host:owner/repo.git` のどれも、
+   *   `@` より前は一切含めない）
+   * - クエリ文字列（`?token=…` 等）・フラグメント
+   * - 資格情報そのもの、および生の URL 文字列
+   *
+   * 解釈できない・上記を確実に落とせない形（`unpushed-work.ts` の
+   * `parseRemoteOriginUrl` を見よ）は、この欄ごと省く——**生の文字列を
+   * 出すくらいなら、何も出さない。**
+   */
+  remoteOrigin: z
+    .object({
+      /** URL のホスト名のみ（ポート・スキームは含まない）。 */
+      host: z.string(),
+      /** userinfo・クエリ・フラグメントを落とした後のパス（先頭の `/` は落とす）。 */
+      path: z.string(),
+    })
+    .optional(),
+});
+export type UnpushedWorkTree = z.infer<typeof unpushedWorkTreeSchema>;
+
+/**
+ * `RunnerClient.unpushedWork()` の戻り値（Issue #1039）。`job.cwd` の下に
+ * 見つかった作業ツリー全部を持つ——1本目だけを返さない（マネージャーが
+ * 作業者へ別ツリーを切る運用を AGENTS.md が許容しているため）。
+ */
+export const unpushedWorkResultSchema = z.object({
+  /** 探索の起点（`job.cwd`）。 */
+  cwd: z.string(),
+  worktrees: z.array(unpushedWorkTreeSchema),
+  /**
+   * `.git` の探索を件数の上限で打ち切ったときだけ載る（値は上限そのもの）。
+   * **省略できるが、黙って切ったことにはしない**（AGENTS.md「取れない軸に
+   * 0の行を作る」の裏——打ち切ったことをここに書かないと「全部見つかった」に
+   * 見えてしまう）。
+   */
+  truncatedAtCount: z.number().int().positive().optional(),
+  /**
+   * 呼び出し元の期限切れで、見つかった作業ツリーの一部を調べる前に打ち切った
+   * ときだけ `true`。**それでも `worktrees` からは落とさない**——見つかった
+   * 分は全部載せ、調べられなかった分は各欄の `*Unknown` に理由が付く。
+   */
+  stoppedEarly: z.literal(true).optional(),
+});
+export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
+
 export const runnerEventSchema = z.discriminatedUnion('type', [
   /**
    * ストリームの先頭。どの runner に繋がったかを名乗る。
@@ -1534,6 +1644,53 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * またいだ等）なら、欄そのものを出さない（0 と混ぜない）。
      */
     cgroupEvents: cgroupEventsDeltaSchema.optional(),
+    /**
+     * **`closed` を emit する直前に取った、未 push の作業ツリーの観測1回分
+     * （Issue #1266 候補(2)）。**
+     *
+     * ## なぜ足すか
+     *
+     * `schema.ts` の `lastUnpushedWorkObservationSchema` の doc「残る族」が
+     * 挙げるとおり、この観測は `manager_stop` の断り・`case 'report'`・
+     * `case 'tool_use'`（`git push`／枝作成の検出）の3種でしか台帳へ残らず、
+     * **枠落ち（429）や失敗でセッションが `closed`（`lost` / `failed`）に
+     * なる経路では一度も取られない**——この3種はどれも「セッションがまだ
+     * 生きていて、次のターンか道具の実行が起きたとき」にしか発火しない。
+     *
+     * **デーモン側が `closed` を受けてから `pool.unpushedWork()` を呼んでも
+     * 手遅れである。** `RunnerSession#finish()` は、この欄を組み立てて
+     * `closed` を emit した**同じ同期区間**で `#onClosed()`
+     * （`Host#stop`/`#sessions.delete` に繋がる）を呼ぶ——デーモンが
+     * `closed` を受信してから改めて runner へ問い合わせても、その時点では
+     * ほぼ確実にセッションが消えていて空振りする。**だから runner が自分で
+     * 先取りして運ぶ**（`systemError` / `cgroupEvents`——Issue #1517「最小の
+     * 形」1と同じ形）。
+     *
+     * ## 形（`ManagerUnpushedWork`——`manager.ts`——と同じ）
+     *
+     * `kind: 'ok'` は取れたこと（`result` に `unpushedWorkResultSchema` を
+     * そのまま運ぶ）、`kind: 'unavailable'` は確かめようとして取れなかった
+     * ことそのものを名乗る（理由付き）。**欄が丸ごと無い（`undefined`）のと
+     * `kind: 'unavailable'` を混ぜないこと**（`AGENTS.md`「取れない軸に0の
+     * 行を作る」・`lastUnpushedWorkObservationSchema` の `unavailable` の
+     * doc と同じ注意）。
+     *
+     * **`.optional()` にしてあるのは `systemError` / `cgroupEvents` と同じ
+     * 理由**——runner とデーモンは別デプロイで版がずれる。この欄を送らない
+     * 古い runner の `closed` を1つも壊さない。
+     *
+     * ## 台帳への書き込みは呼び出し元が持つ
+     *
+     * ここはワイヤーの形を定義するだけ——`record.job.lastUnpushedWorkObservation`
+     * へ実際に書くのは `manager.ts` の `case 'closed'`（5つ目の呼び出し元。
+     * 既に新しい観測が乗っていれば `at` を比べて古い値では上書きしない）。
+     */
+    unpushedWork: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('ok'), result: unpushedWorkResultSchema }),
+        z.object({ kind: z.literal('unavailable'), reason: z.string() }),
+      ])
+      .optional(),
   }),
   /**
    * 前のセッションを開き直せなかった。
@@ -1735,108 +1892,11 @@ export function assertNeverRunnerLegStatus(status: never): never {
   throw new Error(`未知の RunnerLegState.status: ${String(status)}`);
 }
 
-/**
- * `RunnerClient.unpushedWork()` が1本の作業ツリーについて返す値（Issue #1039）。
- *
- * ⛔ **出してよいのは有無・件数・枝名と、origin remote の host/path まで
- * である（host/path は Issue #1376 B2 で足した `remoteOrigin`。userinfo・
- * クエリ・フラグメント・資格・生の URL 文字列は出さない）。ファイル名・
- * 差分の中身・コミットメッセージ・author は一切含めない。** `apps/runner/src/tasks.ts` が
- * 生きているプロセスの素性について引いている線（`cmdline` / `cwd` / `environ`
- * を絶対に読まない）と同じ強さで、ここにも線を引く——**本人の情報を、本人を
- * 止める文脈で、本人を止めようとしている側へ出す。それ以外の口からは引けない。**
- */
-export const unpushedWorkTreeSchema = z.object({
-  /**
-   * 探索の起点（`job.cwd`）からの相対パス。
-   *
-   * **⚠️ 2026-09-24、クローンの決定で例外を1つ足した（オーナーの決定では
-   * ない）**——`job.cwd` に加えて、その委譲自身の id で名前が付いた `/tmp`
-   * 直下のディレクトリも探索の起点にするようになった
-   * （`packages/core/src/unpushed-work.ts` 冒頭の doc「3.6.」）ため、
-   * `job.cwd` の外で見つかった作業ツリーはここへ**絶対パス**が入る
-   * （`describeWorktreePath`）。`job.cwd` の下で見つかったツリーはこれまで
-   * どおり相対パスのままである。
-   */
-  relativePath: z.string(),
-  /** いまの枝名。detached HEAD、または確かめられなかったときは `null`。 */
-  branch: z.string().nullable(),
-  /**
-   * `git rev-list --count HEAD --not --remotes=origin`。
-   *
-   * **`@{u}` ではなくこの式を使う。** upstream 未設定の枝（一度も push
-   * されていない枝）でも検出できる——実測（#1039）で8本中2本が該当し、
-   * `@{u}` 方式は `fatal` で落ちていた。
-   *
-   * ⚠️ **多めに出る側の誤差である。** このプローブは `fetch` も
-   * `git ls-remote` もしない（ネットワークを一切使わない）ので、`origin/*` の
-   * remote-tracking ref は古びうる——実際には push 済みのコミットが「未 push」
-   * と数えられることがある。安全側（失われるものを多めに言う）の誤りであって、
-   * その逆（実際に未 push なのに 0 と出る）は起きない。
-   */
-  unpushedCommitCount: z.number().int().nonnegative().optional(),
-  /** `unpushedCommitCount` を確かめられなかった理由（省略 = 確かめられた）。 */
-  unpushedCommitCountUnknown: z.string().optional(),
-  /** `git status --porcelain` の行数（＝未コミットの変更の件数）。 */
-  uncommittedChangeCount: z.number().int().nonnegative().optional(),
-  /** `uncommittedChangeCount` を確かめられなかった理由（省略 = 確かめられた）。 */
-  uncommittedChangeCountUnknown: z.string().optional(),
-  /**
-   * `git remote get-url origin` から取り出した host と path（Issue #1376
-   * B2）。移送先で clone し直すには、`workspace locator` が `unknown` の
-   * ときに残る唯一の手がかりが元の枝名だけでは足りなかった——移送先が
-   * 元のマネージャーとは別の repo で動いているかもしれないため。
-   *
-   * **広げたのはこの1点（host と path）だけである。** `unpushedWorkTreeSchema`
-   * の線（有無・件数・枝名まで）にこの1点だけを足した——ファイル名・差分の
-   * 中身・コミットメッセージ・author を出さないことは変わらない。この欄は
-   * 次を必ず落とす:
-   *
-   * - userinfo（`https://<token>@host/…`・`https://user:pass@host/…`・
-   *   `ssh://git@host/…`・scp 形式 `git@host:owner/repo.git` のどれも、
-   *   `@` より前は一切含めない）
-   * - クエリ文字列（`?token=…` 等）・フラグメント
-   * - 資格情報そのもの、および生の URL 文字列
-   *
-   * 解釈できない・上記を確実に落とせない形（`unpushed-work.ts` の
-   * `parseRemoteOriginUrl` を見よ）は、この欄ごと省く——**生の文字列を
-   * 出すくらいなら、何も出さない。**
-   */
-  remoteOrigin: z
-    .object({
-      /** URL のホスト名のみ（ポート・スキームは含まない）。 */
-      host: z.string(),
-      /** userinfo・クエリ・フラグメントを落とした後のパス（先頭の `/` は落とす）。 */
-      path: z.string(),
-    })
-    .optional(),
-});
-export type UnpushedWorkTree = z.infer<typeof unpushedWorkTreeSchema>;
-
-/**
- * `RunnerClient.unpushedWork()` の戻り値（Issue #1039）。`job.cwd` の下に
- * 見つかった作業ツリー全部を持つ——1本目だけを返さない（マネージャーが
- * 作業者へ別ツリーを切る運用を AGENTS.md が許容しているため）。
- */
-export const unpushedWorkResultSchema = z.object({
-  /** 探索の起点（`job.cwd`）。 */
-  cwd: z.string(),
-  worktrees: z.array(unpushedWorkTreeSchema),
-  /**
-   * `.git` の探索を件数の上限で打ち切ったときだけ載る（値は上限そのもの）。
-   * **省略できるが、黙って切ったことにはしない**（AGENTS.md「取れない軸に
-   * 0の行を作る」の裏——打ち切ったことをここに書かないと「全部見つかった」に
-   * 見えてしまう）。
-   */
-  truncatedAtCount: z.number().int().positive().optional(),
-  /**
-   * 呼び出し元の期限切れで、見つかった作業ツリーの一部を調べる前に打ち切った
-   * ときだけ `true`。**それでも `worktrees` からは落とさない**——見つかった
-   * 分は全部載せ、調べられなかった分は各欄の `*Unknown` に理由が付く。
-   */
-  stoppedEarly: z.literal(true).optional(),
-});
-export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
+// **`unpushedWorkTreeSchema` / `unpushedWorkResultSchema` は `runnerEventSchema`
+// （すぐ下）より前に置く。** `closed.unpushedWork`（Issue #1266 候補(2)）が
+// `unpushedWorkResultSchema` を参照するため——`const` の実行順は宣言順であり、
+// 後ろに置いたままでは `runnerEventSchema` の評価時点で未初期化
+// （TDZ）になる。中身は1文字も変えていない、位置だけの移動。
 
 /**
  * runner への口。HTTP でも同一プロセスでも、デーモンはこれしか知らない。

@@ -108,6 +108,13 @@ function setup(options: Pick<RunnerHostOptions, 'enforceLease'> = {}): {
     // 状態を拾ってしまう（実測）。この一式は cgroup の値そのものを検証
     // しないので、即座に解決する空の値で十分。
     readCgroupEventCountersFn: async () => ({}),
+    // **同じ理由で、未 push の観測（Issue #1266 候補(2)）も実 I/O をさせない。**
+    // `#finish()` が `closed` を emit する直前に取る観測（既定は
+    // `this.unpushedWork()` → `computeUnpushedWork`）は `cwd` の下を実際に
+    // 読みに行く——上の `readCgroupEventCountersFn` と同型の実測で同じ遅れが
+    // 出る（`RunnerSessionOptions.finishUnpushedWorkFn` の doc）。この一式は
+    // 未 push の観測そのものを検証しないので、即座に解決する空の値で十分。
+    finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
     ...options,
   });
   hosts.push(host);
