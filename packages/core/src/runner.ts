@@ -815,6 +815,13 @@ const DENIED_MEMORY_LIMIT = 512;
 const CUT_OFF_WORKERS_LIMIT = 500;
 
 /**
+ * `#pendingCutOffNotifications`（`task_notification` 経由で判明した「未配達の
+ * 打ち切り注記」）を控える件数の上限（#901）。`CUT_OFF_WORKERS_LIMIT` と同じ
+ * 考え方——長寿のセッションで表が際限なく育たないための蓋。
+ */
+const PENDING_CUT_OFF_NOTIFICATIONS_LIMIT = 500;
+
+/**
  * `#onSubagentStop` が `note` の `text` へ積む文字数の上限（#357）。
  *
  * **黙って落とさない**（AGENTS.md「静かに失敗する道具」）。超えたら切り、
@@ -1228,8 +1235,72 @@ class RunnerSession {
    * の顔で返る（#901 の段0の実測）。打ち切ったのは alteroid 自身（`#onSubagentStop`）
    * なので、その事実をここに控え、マネージャー側の `PostToolUse` で結果の `agentId`
    * と突き合わせて注記する（`#annotateCutOffWorker`）。**注記したら消す**（1回だけ）。
+   *
+   * **同期の `Task`（`status:'completed'`）だけがここを通る。** `async_launched`
+   * （背景委譲。既定）の完了は `PostToolUse` を経由せず `system/task_notification`
+   * としてだけ届く——そちらは `#onTaskNotification` が同じこの Set を見て
+   * `#pendingCutOffNotifications` へ付け替える（下のフィールドの doc）。
    */
   readonly #cutOffWorkers = new Set<string>();
+  /**
+   * `task_notification` 経由で「起こし直しの上限で打ち切られていた」と判明したが、
+   * まだマネージャー自身の次の `PostToolUse` へ注記していない作業者の `agent_id`
+   * （#901）。
+   *
+   * ## なぜ要るか
+   *
+   * 同期の `Task` は `#cutOffWorkers` → `#onPostToolUse` → `#annotateCutOffWorker`
+   * で閉じる。だが `async_launched`（背景委譲。既定）の完了は `PostToolUse` を
+   * 経由しない——`system/task_notification` という別のメッセージとしてだけ届く。
+   * **この `task_notification` に `additionalContext` を注げるフックが存在しない**
+   * （SDK `@anthropic-ai/claude-agent-sdk-linux-x64@0.3.281` の `sdk.d.ts` を
+   * 静的に走査し、`hook_event_name` を持つ21種・`hookEventName`（出力側）を
+   * 持つ20種の**どちらにも** `task_notification` に対応するものが無いことを
+   * 確認した。近い名前の `TaskCompleted`/`TaskCreated` フックは別機能——
+   * `task_subject`/`teammate_name` という欄を持つ「Teams」機能のもので、
+   * `local_agent`（Task ツールの subagent）タスクとは無関係）。
+   *
+   * だから `#onTaskNotification` で `task_id` が `#cutOffWorkers` に在れば
+   * （＝同期経路でまだ消費されていない）、そこから消してここへ付け替え、
+   * **次にマネージャー自身の道具（種類は問わない）が `PostToolUse` を通ったとき
+   * に相乗りする**（`#onPostToolUse` の `#annotateCutOffWorkers`）。
+   *
+   * ## 相関の根拠（`task_id === agentId`）
+   *
+   * `task_notification`/`task_started` の `task_id` と `AgentOutput`（`Task` の
+   * 結果）の `agentId`、そして `SubagentStop` の `agent_id` は、SDK 内部では
+   * **同じ変数**である——バイナリを走査すると、タスク登録の共通コンストラクタ
+   * `function rm(t,s,a,e){return{id:t,...,toolUseId:e,...}}` に対し、
+   * `local_agent`（Task ツールの subagent）を登録する関数 `m6({agentId:e,...})`
+   * が `rm(e,"local_agent",g,U)` の形で**第1引数（＝ `id`）に `agentId` の値
+   * そのもの**を渡している。`SubagentStop` を発火する側も、同じ関数内で
+   * `taskRegistry` のキー（＝この `id`）をそのまま `agent_id` として渡す
+   * （`BJ(void 0,void 0,5000,!1,ue,...)` と `n.taskRegistry.get(ue)` が同じ
+   * 変数 `ue` を指す）。
+   *
+   * ⚠️ **これは SDK バイナリの静的走査（`Buffer.indexOf` によるオフセット特定と
+   * 周辺コードの目視）による確認であって、本物の `query()` を実行した確認ではない。**
+   * マネージャーの器での実行時観測1件（起動時の `agentId` と、後で届いた
+   * `task_notification` の `task_id` が同一だった）と整合する。#1475 の
+   * `#annotateCutOffWorker` の doc にあった「本物の `query()` では測っていない」
+   * という留保は、この2つの根拠（静的走査＋実行時観測1件）でここまで更新した
+   * ——ただし `query()` そのものを流した確認ではない、という限定は残る。
+   *
+   * ## 配達の遅れ（留保）
+   *
+   * ⚠️ **配達はマネージャーが次に道具を呼ぶまで遅れる。** `task_notification` を
+   * 読んだ直後に道具を呼ばずターンを閉じれば、次のターンの最初の道具呼び出しまで
+   * 届かない。マネージャーは通知を読んだ後ほぼ必ず道具を呼ぶ（返答・次の委譲等）
+   * はずだが、これは実測していない。
+   *
+   * ⚠️ **`push()` は使わない。** 作業者（Task サブエージェント）の完了を契機に
+   * 呼ぶと SDK 側の自己継続と二重にターンが回る（`push` 自身の doc、
+   * `runner-wakeup.test.ts` の「`task_notification` を受けても `#input` へは
+   * 1件も積まれない」がこの前提を歯として固定している）。ここはその制約の中で
+   * 選べる、唯一の観測可能な相乗り先（マネージャー自身の次の `PostToolUse`）を
+   * 使う。
+   */
+  readonly #pendingCutOffNotifications = new Set<string>();
   /** このターンで `UserPromptSubmit` がマネージャー自身に発火した回数（`result` で畳む）。 */
   #submitsSinceResult = 0;
   /**
@@ -2824,7 +2895,16 @@ class RunnerSession {
     window.tasks += 1;
   }
 
-  /** `task_notification`。開いている委譲から1件外し、全部片付いたら閉じ待ちにする。 */
+  /**
+   * `task_notification`。開いている委譲から1件外し、全部片付いたら閉じ待ちにする。
+   *
+   * **併せて #901 を見る。** `task_id` が `#cutOffWorkers` に在れば（＝
+   * 起こし直しの上限で打ち切られていて、まだ同期の `Task` 結果として消費されて
+   * いない）、ここで消して `#pendingCutOffNotifications` へ付け替える——
+   * `task_notification` 自体には `additionalContext` を注げないので（
+   * `#pendingCutOffNotifications` の doc）、次にマネージャー自身の道具が動いた
+   * ときに配達する。
+   */
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
     const had = taskId !== undefined && this.#openTasks.delete(taskId);
@@ -2834,6 +2914,12 @@ class RunnerSession {
     // **本当に 1→0 の遷移のときだけ閉じ待ちにする。** 対応の無い通知（本来
     // 起きない想定だが防御的に見る）で誤って閉じ待ちを立てない。
     if (had && this.#openTasks.size === 0) this.#windowClosing = true;
+
+    // #901: 同期経路（`#annotateCutOffWorker`）でまだ消費されていなければ、
+    // ここで「未配達の打ち切り注記」として控える。
+    if (taskId !== undefined && this.#cutOffWorkers.delete(taskId)) {
+      this.#recordPendingCutOffNotification(taskId);
+    }
   }
 
   /**
@@ -3483,9 +3569,13 @@ class RunnerSession {
     this.#recordBackgroundTaskOwner(hook.tool_response, hook.agent_id);
 
     // マネージャー自身の呼び出しだけを見る（`Task` を呼ぶのはマネージャーなので
-    // `agent_id` が付かない。#901）。
+    // `agent_id` が付かない。#901）。**道具の種類は問わない** — 同期の `Task`
+    // 結果（`#annotateCutOffWorker`）はこの呼び出し自身の `tool_response` を見るが、
+    // `#pendingCutOffNotifications`（`task_notification` 経由）はどの道具の
+    // 呼び出しにでも相乗りする（先に届いた別の完了通知を配達するだけなので、
+    // いまの `tool_response` の中身とは無関係）。
     const additionalContext =
-      hook.agent_id === undefined ? this.#annotateCutOffWorker(hook.tool_response) : null;
+      hook.agent_id === undefined ? this.#annotateCutOffWorkers(hook.tool_response) : null;
     if (additionalContext === null) return { continue: true };
     return {
       continue: true,
@@ -3504,21 +3594,60 @@ class RunnerSession {
     }
   }
 
+  /** 「未配達の打ち切り注記」を控える（#901。`#pendingCutOffNotifications`）。 */
+  #recordPendingCutOffNotification(agentId: string): void {
+    this.#pendingCutOffNotifications.delete(agentId);
+    this.#pendingCutOffNotifications.add(agentId);
+    while (this.#pendingCutOffNotifications.size > PENDING_CUT_OFF_NOTIFICATIONS_LIMIT) {
+      const oldest = this.#pendingCutOffNotifications.values().next().value;
+      if (oldest === undefined) break;
+      this.#pendingCutOffNotifications.delete(oldest);
+    }
+  }
+
+  /**
+   * マネージャー自身の次の `PostToolUse` に載せる #901 の注記をまとめる。
+   * 何も無ければ `null`。
+   *
+   * 2つの経路を両方見て、両方あれば連結する（同じ呼び出しの結果に両方載っても
+   * 壊れない——1回のツール呼び出しの背後で、複数の作業者がそれぞれ別の理由で
+   * 打ち切られていることはありうる）:
+   *
+   * 1. **同期の `Task`** — この呼び出し自身の `tool_response` が
+   *    `status:'completed'` かつ `agentId` が `#cutOffWorkers` に在る
+   *    （`#annotateCutOffWorker`）
+   * 2. **背景委譲（`async_launched`）** — `task_notification` で先に届いていて
+   *    `#pendingCutOffNotifications` に控えられている分（`#drainPendingCutOffNotifications`）。
+   *    **道具の種類・`tool_response` の中身を問わない** — 先に届いた別の完了通知を
+   *    配達するだけだからである
+   */
+  #annotateCutOffWorkers(toolResponse: unknown): string | null {
+    const parts: string[] = [];
+    const sync = this.#annotateCutOffWorker(toolResponse);
+    if (sync !== null) parts.push(sync);
+    const pending = this.#drainPendingCutOffNotifications();
+    if (pending !== null) parts.push(pending);
+    return parts.length === 0 ? null : parts.join('\n\n');
+  }
+
   /**
    * `Task` の結果が、起こし直しの上限で打ち切った作業者のものなら、マネージャーへ
-   * 渡す注記を返す（#901）。そうでなければ `null`。
+   * 渡す注記を返す（#901）。そうでなければ `null`。**同期の `Task`
+   * （`status:'completed'`）の経路。** `async_launched` の経路は
+   * `#drainPendingCutOffNotifications` が持つ。
    *
    * **結び目は `tool_response.agentId`（`AgentOutput` の欄）と `SubagentStop` の
    * `agent_id` である。** フックの `agent_id` どうしでは結べない（`Task` の
    * `PostToolUse` はマネージャー側で発火するので `agent_id` が付かない。#901 本文）。
    *
-   * ⚠️ **2つの id が同じ値であることは、本物の `query()` では測っていない**（型定義が
-   * どちらも作業者の id と読める形をしているだけである）。違っていたら注記が
-   * 出ないだけで、挙動は今までと同じ側へ倒れる。
-   *
-   * ⚠️ **同期の `Task`（`status: 'completed'`）にしか効かない。** 背景で起こした委譲
-   * （`async_launched`）の完了は `PostToolUse` を通らない。その経路では
-   * `manager.ts` の `case 'note'`（`escalate`）がクローンへ上げるだけである。
+   * ⚠️ **2つの id が同じ値であることは、本物の `query()` を流して測ってはいない。**
+   * SDK バイナリ（`@anthropic-ai/claude-agent-sdk-linux-x64@0.3.281`）を静的に
+   * 走査し、`local_agent` タスクの登録経路でどちらも同じソース変数であることを
+   * 確認した（`#pendingCutOffNotifications` の doc に逐語で残してある）。加えて
+   * マネージャーの器での実行時観測1件（起動時の `agentId` と、後で届いた
+   * `task_notification` の `task_id` が同一だった）とも整合する。**それでも
+   * `query()` そのものを実行した確認ではない** ——違っていれば注記が出ないだけで、
+   * 挙動は今までと同じ側へ倒れる。
    */
   #annotateCutOffWorker(toolResponse: unknown): string | null {
     if (typeof toolResponse !== 'object' || toolResponse === null) return null;
@@ -3536,6 +3665,43 @@ class RunnerSession {
       '**上の報告は完結していない可能性がある**（最後の発言が「待っています」の類でも、' +
       'その待ちはもう誰も続けない）。成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。'
     );
+  }
+
+  /**
+   * `#pendingCutOffNotifications` を全件配達する（#901。`async_launched` の経路）。
+   * 1件も無ければ `null`。
+   *
+   * **note はここ（配達時点）で1本だけ出す。** `#onTaskNotification` が控えた
+   * 時点では出さない——既存の `#annotateCutOffWorker` の note（「Task の結果に
+   * 注記した」）が「実際にマネージャーへ渡す注記へ組み込んだ」ことを表す過去形
+   * であり、控えただけの段階でこれと同じ文言を出すと「もう注記した」と読めて
+   * しまう。控えた事実そのものは、打ち切りの瞬間に `#onSubagentStop` が
+   * 無条件で出す `stall` の note（`outcome: 'limit_reached'`）が既に日誌へ
+   * 残しているので、ここで出さなくても日誌から消えるわけではない。
+   */
+  #drainPendingCutOffNotifications(): string | null {
+    if (this.#pendingCutOffNotifications.size === 0) return null;
+    const agentIds = [...this.#pendingCutOffNotifications];
+    this.#pendingCutOffNotifications.clear();
+    for (const agentId of agentIds) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `Task の結果に注記した（#901・task_notification 経由）: ` +
+          `agent_id=${agentId} は起こし直しの上限で打ち切られていた`,
+      });
+    }
+    return agentIds
+      .map(
+        (agentId) =>
+          `⚠️ 作業者（agent_id=${agentId}）は、自分で起こした背景処理を残したまま` +
+          '畳もうとする回が起こし直しの上限に達したため、alteroid が打ち切った。' +
+          '**先に届いたその完了通知（task-notification）の報告は完結していない可能性がある**' +
+          '（最後の発言が「待っています」の類でも、その待ちはもう誰も続けない）。' +
+          '成果（commit / push / 検証）が実際に在るかを確かめてから次を決めること。',
+      )
+      .join('\n\n');
   }
 
   /**

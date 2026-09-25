@@ -84,6 +84,14 @@ interface Started {
    * 違う値なら「器が入れ替わった」を表す）。
    */
   restart: (sessionId: string) => void;
+  /**
+   * `system/task_notification` を1件流す（#901）。`task_notification` には
+   * 対応するフックが無い（`hook_event_name` を持つ SDK の全種を静的に確認
+   * 済み——`runner.ts` の `#pendingCutOffNotifications` の doc）ので、
+   * `PostToolUse`/`SubagentStop` のようにフックを直接叩く形では再現できない。
+   * `restart` と同じ要領で、生の `SDKMessage` をストリームへ流す。
+   */
+  notify: (taskId: string) => void;
 }
 
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
@@ -99,6 +107,17 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
           subtype: 'init',
           session_id: sessionId,
           uuid: `uuid-restart-${sessionId}`,
+        } as unknown as SDKMessage),
+      notify: (taskId: string) =>
+        emit?.({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: taskId,
+          status: 'completed',
+          output_file: '/tmp/does-not-exist.txt',
+          summary: '完了',
+          session_id: `sess-${started.length}`,
+          uuid: `uuid-task-notification-${taskId}`,
         } as unknown as SDKMessage),
     };
     started.push(record);
@@ -162,6 +181,17 @@ async function registerBackgroundTask(
     tool_response: { stdout: '', stderr: '', backgroundTaskId: taskId },
     ...(agentId === undefined ? {} : { agent_id: agentId, agent_type: 'worker' }),
   });
+}
+
+/**
+ * `system/task_notification` を1件流し、`runner.ts` の内部で処理されるまで
+ * 待つ（#901）。`Started.notify` は同期にストリームへ流すだけなので、
+ * メッセージループが1周してから戻す一呼吸を入れる（`runner-wakeup.test.ts` の
+ * `taskNotification` と同じ形）。
+ */
+async function fireTaskNotification(started: Started, taskId: string): Promise<void> {
+  started.notify(taskId);
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** 当人（`type=subagent`。`id` は `agent_id` と同じ値になる）。 */
@@ -1907,6 +1937,38 @@ describe('SDK の status の語彙の前提（腐ったら typecheck が落ち�
 });
 
 /**
+ * 作業者 `agentId` を、起こし直しの上限に達するまで `SubagentStop` で打ち切る
+ * （#901）。`打ち切った作業者の Task の結果に注記する（#901）` と
+ * `task_notification 経由で判明した打ち切りにも注記する（#901）` の両方が使う
+ * ——後者は「同期の `Task` ではなく `task_notification` で完了が届く」経路を
+ * 確かめるだけで、**打ち切り自体の起こし方（`SubagentStop` を上限まで送る）は
+ * 同じ**である。
+ */
+async function cutOff(options: Options, agentId: string): Promise<void> {
+  await registerBackgroundTask(options, `bg-${agentId}`, agentId);
+  for (let n = 0; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
+    await fireSubagentStop(options, {
+      ...STOP_BASE,
+      agent_id: agentId,
+      background_tasks: [
+        selfEntry(agentId),
+        { id: `bg-${agentId}`, type: 'monitor', status: 'running' },
+      ],
+    });
+  }
+}
+
+/** 同期の `Task`（`status:'completed'`）の結果（#901）。 */
+function taskResult(agentId: string, extra: Record<string, unknown> = {}) {
+  return {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Agent',
+    tool_input: { prompt: '作業' },
+    tool_response: { status: 'completed', agentId, content: [], ...extra },
+  };
+}
+
+/**
  * #901: 起こし直しの上限で打ち切った作業者の `Task` の結果に、マネージャー向けの注記を付ける。
  *
  * `Task` の結果（`AgentOutput`）は打ち切りも正常な完了も同じ `status: 'completed'` の顔で
@@ -1914,29 +1976,6 @@ describe('SDK の status の語彙の前提（腐ったら typecheck が落ち�
  * マネージャー側の `PostToolUse` で `tool_response.agentId` と突き合わせる。
  */
 describe('打ち切った作業者の Task の結果に注記する（#901）', () => {
-  async function cutOff(options: Options, agentId: string): Promise<void> {
-    await registerBackgroundTask(options, `bg-${agentId}`, agentId);
-    for (let n = 0; n <= SUBAGENT_WAKEUP_LIMIT_PER_TASK; n += 1) {
-      await fireSubagentStop(options, {
-        ...STOP_BASE,
-        agent_id: agentId,
-        background_tasks: [
-          selfEntry(agentId),
-          { id: `bg-${agentId}`, type: 'monitor', status: 'running' },
-        ],
-      });
-    }
-  }
-
-  function taskResult(agentId: string, extra: Record<string, unknown> = {}) {
-    return {
-      hook_event_name: 'PostToolUse',
-      tool_name: 'Agent',
-      tool_input: { prompt: '作業' },
-      tool_response: { status: 'completed', agentId, content: [], ...extra },
-    };
-  }
-
   it('上限で打ち切った作業者の Task の結果には additionalContext が付き、note も残る', async () => {
     const s = setup();
     await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
@@ -2009,6 +2048,117 @@ describe('打ち切った作業者の Task の結果に注記する（#901）', 
     ).toEqual({ continue: true });
     // 控えは消えていない —— 正しい形の結果が来れば注記する。
     expect(await firePostToolUse(started.options, taskResult('agent-1'))).toHaveProperty(
+      'hookSpecificOutput',
+    );
+  });
+});
+
+/**
+ * #901: 背景委譲（`async_launched`。既定）の打ち切りは `PostToolUse` を経由しない
+ * ——完了は `system/task_notification` としてだけ届く。`task_notification` に
+ * `additionalContext` を注げるフックは無い（`hook_event_name` を持つ SDK の
+ * 全種を静的に確認済み。`runner.ts` の `#pendingCutOffNotifications` の doc）
+ * ので、`#onTaskNotification` で「未配達の打ち切り注記」として控え、次に
+ * マネージャー自身のどの道具が動いても（`PostToolUse` 経由で）相乗りする。
+ *
+ * `push()` は使わない —— 作業者の完了を契機に呼ぶと SDK 側の自己継続と
+ * 二重にターンが回る（`push` 自身の doc、`runner-wakeup.test.ts` の
+ * 「`task_notification` を受けても `#input` へは1件も積まれない」）。
+ */
+describe('task_notification 経由で判明した打ち切りにも注記する（#901）', () => {
+  /** マネージャー自身の、`Task` 以外の任意の道具呼び出し。道具の種類を問わないことを示す。 */
+  function anyManagerTool(extra: Record<string, unknown> = {}) {
+    return {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/x' },
+      tool_response: { content: 'ok' },
+      ...extra,
+    };
+  }
+
+  it('次のマネージャー自身の PostToolUse（道具の種類は問わない）に additionalContext が付く', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await fireTaskNotification(started, 'agent-1');
+
+    const result = await firePostToolUse(started.options, anyManagerTool());
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'PostToolUse' },
+    });
+    const context = (result as { hookSpecificOutput?: { additionalContext?: string } })
+      .hookSpecificOutput?.additionalContext;
+    expect(context).toContain('agent_id=agent-1');
+    expect(context).toContain('task-notification');
+    expect(context).toContain('完結していない可能性がある');
+    expect(noteEvents(s.events).at(-1)?.text).toContain(
+      'Task の結果に注記した（#901・task_notification 経由）',
+    );
+  });
+
+  it('1回だけ（配達したら控えは空になる）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await fireTaskNotification(started, 'agent-1');
+
+    await firePostToolUse(started.options, anyManagerTool());
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('打ち切られていない task_notification には何も控えない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await fireTaskNotification(started, 'agent-2');
+
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('同期経路（PostToolUse）で先に消費されていれば、後から届く task_notification では二重に控えない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    // 同期の Task 結果が先に届いて消費する（#annotateCutOffWorker）。
+    await firePostToolUse(started.options, taskResult('agent-1'));
+    // 同じ agent-1 の task_notification が後から届いても、もう #cutOffWorkers に無い。
+    await fireTaskNotification(started, 'agent-1');
+
+    expect(await firePostToolUse(started.options, anyManagerTool())).toEqual({ continue: true });
+  });
+
+  it('作業者内（agent_id あり）の PostToolUse には配達されない（控えは残ったまま）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    await cutOff(started.options, 'agent-1');
+    await fireTaskNotification(started, 'agent-1');
+
+    // 作業者内で発火した PostToolUse（agent_id 付き）には乗らない。
+    expect(
+      await firePostToolUse(started.options, {
+        ...anyManagerTool(),
+        agent_id: 'agent-9',
+        agent_type: 'worker',
+      }),
+    ).toEqual({ continue: true });
+    // 控えは消えていない —— マネージャー自身の呼び出しが来れば配達する。
+    expect(await firePostToolUse(started.options, anyManagerTool())).toHaveProperty(
       'hookSpecificOutput',
     );
   });
