@@ -11,6 +11,7 @@ import {
   KeyRound,
   LayoutDashboard,
   ListChecks,
+  Lock,
   Menu,
   MessageSquare,
   Plug,
@@ -48,6 +49,9 @@ const NAV = [
   { to: '/usage', label: '利用状況', icon: DollarSign, end: false },
   { to: '/tokens', label: '認証トークン', icon: KeyRound, end: false },
   { to: '/access', label: 'アクセス許可', icon: ShieldCheck, end: false },
+  // アクセス許可の隣。あちらは「誰が alteroid を使えるか」、こちらは
+  // 「その人が Bash で何を通せるか」（issue #863）——別の許可の軸である。
+  { to: '/permissions', label: '許可（Bash）', icon: Lock, end: false },
   { to: '/env-vars', label: '環境変数', icon: SlidersHorizontal, end: false },
   // 環境変数の隣。どちらも「器を焼き直さずに実行環境を直す」口で、こちらは
   // シェルスクリプト1本を丸ごと置く太い口である（issue #1122）。

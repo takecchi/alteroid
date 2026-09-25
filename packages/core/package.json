@@ -19,6 +19,10 @@
     "./journal-search": {
       "types": "./dist/journal-search.d.ts",
       "import": "./dist/journal-search.js"
+    },
+    "./permission-rule": {
+      "types": "./dist/permission-rule.d.ts",
+      "import": "./dist/permission-rule.js"
     }
   },
   "files": [

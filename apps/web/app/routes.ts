@@ -28,6 +28,9 @@ export default [
     route('usage', 'routes/usage.tsx'),
     route('tokens', 'routes/tokens.tsx'),
     route('access', 'routes/access.tsx'),
+    // 人間が承認した Bash 許可の一覧・取り消し（Issue #863）。CLI の
+    // `alteroid permission list/revoke` と同じ口。
+    route('permissions', 'routes/permissions.tsx'),
     route('env-vars', 'routes/env-vars.tsx'),
     // 実行環境プロファイル（issue #1122）。CLI の `alteroid profile` と同じ口。
     route('profile', 'routes/profile.tsx'),

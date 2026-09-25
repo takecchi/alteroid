@@ -179,6 +179,18 @@ export type AccessState = Ok<paths['/access']['get']>;
 export type AccessAccount = AccessState['accounts'][number];
 
 /**
+ * 人間が承認した Bash 許可の一覧（`GET /permission-grants`。Issue #863）。
+ * CLI の `alteroid permission list` と同じもの
+ * （`apps/cli/src/permission.ts`）。
+ *
+ * `apps/web/app/routes/permissions.tsx` はこれを読み取り・取り消しの両方に
+ * 使う——取り消し（`revoke`）は `revokedAt` を立てるだけで戻せる操作ではない
+ * ので、`access.tsx` の `AccessGrantControl` と同じく押す前に確認を挟む。
+ */
+export type PermissionGrantsState = Ok<paths['/permission-grants']['get']>;
+export type PermissionGrant = PermissionGrantsState['grants'][number];
+
+/**
  * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
  *
  * **`value` は `secret === false` の行だけに載る。** サーバ側（`credentialsResponseSchema`）

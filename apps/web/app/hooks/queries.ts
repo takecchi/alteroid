@@ -133,6 +133,7 @@ export const KEY = {
   credentials: { type: 'credentials' } as const,
   profile: { type: 'profile' } as const,
   mcpServers: { type: 'mcpServers' } as const,
+  permissionGrants: { type: 'permissionGrants' } as const,
   dropped: { type: 'dropped' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
@@ -498,6 +499,20 @@ export function useTokens() {
 export function useAccess() {
   const api = useApi();
   return useSWR(KEY.access, () => api.api.GET('/access').then(unwrap));
+}
+
+/**
+ * 人間が承認した Bash 許可の一覧（`GET /permission-grants`。Issue #863）。
+ * CLI の `alteroid permission list` と同じもの。
+ *
+ * **資格は認証のみ**（`/access` と同じ強さ。`apps/daemon/src/app.ts` の
+ * `GET /permission-grants` は `deliberateClient` を要求していない）。
+ * **有効・取り消し済みの両方を返す**——絞り込み（既定は有効なものだけ）は
+ * 画面側で行う（`routes/permissions.tsx`。CLI の `--all` と同じ形）。
+ */
+export function usePermissionGrants() {
+  const api = useApi();
+  return useSWR(KEY.permissionGrants, () => api.api.GET('/permission-grants').then(unwrap));
 }
 
 /**

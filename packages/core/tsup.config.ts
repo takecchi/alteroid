@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 5つ出す。
+   * 6つ出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -31,6 +31,14 @@ export default defineConfig({
    *   組み立てた絶対パスを `command`/`args` として spawn する、実行専用の
    *   成果物だからである（`apps/daemon` の `openapi.ts` が `write-openapi.mjs`
    *   専用でエクスポートに載らないのと同じ扱い）。
+   * - `permission-rule.ts` — 許可の規則の純粋な照合器と広さ判定
+   *   （issue #863。`@alteroid/core/permission-rule`）。**`journal-search.ts`
+   *   と同じ理由でもう一段強い** —— CLI（`apps/cli/src/permission.ts`）が
+   *   `describePermissionRuleBreadth` で使っている意味論と、Web UI
+   *   （`apps/web/app/routes/permissions.tsx`）が使う意味論を**同じ実装**に
+   *   揃えるための唯一の正本。ファイル自身がもともと import を1つも
+   *   持たない（ストア・時刻・乱数のどれにも触れない設計——ファイル冒頭の
+   *   doc）ので、分離のために書き換えた行は無い。
    */
   entry: [
     'src/index.ts',
@@ -38,6 +46,7 @@ export default defineConfig({
     'src/revision-format.ts',
     'src/journal-search.ts',
     'src/clone-tool-relay-child.ts',
+    'src/permission-rule.ts',
   ],
   format: ['esm'],
   dts: true,

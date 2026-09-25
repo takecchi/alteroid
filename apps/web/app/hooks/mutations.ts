@@ -986,6 +986,34 @@ export function useRevokeAccess() {
 }
 
 /**
+ * 許可を取り消す（`POST /permission-grants/:id/revoke`。Issue #863）。CLI の
+ * `alteroid permission revoke <id>` と同じ口。
+ *
+ * **行は消さず `revokedAt` を立てるだけ**（`useRevokeAccess` と同じ「終端は
+ * 別の状態であって削除ではない」思想）。押す前の確認は画面の側が持つ
+ * （`routes/permissions.tsx`）——取り消しは戻せない（戻すには、そのルールを
+ * また `request_permission` で人間に承認してもらう必要がある）ので、
+ * `useRevokeAccess` と同じ重さである。
+ *
+ * `body: {}` の理由は `useDeclareOwner` と同じ（`deliberateClient` が
+ * `content-type: application/json` を要求するだけで、中身は読まない）。
+ */
+export function useRevokePermissionGrant() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (id: string) => {
+      const result = await api.api
+        .POST('/permission-grants/{id}/revoke', { params: { path: { id } }, body: {} })
+        .then(unwrap);
+      await mutate(KEY.permissionGrants);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
  * その runner を意図して空ける（drain。`POST /runners/vacate`）。**応答は「立てた」の
  * 確認であって「空き終わった」ではない**ので、呼び出し側はそう言わないこと。
  * 押す前の確認は画面の側が持つ（`routes/settings.tsx` の `VacateRunner`）。
