@@ -6366,6 +6366,74 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `runnerVanishedSince`（`ManagerSummary`。Issue #1212 running 側。段1）を
+   * `manager_list` が専用行で出す。**`usageStoppedAt` の専用行（すぐ上の歯）と
+   * 並べ方・書式を揃えた**——`usageStoppedLine` の直後に置き、`  ⚠ …` の形で
+   * 1行だけ増やす。
+   *
+   * 測るのは2つ:
+   * 1. `runnerVanishedSince` が在る回には専用行が出る（時刻がそのまま読める）
+   * 2. **`runnerVanishedSince` が無い回には1文字も足さない**（次の歯）
+   */
+  it('manager_list は runnerVanishedSince を専用行で出す（Issue #1212 running 側。段1）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.runnerVanishedSince = '2026-09-25T01:23:45.000Z';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 宛先の runner が名簿から消えている');
+    expect(reply).toContain('2026-09-25T01:23:45.000Z');
+    // **`isLive()` の返り値は動かさない**——`live` の判定は別の歯が持つので
+    // ここでは status が動いていないことだけ確かめる。
+    expect(reply).toContain('running');
+    // **`manager_list status: ["lost"]` の絞りには掛からないと本文が言う。**
+    expect(reply).toContain('lost ではない');
+  });
+
+  /**
+   * ⭐ **陰性対照**。`runnerVanishedSince` が無ければ専用行は1文字も足さない
+   * （予算を食わない。`usageStoppedAt` の陰性対照と同じ形）。
+   */
+  it('manager_list は runnerVanishedSince が無ければ1文字も足さない（Issue #1212 running 側。段1）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastReport = '終わった';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('宛先の runner が名簿から消えている');
+  });
+
+  /**
+   * **`usageStoppedAt` / `lastFailure` と同じ委譲で両方（3つとも）出ることを
+   * 許す**（`usageStoppedLine` の doc と同じ理由。片方がもう片方を隠さない）。
+   */
+  it('manager_list: runnerVanishedSince と usageStoppedAt と lastFailure が同じ委譲で全部出る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.runnerVanishedSince = '2026-09-25T01:00:00.000Z';
+    target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
+    target.lastFailure = {
+      code: 'billing_error',
+      via: 'assistant_error',
+      at: '2026-09-25T01:23:50.000Z',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 宛先の runner が名簿から消えている');
+    expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
+    expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+  });
+
+  /**
    * **Issue #1266 の最小の一手。** PR #1265 が `Job.lastUnpushedWorkObservation`
    * へ観測を残すようにしたが、読む口が本番コードに1つも無かった
    * （`manager_list` にも `self_status` にも出ない）——`branch` が non-null で
@@ -10314,6 +10382,65 @@ describe('manager_list は lost を判断待ちの群として窓に入れる（
     expect(reply).toContain('件数: 全 2 本');
     expect(reply).not.toContain('枠(利用上限)で止まっている');
     expect(reply).not.toContain('横断する軸である');
+  });
+
+  /**
+   * **件数の行が「宛先の runner が名簿から消えている」本数を出す**
+   * （Issue #1212 running 側。段1。`usageStopped` と同じ形）。
+   */
+  it('件数の行が「宛先の runner が名簿から消えている」本数と、横断する軸である断りを出す', async () => {
+    const running1 = entry('mgr-run-00', 'running', 10);
+    running1.runnerVanishedSince = minutesBefore(3);
+    const running2 = entry('mgr-run-01', 'running', 11);
+    running2.runnerVanishedSince = minutesBefore(4);
+    const healthy = entry('mgr-run-02', 'running', 12);
+    const h = pool([running1, running2, healthy]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('件数: 全 3 本');
+    expect(reply).toContain('宛先の runner が名簿から消えている 2 本');
+    expect(reply).toContain('他の区分とは足し合わせない');
+    expect(reply).toContain('status の分割ではなく横断する軸である');
+    expect(reply).toContain('名指しで絞る綴りは無い');
+    expect(reply).toContain('この一覧の各行に付く注記');
+  });
+
+  /**
+   * ⭐ **`runnerVanished` が 0 本のときは、件数の行に区分ごと出さない**
+   * （`usageStopped` と同じ「0 の行は作らない」作法）。
+   */
+  it('⭐ 宛先の runner が名簿から消えている委譲が0本なら件数の行にも断り書きにも1文字も出ない', async () => {
+    const h = pool([entry('mgr-done-00', 'done', 10), entry('mgr-fail-00', 'failed', 11)]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('件数: 全 2 本');
+    expect(reply).not.toContain('宛先の runner が名簿から消えている');
+  });
+
+  /**
+   * ⭐ **#1414 が running 側に作った穴そのものを塞いだことを測る**
+   * （Issue #1212 running 側。段1）。「lost を全部確かめても落ちた委譲を
+   * 全部見たことにはならない」という辿る綴りは `lost > 0` のときしか出ない
+   * （直上の describe の陰性対照が固定している）——`runnerVanished` の
+   * 辿る綴りは**その `lost` の条件と無関係に**、自分自身の本数だけで出る
+   * ことを固定する。
+   */
+  it('⭐ lost が 0 本でも、runnerVanished が在れば辿る綴りが出る（#1414 が running 側に作らなかった穴）', async () => {
+    const running = entry('mgr-run-00', 'running', 10);
+    running.runnerVanishedSince = minutesBefore(3);
+    const healthy = entry('mgr-run-01', 'running', 11);
+    const h = pool([running, healthy]);
+
+    const reply = await h.call('manager_list', {});
+
+    // **`lost` は0本である**（この一覧に `lost` の委譲は1本も無い）。
+    expect(reply).not.toContain('戻れなかった(lost)');
+    // それでも `runnerVanished` の辿る綴りは出る——`lost` の条件に混ぜていない。
+    expect(reply).toContain('宛先の runner が名簿から消えている 1 本');
+    expect(reply).toContain('この一覧の各行に付く注記');
+    expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
   });
 });
 

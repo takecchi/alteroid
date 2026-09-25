@@ -2741,6 +2741,48 @@ function usageStoppedLine(manager: ManagerSummary): string | null {
 }
 
 /**
+ * 一覧に添える、「`running` のまま宛先の runner が名簿から entry ごと消えて
+ * いる」の一行（Issue #1212 running 側。段1。先例は `usageStoppedLine`）。
+ *
+ * **`lost`（判断待ち）とは見ている集合が違う。** `lost` は resume を試して
+ * 前のセッションへ戻れなかったという**確かめた事実**——ここが名指しするのは
+ * その手前、器が黙って名簿から entry ごと消えたのに `status` はまだ `running`
+ * のまま残っている委譲である（`manager.ts` の `ManagerSummary.
+ * runnerVanishedSince` の doc）。**`manager_list status: ["lost"]` の絞りでは
+ * 拾えない**——`status` の値ではないので絞りにも掛からない。
+ *
+ * **`status` を置き換えない。** entry が消えていても `sessionId` が残って
+ * いれば `manager_send` は resume から入り直せることがある——`isLive()` は
+ * この行があっても動かさない（`runnerVanishedSince` の doc「`isLive()` の
+ * 返り値は動かさない」）。
+ *
+ * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
+ * と同じ約束）。
+ *
+ * **字面の生成元はここ1箇所である。** `describeManagerCounts` の件数行は、
+ * この行を見れば名指しで辿れることだけを案内する（`describeUsageStopped`
+ * の doc と同じ理由）。
+ */
+function describeRunnerVanished(manager: ManagerSummary): string | null {
+  if (manager.runnerVanishedSince === undefined) return null;
+  return (
+    `⚠ 宛先の runner が名簿から消えている（走り始めは ${manager.runnerVanishedSince}。` +
+    'ただし消えた正確な時刻ではなく、この委譲が走り始めた時刻の近似——名簿は entry が' +
+    'いつ消えたかを記録していない）。resume を試したわけではないので lost ではない' +
+    '——manager_list status: ["lost"] の絞りには掛からない。'
+  );
+}
+
+/**
+ * {@link describeRunnerVanished} を `manager_list` の `extra` へ入れる形にする
+ * （`usageStoppedLine` と同じ作法）。
+ */
+function runnerVanishedLine(manager: ManagerSummary): string | null {
+  const note = describeRunnerVanished(manager);
+  return note === null ? null : `  ${note}`;
+}
+
+/**
  * **`lastReport` を「直近の報告」と呼んでよいか（Issue #714 / #917）。**
  *
  * 呼んではいけない回が2つある——どちらも `lastReport` の本文は完遂した報告
@@ -9403,6 +9445,13 @@ export function createCloneTools(context: ToolContext) {
               // 側で確定している）。**健全なマネージャーでは `null` を返し、
               // 1文字も増えない。**
               usageStoppedLine(manager),
+              // **`running` のまま宛先の runner が名簿から消えている委譲も、
+              // 同じ「失敗は報告の上」の順で置く（Issue #1212 running 側。
+              // 段1）。** `lastFailure` / `usageStoppedAt` とは別の軸なので
+              // 別行——**この行は `lost` の本数に関係なく出す**（`lost` の
+              // 絞りでは拾えない集合そのものを名指しするため）。
+              // **健全なマネージャーでは `null` を返し、1文字も増えない。**
+              runnerVanishedLine(manager),
               // **セッションそのものが `failed` として畳まれた落ち方も、同じ
               // 「失敗は報告の上」の順で置く（Issue #713 段3）。** `lastFailure`
               // の行（すぐ上）とは別の軸なので別行——**両方が同時に出ることは
@@ -11446,6 +11495,17 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
     parts.push(
       `枠(利用上限)で止まっている ${usageStopped} 本（横断する軸。他の区分とは足し合わせない）`,
     );
+  // **横断する軸である（Issue #1212 running 側。段1）。** `runnerVanishedSince`
+  // は `status === 'running'` のときしか立たない（`manager.ts` の
+  // `vanishedSinceOf` の doc）ので `running` の内側にしか現れないが、
+  // `status` の分割そのものではない（`lost` の絞りでは拾えない集合を名指し
+  // するための別軸）——`usageStopped` と同じ扱いで、上の内訳には足し合わせ
+  // ない。0 の行は作らない（同じ理由）。
+  const runnerVanished = managers.filter((m) => m.runnerVanishedSince !== undefined).length;
+  if (runnerVanished > 0)
+    parts.push(
+      `宛先の runner が名簿から消えている ${runnerVanished} 本（横断する軸。他の区分とは足し合わせない）`,
+    );
   return (
     `件数: ${parts.join(' / ')}。話しかけられる委譲は全体で ${live} 本である。` +
     '**「走行中」は「進んでいる」ではない** — 宛先の器が黙って消えても ' +
@@ -11482,7 +11542,21 @@ function describeManagerCounts(managers: readonly ManagerSummary[]): string {
       : ' **「枠(利用上限)で止まっている」は status の分割ではなく横断する軸である** — ' +
         '走行中・返事待ち・戻れなかった(lost)・手が空いている（done）等のどれとも重なりうるので、' +
         '上の内訳には足し合わせない。名指しで絞る綴りは無い（`status` の値ではないため）——' +
-        'この一覧の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見て、どの委譲かを辿ること。')
+        'この一覧の各行に付く注記（⚠ 枠(利用上限)で止まっている）を見て、どの委譲かを辿ること。') +
+    // **`runnerVanished` が在るときだけ足す1文（Issue #1212 running 側。段1）。**
+    // ⚠️ **`lost` の本数に関係なく出す**——直上の「戻れなかった(lost)」の断り
+    // 書きは `lost > 0` のときしか出ないので、`lost` が 0 のまま器が黙って
+    // 消えた委譲だけが在る回（この軸そのものが起きうる回）を取りこぼす
+    // （#1414 が running 側には作らなかった穴）。この文は自分自身の本数
+    // （`runnerVanished`）だけで出し、`lost` を条件に混ぜない。
+    (runnerVanished === 0
+      ? ''
+      : ' **「宛先の runner が名簿から消えている」は status の分割ではなく横断する軸である** — ' +
+        '必ず「走行中」の内側に座るが、`lost`（戻れなかった）とは別の集合で、' +
+        '`manager_list status: ["lost"]` の絞りでは拾えない。名指しで絞る綴りは無い' +
+        '（`status` の値ではないため）——この一覧の各行に付く注記' +
+        '（⚠ 宛先の runner が名簿から消えている）を見て、どの委譲かを辿ること。' +
+        RESTART_BEFORE_CHECK_ADVICE)
   );
 }
 

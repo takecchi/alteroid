@@ -79,6 +79,18 @@ function withUsageStopped(manager: ManagerSummary): ManagerSummary {
   return { ...manager, usageStoppedAt: USAGE_STOPPED_AT };
 }
 
+/**
+ * **`running` のまま、宛先の runner が名簿から entry ごと消えている**委譲に
+ * する形（Issue #1212 running 側。段1）。`manager.ts` の `vanishedSinceOf`
+ * が返す値そのもの——本番では `status !== 'running'` のとき欄自体が立たない
+ * （`vanishedSinceOf` の doc）ので、既定の呼び方は `summary(id, 'running',
+ * live)` に対して使う。
+ */
+const RUNNER_VANISHED_SINCE = '2026-09-20T10:00:00.000Z';
+function withRunnerVanished(manager: ManagerSummary): ManagerSummary {
+  return { ...manager, runnerVanishedSince: RUNNER_VANISHED_SINCE };
+}
+
 describe('countManagerSituation', () => {
   /**
    * **この歯がこのファイルで最初に来る理由。** 「手が空いている」と「背景処理を
@@ -208,6 +220,7 @@ describe('countManagerSituation', () => {
       lastTurnFailedIdle: 0,
       usageStopped: 0,
       usageStoppedIdle: 0,
+      runnerVanished: 0,
     });
   });
 
@@ -352,6 +365,39 @@ describe('countManagerSituation', () => {
     const counts = countManagerSituation([withUsageStopped(summary('a', 'running', true))]);
     expect(counts.usageStopped).toBe(1);
     expect(counts.lastTurnFailed).toBe(0);
+  });
+
+  /**
+   * ⭐ **`runnerVanished` は区分ではなく横断する軸である**（Issue #1212
+   * running 側。段1）。`lastTurnFailed` / `usageStopped` と同じ形——
+   * `running` という区分に数えられたまま、同じ委譲がこの軸にも数えられる。
+   *
+   * **6つの区分の和が `total` のままであること**も一緒に測る。
+   */
+  it('⭐ running のまま宛先が消えた委譲は running としても runnerVanished としても数えられる（区分ではなく横断する軸）', () => {
+    const counts = countManagerSituation([
+      withRunnerVanished(summary('a', 'running', true)),
+      summary('b', 'running', true),
+    ]);
+    expect(counts.running).toBe(2);
+    expect(counts.runnerVanished).toBe(1);
+    expect(
+      counts.running +
+        counts.waitingHuman +
+        counts.awaitingBackground +
+        counts.idle +
+        counts.lost +
+        counts.other,
+    ).toBe(counts.total);
+  });
+
+  /**
+   * ⭐ **陰性対照。** `runnerVanishedSince` が無ければ本数は増えない
+   * ——`usageStopped` の陰性対照と同じ形。
+   */
+  it('⭐ runnerVanishedSince が無ければ runnerVanished は増えない', () => {
+    const counts = countManagerSituation([summary('a', 'running', true)]);
+    expect(counts.runnerVanished).toBe(0);
   });
 });
 
@@ -787,6 +833,75 @@ describe('describeSituation', () => {
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).not.toContain('枠(利用上限)で止まっている');
     expect(text).toContain('「手が空いている」は「枠が空いた」でもない');
+    expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
+  });
+
+  /**
+   * ⭐ **#1212 running 側 段1の芯。** 「running のまま runner が名簿から entry
+   * ごと消えている」を直接名乗る軸が無かった（#1442 段0は日誌の `[計器]` 1行
+   * だけで、この節にも `manager_list` の行にも出ていなかった）。ここに直接の
+   * 軸を足す。
+   *
+   * **本数と断り書きの両方を測る**（`usageStopped` の歯と同じ形）。
+   */
+  it('⭐ 走行中の中に「宛先の runner が名簿から消えている」本数が並び、断り書きが出る', () => {
+    const text = describeSituation({
+      managers: [
+        withRunnerVanished(summary('a', 'running', true)),
+        withRunnerVanished(summary('b', 'running', true)),
+        summary('c', 'running', true),
+      ],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine, '「委譲 全 」の行が見つからない').toBeDefined();
+    // 区分としてはこれまでどおり全部 `running` である（**`running` から外さない**）。
+    expect(countsLine).toContain('走行中 3');
+    expect(countsLine).toContain('宛先の runner が名簿から entry ごと消えているのは 2 本');
+    expect(countsLine).toContain('必ず「走行中」の内側');
+    expect(countsLine).toContain('上の区分とは足し合わせない');
+    expect(text).toContain('manager_list status: ["lost"]');
+    expect(text).toContain('isLive()');
+    expect(text).toContain('`manager_report <managerId>`');
+    // **絞りでは切り出せないことも言う**（`status` の値ではないため）。
+    expect(text).toContain('絞りでは切り出せない');
+  });
+
+  /**
+   * ⭐ **陰性対照。** `runnerVanishedSince` が無ければ本数の行も断り書きも
+   * 1文字も出ない——`usageStoppedAt` の陰性対照と同じ形。
+   */
+  it('⭐ （陰性対照）runnerVanishedSince が無ければ本数も断り書きも1文字も出ない', () => {
+    const withVanished = describeSituation({
+      managers: [withRunnerVanished(summary('a', 'running', true))],
+      runners: [],
+    });
+    const withoutVanished = describeSituation({
+      managers: [summary('a', 'running', true)],
+      runners: [],
+    });
+    const lineWith = withVanished.split('\n').find((l) => l.startsWith('委譲 全 '));
+    const lineWithout = withoutVanished.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(lineWithout, '「委譲 全 」の行が見つからない').toBeDefined();
+    // 区分の本数は変わらない（`runnerVanishedSince` は `status` を動かさない）。
+    expect(lineWith).toContain('走行中 1');
+    expect(lineWithout).toContain('走行中 1');
+    expect(lineWith).not.toBe(lineWithout);
+    expect(lineWithout).not.toContain('宛先の runner が名簿から entry ごと消えている');
+    expect(withoutVanished).not.toContain('の絞りでは見えない');
+  });
+
+  /**
+   * ⭐ **軸が在ることだけは本数が 0 でも名乗る**（`usageStopped` と同じ理由）。
+   */
+  it('⭐ 本数が 0 でも「走行中」は「宛先の runner が名簿に居る」とは限らないことを常に名乗る', () => {
+    const text = describeSituation({
+      managers: [summary('a', 'running', true)],
+      runners: [],
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).not.toContain('宛先の runner が名簿から entry ごと消えている');
+    expect(text).toContain('「走行中」は「宛先の runner が名簿に居る」でもない');
     expect(text).toContain('その本数も1本以上あるときだけ上の行に出る');
   });
 

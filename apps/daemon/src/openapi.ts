@@ -883,6 +883,28 @@ export const managerSummarySchema = z.object({
    * `manager_list` にだけ出る形になる）。
    */
   usageStoppedAt: jobSchema.shape.usageStoppedAt,
+  /**
+   * **`status: 'running'` のまま、宛先の runner が名簿から entry ごと消えて
+   * いる**と判定したときの近似時刻（Issue #1212 running 側。段1。
+   * `packages/core/src/manager.ts` の `ManagerSummary.runnerVanishedSince`）。
+   *
+   * **`jobSchema` の枝を借りない**——`runnerLostSince` と同じ理由。この欄は
+   * 台帳（`Job`）には無い、プロセス内の名簿（`RunnerRegistry`）を材料にした
+   * 計算値で、`Job` を経由しない（`ManagerSummary.runnerVanishedSince` の
+   * doc）。
+   *
+   * **`runnerLostSince` とは別の欄である。** あちらは entry が名簿に残って
+   * いるが `state: 'lost'`。こちらは entry がまるごと消えている——`lost` の
+   * 絞り（`manager_list status: ["lost"]`）では拾えない集合を指す。
+   *
+   * **消えている回だけ載る（`optional`）。** 常に載せると「消えていない」と
+   * 「この器では見ていない」が同じ形になる。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `usageStoppedAt`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になり、クローンの
+   * `manager_list` にだけ出る形になる）。
+   */
+  runnerVanishedSince: z.string().optional(),
   runnerId: z.string().optional(),
   workspace: workspaceLocatorSchema.optional(),
   /**

@@ -275,6 +275,57 @@ const USAGE_STOPPED_NOTICE =
   '`manager_list` の各行に付く注記（⚠ 枠(利用上限)で止まっている）で名指しされる。';
 
 /**
+ * **`running` のまま、宛先の runner が名簿から entry ごと消えている**という
+ * 軸の見出し（Issue #1212 running 側。段1）。
+ *
+ * **`lost`（判断待ち）とは見ている集合が違う。** `lost` は「resume を試して
+ * 前のセッションへ戻れなかった」という**確かめた事実**に付く名前——器の側の
+ * 判定がまだそこまで進んでいない委譲は、いくら宛先が消えていても `lost` には
+ * 数えられず `manager_list status: ["lost"]` の絞りにも掛からない。この軸が
+ * 名指しするのは、まさにその「`lost` の絞りで拾えない」集合である
+ * （`manager.ts` の `vanishedRunnerBacklog` / `ManagerSummary.
+ * runnerVanishedSince` の doc）。
+ *
+ * **`usageStopped` / `lastTurnFailed` と違い、`idle` には現れない。**
+ * `ManagerSummary.runnerVanishedSince` は `status !== 'running'` のとき
+ * 常に `undefined` になる（`manager.ts` の `vanishedSinceOf` の doc）ので、
+ * この本数は必ず「走行中」の内側に座る——`lastTurnFailedIdle` /
+ * `usageStoppedIdle` のような部分集合の欄は要らない。
+ */
+const RUNNER_VANISHED_LABEL = '宛先の runner が名簿から entry ごと消えている';
+
+/**
+ * `runnerVanishedSince` が立っている委譲が1本以上あるときだけ出す1行
+ * （Issue #1212 running 側。段1）。**`LOST_NOTICE` / `USAGE_STOPPED_NOTICE`
+ * と同じ作法**——本数の直後に置き、指図は書かない。
+ *
+ * ## この行が塞ぐ穴
+ *
+ * #1212 の本文が指した欠落そのもの——`manager_list status: ["lost"]` を
+ * 全部確かめても「落ちた委譲を全部見た」にはならない。器が黙って消えた分は
+ * `running` のまま残り、`lost` の断り書き（`LOST_NOTICE`）はそこを言わない。
+ * この行が、その「言わない」を埋める。
+ *
+ * ## ⚠️ `running` から外さない
+ *
+ * `LAST_FAILURE_NOTICE` / `USAGE_STOPPED_NOTICE` が `idle` を外さない
+ * のと同じ理由——外すと「置けない」と読まれ、このファイル冒頭の「空き枠を
+ * 作らない」を壊す（`running` は「そのマネージャーがいま動いている」という
+ * 観測値で、それ自体は正しいままである）。
+ */
+const RUNNER_VANISHED_NOTICE =
+  `**${RUNNER_VANISHED_LABEL}委譲は、\`manager_list status: ["lost"]\` の絞りでは見えない。** ` +
+  '`lost` が数えているのは「resume を試して前のセッションへ戻れなかった」という' +
+  '確かめた事実だけで、この本数は器（runner）が黙って名簿から entry ごと消えたのに' +
+  '`status` は `running` のまま残っているものである' +
+  '——`isLive()` は動かしていない（宛先を失っていても `sessionId` が残っていれば' +
+  '`manager_send` で resume を試せることがある）。' +
+  `⟹ **${RUNNER_VANISHED_LABEL}分は、必ず「走行中」の内側に座る**（区分とは足し合わせない）。` +
+  '名指しで引くなら `manager_list` の各行に付く注記（⚠ 宛先の runner が名簿から消えている）を見る' +
+  '——絞りでは切り出せない（`status` の値ではないため）。' +
+  '中身は `manager_report <managerId>` で読める。';
+
+/**
  * 委譲の数え上げ。**6つの区分は同じ1回の数え上げの「分割」である**——どの
  * マネージャーもちょうど1つに入り、合計は `total` に一致する。
  *
@@ -285,8 +336,10 @@ const USAGE_STOPPED_NOTICE =
  * **横断する軸は分割ではない**——`reachable`（話しかけられる）、#1212 で
  * 足した `lastTurnFailed` / `lastTurnFailedIdle`（直近のターンが失敗で終わって
  * いる）、#1212 残件2で足した `usageStopped` / `usageStoppedIdle`（枠で止まって
- * いる）の5つがそれで、走行中でも返事待ちでも立ちうる。**6つの区分と
- * 足し合わせないこと。**
+ * いる）、#1212 running 側 段1で足した `runnerVanished`（宛先の runner が名簿
+ * から entry ごと消えている）の6つがそれで、走行中でも返事待ちでも立ちうる
+ * ——ただし `runnerVanished` だけは必ず `running` の内側にしか現れない
+ * （`RUNNER_VANISHED_LABEL` の doc）。**6つの区分と足し合わせないこと。**
  */
 export interface ManagerSituationCounts {
   readonly total: number;
@@ -384,6 +437,20 @@ export interface ManagerSituationCounts {
    * 数える。
    */
   readonly usageStoppedIdle: number;
+  /**
+   * **`status: 'running'` のまま、宛先の runner が名簿から entry ごと消えて
+   * いるもの**（`ManagerSummary.runnerVanishedSince` が立っている本数。
+   * Issue #1212 running 側。段1）。**`lastTurnFailed` / `usageStopped` と
+   * 同じく、6つの区分とは足し合わせない横断する軸である。**
+   *
+   * **ただし他の2つと違い、`idle` 側の部分集合は無い。** この欄は
+   * `status === 'running'` のときしか立たない（`manager.ts` の
+   * `vanishedSinceOf` の doc）ので、`lastTurnFailedIdle` /
+   * `usageStoppedIdle` のような「うち idle に入ったもの」の欄は作っていない
+   * ——作っても値は常に 0 になり、取れない軸に 0 の行を作ることになる
+   * （AGENTS.md の地雷表）。
+   */
+  readonly runnerVanished: number;
 }
 
 /**
@@ -418,12 +485,17 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
   let lastTurnFailedIdle = 0;
   let usageStopped = 0;
   let usageStoppedIdle = 0;
+  let runnerVanished = 0;
   for (const manager of managers) {
     if (manager.live) reachable += 1;
-    // **区分の分岐より前に数える（#1212 / 残件2）。** 横断する軸なので
-    // `else if` の鎖に混ぜない——混ぜると、どの区分に入ったかでこの軸が落ちる。
+    // **区分の分岐より前に数える（#1212 / 残件2 / running 側 段1）。** 横断
+    // する軸なので `else if` の鎖に混ぜない——混ぜると、どの区分に入ったかで
+    // この軸が落ちる。`runnerVanishedSince` は `status === 'running'` の
+    // ときしか立たない（`vanishedSinceOf` の doc）ので、実際には `running`
+    // の枝でしか加算されないが、他の横断する軸と同じ場所に置いて揃える。
     if (manager.lastFailure !== undefined) lastTurnFailed += 1;
     if (manager.usageStoppedAt !== undefined) usageStopped += 1;
+    if (manager.runnerVanishedSince !== undefined) runnerVanished += 1;
     if (manager.awaitingBackground !== undefined) awaitingBackground += 1;
     else if (manager.status === 'running') running += 1;
     else if (manager.status === 'waiting_human') waitingHuman += 1;
@@ -452,6 +524,7 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
     lastTurnFailedIdle,
     usageStopped,
     usageStoppedIdle,
+    runnerVanished,
   };
 }
 
@@ -1012,6 +1085,14 @@ export function describeSituation(input: {
         : `${USAGE_STOPPED_LABEL}のは ${counts.usageStopped} 本` +
           `（うち「手が空いている」に数えたものが ${counts.usageStoppedIdle} 本。` +
           '上の区分とは足し合わせない）。') +
+      // **`usageStopped` の直後に置く（Issue #1212 running 側。段1）。** 同じ
+      // 横断する軸の仲間として並べる。**`idle` の内訳は持たない**（`running`
+      // の内側にしか現れないため——`RUNNER_VANISHED_LABEL` の doc）。
+      // **0 のときは1文字も出さない**（同じ作法）。
+      (counts.runnerVanished === 0
+        ? ''
+        : `${RUNNER_VANISHED_LABEL}のは ${counts.runnerVanished} 本` +
+          '（必ず「走行中」の内側。上の区分とは足し合わせない）。') +
       // **#1103 案1。0 本でも出す（0 が合図だから）。** 閾値も ⚠ も持たない
       // ——{@link RECENT_MANAGER_START_WINDOW_MS} の doc「閾値ではなく本数
       // だけを出す」。だから他の横断する軸（`lastTurnFailed` 等）と違い、
@@ -1033,6 +1114,11 @@ export function describeSituation(input: {
     // 断りが3つ並ぶ（`LOST_NOTICE` → `LAST_FAILURE_NOTICE` →
     // `USAGE_STOPPED_NOTICE`）。**0 のときは1文字も出さない**（同じ作法）。
     ...(counts.usageStopped === 0 ? [] : [USAGE_STOPPED_NOTICE]),
+    // **`USAGE_STOPPED_NOTICE` の直後に置く（Issue #1212 running 側。段1）。**
+    // 同じ向きの断りが4つ並ぶ（`LOST_NOTICE` → `LAST_FAILURE_NOTICE` →
+    // `USAGE_STOPPED_NOTICE` → `RUNNER_VANISHED_NOTICE`）。**0 のときは
+    // 1文字も出さない**（同じ作法）。
+    ...(counts.runnerVanished === 0 ? [] : [RUNNER_VANISHED_NOTICE]),
     `器 ${input.runners.length} 台${runnerBreakdown === '' ? '' : `: ${runnerBreakdown}`}。`,
     '**「手が空いている」は「空き枠」ではない** — この器に定員は無いので、' +
       '置けるかどうかはここでは答えていない。' +
@@ -1054,6 +1140,11 @@ export function describeSituation(input: {
       '待っていても「手が空いている」側に数える。' +
       '**「走行中」は「進んでいる」ではないし、「背景処理待ち」を含まない** — ' +
       '`status` が `running` でも、背景処理待ちの印が立っていればそちらへ数える。' +
+      // **同じ理由で本数が 0 でも出す（Issue #1212 running 側。段1）。** 上の
+      // 2文と対で、「走行中」の意味をもう1つ限定する軸が在ることを常に名乗る。
+      '**「走行中」は「宛先の runner が名簿に居る」でもない** — 名簿から entry ごと' +
+      '消えた宛先を持つ委譲も `running` のまま座る（`isLive()` は動かさない。仕様である）。' +
+      'その本数も1本以上あるときだけ上の行に出る。' +
       // **`lost` をここから外した（#688）。** 畳んでいたあいだ、この一文が
       // 「lost は終端したものである」と読ませていた——`lost` は終端の値だが、
       // **成果の有無を観測していない**のはこれだけで、`failed` / `stopped` と

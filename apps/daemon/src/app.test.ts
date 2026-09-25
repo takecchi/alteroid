@@ -2738,6 +2738,65 @@ describe('HTTP API', () => {
     expect(list.managers[0]).not.toHaveProperty('runnerLostSince');
   });
 
+  /**
+   * **`running` のまま、宛先の runner が名簿から entry ごと消えている**という
+   * 5つ目とは別の形（Issue #1212 running 側。段1）。`runnerLostSince` とは
+   * 材料が違う——あちらは entry が名簿に残っているが `state: 'lost'`。こちらは
+   * entry がまるごと消えている（`packages/core/src/manager.ts` の
+   * `ManagerSummary.runnerVanishedSince` の doc）。
+   *
+   * 宣言していない欄は `.parse()` で黙って落ちるので、`runnerLostSince` と
+   * 同じ理由でここを見る（`apps/daemon/src/openapi.ts` の
+   * `managerSummarySchema.runnerVanishedSince`）。
+   */
+  it('宛先の runner が名簿から entry ごと消えているという判定が、一覧と詳細の両方へ載る', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-vanished',
+      status: 'running',
+      // **`isLive()` は動かさない。** entry が消えていても `sessionId` が
+      // 残っていれば resume から入り直せることがある。
+      live: true,
+      runnerVanishedSince: '2026-09-20T10:00:00.000Z',
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-09-20T10:00:00.000Z',
+      updatedAt: '2026-09-20T10:01:00.000Z',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { status: string; live: boolean; runnerVanishedSince?: string }[];
+    };
+    expect(list.managers[0]?.live).toBe(true);
+    expect(list.managers[0]?.runnerVanishedSince).toBe('2026-09-20T10:00:00.000Z');
+    // **`status` は動かさない。** 名簿から消えていても `status` は `running` のまま。
+    expect(list.managers[0]?.status).toBe('running');
+
+    const detail = (await (await app.request('/managers/mgr-vanished')).json()) as {
+      manager: { runnerVanishedSince?: string };
+    };
+    expect(detail.manager.runnerVanishedSince).toBe('2026-09-20T10:00:00.000Z');
+  });
+
+  /** 観測していない回に空の値を載せない（`runnerLostSince` と同じ理由）。 */
+  it('宛先の runner が名簿から消えていないマネージャーには runnerVanishedSince を載せない', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-ok3',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: Record<string, unknown>[];
+    };
+    expect(list.managers[0]).not.toHaveProperty('runnerVanishedSince');
+  });
+
   /** 失敗していない回に空の値を載せない（「失敗していない」と「見ていない」を混ぜない）。 */
   it('失敗していないマネージャーには lastFailure を載せない', async () => {
     fake.managerList.push({
