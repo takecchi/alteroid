@@ -8654,6 +8654,38 @@ describe('runner_list（器の一覧）', () => {
   });
 
   /**
+   * **#1542。** 自動畳み（#1394 段④⑥⑦）は `runners()` の中で起きるので、cursor が
+   * 読めないと分かった時点では既に済んでいる。その早い return でも、畳んだことを
+   * 名乗らなければ、クローンはそのターンで知る手段が無い。
+   */
+  it('読めない cursor を渡しても、同じ呼び出しで起きた自動畳みを名乗る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unknown' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+      autoFolded: [
+        { managerId: 'mgr-idle', runnerId: 'runner-a', outcome: 'folded', detail: '畳んだ' },
+      ],
+    });
+
+    const reply = await h.call('runner_list', { cursor: 'this-is-not-a-valid-cursor' });
+
+    expect(reply).toContain('この cursor は読めない');
+    expect(reply).toContain('mgr-idle');
+    expect(reply).toContain('folded');
+  });
+
+  /**
    * **デーモンと runner の版が同じ出力に並ぶ。**
    *
    * 別々の口に出すと突き合わせ忘れがそのまま見逃しになる
