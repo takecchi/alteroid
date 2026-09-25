@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AnsweredViaLike } from './answered-via.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import { systemErrorFactsSchema } from './system-error.js';
+import type { TraceActionLike } from './trace-action-format.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
 // `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
@@ -2271,6 +2272,28 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
 export type JournalEntryType = JournalEntry['type'];
+
+/**
+ * `trace-action-format.ts` の {@link TraceActionLike}（手書き）が、この zod
+ * スキーマから推論した {@link JournalEntry} を受けられることの強制（issue
+ * #1528）。
+ *
+ * 軽い口（`trace-action-format.ts`）は zod を import できないので、
+ * `JournalEntry` をそのまま使えず、`describeTraceAction` が実際に読む欄
+ * だけを手で書き写している。**ここが崩れると、`apps/web` へ渡した本物の
+ * `JournalEntry` がこの軽い口を通れなくなる**（呼び出し側の typecheck が
+ * 落ちる）か、または欄の型がずれたまま静かに通る——このチェックは後者を
+ * 防ぐ。`answered-via.ts` の `_AssertAnsweredViaMatchesLikeType` と違い、
+ * **一方向でよい**: `TraceActionLike` は `decision` / `memory_update` /
+ * `tool_use` / `exchange` の4種類で `JournalEntry` の対応する枝が持つ欄の
+ * 部分集合しか持たない（残り9種類は判別子だけ）ので、`TraceActionLike` を
+ * `JournalEntry` へ逆に当てはめることはできない——それでよい。この関数が
+ * 実際に必要としているのは「本物の `JournalEntry` を渡せること」だけで
+ * ある。
+ */
+export type _AssertJournalEntryMatchesTraceActionLike = AssertTrue<
+  [JournalEntry] extends [TraceActionLike] ? true : false
+>;
 
 export type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
 

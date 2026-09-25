@@ -3,6 +3,7 @@ import { scanJournalPages } from './journal-scan.js';
 import { describeAnsweredVia } from './schema.js';
 import type { JournalEntry, JournalEntryInput, PendingApproval } from './schema.js';
 import type { JournalStore, Stores } from './store.js';
+import { describeTraceAction } from './trace-action-format.js';
 import { CLONE_ACTOR_ID, CLONE_SUB_ACTOR_PREFIX } from './usage.js';
 
 /**
@@ -320,29 +321,16 @@ export async function traceApproval(
 }
 
 /**
- * 行動1件を「何をしたか」の1文にする（抜粋はしない。切るかどうかは呼び手が決める）。
- *
- * **型ごとの主たる本文をそのまま出すだけで、解釈を足さない**（冒頭の doc
- * 「一般化した基準をここで作らない」）。
+ * 行動1件を「何をしたか」の1文にする関数の正本は `trace-action-format.ts`
+ * （`@alteroid/core/trace-action-format`）へ移した——理由はそちらの doc を
+ * 見よ（issue #1528。`answered-via.ts` と同じ形）。ここは冒頭で import した
+ * ものを再輸出するだけで（このファイル自身の {@link renderApprovalTrace} も
+ * 同じ束縛を使う——`export { x } from '…'` は再輸出専用の構文でローカルの
+ * 束縛を作らないので、同じファイル内で使うにはこの形が要る）、
+ * `describeTraceAction` を import している既存の呼び手（`apps/cli` 等）は
+ * 変更不要である。
  */
-export function describeTraceAction(entry: JournalEntry): string {
-  switch (entry.type) {
-    case 'decision':
-      return `判断: ${entry.decision}（根拠: ${entry.grounds}）`;
-    case 'memory_update':
-      return `記憶の更新 ${entry.action ?? 'write'} ${entry.slug}: ${entry.summary}`;
-    case 'tool_use':
-      return (
-        `道具 ${entry.tool}` +
-        (entry.outcome === undefined ? '' : `（${entry.outcome}）`) +
-        (entry.input === undefined ? '' : `: ${JSON.stringify(entry.input)}`)
-      );
-    case 'exchange':
-      return `${entry.with === 'human' ? '人間への返答' : '発言'}: ${entry.text}`;
-    default:
-      return entry.type;
-  }
-}
+export { describeTraceAction };
 
 /** {@link renderApprovalTrace} の出し方。 */
 export interface ApprovalTraceRenderOptions {

@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 7つ出す。
+   * 8つ出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -47,6 +47,21 @@ export default defineConfig({
    *   import を1つも持たない——zod スキーマから推論した型と構造的に一致する
    *   ことは `schema.ts` の型レベルの検査（`_AssertAnsweredViaMatchesLikeType`）
    *   が保証する。
+   * - `trace-action-format.ts` — 答えの後の行動1件を「何をしたか」の1文に
+   *   する表示（issue #1528。`@alteroid/core/trace-action-format`）。
+   *   **`answered-via.ts` と同じ形**——Web UI
+   *   （`apps/web/app/routes/approvals.tsx`）はこれが無い間、
+   *   `approval-trace.ts` の `describeTraceAction`（正本）と別に画面側へ
+   *   手で複製した `describeAction` を持っていたが、複製は `tool_use` の
+   *   `outcome` と `exchange` の前に付く「人間への返答/発言: 」を落として
+   *   いた（正本の `JournalEntry` は zod を import する重い型で、`apps/web`
+   *   側の `JournalEntry` は `@alteroid/api-client`（OpenAPI 生成）の別の型
+   *   だったため、そのまま輸入すると画面側でキャストが要ったことが複製を
+   *   続けていた理由——`journal-search.ts` の doc と同じ壁）。複製をやめて
+   *   ここへ寄せた。ファイル自身は import を1つも持たない——実際に読む4種類
+   *   （`decision` / `memory_update` / `tool_use` / `exchange`）の欄だけを
+   *   構造で言い、`JournalEntry` を受けられることは `schema.ts` の型レベルの
+   *   検査（`_AssertJournalEntryMatchesTraceActionLike`）が保証する。
    */
   entry: [
     'src/index.ts',
@@ -56,6 +71,7 @@ export default defineConfig({
     'src/clone-tool-relay-child.ts',
     'src/permission-rule.ts',
     'src/answered-via.ts',
+    'src/trace-action-format.ts',
   ],
   format: ['esm'],
   dts: true,

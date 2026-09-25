@@ -16,6 +16,7 @@
  * 4. 1件が駄目でも残りは進み、失敗した id にだけエラーが出る（成功件数へ畳まない）
  * 5. 個別の「回答する」ボタンは、まとめ送りとは無関係にその場で即送信できる
  */
+import { describeTraceAction, type TraceActionLike } from '@alteroid/core/trace-action-format';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -423,6 +424,153 @@ describe('答えの後の行動（issue #847）', () => {
     renderPage();
     fireEvent.click(await screen.findByText('答えの後の行動を見る'));
     expect(await screen.findByText(/行動が無いのではなく、記録していない/)).not.toBeNull();
+  });
+
+  /**
+   * **core の正本（`describeTraceAction`。`@alteroid/core/trace-action-format`）に
+   * 揃える（issue #1528）。** この画面はかつて `describeAction` という名前の
+   * 複製を持っていて、`tool_use` の `outcome` と `exchange` の前に付く
+   * 「人間への返答/発言: 」を落としていた。いまは同じ関数を import して
+   * 使っているので、ここでは*文言が変わった*ことをそのまま固定する
+   * （弱めない——「それらしい文字列を含む」ではなく、正確な文言を見る）。
+   */
+  it('tool_use は outcome を括弧で足す（core の正本に揃える。issue #1528）', async () => {
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'tool_use',
+                id: 'j-1',
+                at: '2026-08-19T11:00:01.000Z',
+                actor: 'clone',
+                tool: 'journal_write',
+                outcome: 'failed',
+                input: { slug: 'note' },
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText('道具 journal_write（failed）: {"slug":"note"}')).not.toBeNull();
+  });
+
+  it('exchange は「人間への返答/発言: 」の接頭辞を持つ（core の正本に揃える。issue #1528）', async () => {
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'exchange',
+                id: 'j-1',
+                at: '2026-08-19T11:00:01.000Z',
+                with: 'human',
+                role: 'outbound',
+                text: '続けます',
+              },
+              {
+                type: 'exchange',
+                id: 'j-2',
+                at: '2026-08-19T11:00:02.000Z',
+                with: 'self',
+                role: 'outbound',
+                text: '内部メモ',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText('人間への返答: 続けます')).not.toBeNull();
+    expect(await screen.findByText('発言: 内部メモ')).not.toBeNull();
+  });
+
+  /**
+   * **`journalEntrySchema`（`packages/core/src/schema.ts`）の判別可能ユニオン
+   * 全種類について、画面の表示が core の正本 `describeTraceAction` の出力と
+   * 一致することを固定する（issue #1528）。** Web はもう複製を持たず、
+   * `@alteroid/core/trace-action-format` から直接 import した同じ関数を
+   * 呼ぶので、これは「別実装が同じ答えを返す」ことの検算ではなく、
+   * 「配線（`TracePanel` が実際にこの関数へ渡している）が壊れていない」
+   * ことの固定である。
+   *
+   * ⚠️ **13種**（issue 起票時点の言及は「12種」だが、この repo の現物
+   * （2026-09-25 実測、`journalEntrySchema` の判別子の数）は13種——
+   * `inbox_flow` を含む。数え上げの持ち主は `journalEntrySchema` 自身
+   * なので、ここは決め打ちの列挙ではなく、増減したら要更新である。
+   */
+  it('13種の entry すべてで、画面の表示が core の正本と一致する（issue #1528）', async () => {
+    const entries: (TraceActionLike & { id: string; at: string })[] = [
+      {
+        type: 'exchange',
+        id: 'j-1',
+        at: '2026-08-19T11:00:01.000Z',
+        with: 'human',
+        text: '続けます',
+      },
+      {
+        type: 'exchange',
+        id: 'j-2',
+        at: '2026-08-19T11:00:02.000Z',
+        with: 'self',
+        text: '内部メモ',
+      },
+      {
+        type: 'decision',
+        id: 'j-3',
+        at: '2026-08-19T11:00:03.000Z',
+        decision: 'b に沿って進めた',
+        grounds: '人間の答え',
+      },
+      {
+        type: 'memory_update',
+        id: 'j-4',
+        at: '2026-08-19T11:00:04.000Z',
+        action: 'write',
+        slug: 'note',
+        summary: '書いた',
+      },
+      {
+        type: 'tool_use',
+        id: 'j-5',
+        at: '2026-08-19T11:00:05.000Z',
+        tool: 'journal_write',
+        outcome: 'failed',
+        input: { slug: 'note' },
+      },
+      { type: 'tool_use', id: 'j-6', at: '2026-08-19T11:00:06.000Z', tool: 'memory_read' },
+      { type: 'token_rotation', id: 'j-7', at: '2026-08-19T11:00:07.000Z' },
+      { type: 'subagent_stall', id: 'j-8', at: '2026-08-19T11:00:08.000Z' },
+      { type: 'escalation', id: 'j-9', at: '2026-08-19T11:00:09.000Z' },
+      { type: 'daily_report', id: 'j-10', at: '2026-08-19T11:00:10.000Z' },
+      { type: 'external_event', id: 'j-11', at: '2026-08-19T11:00:11.000Z' },
+      { type: 'worker_wait', id: 'j-12', at: '2026-08-19T11:00:12.000Z' },
+      { type: 'turn_usage', id: 'j-13', at: '2026-08-19T11:00:13.000Z' },
+      { type: 'context_usage', id: 'j-14', at: '2026-08-19T11:00:14.000Z' },
+      { type: 'inbox_flow', id: 'j-15', at: '2026-08-19T11:00:15.000Z' },
+    ];
+
+    stubApprovals([answered], {
+      trace: () => json(traceBody({ state: 'paired', actions: entries })),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+
+    const heading = await screen.findByText('答えの後の行動（この承認の印を持つもの。古い順）');
+    const list = heading.nextElementSibling;
+    expect(list).not.toBeNull();
+    const items = within(list as HTMLElement).getAllByRole('listitem');
+    expect(items).toHaveLength(entries.length);
+    entries.forEach((entry, i) => {
+      expect(items[i]!.textContent).toContain(describeTraceAction(entry));
+    });
   });
 });
 
