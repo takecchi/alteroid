@@ -479,8 +479,7 @@ const TRACE_MISSING: Record<string, string> = {
  * 「人間への返答/発言: 」を付けるが、この画面の実装はどちらも持たない
  * （このファイルの実測、2026-09-25）。揃えるなら画面の表示文言を変える
  * ことになり、それは「文言を変えない」小さな refactor の範囲を超える
- * 判断（表示を変えてよいか）を要る。**この差分自体は Issue へ上げて
- * 報告した**（このファイルを直した PR の本文を見よ）。
+ * 判断（表示を変えてよいか）を要る。**この差分は Issue #1528 に上げてある。**
  */
 function describeAction(entry: { type: string } & Record<string, unknown>): string {
   const str = (key: string) => (typeof entry[key] === 'string' ? (entry[key] as string) : '');
