@@ -24,6 +24,8 @@ import type {
 } from './agent-events.js';
 import type {
   AgentPreCompactRecord,
+  AgentPreToolDecision,
+  AgentPreToolRecord,
   AgentStopRecord,
   AgentToolAuditFailureRecord,
   AgentUserPromptSubmitRecord,
@@ -1955,7 +1957,7 @@ class RunnerSession {
       canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
       // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
       // 理由は `#onPreToolUse` の doc を見よ。
-      onPreToolUse: (input) => this.#onPreToolUse(input),
+      onPreToolUse: (record) => this.#onPreToolUse(record),
       onPostToolUse: (input) => this.#onPostToolUse(input),
       // **`PostToolUse` と排他**（Issue #924 の実測分岐。#929）。理由は
       // `#onPostToolUseFailure` の doc を見よ。
@@ -3543,12 +3545,15 @@ class RunnerSession {
    * 他のツールまで巻き込むと、この PreToolUse が「何でも弾きうる門」に
    * 見えてしまい、地雷表「確認が要る行為の一覧を作る」に近づく。
    *
-   * ## 拒否は SDK の `permissionDecision: 'deny'` で返す
+   * ## 拒否は中立の `{ kind: 'deny' }` で返す
    *
    * `decision: 'block'`（セッション全体を止める側の口）ではなく、この
    * ツール呼び出し1件だけを拒否する口を使う（SDK の型定義。逐語は
-   * `claude-provider.ts` の `onPreToolUse` の doc）。マネージャーは拒否の
-   * 事実と理由（代替の提示つき）を受け取り、そのターンを続けられる。
+   * `claude-provider.ts` の `wrapPreToolHook` の doc）。**中立の判断
+   * （`AgentPreToolDecision`）を返す**（#486 中立の口の3本目）——SDK の
+   * `hookSpecificOutput.permissionDecision: 'deny'` へ包み直すのは
+   * `claude-provider.ts` の `wrapPreToolHook` の仕事である。マネージャーは
+   * 拒否の事実と理由（代替の提示つき）を受け取り、そのターンを続けられる。
    *
    * ## 弾いたら escalate しない note を1本出す
    *
@@ -3557,27 +3562,13 @@ class RunnerSession {
    * （`#onSubagentStop` の `escalate: true`）のような危険の通知ではなく、
    * ツール呼び出し1件がその場で拒否に置き換わっただけの経過だからである。
    */
-  async #onPreToolUse(input: unknown): Promise<{
-    continue: true;
-    hookSpecificOutput?: {
-      hookEventName: 'PreToolUse';
-      permissionDecision: 'deny';
-      permissionDecisionReason: string;
-    };
-  }> {
-    const hook = input as {
-      tool_name?: unknown;
-      tool_input?: unknown;
-      agent_id?: string;
-      agent_type?: string;
-    };
+  async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
+    if (record.toolName !== 'Bash') return { kind: 'continue' };
 
-    if (hook.tool_name !== 'Bash') return { continue: true };
-
-    const toolInput = hook.tool_input as
+    const toolInput = record.toolInput as
       { command?: unknown; run_in_background?: unknown } | null | undefined;
     const command = toolInput?.command;
-    if (typeof command !== 'string') return { continue: true };
+    if (typeof command !== 'string') return { kind: 'continue' };
 
     // **`run_in_background` はコマンド文字列に現れない。** 背景へ置いたことを
     // 判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
@@ -3586,12 +3577,12 @@ class RunnerSession {
     const verdict = inspectBashCommand(command, {
       backgrounded: toolInput?.run_in_background === true,
     });
-    if (!verdict.blocked) return { continue: true };
+    if (!verdict.blocked) return { kind: 'continue' };
 
     const actor =
-      hook.agent_id === undefined
+      record.agentId === undefined
         ? `manager:${this.#id}`
-        : `worker:${this.#id}:${hook.agent_type ?? WORKER_AGENT_NAME}`;
+        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
 
     this.#emit({
       type: 'note',
@@ -3599,14 +3590,7 @@ class RunnerSession {
       text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
     });
 
-    return {
-      continue: true,
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: verdict.reason,
-      },
-    };
+    return { kind: 'deny', reason: verdict.reason };
   }
 
   /**

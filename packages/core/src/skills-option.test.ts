@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   AgentPreCompactRecord,
+  AgentPreToolHook,
   AgentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
@@ -44,6 +45,10 @@ const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () =
 const noopPreCompactHook: (record: AgentPreCompactRecord) => void = () => undefined;
 const noopUserPromptSubmitHook: (record: AgentUserPromptSubmitRecord) => void = () => undefined;
 const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
+// `onPreToolUse` は判断を返す中立の型（`AgentPreToolHook`）へ移した
+// （#486 中立の口の3本目）——`AgentObservationHook` ではないので上の並びとは
+// 別に持つ。
+const noopPreToolHook: AgentPreToolHook = () => ({ kind: 'continue' });
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
@@ -59,7 +64,7 @@ function cloneOptions(): Options {
     onPreCompact: noopPreCompactHook,
     onPostToolUse: noopAuditHook,
     onPostToolUseFailure: noopAuditFailureHook,
-    onPreToolUse: noopHook,
+    onPreToolUse: noopPreToolHook,
   });
 }
 
@@ -81,7 +86,7 @@ function managerOptions(): Options {
     onUserPromptSubmit: noopUserPromptSubmitHook,
     onSubagentStop: noopHook,
     onStop: noopStopHook,
-    onPreToolUse: noopHook,
+    onPreToolUse: noopPreToolHook,
     managerAutoMemoryEnabled: false,
   });
 }

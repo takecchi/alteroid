@@ -22,6 +22,8 @@ import type {
 } from './agent-events.js';
 import type {
   AgentPreCompactRecord,
+  AgentPreToolDecision,
+  AgentPreToolRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
 } from './agent-hooks.js';
@@ -9112,7 +9114,7 @@ class Clone implements CloneHost {
       // 人間が承認した Bash 許可（Issue #863）を消費する唯一の口。中身は
       // `#onPreToolUse` の doc、配線の理由は `claude-provider.ts` の
       // `CloneSessionOptionsRequest.onPreToolUse` の doc。
-      onPreToolUse: (input) => this.#onPreToolUse(input),
+      onPreToolUse: (record) => this.#onPreToolUse(record),
       onPreCompact: (record) => this.#onPreCompact(record),
       // `self_status` の effort と、**クローンが自分の手を使った跡**をここで拾う
       // （後者は `#onPostToolUse` のコメント）。
@@ -9391,10 +9393,15 @@ class Clone implements CloneHost {
 
   /**
    * 人間が承認した Bash 許可（Issue #863）に、いま流れてきたコマンドが一致
-   * するかを見る。一致すれば `permissionDecision: 'allow'` を返し、その許可
-   * の `lastUsedAt` を進める。**一致しなければ何も決めない**（`continue: true`
+   * するかを見る。一致すれば `{ kind: 'allow' }` を返し、その許可の
+   * `lastUsedAt` を進める。**一致しなければ何も決めない**（`{ kind: 'continue' }`
    * だけを返す——`deny` はしない。一致しないコマンドは、既存の確認フロー
    * （`permissionMode` / 人間の確認）へそのまま委ねる）。
+   *
+   * **中立の判断（`AgentPreToolDecision`）を返す**（#486 中立の口の3本目）。
+   * SDK の `hookSpecificOutput` へ包み直すのは `claude-provider.ts` の
+   * `wrapPreToolHook` の仕事——ここは「届いた記録」と「下した判断」だけを
+   * 知っている。
    *
    * ## 射程はクローン本セッションの `Bash` だけ
    *
@@ -9422,20 +9429,12 @@ class Clone implements CloneHost {
    * 「一致した」という判断を覆さない——`allow` を返すかどうかは一致した
    * 事実だけで決まる。
    */
-  async #onPreToolUse(input: unknown): Promise<{
-    continue: true;
-    hookSpecificOutput?: {
-      hookEventName: 'PreToolUse';
-      permissionDecision: 'allow';
-      permissionDecisionReason: string;
-    };
-  }> {
-    const hook = input as { tool_name?: unknown; tool_input?: unknown };
-    if (hook.tool_name !== 'Bash') return { continue: true };
+  async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
+    if (record.toolName !== 'Bash') return { kind: 'continue' };
 
-    const toolInput = hook.tool_input as { command?: unknown } | null | undefined;
+    const toolInput = record.toolInput as { command?: unknown } | null | undefined;
     const command = toolInput?.command;
-    if (typeof command !== 'string') return { continue: true };
+    if (typeof command !== 'string') return { kind: 'continue' };
 
     const grants = await this.#stores.permissionGrants.list();
     const now = new Date().toISOString();
@@ -9444,15 +9443,11 @@ class Clone implements CloneHost {
       if (!matchPermissionRule(grant.rule, command)) continue;
       await this.#stores.permissionGrants.put({ ...grant, lastUsedAt: now }).catch(() => undefined);
       return {
-        continue: true,
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-          permissionDecisionReason: `人間が承認した許可に一致した（${grant.rule}）`,
-        },
+        kind: 'allow',
+        reason: `人間が承認した許可に一致した（${grant.rule}）`,
       };
     }
-    return { continue: true };
+    return { kind: 'continue' };
   }
 
   /**

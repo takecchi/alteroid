@@ -6,6 +6,7 @@ import type {
   PostToolUseFailureHookInput,
   PostToolUseHookInput,
   PreCompactHookInput,
+  PreToolUseHookInput,
   SDKMessage,
   SessionStore,
   SpawnedProcess,
@@ -25,11 +26,15 @@ import type { AgentProvider } from './agent-ports.js';
 import type {
   AgentObservationHook,
   AgentPreCompactRecord,
+  AgentPreToolDecision,
+  AgentPreToolHook,
+  AgentPreToolRecord,
   AgentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
+import { noteBackgroundFailure } from './dropped-record.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
@@ -215,6 +220,74 @@ function wrapStopHook(hook: AgentObservationHook<AgentStopRecord>): HookCallback
   };
 }
 
+/** `PreToolUse` の生入力を {@link AgentPreToolRecord} へ写す。無い欄は省く（他の `toAgent*Record` と同じ作法）。 */
+function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
+  const raw = input as Partial<PreToolUseHookInput> | null | undefined;
+  return {
+    ...(typeof raw?.tool_name === 'string' ? { toolName: raw.tool_name } : {}),
+    toolInput: raw?.tool_input,
+    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+    ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+  };
+}
+
+/**
+ * 中立の `PreToolUse` 判断フックを SDK の `HookCallback` へ包み直す。
+ *
+ * **観測専用の `wrap*Hook` とは違い、判断ごとに返す形が変わる。** `allow` /
+ * `deny` に足す `hookSpecificOutput` の形は、`clone.ts` の `#onPreToolUse`
+ * （Issue #863）・`runner.ts` の `#onPreToolUse`（Issue #894）が今日すでに
+ * 返している形とちょうど一致させてある——包み直しでその形を1文字も変えない
+ * （`agent-hooks.test.ts` 側ではなく `clone.test.ts` の「issue #863」/
+ * `runner-pre-tool-use.test.ts` の既存の歯がこれを固定している）。
+ *
+ * **`never` で網羅性を検査する。** `AgentPreToolDecision` に4つ目の `kind` が
+ * 増えたら、この `switch` の `default` 節で `tsc` が落ちる（`memory.ts` の
+ * `assertNeverMemoryProtectionStatus` と同じ形の型検査。AGENTS.md「テストを
+ * 弱めずに直す」の「型で塞いだ分岐にも、実行時の倒れ先の歯を足す」）。
+ * **ただし投げない** —— このフックは SDK のツール実行そのものの経路に
+ * 載っており、ここで例外を投げるとそのターン全体が壊れる。実行時にここへ
+ * 来るのは型で弾かれたはずの値が渡ったとき（provider 側の実装ミス）だけ
+ * なので、安全側（`{ continue: true }` ＝ 何も決めない。ブロックも許可も
+ * しない）へ倒し、`noteBackgroundFailure` で跡だけ残す。
+ */
+function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
+  return async (input) => {
+    const decision = await hook(toAgentPreToolRecord(input));
+    switch (decision.kind) {
+      case 'continue':
+        return { continue: true };
+      case 'allow':
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: decision.reason,
+          },
+        };
+      case 'deny':
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: decision.reason,
+          },
+        };
+      default: {
+        const unreachable: never = decision;
+        noteBackgroundFailure(
+          'PreToolUse の中立な判断の包み直し',
+          '',
+          new Error(`未知の AgentPreToolDecision.kind が渡った: ${JSON.stringify(unreachable)}`),
+        );
+        return { continue: true };
+      }
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
 // A. クローン本セッション
 // ---------------------------------------------------------------------------
@@ -288,17 +361,21 @@ export interface CloneSessionOptionsRequest {
    */
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   /**
-   * 人間が承認した Bash 許可（Issue #863）に一致したら
-   * `permissionDecision: 'allow'` を返す。一致しなければ何も決めない
-   * （`continue: true` だけ返す——`runner.ts` の `#onPreToolUse`
-   * （`bash-wait-guard.ts`）が deny 側で使っているのと同じ口を、逆向き
-   * （allow）に使う）。**このセッション（クローン本セッション）にしか
-   * 配線しない** —— `buildCloneDistillOptions`（蒸留）・
-   * `buildManagerSessionOptions`（マネージャー・作業者。`runner.ts` 側で
-   * 別に組む）はこの引数を持たない。中身は `clone.ts` の `#onPreToolUse`
-   * の doc を見よ。
+   * 人間が承認した Bash 許可（Issue #863）に一致したら `allow` を返す。
+   * 一致しなければ何も決めない（`continue`——`runner.ts` の
+   * `#onPreToolUse`（`bash-wait-guard.ts`）が `deny` 側で使っているのと
+   * 同じ判断の型（{@link AgentPreToolDecision}）を、逆向き（`allow`）に
+   * 使う）。**このセッション（クローン本セッション）にしか配線しない** —
+   * `buildCloneDistillOptions`（蒸留）・`buildManagerSessionOptions`
+   * （マネージャー・作業者。`runner.ts` 側で別に組む）はこの引数を持たない。
+   * 中身は `clone.ts` の `#onPreToolUse` の doc を見よ。
+   *
+   * **中立の型（`AgentPreToolHook`）へ移してある**（#486 中立の口の3本目）。
+   * `wrapPreToolHook` が SDK の `HookCallback` へ包み直す——`allow` /
+   * `deny` に足す `hookSpecificOutput` の形は、`clone.ts` の実装が今日
+   * 返している形と1文字も変えていない（`wrapPreToolHook` の doc）。
    */
-  onPreToolUse: HookCallback;
+  onPreToolUse: AgentPreToolHook;
 }
 
 /** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions` から移した。 */
@@ -372,9 +449,10 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       // （Issue #863）。他の3本（`PreCompact` / `PostToolUse` /
       // `PostToolUseFailure`）は観測専用で `continue: true` しか返さない
       // ——`CloneSessionOptionsRequest.onPreToolUse` の doc を見よ。
+      // `wrapPreToolHook` が中立の判断を SDK の `HookCallback` へ包み直す。
       PreToolUse: [
         {
-          hooks: [onPreToolUse],
+          hooks: [wrapPreToolHook(onPreToolUse)],
         },
       ],
       PreCompact: [
@@ -594,8 +672,14 @@ export interface ManagerSessionOptionsRequest {
    * **optional にしない。理由は上の5本と同じ**（可観測性・安全弁は provider
    * を足す側が黙って落とせない要件である）。中身は `runner.ts` の
    * `#onPreToolUse` の doc を見よ。
+   *
+   * **中立の型（`AgentPreToolHook`）へ移してある**（#486 中立の口の3本目）。
+   * `wrapPreToolHook` が SDK の `HookCallback` へ包み直す——`deny` に足す
+   * `hookSpecificOutput` の形は、`runner.ts` の実装が今日返している形と
+   * 1文字も変えていない（`wrapPreToolHook` の doc、`CloneSessionOptionsRequest.
+   * onPreToolUse` の doc と同じ形）。
    */
-  onPreToolUse: HookCallback;
+  onPreToolUse: AgentPreToolHook;
   /**
    * `ALTEROID_MANAGER_AUTO_MEMORY` を解いた結果（`runner.ts` の
    * `resolveManagerAutoMemoryEnabled`）。**このセッションが auto-memory を
@@ -752,8 +836,9 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     hooks: {
       // **ブロックする唯一のフック**（#894 段1・案(A)）。`Bash` 以外は
       // `#onPreToolUse` の内側で素通しする。理由は `runner.ts` の
-      // `#onPreToolUse` の doc を見よ。
-      PreToolUse: [{ hooks: [onPreToolUse] }],
+      // `#onPreToolUse` の doc を見よ。`wrapPreToolHook` が中立の判断を
+      // SDK の `HookCallback` へ包み直す。
+      PreToolUse: [{ hooks: [wrapPreToolHook(onPreToolUse)] }],
       // **`HookCallback` のまま渡す**（`ManagerSessionOptionsRequest.onPostToolUse`
       // の doc）。中立の口を経由しないので、ここでは包み直さない。
       PostToolUse: [{ hooks: [onPostToolUse] }],
