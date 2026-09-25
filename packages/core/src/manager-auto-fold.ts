@@ -38,7 +38,10 @@ export const AUTO_FOLD_PIDS_PRESSURE_RATIO = 0.8;
  * の非対称版——ここは3値ではなく2値だが、判定できないときに安全側（畳まない
  * 側）へ倒すという向きは同じ）。
  */
-export function isPidsUnderPressure(pids: { readonly current: number; readonly max: number }): boolean {
+export function isPidsUnderPressure(pids: {
+  readonly current: number;
+  readonly max: number;
+}): boolean {
   if (!(pids.max > 0)) return false;
   return pids.current / pids.max >= AUTO_FOLD_PIDS_PRESSURE_RATIO;
 }

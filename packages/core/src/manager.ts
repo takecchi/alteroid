@@ -5354,12 +5354,10 @@ class Pool implements ManagerPool {
       // 増やさない）——`case 'report'` の fire-and-forget 観測と同じ「安全側に
       // 短く取った未検証の既定値」という理由がそのまま当てはまる。
       signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
-    }).catch(
-      (error: unknown): ManagerUnpushedWork => ({
-        kind: 'unavailable',
-        reason: `確かめようとして例外が飛んだ: ${String(error)}`,
-      }),
-    );
+    }).catch((error: unknown): ManagerUnpushedWork => ({
+      kind: 'unavailable',
+      reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+    }));
     const verdict = evaluateAutoFoldUnpushedWork(unpushed);
     if (verdict !== 'clear') {
       const reason = describeAutoFoldUnpushedWorkProbe(unpushed);
@@ -5368,8 +5366,7 @@ class Pool implements ManagerPool {
         decision:
           `[auto-fold-skip] ${managerId} は pids 逼迫（runner=${runnerId}、${pidsNote}）で` +
           `畳む候補だったが、畳まなかった: ${reason}。`,
-        grounds:
-          'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
+        grounds: 'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
       });
       return {
         managerId,
@@ -6904,7 +6901,8 @@ class Pool implements ManagerPool {
   ): Promise<ManagerAbortResult> {
     await this.#ensureConnected();
 
-    const who = by === 'clone' ? 'クローン' : by === 'auto-fold' ? 'デーモン（pids逼迫の自動畳み）' : '人間';
+    const who =
+      by === 'clone' ? 'クローン' : by === 'auto-fold' ? 'デーモン（pids逼迫の自動畳み）' : '人間';
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
     if (!record) {

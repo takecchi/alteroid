@@ -50,9 +50,7 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
   });
 
   it('作業ツリーが0本（見つからなかった）でも clear', () => {
-    expect(
-      evaluateAutoFoldUnpushedWork({ kind: 'ok', result: { worktrees: [] } }),
-    ).toBe('clear');
+    expect(evaluateAutoFoldUnpushedWork({ kind: 'ok', result: { worktrees: [] } })).toBe('clear');
   });
 
   it('unavailable（確かめられなかった）は blocked——取れないを無かったへ倒さない', () => {
@@ -113,7 +111,10 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
     expect(
       evaluateAutoFoldUnpushedWork({
         kind: 'ok',
-        result: { worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }], truncatedAtCount: 200 },
+        result: {
+          worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }],
+          truncatedAtCount: 200,
+        },
       }),
     ).toBe('blocked');
   });
@@ -122,7 +123,10 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
     expect(
       evaluateAutoFoldUnpushedWork({
         kind: 'ok',
-        result: { worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }], stoppedEarly: true },
+        result: {
+          worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }],
+          stoppedEarly: true,
+        },
       }),
     ).toBe('blocked');
   });
@@ -130,7 +134,9 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
 
 describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピーを作らない）', () => {
   it('unavailable の理由を言う', () => {
-    expect(describeAutoFoldUnpushedWorkProbe({ kind: 'unavailable' })).toContain('確かめられなかった');
+    expect(describeAutoFoldUnpushedWorkProbe({ kind: 'unavailable' })).toContain(
+      '確かめられなかった',
+    );
   });
 
   it('打ち切り（truncatedAtCount）の理由を件数付きで言う', () => {

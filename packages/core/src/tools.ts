@@ -10800,7 +10800,9 @@ export function createCloneTools(context: ToolContext) {
         // `memory_list` と同じ理由——名簿が0台のときの言い方を奪わない。その枝は
         // すぐ上に在り、ここより先に返っている）。
         if (cursor !== undefined && resolved.view.length === 0) {
-          return text(`（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}${autoFoldedNote}`);
+          return text(
+            `（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}${autoFoldedNote}`,
+          );
         }
 
         const head: string[] = [
