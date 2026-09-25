@@ -10960,6 +10960,21 @@ export function createCloneTools(context: ToolContext) {
           ...(fingerprints === undefined ? {} : { fingerprints }),
           ...(resources === undefined ? {} : { resources }),
         });
+        // **Issue #1394 段④⑥⑦。** この呼び出しの中で自動畳みが実際に走って
+        // いれば（`autoFolded` が省かれていない＝どこかの器の pids を見た）、
+        // どの return 経路でも必ず言う——早い return（cursor が読めない・0台・
+        // cursor 最終頁）の中でだけ黙ると、畳んだ・見送ったことがクローンに一度も
+        // 届かない窓ができる。**cursor が読めない回も、畳むのは上の `runners()` の
+        // 中で既に済んでいる**ので、その早い return より前に組み立てる（#1542）。
+        const autoFoldedNote =
+          overview.autoFolded === undefined
+            ? ''
+            : overview.autoFolded.length === 0
+              ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった。#1394 段④⑥⑦）'
+              : `\n⚠ この呼び出しで自動畳み（#1394 段④⑥⑦）が働いた:\n${overview.autoFolded
+                  .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
+                  .join('\n')}`;
+
         // **#662。** `tools.ts` はこの配列を並べ替えずそのまま積むので、描く順と
         // 錨の順は同一である（`runner-cursor.ts` の doc）。
         const resolved = resolveRunnerCursor(overview.runners, cursor);
@@ -10969,7 +10984,8 @@ export function createCloneTools(context: ToolContext) {
           return text(
             'この cursor は読めない（壊れているか、この道具のものではない）。' +
               'cursor は前回の応答の断り書きに出たものをそのまま渡すこと（自分で組み立てない）。' +
-              '先頭から読み直すなら cursor を省いて呼ぶこと。',
+              '先頭から読み直すなら cursor を省いて呼ぶこと。' +
+              autoFoldedNote,
           );
         }
 
@@ -10979,20 +10995,6 @@ export function createCloneTools(context: ToolContext) {
         const daemonLine = `デーモン（あなた自身が居るプロセス）の版: ${describeRevisionStatus(
           overview.daemonRevision,
         )}`;
-
-        // **Issue #1394 段④⑥⑦。** この呼び出しの中で自動畳みが実際に走って
-        // いれば（`autoFolded` が省かれていない＝どこかの器の pids を見た）、
-        // どの return 経路でも必ず言う——早い return（0台・cursor 最終頁）の
-        // 中でだけ黙ると、畳んだ・見送ったことがクローンに一度も届かない窓が
-        // できる。
-        const autoFoldedNote =
-          overview.autoFolded === undefined
-            ? ''
-            : overview.autoFolded.length === 0
-              ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった。#1394 段④⑥⑦）'
-              : `\n⚠ この呼び出しで自動畳み（#1394 段④⑥⑦）が働いた:\n${overview.autoFolded
-                  .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
-                  .join('\n')}`;
 
         if (overview.runners.length === 0) {
           return text(
