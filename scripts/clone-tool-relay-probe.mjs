@@ -4,15 +4,18 @@
 // 使い方: node clone-tool-relay-probe.mjs <@alteroid/core の dist/index.js> <claude 実行体> <ソケットの置き場>
 // 成功なら exit 0。CLI が中継越しの MCP サーバを「Connected」と言わなければ exit 1。
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
 const [coreEntry, claudeBin, socketDir] = process.argv.slice(2);
 if (!coreEntry || !claudeBin || !socketDir) {
-  console.error('usage: clone-tool-relay-probe.mjs <core dist/index.js> <claude> <socket dir>');
+  process.stderr.write(
+    'usage: clone-tool-relay-probe.mjs <core dist/index.js> <claude> <socket dir>\n',
+  );
   process.exit(2);
 }
 
@@ -77,9 +80,9 @@ try {
   if (line === undefined || !/Connected/.test(line)) {
     throw new Error(`CLI が中継越しの MCP サーバへ繋がなかった: ${line ?? '(行が無い)'}`);
   }
-  console.log('clone-tool-relay-probe: OK');
+  process.stdout.write('clone-tool-relay-probe: OK\n');
 } catch (error) {
-  console.error(`clone-tool-relay-probe: ${String(error)}`);
+  process.stderr.write(`clone-tool-relay-probe: ${String(error)}\n`);
   process.exitCode = 1;
 } finally {
   host.close();
