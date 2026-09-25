@@ -696,6 +696,23 @@ describe("失敗で終わったターンの本文に、task_notification の sta
   const BASELINE_FAILURE_TEXT =
     '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
 
+  it('🔴 #1569: 同じ taskId の failed 通知が2回届いても、作業者の数を水増ししない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1', { status: 'failed', summary: '何か失敗した' });
+    await session.taskNotification('task-1', { status: 'failed', summary: '何か失敗した' });
+    await session.finish('', { isError: true });
+    const text = (await reportTexts(s.inbox, 1))[0] ?? '';
+    expect(text).toContain('1 体が失敗で終わった');
+    await s.pool.stop();
+  });
+
   it("作業者2体の通知が status:'failed' で終わると、状況証拠の行が「作業者が2体開いていた」から「作業者が2体、失敗で終わった」へ変わる（枠を名乗る文言が無ければ内訳は付けない）", async () => {
     const s = setup();
     await s.pool.start({ request: '調べて' });

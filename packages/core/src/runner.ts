@@ -3100,7 +3100,7 @@ class RunnerSession {
     if (event.status === 'failed') {
       const limitNamed =
         event.summary !== undefined && classifyUsageNotice(event.summary) !== undefined;
-      this.#turnTally.recordFailedWorkerNotification(limitNamed);
+      this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);
     }
 
     // #901: 同期経路（`#annotateCutOffWorker`）でまだ消費されていなければ、

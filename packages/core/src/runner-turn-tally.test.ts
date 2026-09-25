@@ -41,8 +41,8 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     tally.addOpenedWorker('task-1');
     tally.addOpenedWorker('task-2');
     tally.pushWorkerRejection('billing_error');
-    tally.recordFailedWorkerNotification(true);
-    tally.recordFailedWorkerNotification(false);
+    tally.recordFailedWorkerNotification('task-1', true);
+    tally.recordFailedWorkerNotification('task-2', false);
 
     const taken = tally.takeAtResult();
     expect(taken.said).toEqual(['本文1', '本文2']);
@@ -85,12 +85,29 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
 
   it('recordFailedWorkerNotification は limitNamed が false の回を枠を名乗った件数に数えない', () => {
     const tally = new RunnerTurnTally();
-    tally.recordFailedWorkerNotification(false);
-    tally.recordFailedWorkerNotification(false);
-    tally.recordFailedWorkerNotification(true);
+    tally.recordFailedWorkerNotification('task-1', false);
+    tally.recordFailedWorkerNotification('task-2', false);
+    tally.recordFailedWorkerNotification('task-3', true);
     const taken = tally.takeAtResult();
     expect(taken.failedWorkerNotificationsThisTurn).toBe(3);
     expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(1);
+  });
+
+  it('🔴 #1569: 同じ taskId の failed 通知は何度届いても1体と数え、1回でも枠を名乗れば枠を名乗った側に数える', () => {
+    const tally = new RunnerTurnTally();
+    tally.recordFailedWorkerNotification('task-1', false);
+    tally.recordFailedWorkerNotification('task-1', true);
+    tally.recordFailedWorkerNotification('task-1', false);
+    const taken = tally.takeAtResult();
+    expect(taken.failedWorkerNotificationsThisTurn).toBe(1);
+    expect(taken.failedWorkerNotificationsNamingLimitThisTurn).toBe(1);
+  });
+
+  it('#1569: taskId を持たない failed 通知は重複を除けないので1件ずつ数える', () => {
+    const tally = new RunnerTurnTally();
+    tally.recordFailedWorkerNotification(undefined, false);
+    tally.recordFailedWorkerNotification(undefined, false);
+    expect(tally.takeAtResult().failedWorkerNotificationsThisTurn).toBe(2);
   });
 
   it('takeSaid は said/reportId の2本だけを読み出して畳み、rejected と残り10本には触れない', () => {
@@ -104,7 +121,7 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     tally.recordSubmitSource('cli');
     tally.addOpenedWorker('task-1');
     tally.pushWorkerRejection('billing_error');
-    tally.recordFailedWorkerNotification(true);
+    tally.recordFailedWorkerNotification('task-1', true);
 
     const { said, reportId } = tally.takeSaid();
     expect(said).toEqual(['未報告の本文']);
@@ -145,7 +162,7 @@ describe('RunnerTurnTally — 喋った本文と拒否の印（takeAtResult / ta
     tally.recordSubmitSource('cli');
     tally.addOpenedWorker('task-1');
     tally.pushWorkerRejection('billing_error');
-    tally.recordFailedWorkerNotification(true);
+    tally.recordFailedWorkerNotification('task-1', true);
 
     tally.discardOpenedWorkersAndRejections();
 

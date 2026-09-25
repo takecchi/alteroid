@@ -221,10 +221,13 @@ export class RunnerTurnTally {
    * ない**——`#workerRejectionsThisTurn` と同じく「本体は当たっていない」とは
    * 言わない。
    */
-  #failedWorkerNotificationsThisTurn = 0;
+  #failedWorkerNotificationsThisTurn = new Map<string, boolean>();
 
-  /** `#failedWorkerNotificationsThisTurn` のうち、要旨が枠(429)を名乗っていた件数。 */
-  #failedWorkerNotificationsNamingLimitThisTurn = 0;
+  /**
+   * 上の Map の鍵を作る連番（`taskId` を持たない通知の分）。**`taskId` が無い
+   * 通知は重複を除けないので、1件ずつ別の鍵で数える**（issue #1569）。
+   */
+  #failedWorkerNotificationsWithoutTaskId = 0;
 
   /**
    * `UserPromptSubmit` の `source` ごとの件数（`result` で畳む）。
@@ -315,9 +318,17 @@ export class RunnerTurnTally {
    * （`summary`）が枠(429)を名乗っていたか（`classifyUsageNotice` で判定した
    * 結果を渡す——ここでは文言を見ない）。
    */
-  recordFailedWorkerNotification(limitNamed: boolean): void {
-    this.#failedWorkerNotificationsThisTurn += 1;
-    if (limitNamed) this.#failedWorkerNotificationsNamingLimitThisTurn += 1;
+  recordFailedWorkerNotification(taskId: string | undefined, limitNamed: boolean): void {
+    // **`taskId` ごとに重複を除く**（issue #1569）。開いた作業者の数
+    // （`addOpenedWorker`）と同じ数え方で、同じ作業者の `failed` 通知が2回届いても
+    // 1体と数える。値は「1回でも枠を名乗ったか」。`task_started` を見ていない
+    // `taskId` の通知も数える（作業者の失敗の証拠であることは変わらない）。
+    const key =
+      taskId ?? `\u0000no-task-id-${String((this.#failedWorkerNotificationsWithoutTaskId += 1))}`;
+    this.#failedWorkerNotificationsThisTurn.set(
+      key,
+      (this.#failedWorkerNotificationsThisTurn.get(key) ?? false) || limitNamed,
+    );
   }
 
   /**
@@ -359,9 +370,10 @@ export class RunnerTurnTally {
     const sourcesThisTurn = this.#submitSources;
     const openedWorkersThisTurn = this.#openedWorkersThisTurn.size;
     const workerRejectionsThisTurn = this.#workerRejectionsThisTurn;
-    const failedWorkerNotificationsThisTurn = this.#failedWorkerNotificationsThisTurn;
-    const failedWorkerNotificationsNamingLimitThisTurn =
-      this.#failedWorkerNotificationsNamingLimitThisTurn;
+    const failedWorkerNotificationsThisTurn = this.#failedWorkerNotificationsThisTurn.size;
+    const failedWorkerNotificationsNamingLimitThisTurn = [
+      ...this.#failedWorkerNotificationsThisTurn.values(),
+    ].filter(Boolean).length;
 
     this.#inputsSinceResult = 0;
     this.#notificationsSinceResult = 0;
@@ -370,8 +382,8 @@ export class RunnerTurnTally {
     this.#submitSources = new Map();
     this.#openedWorkersThisTurn = new Set();
     this.#workerRejectionsThisTurn = [];
-    this.#failedWorkerNotificationsThisTurn = 0;
-    this.#failedWorkerNotificationsNamingLimitThisTurn = 0;
+    this.#failedWorkerNotificationsThisTurn = new Map();
+    this.#failedWorkerNotificationsWithoutTaskId = 0;
 
     return {
       said,
@@ -422,7 +434,7 @@ export class RunnerTurnTally {
    * （呼び出し順によっては、そちらが先に空へ畳んでいるので、ここでの捨て直しは
    * 事実上の空振りになることがある——クラス冒頭の doc を見よ）。
    *
-   * **`#failedWorkerNotificationsThisTurn` / `#failedWorkerNotificationsNamingLimitThisTurn`
+   * **`#failedWorkerNotificationsThisTurn`（と、`taskId` を持たない通知の連番）
    * も同じ理由で持ち越さない（Issue #1373 続き）。** 前のセッションで届いた
    * `task_notification` は、そのセッションが死んだ後に届いたものであっても
    * 「次のセッションの最初のターン」の集計ではない。持ち越すと、前のセッションの
@@ -431,7 +443,7 @@ export class RunnerTurnTally {
   discardOpenedWorkersAndRejections(): void {
     this.#openedWorkersThisTurn = new Set();
     this.#workerRejectionsThisTurn = [];
-    this.#failedWorkerNotificationsThisTurn = 0;
-    this.#failedWorkerNotificationsNamingLimitThisTurn = 0;
+    this.#failedWorkerNotificationsThisTurn = new Map();
+    this.#failedWorkerNotificationsWithoutTaskId = 0;
   }
 }
