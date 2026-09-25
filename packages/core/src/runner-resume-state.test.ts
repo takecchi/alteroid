@@ -104,7 +104,7 @@ describe('RunnerResumeState — markProgressed（立てると同時に seed を�
   });
 });
 
-describe('RunnerResumeState — observeSessionStarted（case \'session_started\' が呼ぶ）', () => {
+describe("RunnerResumeState — observeSessionStarted（case 'session_started' が呼ぶ）", () => {
   it('初回（sessionId が未設定）は必ず「変わった」を返し、値を立てる', () => {
     const state = new RunnerResumeState();
     expect(state.observeSessionStarted('session-1')).toBe(true);
