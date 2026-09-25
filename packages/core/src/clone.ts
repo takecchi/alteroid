@@ -1657,6 +1657,22 @@ class Clone implements CloneHost {
   #sessionAnswered = false;
 
   /**
+   * **このセッションで、もう1度 `held` に入ったか**（issue #955 の (A)。
+   * `#noteContextWindowFold` の doc「`held` は1回きり」）。セッションごとに
+   * 戻す（`#sessionAnswered` と同じ場所）。
+   */
+  #heldInSession = false;
+
+  /**
+   * **1度も答えを返せないまま、`held` の後に畳み直した回数の連なり**（issue #955 の
+   * (A)。人間の依頼の条件2）。開き直した新しいセッションもまた1度も答えないまま
+   * 同じ形で畳み直したら増える ⟹ 2以上は「システムプロンプトや焼き込みそのものが
+   * 収まっていない」ときの `held` と畳みの交互である。**セッションを跨いで持つ**
+   * （セッションごとには戻さない）。答えが1度でも返れば 0 へ戻す。
+   */
+  #heldEscalationStreak = 0;
+
+  /**
    * このセッションで、**このセッションが1度も答えを返さないまま**、枠（利用上限）
    * の合図（`kind: 'reached'`）に連続で当たっている回数（Issue #1240）。
    *
@@ -7020,7 +7036,10 @@ class Clone implements CloneHost {
     // 「今後発生した際に落ちないように対策」）。**判定はここでしかしない** ——
     // `classifyContextWindowFailure` の呼び出しはこの1か所だけで、`#apply` 側で
     // もう一度分類すると判定が2本に割れる。
-    const foldingForContextWindow = await this.#noteContextWindowFold(contextWindowFailure);
+    const foldingForContextWindow = await this.#noteContextWindowFold(
+      contextWindowFailure,
+      conversationId,
+    );
     // **枠に当たり続けたことによる畳み（`#noteUnproductiveUsageBlockFold`）は、
     // このターンの `result` より前（`#apply` の `usage_notice` 処理。
     // `#noteUsageNotice` の doc）で既に判定・実行済みである。** ここで
@@ -7195,6 +7214,25 @@ class Clone implements CloneHost {
    * **畳み直しだけ**で、ターンは回り続ける。そして**抑止しなくても落ち続ける**
    * （同じ材料でもう一度開くだけ）ので、**抑止して悪くなるものが1つも無い。**
    *
+   * ## ⚠️ `held` は1回きり（issue #955 の (A)。2026-09-25 のクローン teto の判断）
+   *
+   * 「材料は同じ」は、**拒まれた入力がセッションに残らない**ときにしか成り立たない。
+   * 残るなら、`held` した同じセッションへ次の入力（どれだけ小さくても）を入れると
+   * 履歴ごと送り直して同じ長さで落ち、合図のたびに `held` し直して**自力では抜け
+   * られない**（器の再起動か鍵の回転で resume されるまで止まる）。本物の CLI が
+   * どちらかは確かめていない。
+   *
+   * ⟹ **同じセッションで、別の入力でもう一度長さの失敗が起きたら、そこで畳む**
+   * （`#heldInSession`）。残らないなら2回目の失敗は起きないので何も変わらず、
+   * 残るなら機械だけで抜けられる——どちらでも今より悪くならない。
+   *
+   * **代償**: システムプロンプトや焼き込みそのものが収まらないときは、開き直した
+   * セッションもまた落ちるので、合図のたびに `held` と畳み直しが交互に起きる。
+   * 周期は合図の到着で決まり（タイマーは無い）、枠が閉じている間は `#usageBlocked`
+   * の保持でターン自体が立たない。**黙って回さない**——畳み直すたびに日誌へ1行
+   * （連続回数つき。2回以上なら「収まっていない可能性」を名乗る）と、人間の会話へ
+   * 1行を残す（`#noteHeldEscalation`）。
+   *
    * ## ⚠️ 「材料は同じ」が指す中身（issue #955）
    *
    * **新しいセッションの最初のターンに載りうるものは、次の3種類だけである。**
@@ -7245,12 +7283,18 @@ class Clone implements CloneHost {
    */
   async #noteContextWindowFold(
     failure: ContextWindowFailure | undefined,
+    /** 落ちたターンの人間の会話（内部のターンなら `null`）。{@link Clone.#noteHeldEscalation} へ渡す。 */
+    conversationId: string | null,
   ): Promise<'no' | 'folding' | 'held'> {
     if (failure === undefined) return 'no';
     // **セッションが無ければ畳むものが無い**（`recycleSessionForToken` の同じ門）。
     if (this.#query === null) return 'no';
-    // 暴走の止め（上の doc）。
-    if (this.#resumedFrom === null && !this.#sessionAnswered) return 'held';
+    // 暴走の止め（上の doc）。**ただし1回きり**（issue #955 の (A)。下の doc）。
+    const escalatedFromHeld = this.#resumedFrom === null && !this.#sessionAnswered;
+    if (escalatedFromHeld && !this.#heldInSession) {
+      this.#heldInSession = true;
+      return 'held';
+    }
 
     this.#recycleForContextWindow = true;
     // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
@@ -7260,7 +7304,62 @@ class Clone implements CloneHost {
     } catch (error) {
       noteDroppedRecord('resume 素材の破棄', 'clone', error);
     }
+    if (escalatedFromHeld) await this.#noteHeldEscalation(conversationId);
     return 'folding';
+  }
+
+  /**
+   * `held` の後に畳み直したことを、日誌と人間の会話へ1行ずつ残す（issue #955 の
+   * (A)。人間の依頼の条件1・2）。**投げない**（`#reportFailure` の途中である）。
+   *
+   * - **日誌**: 判断の1行。答えを返せないまま畳み直した回数（`#heldEscalationStreak`）
+   *   を必ず載せ、2回以上続いたら「システムプロンプトや焼き込みそのものが収まって
+   *   いない可能性」を名乗る（`held` と畳みの交互の印）。
+   * - **人間の会話**: 失敗したのが人間の発言のターンなら、`#reportFailure` が返す
+   *   1行に `CONTEXT_WINDOW_FOLD_NOTICE` が既に載る（`'folding'` と同じ扱い）ので
+   *   ここでは書かない。**内部のターン（tick・外部イベント・マネージャーの報告）で
+   *   落ちた回は、人間へ何も届かない**——そこで、日誌に在る直近の人間とのやりとりの
+   *   会話へ1行を書く。会話が1つも無ければ書かない（書く先が無い）。
+   */
+  async #noteHeldEscalation(conversationId: string | null): Promise<void> {
+    this.#heldEscalationStreak += 1;
+    const streak = this.#heldEscalationStreak;
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'outbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}会話を引き継がずに開いたこのセッションは、1度も答えを返せないまま、` +
+        '1回目の長さの失敗では開き直さずに持ちこたえた（held）が、別の入力でもう一度同じ長さで落ちた。' +
+        '⟹ 拒まれた入力がセッションに残って送り直されている可能性があるので、ここで畳んで新しい' +
+        `セッションで開き直す（issue #955。答えを返せないままの畳み直しは連続 ${String(streak)} 回目）。` +
+        (streak >= 2
+          ? ' ⚠ 開き直した新しいセッションも、1度も答えないまま同じ形で落ちている。' +
+            'システムプロンプトや記憶の焼き込みそのものが文脈窓に収まっていない可能性がある' +
+            '（held と畳み直しの交互）。'
+          : ''),
+    });
+    if (conversationId !== null) return;
+    try {
+      const recent = await this.#stores.journal.list({
+        types: ['exchange'],
+        with: ['human'],
+        limit: 1,
+      });
+      const last = recent[0] as { conversationId?: string } | undefined;
+      if (last?.conversationId === undefined) return;
+      await this.#journal({
+        type: 'exchange',
+        with: 'human',
+        role: 'outbound',
+        text:
+          '文脈が収まらずに走れなくなっていたので、この会話はここで一区切りにして、新しいセッションで' +
+          '開き直した。それまでのやりとりは消えていない（記録は残っている）。',
+        conversationId: last.conversationId,
+      });
+    } catch (error) {
+      noteDroppedRecord('畳み直しを人間へ知らせる1行', 'clone', error);
+    }
   }
 
   /**
@@ -9089,6 +9188,8 @@ class Clone implements CloneHost {
     // 解けてしまう。
     this.#transcriptPath = null;
     this.#sessionAnswered = false;
+    // **`#sessionAnswered` と同じ理由・同じ場所で戻す**（issue #955 の (A)）。
+    this.#heldInSession = false;
     // **`#sessionAnswered` と同じ理由・同じ場所で戻す**（Issue #1240）。持ち越すと
     // 前のセッションで積んだ文字数が新しいセッションの1回目から引き継がれ、
     // まだ1度も試していないのに畳みの敷居へ近い状態から始まることになる。
@@ -11060,6 +11161,8 @@ class Clone implements CloneHost {
         // `#usageBlocked` では代用できない —— あれは初期値も `null` なので
         // 「まだ成功していない」と区別できない（`#sessionAnswered` の doc）。
         this.#sessionAnswered = true;
+        // **答えが返ったので、`held` と畳みの交互の連なりは切れた**（issue #955 の (A)）。
+        this.#heldEscalationStreak = 0;
         // **成功は「積んだ入力が無駄になっている」ことの反証そのもの**
         // （Issue #1240。`#usageBlockedAccumulatedChars` の doc）。降ろさないと、
         // 次に `reached` に当たったときに前回までの積算から数え直してしまい、

@@ -6957,6 +6957,136 @@ describe('クローン — ターンの失敗の跡', () => {
       expect(text).toContain('プロンプトそのものが収まっていない可能性');
     });
 
+    /** 日誌の判断の1行のうち、held の後に畳み直した回（issue #955 の (A)）。 */
+    async function heldEscalationLines(stores: Stores): Promise<string[]> {
+      return (await exchanges(stores))
+        .filter(
+          (entry) =>
+            entry.with === 'self' &&
+            entry.text.includes('1回目の長さの失敗では開き直さずに持ちこたえた'),
+        )
+        .map((entry) => entry.text);
+    }
+
+    it('🔴 #955 (A) 陰性: 1回目の長さの失敗だけなら畳まない（held）。畳み直しの行も出ない', async () => {
+      const s = setupFold(tooLong);
+      s.failFrom();
+      s.clone.post(humanMessage('やあ'));
+      await waitFor(() => s.events.some((event) => event.type === 'error'), 'ターンが落ちること');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      // **判定は stop() の前に取る。** stop() は同じセッションで蒸留のターン
+      // （reason=shutdown）を回すので、偽 SDK がそれも落とすと「別の入力での
+      // 2回目」になって畳み直す——それは (A) の正しい挙動である。
+      const calls = s.calls.length;
+      const lines = await heldEscalationLines(s.stores);
+      const sessionId = await s.stores.sessions.getCloneSessionId();
+      await s.clone.stop();
+
+      expect(calls).toBe(1);
+      expect(lines).toHaveLength(0);
+      // held は resume 素材を捨てない（畳んでいない）。
+      expect(sessionId).not.toBeNull();
+    });
+
+    it('🔴 #955 (A) 陽性: held した同じセッションで、別の入力でもう一度長さで落ちたら畳み、日誌と人間へ1行ずつ残す', async () => {
+      const s = setupFold(tooLong);
+      s.failFrom();
+      s.clone.post(humanMessage('一つ目'));
+      await waitFor(
+        () => s.events.filter((event) => event.type === 'error').length === 1,
+        '1回目が落ちること',
+      );
+      s.clone.post(humanMessage('二つ目'));
+      await waitFor(
+        () => s.events.filter((event) => event.type === 'error').length === 2,
+        '2回目が落ちること',
+      );
+
+      // 畳んだ: resume 素材が捨てられ、次のターンは新しいセッションで走る。
+      await waitFor(
+        async () => (await s.stores.sessions.getCloneSessionId()) === null,
+        'resume 素材が捨てられること',
+      );
+      const lines = await heldEscalationLines(s.stores);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('連続 1 回目');
+      expect(lines[0]).not.toContain('収まっていない可能性');
+      // 人間の発言で落ちた回は、失敗の1行に「開き直す」が載る（黙って畳まない）。
+      // （`lastToHuman` は日誌の並びの都合で古い側を拾うので、在るかを直接見る。）
+      expect(
+        (await exchanges(s.stores)).some(
+          (entry) =>
+            entry.with === 'human' &&
+            entry.role === 'outbound' &&
+            entry.text.startsWith('この発言には返せなかった') &&
+            entry.text.includes('次の発言から新しく開き直す'),
+        ),
+      ).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      s.clone.post(humanMessage('三つ目'));
+      await waitFor(() => s.calls.length > 1, '新しいセッションが開くこと');
+      await s.clone.stop();
+    });
+
+    it('#955 (A): 内部のターンで畳み直した回も、直近の人間の会話へ1行で知らせる（黙って畳まない）', async () => {
+      const s = setupFold(tooLong);
+      s.failFrom();
+      s.clone.post(humanMessage('一つ目'));
+      await waitFor(
+        () => s.events.filter((event) => event.type === 'error').length === 1,
+        '人間の発言のターンが落ちること（held）',
+      );
+      s.clone.post({
+        type: 'external',
+        id: 'evt-ext-955',
+        at: new Date().toISOString(),
+        source: 'ci',
+        payload: 'ビルドが落ちた',
+      });
+      await waitFor(
+        async () => (await heldEscalationLines(s.stores)).length === 1,
+        '内部のターンで畳み直すこと',
+      );
+      const notices = (await exchanges(s.stores)).filter(
+        (entry) =>
+          entry.with === 'human' &&
+          entry.role === 'outbound' &&
+          entry.text.startsWith('文脈が収まらずに走れなくなっていたので'),
+      );
+      await s.clone.stop();
+
+      expect(notices).toHaveLength(1);
+      expect(notices[0]?.conversationId).toBe('conv-1');
+      expect(notices[0]?.text).toContain('記録は残っている');
+    });
+
+    it('#955 (A): 開き直したセッションもまた答えないまま同じ形で畳み直したら、回数つきで「収まっていない可能性」を名乗る', async () => {
+      const s = setupFold(tooLong);
+      s.failFrom();
+      const errors = (n: number) => s.events.filter((event) => event.type === 'error').length === n;
+      s.clone.post(humanMessage('一つ目'));
+      await waitFor(() => errors(1), '1回目');
+      s.clone.post(humanMessage('二つ目'));
+      await waitFor(() => errors(2), '2回目（畳む）');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      s.clone.post(humanMessage('三つ目'));
+      await waitFor(() => errors(3), '3回目（新しいセッションで held）');
+      s.clone.post(humanMessage('四つ目'));
+      await waitFor(() => errors(4), '4回目（また畳む）');
+      await waitFor(
+        async () => (await heldEscalationLines(s.stores)).length >= 2,
+        '畳み直しの行が2本',
+      );
+      // 日誌は新しい順に並ぶので古い順へ直す。stop() の蒸留の分が増える前に取る。
+      const lines = (await heldEscalationLines(s.stores)).reverse();
+      await s.clone.stop();
+
+      expect(lines[1]).toContain('連続 2 回目');
+      expect(lines[1]).toContain('収まっていない可能性');
+      expect(lines[1]).toContain('held と畳み直しの交互');
+    });
+
     /**
      * **⭐ 畳む直前に、生ログが器の外へ出る**（#553 / #564）。
      *
