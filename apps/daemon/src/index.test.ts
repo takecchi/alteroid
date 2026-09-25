@@ -876,6 +876,41 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
 });
 
 /**
+ * **本番の配線: クローンの SDK 子プロセスにもログイン基盤の鍵を伏せる**
+ * （Issue #1495 ①）。
+ *
+ * `createClone(...)` は `main()` の中に在り、型でも実行時でも触れない
+ * （隣の歯と同じ理由）。**原文を読んで、`AUTH_WITHHELD_ENV_KEYS` が実際に
+ * `withheldEnvKeys` として渡っていることだけを固定する。** `withheldEnvKeys`
+ * を受け取った後の挙動（伏せた鍵が子へ渡る env から実際に落ちること・記憶
+ * ストアの鍵は残ること・正本やプロファイルより後で落ちて生き残らせない
+ * こと）は `packages/core/src/clone.test.ts` の
+ * `withheldEnvKeys（SDK 子プロセスへ渡さない鍵。Issue #1495 ①）` が固定する
+ * ——ここは「配ってあるか」だけを見る。
+ *
+ * `storage.withheldEnvKeys` を渡さないことも合わせて固定する——pg 構成では
+ * それが `ALTEROID_DATABASE_URL` を含んでおり、クローンは記憶ストアの持ち主
+ * としてその鍵を使い続ける必要があるので、渡すと退行になる
+ * （`CloneOptions.withheldEnvKeys` の doc）。
+ */
+describe('本番の配線: createClone に AUTH_WITHHELD_ENV_KEYS が渡る（Issue #1495 ①）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+  it('createClone の withheldEnvKeys に AUTH_WITHHELD_ENV_KEYS が渡る', () => {
+    const at = source.indexOf('const clone = createClone({');
+    expect(at).toBeGreaterThan(-1);
+    const block = source.slice(at, source.indexOf('\n  });', at));
+
+    expect(block).toContain('withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS]');
+    // **`storage.withheldEnvKeys` は渡さない。** pg 構成では
+    // `ALTEROID_DATABASE_URL` を含むので、そのまま渡すとクローンから記憶
+    // ストアの鍵が落ち、記憶へ到達できなくなる。
+    expect(block).not.toContain('withheldEnvKeys: storage.withheldEnvKeys');
+    expect(block).not.toContain('...storage.withheldEnvKeys');
+  });
+});
+
+/**
  * **配る合図の本文に、畳んだ件数が出ること**（Issue #783）。
  *
  * 不変条件2（母数を落とさない）の裏付け——受信箱には1件しか入らなくても、

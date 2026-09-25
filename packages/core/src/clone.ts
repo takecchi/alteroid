@@ -1160,6 +1160,28 @@ export interface CloneOptions {
    */
   credentialService?: CredentialService;
   /**
+   * SDK 子プロセス（`Bash` / MCP / 作業者を含む）へ渡さない鍵（Issue #1495 ①）。
+   *
+   * **`#childEnv()` の「記憶ストアの鍵は落とさない」の例外である。** あちらは
+   * クローンが記憶の持ち主であることから来る規則で、ここに挙げるのは記憶へ
+   * 届く鍵ではなく**ログイン基盤そのものの鍵**（Google OAuth のクライアント
+   * ID / シークレット）——握られると `alteroid login` を介さずアクセストークン
+   * を発行でき、API 経由で記憶へ到達できてしまう（daemon 側 `auth.ts` の
+   * `AUTH_WITHHELD_ENV_KEYS`）。クローンの子プロセスが記憶を読み書きするのに
+   * この鍵を使うことは無いので、記憶の持ち主だからという理由では守れない。
+   *
+   * **core は daemon の定数を import できない**（依存の向きが逆——daemon が
+   * core を使う側である）ので、ここは名前の一覧を受け取るだけの口にしてある。
+   * 実際に渡すのは daemon 側（`apps/daemon/src/index.ts` の
+   * `createClone(...)`）。渡さなければ何も伏せない（既定の構成の挙動を
+   * 変えない）。
+   *
+   * **落とすのは `#childEnv()` の最後**（`runner.ts` の `#childEnv()` と同じ
+   * 順序）——正本やプロファイルが同じ名前を重ねてきても、伏せた後にもう一度
+   * 伏せることで生き残らせない。
+   */
+  withheldEnvKeys?: readonly string[];
+  /**
    * 人間の MCP 連携の登録を置いて runner へ配る1本道（#325 段3）。
    *
    * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ理由）。
@@ -2361,6 +2383,8 @@ class Clone implements CloneHost {
    * だけである。
    */
   readonly #credentialService: CredentialService | undefined;
+  /** {@link CloneOptions.withheldEnvKeys}。`#childEnv()` が最後に落とす。 */
+  readonly #withheldEnvKeys: readonly string[];
   readonly #accountUsage: (() => AccountUsageState) | undefined;
   readonly #scheduler: (() => ScheduleStatus[]) | undefined;
   /** {@link CloneOptions.redeliveryGate}。必須（{@link CloneOptions.redeliveryGate} の doc）。 */
@@ -2386,6 +2410,7 @@ class Clone implements CloneHost {
       profile,
       profileService,
       credentialService,
+      withheldEnvKeys,
       mcpServerService,
       accountUsage,
       scheduler,
@@ -2418,6 +2443,7 @@ class Clone implements CloneHost {
     this.#profile = profile;
     this.#profileService = profileService;
     this.#credentialService = credentialService;
+    this.#withheldEnvKeys = withheldEnvKeys ?? [];
     this.#accountUsage = accountUsage;
     this.#scheduler = scheduler;
     this.#self = self;
@@ -9776,6 +9802,13 @@ class Clone implements CloneHost {
    * `#childEnv`）と扱いが逆である — 伏せるのは「上（記憶）へ到達する鍵を
    * *下の層* へ配らない」ためであって、記憶の持ち主であるクローン自身から
    * 取り上げるためではない。取り上げれば、それはただのデグレードになる。
+   *
+   * **⚠️ 例外が1つある——`#withheldEnvKeys`（Issue #1495 ①。`CloneOptions.
+   * withheldEnvKeys` の doc）。** ここへ挙げるのは記憶へ届く鍵ではなく、
+   * ログイン基盤そのものの鍵（Google OAuth のクライアント ID /
+   * シークレット）である。クローンの SDK 子プロセス（`Bash` / MCP / 作業者を
+   * 含む）が記憶を読み書きするのにこの鍵を使うことは無いので、「記憶の持ち主
+   * だから落とさない」という上の理由はここには当てはまらない。
    */
   #childEnv(): NodeJS.ProcessEnv {
     // **鍵は呼ばれるたびに読み直す。** `this.#env` は構築時のスナップショットなので、
@@ -9798,12 +9831,22 @@ class Clone implements CloneHost {
     // **セッションが起きるこの瞬間の身元を捕まえる**（`#sessionTokenIdentity` の doc）。
     // ここ以外で読み直すと、世代の照合が素通しになる。
     this.#sessionTokenIdentity = this.#tokenIdentity?.();
-    return {
+    const env: NodeJS.ProcessEnv = {
       ...this.#env,
       ...this.#vaultCredentialOverlay(),
       ...(this.#credentials?.() ?? {}),
       ...(this.#profile?.env() ?? {}),
     };
+    // **伏せるのは最後**（`runner.ts` の `#childEnv()` と同じ順序）。正本や
+    // プロファイルがログイン基盤の鍵と同じ名前を重ねてきても、最後にもう一度
+    // 落とすことで生き残らせない——`credentialNamesShadowedByProfile` が
+    // 「人間が明示的に書いたほうが勝つ」を検出するのと違い、ここは検出ではなく
+    // 実際に落とす（記憶ストアの鍵とは扱いが違う理由は直上の doc）。
+    // **`this.#env`（daemon の `process.env`）自体は動かさない** —— ここで
+    // 作った新しいオブジェクト（`env`）から削るだけである。daemon 本体は
+    // このメソッドの後もこの鍵を使って OAuth の交換を続ける。
+    for (const key of this.#withheldEnvKeys) delete env[key];
+    return env;
   }
 
   /**

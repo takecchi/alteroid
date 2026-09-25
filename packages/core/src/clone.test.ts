@@ -17224,6 +17224,133 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
 });
 
 /**
+ * SDK 子プロセス（`Bash` / MCP / 作業者を含む）へ渡さない鍵（Issue #1495 ①）。
+ *
+ * **ここが固定するのは4つ** — (1) 渡さなければ何も伏せないこと（既定の構成の
+ * 挙動を変えない）、(2) 伏せた鍵は `env` に在っても子へ渡る env から落ちること、
+ * (3) 伏せない鍵（記憶ストアの鍵）はそのまま残ること、(4) 正本や
+ * プロファイルが同じ名前を重ねてきても**最後に落ちて生き残らない**こと——
+ * 記憶ストアの鍵（`GH_TOKEN` 等）は「プロファイルが明示的に宣言したほうが
+ * 勝つ」（直上の `credentials` 節）が、ここは `#childEnv()` の最後で落ちるので
+ * 同じ抜け道が無い。daemon 側の配線（`AUTH_WITHHELD_ENV_KEYS` が実際に
+ * `createClone` へ届くこと）は `apps/daemon/src/index.test.ts` が固定する。
+ */
+describe('withheldEnvKeys（SDK 子プロセスへ渡さない鍵。Issue #1495 ①）', () => {
+  let postSeq3 = 0;
+
+  function cloneWithWithheld(input: {
+    env?: NodeJS.ProcessEnv;
+    withheldEnvKeys?: readonly string[];
+    credentials?: () => Record<string, string>;
+    profileEnv?: Record<string, string>;
+  }) {
+    const { fn, calls } = fakeSdk();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores: createMemoryStores(),
+      queryFn: fn,
+      env: input.env ?? {},
+      ...(input.withheldEnvKeys === undefined ? {} : { withheldEnvKeys: input.withheldEnvKeys }),
+      ...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+      ...(input.profileEnv === undefined
+        ? {}
+        : {
+            profile: {
+              env: () => input.profileEnv as Record<string, string>,
+            } as unknown as Parameters<typeof createClone>[0]['profile'],
+          }),
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, calls };
+  }
+
+  function say(clone: ReturnType<typeof createClone>): void {
+    clone.post({
+      type: 'human_message',
+      id: `evt-withheld-${String(++postSeq3)}`,
+      at: new Date().toISOString(),
+      text: 'こんにちは',
+      conversationId: 'conv-1',
+    });
+  }
+
+  it('渡さなければ何も伏せない（既定の構成の挙動を変えない）', async () => {
+    const { clone, calls } = cloneWithWithheld({
+      env: { ALTEROID_GOOGLE_CLIENT_SECRET: 'leaked-if-no-withhold' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.ALTEROID_GOOGLE_CLIENT_SECRET).toBe('leaked-if-no-withhold');
+  });
+
+  it('伏せた鍵は、env に在っても SDK へ渡る env から落ちる', async () => {
+    const sourceEnv = { ALTEROID_GOOGLE_CLIENT_SECRET: 'super-secret' };
+    const { clone, calls } = cloneWithWithheld({
+      env: sourceEnv,
+      withheldEnvKeys: ['ALTEROID_GOOGLE_CLIENT_SECRET'],
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_SECRET');
+    // **daemon（呼び出し元）が持つ元の env オブジェクトは変わらない。** daemon
+    // 本体は OAuth の交換でこの値を使い続けるので、`#childEnv()` が書き換えて
+    // はいけない（渡すのはコピーからの削除であって、`this.#env` 自体ではない）。
+    expect(sourceEnv.ALTEROID_GOOGLE_CLIENT_SECRET).toBe('super-secret');
+  });
+
+  it('伏せない鍵（記憶ストアの鍵。例: ALTEROID_DATABASE_URL）はそのまま残る', async () => {
+    const { clone, calls } = cloneWithWithheld({
+      env: {
+        ALTEROID_GOOGLE_CLIENT_SECRET: 'super-secret',
+        ALTEROID_DATABASE_URL: 'postgres://alteroid:secret@db:5432/alteroid',
+      },
+      withheldEnvKeys: ['ALTEROID_GOOGLE_CLIENT_SECRET'],
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.ALTEROID_DATABASE_URL).toBe(
+      'postgres://alteroid:secret@db:5432/alteroid',
+    );
+  });
+
+  it('正本（credentials）が同じ名前を重ねてきても、最後に落ちて生き残らない', async () => {
+    const { clone, calls } = cloneWithWithheld({
+      withheldEnvKeys: ['ALTEROID_GOOGLE_CLIENT_SECRET'],
+      credentials: () => ({ ALTEROID_GOOGLE_CLIENT_SECRET: 'rotated-in-by-credentials' }),
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_SECRET');
+  });
+
+  it('プロファイルが同じ名前を明示的に宣言していても、最後に落ちて生き残らない', async () => {
+    // **記憶ストアの鍵（`GH_TOKEN` 等）とは扱いが違う。** あちらはプロファイルの
+    // 明示宣言が勝つ（直上の `credentials` 節「⚠️ プロファイルが同じ名前を
+    // 宣言していると、鍵が上書きされる」）が、ここは `#childEnv()` の最後で
+    // 落ちるので、人間が明示的に書いても勝てない。
+    const { clone, calls } = cloneWithWithheld({
+      withheldEnvKeys: ['ALTEROID_GOOGLE_CLIENT_SECRET'],
+      profileEnv: { ALTEROID_GOOGLE_CLIENT_SECRET: 'declared-in-profile' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_SECRET');
+  });
+});
+
+/**
  * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
  *
  * **ここが固定するのは「何を渡すか」である。** クローンは回すかどうかを判断しない

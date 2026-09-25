@@ -59,7 +59,7 @@ import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
-import { planAuth } from './auth.js';
+import { AUTH_WITHHELD_ENV_KEYS, planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
 import {
   createHttpRunner,
@@ -1629,6 +1629,12 @@ export async function main(): Promise<void> {
     profile,
     profileService,
     credentialService,
+    // **クローンの子プロセス（`Bash` / MCP / 作業者を含む）にもログイン基盤の
+    // 鍵を渡さない**（Issue #1495 ①）。`storage.withheldEnvKeys` はここでは
+    // 使わない——pg 構成では `ALTEROID_DATABASE_URL` を含んでおり、それは
+    // クローンが記憶ストアへ到達するために要る鍵だからである
+    // （`CloneOptions.withheldEnvKeys` の doc）。
+    withheldEnvKeys: [...AUTH_WITHHELD_ENV_KEYS],
     mcpServerService,
     self,
     // 現役のトークン。**値ではなく関数**——構築時に凍らせない（`CloneOptions` の doc）。
