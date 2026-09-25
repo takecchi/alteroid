@@ -684,7 +684,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
         captured = record;
       },
       onPostToolUseFailure: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
     });
 
     const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
@@ -727,7 +727,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
         captured = record;
       },
       onPostToolUseFailure: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
     });
 
     const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
@@ -759,7 +759,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       onPostToolUseFailure: (record) => {
         captured = record;
       },
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
     });
 
     const result = await invokeHook(options.hooks?.PostToolUseFailure?.[0]?.hooks[0], {
@@ -851,7 +851,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       onUserPromptSubmit: () => {},
       onSubagentStop: async () => ({ continue: true }),
       onStop: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -894,7 +894,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       onUserPromptSubmit: () => {},
       onSubagentStop: async () => ({ continue: true }),
       onStop: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -940,7 +940,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       },
       onPostToolUse: () => {},
       onPostToolUseFailure: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
     });
 
     const signal = new AbortController().signal;
@@ -979,7 +979,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       },
       onPostToolUse: () => {},
       onPostToolUseFailure: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
     });
 
     const signal = new AbortController().signal;
@@ -1016,7 +1016,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onUserPromptSubmit: () => {},
       onSubagentStop: async () => ({ continue: true }),
       onStop: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1054,7 +1054,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       },
       onSubagentStop: async () => ({ continue: true }),
       onStop: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1095,7 +1095,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       },
       onSubagentStop: async () => ({ continue: true }),
       onStop: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1135,7 +1135,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onStop: (record) => {
         captured = record;
       },
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1177,7 +1177,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onStop: (record) => {
         captured = record;
       },
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1215,7 +1215,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onUserPromptSubmit: () => {},
       onSubagentStop: raw,
       onStop: () => {},
-      onPreToolUse: async () => ({ continue: true }),
+      onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
     });
 
