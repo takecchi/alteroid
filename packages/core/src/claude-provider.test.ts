@@ -9,10 +9,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from './agent-events.js';
 import type {
+  AgentContextHook,
+  AgentContextOutcome,
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
   AgentStopRecord,
+  AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
@@ -846,13 +849,13 @@ describe('ツール監査フックの包み直し（#486）', () => {
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: (record) => {
         captured = record;
       },
       onPreCompact: () => {},
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
@@ -878,31 +881,6 @@ describe('ツール監査フックの包み直し（#486）', () => {
     });
   });
 
-  it('buildManagerSessionOptions: onPostToolUse は中立化していない —— 渡した HookCallback がそのまま（包み直さずに）使われる', () => {
-    const raw: HookCallback = async () => ({ continue: true });
-    const options = buildManagerSessionOptions({
-      model: 'opus',
-      permissionMode: DEFAULT_PERMISSION_MODE,
-      systemPromptAppend: '追記',
-      workerAgentName: WORKER_AGENT_NAME,
-      workerPrompt: '作業者のプロンプト',
-      workerModel: 'sonnet',
-      cwd: '/work',
-      env: {},
-      sessionStore,
-      canUseTool,
-      onPostToolUse: raw,
-      onPostToolUseFailure: () => {},
-      onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
-      onStop: () => {},
-      onPreToolUse: () => ({ kind: 'continue' }),
-      managerAutoMemoryEnabled: false,
-    });
-
-    expect(options.hooks?.PostToolUse?.[0]?.hooks[0]).toBe(raw);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1011,13 +989,13 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: (record) => {
         captured = record;
       },
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
@@ -1049,13 +1027,13 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: (record) => {
         captured = record;
       },
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
@@ -1090,13 +1068,13 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: (record) => {
         captured = record;
       },
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
       managerAutoMemoryEnabled: false,
@@ -1130,11 +1108,11 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: (record) => {
         captured = record;
       },
@@ -1172,11 +1150,11 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: (record) => {
         captured = record;
       },
@@ -1199,31 +1177,6 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
     expect(captured).not.toHaveProperty('stopHookActive');
   });
 
-  it('buildManagerSessionOptions: onSubagentStop は中立化していない —— 渡した HookCallback がそのまま（包み直さずに）使われる', () => {
-    const raw: HookCallback = async () => ({ continue: true });
-    const options = buildManagerSessionOptions({
-      model: 'opus',
-      permissionMode: DEFAULT_PERMISSION_MODE,
-      systemPromptAppend: '追記',
-      workerAgentName: WORKER_AGENT_NAME,
-      workerPrompt: '作業者のプロンプト',
-      workerModel: 'sonnet',
-      cwd: '/work',
-      env: {},
-      sessionStore,
-      canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
-      onPostToolUseFailure: () => {},
-      onPreCompact: () => {},
-      onUserPromptSubmit: () => {},
-      onSubagentStop: raw,
-      onStop: () => {},
-      onPreToolUse: () => ({ kind: 'continue' }),
-      managerAutoMemoryEnabled: false,
-    });
-
-    expect(options.hooks?.SubagentStop?.[0]?.hooks[0]).toBe(raw);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1381,11 +1334,11 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: (record) => {
         captured = record;
@@ -1426,11 +1379,11 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({
         kind: 'deny',
@@ -1470,11 +1423,11 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       env: {},
       sessionStore,
       canUseTool,
-      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUse: () => ({ kind: 'continue' }),
       onPostToolUseFailure: () => {},
       onPreCompact: () => {},
       onUserPromptSubmit: () => {},
-      onSubagentStop: async () => ({ continue: true }),
+      onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       // **型では作れない値をわざと渡す** —— 将来 provider を足す側が
       // `AgentPreToolDecision` に無い `kind` を返す実装ミスを模す
@@ -1498,5 +1451,191 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
 
     expect(result).toEqual({ continue: true });
     expect(lines.some((line) => line.includes('未知の AgentPreToolDecision.kind'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 書き側 —— 文脈を返すフックの包み直し（#486「中立の口」4本目）
+// ---------------------------------------------------------------------------
+
+/**
+ * `wrapContextHook`（`claude-provider.ts` 内の private 関数）を、
+ * `buildManagerSessionOptions` が組み立てる `options.hooks` 越しに叩いて確かめる。
+ * 対象はマネージャーの `PostToolUse`（#901 の打ち切り注記）と `SubagentStop`
+ * （#357 / #570 の起こし直し）。`addContext` は、中立化する前に `runner.ts` が
+ * 返していたのと同じ `hookSpecificOutput` の形へ写ることを固定する。
+ */
+describe('文脈を返すフックの中立の包み直し（#486 中立の口の4本目）', () => {
+  function managerOptions(hooks: {
+    onPostToolUse?: AgentContextHook<AgentToolAuditRecord>;
+    onSubagentStop?: AgentContextHook<AgentSubagentStopRecord>;
+  }) {
+    return buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: hooks.onPostToolUse ?? (() => ({ kind: 'continue' })),
+      onPostToolUseFailure: () => {},
+      onPreCompact: () => {},
+      onUserPromptSubmit: () => {},
+      onSubagentStop: hooks.onSubagentStop ?? (() => ({ kind: 'continue' })),
+      onStop: () => {},
+      onPreToolUse: () => ({ kind: 'continue' }),
+      managerAutoMemoryEnabled: false,
+    });
+  }
+
+  it('PostToolUse: 生入力を同じ値のまま中立の記録として渡し、continue は { continue: true } に写る', async () => {
+    let captured: AgentToolAuditRecord | undefined;
+    const options = managerOptions({
+      onPostToolUse: (record) => {
+        captured = record;
+        return { kind: 'continue' };
+      },
+    });
+
+    const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUse',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/t.jsonl',
+      tool_name: 'Agent',
+      tool_input: { prompt: 'p' },
+      tool_response: { status: 'completed', agentId: 'agent-1' },
+      tool_use_id: 'tu-1',
+      agent_id: 'agent-2',
+      agent_type: 'general-purpose',
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      toolName: 'Agent',
+      toolInput: { prompt: 'p' },
+      toolResponse: { status: 'completed', agentId: 'agent-1' },
+      transcriptPath: '/t.jsonl',
+      agentId: 'agent-2',
+      agentType: 'general-purpose',
+    } satisfies AgentToolAuditRecord);
+  });
+
+  it('PostToolUse: addContext は hookEventName PostToolUse の additionalContext に写る（中立化する前と同じ形）', async () => {
+    const options = managerOptions({
+      onPostToolUse: () => ({ kind: 'addContext', text: '打ち切りの注記' }),
+    });
+
+    const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Agent',
+      tool_input: {},
+      tool_response: {},
+      tool_use_id: 'tu-2',
+    });
+
+    expect(result).toEqual({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: '打ち切りの注記' },
+    });
+  });
+
+  it('SubagentStop: 生入力を同じ値のまま中立の記録として渡す', async () => {
+    let captured: AgentSubagentStopRecord | undefined;
+    const backgroundTasks = [{ id: 'b1', type: 'local_bash', status: 'running' }];
+    const sessionCrons = [{ id: 'c1' }];
+    const options = managerOptions({
+      onSubagentStop: (record) => {
+        captured = record;
+        return { kind: 'continue' };
+      },
+    });
+
+    const result = await invokeHook(options.hooks?.SubagentStop?.[0]?.hooks[0], {
+      hook_event_name: 'SubagentStop',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/t.jsonl',
+      agent_id: 'agent-3',
+      agent_type: 'general-purpose',
+      agent_transcript_path: '/a.jsonl',
+      stop_hook_active: false,
+      background_tasks: backgroundTasks,
+      session_crons: sessionCrons,
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      backgroundTasks,
+      sessionCrons,
+      agentId: 'agent-3',
+      agentType: 'general-purpose',
+      stopHookActive: false,
+    } satisfies AgentSubagentStopRecord);
+  });
+
+  it('SubagentStop: 配列でない背景処理・真偽値でない stop_hook_active は、作り物で埋めずに省く（中立化する前の読み方と同じ）', async () => {
+    let captured: AgentSubagentStopRecord | undefined;
+    const options = managerOptions({
+      onSubagentStop: (record) => {
+        captured = record;
+        return { kind: 'continue' };
+      },
+    });
+
+    await invokeHook(options.hooks?.SubagentStop?.[0]?.hooks[0], {
+      hook_event_name: 'SubagentStop',
+      session_id: 's',
+      cwd: '/work',
+      background_tasks: 'not-an-array',
+      session_crons: { not: 'an array' },
+      stop_hook_active: 'yes',
+    });
+
+    expect(captured).toEqual({});
+  });
+
+  it('SubagentStop: addContext は hookEventName SubagentStop の additionalContext に写る（中立化する前と同じ形）', async () => {
+    const options = managerOptions({
+      onSubagentStop: () => ({ kind: 'addContext', text: '起こし直し' }),
+    });
+
+    const result = await invokeHook(options.hooks?.SubagentStop?.[0]?.hooks[0], {
+      hook_event_name: 'SubagentStop',
+      session_id: 's',
+      cwd: '/work',
+      agent_id: 'agent-4',
+    });
+
+    expect(result).toEqual({
+      continue: true,
+      hookSpecificOutput: { hookEventName: 'SubagentStop', additionalContext: '起こし直し' },
+    });
+  });
+
+  it('未知の kind が渡ったら安全側（{ continue: true }）へ倒し、跡を1本残す（型では弾かれるはずの値が渡ったときの防御）', async () => {
+    const options = managerOptions({
+      // **型では作れない値をわざと渡す**（上の PreToolUse の同じ試験と同じ流儀）。
+      onSubagentStop: () => ({ kind: 'block' }) as unknown as AgentContextOutcome,
+    });
+
+    let result: unknown;
+    const lines = await captureStderr(async () => {
+      result = await invokeHook(options.hooks?.SubagentStop?.[0]?.hooks[0], {
+        hook_event_name: 'SubagentStop',
+        session_id: 's',
+        cwd: '/work',
+        agent_id: 'agent-5',
+      });
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(lines.some((line) => line.includes('未知の AgentContextOutcome.kind'))).toBe(true);
   });
 });

@@ -1,6 +1,5 @@
 import type {
   CanUseTool,
-  HookCallback,
   McpServerConfig,
   Options,
   SessionStore,
@@ -8,6 +7,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import type {
+  AgentContextHook,
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentStopRecord,
@@ -34,12 +34,11 @@ import { WORKER_AGENT_NAME } from './runner.js';
  * 目標に据えた特性試験なので、そちらへ足さずにここへ置く。
  */
 
-const noopHook: HookCallback = async () => ({});
 // **観測専用フックへ渡す中立の noop。** `onPostToolUse` / `onPostToolUseFailure` /
 // `onPreCompact` / `onUserPromptSubmit` / `onStop` のうち中立の型
 // （`AgentObservationHook`）へ移した欄はこちらを渡す（`onSubagentStop` と
-// `ManagerSessionOptionsRequest.onPostToolUse` は移していないので `noopHook`
-// のまま——`claude-provider.ts` の同欄の doc を見よ）。
+// `ManagerSessionOptionsRequest.onPostToolUse` は文脈を返しうるので
+// `AgentContextHook` の `noopContextHook` を渡す。#486 中立の口の4本目）。
 const noopAuditHook: (record: AgentToolAuditRecord) => void = () => undefined;
 const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () => undefined;
 const noopPreCompactHook: (record: AgentPreCompactRecord) => void = () => undefined;
@@ -49,6 +48,7 @@ const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
 // （#486 中立の口の3本目）——`AgentObservationHook` ではないので上の並びとは
 // 別に持つ。
 const noopPreToolHook: AgentPreToolHook = () => ({ kind: 'continue' });
+const noopContextHook: AgentContextHook<unknown> = () => ({ kind: 'continue' });
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
@@ -80,11 +80,11 @@ function managerOptions(): Options {
     env: {},
     sessionStore,
     canUseTool,
-    onPostToolUse: noopHook,
+    onPostToolUse: noopContextHook,
     onPostToolUseFailure: noopAuditFailureHook,
     onPreCompact: noopPreCompactHook,
     onUserPromptSubmit: noopUserPromptSubmitHook,
-    onSubagentStop: noopHook,
+    onSubagentStop: noopContextHook,
     onStop: noopStopHook,
     onPreToolUse: noopPreToolHook,
     managerAutoMemoryEnabled: false,
