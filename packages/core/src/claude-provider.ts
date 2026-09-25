@@ -151,12 +151,15 @@ function wrapToolAuditFailureHook(
  * ならないが、この関数の呼び出し側（`wrapPreCompactHook`）がそのまま渡した
  * ものをここへ通すだけで、値そのものの意味は変えない。
  */
-function toAgentPreCompactRecord(input: unknown, signal: AbortSignal): AgentPreCompactRecord {
+function toAgentPreCompactRecord(
+  input: unknown,
+  signal: AbortSignal | undefined,
+): AgentPreCompactRecord {
   const raw = input as Partial<PreCompactHookInput> | null | undefined;
   return {
     ...(typeof raw?.transcript_path === 'string' ? { transcriptPath: raw.transcript_path } : {}),
     ...(typeof raw?.session_id === 'string' ? { sessionId: raw.session_id } : {}),
-    signal,
+    ...(signal === undefined ? {} : { signal }),
   };
 }
 
@@ -175,7 +178,7 @@ function toAgentStopRecord(input: unknown): AgentStopRecord {
   return {
     ...(Array.isArray(raw?.background_tasks) ? { backgroundTasks: raw.background_tasks } : {}),
     ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
-    ...(raw?.stop_hook_active === undefined ? {} : { stopHookActive: raw.stop_hook_active }),
+    ...(typeof raw?.stop_hook_active === 'boolean' ? { stopHookActive: raw.stop_hook_active } : {}),
   };
 }
 
@@ -189,7 +192,7 @@ function toAgentStopRecord(input: unknown): AgentStopRecord {
  */
 function wrapPreCompactHook(hook: AgentObservationHook<AgentPreCompactRecord>): HookCallback {
   return async (input, _toolUseId, options) => {
-    await hook(toAgentPreCompactRecord(input, options.signal));
+    await hook(toAgentPreCompactRecord(input, options?.signal));
     return { continue: true };
   };
 }

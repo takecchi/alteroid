@@ -1185,6 +1185,8 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       hook_event_name: 'Stop',
       session_id: 's',
       cwd: '/work',
+      // 真偽値でない値は読めない欄として扱う（包み直す前の `runner.ts` の `#onStop` と同じ）
+      stop_hook_active: 'yes',
     });
 
     expect(result).toEqual({ continue: true });
