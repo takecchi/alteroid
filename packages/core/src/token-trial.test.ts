@@ -78,6 +78,27 @@ describe('selectTokenForTrial — 試す条件（設計点1）', () => {
     expect(result?.id).toBe('a');
   });
 
+  it('現役が外された（disabled）・指名の先が消えた回も、残りが全部冷却中なら冷却中の鍵を試す', () => {
+    const far = AT + 5 * 60 * 60 * 1000;
+    const disabledActive = selectTokenForTrial({
+      tokens: [
+        token({ id: 'a', order: 0, disabledAt: new Date(AT).toISOString() }),
+        token({ id: 'b', order: 1, cooldownUntil: far }),
+      ],
+      active: active('a'),
+      at: AT,
+      lastTriedAt: {},
+    });
+    expect(disabledActive?.id).toBe('b');
+    const dangling = selectTokenForTrial({
+      tokens: [token({ id: 'b', order: 1, cooldownUntil: far })],
+      active: active('gone'),
+      at: AT,
+      lastTriedAt: {},
+    });
+    expect(dangling?.id).toBe('b');
+  });
+
   it('間隔以内に時計で明けるものは対象にしない（既存の reopened に任せる）', () => {
     const result = selectTokenForTrial({
       tokens: [token({ id: 'a', order: 0, cooldownUntil: AT + TOKEN_TRIAL_INTERVAL_MS - 1 })],

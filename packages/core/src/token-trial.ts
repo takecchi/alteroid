@@ -94,9 +94,15 @@ export interface SelectTokenForTrialInput {
  *
  * ## 試す条件（設計点1）
  *
- * 記録の上で通る鍵が1本も無いとき —— **現役が `cooling` で、`ready` な候補も
- * 無いとき**だけ。現役が `ready` なら何もしない（健全な状態では費用0）。
- * `disabled` / 失効（`invalidatedAt`）の行はどちらの判定からも除外する。
+ * 記録の上で通る鍵が1本も無いとき —— **プールのどの行も `ready` でないとき**
+ * だけ。現役が `ready` なら、その時点で何もしない（健全な状態では費用0）。
+ * `disabled` / 失効（`invalidatedAt`）の行は `ready` にも対象にも数えない。
+ *
+ * **現役が `cooling` であることは要求しない。** 現役が外された（`disabled`）・
+ * 失効した・指名の先が消えた（`dangling`）ときも、残りが全部冷却中なら
+ * 通る鍵が1本も無いのは同じだからである——そこで試さないと、早いリセットを
+ * いちばん要る場面で取りこぼす。**まだ一度も指名していない**（`active` が無い）
+ * プールだけは対象にしない（回し手がまだ一度も動いていない構成を触らない）。
  *
  * ## 対象（設計点2）
  *
@@ -114,14 +120,8 @@ export function selectTokenForTrial(input: SelectTokenForTrialInput): AgentToken
   const intervalMsFor = input.intervalMsFor ?? (() => TOKEN_TRIAL_INTERVAL_MS);
 
   if (active === null || active.tokenId === undefined) return undefined;
-  const activeRow = tokens.find((token) => token.id === active.tokenId);
-  const activeAvailability =
-    activeRow === undefined ? 'dangling' : tokenAvailabilityAt(activeRow, at);
-  // **現役が `ready` なら何もしない**（健全な状態では費用0）。`dangling`
-  // （指名の先が消えた）は「通らない」の最も極端な形として扱う——`ready` では
-  // ないので、下の条件（`cooling` だけを対象にする）と合わせて素通りする。
-  if (activeAvailability !== 'cooling') return undefined;
 
+  // **`ready` な行が1本でも在れば何もしない**（現役を含む。健全な状態では費用0）。
   const hasReadyCandidate = tokens.some((token) => tokenAvailabilityAt(token, at) === 'ready');
   if (hasReadyCandidate) return undefined;
 
