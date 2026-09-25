@@ -13,12 +13,12 @@
  *
  * **1本目の PR（#1527）の範囲は `PostToolUse` / `PostToolUseFailure` の
  * 2本だけだった**（19個の SDK 型の欄のうち13個が `HookCallback` で、その
- * うち最大の内訳がこの2本の3 Request 型ぶんである）。**この2本目の PR
+ * うち最大の内訳がこの2本の3 Request 型ぶんである）。**2本目の PR
  * （#486 中立の口の2本目）では、残りのうち観測専用と確かめられたもの
  * ——`PreCompact`（クローン・マネージャー）/ `UserPromptSubmit` /
- * `Stop`（どちらもマネージャー）——を足す。** `PreToolUse`（判断を返す
+ * `Stop`（どちらもマネージャー）——を足した。** `PreToolUse`（判断を返す
  * 唯一のフック）と `runner.ts` 側の `PostToolUse`（下の理由で対象外）は
- * 触っていない。**`SubagentStop` も対象外にした** — 見た目の doc・
+ * そのとき触っていない。**`SubagentStop` も対象外にした** — 見た目の doc・
  * コメントは「観測専用」と名乗っていたが、`runner.ts` の `#onSubagentStop`
  * の実装を読むと `remaining.length > 0` かつ `shouldWake` が立った回に
  * `hookSpecificOutput.additionalContext` を返し、作業者を実際に起こし直す
@@ -27,15 +27,29 @@
  * ⟹ **doc やコメントの「観測専用」という自己申告を鵜呑みにせず、実装の
  * 返り値を読んで確かめること。**
  *
- * ## 観測専用のフックだけを対象にする
+ * **この3本目の PR（#486 中立の口の3本目）で `PreToolUse` を足す。**
+ * `clone.ts` の `#onPreToolUse`（人間が承認した Bash 許可に一致したら
+ * `allow`。Issue #863）と `runner.ts` の `#onPreToolUse`
+ * （`bash-wait-guard.ts` が「無限に待つだけの形」と判定したら `deny`。
+ * Issue #894）は、どちらも `PostToolUse` 等とは違って**実際に判断を返す**
+ * ——`AgentObservationHook`（`void` しか返せない）には載らない。だから
+ * 判断を運べる専用の型（{@link AgentPreToolDecision}）を別に起こす。
+ * `runner.ts` 側の `PostToolUse`（`#onPostToolUse` の doc）と
+ * `SubagentStop`（`#onSubagentStop` の doc）は、このため今回も対象外に
+ * 残す——次の PR に送る（#486）。
  *
- * ここに置く記録型は、**判断を返さないフック**の入力を写す。
- * `clone.ts` 側（本セッション・蒸留の両方）の `PostToolUse` /
- * `PostToolUseFailure` ハンドラは、実装を読むと常に `{ continue: true }`
- * だけを返す——観測（日誌へ残す・`effort` や生ログの場所を控える）しか
- * していない。`clone.ts` / `runner.ts` の `PreCompact`、`runner.ts` の
- * `UserPromptSubmit` / `Stop` も同様に、実装のすべての分岐で
- * `{ continue: true }` だけを返すことを確かめてある。
+ * ## 観測専用のフックだけを対象にする（`PreToolUse` を除く）
+ *
+ * ここに置く記録型のうち、`AgentToolAuditRecord` / `AgentToolAuditFailureRecord` /
+ * `AgentPreCompactRecord` / `AgentUserPromptSubmitRecord` / `AgentStopRecord` は
+ * **判断を返さないフック**の入力を写す。`clone.ts` 側（本セッション・蒸留の
+ * 両方）の `PostToolUse` / `PostToolUseFailure` ハンドラは、実装を読むと常に
+ * `{ continue: true }` だけを返す——観測（日誌へ残す・`effort` や生ログの
+ * 場所を控える）しかしていない。`clone.ts` / `runner.ts` の `PreCompact`、
+ * `runner.ts` の `UserPromptSubmit` / `Stop` も同様に、実装のすべての分岐で
+ * `{ continue: true }` だけを返すことを確かめてある。**`AgentPreToolRecord` /
+ * `AgentPreToolDecision` はこの限りではない** — 上の「この3本目の PR」の節を
+ * 見よ。
  *
  * **`runner.ts` 側の `PostToolUse` は対象外である。** `#onPostToolUse` は
  * `#annotateCutOffWorkers` の結果を `hookSpecificOutput.additionalContext`
@@ -49,14 +63,14 @@
  * ## 欄は「いま実際に読まれているもの」だけ
  *
  * 新しい語彙を作らない——`clone.ts` の `#journalToolUse` /
- * `#journalToolUseFailure` / `cloneToolActor` / `#onPreCompact` と
- * `runner.ts` の `#onPostToolUseFailure` / `#onPreCompact` /
- * `#onUserPromptSubmit` / `#onStop` が実際に読んでいる欄だけを、同じ意味の
- * まま camelCase へ写した。SDK の snake_case な入力からこの形へ写す処理
- * （`toAgentToolAuditRecord` / `toAgentToolAuditFailureRecord` /
+ * `#journalToolUseFailure` / `cloneToolActor` / `#onPreCompact` /
+ * `#onPreToolUse` と `runner.ts` の `#onPostToolUseFailure` / `#onPreCompact` /
+ * `#onUserPromptSubmit` / `#onStop` / `#onPreToolUse` が実際に読んでいる欄
+ * だけを、同じ意味のまま camelCase へ写した。SDK の snake_case な入力から
+ * この形へ写す処理（`toAgentToolAuditRecord` / `toAgentToolAuditFailureRecord` /
  * `toAgentPreCompactRecord` / `toAgentUserPromptSubmitRecord` /
- * `toAgentStopRecord`）は `claude-provider.ts` 側に置く——ここは「届いた後の
- * 形」だけを知っている。
+ * `toAgentStopRecord` / `toAgentPreToolRecord`）は `claude-provider.ts` 側に
+ * 置く——ここは「届いた後の形」だけを知っている。
  *
  * ## ⛔ このファイルは Claude Agent SDK を import してはいけない
  *
@@ -177,3 +191,62 @@ export interface AgentStopRecord {
  * （載せてよい条件・載せない理由は上のファイル doc を見よ）。
  */
 export type AgentObservationHook<T> = (record: T) => void | Promise<void>;
+
+/**
+ * `PreToolUse`（道具を実行する直前）1件の中立の記録（#486 中立の口の3本目）。
+ *
+ * **すべて任意である。** 無い欄は作り物を出さずに省く（上の Record 型と
+ * 同じ作法）。
+ *
+ * **欄は「いま実際に読まれているもの」の和集合だけ。** `clone.ts` の
+ * `#onPreToolUse`（Issue #863）は `toolName` / `toolInput` だけを読む
+ * （`Bash` 以外は素通し、`tool_input.command` が人間の承認した許可の
+ * ルールに一致するかだけを見る）。`runner.ts` の `#onPreToolUse`
+ * （`bash-wait-guard.ts`、Issue #894）はそれに加えて `agentId` /
+ * `agentType` も読む（弾いた主体を note の文面へ書くため）。ここは両方の
+ * 和集合を持つ——`toolInput` は `unknown` なので、`bash-wait-guard.ts` が
+ * 見る `run_in_background` のような、道具ごとに形が違う欄もここへ写す時点で
+ * 潰さない。
+ */
+export interface AgentPreToolRecord {
+  /** 呼ばれようとしている道具の名前。読めなければ省く。 */
+  toolName?: string;
+  /** 道具へ渡そうとしている入力。 */
+  toolInput?: unknown;
+  /** 呼び出しが作業者（サブエージェント）からのものだったときの id。本体の呼び出しなら省く。 */
+  agentId?: string;
+  /** 作業者の型名。**`agentId` が無ければ意味を持たない。** */
+  agentType?: string;
+}
+
+/**
+ * `PreToolUse` が返せる判断。**判断を返す唯一のフック**なので
+ * `AgentObservationHook` には載らない（そちらの doc を見よ）。
+ *
+ * - `continue`: 何も決めない。既存の確認フロー（`permissionMode` / 人間の
+ *   確認）へそのまま委ねる——`clone.ts` の `#onPreToolUse`「一致しなければ
+ *   何も決めない」と `runner.ts` の `#onPreToolUse`「`Bash` 以外・弾かれ
+ *   なかったコマンドは素通し」の両方がここへ落ちる。
+ * - `allow`: 確認なしで進めてよい（`clone.ts` の `#onPreToolUse`、人間が
+ *   承認した Bash 許可に一致したとき。Issue #863）。
+ * - `deny`: 実行そのものを止める（`runner.ts` の `#onPreToolUse`、
+ *   `bash-wait-guard.ts` が「無限に待つだけの形」と判定したとき。
+ *   Issue #894）。
+ *
+ * **`ask` は持たない。** いまの実装のどちらも `ask` を一度も返していない
+ * ——語彙を先回りして作らない（`agent-events.ts` の `AgentPermissionDenial`
+ * と同じ流儀）。要るようになったら、そのときの実装を確かめてから足す。
+ */
+export type AgentPreToolDecision =
+  | { kind: 'continue' }
+  | { kind: 'allow'; reason: string }
+  | { kind: 'deny'; reason: string };
+
+/**
+ * 判断を返す `PreToolUse` フックの中立の関数型。**`AgentObservationHook` とは
+ * 別の型にする** —— あちらは `void` しか返せないので、判断を返すフックは
+ * そもそも載らない。
+ */
+export type AgentPreToolHook = (
+  record: AgentPreToolRecord,
+) => AgentPreToolDecision | Promise<AgentPreToolDecision>;
