@@ -49,6 +49,8 @@ function fake(): Fake {
       return ignored;
     },
     restore: () => Promise.resolve({ kind: 'none' as const, why: '' }),
+    // この見張りは呼ばない（ダメ元の試しは token-trial-watch.ts の側）。
+    recordTrialVerdict: () => Promise.resolve('unchanged' as const),
   } satisfies TokenRotator;
   return {
     rotator,
@@ -205,6 +207,7 @@ describe('見張り: 契機を回し手へ渡す', () => {
         return Promise.reject(new Error('落ちた'));
       },
       restore: () => Promise.resolve({ kind: 'none' as const, why: '' }),
+      recordTrialVerdict: () => Promise.resolve('unchanged' as const),
     } satisfies TokenRotator;
     const watch = startTokenRotationWatch({
       rotator,

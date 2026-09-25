@@ -3297,3 +3297,87 @@ describe('#1051: recovered は記録に対してエッジだが、429 が記録�
     expect('reopened' in second ? second.reopened : undefined).toBeUndefined();
   });
 });
+
+describe('recordTrialVerdict（Issue #1501: ダメ元の試しの結果を記録へ写す）', () => {
+  it('usable なら冷却の記録を消す。回さない・撒かない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    await h.rotator.observe({ notice: reached });
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+    const spreadBefore = h.spreadCalls.length;
+
+    expect(
+      await h.rotator.recordTrialVerdict({ tokenId: 'tok-a', verdict: { verdict: 'usable' } }),
+    ).toBe('written');
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+    expect(h.spreadCalls.length).toBe(spreadBefore);
+  });
+
+  it('unusable で retryAt が記録と違えば、その期限で書き直す。同じなら書かない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const retryAt = Date.parse('2026-09-30T00:00:00.000Z');
+    expect(
+      await h.rotator.recordTrialVerdict({
+        tokenId: 'tok-b',
+        verdict: { verdict: 'unusable', reason: 'rejected', retryAt },
+      }),
+    ).toBe('written');
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-b');
+    expect(row?.cooldownUntil).toBe(retryAt);
+    expect(row?.cooldownSource).toBe('quota_reset');
+
+    const writes = h.replaceCalls();
+    expect(
+      await h.rotator.recordTrialVerdict({
+        tokenId: 'tok-b',
+        verdict: { verdict: 'unusable', reason: 'rejected', retryAt },
+      }),
+    ).toBe('unchanged');
+    expect(h.replaceCalls()).toBe(writes);
+  });
+
+  it('retryAt の無い unusable と undecidable は何も書かない。行が無ければ missing', async () => {
+    const h = harness();
+    await seedTwo(h);
+    const writes = h.replaceCalls();
+    expect(
+      await h.rotator.recordTrialVerdict({
+        tokenId: 'tok-b',
+        verdict: { verdict: 'unusable', reason: 'HTTP 429' },
+      }),
+    ).toBe('unchanged');
+    expect(
+      await h.rotator.recordTrialVerdict({
+        tokenId: 'tok-b',
+        verdict: { verdict: 'undecidable', reason: '締め切り' },
+      }),
+    ).toBe('unchanged');
+    expect(h.replaceCalls()).toBe(writes);
+    expect(
+      await h.rotator.recordTrialVerdict({ tokenId: 'nope', verdict: { verdict: 'usable' } }),
+    ).toBe('missing');
+  });
+
+  it('🔴 同時に走った observe の書き込みを踏み消さない（回し手の列を通る）', async () => {
+    const h = harness({ verdict: { verdict: 'unusable', reason: '候補も枠' } });
+    await seedTwo(h);
+    // tok-b を冷却中にしておき、試しで通ったことにして消すのと、tok-a が枠に
+    // 当たった観測（tok-a を冷却へ入れる）を**同時に**走らせる。
+    await h.rotator.recordTrialVerdict({
+      tokenId: 'tok-b',
+      verdict: {
+        verdict: 'unusable',
+        reason: 'rejected',
+        retryAt: Date.parse('2026-09-30T00:00:00.000Z'),
+      },
+    });
+    await Promise.all([
+      h.rotator.observe({ notice: reached }),
+      h.rotator.recordTrialVerdict({ tokenId: 'tok-b', verdict: { verdict: 'usable' } }),
+    ]);
+    // 両方の書き込みが残っている: tok-a は冷却に入り、tok-b の冷却は消えている。
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+    expect(await isCooling(h, 'tok-b')).toBe(false);
+  });
+});
