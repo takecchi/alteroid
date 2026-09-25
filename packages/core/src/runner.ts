@@ -78,6 +78,7 @@ import {
   type ResumeRecoveryHost,
   type ResumeRecoveryOutcome,
 } from './runner-resume-recovery.js';
+import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import type {
   RunnerAnswerCommand,
@@ -1375,34 +1376,14 @@ class RunnerSession {
       }),
   });
   /**
-   * resume のために預かった生ログ（SDK の `SessionStore.load` が返す素材）。
-   *
-   * **正常フローでは `#markProgressed` が解放する。** `#sessionStore().load()`
-   * が読むのは SDK がセッションを開く最初の1回だけで、それは `#progressed` が
-   * 立つ（道具を使った・確認を出した・結果を返した）よりも必ず先に済んでいる
-   * ── モデルが手を動かすには、動かす前にセッションが開いていないといけない。
-   * だから `#progressed` が立った時点で `load()` はもう `#seed` を読み終えており、
-   * 二度と呼ばれない。
-   *
-   * **`system/init` が来た時点では解放しない。** `init` は「開いた」ことしか
-   * 示さず、`#recoverFromFailedResume` が resume の成否を判定するのに使う基準は
-   * `#progressed`（「続けられた」）であって `init` の有無ではない
-   * （`#recoverFromFailedResume` のコメント参照）。`init` の直後・何も手が動く
-   * 前に接続が切れる形は「resume が効かなかった」として扱われ、そのときの
-   * 回復（`renderSessionLog(this.#seed)`）にはまだ `#seed` が要る。ここで
-   * 解放すると、その回復だけが静かに材料を失う。
+   * resume/seed の状態4フィールド（`#seed` / `#resumeAttempt` / `#sessionId` /
+   * `#progressed`）の器（Issue #1190 案X で `runner-resume-state.ts` へ
+   * 切り出した。前例は PR #1551 / #1523）。**SDK セッションをいつ開く／畳むか・
+   * `#emit` するかどうかの判断はこれまでどおりここ（`RunnerSession`）が持ち、
+   * この器は状態だけを持つ。** 何を持っているか・切り出しの理由と限界は
+   * `RunnerResumeState` 自身の doc を見よ。
    */
-  #seed: SessionStoreEntry[] | undefined;
-
-  /**
-   * 投げたが、まだ効いたと確かめられていない resume。
-   *
-   * **「resume を投げた」と「続きへ戻れた」は別物である。** SDK は開いた後に
-   * `No conversation found with session ID: …` を投げてくるので、成否は
-   * `system/init` が来たかどうかで見るしかない（`clone.ts` の `#sawInit` と同じ形）。
-   * 効いたら消す。消えないまま閉じたなら、その resume は効かなかった。
-   */
-  #resumeAttempt: { sessionId: string } | null = null;
+  readonly #resumeState = new RunnerResumeState();
   /**
    * 開いている入力ストリームの世代。
    *
@@ -1411,19 +1392,6 @@ class RunnerSession {
    * 死んだストリームが横取りする。
    */
   #generation = 0;
-  /**
-   * このセッションが実際に何かをしたか（道具を使った・確認を出した・結果を返した）。
-   *
-   * 生ログからの作り直しを**手が動く前だけ**に限るための旗である。動いた後で
-   * 作り直すと、済んだ作業を記録から二度走らせる。
-   *
-   * **一度立てたら二度と下ろさない。** `#recoverFromFailedResume` は
-   * `if (this.#progressed) return 'not-a-resume-failure';` でここが立っていれば
-   * `#seed` を読む前に抜けるので、これが立った時点で `#seed` はこの先この
-   * インスタンスの寿命が尽きるまで二度と読まれないことが確定する
-   * （`#markProgressed` 参照）。
-   */
-  #progressed = false;
 
   /**
    * いま開いている作業者への委譲（Task）の `task_id` 集合。
@@ -1501,7 +1469,6 @@ class RunnerSession {
   #query: Query | null = null;
   #reader: Promise<void> | null = null;
   #status: JobStatus = 'running';
-  #sessionId: string | undefined;
   /**
    * SDK が失敗として出したのに、枠の文言としては分類できなかった回の帳面
    * （Issue #393。`種別 → 件数`）。
@@ -1527,7 +1494,7 @@ class RunnerSession {
    * 2. `#open()` が実際に SDK セッションを開いた／開き直したとき
    *    （`#open()` のコメント）
    * 3. `init`（`session_started`）が来て、`event.sessionId` が直前の
-   *    `this.#sessionId` と違っていたとき（`case 'session_started'` の
+   *    `#resumeState.sessionId` と違っていたとき（`case 'session_started'` の
    *    コメント）
    *
    * **⚠️ 以前はここに「`session_started` で必ず空に戻す」と書いてあったが、
@@ -1688,9 +1655,7 @@ class RunnerSession {
    * 器が落ちたことを理由に止まったままにはしない。
    */
   resume(sessionId: string, entries: unknown[] | undefined, message: string | undefined): void {
-    this.#sessionId = sessionId;
-    this.#seed = entries as SessionStoreEntry[] | undefined;
-    this.#resumeAttempt = { sessionId };
+    this.#resumeState.beginResume(sessionId, entries as SessionStoreEntry[] | undefined);
     if (message !== undefined) this.push(message);
     this.#open(sessionId);
   }
@@ -1717,7 +1682,9 @@ class RunnerSession {
         kind: request.kind,
         askedAt: request.askedAt,
       })),
-      ...(this.#sessionId === undefined ? {} : { sessionId: this.#sessionId }),
+      ...(this.#resumeState.sessionId === undefined
+        ? {}
+        : { sessionId: this.#resumeState.sessionId }),
     };
   }
 
@@ -2052,7 +2019,7 @@ class RunnerSession {
       },
       load: async (key: SessionKey) => {
         if (key.subpath !== undefined) return null;
-        return this.#seed ?? null;
+        return this.#resumeState.seed ?? null;
       },
     };
   }
@@ -2250,7 +2217,7 @@ class RunnerSession {
       this.#status !== 'running' &&
       this.#pending.length === 0 &&
       this.#liveBackgroundTasks.length === 0 &&
-      this.#sessionId !== undefined
+      this.#resumeState.sessionId !== undefined
     );
   }
 
@@ -2292,7 +2259,7 @@ class RunnerSession {
       // という `done` の報告に化けてしまう。
       if (this.#endedInputForTokenRotation) {
         this.#endedInputForTokenRotation = false;
-        const sessionId = this.#sessionId;
+        const sessionId = this.#resumeState.sessionId;
         if (sessionId === undefined) {
           // **境界検査（`#atTokenRecycleBoundary`）が `#sessionId !== undefined`
           // を既に確認しているので、ここには来ないはずである。** 来た場合に
@@ -2363,7 +2330,7 @@ class RunnerSession {
    *
    * **`#resumeAttempt` も立てる。** ほとんどの場合 `#progressed` が既に立って
    * いる（このセッションで一度でも成功した result を受けている）ので、
-   * `#recoverFromFailedResume` は `this.#progressed` の時点で
+   * `#recoverFromFailedResume` は `#resumeState.progressed` の時点で
    * `not-a-resume-failure` を返すだけになる —— つまり以後は「普段の resume 失敗」
    * と同じ扱いに合流する。**ただし、まだ一度も進んでいないセッション**
    * （最初のターンが確認待ちのまま境界へ来た場合）で、この開き直し自体の
@@ -2388,7 +2355,7 @@ class RunnerSession {
     }
     this.#query = null;
     this.#reader = null;
-    this.#resumeAttempt = { sessionId };
+    this.#resumeState.armResumeAttempt(sessionId);
     this.#emit({
       type: 'note',
       managerId: this.#id,
@@ -2407,16 +2374,14 @@ class RunnerSession {
   }
 
   /**
-   * `#progressed` を立てる唯一の口。**必ずここを通す** — 直接
-   * `this.#progressed = true` を書くと、`#seed` の解放を足し忘れる経路が生まれる。
+   * `#progressed` を立てる唯一の口。**必ずここを通す。**
    *
-   * 立てると同時に `#seed` を解放する。安全な理由は `#seed` のフィールド
-   * コメントを参照。既に立っている（＝既に解放済み）なら何もしない。
+   * 手順そのものは `runner-resume-state.ts` の `RunnerResumeState.markProgressed`
+   * へ切り出した（Issue #1190 案X）——ここは薄い口である。触るフィールドの
+   * 持ち主は変わっていない。
    */
   #markProgressed(): void {
-    if (this.#progressed) return;
-    this.#progressed = true;
-    this.#seed = undefined;
+    this.#resumeState.markProgressed();
   }
 
   /**
@@ -2477,13 +2442,9 @@ class RunnerSession {
    * どちらでも良い——フィールドとして1回だけ作る形を採った。
    */
   readonly #resumeRecoveryHost: ResumeRecoveryHost = {
-    takeResumeAttempt: () => {
-      const attempt = this.#resumeAttempt;
-      this.#resumeAttempt = null;
-      return attempt;
-    },
-    hasProgressed: () => this.#progressed,
-    renderSeedRecord: () => renderSessionLog(this.#seed),
+    takeResumeAttempt: () => this.#resumeState.takeAttempt(),
+    hasProgressed: () => this.#resumeState.progressed,
+    renderSeedRecord: () => renderSessionLog(this.#resumeState.seed),
     closeWorkerWaitWindow: () => this.#closeWorkerWaitWindow(),
     discardCarriedOverWork: () => {
       // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
@@ -2516,9 +2477,9 @@ class RunnerSession {
       }
       this.#query = null;
       this.#reader = null;
-      this.#sessionId = undefined;
-      // 新しいセッションは resume しないので、素材は本文へ畳んで渡す。
-      this.#seed = undefined;
+      // 新しいセッションは resume しないので、素材は本文へ畳んで渡す
+      // （`sessionId` / `seed` の解放は `RunnerResumeState.discardForRecreate`）。
+      this.#resumeState.discardForRecreate();
       // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
       // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
       return this.#input
@@ -2580,13 +2541,14 @@ class RunnerSession {
         // **器が本当に入れ替わったかは `#open()`（フィールド初期化・reopen
         // 側）が既に見ている**（`#liveBackgroundTasks` の doc の契機1・2）。
         // ここで見るのは、SDK 側でセッションが差し替わった場合の保険——
-        // `event.sessionId` が直前の `this.#sessionId` と違うときだけ、
-        // 判定できないときは配る側へ倒すという原則に沿ってリセットする。
-        // **比較は `this.#sessionId` を更新する前に行う。** 初回は
-        // `#sessionId === undefined` なので必ずリセット側に倒れる
-        // （空→空で無害）。
-        if (this.#sessionId !== event.sessionId) this.#liveBackgroundTasks = [];
-        this.#sessionId = event.sessionId;
+        // `event.sessionId` が直前の値と違うときだけ、判定できないときは
+        // 配る側へ倒すという原則に沿ってリセットする。**比較と代入は
+        // `RunnerResumeState.observeSessionStarted` の中で、代入より前に
+        // 比較する順序のまま行う**（Issue #1190 案X。初回は `sessionId` が
+        // 未設定なので必ずリセット側に倒れる＝空→空で無害）。
+        if (this.#resumeState.observeSessionStarted(event.sessionId)) {
+          this.#liveBackgroundTasks = [];
+        }
         this.#emit({ type: 'session', managerId: this.#id, sessionId: event.sessionId });
         return;
       }
@@ -2734,7 +2696,7 @@ class RunnerSession {
           this.#emit({
             type: 'context_usage',
             managerId: this.#id,
-            sessionId: this.#sessionId,
+            sessionId: this.#resumeState.sessionId,
             turnSucceeded: event.succeeded,
             contextUsage,
           });
@@ -2822,7 +2784,7 @@ class RunnerSession {
             this.#emit({
               type: 'usage',
               managerId: this.#id,
-              sessionId: this.#sessionId,
+              sessionId: this.#resumeState.sessionId,
               models: event.usage.models,
               // **応答として返ったかを別の欄で運ぶ**（`runner-protocol.ts` の
               // `answered` の doc）。`succeeded` は台帳の問いなので、枠で
@@ -3422,7 +3384,7 @@ class RunnerSession {
     this.#emit({
       type: 'usage',
       managerId: this.#id,
-      sessionId: this.#sessionId,
+      sessionId: this.#resumeState.sessionId,
       models,
     });
   }
