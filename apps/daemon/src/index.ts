@@ -31,6 +31,7 @@ import {
   tokenRestoreEntry,
   tokenRotationEntry,
   probeTokenCandidate,
+  runTokenTrial,
   dailyReportEvent,
   installUncaughtNet,
   missingDailyReportDates,
@@ -55,6 +56,7 @@ import {
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { startTokenRotationWatch, type TokenRotationWatch } from './token-watch.js';
+import { startTokenTrialWatch, type TokenTrialWatch } from './token-trial-watch.js';
 import { TokenRotationJournalFold } from './token-rotation-journal-fold.js';
 import { startUsagePolling } from './usage-poller.js';
 import { startManagerPolling } from './manager-poller.js';
@@ -1469,6 +1471,12 @@ export async function main(): Promise<void> {
   // 「一度も再代入されていない」と数えて `const` を勧めてくるが、`const` には
   // できない（上の closure がこの束縛を参照する）。
   let tokenWatch: TokenRotationWatch | undefined = undefined;
+  /**
+   * ダメ元の試し（Issue #1501。`token-trial-watch.ts`）。**`tokenWatch` と同じ
+   * 理由で `undefined` を明示する。** `settleTokenOutcome` / `tokenRotator` を
+   * 要るので、`tokenWatch` と同じ地点（クローンの後）で組み立てる。
+   */
+  let tokenTrialWatch: TokenTrialWatch | undefined = undefined;
 
   /**
    * **畳まれるのを待っている「再開の合図」**（人間の決定 2026-09-07）。
@@ -1668,6 +1676,14 @@ export async function main(): Promise<void> {
       if (observation.succeeded === true) {
         tokenWatch?.observeTurnSuccess(observation.observedBy);
         return;
+      }
+      // **偽陽性の退き方（Issue #1501 設計点8）の材料。** 本物の拒否
+      // （セッション由来。`observedBy.tokenId` が名乗る鍵）が、試しで通した
+      // 直後の窓のあいだに届いたら、その鍵の試しの間隔を倍にする。ここは
+      // 材料を渡すだけで、日誌にも受信箱にも触らない——それは直後の
+      // `tokenRotator.observe` → `settleTokenOutcome` が普段どおり行う。
+      if (observation.transition === 'rejected' && observation.observedBy?.tokenId !== undefined) {
+        tokenTrialWatch?.noteRejection(observation.observedBy.tokenId);
       }
       const outcome = await tokenRotator.observe(observation);
       // **当たった文言をそのまま添える**（Issue #393「言い換えずそのまま残す」）。
@@ -2040,6 +2056,33 @@ export async function main(): Promise<void> {
   });
 
   /**
+   * ダメ元の試し（Issue #1501。`token-trial-watch.ts`）。**`tokenWatch` と同じ
+   * 理由で `clone` の後に作る。**
+   *
+   * 試す口（`TokenTrialPort`）はここで組み立てる —— `runTokenTrial` に、
+   * クローンの層と同じモデルのエイリアス（`cloneModel`。`ALTEROID_CLONE_MODEL`
+   * が在ればその値）を渡す。層とモデル帯を揃えるのは、枠がモデル別のことが
+   * あり、試しが通っても層とモデルが違えば層は通らない偽陽性を防ぐためである
+   * （PR 本文の「確かめていないこと」も見よ——マネージャー・作業者のモデル別の
+   * 枠はこれでも測れない）。
+   */
+  tokenTrialWatch = startTokenTrialWatch({
+    stores,
+    trial: {
+      trial: (token) =>
+        runTokenTrial(query, {
+          token: token.value,
+          cwd: paths.root,
+          model: cloneModel,
+          // **同上（#431）。** 試しの子プロセスへも記憶ストアの鍵は渡さない。
+          withheldEnvKeys: storage.withheldEnvKeys,
+        }),
+    },
+    reconsider: (input) => tokenRotator.reconsider(input),
+    onOutcome: (outcome) => settleTokenOutcome(outcome),
+  });
+
+  /**
    * **起動直後に1回見直す**（人間の決定 2026-09-07）。
    *
    * 引き取り（`restore()`、上）は「記憶ストアが言っている現役を、消えた撒き先へ
@@ -2260,6 +2303,8 @@ export async function main(): Promise<void> {
     // **見張りも畳む。** 止めたはずのデーモンが背景で probe を焼き続けない
     // （`usagePoller` と同じ理由。`token-watch.ts`）。
     tokenWatch?.stop();
+    // **ダメ元の試しも畳む**（同じ理由。`token-trial-watch.ts`）。
+    tokenTrialWatch?.stop();
     // **`token_rotation` の畳み残しを吐き出す**（issue #1311 段B。
     // `TokenRotationJournalFold.flush` の doc）。器が落ちた場合に失うのは
     // 窓の中の件数だけで、連なりの1件目は既に書いてある——ここは「呼べるなら

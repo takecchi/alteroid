@@ -94,6 +94,26 @@ export {
   type UsageProbeQuery,
 } from './usage-probe.js';
 /**
+ * 冷却中の鍵を「ダメ元で」試す仕組み（Issue #1501）。記録の上で通る鍵が1本も
+ * 無いときだけ、冷却中の鍵を間隔を置いて本物の最小の1ターンで試す。
+ */
+export {
+  TOKEN_TRIAL_BACKOFF_CAP_MS,
+  TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS,
+  TOKEN_TRIAL_INTERVAL_MS,
+  TOKEN_TRIAL_PROMPT_TEXT,
+  TOKEN_TRIAL_SYSTEM_PROMPT,
+  TOKEN_TRIAL_TIMEOUT_MS,
+  describeTrialFailureFold,
+  doubledTrialIntervalMs,
+  runTokenTrial,
+  selectTokenForTrial,
+  type RunTokenTrialOptions,
+  type SelectTokenForTrialInput,
+  type TokenTrialPort,
+  type TokenTrialQuery,
+} from './token-trial.js';
+/**
  * 候補トークンを1本 probe で観測し、3値（使える／使えない／判定できない）で
  * 判定する。**「使えない」＝ probe が `rejected` を返す、ではない** — `rejected`
  * も認証失敗も probe からは観測できないので、その2つは `undecidable` に落ちる

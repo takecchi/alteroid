@@ -854,7 +854,8 @@
                             "runner_connected",
                             "account_probe",
                             "startup",
-                            "turn_succeeded"
+                            "turn_succeeded",
+                            "trial_succeeded"
                           ]
                         },
                         "freshness": {
@@ -3481,7 +3482,8 @@
                                   "runner_connected",
                                   "account_probe",
                                   "startup",
-                                  "turn_succeeded"
+                                  "turn_succeeded",
+                                  "trial_succeeded"
                                 ]
                               },
                               "freshness": {
@@ -6107,7 +6109,8 @@
                                     "runner_connected",
                                     "account_probe",
                                     "startup",
-                                    "turn_succeeded"
+                                    "turn_succeeded",
+                                    "trial_succeeded"
                                   ]
                                 },
                                 "freshness": {
@@ -7215,7 +7218,8 @@
                                     "runner_connected",
                                     "account_probe",
                                     "startup",
-                                    "turn_succeeded"
+                                    "turn_succeeded",
+                                    "trial_succeeded"
                                   ]
                                 },
                                 "freshness": {
@@ -8323,7 +8327,8 @@
                                   "runner_connected",
                                   "account_probe",
                                   "startup",
-                                  "turn_succeeded"
+                                  "turn_succeeded",
+                                  "trial_succeeded"
                                 ]
                               },
                               "freshness": {
@@ -9419,7 +9424,8 @@
                                   "runner_connected",
                                   "account_probe",
                                   "startup",
-                                  "turn_succeeded"
+                                  "turn_succeeded",
+                                  "trial_succeeded"
                                 ]
                               },
                               "freshness": {

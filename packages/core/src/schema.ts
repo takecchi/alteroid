@@ -1283,6 +1283,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
          * 2本目の生産者（`TokenRotator.reconsider` の doc）。
          */
         'turn_succeeded',
+        /**
+         * ダメ元の試し（Issue #1501）が、現役以外の冷却中の候補を通ったと
+         * 確かめた直後の見直し。詳しい意味は `TokenReconsiderReason` の
+         * `trial_succeeded` の doc に在る。
+         */
+        'trial_succeeded',
       ])
       .optional(),
     /**

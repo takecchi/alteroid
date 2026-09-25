@@ -160,7 +160,25 @@ export type TokenReconsiderReason =
    * の実装注記）。回すのは `unusable`（probe が観測した失敗）か `stranded`
    * （記録の上で通らない）だけである。
    */
-  | 'turn_succeeded';
+  | 'turn_succeeded'
+  /**
+   * **ダメ元の試し**（Issue #1501。`apps/daemon/src/token-trial-watch.ts`）が、
+   * **現役以外**の冷却中の候補を通ったと確かめ、その行の冷却の記録を
+   * `markTokenUsable` で消した直後に呼ぶ契機。
+   *
+   * **他の状態系の契機（`pool_changed` 等）と同じ扱いである。** `current` は
+   * 渡さない —— 通したのは「記録の上でその候補が `ready` になった」という
+   * 事実そのものであって、`turn_succeeded` のような世代付きの観測ではない
+   * （試した相手は現役ではないので、世代を照合する理由が無い）。この後の
+   * 通常の状態判定（現役が通らないのに `ready` な候補が在る）がそのまま拾い、
+   * `rotated` を出す。
+   *
+   * **現役自身が試しで通ったときは、こちらではなく `turn_succeeded` を使う**
+   * （本当に1ターン通った観測なので、`current` に
+   * `origin: { source: 'turn_success' }` を添えて渡す —— ダメ元の試しでも、
+   * 通った事実そのものは嘘ではない）。
+   */
+  | 'trial_succeeded';
 
 /**
  * {@link TokenRotator.reconsider} の `current` が運ぶ判定の**出所**（#681 (1)）。
