@@ -37,6 +37,7 @@ import type {
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { noteBackgroundFailure } from './dropped-record.js';
+import { excerpt } from './excerpt.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
@@ -963,6 +964,17 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
 // ---------------------------------------------------------------------------
 
 /**
+ * `task_notification.summary` を運ぶときの上限文字数（Issue #1373 続き）。
+ *
+ * SDK の型は `summary` の長さを約束していない。無上限のまま
+ * `AgentDelegationNotified` へ積むと、日誌・報告本文・台帳のどれかで無制限の
+ * 英語文言をそのまま抱えることになる——`excerpt()` が付ける「切った跡」込みで
+ * 運べば十分な長さとして、他の抜粋（`sdk-failure.ts` の失敗文言など）と桁を
+ * 揃えた。
+ */
+const TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT = 500;
+
+/**
  * Claude のメッセージ1件を {@link AgentEvent} へ写す（#486「読み側の中立化」）。
  *
  * **ここが「読み取りの判断」の唯一の置き場である。** SDK の綴り（`subtype` の値・
@@ -1160,10 +1172,28 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   // である）。
   if (subtype === 'task_started' || subtype === 'task_notification') {
     const taskId = (message as { task_id?: unknown }).task_id;
+    if (subtype === 'task_started') {
+      return [{ type: 'delegation_started', ...(typeof taskId === 'string' ? { taskId } : {}) }];
+    }
+    // **#1373 続き: `status` / `summary` を捨てずに運ぶ。** 直す前はここで
+    // `taskId` だけ残し、`status`（`'completed' | 'failed' | 'stopped'`）と
+    // `summary` を捨てていた——委譲の下の作業者が枠（429）で打ち切られたときの
+    // 唯一の構造化された手がかりが、この1行で失われていた（Issue #1373 の
+    // 最新コメント。`SDKResultSuccess.subagent_stats` の doc も「Per-subagent
+    // detail is on the task_started / task_notification events.」と逐語で
+    // 言っている）。**`status` は絞らず string のまま運ぶ**（`agent-events.ts`
+    // の `AgentDelegationNotified.status` の doc）。**`summary` は `excerpt()`
+    // で切ってから運ぶ**——作業者の打ち切り文言は英語の生文言で長さが読めない。
+    const status = (message as { status?: unknown }).status;
+    const summary = (message as { summary?: unknown }).summary;
     return [
       {
-        type: subtype === 'task_started' ? 'delegation_started' : 'delegation_notified',
+        type: 'delegation_notified',
         ...(typeof taskId === 'string' ? { taskId } : {}),
+        ...(typeof status === 'string' ? { status } : {}),
+        ...(typeof summary === 'string'
+          ? { summary: excerpt(summary, TASK_NOTIFICATION_SUMMARY_EXCERPT_LIMIT) }
+          : {}),
       },
     ];
   }
