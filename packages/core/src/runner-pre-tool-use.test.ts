@@ -147,7 +147,9 @@ function waitGuardNotes(events: readonly RunnerEvent[]): NoteEvent[] {
 }
 
 function permissionDeniedEvents(events: readonly RunnerEvent[]): PermissionDeniedEvent[] {
-  return events.filter((event): event is PermissionDeniedEvent => event.type === 'permission_denied');
+  return events.filter(
+    (event): event is PermissionDeniedEvent => event.type === 'permission_denied',
+  );
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -421,7 +423,11 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
       hook_event_name: 'PreToolUse',
       tool_use_id: 'tu-edit-1',
       tool_name: 'Edit',
-      tool_input: { file_path: 'apps/web/app/routes/chat.test.tsx', old_string: 'x', new_string: 'y' },
+      tool_input: {
+        file_path: 'apps/web/app/routes/chat.test.tsx',
+        old_string: 'x',
+        new_string: 'y',
+      },
     });
 
     started.push(liveDenialAsSdkSends('Edit', 'tu-edit-1'));
@@ -445,7 +451,9 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
     await firePreToolUse(started.options, {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
-      tool_input: { command: `curl -H "Authorization: token ${dummyToken}" https://api.github.com` },
+      tool_input: {
+        command: `curl -H "Authorization: token ${dummyToken}" https://api.github.com`,
+      },
     });
 
     started.push(liveDenialAsSdkSends('Bash', 'tu-1'));

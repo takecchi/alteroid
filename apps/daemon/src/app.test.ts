@@ -2557,7 +2557,11 @@ describe('HTTP API', () => {
     const list = (await (await app.request('/managers')).json()) as {
       managers: { denials?: Record<string, unknown>[] }[];
     };
-    expect(list.managers[0]?.denials?.[0]).toMatchObject({ tool: 'Bash', count: 1, actor: 'worker' });
+    expect(list.managers[0]?.denials?.[0]).toMatchObject({
+      tool: 'Bash',
+      count: 1,
+      actor: 'worker',
+    });
     expect(list.managers[0]?.denials?.[0]).not.toHaveProperty('inputHead');
 
     const detail = (await (await app.request('/managers/mgr-denied-input-head')).json()) as {

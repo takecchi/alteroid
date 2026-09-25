@@ -942,7 +942,11 @@ describe('ツール監査フックの包み直し（#486）', () => {
       toolInput: { text: 'メモ' },
       toolUseId: 'tu-3',
     });
-    expect(capturedFailure).toEqual({ toolName: 'memory_write', error: '失敗した', toolUseId: 'tu-4' });
+    expect(capturedFailure).toEqual({
+      toolName: 'memory_write',
+      error: '失敗した',
+      toolUseId: 'tu-4',
+    });
   });
 
   it('buildManagerSessionOptions: PostToolUseFailure は中立の記録として渡り、{ continue: true } を返す', async () => {

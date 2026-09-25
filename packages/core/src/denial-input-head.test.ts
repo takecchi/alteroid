@@ -18,7 +18,10 @@ describe('buildDenialInputHead / 入力を1行にする（command 優先・JSON 
   });
 
   it('command 欄が無ければ JSON.stringify した1行にする（Edit 等）', () => {
-    const head = buildDenialInputHead({ file_path: 'a.ts', old_string: 'x', new_string: 'y' }, undefined);
+    const head = buildDenialInputHead(
+      { file_path: 'a.ts', old_string: 'x', new_string: 'y' },
+      undefined,
+    );
     expect(head).toBe('{"file_path":"a.ts","old_string":"x","new_string":"y"}');
   });
 
