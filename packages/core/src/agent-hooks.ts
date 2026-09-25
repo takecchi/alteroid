@@ -325,6 +325,4 @@ export type AgentContextOutcome = { kind: 'continue' } | { kind: 'addContext'; t
  * `#onSubagentStop`。記録は {@link AgentSubagentStopRecord}）の両方が
  * この型を使う——記録の型（`T`）が違うだけで、返せる判断の形は同じである。
  */
-export type AgentContextHook<T> = (
-  record: T,
-) => AgentContextOutcome | Promise<AgentContextOutcome>;
+export type AgentContextHook<T> = (record: T) => AgentContextOutcome | Promise<AgentContextOutcome>;

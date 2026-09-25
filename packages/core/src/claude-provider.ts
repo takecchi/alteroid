@@ -26,7 +26,6 @@ import type {
 import type { AgentProvider } from './agent-ports.js';
 import type {
   AgentContextHook,
-  AgentContextOutcome,
   AgentObservationHook,
   AgentPreCompactRecord,
   AgentPreToolHook,
@@ -315,9 +314,7 @@ function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
     ...(Array.isArray(raw?.session_crons) ? { sessionCrons: raw.session_crons } : {}),
     ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
-    ...(typeof raw?.stop_hook_active === 'boolean'
-      ? { stopHookActive: raw.stop_hook_active }
-      : {}),
+    ...(typeof raw?.stop_hook_active === 'boolean' ? { stopHookActive: raw.stop_hook_active } : {}),
   };
 }
 
@@ -917,7 +914,9 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // 観測に加えて #901 の打ち切り注記を追加の文脈として返しうる
       // （`ManagerSessionOptionsRequest.onPostToolUse` の doc）。`wrapContextHook` が
       // 中立の `continue` / `addContext` を SDK の形へ包み直す。
-      PostToolUse: [{ hooks: [wrapContextHook('PostToolUse', onPostToolUse, toAgentToolAuditRecord)] }],
+      PostToolUse: [
+        { hooks: [wrapContextHook('PostToolUse', onPostToolUse, toAgentToolAuditRecord)] },
+      ],
       // **`PostToolUse` とは排他で発火する**（Issue #924 が出荷済みの SDK
       // 実行体を実測して確認した排他分岐。`buildCloneSessionOptions` の
       // `PostToolUseFailure` の doc と同じ）。⟹ 道具呼び出し1回につきどちらか
