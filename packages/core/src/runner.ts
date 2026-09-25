@@ -1820,6 +1820,34 @@ class RunnerSession {
     // 初出の1行は既に出ているので存在は残るが、**量が失われる**。
     noteUnclassifiedFailuresSummary(this.#unclassifiedFailures, this.#id);
 
+    // **`#settleAll` の位置はここに残す（`#wakeInput` → `query.close()` の前）。**
+    // 経路Aと経路Bで `report`/`settled` の前後が入れ替わるのは、この行を動かした
+    // からではなく、下の `#shipArchive` / `#flushUnreported` を後ろへ動かした
+    // からである（Issue #1533 の測定コメントが指摘した (b) の食い違い）。
+    this.#settleAll(reason);
+    this.#wakeInput();
+    try {
+      this.#query?.close();
+    } catch {
+      // 既に閉じている
+    }
+    // **Issue #1533。生ログの送り出しと報告を、CLI の読み手（`#reader`）が
+    // 終わるまで待ってから出す。** 以前はここが `query.close()` の前にあり、
+    // CLI がまだ生きているうちに一発で `readFile` していた —— 読んだ後に CLI が
+    // 書く行（stdin の EOF を受けてから書く最後の数行など）を確実に取りこぼす
+    // 形だった。`#finish()` 側には既に「`close()` より先に読む」という注釈が
+    // あるが、あれは control channel（`#flushUsage` が使う）の話であって、
+    // 生ログ（ファイル）の読み出しとは別の資源である——生ログはここで
+    // `#reader` の終わりを待ってから読む形に変える。
+    //
+    // **未確認の前提**: CLI が stdout を閉じた（＝`#reader` が終わった）時点で、
+    // 生ログを書き終えているという前提の上に立っている。SDK
+    // （`@anthropic-ai/claude-agent-sdk@0.3.282`）の `Query#close()` は stdin を
+    // 閉じたあと 2000ms 待って `SIGTERM`、さらに 5000ms 待って `SIGKILL` を
+    // 送るだけで、生ログ（`transcript_path`）を書いているのは CLI のサブ
+    // プロセス自身である——そのバイナリの中でいつフラッシュ・fsync するかは
+    // 読めない（Issue #1533 のコメント、SDK 調査）。**確かめていない。**
+    await this.#reader?.catch(() => undefined);
     // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
     // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
     await this.#shipArchive();
@@ -1828,14 +1856,6 @@ class RunnerSession {
     // — 直上の `#shipArchive` / `#flushUsage` / `#closeWorkerWaitWindow` が
     // ここに並んでいるのと同じ穴である。
     this.#flushUnreported(reason, this.#status);
-    this.#settleAll(reason);
-    this.#wakeInput();
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
-    await this.#reader?.catch(() => undefined);
     this.#onClosed();
   }
 
