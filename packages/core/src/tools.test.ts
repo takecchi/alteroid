@@ -16507,9 +16507,70 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
  * **発端**: `since`/`until` で過去を掘って0件が返ったとき、「その窓に該当が
  * 無かった」のか「日誌がその窓まで遡れない（分母が0）」のかが、それまでは
  * 返り値から区別できなかった（#1092 はこれを判定できないまま閉じている）。
+ *
+ * **付ける条件は「窓の始点（`since` ?? -∞）が地平より前にかかるか」だけ**
+ * （`describeJournalHorizonNote` の doc）。0件かどうかでは決めない——窓が
+ * まるごと地平より後ろなら、0件でも「本当に無かった」と言い切れるので
+ * 付けない。逆に、地平にかかっているのに非空だからと付けないと、#1092 と
+ * 同じ誤読（一覧に見えている分が全部だと誤解する）を生む。
  */
 describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
-  it('until が最古の行より前を指し0件のとき、地平を添える', async () => {
+  it('窓がまるごと地平より後ろで0件なら、地平は付けない（本当に無かったと言い切れる）', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+
+    // since が地平（entry.at）より後ろ ⟹ 窓はまるごと地平より後ろ。
+    const since = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
+    const reply = await h.call('journal_read', { since });
+
+    expect(reply).toBe('（その条件に当たる日誌は無い）');
+    expect(reply).not.toContain('最古');
+  });
+
+  it('since が地平より前で0件なら、地平を添える', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+
+    // since も until も地平（entry.at）より前 ⟹ 窓が地平より前にかかる。
+    const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
+    const until = new Date(Date.parse(entry.at) - 1000).toISOString();
+    const reply = await h.call('journal_read', { since, until });
+
+    expect(reply).toContain('（その条件に当たる日誌は無い）');
+    expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+    expect(reply).toContain(`指定の since（${since}）`);
+    expect(reply).toContain('判定できない');
+  });
+
+  it('since が地平より前で非空でも、地平を添える（#1092 と同じ誤読を防ぐ）', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+
+    // since は地平（entry.at）より前 ⟹ 窓が地平より前にかかる。返るのは
+    // entry の1件だけだが、「since からそこまでの区間に本当に何も無かった
+    // のか」は分からないはずである。
+    const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
+    const reply = await h.call('journal_read', { since });
+
+    expect(reply).toContain('最古の判断');
+    expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+    expect(reply).toContain(`指定の since（${since}）`);
+    expect(reply).toContain('判定できない');
+  });
+
+  it('until だけの指定は、窓の始点が -∞ なので常に地平を添える', async () => {
     const h = harness();
     const entry = await h.stores.journal.append({
       type: 'decision',
@@ -16518,32 +16579,16 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
     });
 
     const reply = await h.call('journal_read', {
-      until: new Date(Date.parse(entry.at) - 1000).toISOString(),
+      until: new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString(),
     });
 
-    expect(reply).toContain('（その条件に当たる日誌は無い）');
+    expect(reply).toContain('最古の判断');
     expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+    expect(reply).toContain('それより前は');
     expect(reply).toContain('判定できない');
   });
 
-  it('since を指定して0件のときも地平を添える（until 側だけの特別扱いにしない）', async () => {
-    const h = harness();
-    const entry = await h.stores.journal.append({
-      type: 'decision',
-      decision: '最古の判断',
-      grounds: '記憶',
-    });
-
-    // 未来を since に指定すれば、いま在る唯一の行より後ろだけを見ることになり
-    // 0件になる——地平（最古の行）とは無関係な理由の0件だが、`since`/`until`
-    // のどちらかが指定されていれば地平を引くという実装なので、ここでも添う。
-    const future = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
-    const reply = await h.call('journal_read', { since: future });
-
-    expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
-  });
-
-  it('日誌そのものが空なら、時間で絞っても地平は付けない（地平が無いため）', async () => {
+  it('日誌そのものが空なら、時間で絞っても地平は付けない（比べる地平が無い）', async () => {
     const h = harness();
 
     const reply = await h.call('journal_read', { until: '2020-01-01T00:00:00.000Z' });
@@ -16552,17 +16597,19 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
     expect(reply).not.toContain('最古');
   });
 
-  it('時間で絞っていない0件には地平を付けない（地平とは無関係な絞りのため）', async () => {
+  it('時間で絞っていない0件には地平を付けない（呼ばない——oldestAt を引かない）', async () => {
     const h = harness();
     await h.stores.journal.append({ type: 'decision', decision: '無関係な判断', grounds: '記憶' });
+    const oldestAtSpy = vi.spyOn(h.stores.journal, 'oldestAt');
 
     const reply = await h.call('journal_read', { types: ['tool_use'] });
 
     expect(reply).toBe('（その条件に当たる日誌は無い）');
     expect(reply).not.toContain('最古');
+    expect(oldestAtSpy).not.toHaveBeenCalled();
   });
 
-  it('q と併せて0件のときも地平を添える', async () => {
+  it('q と併せて0件のときも、窓が地平にかかっていれば地平を添える', async () => {
     const h = harness();
     const entry = await h.stores.journal.append({
       type: 'decision',

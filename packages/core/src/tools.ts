@@ -5299,23 +5299,18 @@ export function createCloneTools(context: ToolContext) {
           // 同じ表記が違う意味を持っていた（issue #426 で揃えた）。
           ...(withFilter === undefined ? {} : { with: withFilter }),
         });
-        if (entries.length === 0) {
-          // **日誌の地平（issue #1510）。** `since`/`until` で時間を絞って
-          // 0件だったとき、「その窓に該当が無かった」のか「日誌がその窓まで
-          // 遡れない（分母が0）」のかは、この0件という結果だけからは区別
-          // できない——どちらも同じ「0件」を返す。時間で絞っていない0件
-          // （type/with/q だけで絞った0件）は地平と無関係なので引かない。
-          const oldestAt =
-            since !== undefined || until !== undefined ? await stores.journal.oldestAt() : null;
-          const horizonNote =
-            oldestAt === null
-              ? []
-              : [
-                  `この記憶ストアの日誌の最古は ${oldestAt}。それより前は判定できない` +
-                    '（該当する行が無かったのか、日誌がそこまで遡れないのかは、' +
-                    'この返り値だけからは区別できない）。',
-                ];
+        // **日誌の地平（issue #1510）。** `oldestAt()` は since/until の
+        // どちらかを指定したときだけ引く（索引1行なので、0件でも非空でも
+        // 安く引ける）。実際に注記へ載せるかどうかの判断は
+        // `describeJournalHorizonNote` が持つ——0件かどうかでは決めない
+        // （窓がまるごと地平より後ろなら、0件でも「本当に無かった」と
+        // 言い切れるため）。
+        const oldestAt =
+          since !== undefined || until !== undefined ? await stores.journal.oldestAt() : null;
+        const horizonNote = describeJournalHorizonNote(oldestAt, since, entries.length === 0);
+        const horizonNoteLines = horizonNote === undefined ? [] : [horizonNote];
 
+        if (entries.length === 0) {
           // **`q` で0件だったとき、探す対象に入っていない欄が在ることまで言う。**
           // 黙ると「日誌にその語は無い」と読めるが、実際には tool_use の input に
           // 書かれているかもしれない（`journal-search.ts`「対象にしていない欄」）。
@@ -5329,7 +5324,7 @@ export function createCloneTools(context: ToolContext) {
                 `"${q}" に当たる日誌は無い（この条件の中では）。` +
                   'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
                   'そこにだけ書かれている語はここでは当たらない。',
-                ...horizonNote,
+                ...horizonNoteLines,
               ].join('\n'),
             );
           }
@@ -5341,7 +5336,7 @@ export function createCloneTools(context: ToolContext) {
               withFilter === undefined
                 ? '（日誌はまだ空）'
                 : '（その条件に当たる日誌は無い）',
-              ...horizonNote,
+              ...horizonNoteLines,
             ].join('\n'),
           );
         }
@@ -5398,6 +5393,7 @@ export function createCloneTools(context: ToolContext) {
             }),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
             ...toolUseNotice,
+            ...horizonNoteLines,
           ].join('\n'),
         );
       },
@@ -11511,6 +11507,45 @@ function describeContextBreakdown(context: ContextUsageRow): string {
   // 自然に空文字になる（実測: その早期 return を消す変異は歯を1本も落とさなかった
   // ——到達不能な分岐だった）。**冗長な分岐は「測れない行」として残るので消す。**
   return (parts.length === 0 ? '' : `\n  内訳: ${parts.join(' / ')}。`) + categories;
+}
+
+/**
+ * `journal_read` に添える、日誌の地平（`JournalStore.oldestAt`）の注記
+ * （issue #1510）。
+ *
+ * **付ける条件は「窓の始点が地平より前にかかるか」だけである。** 窓の始点
+ * `start` は `since`（無指定なら過去へ無限に開いている＝ `-∞`）——`until`
+ * は関与しない。`start < oldestAt` のときだけ意味を持つ。
+ *
+ * - **窓がまるごと地平より後ろ（`start >= oldestAt`）**: 0件なら「その窓に
+ *   本当に無かった」と言い切れる——注記は要らない。**ここで注記を出すと、
+ *   確定できることまで「判定できない」と言ってしまう誤りになる**（0件
+ *   だったら常に注記していた前版の誤り）
+ * - **`start < oldestAt`**: 0件でも非空でも、`start` から地平までの区間は
+ *   日誌が持っていない。0件ならその区間に何も無かったのか記録がそこまで
+ *   遡れないだけなのかが区別できず、非空でも同じ区間について同じ区別が
+ *   付かない——**どちらも同じ形の「判定できない」である**（#1092 と同じ
+ *   誤読を防ぐため、非空でも付ける）
+ *
+ * `oldestAt` が `null`（日誌そのものが空）なら、比べる地平が無いので常に
+ * 付けない。
+ */
+function describeJournalHorizonNote(
+  oldestAt: string | null,
+  since: string | undefined,
+  isEmpty: boolean,
+): string | undefined {
+  if (oldestAt === null) return undefined;
+  if (since !== undefined && !(since < oldestAt)) return undefined;
+  const range =
+    since === undefined ? 'それより前は' : `指定の since（${since}）から ${oldestAt} までの区間は`;
+  return isEmpty
+    ? `この記憶ストアの日誌の最古は ${oldestAt}。${range}判定できない` +
+        '（該当する行が無かったのか、日誌がそこまで遡れないのかは、' +
+        'この返り値だけからは区別できない）。'
+    : `この記憶ストアの日誌の最古は ${oldestAt}。${range}判定できない` +
+        '（その区間に該当する行が無かったのか、日誌がそこまで遡れないのかは、' +
+        'この返り値だけからは区別できない）。';
 }
 
 function renderJournalEntry(entry: JournalEntry): { head: string; body: string } {
