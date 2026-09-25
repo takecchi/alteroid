@@ -2750,6 +2750,8 @@ class RunnerSession {
           sourcesThisTurn,
           openedWorkersThisTurn,
           workerRejectionsThisTurn,
+          failedWorkerNotificationsThisTurn,
+          failedWorkerNotificationsNamingLimitThisTurn,
         } = this.#turnTally.takeAtResult();
 
         // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
@@ -2934,6 +2936,8 @@ class RunnerSession {
                   resultTextOf(event).text,
                   openedWorkersThisTurn,
                   workerRejectionsThisTurn,
+                  failedWorkerNotificationsThisTurn,
+                  failedWorkerNotificationsNamingLimitThisTurn,
                 ),
                 contentless: false,
               };
@@ -3055,6 +3059,16 @@ class RunnerSession {
    * `additionalContext` を注げないので（`RunnerCutOffWorkers` の
    * `#pendingCutOffNotifications` の doc）、次にマネージャー自身の道具が動いた
    * ときに配達する。
+   *
+   * **#1373 続き: `status: 'failed'` を状況証拠として数える。** `claude-provider.ts`
+   * が運んでくる `status` は絞らず string のまま（`AgentDelegationNotified.status`
+   * の doc）なので、ここで見るのは `=== 'failed'` の一致だけである——SDK が
+   * 版で値を増やしても、知らない値は自然に「失敗ではない」側へ落ちる（数えない
+   * だけで、握り潰しはしない）。**枠(429)を名乗っているかは、手で書いた文言
+   * 一致ではなく `classifyUsageNotice`（SDK の定数を使う既存の分類器。
+   * `usage-limits.ts`）に `summary` を通した結果で決める** —— この関数は
+   * このメソッドの少し下（`turn_ended` の枝）で `usage_notice` の判定にも
+   * 使われているのと同じ関数である。
    */
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
@@ -3065,6 +3079,12 @@ class RunnerSession {
     // **本当に 1→0 の遷移のときだけ閉じ待ちにする。** 対応の無い通知（本来
     // 起きない想定だが防御的に見る）で誤って閉じ待ちを立てない。
     if (had && this.#openTasks.size === 0) this.#windowClosing = true;
+
+    if (event.status === 'failed') {
+      const limitNamed =
+        event.summary !== undefined && classifyUsageNotice(event.summary) !== undefined;
+      this.#turnTally.recordFailedWorkerNotification(limitNamed);
+    }
 
     // #901: 同期経路（`#annotateCutOffWorker`）でまだ消費されていなければ、
     // ここで「未配達の打ち切り注記」として控える。
@@ -5089,6 +5109,19 @@ function unreportedText(said: readonly string[], reason: string): string {
  * （`RunnerTurnTally` の `#workerRejectionsThisTurn` の doc）。作業者自身の発言に拒否の印が付いて
  * いたので「作業者が当たった」とは言える。「本体は当たっていない」とは言わない。
  * 印は種類ごとに件数で畳む（同じ `rate_limit` が何件も並ぶと本文が太る）。
+ *
+ * **`workerRejections` が0件でも `failedWorkerNotifications` が1件以上なら、
+ * さらに別の行へ差し替える（Issue #1373 続き）。** こちらは `task_notification`
+ * が `status: 'failed'` で終わった件数——`workerRejections`（作業者自身の
+ * assistant メッセージに付いた拒否の印）とは別の経路の証拠である。CLI の中の
+ * 扱いを静的に読むと、作業者が枠で打ち切られても部分的な出力が在れば「失敗
+ * ではなく部分的な完了」として扱われ、そのとき作業者のエラーの assistant
+ * メッセージは親へ返す履歴から除かれる——`workerRejections` 側では拾えない
+ * 可能性がある（Issue #1373 の最新コメント）。**優先順位は`workerRejections`
+ * （作業者自身の発言に付いた直接の印）が最優先、次にこちら、最後に
+ * `openedWorkers`（開いた数だけ）という並びを保つ**——情報の具体さの順であって、
+ * 3つを足し合わせて全部載せることはしない（本文が太るだけで、いちばん確かな
+ * 証拠が埋もれる）。
  */
 function failedReportText(
   said: readonly string[],
@@ -5096,14 +5129,22 @@ function failedReportText(
   result: string,
   openedWorkers: number,
   workerRejections: readonly string[] = [],
+  failedWorkerNotifications = 0,
+  failedWorkerNotificationsNamingLimit = 0,
 ): string {
   const body = failure.text.length > 0 ? failure.text : result;
   const workerNote =
     workerRejections.length > 0
       ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`
-      : openedWorkers > 0
-        ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
-        : '';
+      : failedWorkerNotifications > 0
+        ? `\n（このターンでは作業者 ${String(failedWorkerNotifications)} 体が失敗で終わった${
+            failedWorkerNotificationsNamingLimit > 0
+              ? `（うち ${String(failedWorkerNotificationsNamingLimit)} 体は枠(429)を名乗った）`
+              : ''
+          }。本体も当たったかは SDK からは分からない）`
+        : openedWorkers > 0
+          ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
+          : '';
   const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}${workerNote}`;
   const partial = said.join('\n\n').trim();
   return partial.length === 0 ? head : `${head}\n\n（失敗する前に出ていた本文）\n${partial}`;
