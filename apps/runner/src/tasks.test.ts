@@ -1157,4 +1157,104 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(serialized).toContain('zombie-visible-cmd');
     expect(serialized).not.toContain('orphan-secret-cmd');
   });
+
+  /**
+   * **pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。**
+   *
+   * 穴: 委譲 A の起源 pid 777 が終わり、777 は `knownTerminatedSessionPidsOf()`
+   * に載る。その後、**生きた**委譲の配下で `setsid` したプロセスが偶然 pid 777 を
+   * 得ると、777 はそのセッションの長になり、配下の孤児の `sid` も 777 になる。
+   * 素朴な分岐4は「777 は終端済み」としてこの配下を撃ってしまう——実際には
+   * 生きた委譲の配下である。
+   *
+   * 守り: 走査に `pid === sid`（777）のプロセスが実在するなら、分岐4では
+   * 撃たない。詳しい理由は `reapDecisionFor` の doc（`apps/runner/src/tasks.ts`）
+   * を見よ。
+   */
+  describe('pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）', () => {
+    it('sid が終端済みでも、同じ pid のプロセス（セッションの長）がいま実在するなら撃たない', async () => {
+      // 777 = 使い回された pid。生きている（＝いま /proc に実在する）。
+      // ppid はどの root にも繋がらない値にして、777 自身は孤児候補にしない
+      // （この歯が見たいのは「777 の *配下* が誤って撃たれないか」である）。
+      placeProcess(root, 777, 'setsid-reused-pid', 'S', 1, 0, 999, 777);
+      // 300 = 777 の配下で孤児になったプロセス。sid はセッションの長 777 のまま。
+      placeProcess(root, 300, 'orphaned-under-reused-pid', 'S', 2, 0, 1, 777);
+      placeUptime(root, 1000);
+      const { fn: killFn, calls } = fakeKillFn();
+
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        reclaim: {
+          childUid: OWN_UID,
+          reap: {
+            // 別の委譲(999)がまだ生きている ⟹ 分岐1の近道には乗らない。
+            liveSessionPidsOf: () => new Set([999]),
+            // host 側は 777 を「終端済み」と判定している（起源のプロセスは
+            // 確かに終わっている。ただし pid は使い回された）。
+            knownTerminatedSessionPidsOf: () => new Set([777]),
+          },
+        },
+      });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(1); // 300 だけが孤児候補（777 は孤児ルートではない）
+      expect(result?.reclaim?.signalled).toBe(0); // 守りが効いて撃たない
+      expect(calls).toEqual([]);
+    });
+
+    it('候補自身が session leader（pid === sid）のときも、pid 使い回しの守りで撃たない', async () => {
+      // 777 自身がセッションの長で、かつ孤児（`setsid nohup` の典型的な残骸の形）。
+      placeProcess(root, 777, 'self-orphaned-leader', 'S', 3, 0, 1, 777);
+      placeUptime(root, 1000);
+      const { fn: killFn, calls } = fakeKillFn();
+
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        reclaim: {
+          childUid: OWN_UID,
+          reap: {
+            liveSessionPidsOf: () => new Set([999]),
+            knownTerminatedSessionPidsOf: () => new Set([777]),
+          },
+        },
+      });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.candidates).toBe(1);
+      expect(result?.reclaim?.signalled).toBe(0);
+      expect(calls).toEqual([]);
+    });
+
+    /**
+     * **⚠️ この守りは分岐1には適用しない（依頼者の判断）。** 分岐1（runner が
+     * 把握している委譲が0本）では、どの sid も生きた委譲の配下に属しようが
+     * 無いので使い回しの危険が無い。むしろ `setsid nohup` で起こしたまま孤立
+     * したサーバの残骸（自分がセッションの長で `ppid == 1`）こそ分岐1で片付け
+     * たい主対象であり、ここに守りを入れるとそれが永久に残ってしまう。
+     */
+    it('分岐1（委譲0本）には守りを適用しない——session leader が実在しても撃つ', async () => {
+      placeProcess(root, 777, 'setsid-nohup-leftover', 'S', 3, 0, 1, 777);
+      placeUptime(root, 1000);
+      const { fn: killFn, calls } = fakeKillFn();
+
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        reclaim: {
+          childUid: OWN_UID,
+          reap: {
+            liveSessionPidsOf: () => new Set(),
+            knownTerminatedSessionPidsOf: () => new Set(),
+            anyTrackedDelegationsOf: () => false, // runner が把握している委譲が0本
+          },
+        },
+      });
+      const result = await reader.read();
+
+      expect(result?.reclaim?.signalled).toBe(1);
+      expect(calls).toEqual([{ pid: 777, signal: 'SIGTERM' }]);
+    });
+  });
 });

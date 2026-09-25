@@ -301,6 +301,14 @@ export interface ReclaimScanOptions {
  * 同じ委譲に新しいプロセスが立てば、古いプロセスの孤児も次の判定からは
  * 「終端していない」側へ戻る）。分岐1 の「委譲が1本も無い」も同じ定義を使う
  * （`anyTrackedDelegationsOf`）。
+ *
+ * **⚠️ 分岐4には、それとは別に pid 使い回しの守りが入る（レビュー指摘・#1334）。**
+ * `knownTerminatedSessionPids` に載っている sid（＝ pid）は「起源のプロセスは
+ * 終わっている」ことしか意味しないので、OS が同じ pid を**生きた別の委譲の
+ * 配下**（`setsid` したプロセス）へ使い回した場合、素朴な分岐4はそれを誤って
+ * 撃ってしまう。守りは「その sid と同じ pid が、今回の走査に実在するなら
+ * 撃たない」——詳しい理由は {@link reapDecisionFor} の doc を見よ。**この守りは
+ * 分岐1には適用しない**（同じ doc）。
  */
 export interface ReclaimReapOptions {
   /**
@@ -702,6 +710,16 @@ async function observeReclaim(
     reclaim.reap?.knownTerminatedSessionPidsOf() ?? new Set<number>();
   // **省略時は `true`（安全側）——doc は {@link ReclaimReapOptions.anyTrackedDelegationsOf}。**
   const anyTrackedDelegations = reclaim.reap?.anyTrackedDelegationsOf?.() ?? true;
+  // **pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。** `scanned` は
+  // UID を問わず今回の走査に写った全 pid——`sid` と同じ値の pid がここに実在する
+  // なら、そのプロセスがいま session leader そのものである（`setsid` すると
+  // 自分の pid がそのまま sid になる、という OS の規則）。`knownTerminatedSessionPids`
+  // に載っている sid は「起源の長は終わっている」前提でしかないので、**いま
+  // 同じ pid が実在するなら、それは (a) pid が使い回されて生きた別の委譲の配下が
+  // 新しいセッションを開いたか (b) 何らかの理由で判定が追いついていないだけで
+  // 本人がまだ生きているかのどちらかであり、どちらでも撃たない側へ倒す。**
+  // 詳しい理由は {@link reapDecisionFor} の doc を見よ。
+  const scannedPids = new Set(scanned.map((entry) => entry.pid));
 
   let candidates = 0;
   let candidateThreads = 0;
@@ -748,6 +766,7 @@ async function observeReclaim(
             liveSessionPids,
             knownTerminatedSessionPids,
             anyTrackedDelegations,
+            scannedPids,
           ) === 'fire'
         ) {
           fireCandidates.push({ pid: entry.pid, numThreads: entry.numThreads });
@@ -823,7 +842,8 @@ async function observeReclaim(
  *    問わず孤児で確定）
  * 2. `sid` が読めない ⟹ `'hold'`
  * 3. `sid` が生きている委譲のものと一致 ⟹ `'hold'`
- * 4. `sid` が終端済みと分かっている委譲のものと一致 ⟹ `'fire'`
+ * 4. `sid` が終端済みと分かっている委譲のものと一致 ⟹ `'fire'`（**ただし
+ *    pid 使い回しの守りが挟まる。下の doc）
  * 5. どれでもない（`setsid` で抜けた等） ⟹ `'hold'`
  *
  * **迷う形（2・3・5）は全部 `'hold'` に倒してある。** 撃つのは 1 と 4 だけ。
@@ -831,17 +851,40 @@ async function observeReclaim(
  * **分岐1 は `liveSessionPids` の大きさでは判定しない**（レビュー指摘・#1334）。
  * `anyTrackedDelegations` を別に受け取るのはそのため——理由は
  * {@link ReclaimReapOptions.anyTrackedDelegationsOf} の doc を見よ。
+ *
+ * **⚠️ pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。** `knownTerminatedSessionPids`
+ * に載っている sid（＝ pid）は「その pid の *起源の* プロセスは終わっている」
+ * ことしか意味しない。OS の pid は有限なので、**その pid が別の（生きた）委譲の
+ * 配下で `setsid` したプロセスへ使い回されることがありうる**——`setsid` は自分の
+ * pid をそのまま新しいセッションの sid にするので、使い回された pid のプロセスは
+ * 「終端済みのはずの sid」を再び名乗る。その配下が孤児になれば、素朴な分岐4は
+ * それを「終端済み委譲の残骸」として撃ってしまう。
+ *
+ * **守り: `scannedPids`（今回の走査に写った全 pid。UID を問わない）に `sid` と
+ * 同じ pid が実在するなら、分岐4では撃たない（`'hold'`）。** `sid` は session
+ * leader 自身の pid なので、それが実在するなら (a) 使い回されて生きた委譲の
+ * 配下が新しいセッションを開いた場合と (b) 何らかの理由で本人がまだ生きている
+ * 場合のどちらかにしかならず、**どちらでも撃たない側が正しい。** 候補自身が
+ * `pid === sid`（自分がセッションの長で、`setsid` して自ら孤立した形）のときも
+ * 必ずこの守りに掛かる——候補自身は常に `scannedPids` に居るからである。
+ *
+ * **⚠️ この守りは分岐1には適用しない**（依頼者の判断・#1334）。分岐1は「runner が
+ * 把握している委譲が1本も無い」場合で、そのときはどの `sid` も生きた委譲の配下に
+ * 属しようが無いので使い回しの危険が無い。むしろ `setsid nohup` で起こしたまま
+ * 孤立したサーバの残骸（自分がセッションの長で `ppid == 1`）こそ分岐1で片付け
+ * たい主対象であり、ここに守りを入れると**それが永久に残ってしまう**。
  */
 function reapDecisionFor(
   sid: number | undefined,
   liveSessionPids: ReadonlySet<number>,
   knownTerminatedSessionPids: ReadonlySet<number>,
   anyTrackedDelegations: boolean,
+  scannedPids: ReadonlySet<number>,
 ): 'fire' | 'hold' {
   if (!anyTrackedDelegations) return 'fire';
   if (sid === undefined) return 'hold';
   if (liveSessionPids.has(sid)) return 'hold';
-  if (knownTerminatedSessionPids.has(sid)) return 'fire';
+  if (knownTerminatedSessionPids.has(sid)) return scannedPids.has(sid) ? 'hold' : 'fire';
   return 'hold';
 }
 
