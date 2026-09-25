@@ -343,6 +343,12 @@ describe('世代（fencing token）と自己失効', () => {
         // `list()` がまだ委譲を持ったままの状態を拾う（`packages/core/src/
         // runner-fence.test.ts` と同じ実測・同じ理由）。
         readCgroupEventCountersFn: async () => ({}),
+        // **同じ理由で、未 push の観測（Issue #1266 候補(2)）も実 I/O させない。**
+        // `#finish()` が `closed` を emit する直前に取る観測（既定は
+        // `this.unpushedWork()` → `computeUnpushedWork`）は `cwd` の下を実際に
+        // 読みに行く——上と同型の実測で同じ遅れが出る（`packages/core/src/
+        // runner.ts` の `RunnerSessionOptions.finishUnpushedWorkFn` の doc）。
+        finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
       });
       const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
 
@@ -385,6 +391,8 @@ describe('世代（fencing token）と自己失効', () => {
         enforceLease: true,
         // 同上（Issue #1517）。
         readCgroupEventCountersFn: async () => ({}),
+        // 同上（Issue #1266 候補(2)）。
+        finishUnpushedWorkFn: async () => ({ cwd: '/work/project', worktrees: [] }),
       });
       const app = createRunnerApp({ host: testHost, outbox, tokenSha256: TOKEN_SHA256 });
 
