@@ -175,3 +175,49 @@ function statValueOf(stat: string | undefined, key: string): number | undefined 
   const value = Number(line.slice(key.length + 1).trim());
   return Number.isFinite(value) ? value : undefined;
 }
+
+/**
+ * `pids.events` の `max`（pids 上限で fork を断った累計回数）と `memory.events`
+ * の `oom_kill`（OOM で殺した累計回数）——**その時点での生の値**であって差分
+ * ではない（差分は `cgroup-events.ts` の `cgroupEventsDeltaOf` が、開いた
+ * ときとの2点から作る。Issue #1517「最小の形」1）。
+ *
+ * `pidsOf` / `memoryOf` と同じく**フォールバック先を持たない**——「ホストの
+ * pids 上限」に相当する概念が無いのと同じ理由で、「ホストの累計拒否回数」も
+ * 存在しない。cgroup から読めなければ、その欄はまるごと省略する。
+ *
+ * **2つの欄は独立して省略できる。** `pids.events` と `memory.events` は
+ * 別ファイルで、cgroup のコントローラは選んで有効化できるため、片方だけ
+ * 読めることが普通に起こる（`cgroup-events.ts` の doc）。
+ */
+export interface CgroupEventCounters {
+  pidsMax?: number;
+  oomKill?: number;
+}
+
+export async function readCgroupEventCounters(
+  options: ExecutionResourcesOptions = {},
+): Promise<CgroupEventCounters> {
+  const dirs = await cgroupDirs(options.cgroupRoot ?? CGROUP_ROOT, options.procCgroupPath);
+  const [pidsEvents, memoryEvents] = await Promise.all([
+    readFirst(dirs, 'pids.events'),
+    readFirst(dirs, 'memory.events'),
+  ]);
+  const pidsMax = eventCounterOf(pidsEvents, 'max');
+  const oomKill = eventCounterOf(memoryEvents, 'oom_kill');
+  return {
+    ...(pidsMax === undefined ? {} : { pidsMax }),
+    ...(oomKill === undefined ? {} : { oomKill }),
+  };
+}
+
+/**
+ * `pids.events` / `memory.events` の1行（`<key> <value>`）から値を読む。
+ * 読めない・負・非整数なら `undefined`（0 と混ぜない）。
+ */
+function eventCounterOf(text: string | undefined, key: string): number | undefined {
+  const line = text?.split('\n').find((entry) => entry.startsWith(`${key} `));
+  if (line === undefined) return undefined;
+  const value = Number(line.slice(key.length + 1).trim());
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}

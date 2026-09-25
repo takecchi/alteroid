@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
 import { type RunnerRevisionReport } from './revision.js';
@@ -1507,6 +1508,32 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * `lost`（resume 不能）へ倒れる回にも、同じ例外の分類として付く。
      */
     systemError: systemErrorFactsSchema.optional(),
+    /**
+     * **委譲が生きていた間に、器の cgroup 全体で増えた「上限で拒んだ／殺した」
+     * 回数（Issue #1517「最小の形」1）。**
+     *
+     * `pids.events` の `max`（pids 上限で fork を断った累計回数）と
+     * `memory.events` の `oom_kill`（OOM で殺した累計回数）を、委譲のセッションが
+     * 開いたときと `closed` のときの2点で読み、その差分を運ぶ。**器全体の
+     * 累計の差分であって、この委譲の専有ではない**——`cgroup-events.ts` の
+     * `cgroupEventsDeltaSchema` の doc に系統立った説明がある。
+     *
+     * **`systemError` とは別の軸である。** あちらは Node が構造として持つ
+     * 失敗の分類（`code`/`errno`/`syscall`）で、`code` を持たない例外
+     * （枠 429・signal で畳まれた回）には付かない。こちらは cgroup の
+     * カウンタが読めた回には（`status` に関わらず）付きうる——**同じ晩に
+     * `EAGAIN`（`systemError` が付く）と `SIGABRT`（`systemError` は付かない）
+     * の両方が観測されている**ので、`systemError` が無い回にこそこちらが
+     * 効く（#1334 の SIGABRT の原因調査そのもの）。
+     *
+     * **`.optional()` にしてあるのは、`systemError` / `selfFenced` と同じ
+     * 理由——runner とデーモンは別デプロイで版がずれる。この欄を送らない
+     * 古い runner の `closed` を1つも壊さない。**
+     *
+     * 読めない・パースできない・開いたときの値が無い（runner の再起動を
+     * またいだ等）なら、欄そのものを出さない（0 と混ぜない）。
+     */
+    cgroupEvents: cgroupEventsDeltaSchema.optional(),
   }),
   /**
    * 前のセッションを開き直せなかった。

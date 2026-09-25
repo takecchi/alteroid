@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { AnsweredViaLike } from './answered-via.js';
+import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import { systemErrorFactsSchema } from './system-error.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
@@ -3875,6 +3876,29 @@ export const jobSchema = z.object({
    * 回では消える」のと同じ理由。下ろす条件は `case 'report'` 側の doc）。
    */
   lastSystemError: systemErrorFactsSchema.extend({ at: isoDateTime }).optional(),
+  /**
+   * セッションが `closed` として畳まれたとき、その委譲が生きていた間に
+   * 器の cgroup 全体で増えた「pids 上限で拒んだ／OOM で殺した」回数の差分
+   * （`cgroup-events.ts` の `CgroupEventsDelta`。Issue #1517「最小の形」2）。
+   *
+   * **`lastSystemError` と軸が違う。** あちらは Node が構造として持つ失敗の
+   * 分類（`code`/`errno`/`syscall`）で `status === 'failed'` かつ `code` を
+   * 持つ例外のときにしか立たない。こちらは cgroup のカウンタが読めた回には
+   * `status` に関わらず立ちうる——**signal で畳まれた回（`lastSystemError`
+   * が立たない回）にこそ効く軸**（#1334 の SIGABRT 原因調査）。同じ欄に
+   * 混ぜない。
+   *
+   * **いまは `status === 'failed'` の回にだけ書く。** `manager.ts` の
+   * `#onEvent` の `case 'closed'` が、`lastSystemError` と同じ条件
+   * （`event.status === 'failed'` かつ材料が在る）でだけ立てる——`done` /
+   * `lost` で畳まれた回にまで台帳の欄を増やすかどうかは、この最小の形の外に
+   * ある判断として保留した（設計判断。PR 本文に記載）。
+   *
+   * **古びさせる。** `lastSystemError` と同じ理由・同じ条件（`case 'report'`
+   * が届いた回）で下ろす——起こし直されて普通に報告しているマネージャーに、
+   * 過去のセッションの落ち方が貼り付いたままにしない。
+   */
+  lastCgroupEvents: cgroupEventsDeltaSchema.extend({ at: isoDateTime }).optional(),
   /**
    * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #914 段2）。
    *

@@ -35,6 +35,7 @@ import {
   assertNeverRunnerLegStatus,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
 } from './runner-protocol.js';
+import { CGROUP_EVENTS_UNKNOWN_NOTE, formatCgroupEventsNote } from './cgroup-events.js';
 import { formatSystemErrorFacts, SYSTEM_ERROR_UNKNOWN_NOTE } from './system-error.js';
 // **`manager_list` と digest の「マネージャー」節で同じ字面を出すための唯一の
 // 生成元。** 片方だけ変えられると区別が潰れる——実際にクローンがそれで誤り、
@@ -2806,6 +2807,42 @@ function describeManagerSystemError(manager: ManagerSummary): string | null {
  */
 function systemErrorLine(manager: ManagerSummary): string | null {
   const note = describeManagerSystemError(manager);
+  return note === null ? null : `  ${note}`;
+}
+
+/**
+ * 一覧に添える、セッションが `failed` として畳まれたとき、その委譲が
+ * 生きていた間に器の cgroup 全体で増えた「pids 上限で拒んだ／OOM で殺した」
+ * 回数（Issue #1517「最小の形」2）。
+ *
+ * **`describeManagerSystemError` と対で読むが、軸は別。** あちらは Node が
+ * 構造として持つ失敗の分類（`code`/`errno`/`syscall`）で `code` を持たない
+ * 例外（枠 429・signal で畳まれた回）には材料が無い。こちらは cgroup の
+ * カウンタが読めた回には付きうる——`manager.status === 'failed'` のとき
+ * にしか材料が無いのは同じ（それ以外の回は `null`。`schema.ts` の
+ * `lastCgroupEvents` の doc）。
+ *
+ * **因果は名乗らない。** `formatCgroupEventsNote` / `CGROUP_EVENTS_UNKNOWN_NOTE`
+ * の doc のとおり、言えるのは「同じ時間帯に器でそれが起きた／起きなかった」
+ * までである。
+ *
+ * **字面の生成元はここ1箇所である。** `manager_list` と `manager_report` の
+ * 両方がこれを使う——`describeManagerSystemError` と同じ理由。
+ */
+function describeManagerCgroupEvents(manager: ManagerSummary): string | null {
+  if (manager.status !== 'failed') return null;
+  if (manager.lastCgroupEvents === undefined) {
+    return `⚠ ${CGROUP_EVENTS_UNKNOWN_NOTE}。`;
+  }
+  return `${formatCgroupEventsNote(manager.lastCgroupEvents)}（${manager.lastCgroupEvents.at}）。`;
+}
+
+/**
+ * {@link describeManagerCgroupEvents} を `manager_list` の `extra` へ入れる形に
+ * する（`systemErrorLine` と同じ作法）。
+ */
+function cgroupEventsLine(manager: ManagerSummary): string | null {
+  const note = describeManagerCgroupEvents(manager);
   return note === null ? null : `  ${note}`;
 }
 
@@ -9414,6 +9451,12 @@ export function createCloneTools(context: ToolContext) {
               // 事実として両方読める——どちらかを隠さない。
               // **健全なマネージャーでは `null` を返し、1文字も増えない。**
               systemErrorLine(manager),
+              // **同じ「失敗は報告の上」の順で置く（Issue #1517「最小の形」
+              // 2）。** `systemErrorLine`（すぐ上）とは別の軸なので別行——
+              // 両方が同時に出ることがある（`code` を持つ例外かつ cgroup も
+              // 読めた回）。**健全なマネージャーでは `null` を返し、1文字も
+              // 増えない。**
+              cgroupEventsLine(manager),
               manager.lastReport === undefined
                 ? null
                 : // **時刻は既存の行に添えるだけ**（#358）。行を1本増やすと、
@@ -9645,6 +9688,10 @@ export function createCloneTools(context: ToolContext) {
           // 「報告が無い」を理由にこちらまで黙らせない（片方が空だからもう
           // 片方も出さない、にはしない）。
           const systemError = describeManagerSystemError(found);
+          // **同じ理由で、cgroup の分類も報告が空の回で拾う（Issue #1517
+          // 「最小の形」2）。** 軸は `systemError` と別だが、材料の在り無しの
+          // 形は同じ——片方が空だからもう片方も出さない、にはしない。
+          const cgroupEvents = describeManagerCgroupEvents(found);
           // **報告が空の回こそ、拒否がいちばん効く（Issue #830）。** 分類器か
           // deny 規則で手が止まった委譲は `running` のまま報告を書かないので、
           // **この枝に落ちる**。ここで黙ると、クローンは「まだ書いていない」と
@@ -9660,7 +9707,9 @@ export function createCloneTools(context: ToolContext) {
           // `describeUnobservedOutcome` 1箇所で、`manager_list` と割れない。
           const unobserved = describeUnobservedOutcome(found);
           return text(
-            [missing, systemError, denied, unobserved].filter((s) => s !== null).join('\n\n'),
+            [missing, systemError, cgroupEvents, denied, unobserved]
+              .filter((s) => s !== null)
+              .join('\n\n'),
           );
         }
 
@@ -9693,6 +9742,11 @@ export function createCloneTools(context: ToolContext) {
         // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
         // このセッションの落ち方の話ではない）。
         const systemError = part === 'request' ? null : describeManagerSystemError(found);
+        // **同じ場所で掘れる（Issue #1517「最小の形」2）。** `manager_list`
+        // の `cgroupEventsLine` と同じ材料——`systemError` と同じ軸ではない
+        // ので、両方が同時に出ることがある。`part === 'request'` では出さない
+        // （`failure` / `systemError` と同じ線）。
+        const cgroupEvents = part === 'request' ? null : describeManagerCgroupEvents(found);
         // **拒否も同じ場所で掘れる（Issue #830）。** `manager_list` の `denialLine`
         // と同じ材料を、同じ字面（`describeDenials`）で出す。**報告が在る回でも
         // 出す** —— 報告を書いた後で別の道具を止められている形が在り、そのとき
@@ -9767,6 +9821,10 @@ export function createCloneTools(context: ToolContext) {
         // `tools.ts` の `describeManagerSystemError` の doc）。**出ていない
         // 回は1文字も増えない。**
         const systemErrorNote = systemError === null ? '' : `${systemError}\n\n`;
+        // **同じ順・同じ理由で本文の上に置く（Issue #1517「最小の形」2）。**
+        // `systemErrorNote` とは別の軸なので、両方が同時に出ることがある。
+        // **対象外の委譲では1文字も増えない。**
+        const cgroupEventsNote = cgroupEvents === null ? '' : `${cgroupEvents}\n\n`;
         // **同じ順・同じ理由で本文の上に置く（Issue #830）。** 本文の下だと、
         // 報告を読み終えてから「実は途中で止められていた」と分かる順になる。
         // **止められていない回は1文字も増えない。**
@@ -9786,7 +9844,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${driftNote}${failureNote}${systemErrorNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${driftNote}${failureNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
         );
       },
     ),

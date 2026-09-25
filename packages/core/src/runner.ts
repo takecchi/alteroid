@@ -29,6 +29,7 @@ import type {
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { cgroupEventsDeltaOf, type CgroupEventsDelta } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
@@ -54,6 +55,7 @@ import {
 import { createProfileApplier, type ProfileApplier, type ProfileVessel } from './profile.js';
 import { createRecentMap } from './recent.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
+import { readCgroupEventCounters, type CgroupEventCounters } from './runner-resources.js';
 import { RunnerFenceError } from './runner-protocol.js';
 import {
   BACKGROUND_TASK_OWNER_LIMIT,
@@ -358,6 +360,12 @@ export interface RunnerHostOptions {
    * `RunnerSessionOptions.spawnClaudeCodeProcessFn` の doc を見よ。
    */
   spawnClaudeCodeProcessFn?: (options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle;
+  /**
+   * `pids.events` / `memory.events` を読む実体をテストから差し替える
+   * （Issue #1517「最小の形」1）。**主にテスト用**（`queryFn` と同じ理由）。
+   * `RunnerSessionOptions.readCgroupEventCountersFn` の doc を見よ。
+   */
+  readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
 }
 
 export interface RunnerHost {
@@ -570,6 +578,7 @@ class Host implements RunnerHost {
   readonly #pidOwnerManagerId = new Map<number, string>();
   readonly #spawnClaudeCodeProcessFn:
     ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle) | undefined;
+  readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
 
   constructor(options: RunnerHostOptions) {
     this.runnerId = options.runnerId;
@@ -583,6 +592,7 @@ class Host implements RunnerHost {
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
     this.#spawnClaudeCodeProcessFn = options.spawnClaudeCodeProcessFn;
+    this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
       // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
@@ -826,6 +836,9 @@ class Host implements RunnerHost {
       ...(this.#spawnClaudeCodeProcessFn === undefined
         ? {}
         : { spawnClaudeCodeProcessFn: this.#spawnClaudeCodeProcessFn }),
+      ...(this.#readCgroupEventCountersFn === undefined
+        ? {}
+        : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
     });
     this.#sessions.set(managerId, session);
     return session;
@@ -1191,6 +1204,14 @@ interface RunnerSessionOptions {
    * プロセス無しで固定できるようにしてある。
    */
   spawnClaudeCodeProcessFn?: (options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle;
+  /**
+   * `pids.events` / `memory.events` を読む実体をテストから差し替える
+   * （Issue #1517「最小の形」1）。**主にテスト用**（`queryFn` /
+   * `spawnClaudeCodeProcessFn` と同じ理由）。既定は本物
+   * （`runner-resources.ts` の `readCgroupEventCounters`、既定の
+   * `/sys/fs/cgroup` を読む）。
+   */
+  readCgroupEventCountersFn?: () => Promise<CgroupEventCounters>;
 }
 
 class RunnerSession {
@@ -1212,6 +1233,21 @@ class RunnerSession {
   readonly #spawnClaudeCodeProcessFn: (
     options: SpawnClaudeCodeProcessOptions,
   ) => DelegationProcessHandle;
+  readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
+  /**
+   * このセッションが**この runner プロセスの中で**開いたときの cgroup の
+   * 累計カウンタ（Issue #1517「最小の形」1）。**コンストラクタで一度だけ
+   * 読む**——`start`（新しい委譲）と `resume`（この `Host` インスタンスに
+   * とって初めて見るセッション）のどちらも `Host#create` が新しい
+   * `RunnerSession` を作るので、どちらの経路でも「開いたとき」が指す時点は
+   * 一致する。
+   *
+   * **`Promise` のまま持つ。** コンストラクタは同期なので、fs 読み取り
+   * （非同期）を待たずに構築を終える——`#finish()` 側で待つ。読めなかった
+   * 軸は `CgroupEventCounters` の欄が省かれるだけで、この `Promise` 自体は
+   * 拒否しない（`readCgroupEventCounters` は例外を投げない）。
+   */
+  readonly #openedCgroupEvents: Promise<CgroupEventCounters>;
 
   readonly #input: SDKUserMessage[] = [];
   readonly #pending: PendingRequest[] = [];
@@ -1584,6 +1620,14 @@ class RunnerSession {
       options.spawnClaudeCodeProcessFn ??
       ((spawnOptions) =>
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
+    this.#readCgroupEventCountersFn =
+      options.readCgroupEventCountersFn ?? (() => readCgroupEventCounters());
+    // **いま読み始める。** 「開いたとき」を指すのはこの瞬間でなければならない
+    // ——`#finish()` の時点で読み直すと、それは「畳んだとき」の値でしかなく
+    // 差分が取れない。`.catch` は付けない——`readCgroupEventCounters` は
+    // 例外を投げない（`readText` が内側で catch 済み）実装なので、ここで
+    // 握る例外は本来無い。
+    this.#openedCgroupEvents = this.#readCgroupEventCountersFn();
   }
 
   /** 見張り（`Host#checkLeaseExpiry`）が読む、いまの貸し出し期限。 */
@@ -3405,6 +3449,17 @@ class RunnerSession {
     // `#shipArchive()` の後に置いてあるのは、この報告を読んだクローンが
     // すぐ `manager_transcript` で裏を取れるようにするためである。
     this.#flushUnreported(reason, status);
+    // **「畳んだとき」の1点を、ここで初めて読む（Issue #1517「最小の形」1）。**
+    // `#openedCgroupEvents` は構築時（＝「開いたとき」）に読み始めた
+    // `Promise` で、ここで初めて await する——構築からここまでの間に
+    // 例外は投げない実装（`readCgroupEventCounters` の doc）なので、
+    // ここで初めて失敗を気にする必要は無い。`cgroupEventsDeltaOf` が
+    // 差分を作れなければ（片方の軸が読めなかった・逆行していた）
+    // `undefined` を返し、そのときは欄ごと出さない。
+    const cgroupEvents = cgroupEventsDeltaOf(
+      await this.#openedCgroupEvents,
+      await this.#readCgroupEventCountersFn(),
+    );
     this.#emit({
       type: 'closed',
       managerId: this.#id,
@@ -3412,6 +3467,7 @@ class RunnerSession {
       reason,
       ...(options.selfFenced === undefined ? {} : { selfFenced: options.selfFenced }),
       ...(options.systemError === undefined ? {} : { systemError: options.systemError }),
+      ...(cgroupEvents === undefined ? {} : { cgroupEvents }),
     });
     this.#onClosed();
   }

@@ -90,6 +90,7 @@ import type {
   WorkspaceLocator,
 } from './schema.js';
 import type { Stores } from './store.js';
+import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import { matchNoticeResetAgainstPool, type NoticeResetMatch } from './token-reset-match.js';
 import {
@@ -547,6 +548,15 @@ export interface ManagerSummary {
    * はもう走っていない。詳しくは `schema.ts` の `lastSystemError` の doc。
    */
   lastSystemError?: NonNullable<Job['lastSystemError']>;
+  /**
+   * セッションが `closed` として畳まれたとき、その委譲が生きていた間に器の
+   * cgroup 全体で増えた「pids 上限で拒んだ／OOM で殺した」回数の差分
+   * （`jobSchema.lastCgroupEvents`。Issue #1517「最小の形」2）。
+   *
+   * `lastSystemError` と軸が違う——詳しくは `schema.ts` の
+   * `lastCgroupEvents` の doc。
+   */
+  lastCgroupEvents?: NonNullable<Job['lastCgroupEvents']>;
   /**
    * この委譲が**枠（利用上限）で止まった**印が立った時刻
    * （`jobSchema.usageStoppedAt` の写し。Issue #1212 残件2）。
@@ -8794,6 +8804,10 @@ class Pool implements ManagerPool {
          * （PR 本文にも記載）。
          */
         delete record.job.lastSystemError;
+        // **同じ理由・同じ条件で下ろす（Issue #1517「最小の形」2）。**
+        // `lastCgroupEvents` も「セッションが `closed` として畳まれた」瞬間を
+        // 指す欄なので、`lastSystemError` と同じ軸で古びる。
+        delete record.job.lastCgroupEvents;
         // **失敗として終わった回は台帳にもそう残す。** 本文（`event.text`）は
         // runner 側で既に包まれているが、包んだ文字列だけに頼ると、一覧を出す側は
         // 「報告が来た」と「エラーで死んだ」を本文の先頭を読んで判定することに
@@ -10264,6 +10278,21 @@ class Pool implements ManagerPool {
         if (event.status === 'failed' && event.systemError !== undefined) {
           record.job.lastSystemError = { ...event.systemError, at: new Date().toISOString() };
         }
+        /*
+         * **同じ理由・同じ条件で台帳へ残す（Issue #1517「最小の形」2）。**
+         * `event.cgroupEvents` は受信箱の合図の本文（下の
+         * `withCgroupEventsNote`）には既に運ばれているが、それだけだと
+         * 振り返る面（`manager_list` / `manager_report`）からは復元できない
+         * ——`lastSystemError` と同じ理由。**軸は違う** —— こちらは `code`
+         * を持たない例外（signal で畳まれた回）にも付きうるが、**いまは
+         * `event.status === 'failed'` の回にだけ書く**（`lastSystemError`
+         * と同じ条件に揃える。`done` / `lost` まで広げるかは保留——
+         * `schema.ts` の `lastCgroupEvents` の doc）。**無い回に既定値を
+         * 作らない**——読めなかった回は欄ごと undefined のままにする。
+         */
+        if (event.status === 'failed' && event.cgroupEvents !== undefined) {
+          record.job.lastCgroupEvents = { ...event.cgroupEvents, at: new Date().toISOString() };
+        }
         await this.#persist(record);
         // **`event.reason` を包まずに渡す（issue #287）。**
         //
@@ -10305,7 +10334,15 @@ class Pool implements ManagerPool {
           // （flush が走っても、flush 側の1行は内訳だけなので変わらない）。
           // 同じ文字列を2回組み立てず、journal と queue の両方へ同じ `const`
           // を渡す。
-          const body = withSystemErrorNote(event.reason, event.systemError);
+          //
+          // **`event.cgroupEvents`（Issue #1517「最小の形」2）を、さらに
+          // 末尾の1行として重ねる。** `withSystemErrorNote` と同じ形
+          // （base を変えず末尾に足すだけ）——文言は因果を名乗らない
+          // （`cgroup-events.ts` の `formatCgroupEventsNote` の doc）。
+          const body = withCgroupEventsNote(
+            withSystemErrorNote(event.reason, event.systemError),
+            event.cgroupEvents,
+          );
           await this.#journal({
             type: 'exchange',
             with: 'manager',
@@ -12342,6 +12379,10 @@ function summaryOf(
     // **台帳をそのまま写すだけ**（#713 段3）。書き込みは `#onEvent` の
     // `case 'closed'`（立てる）と `case 'report'`（下ろす）に閉じている。
     ...(job.lastSystemError === undefined ? {} : { lastSystemError: job.lastSystemError }),
+    // **同じ理由・同じ形で運ぶ（Issue #1517「最小の形」2）。** 台帳をそのまま
+    // 写すだけ——書き込みは `#onEvent` の `case 'closed'`（立てる）と
+    // `case 'report'`（下ろす）に閉じている。
+    ...(job.lastCgroupEvents === undefined ? {} : { lastCgroupEvents: job.lastCgroupEvents }),
     // **門を通した後の値をそのまま運ぶ（Issue #1212 残件2）。** `job` からでは
     // なく引数から取る——`ManagerSummary.usageStoppedAt` の doc「真の参照は
     // `#usageStopped`」のとおり、呼ぶ側（Pool のメソッド）が `Set` で門を
