@@ -363,6 +363,11 @@ export async function main(): Promise<void> {
   const reap: ReclaimReapOptions = {
     liveSessionPidsOf: () => host.delegationSessionPids().live,
     knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
+    // **`host.list()` は `#sessions`（生きた `RunnerSession` のマップ）から作る
+    // ので、「runner がいま把握している委譲が1本もあるか」をそのまま答える**
+    // ——`live` の集合の大きさでは代用できない理由は
+    // `ReclaimReapOptions.anyTrackedDelegationsOf` の doc を見よ。
+    anyTrackedDelegationsOf: () => host.list().length > 0,
   };
 
   // **知らない値なら、ここで落とす**（`reclaimScanOf` の doc）。起動してから

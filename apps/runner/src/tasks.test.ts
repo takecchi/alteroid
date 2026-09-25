@@ -816,7 +816,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
   }
 
-  it('生きている委譲が0本なら、sid が不明でも撃ってよい（属す先が無いので確定で孤児）', async () => {
+  it('runner がいま把握している委譲が0本なら、sid が不明でも撃ってよい（属す先が無いので確定で孤児）', async () => {
     placeProcess(root, 200, 'pnpm', 'S', 3, 0, 1, 999); // sid=999 はどこにも属さない
     placeUptime(root, 1000);
     const { fn: killFn, calls } = fakeKillFn();
@@ -829,6 +829,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reap: {
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
+          anyTrackedDelegationsOf: () => false,
         },
       },
     });
@@ -837,6 +838,67 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
     expect(result?.reclaim?.mode).toBe('reclaim');
     expect(result?.reclaim?.signalled).toBe(1);
     expect(calls).toEqual([{ pid: 200, signal: 'SIGTERM' }]);
+  });
+
+  /**
+   * **⚠️ レビュー指摘・#1334 の是正を固定する。** 直す前は分岐1を
+   * `liveSessionPids.size === 0` で判定していた——`childUser` 無し等、プロセス
+   * 追跡そのものを行わない構成では `liveSessionPidsOf()` が常に空集合を返す
+   * ので、**委譲がいくつ生きていても「0本」と誤読され、無条件に撃っていた。**
+   * このテストは「生きているプロセスは0本だが、runner はまだ委譲を1本
+   * 把握している（`anyTrackedDelegationsOf` が `true`）」場合を再現し、分岐1が
+   * 発火しない（＝候補ごとの通常判定へ回り、sid が不明なので `hold` になる）
+   * ことを固定する。
+   */
+  it('生きているプロセスが0本でも、runner が委譲を把握していれば撃たない（liveSessionPids の大きさでは分岐1を判定しない）', async () => {
+    placeProcess(root, 201, 'pnpm', 'S', 3, 0, 1, 999); // sid=999 はどちらの集合にも無い
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          // **プロセス追跡が無い（例: childUser 未設定）構成の再現。** 生きた
+          // 委譲があっても常に空を返す——分岐1が `liveSessionPids.size===0` の
+          // ままなら、ここで無条件に撃ってしまう。
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+          anyTrackedDelegationsOf: () => true,
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.candidates).toBe(1);
+    expect(result?.reclaim?.signalled).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('anyTrackedDelegationsOf を省略した既定は true（安全側）——分岐1を無条件には発火させない', async () => {
+    placeProcess(root, 202, 'pnpm', 'S', 3, 0, 1, 999);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+          // anyTrackedDelegationsOf は渡さない ⟹ 既定 true。
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.candidates).toBe(1);
+    expect(result?.reclaim?.signalled).toBe(0);
+    expect(calls).toEqual([]);
   });
 
   it('sid が生きている委譲のものと一致するなら撃たない（setsid で抜けた孫が生きた委譲の下に居る形）', async () => {
@@ -952,6 +1014,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reap: {
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
+          anyTrackedDelegationsOf: () => false,
           graceMs: 10_000,
         },
       },
@@ -993,6 +1056,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reap: {
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
+          anyTrackedDelegationsOf: () => false,
         },
       },
     });
@@ -1030,6 +1094,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reap: {
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
+          anyTrackedDelegationsOf: () => false,
           graceMs: 10_000,
         },
       },
@@ -1081,6 +1146,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
         reap: {
           liveSessionPidsOf: () => new Set(),
           knownTerminatedSessionPidsOf: () => new Set(),
+          anyTrackedDelegationsOf: () => false,
         },
       },
     });

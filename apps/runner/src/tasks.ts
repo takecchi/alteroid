@@ -271,10 +271,11 @@ export interface ReclaimScanOptions {
  * ——子孫が `setsid` で自分から抜けない限り、`ppid` が `1` へ付け替わっても
  * セッション ID は起源の委譲プロセスの pid のまま残る。
  *
- * **判定は4分岐（保守的な側へ倒す。全部 {@link reapDecisionFor} が持つ）:**
+ * **判定は5分岐（保守的な側へ倒す。全部 {@link reapDecisionFor} が持つ）:**
  *
- * 1. 生きている委譲が runner 上に1本も無い ⟹ セッション ID を問わず撃ってよい
- *    （属す先が無いのだから、どのセッション ID であっても孤児で確定している）
+ * 1. runner がいま把握している委譲（`managerId`）が1本も無い ⟹ セッション ID を
+ *    問わず撃ってよい（属す先が無いのだから、どのセッション ID であっても孤児で
+ *    確定している）
  * 2. セッション ID が読めない ⟹ 撃たない（観測だけ続ける）
  * 3. セッション ID が「いま生きている委譲」のものと一致する ⟹ 撃たない
  *    （`setsid` で自分から抜けて生きている委譲の下で働いている孫を、誤って
@@ -285,6 +286,21 @@ export interface ReclaimScanOptions {
  *
  * **この5分岐のうち「撃つ」のは1と4だけである。** 迷う形（2・3・5のどれでもない
  * 未知の形）は全部「撃たない」側へ倒してある。
+ *
+ * **⚠️ 2026-09（レビュー指摘・#1334）で分岐1・4の定義を直した。** 直す前は
+ * どちらも「プロセスの生死」だけで判定していた——**「委譲（`managerId`）が
+ * 終端したか」と「そのプロセス自身が `exit` したか」は別のことである。**
+ * マネージャーがターンを終えて次の指示を待つ（`done`）間や、作業者が並列で
+ * 走っている間も、その委譲は生きたまま runner に残る一方、**そのプロセス自身は
+ * ごく普通に `exit` する**（1回の呼び出しが終わっただけ）。旧い定義だと、
+ * 後者が起きた瞬間にその孫（`nohup` で起こしたサーバ等）まで「終端済み」の
+ * 側へ回っていた——委譲そのものは何も終わっていないのに、である。**いまは
+ * `@alteroid/core` の `RunnerHost.delegationSessionPids()` が「その pid を
+ * 起こした `managerId` が、いま runner に生きたセッションとして残っているか」
+ * を毎回その場で判定する**（固定した「終端済み」集合を持たない——resume で
+ * 同じ委譲に新しいプロセスが立てば、古いプロセスの孤児も次の判定からは
+ * 「終端していない」側へ戻る）。分岐1 の「委譲が1本も無い」も同じ定義を使う
+ * （`anyTrackedDelegationsOf`）。
  */
 export interface ReclaimReapOptions {
   /**
@@ -294,16 +310,29 @@ export interface ReclaimReapOptions {
    */
   liveSessionPidsOf: () => ReadonlySet<number>;
   /**
-   * このrunnerが過去に起こしたが、既に終端したと分かっている委譲のセッション pid
-   * （有界。無限には覚えない——`@alteroid/core` の `Host` 側で上限を持つ）。
-   * 呼ぶたびに現在値を返す（{@link ReclaimReapOptions.liveSessionPidsOf} と同じ理由）。
+   * **その pid を起こした委譲（`managerId`）自身が、いま runner に生きた
+   * セッションとして残っていない** セッション pid。呼ぶたびに現在値を返す
+   * （{@link ReclaimReapOptions.liveSessionPidsOf} と同じ理由）。
    *
    * **runner プロセスを跨いで持ち越さない。** runner 自身が作り直された直後は
    * この集合が空で始まる——その窓に居る古い孤児は、セッション ID が「このrunnerの
    * 記憶に無い」側に落ちるので段1でも撃たれない（分岐5）。撃たれるとしたら、
-   * その時点で生きている委譲が0本のとき（分岐1）だけである。
+   * その時点で runner が把握している委譲が0本のとき（分岐1）だけである。
    */
   knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
+  /**
+   * runner がいま把握している委譲（`managerId`）が1本でもあるか（分岐1）。
+   * **省略時は `true`**（安全側——「無い」と確信できないなら在るとみなし、
+   * 分岐1で無条件に撃つ経路へ進まない）。
+   *
+   * **`liveSessionPidsOf()` の集合の大きさでは代用できない。** `done`（ターンを
+   * 終えて次を待つ）委譲はプロセスを持ったまま生きているので通常は問題ないが、
+   * `childUser` を渡さない構成（プロセス追跡そのものを行わない——
+   * `RunnerHost.delegationSessionPids` の doc）では `liveSessionPidsOf()` は
+   * 委譲の本数に関係なく常に空集合を返す。その状態を「委譲が0本」と読むと、
+   * 生きている委譲がいくつあっても分岐1が無条件で発砲してしまう。
+   */
+  anyTrackedDelegationsOf?: () => boolean;
   /**
    * SIGTERM を送ってから SIGKILL へ昇格するまでの猶予（ms）。省略時は
    * {@link DEFAULT_REAP_GRACE_MS}。**主にテスト用**（既定は本番向けの値）。
@@ -671,6 +700,8 @@ async function observeReclaim(
   const liveSessionPids = reclaim.reap?.liveSessionPidsOf() ?? new Set<number>();
   const knownTerminatedSessionPids =
     reclaim.reap?.knownTerminatedSessionPidsOf() ?? new Set<number>();
+  // **省略時は `true`（安全側）——doc は {@link ReclaimReapOptions.anyTrackedDelegationsOf}。**
+  const anyTrackedDelegations = reclaim.reap?.anyTrackedDelegationsOf?.() ?? true;
 
   let candidates = 0;
   let candidateThreads = 0;
@@ -712,7 +743,12 @@ async function observeReclaim(
         // セッションへ属していれば、その子孫は撃たない。
         if (
           reclaim.reap !== undefined &&
-          reapDecisionFor(entry.sid, liveSessionPids, knownTerminatedSessionPids) === 'fire'
+          reapDecisionFor(
+            entry.sid,
+            liveSessionPids,
+            knownTerminatedSessionPids,
+            anyTrackedDelegations,
+          ) === 'fire'
         ) {
           fireCandidates.push({ pid: entry.pid, numThreads: entry.numThreads });
         }
@@ -783,20 +819,26 @@ async function observeReclaim(
  *
  * **5分岐（詳しい理由は {@link ReclaimReapOptions} の doc）:**
  *
- * 1. 生きている委譲が0本 ⟹ `'fire'`（属す先が無いので、sid を問わず孤児で確定）
+ * 1. runner がいま把握している委譲が0本 ⟹ `'fire'`（属す先が無いので、sid を
+ *    問わず孤児で確定）
  * 2. `sid` が読めない ⟹ `'hold'`
  * 3. `sid` が生きている委譲のものと一致 ⟹ `'hold'`
  * 4. `sid` が終端済みと分かっている委譲のものと一致 ⟹ `'fire'`
  * 5. どれでもない（`setsid` で抜けた等） ⟹ `'hold'`
  *
  * **迷う形（2・3・5）は全部 `'hold'` に倒してある。** 撃つのは 1 と 4 だけ。
+ *
+ * **分岐1 は `liveSessionPids` の大きさでは判定しない**（レビュー指摘・#1334）。
+ * `anyTrackedDelegations` を別に受け取るのはそのため——理由は
+ * {@link ReclaimReapOptions.anyTrackedDelegationsOf} の doc を見よ。
  */
 function reapDecisionFor(
   sid: number | undefined,
   liveSessionPids: ReadonlySet<number>,
   knownTerminatedSessionPids: ReadonlySet<number>,
+  anyTrackedDelegations: boolean,
 ): 'fire' | 'hold' {
-  if (liveSessionPids.size === 0) return 'fire';
+  if (!anyTrackedDelegations) return 'fire';
   if (sid === undefined) return 'hold';
   if (liveSessionPids.has(sid)) return 'hold';
   if (knownTerminatedSessionPids.has(sid)) return 'fire';

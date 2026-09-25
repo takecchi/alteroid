@@ -432,10 +432,26 @@ export interface RunnerHost {
    * 委譲の Claude Code プロセスの pid（#1334 段1。孤児の回収が「どのセッションが
    * 生きているか」を判定する材料）。
    *
-   * - `live`: いま生きている（起きて、まだ `exit`/`error` が来ていない）委譲の pid
-   * - `knownTerminated`: このrunnerが過去に起こしたが、既に終端したと分かって
-   *   いる委譲の pid（有界。`KNOWN_TERMINATED_DELEGATION_PID_CAP` を超えたら
-   *   古いものから忘れる）
+   * - `live`: **このプロセス自身**がいま生きている（起きて、まだ `exit`/`error`
+   *   が来ていない）pid
+   * - `knownTerminated`: **その pid を起こした委譲（`managerId`）自身が、いま
+   *   この runner に生きたセッションとして残っていない** pid
+   *
+   * **⚠️ 2026-09（レビュー指摘・#1334）で意味を直した。** 直す前は「このプロセスが
+   * `exit` した」＝即 `knownTerminated` だった。だがプロセスの寿命とセッションの
+   * 寿命は一致しない —— マネージャーがターンを終えて次の指示を待つ（`done`）間も
+   * その CLI プロセスは生き続ける一方、**作業者（並列で走る委譲）の1回の
+   * 呼び出しは、その委譲自身がまだ生きていても普通にプロセスを終える。** 旧い
+   * 定義だと、後者の pid が終わった瞬間に、その孫（`nohup` で起こしたサーバ等）
+   * まで「終端済み」として撃ってよい対象に化けていた——**委譲そのものは
+   * 何も終わっていないのに**、である。
+   *
+   * **いまは「そのプロセスを spawn したときの `managerId` が、いま `#sessions`
+   * に居るか」だけで判定する**（`delegationSessionPids()` の実装）。**判定は
+   * 呼ぶたびにその場で行う**——固定された「終端済み」集合を持たないので、
+   * 一度こう判定されても、その `managerId` が resume で `#sessions` へ戻れば
+   * 次の呼び出しからは `knownTerminated` に出なくなる（resume で同じ委譲に
+   * 新しいプロセスが立っても、古いプロセスの孤児を誤って撃たないため）。
    *
    * **どちらも「このrunnerプロセスが自分で起こした」ものだけを持つ。** 器の
    * 作り直し（runner プロセスの再起動）を跨いでは持ち越さない——起動直後は
@@ -445,18 +461,19 @@ export interface RunnerHost {
 }
 
 /**
- * {@link RunnerHost.delegationSessionPids} の `knownTerminated` に覚える件数の
- * 上限。**無限には覚えない**——長時間走る runner が委譲を何千回起こしても、
- * メモリが際限なく育たないようにする。超えたら古いもの（`Set` の挿入順で先頭）
- * から忘れる。
+ * {@link RunnerHost.delegationSessionPids} が pid の所有者（`managerId`）を
+ * 覚えておく件数の上限。**無限には覚えない**——長時間走る runner が委譲を
+ * 何千回起こしても、メモリが際限なく育たないようにする。超えたら古いもの
+ * （`Map` の挿入順で先頭）から忘れる。
  *
- * **忘れた分は「不明」側へ倒れる。** `apps/runner/src/tasks.ts` の
- * `reapDecisionFor` は「終端済みと分かっている」ものだけを撃ってよいとするので、
- * 忘れたセッションの残骸は（生きた委譲が0本という条件が別に成り立たない限り）
- * 撃たれずに残り続ける——保守的な側へ倒れる欠落であって、誤って撃つ側の欠落
- * ではない。
+ * **忘れた分は「不明」側へ倒れる。** 所有者が分からなければ
+ * `delegationSessionPids()` はその pid を `knownTerminated` に入れない
+ * （`apps/runner/src/tasks.ts` の `reapDecisionFor` は「終端済みと分かっている」
+ * ものだけを撃ってよいとする）ので、忘れたセッションの残骸は（生きた委譲が
+ * 0本という条件が別に成り立たない限り）撃たれずに残り続ける——保守的な側へ
+ * 倒れる欠落であって、誤って撃つ側の欠落ではない。
  */
-const KNOWN_TERMINATED_DELEGATION_PID_CAP = 4096;
+const PID_OWNER_MANAGER_ID_CAP = 4096;
 
 /**
  * 回るとセッションの畳み直しの引き金になる鍵の名前。
@@ -536,9 +553,15 @@ class Host implements RunnerHost {
   /**
    * 委譲の Claude Code プロセスの pid 帳（#1334 段1）。
    * {@link RunnerHost.delegationSessionPids} の doc を見よ。
+   *
+   * `#pidOwnerManagerId` は「その pid を spawn したのはどの `managerId` か」を
+   * 覚える帳——`knownTerminated` はここから**呼ばれるたびに**導く（固定した
+   * 集合として持たない）。持てば「一度終端した」を覚え続けることになり、
+   * resume で同じ `managerId` の委譲が `#sessions` へ戻っても古い pid が
+   * 「終端済み」のままになる（レビュー指摘）。
    */
   readonly #liveDelegationPids = new Set<number>();
-  readonly #knownTerminatedDelegationPids = new Set<number>();
+  readonly #pidOwnerManagerId = new Map<number, string>();
   readonly #spawnClaudeCodeProcessFn:
     ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle) | undefined;
 
@@ -592,30 +615,53 @@ class Host implements RunnerHost {
     // `reclaim.reap.liveSessionPidsOf()` 等から毎回呼び直すだけの想定で、
     // 書き換える理由は無いはずだが、内部の集合そのものへの参照を渡すと
     // 「渡した後に書き換えられない」という前提が呼び出し側の実装に依存してしまう。
+    //
+    // **`knownTerminated` はここで毎回、その場で導く。** pid 自身が `exit` した
+    // かどうかではなく、**その pid を spawn した `managerId` が、いまこの
+    // `#sessions`（＝生きた委譲のマップ）に残っているか**だけで決める——
+    // 残っていれば（`done` でターンの間に挟まっているだけ・resume で戻ってきた
+    // 等）、その pid が指す委譲は終端していないので `knownTerminated` には
+    // 入れない。`live` にまだ在る pid はここでは弾く必要が無い——弾かなくても
+    // 「所有者は `#sessions` に居る」がほぼ必ず成り立つが、念のため二重に見る。
+    const knownTerminated = new Set<number>();
+    for (const [pid, managerId] of this.#pidOwnerManagerId) {
+      if (this.#liveDelegationPids.has(pid)) continue;
+      if (this.#sessions.has(managerId)) continue;
+      knownTerminated.add(pid);
+    }
     return {
       live: new Set(this.#liveDelegationPids),
-      knownTerminated: new Set(this.#knownTerminatedDelegationPids),
+      knownTerminated,
     };
   }
 
   /** 委譲の Claude Code プロセスが起きた（{@link RunnerSessionOptions.onDelegationProcessSpawned}）。 */
-  #noteDelegationProcessSpawned(pid: number): void {
+  #noteDelegationProcessSpawned(pid: number, managerId: string): void {
     this.#liveDelegationPids.add(pid);
-    // pid が再利用された場合に備え、「終端済み」の古い記録は消す——いま生きて
-    // いるものを、既に終わったものとして誤って撃たれる側へ残さない。
-    this.#knownTerminatedDelegationPids.delete(pid);
+    // **挿入順を今に更新してから覚える**（`Map` は挿入順を保つ——`delete` して
+    // からの `set` で「いま覚えた」扱いに更新する。pid が再利用された場合の
+    // 所有者の付け替えも兼ねる）。
+    this.#pidOwnerManagerId.delete(pid);
+    this.#pidOwnerManagerId.set(pid, managerId);
+    // **上限を超えたら、挿入順で古いものから忘れる**（`Map` は挿入順を保つ）。
+    // 忘れた分の帰結は {@link PID_OWNER_MANAGER_ID_CAP} の doc を見よ。
+    while (this.#pidOwnerManagerId.size > PID_OWNER_MANAGER_ID_CAP) {
+      const oldestPid = this.#pidOwnerManagerId.keys().next().value;
+      if (oldestPid === undefined) break;
+      this.#pidOwnerManagerId.delete(oldestPid);
+    }
   }
 
   /** 委譲の Claude Code プロセスが終わった（{@link RunnerSessionOptions.onDelegationProcessExited}）。 */
   #noteDelegationProcessExited(pid: number): void {
     this.#liveDelegationPids.delete(pid);
-    this.#knownTerminatedDelegationPids.add(pid);
-    // **上限を超えたら、挿入順で古いものから忘れる**（`Set` は挿入順を保つ）。
-    while (this.#knownTerminatedDelegationPids.size > KNOWN_TERMINATED_DELEGATION_PID_CAP) {
-      const oldest = this.#knownTerminatedDelegationPids.values().next().value;
-      if (oldest === undefined) break;
-      this.#knownTerminatedDelegationPids.delete(oldest);
-    }
+    // **ここでは `knownTerminated` 側を1文字も触らない。** そちらは
+    // `delegationSessionPids()` が呼ばれるたびに、pid の所有者（`managerId`）が
+    // いま `#sessions` に居るかどうかから導く——**このプロセス自身が終わった
+    // ことは、その委譲そのものが終端したことを意味しない**（レビュー指摘。
+    // `RunnerHost.delegationSessionPids` の doc）。所有者の記録
+    // （`#pidOwnerManagerId`）は消さずに残す——消すと、後でこの委譲が本当に
+    // 終端したときに、この pid を `knownTerminated` へ回す手がかりが無くなる。
   }
 
   /**
@@ -769,7 +815,7 @@ class Host implements RunnerHost {
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
       onClosed: () => this.#sessions.delete(managerId),
-      onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid),
+      onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
       ...(this.#spawnClaudeCodeProcessFn === undefined
         ? {}

@@ -147,7 +147,23 @@ function fakeDelegationProcess(pid: number | undefined): {
 }
 
 describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSessionPids()）', () => {
-  it('起きたら live へ、exit したら knownTerminated へ移る', async () => {
+  /**
+   * **⚠️ 期待値を反転した（レビュー指摘・#1334 の是正、2026-09-25）。**
+   * 旧い実装は「このプロセス自身が `exit` した」時点で即 `knownTerminated` に
+   * 入れていた——このテストの旧い期待値（`knownTerminated: new Set([4242])`）は
+   * まさにその仕様を固定していた。だが `exit` は「そのプロセスが終わった」
+   * ことしか言わず、**それを起こした委譲（`managerId: 'mgr-1'`）自身は
+   * `host.stop()` も経ておらずここでは生きたまま**である——マネージャーが
+   * ターンを終えて次の指示を待つ（`done`）間や、並列の作業者が1回の呼び出しを
+   * 終えただけの間は、まさにこの形（プロセスは終わったが委譲は続く）になる。
+   * 誤って `knownTerminated` に入れると、その pid の子孫（`nohup` 等で
+   * 起こしたまま残るプロセス）が孤児回収で撃たれてしまう。
+   *
+   * 委譲そのものの終端（`stop` される・resume で戻る）の固定は、この下の
+   * 「孤児回収の判定材料（委譲の終端で判定する。#1334 レビュー指摘の是正）」
+   * describe 内にある。
+   */
+  it('起きたら live へ。exit しても、委譲(managerId)自身が runner に残っていれば knownTerminated へは移らない', async () => {
     const sessions: CapturedSession[] = [];
     const fake = fakeDelegationProcess(4242);
 
@@ -183,15 +199,17 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
 
     fake.emitExit();
 
+    // **`mgr-1` は `host.stop()` を経ていない（まだ `#sessions` に居る）。**
+    // だから 4242 は `live` から落ちても `knownTerminated` へは回らない。
     expect(host.delegationSessionPids()).toEqual({
       live: new Set(),
-      knownTerminated: new Set([4242]),
+      knownTerminated: new Set(),
     });
 
     await host.shutdown();
   });
 
-  it('起こす前に失敗しても（error）、knownTerminated へ移る', async () => {
+  it('起こす前に失敗しても（error）、委譲自身が runner に残っていれば knownTerminated へは移らない', async () => {
     const sessions: CapturedSession[] = [];
     const fake = fakeDelegationProcess(4343);
 
@@ -217,9 +235,10 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
 
     fake.emitError();
 
+    // **⚠️ 期待値を反転した（上のテストと同じ理由。レビュー指摘・#1334 の是正）。**
     expect(host.delegationSessionPids()).toEqual({
       live: new Set(),
-      knownTerminated: new Set([4343]),
+      knownTerminated: new Set(),
     });
 
     await host.shutdown();
@@ -257,8 +276,15 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
    * **1本の `RunnerSession` が複数回 `spawnClaudeCodeProcess` を呼ぶ形**
    * （マネージャー本体＋並列の作業者ごと）を、`live` が pid 単位で数えることを固定する。
    * `runner-2` の観測（issue #1334。3本並列の作業者）に対応する形である。
+   *
+   * **⚠️ `knownTerminated` 側の期待値を反転した（レビュー指摘・#1334 の是正）。**
+   * `workerA` / `workerB` はどちらも同じ委譲（`managerId: 'mgr-1'`）が起こした
+   * プロセスで、そのプロセスが exit してもここでは `mgr-1` 自身が
+   * `host.stop()` を経ていない——**作業者を1本ずつ終える働き方は、委譲そのもの
+   * が終わったことを意味しない**ので、`knownTerminated` はどちらの exit の
+   * 後も空のままになる。
    */
-  it('同じセッションの中で複数回起きても、pid ごとに独立して数える', async () => {
+  it('同じセッションの中で複数回起きても、live は pid ごとに独立して数える（exit しても委譲自身が生きていれば knownTerminated へは回らない）', async () => {
     const sessions: CapturedSession[] = [];
     const workerA = fakeDelegationProcess(101);
     const workerB = fakeDelegationProcess(102);
@@ -294,13 +320,13 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
     workerA.emitExit();
     expect(host.delegationSessionPids()).toEqual({
       live: new Set([102]),
-      knownTerminated: new Set([101]),
+      knownTerminated: new Set(),
     });
 
     workerB.emitExit();
     expect(host.delegationSessionPids()).toEqual({
       live: new Set(),
-      knownTerminated: new Set([101, 102]),
+      knownTerminated: new Set(),
     });
 
     await host.shutdown();
@@ -349,6 +375,151 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
     const snapshot = host.delegationSessionPids();
     (snapshot.live as Set<number>).add(9999);
     expect(host.delegationSessionPids().live).toEqual(new Set([55])); // 9999 は混ざらない
+
+    await host.shutdown();
+  });
+});
+
+/**
+ * **孤児回収（#1334 段1）が「委譲の終端」で判定することを固定する（レビュー指摘の
+ * 是正、2026-09-25）。** 直す前は `knownTerminated` を「そのプロセス自身が
+ * `exit` したか」だけで判定していた——マネージャーがターンを終えて次の指示を
+ * 待つ（`done`）間も、並列の作業者が1回の呼び出しを終えただけの間も、その
+ * プロセスは `exit` するが**委譲そのものは終わっていない**。誤って撃つと、
+ * その孤児の子孫（`nohup` で起こしたサーバ・長時間の背景処理）まで巻き込む。
+ *
+ * ここで固定する3本は、依頼（レビュー指摘）が名指ししたものと1対1で対応する:
+ * - `done`（ターンの合間で待つ）委譲の孤児は撃たない
+ * - `stop` された委譲の孤児は撃つ
+ * - `resume` で同じ委譲に新しいプロセスが立っても、古い孤児は撃たない
+ */
+describe('孤児回収が「委譲の終端」で判定すること（#1334 段1。レビュー指摘の是正）', () => {
+  it('done（ターンを終えて次を待つ）委譲: プロセスが exit しても、host.stop() を呼ぶまでは knownTerminated へ回らない（孤児を撃たない）', async () => {
+    const sessions: CapturedSession[] = [];
+    const fake = fakeDelegationProcess(555);
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnClaudeCodeProcessFn: () => fake.handle,
+    });
+
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    const { options } = sessions[0] as CapturedSession;
+    options.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+
+    // **1回のターンを終えて次の指示を待つ（`done`）。** `host.stop()` はまだ
+    // 呼んでいない——`mgr-1` は runner にまだ生きたセッションとして残っている。
+    fake.emitExit();
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set(), // 555 の孤児は撃ってはいけない
+    });
+
+    await host.shutdown();
+  });
+
+  it('stop された委譲: host.stop() を呼んだ後は、そのプロセスの pid が knownTerminated へ回る（孤児を撃ってよい）', async () => {
+    const sessions: CapturedSession[] = [];
+    const fake = fakeDelegationProcess(555);
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnClaudeCodeProcessFn: () => fake.handle,
+    });
+
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    const { options } = sessions[0] as CapturedSession;
+    options.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    fake.emitExit();
+
+    await host.stop('mgr-1');
+
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]), // 委譲そのものが終端したので撃ってよい
+    });
+  });
+
+  it('resume で同じ委譲に新しいプロセスが立つと、古い pid は knownTerminated から外れる（古い孤児を撃たない）', async () => {
+    const sessions: CapturedSession[] = [];
+    const oldProcess = fakeDelegationProcess(555);
+    const newProcess = fakeDelegationProcess(777);
+    let call = 0;
+    const spawnFn = () => {
+      call += 1;
+      return call === 1 ? oldProcess.handle : newProcess.handle;
+    };
+
+    const host: RunnerHost = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: fakeSdk(sessions),
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnClaudeCodeProcessFn: spawnFn,
+    });
+
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
+    const { options: firstOptions } = sessions[0] as CapturedSession;
+    firstOptions.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+    oldProcess.emitExit();
+    await host.stop('mgr-1');
+
+    // **ここまでは直上の「stop された委譲」と同じ形**——古い pid（555）は
+    // いったん撃ってよい側に居る。
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set(),
+      knownTerminated: new Set([555]),
+    });
+
+    // **resume で同じ managerId に新しいプロセスが立つ。**
+    await host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-1',
+      cwd: '/work/project',
+      request: 'つづき',
+    });
+    expect(sessions).toHaveLength(2);
+    const { options: secondOptions } = sessions[1] as CapturedSession;
+    secondOptions.spawnClaudeCodeProcess?.({
+      command: 'claude',
+      args: [],
+      env: {},
+      signal: new AbortController().signal,
+    });
+
+    // **古い pid（555）は、委譲(mgr-1)が resume で runner へ戻った時点で
+    // knownTerminated から外れる**——委譲そのものが続いている以上、その古い
+    // プロセスの孤児（555 の子孫）を撃ってよいとは、もう言えない。
+    expect(host.delegationSessionPids()).toEqual({
+      live: new Set([777]),
+      knownTerminated: new Set(),
+    });
 
     await host.shutdown();
   });
