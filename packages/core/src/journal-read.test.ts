@@ -376,6 +376,7 @@ describe('journal_read — since/until の正規化（issue #1515）', () => {
       decision: 'オフセット越しに掘り当てたい判断',
       grounds: '記憶',
     });
+    expect(entry.at).toBe('2026-09-12T20:21:05.123Z');
     const call = tools(stores);
 
     // `2026-09-13T05:21:05+09:00` は UTC で `2026-09-12T20:21:05.000Z`
