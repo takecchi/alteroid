@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { DAEMON_RUNNER_REGISTRY_SOURCE, DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import {
+  commitmentFor,
+  DAEMON_RUNNER_REGISTRY_SOURCE,
+  DAEMON_TOKEN_POOL_REOPENED_SOURCE,
+} from './clone.js';
 import { restoredInboxEventVerdict } from './inbox-staleness.js';
 import type { InboxEvent } from './schema.js';
 
@@ -127,5 +131,58 @@ describe('restoredInboxEventVerdict は usageBlocked を受け取らない（門
     // `usageBlocked` を受け取る形へ戻る変更を、typecheck の失敗として検出する。
     restoredInboxEventVerdict(SAMPLE_EVENTS.human_message, true);
     expect(true).toBe(true);
+  });
+});
+
+/**
+ * Issue #1534 案1。`#removeStaleRedeliveryChunk`（`clone.ts`）が
+ * `#redeliveredClosed.delete` に歯を持てないのは、**いまの判定の下では
+ * stale の合図が `commitmentFor` 非 null（＝台帳に載る＝`#redeliveredClosed`
+ * に載りうる）になることが無いから**である（`clone.test.ts` の
+ * grep -Fn -- '`#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` には歯を' packages/core/src/clone.test.ts
+ * の注釈）。**その前提そのものを、判定の側（ここ）で固定する。**
+ *
+ * ⚠️ **この歯が赤くなったら**——`restoredInboxEventVerdict` が
+ * `commitmentFor` 非 null の種別を `stale` と判定するよう変わった、
+ * ということ。そのときは #1534 と上の `clone.test.ts` の注釈を読み、
+ * `#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` に歯を
+ * 足すこと（この歯はその歯の不在を正当化していた前提が崩れたと知らせる
+ * だけで、崩れた後の穴そのものは塞がない）。
+ *
+ * 対象は `restoredInboxEventVerdict` の `switch` が分岐する全ての合図——
+ * `external` 以外の6型は `SAMPLE_EVENTS` の1件ずつ（型レベルの
+ * `SampleEvents` により、`InboxEvent['type']` が増えれば `SAMPLE_EVENTS`
+ * 自体が typecheck で落ちる。上の「7つの型それぞれの、素な1件」の doc）、
+ * `external` は分岐する3つの `source`（token-pool / runner-registry /
+ * 自由文字列）すべてを列挙する——`type` だけで束ねると `external` の中の
+ * 分岐が数え上げから漏れる。
+ */
+describe('restoredInboxEventVerdict が stale と言う合図は、必ず commitmentFor が null（Issue #1534 案1）', () => {
+  const CANDIDATES: ReadonlyArray<readonly [string, InboxEvent]> = [
+    ...(Object.keys(SAMPLE_EVENTS) as InboxEvent['type'][]).map(
+      (type) => [type, SAMPLE_EVENTS[type]] as const,
+    ),
+    [
+      'external/DAEMON_TOKEN_POOL_REOPENED_SOURCE',
+      { ...SAMPLE_EVENTS.external, source: DAEMON_TOKEN_POOL_REOPENED_SOURCE },
+    ],
+    [
+      'external/DAEMON_RUNNER_REGISTRY_SOURCE',
+      { ...SAMPLE_EVENTS.external, source: DAEMON_RUNNER_REGISTRY_SOURCE },
+    ],
+  ];
+
+  it.each(CANDIDATES)('%s: stale なら commitmentFor は null', (_label, event) => {
+    if (restoredInboxEventVerdict(event) !== 'stale') {
+      // live 側には何も要求しない（含意なので空振り。次のテストが
+      // 「少なくとも1件は stale」を別に固定し、この it.each が丸ごと
+      // 空振りで終わっていないことを保証する）。
+      return;
+    }
+    expect(commitmentFor(event)).toBeNull();
+  });
+
+  it('候補のうち少なくとも1件は stale である（この歯が空振りしていないことの対照）', () => {
+    expect(CANDIDATES.some(([, event]) => restoredInboxEventVerdict(event) === 'stale')).toBe(true);
   });
 });

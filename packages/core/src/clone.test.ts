@@ -19743,6 +19743,13 @@ describe('待ちの経路に壁時計が無い（#1220）', () => {
  * `commitmentFor` は `null` を返す（`isDaemonSelfNotice`）——stale の合図は
  * `#redeliveredClosed` に一度も載らないので、その行が外す項目がいまの判定の
  * 下では存在しない。stale の判定が広がったらこの行にも歯が要る。
+ *
+ * **その「広がったら」を知らせる門は `inbox-staleness.test.ts` に在る**
+ * （Issue #1534 案1。`restoredInboxEventVerdict が stale と言う合図は、
+ * 必ず commitmentFor が null` の describe）——広がってこの前提が崩れたら、
+ * こちらではなくあちらが先に赤くなる。`CloneRedeliveryState.drop` が両方の
+ * 索引から外すこと自体は `clone-redelivery-state.test.ts` が単体で固定する
+ * （同 Issue 案2）。
  */
 describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue #1264 の続き）', () => {
   it('拾い直した合図を待ち行列から消すと、その合図の3つの索引が外れる（`dropQueuedInboxEvents` の中の3行の固定）', async () => {
