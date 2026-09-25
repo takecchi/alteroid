@@ -399,6 +399,57 @@ export const textMarkupSchema = z.enum(['markdown', 'none']);
 export type TextMarkup = z.infer<typeof textMarkupSchema>;
 
 /**
+ * 承認への回答がどの経路を通ったか（Issue #1479）。**永続化する側の形**——
+ * `host.ts` の `AnswerApprovalVia` と同じ形を zod で写したものである
+ * （あちらは信頼された内部呼び出し専用の値なので zod を持たない。doc「プレーンな
+ * TS の型であって zod スキーマではない」——外部入力から来ない値に検査コストを
+ * 払わせないため。ここは逆に、`PendingApproval.answeredVia` / `inboxEventSchema`
+ * の `human_answer.answeredVia` / journal の `escalation.answeredVia` として
+ * fs / pg へ書いて読み戻すので、往復の検査が要る）。**2つの形の一致は
+ * TypeScript の構造的型付けが守る**——`clone.ts` の `answerApproval` は
+ * `AnswerApprovalVia` の値をそのままこれらの欄へ代入しており、形がずれれば
+ * 代入の時点で型エラーになる。
+ *
+ * **この定義をここ（ファイル冒頭寄り）へ置く理由。** `inboxEventSchema`
+ * （直後）の `human_answer` がこの値を持つ——モジュール先頭から実行される
+ * `const` 初期化の順序で、後方の宣言を先に参照すると TDZ で落ちる。**論理的な
+ * 近さ（`pendingApprovalSchema` / `permissionGrantRouteSchema` の並び）より、
+ * 使われる場所より前に置くことを優先してある。**
+ *
+ * **`kind: 'operator'` が2値に分かれる（Issue #1479 の決定）。** 認証を設定して
+ * いない構成（`authPlan.enabled` が偽）を通った要求は `auth: 'disabled'`、認証を
+ * 設定していても実行環境の持ち主の token（`isOperator`）で通った要求は
+ * `auth: 'operator-token'`。**どちらも「人間が答えた」ことの証拠にはならない**
+ * （`operator` の資格はクローンの器から読める——`Clone#recordPermissionGrantIfConsented`
+ * の doc）。分けて残すのは、認証を意図して設定していない構成のほうが一段緩い
+ * （境界を手前に置く前提を人間が握っている）ことを、後から読む人が区別できる
+ * ようにするためである。
+ *
+ * **この欄自体は「誰が正規の口を通って答えたか」の監査用であって、改ざん防止
+ * ではない。** クローンは記憶ストアの鍵（`ALTEROID_HOME` / `ALTEROID_DATABASE_URL`。
+ * `Clone#childEnv` の doc「記憶ストアの鍵は落とさない」）を持ち、cwd も
+ * `paths.root`（`apps/daemon/src/index.ts` の `createClone({ cwd: paths.root })`）
+ * なので、この記録が置かれている場所（fs の `jobs/jobs.json`・pg の `approvals`
+ * テーブル）そのものを直接書き換えられる。
+ */
+export const answeredViaSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('operator'), auth: z.enum(['disabled', 'operator-token']) }),
+  z.object({ kind: z.literal('account'), accountId: z.string() }),
+]);
+
+export type AnsweredVia = z.infer<typeof answeredViaSchema>;
+
+/**
+ * {@link AnsweredVia} を人間が読む1行にする（短く。`renderApprovalTrace` の
+ * 出力や `human_answer` のターン入力はクローンのプロンプトへそのまま載るので、
+ * 定型文に近い短さを保つ）。
+ */
+export function describeAnsweredVia(via: AnsweredVia): string {
+  if (via.kind === 'account') return `account（${via.accountId}）`;
+  return via.auth === 'disabled' ? 'operator（認証無効）' : 'operator（operator token）';
+}
+
+/**
  * 仕事の起点（PRD「自律」の4つ）。M1 で届くのは `human` だけだが、
  * 判別可能ユニオンとして最初から4つ揃えておく。
  */
@@ -435,6 +486,15 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * その場合は今までどおり `self` の内部ターンとして扱われる。
      */
     conversationId: z.string().optional(),
+    /**
+     * 回答がどの経路を通ったか（Issue #1479）。`PendingApproval.answeredVia` の
+     * 写しで、`Clone#answerApproval` が `post()` するときに一緒に運ぶ。
+     * `turn-input.ts` の `describeTurnInput` がこれをターンの入力の文面へ足す
+     * ——クローンは人間の代理であり、`operator` 経由の回答が人間本人とは限らない
+     * ことを、隠さず自分の判断材料にできるようにするため。doc は
+     * {@link answeredViaSchema} を見よ。
+     */
+    answeredVia: answeredViaSchema.optional(),
   }),
   z.object({
     type: z.literal('distill'),
@@ -1412,6 +1472,12 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     managerId: z.string().optional(),
     answeredAt: isoDateTime.optional(),
     answer: z.string().optional(),
+    /**
+     * 回答がどの経路を通ったか（Issue #1479）。`answeredAt` が付く行にだけ
+     * 一緒に付く——`Clone#answerApproval` が同じ呼びの中で `PendingApproval`
+     * と日誌の両方へ写す。doc は {@link answeredViaSchema} を見よ。
+     */
+    answeredVia: answeredViaSchema.optional(),
     /**
      * クローン自身が `approval_withdraw`（`tools.ts`）で取り下げたとき、その
      * 時刻（#963）。**行は消さず、`commitment_close` と同じ「終端は別の新しい
@@ -3861,6 +3927,19 @@ export const pendingApprovalSchema = z.object({
   requestId: z.string().optional(),
   answeredAt: isoDateTime.optional(),
   answer: z.string().optional(),
+  /**
+   * 回答がどの経路を通ったか（Issue #1479）。doc は {@link answeredViaSchema} を
+   * 見よ。**`answeredAt` と対で埋まる**——`Clone#answerApproval` が同じ呼びの中で
+   * 両方を書く。`via` を渡さずに呼んだ経路（内部呼び出し・古いテスト）では
+   * `answeredAt` だけが付いてここは undefined のままになる。
+   *
+   * **`undefined` は「記録なし」と読む。** この欄より前に答えられた既存の行
+   * （fs の `jobs/jobs.json`・pg の `approvals.approval` は blob なので
+   * マイグレーション無しでそのまま読める）は全部これに当たる——「operator 経由
+   * だった」への遡及はできないが、それは元から記録していなかった情報なので、
+   * 「わからない」を「わかったが operator ではない」に化けさせない。
+   */
+  answeredVia: answeredViaSchema.optional(),
   /**
    * どの会話で上がった確認か（#768）。
    *

@@ -1180,7 +1180,10 @@ describe('HTTP API', () => {
     expect(answer.status).toBe(200);
     // **既定（認証を要求しない構成）では、全リクエストが operator として通る**
     // （Issue #863。`answerApprovalViaOf` が `c.get('principal')` から作る）。
-    expect(fake.answered).toEqual([{ id: 'ap-1', answer: 'よい', via: { kind: 'operator' } }]);
+    // **`auth: 'disabled'`（Issue #1479）——認証を設定していない構成を通った印。**
+    expect(fake.answered).toEqual([
+      { id: 'ap-1', answer: 'よい', via: { kind: 'operator', auth: 'disabled' } },
+    ]);
   });
 
   it('存在しない承認待ちへの回答は 404', async () => {
@@ -3764,9 +3767,10 @@ describe('HTTP API', () => {
       ],
     });
     // 既定（認証を要求しない構成）では operator 経由になる（Issue #863。直上のテストと同じ理由）。
+    // **`auth: 'disabled'`（Issue #1479）——認証を設定していない構成を通った印。**
     expect(fake.answered).toEqual([
-      { id: 'ap-1', answer: 'よい', via: { kind: 'operator' } },
-      { id: 'ap-2', answer: 'だめ', via: { kind: 'operator' } },
+      { id: 'ap-1', answer: 'よい', via: { kind: 'operator', auth: 'disabled' } },
+      { id: 'ap-2', answer: 'だめ', via: { kind: 'operator', auth: 'disabled' } },
     ]);
   });
 
@@ -7620,6 +7624,26 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
     it('存在しない id は 404', async () => {
       const response = await app.request('/permission-grants/no-such-id/revoke', post);
       expect(response.status).toBe(404);
+    });
+
+    it('operator token 経路の回答は via.auth="operator-token" を渡す（認証無効の経路とは区別する。Issue #1479）', async () => {
+      const authed = buildAuthedApp();
+      await authed.stores.jobs.putApproval({
+        id: 'ap-optoken',
+        createdAt: new Date().toISOString(),
+        question: '進めてよいか',
+      });
+
+      const response = await authed.app.request('/approvals/ap-optoken/answer', {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+        body: JSON.stringify({ answer: 'よい' }),
+      });
+      expect(response.status).toBe(200);
+
+      expect(authed.fake.answered).toEqual([
+        { id: 'ap-optoken', answer: 'よい', via: { kind: 'operator', auth: 'operator-token' } },
+      ]);
     });
 
     it('account 経路の回答は clone.answerApproval へ { kind: "account", accountId } を渡す', async () => {

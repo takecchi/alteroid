@@ -2,9 +2,9 @@ import type { ManagerPool } from './manager.js';
 import type { ChatStreamEvent, InboxEvent } from './schema.js';
 
 /**
- * `answerApproval` を叩いた経路（Issue #863）。**プレーンな TS の型であって
- * zod スキーマではない** —— `apps/daemon/src/auth.ts` の `Principal` と同じ
- * 立場（内部でしか組み立てられない、信頼された呼び出し専用の値。外部入力を
+ * `answerApproval` を叩いた経路（Issue #863、#1479）。**プレーンな TS の型で
+ * あって zod スキーマではない** —— `apps/daemon/src/auth.ts` の `Principal` と
+ * 同じ立場（内部でしか組み立てられない、信頼された呼び出し専用の値。外部入力を
  * そのままここへ流し込む経路は無い）。`packages/core` は `apps/daemon` の
  * 型（`Principal`）を知らない（層が逆）ので、ここに同じ形の型を別名で持つ
  * ——`apps/daemon/src/app.ts` が `Principal` からこの型へ変換して渡す。
@@ -15,8 +15,26 @@ import type { ChatStreamEvent, InboxEvent } from './schema.js';
  * **`kind: 'account'` だけが許可の記録に繋がる。** `Clone#recordPermissionGrantIfConsented`
  * の doc を見よ——`operator` を記録しない理由（operator の資格はクローンの
  * 器から読めるため、人間の証拠にならない）はそちらにまとめてある。
+ *
+ * **`kind: 'operator'` は2値に分かれる（Issue #1479）。** `auth: 'disabled'` は
+ * 認証を設定していない構成（`authPlan.enabled` が偽）を通った要求、
+ * `auth: 'operator-token'` は認証を設定していても実行環境の持ち主の token
+ * （`isOperator`）で通った要求——`apps/daemon/src/app.ts` の `authenticate` の
+ * 中でどちらの枝を通ったかは分かるので、そのまま運ぶ。**どちらも人間の証拠には
+ * ならない**（同じ理由）が、認証を意図して設定していない構成のほうが一段緩い
+ * ことを後から読む人が区別できるようにするため分けてある。
+ *
+ * **この形は `schema.ts` の `answeredViaSchema` と一致させること。** あちらは
+ * `PendingApproval.answeredVia` / journal の `escalation.answeredVia` として
+ * 永続化するための zod 版で、ここが zod を持たない理由（外部入力から来ない値に
+ * 検査コストを払わせない）とは無関係に、**値の形そのものは同じでなければ
+ * ならない**——一致は TypeScript の構造的型付けが検査時に守る（`clone.ts` の
+ * `answerApproval` がこの型の値を `answeredVia` 欄へそのまま代入するため、
+ * 形がずれれば代入の時点で型エラーになる）。
  */
-export type AnswerApprovalVia = { kind: 'operator' } | { kind: 'account'; accountId: string };
+export type AnswerApprovalVia =
+  | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
+  | { kind: 'account'; accountId: string };
 
 /**
  * デーモンから見たクローン。

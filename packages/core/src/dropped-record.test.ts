@@ -891,6 +891,12 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
           '参照しない——`human_message.conversationId` と違い、対になる journal 欄も' +
           '無い（単に本体が触れていない欄）。',
       },
+      answeredVia: {
+        emit: 'never',
+        why:
+          '回答の経路（Issue #1479）。中身は id・enum 値のみで自由文を運ばないが、' +
+          'この関数は参照しない（`conversationId` と同じ「単に本体が触れていない欄」）。',
+      },
     },
     distill: {
       reason: { emit: 'tag', token: 'reason' },
@@ -971,6 +977,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       approvalId: 'ap-1',
       answer: SECRET,
       conversationId: SECRET,
+      answeredVia: { kind: 'account', accountId: SECRET },
     },
     distill: {
       type: 'distill',
@@ -1162,6 +1169,13 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
         '契約は「本文は出さない」——`size()` へ逃がす対象を増やす拡張は、実際に ' +
         '掘れなかった実例が出てから広げる（`context_usage` の doc と同じ判断）。',
     },
+    answeredVia: {
+      emit: 'never',
+      why:
+        '回答の経路（Issue #1479）。中身は id・enum 値のみで自由文を運ばないが、' +
+        'この関数は参照しない——`answeredAt`/`answer` と同じ理由（回答は前段の' +
+        '見分けより後の欄）。',
+    },
   } satisfies Record<keyof PendingApproval, FieldPlan>;
 
   const SECRET = 'ghp_555555555555555555555555555555555555';
@@ -1180,6 +1194,7 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
     withdrawnAt: SECRET,
     withdrawnReason: SECRET,
     permissionRequest: { rule: SECRET, allows: [SECRET], denies: [SECRET] },
+    answeredVia: { kind: 'account', accountId: SECRET },
   };
 
   it('名簿のキー集合は pendingApprovalSchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {
@@ -1804,6 +1819,17 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         why: '#963 で足した欄。answeredAt と対称の終端時刻で、PR #709 が answeredAt に付けた判断（載せる判断は別途）をそのまま引き継ぐ。',
       },
       withdrawnReason: { emit: 'size', token: 'withdrawnReason' },
+      // 回答の経路（Issue #1479）。`appraisal`（#1310）と同じ判断——構造欄で
+      // 中身は id・enum 値のみだが、この関数は入れ子の中へ踏み込まない第1階層
+      // までの一般原則（冒頭 doc）を適用し、`never` へ倒す。出す設計にするなら
+      // `case 'escalation'` 側で個別に決める。
+      answeredVia: {
+        emit: 'never',
+        why:
+          '回答の経路（Issue #1479）。中身は id・enum 値のみで自由文を運ばないが、' +
+          'この関数は入れ子の中へ踏み込まない第1階層までの一般原則（冒頭 doc）を' +
+          '適用し、`never` へ倒す（`appraisal` と同じ判断）。',
+      },
     },
     tool_use: {
       actor: { emit: 'tag', token: 'actor' },
@@ -2190,6 +2216,7 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       answer: SECRET,
       withdrawnAt: '2026-08-20T00:00:00.000Z',
       withdrawnReason: SECRET,
+      answeredVia: { kind: 'account', accountId: SECRET },
     },
     tool_use: {
       type: 'tool_use',

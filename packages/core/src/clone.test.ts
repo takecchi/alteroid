@@ -2400,6 +2400,98 @@ describe('クローン', () => {
     await s.clone.stop();
   });
 
+  /**
+   * 回答の経路（`answeredVia`、Issue #1479）が、承認待ちの器・日誌の
+   * `escalation`・クローンのターン入力の3か所すべてへ運ばれることを固定する。
+   * `via` を渡さない呼び出し（既定・古い経路）ではどこにも付かないことも
+   * 併せて見る——「わからない」を「operator ではない」に化けさせない
+   * （`answeredViaSchema` の doc）。
+   */
+  describe('answerApproval の回答経路の記録（issue #1479）', () => {
+    it('via を渡すと、承認待ちの器・日誌・ターン入力の3か所すべてに answeredVia が付く', async () => {
+      const s = setup((input) =>
+        input.includes('承認待ちにしていた質問') ? 'わかった' : 'わかった',
+      );
+      await s.stores.jobs.putApproval({
+        id: 'ap-via-1',
+        createdAt: new Date().toISOString(),
+        question: 'これを進めてよいか',
+      });
+
+      await s.clone.answerApproval('ap-via-1', 'よい', { kind: 'account', accountId: 'acc-1' });
+
+      // 1. 承認待ちの器。
+      const approval = await s.stores.jobs.getApproval('ap-via-1');
+      expect(approval?.answeredVia).toEqual({ kind: 'account', accountId: 'acc-1' });
+
+      // 2. 日誌の escalation（回答）行。
+      await waitFor(async () => {
+        const escalations = await s.stores.journal.list({ types: ['escalation'], limit: 100 });
+        return escalations.some(
+          (entry) => entry.type === 'escalation' && entry.answeredVia !== undefined,
+        );
+      }, '回答経路つきの escalation 行が日誌に積まれる');
+      const escalations = await s.stores.journal.list({ types: ['escalation'], limit: 100 });
+      const answered = escalations.find(
+        (entry) => entry.type === 'escalation' && entry.approvalId === 'ap-via-1',
+      );
+      if (answered === undefined || answered.type !== 'escalation') {
+        throw new Error('回答の escalation 行が日誌に見つからない');
+      }
+      expect(answered.answeredVia).toEqual({ kind: 'account', accountId: 'acc-1' });
+
+      // 3. クローンのターン入力（`case 'human_answer'` の文面。#1479）。
+      // **`calls[0]` はまだ無いことがある**——このテストは事前に人間の発言を
+      // post していないので、回答のターンそのものが最初の呼びを作る。
+      await waitFor(
+        () =>
+          (s.calls[0] as FakeCall | undefined)?.inputs.some((input) =>
+            input.includes('回答経路:'),
+          ) ?? false,
+        '回答経路の1行がクローンのターン入力に届く',
+      );
+      const turnInput = (s.calls[0] as FakeCall).inputs.find((input) =>
+        input.includes('回答経路:'),
+      );
+      expect(turnInput).toContain('回答経路: account（acc-1）');
+
+      await s.clone.stop();
+    });
+
+    it('via を渡さないと、器・日誌・ターン入力のどこにも answeredVia / 回答経路 が付かない', async () => {
+      const s = setup();
+      await s.stores.jobs.putApproval({
+        id: 'ap-via-2',
+        createdAt: new Date().toISOString(),
+        question: 'これを進めてよいか',
+      });
+
+      await s.clone.answerApproval('ap-via-2', 'よい');
+
+      const approval = await s.stores.jobs.getApproval('ap-via-2');
+      expect(approval?.answeredVia).toBeUndefined();
+
+      // **`calls[0]` はまだ無いことがある**（直上のテストと同じ理由）。
+      await waitFor(
+        () =>
+          (s.calls[0] as FakeCall | undefined)?.inputs.some((input) => input.includes('よい')) ??
+          false,
+        '回答「よい」がクローンの入力に届く',
+      );
+      const escalations = await s.stores.journal.list({ types: ['escalation'], limit: 100 });
+      const answered = escalations.find(
+        (entry) => entry.type === 'escalation' && entry.approvalId === 'ap-via-2',
+      );
+      expect(answered && answered.type === 'escalation' ? answered.answeredVia : undefined).toBe(
+        undefined,
+      );
+      const turnInput = (s.calls[0] as FakeCall).inputs.find((input) => input.includes('よい'));
+      expect(turnInput).not.toContain('回答経路:');
+
+      await s.clone.stop();
+    });
+  });
+
   describe('answerApproval の許可の記録（issue #863「許可をコードではなくデータにする」）', () => {
     const PERMISSION_REQUEST_APPROVAL = {
       id: 'ap-perm-1',
@@ -2440,7 +2532,10 @@ describe('クローン', () => {
       const s = setup();
       await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
 
-      await s.clone.answerApproval('ap-perm-1', '許可します', { kind: 'operator' });
+      await s.clone.answerApproval('ap-perm-1', '許可します', {
+        kind: 'operator',
+        auth: 'operator-token',
+      });
 
       expect(await s.stores.permissionGrants.list()).toHaveLength(0);
 
@@ -2511,7 +2606,10 @@ describe('クローン', () => {
       const s = setup();
       await s.stores.jobs.putApproval(PERMISSION_REQUEST_APPROVAL);
 
-      await s.clone.answerApproval('ap-perm-1', '許可します', { kind: 'operator' });
+      await s.clone.answerApproval('ap-perm-1', '許可します', {
+        kind: 'operator',
+        auth: 'disabled',
+      });
 
       const decisions = await s.stores.journal.list({ types: ['decision'] });
       expect(

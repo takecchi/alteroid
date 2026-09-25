@@ -287,10 +287,25 @@ function ApprovalCard({
           描かれていた — 人間が改行を入れて答えても1行に潰れていた（`question` /
           `context` には効いていたのに `answer` だけ無いという見落としである）。
         */
-        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words whitespace-pre-wrap">
-          <span className="mr-2 text-[11px] text-muted">回答</span>
-          {approval.answer}
-        </p>
+        <>
+          <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words whitespace-pre-wrap">
+            <span className="mr-2 text-[11px] text-muted">回答</span>
+            {approval.answer}
+          </p>
+          {/*
+            **回答経路（Issue #1479）。** 記録が無い（`answeredVia` を持たない古い
+            経路で答えられた）行では出さない——「わからない」を「operator では
+            ない」に化けさせない（`packages/core/src/schema.ts` の
+            `answeredViaSchema` の doc）。`describeAnsweredVia` はこの画面が
+            `@alteroid/core` を import できないため独立に持つ
+            （`describeAction` と同じ理由・同じパターン）。
+          */}
+          {approval.answeredVia && (
+            <p className="mt-1 text-[11px] text-muted">
+              回答経路: {describeAnsweredVia(approval.answeredVia)}
+            </p>
+          )}
+        </>
       ) : (
         <div className="mt-3">
           <Textarea
@@ -440,6 +455,16 @@ const TRACE_MISSING: Record<string, string> = {
   unstamped_actions: '⚠️ 答えのターンに印を持たない行動が在る。記録が動いていない疑いがある',
   no_actions: '答えの後にこの承認に紐づいた行動は記録されていない',
 };
+
+/**
+ * `approval.answeredVia`（Issue #1479）を人間が読む1行にする（core の
+ * `describeAnsweredVia` と同じ規則。画面は `@alteroid/core` の値を import
+ * しない——`~/lib/types.ts` 冒頭の約束——ので、ここで独立に持つ）。
+ */
+function describeAnsweredVia(via: NonNullable<PendingApproval['answeredVia']>): string {
+  if (via.kind === 'account') return `account（${via.accountId}）`;
+  return via.auth === 'disabled' ? 'operator（認証無効）' : 'operator（operator token）';
+}
 
 /** 行動1件の要旨（core の `describeTraceAction` と同じ欄を読む。画面は core を import しない）。 */
 function describeAction(entry: { type: string } & Record<string, unknown>): string {

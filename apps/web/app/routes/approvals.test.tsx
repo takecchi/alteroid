@@ -326,6 +326,43 @@ describe('折り返しの付け忘れ（本2）', () => {
     // 入れて答えても1行に潰れていた。
     expect(tokens).toContain('whitespace-pre-wrap');
   });
+
+  /**
+   * 回答経路の表示（Issue #1479）。**記録が無い行では出さない**——
+   * 「わからない」を「operator ではない」に化けさせない
+   * （`packages/core/src/schema.ts` の `answeredViaSchema` の doc）。
+   */
+  it('回答経路（answeredVia）が在れば出す。無ければ出さない', async () => {
+    stubApprovals([
+      approval({
+        id: 'a-1',
+        question: '質問1',
+        answeredAt: '2026-08-19T11:00:00.000Z',
+        answer: '許可する',
+        answeredVia: { kind: 'account', accountId: 'acc-1' },
+      }),
+      approval({
+        id: 'a-2',
+        question: '質問2',
+        answeredAt: '2026-08-19T11:05:00.000Z',
+        answer: '許可する',
+        answeredVia: { kind: 'operator', auth: 'disabled' },
+      }),
+      approval({
+        id: 'a-3',
+        question: '質問3',
+        answeredAt: '2026-08-19T11:10:00.000Z',
+        answer: '許可する',
+        // answeredVia を持たない（記録の無い古い経路）。
+      }),
+    ]);
+    renderPage();
+
+    await screen.findByText(/質問1/);
+    expect(screen.getByText('回答経路: account（acc-1）')).not.toBeNull();
+    expect(screen.getByText('回答経路: operator（認証無効）')).not.toBeNull();
+    expect(screen.getAllByText(/回答経路:/)).toHaveLength(2);
+  });
 });
 
 /**

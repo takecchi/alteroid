@@ -1,5 +1,6 @@
 import { excerptLine, renderListing } from './excerpt.js';
 import { scanJournalPages } from './journal-scan.js';
+import { describeAnsweredVia } from './schema.js';
 import type { JournalEntry, JournalEntryInput, PendingApproval } from './schema.js';
 import type { JournalStore, Stores } from './store.js';
 import { CLONE_ACTOR_ID, CLONE_SUB_ACTOR_PREFIX } from './usage.js';
@@ -408,6 +409,12 @@ export function renderApprovalTrace(
   }
   lines.push(
     `答え（${approval.answeredAt}）: ${cut(approval.answer ?? '')}` +
+      // **回答経路（Issue #1479）。** 記録が無い（`answeredVia` を渡さずに答えた
+      // 古い経路）行では何も足さない——「わからない」を「operator ではない」に
+      // 化けさせない（`answeredViaSchema` の doc）。
+      (approval.answeredVia === undefined
+        ? ''
+        : `（回答経路: ${describeAnsweredVia(approval.answeredVia)}）`) +
       (trace.answerEntry === null
         ? '（日誌に答えの行が見当たらない）'
         : `（日誌 ${trace.answerEntry.id}）`),

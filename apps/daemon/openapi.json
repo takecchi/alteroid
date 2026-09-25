@@ -985,6 +985,37 @@
                         "answer": {
                           "type": "string"
                         },
+                        "answeredVia": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "operator"
+                                },
+                                "auth": {
+                                  "type": "string",
+                                  "enum": ["disabled", "operator-token"]
+                                }
+                              },
+                              "required": ["kind", "auth"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "account"
+                                },
+                                "accountId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "accountId"]
+                            }
+                          ]
+                        },
                         "withdrawnAt": {
                           "type": "string",
                           "format": "date-time",
@@ -3612,6 +3643,37 @@
                               "answer": {
                                 "type": "string"
                               },
+                              "answeredVia": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "operator"
+                                      },
+                                      "auth": {
+                                        "type": "string",
+                                        "enum": ["disabled", "operator-token"]
+                                      }
+                                    },
+                                    "required": ["kind", "auth"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "account"
+                                      },
+                                      "accountId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "accountId"]
+                                  }
+                                ]
+                              },
                               "withdrawnAt": {
                                 "type": "string",
                                 "format": "date-time",
@@ -5726,6 +5788,37 @@
                           "answer": {
                             "type": "string"
                           },
+                          "answeredVia": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "operator"
+                                  },
+                                  "auth": {
+                                    "type": "string",
+                                    "enum": ["disabled", "operator-token"]
+                                  }
+                                },
+                                "required": ["kind", "auth"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "account"
+                                  },
+                                  "accountId": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "accountId"]
+                              }
+                            ]
+                          },
                           "conversationId": {
                             "type": "string"
                           },
@@ -5906,6 +5999,37 @@
                         },
                         "answer": {
                           "type": "string"
+                        },
+                        "answeredVia": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "operator"
+                                },
+                                "auth": {
+                                  "type": "string",
+                                  "enum": ["disabled", "operator-token"]
+                                }
+                              },
+                              "required": ["kind", "auth"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "account"
+                                },
+                                "accountId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "accountId"]
+                            }
+                          ]
                         },
                         "conversationId": {
                           "type": "string"
@@ -6237,6 +6361,37 @@
                                 },
                                 "answer": {
                                   "type": "string"
+                                },
+                                "answeredVia": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "operator"
+                                        },
+                                        "auth": {
+                                          "type": "string",
+                                          "enum": ["disabled", "operator-token"]
+                                        }
+                                      },
+                                      "required": ["kind", "auth"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "account"
+                                        },
+                                        "accountId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "accountId"]
+                                    }
+                                  ]
                                 },
                                 "withdrawnAt": {
                                   "type": "string",
@@ -7346,6 +7501,37 @@
                                 "answer": {
                                   "type": "string"
                                 },
+                                "answeredVia": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "operator"
+                                        },
+                                        "auth": {
+                                          "type": "string",
+                                          "enum": ["disabled", "operator-token"]
+                                        }
+                                      },
+                                      "required": ["kind", "auth"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "const": "account"
+                                        },
+                                        "accountId": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": ["kind", "accountId"]
+                                    }
+                                  ]
+                                },
                                 "withdrawnAt": {
                                   "type": "string",
                                   "format": "date-time",
@@ -8454,6 +8640,37 @@
                               "answer": {
                                 "type": "string"
                               },
+                              "answeredVia": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "operator"
+                                      },
+                                      "auth": {
+                                        "type": "string",
+                                        "enum": ["disabled", "operator-token"]
+                                      }
+                                    },
+                                    "required": ["kind", "auth"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "account"
+                                      },
+                                      "accountId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "accountId"]
+                                  }
+                                ]
+                              },
                               "withdrawnAt": {
                                 "type": "string",
                                 "format": "date-time",
@@ -9549,6 +9766,37 @@
                               },
                               "answer": {
                                 "type": "string"
+                              },
+                              "answeredVia": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "operator"
+                                      },
+                                      "auth": {
+                                        "type": "string",
+                                        "enum": ["disabled", "operator-token"]
+                                      }
+                                    },
+                                    "required": ["kind", "auth"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "account"
+                                      },
+                                      "accountId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["kind", "accountId"]
+                                  }
+                                ]
                               },
                               "withdrawnAt": {
                                 "type": "string",

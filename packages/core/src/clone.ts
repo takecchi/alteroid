@@ -132,6 +132,7 @@ import type { ScheduleStatus } from './schedule.js';
 import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
   commitmentClosedBySchema,
+  describeAnsweredVia,
   isDailyReport,
   isWrittenDailyReport,
   JOB_APPRAISAL_DECISION_PREFIX,
@@ -2950,7 +2951,15 @@ class Clone implements CloneHost {
     if (!approval) throw new Error(`承認待ち ${approvalId} は存在しない`);
 
     const answeredAt = new Date().toISOString();
-    await this.#stores.jobs.putApproval({ ...approval, answeredAt, answer });
+    // **`answeredVia`（Issue #1479）は `via` が渡されたときだけ足す。** 渡さずに
+    // 呼んだ経路（内部呼び出し・`via` を持たない古いテスト）では、この欄そのものを
+    // 書かない——`conversationId` と同じ「省略可能な欄は spread で足す」慣例に揃える。
+    await this.#stores.jobs.putApproval({
+      ...approval,
+      answeredAt,
+      answer,
+      ...(via === undefined ? {} : { answeredVia: via }),
+    });
 
     // 日誌だけを追っても回答済みだと分かるようにする（追記専用なので新しい行）
     await this.#journal({
@@ -2959,6 +2968,7 @@ class Clone implements CloneHost {
       approvalId,
       answeredAt,
       answer,
+      ...(via === undefined ? {} : { answeredVia: via }),
     });
 
     // **`request_permission` が起こした要求だけ、許可の記録を試みる**（Issue
@@ -2969,6 +2979,9 @@ class Clone implements CloneHost {
     // 回答は受信箱へ。止まっていたその仕事だけが再開する。
     // **承認が会話 id を持っていれば、その写しを運ぶ（#768）。** 持っていなければ
     // undefined のままで、今までどおり内部ターン（`self`）として扱われる。
+    // **`answeredVia` も運ぶ（#1479）。** クローンは人間の代理であり、`operator`
+    // 経由の回答が人間本人とは限らないことを、隠さず自分の判断材料にできる
+    // ようにするため（`case 'human_answer'` がこれをターンの入力の文面へ足す）。
     this.post({
       type: 'human_answer',
       id: randomUUID(),
@@ -2976,6 +2989,7 @@ class Clone implements CloneHost {
       approvalId,
       answer,
       ...(approval.conversationId === undefined ? {} : { conversationId: approval.conversationId }),
+      ...(via === undefined ? {} : { answeredVia: via }),
     });
   }
 
@@ -3045,8 +3059,8 @@ class Clone implements CloneHost {
         type: 'decision',
         decision: `許可を記録しなかった: ${permissionRequest.rule}`,
         grounds:
-          `回答の経路が実行環境の持ち主（operator）だった——operator の資格はクローンの器から` +
-          `読めるため、人間の証拠にならない（${grounds}）`,
+          `回答の経路が実行環境の持ち主（operator。認証: ${via.auth}）だった——operator の資格は` +
+          `クローンの器から読めるため、人間の証拠にならない（${grounds}）`,
       });
       return;
     }
@@ -7768,9 +7782,17 @@ class Clone implements CloneHost {
               `回答を \`manager_send\`（許可確認なら decision 付き）で返すと、止まっていたその仕事が再開する。` +
               `\n宛先: managerId: "${approval.jobId}"` +
               (approval.requestId === undefined ? '' : `, requestId: "${approval.requestId}"`);
+        // **回答経路を短く添える（Issue #1479）。** クローンは人間の代理であり、
+        // `operator` 経由の回答が人間本人とは限らないことを、隠さず自分の判断
+        // 材料にできるようにするため——「人間が答えた」という前置きの直後に置く。
+        // `event.answeredVia` が無い（`via` を渡さずに呼んだ経路）ときは何も足さない。
+        const viaLine =
+          event.answeredVia === undefined
+            ? ''
+            : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
         const answerPrompt =
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
-          `${waiting}\n\n` +
+          `${viaLine}${waiting}\n\n` +
           'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
         // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
         // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。

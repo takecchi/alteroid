@@ -176,6 +176,29 @@ describe('traceApproval — 対を読む（issue #847 の案B）', () => {
     expect(text).toContain('（詳細の案内）');
   });
 
+  /**
+   * 回答経路の表示（Issue #1479）。`answeredVia` が付いた行では
+   * `renderApprovalTrace` の答えの行にそれが出て、付いていない行（記録が無い
+   * 古い経路）では何も足さない——「わからない」を「operator ではない」に
+   * 化けさせない（`answeredViaSchema` の doc）。
+   */
+  it('answeredVia が付いていれば答えの行に回答経路を出す。無ければ出さない', async () => {
+    const stores = createMemoryStores();
+    const approval = await answered(stores, 'ap-1');
+    await stores.jobs.putApproval({
+      ...approval,
+      answeredVia: { kind: 'account', accountId: 'acc-1' },
+    });
+    const found = await trace(stores, 'ap-1');
+    expect(renderApprovalTrace(found, RENDER)).toContain('（回答経路: account（acc-1））');
+
+    // `answeredVia` を持たない行（記録の無い古い経路）では何も足さない。
+    const withoutVia = await answered(stores, 'ap-2');
+    const foundWithoutVia = await trace(stores, 'ap-2');
+    expect(withoutVia.answeredVia).toBeUndefined();
+    expect(renderApprovalTrace(foundWithoutVia, RENDER)).not.toContain('回答経路');
+  });
+
   it('印を持つ入口の後に行動が1件も無ければ no_actions で「記録されていない」と言う', async () => {
     const stores = createMemoryStores();
     await answered(stores, 'ap-1');

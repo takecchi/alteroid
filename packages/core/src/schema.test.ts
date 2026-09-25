@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  answeredViaSchema,
   approvalUpdatedAt,
   COMMITMENT_APPRAISAL_CLONE_GROUNDS,
   COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
   commitmentActiveDelegationIds,
   commitmentRespondedAt,
   commitmentUpdatedAt,
+  describeAnsweredVia,
   inboxEventSchema,
   JOB_APPRAISAL_CLONE_GROUNDS,
   JOB_APPRAISAL_HUMAN_GROUNDS,
@@ -342,6 +344,119 @@ describe('pendingApprovalSchema（#963: withdrawnAt / withdrawnReason）', () =>
       withdrawnReason: '不要になった',
     });
     expect(parsed.success).toBe(true);
+  });
+});
+
+/**
+ * 承認への回答経路（Issue #1479）。**既存レコード（欄が無い）は「記録なし」
+ * として読める**——`answeredVia` を持たない fs / pg の古い行に対する後方互換を
+ * ここで固定する。値そのもの（`operator` の2値・`account`）のパースと
+ * `describeAnsweredVia` の文言も併せて固定する。
+ */
+describe('answeredViaSchema / pendingApprovalSchema.answeredVia（Issue #1479）', () => {
+  it('answeredVia 無しでもパースできる（既存の行と互換）', () => {
+    const parsed = pendingApprovalSchema.safeParse({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '質問',
+      answeredAt: '2026-01-01T00:00:10.000Z',
+      answer: 'よい',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.answeredVia).toBeUndefined();
+  });
+
+  it.each([
+    [{ kind: 'operator', auth: 'disabled' }],
+    [{ kind: 'operator', auth: 'operator-token' }],
+    [{ kind: 'account', accountId: 'acc-1' }],
+  ])('answeredVia=%o を持つ行がパースできる', (answeredVia) => {
+    const parsed = pendingApprovalSchema.safeParse({
+      id: 'ap-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      question: '質問',
+      answeredAt: '2026-01-01T00:00:10.000Z',
+      answer: 'よい',
+      answeredVia,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.answeredVia).toEqual(answeredVia);
+  });
+
+  it('operator の auth に定義外の値が来ると拒む（版ずれの検出）', () => {
+    const parsed = answeredViaSchema.safeParse({ kind: 'operator', auth: 'something-else' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('kind が operator でも account でもない値は拒む', () => {
+    const parsed = answeredViaSchema.safeParse({ kind: 'clone' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('describeAnsweredVia は経路ごとに短い1行を返す', () => {
+    expect(describeAnsweredVia({ kind: 'operator', auth: 'disabled' })).toBe(
+      'operator（認証無効）',
+    );
+    expect(describeAnsweredVia({ kind: 'operator', auth: 'operator-token' })).toBe(
+      'operator（operator token）',
+    );
+    expect(describeAnsweredVia({ kind: 'account', accountId: 'acc-1' })).toBe('account（acc-1）');
+  });
+
+  it('inboxEventSchema の human_answer は answeredVia 無しでもパースできる（既存の合図と互換）', () => {
+    const parsed = inboxEventSchema.safeParse({
+      type: 'human_answer',
+      id: 'ev-1',
+      at: '2026-01-01T00:00:10.000Z',
+      approvalId: 'ap-1',
+      answer: 'よい',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('inboxEventSchema の human_answer は answeredVia を運べる', () => {
+    const parsed = inboxEventSchema.safeParse({
+      type: 'human_answer',
+      id: 'ev-1',
+      at: '2026-01-01T00:00:10.000Z',
+      approvalId: 'ap-1',
+      answer: 'よい',
+      answeredVia: { kind: 'account', accountId: 'acc-1' },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'human_answer') {
+      expect(parsed.data.answeredVia).toEqual({ kind: 'account', accountId: 'acc-1' });
+    }
+  });
+
+  it('journalEntrySchema の escalation は answeredVia 無しでもパースできる（既存の行と互換）', () => {
+    const parsed = journalEntrySchema.safeParse({
+      type: 'escalation',
+      id: 'j-1',
+      at: '2026-01-01T00:00:10.000Z',
+      question: '質問',
+      approvalId: 'ap-1',
+      answeredAt: '2026-01-01T00:00:10.000Z',
+      answer: 'よい',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('journalEntrySchema の escalation は answeredVia を運べる', () => {
+    const parsed = journalEntrySchema.safeParse({
+      type: 'escalation',
+      id: 'j-1',
+      at: '2026-01-01T00:00:10.000Z',
+      question: '質問',
+      approvalId: 'ap-1',
+      answeredAt: '2026-01-01T00:00:10.000Z',
+      answer: 'よい',
+      answeredVia: { kind: 'operator', auth: 'operator-token' },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'escalation') {
+      expect(parsed.data.answeredVia).toEqual({ kind: 'operator', auth: 'operator-token' });
+    }
   });
 });
 

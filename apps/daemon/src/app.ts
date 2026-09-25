@@ -1167,16 +1167,20 @@ function describeActor(principal: Principal): string {
 
 /**
  * `Principal`（`auth.ts`）を `Clone#answerApproval` の `via`
- * （`AnswerApprovalVia`、`@alteroid/core`）へ変換する（Issue #863）。
+ * （`AnswerApprovalVia`、`@alteroid/core`）へ変換する（Issue #863、#1479）。
  *
  * **`packages/core` は `apps/daemon` の `Principal` を知らない**（層が逆）ので、
  * この変換をここに置く——`/approvals/answer` と `/approvals/:id/answer` の
  * 両方から呼ぶ。渡し忘れると `answerApproval` は `via: undefined` を受け取り、
  * 既定（記録しない）へ倒れる。
+ *
+ * **`operator` の `auth`（`'disabled' | 'operator-token'`）はそのまま運ぶ。**
+ * `authenticate` の中でどちらの枝を通ったかが確定しているので、ここで判定し
+ * 直さない。
  */
 function answerApprovalViaOf(principal: Principal): AnswerApprovalVia {
   return principal.kind === 'operator'
-    ? { kind: 'operator' }
+    ? { kind: 'operator', auth: principal.auth }
     : { kind: 'account', accountId: principal.account.id };
 }
 
@@ -1308,14 +1312,18 @@ export function createApp(deps: AppDeps) {
    */
   const authenticate = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
     if (isOperator(c, deps.token)) {
-      c.set('principal', { kind: 'operator' });
+      // **`auth: 'operator-token'`（Issue #1479）。** 状態ファイルの token を
+      // 提示できたことをもって通した——`Principal` の doc を見よ。
+      c.set('principal', { kind: 'operator', auth: 'operator-token' });
       await next();
       return;
     }
     if (!authPlan.enabled) {
       // 認証を設定していない構成では、この機能が入る前とまったく同じに振る舞う。
       // 守りは待ち受け先（既定 127.0.0.1）と手前に置く境界の側にある。
-      c.set('principal', { kind: 'operator' });
+      // **`auth: 'disabled'`（Issue #1479）。** token の提示なしに通った——
+      // `Principal` の doc を見よ。
+      c.set('principal', { kind: 'operator', auth: 'disabled' });
       await next();
       return;
     }

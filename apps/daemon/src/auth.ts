@@ -115,8 +115,20 @@ function describe(enabled: boolean, providers: AuthProvider[], mode: string): st
  * 読めることをもって本人とみなす — つまり守っているのはファイルの許可であって、
  * 新しい秘密ではない。ここが「最初の許可を誰が与えるか」の鶏卵問題の出口で、
  * これが無いと誰も `access grant` を実行できない。
+ *
+ * **`kind: 'operator'` は通った経路で2値に分かれる（Issue #1479）。**
+ * `createApp` の `authenticate` ミドルウェアが立てる——`auth: 'operator-token'`
+ * は `isOperator(c, deps.token)` が真を返した(=状態ファイルの token を提示した)
+ * とき、`auth: 'disabled'` は認証をそもそも設定していない構成（`authPlan.enabled`
+ * が偽）で、全要求が operator として通ったとき。**どちらも「人間が答えた」ことの
+ * 証拠にはならない**（operator の資格はクローンの器から読める。
+ * `packages/core/src/host.ts` の `AnswerApprovalVia` の doc）が、認証を意図して
+ * 設定していない構成のほうが一段緩いので分けて残す。`answerApprovalViaOf`
+ * （`app.ts`）がこの欄をそのまま `AnswerApprovalVia` へ運ぶ。
  */
-export type Principal = { kind: 'operator' } | { kind: 'account'; account: AuthAccount };
+export type Principal =
+  | { kind: 'operator'; auth: 'disabled' | 'operator-token' }
+  | { kind: 'account'; account: AuthAccount };
 
 export interface AuthVariables {
   principal: Principal;

@@ -5,6 +5,7 @@ import {
   approvalUpdatedAt,
   appraisalSchema,
   commitmentUpdatedAt,
+  describeAnsweredVia,
   describeAppraisal,
   describeDenialFollowUp,
   describeManagerState,
@@ -1365,6 +1366,11 @@ export async function runSlashCommand(
         } else if (approval.answeredAt) {
           stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
           if (approval.answer) stdout.write(`      回答: ${approval.answer}\n`);
+          // **回答経路（Issue #1479）。** 記録が無い（古い経路で答えられた）行では
+          // 出さない——「わからない」を「operator ではない」に化けさせない。
+          if (approval.answeredVia) {
+            stdout.write(`      回答経路: ${describeAnsweredVia(approval.answeredVia)}\n`);
+          }
         }
         // **この確認が上がった会話を辿れるようにする（issue #877）。** Web の
         // 承認画面（`apps/web/app/routes/approvals.tsx` の `ConversationPanel`）
