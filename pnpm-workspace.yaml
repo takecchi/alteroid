@@ -60,8 +60,8 @@ catalog:
   react-dom: ^19.2.8
   '@types/react': ^19.2.18
   '@types/react-dom': ^19.2.4
-  react-router: ^7.18.2
-  '@react-router/dev': ^7.18.2
+  react-router: ^8.0.0
+  '@react-router/dev': ^8.0.0
   # SPA でもビルド時に要る（index.html を書き出す側が実行系を要求する）。
   # 成果物は静的なので、これが動くのはビルドの中だけ。
   #
@@ -69,7 +69,7 @@ catalog:
   # `package.json` の `dependencies` だけを見て実行系を判定し、`isbot` が
   # 無いと**ビルド中に package.json を書き換えて `pnpm install` を走らせる**。
   # CI でそれが起きると、成果物の生成が依存関係の書き換えを伴う。
-  '@react-router/node': ^7.18.2
+  '@react-router/node': ^8.0.0
   isbot: ^5.2.1
   vite: ^8.2.1
   tailwindcss: ^4.3.3
