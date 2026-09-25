@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+import { dirname } from 'node:path';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -86,12 +87,30 @@ interface PendingRegistration {
  * 配線されておらず、デーモンと同じ UID で走るため（`claude-provider.ts` の
  * `buildManagerSessionOptions` にだけ在ることを実測済み）。UID を跨いで守る
  * 形は、このPRの範囲外である。
+ *
+ * ## ⚠️ listen〜chmod の窓（PR1 の留保）を、ディレクトリ側でも塞ぐ
+ *
+ * `chmodSync(socketPath, 0o600)`（下）は `listen()` が返った**後**にしか
+ * 呼べない——その一瞬、ソケットファイル自体は作成時の既定の mode のままである。
+ * **ここでは加えて、ソケットを収めるディレクトリを先に 0700 にする**
+ * （`mkdirSync(dir, { recursive: true, mode: 0o700 })` の直後に、既存の
+ * ディレクトリだった場合に備えて `chmodSync(dir, 0o700)` も呼ぶ——`mkdirSync` の
+ * `mode` は「新規に作った」ときにしか効かない）。ディレクトリが 0700 なら、
+ * 同じ UID 以外はそもそもそこへ `traverse`（`x` 権限）できないので、**中の
+ * ソケットファイル自身がまだ緩い mode のままの一瞬があっても、辿り着けない
+ * 側から見れば窓が無い**——ソケット単体の chmod と二重に塞ぐ形になる。
  */
 export async function createCloneToolRelayHost(options: {
   socketPath: string;
 }): Promise<CloneToolRelayHost> {
   const { socketPath } = options;
   const pending = new Map<string, PendingRegistration>();
+
+  const dir = dirname(socketPath);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // 既存のディレクトリだった場合に備える——`mkdirSync` の `mode` は新規作成の
+  // ときにしか適用されない（既存なら黙って何もしない）。
+  chmodSync(dir, 0o700);
 
   // 古いソケットが残っていると listen できない（器の作り直しで残る。
   // `apps/runner/src/index.ts` と同じ手当て）。

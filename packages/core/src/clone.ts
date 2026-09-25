@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -27,6 +28,18 @@ import {
   foldClaudeMessage,
 } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import {
+  CLONE_TOOL_RELAY_SOCKET_ENV,
+  CLONE_TOOL_RELAY_TOKEN_ENV,
+} from './clone-tool-relay-protocol.js';
+import { createCloneToolRelayHost, type CloneToolRelayHost } from './clone-tool-relay-host.js';
+import {
+  CLONE_TOOL_RELAY_SOCKET_FILENAME,
+  DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR,
+  resolveCloneToolRelayChildEntry,
+  resolveCloneToolsTransport,
+  type CloneToolsTransport,
+} from './clone-tools-transport.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { restoredInboxEventVerdict, type RestoredInboxEventVerdict } from './inbox-staleness.js';
 import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
@@ -1202,6 +1215,18 @@ export interface CloneOptions {
    */
   mcpServerFactory?: typeof createCloneMcpServer;
   /**
+   * クローンの道具の中継（Issue #486 48(a) PR2）が listen するソケットを収める
+   * ディレクトリ。省略すると `DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR`
+   * （`/run/alteroid/clone-tool-relay`）。
+   *
+   * **省略できるのはテストのためだけである。** 本番の `/run/alteroid` は
+   * `compose.yaml` の名前付き volume（`control`）の下にしか無いので、テストは
+   * ここへ一時ディレクトリを渡す。**`ALTEROID_CLONE_TOOLS_TRANSPORT` が
+   * `stdio` でなければ、この値は一切読まれない**（ホストそのものを起こさない
+   * ので、ディレクトリも作らない）。
+   */
+  cloneToolRelaySocketDir?: string;
+  /**
    * `#restoreUnread` が配り直す1件ごとに、実際に配るか畳むかを決める述語
    * （Issue #783 続き）。doc は {@link RedeliveryGate} に在る。
    *
@@ -1428,6 +1453,24 @@ class Clone implements CloneHost {
   readonly #mergedBatchLimit: number;
   /** 道具の MCP サーバを組み立てる関数。既定は本物、テストでは差し替えられる。 */
   readonly #mcpServerFactory: typeof createCloneMcpServer;
+  /**
+   * クローンの道具を、今日どおりインプロセスで渡すか、中継越し（stdio）で
+   * 渡すか（`ALTEROID_CLONE_TOOLS_TRANSPORT`。Issue #486 48(a) PR2）。
+   * 構築時に1度だけ解決する——`#permissionMode` 等と同じで、走行中には
+   * 変わらない。
+   */
+  readonly #cloneToolsTransport: CloneToolsTransport;
+  /** `#cloneToolsTransport === 'stdio'` のときの、ソケットの置き場。 */
+  readonly #cloneToolRelaySocketDir: string;
+  /**
+   * クローンの道具の中継のホスト（`clone-tool-relay-host.ts`）。**デーモンの
+   * 寿命で高々1つ**——`#mcpServerConfigFor` の doc に理由を書いた。`stdio` の
+   * セッションが1度も組まれなければ、この Promise 自体が生まれない
+   * （ホストは lazy に起こす。`sdk` のままなら listen すら起きない）。
+   */
+  #cloneToolRelayHostPromise: Promise<CloneToolRelayHost> | undefined;
+  /** `clone-tool-relay-child.ts` の成果物の絶対パス。初めて要ったときに1度だけ解決する。 */
+  #cloneToolRelayChildEntry: string | undefined;
 
   // --- `self_status` の材料（SDK が実際に報告してきた値） ---------------------
   //
@@ -2382,6 +2425,7 @@ class Clone implements CloneHost {
       scheduler,
       self,
       mcpServerFactory,
+      cloneToolRelaySocketDir,
       redeliveryGate,
     } = options;
     this.#stores = stores;
@@ -2414,6 +2458,8 @@ class Clone implements CloneHost {
     this.#scheduler = scheduler;
     this.#self = self;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
+    this.#cloneToolsTransport = resolveCloneToolsTransport(envSource);
+    this.#cloneToolRelaySocketDir = cloneToolRelaySocketDir ?? DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR;
     this.#redeliveryGate = redeliveryGate;
     this.#managers =
       managers ??
@@ -3190,6 +3236,15 @@ class Clone implements CloneHost {
     await this.#reader?.catch(() => undefined);
     // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
     await this.#managers.stop().catch(() => undefined);
+    // **クローンの道具の中継のホストも、デーモンが実際に落ちるこの1点で畳む**
+    // （Issue #486 48(a) PR2。`#ensureCloneToolRelayHost` の doc「デーモンの
+    // 寿命で1つ」の対）。`stdio` のセッションを1度も組んでいなければ
+    // `#cloneToolRelayHostPromise` は `undefined` のままなので、ここは何もしない
+    // ——listen していないホストを閉じにいくことはない。
+    if (this.#cloneToolRelayHostPromise !== undefined) {
+      const relayHost = await this.#cloneToolRelayHostPromise.catch(() => undefined);
+      relayHost?.close();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -9044,7 +9099,7 @@ class Clone implements CloneHost {
     return buildCloneSessionOptions({
       model: this.#model,
       permissionMode: this.#permissionMode,
-      mcpServer: this.#mcpServerFactory(this.#toolContext()),
+      mcpServer: await this.#mcpServerConfigFor(this.#toolContext()),
       externalMcpServers: await this.#externalMcpServers(),
       systemPrompt,
       env: this.#childEnv(),
@@ -9080,6 +9135,86 @@ class Clone implements CloneHost {
       // 「どちらで見たかは日誌に残す」から静かに落ちていた）。
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
     });
+  }
+
+  /**
+   * クローンの道具の中継のホスト（`clone-tool-relay-host.ts`）を、**デーモンの
+   * 寿命で高々1つ**だけ起こす（Issue #486 48(a) PR2）。
+   *
+   * ## デーモンの寿命で1つ、を選んだ理由
+   *
+   * セッションごとに起こす（＝ listen し直す）形と迷った。**デーモンの寿命で
+   * 1つの方が安い**——理由は3つ:
+   *
+   * 1. **クローンは1つのプロセスの生涯で何度もセッションを組み直す**（`resume`・
+   *    トークン交代による `recycleSessionForToken`・compaction 後の再開）。
+   *    セッションごとに listen し直すと、そのたびに `rmSync` → `mkdirSync` →
+   *    `listen` → `chmodSync` の4手が走る——`register()`（token を1本発行する
+   *    だけ）に比べて明らかに重い。
+   * 2. **listen し直すたびに「listen〜chmod の窓」が新しく開く。** ディレクトリ
+   *    側を 0700 にして塞いだ（`clone-tool-relay-host.ts` の doc）とはいえ、
+   *    窓の再発生そのものを無くせるなら無くす方が単純である。
+   * 3. **`register()` は token を使い捨てにする設計**（`CloneToolRelayHost` の
+   *    doc）なので、複数セッションが同じホストを共有しても、古いセッションの
+   *    token が新しいセッションの子プロセスに使い回される事故は起きない——
+   *    ホストを使い回すことの安全性は元から作り込まれている。
+   *
+   * **`stdio` のセッションが1度も組まれなければ、この関数自体が呼ばれない**——
+   * `#mcpServerConfigFor` の `'sdk'` 分岐がここへ来ないので、`sdk`（既定）の
+   * ままなら listen すら発生しない。
+   */
+  async #ensureCloneToolRelayHost(): Promise<CloneToolRelayHost> {
+    this.#cloneToolRelayHostPromise ??= createCloneToolRelayHost({
+      socketPath: join(this.#cloneToolRelaySocketDir, CLONE_TOOL_RELAY_SOCKET_FILENAME),
+    });
+    return this.#cloneToolRelayHostPromise;
+  }
+
+  /**
+   * `this.#mcpServerFactory(context)` の結果を、いまの
+   * `ALTEROID_CLONE_TOOLS_TRANSPORT`（`#cloneToolsTransport`）に応じてそのまま
+   * 返すか、`clone-tool-relay-*` 越しの stdio 設定へ組み替える（Issue #486
+   * 48(a) PR2）。**本セッション（`#buildOptions`）と蒸留のサイドクエリ
+   * （`#distillFromTranscript`）の両方がこれを通す**——`claude-provider.ts` の
+   * `cloneMcpServers` の doc「本セッションと蒸留で同じ関数を通す」と同じ理由で、
+   * 経路（transport）も両者で必ず揃える。片方だけ中継越しだと、蒸留のセッション
+   * だけ ToolContext の構築点が別になり、`#toolContext()` の doc が挙げている
+   * 「片方へ渡し忘れる」穴と同じ形の非対称が transport の軸にも生まれる。
+   *
+   * **`sdk`（既定）ではここは素通り。** ホストも子プロセスも一切起こさない——
+   * 今日と1バイトも変わらない経路のまま。
+   *
+   * **`stdio` のときだけ**、ホストを（上の `#ensureCloneToolRelayHost` の理由で
+   * デーモンの寿命で1つに）起こし、呼ぶたびに新しい token を発行して登録する。
+   * `register()` へ渡す関数は道具の実装（`McpServer` インスタンス）を
+   * **その関数が実際に呼ばれるまで**作らない——子プロセスが繋がってこない限り、
+   * 重い `createCloneMcpServer` を組み立てずに済む（`CloneToolRelayHost.register`
+   * の doc と同じ理由）。
+   *
+   * **`alwaysLoad` はどちらの分岐でも渡さない。** インプロセス（`type: 'sdk'`）
+   * の設定にはこの欄自体が無い（SDK の `McpSdkServerConfig` 型に `alwaysLoad` が
+   * 無い——`timeout` しか持たない）ので、今日は常に「渡していない」＝ SDK の
+   * 既定（tool search が効いていれば defer される）のままである。ここで stdio
+   * 側にだけ `alwaysLoad: true` を書くと、**同じ道具なのに transport を
+   * 切り替えただけで読み込みのタイミングが変わる**——`clone-tools-transport.test.ts`
+   * が両分岐で `alwaysLoad` が無いことを固定する。
+   */
+  async #mcpServerConfigFor(context: ToolContext): Promise<McpServerConfig> {
+    if (this.#cloneToolsTransport === 'sdk') {
+      return this.#mcpServerFactory(context);
+    }
+    const host = await this.#ensureCloneToolRelayHost();
+    this.#cloneToolRelayChildEntry ??= resolveCloneToolRelayChildEntry(import.meta.url);
+    const token = host.register(() => this.#mcpServerFactory(context).instance);
+    return {
+      type: 'stdio',
+      command: process.execPath,
+      args: [this.#cloneToolRelayChildEntry],
+      env: {
+        [CLONE_TOOL_RELAY_SOCKET_ENV]: host.socketPath,
+        [CLONE_TOOL_RELAY_TOKEN_ENV]: token,
+      },
+    };
   }
 
   /**
@@ -10014,7 +10149,11 @@ class Clone implements CloneHost {
         // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
         // 蒸留のターンだけ自分のことが分からないクローンになる
         // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
-        mcpServer: this.#mcpServerFactory({
+        // **`#mcpServerConfigFor` を本セッションと同じく通す**（Issue #486
+        // 48(a) PR2）。中身は変えず、経路（`sdk`/`stdio`）を決める1点だけを
+        // 本セッションと揃える——`#mcpServerConfigFor` の doc「片方だけ中継越し
+        // だと…非対称が transport の軸にも生まれる」を参照。
+        mcpServer: await this.#mcpServerConfigFor({
           stores: this.#stores,
           emit: () => undefined,
           ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),

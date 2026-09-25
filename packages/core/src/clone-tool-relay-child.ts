@@ -3,6 +3,17 @@ import { createConnection } from 'node:net';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
+import {
+  CLONE_TOOL_RELAY_SOCKET_ENV,
+  CLONE_TOOL_RELAY_TOKEN_ENV,
+} from './clone-tool-relay-protocol.js';
+
+// **互換のための re-export。** 既存のテスト（`clone-tool-relay-host.test.ts` /
+// `clone-tool-relay-integration.test.ts`）はこのファイルからこの2つの名前を
+// import している——本体は `clone-tool-relay-protocol.ts`（doc はそちら）へ
+// 移したが、import 元は変えずに済むようここでも同じ名前を見せる。
+export { CLONE_TOOL_RELAY_SOCKET_ENV, CLONE_TOOL_RELAY_TOKEN_ENV };
+
 /**
  * SDK が「クローンの道具」の stdio MCP サーバとして spawn する子プロセスの
  * 入口（Issue #486 48(a)、案D「中継（relay）」）。
@@ -29,9 +40,13 @@ import { pathToFileURL } from 'node:url';
  * 双方向の素通しになる——`runner-protocol.ts` が持つ「デーモン⇄runner」の
  * 合鍵の意匠を、最小限だけ流用したもの（あちらは HTTP の Bearer、こちらは
  * 中継の最初の1行）。
+ *
+ * **環境変数の名前2本（`CLONE_TOOL_RELAY_SOCKET_ENV` /
+ * `CLONE_TOOL_RELAY_TOKEN_ENV`）はこのファイルの外、`clone-tool-relay-protocol.ts`
+ * に居る。** 理由はそちらの doc——`clone.ts` がこの2つの名前だけを import
+ * すると、tsup がこのモジュール全体を共有チャンクへ括り出し、下の
+ * `invokedDirectly()` が永久に偽になる事故が起きる。
  */
-export const CLONE_TOOL_RELAY_SOCKET_ENV = 'ALTEROID_CLONE_TOOL_RELAY_SOCKET';
-export const CLONE_TOOL_RELAY_TOKEN_ENV = 'ALTEROID_CLONE_TOOL_RELAY_TOKEN';
 
 /** テストが差し替えられるように、標準入出力を引数として受け取る。 */
 export interface CloneToolRelayChildIo {

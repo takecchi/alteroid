@@ -2,11 +2,18 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { cloneMcpServers } from './claude-provider.js';
+import {
+  CLONE_TOOL_RELAY_SOCKET_ENV,
+  CLONE_TOOL_RELAY_TOKEN_ENV,
+} from './clone-tool-relay-child.js';
+import { CLONE_TOOLS_TRANSPORT_ENV_KEY } from './clone-tools-transport.js';
 import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
 import { buildManagerSystemPrompt, buildWorkerPrompt } from './prompt.js';
@@ -20,7 +27,7 @@ import {
   createRunnerHost,
   type RunnerHost,
 } from './runner.js';
-import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
+import { CLONE_ALLOWED_TOOLS, CLONE_TOOL_NAMES, MCP_SERVER_NAME } from './tools.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 
 /**
@@ -179,6 +186,138 @@ describe('クローン本セッションへ渡す Options', () => {
 
     await clone.stop();
   });
+
+  // -------------------------------------------------------------------------
+  // クローンの道具の中継（Issue #486 48(a) PR2）: ALTEROID_CLONE_TOOLS_TRANSPORT
+  // -------------------------------------------------------------------------
+
+  it('ALTEROID_CLONE_TOOLS_TRANSPORT 未設定・空・空白は、今日どおり type: sdk のまま（既定固定）', async () => {
+    for (const value of [undefined, '', '   ']) {
+      const { fn, calls } = fakeCloneSdk();
+      const stores = createMemoryStores();
+      const clone = createClone({
+        stores,
+        queryFn: fn,
+        env: value === undefined ? {} : { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: value },
+        redeliveryGate: ALWAYS_REDELIVER,
+      });
+
+      clone.post(humanMessage('やあ'));
+      await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+      const mcpServers = (calls[0] as { options: Options }).options.mcpServers ?? {};
+      expect(Object.keys(mcpServers)).toEqual([MCP_SERVER_NAME]);
+      const own = mcpServers[MCP_SERVER_NAME] as { type?: string; alwaysLoad?: boolean };
+      expect(own.type).toBe('sdk');
+      // **`alwaysLoad` はここでは「渡していない」欄そのものが無い**
+      // （`McpSdkServerConfig` は `timeout` しか持たない）。stdio 側と
+      // 同じ「揃っている」を、後続の stdio テストと対で固定する。
+      expect(own.alwaysLoad).toBeUndefined();
+
+      await clone.stop();
+    }
+  });
+
+  it('ALTEROID_CLONE_TOOLS_TRANSPORT=stdio のとき、鍵は同じ1本のまま type: stdio へ切り替わる', async () => {
+    const { fn, calls } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    const socketDir = makeTempDirSync('clone-tool-relay-wire-');
+    const clone = createClone({
+      stores,
+      queryFn: fn,
+      env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' },
+      cloneToolRelaySocketDir: socketDir,
+      redeliveryGate: ALWAYS_REDELIVER,
+    });
+
+    clone.post(humanMessage('やあ'));
+    await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+    const mcpServers = (calls[0] as { options: Options }).options.mcpServers ?? {};
+    // **鍵は `sdk` のときと同じ1本のまま**（`MCP_SERVER_NAME`）。
+    expect(Object.keys(mcpServers)).toEqual([MCP_SERVER_NAME]);
+    const own = mcpServers[MCP_SERVER_NAME] as {
+      type?: string;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      alwaysLoad?: boolean;
+    };
+    expect(own.type).toBe('stdio');
+    expect(own.command).toBe(process.execPath);
+    expect(own.args).toHaveLength(1);
+    expect(own.args?.[0]).toMatch(/clone-tool-relay-child\.js$/);
+    expect(Object.keys(own.env ?? {}).sort()).toEqual(
+      [CLONE_TOOL_RELAY_SOCKET_ENV, CLONE_TOOL_RELAY_TOKEN_ENV].sort(),
+    );
+    // **in-process（sdk）と同じ扱い。** 今日は渡していない——stdio 側にだけ
+    // `alwaysLoad` を足すと、transport を切り替えただけで道具の読み込みの
+    // タイミングが変わってしまう（`#mcpServerConfigFor` の doc）。
+    expect(own.alwaysLoad).toBeUndefined();
+
+    await clone.stop();
+  });
+
+  it('ALTEROID_CLONE_TOOLS_TRANSPORT に未知の値を置くと、黙って倒さずに構築そのものを止める', () => {
+    const { fn } = fakeCloneSdk();
+    const stores = createMemoryStores();
+    expect(() =>
+      createClone({
+        stores,
+        queryFn: fn,
+        env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stido' }, // 綴りの間違いを模す
+        redeliveryGate: ALWAYS_REDELIVER,
+      }),
+    ).toThrow(/ALTEROID_CLONE_TOOLS_TRANSPORT/);
+  });
+
+  it(
+    'stdio モードでも clone.ts の配線を通して本物の createCloneMcpServer へ ' +
+      'tools/list が CLONE_TOOL_NAMES の全本数（52本）届く（実際に子プロセスを spawn する）',
+    async () => {
+      // **⚠️ `packages/core/dist/clone-tool-relay-child.js` のビルド済み成果物に
+      // 依存する**（`clone-tool-relay-integration.test.ts` と同じ前提。
+      // `pnpm --filter @alteroid/core build` を先に走らせること）。
+      const { fn, calls } = fakeCloneSdk();
+      const stores = createMemoryStores();
+      const socketDir = makeTempDirSync('clone-tool-relay-wire-e2e-');
+      const clone = createClone({
+        stores,
+        queryFn: fn,
+        env: { [CLONE_TOOLS_TRANSPORT_ENV_KEY]: 'stdio' },
+        cloneToolRelaySocketDir: socketDir,
+        redeliveryGate: ALWAYS_REDELIVER,
+      });
+
+      clone.post(humanMessage('やあ'));
+      await expect.poll(() => calls.length > 0, { timeout: 3000 }).toBe(true);
+
+      // clone.ts が実際に組み立てた設定（本物の token・socketPath・子プロセスの
+      // 絶対パス）をそのまま使って、本物の MCP クライアントで繋ぎに行く——
+      // `queryFn` を差し替えてあるので SDK 自身はこの設定を一度も使わないが、
+      // ここではその設定を横取りして自分で使う。
+      const own = ((calls[0] as { options: Options }).options.mcpServers ?? {})[
+        MCP_SERVER_NAME
+      ] as { command: string; args: string[]; env: Record<string, string> };
+
+      const transport = new StdioClientTransport({
+        command: own.command,
+        args: own.args,
+        env: own.env,
+      });
+      const client = new Client({ name: 'agent-session-options.test', version: '0' });
+      await client.connect(transport);
+      try {
+        const { tools } = await client.listTools();
+        expect(tools.map((tool) => tool.name).sort()).toEqual([...CLONE_TOOL_NAMES].sort());
+      } finally {
+        await client.close();
+      }
+
+      await clone.stop();
+    },
+    20_000,
+  );
 });
 
 // ---------------------------------------------------------------------------

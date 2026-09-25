@@ -1,5 +1,5 @@
-import { statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { mkdirSync, statSync } from 'node:fs';
 import { createConnection, type Socket } from 'node:net';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -73,6 +73,35 @@ describe('clone-tool-relay-host（クローンの道具の中継・デーモン�
     const h = await openHost();
     const mode = statSync(h.socketPath).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  // Issue #486 48(a) PR2: 「listen〜chmod の窓」（PR1 の留保）を、ソケット単体
+  // ではなくディレクトリ側で塞ぐ——同一 UID 以外はそもそも `traverse` できない
+  // ので、ソケット自身の mode がまだ緩い一瞬があっても辿り着けない。
+  it('ソケットを収めるディレクトリは 0700 である（新規に作る場合）', async () => {
+    const dir = makeTempDirSync('clone-tool-relay-host-newdir-');
+    // `makeTempDirSync` 自身が作るのは `dir` であって、その1段下の
+    // ディレクトリはまだ存在しない——`createCloneToolRelayHost` が
+    // `mkdirSync(..., { recursive: true })` で新規に作る場合を確かめる。
+    const socketDir = join(dir, 'relay');
+    host = await createCloneToolRelayHost({ socketPath: join(socketDir, 's.sock') });
+
+    const mode = statSync(dirname(host.socketPath)).mode & 0o777;
+    expect(mode).toBe(0o700);
+  });
+
+  it('ソケットを収めるディレクトリが既存で緩い mode だった場合も 0700 へ締め直す', async () => {
+    const dir = makeTempDirSync('clone-tool-relay-host-existingdir-');
+    const socketDir = join(dir, 'relay');
+    // 先に緩い mode で作っておく——`mkdirSync` の `mode` は新規作成時にしか
+    // 効かないので、`createCloneToolRelayHost` 側が明示的に締め直さない限り
+    // ここが 0755 のまま残る。
+    mkdirSync(socketDir, { recursive: true, mode: 0o755 });
+
+    host = await createCloneToolRelayHost({ socketPath: join(socketDir, 's.sock') });
+
+    const mode = statSync(dirname(host.socketPath)).mode & 0o777;
+    expect(mode).toBe(0o700);
   });
 
   it('登録した token で接げば、tools/list が CLONE_TOOL_NAMES と一致する', async () => {

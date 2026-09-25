@@ -180,6 +180,17 @@ RUN install -d -m 0711 /run/alteroid/credentials
 # 無い）。ここに用意するのは器だけである。
 RUN install -d -m 0711 /run/alteroid/profile
 
+# クローンの道具の中継（Issue #486 48(a) 案D）の Unix ソケットの置き場。
+#
+# **上の2つ（0711）とは絞りが違う。** あちらはデーモンと別 UID の runner
+# からも読む必要があるが、この中継はデーモンと同じ UID のクローンの子
+# プロセスとしか繋がない（`clone-tool-relay-host.ts` の doc）ので、他の
+# UID には traverse すら要らない——0700 にする。**デーモン起動時にも
+# `createCloneToolRelayHost` が同じ mode で作り直す**（このイメージのぶんは
+# volume の初回コピー用の下地であって、実際の絞り込みは実行時にも重ねて
+# 効く）。
+RUN install -d -m 0700 /run/alteroid/clone-tool-relay
+
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 ENV CI=true
