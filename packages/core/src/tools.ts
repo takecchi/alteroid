@@ -2487,21 +2487,35 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
 /**
  * `ManagerDenial` の分類・理由・拒否文を、journal の `denialSuffix`
  * （`manager.ts` の `case 'permission_denied':`）と同じ字面で1件分にまとめる
- * （issue #1105）。**取れていない欄は省く**——3つとも無ければ何も足さない。
+ * （issue #1105）。**取れていない欄は省く**——4つとも無ければ何も足さない。
  *
- * **長さの上限もエスケープも掛けない。** journal 側が同じ値を無条件・無加工の
- * ままそのまま書いており（`manager.ts` の `denialSuffix`）、この一覧の読み手
- * （クローン。`manager_list`/`manager_report` は両方 `CLONE_TOOL_NAMES`）は
- * journal の読み手（`journal_read`）と同じ相手である——journal 側に無い制約を
- * ここにだけ足す理由が無い（`ManagerDenial.reasonType` の doc）。この一文が
- * 埋め込まれる一覧全体の上限は `LIST_DENIED_TOOLS`（件数）と `LIST_BUDGET`
- * （`manager_list` 側の文字数予算・`renderListing` が絞る）が既に持っている。
+ * **`inputHead` だけは journal 側に同じ字面が無い。** `reasonType` /
+ * `reason` / `message` の3つは journal の `denialSuffix` がそのまま書いて
+ * いる値だが、`inputHead`（`runner.ts` の `#onPreToolUse` が拒否より前に
+ * 見た入力の先頭）は journal の exchange 行には出さない設計である
+ * （`manager.ts` の `case 'permission_denied':` の doc）——ここが唯一、
+ * クローンにその値を渡す口である `manager_list`/`manager_report` 以外に
+ * 出るのは escalation の受信箱の本文だけ。
+ *
+ * **長さの上限もエスケープも掛けない。** journal 側が `reasonType` /
+ * `reason` / `message` を無条件・無加工のままそのまま書いており
+ * （`manager.ts` の `denialSuffix`）、この一覧の読み手（クローン。
+ * `manager_list`/`manager_report` は両方 `CLONE_TOOL_NAMES`）は journal の
+ * 読み手（`journal_read`）と同じ相手である——journal 側に無い制約をここに
+ * だけ足す理由が無い（`ManagerDenial.reasonType` の doc）。`inputHead` は
+ * 既に runner 側で伏せ字・160字以内に切ってあるので、ここで追加の加工は
+ * 要らない。この一文が埋め込まれる一覧全体の上限は `LIST_DENIED_TOOLS`
+ * （件数）と `LIST_BUDGET`（`manager_list` 側の文字数予算・`renderListing`
+ * が絞る）が既に持っている。
  */
-function denialReasonTag(denial: Pick<ManagerDenial, 'reasonType' | 'reason' | 'message'>): string {
+function denialReasonTag(
+  denial: Pick<ManagerDenial, 'reasonType' | 'reason' | 'message' | 'inputHead'>,
+): string {
   const parts = [
     denial.reasonType === undefined ? undefined : `分類: ${denial.reasonType}`,
     denial.reason === undefined ? undefined : `理由: ${denial.reason}`,
     denial.message === undefined ? undefined : `モデルへの拒否文: ${denial.message}`,
+    denial.inputHead === undefined ? undefined : `入力の先頭: ${denial.inputHead}`,
   ].filter((part): part is string => part !== undefined);
   return parts.length > 0 ? ` [${parts.join(' / ')}]` : '';
 }
@@ -2541,11 +2555,13 @@ function denialReasonTag(denial: Pick<ManagerDenial, 'reasonType' | 'reason' | '
  * この道具自身の案内（「まず manager_report を見ること」）どおりに動いた
  * クローンが拒否を1文字も見なかった** —— 案内が嘘をついていた。
  *
- * **各件に `denialReasonTag` で分類・理由・拒否文も添える（issue #1105）。**
- * これまでは「全件は journal_read に残っている」としか言っておらず、中身を
- * 読むには遡る呼び出しが要った。値そのものは journal に既に無条件で残って
- * いるので、ここへ足すのは同じクローンが読める口を1つ増やすだけである
- * （`ManagerDenial.reasonType` の doc）。
+ * **各件に `denialReasonTag` で分類・理由・拒否文・入力の先頭も添える
+ * （issue #1105）。** これまでは「全件は journal_read に残っている」としか
+ * 言っておらず、中身を読むには遡る呼び出しが要った。分類・理由・拒否文の
+ * 値そのものは journal に既に無条件で残っているので、ここへ足すのは同じ
+ * クローンが読める口を1つ増やすだけである（`ManagerDenial.reasonType` の
+ * doc）。**`inputHead` だけは journal に無い値をここで初めて渡す**
+ * （`denialReasonTag` の doc）。
  */
 function describeDenials(
   denials: ManagerDenial[],

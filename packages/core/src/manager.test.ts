@@ -2680,14 +2680,22 @@ function swappableRunner(runnerId = 'runner-primary') {
     /**
      * 確認へ上げずにその場で止められた（分類器・deny 規則）。
      *
-     * `fields` は `actor` / `reasonType` / `reason` / `message`（issue #1105）を
-     * 差し込むための口（`report` の `fields` と同じ作法）。**渡さなければ4つとも
-     * 省略される既存の振る舞いのまま**なので、他のテストの挙動は1つも変わらない。
+     * `fields` は `actor` / `reasonType` / `reason` / `message` / `inputHead`
+     * （issue #1105。`inputHead` は #1105 の後半——`runner.ts` の
+     * `#onPreToolUse` が拒否より前に見た入力の先頭）を差し込むための口
+     * （`report` の `fields` と同じ作法）。**渡さなければ5つとも省略される
+     * 既存の振る舞いのまま**なので、他のテストの挙動は1つも変わらない。
      */
     denied(
       managerId: string,
       tool: string,
-      fields: { actor?: string; reasonType?: string; reason?: string; message?: string } = {},
+      fields: {
+        actor?: string;
+        reasonType?: string;
+        reason?: string;
+        message?: string;
+        inputHead?: string;
+      } = {},
     ) {
       emit?.({
         type: 'permission_denied',
@@ -7342,6 +7350,85 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
       reasonType: 'rule',
       reason: '作業者側',
     });
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **issue #1105 後半 — `inputHead`（拒否より前に見た入力の先頭）も
+   * `denials()` に載る。**
+   *
+   * `reasonType` / `reason` / `message` とは出所が違う——SDK の拒否の合図が
+   * 運んだ値ではなく、`runner.ts` の `#onPreToolUse` が拒否より前に見た入力を
+   * 伏せて切ったもの（`runner-protocol.ts` の `permission_denied.inputHead`
+   * の doc）。それでも `denials()` に載せる欄としては同じ「最新1件」の
+   * 規則に従う——他の3欄と独立に欠落しうることを固定する。
+   */
+  it('入力の先頭（inputHead）も denials() に載る', async () => {
+    const id = 'mgr-denial-input-head-basic';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', {
+      reasonType: 'classifier',
+      inputHead: 'sed -i 1s/.../ 538-comment.md',
+    });
+
+    expect(s.pool.denials(id)).toEqual([
+      {
+        tool: 'Bash',
+        count: 1,
+        lastAt: expect.any(String),
+        reasonType: 'classifier',
+        inputHead: 'sed -i 1s/.../ 538-comment.md',
+      },
+    ]);
+
+    await s.pool.stop();
+  });
+
+  it('inputHead を持たない拒否（旧い runner・控えが無い等）では、その欄だけ省く', async () => {
+    const id = 'mgr-denial-input-head-absent';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', { reasonType: 'classifier' });
+
+    const [denial] = s.pool.denials(id);
+    expect(denial).toMatchObject({ tool: 'Bash', reasonType: 'classifier' });
+    expect(denial).not.toHaveProperty('inputHead');
+
+    await s.pool.stop();
+  });
+
+  it('複数回止められたときは最新1件の inputHead だけを持つ（前回分は持ち越さない）', async () => {
+    const id = 'mgr-denial-input-head-latest-only';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', { inputHead: '1回目の入力' });
+    fake.denied(id, 'Bash', { inputHead: '2回目の入力' });
+
+    const [denial] = s.pool.denials(id);
+    expect(denial).toMatchObject({ tool: 'Bash', count: 2, inputHead: '2回目の入力' });
+
+    // 3回目に inputHead が無い回が来たら、前回までの inputHead も消える
+    // （`reasonType` 等と同じ「最新1件」の像。`denialReasonSnapshotOf` の doc）。
+    fake.denied(id, 'Bash');
+    const [after] = s.pool.denials(id);
+    expect(after).not.toHaveProperty('inputHead');
 
     await s.pool.stop();
   });

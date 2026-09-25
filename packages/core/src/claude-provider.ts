@@ -107,6 +107,8 @@ function toAgentToolAuditRecord(input: unknown): AgentToolAuditRecord {
     ...(typeof raw?.effort?.level === 'string' ? { effortLevel: raw.effort.level } : {}),
     ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+    // issue #1105。`AgentToolAuditRecord.toolUseId` の doc。
+    ...(typeof raw?.tool_use_id === 'string' ? { toolUseId: raw.tool_use_id } : {}),
   };
 }
 
@@ -122,6 +124,8 @@ function toAgentToolAuditFailureRecord(input: unknown): AgentToolAuditFailureRec
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
     ...(typeof raw?.error === 'string' ? { error: raw.error } : {}),
     ...(raw?.is_interrupt === undefined ? {} : { isInterrupt: raw.is_interrupt }),
+    // issue #1105。`AgentToolAuditFailureRecord.toolUseId` の doc。
+    ...(typeof raw?.tool_use_id === 'string' ? { toolUseId: raw.tool_use_id } : {}),
   };
 }
 
@@ -230,7 +234,14 @@ function wrapStopHook(hook: AgentObservationHook<AgentStopRecord>): HookCallback
   };
 }
 
-/** `PreToolUse` の生入力を {@link AgentPreToolRecord} へ写す。無い欄は省く（他の `toAgent*Record` と同じ作法）。 */
+/**
+ * `PreToolUse` の生入力を {@link AgentPreToolRecord} へ写す。無い欄は省く（他の `toAgent*Record` と同じ作法）。
+ *
+ * **`tool_use_id` は SDK の型（`PreToolUseHookInput`）では必須だが、ここでは
+ * 他の欄と同じく `typeof === 'string'` で絞ってから渡す**（issue #1105）。
+ * `runner.ts` の `#onPreToolUse` がこの id をキーに、分類器の拒否より前に
+ * 見た入力の先頭を控える（`AgentPreToolRecord.toolUseId` の doc）。
+ */
 function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
   const raw = input as Partial<PreToolUseHookInput> | null | undefined;
   return {
@@ -238,6 +249,7 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
     toolInput: raw?.tool_input,
     ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
     ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+    ...(typeof raw?.tool_use_id === 'string' ? { toolUseId: raw.tool_use_id } : {}),
   };
 }
 

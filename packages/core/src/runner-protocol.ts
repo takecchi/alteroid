@@ -1432,6 +1432,42 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * そのもの。`.optional()` の理由は `reason` と同じ。
      */
     message: z.string().optional(),
+    /**
+     * 拒否より前に `#onPreToolUse`（`runner.ts`）が見た入力の先頭（issue #1105）。
+     * 伏せ字済み・最大160字（`denial-input-head.ts` の
+     * `buildDenialInputHead` / `DENIAL_INPUT_HEAD_LIMIT`）。
+     *
+     * **出所は `input` とはっきり違う。** `input` は SDK の拒否の合図
+     * （`system/permission_denied` または `result.permission_denials`）が
+     * 実際に運んだ値だが、**この欄はそちらではない** —— 同じ `tool_use_id`
+     * について、alteroid 自身の `PreToolUse` フックが**拒否より前に**
+     * 見た入力を、runner 側で伏せて切ったものである。`via: 'live'` の
+     * 合図には `tool_input` 自体が無い（`input` の doc）ので、この欄が
+     * 「何を実行しようとしたか」が分かる唯一の経路になる回がある。
+     *
+     * **`input` の欄へ後から詰めない理由と同じ理由で、これも新しい別の欄に
+     * する。** `input` の doc が禁じているのは「SDK が運ばなかった値をこの
+     * 欄へ埋めること」であって、その禁止は覆っていない——別の欄を新設する
+     * ことで、事実（SDK が運んだ値）と観測（runner が別の経路で見た値）を
+     * 混ぜずに両方運ぶ。
+     *
+     * **`.optional()` は「まだ書いていない」ではない。** 次のどれでも
+     * 欠ける——(1) `record.toolUseId` が取れなかった回（旧い provider の
+     * 写し） (2) `PreToolUse` を経由しない拒否（原理的には無いはずだが、
+     * 経由しない経路が将来増えても壊れないよう楽観しない） (3) 控えが
+     * `PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`（`runner.ts`）で先に忘れられた回。
+     * **無いものは作り物で埋めない**——欠けた回は「入力は付いていない」
+     * （`denial-shape.ts` の `denialInputAbsence`）のまま、これまでどおり
+     * 運用する。
+     *
+     * **旧いデーモンでも壊れない。** zod 4 の `z.object` は既定で未知の
+     * キーを黙って落とす（strip）ので、この欄をまだ知らない `runnerEventSchema`
+     * （旧デーモン）で `safeParse` しても、この欄が消えるだけで他の欄は
+     * 生き残る。逆に旧い runner がこの欄を送ってこない回も `.optional()`
+     * なので新しいデーモンの `safeParse` は落ちない——どちらの順でデプロイ
+     * しても壊れない。
+     */
+    inputHead: z.string().optional(),
   }),
   /**
    * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。
