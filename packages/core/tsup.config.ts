@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 3つ出す。
+   * 5つ出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -24,8 +24,21 @@ export default defineConfig({
    *   本番でそのルートが開けなくなった事故そのものである
    *   （`apps/web/app/routes/commitments.tsx` の doc）。**写しを持たずに
    *   膨らませない唯一の形がこの軽い口である。**
+   * - `clone-tool-relay-child.ts` — #486 48(a) 案D。クローンの道具の中継
+   *   （relay）の子プロセスの入口。**上の4つと違い `package.json` の
+   *   `exports` には載せない** —— 外から名前で import される口ではなく、
+   *   `clone.ts`（同じパッケージの中）が `import.meta.url` から相対パスで
+   *   組み立てた絶対パスを `command`/`args` として spawn する、実行専用の
+   *   成果物だからである（`apps/daemon` の `openapi.ts` が `write-openapi.mjs`
+   *   専用でエクスポートに載らないのと同じ扱い）。
    */
-  entry: ['src/index.ts', 'src/usage-format.ts', 'src/revision-format.ts', 'src/journal-search.ts'],
+  entry: [
+    'src/index.ts',
+    'src/usage-format.ts',
+    'src/revision-format.ts',
+    'src/journal-search.ts',
+    'src/clone-tool-relay-child.ts',
+  ],
   format: ['esm'],
   dts: true,
   clean: true,

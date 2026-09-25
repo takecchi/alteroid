@@ -16,6 +16,12 @@ catalog:
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
   '@anthropic-ai/claude-agent-sdk': ^0.3.281
+  # `@anthropic-ai/claude-agent-sdk` の peerDependency（`^1.29.0`）と同じ実体
+  # （現に解決されている版は 1.30.0。`pnpm why @modelcontextprotocol/sdk -r` で
+  # 引き直せる）。#486 48(a) 案D — クローンの道具の中継（relay）host が
+  # `StdioServerTransport` を直接使うため、`packages/core` の直接依存として
+  # 明示する（今日までは claude-agent-sdk 経由の peer 解決だけだった）。
+  '@modelcontextprotocol/sdk': ^1.30.0
   hono: ^4.13.5
   '@hono/node-server': ^2.1.0
   '@hono/zod-validator': ^0.9.0
