@@ -121,5 +121,24 @@
       matchPackageNames: ['/^@anthropic-ai\\/claude-agent-sdk/'],
       enabled: false,
     },
+    // **`pnpm-workspace.yaml` の `overrides` はメジャーを上げない。** あそこに在るのは
+    // 推移的依存を脆弱性の修正版へ寄せるための上書きで、**上書きは親の宣言範囲の
+    // 内側に留める**（`pnpm-workspace.yaml` の `overrides` の上のコメント。
+    // `esbuild` を足していない理由も同じ）。メジャーは親の宣言の外へ出る。
+    // 実例（2026-09-26）: #1568（js-yaml 4 → 5）は親の `@redocly/openapi-core`
+    // （4.3.1 の厳密固定）が壊れて `packages/api-client` の生成が落ち、#1567
+    // （fast-uri 3 → 4）は緑だったが `ajv` の宣言 `^3.0.1` の外だった。どちらも閉じた。
+    //
+    // 依存種別の名前 `pnpm-workspace.overrides` は Renovate の
+    // `lib/modules/manager/npm/dep-types.ts`（2026-04-08 の renovatebot/renovate#42247）と
+    // 公式文書の npm マネージャーの頁にある。`package.json` の `pnpm.overrides` とは
+    // 別の名前である（pnpm 11 はあちらを読まない）。minor / patch はこれまでどおり
+    // `non-major dependencies` の束に入る。
+    {
+      matchManagers: ['npm'],
+      matchDepTypes: ['pnpm-workspace.overrides'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
   ],
 }
