@@ -16570,6 +16570,35 @@ describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
     expect(reply).toContain('判定できない');
   });
 
+  it('since は文字列ではなく時刻として比べる（秒の省略・オフセット付きでも地平より前なら添える）', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+    const at = Date.parse(entry.at);
+
+    // 地平の1分前の分の頭を、秒を省いた形で書く。辞書順だと
+    // `'…:MMZ' > '…:MM:SS.sssZ'` になり、地平より後ろと取り違える。
+    const minuteStart = new Date(Math.floor(at / 60_000) * 60_000 - 60_000);
+    const sinceWithoutSeconds = `${minuteStart.toISOString().slice(0, 16)}Z`;
+    const reply1 = await h.call('journal_read', { since: sinceWithoutSeconds });
+    expect(reply1).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+
+    // 地平の1時間前を +09:00 で書く（辞書順では時が大きく見える）。
+    const beforeInJst = new Date(at - 60 * 60 * 1000 + 9 * 60 * 60 * 1000);
+    const sinceWithOffset = `${beforeInJst.toISOString().slice(0, 19)}+09:00`;
+    const reply2 = await h.call('journal_read', { since: sinceWithOffset });
+    expect(reply2).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+
+    // 地平の1時間後を +09:00 で書いたら付かない。
+    const afterInJst = new Date(at + 60 * 60 * 1000 + 9 * 60 * 60 * 1000);
+    const lateWithOffset = `${afterInJst.toISOString().slice(0, 19)}+09:00`;
+    const reply3 = await h.call('journal_read', { since: lateWithOffset });
+    expect(reply3).not.toContain('最古');
+  });
+
   it('until だけの指定は、窓の始点が -∞ なので常に地平を添える', async () => {
     const h = harness();
     const entry = await h.stores.journal.append({

@@ -11536,7 +11536,14 @@ function describeJournalHorizonNote(
   isEmpty: boolean,
 ): string | undefined {
   if (oldestAt === null) return undefined;
-  if (since !== undefined && !(since < oldestAt)) return undefined;
+  // **時刻として比べる（文字列では比べない）。** `since` は自由な ISO 8601 で、
+  // 秒の省略（`…T20:21Z`）やオフセット（`+09:00`）を含みうる。辞書順では
+  // `'…T20:21Z' > '…T20:21:05.123Z'` になり、地平より前の since を後ろと
+  // 取り違える。読めない since は比べられないので、判定できない側（付ける）へ倒す。
+  const sinceMs = since === undefined ? Number.NaN : Date.parse(since);
+  if (since !== undefined && !Number.isNaN(sinceMs) && !(sinceMs < Date.parse(oldestAt))) {
+    return undefined;
+  }
   const range =
     since === undefined ? 'それより前は' : `指定の since（${since}）から ${oldestAt} までの区間は`;
   return isEmpty
