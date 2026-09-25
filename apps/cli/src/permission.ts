@@ -52,11 +52,16 @@ export async function permissionListCommand(options: PermissionListOptions = {})
     options.all === true ? grants : grants.filter((grant) => grant.revokedAt === undefined);
 
   if (shown.length === 0) {
-    stdout.write(
-      options.all === true
-        ? '許可はまだ1件もありません。\n'
-        : '有効な許可はありません（--all を付けると取り消し済みも含めて見られます）。\n',
-    );
+    // Web（`apps/web/app/routes/permissions.tsx` の `PermissionsBody`）と同じ
+    // 条件・文言。`--all` を付けても取り消し済みが1件も無ければ増える見込みが
+    // 無いので、案内は「取り消し済みが在るとき」だけに絞る（#1541）。
+    if (options.all === true) {
+      stdout.write('許可はまだ1件もありません。\n');
+    } else if (grants.length > 0) {
+      stdout.write('有効な許可はありません（--all を付けると取り消し済みも含めて見られます）。\n');
+    } else {
+      stdout.write('有効な許可はありません。\n');
+    }
     return;
   }
 

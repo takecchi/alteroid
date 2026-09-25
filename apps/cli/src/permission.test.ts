@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
@@ -136,13 +140,59 @@ describe('alteroid permission list', () => {
     expect(text).not.toContain('--all で取り消し済みも見られます');
   });
 
-  it('有効な許可が無ければそう言う', async () => {
+  // Issue #1541: 0件の分岐が「取り消し済みが在るか」を見ずに、常に
+  // 「--all を付けると…」と案内していた。Web（`PermissionsBody` の
+  // `revokedCount > 0`）と条件・文言を揃える。
+  it('記録が0件なら --all の案内を出さない（取り消し済みも無いので増える見込みが無い）', async () => {
     replies.push({ status: 200, body: { grants: [] } });
     const read = captureStdout();
 
     await permissionListCommand();
 
-    expect(read()).toContain('有効な許可はありません');
+    expect(read()).toBe('有効な許可はありません。\n');
+  });
+
+  it('有効0件で取り消し済みが在れば --all の案内を出す', async () => {
+    replies.push({
+      status: 200,
+      body: { grants: [grant({ id: 'revoked-1', revokedAt: '2026-09-21T00:00:00.000Z' })] },
+    });
+    const read = captureStdout();
+
+    await permissionListCommand();
+
+    expect(read()).toBe(
+      '有効な許可はありません（--all を付けると取り消し済みも含めて見られます）。\n',
+    );
+  });
+
+  it('--all で0件なら「許可はまだ1件もありません。」と出す', async () => {
+    replies.push({ status: 200, body: { grants: [] } });
+    const read = captureStdout();
+
+    await permissionListCommand({ all: true });
+
+    expect(read()).toBe('許可はまだ1件もありません。\n');
+  });
+
+  it('CLI と Web で文言が一致する（「--all」↔「取り消し済みも見る」ボタンの言い換えを除く）', () => {
+    const webSourcePath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../web/app/routes/permissions.tsx',
+    );
+    const webSource = readFileSync(webSourcePath, 'utf8');
+
+    // Web（`PermissionsBody`）の3分岐の逐語。
+    expect(webSource).toContain('有効な許可はありません。');
+    expect(webSource).toContain(
+      '有効な許可はありません（「取り消し済みも見る」を押すと取り消し済みも含めて見られます）。',
+    );
+    expect(webSource).toContain('許可はまだ1件もありません。');
+
+    // CLI の「--all」を Web のボタン文言へ言い換えると、Web の逐語とそのまま一致する。
+    const cliHint = '有効な許可はありません（--all を付けると取り消し済みも含めて見られます）。';
+    const asWebWording = cliHint.replace('--all を付けると', '「取り消し済みも見る」を押すと');
+    expect(webSource).toContain(asWebWording);
   });
 
   it('誰がいつ承認したか（route.accountId と grantedAt）を出す', async () => {
