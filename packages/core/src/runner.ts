@@ -1824,7 +1824,8 @@ class RunnerSession {
     // **`worker_wait` も同じ理由で取りこぼさない。** この経路は `#finish` を
     // 通らないので、ここで閉じないと開いたままの区間が黙って消える
     // （`#finish` の doc と同じ判断）。`settled` は渡さない — 中で
-    // `#openTasks` の状態から導く（`#closeWorkerWaitWindow` の doc）。
+    // `RunnerWorkerWaitWindow` の `#openTasks` の状態から導く
+    // （`#closeWorkerWaitWindow` の doc）。
     this.#closeWorkerWaitWindow();
 
     // **分類できなかった失敗の件数も、同じ理由でここで出す（Issue #393）。**
@@ -3010,8 +3011,9 @@ class RunnerSession {
     // （他の道具の `brief`/`randomUUID` 系の判断と同じ）。**代用値をここで作るのは、
     // 何で埋めるかが層の判断だからである**（`agent-events.ts` の doc）。
     const taskId = event.taskId ?? randomUUID();
-    // **#1373: `#openTasks` の開閉とは無関係に、このターンで開いた作業者を
-    // 別勘定で数える。** `RunnerTurnTally` の `#openedWorkersThisTurn` の doc を参照。
+    // **#1373: `RunnerWorkerWaitWindow` の `#openTasks` の開閉とは無関係に、
+    // このターンで開いた作業者を別勘定で数える。** `RunnerTurnTally` の
+    // `#openedWorkersThisTurn` の doc を参照。
     this.#turnTally.addOpenedWorker(taskId);
     this.#workerWaitWindow.taskStarted(taskId);
   }
@@ -3451,8 +3453,9 @@ class RunnerSession {
     // 終わる経路そのものである。
     await this.#flushUsage();
     // **取りこぼしを作らない。** window が開いたまま（か閉じ待ちのまま）
-    // 畳まれるなら降ろしてから閉じる。`settled` は渡さない — その時点の
-    // `#openTasks` から導く（`#closeWorkerWaitWindow` の doc）。委譲した全員
+    // 畳まれるなら降ろしてから閉じる。`settled` は渡さない —
+    // `RunnerWorkerWaitWindow` のその時点の `#openTasks` から導く
+    // （`#closeWorkerWaitWindow` の doc）。委譲した全員
     // から通知を受け切っていたのに `result` が来ないまま閉じた回は
     // `settled: true` になる（`turns` が最後の1回を含まないだけである）。
     this.#closeWorkerWaitWindow();
