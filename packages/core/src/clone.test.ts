@@ -15439,6 +15439,85 @@ describe('クローン — 同じマネージャーの連続する report をま
     20_000,
   );
 
+  /**
+   * issue #955: **単発の報告**（`managerPrompt`）も、新しいセッションの最初の
+   * ターンに載れば束と同じ形で文脈窓を越えうる。束だけ締めて単発を素通しに
+   * すると、同じ穴が1件ぶん残る。
+   */
+  it('巨大な単発の報告（6万字）は予算で切り、全文の取り方を名乗る。その取り方で全文が引ける（issue #955）', async () => {
+    const s = setup();
+    const huge = '単発先頭' + 'y'.repeat(60_000) + '単発末尾';
+    s.clone.post(managerMessage('huge-single', 'mgr-single', huge));
+    await waitFor(
+      () =>
+        (s.calls[0]?.inputs ?? []).some((input) =>
+          input.includes('マネージャー mgr-single から届いた。（報告）'),
+        ),
+      '単発の報告のターンが投げられる',
+    );
+    await settle();
+    const input =
+      (s.calls[0] as FakeCall).inputs.find((text) =>
+        text.includes('マネージャー mgr-single から届いた。（報告）'),
+      ) ?? '';
+
+    expect(input.length).toBeLessThan(60_000);
+    expect(input).toContain('単発先頭');
+    expect(input).not.toContain('単発末尾');
+    const notice = lineStartingWith(input, '⚠ 本文が文字数の予算');
+    expect(notice).toContain('journal_read');
+    const since = /since: "([^"]+)"/.exec(notice)?.[1] ?? '';
+    expect(since).not.toBe('');
+    const exchanges = (await s.stores.journal.list({
+      types: ['exchange'],
+      with: ['manager'],
+      since,
+      limit: 200,
+    })) as { text: string }[];
+    expect(exchanges.some((entry) => entry.text.includes(huge))).toBe(true);
+
+    await s.clone.stop();
+  }, 20_000);
+
+  it('予算に収まる単発の報告は1文字も変えず、予算の断りも出さない（issue #955）', async () => {
+    const s = setup();
+    s.clone.post(managerMessage('small-single', 'mgr-small', '小さな報告の本文'));
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes('小さな報告の本文')),
+      '単発の報告のターンが投げられる',
+    );
+    const input =
+      (s.calls[0] as FakeCall).inputs.find((text) => text.includes('小さな報告の本文')) ?? '';
+    expect(input).not.toContain('文字数の予算');
+    await s.clone.stop();
+  });
+
+  it('束の最新1件だけで予算を超える回も、全文の取り方を名乗る（issue #955）', async () => {
+    const s = setup();
+    s.clone.post(humanMessage('先客'));
+    await waitFor(() => (s.calls[0]?.inputs.length ?? 0) === 1, '先客のターンが投げられる');
+    s.clone.post(managerMessage('small-1', 'mgr-mix', '小さい報告'));
+    s.clone.post(
+      managerMessage('huge-last', 'mgr-mix', '最新先頭' + 'z'.repeat(60_000) + '最新末尾'),
+    );
+    const batchHeadline = 'マネージャー mgr-mix から届いた報告を、処理待ちのあいだに続けて';
+    await waitFor(
+      () => (s.calls[0]?.inputs ?? []).some((input) => input.includes(batchHeadline)),
+      'まとめたターンが投げられる',
+    );
+    await settle();
+    const merged =
+      (s.calls[0] as FakeCall).inputs.find((input) => input.includes(batchHeadline)) ?? '';
+    expect(merged.length).toBeLessThan(60_000);
+    expect(merged).toContain('最新先頭');
+    expect(merged).not.toContain('最新末尾');
+    // 最新の1件で予算が埋まるので、古い側は落ちて省略の1行が出る。
+    const notice = lineStartingWith(merged, '⚠ 本文の合計が文字数の予算');
+    expect(notice).toContain('journal_read');
+    expect(merged).not.toContain('小さい報告');
+    await s.clone.stop();
+  }, 20_000);
+
   // **束ねられる報告は、定義上いちばん長く待った報告である。** 単発の経路
   // （`managerPrompt`）にだけ「受け取ってからの経過」が載って、こちらに載らないと、
   // **待った証拠がいちばん要る場所でだけ消える**（#562 PR-1 が入れたもの）。

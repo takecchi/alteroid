@@ -58,7 +58,7 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
-import { excerptLine, renderListingFromEnd } from './excerpt.js';
+import { excerpt, excerptLine, renderListingFromEnd } from './excerpt.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
   EXCHANGE_KIND_FAILURE_PREFIX,
@@ -780,8 +780,8 @@ const CONTEXT_WINDOW_FOLD_NOTICE =
  *
  * ## ⚠️ 「材料は同じ」の中身は、issue #955 でここが書かれた時点から変わっている
  *
- * マネージャーの報告の束（`managerReportBatchPrompt`）はもう1件あたり無制限の
- * 文字数を持てない（{@link MANAGER_REPORT_BATCH_BODY_BUDGET}）。**これが原因で
+ * マネージャーの報告（束の `managerReportBatchPrompt` も単発の `managerPrompt` も）は
+ * もう無制限の文字数を持てない（{@link MANAGER_REPORT_BATCH_BODY_BUDGET}）。**これが原因で
  * 文脈窓に当たっていた回は、開き直せば束が縮んで収まる可能性がある**——
  * 「材料は同じ」ではなくなる。**外部イベントの束（`externalBatchPrompt`）は
  * 調べた結果、変更していない**——本文（`renderPayload`）には元から
@@ -7196,9 +7196,10 @@ class Clone implements CloneHost {
    *    育てば開き直しの間にも伸びうる。**開き直した瞬間だけを見れば、ほぼ同じ材料。**
    * 3. **このターンを起こした合図の本文**——ここが唯一、合図の種類によって
    *    答えが変わる:
-   *    - **マネージャーの報告の束**（`managerReportBatchPrompt`）は、#955 で
-   *      1件あたりの文字数に予算を掛けた（`MANAGER_REPORT_BATCH_BODY_BUDGET`）。
-   *      **⟹ これが原因だった回は、開き直せば束が縮んで収まる可能性がある——
+   *    - **マネージャーの報告**（束の `managerReportBatchPrompt` と単発の
+   *      `managerPrompt`）は、#955 で本文に文字数の予算を掛けた
+   *      （`MANAGER_REPORT_BATCH_BODY_BUDGET`。束は合計、単発は1件ぶん）。
+   *      **⟹ これが原因だった回は、開き直せば本文が縮んで収まる可能性がある——
    *      「材料は同じ」ではなくなった。**
    *    - **外部イベントの束**（`externalBatchPrompt`）は、#955 で調べたが
    *      変更していない——本文（`renderPayload`）には元から
@@ -11628,7 +11629,10 @@ function managerPrompt(
     return [
       `${head}（報告）`,
       '',
-      event.text,
+      // **本文に束と同じ予算を掛ける（issue #955）。** 単発の報告も、新しい
+      // セッションの最初のターンに載れば束と同じ形で文脈窓を越えうる——
+      // 束だけ締めて単発を素通しにすると、同じ穴が1件ぶん残る。
+      ...boundedReportBody({ ...event, kind: 'report' }),
       '',
       // **経過も印も、本文の後ろ・指示の前に置く**（#391 と同じ規則。
       // 本文より前に置くと「読まなくてよい」と読まれて本文を飛ばされる ——
@@ -11755,6 +11759,25 @@ function managerReportRetrievalHint(event: ManagerReportMessage): string {
 const MANAGER_REPORT_BATCH_BODY_BUDGET = 47_500;
 
 /**
+ * 単発の報告（`managerPrompt` の 'report' 分岐）の本文を予算で締める
+ * （issue #955）。予算は束と同じ {@link MANAGER_REPORT_BATCH_BODY_BUDGET}
+ * ——1ターンに載る報告本文の上限という同じ役割だからである。
+ *
+ * **予算に収まる回は本文を1文字も変えない**（配列の1要素として素通しする）。
+ * 切った回は `excerpt` の「N 文字省略。全 M 文字」の印に加えて、全文の取り方
+ * （{@link managerReportRetrievalHint}）を次の行に出す——**切ったのに取り方を
+ * 言わないと、読めるものを減らしたことになる**（listing-and-detail の性質2）。
+ */
+function boundedReportBody(event: ManagerReportMessage): string[] {
+  if (event.text.length <= MANAGER_REPORT_BATCH_BODY_BUDGET) return [event.text];
+  return [
+    excerpt(event.text, MANAGER_REPORT_BATCH_BODY_BUDGET),
+    '',
+    `⚠ 本文が文字数の予算（${MANAGER_REPORT_BATCH_BODY_BUDGET.toLocaleString('en-US')} 文字）を超えたので、ここでは先頭だけを出した。 ${managerReportRetrievalHint(event)}`,
+  ];
+}
+
+/**
  * 同じマネージャーから連続して届いた report をターン1本の本文にする
  * （`#mergedManagerReportBatch`）。
  *
@@ -11816,6 +11839,9 @@ function managerReportBatchPrompt(
     '',
     '---',
     '',
+    // **最新の1件だけで予算を超える回も、この1行は必ず出る。** その1件を
+    // `excerpt` で予算まで切った時点で予算が埋まるので、束の残り（2件以上の
+    // 束なので必ず在る）は落ちる ⟹ `rest > 0` になり、全文の取り方を名乗る。
     renderListingFromEnd(items, {
       budget: MANAGER_REPORT_BATCH_BODY_BUDGET,
       omitted: ({ rest, shown, total }) =>
