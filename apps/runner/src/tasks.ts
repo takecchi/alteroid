@@ -732,7 +732,7 @@ async function observeReclaim(
   const candidateStarttimes: number[] = [];
   // **撃ってよいと判定した候補だけを積む**（{@link reapDecisionFor}）。
   // `reclaim.reap` が無ければ、この判定自体を呼ばないので常に空のまま。
-  const fireCandidates: Array<{ pid: number; numThreads: number }> = [];
+  const fireCandidates: Array<{ pid: number; starttime: number; numThreads: number }> = [];
 
   // **木ごとに辿る。** `visited` は全体で共有し、二重計上だけを防ぐ
   // （通常の `/proc` ツリーではルートをまたいだ重複は起きないが、壊れた `/proc`
@@ -769,7 +769,11 @@ async function observeReclaim(
             scannedPids,
           ) === 'fire'
         ) {
-          fireCandidates.push({ pid: entry.pid, numThreads: entry.numThreads });
+          fireCandidates.push({
+            pid: entry.pid,
+            starttime: entry.starttime,
+            numThreads: entry.numThreads,
+          });
         }
       }
 
@@ -788,14 +792,14 @@ async function observeReclaim(
   // 「reap が無ければ呼ばない」ほうを選んでいるのは、`process.kill` へ触れる
   // 経路そのものを reap 無効時には存在させないため（「段0 は撃たない」歯が
   // 見ているのはまさにこの経路の有無である）。
-  const stillPresentPids = new Set(scanned.map((entry) => entry.pid));
+  const stillPresentStarttimes = new Map(scanned.map((entry) => [entry.pid, entry.starttime]));
   const fired =
     reclaim.reap === undefined
       ? { signalled: 0, killed: 0, freedThreads: 0 }
       : reconcileReaper(
           deps.reaper,
           fireCandidates,
-          stillPresentPids,
+          stillPresentStarttimes,
           nowMs,
           reclaim.reap.graceMs ?? DEFAULT_REAP_GRACE_MS,
           deps.killFn,
@@ -893,6 +897,13 @@ function reapDecisionFor(
  * 昇格させるまでを覚える。
  */
 interface ReaperEntry {
+  /**
+   * SIGTERM を送った時点のプロセスの `starttime`（`/proc/<pid>/stat` の22列目）。
+   * **pid だけでは同じプロセスかが決まらない**ので、帳の行は pid と starttime の組で
+   * 1つのプロセスを指す（#1544）。同じ pid でも starttime が違えば、送った相手は
+   * もう居ない（pid が別のプロセスへ使い回された）とみなす。
+   */
+  starttime: number;
   /** SIGTERM を送った時刻（ms）。 */
   sigtermAt: number;
   /** SIGKILL を送った時刻（ms）。まだなら `undefined`。 */
@@ -908,27 +919,29 @@ interface ReaperEntry {
  * 手順は3段（この順でなければならない——1)を先に済ませないと、同じ回に
  * 「消えた」と「まだ発砲していない」が両方成り立つ pid が生まれうる）:
  *
- * 1. **もう居ない**（`stillPresentPids` に無い）状態帳のエントリを片付け、
- *    その `numThreads` を `freedThreads` へ足す。自然死か、撃って消えたかは
- *    区別しない——どちらでも「返った」という事実は同じである。
+ * 1. **もう居ない**状態帳のエントリを片付け、その `numThreads` を `freedThreads`
+ *    へ足す。「もう居ない」は、今回の走査にその pid が無いか、**在っても
+ *    starttime が帳の値と違う**（pid が別のプロセスへ使い回された。#1544）こと
+ *    である。自然死か、撃って消えたかは区別しない——どちらでも「返った」という
+ *    事実は同じである。
  * 2. **まだ状態帳に居ない発砲対象**へ SIGTERM を送り、状態帳へ登録する。
+ *    1) で使い回しの古い行を消してあるので、同じ pid の新しい占有者はここで
+ *    初めて SIGTERM を受け、猶予も自分の SIGTERM から数え始める。
  * 3. **猶予（`graceMs`）を過ぎてもまだ発砲対象である**エントリへ SIGKILL を送る。
  *    「まだ発砲対象である」を毎回この回の `fireCandidates`（＝いま読み直した
- *    /proc の情報から再判定した結果）で確かめ直す——pid が再利用されて
- *    無関係な別プロセスに化けていても、その新しい占有者が独立に発砲対象の
- *    条件を満たさない限り撃たない（古い記録の starttime を信用しない）。
+ *    /proc の情報から再判定した結果）で、pid と starttime の両方で確かめ直す。
  */
 function reconcileReaper(
   reaper: Map<number, ReaperEntry>,
-  fireCandidates: readonly { pid: number; numThreads: number }[],
-  stillPresentPids: ReadonlySet<number>,
+  fireCandidates: readonly { pid: number; starttime: number; numThreads: number }[],
+  stillPresentStarttimes: ReadonlyMap<number, number>,
   nowMs: number,
   graceMs: number,
   killFn: (pid: number, signal: NodeJS.Signals) => void,
 ): { signalled: number; killed: number; freedThreads: number } {
   let freedThreads = 0;
   for (const [pid, entry] of [...reaper.entries()]) {
-    if (stillPresentPids.has(pid)) continue;
+    if (stillPresentStarttimes.get(pid) === entry.starttime) continue;
     freedThreads += entry.numThreads;
     reaper.delete(pid);
   }
@@ -942,6 +955,7 @@ function reconcileReaper(
       continue; // 送る前に消えていた等。次回の 1) がまだ残っていれば片付ける。
     }
     reaper.set(candidate.pid, {
+      starttime: candidate.starttime,
       sigtermAt: nowMs,
       sigkillAt: undefined,
       numThreads: candidate.numThreads,
@@ -954,7 +968,8 @@ function reconcileReaper(
   for (const [pid, entry] of reaper) {
     if (entry.sigkillAt !== undefined) continue;
     if (nowMs - entry.sigtermAt < graceMs) continue;
-    if (!fireByPid.has(pid)) continue; // 今回は発砲対象でない。撃たずに保留を続ける。
+    // 今回は発砲対象でない（か、同じ pid の別のプロセスである）。撃たずに保留を続ける。
+    if (fireByPid.get(pid)?.starttime !== entry.starttime) continue;
     try {
       killFn(pid, 'SIGKILL');
     } catch {
