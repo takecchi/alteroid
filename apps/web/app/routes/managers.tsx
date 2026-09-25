@@ -313,6 +313,34 @@ export function ManagerRunnerLostNote({
 }
 
 /**
+ * **宛先の器が名簿から entry ごと消えている**ことを、状態に添えて出す一行
+ * （Issue #1212 running 側。段1。`ManagerSummary.runnerVanished`）。
+ *
+ * **`ManagerRunnerLostNote` とは別の部品である。** あちらは entry が名簿に残った
+ * まま黙っている器、こちらは entry ごと消えた器で、排他ではない。文言の核は
+ * CLI（`apps/cli/src/chat.ts`）と `manager_list`（`packages/core/src/tools.ts` の
+ * `describeRunnerVanished`）から取ってある。**時刻は出さない**——消えた時刻は
+ * 名簿に残っていないので、作ると「いつ消えたか」の嘘になる。
+ */
+export function ManagerRunnerVanishedNote({
+  runnerVanished,
+  className = 'mt-1 text-[11px] text-danger',
+}: {
+  runnerVanished: boolean | undefined;
+  className?: string;
+}) {
+  if (runnerVanished !== true) return null;
+  return (
+    <p className={className}>
+      ⚠ 宛先の器が名簿から消えている（消えた時刻は名簿に残っていないので分からない）。resume
+      を試したわけではないので「戻れなかった(lost)」ではなく、lost
+      で絞っても出てこない。状態は実行中のまま残っている —
+      確かめる前に起こし直さないこと（同じ仕事が2本になる）。
+    </p>
+  );
+}
+
+/**
  * **runner は答えたが、この委譲のセッションだけが無かった**ことを、**状態に添えて**
  * 出す一行（`ManagerSummary.sessionMissingSince`）。
  *
@@ -629,6 +657,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                       両方描いていて、この画面だけが両方とも描いていなかった。**
                     */}
                     <ManagerRunnerLostNote runnerLostSince={manager.runnerLostSince} />
+                    <ManagerRunnerVanishedNote runnerVanished={manager.runnerVanished} />
                     {/*
                       これも `status` に映らないし、`live` も落ちない（`sessionId`
                       が在れば resume から入り直せる）。⟹ 右の「接続あり」の緑と

@@ -20,7 +20,11 @@ import { MANAGERS_PAGE } from '~/hooks/use-managers-window';
 import type { ManagerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
-import Managers, { describeDenialFollowUp, describeSessionMissingKindNote } from './managers';
+import Managers, {
+  ManagerRunnerVanishedNote,
+  describeDenialFollowUp,
+  describeSessionMissingKindNote,
+} from './managers';
 
 /**
  * **一覧の中だけを見る。**
@@ -1106,5 +1110,19 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
     for (const label of labels) {
       expect(screen.getByRole('button', { name: label })).toBeTruthy();
     }
+  });
+});
+
+describe('ManagerRunnerVanishedNote（Issue #1212 running 側。段1）', () => {
+  it('印が立っていれば、消えていることと「lost ではない」を出す。時刻は出さない', () => {
+    render(<ManagerRunnerVanishedNote runnerVanished={true} />);
+    expect(screen.getByText(/宛先の器が名簿から消えている/)).toBeTruthy();
+    expect(screen.getByText(/消えた時刻は名簿に残っていないので分からない/)).toBeTruthy();
+    expect(screen.getByText(/lost\s*で絞っても出てこない/)).toBeTruthy();
+  });
+
+  it('印が無ければ1文字も描かない', () => {
+    const { container } = render(<ManagerRunnerVanishedNote runnerVanished={undefined} />);
+    expect(container.textContent).toBe('');
   });
 });

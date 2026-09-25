@@ -2040,6 +2040,18 @@ export function renderManagerList(managers: ManagerListItem[]): string {
           '打つ手はこの委譲の側ではなく器の側にある — 名乗らなくなった器そのものを確かめること',
       );
     }
+    // **宛先の器が名簿から entry ごと消えている**（Issue #1212 running 側。段1。
+    // `ManagerSummary.runnerVanished`）。上の `runnerLostSince`（entry は残って
+    // いるが黙っている）とは別の集合で、排他ではない。文言の核は `manager_list`
+    // （`packages/core/src/tools.ts` の `describeRunnerVanished`）と揃える。
+    // 時刻は持たない——消えた時刻は名簿に残っていない。
+    if (manager.runnerVanished === true) {
+      lines.push(
+        '      ⚠ 宛先の器が名簿から消えている（消えた時刻は名簿に残っていないので分からない）。' +
+          'resume を試したわけではないので「戻れなかった(lost)」ではなく、lost で絞っても出てこない。' +
+          '状態は走行中のまま残っている — 確かめる前に起こし直さないこと（同じ仕事が2本になる）',
+      );
+    }
     // **`runnerLostSince` とは別の欄である（#563）。** あちらは器が黙った
     // （`live` が落ちる）。こちらは**器は答えている**が、この委譲のセッションだけが
     // 無い——`sessionId` が在れば resume から入り直せるので `live` は落ちない。

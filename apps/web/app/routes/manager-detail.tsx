@@ -36,6 +36,7 @@ import {
   describeDenialFollowUp,
   ManagerAwaitingBackgroundNote,
   ManagerRunnerLostNote,
+  ManagerRunnerVanishedNote,
   ManagerSessionMissingNote,
   ManagerStatusBadge,
 } from './managers';
@@ -244,6 +245,10 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             */}
             <ManagerRunnerLostNote
               runnerLostSince={manager.runnerLostSince}
+              className="border-t border-border px-4 py-3 text-xs text-danger"
+            />
+            <ManagerRunnerVanishedNote
+              runnerVanished={manager.runnerVanished}
               className="border-t border-border px-4 py-3 text-xs text-danger"
             />
             {/*

@@ -180,6 +180,22 @@ describe('renderManagerList', () => {
     expect(text).toContain('この委譲が失われたという意味ではない');
   });
 
+  it('宛先の器が名簿から消えているときは、その印と「lost ではない」を添える。時刻は出さない（#1212）', () => {
+    const text = renderManagerList([
+      manager({ status: 'running', live: true, runnerVanished: true }),
+    ]);
+
+    expect(text).toContain('宛先の器が名簿から消えている');
+    expect(text).toContain('消えた時刻は名簿に残っていないので分からない');
+    expect(text).toContain('lost で絞っても出てこない');
+  });
+
+  it('宛先の器が名簿から消えていなければ、その行は出さない（#1212）', () => {
+    const text = renderManagerList([manager({ status: 'running', live: true })]);
+
+    expect(text).not.toContain('名簿から消えている');
+  });
+
   it('宛先の器が黙っていなければ、その行は出さない', () => {
     const text = renderManagerList([manager({ status: 'running', live: true })]);
 
