@@ -2,7 +2,7 @@
 # （`docker/alteroid-db`）を足すためだけに、素の `postgres:17-alpine` へ1段重ねる。
 # 能力は増えていない — URL のパースを Node に任せているぶん `nodejs` を足すだけで、
 # postgres 本体の起動ロジック（`docker-entrypoint.sh`）には一切手を入れない。
-FROM postgres:17-alpine
+FROM postgres:18-alpine
 
 RUN apk add --no-cache nodejs
 
