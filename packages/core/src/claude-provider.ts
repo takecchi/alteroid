@@ -3,6 +3,8 @@ import type {
   HookCallback,
   McpServerConfig,
   Options,
+  PostToolUseFailureHookInput,
+  PostToolUseHookInput,
   SDKMessage,
   SessionStore,
   SpawnedProcess,
@@ -17,6 +19,11 @@ import type {
   AgentTurnUsage,
 } from './agent-events.js';
 import type { AgentProvider } from './agent-ports.js';
+import type {
+  AgentObservationHook,
+  AgentToolAuditFailureRecord,
+  AgentToolAuditRecord,
+} from './agent-hooks.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { resultErrorLines, resultFailureOf } from './sdk-failure.js';
 import { CLONE_ALLOWED_TOOLS, MCP_SERVER_NAME } from './tools.js';
@@ -62,6 +69,73 @@ export const CLAUDE_PROVIDER: AgentProvider = {
     partialMessages: true, // buildCloneSessionOptions の Options.includePartialMessages
   },
 };
+
+// ---------------------------------------------------------------------------
+// 中立の口 —— ツール監査フックの包み直し（#486、`agent-hooks.ts`）
+// ---------------------------------------------------------------------------
+
+/**
+ * `PostToolUse` の生入力を {@link AgentToolAuditRecord} へ写す。
+ *
+ * **無い欄は作り物を出さずキーごと省く**（`toAgentPermissionDenial` と同じ
+ * 作法）。`toolInput` / `toolResponse` は `unknown` なので値そのものが
+ * `undefined` でも構わない——「読めなかった」と「そういう値だった」を
+ * 区別しない（この2つは真偽値・文字列と違い、道具ごとに形が異なる自由な
+ * 値であり、`undefined` を渡すこと自体が「無かった」を表す）。
+ */
+function toAgentToolAuditRecord(input: unknown): AgentToolAuditRecord {
+  const raw = input as Partial<PostToolUseHookInput> | null | undefined;
+  return {
+    ...(typeof raw?.tool_name === 'string' ? { toolName: raw.tool_name } : {}),
+    toolInput: raw?.tool_input,
+    toolResponse: raw?.tool_response,
+    ...(typeof raw?.transcript_path === 'string' ? { transcriptPath: raw.transcript_path } : {}),
+    ...(typeof raw?.effort?.level === 'string' ? { effortLevel: raw.effort.level } : {}),
+    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+    ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+  };
+}
+
+/** `PostToolUseFailure` の生入力を {@link AgentToolAuditFailureRecord} へ写す。無い欄は省く（`toAgentToolAuditRecord` と同じ作法）。 */
+function toAgentToolAuditFailureRecord(input: unknown): AgentToolAuditFailureRecord {
+  const raw = input as Partial<PostToolUseFailureHookInput> | null | undefined;
+  return {
+    ...(typeof raw?.tool_name === 'string' ? { toolName: raw.tool_name } : {}),
+    toolInput: raw?.tool_input,
+    ...(typeof raw?.transcript_path === 'string' ? { transcriptPath: raw.transcript_path } : {}),
+    ...(typeof raw?.effort?.level === 'string' ? { effortLevel: raw.effort.level } : {}),
+    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+    ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+    ...(typeof raw?.error === 'string' ? { error: raw.error } : {}),
+    ...(raw?.is_interrupt === undefined ? {} : { isInterrupt: raw.is_interrupt }),
+  };
+}
+
+/**
+ * 中立の `PostToolUse` 観測フックを SDK の `HookCallback` へ包み直す。
+ *
+ * **`{ continue: true }` 固定で返す。** 包む対象は観測専用フック
+ * （`agent-hooks.ts` の doc「観測専用のフックだけを対象にする」）なので、
+ * 判断を返す余地はそもそも無い——`runner.ts` 側の `PostToolUse`
+ * （`additionalContext` を返しうる）はこの関数を使わず、`HookCallback` の
+ * ままである（`ManagerSessionOptionsRequest.onPostToolUse` の doc）。
+ */
+function wrapToolAuditHook(hook: AgentObservationHook<AgentToolAuditRecord>): HookCallback {
+  return async (input) => {
+    await hook(toAgentToolAuditRecord(input));
+    return { continue: true };
+  };
+}
+
+/** `PostToolUseFailure` 版の {@link wrapToolAuditHook}。同じ理由で `{ continue: true }` 固定。 */
+function wrapToolAuditFailureHook(
+  hook: AgentObservationHook<AgentToolAuditFailureRecord>,
+): HookCallback {
+  return async (input) => {
+    await hook(toAgentToolAuditFailureRecord(input));
+    return { continue: true };
+  };
+}
 
 // ---------------------------------------------------------------------------
 // A. クローン本セッション
@@ -116,9 +190,18 @@ export interface CloneSessionOptionsRequest {
   resume: string | null;
   sessionStore?: SessionStore;
   onPreCompact: HookCallback;
-  onPostToolUse: HookCallback;
-  /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。 */
-  onPostToolUseFailure: HookCallback;
+  /**
+   * **観測専用**（`agent-hooks.ts` の `AgentObservationHook`）。`clone.ts` の
+   * `#onPostToolUse` は日誌へ書く・`effort` や生ログの場所を控えるだけで、
+   * 常に `{ continue: true }` だけを返す（判断を返す経路は無い）。
+   * `wrapToolAuditHook` が SDK の `HookCallback` へ包み直す。
+   */
+  onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
+  /**
+   * 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。
+   * **観測専用**（`onPostToolUse` と同じ理由）。
+   */
+  onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   /**
    * 人間が承認した Bash 許可（Issue #863）に一致したら
    * `permissionDecision: 'allow'` を返す。一致しなければ何も決めない
@@ -231,7 +314,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       //    （`CloneRuntimeFacts.effort` のコメントと同じ）。
       PostToolUse: [
         {
-          hooks: [onPostToolUse],
+          hooks: [wrapToolAuditHook(onPostToolUse)],
         },
       ],
       // **`PostToolUse` とは排他で発火する**（Issue #924 — 出荷済みの SDK
@@ -242,7 +325,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       // が日誌に1件も残らなくなる（`docs/architecture.md`「非対称な可視性」）。
       PostToolUseFailure: [
         {
-          hooks: [onPostToolUseFailure],
+          hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)],
         },
       ],
     },
@@ -262,9 +345,10 @@ export interface CloneDistillOptionsRequest {
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
-  onPostToolUse: HookCallback;
-  /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。 */
-  onPostToolUseFailure: HookCallback;
+  /** **観測専用**（`CloneSessionOptionsRequest.onPostToolUse` と同じ理由）。 */
+  onPostToolUse: AgentObservationHook<AgentToolAuditRecord>;
+  /** 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #924。**観測専用。** */
+  onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
 }
 
 /** 蒸留のサイドクエリへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#distillFromTranscript` から移した。 */
@@ -302,11 +386,11 @@ export function buildCloneDistillOptions(request: CloneDistillOptionsRequest): O
     // **effort の観測はここでは意味を持たない**（別セッションの値なので
     // `#effort` を汚さないよう、日誌だけを書く枝を通す）。
     hooks: {
-      PostToolUse: [{ hooks: [onPostToolUse] }],
+      PostToolUse: [{ hooks: [wrapToolAuditHook(onPostToolUse)] }],
       // **本セッション側と同じ理由で登録する**（`buildCloneSessionOptions` の
       // `PostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路なので、
       // そこの失敗を記録しないと「記憶が書かれなかった」が静かに落ちる。
-      PostToolUseFailure: [{ hooks: [onPostToolUseFailure] }],
+      PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
     },
   };
 }
@@ -329,6 +413,18 @@ export interface ManagerSessionOptionsRequest {
   resume?: string;
   spawnClaudeCodeProcess?: (options: SpawnOptions) => SpawnedProcess;
   canUseTool: CanUseTool;
+  /**
+   * **中立の型に載せていない（`HookCallback` のまま）。** `runner.ts` の
+   * `#onPostToolUse` は観測（日誌・所有者控え）に加えて、`#901` の打ち切り
+   * 注記を `hookSpecificOutput.additionalContext` として返す経路を持つ——
+   * これは「起きたことをただ記録する」を超えた判断であり、いまの
+   * `AgentObservationHook`（`void` しか返せない）には載らない。**クローン側
+   * の `onPostToolUse`（`CloneSessionOptionsRequest` / `CloneDistillOptionsRequest`）
+   * は常に `{ continue: true }` だけを返すことを実装で確認しており、そちらは
+   * 中立の型へ移してある。** この欄を中立化するのは、`AgentObservationHook`
+   * に返り値を持たせる（または専用の型を別に起こす）判断とセットで次の PR に
+   * 送る（#486）。
+   */
   onPostToolUse: HookCallback;
   /**
    * 失敗・中断した道具呼び出し（`PostToolUse` と排他）。Issue #929
@@ -338,9 +434,10 @@ export interface ManagerSessionOptionsRequest {
    * **optional にしない。理由は直上の `onPostToolUse` と同じ** — 省略できる
    * 形にすると、provider を足す側が「渡さない」ことで観測を静かに落とせる
    * （可観測性は要件である。PRD「可観測性」）。中身は `runner.ts` の
-   * `#onPostToolUseFailure` の doc を見よ。
+   * `#onPostToolUseFailure` の doc を見よ。**こちらは常に `{ continue: true }`
+   * だけを返す観測専用フックなので、中立の型へ移してある。**
    */
-  onPostToolUseFailure: HookCallback;
+  onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
   onPreCompact: HookCallback;
   /**
    * ターンの開始を数える観測専用のフック（`worker_wait`）。
@@ -550,13 +647,15 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // `#onPreToolUse` の内側で素通しする。理由は `runner.ts` の
       // `#onPreToolUse` の doc を見よ。
       PreToolUse: [{ hooks: [onPreToolUse] }],
+      // **`HookCallback` のまま渡す**（`ManagerSessionOptionsRequest.onPostToolUse`
+      // の doc）。中立の口を経由しないので、ここでは包み直さない。
       PostToolUse: [{ hooks: [onPostToolUse] }],
       // **`PostToolUse` とは排他で発火する**（Issue #924 が出荷済みの SDK
       // 実行体を実測して確認した排他分岐。`buildCloneSessionOptions` の
       // `PostToolUseFailure` の doc と同じ）。⟹ 道具呼び出し1回につきどちらか
       // 一方だけが呼ばれる。**片方だけ登録しない道は無い** — 失敗・中断した
       // 道具呼び出しが日誌に1件も残らなくなる（Issue #929）。
-      PostToolUseFailure: [{ hooks: [onPostToolUseFailure] }],
+      PostToolUseFailure: [{ hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)] }],
       PreCompact: [{ hooks: [onPreCompact] }],
       // **観測専用**（`worker_wait`）。`{ continue: true }` を返すだけで何も
       // ブロックしない。理由は `runner.ts` の `#onUserPromptSubmit` の doc を見よ。

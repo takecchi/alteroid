@@ -6,7 +6,6 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   Options,
   PermissionResult,
-  PostToolUseFailureHookInput,
   Query,
   SDKUserMessage,
   SessionKey,
@@ -23,6 +22,7 @@ import type {
   AgentPermissionDenial,
   AgentTurnEnded,
 } from './agent-events.js';
+import type { AgentToolAuditFailureRecord } from './agent-hooks.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
@@ -3844,25 +3844,23 @@ class RunnerSession {
    * 道具呼び出しが来るまでのあいだ生ログの在り処や「自分で手を動かした
    * 回数」が古いまま取り残される（`#onPostToolUse` の同じ2行と同じ理由）。
    */
-  async #onPostToolUseFailure(input: unknown): Promise<{ continue: true }> {
-    const hook = input as Partial<PostToolUseFailureHookInput> | null | undefined;
-
-    if (typeof hook?.transcript_path === 'string') this.#transcriptPath = hook.transcript_path;
+  async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
+    if (typeof record.transcriptPath === 'string') this.#transcriptPath = record.transcriptPath;
     // 道具が動いた＝このセッションは生きている（成功側と同じ）。
     this.#markProgressed();
 
     // **`worker_wait.toolless` の材料。** マネージャー自身の道具だけを数える
     // （成功側の `#onPostToolUse` と同じ理由・同じ判定）。
-    if (hook?.agent_id === undefined) this.#turnTally.incrementToolsSinceResult();
+    if (record.agentId === undefined) this.#turnTally.incrementToolsSinceResult();
 
     const actor =
-      hook?.agent_id === undefined
+      record.agentId === undefined
         ? `manager:${this.#id}`
-        : `worker:${this.#id}:${hook.agent_type ?? WORKER_AGENT_NAME}`;
-    const tool = hook?.tool_name ?? '(不明)';
+        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const tool = record.toolName ?? '(不明)';
     const error =
-      typeof hook?.error === 'string'
-        ? excerptLine(hook.error, TOOL_USE_FAILURE_ERROR_EXCERPT)
+      typeof record.error === 'string'
+        ? excerptLine(record.error, TOOL_USE_FAILURE_ERROR_EXCERPT)
         : '(不明)';
 
     this.#emit({
@@ -3870,8 +3868,6 @@ class RunnerSession {
       managerId: this.#id,
       text: `${TOOL_USE_FAILURE_NOTE_PREFIX} 道具=${tool}・actor=${actor}・error=${error}`,
     });
-
-    return { continue: true };
   }
 
   /**

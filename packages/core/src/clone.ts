@@ -6,8 +6,6 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type {
   McpServerConfig,
   Options,
-  PostToolUseFailureHookInput,
-  PostToolUseHookInput,
   Query,
   SDKUserMessage,
   SessionKey,
@@ -22,6 +20,7 @@ import type {
   AgentTurnEnded,
   AgentTurnUsage,
 } from './agent-events.js';
+import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
 import {
   buildCloneDistillOptions,
   buildCloneSessionOptions,
@@ -9535,17 +9534,15 @@ class Clone implements CloneHost {
    * 何もしないだけで、道具の実行そのものは常に続ける（日誌の失敗も `#journal` が
    * 飲み込む）。
    */
-  async #onPostToolUse(input: unknown): Promise<{ continue: true }> {
-    // **`PostToolUseHookInput` の形として読む**（SDK の型。フィールド名の綴りを
-    // ここで自前に決めない）。`unknown` から入るのはフックの引数が SDK 側で
-    // 広い型になっているためで、読めない形でも投げないための検査は下でやる。
-    const raw = input as Partial<PostToolUseHookInput> | null | undefined;
-    const level = raw?.effort?.level;
+  async #onPostToolUse(record: AgentToolAuditRecord): Promise<void> {
+    // **`claude-provider.ts` の `toAgentToolAuditRecord` が SDK の入力から
+    // 写した中立の記録として読む。** フィールド名の綴り（SDK の snake_case）
+    // を決めるのはもうここではない（#486「中立の口」）。
+    const level = record.effortLevel;
     if (typeof level === 'string') this.#effort = level;
-    this.#noteTranscriptPath(raw?.transcript_path);
+    this.#noteTranscriptPath(record.transcriptPath);
 
-    await this.#journalToolUse(raw, CLONE_ACTOR_ID);
-    return { continue: true };
+    await this.#journalToolUse(record, CLONE_ACTOR_ID);
   }
 
   /**
@@ -9556,17 +9553,13 @@ class Clone implements CloneHost {
    * 違うのは actor だけで、**effort はここでは拾わない** — あちらは別セッション
    * なので、その値を本セッションの観測として持つと嘘になる。
    */
-  async #onDistillToolUse(input: unknown): Promise<{ continue: true }> {
-    await this.#journalToolUse(
-      input as Partial<PostToolUseHookInput> | null | undefined,
-      CLONE_DISTILL_ACTOR_ID,
-    );
-    return { continue: true };
+  async #onDistillToolUse(record: AgentToolAuditRecord): Promise<void> {
+    await this.#journalToolUse(record, CLONE_DISTILL_ACTOR_ID);
   }
 
   /** `PostToolUse` の合図1件を日誌へ落とす（自前で日誌へ書く自作ツールは除く）。 */
   async #journalToolUse(
-    raw: Partial<PostToolUseHookInput> | null | undefined,
+    raw: AgentToolAuditRecord | null | undefined,
     mainThreadActor: string,
   ): Promise<void> {
     // 自前で日誌へ書く自作ツールだけを除く（上のコメント）。**`tool_name` が
@@ -9574,7 +9567,7 @@ class Clone implements CloneHost {
     // 名前が読めないなら、それは「自前で書く道具だった」ではなく「観測できな
     // かった」である。黙って消すと、監査の穴がいちばん静かな形（何も起きな
     // かったように見える）で空く。
-    const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
+    const tool = typeof raw?.toolName === 'string' ? raw.toolName : UNKNOWN_TOOL_NAME;
     if (cloneToolJournalsItself(tool)) {
       // **除外する前に、この回がハンドラの走らない検証落ちでないかを見る**
       // （上の doc「除外の前提が崩れる回」。Issue #1338 残件1）。
@@ -9587,7 +9580,7 @@ class Clone implements CloneHost {
           type: 'tool_use',
           actor: cloneToolActor(raw, mainThreadActor),
           tool,
-          input: raw?.tool_input,
+          input: raw?.toolInput,
         },
         this.#answeredApprovalFor(mainThreadActor),
       ),
@@ -9641,10 +9634,10 @@ class Clone implements CloneHost {
    */
   async #journalSelfJournalingToolValidationFailure(
     tool: string,
-    raw: Partial<PostToolUseHookInput> | null | undefined,
+    raw: AgentToolAuditRecord | null | undefined,
     mainThreadActor: string,
   ): Promise<void> {
-    const validation = detectMcpInputValidationFailure(raw?.tool_response);
+    const validation = detectMcpInputValidationFailure(raw?.toolResponse);
     if (validation === undefined) return;
 
     const fieldList =
@@ -9667,7 +9660,7 @@ class Clone implements CloneHost {
                 ),
               }
             : {
-                input: raw?.tool_input,
+                input: raw?.toolInput,
                 error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
               }),
         },
@@ -9698,14 +9691,12 @@ class Clone implements CloneHost {
    * までのあいだ `#effort` と生ログの在り処が古いまま取り残される
    * （`#onPostToolUse` の同じ2行と同じ理由）。
    */
-  async #onPostToolUseFailure(input: unknown): Promise<{ continue: true }> {
-    const raw = input as Partial<PostToolUseFailureHookInput> | null | undefined;
-    const level = raw?.effort?.level;
+  async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
+    const level = record.effortLevel;
     if (typeof level === 'string') this.#effort = level;
-    this.#noteTranscriptPath(raw?.transcript_path);
+    this.#noteTranscriptPath(record.transcriptPath);
 
-    await this.#journalToolUseFailure(raw, CLONE_ACTOR_ID);
-    return { continue: true };
+    await this.#journalToolUseFailure(record, CLONE_ACTOR_ID);
   }
 
   /**
@@ -9719,12 +9710,8 @@ class Clone implements CloneHost {
    * **effort はここでは拾わない**（`#onDistillToolUse` と同じ理由 — 別
    * セッションの値を本セッションの観測として持つと嘘になる）。
    */
-  async #onDistillToolUseFailure(input: unknown): Promise<{ continue: true }> {
-    await this.#journalToolUseFailure(
-      input as Partial<PostToolUseFailureHookInput> | null | undefined,
-      CLONE_DISTILL_ACTOR_ID,
-    );
-    return { continue: true };
+  async #onDistillToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
+    await this.#journalToolUseFailure(record, CLONE_DISTILL_ACTOR_ID);
   }
 
   /**
@@ -9776,11 +9763,11 @@ class Clone implements CloneHost {
    * 後に本物の例外を投げた回と、`is_interrupt: true` の中断だけである。
    */
   async #journalToolUseFailure(
-    raw: Partial<PostToolUseFailureHookInput> | null | undefined,
+    raw: AgentToolAuditFailureRecord | null | undefined,
     mainThreadActor: string,
   ): Promise<void> {
     // 名前が読めない扱いも成功側と揃える（`#journalToolUse` と同じ理由）。
-    const tool = typeof raw?.tool_name === 'string' ? raw.tool_name : UNKNOWN_TOOL_NAME;
+    const tool = typeof raw?.toolName === 'string' ? raw.toolName : UNKNOWN_TOOL_NAME;
     if (cloneToolJournalsItself(tool)) return;
     await this.#journal(
       stampAnsweredApproval(
@@ -9788,14 +9775,14 @@ class Clone implements CloneHost {
           type: 'tool_use',
           actor: cloneToolActor(raw, mainThreadActor),
           tool,
-          input: raw?.tool_input,
-          // **`is_interrupt` が `true` のときだけ `'interrupted'`。** それ以外
-          // （`false` または欠け）は `'failed'` とする——`is_interrupt` は
-          // optional なので SDK が付けてこないことがあるが、そのときは「中断だと
+          input: raw?.toolInput,
+          // **`isInterrupt` が `true` のときだけ `'interrupted'`。** それ以外
+          // （`false` または欠け）は `'failed'` とする——`isInterrupt` は
+          // 任意の欄なので provider が付けてこないことがあるが、そのときは「中断だと
           // 分かっていない」であって「中断ではないと確定している」ではない。
           // 欠けを第3の値にはせず、安全側（failed）に倒す
           // （`schema.ts` の `tool_use.outcome` の doc と同じ判断）。
-          outcome: raw?.is_interrupt === true ? 'interrupted' : 'failed',
+          outcome: raw?.isInterrupt === true ? 'interrupted' : 'failed',
           // `error` は無制限長の自由文なので切り詰める（`TOOL_USE_ERROR_EXCERPT`
           // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
           // 省く——作り物の文言で埋めない。
@@ -12185,13 +12172,13 @@ function assistantTextOf(blocks: readonly AgentContentBlock[]): string {
  * 膨らみ、**日誌が答えるべき問い（自分でやったのか委ねたのか）に嘘の数を返す。**
  */
 function cloneToolActor(
-  hook: { agent_id?: unknown; agent_type?: unknown } | null | undefined,
+  hook: { agentId?: string; agentType?: string } | null | undefined,
   mainThreadActor: string,
 ): string {
-  if (typeof hook?.agent_id !== 'string' || hook.agent_id.length === 0) return mainThreadActor;
+  if (typeof hook?.agentId !== 'string' || hook.agentId.length === 0) return mainThreadActor;
   const type =
-    typeof hook.agent_type === 'string' && hook.agent_type.length > 0
-      ? hook.agent_type
+    typeof hook.agentType === 'string' && hook.agentType.length > 0
+      ? hook.agentType
       : UNKNOWN_AGENT_TYPE;
   return `${CLONE_SUB_ACTOR_PREFIX}${type}`;
 }

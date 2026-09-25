@@ -7,6 +7,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
 import {
   buildCloneDistillOptions,
   buildCloneSessionOptions,
@@ -27,6 +28,12 @@ import { WORKER_AGENT_NAME } from './runner.js';
  */
 
 const noopHook: HookCallback = async () => ({});
+// **観測専用フックへ渡す中立の noop。** `onPostToolUse` / `onPostToolUseFailure`
+// のうち中立の型（`AgentObservationHook`）へ移した欄はこちらを渡す
+// （`ManagerSessionOptionsRequest.onPostToolUse` は移していないので `noopHook`
+// のまま——`claude-provider.ts` の同欄の doc を見よ）。
+const noopAuditHook: (record: AgentToolAuditRecord) => void = () => undefined;
+const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () => undefined;
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
 const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
@@ -40,8 +47,8 @@ function cloneOptions(): Options {
     env: {},
     resume: null,
     onPreCompact: noopHook,
-    onPostToolUse: noopHook,
-    onPostToolUseFailure: noopHook,
+    onPostToolUse: noopAuditHook,
+    onPostToolUseFailure: noopAuditFailureHook,
     onPreToolUse: noopHook,
   });
 }
@@ -59,7 +66,7 @@ function managerOptions(): Options {
     sessionStore,
     canUseTool,
     onPostToolUse: noopHook,
-    onPostToolUseFailure: noopHook,
+    onPostToolUseFailure: noopAuditFailureHook,
     onPreCompact: noopHook,
     onUserPromptSubmit: noopHook,
     onSubagentStop: noopHook,
@@ -81,8 +88,8 @@ describe("skills: 'all' の字義（Options を組み立てる3つの口）", ()
       mcpServer,
       systemPrompt: 'システムプロンプト',
       env: {},
-      onPostToolUse: noopHook,
-      onPostToolUseFailure: noopHook,
+      onPostToolUse: noopAuditHook,
+      onPostToolUseFailure: noopAuditFailureHook,
     });
 
     expect(options.skills).toBe('all');

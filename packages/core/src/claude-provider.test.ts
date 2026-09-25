@@ -1,8 +1,22 @@
-import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  CanUseTool,
+  HookCallback,
+  McpServerConfig,
+  SDKMessage,
+  SessionStore,
+} from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from './agent-events.js';
-import { foldClaudeMessage } from './claude-provider.js';
+import type { AgentToolAuditFailureRecord, AgentToolAuditRecord } from './agent-hooks.js';
+import {
+  buildCloneDistillOptions,
+  buildCloneSessionOptions,
+  buildManagerSessionOptions,
+  foldClaudeMessage,
+} from './claude-provider.js';
+import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
+import { WORKER_AGENT_NAME } from './runner.js';
 
 /**
  * `foldClaudeMessage` —— Claude のメッセージを中立イベントへ写す1本（#486）。
@@ -611,5 +625,269 @@ describe('foldClaudeMessage — compact_boundary', () => {
       ),
     ).toEqual([]);
     expect(foldClaudeMessage(sdk({ type: 'system', subtype: 'compact_boundary' }))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 書き側 —— ツール監査フックの包み直し（#486「中立の口」）
+// ---------------------------------------------------------------------------
+
+/**
+ * `wrapToolAuditHook` / `wrapToolAuditFailureHook`（`claude-provider.ts` 内の
+ * private 関数）を、`buildCloneSessionOptions` / `buildCloneDistillOptions` /
+ * `buildManagerSessionOptions` が組み立てる `Options.hooks` 経由で固定する。
+ *
+ * ## ここで固定したいこと
+ *
+ * 1. **SDK の `PostToolUse` / `PostToolUseFailure` の生入力が、同じ値のまま
+ *    中立の記録（`AgentToolAuditRecord` / `AgentToolAuditFailureRecord`）として
+ *    中立のフックへ届くこと**
+ * 2. **SDK へ返す値は常に `{ continue: true }` だけであること**（観測専用
+ *    フックなので判断を返す余地が無い）
+ * 3. **`ManagerSessionOptionsRequest.onPostToolUse` だけは中立化していない**
+ *    こと（`runner.ts` 側の判断つき経路があるため。同欄の doc）——渡した
+ *    `HookCallback` がそのまま（包み直されずに）使われることを見る
+ */
+
+const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
+const sessionStore = {} as unknown as SessionStore;
+const canUseTool = (async () => ({ behavior: 'allow', updatedInput: {} })) as unknown as CanUseTool;
+
+/** SDK の `HookCallback` を偽の入力で1回呼ぶ。`toolUseID` / `signal` はここでは意味を持たない。 */
+async function invokeHook(hook: HookCallback | undefined, input: unknown): Promise<unknown> {
+  if (hook === undefined) throw new Error('hook が登録されていない');
+  return hook(input as never, 'tool-use-id', { signal: new AbortController().signal });
+}
+
+describe('ツール監査フックの包み直し（#486）', () => {
+  it('buildCloneSessionOptions: PostToolUse の生入力を同じ値のまま中立の記録として渡し、{ continue: true } を返す', async () => {
+    let captured: AgentToolAuditRecord | undefined;
+    const options = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: async () => ({ continue: true }),
+      onPostToolUse: (record) => {
+        captured = record;
+      },
+      onPostToolUseFailure: () => {},
+      onPreToolUse: async () => ({ continue: true }),
+    });
+
+    const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUse',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/tmp/t.jsonl',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: { output: 'hi' },
+      tool_use_id: 'tu-1',
+      agent_id: 'agent-1',
+      agent_type: 'general-purpose',
+      effort: { level: 'high' },
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      toolName: 'Bash',
+      toolInput: { command: 'echo hi' },
+      toolResponse: { output: 'hi' },
+      transcriptPath: '/tmp/t.jsonl',
+      effortLevel: 'high',
+      agentId: 'agent-1',
+      agentType: 'general-purpose',
+    } satisfies AgentToolAuditRecord);
+  });
+
+  it('buildCloneSessionOptions: 読めない・無い欄は作り物を出さずに省く', async () => {
+    let captured: AgentToolAuditRecord | undefined;
+    const options = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: async () => ({ continue: true }),
+      onPostToolUse: (record) => {
+        captured = record;
+      },
+      onPostToolUseFailure: () => {},
+      onPreToolUse: async () => ({ continue: true }),
+    });
+
+    const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUse',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/tmp/t.jsonl',
+      tool_name: 'Bash',
+      tool_use_id: 'tu-1',
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({ toolName: 'Bash', transcriptPath: '/tmp/t.jsonl' });
+    expect(captured).not.toHaveProperty('agentId');
+    expect(captured).not.toHaveProperty('effortLevel');
+  });
+
+  it('buildCloneSessionOptions: PostToolUseFailure の生入力を同じ値のまま中立の記録として渡し、{ continue: true } を返す', async () => {
+    let captured: AgentToolAuditFailureRecord | undefined;
+    const options = buildCloneSessionOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      resume: null,
+      onPreCompact: async () => ({ continue: true }),
+      onPostToolUse: () => {},
+      onPostToolUseFailure: (record) => {
+        captured = record;
+      },
+      onPreToolUse: async () => ({ continue: true }),
+    });
+
+    const result = await invokeHook(options.hooks?.PostToolUseFailure?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUseFailure',
+      session_id: 's',
+      cwd: '/work',
+      transcript_path: '/tmp/t.jsonl',
+      tool_name: 'Bash',
+      tool_input: { command: 'sleep 999' },
+      tool_use_id: 'tu-2',
+      agent_id: 'agent-1',
+      agent_type: 'general-purpose',
+      effort: { level: 'low' },
+      error: '中断された',
+      is_interrupt: true,
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      toolName: 'Bash',
+      toolInput: { command: 'sleep 999' },
+      transcriptPath: '/tmp/t.jsonl',
+      effortLevel: 'low',
+      agentId: 'agent-1',
+      agentType: 'general-purpose',
+      error: '中断された',
+      isInterrupt: true,
+    } satisfies AgentToolAuditFailureRecord);
+  });
+
+  it('buildCloneDistillOptions: PostToolUse / PostToolUseFailure も同じ中立の記録として渡り、{ continue: true } を返す', async () => {
+    let capturedUse: AgentToolAuditRecord | undefined;
+    let capturedFailure: AgentToolAuditFailureRecord | undefined;
+    const options = buildCloneDistillOptions({
+      model: 'fable',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      mcpServer,
+      systemPrompt: 'システムプロンプト',
+      env: {},
+      onPostToolUse: (record) => {
+        capturedUse = record;
+      },
+      onPostToolUseFailure: (record) => {
+        capturedFailure = record;
+      },
+    });
+
+    const useResult = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUse',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'memory_write',
+      tool_input: { text: 'メモ' },
+      tool_use_id: 'tu-3',
+    });
+    const failureResult = await invokeHook(options.hooks?.PostToolUseFailure?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUseFailure',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'memory_write',
+      tool_use_id: 'tu-4',
+      error: '失敗した',
+    });
+
+    expect(useResult).toEqual({ continue: true });
+    expect(failureResult).toEqual({ continue: true });
+    expect(capturedUse).toEqual({ toolName: 'memory_write', toolInput: { text: 'メモ' } });
+    expect(capturedFailure).toEqual({ toolName: 'memory_write', error: '失敗した' });
+  });
+
+  it('buildManagerSessionOptions: PostToolUseFailure は中立の記録として渡り、{ continue: true } を返す', async () => {
+    let captured: AgentToolAuditFailureRecord | undefined;
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: async () => ({ continue: true }),
+      onPostToolUseFailure: (record) => {
+        captured = record;
+      },
+      onPreCompact: async () => ({ continue: true }),
+      onUserPromptSubmit: async () => ({ continue: true }),
+      onSubagentStop: async () => ({ continue: true }),
+      onStop: async () => ({ continue: true }),
+      onPreToolUse: async () => ({ continue: true }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    const result = await invokeHook(options.hooks?.PostToolUseFailure?.[0]?.hooks[0], {
+      hook_event_name: 'PostToolUseFailure',
+      session_id: 's',
+      cwd: '/work',
+      tool_name: 'Bash',
+      tool_use_id: 'tu-5',
+      agent_id: 'agent-2',
+      agent_type: 'general-purpose',
+      error: '失敗した',
+    });
+
+    expect(result).toEqual({ continue: true });
+    expect(captured).toEqual({
+      toolName: 'Bash',
+      agentId: 'agent-2',
+      agentType: 'general-purpose',
+      error: '失敗した',
+    });
+  });
+
+  it('buildManagerSessionOptions: onPostToolUse は中立化していない —— 渡した HookCallback がそのまま（包み直さずに）使われる', () => {
+    const raw: HookCallback = async () => ({ continue: true });
+    const options = buildManagerSessionOptions({
+      model: 'opus',
+      permissionMode: DEFAULT_PERMISSION_MODE,
+      systemPromptAppend: '追記',
+      workerAgentName: WORKER_AGENT_NAME,
+      workerPrompt: '作業者のプロンプト',
+      workerModel: 'sonnet',
+      cwd: '/work',
+      env: {},
+      sessionStore,
+      canUseTool,
+      onPostToolUse: raw,
+      onPostToolUseFailure: () => {},
+      onPreCompact: async () => ({ continue: true }),
+      onUserPromptSubmit: async () => ({ continue: true }),
+      onSubagentStop: async () => ({ continue: true }),
+      onStop: async () => ({ continue: true }),
+      onPreToolUse: async () => ({ continue: true }),
+      managerAutoMemoryEnabled: false,
+    });
+
+    expect(options.hooks?.PostToolUse?.[0]?.hooks[0]).toBe(raw);
   });
 });
