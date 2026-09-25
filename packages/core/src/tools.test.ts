@@ -11416,6 +11416,66 @@ describe('一覧の文言は、観測した分しか言わない', () => {
   });
 
   /**
+   * **Issue #1105 — `manager_list` / `manager_report` の一覧に、分類・理由・
+   * 拒否文が journal_read を遡らず載る。**
+   *
+   * 値そのものは journal（`case 'permission_denied':` の `denialSuffix`）に
+   * 既に無条件で残っている——ここへ足すのは同じクローンが読める口を
+   * `manager_list`/`manager_report` にも増やすだけで、新しい読み手を作る
+   * ものではない（`ManagerDenial.reasonType` の doc）。
+   */
+  it('分類・理由・拒否文が一覧の行に載る（journal_read を遡らない・#1105）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [
+      {
+        tool: 'Bash',
+        count: 1,
+        actor: 'worker',
+        reasonType: 'classifier',
+        reason: 'この形は共有資源を起動しうる',
+        message: 'Blocked by classifier',
+      },
+    ]);
+
+    const list = await h.call('manager_list', {});
+    expect(list).toContain('分類: classifier');
+    expect(list).toContain('理由: この形は共有資源を起動しうる');
+    expect(list).toContain('モデルへの拒否文: Blocked by classifier');
+
+    // `manager_report` も同じ字面（生成元が1箇所であること・#830 と同じ確かめ方）。
+    const report = await h.call('manager_report', { managerId: 'mgr-1' });
+    expect(report).toContain('分類: classifier');
+    expect(report).toContain('理由: この形は共有資源を起動しうる');
+    expect(report).toContain('モデルへの拒否文: Blocked by classifier');
+  });
+
+  it('分類・理由・拒否文を持たない拒否（従来どおり）では、その部分が1文字も増えない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, actor: 'worker' }]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('Bash 1件 [作業者]');
+    expect(reply).not.toContain('分類:');
+    expect(reply).not.toContain('理由:');
+    expect(reply).not.toContain('モデルへの拒否文:');
+  });
+
+  it('分類だけが在って理由・拒否文が無い回は、その欄だけ出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, reasonType: 'rule' }]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('分類: rule');
+    expect(reply).not.toContain('理由:');
+    expect(reply).not.toContain('モデルへの拒否文:');
+  });
+
+  /**
    * **`done` は「マネージャー自身のターンが終わった」でしかない。**
    *
    * その下で作業者が走っているかは、デーモンには見えていない（作業者の生存も

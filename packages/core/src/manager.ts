@@ -795,6 +795,35 @@ export interface ManagerDenial {
    * であって、「古い」ではない**（この欄を持たない版のデーモンから来た値など）。
    */
   lastAt?: string;
+  /**
+   * この道具×層を**最後に止めた**ときの分類・理由・拒否文（issue #1105）。
+   * `lastAt` と同じ「最新1件」——3つ以上前の拒否の理由は運ばない。
+   *
+   * **出所は `case 'permission_denied':` が journal へ書く `denialSuffix` と
+   * 同じ `event.reasonType` / `event.reason` / `event.message`。** これまでは
+   * `journal_read` を遡らないと読めなかった（Issue #830 のときは件数・層・
+   * 最終時刻までしか一覧に出さなかった）——ここへ足すのは journal に既に
+   * 無条件で残っている値を**同じ読み手（クローン）へ、別の口からも**届ける
+   * ことで、新しい読み手を増やすものではない（`manager.ts` の
+   * `deniedLastReason` の doc）。
+   *
+   * **取れていない欄はキーごと省く**（`denialSuffix` と同じ規則。`via: 'result'`
+   * では `reasonType`/`reason` が必ず欠け、`message` も SDK が付けてこなければ
+   * 欠ける——`runner-protocol.ts` の `reason` の doc）。
+   *
+   * ⚠️ **これは分類器・deny 規則の判定根拠を読んだものではない。** SDK が
+   * 返した人間向けの一文であって、モデルへの拒否文（`message`）も含め
+   * prose である——`reasonType` の doc が言う「`reason` の文字列を解釈して
+   * 分類し直さないこと」と同じ注意がここにも掛かる。
+   *
+   * **`/managers` へは流さない**（`deniedLastReason` の doc。
+   * `managerDenialSchema` が宣言していないので `.parse()` が落とす）。
+   */
+  reasonType?: string;
+  /** {@link reasonType} と対。doc は同じ。 */
+  reason?: string;
+  /** {@link reasonType} と対。doc は同じ。 */
+  message?: string;
 }
 
 /**
@@ -879,6 +908,39 @@ function decodeDenialKey(key: string): { tool: string; actor: 'manager' | 'worke
   const rawActor = key.slice(0, separatorIndex);
   const tool = key.slice(separatorIndex + DENIAL_KEY_SEPARATOR.length);
   return { tool, actor: rawActor === 'manager' || rawActor === 'worker' ? rawActor : undefined };
+}
+
+/**
+ * `denied` / `deniedLastAt` と同じ鍵（`denialKey`）が持つ、**最後に止められた
+ * ときの分類・理由・拒否文**（issue #1105）。
+ *
+ * **値ではなく、`case 'permission_denied':` が journal へ既に書いている
+ * ものと同じ3値・同じ欠落規則。** 取れていない欄はキーごと持たない
+ * （`denialDetails` と同じ——作り物を出さない）。
+ */
+interface DenialReasonSnapshot {
+  reasonType?: string;
+  reason?: string;
+  message?: string;
+}
+
+/**
+ * `event`（`case 'permission_denied':` が受け取る `RunnerEvent`）から
+ * {@link DenialReasonSnapshot} を作る。**1件も欄が無ければ `undefined`**
+ * ——空オブジェクトを置くと「観測したが空だった」と「観測していない」が
+ * 区別できなくなる（`ManagerDenial.lastAt` の「取れていない」と同じ規則）。
+ */
+function denialReasonSnapshotOf(event: {
+  reasonType?: string;
+  reason?: string;
+  message?: string;
+}): DenialReasonSnapshot | undefined {
+  const snapshot: DenialReasonSnapshot = {
+    ...(event.reasonType === undefined ? {} : { reasonType: event.reasonType }),
+    ...(event.reason === undefined ? {} : { reason: event.reason }),
+    ...(event.message === undefined ? {} : { message: event.message }),
+  };
+  return Object.keys(snapshot).length === 0 ? undefined : snapshot;
 }
 
 /**
@@ -2502,6 +2564,27 @@ interface ManagerRecord {
    * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の `onForget`）。
    */
   deniedLastAt?: Map<string, string>;
+  /**
+   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められたときの
+   * 分類・理由・拒否文**（{@link DenialReasonSnapshot}、issue #1105）。
+   *
+   * **`journal_read` を遡らなくても `manager_list` / `manager_report` の一覧
+   * だけで読めるようにするための像。** 出所は journal の `denialSuffix`
+   * （`case 'permission_denied':`）と同じ `event.reasonType` /
+   * `event.reason` / `event.message` で、値そのものは既に journal に
+   * 無条件で残っている（journal は `journal_read`／`GET /journal` の
+   * 双方で読める）——ここは同じ値を**別の口からも**読めるようにするだけで、
+   * 新しい読み手を増やすものではない。
+   *
+   * **HTTP の `/managers` へは流さない。** `apps/daemon/src/openapi.ts` の
+   * `managerDenialSchema` はこの3欄を宣言していないので、`.parse()` が
+   * 黙って落とす——`ManagerDenial` にフィールドを足しても、その口の露出面は
+   * 広がらない（意図した線引き。詳細は `ManagerDenial` の doc）。
+   *
+   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
+   * `onForget`、`deniedLastAt` と同じ）。
+   */
+  deniedLastReason?: Map<string, DenialReasonSnapshot>;
   /**
    * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
    *
@@ -5032,11 +5115,15 @@ class Pool implements ManagerPool {
     return denied.entries().map(([key, count]) => {
       const { tool, actor } = decodeDenialKey(key);
       const lastAt = record?.deniedLastAt?.get(key);
+      const reason = record?.deniedLastReason?.get(key);
       return {
         tool,
         count,
         ...(actor === undefined ? {} : { actor }),
         ...(lastAt === undefined ? {} : { lastAt }),
+        ...(reason?.reasonType === undefined ? {} : { reasonType: reason.reasonType }),
+        ...(reason?.reason === undefined ? {} : { reason: reason.reason }),
+        ...(reason?.message === undefined ? {} : { message: reason.message }),
       };
     });
   }
@@ -8855,6 +8942,15 @@ class Pool implements ManagerPool {
         denied.set(key, count);
         // 最後に止められた時刻（#1455）。止められた後に委譲が進んだかを読む材料。
         (record.deniedLastAt ??= new Map()).set(key, new Date(this.#now()).toISOString());
+        // 最後に止められたときの分類・理由・拒否文（#1105）。**この回に無ければ
+        // 前回分を消す** —— 「最新1件」を表す像なので、古い理由を持ち越さない
+        // （`deniedLastAt` が毎回上書きするのと同じ考え方）。
+        const reasonSnapshot = denialReasonSnapshotOf(event);
+        if (reasonSnapshot === undefined) {
+          record.deniedLastReason?.delete(key);
+        } else {
+          (record.deniedLastReason ??= new Map()).set(key, reasonSnapshot);
+        }
 
         // **escalation は道具ごとの合計で判定する（layer 別ではない）。**
         // 持ち主の指摘（PR #549 レビュー）: 「この層のこのループが繰り返して
@@ -10049,7 +10145,10 @@ class Pool implements ManagerPool {
     const denied = createRecentMap<number>({
       limit: DENIED_TOOL_LIMIT,
       onForget: (keys) => {
-        for (const key of keys) record.deniedLastAt?.delete(key);
+        for (const key of keys) {
+          record.deniedLastAt?.delete(key);
+          record.deniedLastReason?.delete(key);
+        }
         const labels = keys.map((key) => {
           const { tool, actor } = decodeDenialKey(key);
           return actor === undefined ? tool : `${tool}（${actor}）`;

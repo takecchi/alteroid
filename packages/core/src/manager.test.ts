@@ -2633,8 +2633,18 @@ function swappableRunner(runnerId = 'runner-primary') {
       state.alive = state.alive.filter((s) => s.managerId !== managerId);
       emit?.({ type: 'closed', managerId, status, reason });
     },
-    /** 確認へ上げずにその場で止められた（分類器・deny 規則）。 */
-    denied(managerId: string, tool: string) {
+    /**
+     * 確認へ上げずにその場で止められた（分類器・deny 規則）。
+     *
+     * `fields` は `actor` / `reasonType` / `reason` / `message`（issue #1105）を
+     * 差し込むための口（`report` の `fields` と同じ作法）。**渡さなければ4つとも
+     * 省略される既存の振る舞いのまま**なので、他のテストの挙動は1つも変わらない。
+     */
+    denied(
+      managerId: string,
+      tool: string,
+      fields: { actor?: string; reasonType?: string; reason?: string; message?: string } = {},
+    ) {
       emit?.({
         type: 'permission_denied',
         managerId,
@@ -2642,6 +2652,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         tool,
         input: {},
         via: 'live',
+        ...fields,
       });
     },
     /**
@@ -7095,6 +7106,198 @@ describe('#records の寿命（終端で外れる）', () => {
     const result = await s.pool.send(id, '許可する', { requestId: 'req-9' });
     expect(result.outcome).toBe('unknown');
     expect(result.detail).toContain('待っていない');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **Issue #1105 — `denials()` に、直近の分類・理由・拒否文を持たせる。**
+ *
+ * これまで `ManagerDenial` は `tool` / `count` / `actor` / `lastAt` までで、
+ * 分類器・deny 規則が実際に何を理由に止めたか（`event.reasonType` /
+ * `event.reason` / `event.message`）は `journal_read` を遡らないと読めなかった。
+ * ここでは `deniedLastReason`（`manager.ts`）が「その道具×層を最後に止めた
+ * ときの理由だけ」を持つことを固定する——`deniedLastAt` と同じ「最新1件」の
+ * 規則で、値そのものは journal に既に無条件で残っている（新しい読み手を
+ * 増やすものではない。`ManagerDenial.reasonType` の doc）。
+ */
+describe('denials() の分類・理由・拒否文（issue #1105）', () => {
+  function job(id: string): Job {
+    return {
+      id,
+      managerId: id,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      status: 'running',
+      summary: '走らせておいて',
+      request: '調べて',
+      cwd: '/work/project',
+      sessionId: `sess-${id}`,
+      runnerId: 'runner-test',
+    };
+  }
+
+  function alive(id: string) {
+    return {
+      managerId: id,
+      status: 'running' as const,
+      cwd: '/work/project',
+      request: '調べて',
+      waiting: [],
+      sessionId: `sess-${id}`,
+    };
+  }
+
+  it('分類・理由・拒否文が denials() に載る', async () => {
+    const id = 'mgr-denial-reason-basic';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', {
+      reasonType: 'classifier',
+      reason: 'この形は共有資源を起動しうる',
+      message: 'Blocked by classifier',
+    });
+
+    expect(s.pool.denials(id)).toEqual([
+      {
+        tool: 'Bash',
+        count: 1,
+        lastAt: expect.any(String),
+        reasonType: 'classifier',
+        reason: 'この形は共有資源を起動しうる',
+        message: 'Blocked by classifier',
+      },
+    ]);
+
+    await s.pool.stop();
+  });
+
+  // **各欄が単独で欠けても、他の欄は出す**（`event.reason` / `reasonType` は
+  // `via: 'live'` でしか付かず、`message` は SDK が付けてこなければ欠ける——
+  // 3つは独立に欠落しうる。`journal_read` の `denialSuffix` と同じ規則）。
+  (
+    [
+      [
+        'reasonType のみ欠如',
+        { reason: '理由だけ', message: '拒否文だけ' },
+        { reasonType: undefined },
+      ],
+      ['reason のみ欠如', { reasonType: '分類だけ', message: '拒否文だけ' }, { reason: undefined }],
+      ['message のみ欠如', { reasonType: '分類だけ', reason: '理由だけ' }, { message: undefined }],
+    ] as const
+  ).forEach(([label, fields, absent]) => {
+    it(`${label}——欠けた欄はキーごと省き、他の欄はそのまま出す`, async () => {
+      const id = `mgr-denial-reason-${label}`;
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(job(id));
+      const fake = swappableRunner('runner-test');
+      fake.state.alive.push(alive(id));
+      const s = setup(undefined, { stores, runner: fake.runner });
+      await s.pool.restore();
+
+      fake.denied(id, 'Bash', fields);
+
+      const [denial] = s.pool.denials(id);
+      expect(denial).toBeDefined();
+      for (const key of Object.keys(absent)) {
+        expect(denial).not.toHaveProperty(key);
+      }
+      for (const [key, value] of Object.entries(fields)) {
+        expect(denial).toHaveProperty(key, value);
+      }
+
+      await s.pool.stop();
+    });
+  });
+
+  it('理由を1つも持たない拒否（従来どおり）では3欄とも出ない', async () => {
+    const id = 'mgr-denial-reason-none';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash');
+
+    const [denial] = s.pool.denials(id);
+    expect(denial).toEqual({ tool: 'Bash', count: 1, lastAt: expect.any(String) });
+
+    await s.pool.stop();
+  });
+
+  it('複数回止められたときは最新1件の理由だけを持つ（前回分は持ち越さない）', async () => {
+    const id = 'mgr-denial-reason-latest-only';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', { reasonType: 'classifier', reason: '1回目の理由' });
+    fake.denied(id, 'Bash', { reasonType: 'rule', reason: '2回目の理由' });
+
+    const [denial] = s.pool.denials(id);
+    expect(denial).toMatchObject({
+      tool: 'Bash',
+      count: 2,
+      reasonType: 'rule',
+      reason: '2回目の理由',
+    });
+    // 1回目の理由は残っていない。
+    expect(denial?.reason).not.toBe('1回目の理由');
+
+    // **3回目に理由が1つも無い回が来たら、前回までの理由は消える**
+    // （「最新1件」の像なので、古い理由を持ち越さない——`deniedLastAt` が
+    // 毎回上書きするのと同じ考え方。`manager.ts` の `case 'permission_denied':`
+    // のコメント）。
+    fake.denied(id, 'Bash');
+    const [after] = s.pool.denials(id);
+    expect(after).toMatchObject({ tool: 'Bash', count: 3 });
+    expect(after).not.toHaveProperty('reasonType');
+    expect(after).not.toHaveProperty('reason');
+
+    await s.pool.stop();
+  });
+
+  it('層（actor）が違えば別の組として、それぞれの理由を独立に持つ', async () => {
+    const id = 'mgr-denial-reason-per-actor';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', {
+      actor: `manager:${id}`,
+      reasonType: 'classifier',
+      reason: 'マネージャー側',
+    });
+    fake.denied(id, 'Bash', {
+      actor: `worker:${id}:agent-1`,
+      reasonType: 'rule',
+      reason: '作業者側',
+    });
+
+    const denials = s.pool.denials(id);
+    expect(denials).toHaveLength(2);
+    expect(denials.find((d) => d.actor === 'manager')).toMatchObject({
+      reasonType: 'classifier',
+      reason: 'マネージャー側',
+    });
+    expect(denials.find((d) => d.actor === 'worker')).toMatchObject({
+      reasonType: 'rule',
+      reason: '作業者側',
+    });
 
     await s.pool.stop();
   });

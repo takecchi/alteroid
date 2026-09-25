@@ -2478,6 +2478,28 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
 }
 
 /**
+ * `ManagerDenial` の分類・理由・拒否文を、journal の `denialSuffix`
+ * （`manager.ts` の `case 'permission_denied':`）と同じ字面で1件分にまとめる
+ * （issue #1105）。**取れていない欄は省く**——3つとも無ければ何も足さない。
+ *
+ * **長さの上限もエスケープも掛けない。** journal 側が同じ値を無条件・無加工の
+ * ままそのまま書いており（`manager.ts` の `denialSuffix`）、この一覧の読み手
+ * （クローン。`manager_list`/`manager_report` は両方 `CLONE_TOOL_NAMES`）は
+ * journal の読み手（`journal_read`）と同じ相手である——journal 側に無い制約を
+ * ここにだけ足す理由が無い（`ManagerDenial.reasonType` の doc）。この一文が
+ * 埋め込まれる一覧全体の上限は `LIST_DENIED_TOOLS`（件数）と `LIST_BUDGET`
+ * （`manager_list` 側の文字数予算・`renderListing` が絞る）が既に持っている。
+ */
+function denialReasonTag(denial: Pick<ManagerDenial, 'reasonType' | 'reason' | 'message'>): string {
+  const parts = [
+    denial.reasonType === undefined ? undefined : `分類: ${denial.reasonType}`,
+    denial.reason === undefined ? undefined : `理由: ${denial.reason}`,
+    denial.message === undefined ? undefined : `モデルへの拒否文: ${denial.message}`,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? ` [${parts.join(' / ')}]` : '';
+}
+
+/**
  * 「確認へ上がらず止められた」件数の一文。
  *
  * **`status` は「動いている」を意味しない。** 確認へ上がらず止められると、その
@@ -2511,6 +2533,12 @@ function denialActorTag(actor: ManagerDenial['actor']): string {
  * 面をまたいで読む人間がそこで詰まる）。**`manager_list` 側だけに在った間は、
  * この道具自身の案内（「まず manager_report を見ること」）どおりに動いた
  * クローンが拒否を1文字も見なかった** —— 案内が嘘をついていた。
+ *
+ * **各件に `denialReasonTag` で分類・理由・拒否文も添える（issue #1105）。**
+ * これまでは「全件は journal_read に残っている」としか言っておらず、中身を
+ * 読むには遡る呼び出しが要った。値そのものは journal に既に無条件で残って
+ * いるので、ここへ足すのは同じクローンが読める口を1つ増やすだけである
+ * （`ManagerDenial.reasonType` の doc）。
  */
 function describeDenials(
   denials: ManagerDenial[],
@@ -2525,7 +2553,7 @@ function describeDenials(
   const rest = recent.length - shown.length;
   const total = denials.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}`).join(' / ')}` +
+    `⚠ 確認へ上がらず止められた道具: ${shown.map((e) => `${e.tool} ${e.count}件${denialActorTag(e.actor)}${denialReasonTag(e)}`).join(' / ')}` +
     (rest > 0 ? `（ほか ${rest} 種、全 ${total} 件）` : '') +
     '。まず担い手自身に返っている拒否文を読ませること。出所はこの数からは取れない —— ' +
     '(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていないので手が止まる。' +

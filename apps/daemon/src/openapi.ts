@@ -674,6 +674,16 @@ const managerDenialSchema = z.object({
    * 「取れていない」であって「古い」ではない。** 宣言しないと `.parse()` が黙って落とす。
    */
   lastAt: z.string().optional(),
+  /**
+   * ⛔ **`reasonType` / `reason` / `message`（issue #1105）は、意図してここに
+   * 宣言していない。** `packages/core/src/manager.ts` の `ManagerDenial` には
+   * この3欄が増えているが、`.parse()` が宣言していないキーを黙って落とす
+   * ——`/managers` と `/managers/:id` はこの PR の前と応答が1バイトも変わらない。
+   * クローン向けの `manager_list` / `manager_report`（`CLONE_TOOL_NAMES`）にだけ
+   * 出す設計で、人間向けの HTTP／CLI／Web へ露出面を広げるかどうかは別の判断
+   * として残してある（値そのものは既に `GET /journal` で読める。
+   * `ManagerDenial.reasonType` の doc）。
+   */
 });
 
 /**
