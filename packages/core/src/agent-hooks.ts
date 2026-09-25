@@ -238,9 +238,7 @@ export interface AgentPreToolRecord {
  * と同じ流儀）。要るようになったら、そのときの実装を確かめてから足す。
  */
 export type AgentPreToolDecision =
-  | { kind: 'continue' }
-  | { kind: 'allow'; reason: string }
-  | { kind: 'deny'; reason: string };
+  { kind: 'continue' } | { kind: 'allow'; reason: string } | { kind: 'deny'; reason: string };
 
 /**
  * 判断を返す `PreToolUse` フックの中立の関数型。**`AgentObservationHook` とは

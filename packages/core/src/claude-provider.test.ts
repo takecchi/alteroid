@@ -1480,7 +1480,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       // `AgentPreToolDecision` に無い `kind` を返す実装ミスを模す
       // （`memory.test.ts` の `bogus` と同じ流儀。`wrapPreToolHook` の doc
       // 「実行時にここへ来るのは型で弾かれたはずの値が渡ったとき」）。
-      onPreToolUse: () => ({ kind: 'ask' } as unknown as AgentPreToolDecision),
+      onPreToolUse: () => ({ kind: 'ask' }) as unknown as AgentPreToolDecision,
       managerAutoMemoryEnabled: false,
     });
 

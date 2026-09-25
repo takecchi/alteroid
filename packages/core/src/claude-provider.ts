@@ -26,7 +26,6 @@ import type { AgentProvider } from './agent-ports.js';
 import type {
   AgentObservationHook,
   AgentPreCompactRecord,
-  AgentPreToolDecision,
   AgentPreToolHook,
   AgentPreToolRecord,
   AgentStopRecord,
