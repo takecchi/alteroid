@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { readExecutionResources } from './runner-resources.js';
+import { readCgroupEventCounters, readExecutionResources } from './runner-resources.js';
 
 /**
  * 実行環境の資源の読み方（roadmap M5 / PR3「cgroup v2 で読む」）。
@@ -188,5 +188,80 @@ describe('pids（プロセス数）', () => {
     expect(resources.cpu?.source).toBe('os');
     expect(resources.memory?.source).toBe('os');
     expect(resources.pids).toBeUndefined();
+  });
+});
+
+/**
+ * cgroup イベント（`pids.events` の `max` / `memory.events` の `oom_kill`。
+ * Issue #1517「最小の形」1）。
+ *
+ * **`pids` と同じく `os` 相当の代替を持たない。** 読めなければ欄ごと省略する
+ * ——ここも `pids.current` / `pids.max` と同じ足場（`place` / `read` の
+ * ヘルパー）に乗せてある。
+ */
+describe('cgroup イベント（pids.events / memory.events。#1517）', () => {
+  async function readEvents(procCgroup?: string) {
+    return readCgroupEventCounters({
+      cgroupRoot: root,
+      procCgroupPath: procCgroup ?? join(root, 'proc-cgroup'),
+    });
+  }
+
+  it('pids.events の max と memory.events の oom_kill を読む', async () => {
+    place(root, {
+      ...CGROUP_FILES,
+      'pids.events': 'max 3\nmax 0\n',
+      'memory.events': 'low 0\nhigh 0\nmax 0\noom 0\noom_kill 2\noom_group_kill 0\n',
+    });
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const counters = await readEvents();
+
+    // `pids.events` は同じ鍵 `max` を複数行持ちうる書式ではないが（実機は1行）、
+    // ここは「1行目に当たる」ことを確かめるためにあえて2行にしてある——
+    // `find` は先頭から探すので最初の行が採られる。
+    expect(counters).toEqual({ pidsMax: 3, oomKill: 2 });
+  });
+
+  it('両方 0（何も起きていない）でも、0 として読む——欠落と混ぜない', async () => {
+    place(root, {
+      ...CGROUP_FILES,
+      'pids.events': 'max 0\n',
+      'memory.events': 'oom_kill 0\n',
+    });
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const counters = await readEvents();
+
+    expect(counters).toEqual({ pidsMax: 0, oomKill: 0 });
+  });
+
+  it('片方のファイルが無くても、もう片方は独立して読める（コントローラを選んで有効化できるため）', async () => {
+    place(root, { ...CGROUP_FILES, 'pids.events': 'max 5\n' });
+    // `memory.events` は置かない。
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const counters = await readEvents();
+
+    expect(counters).toEqual({ pidsMax: 5 });
+    expect(Object.hasOwn(counters, 'oomKill')).toBe(false);
+  });
+
+  it('読めない・パースできないなら、その欄は出さない（0 と混ぜない）', async () => {
+    place(root, { ...CGROUP_FILES, 'pids.events': 'max notanumber\n' });
+    writeFileSync(join(root, 'proc-cgroup'), '0::/\n');
+
+    const counters = await readEvents();
+
+    expect(Object.hasOwn(counters, 'pidsMax')).toBe(false);
+  });
+
+  it('cgroup 自体が無い器では、両方の欄が出ない（os 相当の代替が無い）', async () => {
+    const counters = await readCgroupEventCounters({
+      cgroupRoot: join(root, 'no-such-cgroup'),
+      procCgroupPath: join(root, 'no-such-proc'),
+    });
+
+    expect(counters).toEqual({});
   });
 });

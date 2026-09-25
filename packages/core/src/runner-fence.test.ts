@@ -98,6 +98,16 @@ function setup(options: Pick<RunnerHostOptions, 'enforceLease'> = {}): {
     emit: (event) => events.push(event),
     queryFn: fake.fn,
     env: { PATH: '/usr/bin' },
+    // **cgroup の実ファイルを読ませない（Issue #1517）。** この一式の一部
+    // （自己失効）は `vi.useFakeTimers()` の下で走るが、`readCgroupEventCounters`
+    // の既定実装は本物の `fs.readFile`（libuv の実 I/O）で、フェイクタイマーが
+    // 進めるのは fake timer のコールバックだけ——実 I/O の完了は実時間でしか
+    // 進まない。既定のまま（この差し替えを入れる前）にすると、`#finish()` が
+    // 実 I/O の完了を待つ分だけ `vi.advanceTimersByTimeAsync` の直後の
+    // assertion より遅れて解決し、`host.list()` がまだ委譲を持ったままの
+    // 状態を拾ってしまう（実測）。この一式は cgroup の値そのものを検証
+    // しないので、即座に解決する空の値で十分。
+    readCgroupEventCountersFn: async () => ({}),
     ...options,
   });
   hosts.push(host);
