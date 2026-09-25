@@ -469,8 +469,30 @@ function roundToOneDecimal(value: number): number {
 /** 日報が既に書かれたかを確かめるときに遡る件数。 */
 const DAILY_REPORT_LOOKUP = 30;
 
-/** 外部イベントの中身をクローンに見せる上限。全文が要るなら送り元で切ること。 */
+/**
+ * 外部イベントの中身をクローンに見せる上限（プロンプト・台帳の本文）。
+ *
+ * **切ったら、省いた量と全文の取り方を名乗る**（issue #1535。
+ * `renderPayload`）。全文は日誌の `external_event` の行に残っている
+ * （{@link EXTERNAL_JOURNAL_LIMIT}）。
+ */
 const EXTERNAL_PAYLOAD_LIMIT = 8_000;
+
+/**
+ * 外部イベントの中身を**日誌へ**書くときの上限（issue #1535）。
+ *
+ * **ここは全文を残すための口である。** かつて日誌の控えもプロンプトと同じ
+ * {@link EXTERNAL_PAYLOAD_LIMIT} で切っていたので、8,000 文字を超えた本文は
+ * 受信箱の行が片付いた後どこにも残らなかった——プロンプトの側で「全文は
+ * 日誌に在る」と言う取り方そのものが成り立たなかった。
+ *
+ * **それでも上限は置く。** 入口（`POST /events` / `POST /events/:source`）は
+ * 本文の大きさを締めていないので、病的に大きい webhook が1件で日誌を膨らませ
+ * うる。値は実測（本番の `external_event` の本文の最大は 740 字。2026-09-23、
+ * #955 のコメント）より3桁大きく取り、ふつうの webhook（数十 KB）は切らずに
+ * 残る桁にした。超えたら `excerpt` の印で量を名乗る。
+ */
+const EXTERNAL_JOURNAL_LIMIT = 200_000;
 
 /**
  * 未了イベントの id 一覧・削除された記憶の一覧を抜粋する厚み（#409）。
@@ -4711,7 +4733,9 @@ class Clone implements CloneHost {
       await this.#journal({
         type: 'external_event',
         source: event.source,
-        summary: renderPayload(event.payload),
+        // **切らずに書く**（issue #1535。`EXTERNAL_JOURNAL_LIMIT` の doc）。
+        // プロンプトと台帳が「全文は日誌に在る」と名乗る、その在り処である。
+        summary: journalPayload(event.payload),
       });
     }
   }
@@ -8037,7 +8061,7 @@ class Clone implements CloneHost {
       }
 
       case 'external': {
-        const body = renderPayload(event.payload);
+        const body = renderPayload(event.payload, event.at);
         // **日誌の書き込みは配達のたびに**（`manager_message` と同じ理由。畳む回でも
         // 同じものを書くので1本にまとめてある: `#journalIncomingBody`）。
         await this.#journalIncomingBody(event);
@@ -11900,20 +11924,17 @@ function managerReportBatchPrompt(
  * 上限も実質 8,000文字強のままである——`managerReportBatchPrompt`（1件あたり
  * 無制限だった報告を件数ぶん連結する）とは構造が違う。
  *
- * **ただし別の欠陥が見つかっている（範囲外として報告した）。** `renderPayload`
- * が切ったときの合図（`…（以下省略）`）は省いた文字数も全文の取り方も言わない
- * ——`.claude/skills/listing-and-detail/SKILL.md` の性質2に反する。しかも
- * `#journalIncomingBody` が日誌へ書く `summary` も同じ `renderPayload` を
- * 通すため、**日誌の側にも切る前の全文が残っていない**——ここを直すには
- * 「切ったら名乗る」だけでなく「日誌には切る前の生の本文を残す」という、
- * この PR の範囲（束の文字数予算）とは別の変更が要る。踏み込まず、issue へ
- * 報告する。
+ * **切ったときの名乗り方は issue #1535 で直した。** 以前の `renderPayload` は
+ * `…（以下省略）` だけで省いた量も全文の取り方も言わず、しかも日誌の控えも同じ
+ * 関数を通していたので、切る前の全文がどこにも残らなかった。いまは日誌へ切らずに
+ * 書き（`journalPayload`）、プロンプトの側は省いた量と `journal_read` での取り方を
+ * 名乗る（`renderPayload` の doc）。
  */
 function externalBatchPrompt(events: ExternalEvent[]): string {
   const head = events[0];
   if (head === undefined) return '';
 
-  const body = renderPayload(head.payload);
+  const body = renderPayload(head.payload, head.at);
   const timestamps = events.map((event) => event.at).join(' / ');
 
   return [
@@ -12209,7 +12230,7 @@ export function commitmentFor(event: InboxEvent): Commitment | null {
         ...base,
         origin: 'external',
         source: event.source,
-        body: renderPayload(event.payload),
+        body: renderPayload(event.payload, event.at),
       };
     case 'timer':
     case 'self_initiative':
@@ -12271,16 +12292,41 @@ function isSameTick(a: InboxEvent, b: InboxEvent): boolean {
   return false;
 }
 
-/** 外部から届いた中身を、そのままクローンに読ませられる形にする。 */
-function renderPayload(payload: unknown): string {
+/** 外部から届いた中身を、切る前の1本の文字列にする。 */
+function payloadText(payload: unknown): string {
   // 中身なしの通知（source だけ）もある。`undefined` という文字列を読ませない。
   if (payload === undefined || payload === null || payload === '') {
     return '（中身のない通知。source だけが届いた。）';
   }
-  const body = typeof payload === 'string' ? payload : safeJson(payload);
-  return body.length > EXTERNAL_PAYLOAD_LIMIT
-    ? `${body.slice(0, EXTERNAL_PAYLOAD_LIMIT)}\n…（以下省略）`
-    : body;
+  return typeof payload === 'string' ? payload : safeJson(payload);
+}
+
+/**
+ * 外部から届いた中身を、そのままクローンに読ませられる形にする。
+ *
+ * **切ったら、省いた量と全文の取り方を名乗る**（issue #1535）。以前は
+ * `…（以下省略）` だけで、何文字省いたのかも、全文がどこに在るのかも
+ * 言わなかった（`.claude/skills/listing-and-detail/SKILL.md` の性質2）。
+ * 取り方の先は、同じ合図を受けた回に `#journalIncomingBody` が日誌へ
+ * 切らずに書いた `external_event` の行である（`at` はその合図が届いた時刻）。
+ */
+function renderPayload(payload: unknown, at: string): string {
+  const body = payloadText(payload);
+  if (body.length <= EXTERNAL_PAYLOAD_LIMIT) return body;
+  const journalNote =
+    body.length > EXTERNAL_JOURNAL_LIMIT
+      ? `（日誌にも先頭 ${EXTERNAL_JOURNAL_LIMIT.toLocaleString('en-US')} 文字までしか残っていない）`
+      : '（日誌には切らずに書いてある）';
+  return [
+    excerpt(body, EXTERNAL_PAYLOAD_LIMIT),
+    `全文の取り方: \`journal_read\` に \`types: ["external_event"]\` と \`since: "${at}"\` を渡して行を見つけ、` +
+      `その id を渡して読む${journalNote}。`,
+  ].join('\n');
+}
+
+/** 日誌へ書く中身（issue #1535。{@link EXTERNAL_JOURNAL_LIMIT} の doc）。 */
+function journalPayload(payload: unknown): string {
+  return excerpt(payloadText(payload), EXTERNAL_JOURNAL_LIMIT);
 }
 
 function safeJson(value: unknown): string {

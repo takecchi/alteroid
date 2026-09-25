@@ -5151,6 +5151,66 @@ describe('クローン — 自律（人間以外の起点）', () => {
     await s.clone.stop();
   });
 
+  /**
+   * issue #1535: 外部イベントの本文が 8,000 文字を超えたとき、プロンプトは
+   * 省いた量と全文の取り方を名乗り、日誌には切らずに残る——その取り方で
+   * 実際に全文が引けることまで確かめる（取り方を言うだけで取れない形を作らない）。
+   */
+  it('8,000 文字を超える外部イベントは、プロンプトで量と取り方を名乗り、日誌には全文が残る（issue #1535）', async () => {
+    const s = setup(() => '見た');
+    const at = new Date().toISOString();
+    const big = '外部先頭' + 'w'.repeat(20_000) + '外部末尾';
+    s.clone.post({ type: 'external', id: 'evt-big', at, source: 'webhook', payload: big });
+
+    await waitFor(() => inputsOf(s)().includes('外部先頭'), '外部イベントの入力が届く');
+    const input = inputsOf(s)();
+    expect(input).not.toContain('外部末尾');
+    expect(input).toContain('文字省略。全 20,008 文字');
+    expect(input).toContain('journal_read');
+    expect(input).toContain(`since: "${at}"`);
+    expect(input).toContain('日誌には切らずに書いてある');
+
+    const externals = (await s.stores.journal.list({
+      types: ['external_event'],
+      since: at,
+    })) as { summary: string }[];
+    expect(externals.some((entry) => entry.summary === big)).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('8,000 文字以内の外部イベントは、プロンプトの本文を1文字も変えず取り方も足さない（issue #1535）', async () => {
+    const s = setup(() => '見た');
+    s.clone.post({
+      type: 'external',
+      id: 'evt-small',
+      at: new Date().toISOString(),
+      source: 'webhook',
+      payload: '小さな外部イベント',
+    });
+    await waitFor(() => inputsOf(s)().includes('小さな外部イベント'), '外部イベントの入力が届く');
+    expect(inputsOf(s)()).not.toContain('文字省略');
+    expect(inputsOf(s)()).not.toContain('全文の取り方');
+    await s.clone.stop();
+  });
+
+  it('日誌の上限（20万字）を超える外部イベントは、日誌でも量を名乗り、プロンプトはそれを言う（issue #1535）', async () => {
+    const s = setup(() => '見た');
+    const at = new Date().toISOString();
+    const huge = '巨大先頭' + 'v'.repeat(250_000);
+    s.clone.post({ type: 'external', id: 'evt-huge', at, source: 'webhook', payload: huge });
+    await waitFor(() => inputsOf(s)().includes('巨大先頭'), '外部イベントの入力が届く');
+    expect(inputsOf(s)()).toContain('日誌にも先頭 200,000 文字までしか残っていない');
+    const externals = (await s.stores.journal.list({
+      types: ['external_event'],
+      since: at,
+    })) as { summary: string }[];
+    const summary = externals[0]?.summary ?? '';
+    expect(summary.startsWith('巨大先頭')).toBe(true);
+    expect(summary).toContain('文字省略。全 250,004 文字');
+    await s.clone.stop();
+  });
+
   it('締めの時刻で日報が作られ、対象日は発火が運んだ日である（起点② / 可観測性の最上段）', async () => {
     const s = setup(() => '今日はログイン周りを直した。保留は無い。');
 
