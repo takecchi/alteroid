@@ -348,7 +348,24 @@ export const practiceVersionReadResponseSchema = z.object({ version: practiceVer
 // 日誌（/journal, /journal/stream）— core の journalEntrySchema をそのまま使う
 // ---------------------------------------------------------------------------
 
-export const journalListResponseSchema = z.object({ entries: z.array(journalEntrySchema) });
+/**
+ * `oldestAt` / `crossesHorizon`（issue #1510 の積み残し）。
+ *
+ * **`since`/`until` のどちらかを指定した呼びにだけ現れる**（`journal_read`
+ * の `describeJournalHorizonNote` と同じ gate。`apps/daemon/src/app.ts` の
+ * `GET /journal` ハンドラの doc）。既存の呼び（`since`/`until` を指定しない）
+ * の応答は1バイトも変わらない——足すだけである。
+ *
+ * - `oldestAt`: 日誌の地平（`JournalStore.oldestAt()`）。日誌が空なら `null`
+ * - `crossesHorizon`: 窓の始点（`since`。無指定なら `-∞`）が `oldestAt` より
+ *   前にかかるか（`journalWindowCrossesHorizon`、`@alteroid/core`）。真なら
+ *   「その窓には無かった」と「日誌がそこまで遡れないだけ」を区別できない
+ */
+export const journalListResponseSchema = z.object({
+  entries: z.array(journalEntrySchema),
+  oldestAt: isoDateTimeSchema.nullable().optional(),
+  crossesHorizon: z.boolean().optional(),
+});
 
 /**
  * `journalEntrySchema` は discriminatedUnion。`/reports` が実際に返すのは

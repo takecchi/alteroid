@@ -15,6 +15,7 @@ import {
   applyOlderPage,
   filterByType,
   filterRecent,
+  journalHorizonNote,
   mergeBack,
   mergeFront,
   newerPageQuery,
@@ -291,5 +292,42 @@ describe('shiftForPrepend（新着を先頭に足すとき shift に何を渡す
 
   it('足された・上端に居ない（遡って読んでいる） → shift する（読んでいる行が動かない）', () => {
     expect(shiftForPrepend(true, false)).toBe(true);
+  });
+});
+
+/**
+ * `journalHorizonNote` — 日誌の地平（issue #1510 の積み残し）を、「もっと
+ * 遡る」が終端に達したときの注記へ変換する。
+ *
+ * **判定条件（`crossesHorizon`）はサーバ側（`journalWindowCrossesHorizon`。
+ * `@alteroid/core`）が計算済みの値を渡すだけ**——ここで測るのは「値から
+ * 文言への変換」と「`outcome !== 'end'` では出さない」の2つだけである
+ * （`journal_read` 側の判定条件そのものは `packages/core/src/tools.test.ts`
+ * の「journal_read が日誌の地平を伝える」が測る）。
+ */
+describe('journalHorizonNote（issue #1510 の積み残し）', () => {
+  it('outcome が end で crossesHorizon が真なら、oldestAt を含む注記を返す', () => {
+    const note = journalHorizonNote('end', '2026-09-12T20:21:05.123Z', true);
+    expect(note).toContain('2026-09-12T20:21:05.123Z');
+    expect(note).toContain('区別できない');
+  });
+
+  it('outcome が end でも crossesHorizon が偽なら、注記は無い（本当に終端だと言い切れる）', () => {
+    expect(journalHorizonNote('end', '2026-09-12T20:21:05.123Z', false)).toBeUndefined();
+  });
+
+  it('outcome が progress/retryLarger/blocked なら、crossesHorizon が真でも注記は無い', () => {
+    expect(journalHorizonNote('progress', '2026-09-12T20:21:05.123Z', true)).toBeUndefined();
+    expect(journalHorizonNote('retryLarger', '2026-09-12T20:21:05.123Z', true)).toBeUndefined();
+    expect(journalHorizonNote('blocked', '2026-09-12T20:21:05.123Z', true)).toBeUndefined();
+  });
+
+  it('oldestAt が無い（サーバが since/until 無しの応答を返した）なら、crossesHorizon が真でも注記は無い', () => {
+    expect(journalHorizonNote('end', undefined, true)).toBeUndefined();
+    expect(journalHorizonNote('end', null, true)).toBeUndefined();
+  });
+
+  it('crossesHorizon が未定義（サーバの応答に無い）なら注記は無い', () => {
+    expect(journalHorizonNote('end', '2026-09-12T20:21:05.123Z', undefined)).toBeUndefined();
   });
 });

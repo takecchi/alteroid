@@ -65,6 +65,7 @@ import {
   isDeclaredOwner,
   jobStatusSchema,
   journalEntrySchema,
+  journalWindowCrossesHorizon,
   localDayRange,
   matchesInboxRemoveManyFilter,
   normalizeJournalTimeBoundary,
@@ -2496,10 +2497,16 @@ export function createApp(deps: AppDeps) {
           '既に載っているのでそこから組み立てる）。**`after` は返る順序の意味で' +
           'あって時間の意味ではない** —— `order:desc`（既定）では、指した行より' +
           '**古い**行が返る。`order:asc` ではその逆（**新しい**行が返る）。' +
-          '**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。',
+          '**封筒は持たない** —— 続きが在るかは `limit` 件ちょうど返ったかで判る。' +
+          '`since`/`until` のどちらかを指定すると、応答に `oldestAt`（日誌の地平。' +
+          '日誌が空なら `null`）と `crossesHorizon`（窓の始点が地平より前に' +
+          'かかるか）を足す——真なら「その窓には無かった」のか「日誌がそこまで' +
+          '遡れないだけ」なのかを、この応答だけからは区別できない。',
         responses: {
           200: {
-            description: '日誌エントリの一覧。',
+            description:
+              '日誌エントリの一覧。`since`/`until` を指定した呼びには ' +
+              '`oldestAt`/`crossesHorizon` が付く（指定しない呼びには付かない）。',
             content: { 'application/json': { schema: resolver(journalListResponseSchema) } },
           },
           400: {
@@ -2551,18 +2558,42 @@ export function createApp(deps: AppDeps) {
           until === undefined ? undefined : normalizeJournalTimeBoundary(until)!;
 
         try {
+          const entries = await stores.journal.list({
+            limit,
+            order,
+            ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
+            ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
+            ...(types === undefined || types.length === 0 ? {} : { types }),
+            ...(q === undefined ? {} : { q }),
+            ...(afterId === undefined || afterAt === undefined
+              ? {}
+              : { after: { id: afterId, at: afterAt } }),
+          });
+
+          // **日誌の地平（issue #1510 の積み残し）。** `journal_read`
+          // （`tools.ts`）と同じ条件——`since`/`until` のどちらかを指定した
+          // ときだけ引く（索引1行なので安く引ける）。0件かどうかでは決めない
+          // （窓がまるごと地平より後ろなら、0件でも「本当に無かった」と
+          // 言い切れるため）。**既存の応答の形は壊さない**——この2つは
+          // `since`/`until` を指定したときだけ現れる、足すだけの欄である。
+          const oldestAt =
+            normalizedSince !== undefined || normalizedUntil !== undefined
+              ? await stores.journal.oldestAt()
+              : undefined;
+          // **判定条件は `journal_read` の `describeJournalHorizonNote` と
+          // 同じ関数（`journalWindowCrossesHorizon`）を呼ぶ**——2箇所に
+          // 書き写さない（`journal-horizon.ts` の doc）。ここでは Web が
+          // 自分で `since`/`oldestAt` を比べ直さずに済むよう、判定結果その
+          // ものを構造化された欄として返す。
+          const crossesHorizon =
+            oldestAt === undefined
+              ? undefined
+              : journalWindowCrossesHorizon(oldestAt, normalizedSince);
+
           return c.json({
-            entries: await stores.journal.list({
-              limit,
-              order,
-              ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
-              ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
-              ...(types === undefined || types.length === 0 ? {} : { types }),
-              ...(q === undefined ? {} : { q }),
-              ...(afterId === undefined || afterAt === undefined
-                ? {}
-                : { after: { id: afterId, at: afterAt } }),
-            }),
+            entries,
+            ...(oldestAt === undefined ? {} : { oldestAt }),
+            ...(crossesHorizon === undefined ? {} : { crossesHorizon }),
           });
         } catch (error) {
           // **`afterId`/`afterAt` が指す行が見当たらないのは、判定できないという

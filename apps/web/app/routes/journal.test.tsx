@@ -495,6 +495,77 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
 });
 
 /**
+ * **日誌の地平（issue #1510 の積み残し）。** `olderStatus === 'end'`
+ * （「もっと遡る」で終端に達した）状態は `<Card>`（`Virtualizer`）の外にある
+ * 素の JSX なので、「もっと遡る」ボタンのテストと同じく jsdom から直接測れる
+ * （このファイル冒頭の virtua の断り）。
+ */
+describe('日誌の地平（issue #1510 の積み残し）', () => {
+  const CURSOR_BASE = new Date('2026-08-20T00:00:00.000Z').getTime();
+
+  function pastDecision(id: string, minutesAgo: number): JournalEntry {
+    return {
+      type: 'decision',
+      id,
+      at: new Date(CURSOR_BASE - minutesAgo * 60_000).toISOString(),
+      decision: `d-${id}`,
+      grounds: 'g',
+    };
+  }
+
+  const PAGE = Array.from({ length: 100 }, (_, i) => pastDecision(`p${i}`, i));
+
+  it('窓が地平より前にかかっていたら、「これより古い記録は無い」に続けて注記を出す', async () => {
+    const OLDEST_AT = '2026-08-14T00:00:00.000Z';
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      if (new URL(url).searchParams.has('until')) {
+        // 終端（0件・limit未満）で、窓が地平より前にかかっている応答。
+        return json({ entries: [], oldestAt: OLDEST_AT, crossesHorizon: true });
+      }
+      return json({ entries: PAGE });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(2);
+    });
+
+    expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(OLDEST_AT))).toBeTruthy();
+    expect(screen.getByText(/区別できない/)).toBeTruthy();
+  });
+
+  it('窓が地平より後ろなら（本当に終端だと言い切れる）、注記は出ない', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      if (new URL(url).searchParams.has('until')) {
+        return json({
+          entries: [],
+          oldestAt: '2026-08-14T00:00:00.000Z',
+          crossesHorizon: false,
+        });
+      }
+      return json({ entries: PAGE });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+    await waitFor(() => {
+      expect(stub.calls.filter((url) => url.includes('/journal'))).toHaveLength(2);
+    });
+
+    expect(await screen.findByText(/これより古い記録は無い/)).toBeTruthy();
+    expect(screen.queryByText(/区別できない/)).toBeNull();
+  });
+});
+
+/**
  * 日誌画面の検索欄（issue #250。**4口のうち Web UI のぶん**）。
  *
  * ここで測るのは3つ。**サーバへ投げること**（画面側で捨てない）、**打鍵ごとに

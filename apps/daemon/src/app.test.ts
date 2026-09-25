@@ -4808,6 +4808,93 @@ describe('GET /journal の since/until の正規化（issue #1515）', () => {
 });
 
 /**
+ * `GET /journal` の日誌の地平（issue #1510 の積み残し）。
+ *
+ * **`journal_read`（`packages/core/src/tools.test.ts` の「journal_read が
+ * 日誌の地平を伝える」）と同じ場合分けを、HTTP の口としても固定する。** 違いは
+ * 出し方だけ——`journal_read` は日本語の注記を1本の文字列で返すが、ここは
+ * `oldestAt`/`crossesHorizon` を**構造化された欄**として返す（判定条件は
+ * `journalWindowCrossesHorizon` を共有しており、2箇所に書き写していない）。
+ */
+describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () => {
+  it('since/until を指定しなければ、oldestAt/crossesHorizon は付かない（既存の応答は1バイトも変わらない）', async () => {
+    await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
+    const body = (await (await app.request('/journal')).json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['entries']);
+  });
+
+  it('窓がまるごと地平より後ろなら、crossesHorizon は偽（oldestAt は付く）', async () => {
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+    const since = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
+
+    const body = (await (
+      await app.request(`/journal?since=${encodeURIComponent(since)}`)
+    ).json()) as {
+      entries: unknown[];
+      oldestAt: string | null;
+      crossesHorizon: boolean;
+    };
+
+    expect(body.entries).toHaveLength(0);
+    expect(body.oldestAt).toBe(entry.at);
+    expect(body.crossesHorizon).toBe(false);
+  });
+
+  it('since が地平より前なら、crossesHorizon は真（0件でも非空でも）', async () => {
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+    const since = new Date(Date.parse(entry.at) - 60 * 60 * 1000).toISOString();
+
+    const body = (await (
+      await app.request(`/journal?since=${encodeURIComponent(since)}`)
+    ).json()) as {
+      entries: unknown[];
+      oldestAt: string | null;
+      crossesHorizon: boolean;
+    };
+
+    expect(body.entries).toHaveLength(1);
+    expect(body.oldestAt).toBe(entry.at);
+    expect(body.crossesHorizon).toBe(true);
+  });
+
+  it('until だけの指定は、窓の始点が -∞ なので常に crossesHorizon: true', async () => {
+    const entry = await stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+    const until = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
+
+    const body = (await (
+      await app.request(`/journal?until=${encodeURIComponent(until)}`)
+    ).json()) as {
+      oldestAt: string | null;
+      crossesHorizon: boolean;
+    };
+
+    expect(body.oldestAt).toBe(entry.at);
+    expect(body.crossesHorizon).toBe(true);
+  });
+
+  it('日誌そのものが空なら、oldestAt: null で crossesHorizon: false（比べる地平が無い）', async () => {
+    const body = (await (
+      await app.request(`/journal?until=${encodeURIComponent('2020-01-01T00:00:00.000Z')}`)
+    ).json()) as { oldestAt: string | null; crossesHorizon: boolean };
+
+    expect(body.oldestAt).toBeNull();
+    expect(body.crossesHorizon).toBe(false);
+  });
+});
+
+/**
  * `GET /managers` の `status` / `limit` / 錨（issue #670）。
  *
  * **台帳（`jobs`）に行を消す口が無いので、一覧の件数はその環境で今までに

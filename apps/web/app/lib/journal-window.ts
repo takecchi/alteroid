@@ -181,6 +181,46 @@ export function applyOlderPage(
   };
 }
 
+/**
+ * 「もっと遡る」が終端（`'end'`）に達したとき、その終端が日誌の地平
+ * （`JournalStore.oldestAt()`）より前にかかっていたかを言葉にする
+ * （issue #1510 の積み残し）。
+ *
+ * **`journal_read`（クローンの道具。`packages/core/src/tools.ts` の
+ * `describeJournalHorizonNote`）と同じ趣旨の文言にしてあるが、実装は共有
+ * していない。** `@alteroid/core` 本体から値を import するとサーバ専用の
+ * ドメイン層ごとブラウザバンドルへ入る（#294 / #306。`filterRecent` の doc
+ * と同じ理由）ので、判定条件（`crossesHorizon`）は `GET /journal` が
+ * サーバ側（`journalWindowCrossesHorizon`）で計算済みの値をそのまま受け取り、
+ * ここは文言へ変換するだけである。
+ *
+ * **`outcome !== 'end'` なら常に `undefined`。** 終端に達していない
+ * （まだ続きがあるかもしれない）ときに出すと、常に見える注記になって
+ * 本当に終端に達したときの目印にならない（`reachedStart`/`hiddenByLimit`
+ * と同じ「常に出ているものは情報でなくなる」判断。`chat.tsx` の doc）。
+ *
+ * **⚠️ 既知の非対称。** 初期読み込みは `since`/`until` を送らないので、
+ * 最初の1ページだけで日誌全体が尽きる（`entries.length < JOURNAL_PAGE`）
+ * ほど小さいストアでは、この注記の材料（`oldestAt`/`crossesHorizon`）が
+ * 応答に載らない——`journal_read` の既定呼び（`since`/`until` 省略）が
+ * 地平を引かないのと同じ gate である（`journal-time.ts` 相当の判断を
+ * ここでも踏襲した）。「もっと遡る」を1回でも撃てば（`until` が付くので）
+ * 材料が届く。
+ */
+export function journalHorizonNote(
+  outcome: PageOutcome,
+  oldestAt: string | null | undefined,
+  crossesHorizon: boolean | undefined,
+): string | undefined {
+  if (outcome !== 'end') return undefined;
+  if (crossesHorizon !== true) return undefined;
+  if (oldestAt === null || oldestAt === undefined) return undefined;
+  return (
+    `この記憶ストアの日誌の最古は ${oldestAt}。それより前に本当に何も無かったのか、` +
+    '記録がそこまで遡れないだけなのかは、この一覧だけからは区別できない。'
+  );
+}
+
 /** `since` で撃った1ページ、または SSE の `recent` を先頭へ適用する。 */
 export function applyNewerPage(
   existing: JournalEntry[],

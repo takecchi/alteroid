@@ -32,6 +32,7 @@ import {
   applyOlderPage,
   filterRecent,
   JOURNAL_MAX_LIMIT,
+  journalHorizonNote,
   newerPageQuery,
   olderPageQuery,
   type PageOutcome,
@@ -63,6 +64,15 @@ export interface JournalWindow {
   olderStatus: PageOutcome;
   isLoadingOlder: boolean;
   loadOlder: () => void;
+
+  /**
+   * `olderStatus === 'end'` のとき、その終端が日誌の地平（`GET /journal` の
+   * `oldestAt`/`crossesHorizon`。issue #1510 の積み残し）より前にかかって
+   * いたら、その趣旨の注記。かかっていなければ（本当に終端だと言い切れる
+   * なら）`undefined`。**`~/lib/journal-window.ts` の `journalHorizonNote` が
+   * 決定を持つ**（このフックは直近の応答を渡すだけ）。
+   */
+  horizonNote: string | undefined;
 
   /** 新着方向の取りこぼし確認（SSE の補完）。 */
   isLoadingNewer: boolean;
@@ -115,6 +125,12 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [isLoadingNewer, setLoadingNewer] = useState(false);
   const [newerBlocked, setNewerBlocked] = useState(false);
+  // 日誌の地平の注記（issue #1510 の積み残し）。直近の過去方向の応答が
+  // 持っていた `oldestAt`/`crossesHorizon` から `journalHorizonNote` が
+  // 決める——`olderStatus` が `'end'` でなければ中身は使われない
+  // （`journalHorizonNote` の doc）が、値そのものは常に最新の応答で
+  // 上書きしておく（次に `'end'` になったとき古い応答の値を見せない）。
+  const [horizonNote, setHorizonNote] = useState<string | undefined>(undefined);
 
   // --- prepended（先頭に足された直後の1回の描画だけ true）------------------
   // 「前回の描画からの差分」を state として持ち、レンダー中に比べて
@@ -167,6 +183,13 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
         setOlderStatus(applied.outcome);
+        // **初期読み込みは since/until を送らないので、通常は
+        // `data.oldestAt`/`data.crossesHorizon` が無い**（`buildQuery` の
+        // 既定引数。`journalHorizonNote` の doc「既知の非対称」）。それでも
+        // 常に上書きしておく——省略時は `undefined` になり、
+        // `journalHorizonNote` はそれを「地平にかかっていない」と同じ扱いで
+        // 注記を出さない。
+        setHorizonNote(journalHorizonNote(applied.outcome, data.oldestAt, data.crossesHorizon));
         setLoadingInitial(false);
       })
       .catch((caught: unknown) => {
@@ -202,6 +225,7 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
           return;
         }
         setOlderStatus(applied.outcome);
+        setHorizonNote(journalHorizonNote(applied.outcome, data.oldestAt, data.crossesHorizon));
         setLoadingOlder(false);
       })
       .catch((caught: unknown) => {
@@ -287,5 +311,6 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     newerBlocked,
     refreshNewer,
     prepended,
+    horizonNote,
   };
 }

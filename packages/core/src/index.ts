@@ -394,6 +394,13 @@ export {
   type JournalStoreHorizonContractSubject,
 } from './journal-horizon-contract.js';
 /**
+ * 日誌の窓（`since`）が地平（`JournalStore.oldestAt()`）より前にかかるかの
+ * 判定（issue #1510 の積み残し）。`journal_read`（`tools.ts`）と
+ * `GET /journal`（`apps/daemon/src/app.ts`）が同じ関数を呼ぶ——判定条件を
+ * 2箇所に書き写さない。
+ */
+export { journalWindowCrossesHorizon } from './journal-horizon.js';
+/**
  * `journal_read` / `conversation_read` / `GET /journal` の `since` / `until` を
  * 正規化する唯一の共通の口（issue #1515）。3実装（インメモリ / `storage-fs` /
  * `storage-pg`）の `JournalQuery.since`/`.until` の扱いが食い違っていた

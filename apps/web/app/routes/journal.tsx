@@ -289,7 +289,7 @@ function JournalBody({
   startMargin: number;
 }) {
   const journalWindow = useJournalWindow(selected, q);
-  const { entries, isLoadingInitial, error, olderStatus, isLoadingOlder, loadOlder } =
+  const { entries, isLoadingInitial, error, olderStatus, isLoadingOlder, loadOlder, horizonNote } =
     journalWindow;
 
   const virtualizerRef = useRef<VirtualizerHandle>(null);
@@ -383,6 +383,17 @@ function JournalBody({
             <p className="py-2 text-center text-xs text-muted">
               これより古い記録は無い（全 {entries.length} 件）。
             </p>
+          )}
+          {/*
+            **日誌の地平（issue #1510 の積み残し）。** `olderStatus === 'end'`
+            だけでは「本当に無い」のか「記憶ストアがそこまで遡れないだけ」
+            なのか区別が付かない場合がある——`horizonNote` はその区別が付かない
+            ときにだけ中身を持つ（`journalHorizonNote` の doc）。上の
+            「これより古い記録は無い」に続けて出す（同じ `olderStatus === 'end'`
+            の中の、より詳しい断り）。
+          */}
+          {olderStatus === 'end' && horizonNote !== undefined && (
+            <p className="py-2 text-center text-xs text-muted">{horizonNote}</p>
           )}
           {olderStatus === 'blocked' && (
             <BlockedNote>

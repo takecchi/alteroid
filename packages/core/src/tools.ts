@@ -18,6 +18,7 @@ import {
   resolveCommitmentCursor,
 } from './commitment-cursor.js';
 import { isCronExpression } from './cron.js';
+import { journalWindowCrossesHorizon } from './journal-horizon.js';
 import {
   describeUnreadableJournalTimeBoundary,
   normalizeJournalTimeBoundary,
@@ -11627,14 +11628,10 @@ function describeJournalHorizonNote(
   isEmpty: boolean,
 ): string | undefined {
   if (oldestAt === null) return undefined;
-  // **時刻として比べる（文字列では比べない）。** `since` は自由な ISO 8601 で、
-  // 秒の省略（`…T20:21Z`）やオフセット（`+09:00`）を含みうる。辞書順では
-  // `'…T20:21Z' > '…T20:21:05.123Z'` になり、地平より前の since を後ろと
-  // 取り違える。読めない since は比べられないので、判定できない側（付ける）へ倒す。
-  const sinceMs = since === undefined ? Number.NaN : Date.parse(since);
-  if (since !== undefined && !Number.isNaN(sinceMs) && !(sinceMs < Date.parse(oldestAt))) {
-    return undefined;
-  }
+  // **判定条件そのものは `journal-horizon.ts` の `journalWindowCrossesHorizon`
+  // に1本化してある（issue #1510 の積み残し）。** `GET /journal`
+  // （`apps/daemon/src/app.ts`）も同じ関数を呼ぶ——ここに書き写さない。
+  if (!journalWindowCrossesHorizon(oldestAt, since)) return undefined;
   const range =
     since === undefined ? 'それより前は' : `指定の since（${since}）から ${oldestAt} までの区間は`;
   return isEmpty
