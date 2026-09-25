@@ -21,10 +21,17 @@ import { CGROUP_ROOT } from '@alteroid/core';
  *
  * **孤児の回収（#315 段0）を足したが、この約束は1文字も緩めていない。**
  * 回収の候補を数えるのに使う材料は `stat`（`ppid` / `state` / `num_threads` /
- * `starttime`）と、**`/proc/<pid>` ディレクトリそのものの所有 UID** だけである
- * （{@link ReclaimObservation} の doc）。所有 UID は `statSync` が返す
+ * `starttime` / `session`）と、**`/proc/<pid>` ディレクトリそのものの所有 UID**
+ * だけである（{@link ReclaimObservation} の doc）。所有 UID は `statSync` が返す
  * ディレクトリの属性であって、プロセスの素性が書かれたファイル
  * （`cmdline` / `cwd` / `environ`）ではない —— **そのどれも開いていない。**
+ *
+ * **段1（実際に撃つ）を足しても、この約束は変わらない（#1334）。** 撃ってよいかの
+ * 判定に使う材料も `stat` の6列目（`session`＝セッション ID）だけで、新しいファイルは
+ * 1つも開かない。セッション ID そのものの素性（それがどの委譲のものか）は、
+ * **runner がプロセスを起こした瞬間に自分で控えた pid の集合**（`cmdline` 等を
+ * 読み返して突き止めたものではない）と突き合わせるだけである
+ * （{@link ReclaimReapOptions} の doc）。
  *
  * **走査が「読めなかった」で欠けたときは、回収の欄を出さない**
  * （{@link TaskBreakdown.reclaim} の doc）。
@@ -72,12 +79,19 @@ export interface TaskBreakdown {
 /**
  * 回収の動作段階。
  *
- * **いまここに在るのは段0（観測のみ）だけで、`'observe'` 以外は1度も出ない**
- * （{@link RECLAIM_MODE}）。それでも型に `'reclaim'` を先に置いてあるのは、
- * 段1 を載せた runner と、まだ古い版のデーモンが同時に居る窓を作らないためである
- * （AGENTS.md「Web UI とデーモンのように別デプロイなら版がずれる」——runner が
- * 先に新しい値を返し、受け取る側の型定義がまだ古い、という順序が実在する）。
- * **受け取る側を先に広げ、出す側を後から広げる。**
+ * **段0（観測のみ）と段1（実際に撃つ。#1334）の両方が出るようになった。**
+ * `reclaim.reap`（{@link ReclaimScanOptions.reap}）を渡さなければ `'observe'` の
+ * ままで、いまも撃つ経路は無い。渡した回だけ `'reclaim'` を名乗る——**渡した
+ * その回に1本も撃たなかった（候補が0本だった等）としても `'reclaim'` のまま**
+ * である。「その回に何本撃ったか」は `signalled` / `killed` が持つので、
+ * `mode` は「撃てる構えになっているか」だけを答える。
+ *
+ * 型に先に `'reclaim'` を置いてあったのは、段1 を載せた runner と、まだ古い版の
+ * デーモンが同時に居る窓を作らないためである（AGENTS.md「Web UI とデーモンの
+ * ように別デプロイなら版がずれる」——runner が先に新しい値を返し、受け取る側の
+ * 型定義がまだ古い、という順序が実在する）。**受け取る側（`runner-protocol.ts`
+ * の `runnerExecutionResourcesSchema`）は既にこの2値を受け付けており、この PR で
+ * 変えたのは出す側だけである。**
  */
 export type ReclaimMode = 'observe' | 'reclaim';
 
@@ -183,16 +197,30 @@ export interface ReclaimObservation {
    */
   ageBuckets?: Array<{ upToSec?: number; count: number }>;
   /**
-   * SIGTERM を送った本数。**段0 では常に 0 である**（送出の経路が1つも無い。
-   * `apps/runner/src/tasks.test.ts` の「段0 は撃たない」がそれを振る舞いで固定する）。
+   * この回（1回の `scanTasks` 呼び出し）で SIGTERM を送った本数。
+   *
+   * **`reclaim.reap`（{@link ReclaimScanOptions.reap}）を渡していなければ常に 0**
+   * である（送出の経路が無い。`apps/runner/src/tasks.test.ts` の「段0 は撃たない」
+   * がそれを振る舞いで固定する）。**累積ではなく、この回だけの本数**——`candidates`
+   * など他の欄と同じく、毎回その場で数え直す値である。
    *
    * **0でも欄を省かないのは、段1 で欄が生えたように見せないためである。**
    * 「前は無かった欄が増えた」と読まれると、段0 の観測と段1 の観測が別物に見える。
    */
   signalled: number;
-  /** SIGKILL を送った本数。**段0 では常に 0**（{@link ReclaimObservation.signalled} と同じ理由で欄は置く）。 */
+  /**
+   * この回で SIGKILL を送った本数（{@link ReclaimObservation.signalled} と同じ
+   * 「累積ではなくこの回だけ」）。**猶予（`ReclaimReapOptions.graceMs}）を過ぎても
+   * まだ居る候補にだけ送る**——新規に撃った回はまだ 0 のことが多い。
+   */
   killed: number;
-  /** 回収で返ったスレッド数。**段0 では常に 0**（{@link ReclaimObservation.signalled} と同じ理由で欄は置く）。 */
+  /**
+   * この回で「もう居なくなった」と確認できた、以前 SIGTERM/SIGKILL を送った
+   * プロセスの num_threads の合計（{@link ReclaimObservation.signalled} と同じ
+   * 「累積ではなくこの回だけ」）。**自然死（相手が自分で畳んだ）と、撃って
+   * 消えたものを区別していない**——次の走査で `/proc/<pid>` が消えていれば
+   * 「返った」と数える。
+   */
   freedThreads: number;
   /** この観測を取った時刻（epoch ms）。**TTL のメモを返したときは、メモを取った時刻である。** */
   lastRunAt: number;
@@ -224,6 +252,63 @@ export interface ReclaimScanOptions {
    * のプロセス全部」になってしまう。取れない軸に数を作らない（AGENTS.md）。
    */
   childUid: number;
+  /**
+   * 段1（実際に撃つ。#1334）を有効にする設定。**省略すれば段0（観測のみ）のまま**
+   * ——`mode` は `'observe'` を名乗り続け、`process.kill` は一度も呼ばれない
+   * （既存の「段0 は撃たない」歯がそのまま固定する）。
+   */
+  reap?: ReclaimReapOptions;
+}
+
+/**
+ * 段1（実際に撃つ）を有効にする設定（#1334）。
+ *
+ * **撃ってよいかどうかは、候補プロセスの「セッション ID」（`/proc/<pid>/stat`
+ * 6列目 `session`）と、ここで渡す2つの集合との照合だけで決める。** セッション ID
+ * そのものは、runner が委譲の Claude Code プロセスを起こすとき（`@alteroid/core`
+ * の `RunnerSession`）にそのプロセスを新しいセッションの長にしておく
+ * （`setsid` 相当）ことで、**そのプロセス自身の pid と一致する**ようにしてある
+ * ——子孫が `setsid` で自分から抜けない限り、`ppid` が `1` へ付け替わっても
+ * セッション ID は起源の委譲プロセスの pid のまま残る。
+ *
+ * **判定は4分岐（保守的な側へ倒す。全部 {@link reapDecisionFor} が持つ）:**
+ *
+ * 1. 生きている委譲が runner 上に1本も無い ⟹ セッション ID を問わず撃ってよい
+ *    （属す先が無いのだから、どのセッション ID であっても孤児で確定している）
+ * 2. セッション ID が読めない ⟹ 撃たない（観測だけ続ける）
+ * 3. セッション ID が「いま生きている委譲」のものと一致する ⟹ 撃たない
+ *    （`setsid` で自分から抜けて生きている委譲の下で働いている孫を、誤って
+ *    孤児として撃たないため）
+ * 4. セッション ID が「このrunnerが起こしたが、既に終端したと分かっている委譲」の
+ *    ものと一致する ⟹ 撃ってよい（終端した委譲の残骸そのもの）
+ * 5. 上のどれでもない（`setsid` で抜けた・このrunnerの記憶に無い等）⟹ 撃たない
+ *
+ * **この5分岐のうち「撃つ」のは1と4だけである。** 迷う形（2・3・5のどれでもない
+ * 未知の形）は全部「撃たない」側へ倒してある。
+ */
+export interface ReclaimReapOptions {
+  /**
+   * いま生きている（まだ終端していない）委譲のセッション pid。呼ぶたびに
+   * **現在値**を返す関数で受ける——`TaskBreakdownReader` は1度だけ構築されて
+   * 走り続けるので、値ではなく関数でなければ起動時点の空集合に固定されてしまう。
+   */
+  liveSessionPidsOf: () => ReadonlySet<number>;
+  /**
+   * このrunnerが過去に起こしたが、既に終端したと分かっている委譲のセッション pid
+   * （有界。無限には覚えない——`@alteroid/core` の `Host` 側で上限を持つ）。
+   * 呼ぶたびに現在値を返す（{@link ReclaimReapOptions.liveSessionPidsOf} と同じ理由）。
+   *
+   * **runner プロセスを跨いで持ち越さない。** runner 自身が作り直された直後は
+   * この集合が空で始まる——その窓に居る古い孤児は、セッション ID が「このrunnerの
+   * 記憶に無い」側に落ちるので段1でも撃たれない（分岐5）。撃たれるとしたら、
+   * その時点で生きている委譲が0本のとき（分岐1）だけである。
+   */
+  knownTerminatedSessionPidsOf: () => ReadonlySet<number>;
+  /**
+   * SIGTERM を送ってから SIGKILL へ昇格するまでの猶予（ms）。省略時は
+   * {@link DEFAULT_REAP_GRACE_MS}。**主にテスト用**（既定は本番向けの値）。
+   */
+  graceMs?: number;
 }
 
 export interface TaskBreakdownOptions {
@@ -270,6 +355,15 @@ export interface TaskBreakdownOptions {
    * 固定するには、ここを差し替えるしかない。**
    */
   ownerUidOf?: (procRoot: string, pid: string) => Promise<number | undefined>;
+  /**
+   * SIGTERM / SIGKILL の送り方。既定は `process.kill(pid, signal)`。
+   *
+   * **主にテスト用**（`ownerUidOf` と同じ理由——本物の `process.kill` を実際の
+   * pid へ打つ歯は、候補を実プロセスで作らないと固定できず、しかもこの器の
+   * ユーザで撃ってよいプロセスを都合よく用意できない）。差し替えれば、
+   * 「どの pid へ・どの signal を・何回」を実プロセス無しで固定できる。
+   */
+  killFn?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 const DEFAULT_CLOCK_TICKS_PER_SECOND = 100;
@@ -281,11 +375,15 @@ const ZOMBIE_COMMAND_LIMIT = 8;
 const ZOMBIE_COMMAND_OTHER_LABEL = 'その他';
 
 /**
- * この版が名乗る段階。**段0 は観測しかしないので `'observe'` に固定である。**
- * 定数にしてあるのは1箇所で済ませるためではなく、**段0 のうちはここが動かないことを
- * テストで固定するため**である。
+ * SIGTERM → SIGKILL の既定の猶予（ms）。**10秒。**
+ *
+ * 相手（委譲の残骸）が自分で畳んでいる最中（fs のフラッシュ・git の後始末等）を
+ * 巻き込まないだけの長さを見込みつつ、pids が枯れかけた器で悠長に待ちすぎない
+ * 長さに寄せた——**厳密な実測に基づく値ではない**。`ReclaimReapOptions.graceMs`
+ * で上書きできる（north_star 禁止2「方針は設定で開けられなければならない」の
+ * 精神——固定値にすると人間が調整できなくなる）。
  */
-const RECLAIM_MODE: ReclaimMode = 'observe';
+const DEFAULT_REAP_GRACE_MS = 10_000;
 
 /** 里子の引き取り手（init）の pid。`ppid` がこれなら、元の親はもう居ない。 */
 const INIT_PID = 1;
@@ -320,7 +418,15 @@ export class TaskBreakdownReader {
   readonly #cgroupRoot: string;
   readonly #procCgroupPath: string;
   readonly #ownerUidOf: (procRoot: string, pid: string) => Promise<number | undefined>;
+  readonly #killFn: (pid: number, signal: NodeJS.Signals) => void;
   #cache: { at: number; value: TaskBreakdown | undefined } | undefined;
+  /**
+   * 段1（実際に撃つ）の状態帳。**このインスタンスの寿命ぶんだけ持つ**
+   * （`TaskBreakdownReader` 自体が `apps/runner/src/app.ts` で1個だけ作られ、
+   * 走り続けるオブジェクトなので、runner プロセスが生きているあいだは残る）。
+   * `reclaim.reap` を渡していなければ一度も書き込まれない。
+   */
+  readonly #reaper = new Map<number, ReaperEntry>();
 
   constructor(options: TaskBreakdownOptions = {}) {
     this.#root = options.procRoot ?? '/proc';
@@ -331,6 +437,7 @@ export class TaskBreakdownReader {
     this.#cgroupRoot = options.cgroupRoot ?? CGROUP_ROOT;
     this.#procCgroupPath = options.procCgroupPath ?? DEFAULT_PROC_CGROUP_PATH;
     this.#ownerUidOf = options.ownerUidOf ?? readOwnerUid;
+    this.#killFn = options.killFn ?? ((pid, signal) => process.kill(pid, signal));
   }
 
   /**
@@ -362,6 +469,8 @@ export class TaskBreakdownReader {
       cgroupRoot: this.#cgroupRoot,
       procCgroupPath: this.#procCgroupPath,
       ownerUidOf: this.#ownerUidOf,
+      killFn: this.#killFn,
+      reaper: this.#reaper,
     });
     this.#cache = { at: now, value };
     return value;
@@ -375,6 +484,13 @@ interface ScannedProcess {
   state: string;
   numThreads: number;
   starttime: number;
+  /**
+   * セッション ID（`/proc/<pid>/stat` 6列目 `session`。#1334）。**素性ではない**
+   * ——読んでいるのは同じ `stat` の中の1つの数値で、新しいファイルは開いていない。
+   * パースできなければ `undefined`（そのときは撃つ側で「不明」として保守的に扱う。
+   * {@link ReclaimReapOptions} の doc）。
+   */
+  sid: number | undefined;
   /** `/proc/<pid>` ディレクトリの所有 UID。回収の観測が切ってあるときは読まない（`undefined`）。 */
   ownerUid: number | undefined;
 }
@@ -406,10 +522,13 @@ async function scanTasks(
   clockTicksPerSecond: number,
   nowMs: number,
   reclaim: ReclaimScanOptions | undefined,
-  cgroup: {
+  deps: {
     cgroupRoot: string;
     procCgroupPath: string;
     ownerUidOf: (procRoot: string, pid: string) => Promise<number | undefined>;
+    killFn: (pid: number, signal: NodeJS.Signals) => void;
+    /** 段1の状態帳。`TaskBreakdownReader` の寿命ぶんだけ持ち回す（{@link ReaperEntry}）。 */
+    reaper: Map<number, ReaperEntry>;
   },
 ): Promise<TaskBreakdown | undefined> {
   let entries: string[];
@@ -454,7 +573,8 @@ async function scanTasks(
         state: parsed.state,
         numThreads: parsed.numThreads,
         starttime: parsed.starttime,
-        ownerUid: await ownerUidOrDegraded(cgroup.ownerUidOf, root, entry, health),
+        sid: parsed.sid,
+        ownerUid: await ownerUidOrDegraded(deps.ownerUidOf, root, entry, health),
       });
     }
   }
@@ -481,7 +601,7 @@ async function scanTasks(
       clockTicksPerSecond,
       uptimeSeconds,
       nowMs,
-      cgroup,
+      deps,
     );
   }
 
@@ -508,11 +628,14 @@ async function ownerUidOrDegraded(
 }
 
 /**
- * 孤児プロセス木を数える（#315 段0）。**シグナルは1本も送らない。**
+ * 孤児プロセス木を数え、`reclaim.reap` が渡っていれば撃つ（#315 段0 / #1334 段1）。
  *
- * この関数は `process.kill` を参照しない。**それを `grep` ではなく振る舞いで
- * 固定してある** —— `tasks.test.ts` の「段0 は撃たない」が、候補が実在する器を
- * 走査させたうえで `process.kill` が1度も呼ばれないことを見る。
+ * **`reclaim.reap` が無ければ、この呼び出しは `process.kill` を1度も呼ばない。**
+ * それを `grep` ではなく振る舞いで固定してある —— `tasks.test.ts` の「段0 は
+ * 撃たない」が、候補が実在する器を走査させたうえで `process.kill` が1度も
+ * 呼ばれないことを見る。**撃つ判断そのもの（どの候補が対象か）は
+ * {@link reapDecisionFor}、実際に送る／昇格させる手順は {@link reconcileReaper}
+ * が持つ**——ここは木を辿って候補と発砲対象を集めるだけである。
  */
 async function observeReclaim(
   scanned: readonly ScannedProcess[],
@@ -520,7 +643,12 @@ async function observeReclaim(
   clockTicksPerSecond: number,
   uptimeSeconds: number | undefined,
   nowMs: number,
-  cgroup: { cgroupRoot: string; procCgroupPath: string },
+  deps: {
+    cgroupRoot: string;
+    procCgroupPath: string;
+    killFn: (pid: number, signal: NodeJS.Signals) => void;
+    reaper: Map<number, ReaperEntry>;
+  },
 ): Promise<ReclaimObservation> {
   const children = new Map<number, ScannedProcess[]>();
   for (const entry of scanned) {
@@ -537,6 +665,12 @@ async function observeReclaim(
       entry.ppid === INIT_PID && entry.ownerUid === reclaim.childUid && entry.pid !== INIT_PID,
   );
 
+  // **撃ってよいかの判定材料は、reap が渡っているときだけ1回ずつ取る。**
+  // 呼ぶたびに現在値を返す関数なので、同じ回のあいだは1つの値で揃える
+  // （BFS の途中で値が動くと、同じ回の中で判定がぶれる）。
+  const liveSessionPids = reclaim.reap?.liveSessionPidsOf() ?? new Set<number>();
+  const knownTerminatedSessionPids = reclaim.reap?.knownTerminatedSessionPidsOf() ?? new Set<number>();
+
   let candidates = 0;
   let candidateThreads = 0;
   let oldestStarttime: number | undefined;
@@ -546,6 +680,9 @@ async function observeReclaim(
   // ——ここに積むのは `starttime`（数値）だけで、`comm` はどのエントリにも持たせて
   // いない（{@link ScannedProcess} 自体が `comm` を持たない）。
   const candidateStarttimes: number[] = [];
+  // **撃ってよいと判定した候補だけを積む**（{@link reapDecisionFor}）。
+  // `reclaim.reap` が無ければ、この判定自体を呼ばないので常に空のまま。
+  const fireCandidates: Array<{ pid: number; numThreads: number }> = [];
 
   // **木ごとに辿る。** `visited` は全体で共有し、二重計上だけを防ぐ
   // （通常の `/proc` ツリーではルートをまたいだ重複は起きないが、壊れた `/proc`
@@ -567,6 +704,17 @@ async function observeReclaim(
         if (oldestStarttime === undefined || entry.starttime < oldestStarttime) {
           oldestStarttime = entry.starttime;
         }
+
+        // **撃ってよいかは候補ごとに独立して決める（親の判定を継承しない）。**
+        // `setsid` で自分から抜けた子孫は、親（孤児ルート）とは別のセッション ID を
+        // 持ちうる——親が「終端した委譲の残骸」でも、その子孫だけが生きた委譲の
+        // セッションへ属していれば、その子孫は撃たない。
+        if (
+          reclaim.reap !== undefined &&
+          reapDecisionFor(entry.sid, liveSessionPids, knownTerminatedSessionPids) === 'fire'
+        ) {
+          fireCandidates.push({ pid: entry.pid, numThreads: entry.numThreads });
+        }
       }
 
       for (const child of children.get(entry.pid) ?? []) {
@@ -578,19 +726,35 @@ async function observeReclaim(
     if (treeCandidates === 1) singletonTrees += 1;
   }
 
+  // **発砲（SIGTERM → 猶予 → SIGKILL）は reap が渡っているときだけ行う。**
+  // 渡っていなければ `fireCandidates` は常に空なので、`reconcileReaper` を
+  // 呼んでも signalled/killed/freedThreads は 0 のままである——それでも
+  // 「reap が無ければ呼ばない」ほうを選んでいるのは、`process.kill` へ触れる
+  // 経路そのものを reap 無効時には存在させないため（「段0 は撃たない」歯が
+  // 見ているのはまさにこの経路の有無である）。
+  const stillPresentPids = new Set(scanned.map((entry) => entry.pid));
+  const fired =
+    reclaim.reap === undefined
+      ? { signalled: 0, killed: 0, freedThreads: 0 }
+      : reconcileReaper(
+          deps.reaper,
+          fireCandidates,
+          stillPresentPids,
+          nowMs,
+          reclaim.reap.graceMs ?? DEFAULT_REAP_GRACE_MS,
+          deps.killFn,
+        );
+
   const observation: ReclaimObservation = {
-    mode: RECLAIM_MODE,
+    mode: reclaim.reap === undefined ? 'observe' : 'reclaim',
     candidates,
     candidateThreads,
     roots: roots.length,
     largestTreeCandidates,
     singletonTrees,
-    // 段0 には撃つ経路が無い。**0 を書くのは「取れない軸に0を作る」ではない** ——
-    // 「撃てる段に居て、0本撃った」ではなく「この段は撃たないと名乗っている」ことを、
-    // `mode` と組で読む欄である。
-    signalled: 0,
-    killed: 0,
-    freedThreads: 0,
+    signalled: fired.signalled,
+    killed: fired.killed,
+    freedThreads: fired.freedThreads,
     lastRunAt: nowMs,
   };
 
@@ -607,10 +771,114 @@ async function observeReclaim(
     observation.ageBuckets = bucketAges(ages);
   }
 
-  const pids = await readPidsAtScan(cgroup.cgroupRoot, cgroup.procCgroupPath);
+  const pids = await readPidsAtScan(deps.cgroupRoot, deps.procCgroupPath);
   if (pids !== undefined) observation.pidsAtScan = pids;
 
   return observation;
+}
+
+/**
+ * ある候補（孤児候補として既に選ばれたプロセス）を撃ってよいか（#1334）。
+ *
+ * **5分岐（詳しい理由は {@link ReclaimReapOptions} の doc）:**
+ *
+ * 1. 生きている委譲が0本 ⟹ `'fire'`（属す先が無いので、sid を問わず孤児で確定）
+ * 2. `sid` が読めない ⟹ `'hold'`
+ * 3. `sid` が生きている委譲のものと一致 ⟹ `'hold'`
+ * 4. `sid` が終端済みと分かっている委譲のものと一致 ⟹ `'fire'`
+ * 5. どれでもない（`setsid` で抜けた等） ⟹ `'hold'`
+ *
+ * **迷う形（2・3・5）は全部 `'hold'` に倒してある。** 撃つのは 1 と 4 だけ。
+ */
+function reapDecisionFor(
+  sid: number | undefined,
+  liveSessionPids: ReadonlySet<number>,
+  knownTerminatedSessionPids: ReadonlySet<number>,
+): 'fire' | 'hold' {
+  if (liveSessionPids.size === 0) return 'fire';
+  if (sid === undefined) return 'hold';
+  if (liveSessionPids.has(sid)) return 'hold';
+  if (knownTerminatedSessionPids.has(sid)) return 'fire';
+  return 'hold';
+}
+
+/**
+ * 段1の状態帳の1エントリ。SIGTERM を送ってから、猶予を過ぎたら SIGKILL へ
+ * 昇格させるまでを覚える。
+ */
+interface ReaperEntry {
+  /** SIGTERM を送った時刻（ms）。 */
+  sigtermAt: number;
+  /** SIGKILL を送った時刻（ms）。まだなら `undefined`。 */
+  sigkillAt: number | undefined;
+  /** 送った時点の num_threads。消えたと確認できた回に {@link freedThreads} へ足す。 */
+  numThreads: number;
+}
+
+/**
+ * 発砲を進める（#1334）。**この回の `signalled` / `killed` / `freedThreads` だけを
+ * 返す**（累積は状態帳＝ `reaper` 引数の側が持ち、呼び出しごとに直接書き換える）。
+ *
+ * 手順は3段（この順でなければならない——1)を先に済ませないと、同じ回に
+ * 「消えた」と「まだ発砲していない」が両方成り立つ pid が生まれうる）:
+ *
+ * 1. **もう居ない**（`stillPresentPids` に無い）状態帳のエントリを片付け、
+ *    その `numThreads` を `freedThreads` へ足す。自然死か、撃って消えたかは
+ *    区別しない——どちらでも「返った」という事実は同じである。
+ * 2. **まだ状態帳に居ない発砲対象**へ SIGTERM を送り、状態帳へ登録する。
+ * 3. **猶予（`graceMs`）を過ぎてもまだ発砲対象である**エントリへ SIGKILL を送る。
+ *    「まだ発砲対象である」を毎回この回の `fireCandidates`（＝いま読み直した
+ *    /proc の情報から再判定した結果）で確かめ直す——pid が再利用されて
+ *    無関係な別プロセスに化けていても、その新しい占有者が独立に発砲対象の
+ *    条件を満たさない限り撃たない（古い記録の starttime を信用しない）。
+ */
+function reconcileReaper(
+  reaper: Map<number, ReaperEntry>,
+  fireCandidates: readonly { pid: number; numThreads: number }[],
+  stillPresentPids: ReadonlySet<number>,
+  nowMs: number,
+  graceMs: number,
+  killFn: (pid: number, signal: NodeJS.Signals) => void,
+): { signalled: number; killed: number; freedThreads: number } {
+  let freedThreads = 0;
+  for (const [pid, entry] of [...reaper.entries()]) {
+    if (stillPresentPids.has(pid)) continue;
+    freedThreads += entry.numThreads;
+    reaper.delete(pid);
+  }
+
+  let signalled = 0;
+  for (const candidate of fireCandidates) {
+    if (reaper.has(candidate.pid)) continue;
+    try {
+      killFn(candidate.pid, 'SIGTERM');
+    } catch {
+      continue; // 送る前に消えていた等。次回の 1) がまだ残っていれば片付ける。
+    }
+    reaper.set(candidate.pid, {
+      sigtermAt: nowMs,
+      sigkillAt: undefined,
+      numThreads: candidate.numThreads,
+    });
+    signalled += 1;
+  }
+
+  let killed = 0;
+  const fireByPid = new Map(fireCandidates.map((candidate) => [candidate.pid, candidate]));
+  for (const [pid, entry] of reaper) {
+    if (entry.sigkillAt !== undefined) continue;
+    if (nowMs - entry.sigtermAt < graceMs) continue;
+    if (!fireByPid.has(pid)) continue; // 今回は発砲対象でない。撃たずに保留を続ける。
+    try {
+      killFn(pid, 'SIGKILL');
+    } catch {
+      continue;
+    }
+    entry.sigkillAt = nowMs;
+    killed += 1;
+  }
+
+  return { signalled, killed, freedThreads };
 }
 
 /**
@@ -730,7 +998,15 @@ async function readStat(
   pid: string,
   health: ScanHealth,
 ): Promise<
-  { comm: string; state: string; ppid: number; numThreads: number; starttime: number } | undefined
+  | {
+      comm: string;
+      state: string;
+      ppid: number;
+      numThreads: number;
+      starttime: number;
+      sid: number | undefined;
+    }
+  | undefined
 > {
   let raw: string;
   try {
@@ -748,17 +1024,23 @@ async function readStat(
     .slice(closeIdx + 2)
     .trimEnd()
     .split(/\s+/);
-  // 切った後の配列: [0]=state(3列目) [1]=ppid(4列目) … [17]=num_threads(20列目)
-  // … [19]=starttime(22列目)。
+  // 切った後の配列: [0]=state(3列目) [1]=ppid(4列目) [2]=pgrp(5列目)
+  // [3]=session(6列目) … [17]=num_threads(20列目) … [19]=starttime(22列目)。
   const state = rest[0];
   const ppid = Number(rest[1]);
+  const sidRaw = Number(rest[3]);
   const numThreads = Number(rest[17]);
   const starttime = Number(rest[19]);
   if (state === undefined || state.length === 0) return undefined;
   if (!Number.isFinite(ppid) || ppid < 0) return undefined;
   if (!Number.isFinite(numThreads) || numThreads <= 0) return undefined;
   if (!Number.isFinite(starttime) || starttime < 0) return undefined;
-  return { comm, state, ppid, numThreads, starttime };
+  // **sid が壊れていても、レコード全体は捨てない。** 数え上げ（threads/processes/
+  // 候補数）は sid に依存しないので、既存の挙動を保つ。sid が要るのは撃つ判定
+  // （{@link reapDecisionFor}）だけで、そちらは `undefined` を「不明」として
+  // 保守的に扱う。
+  const sid = Number.isFinite(sidRaw) && sidRaw >= 0 ? sidRaw : undefined;
+  return { comm, state, ppid, numThreads, starttime, sid };
 }
 
 /** 多い順。上限を超えた分は {@link ZOMBIE_COMMAND_OTHER_LABEL} へまとめる（黙って切り捨てない）。 */

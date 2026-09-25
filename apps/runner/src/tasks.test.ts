@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { stat } from 'node:fs/promises';
@@ -50,12 +50,13 @@ function statLine(
   numThreads: number,
   starttime: number,
   ppid = 1,
+  sid = 1,
 ): string {
   const fields: Array<string | number> = [
     state, // [0] state (3列目)
     ppid, // [1] ppid (4列目)
     1, // [2] pgrp
-    1, // [3] session
+    sid, // [3] session（#1334。既定は1——sid を気にしない既存のテストはこのまま）
     0, // [4] tty_nr
     -1, // [5] tpgid
     0, // [6] flags
@@ -84,10 +85,11 @@ function placeProcess(
   numThreads: number,
   starttime: number,
   ppid = 1,
+  sid = 1,
 ): void {
   const dir = join(procRoot, String(pid));
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'stat'), statLine(pid, comm, state, numThreads, starttime, ppid));
+  writeFileSync(join(dir, 'stat'), statLine(pid, comm, state, numThreads, starttime, ppid, sid));
 }
 
 function placeUptime(procRoot: string, uptimeSeconds: number): void {
@@ -791,5 +793,302 @@ describe('孤児プロセス木の観測（#315 段0。数えるだけで撃た�
     now = 2_500; // TTL を超えた → 走査し直す
     const third = await reader.read();
     expect(third?.reclaim?.lastRunAt).toBe(2_500);
+  });
+});
+
+/**
+ * 段1（実際に撃つ。#1334）。
+ *
+ * **`reclaim.reap` を渡したときだけ発砲する。** 判定（{@link reapDecisionFor}
+ * 相当。関数自体は非公開なので、ここでは `TaskBreakdownReader` 越しに振る舞いで
+ * 固定する）は sid（セッション ID）と、生きている／終端済みの委譲 pid の集合との
+ * 突き合わせだけで決まる——名前やパスは一切見ない。
+ */
+describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡したときだけ撃つ）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+
+  /** `killFn` を差し替えて呼び出しを記録する。実プロセスへは触れない。 */
+  function fakeKillFn(): {
+    fn: (pid: number, signal: NodeJS.Signals) => void;
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+  } {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
+  }
+
+  it('生きている委譲が0本なら、sid が不明でも撃ってよい（属す先が無いので確定で孤児）', async () => {
+    placeProcess(root, 200, 'pnpm', 'S', 3, 0, 1, 999); // sid=999 はどこにも属さない
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.mode).toBe('reclaim');
+    expect(result?.reclaim?.signalled).toBe(1);
+    expect(calls).toEqual([{ pid: 200, signal: 'SIGTERM' }]);
+  });
+
+  it('sid が生きている委譲のものと一致するなら撃たない（setsid で抜けた孫が生きた委譲の下に居る形）', async () => {
+    placeProcess(root, 210, 'pnpm', 'S', 3, 0, 1, 555); // sid=555 = 生きている委譲の pid
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set([555]),
+          knownTerminatedSessionPidsOf: () => new Set(),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.candidates).toBe(1); // 候補としては数える
+    expect(result?.reclaim?.signalled).toBe(0); // が、撃たない
+    expect(calls).toEqual([]);
+  });
+
+  it('sid が終端済みと分かっている委譲のものと一致するなら撃つ', async () => {
+    placeProcess(root, 220, 'pnpm', 'S', 3, 0, 1, 777); // sid=777 = 終端済みの委譲の pid
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        // 別の委譲(999)がまだ生きている ⟹ 「生きている委譲が0本」の近道には乗らない。
+        reap: {
+          liveSessionPidsOf: () => new Set([999]),
+          knownTerminatedSessionPidsOf: () => new Set([777]),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.signalled).toBe(1);
+    expect(calls).toEqual([{ pid: 220, signal: 'SIGTERM' }]);
+  });
+
+  it('sid がどの委譲のものでもない（setsid で抜けた等）なら撃たない（保守的に hold）', async () => {
+    placeProcess(root, 230, 'pnpm', 'S', 3, 0, 1, 4242); // 4242 はどちらの集合にも無い
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        // 生きている委譲が居るので「0本」の近道には乗らない。
+        reap: {
+          liveSessionPidsOf: () => new Set([999]),
+          knownTerminatedSessionPidsOf: () => new Set([777]),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.candidates).toBe(1);
+    expect(result?.reclaim?.signalled).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('撃ってよいかは候補ごとに独立して決める（親と子でsidが違えば判定も違う）', async () => {
+    // 親（240）は終端済み委譲の残骸 ⟹ 撃ってよい。
+    // 子（241）は setsid で自分から抜けて、生きている委譲(555)のセッションに
+    // 属している ⟹ 親が死んでいても子は撃たない。
+    placeProcess(root, 240, 'pnpm', 'S', 1, 0, 1, 777);
+    placeProcess(root, 241, 'node', 'S', 1, 0, 240, 555);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set([555]),
+          knownTerminatedSessionPidsOf: () => new Set([777]),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.candidates).toBe(2);
+    expect(result?.reclaim?.signalled).toBe(1);
+    expect(calls).toEqual([{ pid: 240, signal: 'SIGTERM' }]);
+  });
+
+  it('猶予を過ぎてもまだ発砲対象のままなら SIGKILL へ昇格する。過ぎる前は昇格しない', async () => {
+    placeProcess(root, 250, 'pnpm', 'S', 2, 0, 1, 999);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    let now = 0;
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      ttlMs: 0,
+      now: () => now,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+          graceMs: 10_000,
+        },
+      },
+    });
+
+    const first = await reader.read();
+    expect(first?.reclaim?.signalled).toBe(1);
+    expect(first?.reclaim?.killed).toBe(0);
+
+    now = 5_000; // 猶予の内側
+    const second = await reader.read();
+    expect(second?.reclaim?.signalled).toBe(0); // 撃ち直さない
+    expect(second?.reclaim?.killed).toBe(0);
+
+    now = 10_500; // 猶予を過ぎた
+    const third = await reader.read();
+    expect(third?.reclaim?.signalled).toBe(0);
+    expect(third?.reclaim?.killed).toBe(1);
+
+    expect(calls).toEqual([
+      { pid: 250, signal: 'SIGTERM' },
+      { pid: 250, signal: 'SIGKILL' },
+    ]);
+  });
+
+  it('消えたプロセスの num_threads を freedThreads へ足す（自然死・撃って消えたを区別しない）', async () => {
+    placeProcess(root, 260, 'pnpm', 'S', 6, 0, 1, 999);
+    placeUptime(root, 1000);
+    const { fn: killFn } = fakeKillFn();
+    let now = 0;
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      ttlMs: 0,
+      now: () => now,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+        },
+      },
+    });
+
+    const first = await reader.read();
+    expect(first?.reclaim?.signalled).toBe(1);
+    expect(first?.reclaim?.freedThreads).toBe(0);
+
+    // 相手が実際に消えた（自分で畳んだ、または SIGTERM が効いた）。
+    rmSync(join(root, '260'), { recursive: true, force: true });
+    now = 1_000;
+    const second = await reader.read();
+    expect(second?.reclaim?.freedThreads).toBe(6);
+    expect(second?.reclaim?.candidates).toBe(0);
+
+    // 一度返した分は、その後の回では二度と足さない（この回だけの値である）。
+    now = 2_000;
+    const third = await reader.read();
+    expect(third?.reclaim?.freedThreads).toBe(0);
+  });
+
+  it('猶予を過ぎても、その回にもう発砲対象でなければ SIGKILL へ昇格しない（pid 再利用等の保険）', async () => {
+    placeProcess(root, 270, 'pnpm', 'S', 2, 0, 1, 999);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    let now = 0;
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      ttlMs: 0,
+      now: () => now,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+          graceMs: 10_000,
+        },
+      },
+    });
+
+    const first = await reader.read();
+    expect(first?.reclaim?.signalled).toBe(1);
+
+    // 猶予の途中で state が Z（ゾンビ）へ変わった——もう「候補」ではないので、
+    // 発砲対象からも外れる。
+    placeProcess(root, 270, 'pnpm', 'Z', 1, 0, 1, 999);
+    now = 10_500;
+    const second = await reader.read();
+
+    expect(second?.reclaim?.killed).toBe(0);
+    expect(calls).toEqual([{ pid: 270, signal: 'SIGTERM' }]); // SIGKILL は送られていない
+  });
+
+  it('reap を渡していなければ mode は observe のまま、reap があれば候補0本でも reclaim を名乗る', async () => {
+    placeProcess(root, 280, 'node', 'S', 1, 0, 999); // 孤児ではない＝候補0本
+    placeUptime(root, 1000);
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.candidates).toBe(0);
+    expect(result?.reclaim?.mode).toBe('reclaim'); // 候補0本でも「撃てる構え」は名乗る
+  });
+
+  it('🔴 発砲対象になった孤児候補の comm も、reap 有効時に出力へ一切含まれない', async () => {
+    placeProcess(root, 800, 'zombie-visible-cmd', 'Z', 1, 0, 1); // ゾンビ: comm が出て良い
+    placeProcess(root, 801, 'orphan-secret-cmd', 'S', 3, 0, 1, 999); // 発砲対象
+    placeUptime(root, 1000);
+
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn: () => undefined,
+      reclaim: {
+        childUid: OWN_UID,
+        reap: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set(),
+        },
+      },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.signalled).toBe(1);
+    const serialized = JSON.stringify(result);
+    expect(serialized).toContain('zombie-visible-cmd');
+    expect(serialized).not.toContain('orphan-secret-cmd');
   });
 });

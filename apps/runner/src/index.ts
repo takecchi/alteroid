@@ -20,7 +20,7 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
-import { TaskBreakdownReader, type ReclaimScanOptions } from './tasks.js';
+import { TaskBreakdownReader, type ReclaimReapOptions, type ReclaimScanOptions } from './tasks.js';
 
 export {
   createRunnerApp,
@@ -197,41 +197,48 @@ export function childUserOf(env: NodeJS.ProcessEnv = process.env): RunnerChildUs
   };
 }
 
-/** 孤児の回収（#315）を切る口。**この版が受け付けるのは段0の2値だけである。** */
+/** 孤児の回収（#315 / #1334）を切る口。**この版が受け付けるのは3値である。** */
 export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
 
 /**
- * 孤児プロセス木の観測（#315 段0）をどう構えるか。**`undefined` なら欄ごと出さない。**
+ * 孤児プロセス木の観測・回収（#315 段0 / #1334 段1）をどう構えるか。**`undefined`
+ * なら欄ごと出さない。**
  *
  * **切れる口を持たせてある。** 回収は「人間が PC でできること（長時間の
  * バックグラウンドジョブ）」を器が奪いうる形なので、開けられない実装にすると
  * north_star 禁止2（追加制限禁止。「制限が必要なら方針で表す。方針は設定で
- * 開けられなければならない」）に当たる。**いまの段は数えるだけで撃たないが、
- * 口はここで先に開けておく。**
+ * 開けられなければならない」）に当たる。
  *
  * **⚠️ 知らない値は落とす。黙って既定へ倒れない。** 人間が `off` のつもりで
  * `Off` と書いたときに観測が動き続けると、「置いた」と「効いている」が食い違ったまま
- * 誰も気づけない（`tokenSha256Of` が食い違いで落とすのと同じ形）。**段1 を載せる
- * ときは、ここへ `reclaim` を足すのが有効化の手順である** —— 型（`ReclaimMode`）は
- * 先に `'reclaim'` を知っているが、この器はまだ受け付けない。
+ * 誰も気づけない（`tokenSha256Of` が食い違いで落とすのと同じ形）。
+ *
+ * **`reclaim`（段1。実際に撃つ）は `reap` を渡したときだけ、その中身を実際に
+ * 有効化する。** `reap` は `main()` が `host.delegationSessionPids()` から組み立てて
+ * 渡す——**この関数を単体で（`reap` 無しで）`'reclaim'` を指定して呼んでも、
+ * 「知らない値」としては落ちないが、`reap` の無い `ReclaimScanOptions` が返る**
+ * （＝ `apps/runner/src/tasks.ts` 側では段0と同じ扱いになる）。本番の唯一の
+ * 呼び出し元（`main()`）は必ず `reap` を渡すので、この分岐は実質テスト用の
+ * 観測点である。
  *
  * **降ろす UID が分からない器では観測しない**（`ReclaimScanOptions.childUid` の doc）。
  */
 export function reclaimScanOf(
   env: NodeJS.ProcessEnv = process.env,
   childUser: RunnerChildUser | undefined = childUserOf(env),
+  reap?: ReclaimReapOptions,
 ): ReclaimScanOptions | undefined {
   const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'observe';
   if (raw === 'off') return undefined;
-  if (raw !== 'observe') {
+  if (raw !== 'observe' && raw !== 'reclaim') {
     throw new Error(
       `${RECLAIM_ENV_KEY} に知らない値が置かれている: ${JSON.stringify(raw)}` +
-        '（この版が受け付けるのは observe と off だけである。' +
+        '（この版が受け付けるのは observe と reclaim と off だけである。' +
         '黙って既定へ倒れると「置いた」と「効いている」が食い違ったまま残る）',
     );
   }
   if (childUser === undefined) return undefined;
-  return { childUid: childUser.uid };
+  return { childUid: childUser.uid, ...(raw === 'reclaim' && reap !== undefined ? { reap } : {}) };
 }
 
 export async function main(): Promise<void> {
@@ -257,10 +264,6 @@ export async function main(): Promise<void> {
         '同じ UID で走らせると子プロセスが制御面に手を届かせるので起動しない。',
     );
   }
-
-  // **知らない値なら、ここで落とす**（`reclaimScanOf` の doc）。起動してから
-  // 黙って既定で走るより、起きないほうが人間には見える。
-  const reclaimScan = reclaimScanOf(process.env, childUser);
 
   /**
    * マネージャーの道具の鍵は、env のスナップショットではなく器から配る。
@@ -352,8 +355,23 @@ export async function main(): Promise<void> {
   });
 
   /**
-   * タスクの内訳を測るリーダー（#315）。**孤児の観測を構えるためだけに、ここで
-   * 明示的に作っている** —— 既定（`app.ts` 側の `new TaskBreakdownReader()`）では
+   * 段1（実際に撃つ。#1334）の判定材料。**`host` が持つ委譲の pid 帳をそのまま
+   * 関数越しに渡す**——値ではなく関数で渡すのは、`reclaimScanOf` の doc・
+   * `apps/runner/src/tasks.ts` の `ReclaimReapOptions` の doc と同じ理由
+   * （呼ぶたびに現在値を返す必要がある）。
+   */
+  const reap: ReclaimReapOptions = {
+    liveSessionPidsOf: () => host.delegationSessionPids().live,
+    knownTerminatedSessionPidsOf: () => host.delegationSessionPids().knownTerminated,
+  };
+
+  // **知らない値なら、ここで落とす**（`reclaimScanOf` の doc）。起動してから
+  // 黙って既定で走るより、起きないほうが人間には見える。
+  const reclaimScan = reclaimScanOf(process.env, childUser, reap);
+
+  /**
+   * タスクの内訳を測るリーダー（#315 / #1334）。**孤児の観測・回収を構えるためだけに、
+   * ここで明示的に作っている** —— 既定（`app.ts` 側の `new TaskBreakdownReader()`）では
    * 降ろす UID を知らないので、観測が動かない。
    */
   const taskBreakdownReader = new TaskBreakdownReader({
@@ -441,8 +459,10 @@ export async function main(): Promise<void> {
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
       `${childUser === undefined ? '' : ` / 子プロセス: uid ${childUser.uid}`}` +
       // **切ってあることを起動時に名乗る。** 切った本人が「切れているか」を
-      // `/health` を叩かずに確かめられる唯一の場所である（#315 段0）。
-      ` / 孤児の観測: ${reclaimScan === undefined ? '切' : '観測のみ（撃たない）'}` +
+      // `/health` を叩かずに確かめられる唯一の場所である（#315 段0 / #1334 段1）。
+      ` / 孤児の観測: ${
+        reclaimScan === undefined ? '切' : reclaimScan.reap === undefined ? '観測のみ（撃たない）' : '回収（撃つ）'
+      }` +
       ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
   );
 }

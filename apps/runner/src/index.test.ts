@@ -155,11 +155,11 @@ describe('器の起動スクリプト', () => {
 });
 
 /**
- * 孤児の観測を切る口（#315 段0）。
+ * 孤児の観測・回収を切る口（#315 段0 / #1334 段1）。
  *
  * **切れる口が要るのは north_star 禁止2 のためである** —— 回収は「人間が PC で
  * できること（長時間のバックグラウンドジョブ）」を器が奪いうる形なので、
- * 開けられない実装にすると追加制限になる。**この段はまだ撃たないが、口は先に開けておく。**
+ * 開けられない実装にすると追加制限になる。
  */
 describe('reclaimScanOf（孤児の観測を切る口）', () => {
   const CHILD = { uid: 1001, gid: 1001 };
@@ -186,11 +186,36 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
   });
 
   /**
-   * **段1 の値は、この版ではまだ受け付けない。** 型（`ReclaimMode`）は先に
-   * `'reclaim'` を知っているが、撃つ経路がこの版に無い以上、受け取ったら落とす。
+   * **段1（#1334）を足したので `reclaim` はもう「知らない値」ではない。**
+   * ただし `reap`（判定材料）を渡さなければ、`ReclaimScanOptions.reap` の
+   * 無い形になる——`main()` は必ず `reap` を渡すので、これは実質テスト用の
+   * 観測点である（`reclaimScanOf` の doc）。
    */
-  it('reclaim は、この版ではまだ受け付けない（撃つ経路が無いので）', () => {
-    expect(() => reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD)).toThrow(/知らない値/);
+  it('reclaim は受け付けるが、reap を渡さなければ reap の無い形が返る', () => {
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD)).toEqual({ childUid: 1001 });
+  });
+
+  /** `reap` を渡せば、返った `ReclaimScanOptions.reap` にそのまま乗る。 */
+  it('reclaim に reap を渡すと、そのまま ReclaimScanOptions.reap に乗る', () => {
+    const reap = {
+      liveSessionPidsOf: () => new Set<number>(),
+      knownTerminatedSessionPidsOf: () => new Set<number>(),
+    };
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, reap)).toEqual({
+      childUid: 1001,
+      reap,
+    });
+  });
+
+  /** `reap` を渡していても、`observe` のままなら乗らない（明示した段だけが有効）。 */
+  it('observe のときは reap を渡していても乗らない', () => {
+    const reap = {
+      liveSessionPidsOf: () => new Set<number>(),
+      knownTerminatedSessionPidsOf: () => new Set<number>(),
+    };
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, reap)).toEqual({
+      childUid: 1001,
+    });
   });
 
   /** 降ろす UID が分からない器では、器の常設物と区別できないので観測しない。 */
