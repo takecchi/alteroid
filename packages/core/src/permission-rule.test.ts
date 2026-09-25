@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   containsShellMetacharacters,
+  describePermissionRuleBreadth,
   matchPermissionRule,
   parsePermissionRule,
   validatePermissionRequest,
@@ -127,5 +128,62 @@ describe('validatePermissionRequest', () => {
   it('規則そのものが不正なら拒否', () => {
     const result = validatePermissionRequest({ ...BASE, rule: 'gh release edit' });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('describePermissionRuleBreadth', () => {
+  it('完全一致は常に exact（先頭語数を持たない）', () => {
+    expect(describePermissionRuleBreadth('Bash(gh pr view)')).toEqual({ level: 'exact' });
+  });
+
+  it('前方一致は、固定された先頭の語数が多いほど狭い（Issue #863 の例: gh pr merge / gh / *）', () => {
+    // `Bash(gh pr merge:*)` 相当（3語）——issue が「狭い」側の例として挙げた形。
+    expect(describePermissionRuleBreadth('Bash(gh pr merge:*)')).toEqual({
+      level: 'narrow',
+      prefixWordCount: 3,
+    });
+    // `Bash(gh *)` 相当（このリポジトリの書式では `Bash(gh:*)`。1語）——
+    // issue が「広い」側の例として挙げた形。
+    expect(describePermissionRuleBreadth('Bash(gh:*)')).toEqual({
+      level: 'broad',
+      prefixWordCount: 1,
+    });
+  });
+
+  it('2語の前方一致は medium', () => {
+    expect(describePermissionRuleBreadth('Bash(gh release:*)')).toEqual({
+      level: 'medium',
+      prefixWordCount: 2,
+    });
+  });
+
+  it('境界値: 3語で narrow、2語で medium、1語で broad', () => {
+    expect(describePermissionRuleBreadth('Bash(a b c:*)').level).toBe('narrow');
+    expect(describePermissionRuleBreadth('Bash(a b:*)').level).toBe('medium');
+    expect(describePermissionRuleBreadth('Bash(a:*)').level).toBe('broad');
+  });
+
+  it('語数の多い前方一致（4語以上）も narrow のまま（narrow は下限であって上限ではない）', () => {
+    expect(describePermissionRuleBreadth('Bash(gh release edit --draft:*)')).toEqual({
+      level: 'narrow',
+      prefixWordCount: 4,
+    });
+  });
+
+  it('不正な規則は invalid（黙って broad 等に倒さない）', () => {
+    expect(describePermissionRuleBreadth('gh pr view')).toEqual({ level: 'invalid' });
+    expect(describePermissionRuleBreadth('Bash()')).toEqual({ level: 'invalid' });
+    expect(describePermissionRuleBreadth('Bash(gh pr view; rm -rf /)')).toEqual({
+      level: 'invalid',
+    });
+  });
+
+  it('matchPermissionRule と同じ語境界の意味論を使う——連続する空白も1つの区切りとして数える', () => {
+    // parsePermissionRule はここで空白を畳まないが、split(/\s+/) 側で畳んで
+    // 数えるので、見た目上の語数と一致する。
+    expect(describePermissionRuleBreadth('Bash(gh  release:*)')).toEqual({
+      level: 'medium',
+      prefixWordCount: 2,
+    });
   });
 });

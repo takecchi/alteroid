@@ -49,6 +49,7 @@ import {
   mcpShowCommand,
 } from './mcp.js';
 import { alteroidRoot } from './paths.js';
+import { permissionListCommand, permissionRevokeCommand } from './permission.js';
 import { resetCommand } from './reset.js';
 import { interruptCommand } from './interrupt.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
@@ -406,6 +407,35 @@ accessCommand
   .option('--revoke', '宣言を取り消す')
   .action(async (accountId: string, options: { revoke?: boolean }) => {
     await accessOwnerCommand(accountId, options);
+  });
+
+/**
+ * 許可の棚卸し（Issue #863「許可をコードではなくデータにする」）。
+ *
+ * `request_permission` でクローンが要求し、人間が「許可します」と定型文で答えた
+ * Bash 許可（`packages/core/src/permission-rule.ts`）を一覧・取り消しする——
+ * 記録そのもの（`request_permission` / `answerApproval`）はここには無い。
+ * #863 が #193 から引き継いだ残項目「CLI / Web UI（入口の等価性）」を埋める側。
+ */
+const permissionCommand = program
+  .command('permission')
+  .description(
+    '人間が承認した Bash 許可（Issue #863）を棚卸しする（一覧・取り消し。記録そのものはクローンの request_permission が行う）',
+  );
+
+permissionCommand
+  .command('list')
+  .description('承認済みの許可を一覧する（既定は有効なものだけ）')
+  .option('--all', '取り消し済みも含めて全部見る')
+  .action(async (options: { all?: boolean }) => {
+    await permissionListCommand(options);
+  });
+
+permissionCommand
+  .command('revoke <id>')
+  .description('許可を取り消す（次の Bash 呼び出しから効く）')
+  .action(async (id: string) => {
+    await permissionRevokeCommand(id);
   });
 
 /**

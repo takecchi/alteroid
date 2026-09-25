@@ -115,6 +115,60 @@ export function matchPermissionRule(rule: string, command: string): boolean {
   return command === parsed.command || command.startsWith(`${parsed.command} `);
 }
 
+/**
+ * 規則の広さの段階（#193 から #863 へ畳んだ残項目「規則の広さの段階表示」——
+ * `Bash(gh pr merge:*)` と `Bash(gh:*)` と `Bash(*)` のような、書き方1つで通る
+ * 範囲が大きく変わる規則を、棚卸しの一覧で見分けられるようにする）。
+ *
+ * - `'exact'` —— 完全一致。常に最も狭い（このコマンド文字列にしか一致しない）。
+ * - `'narrow'` / `'medium'` / `'broad'` —— 前方一致。**固定された先頭の語数**が
+ *   少ないほど広い。`Bash(gh release edit:*)`（3語）は `gh release edit` で
+ *   始まるものにしか一致しないが、`Bash(gh:*)`（1語）は `gh` で始まる**あらゆる**
+ *   サブコマンドに一致する——同じ「前方一致」という書式でも、実際に通す範囲は
+ *   桁違いに違う。
+ * - `'invalid'` —— {@link parsePermissionRule} が解けない規則。`PermissionGrant`
+ *   は生成時に {@link validatePermissionRequest} を通っているはずなので通常は
+ *   起きないが、棚卸しの一覧はストアの中身をそのまま描くので、念のため区別する
+ *   （黙って `'broad'` 等へ倒すと、壊れた規則が「広いだけの規則」に見えてしまう）。
+ */
+export type PermissionRuleBreadthLevel = 'exact' | 'narrow' | 'medium' | 'broad' | 'invalid';
+
+export interface PermissionRuleBreadth {
+  level: PermissionRuleBreadthLevel;
+  /**
+   * 前方一致の、固定された先頭の語数。`level` が `'exact'` / `'invalid'` の
+   * ときは無い——完全一致には「先頭何語」という概念が無く、不正な規則は
+   * 語数を数えるところまで到達していない。
+   */
+  prefixWordCount?: number;
+}
+
+/** `'narrow'` と `'medium'` を分ける境界（この語数以上なら `'narrow'`）。 */
+const NARROW_PREFIX_WORD_COUNT = 3;
+
+/**
+ * 規則の広さを段階へ変換する（棚卸しの一覧の表示専用。**判定は
+ * {@link matchPermissionRule} と同じ意味論に寄せてある**——独自にパースし直すと
+ * `parsePermissionRule` の書式が増えたときに2か所を揃え忘れ、一覧の表示と実際の
+ * 挙動がずれる）。
+ *
+ * 語数は空白区切り（`command.split(/\s+/)`）で数える——`matchPermissionRule` の
+ * 語境界一致（末尾に空白が続くかちょうど一致するか）と同じ区切り方である。
+ */
+export function describePermissionRuleBreadth(rule: string): PermissionRuleBreadth {
+  const parsed = parsePermissionRule(rule);
+  if (!parsed.ok) return { level: 'invalid' };
+  if (parsed.kind === 'exact') return { level: 'exact' };
+  const prefixWordCount = parsed.command.split(/\s+/).filter((word) => word.length > 0).length;
+  const level: PermissionRuleBreadthLevel =
+    prefixWordCount >= NARROW_PREFIX_WORD_COUNT
+      ? 'narrow'
+      : prefixWordCount === 2
+        ? 'medium'
+        : 'broad';
+  return { level, prefixWordCount };
+}
+
 export interface PermissionRequestCandidate {
   rule: string;
   allows: readonly string[];

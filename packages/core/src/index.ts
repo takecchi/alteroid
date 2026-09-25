@@ -965,12 +965,15 @@ export {
  */
 export {
   containsShellMetacharacters,
+  describePermissionRuleBreadth,
   matchPermissionRule,
   parsePermissionRule,
   validatePermissionRequest,
   type ParsedPermissionRule,
   type PermissionRequestCandidate,
   type PermissionRequestValidation,
+  type PermissionRuleBreadth,
+  type PermissionRuleBreadthLevel,
   type PermissionRuleKind,
   type PermissionRuleParseResult,
 } from './permission-rule.js';
