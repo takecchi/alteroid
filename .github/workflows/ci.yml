@@ -699,6 +699,22 @@ jobs:
             fi
           '
 
+      # **本物の Claude Code CLI（SDK 同梱の実行体）が、中継越しのクローンの道具に
+      # 繋がるか（#486 48(a)）。** vitest の統合試験は MCP SDK の Client で繋いでおり、
+      # CLI が `type: 'stdio'` の設定から子を起こす経路（command / args / env の渡り方、
+      # 手続きの握手）は通っていない。ここでは焼いたイメージの中で、デーモンが降りた先の
+      # 主体（node）が中継を開き、CLI 自身に `claude mcp list` で health check させる。
+      # **モデルは呼ばない**（鍵は要らない）。⚠️ 見ているのは「CLI が繋がる」までで、
+      # 本物のクローンのセッションが道具を呼べるか（モデルあり）は、ここでは見ない。
+      - name: 本物の CLI が中継越しのクローンの道具に繋がるか
+        run: |
+          docker run --rm -u 0 -v "$PWD/scripts/clone-tool-relay-probe.mjs:/tmp/clone-tool-relay-probe.mjs:ro" \
+            alteroid:ci sh -eu -c '
+            bin=$(ls -d /app/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-x64@*/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude | head -n 1)
+            test -x "$bin" || { echo "SDK 同梱の CLI が見つからない" >&2; exit 1; }
+            su -s /bin/sh node -c "node /tmp/clone-tool-relay-probe.mjs /app/packages/core/dist/index.js $bin /run/alteroid/clone-tool-relay"
+          '
+
       # **別 UID の子プロセスは runner の制御面ソケットへ繋げないことを実物で見る。**
       # `apps/runner/src/boundary.test.ts`（vitest）はこれを in-process では確かめ
       # られない — vitest プロセスは非 root で `CAP_SETUID` を持たず、`pnpm test` が

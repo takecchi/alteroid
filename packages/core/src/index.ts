@@ -1043,6 +1043,22 @@ export {
   type MemoryGuardValue,
   type ToolContext,
 } from './tools.js';
+// クローンの道具の中継（#486 48(a)）。デーモンは `clone.ts` の中から使うだけだが、
+// image の検査（ci.yml）が焼いたイメージの中で本物の CLI と繋ぐために外へ出す。
+export {
+  createCloneToolRelayHost,
+  DEFAULT_REGISTRATION_TIMEOUT_MS,
+  type CloneToolRelayHost,
+} from './clone-tool-relay-host.js';
+export {
+  CLONE_TOOL_RELAY_SOCKET_ENV,
+  CLONE_TOOL_RELAY_TOKEN_ENV,
+} from './clone-tool-relay-protocol.js';
+export {
+  CLONE_TOOLS_TRANSPORT_ENV_KEY,
+  DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR,
+  resolveCloneToolRelayChildEntry,
+} from './clone-tools-transport.js';
 export {
   ALWAYS_REDELIVER,
   CLONE_MODEL,
