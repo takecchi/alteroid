@@ -50,9 +50,7 @@ afterEach(async () => {
 });
 
 /** 呼ぶたびに配列の次の値を返す偽の `readCgroupEventCountersFn`。 */
-function sequencedCounters(
-  ...values: CgroupEventCounters[]
-): () => Promise<CgroupEventCounters> {
+function sequencedCounters(...values: CgroupEventCounters[]): () => Promise<CgroupEventCounters> {
   let i = 0;
   return async () => {
     const value = values[Math.min(i, values.length - 1)] ?? {};

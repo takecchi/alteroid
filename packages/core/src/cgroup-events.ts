@@ -73,7 +73,10 @@ export function cgroupEventsDeltaOf(
   };
 }
 
-function nonNegativeDeltaOf(before: number | undefined, after: number | undefined): number | undefined {
+function nonNegativeDeltaOf(
+  before: number | undefined,
+  after: number | undefined,
+): number | undefined {
   if (before === undefined || after === undefined) return undefined;
   if (after < before) return undefined;
   return after - before;
