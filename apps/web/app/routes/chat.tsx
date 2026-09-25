@@ -511,15 +511,47 @@ export function ChatPane({
    * と同じ理由・同じ形で会話 id を持つ（#1570）。
    *
    * **画面全体で共有している `failure`（上）へは合流させない。** `failure` は
-   * 送信経路（`send`/`followUp`、ストリームの `error` イベント）など会話に
-   * 依らない複数の発生源を1つの表示枠へ集約したもので、`failure` 自体は
+   * 会話に依らない複数の発生源を1つの表示枠へ集約したもので、`failure` 自体は
    * どの会話由来かを持たない。そこへ会話スコープを混ぜると他の発生源まで
    * 巻き込むことになるので、interrupt 由来の失敗だけをここで別に持ち、
    * 描画する場所（下の `ErrorNote`）で `interruptNotice` と同じ形の突き合わせを
    * してから合流させる。
+   *
+   * （2026-09-26 追記: かつてはここで「送信経路（`send`/`followUp`、ストリームの
+   * `error` イベント）など」を会話に依らない発生源の例として挙げていたが、
+   * それ自体が #1576 の実害だった——切り替えた後に届いた送信の失敗が別の
+   * 会話の画面に出ていた。下の `sendFailure` で同じ形に直したので、いま
+   * `failure` に残っているのは本当に会話に依らない発生源だけである。）
    */
   const [interruptFailure, setInterruptFailure] = useState<
     { conversationId: string; error: unknown } | undefined
+  >(undefined);
+  /**
+   * 送信経路の会話を特定できる失敗（#1576）。2つの発生源をまとめて持つ——
+   * どちらも「発言を送る」という同じ行為の失敗であり、直す前はどちらも
+   * 会話を見ずに `failure` へ直接積んでいた点も共通していたため、
+   * `interruptFailure` と同じ理由・同じ形（会話 id を持ち、描画の時点の
+   * `shownId` と突き合わせてから出す）で1つにまとめている。
+   *
+   * 1. **新規ストリームの `error` イベント**（下の `send` の event loop）。
+   *    `append`/`setTransient` は `writable()`（`owns() && !stopped()`）で
+   *    締めているが、`owns()` が読む `shownIdRef.current` は受動効果の中
+   *    でしか進まないため、#1570 と同じ窓（会話を切り替えた render から
+   *    効果が走るまでの間）で `error` が届くと、`writable()` に頼っても
+   *    同じ理由で漏れる。ここでは `owns()`/`writable()` を使わず、
+   *    `interruptFailure` と同じ「会話 id を積んで、描画側で突き合わせる」
+   *    形にして、ref の更新タイミングから独立させる。
+   * 2. **追送（`followUp`）の catch**。投函先を見ずに `failure` へ積んで
+   *    いたため、A で追送を打って B へ切り替えた後に投函が失敗すると、
+   *    B の画面に出ていた。
+   *
+   * **`send` の `catch` の `if (!controller.signal.aborted) setFailure(caught)`
+   * はここでは触らない。** あちらは「人間が受信をやめた（`stopped()`）」を
+   * 見て抑える、上記2つとは別の意味の防御であり、#1576 が指しているのは
+   * この2つの発生源だけである。
+   */
+  const [sendFailure, setSendFailure] = useState<
+    { conversationId: string | undefined; error: unknown } | undefined
   >(undefined);
   /**
    * いま編集中の行の `key`（チャットのメッセージ編集、#1010）。無ければ
@@ -699,6 +731,10 @@ export function ChatPane({
       // 場合は、会話 id の突き合わせ（`visibleInterruptNotice`）が別の会話へ出すのを防ぐ（#1570）。
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
+      // 送信経路の失敗も同じ理由で持ち越さない（#1576）。会話 id の突き合わせ
+      // （`visibleSendFailure`）が別の会話へ出すのを防ぐので必須ではないが、
+      // `interruptNotice`/`interruptFailure` と同じ扱いに揃える。
+      setSendFailure(undefined);
       // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
       // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
       setEditingKey(undefined);
@@ -1081,12 +1117,24 @@ export function ChatPane({
    */
   const followUp = useCallback(
     /**
+     * `pressedConversationId` — 呼び出し元（下の `send`）が**その render で
+     * 決まっている `shownId`** を直接渡す（#1576）。追送は `running`（既に
+     * 走っているストリーム）へ投函するだけで自分では会話を判定しないが、
+     * 失敗したときに「どの画面の追送だったか」を `sendFailure` へ積むために
+     * 要る——`handleInterrupt(shownId)`（#1570 / PR #1572）と同じ形。
+     *
      * `supersedes` — この追送が送信済みの人間の発言を編集したものなら、
      * 置き換える対象の日誌エントリ id（チャットのメッセージ編集、#1010）。
      * 通常の追送では渡らない。
      */
-    async (text: string, running: Stream, supersedes?: string) => {
+    async (
+      text: string,
+      running: Stream,
+      pressedConversationId: string | undefined,
+      supersedes?: string,
+    ) => {
       setFailure(undefined);
+      setSendFailure(undefined);
       setDraft('');
       showOwnLine(text);
 
@@ -1111,7 +1159,10 @@ export function ChatPane({
         }
         recordOwnMessage(conversationId, text);
       } catch (caught) {
-        setFailure(caught);
+        // 投函先ではなく、**押した時点で見ていた会話**を積む（#1576）。
+        // `pressedConversationId` は毎 render 同期的に決まる `shownId` から
+        // 渡されているので、ref の更新タイミングに依らない。
+        setSendFailure({ conversationId: pressedConversationId, error: caught });
       }
     },
     [api, recordOwnMessage, showOwnLine],
@@ -1135,7 +1186,9 @@ export function ChatPane({
        */
       const running = streamRef.current;
       if (running !== undefined) {
-        await followUp(text, running, supersedes);
+        // `shownId` はこの render で決まっている値——追送が失敗したときに
+        // `sendFailure` へ積む「押した時点で見ていた会話」になる（#1576）。
+        await followUp(text, running, shownId, supersedes);
         return;
       }
 
@@ -1144,6 +1197,7 @@ export function ChatPane({
       streamRef.current = stream;
       setSending(true);
       setFailure(undefined);
+      setSendFailure(undefined);
       setDraft('');
       showOwnLine(text);
 
@@ -1393,7 +1447,13 @@ export function ChatPane({
               ]);
               break;
             case 'error':
-              setFailure(new Error(event.message));
+              // `writable()`（`owns() && !stopped()`）は使わない——`owns()` が
+              // 読む `shownIdRef.current` は受動効果の中でしか進まないため、
+              // #1570 と同じ窓で `writable()` に頼っても同じ理由で漏れる
+              // （`sendFailure` の doc）。`stream.id` は `open` で同期的に
+              // 確定する、ref の更新タイミングに依らない値なので、これを
+              // 会話 id として積む（#1576）。
+              setSendFailure({ conversationId: stream.id, error: new Error(event.message) });
               break;
             case 'done':
               setLines((previous) => previous.filter((line) => line.transient !== true));
@@ -1547,6 +1607,15 @@ export function ChatPane({
   const visibleInterruptFailure =
     interruptFailure !== undefined && interruptFailure.conversationId === shownId
       ? interruptFailure.error
+      : undefined;
+  /**
+   * `sendFailure` を**いま出してよいか**の判断（#1576）。`visibleInterruptFailure`
+   * と同じ形——ここだけが判断する場所で、発生源（`send` の `error` イベント／
+   * `followUp` の catch）側はもう判断しない。
+   */
+  const visibleSendFailure =
+    sendFailure !== undefined && sendFailure.conversationId === shownId
+      ? sendFailure.error
       : undefined;
 
   return (
@@ -1895,13 +1964,17 @@ export function ChatPane({
 
       <div className="shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         {/*
-          `failure`（送信経路など会話に依らない発生源）と
-          `visibleInterruptFailure`（interrupt 由来、会話が一致するときだけ）を
-          同じ枠へ合流させる。両方立つことは無い想定だが、立っても `failure` を
-          優先する——どちらが先でも「何かの失敗が出ている」という事実自体は
-          変わらないので、優先順位そのものに強い意味は無い。
+          `failure`（会話に依らない発生源）・`visibleInterruptFailure`（interrupt
+          由来）・`visibleSendFailure`（送信経路由来。#1576）のどれも会話が
+          一致するときだけ出るよう既に絞ってあるものを、同じ枠へ合流させる。
+          複数が同時に立つことは無い想定だが、立っても `failure` を優先する
+          ——どれが先でも「何かの失敗が出ている」という事実自体は変わらない
+          ので、優先順位そのものに強い意味は無い。
         */}
-        <ErrorNote error={failure ?? visibleInterruptFailure} className="mb-2" />
+        <ErrorNote
+          error={failure ?? visibleInterruptFailure ?? visibleSendFailure}
+          className="mb-2"
+        />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
             {/*
