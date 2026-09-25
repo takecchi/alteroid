@@ -1449,16 +1449,38 @@ export function ChatPane({
    * はどれも「呼べた」ので `interruptMessage` へ、ネットワーク断・403 等の
    * 呼べなかった失敗は既存の `failure`（`ErrorNote`）へ——このパターンは
    * `settings.tsx` の `ResetWorkspace`（`failure` と結果表示を分ける）と同じ。
+   *
+   * **押したときの会話と、応答が返ったときの会話が同じかを確かめる（#1548）。**
+   * `ChatPane` は会話を切り替えても作り直されない（doc 冒頭）ので、`await
+   * interruptClone()` の間に別の会話へ `navigate` されうる。ここは受信中の
+   * ストリームとは違って `AbortController` を持たない——止めたいのはサーバ側の
+   * ターンそのものであって、切り替えたからといって「止めた」という事実が
+   * 消えるわけではないので、リクエスト自体は最後まで送る。**変えるのは
+   * 表示だけ。** 送った時点の `shownIdRef.current` を `pressedConversationId`
+   * として閉じ込め、応答が返った時点の `shownIdRef.current` と比べる——
+   * `owns()`（上の送信経路）が `stream.id === shownIdRef.current` で持ち主を
+   * 見るのと同じ形。**一致しなければ何も出さない**（成功メッセージも
+   * `failure` も）。「切り替えたら前の会話の表示を持ち越さない」という画面の
+   * 約束（直上の `setInterruptMessage(undefined)`）を、応答が遅れて届いた
+   * この経路にも揃えるとそうなる。**止めたこと自体は B の画面には無関係な
+   * 事実なので、B へ何かを新しく出す理由も無い**——何も出さないことが、
+   * 何も起きていないと見せることにはならない（クローンのターンは会話ごとの
+   * ものではなく、いま見ている会話に何が起きたかを主張していないだけ）。
+   * `failure` 側も同じ理由で揃える——上の送信経路も `stopped()`（＝別の会話へ
+   * 移った）を見て `catch` の `setFailure` を抑えており、ここだけ例外にする
+   * 理由は無い。
    */
   const handleInterrupt = useCallback(async () => {
+    const pressedConversationId = shownIdRef.current;
+    const stillShown = () => shownIdRef.current === pressedConversationId;
     setInterrupting(true);
     setFailure(undefined);
     setInterruptMessage(undefined);
     try {
       const outcome = await interruptClone();
-      setInterruptMessage(describeCloneInterruptOutcome(outcome));
+      if (stillShown()) setInterruptMessage(describeCloneInterruptOutcome(outcome));
     } catch (caught) {
-      setFailure(caught);
+      if (stillShown()) setFailure(caught);
     } finally {
       setInterrupting(false);
     }
