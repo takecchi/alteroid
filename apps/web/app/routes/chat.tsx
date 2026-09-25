@@ -492,10 +492,18 @@ export function ChatPane({
    * キーは失敗を積む時点の `stream.id`/`running.id`。**新しい会話でまだ id が
    * 確定していない失敗は、キー `undefined` に積む**——その時点の `shownId` も
    * 同じく `undefined` なので、いま見えている「新しい会話」の画面にはそのまま出る。
-   * その後ストリームが `open` を見て `stream.id` が確定したら、キー `undefined` の
-   * 失敗をその確定した id へ移す（下の `if (message.event === 'open')` の分岐参照）——移さないと、
-   * 「まだ id が無かった頃に投函が失敗した、同じ新規会話」の画面から id が
-   * 確定した瞬間に失敗が消える。
+   *
+   * **キー `undefined` の失敗を、後から確定した id へ移すことはしない。** そうなる
+   * 前提（キー `undefined` に失敗が積まれた後で、同じ会話の `open` が届く）が
+   * 作れないからである——
+   * - `followUp` は `await running.opened` の後にしか投函しない ⟹ 追送の失敗は
+   *   常に id が確定した後に起き、キー `undefined` には入らない
+   * - キー `undefined` に入るのは、ストリームが `open` を1度も見ないまま終わった回
+   *   （`send` の `finally` の `failOpen`）だけで、そのストリームに後から `open` は届かない
+   *
+   * #1585 の直しは `open` の分岐でキー `undefined` を確定した id へ移す処理を持って
+   * いたが、到達しないので消した（消しても Web の全スイートが緑のままだったことが
+   * 横断レビューで分かった。PR 本文に再現を書いてある）。
    *
    * **消えるときは「その会話で次の送信・追送を始めたとき」だけ。** 会話の
    * 切り替えでは消さない——切り替えても Map から他の会話のエントリを触らない
@@ -1383,25 +1391,6 @@ export function ChatPane({
                     )
                   : previous,
               );
-              /*
-               * **キー `undefined`（id 未確定だった頃）に積まれた失敗を、確定した
-               * id へ移す（#1585）。** この会話でまだ id が無かった間に投函
-               * （`followUp`）やこのストリーム自身が失敗していれば、`failures`
-               * には `undefined` キーで積まれている。ここで移さないと、この
-               * `open` で `shownId` が `undefined` から `settled` へ進んだ瞬間、
-               * 同じ会話の画面のままなのに `visibleFailure` の突き合わせ
-               * （`failures.get(shownId)`）が外れて失敗が消える——見えている
-               * 画面自体は変わっていないのに、id が後から決まっただけで
-               * 表示が落ちるのはおかしい。
-               */
-              setFailures((prev) => {
-                if (!prev.has(undefined)) return prev;
-                const next = new Map(prev);
-                const pending = next.get(undefined);
-                next.delete(undefined);
-                next.set(settled, pending);
-                return next;
-              });
               setShownId(stream.id);
               // URL は後から追いつかせるだけ。作り直しは起きない（key を付けていない）。
               void navigate(`/chat/${stream.id}`, { replace: true });
