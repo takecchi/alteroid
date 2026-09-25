@@ -1,4 +1,5 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
+import { describeTraceAction } from '@alteroid/core/trace-action';
 import { useMemo, useState } from 'react';
 
 import { Markdown } from '~/components/markdown';
@@ -301,9 +302,9 @@ function ApprovalCard({
             `@alteroid/core/answered-via`（ブラウザが読む軽い口。
             `packages/core/tsup.config.ts` の doc）から import する——
             `@alteroid/core` バレルからの値 import はサーバ専用のドメイン層を
-            引き込むので禁じている（`describeAction` と同じ理由・同じ
-            パターンだが、こちらは正本を1つに揃えられた——理由の違いは
-            `describeAction` の doc を見よ）。
+            引き込むので禁じている（行動一覧の `describeTraceAction`
+            ——`@alteroid/core/trace-action`——と同じ理由・同じパターン。
+            issue #1528 でこちらも正本を1つに揃えた）。
           */}
           {approval.answeredVia && (
             <p className="mt-1 text-[11px] text-muted">
@@ -427,7 +428,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
             <span className="mr-1 text-[10px] text-muted">
               {formatDateTime(entry.at)} {entry.type}
             </span>
-            {describeAction(entry)}
+            {describeTraceAction(entry)}
           </li>
         ))}
       </ul>
@@ -460,42 +461,6 @@ const TRACE_MISSING: Record<string, string> = {
   unstamped_actions: '⚠️ 答えのターンに印を持たない行動が在る。記録が動いていない疑いがある',
   no_actions: '答えの後にこの承認に紐づいた行動は記録されていない',
 };
-
-/**
- * 行動1件の要旨（core の `describeTraceAction`——`packages/core/src/approval-trace.ts`
- * ——と同じ欄を読む）。
- *
- * **`describeAnsweredVia` と違い、これは軽い口へ移していない。** 検討した
- * うえで見送った——理由は3つ。(1) `describeTraceAction` の引数は
- * `JournalEntry`（`schema.ts` の12種の判別可能ユニオン。`answeredViaSchema`
- * の2種・数欄とは桁が違う）で、`AnsweredViaLike` と同じ手法（構造的に
- * 一致する型をここへ手で書き写す）を採ると、その12種を丸ごと複製する
- * ことになり「複製をやめる」という目的そのものに反する。(2) `journal-search.ts`
- * の doc が既に同じ壁を指摘している——`apps/web` が持つ `JournalEntry` は
- * `@alteroid/core` のものではなく `@alteroid/api-client`（OpenAPI 生成）の
- * 別の型なので、正本の関数をそのまま受けると画面側でキャストが要る。
- * (3) **そして最も重い理由——2つの実装は既に文言が違う。** core 版は
- * `tool_use` に `outcome` を括弧で足し、`exchange` の前に
- * 「人間への返答/発言: 」を付けるが、この画面の実装はどちらも持たない
- * （このファイルの実測、2026-09-25）。揃えるなら画面の表示文言を変える
- * ことになり、それは「文言を変えない」小さな refactor の範囲を超える
- * 判断（表示を変えてよいか）を要る。**この差分は Issue #1528 に上げてある。**
- */
-function describeAction(entry: { type: string } & Record<string, unknown>): string {
-  const str = (key: string) => (typeof entry[key] === 'string' ? (entry[key] as string) : '');
-  switch (entry.type) {
-    case 'decision':
-      return `判断: ${str('decision')}（根拠: ${str('grounds')}）`;
-    case 'memory_update':
-      return `記憶の更新 ${str('action') || 'write'} ${str('slug')}: ${str('summary')}`;
-    case 'tool_use':
-      return `道具 ${str('tool')}${entry.input === undefined ? '' : `: ${JSON.stringify(entry.input)}`}`;
-    case 'exchange':
-      return str('text');
-    default:
-      return entry.type;
-  }
-}
 
 /**
  * 承認カードに、その確認が上がった会話を出す（issue #782 の3）。

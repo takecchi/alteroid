@@ -27,6 +27,10 @@
     "./answered-via": {
       "types": "./dist/answered-via.d.ts",
       "import": "./dist/answered-via.js"
+    },
+    "./trace-action": {
+      "types": "./dist/trace-action.d.ts",
+      "import": "./dist/trace-action.js"
     }
   },
   "files": [

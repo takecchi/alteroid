@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AnsweredViaLike } from './answered-via.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import { systemErrorFactsSchema } from './system-error.js';
+import type { TraceActionLike } from './trace-action.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
 // `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
@@ -2271,6 +2272,31 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
 export type JournalEntryType = JournalEntry['type'];
+
+/**
+ * `trace-action.ts` の {@link TraceActionLike}（手書き）が、この zod
+ * スキーマから推論した {@link JournalEntry}（12種の判別可能ユニオン）を
+ * 構造的に受け付けることの強制（issue #1528）。
+ *
+ * 軽い口（`trace-action.ts`）は zod を import できないので、
+ * `describeTraceAction` が実際に読む4種（`decision` / `memory_update` /
+ * `tool_use` / `exchange`）の欄だけを手で書き写し、残り8種は型の名前
+ * だけで受けている（そちらの doc）。**ここが崩れると、`describeTraceAction`
+ * へ実際の `JournalEntry` を渡す呼び出し（`approval-trace.ts` の
+ * `renderApprovalTrace`）自体が `typecheck` で落ちるはずだが、その落ち方は
+ * 「どの欄がずれたか」を言わない**——この宣言はずれを名指しで捕まえる場所
+ * として置いてある。
+ *
+ * **`_AssertAnsweredViaMatchesLikeType` と違い、双方向の完全一致ではなく
+ * 片方向**（`JournalEntry extends TraceActionLike`）。`TraceActionLike` は
+ * 意図して「`describeTraceAction` が読む欄だけの最小の型」であって
+ * `JournalEntry` の完全な写しではないので、双方向にすると
+ * `TraceActionLike` が持たない欄（`id` / `at` / `actor` など）のぶんで
+ * 必ず落ちる（`trace-action.ts` 冒頭の doc）。
+ */
+export type _AssertTraceActionMatchesLikeType = AssertTrue<
+  JournalEntry extends TraceActionLike ? true : false
+>;
 
 export type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;
 

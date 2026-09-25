@@ -424,6 +424,72 @@ describe('答えの後の行動（issue #847）', () => {
     fireEvent.click(await screen.findByText('答えの後の行動を見る'));
     expect(await screen.findByText(/行動が無いのではなく、記録していない/)).not.toBeNull();
   });
+
+  /**
+   * 行動一覧の文言が core（`describeTraceAction`。`packages/core/src/trace-action.ts`）
+   * と揃うことを固定する（issue #1528）。**この画面はかつて `describeAction` という
+   * 名前の複製を持ち、`tool_use` の `outcome` と `exchange` の「人間への返答/発言:」
+   * の接頭辞が抜けていた**——ここで固定するのはその2点そのものである。
+   */
+  it('tool_use は outcome を括弧で足す（core と同じ文言）', async () => {
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'tool_use',
+                id: 'j-2',
+                at: '2026-08-19T11:00:01.000Z',
+                actor: 'clone',
+                tool: 'Bash',
+                outcome: 'failed',
+                answeredApprovalId: 'a-1',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/道具 Bash（failed）/)).not.toBeNull();
+  });
+
+  it('exchange with=human は「人間への返答: 」を、それ以外は「発言: 」を前に置く（core と同じ文言）', async () => {
+    stubApprovals([answered], {
+      trace: () =>
+        json(
+          traceBody({
+            state: 'paired',
+            actions: [
+              {
+                type: 'exchange',
+                id: 'j-3',
+                at: '2026-08-19T11:00:01.000Z',
+                with: 'human',
+                role: 'outbound',
+                text: '進めました',
+                answeredApprovalId: 'a-1',
+              },
+              {
+                type: 'exchange',
+                id: 'j-4',
+                at: '2026-08-19T11:00:02.000Z',
+                with: 'self',
+                role: 'outbound',
+                text: '内部の発言',
+                answeredApprovalId: 'a-1',
+              },
+            ],
+          }),
+        ),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('答えの後の行動を見る'));
+    expect(await screen.findByText(/人間への返答: 進めました/)).not.toBeNull();
+    expect(await screen.findByText(/発言: 内部の発言/)).not.toBeNull();
+  });
 });
 
 /**

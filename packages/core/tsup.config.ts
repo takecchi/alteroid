@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 7つ出す。
+   * 8つ出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -47,6 +47,15 @@ export default defineConfig({
    *   import を1つも持たない——zod スキーマから推論した型と構造的に一致する
    *   ことは `schema.ts` の型レベルの検査（`_AssertAnsweredViaMatchesLikeType`）
    *   が保証する。
+   * - `trace-action.ts` — 承認の行動一覧の1件を1文にする表示
+   *   （issue #1528。`@alteroid/core/trace-action`）。**`answered-via.ts` と
+   *   同じ形**——Web UI（`apps/web/app/routes/approvals.tsx`）はこれが無かった
+   *   間、`describeTraceAction`（`approval-trace.ts`）の複製（`describeAction`）
+   *   を画面へ手で持っていたが、`tool_use` の `outcome` と `exchange` の
+   *   接頭辞が抜けて2つの実装の文言がずれていた。複製をやめてここへ寄せた。
+   *   ファイル自身は import を1つも持たない（`schema.ts` からは
+   *   `import type` だけ）——構造的に一致することは `schema.ts` の型レベルの
+   *   検査（`_AssertTraceActionMatchesLikeType`）が保証する。
    */
   entry: [
     'src/index.ts',
@@ -56,6 +65,7 @@ export default defineConfig({
     'src/clone-tool-relay-child.ts',
     'src/permission-rule.ts',
     'src/answered-via.ts',
+    'src/trace-action.ts',
   ],
   format: ['esm'],
   dts: true,
