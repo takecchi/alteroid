@@ -80,6 +80,7 @@ import {
 } from './runner-resume-recovery.js';
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
+import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
@@ -1394,44 +1395,14 @@ class RunnerSession {
   #generation = 0;
 
   /**
-   * いま開いている作業者への委譲（Task）の `task_id` 集合。
-   *
-   * `task_started` で追加、`task_notification` で削除する。**`skip_transcript:
-   * true` の `task_started`（SDK の JSDoc 曰く ambient = activity ではない task）も
-   * 間引かずに数える** — 何を除外してよいかの判断を誰も持っていないので、
-   * 数える側では絞らない。
+   * **作業者を待つ窓の状態3フィールド**（`#openTasks` / `#window` /
+   * `#windowClosing`）の器（Issue #1190 案X で `runner-worker-wait-window.ts`
+   * へ切り出した。前例は PR #1565 / #1551 / #1550 / #1523）。**`worker_wait` を
+   * 出すかどうかの判断・`#emit` するかどうかは、これまでどおりここ
+   * （`RunnerSession`）が持ち、この器は状態だけを持つ。** 何を持っているか・
+   * 切り出しの理由と限界は `RunnerWorkerWaitWindow` 自身の doc を見よ。
    */
-  #openTasks = new Set<string>();
-
-  /**
-   * いま開いている委譲区間（`worker_wait` の集計。`runner-protocol.ts` の
-   * `worker_wait` イベントと同じ形で溜める。`sources` だけ `Map` にしてあるのは
-   * 途中で加算し続けるため）。
-   *
-   * `#openTasks` が 0→1 になった瞬間に開く。**閉じるのは `#openTasks` が空に
-   * なった瞬間ではない** — 最後の完了通知そのものを契機に回ったターン（実際に
-   * 仕事をする回）を数え落とさないため、`#windowClosing` を立てて次の `result`
-   * でそのターンを数えてから閉じる（`#closeWorkerWaitWindow`）。
-   */
-  #window: {
-    openedAt: string;
-    tasks: number;
-    turns: number;
-    byCause: { input: number; notification: number; continuation: number };
-    toolless: number;
-    notifications: number;
-    submits: number;
-    sources: Map<string, number>;
-  } | null = null;
-
-  /**
-   * `#openTasks` が空になった。**その場では `#window` を閉じない。**
-   *
-   * 次の `result` でそのターンを数えてから `#closeWorkerWaitWindow` を呼ぶ。
-   * `#onTaskStarted` が閉じ待ちの間に次の委譲が始まったのを見つけたら、
-   * 閉じずに取り消す（同じ区間として続ける）。
-   */
-  #windowClosing = false;
+  readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
 
   /**
    * **起こし直しの上限で打ち切った作業者を追う2フィールドの器**（Issue #1190
@@ -1924,7 +1895,7 @@ class RunnerSession {
     // ここであって、次に来る `init`（`case 'session_started'`）ではない
     // （`init` はターンの頭ごとに来るだけで、器の (re)start を意味しない
     // ——詳しくは `#liveBackgroundTasks` の doc）。`#recoverFromFailedResume`
-    // が `#openTasks.clear()` を「前のセッションの task_id を持ち越さない」
+    // が `#workerWaitWindow.clear()` を「前のセッションの task_id を持ち越さない」
     // ために置いているのと同じ理由で、ここでも前の器の在り高を持ち越さない。
     this.#liveBackgroundTasks = [];
     const generation = this.#generation;
@@ -2450,7 +2421,9 @@ class RunnerSession {
       // **委譲の区間を持ち越さない。** 新しいセッション（か、この後の終了）は
       // 前のセッションが開いていた作業者の `task_id` を一切知らない。持ち越すと
       // 二度と来ない `task_notification` を待ち続けて区間が永久に閉じない。
-      this.#openTasks.clear();
+      // **必ず `closeWorkerWaitWindow`（直上）の後に呼ぶこと**（`close()` を
+      // 先に、`clear()` を後に——`RunnerWorkerWaitWindow` の doc「順序の約束」）。
+      this.#workerWaitWindow.clear();
       // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
       // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
       // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
@@ -2720,33 +2693,25 @@ class RunnerSession {
           failedWorkerNotificationsNamingLimitThisTurn,
         } = this.#turnTally.takeAtResult();
 
-        // **`#window` が非 null なのは、区間が開いている（`#openTasks` が非空）か
-        // 閉じ待ち（`#windowClosing`）のときだけ**である。委譲の外で起きたターン
-        // （人間・クローンと直接話しているだけの回）は数えない。
-        if (this.#window !== null) {
-          const window = this.#window;
-          window.turns += 1;
-          // **契機は排他で1件だけ数える。** 3つの合計が `turns` と必ず一致する
-          // （`runner-wakeup.test.ts` がこの不変を固定する）。
-          if (inputsThisTurn > 0) {
-            window.byCause.input += 1;
-          } else if (notificationsThisTurn > 0) {
-            window.byCause.notification += 1;
-          } else {
-            window.byCause.continuation += 1;
-          }
-          if (toolsThisTurn === 0) window.toolless += 1;
-          window.notifications += notificationsThisTurn;
-          window.submits += submitsThisTurn;
-          for (const [source, count] of sourcesThisTurn) {
-            window.sources.set(source, (window.sources.get(source) ?? 0) + count);
-          }
-          // **最後の完了通知そのものを契機に回ったこのターンを数え終えてから閉じる。**
-          // `#openTasks` が空になった瞬間に閉じないのはこのためである
-          // （`#windowClosing` の doc）。`settled` は渡さない — この時点で
-          // `#openTasks` は必ず空なので（`#windowClosing` はそのときにしか立たない）、
-          // 中で導く `settled` は自動的に `true` になる。
-          if (this.#windowClosing) this.#closeWorkerWaitWindow();
+        // **窓（作業者を待つ区間）への足し込みは `RunnerWorkerWaitWindow` へ
+        // 委譲した**（Issue #1190 案X。前例は PR #1565 / #1551 / #1550 /
+        // #1523）。窓が開いている（区間が開いているか閉じ待ちのとき）だけ
+        // 足し込む——委譲の外で起きたターン（人間・クローンと直接話している
+        // だけの回）なら {@link RunnerWorkerWaitWindow.foldTurn} は何もせず
+        // `null` を返す。**最後の完了通知そのものを契機に回ったこのターンを
+        // 数え終えてから閉じる**——閉じ待ちなら、足し込んだ直後に閉じて
+        // `worker_wait` の中身を返す（`RunnerWorkerWaitWindow` の doc
+        // 「`#windowClosing`」参照）。`#emit` するかどうかの判断はここに残す
+        // ——`foldTurn` が非 `null` を返したときだけ出す。
+        const closedWindow = this.#workerWaitWindow.foldTurn({
+          inputsThisTurn,
+          notificationsThisTurn,
+          toolsThisTurn,
+          submitsThisTurn,
+          sourcesThisTurn,
+        });
+        if (closedWindow !== null) {
+          this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
         }
 
         // **成否で絞らない。** 拒否は成功したターンにも失敗したターンにも載る（型は
@@ -2985,7 +2950,10 @@ class RunnerSession {
   // 委譲の契機を数える（`worker_wait`）
   // -------------------------------------------------------------------------
 
-  /** `task_started`。`#openTasks` が 0→1 になった瞬間に区間を開く。 */
+  /**
+   * `task_started`。`#openTasks` が 0→1 になった瞬間に区間を開く（Issue #1190
+   * 案X で `RunnerWorkerWaitWindow`（`runner-worker-wait-window.ts`）へ切り出した）。
+   */
   #onTaskStarted(event: AgentDelegationStarted): void {
     // provider が id を名乗らなければ、取りこぼすより偽の id で数える方を選ぶ
     // （他の道具の `brief`/`randomUUID` 系の判断と同じ）。**代用値をここで作るのは、
@@ -2994,25 +2962,7 @@ class RunnerSession {
     // **#1373: `#openTasks` の開閉とは無関係に、このターンで開いた作業者を
     // 別勘定で数える。** `RunnerTurnTally` の `#openedWorkersThisTurn` の doc を参照。
     this.#turnTally.addOpenedWorker(taskId);
-    if (this.#openTasks.size === 0 && this.#window !== null) {
-      // 閉じ待ちの間に次の委譲が始まった。**同じ区間として続ける** — ここで
-      // 新しい区間を開き直すと、閉じていない集計を上書きして消してしまう。
-      this.#windowClosing = false;
-    }
-    const window =
-      this.#window ??
-      (this.#window = {
-        openedAt: new Date().toISOString(),
-        tasks: 0,
-        turns: 0,
-        byCause: { input: 0, notification: 0, continuation: 0 },
-        toolless: 0,
-        notifications: 0,
-        submits: 0,
-        sources: new Map(),
-      });
-    this.#openTasks.add(taskId);
-    window.tasks += 1;
+    this.#workerWaitWindow.taskStarted(taskId);
   }
 
   /**
@@ -3051,13 +3001,13 @@ class RunnerSession {
    */
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
-    const had = taskId !== undefined && this.#openTasks.delete(taskId);
+    // **開閉（1→0 の遷移で閉じ待ちを立てる）は `RunnerWorkerWaitWindow` へ
+    // 切り出した**（Issue #1190 案X）。対応の無い通知（本来起きない想定だが
+    // 防御的に見る）で誤って閉じ待ちを立てないのは、あちら側の doc を見よ。
+    this.#workerWaitWindow.notified(taskId);
     // **`worker_wait.notifications` の材料。** 対応する `task_started` を見て
-    // いなくても（`had` が false でも）数える — 通知そのものは事実である。
+    // いなくても数える — 通知そのものは事実である。
     this.#turnTally.incrementNotificationsSinceResult();
-    // **本当に 1→0 の遷移のときだけ閉じ待ちにする。** 対応の無い通知（本来
-    // 起きない想定だが防御的に見る）で誤って閉じ待ちを立てない。
-    if (had && this.#openTasks.size === 0) this.#windowClosing = true;
 
     if (event.status === 'failed') {
       const limitNamed =
@@ -3090,46 +3040,28 @@ class RunnerSession {
   }
 
   /**
-   * 開いている委譲区間を1件の `worker_wait` として降ろし、閉じる。
+   * 開いている委譲区間を1件の `worker_wait` として降ろし、閉じる。**中身の
+   * 組み立てと `settled` の算出は `RunnerWorkerWaitWindow.close()`（Issue #1190
+   * 案X）へ切り出した——ここに残るのは「非 `null` なら emit する」という
+   * 判断だけである。**
    *
-   * **`#window` が null なら何もしない。** `#finish` / `stop` / 引き継ぎの
-   * どこから呼んでも安全に重ねられるようにするための無害化である。
+   * **窓が閉じていれば何もしない。** `#finish` / `stop` / 引き継ぎのどこから
+   * 呼んでも安全に重ねられるようにするための無害化である
+   * （`RunnerWorkerWaitWindow.close` の doc）。
    *
-   * **`settled` は引数で受け取らず、ここで `#openTasks` の状態から導く。**
-   * 呼び出し側に真偽値を持たせると、`#finish` / `stop` / 引き継ぎの3経路が
-   * 固定で `false` を渡すことになり、**「委譲した作業者全員から完了通知を
-   * 受け切った直後に、次の `result` が来ないままセッションが畳まれた」場合まで
-   * `false`（＝受け切れなかった）と偽って報告する。** これはこの PR が答えたい
-   * 問い（最後の完了通知の後、SDK はマネージャーを起こすのか）のど真ん中で
-   * 起きる — 「起こさない」という当たりの仮説が成り立つ場合に限って、**全区間
-   * に偽の印が付く**ことになる。`#openTasks.size === 0` は「呼ばれた時点で
-   * 委譲した全員から通知を受け切っているか」をそのまま表すので、これを直接
-   * 使う（呼び出し側の意図の言い換えを挟まない）。
-   *
-   * `sources` は**取れた分だけ載せる**。`RunnerTurnTally` の `#submitSources`
-   * が1件も無ければフィールドごと省く — 取れない軸に0の行を作らない
-   * （AGENTS.md 地雷）。
+   * **`settled` は引数で受け取らず、`RunnerWorkerWaitWindow` の中で `#openTasks`
+   * の状態から導く。** 呼び出し側に真偽値を持たせると、`#finish` / `stop` /
+   * 引き継ぎの3経路が固定で `false` を渡すことになり、**「委譲した作業者全員
+   * から完了通知を受け切った直後に、次の `result` が来ないままセッションが
+   * 畳まれた」場合まで `false`（＝受け切れなかった）と偽って報告する。** これは
+   * この PR が答えたい問い（最後の完了通知の後、SDK はマネージャーを起こすのか）
+   * のど真ん中で起きる — 「起こさない」という当たりの仮説が成り立つ場合に
+   * 限って、**全区間に偽の印が付く**ことになる。
    */
   #closeWorkerWaitWindow(): void {
-    const window = this.#window;
-    if (window === null) return;
-    const settled = this.#openTasks.size === 0;
-    this.#window = null;
-    this.#windowClosing = false;
-    const sources = Object.fromEntries(window.sources);
-    this.#emit({
-      type: 'worker_wait',
-      managerId: this.#id,
-      openedAt: window.openedAt,
-      tasks: window.tasks,
-      turns: window.turns,
-      byCause: window.byCause,
-      toolless: window.toolless,
-      notifications: window.notifications,
-      submits: window.submits,
-      ...(Object.keys(sources).length > 0 ? { sources } : {}),
-      settled,
-    });
+    const closedWindow = this.#workerWaitWindow.close();
+    if (closedWindow === null) return;
+    this.#emit({ type: 'worker_wait', managerId: this.#id, ...closedWindow });
   }
 
   /**
