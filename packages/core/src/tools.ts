@@ -8870,13 +8870,21 @@ export function createCloneTools(context: ToolContext) {
           'これは矛盾である）。この行に時刻の閾値は置いていない——何分経ったかは判定していないので、' +
           '行に出ている timestamp を読んで判断すること。返事待ちが在るものにはこの行を出さない' +
           '（確認は届いていて、クローンがまだ答えていないだけの正常な状態である）。',
-        // **Issue #1394 段⑤。** 畳む操作そのものはまだ無い——表示だけである。
-        // 説明文にも書く理由は上の各行と同じ（JSDoc はクローンに届かない）。
+        // **Issue #1394 段⑤・④⑥⑦。** ⚠ の表示はこの道具からは畳まない
+        // （段⑤のまま）が、**同じ判定を使って runner_list が自動で畳むことが
+        // ある**（段④⑥⑦）——「畳む操作はどの道具からも行われない」だった
+        // 頃の文言のまま放置しない（AGENTS.md「実装が実際にやっていること
+        // だけを書く」）。
         '「畳む候補」の ⚠ は、status が done で背景処理待ちの印が無く、状態の判定が' +
           'active で、最後のターン終了から一定時間が経った委譲に出す印である。' +
           'ただし、器が「背景処理待ちの印を送る版」だと名乗った（runner の hello の能力）委譲にしか出ない' +
           '——名乗らない古い器や、名乗りをまだ受けていない器の委譲には出ない' +
-          '（出ていないことを「畳む候補が無い」と読まないこと）。畳む操作は、この道具や他のどの道具からも行われない。',
+          '（出ていないことを「畳む候補が無い」と読まないこと）。' +
+          'この道具（manager_list）自身は畳まない——ここは表示だけである。' +
+          '畳むのは runner_list を resources: true で呼んだときだけで、その器の pids が' +
+          '逼迫していれば（上限の80%以上）、同じ候補の判定を満たす委譲をデーモンが自動で畳む' +
+          '（未 push の実装・未コミットの変更が無いことも確かめたうえで。#1394 段④⑥⑦）。' +
+          '何を畳んだ・見送ったかは runner_list の応答と日誌（journal_read、decision）に出る。',
         // **並びを名乗る（#688 の3 を直した）。** ここに書いてある順序と実装が食い違うと、
         // クローンは「出ていない＝無い」と読む。実装が実際にやっていることだけを書く。
         '走行中・返事待ち（running / waiting_human）を先に出し、次に lost（前のセッションへ戻れなかったもの。' +
@@ -10698,6 +10706,19 @@ export function createCloneTools(context: ToolContext) {
           '落ちて空いた器が「空いている」ように見えて次も吸い込む輪を切るため）——' +
           'pids が枯れた器は自動配置で選ばれにくくなる。**ただし断る材料ではない**——' +
           '枯れていても置き先としては返るので、「置けない」と読まないこと。',
+        // **Issue #1394 段④⑥⑦。** `resources: true` は読むだけの opt-in
+        // だったが、いまは副作用を持つことがある——道具の説明文にそれを書く
+        // （AGENTS.md「実装が実際にやっていることだけを書く」）。
+        'resources: true を渡した結果、いずれかの器の pids が逼迫していれば' +
+          '（現在値が上限の80%以上）、その器に割り当てられた委譲のうち' +
+          '「畳む候補」（manager_list の ⚠ と同じ5条件——done・背景処理待ちの印なし・' +
+          '器がその印を送る版だと名乗っている・状態の判定が active・最後のターン終了から' +
+          '一定時間経過）を、デーモンが自動で manager_stop 相当（非 force）で畳む' +
+          '（#1394 段④⑥⑦）。**未 push の実装・未コミットの変更が1件でもある' +
+          '（または確認できなかった）委譲は畳まない**——安全側に倒す。' +
+          '何を畳んだ・見送ったかはこの応答の先頭に出て、日誌にも decision として残る' +
+          '（journal_read）。**新しい周期処理ではない**——この道具をこの引数で呼んだ、' +
+          'まさにこの1回の中だけで判定と実行が完結する。呼ばなければ何も起きない。',
       ].join(' '),
       {
         fingerprints: z
@@ -10754,10 +10775,24 @@ export function createCloneTools(context: ToolContext) {
           overview.daemonRevision,
         )}`;
 
+        // **Issue #1394 段④⑥⑦。** この呼び出しの中で自動畳みが実際に走って
+        // いれば（`autoFolded` が省かれていない＝どこかの器の pids を見た）、
+        // どの return 経路でも必ず言う——早い return（0台・cursor 最終頁）の
+        // 中でだけ黙ると、畳んだ・見送ったことがクローンに一度も届かない窓が
+        // できる。
+        const autoFoldedNote =
+          overview.autoFolded === undefined
+            ? ''
+            : overview.autoFolded.length === 0
+              ? '\n（pids 逼迫を検出したが、この呼び出しでは畳む候補が無かった。#1394 段④⑥⑦）'
+              : `\n⚠ この呼び出しで自動畳み（#1394 段④⑥⑦）が働いた:\n${overview.autoFolded
+                  .map((entry) => `  - [${entry.managerId}] ${entry.outcome}: ${entry.detail}`)
+                  .join('\n')}`;
+
         if (overview.runners.length === 0) {
           return text(
             '登録されている runner は0台である（設定に ALTEROID_RUNNER_URLS 等が無いか、' +
-              `まだ配線されていない）。\n${daemonLine}`,
+              `まだ配線されていない）。\n${daemonLine}${autoFoldedNote}`,
           );
         }
 
@@ -10765,7 +10800,7 @@ export function createCloneTools(context: ToolContext) {
         // `memory_list` と同じ理由——名簿が0台のときの言い方を奪わない。その枝は
         // すぐ上に在り、ここより先に返っている）。
         if (cursor !== undefined && resolved.view.length === 0) {
-          return text(`（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}`);
+          return text(`（cursor より後ろの器は無い。これが最後の頁）\n${daemonLine}${autoFoldedNote}`);
         }
 
         const head: string[] = [
@@ -11038,6 +11073,8 @@ export function createCloneTools(context: ToolContext) {
         }
 
         const tail: string[] = [];
+        // **Issue #1394 段④⑥⑦。** ここでも同じ理由（早い return と揃える）。
+        if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
         // **pids を出したなら、その数字が言えないことを必ず添える（#315）。**
         // 計器に「この数字が言えないこと」を貼るのは、この repo が繰り返している
         // 作法である（`.github/workflows/ci.yml` の OpenAPI 検査の doc）。

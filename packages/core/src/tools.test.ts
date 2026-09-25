@@ -7564,7 +7564,11 @@ describe('クローンの道具', () => {
       const description = tools.find((entry) => entry.name === 'manager_list')?.description;
 
       expect(description).toContain('「畳む候補」の ⚠');
-      expect(description).toContain('畳む操作は、この道具や他のどの道具からも行われない');
+      // **#1394 段④⑥⑦。** manager_list 自身は畳まないが、runner_list の
+      // pids 逼迫契機では自動で畳む——「どの道具からも行われない」という
+      // 段⑤当時の文言のままではないことを確かめる。
+      expect(description).toContain('この道具（manager_list）自身は畳まない');
+      expect(description).toContain('runner_list を resources: true で呼んだとき');
       // 条件3は器の名乗り次第——名乗らない器の委譲には出ないことを説明文が名乗る（黙ると「候補が無い」と読まれる）。
       expect(description).toContain('名乗らない古い器');
     });
