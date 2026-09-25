@@ -209,6 +209,27 @@ export interface AgentDelegationStarted {
 export interface AgentDelegationNotified {
   type: 'delegation_notified';
   taskId?: string;
+  /**
+   * SDK の `task_notification.status`（Issue #1373 続き）。
+   *
+   * **型を `'completed' | 'failed' | 'stopped'` に絞らず `string` のまま運ぶ。**
+   * SDK がこの先の版で値を増やしても、知らない値を握り潰して `undefined` へ
+   * 落とすと「取れなかった」と「`'failed'` ではないと確定した」が区別できなく
+   * なる。文字列のまま届ければ、読み手（`runner.ts`）は「`'failed'` に一致する
+   * か」だけを見ればよく、知らない値は自然に「`'failed'` ではない」側へ安全に
+   * 倒れる（判定を狭めるだけで、握り潰しはしない）。**取れなければ省く**
+   * （代用値を作らない——`taskId` と同じ作法）。
+   */
+  status?: string;
+  /**
+   * SDK の `task_notification.summary` の抜粋（Issue #1373 続き）。
+   *
+   * **`excerpt()`（`excerpt.ts`）で上限を切ってから運ぶ**（`claude-provider.ts`
+   * の `foldSystemMessage` を見よ）——作業者が打ち切られる直前の要旨は英語の
+   * 生文言で長さが読めないため、無上限のまま層をまたがせない。切った跡は
+   * `excerpt()` 自身が付ける。**取れなければ省く**（代用値を作らない）。
+   */
+  summary?: string;
 }
 
 /**
