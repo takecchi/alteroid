@@ -827,6 +827,31 @@ export function useEndConversation() {
 }
 
 /**
+ * いま走っているクローンのターンを止める（`POST /clone/interrupt`。#1398 c23-1/c30-2）。
+ *
+ * CLI の `alteroid interrupt`（`apps/cli/src/interrupt.ts`）と同じ口・同じ資格
+ * （`deliberateClient`——`/chat/:conversationId/end` と同じ）。**資格の判定は
+ * ここでは行わない** —— HTTP の口の認可（`apps/daemon/src/app.ts` の
+ * `/clone/interrupt`）にそのまま従う。`useDeclareOwner` 等と同じ「サーバの線を
+ * 画面へ写さない」方針。
+ *
+ * 応答は3値（`interrupted` / `idle` / `unsupported`）——「止めるものが無かった」を
+ * 「止めた」と言わないのは CLI 側と同じ理由（`interrupt.ts` の doc）。文言は
+ * `routes/chat.tsx` の `describeCloneInterruptOutcome` が持つ。
+ *
+ * **キャッシュは引き直さない。** セッションと受信箱はそのまま残るので
+ * （サーバ側の doc）、この呼び出し自体は画面のどの一覧の中身も変えない——
+ * 止めたことは日誌に残り、日誌の SSE（`use-journal-live.ts`）が別途拾う。
+ */
+export function useInterruptClone() {
+  const api = useApi();
+  return useCallback(async () => {
+    const result = await api.api.POST('/clone/interrupt', { body: {} }).then(unwrap);
+    return result.outcome;
+  }, [api]);
+}
+
+/**
  * アーカイブ済み生ログの本文を1件消す（`DELETE /archive/:id`。tombstone——
  * 行そのものは残る。CLI の `/archive remove` / クローンの道具 `archive_remove`
  * と同じ口。#698 / #776）。

@@ -1,11 +1,11 @@
-import { PanelLeft, Pencil, Plus, Send, Square } from 'lucide-react';
+import { OctagonPause, PanelLeft, Pencil, Plus, Send, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Drawer } from '~/components/drawer';
 import { Markdown } from '~/components/markdown';
 import { Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
-import { useEndConversation, useRecordOwnMessage } from '~/hooks/mutations';
+import { useEndConversation, useInterruptClone, useRecordOwnMessage } from '~/hooks/mutations';
 import { useConversation, useConversationApprovals, useConversations } from '~/hooks/queries';
 import { useIsMobile } from '~/hooks/use-is-mobile';
 import { postChat, useApi } from '~/lib/api';
@@ -245,6 +245,30 @@ export function buildEditVersions(
   });
 }
 
+/**
+ * `POST /clone/interrupt` の3値（`useInterruptClone` の doc）を人間の言葉にする
+ * （#1398 c23-1/c30-2。入口の等価性——CLI の `alteroid interrupt` にあって
+ * Web UI に無かった口を足す）。
+ *
+ * **CLI の `describeInterruptOutcome`（`apps/cli/src/interrupt.ts`）と文言を
+ * 1文字も違えていない。二重管理である**——apps 同士はパッケージを共有しない
+ * （共有先は `packages/` だけ）ので、揃える手段がここに書き写す以外に無い
+ * （`hooks/mutations.ts` の `roughPreview` と同じ事情）。CLI 側の文言を直したら
+ * ここも直すこと。
+ */
+export function describeCloneInterruptOutcome(
+  outcome: 'interrupted' | 'idle' | 'unsupported',
+): string {
+  switch (outcome) {
+    case 'interrupted':
+      return 'いま走っていたクローンのターンを止めた。会話の続きと受信箱はそのまま残る（次の合図で次のターンが始まる）。';
+    case 'idle':
+      return '走っているターンは無かった（止めるものが無い）。';
+    case 'unsupported':
+      return 'このデーモンのクローンは、ターンを止める口を持っていない。';
+  }
+}
+
 export default function Chat({ loaderData }: Route.ComponentProps) {
   const { conversationId } = loaderData;
 
@@ -440,6 +464,7 @@ export function ChatPane({
   const navigate = useNavigate();
   const endConversation = useEndConversation();
   const recordOwnMessage = useRecordOwnMessage();
+  const interruptClone = useInterruptClone();
 
   /**
    * この画面が見せている会話。
@@ -453,6 +478,18 @@ export function ChatPane({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
+  /**
+   * `POST /clone/interrupt` を呼んでいる最中かどうか（#1398 c23-1/c30-2）。
+   * ボタンの二重打鍵を防ぐためだけの、この画面だけの状態——サーバ側の状態には
+   * 対応しない。
+   */
+  const [interrupting, setInterrupting] = useState(false);
+  /**
+   * `POST /clone/interrupt` の応答を人間の言葉にしたもの（`describeCloneInterruptOutcome`）。
+   * 失敗（ネットワーク断・403 等）は `failure`（既存の `ErrorNote`）へ回すので、
+   * ここに乗るのは3値のどれかに正しく応答が返った場合だけである。
+   */
+  const [interruptMessage, setInterruptMessage] = useState<string | undefined>(undefined);
   /**
    * いま編集中の行の `key`（チャットのメッセージ編集、#1010）。無ければ
    * `undefined`。**`Line.key`（サーバ確定済みの発言では日誌エントリ id と
@@ -626,6 +663,9 @@ export function ChatPane({
        * この render リセットだけでは減らない。
        */
       setFailure(undefined);
+      // ターンを止めた結果の表示も同じ理由で持ち越さない——前の会話で見た
+      // 「止めた」の表示が、別の会話の画面にそのまま居座るのはおかしい。
+      setInterruptMessage(undefined);
       // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
       // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
       setEditingKey(undefined);
@@ -1396,6 +1436,34 @@ export function ChatPane({
     [editDraft, send],
   );
 
+  /**
+   * 「ターンを止める」ボタンの押下（#1398 c23-1/c30-2）。
+   *
+   * **「受信をやめる」（`streamRef.current?.controller.abort()`）とは別物。**
+   * あちらはこの画面の購読を切るだけでクローンのターンは走り続けるが
+   * （そのボタンの `title` が明言している）、これは `POST /clone/interrupt`
+   * を叩いてサーバ側のターンそのものを止めにいく——CLI の `alteroid interrupt`
+   * と同じ経路（`useInterruptClone` の doc）。
+   *
+   * **成功と失敗を別の場所に出す。** 3値（`interrupted`/`idle`/`unsupported`）
+   * はどれも「呼べた」ので `interruptMessage` へ、ネットワーク断・403 等の
+   * 呼べなかった失敗は既存の `failure`（`ErrorNote`）へ——このパターンは
+   * `settings.tsx` の `ResetWorkspace`（`failure` と結果表示を分ける）と同じ。
+   */
+  const handleInterrupt = useCallback(async () => {
+    setInterrupting(true);
+    setFailure(undefined);
+    setInterruptMessage(undefined);
+    try {
+      const outcome = await interruptClone();
+      setInterruptMessage(describeCloneInterruptOutcome(outcome));
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setInterrupting(false);
+    }
+  }, [interruptClone]);
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
@@ -1416,18 +1484,56 @@ export function ChatPane({
           </p>
         </div>
         {shownId !== undefined && (
-          <Button
-            size="sm"
-            className="shrink-0"
-            onClick={() => {
-              void endConversation(shownId).then(() => navigate('/chat'));
-            }}
-            title="クローンがここまでの学びを記憶へ蒸留する"
-          >
-            会話を終える
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/*
+              **「受信をやめる」（下、入力欄の脇）とは別のボタン。** あちらは
+              この画面の購読を切るだけで、クローンのターンは走り続ける
+              （そのボタンの `title` が明言している）。これは `POST
+              /clone/interrupt` を叩いてサーバ側のターンそのものを止める
+              ——CLI の `alteroid interrupt` と同じ経路で、Web UI にだけ
+              無かった口（#1398 c23-1/c30-2。入口の等価性）。
+
+              **`sending`（この画面が受信中かどうか）では出し分けない。**
+              走っているターンはこの画面が起こしたものとは限らない（別の
+              タブ・CLI・自律の起点から始まったターンも同じクローンの
+              ものである）。会話を持てるならこのボタンは常に押せてよい
+              ——資格の判定はサーバに委ね（`useInterruptClone` の doc）、
+              ここでは先回りして隠さない。
+            */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void handleInterrupt()}
+              loading={interrupting}
+              title="いま走っているクローンのターンだけを止める。会話とセッションはそのまま残り、次の合図で次のターンが始まる"
+              aria-label="クローンのターンを止める"
+            >
+              <OctagonPause className="size-3.5" aria-hidden />
+              <span className="hidden md:inline">ターンを止める</span>
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                void endConversation(shownId).then(() => navigate('/chat'));
+              }}
+              title="クローンがここまでの学びを記憶へ蒸留する"
+            >
+              会話を終える
+            </Button>
+          </div>
         )}
       </header>
+
+      {/*
+        「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
+        （ネットワーク断・403 等）は下の `ErrorNote`（`failure`）に出るので、
+        ここに乗るのは正しく応答が返った場合だけである。
+      */}
+      {interruptMessage !== undefined && (
+        <p className="shrink-0 border-b border-border py-2 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] text-[11px] text-muted md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
+          {interruptMessage}
+        </p>
+      )}
 
       <div
         ref={scrollContainerRef}
