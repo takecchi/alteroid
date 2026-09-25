@@ -215,7 +215,7 @@ minimumReleaseAgeExclude:
 # 矛盾しない）。**片方だけ消さないこと** —— `catalog` を消すと消費側の宣言が失われ、
 # `overrides` を消すと SDK 側が古い版へ戻る。
 overrides:
-  fast-uri: ^3.1.6
+  fast-uri: ^4.0.0
   hono: ^4.13.5
   js-yaml: ^4.3.2
   qs: ^6.16.0
