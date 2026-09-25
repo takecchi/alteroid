@@ -7072,6 +7072,10 @@ describe('クローン — ターンの失敗の跡', () => {
       await new Promise((resolve) => setTimeout(resolve, 80));
       s.clone.post(humanMessage('三つ目'));
       await waitFor(() => errors(3), '3回目（新しいセッションで held）');
+      // **新しいセッションの1回目は、また held である**（印はセッションごとに戻る）。
+      // ここでいきなり畳み直すと、held を挟まない交互になる。
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(await heldEscalationLines(s.stores)).toHaveLength(1);
       s.clone.post(humanMessage('四つ目'));
       await waitFor(() => errors(4), '4回目（また畳む）');
       await waitFor(
