@@ -153,6 +153,7 @@ export function createSyntheticJournalStore(
       list,
       append: notImplemented('append'),
       get: notImplemented('get'),
+      oldestAt: notImplemented('oldestAt'),
       clear: notImplemented('clear'),
     },
     calls,

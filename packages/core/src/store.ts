@@ -439,6 +439,22 @@ export interface JournalStore {
   get(id: string): Promise<JournalEntry | null>;
 
   /**
+   * 日誌の地平（最古の行の `at`）。1件も無ければ `null`（issue #1510）。
+   *
+   * **なぜ要るか。** `journal_read`（`tools.ts`）が `since`/`until` で過去を
+   * 掘って0件が返ったとき、「その窓に該当の行が無かった」のか「日誌がその
+   * 窓まで遡れない（分母が0）」のかは、`list()` の0件という結果だけからは
+   * 区別できない——両方とも同じ「0件」を返す。`GET /usage` が `since` /
+   * `beforeLedger` で「0 ではなく記録が無い」と言えるようにしているのと
+   * 同じ理由である（`usage.ts` の `usageAggregateSchema.since` の doc）。
+   *
+   * **毎回全件走査で取らないこと。** 3実装とも、挿入順や時刻の索引に乗る形で
+   * 最初の1行だけを引く——fs はファイル名の昇順一覧の先頭ファイルだけを開き、
+   * pg は `journal_at_idx` に乗る `ORDER BY at ASC LIMIT 1` を使う。
+   */
+  oldestAt(): Promise<string | null>;
+
+  /**
    * 全件を消す（ワークスペースのリセット専用。#workspace-reset）。
    *
    * **これは「追記専用」の契約（`append` しか書き込みの口を持たない）への

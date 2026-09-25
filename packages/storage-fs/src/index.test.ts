@@ -9,6 +9,7 @@ import {
   verifyMcpServerStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
+  verifyJournalStoreHorizonContract,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
@@ -1558,6 +1559,25 @@ describe('FsJournalStore', () => {
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約を、**fs
+   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-horizon-contract.test.ts`）/ fs
+   * （このテスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで
+   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約 /
+   * `query edge` 契約と同じ作法）。
+   *
+   * fs 実装は昇順に並べたファイル名の先頭（＝最古の日）だけを開くので、
+   * 他の日のファイルが何件・何行あっても読まない——全件走査していないことの
+   * 直接の検算にはならないが（それは別途、大量データでの実測が要る）、
+   * 少なくとも答えが正しいことはここで測る。
+   */
+  describe('日誌の地平（issue #1510）', () => {
+    it('空なら null／1件ならその at／複数件でも最古のまま', async () => {
+      await verifyJournalStoreHorizonContract(stores.journal);
     });
   });
 

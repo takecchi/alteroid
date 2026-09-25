@@ -364,6 +364,16 @@ export {
   type JournalStoreQueryEdgeContractSubject,
 } from './journal-query-edge-contract.js';
 /**
+ * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約。3実装
+ * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
+ * 揃っていることを測る — 1つで測って3つとも測ったことにしない
+ * （`verifyJournalStoreWithContract` と同じ作法）。
+ */
+export {
+  verifyJournalStoreHorizonContract,
+  type JournalStoreHorizonContractSubject,
+} from './journal-horizon-contract.js';
+/**
  * 日誌を語で探す（`JournalQuery.q`。issue #250）ときの、照合の唯一の正本。
  * **どの欄を本文と見るか**を `journal-search.ts` が持ち、3実装（インメモリ /
  * `storage-fs` は `matchesJournalSearch`、`storage-pg` は

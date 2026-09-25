@@ -5300,6 +5300,22 @@ export function createCloneTools(context: ToolContext) {
           ...(withFilter === undefined ? {} : { with: withFilter }),
         });
         if (entries.length === 0) {
+          // **日誌の地平（issue #1510）。** `since`/`until` で時間を絞って
+          // 0件だったとき、「その窓に該当が無かった」のか「日誌がその窓まで
+          // 遡れない（分母が0）」のかは、この0件という結果だけからは区別
+          // できない——どちらも同じ「0件」を返す。時間で絞っていない0件
+          // （type/with/q だけで絞った0件）は地平と無関係なので引かない。
+          const oldestAt =
+            since !== undefined || until !== undefined ? await stores.journal.oldestAt() : null;
+          const horizonNote =
+            oldestAt === null
+              ? []
+              : [
+                  `この記憶ストアの日誌の最古は ${oldestAt}。それより前は判定できない` +
+                    '（該当する行が無かったのか、日誌がそこまで遡れないのかは、' +
+                    'この返り値だけからは区別できない）。',
+                ];
+
           // **`q` で0件だったとき、探す対象に入っていない欄が在ることまで言う。**
           // 黙ると「日誌にその語は無い」と読めるが、実際には tool_use の input に
           // 書かれているかもしれない（`journal-search.ts`「対象にしていない欄」）。
@@ -5309,18 +5325,24 @@ export function createCloneTools(context: ToolContext) {
           // こちらの取りこぼしの出所は窓ではなく欄である）。
           if (q !== undefined) {
             return text(
-              `"${q}" に当たる日誌は無い（この条件の中では）。` +
-                'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
-                'そこにだけ書かれている語はここでは当たらない。',
+              [
+                `"${q}" に当たる日誌は無い（この条件の中では）。` +
+                  'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
+                  'そこにだけ書かれている語はここでは当たらない。',
+                ...horizonNote,
+              ].join('\n'),
             );
           }
           return text(
-            since === undefined &&
+            [
+              since === undefined &&
               until === undefined &&
               types === undefined &&
               withFilter === undefined
-              ? '（日誌はまだ空）'
-              : '（その条件に当たる日誌は無い）',
+                ? '（日誌はまだ空）'
+                : '（その条件に当たる日誌は無い）',
+              ...horizonNote,
+            ].join('\n'),
           );
         }
 

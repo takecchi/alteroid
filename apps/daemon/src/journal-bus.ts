@@ -43,6 +43,9 @@ export function createJournalBus(inner: JournalStore): JournalBus {
     get(id: string): Promise<JournalEntry | null> {
       return inner.get(id);
     },
+    oldestAt(): Promise<string | null> {
+      return inner.oldestAt();
+    },
     // **`clear()` は購読者へは流さない。** リセットは「日誌に載った出来事」
     // ではなく日誌そのものを空にする操作であり、この層が中継しているのは
     // 前者（`append` の通知）だけである。`resetWorkspaceState` が

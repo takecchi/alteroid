@@ -16502,6 +16502,85 @@ describe('journal_read に with の絞りを足す（issue #426）', () => {
 });
 
 /**
+ * `journal_read` が日誌の地平（最古の行の `at`）を伝えるか（issue #1510）。
+ *
+ * **発端**: `since`/`until` で過去を掘って0件が返ったとき、「その窓に該当が
+ * 無かった」のか「日誌がその窓まで遡れない（分母が0）」のかが、それまでは
+ * 返り値から区別できなかった（#1092 はこれを判定できないまま閉じている）。
+ */
+describe('journal_read が日誌の地平を伝える（issue #1510）', () => {
+  it('until が最古の行より前を指し0件のとき、地平を添える', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+
+    const reply = await h.call('journal_read', {
+      until: new Date(Date.parse(entry.at) - 1000).toISOString(),
+    });
+
+    expect(reply).toContain('（その条件に当たる日誌は無い）');
+    expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+    expect(reply).toContain('判定できない');
+  });
+
+  it('since を指定して0件のときも地平を添える（until 側だけの特別扱いにしない）', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+
+    // 未来を since に指定すれば、いま在る唯一の行より後ろだけを見ることになり
+    // 0件になる——地平（最古の行）とは無関係な理由の0件だが、`since`/`until`
+    // のどちらかが指定されていれば地平を引くという実装なので、ここでも添う。
+    const future = new Date(Date.parse(entry.at) + 60 * 60 * 1000).toISOString();
+    const reply = await h.call('journal_read', { since: future });
+
+    expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+  });
+
+  it('日誌そのものが空なら、時間で絞っても地平は付けない（地平が無いため）', async () => {
+    const h = harness();
+
+    const reply = await h.call('journal_read', { until: '2020-01-01T00:00:00.000Z' });
+
+    expect(reply).toBe('（その条件に当たる日誌は無い）');
+    expect(reply).not.toContain('最古');
+  });
+
+  it('時間で絞っていない0件には地平を付けない（地平とは無関係な絞りのため）', async () => {
+    const h = harness();
+    await h.stores.journal.append({ type: 'decision', decision: '無関係な判断', grounds: '記憶' });
+
+    const reply = await h.call('journal_read', { types: ['tool_use'] });
+
+    expect(reply).toBe('（その条件に当たる日誌は無い）');
+    expect(reply).not.toContain('最古');
+  });
+
+  it('q と併せて0件のときも地平を添える', async () => {
+    const h = harness();
+    const entry = await h.stores.journal.append({
+      type: 'decision',
+      decision: '最古の判断',
+      grounds: '記憶',
+    });
+
+    const reply = await h.call('journal_read', {
+      q: '当たらない語',
+      until: new Date(Date.parse(entry.at) - 1000).toISOString(),
+    });
+
+    expect(reply).toContain('当たらない語');
+    expect(reply).toContain(`この記憶ストアの日誌の最古は ${entry.at}`);
+  });
+});
+
+/**
  * Issue #357。`subagent_stall`（委譲の空転）を `exchange` から切り出した
  * 目的そのもの——`journal_read` の `types` で絞れることを確かめる。
  * 絞る前は `{ type: 'exchange', with: 'manager' }` の雑多入れに埋もれて

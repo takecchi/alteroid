@@ -179,6 +179,33 @@ export class FsJournalStore implements JournalStore {
   }
 
   /**
+   * 日誌の地平（`JournalStore.oldestAt` の doc、issue #1510）。
+   *
+   * **全件走査しない。** ファイル名は追記時の UTC 日付なので、昇順に並べた
+   * 先頭のファイル（＝最古の日）だけを開けば足りる——他のファイルは開かない。
+   * その最古のファイルの中で、壊れて読めない行は飛ばして次の行を見る（追記
+   * 専用ゆえ先頭は健全なはずだが、`parseLine` と同じ扱いを崩さない）。
+   * 全ファイルが壊れた行だけだった場合に備え、次のファイルへは進む——ただし
+   * それも「壊れたファイルの数」ぶんだけで、総行数には依存しない。
+   */
+  async oldestAt(): Promise<string | null> {
+    const dropped = new Map<string, number>();
+    for (const file of await this.#files('asc')) {
+      const raw = await readFile(join(this.#dir, file), 'utf8');
+      const lines = raw.split('\n').filter((line) => line.length > 0);
+      for (const line of lines) {
+        const entry = parseLine(line, dropped);
+        if (entry) {
+          noteDroppedJournalRowsSummary(dropped);
+          return entry.at;
+        }
+      }
+    }
+    noteDroppedJournalRowsSummary(dropped);
+    return null;
+  }
+
+  /**
    * 全件を消す（`JournalStore.clear` の doc）。`append()` と同じ `#chain` で
    * 直列化する — 消している最中に別の呼び出しが追記した日付ファイルを
    * 巻き込んで消してしまわないため。

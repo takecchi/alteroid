@@ -218,6 +218,21 @@ export class PgJournalStore implements JournalStore {
     return null;
   }
 
+  /**
+   * 日誌の地平（`JournalStore.oldestAt` の doc、issue #1510）。
+   *
+   * `journal_at_idx`（`schema.ts`）に乗る `ORDER BY at ASC LIMIT 1` — 索引
+   * スキャンで先頭の1行だけを取るので、テーブル全体の行数に依存しない。
+   */
+  async oldestAt(): Promise<string | null> {
+    const rows = await this.#db
+      .select({ at: journal.at })
+      .from(journal)
+      .orderBy(asc(journal.at))
+      .limit(1);
+    return rows[0]?.at.toISOString() ?? null;
+  }
+
   /** 全件を消す（`JournalStore.clear` の doc）。 */
   async clear(): Promise<number> {
     const removed = await this.#db.delete(journal).returning({ seq: journal.seq });

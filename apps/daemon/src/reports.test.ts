@@ -47,6 +47,9 @@ function fakeJournal(appended: readonly JournalEntry[]) {
     async get() {
       return null;
     },
+    async oldestAt() {
+      throw new Error('このテストでは使わない');
+    },
     async clear() {
       throw new Error('このテストでは消さない');
     },

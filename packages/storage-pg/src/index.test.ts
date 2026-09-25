@@ -8,6 +8,7 @@ import {
   verifyMcpServerStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
+  verifyJournalStoreHorizonContract,
   verifyJournalStoreOrderContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
@@ -1298,6 +1299,24 @@ describe('PgJournalStore', () => {
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);
+    });
+  });
+
+  /**
+   * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約を、**pg
+   * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
+   * （`packages/core/src/journal-horizon-contract.test.ts`）/ fs
+   * （`packages/storage-fs/src/index.test.ts`）/ pg（このテスト）。1つで
+   * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約 /
+   * `query edge` 契約と同じ作法）。
+   *
+   * pg 実装は `journal_at_idx` に乗る `ORDER BY at ASC LIMIT 1` なので、
+   * テーブルの行数に依存しない——ここでは答えが正しいことを測る
+   * （索引が実際に使われているかは実行計画の確認が要り、ここでは見ていない）。
+   */
+  describe('日誌の地平（issue #1510）', () => {
+    it('空なら null／1件ならその at／複数件でも最古のまま', async () => {
+      await verifyJournalStoreHorizonContract(stores.journal);
     });
   });
 

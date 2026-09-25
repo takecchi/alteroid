@@ -80,6 +80,9 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
       }
       return query.limit === undefined ? windowed : windowed.slice(0, query.limit);
     },
+    async oldestAt() {
+      throw new Error('このテストでは使わない');
+    },
     async clear() {
       throw new Error('このテストでは消さない');
     },

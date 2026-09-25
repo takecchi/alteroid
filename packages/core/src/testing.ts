@@ -519,6 +519,11 @@ export function createMemoryStores(): Stores {
     async get(id: string) {
       return entries.find((entry) => entry.id === id) ?? null;
     },
+    async oldestAt() {
+      // `entries` は push 順＝追記順そのもの（`list()` の `order:'asc'` と
+      // 同じ前提）。先頭が最古——全件走査ではなく1要素を見るだけで済む。
+      return entries[0]?.at ?? null;
+    },
     async clear() {
       const removed = entries.length;
       entries.length = 0;
