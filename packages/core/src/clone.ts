@@ -61,6 +61,7 @@ import {
 } from './distill-gap.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { excerpt, excerptLine, renderListingFromEnd } from './excerpt.js';
+import { readConversationWindow } from './conversation.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
   EXCHANGE_KIND_FAILURE_PREFIX,
@@ -7341,11 +7342,9 @@ class Clone implements CloneHost {
     });
     if (conversationId !== null) return;
     try {
-      const recent = await this.#stores.journal.list({
-        types: ['exchange'],
-        with: ['human'],
-        limit: 1,
-      });
+      // **会話の窓は `readConversationWindow` でだけ組む**（issue #418 の再発防止。
+      // `scripts/conversation-window-single-source.test.ts`）。直近の1件だけを見る。
+      const recent = await readConversationWindow(this.#stores.journal, { scan: 1 });
       const last = recent[0] as { conversationId?: string } | undefined;
       if (last?.conversationId === undefined) return;
       await this.#journal({

@@ -242,7 +242,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // `EXCHANGE_KIND_DECISION_PREFIX` で書く）。
   // + 1（#325 段2 が足した `#externalMcpServers`。MCP サーバの登録が読めなかったことを
   // `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
-  'clone.ts': 48,
+  // + 2（issue #955 の (A) の `#noteHeldEscalation`。held の後に畳み直した判断を
+  // `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で書く1本と、内部のターンで畳み直した
+  // ことを直近の人間の会話へ知らせる `with: 'human'` の1本）。
+  'clone.ts': 50,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
