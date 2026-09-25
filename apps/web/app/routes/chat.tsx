@@ -500,6 +500,9 @@ export function ChatPane({
    *   常に id が確定した後に起き、キー `undefined` には入らない
    * - キー `undefined` に入るのは、ストリームが `open` を1度も見ないまま終わった回
    *   （`send` の `finally` の `failOpen`）だけで、そのストリームに後から `open` は届かない
+   * - サーバーは `open` を必ず最初の SSE のイベントとして書き、`error` を書いたら抜ける
+   *   （`apps/daemon/src/app.ts` の `POST /chat` の `streamSSE`）⟹ `open` より前に `error`
+   *   のイベントが届いて、その後に同じストリームで `open` が来ることもない
    *
    * #1585 の直しは `open` の分岐でキー `undefined` を確定した id へ移す処理を持って
    * いたが、到達しないので消した（消しても Web の全スイートが緑のままだったことが
@@ -1190,9 +1193,10 @@ export function ChatPane({
          * は「いま分かっている投函先」を指す——新しい会話でまだ確定していなければ
          * `undefined`。`running.opened` が解決しないまま失敗した場合も、
          * `running.id` は作成時の値（既存の会話ならその id、新しい会話ならまだ
-         * `undefined`）のままなので、そのまま使える。**`undefined` キーで積んだ
-         * 失敗は、後でそのストリームが `open` を見て id が確定したら、確定した
-         * id へ移す**（`send` の `if (message.event === 'open')` の分岐参照）。
+         * `undefined`）のままなので、そのまま使える。**`undefined` キーで積むのは
+         * `running.opened` が reject された回（ストリームが `open` を見ないまま
+         * 終わった）だけ**で、そのストリームに後から `open` は届かないので、
+         * 確定した id へ移す必要は無い（`failures` の doc）。
          */
         setFailures((prev) => new Map(prev).set(running.id, caught));
       }
