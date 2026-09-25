@@ -179,6 +179,7 @@ import {
 } from './tools.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
+import { CloneRedeliveryState } from './clone-redelivery-state.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -2088,8 +2089,14 @@ class Clone implements CloneHost {
    * ない。
    */
   #recordChain: Promise<void> = Promise.resolve();
-  /** 起動時に拾い直した合図。id → 何度目の配達か。 */
-  readonly #redelivered = new Map<string, PendingInboxEvent>();
+  /**
+   * 再配達の在り高2フィールド（起動時に拾い直した合図 `#redelivered` と、
+   * 台帳が既に片付いていると言っているもの `#redeliveredClosed`）。状態と
+   * doc の本体は `clone-redelivery-state.ts` の {@link CloneRedeliveryState}
+   * へ移した（Issue #1190 の続き）——**対で持つ理由・削除を揃える理由・
+   * `redeliveryGate` をここへ移さなかった理由はそちらの doc に在る。**
+   */
+  readonly #redeliveryState = new CloneRedeliveryState();
   /**
    * 直前の起動時に、**一緒に**拾い直した未読の件数（`#restoreUnread` が数える）。
    *
@@ -2114,23 +2121,6 @@ class Clone implements CloneHost {
    * 調べるためにターンを使い、**答えは「この合図は一度も処理されていなかった」だった。**
    */
   #restoredCohort = 0;
-  /**
-   * 拾い直した合図のうち、台帳が既に片付いていると言っているもの
-   * （**閉じた主体は問わない** — クローンの `commitment_close` に限らず、
-   * 人間の `POST /commitments/:id/close` で閉じたものも同じくここに載る。
-   * `commitment.closedBy` を見て区別するのは `closedRedeliveryNotice` の側
-   * である）。id → 台帳の記録（`closedAt` が立っている）。
-   *
-   * **`#redelivered` と対で持つ。** あちらは「二度目だと分かる」ための印、
-   * こちらは「本文を短くしてよい」ための印で、`#forget`（消し込み）で一緒に
-   * 消す。ここに載っているかどうかは `#restoreUnread` が `stores.commitments`
-   * を引いて決める — **決めるのはそこだけ**（`#handle` の側では引き直さない）。
-   *
-   * **載っていない合図は、これまでどおり全文で配る。** `commitments.get` が
-   * 投げたときも載せない（安全側は「全文で配る」— 雑音であって喪失ではない側
-   * へ倒す。`#restoreUnread` の catch を見よ）。
-   */
-  readonly #redeliveredClosed = new Map<string, Commitment>();
   /**
    * 自動で開いた未了。合図の id → その書き込みの約束。
    *
@@ -2888,8 +2878,7 @@ class Clone implements CloneHost {
 
     for (const event of [...fromQueue, ...fromHeld]) {
       this.#unread.delete(event.id);
-      this.#redelivered.delete(event.id);
-      this.#redeliveredClosed.delete(event.id);
+      this.#redeliveryState.drop(event.id);
       this.#dropPendingCollapse(event);
     }
 
@@ -4515,8 +4504,7 @@ class Clone implements CloneHost {
         );
         for (const record of chunk) {
           this.#unread.delete(record.event.id);
-          this.#redelivered.delete(record.event.id);
-          this.#redeliveredClosed.delete(record.event.id);
+          this.#redeliveryState.drop(record.event.id);
           this.#dropPendingCollapse(record.event);
           // **token-pool の代表もここで落とす**（Issue #1051 続き）。この
           // 経路は `#forget` を通らない（このメソッドの doc「`#forget` の
@@ -6062,8 +6050,7 @@ class Clone implements CloneHost {
       try {
         await this.#stores.inbox.remove(event.id);
         this.#unread.delete(event.id);
-        this.#redelivered.delete(event.id);
-        this.#redeliveredClosed.delete(event.id);
+        this.#redeliveryState.drop(event.id);
         // **畳み込みの索引も、器から消えたここで落とす**（Issue #954 続き。
         // `#dropPendingCollapse` の doc）。`remove` が確定した後でしか落とさ
         // ないのが肝である —— 消せずに下の `noteDroppedRecord` へ抜ける回は、
@@ -6390,7 +6377,7 @@ class Clone implements CloneHost {
           // 何もしない（`#redeliveredClosed` に載らない）ので、後段は変わらず
           // 全文で配る — 1文字も変えない。
           if (commitment !== null && commitment.closedAt !== undefined) {
-            this.#redeliveredClosed.set(record.event.id, commitment);
+            this.#redeliveryState.markClosed(record.event.id, commitment);
           }
         } catch (error) {
           // **読めなければ「閉じていない」として扱う＝全文で配る。** ここで
@@ -6400,7 +6387,7 @@ class Clone implements CloneHost {
         }
       }
 
-      this.#redelivered.set(record.event.id, record);
+      this.#redeliveryState.markRedelivered(record.event.id, record);
       // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
       // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
       this.#unread.set(record.event.id, Promise.resolve());
@@ -6516,8 +6503,7 @@ class Clone implements CloneHost {
       // 空振りの `remove` で `settled` を二重に数える）。
       if (this.#droppedWhileRestoring.has(record.event.id)) {
         this.#unread.delete(record.event.id);
-        this.#redelivered.delete(record.event.id);
-        this.#redeliveredClosed.delete(record.event.id);
+        this.#redeliveryState.drop(record.event.id);
         this.#dropPendingCollapse(record.event);
         await this.#journal({
           type: 'exchange',
@@ -6805,7 +6791,7 @@ class Clone implements CloneHost {
     if (batch.length === 1) {
       const event = batch[0];
       if (event === undefined) return '';
-      const record = this.#redelivered.get(event.id);
+      const record = this.#redeliveryState.get(event.id);
       if (record === undefined) return '';
 
       // **同時に拾い直した件数で名乗り分ける**（`#restoredCohort` の doc）。
@@ -6843,7 +6829,7 @@ class Clone implements CloneHost {
     // 空文字（初回配達だけの束）。
     const records: PendingInboxEvent[] = [];
     for (const event of batch) {
-      const record = this.#redelivered.get(event.id);
+      const record = this.#redeliveryState.get(event.id);
       if (record !== undefined) records.push(record);
     }
     if (records.length === 0) return '';
@@ -6887,7 +6873,7 @@ class Clone implements CloneHost {
    * 「配り直した時点では未了だった」という事実が消える。
    */
   #closedRedeliveryNoticeFor(event: InboxEvent): string | null {
-    const commitment = this.#redeliveredClosed.get(event.id);
+    const commitment = this.#redeliveryState.getClosed(event.id);
     if (commitment === undefined) return null;
     return closedRedeliveryNotice(event, commitment);
   }
@@ -11100,8 +11086,8 @@ class Clone implements CloneHost {
       // 増分ではない（`schema.ts` の `inbox_flow.retained` の doc）。
       retained: {
         unread: this.#unread.size,
-        redelivered: this.#redelivered.size,
-        redeliveredClosed: this.#redeliveredClosed.size,
+        redelivered: this.#redeliveryState.redeliveredSize,
+        redeliveredClosed: this.#redeliveryState.redeliveredClosedSize,
         pendingCollapse: this.#pendingCollapse.size,
       },
     });
