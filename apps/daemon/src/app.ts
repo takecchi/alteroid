@@ -6300,6 +6300,12 @@ export function createApp(deps: AppDeps) {
             description: 'ログインの成否を人間に伝える画面。',
             content: { 'text/html': { schema: resolver(z.string()) } },
           },
+          400: {
+            description:
+              'プロバイダ側が拒否した（`?error=`）／`code`・`state` が足りない／' +
+              '`completeLogin` がエラーを返した、のいずれか。応答は人間が読む HTML。',
+            content: { 'text/html': { schema: resolver(z.string()) } },
+          },
         },
       }),
       async (c) => {

@@ -47,6 +47,7 @@ import {
   recentDroppedTraces,
   summarizeInboxBacklog,
 } from '@alteroid/core';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
