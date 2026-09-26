@@ -6269,11 +6269,12 @@ export function createCloneTools(context: ToolContext) {
           .describe('この依頼の名前（英小文字・数字・. _ -）。後から直す・消すときの識別子'),
         request: z
           .string()
-          // **issue #1651。** HTTP の `scheduleBody`（`apps/daemon/src/app.ts`）と
-          // 揃える——空文字はここで弾く。無いと保存層（fs / pg の
-          // `scheduledRequestSchema.parse(entry)`）まで届いてから ZodError が
-          // 素で投げられ、クローンには読めない例外になる。
-          .min(1)
+          // **issue #1651 の後始末（PR #1656 のクロスレビュー指摘）。**
+          // ここに `.min(1)` を足すと、SDK の `tool()` がハンドラを呼ぶ**前**に
+          // 検証してしまい、落ちたときの応答が兄弟の欄（`kind` など。ハンドラの
+          // 先頭で `safeParse` して日本語の平文を返す）と違う形——英語の zod の
+          // JSON がマーカー付きでそのまま返る——になる。空文字を弾く判定は
+          // ハンドラの先頭（下）へ移した。ここは型（文字列）だけを固定する。
           .describe(
             '依頼の本文。時刻が来たときのあなたが読んで、そのまま動ける粒度で書く' +
               '（対象・狙い・どこまでやるか。人間から頼まれた言葉そのものも残すとよい）',
@@ -6300,6 +6301,14 @@ export function createCloneTools(context: ToolContext) {
         const parsedKind = scheduleKindSchema.safeParse(kind);
         if (!parsedKind.success) {
           return text(`kind "${kind}" は使えない（英小文字・数字・. _ - のみ、64文字まで）。`);
+        }
+        // **issue #1651 の後始末。** HTTP の `scheduleBody`（`z.object({ …
+        // request: z.string().min(1), … })`。400 の意味「request は空文字を
+        // 許さない」に揃える——ただし検査そのものはここ（ハンドラの先頭）で
+        // 行い、保存層（fs / pg の `scheduledRequestSchema.parse(entry)`）へは
+        // 空文字を1文字も渡さない。doc は `request` の入力スキーマ側にある。
+        if (request.length === 0) {
+          return text('request が空文字は使えない（依頼の本文を渡すこと）。');
         }
         if (RESERVED_SCHEDULE_KINDS.includes(parsedKind.data)) {
           // 名前が使えないことだけ言って黙らない。既定の刻みを変えたいなら手段は

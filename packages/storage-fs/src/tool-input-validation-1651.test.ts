@@ -37,12 +37,27 @@ import { createFsStores } from './index.js';
  */
 
 /**
- * `schedule_create` の `request: z.string().min(1)` は道具の**入力スキーマ**の
- * 側に足した（`packages/core/src/tools.ts`）ので、SDK の `tool()` が
- * ハンドラを呼ぶ前に検査する。`entry.handler(args)` を直接叩く形
- * （`tools.test.ts` の harness と同じ）はこの検査を素通りしてしまう
- * （`tool-arguments.test.ts` の doc と同じ理由）ので、ここでは本物の
- * MCP の往復（`tools/call`）を通す最小のトランスポートを自前で組む。
+ * `schedule_create` の `request` は道具の**入力スキーマ**の側で
+ * `z.string()` としか宣言していない（空文字を弾く判定はハンドラの先頭に
+ * 移した——下の追記を見よ）ので、`entry.handler(args)` を直接叩く形
+ * （`tools.test.ts` の harness と同じ）でも素通りせずに検査へ入る。
+ * それでもここでは本物の MCP の往復（`tools/call`）を通す最小の
+ * トランスポートを自前で組んで確かめる——JSON の往復を経由しないと
+ * 見えない食い違い（`tool-arguments.test.ts` の doc と同じ理由）が
+ * 他の欄にも将来出うるため、経路そのものは変えない。
+ *
+ * ## 追記（#1651 の後始末。PR #1656 のクロスレビュー指摘）
+ *
+ * 当初（#1656）は `request: z.string().min(1)` を**入力スキーマ**の側に
+ * 足していた。これだと SDK の `tool()` がハンドラを呼ぶ**前**に検証し、
+ * 落ちたときの応答が英語の zod の JSON（`MCP_INPUT_VALIDATION_ERROR_MARKER`
+ * 付き）になる——`practice_*` の slug 検査などハンドラの先頭で断る兄弟の
+ * 欄とは違う形だった。下の最初の `it` は、直す前は
+ * `MCP_INPUT_VALIDATION_ERROR_MARKER` を含むことを期待していたが、ここでは
+ * **期待を反転**させ、日本語の平文（マーカー無し）を期待するよう書き換えた
+ * （AGENTS.md「テストを弱めずに直す」——「保存層に何も残らないこと」の保証は
+ * そのまま残し、それに加えて「クローンに読める日本語で返ること」も保証する
+ * ようになったので、保証は弱くなっていない）。
  */
 interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
@@ -131,7 +146,7 @@ describe('schedule_create / practice_* — issue #1651 の fs 実装での確認
     stores = createFsStores(root);
   });
 
-  it('schedule_create: 空文字の request は道具の入力検査で落ち、fs の保存層に何も残らない', async () => {
+  it('schedule_create: 空文字の request はハンドラの先頭で断られ、日本語の平文で返り、fs の保存層に何も残らない', async () => {
     const rpc = await connect(stores);
     const result = await callTool(rpc, 'schedule_create', {
       kind: 'probe',
@@ -139,21 +154,23 @@ describe('schedule_create / practice_* — issue #1651 の fs 実装での確認
       everyMinutes: 60,
     });
 
-    expect(result.isError, result.text).toBe(true);
-    // ⚠️ **`isError: true` と「保存層に何も残らない」だけでは、この fix を
-    // 測ったことにならない。** fs の `scheduledRequestSchema` 自身も
-    // `request: z.string().min(1)` を持つので（`packages/core/src/schema.ts`）、
-    // 道具の入力スキーマの `.min(1)`（このテストが実際に見たい変更）を外しても、
-    // ハンドラが `stores.schedules.put(plan)` まで進んだ先で fs 側の検査が
-    // 同じ2つの結果（`isError: true` / 保存されない）を作ってしまう——ただし
-    // その場合の `result.text` は **`MCP_INPUT_VALIDATION_ERROR_MARKER` を
-    // 含まない生の ZodError の JSON** になる（クローンには読めない例外その
-    // もの。実測は `.claude` 配下ではなくこの PR の作業ログに残した手動確認）。
-    // ⟹ マーカーの有無まで見て、初めて「道具の入力段階で断っている」ことの
-    // 証拠になる。
-    expect(result.text).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    // **`isError` は立てない——兄弟の欄（`kind` など）と同じ形。**
+    // 直す前（#1656 のまま）はここが `isError: true` かつ
+    // `MCP_INPUT_VALIDATION_ERROR_MARKER` 付きの英語の zod の JSON だった
+    // （SDK の入力検証がハンドラより先に落ちていたため）。期待を反転させた
+    // 理由と、保証が弱くなっていないことの説明は上のファイル冒頭の追記に
+    // 書いた。
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
     expect(result.text).toContain('request');
+    expect(result.text).toContain('空');
 
+    // **保存層に何も残らないこと——ここは変わらない保証。** fs の
+    // `scheduledRequestSchema` 自身も `request: z.string().min(1)` を持つ
+    // ので（`packages/core/src/schema.ts`）、道具側の判定が万一素通りしても
+    // fs 側が最後の網として ZodError を投げる（その場合はこの `it` 自体が
+    // 例外で落ちて赤くなる——「保存層に空文字が届かない」ことは、道具の
+    // 判定と fs 側の判定の**両方**で保証されている）。
     await expect(stores.schedules.get('probe')).resolves.toBeNull();
   });
 
