@@ -35,6 +35,10 @@
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"
+    },
+    "./job-status-running": {
+      "types": "./dist/job-status-running.d.ts",
+      "import": "./dist/job-status-running.js"
     }
   },
   "files": [
