@@ -151,6 +151,45 @@ describe('alteroid memory remove', () => {
   });
 });
 
+/**
+ * Issue #1641 本文の再現をそのまま歯にする。
+ *
+ * 本文はこう言っていた——「401（認証切れ）でも 500 でも『名前が不正』と案内
+ * する」「500 でも『無い』と言う」。ここではその2つの取り違えが**もう起きない
+ * こと**（401/500 は 400/404 の案内に化けず、例外として上へ通ること）を確かめる。
+ */
+describe('#1641 の再現（Issue 本文）', () => {
+  it('memory set: PUT が 500 なら投げる', async () => {
+    const dir = await makeTempDir('alteroid-memory-test-');
+    const path = join(dir, 'x.md');
+    await writeFile(path, 'なにか', 'utf8');
+    replies.push({ status: 500, body: { error: '内部エラー' } });
+
+    await expect(memorySetCommand('some-slug', { file: path })).rejects.toThrow();
+  });
+
+  it('memory set: PUT が 401 なら投げる（名前が不正、と案内しない）', async () => {
+    const dir = await makeTempDir('alteroid-memory-test-');
+    const path = join(dir, 'x.md');
+    await writeFile(path, 'なにか', 'utf8');
+    replies.push({ status: 401, body: {} });
+
+    const error = await memorySetCommand('some-slug', { file: path }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain('名前が不正');
+  });
+
+  it('memory remove: DELETE が 500 なら投げる（「そんな記憶はありません」に化けない）', async () => {
+    replies.push({ status: 500, body: { error: '内部エラー' } });
+
+    const error = await memoryRemoveCommand('some-slug').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain('そんな記憶はありません');
+  });
+});
+
 describe('alteroid memory list / show', () => {
   it('空なら「0 件」で終わらせず、次の一手を出す', async () => {
     const read = captureStdout();

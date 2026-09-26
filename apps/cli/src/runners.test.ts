@@ -355,4 +355,23 @@ describe('runnersVacateCommand', () => {
     expect(String(error)).toContain('空けると立てられませんでした（HTTP 400）');
     expect(String(error)).not.toContain('空けると立てた。');
   });
+
+  /**
+   * #1641 本文の対象外（`runners vacate` は本文には無いが、コーディネーターの
+   * 判断で同じ形として揃えた）。401/500 でも「立てた」ことにしない。
+   */
+  it('#1641: デーモンが 500 を返しても投げる（「立てた」と言わない）', async () => {
+    replies.push({ status: 500, body: { error: '内部エラー' } });
+
+    const error = await runnersVacateCommand('runner-2').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain('空けると立てた。');
+  });
+
+  it('#1641: デーモンが 401 を返しても投げる', async () => {
+    replies.push({ status: 401, body: {} });
+
+    await expect(runnersVacateCommand('runner-2')).rejects.toThrow();
+  });
 });

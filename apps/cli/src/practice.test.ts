@@ -297,6 +297,32 @@ describe('alteroid practice remove', () => {
   });
 });
 
+/**
+ * Issue #1641 本文の再現をそのまま歯にする（`memory.test.ts` の同名 describe と
+ * 対になる）。`practice set` / `practice edit` は同じ内部関数 `write()` を
+ * 共有するので、`practiceSetCommand` 経由で確かめれば `practiceEditCommand`
+ * の失敗経路も同じコードで守られる。
+ */
+describe('#1641 の再現（Issue 本文）', () => {
+  it('practice set: PUT が 500 なら投げる', async () => {
+    replies.push({ status: 404, body: { error: 'not found' } }); // 既存を見に行く（read）
+    replies.push({ status: 500, body: { error: '内部エラー' } }); // PUT
+
+    await expect(
+      practiceSetCommand('some-slug', { file: fileWith('本文\n'), kind: 'x', title: 'y' }),
+    ).rejects.toThrow();
+  });
+
+  it('practice remove: DELETE が 500 なら投げる（「そんなやり方はありません」に化けない）', async () => {
+    replies.push({ status: 500, body: { error: '内部エラー' } });
+
+    const error = await practiceRemoveCommand('some-slug').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain('そんなやり方はありません');
+  });
+});
+
 describe('alteroid practice list / show', () => {
   /**
    * ⭐ **空は正常である。** クローンの `practice_list` が逐語でそう言っている
