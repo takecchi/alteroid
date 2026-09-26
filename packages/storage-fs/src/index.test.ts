@@ -3668,18 +3668,22 @@ describe('AuthStore', () => {
   };
 
   /**
-   * **バグ探し（test/bughunt-auth）。** `listAccounts` は `createdAt` の
-   * **実時刻**順であるべきだが、fs / memory は `localeCompare`（文字列比較）で
-   * 並べている。`isoDateTime`（`z.string().datetime({ offset: true })`）は
-   * オフセット付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。
+   * **issue #1676。** `listAccounts` は `createdAt` の**実時刻**順でなければ
+   * ならない。直す前の fs / memory は `localeCompare`（文字列比較）で並べて
+   * いた。`isoDateTime`（`z.string().datetime({ offset: true })`）はオフセット
+   * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。
    *
    * ここでは実時刻で先に作られた行（`+09:00` 表記なので文字列は `"23"` から
    * 始まる）と、実時刻で後に作られた行（`+00:00` 表記なので文字列は `"15"` から
-   * 始まる）を作る。文字列比較では `"15" < "23"` なので順序が反転する——pg は
+   * 始まる）を作る。文字列比較では `"15" < "23"` なので順序が反転していた——pg は
    * `timestamptz` 列で実時刻を比較するので反転しない（`packages/storage-pg/src/
-   * index.test.ts` の対の歯が緑になることで示す）。
+   * index.test.ts` の対の歯と同じ入力で同じ期待値になることで示す）。
+   *
+   * **変異**: `compareCreatedAt`（`auth.ts`）を `(a, b) =>
+   * a.createdAt.localeCompare(b.createdAt)` に戻すと、この歯は赤に戻る
+   * （直した際に確認済み）。
    */
-  it('バグ疑い: listAccounts は createdAt の文字列比較で並ぶので、オフセット表記が違うと実時刻の順が崩れる', async () => {
+  it('listAccounts は createdAt の実時刻順（オフセット表記が違っても崩れない）', async () => {
     const early = {
       ...account,
       id: 'account-early-utc',
@@ -3700,6 +3704,85 @@ describe('AuthStore', () => {
     const ids = (await stores.auth.listAccounts()).map((it) => it.id);
     // 実時刻順は early（14:00Z）→ late（15:00Z）のはず。
     expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  });
+
+  /**
+   * **issue #1676（同じ族）。** `listIdentities` は明示的な並びを持たず
+   * （`identities.filter(...)` のみ）、`putIdentity` は更新されたばかりの行を
+   * 配列の末尾へ動かす（`identities: [...file.identities.filter(...), parsed]`）。
+   * pg は `createdAt` の `asc()` で並べるので、**更新しても順が動かない**——
+   * fs はここが揃っていなかった。
+   *
+   * **変異**: `listIdentities` の `.sort(compareCreatedAt)` を外すと、この歯は
+   * 赤に戻る（直した際に確認済み）。
+   */
+  it('listIdentities は createdAt の実時刻順（後から lastLoginAt を更新しても順が動かない）', async () => {
+    await stores.auth.putAccount(account);
+    const first = {
+      provider: 'google',
+      subject: 'sub-first',
+      accountId: 'account-1',
+      email: 'first@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-01-01T00:00:00.000Z',
+    };
+    const second = {
+      provider: 'google',
+      subject: 'sub-second',
+      accountId: 'account-1',
+      email: 'second@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-02T00:00:00.000Z',
+      lastLoginAt: '2026-01-02T00:00:00.000Z',
+    };
+    await stores.auth.putIdentity(first);
+    await stores.auth.putIdentity(second);
+    // first だけ後から更新する。fs は「消して末尾へ足す」形なので、直す前は
+    // ここで first が second より後ろへ動いていた。
+    await stores.auth.putIdentity({ ...first, lastLoginAt: '2026-01-03T00:00:00.000Z' });
+
+    const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
+    expect(subjects).toEqual(['sub-first', 'sub-second']);
+  });
+
+  /**
+   * **issue #1676（同じ族）。** `listAccessTokens` も同じ形——
+   * `putAccessToken`（`touch()` 経由の `lastUsedAt` 書き戻しを含む）が
+   * 更新した行を末尾へ動かす。pg は `createdAt` の `asc()` なので動かない。
+   *
+   * **変異**: `listAccessTokens` の `.sort(compareCreatedAt)` を外すと、
+   * この歯は赤に戻る（直した際に確認済み）。
+   */
+  it('listAccessTokens は createdAt の実時刻順（後から lastUsedAt を更新しても順が動かない）', async () => {
+    await stores.auth.putAccount(account);
+    const first = {
+      id: 'token-first',
+      accountId: 'account-1',
+      sha256: 'a'.repeat(64),
+      label: 'first',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    const second = {
+      id: 'token-second',
+      accountId: 'account-1',
+      sha256: 'b'.repeat(64),
+      label: 'second',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    await stores.auth.putAccessToken(first);
+    await stores.auth.putAccessToken(second);
+    // first だけ後から「使った」印を付ける（`touch()` と同じ形の更新）。
+    await stores.auth.putAccessToken({ ...first, lastUsedAt: '2026-01-03T00:00:00.000Z' });
+
+    const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
+    expect(ids).toEqual(['token-first', 'token-second']);
   });
 
   it('アカウントを保存して読み戻せる', async () => {
