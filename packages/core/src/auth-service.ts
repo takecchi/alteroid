@@ -222,20 +222,25 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         });
       } else {
         /**
-         * 初めて見る identity。**メールが一致しても既存アカウントへ相乗りさせない。**
+         * 初めて見る identity（にこの時点では見える）。**メールが一致しても
+         * 既存アカウントへ相乗りさせない。**
          *
          * 別プロバイダで同じメールを名乗れる以上、メール一致での自動結合は
          * 「他人のメールでアカウントを作れば持ち主になれる」経路になる。
          * ここでは必ず別アカウントとして作り、許可は人間が CLI で明示的に与える。
          * 結合（同一人物の複数ログイン手段を束ねる）は identity 側に accountId が
          * あるので後から足せる。
+         *
+         * **メールの衝突検査（大小文字違いの攻撃者を弾く）はここ（読んでから
+         * 書く外側）で行う。** 同じ `(provider, subject)` を同時に取り合う競合
+         * とは別の話なので、`createAccountWithIdentity` の中には入れない。
          */
         const collision =
           profile.email !== null && profile.emailVerified
             ? await store.findAccountByEmail(profile.email)
             : null;
 
-        account = {
+        const candidateAccount: AuthAccount = {
           id: newId(),
           displayName: profile.displayName,
           // 衝突するときは連絡先を空にしておく（検証済みメールの一意性を壊さない）。
@@ -246,16 +251,48 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
           grantedBy: null,
           ownerDeclaredAt: null,
         };
-        await store.putAccount(account);
-        await store.putIdentity({
-          provider: provider.id,
-          subject: profile.subject,
-          accountId: account.id,
-          email: profile.email,
-          emailVerified: profile.emailVerified,
-          createdAt: at,
-          lastLoginAt: at,
+
+        /**
+         * **account の作成と identity の作成を1操作で行う**（issue #1714）。
+         *
+         * 上の `findIdentity` は早期の門前払いでしかない。同じ
+         * `(provider, subject)` の2つのログインが同時に着くと、両方がここまで
+         * `null` を見て進む。「読む→検査→書く」に割ったままだと両方が別の
+         * account を作ってしまうので、`putAccount` + `putIdentity` の対を
+         * ストアの1操作へ渡し、在れば作らず既存を返させる。
+         */
+        const outcome = await store.createAccountWithIdentity({
+          account: candidateAccount,
+          identity: {
+            provider: provider.id,
+            subject: profile.subject,
+            accountId: candidateAccount.id,
+            email: profile.email,
+            emailVerified: profile.emailVerified,
+            createdAt: at,
+            lastLoginAt: at,
+          },
         });
+
+        if (outcome.created) {
+          account = candidateAccount;
+        } else {
+          // 負けた側。既存 identity のログインと同じ扱いに落とす
+          // （直上の `existing !== null` の分岐と同じ処理）。
+          const found = await store.getAccount(outcome.existing.accountId);
+          if (found === null) {
+            await fail(request, 'exchange_failed');
+            return { status: 'error', reason: 'exchange_failed' };
+          }
+          account = { ...found, lastLoginAt: at };
+          await store.putAccount(account);
+          await store.putIdentity({
+            ...outcome.existing,
+            email: profile.email,
+            emailVerified: profile.emailVerified,
+            lastLoginAt: at,
+          });
+        }
       }
 
       await store.putLoginRequest({

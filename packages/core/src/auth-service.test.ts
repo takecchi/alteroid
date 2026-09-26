@@ -353,6 +353,58 @@ describe('createAuthService', () => {
     expect(await service.authenticate(claimedFirst.token)).not.toBeNull();
   });
 
+  /**
+   * **issue #1714。** `completeLogin` の「初めて見る identity」の分岐は
+   * `findIdentity` → （無ければ）`putAccount` → `putIdentity` の読んでから書く形
+   * だった。同じ `(provider, subject)` の2つのログインが同時に着くと、両方が
+   * `findIdentity` で null を見て、それぞれ別の `AuthAccount` を作ってしまう
+   * （負けた側の identity は上書きされ、そのアカウントは二度とログインできない
+   * まま `listAccounts()` に残る）。
+   *
+   * **変異**: `AuthStore.createAccountWithIdentity` の「在れば作らない」判定を
+   * 外すと、この歯は赤に戻る。
+   */
+  it('同じ identity で2つのログインが同時に完了しても、アカウントは1つで両方が同じ accountId になる（#1714）', async () => {
+    const first = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const second = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const stateFirst = decodeState(
+      new URL(first.authorizationUrl).searchParams.get('state') ?? '',
+    );
+    const stateSecond = decodeState(
+      new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+    );
+    expect(stateFirst).not.toBeNull();
+    expect(stateSecond).not.toBeNull();
+
+    const [resultA, resultB] = await Promise.all([
+      service.completeLogin({
+        state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+        code: 'code-alice',
+      }),
+      service.completeLogin({
+        state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+        code: 'code-alice',
+      }),
+    ]);
+
+    expect(resultA.status).toBe('ok');
+    expect(resultB.status).toBe('ok');
+    if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+      throw new Error('ログインできていない');
+    }
+    expect(resultA.accountId).toBe(resultB.accountId);
+
+    const accounts = await store.listAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(await store.listIdentities(resultA.accountId)).toHaveLength(1);
+  });
+
   it('同じ claim を並行に投げても、有効なトークンは1本しか出ない', async () => {
     const { requestId, claimSecret } = await login('code-alice');
 

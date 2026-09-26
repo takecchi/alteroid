@@ -1124,6 +1124,16 @@ export function createMemoryStores(): Stores {
     async putIdentity(identity) {
       identities.set(identityKey(identity.provider, identity.subject), identity);
     },
+    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由——
+    // 挟むと同じ identity を作ろうとする2本目が割り込む窓ができる。issue #1714）。
+    async createAccountWithIdentity({ account, identity }) {
+      const key = identityKey(identity.provider, identity.subject);
+      const existing = identities.get(key);
+      if (existing !== undefined) return { created: false, existing };
+      accounts.set(account.id, account);
+      identities.set(key, identity);
+      return { created: true };
+    },
     async putAccessToken(token) {
       accessTokens.set(token.id, token);
     },

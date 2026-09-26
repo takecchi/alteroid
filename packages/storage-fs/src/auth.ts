@@ -12,6 +12,7 @@ import type {
   AuthAccount,
   AuthIdentity,
   AuthStore,
+  CreateAccountWithIdentityOutcome,
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
@@ -171,6 +172,39 @@ export class FsAuthStore implements AuthStore {
         parsed,
       ],
     }));
+  }
+
+  /**
+   * 「初めて見る identity」の account 作成を**1回の書き込みで**行う（issue #1714）。
+   *
+   * `#mutate` の判定・書き込みは同期的に評価されるので（`#mutate` の doc）、
+   * ここで見た「identity が無い」は書き込みの瞬間まで有効——同じ排他区間の
+   * 外から割り込む隙間が無い。在れば `next: null` で何も書かずに既存を返す。
+   */
+  async createAccountWithIdentity(input: {
+    account: AuthAccount;
+    identity: AuthIdentity;
+  }): Promise<CreateAccountWithIdentityOutcome> {
+    return this.#mutate<CreateAccountWithIdentityOutcome>(
+      (file): { next: AuthFile | null; result: CreateAccountWithIdentityOutcome } => {
+        const existing = file.identities.find(
+          (it) => it.provider === input.identity.provider && it.subject === input.identity.subject,
+        );
+        if (existing !== undefined) {
+          return { next: null, result: { created: false, existing } };
+        }
+        const account = authAccountSchema.parse(input.account);
+        const identity = authIdentitySchema.parse(input.identity);
+        return {
+          next: {
+            ...file,
+            accounts: [...file.accounts.filter((it) => it.id !== account.id), account],
+            identities: [...file.identities, identity],
+          },
+          result: { created: true },
+        };
+      },
+    );
   }
 
   async putAccessToken(token: AccessTokenRecord): Promise<void> {
