@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AnsweredViaLike } from './answered-via.js';
 import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
+import type { JobStatusLike } from './job-status-running.js';
 import { systemErrorFactsSchema } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
@@ -3302,6 +3303,25 @@ export const jobStatusSchema = z.enum([
 ]);
 
 export type JobStatus = z.infer<typeof jobStatusSchema>;
+
+/**
+ * `job-status-running.ts` の {@link JobStatusLike}（手書き）が、この zod
+ * スキーマから推論した {@link JobStatus} と構造的に一致することの強制
+ * （`_AssertAnsweredViaMatchesLikeType` と同じ形。9回目の横断レビュー指摘）。
+ *
+ * 軽い口（`job-status-running.ts`）は zod を import できないので、
+ * `JobStatus` をそのまま使えず、同じ形を手で書き写している。**ここが崩れると、
+ * 両者は静かにずれうる**——`jobStatusSchema` に選択肢を足しても
+ * `JobStatusLike` を書き換え忘れれば、`isRunningJobStatus` の型はいまの
+ * 6値のままで新しい値を受け付けられず、この `typecheck` が落ちて初めて
+ * 気づく。**これは事故ではなく歯である**——新しい値を「実行中」に入れるか
+ * 外すかを、`isRunningJobStatus` の `switch` へ明示的に足すまで
+ * `pnpm typecheck` が赤いままにするための仕掛け。相互に `extends` させ、
+ * 片方でも欠けたら `false` になって `AssertTrue<false>` が落とす。
+ */
+export type _AssertJobStatusMatchesRunningLikeType = AssertTrue<
+  [JobStatus] extends [JobStatusLike] ? ([JobStatusLike] extends [JobStatus] ? true : false) : false
+>;
 
 /**
  * workspace の所在（M4 で置く継ぎ目）。
