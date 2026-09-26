@@ -1143,7 +1143,11 @@ describe('#1593: 畳む・中断の経路では question も deny(理由付き)�
     ) => Promise<PermissionResult>;
     const askPromise = canUseTool(
       'AskUserQuestion',
-      { questions: [{ question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false }] },
+      {
+        questions: [
+          { question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false },
+        ],
+      },
       { signal: new AbortController().signal, requestId: 'req-q-answer' },
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1158,9 +1162,9 @@ describe('#1593: 畳む・中断の経路では question も deny(理由付き)�
     const answer = await askPromise;
 
     expect(answer.behavior).toBe('allow');
-    expect((answer as { updatedInput?: { answers?: Record<string, string> } }).updatedInput?.answers).toEqual(
-      { 'DB はどちらにする？': 'PostgreSQL で' },
-    );
+    expect(
+      (answer as { updatedInput?: { answers?: Record<string, string> } }).updatedInput?.answers,
+    ).toEqual({ 'DB はどちらにする？': 'PostgreSQL で' });
 
     const settled = s.events.find(
       (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
