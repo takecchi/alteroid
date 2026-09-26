@@ -293,12 +293,21 @@ export function createMemoryStores(): Stores {
     at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 
   /**
-   * **本物（fs の `#path` / pg の `#slug`）と同じ slug の検査を掛ける。** かつては
-   * インメモリだけが何でも受け付けたので、クローンの道具へ不正な slug を渡す歯が
-   * 本物では例外になる入力を「書けた」として通していた（2026-09-26 のバグ探しで
-   * 見つけた差）。掛けるのは fs と pg の**両方**が検査している `read` / `write` /
-   * `append` / `remove` だけ——片方だけが検査するメソッドまで締めると、今度は
-   * 本物より厳しい逆向きの差になる。文言も本物と同じにする。
+   * **本物（fs の `#checkSlug` / pg の `#slug`）と同じ slug の検査を掛ける。**
+   * かつてはインメモリだけが何でも受け付けたので、クローンの道具へ不正な
+   * slug を渡す歯が本物では例外になる入力を「書けた」として通していた
+   * （2026-09-26 のバグ探しで見つけた差、#1640）。
+   *
+   * **掛けるのは `read` / `write` / `append` / `remove` / `protectionStatus`
+   * / `markHumanTouched` / `markCreatedAt` の全部である（issue #1700）。**
+   * かつてここは「fs と pg の両方が検査しているメソッドだけに掛ける。片方
+   * だけが検査するメソッドまで締めると、今度は本物より厳しい逆向きの差に
+   * なる」と断っていたが、それは現物と食い違っていた——`protectionStatus`
+   * は pg だけが検査し、`markHumanTouched` / `markCreatedAt` は pg が直接
+   * 検査し、fs も（`read()` 経由の間接検査で）実質的に検査していた。**3実装
+   * とも検査しているのに、インメモリだけが検査していない**という #1634 と
+   * 同じ形の穴が3つとも残っていたので、#1700 で fs 側の間接検査を直接検査に
+   * 直したうえで、この3メソッドもここへ含めた。文言も本物と同じにする。
    */
   const checkMemorySlug = (slug: string): void => {
     if (!memorySlugSchema.safeParse(slug).success) throw new Error(`記憶のスラッグが不正: ${slug}`);
@@ -437,6 +446,7 @@ export function createMemoryStores(): Stores {
       createdAtStore.delete(slug);
     },
     async protectionStatus(slug): Promise<MemoryProtectionStatus> {
+      checkMemorySlug(slug);
       if (humanTouchedAt.has(slug)) return { kind: 'human' };
       const hash = contentSha256.get(slug);
       if (hash === undefined) return { kind: 'unknown' };
@@ -445,12 +455,14 @@ export function createMemoryStores(): Stores {
       return hash === sha256Hex(doc.content) ? { kind: 'clone-only' } : { kind: 'unknown' };
     },
     async markHumanTouched(slug, at) {
+      checkMemorySlug(slug);
       // 実体も索引も無い slug には新しく行を作らない（fs / pg と同じ約束）。
       if (!documents.has(slug) && !humanTouchedAt.has(slug)) return;
       const prior = humanTouchedAt.get(slug);
       if (prior === undefined || at > prior) humanTouchedAt.set(slug, at);
     },
     async markCreatedAt(slug, at) {
+      checkMemorySlug(slug);
       // 実体も index も無い slug には新しく行を作らない（`markHumanTouched` と
       // 同じ約束）。**一度きりの確定**——既に値が入っていれば何もしない
       // （絶対条件2「埋めるのは値が無いときだけ」。fs / pg と同じ）。
