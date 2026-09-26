@@ -135,6 +135,7 @@ export const KEY = {
   mcpServers: { type: 'mcpServers' } as const,
   permissionGrants: { type: 'permissionGrants' } as const,
   dropped: { type: 'dropped' } as const,
+  appraisalStats: { type: 'appraisalStats' } as const,
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
   inbox: { type: 'inbox' } as const,
@@ -561,6 +562,19 @@ export function useMcpServers() {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
   });
+}
+
+/**
+ * 評定（`good`/`bad`/`unclear`/未評定）の内訳（`GET /appraisal-stats`。issue
+ * #1278 の HTTP 面、issue #1620 の Web 面——PRD「入口の等価性」）。**資格は
+ * 認証のみ**（`/journal` `/dropped` と同じ強さ。`requireOperator` は付いて
+ * いない——`apps/daemon/src/app.ts` の `GET /appraisal-stats` の doc）。
+ * **読み取り専用。クエリ引数は無い**（出力は母集団の件数に関わらず固定個数の
+ * 集計値なので窓を切る必要が無い）。
+ */
+export function useAppraisalStats() {
+  const api = useApi();
+  return useSWR(KEY.appraisalStats, () => api.api.GET('/appraisal-stats').then(unwrap));
 }
 
 /**

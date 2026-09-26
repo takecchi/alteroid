@@ -218,9 +218,7 @@ describe('/appraisal-stats 画面 — 人間とクローンの食い違い', () 
 
     await renderPage();
 
-    const notes = await screen.findAllByText(
-      '（クローンが付けた評定を人間が付け直した対は無い）',
-    );
+    const notes = await screen.findAllByText('（クローンが付けた評定を人間が付け直した対は無い）');
     expect(notes.length).toBe(2);
   });
 
@@ -242,10 +240,13 @@ describe('/appraisal-stats 画面 — 人間とクローンの食い違い', () 
 
     await renderPage();
 
-    expect(screen.getByText(/クローン「良かった」→人間「悪かった」: 2 件（食い違い）/)).toBeTruthy();
+    expect(
+      screen.getByText(/クローン「良かった」→人間「悪かった」: 2 件（食い違い）/),
+    ).toBeTruthy();
     expect(screen.getByText(/合計: 2 対（一致 0 \/ 食い違い 2）/)).toBeTruthy();
     // 0件でも「測っていない」とは違う、という注記自体は常に出る。
-    const undeterminedNotes = screen.getAllByText(/0件は「無かった」であって「測っていない」ではない/);
+    const undeterminedNotes =
+      screen.getAllByText(/0件は「無かった」であって「測っていない」ではない/);
     expect(undeterminedNotes.length).toBe(2);
   });
 

@@ -7,6 +7,7 @@ import {
   CalendarClock,
   DollarSign,
   Footprints,
+  Gauge,
   Inbox as InboxIcon,
   KeyRound,
   LayoutDashboard,
@@ -44,6 +45,10 @@ const NAV = [
   // いなくても片付いていない仕事はある）。
   { to: '/commitments', label: '未了の仕事', icon: ListChecks, end: false },
   { to: '/managers', label: 'マネージャー', icon: Users, end: false },
+  // マネージャーの隣。評定（good/bad/unclear）は台帳（未了の仕事）と委譲
+  // （マネージャー）の両方の軸を跨いで集計するので、どちらか一方の詳細画面では
+  // なくここに置く（issue #1278 / #1620。PRD「入口の等価性」）。
+  { to: '/appraisal-stats', label: '評定の内訳', icon: Gauge, end: false },
   { to: '/journal', label: '日誌', icon: Activity, end: false },
   { to: '/reports', label: '日報', icon: BookText, end: false },
   { to: '/usage', label: '利用状況', icon: DollarSign, end: false },

@@ -271,3 +271,23 @@ export type InboxRemoveManyResult = Ok<paths['/inbox/remove']['post']>;
  * （`apps/daemon/src/openapi.ts` の `inboxBacklogResponseSchema`）。
  */
 export type InboxBacklog = Ok<paths['/inbox']['get']>;
+
+/**
+ * 評定の内訳（`GET /appraisal-stats`。issue #1278 の HTTP 面、issue #1620 の
+ * Web 面）。クローンの道具 `appraisal_stats`（`packages/core/src/tools.ts`）と
+ * 同じものを人間の入口（Web UI）から読む——`@alteroid/core` の
+ * `AppraisalJournalStats` / `JobAppraisalCoverage` / `AppraisalReconciliationStats`
+ * を1つの JSON へ写したもの（`apps/daemon/src/openapi.ts` の
+ * `appraisalStatsResponseSchema`）。**読み取り専用。**
+ */
+export type AppraisalStats = Ok<paths['/appraisal-stats']['get']>;
+/** 先頭一致で数えた評定の内訳（`good`/`bad`/`unclear`/`other`/`total`）。 */
+export type AppraisalDecisionTally = AppraisalStats['journal']['commitments'];
+/** 仕事の種類ごとの評定行（issue #1308 段B）。`workKind: null` は未分類。 */
+export type AppraisalWorkKindTally = AppraisalStats['journal']['byWorkKind']['commitments'][number];
+/** 1つの `JobStatus`（終端した状態だけ）について、評定の有無を数えた行。 */
+export type JobAppraisalCoverageRow = AppraisalStats['jobCoverage']['byStatus'][number];
+/** 1つの軸（台帳 or 委譲）ぶんの (b) 人間 と (c) クローンの食い違い（issue #1310）。 */
+export type AppraisalReconciliation = AppraisalStats['reconciliation']['commitments'];
+/** (クローンの値 → 人間の値) の組ごとの件数。 */
+export type AppraisalReconciliationTransition = AppraisalReconciliation['transitions'][number];
