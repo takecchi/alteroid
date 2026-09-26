@@ -568,8 +568,16 @@ export interface PermissionGrantStore {
    * 書くまでの間に人間の `revoke` が割り込むと、**`#onPreToolUse` 側が
    * 持っていた「`revokedAt` が無い」古い写しがそのまま書き戻り、取り消しが
    * 消えていた**（`revoke` の doc の実測はこの逆方向）。
+   *
+   * **取り消されていれば記録せず `false` を返す（Issue #1687）。** 返すのは
+   * 「排他区間の中で見たとき、許可が在り、取り消されていなかったか」で、
+   * `lastUsedAt` を進めたかどうかではない（既存より古い時刻で進めなかった回も
+   * `true`）。`#onPreToolUse` は `list()` の写しで照合するので、読んだ後に人間の
+   * 取り消しが完了すると、写しの上では生きている許可で道具が1回通っていた。
+   * 判断をこの戻り値に寄せることで、「取り消した」が人間に返った後に、その許可で
+   * 通ることは無くなる（判断と記録が同じ区間に入る）。無い id も `false`。
    */
-  markUsed(id: string, at: string): Promise<void>;
+  markUsed(id: string, at: string): Promise<boolean>;
 }
 
 /**

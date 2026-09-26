@@ -2789,6 +2789,44 @@ describe('クローン', () => {
       expect(stored?.revokedAt).toBeDefined();
     });
 
+    /**
+     * **Issue #1687。** `list()` で読んだ後、照合が許可に着く前に人間の取り消しが
+     * 完了すると、写しの上では生きている許可で道具が1回通っていた。判断を
+     * `markUsed`（取り消されていれば記録せず `false`）の結果に寄せたので、
+     * 「取り消した」が人間に返った後に、その許可で通ることは無い。
+     */
+    it('list() の後に人間の取り消しが完了していたら、同じ呼び出しでもその許可では通さない', async () => {
+      const base = createMemoryStores();
+      const stores: Stores = {
+        ...base,
+        permissionGrants: {
+          ...base.permissionGrants,
+          async list() {
+            const grants = await base.permissionGrants.list();
+            // 読んだ後に取り消しが確定する（人間には「取り消した」が返る）。
+            await base.permissionGrants.revoke('grant-1', '2026-01-02T00:00:00.000Z');
+            return grants;
+          },
+        },
+      };
+      const s = setup(undefined, stores);
+      await base.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      const result = (await hook(
+        { tool_name: 'Bash', tool_input: { command: 'gh release edit' } } as never,
+        undefined,
+        {} as never,
+      )) as { hookSpecificOutput?: { permissionDecision?: string } };
+
+      expect((await base.permissionGrants.get('grant-1'))?.revokedAt).toBeDefined();
+      expect(result.hookSpecificOutput?.permissionDecision).not.toBe('allow');
+      // 取り消された許可に「使った」時刻を残さない。
+      expect((await base.permissionGrants.get('grant-1'))?.lastUsedAt).toBeUndefined();
+
+      await s.clone.stop();
+    });
+
     it('Bash 以外の道具には何もしない', async () => {
       const s = setup();
       await s.stores.permissionGrants.put(GRANT);

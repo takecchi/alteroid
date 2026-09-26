@@ -1,6 +1,6 @@
 import { permissionGrantSchema } from '@alteroid/core';
 import type { PermissionGrant, PermissionGrantStore } from '@alteroid/core';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { permissionGrants } from './schema.js';
@@ -96,8 +96,11 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
    * いないことは、この文が `record` の他のキーを1つも参照しないことで担保
    * される）。既存より古い時刻では戻さない（`case` で pre-image と比べる）。
    */
-  async markUsed(id: string, at: string): Promise<void> {
-    await this.#db
+  async markUsed(id: string, at: string): Promise<boolean> {
+    // **取り消し済みの行は条件で外す（Issue #1687）。** 更新できた行があるか＝
+    // 「在って、取り消されていなかったか」。`lastUsedAt` を進めなかった回
+    // （既存のほうが新しい）も同じ値で書き戻すので行は返る＝`true`。
+    const rows = await this.#db
       .update(permissionGrants)
       .set({
         record: sql`jsonb_set(
@@ -114,6 +117,10 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
           true
         )`,
       })
-      .where(eq(permissionGrants.id, id));
+      .where(
+        and(eq(permissionGrants.id, id), sql`${permissionGrants.record} ->> 'revokedAt' is null`),
+      )
+      .returning({ id: permissionGrants.id });
+    return rows.length > 0;
   }
 }

@@ -70,17 +70,19 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
    * 一切触れない——差し替えるのは `lastUsedAt` だけ。既存より古い時刻では
    * 戻さない。
    */
-  async markUsed(id: string, at: string): Promise<void> {
-    await this.#update((file) => {
+  async markUsed(id: string, at: string): Promise<boolean> {
+    return this.#update((file) => {
       const found = file.grants.find((grant) => grant.id === id);
-      if (found === undefined) return { next: file, result: undefined };
+      // 無い・取り消し済みなら記録しない（Issue #1687。`PermissionGrantStore.markUsed` の doc）。
+      if (found === undefined || found.revokedAt !== undefined)
+        return { next: file, result: false };
       if (found.lastUsedAt !== undefined && found.lastUsedAt >= at) {
-        return { next: file, result: undefined };
+        return { next: file, result: true };
       }
       const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });
       return {
         next: { grants: file.grants.map((grant) => (grant.id === id ? next : grant)) },
-        result: undefined,
+        result: true,
       };
     });
   }
