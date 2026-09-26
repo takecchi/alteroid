@@ -1,4 +1,5 @@
 import { COMMITMENT_APPRAISAL_DECISION_PREFIX, describeAppraisal } from '@alteroid/core';
+import { FsPersonaStore } from '@alteroid/storage-fs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -48,7 +49,7 @@ import {
 } from '@alteroid/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeTempDirSync } from '../../../vitest.tmpdir.js';
+import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createApp, parseAllowedOrigins } from './app.js';
 import { encodeCursor } from './cursor.js';
@@ -3958,6 +3959,62 @@ describe('HTTP API', () => {
  * 留める（`toMatchObject` は余分な鍵を見逃す。`AGENTS.md`「報告の形」と同じ
  * 理由で、判定できることは判定できる形で書く）。
  */
+/**
+ * **issue #1634。**
+ *
+ * `PUT /memory/:slug` と `DELETE /memory/:slug` はどちらもハンドラの先頭で
+ * `memorySlugSchema.safeParse(slug)` を明示的に検査し、落ちれば
+ * `{ error: '記憶のスラッグが不正' }` を 400 で返す
+ * （`grep -Fn -- "記憶のスラッグが不正" apps/daemon/src/app.ts`）。
+ *
+ * **`GET /memory/:slug` にはこの検査が無かった。** `stores.persona.read(c.req.param('slug'))`
+ * を直接呼ぶだけだった。`packages/core/src/testing.ts` の in-memory 実装は
+ * ただの `Map` の参照なので不正なスラッグでも例外を投げず 404 に落ちるが、
+ * 本番で使う `FsPersonaStore`（`packages/storage-fs/src/persona.ts`）の
+ * `#path(slug)` は `memorySlugSchema.safeParse` に落ちると同期的に
+ * `throw new Error('記憶のスラッグが不正: ...')` する
+ * （`grep -Fn -- "記憶のスラッグが不正: " packages/storage-fs/src/persona.ts`）。
+ * この例外は `read()` の try/catch の外（`#path` の呼び出し自体）で投げられる
+ * ので、ハンドラが捕まえなければ `createApp` の `base.onError` まで抜けて
+ * 500 Internal Server Error になる——`PUT`/`DELETE` の同じ入力は 400 で
+ * 断っているのに、`GET` だけ形も status も違っていた。
+ */
+describe('GET /memory/:slug は不正なスラッグを 400 で断る（issue #1634）', () => {
+  it('PUT・DELETE と同じ 400 になる（fs 実装。直す前は 500 だった）', async () => {
+    const dir = await makeTempDir('alteroid-memory-slug-');
+    const base = createMemoryStores();
+    const fsStores: Stores = { ...base, persona: new FsPersonaStore(dir, base.journal) };
+    const fsApp = createApp({
+      clone: fakeClone().clone,
+      stores: fsStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    // `memorySlugSchema`（`/^[a-z0-9][a-z0-9._-]*$/`）に落ちる——先頭が大文字。
+    const badSlug = 'UPPER';
+
+    const putRes = await fsApp.request(`/memory/${badSlug}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'x' }),
+    });
+    expect(putRes.status, 'PUT は不正なスラッグを 400 で断る（想定どおり）').toBe(400);
+    const putBody = (await putRes.json()) as { error: string };
+
+    const getRes = await fsApp.request(`/memory/${badSlug}`);
+    expect(
+      getRes.status,
+      'GET /memory/:slug は PUT/DELETE と同じ入力なら 400 を返すべき' +
+        '（直す前は FsPersonaStore#path が投げた例外が onError まで素通りして500だった）。',
+    ).toBe(400);
+    const getBody = (await getRes.json()) as { error: string };
+    // **本文の文言も PUT/DELETE と揃える。**
+    expect(getBody).toEqual(putBody);
+    expect(getBody).toEqual({ error: '記憶のスラッグが不正' });
+  });
+});
+
 describe('GET /approvals の order/limit/cursor（issue #432）', () => {
   it('既定の呼び（order/limit/cursor を渡さない）では応答の鍵が増えない', async () => {
     await stores.jobs.putApproval({
