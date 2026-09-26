@@ -60,6 +60,18 @@ export interface McpServerService {
    * **古い runner（口が 404）は `RunnerMcpServersUnsupportedError` を投げる。**
    */
   syncRunner(runner: RunnerClient): Promise<{ mcpServers?: RunnerMcpServersFingerprint } | null>;
+  /**
+   * **`apply()` の即時の配布の結果を知らせる（Issue #1699）。** 返り値は購読を外す関数。
+   *
+   * `apply()` は保存の直後に、繋がっている runner へその場で直接配る。この経路は
+   * `ManagerPool` の押し込みの帳面（`#pushHealth`）と挑み直し（`#schedulePushRetry`）を
+   * 通らなかったので、一時的な障害で配り損ねても `runner_list` は前の「ok」のままで、
+   * 挑み直しも予約されなかった（名乗りのときの配布は「諦めずに挑み直す」と約束して
+   * いるのに）。`ManagerPool` がここを購読し、同じ帳面に積む——約束を1つにする。
+   *
+   * **任意の口である。** 偽物（テスト）は持たなくてよい。
+   */
+  onPushed?(listener: (results: readonly McpServersRunnerResult[]) => void): () => void;
 }
 
 export interface McpServerServiceOptions {
@@ -94,6 +106,7 @@ export interface ApplyMcpServersResult {
 
 export function createMcpServerService(options: McpServerServiceOptions): McpServerService {
   const { stores, runners } = options;
+  const pushListeners = new Set<(results: readonly McpServersRunnerResult[]) => void>();
 
   // 直列化の実体（`profile-service.ts` の `serial` と同じ形）。前の失敗で列が
   // 止まらないように、常に解決する形で繋ぐ。
@@ -117,15 +130,29 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
         // 正本の版へ巻き戻る（しかも誰も成功と言っていない版が一時的に効く）。
         const stored = await stores.mcpServers.write(servers);
         const names = mcpServerNames(stored.mcpServers);
+        const pushed = await pushAll(stored.mcpServers);
+        // 購読者（`ManagerPool`）の例外で、人間への応答を落とさない。
+        for (const listener of pushListeners) {
+          try {
+            listener(pushed);
+          } catch {
+            // 帳面に積めなかっただけで、配布の結果そのものは下で返す。
+          }
+        }
         return {
           updatedAt: stored.updatedAt,
           names,
           // **指紋は正本から取る。** runner が返す指紋と同じ関数を通すので、
           // 突き合わせれば「届いているか」がそのまま言える。
           ...(names.length === 0 ? {} : { sha256: mcpServersFingerprintOf(stored.mcpServers) }),
-          runners: await pushAll(stored.mcpServers),
+          runners: pushed,
         };
       }),
+
+    onPushed: (listener) => {
+      pushListeners.add(listener);
+      return () => pushListeners.delete(listener);
+    },
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {

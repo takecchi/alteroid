@@ -4570,6 +4570,11 @@ class Pool implements ManagerPool {
    * 挑み直すためのものだからである。
    */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * `ProfileService` / `McpServerService` の `onPushed`（即時の配布の結果）の購読を
+   * 外す関数（Issue #1699。`#recordDirectPushResults` の doc）。`stop()` で外す。
+   */
+  readonly #unsubscribeDirectPushes: (() => void)[] = [];
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
   readonly #pushRetryDelays = new Map<string, number>();
   /**
@@ -4608,6 +4613,13 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
+    // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699）。**
+    for (const unsubscribe of [
+      profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
+      mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
+    ]) {
+      if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
+    }
     this.#now = now ?? (() => Date.now());
     this.#leaseTtlMs = leaseTtlMs ?? LEASE_TTL_MS;
     this.#withheldReportFlushMs = withheldReportFlushMs ?? resolveWithheldReportFlushMs();
@@ -7648,6 +7660,7 @@ class Pool implements ManagerPool {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    for (const unsubscribe of this.#unsubscribeDirectPushes.splice(0)) unsubscribe();
     // **窓の中でデーモンが落ちると、積んだ知らせが失われる。** ここで flush
     // しないと `setTimeout` は二度と発火しない（プロセスが終わるので）——
     // `#flushSynthesizedNotices` は全 managerId ぶんを同期的に配り切る
@@ -11091,6 +11104,43 @@ class Pool implements ManagerPool {
    * 試みる——ここは「繋がったまま runner 側の一時障害だけが直った」ケースを、
    * 次の `hello` を待たずに拾うためのものである。
    */
+  /**
+   * **`apply()` の即時の配布の結果を、名乗りのときの配布と同じ帳面に積む（Issue #1699）。**
+   *
+   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` は、保存の直後に繋がっている
+   * runner へその場で直接配る（`McpServerService.apply` / `ProfileService.apply`）。
+   * この経路が帳面（`#pushHealth`）も挑み直し（`#schedulePushRetry`）も通らなかった
+   * ので、一時的な障害で配り損ねても `runner_list` の「直近の押し込み」は前の「ok」の
+   * ままで、挑み直しも予約されず、runner が名乗り直すまで古い版のまま走っていた。
+   * **名乗りのときの配布（`#pushProfile` / `#pushMcpServers`）と同じく、失敗は
+   * `failed` として帳面に書き、`#settlePushRetry` で挑み直しを予約する**
+   * （「間隔は伸ばすが、諦めはしない」の約束を1つにする）。成功は `ok` で上書きする。
+   *
+   * 日誌の行は書かない。即時の配布の失敗は、呼び出し元（`app.ts` の `PUT`）が既に
+   * 日誌へ残している——ここで書くと二重になる。
+   */
+  #recordDirectPushResults(
+    kind: 'profile' | 'mcpServers',
+    results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
+  ): void {
+    if (this.#stopped) return;
+    const at = this.#nowIso();
+    for (const result of results) {
+      if (kind === 'mcpServers') {
+        if (result.unsupported === true) this.#mcpServersUnsupported.add(result.runnerId);
+        else this.#mcpServersUnsupported.delete(result.runnerId);
+      }
+      this.#notePushOutcome(
+        result.runnerId,
+        kind,
+        result.ok
+          ? { status: 'ok', at }
+          : { status: 'failed', at, error: result.error ?? '理由不明' },
+      );
+      this.#settlePushRetry(result.runnerId);
+    }
+  }
+
   #settlePushRetry(runnerId: string): void {
     const health = this.#pushHealth.get(runnerId);
     // **口を持たない古い runner への MCP の登録（#325 段3）は数えない。** 挑み直しても
