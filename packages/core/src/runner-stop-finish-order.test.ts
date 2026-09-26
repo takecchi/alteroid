@@ -1072,6 +1072,142 @@ describe('#1602: #finish() が畳んでいる間に stop() が来ると、待た
   });
 });
 
+/**
+ * **Issue #1605 の再現。** #1602（PR #1604）が直したのは「`#finish()` が
+ * 畳んでいる間に `stop()` が来た」場合だけである——`stop()` の入口
+ * （`if (this.#stopped)` の分岐）が待つのは `#finishing`（`#finish()` の
+ * Promise）だけで、**`stop()` 自身の畳み**（`query.close()` → `await
+ * this.#reader` → `#shipArchive` → `#flushUnreported` → `#onClosed`）は
+ * `#finishing` を経由しない。だから「1本目の `stop()` が畳んでいる間に、
+ * 2本目の `stop()`（または `Host#shutdown()` 経由の2本目）が来る」という、
+ * #1602 とは軸違いの重なりでは、2本目は1本目の畳み終わりを待たずにすぐ
+ * 解決してしまう。
+ *
+ * `deferCloseEnd: true` を使い、1本目の `stop()` を `query.close()` の後・
+ * `await this.#reader` 待ちで足止めする——その間に2本目を呼ぶ。これは
+ * `#1533` の歯（804行目付近）が `#reader` を足止めするのに使った仕掛けと
+ * 同じで、あちらは「stop() 単体の畳みの順序」を見るためのものだったが、
+ * ここでは「その途中に2本目が来たらどうなるか」を見る。
+ *
+ * ## 直す前と直した後
+ *
+ * - **直す前**: `stop()` の入口は `#finishing` しか見ないので、`#reader`
+ *   待ちで止まっている1本目とは無関係に、2本目は即座に解決する——
+ *   `archive`/`report` が出るより前、`host.list()` にまだ載っている時点で
+ *   `stop2Settled`/`shutdownSettled` が true になる。
+ * - **直した後**: 2本目は1本目の畳み（`stop()` 自身）を待ってから解決する。
+ *   解決した時点では `archive`/`report` は既に出ている。
+ */
+describe('#1605: stop() 自身の畳みの途中でもう一本 stop()/shutdown() が来ると、待たずに戻ってしまう（再現）', () => {
+  it('stop() を2回呼ぶと、2本目は1本目の畳み終わり（archive・report）を待ってから解決する', async () => {
+    const s = setup({ deferCloseEnd: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+
+    const transcriptPath = join(dir, 'transcript-1605-a.jsonl');
+    writeFileSync(transcriptPath, '#1605 の生ログ本文（stop 二重呼び）', 'utf8');
+    // `say()` で本文を積んでおく——`#flushUnreported` は `hasSaid` が
+    // false だと report を1件も出さない（doc「空なら1件も出さない」）ので、
+    // 積んでおかないと report の有無で直し前後を区別できない。
+    await session.say('畳まれる前に喋った本文');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    s.resetTimeline();
+
+    // 1本目。close() の後、deferCloseEnd により #reader 待ちで止まる。
+    const stopPromise1 = s.host.stop('mgr-1');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(s.timeline).toContain('query.close()');
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(false);
+    expect(s.timeline.some((l) => l.startsWith('emit:report'))).toBe(false);
+
+    // 1本目がまだ #reader 待ちで止まっている間に、2本目を呼ぶ
+    // ——Issue 本文の再現条件そのもの。
+    const stopPromise2 = s.host.stop('mgr-1');
+    let stop2Settled = false;
+    void stopPromise2.then(
+      () => {
+        stop2Settled = true;
+      },
+      () => {
+        stop2Settled = true;
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // ⭐ 直す前はここが true になる——2本目は1本目の畳み終わりを待たずに
+    //   解決してしまう。
+    expect(stop2Settled).toBe(false);
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(true);
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(false);
+
+    // #reader を解放し、1本目の畳みを完了させる。
+    session.endAfterClose();
+    await Promise.all([stopPromise1, stopPromise2]);
+
+    // ⭐ 2本目が解決した時点で、archive と report は既に出ている。
+    expect(stop2Settled).toBe(true);
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(true);
+    expect(s.timeline.some((l) => l.startsWith('emit:report'))).toBe(true);
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(false);
+
+    console.log('#1605 (stop x2) timeline:', JSON.stringify(s.timeline));
+  });
+
+  it('host.shutdown() が stop() の畳みの途中で来ても、畳み終わり（archive・report）を待ってから解決する', async () => {
+    const s = setup({ deferCloseEnd: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+
+    const transcriptPath = join(dir, 'transcript-1605-b.jsonl');
+    writeFileSync(transcriptPath, '#1605 の生ログ本文（shutdown）', 'utf8');
+    // 上のテストと同じ理由（`#flushUnreported` の `hasSaid` 門）。
+    await session.say('畳まれる前に喋った本文');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    s.resetTimeline();
+
+    const stopPromise1 = s.host.stop('mgr-1');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(s.timeline).toContain('query.close()');
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(false);
+
+    // 器の入れ替え（SIGTERM 相当）。`shutdown()` は全セッションの `stop()` を
+    // 呼ぶ——同じセッションに対する2本目の `stop()` になる
+    // （`RunnerHost#shutdown` の実装）。
+    const shutdownPromise = s.host.shutdown();
+    let shutdownSettled = false;
+    void shutdownPromise.then(() => {
+      shutdownSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // ⭐ 直す前はここが true になる。
+    expect(shutdownSettled).toBe(false);
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(false);
+    expect(s.timeline.some((l) => l.startsWith('emit:report'))).toBe(false);
+
+    session.endAfterClose();
+    await Promise.all([stopPromise1, shutdownPromise]);
+
+    // ⭐ shutdown() が解決した時点で、archive・report は既に出ている。
+    expect(shutdownSettled).toBe(true);
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(true);
+    expect(s.timeline.some((l) => l.startsWith('emit:report'))).toBe(true);
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(false);
+
+    console.log('#1605 (shutdown) timeline:', JSON.stringify(s.timeline));
+  });
+});
+
 describe('#1586: 畳むときに解いた確認の settled には withdrawn(reason) が載る（answer() の経路には載らない）', () => {
   it('stop() で畳むと、未決の確認の settled に withdrawn(reason) が載る', async () => {
     const s = setup();

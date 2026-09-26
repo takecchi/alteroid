@@ -23,7 +23,7 @@ function count(value: number): string {
  * 結合文字（合成のアクセント等）の途中で切ることは防がない——無効な列には
  * ならないため。
  */
-function codePointBoundary(text: string, end: number): number {
+export function codePointBoundary(text: string, end: number): number {
   if (end <= 0 || end >= text.length) return end;
   const last = text.charCodeAt(end - 1);
   return last >= 0xd800 && last <= 0xdbff ? end - 1 : end;
