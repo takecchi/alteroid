@@ -8461,6 +8461,37 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       expect(response.status).toBe(404);
     });
 
+    it(
+      '取り消しと markUsed（#onPreToolUse 相当）が競合しても、両方の効果が残る' +
+        '（lost update・#1654 と同型。ストア単体の歯は packages/storage-fs / ' +
+        'packages/storage-pg の permission-grant-concurrent-writes.test.ts）',
+      async () => {
+        await stores.permissionGrants.put({
+          id: 'grant-1',
+          rule: 'Bash(gh pr view)',
+          allows: ['gh pr view'],
+          denies: ['gh pr view; rm -rf /'],
+          approvalId: 'ap-1',
+          answer: '許可します',
+          grantedAt: '2026-01-01T00:00:00.000Z',
+          route: { principalKind: 'account', accountId: 'acc-x' },
+        });
+
+        // `revoke`（HTTP 経由）と `markUsed`（クローンの `#onPreToolUse` が
+        // 呼ぶもの）を同時に叩く。**修正後はどちらも「読んでから書く」を
+        // アプリ層に持たない**ので、順序に関わらず両方の効果が残るはず。
+        const [response] = await Promise.all([
+          app.request('/permission-grants/grant-1/revoke', post),
+          stores.permissionGrants.markUsed('grant-1', '2026-01-02T00:00:00.000Z'),
+        ]);
+        expect(response.status).toBe(200);
+
+        const after = await stores.permissionGrants.get('grant-1');
+        expect(after?.revokedAt).toBeDefined();
+        expect(after?.lastUsedAt).toBe('2026-01-02T00:00:00.000Z');
+      },
+    );
+
     it('operator token 経路の回答は via.auth="operator-token" を渡す（認証無効の経路とは区別する。Issue #1479）', async () => {
       const authed = buildAuthedApp();
       await authed.stores.jobs.putApproval({
