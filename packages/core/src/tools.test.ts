@@ -21,6 +21,7 @@ import type {
 import { commitmentFor } from './clone.js';
 import { encodeRunnerCursor } from './runner-cursor.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
+import { encodeUsageCursor } from './usage-cursor.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 import { STALE_TOKEN_RECOVERY_CAVEAT } from './usage-limits.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
@@ -12125,6 +12126,8 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       managerId: string;
       costUsd: number;
       date?: string;
+      /** 既定は固定値（大半のテストは時刻に依存しない）。issue #1673 の再現だけが変える。 */
+      at?: string;
     },
   ) {
     await h.stores.usage.record({
@@ -12133,9 +12136,16 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       accumulation: over.site === 'distill' ? 'oneshot' : 'cumulative',
       managerId: over.managerId,
       date: over.date ?? '2026-08-14',
-      at: '2026-08-14T10:00:00.000Z',
+      at: over.at ?? '2026-08-14T10:00:00.000Z',
       snapshot: { models: one(over.costUsd) },
     });
+  }
+
+  /** `usage_read` の打ち切りの行から `axis="…", cursor="…"` を抜き出す。 */
+  function extractUsageCursor(reply: string, axis: string): string {
+    const found = reply.match(new RegExp(`axis="${axis}", cursor="([^"]+)" で続きが出る`));
+    if (!found) throw new Error(`usage_read の続きの cursor が見つからない: ${reply}`);
+    return found[1]!;
   }
 
   it('層と場所の軸を出す（モデル名では層を見分けられない）', async () => {
@@ -12189,7 +12199,7 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     const reply = await h.call('usage_read', {});
 
     expect(reply).toContain('残り 6 件は出していない');
-    expect(reply).toContain('axis="manager", offset=14 で続きが出る');
+    expect(reply).toMatch(/axis="manager", cursor="[A-Za-z0-9_-]+" で続きが出る/);
   });
 
   /**
@@ -12229,7 +12239,7 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).not.toContain('は出していない');
   });
 
-  it('axis を指定すると、その軸だけを offset から出す', async () => {
+  it('axis を指定すると、その軸だけを cursor から出す', async () => {
     const h = harness();
     for (let i = 0; i < 20; i += 1) {
       await record(h, {
@@ -12240,7 +12250,9 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
       });
     }
 
-    const reply = await h.call('usage_read', { axis: 'manager', offset: 14 });
+    const summary = await h.call('usage_read', {});
+    const cursor = extractUsageCursor(summary, 'manager');
+    const reply = await h.call('usage_read', { axis: 'manager', cursor });
 
     // まとめ表示の先頭14件と続きが重ならない（同じ並びを1か所で決めている）。
     expect(reply).toContain('mgr-14');
@@ -12251,14 +12263,136 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
     expect(reply).not.toContain('アカウント全体の残り');
   });
 
-  it('offset が範囲外でも黙って空を返さない', async () => {
-    // 空の一覧だけでは「この軸には記録が無い」と「offset が範囲外」を区別できない。
+  it('cursor が最後の頁を指していても、黙って空を返さない', async () => {
+    // 空の一覧だけでは「この軸には記録が無い」と「cursor がもう続きを持たない」を区別できない。
     const h = harness();
     await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
 
-    const reply = await h.call('usage_read', { axis: 'manager', offset: 99 });
+    // mgr-1 自身を錨にする＝「mgr-1 まではもう見た」——それより後ろは無い。
+    const cursor = encodeUsageCursor({ axis: 'manager', label: 'mgr-1', cost: 1 });
+    const reply = await h.call('usage_read', { axis: 'manager', cursor });
 
-    expect(reply).toContain('全 1 件で、offset=99 以降は無い');
+    expect(reply).toContain('全 1 件');
+    expect(reply).toContain('cursor より後ろは無い。これが最後の頁');
+  });
+
+  it('壊れた cursor は断る（黙って先頭へ倒さない）', async () => {
+    const h = harness();
+    await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
+
+    const reply = await h.call('usage_read', { axis: 'manager', cursor: '!!!not-a-cursor!!!' });
+
+    expect(reply).toContain('cursor が壊れている');
+    // 黙って先頭へは倒さない——本来の中身（mgr-1）を出していない。
+    expect(reply).not.toContain('mgr-1:');
+  });
+
+  it('別の軸の cursor は断る', async () => {
+    const h = harness();
+    await record(h, { layer: 'manager', site: 'session', managerId: 'mgr-1', costUsd: 1 });
+
+    // 'model' 軸の cursor を 'manager' 軸へ渡す。
+    const wrongAxisCursor = encodeUsageCursor({ axis: 'model', label: 'claude-opus-5', cost: 1 });
+    const reply = await h.call('usage_read', { axis: 'manager', cursor: wrongAxisCursor });
+
+    expect(reply).toContain('別の軸');
+    expect(reply).not.toContain('mgr-1:');
+  });
+
+  /**
+   * **issue #1673 の再現。** まとめ表示 → 続きの間に、最下位（まとめ表示にも
+   * 続きにも出ていない行）が別の記録で費用を積んで先頭へ来ると、旧実装
+   * （素の配列添字 `offset`）は mgr-15 を両方の応答からも落とし、代わりに
+   * まとめ表示で既に見せた mgr-14 を続きの頁で重複させていた。
+   * cursor（keyset）はこの2つを両方直す——重複せず、mgr-15 は「順位が
+   * 上がった」枠に出る（黙って消えない）。
+   */
+  it('#1673: まとめ表示→続きの間に最下位の行が伸びて先頭へ来ても、欠落せず重複もしない', async () => {
+    const h = harness();
+    const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
+    for (let i = 1; i <= 14; i += 1) {
+      await record(h, {
+        layer: 'manager',
+        site: 'session',
+        managerId: `mgr-${String(i).padStart(2, '0')}`,
+        costUsd: 15 - i,
+        at: FIRST_CALL_AT,
+      });
+    }
+    await record(h, {
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-15',
+      costUsd: 0.5,
+      at: FIRST_CALL_AT,
+    });
+
+    const summary = await h.call('usage_read', {});
+    for (let i = 1; i <= 14; i += 1) {
+      expect(summary).toContain(`mgr-${String(i).padStart(2, '0')}`);
+    }
+    expect(summary).not.toContain('mgr-15');
+    const cursor = extractUsageCursor(summary, 'manager');
+
+    // まとめ表示を見てから続きを取りに行くまでの間に、mgr-15 が費用を積んで
+    // 先頭（最上位）へ移る。委譲が並行して走っている器では普通に起こる。
+    await record(h, {
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-15',
+      costUsd: 100,
+      at: '2026-08-14T11:00:00.000Z',
+    });
+
+    const continuation = await h.call('usage_read', { axis: 'manager', cursor });
+
+    // 欠落しない: mgr-15 は「順位が上がった」枠で出る。
+    expect(continuation).toContain('順位が上がった');
+    expect(continuation).toContain('mgr-15');
+
+    // 重複しない: 続きの頁の本体（「順位が上がった」節より前）に、まとめ表示で
+    // 既に見せた mgr-14 が再び出てはいけない。
+    const [body] = continuation.split('⚠ 順位が上がった');
+    expect(body).not.toContain('mgr-14');
+  });
+
+  /**
+   * **記録が増えない対照。** cursor（keyset）に切り替えても、通常の場合
+   * （途中で記録が増えない）は複数頁を欠落・重複なく辿れること。
+   */
+  it('記録が増えない場合は、cursor で複数頁を欠落・重複なく辿れる', async () => {
+    const h = harness();
+    const total = 250; // USAGE_AXIS_PAGE(100) を跨いで最低3頁になる件数。
+    for (let i = 0; i < total; i += 1) {
+      await record(h, {
+        layer: 'manager',
+        site: 'session',
+        managerId: `mgr-${String(i).padStart(4, '0')}`,
+        costUsd: total - i,
+      });
+    }
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (;;) {
+      pages += 1;
+      if (pages > total) throw new Error('頁が終わらない（無限ループの疑い）');
+      const reply = await h.call(
+        'usage_read',
+        cursor === undefined ? { axis: 'manager' } : { axis: 'manager', cursor },
+      );
+      expect(reply).not.toContain('順位が上がった'); // 記録は増えていない。
+      for (const m of reply.matchAll(/^ {2}(mgr-\d{4}): /gm)) seen.push(m[1]!);
+      const next = reply.match(/axis="manager", cursor="([^"]+)" で続きが出る/);
+      if (!next) break;
+      cursor = next[1];
+    }
+
+    // 欠落しない: 全件そろう。重複しない: 同じラベルが2度出てこない。
+    expect(new Set(seen).size).toBe(total);
+    expect(seen.length).toBe(total);
+    expect(pages).toBeGreaterThan(1); // 複数頁であることの前提そのものの確認。
   });
 
   it('層の軸の始点を台帳の始点と混ぜない', async () => {
@@ -13724,7 +13858,7 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       label: 'usage_read',
       name: 'usage_read',
       args: {},
-      mark: /…（残り \d+ 件は出していない。axis="[a-z]+", offset=\d+ で続きが出る）/,
+      mark: /…（残り \d+ 件は出していない。axis="[a-z]+", cursor="[A-Za-z0-9_-]+" で続きが出る）/,
     },
     /*
      * **`conversation_read` は3つの一覧モードを持ち、予算の切り口が別々である。**
@@ -13822,15 +13956,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      *
      * `mark` はこの節の一覧レベルの断り書きだけが持つ語彙
      * （`renderLedgerCrossReference` の `…（残り N 件は出していない。self_status の
-     * ledgerOffset=M で続きが出る）`。#1638 で続きの呼び方を足した。`usage_read` 側は
-     * `axis="…", offset=…` を名乗るので、取り違えない）。
+     * ledgerCursor=… で続きが出る）`。#1638 で続きの呼び方を足し、#1673 で
+     * `ledgerOffset`（素の配列添字）を `ledgerCursor`（keyset）へ置き換えた。
+     * `usage_read` 側は `axis="…", cursor="…"` を名乗るので、取り違えない）。
      */
     {
       label: 'self_status（台帳との突き合わせ）',
       name: 'self_status',
       args: {},
       section: '## 台帳との突き合わせ',
-      mark: /…（残り \d+ 件は出していない。self_status の ledgerOffset=\d+ で続きが出る）/,
+      mark: /…（残り \d+ 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     },
     /*
      * **`memory_outline` は名前が `_list` で終わらないが、道具の応答そのものが
@@ -20763,8 +20898,12 @@ describe('conversation_post', () => {
  * かつては `…（残り N 件は出していない）` とだけ書いて終わり、この内訳（モデル ×
  * managerId × layer × site）は `usage_read` のどの軸でも同じ形では取れないので、
  * 15件目以降はどの道具からも読めなかった。
+ *
+ * **issue #1673。** その後足した `ledgerOffset`（素の配列添字）は、台帳が増え
+ * 続けるあいだに内訳の順位が入れ替わると欠落・重複を作る——`usage_read` の
+ * `axis` モードと同じ穴。`ledgerCursor`（keyset。`usage-cursor.ts`）に置き換えた。
  */
-describe('self_status の台帳の内訳は、打ち切った続きを ledgerOffset で辿れる（#1638）', () => {
+describe('self_status の台帳の内訳は、打ち切った続きを ledgerCursor で辿れる（#1638 / #1673）', () => {
   const MODEL = 'claude-ledger-offset-model';
   const RUNTIME: CloneRuntimeFacts = {
     revision: { commit: null, short: null, source: null },
@@ -20788,7 +20927,7 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerOff
   };
 
   /** 同じモデル・同じ層と場所で、managerId だけが違う行を `count` 本積む（費用は i+1）。 */
-  async function seed(h: Harness, count: number): Promise<void> {
+  async function seed(h: Harness, count: number, at = '2026-08-14T10:00:00.000Z'): Promise<void> {
     for (let i = 0; i < count; i += 1) {
       await h.stores.usage.record({
         layer: 'manager',
@@ -20796,7 +20935,7 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerOff
         accumulation: 'cumulative',
         managerId: `mgr-${String(i).padStart(3, '0')}`,
         date: '2026-08-14',
-        at: '2026-08-14T10:00:00.000Z',
+        at,
         snapshot: {
           models: {
             [MODEL]: {
@@ -20813,26 +20952,59 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerOff
     }
   }
 
-  it('14件を超えたら、打ち切りの行に ledgerOffset での続きの呼び方を書く', async () => {
+  /** 既存の1本（`managerId`）だけ、別の時刻で費用を積み増す（issue #1673 の再現用）。 */
+  async function bump(h: Harness, managerId: string, costUsd: number, at: string): Promise<void> {
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId,
+      date: '2026-08-14',
+      at,
+      snapshot: {
+        models: {
+          [MODEL]: {
+            inputTokens: 1,
+            outputTokens: 1,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUsd,
+          },
+        },
+      },
+    });
+  }
+
+  /** `self_status` の打ち切りの行から `ledgerCursor=…` を抜き出す。 */
+  function extractLedgerCursor(reply: string): string {
+    const found = reply.match(/self_status の ledgerCursor=([A-Za-z0-9_-]+) で続きが出る/);
+    if (!found) throw new Error(`self_status の ledgerCursor が見つからない: ${reply}`);
+    return found[1]!;
+  }
+
+  it('14件を超えたら、打ち切りの行に ledgerCursor での続きの呼び方を書く', async () => {
     const h = harness(() => RUNTIME);
     await seed(h, 15);
 
     const reply = await h.call('self_status', {});
 
-    expect(reply).toContain(
-      '…（残り 1 件は出していない。self_status の ledgerOffset=14 で続きが出る）',
+    expect(reply).toMatch(
+      /…（残り 1 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     );
     // 費用降順なので、最も安い mgr-000 が15件目として落ちている。
     expect(reply).not.toContain('"mgr-000"');
   });
 
-  it('案内どおり ledgerOffset=14 で呼ぶと、落ちた15件目がその節だけで出る', async () => {
+  it('案内どおり ledgerCursor で呼ぶと、落ちた15件目がその節だけで出る', async () => {
     const h = harness(() => RUNTIME);
     await seed(h, 15);
 
-    const reply = await h.call('self_status', { ledgerOffset: 14 });
+    const first = await h.call('self_status', {});
+    const cursor = extractLedgerCursor(first);
+    const reply = await h.call('self_status', { ledgerCursor: cursor });
 
-    expect(reply).toContain('（全 15 件 / ledgerOffset=14）');
+    expect(reply).toContain('（全 15 件）');
     expect(reply).toContain('managerId: "mgr-000"');
     // 続きを取りに来た呼び出しなので、他の節は出さない。
     expect(reply).not.toContain('## いまどう走っているか');
@@ -20840,24 +21012,105 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerOff
     expect(reply).not.toContain('続きが出る');
   });
 
-  it('1頁に収まらなければ、次の ledgerOffset を案内する', async () => {
+  it('1頁に収まらなければ、次の ledgerCursor を案内する', async () => {
     const h = harness(() => RUNTIME);
     await seed(h, 120);
 
-    const reply = await h.call('self_status', { ledgerOffset: 14 });
+    const first = await h.call('self_status', {});
+    const cursor = extractLedgerCursor(first);
+    const reply = await h.call('self_status', { ledgerCursor: cursor });
 
-    expect(reply).toContain('（全 120 件 / ledgerOffset=14）');
-    expect(reply).toContain(
-      '…（残り 6 件は出していない。self_status の ledgerOffset=114 で続きが出る）',
+    expect(reply).toContain('（全 120 件）');
+    expect(reply).toMatch(
+      /…（残り 6 件は出していない。self_status の ledgerCursor=[A-Za-z0-9_-]+ で続きが出る）/,
     );
   });
 
-  it('範囲外の ledgerOffset は、黙って空を返さずそう言う', async () => {
+  it('範囲外の ledgerCursor は、黙って空を返さずそう言う', async () => {
     const h = harness(() => RUNTIME);
     await seed(h, 3);
 
-    const reply = await h.call('self_status', { ledgerOffset: 10 });
+    // mgr-000（費用最小。最後に見せる行）を錨にする＝「そこまではもう見た」。
+    const cursor = encodeUsageCursor({
+      axis: 'ledger',
+      label: ['mgr-000', 'manager', 'session'].join('\u0000'),
+      cost: 1,
+    });
+    const reply = await h.call('self_status', { ledgerCursor: cursor });
 
-    expect(reply).toContain('（内訳は全 3 件で、ledgerOffset=10 以降は無い）');
+    expect(reply).toContain('ledgerCursor より後ろは無い。これが最後の頁');
+  });
+
+  it('壊れた ledgerCursor は断る（黙って先頭へ倒さない）', async () => {
+    const h = harness(() => RUNTIME);
+    await seed(h, 3);
+
+    const reply = await h.call('self_status', { ledgerCursor: '!!!not-a-cursor!!!' });
+
+    expect(reply).toContain('ledgerCursor が壊れている');
+    expect(reply).not.toContain('"mgr-000"');
+  });
+
+  it('usage_read の axis 用の cursor は self_status の ledgerCursor には使えない', async () => {
+    const h = harness(() => RUNTIME);
+    await seed(h, 3);
+
+    const wrongContextCursor = encodeUsageCursor({ axis: 'manager', label: 'mgr-000', cost: 1 });
+    const reply = await h.call('self_status', { ledgerCursor: wrongContextCursor });
+
+    expect(reply).toContain('別の文脈');
+    expect(reply).not.toContain('"mgr-000"');
+  });
+
+  /**
+   * **issue #1673 の再現（`self_status` 側）。** `usage_read` の `axis` モードと
+   * 同じ穴が `ledgerOffset` にもあった——委譲が並行して走るあいだに、まだ見せて
+   * いない行（`mgr-000`）が費用を積んで最上位へ移ると、旧実装は黙って落として
+   * いた。`ledgerCursor` は「順位が上がった」枠でそれを名乗る。
+   */
+  it('#1673: 前回の呼び出し以降に記録が増えると、順位が上がった行が別枠で出る', async () => {
+    const h = harness(() => RUNTIME);
+    const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
+    await seed(h, 15, FIRST_CALL_AT); // mgr-000(費用1, 最下位) .. mgr-014(費用15, 最上位)
+
+    const first = await h.call('self_status', {});
+    const cursor = extractLedgerCursor(first);
+    expect(first).not.toContain('"mgr-000"');
+
+    // まとめを見てから続きを取りに行くまでの間に、mgr-000 が費用を積んで最上位へ移る。
+    await bump(h, 'mgr-000', 1000, '2026-08-14T11:00:00.000Z');
+
+    const reply = await h.call('self_status', { ledgerCursor: cursor });
+
+    expect(reply).toContain('順位が上がった');
+    expect(reply).toContain('managerId: "mgr-000"');
+  });
+
+  /** 記録が増えない対照。cursor に切り替えても複数頁を欠落・重複なく辿れる。 */
+  it('記録が増えない場合は、ledgerCursor で複数頁を欠落・重複なく辿れる', async () => {
+    const h = harness(() => RUNTIME);
+    const total = 250;
+    await seed(h, total);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (;;) {
+      pages += 1;
+      if (pages > total) throw new Error('頁が終わらない（無限ループの疑い）');
+      const reply = await h.call(
+        'self_status',
+        cursor === undefined ? {} : { ledgerCursor: cursor },
+      );
+      expect(reply).not.toContain('順位が上がった');
+      for (const m of reply.matchAll(/managerId: "(mgr-\d{3})"/g)) seen.push(m[1]!);
+      const next = reply.match(/self_status の ledgerCursor=([A-Za-z0-9_-]+) で続きが出る/);
+      if (!next) break;
+      cursor = next[1];
+    }
+
+    expect(new Set(seen).size).toBe(total);
+    expect(seen.length).toBe(total);
+    expect(pages).toBeGreaterThan(1);
   });
 });

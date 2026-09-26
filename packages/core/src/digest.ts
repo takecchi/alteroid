@@ -1018,7 +1018,12 @@ function usageOmitted(total: number, shown: number, axis: string, unit: string):
   if (total <= shown) return '';
   return (
     `…ほか ${total - shown} ${unit}` +
-    `（\`usage_read\` に axis="${axis}", offset=0 を渡すと続きから辿れる）`
+    // **issue #1673。** `usage_read` の続きは素の `offset` から `cursor`
+    // （keyset）へ置き換わった。ここは「先頭から辿り直す」ことしか案内して
+    // いない（この digest 自身の打ち切りは別の予算 `MAX_ITEMS` によるもので、
+    // `usage_read` 側の頁の途中を指し示す必要は無い）ので、`axis` だけ渡せば
+    // 済む——省略すれば先頭から出る。
+    `（\`usage_read\` に axis="${axis}" を渡すと続きから辿れる）`
   );
 }
 
