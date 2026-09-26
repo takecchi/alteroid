@@ -99,6 +99,15 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
 複数ブロック入力に対する3箇所のふるまいは今後食い違う（`scripts/mutate-core-strip-ansi.test.ts`
 の該当 `describe` にも同じ注記がある）。
 
+**#1691 の「確かめていないこと」— `runTests` はワークスペースの `test` script の形に
+依存していない。** `runTests`（`buildTestSpawnArgs`）は `spawnSync('pnpm', ['test',
+'--maxWorkers=<n>', ...extraArgs], { cwd: ROOT })` の形で、**root の `package.json` の
+`test` script（`node ./scripts/test.mjs`。`--filter` も `--scope` も付かない）を直接
+起こす**——各ワークスペースの `package.json` の `test` script（`--root=` / `--scope=`
+を付ける形）は経由しない。⟹ #1691 でワークスペース側の `test` script の引数の渡し方
+（位置引数 → named 引数）を変えても、`runTests` の呼び出し方も出力の解釈
+（`parseAggregateLines` / `census`）も1文字も影響を受けない。
+
 ### 何を機械が守り、何が依然として人間（AI）の判断に残るか
 
 **全部を道具が守れるわけではない。** 守れないものを守れると書かない — 下の表の「人間側」列は
@@ -206,6 +215,7 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
     - 対処は**不足しているパッケージを build すること**。`pnpm --filter <パッケージ> build` を1つずつ、**依存する側のパッケージまで含めて**打つ形でよい。**⚠️ ただしこれを「`pnpm -r build` は EAGAIN で落ちるから `--filter` にする」と読まないこと。** `-r` が落ちたという観測は実在するが、それは器の条件に依存する — **範囲は上の「`pnpm build` が資源枯渇で落ちる事例が記録されている（#254）」の段落に在る。** ここで `--filter` を使うのは、**足りないパッケージだけを名指しで build するため**である
     - **変異試験では特に致命的である。** ベースラインが緑だと誤認したまま変異を当てると、生存4分類の判定が丸ごと狂う——「検出」「歯が無い」「観測不能」「届いていない」のどれだと結論しても、その手前にある「ベースラインは変異の影響を受けていない」という土台そのものが崩れている
 - **`pnpm --filter <パッケージ> test` は、その test script が無ければ1本も走らせない。** テストは root の `vitest.config.ts` 1本が集めているが、**#246** で `packages/*` / `apps/*` の8ワークスペース全部の `package.json` に `test` script を足した（以前はどれも `test` script が無く、`pnpm --filter <パッケージ> test` は出力0行・exit 0 だった。実測（2026-08-20 観測）はその状態でのものである）。**同じ PR で `pnpm-workspace.yaml` に `failIfNoMatch: true` も足した** ので、存在しないパッケージ名・打ち間違いは exit 1 になる。**それでも塞がっていない穴が残る** — `failIfNoMatch` が見るのは「フィルタに一致するプロジェクトが在るか」であって「その `test` script を持つか」ではないため、**実在するパッケージでも `test` script が未整備なら、いまも出力0行・exit 0 のまま**である（実測 2026-08-23: `packages/api-client/package.json` から `scripts.test` を一時的に外して `pnpm --filter @alteroid/api-client test` を打つと `failIfNoMatch: true` の下でも exit 0・出力0行だった）。**新しく足したパッケージや、`test` を書き終える前のパッケージを変異試験で filter するとこの穴を踏む。** 機械的な歯（`scripts/workspace-test-scripts.test.ts`。root の `pnpm test` に含まれる）はこれを検出するが、**`pnpm --filter <パッケージ> test` という個別コマンドそのものは自分では落ちない** — 対象パッケージの `package.json` を自分の目で確認するか、絞るなら root から `pnpm test <パスの一部>`（引数は vitest へそのまま渡る）を使うほうが安全である。**設定そのものの話（`failIfNoMatch` が何を塞ぎ何を塞がないか）は `pnpm-workspace.yaml` の `failIfNoMatch: true` の傍に在る。片方だけ直して終わらせないこと** — pnpm の挙動が変わったら、こちらの実測も古くなる
+  - **⚠️ これとは別の穴が #1691 で直っている——`test` script が在っても、位置引数による絞り込みが効いていなかった。** 各ワークスペースの `test` script はパッケージの範囲を**位置引数**で渡していたため、`pnpm --filter <パッケージ> test -- <file>` の `<file>` は vitest の OR に乗って範囲の位置引数と一緒にフィルタになり、**範囲（＝パッケージ全体）のほうが常に一致して絞り込みが1つも効かなかった**（`pnpm --filter @alteroid/cli test -- src/interrupt.test.ts` が1本ではなく `apps/cli` 全体を走らせる形）。**上の「root から `pnpm test <パスの一部>` を使うほうが安全」という助言は、この穴が在った時期のものも含む。** #1691 以降は、範囲を named 引数（`--scope=`）へ移したことで `pnpm --filter <パッケージ> test -- <file>` も正しく1本へ絞られる（`scripts/test-guard-core.mjs` の `resolveScopedArgs`）——ただし直上の「`test` script が無いパッケージでは出力0行・exit 0」という穴自体は残っているので、「root のほうが安全」という助言そのものは取り消していない
 - **変異が生存したとき（テストが通ったとき）、テストの中に仕込んだ `console.log` は出力に出ない。** vitest の既定の reporter は console を横取りしており、**通ったテストのぶんは捨てる**（落ちたテストのぶんは `stdout | <ファイル> > <テスト名>` の形で出る）。実測（2026-08-22T04:28Z 観測、`vitest@4.1.10`。この repo の `vitest.config.ts` は `reporters` / `silent` / `onConsoleLog` / `disableConsoleIntercept` のどれも指定していないので既定のままである）。**`console.error` も同じで、`process.stdout.write` だけは横取りを通らず、通っても落ちても出る**
   - **重いのは、消えるのが「通ったとき」＝生存したときだけだからである。** 変異が生存したあと、次に知りたいのは「そのコードパスをテストが踏んでいるのか」である（踏んだうえで assertion が無いのか、そもそも到達していないのか。**どちらも「歯が無い」だが、次にやることが違う**）。それを見るために出力を仕込む — **その出力が、生存したときにだけ捨てられる。** 結果として**出力の不在が2つの意味を持つ**（何も起きなかった / 出力が捨てられた）。`AGENTS.md`「静かに失敗する道具」の `grep -c` が返す 0 と同じ形である
   - **仕込みが効いているかを「1回落として確かめる」と、必ず誤った結論に至る。** 落ちたぶんは出るので「出た＝ちゃんと出る」と読めてしまい、生存した変異でだけ黙って消える。**確かめるなら通るテストで確かめること**

@@ -58,6 +58,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
 /** `scripts/` の1つ上 ＝ リポジトリ根。`process.cwd()` に依存しない
@@ -98,6 +99,227 @@ const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-r
  */
 export function dropBareDashDash(argv) {
   return argv.filter((arg) => arg !== '--');
+}
+
+// ── 引数の正規化（続き）: パッケージの範囲（#1691） ──────────────────
+
+/**
+ * 各ワークスペースの `test` script が渡す、パッケージの範囲を表す名前付き引数。
+ * 値は repo の根からの相対パス（例: `apps/cli/src`）。
+ *
+ * #1691: 以前は範囲そのものを**位置引数**（例: `apps/cli/src`）として渡していた。
+ * vitest の位置引数は **OR** で効くため、利用者が `pnpm test -- <file>` で足した
+ * 位置引数と範囲の位置引数が両方フィルタとして働き、範囲（＝パッケージ全体）の
+ * ほうが常に勝って絞り込みが1つも効かなかった（実測は `test.mjs` の doc、
+ * PR 本文）。**範囲を named 引数へ移し、利用者の位置引数の有無で分岐する**
+ * （下の `resolveScopedArgs`）ことで、この OR を無くす。
+ */
+export const SCOPE_FLAG = '--scope';
+
+/** argv から `--scope=<value>` を取り出す。純粋関数——`--scope=` 以外の要素は
+ * 順序を保ったまま `rest` へ残す。 */
+export function extractScope(argv) {
+  const scopePrefix = SCOPE_FLAG + '=';
+  let scope;
+  const rest = [];
+  for (const arg of argv) {
+    if (arg.startsWith(scopePrefix)) {
+      scope = arg.slice(scopePrefix.length);
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { scope, rest };
+}
+
+/**
+ * `matchScopedPositionals` が「値が別トークンに分かれて来る」と知っている
+ * vitest のフラグ。**「絞り込むかどうか」ではなく「次の要素を値として飲むか」
+ * だけを見るための一覧なので、`verify-core.mjs` の
+ * `TEST_ARGS_THAT_DO_NOT_NARROW`（許可リストの目的が違う——あちらは「絞り込ま
+ * ないと分かっているもの」）を流用しない。`-t` は名前で絞り込むが、値は
+ * パスへの部分一致の対象ではないので範囲判定に持ち込まない。
+ */
+const VALUE_TAKING_FLAGS = new Set([
+  '--maxWorkers',
+  '--minWorkers',
+  '--reporter',
+  '--testNamePattern',
+  '-t',
+]);
+
+/** 値必須フラグの値として飲んでよいか。`-` で始まるものはフラグ自身とみなし、
+ * 値としては飲まない（`verify-core.mjs` の `isFlagLike` と同じ向き。飲まなければ
+ * 「位置引数」側へ回るだけで、安全側に倒れる）。 */
+function isFlagLike(arg) {
+  return arg === undefined || arg.startsWith('-');
+}
+
+/** `rest`（`--scope=` を除いた argv）のうち、フラグでも値必須フラグの値でも
+ * ない要素（＝利用者が絞り込みのために打った位置引数）の添字を集める。
+ * 純粋関数。 */
+function findPositionalIndices(rest) {
+  const positionalIdx = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (isFlagLike(arg)) {
+      const eqIdx = arg.indexOf('=');
+      const head = eqIdx === -1 ? arg : arg.slice(0, eqIdx);
+      if (eqIdx === -1 && VALUE_TAKING_FLAGS.has(head) && !isFlagLike(rest[i + 1])) {
+        i += 1; // 空白区切りの値をフィルタと読み違えない
+      }
+      continue;
+    }
+    positionalIdx.push(i);
+  }
+  return positionalIdx;
+}
+
+/** 歯B/歯Cの exit code（1〜7）とは別の値にする。範囲の外を指す位置引数、または
+ * 範囲の中に部分一致するテストが1本も無い位置引数を断ったときに使う（#1691）。 */
+export const EXIT_SCOPE_VIOLATION = 8;
+
+/**
+ * `rest`（`--scope=` を除いた argv。素の `--` も既に落ちている前提）の位置引数を、
+ * 範囲（`scope`）の中にある実際のテストファイルへ解決する。
+ *
+ * **vitest の位置引数は「パス」ではなく、ファイルのパスへの部分一致として
+ * 読まれる**（実測は PR 本文——`pnpm exec vitest run --root=../.. manager-detail`
+ * は `apps/web/app/routes/manager-detail.test.tsx` の1本に絞られ、
+ * `pnpm exec vitest run --root=../.. interrupt` は `apps/cli` と `apps/web` の
+ * 2本にまたがって当たる）。だから各位置引数は、`path.resolve` で「パス」として
+ * 解決するのではなく、範囲の中のテストファイル一覧（`filesInScope`。repo根
+ * からの相対パス、`/`区切り）に対する**部分一致**で解決する——一致が1件以上
+ * あれば、その一致した実ファイルのパスへ差し替える（複数一致なら複数個に
+ * 展開する）。**素の部分一致文字列をそのまま vitest へ渡さない** — 範囲の外
+ * にある同じ部分文字列のファイル（例: 上の `interrupt` が `apps/cli` にも
+ * 当たる）まで拾ってしまうため、範囲の中で見つかった実ファイルのパスへ
+ * 明示的に差し替えることで、範囲の外への漏れを断つ。
+ *
+ * 一致が0件のときは、黙って全体を走らせたり0本で緑を名乗ったりせず断る。
+ * 断る理由は2種——(1) 打ったものが明らかに `cwd`（パッケージのディレクトリ）
+ * そのものの外を指している（例: `../../packages/core/...`）⟹ 既存の「範囲外」
+ * の文言 (2) `cwd` の中ではあるが、範囲の中に部分一致するテストファイルが
+ * 1本も無い ⟹ 「範囲内に一致なし」の文言。**この2種を混ぜない**（歯Bの
+ * 「見ていない」と「見て、無かった」を混ぜないのと同じ作法）。
+ *
+ * ディスクを読まない純粋関数——`filesInScope` を合成した配列で試せる
+ * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
+ */
+export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope }) {
+  const positionalIdx = findPositionalIndices(rest);
+  if (positionalIdx.length === 0) {
+    // 利用者の位置引数が無い ⟹ 範囲そのものが唯一のフィルタになる
+    // （旧来の既定と同じ、パッケージ全体を走らせる）。
+    return { ok: true, args: [...rest, scope] };
+  }
+
+  const packageDirRaw = path.relative(repoRoot, cwd).split(path.sep).join('/');
+  const packageDir = packageDirRaw === '' ? '.' : packageDirRaw;
+
+  const outArgs = [];
+  let cursor = 0;
+  for (const i of positionalIdx) {
+    // 前回の位置引数の後ろ〜今回の手前（フラグ部分）はそのまま足す。
+    outArgs.push(...rest.slice(cursor, i));
+    cursor = i + 1;
+
+    const rawArg = rest[i];
+    const pattern = rawArg.replace(/^\.\//, ''); // 先頭の `./` は素の部分一致の邪魔になるだけ
+    const matches = [...filesInScope].filter((f) => f.includes(pattern)).sort();
+
+    if (matches.length > 0) {
+      outArgs.push(...matches);
+      continue;
+    }
+
+    // 一致0件。断る理由を、打った場所（cwd＝パッケージのディレクトリ）の
+    // 外を明らかに指しているかどうかで書き分ける。
+    const abs = path.resolve(cwd, rawArg);
+    const candidateRel = path.relative(repoRoot, abs).split(path.sep).join('/');
+    const escapesPackage = !(
+      candidateRel === packageDir || candidateRel.startsWith(`${packageDir}/`)
+    );
+
+    if (escapesPackage) {
+      return {
+        ok: false,
+        exitCode: EXIT_SCOPE_VIOLATION,
+        message: [
+          `test-guard: 範囲外 — 指定したパス「${rawArg}」は、この test の範囲` +
+            `（${scope}）の外を指している（打った場所 ${cwd} から repo の根への相対パスは` +
+            `「${candidateRel}」）。`,
+          'このパッケージの test はここまでしか見ない。範囲内のパスを指すか、',
+          'root の `pnpm test <パスの一部>` を使うこと。',
+        ].join('\n'),
+      };
+    }
+
+    return {
+      ok: false,
+      exitCode: EXIT_SCOPE_VIOLATION,
+      message: [
+        `test-guard: 範囲内に一致なし — 「${rawArg}」に部分一致するテストファイルが` +
+          `範囲（${scope}）の中に1本も無い。`,
+        '綴りを確認すること。範囲の外まで見たいなら root の `pnpm test <パスの一部>`',
+        'を使うこと。',
+      ].join('\n'),
+    };
+  }
+  outArgs.push(...rest.slice(cursor));
+
+  return { ok: true, args: outArgs };
+}
+
+/**
+ * 範囲（`scope`）の中にある、root の `vitest.config.ts` の `include` に一致する
+ * テストファイル一覧（repo根からの相対パス、`/`区切り）を返す。
+ * `matchScopedPositionals` の `filesInScope` を作るための I/O 層——歯Bの走査
+ * （`readIncludeGlobs` / `collectMatchingTestFiles`）をそのまま再利用する
+ * （二重実装しない）。`include` を読めない・空なら、判定できないので空配列
+ * を返す（`matchScopedPositionals` 側は「範囲内に一致なし」として扱う——
+ * この経路は歯B/歯Cの `EXIT_SCAN_EMPTY` とは独立の関心事なので、ここでは
+ * 混ぜない）。
+ */
+export async function listScopeTestFiles(root, scope) {
+  let includeGlobs;
+  try {
+    includeGlobs = await readIncludeGlobs(root);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(includeGlobs) || includeGlobs.length === 0) return [];
+  return collectMatchingTestFiles(root, includeGlobs).filter(
+    (f) => f === scope || f.startsWith(`${scope}/`),
+  );
+}
+
+/**
+ * `test.mjs` の `main()` が呼ぶ、I/O込みの合成。
+ *
+ * - **`--scope` が無い** ⟹ 何もしない（root の `pnpm test <パスの一部>` は
+ *   影響を受けない。ディスクも読まない）。
+ * - **`--scope` はあるが利用者の位置引数が無い** ⟹ 範囲そのものがフィルタに
+ *   なる（`matchScopedPositionals` の既定と同じ。ディスクを読まない）。
+ * - **両方ある** ⟹ `listScopeTestFiles` で範囲の中のテストファイル一覧を
+ *   読み（ここでだけディスクを読む）、`matchScopedPositionals` へ渡す。
+ *
+ * `cwd` はパッケージのディレクトリを渡す想定（`INIT_CWD` ではなく
+ * `process.cwd()` を使う理由は `matchScopedPositionals` の doc と PR 本文）。
+ */
+export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = ROOT } = {}) {
+  const { scope, rest } = extractScope(argv);
+  if (scope === undefined) {
+    return { ok: true, args: rest };
+  }
+
+  const positionalIdx = findPositionalIndices(rest);
+  if (positionalIdx.length === 0) {
+    return { ok: true, args: [...rest, scope] };
+  }
+
+  const filesInScope = await listScopeTestFiles(repoRoot, scope);
+  return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope });
 }
 
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────

@@ -45,7 +45,32 @@
  * `pnpm test -- --maxWorkers=4 a.test.ts`（`--` を落とした残り）も、
  * これまでどおり動く。
  *
- * ## exit code（7値。混ぜない）
+ * ## パッケージの範囲は named 引数（`--scope`）で受け取る（#1691）
+ *
+ * 各ワークスペースの `test` script（例: `apps/cli`）は
+ * `node ../../scripts/test.mjs --root=../.. --scope=apps/cli/src` の形で、
+ * パッケージの範囲を**named 引数**として渡す。**以前は範囲を位置引数として
+ * 渡していた**（`node ../../scripts/test.mjs --root=../.. apps/cli/src`）。
+ * vitest の位置引数は **OR** で効くため、利用者が `pnpm test -- <file>` で
+ * 足した位置引数と範囲の位置引数が両方フィルタとして働き、範囲（＝パッケージ
+ * 全体）のほうが常に一致してスイート全体が走っていた（`cd apps/cli && pnpm
+ * test -- src/interrupt.test.ts` が1本ではなくパッケージ全体を走らせる形。
+ * Issue #1691）。
+ *
+ * `test-guard-core.mjs` の `resolveScopedArgs` がこの分岐を持つ——`--scope` が
+ * 無ければ何もしない（root の `pnpm test <パスの一部>` は影響を受けない）。
+ * `--scope` は在るが利用者の位置引数が無ければ、範囲そのものが唯一のフィルタ
+ * になる（旧来の既定と同じ、パッケージ全体を走らせる）。**両方在れば**、
+ * 各位置引数を、範囲の中のテストファイル一覧に対する**部分一致**で解決する
+ * （vitest の位置引数自体が「パス」ではなく部分一致だから——`path.resolve` で
+ * パスとして直すだけでは `pnpm test -- manager-detail` のような部分一致の
+ * 打ち方を範囲外として誤って断ってしまう。実測は PR 本文）。一致が0件なら、
+ * 黙って全体を走らせたり0本で緑を名乗ったりせず断る（打ったものが `cwd` の
+ * 外を明らかに指しているか、`cwd` の中だが範囲に一致が無いか、で理由を書き
+ * 分ける）。詳細と実測（`INIT_CWD` ではなく `process.cwd()` を基準にする理由
+ * も含む）は `matchScopedPositionals` / `resolveScopedArgs` の doc に在る。
+ *
+ * ## exit code（8値。混ぜない）
  *
  * | 出所                                | 意味                                             |
  * | ----------------------------------- | ------------------------------------------------ |
@@ -56,12 +81,15 @@
  * | `EXIT_SCAN_EMPTY`（5）              | 歯B/歯C: 走査対象が0ファイル（判定できない）       |
  * | `EXIT_OBSERVATION_UNDECLARED`（6）  | 歯C: 観測用テストの終了条件／見直し期限が無い、または書式が壊れている |
  * | `EXIT_OBSERVATION_DUE`（7）         | 歯C: 観測用テストの見直し期限を過ぎた              |
+ * | `EXIT_SCOPE_VIOLATION`（8）         | `--scope` の範囲外を指す位置引数、または範囲の中に部分一致するテストが無い位置引数を検出（#1691） |
  *
- * 歯A/歯B/歯Cは vitest が exit 0 を返した後にしか判定しない。**vitest が非0で
- * 落ちたら、ラッパの検査は一切走らせず、その exit code をそのまま返す**
- * （「自分の検査は通った」で上書きしない）。**ラッパ自身が例外で落ちたときも
- * exit 0 にはならない**（末尾の `main().catch(...)` が exit code 1 で拾う。
- * 緑を名乗る経路を1本も作らない）。
+ * `EXIT_SCOPE_VIOLATION` は vitest を起こす**前**に判定する（範囲外・一致無しの
+ * パスを vitest へ渡してもエラーにはならず「一致なし」で静かに空振りするだけ
+ * なので、vitest 側の判定に委ねられない）。歯A/歯B/歯Cは vitest が exit 0 を返した
+ * 後にしか判定しない。**vitest が非0で落ちたら、ラッパの検査は一切走らせず、
+ * その exit code をそのまま返す**（「自分の検査は通った」で上書きしない）。
+ * **ラッパ自身が例外で落ちたときも exit 0 にはならない**（末尾の
+ * `main().catch(...)` が exit code 1 で拾う。緑を名乗る経路を1本も作らない）。
  */
 
 import { spawn } from 'node:child_process';
@@ -71,6 +99,7 @@ import {
   ROOT,
   dropBareDashDash,
   judgeExecution,
+  resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
 } from './test-guard-core.mjs';
@@ -103,7 +132,18 @@ function runVitest(args) {
 
 async function main() {
   const args = dropBareDashDash(process.argv.slice(2));
-  const { code, combined } = await runVitest(args);
+
+  // #1691: `--scope` の範囲外・範囲内に部分一致するテストが無い位置引数は、
+  // vitest へ渡す前に断る（渡すと「一致なし」で静かに空振りするだけで、
+  // 範囲外だと分かる材料が出ない）。
+  const scoped = await resolveScopedArgs(args, { cwd: process.cwd(), repoRoot: ROOT });
+  if (!scoped.ok) {
+    process.stderr.write(`\n${scoped.message}\n`);
+    process.exitCode = scoped.exitCode;
+    return;
+  }
+
+  const { code, combined } = await runVitest(scoped.args);
 
   if (code !== 0) {
     // vitest 自身が落ちた（signal で殺された場合 code は null になる。その場合も
