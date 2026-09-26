@@ -29,7 +29,12 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
-import { practiceSchema, practiceVersionSchema, schedulePhaseSchema } from './schema.js';
+import {
+  memorySlugSchema,
+  practiceSchema,
+  practiceVersionSchema,
+  schedulePhaseSchema,
+} from './schema.js';
 import {
   sha256Hex,
   type AccessTokenRecord,
@@ -278,6 +283,18 @@ export function createMemoryStores(): Stores {
   const toMemoryCreatedAt = (at: string | undefined): MemoryCreatedAt =>
     at === undefined ? { kind: 'unknown' } : { kind: 'known', at };
 
+  /**
+   * **本物（fs の `#path` / pg の `#slug`）と同じ slug の検査を掛ける。** かつては
+   * インメモリだけが何でも受け付けたので、クローンの道具へ不正な slug を渡す歯が
+   * 本物では例外になる入力を「書けた」として通していた（2026-09-26 のバグ探しで
+   * 見つけた差）。掛けるのは fs と pg の**両方**が検査している `read` / `write` /
+   * `append` / `remove` だけ——片方だけが検査するメソッドまで締めると、今度は
+   * 本物より厳しい逆向きの差になる。文言も本物と同じにする。
+   */
+  const checkMemorySlug = (slug: string): void => {
+    if (!memorySlugSchema.safeParse(slug).success) throw new Error(`記憶のスラッグが不正: ${slug}`);
+  };
+
   const persona: PersonaStore = {
     async list(): Promise<MemoryDocumentMeta[]> {
       return [...documents.values()]
@@ -312,11 +329,13 @@ export function createMemoryStores(): Stores {
         .sort((a, b) => a.slug.localeCompare(b.slug));
     },
     async read(slug) {
+      checkMemorySlug(slug);
       const doc = documents.get(slug);
       if (doc === undefined) return null;
       return { ...doc, createdAt: toMemoryCreatedAt(createdAtStore.get(slug)) };
     },
     async write(slug, content) {
+      checkMemorySlug(slug);
       const before = documents.get(slug);
       const updatedAt = new Date().toISOString();
       // **保存する形へ正規化してから、以降は正規化した本文だけを使う。**
@@ -382,6 +401,7 @@ export function createMemoryStores(): Stores {
       return doc;
     },
     async append(slug, content) {
+      checkMemorySlug(slug);
       const existing = documents.get(slug);
       // **既存の本文を `ensureTrailingNewline` に通してから連結する。** 上の
       // `write` が既に正規化しているので冗長に見えるが、fs
@@ -396,6 +416,7 @@ export function createMemoryStores(): Stores {
       );
     },
     async remove(slug) {
+      checkMemorySlug(slug);
       documents.delete(slug);
       // fs / pg と同じく、実体が消えれば派生値も消える（過去に human で書かれた
       // 事実そのものは journal に残るので、backfill が立て直す）。
