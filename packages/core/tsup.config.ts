@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 9つ出す。
+   * 10個出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -75,6 +75,16 @@ export default defineConfig({
    *   1つだけ持つ（`./inbox-validity.js`）が、**そちらも実行時の依存が
    *   無い**（`schema.ts` からは両方とも `import type` だけ）ので、束ねても
    *   `usage-format.ts` と同じ「実行時の依存を1つも持たない」帯に収まる。
+   * - `job-status-running.ts` — ジョブの「実行中」件数の判定（9回目の横断
+   *   レビュー指摘。`@alteroid/core/job-status-running`）。**`mask-url.ts` と
+   *   同じ形**——Web UI（`apps/web/app/routes/dashboard.tsx`）が
+   *   `m.status === 'running'` を直書きしていて、将来「実行中」を意味する
+   *   新しい値が `jobStatusSchema` に足されても件数から静かに漏れる形に
+   *   なっていた。core 側（`tools.ts` の `describeManagerCounts`）にも同じ
+   *   直書きが在ったので、判定をここへ寄せた。ファイル自身は import を
+   *   1つも持たない——zod スキーマから推論した型と構造的に一致することは
+   *   `schema.ts` の型レベルの検査（`_AssertJobStatusMatchesRunningLikeType`）
+   *   が保証する。
    */
   entry: [
     'src/index.ts',
@@ -87,6 +97,7 @@ export default defineConfig({
     'src/trace-action.ts',
     'src/mask-url.ts',
     'src/manager-activity.ts',
+    'src/job-status-running.ts',
   ],
   format: ['esm'],
   dts: true,

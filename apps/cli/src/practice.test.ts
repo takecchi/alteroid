@@ -167,16 +167,24 @@ describe('alteroid practice set', () => {
     expect(sent.filter((s) => s.method === 'PUT')).toHaveLength(0);
   });
 
-  it('書き換えられなければ、書き換えたとは言わない', async () => {
-    const read = captureStdout();
+  /**
+   * ⚠️ 2026-09-26（#1641）: 以前はここで `stdout.write` して正常 return して
+   * いた（＝終了コードは常に 0）。いまは例外を投げる——アサーションは消さず、
+   * 見る先を「書いた文字列」から「投げた例外の文言」へ反転した（`memory.ts`
+   * の同名テストと同じ理由）。
+   */
+  it('書き換えられなければ、書き換えたとは言わない（例外の文言で確かめる。#1641）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
     replies.push({ status: 400, body: { error: 'やり方のスラッグが不正' } });
 
-    await practiceSetCommand('..', { file: fileWith('本文\n'), kind: 'x', title: 'y' });
+    const error = await practiceSetCommand('..', {
+      file: fileWith('本文\n'),
+      kind: 'x',
+      title: 'y',
+    }).catch((e: unknown) => e);
 
-    const text = read();
-    expect(text).toContain('書き換えられませんでした');
-    expect(text).not.toContain('書き換えました: ..');
+    expect(String(error)).toContain('書き換えられませんでした');
+    expect(String(error)).not.toContain('書き換えました: ..');
   });
 });
 
@@ -272,20 +280,46 @@ describe('alteroid practice remove', () => {
   /**
    * デーモンは「無い」（404）と「名前として成立しない」（400）を分けている。
    * **こちらで1つに潰すと、直し方が読めなくなる**（打ち間違いなのか、消えたのか）。
+   *
+   * ⚠️ 2026-09-26（#1641）: 以前はどちらも `stdout.write` して正常 return して
+   * いた（＝終了コードは常に 0）。いまは両方とも例外を投げる——アサーションは
+   * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
    */
-  it('「無い」と「名前として不正」を混ぜない', async () => {
-    const read = captureStdout();
+  it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
-    await practiceRemoveCommand('missing');
-    expect(read()).toContain('そんなやり方はありません');
+    const missing = await practiceRemoveCommand('missing').catch((e: unknown) => e);
+    expect(String(missing)).toContain('そんなやり方はありません');
 
-    vi.restoreAllMocks();
-    const read2 = captureStdout();
     replies.push({ status: 400, body: { error: 'やり方のスラッグが不正' } });
-    await practiceRemoveCommand('..');
-    const text = read2();
-    expect(text).toContain('名前として成立しません');
-    expect(text).not.toContain('そんなやり方はありません');
+    const invalid = await practiceRemoveCommand('..').catch((e: unknown) => e);
+    expect(String(invalid)).toContain('名前として成立しません');
+    expect(String(invalid)).not.toContain('そんなやり方はありません');
+  });
+});
+
+/**
+ * Issue #1641 本文の再現をそのまま歯にする（`memory.test.ts` の同名 describe と
+ * 対になる）。`practice set` / `practice edit` は同じ内部関数 `write()` を
+ * 共有するので、`practiceSetCommand` 経由で確かめれば `practiceEditCommand`
+ * の失敗経路も同じコードで守られる。
+ */
+describe('#1641 の再現（Issue 本文）', () => {
+  it('practice set: PUT が 500 なら投げる', async () => {
+    replies.push({ status: 404, body: { error: 'not found' } }); // 既存を見に行く（read）
+    replies.push({ status: 500, body: { error: '内部エラー' } }); // PUT
+
+    await expect(
+      practiceSetCommand('some-slug', { file: fileWith('本文\n'), kind: 'x', title: 'y' }),
+    ).rejects.toThrow();
+  });
+
+  it('practice remove: DELETE が 500 なら投げる（「そんなやり方はありません」に化けない）', async () => {
+    replies.push({ status: 500, body: { error: '内部エラー' } });
+
+    const error = await practiceRemoveCommand('some-slug').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain('そんなやり方はありません');
   });
 });
 

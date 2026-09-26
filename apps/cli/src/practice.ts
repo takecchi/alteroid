@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid practice` — 仕事のやり方を読む・書き換える・消す（#1055 段3③）。
@@ -53,8 +53,9 @@ export interface PracticeSummary {
 }
 
 export async function practiceListCommand(): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client } = conn;
   const response = await client.practices.$get();
   if (!response.ok) {
     stdout.write('やり方の一覧を読めませんでした\n');
@@ -82,8 +83,9 @@ export async function practiceShowCommand(
   slug: string,
   options: { version?: number } = {},
 ): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client } = conn;
 
   if (options.version !== undefined) {
     const response = await client.practices[':slug'].versions[':version'].$get({
@@ -117,8 +119,9 @@ export async function practiceShowCommand(
  * `alteroid practice show <slug> --version <n>` で読む。
  */
 export async function practiceHistoryCommand(slug: string): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client } = conn;
   const response = await client.practices[':slug'].versions.$get({ param: { slug } });
   if (!response.ok) {
     stdout.write('版の履歴を読めませんでした\n');
@@ -152,8 +155,9 @@ export async function practiceEditCommand(
   slug: string,
   options: { kind?: string; title?: string } = {},
 ): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const current = await read(client, slug);
 
   const kind = options.kind ?? current?.kind;
@@ -185,7 +189,7 @@ export async function practiceEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    await write(client, slug, kind, title, edited);
+    await write(client, target, slug, kind, title, edited);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -201,8 +205,9 @@ export async function practiceSetCommand(
   slug: string,
   options: { file?: string; kind?: string; title?: string } = {},
 ): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const current = await read(client, slug);
 
   const kind = options.kind ?? current?.kind;
@@ -219,7 +224,7 @@ export async function practiceSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readFile(options.file, 'utf8');
-  await write(client, slug, kind, title, content);
+  await write(client, target, slug, kind, title, content);
 }
 
 /**
@@ -228,32 +233,47 @@ export async function practiceSetCommand(
  * **確認を求めない**（`memory remove` と同じ理由——Web UI に確認の段が
  * 無く、CLI にだけ `--yes` を要求すると「CLI だけができないこと」を作る）。
  * 消した事実は日誌に残る。
+ *
+ * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** `memory.ts` の
+ * `memoryRemoveCommand` と同じ理由（#1621 / #1641）。
+ *
+ * **「無い」と「名前として不正」は、サーバが 404 と 400 で分けているものを
+ * そのまま伝える。それ以外（401/403/5xx）を、この2つのどちらかだと取り違え
+ * ない**——以前はここが「400 以外は全部『無い』」という形をしていたため、
+ * 認証切れやサーバの内部エラーでも「そんなやり方はありません」と誤案内して
+ * いた。
  */
 export async function practiceRemoveCommand(slug: string): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const response = await client.practices[':slug'].$delete({ param: { slug } });
   if (!response.ok) {
-    // **「無い」と「名前として不正」を混ぜない**（`memory remove` と同じ
-    // 理由——デーモンが 404 と 400 で分けているものを1つに潰すと、
-    // 打ち間違いなのか消えたのかが読めなくなる）。
-    stdout.write(
-      response.status === 400
-        ? `やり方の名前として成立しません: ${slug}\n`
-        : `そんなやり方はありません: ${slug}\n`,
-    );
-    return;
+    if (response.status === 400) {
+      throw new Error(`やり方の名前として成立しません: ${slug}`);
+    }
+    if (response.status === 404) {
+      throw new Error(`そんなやり方はありません: ${slug}`);
+    }
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(`やり方を消せませんでした: ${slug}（HTTP ${String(response.status)}）`);
   }
   stdout.write(`消しました: ${slug}\n`);
 }
 
-async function connect(): Promise<DaemonClient | null> {
+/**
+ * **`target` も一緒に返す。** 書き込み系（`write` / `practiceRemoveCommand`）
+ * が HTTP の失敗を `describeAuthFailure` で判定するのに要る（#1641。
+ * `memory.ts` の `connect` と同じ理由）。
+ */
+async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
     stdout.write(`${target.note}\n`);
     return null;
   }
-  return createClient(target.baseUrl, target.headers);
+  return { client: createClient(target.baseUrl, target.headers), target };
 }
 
 /** 無ければ `null`。 */
@@ -269,8 +289,18 @@ async function read(
     : null;
 }
 
+/**
+ * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** `memory.ts` の
+ * `write` と同じ理由（#1641）。
+ *
+ * **400 は「種類・題・スラッグのどれかが不正」の意味を保つ**（サーバの
+ * `practiceSlugSchema` / `practiceKindSchema` 検証。`PUT /practices/:slug`
+ * が返す唯一の明示的な失敗コード）。**それ以外（401/403/5xx）を、それだと
+ * 取り違えない。**
+ */
 async function write(
   client: DaemonClient,
+  target: Target,
   slug: string,
   kind: string,
   title: string,
@@ -281,10 +311,14 @@ async function write(
     json: { kind, title, content },
   });
   if (!response.ok) {
-    stdout.write(
-      `書き換えられませんでした: ${slug}（種類・題・スラッグのどれかが不正かもしれません）\n`,
-    );
-    return;
+    if (response.status === 400) {
+      throw new Error(
+        `書き換えられませんでした: ${slug}（種類・題・スラッグのどれかが不正かもしれません）`,
+      );
+    }
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(`書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`);
   }
   stdout.write(`書き換えました: ${slug}\n`);
 }

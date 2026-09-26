@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid memory` — 記憶（人格）を読む・書き換える・消す。
@@ -90,8 +90,9 @@ export function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
 }
 
 export async function memoryListCommand(): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client } = conn;
   const response = await client.memory.$get();
   if (!response.ok) {
     stdout.write('記憶の一覧を読めませんでした\n');
@@ -241,9 +242,9 @@ export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']
 }
 
 export async function memoryShowCommand(slug: string): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
-  const content = await read(client, slug);
+  const conn = await connect();
+  if (conn === null) return;
+  const content = await read(conn.client, slug);
   if (content === null) {
     stdout.write(`そんな記憶はありません: ${slug}\n`);
     return;
@@ -259,8 +260,9 @@ export async function memoryShowCommand(slug: string): Promise<void> {
  * 雛形を入れる。
  */
 export async function memoryEditCommand(slug: string): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const current = await read(client, slug);
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
@@ -277,7 +279,7 @@ export async function memoryEditCommand(slug: string): Promise<void> {
       stdout.write('変更はありません。\n');
       return;
     }
-    await write(client, slug, edited);
+    await write(client, target, slug, edited);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -288,13 +290,13 @@ export async function memorySetCommand(
   slug: string,
   options: { file?: string } = {},
 ): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
   const content =
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readFile(options.file, 'utf8');
-  await write(client, slug, content);
+  await write(conn.client, conn.target, slug, content);
 }
 
 /**
@@ -303,20 +305,32 @@ export async function memorySetCommand(
  * **確認を求めない。** Web には確認の段が無く（ボタン1つで消える）、CLI にだけ
  * `--yes` を要求すると「CLI だけができないこと」を作る。消した事実は日誌に残るので、
  * 記憶から消えても記録からは消えない（`DELETE /memory/:slug` の description）。
+ *
+ * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** 書き込み系（消す
+ * 操作）なので、`reset.ts` / `access.ts` / `token.ts` / `alteroid interrupt`
+ * （#1621）と同じく、HTTP の失敗を握り潰さない（#1641）。
+ *
+ * **「無い」と「名前として不正」は、サーバが 404 と 400 で分けているものを
+ * そのまま伝える**（1つに潰すと打ち間違いなのか消えたのかが読めなくなる）。
+ * **それ以外（401/403/5xx）を、この2つのどちらかだと取り違えない**——
+ * 以前はここが「400 以外は全部『無い』」という形をしていたため、認証切れや
+ * サーバの内部エラーでも「そんな記憶はありません」と誤案内していた。
  */
 export async function memoryRemoveCommand(slug: string): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client, target } = conn;
   const response = await client.memory[':slug'].$delete({ param: { slug } });
   if (!response.ok) {
-    // **「無い」と「名前として不正」を混ぜない**（デーモンが 404 と 400 で分けて
-    // いるものを、こちらで1つに潰すと直し方が読めなくなる）。
-    stdout.write(
-      response.status === 400
-        ? `記憶の名前として成立しません: ${slug}\n`
-        : `そんな記憶はありません: ${slug}\n`,
-    );
-    return;
+    if (response.status === 400) {
+      throw new Error(`記憶の名前として成立しません: ${slug}`);
+    }
+    if (response.status === 404) {
+      throw new Error(`そんな記憶はありません: ${slug}`);
+    }
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(`記憶を消せませんでした: ${slug}（HTTP ${String(response.status)}）`);
   }
   stdout.write(`消しました: ${slug}\n`);
 }
@@ -326,14 +340,17 @@ export async function memoryRemoveCommand(slug: string): Promise<void> {
  *
  * 例外にしないのは `usage.ts` と揃えるためである（`alteroid: Error: …` の形に
  * すると、「ログインしていません」という人間向けの案内が例外の見た目で出る）。
+ *
+ * **`target` も一緒に返す。** 書き込み系（`write` / `memoryRemoveCommand`）が
+ * HTTP の失敗を `describeAuthFailure` で判定するのに要る（#1641）。
  */
-async function connect(): Promise<DaemonClient | null> {
+async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
     stdout.write(`${target.note}\n`);
     return null;
   }
-  return createClient(target.baseUrl, target.headers);
+  return { client: createClient(target.baseUrl, target.headers), target };
 }
 
 /** 無ければ `null`。**空文字と区別する**（空の記憶は在りうる）。 */
@@ -344,11 +361,30 @@ async function read(client: DaemonClient, slug: string): Promise<string | null> 
   return 'document' in body ? body.document.content : null;
 }
 
-async function write(client: DaemonClient, slug: string, content: string): Promise<void> {
+/**
+ * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** `memoryRemoveCommand`
+ * と同じ理由（#1641）。
+ *
+ * **400 は「記憶の名前が不正」の意味を保つ**（サーバの `memorySlugSchema` 検証。
+ * `PUT /memory/:slug` が返す唯一の明示的な失敗コード）。**それ以外
+ * （401/403/5xx）を「名前が不正」だと取り違えない**——以前はここが `!response.ok`
+ * を1つに潰していたため、認証切れやサーバの内部エラーでも「名前が不正かも
+ * しれません」と誤案内していた。
+ */
+async function write(
+  client: DaemonClient,
+  target: Target,
+  slug: string,
+  content: string,
+): Promise<void> {
   const response = await client.memory[':slug'].$put({ param: { slug }, json: { content } });
   if (!response.ok) {
-    stdout.write(`書き換えられませんでした: ${slug}（記憶の名前が不正かもしれません）\n`);
-    return;
+    if (response.status === 400) {
+      throw new Error(`書き換えられませんでした: ${slug}（記憶の名前が不正かもしれません）`);
+    }
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(`書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`);
   }
   stdout.write(`書き換えました: ${slug}\n`);
   // **どこに効くかを言う。** 記憶はクローンのシステムプロンプトに載るので、

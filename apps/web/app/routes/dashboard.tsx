@@ -1,3 +1,4 @@
+import { isRunningJobStatus } from '@alteroid/core/job-status-running';
 import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
 import { Link } from 'react-router';
 
@@ -62,7 +63,11 @@ export default function Dashboard() {
 
   const latestReport = reports.data?.reports[0];
   const pending = approvals.data?.approvals ?? [];
-  const running = (managers.data?.managers ?? []).filter((m) => m.status === 'running');
+  // **`m.status === 'running'` を直書きしない。** 将来「実行中」を意味する
+  // 新しい値が `jobStatusSchema` に足されても件数から漏らさないための唯一の
+  // 判定を `@alteroid/core/job-status-running` から取る（そちらの doc に
+  // 経緯——直書きが実際にこの穴を持っていたこと——がある）。
+  const running = (managers.data?.managers ?? []).filter((m) => isRunningJobStatus(m.status));
 
   return (
     <Page title="ダッシュボード" description="いま何が動いていて、何が人間を待っているか">

@@ -5726,6 +5726,29 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **`describeManagerCounts` の「走行中」も `m.status === 'running'` を
+   * 直書きしていた（9回目の横断レビュー指摘。`job-status-running.ts` の
+   * doc）。** 将来「実行中」を意味する新しい値が `jobStatusSchema`
+   * （`schema.ts`）へ足されても、`typecheck` は落ちず画面（この場合は文面）も
+   * 落ちず、件数からその分だけ静かに漏れる。まだ存在しない値を模して確かめる
+   * ——本物の値を1つ増やす改修は要件を動かすので、型を迂回したキャストで
+   * 代用する（上の web 側の歯（`dashboard.test.tsx`）と同じ形）。
+   */
+  it('走行中の件数は、jobStatusSchema にまだ無い「実行中」相当の値も含める', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const future = h.running[0];
+    if (!future) throw new Error('準備に失敗');
+    // まだ `jobStatusSchema` に無い値。将来「実行中」を意味する値が足された、
+    // という状況を模す（上の doc）。
+    future.status = 'executing-in-background' as JobStatus;
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('走行中 1 本（うち話しかけられる 1 本）');
+  });
+
+  /**
    * **`live: false` の理由を、分かる分だけ名指しする。**
    *
    * 状態名だけだと「セッションが終わった」のか「宛先の器が消えた」のかが読めず、

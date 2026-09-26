@@ -283,6 +283,55 @@ describe('概要カードが打ち切ったことを言う', () => {
 });
 
 /**
+ * 「稼働中のマネージャー」カードの件数が `m.status === 'running'` を直書き
+ * していると、将来「実行中」を意味する新しい値が `jobStatusSchema`
+ * （`packages/core/src/schema.ts`）へ足されても、この画面は**型検査にも
+ * 落ちず、画面も落ちず**、件数からその分だけ静かに漏れる（9回目の横断
+ * レビュー指摘。Issue は無い）。
+ *
+ * **まだ存在しない値を模して確かめる。** `jobStatusSchema` の現行6値は
+ * すでに正しく扱えているので（直上の `describe`）、ここで踏みたいのは
+ * *まだ無い将来の値*である——本物の値を1つ増やす改修は要件を動かすので、
+ * 型を迂回したフィクスチャで代用する（`lists.managers` は `unknown[]`
+ * なので、ここでのキャストは画面の型を1文字も緩めない）。
+ *
+ * `@alteroid/core/job-status-running` の `isRunningJobStatus` が安全側
+ * （知らない値は実行中として数える）を選んでいるので、直した後はここが緑に
+ * なる。直す前（`m.status === 'running'` の直書き）は、このマネージャーが
+ * 一覧にも件数にも出ない。
+ */
+describe('「稼働中のマネージャー」は知らない status を静かに落とさない', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  it('jobStatusSchema にまだ無い「実行中」相当の値も、一覧と件数に含める', async () => {
+    const managers = [
+      {
+        managerId: 'mgr-future-running',
+        // **まだ `jobStatusSchema` に無い値。** 将来「実行中」を意味する
+        // 値が足された、という状況を模す（上のファイル doc）。
+        status: 'executing-in-background',
+        live: true,
+        cwd: '/workspace',
+        request: '将来のrunning相当ステータス',
+        startedAt: '2026-08-14T09:00:00.000Z',
+        updatedAt: '2026-08-14T09:00:00.000Z',
+      },
+    ];
+    renderDashboard(USAGE, EMPTY_FEED, [], { managers });
+
+    // **先に非同期側（`findByText`）を待つ。** データが届く前に同期の
+    // `queryByText` を読むと、読み込み中の空表示と区別が付かないまま
+    // 「無かった」と誤判定する（このテストが実際にその形で一度落ちた）。
+    // 直す前（`m.status === 'running'` の直書き）は、このマネージャーが
+    // 一覧からも件数からも漏れて、`findByText` がタイムアウトして落ちる。
+    expect(await screen.findByText('将来のrunning相当ステータス')).toBeTruthy();
+    // ここまで来ればデータは届いている——「いま走っているものはない」
+    // （0件の空表示）が同時に出ていないことを確かめられる。
+    expect(screen.queryByText('いま走っているものはない。')).toBeNull();
+  });
+});
+
+/**
  * 「次の自動実行」カードは、この画面の他5枚（最新の日報／承認待ち／稼働中の
  * マネージャー／今日の利用／いま届いている出来事）と違って `action` を持たず、
  * かつ `entry.description` を `truncate` で切っている唯一のカードだった
