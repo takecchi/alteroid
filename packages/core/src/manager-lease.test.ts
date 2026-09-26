@@ -1415,3 +1415,27 @@ describe('器が入れ替わった後の manager_send（#669）', () => {
     await h.close();
   });
 });
+
+/**
+ * **取り直し（`#reattach`）も、状態を読めなかったが runner に居る委譲を resume しない**
+ * （Issue #1661）。版ずれで `HttpRunner#list()` のスキーマに落ちた委譲を「居ない」と
+ * 読むと、まだ走っている委譲を resume し、待っていた確認を捨てる。対照は、同じ足場で
+ * 猶予を過ぎた委譲が実際に resume される既存の歯（「畳む猶予を過ぎたら引き取り…」）。
+ */
+describe('取り直しは、読めないまま runner に居る委譲を resume しない（#1661）', () => {
+  it('猶予を過ぎていても、listWithUnreadable が名乗る委譲は resume しない', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+    h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+    // runner は mgr-1 を持っているが、こちらの知らない形で名乗っている（版ずれ）。
+    (h.runner as RunnerClient).listWithUnreadable = async () => ({
+      states: [],
+      unreadableIds: ['mgr-1'],
+    });
+
+    await h.pool.reattachRunner('runner-primary');
+
+    expect(h.runner.resumes).toEqual([]);
+    await h.close();
+  });
+});
