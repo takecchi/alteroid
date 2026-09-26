@@ -348,10 +348,16 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       await stores.jobs.putJob(orphanJob(managerId));
 
       // **abort() が list() を呼んだことを合図に、runner.resume() の解決を
-      // 遅らせる。** チェックポイント1（resume を呼ぶ前）は素通りさせ
-      // （resume は実際に1回呼ばれる）、resume が「返る」より前に abort() が
-      // 確定するように仕組む——`#resume` のチェックポイント2、それでも
-      // 間に合わなければ `send()` 自身のチェックポイント3が畳み直す。
+      // 遅らせる。** 当初はここでチェックポイント1（resume を呼ぶ前）を
+      // 必ず素通りさせるつもりで組んだが、**Issue #1716 の直しで
+      // `abort()` が印（`record.stopConfirmedAt`）を `#confirmStoppedAndReleaseLease`
+      // より前（`#runnerOf` の直後）に立てるようになった**ので、いまは
+      // チェックポイント1がこの回も先に捕まえることがある——`stopConfirmedAt`
+      // は `runner.stop()` / `runner.list()` を待たずに立つため、送信側が
+      // チェックポイント1に達する前に既に立っている可能性が高い。
+      // **どちらのチェックポイントが捕まえても、下の本題（畳み直し・
+      // 台帳・send() の答え）は変わらない**ので、`resumeCalls` の本数で
+      // 分岐しつつ両方を確かめる。
       const abortListCalled = deferred<void>();
       const { runner, stopCalls, resumeCalls, sessions } = trackingRunner({
         resumeGate: (async () => {
@@ -383,12 +389,19 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       expect(abortResult.outcome).toBe('stopped');
       expect(abortResult.sessionGone).toBe(true);
 
-      // **本題。** resume は実際に1回呼ばれた（チェックポイント1は素通り）。
-      expect(resumeCalls).toHaveLength(1);
-      // runner 側に立ったセッションは畳み直されて残らない。
+      // runner 側に立ったセッション（そもそも立っていれば）は畳み直されて
+      // 残らない。
       expect(sessions.has(managerId)).toBe(false);
-      // abort() 自身の stop 呼び出し ＋ 畳み直しの stop 呼び出しで2回。
-      expect(stopCalls).toHaveLength(2);
+      if (resumeCalls.length === 0) {
+        // チェックポイント1が先に捕まえた——resume そのものが出ていない
+        // ので、畳み直しも要らず stop は abort() 自身の1回だけ。
+        expect(stopCalls).toHaveLength(1);
+      } else {
+        // チェックポイント2 または 3 が捕まえた——resume は出たが畳み直された。
+        expect(resumeCalls).toHaveLength(1);
+        // abort() 自身の stop 呼び出し ＋ 畳み直しの stop 呼び出しで2回。
+        expect(stopCalls).toHaveLength(2);
+      }
 
       expect(sendResult.outcome).not.toBe('delivered');
       expect(sendResult.outcome).toBe('session_missing');
@@ -398,7 +411,7 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
     },
   );
 
-  it('abort() が not_stopped を返す回では、印（stopConfirmedAt）は立たず、send() は従来どおり進む', async () => {
+  it('abort() が not_stopped を返した後は、印（stopConfirmedAt）が下ろされ、send() は従来どおり進む', async () => {
     const managerId = 'mgr-orphan-not-stopped';
     const stores = createMemoryStores();
     await stores.jobs.putJob(orphanJob(managerId));
@@ -460,15 +473,22 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
     });
     await pool.restore();
 
-    const [sendResult, abortResult] = await Promise.all([
-      pool.send(managerId, 'hello'),
-      pool.abort(managerId),
-    ]);
-
+    // **`Promise.all` で同時に投げない。** Issue #1716 の直しで `abort()` は
+    // `#confirmStoppedAndReleaseLease` を await する**前**に印
+    // （`record.stopConfirmedAt`）を立てるようになった——`send()` を本当に
+    // 同時に投げると、abort() が `not_stopped` と確定して印を下ろす前に
+    // send() 側のチェックポイントが印を見てしまい、`session_missing` を
+    // 返すことがある（それ自体は「止めている最中かもしれない相手には
+    // 慎重に振る舞う」という正しい安全側の挙動であって、この歯が測りたい
+    // こと——「確かめた後は印を下ろす」——とは別の変数を持ち込む）。
+    // ここで測りたいのは**印が下ろされた後**の状態なので、`abort()` を
+    // 先に最後まで終わらせてから `send()` を投げる。
+    const abortResult = await pool.abort(managerId);
     expect(abortResult.outcome).toBe('not_stopped');
     expect(abortResult.sessionGone).toBe(false);
 
-    // **印が立っていないので、send() は従来どおり resume して届く。**
+    // **印が下ろされているので、send() は従来どおり resume して届く。**
+    const sendResult = await pool.send(managerId, 'hello');
     expect(sendResult.outcome).toBe('delivered');
 
     const finalJob = (await stores.jobs.listJobs()).find((entry) => entry.id === managerId);
@@ -598,15 +618,22 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
     expect(abortResult.outcome).toBe('stopped');
     expect(abortResult.sessionGone).toBe(true);
 
-    // resume は実際に1回呼ばれた。
-    expect(resumeCalls).toHaveLength(1);
-    // 起こしてしまったセッションは畳み直されて残らない。
+    // 起こしてしまったセッション（そもそも立っていれば）は畳み直されて残らない。
     expect(sessions.has(managerId)).toBe(false);
-    // abort() 自身の stop ＋ 畳み直しの stop で2回。
-    expect(stopCalls).toHaveLength(2);
+    // **`abort()` は Issue #1716 の直しで、印（`record.stopConfirmedAt`）を
+    // `#confirmStoppedAndReleaseLease` より前（`#runnerOf` の直後）に立てる
+    // ようになった。** そのぶんチェックポイント1がこの回も先に捕まえる
+    // ことがある——`resumeCalls` の本数で分岐しつつ両方を確かめる。
+    if (resumeCalls.length === 0) {
+      expect(stopCalls).toHaveLength(1);
+    } else {
+      expect(resumeCalls).toHaveLength(1);
+      // abort() 自身の stop ＋ 畳み直しの stop で2回。
+      expect(stopCalls).toHaveLength(2);
+    }
 
     // **本題。** `#reattach` は `send()` のようなチェックポイント3を持たない
-    // ——チェックポイント2だけが、ここで `running` の書き戻しを防いでいる。
+    // ——チェックポイント1／2だけが、ここで `running` の書き戻しを防いでいる。
     const finalJob = (await stores.jobs.listJobs()).find((entry) => entry.id === managerId);
     expect(finalJob?.status).toBe('stopped');
   });

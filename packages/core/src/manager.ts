@@ -7591,6 +7591,30 @@ class Pool implements ManagerPool {
       return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
+    /*
+     * **止めた意思を先に立てる（Issue #1716）。** まだ「止まった」と確かめて
+     * すらいないが、これから `#confirmStoppedAndReleaseLease` を await する
+     * 間に、別の契機が同じ `ManagerRecord`（`#load()` の共有。Issue #1703）を
+     * 握って `resume()` を進めることがある——`send()` が同じ runner-a へ話し
+     * かける形（#1703 本体）だけでなく、**別の runner の名乗り（`#reattach`）
+     * が同じ委譲を引き取って runner-b へ resume する形**もありうる（#1716）。
+     * `#resume` はこの印（`record.stopConfirmedAt`）を2箇所で見て、まだ
+     * resume を出していなければ出さず、既に出してしまっていれば畳み直す
+     * （`ResumeOutcome.stopped-meanwhile` の doc）——**印が「確定した事実」
+     * ではなく「これから確かめに行く意思」の段階でも、resume 側からは同じ
+     * 優先順位で扱ってよい。** 待たせて損はない（`send()` 同様、待てば
+     * `#load()` からやり直せる）が、待たずに resume してしまうと Issue #1716
+     * の事故（runner-b で走り続ける委譲を「止まった」と言う）が起きる。
+     *
+     * **確かめられなければ、この印を下ろす**（下の `outcome !== 'stopped'`
+     * の分岐）。台帳は引き続き、実際に `outcome === 'stopped'` を確かめてから
+     * しか書かない——ここは「意思の共有」であって「確定の記録」ではない。
+     */
+    record.stopConfirmedAt = new Date(this.#now()).toISOString();
+    // **await の前の宛先を覚えておく（Issue #1716 の「二重の網」）。** await の
+    // 後にこの値と食い違っていたら、委譲は別の runner へ移っている。
+    const runnerIdBeforeConfirm = record.job.runnerId;
+
     // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
     // 越しの runner では期限切れ（`RunnerUnknownError`）や明確な失敗（接続拒否等）
     // が投げられる（`runner-client.ts` の `#call`）。投げたまま素通しすると、日誌の
@@ -7598,11 +7622,48 @@ class Pool implements ManagerPool {
     // が 500 になる — **「止めた事実は日誌に残る」という約束がいちばん要る場面で
     // 消える**。捕まえて、権威は下の `sessionGone` の探りに置く（stop の RPC が
     // 返らなくても、届いていて実際に止まっていることがある）。
-    const { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
+    let { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
       record,
       runner,
       managerId,
     );
+
+    /*
+     * **二重の網（Issue #1716）。** 上の印が主な防御だが、印を立てる**前**
+     * （`#ensureConnected` / `#load` / `#runnerOf` の await）にも同じ形の窓が
+     * 開く——印が立つより前に `#reattach` が resume を終えていれば、印では
+     * 塞げない。だから、await から戻った直後にもう一度確かめる:
+     * `record.job.runnerId` が await の前と食い違っていたら、委譲は既に
+     * 別の runner（新しい持ち主）へ移っている。
+     *
+     * **「降りて新しい持ち主に任せる」ではなく「止めた意思を優先する」
+     * （#1703 と同じ方針）。** 新しい runner でも実際に止まったと確かめて
+     * からでなければ `stopped` を語らない。確かめられなければ `outcome` を
+     * 書き換え、下の分岐（`not_stopped` / `unknown` と同じ「台帳を書かない」
+     * 側）へ合流させる。
+     */
+    if (outcome === 'stopped' && record.job.runnerId !== runnerIdBeforeConfirm) {
+      const movedRunner = await this.#runnerOf(record);
+      if (movedRunner === null) {
+        // 移った先が開いていない——確かめようが無い。
+        outcome = 'unknown';
+        stopError = undefined;
+        sessionGone = undefined;
+      } else {
+        const moved = await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
+        outcome = moved.outcome;
+        stopError = moved.stopError;
+        sessionGone = moved.sessionGone;
+      }
+    }
+
+    if (outcome !== 'stopped') {
+      // **確かめられなかった。印を下ろす（Issue #1716）。** 台帳を1文字も
+      // 書かない既存の約束（下）はそのまま——印だけが、確かめられた事実に
+      // 追いつかないまま残ることを防ぐ。次にこの委譲へ触れる `#resume` は、
+      // 印の無い（＝止まっていない）ものとして扱ってよい。
+      delete record.stopConfirmedAt;
+    }
 
     // **止めた委譲が「握り潰した報告」を抱えたまま終わったという事実を、
     // 依頼者（クローン）へ能動的に届けるための控え。**
@@ -7619,21 +7680,6 @@ class Pool implements ManagerPool {
     // 揃えた。
     let withheldNote = '';
     if (outcome === 'stopped') {
-      /*
-       * **止めた意思を印にする。台帳を書く前に立てる（Issue #1703）。**
-       *
-       * `send()` が同じ `ManagerRecord`（`#load()` の共有の直し）を握ったまま
-       * `runner.resume()` を進めている最中に、こちらが「止めた」と確かめたと
-       * いう順序がありうる——resume は実 I/O なので、台帳の読み直しでは
-       * 間に合わない。`#resume` はこの印を見て、まだ resume を出していなければ
-       * 出さず、既に出してしまっていれば起こしたセッションを畳み直す
-       * （`ResumeOutcome.stopped-meanwhile` の doc）。
-       *
-       * **`not_stopped` / `unknown` では立てない**（下の分岐に入らない）。
-       * 台帳を1文字も書かないのと同じ理由で、確かめていない停止をここでも
-       * 確定させない。
-       */
-      record.stopConfirmedAt = new Date(this.#now()).toISOString();
       record.waiting = [];
       record.attached = false;
       record.job.status = 'stopped';
