@@ -13,6 +13,7 @@ import {
   accessOwnerCommand,
   accessRevokeCommand,
 } from './access.js';
+import { appraisalStatsCommand } from './appraisal-stats.js';
 import { chatCommand } from './chat.js';
 import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
 import * as daemon from './daemon.js';
@@ -278,6 +279,18 @@ program
   .description('握り潰しの跡（記録・読み出しの失敗の跡。本文は含まない）を見る')
   .action(async () => {
     await droppedCommand();
+  });
+
+/**
+ * 評定（`good`/`bad`/`unclear`/未評定）の内訳。経路は `GET /appraisal-stats` の
+ * 1本だけで、クローンの道具 `appraisal_stats` も同じ集計を見る
+ * （`apps/cli/src/appraisal-stats.ts`。#1620）。
+ */
+program
+  .command('appraisal-stats')
+  .description('評定（good/bad/unclear/未評定）の内訳を見る')
+  .action(async () => {
+    await appraisalStatsCommand();
   });
 
 /**
