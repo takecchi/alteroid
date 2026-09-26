@@ -361,6 +361,14 @@ export interface Listed {
   messagesConversationId: string | null;
 }
 
+/**
+ * **ここの `!response.ok` は例外を投げない（`stdout.write` して `'ok'` を返す）。**
+ * #1641 / PR #1642 で変更系コマンド（`reset.ts` / `access.ts` / `token.ts` /
+ * `memory.ts` / `practice.ts` 等）は HTTP の失敗で例外を投げる形に揃えたが、
+ * ここは意図して揃えていない——`runSlashCommand` の呼び出し側（`chatCommand`
+ * の読み取りループ）に `try/catch` が無く、ここで投げると対話のセッション
+ * 全体が落ちるためである（オーナー了承済み）。
+ */
 export async function runSlashCommand(
   line: string,
   client: ReturnType<typeof createClient>,
