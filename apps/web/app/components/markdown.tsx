@@ -37,8 +37,8 @@
  */
 import { gfm } from 'micromark-extension-gfm';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
-import type { ReactNode } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import type { ComponentProps, ReactNode } from 'react';
+import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 
 /**
@@ -148,10 +148,25 @@ const HEADINGS = {
 
 type HeadingTag = keyof typeof HEADINGS;
 
+/**
+ * `id` だけは通す。GFM の脚注節は見出し（既定 `h2`）に
+ * `id="footnote-label"` を付け、本文の参照・戻るリンクの
+ * `aria-describedby="footnote-label"` がそれを指す
+ * （`mdast-util-to-hast` の `lib/footer.js` の `footnoteLabelTagName` /
+ * `footnoteLabelProperties`）。`id` を落とすと、その参照先が無くなる。
+ * **`className` は渡さない** — 見出しの見た目はこの部品が決めるものであって
+ * Markdown 側の任意のクラスに揺らがせない（脚注節の見出しに付く
+ * `sr-only` も同じ理由で渡していない。視覚的には通常の見出しと同じ大きさで
+ * 見える——リンクの生死には関わらない差として残す）。
+ */
 function heading(tag: HeadingTag) {
-  return function Heading({ children }: { children?: ReactNode }) {
+  return function Heading({ id, children }: { id?: string; children?: ReactNode }) {
     const Tag = tag;
-    return <Tag className={HEADINGS[tag]}>{children}</Tag>;
+    return (
+      <Tag id={id} className={HEADINGS[tag]}>
+        {children}
+      </Tag>
+    );
   };
 }
 
@@ -167,17 +182,67 @@ const components: Components = {
   ol: ({ children }) => (
     <ol className="mt-2 list-decimal space-y-0.5 pl-5 first:mt-0">{children}</ol>
   ),
-  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-  a: ({ href, children }) => (
+  // GFM の脚注の定義（`<li id="user-content-fn-N">`）。**`id` だけを通す** —
+  // 本文の参照リンク（`components.a`、下）の `href` はここの `id` を指す。
+  // 落とすと参照を押しても飛ぶ先が無い「死んだリンク」になる
+  // （`mdast-util-to-hast` の `lib/footer.js` の `footer()`）。
+  li: ({ id, children }: ComponentProps<'li'>) => (
+    <li id={id} className="leading-relaxed">
+      {children}
+    </li>
+  ),
+  a: ({
+    href,
+    children,
+    id,
+    'aria-describedby': ariaDescribedBy,
+    'aria-label': ariaLabel,
+    'data-footnote-ref': dataFootnoteRef,
+    'data-footnote-backref': dataFootnoteBackref,
+  }: ComponentProps<'a'> &
+    ExtraProps & {
+      // `data-*` は @types/react の型に汎用の index signature が無いため、
+      // 明示的に広げないと destructure できない（`id` / `aria-describedby` /
+      // `aria-label` は標準の HTML/ARIA 属性としてすでに `ComponentProps<'a'>`
+      // に在るので、ここでは広げていない）。
+      'data-footnote-ref'?: boolean;
+      'data-footnote-backref'?: string;
+    }) => (
     // 外部リンク扱いで開く。本文は AI・人間が書いた自由文であって、この
     // アプリ内の経路を指す相対リンクを前提にしていない。
-    // **`...props` を素通ししない。** react-markdown は hast の `node`
-    // （`ExtraProps`）を毎回この形へ渡すので、そのまま `<a>` へ広げると
-    // DOM が知らない `node` prop を渡すことになる（React の警告）。
+    // **任意の hast 属性を丸ごと素通ししない。** react-markdown は hast の
+    // `node`（`ExtraProps`）を毎回この形へ渡すので、そのまま `<a>` へ広げる
+    // と DOM が知らない `node` prop を渡すことになる（React の警告）ほか、
+    // Markdown 本文が持ちうる任意の `className` / `style` でこの部品の見た目
+    // ・安全性（下の外部リンク扱い・`rel`）を上書きされる経路にもなる。
+    // **だから許可した名前だけを明示して渡す** — `id` と、GFM が脚注の
+    // `<a>` に付ける4つ（`data-footnote-ref` / `aria-describedby`＝本文の
+    // 参照、`data-footnote-backref` / `aria-label`＝脚注からの戻るリンク）
+    // だけをこの形で足す。`clobberPrefix`（既定 `user-content-`）は
+    // `remarkRehypeOptions` を渡していないので `mdast-util-to-hast` の既定
+    // のまま外していない。
+    //
+    // **`#` で始まる href（同じ文書内を指すリンク）には `target` / `rel` を
+    // 付けない。** GFM の脚注の参照（`#user-content-fn-N`）・戻るリンク
+    // （`#user-content-fnref-N`）はどちらもこの形。`target="_blank"` を
+    // 付けたままだと、押すたびに SPA を新しいタブで読み直すことになり、
+    // その新しいタブでは本文がまだ非同期に描かれる前で飛ぶ先の要素が無い
+    // ——「id を通しただけ」では直らない、同じ「脚注のリンクが死ぬ」穴の
+    // 別の形（2026-09-26 レビュー指摘）。**判定は `href` の先頭が `#` かだけ
+    // で行い、URL を解釈して「同じ origin か」を見る形にはしない**
+    // （below の `defaultUrlTransform` 由来の危険な URL 無効化——`href` は
+    // 既にそこを通った後の値なので、ここで URL 解釈を増やすと安全性の判断
+    // 経路が2つに増える）。外部リンクの扱い（`_blank` / `noreferrer
+    // noopener`）はそれ以外のすべての href で変えていない。
     <a
       href={href}
-      target="_blank"
-      rel="noreferrer noopener"
+      id={id}
+      aria-describedby={ariaDescribedBy}
+      aria-label={ariaLabel}
+      data-footnote-ref={dataFootnoteRef}
+      data-footnote-backref={dataFootnoteBackref}
+      target={href?.startsWith('#') ? undefined : '_blank'}
+      rel={href?.startsWith('#') ? undefined : 'noreferrer noopener'}
       className="break-words text-accent hover:underline"
     >
       {children}
