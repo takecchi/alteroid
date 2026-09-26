@@ -474,6 +474,45 @@ describe('createAuthService', () => {
 });
 
 /**
+ * **バグ探し（test/bughunt-auth）。** `AuthStore.listAccounts` は3実装
+ * （fs / pg / in-memory）で同じ順にならなければならない（M4 の要件、
+ * `packages/storage-fs/src/index.test.ts` の doc）。
+ *
+ * memory 実装（`testing.ts`）は fs と同じ `localeCompare`（文字列比較）で
+ * 並べている。`isoDateTime` はオフセット付きの任意の表記を許すので、同じ瞬間
+ * でも書き方は一意ではなく、文字列比較では実時刻の順が崩れうる。
+ */
+describe('バグ探し: listAccounts の並び（in-memory）', () => {
+  it('createdAt の文字列比較で並ぶので、オフセット表記が違うと実時刻の順が崩れる', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    const base = {
+      displayName: null,
+      email: null,
+      lastLoginAt: null,
+      grantedAt: null,
+      grantedBy: null,
+      ownerDeclaredAt: null,
+    };
+    const early = {
+      ...base,
+      id: 'account-early-utc',
+      createdAt: '2024-01-01T23:00:00+09:00', // 実時刻 2024-01-01T14:00:00Z
+    };
+    const late = {
+      ...base,
+      id: 'account-late-utc',
+      createdAt: '2024-01-01T15:00:00+00:00', // 実時刻 2024-01-01T15:00:00Z
+    };
+    await memoryAuth.putAccount(early);
+    await memoryAuth.putAccount(late);
+
+    const ids = (await memoryAuth.listAccounts()).map((it) => it.id);
+    // 実時刻順は early（14:00Z）→ late（15:00Z）のはず。
+    expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  });
+});
+
+/**
  * **`isDeclaredOwner`（本来の owner 判定。issue #1198）。**
  *
  * ここで固定するのは3つ。**①宣言済みなら真**、**②宣言していなければ

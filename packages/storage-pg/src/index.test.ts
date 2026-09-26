@@ -4133,6 +4133,32 @@ describe('AuthStore', () => {
     expect(await stores.auth.getAccount('居ない')).toBeNull();
   });
 
+  /**
+   * **バグ探し（test/bughunt-auth）。対照実験。** `packages/storage-fs/src/
+   * index.test.ts` の同名の歯は fs（文字列比較の `localeCompare`）で赤くなる。
+   * pg は `timestamptz` 列（`asc(authAccounts.createdAt)`）で実時刻を比べるので、
+   * オフセット表記が違っても崩れない——ここは緑のままであることを示す対照。
+   */
+  it('listAccounts は createdAt の実時刻順（timestamptz 列で比較するのでオフセット表記が違っても崩れない）', async () => {
+    const early = {
+      ...account,
+      id: 'account-early-utc',
+      email: 'early@example.test',
+      createdAt: '2024-01-01T23:00:00+09:00', // 実時刻 2024-01-01T14:00:00Z
+    };
+    const late = {
+      ...account,
+      id: 'account-late-utc',
+      email: 'late@example.test',
+      createdAt: '2024-01-01T15:00:00+00:00', // 実時刻 2024-01-01T15:00:00Z
+    };
+    await stores.auth.putAccount(early);
+    await stores.auth.putAccount(late);
+
+    const ids = (await stores.auth.listAccounts()).map((it) => it.id);
+    expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  });
+
   it('許可の2値を書き換えられる（alteroid access grant の実体）', async () => {
     await stores.auth.putAccount(account);
     await stores.auth.putAccount({

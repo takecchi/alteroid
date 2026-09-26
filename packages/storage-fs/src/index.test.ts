@@ -3667,6 +3667,41 @@ describe('AuthStore', () => {
     ownerDeclaredAt: null,
   };
 
+  /**
+   * **バグ探し（test/bughunt-auth）。** `listAccounts` は `createdAt` の
+   * **実時刻**順であるべきだが、fs / memory は `localeCompare`（文字列比較）で
+   * 並べている。`isoDateTime`（`z.string().datetime({ offset: true })`）は
+   * オフセット付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。
+   *
+   * ここでは実時刻で先に作られた行（`+09:00` 表記なので文字列は `"23"` から
+   * 始まる）と、実時刻で後に作られた行（`+00:00` 表記なので文字列は `"15"` から
+   * 始まる）を作る。文字列比較では `"15" < "23"` なので順序が反転する——pg は
+   * `timestamptz` 列で実時刻を比較するので反転しない（`packages/storage-pg/src/
+   * index.test.ts` の対の歯が緑になることで示す）。
+   */
+  it('バグ疑い: listAccounts は createdAt の文字列比較で並ぶので、オフセット表記が違うと実時刻の順が崩れる', async () => {
+    const early = {
+      ...account,
+      id: 'account-early-utc',
+      email: 'early@example.test',
+      // 実時刻 2024-01-01T14:00:00Z（+09:00 表記なので文字列は "23" から始まる）
+      createdAt: '2024-01-01T23:00:00+09:00',
+    };
+    const late = {
+      ...account,
+      id: 'account-late-utc',
+      email: 'late@example.test',
+      // 実時刻 2024-01-01T15:00:00Z（+00:00 表記なので文字列は "15" から始まる）
+      createdAt: '2024-01-01T15:00:00+00:00',
+    };
+    await stores.auth.putAccount(early);
+    await stores.auth.putAccount(late);
+
+    const ids = (await stores.auth.listAccounts()).map((it) => it.id);
+    // 実時刻順は early（14:00Z）→ late（15:00Z）のはず。
+    expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  });
+
   it('アカウントを保存して読み戻せる', async () => {
     await stores.auth.putAccount(account);
 
