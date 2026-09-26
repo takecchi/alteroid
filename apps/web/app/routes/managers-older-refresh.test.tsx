@@ -169,7 +169,9 @@ describe('もっと見るで読み足した行も SSE の生きた更新に追�
 
     // 頁1（先頭50件）は再取得されるはずなので、それを合図に十分待つ。
     await waitFor(() => {
-      expect(stub.calls.filter((url) => url.includes('/managers') && !url.includes('afterId=')).length).toBeGreaterThan(1);
+      expect(
+        stub.calls.filter((url) => url.includes('/managers') && !url.includes('afterId=')).length,
+      ).toBeGreaterThan(1);
     });
 
     // **求める挙動（#1624 の受け入れ基準）**: 一覧が「生きている」と言える
