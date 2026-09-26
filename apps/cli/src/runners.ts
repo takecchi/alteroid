@@ -9,7 +9,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
  * `alteroid runners` — 委譲先の器と、**いま走っているコードの版**を見る。
@@ -52,6 +52,19 @@ export async function runnersCommand(): Promise<void> {
  * （`app.ts` の `POST /runners/vacate` の doc）。だから終わったとは言わず、
  * 進捗を追う口を名指しする。名簿に無い runnerId でもデーモンは同じ 200 を返すので、
  * 「そんな器は無い」とはここでも言えない（言わない）。
+ *
+ * **失敗（HTTP の 4xx/5xx）は例外で上へ通す（＝終了コードが 0 でなくなる）。**
+ * 上の「緩さ」は**成功の意味**の話（「立てた」までしか確認しない）であって、
+ * **失敗の扱い**とは別である——401 や 500 は「立てた」ことすら起きていない
+ * ので、`reset.ts` / `access.ts` / `token.ts` / `alteroid interrupt`（#1621）/
+ * `memory.ts` / `practice.ts`（#1641）と同じく握り潰さない（#1641。以前は
+ * ここで `stdout.write` して正常 return していた）。
+ *
+ * **`railway/scale-runners.sh` はこの CLI コマンドを呼ばない。** 減らす操作
+ * （`--vacate`）は `POST /runners/vacate` を自前の node スクリプトで直接叩き、
+ * 失敗時は独自に `process.exit(2)` する（`railway/scale-runners.sh` の
+ * `vacateResponse.ok` の分岐）——つまりこの CLI コマンドの終了コードに依存
+ * している自動化は無い。
  */
 export async function runnersVacateCommand(runnerId: string): Promise<void> {
   const target = await resolveTarget();
@@ -62,10 +75,11 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.runners.vacate.$post({ json: { runnerId } });
   if (!response.ok) {
-    stdout.write(
-      `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）\n`,
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）`,
     );
-    return;
   }
   stdout.write(
     `runner ${runnerId} を空けると立てた。まだ空き終わってはいない——` +

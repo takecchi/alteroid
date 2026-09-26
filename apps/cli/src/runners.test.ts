@@ -24,6 +24,10 @@ vi.mock('./target.js', () => ({
   resolveTarget: vi.fn(() =>
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
+  // #1641: `runnersVacateCommand` が失敗時に `describeAuthFailure` を呼ぶように
+  // なった（`memory.test.ts` / `practice.test.ts` と同じスタブ。ここでは認証の
+  // 判別そのものは見ないので、常に `null`＝「判別できない」を返す）。
+  describeAuthFailure: () => null,
 }));
 
 const { renderRunners, runnersCommand, runnersVacateCommand } = await import('./runners.js');
@@ -334,13 +338,21 @@ describe('runnersVacateCommand', () => {
     expect(out).toContain('alteroid runners');
   });
 
-  it('デーモンが断ったら、立てたとは言わない', async () => {
+  /**
+   * ⚠️ 2026-09-26（#1641）: 以前はここで `stdout.write` して正常 return して
+   * いた（＝終了コードは常に 0）。**「立てた」の意味が緩いのは成功側の話**で、
+   * 失敗（HTTP の 4xx/5xx）は「立てた」ことすら起きていないので、
+   * `reset.ts` / `access.ts` / `token.ts` / `alteroid interrupt`（#1621）と
+   * 同じく例外を投げる形に揃えた。アサーションは消さず、見る先を「書いた
+   * 文字列」から「投げた例外の文言」へ反転しただけである——保証していること
+   * （「立てられませんでした」を言う／「立てた」と言わない）は変わらない。
+   */
+  it('デーモンが断ったら、立てたとは言わない（例外の文言で確かめる。#1641）', async () => {
     replies.push({ status: 400, body: { error: 'runnerId の形が不正（空けていない）' } });
-    const read = captureStdout();
-    await runnersVacateCommand('');
-    const out = read();
 
-    expect(out).toContain('空けると立てられませんでした（HTTP 400）');
-    expect(out).not.toContain('空けると立てた。');
+    const error = await runnersVacateCommand('').catch((e: unknown) => e);
+
+    expect(String(error)).toContain('空けると立てられませんでした（HTTP 400）');
+    expect(String(error)).not.toContain('空けると立てた。');
   });
 });
