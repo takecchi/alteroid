@@ -2438,7 +2438,7 @@ describe('HTTP API', () => {
         expect(await snapshot()).toEqual(before);
       });
 
-      // ⭐ 調査で追加（範囲5）: `limit` の型検証（負数・0・小数・文字列・巨大値）。
+      // `limit` の型検証（負数・0・小数・文字列・巨大値）。
       // スキーマは `z.number().int().min(1).optional()`（openapi.ts）——
       // これが実際にどの入力を弾くかを HTTP 層で撃つ。
       it.each([
@@ -2466,7 +2466,7 @@ describe('HTTP API', () => {
     });
 
     /**
-     * ⭐ 調査で追加（範囲5）: `POST /archive/remove` が `requireContainment` の
+     * `POST /archive/remove` が `requireContainment` の
      * 実効値（`requireContainment ?? true`）を `guardArchiveRemoval` の第4引数へ
      * 正しく渡しているか——この口自身の `describe` に在る他のテストは全部
      * `fakeClone()` の `managers`（`runningManagerPinning` を実装しない像）を
