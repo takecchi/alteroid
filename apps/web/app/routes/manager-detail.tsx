@@ -21,6 +21,16 @@ import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 
 import type { AppraisalValue } from '@alteroid/core';
+/**
+ * **`manager-activity.ts` は `@alteroid/core` 本体（`.`）とは別の軽い口
+ * （`tsup.config.ts` の doc）。** 実行時の依存を1つも持たないので、
+ * バレル全体（サーバ専用のドメイン層ごと）を引き込む #294 / #306 の事故には
+ * 当たらない——`describeReportDrift` / `classifyManagerActivity` は、クローンの
+ * `manager_list` / `manager_report`（`packages/core/src/tools.ts`）が読んでいる
+ * のと同じ判定を、この画面（診断欄）にも1本だけの正本から届ける。
+ */
+import { classifyManagerActivity, describeReportDrift } from '@alteroid/core/manager-activity';
+import { maskUrl } from '@alteroid/core/mask-url';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
@@ -278,6 +288,8 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             <LostNote status={manager.status} />
             <FailureNote failure={manager.lastFailure} />
           </Card>
+
+          <DiagnosticsCard manager={manager} />
 
           <DenialsCard denials={manager.denials} lastReportAt={manager.lastReportAt} />
 
@@ -774,6 +786,418 @@ function DenialsCard({
       {followUp !== null && (
         <p className="border-t border-border px-4 py-3 text-xs">{followUp}。</p>
       )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 診断——クローンの manager_list / manager_report が読んでいるが、この画面には
+// 出ていなかった欄（オーナーの決定「人間が後から読んで確かめられることが
+// alteroid の芯」）。
+// ---------------------------------------------------------------------------
+
+/**
+ * `lastReport` を「直近の報告」と呼んでよいかとは別の軸——**その報告を書いた
+ * 瞬間の `status` が、いまの `status` と食い違っていないか**（Issue #1036）。
+ *
+ * **判定のコピーを作らない。** クローンの `manager_list` / `manager_report`
+ * （`packages/core/src/tools.ts`）はこの1行を `describeReportDrift`
+ * （`@alteroid/core/manager-activity`）から取っている——ここも同じ関数を
+ * 同じ引数で呼ぶ。字面が割れると、同じ委譲を見た人間とクローンが違う結論を
+ * 読むことになる。
+ *
+ * **健全な回（drift 無し）では空文字が返る**（`describeReportDrift` の doc）
+ * ——その場合は1行も出さない。
+ */
+function reportStatusDriftText(manager: ManagerSummary): string {
+  return describeReportDrift({
+    managerId: manager.managerId,
+    lastReportAt: manager.lastReportAt,
+    lastReportStatus: manager.lastReportStatus,
+    status: manager.status,
+    now: new Date(),
+  });
+}
+
+function ReportStatusDriftNote({ manager }: { manager: ManagerSummary }) {
+  const note = reportStatusDriftText(manager);
+  if (note === '') return null;
+  return <p className="border-t border-border px-4 py-3 text-xs text-warn">{note}</p>;
+}
+
+/**
+ * 「道具の応答待ちのまま、誰もその応答を待っていない」という矛盾（Issue #572）。
+ *
+ * **判定（3条件目まで含む）はクローンと同じ `classifyManagerActivity`
+ * （`@alteroid/core/manager-activity`）に通す。** 字面はこの画面向けに
+ * 書き直す（クローン向けの原文は `manager_transcript` / `manager_stop` という
+ * クローンの道具名を名指しするので、人間の画面にそのまま出しても次の一手に
+ * ならない——出典は
+ * `grep -Fn -- '道具の応答待ちのまま、誰もその応答を待っていない' packages/core/src/tools.ts`）。
+ * **判定そのもの（3条件目「waiting が空か」を含む）は割らない**——同じ
+ * 委譲について、この画面とクローンとで「止まっている／いない」の結論が
+ * 違うことは無い。
+ *
+ * ⚠️ **`turnEndReason` / `turnEndedAt` はこの画面に出していない**（このファイル
+ * 冒頭の `DiagnosticsCard` の doc「出さないと決めた欄」）。
+ * `classifyManagerActivity` は2つの探り（ターン終わり型・道具待ち型）が同じ
+ * 生ログの末尾行を見ているため通常は同時に立たないとしつつ、万一立ったときは
+ * ターン終わり型を優先してこの行を消す（`manager-activity.ts` の
+ * `classifyManagerActivity` の doc）——その優先で消えた場合、この画面には
+ * 代わりの行が無い。**実測でこの優先分岐が発火した例は無い**（同 doc の
+ * 「万一」という言葉どおり、防御的な分岐である）。
+ *
+ * **時刻の閾値は置かない。** クローン向けの原文と同じ理由——「何分経ったか」は
+ * 症状の下限を決めないので判定に使わない。読み手が `toolUseStallAt` を見て
+ * 自分で判断する。
+ */
+function toolUseStallText(manager: ManagerSummary): string | null {
+  const pending = manager.toolUseStallPending;
+  if (pending === undefined || pending.length === 0) return null;
+  const kind = classifyManagerActivity({
+    turnEndReason: manager.turnEndReason,
+    turnEndedAt: manager.turnEndedAt,
+    lastReportAt: manager.lastReportAt,
+    toolUseStallPending: pending,
+    waitingCount: manager.waiting.length,
+  });
+  if (kind !== 'stalled-tool-use') return null;
+
+  const names = pending.map((item) => `${item.name ?? '（名前不明）'}(${item.id})`).join(' / ');
+  const whenNote =
+    manager.toolUseStallAt === undefined
+      ? 'その行に timestamp が無かったので、いつからかは分からない'
+      : `${formatDateTime(manager.toolUseStallAt)}（${formatRelative(manager.toolUseStallAt)}）から`;
+  return (
+    '道具の応答待ちのまま、誰もその応答を待っていない（矛盾）。生ログの末尾の assistant 行が ' +
+    '道具の呼び出しで終わっているのに、対応する結果が生ログに無く、かつこのデーモン側の返事待ち' +
+    `も空である。未応答の道具: ${names}。${whenNote}。` +
+    'この状態そのものは何も止めていない——委譲は動き続けてよい。長時間の作業者委譲（Agent 等）の' +
+    '実行中でも同じ形になりうるので、この行だけで「壊れている」と決めつけないこと。' +
+    '生ログの末尾は下の「セッションログ（生）」で読める。'
+  );
+}
+
+function ToolUseStallNote({ manager }: { manager: ManagerSummary }) {
+  const note = toolUseStallText(manager);
+  if (note === null) return null;
+  return <p className="border-t border-border px-4 py-3 text-xs text-warn">⚠ {note}</p>;
+}
+
+/**
+ * 直近のターンが `result` を受け取らないまま畳まれたこと（Issue #917）。
+ * `lastFailure`（SDK が「これは応答ではない」と声明した回）とは軸が違う——
+ * こちらは声明すら届かないまま器の入れ替え・`manager_stop`・クラッシュ等で
+ * 畳まれた回（`schema.ts` の `lastUnreported` の doc）。
+ */
+function UnreportedNote({ lastUnreported }: { lastUnreported: ManagerSummary['lastUnreported'] }) {
+  if (lastUnreported === undefined) return null;
+  return (
+    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+      直近のターンは、<strong className="font-medium">result を受け取らないまま畳まれた</strong>（
+      {formatDateTime(lastUnreported.at)}）。理由: {lastUnreported.reason}
+    </p>
+  );
+}
+
+/**
+ * `manager_stop`（running・非force）で畳まれたターンの本文（Issue #1038）。
+ * `lastReport`（完遂した報告）とは別の欄——混ぜると「完遂した報告」と
+ * 「止めた後に打ち切られた途中経過」の区別が読み手から消える
+ * （`schema.ts` の `lastFoldedTurn` の doc）。
+ *
+ * **全文を出す（クローン向けの `manager_stop` 応答は240字で切る——
+ * `packages/core/src/tools.ts` の `MANAGER_STOP_FOLDED_TURN_EXCERPT`）。**
+ * ここは一覧ではなく詳細画面なので、`RequestCard` / `LastReportBody` と同じ
+ * 理由で切り詰めない。
+ */
+function FoldedTurnNote({ lastFoldedTurn }: { lastFoldedTurn: ManagerSummary['lastFoldedTurn'] }) {
+  if (lastFoldedTurn === undefined) return null;
+  return (
+    <div className="border-t border-border px-4 py-3 text-xs">
+      <p className="text-muted">
+        <strong className="font-medium text-danger">manager_stop で畳まれたターンの本文</strong>（
+        {formatDateTime(lastFoldedTurn.at)} 受信。<code className="font-mono">lastReport</code>
+        （完遂した報告）ではない）:
+      </p>
+      <pre className="mt-1 overflow-x-auto rounded border border-border bg-bg p-2 text-[11px] break-words whitespace-pre-wrap text-muted">
+        {lastFoldedTurn.text}
+      </pre>
+    </div>
+  );
+}
+
+/**
+ * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
+ * （Issue #1517「最小の形」2）。
+ *
+ * **文言は `packages/core/src/cgroup-events.ts` の `CGROUP_EVENTS_UNKNOWN_NOTE` /
+ * `formatCgroupEventsNote` と1文字も変えずに揃えてある**（出典は
+ * `grep -Fn -- 'この委譲が走っていた間に器で pids 上限による' packages/core/src/cgroup-events.ts`）。
+ *
+ * **その関数を直接 import しなかった理由（`@alteroid/core/manager-activity` /
+ * `mask-url` とは違う判断）**: `cgroup-events.ts` は `cgroupEventsDeltaSchema`
+ * （zod）を同じファイルに持ち、zod は実行時の依存になる——このリポジトリの
+ * 軽い口（`usage-format.ts` 等）が守ってきた「実行時の依存を1つも持たない」の
+ * 帯から外れる。**この数行の文言を1箇所にまとめる価値のために zod 一式を
+ * ブラウザへ運ぶのは釣り合わないと判断し、文言だけを複製した。** 字面がずれたら
+ * 両方を直すこと。
+ */
+const CGROUP_EVENTS_UNKNOWN_NOTE_WEB =
+  'この委譲が走っていた間に器で pids 上限による fork の拒否・OOM kill が起きたかは、この欄では判定できなかった';
+
+function formatCgroupEventsForHumans(
+  delta: NonNullable<ManagerSummary['lastCgroupEvents']>,
+): string {
+  if (delta.pidsMaxDelta === 0 && delta.oomKillDelta === 0) {
+    return 'この委譲が走っていた間、器で pids 上限による fork の拒否も OOM kill も起きていなかった';
+  }
+  const pidsPart =
+    delta.pidsMaxDelta === undefined
+      ? 'pids 上限による fork 拒否の回数は判定できなかった'
+      : `器で fork が pids 上限により ${delta.pidsMaxDelta} 回断られた`;
+  const oomPart =
+    delta.oomKillDelta === undefined
+      ? 'OOM kill の回数は判定できなかった'
+      : `OOM kill が ${delta.oomKillDelta} 回あった`;
+  return `この委譲が走っていた間 —— ${pidsPart}。${oomPart}`;
+}
+
+function cgroupEventsText(manager: ManagerSummary): string | null {
+  if (manager.status !== 'failed') return null;
+  if (manager.lastCgroupEvents === undefined) {
+    return `⚠ ${CGROUP_EVENTS_UNKNOWN_NOTE_WEB}。`;
+  }
+  return (
+    `${formatCgroupEventsForHumans(manager.lastCgroupEvents)}` +
+    `（${formatDateTime(manager.lastCgroupEvents.at)}）。`
+  );
+}
+
+function CgroupEventsNote({ manager }: { manager: ManagerSummary }) {
+  const note = cgroupEventsText(manager);
+  if (note === null) return null;
+  return <p className="border-t border-border px-4 py-3 text-xs text-muted">{note}</p>;
+}
+
+/**
+ * セッションが `failed` として畳まれたときの、Node が構造として持つ失敗の
+ * 分類（`code` / `errno` / `syscall`。#713 段3）。
+ *
+ * **`CgroupEventsNote` と対で読むが軸は別**——あちらは cgroup のカウンタ、
+ * こちらは Node の例外分類（`packages/core/src/system-error.ts` の
+ * `SystemErrorFacts`）。文言は `SYSTEM_ERROR_UNKNOWN_NOTE` /
+ * `formatSystemErrorFacts` に揃える（出典は
+ * `grep -Fn -- '器の資源による落ち方かどうかは、この欄では判定できなかった' packages/core/src/system-error.ts`）
+ * ——ただし末尾の「本文と lastFailure を見ること」は、クローン向けの欄名
+ * （`lastFailure`）そのままではなく、この画面の該当箇所（上の「直近のターンは
+ * 報告ではなく失敗で終わっている」の注記）を指す言葉に置き換えてある。
+ *
+ * **`@alteroid/core/system-error` を軽い口にしなかった理由は
+ * `CgroupEventsNote` と同じ**（同ファイルの `systemErrorFactsSchema` が zod を
+ * 引き込む）。
+ */
+const SYSTEM_ERROR_UNKNOWN_NOTE_WEB =
+  '器の資源による落ち方かどうかは、この欄では判定できなかった。枠に当たった場合・' +
+  'セッションが切れた場合もこの欄には出ない —— 本文と、上の「直近のターンは報告ではなく' +
+  '失敗で終わっている」の注記を見ること';
+
+function formatSystemErrorFactsForHumans(
+  systemError: NonNullable<ManagerSummary['lastSystemError']>,
+): string {
+  const facts = [`code=${systemError.code}`];
+  if (systemError.errno !== undefined) facts.push(`errno=${systemError.errno}`);
+  if (systemError.syscall !== undefined) facts.push(`syscall=${systemError.syscall}`);
+  return facts.join(' ');
+}
+
+function systemErrorText(manager: ManagerSummary): string | null {
+  if (manager.status !== 'failed') return null;
+  if (manager.lastSystemError === undefined) {
+    return `セッションは失敗で畳まれた。${SYSTEM_ERROR_UNKNOWN_NOTE_WEB}。`;
+  }
+  return (
+    'セッションは器の資源による落ち方で畳まれた可能性 ' +
+    `（${formatDateTime(manager.lastSystemError.at)}）: ` +
+    formatSystemErrorFactsForHumans(manager.lastSystemError)
+  );
+}
+
+function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
+  const note = systemErrorText(manager);
+  if (note === null) return null;
+  return <p className="border-t border-border px-4 py-3 text-xs text-danger">⚠ {note}</p>;
+}
+
+/**
+ * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
+ * 結果（Issue #914 オーナー提案(2)）。
+ *
+ * **クローン向けの `describeResetTimeSkew`（`tools.ts`）との違い**: あちらは
+ * `tokenGeneration` / `activeTokenGeneration`（世代の生の番号）が既に食い違いを
+ * 名指ししているときは二重に鳴らさないよう、この行を抑える分岐を持つ。
+ * **この画面は世代の生の番号を出していない**（`DiagnosticsCard` の doc
+ * 「出さないと決めた欄」——resetTimeSkewMatch 自身が既に人間向けの結論を
+ * 出しているため）ので、抑える判定に使う材料そのものが無い。抑えずにそのまま
+ * 出す——二重に鳴る先（世代番号の行）がこの画面には無いので、実害は無い。
+ *
+ * **未知の値でも落ちない**（#1623 / #1630 の流儀）。既知の2値
+ * （`'stale'` / `'active'`）のどちらでもなければ、その旨をそのまま出す——
+ * 版のずれで新しいデーモンがこの画面の知らない値を返しても、画面ごと落ちない。
+ */
+function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
+  const value = manager.resetTimeSkewMatch;
+  if (value === undefined) return null;
+  if (value === 'stale') {
+    return (
+      <>
+        ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の
+        冷却期限と一致した）。このセッションは古い鍵を掴んだまま走っている可能性がある ——
+        鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。
+        この行が消えないまま 429 が続くようなら、起こし直すこと。
+        <strong className="font-medium">この印は枠(利用上限)で止まっている間だけ意味を持つ</strong>
+        ——枠から下りれば一緒に消える。
+      </>
+    );
+  }
+  if (value === 'active') {
+    return (
+      '認証トークン: 429の文言に書かれていた resets 時刻が、現役の鍵自身の冷却期限と一致した —— ' +
+      '世代ずれではなく、待てば戻る。'
+    );
+  }
+  return `認証トークンの世代ずれの判定: この画面が知らない値 "${String(value)}"（デーモンの版が新しい可能性）。`;
+}
+
+function ResetTimeSkewNote({ manager }: { manager: ManagerSummary }) {
+  const note = resetTimeSkewText(manager);
+  if (note === null) return null;
+  return <p className="border-t border-border px-4 py-3 text-xs text-warn">{note}</p>;
+}
+
+/**
+ * `manager_stop`（running・非force）の断り、ターンが `report` で終わったとき、
+ * または Bash で `git push` か新しい枝を作る操作を検出したときに取った最後の
+ * 未push観測（Issue #1266）。**答えるのは「どこ（どの枝）を見ればよいか」
+ * までである——「成果が届いたか」は含まない**（`schema.ts` の
+ * `lastUnpushedWorkObservationSchema` の doc）。
+ *
+ * **`remoteOrigin` は `maskUrl`（`@alteroid/core/mask-url`）へ通す**（#1627 の
+ * 流儀）。この欄はスキーマの時点で既に userinfo・クエリ・フラグメント・生の
+ * URL 文字列を落として `{ host, path }` だけにしてある
+ * （`schema.ts` の `observedWorktreeBranchSchema.remoteOrigin` の doc）ので、
+ * ここへ通しても大抵は1文字も変わらない——それでも通すのは、万一 `path` に
+ * 想定外の断片が紛れ込んだ場合の二重の備えとして、である。
+ *
+ * **`unavailable` / `observed` のどちらでもない値でも落ちない**（#1623 /
+ * #1630 の流儀。discriminated union の `kind` は増えうる）。
+ */
+function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
+  const observation = manager.lastUnpushedWorkObservation;
+  if (observation === undefined) return null;
+  const provenance =
+    'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
+    'または Bash で git push か新しい枝を作る操作を検出したときに取った最後の1回' +
+    '（force:true・器の入れ替え（redeploy・枠落ちでセッションを失う経路）では更新されない。' +
+    'いまの状態そのものではない）';
+
+  if (observation.kind === 'unavailable') {
+    return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${observation.reason}`;
+  }
+  if (observation.kind === 'observed') {
+    if (observation.worktrees.length === 0) {
+      return `未push観測（${provenance}、${formatDateTime(observation.at)}）: 見つかった作業ツリー0本`;
+    }
+    return (
+      <>
+        未push観測（{provenance}、{formatDateTime(observation.at)}）:
+        <ul className="mt-1 list-disc pl-4">
+          {observation.worktrees.map((wt, index) => (
+            // key に index を混ぜる——相対パスだけでは、同名の worktree が
+            // 2箇所に無いとは限らないので一意にならない。
+            <li key={`${wt.relativePath}::${index}`} className="break-all">
+              {wt.relativePath}: branch=
+              {wt.branch === null ? 'null（取れなかった）' : wt.branch}
+              {wt.remoteOrigin !== undefined &&
+                ` / origin=${maskUrl(`https://${wt.remoteOrigin.host}${wt.remoteOrigin.path}`)}`}
+            </li>
+          ))}
+        </ul>
+      </>
+    );
+  }
+  // 版のずれ（新しいデーモンがこの画面の知らない kind を返した）でも落ちない。
+  const unknownKind: string = (observation as { kind: string }).kind;
+  return `未push観測: この画面が知らない種類 "${unknownKind}"（デーモンの版が新しい可能性）。`;
+}
+
+function UnpushedWorkObservationNote({ manager }: { manager: ManagerSummary }) {
+  const note = unpushedWorkText(manager);
+  if (note === null) return null;
+  return <div className="border-t border-border px-4 py-3 text-xs text-muted">{note}</div>;
+}
+
+/**
+ * **診断**（オーナーの決定「人間が後から読んで確かめられることが alteroid の
+ * 芯」）。
+ *
+ * クローンは `manager_list` / `manager_report`（`packages/core/src/tools.ts`）
+ * で `ManagerSummary` の同じ欄を読んでいるが、この画面にはまだ出ていなかった
+ * ——人間とクローンが同じ委譲を見て違う情報しか持てない形になっていた
+ * （`docs/north_star.md` 禁止1 と同じ向き）。ここへ集めたのは、いずれも
+ * (a) クローンの道具は既に本文へ出している (b) この画面にはまだ出ていない、
+ * の両方を満たす欄のうち、**Issue #1628 が足した8欄すべて**
+ * （`lastReportStatus` / `lastUnreported` / `lastFoldedTurn` /
+ * `lastCgroupEvents` / `lastUnpushedWorkObservation` / `toolUseStallAt` /
+ * `toolUseStallPending` / `resetTimeSkewMatch`）と、`lastSystemError`
+ * （人間が「器の資源で落ちたのか」を後から確かめるのに要る欄。#713 段3）を
+ * 合わせた9欄である。
+ *
+ * ## 出さないと決めた欄（同じ (a)/(b) を満たすが、この PR では出さない）
+ *
+ * - `usageStoppedAt` — 枠(利用上限)に当たった時刻。`ResetTimeSkewNote` 自身が
+ *   「枠で止まっている間だけ意味を持つ」と書くので、独立した行を増やさなくても
+ *   読める
+ * - `turnEndedAt` / `turnEndReason` / `turnEndTail` — デーモンが生ログの末尾から
+ *   計算した「ターンが終わったらしい」という**助言**（#567）であって判定では
+ *   ない。`waiting` / `lastReport` など、この画面に既に出ている材料との重なりが
+ *   大きい（内部の判定材料としては `ToolUseStallNote` が読んでいる——表示だけを
+ *   見送った）
+ * - `tokenGeneration` / `activeTokenGeneration` / `tokenGenerationUnknownReason`
+ *   — 認証トークンのプール内部の世代番号。`resetTimeSkewMatch` が既にこの軸の
+ *   **結論**を人間向けの言葉で出しているので、生の世代番号を並べても人間の
+ *   次の一手は増えない
+ *
+ * **無い欄は行ごと出さない**（`AGENTS.md`「取れない軸に0の行を作る」）——
+ * どの行も材料が無ければ `null` を返し、このカード自体も何も無ければ描かない
+ * （`DenialsCard` と同じ約束）。
+ */
+function DiagnosticsCard({ manager }: { manager: ManagerSummary }) {
+  const visible =
+    reportStatusDriftText(manager) !== '' ||
+    toolUseStallText(manager) !== null ||
+    manager.lastUnreported !== undefined ||
+    manager.lastFoldedTurn !== undefined ||
+    cgroupEventsText(manager) !== null ||
+    systemErrorText(manager) !== null ||
+    resetTimeSkewText(manager) !== null ||
+    manager.lastUnpushedWorkObservation !== undefined;
+  if (!visible) return null;
+
+  return (
+    <Card>
+      <CardHeader
+        title="診断"
+        subtitle="クローンが manager_list / manager_report で読んでいるのと同じ材料。無ければ行ごと出さない"
+      />
+      <ReportStatusDriftNote manager={manager} />
+      <ToolUseStallNote manager={manager} />
+      <UnreportedNote lastUnreported={manager.lastUnreported} />
+      <FoldedTurnNote lastFoldedTurn={manager.lastFoldedTurn} />
+      <CgroupEventsNote manager={manager} />
+      <SystemErrorNote manager={manager} />
+      <ResetTimeSkewNote manager={manager} />
+      <UnpushedWorkObservationNote manager={manager} />
     </Card>
   );
 }

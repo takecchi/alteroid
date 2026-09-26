@@ -36,6 +36,10 @@
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"
     },
+    "./manager-activity": {
+      "types": "./dist/manager-activity.d.ts",
+      "import": "./dist/manager-activity.js"
+    },
     "./job-status-running": {
       "types": "./dist/job-status-running.d.ts",
       "import": "./dist/job-status-running.js"

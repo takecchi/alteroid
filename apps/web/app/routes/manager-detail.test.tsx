@@ -15,7 +15,14 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ManagerStatus, ManagerSummary } from '~/lib/types';
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import {
+  DEFAULT_VIEWPORT_WIDTH,
+  json,
+  Providers,
+  setViewportWidth,
+  stubFetch,
+  storeTestBaseUrl,
+} from '~/test-support';
 
 import type { Route } from './+types/manager-detail';
 import ManagerDetail, { clientLoader } from './manager-detail';
@@ -1208,5 +1215,342 @@ describe('詳細でも、知らない status に倒れ先がある（#1623）', 
     renderDetail({ ...BASE, status: 'archived' as ManagerSummary['status'] });
 
     expect(await screen.findByText('知らない状態（archived）')).toBeTruthy();
+  });
+});
+
+/**
+ * **診断**——クローンの `manager_list` / `manager_report`
+ * （`packages/core/src/tools.ts`）が読んでいるのと同じ材料
+ * （`ManagerSummary` の各欄）を、この画面（詳細）にも出す。
+ *
+ * オーナーの決定「人間が後から読んで確かめられることが alteroid の芯」に沿って、
+ * Issue #1628 が `managerSummarySchema` へ足した8欄
+ * （`lastReportStatus` / `lastUnreported` / `lastFoldedTurn` /
+ * `lastCgroupEvents` / `lastUnpushedWorkObservation` / `toolUseStallAt` /
+ * `toolUseStallPending` / `resetTimeSkewMatch`）と `lastSystemError` を対象に
+ * する。各欄について、(1) 値があるときに出る (2) 無いときに出ない
+ * （行ごと消える。0 や空の行を作らない） (3) 知らない値でも落ちない、の3つを
+ * 固定する。狭い画面でも崩れないかも1本。
+ */
+describe('診断（クローンの manager_list / manager_report と同じ材料。#1628 / #713）', () => {
+  afterEach(() => {
+    // 狭い画面のテストが変えた幅を、他のテストへ持ち越さない
+    // （`test-support.tsx` の `setViewportWidth` の doc の約束）。
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+  });
+
+  it('材料が1つも無ければ「診断」カードごと出ない（0や空の行を作らない）', async () => {
+    renderDetail({ ...BASE, status: 'running' });
+
+    // 読み込みが終わったことを、他の欄で確かめてから「無い」を見に行く
+    // （読み込み中に無いのは自明で、確かめたいのはそこではない）。
+    expect(await screen.findByText('PR を出して')).toBeTruthy();
+    expect(screen.queryByText('診断')).toBeNull();
+  });
+
+  describe('lastReportStatus の drift（Issue #1036。`describeReportDrift` をクローンと共有）', () => {
+    it('報告を書いた時点の status といまの status が食い違っていれば注記を出す', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastReportAt: '2026-08-16T03:10:00.000Z',
+        lastReportStatus: 'running',
+      });
+
+      expect(await screen.findByText('診断')).toBeTruthy();
+      expect(await screen.findByText(/いま走っているターンの中身ではない/)).toBeTruthy();
+    });
+
+    it('食い違っていなければ、この行は出ない（他に材料が無ければカードごと出ない）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastReportAt: '2026-08-16T03:10:00.000Z',
+        lastReportStatus: 'done',
+      });
+
+      expect(await screen.findByText('PR を出して')).toBeTruthy();
+      expect(screen.queryByText(/いま走っているターンの中身ではない/)).toBeNull();
+      expect(screen.queryByText('診断')).toBeNull();
+    });
+  });
+
+  describe('lastUnreported（Issue #917）', () => {
+    it('在れば理由と時刻を出す', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnreported: { reason: '器の入れ替えで畳まれた', at: '2026-08-16T03:20:00.000Z' },
+      });
+
+      expect(await screen.findByText(/result を受け取らないまま畳まれた/)).toBeTruthy();
+      expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
+    });
+  });
+
+  describe('lastFoldedTurn（Issue #1038）', () => {
+    it('本文を切り詰めずに全文出す（クローン向けの240字より長くても）', async () => {
+      const longText = 'あ'.repeat(400);
+      renderDetail({
+        ...BASE,
+        status: 'stopped',
+        lastFoldedTurn: { text: longText, at: '2026-08-16T03:25:00.000Z' },
+      });
+
+      expect(await screen.findByText(/manager_stop で畳まれたターンの本文/)).toBeTruthy();
+      expect(screen.getByText(longText)).toBeTruthy();
+    });
+  });
+
+  describe('lastCgroupEvents（Issue #1517「最小の形」2）', () => {
+    it('status が failed 以外なら、値があっても出ない', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 0, at: '2026-08-16T03:30:00.000Z' },
+      });
+
+      expect(await screen.findByText('PR を出して')).toBeTruthy();
+      expect(screen.queryByText(/pids 上限/)).toBeNull();
+    });
+
+    it('failed かつ値が無ければ「判定できなかった」と書く（0の行にしない）', async () => {
+      renderDetail({ ...BASE, status: 'failed' });
+
+      expect(
+        await screen.findByText(
+          /pids 上限による fork の拒否・OOM kill が起きたかは、この欄では判定できなかった/,
+        ),
+      ).toBeTruthy();
+    });
+
+    it('failed かつ値があれば、読めた分の数を出す', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'failed',
+        lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 1, at: '2026-08-16T03:30:00.000Z' },
+      });
+
+      expect(await screen.findByText(/fork が pids 上限により 3 回断られた/)).toBeTruthy();
+      expect(screen.getByText(/OOM kill が 1 回あった/)).toBeTruthy();
+    });
+  });
+
+  describe('lastSystemError（#713 段3）', () => {
+    it('status が failed 以外なら、値があっても出ない', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastSystemError: { code: 'EAGAIN', at: '2026-08-16T03:35:00.000Z' },
+      });
+
+      expect(await screen.findByText('PR を出して')).toBeTruthy();
+      expect(screen.queryByText(/code=EAGAIN/)).toBeNull();
+    });
+
+    it('failed かつ値が無ければ「判定できなかった」と書く', async () => {
+      renderDetail({ ...BASE, status: 'failed' });
+
+      expect(
+        await screen.findByText(/器の資源による落ち方かどうかは、この欄では判定できなかった/),
+      ).toBeTruthy();
+    });
+
+    it('failed かつ値があれば code / errno / syscall をそのまま出す（言い換えない）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'failed',
+        lastSystemError: {
+          code: 'EAGAIN',
+          errno: -11,
+          syscall: 'spawn',
+          at: '2026-08-16T03:35:00.000Z',
+        },
+      });
+
+      expect(await screen.findByText(/code=EAGAIN errno=-11 syscall=spawn/)).toBeTruthy();
+    });
+  });
+
+  describe('resetTimeSkewMatch（Issue #914 オーナー提案(2)）', () => {
+    it('stale なら世代ずれの疑いを出す', async () => {
+      renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
+
+      expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+      // クローン向けの文言（`**強調**`）をそのまま写した名残りが画面に
+      // literal `**` として出ないこと（下の「画面の本文に `**` が出ない」歯の
+      // 個別ケース。強調が要るなら `<strong>` を使う）。
+      expect(screen.getByText(/この印は枠\(利用上限\)で止まっている間だけ意味を持つ/)).toBeTruthy();
+      expect(document.body.textContent).not.toContain('**');
+    });
+
+    it('active なら「待てば戻る」を出す', async () => {
+      renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'active' });
+
+      expect(await screen.findByText(/世代ずれではなく、待てば戻る/)).toBeTruthy();
+    });
+
+    it('知らない値でも落ちずに、その値をそのまま出す（#1623 / #1630 の流儀）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'running',
+        resetTimeSkewMatch: 'unknown-future-value' as ManagerSummary['resetTimeSkewMatch'],
+      });
+
+      expect(await screen.findByText(/この画面が知らない値 "unknown-future-value"/)).toBeTruthy();
+    });
+  });
+
+  describe('toolUseStallAt / toolUseStallPending（Issue #572）', () => {
+    it('未応答の道具があり、返事待ちが空なら注記を出す', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'running',
+        toolUseStallAt: '2026-08-16T03:40:00.000Z',
+        toolUseStallPending: [{ id: 'tu-1', name: 'Bash' }],
+        waiting: [],
+      });
+
+      expect(
+        await screen.findByText(/道具の応答待ちのまま、誰もその応答を待っていない/),
+      ).toBeTruthy();
+      expect(screen.getByText(/未応答の道具: Bash\(tu-1\)/)).toBeTruthy();
+    });
+
+    it('デーモン側の返事待ちが在れば、正常な待ちなので出さない（矛盾ではない）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'running',
+        toolUseStallAt: '2026-08-16T03:40:00.000Z',
+        toolUseStallPending: [{ id: 'tu-1', name: 'Bash' }],
+        waiting: [{ requestId: 'req-1', summary: '許可しますか', kind: 'permission' }],
+      });
+
+      // 待ちの一覧自体は出るが、矛盾の注記は出ない。
+      expect(await screen.findByText('許可しますか')).toBeTruthy();
+      expect(screen.queryByText(/道具の応答待ちのまま、誰もその応答を待っていない/)).toBeNull();
+    });
+  });
+
+  describe('lastUnpushedWorkObservation（Issue #1266）', () => {
+    it('unavailable なら理由と時刻を出す', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'unavailable',
+          at: '2026-08-16T03:45:00.000Z',
+          reason: 'git が見つからなかった',
+        },
+      });
+
+      expect(await screen.findByText(/未push観測/)).toBeTruthy();
+      expect(screen.getByText(/取れなかった/)).toBeTruthy();
+      expect(screen.getByText(/git が見つからなかった/)).toBeTruthy();
+    });
+
+    it('observed なら枝名を出し、remoteOrigin は maskUrl を通す（#1627 の流儀）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [
+            {
+              relativePath: '.',
+              branch: 'feat/x',
+              // schema はここへ userinfo・クエリを作らないが（`schema.ts` の
+              // `observedWorktreeBranchSchema.remoteOrigin` の doc）、この画面は
+              // 二重の備えとして maskUrl を必ず通す——path に紛れ込んだ `?` も
+              // 隠れることを、ここで確かめる。
+              remoteOrigin: { host: 'github.com', path: '/o/r.git?token=SECRET' },
+            },
+          ],
+        },
+      });
+
+      expect(await screen.findByText(/branch=feat\/x/)).toBeTruthy();
+      expect(screen.queryByText(/SECRET/)).toBeNull();
+      expect(screen.getByText(/origin=https:\/\/github\.com\/o\/r\.git\?\*\*\*/)).toBeTruthy();
+    });
+
+    it('知らない kind でも落ちない（#1623 / #1630 の流儀）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'not-yet-invented',
+          at: '2026-08-16T03:55:00.000Z',
+        } as unknown as ManagerSummary['lastUnpushedWorkObservation'],
+      });
+
+      expect(await screen.findByText(/この画面が知らない種類 "not-yet-invented"/)).toBeTruthy();
+    });
+  });
+
+  it('狭い画面でも診断カードが崩れない（クラッシュせず、本文がそのまま読める）', async () => {
+    setViewportWidth(375);
+    renderDetail({
+      ...BASE,
+      status: 'failed',
+      lastSystemError: { code: 'EAGAIN', at: '2026-08-16T03:35:00.000Z' },
+      lastUnreported: { reason: '器の入れ替えで畳まれた', at: '2026-08-16T03:20:00.000Z' },
+    });
+
+    expect(await screen.findByText('診断')).toBeTruthy();
+    expect(screen.getByText(/code=EAGAIN/)).toBeTruthy();
+    expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
+  });
+
+  /**
+   * **画面の本文に、クローン向けの Markdown（`**強調**`）の写し残しが literal な
+   * `**` として出ないこと。** `resetTimeSkewMatch: 'stale'` の文言に
+   * `**この印は枠(利用上限)で止まっている間だけ意味を持つ**` があり、この画面は
+   * プレーンテキストとして描くので `**` が文字としてそのまま出ていた（レビュー
+   * 指摘で発覚）。診断カードが出しうる文言をできるだけ多く同時に描いて、
+   * どの行にも同じ写し残しが無いことをまとめて確かめる。
+   */
+  it('画面の本文に `**` がそのまま出ない（クローン向け Markdown の写し残し無し）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'failed',
+      lastReportAt: '2026-08-16T03:10:00.000Z',
+      lastReportStatus: 'running',
+      lastUnreported: { reason: '器の入れ替えで畳まれた', at: '2026-08-16T03:20:00.000Z' },
+      lastFoldedTurn: { text: '畳まれた本文', at: '2026-08-16T03:25:00.000Z' },
+      lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 1, at: '2026-08-16T03:30:00.000Z' },
+      lastSystemError: {
+        code: 'EAGAIN',
+        errno: -11,
+        syscall: 'spawn',
+        at: '2026-08-16T03:35:00.000Z',
+      },
+      resetTimeSkewMatch: 'stale',
+      toolUseStallAt: '2026-08-16T03:40:00.000Z',
+      toolUseStallPending: [{ id: 'tu-1', name: 'Bash' }],
+      waiting: [],
+      lastUnpushedWorkObservation: {
+        kind: 'observed',
+        at: '2026-08-16T03:50:00.000Z',
+        cwd: '/work/project',
+        worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+      },
+    });
+
+    expect(await screen.findByText('診断')).toBeTruthy();
+    // 8欄+lastSystemError のうち文言を持つものが全部出ていることを、
+    // 「無かった」を後から疑わずに済むように先に確かめる。
+    expect(screen.getByText(/いま走っているターンの中身ではない/)).toBeTruthy();
+    expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
+    expect(screen.getByText(/畳まれた本文/)).toBeTruthy();
+    expect(screen.getByText(/fork が pids 上限により 3 回断られた/)).toBeTruthy();
+    expect(screen.getByText(/code=EAGAIN errno=-11 syscall=spawn/)).toBeTruthy();
+    expect(screen.getByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+    expect(screen.getByText(/道具の応答待ちのまま、誰もその応答を待っていない/)).toBeTruthy();
+    expect(screen.getByText(/branch=feat\/x/)).toBeTruthy();
+
+    expect(document.body.textContent).not.toContain('**');
   });
 });
