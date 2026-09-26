@@ -13755,16 +13755,16 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
      * この節が実際に打ち切りを起こす。
      *
      * `mark` はこの節の一覧レベルの断り書きだけが持つ語彙
-     * （`renderLedgerCrossReference` の `…（残り N 件は出していない）`。
-     * `usage_read` 側の「…続きが出る」を含む言い方とは文言が違うので、
-     * 取り違えない）。
+     * （`renderLedgerCrossReference` の `…（残り N 件は出していない。self_status の
+     * ledgerOffset=M で続きが出る）`。#1638 で続きの呼び方を足した。`usage_read` 側は
+     * `axis="…", offset=…` を名乗るので、取り違えない）。
      */
     {
       label: 'self_status（台帳との突き合わせ）',
       name: 'self_status',
       args: {},
       section: '## 台帳との突き合わせ',
-      mark: /…（残り \d+ 件は出していない）/,
+      mark: /…（残り \d+ 件は出していない。self_status の ledgerOffset=\d+ で続きが出る）/,
     },
     /*
      * **`memory_outline` は名前が `_list` で終わらないが、道具の応答そのものが
@@ -20688,5 +20688,110 @@ describe('conversation_post', () => {
     await h.call('conversation_post', { conversationId: 'conv-other', text: '別の会話への知らせ' });
 
     expect(h.posted).toEqual([{ conversationId: 'conv-other', text: '別の会話への知らせ' }]);
+  });
+});
+
+/**
+ * **`self_status` の「台帳との突き合わせ」は、打ち切った内訳の続きへ届く（#1638）。**
+ *
+ * かつては `…（残り N 件は出していない）` とだけ書いて終わり、この内訳（モデル ×
+ * managerId × layer × site）は `usage_read` のどの軸でも同じ形では取れないので、
+ * 15件目以降はどの道具からも読めなかった。
+ */
+describe('self_status の台帳の内訳は、打ち切った続きを ledgerOffset で辿れる（#1638）', () => {
+  const MODEL = 'claude-ledger-offset-model';
+  const RUNTIME: CloneRuntimeFacts = {
+    revision: { commit: null, short: null, source: null },
+    buildTime: { builtAt: null },
+    declaredModel: 'fable',
+    modelOverridden: false,
+    modelEnvKey: 'ALTEROID_CLONE_MODEL',
+    sdkModel: MODEL,
+    effort: null,
+    requestedEffort: null,
+    claudeCodeVersion: null,
+    apiKeySource: null,
+    permissionMode: null,
+    requestedPermissionMode: 'auto',
+    mcpServers: [],
+    sessionId: null,
+    resumedFrom: null,
+    injectedMemoryChars: heuristicChars(0),
+    systemPromptChars: heuristicChars(0),
+    lastContextUsage: null,
+  };
+
+  /** 同じモデル・同じ層と場所で、managerId だけが違う行を `count` 本積む（費用は i+1）。 */
+  async function seed(h: Harness, count: number): Promise<void> {
+    for (let i = 0; i < count; i += 1) {
+      await h.stores.usage.record({
+        layer: 'manager',
+        site: 'session',
+        accumulation: 'cumulative',
+        managerId: `mgr-${String(i).padStart(3, '0')}`,
+        date: '2026-08-14',
+        at: '2026-08-14T10:00:00.000Z',
+        snapshot: {
+          models: {
+            [MODEL]: {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUsd: 1 + i,
+            },
+          },
+        },
+      });
+    }
+  }
+
+  it('14件を超えたら、打ち切りの行に ledgerOffset での続きの呼び方を書く', async () => {
+    const h = harness(() => RUNTIME);
+    await seed(h, 15);
+
+    const reply = await h.call('self_status', {});
+
+    expect(reply).toContain(
+      '…（残り 1 件は出していない。self_status の ledgerOffset=14 で続きが出る）',
+    );
+    // 費用降順なので、最も安い mgr-000 が15件目として落ちている。
+    expect(reply).not.toContain('"mgr-000"');
+  });
+
+  it('案内どおり ledgerOffset=14 で呼ぶと、落ちた15件目がその節だけで出る', async () => {
+    const h = harness(() => RUNTIME);
+    await seed(h, 15);
+
+    const reply = await h.call('self_status', { ledgerOffset: 14 });
+
+    expect(reply).toContain('（全 15 件 / ledgerOffset=14）');
+    expect(reply).toContain('managerId: "mgr-000"');
+    // 続きを取りに来た呼び出しなので、他の節は出さない。
+    expect(reply).not.toContain('## いまどう走っているか');
+    expect(reply).not.toContain('## 記憶の大きさ');
+    expect(reply).not.toContain('続きが出る');
+  });
+
+  it('1頁に収まらなければ、次の ledgerOffset を案内する', async () => {
+    const h = harness(() => RUNTIME);
+    await seed(h, 120);
+
+    const reply = await h.call('self_status', { ledgerOffset: 14 });
+
+    expect(reply).toContain('（全 120 件 / ledgerOffset=14）');
+    expect(reply).toContain(
+      '…（残り 6 件は出していない。self_status の ledgerOffset=114 で続きが出る）',
+    );
+  });
+
+  it('範囲外の ledgerOffset は、黙って空を返さずそう言う', async () => {
+    const h = harness(() => RUNTIME);
+    await seed(h, 3);
+
+    const reply = await h.call('self_status', { ledgerOffset: 10 });
+
+    expect(reply).toContain('（内訳は全 3 件で、ledgerOffset=10 以降は無い）');
   });
 });

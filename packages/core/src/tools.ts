@@ -8363,15 +8363,34 @@ export function createCloneTools(context: ToolContext) {
         '**effort はこのセッションで最初の道具呼び出しでは取れない**（前の道具呼び出しの結果として',
         '観測するため）。モデルが effort に対応していない場合もずっと取れない。',
         '取れない値は「まだ分からない」と出る（既定値では埋めない）。',
+        // **打ち切った内訳の続きへ届く口（#1638）。** 案内は打ち切りの行にそのまま書く。
+        '台帳との突き合わせの内訳は14件で打ち切る。続きは ledgerOffset で辿れる' +
+          '（打ち切りの行にそのまま書いてある。ledgerOffset を渡すとその節だけを出す）。',
       ].join(' '),
-      {},
-      async () => {
+      {
+        ledgerOffset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            '台帳との突き合わせの内訳を、この位置から出す（実行時の事実・記憶の大きさは出ない）',
+          ),
+      },
+      async ({ ledgerOffset }) => {
         const runtime = context.runtime?.();
         if (runtime === undefined) {
           return text(
             'いまは自分の実行時の事実を読めない場面である（記憶へ移すための内部ターン）。' +
               '次の会話で呼ぶこと。',
           );
+        }
+
+        // **続きを取りに来た呼び出しは、その節だけを返す**（`usage_read` の `axis`
+        // モードと同じ判断。続きを辿るたびに同じ全体が返ると、辿るほど入力を食う）。
+        if (ledgerOffset !== undefined) {
+          const aggregate = runtime.sdkModel === null ? null : await stores.usage.aggregate({});
+          return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerOffset));
         }
 
         const [documents, memoryDocuments, aggregate] = await Promise.all([
@@ -12577,10 +12596,21 @@ function renderMemorySize(
  * マネージャーは同じモデル id に並ぶので、`managerId` だけで畳むと #80 で残った
  * 「モデル名だけでは自分を見分けられない」がそのまま残る。層を鍵に入れて初めて
  * 「このモデル id の行のうち、層はこう分かれている」が見える。
+ *
+ * **打ち切ったら、続きの呼び方をその行に書く（#1638）。** かつては
+ * `…（残り N 件は出していない）` とだけ書いて終わっており、この内訳
+ * （モデル × managerId × layer × site）は `usage_read` のどの軸でも同じ形では
+ * 取れないので、15件目以降はどの道具からも読めなかった。`usage_read` の
+ * 打ち切りと同じ形で `self_status` の `ledgerOffset` を案内する。
+ *
+ * **`ledgerOffset` を渡したときは「続きを取りに来た呼び出し」として扱う**
+ * （`usage_read` の `axis` モードと同じ判断）。1頁は `USAGE_AXIS_PAGE` 件で、
+ * 範囲外なら黙って空を返さずそう言う。
  */
 function renderLedgerCrossReference(
   sdkModel: string | null,
   aggregate: UsageAggregate | null,
+  ledgerOffset?: number,
 ): string {
   const lines = ['## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）', ''];
 
@@ -12628,17 +12658,41 @@ function renderLedgerCrossReference(
       a.site.localeCompare(b.site),
   );
 
+  const formatEntry = (entry: (typeof entries)[number]): string =>
+    `  - managerId: "${entry.managerId}" / layer: ${entry.layer} / site: ${entry.site}` +
+    ` / 合計 ${formatUsd(entry.costUsd)}`;
+
+  if (ledgerOffset !== undefined) {
+    lines.push(
+      `モデル id ${sdkModel} の行の内訳（全 ${entries.length} 件 / ledgerOffset=${ledgerOffset}）:`,
+    );
+    const page = entries.slice(ledgerOffset, ledgerOffset + USAGE_AXIS_PAGE);
+    if (page.length === 0) {
+      // **黙って空を返さない。** 空だけでは「内訳が無い」と「offset が範囲外」を区別できない。
+      lines.push(`  （内訳は全 ${entries.length} 件で、ledgerOffset=${ledgerOffset} 以降は無い）`);
+      return lines.join('\n');
+    }
+    for (const entry of page) lines.push(formatEntry(entry));
+    const rest = entries.length - (ledgerOffset + page.length);
+    if (rest > 0) {
+      lines.push(
+        `  …（残り ${rest} 件は出していない。` +
+          `self_status の ledgerOffset=${ledgerOffset + page.length} で続きが出る）`,
+      );
+    }
+    return lines.join('\n');
+  }
+
   lines.push(
     `モデル id ${sdkModel} の行の内訳（台帳の軸そのもの。行には必ず actor と層と場所が付く）:`,
   );
-  for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
-    lines.push(
-      `  - managerId: "${entry.managerId}" / layer: ${entry.layer} / site: ${entry.site}` +
-        ` / 合計 ${formatUsd(entry.costUsd)}`,
-    );
-  }
+  for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) lines.push(formatEntry(entry));
   if (entries.length > USAGE_AXIS_LIMIT) {
-    lines.push(`  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない）`);
+    // **打ち切りの行がそのまま次に打つ手を書く**（`usage_read` と同じ。#1638）。
+    lines.push(
+      `  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない。` +
+        `self_status の ledgerOffset=${USAGE_AXIS_LIMIT} で続きが出る）`,
+    );
   }
   return lines.join('\n');
 }
