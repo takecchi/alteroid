@@ -32,6 +32,11 @@
  * パターンにも合わなくなり、そのまま残る。** だから必ず「伏せ字→切る」の
  * 順で行う（{@link buildDenialInputHead} の実装そのものがこの順）。
  *
+ * **切り口はコードポイントの境界へ寄せる**（`excerpt.ts` の `codePointBoundary`。
+ * #1549 で塞いだ穴と同じもの。#1606）。160コード単位目を絵文字がまたぐと、
+ * そのまま切れば高サロゲートだけが残り、UTF-8 へ変える経路（受信箱の本文・
+ * `manager_list` の応答）で黙って U+FFFD に化ける。寄せた回は159字になる。
+ *
  * ## 塞げていないもの（正直に書く。`denial-shape.ts` の doc と同じ姿勢）
  *
  * - **英字だけ・数字だけでできた短い秘密**（`hunter2` のようなパスワード）は
@@ -51,6 +56,7 @@
  *   （`denial-shape.ts` の「先頭の語」のような）はここには無い
  */
 
+import { codePointBoundary } from './excerpt.js';
 import { redactEnvSecrets } from './usage-probe.js';
 
 /** 伏せてから切る、最終的な文字数の上限（issue #1105 本文の「先頭最大160字」）。 */
@@ -200,6 +206,6 @@ export function buildDenialInputHead(
   if (raw === undefined) return undefined;
   const redacted = redactKnownSecretPatterns(redactSecretEnvValues(raw, env));
   return redacted.length > DENIAL_INPUT_HEAD_LIMIT
-    ? `${redacted.slice(0, DENIAL_INPUT_HEAD_LIMIT)}${TRUNCATION_MARK}`
+    ? `${redacted.slice(0, codePointBoundary(redacted, DENIAL_INPUT_HEAD_LIMIT))}${TRUNCATION_MARK}`
     : redacted;
 }

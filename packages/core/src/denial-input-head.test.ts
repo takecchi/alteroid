@@ -196,6 +196,22 @@ describe('buildDenialInputHead / 伏せてから切る（境界にトークン�
     expect(head).toBe(`${'x'.repeat(DENIAL_INPUT_HEAD_LIMIT)}…`);
   });
 
+  /**
+   * **絵文字の途中で切らない（#1606）。** 補助面の文字が160コード単位目をまたぐと、
+   * `slice` のままでは高サロゲートだけが残る。切り口は1つ手前（159）へ寄る。
+   */
+  it('絵文字が160字目をまたいでも孤立サロゲートを残さない', () => {
+    const head = buildDenialInputHead(
+      { command: `${'a'.repeat(DENIAL_INPUT_HEAD_LIMIT - 1)}\u{1F600}${'b'.repeat(50)}` },
+      undefined,
+    );
+    // `isWellFormed()` は tsconfig の lib（es2024 未満）に無いので、孤立サロゲートを直接探す。
+    expect(head).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+    expect(head).toBe(`${'a'.repeat(DENIAL_INPUT_HEAD_LIMIT - 1)}…`);
+  });
+
   it('160字ちょうどの入力は切らない（印を付けない）', () => {
     const raw = 'x'.repeat(DENIAL_INPUT_HEAD_LIMIT);
     const head = buildDenialInputHead({ command: raw }, undefined);
