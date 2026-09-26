@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 8つ出す。
+   * 9つ出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -62,6 +62,19 @@ export default defineConfig({
    *   同じ1行の判定を別々に持ち、**どちらも password だけの userinfo を
    *   伏せていなかった**。秘密の伏せ方は片方だけ直すと他方から漏れるので、
    *   ここへ寄せた。ファイル自身は import を1つも持たない。
+   * - `manager-activity.ts` — マネージャー1本が「止まっている／進んでいる／
+   *   判定できない」かの判定（`classifyManagerActivity`）と、直近の報告が
+   *   いま走っているターンのものではないことを言う一文
+   *   （`describeReportDrift`。issue #1036）（`@alteroid/core/manager-activity`）。
+   *   **`answered-via.ts` と同じ形**——クローンの `manager_list` /
+   *   `manager_report`（`tools.ts` の `describeToolUseStall` /
+   *   `describeReportDrift` の呼び出し元）が使っている判定そのものを、
+   *   Web UI（`apps/web/app/routes/manager-detail.tsx`）の診断欄が
+   *   **同じ答えで**借りるための唯一の正本——判定のコピーを2つ作らない
+   *   （ファイル冒頭の doc と同じ理由）。ファイル自身は値の import を
+   *   1つだけ持つ（`./inbox-validity.js`）が、**そちらも実行時の依存が
+   *   無い**（`schema.ts` からは両方とも `import type` だけ）ので、束ねても
+   *   `usage-format.ts` と同じ「実行時の依存を1つも持たない」帯に収まる。
    */
   entry: [
     'src/index.ts',
@@ -73,6 +86,7 @@ export default defineConfig({
     'src/answered-via.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',
+    'src/manager-activity.ts',
   ],
   format: ['esm'],
   dts: true,

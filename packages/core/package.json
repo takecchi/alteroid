@@ -35,6 +35,10 @@
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"
+    },
+    "./manager-activity": {
+      "types": "./dist/manager-activity.d.ts",
+      "import": "./dist/manager-activity.js"
     }
   },
   "files": [
