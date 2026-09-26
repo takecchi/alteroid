@@ -3602,9 +3602,7 @@ describe('HTTP API', () => {
       worktrees: [],
     });
 
-    const single = (await (
-      await app.request('/managers/mgr-cgroup-unpushed')
-    ).json()) as {
+    const single = (await (await app.request('/managers/mgr-cgroup-unpushed')).json()) as {
       manager: { lastCgroupEvents?: unknown; lastUnpushedWorkObservation?: unknown };
     };
     expect(single.manager.lastCgroupEvents).toBeDefined();
