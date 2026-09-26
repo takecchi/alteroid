@@ -43,6 +43,14 @@
     "./job-status-running": {
       "types": "./dist/job-status-running.d.ts",
       "import": "./dist/job-status-running.js"
+    },
+    "./cgroup-events-format": {
+      "types": "./dist/cgroup-events-format.d.ts",
+      "import": "./dist/cgroup-events-format.js"
+    },
+    "./system-error-format": {
+      "types": "./dist/system-error-format.d.ts",
+      "import": "./dist/system-error-format.js"
     }
   },
   "files": [

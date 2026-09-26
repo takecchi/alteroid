@@ -37,6 +37,7 @@ import {
   runnerAnswerResultSchema,
   runnerEventSchema,
   runnerExecutionResourcesSchema,
+  noteDroppedRunnerManagers,
   runnerManagerStateSchema,
   runnerPlacementResourcesSchema,
   unpushedWorkResultSchema,
@@ -568,6 +569,12 @@ function causeSuffixOf(info: ReturnType<typeof causeInfoOf>): string {
   return ` cause=${info.text}${info.code === '' ? '' : ` code=${info.code}`}`;
 }
 
+/**
+ * `HttpRunner#list()` が覚えておく「跡へ残した組」の上限（#1661）。超えたら忘れて
+ * 数え直す——無制限の帳面を作らない（上限を超えた回は同じ組がもう一度出るだけ）。
+ */
+const DROPPED_MANAGER_KEY_LIMIT = 256;
+
 class HttpRunner implements RunnerClient {
   runnerId = 'runner-primary';
   workspacePath = '';
@@ -776,6 +783,12 @@ class HttpRunner implements RunnerClient {
    * `GET /runners`）から読める形に引き上げた口で、実装は増やしていない（#330）。
    */
   #runnerIdKnown = false;
+
+  /**
+   * `list()` が既に跡へ残した「飛ばした委譲」の組（`managerId|欄`）。同じ組を
+   * 周期ごとに出さないために持つ（#1661）。上限は {@link DROPPED_MANAGER_KEY_LIMIT}。
+   */
+  readonly #droppedManagerKeys = new Set<string>();
 
   /**
    * {@link #runnerIdKnown} を `RunnerClient` の外から読める形にした口（#330）。
@@ -1637,10 +1650,43 @@ class HttpRunner implements RunnerClient {
     const response = await this.#call('GET', '/managers', undefined, options?.signal);
     const body = (await response.json()) as { managers?: unknown };
     if (!Array.isArray(body.managers)) return [];
-    return body.managers.flatMap((entry) => {
+    // **スキーマに合わない要素は飛ばすが、黙っては飛ばさない（#1661）。** 飛ばした
+    // 委譲は Pool から見て「runner に居ない」側に落ち、待っていた確認まで捨てられうる
+    // （`runnerWaitingSchema` の doc）。典型は runner が先に新しい版になって、こちらの
+    // 知らない `status` を送る版ずれで、跡が無いと委譲が消えた理由を誰も追えない。
+    // 値は載せず、`managerId` と落ちた欄の名前だけを残す（`noteDroppedRunnerManagers`）。
+    const dropped: { managerId: string | undefined; fields: string[] }[] = [];
+    const managers = body.managers.flatMap((entry) => {
       const parsed = runnerManagerStateSchema.safeParse(entry);
-      return parsed.success ? [parsed.data] : [];
+      if (parsed.success) return [parsed.data];
+      const rawId =
+        typeof entry === 'object' && entry !== null
+          ? (entry as { managerId?: unknown }).managerId
+          : undefined;
+      const fields = [
+        ...new Set(
+          parsed.error.issues.map((issue) => issue.path.map(String).join('.')).filter(Boolean),
+        ),
+      ];
+      dropped.push({
+        managerId: typeof rawId === 'string' && rawId !== '' ? rawId : undefined,
+        fields,
+      });
+      return [];
     });
+    // **同じ組は初出だけ残す。** `list()` は生存確認で周期的に呼ばれるので、毎回出すと
+    // 跡でログを埋める（`#noteDropped` の doc と同じ理由）。
+    const fresh = dropped.filter(({ managerId, fields }) => {
+      const key = `${managerId ?? ''}|${fields.join(',')}`;
+      if (this.#droppedManagerKeys.has(key)) return false;
+      if (this.#droppedManagerKeys.size >= DROPPED_MANAGER_KEY_LIMIT) {
+        this.#droppedManagerKeys.clear();
+      }
+      this.#droppedManagerKeys.add(key);
+      return true;
+    });
+    if (fresh.length > 0) noteDroppedRunnerManagers(this.#describeSelf(), fresh);
+    return managers;
   }
 
   async credentials(): Promise<RunnerCredentialFingerprint[]> {

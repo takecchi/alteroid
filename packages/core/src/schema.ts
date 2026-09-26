@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
 import type { AnsweredViaLike } from './answered-via.js';
-import { cgroupEventsDeltaSchema } from './cgroup-events.js';
+import type { CgroupEventsDeltaLike } from './cgroup-events-format.js';
+import { cgroupEventsDeltaSchema, type CgroupEventsDelta } from './cgroup-events.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import type { JobStatusLike } from './job-status-running.js';
-import { systemErrorFactsSchema } from './system-error.js';
+import type { SystemErrorFactsLike } from './system-error-format.js';
+import { systemErrorFactsSchema, type SystemErrorFacts } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
@@ -4034,6 +4036,46 @@ export const jobSchema = z.object({
 });
 
 export type Job = z.infer<typeof jobSchema>;
+
+/**
+ * `system-error-format.ts` の {@link SystemErrorFactsLike}（手書き）が、
+ * この zod スキーマから推論した {@link SystemErrorFacts} と構造的に一致する
+ * ことの強制（`_AssertJobStatusMatchesRunningLikeType` と同じ形）。
+ *
+ * 軽い口（`system-error-format.ts`）は zod を import できないので、
+ * `SystemErrorFacts` をそのまま使えず、同じ形を手で書き写している。
+ * **ここが崩れると、両者は静かにずれうる**——`systemErrorFactsSchema` に
+ * 欄を足しても `SystemErrorFactsLike` を書き換え忘れれば、
+ * `formatSystemErrorFacts` はその欄を1つも読めないまま `pnpm typecheck` が
+ * 落ちて初めて気づく。
+ */
+export type _AssertSystemErrorFactsMatchesLikeType = AssertTrue<
+  [SystemErrorFacts] extends [SystemErrorFactsLike]
+    ? [SystemErrorFactsLike] extends [SystemErrorFacts]
+      ? true
+      : false
+    : false
+>;
+
+/**
+ * `cgroup-events-format.ts` の {@link CgroupEventsDeltaLike}（手書き）が、
+ * この zod スキーマから推論した {@link CgroupEventsDelta} と構造的に一致する
+ * ことの強制（`_AssertSystemErrorFactsMatchesLikeType` と同じ形）。
+ *
+ * 軽い口（`cgroup-events-format.ts`）は zod を import できないので、
+ * `CgroupEventsDelta` をそのまま使えず、同じ形を手で書き写している。
+ * **ここが崩れると、両者は静かにずれうる**——`cgroupEventsDeltaSchema` に
+ * 欄を足しても `CgroupEventsDeltaLike` を書き換え忘れれば、
+ * `formatCgroupEventsNote` はその欄を1つも読めないまま `pnpm typecheck` が
+ * 落ちて初めて気づく。
+ */
+export type _AssertCgroupEventsDeltaMatchesLikeType = AssertTrue<
+  [CgroupEventsDelta] extends [CgroupEventsDeltaLike]
+    ? [CgroupEventsDeltaLike] extends [CgroupEventsDelta]
+      ? true
+      : false
+    : false
+>;
 
 /**
  * `request_permission`（`tools.ts`）が起こした承認待ちが持つ、規則そのものの

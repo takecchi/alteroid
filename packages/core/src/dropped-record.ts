@@ -168,6 +168,42 @@ export function noteMissingRecordSource(what: string, detail: string): void {
 }
 
 /**
+ * runner の委譲一覧（`GET /managers`）のうち、こちらのスキーマに合わずに飛ばした
+ * 要素を stderr へ1行残す（Issue #1661）。
+ *
+ * **これは失敗の記録ではなく、判定を誤りうることの跡である。** `HttpRunner#list()`
+ * （`apps/daemon/src/runner-client.ts`）が飛ばした委譲は、Pool（`manager.ts`）から
+ * 見て「runner に居ない」側に落ち、待っていた確認が捨てられうる
+ * （`runner-protocol.ts` の `runnerWaitingSchema` の doc）。典型は、runner が先に
+ * 新しい版になって、デーモンのまだ知らない `status` を送る版ずれである。
+ * 跡が無いと、委譲が消えた理由を誰も追えない。
+ *
+ * **値は載せない。** 載せるのは runner の名前、`managerId`（こちらが発行した id）、
+ * 落ちた欄の名前（zod の issue の path）だけ——`safeParse` が返す値や
+ * `error.message` は検証に失敗した値を引用しうるので渡さない
+ * （`noteDroppedJournalRow` の doc と同じ理由）。
+ *
+ * @param runner runner の名札（`HttpRunner` の `#describeSelf()`。`runner (<接続先> / <runnerId>)`）。
+ * @param dropped 飛ばした要素ごとの `managerId`（読めなければ `undefined`）と欄の名前。
+ */
+export function noteDroppedRunnerManagers(
+  runner: string,
+  dropped: readonly { managerId: string | undefined; fields: readonly string[] }[],
+): void {
+  const items = dropped
+    .map(
+      ({ managerId, fields }) =>
+        `managerId=${managerId === undefined ? '（読めない）' : tag(managerId)} ` +
+        `欄=${fields.length === 0 ? '（不明）' : fields.map(tag).join(',')}`,
+    )
+    .join(' / ');
+  note(
+    `${tag(runner)} の委譲一覧で、こちらのスキーマに合わない ${dropped.length} 件を飛ばした` +
+      `（この委譲は runner に居ないと判定されうる。版ずれを疑うこと）: ${items}`,
+  );
+}
+
+/**
  * 発行した id が既に使われていて、引き直したことを stderr へ1行だけ残す（#238）。
  *
  * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と

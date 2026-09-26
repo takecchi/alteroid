@@ -163,6 +163,8 @@ import {
   describeAppraisal,
   formatAppraisalDecision,
   jobStatusSchema,
+  memorySlugSchema,
+  practiceSlugSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
 } from './schema.js';
@@ -3964,6 +3966,14 @@ export function createCloneTools(context: ToolContext) {
         offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
       },
       async ({ slug, offset = 0 }) => {
+        // **issue #1662。** HTTP の `GET /memory/:slug`（#1634/#1636）と同じ門
+        // ——`memorySlugSchema` に落ちるスラッグはここで断る。ここが無いと
+        // `FsPersonaStore#path()` / `PgPersonaStore#slug()` の生の例外
+        // （`Error: 記憶のスラッグが不正: …`）がそのまま抜ける（fs / pg の
+        // どちらの実装でも起きる。#1651 の `practice_read` と同じ形）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const doc = await stores.persona.read(slug);
         if (!doc) return text(`記憶 ${slug} は存在しない。`);
         const part = page(doc.content, offset, MEMORY_PAGE);
@@ -4004,6 +4014,10 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を更新したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const cause = memoryCause();
         const denial = await guardFullReplace(stores, slug, cause, '全文置換');
         if (denial !== null) return text(denial);
@@ -4070,6 +4084,10 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を追記したかの一行要約（日誌に残る）'),
       },
       async ({ slug, content, summary }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const [before, memoryBefore] = await Promise.all([
           stores.persona.read(slug),
           stores.persona.documents(),
@@ -4155,6 +4173,10 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
       },
       async ({ slug, summary }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const existing = await stores.persona.read(slug);
         if (existing === null) {
           return text(`記憶 ${slug} は存在しない（消せない。何も変わっていない）。`);
@@ -4261,6 +4283,10 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('何を直したかの一行要約（日誌に残る）'),
       },
       async ({ slug, description, type, parent, summary }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         if (description === undefined && type === undefined && parent === undefined) {
           return text(
             `記憶 ${slug} の frontmatter を直すには description・type・parent のうち少なくとも1つを渡すこと` +
@@ -4530,6 +4556,10 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ slug, side, q, offset }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const doc = await stores.persona.read(slug);
         if (doc === null) return text(`記憶 ${slug} は存在しない。`);
         const { sections } = scanMemorySections(doc.content);
@@ -4606,6 +4636,10 @@ export function createCloneTools(context: ToolContext) {
           .describe('開く節の節id（複数可）。焼き込みのカードか memory_outline に出ているもの'),
       },
       async ({ slug, sections: requested }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const doc = await stores.persona.read(slug);
         if (doc === null) return text(`記憶 ${slug} は存在しない。`);
         const { sections } = scanMemorySections(doc.content);
@@ -4830,6 +4864,14 @@ export function createCloneTools(context: ToolContext) {
         summary: z.string().describe('なぜ移したかの一行要約（日誌に残る。本文は残らない）'),
       },
       async ({ fromSlug, sections: ids, toSlug, summary }) => {
+        // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
+        // ここは slug を2つ受けるので、両方を保存層より前に検査する。
+        if (!memorySlugSchema.safeParse(fromSlug).success) {
+          return text(`記憶のスラッグが不正: ${fromSlug}（英小文字・数字・. _ - のみ）。`);
+        }
+        if (!memorySlugSchema.safeParse(toSlug).success) {
+          return text(`記憶のスラッグが不正: ${toSlug}（英小文字・数字・. _ - のみ）。`);
+        }
         if (fromSlug === toSlug) {
           return text(
             `from と to が同じ文書（${fromSlug}）である。節の移動先は別の文書でなければならない` +
@@ -6227,6 +6269,11 @@ export function createCloneTools(context: ToolContext) {
           .describe('この依頼の名前（英小文字・数字・. _ -）。後から直す・消すときの識別子'),
         request: z
           .string()
+          // **issue #1651。** HTTP の `scheduleBody`（`apps/daemon/src/app.ts`）と
+          // 揃える——空文字はここで弾く。無いと保存層（fs / pg の
+          // `scheduledRequestSchema.parse(entry)`）まで届いてから ZodError が
+          // 素で投げられ、クローンには読めない例外になる。
+          .min(1)
           .describe(
             '依頼の本文。時刻が来たときのあなたが読んで、そのまま動ける粒度で書く' +
               '（対象・狙い・どこまでやるか。人間から頼まれた言葉そのものも残すとよい）',
@@ -8157,6 +8204,14 @@ export function createCloneTools(context: ToolContext) {
           .describe('省略時はいまの本文。指定すると practice_history にある過去の版を読む'),
       },
       async ({ slug, version }) => {
+        // **issue #1651。** HTTP の `GET /practices/:slug` と同じ門——
+        // `practiceSlugSchema` に落ちるスラッグはここで断る。ここが無いと、
+        // pg の `PgPracticeStore#slug()` が `Error: やり方のスラッグが不正: …`
+        // を素で投げ、クローンには読めない例外になる（fs / インメモリは検査を
+        // 持たないので「無い」として扱ってしまい、器によって結果が違ってしまう）。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         if (version !== undefined) {
           const found = await stores.practices.readVersion(slug, version);
           if (found === null) {
@@ -8209,6 +8264,10 @@ export function createCloneTools(context: ToolContext) {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
       },
       async ({ slug }) => {
+        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const versions = await stores.practices.listVersions(slug);
         if (versions.length === 0) {
           return text(
@@ -8257,6 +8316,11 @@ export function createCloneTools(context: ToolContext) {
         content: z.string().describe('本文（人間もこのまま読む。Markdown を想定）'),
       },
       async ({ slug, kind, title, content }) => {
+        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
+        // `PUT /practices/:slug`（HTTP）も書く前に同じ検査を通す。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const before = await stores.practices.read(slug);
         const written = await stores.practices.write({ slug, kind, title, content });
         await appendJournalOrThrow(
@@ -8294,6 +8358,10 @@ export function createCloneTools(context: ToolContext) {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
       },
       async ({ slug }) => {
+        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const before = await stores.practices.read(slug);
         await stores.practices.remove(slug);
         // **無かったときは日誌を書かない。** 何も起きていないのに「消した」という
