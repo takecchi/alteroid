@@ -104,6 +104,171 @@ describe('安全性: javascript: リンクが実行可能な URL にならない
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noreferrer noopener');
   });
+
+  it('data: リンクの href も javascript: と同じく空へ潰れる', async () => {
+    render(
+      <Markdown>{'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}</Markdown>,
+    );
+
+    const anchor = await screen.findByText('click');
+    expect(anchor.tagName).toBe('A');
+    expect(anchor.getAttribute('href')).toBe('');
+  });
+
+  it('vbscript: リンクの href も javascript: と同じく空へ潰れる', async () => {
+    render(<Markdown>{'[click](vbscript:msgbox(1))'}</Markdown>);
+
+    const anchor = await screen.findByText('click');
+    expect(anchor.tagName).toBe('A');
+    expect(anchor.getAttribute('href')).toBe('');
+  });
+});
+
+/**
+ * ここから下は、PR #1665（`e4b3a93`）で `remark-gfm` パッケージ自体をやめ
+ * `remarkGfmParseOnly`（`micromark-extension-gfm` の `gfm()` ＋
+ * `mdast-util-gfm` の `gfmFromMarkdown()`）だけに替えたときの横断レビューで、
+ * `remark-gfm@4.0.1` と描画が完全一致することを確認した機能を固定する歯である。
+ *
+ * **期待値はどれも「今の描画」（＝確認済みの `remark-gfm` と同じ描画）である。**
+ * ここより前のテストは表・生 HTML・`javascript:`・改行しか見ていないので、
+ * GFM の plugin をまた差し替えたときに描画が変わっても、ここが無いと気づけない。
+ *
+ * 直す前に赤くなる歯ではない（`markdown.tsx` はまだ元の実装のまま）ので、
+ * 代わりに変異で赤くなることを確認してある — (a) `remarkPlugins` の配列から
+ * `remarkGfmParseOnly` を抜くと GFM の歯が赤くなる (b) `gfm()` に
+ * `{ singleTilde: false }` を渡すと `~1つ~` の歯だけが赤くなる。PR 本文に
+ * 生出力がある。
+ */
+describe('GFM: 取り消し線（`~`1つと`~~`2つの両方が <del> になる）', () => {
+  it('`~1つ~` が <del> になる', async () => {
+    const { container } = render(<Markdown>{'a ~b~ c'}</Markdown>);
+
+    const del = container.querySelector('del');
+    expect(del).not.toBeNull();
+    expect(del?.textContent).toBe('b');
+  });
+
+  it('`~~2つ~~` も同じく <del> になる', async () => {
+    const { container } = render(<Markdown>{'a ~~b~~ c'}</Markdown>);
+
+    const del = container.querySelector('del');
+    expect(del).not.toBeNull();
+    expect(del?.textContent).toBe('b');
+  });
+});
+
+describe('GFM: タスクリスト（チェックボックスが描かれ、操作できない）', () => {
+  it('`- [ ]` / `- [x]` がチェック状態の異なる disabled のチェックボックスになる', async () => {
+    const md = ['- [ ] todo', '- [x] done'].join('\n');
+    const { container } = render(<Markdown>{md}</Markdown>);
+
+    const checkboxes = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    );
+    expect(checkboxes.length).toBe(2);
+    expect(checkboxes[0]!.checked).toBe(false);
+    expect(checkboxes[1]!.checked).toBe(true);
+    // 操作できない（disabled）こと — 表示用であって、押して状態を変えられては
+    // 本文の Markdown と表示が食い違う。
+    expect(checkboxes[0]!.disabled).toBe(true);
+    expect(checkboxes[1]!.disabled).toBe(true);
+  });
+});
+
+describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
+  it('本文中に参照（上付きのリンク）が、末尾に脚注の節が描かれる', async () => {
+    const md = ['Here is a note[^1].', '', '[^1]: The note text.'].join('\n');
+    const { container } = render(<Markdown>{md}</Markdown>);
+
+    // 本文中の参照（上付きの「1」へのリンク）。
+    // ⚠️ `components.a` はカスタムの `<a>` で `href` と `children` だけを
+    // 転送するので、hast が持つ `data-footnote-ref` / `id` は描画に残らない
+    // （既存の `a` の実装に由来し、この PR が作った差ではない）。だから
+    // ここでは残る側（`href` と表示テキスト）で固定する。
+    const ref = container.querySelector('sup a');
+    expect(ref).not.toBeNull();
+    expect(ref?.getAttribute('href')).toBe('#user-content-fn-1');
+    expect(ref?.textContent).toBe('1');
+
+    // 末尾の脚注の節（`section` は components で上書きしていないので
+    // `data-footnotes` 属性がそのまま残る）。
+    const section = container.querySelector('section[data-footnotes="true"]');
+    expect(section).not.toBeNull();
+    expect(section?.textContent).toContain('Footnotes');
+    expect(section?.textContent).toContain('The note text.');
+
+    // 脚注から本文へ戻るリンク（同じ理由で `data-footnote-backref` は
+    // 残らないので、`href` と表示テキスト「↩」で固定する）。
+    const backref = section?.querySelector('a');
+    expect(backref).not.toBeNull();
+    expect(backref?.getAttribute('href')).toBe('#user-content-fnref-1');
+    expect(backref?.textContent).toBe('↩');
+  });
+});
+
+describe('GFM: 自動リンク（オートリンク）', () => {
+  it('`www.` で始まる裸のドメインが `http://` リンクになる', async () => {
+    render(<Markdown>{'see www.example.com for more'}</Markdown>);
+
+    const link = await screen.findByRole('link', { name: 'www.example.com' });
+    expect(link.getAttribute('href')).toBe('http://www.example.com');
+  });
+
+  it('メールアドレスが `mailto:` リンクになる', async () => {
+    render(<Markdown>{'contact me at foo@example.com please'}</Markdown>);
+
+    const link = await screen.findByRole('link', { name: 'foo@example.com' });
+    expect(link.getAttribute('href')).toBe('mailto:foo@example.com');
+  });
+
+  it('URL 末尾の `.` はリンクへ含まれない', async () => {
+    const { container } = render(<Markdown>{'visit https://example.com/path.'}</Markdown>);
+
+    const link = container.querySelector('a');
+    expect(link?.getAttribute('href')).toBe('https://example.com/path');
+    // 句読点自体はリンクの外、地の文として残る。
+    expect(link?.nextSibling?.textContent).toBe('.');
+  });
+
+  it('URL 末尾の `,` はリンクへ含まれない', async () => {
+    const { container } = render(<Markdown>{'visit https://example.com/path, next'}</Markdown>);
+
+    const link = container.querySelector('a');
+    expect(link?.getAttribute('href')).toBe('https://example.com/path');
+    expect(link?.nextSibling?.textContent).toBe(', next');
+  });
+
+  it('URL を囲む閉じ括弧 `)` はリンクへ含まれない', async () => {
+    const { container } = render(<Markdown>{'see (https://example.com/path) here'}</Markdown>);
+
+    const link = container.querySelector('a');
+    expect(link?.getAttribute('href')).toBe('https://example.com/path');
+    expect(link?.nextSibling?.textContent).toBe(') here');
+  });
+});
+
+describe('GFM: 表の中の `\\|`（パイプのエスケープ）', () => {
+  it('`\\|` は列区切りにならず、逐語の `|` として1つのセルに描かれる', async () => {
+    const md = ['| a\\|b | c |', '| --- | --- |', '| 1 | 2 |'].join('\n');
+    const { container } = render(<Markdown>{md}</Markdown>);
+
+    const headers = Array.from(container.querySelectorAll('th'));
+    // 列が3つに割れていないこと — エスケープが効かず列区切りとして解釈
+    // された場合、ここが3になって最初に壊れる。
+    expect(headers.map((th) => th.textContent)).toEqual(['a|b', 'c']);
+  });
+});
+
+describe('GFM: 入れ子（表のセルの中の取り消し線）', () => {
+  it('表のセルの中の `~~取り消し線~~` も <del> になる', async () => {
+    const md = ['| a | b |', '| --- | --- |', '| ~~x~~ | y |'].join('\n');
+    const { container } = render(<Markdown>{md}</Markdown>);
+
+    const cell = container.querySelector('td');
+    expect(cell?.querySelector('del')).not.toBeNull();
+    expect(cell?.querySelector('del')?.textContent).toBe('x');
+  });
 });
 
 describe('remark-breaks: 単独の改行を畳まない', () => {
