@@ -56,7 +56,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
     let emit: ((message: SDKMessage | null) => void) | null = null;
     const buffered: SDKMessage[] = [];
     let ended = false;
-    let endedResolve: (() => void) | null = null;
+    let endedResolve!: () => void;
     const endedPromise = new Promise<void>((resolve) => {
       endedResolve = resolve;
     });
@@ -78,7 +78,7 @@ function fakeSdk(): { fn: typeof sdkQuery; sessions: FakeSession[] } {
     void (async () => {
       for await (const message of params.prompt as AsyncIterable<unknown>) void message;
       ended = true;
-      endedResolve?.();
+      endedResolve();
     })();
 
     const session: FakeSession = {
