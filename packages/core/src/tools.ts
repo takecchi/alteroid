@@ -73,7 +73,7 @@ import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
-import { encodeUsageCursor, resolveUsageCursor } from './usage-cursor.js';
+import { encodeUsageCursor, findUsageCursorTies, resolveUsageCursor } from './usage-cursor.js';
 import {
   describePage,
   excerpt,
@@ -12607,11 +12607,13 @@ function renderUsage(
       const rest = afterAnchor.length - page.length;
       if (rest > 0) {
         const lastShown = page[page.length - 1]!;
+        const nextAsOf = maxUpdatedAt(rows);
         const nextCursor = encodeUsageCursor({
           axis,
           label: lastShown.label,
           cost: lastShown.totals.costUsd,
-          asOf: maxUpdatedAt(rows),
+          asOf: nextAsOf,
+          tiedAtAsOf: findUsageCursorTies(entries, axis, lastShown, nextAsOf),
         });
         lines.push(
           `  …（残り ${rest} 件は出していない。` +
@@ -12651,11 +12653,13 @@ function renderUsage(
         // **打ち切りの行がそのまま次に打つ手を書く。** 「残り N 件」だけでは、
         // 続きを見る方法が無いのと同じである。
         const lastShown = entries[USAGE_AXIS_LIMIT - 1]!;
+        const nextAsOf = maxUpdatedAt(rows);
         const nextCursor = encodeUsageCursor({
           axis,
           label: lastShown.label,
           cost: lastShown.totals.costUsd,
-          asOf: maxUpdatedAt(rows),
+          asOf: nextAsOf,
+          tiedAtAsOf: findUsageCursorTies(entries, axis, lastShown, nextAsOf),
         });
         lines.push(
           `  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない。` +
@@ -13028,11 +13032,13 @@ function renderLedgerCrossReference(
     const rest = afterAnchor.length - page.length;
     if (rest > 0) {
       const lastShown = page[page.length - 1]!;
+      const nextAsOf = maxUpdatedAt(matches);
       const nextCursor = encodeUsageCursor({
         axis: LEDGER_CURSOR_AXIS,
         label: lastShown.label,
         cost: lastShown.cost,
-        asOf: maxUpdatedAt(matches),
+        asOf: nextAsOf,
+        tiedAtAsOf: findUsageCursorTies(entries, LEDGER_CURSOR_AXIS, lastShown, nextAsOf),
       });
       lines.push(
         `  …（残り ${rest} 件は出していない。self_status の ledgerCursor=${nextCursor} で続きが出る）`,
@@ -13049,11 +13055,13 @@ function renderLedgerCrossReference(
   if (entries.length > USAGE_AXIS_LIMIT) {
     // **打ち切りの行がそのまま次に打つ手を書く**（`usage_read` と同じ。#1638）。
     const lastShown = entries[USAGE_AXIS_LIMIT - 1]!;
+    const nextAsOf = maxUpdatedAt(matches);
     const nextCursor = encodeUsageCursor({
       axis: LEDGER_CURSOR_AXIS,
       label: lastShown.label,
       cost: lastShown.cost,
-      asOf: maxUpdatedAt(matches),
+      asOf: nextAsOf,
+      tiedAtAsOf: findUsageCursorTies(entries, LEDGER_CURSOR_AXIS, lastShown, nextAsOf),
     });
     lines.push(
       `  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない。` +
