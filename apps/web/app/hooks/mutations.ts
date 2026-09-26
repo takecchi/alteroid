@@ -168,16 +168,43 @@ export function useDeletePractice() {
   );
 }
 
-/** 承認待ちに答える。 */
+/**
+ * 承認待ちに答える。
+ *
+ * **成功でも失敗でも一覧を取り直す（issue #1619）。** 個別に答える経路は、
+ * 裏で先に片付いている（クローンが `approval_withdraw` で取り下げた・別の
+ * タブや CLI が先に答えた）と 409（`withdrawn` / `already answered`）を
+ * 返す——`unwrap` がそこで例外を投げて抜けると、取り直しに一度も届かない
+ * ままカードが「未回答」の見た目で残ってしまう。**409 に限らず失敗全般を
+ * 対象にした**——ネットワーク断のように取り直し自体も届かない失敗を除けば、
+ * どの失敗でも「サーバ側の実際の状態」を見に行くほうが安全側であり、
+ * `useAnswerApprovals`（まとめ送信。1件が駄目でも200で進む）と同じ「答えの
+ * 成否に関わらず取り直す」という筋を個別送信にも揃えるだけである。
+ *
+ * **取り直し自体が失敗しても、元の失敗を上書きしない。** オフラインのように
+ * 答えの送信そのものが届かなかった場合、取り直しの GET も同じ理由で失敗
+ * しうる——そのときは呼び出し側（`ApprovalCard.submit` の `catch`）へ伝える
+ * のは「なぜ答えられなかったか」であって「なぜ取り直せなかったか」ではない。
+ */
 export function useAnswerApproval() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
     async (id: string, answer: string) => {
-      await api.api
-        .POST('/approvals/{id}/answer', { params: { path: { id } }, body: { answer } })
-        .then(unwrap);
-      await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
+      let answerError: unknown;
+      try {
+        await api.api
+          .POST('/approvals/{id}/answer', { params: { path: { id } }, body: { answer } })
+          .then(unwrap);
+      } catch (caught) {
+        answerError = caught;
+      }
+      try {
+        await Promise.all([mutate(KEY.approvals(true)), mutate(KEY.approvals(false))]);
+      } catch (refreshError) {
+        if (answerError === undefined) throw refreshError;
+      }
+      if (answerError !== undefined) throw answerError;
     },
     [api, mutate],
   );
