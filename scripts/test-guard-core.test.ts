@@ -9,6 +9,7 @@ import {
   EXIT_OBSERVATION_DUE,
   EXIT_OBSERVATION_UNDECLARED,
   EXIT_SCAN_EMPTY,
+  EXIT_SCOPE_VIOLATION,
   EXIT_STATIC_SKIP,
   EXIT_UNKNOWN,
   EXIT_ZERO_PASSED,
@@ -27,6 +28,7 @@ import {
   parsePassedCount,
   readIncludeGlobs,
   readObservationDeclaration,
+  resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
@@ -113,6 +115,108 @@ describe('dropBareDashDash（pnpm 経由の素の `--` を vitest へ渡す前�
   it('`--` が途中や複数回に現れても、素の `--` 要素だけを全部落とす（splitVerifyArgs と同じ規則）', () => {
     expect(dropBareDashDash(['a.test.ts', '--', '--bail', '--'])).toEqual(['a.test.ts', '--bail']);
   });
+});
+
+/**
+ * `resolveScopedArgs`（#1691）。
+ *
+ * すべてのケースで `dropBareDashDash` を先に通してから渡す——実際の呼び出し順
+ * （`test.mjs` の `main()`）と揃える。`cwd` はパッケージのディレクトリを想定
+ * （`process.cwd()` が呼び出し形にかかわらず安定していることは、`INIT_CWD` との
+ * 比較実測（PR 本文）で確かめた——`pnpm --filter <pkg> test` では `INIT_CWD` が
+ * repo の根になり、`cd <pkg> && pnpm test` では `INIT_CWD` がパッケージの
+ * ディレクトリになって**割れる**が、`process.cwd()` はどちらでもパッケージの
+ * ディレクトリで一致する）。
+ */
+describe('resolveScopedArgs（パッケージの範囲を named 引数で渡す。#1691）', () => {
+  const cwd = '/repo/apps/cli';
+  const repoRoot = '/repo';
+  const scope = 'apps/cli/src';
+
+  it('(a) 範囲だけ（利用者の位置引数が無い）⟹ 範囲そのものが唯一のフィルタになる', () => {
+    const result = resolveScopedArgs(dropBareDashDash(['--root=../..', `--scope=${scope}`]), {
+      cwd,
+      repoRoot,
+    });
+    expect(result).toEqual({ ok: true, args: ['--root=../..', scope] });
+  });
+
+  it('(b) パッケージのディレクトリからの相対パスの1ファイル ⟹ そのファイルだけに絞られる（repo根からのパスへ直る）', () => {
+    const result = resolveScopedArgs(
+      dropBareDashDash(['--root=../..', `--scope=${scope}`, 'src/interrupt.test.ts']),
+      { cwd, repoRoot },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+
+  it('(c) 範囲の外を指す位置引数 ⟹ 断る（EXIT_SCOPE_VIOLATION。黙って全体を走らせない）', () => {
+    const result = resolveScopedArgs(
+      dropBareDashDash([
+        '--root=../..',
+        `--scope=${scope}`,
+        '../../packages/core/src/other.test.ts',
+      ]),
+      { cwd, repoRoot },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲外/);
+    expect(result.message).toContain('packages/core/src/other.test.ts');
+  });
+
+  it('(d) `--maxWorkers=4 <ファイル>` ⟹ 両方効く（フラグはそのまま、ファイルは範囲内のパスへ直る）', () => {
+    const result = resolveScopedArgs(
+      dropBareDashDash([
+        '--root=../..',
+        `--scope=${scope}`,
+        '--maxWorkers=4',
+        'src/interrupt.test.ts',
+      ]),
+      { cwd, repoRoot },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', '--maxWorkers=4', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+
+  it('(e) 素の `--` を挟んでも同じ結果になる（dropBareDashDash が先に落とすため）', () => {
+    const withDashDash = resolveScopedArgs(
+      dropBareDashDash(['--root=../..', `--scope=${scope}`, '--', 'src/interrupt.test.ts']),
+      { cwd, repoRoot },
+    );
+    const without = resolveScopedArgs(
+      dropBareDashDash(['--root=../..', `--scope=${scope}`, 'src/interrupt.test.ts']),
+      { cwd, repoRoot },
+    );
+    expect(withDashDash).toEqual(without);
+    expect(withDashDash).toEqual({
+      ok: true,
+      args: ['--root=../..', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+
+  it('`--scope` が無ければ何も変えない（root の `pnpm test <パスの一部>` はここを通らない）', () => {
+    const argv = ['apps/cli/src/interrupt.test.ts', '--maxWorkers=4'];
+    expect(resolveScopedArgs(argv, { cwd, repoRoot })).toEqual({ ok: true, args: argv });
+  });
+
+  it('`-t <名前>`（空白区切りの値）は位置引数として範囲判定に持ち込まない', () => {
+    const result = resolveScopedArgs(
+      dropBareDashDash(['--root=../..', `--scope=${scope}`, '-t', 'ある名前']),
+      { cwd, repoRoot },
+    );
+    // -t の値以外に利用者の位置引数が無いので、範囲そのものがフィルタに足される
+    // （(a) と同じ既定）。
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', '-t', 'ある名前', scope],
+    });
+  });
+
 });
 
 describe('parseAggregateLines / parsePassedCount', () => {

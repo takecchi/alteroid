@@ -76,17 +76,26 @@ function collectFiles(dir: string, out: string[]): void {
 }
 
 /**
- * `node ../../scripts/test.mjs --root=<...> <path>` の形の script から絞り込み先の
- * パスを取り出す。
+ * `node ../../scripts/test.mjs --root=<...> --scope=<path>` の形の script から
+ * 絞り込み先のパスを取り出す。
  *
  * **#311 でこの形が変わった。** 以前は `vitest run --root=<...> <path>` だったが、
  * `describe.skip` / `it.skip` で全部飛ばしても exit 0 のまま緑になる欠陥を塞ぐため、
  * vitest を直呼びせずラッパ（`scripts/test.mjs`）を経由するようにした
- * （`scripts/test-guard-core.mjs` の doc）。**この歯が見ている3つの性質は変えていない**
- * — script が在るか・自分自身のパッケージを指しているか・絞り込み先にテストが実在するか。
- * 変わったのは、それを読み取る正規表現の形だけである。
+ * （`scripts/test-guard-core.mjs` の doc）。
+ *
+ * **#1691 でさらに変わった。** 範囲を位置引数（`<path>`）ではなく named 引数
+ * （`--scope=<path>`）で渡す形にした——位置引数だと vitest の OR semantics に
+ * 乗ってしまい、利用者が `pnpm test -- <file>` で足した位置引数と範囲の位置
+ * 引数が両方フィルタとして働き、範囲（＝パッケージ全体）のほうが常に一致して
+ * 絞り込みが1つも効かなかった（`scripts/test-guard-core.mjs` の
+ * `resolveScopedArgs` の doc）。
+ *
+ * **この歯が見ている3つの性質は変えていない** — script が在るか・自分自身の
+ * パッケージを指しているか・絞り込み先にテストが実在するか。変わったのは、
+ * それを読み取る正規表現の形だけである。
  */
-const TEST_SCRIPT_SHAPE = /^node \.\.\/\.\.\/scripts\/test\.mjs --root=\S+\s+(\S+)$/;
+const TEST_SCRIPT_SHAPE = /^node \.\.\/\.\.\/scripts\/test\.mjs --root=\S+ --scope=(\S+)$/;
 
 const workspaceDirs = expandWorkspaceDirs(readWorkspaceGlobs());
 
