@@ -1106,6 +1106,10 @@ describe('#1605: stop() 自身の畳みの途中でもう一本 stop()/shutdown(
 
     const transcriptPath = join(dir, 'transcript-1605-a.jsonl');
     writeFileSync(transcriptPath, '#1605 の生ログ本文（stop 二重呼び）', 'utf8');
+    // `say()` で本文を積んでおく——`#flushUnreported` は `hasSaid` が
+    // false だと report を1件も出さない（doc「空なら1件も出さない」）ので、
+    // 積んでおかないと report の有無で直し前後を区別できない。
+    await session.say('畳まれる前に喋った本文');
     await session.postToolUse({
       tool_name: 'Bash',
       tool_input: {},
@@ -1161,6 +1165,8 @@ describe('#1605: stop() 自身の畳みの途中でもう一本 stop()/shutdown(
 
     const transcriptPath = join(dir, 'transcript-1605-b.jsonl');
     writeFileSync(transcriptPath, '#1605 の生ログ本文（shutdown）', 'utf8');
+    // 上のテストと同じ理由（`#flushUnreported` の `hasSaid` 門）。
+    await session.say('畳まれる前に喋った本文');
     await session.postToolUse({
       tool_name: 'Bash',
       tool_input: {},
