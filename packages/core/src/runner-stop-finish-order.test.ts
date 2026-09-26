@@ -114,6 +114,13 @@ interface FakeSession {
    * 「`#finish('lost', …)` が完了する前に `stop()` が割り込む」窓を作る。
    */
   resultFailed(text: string, subtype?: string): void;
+  /**
+   * **Issue #1602 専用。** `#flushUsage()` が読みに行く control channel の
+   * usage 応答を、`releaseUsage()` を呼ぶまで解決させない——`#finish()` の
+   * 最初の await（`await this.#flushUsage()`）でその場に止めておくための
+   * ゲート。`testOptions.deferUsage` が立っているときだけ効く。
+   */
+  releaseUsage(): void;
 }
 
 /**
@@ -126,10 +133,15 @@ interface FakeSession {
  *   `Options`）と同じ名前にすると後者にシャドウされて無効化されるため**
  *   （実装中に一度その事故を踏んで直した——`options` という名前は下で
  *   `const options = params.options ?? {};` として再定義される）。
+ * @param testOptions.deferUsage **Issue #1602 専用。** `true` なら
+ *   `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` が
+ *   `FakeSession#releaseUsage()` を呼ぶまで解決しない——`#finish()` の最初の
+ *   await（`#flushUsage()`）の途中で止めるためのゲート。既定 (`false`) は
+ *   他のテストと同じ「即座に解決する」動き。
  */
 function fakeSdk(
   onClose: () => void,
-  testOptions: { deferCloseEnd?: boolean } = {},
+  testOptions: { deferCloseEnd?: boolean; deferUsage?: boolean } = {},
 ): { fn: typeof sdkQuery; sessions: FakeSession[] } {
   const sessions: FakeSession[] = [];
   let sayCounter = 0;
@@ -139,6 +151,7 @@ function fakeSdk(
     let emit: ((message: SDKMessage | null) => void) | null = null;
     let fail: ((error: unknown) => void) | null = null;
     const buffered: SDKMessage[] = [];
+    const usageResolvers: Array<() => void> = [];
 
     const push = (message: SDKMessage | null) => {
       if (emit) {
@@ -216,6 +229,10 @@ function fakeSdk(
           uuid: 'uuid-result-failed',
         } as unknown as SDKMessage);
       },
+      releaseUsage() {
+        const resolve = usageResolvers.shift();
+        if (resolve) resolve();
+      },
     };
     sessions.push(session);
 
@@ -260,30 +277,40 @@ function fakeSdk(
       // は「全部ゼロなら降ろさない」ので、これが無いと `usage` が1本も
       // timeline に乗らない（`usage-flush.test.ts` の `getUsageResponse` と
       // 同じ形）。
-      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
-        session: {
-          total_cost_usd: 0.1,
-          total_api_duration_ms: 0,
-          total_duration_ms: 0,
-          total_lines_added: 0,
-          total_lines_removed: 0,
-          model_usage: {
-            'claude-opus-4-8': {
-              inputTokens: 10,
-              outputTokens: 10,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
-              webSearchRequests: 0,
-              costUSD: 0.1,
-              contextWindow: 200_000,
-              maxOutputTokens: 64_000,
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => {
+        // **Issue #1602 のゲート。** `#flushUsage()`（`#finish()` の最初の
+        // await）をここで足止めする——`FakeSession#releaseUsage()` が呼ばれる
+        // まで解決しない。
+        if (testOptions.deferUsage) {
+          await new Promise<void>((resolve) => {
+            usageResolvers.push(resolve);
+          });
+        }
+        return {
+          session: {
+            total_cost_usd: 0.1,
+            total_api_duration_ms: 0,
+            total_duration_ms: 0,
+            total_lines_added: 0,
+            total_lines_removed: 0,
+            model_usage: {
+              'claude-opus-4-8': {
+                inputTokens: 10,
+                outputTokens: 10,
+                cacheReadInputTokens: 0,
+                cacheCreationInputTokens: 0,
+                webSearchRequests: 0,
+                costUSD: 0.1,
+                contextWindow: 200_000,
+                maxOutputTokens: 64_000,
+              },
             },
           },
-        },
-        subscription_type: 'max',
-        rate_limits_available: false,
-        rate_limits: null,
-      }),
+          subscription_type: 'max',
+          rate_limits_available: false,
+          rate_limits: null,
+        };
+      },
     }) as unknown as Query;
   }) as unknown as typeof sdkQuery;
 
@@ -952,6 +979,96 @@ describe('#1597: resume 直後に結果なし result（unresumable）と stop() 
 
     // stop() は host.list() からセッションを消し終えている。
     expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(false);
+  });
+});
+
+/**
+ * **Issue #1602 の再現。** `#finish()` は1行目で同期的に `this.#stopped = true`
+ * を立ててから、await を挟みつつ畳む（`#flushUsage` → … → `query.close()` →
+ * `#shipArchive` → `#flushUnreported` → `closed` の emit → `#onClosed()`）。
+ * `stop()` は入口の `if (this.#stopped) return;` で抜けるだけなので、
+ * **`#finish()` が走り始めた後に `stop()` が来ると、`stop()` は畳み終わりを
+ * 待たずにすぐ返る。** 畳むのは、まだ途中の `#finish()` に任されたままになる。
+ *
+ * `#finish` に入る経路は、ストリームの自然終了（`session.end()`。この
+ * ファイルの「経路B」——`result` を伴わずに `for await` がそのまま抜けて
+ * `#finish('done', …)` へ落ちる）を代表にする。`#finish()` の最初の await
+ * （`#flushUsage()` が読む usage 応答）を `deferUsage` ゲートで足止めし、
+ * その間に `host.stop()` を呼ぶ——Issue 本文の再現条件（「`#finish()` が
+ * 走り始めた後に `stop()` が来る」）そのものである。
+ *
+ * ## 直す前と直した後
+ *
+ * - **直す前（`stop()` が `#finishing` を待たない）**: `stop()` は
+ *   `#flushUsage` のゲートを解く前に解決してしまう——`closed` の emit
+ *   （(a)(b)）にも `#shipArchive`（(c)）にも先んじる。下の
+ *   `expect(stopSettled).toBe(false)` がここで落ちる（赤）。
+ * - **直した後（`stop()` が畳み中の `#finish()` を await してから返る）**:
+ *   `stop()` はゲートを解くまで解決しない。解いた後は、`closed` の emit・
+ *   `archive` の emit（`#shipArchive`）のどちらも `stop()` の解決より前に
+ *   済んでいる。
+ */
+describe('#1602: #finish() が畳んでいる間に stop() が来ると、待たずに戻ってしまう（再現）', () => {
+  it('(a)(b)(c) stop() は #finish() の畳み終わり（closed の emit・#shipArchive）を待ってから解決する', async () => {
+    const s = setup({ deferUsage: true });
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+
+    const transcriptPath = join(dir, 'transcript-1602.jsonl');
+    writeFileSync(transcriptPath, '#1602 の生ログ本文', 'utf8');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    s.resetTimeline();
+
+    // 経路B（自然終了）: `for await` がそのまま抜けて `#finish('done', …)` へ
+    // 落ちる。`#finish` は1行目で `#stopped = true` を立てた直後、
+    // `#flushUsage()` の usage 応答待ちで（`deferUsage` ゲートにより）止まる。
+    session.end();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // sanity: この時点ではまだ何も畳み終わっていない。
+    expect(s.timeline.some((l) => l.startsWith('emit:closed'))).toBe(false);
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(false);
+
+    // `#finish()` が `#flushUsage` の途中で止まっている間に `stop()` を呼ぶ
+    // ——Issue 本文の再現条件そのもの。
+    const stopPromise = s.host.stop('mgr-1');
+    let stopSettled = false;
+    void stopPromise.then(
+      () => {
+        stopSettled = true;
+      },
+      () => {
+        stopSettled = true;
+      },
+    );
+
+    // ゲートを解く前——一呼吸置いて、stop() がまだ解決していないことを見る。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // (a) stop() の解決は、#finish() が畳み終わる（closed の emit・onClosed）
+    //     より先に来てはいけない——直す前はここが赤くなる
+    //     （`stop()` が即座に解決してしまうため）。
+    expect(stopSettled).toBe(false);
+    expect(s.timeline.some((l) => l.startsWith('emit:closed'))).toBe(false);
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(true);
+
+    // usage のゲートを解いて `#finish()` を完了させる。
+    session.releaseUsage();
+    await stopPromise;
+
+    // (b) stop() が解決した後で closed が出るのではなく、解決した時点で
+    //     既に出ている（stop() が畳み終わりを見届けてから返る）。
+    expect(s.timeline.some((l) => l.startsWith('emit:closed'))).toBe(true);
+    // (c) #shipArchive（archive の emit）も、stop() の解決より前に走っている。
+    expect(s.timeline.some((l) => l.startsWith('emit:archive'))).toBe(true);
+    expect(stopSettled).toBe(true);
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(false);
+
+    console.log('#1602 timeline:', JSON.stringify(s.timeline));
   });
 });
 
