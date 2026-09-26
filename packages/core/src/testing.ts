@@ -625,6 +625,25 @@ export function createMemoryStores(): Stores {
     async remove(kind) {
       schedules.delete(kind);
     },
+    async editRequest(kind, changes, updatedAt) {
+      // fs / pg と同じ形（Issue #1654）——現在値（この in-memory 実装では常に
+      // 最新の `Map` の値そのもの）から `pendingRun` / `lastRunAt` /
+      // `lastScheduledRunAt` / `createdAt` を引き継ぐ。プロセス内の `Map` は
+      // 同期アクセスなので、fs の `withPathLock` / pg の `for update` に相当する
+      // 排他は要らない——読みと書きの間に他の呼び出しが割り込む隙間が無い。
+      const found = schedules.get(kind);
+      if (!found) return null;
+      // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652 と
+      // 同じ理由）。
+      const next = scheduledRequestSchema.parse({
+        ...found,
+        request: changes.request,
+        spec: changes.spec,
+        updatedAt,
+      });
+      schedules.set(kind, next);
+      return isolate(next);
+    },
     async claimRun(kind, expectedUpdatedAt, at, cause) {
       const existing = schedules.get(kind);
       // 消された・書き換わったなら古い本文で動かさない

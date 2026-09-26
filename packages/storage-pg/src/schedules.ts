@@ -1,5 +1,5 @@
 import { schedulePhaseSchema, scheduledRequestSchema } from '@alteroid/core';
-import type { SchedulePhase, ScheduleStore, ScheduledRequest } from '@alteroid/core';
+import type { SchedulePhase, ScheduleSpec, ScheduleStore, ScheduledRequest } from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -84,6 +84,48 @@ export class PgScheduleStore implements ScheduleStore {
 
   async remove(kind: string): Promise<void> {
     await this.#db.delete(schedules).where(eq(schedules.kind, kind));
+  }
+
+  /**
+   * `request` / `spec` だけを差し替える（Issue #1654。`ScheduleStore.editRequest`
+   * の doc）。**`claimRun` と同じ形——`for update` で押さえてから読み直した現在値
+   * を引き継ぐ**ので、`pendingRun` / `lastRunAt` / `lastScheduledRunAt` は読んでから
+   * 書くまでの間に割り込まれても消えない。`updatedAt` はここで進める（本文の編集
+   * そのものなので、`claimRun` と違って版を動かしてよい——動かすべきである）。
+   */
+  async editRequest(
+    kind: string,
+    changes: { readonly request: string; readonly spec: ScheduleSpec },
+    updatedAt: string,
+  ): Promise<ScheduledRequest | null> {
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ plan: schedules.plan })
+        .from(schedules)
+        .where(eq(schedules.kind, kind))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      // 消されていた。編集する対象が無い——呼び出し側は `put()` で新規に作る。
+      if (row === undefined) return null;
+
+      const plan = parsePlan(kind, row.plan);
+      const next = stripNulls(
+        scheduledRequestSchema.parse({
+          ...plan,
+          request: changes.request,
+          spec: changes.spec,
+          updatedAt,
+        }),
+      );
+
+      await tx
+        .update(schedules)
+        .set({ updatedAt: new Date(updatedAt), plan: next })
+        .where(eq(schedules.kind, kind));
+
+      return next;
+    });
   }
 
   /**
