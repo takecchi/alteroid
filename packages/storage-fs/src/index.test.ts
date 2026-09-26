@@ -2959,6 +2959,50 @@ describe('FsTranscriptArchive', () => {
     expect(await stores.archive.remove('../../etc/passwd')).toEqual({ kind: 'missing' });
   });
 
+  /**
+   * **issue #1635。**
+   *
+   * `'/'` を含む id は上の2本が防いでいたが、`'.'` / `'..'` 単体は
+   * `sanitize()`（`[^A-Za-z0-9._-]` だけを `_` へ潰す——`.` と `-` は
+   * そのまま素通りする）による同一性チェックでは弾けなかった。
+   * `join(this.#dir, '..')` は archive ディレクトリの1つ上（本番では
+   * `ALTEROID_HOME`）を指し、`read()` は `ENOENT` だけを missing へ変換
+   * するのでディレクトリを開こうとした実際のエラー（`EISDIR`）はそのまま
+   * 投げられ、`GET /archive/:id` のハンドラ（try/catch を持たない）を
+   * 通って 500 になっていた。
+   *
+   * いまは `resolve()` した実パスが archive ディレクトリの直下に収まって
+   * いるかで判定する（`isWithinArchiveDir`）——`.`/`..` を含め、境界の外を
+   * 指す id はすべて `missing` になる。
+   */
+  it('id === "." / ".." も missing になる（issue #1635）', async () => {
+    await stores.archive.archive('session-unrelated', 'x\n');
+
+    expect(await stores.archive.read('.')).toEqual({ kind: 'missing' });
+    expect(await stores.archive.read('..')).toEqual({ kind: 'missing' });
+    expect(await stores.archive.readTail('.', 10)).toEqual({ kind: 'missing' });
+    expect(await stores.archive.readTail('..', 10)).toEqual({ kind: 'missing' });
+  });
+
+  /**
+   * **issue #1635（remove の副作用）。**
+   *
+   * 直す前は `remove('..')` が「missing」を返す前に副作用を残していた——
+   * `stat()` はディレクトリでも成功するので通り抜け、印ファイル
+   * （`archive/...removed`）を実際に書き込んでから、最後の
+   * `writeFile(filePath, '', 'utf8')`（filePath = archive の1つ上）で
+   * `EISDIR` を投げていた。missing で断るなら、何も書き込まずに断ること。
+   */
+  it('remove("..") は missing を返し、archive/ 配下に何も書き込まない（副作用なし。issue #1635）', async () => {
+    await stores.archive.archive('session-unrelated', 'x\n');
+    const before = await readdir(join(root, 'archive'));
+
+    expect(await stores.archive.remove('..')).toEqual({ kind: 'missing' });
+
+    const after = await readdir(join(root, 'archive'));
+    expect(after).toEqual(before);
+  });
+
   /** 契約（#698）を3実装ぶんの1つとして測る。他は testing.ts / storage-pg。 */
   it('TranscriptArchive の契約を満たす', async () => {
     await verifyTranscriptArchiveContract(stores.archive, {

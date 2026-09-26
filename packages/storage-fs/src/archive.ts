@@ -1,5 +1,5 @@
 import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import {
   MAX_UTF8_BYTES_PER_UTF16_UNIT,
@@ -225,8 +225,15 @@ export class FsTranscriptArchive implements TranscriptArchive {
     );
   }
 
+  /**
+   * `id` はディレクトリ外を指してはいけない（issue #1635）。**判定は
+   * `isWithinArchiveDir`（resolve した実パスが archive ディレクトリの直下に
+   * 収まっているか）で行う**——`'/'` を含む id を弾く旧来の `sanitize(id)
+   * !== id` は `'.'`/`'..'` を素通りさせていた（`sanitize()` の文字クラスが
+   * `.` と `-` を許すため、`'..'` は sanitize しても変わらない）。
+   */
   async read(id: string): Promise<ArchiveRead> {
-    if (sanitize(id) !== id) return { kind: 'missing' };
+    if (!isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
     const marker = await this.#readMarker(id);
     if (marker !== null)
       return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
@@ -274,7 +281,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
         `archive.readTail(): maxChars は正の整数でなければならない（渡された値: ${String(maxChars)}）`,
       );
     }
-    if (sanitize(id) !== id) return { kind: 'missing' };
+    if (!isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
     const marker = await this.#readMarker(id);
     if (marker !== null)
       return { kind: 'removed', removedAt: marker.removedAt, bytes: marker.bytes };
@@ -308,7 +315,7 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * `UPDATE ... WHERE removed_at IS NULL` と同じ理由)。
    */
   async remove(id: string): Promise<ArchiveRemoval> {
-    if (sanitize(id) !== id) return { kind: 'missing' };
+    if (!isWithinArchiveDir(this.#dir, id)) return { kind: 'missing' };
     const existingMarker = await this.#readMarker(id);
     if (existingMarker !== null) {
       return { kind: 'already', removedAt: existingMarker.removedAt, bytes: existingMarker.bytes };
@@ -478,4 +485,35 @@ function fallbackMeta(id: string): ArchiveMeta {
 
 function sanitize(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
+/**
+ * `id` が指す実際のパスが、archive ディレクトリの直下に収まっているか
+ * （issue #1635）。
+ *
+ * **文字クラスでの制限（`sanitize()`）は境界の判定には使わない。** `sanitize()`
+ * は `[^A-Za-z0-9._-]` を `_` へ潰すだけなので、`'/'` を含む id は弾けるが
+ * `'.'` / `'..'` はそのまま素通りする（`.` と `-` を許しているため）。
+ * `resolve()` した結果そのものを比べれば、`sanitize()` の文字クラスを
+ * どう変えても——将来 `.` を許さなくする／許す文字を増やす、どちらの
+ * 変更をしても——境界の判定はそれに引きずられない。
+ *
+ * `resolve(dir, id)` が `resolve(dir)` 自身と一致する（`id === '.'` 等）場合も
+ * 「ディレクトリそのもの」であって「ディレクトリ配下の1ファイル」では
+ * ないので、`false` を返す（`startsWith(resolvedDir + sep)` は一致する
+ * 文字列そのものには真を返さない——境界の `sep` を含めて比べているため）。
+ *
+ * `resolve()` が例外を投げる入力（null バイトを含む文字列等）も、境界の
+ * 外にあるのと同じ扱い（`false`）にする——`sanitize(id) !== id` はこの種の
+ * 入力も暗黙に弾いていたので、その性質を保つ。
+ */
+function isWithinArchiveDir(dir: string, id: string): boolean {
+  let resolvedPath: string;
+  try {
+    resolvedPath = resolve(dir, id);
+  } catch {
+    return false;
+  }
+  const resolvedDir = resolve(dir);
+  return resolvedPath.startsWith(resolvedDir + sep);
 }
