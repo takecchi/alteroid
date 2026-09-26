@@ -12213,6 +12213,24 @@
                           "turnEndTail": {
                             "type": "string"
                           },
+                          "toolUseStallAt": {
+                            "type": "string"
+                          },
+                          "toolUseStallPending": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["id"]
+                            }
+                          },
                           "cwd": {
                             "type": "string"
                           },
@@ -12249,6 +12267,17 @@
                           "lastReportAt": {
                             "type": "string"
                           },
+                          "lastReportStatus": {
+                            "type": "string",
+                            "enum": [
+                              "running",
+                              "waiting_human",
+                              "done",
+                              "failed",
+                              "lost",
+                              "stopped"
+                            ]
+                          },
                           "lastFailure": {
                             "type": "object",
                             "properties": {
@@ -12265,6 +12294,34 @@
                               }
                             },
                             "required": ["code", "via", "at"]
+                          },
+                          "lastUnreported": {
+                            "type": "object",
+                            "properties": {
+                              "reason": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              }
+                            },
+                            "required": ["reason", "at"]
+                          },
+                          "lastFoldedTurn": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              }
+                            },
+                            "required": ["text", "at"]
                           },
                           "lastSystemError": {
                             "type": "object",
@@ -12285,6 +12342,27 @@
                               }
                             },
                             "required": ["code", "at"]
+                          },
+                          "lastCgroupEvents": {
+                            "type": "object",
+                            "properties": {
+                              "pidsMaxDelta": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "oomKillDelta": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              }
+                            },
+                            "required": ["at"]
                           },
                           "usageStoppedAt": {
                             "type": "string",
@@ -12440,6 +12518,77 @@
                               "pool-not-wired",
                               "not-yet-observed",
                               "reattached-across-restart"
+                            ]
+                          },
+                          "resetTimeSkewMatch": {
+                            "type": "string",
+                            "enum": ["active", "stale"]
+                          },
+                          "lastUnpushedWorkObservation": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "observed"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  "cwd": {
+                                    "type": "string"
+                                  },
+                                  "worktrees": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "relativePath": {
+                                          "type": "string"
+                                        },
+                                        "branch": {
+                                          "type": ["string", "null"]
+                                        },
+                                        "remoteOrigin": {
+                                          "type": "object",
+                                          "properties": {
+                                            "host": {
+                                              "type": "string"
+                                            },
+                                            "path": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": ["host", "path"]
+                                        }
+                                      },
+                                      "required": ["relativePath", "branch"]
+                                    }
+                                  }
+                                },
+                                "required": ["kind", "at", "cwd", "worktrees"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  "reason": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "at", "reason"]
+                              }
                             ]
                           },
                           "waiting": {
@@ -12624,6 +12773,24 @@
                         "turnEndTail": {
                           "type": "string"
                         },
+                        "toolUseStallAt": {
+                          "type": "string"
+                        },
+                        "toolUseStallPending": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id"]
+                          }
+                        },
                         "cwd": {
                           "type": "string"
                         },
@@ -12660,6 +12827,10 @@
                         "lastReportAt": {
                           "type": "string"
                         },
+                        "lastReportStatus": {
+                          "type": "string",
+                          "enum": ["running", "waiting_human", "done", "failed", "lost", "stopped"]
+                        },
                         "lastFailure": {
                           "type": "object",
                           "properties": {
@@ -12676,6 +12847,34 @@
                             }
                           },
                           "required": ["code", "via", "at"]
+                        },
+                        "lastUnreported": {
+                          "type": "object",
+                          "properties": {
+                            "reason": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            }
+                          },
+                          "required": ["reason", "at"]
+                        },
+                        "lastFoldedTurn": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            }
+                          },
+                          "required": ["text", "at"]
                         },
                         "lastSystemError": {
                           "type": "object",
@@ -12696,6 +12895,27 @@
                             }
                           },
                           "required": ["code", "at"]
+                        },
+                        "lastCgroupEvents": {
+                          "type": "object",
+                          "properties": {
+                            "pidsMaxDelta": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "oomKillDelta": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            }
+                          },
+                          "required": ["at"]
                         },
                         "usageStoppedAt": {
                           "type": "string",
@@ -12851,6 +13071,77 @@
                             "pool-not-wired",
                             "not-yet-observed",
                             "reattached-across-restart"
+                          ]
+                        },
+                        "resetTimeSkewMatch": {
+                          "type": "string",
+                          "enum": ["active", "stale"]
+                        },
+                        "lastUnpushedWorkObservation": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "observed"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "cwd": {
+                                  "type": "string"
+                                },
+                                "worktrees": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "relativePath": {
+                                        "type": "string"
+                                      },
+                                      "branch": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "remoteOrigin": {
+                                        "type": "object",
+                                        "properties": {
+                                          "host": {
+                                            "type": "string"
+                                          },
+                                          "path": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["host", "path"]
+                                      }
+                                    },
+                                    "required": ["relativePath", "branch"]
+                                  }
+                                }
+                              },
+                              "required": ["kind", "at", "cwd", "worktrees"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "unavailable"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["kind", "at", "reason"]
+                            }
                           ]
                         },
                         "waiting": {
