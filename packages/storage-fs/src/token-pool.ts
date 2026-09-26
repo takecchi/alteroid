@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 
 import {
   activeAgentTokenSchema,
-  cooldownSourceSchema,
+  agentTokenSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationSettingsSchema,
   type ActiveAgentToken,
@@ -20,37 +20,24 @@ import { withPathLock } from './file-lock.js';
  * 認証トークンのプールの正本を持つ行のスキーマ。**`value` は素の文字列のまま
  * 保存する**——ここが正本を持つ唯一の場所であり、値を持たない顔（`AgentTokenView`）
  * は上の層（`token-pool-service.ts`）が作る。
+ *
+ * **本体は `@alteroid/core` の `agentTokenSchema`（issue #1652）。** 書き込み
+ * 時の検査（`order: z.number().int()` 等）は3実装（fs / pg / インメモリ）で
+ * 共有するためそちらへ移した——ここで `.extend()` しているのは、`source` だけ
+ * fs のファイル形式特有の事情（下のコメント）があるためである。
  */
-const agentTokenRowSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  value: z.string().optional(),
+const agentTokenRowSchema = agentTokenSchema.extend({
   /**
    * **`'env'` も読めるようにしてある（書けない）。** 器の環境変数
    * （`CLAUDE_CODE_OAUTH_TOKEN`）を指す行という概念は廃止したので、新しく
    * `'env'` の行を書く経路はもう無い（`@alteroid/core` の `AgentToken.source`
-   * は `'stored'` しか持たない）。**それでも過去にこの機構が書いた行が
-   * ファイルに残っていることがある**——読めなければ `fileSchema.parse` が
-   * ファイル全体を落としてしまうので、読めることだけは残し、`list()` 側で
-   * 読み捨てる（値を持たない行なので、そのまま渡すと `credentialOf` が壊れる）。
+   * は `'stored'` しか持たない——`agentTokenSchema` も同じく `'stored'` しか
+   * 通さない）。**それでも過去にこの機構が書いた行がファイルに残っている
+   * ことがある**——読めなければ `fileSchema.parse` がファイル全体を
+   * 落としてしまうので、読めることだけは残し、`list()` 側で読み捨てる
+   * （値を持たない行なので、そのまま渡すと `credentialOf` が壊れる）。
    */
   source: z.enum(['stored', 'env']).optional(),
-  order: z.number().int(),
-  disabledAt: z.string().optional(),
-  cooldownUntil: z.number().optional(),
-  /**
-   * 冷却の期限の出所（#683。`@alteroid/core` の `CooldownSource`）。
-   *
-   * **無い行が在る**（#683 より前に書かれたファイル）。**既定値を持たせない**
-   * ——`default` で埋めると「推測だと観測した」という嘘になる。
-   */
-  cooldownSource: cooldownSourceSchema.optional(),
-  lastRejectedAt: z.string().optional(),
-  lastRejectedReason: z.string().optional(),
-  invalidatedAt: z.string().optional(),
-  invalidatedReason: z.string().optional(),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
 });
 
 const fileSchema = z.object({

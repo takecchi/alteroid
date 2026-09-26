@@ -164,6 +164,7 @@ import {
   formatAppraisalDecision,
   jobStatusSchema,
   memorySlugSchema,
+  practiceSlugSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
 } from './schema.js';
@@ -6268,6 +6269,11 @@ export function createCloneTools(context: ToolContext) {
           .describe('この依頼の名前（英小文字・数字・. _ -）。後から直す・消すときの識別子'),
         request: z
           .string()
+          // **issue #1651。** HTTP の `scheduleBody`（`apps/daemon/src/app.ts`）と
+          // 揃える——空文字はここで弾く。無いと保存層（fs / pg の
+          // `scheduledRequestSchema.parse(entry)`）まで届いてから ZodError が
+          // 素で投げられ、クローンには読めない例外になる。
+          .min(1)
           .describe(
             '依頼の本文。時刻が来たときのあなたが読んで、そのまま動ける粒度で書く' +
               '（対象・狙い・どこまでやるか。人間から頼まれた言葉そのものも残すとよい）',
@@ -8188,6 +8194,14 @@ export function createCloneTools(context: ToolContext) {
           .describe('省略時はいまの本文。指定すると practice_history にある過去の版を読む'),
       },
       async ({ slug, version }) => {
+        // **issue #1651。** HTTP の `GET /practices/:slug` と同じ門——
+        // `practiceSlugSchema` に落ちるスラッグはここで断る。ここが無いと、
+        // pg の `PgPracticeStore#slug()` が `Error: やり方のスラッグが不正: …`
+        // を素で投げ、クローンには読めない例外になる（fs / インメモリは検査を
+        // 持たないので「無い」として扱ってしまい、器によって結果が違ってしまう）。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         if (version !== undefined) {
           const found = await stores.practices.readVersion(slug, version);
           if (found === null) {
@@ -8240,6 +8254,10 @@ export function createCloneTools(context: ToolContext) {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
       },
       async ({ slug }) => {
+        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const versions = await stores.practices.listVersions(slug);
         if (versions.length === 0) {
           return text(
@@ -8288,6 +8306,11 @@ export function createCloneTools(context: ToolContext) {
         content: z.string().describe('本文（人間もこのまま読む。Markdown を想定）'),
       },
       async ({ slug, kind, title, content }) => {
+        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
+        // `PUT /practices/:slug`（HTTP）も書く前に同じ検査を通す。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const before = await stores.practices.read(slug);
         const written = await stores.practices.write({ slug, kind, title, content });
         await appendJournalOrThrow(
@@ -8325,6 +8348,10 @@ export function createCloneTools(context: ToolContext) {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
       },
       async ({ slug }) => {
+        // **issue #1651。** `practice_read` と同じ門（doc はそちらにある）。
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
+        }
         const before = await stores.practices.read(slug);
         await stores.practices.remove(slug);
         // **無かったときは日誌を書かない。** 何も起きていないのに「消した」という

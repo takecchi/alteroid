@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createMemoryStores } from './testing.js';
 import {
@@ -374,5 +374,80 @@ describe('practice_* — 仕事のやり方を器に持つ道具（#1055 段3②
     // 二度目も落ちない。
     const again = await h.call('practice_remove', { slug: 'ghost' });
     expect(again).toContain('もともと無かった');
+  });
+
+  // --- 形式不正な slug（issue #1651） ---------------------------------------
+  //
+  // `practiceSlugSchema` に落ちる形式不正な slug（例: 空白入り）を渡したとき、
+  // 3つの実装（インメモリ・fs・pg）は食い違っていた——pg は `#slug()` で
+  // `Error: やり方のスラッグが不正: …` を素で投げ、インメモリ/fs は検査を
+  // 持たないので「無い」として扱っていた（`practice_write` だけは
+  // `practiceSchema.parse()` を経由するので、どの実装でも同じ ZodError を
+  // 投げていた）。HTTP（`GET/PUT/DELETE /practices/:slug`）は
+  // `practiceSlugSchema.safeParse` で先に断って 400 を返す——ここではそれと
+  // 同じ門を道具の側にも足し、**保存層へ触れる前に**断る。
+  //
+  // ここではインメモリ実装に対して確かめる（`vi.spyOn` で保存層の呼び出し
+  // そのものを観測できるのはここだけ——fs / pg は本物の I/O なので、
+  // 「呼ばれたら何が起きるか」ではなく「呼ばれていないか」を直接見るには
+  // スパイが要る）。fs / pg に対する同じ入力の確認は
+  // `packages/storage-fs/src/practice-tool-slug-validation.test.ts` /
+  // `packages/storage-pg/src/practice-tool-slug-validation.test.ts` に置く。
+  describe('形式不正な slug は保存層を呼ぶ前に断る（issue #1651）', () => {
+    const invalidSlug = 'Invalid Slug!';
+
+    it('practice_read: read() も readVersion() も呼ばずに「スラッグが不正」と返す', async () => {
+      const h = harness();
+      const readSpy = vi.spyOn(h.stores.practices, 'read');
+      const readVersionSpy = vi.spyOn(h.stores.practices, 'readVersion');
+
+      const body = await h.call('practice_read', { slug: invalidSlug });
+      expect(body).toContain('スラッグが不正');
+      expect(body).toContain(invalidSlug);
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(readVersionSpy).not.toHaveBeenCalled();
+
+      // version 付きの呼び出しでも同じ門を通る（readVersion() へも到達しない）。
+      const withVersion = await h.call('practice_read', { slug: invalidSlug, version: 1 });
+      expect(withVersion).toContain('スラッグが不正');
+      expect(readVersionSpy).not.toHaveBeenCalled();
+    });
+
+    it('practice_history: listVersions() を呼ばずに「スラッグが不正」と返す', async () => {
+      const h = harness();
+      const spy = vi.spyOn(h.stores.practices, 'listVersions');
+
+      const body = await h.call('practice_history', { slug: invalidSlug });
+      expect(body).toContain('スラッグが不正');
+      expect(body).toContain(invalidSlug);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('practice_remove: read() も remove() も呼ばずに「スラッグが不正」と返す', async () => {
+      const h = harness();
+      const readSpy = vi.spyOn(h.stores.practices, 'read');
+      const removeSpy = vi.spyOn(h.stores.practices, 'remove');
+
+      const body = await h.call('practice_remove', { slug: invalidSlug });
+      expect(body).toContain('スラッグが不正');
+      expect(body).toContain(invalidSlug);
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(removeSpy).not.toHaveBeenCalled();
+    });
+
+    it('practice_write: write() を呼ばずに「スラッグが不正」と返す（以前はここだけ zod の例外が素で投げられていた）', async () => {
+      const h = harness();
+      const writeSpy = vi.spyOn(h.stores.practices, 'write');
+
+      const body = await h.call('practice_write', {
+        slug: invalidSlug,
+        kind: '調査',
+        title: '題',
+        content: '本文',
+      });
+      expect(body).toContain('スラッグが不正');
+      expect(body).toContain(invalidSlug);
+      expect(writeSpy).not.toHaveBeenCalled();
+    });
   });
 });

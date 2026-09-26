@@ -87,6 +87,12 @@ catalogs:
     lucide-react:
       specifier: ^1.31.0
       version: 1.48.0
+    mdast-util-gfm:
+      specifier: ^3.1.0
+      version: 3.1.0
+    micromark-extension-gfm:
+      specifier: ^3.0.0
+      version: 3.0.0
     openapi-fetch:
       specifier: ^0.17.0
       version: 0.17.0
@@ -120,9 +126,6 @@ catalogs:
     remark-breaks:
       specifier: ^4.0.0
       version: 4.0.0
-    remark-gfm:
-      specifier: ^4.0.1
-      version: 4.0.1
     shadcn:
       specifier: ^4.18.0
       version: 4.21.0
@@ -332,6 +335,12 @@ importers:
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
+      mdast-util-gfm:
+        specifier: 'catalog:'
+        version: 3.1.0(supports-color@10.2.2)
+      micromark-extension-gfm:
+        specifier: 'catalog:'
+        version: 3.0.0
       radix-ui:
         specifier: 'catalog:'
         version: 1.6.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -350,9 +359,6 @@ importers:
       remark-breaks:
         specifier: 'catalog:'
         version: 4.0.0
-      remark-gfm:
-        specifier: 'catalog:'
-        version: 4.0.1(supports-color@10.2.2)
       shadcn:
         specifier: 'catalog:'
         version: 4.21.0(supports-color@10.2.2)(typescript@6.0.3)
@@ -4636,17 +4642,11 @@ packages:
   remark-breaks@4.0.0:
     resolution: {integrity: sha512-IjEjJOkH4FuJvHZVIW0QCDWxcG96kCq7An/KVH2NfJe6rKZU2AsHeB3OEjPNRxi4QC34Xdx7I2KGYn6IpT7gxQ==}
 
-  remark-gfm@4.0.1:
-    resolution: {integrity: sha512-1quofZ2RQ9EWdeN34S79+KExV1764+wCUGop5CPL1WGdD0ocPpu91lzPGbwWMECpEpd42kJGQwzRfyov9j4yNg==}
-
   remark-parse@11.0.0:
     resolution: {integrity: sha512-FCxlKLNGknS5ba/1lmpYijMUzX2esxW5xQqjWxw2eHFfS2MSdaHVINFmhjo+qN1WhZhNimq0dZATN9pH0IDrpA==}
 
   remark-rehype@11.1.2:
     resolution: {integrity: sha512-Dh7l57ianaEoIpzbp0PC9UKAdCSVklD8E5Rpw7ETfbTl3FqcOOgq5q2LVDhgGCkaBv7p24JXikPdvhhmHvKMsw==}
-
-  remark-stringify@11.0.0:
-    resolution: {integrity: sha512-1OSmLd3awB/t8qdoEOMazZkNsfVTeY4fTsgzcQFdXNq8ToTN4ZGwrMnlda4K6smTFKD+GRV6O48i6Z4iKgPPpw==}
 
   require-from-string@2.0.2:
     resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
@@ -9380,17 +9380,6 @@ snapshots:
       mdast-util-newline-to-break: 2.0.0
       unified: 11.0.5
 
-  remark-gfm@4.0.1(supports-color@10.2.2):
-    dependencies:
-      '@types/mdast': 4.0.4
-      mdast-util-gfm: 3.1.0(supports-color@10.2.2)
-      micromark-extension-gfm: 3.0.0
-      remark-parse: 11.0.0(supports-color@10.2.2)
-      remark-stringify: 11.0.0
-      unified: 11.0.5
-    transitivePeerDependencies:
-      - supports-color
-
   remark-parse@11.0.0(supports-color@10.2.2):
     dependencies:
       '@types/mdast': 4.0.4
@@ -9407,12 +9396,6 @@ snapshots:
       mdast-util-to-hast: 13.2.1
       unified: 11.0.5
       vfile: 6.0.3
-
-  remark-stringify@11.0.0:
-    dependencies:
-      '@types/mdast': 4.0.4
-      mdast-util-to-markdown: 2.1.2
-      unified: 11.0.5
 
   require-from-string@2.0.2: {}
 

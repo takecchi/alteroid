@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { CGROUP_EVENTS_UNKNOWN_NOTE, formatCgroupEventsNote } from './cgroup-events-format.js';
+
 /**
  * 器の cgroup が持つ「上限に当たって拒んだ／殺した」累計の、委譲が生きていた
  * 間の差分（Issue #1517「最小の形」1）。
@@ -83,36 +85,16 @@ function nonNegativeDeltaOf(
 }
 
 /**
- * D（この軸では判定できなかった）の核となる一文（`system-error.ts` の
- * `SYSTEM_ERROR_UNKNOWN_NOTE` と同じ作法で1箇所にまとめる）。
+ * `CGROUP_EVENTS_UNKNOWN_NOTE` / `formatCgroupEventsNote` の定義そのものは
+ * `cgroup-events-format.ts`（軽い口 `@alteroid/core/cgroup-events-format`。
+ * import を1つも持たない）へ移した。ここは re-export するだけ——既存の
+ * import 元（`tools.ts` の `manager_list` / `manager_report`、
+ * `cgroup-events.test.ts`）を1つも書き換えずに済ませるため。**文言・ロジックは
+ * 1文字も変えていない**（移しただけ。issue #1645 で Web 側がこの2つを
+ * 手で複製していた重複を解消する一環——Web はいまこの軽い口を直接使う。
+ * `apps/web/app/routes/manager-detail.tsx` の doc）。
  */
-export const CGROUP_EVENTS_UNKNOWN_NOTE =
-  'この委譲が走っていた間に器で pids 上限による fork の拒否・OOM kill が起きたかは、この欄では判定できなかった';
-
-/**
- * 差分を、人が読む一文へ整形する。
- *
- * **因果は名乗らない。** ここで言えるのは「同じ時間帯に器でそれが起きた／
- * 起きなかった」までで、「この委譲がそれで落ちた」ではない（#1517 の注意）。
- *
- * **両方が読めて、両方が 0 のときだけ、断定してよい強い言い方をする。** それ
- * 以外（どちらかが正の値・どちらかが読めていない）は、読めた分だけを数で
- * 出し、読めていない軸はそう名乗る——0 と「読めなかった」を混ぜない。
- */
-export function formatCgroupEventsNote(delta: CgroupEventsDelta): string {
-  if (delta.pidsMaxDelta === 0 && delta.oomKillDelta === 0) {
-    return 'この委譲が走っていた間、器で pids 上限による fork の拒否も OOM kill も起きていなかった';
-  }
-  const pidsPart =
-    delta.pidsMaxDelta === undefined
-      ? 'pids 上限による fork 拒否の回数は判定できなかった'
-      : `器で fork が pids 上限により ${delta.pidsMaxDelta} 回断られた`;
-  const oomPart =
-    delta.oomKillDelta === undefined
-      ? 'OOM kill の回数は判定できなかった'
-      : `OOM kill が ${delta.oomKillDelta} 回あった`;
-  return `この委譲が走っていた間 —— ${pidsPart}。${oomPart}`;
-}
+export { CGROUP_EVENTS_UNKNOWN_NOTE, formatCgroupEventsNote };
 
 /**
  * `closed_failed` の受信箱本文へ、`event.cgroupEvents` を運ぶ。

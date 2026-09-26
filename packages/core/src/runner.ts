@@ -903,25 +903,78 @@ class Host implements RunnerHost {
    * `checkFence` が投げ、その時点でまだ何もしていない（`push` を呼ぶ前）ので、
    * 走っているセッションは1文字も影響を受けない。新しい世代なら世代だけ
    * 覚え直し、同じ短絡（作り直さずに一言だけ流す）へそのまま合流する。
+   *
+   * **ただし `alive` が畳み中（`alive.stopping`）なら、この短絡へは合流しない。**
+   * `alive.push(...)` は `RunnerSession#push` の `if (this.#sdkSession.stopped) return;`
+   * で黙って捨てられる——doc の「何もせず追加の一言だけを流す」を守れない。
+   * かといって、待たずにここで新しいセッションを作ってはいけない —
+   * `#onClosed()`（`#create` の `onClosed: () => this.#sessions.delete(managerId)`）
+   * は managerId だけを見て `#sessions` から消すので、畳み終わる前に新しい
+   * セッションを作ってしまうと、遅れて届いた古い畳みの `#onClosed()` が
+   * その新しいセッションを名簿から消してしまう。**だから畳み終わるのを
+   * 待ってから作り直す。**
+   *
+   * 待つ手段は `alive.stop(...)` である——`stop()` は既に畳み中のセッション
+   * に対しては `#stopBody` / `#finishBody` を呼び直さず、走っている畳みの
+   * `#closing` を待ってから返るだけである（Issue #1602 / #1605）。畳みが
+   * 例外で終わっても、待ちたいのは完了そのものであって成否ではないので、
+   * 例外はここで握って先へ進む。
+   *
+   * 待った後は名簿を取り直す。
+   * - **畳み中でない別のセッションが既に居れば**、並行した resume が先に
+   *   作り直していたということなので、そちらの alive の短絡（`push`）に
+   *   合流する（ここで作り直すと同じ managerId のセッションが2本開く）。
+   * - **まだ同じ（畳み済みの）セッションが名簿に残っていれば**、畳みが
+   *   途中の例外で `#onClosed()` まで届かなかった回である——名簿から手で
+   *   取り除いてから作り直す。
+   * - どちらでもなければ（名簿から既に消えていれば）、そのまま「初めて見る
+   *   セッション」の経路（下）へ合流する。
    */
   async resume(command: RunnerResumeCommand): Promise<void> {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
       alive.checkFence(command.lease);
-      if (command.message !== undefined) alive.push(command.message);
-      return;
+      if (!alive.stopping) {
+        if (command.message !== undefined) alive.push(command.message);
+        return;
+      }
+      try {
+        await alive.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
+      } catch {
+        // 待ちたいのは畳みの完了であって成否ではない。ここで投げ直すと
+        // resume 自体が失敗したように見えてしまう。
+      }
+      const afterWait = this.#sessions.get(command.managerId);
+      if (afterWait !== undefined) {
+        if (!afterWait.stopping) {
+          // 並行した resume が先に新しいセッションを作っていた。合流する。
+          if (command.message !== undefined) afterWait.push(command.message);
+          return;
+        }
+        // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
+        // セッションが名簿に残ったままだった。手で取り除いて作り直す。
+        this.#sessions.delete(command.managerId);
+      }
     }
     const session = this.#create(command.managerId, command.request, command.cwd);
     // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
-    // デーモンの再起動後の resume）なので、比べる前の世代が無い。拒む判定は
-    // 起きず、覚えるだけになる（`start` と同じ形）。
+    // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
+    // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる
+    // （`start` と同じ形）。
     session.checkFence(command.lease);
     session.resume(command.sessionId, command.entries, command.message);
   }
 
   async send(managerId: string, text: string): Promise<boolean> {
     const session = this.#sessions.get(managerId);
-    if (!session) return false;
+    // **畳み中（`stopping`）なら積まずに `false` を返す。** `push()` は
+    // `this.#sdkSession.stopped` を見て黙って捨てるだけなので、ここで
+    // 見ずに `true` を返すと「セッションはまだ在る」ように見えて、実際は
+    // 誰にも読まれない本文が 200 で返ってしまう。既存の「セッションが無い」
+    // 場合とまったく同じ `false`（呼び出し元 `apps/runner/src/app.ts` の
+    // 404 `{ error: 'not found' }`）に乗せる——デーモンはこれを見て
+    // resume に回る。
+    if (!session || session.stopping) return false;
     session.push(text);
     return true;
   }
@@ -1610,6 +1663,19 @@ class RunnerSession {
         ? {}
         : { sessionId: this.#resumeState.sessionId }),
     };
+  }
+
+  /**
+   * 畳み中・畳み済みか（`stop()` / `#finish()` が `markStopped()` を呼んだ
+   * 後）を、内部状態を覗かずに読める形で外へ出す。
+   *
+   * **`stop()` / `#stopBody` / `#finish` の中身（畳みの順序）はここでは変えて
+   * いない。** `Host#send` / `Host#resume` が「積んでも `push()` が黙って
+   * 捨てるだけの窓」を避けるために読む（`push()` の `if (this.#sdkSession.stopped) return;`
+   * と同じ条件を、判定できる形で公開しているだけである）。
+   */
+  get stopping(): boolean {
+    return this.#sdkSession.stopped;
   }
 
   /**

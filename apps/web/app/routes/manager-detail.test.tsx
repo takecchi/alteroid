@@ -14,6 +14,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  CGROUP_EVENTS_UNKNOWN_NOTE,
+  formatCgroupEventsNote,
+} from '@alteroid/core/cgroup-events-format';
+import {
+  formatSystemErrorFacts,
+  formatSystemErrorUnknownNote,
+} from '@alteroid/core/system-error-format';
 import type { ManagerStatus, ManagerSummary } from '~/lib/types';
 import {
   DEFAULT_VIEWPORT_WIDTH,
@@ -1369,6 +1377,69 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       });
 
       expect(await screen.findByText(/code=EAGAIN errno=-11 syscall=spawn/)).toBeTruthy();
+    });
+  });
+
+  /**
+   * **この画面の診断欄の文言が、クローン側（`packages/core/src/tools.ts` の
+   * `manager_list` / `manager_report`）と単一の定義元を共有していることを
+   * 固定する歯（issue: PR #1645 の Web 側の文言複製を解消するリファクタ）。**
+   *
+   * PR #1645 の時点では、この画面は `lastCgroupEvents` / `lastSystemError` の
+   * 文言を core（`cgroup-events.ts` / `system-error.ts`）から手で複製していた
+   * ——**複製した理由は、隣に zod のスキーマが同居していて軽い口にできな
+   * かったから**（当時の doc コメント）。複製である以上、クローン側の文言が
+   * 変わっても Web はそれに気づけない——**変わったことを検出する歯が無い
+   * まま、2箇所が独立に文言を持っていた。**
+   *
+   * ここでは文言を組む純粋な関数を、import を1つも持たない新しいファイル
+   * （`@alteroid/core/cgroup-events-format` / `@alteroid/core/system-error-format`）
+   * へ切り出し、core・Web の両方がそこから引く形にした。**この画面が実際に
+   * その軽い口を使っていること**（手元でハードコードした文字列と偶然一致
+   * しているだけではないこと）を、インポートした関数・定数の戻り値と画面の
+   * 表示を突き合わせて確かめる——文字列リテラルを手で書き写さない。
+   *
+   * この歯は変更前（PR #1645 時点の複製したまま）だと **`@alteroid/core/
+   * cgroup-events-format` / `@alteroid/core/system-error-format` が存在せず
+   * import が解決できないため、このファイル全体が読み込めずに落ちる**（赤）。
+   */
+  describe('診断欄の文言は core の軽い口と単一の定義元を共有する（PR #1645 の複製を解消）', () => {
+    it('lastCgroupEvents: 値なしの注記が @alteroid/core/cgroup-events-format の定数そのものを含む', async () => {
+      renderDetail({ ...BASE, status: 'failed' });
+
+      await screen.findByText(/pids 上限/);
+      expect(document.body.textContent ?? '').toContain(CGROUP_EVENTS_UNKNOWN_NOTE);
+    });
+
+    it('lastCgroupEvents: 値ありの注記が @alteroid/core/cgroup-events-format の整形関数の戻り値そのものを含む', async () => {
+      const delta = { pidsMaxDelta: 3, oomKillDelta: 1, at: '2026-08-16T03:30:00.000Z' };
+      renderDetail({ ...BASE, status: 'failed', lastCgroupEvents: delta });
+
+      await screen.findByText(/fork が pids 上限により/);
+      expect(document.body.textContent ?? '').toContain(formatCgroupEventsNote(delta));
+    });
+
+    it('lastSystemError: 値ありの事実整形が @alteroid/core/system-error-format の整形関数の戻り値そのものを含む', async () => {
+      const systemError = {
+        code: 'EAGAIN',
+        errno: -11,
+        syscall: 'spawn',
+        at: '2026-08-16T03:35:00.000Z',
+      };
+      renderDetail({ ...BASE, status: 'failed', lastSystemError: systemError });
+
+      await screen.findByText(/code=EAGAIN/);
+      expect(document.body.textContent ?? '').toContain(formatSystemErrorFacts(systemError));
+    });
+
+    it('lastSystemError: 値なしの注記の共通部分が formatSystemErrorUnknownNote の戻り値そのものを含む（末尾の指し先はこの画面固有のまま）', async () => {
+      renderDetail({ ...BASE, status: 'failed' });
+
+      await screen.findByText(/器の資源による落ち方かどうかは、この欄では判定できなかった/);
+      const expected = formatSystemErrorUnknownNote(
+        '、上の「直近のターンは報告ではなく失敗で終わっている」の注記を見ること',
+      );
+      expect(document.body.textContent ?? '').toContain(expected);
     });
   });
 

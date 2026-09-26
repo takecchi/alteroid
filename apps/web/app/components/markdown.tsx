@@ -24,7 +24,9 @@
  * `whitespace-pre-wrap` で改行をそのまま見せていたので、`remark-breaks` が
  * 無いと「今まで見えていた行区切りが消える」という劣化になる。
  *
- * `remark-gfm` は表・取り消し線・タスクリストなど GFM 拡張のため。
+ * GFM（表・取り消し線・タスクリスト・フッターノート・オートリンク）は
+ * `remarkGfmParseOnly`（下）で足す。**`remark-gfm` パッケージそのものは
+ * ここでは使わない** — 理由は下のコメントに書いた。
  *
  * **一覧の1行（`truncate` / `line-clamp`）は Markdown 化の対象ではない。**
  * そこに出ているのは畳んだ索引であって本文の面ではなく、押せば全文の面へ
@@ -33,10 +35,72 @@
  * が「`line-clamp` で切ると、収まっているように見えたまま読めない部分ができる」
  * として避ける理由を既に書いている。**対象は、詳細で全文を出す面だけである。**
  */
+import { gfm } from 'micromark-extension-gfm';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
 import type { ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
-import remarkGfm from 'remark-gfm';
+
+/**
+ * unified の `Processor.data()` が実際に返す形の一部だけを、ここで使う分だけ
+ * 切り出した最小限の型。**`unified` パッケージを型のためだけに依存へ足さない
+ * ための割り切り**（`apps/web` はまだ `unified` を直接の依存に持っていない
+ * ——react-markdown 経由の間接依存でしかなく、`apps/web/node_modules` に
+ * 解決できない）。
+ *
+ * **`this` パラメータの型は `unknown` にする（`UnifiedProcessorDataOnly` を
+ * 直接使わない）。** react-markdown の `remarkPlugins` は unified の
+ * `Plugin<...>`（`this: Processor` を要求）を期待する。`this` パラメータの
+ * 型チェックは反変（呼び出し側の型が自分の宣言した型へ代入できるか）なので、
+ * `this: UnifiedProcessorDataOnly` だと「本物の `Processor.data()` が返す
+ * `Data`（`unified` 側でこの画面から見える範囲では空に見える——
+ * `mdast-util-from-markdown` の型による宣言マージをこのファイルは読み込んで
+ * いない）が `UnifiedProcessorDataOnly` に代入できるか」を TS が構造的に
+ * 検査し、共通のプロパティが無いとして落ちる（実測: `tsc --noEmit` で
+ * `The types returned by 'data()' are incompatible` ）。`this: unknown` なら
+ * 「`Processor` は `unknown` に代入できるか」という自明に真の問いになり、
+ * ここで初めて `UnifiedProcessorDataOnly` へ関数内で明示キャストする。
+ */
+interface UnifiedProcessorDataOnly {
+  data(): {
+    micromarkExtensions?: unknown[];
+    fromMarkdownExtensions?: unknown[];
+  };
+}
+
+/**
+ * `remark-gfm`（`node_modules/remark-gfm/lib/index.js` 逐語）は
+ * `mdast-util-gfm` から `gfmFromMarkdown`（解析）と `gfmToMarkdown`
+ * （mdast → Markdown 文字列への書き戻し）の**両方を無条件に呼ぶ**——
+ * `data.toMarkdownExtensions.push(gfmToMarkdown(settings))` が実行される。
+ *
+ * この画面（`<Markdown>`）は react-markdown で「Markdown 文字列 → mdast →
+ * hast → React 要素」の一方向にしか使わない。`unified().stringify()` は
+ * 一度も呼ばれない（react-markdown 自身が呼ばない）ので、`gfmToMarkdown()`
+ * が組み立てる「書き戻し」側の実装（`mdast-util-to-markdown` 本体・
+ * `markdown-table` を含む）は**実行はされるが結果を誰も読まない**——
+ * 呼び出し自体は生きたコードなので bundler の tree-shaking では削れず、
+ * 実測でクライアント JS に ~13KB 乗っていた
+ * （`mdast-util-to-markdown` 11,435B + `markdown-table` 1,570B、
+ * 2026-09-27 観測。手段は tmp の source-map 集計スクリプト、`.claude/skills/`
+ * には無い一時的なもの）。
+ *
+ * **だから `remark-gfm` パッケージ自体を使わず、`gfmFromMarkdown`（解析側）
+ * だけを呼ぶ。** 呼んでいる関数は `remark-gfm` が内部で呼んでいるのと
+ * **同じ** `mdast-util-gfm` の `gfmFromMarkdown()` そのもの——解析結果
+ * （mdast）は1文字も変わらない。独自のパーサ実装は無い。
+ *
+ * オプションは常に空（`remarkGfm` を呼んでいた既存呼び出しも無指定だった）。
+ * `mdast-util-gfm` の `gfmFromMarkdown()` はオプションを取らない
+ * （`remark-gfm` 自身もオプション無しで呼ぶ）ので、ここでも渡さない。
+ */
+function remarkGfmParseOnly(this: unknown) {
+  const data = (this as UnifiedProcessorDataOnly).data();
+  const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = []);
+  const fromMarkdownExtensions = data.fromMarkdownExtensions ?? (data.fromMarkdownExtensions = []);
+  micromarkExtensions.push(gfm());
+  fromMarkdownExtensions.push(gfmFromMarkdown());
+}
 
 /**
  * コードが行内（inline）か、フェンスされたコードブロックかを見分ける。
@@ -180,7 +244,7 @@ const components: Components = {
 export function Markdown({ children }: { children: string }) {
   return (
     <div className="min-w-0 text-sm break-words">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfmParseOnly, remarkBreaks]} components={components}>
         {children}
       </ReactMarkdown>
     </div>

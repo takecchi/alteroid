@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 11個出す。
+   * 13個出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -85,6 +85,28 @@ export default defineConfig({
    *   1つも持たない——zod スキーマから推論した型と構造的に一致することは
    *   `schema.ts` の型レベルの検査（`_AssertJobStatusMatchesRunningLikeType`）
    *   が保証する。
+   * - `cgroup-events-format.ts` — `lastCgroupEvents`（cgroup の pids/OOM
+   *   カウンタの差分）を人が読む一文へ整形する表示（issue #1517。
+   *   `@alteroid/core/cgroup-events-format`）。**`mask-url.ts` と同じ形**——
+   *   issue #1645（委譲の詳細画面に診断欄を出す）で、Web UI
+   *   （`apps/web/app/routes/manager-detail.tsx`）は隣の `cgroup-events.ts`
+   *   が zod（`cgroupEventsDeltaSchema`）を同じファイルに持つために軽い口へ
+   *   できず、文言を手で複製していた。複製をやめてここへ寄せた。ファイル
+   *   自身は import を1つも持たない——zod スキーマから推論した型と構造的に
+   *   一致することは `schema.ts` の型レベルの検査
+   *   （`_AssertCgroupEventsDeltaMatchesLikeType`）が保証する。
+   * - `system-error-format.ts` — `lastSystemError`（Node が構造として持つ
+   *   失敗の分類 `code`/`errno`/`syscall`）を人が読む一文へ整形する表示
+   *   （#713 段3。`@alteroid/core/system-error-format`）。**`cgroup-events-format.ts`
+   *   と同じ形・同じ理由**——隣の `system-error.ts` が zod
+   *   （`systemErrorFactsSchema`）を同じファイルに持つ。ファイル自身は
+   *   import を1つも持たない——構造的に一致することは `schema.ts` の型
+   *   レベルの検査（`_AssertSystemErrorFactsMatchesLikeType`）が保証する。
+   *   D（判定できなかった）の文言は、クローン向け（`system-error.ts` の
+   *   `SYSTEM_ERROR_UNKNOWN_NOTE`）と Web UI 向けとで末尾の指し先だけが
+   *   意図して違う（欄名 `lastFailure` を直接指すか、画面上の該当セクション
+   *   を指すか）ので、共通部分だけを `formatSystemErrorUnknownNote(pointer)`
+   *   としてまとめ、指し先は呼び出し元の引数にした（ファイル冒頭の doc）。
    */
   entry: [
     'src/index.ts',
@@ -98,6 +120,8 @@ export default defineConfig({
     'src/mask-url.ts',
     'src/manager-activity.ts',
     'src/job-status-running.ts',
+    'src/cgroup-events-format.ts',
+    'src/system-error-format.ts',
   ],
   format: ['esm'],
   dts: true,
