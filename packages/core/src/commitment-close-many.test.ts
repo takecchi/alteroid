@@ -442,6 +442,57 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
   });
 });
 
+/**
+ * **応答の「全 id は日誌に N 件に分けて残してある」の N は、実際に書いた日誌の行の数で言う。**
+ * 1件も閉じられなかった塊は日誌に書かない（上の12番）ので、塊の数（`chunks.length`）で
+ * 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗っていた（PR #1711 で直したが、
+ * 専用の歯は `archive_remove_many` にしか無かった——`archive-remove-many-raced.test.ts`
+ * の「応答が言う『日誌に N 件』は、実際に書いた件数である」と同じ形で、ここに足す）。
+ */
+describe('commitment_close_many の応答が言う「日誌に N 件」は、実際に書いた件数である', () => {
+  it('2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
+    const stores = createMemoryStores();
+    const entries = Array.from({ length: 250 }, (_, i) => entryAt(i, 'external'));
+    await openAll(stores, entries);
+    const allIds = entries.map((entry) => entry.id);
+    // `chunkIdsByChars` は道具本体が使っているのと同じ export。同じ引数
+    // （id の並び・予算）で呼べば、道具の中で実際に切れる境界と一致する。
+    const CLOSE_MANY_JOURNAL_ID_CHARS_COPY = 3_600;
+    const chunksExpected = chunkIdsByChars(allIds, CLOSE_MANY_JOURNAL_ID_CHARS_COPY);
+    expect(chunksExpected.length).toBeGreaterThanOrEqual(2); // 2個目以降を丸ごと競合にするのに要る
+
+    // **1つ目の塊は本当に閉じ、2つ目以降は「呼ぶ直前に他経路が丸ごと先に閉じていた」を
+    // 模す。** `archive-remove-many-raced.test.ts` と同じ作法——本物の `closeMany` 実装
+    // だけで競合を作る（フェイクの戻り値を手で組み立てない）。2回目以降の呼びでは、
+    // 本物の `closeMany` を1回先打ちして「別経路」が閉じたことにしてから、道具自身の
+    // 呼びをもう一度本物へ通す（その時点では既に閉じているので `[]` が返る）。
+    const originalCloseMany = stores.commitments.closeMany.bind(stores.commitments);
+    let calls = 0;
+    stores.commitments.closeMany = async (ids, at, reason, by) => {
+      calls += 1;
+      if (calls > 1) {
+        await originalCloseMany(ids, at, '別経路が先に閉じた', 'human');
+      }
+      return originalCloseMany(ids, at, reason, by);
+    };
+
+    const reply = await closer(stores)({
+      origin: ['external'],
+      reason: '250件を一括で片付けた',
+      dryRun: false,
+    });
+
+    const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
+    expect(claimed, '省略の断り書きが出ていない（20件を超えて閉じていない）').not.toBeNull();
+    const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
+    expect(chunkEntries.length).toBeGreaterThan(0);
+    // **この歯が意味を持つための前提**: 実際に複数の塊に割れているのに、日誌に書いた
+    // のは1つ目の塊だけ（＝ journaledChunks < chunks.length）であること。
+    expect(chunkEntries.length).toBeLessThan(chunksExpected.length);
+    expect(Number(claimed?.[1])).toBe(chunkEntries.length);
+  });
+});
+
 describe('chunkIdsByChars（id の列を文字数の予算で塊に割る）', () => {
   it('14a. 塊を全部つなげると元の列に戻る（1つも落とさない・順序も保つ）', () => {
     const ids = Array.from({ length: 40 }, () => randomUUID());
