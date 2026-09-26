@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { CloneDelivery } from './clone-delivery.js';
+import type { Listener } from './clone.js';
 import { Inbox } from './inbox.js';
 import { CloneRedeliveryState } from './clone-redelivery-state.js';
 import type { InboxEvent } from './schema.js';
@@ -75,6 +76,26 @@ describe('CloneDelivery — subscribeListener/unsubscribeListener/dropListenersI
     // 古い set への「解除」をもう一度呼んでも、新しい Set には影響しない
     delivery.unsubscribeListener('conv-1', first, firstSet);
     expect([...delivery.listenersFor('conv-1')]).toEqual([second]);
+  });
+
+  /**
+   * 上の歯（「同一性チェック」）は、`set` の同一性判定（`===`）を `!==` へ
+   * 反転させる変異では落ちない——両方とも `set.delete(listener)` を無条件に
+   * 呼ぶので、渡した `set`（この歯では常に現在登録されている本物の `set`）が
+   * 空になる経路そのものは反転の影響を受けず、`listenersFor` の見た目
+   * （空配列）が変わらないまま揃ってしまう。**この歯は、現在登録されている
+   * ものとは別の（無関係な）`Set` を渡す**——`===` が正しければ現在の購読には
+   * 触れない。`!==` へ反転させると、無関係な空の `Set` を渡しただけで
+   * 「一致しない」が真になり、現在登録されている購読が消えてしまう。
+   */
+  it('unsubscribeListener は無関係な Set を渡しても、現在登録されている購読を消さない', () => {
+    const delivery = new CloneDelivery();
+    const listener = vi.fn();
+    delivery.subscribeListener('conv-1', listener);
+    // `subscribeListener` を経由していない、無関係な空の Set。
+    const foreignSet = new Set<Listener>();
+    delivery.unsubscribeListener('conv-1', vi.fn(), foreignSet);
+    expect([...delivery.listenersFor('conv-1')]).toEqual([listener]);
   });
 
   it('dropListenersIfEmpty は、Set が存在してかつ空のときだけ conversationId を消す', () => {
@@ -185,6 +206,25 @@ describe('CloneDelivery — pushDeferred/drainDeferred/removeDeferredWhere/remov
   it('removeDeferredById は見つからなければ undefined を返す（null ではない）', () => {
     const delivery = new CloneDelivery();
     expect(delivery.removeDeferredById('never')).toBeUndefined();
+  });
+
+  /**
+   * 直上の歯は**空の待ち行列**でしかこの分岐（`index === -1`）を見ていない
+   * ——`splice(-1, 1)` は空配列に対しては何も削らないので、`if (index === -1)
+   * return undefined;` を消す変異が生存してしまう（`AGENTS.md`「Issue の
+   * 『確かめていないこと』は仕事の指定である」と同じ形の穴）。ここでは
+   * **要素が入った待ち行列**で存在しない id を渡し、`splice(-1, 1)` が
+   * 末尾（`b`）を黙って消さないことを見る。
+   */
+  it('removeDeferredById は、要素が入った待ち行列で存在しない id を渡しても何も取り除かない', () => {
+    const delivery = new CloneDelivery();
+    const a = humanMessage('a');
+    const b = humanMessage('b');
+    delivery.pushDeferred(a);
+    delivery.pushDeferred(b);
+    expect(delivery.removeDeferredById('never')).toBeUndefined();
+    expect(delivery.deferredCount).toBe(2);
+    expect(delivery.drainDeferred()).toEqual([a, b]);
   });
 
   it('someDeferred / matchingDeferredCount は述語に一致する分だけ数える', () => {

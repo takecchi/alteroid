@@ -23,6 +23,44 @@ function fakeQuery(): Query {
   return { close: vi.fn() } as unknown as Query;
 }
 
+/**
+ * `markStopped` / `beginTurn` / `waitForInput` への変異は、アサーションでは
+ * なく**ハング**で赤くなることがある（マネージャー依頼 #1614）。
+ * `finishTurn` が `wakeInput()` を呼び忘れる・`waitForInput` が控えた
+ * `resolve` を握り潰す、といった変異は、この下の `it` が待っている
+ * `Promise` を永久に解決させない——落ちるとしても vitest 既定の
+ * `testTimeout`（5000ms。`vitest.config.ts` に指定が無いのでそのまま）
+ * に埋もれた「Test timed out in 5000ms」でしかなく、**どの遷移が壊れたのか
+ * が失敗のメッセージから読めない**。
+ *
+ * ⟹ `Promise.race` で**短い上限**（1500ms。本物の解決はマイクロタスク〜
+ * 数msで終わるので十分な余裕がある一方、既定の5000msより確実に先へ落ちる）
+ * を付け、「〜が戻らなかった（遷移が壊れた疑い）」と読める失敗メッセージで
+ * 落とす。**既存のアサーション（`expect(resolved).toBe(true)` 等）は1つも
+ * 弱めていない**——`Promise.race` は解決を早める・遅らせることはせず、
+ * 「本物の Promise が解決しない場合にだけ、代わりに失敗を投げる」だけの
+ * 追加である。
+ */
+async function expectResolvesSoon<T>(promise: Promise<T>, label: string): Promise<T> {
+  const TIMEOUT_MS = 1500;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `${label} が戻らなかった（${String(TIMEOUT_MS)}ms 待っても解決しない。` +
+            'markStopped / beginTurn / waitForInput のいずれかの遷移が壊れた疑い）',
+        ),
+      );
+    }, TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe('CloneSdkSession — 初期状態', () => {
   it('生成直後は query / reader / pumpLoop が null', () => {
     const s = new CloneSdkSession();
@@ -167,7 +205,7 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
     expect(resolved).toBe(false);
     // 後始末: 待ちを残さない。
     s.wakeInput();
-    await waiting;
+    await expectResolvesSoon(waiting, '後始末の wakeInput() による入力待ちの解決');
   });
 
   it('wantsTokenRecycle が立っていれば、finishTurn は入力待ちを起こす', async () => {
@@ -180,7 +218,7 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
     });
     s.beginTurn(fakeTurn());
     s.finishTurn();
-    await waiting;
+    await expectResolvesSoon(waiting, 'wantsTokenRecycle が立った finishTurn() の入力待ちの解決');
     expect(resolved).toBe(true);
     // 消費はしない（`finishTurn` は読むだけ）。
     expect(s.wantsTokenRecycle).toBe(true);
@@ -196,7 +234,10 @@ describe('CloneSdkSession — turn（beginTurn / finishTurn）', () => {
     });
     s.beginTurn(fakeTurn());
     s.finishTurn();
-    await waiting;
+    await expectResolvesSoon(
+      waiting,
+      'wantsContextWindowRecycle が立った finishTurn() の入力待ちの解決',
+    );
     expect(resolved).toBe(true);
   });
 });
@@ -230,7 +271,7 @@ describe('CloneSdkSession — 入力の待ち行列（enqueueInput / dequeueInpu
     await new Promise((r) => setTimeout(r, 0));
     expect(resolved).toBe(false);
     s.wakeInput();
-    await p;
+    await expectResolvesSoon(p, 'wakeInput() による waitForInput() の解決');
     expect(resolved).toBe(true);
   });
 
@@ -250,7 +291,7 @@ describe('CloneSdkSession — 入力の待ち行列（enqueueInput / dequeueInpu
       secondResolved = true;
     });
     s.wakeInput();
-    await second;
+    await expectResolvesSoon(second, '2度目の waitForInput() の解決（待ち手の上書き）');
     expect(secondResolved).toBe(true);
     expect(firstResolved).toBe(false);
     void first;
