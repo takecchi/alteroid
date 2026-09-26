@@ -46,15 +46,20 @@ export class PgTranscriptArchive implements TranscriptArchive {
   }
 
   /**
-   * **指紋は `stripNulls` 後の値に対して取る**（#698）。`body` はストアに
-   * 実際に入る値——`stripNulls` される前の `transcript` で指紋を取ると、
-   * NUL を含む本文で「積んだ値」と「指紋が指す値」がずれる。
+   * **指紋と連続性の判定は、`stripNulls` する前の生の `transcript` で取る。保存だけ
+   * NUL を除く**（#1709。オーナー判断 2026-09-26「安全側に倒す」）。
    *
-   * ⚠️ **これは fs / インメモリ実装との非対称である。** あの2つは
-   * `stripNulls` を行わないので、NUL を含む本文では3実装の連続性判定が
-   * 揃わない可能性がある（`db.ts` の `stripNulls` は pg 固有の制約——
-   * PostgreSQL の `text` / `jsonb` が NUL を受け付けないための変換であって、
-   * fs / インメモリにはその制約が無い）。
+   * 以前は NUL を除いた後の値で指紋を取っていた。すると NUL の位置だけが違う本文を、
+   * pg だけが「続いている」と判定し、fs / インメモリ（生の本文で判定する）と割れていた
+   * （同じ2回の `archive()` で pg は `continues`、インメモリは `diverged`）。連続性は
+   * 自動の畳み・`archive_remove_many` が「消してよいか」を決める材料なので、**迷ったら
+   * 消さない側**——NUL の位置だけが違う本文は「続いていない」と読む——に揃える。
+   *
+   * **代償として、この行の指紋は保存した `body`（NUL を除いた値）ではなく、除く前の
+   * 本文を指す。** 指紋は連続性の判定にしか使わないので、判定が3実装で揃うことを
+   * 優先した。**既に保存されている行の指紋**は NUL を除いた値のものだが、NUL を
+   * 含まなかった行は除く前と同じで、含んでいた行は生の本文と一致しない＝「続いて
+   * いない」側に倒れるので、安全側に外れる（移行は要らない）。
    *
    * **直前の行を引くとき `body` 列に触れない**（`select` に含めない）。
    * 100MB 級の行がある `archive` で、判定のためだけに本文を読み直すと
@@ -98,7 +103,8 @@ export class PgTranscriptArchive implements TranscriptArchive {
     const at = new Date();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
     const base = `${sanitize(sessionId)}-${stamp}`;
-    const fingerprint = fingerprintArchiveBody(body);
+    // 指紋は生の本文で取る（上の doc。#1709）。保存する `body` は NUL を除いた値。
+    const fingerprint = fingerprintArchiveBody(transcript);
     return this.#db.transaction(async (tx) => {
       const candidateRows = await tx
         .select({
@@ -118,7 +124,7 @@ export class PgTranscriptArchive implements TranscriptArchive {
         if (best === null) return row;
         return archiveIdBranch(row.id) > archiveIdBranch(best.id) ? row : best;
       }, null);
-      const { continuity, comparedTo } = classifyArchiveContinuity(previous, body);
+      const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
       for (let attempt = 1; attempt <= MAX_ARCHIVE_ID_ATTEMPTS; attempt += 1) {
         const id = archiveIdCandidate(base, attempt);
         const inserted = await tx
