@@ -5456,10 +5456,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
         // **issue #1720。** 同上。
-        offset: z
-          .number()
-          .optional()
-          .describe('id で全文を読むとき、何文字目から読むか'),
+        offset: z.number().optional().describe('id で全文を読むとき、何文字目から読むか'),
       },
       async ({ limit, since, until, types, q, with: withFilter, id, offset = 0 }) => {
         // **issue #1720（#1651/#1689 の揃え漏れ）。** limit / offset は入力
@@ -5827,10 +5824,7 @@ export function createCloneTools(context: ToolContext) {
           .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
         // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
         // 先頭で見る。
-        offset: z
-          .number()
-          .optional()
-          .describe('id で全文を読むとき、何文字目から読むか'),
+        offset: z.number().optional().describe('id で全文を読むとき、何文字目から読むか'),
       },
       async ({ id, offset = 0 }) => {
         // **issue #1720（#1651/#1689 の揃え漏れ）。**
@@ -6208,10 +6202,7 @@ export function createCloneTools(context: ToolContext) {
           .describe('この1件の依頼本文を全文で読む（一覧に出ている kind）'),
         // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
         // 先頭で見る。
-        offset: z
-          .number()
-          .optional()
-          .describe('kind で全文を読むとき、何文字目から読むか'),
+        offset: z.number().optional().describe('kind で全文を読むとき、何文字目から読むか'),
         // **#662 段1。** `commitment_list` の `cursor` と同じ契約（不透明な
         // 文字列。自分で組み立てない）。この一覧には `includeClosed` /
         // `order` に相当する引数が無いので、`schedule-cursor.ts` の doc
@@ -10313,10 +10304,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('この発言1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
         // **issue #1720。** 同上（`.int().min(0)`）。
-        offset: z
-          .number()
-          .optional()
-          .describe('id で全文を読むとき、何文字目から読むか'),
+        offset: z.number().optional().describe('id で全文を読むとき、何文字目から読むか'),
         includeSuperseded: z
           .boolean()
           .optional()
