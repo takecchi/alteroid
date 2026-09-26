@@ -7308,33 +7308,76 @@ class Pool implements ManagerPool {
     // 読んだ像を `#records` へ登録するので、終端済みの委譲を評定するたびに
     // 地図が太る（この関数の doc）。
     const record = this.#records.get(managerId);
-    const job = record?.job ?? (await this.#stores.jobs.listJobs()).find((e) => e.id === managerId);
-    if (job === undefined) {
-      return {
-        outcome: 'absent',
-        detail: `${managerId} というマネージャーは台帳に居ない。`,
-        previous: null,
-      };
-    }
-    const previous = describeAppraisal(job);
-    // **構造欄（#1310）の `previous` / `previousBy` は、上書きする前の raw な
-    // 値から取る。** `previous`（上）は人間向けの整形済み文で、構造欄は
-    // 数え上げ（`computeAppraisalReconciliation`）が読む側なので別に持つ。
-    const previousValue = job.appraisal;
-    const previousBy = job.appraisedBy;
 
-    job.appraisal = appraisal;
-    job.appraisedAt = at;
-    job.appraisedBy = by;
-    // **理由を渡さなかったら前の理由を消す。** 残すと、理由無しで覆したときに
-    // **前の書き手の理由が新しい値の理由として残る**（台帳側と同じ穴。
-    // `CommitmentStore.appraise` の doc）。
-    delete job.appraisalReason;
-    if (reason !== undefined) job.appraisalReason = reason;
-    // 種類は理由と逆で、渡されなければ前の値を残す（interface の doc。#1308）。
-    if (workKind !== undefined) job.workKind = workKind;
-    job.updatedAt = at;
-    await this.#stores.jobs.putJob(job);
+    let job: Job;
+    let previous: string | null;
+    let previousValue: string | undefined;
+    let previousBy: string | undefined;
+
+    if (record !== undefined) {
+      job = record.job;
+      previous = describeAppraisal(job);
+      // **構造欄（#1310）の `previous` / `previousBy` は、上書きする前の raw な
+      // 値から取る。** `previous`（上）は人間向けの整形済み文で、構造欄は
+      // 数え上げ（`computeAppraisalReconciliation`）が読む側なので別に持つ。
+      previousValue = job.appraisal;
+      previousBy = job.appraisedBy;
+
+      job.appraisal = appraisal;
+      job.appraisedAt = at;
+      job.appraisedBy = by;
+      // **理由を渡さなかったら前の理由を消す。** 残すと、理由無しで覆したときに
+      // **前の書き手の理由が新しい値の理由として残る**（台帳側と同じ穴。
+      // `CommitmentStore.appraise` の doc）。
+      delete job.appraisalReason;
+      if (reason !== undefined) job.appraisalReason = reason;
+      // 種類は理由と逆で、渡されなければ前の値を残す（interface の doc。#1308）。
+      if (workKind !== undefined) job.workKind = workKind;
+      job.updatedAt = at;
+      await this.#stores.jobs.putJob(job);
+    } else {
+      // **孤児（`#records` に像を持たない委譲）は `updateJob` を通す
+      // （Issue #1674）。** `listJobs()` で読んでから `putJob()` で書くまでの
+      // 間に別の書き込みが挟まると、その書き込みが古いスナップショットに
+      // 丸ごと上書きされて消えていた——`updateJob` は読み直しと書き込みを
+      // 1つの排他区間に閉じるので、その隙間が無い（`JobStore.updateJob` の
+      // doc）。
+      //
+      // **`previous` 等は `mutate` の中で捕まえる。** `mutate` は排他区間の
+      // 中で「読み直した現在値」を受け取る唯一の場所なので、上書きする前の
+      // 値を読むにはここしかない——`updateJob` が返すのは書いた**後**の値
+      // だけである。
+      let capturedPrevious: string | null | undefined;
+      let capturedPreviousValue: string | undefined;
+      let capturedPreviousBy: string | undefined;
+      const updated = await this.#stores.jobs.updateJob(managerId, (current) => {
+        capturedPrevious = describeAppraisal(current);
+        capturedPreviousValue = current.appraisal;
+        capturedPreviousBy = current.appraisedBy;
+        const next: Job = {
+          ...current,
+          appraisal,
+          appraisedAt: at,
+          appraisedBy: by,
+          updatedAt: at,
+        };
+        delete next.appraisalReason;
+        if (reason !== undefined) next.appraisalReason = reason;
+        if (workKind !== undefined) next.workKind = workKind;
+        return next;
+      });
+      if (updated === null) {
+        return {
+          outcome: 'absent',
+          detail: `${managerId} というマネージャーは台帳に居ない。`,
+          previous: null,
+        };
+      }
+      job = updated;
+      previous = capturedPrevious ?? null;
+      previousValue = capturedPreviousValue;
+      previousBy = capturedPreviousBy;
+    }
 
     await this.#journal({
       type: 'decision',

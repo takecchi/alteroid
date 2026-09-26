@@ -32,6 +32,7 @@ import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
   commitmentSchema,
   inboxEventSchema,
+  jobSchema,
   journalEntrySchema,
   memorySlugSchema,
   permissionGrantSchema,
@@ -595,6 +596,23 @@ export function createMemoryStores(): Stores {
     async putJob(job) {
       jobs.set(job.id, isolate(job));
     },
+    // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041 と
+    // 同じ理由）。** プロセス内の `Map` は同期アクセスなので、fs の
+    // `withPathLock` / pg の `select … for update` に相当する排他は要らない
+    // ——読みと書きの間に他の呼び出しが割り込む隙間が無い（Issue #1674。
+    // `JobStore.updateJob` の doc）。
+    async updateJob(id, mutate) {
+      const found = jobs.get(id);
+      if (found === undefined) return null;
+      // `mutate` へは独立したコピーを渡す（`isolate`）——`mutate` が引数を
+      // その場で書き換えて返す形（`ManagerPool.appraise` の像を書く分岐と
+      // 同じ書き方）でも、`jobSchema.parse` が投げて書き込みに至らなかった
+      // ときに `Map` の中身を汚さないため。
+      // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1652 と同じ理由）。
+      const next = jobSchema.parse(mutate(isolate(found)));
+      jobs.set(id, isolate(next));
+      return isolate(next);
+    },
     async listApprovals(options = {}) {
       const all = [...approvals.values()].map(isolate);
       // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える）。
@@ -1006,9 +1024,24 @@ export function createMemoryStores(): Stores {
   const loginRequests = new Map<string, LoginRequest>();
   const identityKey = (provider: string, subject: string) => `${provider} ${subject}`;
 
+  /**
+   * `createdAt` の**実時刻**昇順で並べる（issue #1676。fs 版と同じ理由・同じ形
+   * ——`packages/storage-fs/src/auth.ts` の `compareCreatedAt` の doc）。
+   *
+   * **文字列の `localeCompare` を使わないこと。** `isoDateTime` はオフセット
+   * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。文字列比較
+   * だとオフセット表記が違う行で実時刻の順が崩れる——pg（`timestamptz` 列の
+   * `asc()`）は崩れないので、fs / メモリもここで揃える。
+   *
+   * 2次キーは持たない（pg 側も持たないので、揃えるものが無い）。
+   * `Array.prototype.sort` は安定なので、ties は元の並び（Map の反復順）を保つ。
+   */
+  const compareCreatedAt = (a: { createdAt: string }, b: { createdAt: string }): number =>
+    Date.parse(a.createdAt) - Date.parse(b.createdAt);
+
   const auth: AuthStore = {
     async listAccounts() {
-      return [...accounts.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return [...accounts.values()].sort(compareCreatedAt);
     },
     async getAccount(id) {
       return accounts.get(id) ?? null;
@@ -1023,7 +1056,10 @@ export function createMemoryStores(): Stores {
       return identities.get(identityKey(provider, subject)) ?? null;
     },
     async listIdentities(accountId) {
-      return [...identities.values()].filter((identity) => identity.accountId === accountId);
+      // fs と同じ理由で明示的に並べる（`compareCreatedAt` の doc）。
+      return [...identities.values()]
+        .filter((identity) => identity.accountId === accountId)
+        .sort(compareCreatedAt);
     },
     async putIdentity(identity) {
       identities.set(identityKey(identity.provider, identity.subject), identity);
@@ -1035,7 +1071,10 @@ export function createMemoryStores(): Stores {
       return [...accessTokens.values()].find((token) => token.sha256 === hash) ?? null;
     },
     async listAccessTokens(accountId) {
-      return [...accessTokens.values()].filter((token) => token.accountId === accountId);
+      // fs と同じ理由で明示的に並べる（`compareCreatedAt` の doc）。
+      return [...accessTokens.values()]
+        .filter((token) => token.accountId === accountId)
+        .sort(compareCreatedAt);
     },
     async putLoginRequest(request) {
       loginRequests.set(request.id, request);

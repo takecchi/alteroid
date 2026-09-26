@@ -474,6 +474,124 @@ describe('createAuthService', () => {
 });
 
 /**
+ * **issue #1676。** `AuthStore.listAccounts` / `listIdentities` /
+ * `listAccessTokens` は3実装（fs / pg / in-memory）で同じ順にならなければ
+ * ならない（M4 の要件、`packages/storage-fs/src/index.test.ts` の doc）。
+ *
+ * 直す前の memory 実装（`testing.ts`）は fs と同じ `localeCompare`
+ * （文字列比較）で `listAccounts` を並べていた。`isoDateTime` はオフセット
+ * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではなく、文字列比較
+ * では実時刻の順が崩れうる。
+ */
+describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory、issue #1676）', () => {
+  it('listAccounts は createdAt の実時刻順（オフセット表記が違っても崩れない）', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    const base = {
+      displayName: null,
+      email: null,
+      lastLoginAt: null,
+      grantedAt: null,
+      grantedBy: null,
+      ownerDeclaredAt: null,
+    };
+    const early = {
+      ...base,
+      id: 'account-early-utc',
+      createdAt: '2024-01-01T23:00:00+09:00', // 実時刻 2024-01-01T14:00:00Z
+    };
+    const late = {
+      ...base,
+      id: 'account-late-utc',
+      createdAt: '2024-01-01T15:00:00+00:00', // 実時刻 2024-01-01T15:00:00Z
+    };
+    await memoryAuth.putAccount(early);
+    await memoryAuth.putAccount(late);
+
+    const ids = (await memoryAuth.listAccounts()).map((it) => it.id);
+    // 実時刻順は early（14:00Z）→ late（15:00Z）のはず。
+    expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  });
+
+  it('listIdentities は createdAt の実時刻順で返す', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    await memoryAuth.putAccount({
+      id: 'account-1',
+      displayName: null,
+      email: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: null,
+      grantedAt: null,
+      grantedBy: null,
+      ownerDeclaredAt: null,
+    });
+    const first = {
+      provider: 'google',
+      subject: 'sub-first',
+      accountId: 'account-1',
+      email: 'first@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-01-01T00:00:00.000Z',
+    };
+    const second = {
+      provider: 'google',
+      subject: 'sub-second',
+      accountId: 'account-1',
+      email: 'second@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-02T00:00:00.000Z',
+      lastLoginAt: '2026-01-02T00:00:00.000Z',
+    };
+    // わざと second → first の順で put する（Map の反復順に頼らないことを示す）。
+    await memoryAuth.putIdentity(second);
+    await memoryAuth.putIdentity(first);
+
+    const subjects = (await memoryAuth.listIdentities('account-1')).map((it) => it.subject);
+    expect(subjects).toEqual(['sub-first', 'sub-second']);
+  });
+
+  it('listAccessTokens は createdAt の実時刻順で返す', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    await memoryAuth.putAccount({
+      id: 'account-1',
+      displayName: null,
+      email: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: null,
+      grantedAt: null,
+      grantedBy: null,
+      ownerDeclaredAt: null,
+    });
+    const first = {
+      id: 'token-first',
+      accountId: 'account-1',
+      sha256: 'a'.repeat(64),
+      label: 'first',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    const second = {
+      id: 'token-second',
+      accountId: 'account-1',
+      sha256: 'b'.repeat(64),
+      label: 'second',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    // わざと second → first の順で put する（Map の反復順に頼らないことを示す）。
+    await memoryAuth.putAccessToken(second);
+    await memoryAuth.putAccessToken(first);
+
+    const ids = (await memoryAuth.listAccessTokens('account-1')).map((it) => it.id);
+    expect(ids).toEqual(['token-first', 'token-second']);
+  });
+});
+
+/**
  * **`isDeclaredOwner`（本来の owner 判定。issue #1198）。**
  *
  * ここで固定するのは3つ。**①宣言済みなら真**、**②宣言していなければ
