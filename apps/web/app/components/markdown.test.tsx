@@ -107,9 +107,7 @@ describe('安全性: javascript: リンクが実行可能な URL にならない
 
   it('data: リンクの href も javascript: と同じく空へ潰れる', async () => {
     render(
-      <Markdown>
-        {'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}
-      </Markdown>,
+      <Markdown>{'[click](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)'}</Markdown>,
     );
 
     const anchor = await screen.findByText('click');
@@ -165,14 +163,16 @@ describe('GFM: タスクリスト（チェックボックスが描かれ、操�
     const md = ['- [ ] todo', '- [x] done'].join('\n');
     const { container } = render(<Markdown>{md}</Markdown>);
 
-    const checkboxes = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    const checkboxes = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    );
     expect(checkboxes.length).toBe(2);
-    expect(checkboxes[0].checked).toBe(false);
-    expect(checkboxes[1].checked).toBe(true);
+    expect(checkboxes[0]!.checked).toBe(false);
+    expect(checkboxes[1]!.checked).toBe(true);
     // 操作できない（disabled）こと — 表示用であって、押して状態を変えられては
     // 本文の Markdown と表示が食い違う。
-    expect(checkboxes[0].disabled).toBe(true);
-    expect(checkboxes[1].disabled).toBe(true);
+    expect(checkboxes[0]!.disabled).toBe(true);
+    expect(checkboxes[1]!.disabled).toBe(true);
   });
 });
 
