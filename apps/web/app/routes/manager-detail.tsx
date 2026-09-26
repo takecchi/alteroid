@@ -1045,16 +1045,19 @@ function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
  * （`'stale'` / `'active'`）のどちらでもなければ、その旨をそのまま出す——
  * 版のずれで新しいデーモンがこの画面の知らない値を返しても、画面ごと落ちない。
  */
-function resetTimeSkewText(manager: ManagerSummary): string | null {
+function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
   const value = manager.resetTimeSkewMatch;
   if (value === undefined) return null;
   if (value === 'stale') {
     return (
-      '⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の' +
-      '冷却期限と一致した）。このセッションは古い鍵を掴んだまま走っている可能性がある —— ' +
-      '鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。' +
-      'この行が消えないまま 429 が続くようなら、起こし直すこと。' +
-      '**この印は枠(利用上限)で止まっている間だけ意味を持つ**——枠から下りれば一緒に消える。'
+      <>
+        ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の
+        冷却期限と一致した）。このセッションは古い鍵を掴んだまま走っている可能性がある ——
+        鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。
+        この行が消えないまま 429 が続くようなら、起こし直すこと。
+        <strong className="font-medium">この印は枠(利用上限)で止まっている間だけ意味を持つ</strong>
+        ——枠から下りれば一緒に消える。
+      </>
     );
   }
   if (value === 'active') {

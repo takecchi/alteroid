@@ -1377,6 +1377,11 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
 
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+      // クローン向けの文言（`**強調**`）をそのまま写した名残りが画面に
+      // literal `**` として出ないこと（下の「画面の本文に `**` が出ない」歯の
+      // 個別ケース。強調が要るなら `<strong>` を使う）。
+      expect(screen.getByText(/この印は枠\(利用上限\)で止まっている間だけ意味を持つ/)).toBeTruthy();
+      expect(document.body.textContent).not.toContain('**');
     });
 
     it('active なら「待てば戻る」を出す', async () => {
@@ -1497,5 +1502,55 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
     expect(await screen.findByText('診断')).toBeTruthy();
     expect(screen.getByText(/code=EAGAIN/)).toBeTruthy();
     expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
+  });
+
+  /**
+   * **画面の本文に、クローン向けの Markdown（`**強調**`）の写し残しが literal な
+   * `**` として出ないこと。** `resetTimeSkewMatch: 'stale'` の文言に
+   * `**この印は枠(利用上限)で止まっている間だけ意味を持つ**` があり、この画面は
+   * プレーンテキストとして描くので `**` が文字としてそのまま出ていた（レビュー
+   * 指摘で発覚）。診断カードが出しうる文言をできるだけ多く同時に描いて、
+   * どの行にも同じ写し残しが無いことをまとめて確かめる。
+   */
+  it('画面の本文に `**` がそのまま出ない（クローン向け Markdown の写し残し無し）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'failed',
+      lastReportAt: '2026-08-16T03:10:00.000Z',
+      lastReportStatus: 'running',
+      lastUnreported: { reason: '器の入れ替えで畳まれた', at: '2026-08-16T03:20:00.000Z' },
+      lastFoldedTurn: { text: '畳まれた本文', at: '2026-08-16T03:25:00.000Z' },
+      lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 1, at: '2026-08-16T03:30:00.000Z' },
+      lastSystemError: {
+        code: 'EAGAIN',
+        errno: -11,
+        syscall: 'spawn',
+        at: '2026-08-16T03:35:00.000Z',
+      },
+      resetTimeSkewMatch: 'stale',
+      toolUseStallAt: '2026-08-16T03:40:00.000Z',
+      toolUseStallPending: [{ id: 'tu-1', name: 'Bash' }],
+      waiting: [],
+      lastUnpushedWorkObservation: {
+        kind: 'observed',
+        at: '2026-08-16T03:50:00.000Z',
+        cwd: '/work/project',
+        worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+      },
+    });
+
+    expect(await screen.findByText('診断')).toBeTruthy();
+    // 8欄+lastSystemError のうち文言を持つものが全部出ていることを、
+    // 「無かった」を後から疑わずに済むように先に確かめる。
+    expect(screen.getByText(/いま走っているターンの中身ではない/)).toBeTruthy();
+    expect(screen.getByText(/器の入れ替えで畳まれた/)).toBeTruthy();
+    expect(screen.getByText(/畳まれた本文/)).toBeTruthy();
+    expect(screen.getByText(/fork が pids 上限により 3 回断られた/)).toBeTruthy();
+    expect(screen.getByText(/code=EAGAIN errno=-11 syscall=spawn/)).toBeTruthy();
+    expect(screen.getByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+    expect(screen.getByText(/道具の応答待ちのまま、誰もその応答を待っていない/)).toBeTruthy();
+    expect(screen.getByText(/branch=feat\/x/)).toBeTruthy();
+
+    expect(document.body.textContent).not.toContain('**');
   });
 });
