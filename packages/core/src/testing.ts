@@ -826,7 +826,13 @@ export function createMemoryStores(): Stores {
    * pg の圧縮後バイト数・fs のファイル長とは単位が違う——`ArchiveEntry` の
    * doc のとおり、置き場をまたいで比較してはならない。
    *
-   * 並びは新しい順（`at` の降順、同じミリ秒なら積んだ順の降順）。
+   * 並びは新しい順（`at` の降順）。**同じミリ秒で違うセッションなら `sessionId` の
+   * 昇順、同じセッションなら積んだ順の降順**——fs / pg が共有する
+   * `compareArchiveEntriesNewestFirst`（`archive-id.ts`）と同じ規則にそろえる。以前は
+   * 同着をセッションを問わず積んだ順で並べていて、違うセッションの同着だけ fs / pg と
+   * 並びが食い違っていた（契約テストはこの形を一度も作っていなかった）。共有の関数を
+   * そのまま使わないのは、インメモリの id（`<sessionId>-id-<n>`）が枝番の形を持たず、
+   * 同じセッション内の同着を `archiveIdBranch` で決められないからである。
    */
   const buildArchiveEntries = (): ArchiveEntry[] =>
     [...archives.entries()]
@@ -846,7 +852,13 @@ export function createMemoryStores(): Stores {
         };
         return [{ entry, seq: meta.seq }];
       })
-      .sort((x, y) => (x.entry.at < y.entry.at ? 1 : x.entry.at > y.entry.at ? -1 : y.seq - x.seq))
+      .sort((x, y) => {
+        if (x.entry.at !== y.entry.at) return x.entry.at < y.entry.at ? 1 : -1;
+        if (x.entry.sessionId !== y.entry.sessionId) {
+          return x.entry.sessionId < y.entry.sessionId ? -1 : 1;
+        }
+        return y.seq - x.seq;
+      })
       .map(({ entry }) => entry);
 
   /**
