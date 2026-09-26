@@ -31,6 +31,7 @@ import type {
 import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
   commitmentSchema,
+  jobSchema,
   memorySlugSchema,
   practiceSchema,
   practiceVersionSchema,
@@ -585,6 +586,23 @@ export function createMemoryStores(): Stores {
     },
     async putJob(job) {
       jobs.set(job.id, isolate(job));
+    },
+    // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041 と
+    // 同じ理由）。** プロセス内の `Map` は同期アクセスなので、fs の
+    // `withPathLock` / pg の `select … for update` に相当する排他は要らない
+    // ——読みと書きの間に他の呼び出しが割り込む隙間が無い（Issue #1674。
+    // `JobStore.updateJob` の doc）。
+    async updateJob(id, mutate) {
+      const found = jobs.get(id);
+      if (found === undefined) return null;
+      // `mutate` へは独立したコピーを渡す（`isolate`）——`mutate` が引数を
+      // その場で書き換えて返す形（`ManagerPool.appraise` の像を書く分岐と
+      // 同じ書き方）でも、`jobSchema.parse` が投げて書き込みに至らなかった
+      // ときに `Map` の中身を汚さないため。
+      // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1652 と同じ理由）。
+      const next = jobSchema.parse(mutate(isolate(found)));
+      jobs.set(id, isolate(next));
+      return isolate(next);
     },
     async listApprovals(options = {}) {
       const all = [...approvals.values()].map(isolate);

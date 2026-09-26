@@ -273,6 +273,43 @@ export class PgJobStore implements JobStore {
       });
   }
 
+  /**
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く
+   * （Issue #1674。`JobStore.updateJob` の doc）。**`select … for update` で
+   * 押さえてから読み直す**（#1654 の `editRequest` と同じ形）——同じ
+   * トランザクションの中でだけ排他が効くので、読みと書きは必ず同じ `tx` を
+   * 通す。
+   *
+   * **`#cache`（段1/段2の覚え。上の doc）へは触らない。** ここで `UPDATE` を
+   * 通すと行の `xmin` が必ず進む（PostgreSQL の性質。上の `jobRowVersion` の
+   * doc）ので、次の `listJobs()` の段1がこの行を「版が変わった」と検出して
+   * 自然に引き直す——手で消さなくても覚えは腐らない。
+   */
+  async updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null> {
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ job: jobs.job })
+        .from(jobs)
+        .where(eq(jobs.id, id))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      // 消されていた。**`mutate` は呼ばない**——書く先が無い書き換えを作らせない。
+      if (row === undefined) return null;
+
+      const current = jobSchema.parse(row.job);
+      // 依頼文や報告に NUL が混ざりうる（`putJob` と同じ理由）。
+      const next = stripNulls(jobSchema.parse(mutate(current)));
+
+      await tx
+        .update(jobs)
+        .set({ status: next.status, updatedAt: new Date(next.updatedAt), job: next })
+        .where(eq(jobs.id, id));
+
+      return next;
+    });
+  }
+
   async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<PendingApproval[]> {
     // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える —
     // `storage-fs` の `jobs.ts` / `testing.ts` の同名フィルタと同じ条件）。
