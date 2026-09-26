@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
+import { maskUrl } from '@alteroid/core/mask-url';
+
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
@@ -217,19 +219,11 @@ function maskValues(values: Record<string, string>): Record<string, string> {
 }
 
 /**
- * URL のクエリ・フラグメント・認証情報（`user:pass@`）を伏せる。**読めない URL は
- * 丸ごと伏せる** —— 読めないものの中のどこに鍵があるかは判別できない。
+ * URL のクエリ・フラグメント・認証情報を伏せる。**実装は Web UI と同じ1つ**
+ * （`@alteroid/core/mask-url`。issue #1622 —— 2つが別々に同じ判定を持ち、
+ * どちらも password だけの userinfo を素通ししていた）。ここは再エクスポートだけ。
  */
-export function maskUrl(url: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return MASK;
-  }
-  const hidden = parsed.search !== '' || parsed.hash !== '' || parsed.username !== '';
-  return hidden ? `${parsed.origin}${parsed.pathname}?${MASK}` : url;
-}
+export { maskUrl };
 
 async function put(target: Target, servers: McpServers, beforeNames: string[]): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
