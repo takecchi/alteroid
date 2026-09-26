@@ -8531,7 +8531,7 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
         // `revoke`（HTTP 経由）と `markUsed`（クローンの `#onPreToolUse` が
         // 呼ぶもの）を同時に叩く。**修正後はどちらも「読んでから書く」を
         // アプリ層に持たない**ので、順序に関わらず両方の効果が残るはず。
-        const [response] = await Promise.all([
+        const [response, used] = await Promise.all([
           app.request('/permission-grants/grant-1/revoke', post),
           stores.permissionGrants.markUsed('grant-1', '2026-01-02T00:00:00.000Z'),
         ]);
@@ -8539,7 +8539,9 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
 
         const after = await stores.permissionGrants.get('grant-1');
         expect(after?.revokedAt).toBeDefined();
-        expect(after?.lastUsedAt).toBe('2026-01-02T00:00:00.000Z');
+        // どちらが先かは決まらない。markUsed が先なら記録して true、取り消しが先なら
+        // 記録せず false（Issue #1687）——戻り値と記録が必ず一致する。
+        expect(after?.lastUsedAt).toBe(used ? '2026-01-02T00:00:00.000Z' : undefined);
       },
     );
 
