@@ -1,3 +1,4 @@
+import { archiveIdBranch } from './archive-id.js';
 import type { ArchiveEntry } from './store.js';
 
 /**
@@ -136,10 +137,24 @@ export interface ArchiveRemovalSelection {
   };
 }
 
-/** `at` 昇順（同着は `id` 昇順）——セッション内の「古い順」の唯一の並び方。 */
+/**
+ * `at` 昇順——セッション内の「古い順」の唯一の並び方。
+ *
+ * **同着は、同じセッションなら id の枝番（`archiveIdBranch`）の昇順で並べる。**
+ * 同じセッションへ同じミリ秒に複数回積むと、id は `base.jsonl`（枝番1）/
+ * `base-2.jsonl`（枝番2）…になる。`-`（0x2D）が `.`（0x2E）より小さいので、
+ * **文字列の昇順では枝番の無い1本目が最後（＝最新）に来る。** その誤った並びの
+ * 上で「最新行の安全弁」と含有の証明を組むと、本当の最新行（まだ蒸留していない
+ * かもしれない本文）が削除対象に入っていた。`list()` の側（`compareArchiveEntriesNewestFirst`）
+ * は #908 で直っていたが、ここは漏れていた。
+ */
 function compareOldestFirst(a: ArchiveEntry, b: ArchiveEntry): number {
   const byAt = Date.parse(a.at) - Date.parse(b.at);
   if (byAt !== 0) return byAt;
+  if (a.sessionId === b.sessionId) {
+    const byBranch = archiveIdBranch(a.id) - archiveIdBranch(b.id);
+    if (byBranch !== 0) return byBranch;
+  }
   if (a.id < b.id) return -1;
   if (a.id > b.id) return 1;
   return 0;
