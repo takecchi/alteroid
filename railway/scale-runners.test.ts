@@ -37,7 +37,7 @@
  * デーモン（`startFakeDaemon`）で、資格は `ALTEROID_HOME/state/daemon.json`
  * に用意する（`apps/daemon/src/runtime.ts` の `writeRuntimeInfo` と同じ形）。
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
-import { type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
+import { RAILWAY_DIR, type Run, runScriptAsync, scenarioCollector } from './cli-stub.js';
 
 /** いま本番に在るもの（app / Postgres / runner の3つ）。 */
 const EXISTING = [
@@ -800,6 +800,26 @@ describe('--vacate で2台以上減らそうとしたとき', () => {
   it('vacate も railway ssh も呼ばない（呼び出し記録が空）', () => {
     expect(r.calls.some((c) => c.startsWith('ssh '))).toBe(false);
     expect(r.stderr).not.toContain('vacate を投げた');
+  });
+});
+
+describe('VACATED の判定をパイプで書かない（#1610）', () => {
+  // **main の CI が1回落ちた形。** node は VACATED を出して 0 で終わっていた
+  // のに、スクリプトは「確かめられなかった」で落ちた。`set -o pipefail` の
+  // 下で `printf … | grep -q` と書くと、grep が一致した時点で読むのをやめ、
+  // 書き残した printf が SIGPIPE（141）で終わってパイプ全体が偽になる。
+  // bash は stdout を行ごとに書き出すので、出力が短くても、器が混んで printf の
+  // 2行目以降の書き込みが grep の終了より遅れた回だけ起きる。
+  // ⟹ 上のシナリオで決定的には再現できない（偽 CLI を通る出力は長くしても
+  // パイプの容量に届かなかった）。だから書き方そのものを見る
+  it('scale-runners.sh は pipefail の下で「… | grep -q」を使わない', () => {
+    const script = readFileSync(join(RAILWAY_DIR, 'scale-runners.sh'), 'utf8');
+    expect(script).toContain('set -euo pipefail');
+    const piped = script
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .filter((line) => /\|\s*(command\s+)?grep\s+-[A-Za-z]*q/.test(line));
+    expect(piped).toEqual([]);
   });
 });
 

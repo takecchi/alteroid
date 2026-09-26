@@ -397,7 +397,9 @@ NODE_EOF
   fi
   printf '%s\n' "$VACATE_OUT" >&2
 
-  if printf '%s\n' "$VACATE_OUT" | command grep -Fq -- 'VACATED'; then
+  # パイプで grep -q へ渡さない（#1610）。pipefail の下では、grep が一致して
+  # 先に終わると書き残した printf が SIGPIPE で落ち、VACATED が出ていても偽になる
+  if command grep -Fq -- 'VACATED' <<<"$VACATE_OUT"; then
     ok "$VACATE の委譲は移り終えた（runnerId=${VACATE_ID}）"
 
     # 消す器を除いた宛先。**runner_url_for が作るのと同じ ${{…}} 参照の形**に
