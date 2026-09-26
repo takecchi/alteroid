@@ -187,6 +187,7 @@ import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneRedeliveryState } from './clone-redelivery-state.js';
+import { CloneSdkSession } from './clone-sdk-session.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import {
@@ -1307,7 +1308,7 @@ export interface CloneOptions {
 
 type Listener = (event: ChatStreamEvent) => void;
 
-interface Turn {
+export interface Turn {
   /** 出力を届ける会話。null なら人間に見せない内部ターン（蒸留など）。 */
   conversationId: string | null;
   /**
@@ -1556,8 +1557,6 @@ class Clone implements CloneHost {
    * どちらも `[]` に畳むと、`self.ts` 側でこの2つを区別する手段が無くなる。
    */
   #mcpServersInfo: Array<{ name: string; status: string }> | null = null;
-  /** init で報告された、いまの SDK セッション id。`#resumedFrom` とは別（あちらは resume 元）。 */
-  #sdkSessionId: string | null = null;
   /**
    * 直近のターンの境界で `#observeContextUsage` が返した観測を、そのまま控える
    * （#804）。
@@ -1773,28 +1772,6 @@ class Clone implements CloneHost {
    * 始めることになる。
    */
   #usageBlockedAccumulatedChars = 0;
-
-  /**
-   * 文脈窓（プロンプトの長さ）で落ちたので、**次のターンの境界でセッションを
-   * 畳んで作り直す**（#553。人間の依頼「今後発生した際に落ちないように対策」）。
-   *
-   * **`#recycleForToken` と同じ3段に相乗りする**（新しい系統を作らない）——
-   * 印を立て、`#finishTurn()` が境界を起こし、`#inputStream` が境界で `return`
-   * する。違うのは1点だけで、**こちらは作り直すときに resume しない**
-   * （`setCloneSessionId(null)` を印と同時に打つ）。
-   *
-   * ## なぜ resume しないのか
-   *
-   * resume すると同じ長すぎる会話が戻ってくる。**⟹ 同じところで落ちる。**
-   * `#read` の `catch` に既に在る判断がそのまま当たる —— 逐語で
-   * 「同一性はセッションではなく記憶に宿るので、捨てて困るものは無い」。
-   *
-   * ## ⚠️ `#recycleForToken` と混ぜない
-   *
-   * あちらは**会話を切らない**（`resume` で id を引き継ぐ）。こちらは切る。
-   * 1つの印に畳むと、トークンを回すだけで会話が切れる。
-   */
-  #recycleForContextWindow = false;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -2189,37 +2166,6 @@ class Clone implements CloneHost {
    */
   readonly #notices = new CloneNotices();
 
-  /** SDK へ流す入力の待ち行列。 */
-  readonly #input: SDKUserMessage[] = [];
-  #inputWaiter: (() => void) | null = null;
-  /**
-   * 認証トークンを回したので、**次のターンの境界で** SDK セッションを畳んで作り直す
-   * （Issue #393 PR4）。
-   *
-   * **印だけを持つ。** 回すと決めた時点ではセッションに触らない —— 触ると、
-   * そのとき走っていたターンを殺すか、失敗として報告するかのどちらかになる
-   * （`#inputStream` の doc）。
-   */
-  #recycleForToken = false;
-
-  #query: Query | null = null;
-  #reader: Promise<void> | null = null;
-  /**
-   * 受信箱のループ（`#pump()`）そのもの。**畳むときに読み切るために保持する**
-   * （Issue #564 (a)）。
-   *
-   * かつてここは `void this.#pump().catch(...)` で起こしっぱなしにしてあり、
-   * Promise はどこにも残っていなかった。`stop()` が待ち行列を読み切ってから
-   * 畳むには、その1本を `await` できる形で持っておく必要がある（`stop()` の doc）。
-   *
-   * **`.catch(...)` を外して素の `#pump()` を入れないこと。** 外すと、ループが
-   * 投げたときに `stop()` が待つ前の時点で unhandled rejection になる（理由は
-   * コンストラクタ側の逐語コメント）。ここに入れるのは `.catch(...)` まで
-   * 含めた Promise であり、だから `await` しても投げない。
-   */
-  #pumpLoop: Promise<void> | null = null;
-  #turn: Turn | null = null;
-  #stopped = false;
   /**
    * **「蒸留・記憶」の状態12フィールドの器**（Issue #1190 の続きで
    * `clone-distill-memory-state.ts` へ切り出した。前例は PR #1359 / #1507 /
@@ -2234,9 +2180,19 @@ class Clone implements CloneHost {
    * 切り出しの理由と限界は `CloneDistillMemoryState` 自身の doc を見よ。
    */
   readonly #distillMemory = new CloneDistillMemoryState();
-  /** resume を試みた session id。init が来る前に落ちたら捨てる。 */
-  #resumedFrom: string | null = null;
-  #sawInit = false;
+  /**
+   * **「SDK セッションの生存」の状態13フィールドの器**（Issue #1190 の続きで
+   * `clone-sdk-session.ts` へ切り出した。前例は #1611 `runner-sdk-session.ts`）。
+   * `#query` / `#reader` / `#pumpLoop`・`#turn`・`#stopped`・`#input` /
+   * `#inputWaiter`・`#recycleForToken` / `#recycleForContextWindow`・
+   * `#resumedFrom` / `#sawInit`・`#sdkSessionId`・`#sessionTokenIdentity` を
+   * 持つ。**SDK セッションをいつ開く／畳むか・ターンをどう回すか・畳みの
+   * 順序の判断はこれまでどおりここ（`Clone`）が持ち、この器は状態と、
+   * 局所的な遷移だけを持つ。** 注入された依存（`#queryFn` / `#mcpServerFactory` /
+   * `#cloneTools*`）は器に入れていない——何を入れ、何を残したかの理由は
+   * `CloneSdkSession` 自身の doc を見よ。
+   */
+  readonly #sdkSession = new CloneSdkSession();
   readonly #env: NodeJS.ProcessEnv;
   /**
    * SDK 子プロセスへ重ねる鍵の**現在値を返す関数**（Issue #393 PR3）。
@@ -2251,14 +2207,6 @@ class Clone implements CloneHost {
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   /** {@link CloneOptions.onTokenSessionRecycled}。**畳んだ後**に1度だけ鳴らす。 */
   readonly #onTokenSessionRecycled: (() => void) | undefined;
-  /**
-   * **このセッションが起きたときの**トークンの身元（Issue #393 PR3）。
-   *
-   * `#childEnv()` で1度だけ捕まえる——**観測のたびに読み直さない。** 読み直すと、
-   * 回した後に届いた「前のセッションの観測」が新しい身元を名乗り、**世代の照合が
-   * そのまま素通しになる**（`observationFreshness` が `current` を返す）。
-   */
-  #sessionTokenIdentity: { tokenId: string; generation: number } | undefined;
   /**
    * 枠の事実を覚える（`ManagerPool#onEvent` と同じ形）。**鍵は「トークンの身元 ×
    * 枠の種類」である**（`usage-limits.ts` の `rateLimitMemoryKey`）。
@@ -2419,10 +2367,12 @@ class Clone implements CloneHost {
     // できる形にしておく（Issue #564 (a)。`#pumpLoop` の doc）。**`.catch(...)`
     // まで含めた Promise を入れること** —— 素の `#pump()` を入れると、`stop()` が
     // 待つより前に投げた分が unhandled rejection になる（すぐ上の理由）。
-    this.#pumpLoop = this.#pump().catch((error: unknown) => {
-      noteBackgroundFailure('クローンの受信箱のループ', '', error);
-      throw error;
-    });
+    this.#sdkSession.beginPumpLoop(
+      this.#pump().catch((error: unknown) => {
+        noteBackgroundFailure('クローンの受信箱のループ', '', error);
+        throw error;
+      }),
+    );
   }
 
   /**
@@ -2474,10 +2424,10 @@ class Clone implements CloneHost {
    *   - `'deferred'` — 印を立てた。**畳まれるのはターンの境界**
    */
   recycleSessionForToken(): 'now' | 'deferred' {
-    if (this.#query === null) return 'now';
-    this.#recycleForToken = true;
+    if (this.#sdkSession.query === null) return 'now';
+    this.#sdkSession.requestTokenRecycle();
     // 入力待ちで止まっているなら、そこから抜けさせる（ターンの境界に居る場合）。
-    this.#wakeInput();
+    this.#sdkSession.wakeInput();
     return 'deferred';
   }
 
@@ -2532,7 +2482,7 @@ class Clone implements CloneHost {
    * ので、セッションの身元をそのまま返せば足りる。
    */
   get usageBlockedTokenId(): string | undefined {
-    return this.#sessionTokenIdentity?.tokenId;
+    return this.#sdkSession.sessionTokenIdentity?.tokenId;
   }
 
   // -------------------------------------------------------------------------
@@ -2560,7 +2510,7 @@ class Clone implements CloneHost {
     // 待ち行列を読み切り、そのあとで `#stopped` を立てる。⟹ **その間に届いたものを
     // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
     // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
-    if (this.#stopped || this.#inbox.closed) {
+    if (this.#sdkSession.stopped || this.#inbox.closed) {
       // **ここでも畳む。** この窓は `#remember` が実際にストアへ書く経路その
       // ものなので、畳まなければ「片付け中に届いた同文の連投」がそのまま
       // ディスクへ行の増殖として残る——これは通常経路（下の
@@ -2643,7 +2593,7 @@ class Clone implements CloneHost {
       const staleSameKeyRecovery = staleObservedRecoveryNoticeEvent(
         event,
         resetsAt,
-        this.#sessionTokenIdentity?.tokenId,
+        this.#sdkSession.sessionTokenIdentity?.tokenId,
       );
       if ((!usageBlockAlwaysRearms(event) || staleSameKeyRecovery) && stillCoolingDown) {
         this.#usageBlockSuppressedRearms += 1;
@@ -2875,8 +2825,8 @@ class Clone implements CloneHost {
    *   （`#reportFailure`）がそのまま記録する
    */
   async interruptTurn(): Promise<'interrupted' | 'idle'> {
-    const turn = this.#turn;
-    const q = this.#query;
+    const turn = this.#sdkSession.turn;
+    const q = this.#sdkSession.query;
     if (turn === null || q === null) return 'idle';
     await this.#journal({
       type: 'exchange',
@@ -3071,7 +3021,7 @@ class Clone implements CloneHost {
     // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
     // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
     // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
-    if (this.#stopped || this.#inbox.closed) return;
+    if (this.#sdkSession.stopped || this.#inbox.closed) return;
 
     // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
     // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
@@ -3104,7 +3054,7 @@ class Clone implements CloneHost {
     //    `FORCED_EXIT_MS` は `SHUTDOWN_GRACE_MS - 5_000` = 55_000。
     //    ⟹ 待ち行列が詰まっていれば、蒸留は「順番が遅い」のではなく**切られる**。
     //    失われるのは会話1区間まるごとである（#564 の観測）
-    if (this.#query) {
+    if (this.#sdkSession.query) {
       await this.#postAndWait(
         {
           type: 'distill',
@@ -3149,20 +3099,16 @@ class Clone implements CloneHost {
     // 新しい仕事を受けない印ではない** —— 後者は `#inbox.closed` が持つ。
     //
     // `#pump` がまだ起きていなければ（`null`）何もしない。
-    await this.#pumpLoop;
+    await this.#sdkSession.pumpLoop;
 
-    this.#stopped = true;
-    this.#wakeInput();
+    this.#sdkSession.markStopped();
+    this.#sdkSession.wakeInput();
     // **閉じる前に累積を1回読む**（`#flushSessionUsage` の doc）。デーモンの停止で
     // ここを通ったぶんは `result` を出さないので、読まなければ台帳に1行も残らない。
     // `runner.ts` の `stop()` が `#flushUsage()` を同じ位置に置いているのと対である。
     await this.#flushSessionUsage();
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
-    await this.#reader?.catch(() => undefined);
+    this.#sdkSession.closeQuery();
+    await this.#sdkSession.reader?.catch(() => undefined);
     // 走行中のマネージャーも畳む。返事待ちで宙吊りのまま消えない。
     await this.#managers.stop().catch(() => undefined);
     // **クローンの道具の中継のホストも、デーモンが実際に落ちるこの1点で畳む**
@@ -3239,7 +3185,7 @@ class Clone implements CloneHost {
    */
   #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
     // 門は `post()` と同じ述語である（理由はそちら。Issue #564 (a)）。
-    if (this.#stopped || this.#inbox.closed) return Promise.resolve();
+    if (this.#sdkSession.stopped || this.#inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#completions.set(event.id, resolve);
       // `delivered`（Issue #783 段0）。この経路（蒸留の割り込み）は `#remember`
@@ -6227,7 +6173,7 @@ class Clone implements CloneHost {
     };
 
     for (const [restoreUnreadPassIndex, { record, verdict }] of decided.entries()) {
-      if (this.#stopped || this.#inbox.closed) {
+      if (this.#sdkSession.stopped || this.#inbox.closed) {
         await flushStaleRemovalBuffer();
         // **`staleBuffer` と同じ理由で、ここでも先に空にする。** 既に
         // 「畳んだ」対象として `gatedRecordsThisPass` へ積んだ record は、
@@ -6284,7 +6230,7 @@ class Clone implements CloneHost {
       // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
       // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
       // ので、積めなかったものは次の起動で拾い直せる。
-      if (this.#stopped || this.#inbox.closed) {
+      if (this.#sdkSession.stopped || this.#inbox.closed) {
         await flushStaleRemovalBuffer();
         // 直上と同じ理由（前の record ぶんで既に積んだ「畳んだ」を失わない）。
         await flushGatedFoldHeadline();
@@ -6897,7 +6843,7 @@ class Clone implements CloneHost {
     //
     // **`#finishTurn()` より必ず先に呼ばれる**（全4経路でこの順序）。逆にすると
     // `this.#turn` は既に `null` で、印はどこにも残らない。
-    const running = this.#turn;
+    const running = this.#sdkSession.turn;
     if (running !== null) running.failure = message;
 
     // 繋がっている人間には即座に見せる。日誌より先なのは、書き込みを待たせて
@@ -6933,7 +6879,7 @@ class Clone implements CloneHost {
     const foldingForUnproductiveUsage: 'no' | 'folding' =
       foldingForContextWindow === 'no' &&
       this.#usageBlocked !== null &&
-      this.#recycleForContextWindow
+      this.#sdkSession.wantsContextWindowRecycle
         ? 'folding'
         : 'no';
     const failureText =
@@ -7171,15 +7117,15 @@ class Clone implements CloneHost {
   ): Promise<'no' | 'folding' | 'held'> {
     if (failure === undefined) return 'no';
     // **セッションが無ければ畳むものが無い**（`recycleSessionForToken` の同じ門）。
-    if (this.#query === null) return 'no';
+    if (this.#sdkSession.query === null) return 'no';
     // 暴走の止め（上の doc）。**ただし1回きり**（issue #955 の (A)。下の doc）。
-    const escalatedFromHeld = this.#resumedFrom === null && !this.#sessionAnswered;
+    const escalatedFromHeld = this.#sdkSession.resumedFrom === null && !this.#sessionAnswered;
     if (escalatedFromHeld && !this.#heldInSession) {
       this.#heldInSession = true;
       return 'held';
     }
 
-    this.#recycleForContextWindow = true;
+    this.#sdkSession.armContextWindowRecycle();
     // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
     this.#distillMemory.armContextWindowFoldNotice();
     try {
@@ -7276,12 +7222,12 @@ class Clone implements CloneHost {
    */
   async #noteUnproductiveUsageBlockFold(): Promise<'no' | 'folding'> {
     // **セッションが無ければ畳むものが無い**（`#noteContextWindowFold` と同じ門）。
-    if (this.#query === null) return 'no';
+    if (this.#sdkSession.query === null) return 'no';
     if (this.#usageBlockedAccumulatedChars < UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD) {
       return 'no';
     }
 
-    this.#recycleForContextWindow = true;
+    this.#sdkSession.armContextWindowRecycle();
     this.#distillMemory.armContextWindowFoldNotice();
     try {
       await this.#stores.sessions.setCloneSessionId(null);
@@ -7349,14 +7295,17 @@ class Clone implements CloneHost {
     let archiveId: string | null = null;
     try {
       const transcript = await readFile(path, 'utf8');
-      const write = await this.#stores.archive.archive(this.#sdkSessionId ?? 'clone', transcript);
+      const write = await this.#stores.archive.archive(
+        this.#sdkSession.sdkSessionId ?? 'clone',
+        transcript,
+      );
       archiveId = write.id;
       // **diverged / unknown のときだけ日誌へ記録する**（#698。理由は
       // `describeArchiveContinuityForJournal` の doc）。`#journal` は自分で
       // 失敗を握り潰すので、退避の成功を道連れにしない。
       const continuityText = describeArchiveContinuityForJournal({
         caller: '文脈窓で畳む前の退避',
-        sessionId: this.#sdkSessionId ?? 'clone',
+        sessionId: this.#sdkSession.sdkSessionId ?? 'clone',
         continuity: write.continuity,
         comparedTo: write.comparedTo,
         bodyChars: transcript.length,
@@ -7714,7 +7663,7 @@ class Clone implements CloneHost {
 
       case 'distill': {
         // セッションがまだ無いなら蒸留するものも無い
-        if (!this.#query) return;
+        if (!this.#sdkSession.query) return;
         // **前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない。**
         // `endConversation()` の直後に `stop()` が来る形（デプロイの夜間再起動が
         // これに当たる）は、`event.reason` が `conversation_end` でも `shutdown`
@@ -8126,7 +8075,7 @@ class Clone implements CloneHost {
         resolve,
         kind,
       };
-      this.#turn = turn;
+      this.#sdkSession.beginTurn(turn);
     });
 
     try {
@@ -8897,28 +8846,22 @@ class Clone implements CloneHost {
     // 別の場所（`turn_ended` の成功枝）で 0 へ戻すので、健全なセッションでは
     // ここは大きくならない。**
     this.#usageBlockedAccumulatedChars += text.length;
-    this.#input.push({
+    this.#sdkSession.enqueueInput({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
     });
-    this.#wakeInput();
-  }
-
-  #wakeInput(): void {
-    const waiter = this.#inputWaiter;
-    this.#inputWaiter = null;
-    waiter?.();
+    this.#sdkSession.wakeInput();
   }
 
   async *#inputStream(): AsyncGenerator<SDKUserMessage> {
     for (;;) {
-      const next = this.#input.shift();
+      const next = this.#sdkSession.dequeueInput();
       if (next !== undefined) {
         yield next;
         continue;
       }
-      if (this.#stopped) return;
+      if (this.#sdkSession.stopped) return;
       // **認証トークンを回したので、このセッションを畳んで作り直す**（Issue #393 PR4）。
       //
       // **ここが「ターンの境界」である** —— 積まれた入力が無く（上の `shift` が
@@ -8940,7 +8883,10 @@ class Clone implements CloneHost {
       // 違うのは作り直すときに resume しない点だけである
       // （`#recycleForContextWindow` の doc）。**印を2つに分けているのは、
       // トークンを回すだけで会話が切れないようにするためである。**
-      if ((this.#recycleForToken || this.#recycleForContextWindow) && this.#turn === null) {
+      if (
+        (this.#sdkSession.wantsTokenRecycle || this.#sdkSession.wantsContextWindowRecycle) &&
+        this.#sdkSession.turn === null
+      ) {
         /**
          * **トークンのために畳んだのなら、畳んだことを知らせる**（人間の決定
          * 2026-09-07。{@link CloneOptions.onTokenSessionRecycled}）。
@@ -8955,8 +8901,7 @@ class Clone implements CloneHost {
          * **投げさせない。** 知らせの失敗でセッションの作り直しを巻き添えに
          * しない —— 畳むことはもう決まっている。
          */
-        const recycledForToken = this.#recycleForToken;
-        this.#recycleForToken = false;
+        const recycledForToken = this.#sdkSession.takeTokenRecycle();
         if (recycledForToken && this.#onTokenSessionRecycled !== undefined) {
           try {
             this.#onTokenSessionRecycled();
@@ -8966,9 +8911,7 @@ class Clone implements CloneHost {
         }
         return;
       }
-      await new Promise<void>((resolve) => {
-        this.#inputWaiter = resolve;
-      });
+      await this.#sdkSession.waitForInput();
     }
   }
 
@@ -9045,7 +8988,7 @@ class Clone implements CloneHost {
   }
 
   async #ensureQuery(): Promise<void> {
-    if (this.#query) return;
+    if (this.#sdkSession.query) return;
 
     const storedResume = await this.#stores.sessions.getCloneSessionId();
     // **`load()` を呼ぶ前に大きさを測る**（#1283 の OOM、段2）。超えていたら
@@ -9053,8 +8996,7 @@ class Clone implements CloneHost {
     // （`#resumeCandidateWithinBudget` の doc）。
     const resume =
       storedResume === null ? null : await this.#resumeCandidateWithinBudget(storedResume);
-    this.#resumedFrom = resume;
-    this.#sawInit = false;
+    this.#sdkSession.beginSession(resume);
     // **セッションごとに戻す。** 生ログの在り処を持ち越すと、別のセッションの
     // 生ログをいまの `sessionId` の名前で退避することになる（`#transcriptPath` の
     // doc）。`#sessionAnswered` を持ち越すと、暴走の止めが前のセッションの成功で
@@ -9077,8 +9019,7 @@ class Clone implements CloneHost {
       prompt: this.#inputStream(),
       options: await this.#buildOptions(resume),
     });
-    this.#query = q;
-    this.#reader = this.#read(q);
+    this.#sdkSession.open(q, this.#read(q));
   }
 
   /**
@@ -9311,15 +9252,18 @@ class Clone implements CloneHost {
       // 並行して走りうる。
       stores: {
         ...this.#stores,
-        journal: stampingJournal(this.#stores.journal, () => this.#turn?.approvalId ?? null),
+        journal: stampingJournal(
+          this.#stores.journal,
+          () => this.#sdkSession.turn?.approvalId ?? null,
+        ),
       },
-      emit: (event) => this.#emit(this.#turn?.conversationId ?? null, event),
+      emit: (event) => this.#emit(this.#sdkSession.turn?.conversationId ?? null, event),
       managers: this.#managers,
       ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
       ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
-      memoryCause: () => (this.#turn?.kind === 'distill' ? 'distill' : 'clone'),
+      memoryCause: () => (this.#sdkSession.turn?.kind === 'distill' ? 'distill' : 'clone'),
       // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
       // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。
       dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
@@ -9331,7 +9275,7 @@ class Clone implements CloneHost {
       // **`ask_human` が `PendingApproval.conversationId` を埋めるための口（#768）。**
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
-      conversationId: () => this.#turn?.conversationId ?? undefined,
+      conversationId: () => this.#sdkSession.turn?.conversationId ?? undefined,
       // **`conversation_post` の1通を、その会話を開いている画面へ流す口**
       // （issue #1393）。1通で閉じる逐次配信なので、本文の直後に `done` を出す。
       postToConversation: (conversationId, text) => {
@@ -9365,8 +9309,8 @@ class Clone implements CloneHost {
       permissionMode: this.#observedPermissionMode,
       requestedPermissionMode: this.#permissionMode,
       mcpServers: this.#mcpServersInfo,
-      sessionId: this.#sdkSessionId,
-      resumedFrom: this.#resumedFrom,
+      sessionId: this.#sdkSession.sdkSessionId,
+      resumedFrom: this.#sdkSession.resumedFrom,
       // **ここで `heuristicChars(...)` を通す。** `#promptMemoryChars` /
       // `#systemPromptChars` は素の `number`（`String.length` を直接
       // 控えている私有フィールド）——`CloneRuntimeFacts` の欄は
@@ -9401,7 +9345,7 @@ class Clone implements CloneHost {
     // 観測していない」であって「0本と観測した」ではない（#324）。`[]` に戻すと
     // 次の init が届くまでの窓で「0本」と嘘をつく。
     this.#mcpServersInfo = null;
-    this.#sdkSessionId = null;
+    this.#sdkSession.setSdkSessionId(null);
     this.#lastContextUsage = null;
   }
 
@@ -9417,7 +9361,7 @@ class Clone implements CloneHost {
    * を名乗れる。
    */
   #captureInitFacts(facts: AgentRuntimeFacts): void {
-    this.#sdkSessionId = facts.sessionId;
+    this.#sdkSession.setSdkSessionId(facts.sessionId);
     this.#sdkModel = facts.model;
     this.#claudeCodeVersion = facts.agentVersion;
     this.#apiKeySource = facts.apiKeySource;
@@ -9651,7 +9595,7 @@ class Clone implements CloneHost {
    * セッションなので、`#turn` を読むと答えと無関係な行へ印が付く。
    */
   #answeredApprovalFor(mainThreadActor: string): string | null {
-    return mainThreadActor === CLONE_ACTOR_ID ? (this.#turn?.approvalId ?? null) : null;
+    return mainThreadActor === CLONE_ACTOR_ID ? (this.#sdkSession.turn?.approvalId ?? null) : null;
   }
 
   /**
@@ -10068,7 +10012,7 @@ class Clone implements CloneHost {
     // （`credentialNamesShadowedByProfile`。理由はあちらの doc）。
     // **セッションが起きるこの瞬間の身元を捕まえる**（`#sessionTokenIdentity` の doc）。
     // ここ以外で読み直すと、世代の照合が素通しになる。
-    this.#sessionTokenIdentity = this.#tokenIdentity?.();
+    this.#sdkSession.captureSessionTokenIdentity(this.#tokenIdentity?.());
     const env: NodeJS.ProcessEnv = {
       ...this.#env,
       ...this.#vaultCredentialOverlay(),
@@ -10145,9 +10089,9 @@ class Clone implements CloneHost {
     try {
       await this.#onUsageObservation({
         ...observation,
-        ...(this.#sessionTokenIdentity === undefined
+        ...(this.#sdkSession.sessionTokenIdentity === undefined
           ? {}
-          : { observedBy: this.#sessionTokenIdentity }),
+          : { observedBy: this.#sdkSession.sessionTokenIdentity }),
       });
     } catch (error) {
       // **黙って握り潰さない。** 跡は残すが、ターンは続ける。
@@ -10363,7 +10307,7 @@ class Clone implements CloneHost {
    * ——新しい伏せ字の仕組みは作っていない。
    */
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
-    const q = this.#query;
+    const q = this.#sdkSession.query;
     if (q === null) return undefined;
     const startedAt = Date.now();
     try {
@@ -10462,7 +10406,7 @@ class Clone implements CloneHost {
    *   サイドクエリについて言っているのと同じ理由である）
    */
   async #flushSessionUsage(): Promise<void> {
-    const models = await readSessionUsage(this.#query);
+    const models = await readSessionUsage(this.#sdkSession.query);
     if (models === undefined) return;
     await this.#recordUsage({ models }, 'session', 'cumulative');
   }
@@ -10526,9 +10470,9 @@ class Clone implements CloneHost {
         // **無いときは渡さない。** プールが空の器では毎回 undefined になり、
         // 台帳のトークン軸は空のまま ＝ 受け入れ基準7（既定の構成の挙動を
         // 1文字も変えない）。
-        ...(this.#sessionTokenIdentity === undefined
+        ...(this.#sdkSession.sessionTokenIdentity === undefined
           ? {}
-          : { tokenId: this.#sessionTokenIdentity.tokenId }),
+          : { tokenId: this.#sdkSession.sessionTokenIdentity.tokenId }),
       });
 
       // **ターン1回ぶんの増分を日誌へ残す。** 台帳は日 × actor × モデル ×
@@ -10641,14 +10585,18 @@ class Clone implements CloneHost {
 
       // init すら来ずに落ちたなら resume 素材が腐っている。捨てて作り直す。
       // 同一性はセッションではなく記憶に宿るので、捨てて困るものは無い。
-      if (!this.#stopped && !this.#sawInit && this.#resumedFrom !== null) {
+      if (
+        !this.#sdkSession.stopped &&
+        !this.#sdkSession.sawInit &&
+        this.#sdkSession.resumedFrom !== null
+      ) {
         // **⭐ 捨てる前に墓標を立てる**（#564 E1b）。**順序が要点である** —— 捨てた後だと、
         // 立てる前にプロセスが死んだ回で id がどこにも残らない。
         //
         // **この回は退避が無い**（道具を1つも使っていないので `#transcriptPath` は
         // `null` で、`#salvageTranscript` は何もしない）。⟹ `TranscriptGrave` の側では
         // 拾えない。材料は pg に預けた生ログだけである。
-        await this.#noteLostSession(this.#resumedFrom);
+        await this.#noteLostSession(this.#sdkSession.resumedFrom);
         // **捨て損ねたことを黙らせない**（issue #1157）。ここで投げると失敗の報告
         // そのものが失敗するので投げないが、跡は残す —— **同じ操作を打つ
         // `#noteContextWindowFold` が既にこの形で跡を残しており、こちらだけが
@@ -10660,9 +10608,9 @@ class Clone implements CloneHost {
         });
       }
     } finally {
-      if (!this.#stopped) {
+      if (!this.#sdkSession.stopped) {
         // result を伴わずに終わってもターンを取り残さない（取り残すと受信箱ごと止まる）
-        const turn = this.#turn;
+        const turn = this.#sdkSession.turn;
         if (turn) {
           await this.#reportFailure(
             turn.conversationId,
@@ -10676,7 +10624,7 @@ class Clone implements CloneHost {
         // 何も取れない。`runner.ts` の `#finish` が `#flushUsage()` を `close()` の
         // 手前に置いているのと対である。
         await this.#flushSessionUsage();
-        this.#query = null;
+        this.#sdkSession.clearQuery();
         // 次のセッションは `#buildOptions` が控え直す。ここで空にしておかないと、
         // 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステム
         // プロンプトを組むことになる（実際には焼き込み直すので嘘にはならないが、
@@ -10691,8 +10639,7 @@ class Clone implements CloneHost {
         //
         // **印を先に下ろす。** 下ろさずに `await` すると、その間に届いた失敗が
         // もう一度畳もうとする。
-        if (this.#recycleForContextWindow) {
-          this.#recycleForContextWindow = false;
+        if (this.#sdkSession.takeContextWindowRecycle()) {
           await this.#salvageTranscript();
         }
       }
@@ -10711,7 +10658,7 @@ class Clone implements CloneHost {
   async #apply(event: AgentEvent): Promise<void> {
     switch (event.type) {
       case 'session_started': {
-        this.#sawInit = true;
+        this.#sdkSession.markSawInit();
         // **控え損ねたことを黙らせない**（issue #1157）。**投げない** —— 控えに
         // 失敗したことでセッションそのものを殺さない。**だが跡は残す**:
         // 控えられなければ次の起動で resume を諦めるが、その諦め方は
@@ -10745,7 +10692,11 @@ class Clone implements CloneHost {
         // **文言の分類そのものは provider の写しが済ませている**
         // （`claude-provider.ts` の `foldClaudeMessage`）。ここへ届く時点で
         // 「上限の合図である」は確定している。
-        await this.#noteUsageNotice(event.notice, this.#turn?.conversationId ?? null, 'text');
+        await this.#noteUsageNotice(
+          event.notice,
+          this.#sdkSession.turn?.conversationId ?? null,
+          'text',
+        );
         return;
       }
 
@@ -10770,7 +10721,7 @@ class Clone implements CloneHost {
         // —— 読み直さない理由は `UsageStore.record` の `tokenId` の doc と同じで、
         // 回った直後に届いた**前の鍵の観測**が新しい鍵の欄へ入るからである。
         const kind = facts.kind ?? '';
-        const memoryKey = rateLimitMemoryKey(this.#sessionTokenIdentity?.tokenId, kind);
+        const memoryKey = rateLimitMemoryKey(this.#sdkSession.sessionTokenIdentity?.tokenId, kind);
         const previous = this.#rateLimits.get(memoryKey);
         const transition = usageTransitionOf(previous, facts);
         const merged = mergeRateLimitFacts(previous, facts);
@@ -10783,7 +10734,7 @@ class Clone implements CloneHost {
         // ある理由（#1311 と同じ形の肥大化を作り直さない／同じ会話の連打は
         // 数えない）で、畳むたびには書かず、次に `transition` が定まった
         // 回にまとめて `#journal` へ吐き出す。
-        const conversationId = this.#turn?.conversationId ?? null;
+        const conversationId = this.#sdkSession.turn?.conversationId ?? null;
         if (transition === undefined) {
           const crossFold = this.#rateLimitCrossFold.get(memoryKey);
           if (crossFold !== undefined && crossFold.lastConversationId !== conversationId) {
@@ -10843,7 +10794,7 @@ class Clone implements CloneHost {
         if (facts.status === 'rejected') {
           await this.#noteUsageNotice(
             rejectedRateLimitNotice(facts),
-            this.#turn?.conversationId ?? null,
+            this.#sdkSession.turn?.conversationId ?? null,
             'rate_limit',
           );
         }
@@ -10851,14 +10802,14 @@ class Clone implements CloneHost {
       }
 
       case 'text_delta': {
-        const turn = this.#turn;
+        const turn = this.#sdkSession.turn;
         if (turn) turn.streamed = true;
         this.#emit(turn?.conversationId ?? null, { type: 'text', text: event.text });
         return;
       }
 
       case 'assistant_message': {
-        const turn = this.#turn;
+        const turn = this.#sdkSession.turn;
         const said = assistantTextOf(event.blocks);
 
         // **SDK が「これは応答ではない」と印を付けたメッセージは、応答として
@@ -10897,7 +10848,7 @@ class Clone implements CloneHost {
       // `tool_result` を含むときだけにしているのは、人間の発言のエコーや
       // replay（`SDKUserMessageReplay`）を「考え始めた」と読み違えないため。
       case 'tool_result': {
-        this.#emit(this.#turn?.conversationId ?? null, { type: 'thinking' });
+        this.#emit(this.#sdkSession.turn?.conversationId ?? null, { type: 'thinking' });
         return;
       }
 
@@ -10910,7 +10861,7 @@ class Clone implements CloneHost {
         // **ターンの外で届いた分は拾えない。** `this.#turn` が `null`（人間とも
         // クローン自身とも話していない窓）なら静かに捨てる —— 対応する
         // `turn_usage` の行そのものが無いので、持ち帰る先が無い。
-        this.#turn?.compactions.push({
+        this.#sdkSession.turn?.compactions.push({
           trigger: event.trigger,
           preTokens: event.preTokens,
           ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
@@ -10951,7 +10902,9 @@ class Clone implements CloneHost {
             layer: 'clone',
             site: 'session',
             managerId: CLONE_ACTOR_ID,
-            ...(this.#sdkSessionId === null ? {} : { sessionId: this.#sdkSessionId }),
+            ...(this.#sdkSession.sdkSessionId === null
+              ? {}
+              : { sessionId: this.#sdkSession.sdkSessionId }),
             turnSucceeded: event.succeeded,
             contextUsage,
           });
@@ -10969,7 +10922,7 @@ class Clone implements CloneHost {
         // 消えない（畳むのは `#finishTurn()` が `this.#turn = null` にする形
         // でまとめて行われる —— `#said` を個別に空配列へ戻す必要が無いのと
         // 同じ理由）。
-        const compactions = this.#turn?.compactions ?? [];
+        const compactions = this.#sdkSession.turn?.compactions ?? [];
 
         // **クローンの消費も台帳へ載せる。** ここを渡していなかったのは設計判断
         // ではなく抜けで（#45 の本文にも `usage.ts` にも「クローンの分は記録
@@ -10989,7 +10942,7 @@ class Clone implements CloneHost {
           await this.#noteDenial(denial, 'result');
         }
 
-        const turn = this.#turn;
+        const turn = this.#sdkSession.turn;
         // 失敗の印は日誌へ書く前に決める（下の分岐と同じ材料を使う）。**本文を
         // 「クローンの発言」として無印で残せるかどうかがこれで変わる。**
         const failure = event.failure ?? turn?.rejected ?? undefined;
@@ -11252,14 +11205,16 @@ class Clone implements CloneHost {
     }
   }
 
+  /**
+   * 中身（ターンを取り出して `null` にし、控えていた `resolve()` を呼び、
+   * 回す印が立っていれば入力待ちで止まっている `#inputStream` を起こす）は
+   * `CloneSdkSession#finishTurn` へそのまま移した——触る4フィールド
+   * （`#turn`・`#recycleForToken`・`#recycleForContextWindow`・
+   * `#inputWaiter`）がすべてあの器の中にあるため、丸ごと1つの遷移として
+   * 移せた。ここは薄い口である。
+   */
   #finishTurn(): void {
-    const turn = this.#turn;
-    this.#turn = null;
-    turn?.resolve();
-    // **ここがターンの境界になった。** 回す印が立っていれば、入力待ちで止まって
-    // いる `#inputStream` を起こして畳ませる（Issue #393 PR4）。起こさないと、
-    // **次に入力が届くまで古いトークンのまま走り続ける。**
-    if (this.#recycleForToken || this.#recycleForContextWindow) this.#wakeInput();
+    this.#sdkSession.finishTurn();
   }
 
   #emit(conversationId: string | null, event: ChatStreamEvent): void {
