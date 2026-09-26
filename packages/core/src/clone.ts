@@ -183,6 +183,7 @@ import {
   qualifiedToolName,
   type ToolContext,
 } from './tools.js';
+import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
 import { CloneRedeliveryState } from './clone-redelivery-state.js';
@@ -1659,68 +1660,6 @@ class Clone implements CloneHost {
    * 「もう一度だけ注意書きが載る」だけなので、上限や永続化までは持たせない。
    */
   readonly #grantFunneledWarnedOnce = new Set<string>();
-  /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
-  #systemPromptChars = 0;
-  /**
-   * システムプロンプトへ焼き込んだ記憶の文字数。**セッションの間は固定。**
-   *
-   * `#memoryOnRecord` の合計で代用しないこと — あちらは走行中に人間が記憶を直せば
-   * 動く。`CloneRuntimeFacts.injectedMemoryChars` が名乗っているのは「このセッション
-   * を組み立てた時点」の値であり、動く数を渡せばその場で嘘になる。
-   */
-  #promptMemoryChars = 0;
-
-  /**
-   * 直近の tick（`self_initiative` / `timer`）が測った「記憶の床」の絶対値
-   * （`measureMemoryFloor(...).totalChars`）。`null` は「まだこのプロセスで
-   * 一度も測れていない」（＝前回の tick が無い、または在っても測定に失敗した）。
-   *
-   * **永続化しない。** 器が再起動すればここは失われ、再起動後の最初の tick は
-   * 「前回の tick が無い」として扱われる——それが正しい（#553 F2、依頼者の
-   * 明示指定）。測定に失敗した回は更新しない（`#memoryFloorDigestLine` の doc）。
-   */
-  #lastTickMemoryFloorChars: number | null = null;
-  /**
-   * 直近の tick が見た `#promptMemoryChars`（＝そのときの「セッション構築時点」
-   * の基準）。`#lastTickMemoryFloorChars` と対で更新する。
-   *
-   * これを次回の tick 時点の `#promptMemoryChars` と突き合わせることで、
-   * 「セッションが組み直されて基準が取り直された」（resume 等）を検出する
-   * （`#memoryFloorDigestLine` の doc）。**この値も永続化しない。**
-   */
-  #lastTickMemoryBaselineChars: number | null = null;
-
-  /**
-   * このセッションの生ログ（トランスクリプト）の在り処。**フックの入力から控える。**
-   *
-   * ## なぜ控える必要があるのか
-   *
-   * 生ログを退避・蒸留する既存の経路（`#onPreCompact`）は、在り処を
-   * `PreCompact` フックの入力から受け取っている。**⟹ compaction 自体が失敗した回
-   * （文脈窓を超えて落ちた回）ではそのフックが走らないので、在り処が誰にも
-   * 分からない。** 実測ではその形が 2026-08-29〜31 に 24 件在った（#553）。
-   *
-   * **`transcript_path` は `BaseHookInput` の必須フィールドで、どのフックの入力にも
-   * 必ず載る。⟹ 既に張ってある `PostToolUse` から控えられる**（新しいフックを
-   * 増やさない。増やすと、届かなくなったときに赤くならない）。
-   *
-   * ## ⚠️ 弱さ（そのまま書く）
-   *
-   * **そのセッションで最初の道具呼び出しより前は `null` である。**`PostToolUse` は
-   * ツールの実行後に走るので当然そうなる（`claude-provider.ts` の同じフックの注釈が
-   * 書いている窓と同一である）。**`#withFreshMemory` は道具ではないので、記憶の
-   * 載せ直しでは埋まらない。**
-   *
-   * **⭐ ただしこの窓は、失うものが無い窓と重なる。** 控えが `null` なのは「開いた
-   * ばかりで、まだ道具を1つも使っていないセッション」であり、そこで落ちたなら
-   * **退避する中身も蒸留する中身もほぼ無い**（生ログは1往復ぶんである）。
-   *
-   * ## セッションを跨いで持ち越さない
-   *
-   * `#ensureQuery` で `null` へ戻す。持ち越すと、別のセッションの生ログを
-   * **いまの `sessionId` の名前で**退避することになる（退避の中身と名前が食い違う）。
-   */
-  #transcriptPath: string | null = null;
 
   /**
    * このセッションで、**応答として扱える `result` を1度でも受けたか。**
@@ -1856,66 +1795,6 @@ class Clone implements CloneHost {
    * 1つの印に畳むと、トークンを回すだけで会話が切れる。
    */
   #recycleForContextWindow = false;
-
-  /**
-   * 文脈窓で畳んだので、**次の通常のターンで1度だけ、クローン自身へ断る。**
-   *
-   * ## なぜクローンにも言う必要があるのか
-   *
-   * 畳んだ次のターンで、クローンは**自分が文脈を失ったことを知らない。**
-   * ⟹ 読み直すべきだと気づけない。⟹ 人間には「なぜか話が通じない」として出る。
-   * **落ちなくなっても、人間から見た症状はそこで残る。**
-   *
-   * ## `#distillGapNoticePending` と同じ形で持つ
-   *
-   * 印を立て、次の通常のターンの入力の先頭へ1度だけ差し込み、印を下ろす。
-   * **蒸留のターンには載せない**（記憶へ移すためだけの内部ターンである）。
-   */
-  #contextWindowFoldNoticePending = false;
-
-  /**
-   * **要約に潰されたので、次のターンで記憶の索引を丸ごと載せ直す**（Issue #696）。
-   *
-   * ## なぜ要るのか — 差分は compaction を越えられない
-   *
-   * 記憶の焼き込みは `#buildOptions` が**セッションを組むときに1回だけ**行う。
-   * ⟹ システムプロンプトの「現在の記憶」は、そのセッションの構築時点の索引で
-   * 固定される。以後の変化は `#withFreshMemory` が**差分**として会話へ載せる
-   * ので、**構築時点の索引 ＋ その後の差分の積み重ね ＝ 現在**であり、そこまでは
-   * 揃っている。
-   *
-   * **揃っていないのは compaction の後である。** 会話が要約に潰されると、
-   * 載せた差分もその要約の中へ畳まれる（残っているとは限らない）。⟹ クローンの
-   * 手元に確実に残るのは**構築時点の索引だけ**になり、それはセッションが長く
-   * 走るほど古い。本番の実測（2026-09-08）では、クローンのセッションが
-   * 2026-09-02 から6日間1本のままで、**6日前の索引を「現在の記憶」として
-   * 読み続けていた。**
-   *
-   * ## ⚠️ セッションを組み直す形は採らなかった（費用で落ちる）
-   *
-   * Issue #696 に書いた当ては「ターンの境界でセッションを `resume` 付きで
-   * 組み直す」（`#recycleForToken` の3段に相乗りする）だった。**測ってやめた** ——
-   * システムプロンプトはプロンプトキャッシュの**接頭辞**なので、そこを差し替えると
-   * **その後ろの文脈が全部キャッシュから外れる。** 実測の文脈は 50〜95万トークン級
-   * なので、組み直し1回でキャッシュの書き直しが同じだけ発生する。いまの実測の
-   * 1ターンは約 $1.3 であり、**組み直しはその数倍を1回で払う。**
-   *
-   * ⟹ **索引を会話へ1回載せ直すほうが桁で安い**（索引は約3万文字 ＝ 2万トークン級で、
-   * しかも接頭辞を壊さないので後ろのキャッシュが生きたまま）。**そして直したい
-   * ものは同じである** —— クローンの手元にある索引が古いこと、そのものである。
-   *
-   * ## 立てるのは `#onPreCompact`、下ろすのは `#withFreshMemory` と `#buildOptions`
-   *
-   * - **立てる**: compaction が起きる直前（フックの入口。退避や蒸留が落ちても立つ）
-   * - **下ろす**: 次の `#withFreshMemory`（載せた回）。**載せるものが無くても
-   *   下ろす** —— 残すと、記憶が動くまで印が残って無関係な更新に相乗りする
-   * - **下ろす**: `#buildOptions`（セッションを組み直した回）。そこは焼き込みが
-   *   最新なので、載せ直す意味が無い
-   *
-   * **永続化しない。** 器が落ちれば失われるが、そのとき次の起動は
-   * `#buildOptions` が最新の索引を焼くので、**印が消えても困らない。**
-   */
-  #memoryIndexRefreshPending = false;
 
   readonly #inbox = new Inbox();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -2342,99 +2221,19 @@ class Clone implements CloneHost {
   #turn: Turn | null = null;
   #stopped = false;
   /**
-   * セッション内で「前回の蒸留以降に、蒸留すべき新しいことがあったか」の印。
-   *
-   * **`stop()` が無条件に蒸留を投げていたことの直しである。** `endConversation()`
-   * の直後に器の入れ替えで `stop()` が来ると、`buildDistillPrompt` は
-   * `conversation_end` と `shutdown` を同じ文面へ写すので（`#handle` の
-   * `'distill'` 分岐）、**同一内容の蒸留がフルコストで2回走っていた。**
-   *
-   * - **立てる（`true`）のは `#runTurn` 自身。** ターンが1本走ったこと（受信箱の
-   *   起点を問わない）が「新しいことがあった」の唯一の根拠であり、個々の起点
-   *   ごとに立てる形にすると起点を1つ足すたびに立て忘れが起きる
-   *   （`#notices` の `redelivery` と同じ理由でここへ寄せた）。
-   * - **蒸留そのもののターンでは立て直さない。** 立て直すと蒸留のたびに印が
-   *   即座に戻り、`stop()` の判定は永久に「新しいことがある」のままになって
-   *   この直しは何もしないのと同じになる（`#runTurn` の `kind` 引数で見分ける）。
-   * - **下ろすのは蒸留が成功で終わった時点だけ**（`#runInternal` が返す
-   *   `TurnOutcome.status === 'answered'` を `'distill'` 分岐で直接見る）。
-   *   失敗した蒸留（枠で保持された場合を含む）で下ろすと、移せなかった記憶を
-   *   「移した」ことにして記憶を落とす。迷ったら蒸留する側へ倒す
-   *   （AGENTS.md「蒸留は生存条件」）。
-   * - **初期値は `true`。** プロセスを起こした直後・新しいセッションを開いた
-   *   直後は、前のプロセスが shutdown 蒸留を済ませたかをこの層からは知れない。
-   *   知れないものを「済んだ」と仮定すると記憶を落とす側に倒れるので、
-   *   知れないなら蒸留する側を既定にする。
-   * - **回数の上限ではない**（AGENTS.md 地雷2）。「新しいことがあるたびに必ず
-   *   蒸留する」側は締めていない — 締めているのは「同一内容を2回払わない」側
-   *   だけである。
-   *
-   * **プロセス内だけで持つ。** ストアへ持ち越さない — 狙っているのは
-   * `endConversation()` → `stop()` という同一プロセス内の並びであり、持ち越すと
-   * 「済んだと思ったら済んでいなかった」の事故が記憶の喪失として出る経路が
-   * 増える（`pre_compact` の蒸留はこの印を一切触らない。`#distillFromTranscript`
-   * は `#runTurn` を経由しない別の短命セッションだからである）。
-   *
-   * **成否の判定に専用フィールドを持たない。** 初版（PR #119）はここに
-   * `#lastTurnSucceeded` という専用フィールドを持ち、`#dispatch` の成功枝
-   * （`this.#usageBlocked = null` の直後）へ直接立てていた —
-   * 当時の `#runTurn` の戻り値が `Promise<string>` 一本で、失敗しても本文を
-   * 返していたため、成否を運ぶ手段がそこにしか無かったからである。main は
-   * その後 #124（`fix: SDK のエラーを応答として扱うのをやめる`）で `#runTurn` /
-   * `#runInternal` の戻り値を `TurnOutcome`（`'answered' | 'failed'`）へ変えて
-   * おり、`#dailyReport` は既にその戻り値を直接見て成否を判定している
-   * （同ファイル該当箇所）。**同じ形をここでも使う** — 呼び出し元
-   * （`#handle` の `'distill'` 分岐）が `#runInternal` の戻り値を直接見れば
-   * 専用フィールドは不要で、`#dispatch`（#124・#125 が書き換えた領域）を
-   * 一切触らずに済む。
+   * **「蒸留・記憶」の状態12フィールドの器**（Issue #1190 の続きで
+   * `clone-distill-memory-state.ts` へ切り出した。前例は PR #1359 / #1507 /
+   * #1532 / #1611）。`#systemPromptChars` / `#promptMemoryChars`・
+   * `#lastTickMemoryFloorChars` / `#lastTickMemoryBaselineChars`・
+   * `#transcriptPath`・`#contextWindowFoldNoticePending`・
+   * `#memoryIndexRefreshPending`・`#hasUndistilledActivity`・
+   * `#memoryOnRecord`・`#resumedHistoryHasMemory`・`#bootAt`・
+   * `#distillGapNoticePending` を持つ。**蒸留を投げるか・断り書きの文面を
+   * 組み立てるか・記憶をいつ読み直すかの判断はこれまでどおりここ（`Clone`）
+   * が持ち、この器は状態と、局所的な遷移だけを持つ。** 何を持っているか・
+   * 切り出しの理由と限界は `CloneDistillMemoryState` 自身の doc を見よ。
    */
-  #hasUndistilledActivity = true;
-  /**
-   * いまの SDK セッションでクローンが最後に見た記憶。slug → 本文。
-   *
-   * **全文の1文字列ではなく文書ごとに持つ。** 全文で持って全文と比べていた頃は、
-   * 人間が1つの文書の1行を直しただけで**記憶の全文をもう一度クローンの文脈へ
-   * 載せていた** — システムプロンプトに焼き込んだ分と合わせて二重に載り、しかも
-   * 直すたびに写しが増えた（会話の履歴に残るので、resume でも運ばれる）。
-   * 文書ごとに持てば、載せ直すのは実際に変わった文書だけで済む。
-   */
-  readonly #memoryOnRecord = new Map<string, string>();
-  /**
-   * resume で起こしたセッションかどうか（最初のターンで1度だけ断るために持つ）。
-   *
-   * **履歴には前のセッションで載せ直した記憶の写しが残っている。** それは
-   * 「以降はこれが現在の記憶である」と名乗る形で、しかもシステムプロンプトより
-   * **後ろ**に並ぶ。デーモンが落ちている間に人間が記憶を直していた場合、正本
-   * （システムプロンプト）のほうが新しいのに、古い写しが最後の言葉として残る。
-   * 全文を載せ直して上書きするのではなく、**どちらが正本かを1文で断る**
-   * （載せ直せば、いま塞いでいる二重載せを自分でやることになる）。
-   */
-  #resumedHistoryHasMemory = false;
-  /**
-   * この器が組み立てられた時刻。**蒸留が間に合わなかった区間の上端である**
-   * （Issue #564 の (b)。`distill-gap.ts` の `deriveDistillGapFromJournal` の
-   * `until`）。
-   *
-   * **ここで取ることに意味がある。** この時刻より後に日誌へ入った行は、
-   * 定義上いまの器が書いたもの ＝ いまの会話の中に在る。境界を持たずに数えると、
-   * **最初のターンを起こした人間の発言そのもの**（`#record` が `post` の中で
-   * 書く）を「移されなかった活動」として数えてしまい、新しいセッションの
-   * 最初のターンは必ず「ずれが在る」になる。
-   */
-  readonly #bootAt = new Date().toISOString();
-  /**
-   * 蒸留が間に合わなかった区間の断り書きを、まだ1度も添えていないかどうか
-   * （Issue #564 の (b)）。
-   *
-   * **`#resumedHistoryHasMemory` と同じ形で持つ。** 最初のターンで1度だけ
-   * 添えて下ろす。毎ターン添えると、読み飛ばされる定型文が1つ増えるだけで、
-   * しかも会話の履歴に写しが溜まって resume のたびに運ばれる。
-   *
-   * **蒸留のターンでは添えず、印も下ろさない。** 蒸留は記憶へ移すためだけの
-   * 内部ターンで、`stop()` 経由ならこの直後にプロセスが消える
-   * （`#commitmentNoticeFor` が `distill` を弾いているのと同じ理由）。
-   */
-  #distillGapNoticePending = true;
+  readonly #distillMemory = new CloneDistillMemoryState();
   /** resume を試みた session id。init が来る前に落ちたら捨てる。 */
   #resumedFrom: string | null = null;
   #sawInit = false;
@@ -7271,7 +7070,7 @@ class Clone implements CloneHost {
    * `null` に戻すと、既に控えてあった正しい在り処を捨てることになる。
    */
   #noteTranscriptPath(path: string | undefined): void {
-    if (typeof path === 'string' && path.length > 0) this.#transcriptPath = path;
+    if (typeof path === 'string' && path.length > 0) this.#distillMemory.setTranscriptPath(path);
   }
 
   /**
@@ -7382,7 +7181,7 @@ class Clone implements CloneHost {
 
     this.#recycleForContextWindow = true;
     // **クローン自身への断りも同時に立てる**（`#contextWindowFoldNoticePending`）。
-    this.#contextWindowFoldNoticePending = true;
+    this.#distillMemory.armContextWindowFoldNotice();
     try {
       await this.#stores.sessions.setCloneSessionId(null);
     } catch (error) {
@@ -7483,7 +7282,7 @@ class Clone implements CloneHost {
     }
 
     this.#recycleForContextWindow = true;
-    this.#contextWindowFoldNoticePending = true;
+    this.#distillMemory.armContextWindowFoldNotice();
     try {
       await this.#stores.sessions.setCloneSessionId(null);
     } catch (error) {
@@ -7539,7 +7338,7 @@ class Clone implements CloneHost {
    * から「1区間の生ログは在るが、記憶へは移せていない」へ変わるだけである。**
    */
   async #salvageTranscript(): Promise<void> {
-    const path = this.#transcriptPath;
+    const path = this.#distillMemory.transcriptPath;
     // **控えが無い窓は在る**（`#transcriptPath` の doc）。そこは開いたばかりの
     // セッションで、退避する中身もほぼ無い。**黙って通す側へ倒す** — ここで日誌へ
     // 書くと、道具を使う前に落ちた回のたびにノイズが1行増える。
@@ -7923,7 +7722,7 @@ class Clone implements CloneHost {
         // ターンが1本も無ければ2回目は文字どおりの重複でしかない
         // （`#hasUndistilledActivity` の doc）。**取りこぼしより重複を疑うこと** —
         // 印が立っていれば必ず投げる。
-        if (!this.#hasUndistilledActivity) {
+        if (!this.#distillMemory.hasUndistilledActivity) {
           await this.#journal({
             type: 'exchange',
             with: 'self',
@@ -8051,7 +7850,7 @@ class Clone implements CloneHost {
         // なかった記憶を「移した」ことにして記憶を落とす（`#hasUndistilledActivity`
         // の doc）。
         if (outcome.status === 'answered') {
-          this.#hasUndistilledActivity = false;
+          this.#distillMemory.markDistilled();
           // **「成功で終わった」を日誌へ残す**（Issue #564 の (b)）。印は器の
           // 中にしか無く（`#hasUndistilledActivity`）、プロセスが消えれば一緒に
           // 消えるので、次のセッションからは「前回どこまで移せたか」が引けない。
@@ -8310,7 +8109,7 @@ class Clone implements CloneHost {
      */
     approvalId: string | null = null,
   ): Promise<TurnOutcome> {
-    if (kind !== 'distill') this.#hasUndistilledActivity = true;
+    if (kind !== 'distill') this.#distillMemory.markActivity();
 
     // ターンは **セッションを起こす前に** 登録する。セッションの生成が失敗したり
     // 読み取りが即死したりしても、待っているターンを必ず誰かが解放できるように。
@@ -8742,16 +8541,16 @@ class Clone implements CloneHost {
     }
 
     const afterChars = measureMemoryFloor(documents).totalChars;
-    const injectedMemoryChars = this.#promptMemoryChars;
+    const injectedMemoryChars = this.#distillMemory.promptMemoryChars;
     const sessionDelta = describeMemorySessionDelta({
       afterChars,
       injectedMemoryChars: injectedMemoryChars === 0 ? null : injectedMemoryChars,
     });
 
     const tickDiffNote =
-      this.#lastTickMemoryFloorChars === null
+      this.#distillMemory.lastTickMemoryFloorChars === null
         ? '前回の tick が無いので差分は出せない（このプロセスでの最初の tick）。'
-        : `前回の tick から ${formatSignedMemoryCharCount(afterChars - this.#lastTickMemoryFloorChars)} 文字。`;
+        : `前回の tick から ${formatSignedMemoryCharCount(afterChars - this.#distillMemory.lastTickMemoryFloorChars)} 文字。`;
 
     const thresholdNote =
       injectedMemoryChars === 0
@@ -8762,15 +8561,14 @@ class Clone implements CloneHost {
           : '';
 
     const rebasedNote =
-      this.#lastTickMemoryBaselineChars !== null &&
-      this.#lastTickMemoryBaselineChars !== 0 &&
+      this.#distillMemory.lastTickMemoryBaselineChars !== null &&
+      this.#distillMemory.lastTickMemoryBaselineChars !== 0 &&
       injectedMemoryChars !== 0 &&
-      this.#lastTickMemoryBaselineChars !== injectedMemoryChars
-        ? `⚠️ セッションが組み直されて基準が ${formatMemoryCharCountLocal(this.#lastTickMemoryBaselineChars)} → ${formatMemoryCharCountLocal(injectedMemoryChars)} 文字へ取り直された（% が下がったのは畳んだからではない）。`
+      this.#distillMemory.lastTickMemoryBaselineChars !== injectedMemoryChars
+        ? `⚠️ セッションが組み直されて基準が ${formatMemoryCharCountLocal(this.#distillMemory.lastTickMemoryBaselineChars)} → ${formatMemoryCharCountLocal(injectedMemoryChars)} 文字へ取り直された（% が下がったのは畳んだからではない）。`
         : '';
 
-    this.#lastTickMemoryFloorChars = afterChars;
-    this.#lastTickMemoryBaselineChars = injectedMemoryChars;
+    this.#distillMemory.recordTick(afterChars, injectedMemoryChars);
 
     return ['記憶の床:', sessionDelta, tickDiffNote, thresholdNote, rebasedNote]
       .filter((part) => part !== '')
@@ -8885,18 +8683,17 @@ class Clone implements CloneHost {
    */
   async #distillGapNotice(kind: 'normal' | 'distill'): Promise<string> {
     if (kind === 'distill') return '';
-    if (!this.#distillGapNoticePending) return '';
-    this.#distillGapNoticePending = false;
+    if (!this.#distillMemory.takeDistillGapNoticePending()) return '';
 
     try {
       const gap = await deriveDistillGapFromJournal(this.#stores.journal, {
-        until: this.#bootAt,
+        until: this.#distillMemory.bootAt,
         activityScanLimit: DISTILL_GAP_ACTIVITY_SCAN_LIMIT,
       });
       if (gap === null) return '';
       return `${describeDistillGap(gap)}\n\n---\n\n`;
     } catch (error) {
-      noteDroppedRecord('蒸留の区間の読み出し', `until=${this.#bootAt}`, error);
+      noteDroppedRecord('蒸留の区間の読み出し', `until=${this.#distillMemory.bootAt}`, error);
       return '';
     }
   }
@@ -8921,8 +8718,7 @@ class Clone implements CloneHost {
    */
   #contextWindowFoldNotice(kind: 'normal' | 'distill'): string {
     if (kind === 'distill') return '';
-    if (!this.#contextWindowFoldNoticePending) return '';
-    this.#contextWindowFoldNoticePending = false;
+    if (!this.#distillMemory.takeContextWindowFoldNoticePending()) return '';
     return (
       '[system] 直前のターンが文脈窓（プロンプトの長さ）に当たって失敗したので、' +
       'このセッションは前の会話を引き継がずに開き直したものである。' +
@@ -9029,19 +8825,17 @@ class Clone implements CloneHost {
       return text;
     }
 
-    const changed = documents.filter((doc) => this.#memoryOnRecord.get(doc.slug) !== doc.content);
-    const present = new Set(documents.map((doc) => doc.slug));
-    const removed = [...this.#memoryOnRecord.keys()].filter((slug) => !present.has(slug));
+    const { changed, removed } = this.#distillMemory.diffAgainstRecorded(documents);
 
     // resume の断りは、載せ直すものが無くても1度だけ出す（それが目的である）。
-    const resumeNotice = this.#resumedHistoryHasMemory ? RESUMED_MEMORY_NOTICE : null;
-    this.#resumedHistoryHasMemory = false;
+    const resumeNotice = this.#distillMemory.takeResumedHistoryHasMemory()
+      ? RESUMED_MEMORY_NOTICE
+      : null;
 
     // **要約に潰された直後は、索引を丸ごと載せ直す**（`#memoryIndexRefreshPending`）。
     // **印は載せ直すものが無くても下ろす** —— 下ろさないと、記憶が動くまで印が
     // 残り続け、何ターンも先の無関係な更新に相乗りして載る。
-    const refreshIndex = this.#memoryIndexRefreshPending;
-    this.#memoryIndexRefreshPending = false;
+    const refreshIndex = this.#distillMemory.takeMemoryIndexRefreshPending();
 
     if (!refreshIndex && changed.length === 0 && removed.length === 0) {
       return resumeNotice === null ? text : [resumeNotice, '', '---', '', text].join('\n');
@@ -9052,10 +8846,7 @@ class Clone implements CloneHost {
     // （`memory.ts` の `RenderMemoryDocumentsOptions.seenContent`）。順序を
     // 逆にすると、退避したつもりの `Map` が新しい内容で埋まっていて、差分が
     // 常に空になる＝**何も載らないのに「更新された」とだけ言う**形になる。
-    const seenContent = new Map(this.#memoryOnRecord);
-
-    this.#memoryOnRecord.clear();
-    for (const doc of documents) this.#memoryOnRecord.set(doc.slug, doc.content);
+    const seenContent = this.#distillMemory.commitMemory(documents);
 
     const head = refreshIndex
       ? '[system] この会話の文脈が要約に潰された。**それまでに載せた記憶の差分も、その要約の中へ' +
@@ -9268,7 +9059,7 @@ class Clone implements CloneHost {
     // 生ログをいまの `sessionId` の名前で退避することになる（`#transcriptPath` の
     // doc）。`#sessionAnswered` を持ち越すと、暴走の止めが前のセッションの成功で
     // 解けてしまう。
-    this.#transcriptPath = null;
+    this.#distillMemory.clearTranscriptPath();
     this.#sessionAnswered = false;
     // **`#sessionAnswered` と同じ理由・同じ場所で戻す**（issue #955 の (A)）。
     this.#heldInSession = false;
@@ -9326,22 +9117,23 @@ class Clone implements CloneHost {
     // **焼き込んだ内容をそのまま「クローンが見たもの」として控える。** ここを
     // 控え損ねると、最初のターンでいきなり全文が載せ直される（システムプロンプト
     // と合わせて二重に載る）。読み直して比べるのではなく、載せた値を控えること —
-    // 読み直すと、この行までの間に人間が直した場合に差分を見失う。
-    this.#memoryOnRecord.clear();
-    for (const doc of documents) this.#memoryOnRecord.set(doc.slug, doc.content);
+    // 読み直すと、この行までの間に人間が直した場合に差分を見失う。**戻り値
+    // （退避した旧い控え）は使わない**——`#withFreshMemory` と同じ「退避して
+    // から差し替える」遷移をそのまま再利用しているだけである。
+    this.#distillMemory.commitMemory(documents);
     // 履歴に前のセッションの載せ直しが残っているのは resume のときだけである。
-    this.#resumedHistoryHasMemory = resume !== null;
+    this.#distillMemory.setResumedHistoryHasMemory(resume !== null);
     // **セッションを組んだ回は、焼き込みが最新である。** 前のセッションで
     // 立った印を持ち越すと、載せる必要が無い索引をもう一度会話へ積む
     // （`#memoryIndexRefreshPending` の doc「下ろすのは …と `#buildOptions`」）。
-    this.#memoryIndexRefreshPending = false;
+    // **戻り値は使わない**——ここは「無条件に下ろす」だけの意味で呼んでいる。
+    this.#distillMemory.takeMemoryIndexRefreshPending();
 
     const systemPrompt = buildCloneSystemPrompt({
       memory,
       ...(this.#self === undefined ? {} : { self: this.#self }),
     });
-    this.#systemPromptChars = systemPrompt.length;
-    this.#promptMemoryChars = memory.length;
+    this.#distillMemory.recordBuiltSizes(systemPrompt.length, memory.length);
 
     return buildCloneSessionOptions({
       model: this.#model,
@@ -9580,8 +9372,8 @@ class Clone implements CloneHost {
       // 控えている私有フィールド）——`CloneRuntimeFacts` の欄は
       // `HeuristicChars` なので、代入するこの1行が単位を名乗り直している
       // 印になる（`quantity.ts` モジュール冒頭の doc）。
-      injectedMemoryChars: heuristicChars(this.#promptMemoryChars),
-      systemPromptChars: heuristicChars(this.#systemPromptChars),
+      injectedMemoryChars: heuristicChars(this.#distillMemory.promptMemoryChars),
+      systemPromptChars: heuristicChars(this.#distillMemory.systemPromptChars),
       lastContextUsage: this.#lastContextUsage,
     };
   }
@@ -10376,7 +10168,7 @@ class Clone implements CloneHost {
     // このフックが何を返しても起きるので、生ログのパスが取れない回でも
     // 「潰された」ことは真である。**退避や蒸留の try より前に置く** ——
     // あちらが落ちても、索引の載せ直しは行われなければならない。
-    this.#memoryIndexRefreshPending = true;
+    this.#distillMemory.armMemoryIndexRefresh();
 
     if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) {
       return;
@@ -10889,7 +10681,7 @@ class Clone implements CloneHost {
         // 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステム
         // プロンプトを組むことになる（実際には焼き込み直すので嘘にはならないが、
         // 控えの出所が2か所になる）。
-        this.#memoryOnRecord.clear();
+        this.#distillMemory.forgetMemory();
         // **文脈窓で畳んだ回は、ここで生ログを器の外へ出す**（#553 / #564）。
         //
         // **`this.#query = null` より後に置いてある。** ここは `#read` の
