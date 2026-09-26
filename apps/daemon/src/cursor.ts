@@ -44,18 +44,17 @@ import { z } from 'zod';
  *    見えていないだけではないことは `grep -ac 'offset' apps/daemon/openapi.json`
  *    も `0` であることで確かめてある）。ここで新しく `offset` を持ち出すと、
  *    HTTP の口としては初めての意味になる。
- * 2. **`packages/core/src/tools.ts` の `offset` は、11箇所のうち10箇所が
- *    「`id` を指定した1件の本文を何文字目から読むか」である**（`page()`
- *    呼び出し10箇所——`memory_read` / `journal_read` / `approvals_list` /
- *    `schedule_list` / `commitment_list` / `profile_read` / `self_read` /
- *    `manager_report` / `conversation_read` / `manager_transcript`。
- *    `grep -Fn -- '= page(' packages/core/src/tools.ts` で当たる——`grep -Fn -- 'page('`
- *    だと doc コメント中の言及2件も一致して12件になるので、実際に呼んでいる
- *    行だけを取るこの形で数えること）。**残る1箇所だけが一覧の配列を切って
- *    いる** — `usage_summary` の `axis` モード（`renderUsage` の中の
- *    `entries.slice(offset, offset + USAGE_AXIS_PAGE)`。
- *    `grep -Fn -- 'entries.slice(offset' packages/core/src/tools.ts` で当たる）。
- *    **「一覧を切る呼びは1件も無い」とは言えない**（10/11 という比で言う）。
+ * 2. **`packages/core/src/tools.ts` の `offset` の大半は「`id` を指定した1件の
+ *    本文を何文字目から読むか」である**（`page()` 呼び出し10箇所——`memory_read` /
+ *    `journal_read` / `approvals_list` / `schedule_list` / `commitment_list` /
+ *    `profile_read` / `self_read` / `manager_report` / `conversation_read` /
+ *    `manager_transcript`。`grep -Fn -- '= page(' packages/core/src/tools.ts` で当たる
+ *    ——`grep -Fn -- 'page('` だと doc コメント中の言及も一致するので、実際に呼んで
+ *    いる行だけを取るこの形で数えること）。**一覧の位置として `offset` を使う道具も
+ *    ある** — `memory_outline`（節の目次の位置）と `self_dropped`（跡の一覧を何件
+ *    飛ばすか）。かつては `usage_read` の `axis` モードも一覧の配列を `offset` で
+ *    切っていたが、途中で記録が増えると飛ばし・重複が起きたので、#1673 で錨
+ *    （`cursor`）に替えた。**「一覧を切る `offset` は1件も無い」とは言えない。**
  *
  * ⟹ 同じ名前が2つの意味（本文のオフセット／一覧のオフセット）を持つ状態を
  * これ以上広げないため、HTTP 側の一覧ページングには `cursor` という別の
