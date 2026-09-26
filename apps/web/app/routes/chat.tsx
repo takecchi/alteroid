@@ -476,6 +476,27 @@ export function ChatPane({
   const [shownId, setShownId] = useState(routeId);
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
+  /**
+   * 「いま見ている会話ではない」会話の下書き（#1618）。**キーは会話 id
+   * （`shownId` と同じ形。新しい会話＝id 無しは `undefined` という1つの鍵に
+   * 持つ）。**
+   *
+   * **いま見ている会話ぶんはここには無い** — それは `draft`（上）が持つ。
+   * 会話を切り替える瞬間（下の `routeId !== lastRouteId` の同期ブロック）に
+   * 限って、双方向に1回だけ動く: 出ていく会話の `draft` をここへしまい、
+   * 入ってくる会話の下書きをここから読んで `draft` へ差し替える。`failures`
+   * （上の同名の Map の doc）と同じ理由で Map にしてある — 会話ごとに持たない
+   * 限り、切り替えるたびに他の会話の下書きへ触れずに済ませられない。
+   *
+   * **送信で空にするのは `draft`（表示中の1つ）だけでよい。** `send`/`followUp`
+   * が `setDraft('')` を呼ぶのは常に「いま見ている会話」に対してで、次に
+   * この会話から離れるときにその空の値がここへしまわれる（下の同期ブロック）
+   * ので、送った会話の下書きだけが空になり、他の会話のエントリには触れない。
+   *
+   * **再読み込みを跨いでは残さない**（`localStorage` 等は Issue #1618 の
+   * 範囲外）。この Map はメモリの中だけの state である。
+   */
+  const [drafts, setDrafts] = useState<Map<string | undefined, string>>(new Map());
   const [sending, setSending] = useState(false);
   /**
    * 送信経路（`send`/`followUp`、ストリームの `error` イベント）の失敗。**会話 id ごとに持つ（#1585）。**
@@ -758,6 +779,31 @@ export function ChatPane({
       // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
       // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
       setEditingKey(undefined);
+      /*
+       * **送っていない下書きは会話ごとに持ち、戻ったら戻す（#1618）。**
+       *
+       * `editingKey`/`editDraft`（直上。送信済みの発言を編集中の下書き）や
+       * `sending`（この画面のものと明示的に決めてある、上の doc）とは違う——
+       * こちらは「まだ送っていない、これから送るはずの入力」なので、会話を
+       * 離れても人間にとっては消えてよい理由が無い。
+       *
+       * **`shownId` をキーに、いま出ていく会話の `draft` をしまう。** この
+       * 時点の `shownId` はまだ古い会話（切り替わる前）を指しているので、
+       * これがそのまま「離れる会話」の鍵になる——`setShownId(routeId)`（上）
+       * より前に読んでいるので取り違えない。新しい会話（id 無し）から離れる
+       * ときは鍵 `undefined` にしまわれる。
+       *
+       * **入ってくる会話（`routeId`）の下書きは `drafts`（この render 開始
+       * 時点の値）から読む。** まだ一度もこの鍵に何もしまっていなければ
+       * `undefined` なので `?? ''` で空にする——初めて開く会話や、送信済みで
+       * まだ何も書きかけていない会話がこれに当たる。
+       */
+      setDrafts((previous) => {
+        const next = new Map(previous);
+        next.set(shownId, draft);
+        return next;
+      });
+      setDraft(drafts.get(routeId) ?? '');
     }
   }
 
