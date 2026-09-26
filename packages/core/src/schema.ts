@@ -1509,16 +1509,33 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      */
     answeredVia: answeredViaSchema.optional(),
     /**
-     * クローン自身が `approval_withdraw`（`tools.ts`）で取り下げたとき、その
-     * 時刻（#963）。**行は消さず、`commitment_close` と同じ「終端は別の新しい
-     * 行として積む」形にする** — `answeredAt` / `answer` が回答という終端を
-     * 別行で表すのと対称に、こちらは取り下げという終端を表す。同じ
-     * `approvalId` に `answeredAt` と `withdrawnAt` の両方が付いた行が別々に
-     * 在ることは、正常な経路では起きない（回答済みは取り下げられない。
-     * `tools.ts` の `approval_withdraw` の doc）。
+     * 取り下げられた時刻（`answeredAt` と対称の、取り下げという終端）。
+     * **行は消さず、`commitment_close` と同じ「終端は別の新しい行として
+     * 積む」形にする。** 書き手は2つある:
+     *
+     * 1. **クローン自身が `approval_withdraw`（`tools.ts`）で取り下げたとき**
+     *    （#963）。同じ `approvalId` に `answeredAt` と `withdrawnAt` の
+     *    両方が付いた行が別々に在ることは、正常な経路では起きない（回答済み
+     *    は取り下げられない。`tools.ts` の `approval_withdraw` の doc）
+     * 2. **マネージャーのセッションが畳むとき、未決だった確認を runner が
+     *    `deny` で解いたが、その答えが CLI へは一度も届かなかった回**
+     *    （Issue #1586。`manager.ts` の `case 'settled'`、`event.withdrawn`
+     *    が付いた行）。`approvalId` はここでは `case 'ask'` が開いた行と
+     *    同じ `requestId`——「承認待ちキューの項目 id、またはマネージャーの
+     *    確認1件の id」の両方を受ける、という直上の doc のとおりである。
+     *    こちらは `record.job.status === 'stopped'` の後に届いても書く
+     *    （`case 'report'` の R4 と同じ考え方——止めた事実と「答えが届いて
+     *    いない」事実は独立で、後者は止めた後に分かっても消えない）
      */
     withdrawnAt: isoDateTime.optional(),
-    /** 取り下げの理由（必須入力。人間が後から「なぜ消えたか」を読むための本体）。 */
+    /**
+     * 取り下げの理由（人間が後から「なぜ消えたか」を読むための本体）。
+     * **書き手が2つある分、内容の形も2通りある**（直上の `withdrawnAt` の
+     * doc）——クローン発なら `approval_withdraw` の引数がそのまま入り、
+     * runner 発（Issue #1586）なら「CLI へは届いていない」という事実と
+     * `#settleAll(reason)` に渡った `reason` を連ねた文になる
+     * （`manager.ts` の `case 'settled'`）。
+     */
     withdrawnReason: z.string().optional(),
   }),
   z.object({
@@ -3749,14 +3766,25 @@ export const jobSchema = z.object({
    * ## 何を書くか——「書いた瞬間」は前ではなく後
    *
    * `case 'report':`（`manager.ts`）はこの欄と同じ瞬間に `record.job.status`
-   * を `event.status` へ書き換える。**ここに書くのは書き換え後の値
-   * （＝`event.status`）である**——書き換え前の値（この report が届く直前
+   * を `event.status` へ書き換える。**ここに書くのは `event.status`（報告が
+   * 名乗った値）そのものである**——書き換え前の値（この report が届く直前
    * まで台帳が名乗っていた status。多くは `running`）ではない。理由は、
    * 突き合わせたい問いが「この報告が運んだ内容は、どの status に対応する
    * ものか」だからである。`report` イベントの `status` は「このターンを
    * 終えて、いまはこの状態で待っている」を意味する。前者（書き換え前）を
    * 採ると、この欄はほぼ常に `running` になり、比較はほぼ常に「違う」から
    * 始まってしまう。
+   *
+   * **⚠️ 例外が1つある（Issue #1592 の副作用の疑い）。** `event.status ===
+   * 'waiting_human'` かつ `record.waiting` が空（＝待っている確認が実際には
+   * 無い）なら、`record.job.status` は `event.status` をそのまま採らず
+   * `'running'` へ補正する（`manager.ts` の `case 'report'` の該当コメント）。
+   * **この欄（`lastReportStatus`）は補正しない**——`event.status` を
+   * そのまま残す。だから、この例外に当たった回だけ、この欄と
+   * `record.job.status` が同じ瞬間に別の値を持つ。**これは壊れではなく
+   * `describeReportDrift` の入力そのもの**——「報告が名乗った前提（この
+   * 欄）と、いまの状態（`status`）が違う」を言うための欄なので、ここでだけ
+   * 両者が一致しないのは設計どおりである。
    *
    * ## 何のために読まれるか
    *

@@ -959,6 +959,35 @@ describe('inputHead — escalation にだけ乗り、journal には乗らない�
     await s.pool.stop();
   }, 15_000);
 
+  /**
+   * **答える先の無い合図に、答え方を書く（#1105 P0）。** `requestId` 無しの
+   * `decision` は待ちがちょうど1件ならその1件へ当たる（`#choosePending`）ので、
+   * この合図を読んで `decision: 'allow'` を送ると無関係の確認を許可しうる。
+   * 本文が「decision を付けるな」と言うことを固定する。
+   */
+  it('escalation の本文は答え方（requestId が無い・decision を付けない・マネージャーに中継させる）を言う', async () => {
+    const s = open();
+    await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    session.push(liveDenialAsSdkSends('Bash', 'toolu_route1'));
+    await tick();
+
+    const message = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    const text = message?.type === 'manager_message' ? message.text : '';
+
+    expect(text).toContain('答え方: この拒否には `requestId` が無く、許可として答える口は無い。');
+    expect(text).toContain('`manager_send` に `decision` を付けて送らないこと');
+    expect(text).toContain('別に待っている確認へ回答として当たりうる');
+    expect(text).toContain('その作業者へ伝えるようマネージャーに頼む');
+    // 答え方は日誌には書かない（日誌は事実の記録で、クローンへの案内ではない）。
+    const lines = await deniedLines(s.stores);
+    expect(lines[0]).not.toContain('答え方');
+
+    await s.pool.stop();
+  }, 15_000);
+
   it('PreToolUse を経由しなかった回は、従来どおり「形」だけの案内のまま（作り物を足さない）', async () => {
     const s = open();
     const { managerId } = await s.pool.start({ request: 'ビルドを直して' });

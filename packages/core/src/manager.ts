@@ -3302,6 +3302,32 @@ const DENIED_TOOL_LIMIT = 64;
 const DENIED_ESCALATE_AT = 1;
 
 /**
+ * 拒否の escalation の末尾に付ける「答え方」（issue #1105 の P0）。
+ *
+ * **この合図には答える先が無い。** 器の分類器・deny 規則の拒否は `canUseTool` を
+ * 経由しないので `requestId` が生まれず、`record.waiting` にも載らない。
+ * ところが `manager_send` は `decision` があって `requestId` が無いとき、
+ * **待ちがちょうど1件なら黙ってその1件へ当てる**（`#choosePending`。#313）。
+ * ⟹ この合図を読んで「許可しよう」と `decision: 'allow'` を送ると、
+ * **同じマネージャーが別に待っている無関係の確認を許可してしまう。** 本文が
+ * 答え方を何も言わずに終わっていたので、その誤りを止めるものが無かった。
+ *
+ * **だから答え方を合図そのものに書く。** 許可としては答えられないこと、
+ * `decision` を付けないこと、別の形は追加指示として送れること、作業者の拒否は
+ * マネージャーに中継させること、の4点。**分類器の判定には触らない** —— 通す口を
+ * 作るのではなく、既に在る口（追加指示）を正しく指すだけである。
+ *
+ * **Markdown の記号を散文に混ぜない**（`denialInputAbsence` の doc と同じ）。
+ * 識別子だけをバッククォートで包む（本文の他の識別子と揃える）。
+ */
+const DENIAL_REPLY_ROUTE =
+  '\n答え方: この拒否には `requestId` が無く、許可として答える口は無い。' +
+  '`manager_send` に `decision` を付けて送らないこと' +
+  '（`requestId` 無しの `decision` は、このマネージャーが別に待っている確認へ回答として当たりうる）。' +
+  '別の形でやり直させるなら、`decision` 無しの追加指示として送る。' +
+  '作業者の拒否なら、その作業者へ伝えるようマネージャーに頼む（`manager_send` の届け先はマネージャーである）。';
+
+/**
  * managerId の発行で、衝突を引き直す回数の上限（#238）。
  *
  * **非対称だから安全側へ倒す**（`lease.ts` の `mayClaim` の doc と同じ理由）。
@@ -8961,10 +8987,43 @@ class Pool implements ManagerPool {
         // 瞬間として `new Date().toISOString()` を直接使う。
         record.job.lastReportAt = new Date().toISOString();
         record.job.status = event.status;
+        // **`waiting` が空なら `waiting_human` を名乗らせない（Issue #1592
+        // の副作用の疑い、結合テストで再現・確認した）。**
+        //
+        // `runner.ts` の `RunnerSession#stop()`（#1533 のオーナー判断）は
+        // `#settleAll(reason)`（未決の確認を解く。`settled` を emit して
+        // `record.waiting` を空にする）→ … →
+        // `#flushUnreported(reason, statusAtStop)`（`statusAtStop` は
+        // `#settleAll` より**前**に控えた値）という順で畳む。喋った本文が
+        // 在れば、この `report` は「解かれる前」の状態（`waiting_human`）を
+        // 名乗ったまま届く——直上の代入がそれをそのまま `record.job.status`
+        // へ書くと、`settled` が空にした直後を「解かれる前」の値で上書き
+        // することになる。**器の入れ替え**（`Host#shutdown` → `stop('runner
+        // が停止した。')`）はデーモンが stop を指示していないので、
+        // `abort()` の `record.job.status = 'stopped'`（無条件の上書き）に
+        // 頼れず、この食い違いが台帳に残ったままになる（`manager_stop` の
+        // 経路は `abort()` の上書きで最終的には正しくなる——結合テストで
+        // 両経路とも実測した）。
+        //
+        // **`case 'settled'` が空のとき `running` に戻すのと同じ判断へ
+        // 揃える。** 待っている確認が無いのに `waiting_human` を名乗る
+        // ことはできない——「解けた後」の事実（`record.waiting`）を
+        // `event.status` より優先する。
+        //
+        // **`event.status` そのものは書き換えない。** 報告が名乗った値は
+        // `lastReportStatus`（この少し下）にそのまま残す——「何を名乗ったか」
+        // の記録と「いまの状態をどう数えるか」の判断を1つに畳まない。
+        if (event.status === 'waiting_human' && record.waiting.length === 0) {
+          record.job.status = 'running';
+        }
         // **「書いた瞬間」は書き換え後の値（Issue #1036）。** `event.status`
         // を直接使う——`record.job.status` を読み直しても同じ値だが、直上の
         // 代入と同じ値であることを1目で分かるようにするため直接使う。
         // **既定値は作らない**（`schema.ts` の `lastReportStatus` の doc）。
+        // **`record.job.status` とは意図して別の値になりうる**（直上の
+        // `waiting` が空のときの補正）——`lastReportStatus` は「報告が何を
+        // 名乗ったか」を残す欄で、「いまの状態をどう数えるか」の欄ではない
+        // （`schema.ts` の `lastReportStatus` の doc）。
         record.job.lastReportStatus = event.status;
         // **止めた後に畳んだ本文（Issue #1038）は、応答として終わった回では
         // 消す。** ここへ来られたのは `record.job.status === 'stopped'` の
@@ -9316,11 +9375,64 @@ class Pool implements ManagerPool {
       }
 
       case 'settled': {
+        // **消える前に取る（Issue #1586）。** `record.waiting` から外す前に
+        // 該当行の `summary` を控えておく——`withdrawn` の journal に「何の
+        // 確認だったか」を残すのに要る。`stopped` の後に届いた回は `abort()`
+        // が既に `record.waiting = []` で空にしていることがあり、そのときは
+        // 拾えない（拾えなかったことも journal に書く）。
+        const pendingSummary = record.waiting.find(
+          (item) => item.requestId === event.requestId,
+        )?.summary;
+
+        // **止めたマネージャーの `waiting`/`status` を、遅れて届いた `settled`
+        // で動かしてしまわないか——ここは `case 'report'` / `case 'ask'` と
+        // 違って、専用のガードを足していない。理由: `record.job.status` が
+        // `'stopped'` のとき（＝ `abort()` 経由）、`abort()` は同じ呼びの中で
+        // `record.waiting` も `[]` にしている（このファイルの `abort()` の
+        // 該当箇所）。**`'stopped'` と `'waiting_human'` は同じ欄の別の値な
+        // ので同時に成り立たない**——下の `record.job.status === 'waiting_human'`
+        // という条件そのものが、`'stopped'` から `'running'` へ甦らせる余地を
+        // 持たない。`case 'ask'` に専用ガードが要るのは「押し込む」操作
+        // （`waiting` を増やす）を止める必要があるからで、こちらは「外す」
+        // 操作（減らす／変えない）しかしないので、同じ形のガードを足しても
+        // 観測できる差が無い（足しても検出できないテストしか書けない、と
+        // いう歯を書いて確かめた——Issue #1586 の PR 本文に記載）。
+        //
+        // **ただし `withdrawn` の記録は、この判定と無関係に残す**——「答えが
+        // 届いていない」という事実は、止めた後に分かったのでも変わらない
+        // （`case 'report'` の R4 分岐が「日誌にだけは残す」のと同じ考え方）。
         record.waiting = record.waiting.filter((item) => item.requestId !== event.requestId);
         if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
           record.job.status = 'running';
         }
         await this.#persist(record);
+
+        // **`withdrawn` が付いた回だけ日誌へ残す（Issue #1586）。**
+        // `#settleAll`（畳むときに未決の確認を deny で解く経路）だけがこれを
+        // 立てる——`answer()`（クローンの回答）はここへ来ない
+        // （`runner.ts` の `#settleAll` の doc）。
+        //
+        // **`escalation` を再利用し、新しい種別は作らない。** `case 'ask'` が
+        // 開いたときの1行と同じ `approvalId`（＝ `event.requestId`）へ、
+        // 「取り下げ」という終端を**別の新しい行**として積む——
+        // `withdrawnAt`/`withdrawnReason` は元々クローン自身の
+        // `approval_withdraw`（`tools.ts`）向けだったが、`schema.ts` の
+        // `escalation.approvalId` の doc が言うとおり「承認待ちキューの項目
+        // id、またはマネージャーの確認1件の id」の両方を受ける欄なので、
+        // 形はそのまま流用できる（`escalation.withdrawnAt` の doc に、この
+        // 2つ目の書き手を追記した）。
+        if (event.withdrawn !== undefined) {
+          await this.#journal({
+            type: 'escalation',
+            question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
+            approvalId: event.requestId,
+            managerId: event.managerId,
+            withdrawnAt: new Date().toISOString(),
+            withdrawnReason:
+              `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
+              `理由: ${event.withdrawn.reason}`,
+          });
+        }
         return;
       }
 
@@ -9660,6 +9772,7 @@ class Pool implements ManagerPool {
               : `\n拒否より前に見た入力の先頭（伏せ字・最大160字。この拒否の合図自体が` +
                 `運んだ値ではなく、同じ tool_use_id で runner の \`PreToolUse\` フックが` +
                 `拒否より前に見た値である）: ${codeSpan(event.inputHead)}`) +
+            DENIAL_REPLY_ROUTE +
             '\n全件は日誌に残っている（`journal_read` で辿れる）。',
         );
         return;

@@ -8583,6 +8583,14 @@ export function createCloneTools(context: ToolContext) {
         'requestId か decision を付けたときだけ回答として扱う（止まっていたその仕事だけが再開する）。',
         'どちらも無い本文は、相手が返事待ちでも回答にはならず追加指示として届く。',
         '許可確認への回答では decision を必ず付けること。',
+        // **答える先の無い合図に decision を付けさせない（#1105 P0）。** 器の分類器・
+        // deny 規則の拒否は requestId を持たないが、requestId 無しの decision は
+        // 待ちがちょうど1件ならその1件へ当たる（`manager.ts` の `#choosePending`）
+        // ——無関係の確認を許可してしまう。理由の全文は `manager.ts` の
+        // `DENIAL_REPLY_ROUTE` の doc。
+        '「確認へ上がらずに止められた」合図（分類器・deny 規則の拒否）には requestId が無く、' +
+          '許可として答える口は無い。decision を付けずに、別の形を追加指示として送ること' +
+          '（requestId 無しの decision は、そのマネージャーが別に待っている確認へ回答として当たりうる）。',
         // **5つ目の形を名指しする（#563）。** かつてこの場合は `ManagerSendResult` に
         // ならず例外として貫通していたので、クローンが受け取るのは生の例外文言だった
         // ——「何が起きたか」も「次に何をすればよいか」も、この説明文から読めなかった。

@@ -1158,7 +1158,52 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     askedAt: isoDateTime.optional(),
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
-  z.object({ type: z.literal('settled'), managerId: z.string(), requestId: z.string() }),
+  z.object({
+    type: z.literal('settled'),
+    managerId: z.string(),
+    requestId: z.string(),
+    /**
+     * **任意欄。`.optional()`（Issue #1586）。** 畳むとき（`runner.ts` の
+     * `#settleAll`）に解いた確認だけに載る——回答（`answer()`）・
+     * マネージャー側中断（`#onPermission` の `onAbort`）の経路では載らない
+     * （`runner.ts` の `#settleAll` の doc、`#onPermission` の `onAbort` の
+     * doc）。
+     *
+     * **なぜ要るか。** `#settleAll` は `#pending` の各要求を `decision:'deny'`
+     * で解くが、その直後（await を挟まず）に `query.close()` を呼ぶため、
+     * SDK（`@anthropic-ai/claude-agent-sdk@0.3.282`）の
+     * `Query#handleControlRequest` が `canUseTool` の答えを待っている間に
+     * `cleanupPerformed` が立ち、`control_response` が CLI へ一度も書き
+     * 込まれない（Issue #1586 の実測。1マイクロタスクでは足りず、2マイク
+     * ロタスク以上待てば届くところまで確認した——`close()` の前に待つ形は
+     * 採らないと決めている＝この欄はその代わりに「届いていない」という
+     * 事実を記録に残すためのものである）。**この欄がある回は、CLI が
+     * この確認への答えを一度も受け取っていない**、という事実だけを言う
+     * ——SDK 内部の実装（ミニファイされたバンドル）に依存する話なので、
+     * 版が上がれば挙動自体は変わりうる。
+     *
+     * **`reason` は `#settleAll(reason)` に渡った文字列そのもの**
+     * （例:「デーモンから停止を指示された。」）。言い換えない。
+     *
+     * **なぜ任意欄が安全か —— `packages/core` は daemon と runner の両方が
+     * 取り込むが、両サービスは別々にデプロイされ、入れ替わる順序は保証
+     * されない。**
+     *
+     * - **新 runner ＋ 旧デーモン**: runner がこの欄を載せても、旧デーモンの
+     *   zod は `z.object` の既定（strict ではない）どおり**未知の欄を黙って
+     *   落とす**ので、`settled` はこれまでどおり処理される（日誌には残らない）
+     *   ＝いまと同じ（実測: `z.object({...}).safeParse({...,withdrawn:{...}})`
+     *   は `success:true` を返し、出力から `withdrawn` が消える）
+     * - **旧 runner ＋ 新デーモン**: `withdrawn` が来ない（`undefined`）ので、
+     *   新デーモンの `event.withdrawn !== undefined` の分岐が立たず、これまで
+     *   どおり日誌へは残さない＝新デーモンが `withdrawn` を知る前の挙動と同じ
+     *
+     * ⟹ **どちらが先にデプロイされても壊れない。** 判定は必ずこの欄の有無で
+     * 行い、`reason` の文言（日本語の言い回し）では判定しない
+     * （`manager.ts` の `case 'settled'`）。
+     */
+    withdrawn: z.object({ reason: z.string() }).optional(),
+  }),
   /**
    * runner の内側で起きた、記録に残すべき事実。
    *

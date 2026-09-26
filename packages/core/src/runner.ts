@@ -1177,7 +1177,15 @@ interface PendingRequest {
    * そのものが消える（#334）。
    */
   askedAt: string;
-  settle: (answer: { message: string; decision?: 'allow' | 'deny' }) => void;
+  /**
+   * **`withdrawn` は経路を運ぶための引数であって、文言ではない**（Issue
+   * #1586）。`#settleAll` だけがこれを `true` にして渡す——`answer()`
+   * （クローンの回答）と `#onPermission` の `onAbort`（マネージャー側中断）
+   * はどちらも渡さない（`undefined` のまま）。呼び出し側はこれで
+   * 「畳むときに答えないまま解いたか」を判定し、`reason` の文字列を
+   * 嗅がない（AGENTS.md「文字列で本文を嗅がない」と同じ考え方）。
+   */
+  settle: (answer: { message: string; decision?: 'allow' | 'deny'; withdrawn?: true }) => void;
   /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
   result: Promise<PermissionResult>;
 }
@@ -3704,7 +3712,12 @@ class RunnerSession {
         if (this.#status === 'waiting_human' && this.#pending.length === 0) {
           this.#status = 'running';
         }
-        this.#emit({ type: 'settled', managerId: this.#id, requestId: id });
+        this.#emit({
+          type: 'settled',
+          managerId: this.#id,
+          requestId: id,
+          ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
+        });
         settle(value);
       },
     };
@@ -5152,10 +5165,20 @@ class RunnerSession {
     this.#emit({ type: 'archive', managerId: this.#id, body: result.body });
   }
 
-  /** 待たせたまま消えない。止まっている確認は理由付きで全部解く。 */
+  /**
+   * 待たせたまま消えない。止まっている確認は理由付きで全部解く。
+   *
+   * **`withdrawn: true` を渡すのはここだけである（Issue #1586）。** `stop()` /
+   * `#finish()` はこの直後、await を挟まずに `query.close()` を呼ぶ——SDK が
+   * `canUseTool` の答え（ここで `decision:'deny'` として解いたもの）を CLI へ
+   * 書き込む前に `cleanupPerformed` が立ち、答えは CLI に一度も届かない
+   * （`settled` イベントの `withdrawn` の doc、`runner-protocol.ts`）。
+   * `answer()`（クローンの回答）はこの関数を経由しないので `withdrawn` は
+   * 付かない——あちらは `close()` を伴わず、答えは普通に CLI へ届く。
+   */
   #settleAll(reason: string): void {
     for (const request of [...this.#pending]) {
-      request.settle({ message: reason, decision: 'deny' });
+      request.settle({ message: reason, decision: 'deny', withdrawn: true });
     }
     this.#pending.length = 0;
   }
