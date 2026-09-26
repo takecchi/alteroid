@@ -65,6 +65,20 @@ export interface ProfileService {
    * 書いたスクリプトを評価し直さない）。
    */
   syncRunner(runner: RunnerClient): Promise<RunnerProfileResult | null>;
+  /**
+   * **`apply()` の即時の配布の結果を知らせる（Issue #1699）。** 返り値は購読を外す関数。
+   *
+   * `apply()` は保存の直後に、繋がっている runner へその場で直接配る。この経路は
+   * `ManagerPool` の押し込みの帳面（`#pushHealth`）と挑み直し（`#schedulePushRetry`）を
+   * 通らなかったので、一時的な障害で配り損ねても `runner_list` は前の「ok」のままで、
+   * 挑み直しも予約されなかった（名乗りのときの配布は「諦めずに挑み直す」と約束して
+   * いるのに）。`ManagerPool` がここを購読し、同じ帳面に積む——約束を1つにする。
+   *
+   * **任意の口である。** 偽物（テスト）は持たなくてよい。`PUT /profile` とクローンの `profile_write` は同じインスタンスを通るので、どちらの入口から書いても同じ扱いになる。
+   */
+  onPushed?(
+    listener: (results: readonly (RunnerProfileResult & { runnerId: string })[]) => void,
+  ): () => void;
 }
 
 export interface ProfileServiceOptions {
@@ -89,6 +103,9 @@ export interface ApplyProfileResult {
 
 export function createProfileService(options: ProfileServiceOptions): ProfileService {
   const { stores, applier, runners } = options;
+  const pushListeners = new Set<
+    (results: readonly (RunnerProfileResult & { runnerId: string })[]) => void
+  >();
 
   /**
    * 直列化の実体。**次の更新は前の更新の全段が終わってから始まる。**
@@ -214,6 +231,14 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         }
 
         const results = await pushAll(normalized);
+        // 購読者（`ManagerPool`）の例外で、人間・クローンへの応答を落とさない。
+        for (const listener of pushListeners) {
+          try {
+            listener(results);
+          } catch {
+            // 帳面に積めなかっただけで、配布の結果そのものは下で返す。
+          }
+        }
 
         return {
           stored: true,
@@ -235,6 +260,11 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         // 記憶ストアには書かない（`updatedAt` は本文を変えた人のものである）。
         return applier.apply(normalizeProfileScript(stored.script));
       }),
+
+    onPushed: (listener) => {
+      pushListeners.add(listener);
+      return () => pushListeners.delete(listener);
+    },
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
