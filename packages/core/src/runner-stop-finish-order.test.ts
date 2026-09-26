@@ -101,6 +101,19 @@ interface FakeSession {
    * 形（生ログ・報告が `#reader` の後ろ）でも保つことを確かめる歯専用。
    */
   crashAfterClose(reason: string): void;
+  /**
+   * **Issue #1597 専用。** `result` を、成功ではない `subtype`（既定は
+   * `error_during_execution`）かつ `session_id` を伴って流す——resume 直後で
+   * まだ一度も手が動いていない状態でこれを受けると、`#apply` の
+   * `case 'turn_ended'` は `#recoverFromFailedResume` を `unresumable` と
+   * 判定し、`void this.#finish('lost', …)` を**待たずに**発火して次のメッセージ
+   * 待ちへ戻る（`runner.ts` の当該コメント「他5箇所のように `await` へ揃える
+   * ことはしていない」）。**同期関数**（`say`/`taskStarted` と違い、呼んだ後に
+   * 一呼吸置かない）——呼んだ直後に `host.stop()` を重ねることで、Issue の
+   * 再現手順（`session.finish(...)` の直後に `await host.stop(...)`）と同じ
+   * 「`#finish('lost', …)` が完了する前に `stop()` が割り込む」窓を作る。
+   */
+  resultFailed(text: string, subtype?: string): void;
 }
 
 /**
@@ -192,6 +205,16 @@ function fakeSdk(
           fail = null;
           reject(new Error(reason));
         }
+      },
+      resultFailed(text, subtype = 'error_during_execution') {
+        push({
+          type: 'result',
+          subtype,
+          is_error: true,
+          result: text,
+          session_id: 'sess-mgr',
+          uuid: 'uuid-result-failed',
+        } as unknown as SDKMessage);
       },
     };
     sessions.push(session);
@@ -870,6 +893,65 @@ describe('#1533 + #1589 新しい歯: stop() の後に #reader が例外で抜�
       behavior: 'deny',
       message: 'デーモンから停止を指示された。',
     });
+  });
+});
+
+/**
+ * **Issue #1597 の再現。** `#apply` の `case 'turn_ended'` にある
+ * `unresumable` の枝（`void this.#finish('lost', …)`）には `#stopped` の門が
+ * 無い——`#read` の catch 節（Issue #1589 / PR #1590 が塞いだ箇所）と同じ形の
+ * 穴が、resume に失敗した直後の経路に残っている。
+ *
+ * 条件（Issue 本文の「再現の条件」）:
+ *
+ * 1. `resume()` で開いたセッションである（`start()` では `#resumeAttempt` が
+ *    立たない）——`host.resume()` を使う
+ * 2. まだ一度も手が動いていない——`resume()` の後、`say`/`finish` を一度も
+ *    呼ばない
+ * 3. 生ログから作り直せる記録が無い——`entries` を渡さない
+ *    （`renderSessionLog(undefined)` は `null`）
+ * 4. `subtype: 'error_during_execution'` の `result`（結果なし）を流した直後に、
+ *    await を挟まず `host.stop(id)` を呼ぶ——`resultFailed()` は同期関数
+ *    （`FakeSession.resultFailed` の doc）
+ *
+ * **直す前は赤くなる**——`void this.#finish('lost', …)` が `stop()` と
+ * 競合し、`stop()` が `host.list()` から消した後に `closed(status=lost)` が
+ * 1本出る（Issue 本文の実測ログと同じ形）。**直した後（`#apply` の
+ * `unresumable` の枝を `if (!this.#stopped)` で囲む）は緑になる。**
+ */
+describe('#1597: resume 直後に結果なし result（unresumable）と stop() が重なっても、closed は出ない', () => {
+  it('closed が0本のまま、stop() が host.list() からセッションを消す', async () => {
+    const s = setup();
+    await s.host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'sess-mgr',
+      cwd: dir,
+      request: '調べて',
+      // entries を渡さない → renderSessionLog が null → unresumable
+      // （`decideResumeRecoveryOutcome` の doc）。
+    });
+    const session = await firstSession(s.sessions);
+    s.resetTimeline();
+
+    // **await を挟まない（Issue 本文の再現手順そのもの）。** `resultFailed`
+    // は同期関数なので、この行が返った時点では `#apply` はまだ
+    // `unresumable` の枝へすら到達していない——`#read` の `for await` が
+    // 次のマイクロタスクでこのメッセージを受け取ってから処理する。
+    session.resultFailed('失敗した', 'error_during_execution');
+    await s.host.stop('mgr-1');
+    // `stop()` が戻った後も、競合していた `void this.#finish('lost', …)` が
+    // 遅れて emit することがある——一呼吸置いてから数える。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    console.log('#1597 timeline:', JSON.stringify(s.timeline));
+
+    // ⭐ ここが歯の本体。closed が1本も出ない——`stop()` は closed を出さない
+    // 設計であり（`runner.ts` の `stop()` の doc）、`unresumable` を畳む
+    // `#finish('lost', …)` がそれを覆してはいけない。
+    expect(s.events.filter((e) => e.type === 'closed')).toHaveLength(0);
+
+    // stop() は host.list() からセッションを消し終えている。
+    expect(s.host.list().some((m) => m.managerId === 'mgr-1')).toBe(false);
   });
 });
 
