@@ -2486,9 +2486,25 @@ export function createApp(deps: AppDeps) {
               'application/json': { schema: resolver(practiceVersionListResponseSchema) },
             },
           },
+          400: {
+            description: 'やり方のスラッグが不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
-      async (c) => c.json({ versions: await stores.practices.listVersions(c.req.param('slug')) }),
+      async (c) => {
+        // **issue #1670。** `GET`/`PUT`/`DELETE /practices/:slug`（#1647/#1634）と
+        // 同じ門——`practiceSlugSchema` に落ちるスラッグはここで 400 で断る。
+        // ここが無いと、fs/in-memory では空配列がそのまま 200 で返り、pg 実装
+        // （`PgPracticeStore#slug()`、`packages/storage-pg/src/practices.ts`）
+        // では例外が投げられて `onError` が 500 にする——入口によって結果が
+        // 変わる非対称になっていた。
+        const slug = c.req.param('slug');
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
+        }
+        return c.json({ versions: await stores.practices.listVersions(slug) });
+      },
     )
 
     /** やり方の版を1つ、本文まで読む（#1309）。 */
@@ -2505,7 +2521,7 @@ export function createApp(deps: AppDeps) {
             },
           },
           400: {
-            description: '版番号が正の整数として成立しない。',
+            description: 'やり方のスラッグが不正、または版番号が正の整数として成立しない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
@@ -2515,12 +2531,19 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
+        // **issue #1670。** 版番号の検査（既存）より前に、同じ門を先に通す。
+        // 順序は `GET /practices/:slug/versions` と揃え、スラッグが不正なら
+        // 版番号の妥当性を見るまでもなく断る。
+        const slug = c.req.param('slug');
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
+        }
         const raw = c.req.param('version');
         const version = Number(raw);
         if (!Number.isInteger(version) || version <= 0) {
           return c.json({ error: '版番号が不正' as const }, 400);
         }
-        const found = await stores.practices.readVersion(c.req.param('slug'), version);
+        const found = await stores.practices.readVersion(slug, version);
         if (!found) return c.json({ error: 'not found' as const }, 404);
         return c.json({ version: found });
       },
@@ -3185,10 +3208,12 @@ export function createApp(deps: AppDeps) {
       deliberateClient,
       async (c) => {
         const id = c.req.param('id');
-        const grant = await stores.permissionGrants.get(id);
+        // `get()` → `put({ ...grant, revokedAt })` にしないこと——lost update
+        // （`PermissionGrantStore.revoke` の doc。#1654 と同型）。`revoke` が
+        // 排他区間の中で現在値を読み直すので、`#onPreToolUse` の `markUsed`
+        // 割り込みでも取り消しが消えない。
+        const grant = await stores.permissionGrants.revoke(id, new Date().toISOString());
         if (grant === null) return c.json({ error: 'not found' as const }, 404);
-        const revokedAt = grant.revokedAt ?? new Date().toISOString();
-        await stores.permissionGrants.put({ ...grant, revokedAt });
         // 誰が取り消したかは必ず残す（`/access/*` の grant/revoke と同じ理由——
         // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
         await stores.journal.append({

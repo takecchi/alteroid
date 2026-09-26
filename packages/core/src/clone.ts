@@ -9230,7 +9230,11 @@ class Clone implements CloneHost {
     for (const grant of grants) {
       if (grant.revokedAt !== undefined) continue;
       if (!matchPermissionRule(grant.rule, command)) continue;
-      await this.#stores.permissionGrants.put({ ...grant, lastUsedAt: now }).catch(() => undefined);
+      // `put({ ...grant, lastUsedAt })` にしないこと——lost update
+      // （`PermissionGrantStore.markUsed` の doc。#1654 と同型）。`markUsed` が
+      // 排他区間の中で現在値を読み直すので、人間の `revoke` 割り込みでも
+      // 取り消しが消えない。
+      await this.#stores.permissionGrants.markUsed(grant.id, now).catch(() => undefined);
       if (typeof record.toolUseId === 'string') {
         this.#allowedByGrantToolUses.set(record.toolUseId, { grantId: grant.id, rule: grant.rule });
       }

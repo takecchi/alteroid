@@ -44,7 +44,44 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
     await this.#update((file) => {
       const grants = file.grants.filter((existing) => existing.id !== grant.id);
       grants.push(permissionGrantSchema.parse(grant));
-      return { grants };
+      return { next: { grants }, result: undefined };
+    });
+  }
+
+  /**
+   * `PermissionGrantStore.revoke` の doc（lost update・#1654 と同型）。
+   * **現在値を読むのも書くのも同じ `#update` の排他区間の中**——`get()` した
+   * 古い写しではなく、ここで読み直した現在値から `revokedAt` の有無を見る。
+   */
+  async revoke(id: string, at: string): Promise<PermissionGrant | null> {
+    return this.#update((file) => {
+      const found = file.grants.find((grant) => grant.id === id);
+      if (found === undefined) return { next: file, result: null };
+      const next = permissionGrantSchema.parse({ ...found, revokedAt: found.revokedAt ?? at });
+      return {
+        next: { grants: file.grants.map((grant) => (grant.id === id ? next : grant)) },
+        result: next,
+      };
+    });
+  }
+
+  /**
+   * `PermissionGrantStore.markUsed` の doc。`revokedAt` などの他の欄には
+   * 一切触れない——差し替えるのは `lastUsedAt` だけ。既存より古い時刻では
+   * 戻さない。
+   */
+  async markUsed(id: string, at: string): Promise<void> {
+    await this.#update((file) => {
+      const found = file.grants.find((grant) => grant.id === id);
+      if (found === undefined) return { next: file, result: undefined };
+      if (found.lastUsedAt !== undefined && found.lastUsedAt >= at) {
+        return { next: file, result: undefined };
+      }
+      const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });
+      return {
+        next: { grants: file.grants.map((grant) => (grant.id === id ? next : grant)) },
+        result: undefined,
+      };
     });
   }
 
@@ -61,13 +98,16 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   /**
    * read-modify-write を直列化する（`FsJobStore.#update` と同じ理由——issue
    * #1113 / #1050 の教訓。`withPathLock` でプロセス内・プロセス間の両方を
-   * 排他する）。
+   * 排他する）。**`mutate` が返す `result` をそのまま呼び出し側へ返す**
+   * （`FsScheduleStore.#update` と同じ形——`revoke` / `markUsed` が「読んで
+   * から書くまで」を排他区間の中へ引き取れるようにするため）。
    */
-  async #update(mutate: (file: GrantFile) => GrantFile): Promise<void> {
-    await withPathLock(this.#path, async () => {
-      const next = mutate(await this.#read());
+  async #update<T>(mutate: (file: GrantFile) => { next: GrantFile; result: T }): Promise<T> {
+    return withPathLock(this.#path, async () => {
+      const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
       await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
+      return result;
     });
   }
 }

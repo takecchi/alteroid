@@ -32,6 +32,7 @@ import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
   commitmentSchema,
   memorySlugSchema,
+  permissionGrantSchema,
   practiceSchema,
   practiceVersionSchema,
   scheduledRequestSchema,
@@ -1105,6 +1106,26 @@ export function createMemoryStores(): Stores {
     },
     async put(grant) {
       permissionGrantRows.set(grant.id, grant);
+    },
+    // fs / pg と同じ形（lost update・#1654 と同型）——現在値（この in-memory
+    // 実装では常に最新の `Map` の値そのもの）から判断する。プロセス内の
+    // `Map` は同期アクセスなので、fs の `withPathLock` / pg の条件付き
+    // UPDATE に相当する排他は要らない——読みと書きの間に他の呼び出しが
+    // 割り込む隙間が無い。
+    async revoke(id, at) {
+      const found = permissionGrantRows.get(id);
+      if (found === undefined) return null;
+      const next = permissionGrantSchema.parse({ ...found, revokedAt: found.revokedAt ?? at });
+      permissionGrantRows.set(id, next);
+      return next;
+    },
+    async markUsed(id, at) {
+      const found = permissionGrantRows.get(id);
+      if (found === undefined) return;
+      // 既存より古い時刻では戻さない（`PermissionGrantStore.markUsed` の doc）。
+      if (found.lastUsedAt !== undefined && found.lastUsedAt >= at) return;
+      const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });
+      permissionGrantRows.set(id, next);
     },
   };
 
