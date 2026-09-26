@@ -35,7 +35,9 @@
 //  FAKE_CLI_EXIT_AFTER_MS  - 自分から終了するまでの時間（既定 800）
 
 import fs from 'node:fs';
+import process from 'node:process';
 import readline from 'node:readline';
+import { setTimeout } from 'node:timers';
 
 const logPath = process.env.FAKE_CLI_LOG;
 if (!logPath) {

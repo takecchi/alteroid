@@ -99,11 +99,10 @@ function startQuery(): Harness {
       permissionMode: 'default',
       pathToClaudeCodeExecutable: FAKE_CLI_PATH,
       env: { ...process.env, FAKE_CLI_LOG: logPath },
-      canUseTool: (_toolName, _input, _extra) => {
-        return new Promise<PermissionResult>((resolve) => {
+      canUseTool: () =>
+        new Promise<PermissionResult>((resolve) => {
           resolveAsk?.(resolve);
-        });
-      },
+        }),
     },
   });
 
@@ -111,8 +110,9 @@ function startQuery(): Harness {
   // （`for await` が transport の読み取りループを駆動する）。
   void (async () => {
     try {
-      for await (const _message of q) {
+      for await (const message of q) {
         // 中身は見ない。読み進めること自体が目的。
+        void message;
       }
     } catch {
       // close() 後の読み取りエラーは無視する（本テストが見るのは fake-cli の
@@ -166,7 +166,11 @@ describe('SDK 単体: settle → close() の間に何を挟むかで control_res
       harness.close();
 
       await new Promise((resolve) => setTimeout(resolve, OBSERVE_MS));
-      expect(delivered(harness.logPath)).toBe(false);
+      expect(
+        delivered(harness.logPath),
+        'SDK の内部が変わった。#1596 の withdrawn の前提（settle → close() を await なしで並べると ' +
+          'control_response が CLI へ届かない）を見直せ。',
+      ).toBe(false);
     },
     10_000,
   );
