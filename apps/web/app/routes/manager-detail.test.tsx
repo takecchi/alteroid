@@ -1201,3 +1201,12 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
     expect(screen.queryByText(new RegExp(MISSING))).toBeNull();
   });
 });
+
+/** **詳細も、知らない `status` で落ちない**（issue #1623。一覧と同じ部品を使う）。 */
+describe('詳細でも、知らない status に倒れ先がある（#1623）', () => {
+  it('知らない status でも詳細を描き、生の値を出す', async () => {
+    renderDetail({ ...BASE, status: 'archived' as ManagerSummary['status'] });
+
+    expect(await screen.findByText('知らない状態（archived）')).toBeTruthy();
+  });
+});
