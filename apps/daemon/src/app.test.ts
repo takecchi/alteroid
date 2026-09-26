@@ -1013,6 +1013,57 @@ describe('HTTP API', () => {
       expect(list.status).toBe(200);
       expect(await list.json()).toEqual({ versions: [] });
     });
+
+    /**
+     * **issue #1670。**
+     *
+     * `GET`/`PUT`/`DELETE /practices/:slug`（#1647/#1634）と同じ
+     * `practiceSlugSchema` の 400 の門が、`GET /practices/:slug/versions` と
+     * `GET /practices/:slug/versions/:version` には無かった。in-memory /
+     * fs 実装では `PracticeStore` が不正な slug で例外を投げないので、
+     * 直す前は 200（空配列）/ 404 に落ちるだけで再現しない——**pg 実装
+     * （`PgPracticeStore#slug()`）では同じ入力が 500 になることを、
+     * `practice-versions-slug-pg-1670.test.ts` が PGlite で確かめている。**
+     * ここでは HTTP 層の応答の形と文言を `GET /practices/:slug` と揃える。
+     */
+    describe('GET /practices/:slug/versions* は不正なスラッグを 400 で断る（issue #1670）', () => {
+      const badSlug = 'Not_Valid_SLUG!';
+
+      it('GET /practices/:slug/versions — 直す前は 200（空配列）だった', async () => {
+        const getRes = await app.request(`/practices/${badSlug}`);
+        expect(getRes.status, 'GET /practices/:slug は既に 400（#1647、比較対象）').toBe(400);
+        const getBody = (await getRes.json()) as { error: string };
+
+        const versionsRes = await app.request(`/practices/${badSlug}/versions`);
+        expect(
+          versionsRes.status,
+          'GET /practices/:slug/versions は GET /practices/:slug と同じ 400 で' +
+            '断るべき（直す前は空配列付きの 200 だった）。',
+        ).toBe(400);
+        const versionsBody = (await versionsRes.json()) as { error: string };
+
+        expect(versionsBody).toEqual(getBody);
+        expect(versionsBody).toEqual({ error: 'やり方のスラッグが不正' });
+      });
+
+      it('GET /practices/:slug/versions/:version — 直す前は 404 だった', async () => {
+        const versionRes = await app.request(`/practices/${badSlug}/versions/1`);
+        expect(
+          versionRes.status,
+          'GET /practices/:slug/versions/:version も同じ 400 で断るべき' +
+            '（直す前は readVersion が素通りで null を返すので 404 だった）。',
+        ).toBe(400);
+        expect(await versionRes.json()).toEqual({ error: 'やり方のスラッグが不正' });
+      });
+
+      it('版番号が不正でも、スラッグの不正が先に断る', async () => {
+        // スラッグが不正なら、版番号の妥当性を見るまでもなく 400。
+        // 「版番号が不正」ではなく「スラッグが不正」の文言で断ることを固定する。
+        const res = await app.request(`/practices/${badSlug}/versions/not-a-number`);
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: 'やり方のスラッグが不正' });
+      });
+    });
   });
 
   it('日誌を読める（可観測性の中段）', async () => {

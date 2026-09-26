@@ -40,7 +40,9 @@
   },
   "devDependencies": {
     "@alteroid/runner": "workspace:*",
+    "@electric-sql/pglite": "catalog:",
     "@types/node": "catalog:",
+    "drizzle-orm": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "prettier": "catalog:"
