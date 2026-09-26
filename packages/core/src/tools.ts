@@ -73,6 +73,7 @@ import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
 import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
+import { encodeUsageCursor, resolveUsageCursor } from './usage-cursor.js';
 import {
   describePage,
   excerpt,
@@ -224,6 +225,7 @@ import {
   usageSiteSchema,
   type UsageAggregate,
   type UsageBreakdown,
+  type UsageRow,
   type UsageTotals,
 } from './usage.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
@@ -6055,7 +6057,15 @@ export function createCloneTools(context: ToolContext) {
         'token の軸に「（トークンの帰属が無い分）」が出るのは、プールを使っていない構成では正常である（0 でも既定値でもなく、取れていない）。',
         '**推定値であり請求明細ではない。**',
         '記録は台帳を置いた日から始まっているので、それより前は 0 ではなく「記録が無い」と出る。',
-        'まとめ表示は軸ごとに打ち切る。続きは axis と offset で辿れる（打ち切りの行にそのまま書いてある）。',
+        'まとめ表示は軸ごとに打ち切る。続きは axis と cursor で辿れる（打ち切りの行にそのまま書いてある。' +
+          'cursor は前回の応答に出たものをそのまま渡す——自分で組み立てない）。',
+        // **issue #1673。** 台帳は委譲が進むたびに増え続けるので、まとめ表示を見てから
+        // 続きを取りに行くまでの間に他の行の費用が変わって順位が入れ替わりうる。
+        // cursor（keyset）は費用が増える一方であることを使って欠落・重複を作らないが、
+        // それでも「錨より上位へ追い越してきた行」「既に見せた行がその後も伸びた行」は
+        // 通常の続きの頁とは別枠（「順位が上がった、または…」の節）で出る。
+        '続きの応答に「順位が上がった、または既に見せた行が伸びた可能性がある行」が別枠で出ることがある' +
+          '（前回の呼び出し以降に記録が増えて起きる。通常の続きの頁と重複しない）。',
       ].join(' '),
       {
         from: z.string().optional().describe('この日から（YYYY-MM-DD）。省略すると台帳の全期間'),
@@ -6075,16 +6085,17 @@ export function createCloneTools(context: ToolContext) {
           .enum(USAGE_AXES)
           .optional()
           .describe(
-            'この軸だけを offset から出す（まとめ表示・他の軸・アカウント全体の残りは出ない）',
+            'この軸だけを出す（まとめ表示・他の軸・アカウント全体の残りは出ない）。省略すると先頭から',
           ),
-        offset: z
-          .number()
-          .int()
-          .nonnegative()
+        cursor: z
+          .string()
           .optional()
-          .describe('axis と一緒に使う。その軸の何件目から出すか'),
+          .describe(
+            'axis と一緒に使う。その軸の続きを読む位置。前回の応答の断り書きに出た cursor を' +
+              'そのまま渡す（自分で組み立てない）。省略すると先頭から',
+          ),
       },
-      async ({ from, to, managerId, layer, site, tokenId, axis, offset }) => {
+      async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),
@@ -6096,9 +6107,7 @@ export function createCloneTools(context: ToolContext) {
         // **軸モードでは「続きの1軸」だけを返す。** アカウント全体の残りもまとめ表示も
         // 付けない — 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるためである。
         if (axis !== undefined) {
-          return text(
-            renderUsage(aggregate, { axis, ...(offset === undefined ? {} : { offset }) }),
-          );
+          return text(renderUsage(aggregate, { axis, cursor }));
         }
         const unrecordedManagers = await unrecordedManagersLines(context, stores, aggregate.since);
         return text(
@@ -8443,20 +8452,24 @@ export function createCloneTools(context: ToolContext) {
         '観測するため）。モデルが effort に対応していない場合もずっと取れない。',
         '取れない値は「まだ分からない」と出る（既定値では埋めない）。',
         // **打ち切った内訳の続きへ届く口（#1638）。** 案内は打ち切りの行にそのまま書く。
-        '台帳との突き合わせの内訳は14件で打ち切る。続きは ledgerOffset で辿れる' +
-          '（打ち切りの行にそのまま書いてある。ledgerOffset を渡すとその節だけを出す）。',
+        // **issue #1673。** 台帳は増え続けるので、素の位置（旧 `ledgerOffset`）は
+        // 途中で内訳の順位が入れ替わると欠落・重複を生む。`ledgerCursor` は
+        // `usage_read` の `axis` モードと同じ keyset（cursor は前回の応答のものを
+        // そのまま渡す。壊れた・別の cursor は断る）。
+        '台帳との突き合わせの内訳は14件で打ち切る。続きは ledgerCursor で辿れる' +
+          '（打ち切りの行にそのまま書いてある。ledgerCursor を渡すとその節だけを出す。' +
+          '前回の呼び出し以降に記録が増えていたら、順位が上がった行が別枠で出ることがある）。',
       ].join(' '),
       {
-        ledgerOffset: z
-          .number()
-          .int()
-          .min(0)
+        ledgerCursor: z
+          .string()
           .optional()
           .describe(
-            '台帳との突き合わせの内訳を、この位置から出す（実行時の事実・記憶の大きさは出ない）',
+            '台帳との突き合わせの内訳の続きを読む位置。前回の応答の断り書きに出た ledgerCursor を' +
+              'そのまま渡す（自分で組み立てない。実行時の事実・記憶の大きさは出ない）',
           ),
       },
-      async ({ ledgerOffset }) => {
+      async ({ ledgerCursor }) => {
         const runtime = context.runtime?.();
         if (runtime === undefined) {
           return text(
@@ -8467,9 +8480,9 @@ export function createCloneTools(context: ToolContext) {
 
         // **続きを取りに来た呼び出しは、その節だけを返す**（`usage_read` の `axis`
         // モードと同じ判断。続きを辿るたびに同じ全体が返ると、辿るほど入力を食う）。
-        if (ledgerOffset !== undefined) {
+        if (ledgerCursor !== undefined) {
           const aggregate = runtime.sdkModel === null ? null : await stores.usage.aggregate({});
-          return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerOffset));
+          return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
         }
 
         const [documents, memoryDocuments, aggregate] = await Promise.all([
@@ -12229,53 +12242,152 @@ interface UsageAxisEntry {
    * （`0` にしない）。
    */
   turns?: number;
+  /**
+   * このエントリを構成する台帳の行（`UsageRow`）のうち、最も新しい `updatedAt`
+   * （issue #1673）。**`usage-cursor.ts` の `resolveUsageCursor` が「錨より前に
+   * 居る行が、初回の呼び出しの後に伸びていないか」を見るためだけに持つ**——
+   * `usageBreakdownSchema` には無い欄で、HTTP には出さない（`renderUsage` の
+   * 内部でしか使わない）。
+   */
+  updatedAt: string;
+  /**
+   * `totals.costUsd` の写し（issue #1673）。**`resolveUsageCursor`
+   * （`UsageCursorEntry`）が求める形に合わせるためだけの欄**——真値は
+   * `totals.costUsd` のままで、ここは二重管理ではなく単なる型合わせである
+   * （`usageAxisEntries` の `withUpdatedAt` が両方を同時に埋める）。
+   */
+  cost: number;
+}
+
+/**
+ * `token` 軸で、認証トークンの帰属が無い分に使うラベル。
+ *
+ * `usageAxisEntries` と `usageAxisUpdatedAtByLabel` の両方が同じ字面を使う
+ * 必要がある——**畳んだラベルの綴りが1文字でもずれると、`updatedAt` の
+ * 引き当てが外れて「取れなかった」を`updatedAt` 欠落として静かに握り潰す**
+ * ので、定数へ寄せて書き写しをやめる。
+ */
+const USAGE_TOKEN_UNATTRIBUTED_LABEL = '（トークンの帰属が無い分）';
+
+/**
+ * 軸ごとに、そのラベルを構成する台帳の行のうち最も新しい `updatedAt` を引く
+ * （issue #1673）。**`usageAxisEntries` と同じ鍵の取り方をすること**——
+ * ここがずれると `resolveUsageCursor` の「取りこぼし対策」が誤動作する
+ * （見つからないラベルは `updatedAt` が空になり、常に`risen`へ回らない）。
+ */
+function usageAxisUpdatedAtByLabel(
+  rows: readonly UsageRow[],
+  axis: UsageAxis,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const bump = (label: string, updatedAt: string) => {
+    const found = map.get(label);
+    if (found === undefined || updatedAt > found) map.set(label, updatedAt);
+  };
+  for (const row of rows) {
+    switch (axis) {
+      case 'date':
+        bump(row.date, row.updatedAt);
+        break;
+      case 'manager':
+        bump(row.managerId, row.updatedAt);
+        break;
+      case 'model':
+        bump(row.model, row.updatedAt);
+        break;
+      case 'layer':
+        bump(row.layer, row.updatedAt);
+        break;
+      case 'site':
+        bump(row.site, row.updatedAt);
+        break;
+      case 'token':
+        bump(row.tokenId ?? USAGE_TOKEN_UNATTRIBUTED_LABEL, row.updatedAt);
+        break;
+    }
+  }
+  return map;
 }
 
 /**
  * 軸ごとの並びを1か所へ寄せる。**まとめ表示と `axis` モードが同じここを通ること。**
  *
- * まとめ表示の先頭 N 件と `axis` モードの `offset=0..N` が同じ並びでなければ、
- * ページングは取りこぼすか重複する。
+ * まとめ表示の先頭 N 件と `axis` モードの続きが同じ並びでなければ、ページングは
+ * 取りこぼすか重複する。
  *
  * **全順序にする。** 費用の降順だけだと同額のときの順序が `groupBy` の `Map` の
  * 挿入順に依存する（いまは安定ソートの結果としてラベル昇順に落ちているが、それは
  * 実装の偶然である）。「費用降順 → ラベル昇順」を約束にすると結果は変わらないまま
  * ページングの前提が成り立つ。
+ *
+ * **`rows`（issue #1673）は `updatedAt` を引くためだけに要る。** `summary`
+ * （`UsageBreakdown`）はブラウザ（`apps/web`）とも共有する軽い型なので、そちらに
+ * `updatedAt` を足すと HTTP の応答の形が変わる——ここでは触らず、同じ `rows` から
+ * 別に畳んで `UsageAxisEntry` へ添えるだけにとどめる。
  */
-function usageAxisEntries(summary: UsageBreakdown, axis: UsageAxis): UsageAxisEntry[] {
+function usageAxisEntries(
+  summary: UsageBreakdown,
+  axis: UsageAxis,
+  rows: readonly UsageRow[],
+): UsageAxisEntry[] {
+  const updatedAtByLabel = usageAxisUpdatedAtByLabel(rows, axis);
+  // **見つからないラベルは無い想定**（`summary` も `rows` も同じ集計呼び出しの
+  // 産物なので、`summary` に載っているラベルは必ず `rows` に行を持つ）。それでも
+  // 万一見つからなければ、`risen` へ回さない安全側（絶対に最古のタイムスタンプ）
+  // に倒す——見つからない場合を「常に伸びた」と誤解して余計な節を出すより安全。
+  const updatedAtOf = (label: string): string => updatedAtByLabel.get(label) ?? '';
+  const withUpdatedAt = <E extends { label: string; totals: UsageTotals }>(
+    e: E,
+  ): E & { updatedAt: string; cost: number } => ({
+    ...e,
+    updatedAt: updatedAtOf(e.label),
+    cost: e.totals.costUsd,
+  });
   const byCost = (entries: UsageAxisEntry[]) =>
     entries.sort((a, b) => b.totals.costUsd - a.totals.costUsd || a.label.localeCompare(b.label));
   switch (axis) {
     case 'date':
       // 日別は新しい順（古い日で上限を使い切らせない）。日付そのものが全順序である。
       return summary.byDate
-        .map((entry) => ({ label: entry.date, totals: entry.totals, turns: entry.turns }))
+        .map((entry) =>
+          withUpdatedAt({ label: entry.date, totals: entry.totals, turns: entry.turns }),
+        )
         .sort((a, b) => b.label.localeCompare(a.label));
     case 'manager':
       return byCost(
-        summary.byManager.map((e) => ({ label: e.managerId, totals: e.totals, turns: e.turns })),
+        summary.byManager.map((e) =>
+          withUpdatedAt({ label: e.managerId, totals: e.totals, turns: e.turns }),
+        ),
       );
     case 'model':
       // **回数は渡さない。** `byModel` に欄が無い（`UsageAxisEntry.turns` の doc）。
-      return byCost(summary.byModel.map((e) => ({ label: e.model, totals: e.totals })));
+      return byCost(
+        summary.byModel.map((e) => withUpdatedAt({ label: e.model, totals: e.totals })),
+      );
     case 'layer':
       return byCost(
-        summary.byLayer.map((e) => ({ label: e.layer, totals: e.totals, turns: e.turns })),
+        summary.byLayer.map((e) =>
+          withUpdatedAt({ label: e.layer, totals: e.totals, turns: e.turns }),
+        ),
       );
     case 'site':
       return byCost(
-        summary.bySite.map((e) => ({ label: e.site, totals: e.totals, turns: e.turns })),
+        summary.bySite.map((e) =>
+          withUpdatedAt({ label: e.site, totals: e.totals, turns: e.turns }),
+        ),
       );
     case 'token':
       // **`null` を「記録が無い」と書く。id を捏造しない。** ここが空文字や
       // `'unknown'` になると、クローンからは1本のトークンとして見え、費用を
       // そこへ帰属させた話が始まる（`usage.ts` の `usageBreakdownSchema`）。
       return byCost(
-        summary.byToken.map((e) => ({
-          label: e.tokenId ?? '（トークンの帰属が無い分）',
-          totals: e.totals,
-          turns: e.turns,
-        })),
+        summary.byToken.map((e) =>
+          withUpdatedAt({
+            label: e.tokenId ?? USAGE_TOKEN_UNATTRIBUTED_LABEL,
+            totals: e.totals,
+            turns: e.turns,
+          }),
+        ),
       );
   }
 }
@@ -12335,11 +12447,45 @@ async function unrecordedManagersLines(
   return describeUnrecordedManagers(findUnrecordedManagers(managers, recordedManagerIds, since));
 }
 
+/**
+ * 対象の行（issue #1673 の `rows`）の `updatedAt` の最大値。**カーソルの
+ * `asOf` に積む値そのもの。** 行が0件なら `undefined`（＝台帳のその範囲には
+ * 何も無いので、比べる基準そのものが作れない）。
+ */
+function maxUpdatedAt(rows: readonly UsageRow[]): string | undefined {
+  let max: string | undefined;
+  for (const row of rows) {
+    if (max === undefined || row.updatedAt > max) max = row.updatedAt;
+  }
+  return max;
+}
+
+/**
+ * 「順位が上がった、または既に見せた行が伸びた可能性がある」節（issue #1673）。
+ *
+ * **`usage_read` の軸モードと `self_status` の台帳突き合わせが両方使う**——
+ * 文言を1か所に寄せないと、片方だけ直したときに読み手が「同じことを別の
+ * 言葉で言っている」と誤読する。
+ */
+function renderRisenSection<T>(risen: readonly T[], formatEntry: (entry: T) => string): string[] {
+  if (risen.length === 0) return [];
+  const lines = [
+    '',
+    '⚠ 順位が上がった、または既に見せた行が伸びた可能性がある行' +
+      '（前回の呼び出し以降に記録が増えたため。この頁の本体とは重複しない）:',
+  ];
+  for (const entry of risen.slice(0, USAGE_AXIS_LIMIT)) lines.push(formatEntry(entry));
+  if (risen.length > USAGE_AXIS_LIMIT) {
+    lines.push(`  …ほか ${risen.length - USAGE_AXIS_LIMIT} 件は省略。`);
+  }
+  return lines;
+}
+
 function renderUsage(
   aggregate: UsageAggregate,
   view: {
     axis?: UsageAxis;
-    offset?: number;
+    cursor?: string;
     /**
      * 台帳に1行も無い委譲（Issue #98）を、すでに整形した行として渡す。
      *
@@ -12382,26 +12528,55 @@ function renderUsage(
     // 他の軸も出さない — 続きを取るたびに同じ全体が返ってくると、続きを辿るほど
     // 入力を食うことになる。
     const axis = view.axis;
-    const offset = view.offset ?? 0;
-    const entries = usageAxisEntries(summary, axis);
-    lines.push(`${USAGE_AXIS_TITLES[axis]}（全 ${entries.length} 件 / offset=${offset}）`);
-    const page = entries.slice(offset, offset + USAGE_AXIS_PAGE);
+    const entries = usageAxisEntries(summary, axis, rows);
+    const cursorOutcome = resolveUsageCursor(entries, axis, view.cursor);
+    if (cursorOutcome.kind === 'malformed') {
+      lines.push(
+        `${USAGE_AXIS_TITLES[axis]}`,
+        'cursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+          `cursor を付けずに axis="${axis}" で usage_read を呼び直すと先頭から読める。`,
+      );
+      return lines.join('\n');
+    }
+    if (cursorOutcome.kind === 'wrong-axis') {
+      lines.push(
+        `${USAGE_AXIS_TITLES[axis]}`,
+        `cursor が別の軸（または self_status）のものである。axis="${axis}" の cursor を` +
+          'そのまま渡すこと（自分で組み立てない）。',
+      );
+      return lines.join('\n');
+    }
+    const { page: afterAnchor, risen } = cursorOutcome;
+    lines.push(`${USAGE_AXIS_TITLES[axis]}（全 ${entries.length} 件）`);
+    const page = afterAnchor.slice(0, USAGE_AXIS_PAGE);
     if (page.length === 0) {
       // **黙って空を返さない。** 空の一覧だけでは「この軸には記録が無い」と
-      // 「offset が範囲外」を区別できない。
-      lines.push(`  （その軸は全 ${entries.length} 件で、offset=${offset} 以降は無い）`);
+      // 「cursor がもう続きを持たない（最後の頁）」を区別できない。
+      lines.push(
+        view.cursor === undefined
+          ? `  （その軸には記録が無い）`
+          : '  （cursor より後ろは無い。これが最後の頁）',
+      );
     } else {
       for (const entry of page) {
         lines.push(formatUsageAxisLine(entry));
       }
-      const rest = entries.length - (offset + page.length);
+      const rest = afterAnchor.length - page.length;
       if (rest > 0) {
+        const lastShown = page[page.length - 1]!;
+        const nextCursor = encodeUsageCursor({
+          axis,
+          label: lastShown.label,
+          cost: lastShown.totals.costUsd,
+          asOf: maxUpdatedAt(rows),
+        });
         lines.push(
           `  …（残り ${rest} 件は出していない。` +
-            `axis="${axis}", offset=${offset + page.length} で続きが出る）`,
+            `axis="${axis}", cursor="${nextCursor}" で続きが出る）`,
         );
       }
     }
+    lines.push(...renderRisenSection(risen, formatUsageAxisLine));
   } else if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
     // **取りこぼしは照会範囲と無関係に全期間で判定する**（`findUnrecordedManagers`
@@ -12424,7 +12599,7 @@ function renderUsage(
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
 
     for (const axis of USAGE_AXES) {
-      const entries = usageAxisEntries(summary, axis);
+      const entries = usageAxisEntries(summary, axis, rows);
       lines.push('', `${USAGE_AXIS_TITLES[axis]}:`);
       for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) {
         lines.push(formatUsageAxisLine(entry));
@@ -12432,9 +12607,16 @@ function renderUsage(
       if (entries.length > USAGE_AXIS_LIMIT) {
         // **打ち切りの行がそのまま次に打つ手を書く。** 「残り N 件」だけでは、
         // 続きを見る方法が無いのと同じである。
+        const lastShown = entries[USAGE_AXIS_LIMIT - 1]!;
+        const nextCursor = encodeUsageCursor({
+          axis,
+          label: lastShown.label,
+          cost: lastShown.totals.costUsd,
+          asOf: maxUpdatedAt(rows),
+        });
         lines.push(
           `  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない。` +
-            `axis="${axis}", offset=${USAGE_AXIS_LIMIT} で続きが出る）`,
+            `axis="${axis}", cursor="${nextCursor}" で続きが出る）`,
         );
       }
     }
@@ -12684,16 +12866,35 @@ function renderMemorySize(
  * `…（残り N 件は出していない）` とだけ書いて終わっており、この内訳
  * （モデル × managerId × layer × site）は `usage_read` のどの軸でも同じ形では
  * 取れないので、15件目以降はどの道具からも読めなかった。`usage_read` の
- * 打ち切りと同じ形で `self_status` の `ledgerOffset` を案内する。
+ * 打ち切りと同じ形で `self_status` の `ledgerCursor` を案内する。
  *
- * **`ledgerOffset` を渡したときは「続きを取りに来た呼び出し」として扱う**
+ * **`ledgerCursor` を渡したときは「続きを取りに来た呼び出し」として扱う**
  * （`usage_read` の `axis` モードと同じ判断）。1頁は `USAGE_AXIS_PAGE` 件で、
  * 範囲外なら黙って空を返さずそう言う。
+ *
+ * **issue #1673。** 素の位置（旧 `ledgerOffset`）は、この内訳（actor × 層 ×
+ * 場所ごとに畳んだ費用の降順）が委譲の進行で順位を変えると、欠落・重複を
+ * 生む——`usage_read` の軸モードと同じ穴である。`ledgerCursor` は
+ * `usage-cursor.ts` の同じ keyset を使う。**この内訳は3項目（managerId /
+ * layer / site）の複合鍵で並べるので、`usage_read` の単一ラベルの軸とは
+ * 錨の「ラベル」が違う**——ここでは3項目を区切り文字（`\u0000`。
+ * managerId・layer・site のいずれも通常はこの文字を含まない）で連結した
+ * 合成ラベルを使う。区切り文字が個々のフィールドより小さい codepoint で
+ * あれば、合成文字列の `localeCompare` は3項目のタプル比較と同じ順序に
+ * なる（「区切りが個々のフィールドの文字より小さい」という前提が崩れる
+ * 入力——たとえば managerId に制御文字が混ざる——までは保証しない。
+ * 現状の生成元（`randomUUID()` 由来の `mgr-*` と `CLONE_ACTOR_ID`）では
+ * 起こらない）。**軸の名前は `'ledger'`**（`UsageAxis` のどれとも重ならない
+ * ので、`usage_read` の cursor をここへ渡しても・その逆も `resolveUsageCursor`
+ * の `wrong-axis` で断られる）。
  */
+const LEDGER_CURSOR_AXIS = 'ledger';
+const LEDGER_LABEL_SEP = '\u0000';
+
 function renderLedgerCrossReference(
   sdkModel: string | null,
   aggregate: UsageAggregate | null,
-  ledgerOffset?: number,
+  ledgerCursor?: string,
 ): string {
   const lines = ['## 台帳との突き合わせ（軸: 日 × actor × モデル × 層 × 場所）', ''];
 
@@ -12716,7 +12917,7 @@ function renderLedgerCrossReference(
   // 行数が増えても、出す単位はこの組み合わせの数までにとどめる。
   const buckets = new Map<
     string,
-    { managerId: string; layer: string; site: string; costUsd: number }
+    { managerId: string; layer: string; site: string; costUsd: number; updatedAt: string }
   >();
   for (const row of matches) {
     const key = `${row.managerId} ${row.layer} ${row.site}`;
@@ -12727,42 +12928,74 @@ function renderLedgerCrossReference(
         layer: row.layer,
         site: row.site,
         costUsd: row.totals.costUsd,
+        updatedAt: row.updatedAt,
       });
     } else {
       found.costUsd += row.totals.costUsd;
+      if (row.updatedAt > found.updatedAt) found.updatedAt = row.updatedAt;
     }
   }
   // 費用降順 → 鍵の昇順。同額のときに `Map` の挿入順へ落ちないようにする。
-  const entries = [...buckets.values()].sort(
-    (a, b) =>
-      b.costUsd - a.costUsd ||
-      a.managerId.localeCompare(b.managerId) ||
-      a.layer.localeCompare(b.layer) ||
-      a.site.localeCompare(b.site),
-  );
+  const entries = [...buckets.values()]
+    .map((bucket) => ({
+      ...bucket,
+      label: [bucket.managerId, bucket.layer, bucket.site].join(LEDGER_LABEL_SEP),
+      cost: bucket.costUsd,
+    }))
+    .sort(
+      (a, b) =>
+        b.costUsd - a.costUsd ||
+        a.managerId.localeCompare(b.managerId) ||
+        a.layer.localeCompare(b.layer) ||
+        a.site.localeCompare(b.site),
+    );
 
   const formatEntry = (entry: (typeof entries)[number]): string =>
     `  - managerId: "${entry.managerId}" / layer: ${entry.layer} / site: ${entry.site}` +
     ` / 合計 ${formatUsd(entry.costUsd)}`;
 
-  if (ledgerOffset !== undefined) {
+  const cursorOutcome = resolveUsageCursor(entries, LEDGER_CURSOR_AXIS, ledgerCursor);
+  if (cursorOutcome.kind === 'malformed') {
     lines.push(
-      `モデル id ${sdkModel} の行の内訳（全 ${entries.length} 件 / ledgerOffset=${ledgerOffset}）:`,
+      'ledgerCursor が壊れている（この道具が返したものではないか、書き換えられている）。' +
+        'ledgerCursor を付けずに self_status を呼び直すと先頭の内訳から読める。',
     );
-    const page = entries.slice(ledgerOffset, ledgerOffset + USAGE_AXIS_PAGE);
+    return lines.join('\n');
+  }
+  if (cursorOutcome.kind === 'wrong-axis') {
+    lines.push(
+      'ledgerCursor が別の文脈（usage_read の axis 用など）のものである。' +
+        'self_status が返した ledgerCursor をそのまま渡すこと。',
+    );
+    return lines.join('\n');
+  }
+  const { page: afterAnchor, risen } = cursorOutcome;
+
+  if (ledgerCursor !== undefined) {
+    lines.push(`モデル id ${sdkModel} の行の内訳（全 ${entries.length} 件）:`);
+    const page = afterAnchor.slice(0, USAGE_AXIS_PAGE);
     if (page.length === 0) {
-      // **黙って空を返さない。** 空だけでは「内訳が無い」と「offset が範囲外」を区別できない。
-      lines.push(`  （内訳は全 ${entries.length} 件で、ledgerOffset=${ledgerOffset} 以降は無い）`);
+      // **黙って空を返さない。** 空だけでは「内訳が無い」と「cursor がもう続きを
+      // 持たない（最後の頁）」を区別できない。
+      lines.push('  （ledgerCursor より後ろは無い。これが最後の頁）');
+      lines.push(...renderRisenSection(risen, formatEntry));
       return lines.join('\n');
     }
     for (const entry of page) lines.push(formatEntry(entry));
-    const rest = entries.length - (ledgerOffset + page.length);
+    const rest = afterAnchor.length - page.length;
     if (rest > 0) {
+      const lastShown = page[page.length - 1]!;
+      const nextCursor = encodeUsageCursor({
+        axis: LEDGER_CURSOR_AXIS,
+        label: lastShown.label,
+        cost: lastShown.cost,
+        asOf: maxUpdatedAt(matches),
+      });
       lines.push(
-        `  …（残り ${rest} 件は出していない。` +
-          `self_status の ledgerOffset=${ledgerOffset + page.length} で続きが出る）`,
+        `  …（残り ${rest} 件は出していない。self_status の ledgerCursor=${nextCursor} で続きが出る）`,
       );
     }
+    lines.push(...renderRisenSection(risen, formatEntry));
     return lines.join('\n');
   }
 
@@ -12772,9 +13005,16 @@ function renderLedgerCrossReference(
   for (const entry of entries.slice(0, USAGE_AXIS_LIMIT)) lines.push(formatEntry(entry));
   if (entries.length > USAGE_AXIS_LIMIT) {
     // **打ち切りの行がそのまま次に打つ手を書く**（`usage_read` と同じ。#1638）。
+    const lastShown = entries[USAGE_AXIS_LIMIT - 1]!;
+    const nextCursor = encodeUsageCursor({
+      axis: LEDGER_CURSOR_AXIS,
+      label: lastShown.label,
+      cost: lastShown.cost,
+      asOf: maxUpdatedAt(matches),
+    });
     lines.push(
       `  …（残り ${entries.length - USAGE_AXIS_LIMIT} 件は出していない。` +
-        `self_status の ledgerOffset=${USAGE_AXIS_LIMIT} で続きが出る）`,
+        `self_status の ledgerCursor=${nextCursor} で続きが出る）`,
     );
   }
   return lines.join('\n');

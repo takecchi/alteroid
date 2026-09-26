@@ -1711,9 +1711,7 @@ describe('4軸の合図を1つの関数に閉じる（#415）', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    expect(digest).toContain(
-      '…ほか 1 件（`usage_read` に axis="model", offset=0 を渡すと続きから辿れる）',
-    );
+    expect(digest).toContain('…ほか 1 件（`usage_read` に axis="model" を渡すと続きから辿れる）');
     // **切ったときに残る側が「高い順の上位」であることまで見る。** 合図が在る
     // かどうかだけを測ると、`top()` の並びが逆になっても通ってしまう——そのとき
     // 出力は「安い15件」になり、**合図は正しいまま中身が入れ替わる。** 読んだ側
@@ -1739,9 +1737,12 @@ describe('4軸の合図を1つの関数に閉じる（#415）', () => {
 
     const digest = await buildActivityDigest(stores, { since: since() });
 
-    // **既存の文言と1文字も変わっていないことを見る（PR 本文の要件）。**
+    // **issue #1673 で `usage_read` の続きが `offset` → `cursor` になったのに合わせた
+    // 文言。** 変えたのは「先頭から辿り直せ」という案内の綴りだけで、この歯が測って
+    // いる本題（打ち切りの合図が出ること・残る側が高い順の上位であること）は変えて
+    // いない。
     expect(digest).toContain(
-      '  - …ほか 1 本（`usage_read` に axis="manager", offset=0 を渡すと続きから辿れる）',
+      '  - …ほか 1 本（`usage_read` に axis="manager" を渡すと続きから辿れる）',
     );
     // モデル別と同じ理由——残る側が高い順の上位であることを見る。
     expect(digest).toContain('mgr-0: $100.00');
