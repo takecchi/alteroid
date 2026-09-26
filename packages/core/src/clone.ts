@@ -9234,7 +9234,14 @@ class Clone implements CloneHost {
       // （`PermissionGrantStore.markUsed` の doc。#1654 と同型）。`markUsed` が
       // 排他区間の中で現在値を読み直すので、人間の `revoke` 割り込みでも
       // 取り消しが消えない。
-      await this.#stores.permissionGrants.markUsed(grant.id, now).catch(() => undefined);
+      // **判断は写しではなく、この記録の結果に寄せる（Issue #1687）。** `list()` で
+      // 読んだ後に人間の取り消しが完了していると、写しの上では生きていても
+      // `markUsed` は記録せず `false` を返す——その許可では通さない。
+      // **店が例外を投げたときは、これまでどおり写しの読みに倒す**（通す）。
+      // 許可の層を境界と読むか監査と読むかの判断（人間の回答待ち）に関わる向きなので、
+      // ここでは変えない。
+      const usable = await this.#stores.permissionGrants.markUsed(grant.id, now).catch(() => true);
+      if (!usable) continue;
       if (typeof record.toolUseId === 'string') {
         this.#allowedByGrantToolUses.set(record.toolUseId, { grantId: grant.id, rule: grant.rule });
       }
