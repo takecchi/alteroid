@@ -3339,25 +3339,22 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'reserved kind' as const }, 409);
         }
         const now = new Date().toISOString();
-        const existing = await stores.schedules.get(kind);
-        await stores.schedules.put({
-          kind,
-          spec,
-          request,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-          // **これまでの記録を引き継ぐ。** 落とすと、直した瞬間に定期の基準が消えて
-          // 位相が createdAt から引き直され（＝直後に1回余分に起きる）、引き受けたまま
-          // 終わっていない発火の印も消える（＝その回が失われる）。
-          ...(existing?.lastRunAt === undefined ? {} : { lastRunAt: existing.lastRunAt }),
-          ...(existing?.lastScheduledRunAt === undefined
-            ? {}
-            : { lastScheduledRunAt: existing.lastScheduledRunAt }),
-          ...(existing?.pendingRun === undefined ? {} : { pendingRun: existing.pendingRun }),
-        });
+        // **編集は `editRequest`、新規作成だけ `put`（Issue #1654）。**
+        // かつてはここで `get()` した `existing` から `lastRunAt` /
+        // `lastScheduledRunAt` / `pendingRun` を写して `put()` していたが、
+        // その「読んでから書く」の間に定期発火の `claimRun` が割り込むと、
+        // 割り込んだ側が付けた印を丸ごと消していた（#1041 の
+        // `CommitmentStore.open()` と同じ形の lost update。実測は
+        // `packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`）。
+        // `editRequest` は現在値をストアの排他区間の中で読み直して引き継ぐので、
+        // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
+        const edited = await stores.schedules.editRequest(kind, { request, spec }, now);
+        if (edited === null) {
+          await stores.schedules.put({ kind, spec, request, createdAt: now, updatedAt: now });
+        }
         await stores.journal.append({
           type: 'decision',
-          decision: `人間が定期の依頼を${existing ? '直した' : '仕込んだ'}: ${kind}: ${request}`,
+          decision: `人間が定期の依頼を${edited !== null ? '直した' : '仕込んだ'}: ${kind}: ${request}`,
           grounds: '人間が直接 API から仕込んだ',
         });
         // 次の刻みを待たずに効かせる（人間が仕込んだのに1分間存在しないのは嘘になる）

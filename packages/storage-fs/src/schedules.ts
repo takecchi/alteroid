@@ -2,7 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { schedulePhaseSchema, scheduledRequestSchema } from '@alteroid/core';
-import type { SchedulePhase, ScheduleStore, ScheduledRequest } from '@alteroid/core';
+import type { SchedulePhase, ScheduleSpec, ScheduleStore, ScheduledRequest } from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -65,6 +65,36 @@ export class FsScheduleStore implements ScheduleStore {
       next: { ...file, schedules: file.schedules.filter((existing) => existing.kind !== kind) },
       result: undefined,
     }));
+  }
+
+  /**
+   * `request` / `spec` だけを差し替える（Issue #1654。`ScheduleStore.editRequest`
+   * の doc）。**現在値を読むのも書くのも同じ `#update` の排他区間の中**——
+   * `pendingRun` / `lastRunAt` / `lastScheduledRunAt` / `createdAt` は、呼び出し側
+   * が読んだかもしれない古い値ではなく、ここで読み直した現在値をそのまま引き継ぐ。
+   */
+  async editRequest(
+    kind: string,
+    changes: { readonly request: string; readonly spec: ScheduleSpec },
+    updatedAt: string,
+  ): Promise<ScheduledRequest | null> {
+    return this.#update((file) => {
+      const found = file.schedules.find((entry) => entry.kind === kind);
+      if (found === undefined) return { next: file, result: null };
+      const next = scheduledRequestSchema.parse({
+        ...found,
+        request: changes.request,
+        spec: changes.spec,
+        updatedAt,
+      });
+      return {
+        next: {
+          ...file,
+          schedules: file.schedules.map((entry) => (entry.kind === kind ? next : entry)),
+        },
+        result: next,
+      };
+    });
   }
 
   async getPhase(kind: string): Promise<SchedulePhase | null> {

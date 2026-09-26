@@ -6289,30 +6289,40 @@ export function createCloneTools(context: ToolContext) {
         if (!parsedSpec.success) return text(`周期を読めなかった: ${parsedSpec.error.message}`);
 
         const now = new Date().toISOString();
-        const existing = await stores.schedules.get(parsedKind.data);
-        const plan: ScheduledRequest = {
-          kind: parsedKind.data,
-          spec: parsedSpec.data,
-          request,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-          // **これまでの記録を引き継ぐ。** 落とすと、直した瞬間に定期の基準が消えて
-          // 位相が createdAt から引き直され（＝直後に1回余分に起きる）、引き受けたまま
-          // 終わっていない発火の印も消える（＝その回が失われる）。
-          ...(existing?.lastRunAt === undefined ? {} : { lastRunAt: existing.lastRunAt }),
-          ...(existing?.lastScheduledRunAt === undefined
-            ? {}
-            : { lastScheduledRunAt: existing.lastScheduledRunAt }),
-          ...(existing?.pendingRun === undefined ? {} : { pendingRun: existing.pendingRun }),
-        };
-        await stores.schedules.put(plan);
+        // **編集は `editRequest`、新規作成だけ `put`（Issue #1654）。**
+        // かつてはここで `get()` した `existing` から `lastRunAt` /
+        // `lastScheduledRunAt` / `pendingRun` を写して `put()` していたが、
+        // その「読んでから書く」の間に定期発火の `claimRun` が割り込むと、
+        // 割り込んだ側が付けた印を丸ごと消していた（#1041 の
+        // `CommitmentStore.open()` と同じ形の lost update。実測は
+        // `packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`）。
+        // `editRequest` は現在値をストアの排他区間の中で読み直して引き継ぐので、
+        // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
+        const edited = await stores.schedules.editRequest(
+          parsedKind.data,
+          { request, spec: parsedSpec.data },
+          now,
+        );
+        let plan: ScheduledRequest;
+        if (edited !== null) {
+          plan = edited;
+        } else {
+          plan = {
+            kind: parsedKind.data,
+            spec: parsedSpec.data,
+            request,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await stores.schedules.put(plan);
+        }
         await appendJournalOrThrow(
           'schedule_create',
           stores.journal,
           {
             type: 'decision',
             decision:
-              `${existing ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
+              `${edited !== null ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
               `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
             grounds: '継続する依頼を時間起点として持つ判断',
           },

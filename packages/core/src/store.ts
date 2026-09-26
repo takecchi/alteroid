@@ -27,6 +27,7 @@ import type {
   PracticeVersionMeta,
   SchedulePhase,
   ScheduledRequest,
+  ScheduleSpec,
   UnreadableCommitment,
 } from './schema.js';
 import type {
@@ -521,6 +522,38 @@ export interface ScheduleStore {
   /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
   put(entry: ScheduledRequest): Promise<void>;
   remove(kind: string): Promise<void>;
+
+  /**
+   * 依頼の「人間・クローンが直す欄」（`request` / `spec`）だけを差し替える
+   * （Issue #1654）。**排他区間の中で読み直した現在値から `pendingRun` /
+   * `lastRunAt` / `lastScheduledRunAt` / `createdAt` をそのまま引き継ぎ、
+   * `request` / `spec` / `updatedAt` だけを渡された値へ差し替える。**
+   *
+   * **`put()` に無い理由 —— `put()` は無条件の全置換で、版チェックを持たない。**
+   * `schedule_create`（`tools.ts`）や `POST /schedule`（`apps/daemon/src/app.ts`）が
+   * かつてやっていた形（`get()` で読んだ `existing` から3欄をコピーし、新しい
+   * `updatedAt` を付けて `put()` する）は、**読んでから書くまでの間**に
+   * `claimRun()` が成立すると、その `pendingRun` / `lastRunAt` を丸ごと消して
+   * いた——`claimRun` 自身の doc が「claim の直後に器が落ちても消えないため」と
+   * 言っている印が、器が落ちなくても**同じ kind への `put()` 1回**で消える形
+   * だった（#1041 の `CommitmentStore.open()` が「読んでから書く」をアプリ層から
+   * 追い出したのと同じ理由・同じ形。実測は `packages/storage-fs/src/schedule
+   * -edit-keeps-claim.test.ts` / `packages/storage-pg/src/schedule-edit-keeps
+   * -claim.test.ts`）。
+   *
+   * **無ければ何もせず `null`。** 呼び出し側はこれで新規作成しない——
+   * `schedule_create` / `POST /schedule` は作成と編集を兼ねるが、新規作成には
+   * 引き継ぐべき状態がそもそも無いので、そちらは引き続き `put()` を使う
+   * （`null` が返ったら `put()` で新規に作る、という順で呼ぶ）。
+   *
+   * 返すのは書き込んだ後の全体。
+   */
+  editRequest(
+    kind: string,
+    changes: { readonly request: string; readonly spec: ScheduleSpec },
+    updatedAt: string,
+  ): Promise<ScheduledRequest | null>;
+
   /**
    * 発火を確定させる。**読むことと記録することを1操作に閉じる。**
    *
@@ -536,6 +569,11 @@ export interface ScheduleStore {
    * ここで付けるのは **`pendingRun`（引き受けた印）と `lastRunAt`（観測用）だけ**で、
    * 定期の予定の基準（`lastScheduledRunAt`）は `completeRun` まで進めない。claim の
    * 直後に器が落ちたとき、その回が「もう動いた」ことになって消えないようにするため。
+   *
+   * **同じ kind の「本文だけ直す」編集でも消えない（Issue #1654）。** `editRequest`
+   * が現在値から `pendingRun` / `lastRunAt` を引き継ぐので、claim の直後に
+   * `editRequest` が割り込んでもこの印は残る——`put()` を使う経路（新規作成）
+   * にだけ、この保護は掛からない。
    */
   claimRun(
     kind: string,

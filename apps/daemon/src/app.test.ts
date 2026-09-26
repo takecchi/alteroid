@@ -3251,6 +3251,50 @@ describe('HTTP API', () => {
     expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
   });
 
+  /**
+   * Issue #1654（バグ探しで見つかった lost update）。`packages/core/src/tools
+   * .test.ts` の同名 Issue の歯（`schedule_create` 側）と対になる、
+   * `POST /schedule`（人間の API）側の再現。
+   */
+  it('claimRun が成立した直後に POST /schedule で本文だけ直しても、pendingRun / lastRunAt は消えない（Issue #1654）', async () => {
+    await stores.schedules.put({
+      kind: 'issue-round',
+      spec: { type: 'daily', at: '09:00' },
+      request: 'open issue を見て実装を進める',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    });
+    const claimed = await stores.schedules.claimRun(
+      'issue-round',
+      '2026-08-12T00:00:00.000Z',
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+    expect(claimed).not.toBeNull();
+
+    const response = await app.request(
+      '/schedule',
+      json({
+        kind: 'issue-round',
+        request: '本文だけ直した',
+        spec: { type: 'daily', at: '09:00' },
+      }),
+    );
+    expect(response.status).toBe(200);
+
+    const afterEdit = await stores.schedules.get('issue-round');
+    expect(afterEdit).toMatchObject({
+      request: '本文だけ直した',
+      lastRunAt: '2026-08-13T00:00:00.000Z',
+      pendingRun: { at: '2026-08-13T00:00:00.000Z', cause: 'schedule' },
+    });
+
+    await stores.schedules.completeRun('issue-round', '2026-08-13T00:00:00.000Z', 'schedule');
+    const afterComplete = await stores.schedules.get('issue-round');
+    expect(afterComplete?.pendingRun).toBeUndefined();
+    expect(afterComplete?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
   it('読めない時刻は API でも弾く（道具と同じ真実を持つ）', async () => {
     // 通ると一覧に「毎日 25:99」と出るのに実際は 00:00 に起きる、という
     // 人間が読んで矛盾する状態が作れてしまう

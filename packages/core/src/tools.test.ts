@@ -1960,6 +1960,49 @@ describe('クローンの道具', () => {
     });
   });
 
+  /**
+   * Issue #1654（バグ探しで見つかった lost update）。
+   *
+   * 直上の「同じ kind で仕込み直すと置き換わる」は `completeRun` まで済ませて
+   * から編集しているので、この形は捕まえない——`pendingRun` が既に消えている
+   * 状態からの編集は、そもそも壊れようがない（引き継ぐものが無い）。
+   *
+   * ここは `claimRun` が成立した**直後**（`completeRun` の前）に
+   * `schedule_create` で本文だけを直す——`editRequest` を使わず `get()` →
+   * `put()` していた頃は、この `put()` が `pendingRun` / `lastRunAt` を
+   * 丸ごと消し、その後の `completeRun` も「別の発火の印」ガードに阻まれて
+   * 空振りしていた（`packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`
+   * に同じ形の店（ストア直叩き）の歯がある）。
+   */
+  it('claimRun が成立した直後に本文だけ直しても、pendingRun / lastRunAt は消えない（Issue #1654）', async () => {
+    const h = harness();
+    await h.call('schedule_create', { kind: 'watch', request: '最初の依頼', everyMinutes: 30 });
+    const first = await h.stores.schedules.get('watch');
+    const claimed = await h.stores.schedules.claimRun(
+      'watch',
+      first?.updatedAt ?? '',
+      '2026-08-13T00:00:00.000Z',
+      'schedule',
+    );
+    expect(claimed).not.toBeNull();
+
+    await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
+
+    const afterEdit = await h.stores.schedules.get('watch');
+    expect(afterEdit).toMatchObject({
+      request: '直した依頼',
+      spec: { type: 'every', minutes: 10 },
+      lastRunAt: '2026-08-13T00:00:00.000Z',
+      pendingRun: { at: '2026-08-13T00:00:00.000Z', cause: 'schedule' },
+    });
+
+    // `completeRun` も空振りしない——`lastScheduledRunAt` が実際に進む。
+    await h.stores.schedules.completeRun('watch', '2026-08-13T00:00:00.000Z', 'schedule');
+    const afterComplete = await h.stores.schedules.get('watch');
+    expect(afterComplete?.pendingRun).toBeUndefined();
+    expect(afterComplete?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
+  });
+
   it('cron 式でも仕込める（曜日の指定が要る依頼のため）', async () => {
     const h = harness();
 
