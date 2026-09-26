@@ -4571,8 +4571,9 @@ class Pool implements ManagerPool {
    */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
-   * `ProfileService` / `McpServerService` の `onPushed`（即時の配布の結果）の購読を
-   * 外す関数（Issue #1699。`#recordDirectPushResults` の doc）。`stop()` で外す。
+   * `ProfileService` / `McpServerService` / `CredentialService` の `onPushed`
+   * （即時の配布の結果）の購読を外す関数（Issue #1699 / #1717。
+   * `#recordDirectPushResults` の doc）。`stop()` で外す。
    */
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
