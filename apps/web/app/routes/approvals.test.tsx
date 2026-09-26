@@ -260,6 +260,102 @@ describe('/approvals 画面のまとめ送信', () => {
 });
 
 /**
+ * 個別の回答が 409 で断られたとき（issue #1619）。
+ *
+ * `POST /approvals/{id}/answer` は、裏で先に片付いている——クローンが
+ * `approval_withdraw` で取り下げた（#963）・別のタブや CLI が先に答えた——と
+ * 409 を返す（`error: 'withdrawn'` / `error: 'already answered'`）。
+ *
+ * **このとき画面が一覧を取り直さないと**、カードは「未回答」の見た目
+ * （入力欄・答えるボタン）のまま残り、生の英単語だけが赤字で出る——もう一度
+ * 押しても同じ 409 が繰り返される。正しい状態に変わるのは手で再読み込みした
+ * ときだけだった。
+ *
+ * 「まとめて送る」（`POST /approvals/answer`）は 1件が駄目でも 200 で
+ * `results[]` を返すので、呼び出し側は必ず取り直しまで進む。**個別に答える
+ * 経路だけ、この手当てが無かった**（`useAnswerApproval` は `unwrap` の例外で
+ * 早期に抜け、`mutate(KEY.approvals(...))` へ届かない）。
+ */
+describe('個別の回答が 409 で断られたとき（issue #1619）', () => {
+  /**
+   * `GET /approvals` は、まだ答えていない（`initial`）／答えの後に裏で先に
+   * 片付いていたと分かった（`resolved`）の2状態を、答える POST が届いた
+   * かどうかで切り替えて返す。**この切り替えが「取り直した」ことの証拠に
+   * なる** —— 取り直していなければ `resolved` は一度も画面に届かない。
+   */
+  function stubStaleAnswer(
+    initial: PendingApproval,
+    resolved: PendingApproval,
+    answerError: { error: string },
+  ): { calls: string[] } {
+    const calls: string[] = [];
+    let settled = false;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      calls.push(url);
+      const path = new URL(url).pathname;
+      if (path === '/approvals') return json({ approvals: [settled ? resolved : initial] });
+      if (/^\/approvals\/[^/]+\/answer$/.test(path)) {
+        settled = true;
+        return json(answerError, 409);
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+    return { calls };
+  }
+
+  it('withdrawn（クローンが取り下げ済み）: 取り直して答える口を引っ込め、失敗は出したまま', async () => {
+    const base = approval({ id: 'a-1', question: '本番に出してよいか' });
+    const { calls } = stubStaleAnswer(
+      base,
+      { ...base, withdrawnAt: '2026-08-19T10:01:00.000Z', withdrawnReason: 'もう要らない' },
+      { error: 'withdrawn' },
+    );
+    renderPage();
+
+    const textarea = await screen.findByPlaceholderText(/答える/);
+    fireEvent.change(textarea, { target: { value: '許可する' } });
+    fireEvent.click(screen.getByRole('button', { name: '回答する' }));
+
+    // 失敗を握り潰さない——既存の表示の流儀どおり、サーバの文言をそのまま出す
+    // （バルク版の「1件が失敗しても…」と同じ生の英単語のまま。下の doc 参照）。
+    await screen.findByText(/withdrawn/);
+    // 取り直した結果、答える口（textarea・「回答する」ボタン）は消える。
+    await waitFor(() => expect(screen.queryByRole('button', { name: '回答する' })).toBeNull());
+    await screen.findByText('取り下げ済');
+    await screen.findByText('もう要らない');
+
+    // GET /approvals は初回＋失敗後の取り直しで、最低2回叩かれている。
+    expect(
+      calls.filter((url) => new URL(url).pathname === '/approvals').length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('already answered（別経路で先に回答済み）: 取り直して答える口を引っ込め、失敗は出したまま', async () => {
+    const base = approval({ id: 'a-1', question: '本番に出してよいか' });
+    const { calls } = stubStaleAnswer(
+      base,
+      { ...base, answeredAt: '2026-08-19T10:01:00.000Z', answer: '（別経路からの回答）' },
+      { error: 'already answered' },
+    );
+    renderPage();
+
+    const textarea = await screen.findByPlaceholderText(/答える/);
+    fireEvent.change(textarea, { target: { value: '許可する' } });
+    fireEvent.click(screen.getByRole('button', { name: '回答する' }));
+
+    await screen.findByText(/already answered/);
+    await waitFor(() => expect(screen.queryByRole('button', { name: '回答する' })).toBeNull());
+    await screen.findByText('回答済');
+    await screen.findByText('（別経路からの回答）');
+
+    expect(
+      calls.filter((url) => new URL(url).pathname === '/approvals').length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
  * 折り返しの付け忘れ（本2）。
  *
  * `question` / `answer` は自由文（`z.string()`、長さ・空白の制約なし）で、

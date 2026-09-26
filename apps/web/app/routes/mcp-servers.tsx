@@ -1,3 +1,6 @@
+// URL の伏せ字は CLI と同じ1つの実装（`@alteroid/core/mask-url`。issue #1622 ——
+// 2つが別々に同じ判定を持ち、どちらも password だけの userinfo を素通ししていた）。
+import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
@@ -424,19 +427,4 @@ function parseMcpJson(
     };
   }
   return { ok: true, servers: servers as McpServers };
-}
-
-/**
- * URL のクエリ・フラグメント・認証情報を伏せる（CLI の `maskUrl` と同じ線）。
- * 読めない URL は丸ごと伏せる —— どこに鍵があるかを判別できない。
- */
-function maskUrl(url: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return '***';
-  }
-  const hidden = parsed.search !== '' || parsed.hash !== '' || parsed.username !== '';
-  return hidden ? `${parsed.origin}${parsed.pathname}?***` : url;
 }

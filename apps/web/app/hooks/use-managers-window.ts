@@ -17,8 +17,100 @@
  * 変わったら state をリセットする」ための effect を持たない —— `apps/web` の
  * eslint（`react-hooks/set-state-in-effect`）がその形を落とすので、
  * `useJournalWindow` と同じく「`key` で作り直す」側を採る。
+ *
+ * ## 読み足した頁（`older`）も生きた更新に追随する（issue #1624）
+ *
+ * **直す前の形。** 頁1（`first`、SWR）は `use-journal-live.ts` の
+ * `invalidate()` が `mutate((key) => isKeyOfType(key, 'managers'))` で束ねて
+ * 取り直すが、「もっと見る」で読み足した頁（`older`）は SWR の外に置いた
+ * ただの `useState` で、`loadOlder()` を手で呼んだとき以外に書き換わる経路が
+ * 無かった。⟹ 読み足した行の札・注記は「もっと見る」を押した瞬間の値に
+ * 凍りつき、SSE がどれだけ届いても動かなかった。
+ *
+ * **選ばなかった案 —— `older` を `useSWRInfinite` へ移す。** SWR
+ * (`swr@2.5.1`、`node_modules/swr/dist/config-context-*.mjs` の
+ * `internalMutate`) の述語版 `mutate((key) => …)` は、`useSWRInfinite` が
+ * 内部で使う集約キー（`$inf$` 接頭）を**常に除外する**
+ * （`!/^\$(inf|sub)\$/.test(key) && keyFilter(...)` —— 除外は決め打ちで、
+ * 呼び出し側からは外せない）。`useSWRInfinite` の各頁は個別の `useSWR` として
+ * 登録されるわけではなく、集約キー1本の `fetcher` の中で頁ごとの取得を束ねて
+ * いるので、`invalidate()` が指すのは束ねる側の `$inf$` キーであり、そこは
+ * 上の除外に当たる。⟹ 頁を `useSWRInfinite` に移しても、いまの
+ * `mutate((key) => isKeyOfType(key, 'managers'))` という指し方のままでは
+ * 束から漏れる —— 動かすには `invalidate()` 側にこの窓の集約キーを個別に
+ * 教える必要があり、「日誌の種別ごとに落とす束を1箇所で決める」という
+ * `use-journal-live.ts` の設計を崩す。
+ *
+ * **採った案 —— 頁1の再検証に便乗する。** 頁1（`first`）は
+ * `isValidating: true → false` の遷移で「1回の再検証が終わった」ことを言う。
+ * これは `invalidate()` の `mutate()` だけでなく、SWR 既定の
+ * revalidateOnFocus / revalidateOnReconnect でも同じ形で起こる —— **`older`
+ * を「頁1が再検証されたら、読み足した頁も同じ錨で取り直す」だけの効果に
+ * 閉じることで、頁1にすでに掛かっている SWR の間引き
+ * （`dedupingInterval`。既定 2000ms）にそのまま乗る。** SSE が短時間に何本
+ * 届いても、頁1の再検証は1回に間引かれ、`older` の取り直しはその1回にだけ
+ * 便乗する —— 間引きを自分で作る必要が無い。
+ *
+ * **`first.data` の参照ではなく `first.isValidating` を見る理由。** SWR の
+ * 既定 `compare` は `dequal`（深い等価）—— 頁1の中身が字面として変わって
+ * いなければ、取り直しが実際に走っても `data` の参照は据え置かれる
+ * （`node_modules/swr/dist/config-context-*.mjs` の `const compare = dequal`）。
+ * 読み足した頁だけが変わって頁1が無傷、という筋書き（`invalidate()` が
+ * `exchange(with:'manager')` で束を落とす一方、その委譲自体は頁1にもう
+ * 載っていない場合）はまさにこれに当たるので、`data` を見ていると取り直し
+ * そのものを見落とす。`isValidating` は実際に fetch が走ったかどうかを
+ * 直接言うので、この見落としが無い。
+ *
+ * **錨は取り直さない。** 読み足した頁それぞれが最初に読んだときの
+ * `(managerId, startedAt)` をそのまま使って撃ち直す —— 頁1の新しい末尾から
+ * 錨を組み直すと、頁1の並びが動いたときに抜け・重複の形が変わりうる
+ * （このファイルの `dedupeByManagerId` の doc、および `managers.test.tsx`
+ * の「もっと見るが錨で継ぎ足す」の歯が固定している契約と同じ理由）。同じ
+ * 錨で撃ち直す限り、返る行の並び（頁の順序）はいつでも今までどおりで、
+ * `dedupeByManagerId` が頁1との重なりだけを吸収する —— 一覧が先頭へ飛ぶ
+ * ことも、行が抜けることも無い。
+ *
+ * **取り直しが失敗した頁は、古い行をそのまま残す。** `Promise.allSettled`
+ * で頁ごとに結果を見て、失敗した頁は前回の値のまま `setOlderPages` に渡す
+ * （画面を空にしない）。
+ *
+ * **走っている間に来た分は取りこぼさない —— 最大1回の追い撃ち。** 背景の
+ * 取り直しが1本（`R1`）走っている間にもう一度 `first.isValidating` が
+ * `true → false` になったら（＝別の SSE がもう1本、頁1の再検証を終わらせた
+ * ら）、その場で重ねて2本目を撃つ代わりに「積み残しが在る」という印
+ * （`olderRefreshDirtyRef`）だけを立てて `return` する。`R1` が終わった時点で
+ * この印を見て、立っていれば消してからもう1回だけ撃ち直す
+ * （`runOlderRefresh` の再帰）。**何本 SSE が重なっても、印は1つしか持たない
+ * ので追い撃ちは最大1回に収まる** —— `R1` が終わった時点でのいちばん新しい
+ * 錨（`olderPagesRef.current`）で撃ち直すので、間に「もっと見る」で頁が
+ * 増えていてもそれも一緒に取り直される。
+ *
+ * **これが無いと何が起きるか。** `R1` の応答がサーバ側では②の変化より
+ * *前*に確定していた場合（＝在庫としては古い値のまま応答が組み立てられて
+ * いた場合）、`R1` が返ってきても中身は古いままで、かつ「次の頁1の再検証が
+ * 来ればそこで追いつく」が成り立つのは*次の SSE が実際に来たとき*だけ
+ * ——それ以降 SSE が来なければ、読み足した行はその古い値のまま残り続ける
+ * （issue #1624 のレビューで指摘された取りこぼし。`managers-older-refresh
+ * -in-flight.test.tsx` がこの筋書きを歯にしている）。
+ *
+ * **重ねて2本を並行に撃たない理由。** 同じ錨へ2本の要求を並行に飛ばすと、
+ * 応答が届く順序がネットワークの都合で入れ替わりうる——先に撃った方が
+ * 後から届くと、`setOlderPages` が新しい値を古い値で上書きしてしまう
+ * （SWR がこの並び替えを気にしなくてよいのは、`dedupingInterval` の間は
+ * 同じキーへの要求を1本に併合しているからで、ここでも同じ理由で「常に
+ * 1本ずつ、順に撃つ」側を採っている）。
+ *
+ * **`lastOlderCount` / `olderStatus`（進捗・終端の判定）は動かさない。**
+ * 動かしているのは常に `loadOlder()` が明示的に読んだときだけで、この
+ * 背景の取り直しは「もう表示している頁の中身を新しくする」ことに閉じる
+ * ——「もっと見る」を押せるかどうかの判定に、背景の取り直しの結果を
+ * 混ぜない（`loadOlder` が同時に走っているときの競合を増やさないため）。
+ * ⚠️ **確かめていないこと**: 背景の取り直しで最後の頁の件数が
+ * `MANAGERS_PAGE` を割り込んでも、`olderStatus` はそのままなので
+ * 「もっと見る」ボタンの有無はズレたままになりうる。実機でどれだけ
+ * 起こりうるかは見ていない。
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { managersToQuery, useManagers } from '~/hooks/queries';
 import { unwrap, useApi } from '~/lib/api';
@@ -77,11 +169,22 @@ export interface ManagersWindow {
   loadOlder: () => void;
 }
 
+/** 「もっと見る」で読み足した1頁。錨とその頁の中身を組で持つ。 */
+interface OlderPage {
+  after: { managerId: string; startedAt: string };
+  managers: ManagerSummary[];
+}
+
+/** `OlderPage.after` を突き合わせるための文字列鍵。 */
+function anchorKey(after: OlderPage['after']): string {
+  return `${after.managerId}\u0000${after.startedAt}`;
+}
+
 export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWindow {
   const api = useApi();
   const first = useManagers({ status, limit: MANAGERS_PAGE });
 
-  const [older, setOlder] = useState<ManagerSummary[]>([]);
+  const [olderPages, setOlderPages] = useState<OlderPage[]>([]);
   const [isLoadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState<unknown>(undefined);
   /**
@@ -92,14 +195,16 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
   const [lastOlderCount, setLastOlderCount] = useState<number | undefined>(undefined);
 
   const page = first.data?.managers ?? [];
+  const older = olderPages.flatMap((p) => p.managers);
 
   /**
    * 先頭の頁と読み足した分を繋ぐ。**`managerId` で重複を落とす。**
    *
    * 先頭の頁は SWR が取り直す（`use-journal-live.ts` が `managers` の束を
-   * 落とす）ので、取り直しで伸びた分が読み足した分と重なりうる。**重なった
-   * ときに残すのは先頭の頁の側である**——そちらが新しい観測だからで、
-   * 古い像で上書きすると札や注記が巻き戻る。
+   * 落とす）し、読み足した頁も頁1の再検証に便乗して同じ錨で取り直される
+   * （このファイル冒頭の doc）ので、どちらの取り直しで伸びた分も重なりうる。
+   * **重なったときに残すのは先頭の頁の側である**——そちらが新しい観測だから
+   * で、古い像で上書きすると札や注記が巻き戻る。
    */
   const managers = dedupeByManagerId([...page, ...older]);
 
@@ -120,16 +225,13 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
     // **クエリの組み立ては `managersToQuery` の1箇所に閉じる**（`useManagers`
     // と同じ関数を通す）。ここで手で組むと、`status` の空配列を送らない規則が
     // 先頭の頁と読み足す頁で割れる。
-    const query = managersToQuery({
-      status,
-      limit: MANAGERS_PAGE,
-      after: { managerId: anchorId, startedAt: anchorStartedAt },
-    });
+    const after = { managerId: anchorId, startedAt: anchorStartedAt };
+    const query = managersToQuery({ status, limit: MANAGERS_PAGE, after });
     api.api
       .GET('/managers', { params: { query } })
       .then(unwrap)
       .then((body) => {
-        setOlder((previous) => [...previous, ...body.managers]);
+        setOlderPages((previous) => [...previous, { after, managers: body.managers }]);
         setLastOlderCount(body.managers.length);
       })
       .catch((error: unknown) => {
@@ -139,6 +241,94 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
         setLoadingOlder(false);
       });
   }, [api, anchorId, anchorStartedAt, status]);
+
+  // --- 読み足した頁を、頁1の再検証に便乗して取り直す（issue #1624）---------
+  // 理由と選ばなかった案は、このファイル冒頭の doc「読み足した頁
+  // （`older`）も生きた更新に追随する」を参照。
+  const olderPagesRef = useRef(olderPages);
+  useEffect(() => {
+    olderPagesRef.current = olderPages;
+  }, [olderPages]);
+
+  // すでに背景の取り直しが走っている間は重ねて撃たない——代わりに
+  // 「走っている間にもう1回来た」ことだけを覚えておき（下の
+  // `olderRefreshDirtyRef`）、いま走っている分が終わった時点で消費して
+  // もう1回だけ撃ち直す（`runOlderRefresh` の再帰）。理由はこのファイル
+  // 冒頭の doc「走っている間に来た分は取りこぼさない」を参照。
+  const isRefreshingOlderRef = useRef(false);
+  const olderRefreshDirtyRef = useRef(false);
+
+  // `useCallback` の自己参照を避けるため素の関数にしてある
+  // （`use-journal-window.ts` の `loadOlderAt` と同じ理由・同じ形）。
+  function runOlderRefresh(): void {
+    const pages = olderPagesRef.current;
+    if (pages.length === 0) {
+      isRefreshingOlderRef.current = false;
+      return;
+    }
+    Promise.allSettled(
+      pages.map((p) => {
+        const query = managersToQuery({ status, limit: MANAGERS_PAGE, after: p.after });
+        return api.api
+          .GET('/managers', { params: { query } })
+          .then(unwrap)
+          .then((body): OlderPage => ({ after: p.after, managers: body.managers }));
+      }),
+    )
+      .then((results) => {
+        // **失敗した頁は前回の値のまま残す**（画面を空にしない）。成功した
+        // 頁だけを錨で突き合わせて置き換える。
+        const refreshed = new Map<string, ManagerSummary[]>();
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            refreshed.set(anchorKey(result.value.after), result.value.managers);
+          }
+        }
+        if (refreshed.size === 0) return;
+        setOlderPages((previous) =>
+          previous.map((existing) => {
+            const next = refreshed.get(anchorKey(existing.after));
+            return next === undefined ? existing : { ...existing, managers: next };
+          }),
+        );
+      })
+      .finally(() => {
+        // **積み残しが在れば、消費してもう1回だけ撃ち直す。** `isRefreshing`
+        // を立てたまま再帰するので、この1本が終わるまでは次の積み残しも
+        // 重ねて撃たれない（最大1回の追い撃ちに収まる）。
+        if (olderRefreshDirtyRef.current) {
+          olderRefreshDirtyRef.current = false;
+          runOlderRefresh();
+        } else {
+          isRefreshingOlderRef.current = false;
+        }
+      });
+  }
+
+  const refreshOlderPages = useCallback(() => {
+    if (isRefreshingOlderRef.current) {
+      olderRefreshDirtyRef.current = true;
+      return;
+    }
+    if (olderPagesRef.current.length === 0) return;
+    isRefreshingOlderRef.current = true;
+    runOlderRefresh();
+    // `runOlderRefresh` は素の関数で、呼ぶたびに最新の
+    // `olderPagesRef`/`status`/`api` をそのまま読む（依存に含めない）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, status]);
+
+  // `first.isValidating` が `true → false` になった瞬間だけ発火する。
+  // `first.data` の参照ではなく `isValidating` を見る理由は、このファイル
+  // 冒頭の doc（SWR の既定 `compare` が `dequal` であること）を参照。
+  const wasValidatingRef = useRef(first.isValidating);
+  useEffect(() => {
+    const wasValidating = wasValidatingRef.current;
+    wasValidatingRef.current = first.isValidating;
+    if (wasValidating && !first.isValidating) {
+      refreshOlderPages();
+    }
+  }, [first.isValidating, refreshOlderPages]);
 
   return {
     managers,
