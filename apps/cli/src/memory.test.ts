@@ -95,18 +95,26 @@ describe('alteroid memory set', () => {
     expect(read()).toContain('次の会話からクローンの判断に入ります');
   });
 
-  it('書き換えられなければ、書き換えたとは言わない', async () => {
-    const read = captureStdout();
+  /**
+   * ⚠️ 2026-09-26（#1641）: 「書き換えたとは言わない」の確かめ方を、stdout の
+   * 文言から**例外**へ移した。以前はここで `stdout.write` して正常 return して
+   * いたため、終了コードは常に 0 だった——`reset.ts` / `access.ts` / `token.ts` /
+   * `alteroid interrupt`（#1621）と同じ形に揃え、失敗を例外で上へ通す（＝
+   * 終了コードが 0 でなくなる）ようにした。アサーションは消さず、見る先を
+   * 「書いた文字列」から「投げた例外の文言」へ反転しただけである——保証して
+   * いること（「書き換えられませんでした」を言う／「次の会話から」を言わない）
+   * は変わらない。
+   */
+  it('書き換えられなければ、書き換えたとは言わない（例外の文言で確かめる。#1641）', async () => {
     const dir = await makeTempDir('alteroid-memory-test-');
     const path = join(dir, 'x.md');
     await writeFile(path, 'なにか', 'utf8');
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
 
-    await memorySetCommand('..', { file: path });
+    const error = await memorySetCommand('..', { file: path }).catch((e: unknown) => e);
 
-    const text = read();
-    expect(text).toContain('書き換えられませんでした');
-    expect(text).not.toContain('次の会話から');
+    expect(String(error)).toContain('書き換えられませんでした');
+    expect(String(error)).not.toContain('次の会話から');
   });
 });
 
@@ -126,20 +134,20 @@ describe('alteroid memory remove', () => {
   /**
    * デーモンは「無い」（404）と「名前として成立しない」（400）を分けている。
    * **こちらで1つに潰すと、直し方が読めなくなる**（打ち間違いなのか、消えたのか）。
+   *
+   * ⚠️ 2026-09-26（#1641）: 以前はどちらも `stdout.write` して正常 return して
+   * いた（＝終了コードは常に 0）。いまは両方とも例外を投げる——アサーションは
+   * 消さず、見る先を「書いた文字列」から「投げた例外の文言」へ反転した。
    */
-  it('「無い」と「名前として不正」を混ぜない', async () => {
-    const read = captureStdout();
+  it('「無い」と「名前として不正」を混ぜない（どちらも例外を投げる。#1641）', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
-    await memoryRemoveCommand('missing');
-    expect(read()).toContain('そんな記憶はありません');
+    const missing = await memoryRemoveCommand('missing').catch((e: unknown) => e);
+    expect(String(missing)).toContain('そんな記憶はありません');
 
-    vi.restoreAllMocks();
-    const read2 = captureStdout();
     replies.push({ status: 400, body: { error: '記憶のスラッグが不正' } });
-    await memoryRemoveCommand('..');
-    const text = read2();
-    expect(text).toContain('名前として成立しません');
-    expect(text).not.toContain('そんな記憶はありません');
+    const invalid = await memoryRemoveCommand('..').catch((e: unknown) => e);
+    expect(String(invalid)).toContain('名前として成立しません');
+    expect(String(invalid)).not.toContain('そんな記憶はありません');
   });
 });
 

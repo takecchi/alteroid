@@ -371,7 +371,12 @@ async function read(client: DaemonClient, slug: string): Promise<string | null> 
  * を1つに潰していたため、認証切れやサーバの内部エラーでも「名前が不正かも
  * しれません」と誤案内していた。
  */
-async function write(client: DaemonClient, target: Target, slug: string, content: string): Promise<void> {
+async function write(
+  client: DaemonClient,
+  target: Target,
+  slug: string,
+  content: string,
+): Promise<void> {
   const response = await client.memory[':slug'].$put({ param: { slug }, json: { content } });
   if (!response.ok) {
     if (response.status === 400) {
