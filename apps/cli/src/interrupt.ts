@@ -1,7 +1,7 @@
 import { stdout } from 'node:process';
 
 import { createClient } from './client.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
  * `alteroid interrupt` — いま走っているクローンのターンを止める（#1398 c23-1）。
@@ -12,6 +12,28 @@ import { resolveTarget } from './target.js';
  *
  * 応答の3値（`interrupted` / `idle` / `unsupported`）を言い分ける —— 「止めるものが
  * 無かった」を「止めた」と言わない。
+ *
+ * **失敗は例外で上へ通す（＝終了コードが 0 でなくなる）。** ここは走行中のクローンの
+ * ターンを止める副作用のある操作なので、`reset.ts` / `access.ts` / `token.ts` と
+ * 同じく、401/403/5xx のどれでも握り潰さない（#1621。以前はここで `stdout.write`
+ * して正常 return していたため、認証切れやデーモンの内部エラーでも終了コードが
+ * 0 になり、スクリプトや cron から失敗を検知できなかった——
+ * `grep -Fn -- 'スクリプトや cron から失敗を検知できない' apps/cli/src/inbox.ts`
+ * と同じ理由）。
+ *
+ * **401/403 は `describeAuthFailure` に判定を委ねる。** `/clone/interrupt` の資格は
+ * `authenticate` だけ（`requireOperator` / `requireOwner` は付いていない —
+ * `/chat/:conversationId/end` と同じ強さ。`apps/daemon/src/app.ts` の
+ * `POST /clone/interrupt` の doc「資格は `/chat/:conversationId/end` と同じ」）
+ * ので、403 の理由はほぼ必ず未許可——`forbiddenKindOf` を呼ばずに `kind` 省略
+ * （既定 `'unknown'`）でここへ丸投げしてよい（`chat.ts` / `inbox.ts` と同じ判断。
+ * `target.ts` の `describeAuthFailure` の doc）。
+ *
+ * **`target.note`（未ログイン）の分岐はそのまま残す。** `reset.ts` / `access.ts` /
+ * `token.ts` はこの分岐を持たない独自の `request()` ヘルパを使っているが、
+ * ここは `inboxRemoveCommand`（`inbox.ts`）と同じく `createClient` を使う形なので、
+ * より構造の近いそちらに揃えてある——`inboxRemoveCommand` も「未ログインなら
+ * note を出して return、それ以外は throw」という同じ2段構えである。
  */
 export async function interruptCommand(): Promise<void> {
   const target = await resolveTarget();
@@ -22,8 +44,9 @@ export async function interruptCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.clone.interrupt.$post();
   if (!response.ok) {
-    stdout.write(`クローンのターンを止められませんでした（HTTP ${String(response.status)}）\n`);
-    return;
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(`クローンのターンを止められませんでした（HTTP ${String(response.status)}）`);
   }
   stdout.write(`${describeInterruptOutcome((await response.json()).outcome)}\n`);
 }
