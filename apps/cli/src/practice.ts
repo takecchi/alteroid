@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
-import { resolveTarget } from './target.js';
+import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid practice` — 仕事のやり方を読む・書き換える・消す（#1055 段3③）。
@@ -53,8 +53,9 @@ export interface PracticeSummary {
 }
 
 export async function practiceListCommand(): Promise<void> {
-  const client = await connect();
-  if (client === null) return;
+  const conn = await connect();
+  if (conn === null) return;
+  const { client } = conn;
   const response = await client.practices.$get();
   if (!response.ok) {
     stdout.write('やり方の一覧を読めませんでした\n');
