@@ -66,8 +66,8 @@ import {
   type CutOffBackgroundTaskSummary,
   type PendingBackgroundTaskOutput,
 } from './runner-cut-off-workers.js';
-import { RunnerFenceError } from './runner-protocol.js';
 import { readCgroupEventCounters, type CgroupEventCounters } from './runner-resources.js';
+import { RunnerSdkSession } from './runner-sdk-session.js';
 import {
   BACKGROUND_TASK_OWNER_LIMIT,
   RunnerSubagentStopState,
@@ -1361,7 +1361,6 @@ class RunnerSession {
    */
   readonly #openedCgroupEvents: Promise<CgroupEventCounters>;
 
-  readonly #input: SDKUserMessage[] = [];
   readonly #pending: PendingRequest[] = [];
   /**
    * **解けた確認と、そのときの結果。**
@@ -1450,15 +1449,6 @@ class RunnerSession {
    */
   readonly #resumeState = new RunnerResumeState();
   /**
-   * 開いている入力ストリームの世代。
-   *
-   * resume に失敗して新しいセッションを開くと、前の `#inputStream` がまだ
-   * `#input` を待っている。世代を進めて畳まないと、新しいセッション宛の指示を
-   * 死んだストリームが横取りする。
-   */
-  #generation = 0;
-
-  /**
    * **作業者を待つ窓の状態3フィールド**（`#openTasks` / `#window` /
    * `#windowClosing`）の器（Issue #1190 案X で `runner-worker-wait-window.ts`
    * へ切り出した。前例は PR #1565 / #1551 / #1550 / #1523）。**`worker_wait` を
@@ -1500,142 +1490,19 @@ class RunnerSession {
    * 見よ。
    */
   readonly #turnTally = new RunnerTurnTally();
-  readonly #inputWaiters = new Set<() => void>();
-  #query: Query | null = null;
-  #reader: Promise<void> | null = null;
-  #status: JobStatus = 'running';
   /**
-   * SDK が失敗として出したのに、枠の文言としては分類できなかった回の帳面
-   * （Issue #393。`種別 → 件数`）。
-   *
-   * **セッション1本ぶんである。** プロセス単位で畳むと、器が入れ替わって新しい
-   * 失敗が始まっても「前に見たから」で黙る（`noteUnclassifiedFailure` の doc）。
-   *
-   * **これは計器であって、何も分岐させない。** 分類できたときに `usage_notice`
-   * を出す判断も、回し手へ渡すものも、1文字も変えていない。
+   * **「SDK セッションの生存」の状態15フィールドの器**（Issue #1190 案X で
+   * `runner-sdk-session.ts` へ切り出した。前例は PR #1565 / #1551 / #1550 /
+   * #1523 / #1433 / #1359）。`#query` / `#reader` / `#generation`・`#status` /
+   * `#stopped`・`#transcriptPath`・`#liveBackgroundTasks`・
+   * `#unclassifiedFailures`・`#fence` / `#leaseTtlMs`・`#recycleForToken` /
+   * `#endedInputForTokenRotation`・`#input` / `#inputWaiters`・`#closing` を
+   * 持つ。**SDK セッションをいつ開く／畳むか・畳みの順序・`#emit` するかどうかの
+   * 判断はこれまでどおりここ（`RunnerSession`）が持ち、この器は状態と、局所的な
+   * 遷移だけを持つ。** 何を持っているか・切り出しの理由と限界は
+   * `RunnerSdkSession` 自身の doc を見よ。
    */
-  readonly #unclassifiedFailures = new Map<string, number>();
-  /**
-   * いま起こしっぱなしの背景処理（`agent-events.ts` の
-   * `AgentBackgroundTasksEvent`）。**REPLACE 意味論**——SDK の JSDoc が
-   * 「missed bookend cannot wedge a stale running indicator」と言っている [sdk-verbatim SDKBackgroundTasksChangedMessage]
-   * とおり、届いた `tasks` で丸ごと入れ替える。加算・削除の差分計算はしない。
-   *
-   * **空へ戻すのは「器（CLI プロセス）が本当に入れ替わったとき」だけ**
-   * ——契機は3つに限る:
-   *
-   * 1. フィールド初期化（このデフォルト値）——新しい `RunnerSession`
-   *    インスタンス＝新しい器
-   * 2. `#open()` が実際に SDK セッションを開いた／開き直したとき
-   *    （`#open()` のコメント）
-   * 3. `init`（`session_started`）が来て、`event.sessionId` が直前の
-   *    `#resumeState.sessionId` と違っていたとき（`case 'session_started'` の
-   *    コメント）
-   *
-   * **⚠️ 以前はここに「`session_started` で必ず空に戻す」と書いてあったが、
-   * それは誤りだった。** `init` はターンの頭ごとに来る（`SDKSystemMessage`
-   * の JSDoc）のであって、器の (re)start の合図ではない——器の (re)start を
-   * 言っているのは `SDKBackgroundTasksChangedMessage` の JSDoc のほうで、
-   * こちらは「背景タスクの level 信号が per-process である」ことの説明に
-   * すぎない。**この2つの JSDoc は別のことを言っている**——逐語は
-   * `case 'session_started'` のコメントに置いた。誤読の結果、ターンの頭
-   * ごとに在り高が0へ落ち、そのターン中に `background_tasks_changed` が
-   * 来なければ `awaitingBackground` が付かず、報告が畳まれずクローンを
-   * 起こしていた（実測: K 本並列に出すと K-1 回よけいに起こす）。
-   *
-   * 読むのは `result` の枝（`awaitingBackground` を報告に載せるかどうかの
-   * 判定）だけ。**`worker_wait` の区間の開閉には使わない**
-   * （`claude-provider.ts` の `foldSystemMessage` の doc）。
-   */
-  #liveBackgroundTasks: readonly { id: string; taskType: string }[] = [];
-  #transcriptPath: string | undefined;
-  #stopped = false;
-  /**
-   * **走っている畳み処理の Promise（Issue #1602 / #1605）。** 畳む手続きは
-   * このクラスに2本ある——`stop()` 自身（中身は `#stopBody`）と、自然終了・
-   * resume 失敗などが呼ぶ `#finish()`（中身は `#finishBody`）。どちらも、
-   * 走り始めた直後にここへ自分の Promise を控える。
-   *
-   * `stop()` の入口（`#stopped` が既に立っている側の分岐）はこれを await
-   * してから返る。**#1602 の時点ではここに `#finish()` の Promise しか
-   * 控えておらず、名前も `#finishing` だった**——`stop()` 自身が畳んでいる
-   * 最中に2本目の `stop()`（または `Host#shutdown()` 経由の2本目）が来ると、
-   * `#finishing` は空のままなので2本目は畳み終わりを待たずにすぐ返って
-   * しまっていた（Issue #1605）。**`stop()` 自身の畳みも同じ形で控える
-   * ように直し、名前を `#closing` へ変えた**——「畳み中のものが `#finish()`
-   * 由来でも `stop()` 自身の畳み由来でも、`stop()` が戻った＝畳み終わった」
-   * という約束を、どちらが走っていても・何本重なっても保つためである。
-   *
-   * **`#finishBody` / `#stopBody` 自身の中身の順序・`closed` を出すかどうか
-   * は1文字も変えていない**——ここは、それぞれを呼ぶ側（`#finish()` /
-   * `stop()` のラッパー）が「畳み終わったかどうか」をどう確かめるかだけの
-   * 話である。**畳みが二重に走ることはない**——`stop()` 自身は2本目以降を
-   * 素通りする（`stop()` の doc）。`#finishBody` の同時多重起動は、呼び出し
-   * 元が持つ `!this.#stopped` の門（#1589 / #1599）と `stop()` が同期的に
-   * 真っ先に `#stopped` を立てることの組み合わせにより起きないと判定して
-   * いる（#1604 の「残した角」と同じ判定。#1605 で軸を変えても崩れていない
-   * ——確かめたのは「`stop()` 自身の畳み」と「もう1本の `stop()`」の重なり
-   * であって、`#finishBody` どうしの多重起動ではない）。
-   */
-  #closing: Promise<void> | null = null;
-  /**
-   * 最後に受け取った世代番号（fencing token）。
-   *
-   * **`undefined` は「まだ lease を伴わずに起こされた」ことを表す。** そのときは
-   * 判定しない（`lease.ts` の `undecidable` と同じ形 — 材料が無いことを
-   * 「古くない」と読まない。ただし判定しない以上、拒む理由も無いので実質は
-   * 「常に受ける」になる）。名乗らない古いデーモンとも繋がるための任意フィールドと
-   * 対になっている（`runnerLeaseSchema` の doc）。
-   */
-  #fence: number | undefined;
-  /**
-   * いまの貸し出し期限（ミリ秒）。`Host` の自己失効の見張りが読む。
-   *
-   * **lease を伴わずに起こされたセッションは `undefined` のまま。** 自己失効は
-   * 期限を約束されたセッションだけに効く（`RunnerHostOptions.enforceLease` の doc）。
-   */
-  #leaseTtlMs: number | undefined;
-
-  /**
-   * 認証トークンが差し替わったので、次のターンの境界で SDK セッションを畳んで
-   * 開き直す（PR #454 がクローン側で塞いだのと同じ穴の、マネージャー側の直し）。
-   *
-   * **印だけを持つ。** 立てた時点ではセッションに触らない —— 触ると、そのとき
-   * 走っていたターンを殺すか、失敗として報告するかのどちらかになる
-   * （`clone.ts` の `#recycleForToken` の doc と同じ理由。あちらは
-   * `recycleSessionForToken()` が呼ぶ側で、こちらは `Host#setCredentials` が
-   * 呼ぶ側という違いだけで、印の意味は同じである）。
-   *
-   * **畳んでよいのは `#atTokenRecycleBoundary()` が真を返すときだけ。** 1つでも
-   * 条件が欠けていれば、この印を立てたまま次の境界まで待つ（下ろさない）。
-   *
-   * **これは「畳みたい」という意図であって、「いま自分から閉じた」という
-   * 事実ではない。** `#read` が「畳み直しのために閉じたのか」を判定する印は
-   * 別に持つ（`#endedInputForTokenRotation`）——2つを1つに潰すと、この印が
-   * 立ったままの状態で SDK が**自分の理由で**（クラッシュ・resume 不能など）
-   * ストリームを閉じたときに、`#read` がそれを「畳み直しが起きた」と誤認し、
-   * 嘘の `note`（「認証トークンが差し替わったので…」）を出したうえで、
-   * 実際には効いていない開き直りを行うことになる（レビュー指摘。種類の違う
-   * ものを1つの計器で見分けていた形）。
-   */
-  #recycleForToken = false;
-
-  /**
-   * **`#inputStream` が、まさにいま `recycleForToken` の意図に基づいて
-   * 自分から入力ストリームを終えた**、という事実の印。
-   *
-   * **`#recycleForToken`（「畳みたい」という意図）とは意味が違う。** `#read` は
-   * `for await` が正常終了した理由を、こちらの印**だけ**で判定する——
-   * 「自分から閉じた」(a) と「SDK が自分の理由で閉じた」(b) は、どちらも
-   * `for await` の正常終了として同じ形で観測されるが、(a) のときだけ
-   * `#reopenForTokenRotation` へ進んでよい。`#recycleForToken` を見て判定すると、
-   * 意図がまだ残っている（境界条件が揃わず `#inputStream` はまだ `return`
-   * していない）状態で (b) が起きたときに誤判定する。
-   *
-   * **`#inputStream` が立て、`#read` が読んで下ろす。** 立てるのは
-   * `#atTokenRecycleBoundary()` を認めて `return` する、まさにその1行のみ。
-   */
-  #endedInputForTokenRotation = false;
+  readonly #sdkSession = new RunnerSdkSession();
 
   constructor(options: RunnerSessionOptions) {
     this.#id = options.managerId;
@@ -1672,7 +1539,7 @@ class RunnerSession {
 
   /** 見張り（`Host#checkLeaseExpiry`）が読む、いまの貸し出し期限。 */
   get leaseTtlMs(): number | undefined {
-    return this.#leaseTtlMs;
+    return this.#sdkSession.leaseTtlMs;
   }
 
   /**
@@ -1691,18 +1558,12 @@ class RunnerSession {
    * 受けない。**同じ値は再送として受ける**（更新も拒否もしない）。**新しい値**は
    * ここで覚え直すだけで、セッションを作り直す判断はここには無い
    * （`Host#resume` が呼び出し元で、既にセッションを作り直さない短絡を持っている）。
+   *
+   * **中身（比べる・投げる・覚える）は `RunnerSdkSession#checkFence` へ切り
+   * 出した**（Issue #1190 案X）。ここは薄い口である。
    */
   checkFence(lease: RunnerLease | undefined): void {
-    if (lease === undefined) return;
-    if (this.#fence !== undefined && lease.fence < this.#fence) {
-      throw new RunnerFenceError({
-        managerId: this.#id,
-        expected: this.#fence,
-        given: lease.fence,
-      });
-    }
-    this.#fence = lease.fence;
-    this.#leaseTtlMs = lease.ttlMs;
+    this.#sdkSession.checkFence(lease, this.#id);
   }
 
   begin(request: string): void {
@@ -1726,7 +1587,7 @@ class RunnerSession {
   state(): RunnerManagerState {
     return {
       managerId: this.#id,
-      status: this.#status,
+      status: this.#sdkSession.status,
       cwd: this.#cwd,
       request: this.#request,
       // **`kind` も運ぶ（#334）。** `#pending` の要素（`PendingRequest`）は
@@ -1766,14 +1627,14 @@ class RunnerSession {
    * 「`task_notification` を受けても `byCause.input` は増えない」の1本のみ。
    */
   push(text: string): void {
-    if (this.#stopped) return;
-    this.#input.push({
+    if (this.#sdkSession.stopped) return;
+    this.#sdkSession.enqueueInput({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
     });
-    this.#status = 'running';
-    this.#wakeInput();
+    this.#sdkSession.setStatus('running');
+    this.#sdkSession.wakeInput();
   }
 
   /**
@@ -1882,7 +1743,7 @@ class RunnerSession {
     | { status: 'unreadable'; error: unknown }
     | { status: 'ok'; body: string }
   > {
-    const path = this.#transcriptPath;
+    const path = this.#sdkSession.transcriptPath;
     if (path === undefined) return { status: 'no-path' };
     try {
       return { status: 'ok', body: await readFile(path, 'utf8') };
@@ -1897,9 +1758,13 @@ class RunnerSession {
    * がこれを await して、畳み中の畳み（`#finish()` 由来でも `stop()` 自身
    * 由来でも）を追い越さないようにするためである（`#closing` の doc）。
    * **中身の順序・`closed` を出すかどうかは変えていない。**
+   *
+   * **`#closing` を控える・待つ・消す3行は `RunnerSdkSession#trackClosing`
+   * へ切り出した**（Issue #1190 案X）。`stop()` と `#finish()` が持っていた
+   * 同じ3行を1本化しただけで、いつ・何を畳むかはここに残る。
    */
   async stop(reason: string): Promise<void> {
-    if (this.#stopped) {
+    if (this.#sdkSession.stopped) {
       // **Issue #1602 / #1605。畳み中のもの（`#finish()` 由来でも `stop()`
       // 自身の畳み由来でも）があれば、それを待ってから返る。**
       //
@@ -1927,25 +1792,16 @@ class RunnerSession {
       // 既に例外を飲み込む。どちらも「`stop()` が投げうる」という前提を
       // 既に持っているので、ここで新しく飲み込むと、その前提を握りつぶす
       // 側の変更になる（この PR の報告に、呼び出し元を読んだ根拠を書く）。
-      if (this.#closing) await this.#closing;
+      const closing = this.#sdkSession.closing;
+      if (closing) await closing;
       return;
     }
-    const promise = this.#stopBody(reason);
-    this.#closing = promise;
-    try {
-      await promise;
-    } finally {
-      // **自分が控えた Promise のときだけ消す。** `#finish()` のラッパーと
-      // 同じ理由——`#closing` を握っているのが自分の呼び出しかどうかを
-      // 確かめずに消すと、後から始まった畳みが握っている `#closing` を
-      // 先に終わった呼び出しの `finally` が奪って消してしまう。
-      if (this.#closing === promise) this.#closing = null;
-    }
+    await this.#sdkSession.trackClosing(() => this.#stopBody(reason));
   }
 
   /** `stop()` の中身。呼ぶのは `stop()` のラッパーだけである。 */
   async #stopBody(reason: string): Promise<void> {
-    this.#stopped = true;
+    this.#sdkSession.markStopped();
 
     // **オーナー判断（2026-09-26、Issue #1533）。報告は「stop が指示された
     // 時点の状態」を名乗る——`#settleAll` より前でここに控える。**
@@ -1958,7 +1814,7 @@ class RunnerSession {
     // `#flushUnreported` より後だった以前には無かった状態変化で、報告の
     // 意味が変わってしまう。**ここで控えるのは、その変化を打ち消し、以前
     // どおり「stop が指示された瞬間の状態」を報告に載せるためである。**
-    const statusAtStop = this.#status;
+    const statusAtStop = this.#sdkSession.status;
 
     // **器の入れ替えと `manager_stop` はここを通る**（`Host#shutdown` / `Host#stop`
     // → `stop()`）。`result` を待っていると、この経路で畳まれたぶんは台帳に1行も
@@ -1976,19 +1832,15 @@ class RunnerSession {
     // 直上の `worker_wait` とまったく同じ穴である —— `#finish` にだけ置くと、
     // **器の入れ替えと `manager_stop` で畳まれたセッションのぶんが黙って消える。**
     // 初出の1行は既に出ているので存在は残るが、**量が失われる**。
-    noteUnclassifiedFailuresSummary(this.#unclassifiedFailures, this.#id);
+    noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
 
     // **`#settleAll` の位置はここに残す（`#wakeInput` → `query.close()` の前）。**
     // 経路Aと経路Bで `report`/`settled` の前後が入れ替わるのは、この行を動かした
     // からではなく、下の `#shipArchive` / `#flushUnreported` を後ろへ動かした
     // からである（Issue #1533 の測定コメントが指摘した (b) の食い違い）。
     this.#settleAll(reason);
-    this.#wakeInput();
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
+    this.#sdkSession.wakeInput();
+    this.#sdkSession.closeQuery();
     // **Issue #1533。生ログの送り出しと報告を、CLI の読み手（`#reader`）が
     // 終わるまで待ってから出す。** 以前はここが `query.close()` の前にあり、
     // CLI がまだ生きているうちに一発で `readFile` していた —— 読んだ後に CLI が
@@ -2005,7 +1857,7 @@ class RunnerSession {
     // 送るだけで、生ログ（`transcript_path`）を書いているのは CLI のサブ
     // プロセス自身である——そのバイナリの中でいつフラッシュ・fsync するかは
     // 読めない（Issue #1533 のコメント、SDK 調査）。**確かめていない。**
-    await this.#reader?.catch(() => undefined);
+    await this.#sdkSession.reader?.catch(() => undefined);
     // 止まる前に全文を返す。runner のディスクは器と一緒に消えるので、ここで
     // 渡し損ねると manager_id から生ログへ降りる経路が切れる。
     await this.#shipArchive();
@@ -2045,7 +1897,7 @@ class RunnerSession {
    * （`lease`）を返し、引き取り直せるようにする。
    */
   async selfFence(reason: string): Promise<void> {
-    if (this.#stopped) return;
+    if (this.#sdkSession.stopped) return;
     await this.#finish('lost', reason, { selfFenced: true });
   }
 
@@ -2060,9 +1912,9 @@ class RunnerSession {
    * 無い（立てても、そのとき `#pending` 等はまだ存在しないので意味を持たない）。
    */
   recycleForToken(): void {
-    if (this.#query === null) return;
-    this.#recycleForToken = true;
-    this.#wakeInput();
+    if (this.#sdkSession.query === null) return;
+    this.#sdkSession.requestTokenRecycle();
+    this.#sdkSession.wakeInput();
   }
 
   // -------------------------------------------------------------------------
@@ -2070,7 +1922,7 @@ class RunnerSession {
   // -------------------------------------------------------------------------
 
   #open(resume?: string): void {
-    if (this.#query) return;
+    if (this.#sdkSession.query) return;
     // **ここが「器（CLI プロセス）を実際に開く／開き直す」唯一の場所である**
     // ——SDK の `SDKBackgroundTasksChangedMessage` の JSDoc が言う
     // 「whenever the session's CLI process (re)starts」[sdk-verbatim SDKBackgroundTasksChangedMessage] に正確に対応するのは
@@ -2079,11 +1931,15 @@ class RunnerSession {
     // ——詳しくは `#liveBackgroundTasks` の doc）。`#recoverFromFailedResume`
     // が `#workerWaitWindow.clear()` を「前のセッションの task_id を持ち越さない」
     // ために置いているのと同じ理由で、ここでも前の器の在り高を持ち越さない。
-    this.#liveBackgroundTasks = [];
-    const generation = this.#generation;
+    this.#sdkSession.resetLiveBackgroundTasks();
+    const generation = this.#sdkSession.generation;
     const q = this.#queryFn({ prompt: this.#inputStream(), options: this.#buildOptions(resume) });
-    this.#query = q;
-    this.#reader = this.#read(q, generation);
+    // **`#query` を先に、`#reader` を後に代入していた元の2行を、
+    // `RunnerSdkSession#open` の1回の呼び出しへまとめた**（Issue #1190
+    // 案X）。`#read`（`reader` の中身）は同期の前置きの中で `this.#query` を
+    // 読まないので、まとめても観測できる違いは無い（`runner-sdk-session.ts`
+    // の `open` の doc）。
+    this.#sdkSession.open(q, this.#read(q, generation));
   }
 
   #buildOptions(resume?: string): Options {
@@ -2276,19 +2132,13 @@ class RunnerSession {
   }
 
   /** 待っているストリームを全部起こす。**1本だけ覚えない** — 世代が重なる。 */
-  #wakeInput(): void {
-    const waiters = [...this.#inputWaiters];
-    this.#inputWaiters.clear();
-    for (const waiter of waiters) waiter();
-  }
-
   async *#inputStream(): AsyncGenerator<SDKUserMessage> {
-    const generation = this.#generation;
+    const generation = this.#sdkSession.generation;
     for (;;) {
       // **世代の確認を `shift` より先に。** 逆にすると、畳まれる直前の死んだ
       // ストリームが新しいセッション宛の1通を引き抜いてから終わる。
-      if (generation !== this.#generation) return;
-      const next = this.#input.shift();
+      if (generation !== this.#sdkSession.generation) return;
+      const next = this.#sdkSession.dequeueInput();
       if (next !== undefined) {
         // **`worker_wait` の `byCause.input` の材料。** 実際に消費した入力だけを
         // 数える（積んだ時点ではなく、SDK が読み取った時点）。
@@ -2296,7 +2146,7 @@ class RunnerSession {
         yield next;
         continue;
       }
-      if (this.#stopped) return;
+      if (this.#sdkSession.stopped) return;
       // **認証トークンを回したので、このセッションを畳んで作り直す**
       // （`recycleForToken` の doc）。
       //
@@ -2316,14 +2166,11 @@ class RunnerSession {
       // ストリームを閉じる（b）ことがある。判定を1つの計器に潰すと、(b) を
       // (a) と誤認して嘘の `note` を出すことになる。`#endedInputForTokenRotation`
       // の doc を見よ）。
-      if (this.#recycleForToken && this.#atTokenRecycleBoundary()) {
-        this.#recycleForToken = false;
-        this.#endedInputForTokenRotation = true;
+      if (this.#sdkSession.wantsTokenRecycle && this.#atTokenRecycleBoundary()) {
+        this.#sdkSession.consumeTokenRecycleAtBoundary();
         return;
       }
-      await new Promise<void>((resolve) => {
-        this.#inputWaiters.add(resolve);
-      });
+      await this.#sdkSession.waitForInput();
     }
   }
 
@@ -2367,9 +2214,9 @@ class RunnerSession {
    */
   #atTokenRecycleBoundary(): boolean {
     return (
-      this.#status !== 'running' &&
+      this.#sdkSession.status !== 'running' &&
       this.#pending.length === 0 &&
-      this.#liveBackgroundTasks.length === 0 &&
+      this.#sdkSession.liveBackgroundTasks.length === 0 &&
       this.#resumeState.sessionId !== undefined
     );
   }
@@ -2389,7 +2236,7 @@ class RunnerSession {
         // 次の provider を足しても `#apply` は1本のままになる（#486）。
         for (const event of foldClaudeMessage(message)) await this.#apply(event);
       }
-      if (this.#stopped || generation !== this.#generation) return;
+      if (this.#sdkSession.stopped || generation !== this.#sdkSession.generation) return;
       // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
       // 判定は `#endedInputForTokenRotation` だけで行う（`#recycleForToken`
       // ではない）。`#inputStream` が境界（`#atTokenRecycleBoundary()`）を
@@ -2410,8 +2257,7 @@ class RunnerSession {
       // **この分岐を `#finish('done', …)` より前に置くこと。** 見ないと、
       // 畳み直しのつもりの正常な閉じが「マネージャーのセッションが閉じた」
       // という `done` の報告に化けてしまう。
-      if (this.#endedInputForTokenRotation) {
-        this.#endedInputForTokenRotation = false;
+      if (this.#sdkSession.takeEndedForTokenRotation()) {
         const sessionId = this.#resumeState.sessionId;
         if (sessionId === undefined) {
           // **境界検査（`#atTokenRecycleBoundary`）が `#sessionId !== undefined`
@@ -2438,7 +2284,7 @@ class RunnerSession {
           return;
       }
     } catch (error) {
-      if (generation !== this.#generation) return;
+      if (generation !== this.#sdkSession.generation) return;
       // **`String(error)` の手前で分類を取る（#713）。** 語そのものは `reason` にも
       // 残る（Node の `Error` は `message` に `syscall` と `code` を織り込む）が、
       // **文字列になった時点で「機械が判定できる形」ではなくなる。** 受け取る側が
@@ -2464,7 +2310,7 @@ class RunnerSession {
       // 止めた後のセッションを新しい世代へ作り直す意味が無い。
       // これは自然終了側の `if (this.#stopped || generation !== this.#generation)
       // return;` と同じ向きの門を、例外側にも揃えるものである。
-      if (!this.#stopped) {
+      if (!this.#sdkSession.stopped) {
         switch (this.#recoverFromFailedResume(reason)) {
           case 'recovered':
             return;
@@ -2514,14 +2360,11 @@ class RunnerSession {
    * 新しい `type` を足さずに済む。
    */
   #reopenForTokenRotation(sessionId: string): void {
-    this.#generation += 1;
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
-    this.#query = null;
-    this.#reader = null;
+    // **`#generation` を進めて `#query` / `#reader` を畳む4行は
+    // `RunnerSdkSession#teardownForRecreate` へ切り出した**（Issue #1190
+    // 案X）。`ResumeRecoveryHost.teardownForRecreate` と重複していた同じ4行を
+    // 1本化しただけで、順序は変えていない。
+    this.#sdkSession.teardownForRecreate();
     this.#resumeState.armResumeAttempt(sessionId);
     this.#emit({
       type: 'note',
@@ -2637,22 +2480,17 @@ class RunnerSession {
     },
     teardownForRecreate: () => {
       // 前のストリームを畳んでから開く。世代を進めないと、死んだ `#inputStream` が
-      // 引き継ぎの一言を横取りする。
-      this.#generation += 1;
-      try {
-        this.#query?.close();
-      } catch {
-        // 既に閉じている
-      }
-      this.#query = null;
-      this.#reader = null;
+      // 引き継ぎの一言を横取りする。**中身は `RunnerSdkSession#teardownForRecreate`
+      // へ切り出した**（Issue #1190 案X。`#reopenForTokenRotation` と重複して
+      // いた同じ4行を1本化した）。
+      this.#sdkSession.teardownForRecreate();
       // 新しいセッションは resume しないので、素材は本文へ畳んで渡す
       // （`sessionId` / `seed` の解放は `RunnerResumeState.discardForRecreate`）。
       this.#resumeState.discardForRecreate();
       // **前の器へ向けた入力を捨てない。** 一言も落とさずに引き継ぎへ折り込む
       // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
-      return this.#input
-        .splice(0)
+      return this.#sdkSession
+        .drainInput()
         .map((message) => String(message.message.content))
         .filter((text) => text.length > 0);
     },
@@ -2716,7 +2554,7 @@ class RunnerSession {
         // 比較する順序のまま行う**（Issue #1190 案X。初回は `sessionId` が
         // 未設定なので必ずリセット側に倒れる＝空→空で無害）。
         if (this.#resumeState.observeSessionStarted(event.sessionId)) {
-          this.#liveBackgroundTasks = [];
+          this.#sdkSession.resetLiveBackgroundTasks();
         }
         this.#emit({ type: 'session', managerId: this.#id, sessionId: event.sessionId });
         return;
@@ -2800,7 +2638,7 @@ class RunnerSession {
       case 'background_tasks': {
         // **REPLACE 意味論。加算・削除の差分計算はしない**
         // （`#liveBackgroundTasks` の doc）。読むのは `result` の枝だけ。
-        this.#liveBackgroundTasks = event.tasks;
+        this.#sdkSession.replaceLiveBackgroundTasks(event.tasks);
         // **認証トークンの畳み直しの印が立っていれば、ここでも起こす**
         // （`'result'` の枝と同じ形。理由は3点。
         //
@@ -2822,7 +2660,7 @@ class RunnerSession {
         //    `'result'` の枝1つに任せると、`awaitingBackground` で畳んだ後の
         //    完了は誰も起こさず、次に届く入力（次のターン全体）が古いトークン
         //    のまま走る——この枝が塞ぐのはその穴である
-        if (this.#recycleForToken) this.#wakeInput();
+        if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         return;
       }
 
@@ -2999,7 +2837,7 @@ class RunnerSession {
           // 何も出さない）。足したのは数えることだけである。
           if (!classified) {
             noteUnclassifiedFailure(
-              this.#unclassifiedFailures,
+              this.#sdkSession.unclassifiedFailures,
               this.#id,
               failure.via,
               failure.code,
@@ -3040,7 +2878,7 @@ class RunnerSession {
             // 穴——あちらは塞いだが、この枝は #1590 の本文が「確かめていない」
             // として残していた場所そのものである）。**畳むのは `stop()` の仕事
             // なので、ここは何もしない。**
-            if (!this.#stopped) {
+            if (!this.#sdkSession.stopped) {
               void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
                 (error: unknown) => {
                   noteBackgroundFailure(
@@ -3085,7 +2923,7 @@ class RunnerSession {
                 ),
                 contentless: false,
               };
-        this.#status = this.#pending.length > 0 ? 'waiting_human' : 'done';
+        this.#sdkSession.setStatus(this.#pending.length > 0 ? 'waiting_human' : 'done');
         // **ここがターンの境界になった。** 認証トークンの畳み直しの印が立って
         // いれば、入力待ちで止まっている `#inputStream` を起こす
         // （`clone.ts` の `#finishTurn` と同じ理由 —— 起こさないと、次に
@@ -3095,7 +2933,7 @@ class RunnerSession {
         // 判定は `#inputStream` 側が持つので、ここで起こしても条件が揃って
         // いなければ（確認待ちが残っている・背景処理が生きている等）そのまま
         // 待ちへ戻るだけである。
-        if (this.#recycleForToken) this.#wakeInput();
+        if (this.#sdkSession.wantsTokenRecycle) this.#sdkSession.wakeInput();
         // **マネージャーがバックグラウンド実行の完了を待つためだけに畳んだ
         // ターンの報告に、その旨を載せる（`runner-protocol.ts` の
         // `report.awaitingBackground` の doc）。**
@@ -3114,11 +2952,13 @@ class RunnerSession {
         // 3. `this.#liveBackgroundTasks.length > 0` —— 起こしっぱなしの
         //    背景処理が実際に在るときだけ
         const awaitingBackground =
-          failure === undefined && this.#status === 'done' && this.#liveBackgroundTasks.length > 0
+          failure === undefined &&
+          this.#sdkSession.status === 'done' &&
+          this.#sdkSession.liveBackgroundTasks.length > 0
             ? {
-                count: this.#liveBackgroundTasks.length,
+                count: this.#sdkSession.liveBackgroundTasks.length,
                 // **診断用の写しであって判定には使わない**（doc のとおり）。
-                breakdown: summarizeBackgroundTasks(this.#liveBackgroundTasks),
+                breakdown: summarizeBackgroundTasks(this.#sdkSession.liveBackgroundTasks),
               }
             : undefined;
         this.#emit({
@@ -3131,7 +2971,7 @@ class RunnerSession {
           // `report.reportId` の doc）。
           reportId: event.id,
           text: outcome.text,
-          status: this.#status,
+          status: this.#sdkSession.status,
           ...(failure === undefined ? {} : { failure: { code: failure.code, via: failure.via } }),
           ...(outcome.contentless ? { contentless: true } : {}),
           ...(awaitingBackground === undefined ? {} : { awaitingBackground }),
@@ -3453,7 +3293,7 @@ class RunnerSession {
    * ——新しい伏せ字の仕組みは作っていない。
    */
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
-    const q = this.#query;
+    const q = this.#sdkSession.query;
     if (q === null) return undefined;
     const startedAt = Date.now();
     try {
@@ -3539,7 +3379,7 @@ class RunnerSession {
    * 読ませる（そちらの doc に、なぜ両方要るかを逐語で書いた）。
    */
   async #flushUsage(): Promise<void> {
-    const models = await readSessionUsage(this.#query);
+    const models = await readSessionUsage(this.#sdkSession.query);
     if (models === undefined) return;
     this.#emit({
       type: 'usage',
@@ -3617,23 +3457,17 @@ class RunnerSession {
    * させる）——`#finish()` を呼ぶ側（`stop()` と、fire-and-forget な7箇所
    * の呼び出し元）のどちらも元から例外の伝播を前提にしていたので、ここで
    * 新しく飲み込むと片方の前提を壊す（`stop()` の doc に理由の詳細）。
+   *
+   * **`#closing` を控える・待つ・消す3行は `RunnerSdkSession#trackClosing`
+   * へ切り出した**（Issue #1190 案X。`stop()` と重複していた同じ3行を
+   * 1本化した）。
    */
   async #finish(
     status: JobStatus,
     reason: string,
     options: { selfFenced?: true; systemError?: SystemErrorFacts } = {},
   ): Promise<void> {
-    const promise = this.#finishBody(status, reason, options);
-    this.#closing = promise;
-    try {
-      await promise;
-    } finally {
-      // **自分が控えた Promise のときだけ消す。** `#finishBody` は複数回
-      // 走ることがある（`#finish` は複数の呼び出し元を持つ）ので、後から
-      // 始まった呼び出しが `#closing` を握っている間に、先に始まっていた
-      // 呼び出しの `finally` がそれを消してしまわないようにする。
-      if (this.#closing === promise) this.#closing = null;
-    }
+    await this.#sdkSession.trackClosing(() => this.#finishBody(status, reason, options));
   }
 
   /** `#finish()` の中身。呼ぶのは `#finish()` のラッパーだけである。 */
@@ -3642,7 +3476,7 @@ class RunnerSession {
     reason: string,
     options: { selfFenced?: true; systemError?: SystemErrorFacts } = {},
   ): Promise<void> {
-    this.#stopped = true;
+    this.#sdkSession.markStopped();
     // **量をここで1行にまとめる。終わり口はここだけではない（Issue #393）。**
     // もう1本は `stop()`（器の入れ替えと `manager_stop` が通る道）で、**あちらは
     // ここを通らない** —— だから同じ呼び出しが両方に在る（`stop()` の中の
@@ -3652,7 +3486,7 @@ class RunnerSession {
     // 関係なく出るので、**落ちていることに気づく手がかりが出力に無い。**
     // 数え上げの持ち主は `noteUnclassifiedFailuresSummary` の doc に在り、
     // そこは「すべての終わり口」ではなく現物の2本を名指ししている。
-    noteUnclassifiedFailuresSummary(this.#unclassifiedFailures, this.#id);
+    noteUnclassifiedFailuresSummary(this.#sdkSession.unclassifiedFailures, this.#id);
     // **`close()` より先に読む。** 閉じた後の control channel からは何も取れない。
     // ここを通るのはクラッシュ・`lost`・`failed`、つまり `result` が出ないまま
     // 終わる経路そのものである。
@@ -3667,13 +3501,9 @@ class RunnerSession {
     this.#settleAll(reason);
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
-    this.#wakeInput();
-    try {
-      this.#query?.close();
-    } catch {
-      // 既に閉じている
-    }
-    this.#status = status;
+    this.#sdkSession.wakeInput();
+    this.#sdkSession.closeQuery();
+    this.#sdkSession.setStatus(status);
     await this.#shipArchive();
     // **生ログに在る本文を、報告としても渡してから閉じる（#323）。**
     // `#shipArchive()` の後に置いてあるのは、この報告を読んだクローンが
@@ -3852,8 +3682,8 @@ class RunnerSession {
         unlisten();
         const at = this.#pending.indexOf(request);
         if (at !== -1) this.#pending.splice(at, 1);
-        if (this.#status === 'waiting_human' && this.#pending.length === 0) {
-          this.#status = 'running';
+        if (this.#sdkSession.status === 'waiting_human' && this.#pending.length === 0) {
+          this.#sdkSession.setStatus('running');
         }
         this.#emit({
           type: 'settled',
@@ -3866,7 +3696,7 @@ class RunnerSession {
     };
 
     this.#pending.push(request);
-    this.#status = 'waiting_human';
+    this.#sdkSession.setStatus('waiting_human');
 
     // マネージャー側で中断されたら宙吊りにしない。
     // **`aborted: true` を渡すのはここだけである（Issue #1593）。** `withdrawn`
@@ -4009,7 +3839,8 @@ class RunnerSession {
    */
   async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
     if (typeof record.toolUseId === 'string') this.#preToolInputHeads.delete(record.toolUseId);
-    if (typeof record.transcriptPath === 'string') this.#transcriptPath = record.transcriptPath;
+    if (typeof record.transcriptPath === 'string')
+      this.#sdkSession.setTranscriptPath(record.transcriptPath);
     // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
     this.#markProgressed();
 
@@ -4297,7 +4128,8 @@ class RunnerSession {
    */
   async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
     if (typeof record.toolUseId === 'string') this.#preToolInputHeads.delete(record.toolUseId);
-    if (typeof record.transcriptPath === 'string') this.#transcriptPath = record.transcriptPath;
+    if (typeof record.transcriptPath === 'string')
+      this.#sdkSession.setTranscriptPath(record.transcriptPath);
     // 道具が動いた＝このセッションは生きている（成功側と同じ）。
     this.#markProgressed();
 
@@ -5281,7 +5113,7 @@ class RunnerSession {
   /** 要約に潰される前に全文を上げる（監査は日誌＋アーカイブで担保する）。 */
   async #onPreCompact(record: AgentPreCompactRecord): Promise<void> {
     const path = record.transcriptPath;
-    if (typeof path === 'string' && path.length > 0) this.#transcriptPath = path;
+    if (typeof path === 'string' && path.length > 0) this.#sdkSession.setTranscriptPath(path);
     await this.#shipArchive();
   }
 
