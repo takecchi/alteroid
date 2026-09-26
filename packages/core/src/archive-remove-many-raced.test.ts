@@ -127,3 +127,42 @@ describe('archive_remove_many は、選んだ後に他経路が消していた�
     },
   );
 });
+
+/**
+ * **応答の「全 id は日誌に N 件に分けて残してある」の N は、実際に書いた日誌の行の数で言う。**
+ * 1件も消せなかった塊は日誌に書かないので、塊の数（`chunks.length`）で言うと、塊が丸ごと
+ * 競合になった回に、無い日誌の行を名乗っていた（`commitment_close_many` / `inbox_remove_many`
+ * も同じ形で、同じく直した）。
+ */
+describe('archive_remove_many の応答が言う「日誌に N 件」は、実際に書いた件数である', () => {
+  it('2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 150; i += 1) {
+      // id を長くして、日誌の1行の文字数の予算に収まらず塊が複数できるようにする。
+      await seedRemovableSession(
+        stores,
+        `sess-count-${String(i).padStart(3, '0')}-${'x'.repeat(60)}`,
+      );
+    }
+    // 先頭の25件だけ本当に消し、それ以降は「選んだ後に他経路が先に消していた」にする。
+    const originalRemove = stores.archive.remove.bind(stores.archive);
+    let calls = 0;
+    stores.archive.remove = async (id: string) => {
+      calls += 1;
+      if (calls > 25) await originalRemove(id);
+      return originalRemove(id);
+    };
+
+    const reply = await remover(stores)({
+      minStoredBytes: 0,
+      summary: 'まとめて掃除',
+      dryRun: false,
+    });
+
+    const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
+    expect(claimed, '省略の断り書きが出ていない（25件を超えて消していない）').not.toBeNull();
+    const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
+    expect(chunkEntries.length).toBeGreaterThan(0);
+    expect(Number(claimed?.[1])).toBe(chunkEntries.length);
+  });
+});

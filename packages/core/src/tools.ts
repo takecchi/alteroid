@@ -7552,6 +7552,10 @@ export function createCloneTools(context: ToolContext) {
         );
         const now = new Date().toISOString();
         const closedIds: string[] = [];
+        // **応答が言う「日誌に N 件」は、実際に書いた件数で数える。** 1件も処理できな
+        // かった塊は日誌に書かない（下の `continue`）ので、塊の数（`chunks.length`）で
+        // 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗ることになる。
+        let journaledChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
           const closed = await stores.commitments.closeMany(chunk, now, reason, 'clone');
           closedIds.push(...closed);
@@ -7560,6 +7564,7 @@ export function createCloneTools(context: ToolContext) {
           // 起きる。番号は割った時点の塊番号なので、**抜けている番号そのものが
           // 「その塊は1件も閉じなかった」を意味する。**
           if (closed.length === 0) continue;
+          journaledChunks += 1;
           await appendJournalOrThrow(
             'commitment_close_many',
             stores.journal,
@@ -7595,7 +7600,7 @@ export function createCloneTools(context: ToolContext) {
             `絞り込み: ${filterText}`,
             `閉じた id（先頭 ${shownClosed.length} 件）: ${shownClosed.join(', ')}${
               hiddenClosed > 0
-                ? ` …ほか ${hiddenClosed} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
+                ? ` …ほか ${hiddenClosed} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
                 : ''
             }`,
             ...(raced === 0
@@ -7839,6 +7844,10 @@ export function createCloneTools(context: ToolContext) {
         );
         const removedIds: string[] = [];
         let droppedFromDelivery = 0;
+        // **応答が言う「日誌に N 件」は、実際に書いた件数で数える。** 1件も処理できな
+        // かった塊は日誌に書かない（下の `continue`）ので、塊の数（`chunks.length`）で
+        // 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗ることになる。
+        let journaledChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
           // **器から消すのと配達を止めるのを、1つの呼びで行う**（issue #1049）。
           // `stores.inbox.removeMany` を直に呼ばないこと——`POST /inbox/remove`
@@ -7854,6 +7863,7 @@ export function createCloneTools(context: ToolContext) {
           // **1件も消せなかった塊では日誌へ書かない**（他の経路——別セッションの
           // `remove()` や再起動をまたいだ処理——が先に消していた場合に起きる）。
           if (removed.length === 0) continue;
+          journaledChunks += 1;
           await appendJournalOrThrow(
             'inbox_remove_many',
             stores.journal,
@@ -7882,7 +7892,7 @@ export function createCloneTools(context: ToolContext) {
             `絞り込み: ${filterText}`,
             `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
               hiddenRemoved > 0
-                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
+                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
                 : ''
             }`,
             // **配達の側にも届いたことを名乗る**（issue #1049）。この道具は
@@ -10923,6 +10933,10 @@ export function createCloneTools(context: ToolContext) {
         const removedIds: string[] = [];
         let removedBytes = 0;
         let raced = 0;
+        // **応答が言う「日誌に N 件」は、実際に書いた件数で数える。** 1件も処理できな
+        // かった塊は日誌に書かない（下の `continue`）ので、塊の数（`chunks.length`）で
+        // 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗ることになる。
+        let journaledChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
           const chunkIds = new Set(chunk);
           const chunkTargets = removableTargets.filter((row) => chunkIds.has(row.id));
@@ -10949,6 +10963,7 @@ export function createCloneTools(context: ToolContext) {
           // `commitment_close_many` と同じ理由）。
           if (removedThisChunk.length === 0) continue;
 
+          journaledChunks += 1;
           await appendJournalOrThrow(
             'archive_remove_many',
             stores.journal,
@@ -10978,7 +10993,7 @@ export function createCloneTools(context: ToolContext) {
             `消したバイト数（直前の合計）: ${removedBytes.toLocaleString('ja-JP')}`,
             `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
               hiddenRemoved > 0
-                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${chunks.length} 件に分けて残してある**）`
+                ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
                 : ''
             }`,
             ...(raced === 0
