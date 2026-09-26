@@ -28,6 +28,9 @@ describe('見出し・表・コードブロック', () => {
 
     const heading = await screen.findByRole('heading', { name: '見出し' });
     expect(heading.tagName).toBe('H2');
+    // 普通の見出しは sr-only を持たない（`sr-only` は GFM の脚注節の見出し
+    // だけに現れる特別なクラスであって、既定で漏れて付くものではない）。
+    expect(heading.classList.contains('sr-only')).toBe(false);
   });
 
   it('GFM の表が table 要素になる', async () => {
@@ -258,6 +261,30 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
     const backrefTarget = container.querySelector(`#${backrefTargetId}`);
     expect(backrefTarget).not.toBeNull();
     expect(backrefTarget).toBe(ref);
+  });
+
+  /**
+   * ⚠️ PR #1678 の作業者が範囲外として見つけた穴（本文コメント参照）。
+   * `mdast-util-to-hast` の `lib/footer.js` は脚注節の見出しに既定で
+   * `className: ['sr-only']` を付ける（画面には出さず、スクリーンリーダー
+   * だけに読ませる見出し）。ところが `heading()` は `id` だけを通し
+   * `className` を丸ごと落としていたので、この見出しは
+   * 普通の見出し（`HEADINGS.h2` の見た目）として画面に出ていた。
+   *
+   * 直し方は `className` を丸ごと通すのではなく、受け取った `className` に
+   * `sr-only` が含まれるときだけ `sr-only` を付ける（他のクラスは通さない）。
+   */
+  it('脚注の節の見出し（footnote-label）は sr-only で、見た目のクラスを持たない', async () => {
+    const md = ['Here is a note[^1].', '', '[^1]: The note text.'].join('\n');
+    render(<Markdown>{md}</Markdown>);
+
+    const label = screen.getByText('Footnotes');
+    expect(label.id).toBe('footnote-label');
+    expect(label.tagName).toBe('H2');
+
+    // sr-only だけを持ち、この部品が決める見た目のクラス（HEADINGS.h2）を
+    // 持たないこと——両方持っていると「className を丸ごと通した」ことになる。
+    expect(label.className).toBe('sr-only');
   });
 });
 
