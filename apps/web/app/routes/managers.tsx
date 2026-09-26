@@ -37,8 +37,20 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
     stopped: { tone: 'neutral', label: '停止済み' },
   };
 
+/**
+ * **知らない `status` にも倒れ先を持つ**（issue #1623）。Web（Vercel）とデーモン
+ * （Railway）は別々にデプロイされるので、デーモンが先に新しい状態値を返す時間が
+ * 在る。型は `ManagerStatus` でも、JSON はそのまま届く。倒れ先が無いと
+ * `STATUS[status]` が `undefined` になり、1件で一覧と詳細が画面ごと落ちていた。
+ *
+ * **生の値をそのまま見せる。** 「不明」とだけ書くと、何が来たのかを人間が
+ * 追えない。**`Object.hasOwn` で引く** —— `STATUS['constructor']` のような
+ * 継承したキーは `undefined` にならず、別の形で壊れるためである。
+ */
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
-  const view = STATUS[status];
+  const view = Object.hasOwn(STATUS, status)
+    ? STATUS[status]
+    : { tone: 'neutral' as const, label: `知らない状態（${String(status)}）` };
   return <Badge tone={view.tone}>{view.label}</Badge>;
 }
 

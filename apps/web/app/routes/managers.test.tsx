@@ -1126,3 +1126,42 @@ describe('ManagerRunnerVanishedNote（Issue #1212 running 側。段1）', () => 
     expect(container.textContent).toBe('');
   });
 });
+
+/**
+ * **知らない `status` でも画面ごと落ちない**（issue #1623）。Web とデーモンは別々に
+ * デプロイされるので、デーモンが先に新しい状態値を返す時間が在る。型は
+ * `as ManagerSummary['status']` で迂回する——実機でも型はコンパイル時の飾りで、
+ * JSON はそのまま届く。
+ */
+describe('知らない status に倒れ先がある（#1623）', () => {
+  it('知らない status が混ざっても、他の行は見え、その行は生の値を出す', async () => {
+    renderManagers([
+      { ...BASE, managerId: 'mgr-good', request: 'known good row' },
+      {
+        ...BASE,
+        managerId: 'mgr-bad',
+        request: 'unknown status row',
+        status: 'archived' as ManagerSummary['status'],
+      },
+    ]);
+
+    expect(await screen.findByText('known good row')).toBeTruthy();
+    expect(screen.getByText('unknown status row')).toBeTruthy();
+    expect(screen.getByText('知らない状態（archived）')).toBeTruthy();
+  });
+
+  /** 継承したキー（`constructor`）は `STATUS[...]` が `undefined` にならないので別に測る。 */
+  it('Object の継承したキーと同じ名前の status でも落ちない', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        managerId: 'mgr-proto',
+        request: 'prototype key row',
+        status: 'constructor' as ManagerSummary['status'],
+      },
+    ]);
+
+    expect(await screen.findByText('prototype key row')).toBeTruthy();
+    expect(screen.getByText('知らない状態（constructor）')).toBeTruthy();
+  });
+});
