@@ -205,7 +205,10 @@ describe('buildDenialInputHead / 伏せてから切る（境界にトークン�
       { command: `${'a'.repeat(DENIAL_INPUT_HEAD_LIMIT - 1)}\u{1F600}${'b'.repeat(50)}` },
       undefined,
     );
-    expect(head?.isWellFormed()).toBe(true);
+    // `isWellFormed()` は tsconfig の lib（es2024 未満）に無いので、孤立サロゲートを直接探す。
+    expect(head).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
     expect(head).toBe(`${'a'.repeat(DENIAL_INPUT_HEAD_LIMIT - 1)}…`);
   });
 
