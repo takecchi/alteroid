@@ -2437,6 +2437,138 @@ describe('HTTP API', () => {
         expect(response.status).toBe(400);
         expect(await snapshot()).toEqual(before);
       });
+
+      // ⭐ 調査で追加（範囲5）: `limit` の型検証（負数・0・小数・文字列・巨大値）。
+      // スキーマは `z.number().int().min(1).optional()`（openapi.ts）——
+      // これが実際にどの入力を弾くかを HTTP 層で撃つ。
+      it.each([
+        ['0', 0],
+        ['負数', -5],
+        ['小数', 1.5],
+        ['文字列', '200'],
+        ['巨大値（安全整数を超える）', Number.MAX_SAFE_INTEGER + 2],
+      ])('limit が不正な値（%s）だと400（1件も消さない）', async (_label, limit) => {
+        await stores.archive.archive('sess-400-limit', 'A');
+        const before = await snapshot();
+
+        const response = await app.request(
+          '/archive/remove',
+          json({
+            minStoredBytes: 0,
+            limit,
+            reason: 'x',
+            dryRun: false,
+          }),
+        );
+        expect(response.status).toBe(400);
+        expect(await snapshot()).toEqual(before);
+      });
+    });
+
+    /**
+     * ⭐ 調査で追加（範囲5）: `POST /archive/remove` が `requireContainment` の
+     * 実効値（`requireContainment ?? true`）を `guardArchiveRemoval` の第4引数へ
+     * 正しく渡しているか——この口自身の `describe` に在る他のテストは全部
+     * `fakeClone()` の `managers`（`runningManagerPinning` を実装しない像）を
+     * 使っているため、狭め判定（`runningManagerOwning` の全件保護 vs
+     * `runningManagerPinning` の末尾1本だけの保護）が実際に効くかどうかを
+     * 一度も観測していない——`guardArchiveRemoval` の4引数目に何を渡しても、
+     * この偽物では `managers.runningManagerPinning !== undefined` が常に偽なので
+     * 挙動が変わらない（`packages/core/src/manager.ts` の `guardArchiveRemoval`
+     * doc「`runningManagerPinning` を持たない像では…狭めず安全側へ倒す」）。
+     * `apps/daemon/src/archive-folder.test.ts` の `fakeManagersWithPinning` と
+     * 同じ手口（本物の `Pool` は使わず、2メソッドだけ実装した像を手で組む）で、
+     * この口自身についても同じ観測点を作る。
+     */
+    describe('requireContainment の狭め（runningManagerPinning）が HTTP 層でも効くか', () => {
+      /**
+       * 1セッションに3行（first → continues → continues=newest）を積み、
+       * 走行中の1マネージャーがその3行すべてを `archiveIds` として抱えている
+       * 状態を模す。`runningManagerOwning` は3行とも保護し（狭める前）、
+       * `runningManagerPinning` は末尾（`idNew`）だけを保護する
+       * （`archive-folder.test.ts` の `fakeManagersWithPinning` と同じ形）。
+       */
+      async function seedChainOwnedByOneManager() {
+        const idOld = (await stores.archive.archive('sess-pin-http', 'A')).id; // first
+        const idMid = (await stores.archive.archive('sess-pin-http', 'AB')).id; // continues
+        const idNew = (await stores.archive.archive('sess-pin-http', 'ABC')).id; // continues, newest
+        const managerId = 'mgr-pin-http';
+        const ownedIds = [idOld, idMid, idNew];
+        const managersWithPinning: ManagerPool = {
+          ...fake.clone.managers,
+          runningManagerOwning: (archiveId: string) =>
+            ownedIds.includes(archiveId) ? managerId : undefined,
+          runningManagerPinning: (archiveId: string) =>
+            archiveId === idNew ? managerId : undefined,
+        };
+        const localApp = createApp({
+          clone: { ...fake.clone, managers: managersWithPinning },
+          stores,
+          token: 'test-token',
+          shutdown: () => undefined,
+          scheduler: schedule.scheduler,
+          journalEvents: journalBus,
+        });
+        return { idOld, idMid, idNew, managerId, localApp };
+      }
+
+      it('requireContainment 省略（既定 true）: 含有証明済みの old/mid は走行中でも消え、newest だけ残る', async () => {
+        const { idOld, idMid, idNew, localApp } = await seedChainOwnedByOneManager();
+
+        const response = await localApp.request(
+          '/archive/remove',
+          json({ minStoredBytes: 0, reason: '狭め既定', dryRun: false }),
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          targeted: number;
+          removedIds: string[];
+          skipped: { newest: number; inUse: number };
+        };
+        // 狭め（既定 true）が効いていれば、old/mid は runningManagerPinning が
+        // 保護しないので guard を通り、実際に消える。newest は selectArchiveRemovalTargets
+        // の安全弁（skipped.newest）で守られる——guard 以前の話。
+        expect(body.skipped.newest).toBe(1);
+        expect(body.skipped.inUse).toBe(0);
+        expect(body.targeted).toBe(2);
+        expect(body.removedIds.sort()).toEqual([idMid, idOld].sort());
+
+        const readNew = await localApp.request(`/archive/${idNew}`);
+        expect(readNew.status).toBe(200);
+      });
+
+      it('requireContainment: false + sessionIds: 狭めない（安全側）ので old/mid も inUse で守られたまま', async () => {
+        const { idOld, idMid, localApp } = await seedChainOwnedByOneManager();
+
+        const response = await localApp.request(
+          '/archive/remove',
+          json({
+            sessionIds: ['sess-pin-http'],
+            requireContainment: false,
+            reason: '狭めない',
+            dryRun: false,
+          }),
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as {
+          targeted: number;
+          removedIds: string[];
+          skipped: { newest: number; inUse: number };
+        };
+        // `requireContainment: false` は狭め判定を使わない
+        // （`guardArchiveRemoval` の doc「`false` or `undefined` のとき、
+        // 狭めた判定は一切使わない」）——`runningManagerOwning` の全件保護の
+        // まま、old/mid も inUse に落ちて消えない。
+        expect(body.skipped.newest).toBe(1);
+        expect(body.skipped.inUse).toBe(2);
+        expect(body.targeted).toBe(0);
+        expect(body.removedIds).toEqual([]);
+
+        const readOld = await localApp.request(`/archive/${idOld}`);
+        expect(readOld.status).toBe(200);
+        const readMid = await localApp.request(`/archive/${idMid}`);
+        expect(readMid.status).toBe(200);
+      });
     });
 
     it('日誌に理由と消した id が残る', async () => {

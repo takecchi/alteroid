@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ManagerPool } from './manager.js';
 import type { Stores } from './store.js';
@@ -334,5 +334,90 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     // 実状態でも裏を取る。
     expect(await stores.archive.read(chainOld)).toMatchObject({ kind: 'removed' });
     expect(await stores.archive.read(runningOld)).toEqual({ kind: 'body', body: 'AAA' });
+  });
+
+  /**
+   * ⭐ 調査で追加（範囲6）: 応答の文言「**全 id は日誌に N 件に分けて残してある**」
+   * （`hiddenRemoved > 0` のときだけ出る）の逐語どおりの主張を実測で測る——
+   * `inbox-remove-many.test.ts` の「9. 250件を一括で消すと、消した id が
+   * 全部・過不足なく日誌に残る（2件以上に分割）」と同じ手口（`chunkIdsByChars`
+   * の予算 3,600 文字を超えさせて実際に2件以上へ割れさせる）を、この道具
+   * （`archive_remove_many`）に対しても当てる——既存のこの describe には
+   * この形（1呼びで ARCHIVE_REMOVE_MANY_IDS_SHOWN=20 件を超える除去）が
+   * 無かった。
+   */
+  it('多数件（220件）を一括で消すと、消した id が全部・過不足なく日誌に残る（2件以上に分割）', async () => {
+    const stores = createMemoryStores();
+    const ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS_COPY = 3_600;
+    const SESSION_COUNT = 220;
+    // sessionId を意図的に長くする——短い id では 3,600 文字の予算に収まって
+    // しまい「実際に複数の塊に割れること」を確かめられない
+    // （`inbox-remove-many.test.ts` の `managerEventWithUuid` の doc と同じ理由）。
+    //
+    // ⚠️ `at` を明示的に1msずつ進める（`vi.useFakeTimers`）。in-memory の id
+    // （`${sessionId}-連番`）は `archiveIdBranch`（`archive-id.ts`）が解析できず
+    // 常に枝番1へフォールバックするため、`at` が同ミリ秒だと tie-break が id の
+    // 文字列比較に落ち、連番の桁上がり（9→10 等）で old/new の前後が入れ替わる
+    // （実測: 揃えたまま220件回すと2件だけ218/220に減って赤くなった）。
+    vi.useFakeTimers();
+    const baseTime = new Date('2026-01-01T00:00:00.000Z').getTime();
+    let tick = 0;
+    const nextTime = () => {
+      tick += 1;
+      return baseTime + tick;
+    };
+    vi.setSystemTime(nextTime());
+    const oldIds: string[] = [];
+    try {
+      for (let i = 0; i < SESSION_COUNT; i += 1) {
+        const sessionId = `sess-archive-flood-${String(i).padStart(4, '0')}-${'x'.repeat(20)}`;
+        // `seedRemovableSession` を使わず自前で2回叩く——old と new のあいだにも
+        // 時刻を進める必要があるため（上の注記。tie はセッション内の2行の
+        // あいだで起きる）。
+        const oldRow = await stores.archive.archive(sessionId, 'AAA');
+        vi.setSystemTime(nextTime());
+        const newRow = await stores.archive.archive(sessionId, 'AAABBB');
+        vi.setSystemTime(nextTime());
+        expect(newRow.continuity, '前方一致の前提が崩れている（テストの組み立てミス）').toBe(
+          'continues',
+        );
+        oldIds.push(oldRow.id);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const reply = await remover(stores)({
+      minStoredBytes: 0,
+      summary: `${SESSION_COUNT}件を一括で畳んだ`,
+      dryRun: false,
+    });
+
+    expect(reply).toContain('全 id は日誌に');
+
+    const texts = await decisionTexts(stores);
+    expect(texts.length).toBeGreaterThanOrEqual(2);
+
+    const seen = new Set<string>();
+    for (const text of texts) {
+      const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
+      for (const id of idsPart.split(' ')) if (id.length > 0) seen.add(id);
+    }
+    expect(seen.size).toBe(oldIds.length);
+    expect(seen).toEqual(new Set(oldIds));
+
+    for (const text of texts) {
+      const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
+      expect(idsPart.length).toBeLessThanOrEqual(ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS_COPY + 60);
+    }
+
+    // 応答の `N 件に分けて` の N が、実際の日誌のエントリ数と一致すること。
+    const claimed = Number(/全 id は日誌に (\d+) 件に分けて残してある/.exec(reply)?.[1]);
+    expect(claimed).toBe(texts.length);
+
+    // 実状態でも裏を取る——全 old が実際に removed になっていること。
+    for (const id of oldIds) {
+      expect(await stores.archive.read(id)).toMatchObject({ kind: 'removed' });
+    }
   });
 });
