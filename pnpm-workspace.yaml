@@ -92,8 +92,33 @@ catalog:
   # **`dangerouslySetInnerHTML` も HTML 文字列も経由しない**ため。HTML 文字列を
   # 作ってから貼る方式（`marked` + `dangerouslySetInnerHTML` など）は、サニタイズを
   # 足し忘れた瞬間に注入経路になる。react-markdown はその経路自体が無い。
-  # remark-gfm は表・取り消し線・タスクリストなど GFM 拡張のため（AI も日報も
-  # 表を返すことがある）。
+  # GFM（表・取り消し線・タスクリスト・フッターノート・オートリンク。AI も
+  # 日報も表を返すことがある）は `mdast-util-gfm` の `gfmFromMarkdown`（解析）
+  # だけを直接呼ぶ形にしてある（`apps/web/app/components/markdown.tsx` の
+  # `remarkGfmParseOnly`）。**`remark-gfm` パッケージそのものはもう使わない**
+  # —— `remark-gfm`（`node_modules/remark-gfm/lib/index.js` 逐語）は解析
+  # （`gfmFromMarkdown`）と Markdown への書き戻し（`gfmToMarkdown`）の
+  # **両方**を無条件に呼ぶが、`apps/web` の `<Markdown>`（react-markdown）は
+  # 「文字列 → mdast → hast → React 要素」の一方向にしか使わず
+  # `unified().stringify()` を一度も呼ばない。書き戻し側
+  # （`mdast-util-to-markdown` 本体・`markdown-table` を含む）は実行は
+  # されるが結果を誰も読まないのに tree-shaking では削れず、実測でクライアント
+  # JS に ~13KB 乗っていた（2026-09-27 観測、issue #335 系の「大きさそのもの」
+  # の予算 `check:web-bundle-size` に対する対応）。呼んでいる関数は
+  # `remark-gfm` が内部で呼んでいるのと**同じ** `mdast-util-gfm` の
+  # `gfmFromMarkdown()` そのもの（micromark 側は `micromark-extension-gfm` の
+  # `gfm()`）——解析結果（mdast）は1文字も変わらない。独自のパーサ実装は無い。
+  #
+  # **`remark-gfm` はこの2行より下に置かない**（2026-09-27 に削除した）。
+  # `pnpm why remark-gfm -r` で確かめられる通り、この2つの版はもともと
+  # `remark-gfm@4.0.1` が依存していた実体と同じもの（`apps/web` が
+  # `remark-gfm` を直接使っていた頃から解決済みだった版を、そのまま昇格させた
+  # だけ）。**`remark-gfm` を import しているコードはこの repo にもう無い**
+  # （`packages/core/src/manager.ts` などのコメントに版番号の記述が残っているが、
+  # あれは「本番のレンダラの設定を文章で説明している」だけで `import` ではない
+  # —— `grep -rn "from 'remark-gfm'"` で確認済み）。もし将来 `remark-gfm`
+  # 本体（書き戻しも要る用途）が要る箇所ができたら、ここへ '`remark-gfm`:
+  # ^4.0.1' を書き戻すこと。
   #
   # remark-breaks も併せて入れる。素の Markdown は単独の改行を畳んで表示する
   # （半角スペース2つや空行での改行と区別しない）。この画面はこれまで
@@ -107,24 +132,9 @@ catalog:
   # `apps/web/app/components/markdown.test.tsx` の「生 HTML が要素にならない」
   # テストを先に見ること。
   'react-markdown': ^10.1.0
-  'remark-gfm': ^4.0.1
-  'remark-breaks': ^4.0.0
-  # `apps/web` だけは `remark-gfm` パッケージを直接使わない —— `remark-gfm` は
-  # 解析（`gfmFromMarkdown`）と Markdown への書き戻し（`gfmToMarkdown`）の
-  # **両方**を無条件に呼ぶが、`apps/web` の `<Markdown>`（react-markdown）は
-  # 「文字列 → mdast → hast → React 要素」の一方向にしか使わず
-  # `unified().stringify()` を一度も呼ばない。書き戻し側
-  # （`mdast-util-to-markdown` / `markdown-table` を含む）は実行はされるが
-  # 結果を誰も読まないのに tree-shaking では削れず、実測でクライアント JS に
-  # ~13KB 乗っていた（2026-09-27 観測、issue #335 系の「大きさそのもの」の
-  # 予算 `check:web-bundle-size` に対する対応）。`apps/web/app/components/
-  # markdown.tsx` の `remarkGfmParseOnly` が、`remark-gfm` が内部で呼ぶのと
-  # **同じ** `gfmFromMarkdown` / `gfm`（micromark 側）だけを直接呼ぶ——解析結果
-  # は1文字も変わらない。だからここに実体の版が要る（`remark-gfm@4.0.1` が
-  # 依存する版とここで揃える。`packages/core` は引き続き `remark-gfm` 本体
-  # （書き戻しも使う）を使うので、そちらの版はこの2行と無関係）。
   'mdast-util-gfm': ^3.1.0
   'micromark-extension-gfm': ^3.0.0
+  'remark-breaks': ^4.0.0
   # 画面の回帰テスト（描画して操作する分だけ。DOM が要るファイルにだけ jsdom を指定する）
   jsdom: ^30.0.1
   '@testing-library/react': ^16.3.2
