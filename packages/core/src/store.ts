@@ -476,6 +476,31 @@ export interface JobStore {
   listJobs(): Promise<Job[]>;
   putJob(job: Job): Promise<void>;
 
+  /**
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く（Issue #1674）。
+   *
+   * **なぜ要るか。** `listJobs()` で読んでから `putJob()` で書くまでの間に別の
+   * 書き込みが挟まると、その書き込みは古いスナップショットに丸ごと上書きされて
+   * 消える——`ScheduleStore.editRequest`（#1654）が `put()` の read-modify-write
+   * を塞いだのと同じ形の穴であり、`CommitmentStore.open`（#1041）が
+   * 「読んでから書く」をアプリ層から追い出したのとも同じ理由である。**実際に
+   * `ManagerPool.appraise()` の孤児ジョブ分岐（`#records` に像を持たない委譲）が
+   * この形で割り込まれた書き込みを踏み消していた**（Issue #1674 の実測）。
+   *
+   * **`mutate` は同期の関数である。** 区間の中で `await` を挟むと、区間が
+   * 排他している意味そのものが崩れる——fs は `withPathLock`、pg は
+   * `select … for update` で押さえた1つのトランザクションの中でだけ意味を
+   * 持つので、その中で他の I/O を待つと排他の外へ出てしまう
+   * （`CommitmentStore.open` の「判定と書き込みのあいだに `await` を1つも
+   * 挟まないこと」と同じ注意）。
+   *
+   * **無ければ何もせず `null`。`mutate` は呼ばれない**——存在しない行に対して
+   * 書き換えの結果を作らせても、書く先が無い。
+   *
+   * 返すのは書き込んだ後の値。
+   */
+  updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null>;
+
   listApprovals(options?: { pendingOnly?: boolean }): Promise<PendingApproval[]>;
   getApproval(id: string): Promise<PendingApproval | null>;
   putApproval(approval: PendingApproval): Promise<void>;

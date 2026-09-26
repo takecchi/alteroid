@@ -42,6 +42,29 @@ export class FsJobStore implements JobStore {
     });
   }
 
+  /**
+   * 現在の値を排他区間（`withPathLock`）の中で読み直し、`mutate` で書き換えて
+   * 書く（Issue #1674。`JobStore.updateJob` の doc）。**現在値を読むのも書くのも
+   * 同じロックの区間の中**——`schedules.ts` の `editRequest` と同じ形。ここは
+   * `#update`（戻り値を持たない）を共有せず独立させてある——`#update` は
+   * `putApproval` / `clear`（担当が別）も使っているので、戻り値の形を変える
+   * ために触ると、この変更の範囲が承認待ちキューの実装にまで広がってしまう。
+   */
+  async updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null> {
+    return withPathLock(this.#path, async () => {
+      const file = await this.#read();
+      const found = file.jobs.find((entry) => entry.id === id);
+      if (found === undefined) return null;
+      // 同期のまま最後まで書き換える（`mutate` に await を挟ませない——区間の
+      // 外へ出ると排他の意味が崩れる。`CommitmentStore.open` の同じ注意）。
+      const next = jobSchema.parse(mutate(found));
+      const jobs = file.jobs.map((entry) => (entry.id === id ? next : entry));
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(this.#path, `${JSON.stringify({ ...file, jobs }, null, 2)}\n`);
+      return next;
+    });
+  }
+
   async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<PendingApproval[]> {
     const { approvals } = await this.#read();
     // **未回答かつ未取り下げだけを「保留」とする（#963）。** 取り下げも
