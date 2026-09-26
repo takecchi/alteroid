@@ -13,7 +13,7 @@ import type {
   RunnerRegistry,
   RunnerResumeCommand,
 } from './runner-protocol.js';
-import type { InboxEvent, Job, JobLease, WorkspaceLocator } from './schema.js';
+import type { InboxEvent, Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
 /**
@@ -226,18 +226,6 @@ function jobWith(id: string, runnerId: string | undefined, overrides: Partial<Jo
   };
 }
 
-/** まだ TTL の中にある貸し出し（`manager-lease.test.ts` の `leaseHeldBy` の縮小版）。 */
-function recentLease(runnerId: string, fence = 4): JobLease {
-  const now = Date.now();
-  return {
-    runnerId,
-    fence,
-    grantedAt: new Date(now - 2_000).toISOString(),
-    seenAt: new Date(now - 1_000).toISOString(),
-    ttlMs: 10 * 60_000,
-  };
-}
-
 function setup(stores: ReturnType<typeof createMemoryStores>, registry: RunnerRegistry) {
   const inbox: InboxEvent[] = [];
   const pool = createManagerPool({ stores, post: (event) => inbox.push(event), runners: registry });
@@ -302,7 +290,7 @@ describe('vacate の await の間に、同じ委譲が別の runner へ引き取
 
     releaseStop();
     await vacating;
-    return { pool, stores };
+    return { pool, stores, runnerB };
   }
 
   it('新しい runner が握っている貸し出しを返さない', async () => {
@@ -314,11 +302,20 @@ describe('vacate の await の間に、同じ委譲が別の runner へ引き取
     await pool.stop();
   });
 
-  it('動いている委譲を live のままにする（attached を書き換えない）', async () => {
-    const { pool } = await race();
-    const summary = (await pool.list()).find((s) => s.managerId === 'mgr-race');
-    expect(summary?.live).toBe(true);
-    expect(summary?.runnerId).toBe('runner-b');
+  /**
+   * **メモリの上の像にも、解放済みの貸し出しを残さない。** vacate が永続化を見送っても、
+   * 像の貸し出しが書き換わっていると、その委譲について次に誰かが像を永続化した時点で
+   * 解放済みの貸し出しが台帳へ書かれる。ここでは送信（`send`）で像を永続化させる。
+   */
+  it('その後に像が永続化されても、新しい runner の貸し出しは解放済みにならない', async () => {
+    const { pool, stores, runnerB } = await race();
+    await pool.send('mgr-race', '続きを');
+    // **送信は送信のまま届く。** vacate が動いている委譲に `attached = false` を書くと、
+    // 次の送信は resume 扱いになり、runner-b へ余計な resume が飛ぶ。
+    expect(runnerB.resumes).toHaveLength(1);
+    const job = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-race');
+    expect(job?.lease?.runnerId).toBe('runner-b');
+    expect(job?.lease?.releasedAt).toBeUndefined();
     await pool.stop();
   });
 });
