@@ -33,7 +33,10 @@ type AuthFile = z.infer<typeof fileSchema>;
 const EMPTY: AuthFile = { accounts: [], identities: [], accessTokens: [], loginRequests: [] };
 
 /**
- * `createdAt` の**実時刻**昇順で並べる（issue #1676）。
+ * `createdAt` の**実時刻**昇順（issue #1676）。**単独では使わない** ——
+ * `createdAt` が完全に同じ（同着）行どうしの相対順を決めないため（issue
+ * #1688）。並び全体を決めるのは直下の `compareAccountOrder` /
+ * `compareIdentityOrder` / `compareAccessTokenOrder` である。
  *
  * **文字列の `localeCompare` を使わないこと。** `isoDateTime`
  * （`z.string().datetime({ offset: true })`）はオフセット付きの任意の表記を
@@ -42,14 +45,50 @@ const EMPTY: AuthFile = { accounts: [], identities: [], accessTokens: [], loginR
  * pg（`timestamptz` 列に対する `asc()`）は実時刻で比較するので崩れない。
  * 3実装で同じ並びにする（fs / pg のどちらのドライバでも同じ IF を満たす、
  * `AuthStore` の doc）。
- *
- * 同じ実時刻どうしの2次キーは持たない——pg の `orderBy` も2次キーを
- * 持たないので、揃えるものが無い。`Array.prototype.sort` は安定
- * （ties は元の配列順を保つ）なので、この関数を差し込んでも同じ実時刻の
- * 行どうしの相対順は変えない。
  */
 function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): number {
   return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+}
+
+/**
+ * `listAccounts` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
+ *
+ * **2次キーが要る理由**: `putAccount` は「既存行を消して末尾へ足す」形
+ * （直下の doc）なので、`createdAt` が完全に同じ2行のうち片方だけ後から
+ * 更新すると、`compareCreatedAt` だけ（`Array.prototype.sort` は安定）では
+ * 更新されたほうが後ろへ回る——「作成順」ではなく「最後に触られた順」に
+ * なってしまう。`id` は一意なので、これで並びが完全に決まる（pg の
+ * `orderBy(asc(createdAt), asc(id))` と同じ形）。
+ */
+function compareAccountOrder(a: AuthAccount, b: AuthAccount): number {
+  return compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+}
+
+/**
+ * `listIdentities` の並び全体（issue #1688）。
+ * `createdAt` の実時刻 → `provider` → `subject`。
+ *
+ * `(provider, subject)` は一意なので（`AuthStore.putIdentity` の doc）、
+ * これで並びが完全に決まる。2次キーが要る理由は `compareAccountOrder` と
+ * 同じ——`putIdentity` も「既存行を消して末尾へ足す」形である。
+ */
+function compareIdentityOrder(a: AuthIdentity, b: AuthIdentity): number {
+  return (
+    compareCreatedAt(a, b) ||
+    a.provider.localeCompare(b.provider) ||
+    a.subject.localeCompare(b.subject)
+  );
+}
+
+/**
+ * `listAccessTokens` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
+ *
+ * `id` は一意なので、これで並びが完全に決まる。2次キーが要る理由は
+ * `compareAccountOrder` と同じ——`putAccessToken` も「既存行を消して末尾へ
+ * 足す」形である（`lastUsedAt` の書き戻し＝`touch()` だけで動く）。
+ */
+function compareAccessTokenOrder(a: AccessTokenRecord, b: AccessTokenRecord): number {
+  return compareCreatedAt(a, b) || a.id.localeCompare(b.id);
 }
 
 /** 期限切れのログイン要求をいつまでも抱えない（往復用の一時的な行なので）。 */
@@ -76,7 +115,7 @@ export class FsAuthStore implements AuthStore {
 
   async listAccounts(): Promise<AuthAccount[]> {
     const { accounts } = await this.#read();
-    return [...accounts].sort(compareCreatedAt);
+    return [...accounts].sort(compareAccountOrder);
   }
 
   async getAccount(id: string): Promise<AuthAccount | null> {
@@ -108,7 +147,11 @@ export class FsAuthStore implements AuthStore {
     // （直下の doc）、更新されたばかりの identity ほど配列の後ろへ動く——
     // ソートを外すと「作成順」ではなく「最後に触られた順」になる。pg は
     // `createdAt` の `asc()` で並べるので、ここも実時刻昇順に揃える（issue #1676）。
-    return identities.filter((identity) => identity.accountId === accountId).sort(compareCreatedAt);
+    // 同着（createdAt が完全に同じ）の相対順は `provider`/`subject` で決める
+    // （issue #1688。`compareIdentityOrder` の doc）。
+    return identities
+      .filter((identity) => identity.accountId === accountId)
+      .sort(compareIdentityOrder);
   }
 
   async putIdentity(identity: AuthIdentity): Promise<void> {
@@ -142,7 +185,11 @@ export class FsAuthStore implements AuthStore {
     // **明示的に並べる。** `putAccessToken` も既存行を消して末尾へ足す形なので、
     // `lastUsedAt` の書き戻し（`touch()`）だけで作成順が崩れる。pg は `createdAt`
     // の `asc()` で並べるので、ここも実時刻昇順に揃える（issue #1676）。
-    return accessTokens.filter((token) => token.accountId === accountId).sort(compareCreatedAt);
+    // 同着（createdAt が完全に同じ）の相対順は `id` で決める
+    // （issue #1688。`compareAccessTokenOrder` の doc）。
+    return accessTokens
+      .filter((token) => token.accountId === accountId)
+      .sort(compareAccessTokenOrder);
   }
 
   async putLoginRequest(request: LoginRequest): Promise<void> {

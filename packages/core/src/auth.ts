@@ -158,9 +158,18 @@ export type LoginRequestStatus = LoginRequest['status'];
  */
 export interface AuthStore {
   /**
-   * `createdAt` の**実時刻**昇順（issue #1676）。文字列の `localeCompare` で
-   * 並べないこと——`isoDateTime` はオフセット付きの任意の表記を許すので、
-   * 同じ瞬間でも書き方は一意ではなく、文字列比較では実時刻の順が崩れうる。
+   * `createdAt` の**実時刻**昇順、**同着（`createdAt` が完全に同じ）は `id`
+   * で決める**（issue #1676 / #1688）。
+   *
+   * 文字列の `localeCompare` で並べないこと——`isoDateTime` はオフセット
+   * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではなく、文字列比較
+   * では実時刻の順が崩れうる。
+   *
+   * **2次キー（`id`）が要る理由**: `createdAt` だけでは同着行どうしの順が
+   * 決まらない。fs は「既存行を消して末尾へ足す」実装なので、同着の2行の
+   * うち片方だけ後から更新すると安定ソートで順が動く。pg は2次キーの無い
+   * `ORDER BY` では同着の順を保証しない。**挿入順を約束にはしない**——
+   * 3実装とも `id` という明示的な2次キーで並びを完全に決める。
    */
   listAccounts(): Promise<AuthAccount[]>;
   getAccount(id: string): Promise<AuthAccount | null>;
@@ -169,13 +178,20 @@ export interface AuthStore {
   putAccount(account: AuthAccount): Promise<void>;
 
   findIdentity(provider: string, subject: string): Promise<AuthIdentity | null>;
-  /** `createdAt` の実時刻昇順（`listAccounts` の doc と同じ理由。issue #1676）。 */
+  /**
+   * `createdAt` の実時刻昇順、**同着は `provider` → `subject` で決める**
+   * （`listAccounts` の doc と同じ理由。issue #1676 / #1688）。
+   * `(provider, subject)` は一意なので、これで並びが完全に決まる。
+   */
   listIdentities(accountId: string): Promise<AuthIdentity[]>;
   putIdentity(identity: AuthIdentity): Promise<void>;
 
   putAccessToken(token: AccessTokenRecord): Promise<void>;
   findAccessTokenBySha256(sha256: string): Promise<AccessTokenRecord | null>;
-  /** `createdAt` の実時刻昇順（`listAccounts` の doc と同じ理由。issue #1676）。 */
+  /**
+   * `createdAt` の実時刻昇順、**同着は `id` で決める**（`listAccounts` の doc
+   * と同じ理由。issue #1676 / #1688）。
+   */
   listAccessTokens(accountId: string): Promise<AccessTokenRecord[]>;
 
   putLoginRequest(request: LoginRequest): Promise<void>;

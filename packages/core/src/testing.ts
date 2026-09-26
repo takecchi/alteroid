@@ -1025,23 +1025,53 @@ export function createMemoryStores(): Stores {
   const identityKey = (provider: string, subject: string) => `${provider} ${subject}`;
 
   /**
-   * `createdAt` の**実時刻**昇順で並べる（issue #1676。fs 版と同じ理由・同じ形
+   * `createdAt` の**実時刻**昇順（issue #1676。fs 版と同じ理由・同じ形
    * ——`packages/storage-fs/src/auth.ts` の `compareCreatedAt` の doc）。
+   * **単独では使わない**——同着（`createdAt` が完全に同じ）行どうしの相対順
+   * を決めないため（issue #1688）。並び全体を決めるのは直下の
+   * `compareAccountOrder` / `compareIdentityOrder` / `compareAccessTokenOrder`
+   * である。
    *
    * **文字列の `localeCompare` を使わないこと。** `isoDateTime` はオフセット
    * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。文字列比較
    * だとオフセット表記が違う行で実時刻の順が崩れる——pg（`timestamptz` 列の
    * `asc()`）は崩れないので、fs / メモリもここで揃える。
-   *
-   * 2次キーは持たない（pg 側も持たないので、揃えるものが無い）。
-   * `Array.prototype.sort` は安定なので、ties は元の並び（Map の反復順）を保つ。
    */
   const compareCreatedAt = (a: { createdAt: string }, b: { createdAt: string }): number =>
     Date.parse(a.createdAt) - Date.parse(b.createdAt);
 
+  /**
+   * `listAccounts` の並び全体（issue #1688。fs 版と同じ形——
+   * `packages/storage-fs/src/auth.ts` の `compareAccountOrder` の doc）。
+   * `createdAt` の実時刻 → `id`。
+   *
+   * **挿入順を約束にしない。** `Map.set` は既存キーの反復順を動かさないので
+   * 挿入順どおりに見えるが、それは実装の偶然であって契約ではない——pg は
+   * 2次キーの無い `ORDER BY` では同着の順を保証しないので、fs / メモリの
+   * どちらも「Map/配列がたまたまその順だから」ではなく、`id` という明示的な
+   * 2次キーで並びを決める。
+   */
+  const compareAccountOrder = (a: AuthAccount, b: AuthAccount): number =>
+    compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+
+  /**
+   * `listIdentities` の並び全体（issue #1688）。
+   * `createdAt` の実時刻 → `provider` → `subject`。
+   */
+  const compareIdentityOrder = (a: AuthIdentity, b: AuthIdentity): number =>
+    compareCreatedAt(a, b) ||
+    a.provider.localeCompare(b.provider) ||
+    a.subject.localeCompare(b.subject);
+
+  /**
+   * `listAccessTokens` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
+   */
+  const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
+    compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+
   const auth: AuthStore = {
     async listAccounts() {
-      return [...accounts.values()].sort(compareCreatedAt);
+      return [...accounts.values()].sort(compareAccountOrder);
     },
     async getAccount(id) {
       return accounts.get(id) ?? null;
@@ -1056,10 +1086,10 @@ export function createMemoryStores(): Stores {
       return identities.get(identityKey(provider, subject)) ?? null;
     },
     async listIdentities(accountId) {
-      // fs と同じ理由で明示的に並べる（`compareCreatedAt` の doc）。
+      // fs と同じ理由で明示的に並べる（`compareIdentityOrder` の doc）。
       return [...identities.values()]
         .filter((identity) => identity.accountId === accountId)
-        .sort(compareCreatedAt);
+        .sort(compareIdentityOrder);
     },
     async putIdentity(identity) {
       identities.set(identityKey(identity.provider, identity.subject), identity);
@@ -1071,10 +1101,10 @@ export function createMemoryStores(): Stores {
       return [...accessTokens.values()].find((token) => token.sha256 === hash) ?? null;
     },
     async listAccessTokens(accountId) {
-      // fs と同じ理由で明示的に並べる（`compareCreatedAt` の doc）。
+      // fs と同じ理由で明示的に並べる（`compareAccessTokenOrder` の doc）。
       return [...accessTokens.values()]
         .filter((token) => token.accountId === accountId)
-        .sort(compareCreatedAt);
+        .sort(compareAccessTokenOrder);
     },
     async putLoginRequest(request) {
       loginRequests.set(request.id, request);

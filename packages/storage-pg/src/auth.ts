@@ -53,7 +53,13 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listAccounts(): Promise<AuthAccount[]> {
-    const rows = await this.#db.select().from(authAccounts).orderBy(asc(authAccounts.createdAt));
+    // **2次キーに `id` を持つ**（issue #1688）。`createdAt` だけの `ORDER BY` は
+    // 同着（`createdAt` が完全に同じ）行どうしの順を SQL が保証しない
+    // （`AuthStore` の doc「並びの契約」）。
+    const rows = await this.#db
+      .select()
+      .from(authAccounts)
+      .orderBy(asc(authAccounts.createdAt), asc(authAccounts.id));
     return rows.map((row) => this.#toAccount(row));
   }
 
@@ -100,11 +106,17 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listIdentities(accountId: string): Promise<AuthIdentity[]> {
+    // **2次キーに `provider` → `subject` を持つ**（issue #1688。`(provider,
+    // subject)` は一意なので、これで完全に決まった順になる）。
     const rows = await this.#db
       .select()
       .from(authIdentities)
       .where(eq(authIdentities.accountId, accountId))
-      .orderBy(asc(authIdentities.createdAt));
+      .orderBy(
+        asc(authIdentities.createdAt),
+        asc(authIdentities.provider),
+        asc(authIdentities.subject),
+      );
     return rows.map((row) => this.#toIdentity(row));
   }
 
@@ -157,11 +169,13 @@ export class PgAuthStore implements AuthStore {
   }
 
   async listAccessTokens(accountId: string): Promise<AccessTokenRecord[]> {
+    // **2次キーに `id` を持つ**（issue #1688。`id` は一意なので、これで完全に
+    // 決まった順になる）。
     const rows = await this.#db
       .select()
       .from(authAccessTokens)
       .where(eq(authAccessTokens.accountId, accountId))
-      .orderBy(asc(authAccessTokens.createdAt));
+      .orderBy(asc(authAccessTokens.createdAt), asc(authAccessTokens.id));
     return rows.map((row) => this.#toAccessToken(row));
   }
 
