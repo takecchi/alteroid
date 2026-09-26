@@ -144,10 +144,22 @@ export class FsPersonaStore implements PersonaStore {
     return withPathLock(this.#indexPath(), task);
   }
 
-  #path(slug: string): string {
+  /**
+   * slug の形を検査する（issue #1700）。不正なら pg（`#slug()`）と同じ
+   * 文言で投げる。**`#path` だけでなく `protectionStatus` /
+   * `markHumanTouched` / `markCreatedAt` からも直接呼ぶ**——かつてこの3つは
+   * `#path`（＝ `read()` 経由）を通るときにだけ間接的に検査が効いていて、
+   * 索引にエントリが無い形式不正な slug でしか検査を踏まなかった
+   * （実体が既にある slug には効かない偶然の穴があった）。
+   */
+  #checkSlug(slug: string): string {
     const parsed = memorySlugSchema.safeParse(slug);
     if (!parsed.success) throw new Error(`記憶のスラッグが不正: ${slug}`);
-    return join(this.#dir, `${parsed.data}.md`);
+    return parsed.data;
+  }
+
+  #path(slug: string): string {
+    return join(this.#dir, `${this.#checkSlug(slug)}.md`);
   }
 
   /**
@@ -483,6 +495,10 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   async protectionStatus(slug: string): Promise<MemoryProtectionStatus> {
+    // pg / インメモリと同じ検査を直接通す（issue #1700）——索引にエントリが
+    // 無い形式不正な slug は `read()` を経由しないので、ここで検査しないと
+    // 素通りしていた。
+    this.#checkSlug(slug);
     const index = await this.#readIndex();
     const entry = index[slug];
     if (entry?.humanTouchedAt !== undefined) return { kind: 'human' };
@@ -495,6 +511,11 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   async markHumanTouched(slug: string, at: string): Promise<void> {
+    // pg と同じく直接検査する（issue #1700）。**以前はここを検査せず、
+    // 下の `this.read(slug)`（＝ `#path` 経由）が索引にエントリの無い slug
+    // に対してだけ間接的に検査していた**——実体が既にある slug には効かない
+    // 偶然の穴だった。
+    this.#checkSlug(slug);
     await this.#serialize(async () => {
       const index = await this.#readIndex();
       const entry = index[slug];
@@ -513,6 +534,8 @@ export class FsPersonaStore implements PersonaStore {
   }
 
   async markCreatedAt(slug: string, at: string): Promise<boolean> {
+    // pg と同じく直接検査する（issue #1700。`markHumanTouched` と同じ理由）。
+    this.#checkSlug(slug);
     return this.#serialize(async () => {
       const index = await this.#readIndex();
       const entry = index[slug];
