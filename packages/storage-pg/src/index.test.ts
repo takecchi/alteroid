@@ -3857,6 +3857,80 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
     expect(one).not.toContain('OLDEST');
   });
 
+  /**
+   * **境界: 積んだ量がちょうど `maxChars` に達する回でも、古い行を落とさない**
+   * （#1718）。
+   *
+   * `readTail` を消費する唯一の呼び出し側（`clone.ts` の `#pickUpLostSession`
+   * → `tailOf`）は、`transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で
+   * 「切り詰めが要ったか」を判定する。この判定が安全なのは、`readTail` が
+   * 「本文が `maxChars` より長いときは、返す量が `maxChars` を必ず**上回る**」
+   * ことを守っているときだけである（`SessionTranscriptTail.readTail` の
+   * doc「契約」節。`TranscriptArchive.readTail` と同じ強さ）。
+   *
+   * 下は境界をちょうど突く `maxChars` を選んで確かめる（新しい行1本だけで
+   * 累計がちょうど `maxChars` に達するように仕込む——修正前はここで
+   * `chars` がちょうど `maxChars` に達し、返る長さが `maxChars - 1` になって
+   * 古い行を黙って落としていた）。
+   */
+  it('境界: 積んだ量がちょうど maxChars に達する回でも、返る長さは maxChars を上回り、古い行を落とさない', async () => {
+    const tailKey = { projectKey: 'proj', sessionId: 'sess-tail-boundary' };
+    const oldest = { type: 'user' as const, uuid: 'oldest', body: 'OLDEST-MARKER' };
+    const newest = { type: 'assistant' as const, uuid: 'newest', body: '' };
+
+    await stores.sessionStore.append(tailKey, [oldest]);
+    await stores.sessionStore.append(tailKey, [newest]);
+
+    // pg は jsonb に積むときにキーをアルファベット順へ並べ替えるので、期待値も
+    // `JSON.stringify` の素朴な結果ではなくキー順を揃えて計算する。
+    const newestLineLength = JSON.stringify({
+      body: newest.body,
+      type: newest.type,
+      uuid: newest.uuid,
+    }).length;
+    // 新しい行1本だけで累計がちょうど maxChars に達する値を選ぶ
+    // （`chars += line.length + 1` が `maxChars` ちょうどになる）。
+    const maxChars = newestLineLength + 1;
+
+    const tail = await stores.sessionStore.readTail(tailKey, maxChars);
+
+    // 本文（oldest + newest の全量）は maxChars よりずっと長いので、返る量は
+    // maxChars を厳密に上回り、かつ古い行を落としていないこと。
+    expect(tail).not.toBeNull();
+    expect(tail?.length ?? 0).toBeGreaterThan(maxChars);
+    expect(tail).toContain('OLDEST-MARKER');
+  });
+
+  /**
+   * **陰性対照: 全行の合計（区切り込み）が `maxChars` 未満なら、境界判定を
+   * 待たずに全行を返す。**
+   *
+   * 上のテストは「境界ちょうどで止まりすぎない」ことだけを見ているので、
+   * 逆向き（止めるべきときに止まらず、際限なく行を足し続ける）が壊れて
+   * いないことは別に測る必要がある——`chars > maxChars + 1` は「まだ足りない
+   * ときは足す」を変えていないはずだが、それは実装を読んだ判断であって
+   * 測ってはいない。ここで測る。
+   */
+  it('陰性対照: 全行の合計が maxChars 未満なら、全行を返す（境界判定を待たない）', async () => {
+    const tailKey = { projectKey: 'proj', sessionId: 'sess-tail-under-budget' };
+    await stores.sessionStore.append(tailKey, [
+      { type: 'user', uuid: 'u1', body: 'A' },
+      { type: 'assistant', uuid: 'u2', body: 'B' },
+      { type: 'assistant', uuid: 'u3', body: 'C' },
+    ]);
+
+    // 予算を大きく取り、合計が maxChars に遠く及ばないことを確かめたうえで呼ぶ。
+    const maxChars = 10_000;
+    const tail = await stores.sessionStore.readTail(tailKey, maxChars);
+
+    expect(tail).not.toBeNull();
+    expect(tail?.length ?? 0).toBeLessThan(maxChars);
+    expect(tail?.split('\n')).toHaveLength(3);
+    expect(tail).toContain('u1');
+    expect(tail).toContain('u2');
+    expect(tail).toContain('u3');
+  });
+
   it('積んだ順に読み戻せる', async () => {
     await stores.sessionStore.append(key, [
       { type: 'user', uuid: 'u1', timestamp: '2026-08-01T00:00:00.000Z' },
