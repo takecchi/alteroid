@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { formatSystemErrorFacts, formatSystemErrorUnknownNote } from './system-error-format.js';
+
 /**
  * 投げられた例外から、Node が構造として持っている失敗の分類を取り出す。
  *
@@ -124,27 +126,27 @@ export function withSystemErrorNote(
 }
 
 /**
- * D（この軸では判定できなかった）の核となる一文。
+ * D（この軸では判定できなかった）の核となる一文。**クローン向けの指し先
+ * （`本文と lastFailure を見ること`）で固定した形。** 共通部分の組み立ては
+ * `system-error-format.ts` の `formatSystemErrorUnknownNote`（軽い口
+ * `@alteroid/core/system-error-format`。import を1つも持たない）が唯一の
+ * 定義元——ここでは呼ぶだけ。
  *
  * **1箇所にまとめる。** `withSystemErrorNote`（受信箱の本文）と `tools.ts` の
  * `manager_list` / `manager_report`（クローンの一覧・詳細）の3箇所が同じ
  * D の事実を書く——文言が割れると、受信箱で読んだ説明と一覧で読んだ説明が
  * 違う言葉になり、同じ観測結果だと読み手が気づけなくなる（A を D が飲み込ま
- * ないための注意書きも含めて、ここ1本を参照する）。
+ * ないための注意書きも含めて、ここ1本を参照する）。**文言は1文字も変えて
+ * いない**（`formatSystemErrorUnknownNote` への切り出しで移しただけ）。
  */
-export const SYSTEM_ERROR_UNKNOWN_NOTE =
-  '器の資源による落ち方かどうかは、この欄では判定できなかった。' +
-  '枠に当たった場合・セッションが切れた場合もこの欄には出ない —— ' +
-  '本文と lastFailure を見ること';
+export const SYSTEM_ERROR_UNKNOWN_NOTE = formatSystemErrorUnknownNote(' lastFailure を見ること');
 
 /**
- * `code=... errno=... syscall=...` の形に整形する。B（器の資源で落ちた）の
- * 事実を出す全箇所（`withSystemErrorNote` と `tools.ts` の `manager_list` /
- * `manager_report`）で共有し、値の言い換えが起きないようにする。
+ * `formatSystemErrorFacts` の定義そのものは `system-error-format.ts`（軽い口
+ * `@alteroid/core/system-error-format`）へ移した。ここは re-export するだけ
+ * ——既存の import 元（`tools.ts` / 各 `*.test.ts`）を1つも書き換えないため。
+ * **文言・ロジックは1文字も変えていない**（issue #1645 で Web 側がこの関数を
+ * 手で複製していた重複を解消する一環——Web はいまこの軽い口を直接使う。
+ * `apps/web/app/routes/manager-detail.tsx` の doc）。
  */
-export function formatSystemErrorFacts(systemError: SystemErrorFacts): string {
-  const facts = [`code=${systemError.code}`];
-  if (systemError.errno !== undefined) facts.push(`errno=${systemError.errno}`);
-  if (systemError.syscall !== undefined) facts.push(`syscall=${systemError.syscall}`);
-  return facts.join(' ');
-}
+export { formatSystemErrorFacts };
