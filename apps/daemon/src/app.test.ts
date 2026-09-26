@@ -5962,6 +5962,138 @@ describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
   });
 });
 
+/** `findRouteStatusMismatches` が Hono のチェーンとして経路の宣言とみなす、プロパティ名の集合。 */
+const HTTP_METHOD_NAMES_FOR_STATUS_AUDIT = new Set(['get', 'post', 'put', 'delete', 'patch']);
+/** `findRouteStatusMismatches` が「実際にステータスを返す口」とみなす、`c.` のプロパティ名の集合。 */
+const RESPONSE_METHOD_NAMES_FOR_STATUS_AUDIT = new Set(['json', 'html', 'text', 'body']);
+
+interface RouteStatusMismatch {
+  /** `` `${METHOD} ${path}` ``（`path` は配線に書いた元の形——`:provider` のように `{}` へ変換する前）。 */
+  route: string;
+  declared: string[];
+  actual: string[];
+  undeclared: string[];
+}
+
+/**
+ * その経路の呼び出し（1本の `.get(...)` / `.post(...)` 等）の**引数だけ**を
+ * 走査し、`describeRoute({ responses: { <数値>: {...}, ... } })` から宣言済み
+ * ステータスの一覧を拾う。詳細は `describe('OpenAPI', …)` 内の歯の doc を見よ。
+ *
+ * **⚠️ `node`（CallExpression）そのものではなく `node.arguments` から辿ること。**
+ * Hono のチェーン（`base.use(...).get(...).post(...)…`）は、後続の呼び出しの
+ * `CallExpression.expression`（呼び出し先）が**直前までの呼び出し全体**に
+ * なる——`x.a().b()` の `.b()` 呼び出しの `expression` は `x.a()` という
+ * CallExpression そのものである。`node` から素朴に `ts.forEachChild` すると
+ * `node.expression`（＝それより前の経路が全部）まで辿ってしまい、後ろの経路
+ * ほど前の経路の宣言・応答を巻き込んで数える（実測: この巻き込みのせいで、
+ * ある経路の 400 宣言を消しても他の経路の 400 宣言が「巻き込みで見える」ため
+ * 赤くならなかった。`node.arguments` だけを辿るここの実装で直っている）。
+ */
+function collectDeclaredStatuses(node: ts.CallExpression): string[] {
+  const found: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === 'describeRoute' &&
+      n.arguments[0] !== undefined &&
+      ts.isObjectLiteralExpression(n.arguments[0])
+    ) {
+      for (const prop of n.arguments[0].properties) {
+        if (
+          ts.isPropertyAssignment(prop) &&
+          ts.isIdentifier(prop.name) &&
+          prop.name.text === 'responses' &&
+          ts.isObjectLiteralExpression(prop.initializer)
+        ) {
+          for (const responseProp of prop.initializer.properties) {
+            if (ts.isPropertyAssignment(responseProp) && ts.isNumericLiteral(responseProp.name)) {
+              found.push(responseProp.name.text);
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  for (const arg of node.arguments) visit(arg);
+  return found;
+}
+
+/**
+ * その経路の呼び出し（1本ぶん）の**引数だけ**を走査し、`c.json(...)` /
+ * `c.html(...)` / `c.text(...)` / `c.body(...)` へ渡されている、最後の引数が
+ * 数値リテラルのものだけを「実際に返しているステータス」として拾う。詳細は
+ * `describe('OpenAPI', …)` 内の歯の doc（「静的走査の限界」）を見よ。
+ *
+ * **⚠️ `collectDeclaredStatuses` と同じ理由で `node.arguments` だけを辿る。**
+ * `node`（CallExpression）そのものから辿ると、Hono のチェーン構造上
+ * `node.expression` に前の経路の呼び出し全体が入っており、前の経路が返す
+ * ステータスまで「この経路が返した」と誤って数えてしまう。
+ */
+function collectActualStatuses(node: ts.CallExpression): string[] {
+  const found: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === 'c' &&
+      RESPONSE_METHOD_NAMES_FOR_STATUS_AUDIT.has(n.expression.name.text)
+    ) {
+      const last = n.arguments[n.arguments.length - 1];
+      if (last !== undefined && ts.isNumericLiteral(last)) found.push(last.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  for (const arg of node.arguments) visit(arg);
+  return found;
+}
+
+/**
+ * `app.ts` の全経路について、`describeRoute` の宣言ステータスと、ハンドラが
+ * 実際に返すリテラルのステータスを突き合わせ、宣言に無い実際のステータスが
+ * あった経路だけを返す（issue #1633 の再発防止）。
+ */
+function findRouteStatusMismatches(sourceText: string, fileName = 'app.ts'): RouteStatusMismatch[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const mismatches: RouteStatusMismatch[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      HTTP_METHOD_NAMES_FOR_STATUS_AUDIT.has(node.expression.name.text)
+    ) {
+      const method = node.expression.name.text;
+      const firstArg = node.arguments[0];
+      if (firstArg !== undefined && ts.isStringLiteral(firstArg) && firstArg.text.startsWith('/')) {
+        const declared = [...new Set(collectDeclaredStatuses(node))].sort();
+        const actual = [...new Set(collectActualStatuses(node))].sort();
+        const undeclared = actual.filter((status) => !declared.includes(status));
+        if (undeclared.length > 0) {
+          mismatches.push({
+            route: `${method.toUpperCase()} ${firstArg.text}`,
+            declared,
+            actual,
+            undeclared,
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return mismatches;
+}
+
 /**
  * OpenAPI の配信（Issue #20）。
  *
@@ -5971,6 +6103,96 @@ describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
  * 自体が machine-generated で、`pnpm build` のたびに作り直される）。
  */
 describe('OpenAPI', () => {
+  /**
+   * **issue #1633。**
+   *
+   * `GET /auth/:provider/callback` のハンドラは実際に3つの分岐で `400` を
+   * 返す（プロバイダ拒否 `?error=`／`code`・`state` の欠落／`completeLogin`
+   * のエラー）が、`describeRoute` の `responses` には `200` しか宣言して
+   * いなかった。生成物 `apps/daemon/openapi.json` にも `400` は現れて
+   * いなかった。
+   */
+  it('GET /auth/:provider/callback: 実際に返る 400 が openapi.json の宣言にも現れる（issue #1633）', async () => {
+    const response = await app.request('/auth/fake/callback');
+    expect(response.status).toBe(400);
+
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<string, { get?: { responses?: Record<string, unknown> } }>;
+    };
+    const declared = Object.keys(spec.paths['/auth/{provider}/callback']?.get?.responses ?? {});
+    expect(
+      declared,
+      'ハンドラは400を返すのに、describeRouteのresponsesに400が宣言されていない' +
+        '（openapi.jsonにも400が現れない）。実装とspecが食い違っている。',
+    ).toContain('400');
+  });
+
+  /**
+   * **issue #1633 の再発防止。**
+   *
+   * 上のテストは1経路（`GET /auth/:provider/callback`）だけを名指しで見る。
+   * ここは同じ形の見落とし——**ハンドラが実際に返すステータスが
+   * `describeRoute` の `responses` に宣言されていない**——を、`app.ts` の
+   * **全経路**について機械的に突き合わせる。
+   *
+   * ## なぜ正規表現ではなく TypeScript の AST を読むか
+   *
+   * `scripts/require-operator-routes.test.ts` と同じ理由——この repo の
+   * コメントは日本語の説明文の中に3桁の数字が頻出する（「200字で切る」
+   * 「1000件」等）。正規表現で「3桁の数字」を拾うと、コメントの中の数字を
+   * 宣言や実際の応答と誤読する誤陽性の工場になる。AST なら、`describeRoute`
+   * の `responses` オブジェクトの**プロパティ名**と、`c.json`/`c.html`/
+   * `c.text`/`c.body` への**実引数**だけを構文的に見分けられる（コメントは
+   * トリビアなので構文木のノードにならず、最初から数えられない）。
+   *
+   * ## 抽出の条件
+   *
+   * - 経路とみなすのは、プロパティ名が `get`/`post`/`put`/`delete`/`patch`
+   *   の呼び出しで、第1引数が `/` から始まる文字列リテラルのもの
+   *   （`findRouteDeclarations` と同じ条件）。
+   * - 「宣言したステータス」は、その経路の呼び出し全体（`describeRoute` を
+   *   含む）に現れる `responses: { <数値キー>: {...} }` のキー全部。
+   * - 「実際のステータス」は、その経路の呼び出し全体に現れる
+   *   `c.json(...)`/`c.html(...)`/`c.text(...)`/`c.body(...)` の**最後の
+   *   引数**が数値リテラルであるものだけ（`c.json(body, 400)` の形）。
+   *
+   * ## ⚠️ この歯が測っていないこと（静的走査の限界）
+   *
+   * - **リテラルでないステータスは見ない。** `c.json(body, someVariable)`
+   *   のように変数・式でステータスを渡す形は検出できない——実測
+   *   （2026-09-26、`app.ts` の全75経路）では全経路がリテラルの数値で
+   *   ステータスを渡しており見逃しは無かったが、将来リテラルでない形が
+   *   増えたら、この歯は「何も見つからない」まま黙って通り過ぎる。
+   * - **`jsonBody(schema, onInvalid)` ラッパーの中で発生する 400 は見ない。**
+   *   実際に `c.json(onInvalid(...), 400)` を呼ぶコードは `jsonBody` 関数
+   *   定義の中にあり、各経路の呼び出し箇所（このテストが走査する範囲）には
+   *   現れない。この repo で `jsonBody` を使う経路は実測では例外なく
+   *   `describeRoute` に `400` を宣言済みなので見逃しは起きていないが、
+   *   これは「たまたま揃っている」であって、この歯が保証しているわけでは
+   *   ない。
+   * - **ミドルウェア層**（`authenticate`/`requireOperator`/`requireOwner`
+   *   が返す 401/403、`onError` が返す 500）は経路ごとの宣言と紐付けない
+   *   ——この歯が見るのはハンドラ本体が直接返す応答だけである。
+   * - **チェーンに載せていない配線**（`app.get('/openapi.json', ...)` 等）は
+   *   対象外——上の抽出条件に一致しないため、そもそも走査に現れない。
+   */
+  it('describeRoute の宣言ステータスと、ハンドラが実際に返すリテラルのステータスが一致する（#1633 再発防止）', () => {
+    const source = readFileSync(new URL('./app.ts', import.meta.url), 'utf8');
+    const mismatches = findRouteStatusMismatches(source);
+    expect(
+      mismatches,
+      '【赤の意味】以下の経路で、ハンドラが実際に返すステータスが describeRoute の ' +
+        'responses に宣言されていない:\n' +
+        mismatches
+          .map(
+            (m) =>
+              `  ${m.route}: 宣言=${JSON.stringify(m.declared)} ` +
+              `実際=${JSON.stringify(m.actual)} 未宣言=${JSON.stringify(m.undeclared)}`,
+          )
+          .join('\n'),
+    ).toEqual([]);
+  });
+
   /**
    * ⭐ **HTTP の面の description も、同じ族である（#701 / #756）。**
    *
