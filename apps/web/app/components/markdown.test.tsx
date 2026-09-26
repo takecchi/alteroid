@@ -177,19 +177,47 @@ describe('GFM: タスクリスト（チェックボックスが描かれ、操�
 });
 
 describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
-  it('本文中に参照（上付きのリンク）が、末尾に脚注の節が描かれる', async () => {
+  /**
+   * ⚠️ このテストは元々（PR #1671）「`components.a` はカスタムの `<a>` で
+   * `href` と `children` だけを転送するので、hast が持つ `data-footnote-ref` /
+   * `id` は描画に残らない（既存の `a` の実装に由来し、この PR が作った差では
+   * ない）。だからここでは残る側（`href` と表示テキスト）で固定する。」と
+   * 書き、`id` が落ちることを前提として回避していた。
+   *
+   * **その前提が壊れていた** — `id` が無いと、`href="#user-content-fn-1"` は
+   * 実在する要素を指さない（本文の参照を押しても飛ぶ先が無い）。同じ理由で
+   * 戻るリンクも着地先が無い。ここでは「壊れていることを回避する」のをやめ、
+   * **`href` が指す `id` を持つ要素が実際に DOM 内に存在すること**を双方向
+   * （参照 → 脚注、戻るリンク → 参照）で見る。あわせて GFM が脚注に付ける
+   * 属性（`data-footnote-ref` / `data-footnote-backref` / `aria-describedby` /
+   * `aria-label`）と `clobberPrefix`（`user-content-`）が保たれることも見る。
+   */
+  it('本文中の参照と末尾の脚注が、id で相互に辿れる（死んだリンクにならない）', async () => {
     const md = ['Here is a note[^1].', '', '[^1]: The note text.'].join('\n');
     const { container } = render(<Markdown>{md}</Markdown>);
 
     // 本文中の参照（上付きの「1」へのリンク）。
-    // ⚠️ `components.a` はカスタムの `<a>` で `href` と `children` だけを
-    // 転送するので、hast が持つ `data-footnote-ref` / `id` は描画に残らない
-    // （既存の `a` の実装に由来し、この PR が作った差ではない）。だから
-    // ここでは残る側（`href` と表示テキスト）で固定する。
     const ref = container.querySelector('sup a');
     expect(ref).not.toBeNull();
     expect(ref?.getAttribute('href')).toBe('#user-content-fn-1');
     expect(ref?.textContent).toBe('1');
+
+    // 参照自身が clobberPrefix 付きの id を持ち、GFM の脚注属性を保つこと。
+    expect(ref?.getAttribute('id')).toBe('user-content-fnref-1');
+    expect(ref?.getAttribute('data-footnote-ref')).toBe('true');
+    expect(ref?.getAttribute('aria-describedby')).toBe('footnote-label');
+
+    // 押した先（href が指す id）が実在すること。無いと「死んだリンク」になる。
+    const refTargetId = ref!.getAttribute('href')!.slice(1);
+    const refTarget = container.querySelector(`#${refTargetId}`);
+    expect(refTarget).not.toBeNull();
+    expect(refTarget?.tagName).toBe('LI');
+
+    // aria-describedby が指す footnote-label も実在すること
+    // （見出し用の `heading()` も `id` を落とすと、ここが宙に浮く）。
+    const label = container.querySelector('#footnote-label');
+    expect(label).not.toBeNull();
+    expect(label?.textContent).toBe('Footnotes');
 
     // 末尾の脚注の節（`section` は components で上書きしていないので
     // `data-footnotes` 属性がそのまま残る）。
@@ -197,13 +225,21 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
     expect(section).not.toBeNull();
     expect(section?.textContent).toContain('Footnotes');
     expect(section?.textContent).toContain('The note text.');
+    expect(section).toBe(refTarget?.closest('section'));
 
-    // 脚注から本文へ戻るリンク（同じ理由で `data-footnote-backref` は
-    // 残らないので、`href` と表示テキスト「↩」で固定する）。
+    // 脚注から本文へ戻るリンク。
     const backref = section?.querySelector('a');
     expect(backref).not.toBeNull();
     expect(backref?.getAttribute('href')).toBe('#user-content-fnref-1');
     expect(backref?.textContent).toBe('↩');
+    expect(backref?.getAttribute('data-footnote-backref')).toBe('');
+    expect(backref?.getAttribute('aria-label')).toBe('Back to reference 1');
+
+    // 戻るリンクの押した先（本文の参照そのもの）が実在すること。
+    const backrefTargetId = backref!.getAttribute('href')!.slice(1);
+    const backrefTarget = container.querySelector(`#${backrefTargetId}`);
+    expect(backrefTarget).not.toBeNull();
+    expect(backrefTarget).toBe(ref);
   });
 });
 
