@@ -149,21 +149,37 @@ const HEADINGS = {
 type HeadingTag = keyof typeof HEADINGS;
 
 /**
- * `id` だけは通す。GFM の脚注節は見出し（既定 `h2`）に
+ * `id` は常に通す。GFM の脚注節は見出し（既定 `h2`）に
  * `id="footnote-label"` を付け、本文の参照・戻るリンクの
  * `aria-describedby="footnote-label"` がそれを指す
  * （`mdast-util-to-hast` の `lib/footer.js` の `footnoteLabelTagName` /
  * `footnoteLabelProperties`）。`id` を落とすと、その参照先が無くなる。
- * **`className` は渡さない** — 見出しの見た目はこの部品が決めるものであって
- * Markdown 側の任意のクラスに揺らがせない（脚注節の見出しに付く
- * `sr-only` も同じ理由で渡していない。視覚的には通常の見出しと同じ大きさで
- * 見える——リンクの生死には関わらない差として残す）。
+ *
+ * **`className` は丸ごとは渡さない** — 見出しの見た目はこの部品が決めるもので
+ * あって Markdown 側の任意のクラスに揺らがせない。**ただし `sr-only` だけは
+ * 例外で通す** — `mdast-util-to-hast` の同じ `lib/footer.js` が脚注節の
+ * 見出しに既定で `className: ['sr-only']` を付けており（画面には出さず
+ * スクリーンリーダーだけに読ませる意図）、これを無視すると本来隠すはずの
+ * 見出しが通常の見出し（`HEADINGS[tag]` の見た目）として画面に出てしまう。
+ * 受け取った `className` に `sr-only` というトークンが含まれるときだけ、
+ * この部品の見た目のクラスの代わりに `sr-only` 単体を付ける——他のクラスは
+ * 通さない。`sr-only` は Tailwind の組み込みユーティリティで、この repo でも
+ * 既に `shadcn/sheet.tsx` / `drawer.tsx` で使っている。
  */
 function heading(tag: HeadingTag) {
-  return function Heading({ id, children }: { id?: string; children?: ReactNode }) {
+  return function Heading({
+    id,
+    className,
+    children,
+  }: {
+    id?: string;
+    className?: string;
+    children?: ReactNode;
+  }) {
     const Tag = tag;
+    const isScreenReaderOnly = (className ?? '').split(/\s+/).includes('sr-only');
     return (
-      <Tag id={id} className={HEADINGS[tag]}>
+      <Tag id={id} className={isScreenReaderOnly ? 'sr-only' : HEADINGS[tag]}>
         {children}
       </Tag>
     );
