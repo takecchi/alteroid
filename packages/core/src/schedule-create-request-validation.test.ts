@@ -20,6 +20,25 @@ import { createCloneMcpServer, MCP_INPUT_VALIDATION_ERROR_MARKER } from './tools
  * `.min(1)` は道具の入力スキーマの側に足したので、それが効くのを見るには
  * 本物の MCP の往復（`tools/call`）を通す必要がある——ここではそれを
  * 最小限に自前で組む（`tool-arguments.test.ts` と同じ手）。
+ *
+ * ## 追記（#1651 の後始末。PR #1656 のクロスレビュー指摘）
+ *
+ * #1656 は上の `.min(1)` を**道具の入力スキーマ**（`z` の shape）に足した。
+ * これは SDK の `tool()` がハンドラを呼ぶ**前**に検証するので、保存層には
+ * 届かなくなった（この点は直っている）——が、失敗時の応答が兄弟の欄
+ * （`kind` など。ハンドラの先頭で `safeParse` して日本語の平文を返す）とは
+ * 別の形になった。SDK が投げる `McpError` を素通しした結果、
+ * `MCP_INPUT_VALIDATION_ERROR_MARKER`（`Input validation error: Invalid
+ * arguments for tool …`）に続く**英語の zod の JSON**がそのまま返る。
+ * 下の最初の `it` は、直す前（#1656 の実装のまま）は
+ * `MCP_INPUT_VALIDATION_ERROR_MARKER` を含む・`isError: true` を期待して
+ * いたが、ここでは**期待を反転**させ、`kind` と同じ形（ハンドラの先頭で
+ * 弾く・日本語の平文・`isError` は立てない）を期待するよう書き換えた
+ * （AGENTS.md「テストを弱めずに直す」——テストは消さず、保存層に届かない
+ * ことを見る保証はそのまま。弱くなっていないのは、以前は「マーカー付きの
+ * 英語のエラーが返ること」しか保証していなかったのに対し、今回は「日本語
+ * の平文が返ること」に加えて「保存層を1文字も呼ばないこと」の両方を保証
+ * する点である）。
  */
 
 interface Rpc {
@@ -96,7 +115,7 @@ async function callTool(
 }
 
 describe('schedule_create — request が空文字のときの扱い（issue #1651）', () => {
-  it('空文字の request は保存層を呼ぶ前に弾かれる（MCP 入力検査で落ちる）', async () => {
+  it('空文字の request は保存層を呼ぶ前に弾かれ、日本語の平文で返る（英語の zod の JSON を返さない）', async () => {
     const stores = createMemoryStores();
     const rpc = await connect(stores);
 
@@ -106,9 +125,14 @@ describe('schedule_create — request が空文字のときの扱い（issue #16
       everyMinutes: 60,
     });
 
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    // **兄弟の欄（`kind` など）と同じ形。** ハンドラの先頭で弾き、
+    // `isError` は立てず、日本語の平文だけを返す。SDK の入力検証に
+    // 弾かれて英語の zod の JSON がそのまま返る形（マーカー付き）には
+    // ならない。
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
     expect(result.text).toContain('request');
+    expect(result.text).toContain('空');
 
     // **保存層に触れていないことの直接の証拠。** ハンドラが実行されていれば
     // `stores.schedules.put(plan)` まで届き、メモリ実装は検査を持たないので
@@ -130,5 +154,30 @@ describe('schedule_create — request が空文字のときの扱い（issue #16
     expect(result.isError, result.text).toBe(false);
     const stored = await stores.schedules.get('probe');
     expect(stored?.request).toBe('定期的に確認する');
+  });
+
+  it('空文字の request の応答は、不正な kind の応答と同じ形（マーカー無し・isError 無し）である', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+
+    const emptyRequest = await callTool(rpc, 'schedule_create', {
+      kind: 'probe',
+      request: '',
+      everyMinutes: 60,
+    });
+    const invalidKind = await callTool(rpc, 'schedule_create', {
+      kind: 'ダメな名前',
+      request: '定期的に確認する',
+      everyMinutes: 60,
+    });
+
+    // **形（shape）を比較する——文言の一致は求めない。** 直す前は
+    // `emptyRequest` だけが `isError: true` かつ英語の zod の JSON
+    // （マーカー付き）で、`invalidKind` は `isError` を立てない日本語の
+    // 平文だった。この非対称が今回の指摘の芯である。
+    expect(emptyRequest.isError).toBe(invalidKind.isError);
+    expect(emptyRequest.text.includes(MCP_INPUT_VALIDATION_ERROR_MARKER)).toBe(
+      invalidKind.text.includes(MCP_INPUT_VALIDATION_ERROR_MARKER),
+    );
   });
 });
