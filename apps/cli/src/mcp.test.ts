@@ -140,6 +140,28 @@ describe('alteroid mcp list', () => {
     expect(sent).toEqual([{ method: 'GET', path: '/mcp-servers', body: undefined }]);
   });
 
+  /**
+   * 🔴 **password だけの userinfo（`https://:秘密@host`）も伏せる**（issue #1622）。
+   * Web の一覧と同じ穴で、`username` だけを見る判定ではこの形が素通りしていた。
+   */
+  it('password だけの userinfo の宛先も伏せ、秘密を出さない', async () => {
+    setReply('GET', '/mcp-servers', {
+      status: 200,
+      body: {
+        mcpServers: {
+          passwordOnly: { type: 'http', url: `https://:${SECRET}@mcp.example.com/mcp` },
+        },
+      },
+    });
+    const read = captureStdout();
+
+    await mcpListCommand();
+
+    const text = read();
+    expect(text).toContain('  passwordOnly  http  https://mcp.example.com/mcp?***');
+    expect(text).not.toContain(SECRET);
+  });
+
   it('置かれていなければ、無いことと置き方を言う', async () => {
     setReply('GET', '/mcp-servers', { status: 200, body: { mcpServers: {} } });
     const read = captureStdout();
@@ -367,6 +389,7 @@ describe('伏せ方と読み方', () => {
     expect(maskUrl('https://example.com/mcp')).toBe('https://example.com/mcp');
     expect(maskUrl('https://example.com/mcp?token=x')).toBe('https://example.com/mcp?***');
     expect(maskUrl('https://u:p@example.com/mcp')).toBe('https://example.com/mcp?***');
+    expect(maskUrl('https://:p@example.com/mcp')).toBe('https://example.com/mcp?***');
     expect(maskUrl('https://example.com/mcp#k')).toBe('https://example.com/mcp?***');
     expect(maskUrl('not a url with secret')).toBe('***');
   });
