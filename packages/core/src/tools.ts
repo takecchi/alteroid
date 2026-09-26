@@ -18,6 +18,7 @@ import {
   resolveCommitmentCursor,
 } from './commitment-cursor.js';
 import { isCronExpression } from './cron.js';
+import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
 import {
   describeUnreadableJournalTimeBoundary,
@@ -11569,7 +11570,11 @@ function compareManagerAttention(a: ManagerSummary, b: ManagerSummary): number {
 function describeManagerCounts(managers: readonly ManagerSummary[]): string {
   const live = managers.filter((m) => m.live).length;
   const parts = [`全 ${managers.length} 本`];
-  const running = managers.filter((m) => m.status === 'running');
+  // **`m.status === 'running'` を直書きしない**（9回目の横断レビュー指摘。
+  // `job-status-running.ts` の doc）——`waiting_human` は「返事待ち」として
+  // 下で別に数えるので、ここへ混ぜない。直書きのままだと、将来「実行中」を
+  // 意味する新しい値が足されてもこの行の件数からだけ静かに漏れる。
+  const running = managers.filter((m) => isRunningJobStatus(m.status));
   if (running.length > 0) {
     const reachable = running.filter((m) => m.live).length;
     parts.push(`走行中 ${running.length} 本（うち話しかけられる ${reachable} 本）`);
