@@ -1,4 +1,4 @@
-import { captureStderr } from '@alteroid/core';
+import { captureStderr, listRunnerManagers } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createHttpRunner } from './runner-client.js';
@@ -93,7 +93,7 @@ describe('HttpRunner#listWithUnreadable() は、読めなかった委譲の mana
     });
 
     const listing = await captureStderr(async () => {
-      const result = await client.listWithUnreadable();
+      const result = await listRunnerManagers(client);
       expect(result.states.map((m) => m.managerId)).toEqual(['mgr-ok']);
       expect(result.unreadableIds).toEqual(['mgr-future']);
     });
