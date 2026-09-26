@@ -11,7 +11,6 @@ import type {
   RunnerProfileFingerprint,
   RunnerProfileResult,
   RunnerRegistry,
-  RunnerResumeCommand,
 } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
 import { createMemoryStores } from './testing.js';
