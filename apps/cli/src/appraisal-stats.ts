@@ -40,7 +40,9 @@ export async function appraisalStatsCommand(): Promise<void> {
   const response = await client['appraisal-stats'].$get();
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
-    stdout.write(`${described ?? `評定の内訳を読めませんでした（HTTP ${String(response.status)}）`}\n`);
+    stdout.write(
+      `${described ?? `評定の内訳を読めませんでした（HTTP ${String(response.status)}）`}\n`,
+    );
     return;
   }
   const body = await response.json();

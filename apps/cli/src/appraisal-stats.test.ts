@@ -18,16 +18,15 @@ import { captureStdout } from './test-support.js';
  * 経由で `fetch` を叩くので、`permission.test.ts` / `interrupt.test.ts` と同じ
  * スタブで足りる。
  */
-vi.mock('./target.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./target.js')>()),
-  resolveTarget: () =>
-    Promise.resolve({
-      baseUrl: 'http://127.0.0.1:4517',
-      headers: {},
-      note: null,
-      remote: false,
-    }),
-}));
+vi.mock('./target.js', async () => {
+  const actual = await vi.importActual<typeof import('./target.js')>('./target.js');
+  return {
+    ...actual,
+    resolveTarget: vi.fn(() =>
+      Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
+    ),
+  };
+});
 
 const { appraisalStatsCommand } = await import('./appraisal-stats.js');
 const target = await import('./target.js');
