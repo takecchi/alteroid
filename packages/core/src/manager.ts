@@ -924,6 +924,25 @@ export interface ManagerDenial {
   reason?: string;
   /** {@link reasonType} と対。doc は同じ。 */
   message?: string;
+  /**
+   * この道具×層を**最後に止めた**ときの、拒否より前に見た入力の先頭
+   * （issue #1105）。`lastAt` / {@link reasonType} と同じ「最新1件」。
+   *
+   * **出所は `reasonType` とは違う。** SDK の拒否の合図が運んだ値では
+   * なく、runner の `#onPreToolUse` が拒否より前に見た入力を伏せて切った
+   * もの（`runner-protocol.ts` の `permission_denied.inputHead` の doc）。
+   * 伏せ字済み・最大160字。
+   *
+   * **取れていない欄はキーごと省く。** `via: 'result'` の拒否・旧い
+   * runner・`PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT` で先に忘れられた回は
+   * 欠ける——欠けた理由をここから読み分けることはできない（`reasonType`
+   * の doc と同じ、取れていないことは「そういう理由で取れていない」と
+   * まで言えない規則）。
+   *
+   * **`/managers` へは流さない**（{@link reasonType} の doc と同じ判断。
+   * `managerDenialSchema` が宣言していないので `.parse()` が落とす）。
+   */
+  inputHead?: string;
 }
 
 /**
@@ -1012,16 +1031,19 @@ function decodeDenialKey(key: string): { tool: string; actor: 'manager' | 'worke
 
 /**
  * `denied` / `deniedLastAt` と同じ鍵（`denialKey`）が持つ、**最後に止められた
- * ときの分類・理由・拒否文**（issue #1105）。
+ * ときの分類・理由・拒否文・入力の先頭**（issue #1105）。
  *
  * **値ではなく、`case 'permission_denied':` が journal へ既に書いている
- * ものと同じ3値・同じ欠落規則。** 取れていない欄はキーごと持たない
- * （`denialDetails` と同じ——作り物を出さない）。
+ * ものと同じ3値・同じ欠落規則、それに `inputHead`（`event.inputHead`。
+ * journal へは書かない——`case 'permission_denied':` の doc）を足した4値。**
+ * 取れていない欄はキーごと持たない（`denialDetails` と同じ——作り物を
+ * 出さない）。
  */
 interface DenialReasonSnapshot {
   reasonType?: string;
   reason?: string;
   message?: string;
+  inputHead?: string;
 }
 
 /**
@@ -1034,11 +1056,13 @@ function denialReasonSnapshotOf(event: {
   reasonType?: string;
   reason?: string;
   message?: string;
+  inputHead?: string;
 }): DenialReasonSnapshot | undefined {
   const snapshot: DenialReasonSnapshot = {
     ...(event.reasonType === undefined ? {} : { reasonType: event.reasonType }),
     ...(event.reason === undefined ? {} : { reason: event.reason }),
     ...(event.message === undefined ? {} : { message: event.message }),
+    ...(event.inputHead === undefined ? {} : { inputHead: event.inputHead }),
   };
   return Object.keys(snapshot).length === 0 ? undefined : snapshot;
 }
@@ -5387,6 +5411,7 @@ class Pool implements ManagerPool {
         ...(reason?.reasonType === undefined ? {} : { reasonType: reason.reasonType }),
         ...(reason?.reason === undefined ? {} : { reason: reason.reason }),
         ...(reason?.message === undefined ? {} : { message: reason.message }),
+        ...(reason?.inputHead === undefined ? {} : { inputHead: reason.inputHead }),
       };
     });
   }
@@ -9324,11 +9349,64 @@ class Pool implements ManagerPool {
       }
 
       case 'settled': {
+        // **消える前に取る（Issue #1586）。** `record.waiting` から外す前に
+        // 該当行の `summary` を控えておく——`withdrawn` の journal に「何の
+        // 確認だったか」を残すのに要る。`stopped` の後に届いた回は `abort()`
+        // が既に `record.waiting = []` で空にしていることがあり、そのときは
+        // 拾えない（拾えなかったことも journal に書く）。
+        const pendingSummary = record.waiting.find(
+          (item) => item.requestId === event.requestId,
+        )?.summary;
+
+        // **止めたマネージャーの `waiting`/`status` を、遅れて届いた `settled`
+        // で動かしてしまわないか——ここは `case 'report'` / `case 'ask'` と
+        // 違って、専用のガードを足していない。理由: `record.job.status` が
+        // `'stopped'` のとき（＝ `abort()` 経由）、`abort()` は同じ呼びの中で
+        // `record.waiting` も `[]` にしている（このファイルの `abort()` の
+        // 該当箇所）。**`'stopped'` と `'waiting_human'` は同じ欄の別の値な
+        // ので同時に成り立たない**——下の `record.job.status === 'waiting_human'`
+        // という条件そのものが、`'stopped'` から `'running'` へ甦らせる余地を
+        // 持たない。`case 'ask'` に専用ガードが要るのは「押し込む」操作
+        // （`waiting` を増やす）を止める必要があるからで、こちらは「外す」
+        // 操作（減らす／変えない）しかしないので、同じ形のガードを足しても
+        // 観測できる差が無い（足しても検出できないテストしか書けない、と
+        // いう歯を書いて確かめた——Issue #1586 の PR 本文に記載）。
+        //
+        // **ただし `withdrawn` の記録は、この判定と無関係に残す**——「答えが
+        // 届いていない」という事実は、止めた後に分かったのでも変わらない
+        // （`case 'report'` の R4 分岐が「日誌にだけは残す」のと同じ考え方）。
         record.waiting = record.waiting.filter((item) => item.requestId !== event.requestId);
         if (record.job.status === 'waiting_human' && record.waiting.length === 0) {
           record.job.status = 'running';
         }
         await this.#persist(record);
+
+        // **`withdrawn` が付いた回だけ日誌へ残す（Issue #1586）。**
+        // `#settleAll`（畳むときに未決の確認を deny で解く経路）だけがこれを
+        // 立てる——`answer()`（クローンの回答）はここへ来ない
+        // （`runner.ts` の `#settleAll` の doc）。
+        //
+        // **`escalation` を再利用し、新しい種別は作らない。** `case 'ask'` が
+        // 開いたときの1行と同じ `approvalId`（＝ `event.requestId`）へ、
+        // 「取り下げ」という終端を**別の新しい行**として積む——
+        // `withdrawnAt`/`withdrawnReason` は元々クローン自身の
+        // `approval_withdraw`（`tools.ts`）向けだったが、`schema.ts` の
+        // `escalation.approvalId` の doc が言うとおり「承認待ちキューの項目
+        // id、またはマネージャーの確認1件の id」の両方を受ける欄なので、
+        // 形はそのまま流用できる（`escalation.withdrawnAt` の doc に、この
+        // 2つ目の書き手を追記した）。
+        if (event.withdrawn !== undefined) {
+          await this.#journal({
+            type: 'escalation',
+            question: pendingSummary ?? '（不明 — 台帳の該当行が settled より先に消えていた）',
+            approvalId: event.requestId,
+            managerId: event.managerId,
+            withdrawnAt: new Date().toISOString(),
+            withdrawnReason:
+              `この確認への答えは CLI へ届いていない（セッションを畳んだため）。` +
+              `理由: ${event.withdrawn.reason}`,
+          });
+        }
         return;
       }
 
@@ -9654,6 +9732,20 @@ class Pool implements ManagerPool {
             (inputShape !== undefined && inputShape.includes('先頭の語=')
               ? '（「先頭の語」は入力コマンドの先頭の単語であって、拒否の原因ではない）'
               : '') +
+            // **`inputHead`（issue #1105）は無いものを作り物で埋めない。**
+            // 欠ける回（旧い runner・`toolUseId` が取れなかった・控えが上限で
+            // 先に忘れられた）は、これまでどおり上の「形」だけで案内する。
+            // **出所を明記する** —— この拒否の合図自体が運んだ値ではなく、
+            // 同じ `tool_use_id` で runner の `PreToolUse` フックが拒否より
+            // 前に見た値であることを、読む側が誤解しないようにする
+            // （`runner-protocol.ts` の `permission_denied.inputHead` の doc）。
+            // `codeSpan()` で包む理由は `inputShape` と同じ——この本文は
+            // Markdown として描かれる面へ埋め込まれる（`markdown-span.ts`）。
+            (event.inputHead === undefined
+              ? ''
+              : `\n拒否より前に見た入力の先頭（伏せ字・最大160字。この拒否の合図自体が` +
+                `運んだ値ではなく、同じ tool_use_id で runner の \`PreToolUse\` フックが` +
+                `拒否より前に見た値である）: ${codeSpan(event.inputHead)}`) +
             '\n全件は日誌に残っている（`journal_read` で辿れる）。',
         );
         return;

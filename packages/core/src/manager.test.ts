@@ -2632,6 +2632,17 @@ function swappableRunner(runnerId = 'runner-primary') {
       emit?.({ type: 'ask', managerId, requestId, kind, summary, askedAt });
     },
     /**
+     * 確認が解けた、と伝える（`ask` の対）。**`withdrawn` を渡さなければ
+     * これまでどおり**（クローンの回答・マネージャー側中断と同じ形）。
+     * `withdrawn` を渡すと `#settleAll` が畳むときに deny で解いた経路
+     * （Issue #1586）を模す——`case 'settled'` はこのときだけ日誌へ残す。
+     */
+    settled(managerId: string, requestId: string, withdrawn?: { reason: string }) {
+      const session = state.alive.find((s) => s.managerId === managerId);
+      if (session) session.waiting = session.waiting.filter((w) => w.requestId !== requestId);
+      emit?.({ type: 'settled', managerId, requestId, ...(withdrawn ? { withdrawn } : {}) });
+    },
+    /**
      * マネージャーの1ターンが終わって報告が上がる。
      *
      * `fields` は `contentless` / `failure` / `reportId`（#206）/ `unreported`
@@ -2680,14 +2691,22 @@ function swappableRunner(runnerId = 'runner-primary') {
     /**
      * 確認へ上げずにその場で止められた（分類器・deny 規則）。
      *
-     * `fields` は `actor` / `reasonType` / `reason` / `message`（issue #1105）を
-     * 差し込むための口（`report` の `fields` と同じ作法）。**渡さなければ4つとも
-     * 省略される既存の振る舞いのまま**なので、他のテストの挙動は1つも変わらない。
+     * `fields` は `actor` / `reasonType` / `reason` / `message` / `inputHead`
+     * （issue #1105。`inputHead` は #1105 の後半——`runner.ts` の
+     * `#onPreToolUse` が拒否より前に見た入力の先頭）を差し込むための口
+     * （`report` の `fields` と同じ作法）。**渡さなければ5つとも省略される
+     * 既存の振る舞いのまま**なので、他のテストの挙動は1つも変わらない。
      */
     denied(
       managerId: string,
       tool: string,
-      fields: { actor?: string; reasonType?: string; reason?: string; message?: string } = {},
+      fields: {
+        actor?: string;
+        reasonType?: string;
+        reason?: string;
+        message?: string;
+        inputHead?: string;
+      } = {},
     ) {
       emit?.({
         type: 'permission_denied',
@@ -5695,6 +5714,54 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
     await s.pool.stop();
   });
 
+  /**
+   * **`settled` は `report` / `ask` と少し違う——今回 `withdrawn` が付いた
+   * ときだけ日誌に残す（Issue #1586）。だから R4 の2本は「日誌には残る」と
+   * 「クローン・status は動かない」に加えて、withdrawn の中身が読める形で
+   * 残ることまで確かめる。** `record.job.status === 'stopped'` の後に届いても
+   * 記録は失われない、というのがこの2本の要点そのものである。
+   */
+  it('settled イベント（withdrawn 付き）は日誌には残る（捨てない）', async () => {
+    const { s, fake } = await stopped();
+
+    fake.settled(job.id, 'req-after-stop', {
+      reason: '止めたはずなのに畳まれたと言ってきた',
+    });
+
+    await journalHas(s, '止めたはずなのに畳まれたと言ってきた', ['escalation']);
+
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      approvalId?: string;
+      managerId?: string;
+      withdrawnAt?: string;
+      withdrawnReason?: string;
+    }[];
+    const entry = escalations.find((e) => e.approvalId === 'req-after-stop');
+    expect(entry?.managerId).toBe(job.id);
+    expect(typeof entry?.withdrawnAt).toBe('string');
+    expect(entry?.withdrawnReason).toContain('CLI へ');
+    expect(entry?.withdrawnReason).toContain('止めたはずなのに畳まれたと言ってきた');
+
+    await s.pool.stop();
+  });
+
+  it('settled イベント（withdrawn 付き）はクローンへは回らず、status も waiting も動かない', async () => {
+    const { s, fake } = await stopped();
+    const postedBefore = s.inbox.length;
+
+    fake.settled(job.id, 'req-after-stop-2', {
+      reason: '止めたはずなのに畳まれたと言ってきた（2）',
+    });
+    await settleAfterJournal(s, '止めたはずなのに畳まれたと言ってきた（2）', ['escalation']);
+
+    expect(s.inbox.length).toBe(postedBefore);
+    const listed = (await s.pool.list()).find((m) => m.managerId === job.id);
+    expect(listed?.status).toBe('stopped');
+    expect(listed?.waiting).toEqual([]);
+
+    await s.pool.stop();
+  });
+
   it('closed(failed) イベントは日誌には載るが、クローンへは回らず status も動かない', async () => {
     const { s, fake } = await stopped();
     const postedBefore = s.inbox.length;
@@ -5776,6 +5843,113 @@ describe('止めたマネージャーの後続イベント（R4）', () => {
         timeout: 2000,
       })
       .toBe('lost');
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **Issue #1586: `settled` に `withdrawn` が付いた回だけ日誌へ1行残す。**
+ *
+ * `#settleAll`（畳むときに未決の確認を deny で解く経路）が解いた回は、SDK
+ * （`@anthropic-ai/claude-agent-sdk@0.3.282`）の内部実装により、その deny が
+ * CLI へ一度も書き込まれない（`runner.ts` の `#settleAll` の doc）。**記録
+ * だけは残る**（`settled` イベントの emit・台帳の `waiting` からの除去）ので、
+ * 後から日誌・台帳を読む人間には「確認は答えられた」ように見えてしまう
+ * ——実際には CLI 側は答えを受け取っていない。この2本は、`withdrawn` の
+ * 有無で日誌への記録が分かれることを固定する（付いていないとき——クローンの
+ * 回答・マネージャー側中断——はこれまでどおり何も残らない）。
+ */
+describe('Issue #1586: settled(withdrawn) を日誌へ残す（畳むときに CLI へ届かなかった deny の記録）', () => {
+  const runningJob = {
+    id: 'mgr-running',
+    managerId: 'mgr-running',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T01:00:00.000Z',
+    status: 'running' as const,
+    summary: '移行作業',
+    request: 'DB の移行をやって',
+    cwd: '/work/project',
+    sessionId: 'sess-1586',
+    runnerId: 'runner-primary',
+  };
+
+  it('withdrawn 付きの settled は、requestId・summary・届いていないこと・reason が読める1行として日誌に残る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    fake.ask('mgr-running', 'req-1', 'Bash の実行許可: rm -rf /tmp/x');
+    await expect
+      .poll(
+        async () =>
+          (await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting.length,
+        { timeout: 2000 },
+      )
+      .toBe(1);
+
+    fake.settled('mgr-running', 'req-1', { reason: 'デーモンから停止を指示された。' });
+    await expect
+      .poll(
+        async () =>
+          (await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting.length,
+        { timeout: 2000 },
+      )
+      .toBe(0);
+
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      question?: string;
+      approvalId?: string;
+      managerId?: string;
+      withdrawnAt?: string;
+      withdrawnReason?: string;
+    }[];
+    const entry = escalations.find((e) => e.approvalId === 'req-1' && e.withdrawnAt !== undefined);
+    expect(entry?.question).toBe('Bash の実行許可: rm -rf /tmp/x');
+    expect(entry?.managerId).toBe('mgr-running');
+    expect(typeof entry?.withdrawnAt).toBe('string');
+    // 「届いていないこと」と「reason」の両方が読める。
+    expect(entry?.withdrawnReason).toContain('CLI へ');
+    expect(entry?.withdrawnReason).toContain('デーモンから停止を指示された。');
+
+    await s.pool.stop();
+  });
+
+  it('withdrawn 無しの settled は、これまでどおり日誌に何も残さない（answer()・onAbort と同じ形）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putJob({ ...runningJob, status: 'waiting_human' });
+    const fake = swappableRunner();
+    const s = setup(undefined, { stores, runner: fake.runner });
+
+    await s.pool.restore();
+    fake.ask('mgr-running', 'req-2', 'Bash の実行許可: echo hi');
+    await expect
+      .poll(
+        async () =>
+          (await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting.length,
+        { timeout: 2000 },
+      )
+      .toBe(1);
+
+    // withdrawn を渡さない ⟹ クローンの回答・マネージャー側中断と同じ形。
+    fake.settled('mgr-running', 'req-2');
+    await expect
+      .poll(
+        async () =>
+          (await s.pool.list()).find((m) => m.managerId === 'mgr-running')?.waiting.length,
+        { timeout: 2000 },
+      )
+      .toBe(0);
+
+    const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
+      approvalId?: string;
+      withdrawnAt?: string;
+    }[];
+    expect(escalations.some((e) => e.approvalId === 'req-2' && e.withdrawnAt !== undefined)).toBe(
+      false,
+    );
 
     await s.pool.stop();
   });
@@ -7342,6 +7516,85 @@ describe('denials() の分類・理由・拒否文（issue #1105）', () => {
       reasonType: 'rule',
       reason: '作業者側',
     });
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **issue #1105 後半 — `inputHead`（拒否より前に見た入力の先頭）も
+   * `denials()` に載る。**
+   *
+   * `reasonType` / `reason` / `message` とは出所が違う——SDK の拒否の合図が
+   * 運んだ値ではなく、`runner.ts` の `#onPreToolUse` が拒否より前に見た入力を
+   * 伏せて切ったもの（`runner-protocol.ts` の `permission_denied.inputHead`
+   * の doc）。それでも `denials()` に載せる欄としては同じ「最新1件」の
+   * 規則に従う——他の3欄と独立に欠落しうることを固定する。
+   */
+  it('入力の先頭（inputHead）も denials() に載る', async () => {
+    const id = 'mgr-denial-input-head-basic';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', {
+      reasonType: 'classifier',
+      inputHead: 'sed -i 1s/.../ 538-comment.md',
+    });
+
+    expect(s.pool.denials(id)).toEqual([
+      {
+        tool: 'Bash',
+        count: 1,
+        lastAt: expect.any(String),
+        reasonType: 'classifier',
+        inputHead: 'sed -i 1s/.../ 538-comment.md',
+      },
+    ]);
+
+    await s.pool.stop();
+  });
+
+  it('inputHead を持たない拒否（旧い runner・控えが無い等）では、その欄だけ省く', async () => {
+    const id = 'mgr-denial-input-head-absent';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', { reasonType: 'classifier' });
+
+    const [denial] = s.pool.denials(id);
+    expect(denial).toMatchObject({ tool: 'Bash', reasonType: 'classifier' });
+    expect(denial).not.toHaveProperty('inputHead');
+
+    await s.pool.stop();
+  });
+
+  it('複数回止められたときは最新1件の inputHead だけを持つ（前回分は持ち越さない）', async () => {
+    const id = 'mgr-denial-input-head-latest-only';
+    const stores = createMemoryStores();
+    await stores.jobs.putJob(job(id));
+    const fake = swappableRunner('runner-test');
+    fake.state.alive.push(alive(id));
+    const s = setup(undefined, { stores, runner: fake.runner });
+    await s.pool.restore();
+
+    fake.denied(id, 'Bash', { inputHead: '1回目の入力' });
+    fake.denied(id, 'Bash', { inputHead: '2回目の入力' });
+
+    const [denial] = s.pool.denials(id);
+    expect(denial).toMatchObject({ tool: 'Bash', count: 2, inputHead: '2回目の入力' });
+
+    // 3回目に inputHead が無い回が来たら、前回までの inputHead も消える
+    // （`reasonType` 等と同じ「最新1件」の像。`denialReasonSnapshotOf` の doc）。
+    fake.denied(id, 'Bash');
+    const [after] = s.pool.denials(id);
+    expect(after).not.toHaveProperty('inputHead');
 
     await s.pool.stop();
   });

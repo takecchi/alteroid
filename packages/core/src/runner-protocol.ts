@@ -1158,7 +1158,52 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     askedAt: isoDateTime.optional(),
   }),
   /** 確認が解けた（回答・中断・停止）。デーモン側の待ち行列から外す合図。 */
-  z.object({ type: z.literal('settled'), managerId: z.string(), requestId: z.string() }),
+  z.object({
+    type: z.literal('settled'),
+    managerId: z.string(),
+    requestId: z.string(),
+    /**
+     * **任意欄。`.optional()`（Issue #1586）。** 畳むとき（`runner.ts` の
+     * `#settleAll`）に解いた確認だけに載る——回答（`answer()`）・
+     * マネージャー側中断（`#onPermission` の `onAbort`）の経路では載らない
+     * （`runner.ts` の `#settleAll` の doc、`#onPermission` の `onAbort` の
+     * doc）。
+     *
+     * **なぜ要るか。** `#settleAll` は `#pending` の各要求を `decision:'deny'`
+     * で解くが、その直後（await を挟まず）に `query.close()` を呼ぶため、
+     * SDK（`@anthropic-ai/claude-agent-sdk@0.3.282`）の
+     * `Query#handleControlRequest` が `canUseTool` の答えを待っている間に
+     * `cleanupPerformed` が立ち、`control_response` が CLI へ一度も書き
+     * 込まれない（Issue #1586 の実測。1マイクロタスクでは足りず、2マイク
+     * ロタスク以上待てば届くところまで確認した——`close()` の前に待つ形は
+     * 採らないと決めている＝この欄はその代わりに「届いていない」という
+     * 事実を記録に残すためのものである）。**この欄がある回は、CLI が
+     * この確認への答えを一度も受け取っていない**、という事実だけを言う
+     * ——SDK 内部の実装（ミニファイされたバンドル）に依存する話なので、
+     * 版が上がれば挙動自体は変わりうる。
+     *
+     * **`reason` は `#settleAll(reason)` に渡った文字列そのもの**
+     * （例:「デーモンから停止を指示された。」）。言い換えない。
+     *
+     * **なぜ任意欄が安全か —— `packages/core` は daemon と runner の両方が
+     * 取り込むが、両サービスは別々にデプロイされ、入れ替わる順序は保証
+     * されない。**
+     *
+     * - **新 runner ＋ 旧デーモン**: runner がこの欄を載せても、旧デーモンの
+     *   zod は `z.object` の既定（strict ではない）どおり**未知の欄を黙って
+     *   落とす**ので、`settled` はこれまでどおり処理される（日誌には残らない）
+     *   ＝いまと同じ（実測: `z.object({...}).safeParse({...,withdrawn:{...}})`
+     *   は `success:true` を返し、出力から `withdrawn` が消える）
+     * - **旧 runner ＋ 新デーモン**: `withdrawn` が来ない（`undefined`）ので、
+     *   新デーモンの `event.withdrawn !== undefined` の分岐が立たず、これまで
+     *   どおり日誌へは残さない＝新デーモンが `withdrawn` を知る前の挙動と同じ
+     *
+     * ⟹ **どちらが先にデプロイされても壊れない。** 判定は必ずこの欄の有無で
+     * 行い、`reason` の文言（日本語の言い回し）では判定しない
+     * （`manager.ts` の `case 'settled'`）。
+     */
+    withdrawn: z.object({ reason: z.string() }).optional(),
+  }),
   /**
    * runner の内側で起きた、記録に残すべき事実。
    *
@@ -1432,6 +1477,42 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * そのもの。`.optional()` の理由は `reason` と同じ。
      */
     message: z.string().optional(),
+    /**
+     * 拒否より前に `#onPreToolUse`（`runner.ts`）が見た入力の先頭（issue #1105）。
+     * 伏せ字済み・最大160字（`denial-input-head.ts` の
+     * `buildDenialInputHead` / `DENIAL_INPUT_HEAD_LIMIT`）。
+     *
+     * **出所は `input` とはっきり違う。** `input` は SDK の拒否の合図
+     * （`system/permission_denied` または `result.permission_denials`）が
+     * 実際に運んだ値だが、**この欄はそちらではない** —— 同じ `tool_use_id`
+     * について、alteroid 自身の `PreToolUse` フックが**拒否より前に**
+     * 見た入力を、runner 側で伏せて切ったものである。`via: 'live'` の
+     * 合図には `tool_input` 自体が無い（`input` の doc）ので、この欄が
+     * 「何を実行しようとしたか」が分かる唯一の経路になる回がある。
+     *
+     * **`input` の欄へ後から詰めない理由と同じ理由で、これも新しい別の欄に
+     * する。** `input` の doc が禁じているのは「SDK が運ばなかった値をこの
+     * 欄へ埋めること」であって、その禁止は覆っていない——別の欄を新設する
+     * ことで、事実（SDK が運んだ値）と観測（runner が別の経路で見た値）を
+     * 混ぜずに両方運ぶ。
+     *
+     * **`.optional()` は「まだ書いていない」ではない。** 次のどれでも
+     * 欠ける——(1) `record.toolUseId` が取れなかった回（旧い provider の
+     * 写し） (2) `PreToolUse` を経由しない拒否（原理的には無いはずだが、
+     * 経由しない経路が将来増えても壊れないよう楽観しない） (3) 控えが
+     * `PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`（`runner.ts`）で先に忘れられた回。
+     * **無いものは作り物で埋めない**——欠けた回は「入力は付いていない」
+     * （`denial-shape.ts` の `denialInputAbsence`）のまま、これまでどおり
+     * 運用する。
+     *
+     * **旧いデーモンでも壊れない。** zod 4 の `z.object` は既定で未知の
+     * キーを黙って落とす（strip）ので、この欄をまだ知らない `runnerEventSchema`
+     * （旧デーモン）で `safeParse` しても、この欄が消えるだけで他の欄は
+     * 生き残る。逆に旧い runner がこの欄を送ってこない回も `.optional()`
+     * なので新しいデーモンの `safeParse` は落ちない——どちらの順でデプロイ
+     * しても壊れない。
+     */
+    inputHead: z.string().optional(),
   }),
   /**
    * SDK が報告した消費量の**累積**（`result.modelUsage` の写し）。

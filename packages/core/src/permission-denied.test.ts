@@ -902,6 +902,85 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
 });
 
 /**
+ * **Issue #1105 後半 — `#onPreToolUse` が拒否より前に見た入力が、`inputHead`
+ * として escalation の受信箱にだけ乗り、journal（日誌）の exchange 行には
+ * 出ないこと。**
+ *
+ * `liveDenial()` / `liveDenialAsSdkSends()` はどちらも `system/permission_denied`
+ * を「後から」流すだけで、拒否より前の `PreToolUse` は模していない——
+ * `inputHead` を確かめるには、`session.options.hooks.PreToolUse` を実際に
+ * 叩いてから、同じ `tool_use_id` で走行中の拒否を流す必要がある
+ * （`runner-pre-tool-use.test.ts` が runner 単体で固定している配線を、
+ * ここではマネージャープール込みの経路で確かめる）。
+ */
+describe('inputHead — escalation にだけ乗り、journal には乗らない（issue #1105）', () => {
+  /** `session.options.hooks.PreToolUse[0].hooks[0]` を直接叩く。 */
+  async function firePreToolUse(
+    session: { options: Options },
+    input: Record<string, unknown>,
+  ): Promise<unknown> {
+    const hook = session.options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+    if (hook === undefined) throw new Error('PreToolUse フックが登録されていない');
+    return hook(input as never, undefined, { signal: new AbortController().signal });
+  }
+
+  it('escalation の本文には inputHead が codeSpan で乗り、日誌には乗らない', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    await firePreToolUse(session, {
+      hook_event_name: 'PreToolUse',
+      tool_use_id: 'toolu_ih1',
+      tool_name: 'Bash',
+      tool_input: { command: 'sed -i 1s/.../ 538-comment.md' },
+    });
+    session.push(liveDenialAsSdkSends('Bash', 'toolu_ih1'));
+    await tick();
+
+    const message = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    expect(message).toMatchObject({ managerId, kind: 'report' });
+    const text = message?.type === 'manager_message' ? message.text : '';
+
+    expect(text).toContain(codeSpan('sed -i 1s/.../ 538-comment.md'));
+    // 出所を誤読させない一文が付く。
+    expect(text).toContain('拒否より前に見た入力の先頭');
+    expect(text).toContain('この拒否の合図自体が運んだ値ではなく');
+
+    // **日誌には乗らない。** journal の exchange 行は「形」だけを持ち、
+    // `#onPreToolUse` が見た生の値（伏せ字済みであっても）は出ない。
+    const lines = await deniedLines(s.stores);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain('sed -i');
+    expect(lines[0]).not.toContain('538-comment.md');
+    expect(lines[0]).not.toContain('拒否より前に見た入力の先頭');
+
+    await s.pool.stop();
+  }, 15_000);
+
+  it('PreToolUse を経由しなかった回は、従来どおり「形」だけの案内のまま（作り物を足さない）', async () => {
+    const s = open();
+    const { managerId } = await s.pool.start({ request: 'ビルドを直して' });
+    const session = s.manager.sessions[0];
+    if (!session) throw new Error('マネージャーのセッションが無い');
+
+    // PreToolUse を一度も呼ばずに拒否だけが来る（旧い runner・控えが無い等）。
+    session.push(liveDenialAsSdkSends('Bash', 'toolu_ih2'));
+    await tick();
+
+    const message = s.inbox.filter((event) => event.type === 'manager_message')[0];
+    expect(message).toMatchObject({ managerId, kind: 'report' });
+    const text = message?.type === 'manager_message' ? message.text : '';
+
+    expect(text).not.toContain('拒否より前に見た入力の先頭');
+    expect(text).toContain('入力は付いていない');
+
+    await s.pool.stop();
+  }, 15_000);
+});
+
+/**
  * Issue #373 — マネージャー自身の拒否と作業者の拒否が同じ数に畳まれていて、
  * クローンが誤った相手（例: マネージャー自身）へ指示を出した実害（2026-08-24
  * コメント #5393921053）を再現しないことを固定する。

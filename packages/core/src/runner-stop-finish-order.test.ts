@@ -872,3 +872,104 @@ describe('#1533 + #1589 新しい歯: stop() の後に #reader が例外で抜�
     });
   });
 });
+
+describe('#1586: 畳むときに解いた確認の settled には withdrawn(reason) が載る（answer() の経路には載らない）', () => {
+  it('stop() で畳むと、未決の確認の settled に withdrawn(reason) が載る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'stop-withdrawn.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await primeState(session, transcriptPath);
+
+    await s.host.stop('mgr-1');
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-1',
+    );
+    // reason は stop() が渡す固定文言（`runner.ts` の `RunnerHost#stop`）。
+    expect(settled?.withdrawn).toEqual({ reason: 'デーモンから停止を指示された。' });
+  });
+
+  it('#finish の自然終了（経路B）で畳んでも、未決の確認の settled に withdrawn(reason) が載る', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'finish-withdrawn.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await primeState(session, transcriptPath);
+
+    session.end();
+    await vi.waitFor(() => {
+      if (!s.events.some((e) => e.type === 'closed')) throw new Error('closed 待ち');
+    });
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-1',
+    );
+    // reason は自然終了の経路が合成する固定文言（`runner.ts` の `#finish` 呼び出し箇所）。
+    expect(settled?.withdrawn).toEqual({ reason: 'マネージャーのセッションが閉じた。' });
+  });
+
+  it('answer()（クローンの回答）の経路では withdrawn が載らない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'answer-not-withdrawn.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    const { askPromise } = await primeState(session, transcriptPath);
+
+    await s.host.answer('mgr-1', { requestId: 'req-1', decision: 'allow', message: 'どうぞ' });
+    const answer = await askPromise;
+    expect(answer.behavior).toBe('allow');
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-1',
+    );
+    expect(settled).toBeDefined();
+    expect(settled?.withdrawn).toBeUndefined();
+  });
+
+  it('マネージャー側の中断（onAbort）の経路でも withdrawn が載らない', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'abort-not-withdrawn.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+
+    // `primeState` と同じ形で1件積むが、signal はこちらで握る
+    // （abort させるため）。
+    await session.say('喋った');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    const controller = new AbortController();
+    const canUseTool = session.options.canUseTool as (
+      toolName: string,
+      input: Record<string, unknown>,
+      extra: { signal: AbortSignal; requestId?: string },
+    ) => Promise<PermissionResult>;
+    const askPromise = canUseTool(
+      'Bash',
+      { command: 'echo hi' },
+      { signal: controller.signal, requestId: 'req-abort' },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    controller.abort();
+    const answer = await askPromise;
+    expect(answer.behavior).toBe('deny');
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-abort',
+    );
+    expect(settled).toBeDefined();
+    expect(settled?.withdrawn).toBeUndefined();
+  });
+});

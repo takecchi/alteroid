@@ -701,6 +701,11 @@ const managerDenialSchema = z.object({
    * 出す設計で、人間向けの HTTP／CLI／Web へ露出面を広げるかどうかは別の判断
    * として残してある（値そのものは既に `GET /journal` で読める。
    * `ManagerDenial.reasonType` の doc）。
+   *
+   * ⛔ **`inputHead`（issue #1105、拒否より前に見た入力の先頭）も同じ理由で
+   * 意図して宣言していない。** こちらは journal にすら同じ字面が無い
+   * （`ManagerDenial.inputHead` の doc）——`reasonType` 等より露出をさらに
+   * 絞る側の判断であって、緩める理由には使わない。
    */
 });
 

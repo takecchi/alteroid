@@ -813,6 +813,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       effortLevel: 'high',
       agentId: 'agent-1',
       agentType: 'general-purpose',
+      toolUseId: 'tu-1',
     } satisfies AgentToolAuditRecord);
   });
 
@@ -843,7 +844,13 @@ describe('ツール監査フックの包み直し（#486）', () => {
     });
 
     expect(result).toEqual({ continue: true });
-    expect(captured).toEqual({ toolName: 'Bash', transcriptPath: '/tmp/t.jsonl' });
+    // `tool_use_id` はこのフィクスチャでも渡っている（SDK の型で必須のため）ので、
+    // 「読めない・無い欄」には当たらず、他の欄と同じく写る（issue #1105）。
+    expect(captured).toEqual({
+      toolName: 'Bash',
+      transcriptPath: '/tmp/t.jsonl',
+      toolUseId: 'tu-1',
+    });
     expect(captured).not.toHaveProperty('agentId');
     expect(captured).not.toHaveProperty('effortLevel');
   });
@@ -890,6 +897,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       agentType: 'general-purpose',
       error: '中断された',
       isInterrupt: true,
+      toolUseId: 'tu-2',
     } satisfies AgentToolAuditFailureRecord);
   });
 
@@ -929,8 +937,16 @@ describe('ツール監査フックの包み直し（#486）', () => {
 
     expect(useResult).toEqual({ continue: true });
     expect(failureResult).toEqual({ continue: true });
-    expect(capturedUse).toEqual({ toolName: 'memory_write', toolInput: { text: 'メモ' } });
-    expect(capturedFailure).toEqual({ toolName: 'memory_write', error: '失敗した' });
+    expect(capturedUse).toEqual({
+      toolName: 'memory_write',
+      toolInput: { text: 'メモ' },
+      toolUseId: 'tu-3',
+    });
+    expect(capturedFailure).toEqual({
+      toolName: 'memory_write',
+      error: '失敗した',
+      toolUseId: 'tu-4',
+    });
   });
 
   it('buildManagerSessionOptions: PostToolUseFailure は中立の記録として渡り、{ continue: true } を返す', async () => {
@@ -975,6 +991,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       agentId: 'agent-2',
       agentType: 'general-purpose',
       error: '失敗した',
+      toolUseId: 'tu-5',
     });
   });
 });
@@ -1346,6 +1363,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       toolInput: { command: 'echo hi' },
       agentId: 'agent-1',
       agentType: 'general-purpose',
+      toolUseId: 'tu-1',
     } satisfies AgentPreToolRecord);
   });
 
@@ -1375,7 +1393,9 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       tool_use_id: 'tu-1',
     });
 
-    expect(captured).toEqual({ toolName: 'Bash' });
+    // `tool_use_id` はこのフィクスチャでも渡っている（SDK の型で必須のため）ので、
+    // 「読めない・無い欄」には当たらず写る（issue #1105）。
+    expect(captured).toEqual({ toolName: 'Bash', toolUseId: 'tu-1' });
     expect(captured).not.toHaveProperty('agentId');
     expect(captured).not.toHaveProperty('agentType');
   });
@@ -1459,6 +1479,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       toolInput: { command: 'while true; do sleep 1; done', run_in_background: true },
       agentId: 'agent-9',
       agentType: 'worker',
+      toolUseId: 'tu-3',
     } satisfies AgentPreToolRecord);
   });
 
@@ -1617,6 +1638,7 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
       transcriptPath: '/t.jsonl',
       agentId: 'agent-2',
       agentType: 'general-purpose',
+      toolUseId: 'tu-1',
     } satisfies AgentToolAuditRecord);
   });
 

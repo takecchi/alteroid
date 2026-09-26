@@ -11642,6 +11642,47 @@ describe('一覧の文言は、観測した分しか言わない', () => {
   });
 
   /**
+   * **issue #1105 後半 — 拒否より前に見た入力の先頭（`inputHead`）も
+   * `manager_list` / `manager_report` の行に載る。**
+   *
+   * `reasonType` / `reason` / `message` とは出所が違う——journal にすら
+   * 同じ字面が無い値をここで初めて渡す（`denialReasonTag` の doc）。それでも
+   * 埋め込み先（`manager_list`/`manager_report`）は同じで、生成元も1箇所
+   * （`denialReasonTag`）のままである。
+   */
+  it('入力の先頭（inputHead）が一覧の行に載る（journal_read には無い値・issue #1105）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [
+      {
+        tool: 'Bash',
+        count: 1,
+        actor: 'worker',
+        reasonType: 'classifier',
+        inputHead: 'sed -i 1s/.../ 538-comment.md',
+      },
+    ]);
+
+    const list = await h.call('manager_list', {});
+    expect(list).toContain('入力の先頭: sed -i 1s/.../ 538-comment.md');
+
+    // `manager_report` も同じ字面（生成元が1箇所であること・#830 と同じ確かめ方）。
+    const report = await h.call('manager_report', { managerId: 'mgr-1' });
+    expect(report).toContain('入力の先頭: sed -i 1s/.../ 538-comment.md');
+  });
+
+  it('inputHead を持たない拒否（従来どおり）では、その部分が1文字も増えない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.denied.set('mgr-1', [{ tool: 'Bash', count: 1, reasonType: 'rule' }]);
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('分類: rule');
+    expect(reply).not.toContain('入力の先頭:');
+  });
+
+  /**
    * **`done` は「マネージャー自身のターンが終わった」でしかない。**
    *
    * その下で作業者が走っているかは、デーモンには見えていない（作業者の生存も

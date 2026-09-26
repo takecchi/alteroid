@@ -119,6 +119,14 @@ export interface AgentToolAuditRecord {
   agentId?: string;
   /** 作業者の型名。**`agentId` が無ければ意味を持たない。** */
   agentType?: string;
+  /**
+   * SDK の `tool_use_id`（issue #1105）。**`runner.ts` の `#onPreToolUse` が
+   * 拒否より前に控えた入力の先頭（`#preToolInputHeads`）を、この呼び出しが
+   * 成功で終わった時点で忘れるための鍵。** 読めなければ省く——旧い provider
+   * の写しがこの欄を持たない回は、その回だけ帳面が忘れずに残り、上限
+   * （`createRecentMap` の `onForget`）が最後の網になる。
+   */
+  toolUseId?: string;
 }
 
 /**
@@ -148,6 +156,8 @@ export interface AgentToolAuditFailureRecord {
   error?: string;
   /** 中断（キャンセル）によって終わった呼び出しか。省かれていれば「分かっていない」——中断ではないと確定しているのではない（`clone.ts` の `#journalToolUseFailure` の同じ判断）。 */
   isInterrupt?: boolean;
+  /** SDK の `tool_use_id`（issue #1105）。`AgentToolAuditRecord.toolUseId` と同じ理由・同じ作法。 */
+  toolUseId?: string;
 }
 
 /**
@@ -244,6 +254,17 @@ export interface AgentPreToolRecord {
   agentId?: string;
   /** 作業者の型名。**`agentId` が無ければ意味を持たない。** */
   agentType?: string;
+  /**
+   * SDK の `tool_use_id`（issue #1105）。**`PreToolUseHookInput` では必須**
+   * （SDK の型。`claude-provider.ts` の `toAgentPreToolRecord` の doc）だが、
+   * ここでは他の欄と同じく任意にする——`Partial<...>` 経由で読む以上、
+   * 実行時に文字列でなければ省く作法をここだけ崩さない。
+   *
+   * **読み手は `runner.ts` の `#onPreToolUse` だけである**（分類器の拒否より
+   * 前に見た入力の先頭を、この id をキーに控える。`#capturePreToolInputHead`）。
+   * `clone.ts` の `#onPreToolUse`（Issue #863）はこの欄を読まない。
+   */
+  toolUseId?: string;
 }
 
 /**

@@ -2525,6 +2525,52 @@ describe('HTTP API', () => {
   });
 
   /**
+   * **issue #1105 後半 — `reasonType` / `reason` / `message` と同じ判断で、
+   * `inputHead`（拒否より前に見た入力の先頭）も HTTP へは意図して出さない。**
+   *
+   * `managerDenialSchema`（`openapi.ts`）はこの欄を宣言していないので、
+   * `.parse()` が黙って落とす——`/managers` と `/managers/:id` はこの欄が
+   * 増える前と応答が1バイトも変わらない。クローン向けの `manager_list` /
+   * `manager_report`（`tools.ts`）にだけ出す設計であることを、HTTP の面から
+   * も確かめる（`ManagerDenial.inputHead` の doc）。
+   */
+  it('入力の先頭（inputHead）は一覧にも詳細にも出ない', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-denied-input-head',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '止められている仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    });
+    fake.managerDenials.set('mgr-denied-input-head', [
+      {
+        tool: 'Bash',
+        count: 1,
+        actor: 'worker',
+        inputHead: 'sed -i 1s/.../ 538-comment.md',
+      },
+    ]);
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { denials?: Record<string, unknown>[] }[];
+    };
+    expect(list.managers[0]?.denials?.[0]).toMatchObject({
+      tool: 'Bash',
+      count: 1,
+      actor: 'worker',
+    });
+    expect(list.managers[0]?.denials?.[0]).not.toHaveProperty('inputHead');
+
+    const detail = (await (await app.request('/managers/mgr-denied-input-head')).json()) as {
+      manager: { denials?: Record<string, unknown>[] };
+    };
+    expect(detail.manager.denials?.[0]).not.toHaveProperty('inputHead');
+  });
+
+  /**
    * **「数えていない」を「0 件だった」に見せない。**
    *
    * 拒否の帳面はデーモンのプロセス内にしかなく、器を作り直せば数え直しになる。

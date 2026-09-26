@@ -43,15 +43,32 @@ import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
 interface Started {
   options: Options;
   finish: () => void;
+  /**
+   * セッション開始後に、追加の SDK メッセージを流し込む（issue #1105 の
+   * テストのため）。**保留中の `emit` が無ければバッファへ積む**
+   * （`permission-denied.test.ts` の `fakeManagerSdk` と同じ形）——押した
+   * 直後に読まれる保証が無いため、素の resolve だけでは取りこぼす。
+   */
+  push: (message: SDKMessage) => void;
 }
 
 function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
   const started: Started[] = [];
   const fn = ((input: { options: Options }) => {
     let emit: ((message: SDKMessage | null) => void) | null = null;
+    const buffered: SDKMessage[] = [];
     const record: Started = {
       options: input.options,
       finish: () => emit?.(null),
+      push: (message) => {
+        if (emit) {
+          const resolve = emit;
+          emit = null;
+          resolve(message);
+        } else {
+          buffered.push(message);
+        }
+      },
     };
     started.push(record);
 
@@ -63,6 +80,11 @@ function fakeRunnerSdk(): { fn: typeof sdkQuery; started: Started[] } {
         uuid: `uuid-${started.length}`,
       } as unknown as SDKMessage;
       for (;;) {
+        const next = buffered.shift();
+        if (next !== undefined) {
+          yield next;
+          continue;
+        }
         const message = await new Promise<SDKMessage | null>((resolve) => {
           emit = resolve;
         });
@@ -91,9 +113,30 @@ async function firePreToolUse(
   return hook(input as never, undefined, { signal: new AbortController().signal });
 }
 
+/** `options.hooks.PostToolUse[0].hooks[0]` を直接叩く（issue #1105、控えの消費を確かめるため）。 */
+async function firePostToolUse(
+  options: Options,
+  input: Record<string, unknown>,
+): Promise<HookJSONOutput> {
+  const hook = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+  if (hook === undefined) throw new Error('PostToolUse フックが登録されていない');
+  return hook(input as never, undefined, { signal: new AbortController().signal });
+}
+
+/** `options.hooks.PostToolUseFailure[0].hooks[0]` を直接叩く（同上）。 */
+async function firePostToolUseFailure(
+  options: Options,
+  input: Record<string, unknown>,
+): Promise<HookJSONOutput> {
+  const hook = options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+  if (hook === undefined) throw new Error('PostToolUseFailure フックが登録されていない');
+  return hook(input as never, undefined, { signal: new AbortController().signal });
+}
+
 const PRE_TOOL_USE_BASE = { hook_event_name: 'PreToolUse', tool_use_id: 'tu-1' };
 
 type NoteEvent = Extract<RunnerEvent, { type: 'note' }>;
+type PermissionDeniedEvent = Extract<RunnerEvent, { type: 'permission_denied' }>;
 
 function noteEvents(events: readonly RunnerEvent[]): NoteEvent[] {
   return events.filter((event): event is NoteEvent => event.type === 'note');
@@ -101,6 +144,30 @@ function noteEvents(events: readonly RunnerEvent[]): NoteEvent[] {
 
 function waitGuardNotes(events: readonly RunnerEvent[]): NoteEvent[] {
   return noteEvents(events).filter((note) => note.text.includes('Bash の呼び出しを弾いた'));
+}
+
+function permissionDeniedEvents(events: readonly RunnerEvent[]): PermissionDeniedEvent[] {
+  return events.filter(
+    (event): event is PermissionDeniedEvent => event.type === 'permission_denied',
+  );
+}
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * 走行中の合図（`system/permission_denied`）を、実機の SDK が実際に送ってくる
+ * 形で作る（`permission-denied.test.ts` の `liveDenialAsSdkSends` と同じ形。
+ * `tool_input` を持たない）。
+ */
+function liveDenialAsSdkSends(tool: string, toolUseId: string): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'permission_denied',
+    tool_name: tool,
+    tool_use_id: toolUseId,
+    session_id: 'sess-mgr',
+    uuid: `uuid-denied-${toolUseId}`,
+  } as unknown as SDKMessage;
 }
 
 let dir: string;
@@ -334,5 +401,153 @@ describe('run_in_background を判定器へ渡す', () => {
       expect(result).toEqual({ continue: true });
     }
     expect(waitGuardNotes(events).length).toBe(0);
+  });
+});
+
+/**
+ * **issue #1105 — `PreToolUse` が拒否より前に見た入力の先頭が、同じ
+ * `tool_use_id` の走行中の拒否（`system/permission_denied`）へ `inputHead`
+ * として乗る。**
+ *
+ * SDK の走行中の合図自体には `tool_input` が原理的に付かない
+ * （`liveDenialAsSdkSends` の doc）。ここで固定するのは、その欠落を
+ * `#onPreToolUse` が拒否より前に見た値で埋める配線そのもの——`#capturePreToolInputHead`
+ * が全道具で控え、`#noteDenial` が同じ `tool_use_id` で引いて `inputHead` へ
+ * 載せ、`#onPostToolUse` / `#onPostToolUseFailure` が決着済みの分を消す。
+ */
+describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（issue #1105）', () => {
+  it('Bash 以外（Edit）でも、拒否より前に見た入力が inputHead に乗る', async () => {
+    const { started, events } = await startSession();
+
+    await firePreToolUse(started.options, {
+      hook_event_name: 'PreToolUse',
+      tool_use_id: 'tu-edit-1',
+      tool_name: 'Edit',
+      tool_input: {
+        file_path: 'apps/web/app/routes/chat.test.tsx',
+        old_string: 'x',
+        new_string: 'y',
+      },
+    });
+
+    started.push(liveDenialAsSdkSends('Edit', 'tu-edit-1'));
+    await tick();
+
+    const denials = permissionDeniedEvents(events);
+    expect(denials).toHaveLength(1);
+    expect(denials[0]?.inputHead).toBe(
+      '{"file_path":"apps/web/app/routes/chat.test.tsx","old_string":"x","new_string":"y"}',
+    );
+    // **`input` の欄には絶対に詰めない**（走行中の合図は `tool_input` を
+    // 持たないので、runner はここへ何も作り物を置かない）。
+    expect(denials[0]?.input).toBeUndefined();
+    expect(() => runnerEventSchema.parse(denials[0])).not.toThrow();
+  });
+
+  it('伏せ字済みで乗る（ダミーの GitHub トークン）', async () => {
+    const { started, events } = await startSession();
+    const dummyToken = `ghp_${'1234567890abcdef1234567890abcdef1234'}`; // ダミー。本物ではない。
+
+    await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: {
+        command: `curl -H "Authorization: token ${dummyToken}" https://api.github.com`,
+      },
+    });
+
+    started.push(liveDenialAsSdkSends('Bash', 'tu-1'));
+    await tick();
+
+    const denials = permissionDeniedEvents(events);
+    expect(denials).toHaveLength(1);
+    expect(denials[0]?.inputHead).not.toContain(dummyToken);
+    expect(denials[0]?.inputHead).toContain('[REDACTED]');
+  });
+
+  it('160字を超える入力は切られる（末尾に … が付く）', async () => {
+    const { started, events } = await startSession();
+    const longCommand = `echo ${'x'.repeat(300)}`;
+
+    await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: longCommand },
+    });
+
+    started.push(liveDenialAsSdkSends('Bash', 'tu-1'));
+    await tick();
+
+    const denials = permissionDeniedEvents(events);
+    expect(denials).toHaveLength(1);
+    const head = denials[0]?.inputHead;
+    expect(head).toBeDefined();
+    // 160字で切って印（`…`）を1文字足すので、全体は161文字になる
+    // （`denial-input-head.test.ts` が固定する形と同じ）。
+    expect(head).toBe(`${longCommand.slice(0, 160)}…`);
+  });
+
+  it('成功した呼びの分は帳面から消える（PostToolUse の後の拒否には inputHead が乗らない）', async () => {
+    const { started, events } = await startSession();
+
+    await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+    });
+    // 成功で決着（同じ tool_use_id）。
+    await firePostToolUse(started.options, {
+      hook_event_name: 'PostToolUse',
+      tool_use_id: 'tu-1',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: { output: 'hi' },
+    });
+
+    // **同じ tool_use_id が別の呼び出しで再利用されることは実機では無いはず
+    // だが、帳面が本当に消えたかを確かめるにはこの形しかない** —— 消えて
+    // いなければここで前の入力の先頭が漏れて出てくる。
+    started.push(liveDenialAsSdkSends('Bash', 'tu-1'));
+    await tick();
+
+    const denials = permissionDeniedEvents(events);
+    expect(denials).toHaveLength(1);
+    expect(denials[0]?.inputHead).toBeUndefined();
+  });
+
+  it('失敗（PostToolUseFailure）で決着した分も帳面から消える', async () => {
+    const { started, events } = await startSession();
+
+    await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+    });
+    await firePostToolUseFailure(started.options, {
+      hook_event_name: 'PostToolUseFailure',
+      tool_use_id: 'tu-1',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      error: '中断された',
+    });
+
+    started.push(liveDenialAsSdkSends('Bash', 'tu-1'));
+    await tick();
+
+    const denials = permissionDeniedEvents(events);
+    expect(denials).toHaveLength(1);
+    expect(denials[0]?.inputHead).toBeUndefined();
+  });
+
+  it('PreToolUse を経由しなかった回（toolUseId が取れない）は inputHead を作り物で埋めない', async () => {
+    const { started, events } = await startSession();
+
+    // PreToolUse を一度も呼ばずに、いきなり拒否が来る形。
+    started.push(liveDenialAsSdkSends('Bash', 'tu-never-seen'));
+    await tick();
+
+    const denials = permissionDeniedEvents(events);
+    expect(denials).toHaveLength(1);
+    expect(denials[0]?.inputHead).toBeUndefined();
   });
 });

@@ -38,6 +38,7 @@ import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
+import { buildDenialInputHead } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
   noteMissingRecordSource,
@@ -984,6 +985,26 @@ const RESOLVED_MEMORY_LIMIT = 512;
 const DENIED_MEMORY_LIMIT = 512;
 
 /**
+ * `PreToolUse` が見た入力の先頭（伏せ字済み・160文字以内。
+ * `denial-input-head.ts` の `DENIAL_INPUT_HEAD_LIMIT`）を、拒否より前に控えておく件数
+ * （issue #1105）。**セッション1本ぶんの上限**である。
+ *
+ * **鍵は `tool_use_id`。** `#onPostToolUse`（成功）が消費前に自分の分を消し、
+ * `#onPostToolUseFailure`（失敗）も同様に消す。`#noteDenial`（拒否）は
+ * 引いた時点で消す——残るのは「まだ決着していない呼び出し」の分だけなので、
+ * ここに溜まるのは同時に走っている道具呼び出しの数程度のはずである。それでも
+ * 上限を切っておくのは、同時実行数が異常に伸びた回・上の3経路のどれも
+ * 掃除できない回（provider が `tool_use_id` を送ってこない旧いデプロイなど）
+ * に備えるためで、達したら `note` で上へ言う。
+ *
+ * **`onForget` の日誌行には `tool_use_id` だけを書き、控えていた本文（入力の
+ * 先頭そのもの）は書かない。** `#denied` の `onForget` が本文を鍵に混ぜない
+ * のと同じ理由——ここで本文を日誌へ書くと、上限に達した回にだけ入力の先頭が
+ * 日誌へ滲み出る経路が開く。
+ */
+const PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT = 512;
+
+/**
  * `CUT_OFF_WORKERS_LIMIT` / `PENDING_CUT_OFF_NOTIFICATIONS_LIMIT`（#901）の
  * 定義は `runner-cut-off-workers.ts` へ切り出した（Issue #1190 段0）。どちらも
  * 元から `export` していなかったので（テストからの直参照が無い）、再輸出は
@@ -1156,7 +1177,15 @@ interface PendingRequest {
    * そのものが消える（#334）。
    */
   askedAt: string;
-  settle: (answer: { message: string; decision?: 'allow' | 'deny' }) => void;
+  /**
+   * **`withdrawn` は経路を運ぶための引数であって、文言ではない**（Issue
+   * #1586）。`#settleAll` だけがこれを `true` にして渡す——`answer()`
+   * （クローンの回答）と `#onPermission` の `onAbort`（マネージャー側中断）
+   * はどちらも渡さない（`undefined` のまま）。呼び出し側はこれで
+   * 「畳むときに答えないまま解いたか」を判定し、`reason` の文字列を
+   * 嗅がない（AGENTS.md「文字列で本文を嗅がない」と同じ考え方）。
+   */
+  settle: (answer: { message: string; decision?: 'allow' | 'deny'; withdrawn?: true }) => void;
   /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
   result: Promise<PermissionResult>;
 }
@@ -1374,6 +1403,29 @@ class RunnerSession {
           `上へ降ろした拒否の記憶が上限（${DENIED_MEMORY_LIMIT}件）に達したので、` +
           `古い ${ids.length} 件を忘れた: ${ids.join(', ')}。` +
           'この tool_use_id が result に残っていれば、同じ拒否がもう一度上がる。',
+      }),
+  });
+  /**
+   * `PreToolUse` が拒否より前に見た入力の先頭（伏せ字済み）を、`tool_use_id`
+   * をキーに控えておく帳面（issue #1105。`PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`
+   * の doc）。**生の入力は保持しない** —— 値は `denial-input-head.ts` の
+   * `buildDenialInputHead` を通した後の、伏せ字済み・160字以内の文字列だけ。
+   *
+   * - `#capturePreToolInputHead`（`#onPreToolUse` の冒頭）が書く
+   * - `#onPostToolUse` / `#onPostToolUseFailure` が、その呼び出しが決着した
+   *   時点で自分の分を消す（控えっぱなしにしない）
+   * - `#noteDenial` が、拒否の合図へ `inputHead` として載せる直前に引いて消す
+   */
+  readonly #preToolInputHeads = createRecentMap<string>({
+    limit: PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT,
+    onForget: (ids) =>
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `PreToolUse で控えた入力の先頭の記憶が上限（${PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT}件）に` +
+          `達したので、古い ${ids.length} 件（tool_use_id のみ。本文は書かない）を忘れた: ` +
+          `${ids.join(', ')}。この tool_use_id の拒否が後から届いても、inputHead は付かない。`,
       }),
   });
   /**
@@ -3154,6 +3206,15 @@ class RunnerSession {
     // 記憶が上限に達した回にだけコマンド本文が日誌へ出る経路が開いていた。
     // **同じ文字列は同じ鍵になる**ので、畳み方（＝重複排除の効き方）は変わらない。
     const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 120))}`;
+    // **`PreToolUse` が拒否より前に控えた入力の先頭を、有れば引いて消す**
+    // （issue #1105。`#preToolInputHeads` / `#capturePreToolInputHead`）。
+    // ここで引くのは、この呼び出し1回につき `permission_denied` を1度しか
+    // 降ろさない（直後の重複排除）のと揃えるため——2度目以降の呼び出しで
+    // 引いても、下の早期返却でどのみち使われない。**引いたら消す**（帳面に
+    // 残さない。同じ tool_use_id の拒否がもう一度来ても、控えは戻らない
+    // ——生の入力を持ち回っていない以上、作り直すことはできない）。
+    const inputHead = this.#preToolInputHeads.get(toolUseId);
+    if (inputHead !== undefined) this.#preToolInputHeads.delete(toolUseId);
     // **既に降ろしてある1件でも、入力を持つ記録が後から来たら形だけ足す。**
     //
     // 同じ拒否は `via: 'live'`（走行中の合図）と `via: 'result'`（ターン終わりの
@@ -3247,6 +3308,11 @@ class RunnerSession {
       ...(denial.reason === undefined ? {} : { reason: denial.reason }),
       ...(denial.reasonType === undefined ? {} : { reasonType: denial.reasonType }),
       ...(denial.message === undefined ? {} : { message: denial.message }),
+      // **`input` の欄には絶対に詰めない**（`runner-protocol.ts` の `input`
+      // の doc が明文で禁じている）。ここは別の任意欄——SDK の拒否の合図が
+      // 運んだ値ではなく、同じ `tool_use_id` で `#onPreToolUse` が拒否より
+      // 前に見た入力を、伏せて切ったものである（issue #1105）。
+      ...(inputHead === undefined ? {} : { inputHead }),
     });
   }
 
@@ -3629,7 +3695,12 @@ class RunnerSession {
         if (this.#status === 'waiting_human' && this.#pending.length === 0) {
           this.#status = 'running';
         }
-        this.#emit({ type: 'settled', managerId: this.#id, requestId: id });
+        this.#emit({
+          type: 'settled',
+          managerId: this.#id,
+          requestId: id,
+          ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
+        });
         settle(value);
       },
     };
@@ -3690,8 +3761,19 @@ class RunnerSession {
    * **`escalate` は立てない** —— これは「作業者が動けなくなった」
    * （`#onSubagentStop` の `escalate: true`）のような危険の通知ではなく、
    * ツール呼び出し1件がその場で拒否に置き換わっただけの経過だからである。
+   *
+   * ## 冒頭で全道具の入力の先頭を控える（issue #1105）
+   *
+   * `#capturePreToolInputHead` は、この直後の `Bash` 限定の早期返却より前に
+   * 呼ぶ——分類器（器の auto mode classifier）はどの道具でも拒否しうるので、
+   * ここを `Bash` に絞ると `Edit` 等の拒否には控えが一切乗らない
+   * （kiritan の実測、issue #1105 本文）。控えは `#noteDenial` が
+   * `system/permission_denied`（`tool_input` を持たない走行中の合図）へ
+   * `inputHead` を足すための材料になる。
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
+    this.#capturePreToolInputHead(record);
+
     if (record.toolName !== 'Bash') return { kind: 'continue' };
 
     const toolInput = record.toolInput as
@@ -3723,14 +3805,42 @@ class RunnerSession {
   }
 
   /**
+   * `PreToolUse` が見た入力の先頭を、拒否より前に控える（issue #1105）。
+   *
+   * **全道具で行う。** 直前の `#onPreToolUse` の `Bash` 限定の早期返却は
+   * `bash-wait-guard.ts` の判定にだけ掛かるもので、この控えには掛からない
+   * ——分類器はどの道具でも拒否しうる。
+   *
+   * **`record.toolUseId` が無ければ何もしない。** 鍵が無ければ後で
+   * `#noteDenial` から引けない（旧い provider の写しがこの欄を持たない回。
+   * `AgentPreToolRecord.toolUseId` の doc）。
+   *
+   * **控えるのは伏せ字済み・160文字以内の先頭だけ**
+   * （`buildDenialInputHead`。`denial-input-head.ts`）。生の入力は
+   * 保持しない——`denial-shape.ts` の `DeniedRecord` が「入力そのものを
+   * 覚えない」のと同じ理由（忘れるまでの間ずっと鍵が入りうる文字列を
+   * 抱えることになり、`onForget` の日誌行へ滲み出る経路も増える）。
+   */
+  #capturePreToolInputHead(record: AgentPreToolRecord): void {
+    if (record.toolUseId === undefined) return;
+    const preview = buildDenialInputHead(record.toolInput, this.#env);
+    if (preview === undefined) return;
+    this.#preToolInputHeads.set(record.toolUseId, preview);
+  }
+
+  /**
    * マネージャーと作業者の全ツール実行をデーモンの日誌へ（監査）。
    *
    * **併せて、背景タスクの所有者を控える**（#570。`#backgroundTaskOwners`）。
    * ここでしか取れない —— `SubagentStop` の `background_tasks[]` に所有者の欄が
    * 無く、作業者の生ログ側にも構造化された形では出ないためである（実測: 生ログ
    * に出るのは `Command running in background with ID: …` という**自由文**だけ）。
+   *
+   * **成功で決着した呼び出しぶんの入力の先頭も、ここで帳面から消す**
+   * （`#preToolInputHeads`。issue #1105）——控えっぱなしにしない。
    */
   async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
+    if (typeof record.toolUseId === 'string') this.#preToolInputHeads.delete(record.toolUseId);
     if (typeof record.transcriptPath === 'string') this.#transcriptPath = record.transcriptPath;
     // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
     this.#markProgressed();
@@ -4011,8 +4121,14 @@ class RunnerSession {
    * 直近の道具呼び出しが失敗した回だけこれらを拾わずにいると、次に成功する
    * 道具呼び出しが来るまでのあいだ生ログの在り処や「自分で手を動かした
    * 回数」が古いまま取り残される（`#onPostToolUse` の同じ2行と同じ理由）。
+   *
+   * **`#preToolInputHeads` の掃除も同じ理由で拾う**（issue #1105）。この
+   * 呼び出しは拒否ではなく失敗（実行できた・実行しようとしたが例外や
+   * 中断で終わった）なので `#noteDenial` を経由しない——ここで消さないと、
+   * 拒否ではなく失敗で終わった分の控えが上限による `onForget` まで残る。
    */
   async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
+    if (typeof record.toolUseId === 'string') this.#preToolInputHeads.delete(record.toolUseId);
     if (typeof record.transcriptPath === 'string') this.#transcriptPath = record.transcriptPath;
     // 道具が動いた＝このセッションは生きている（成功側と同じ）。
     this.#markProgressed();
@@ -5032,10 +5148,20 @@ class RunnerSession {
     this.#emit({ type: 'archive', managerId: this.#id, body: result.body });
   }
 
-  /** 待たせたまま消えない。止まっている確認は理由付きで全部解く。 */
+  /**
+   * 待たせたまま消えない。止まっている確認は理由付きで全部解く。
+   *
+   * **`withdrawn: true` を渡すのはここだけである（Issue #1586）。** `stop()` /
+   * `#finish()` はこの直後、await を挟まずに `query.close()` を呼ぶ——SDK が
+   * `canUseTool` の答え（ここで `decision:'deny'` として解いたもの）を CLI へ
+   * 書き込む前に `cleanupPerformed` が立ち、答えは CLI に一度も届かない
+   * （`settled` イベントの `withdrawn` の doc、`runner-protocol.ts`）。
+   * `answer()`（クローンの回答）はこの関数を経由しないので `withdrawn` は
+   * 付かない——あちらは `close()` を伴わず、答えは普通に CLI へ届く。
+   */
   #settleAll(reason: string): void {
     for (const request of [...this.#pending]) {
-      request.settle({ message: reason, decision: 'deny' });
+      request.settle({ message: reason, decision: 'deny', withdrawn: true });
     }
     this.#pending.length = 0;
   }

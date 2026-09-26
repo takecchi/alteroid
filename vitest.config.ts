@@ -20,6 +20,16 @@ export default defineConfig({
      * 散っていて、共通の足場を置ける場所が他に無いため）。
      */
     setupFiles: ['./vitest.setup.ts'],
+    /**
+     * **vitest 5 で既定が `true` に変わったものを、4 の既定（`false`）に戻して固定する**（#1574）。
+     * `true` だと各テストの前に全モックの呼び出し履歴が消えるので、import 時や
+     * `beforeAll`、それより前のテストで起きた呼び出しを `not.toHaveBeenCalled()` が
+     * 見なくなる。**呼ばれてはいけない呼び出しがテストの始まる前に起きる形の回帰は、
+     * 赤から緑へ黙って変わる。** 上げた時点の CI はどちらの値でも緑だったので、この差は
+     * CI には現れない。`true` へ移すなら、`not.toHaveBeenCalled` 系を数え直してから
+     * 別の変更として入れること。
+     */
+    clearMocks: false,
     include: [
       // root 直下に置く共通の足場（`vitest.tmpdir.ts` など、#1436 案B）自身の
       // 単体テスト。`*` は `/` を跨がないので、他の階層向けの `*.test.ts` とは
