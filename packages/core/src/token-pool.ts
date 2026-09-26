@@ -285,6 +285,39 @@ export interface AgentToken {
 }
 
 /**
+ * {@link AgentToken} 1行の実行時の検査（issue #1652）。
+ *
+ * **書き込み時の検査を3実装（fs / pg / インメモリ）で共有する出所。**
+ * かつては `storage-fs`（`agentTokenRowSchema`）だけがこの形の検査を
+ * 持っていて、pg は `order` 列が SQL の整数型であることに偶然守られ、
+ * インメモリは何にも守られていなかった（`order` が非整数の行をそのまま
+ * 格納していた）。`PersonaStore.write` の doc「4つ目を足すときは、その歯も
+ * 4つ目にする」と同じ理由で、検査そのものをここへ1本だけ置く。
+ *
+ * ⚠️ **`source` はここでは `'stored'` しか通さない**（{@link AgentToken.source}
+ * の doc どおり——新しく `'env'` の行を書く経路はもう無い）。過去に書かれた
+ * `'env'` の行（fs のファイルに残っていることがある）を**読む**ための緩い形は
+ * ここでは持たない——`storage-fs` 側のファイルスキーマがこれを `.extend()` して
+ * 自分で緩める（`packages/storage-fs/src/token-pool.ts` の doc）。
+ */
+export const agentTokenSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  value: z.string().optional(),
+  source: z.enum(['stored']).optional(),
+  order: z.number().int(),
+  disabledAt: z.string().optional(),
+  cooldownUntil: z.number().optional(),
+  cooldownSource: cooldownSourceSchema.optional(),
+  lastRejectedAt: z.string().optional(),
+  lastRejectedReason: z.string().optional(),
+  invalidatedAt: z.string().optional(),
+  invalidatedReason: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
+/**
  * 外へ出す顔。**`value` を持たない**——型として無いので、書き忘れて漏れる形が
  * そもそも作れない。値以外はすべて {@link AgentToken} と同じ意味で、秘密ではない
  * ので出してよい。
