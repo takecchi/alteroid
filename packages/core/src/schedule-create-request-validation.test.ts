@@ -181,3 +181,81 @@ describe('schedule_create — request が空文字のときの扱い（issue #16
     );
   });
 });
+
+/**
+ * #1651 の後始末（マネージャーの追加指摘、同じ PR）。
+ *
+ * 上の `request` と**同じ穴**——`everyMinutes` も道具の**入力スキーマ**の側に
+ * `z.number().int().min(1)` を持っていた（これは #1656 より前から在った）。
+ * `everyMinutes: 0` や負の数、非整数を渡すと SDK の `tool()` がハンドラを呼ぶ
+ * **前**に検証し、英語の zod の JSON がマーカー付きでそのまま返る——`request`
+ * のときと形が同じである（症状の単位で見れば「同じ穴」。AGENTS.md「範囲外でも
+ * 気づいたことは上げる」の問い1）。
+ */
+describe('schedule_create — everyMinutes が 0 / 負の数 / 非整数のときの扱い（issue #1651 と同じ穴）', () => {
+  it('0 は保存層を呼ぶ前に弾かれ、日本語の平文で返る（英語の zod の JSON を返さない）', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+
+    const result = await callTool(rpc, 'schedule_create', {
+      kind: 'probe',
+      request: '定期的に確認する',
+      everyMinutes: 0,
+    });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    expect(result.text).toContain('everyMinutes');
+
+    await expect(stores.schedules.get('probe')).resolves.toBeNull();
+  });
+
+  it('負の数も同様に断られる', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+
+    const result = await callTool(rpc, 'schedule_create', {
+      kind: 'probe',
+      request: '定期的に確認する',
+      everyMinutes: -5,
+    });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    expect(result.text).toContain('everyMinutes');
+
+    await expect(stores.schedules.get('probe')).resolves.toBeNull();
+  });
+
+  it('非整数（小数）も同様に断られる', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+
+    const result = await callTool(rpc, 'schedule_create', {
+      kind: 'probe',
+      request: '定期的に確認する',
+      everyMinutes: 1.5,
+    });
+
+    expect(result.isError, result.text).toBe(false);
+    expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+    expect(result.text).toContain('everyMinutes');
+
+    await expect(stores.schedules.get('probe')).resolves.toBeNull();
+  });
+
+  it('比較対象: 1以上の整数は今までどおり通る', async () => {
+    const stores = createMemoryStores();
+    const rpc = await connect(stores);
+
+    const result = await callTool(rpc, 'schedule_create', {
+      kind: 'probe',
+      request: '定期的に確認する',
+      everyMinutes: 30,
+    });
+
+    expect(result.isError, result.text).toBe(false);
+    const stored = await stores.schedules.get('probe');
+    expect(stored?.spec).toEqual({ type: 'every', minutes: 30 });
+  });
+});
