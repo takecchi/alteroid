@@ -268,9 +268,15 @@ importers:
       '@alteroid/runner':
         specifier: workspace:*
         version: link:../runner
+      '@electric-sql/pglite':
+        specifier: 'catalog:'
+        version: 0.5.8
       '@types/node':
         specifier: 'catalog:'
         version: 22.20.4
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.3(@electric-sql/pglite@0.5.8)(@types/pg@8.23.1)(pg@8.23.0)
       prettier:
         specifier: 'catalog:'
         version: 3.9.9
