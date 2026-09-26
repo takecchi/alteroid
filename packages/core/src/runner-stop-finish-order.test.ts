@@ -973,3 +973,199 @@ describe('#1586: 畳むときに解いた確認の settled には withdrawn(reas
     expect(settled?.withdrawn).toBeUndefined();
   });
 });
+
+/**
+ * **Issue #1593: 畳む・中断の経路では `AskUserQuestion`（`kind: 'question'`）も
+ * `deny`（理由付き）で解けること。**
+ *
+ * `decideAnswer`（唯一の実装、#322）は `kind === 'question'` のとき
+ * `decision` を一切見ず常に `allow` を返す——これは `Session#answer()`
+ * （クローンが実際に答えたとき）の計算としては正しい。だが `#settleAll`
+ * （`stop()`/`#finish()` が畳むとき）と `#onPermission` の `onAbort`
+ * （マネージャー側中断）は、人間が一度も答えていない問いを同じ
+ * `decideAnswer` に通していたため、`decision: 'deny'` を渡していても
+ * `question` は `allow` へ解決され、畳む・中断の理由の文言が
+ * `withAnswers()` を通って「人間の答え」として SDK へ返っていた
+ * （直す前の症状。#1586 の実測で、この allow が CLI へ実際に届く窓が
+ * 在ることが分かっている）。
+ *
+ * **直した形——`#onPermission` の `answered.then()` は、`settle` の値が運ぶ
+ * 経路の印（`withdrawn` / `aborted`）を見て、`kind` に関係なく `deny` へ
+ * 倒す。** `decideAnswer` 自体は変えていない（`Session#answer()` との
+ * 一致・#322 の保証はそのまま）。
+ */
+describe('#1593: 畳む・中断の経路では question も deny(理由付き)になる', () => {
+  it('直す前は allow になっていた: stop() で畳むと、未決の question が deny(理由付き)で解ける', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'stop-question-deny.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await session.say('畳まれる前に喋った本文');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    await session.taskStarted('task-1');
+    // `primeState` は `'Bash'`（permission）固定なので、ここでは
+    // `kind: 'question'` を作るために `askPermission` を直接
+    // `'AskUserQuestion'` で呼ぶ（`FakeSession#askPermission` はトツール名を
+    // そのまま渡すだけの薄いラッパーなので、この呼び方は元の仕組みに沿う）。
+    const askPromise = session.askPermission('AskUserQuestion', 'req-q1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await s.host.stop('mgr-1');
+    const answer = await askPromise;
+
+    // reason は stop() が渡す固定文言——上の #1586 の歯と同じ値。
+    expect(answer).toEqual({ behavior: 'deny', message: 'デーモンから停止を指示された。' });
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-q1',
+    );
+    expect(settled?.withdrawn).toEqual({ reason: 'デーモンから停止を指示された。' });
+  });
+
+  it('直す前は allow になっていた: #finish の自然終了（経路B）で畳んでも、未決の question が deny(理由付き)で解ける', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'finish-question-deny.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await session.say('畳まれる前に喋った本文');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    await session.taskStarted('task-1');
+    const askPromise = session.askPermission('AskUserQuestion', 'req-q2');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    session.end();
+    await vi.waitFor(() => {
+      if (!s.events.some((e) => e.type === 'closed')) throw new Error('closed 待ち');
+    });
+    const answer = await askPromise;
+
+    expect(answer).toEqual({ behavior: 'deny', message: 'マネージャーのセッションが閉じた。' });
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-q2',
+    );
+    expect(settled?.withdrawn).toEqual({ reason: 'マネージャーのセッションが閉じた。' });
+  });
+
+  it('直す前は allow になっていた: マネージャー側の中断（onAbort）の経路でも、未決の question が deny(理由付き)で解ける', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'abort-question-deny.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await session.say('喋った');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    const controller = new AbortController();
+    const canUseTool = session.options.canUseTool as (
+      toolName: string,
+      input: Record<string, unknown>,
+      extra: { signal: AbortSignal; requestId?: string },
+    ) => Promise<PermissionResult>;
+    const askPromise = canUseTool(
+      'AskUserQuestion',
+      { questions: [{ question: '続けますか？', header: 'Q', options: [], multiSelect: false }] },
+      { signal: controller.signal, requestId: 'req-q-abort' },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    controller.abort();
+    const answer = await askPromise;
+
+    expect(answer).toEqual({ behavior: 'deny', message: 'マネージャー側で中断された。' });
+
+    // **`aborted` は `settled` イベントには載らない（`withdrawn` とは別の
+    // 事実であることの裏取り。PendingRequest.settle の doc）。**
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-q-abort',
+    );
+    expect(settled?.withdrawn).toBeUndefined();
+  });
+
+  it('再送されても同じ deny(理由付き)が返る(#resolved 経由)', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'stop-question-deny-resend.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await session.say('畳まれる前に喋った本文');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    const askPromise = session.askPermission('AskUserQuestion', 'req-q-resend');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await s.host.stop('mgr-1');
+    const first = await askPromise;
+    // SDK が同じ確認を再送しうる——`#onPermission` は `requestId`（＝
+    // `extra.toolUseID`）が一致する再送に対し、`#resolved` に控えた同じ
+    // 結果をそのまま返す（`#onPermission` 冒頭の分岐）。
+    const second = await session.askPermission('AskUserQuestion', 'req-q-resend');
+
+    expect(first).toEqual({ behavior: 'deny', message: 'デーモンから停止を指示された。' });
+    expect(second).toEqual(first);
+  });
+
+  it('クローンの答え（answer()）の経路では、question はいまどおり allow + 答えになる（回帰の網。#322 と同じ計算のまま）', async () => {
+    const s = setup();
+    await s.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+    const session = await firstSession(s.sessions);
+    const transcriptPath = join(dir, 'answer-question-allow.jsonl');
+    writeFileSync(transcriptPath, 'x', 'utf8');
+    await session.say('喋った');
+    await session.postToolUse({
+      tool_name: 'Bash',
+      tool_input: {},
+      transcript_path: transcriptPath,
+    });
+    const canUseTool = session.options.canUseTool as (
+      toolName: string,
+      input: Record<string, unknown>,
+      extra: { signal: AbortSignal; requestId?: string },
+    ) => Promise<PermissionResult>;
+    const askPromise = canUseTool(
+      'AskUserQuestion',
+      { questions: [{ question: 'DB はどちらにする？', header: 'DB', options: [], multiSelect: false }] },
+      { signal: new AbortController().signal, requestId: 'req-q-answer' },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // **矛盾した `decision: 'deny'` を明示しても無視される（#322 の core と
+    // 同じ確認）。** 直した後もここは崩れていないことを確かめる。
+    await s.host.answer('mgr-1', {
+      requestId: 'req-q-answer',
+      decision: 'deny',
+      message: 'PostgreSQL で',
+    });
+    const answer = await askPromise;
+
+    expect(answer.behavior).toBe('allow');
+    expect((answer as { updatedInput?: { answers?: Record<string, string> } }).updatedInput?.answers).toEqual(
+      { 'DB はどちらにする？': 'PostgreSQL で' },
+    );
+
+    const settled = s.events.find(
+      (e): e is Extract<RunnerEvent, { type: 'settled' }> =>
+        e.type === 'settled' && e.requestId === 'req-q-answer',
+    );
+    expect(settled?.withdrawn).toBeUndefined();
+  });
+});
