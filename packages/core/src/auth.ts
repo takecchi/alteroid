@@ -173,7 +173,14 @@ export interface AuthStore {
    */
   listAccounts(): Promise<AuthAccount[]>;
   getAccount(id: string): Promise<AuthAccount | null>;
-  /** 検証済みメールの衝突検査に使う。 */
+  /**
+   * 検証済みメールの衝突検査に使う。
+   *
+   * **大小文字を区別しない（#1702）。** `alice@example.test` と
+   * `ALICE@EXAMPLE.TEST` は同じメールとして扱う——3実装（memory / fs / pg）
+   * とも比較の前に小文字化する（pg は `lower(email) = lower($1)`）。保存する
+   * メールそのもの（表示用）は正規化しない——比較のときだけ小文字にそろえる。
+   */
   findAccountByEmail(email: string): Promise<AuthAccount | null>;
   putAccount(account: AuthAccount): Promise<void>;
 

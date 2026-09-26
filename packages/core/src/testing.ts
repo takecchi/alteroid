@@ -1101,7 +1101,13 @@ export function createMemoryStores(): Stores {
       return accounts.get(id) ?? null;
     },
     async findAccountByEmail(email) {
-      return [...accounts.values()].find((account) => account.email === email) ?? null;
+      // 大小文字を区別しない（#1702）。fs / pg の実装と同じ規約。
+      const needle = email.toLowerCase();
+      return (
+        [...accounts.values()].find(
+          (account) => account.email !== null && account.email.toLowerCase() === needle,
+        ) ?? null
+      );
     },
     async putAccount(account) {
       accounts.set(account.id, account);

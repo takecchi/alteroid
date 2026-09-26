@@ -125,7 +125,12 @@ export class FsAuthStore implements AuthStore {
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
     const { accounts } = await this.#read();
-    return accounts.find((account) => account.email === email) ?? null;
+    // 大小文字を区別しない（#1702）。memory / pg の実装と同じ規約。
+    const needle = email.toLowerCase();
+    return (
+      accounts.find((account) => account.email !== null && account.email.toLowerCase() === needle) ??
+      null
+    );
   }
 
   async putAccount(account: AuthAccount): Promise<void> {

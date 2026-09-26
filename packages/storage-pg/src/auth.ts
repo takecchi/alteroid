@@ -25,7 +25,8 @@ import { authAccessTokens, authAccounts, authIdentities, authLoginRequests } fro
  * （2026-09-09）。**知識のほうは消していない** — drizzle がドライバの例外を自前の
  * エラーで包むので最前面だけ見ると `code` が見つからない、という事実は
  * `.claude/skills/auth-and-access/SKILL.md` が持つ。この表にはまだ一意索引が在る
- * （`auth_accounts_email_idx`）ので、翻訳が要る日が来たらそこから書き戻すこと。
+ * （`auth_accounts_email_lower_idx`。#1702 で `auth_accounts_email_idx` から
+ * `lower(email)` へ移した）ので、翻訳が要る日が来たらそこから書き戻すこと。
  */
 
 /** 期限切れのログイン要求をいつまでも抱えない（往復用の一時的な行なので）。 */
@@ -70,10 +71,13 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findAccountByEmail(email: string): Promise<AuthAccount | null> {
+    // 大小文字を区別しない（#1702）。一意索引（auth_accounts_email_lower_idx）
+    // と同じ `lower()` で比べる——`eq` のままだと索引に乗らない上に、
+    // memory / fs の実装と判定が食い違う。
     const rows = await this.#db
       .select()
       .from(authAccounts)
-      .where(eq(authAccounts.email, email))
+      .where(sql`lower(${authAccounts.email}) = lower(${email})`)
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : this.#toAccount(row);

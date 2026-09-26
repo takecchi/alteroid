@@ -4743,13 +4743,17 @@ describe('AuthStore', () => {
   });
 
   /**
-   * **[疑いの検証] issue #1688 の「疑い」——`findAccountByEmail` の大小文字（pg）。**
+   * **大小文字だけが違う検証済みメールも衝突として検出する（pg。issue #1702）。**
    *
    * `packages/core/src/auth-service.test.ts` / `packages/storage-fs/src/
    * index.test.ts` の同名の歯と同じ入力・同じ期待値を、`createAuthService`
    * （`auth-service.ts` の実コード。器だけ pg へ差し替える）に対して確かめる。
+   * issue #1688 でこの歯は `findAccountByEmail` が SQL の `=`（大小文字を
+   * 区別する）で比較していたために red だった（オーナー判断は #1702：メール
+   * の大小文字は区別しない。一意索引も `lower(email)` へ移した）。いまは
+   * green であることが保証。
    */
-  describe('[疑いの検証] 大小文字だけが違う検証済みメール', () => {
+  describe('大小文字だけが違う検証済みメール（#1702）', () => {
     function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
       return {
         kind: 'oauth2',
@@ -4764,7 +4768,7 @@ describe('AuthStore', () => {
       };
     }
 
-    it('大小文字だけが違う検証済みメールは衝突として検出されず、一意性が壊れる', async () => {
+    it('大小文字だけが違う検証済みメールも衝突として検出し、2つ目のアカウントには乗せない', async () => {
       const service = createAuthService({
         store: stores.auth,
         providers: createAuthProviderRegistry([
@@ -4812,7 +4816,7 @@ describe('AuthStore', () => {
       if (claimedImpostorCase.status !== 'ready') throw new Error('ログインできていない');
 
       expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
-      // あるべき形（大小文字を区別せずに衝突を検出できていれば）: null のはず。
+      // 大小文字を区別せずに衝突を検出しているので null（#1702）。
       expect(claimedImpostorCase.account.email).toBeNull();
     });
   });

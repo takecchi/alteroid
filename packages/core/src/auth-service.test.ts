@@ -87,7 +87,7 @@ describe('createAuthService', () => {
             emailVerified: true,
             displayName: 'Not Alice',
           },
-          // [疑いの検証] 同じメールだが大小文字だけが違う版。
+          // 同じメールだが大小文字だけが違う版（#1702）。
           'code-impostor-case': {
             subject: 'sub-impostor-case',
             email: 'ALICE@EXAMPLE.TEST',
@@ -304,7 +304,7 @@ describe('createAuthService', () => {
   });
 
   /**
-   * **[疑いの検証] issue #1688 の「疑い」——`findAccountByEmail` の大小文字（in-memory）。**
+   * **大小文字だけが違う検証済みメールも衝突として検出する（in-memory。issue #1702）。**
    *
    * 直上の歯は「大小文字まで完全に同じメール」での相乗り防止を確かめている。
    * ここでは**大小文字だけが違う**メール（`alice@example.test` vs
@@ -312,13 +312,15 @@ describe('createAuthService', () => {
    *
    * `auth-service.ts` の該当コメント（`grep -Fn -- '衝突するときは連絡先を空にしておく' packages/core/src/auth-service.ts`）
    * は「検証済みメールの一意性を壊さない」ことを明示的な意図として書いている。
-   * `findAccountByEmail`（`packages/core/src/testing.ts` / `packages/storage-fs/
-   * src/auth.ts` / `packages/storage-pg/src/auth.ts`）はいずれも `===` /
-   * SQL の `=`（既定で大小文字を区別する）で比較しているので、大小文字だけが
-   * 違うメールは「衝突なし」と判定され、2つ目のアカウントにも検証済みメールが
-   * 乗ってしまう——**この歯が red なら、その意図がここで破れていることを示す。**
+   * issue #1688 でこの歯は一度 `findAccountByEmail`（`packages/core/src/testing.ts` /
+   * `packages/storage-fs/src/auth.ts` / `packages/storage-pg/src/auth.ts`）が
+   * `===` / SQL の `=`（大小文字を区別する）で比較していたために red だった
+   * （オーナー判断は #1702：メールの大小文字は区別しない）。3実装とも比較を
+   * 大小文字を無視する形へ直したいまは、**この歯は green であることが保証**
+   * ——大小文字だけが違うメールも衝突として検出され、2つ目のアカウントには
+   * 乗らない。
    */
-  it('[疑いの検証] 大小文字だけが違う検証済みメールは衝突として検出されず、一意性が壊れる', async () => {
+  it('大小文字だけが違う検証済みメールも衝突として検出し、2つ目のアカウントには乗せない（#1702）', async () => {
     const alice = await login('code-alice');
     const claimedAlice = await service.claim(alice);
     if (claimedAlice.status !== 'ready') throw new Error('ログインできていない');
@@ -330,7 +332,7 @@ describe('createAuthService', () => {
     if (claimedImpostorCase.status !== 'ready') throw new Error('ログインできていない');
 
     expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
-    // あるべき形（大小文字を区別せずに衝突を検出できていれば）: null のはず。
+    // 大小文字を区別せずに衝突を検出しているので null（#1702）。
     expect(claimedImpostorCase.account.email).toBeNull();
   });
 
