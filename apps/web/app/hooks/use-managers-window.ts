@@ -74,6 +74,32 @@
  * で頁ごとに結果を見て、失敗した頁は前回の値のまま `setOlderPages` に渡す
  * （画面を空にしない）。
  *
+ * **走っている間に来た分は取りこぼさない —— 最大1回の追い撃ち。** 背景の
+ * 取り直しが1本（`R1`）走っている間にもう一度 `first.isValidating` が
+ * `true → false` になったら（＝別の SSE がもう1本、頁1の再検証を終わらせた
+ * ら）、その場で重ねて2本目を撃つ代わりに「積み残しが在る」という印
+ * （`olderRefreshDirtyRef`）だけを立てて `return` する。`R1` が終わった時点で
+ * この印を見て、立っていれば消してからもう1回だけ撃ち直す
+ * （`runOlderRefresh` の再帰）。**何本 SSE が重なっても、印は1つしか持たない
+ * ので追い撃ちは最大1回に収まる** —— `R1` が終わった時点でのいちばん新しい
+ * 錨（`olderPagesRef.current`）で撃ち直すので、間に「もっと見る」で頁が
+ * 増えていてもそれも一緒に取り直される。
+ *
+ * **これが無いと何が起きるか。** `R1` の応答がサーバ側では②の変化より
+ * *前*に確定していた場合（＝在庫としては古い値のまま応答が組み立てられて
+ * いた場合）、`R1` が返ってきても中身は古いままで、かつ「次の頁1の再検証が
+ * 来ればそこで追いつく」が成り立つのは*次の SSE が実際に来たとき*だけ
+ * ——それ以降 SSE が来なければ、読み足した行はその古い値のまま残り続ける
+ * （issue #1624 のレビューで指摘された取りこぼし。`managers-older-refresh
+ * -in-flight.test.tsx` がこの筋書きを歯にしている）。
+ *
+ * **重ねて2本を並行に撃たない理由。** 同じ錨へ2本の要求を並行に飛ばすと、
+ * 応答が届く順序がネットワークの都合で入れ替わりうる——先に撃った方が
+ * 後から届くと、`setOlderPages` が新しい値を古い値で上書きしてしまう
+ * （SWR がこの並び替えを気にしなくてよいのは、`dedupingInterval` の間は
+ * 同じキーへの要求を1本に併合しているからで、ここでも同じ理由で「常に
+ * 1本ずつ、順に撃つ」側を採っている）。
+ *
  * **`lastOlderCount` / `olderStatus`（進捗・終端の判定）は動かさない。**
  * 動かしているのは常に `loadOlder()` が明示的に読んだときだけで、この
  * 背景の取り直しは「もう表示している頁の中身を新しくする」ことに閉じる
@@ -224,18 +250,22 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
     olderPagesRef.current = olderPages;
   }, [olderPages]);
 
-  // すでに背景の取り直しが走っている間は重ねて撃たない——次の頁1の
-  // 再検証（次の SSE の束、または次の focus/reconnect）が来ればそこで
-  // 追いつく。撃ちっぱなしにすると、SSE が頁1の間引きより短い間隔で
-  // 何度も再検証を終える形（間引きの窓をまたいで2回終わる等）のときに
-  // 同じ錨へ重ねて撃つことになる。
+  // すでに背景の取り直しが走っている間は重ねて撃たない——代わりに
+  // 「走っている間にもう1回来た」ことだけを覚えておき（下の
+  // `olderRefreshDirtyRef`）、いま走っている分が終わった時点で消費して
+  // もう1回だけ撃ち直す（`runOlderRefresh` の再帰）。理由はこのファイル
+  // 冒頭の doc「走っている間に来た分は取りこぼさない」を参照。
   const isRefreshingOlderRef = useRef(false);
+  const olderRefreshDirtyRef = useRef(false);
 
-  const refreshOlderPages = useCallback(() => {
-    if (isRefreshingOlderRef.current) return;
+  // `useCallback` の自己参照を避けるため素の関数にしてある
+  // （`use-journal-window.ts` の `loadOlderAt` と同じ理由・同じ形）。
+  function runOlderRefresh(): void {
     const pages = olderPagesRef.current;
-    if (pages.length === 0) return;
-    isRefreshingOlderRef.current = true;
+    if (pages.length === 0) {
+      isRefreshingOlderRef.current = false;
+      return;
+    }
     Promise.allSettled(
       pages.map((p) => {
         const query = managersToQuery({ status, limit: MANAGERS_PAGE, after: p.after });
@@ -263,8 +293,29 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
         );
       })
       .finally(() => {
-        isRefreshingOlderRef.current = false;
+        // **積み残しが在れば、消費してもう1回だけ撃ち直す。** `isRefreshing`
+        // を立てたまま再帰するので、この1本が終わるまでは次の積み残しも
+        // 重ねて撃たれない（最大1回の追い撃ちに収まる）。
+        if (olderRefreshDirtyRef.current) {
+          olderRefreshDirtyRef.current = false;
+          runOlderRefresh();
+        } else {
+          isRefreshingOlderRef.current = false;
+        }
       });
+  }
+
+  const refreshOlderPages = useCallback(() => {
+    if (isRefreshingOlderRef.current) {
+      olderRefreshDirtyRef.current = true;
+      return;
+    }
+    if (olderPagesRef.current.length === 0) return;
+    isRefreshingOlderRef.current = true;
+    runOlderRefresh();
+    // `runOlderRefresh` は素の関数で、呼ぶたびに最新の
+    // `olderPagesRef`/`status`/`api` をそのまま読む（依存に含めない）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, status]);
 
   // `first.isValidating` が `true → false` になった瞬間だけ発火する。
