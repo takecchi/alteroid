@@ -6817,7 +6817,15 @@ class Pool implements ManagerPool {
          * 一覧は `live: true` を名乗り続けていた。`sessionMissingKind` は立てない
          * —— 意図して止めたのであって、resume に失敗したのではない。
          */
-        if (outcome === 'stopped') {
+        /*
+         * **await の間に別の runner へ移っていたら、この委譲には触らない。** 上の
+         * 観測と握手は元の runner を相手に await する。その間に貸し出しが期限切れで、
+         * 別の runner の名乗り（`#reattach`）が同じ委譲を引き取っていると、
+         * `record.job.runnerId` は新しい runner を指している——「元の runner の一覧に
+         * 居ない」は「止まった」ではなく「移った」であり、動いている委譲に
+         * `attached = false` を書くことになる（C のレビューが #1659 について挙げた疑い）。
+         */
+        if (outcome === 'stopped' && record.job.runnerId === runnerId) {
           record.attached = false;
           await this.#persist(record);
         }
@@ -7265,7 +7273,14 @@ class Pool implements ManagerPool {
        * 貸し出しを返すと、まだ走っているセッションを別の器が引き取れてしまう）。
        */
       const holder = record.job.lease;
-      if (holder !== undefined) {
+      /*
+       * **止めて確かめた runner 自身が握っている貸し出しだけを返す。** 呼び出し元が
+       * `runner.stop()` / 一覧の確認を await している間に、別の runner が同じ委譲を
+       * 引き取っていると、`record.job.lease` はもう新しい runner の貸し出しである。
+       * それを返すと、動いている委譲の貸し出しが空き、さらに別の器が同じ委譲を
+       * 引き取れる（二重実行の芽。vacate の途中の引き取りで実測した）。
+       */
+      if (holder !== undefined && holder.runnerId === runner.runnerId) {
         /*
          * **判定は `judgeLease` に委ねる（ここで2値へ潰さない）。** 以前はここに
          * 手書きの `sameHolder`（`holder.instanceId !== undefined && seen.instanceId
