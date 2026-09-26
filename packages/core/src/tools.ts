@@ -6285,8 +6285,13 @@ export function createCloneTools(context: ToolContext) {
           .describe('毎日この時刻に起こす（ローカル時刻の HH:MM）。周期はどれか1つだけ渡す'),
         everyMinutes: z
           .number()
-          .int()
-          .min(1)
+          // **issue #1651 の後始末（マネージャーの追加指摘。`request` と同じ穴）。**
+          // ここに `.int().min(1)` を足すと、SDK の `tool()` がハンドラを呼ぶ
+          // **前**に検証してしまい、落ちたときの応答が兄弟の欄（`kind` /
+          // `request` など。ハンドラの先頭で断って日本語の平文を返す）と違う
+          // 形——英語の zod の JSON がマーカー付きでそのまま返る——になる。
+          // 整数・1以上の判定はハンドラの先頭（下）へ移した。ここは型（数値）
+          // だけを固定する。
           .optional()
           .describe('この分数ごとに起こす。周期はどれか1つだけ渡す'),
         cron: z
@@ -6333,6 +6338,18 @@ export function createCloneTools(context: ToolContext) {
           return text(
             `cron "${cron}" は cron 式として読めない（例: 毎週月曜 10:00 なら \`0 10 * * 1\`）。`,
           );
+        }
+        // **issue #1651 の後始末。** HTTP の `scheduleBody`（`spec` を
+        // `scheduleSpecSchema` で検査——`every` は `minutes: z.number().int().min(1)`）
+        // と同じ意味「1以上の整数のみ」に揃える。検査はここ（ハンドラ）で行い、
+        // 保存層（fs / pg の `scheduledRequestSchema.parse(entry)` 経由の
+        // `scheduleSpecSchema`）へは不正な値を1文字も渡さない。doc は
+        // `everyMinutes` の入力スキーマ側にある。
+        if (
+          everyMinutes !== undefined &&
+          (!Number.isInteger(everyMinutes) || everyMinutes < 1)
+        ) {
+          return text(`everyMinutes ${everyMinutes} は使えない（1以上の整数のみ）。`);
         }
 
         const spec: ScheduleSpec =

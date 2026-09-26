@@ -58,6 +58,14 @@ import { createFsStores } from './index.js';
  * （AGENTS.md「テストを弱めずに直す」——「保存層に何も残らないこと」の保証は
  * そのまま残し、それに加えて「クローンに読める日本語で返ること」も保証する
  * ようになったので、保証は弱くなっていない）。
+ *
+ * ## 追記2（同じ PR。マネージャーの追加指摘——`everyMinutes` も同じ穴）
+ *
+ * `everyMinutes` も `request` と同じ形で入力スキーマ側に
+ * `z.number().int().min(1)` を持っていた（#1656 より前から在ったが、症状の
+ * 単位で見れば同じ穴——AGENTS.md「範囲外でも気づいたことは上げる」の問い1）。
+ * `.int().min(1)` を外し、ハンドラの先頭で断るように直した。下に
+ * `everyMinutes` 版の `it` を足した（0・負の数・非整数の3値）。
  */
 interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
@@ -172,6 +180,31 @@ describe('schedule_create / practice_* — issue #1651 の fs 実装での確認
     // 例外で落ちて赤くなる——「保存層に空文字が届かない」ことは、道具の
     // 判定と fs 側の判定の**両方**で保証されている）。
     await expect(stores.schedules.get('probe')).resolves.toBeNull();
+  });
+
+  it('schedule_create: everyMinutes が 0 / 負の数 / 非整数はハンドラの先頭で断られ、日本語の平文で返り、fs の保存層に何も残らない（issue #1651 と同じ穴。マネージャーの追加指摘）', async () => {
+    const rpc = await connect(stores);
+
+    for (const everyMinutes of [0, -5, 1.5]) {
+      const result = await callTool(rpc, 'schedule_create', {
+        kind: 'probe',
+        request: '定期的に確認する',
+        everyMinutes,
+      });
+
+      // **`isError` は立てない——`request` の節と同じ形。** 直す前は
+      // `everyMinutes` も道具の入力スキーマ側に `.int().min(1)` を持って
+      // いたので、ここが `isError: true` かつ英語の zod の JSON だった。
+      expect(result.isError, result.text).toBe(false);
+      expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
+      expect(result.text).toContain('everyMinutes');
+
+      // **保存層に何も残らないこと——fs の `scheduledRequestSchema`
+      // （`spec` の `every` 変種が同じ `minutes: z.number().int().min(1)`
+      // を持つ）が最後の網として ZodError を投げる経路も生きているので、
+      // 道具側の判定が万一素通りしてもこの `it` 自体が例外で落ちて赤くなる。
+      await expect(stores.schedules.get('probe')).resolves.toBeNull();
+    }
   });
 
   it('practice_write: 形式不正な slug は例外を投げず、「スラッグが不正」と返り、保存層に何も残らない', async () => {
