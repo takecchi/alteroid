@@ -869,6 +869,54 @@ describe('HTTP API', () => {
   });
 
   /**
+   * **issue #1634 の範囲外の気づき（この Issue そのものではない——別 PR）。**
+   *
+   * `PUT /practices/:slug` と `DELETE /practices/:slug` はどちらもハンドラの
+   * 先頭で `practiceSlugSchema.safeParse(slug)` を検査し、落ちれば
+   * `{ error: 'やり方のスラッグが不正' }` を 400 で返す。**`GET /practices/:slug`
+   * にはこの検査が無かった。**
+   *
+   * `GET /memory/:slug`（#1634/#1636）と違い、`PracticeStore` の
+   * `read()`（in-memory・fs のどちらも）は不正なスラッグで例外を投げない
+   * ——`Map`/JSON ファイルから単純に「見つからない」扱いになるだけなので、
+   * 直す前もクラッシュはせず 404 を返していた。**それでも `PUT`/`DELETE`
+   * とは異なる応答（ステータスも本文も違う）になっていたので、
+   * オーナーの判断で `GET` にも同じ 400 の門を足して揃えた。**
+   */
+  describe('GET /practices/:slug は不正なスラッグを 400 で断る', () => {
+    it('PUT・DELETE と同じ 400・同じ本文になる（直す前は 404 だった）', async () => {
+      // `practiceSlugSchema` に落ちる——先頭が大文字（PUT の既存の歯
+      // 「不正な slug は 400」と同じ値）。
+      const badSlug = 'Not_Valid_SLUG!';
+
+      const putRes = await app.request(`/practices/${badSlug}`, {
+        ...json({ kind: '実装', title: '題', content: '本文' }),
+        method: 'PUT',
+      });
+      expect(putRes.status, 'PUT は不正なスラッグを 400 で断る（想定どおり）').toBe(400);
+      const putBody = (await putRes.json()) as { error: string };
+
+      const deleteRes = await app.request(`/practices/${badSlug}`, { method: 'DELETE' });
+      expect(deleteRes.status, 'DELETE は不正なスラッグを 400 で断る（想定どおり）').toBe(400);
+      const deleteBody = (await deleteRes.json()) as { error: string };
+
+      const getRes = await app.request(`/practices/${badSlug}`);
+      expect(
+        getRes.status,
+        'GET /practices/:slug は PUT/DELETE と同じ入力なら 400 を返すべき' +
+          '（直す前は practiceSlugSchema の pre-check が無く、store.read() が' +
+          '素通りで null を返すので 404 だった）。',
+      ).toBe(400);
+      const getBody = (await getRes.json()) as { error: string };
+
+      // **本文の文言も PUT/DELETE と揃える。**
+      expect(getBody).toEqual(putBody);
+      expect(getBody).toEqual(deleteBody);
+      expect(getBody).toEqual({ error: 'やり方のスラッグが不正' });
+    });
+  });
+
+  /**
    * やり方の追記専用の版の履歴（#1309）。
    * `GET /practices/:slug/versions` と `GET /practices/:slug/versions/:version`。
    */

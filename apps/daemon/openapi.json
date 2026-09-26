@@ -2966,6 +2966,22 @@
               }
             }
           },
+          "400": {
+            "description": "やり方のスラッグが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "404": {
             "description": "該当するやり方が無い。",
             "content": {
