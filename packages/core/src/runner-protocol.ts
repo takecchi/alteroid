@@ -124,6 +124,33 @@ export const runnerManagerStateSchema = z.object({
   sessionId: z.string().optional(),
 });
 
+/**
+ * runner の委譲一覧の読み出し結果（Issue #1661。`RunnerClient.listWithUnreadable`）。
+ *
+ * `states` は読めた委譲、`unreadableIds` はスキーマに合わず状態を読めなかったが
+ * `managerId` だけは拾えた委譲である。**後者も「runner に居る」側に数えること**
+ * ——状態が読めないことを、居ないことと畳まない。
+ */
+export interface RunnerManagerListing {
+  states: RunnerManagerState[];
+  unreadableIds: string[];
+}
+
+/**
+ * runner の委譲一覧を、読めなかった委譲の id ごと読む（Issue #1661）。
+ *
+ * `listWithUnreadable` を持たない runner（同一プロセスの実装・テストの偽物）は、
+ * `unreadableIds` を空にして `list()` へ落ちる。**`Pool` の生存判定はこれを通す**
+ * （`manager.ts` の `#restoreJobs` / `#reattach` / `#confirmStoppedAndReleaseLease`）。
+ */
+export async function listRunnerManagers(
+  runner: Pick<RunnerClient, 'list' | 'listWithUnreadable'>,
+  options?: { signal?: AbortSignal },
+): Promise<RunnerManagerListing> {
+  if (runner.listWithUnreadable !== undefined) return runner.listWithUnreadable(options);
+  return { states: await runner.list(options), unreadableIds: [] };
+}
+
 export type RunnerManagerState = z.infer<typeof runnerManagerStateSchema>;
 
 // ---------------------------------------------------------------------------
@@ -2284,6 +2311,22 @@ export interface RunnerClient {
    * 受ける。
    */
   list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]>;
+  /**
+   * {@link list} と同じ一覧に加えて、**こちらのスキーマに合わずに読めなかったが、
+   * `managerId` だけは拾えた委譲**の id を返す（Issue #1661）。
+   *
+   * **任意の口である。** 版ずれが起きうるのは別プロセスの runner（`HttpRunner`）
+   * だけで、同一プロセスの実装やテストの偽物は同じスキーマを共有するので持たなくて
+   * よい。呼ぶ側は {@link listRunnerManagers} を通すこと——口が無ければ
+   * `unreadableIds` を空にして {@link list} へ落ちる。
+   *
+   * **なぜ要るか。** 読めなかった委譲を一覧から黙って落とすと、Pool（`manager.ts`）は
+   * 「runner に居ない」と判定する。runner が先に新しい版になって、デーモンのまだ
+   * 知らない `status` を送る版ずれで、**まだ走っている委譲の貸し出しを解放し**
+   * （`#confirmStoppedAndReleaseLease`）、**待っていた確認を捨てて resume する**
+   * （`#reattach` / `#restoreJobs`）。状態は読めなくても、「居る」ことは分かる。
+   */
+  listWithUnreadable?(options?: { signal?: AbortSignal }): Promise<RunnerManagerListing>;
   /** runner のローカルにある生ログ。無ければ null。 */
   transcript(managerId: string): Promise<string | null>;
   /**

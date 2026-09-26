@@ -1,4 +1,4 @@
-import { captureStderr } from '@alteroid/core';
+import { captureStderr, listRunnerManagers } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import { createHttpRunner } from './runner-client.js';
@@ -77,5 +77,26 @@ describe('HttpRunner#list() は飛ばした委譲の跡を残す（#1661）', ()
 
     expect(first.join('\n')).toContain('managerId=mgr-future');
     expect(second.join('\n')).not.toContain('managerId=mgr-future');
+  });
+});
+
+describe('HttpRunner#listWithUnreadable() は、読めなかった委譲の managerId を返す（#1661）', () => {
+  it('スキーマに落ちた委譲も、managerId だけは unreadableIds に載る（Pool が「居る」側に数える材料）', async () => {
+    const client = await createHttpRunner({
+      baseUrl: 'http://future.test',
+      token: TOKEN,
+      fetchFn: fetchWithManagers([
+        ...MANAGERS,
+        // managerId すら読めない要素は、id を作らずに外す。
+        { status: 'archiving' },
+      ]),
+    });
+
+    const listing = await captureStderr(async () => {
+      const result = await listRunnerManagers(client);
+      expect(result.states.map((m) => m.managerId)).toEqual(['mgr-ok']);
+      expect(result.unreadableIds).toEqual(['mgr-future']);
+    });
+    expect(listing.join('\n')).toContain('こちらのスキーマに合わない 2 件を飛ばした');
   });
 });
