@@ -837,6 +837,7 @@ export {
  */
 export {
   agentTokenInputSchema,
+  agentTokenSchema,
   agentTokenViewSchema,
   cooldownSourceSchema,
   DEFAULT_TOKEN_COOLDOWN_MS,

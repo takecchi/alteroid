@@ -30,9 +30,11 @@ import type {
 } from './schema.js';
 import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
+  commitmentSchema,
   memorySlugSchema,
   practiceSchema,
   practiceVersionSchema,
+  scheduledRequestSchema,
   schedulePhaseSchema,
 } from './schema.js';
 import {
@@ -76,7 +78,10 @@ import {
   JournalAnchorNotFoundError,
 } from './store.js';
 import {
+  activeAgentTokenSchema,
+  agentTokenSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  tokenRotationSettingsSchema,
   type ActiveAgentToken,
   type AgentToken,
   type TokenRotationSettings,
@@ -612,7 +617,10 @@ export function createMemoryStores(): Stores {
       return found === undefined ? null : isolate(found);
     },
     async put(entry) {
-      schedules.set(entry.kind, isolate(entry));
+      // 本物（fs / pg）と同じく `scheduledRequestSchema` を通す（issue #1652）。
+      // かつてはインメモリだけが何でも受け付けたので、`request` が空文字の
+      // ような形式不正な entry も「書けた」として通していた。
+      schedules.set(entry.kind, isolate(scheduledRequestSchema.parse(entry)));
     },
     async remove(kind) {
       schedules.delete(kind);
@@ -689,10 +697,16 @@ export function createMemoryStores(): Stores {
     // 守ってくれるからではない——途中に `await` を入れた瞬間、同じストアを
     // 共有する2つの `Clone` のあいだで本物の器と同じ競合が生まれる。
     async open(entry) {
-      if (commitments.has(entry.id)) return { opened: false, folded: false };
-      const duplicate = findOpenManagerDuplicate([...commitments.values()], entry);
+      // 本物（fs / pg）と同じく `commitmentSchema` を通す（issue #1652）。
+      // かつてはインメモリだけが何でも受け付けたので、`at` が ISO 8601 で
+      // ないような形式不正な entry も「開けた」として通していた。
+      // ⚠️ 同期のまま最後まで判定して書く（`await` を挟まない）——`.parse()`
+      // は同期なので、直上のコメント（issue #1041）の性質を壊さない。
+      const parsed = commitmentSchema.parse(entry);
+      if (commitments.has(parsed.id)) return { opened: false, folded: false };
+      const duplicate = findOpenManagerDuplicate([...commitments.values()], parsed);
       if (duplicate !== undefined) return { opened: false, folded: true, foldedInto: duplicate.id };
-      commitments.set(entry.id, isolate(entry));
+      commitments.set(parsed.id, isolate(parsed));
       return { opened: true, folded: false };
     },
     async close(id, at, reason, by: CommitmentClosedBy) {
@@ -1136,15 +1150,19 @@ export function createMemoryStores(): Stores {
       return [...tokenPool].sort((a, b) => a.order - b.order);
     },
     async replace(next) {
-      tokenPool = [...next];
+      // **本物（fs の `agentTokenRowSchema` / pg の `order` 列の SQL 整数型）と
+      // 同じ検査を掛ける。** かつてはインメモリだけが何でも受け付けたので、
+      // `order` が非整数の行を「書けた」として通していた（issue #1652）。
+      tokenPool = next.map((token) => agentTokenSchema.parse(token));
       return tokens.list();
     },
     async readSettings() {
       return tokenRotationSettings ?? DEFAULT_TOKEN_ROTATION_SETTINGS;
     },
     async writeSettings(settings) {
-      tokenRotationSettings = settings;
-      return settings;
+      // 本物（fs / pg）と同じく `tokenRotationSettingsSchema` を通す（#1652）。
+      tokenRotationSettings = tokenRotationSettingsSchema.parse(settings);
+      return tokenRotationSettings;
     },
     async readActive() {
       // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
@@ -1153,8 +1171,9 @@ export function createMemoryStores(): Stores {
       return activeAgentToken;
     },
     async writeActive(active) {
-      activeAgentToken = active;
-      return active;
+      // 本物（fs）と同じく `activeAgentTokenSchema` を通す（#1652）。
+      activeAgentToken = activeAgentTokenSchema.parse(active);
+      return activeAgentToken;
     },
   };
 
@@ -1484,6 +1503,12 @@ function createMemoryInboxStore(): InboxStore {
     async put(event: InboxEvent, at: string): Promise<void> {
       // 配達回数は保つ（本文だけを差し替える）。
       const deliveries = unread.get(event.id)?.deliveries ?? 0;
+      // **既存の行を一旦 `delete` してから `set` し直す。** `Map` はキーの
+      // 再設定では挿入順を動かさない仕様なので、`delete` を挟まずに
+      // `set` するだけだと再配達された行が元の位置に留まり、fs / pg
+      // （どちらも「既存の行を除いてから足す」形で末尾へ回る）と同着
+      // （同じ `at`）のときの並びが食い違っていた（issue #1652）。
+      unread.delete(event.id);
       unread.set(event.id, { event, at, deliveries });
     },
     async remove(id: string): Promise<void> {
