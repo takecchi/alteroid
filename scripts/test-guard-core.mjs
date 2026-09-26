@@ -100,6 +100,134 @@ export function dropBareDashDash(argv) {
   return argv.filter((arg) => arg !== '--');
 }
 
+// ── 引数の正規化（続き）: パッケージの範囲（#1691） ──────────────────
+
+/**
+ * 各ワークスペースの `test` script が渡す、パッケージの範囲を表す名前付き引数。
+ * 値は repo の根からの相対パス（例: `apps/cli/src`）。
+ *
+ * #1691: 以前は範囲そのものを**位置引数**（例: `apps/cli/src`）として渡していた。
+ * vitest の位置引数は **OR** で効くため、利用者が `pnpm test -- <file>` で足した
+ * 位置引数と範囲の位置引数が両方フィルタとして働き、範囲（＝パッケージ全体）の
+ * ほうが常に勝って絞り込みが1つも効かなかった（実測は `test.mjs` の doc、
+ * PR 本文）。**範囲を named 引数へ移し、利用者の位置引数の有無で分岐する**
+ * （下の `resolveScopedArgs`）ことで、この OR を無くす。
+ */
+export const SCOPE_FLAG = '--scope';
+
+/**
+ * `resolveScopedArgs` が「値が別トークンに分かれて来る」と知っている vitest の
+ * フラグ。**「絞り込むかどうか」ではなく「次の要素を値として飲むか」だけを見る
+ * ための一覧なので、`verify-core.mjs` の `TEST_ARGS_THAT_DO_NOT_NARROW`（許可
+ * リストの目的が違う——あちらは「絞り込まないと分かっているもの」）を流用しない。
+ * `-t` は名前で絞り込むが、値はパスではないので範囲判定の対象にしない。
+ */
+const VALUE_TAKING_FLAGS = new Set([
+  '--maxWorkers',
+  '--minWorkers',
+  '--reporter',
+  '--testNamePattern',
+  '-t',
+]);
+
+/** 値必須フラグの値として飲んでよいか。`-` で始まるものはフラグ自身とみなし、
+ * 値としては飲まない（`verify-core.mjs` の `isFlagLike` と同じ向き。飲まなければ
+ * 「位置引数」側へ回るだけで、安全側に倒れる）。 */
+function isFlagLike(arg) {
+  return arg === undefined || arg.startsWith('-');
+}
+
+/** 歯B/歯Cの exit code（1〜7）とは別の値にする。範囲の外を指す位置引数を断ったとき
+ * に使う（#1691）。 */
+export const EXIT_SCOPE_VIOLATION = 8;
+
+/**
+ * `--scope=<repo根からの相対パス>` を argv から取り出し、利用者の位置引数を
+ * 「打った場所（パッケージのディレクトリ）」から repo の根からのパスへ直す。
+ *
+ * 呼び出し側の想定: `test.mjs` の `main()` が
+ * `resolveScopedArgs(dropBareDashDash(process.argv.slice(2)), { cwd: process.cwd() })`
+ * の形で呼ぶ（素の `--` は既に落ちている前提）。
+ *
+ * ## 分岐
+ *
+ * - **`--scope` が無い** ⟹ 何もしない。argv をそのまま返す（root の
+ *   `pnpm test <パスの一部>` はここを通らないので、1文字も変えない）。
+ * - **`--scope` は在るが、利用者の位置引数が無い** ⟹ 範囲そのものが唯一の
+ *   フィルタになる（旧来、範囲を位置引数として渡していたときの既定と同じ
+ *   挙動——パッケージ全体を走らせる）。
+ * - **`--scope` があり、利用者の位置引数もある** ⟹ 各位置引数を `cwd`
+ *   （呼び出し側が渡す。パッケージのディレクトリ——`pnpm --filter <pkg> test`
+ *   と `cd <pkg> && pnpm test` のどちらでも `process.cwd()` はパッケージの
+ *   ディレクトリで安定している。`INIT_CWD` は前者だと repo の根、後者だと
+ *   パッケージのディレクトリで**割れる**ので使わない。実測は PR 本文）から
+ *   repo の根からの相対パスへ直す。**範囲の外を指すものが1つでもあれば、
+ *   黙って全体を走らせず、断る**（`ok: false` + 理由）。
+ *
+ * 名前付き引数（`--maxWorkers` 等）・`-t`・`--reporter` はそのまま素通しする
+ * （位置引数としては数えない。上の `VALUE_TAKING_FLAGS` が値の側も飲む）。
+ *
+ * ディスクを読まない純粋関数——`cwd` / `repoRoot` を合成した文字列で試せる
+ * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
+ */
+export function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = ROOT } = {}) {
+  const scopePrefix = SCOPE_FLAG + '=';
+  let scope;
+  const rest = [];
+  for (const arg of argv) {
+    if (arg.startsWith(scopePrefix)) {
+      scope = arg.slice(scopePrefix.length);
+      continue;
+    }
+    rest.push(arg);
+  }
+
+  if (scope === undefined) {
+    return { ok: true, args: rest };
+  }
+
+  const positionalIdx = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (isFlagLike(arg)) {
+      const eqIdx = arg.indexOf('=');
+      const head = eqIdx === -1 ? arg : arg.slice(0, eqIdx);
+      if (eqIdx === -1 && VALUE_TAKING_FLAGS.has(head) && !isFlagLike(rest[i + 1])) {
+        i += 1; // 空白区切りの値をフィルタと読み違えない
+      }
+      continue;
+    }
+    positionalIdx.push(i);
+  }
+
+  if (positionalIdx.length === 0) {
+    return { ok: true, args: [...rest, scope] };
+  }
+
+  const outArgs = [...rest];
+  for (const i of positionalIdx) {
+    const rawArg = rest[i];
+    const abs = path.resolve(cwd, rawArg);
+    const rel = path.relative(repoRoot, abs).split(path.sep).join('/');
+    const inScope = rel === scope || rel.startsWith(`${scope}/`);
+    if (!inScope) {
+      return {
+        ok: false,
+        exitCode: EXIT_SCOPE_VIOLATION,
+        message: [
+          `test-guard: 範囲外 — 指定したパス「${rawArg}」は、この test の範囲` +
+            `（${scope}）の外を指している（打った場所 ${cwd} から repo の根への相対パスは` +
+            `「${rel}」）。`,
+          'このパッケージの test はここまでしか見ない。範囲内のパスを指すか、',
+          'root の `pnpm test <パスの一部>` を使うこと。',
+        ].join('\n'),
+      };
+    }
+    outArgs[i] = rel;
+  }
+  return { ok: true, args: outArgs };
+}
+
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────
 
 /**
