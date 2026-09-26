@@ -132,6 +132,30 @@ describe('/mcp-servers 画面 — 読む', () => {
     expect(document.body.textContent).not.toContain(SECRET);
   });
 
+  /**
+   * 🔴 **password だけの userinfo（`https://:秘密@host`）も、押す前の一覧に出さない**
+   * （issue #1622）。`username` だけを見る判定では、`username` が空文字のこの形が
+   * 素通りし、秘密が一覧にそのまま出ていた。
+   */
+  it('password だけの userinfo の宛先も伏せ、押す前の一覧に秘密を出さない', async () => {
+    stubMcp({
+      get: {
+        status: 200,
+        body: {
+          mcpServers: {
+            passwordOnly: { type: 'http', url: `https://:${SECRET}@mcp.example.com/mcp` },
+          },
+          updatedAt: '2026-09-20T00:00:00.000Z',
+        },
+      },
+    });
+    renderScreen();
+
+    expect(await screen.findByText('passwordOnly')).toBeTruthy();
+    expect(screen.getByText('https://mcp.example.com/mcp?***')).toBeTruthy();
+    expect(document.body.textContent).not.toContain(SECRET);
+  });
+
   it('置かれていなければ「置かれていない」と出し、表示・外すボタンを出さない', async () => {
     stubMcp({ get: { status: 200, body: { mcpServers: {} } } });
     renderScreen();

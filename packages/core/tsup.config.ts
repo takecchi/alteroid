@@ -56,6 +56,12 @@ export default defineConfig({
    *   ファイル自身は import を1つも持たない（`schema.ts` からは
    *   `import type` だけ）——構造的に一致することは `schema.ts` の型レベルの
    *   検査（`_AssertTraceActionMatchesLikeType`）が保証する。
+   * - `mask-url.ts` — MCP サーバの宛先 URL の伏せ字（issue #1622。
+   *   `@alteroid/core/mask-url`）。**`permission-rule.ts` と同じ形**——CLI
+   *   （`apps/cli/src/mcp.ts`）と Web UI（`apps/web/app/routes/mcp-servers.tsx`）が
+   *   同じ1行の判定を別々に持ち、**どちらも password だけの userinfo を
+   *   伏せていなかった**。秘密の伏せ方は片方だけ直すと他方から漏れるので、
+   *   ここへ寄せた。ファイル自身は import を1つも持たない。
    */
   entry: [
     'src/index.ts',
@@ -66,6 +72,7 @@ export default defineConfig({
     'src/permission-rule.ts',
     'src/answered-via.ts',
     'src/trace-action.ts',
+    'src/mask-url.ts',
   ],
   format: ['esm'],
   dts: true,
