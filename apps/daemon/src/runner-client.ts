@@ -7,6 +7,7 @@ import type {
   RunnerExecutionResources,
   RunnerLegState,
   McpServers,
+  RunnerManagerListing,
   RunnerManagerState,
   RunnerMcpServersFingerprint,
   RunnerPlacementResources,
@@ -1647,9 +1648,18 @@ class HttpRunner implements RunnerClient {
    * `ping()` / `resources()` が既に `signal` を受けているのと同じ形である。
    */
   async list(options?: { signal?: AbortSignal }): Promise<RunnerManagerState[]> {
+    return (await this.listWithUnreadable(options)).states;
+  }
+
+  /**
+   * {@link list} と同じ一覧に、スキーマに合わずに読めなかった委譲の `managerId` を
+   * 添えて返す（Issue #1661。`RunnerClient.listWithUnreadable` の doc）。Pool の
+   * 生存判定は、読めなかった委譲も「runner に居る」側に数える。
+   */
+  async listWithUnreadable(options?: { signal?: AbortSignal }): Promise<RunnerManagerListing> {
     const response = await this.#call('GET', '/managers', undefined, options?.signal);
     const body = (await response.json()) as { managers?: unknown };
-    if (!Array.isArray(body.managers)) return [];
+    if (!Array.isArray(body.managers)) return { states: [], unreadableIds: [] };
     // **スキーマに合わない要素は飛ばすが、黙っては飛ばさない（#1661）。** 飛ばした
     // 委譲は Pool から見て「runner に居ない」側に落ち、待っていた確認まで捨てられうる
     // （`runnerWaitingSchema` の doc）。典型は runner が先に新しい版になって、こちらの
@@ -1686,7 +1696,12 @@ class HttpRunner implements RunnerClient {
       return true;
     });
     if (fresh.length > 0) noteDroppedRunnerManagers(this.#describeSelf(), fresh);
-    return managers;
+    return {
+      states: managers,
+      unreadableIds: dropped.flatMap(({ managerId }) =>
+        managerId === undefined ? [] : [managerId],
+      ),
+    };
   }
 
   async credentials(): Promise<RunnerCredentialFingerprint[]> {

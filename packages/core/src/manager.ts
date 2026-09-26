@@ -45,6 +45,7 @@ import {
   describeRunnerEntries,
   isFencedRunnerError,
   isRetryableRunnerError,
+  listRunnerManagers,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   RunnerHttpError,
   RunnerMcpServersUnsupportedError,
@@ -6862,8 +6863,14 @@ class Pool implements ManagerPool {
     // 応答が無いことを『セッションが無い』と読むと、生きている仕事を二重に起こす」）。
     // 同じクラスの同じ危険に対して、片方にだけ置かれていた。
     const unheard = new Set<string>();
+    /**
+     * **状態は読めなかったが runner に居る委譲**（Issue #1661）。版ずれで
+     * こちらのスキーマに合わなかった要素で、`managerId` だけが分かる。
+     * 「居ない」と畳むと、まだ走っている委譲を resume し、待っていた確認を捨てる。
+     */
+    const unreadable = new Map<string, RunnerClient>();
     for (const runner of await this.#runners.list()) {
-      const states = await runner.list().catch((error: unknown) => {
+      const listing = await listRunnerManagers(runner).catch((error: unknown) => {
         unheard.add(runner.runnerId);
         // **黙って引き下がらない。** 聞けなかったことが跡に残らないと、後から
         // 「セッションが無かった」のか「聞けなかった」のかを誰も言えない
@@ -6872,10 +6879,11 @@ class Pool implements ManagerPool {
         noteUnreadableRecord('runner のセッション一覧', `runnerId=${runner.runnerId}`, error);
         return null;
       });
-      if (states === null) continue;
-      for (const state of states) {
+      if (listing === null) continue;
+      for (const state of listing.states) {
         alive.set(state.managerId, { runner, state });
       }
+      for (const managerId of listing.unreadableIds) unreadable.set(managerId, runner);
     }
 
     const silent = this.#silentRunners();
@@ -6896,6 +6904,27 @@ class Pool implements ManagerPool {
        * `resumeStoppedByUsage()` がこの委譲を回転の対象にすら入れない。
        */
       if (job.usageStoppedAt !== undefined) this.#usageStopped.add(job.id);
+
+      /*
+       * **状態を読めなかったが runner に居る委譲は、resume せずに引き取る**
+       * （Issue #1661）。下の `living` の枝と同じくホワイトリストの側に倒す——
+       * 生きているとしか読めない状態を名指しできないので `attached: false`
+       * （話しかけたら resume 扱いになり、runner の `host.resume()` は生きた
+       * セッションへ一言を流して短絡する）。**待ちは持ち越さない**（読めない）。
+       * `status` は台帳の値のまま（runner の名乗りを読めていない）。
+       */
+      const unreadableOn = alive.has(job.id) ? undefined : unreadable.get(job.id);
+      if (unreadableOn !== undefined) {
+        const record: ManagerRecord = {
+          job: { ...job, runnerId: unreadableOn.runnerId },
+          waiting: [],
+          attached: false,
+          reattachedAcrossRestart: true,
+        };
+        this.#records.set(job.id, record);
+        await this.#persist(record);
+        continue;
+      }
 
       const living = alive.get(job.id);
       if (living) {
@@ -7215,9 +7244,15 @@ class Pool implements ManagerPool {
     // そこを見に行く。訊けなかったときは黙って成功にせず undefined のまま返す。
     // **`stop()` が例外を投げていても、この探りは必ず行う** — 探りが「消えた」と
     // 答えるなら、stop の RPC が不明のままでも止まったと言い切ってよい。
-    const sessionGone = await runner
-      .list()
-      .then((sessions) => !sessions.some((session) => session.managerId === managerId))
+    // **状態を読めなかった委譲も「居る」側に数える**（Issue #1661）。版ずれで
+    // スキーマに落ちた委譲を「消えた」と読むと、まだ走っているセッションの貸し出しを
+    // 返してしまい、別の器が同じ委譲を引き取れる。
+    const sessionGone = await listRunnerManagers(runner)
+      .then(
+        ({ states, unreadableIds }) =>
+          !states.some((session) => session.managerId === managerId) &&
+          !unreadableIds.includes(managerId),
+      )
       .catch(() => undefined);
 
     const outcome: 'stopped' | 'not_stopped' | 'unknown' =
@@ -7989,12 +8024,18 @@ class Pool implements ManagerPool {
       // 同じ HTTP 経路なので、器の起動直後・瞬断・一時的な 5xx でこける。SSE が
       // 既に安定していれば次の名乗りは来ないので、ここで予約せずに帰ると、生死
       // 確認の段階に同じ恒久停止が残る（台帳は `running`、セッションは不在）。
-      const states = await runner.list().catch(() => {
+      const listing = await listRunnerManagers(runner).catch(() => {
         retry = true;
         return null;
       });
-      if (states === null || this.#stopped) return;
-      const alive = new Set(states.map((state) => state.managerId));
+      if (listing === null || this.#stopped) return;
+      // **状態を読めなかった委譲も「居る」側に数える**（Issue #1661）。版ずれで
+      // スキーマに落ちた委譲を居ないと読むと、まだ走っているものを resume し、
+      // 待っていた確認まで捨てる。
+      const alive = new Set([
+        ...listing.states.map((state) => state.managerId),
+        ...listing.unreadableIds,
+      ]);
 
       for (const job of jobs) {
         if (alive.has(job.id) || this.#stopped) continue;
