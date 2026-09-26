@@ -12943,7 +12943,13 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
       layer: 'clone',
       site: 'session',
       managerId: CLONE_ACTOR_ID,
-      models: [],
+      // journalEntrySchema の turn_usage.models は record（オブジェクト）——
+      // 空配列ではない。ここが `[]` だったのは、インメモリの
+      // JournalStore.append が journalEntrySchema.parse を通していなかった
+      // 頃（issue #1668 の直し前）に見えなかった latent なずれで、fs / pg
+      // （どちらも append() で journalEntrySchema.parse を通す）にこの入力を
+      // 当てれば元から throw していた。
+      models: {},
       summary: 'ターンの消費',
       contextUsage,
     } as never);
