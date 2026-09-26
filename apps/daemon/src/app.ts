@@ -3185,10 +3185,12 @@ export function createApp(deps: AppDeps) {
       deliberateClient,
       async (c) => {
         const id = c.req.param('id');
-        const grant = await stores.permissionGrants.get(id);
+        // `get()` → `put({ ...grant, revokedAt })` にしないこと——lost update
+        // （`PermissionGrantStore.revoke` の doc。#1654 と同型）。`revoke` が
+        // 排他区間の中で現在値を読み直すので、`#onPreToolUse` の `markUsed`
+        // 割り込みでも取り消しが消えない。
+        const grant = await stores.permissionGrants.revoke(id, new Date().toISOString());
         if (grant === null) return c.json({ error: 'not found' as const }, 404);
-        const revokedAt = grant.revokedAt ?? new Date().toISOString();
-        await stores.permissionGrants.put({ ...grant, revokedAt });
         // 誰が取り消したかは必ず残す（`/access/*` の grant/revoke と同じ理由——
         // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
         await stores.journal.append({
