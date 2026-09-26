@@ -2349,6 +2349,10 @@ export function createApp(deps: AppDeps) {
             description: 'やり方（本文まで）。',
             content: { 'application/json': { schema: resolver(practiceReadResponseSchema) } },
           },
+          400: {
+            description: 'やり方のスラッグが不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           404: {
             description: '該当するやり方が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
@@ -2356,7 +2360,18 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        const practice = await stores.practices.read(c.req.param('slug'));
+        // **issue #1634 の範囲外の気づき。** `PUT`/`DELETE /practices/:slug` と
+        // 同じ門——`practiceSlugSchema` に落ちるスラッグはここで 400 で断る。
+        // ここが無いと、不正なスラッグは例外を投げずにそのまま store の
+        // `read()` へ渡り、見つからない扱いで 404 になる（`GET /memory/:slug`
+        // の #1634/#1636 と違い、この実装は fs/in-memory どちらもクラッシュ
+        // しない——それでも `PUT`/`DELETE` とは異なる応答形になっていたので、
+        // オーナーの判断でここも揃えた）。
+        const slug = c.req.param('slug');
+        if (!practiceSlugSchema.safeParse(slug).success) {
+          return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
+        }
+        const practice = await stores.practices.read(slug);
         if (!practice) return c.json({ error: 'not found' as const }, 404);
         return c.json({ practice });
       },
