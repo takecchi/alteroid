@@ -7439,16 +7439,34 @@ class Clone implements CloneHost {
         // 兄弟の見送り（すぐ下、`!hasUndistilledActivity`）と非対称になる ——
         // あちらは見送ったことを日誌へ残すのに、こちらは1バイトも残さなかった。
         //
-        // - **活動が在る（`hasUndistilledActivity`）**: 記憶へ移すべきものが
-        //   在るのに見送るので、その事実を日誌へ残す。**印は倒さない** —— 倒すと
-        //   「移した」ことになり、実際には何も移っていない記憶が落ちる
-        //   （`#hasUndistilledActivity` の doc「迷ったら蒸留する側へ倒す」と同じ
-        //   理由）。次に別の入口（人間の発言・外部イベント・自発の tick 等）が
-        //   `#ensureQuery()` でセッションを戻せば、その次の蒸留契機で走る。
-        // - **活動も無い**: 移すものが何も無いので、これまでどおり黙って return
-        //   する（起動直後の停止などで、毎回日誌を増やさないため）。
+        // - **活動が在る（`hasUndistilledActivity`）＋ このクローンが一度でも
+        //   活動している**: 記憶へ移すべきものが在るのに見送るので、その事実を
+        //   日誌へ残す。**印は倒さない** —— 倒すと「移した」ことになり、実際には
+        //   何も移っていない記憶が落ちる（`#hasUndistilledActivity` の doc
+        //   「迷ったら蒸留する側へ倒す」と同じ理由）。次に別の入口（人間の発言・
+        //   外部イベント・自発の tick 等）が `#ensureQuery()` でセッションを
+        //   戻せば、その次の蒸留契機で走る。
+        // - **活動が一度も無い**: 移すものが何も無いので、これまでどおり黙って
+        //   return する（起動直後の停止などで、毎回日誌を増やさないため）。
+        //
+        // ⚠️ **横断レビューの指摘（#1650 後始末）**: `hasUndistilledActivity` の
+        // 初期値は `true`（`CloneDistillMemoryState` の doc「知れないなら蒸留
+        // する側を既定にする」——前のプロセスの終わり方をこの層からは知れない
+        // ための保守的な既定）。⟹ **一度もターンを走らせていないクローンでも、
+        // 起動直後からこの条件は満たされてしまう**——`hasUndistilledActivity`
+        // 単独では「確認された活動」と「知らないので活動が在ると仮定している
+        // だけ」を区別できない。**「一度も活動していない」の意味は「起動して
+        // から一度もターンが走っていない」ではなく「このクローンがこれまでに
+        // 一度も活動していない」である**——プロセスの再起動そのものは活動の
+        // 有無を変えないので、判定もプロセスをまたいで残るものを見る必要が
+        // ある。`stores.sessions` に控えた `cloneSessionId`（`session_started`
+        // で必ず立ち、通常終了では下ろさない——下ろすのは畳み・resume 素材の
+        // 破棄という別の理由のときだけ）が、まさにその「このクローンが一度でも
+        // セッションを起こしたか」を跨プロセスで持つ唯一の控えである。**読めな
+        // かったら「活動が在った」側へ倒す**（同じ「迷ったら記録する側へ倒す」
+        // 理由——読めないことを理由に記録を失うと #1650 の約束を壊す）。
         if (!this.#sdkSession.query) {
-          if (this.#distillMemory.hasUndistilledActivity) {
+          if (this.#distillMemory.hasUndistilledActivity && (await this.#everHadSession())) {
             await this.#journal({
               type: 'exchange',
               with: 'self',
@@ -8782,6 +8800,36 @@ class Clone implements CloneHost {
         `（${bytes} バイト ＞ 予算 ${RESUME_SIZE_BUDGET_BYTES} バイト）`,
     });
     return null;
+  }
+
+  /**
+   * このクローンが、これまでに一度でも SDK セッションを起こしたことがあるか。
+   * `case 'distill'`（セッションが無い枝、Issue #1650 後始末）だけが使う。
+   *
+   * **`#distillMemory.hasUndistilledActivity` では代用できない。** あちらは
+   * プロセスを起こすたびに `true` へ戻る（前のプロセスの終わり方をこの層からは
+   * 知れないための保守的な既定——`CloneDistillMemoryState` の doc）ので、
+   * 「確認された活動」と「知らないので活動が在ると仮定しているだけ」を
+   * 区別できない。**ここで要るのはプロセスをまたいで残るほうの信号である。**
+   *
+   * `stores.sessions` の `cloneSessionId` を見る——`session_started`
+   * （`#apply` の該当 `case`）で必ず立ち、通常の終了では下ろさない。下ろす
+   * のは文脈窓の畳み・resume 素材の破棄という別の理由のときだけ
+   * （`#noteContextWindowFold` / 直後の `catch` 節）。⟹ **非 null なら、この
+   * クローンは過去に少なくとも1回はセッションを起こしている**（＝一度も活動
+   * していない、ではない）。
+   *
+   * **読めなかったら「活動が在った」側へ倒す。** 読めないことを理由に見送りの
+   * 記録を落とすと、#1650 が塞ぎたかった「記録の欠落」をこの層自身が新しく
+   * 作ることになる。
+   */
+  async #everHadSession(): Promise<boolean> {
+    try {
+      return (await this.#stores.sessions.getCloneSessionId()) !== null;
+    } catch (error) {
+      noteDroppedRecord('一度でも活動したかの確認', '', error);
+      return true;
+    }
   }
 
   async #ensureQuery(): Promise<void> {
