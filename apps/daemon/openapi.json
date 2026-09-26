@@ -16794,6 +16794,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "プロバイダ側が拒否した（`?error=`）／`code`・`state` が足りない／`completeLogin` がエラーを返した、のいずれか。応答は人間が読む HTML。",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "parameters": [
