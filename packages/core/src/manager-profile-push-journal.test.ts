@@ -28,15 +28,7 @@
  * `#pushProfile`（`grep -Fn -- 'async #pushProfile' packages/core/src/manager.ts`）
  * だけを起こして journal を覗く。
  */
-import type {
-  query as sdkQuery,
-  CanUseTool,
-  HookCallbackMatcher,
-  Options,
-  PermissionResult,
-  Query,
-  SDKMessage,
-} from '@anthropic-ai/claude-agent-sdk';
+import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { WITHHELD_ENV_KEYS, createManagerPool, type ManagerPool } from './manager.js';
@@ -56,18 +48,13 @@ import { createMemoryStores } from './testing.js';
  */
 function fakeSdk() {
   const fn = ((params: { prompt: unknown; options?: Options }) => {
-    const options = params.options ?? {};
     let emit: ((message: SDKMessage) => void) | null = null;
     const buffered: SDKMessage[] = [];
 
-    const push = (message: SDKMessage) => {
-      if (emit) emit(message);
-      else buffered.push(message);
-    };
-
     void (async () => {
-      for await (const _ of params.prompt as AsyncIterable<unknown>) {
+      for await (const input of params.prompt as AsyncIterable<unknown>) {
         // クローンからの入力は読み捨てる。この歯は委譲の中身を見ない。
+        void input;
       }
     })();
 
