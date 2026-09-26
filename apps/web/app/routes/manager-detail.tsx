@@ -30,7 +30,37 @@ import type { AppraisalValue } from '@alteroid/core';
  * のと同じ判定を、この画面（診断欄）にも1本だけの正本から届ける。
  */
 import { classifyManagerActivity, describeReportDrift } from '@alteroid/core/manager-activity';
+/**
+ * **`cgroup-events-format.ts` は `manager-activity.ts` と同じ形の軽い口**
+ * （`tsup.config.ts` の doc）。実行時の依存を1つも持たない。**この画面はかつて
+ * この2つ（`CGROUP_EVENTS_UNKNOWN_NOTE` / `formatCgroupEventsNote`）を手で
+ * 複製していた**（隣の `cgroup-events.ts` が zod を同じファイルに持つため
+ * 軽い口にできなかった、というのが当時の判断）——issue の指摘を受けて
+ * 複製をやめ、クローンの `manager_list` / `manager_report`
+ * （`packages/core/src/tools.ts`）が読んでいるのと同じ文言を、ここでも
+ * 1本だけの正本から届ける形にした。
+ */
+import {
+  CGROUP_EVENTS_UNKNOWN_NOTE,
+  formatCgroupEventsNote,
+} from '@alteroid/core/cgroup-events-format';
 import { maskUrl } from '@alteroid/core/mask-url';
+/**
+ * **`system-error-format.ts` も同じ形の軽い口。** `formatSystemErrorFacts`
+ * （`code`/`errno`/`syscall` の整形）は core と1文字も変えず共有する。
+ * D（判定できなかった）の文言は、クローン向け
+ * （`packages/core/src/system-error.ts` の `SYSTEM_ERROR_UNKNOWN_NOTE`）と
+ * この画面とで末尾の「次にどこを見ればよいか」の指し先だけが意図して違う
+ * ——クローン向けは欄名 `lastFailure` を直接指すが、この画面はその欄を
+ * 出していないので、代わりに下の「直近のターンは報告ではなく失敗で終わって
+ * いる」の注記を指す（`formatSystemErrorUnknownNote` の doc）。共通部分
+ * （枠 429 とセッション切断はこの欄の対象外という本文）はここでも複製せず、
+ * 指し先の一言だけをこの画面が渡す。
+ */
+import {
+  formatSystemErrorFacts,
+  formatSystemErrorUnknownNote,
+} from '@alteroid/core/system-error-format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
@@ -931,45 +961,22 @@ function FoldedTurnNote({ lastFoldedTurn }: { lastFoldedTurn: ManagerSummary['la
  * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
  * （Issue #1517「最小の形」2）。
  *
- * **文言は `packages/core/src/cgroup-events.ts` の `CGROUP_EVENTS_UNKNOWN_NOTE` /
- * `formatCgroupEventsNote` と1文字も変えずに揃えてある**（出典は
- * `grep -Fn -- 'この委譲が走っていた間に器で pids 上限による' packages/core/src/cgroup-events.ts`）。
- *
- * **その関数を直接 import しなかった理由（`@alteroid/core/manager-activity` /
- * `mask-url` とは違う判断）**: `cgroup-events.ts` は `cgroupEventsDeltaSchema`
- * （zod）を同じファイルに持ち、zod は実行時の依存になる——このリポジトリの
- * 軽い口（`usage-format.ts` 等）が守ってきた「実行時の依存を1つも持たない」の
- * 帯から外れる。**この数行の文言を1箇所にまとめる価値のために zod 一式を
- * ブラウザへ運ぶのは釣り合わないと判断し、文言だけを複製した。** 字面がずれたら
- * 両方を直すこと。
+ * **文言は `@alteroid/core/cgroup-events-format`（`CGROUP_EVENTS_UNKNOWN_NOTE` /
+ * `formatCgroupEventsNote`）の1本だけの正本から引く。** クローンの
+ * `manager_list` / `manager_report`（`packages/core/src/tools.ts`。同じ
+ * 軽い口を re-export する `cgroup-events.ts` 経由で使う）と、この画面とで
+ * 文言を複製しない——**かつてはここで文言を手で複製していたが**（`cgroup-events.ts`
+ * が `cgroupEventsDeltaSchema`（zod）を同じファイルに持ち、軽い口にできな
+ * かったため）、文言だけを切り出した `cgroup-events-format.ts` へ寄せて
+ * 複製をやめた（import 文の doc）。
  */
-const CGROUP_EVENTS_UNKNOWN_NOTE_WEB =
-  'この委譲が走っていた間に器で pids 上限による fork の拒否・OOM kill が起きたかは、この欄では判定できなかった';
-
-function formatCgroupEventsForHumans(
-  delta: NonNullable<ManagerSummary['lastCgroupEvents']>,
-): string {
-  if (delta.pidsMaxDelta === 0 && delta.oomKillDelta === 0) {
-    return 'この委譲が走っていた間、器で pids 上限による fork の拒否も OOM kill も起きていなかった';
-  }
-  const pidsPart =
-    delta.pidsMaxDelta === undefined
-      ? 'pids 上限による fork 拒否の回数は判定できなかった'
-      : `器で fork が pids 上限により ${delta.pidsMaxDelta} 回断られた`;
-  const oomPart =
-    delta.oomKillDelta === undefined
-      ? 'OOM kill の回数は判定できなかった'
-      : `OOM kill が ${delta.oomKillDelta} 回あった`;
-  return `この委譲が走っていた間 —— ${pidsPart}。${oomPart}`;
-}
-
 function cgroupEventsText(manager: ManagerSummary): string | null {
   if (manager.status !== 'failed') return null;
   if (manager.lastCgroupEvents === undefined) {
-    return `⚠ ${CGROUP_EVENTS_UNKNOWN_NOTE_WEB}。`;
+    return `⚠ ${CGROUP_EVENTS_UNKNOWN_NOTE}。`;
   }
   return (
-    `${formatCgroupEventsForHumans(manager.lastCgroupEvents)}` +
+    `${formatCgroupEventsNote(manager.lastCgroupEvents)}` +
     `（${formatDateTime(manager.lastCgroupEvents.at)}）。`
   );
 }
@@ -986,40 +993,28 @@ function CgroupEventsNote({ manager }: { manager: ManagerSummary }) {
  *
  * **`CgroupEventsNote` と対で読むが軸は別**——あちらは cgroup のカウンタ、
  * こちらは Node の例外分類（`packages/core/src/system-error.ts` の
- * `SystemErrorFacts`）。文言は `SYSTEM_ERROR_UNKNOWN_NOTE` /
- * `formatSystemErrorFacts` に揃える（出典は
- * `grep -Fn -- '器の資源による落ち方かどうかは、この欄では判定できなかった' packages/core/src/system-error.ts`）
- * ——ただし末尾の「本文と lastFailure を見ること」は、クローン向けの欄名
- * （`lastFailure`）そのままではなく、この画面の該当箇所（上の「直近のターンは
- * 報告ではなく失敗で終わっている」の注記）を指す言葉に置き換えてある。
+ * `SystemErrorFacts`）。文言は `@alteroid/core/system-error-format` の
+ * `formatSystemErrorFacts` と1本だけの正本から引く。
  *
- * **`@alteroid/core/system-error` を軽い口にしなかった理由は
- * `CgroupEventsNote` と同じ**（同ファイルの `systemErrorFactsSchema` が zod を
- * 引き込む）。
+ * **D（判定できなかった）の文言は、末尾の指し先だけこの画面のものを渡す。**
+ * `formatSystemErrorUnknownNote` の共通部分（枠 429・セッション切断はこの欄の
+ * 対象外という本文）はクローン向けと共有し、末尾の「本文と◯◯を見ること」の
+ * ◯◯だけ、クローン向けの欄名（`lastFailure`）ではなくこの画面の該当箇所
+ * （下の「直近のターンは報告ではなく失敗で終わっている」の注記）を指す言葉に
+ * 差し替える（import 文の doc）。
  */
-const SYSTEM_ERROR_UNKNOWN_NOTE_WEB =
-  '器の資源による落ち方かどうかは、この欄では判定できなかった。枠に当たった場合・' +
-  'セッションが切れた場合もこの欄には出ない —— 本文と、上の「直近のターンは報告ではなく' +
-  '失敗で終わっている」の注記を見ること';
-
-function formatSystemErrorFactsForHumans(
-  systemError: NonNullable<ManagerSummary['lastSystemError']>,
-): string {
-  const facts = [`code=${systemError.code}`];
-  if (systemError.errno !== undefined) facts.push(`errno=${systemError.errno}`);
-  if (systemError.syscall !== undefined) facts.push(`syscall=${systemError.syscall}`);
-  return facts.join(' ');
-}
-
 function systemErrorText(manager: ManagerSummary): string | null {
   if (manager.status !== 'failed') return null;
   if (manager.lastSystemError === undefined) {
-    return `セッションは失敗で畳まれた。${SYSTEM_ERROR_UNKNOWN_NOTE_WEB}。`;
+    const note = formatSystemErrorUnknownNote(
+      '、上の「直近のターンは報告ではなく失敗で終わっている」の注記を見ること',
+    );
+    return `セッションは失敗で畳まれた。${note}。`;
   }
   return (
     'セッションは器の資源による落ち方で畳まれた可能性 ' +
     `（${formatDateTime(manager.lastSystemError.at)}）: ` +
-    formatSystemErrorFactsForHumans(manager.lastSystemError)
+    formatSystemErrorFacts(manager.lastSystemError)
   );
 }
 
