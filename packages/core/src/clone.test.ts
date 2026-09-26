@@ -4056,6 +4056,52 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * **横断レビューの指摘（後始末、まだ再現していない段階の赤取り）**: 歯Fが
+   * 「活動も無ければ黙る」を確かめるとき使っているのは、**蒸留を1回成功させて
+   * `hasUndistilledActivity` を倒した後**の「活動が無い」状態である。**一度も
+   * ターンを走らせていないクローン**（起動直後、まだ何も無い）は別の状態
+   * ——`CloneDistillMemoryState#hasUndistilledActivity` の初期値は `true`
+   * （doc:「知れないなら蒸留する側を既定にする」）——であり、歯Fはこちらを
+   * 検査していない。
+   *
+   * 定期の棚卸し（`reason: 'scheduled'`）を、一度もターンを走らせていない
+   * クローンへ2日ぶん送ると、`#sdkSession.query === null` かつ
+   * `hasUndistilledActivity === true` の組み合わせが**起動直後から**成立して
+   * いるため、PR #1653 が足した「活動が在る」枝へ毎回入り、日誌が1行ずつ
+   * 増え続ける（はず）。
+   */
+  it('G: 一度もターンを走らせていないクローンに定期の棚卸しを2日ぶん送っても、日誌は増えないはず（横断レビューの指摘、Issue 未起票）', async () => {
+    const s = setup();
+
+    const journalCountBefore = (await s.stores.journal.list({})).length;
+
+    s.clone.post({
+      type: 'distill',
+      id: 'evt-tidy-day1',
+      at: new Date().toISOString(),
+      reason: 'scheduled',
+    });
+    await flushPendingMicrotasks();
+    const journalCountAfterDay1 = (await s.stores.journal.list({})).length;
+
+    s.clone.post({
+      type: 'distill',
+      id: 'evt-tidy-day2',
+      at: new Date().toISOString(),
+      reason: 'scheduled',
+    });
+    await flushPendingMicrotasks();
+    const journalCountAfterDay2 = (await s.stores.journal.list({})).length;
+
+    // 一度も活動していないクローンなら、定期の棚卸しが何日回っても
+    // 日誌は増えないはず ——「見送った」の1行が積み上がるのはバグである。
+    expect(journalCountAfterDay1).toBe(journalCountBefore);
+    expect(journalCountAfterDay2).toBe(journalCountAfterDay1);
+
+    await s.clone.stop();
+  });
 });
 
 /**
