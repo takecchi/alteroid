@@ -103,7 +103,6 @@ import {
 } from './dropped-record.js';
 import type { AnswerApprovalVia, CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
-import { Inbox } from './inbox.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
 import { describeAppraisalTargets } from './appraisal.js';
 import { computeAppraisalReconciliation } from './appraisal-stats.js';
@@ -183,10 +182,10 @@ import {
   qualifiedToolName,
   type ToolContext,
 } from './tools.js';
+import { CloneDelivery } from './clone-delivery.js';
 import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
-import { CloneRedeliveryState } from './clone-redelivery-state.js';
 import { CloneSdkSession } from './clone-sdk-session.js';
 import { composeTurnInputText, turnInputEntry } from './turn-input.js';
 import type { AccountUsageState } from './usage-snapshot.js';
@@ -1306,7 +1305,7 @@ export interface CloneOptions {
   redeliveryGate: RedeliveryGate;
 }
 
-type Listener = (event: ChatStreamEvent) => void;
+export type Listener = (event: ChatStreamEvent) => void;
 
 export interface Turn {
   /** 出力を届ける会話。null なら人間に見せない内部ターン（蒸留など）。 */
@@ -1478,7 +1477,7 @@ type TurnOutcome =
  * （`unrecorded` の断り）は別のことを言っているので、片方が出たから
  * もう片方を隠す理由が無い。
  */
-type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed' | 'unrecorded';
+export type CommitOutcome = 'opened' | 'existed' | 'folded' | 'failed' | 'unrecorded';
 
 export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
@@ -1773,10 +1772,19 @@ class Clone implements CloneHost {
    */
   #usageBlockedAccumulatedChars = 0;
 
-  readonly #inbox = new Inbox();
-  readonly #listeners = new Map<string, Set<Listener>>();
-  /** 受信箱に積んだイベントの処理完了を待つための約束。 */
-  readonly #completions = new Map<string, () => void>();
+  /**
+   * 「配送」11フィールド（`#inbox` / `#listeners` / `#completions` /
+   * `#deferred` / `#unread` / `#pendingCollapse` / `#pendingTokenPoolNotice` /
+   * `#recorded` / `#recordChain` / `#redeliveryState` / `#committed`）を
+   * 持つ単位（`clone-delivery.ts` の {@link CloneDelivery}。Issue #1190）。
+   *
+   * **枠停止・許可まわり・処理そのものの順序はここへは移していない
+   * —— 状態と局所的な遷移だけを持つ。** 何が入り何が入らないか・
+   * `#recordChain` の直列化を壊さないための設計・`#inbox` /
+   * `#redeliveryState` をフィールドとして1本持つだけにした理由は
+   * {@link CloneDelivery} 冒頭の doc に在る。
+   */
+  readonly #delivery = new CloneDelivery();
 
   /**
    * 受信箱の到着・配達・消し込みの窓を測るカウンタ（Issue #783 段0）。
@@ -1799,21 +1807,6 @@ class Clone implements CloneHost {
    * 自然に試す。
    */
   #usageBlocked: UsageLimitNotice | null = null;
-  /**
-   * 枠が閉じていて処理できなかった合図。**FIFO を崩さない。**
-   *
-   * 積む・戻すのどちらも配列の端だけを使う（`push` で足し、`splice(0)` で
-   * 全部を順序どおり取り出す）。ここに居る合図は `#forget` していない
-   * （器＝`stores.inbox` にも未読のまま残っている）ので、途中でプロセスが
-   * 死んでも `#restoreUnread` が拾い直す。この配列はそれとは別に、**同じ
-   * 器の中身をメモリ上でも順序どおり並べておく**ためのものである。
-   *
-   * **中身を持たない合図（`isTick`）の畳み込みは、ここも見る**
-   * （`#foldsIntoHeldTick`）。`post` の畳み込みは `Inbox#hasPending`＝待ち行列
-   * しか見ないので、ここに移った分は向こうからは見えない。両方を見なければ、
-   * 枠が閉じている間だけ畳み込みが効かなくなる。
-   */
-  readonly #deferred: InboxEvent[] = [];
   /**
    * いま `#restoreUnread` の拾い直しが走っているか（issue #1049）。
    *
@@ -1911,190 +1904,6 @@ class Clone implements CloneHost {
   #usageBlockFoldedInternalFailures = 0;
 
   /**
-   * 未読として器に置いた合図。id → その書き込みの約束。
-   *
-   * **消し込みがこの書き込みを追い越さないために持つ。** `post` は同期なので
-   * 書き込みは非同期になり、短いターンなら「処理を終えた」が「書けた」より先に
-   * 来る。順序を見ないと、消したはずの合図が後から書かれて永久に配り直される。
-   *
-   * ここに居ないものは器に置いていない合図である（`#postAndWait` の蒸留）。
-   */
-  readonly #unread = new Map<string, Promise<void>>();
-  /**
-   * 「alteroid 自身が合成した同一本文の未読」を畳むための索引（Issue #954
-   * 続き。受信箱側）。`inboxCollapseKey` の鍵 → その鍵を最初に受理した合図
-   * （代表）の `id` / `at` と、代表に畳み込んだ件数。
-   *
-   * ## なぜ在るか — 台帳側の壁（#1035）は受信箱を守らない
-   *
-   * `#commit`（台帳を開く側）は同一マネージャー×同一本文の未了を畳むが
-   * （Issue #1041 以降はストアの `open()` の中で。{@link findOpenManagerDuplicate}）、
-   * `#commit` が呼ばれる時点で受信箱への書き込み（`#remember`）は**既に終わっている**
-   * （`#commit` の doc「受信箱はここより前で既に書き終えているので、この
-   * 畳み込みで減るのは台帳の行数だけである」）。429 の無限連投のような形は、
-   * 台帳を1行に畳んでも受信箱の行が連投の回数だけ増え続ける——これがこの
-   * 索引で塞ぐ穴である。
-   *
-   * **429（`manager_message`）だけの穴ではなかった。** クローンの日誌の
-   * 実測（直近24時間）では、`external` / `source: 'token-pool'`（デーモン
-   * 自身が「認証トークンが通る状態に戻った」と自分に出す知らせ）のほうが
-   * 桁で多く積まれていた——`inboxCollapseKey` はその両方を畳む（同関数の
-   * doc）。
-   *
-   * ## `post()` の中だけで閉じる
-   *
-   * `post()` は同期関数なので、この索引の照会（鍵が在るか）と書き込み
-   * （代表を登録する／`collapsed` を進める）は**同じイベントループの刻みの
-   * 中で不可分に起きる**。⟹ #1041 が台帳側（`list()` と `open()` の間）で
-   * 指摘する TOCTOU は、この経路には構造的に存在しない——ここは #1041 を
-   * 直したものではなく、台帳側とは別の場所に同じ形の穴が無いことを最初から
-   * 保証している、という違いである。
-   *
-   * ## 鍵が落ちるとき
-   *
-   * 代表の合図が実際に片付いて `#forget`（受信箱からの消し込み）が
-   * `stores.inbox.remove` を確定させたときに、`#dropPendingCollapse` が
-   * ここから鍵を落とす。**落とし忘れると、片付いた合図の「影」が永久に
-   * 残り、次に同じ内容の合図が来ても二度と積まれなくなる**（畳み込みでは
-   * なく能力の削除になる）ので、`#forget` が実際に消せた分岐でしか落とさない
-   * （`#dropPendingCollapse` の doc）。
-   *
-   * ## 器の入れ替えを跨ぐと空になる
-   *
-   * ここはメモリ上にしか無いので、プロセスの再起動でいったん空になる。
-   * `#restoreUnread` が拾い直した未読からこの索引を作り直す（同メソッドの
-   * 「索引を拾い直した未読から作り直す」の節）——作り直さないと、器が
-   * 入れ替わるたびに畳み込みが白紙に戻り、同じ本文がまた1件積まれる。
-   *
-   * ## 日誌（`#journal`）は畳まない
-   *
-   * 畳んだ合図も、その生の本文（`#journalIncomingBody`）と「畳んだ」という
-   * 事実は1件ずつ日誌へ残す——**受信箱・台帳が「まだ片付いていない仕事」の
-   * 待ち行列であるのに対し、日誌は追記専用の「何が起きたか」の記録である。**
-   * この2つを分けるのがこの索引の設計の肝で、#914 / #931 が診断に使う生の
-   * 429 文言（`resets` 時刻など）を、畳んだ回についても1文字も失わないため
-   * の保証になっている（`#foldIntoPendingCollapse` の doc）。
-   */
-  readonly #pendingCollapse = new Map<
-    string,
-    { readonly id: string; readonly at: string; collapsed: number }
-  >();
-  /**
-   * token-pool（{@link DAEMON_TOKEN_POOL_REOPENED_SOURCE}）の「戻った」通知の
-   * うち、いまこの器で**未処理のまま**残っている代表1件（Issue #1051 続き。
-   * 実運用の食い違い調査 2026-09-23）。
-   *
-   * ## `#pendingCollapse` の姉妹だが、軸が違う
-   *
-   * `#pendingCollapse`（Issue #954）が畳むのは「本文が一字一句同じ」ものだけ
-   * ——本文が違えば鍵が別になり、何件でも同時に未処理のまま積み上がる。
-   * token-pool の「戻った」は、429↔成功の往復のたびに**現役トークンの指名や
-   * 折り返し込みの本文が変わりうる**ので、本文が変わるたびに`#pendingCollapse`
-   * をすり抜けて別行として積まれていた。この索引が守るのは本文の一致では
-   * なく「token-pool 由来の通知は、内容が何であれ同時に未処理で1件まで」
-   * という別の不変条件である。
-   *
-   * ## なぜ要るか — `#pump` の FIFO が古い本文を先に配っていた
-   *
-   * 枠（利用上限）で保持された合図は `#deferred` に FIFO で積まれ、`#pump` の
-   * 解除ブロックは `[...held, event]` の順で受信箱の先頭へ戻す
-   * （`usageBlockAlwaysRearms` の doc、`#pump` の解除ブロックの doc）。
-   * ⟹ 保持していた**古い**token-pool 通知が、あとから届いた**新しい**
-   * 通知より先にモデルへ渡り、しかもそのリトライがそのとき通れば「古い本文
-   * のまま成功したターン」として記録される——本番で観測された「recovered は
-   * 03 なのにクローンへ渡った本文は 09」という食い違いの機序がこれである。
-   *
-   * ## 何を保証するか
-   *
-   * `post()` が token-pool 由来の `external` を受理するたびに
-   * {@link Clone.#foldPendingTokenPoolNotice} を通す。まだ処理を終えていない
-   * 代表が既に在れば、**内容が違う限り**古い方を受信箱・`#deferred` の
-   * どちらに居ても外して畳み（`#forget` を通すので器からも消える）、新しい
-   * 方をその場の代表にする——結果として、同時に未処理で残る token-pool の
-   * 「戻った」は高々1件になる。**中身が一字一句同じなら何もしない**
-   * （`#pendingCollapse` 側の既存の畳み込みに任せる——鍵の作り方そのものは
-   * Issue #1298 / PR #1355 の領分なので、ここでは触らない）。
-   *
-   * ## 消えない — 合図を捨てるのではなく代表を差し替えるだけ
-   *
-   * 外した古い方は `#journalSupersededTokenPoolNotice` が全文を日誌へ残して
-   * から `#forget` する（`#forget` は器の未読からも `#pendingCollapse` からも
-   * 正しく消す——`dropQueuedInboxEvents` と同じ後始末を1箇所に閉じたものを
-   * 再利用しているだけで、ここに新しい消し方は無い）。**1回目は必ず配る**
-   * ——代表が居ない状態（`null`）で届いた最初の1件はここでは何もせず、
-   * これまでどおり `#foldIntoPendingCollapse` → `#remember` → `#inbox.push`
-   * を通る。
-   *
-   * ## 代表が「未処理」でなくなる時点
-   *
-   * 代表が実際にターンへ渡って片付いた（`#forget` された）時点で、この索引
-   * からも落ちる（`#forget` の中、`#dropPendingCollapse` と対の場所）。
-   * **枠で保持されて `#deferred` にいる間は「未処理」のままである**——
-   * まだモデルへ渡っていない・まだ成功していないので、そのあいだに届いた
-   * 新しい通知はこの代表へ合流できる。片付いた後に届いた通知は、代表が
-   * 居ない状態として扱われ、これまでどおり自分自身のターンを持つ
-   * （負の対照「合流は『未処理の間』に限る」）。
-   *
-   * **⚠️ `#forget` を通らずに片付く経路がもう1つある。** 起動時に拾い直した
-   * 未読が `restoredInboxEventVerdict` で `stale` と判定された場合
-   * （token-pool は常にこれに当たる。`inbox-staleness.ts` の doc）、
-   * `#removeStaleRedeliveryChunk` が `#forget` の代わりに束ねて消す
-   * （同メソッドの doc「`#forget` の代わりにここを通る理由」）。**この経路
-   * にも同じ後始末を書いてある**——書き忘れると、器からは既に消えた stale
-   * な id を代表として指したまま残り、次に届く新しい token-pool 通知の
-   * 合流判定が「代表がまだ未処理で残っている」という偽の前提で走る
-   * （器の未読とメモリ上の索引がずれる、という Issue #1051 続きが避けたい
-   * 形そのもの）。
-   *
-   * ## 器の入れ替えを跨ぐと空になる
-   *
-   * `#pendingCollapse` と同じくメモリ上にしか無い。`#restoreUnread` が拾い
-   * 直した未読からこの索引も作り直す（`#restoreUnreadPass` の該当箇所）——
-   * 拾い直した集合の中でいちばん新しく積まれていたと分かる1件を代表にする
-   * だけで、拾い直した時点で既に複数残っていた分を遡って畳みはしない
-   * （`#pendingCollapse` の再構築が同じ理由で遡らないのと同じ判断）。
-   */
-  #pendingTokenPoolNotice: { id: string; at: string; key: string; folded: number } | null = null;
-  /**
-   * 受理した瞬間に日誌へ書いた発言。id → その追記の約束。
-   *
-   * **応答がこの追記を追い越さないために持つ。** `post` は同期なので追記は
-   * 非同期になる。日誌の順序は追記した順なので、待たずにターンを走らせると
-   * 短いターンでは応答（`result` の `#journal`）が先に載り、**日誌の上で
-   * クローンが問われる前に答えたことになる**。ここに置いて `#handle` が
-   * 待てば、受理の瞬間に書き始めながら順序は保てる。
-   *
-   * ここに居ないものは受理の瞬間に書いていない合図である（人間の発言以外と、
-   * 起動時に拾い直したもの＝前の器で既に書いてあるもの）。
-   */
-  readonly #recorded = new Map<string, Promise<void>>();
-  /**
-   * 受理の瞬間の追記を、受け取った順に1本ずつ器へ渡すための列。
-   *
-   * **「日誌の追記順がそのまま会話の順序」という不変条件を、器の側に賭けない。**
-   * `GET /conversations` / `GET /conversations/:id` は追記順をそのまま使う（`at` で
-   * 並べ直さないのは、同じミリ秒に並んだ発言の前後が時刻からは決められないから
-   * である）。追記が `#pump` の中に在ったあいだ、その直列は受信箱のループが与えて
-   * いた。受理の瞬間へ移した以上、**同じ会話へ短時間に2発言が届くと2本の追記が
-   * 同時に飛ぶ** — `FsJournalStore` は自分で直列化しているが、`PgJournalStore` は
-   * していない（コネクションプール越しなので、`seq` が呼び出し順と一致する保証が
-   * 無い）。ここで列にすれば、器がどちらでも呼び出し順のまま入る。
-   *
-   * **`PgJournalStore` 側を直列化する形は採らない。** あちらを直列化すると
-   * マネージャーの `tool_use`（量が多い）まで1本の列に並び、日誌の書き込みが
-   * 全体の律速になる。守りたいのは会話の順序であって、日誌の全書き込みの順序では
-   * ない。
-   */
-  #recordChain: Promise<void> = Promise.resolve();
-  /**
-   * 再配達の在り高2フィールド（起動時に拾い直した合図 `#redelivered` と、
-   * 台帳が既に片付いていると言っているもの `#redeliveredClosed`）。状態と
-   * doc の本体は `clone-redelivery-state.ts` の {@link CloneRedeliveryState}
-   * へ移した（Issue #1190 の続き）——**対で持つ理由・削除を揃える理由・
-   * `redeliveryGate` をここへ移さなかった理由はそちらの doc に在る。**
-   */
-  readonly #redeliveryState = new CloneRedeliveryState();
-  /**
    * 直前の起動時に、**一緒に**拾い直した未読の件数（`#restoreUnread` が数える）。
    *
    * **配達回数（`deliveries`）が何を測っているかを、読む側が判定するための材料である。**
@@ -2118,25 +1927,6 @@ class Clone implements CloneHost {
    * 調べるためにターンを使い、**答えは「この合図は一度も処理されていなかった」だった。**
    */
   #restoredCohort = 0;
-  /**
-   * 自動で開いた未了。合図の id → その書き込みの約束。
-   *
-   * **`#unread` と同じ理由で持つ。** `open` は非同期なので、待たずにターンを走らせると
-   * 短いターンでは `commitment_close` が open を追い越し、**クローンが閉じたつもりの
-   * 未了が後から開いて残り続ける**。順序を見るためだけのもので、書けたかどうかは
-   * ターンの条件にしない。
-   *
-   * **Issue #856 で `Promise<void>` から `Promise<CommitOutcome>` へ広げた。**
-   * かつては「待ち終えたかどうか」しか見えず、`#commitmentNoticeFor` は
-   * `list()` を読み直して見つかった id だけを名乗っていた——**見つからなかった
-   * 理由**（#1035 の重複として意図的に畳んだのか、`open()` が「既に在る」と
-   * 答えたのか、書き込みそのものが失敗したのか）は、この約束の中身からは
-   * 区別できなかった。いまは `#commit` が自分の分岐（畳んだ／既に在った／
-   * 開けた／落ちた）をそのまま値として返すので、`#commitmentNoticeFor` は
-   * 「畳んだ・既に在ったから見つからない（どちらも正常）」と「載せ損なったのに
-   * 見つからない（異常）」を区別できる。
-   */
-  readonly #committed = new Map<string, Promise<CommitOutcome>>();
   /**
    * 通知8フィールド（1反復ぶんの断り書き6本＋畳み込みの記憶2本）を持つ単位
    * （`clone-notices.ts` の {@link CloneNotices}。Issue #1190）。
@@ -2510,7 +2300,7 @@ class Clone implements CloneHost {
     // 待ち行列を読み切り、そのあとで `#stopped` を立てる。⟹ **その間に届いたものを
     // `#stopped` だけで判定すると、閉じた受信箱へ `push` して投げる**（`Inbox#push`）。
     // ここが「読み切りが必ず終わる」根拠そのものでもある（`stop()` の doc）。
-    if (this.#sdkSession.stopped || this.#inbox.closed) {
+    if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
       // **ここでも畳む。** この窓は `#remember` が実際にストアへ書く経路その
       // ものなので、畳まなければ「片付け中に届いた同文の連投」がそのまま
       // ディスクへ行の増殖として残る——これは通常経路（下の
@@ -2625,7 +2415,8 @@ class Clone implements CloneHost {
     // 器からも消える。処理待ちのあいだに積み上がった人間の発言を1ターンで読む機構
     // （`#mergedHumanBatch`）は**捨てない** — 全文が届いた順に渡り、合図は件数ぶん
     // 器に残り、後始末も件数ぶん通る。だからそちらはこの `return` の側に足さないこと。
-    if (isTick(event) && this.#inbox.hasPending((queued) => isSameTick(queued, event))) return;
+    if (isTick(event) && this.#delivery.inbox.hasPending((queued) => isSameTick(queued, event)))
+      return;
 
     // **alteroid 自身が合成した同一本文の未読が既に在れば、ここで畳む**
     // （Issue #954 続き。受信箱側 — `#pendingCollapse` の doc、
@@ -2693,7 +2484,7 @@ class Clone implements CloneHost {
     // 実際に載った回であり、`arrived` とは別の軸（`schema.ts` の `inbox_flow`
     // の doc）。
     this.#inboxFlow.delivered(event.type);
-    this.#inbox.push(
+    this.#delivery.inbox.push(
       event,
       this.#humanPriority && isHumanOriginated(event) ? isHumanOriginated : undefined,
     );
@@ -2753,22 +2544,15 @@ class Clone implements CloneHost {
     // を挟んだ隙にループが1件積む窓ができる。
     if (this.#restoringUnread) for (const id of targets) this.#droppedWhileRestoring.add(id);
 
-    const fromQueue = this.#inbox.removeWhere((event) => targets.has(event.id));
+    const fromQueue = this.#delivery.inbox.removeWhere((event) => targets.has(event.id));
 
     // 枠で保持している分（`#deferred`）も落とす。**後ろから外す**（前から
     // splice すると1件外すごとに次を読み飛ばす。`Inbox#removeWhere` と同じ）。
-    const fromHeld: InboxEvent[] = [];
-    for (let i = this.#deferred.length - 1; i >= 0; i--) {
-      const held = this.#deferred[i];
-      if (held === undefined || !targets.has(held.id)) continue;
-      this.#deferred.splice(i, 1);
-      fromHeld.push(held);
-    }
-    fromHeld.reverse();
+    const fromHeld = this.#delivery.removeDeferredWhere((held) => targets.has(held.id));
 
     for (const event of [...fromQueue, ...fromHeld]) {
-      this.#unread.delete(event.id);
-      this.#redeliveryState.drop(event.id);
+      this.#delivery.deleteUnread(event.id);
+      this.#delivery.redeliveryState.drop(event.id);
       this.#dropPendingCollapse(event);
     }
 
@@ -2796,14 +2580,9 @@ class Clone implements CloneHost {
   }
 
   subscribe(conversationId: string, listener: Listener): () => void {
-    const set = this.#listeners.get(conversationId) ?? new Set<Listener>();
-    set.add(listener);
-    this.#listeners.set(conversationId, set);
+    const set = this.#delivery.subscribeListener(conversationId, listener);
     return () => {
-      set.delete(listener);
-      if (this.#listeners.get(conversationId) === set && set.size === 0) {
-        this.#listeners.delete(conversationId);
-      }
+      this.#delivery.unsubscribeListener(conversationId, listener, set);
     };
   }
 
@@ -2860,8 +2639,7 @@ class Clone implements CloneHost {
       },
       true,
     );
-    const set = this.#listeners.get(conversationId);
-    if (set && set.size === 0) this.#listeners.delete(conversationId);
+    this.#delivery.dropListenersIfEmpty(conversationId);
     // **畳み込みの記憶も一緒に落とす**（`#notices` の `forgetConversation`）。
     // **振る舞いのためではなく、上限を持たせるためである** —— 会話は無限に
     // 増えうるので、失敗した会話のぶんが増え続ける形にはしない。落としても
@@ -3021,7 +2799,7 @@ class Clone implements CloneHost {
     // **`#inbox.closed` も見る**（Issue #564 (a)）。読み切りのあいだ `#stopped` はまだ
     // 立っていないので、ここを `#stopped` だけで守ると2度目の呼びが本体をもう一度
     // 走らせる。受信箱を閉じるのはこの関数だけなので、閉じている＝もう入っている。
-    if (this.#sdkSession.stopped || this.#inbox.closed) return;
+    if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return;
 
     // 落ちる前にもう一度だけ記憶へ移す機会を作る（蒸留は生存条件）。
     // 既にセッションが無いなら何も起きない。**ここでは無条件に投げる** —
@@ -3066,7 +2844,7 @@ class Clone implements CloneHost {
       ).catch(() => undefined);
     }
 
-    this.#inbox.close();
+    this.#delivery.inbox.close();
 
     // **割り込ませたら、読み切ってから畳むこと**（Issue #564 (a)）。
     //
@@ -3084,7 +2862,7 @@ class Clone implements CloneHost {
     // いるのは下の `this.#query?.close()` のほうである。⟹ **その手前で待てばよい。**
     //
     // **止まる根拠**は `post()` / `#postAndWait()` の門である。どちらも
-    // `this.#stopped || this.#inbox.closed` を見るので、**受信箱を閉じた時点から
+    // `this.#stopped || this.#delivery.inbox.closed` を見るので、**受信箱を閉じた時点から
     // 新しい合図は1件も積まれない**（`#restoreUnread` が既に使っていた形と同じ
     // 述語）。⟹ 待ち行列は必ず尽きて `#pump` の `for await` が抜ける。
     //
@@ -3185,15 +2963,15 @@ class Clone implements CloneHost {
    */
   #postAndWait(event: InboxEvent, interrupt = false): Promise<void> {
     // 門は `post()` と同じ述語である（理由はそちら。Issue #564 (a)）。
-    if (this.#sdkSession.stopped || this.#inbox.closed) return Promise.resolve();
+    if (this.#sdkSession.stopped || this.#delivery.inbox.closed) return Promise.resolve();
     return new Promise<void>((resolve) => {
-      this.#completions.set(event.id, resolve);
+      this.#delivery.registerCompletion(event.id, resolve);
       // `delivered`（Issue #783 段0）。この経路（蒸留の割り込み）は `#remember`
       // を通らないので、この event は `arrived` には数えられない——蒸留は
       // `stores.inbox.put` の対象ですらない（`#forget` の doc「器に置いて
       // いない合図（`#postAndWait` の蒸留）は消すものが無い」）。
       this.#inboxFlow.delivered(event.type);
-      this.#inbox.push(
+      this.#delivery.inbox.push(
         event,
         interrupt && this.#humanPriority
           ? (queued) =>
@@ -3241,7 +3019,7 @@ class Clone implements CloneHost {
       noteDroppedRecord('捨てたセッションの拾い直し', '', error);
     });
 
-    for await (const event of this.#inbox) {
+    for await (const event of this.#delivery.inbox) {
       // **枠（利用上限）の解除はここでだけ行う。`post()` からは行わない。**
       //
       // ここは「直前の合図の後始末（`#settleInboxEvent`）が完全に終わっている」
@@ -3277,11 +3055,11 @@ class Clone implements CloneHost {
       // 解除しないほうの被害は無い — 保持した分は器に未読のまま残っており
       // （`#settleInboxEvent` が `#forget` を呼んでいない）、次の起動で
       // `#restoreUnread` が拾い直す。**この機構が生死をまたげる理由がそれである。**
-      if (this.#releaseRequested && !this.#inbox.closed) {
+      if (this.#releaseRequested && !this.#delivery.inbox.closed) {
         this.#releaseRequested = false;
         if (this.#usageBlocked !== null) {
           this.#usageBlocked = null;
-          const held = this.#deferred.splice(0);
+          const held = this.#delivery.drainDeferred();
           // **いま取り出した `event` は `held` より後に届いている。** だから
           // `held` → `event` の順で受信箱の**先頭へ**戻し、次の反復で先頭から
           // 取り直す（`event` を末尾へ push すると到着順が崩れる）。
@@ -3298,7 +3076,7 @@ class Clone implements CloneHost {
           // 分岐が1本増えるだけで、通る条件（枠が閉じているのに保持が0件）は
           // 構造上ほぼ起きないのでテストの当たらない道になる。空なら次の反復で
           // 同じ `event` が枠の閉じていない状態で取り出されるだけである。
-          this.#inbox.unshift([...held, event]);
+          this.#delivery.inbox.unshift([...held, event]);
           // **抑止した再武装（`#usageBlockSuppressedRearms`）と、畳んだ内部の
           // 失敗記録（`#usageBlockFoldedInternalFailures`）を、この1行へ畳んで
           // 出す**（Issue #1240 続き。両方の doc）。**1回ごとには書かない** ——
@@ -3566,8 +3344,7 @@ class Clone implements CloneHost {
       }
     }
     // 閉じた後に待っている人を取り残さない
-    for (const done of this.#completions.values()) done();
-    this.#completions.clear();
+    this.#delivery.settleAllCompletions();
   }
 
   /**
@@ -3825,7 +3602,7 @@ class Clone implements CloneHost {
     let taken = 1;
     const matchesRule = (queued: InboxEvent): boolean =>
       predicate(queued) && this.#mergeable(queued);
-    const rest = this.#inbox.drainWhile((queued) => {
+    const rest = this.#delivery.inbox.drainWhile((queued) => {
       if (taken >= limit) return false;
       const matches = matchesRule(queued);
       if (matches) taken += 1;
@@ -3836,7 +3613,7 @@ class Clone implements CloneHost {
     // （呼び出し元はこのとき `null` を返して単発経路へ落ちる）が、それでも
     // 待ち行列の先頭に「同じ束に入るはずだった」合図は残りうる——その場合も
     // 切った事実は本物なので、ここで見落とさない。
-    const remainingHead = this.#inbox.countWhile(matchesRule);
+    const remainingHead = this.#delivery.inbox.countWhile(matchesRule);
     if (remainingHead > 0) {
       this.#notices.set(
         'mergedBatchTruncation',
@@ -3940,7 +3717,7 @@ class Clone implements CloneHost {
     // **書けたかどうかを条件にしない** — `#journal` は失敗を自分で握って stderr へ
     // 落とすので、ここへ来る約束は必ず解決する。書けなかったからターンを止める、には
     // しない（記録できないことより、応答が返らないことの方が高くつく）。
-    for (const event of events) await this.#recorded.get(event.id);
+    for (const event of events) await this.#delivery.getRecorded(event.id);
 
     const head = events[0];
     if (head === undefined) return;
@@ -4069,12 +3846,12 @@ class Clone implements CloneHost {
     // 記帳の控えも同じ場所で捨てる。**台帳の行は消さない** — 消すのは「もう
     // 順序を待つ相手が居ない」という印だけで、閉じられていない未了はそのまま残る
     // （それがこの器の目的である）。
-    this.#committed.delete(event.id);
+    this.#delivery.deleteCommitted(event.id);
     // 受理の瞬間に書いた追記の控えは、待つ相手が居なくなった時点で捨てる。
     // **例外で終わった経路も通る**ので、ここに置く（`#handle` の中で消すと、
     // 途中で投げたぶんが残り続ける）。追記そのものは取り消さない — 消すのは
     // 「もう誰も待たない」という印だけである。
-    this.#recorded.delete(event.id);
+    this.#delivery.deleteRecorded(event.id);
 
     if (defer && this.#foldsIntoHeldTick(event)) {
       // **中身を持たない合図で在庫を作らない。** `post` の畳み込みと同じ規則
@@ -4101,7 +3878,7 @@ class Clone implements CloneHost {
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     } else if (defer) {
-      this.#deferred.push(event);
+      this.#delivery.pushDeferred(event);
       // 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
       // `#forget` と同じ側である** — 保持している間に消すと、解除で戻ってきた
       // 合図が「初めて届いたもの」に見えてまとめ読みの対象へ戻る。
@@ -4119,9 +3896,7 @@ class Clone implements CloneHost {
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
     }
-    const done = this.#completions.get(event.id);
-    this.#completions.delete(event.id);
-    done?.();
+    this.#delivery.takeCompletion(event.id)?.();
   }
 
   /**
@@ -4136,7 +3911,7 @@ class Clone implements CloneHost {
    * に委ねてあり、本文の一致は1文字も見ていない。
    */
   #foldsIntoHeldTick(event: InboxEvent): boolean {
-    return isTick(event) && this.#deferred.some((held) => isSameTick(held, event));
+    return isTick(event) && this.#delivery.someDeferred((held) => isSameTick(held, event));
   }
 
   /**
@@ -4158,7 +3933,7 @@ class Clone implements CloneHost {
       text:
         `${EXCHANGE_KIND_THINNING_PREFIX}枠で保持している同じ合図（${event.type}）が既にあるので、新しく届いた分を畳んだ。` +
         `中身は処理の瞬間に組み立て直すので、読まれる前の重複には情報が無い（保持中の同種: ` +
-        `${this.#deferred.filter((held) => isSameTick(held, event)).length} 件）。`,
+        `${this.#delivery.matchingDeferredCount((held) => isSameTick(held, event))} 件）。`,
     });
   }
 
@@ -4351,12 +4126,12 @@ class Clone implements CloneHost {
    *
    * ## `#forget` の `await written` がここに無い理由
    *
-   * `#forget` は消す前に `const written = this.#unread.get(event.id)` を
+   * `#forget` は消す前に `const written = this.#delivery.getUnread(event.id)` を
    * `await` する——`#unread` の値は `inbox.put` の書き込みそのものなので、
    * 書き終える前に消すと「消してから積む」順になりかねないためである。
    * **ここでは待たない。** この経路が扱う record は `#restoreUnreadPass`
    * が `Promise.resolve()` を積んだものだけで（逐語:
-   * `grep -Fn -- 'this.#unread.set(record.event.id, Promise.resolve())' packages/core/src/clone.ts`）、
+   * `grep -Fn -- 'this.#delivery.setUnread(record.event.id, Promise.resolve())' packages/core/src/clone.ts`）、
    * **待つべき書き込みが最初から存在しない**——器には前の起動が既に積んで
    * あり、この周は `claimPending` で拾い直しただけである。
    * ⚠️ **`#restoreUnreadPass` がここへ本物の書き込みの Promise を積むよう
@@ -4389,8 +4164,8 @@ class Clone implements CloneHost {
           ids,
         );
         for (const record of chunk) {
-          this.#unread.delete(record.event.id);
-          this.#redeliveryState.drop(record.event.id);
+          this.#delivery.deleteUnread(record.event.id);
+          this.#delivery.redeliveryState.drop(record.event.id);
           this.#dropPendingCollapse(record.event);
           // **token-pool の代表もここで落とす**（Issue #1051 続き）。この
           // 経路は `#forget` を通らない（このメソッドの doc「`#forget` の
@@ -4401,9 +4176,7 @@ class Clone implements CloneHost {
           // が拾い直しの直後に作り直した代表がこの経路で消える回はここが
           // 唯一の後始末になる）、次に届く新しい token-pool 通知の合流判定が
           // 「代表がまだ未処理で残っている」という偽の前提で走ることになる。
-          if (this.#pendingTokenPoolNotice?.id === record.event.id) {
-            this.#pendingTokenPoolNotice = null;
-          }
+          this.#delivery.clearPendingTokenPoolNoticeIfMatches(record.event.id);
           this.#inboxFlow.settled(record.event.type);
         }
         return;
@@ -4671,11 +4444,11 @@ class Clone implements CloneHost {
     const key = inboxCollapseKey(event);
     if (key === undefined) return 'pass';
 
-    const existing = this.#pendingCollapse.get(key);
+    const existing = this.#delivery.getCollapseEntry(key);
     if (existing === undefined) {
       // **この鍵の代表になる。** 代表自身はここでは何もせず（呼び出し側が
       // これまでどおり `#remember` 以下を通す）、索引にだけ載せる。
-      this.#pendingCollapse.set(key, { id: event.id, at: event.at, collapsed: 0 });
+      this.#delivery.registerCollapseRepresentative(key, event.id, event.at);
       return 'pass';
     }
 
@@ -4749,9 +4522,8 @@ class Clone implements CloneHost {
     const key = inboxCollapseKey(event);
     if (key === undefined) return;
 
-    const existing = this.#pendingCollapse.get(key);
-    if (existing === undefined || existing.id !== event.id) return;
-    this.#pendingCollapse.delete(key);
+    const existing = this.#delivery.dropCollapseEntryIfMatches(key, event.id);
+    if (existing === undefined) return;
 
     if (existing.collapsed > 0) {
       void this.#journal({
@@ -4801,12 +4573,12 @@ class Clone implements CloneHost {
     const key = this.#externalMergeKey(event);
     if (key === null) return;
 
-    const current = this.#pendingTokenPoolNotice;
+    const current = this.#delivery.pendingTokenPoolNotice;
 
     if (current === null) {
       // **代表が居ない ⟹ この event が新しい代表になる。** ここでは何も畳まない
       // ——1回目は必ず配る、という約束そのものである。
-      this.#pendingTokenPoolNotice = { id: event.id, at: event.at, key, folded: 0 };
+      this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded: 0 });
       return;
     }
 
@@ -4826,7 +4598,7 @@ class Clone implements CloneHost {
     // 場合も、代表はこの event へ差し替える。** 見つからないことは「合流でき
     // なかった」ではない——負の対照（「合流は未処理の間に限る」）が期待する
     // とおり、その場合はこの event が自分自身の新しい代表として振る舞う。
-    this.#pendingTokenPoolNotice = { id: event.id, at: event.at, key, folded };
+    this.#delivery.setPendingTokenPoolNotice({ id: event.id, at: event.at, key, folded });
   }
 
   /**
@@ -4854,16 +4626,14 @@ class Clone implements CloneHost {
    * 跡を残す。
    */
   #evictPendingTokenPoolRepresentative(id: string): InboxEvent | null {
-    const fromQueue = this.#inbox.removeWhere((queued) => queued.id === id);
+    const fromQueue = this.#delivery.inbox.removeWhere((queued) => queued.id === id);
     const victim = fromQueue[0];
     if (victim !== undefined) {
       void this.#forget(victim);
       return victim;
     }
 
-    const index = this.#deferred.findIndex((held) => held.id === id);
-    if (index === -1) return null;
-    const [held] = this.#deferred.splice(index, 1);
+    const held = this.#delivery.removeDeferredById(id);
     if (held === undefined) return null;
     this.#heldForUsage.delete(id);
     void this.#forget(held);
@@ -4939,7 +4709,7 @@ class Clone implements CloneHost {
    */
   #remember(event: InboxEvent, options: { readonly canQueue: boolean }): void {
     this.#inboxFlow.arrived(event.type);
-    this.#unread.set(event.id, this.#persistUnread(event, options));
+    this.#delivery.setUnread(event.id, this.#persistUnread(event, options));
   }
 
   /**
@@ -5017,7 +4787,13 @@ class Clone implements CloneHost {
     // 解釈（どれを既定ビューから隠すか）はここでは一切しない——それは
     // `conversation.ts` の `computeSupersededIds` が持つ射影であって、記録の
     // 時点で何かを取り消す・巻き戻すものではない（制約(B)）。
-    const written = this.#recordChain.then(() =>
+    // 列そのものは失敗で切らない。**1本書けなかったことで以後の発言の記録まで
+    // 止めない**（`#journal` は自分で握るので普通は来ないが、列は器の外の失敗にも
+    // 耐える形で持つ）。待っている側（`#handle`）には元の約束を渡す。この3行
+    // （繋ぐ・戻す・控える）は `CloneDelivery#chainRecord` へそのまま移した
+    // （Issue #1190「配送」束。await の構造・Promise の同一性は変えていない
+    // ——同メソッドの doc を見よ）。
+    this.#delivery.chainRecord(event.id, () =>
       this.#journal({
         type: 'exchange',
         with: 'human',
@@ -5027,11 +4803,6 @@ class Clone implements CloneHost {
         ...(event.supersedes === undefined ? {} : { supersedes: event.supersedes }),
       }),
     );
-    // 列そのものは失敗で切らない。**1本書けなかったことで以後の発言の記録まで
-    // 止めない**（`#journal` は自分で握るので普通は来ないが、列は器の外の失敗にも
-    // 耐える形で持つ）。待っている側（`#handle`）には元の約束を渡す。
-    this.#recordChain = written.catch(() => undefined);
-    this.#recorded.set(event.id, written);
 
     // 同期で呼ぶ。`post` から見て、この合図は日誌の書き込みを待たずに届く
     // （待てるのは記録の**順序**だけで、通知を待たせる理由は無い）。
@@ -5148,7 +4919,7 @@ class Clone implements CloneHost {
    *
    * **記録は名乗りより先に済む。** この追記は、この `.then()` チェーン
    * そのもの——`#committed` に控えるプロミスの鎖——の中で行う。
-   * `#commitmentNoticeFor` はこの鎖（`this.#committed.get(pending.id)`）を
+   * `#commitmentNoticeFor` はこの鎖（`this.#delivery.getCommitted(pending.id)`）を
    * `await` してから初めて `list()` で再読し、名乗る文面を組み立てる
    * （下の `#commitmentNoticeFor` 冒頭のコメント「この合図の記帳が済んで
    * から読む」）。**⟹ 「記録してから名乗る」という順序は、気をつけて書く
@@ -5173,7 +4944,7 @@ class Clone implements CloneHost {
   #commit(event: InboxEvent): void {
     const entry = commitmentFor(event);
     if (entry === null) return;
-    this.#committed.set(
+    this.#delivery.setCommitted(
       event.id,
       this.#stores.commitments.open(entry).then(
         async (result): Promise<CommitOutcome> => {
@@ -5283,7 +5054,7 @@ class Clone implements CloneHost {
     // 台帳と無関係なので、後段の「載っていない」判定からも除かれる。
     const outcomes = new Map<string, CommitOutcome>();
     for (const pending of events) {
-      const outcome = await this.#committed.get(pending.id);
+      const outcome = await this.#delivery.getCommitted(pending.id);
       if (outcome !== undefined) outcomes.set(pending.id, outcome);
     }
 
@@ -5585,14 +5356,14 @@ class Clone implements CloneHost {
    * `describeSituation` へ渡す）と、**`manager_list` の受信箱の行**
    * （`#toolContext()` が `ToolContext.queuedInMemory` として道具へ渡し、
    * `tools.ts` の `describeInboxBacklog` が読む）である。**式
-   * `this.#inbox.size + this.#deferred.length` を2箇所に書き写すと、
+   * `this.#delivery.inbox.size + this.#delivery.deferredCount` を2箇所に書き写すと、
    * どちらかだけを直して忘れた瞬間に2つの数字が食い違いうる**——同じ
    * クローンが同じターンの中で読む2つの「受信箱の滞留」が、また別の理由で
    * 割れることになる。**この1本を両方が通ることで、その割れ方そのものを
    * 構造的に作れなくする。**
    */
   #queuedInMemoryCount(): number {
-    return this.#inbox.size + this.#deferred.length;
+    return this.#delivery.inbox.size + this.#delivery.deferredCount;
   }
 
   /**
@@ -5759,7 +5530,7 @@ class Clone implements CloneHost {
         // 「`undefined` は『読めなかった』ではない」）。
         //
         // **このターン自身（`events` / `batch`）は引かない——引く必要が無い。**
-        // `#pump` は `next()` / `drainWhile()` で `this.#inbox` から取り出して
+        // `#pump` は `next()` / `drainWhile()` で `this.#delivery.inbox` から取り出して
         // からここへ来るので、`#inbox.size` は既にこのターンの分を含まない
         // （DB 側の `Math.max(0, backlog.count - events.length)` に対応する
         // 補正が要らない理由——引く前の値が既に「これを除いた残り」である）。
@@ -5768,7 +5539,7 @@ class Clone implements CloneHost {
         // 側（`tools.ts` の `describeInboxBacklog`）が同じ数を読む口
         // （`#toolContext()` の `queuedInMemory`）も、この下の1本のメソッドを
         // 通す——件数の出どころを1箇所にすることで、2つの呼び出し口が
-        // 別々の式（`this.#inbox.size + this.#deferred.length` を2箇所に
+        // 別々の式（`this.#delivery.inbox.size + this.#delivery.deferredCount` を2箇所に
         // 書き写す形）に割れて食い違う経路を構造的に作らない。
         queuedInMemory: this.#queuedInMemoryCount(),
       });
@@ -5924,7 +5695,7 @@ class Clone implements CloneHost {
    * ここに引く。**
    */
   async #forget(event: InboxEvent): Promise<void> {
-    const written = this.#unread.get(event.id);
+    const written = this.#delivery.getUnread(event.id);
     // 器に置いていない合図（`#postAndWait` の蒸留）は消すものが無い。
     if (written === undefined) return;
 
@@ -5937,8 +5708,8 @@ class Clone implements CloneHost {
       }
       try {
         await this.#stores.inbox.remove(event.id);
-        this.#unread.delete(event.id);
-        this.#redeliveryState.drop(event.id);
+        this.#delivery.deleteUnread(event.id);
+        this.#delivery.redeliveryState.drop(event.id);
         // **畳み込みの索引も、器から消えたここで落とす**（Issue #954 続き。
         // `#dropPendingCollapse` の doc）。`remove` が確定した後でしか落とさ
         // ないのが肝である —— 消せずに下の `noteDroppedRecord` へ抜ける回は、
@@ -5954,7 +5725,7 @@ class Clone implements CloneHost {
         // 合流で差し替えられた後（`#pendingTokenPoolNotice` が別の id を
         // 指している）に、外した側の古い event がここへ来ても代表を巻き添え
         // で消さない。
-        if (this.#pendingTokenPoolNotice?.id === event.id) this.#pendingTokenPoolNotice = null;
+        this.#delivery.clearPendingTokenPoolNoticeIfMatches(event.id);
         // **`settled`（Issue #783 段0）。成功した回だけ1回数える** —— この
         // `for` は失敗を再試行するが、`return` するのはここだけなので、
         // 同じ event で2回数えることは無い（`schema.ts` の `inbox_flow` の
@@ -6047,12 +5818,8 @@ class Clone implements CloneHost {
     for (const record of pending) {
       const key = inboxCollapseKey(record.event);
       if (key === undefined) continue;
-      if (this.#pendingCollapse.has(key)) continue;
-      this.#pendingCollapse.set(key, {
-        id: record.event.id,
-        at: record.event.at,
-        collapsed: 0,
-      });
+      if (this.#delivery.hasCollapseKey(key)) continue;
+      this.#delivery.registerCollapseRepresentative(key, record.event.id, record.event.at);
     }
 
     // **token-pool の代表も同じ形で作り直す**（Issue #1051 続き。
@@ -6074,7 +5841,12 @@ class Clone implements CloneHost {
       // record 自身を指す代表を無条件で外しに行ってしまう）。
       const key = this.#externalMergeKey(record.event);
       if (key === null) continue;
-      this.#pendingTokenPoolNotice = { id: record.event.id, at: record.event.at, key, folded: 0 };
+      this.#delivery.setPendingTokenPoolNotice({
+        id: record.event.id,
+        at: record.event.at,
+        key,
+        folded: 0,
+      });
     }
 
     // **日誌の側も同じ材料で名乗り分ける**（判定は `#redeliveryNoticeFor` と同一）。
@@ -6173,7 +5945,7 @@ class Clone implements CloneHost {
     };
 
     for (const [restoreUnreadPassIndex, { record, verdict }] of decided.entries()) {
-      if (this.#sdkSession.stopped || this.#inbox.closed) {
+      if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
         // **`staleBuffer` と同じ理由で、ここでも先に空にする。** 既に
         // 「畳んだ」対象として `gatedRecordsThisPass` へ積んだ record は、
@@ -6209,7 +5981,7 @@ class Clone implements CloneHost {
         // どんな早期 return よりも前でなければならない**（issue #903 の
         // 実装中に見つけた自分のバグ）。すぐ下（数行後）に `#stopped` /
         // `#inbox.closed` を見る早期 return があり、それは本来
-        // `this.#inbox.push`（live 専用）を守るためのものだが、この積む
+        // `this.#delivery.inbox.push`（live 専用）を守るためのものだが、この積む
         // 操作をその**後ろ**に置くと、「消した」と日誌へ書いた直後に
         // `#stopped` が立った回だけ、この record が `staleBuffer` に
         // 一度も積まれないまま関数が return してしまう——**日誌は「消した」
@@ -6230,7 +6002,7 @@ class Clone implements CloneHost {
       // 日誌を書いているあいだに片付けが始まっていることがある。**積む直前に
       // もう一度見ること**（`Inbox#push` は閉じた後だと投げる）。消してはいない
       // ので、積めなかったものは次の起動で拾い直せる。
-      if (this.#sdkSession.stopped || this.#inbox.closed) {
+      if (this.#sdkSession.stopped || this.#delivery.inbox.closed) {
         await flushStaleRemovalBuffer();
         // 直上と同じ理由（前の record ぶんで既に積んだ「畳んだ」を失わない）。
         await flushGatedFoldHeadline();
@@ -6265,7 +6037,7 @@ class Clone implements CloneHost {
           // 何もしない（`#redeliveredClosed` に載らない）ので、後段は変わらず
           // 全文で配る — 1文字も変えない。
           if (commitment !== null && commitment.closedAt !== undefined) {
-            this.#redeliveryState.markClosed(record.event.id, commitment);
+            this.#delivery.redeliveryState.markClosed(record.event.id, commitment);
           }
         } catch (error) {
           // **読めなければ「閉じていない」として扱う＝全文で配る。** ここで
@@ -6275,10 +6047,10 @@ class Clone implements CloneHost {
         }
       }
 
-      this.#redeliveryState.markRedelivered(record.event.id, record);
+      this.#delivery.redeliveryState.markRedelivered(record.event.id, record);
       // 既に器に在るので書き直さない。**ただし消し込みの対象には入れる**
       // （入れ忘れると、拾い直したものが処理後も残って毎回配られる）。
-      this.#unread.set(record.event.id, Promise.resolve());
+      this.#delivery.setUnread(record.event.id, Promise.resolve());
       // **本文は配達のたびに書く。** 受理の瞬間の追記（`#record`）は `post` から
       // 見て非同期なので、器へ届く前に落ちたかどうかは**ここからは分からない**。
       // 書かない側を選ぶと、その窓に落ちた発言が日誌から永久に消える（未読の器に
@@ -6390,8 +6162,8 @@ class Clone implements CloneHost {
       // （`dropQueuedInboxEvents` の doc「消し込みは呼ばない」と同じ理由 ——
       // 空振りの `remove` で `settled` を二重に数える）。
       if (this.#droppedWhileRestoring.has(record.event.id)) {
-        this.#unread.delete(record.event.id);
-        this.#redeliveryState.drop(record.event.id);
+        this.#delivery.deleteUnread(record.event.id);
+        this.#delivery.redeliveryState.drop(record.event.id);
         this.#dropPendingCollapse(record.event);
         await this.#journal({
           type: 'exchange',
@@ -6405,7 +6177,7 @@ class Clone implements CloneHost {
       }
 
       this.#inboxFlow.delivered(record.event.type);
-      this.#inbox.push(
+      this.#delivery.inbox.push(
         record.event,
         this.#humanPriority && isHumanOriginated(record.event) ? isHumanOriginated : undefined,
       );
@@ -6679,7 +6451,7 @@ class Clone implements CloneHost {
     if (batch.length === 1) {
       const event = batch[0];
       if (event === undefined) return '';
-      const record = this.#redeliveryState.get(event.id);
+      const record = this.#delivery.redeliveryState.get(event.id);
       if (record === undefined) return '';
 
       // **同時に拾い直した件数で名乗り分ける**（`#restoredCohort` の doc）。
@@ -6717,7 +6489,7 @@ class Clone implements CloneHost {
     // 空文字（初回配達だけの束）。
     const records: PendingInboxEvent[] = [];
     for (const event of batch) {
-      const record = this.#redeliveryState.get(event.id);
+      const record = this.#delivery.redeliveryState.get(event.id);
       if (record !== undefined) records.push(record);
     }
     if (records.length === 0) return '';
@@ -6761,7 +6533,7 @@ class Clone implements CloneHost {
    * 「配り直した時点では未了だった」という事実が消える。
    */
   #closedRedeliveryNoticeFor(event: InboxEvent): string | null {
-    const commitment = this.#redeliveryState.getClosed(event.id);
+    const commitment = this.#delivery.redeliveryState.getClosed(event.id);
     if (commitment === undefined) return null;
     return closedRedeliveryNotice(event, commitment);
   }
@@ -11170,10 +10942,10 @@ class Clone implements CloneHost {
       // `settled`（直上）と違って `.clear()` しない——時点の値であって
       // 増分ではない（`schema.ts` の `inbox_flow.retained` の doc）。
       retained: {
-        unread: this.#unread.size,
-        redelivered: this.#redeliveryState.redeliveredSize,
-        redeliveredClosed: this.#redeliveryState.redeliveredClosedSize,
-        pendingCollapse: this.#pendingCollapse.size,
+        unread: this.#delivery.unreadSize,
+        redelivered: this.#delivery.redeliveryState.redeliveredSize,
+        redeliveredClosed: this.#delivery.redeliveryState.redeliveredClosedSize,
+        pendingCollapse: this.#delivery.collapseSize,
       },
     });
 
@@ -11219,7 +10991,7 @@ class Clone implements CloneHost {
 
   #emit(conversationId: string | null, event: ChatStreamEvent): void {
     if (conversationId === null) return;
-    for (const listener of this.#listeners.get(conversationId) ?? []) {
+    for (const listener of this.#delivery.listenersFor(conversationId)) {
       try {
         listener(event);
       } catch {

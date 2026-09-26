@@ -961,7 +961,9 @@ describe('引き受けたまま終わっていない仕事', () => {
    *
    * （逐語は `grep -Fn -- '台帳側で #1041 が挙げるような' packages/core/src/clone.ts`。
    * `#pendingCollapse` の doc 側にも同じ趣旨の断りがもう1箇所在る——
-   * `grep -Fn -- '#1041 が台帳側（' packages/core/src/clone.ts`）
+   * 状態と doc の本体は `clone-delivery.ts` の {@link CloneDelivery}
+   * へ移した（Issue #1190「配送」束）ので、いまはそちらに在る:
+   * `grep -Fn -- '#1041 が台帳側（' packages/core/src/clone-delivery.ts`）
    *
    * ⟹ **`#commit` の TOCTOU（Issue #1041 本題）そのものは、単一インスタンスの
    * `Clone#post()` からは到達できない。** `#pendingCollapse`（畳み込みの索引）が
