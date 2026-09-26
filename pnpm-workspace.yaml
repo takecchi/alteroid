@@ -15,7 +15,7 @@ catalog:
   prettier: ^3.9.6
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
-  '@anthropic-ai/claude-agent-sdk': ^0.3.282
+  '@anthropic-ai/claude-agent-sdk': ^0.3.283
   # `@anthropic-ai/claude-agent-sdk` の peerDependency（`^1.29.0`）と同じ実体
   # （現に解決されている版は 1.30.1。`pnpm why @modelcontextprotocol/sdk -r` で
   # 引き直せる）。#486 48(a) 案D — クローンの道具の中継（relay）host が
