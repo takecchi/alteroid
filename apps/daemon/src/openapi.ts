@@ -812,6 +812,35 @@ export const managerSummarySchema = z.object({
    * `ManagerSummary.turnEndTail`）。その行の本文の末尾の抜粋（全文ではない）。
    */
   turnEndTail: z.string().optional(),
+  /**
+   * **デーモンが生ログの末尾を読んで計算した、「SDK は道具の応答を待っている」
+   * という事実**（Issue #572。`packages/core/src/manager.ts` の
+   * `ManagerSummary.toolUseStallAt`）。`toolUseStallPending`（真下）と対で
+   * 運ぶ——旗はあちらである。
+   *
+   * **判定ではない。時刻の閾値でもない。** `turnEndedAt` と同じ位置づけで、
+   * `status` を動かさない・委譲を abort しない・貸し出し期限も縮めない。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `turnEndTail`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になり、クローンの
+   * `manager_list` にだけ出る形になる）。
+   */
+  toolUseStallAt: z.string().optional(),
+  /**
+   * `toolUseStallAt` と対で運ぶ（Issue #572。`packages/core/src/manager.ts` の
+   * `ManagerSummary.toolUseStallPending` / `PendingToolUse`）。対応する
+   * `tool_result` が生ログに見つからなかった `tool_use` の一覧。
+   *
+   * **この欄が立っていることが観測が在る印。** 本当に止まっているかの判定は
+   * 読み手が `waiting` と突き合わせて行う（`packages/core/src/tools.ts` の
+   * `describeToolUseStall`）——この宣言は材料を運ぶだけで判定しない。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `toolUseStallAt`
+   * と同じ断り）。
+   */
+  toolUseStallPending: z
+    .array(z.object({ id: z.string(), name: z.string().optional() }))
+    .optional(),
   cwd: z.string(),
   request: z.string(),
   startedAt: z.string(),
@@ -847,6 +876,21 @@ export const managerSummarySchema = z.object({
    */
   lastReportAt: z.string().optional(),
   /**
+   * `lastReport` を台帳へ書いた瞬間の status（Issue #917。
+   * `packages/core/src/manager.ts` の `ManagerSummary.lastReportStatus`。
+   * `packages/core/src/schema.ts` の `jobSchema.lastReportStatus`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * と同じ理由——`jobStatusSchema` の選択肢が増えた日に spec が黙って古びる。
+   *
+   * **この欄は補正しない**——`event.status` をそのまま写す（`schema.ts` の
+   * doc と同じ断り）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastReportAt`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になる）。
+   */
+  lastReportStatus: jobSchema.shape.lastReportStatus,
+  /**
    * 直近の1ターンが**報告ではなく失敗**で終わったこと。
    *
    * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** これは台帳の値を
@@ -862,6 +906,36 @@ export const managerSummarySchema = z.object({
    * 「失敗していない」と「この器では見ていない」が同じ形になる。
    */
   lastFailure: jobSchema.shape.lastFailure,
+  /**
+   * `result` を受け取らないまま畳まれた回（Issue #917。
+   * `packages/core/src/manager.ts` の `ManagerSummary.lastUnreported`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * と同じ理由——`reason` / `at` のどちらかが片方だけ増えた日に spec が
+   * 黙って古びる。
+   *
+   * **`lastFailure` とは別の欄である。重なりは許すが同一ではない**
+   * （`packages/core/src/schema.ts` の `lastUnreported` の doc）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastFailure`
+   * と同じ断り）。
+   */
+  lastUnreported: jobSchema.shape.lastUnreported,
+  /**
+   * `manager_stop` で畳まれたターンの本文（Issue #1038。
+   * `packages/core/src/manager.ts` の `ManagerSummary.lastFoldedTurn`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * と同じ理由。
+   *
+   * **`lastReport`（完遂した報告）とは別の欄である。** 混ぜると「完遂した
+   * 報告」と「止めた後に打ち切られた途中経過」の区別が読み手から消える
+   * （`packages/core/src/schema.ts` の `lastFoldedTurn` の doc）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastUnreported`
+   * と同じ断り）。
+   */
+  lastFoldedTurn: jobSchema.shape.lastFoldedTurn,
   /**
    * セッションが `failed` として畳まれたときの、器の資源による落ち方の分類
    * （#713 段3）。
@@ -882,6 +956,23 @@ export const managerSummarySchema = z.object({
    * （`lastReport` / 受信箱）を見る。
    */
   lastSystemError: jobSchema.shape.lastSystemError,
+  /**
+   * この委譲が生きていた間に、器（cgroup）が「上限に当たって拒んだ／殺した」
+   * 累計がいくつ増えたか（Issue #1517「最小の形」2。
+   * `packages/core/src/manager.ts` の `ManagerSummary.lastCgroupEvents`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * / `lastSystemError` と同じ理由——`pidsMaxDelta` / `oomKillDelta` / `at` の
+   * どれかが片方だけ増えた日に spec が黙って古びる。
+   *
+   * **器全体の累計の差分であって、この委譲がそれで落ちたと名乗るものではない**
+   * （`packages/core/src/cgroup-events.ts` の doc）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の `lastSystemError`
+   * と同じ断り。落ちると CLI と Web の両方が同時に盲目になり、クローンの
+   * `manager_list` にだけ出る形になる）。
+   */
+  lastCgroupEvents: jobSchema.shape.lastCgroupEvents,
   /**
    * この委譲が**枠（利用上限）で止まった**印が立った時刻（Issue #1212 残件2。
    * `packages/core/src/manager.ts` の `ManagerSummary.usageStoppedAt`）。
@@ -1010,6 +1101,43 @@ export const managerSummarySchema = z.object({
   tokenGenerationUnknownReason: z
     .enum(['pool-not-wired', 'not-yet-observed', 'reattached-across-restart'])
     .optional(),
+  /**
+   * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
+   * 結果（Issue #914 オーナー提案(2)。`packages/core/src/manager.ts` の
+   * `ManagerSummary.resetTimeSkewMatch`）。
+   *
+   * - `'stale'` — このセッションは古い鍵を掴んだまま走っている（世代ずれ）
+   * - `'active'` — 待てば戻る（世代ずれではない）
+   *
+   * **`jobSchema` の枝を借りない**——`runnerVanished` と同じ理由。台帳
+   * （`Job`）には無い、プロセス内の `#resetTimeSkewMatches`（`manager.ts`）を
+   * 材料にした計算値である。
+   *
+   * **枠で止まっている間だけ意味を持つ**——`usageStoppedAt` が下りる時点で
+   * 一緒に消える。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
+   * `tokenGenerationUnknownReason` と同じ断り。落ちると CLI と Web の両方が
+   * 同時に盲目になり、クローンの `manager_list` にだけ出る形になる）。
+   */
+  resetTimeSkewMatch: z.enum(['active', 'stale']).optional(),
+  /**
+   * `manager_stop`（running・非 force）が最後に取った、未 push の作業ツリーの
+   * 枝名の観測（Issue #1266。`packages/core/src/manager.ts` の
+   * `ManagerSummary.lastUnpushedWorkObservation`）。
+   *
+   * **`jobSchema` の枝をそのまま借りる（ここで書き直さない）。** `lastFailure`
+   * と同じ理由——`kind` の分岐や `worktrees` の形が増えた日に spec が黙って
+   * 古びる。
+   *
+   * **答えるのは「どこ（どの枝）を見ればよいか」までである。** 「成果が届いた
+   * か」は含まない（`packages/core/src/schema.ts` の
+   * `lastUnpushedWorkObservationSchema` の doc）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上の
+   * `resetTimeSkewMatch` と同じ断り）。
+   */
+  lastUnpushedWorkObservation: jobSchema.shape.lastUnpushedWorkObservation,
   waiting: z.array(managerWaitingSchema),
   /**
    * 確認へ上がらずに止められた道具と件数（**古い順**）。

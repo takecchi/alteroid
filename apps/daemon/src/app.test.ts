@@ -55,6 +55,7 @@ import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
 import {
+  managerSummarySchema,
   practiceListResponseSchema,
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
@@ -379,6 +380,87 @@ const simpleRequest = (body = 'x') => ({
   method: 'POST',
   headers: { 'content-type': 'text/plain;charset=UTF-8' },
   body,
+});
+
+/**
+ * 再発防止の歯（管理者からの依頼、疑いが実測で確認できた後に追加）。
+ *
+ * `ManagerSummary`（core の TS interface。`packages/core/src/manager.ts`）に
+ * キーを1つ足しても、`managerSummarySchema`（このファイル冒頭で import した
+ * `openapi.ts` のもの。**手書きの再宣言**）に対応する宣言を足し忘れると、
+ * `GET /managers` / `GET /managers/:id` の `.parse()` がその欄を黙って落とす
+ * ——実際に `lastCgroupEvents`（#1517）と `lastUnpushedWorkObservation`
+ * （#1266）がこの形で欠けていた（直上の赤テストで実測した）。
+ *
+ * ここでは、その食い違いを compile time と runtime の両方で検出する。
+ *
+ * **compile time**: `coverage` の型を `Record<keyof ManagerSummary, true>` に
+ * してある——`Record` はキーをすべて必須にするので、`ManagerSummary` に
+ * オプショナルも含めて新しいキーが増えると、`coverage` の**この場所**が
+ * 型エラーで落ちる（足し忘れではなく、コンパイルが強制的に追記させる）。
+ *
+ * **runtime**: `coverage` のキー一覧と `managerSummarySchema.shape` の
+ * キー一覧を突き合わせ、`coverage` にあるのに schema に無いキーがあれば
+ * 落とす（`managerSummarySchema` から1行消す変異で赤くなることを確かめて
+ * ある）。
+ *
+ * **意図して HTTP へ出さない欄はここに無い（2026-09-26 時点の全キーで
+ * 確認済み）。** もし今後そういう欄を足すなら、`coverage` からはその欄を
+ * 除き、除いた理由を `managerSummarySchema` の該当欄の直前（無ければ
+ * その名前で）に書くこと——`ManagerDenial.reasonType` / `inputHead` が
+ * 「クローン向けの `manager_list` にだけ出す設計」と逐語で書いている
+ * のと同じ作法。
+ */
+describe('managerSummarySchema と ManagerSummary のキーの一致（再発防止の歯）', () => {
+  it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
+    const coverage: Record<keyof ManagerSummary, true> = {
+      managerId: true,
+      status: true,
+      live: true,
+      runnerLostSince: true,
+      runnerVanished: true,
+      sessionMissingSince: true,
+      sessionMissingKind: true,
+      turnEndedAt: true,
+      turnEndReason: true,
+      turnEndTail: true,
+      toolUseStallAt: true,
+      toolUseStallPending: true,
+      cwd: true,
+      request: true,
+      startedAt: true,
+      updatedAt: true,
+      sessionId: true,
+      appraisal: true,
+      appraisedAt: true,
+      appraisedBy: true,
+      appraisalReason: true,
+      workKind: true,
+      lastReport: true,
+      lastReportAt: true,
+      lastReportStatus: true,
+      lastFailure: true,
+      lastUnreported: true,
+      lastFoldedTurn: true,
+      lastSystemError: true,
+      lastCgroupEvents: true,
+      usageStoppedAt: true,
+      runnerId: true,
+      workspace: true,
+      lease: true,
+      waiting: true,
+      awaitingBackground: true,
+      tokenGeneration: true,
+      activeTokenGeneration: true,
+      tokenGenerationUnknownReason: true,
+      resetTimeSkewMatch: true,
+      lastUnpushedWorkObservation: true,
+    };
+
+    const schemaKeys = new Set(Object.keys(managerSummarySchema.shape));
+    const missing = Object.keys(coverage).filter((key) => !schemaKeys.has(key));
+    expect(missing).toEqual([]);
+  });
 });
 
 describe('HTTP API', () => {
@@ -3473,6 +3555,58 @@ describe('HTTP API', () => {
       managers: { managerId: string; workKind?: string }[];
     };
     expect(listed.managers.find((m) => m.managerId === 'mgr-kind')?.workKind).toBe('調査');
+  });
+
+  /**
+   * 疑い（管理者から）: `ManagerSummary`（core）が持つ `lastCgroupEvents`（#1517）と
+   * `lastUnpushedWorkObservation`（#1266）は `managerSummarySchema`（openapi.ts）に
+   * 宣言されていないように見える。`/managers` は応答を `.parse()` に通すので、
+   * 宣言に無い欄は zod が黙って落とす（直上のテストの `workKind` と同じ機構）。
+   * ここではその2欄が実際に応答へ届くかを、直で確かめる。
+   */
+  it('lastCgroupEvents（#1517）と lastUnpushedWorkObservation（#1266）が GET /managers の応答まで届く', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-cgroup-unpushed',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+      lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 1, at: '2026-01-01T00:05:00.000Z' },
+      lastUnpushedWorkObservation: {
+        kind: 'observed',
+        at: '2026-01-01T00:05:00.000Z',
+        cwd: '/work',
+        worktrees: [],
+      },
+    });
+    const listed = (await (await app.request('/managers')).json()) as {
+      managers: {
+        managerId: string;
+        lastCgroupEvents?: unknown;
+        lastUnpushedWorkObservation?: unknown;
+      }[];
+    };
+    const found = listed.managers.find((m) => m.managerId === 'mgr-cgroup-unpushed');
+    expect(found?.lastCgroupEvents).toEqual({
+      pidsMaxDelta: 3,
+      oomKillDelta: 1,
+      at: '2026-01-01T00:05:00.000Z',
+    });
+    expect(found?.lastUnpushedWorkObservation).toEqual({
+      kind: 'observed',
+      at: '2026-01-01T00:05:00.000Z',
+      cwd: '/work',
+      worktrees: [],
+    });
+
+    const single = (await (await app.request('/managers/mgr-cgroup-unpushed')).json()) as {
+      manager: { lastCgroupEvents?: unknown; lastUnpushedWorkObservation?: unknown };
+    };
+    expect(single.manager.lastCgroupEvents).toBeDefined();
+    expect(single.manager.lastUnpushedWorkObservation).toBeDefined();
   });
 
   it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {
