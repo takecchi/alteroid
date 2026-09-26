@@ -1916,6 +1916,18 @@ export interface SessionTranscriptTail {
    * 返すのは生ログ（JSONL）の形そのままで、**行の途中から始まりうる。** 整えるのは
    * 呼び出し側（`tailOf`）である —— 器ごとに整え方が分かれると、蒸留へ渡るものが
    * 器で変わる。
+   *
+   * ## 契約
+   *
+   * 🔴 **本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に
+   * 上回ること（同じ数で切り詰めない）。** `TranscriptArchive.readTail`
+   * （`readTail` interface doc）と同じ契約である——呼び出し側（`tailOf`）は
+   * `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰めが
+   * 要ったか」を判定するので、ここで「ちょうど `maxChars`」以下を返すと、
+   * 実際には切り捨てた行があるのに「本文がもとから短かった」と誤読される
+   * （#1718 で実際に踏んだ——`PgSessionStore.readTail` の停止条件が返す長さ
+   * ではなく積んだ累計文字数を見ていたため、境界ちょうどで `maxChars - 1`
+   * 文字しか返さなかった）。本文が `maxChars` 以下なら全文を返す。
    */
   readTail(key: LostSessionGrave, maxChars: number): Promise<string | null>;
 
