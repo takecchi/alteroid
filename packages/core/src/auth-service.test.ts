@@ -592,6 +592,172 @@ describe('listAccounts / listIdentities / listAccessTokens の並び（in-memory
 });
 
 /**
+ * **issue #1688（#1676 / PR #1681 の残り）。** `createdAt` が完全に同じ
+ * （同着）行どうしの並びは、直上の歯だけでは揃わない。memory は `Map.set`
+ * を使うので既存キーの反復順は動かないが、それは実装の偶然であって契約では
+ * ない——`id` / `(provider, subject)` という明示的な2次キーで並びを決める
+ * ようにした（fs / pg と同じ形。`packages/storage-fs/src/index.test.ts` の
+ * 同名の describe を見よ）。
+ */
+describe('同着（createdAt が同一）の並び（in-memory、issue #1688）', () => {
+  const TIE = '2026-01-05T00:00:00.000Z';
+  const account = {
+    id: 'account-1',
+    displayName: null,
+    email: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    lastLoginAt: null,
+    grantedAt: null,
+    grantedBy: null,
+    ownerDeclaredAt: null,
+  };
+
+  it('listAccounts: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    const first = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
+    const second = { ...account, id: 'account-b', email: 'b@example.test', createdAt: TIE };
+    await memoryAuth.putAccount(first);
+    await memoryAuth.putAccount(second);
+    await memoryAuth.putAccount({ ...first, displayName: 'renamed' });
+
+    const ids = (await memoryAuth.listAccounts()).map((it) => it.id);
+    expect(ids).toEqual(['account-a', 'account-b']);
+  });
+
+  it('listAccounts: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    const first = { ...account, id: 'account-z', email: 'z@example.test', createdAt: TIE };
+    const second = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
+    // 挿入順は z → a（id の昇順とは逆）。更新はしない。
+    await memoryAuth.putAccount(first);
+    await memoryAuth.putAccount(second);
+
+    const ids = (await memoryAuth.listAccounts()).map((it) => it.id);
+    expect(ids).toEqual(['account-a', 'account-z']);
+  });
+
+  it('listIdentities: 同着の2行のうち先に作ったほうだけ後から更新すると、(provider, subject) 昇順のまま動かない', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    await memoryAuth.putAccount(account);
+    const first = {
+      provider: 'google',
+      subject: 'sub-first',
+      accountId: 'account-1',
+      email: 'first@example.test',
+      emailVerified: true,
+      createdAt: TIE,
+      lastLoginAt: TIE,
+    };
+    const second = {
+      provider: 'google',
+      subject: 'sub-second',
+      accountId: 'account-1',
+      email: 'second@example.test',
+      emailVerified: true,
+      createdAt: TIE,
+      lastLoginAt: TIE,
+    };
+    await memoryAuth.putIdentity(first);
+    await memoryAuth.putIdentity(second);
+    await memoryAuth.putIdentity({ ...first, lastLoginAt: '2026-01-06T00:00:00.000Z' });
+
+    const subjects = (await memoryAuth.listIdentities('account-1')).map((it) => it.subject);
+    expect(subjects).toEqual(['sub-first', 'sub-second']);
+  });
+
+  it('listIdentities: 同着2行を2次キー（subject）と逆順に挿入しても、subject 昇順で返る', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    await memoryAuth.putAccount(account);
+    const first = {
+      provider: 'google',
+      subject: 'sub-z',
+      accountId: 'account-1',
+      email: 'z@example.test',
+      emailVerified: true,
+      createdAt: TIE,
+      lastLoginAt: TIE,
+    };
+    const second = {
+      provider: 'google',
+      subject: 'sub-a',
+      accountId: 'account-1',
+      email: 'a@example.test',
+      emailVerified: true,
+      createdAt: TIE,
+      lastLoginAt: TIE,
+    };
+    // 挿入順は z → a（subject の昇順とは逆）。更新はしない。
+    await memoryAuth.putIdentity(first);
+    await memoryAuth.putIdentity(second);
+
+    const subjects = (await memoryAuth.listIdentities('account-1')).map((it) => it.subject);
+    expect(subjects).toEqual(['sub-a', 'sub-z']);
+  });
+
+  it('listAccessTokens: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    await memoryAuth.putAccount(account);
+    const first = {
+      id: 'token-first',
+      accountId: 'account-1',
+      sha256: 'a'.repeat(64),
+      label: 'first',
+      createdAt: TIE,
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    const second = {
+      id: 'token-second',
+      accountId: 'account-1',
+      sha256: 'b'.repeat(64),
+      label: 'second',
+      createdAt: TIE,
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    await memoryAuth.putAccessToken(first);
+    await memoryAuth.putAccessToken(second);
+    await memoryAuth.putAccessToken({ ...first, lastUsedAt: '2026-01-06T00:00:00.000Z' });
+
+    const ids = (await memoryAuth.listAccessTokens('account-1')).map((it) => it.id);
+    expect(ids).toEqual(['token-first', 'token-second']);
+  });
+
+  it('listAccessTokens: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
+    const memoryAuth = createMemoryStores().auth;
+    await memoryAuth.putAccount(account);
+    const first = {
+      id: 'token-z',
+      accountId: 'account-1',
+      sha256: 'a'.repeat(64),
+      label: 'z',
+      createdAt: TIE,
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    const second = {
+      id: 'token-a',
+      accountId: 'account-1',
+      sha256: 'b'.repeat(64),
+      label: 'a',
+      createdAt: TIE,
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    // 挿入順は z → a（id の昇順とは逆）。更新はしない。
+    await memoryAuth.putAccessToken(first);
+    await memoryAuth.putAccessToken(second);
+
+    const ids = (await memoryAuth.listAccessTokens('account-1')).map((it) => it.id);
+    expect(ids).toEqual(['token-a', 'token-z']);
+  });
+});
+
+/**
  * **`isDeclaredOwner`（本来の owner 判定。issue #1198）。**
  *
  * ここで固定するのは3つ。**①宣言済みなら真**、**②宣言していなければ

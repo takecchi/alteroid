@@ -3785,6 +3785,163 @@ describe('AuthStore', () => {
     expect(ids).toEqual(['token-first', 'token-second']);
   });
 
+  /**
+   * **issue #1688（#1676 / PR #1681 の残り）。** `createdAt` が完全に同じ
+   * （同着）行どうしの並びは、直上の歯だけでは揃わない。fs は `putIdentity` /
+   * `putAccessToken` / `putAccount` が「既存行を消して末尾へ足す」形なので、
+   * 安定ソート（`Array.prototype.sort`）だけでは**最後に書き換えた行が後ろへ
+   * 回る**——「作成順」ではなく「最後に触られた順」になる。
+   *
+   * 2次キー（`listAccounts`/`listAccessTokens` は `id`、`listIdentities` は
+   * `provider` → `subject`）を明示的に比較へ足し、**挿入順を約束にしない**
+   * 形にした（pg は2次キーの無い `ORDER BY` では同着の順を保証しないため、
+   * 「挿入順」を約束にすると pg 側では守れない）。
+   */
+  describe('同着（createdAt が同一）の並び（issue #1688）', () => {
+    const TIE = '2026-01-05T00:00:00.000Z';
+
+    it('listAccounts: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
+      const first = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
+      const second = { ...account, id: 'account-b', email: 'b@example.test', createdAt: TIE };
+      await stores.auth.putAccount(first);
+      await stores.auth.putAccount(second);
+      // first だけ後から更新する（createdAt は変えない）。
+      await stores.auth.putAccount({ ...first, displayName: 'Owner (renamed)' });
+
+      const ids = (await stores.auth.listAccounts()).map((it) => it.id);
+      expect(ids).toEqual(['account-a', 'account-b']);
+    });
+
+    it('listAccounts: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
+      const first = { ...account, id: 'account-z', email: 'z@example.test', createdAt: TIE };
+      const second = { ...account, id: 'account-a', email: 'a@example.test', createdAt: TIE };
+      // 挿入順は z → a（id の昇順とは逆）。更新はしない。
+      await stores.auth.putAccount(first);
+      await stores.auth.putAccount(second);
+
+      const ids = (await stores.auth.listAccounts()).map((it) => it.id);
+      expect(ids).toEqual(['account-a', 'account-z']);
+    });
+
+    it('listIdentities: 同着の2行のうち先に作ったほうだけ後から更新すると、(provider, subject) 昇順のまま動かない', async () => {
+      await stores.auth.putAccount(account);
+      const first = {
+        provider: 'google',
+        subject: 'sub-first',
+        accountId: 'account-1',
+        email: 'first@example.test',
+        emailVerified: true,
+        createdAt: TIE,
+        lastLoginAt: TIE,
+      };
+      const second = {
+        provider: 'google',
+        subject: 'sub-second',
+        accountId: 'account-1',
+        email: 'second@example.test',
+        emailVerified: true,
+        createdAt: TIE,
+        lastLoginAt: TIE,
+      };
+      await stores.auth.putIdentity(first);
+      await stores.auth.putIdentity(second);
+      // first だけ後から更新する（createdAt は変えない）。
+      await stores.auth.putIdentity({ ...first, lastLoginAt: '2026-01-06T00:00:00.000Z' });
+
+      const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
+      expect(subjects).toEqual(['sub-first', 'sub-second']);
+    });
+
+    it('listIdentities: 同着2行を2次キー（subject）と逆順に挿入しても、subject 昇順で返る', async () => {
+      await stores.auth.putAccount(account);
+      const first = {
+        provider: 'google',
+        subject: 'sub-z',
+        accountId: 'account-1',
+        email: 'z@example.test',
+        emailVerified: true,
+        createdAt: TIE,
+        lastLoginAt: TIE,
+      };
+      const second = {
+        provider: 'google',
+        subject: 'sub-a',
+        accountId: 'account-1',
+        email: 'a@example.test',
+        emailVerified: true,
+        createdAt: TIE,
+        lastLoginAt: TIE,
+      };
+      // 挿入順は z → a（subject の昇順とは逆）。更新はしない。
+      await stores.auth.putIdentity(first);
+      await stores.auth.putIdentity(second);
+
+      const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
+      expect(subjects).toEqual(['sub-a', 'sub-z']);
+    });
+
+    it('listAccessTokens: 同着の2行のうち先に作ったほうだけ後から更新すると、id 昇順のまま動かない', async () => {
+      await stores.auth.putAccount(account);
+      const first = {
+        id: 'token-first',
+        accountId: 'account-1',
+        sha256: 'a'.repeat(64),
+        label: 'first',
+        createdAt: TIE,
+        expiresAt: null,
+        lastUsedAt: null,
+        revokedAt: null,
+      };
+      const second = {
+        id: 'token-second',
+        accountId: 'account-1',
+        sha256: 'b'.repeat(64),
+        label: 'second',
+        createdAt: TIE,
+        expiresAt: null,
+        lastUsedAt: null,
+        revokedAt: null,
+      };
+      await stores.auth.putAccessToken(first);
+      await stores.auth.putAccessToken(second);
+      // first だけ後から「使った」印を付ける（`touch()` と同じ形の更新）。
+      await stores.auth.putAccessToken({ ...first, lastUsedAt: '2026-01-06T00:00:00.000Z' });
+
+      const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
+      expect(ids).toEqual(['token-first', 'token-second']);
+    });
+
+    it('listAccessTokens: 同着2行を2次キー（id）と逆順に挿入しても、id 昇順で返る', async () => {
+      await stores.auth.putAccount(account);
+      const first = {
+        id: 'token-z',
+        accountId: 'account-1',
+        sha256: 'a'.repeat(64),
+        label: 'z',
+        createdAt: TIE,
+        expiresAt: null,
+        lastUsedAt: null,
+        revokedAt: null,
+      };
+      const second = {
+        id: 'token-a',
+        accountId: 'account-1',
+        sha256: 'b'.repeat(64),
+        label: 'a',
+        createdAt: TIE,
+        expiresAt: null,
+        lastUsedAt: null,
+        revokedAt: null,
+      };
+      // 挿入順は z → a（id の昇順とは逆）。更新はしない。
+      await stores.auth.putAccessToken(first);
+      await stores.auth.putAccessToken(second);
+
+      const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
+      expect(ids).toEqual(['token-a', 'token-z']);
+    });
+  });
+
   it('アカウントを保存して読み戻せる', async () => {
     await stores.auth.putAccount(account);
 
