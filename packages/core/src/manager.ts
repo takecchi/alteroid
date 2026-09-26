@@ -8096,7 +8096,7 @@ class Pool implements ManagerPool {
       // 本文・`ask` の要旨・`closed` の理由は外から来るので載せない。
       await runner.connect(
         (event) =>
-          void this.#onEvent(event).catch((error: unknown) => {
+          void this.#onEvent(event, runner.runnerId).catch((error: unknown) => {
             noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
             throw error;
           }),
@@ -9277,8 +9277,22 @@ class Pool implements ManagerPool {
    *
    * 記録（日誌・台帳・アーカイブ・生ログ）はすべてここで行う。runner は記憶へ
    * 到達する鍵を持たないので、書けるのはデーモンだけである。
+   *
+   * **`fromRunnerId`（Issue #1716 の「確かめていないこと」）。** どの runner の
+   * SSE 接続から来た出来事かを、呼び出し元（`#connectTo`）の閉包から渡す
+   * ——`RunnerEvent` 自身はこれを運ばない（`runnerEventSchema` に `runnerId`
+   * が無い。ワイヤの形は変えていない）。**`case 'closed'` / `case
+   * 'resume_failed'` だけがこれを見る**（下の該当箇所）——古い runner から
+   * 遅れて届いた、この委譲がもう別の runner へ移った後の出来事が、いま
+   * 現に走っている委譲の台帳・貸し出しを巻き戻すのを防ぐため（abort() /
+   * `#reattach` の「await の間に別の runner へ移る」窓と同じ形の穴が、
+   * ここでは「イベントが並行に届く」形で開く。`void this.#onEvent(event)`
+   * で起こされるので、複数の出来事が並行に処理されうる——上の doc 参照）。
+   * **他の `case` には広げていない**（Issue の「確かめていないこと」が
+   * 名指ししたのはこの2つだけで、他の分岐まで同じ確認を足すのは、この
+   * 変更が答えるべき範囲を超える）。
    */
-  async #onEvent(event: RunnerEvent): Promise<void> {
+  async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
     if (event.type === 'hello') {
       // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
       // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
@@ -10787,6 +10801,29 @@ class Pool implements ManagerPool {
           });
           return;
         }
+        /*
+         * **移った後に届いた、古い runner の resume_failed で巻き戻さない
+         * （Issue #1716 の「確かめていないこと」）。** `#reattach` が
+         * `record.job.runnerId` を新しい runner へ書き換えた**後**に、
+         * 前の runner から遅れてこのイベントが届くことがある——`resume_failed`
+         * は `#resume` が実 I/O（SDK の検証）を投げた後、別経路（SSE）で
+         * 遅れて届くので、その間に台帳が別の runner へ移っていても不思議は
+         * ない。**`record.job.runnerId` が未記録（`undefined`）の古いジョブは
+         * 判定材料が無いので、これまでどおり処理する**（能力を削らない。
+         * `mayClaim` の `undecidable` と同じ判断）。
+         */
+        if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+              `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）前のセッション` +
+              `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
+          });
+          return;
+        }
         // **「resume を投げた」は「戻れた」ではない。** ここが来るということは、
         // `#resume` が `true` を返した後に SDK が会話を見つけられなかったという
         // ことである。台帳と受信箱を、実際に起きたことへ揃え直す。
@@ -10863,6 +10900,37 @@ class Pool implements ManagerPool {
             text:
               `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
               `（status=${event.status}）を受け取った: ${event.reason}`,
+          });
+          return;
+        }
+        /*
+         * **移った後に届いた、古い runner の closed で巻き戻さない（Issue
+         * #1716 の「確かめていないこと」。実測で赤を取った。）** `#reattach`
+         * が同じ委譲を別の runner へ引き取った**後**に、前の runner の
+         * `RunnerSession#finish()` が（自身のプロセスがまだ生きていて、遅れて
+         * 気づいた等の理由で）このイベントを出すことがある。上の `stopped`
+         * ガードは `abort()` 経由の終端しか見ないので、**`#reattach` 経由で
+         * 「別の runner で走り続けている」場合はすり抜ける**——無条件に
+         * 処理すると `record.job.status` を `event.status`（`done` /
+         * `lost` / `failed`）へ書き換え、`releaseLease` で**いま現に
+         * 使われている新しい runner の貸し出しを解放してしまう**（実測:
+         * runner-b が引き取って `running` で走っている委譲へ runner-a の
+         * 古い `closed`（`status: 'lost'`）を流すと、台帳が `lost` へ
+         * 戻り、runner-b の貸し出しの `releasedAt` が立った——他の器が
+         * 同じ委譲を無条件で奪える状態になる）。
+         *
+         * **`record.job.runnerId` が未記録（`undefined`）の古いジョブは
+         * 判定材料が無いので、これまでどおり処理する。**
+         */
+        if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+              `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
+              `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
           });
           return;
         }
