@@ -7717,13 +7717,26 @@ class Pool implements ManagerPool {
       // ここが投げ直すことはしない——プロファイルを降ろす経路はクローンが
       // 直接応答を受け取る口を持たないので、tools.ts 側の
       // `appendJournalOrThrow` とは非対称にしてある。詳細は下の catch 節）。
+      //
+      // **プロファイルの出力（`result.output`）は日誌へ書かない。長さだけを書く。**
+      // 出力は評価に使ったシェルの生の stderr で、本文の構文エラーをシェルがその行ごと
+      // 返したり、本文のデバッグ用の echo が出たりすると、**鍵の値そのものが乗る**
+      // （本文には鍵の値が入っている——`env-profile` スキル）。日誌は永続で、クローンも
+      // 人間も後から読む。`profile_write` の成功時が「値は記録しない」で要約だけを書く
+      // のと同じ線に揃える（出力はその場の応答——`profile_write` / `PUT /profile`——
+      // でだけ返す）。
+      const outputChars = result.output?.length ?? 0;
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
         text:
           `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} に実行環境プロファイルを置けなかった（前のものが残っている）: ` +
-          `${result.error ?? '理由不明'}${result.output === undefined || result.output.length === 0 ? '' : `\n${result.output}`}`,
+          `${result.error ?? '理由不明'}` +
+          (outputChars === 0
+            ? ''
+            : `（プロファイルの出力 ${outputChars} 文字は記録しない——鍵の値が入りうる。` +
+              '出力は profile_write / PUT /profile で書き直したときの応答で読める）'),
       });
     } catch (error) {
       // **`this.#journal` を経由する。** ここが直に `this.#stores.journal.append`

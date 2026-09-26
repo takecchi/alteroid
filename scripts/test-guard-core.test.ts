@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -9,12 +9,14 @@ import {
   EXIT_OBSERVATION_DUE,
   EXIT_OBSERVATION_UNDECLARED,
   EXIT_SCAN_EMPTY,
+  EXIT_SCOPE_VIOLATION,
   EXIT_STATIC_SKIP,
   EXIT_UNKNOWN,
   EXIT_ZERO_PASSED,
   ROOT,
   collectMatchingTestFiles,
   dropBareDashDash,
+  extractScope,
   findObservationDebts,
   findUnconditionalSkips,
   formatObservationGuardMessage,
@@ -23,10 +25,12 @@ import {
   judgeExecution,
   judgeObservationScan,
   judgeStaticSkipScan,
+  matchScopedPositionals,
   parseAggregateLines,
   parsePassedCount,
   readIncludeGlobs,
   readObservationDeclaration,
+  resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない test-guard の中核）を読む
@@ -112,6 +116,239 @@ describe('dropBareDashDash（pnpm 経由の素の `--` を vitest へ渡す前�
 
   it('`--` が途中や複数回に現れても、素の `--` 要素だけを全部落とす（splitVerifyArgs と同じ規則）', () => {
     expect(dropBareDashDash(['a.test.ts', '--', '--bail', '--'])).toEqual(['a.test.ts', '--bail']);
+  });
+});
+
+describe('extractScope', () => {
+  it('--scope=<value> を取り出し、残りは順序を保って返す', () => {
+    expect(extractScope(['--root=../..', '--scope=apps/cli/src', '--maxWorkers=4'])).toEqual({
+      scope: 'apps/cli/src',
+      rest: ['--root=../..', '--maxWorkers=4'],
+    });
+  });
+
+  it('`--scope` が無ければ scope は undefined、rest は元のまま', () => {
+    const argv = ['apps/cli/src/interrupt.test.ts', '--maxWorkers=4'];
+    expect(extractScope(argv)).toEqual({ scope: undefined, rest: argv });
+  });
+});
+
+/**
+ * `matchScopedPositionals`（#1691。PR #1693 のレビュー差し戻しで書き直した）。
+ *
+ * **差し戻しの経緯**: 最初の実装は各位置引数を `path.resolve(cwd, arg)` で
+ * 「パス」として直し、範囲の中かどうかを判定していた。しかし vitest の位置引数
+ * は「パス」ではなく、**ファイルのパスへの部分一致**として読まれる（実測は
+ * `resolveScopedArgs` の doc・PR 本文）。`pnpm --filter @alteroid/web test --
+ * manager-detail` のような、作業者もマネージャーも日常的に打つ形——パスでは
+ * ない1語——を `path.resolve` に通すと存在しない兄弟パスになり、範囲の外として
+ * 誤って断っていた（後退）。この歯は、直した後の「部分一致で範囲の中を解決する」
+ * 形を固定する。
+ *
+ * `filesInScope` は範囲の中のテストファイル一覧（repo根からの相対パス）を
+ * 合成したもの——ディスクを読まない。実ファイルに対する確認は下の
+ * `resolveScopedArgs`（I/O込みの合成）の describe が持つ。
+ */
+describe('matchScopedPositionals（範囲の中で位置引数を部分一致で解決する。#1691）', () => {
+  const cwd = '/repo/apps/cli';
+  const repoRoot = '/repo';
+  const scope = 'apps/cli/src';
+  const filesInScope = [
+    'apps/cli/src/interrupt.test.ts',
+    'apps/cli/src/memory.test.ts',
+    'apps/cli/src/appraisal-stats.test.ts',
+  ];
+
+  it('(a) 位置引数が無い ⟹ 範囲そのものが唯一のフィルタになる（filesInScope を見ない）', () => {
+    const result = matchScopedPositionals(['--root=../..'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope: [],
+    });
+    expect(result).toEqual({ ok: true, args: ['--root=../..', scope] });
+  });
+
+  it('(b) パッケージのディレクトリからの相対パス（1ファイル）⟹ 部分一致でそのファイルだけに絞られる', () => {
+    const result = matchScopedPositionals(['--root=../..', 'src/interrupt.test.ts'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope,
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+
+  it('(b2) パスではない部分一致の1語（レビュー差し戻しの再現）⟹ 範囲の中で当たるファイルだけに絞られる', () => {
+    const result = matchScopedPositionals(['--root=../..', 'interrupt'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope,
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+
+  it('(c) 範囲の外（cwd の外）を明らかに指す位置引数 ⟹ 断る（「範囲外」の文言。EXIT_SCOPE_VIOLATION）', () => {
+    const result = matchScopedPositionals(
+      ['--root=../..', '../../packages/core/src/other.test.ts'],
+      scope,
+      { cwd, repoRoot, filesInScope },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲外/);
+    expect(result.message).toContain('packages/core/src/other.test.ts');
+  });
+
+  it('(c2) cwd の中だが、範囲に部分一致するテストが1本も無い ⟹ 断る（「範囲内に一致なし」。範囲外とは別の文言）', () => {
+    const result = matchScopedPositionals(['--root=../..', 'zzz-nonexistent-pattern'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲内に一致なし/);
+    expect(result.message).not.toMatch(/範囲外/);
+  });
+
+  it('(d) `--maxWorkers=4 <ファイル>` ⟹ 両方効く（フラグはそのまま、ファイルは部分一致で範囲内のパスへ直る）', () => {
+    const result = matchScopedPositionals(
+      ['--root=../..', '--maxWorkers=4', 'src/interrupt.test.ts'],
+      scope,
+      { cwd, repoRoot, filesInScope },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', '--maxWorkers=4', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+
+  it('(e) `-t <名前>`（空白区切りの値）は位置引数として範囲判定に持ち込まない', () => {
+    const result = matchScopedPositionals(['--root=../..', '-t', 'ある名前'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope,
+    });
+    // -t の値以外に利用者の位置引数が無いので、範囲そのものがフィルタに足される
+    // （(a) と同じ既定）。
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', '-t', 'ある名前', scope],
+    });
+  });
+
+  it('複数一致するときは、一致した全ファイルへ展開する（1個の位置引数がN個になる）', () => {
+    const result = matchScopedPositionals(['--root=../..', 'test.ts'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope,
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: [
+        '--root=../..',
+        'apps/cli/src/appraisal-stats.test.ts',
+        'apps/cli/src/interrupt.test.ts',
+        'apps/cli/src/memory.test.ts',
+      ],
+    });
+  });
+
+  it('先頭の `./` は部分一致の邪魔にならないよう剥がす', () => {
+    const result = matchScopedPositionals(['--root=../..', './src/interrupt.test.ts'], scope, {
+      cwd,
+      repoRoot,
+      filesInScope,
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: ['--root=../..', 'apps/cli/src/interrupt.test.ts'],
+    });
+  });
+});
+
+/** tmpdir に「最小の `vitest.config.ts` ＋ 2パッケージ分のテストファイル」を
+ * 持つ根を作る。`resolveScopedArgs`（`listScopeTestFiles` 経由でディスクを
+ * 読む）を、実リポジトリの内容に依存せず・実リポジトリの将来の変化に対して
+ * 壊れない形で確かめるため（`runStaticSkipGuard` の「実リポジトリの状態を
+ * アサートしない」と同じ理由）。 */
+function makeScopeFixtureRoot(): string {
+  const dir = makeTempDirSync('test-guard-scope-');
+  mkdirSync(join(dir, 'pkg-a', 'src'), { recursive: true });
+  mkdirSync(join(dir, 'pkg-b', 'src'), { recursive: true });
+  writeFileSync(
+    join(dir, 'vitest.config.ts'),
+    "export default { test: { include: ['**/*.test.ts'] } };\n",
+  );
+  writeFileSync(join(dir, 'pkg-a', 'src', 'foo.test.ts'), 'export {};\n');
+  writeFileSync(join(dir, 'pkg-a', 'src', 'bar-widget.test.ts'), 'export {};\n');
+  writeFileSync(join(dir, 'pkg-b', 'src', 'baz.test.ts'), 'export {};\n');
+  return dir;
+}
+
+describe('resolveScopedArgs（I/O込みの合成。#1691 レビュー差し戻しの再現をfixtureで固定する）', () => {
+  it('パスではない部分一致の1語 ⟹ 範囲の中で当たるファイルだけに絞られる', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', 'widget'], {
+      cwd,
+      repoRoot: root,
+    });
+    expect(result).toEqual({ ok: true, args: ['pkg-a/src/bar-widget.test.ts'] });
+  });
+
+  it('パスの形（打った場所からの相対パス）も、今までどおり効く', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', 'src/foo.test.ts'], {
+      cwd,
+      repoRoot: root,
+    });
+    expect(result).toEqual({ ok: true, args: ['pkg-a/src/foo.test.ts'] });
+  });
+
+  it('範囲の外（別パッケージ）にしか無い文字列 ⟹ 断る（範囲外へは漏れない。「範囲内に一致なし」）', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    // 'baz' は pkg-b にしか無い。範囲（pkg-a/src）の中には無いので、
+    // pkg-b の baz.test.ts を拾って漏らしてはいけない。
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', 'baz'], {
+      cwd,
+      repoRoot: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲内に一致なし/);
+  });
+
+  it('範囲の外を明らかに指すパス ⟹ 断る（「範囲外」）', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', '../pkg-b/src/baz.test.ts'], {
+      cwd,
+      repoRoot: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲外/);
+  });
+
+  it('位置引数が無ければ範囲そのものがフィルタになる（ディスクを読まない経路）', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(['--scope=pkg-a/src'], { cwd, repoRoot: root });
+    expect(result).toEqual({ ok: true, args: ['pkg-a/src'] });
+  });
+
+  it('`--scope` が無ければ何も変えない（root の `pnpm test <パスの一部>` はここを通らない。ディスクも読まない）', async () => {
+    const argv = ['apps/cli/src/interrupt.test.ts', '--maxWorkers=4'];
+    const result = await resolveScopedArgs(argv, { cwd: '/repo/apps/cli', repoRoot: '/repo' });
+    expect(result).toEqual({ ok: true, args: argv });
   });
 });
 

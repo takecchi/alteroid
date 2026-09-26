@@ -404,3 +404,47 @@ describe('selectArchiveRemovalTargets', () => {
     assertEveryTargetIsReachableFromASurvivor(rows, selection);
   });
 });
+
+/**
+ * **同じセッションへ同じミリ秒に複数回積んだとき、本当の最新行（枝番の大きい方）を
+ * 消さない。** id は `base.jsonl`（枝番1）/ `base-2.jsonl`（枝番2）になり、`-` が `.`
+ * より小さいので、文字列の昇順では枝番の無い1本目が最後に来る。`compareOldestFirst` が
+ * その文字列比較で同着を並べていたので、最新行の安全弁が1本目に付き、本当の最新行
+ * （枝番2。まだ蒸留していないかもしれない本文）が「1本目に含まれている」として
+ * 削除対象に入っていた。`list()` の側は #908 で直っていたが、ここは漏れていた。
+ */
+describe('selectArchiveRemovalTargets — 同じミリ秒に積んだ行の順（#908 の漏れ）', () => {
+  it('同じミリ秒の2本のうち、後から積んだ方（枝番2）を最新行として残す', () => {
+    const sessionId = 'sess-tie';
+    const tiedAt = '2026-01-01T00:05:00.000Z';
+    const stamp = tiedAt.replace(/[:.]/g, '-');
+    const first: ArchiveEntry = {
+      id: `${sessionId}-2026-01-01T00-00-00-000Z.jsonl`,
+      sessionId,
+      at: '2026-01-01T00:00:00.000Z',
+      storedBytes: 100,
+      continuity: 'first',
+    };
+    const branch1: ArchiveEntry = {
+      id: `${sessionId}-${stamp}.jsonl`,
+      sessionId,
+      at: tiedAt,
+      storedBytes: 200,
+      continuity: 'continues',
+    };
+    const branch2: ArchiveEntry = {
+      id: `${sessionId}-${stamp}-2.jsonl`,
+      sessionId,
+      at: tiedAt,
+      storedBytes: 300,
+      continuity: 'continues',
+    };
+
+    const selection = selectArchiveRemovalTargets([branch2, first, branch1], {});
+    const targetIds = selection.targets.map((target) => target.id);
+
+    expect(targetIds).not.toContain(branch2.id);
+    expect(targetIds).toEqual([first.id, branch1.id]);
+    expect(selection.skipped.newest).toBe(1);
+  });
+});
