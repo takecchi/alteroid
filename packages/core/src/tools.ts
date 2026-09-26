@@ -2088,6 +2088,45 @@ function text(body: string) {
 }
 
 /**
+ * 数値引数の整数・範囲の検査を、道具の入力スキーマ側ではなくここ（ハンドラの
+ * 先頭）で行うための共通関数。
+ *
+ * **なぜ入力スキーマ側（`.int()` / `.min()` / `.max()` / `.positive()` 等）へ
+ * 置かないか — issue #1651 / PR #1689 / issue #1720 と同じ穴である。** 入力
+ * スキーマ側に型以外の制約を持たせると、SDK の `tool()` がハンドラを呼ぶ
+ * **前**に検証してしまい、落ちたときの応答が英語の zod の JSON
+ * （`MCP_INPUT_VALIDATION_ERROR_MARKER` 付き）のまま `isError: true` で返る。
+ * 兄弟の欄（`slug` など、ハンドラの先頭で `safeParse` して `isError` を立てない
+ * 日本語の平文を返す欄）と応答の形が食い違う。**ここへ揃えるのが目的である。**
+ *
+ * `value` が `undefined`（省略された、または呼び出し側の destructuring 既定値
+ * が既に当たっている）のときは常に許す — `optional()` の意味はここでは変えない。
+ * 範囲外・非整数のときだけ断り文を返し、それ以外（許される値）は `null`。
+ *
+ * 呼び出し側は必ず次の形にする —
+ * `const err = describeIntRangeViolation('offset', offset, { min: 0 }); if (err !== null) return text(err);`
+ */
+function describeIntRangeViolation(
+  field: string,
+  value: number | undefined,
+  range: { min?: number; max?: number },
+): string | null {
+  if (value === undefined) return null;
+  const { min, max } = range;
+  const withinRange = (min === undefined || value >= min) && (max === undefined || value <= max);
+  if (Number.isInteger(value) && withinRange) return null;
+  const rangeText =
+    min !== undefined && max !== undefined
+      ? `${min}以上${max}以下の整数のみ`
+      : min !== undefined
+        ? `${min}以上の整数のみ`
+        : max !== undefined
+          ? `${max}以下の整数のみ`
+          : '整数のみ';
+  return `${field} ${value} は使えない（${rangeText}）。`;
+}
+
+/**
  * 日誌への追記の失敗が、呼び出し元の道具にとって何を意味するかの3分類
  * （Issue「日誌が書けないと跡が消える」）。
  *
@@ -3965,7 +4004,10 @@ export function createCloneTools(context: ToolContext) {
       ['記憶の文書を1つ読む。', '長ければ切れて出る（続きの取り方が出力に付く）。'].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（拡張子なし）'),
-        offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭（下の `describeIntRangeViolation` 呼び出し）で見る。ここは型
+        // （数値）だけを固定する。
+        offset: z.number().optional().describe('何文字目から読むか（既定 0）'),
       },
       async ({ slug, offset = 0 }) => {
         // **issue #1662。** HTTP の `GET /memory/:slug`（#1634/#1636）と同じ門
@@ -3976,6 +4018,11 @@ export function createCloneTools(context: ToolContext) {
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #1720（#1651/#1689 の揃え漏れ）。** offset は入力スキーマ側の
+        // `.int().min(0)` に弾かれると英語の zod の JSON が返っていた——ここで
+        // 断って日本語の平文にする。
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         const doc = await stores.persona.read(slug);
         if (!doc) return text(`記憶 ${slug} は存在しない。`);
         const part = page(doc.content, offset, MEMORY_PAGE);
@@ -4548,10 +4595,11 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '見出しをこの文字列で絞り込む（大文字小文字を区別しない部分一致。正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。side と併用できる（絞り込んだ結果をどちらから詰めるか）。一致0件と、一致はあるが予算で切れた場合は別の文言で返る。',
           ),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭（下の `describeIntRangeViolation` 呼び出し）で見る。ここは型
+        // （数値）だけを固定する。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe(
             '先頭から何節を飛ばしてから予算を埋めるか（0起点）。応答が返す次の offset ぶんずつ進めれば、有限回の呼び出しで全節に届く（中央へ届くことを保証する側）。渡すと side は見ない。q と併用でき、その場合は絞り込んだ結果に対して窓を開く。範囲外（節数以上）なら断る。',
@@ -4562,6 +4610,11 @@ export function createCloneTools(context: ToolContext) {
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #1720（#1651/#1689 の揃え漏れ。issue 本文の対象2）。** offset
+        // は入力スキーマ側の `.int().min(0)` に弾かれると英語の zod の JSON が
+        // 返っていた——ここで断って日本語の平文にする。
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         const doc = await stores.persona.read(slug);
         if (doc === null) return text(`記憶 ${slug} は存在しない。`);
         const { sections } = scanMemorySections(doc.content);
@@ -5368,7 +5421,10 @@ export function createCloneTools(context: ToolContext) {
         'types で別途除く必要はない。',
       ].join(' '),
       {
-        limit: z.number().int().min(1).max(200).optional().describe('件数（既定 20）'),
+        // **issue #1720。** `.int().min(1).max(200)` は入力スキーマ側ではなく
+        // ハンドラの先頭（下の `describeIntRangeViolation` 呼び出し）で見る。
+        // ここは型（数値）だけを固定する。
+        limit: z.number().optional().describe('件数（既定 20）'),
         since: z
           .string()
           .optional()
@@ -5399,14 +5455,20 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        // **issue #1720。** 同上。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか'),
       },
       async ({ limit, since, until, types, q, with: withFilter, id, offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。** limit / offset は入力
+        // スキーマ側の `.int()` / `.min()` / `.max()` に弾かれると英語の zod
+        // の JSON が返っていた——ここで断って日本語の平文にする。
+        const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
+        if (limitError !== null) return text(limitError);
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           const entry = await stores.journal.get(id);
@@ -5763,14 +5825,17 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか'),
       },
       async ({ id, offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           const approval = await stores.jobs.getApproval(id);
@@ -6141,10 +6206,10 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('この1件の依頼本文を全文で読む（一覧に出ている kind）'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('kind で全文を読むとき、何文字目から読むか'),
         // **#662 段1。** `commitment_list` の `cursor` と同じ契約（不透明な
@@ -6161,6 +6226,9 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ kind, offset = 0, cursor }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (kind !== undefined) {
           const plan = await stores.schedules.get(kind);
@@ -6470,10 +6538,10 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             'この1件を全文で読む（一覧に出ている id）。片付いた件も読める。他の条件は無視される（cursor も含む）',
           ),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか（件数ではなく文字数）'),
         includeClosed: z
@@ -6549,6 +6617,9 @@ export function createCloneTools(context: ToolContext) {
         // を zod の `.default()` に持たせず、ここで明示するのは `effectiveOrder`
         // をカーソルの発行・比較・文言の全箇所で同じ1つの値として使うため。
         const effectiveOrder = order ?? 'oldest';
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
           // **片付いた件も読める。`includeClosed` は要求しない。** id で名指し
@@ -7347,11 +7418,10 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '省略すると true（何件当たるかを数えるだけで1件も閉じない）。実際に閉じるときだけ false を明示する',
           ),
+        // **issue #1720。** `.int().min(1).max(CLOSE_MANY_LIMIT_MAX)` は入力
+        // スキーマ側ではなくハンドラの先頭で見る。
         limit: z
           .number()
-          .int()
-          .min(1)
-          .max(CLOSE_MANY_LIMIT_MAX)
           .optional()
           .describe(
             '1回の呼びで閉じる上限（省略すると 500）。**古い側から**閉じる。' +
@@ -7359,6 +7429,12 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ origin, source, q, until, reason, dryRun, limit }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const limitError = describeIntRangeViolation('limit', limit, {
+          min: 1,
+          max: CLOSE_MANY_LIMIT_MAX,
+        });
+        if (limitError !== null) return text(limitError);
         // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
         // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
         // **「全部閉じる」が事故で撃てる形を作らない。** そしてこの1つの規則が、
@@ -7698,11 +7774,10 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '省略すると true（何件当たるかを数えるだけで1件も消さない）。実際に消すときだけ false を明示する',
           ),
+        // **issue #1720。** `.int().min(1).max(REMOVE_MANY_LIMIT_MAX)` は入力
+        // スキーマ側ではなくハンドラの先頭で見る。
         limit: z
           .number()
-          .int()
-          .min(1)
-          .max(REMOVE_MANY_LIMIT_MAX)
           .optional()
           .describe(
             '1回の呼びで消す上限（省略すると 500）。**古い側から**消す。' +
@@ -7710,6 +7785,12 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ types, sources, before, reason, dryRun, limit }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const limitError = describeIntRangeViolation('limit', limit, {
+          min: 1,
+          max: REMOVE_MANY_LIMIT_MAX,
+        });
+        if (limitError !== null) return text(limitError);
         // 🔴 **絞り込みの無い呼びを断る（#972。commitment_close_many の origin と同じ形）。**
         // ⚠️ **ここでの「全部」は選べる5種類（human_message / human_answer を
         // 除いた集合）を指す**——その2種はそもそも `types` の値になりえない
@@ -7927,9 +8008,14 @@ export function createCloneTools(context: ToolContext) {
         '（記憶はあなたのシステムプロンプトに載るし、人間がいつでも開く場所である）。',
       ].join(' '),
       {
-        offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
+        offset: z.number().optional().describe('何文字目から読むか（既定 0）'),
       },
       async ({ offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         const current = await stores.profile.read();
         if (current === null) {
           return text('実行環境プロファイルは置かれていない。');
@@ -8238,10 +8324,13 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('やり方のスラッグ（practice_list に出ている slug）'),
+        // **issue #1720（#1651/#1689 の揃え漏れ。issue 本文の対象1）。**
+        // `.int().positive()` は入力スキーマ側ではなくハンドラの先頭（下の
+        // `describeIntRangeViolation` 呼び出し）で見る。`slug` はハンドラの
+        // 先頭で `safeParse` するのに、ここだけ入力スキーマ側の制約に弾かれて
+        // 英語の zod の JSON が返っていた——揃える。
         version: z
           .number()
-          .int()
-          .positive()
           .optional()
           .describe('省略時はいまの本文。指定すると practice_history にある過去の版を読む'),
       },
@@ -8254,6 +8343,9 @@ export function createCloneTools(context: ToolContext) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #1720。** `positive()` は「0より大きい」＝整数では「1以上」。
+        const versionError = describeIntRangeViolation('version', version, { min: 1 });
+        if (versionError !== null) return text(versionError);
         if (version !== undefined) {
           const found = await stores.practices.readVersion(slug, version);
           if (found === null) {
@@ -8439,9 +8531,14 @@ export function createCloneTools(context: ToolContext) {
         document: z
           .string()
           .describe(`正典の名前。読めるのは ${canonNames().join(' / ')}（上ほど優先順位が高い）`),
-        offset: z.number().int().min(0).optional().describe('何文字目から読むか（既定 0）'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
+        offset: z.number().optional().describe('何文字目から読むか（既定 0）'),
       },
       async ({ document, offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         const doc = canonDocument(document);
         if (doc === undefined) {
           return text(`正典 ${document} は無い。読めるのは ${canonNames().join(' / ')}。`);
@@ -8591,11 +8688,10 @@ export function createCloneTools(context: ToolContext) {
         '予算で切れた古い側は offset で読み進められる（limit を上げても境界は動かない）。',
       ].join(' '),
       {
+        // **issue #1720。** `.int().min(1).max(RECENT_TRACE_LIMIT)` は入力
+        // スキーマ側ではなくハンドラの先頭で見る。
         limit: z
           .number()
-          .int()
-          .min(1)
-          .max(RECENT_TRACE_LIMIT)
           .optional()
           .describe(
             `一度に対象にする件数（既定 ${SELF_DROPPED_DEFAULT_LIMIT}、最大 ${RECENT_TRACE_LIMIT}` +
@@ -8603,11 +8699,9 @@ export function createCloneTools(context: ToolContext) {
               'あり、そのときはこれを上げても実際に載る内容は動かない——古い側へ進むには' +
               '`offset` を使うこと。',
           ),
+        // **issue #1720。** 同上（`.int().min(0).max(RECENT_TRACE_LIMIT)`）。
         offset: z
           .number()
-          .int()
-          .min(0)
-          .max(RECENT_TRACE_LIMIT)
           .optional()
           .describe(
             '直近から数えて何件をスキップしてから見るか（既定 0＝最新から）。' +
@@ -8616,6 +8710,17 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ limit = SELF_DROPPED_DEFAULT_LIMIT, offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const limitError = describeIntRangeViolation('limit', limit, {
+          min: 1,
+          max: RECENT_TRACE_LIMIT,
+        });
+        if (limitError !== null) return text(limitError);
+        const offsetError = describeIntRangeViolation('offset', offset, {
+          min: 0,
+          max: RECENT_TRACE_LIMIT,
+        });
+        if (offsetError !== null) return text(offsetError);
         const origin = describeDroppedTraceOrigin('daemon');
         const since = `この帳面が数え始めたのは ${droppedTraceLedgerSince()}。`;
         const all = recentDroppedTraces();
@@ -9863,14 +9968,17 @@ export function createCloneTools(context: ToolContext) {
           .enum(['report', 'request'])
           .optional()
           .describe('report=直近の報告（既定） / request=依頼文'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('何文字目から読むか。前回の応答が示した続きの位置を渡す'),
       },
       async ({ managerId, part = 'report', offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
         const managers = await context.managers.list();
         const found = managers.find((manager) => manager.managerId === managerId);
@@ -10186,31 +10294,27 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('ISO 8601。この時刻以前だけ返す。過去を掘るときはこれを指定する'),
+        // **issue #1720。** `.int().min(1).max(10_000)` は入力スキーマ側では
+        // なくハンドラの先頭で見る。
         scan: z
           .number()
-          .int()
-          .min(1)
-          .max(10_000)
           .optional()
           .describe(
             '人間との往復を何件遡るか（既定 2000。マネージャーとの往復・内部ターンは' +
               '数えない。issue #418）。遡り切れたかは応答の注記で分かる',
           ),
+        // **issue #1720。** 同上（`.int().min(1).max(200)`）。
         limit: z
           .number()
-          .int()
-          .min(1)
-          .max(200)
           .optional()
           .describe('一覧モードで返す会話の本数（既定 20）。conversationId / q のときは効かない'),
         id: z
           .string()
           .optional()
           .describe('この発言1件を全文で読む（一覧に出ている id）。他の条件は無視される'),
+        // **issue #1720。** 同上（`.int().min(0)`）。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('id で全文を読むとき、何文字目から読むか'),
         includeSuperseded: z
@@ -10234,6 +10338,15 @@ export function createCloneTools(context: ToolContext) {
         offset = 0,
         includeSuperseded = false,
       }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。** scan / limit / offset は
+        // 入力スキーマ側の `.int()` / `.min()` / `.max()` に弾かれると英語の
+        // zod の JSON が返っていた——ここで断って日本語の平文にする。
+        const scanError = describeIntRangeViolation('scan', scan, { min: 1, max: 10_000 });
+        if (scanError !== null) return text(scanError);
+        const limitError = describeIntRangeViolation('limit', limit, { min: 1, max: 200 });
+        if (limitError !== null) return text(limitError);
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         // --- 全文モード（発言1件） ---
         if (id !== undefined) {
           const entry = await stores.journal.get(id);
@@ -10536,14 +10649,17 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
         offset: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('何文字目から読むか。前回の応答が示した続きの位置を渡す'),
       },
       async ({ managerId, offset = 0 }) => {
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
         if (!context.managers) return NO_POOL;
         const result = await context.managers.transcript(managerId);
         if (result.kind === 'missing') {
@@ -10788,10 +10904,10 @@ export function createCloneTools(context: ToolContext) {
             'この時刻より前（ISO8601、排他）に積まれた行だけを対象にする' +
               '（例 2026-09-15T00:00:00.000Z）',
           ),
+        // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
+        // 先頭で見る。
         minStoredBytes: z
           .number()
-          .int()
-          .min(0)
           .optional()
           .describe('storedBytes がこれ以上の行だけを対象にする'),
         summary: z.string().min(1).describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
@@ -10817,6 +10933,11 @@ export function createCloneTools(context: ToolContext) {
               '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
           );
         }
+        // **issue #1720（#1651/#1689 の揃え漏れ）。**
+        const minStoredBytesError = describeIntRangeViolation('minStoredBytes', minStoredBytes, {
+          min: 0,
+        });
+        if (minStoredBytesError !== null) return text(minStoredBytesError);
 
         // **墓標を守る**（issue #698 追補3。`app.ts` の `POST /archive/remove` の
         // doc「なぜ冗長に見えるか」と同じ理由）。
