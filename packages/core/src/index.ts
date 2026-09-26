@@ -1134,6 +1134,7 @@ export {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   noteDroppedRecord,
+  noteDroppedRunnerManagers,
   noteSessionMaterialUnreadable,
   noteUncaught,
   reasonOf,
