@@ -90,6 +90,22 @@ async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> 
   }
 }
 
+/**
+ * **resume が runner の中で `host.resume` に届くまで、栓を抜かずに待つ。**
+ *
+ * `app.request` を呼んだ直後に栓を抜くと、経路が `host.resume` に届く前に畳みが
+ * 終わってしまい、窓が閉じた状態の resume を測ることになる（実測: その形だと、
+ * 待ちを外した変異でも緑になった）。直した後の resume は栓を抜くまで応答しない
+ * ので、ここは必ず時計の側で抜ける。古い挙動（畳み中でも一言を積んで即座に
+ * 返す）はここで応答が先に来るので、栓を抜く前に一言が捨てられる。
+ */
+async function settledBeforeRelease(
+  pending: (Response | Promise<Response>)[],
+  ms = 200,
+): Promise<void> {
+  await Promise.race([Promise.all(pending), new Promise((resolve) => setTimeout(resolve, ms))]);
+}
+
 function resumeBody(managerId: string, message: string): string {
   return JSON.stringify({
     managerId,
@@ -152,6 +168,7 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
       headers: bearer(),
       body: resumeBody('mgr-resume', '追加の一言（畳み中の resume）'),
     });
+    await settledBeforeRelease([pending]);
     s.releaseUsage();
     const res = await pending;
     await s.stopped;
@@ -176,6 +193,7 @@ describe('畳み中のセッションへの送信・resume（#1660）', () => {
       headers: bearer(),
       body: resumeBody('mgr-race', '二言目'),
     });
+    await settledBeforeRelease([first, second]);
     s.releaseUsage();
     const [a, b] = await Promise.all([first, second]);
     await s.stopped;
