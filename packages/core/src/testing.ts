@@ -31,6 +31,7 @@ import type {
 import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
   commitmentSchema,
+  inboxEventSchema,
   memorySlugSchema,
   practiceSchema,
   practiceVersionSchema,
@@ -1520,15 +1521,18 @@ function createMemoryInboxStore(): InboxStore {
 
   return {
     async put(event: InboxEvent, at: string): Promise<void> {
+      // fs（`FsInboxStore.put`）/ pg（`PgInboxStore.put`）と同じく、形の
+      // 崩れた event を書く前に拒む（issue #1668）。
+      const value = inboxEventSchema.parse(event);
       // 配達回数は保つ（本文だけを差し替える）。
-      const deliveries = unread.get(event.id)?.deliveries ?? 0;
+      const deliveries = unread.get(value.id)?.deliveries ?? 0;
       // **既存の行を一旦 `delete` してから `set` し直す。** `Map` はキーの
       // 再設定では挿入順を動かさない仕様なので、`delete` を挟まずに
       // `set` するだけだと再配達された行が元の位置に留まり、fs / pg
       // （どちらも「既存の行を除いてから足す」形で末尾へ回る）と同着
       // （同じ `at`）のときの並びが食い違っていた（issue #1652）。
-      unread.delete(event.id);
-      unread.set(event.id, { event, at, deliveries });
+      unread.delete(value.id);
+      unread.set(value.id, { event: value, at, deliveries });
     },
     async remove(id: string): Promise<void> {
       unread.delete(id);
