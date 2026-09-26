@@ -2744,6 +2744,51 @@ describe('クローン', () => {
       await s.clone.stop();
     });
 
+    it('人間の取り消しが、#onPreToolUse の list() と put() の間に割り込んでも消えない（lost update）', async () => {
+      // `#onPreToolUse` は `list()` で読んだ古い写しへ `lastUsedAt` を足して
+      // `put()` する（当時の実装）。この「読んでから書く」の間に人間の
+      // `POST /permission-grants/:id/revoke`（`get()` → `put({ ...grant,
+      // revokedAt })`）が割り込むと、後から来る `#onPreToolUse` 側の `put()`
+      // が「`revokedAt` の無い」古い写しをそのまま書き戻し、取り消しを消す。
+      const base = createMemoryStores();
+      let interrupt: (() => Promise<void>) | undefined;
+      const stores: Stores = {
+        ...base,
+        permissionGrants: {
+          ...base.permissionGrants,
+          async list() {
+            const grants = await base.permissionGrants.list();
+            if (interrupt) {
+              const fire = interrupt;
+              interrupt = undefined;
+              await fire();
+            }
+            return grants;
+          },
+        },
+      };
+      const s = setup(undefined, stores);
+      await s.stores.permissionGrants.put(GRANT);
+      const hook = await hookOf(s);
+
+      // `#onPreToolUse` が `list()` を呼んだ直後（`put()` で書き戻す前）に、
+      // 人間の取り消し相当の書き込みを割り込ませる。
+      interrupt = async () => {
+        const current = await base.permissionGrants.get('grant-1');
+        if (current === null) throw new Error('grant-1 が見当たらない');
+        await base.permissionGrants.put({ ...current, revokedAt: '2026-01-02T00:00:00.000Z' });
+      };
+
+      await hook(
+        { tool_name: 'Bash', tool_input: { command: 'gh release edit' } } as never,
+        undefined,
+        {} as never,
+      );
+
+      const stored = await base.permissionGrants.get('grant-1');
+      expect(stored?.revokedAt).toBeDefined();
+    });
+
     it('Bash 以外の道具には何もしない', async () => {
       const s = setup();
       await s.stores.permissionGrants.put(GRANT);

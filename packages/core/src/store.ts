@@ -501,8 +501,50 @@ export interface JobStore {
 export interface PermissionGrantStore {
   list(): Promise<PermissionGrant[]>;
   get(id: string): Promise<PermissionGrant | null>;
-  /** id で置き換える（`JobStore.putApproval` と同じ形——新規作成にも更新にも使う）。 */
+  /**
+   * 新規作成専用（`JobStore.putApproval` と同じ形）。**既存行の更新には使わない
+   * こと** —— `revoke` / `markUsed` が居る理由の doc を見よ。呼び手は
+   * `clone.ts` の `answerApproval` の1箇所だけで、常に新しい `id` を渡す。
+   */
   put(grant: PermissionGrant): Promise<void>;
+
+  /**
+   * 取り消す（人間の `POST /permission-grants/:id/revoke`）。**排他区間の中で
+   * 現在値を読み直し、`revokedAt` だけを立てる。** 無ければ `null`。既に
+   * 取り消し済みなら元の `revokedAt` を保つ（上書きしない）。書いた後の全体を
+   * 返す。
+   *
+   * **`get()` → `put({ ...grant, revokedAt })` の代わりにこれを使う理由 ——
+   * lost update（#1654 と同じ形）。** かつての `apps/daemon/src/app.ts` の
+   * 取り消しは「`get(id)` で読んだ `grant` に `revokedAt` を足して `put()` する」
+   * 形だった。`put()` は無条件の全置換で版チェックを持たないので、この
+   * 「読んでから書く」の間に `clone.ts` の `#onPreToolUse`（`markUsed` の
+   * 前身——`list()` で読んだ古い写しに `lastUsedAt` を足して `put()` していた）
+   * が割り込むと、**割り込んだ側が持っていた「`revokedAt` が無い」古い写しが
+   * そのまま書き戻り、人間が取り消した許可が生き返っていた。** `#1041` の
+   * `CommitmentStore.open()` / `#1667` の `ScheduleStore.editRequest` と同じ
+   * 理由・同じ形（アプリ層の「読んでから書く」をストア側の排他区間へ引き取る）。
+   */
+  revoke(id: string, at: string): Promise<PermissionGrant | null>;
+
+  /**
+   * `#onPreToolUse` が許可を消費するたびに `lastUsedAt` を進める。**排他区間の
+   * 中で現在値を読み直し、`lastUsedAt` だけを更新する。他の欄（`revokedAt` を
+   * 含む）には一切触らない。** 無ければ何もしない。
+   *
+   * **既存より古い時刻では戻さないこと。** `#onPreToolUse` はキャッシュを
+   * 持たないので、遅延した呼び出しが後から追いついて新しいほうを巻き戻す
+   * ことがありうる——観測用の値なので巻き戻る実害は小さいが、「最後に使った
+   * 時刻」という名前の意味は保つ。
+   *
+   * **`get()` → `put({ ...grant, lastUsedAt })` の代わりにこれを使う理由 ——
+   * `revoke` と対になる lost update。** かつての `#onPreToolUse` は `list()` で
+   * 読んだ古い写しに `lastUsedAt` を足して `put()` していた。この読んでから
+   * 書くまでの間に人間の `revoke` が割り込むと、**`#onPreToolUse` 側が
+   * 持っていた「`revokedAt` が無い」古い写しがそのまま書き戻り、取り消しが
+   * 消えていた**（`revoke` の doc の実測はこの逆方向）。
+   */
+  markUsed(id: string, at: string): Promise<void>;
 }
 
 /**
