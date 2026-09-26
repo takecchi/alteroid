@@ -472,4 +472,80 @@ describe('chunkIdsByChars（id の列を文字数の予算で塊に割る）', (
   it('14c. 空配列を渡すと空配列が返る', () => {
     expect(chunkIdsByChars([], 100)).toEqual([]);
   });
+
+  /**
+   * 14d. **境界: 塊の合計（区切り込み）がちょうど予算に一致するとき、
+   * 分割しない。**
+   *
+   * 実装は `width + added > budget` のときだけ塊を切る（`>` であって
+   * `>=` ではない）——ちょうど一致は「超えていない」なので同じ塊に留まる。
+   * `id.length` を2つと区切り1文字ぶんを足してちょうど budget になるよう
+   * 仕込む。
+   */
+  it('14d. 境界: 塊の合計（区切り込み）がちょうど予算に一致するとき、分割しない', () => {
+    const a = 'a'.repeat(10);
+    const b = 'b'.repeat(9); // 10 + 1(区切り) + 9 = 20 = budget ちょうど
+    const budget = 20;
+    expect(chunkIdsByChars([a, b], budget).length).toBe(1);
+    expect(chunkIdsByChars([a, b], budget)).toEqual([[a, b]]);
+
+    // 陰性対照: 1文字でも超えると2塊に割れる。
+    const bPlusOne = 'b'.repeat(10); // 10 + 1 + 10 = 21 > 20
+    const split = chunkIdsByChars([a, bPlusOne], budget);
+    expect(split.length).toBe(2);
+    expect(split).toEqual([[a], [bPlusOne]]);
+  });
+
+  /**
+   * 14e. **境界: 1件だけで予算を超える id が列の途中・先頭・末尾のどこに
+   * 在っても、単独の塊として残り、空の塊は1つも生まれず、無限ループにも
+   * ならない。**
+   *
+   * 14b は「途中に挟まった」形だけを見ている。ここは先頭・末尾という
+   * 別の位置も見て、位置に依らないことを確かめる。
+   */
+  it('14e. 境界: 予算超えの id が先頭・末尾に在っても単独の塊になり、空の塊は生まれない', () => {
+    const tooLong = 'x'.repeat(50);
+    const budget = 10;
+
+    const headChunks = chunkIdsByChars([tooLong, 'a', 'b'], budget);
+    expect(headChunks[0]).toEqual([tooLong]);
+    expect(headChunks.every((chunk) => chunk.length > 0)).toBe(true);
+    expect(headChunks.flat()).toEqual([tooLong, 'a', 'b']);
+
+    const tailChunks = chunkIdsByChars(['a', 'b', tooLong], budget);
+    expect(tailChunks.at(-1)).toEqual([tooLong]);
+    expect(tailChunks.every((chunk) => chunk.length > 0)).toBe(true);
+    expect(tailChunks.flat()).toEqual(['a', 'b', tooLong]);
+
+    // 予算超えの id が連続しても、1つずつ単独の塊になる（まとめられない・
+    // 空の塊を挟まない）。
+    const allTooLong = chunkIdsByChars([tooLong, tooLong], budget);
+    expect(allTooLong).toEqual([[tooLong], [tooLong]]);
+  });
+
+  /**
+   * 14f. **区切りの1文字は、実際の呼び出し側（`.join(' ')`）と同じ幅で
+   * 数えている。**
+   *
+   * `tools.ts` / `apps/daemon/src/app.ts` の全呼び出し側は、日誌へ書くとき
+   * `chunk.join(' ')`（半角スペース1文字）で塊をつなぐ。`chunkIdsByChars`
+   * が区切りを1文字と仮定しているのは、この事実と一致していなければならない
+   * ——もし呼び出し側が2文字以上の区切り（例: `', '`）を使うようになれば、
+   * ここは黙って予算を過小に守ることになる（実際に繋いだ文字列が budget を
+   * 超えうる）。この歯は「区切りは1文字」という前提そのものを固定し、
+   * 前提が壊れたら（誰かが `chunkIdsByChars` の中の `+ 1` を書き換えたら）
+   * 赤くなる。
+   */
+  it("14f. 区切りは1文字ぶんとして数えている（.join(' ') の実際の幅と一致）", () => {
+    const ids = ['aa', 'bb', 'cc']; // 2+1+2+1+2 = 8
+    const budget = 8;
+    const chunks = chunkIdsByChars(ids, budget);
+    expect(chunks).toEqual([ids]);
+    expect(chunks[0]!.join(' ').length).toBe(budget);
+
+    // 1文字減らすと入りきらず割れる。
+    const chunksMinusOne = chunkIdsByChars(ids, budget - 1);
+    expect(chunksMinusOne.length).toBeGreaterThan(1);
+  });
 });
