@@ -9,12 +9,12 @@ import { createFsStores } from './index.js';
  * Issue #1662（fs 実装で赤を取る）。
  *
  * #1651 で直した `schedule_create` / `practice_*` と**同じ形の穴**が
- * `memory_*`（スラッグを受ける道具全部）にも残っている——`packages/core/src/
- * tools.ts` は `memorySlugSchema` を1箇所も import/使用していない
- * （`grep -n "memorySlugSchema" packages/core/src/tools.ts` が0ヒット）。
+ * `memory_*`（スラッグを受ける道具全部）にも見つかった——このコミットで
+ * 直す前は、`packages/core/src/tools.ts` は `memorySlugSchema` を
+ * 1箇所も import/使用していなかった。
  *
- * `FsPersonaStore#path()`（`packages/storage-fs/src/persona.ts:147-151`）は
- * `memorySlugSchema.safeParse` に落ちる slug に対して
+ * `FsPersonaStore#path()`（`packages/storage-fs/src/persona.ts` の
+ * `#path`）は `memorySlugSchema.safeParse` に落ちる slug に対して
  * `throw new Error('記憶のスラッグが不正: …')` する——**これは `read()` /
  * `write()`（内部で `#writeNow` 経由）/ `append()`（内部で `read()` 経由）/
  * `remove()` のすべてで、`await` の手前・同期的に投げる。** クローンの道具
