@@ -107,8 +107,7 @@ async function callTool(
 ): Promise<{ isError: boolean; text: string }> {
   const response = await rpc.call('tools/call', { name, arguments: args });
   const result = response['result'] as
-    | { content?: { type: string; text?: string }[]; isError?: boolean }
-    | undefined;
+    { content?: { type: string; text?: string }[]; isError?: boolean } | undefined;
   if (result === undefined) {
     return { isError: true, text: JSON.stringify(response['error']) };
   }
