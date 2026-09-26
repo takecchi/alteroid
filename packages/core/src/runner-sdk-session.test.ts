@@ -80,7 +80,11 @@ describe('RunnerSdkSession — open / closeQuery / teardownForRecreate（`#open`
 
   it('closeQuery は close() が投げても飲み込む（「既に閉じている」）', () => {
     const s = new RunnerSdkSession();
-    const q = { close: () => { throw new Error('already closed'); } } as unknown as Query;
+    const q = {
+      close: () => {
+        throw new Error('already closed');
+      },
+    } as unknown as Query;
     s.open(q, Promise.resolve());
     expect(() => s.closeQuery()).not.toThrow();
   });
@@ -241,8 +245,16 @@ describe('RunnerSdkSession — 認証トークンの畳み直し（recycleForTok
 describe('RunnerSdkSession — 入力の待ち行列（enqueueInput / dequeueInput / drainInput / waitForInput / wakeInput）', () => {
   it('enqueueInput → dequeueInput は FIFO', () => {
     const s = new RunnerSdkSession();
-    const a = { type: 'user', message: { role: 'user', content: 'a' }, parent_tool_use_id: null } as never;
-    const b = { type: 'user', message: { role: 'user', content: 'b' }, parent_tool_use_id: null } as never;
+    const a = {
+      type: 'user',
+      message: { role: 'user', content: 'a' },
+      parent_tool_use_id: null,
+    } as never;
+    const b = {
+      type: 'user',
+      message: { role: 'user', content: 'b' },
+      parent_tool_use_id: null,
+    } as never;
     s.enqueueInput(a);
     s.enqueueInput(b);
     expect(s.dequeueInput()).toBe(a);
@@ -252,8 +264,16 @@ describe('RunnerSdkSession — 入力の待ち行列（enqueueInput / dequeueInp
 
   it('drainInput は積んだ順のまま全件返し、待ち行列を空にする', () => {
     const s = new RunnerSdkSession();
-    const a = { type: 'user', message: { role: 'user', content: 'a' }, parent_tool_use_id: null } as never;
-    const b = { type: 'user', message: { role: 'user', content: 'b' }, parent_tool_use_id: null } as never;
+    const a = {
+      type: 'user',
+      message: { role: 'user', content: 'a' },
+      parent_tool_use_id: null,
+    } as never;
+    const b = {
+      type: 'user',
+      message: { role: 'user', content: 'b' },
+      parent_tool_use_id: null,
+    } as never;
     s.enqueueInput(a);
     s.enqueueInput(b);
     expect(s.drainInput()).toEqual([a, b]);
