@@ -2173,6 +2173,10 @@ export function createApp(deps: AppDeps) {
             description: '記憶文書。',
             content: { 'application/json': { schema: resolver(memoryReadResponseSchema) } },
           },
+          400: {
+            description: '記憶のスラッグが不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           404: {
             description: '該当する記憶が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
@@ -2180,7 +2184,16 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        const doc = await stores.persona.read(c.req.param('slug'));
+        // **issue #1634。** `PUT`/`DELETE /memory/:slug` と同じ門——
+        // `memorySlugSchema` に落ちるスラッグはここで 400 で断る。ここが
+        // 無いと `FsPersonaStore#path` が投げる例外（`packages/storage-fs/src/persona.ts`）が
+        // そのまま `onError` まで抜けて 500 になり、同じ入力なのに
+        // `PUT`/`DELETE` とは違う応答になっていた。
+        const slug = c.req.param('slug');
+        if (!memorySlugSchema.safeParse(slug).success) {
+          return c.json({ error: '記憶のスラッグが不正' as const }, 400);
+        }
+        const doc = await stores.persona.read(slug);
         if (!doc) return c.json({ error: 'not found' as const }, 404);
         return c.json({ document: doc });
       },
