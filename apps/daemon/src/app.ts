@@ -5590,7 +5590,7 @@ export function createApp(deps: AppDeps) {
      * 飛ばした行を `targeted` にも `skipped.inUse` にも数えると2回数える
      * ことになり、上の等式が壊れる。`removedIds` も guard を通った後の
      * ものだけ。`raced` は「guard までは通ったが、実際に `remove()` する
-     * までの間に他経路が先に消していた」行（`result.kind === 'missing'`）
+     * までの間に他経路が先に消していた」行（`result.kind` が `'missing'` か `'already'`）
      * ——0件でも欄を省かない。
      *
      * **`limit` は guard より前に効く。** `selectArchiveRemovalTargets` が
@@ -5796,7 +5796,12 @@ export function createApp(deps: AppDeps) {
           const removedThisChunk: string[] = [];
           for (const target of chunkTargets) {
             const result = await stores.archive.remove(target.id);
-            if (result.kind === 'missing') {
+            if (result.kind === 'missing' || result.kind === 'already') {
+              // **`already` も同じ競合である。** `remove()` は行を消さずに本文だけを墓標にするので、
+              // 他経路が先に消していた回は `missing` ではなく `already` を返すのが普通である。
+              // 選定の時点で既に消えていた行は選定から外してある（`skipped.alreadyRemoved`）ので、
+              // ここで `already` が返るのは、選んだ後に他経路が消した回だけ——この呼びが消した
+              // ことにしない（応答・日誌に、触っていない id を載せない）。
               // list() で見つかり guard も通ったのに、実際に remove() する
               // までの間に他経路が先に消していた（#698 欠陥3）。`targeted`
               // には数えているのでここで黙って `continue` すると
@@ -5808,8 +5813,7 @@ export function createApp(deps: AppDeps) {
               continue;
             }
             removedThisChunk.push(target.id);
-            // `already`（冪等な再実行）はバイト数を二重に数えない。
-            if (result.kind === 'removed') removedBytes += result.bytes;
+            removedBytes += result.bytes;
           }
           removedIds.push(...removedThisChunk);
           if (removedThisChunk.length === 0) continue;

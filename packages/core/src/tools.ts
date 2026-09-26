@@ -10929,15 +10929,20 @@ export function createCloneTools(context: ToolContext) {
           const removedThisChunk: string[] = [];
           for (const target of chunkTargets) {
             const result = await stores.archive.remove(target.id);
-            if (result.kind === 'missing') {
+            if (result.kind === 'missing' || result.kind === 'already') {
               // list() で見つかり guard も通ったのに、実際に remove() する
               // までの間に他経路が先に消していた——`raced` へ数える（`POST
               // /archive/remove` と同じ理由。隠さない）。
+              // **`already` も同じ競合である。** `remove()` は行を消さずに本文だけを墓標にするので、
+              // 他経路が先に消していた回は `missing` ではなく `already` を返すのが普通である。
+              // 選定の時点で既に消えていた行は選定から外してある（`skipped.alreadyRemoved`）ので、
+              // ここで `already` が返るのは、選んだ後に他経路が消した回だけ——この呼びが消した
+              // ことにしない（応答・日誌に、触っていない id を載せない）。
               raced += 1;
               continue;
             }
             removedThisChunk.push(target.id);
-            if (result.kind === 'removed') removedBytes += result.bytes;
+            removedBytes += result.bytes;
           }
           removedIds.push(...removedThisChunk);
           // **1件も消せなかった塊では日誌へ書かない**（`inbox_remove_many` /
