@@ -125,6 +125,12 @@ export interface AgentToolAuditRecord {
    * 成功で終わった時点で忘れるための鍵。** 読めなければ省く——旧い provider
    * の写しがこの欄を持たない回は、その回だけ帳面が忘れずに残り、上限
    * （`createRecentMap` の `onForget`）が最後の網になる。
+   *
+   * **`clone.ts` の `#onPostToolUse` も読む（issue #863 残項目・検出のみ）。**
+   * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しを
+   * `#allowedByGrantToolUses` へこの id をキーに控えており、この呼び出しが
+   * 成功で終わった時点で同じ理由で忘れる（`runner.ts` の `#preToolInputHeads`
+   * と同じ形）。
    */
   toolUseId?: string;
 }
@@ -156,7 +162,11 @@ export interface AgentToolAuditFailureRecord {
   error?: string;
   /** 中断（キャンセル）によって終わった呼び出しか。省かれていれば「分かっていない」——中断ではないと確定しているのではない（`clone.ts` の `#journalToolUseFailure` の同じ判断）。 */
   isInterrupt?: boolean;
-  /** SDK の `tool_use_id`（issue #1105）。`AgentToolAuditRecord.toolUseId` と同じ理由・同じ作法。 */
+  /**
+   * SDK の `tool_use_id`（issue #1105）。`AgentToolAuditRecord.toolUseId` と
+   * 同じ理由・同じ作法——`clone.ts` の `#onPostToolUseFailure` も
+   * `#allowedByGrantToolUses` を同じ id で忘れる（issue #863 残項目）。
+   */
   toolUseId?: string;
 }
 
@@ -236,14 +246,13 @@ export type AgentObservationHook<T> = (record: T) => void | Promise<void>;
  * 同じ作法）。
  *
  * **欄は「いま実際に読まれているもの」の和集合だけ。** `clone.ts` の
- * `#onPreToolUse`（Issue #863）は `toolName` / `toolInput` だけを読む
- * （`Bash` 以外は素通し、`tool_input.command` が人間の承認した許可の
- * ルールに一致するかだけを見る）。`runner.ts` の `#onPreToolUse`
- * （`bash-wait-guard.ts`、Issue #894）はそれに加えて `agentId` /
- * `agentType` も読む（弾いた主体を note の文面へ書くため）。ここは両方の
- * 和集合を持つ——`toolInput` は `unknown` なので、`bash-wait-guard.ts` が
- * 見る `run_in_background` のような、道具ごとに形が違う欄もここへ写す時点で
- * 潰さない。
+ * `#onPreToolUse`（Issue #863）は `toolName` / `toolInput` に加え、いまは
+ * `toolUseId` も読む（下の欄の doc、issue #863 残項目）。`runner.ts` の
+ * `#onPreToolUse`（`bash-wait-guard.ts`、Issue #894）はそれに加えて
+ * `agentId` / `agentType` も読む（弾いた主体を note の文面へ書くため）。
+ * ここは両方の和集合を持つ——`toolInput` は `unknown` なので、
+ * `bash-wait-guard.ts` が見る `run_in_background` のような、道具ごとに形が
+ * 違う欄もここへ写す時点で潰さない。
  */
 export interface AgentPreToolRecord {
   /** 呼ばれようとしている道具の名前。読めなければ省く。 */
@@ -260,9 +269,12 @@ export interface AgentPreToolRecord {
    * ここでは他の欄と同じく任意にする——`Partial<...>` 経由で読む以上、
    * 実行時に文字列でなければ省く作法をここだけ崩さない。
    *
-   * **読み手は `runner.ts` の `#onPreToolUse` だけである**（分類器の拒否より
-   * 前に見た入力の先頭を、この id をキーに控える。`#capturePreToolInputHead`）。
-   * `clone.ts` の `#onPreToolUse`（Issue #863）はこの欄を読まない。
+   * **読み手は2つある。** `runner.ts` の `#onPreToolUse` は分類器の拒否より
+   * 前に見た入力の先頭を、この id をキーに控える（`#capturePreToolInputHead`）。
+   * `clone.ts` の `#onPreToolUse`（issue #863 残項目・検出のみ、2026-09-26）は、
+   * 許可 DB の規則に一致して `allow` を返した呼び出しを、この id をキーに
+   * `#allowedByGrantToolUses` へ控える——同じ id で拒否が届いたら
+   * （`#noteDenial`）「hook の allow を SDK が追い越した」ことを検出するため。
    */
   toolUseId?: string;
 }

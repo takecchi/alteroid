@@ -548,6 +548,30 @@ const TOOL_USE_ERROR_EXCERPT = 500;
 const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
 
 /**
+ * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しを、
+ * 決着する（`#onPostToolUse` / `#onPostToolUseFailure`）か拒否が来る
+ * （`#noteDenial`）まで覚えておく件数の上限（Issue #863 残項目「hook の
+ * allow を SDK が追い越したことの検出」）。**`#deniedToolUses` と同じ理由・
+ * 同じ値に揃える**——長く走るセッションでメモリが伸び続けないための蓋。
+ * 溢れたら `#allowedByGrantToolUses` の `onForget` が日誌へ残す。
+ */
+const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
+
+/**
+ * `#allowedByGrantToolUses` が `tool_use_id` ごとに覚える1件（Issue #863
+ * 残項目）。**`DeniedRecord`（`denial-shape.ts`）と同じ理由で、コマンド本文は
+ * 一切持たない**——覚える必要があるのは「どの許可に、どの規則で一致したか」
+ * だけで、これはどちらも人間が既に承認した文字列（`grant.rule`）と、それが
+ * 指す DB の行の id（`grant.id`）である。
+ */
+interface AllowedByGrantRecord {
+  /** 一致した `PermissionGrant.id`。 */
+  readonly grantId: string;
+  /** 一致した `PermissionGrant.rule`（人間が既に承認した文字列そのもの）。 */
+  readonly rule: string;
+}
+
+/**
  * `#mergedHumanBatch` / `#mergedManagerReportBatch` / `#mergedExternalBatch`
  * が1ターンへ束ねる合図の最大件数（issue #783、`#mergedExternalBatch` は
  * issue #841）。
@@ -1576,6 +1600,65 @@ class Clone implements CloneHost {
       });
     },
   });
+  /**
+   * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しの
+   * `tool_use_id` を、決着するまで控える帳面（Issue #863 残項目「hook の
+   * allow を SDK が追い越したことの検出」）。
+   *
+   * ## なぜ要るか
+   *
+   * バイナリを静的に読んだ観測（Issue #863 のコメント、2026-09-26）による
+   * と、hook が返した `permissionDecision: 'allow'` は普通は分類器を通らず
+   * 確定するが、リモートの機能フラグ（`tengu_virtual_knuth`）が立つと分類器
+   * へ回されうる。**これが起きているかどうかを、alteroid 自身のコードから
+   * 判定する手段は無い**——観測できるのは「hook が allow を返した直後の
+   * 呼び出しが、それでも拒否された」という結果だけである。この帳面はその
+   * 結果を見分けるための唯一の材料（`grantId` / `rule`）を持つ。
+   *
+   * ## 決着で消す（`#onPostToolUse` / `#onPostToolUseFailure`）
+   *
+   * 呼び出しが成功・失敗のどちらかで終わったら、もう拒否は来ない
+   * （`PreToolUse` は道具の実行より前にしか発火しない）ので、その
+   * `tool_use_id` はここから消す——`runner.ts` の `#preToolInputHeads` と
+   * 同じ理由・同じ形。
+   *
+   * ## 拒否が来たら `#noteDenial` が読む
+   *
+   * 一致すれば「hook の allow を追い越した」と判定し、消費してから日誌へ
+   * 残す（`#noteGrantFunneled` の doc）。
+   *
+   * ## 無制限には覚えない
+   *
+   * `#deniedToolUses` と同じ理由・同じ値（`ALLOWED_BY_GRANT_MEMORY_LIMIT`）
+   * で `createRecentMap` に揃える。上限に達して忘れた id へ後から拒否が届いて
+   * も、もう検出できない——`onForget` がその代償を日誌へ残す。
+   */
+  readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
+    limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
+    onForget: (ids) => {
+      void this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'inbound',
+        text:
+          `${EXCHANGE_KIND_THINNING_PREFIX}許可 DB の規則に一致して allow を返した記憶が上限` +
+          `（${ALLOWED_BY_GRANT_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を忘れた: ` +
+          `${ids.join(', ')}。この tool_use_id への拒否が後から届いても、もう「hook の allow を` +
+          '追い越した」とは検出できない。',
+      });
+    },
+  });
+  /**
+   * `#noteGrantFunneled` の「原因を断定しない」注意書きを、grant ごとに初回
+   * だけ足すための記憶（Issue #863 残項目）。**日誌の書き込みそのものは
+   * 毎回行う**——間引くのは注意書きの文言だけで、`#notices.noteUsage` の
+   * 「同じ知らせで日誌を埋めない」考え方をここへも当てる。
+   *
+   * **セッションを跨いで持ち越さない**（器を作り直せば消える）。取り消し・
+   * 再承認で同じ grant id が別の意味を持つことは無いが、忘れても実害は
+   * 「もう一度だけ注意書きが載る」だけなので、上限や永続化までは持たせない。
+   */
+  readonly #grantFunneledWarnedOnce = new Set<string>();
   /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
   #systemPromptChars = 0;
   /**
@@ -9587,6 +9670,20 @@ class Clone implements CloneHost {
    * 観測用の副作用（最終使用時刻）が書けなかったからといって、既に下した
    * 「一致した」という判断を覆さない——`allow` を返すかどうかは一致した
    * 事実だけで決まる。
+   *
+   * ## `allow` を返した呼び出しを控える（Issue #863 残項目・検出のみ）
+   *
+   * `record.toolUseId` が読めれば、一致した grant の id / rule を
+   * `#allowedByGrantToolUses` へその id をキーに控える——**SDK がこの
+   * `permissionDecision: 'allow'` を分類器へ回して、それでも拒否する
+   * ことがありうる**（バイナリを静的に読んだ観測。リモートの機能フラグ
+   * `tengu_virtual_knuth` が立つと `Hook approved tool use for X, but auto
+   * mode requires classifier adjudication` に分岐する）。alteroid のコード
+   * からはこの分岐を検出できないので、代わりに「hook が allow を返した直後の
+   * 同じ呼び出しが、それでも拒否された」という結果を `#noteDenial` 側で
+   * 見分けられるようにする。`toolUseId` が読めない回（古い provider の写し）
+   * は控えずに `allow` だけ返す——検出できないだけで、許可そのものは今までと
+   * 同じ理由で下す。
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     if (record.toolName !== 'Bash') return { kind: 'continue' };
@@ -9601,6 +9698,9 @@ class Clone implements CloneHost {
       if (grant.revokedAt !== undefined) continue;
       if (!matchPermissionRule(grant.rule, command)) continue;
       await this.#stores.permissionGrants.put({ ...grant, lastUsedAt: now }).catch(() => undefined);
+      if (typeof record.toolUseId === 'string') {
+        this.#allowedByGrantToolUses.set(record.toolUseId, { grantId: grant.id, rule: grant.rule });
+      }
       return {
         kind: 'allow',
         reason: `人間が承認した許可に一致した（${grant.rule}）`,
@@ -9699,6 +9799,11 @@ class Clone implements CloneHost {
     const level = record.effortLevel;
     if (typeof level === 'string') this.#effort = level;
     this.#noteTranscriptPath(record.transcriptPath);
+    // **決着したので `#allowedByGrantToolUses` から忘れる**（Issue #863
+    // 残項目）。`#preToolInputHeads` の同じ掃除と同じ理由——`PreToolUse` は
+    // 実行より前にしか発火しないので、成功で終わった呼び出しに後から拒否が
+    // 届くことはない。
+    if (typeof record.toolUseId === 'string') this.#allowedByGrantToolUses.delete(record.toolUseId);
 
     await this.#journalToolUse(record, CLONE_ACTOR_ID);
   }
@@ -9853,6 +9958,8 @@ class Clone implements CloneHost {
     const level = record.effortLevel;
     if (typeof level === 'string') this.#effort = level;
     this.#noteTranscriptPath(record.transcriptPath);
+    // **`#onPostToolUse` の同じ掃除と同じ理由**（Issue #863 残項目）。
+    if (typeof record.toolUseId === 'string') this.#allowedByGrantToolUses.delete(record.toolUseId);
 
     await this.#journalToolUseFailure(record, CLONE_ACTOR_ID);
   }
@@ -9966,6 +10073,22 @@ class Clone implements CloneHost {
    */
   async #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): Promise<void> {
     const tool = denial.tool ?? UNKNOWN_TOOL_NAME;
+
+    // **hook の allow を SDK が追い越したかの検出**（Issue #863 残項目）。
+    // **必ず SDK が実際に付けてきた `tool_use_id` で引く**——下で組む
+    // `toolUseId`（道具名・`via` からの代用値）ではない。代用値はここで
+    // 意味を持つ実在の id ではないので、それで引くと無関係な一致が起きうる。
+    // 一致したら消費してから消す——同じ拒否が生の合図と `result` の両方から
+    // 届いても、検出そのものは1回しか起こらない（下の二重書き防止と同じ形の
+    // 独立した仕組み）。
+    if (typeof denial.toolUseId === 'string') {
+      const funneled = this.#allowedByGrantToolUses.get(denial.toolUseId);
+      if (funneled !== undefined) {
+        this.#allowedByGrantToolUses.delete(denial.toolUseId);
+        await this.#noteGrantFunneled(funneled, denial, via);
+      }
+    }
+
     // id が無ければ道具の名前で代用する。**取りこぼすより重複を許す。**
     //
     // **代用値を作るのはこちら側の仕事である**（`agent-events.ts` の
@@ -10054,6 +10177,67 @@ class Clone implements CloneHost {
         // **かといって本文は書けない** —— 道具の入力には鍵が入りうる。
         `入力の形: ${denialInputShape(denial.input) ?? denialInputAbsence(via)}。` +
         `許可モードは ${this.#permissionMode} で、この層に確認を回す相手は居ない。`,
+    });
+  }
+
+  /**
+   * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しが、
+   * 同じ `tool_use_id` で拒否された1件を日誌へ残す（Issue #863 残項目「hook
+   * の allow を SDK が追い越したことの検出」）。
+   *
+   * ## 原因は断定しない
+   *
+   * バイナリを静的に読んだ観測（Issue #863 のコメント、2026-09-26）による
+   * と、考えられる筋は2つある——(1) リモートの機能フラグ
+   * （`tengu_virtual_knuth`）が立ち、SDK が hook の allow を分類器へ回すように
+   * なった、(2) deny 規則が hook の allow を上書きした。**alteroid 自身の
+   * コードからはどちらか（あるいは両方）かを切り分けられない**——切り分けを
+   * 主張せず、両方を挙げたうえで「効いていない可能性がある」とだけ言う。
+   *
+   * ## 日誌には毎回書く。注意書きは grant ごとに初回だけ
+   *
+   * 起きた事実（規則・grant id・拒否の分類/理由）は検出のたびに書く。
+   * **人間が読む「原因を断定しない」注意書きは、同じ grant について初めて
+   * 検出した回にだけ足す**（`#grantFunneledWarnedOnce`）——`#notices.noteUsage`
+   * が「同じ知らせで日誌を埋めない」ために畳むのと同じ考え方で、ここでは
+   * 事実の記録そのものは畳まず、注意書きの文言だけを間引く。
+   *
+   * ## コマンド本文は書かない
+   *
+   * `funneled.rule` は人間が既に承認した文字列（`request_permission` の
+   * 引数）なので書いてよいが、実際に流れたコマンド本文（`denial.input` /
+   * `toolInput`）はここでは一切読まない——`#noteDenial` 本体が既に
+   * `denialInputShape` で形だけに畳んでいる分（この呼び出しの直後に書かれる
+   * 通常の拒否の行）に任せる。
+   */
+  async #noteGrantFunneled(
+    funneled: AllowedByGrantRecord,
+    denial: AgentPermissionDenial,
+    via: 'live' | 'result',
+  ): Promise<void> {
+    const denialDetails = [
+      denial.reasonType === undefined ? undefined : `分類: ${denial.reasonType}`,
+      denial.reason === undefined ? undefined : `理由: ${denial.reason}`,
+    ].filter((line): line is string => line !== undefined);
+    const why = denialDetails.length > 0 ? `（${denialDetails.join(' / ')}）` : '';
+
+    const firstTimeForGrant = !this.#grantFunneledWarnedOnce.has(funneled.grantId);
+    if (firstTimeForGrant) this.#grantFunneledWarnedOnce.add(funneled.grantId);
+    const guidance = firstTimeForGrant
+      ? ' 考えられるのは、SDK が hook の allow を分類器へ回すようになったこと、' +
+        'または deny 規則が hook の allow を上書きしたことである' +
+        '（どちらかは、あるいは両方かは、ここからは切り分けられない）。' +
+        'この許可は、いまは効いていない可能性がある。'
+      : '';
+
+    await this.#journal({
+      type: 'exchange',
+      with: 'self',
+      role: 'inbound',
+      text:
+        `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
+        `PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: ${via}）が拒否された${why}。` +
+        guidance,
     });
   }
 

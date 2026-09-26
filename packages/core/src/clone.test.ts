@@ -2760,6 +2760,212 @@ describe('クローン', () => {
     });
   });
 
+  describe(
+    '#noteDenial が「hook の allow を SDK が追い越した」ことを検出する' +
+      '（issue #863 残項目、2026-09-26）',
+    () => {
+      const GRANT = {
+        id: 'grant-1',
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit'],
+        denies: ['gh release edit; rm -rf /'],
+        approvalId: 'ap-1',
+        answer: '許可します',
+        grantedAt: '2026-01-01T00:00:00.000Z',
+        route: { principalKind: 'account' as const, accountId: 'acc-1' },
+      };
+
+      /** 検出の記録が付ける文言の目印。**この文言自体が固定なので、ここに1本だけ持つ。** */
+      const FUNNELED_MARK = 'PreToolUse が allow を返した';
+
+      function hooksOf(s: Setup) {
+        const options = (s.calls[0] as FakeCall).options;
+        const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+        const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+        if (preToolUse === undefined) throw new Error('PreToolUse フックが登録されていない');
+        if (postToolUse === undefined) throw new Error('PostToolUse フックが登録されていない');
+        return { preToolUse, postToolUse };
+      }
+
+      it('grant に一致して allow → 同じ tool_use_id の live 拒否 → 検出の記録が出る', async () => {
+        let beforeAssistantCalls = 0;
+        const denial = {
+          tool_name: 'Bash',
+          tool_use_id: 'tu-funnel-1',
+          tool_input: { command: 'gh release edit --draft' },
+        };
+        const s = setup(undefined, createMemoryStores(), {
+          // **1本目のターン（hook を捕まえるだけ）では拒否を出さず、2本目で
+          // だけ出す**（`result→live の順では、行は1本のまま増えない（C5）` と
+          // 同じ「呼び出し回数で数える」idiom）。
+          beforeAssistant: () => {
+            beforeAssistantCalls += 1;
+            return beforeAssistantCalls === 2
+              ? [
+                  {
+                    type: 'system',
+                    subtype: 'permission_denied',
+                    ...denial,
+                    decision_reason: '分類器が止めた',
+                    decision_reason_type: 'classifier',
+                    message: 'Bash is not allowed right now',
+                  } as unknown as SDKMessage,
+                ]
+              : [];
+          },
+        });
+        await s.stores.permissionGrants.put(GRANT);
+
+        s.clone.post(humanMessage('やあ'));
+        await waitForDone(s.events);
+        const { preToolUse } = hooksOf(s);
+
+        // SDK が実際に PreToolUse を呼んだのと同じ形で allow を消費させる
+        // （`tool_use_id` 付き——`toAgentPreToolRecord` が読む欄そのもの）。
+        const decision = (await preToolUse(
+          {
+            tool_name: 'Bash',
+            tool_input: { command: 'gh release edit --draft' },
+            tool_use_id: 'tu-funnel-1',
+          } as never,
+          undefined,
+          {} as never,
+        )) as { hookSpecificOutput?: { permissionDecision?: string } };
+        expect(decision.hookSpecificOutput?.permissionDecision).toBe('allow');
+
+        s.events.length = 0;
+        s.clone.post(humanMessage('two'));
+        await waitForDone(s.events);
+
+        const entries = await s.stores.journal.list({ types: ['exchange'] });
+        const funneled = entries.filter((entry) =>
+          (entry as { text: string }).text.includes(FUNNELED_MARK),
+        );
+        expect(funneled.length).toBe(1);
+        const text = (funneled[0] as { text: string }).text;
+        expect(text).toContain('Bash(gh release edit:*)');
+        expect(text).toContain('grant-1');
+        // 拒否の分類・理由は読む。
+        expect(text).toContain('分類: classifier');
+        expect(text).toContain('理由: 分類器が止めた');
+        // 原因は断定しない2行——両方の筋を挙げたうえで「可能性がある」とだけ言う。
+        expect(text).toContain('分類器へ回すようになった');
+        expect(text).toContain('deny 規則が hook の allow を上書きした');
+        expect(text).toContain('この許可は、いまは効いていない可能性がある');
+        // コマンド本文は書かない。
+        expect(text).not.toContain('gh release edit --draft');
+
+        await s.clone.stop();
+      });
+
+      it('grant に一致しない呼び出しの拒否では検出の記録が出ない', async () => {
+        let beforeAssistantCalls = 0;
+        const denial = {
+          tool_name: 'Bash',
+          tool_use_id: 'tu-no-match-1',
+          tool_input: { command: 'git push' },
+        };
+        const s = setup(undefined, createMemoryStores(), {
+          beforeAssistant: () => {
+            beforeAssistantCalls += 1;
+            return beforeAssistantCalls === 2
+              ? [
+                  {
+                    type: 'system',
+                    subtype: 'permission_denied',
+                    ...denial,
+                  } as unknown as SDKMessage,
+                ]
+              : [];
+          },
+        });
+        await s.stores.permissionGrants.put(GRANT);
+
+        // **PreToolUse を一度も呼ばない**——grant に一致する allow が
+        // そもそも起きていない状態を作る。
+        s.clone.post(humanMessage('やあ'));
+        await waitForDone(s.events);
+
+        s.events.length = 0;
+        s.clone.post(humanMessage('two'));
+        await waitForDone(s.events);
+
+        const entries = await s.stores.journal.list({ types: ['exchange'] });
+        expect(
+          entries.some((entry) => (entry as { text: string }).text.includes(FUNNELED_MARK)),
+        ).toBe(false);
+
+        await s.clone.stop();
+      });
+
+      it(
+        'allow の後に PostToolUse で成功が決着すれば帳面から消え、後で同じ id の' +
+          '拒否が来ても検出しない（id の再利用は現実には無いが、帳面が消えている' +
+          'ことの歯として）',
+        async () => {
+          let beforeAssistantCalls = 0;
+          const denial = {
+            tool_name: 'Bash',
+            tool_use_id: 'tu-settled-1',
+            tool_input: { command: 'gh release edit --draft' },
+          };
+          const s = setup(undefined, createMemoryStores(), {
+            beforeAssistant: () => {
+              beforeAssistantCalls += 1;
+              return beforeAssistantCalls === 2
+                ? [
+                    {
+                      type: 'system',
+                      subtype: 'permission_denied',
+                      ...denial,
+                    } as unknown as SDKMessage,
+                  ]
+                : [];
+            },
+          });
+          await s.stores.permissionGrants.put(GRANT);
+
+          s.clone.post(humanMessage('やあ'));
+          await waitForDone(s.events);
+          const { preToolUse, postToolUse } = hooksOf(s);
+
+          await preToolUse(
+            {
+              tool_name: 'Bash',
+              tool_input: { command: 'gh release edit --draft' },
+              tool_use_id: 'tu-settled-1',
+            } as never,
+            undefined,
+            {} as never,
+          );
+          // **決着した**（実行が成功で終わった）ことを PostToolUse で伝える——
+          // `#allowedByGrantToolUses` から消えるはずの経路。
+          await postToolUse(
+            {
+              tool_name: 'Bash',
+              tool_use_id: 'tu-settled-1',
+              tool_input: { command: 'gh release edit --draft' },
+              tool_response: { output: 'ok' },
+            } as never,
+            undefined,
+            {} as never,
+          );
+
+          s.events.length = 0;
+          s.clone.post(humanMessage('two'));
+          await waitForDone(s.events);
+
+          const entries = await s.stores.journal.list({ types: ['exchange'] });
+          expect(
+            entries.some((entry) => (entry as { text: string }).text.includes(FUNNELED_MARK)),
+          ).toBe(false);
+
+          await s.clone.stop();
+        },
+      );
+    },
+  );
+
   it(
     '会話 id を持つ承認に答えると、返答が with: "human" としてその会話 id と共に' +
       '日誌へ積まれ、会話の窓（readConversationWindow）からも読める（#768）',
