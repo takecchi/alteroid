@@ -3302,6 +3302,32 @@ const DENIED_TOOL_LIMIT = 64;
 const DENIED_ESCALATE_AT = 1;
 
 /**
+ * 拒否の escalation の末尾に付ける「答え方」（issue #1105 の P0）。
+ *
+ * **この合図には答える先が無い。** 器の分類器・deny 規則の拒否は `canUseTool` を
+ * 経由しないので `requestId` が生まれず、`record.waiting` にも載らない。
+ * ところが `manager_send` は `decision` があって `requestId` が無いとき、
+ * **待ちがちょうど1件なら黙ってその1件へ当てる**（`#choosePending`。#313）。
+ * ⟹ この合図を読んで「許可しよう」と `decision: 'allow'` を送ると、
+ * **同じマネージャーが別に待っている無関係の確認を許可してしまう。** 本文が
+ * 答え方を何も言わずに終わっていたので、その誤りを止めるものが無かった。
+ *
+ * **だから答え方を合図そのものに書く。** 許可としては答えられないこと、
+ * `decision` を付けないこと、別の形は追加指示として送れること、作業者の拒否は
+ * マネージャーに中継させること、の4点。**分類器の判定には触らない** —— 通す口を
+ * 作るのではなく、既に在る口（追加指示）を正しく指すだけである。
+ *
+ * **Markdown の記号を散文に混ぜない**（`denialInputAbsence` の doc と同じ）。
+ * 識別子だけをバッククォートで包む（本文の他の識別子と揃える）。
+ */
+const DENIAL_REPLY_ROUTE =
+  '\n答え方: この拒否には `requestId` が無く、許可として答える口は無い。' +
+  '`manager_send` に `decision` を付けて送らないこと' +
+  '（`requestId` 無しの `decision` は、このマネージャーが別に待っている確認へ回答として当たりうる）。' +
+  '別の形でやり直させるなら、`decision` 無しの追加指示として送る。' +
+  '作業者の拒否なら、その作業者へ伝えるようマネージャーに頼む（`manager_send` の届け先はマネージャーである）。';
+
+/**
  * managerId の発行で、衝突を引き直す回数の上限（#238）。
  *
  * **非対称だから安全側へ倒す**（`lease.ts` の `mayClaim` の doc と同じ理由）。
@@ -9660,6 +9686,7 @@ class Pool implements ManagerPool {
               : `\n拒否より前に見た入力の先頭（伏せ字・最大160字。この拒否の合図自体が` +
                 `運んだ値ではなく、同じ tool_use_id で runner の \`PreToolUse\` フックが` +
                 `拒否より前に見た値である）: ${codeSpan(event.inputHead)}`) +
+            DENIAL_REPLY_ROUTE +
             '\n全件は日誌に残っている（`journal_read` で辿れる）。',
         );
         return;
