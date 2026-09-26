@@ -7434,8 +7434,33 @@ class Clone implements CloneHost {
       }
 
       case 'distill': {
-        // セッションがまだ無いなら蒸留するものも無い
-        if (!this.#sdkSession.query) return;
+        // **セッションが無いなら蒸留するものも無い。ただし「無い」の中身で分ける**
+        // （Issue #1650）。かつては無条件に沈黙して return していたが、それだと
+        // 兄弟の見送り（すぐ下、`!hasUndistilledActivity`）と非対称になる ——
+        // あちらは見送ったことを日誌へ残すのに、こちらは1バイトも残さなかった。
+        //
+        // - **活動が在る（`hasUndistilledActivity`）**: 記憶へ移すべきものが
+        //   在るのに見送るので、その事実を日誌へ残す。**印は倒さない** —— 倒すと
+        //   「移した」ことになり、実際には何も移っていない記憶が落ちる
+        //   （`#hasUndistilledActivity` の doc「迷ったら蒸留する側へ倒す」と同じ
+        //   理由）。次に別の入口（人間の発言・外部イベント・自発の tick 等）が
+        //   `#ensureQuery()` でセッションを戻せば、その次の蒸留契機で走る。
+        // - **活動も無い**: 移すものが何も無いので、これまでどおり黙って return
+        //   する（起動直後の停止などで、毎回日誌を増やさないため）。
+        if (!this.#sdkSession.query) {
+          if (this.#distillMemory.hasUndistilledActivity) {
+            await this.#journal({
+              type: 'exchange',
+              with: 'self',
+              role: 'outbound',
+              text:
+                `${EXCHANGE_KIND_THINNING_PREFIX}蒸留（${event.reason}）は見送った。セッションが無い` +
+                '（終わっていた）ので蒸留できない。未蒸留の活動の印は残したので、次にセッションが戻った' +
+                'とき（別の入口が新しいセッションを起こしたとき）に蒸留される。',
+            });
+          }
+          return;
+        }
         // **前回の蒸留以降に新しいことが無ければ、同一内容の蒸留を重ねて払わない。**
         // `endConversation()` の直後に `stop()` が来る形（デプロイの夜間再起動が
         // これに当たる）は、`event.reason` が `conversation_end` でも `shutdown`

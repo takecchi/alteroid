@@ -3901,6 +3901,116 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
 
     await s.clone.stop();
   });
+
+  /**
+   * **Issue #1650**: `#handle` の `case 'distill'` は `if (!this.#sdkSession.query)
+   * return;` で、セッションが無ければ**蒸留を試みずに戻る**。ここまでは意図どおり
+   * （記憶へ移す先の会話そのものが器の中に無い）——直したのは、**活動が在るのに
+   * 見送るときは、その事実を兄弟の分岐（`!hasUndistilledActivity`）と同じ形で
+   * 日誌へ残す**ことである。直す前はここが完全に沈黙しており、見送ったという
+   * 事実そのものがどこにも残らなかった（PR #1650 の元になった調査）。
+   *
+   * `#read` の `finally` は `this.#sdkSession.clearQuery()` を呼ぶが、
+   * `#salvageTranscript()`（＝蒸留）へ進むのは**文脈窓で畳んだ回**
+   * （`takeContextWindowRecycle()` が真）にだけである。**畳みが絡まない理由で
+   * セッションの読み取りループがただ終わる回**（`endSessionAfterTurn` が模す。
+   * 実機なら SDK 子プロセスの静かな終了・ネットワークの瞬断など）は、その
+   * `finally` が退避も蒸留も試みない——`this.#stores.sessions
+   * .setCloneSessionId(null)` も呼ばれないので、記憶ストアの `cloneSessionId`
+   * は死んだセッションの id を指したまま残る（＝次の `#ensureQuery` は
+   * `resume` でそこへ戻れる）。
+   *
+   * この歯が固定するのは3点—— (1) 見送るときは蒸留のターンを1本も走らせない
+   * (2) 見送ったことが `skippedDistillEntries` と同じ形で日誌に1件残る、
+   * 文面に `event.reason` と「セッションが無い」ことが入る (3) **未蒸留の
+   * 活動の印は倒さない**——セッションが戻らないまま同じ理由の蒸留契機が
+   * もう一度来ても、まだ「活動が在る」側の見送り（journal に残るほう）のまま
+   * であり続ける。
+   *
+   * ## ⚠️ (3) を「別会話の人間の発言でセッションを戻してから確かめる」形に
+   * しなかった理由
+   *
+   * `#runTurn` の `markActivity()`（`kind !== 'distill'` のターンなら無条件に
+   * 呼ぶ）は、セッションを戻すために要る通常のターンそのものが**印を無条件に
+   * 立て直してしまう**——立て直った印は「倒していなかったから真」なのか
+   * 「間違って倒したのを、この回復ターンが上書きして真に戻したから真」なのか
+   * 外から区別できない（実際、`markDistilled()` を見送りの枝へ誤って足す変異を
+   * 当てても、この形の歯は緑のまま通ってしまうことを確かめた上でここへ書いて
+   * いる）。**⟹ 通常のターンを1本も挟まずに、同じ見送りがもう一度起きるかで
+   * 確かめる。**
+   */
+  it('E: セッションが（畳みとは無関係に）自然に終わった直後は、蒸留は走らないが見送りが日誌に残り、活動の印は倒れない（Issue #1650）', async () => {
+    const s = setup(() => 'わかった', createMemoryStores(), { endSessionAfterTurn: 0 });
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    // `#read` の `finally` が `this.#sdkSession.clearQuery()` を打ち終える
+    // （＝ `#sdkSession.query === null` に戻る）のを待つ。同じ手当てはこの
+    // ファイルの「受信箱が閉じた後に…」歯・`flushPendingMicrotasks` の doc。
+    await flushPendingMicrotasks();
+
+    const journalCountBefore = (await s.stores.journal.list({})).length;
+    await s.clone.endConversation('conv-1');
+    const journalCountAfter = (await s.stores.journal.list({})).length;
+
+    // (1) 蒸留のターンは1本も走っていない —— 本流セッションの呼び出しは1本のまま。
+    const inputs = (s.calls[0] as FakeCall).inputs;
+    expect(inputs.filter((input) => input.includes(DISTILL_MARKER)).length).toBe(0);
+
+    // (2) 見送ったことが日誌に1件だけ増え、文面に reason と「セッションが無い」が入る。
+    expect(journalCountAfter).toBe(journalCountBefore + 1);
+    const skipped = await skippedDistillEntries(s.stores);
+    expect(skipped.length).toBe(1);
+    expect(skipped[0]?.text).toContain('蒸留（conversation_end）は見送った');
+    expect(skipped[0]?.text).toContain('セッションが無い');
+
+    // (3) 活動の印は倒れていない ⟹ セッションが戻らないまま、通常のターンを
+    // 1本も挟まずにもう一度同じ理由の蒸留契機が来ても、「活動が在る」側の
+    // 見送り(journal に残る)がもう一度起きる。
+    const journalCountBeforeSecond = journalCountAfter;
+    await s.clone.endConversation('conv-1');
+    const journalCountAfterSecond = (await s.stores.journal.list({})).length;
+    expect(journalCountAfterSecond).toBe(journalCountBeforeSecond + 1);
+    expect((await skippedDistillEntries(s.stores)).length).toBe(2);
+
+    await s.clone.stop();
+  });
+
+  /**
+   * **Issue #1650 の裏面**: セッションが無く、かつ**移すものも無い**
+   * （＝直前の蒸留で `hasUndistilledActivity` が既に倒れている）ときは、
+   * これまでどおり黙って見送る——起動直後の停止などで、毎回日誌を増やさない
+   * ための意図的な沈黙である。歯Eの「活動が在るときは残す」と対にして固定する。
+   */
+  it('F: セッションが無く、未蒸留の活動も無ければ、これまでどおり日誌を増やさず黙って見送る（Issue #1650）', async () => {
+    // ターン0＝人間の発言、ターン1＝1回目の endConversation が起こす蒸留。
+    // その蒸留が成功で終わった直後にセッションを終わらせる。
+    const s = setup(() => 'わかった', createMemoryStores(), { endSessionAfterTurn: 1 });
+
+    s.clone.post(humanMessage('価値観を伝える'));
+    await waitForDone(s.events);
+    await s.clone.endConversation('conv-1');
+    // 蒸留が成功したので `hasUndistilledActivity` は倒れている
+    // （`skippedDistillEntries` は歯Aと同じ確認方法）。
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+    const distillPrompts = (s.calls[0] as FakeCall).inputs.filter((input) =>
+      input.includes(DISTILL_MARKER),
+    );
+    expect(distillPrompts.length).toBe(1);
+
+    // `#read` の `finally` が `this.#sdkSession.clearQuery()` を打ち終えるのを待つ。
+    await flushPendingMicrotasks();
+
+    const journalCountBefore = (await s.stores.journal.list({})).length;
+    // セッションも活動も無い状態で、もう一度 `case 'distill'` へ届かせる。
+    await s.clone.endConversation('conv-1');
+    const journalCountAfter = (await s.stores.journal.list({})).length;
+
+    expect(journalCountAfter).toBe(journalCountBefore);
+    expect(await skippedDistillEntries(s.stores)).toEqual([]);
+
+    await s.clone.stop();
+  });
 });
 
 /**

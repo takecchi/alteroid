@@ -248,7 +248,10 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // + 2（issue #863 の `#allowedByGrantToolUses` の `onForget`（`[間引き]` =
   // `EXCHANGE_KIND_THINNING_PREFIX`）と `#noteGrantFunneled`（許可 DB の allow が拒否に
   // 追い越されたことを `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で書く））。
-  'clone.ts': 52,
+  // + 1（issue #1650。`case 'distill'` の「セッションが無い」分岐で、未蒸留の
+  // 活動が在るのに見送るときだけ `[間引き]` = `EXCHANGE_KIND_THINNING_PREFIX` で
+  // 書く。直す前はこの分岐が完全に沈黙していた）。
+  'clone.ts': 53,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
