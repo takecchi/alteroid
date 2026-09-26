@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -6,6 +5,12 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../../vitest.tmpdir.js';
+
+import {
+  assertHealthyFakeCliExit,
+  controlResponseDelivered,
+  waitForFakeCliExit,
+} from './log-wait.js';
 
 /**
  * **本物の SDK の `query()` を、`pathToClaudeCodeExecutable` で偽 CLI
@@ -39,9 +44,26 @@ import { makeTempDirSync } from '../../../../vitest.tmpdir.js';
  *   control プロトコルの往復だけを模した node スクリプトで、本物の CLI が
  *   `deny` を受けてどう振る舞うかは分からない（Issue #1586 本文の「確かめて
  *   いないこと」のまま）
- * - **タイミングの数字（20ms / 300ms）は、この器・この SDK 版での実測に
+ * - **`(b)` のマクロタスク待ち（20ms）は、この器・この SDK 版での実測に
  *   基づく閾値であって、SDK が変われば動きうる。** 赤くなったらまずここを
  *   疑うこと（下の `describe` の doc）
+ *
+ * ## 「偽 CLI が早く死んだだけ」と区別する
+ *
+ * **レビュー指摘（PR #1609）: 偽 CLI の寿命が固定の短い時間だと、CI が
+ * 混んでいて起動が遅いとき、settle → close() を撃つ前に偽 CLI が自分から
+ * 死んでしまい、(a) が「本当は届くはずなのに、CLI がもう居ないから届かない
+ * ように見える」形で誤って緑になりうる。** これは #1596 の前提が崩れていても
+ * 気づけないということで、この歯の目的そのものを壊す。
+ *
+ * 対策は2つ——
+ * 1. `fake-cli.mjs` 自身を、固定の短い寿命ではなく **SDK の `close()` が
+ *    送る stdin の EOF を受けて終わる**形にした（`fake-cli.mjs` の doc）。
+ *    固定寿命は「ぶら下がり防止の保険」としてだけ長く（15000ms）残してある
+ * 2. `delivered/not-delivered` を見る**前に**、`assertHealthyFakeCliExit()`
+ *    で「ask を送った」「保険の寿命ではなく stdin end で終わった」ことを
+ *    確かめる。**この表明が落ちたら、それは前提の変化ではなく足場の壊れで
+ *    あり、`delivered` の値をそのまま読んではいけない**
  *
  * ## 足場について
  *
@@ -53,9 +75,6 @@ import { makeTempDirSync } from '../../../../vitest.tmpdir.js';
  * 自動化して固定する。
  */
 const FAKE_CLI_PATH = fileURLToPath(new URL('./fake-cli.mjs', import.meta.url));
-
-/** 偽 CLI が生きているあいだに `control_response` を書き切るのに十分な、かつ「まだ届いていない」を確定させるのにも十分な観測窓。 */
-const OBSERVE_MS = 300;
 
 interface Harness {
   q: Query;
@@ -139,12 +158,6 @@ async function waitTicks(mode: 'sync' | 'macrotask'): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function delivered(logPath: string): boolean {
-  if (!existsSync(logPath)) return false;
-  const content = readFileSync(logPath, 'utf8');
-  return content.includes('GOT_CONTROL_RESPONSE request_id=ask-1');
-}
-
 describe('SDK 単体: settle → close() の間に何を挟むかで control_response の到達が変わる（#1586 / #1596 の前提）', () => {
   const harnesses: Harness[] = [];
 
@@ -165,9 +178,14 @@ describe('SDK 単体: settle → close() の間に何を挟むかで control_res
       await waitTicks('sync');
       harness.close();
 
-      await new Promise((resolve) => setTimeout(resolve, OBSERVE_MS));
+      const log = await waitForFakeCliExit(harness.logPath);
+      // **足場が壊れていないことを、届いたかを見る前に確かめる。** ここが
+      // 落ちたら「(a) の届かない」は偽 CLI が早く死んだだけの可能性があり、
+      // 前提の裏付けとして使えない（レビュー指摘、上の doc）。
+      assertHealthyFakeCliExit(log);
+
       expect(
-        delivered(harness.logPath),
+        controlResponseDelivered(log),
         'SDK の内部が変わった。#1596 の withdrawn の前提（settle → close() を await なしで並べると ' +
           'control_response が CLI へ届かない）を見直せ。',
       ).toBe(false);
@@ -187,8 +205,10 @@ describe('SDK 単体: settle → close() の間に何を挟むかで control_res
       await waitTicks('macrotask');
       harness.close();
 
-      await new Promise((resolve) => setTimeout(resolve, OBSERVE_MS));
-      expect(delivered(harness.logPath)).toBe(true);
+      const log = await waitForFakeCliExit(harness.logPath);
+      assertHealthyFakeCliExit(log);
+
+      expect(controlResponseDelivered(log)).toBe(true);
     },
     10_000,
   );

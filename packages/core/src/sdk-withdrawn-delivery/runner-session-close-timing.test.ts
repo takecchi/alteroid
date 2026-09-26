@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import type { Options, Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
@@ -9,6 +8,12 @@ import { makeTempDirSync } from '../../../../vitest.tmpdir.js';
 
 import { createRunnerHost, type RunnerHost } from '../runner.js';
 import type { RunnerEvent } from '../runner-protocol.js';
+
+import {
+  assertHealthyFakeCliExit,
+  controlResponseDelivered,
+  waitForFakeCliExit,
+} from './log-wait.js';
 
 /**
  * **`RunnerSession` を、本物の SDK の `query()` と偽 CLI（`./fake-cli.mjs`）
@@ -48,13 +53,12 @@ import type { RunnerEvent } from '../runner-protocol.js';
  * - `runner-stop-finish-order.test.ts` が固定している「経路A（`stop()`）と
  *   経路B（`#finish` 自然終了）で並びが同じか」は、ここでは経路A（`stop()`）
  *   しか踏んでいない
- * - タイミングの数値（`FAKE_CLI_EXIT_AFTER_MS` 等）は `real-sdk-close-timing.
- *   test.ts` の doc と同じ断りが掛かる
+ * - タイミングの数値・「偽 CLI が早く死んだだけ」との区別（`assertHealthyFakeCliExit`）
+ *   は `real-sdk-close-timing.test.ts` の doc と同じ断りが掛かる——ここでは
+ *   `FAKE_CLI_EXIT_AFTER_MS` を渡していないので、偽 CLI 自身の既定
+ *   （保険として 15000ms。正常系は stdin end で先に終わる）がそのまま効く
  */
 const FAKE_CLI_PATH = fileURLToPath(new URL('./fake-cli.mjs', import.meta.url));
-
-/** 偽 CLI に自分から寿命を切らせるまでの時間。短いほど1本あたりの実行時間が縮む。 */
-const FAKE_CLI_EXIT_AFTER_MS = 400;
 
 /** `buildManagerSessionOptions` が組み立てた `Options` はそのまま通し、`pathToClaudeCodeExecutable` / `env` だけ上書きする。 */
 function wrapQueryFnForFakeCli(logPath: string): typeof sdkQuery {
@@ -69,16 +73,10 @@ function wrapQueryFnForFakeCli(logPath: string): typeof sdkQuery {
           ...(options.env ?? process.env),
           FAKE_CLI_LOG: logPath,
           FAKE_CLI_ASK_REQUEST_ID: 'ask-1',
-          FAKE_CLI_EXIT_AFTER_MS: String(FAKE_CLI_EXIT_AFTER_MS),
         },
       },
     });
   }) as unknown as typeof sdkQuery;
-}
-
-function delivered(logPath: string): boolean {
-  if (!existsSync(logPath)) return false;
-  return readFileSync(logPath, 'utf8').includes('GOT_CONTROL_RESPONSE request_id=ask-1');
 }
 
 let hosts: RunnerHost[] = [];
@@ -128,8 +126,13 @@ describe('RunnerSession を通した stop(): settled.withdrawn と「CLI へ届�
     expect(settledEvent).toBeDefined();
     expect(settledEvent?.withdrawn?.reason).toBeTruthy();
 
+    // **足場が壊れていないことを、届いたかを見る前に確かめる**（レビュー
+    // 指摘。`real-sdk-close-timing.test.ts` の doc と同じ理由）。
+    const log = await waitForFakeCliExit(logPath);
+    assertHealthyFakeCliExit(log);
+
     expect(
-      delivered(logPath),
+      controlResponseDelivered(log),
       'SDK の内部が変わった。#1596 の withdrawn の前提（settle → close() を await なしで並べると ' +
         'control_response が CLI へ届かない）を見直せ。',
     ).toBe(false);

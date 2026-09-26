@@ -17,22 +17,30 @@
 // （`fs.appendFileSync` — 読み手（テスト側）が読みに来た時点で必ずディスクに
 // 出ていることを、非同期バッファリングに頼らず保証するため）。
 //
-// **このプロセスは自分から寿命を区切る。** 本物の SDK の `close()` は
-// stdin を閉じてから2秒待って生きていれば SIGTERM、さらに5秒待って
-// SIGKILL という「やわらかい停止」を取るが（Issue #1533 の実測）、この
-// 足場はそれに付き合わない — `FAKE_CLI_EXIT_AFTER_MS`（既定 800ms）が
-// 来たら自分から `process.exit(0)` する。**この寿命は測っている前提
-// （cleanupPerformed の窓）とは無関係である** — 答えが書き込まれるかどうか
-// は「もう書かない」と決まる瞬間（`cleanupPerformed` が立つ瞬間、SDK 側の
-// 同期処理）で確定しており、CLI 側のプロセスがいつ死ぬかには依存しない
-// （届く経路では、届いた後にいつ死のうと結果は変わらない）。自分で寿命を
-// 切ることで、テスト1本ごとに本物の停止シーケンスの数秒を払わずに済む。
+// **このプロセスは stdin の EOF（＝ SDK の `close()` が `processStdin.end()`
+// を呼んだ合図）を受けたら、そこで自分から終わる。** 本物の SDK の
+// `close()` は stdin を閉じてから2秒待って生きていれば SIGTERM、さらに
+// 5秒待って SIGKILL という「やわらかい停止」を取るが（Issue #1533 の実測）、
+// この足場はそれに付き合わない——`STDIN_END` をログへ書いてすぐ
+// `process.exit(0)` する。**この終わり方は測っている前提（cleanupPerformed
+// の窓）とは無関係である** — 答えが書き込まれるかどうかは「もう書かない」と
+// 決まる瞬間（`cleanupPerformed` が立つ瞬間、SDK 側の同期処理）で確定して
+// おり、CLI 側のプロセスがいつ死ぬかには依存しない（届く経路では、届いた
+// 後にいつ死のうと結果は変わらない）。
+//
+// **固定寿命（`FAKE_CLI_EXIT_AFTER_MS`）はぶら下がり防止の保険としてだけ
+// 残す。** 既定を長く取ってある（15000ms）——CI が混んでいて起動や SDK の
+// 初期化が遅れても、stdin end より先にこの保険が発火してしまわないように
+// する。**もしこの保険で終わったら `EXIT_BY_LIFETIME` をログへ書く**——
+// これが出た回は「stdin end で終わった」という前提そのものが崩れているので、
+// 読み手（テスト側）はそれを「届いていない」の証拠として使わず、足場が
+// 壊れていると読むこと。
 //
 // 環境変数:
 //  FAKE_CLI_LOG           - 受信・送信した行を1行ずつ追記するファイル（必須）
 //  FAKE_CLI_ASK_REQUEST_ID - 送る can_use_tool の request_id（既定 'ask-1'）
 //  FAKE_CLI_ASK_DELAY_MS   - initialize 応答後、can_use_tool を送るまでの遅延（既定 0）
-//  FAKE_CLI_EXIT_AFTER_MS  - 自分から終了するまでの時間（既定 800）
+//  FAKE_CLI_EXIT_AFTER_MS  - 保険の寿命（既定 15000。stdin end で先に終わるのが正常系）
 
 import fs from 'node:fs';
 import process from 'node:process';
@@ -59,7 +67,7 @@ log(`PID ${process.pid}`);
 
 const askRequestId = process.env.FAKE_CLI_ASK_REQUEST_ID ?? 'ask-1';
 const askDelayMs = Number(process.env.FAKE_CLI_ASK_DELAY_MS ?? '0');
-const exitAfterMs = Number(process.env.FAKE_CLI_EXIT_AFTER_MS ?? '800');
+const exitAfterMs = Number(process.env.FAKE_CLI_EXIT_AFTER_MS ?? '15000');
 
 const rl = readline.createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
 
@@ -67,6 +75,9 @@ let sentAsk = false;
 function sendAskOnce() {
   if (sentAsk) return;
   sentAsk = true;
+  // **読み手（テスト側）が「ask を送った」ことを、生の control_request の
+  // JSON を解かずに確かめられるようにする専用のマーカー行。**
+  log(`ASK_SENT request_id=${askRequestId}`);
   send({
     type: 'control_request',
     request_id: askRequestId,
@@ -115,8 +126,12 @@ rl.on('line', (line) => {
   }
 });
 
+// **正常系の終わり方。** SDK の close() が stdin を閉じた合図（EOF）を
+// 受けたら、ここでログへ書いてすぐ終わる——本物の SDK の「やわらかい停止」
+// （2秒+5秒）を待たない（ファイル冒頭の doc）。
 process.stdin.on('end', () => {
   log('STDIN_END');
+  process.exit(0);
 });
 
 process.on('exit', (code) => {
@@ -128,6 +143,11 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
-// **自分から寿命を切る。** SDK 側の close() の「やわらかい停止」を待たない
-// （ファイル冒頭の doc）。
-setTimeout(() => process.exit(0), exitAfterMs);
+// **保険（ぶら下がり防止）だけの寿命。** 正常系では stdin end が先に効いて
+// ここには来ない——来たら「stdin end で終わった」という前提が崩れている
+// ということなので、読み手が区別できるようマーカーを変える（ファイル冒頭の
+// doc）。
+setTimeout(() => {
+  log('EXIT_BY_LIFETIME');
+  process.exit(0);
+}, exitAfterMs);
