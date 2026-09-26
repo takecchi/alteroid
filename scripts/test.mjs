@@ -61,10 +61,14 @@
  * 無ければ何もしない（root の `pnpm test <パスの一部>` は影響を受けない）。
  * `--scope` は在るが利用者の位置引数が無ければ、範囲そのものが唯一のフィルタ
  * になる（旧来の既定と同じ、パッケージ全体を走らせる）。**両方在れば**、
- * 利用者の位置引数を「打った場所（パッケージのディレクトリ）」から repo の
- * 根からのパスへ直し、**範囲の外を指すものが1つでもあれば断る**（黙って
- * 全体を走らせない）。詳細と実測（`INIT_CWD` ではなく `process.cwd()` を
- * 基準にする理由）は `resolveScopedArgs` の doc に在る。
+ * 各位置引数を、範囲の中のテストファイル一覧に対する**部分一致**で解決する
+ * （vitest の位置引数自体が「パス」ではなく部分一致だから——`path.resolve` で
+ * パスとして直すだけでは `pnpm test -- manager-detail` のような部分一致の
+ * 打ち方を範囲外として誤って断ってしまう。実測は PR 本文）。一致が0件なら、
+ * 黙って全体を走らせたり0本で緑を名乗ったりせず断る（打ったものが `cwd` の
+ * 外を明らかに指しているか、`cwd` の中だが範囲に一致が無いか、で理由を書き
+ * 分ける）。詳細と実測（`INIT_CWD` ではなく `process.cwd()` を基準にする理由
+ * も含む）は `matchScopedPositionals` / `resolveScopedArgs` の doc に在る。
  *
  * ## exit code（8値。混ぜない）
  *
@@ -77,11 +81,11 @@
  * | `EXIT_SCAN_EMPTY`（5）              | 歯B/歯C: 走査対象が0ファイル（判定できない）       |
  * | `EXIT_OBSERVATION_UNDECLARED`（6）  | 歯C: 観測用テストの終了条件／見直し期限が無い、または書式が壊れている |
  * | `EXIT_OBSERVATION_DUE`（7）         | 歯C: 観測用テストの見直し期限を過ぎた              |
- * | `EXIT_SCOPE_VIOLATION`（8）         | `--scope` の範囲外を指す位置引数を検出（#1691）    |
+ * | `EXIT_SCOPE_VIOLATION`（8）         | `--scope` の範囲外を指す位置引数、または範囲の中に部分一致するテストが無い位置引数を検出（#1691） |
  *
- * `EXIT_SCOPE_VIOLATION` は vitest を起こす**前**に判定する（範囲外のパスを
- * vitest へ渡してもエラーにはならず「一致なし」で静かに空振りするだけなので、
- * vitest 側の判定に委ねられない）。歯A/歯B/歯Cは vitest が exit 0 を返した
+ * `EXIT_SCOPE_VIOLATION` は vitest を起こす**前**に判定する（範囲外・一致無しの
+ * パスを vitest へ渡してもエラーにはならず「一致なし」で静かに空振りするだけ
+ * なので、vitest 側の判定に委ねられない）。歯A/歯B/歯Cは vitest が exit 0 を返した
  * 後にしか判定しない。**vitest が非0で落ちたら、ラッパの検査は一切走らせず、
  * その exit code をそのまま返す**（「自分の検査は通った」で上書きしない）。
  * **ラッパ自身が例外で落ちたときも exit 0 にはならない**（末尾の
@@ -129,9 +133,10 @@ function runVitest(args) {
 async function main() {
   const args = dropBareDashDash(process.argv.slice(2));
 
-  // #1691: `--scope` の範囲外を指す位置引数は、vitest へ渡す前に断る（渡すと
-  // 「一致なし」で静かに空振りするだけで、範囲外だと分かる材料が出ない）。
-  const scoped = resolveScopedArgs(args, { cwd: process.cwd(), repoRoot: ROOT });
+  // #1691: `--scope` の範囲外・範囲内に部分一致するテストが無い位置引数は、
+  // vitest へ渡す前に断る（渡すと「一致なし」で静かに空振りするだけで、
+  // 範囲外だと分かる材料が出ない）。
+  const scoped = await resolveScopedArgs(args, { cwd: process.cwd(), repoRoot: ROOT });
   if (!scoped.ok) {
     process.stderr.write(`\n${scoped.message}\n`);
     process.exitCode = scoped.exitCode;
