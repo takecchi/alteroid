@@ -178,8 +178,24 @@ export const STATEMENTS = [
      granted_by text
    )`,
   // email は null を許す（未検証・衝突時は入れない）。PostgreSQL の unique は
-  // null を重複と見なさないので、これで「検証済みメールは高々1アカウント」になる。
-  `create unique index if not exists auth_accounts_email_idx on auth_accounts (email)`,
+  // null を重複と見なさないので、これで「検証済みメールは高々1アカウント」になる
+  // ——この不変条件を持つ索引は、いまは `auth_accounts_email_lower_idx`
+  // （`lower(email)`。#1702）である。
+  //
+  // ⚠️ **ここに `create unique index if not exists auth_accounts_email_idx on
+  // auth_accounts (email)`（大小文字を区別する旧索引）が在った。** #1702（メール
+  // の大小文字は区別しないというオーナー決定）で `auth_accounts_email_lower_idx`
+  // へ差し替え、直上の「古い鍵の `create` は配列から消す」に従って**この create
+  // は消してある** — 残すと、次の起動で本当に作りに行き
+  // `could not create unique index … is duplicated` でデーモンが上がらなくなる。
+  // 新しい鍵は無条件には作れない（既存の重複行がありうる）ので `STATEMENTS` には
+  // 置かず、`ensureAuthAccountsEmailLowerIndex`（`migrate` から呼ぶ）が重複を
+  // 数えてから作る。**旧索引の drop も同じ関数の中に置いた**（`STATEMENTS` の
+  // 末尾には置いていない）——`auth_accounts_single_owner_idx` の場合と違い、
+  // 旧索引は「検証済みメールは高々1アカウント」を守る現役の鍵なので、新しい鍵が
+  // 実際に作れる（＝重複が無い）ことを確かめてから外す必要がある。先に外すと、
+  // 新しい鍵ができるまでの間、大小文字だけが違う重複を DB が拒めなくなる。
+  //
   // ⚠️ **ここに `auth_accounts_single_owner_idx`（持ち主を1行に絞る部分一意索引）を
   // 作る文が在った。2026-09-09 のオーナー決定で落とし、この配列の末尾へ drop を
   // 置いた。** 直上の「古い鍵の `create` は配列から消す」に従って**この create は
@@ -797,12 +813,130 @@ export async function ensureOpenManagerBodyIndex(
   }
 }
 
+/** `ensureAuthAccountsEmailLowerIndex` が作る一意索引の名前（issue #1702）。 */
+export const AUTH_ACCOUNTS_EMAIL_LOWER_INDEX = 'auth_accounts_email_lower_idx';
+
+/**
+ * 大小文字を区別する旧索引の名前。#1702 で `AUTH_ACCOUNTS_EMAIL_LOWER_INDEX` へ
+ * 差し替えた。`STATEMENTS` からは create を消してあるので、この名前が新たに
+ * 作られることはない——ここに残っているのは `ensureAuthAccountsEmailLowerIndex`
+ * が drop する対象を指すためだけである。
+ */
+const AUTH_ACCOUNTS_EMAIL_IDX = 'auth_accounts_email_idx';
+
+const CREATE_AUTH_ACCOUNTS_EMAIL_LOWER_INDEX = `create unique index if not exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}
+   on auth_accounts (lower(email))`;
+
+/** `ensureAuthAccountsEmailLowerIndex` が見つけた、索引を作れなくする重複の1組。 */
+export interface AuthAccountsEmailLowerDuplicate {
+  readonly ids: readonly string[];
+}
+
+/** 索引が既に在るか（`pg_class` を1行引くだけ。台帳には触らない）。 */
+async function hasAuthAccountsEmailLowerIndex(db: Db): Promise<boolean> {
+  const result = await db.execute(
+    sql`select 1 from pg_class where relname = ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`,
+  );
+  return rowsOf(result).length > 0;
+}
+
+/**
+ * 索引を作れなくする重複（`email is not null` の行を `lower(email)` で group by
+ * して count > 1 になった組）を数える。
+ */
+export async function findAuthAccountsEmailLowerDuplicates(
+  db: Db,
+): Promise<AuthAccountsEmailLowerDuplicate[]> {
+  const result = await db.execute(sql`
+    select array_agg(id order by created_at asc, id asc) as ids
+    from auth_accounts
+    where email is not null
+    group by lower(email)
+    having count(*) > 1
+    order by count(*) desc
+  `);
+  return rowsOf(result).map((row) => {
+    const value = row as { ids: string[] };
+    return { ids: value.ids };
+  });
+}
+
+/**
+ * 索引を作る。**ただし既存の重複が在るなら作らず、逐語で警告して進む（issue #1702）。**
+ *
+ * `ensureOpenManagerBodyIndex`（issue #1041）と同じ形の判断——
+ *
+ * ## ⛔ 重複を黙って畳まない
+ *
+ * 「大小文字だけが違う2アカウントのうち、古いほうだけ残す」という直し方は採らない。
+ * どちらのアカウントが本物か（あるいは両方とも本物で、統合すべきかどうか）は
+ * 器では決められない——人間が読んで決める。
+ *
+ * ## ⛔ かといって落とさない（起動を止めない）
+ *
+ * 既存の重複行が在ること自体は危険ではない（大小文字だけが違う2つの検証済み
+ * メールが、それぞれ別のアカウントに乗っているだけである）。ここで投げれば
+ * `migrate` が落ち、**デーモンが上がらなくなる。**
+ *
+ * ## ⟹ 索引を作らずに警告して進む
+ *
+ * 何が失われるかを正確に言う：**旧索引（`auth_accounts_email_idx`。大小文字を
+ * 区別する）は残したままにする**ので、大小文字まで完全に同じメールの重複は
+ * これまでどおり DB が拒む。無くなるのは「大小文字だけが違う」重複を拒む段
+ * だけである。
+ *
+ * **順序は「新しい鍵ができることを確かめてから → 古い鍵を外す」。** 重複が無い
+ * ときだけ新しい鍵を作り、**作れたことを確認した直後に**旧索引を drop する
+ * （`migrate.ts` 冒頭の doc「列を足す→新しい鍵→古い鍵を外す」と同じ順序）。
+ * 先に外すと、新しい鍵ができるまでの間、大小文字だけが違う重複を DB が一切
+ * 拒めない空白ができる。
+ *
+ * **警告には件数と id を逐語で載せる。メールアドレスそのものは載せない**
+ * （ログへ個人情報を出さない）。人間がその id を `getAccount` 等で引いて、
+ * 自分でメールを直すか空にするかを決められる材料をここで渡す。次の起動で
+ * 重複が無くなっていれば、索引は黙って作られる。
+ */
+export async function ensureAuthAccountsEmailLowerIndex(
+  db: Db,
+  warn: (line: string) => void,
+): Promise<void> {
+  // **新しい鍵が既に在るなら、台帳を1行も走査しない。** ここは起動のたびに通る
+  // ので、重複を数える意味が無い（新しい鍵が在る＝重複はもう作れない）。
+  // `ensureOpenManagerBodyIndex` と同じ理由。旧索引がまだ残っていれば、
+  // ここで drop する（新しい鍵ができた後に残った旧索引の後始末）。
+  if (await hasAuthAccountsEmailLowerIndex(db)) {
+    await db.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_IDX}`));
+    return;
+  }
+  const duplicates = await findAuthAccountsEmailLowerDuplicates(db);
+  if (duplicates.length === 0) {
+    await db.execute(sql.raw(CREATE_AUTH_ACCOUNTS_EMAIL_LOWER_INDEX));
+    await db.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_IDX}`));
+    return;
+  }
+  const rows = duplicates.reduce((total, group) => total + group.ids.length, 0);
+  warn(
+    `alteroid: auth_accounts に大小文字だけが違う検証済みメールの重複がある` +
+      `（${duplicates.length} 組 / ${rows} 行）。` +
+      `${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX} を作らずに起動する（#1702）。` +
+      `旧索引（${AUTH_ACCOUNTS_EMAIL_IDX}）は残したままなので、大小文字まで完全に` +
+      `同じメールの重複はこれまでどおり DB が拒む。` +
+      `重複を人間が直せば（例: 片方のアカウントのメールを空にする）、` +
+      `次の起動で索引は作られる。\n`,
+  );
+  for (const group of duplicates) {
+    warn(`alteroid:   ids=${group.ids.join(', ')}\n`);
+  }
+}
+
 /**
  * スキーマを用意する。**起動のたびに通る。**
  *
- * `STATEMENTS` を頭から当てたあと、**無条件には当てられない1文**だけを
- * {@link ensureOpenManagerBodyIndex} が条件付きで当てる（issue #1041。既存の
- * 重複行が在ると索引が作れず、作りにいけば起動そのものが落ちる）。
+ * `STATEMENTS` を頭から当てたあと、**無条件には当てられない文**を条件付きで
+ * 当てる — {@link ensureOpenManagerBodyIndex}（issue #1041。既存の重複行が
+ * 在ると索引が作れず、作りにいけば起動そのものが落ちる）と
+ * {@link ensureAuthAccountsEmailLowerIndex}（issue #1702。大小文字だけが違う
+ * 検証済みメールの重複があると同様に落ちる）の2つ。
  *
  * **`warn` を差し替えられるのはテストのためである。** 既定は stderr
  * （`index.ts` の接続エラーと同じ口）。警告が出たことと、その逐語を歯で測れないと、
@@ -816,4 +950,5 @@ export async function migrate(
     await db.execute(sql.raw(statement));
   }
   await ensureOpenManagerBodyIndex(db, warn);
+  await ensureAuthAccountsEmailLowerIndex(db, warn);
 }

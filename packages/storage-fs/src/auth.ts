@@ -128,8 +128,9 @@ export class FsAuthStore implements AuthStore {
     // 大小文字を区別しない（#1702）。memory / pg の実装と同じ規約。
     const needle = email.toLowerCase();
     return (
-      accounts.find((account) => account.email !== null && account.email.toLowerCase() === needle) ??
-      null
+      accounts.find(
+        (account) => account.email !== null && account.email.toLowerCase() === needle,
+      ) ?? null
     );
   }
 

@@ -466,7 +466,21 @@ export const authAccounts = pgTable(
     ownerDeclaredAt: timestamp('owner_declared_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
-    uniqueIndex('auth_accounts_email_idx').on(table.email),
+    /**
+     * **⚠️ この索引だけは `migrate` が無条件には作らない。** メールの大小文字は
+     * 区別しない（#1702）ので、鍵は `lower(email)`。既存の重複行（大小文字だけが
+     * 違う2行）が在ると作成そのものが落ち、起動のたびに通る `STATEMENTS` に
+     * 置けば**デーモンが二度と上がらなくなる**ので、
+     * `ensureAuthAccountsEmailLowerIndex` が重複を数えてから作る
+     * （在れば作らずに警告して進む。`commitments_open_manager_body_idx` と
+     * 同じ形）。⟹ **在る DB と無い DB が両方ありうる。**
+     *
+     * 旧索引 `auth_accounts_email_idx`（大小文字を区別する。email だけの鍵）は
+     * `migrate.ts` の側で drop する（2026-09-09 に落とした
+     * `auth_accounts_single_owner_idx` と同じ「create は配列から消し、drop だけ
+     * 残す」の形）。
+     */
+    uniqueIndex('auth_accounts_email_lower_idx').on(sql`lower(${table.email})`),
     // ⚠️ **`auth_accounts_single_owner_idx`（granted_at が入る行をテーブル全体で
     // 1行に絞る部分一意索引）が在った。2026-09-09 のオーナー決定で落とした。**
     // `migrate.ts` の側は create を消して drop を足してある（残すと次の起動で

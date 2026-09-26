@@ -3,14 +3,16 @@ import { eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { PgAuthStore } from './auth.js';
 import type { Db } from './db.js';
 import {
+  AUTH_ACCOUNTS_EMAIL_LOWER_INDEX,
   ensureOpenManagerBodyIndex,
   migrate,
   OPEN_MANAGER_BODY_INDEX,
   STATEMENTS,
 } from './migrate.js';
-import { archive, commitments } from './schema.js';
+import { archive, authAccounts, commitments } from './schema.js';
 
 /**
  * **`migrate` の配列そのものを構造で見る歯。**
@@ -357,5 +359,150 @@ describe('migrate（台帳の畳み込みの索引。#1041）', () => {
     await managerRow('row-2', '二言め');
     await migrate(db);
     expect(await indexExists()).toBe(true);
+  }, 30_000);
+});
+
+/**
+ * **`auth_accounts_email_lower_idx`（メールの大小文字を区別しない一意索引。issue #1702）。**
+ *
+ * `commitments_open_manager_body_idx`（#1041、直上）と同じ形の判断——既存の
+ * 重複行が1組でも在ると `create unique index` は落ちるので、この文を
+ * `STATEMENTS` に無条件で置けば**デーモンが二度と上がらなくなる**。
+ * `ensureAuthAccountsEmailLowerIndex` が重複を数えてから作る。
+ *
+ * ここでの重複は「大小文字だけが違う検証済みメールを持つ2アカウント」——
+ * #1702 以前（旧索引 `auth_accounts_email_idx` だけが在り、大小文字を区別する）
+ * の DB にだけ実在しうる状態である。**旧形式の DB は自分で作る**（`makeOldFormatDb`）
+ * ——空の DB へ `migrate` を通すと新索引がいきなり作られてしまい、この状態を
+ * 再現できない（AGENTS.md「2回通しても壊れないを測るテストは…状態を挟む」と
+ * 同じ理由——ここで挟むのは「新索引ができる前の、旧索引だけの状態」である）。
+ */
+describe('migrate（auth_accounts のメール大小文字索引。#1702）', () => {
+  let client: PGlite;
+  let db: Db;
+
+  /** #1702 で `AUTH_ACCOUNTS_EMAIL_LOWER_INDEX` へ差し替えられた旧索引の名前。 */
+  const OLD_INDEX = 'auth_accounts_email_idx';
+
+  const indexExists = async (name: string): Promise<boolean> => {
+    const result = await db.execute(sql`select 1 from pg_class where relname = ${name}`);
+    const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
+    return rows.length > 0;
+  };
+
+  /**
+   * **#1702 以前の DB（旧索引だけが在る）を自分で作る。** `migrate` を素直に
+   * 通すと新索引がその場で作られてしまうので、通した直後に新索引を drop し、
+   * 旧索引（大小文字を区別する、`email` だけの鍵）を手で作り直す。
+   */
+  const makeOldFormatDb = async (): Promise<void> => {
+    await migrate(db);
+    await db.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`));
+    await db.execute(
+      sql.raw(`create unique index if not exists ${OLD_INDEX} on auth_accounts (email)`),
+    );
+  };
+
+  const insertAccount = (id: string, email: string | null) =>
+    db.insert(authAccounts).values({ id, email, createdAt: new Date('2026-09-27T00:00:00.000Z') });
+
+  beforeEach(async () => {
+    client = new PGlite();
+    db = drizzle(client);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it('空の DB から migrate すると、新索引が在り旧索引は無い', async () => {
+    await migrate(db);
+    expect(await indexExists(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX)).toBe(true);
+    expect(await indexExists(OLD_INDEX)).toBe(false);
+  }, 30_000);
+
+  it('⭐ 旧形式の DB に大小文字だけ違う2行があっても migrate は落ちない —— 索引を作らず、件数と id を逐語で警告する（メールは載せない）', async () => {
+    await makeOldFormatDb();
+    await insertAccount('acc-a', 'alice@example.test');
+    await insertAccount('acc-b', 'ALICE@EXAMPLE.TEST');
+
+    const warnings: string[] = [];
+    await expect(migrate(db, (line) => warnings.push(line))).resolves.toBeUndefined();
+
+    // 落ちない。しかし新索引は作られておらず、旧索引は残ったまま。
+    expect(await indexExists(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX)).toBe(false);
+    expect(await indexExists(OLD_INDEX)).toBe(true);
+
+    const warned = warnings.join('');
+    expect(warned).toContain('1 組 / 2 行');
+    expect(warned).toContain('acc-a, acc-b');
+    expect(warned).toContain(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX);
+    expect(warned).toContain('#1702');
+    // メールアドレスそのものはログに出さない（個人情報をログへ出さない）。
+    expect(warned).not.toContain('alice@example.test');
+    expect(warned).not.toContain('ALICE@EXAMPLE.TEST');
+
+    // ⛔ 器が勝手に統合・削除していない（2行とも無傷のまま）
+    const rows = await db
+      .select({ id: authAccounts.id, email: authAccounts.email })
+      .from(authAccounts);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.id === 'acc-a')?.email).toBe('alice@example.test');
+    expect(rows.find((row) => row.id === 'acc-b')?.email).toBe('ALICE@EXAMPLE.TEST');
+  }, 30_000);
+
+  it('⭐ 重複が片付けば（片方のメールを空にする）、次の起動で新索引が在り旧索引は無くなる', async () => {
+    await makeOldFormatDb();
+    await insertAccount('acc-a', 'alice@example.test');
+    await insertAccount('acc-b', 'ALICE@EXAMPLE.TEST');
+    await migrate(db); // まだ重複がある → 何も変わらない
+    expect(await indexExists(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX)).toBe(false);
+
+    // 人間が重複を直した、を模す（器ではなく人間が決めた）
+    await db.update(authAccounts).set({ email: null }).where(eq(authAccounts.id, 'acc-b'));
+
+    const warnings: string[] = [];
+    await migrate(db, (line) => warnings.push(line));
+    expect(await indexExists(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX)).toBe(true);
+    expect(await indexExists(OLD_INDEX)).toBe(false);
+    expect(warnings).toEqual([]);
+  }, 30_000);
+
+  /**
+   * **2周目でだけ壊れる状態を挟む**（`migrate.ts` 冒頭の doc と同じ作法）。
+   * 新索引ができた後に `migrate` をさらに2回通しても落ちないこと、そして
+   * 新索引が実際に効いていること（大小文字違いの行を `putAccount` すると DB が
+   * 拒むこと）までを確かめる——索引の有無だけを見るテストでは「作られたが
+   * 実は何も強制していない」を見落とす。
+   */
+  it('新索引ができた後に migrate をさらに2回通しても落ちず、大小文字違いは putAccount を DB が拒む', async () => {
+    await makeOldFormatDb();
+    await insertAccount('acc-a', 'alice@example.test');
+    await insertAccount('acc-b', 'ALICE@EXAMPLE.TEST');
+    await migrate(db);
+    await db.update(authAccounts).set({ email: null }).where(eq(authAccounts.id, 'acc-b'));
+    await migrate(db);
+    expect(await indexExists(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX)).toBe(true);
+
+    await expect(migrate(db)).resolves.toBeUndefined();
+    await expect(migrate(db)).resolves.toBeUndefined();
+    expect(await indexExists(AUTH_ACCOUNTS_EMAIL_LOWER_INDEX)).toBe(true);
+    expect(await indexExists(OLD_INDEX)).toBe(false);
+
+    const store = new PgAuthStore(db);
+    // acc-a はまだ alice@example.test を持っている。大小文字だけが違う
+    // メールを持つ新しいアカウントを putAccount すると、新索引が拒むはず。
+    await expect(
+      store.putAccount({
+        id: 'acc-c',
+        displayName: null,
+        email: 'ALICE@EXAMPLE.TEST',
+        createdAt: '2026-09-27T00:00:02.000Z',
+        lastLoginAt: null,
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      }),
+    ).rejects.toThrow();
   }, 30_000);
 });
