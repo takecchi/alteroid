@@ -191,6 +191,14 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
    * （参照 → 脚注、戻るリンク → 参照）で見る。あわせて GFM が脚注に付ける
    * 属性（`data-footnote-ref` / `data-footnote-backref` / `aria-describedby` /
    * `aria-label`）と `clobberPrefix`（`user-content-`）が保たれることも見る。
+   *
+   * ⚠️ **レビューで見つかった2点目（同じ「脚注のリンクが死ぬ」穴）**:
+   * `id` を通しただけでは、`components.a` がどのリンクにも付けている
+   * `target="_blank"` がそのまま残り、脚注の参照・戻るリンクを押すと
+   * 新しいタブで SPA を読み直す形になっていた——本文が非同期に描かれる前
+   * なので、飛ぶ先の要素がまだ無く、同じ画面の中の移動にならない。
+   * `#` で始まる（同じ文書内を指す）リンクには `target` / `rel` を
+   * 付けないことも、ここで固定する。
    */
   it('本文中の参照と末尾の脚注が、id で相互に辿れる（死んだリンクにならない）', async () => {
     const md = ['Here is a note[^1].', '', '[^1]: The note text.'].join('\n');
@@ -206,6 +214,12 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
     expect(ref?.getAttribute('id')).toBe('user-content-fnref-1');
     expect(ref?.getAttribute('data-footnote-ref')).toBe('true');
     expect(ref?.getAttribute('aria-describedby')).toBe('footnote-label');
+
+    // 同じ文書内（`#` で始まる href）を指すので、新しいタブを開かないこと。
+    // 新しいタブで開くと、そこでは本文がまだ非同期で描かれていないので
+    // 飛ぶ先が無く、同じ画面の中の移動にならない。
+    expect(ref?.getAttribute('target')).toBeNull();
+    expect(ref?.getAttribute('rel')).toBeNull();
 
     // 押した先（href が指す id）が実在すること。無いと「死んだリンク」になる。
     const refTargetId = ref!.getAttribute('href')!.slice(1);
@@ -234,6 +248,10 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
     expect(backref?.textContent).toBe('↩');
     expect(backref?.getAttribute('data-footnote-backref')).toBe('');
     expect(backref?.getAttribute('aria-label')).toBe('Back to reference 1');
+
+    // 戻るリンクも同じ文書内を指すので、新しいタブを開かないこと。
+    expect(backref?.getAttribute('target')).toBeNull();
+    expect(backref?.getAttribute('rel')).toBeNull();
 
     // 戻るリンクの押した先（本文の参照そのもの）が実在すること。
     const backrefTargetId = backref!.getAttribute('href')!.slice(1);

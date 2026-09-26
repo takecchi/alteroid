@@ -221,6 +221,19 @@ const components: Components = {
     // だけをこの形で足す。`clobberPrefix`（既定 `user-content-`）は
     // `remarkRehypeOptions` を渡していないので `mdast-util-to-hast` の既定
     // のまま外していない。
+    //
+    // **`#` で始まる href（同じ文書内を指すリンク）には `target` / `rel` を
+    // 付けない。** GFM の脚注の参照（`#user-content-fn-N`）・戻るリンク
+    // （`#user-content-fnref-N`）はどちらもこの形。`target="_blank"` を
+    // 付けたままだと、押すたびに SPA を新しいタブで読み直すことになり、
+    // その新しいタブでは本文がまだ非同期に描かれる前で飛ぶ先の要素が無い
+    // ——「id を通しただけ」では直らない、同じ「脚注のリンクが死ぬ」穴の
+    // 別の形（2026-09-26 レビュー指摘）。**判定は `href` の先頭が `#` かだけ
+    // で行い、URL を解釈して「同じ origin か」を見る形にはしない**
+    // （below の `defaultUrlTransform` 由来の危険な URL 無効化——`href` は
+    // 既にそこを通った後の値なので、ここで URL 解釈を増やすと安全性の判断
+    // 経路が2つに増える）。外部リンクの扱い（`_blank` / `noreferrer
+    // noopener`）はそれ以外のすべての href で変えていない。
     <a
       href={href}
       id={id}
@@ -228,8 +241,8 @@ const components: Components = {
       aria-label={ariaLabel}
       data-footnote-ref={dataFootnoteRef}
       data-footnote-backref={dataFootnoteBackref}
-      target="_blank"
-      rel="noreferrer noopener"
+      target={href?.startsWith('#') ? undefined : '_blank'}
+      rel={href?.startsWith('#') ? undefined : 'noreferrer noopener'}
       className="break-words text-accent hover:underline"
     >
       {children}
