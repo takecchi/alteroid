@@ -17,9 +17,9 @@ import { describeAuthFailure, resolveTarget } from './target.js';
  * ターンを止める副作用のある操作なので、`reset.ts` / `access.ts` / `token.ts` と
  * 同じく、401/403/5xx のどれでも握り潰さない（#1621。以前はここで `stdout.write`
  * して正常 return していたため、認証切れやデーモンの内部エラーでも終了コードが
- * 0 になり、スクリプトや cron から失敗を検知できなかった——
- * `grep -Fn -- 'スクリプトや cron から失敗を検知できない' apps/cli/src/inbox.ts`
- * と同じ理由）。
+ * 0 になり、スクリプトや cron から失敗を検知できなかった——`inbox.ts` の
+ * `inboxRemoveCommand` が同じ理由を書いている（逐語は
+ * `grep -Fn -- 'は全部この形である' apps/cli/src/inbox.ts`）。
  *
  * **401/403 は `describeAuthFailure` に判定を委ねる。** `/clone/interrupt` の資格は
  * `authenticate` だけ（`requireOperator` / `requireOwner` は付いていない —
