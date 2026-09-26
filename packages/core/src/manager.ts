@@ -6809,8 +6809,17 @@ class Pool implements ManagerPool {
          * **貸し出しの解放だけは永続化する。** ここを persist しないと、
          * 下の3が呼ぶ `#reattach` は期限が切れるまで移送を待つ——せっかく
          * ここで返した貸し出しが、台帳には残ったままになる。
+         *
+         * **`attached` も確かめた事実で訂正する**（`abort()` と同じ）。runner に
+         * セッションが無いことをここで確かめたのに古い `true` を残すと、移送先が
+         * 無い drain（runner が1台だけ）では委譲がこの runner に紐づいたまま残り、
+         * 一覧は `live: true` を名乗り続けていた。`sessionMissingKind` は立てない
+         * —— 意図して止めたのであって、resume に失敗したのではない。
          */
-        if (outcome === 'stopped') await this.#persist(record);
+        if (outcome === 'stopped') {
+          record.attached = false;
+          await this.#persist(record);
+        }
       }
     }
 
