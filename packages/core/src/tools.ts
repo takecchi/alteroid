@@ -6345,10 +6345,7 @@ export function createCloneTools(context: ToolContext) {
         // 保存層（fs / pg の `scheduledRequestSchema.parse(entry)` 経由の
         // `scheduleSpecSchema`）へは不正な値を1文字も渡さない。doc は
         // `everyMinutes` の入力スキーマ側にある。
-        if (
-          everyMinutes !== undefined &&
-          (!Number.isInteger(everyMinutes) || everyMinutes < 1)
-        ) {
+        if (everyMinutes !== undefined && (!Number.isInteger(everyMinutes) || everyMinutes < 1)) {
           return text(`everyMinutes ${everyMinutes} は使えない（1以上の整数のみ）。`);
         }
 
