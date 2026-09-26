@@ -533,3 +533,35 @@ describe('startArchiveFolding（issue #698）', () => {
     expect(listCalls).toBe(after);
   });
 });
+
+/**
+ * **選んだ後に他経路が先に消していた行は、`raced` に数え、畳んだことにしない。**
+ * `remove()` は本文だけを墓標にするので、他経路が先に消していた回は `already` を返す。
+ * 以前は `missing` だけを `raced` に数え、`already` の行を「畳んだ」に数えていた。
+ */
+describe('foldArchiveOnce — 選んだ後に他経路が消していた行', () => {
+  it('remove() が already を返した行は raced に数え、folded に入れない', async () => {
+    const stores = createMemoryStores();
+    const row1 = await stores.archive.archive('sess-race', 'A'.repeat(40));
+    const row2 = await stores.archive.archive('sess-race', 'A'.repeat(40) + 'B'.repeat(40));
+    expect(row2.continuity).toBe('continues');
+
+    const originalRemove = stores.archive.remove.bind(stores.archive);
+    let armed = true;
+    stores.archive.remove = async (id: string) => {
+      if (id === row1.id && armed) {
+        armed = false;
+        await originalRemove(id); // 他経路が先に消した
+      }
+      return originalRemove(id);
+    };
+
+    const result = await foldArchiveOnce({ stores, managers: noRunningManagers, now: FAR_FUTURE });
+    assertInvariant(result);
+
+    expect(result.raced).toBe(1);
+    expect(result.folded).toBe(0);
+    expect((await stores.archive.read(row1.id)).kind).toBe('removed');
+    expect((await stores.archive.read(row2.id)).kind).toBe('body');
+  });
+});
