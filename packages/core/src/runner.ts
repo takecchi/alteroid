@@ -2925,16 +2925,33 @@ class RunnerSession {
             // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
             // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
             // 1つ増える** —— その影響は測っていないので、この変更には含めない。
-            void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
-              (error: unknown) => {
-                noteBackgroundFailure(
-                  'セッションの片付け',
-                  `managerId=${this.#id} outcome=lost`,
-                  error,
-                );
-                throw error;
-              },
-            );
+            //
+            // **`#stopped` なら、ここで `#finish` を呼ばない（#1597）。** 待たずに
+            // 発火する `void this.#finish('lost', …)` は、resume 直後（まだ一度も
+            // 手が動いていない）に結果なしの result が来て `unresumable` と判定
+            // されたとき、await を挟まず `stop()` が重なると `stop()` と競合する。
+            // `stop()` は `#stopped = true` を立ててから自分で畳み一式
+            // （`#closeWorkerWaitWindow` / `#settleAll` / `#shipArchive` /
+            // `#flushUnreported` / `#onClosed()`）を行い、`closed` を出さないと
+            // 決めている（doc「あちらは closed すら出さない」）。ここで無条件に
+            // `#finish('lost', …)` を発火すると、`stop()` が `host.list()` から
+            // 消した**後**に `closed(status=lost)` が遅れて出てしまう
+            // （Issue #1589 / PR #1590 が `#read` の catch 節に足した門と同じ形の
+            // 穴——あちらは塞いだが、この枝は #1590 の本文が「確かめていない」
+            // として残していた場所そのものである）。**畳むのは `stop()` の仕事
+            // なので、ここは何もしない。**
+            if (!this.#stopped) {
+              void this.#finish('lost', `結果なしで終了: ${resultTextOf(event).text}`).catch(
+                (error: unknown) => {
+                  noteBackgroundFailure(
+                    'セッションの片付け',
+                    `managerId=${this.#id} outcome=lost`,
+                    error,
+                  );
+                  throw error;
+                },
+              );
+            }
             return;
           }
         }
