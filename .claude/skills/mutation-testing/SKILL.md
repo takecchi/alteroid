@@ -666,6 +666,8 @@ JSON:     {"file":"<絶対パス>","ancestorTitles":["外","内"],"title":"赤�
 
 **⟹ 代わりに、`assertAggregateBlocksUnambiguous`（門1）と同じ作法で、`Errors` 行の存在そのものを理由に拒む純関数（`assertNoUnhandledErrorsLine`）を足した。** 門1 の直後・門3（`testsRanCleanly`。当時「門2」と呼んでいた）より前に置く——集計行が「緑に読める」かどうかを見るより先に、その集計ブロックが信用できるかを見るという、門1 と同じ考え方の延長である。`assertAggregateBlocksUnambiguous` と同じ4つの呼び出し元（`decideJudgementCategory` / `足場対照` / `mutate.mjs` の `cmdBaseline` / `cmdRun` の baseline 確認）から呼ぶ。
 
+**⚠️ `exitCode` を見ないことの裏返り——手で `spawnSync` に `timeout` を足して生存/検出を測るときは、`signal` も見ること。** `mutate-core.mjs` の `runTests` は現時点で `spawnSync` へ `timeout` を渡していない（無期限に待つ）ので、この罠はハーネス自身は踏んでいない。**それでも、ハング（本節が扱う `markStopped` / `beginTurn` / `waitForInput` のような遷移の破壊）を手元で疑って `timeout` を足したくなったときのために書いておく**：`timeout` で強制終了された `pnpm` は、**`result.signal` が `'SIGTERM'` 等で立っているのに `result.status`（exit code）が `0` を返すことがある**（#1614 の横断レビューで実測）。`decideJudgementCategory` 系の判定はもともと `exitCode` を見ないので巻き込まれないが、**`exitCode` だけを自分の目で読んで「緑だった」と判定する手当て**をすると、実際には測り切れていない（強制終了された）走行を「生存」と誤って記録する。`result.signal` を必ず併読すること。
+
 ### 意図的な赤を巻き込まないことの対照
 
 `scripts/test-guard-core.mjs` の歯A/B/Cは vitest の外側（`test.mjs`）が追加のメッセージと専用 exit を出す形であって、vitest 自身の集計ブロックへは1行も足さない。実測（歯Bが無条件の `it.skip` を検出、exit 4）:
