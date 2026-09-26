@@ -196,6 +196,23 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
   });
 
   it('歯1: --root <path> を渡すと apply/restore が MARKER_PATH / BACKUP_DIR も含めてそのツリーを使う', () => {
+    // #1705: 「実 ROOT に印が絶対に無い」ではなく「このテストの --root tmp
+    // 呼び出しが実 ROOT の印の状態を変えていない」を見る。実 ROOT で
+    // （--root を付けずに）`mutate.mjs apply` を動かすのは、このハーネスの
+    // 主要な使い方そのもの（SKILL.md 本文の大半がその手順を説明している）
+    // なので、並行して誰か（人・別のエージェント）が実際にそれをしていれば
+    // 印は最初から在る。それを「無い」と決め打つと、このテストが触ってすら
+    // いない外部の状態で誤って赤くなる——#1705 で実測済み: 実 ROOT へ
+    // `mutate.mjs apply`（--root なし）で印を置いた状態でこのファイルだけを
+    // 走らせると、直後の `toBe(false)` の行だけが
+    // `AssertionError: expected true to be false` で落ちた（他の全アサーション
+    // は通っていた）。この歯が測りたいのは「対象の取り違え」（tmp のはずが
+    // 実 ROOT に漏れる)であって「実 ROOT が絶対的に空か」ではないので、
+    // 開始時点の状態を基準にした差分で見る——漏れがあれば基準からの差分と
+    // して確実に検出され、既存の外部状態には影響されない。
+    const repoRootMarkerBeforeTest = fs.existsSync(
+      path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'),
+    );
     const tmp = makeTmpGitRepo();
     const specPath = path.join(tmp, 'spec.json');
     fs.writeFileSync(
@@ -229,7 +246,10 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
     ).toBe(true);
 
     // 実リポジトリ側には何も漏れていないこと（対象の取り違えが起きていないこと）。
-    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+    // 「絶対に無い」ではなく「テスト開始時から変わっていない」を見る（上の注記）。
+    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(
+      repoRootMarkerBeforeTest,
+    );
 
     const restoreResult = runCli(['restore', '--root', tmp]);
     expect(restoreResult.status).toBe(0);

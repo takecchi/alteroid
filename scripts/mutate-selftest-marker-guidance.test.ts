@@ -87,6 +87,14 @@ describe('mutate-selftest: selftestMarkerPresentMessage は復元経路を名指
 
 describe('mutate-selftest: 印が残った状態で selftest を起こすと、その案内が実際に出る', () => {
   it('印を置いた ROOT では backup-corruption が復元経路を出して止まる', () => {
+    // #1705: 「実 ROOT に印が絶対に無い」ではなく「このテストの --root tmp
+    // 呼び出しが実 ROOT の印の状態を変えていない」を見る。理由と実測は
+    // `scripts/mutate-root-override.test.ts` 歯1の同じ注記を参照（この歯も
+    // 同じ形の `expect(...).toBe(false)` を実 ROOT に対して持っていたため、
+    // #1705 で同じ壊れ方をした）。
+    const repoRootMarkerBeforeTest = fs.existsSync(
+      path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'),
+    );
     const tmp = makeTempDirSync('mutate-selftest-marker-guidance-');
     // 中身は読まれない —— `requireNoMarker` は存在だけを見て、シナリオの
     // いちばん最初（`ensureFixtureClean` より前）で止まる。
@@ -105,6 +113,9 @@ describe('mutate-selftest: 印が残った状態で selftest を起こすと、�
     expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.restore);
 
     // 実リポジトリ側へ漏れていないこと（対象の取り違えが起きていないこと）。
-    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+    // 「絶対に無い」ではなく「テスト開始時から変わっていない」を見る（上の注記）。
+    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(
+      repoRootMarkerBeforeTest,
+    );
   });
 });
