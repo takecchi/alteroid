@@ -58,6 +58,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { URL, fileURLToPath, pathToFileURL } from 'node:url';
 
 /** `scripts/` の1つ上 ＝ リポジトリ根。`process.cwd()` に依存しない

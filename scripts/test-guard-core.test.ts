@@ -216,7 +216,6 @@ describe('resolveScopedArgs（パッケージの範囲を named 引数で渡す�
       args: ['--root=../..', '-t', 'ある名前', scope],
     });
   });
-
 });
 
 describe('parseAggregateLines / parsePassedCount', () => {
