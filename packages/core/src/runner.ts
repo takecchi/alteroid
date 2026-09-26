@@ -1539,6 +1539,21 @@ class RunnerSession {
   #transcriptPath: string | undefined;
   #stopped = false;
   /**
+   * **畳んでいる最中の `#finish()` の Promise（Issue #1602）。** `#finish()`
+   * は1行目で同期的に `this.#stopped = true` を立ててから、await を挟みつつ
+   * 畳む（`#flushUsage` → … → `closed` の emit → `#onClosed()`）。`stop()` は
+   * 入口を `#stopped` だけで判定していたので、`#finish()` が走り始めた後に
+   * `stop()` が来ると、畳み終わりを待たずにすぐ返っていた——`stop()` が戻った
+   * ことは、もう畳み終わったことを何も保証しなかった。
+   *
+   * ここに `#finish()` の実行中の Promise を控えておき、`stop()` の入口
+   * （`#stopped` が既に立っている側の分岐）で待つ。**`#finish()` 自身の中身
+   * の順序・`closed` を出すかどうかは1文字も変えていない**——ここは
+   * `#finish()` を呼ぶ側（`stop()`）が「畳み終わったかどうか」をどう確かめる
+   * かだけの話である。
+   */
+  #finishing: Promise<void> | null = null;
+  /**
    * 最後に受け取った世代番号（fencing token）。
    *
    * **`undefined` は「まだ lease を伴わずに起こされた」ことを表す。** そのときは
@@ -1852,7 +1867,32 @@ class RunnerSession {
   }
 
   async stop(reason: string): Promise<void> {
-    if (this.#stopped) return;
+    if (this.#stopped) {
+      // **Issue #1602。`#finish()` が畳んでいる最中に `stop()` が来た形。**
+      // 以前はここで即座に返っていた——`stop()` が戻ったのに、畳みは
+      // まだ途中の `#finish()` に任されたままだった（`stop()` を await した
+      // 呼び出し元は「畳み終わった」と思って先へ進めてしまう）。
+      //
+      // **畳み中の `#finish()` があれば、それを待ってから返る。** これで
+      // 「`stop()` が戻った＝畳み終わった」という約束を、`#finish()` が
+      // 先に走り始めていた場合にも保つ。二重呼び（`stop()` → `stop()`）は
+      // 従来どおり何もしない——2回目が来る頃には1回目の `stop()` 自身は
+      // `#finishing` を経由しないので（このセッションでは `stop()` が
+      // `#finish()` を呼ばない）、`#finishing` は「たまたま `#finish()` が
+      // 先に走っていた」ときにしか値を持たず、2回目の `stop()` はそれを
+      // 待つだけで自分の畳み一式は行わない——挙動は変わらない。
+      //
+      // **例外はそのまま伝播させる。** `#finish()` のラッパー（`#finish` の
+      // doc）と同じ理由——`Host#stop` の呼び出し元（`manager.ts` の
+      // `#confirmStoppedAndReleaseLease`）は既に `runner.stop()` の例外を
+      // try/catch で受けており、`Host#shutdown` の呼び出し元
+      // （`manager.ts` の `runner.close().catch(() => undefined)`）も
+      // 既に例外を飲み込む。どちらも「`stop()` が投げうる」という前提を
+      // 既に持っているので、ここで新しく飲み込むと、その前提を握りつぶす
+      // 側の変更になる（この PR の報告に、呼び出し元を読んだ根拠を書く）。
+      if (this.#finishing) await this.#finishing;
+      return;
+    }
     this.#stopped = true;
 
     // **オーナー判断（2026-09-26、Issue #1533）。報告は「stop が指示された
@@ -3514,8 +3554,36 @@ class RunnerSession {
    * `runnerEventSchema` の `closed.selfFenced` は既定で undefined になり、
    * デーモン側の判定（自己失効なら `lease` だけ返す）は自己失効の1経路にしか
    * 効かない（`runner-protocol.ts` の `closed` の doc）。
+   *
+   * **薄いラッパーである（Issue #1602）。** 中身（`#finishBody`）を呼ぶ前に、
+   * その Promise を `#finishing` へ控える——`stop()` がこれを await して、
+   * 畳み中の `#finish()` を追い越さないようにするためである（`#finishing` の
+   * doc）。**中身の順序・`closed` を出すかどうかは変えていない。** ここで
+   * 例外を握り潰さない（`await promise` をそのまま伝播させる）——`#finish()`
+   * を呼ぶ側（`stop()` と、fire-and-forget な7箇所の呼び出し元）のどちらも
+   * 元から例外の伝播を前提にしていたので、ここで新しく飲み込むと片方の
+   * 前提を壊す（`stop()` の doc に理由の詳細）。
    */
   async #finish(
+    status: JobStatus,
+    reason: string,
+    options: { selfFenced?: true; systemError?: SystemErrorFacts } = {},
+  ): Promise<void> {
+    const promise = this.#finishBody(status, reason, options);
+    this.#finishing = promise;
+    try {
+      await promise;
+    } finally {
+      // **自分が控えた Promise のときだけ消す。** `#finishBody` は複数回
+      // 走ることがある（`#finish` は複数の呼び出し元を持つ）ので、後から
+      // 始まった呼び出しが `#finishing` を握っている間に、先に始まっていた
+      // 呼び出しの `finally` がそれを消してしまわないようにする。
+      if (this.#finishing === promise) this.#finishing = null;
+    }
+  }
+
+  /** `#finish()` の中身。呼ぶのは `#finish()` のラッパーだけである。 */
+  async #finishBody(
     status: JobStatus,
     reason: string,
     options: { selfFenced?: true; systemError?: SystemErrorFacts } = {},
