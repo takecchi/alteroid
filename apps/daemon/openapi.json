@@ -3254,6 +3254,22 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "やり方のスラッグが不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -3326,7 +3342,7 @@
             }
           },
           "400": {
-            "description": "版番号が正の整数として成立しない。",
+            "description": "やり方のスラッグが不正、または版番号が正の整数として成立しない。",
             "content": {
               "application/json": {
                 "schema": {
