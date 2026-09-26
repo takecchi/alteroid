@@ -23,6 +23,9 @@ export default [
     route('practices/:slug', 'routes/practice-detail.tsx'),
     route('approvals', 'routes/approvals.tsx'),
     route('commitments', 'routes/commitments.tsx'),
+    // 評定の内訳（issue #1278 の HTTP 面、issue #1620 の Web 面）。クローンの
+    // 道具 `appraisal_stats` / `GET /appraisal-stats` と同じもの。
+    route('appraisal-stats', 'routes/appraisal-stats.tsx'),
     // 同じ日に複数あるので、日付だけでは1件に定まらない（`reports.tsx` の選択の doc）。
     route('reports/:date?/:reportId?', 'routes/reports.tsx'),
     route('usage', 'routes/usage.tsx'),
