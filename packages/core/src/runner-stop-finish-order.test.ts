@@ -359,7 +359,7 @@ function labelOf(event: RunnerEvent): string {
  * 時点でまだ `host.list()` に載っているか」を記録する——載っていれば
  * `onClosed` はまだ呼ばれていない証拠になる。
  */
-function setup(sdkOptions: { deferCloseEnd?: boolean } = {}): {
+function setup(sdkOptions: { deferCloseEnd?: boolean; deferUsage?: boolean } = {}): {
   host: RunnerHost;
   events: RunnerEvent[];
   timeline: string[];
