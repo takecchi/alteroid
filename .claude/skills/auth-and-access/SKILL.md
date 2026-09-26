@@ -18,12 +18,14 @@ description: ログイン・アクセス許可（alteroid login / access grant�
 - **許可できるアカウントの数に上限は無い**（2026-09-09 のオーナー決定）。同じ人間が私用と仕事用の Google アカウントの両方から入れる。使わせたくなくなったら `revoke` する（**発行済みトークンを消さなくても即座に効く**）
   - **⚠️ 2026-09-09 まではここが「高々1つ」で、2つ目の `grant` は 409 だった。** 強制は3層に入っていた —— `AuthStore.grantExclusive`（IF）/ fs の排他区間 / pg の部分一意索引 `auth_accounts_single_owner_idx`。**3層とも外してある**（索引は `migrate.ts` の末尾で drop。create を残すと次の起動で作りに行って落ちる）
   - **⚠️ 許可が伝播するようになった。** `/access/*` は 2026-09-06 から許可を持つアカウントも叩けるが、それまでは2人目が必ず 409 で弾かれていたので**伝播は起こりようがなかった。** いまは A が B を、B が C を通せる。**追える場所は日誌だけである**（`grantedBy` と `decision: アクセス許可を付与`）。`grantedBy` に固定値を書かないこと
-- **不変条件はストアの1操作に閉じること。** ここは同じ失敗を3度踏んでいる場所である。ログインの経路は「読む → 外の世界と話す → 書く」の形をしていて、その真ん中が遅いので**必ず割り込まれる**と考えること
+- **不変条件はストアの1操作に閉じること。** ここは同じ失敗を4度踏んでいる場所である。ログインの経路は「読む → 外の世界と話す → 書く」の形をしていて、その真ん中が遅いので**必ず割り込まれる**と考えること
   - `beginLoginExchange` — `pending → processing`。**外部プロバイダとの交換へ進む権利**を1本に絞る。ブラウザの再送やプロキシのリトライで同じ callback が並行に届くのは普通に起きて、両方が交換すると認可コードは一度きりなので片方が必ず失敗し、その失敗が古い写しから `failed` を書いて成功側の `authenticated` を上書きしうる
     - **テストは「交換が1回だけ起きたか」を見ること。** 上書きが起きるかは処理順に依るので、最終状態だけを見るテストは通ってしまう（実際に通った）
   - `claimLoginRequest` — 消費とトークン保存を**1操作で**行う。「読む→検査→書く」に割ると同じ claim の並行送信で二重発行になり、「先に consumed→後で保存」に割ると保存失敗でログインを回収できなくなる（トークンは返らないのに要求は消費済み）
   - `grantAccess` — 許可の書き込みを1操作で。**⚠️ 2026-09-09 まではこれが `grantExclusive` で、守っていたのは「持ち主は高々1つ」だった。上限は外れたが1操作は残す** — 同じ account への同時 grant を「読む→検査→書く」に割ると `grantedBy` が後から来た側で上書きされ、**日誌に残した「誰が通したか」と食い違う**（伝播を追える唯一の場所がそこなので、ここが崩れると追跡ごと崩れる）
-  - fs は1回の書き込み、pg は条件付き UPDATE（`granted_at is null`）で強制する
+  - `createAccountWithIdentity` — 「初めて見る identity」の account 作成を**1操作で**行う（issue #1714）。`completeLogin` の当該分岐は `findIdentity` → `putAccount` → `putIdentity` の読んでから書く形をしていて、同じ `(provider, subject)` の2つのログインが同時に着くと両方が `null` を見て別々の account を作ってしまう——`putIdentity` は上書きなので後に書いた側が勝ち、**負けた側の account は identity から参照されない孤児として残る**（`listAccounts()` には残るが二度とログインできない）。在れば作らず既存の identity を返し、呼び手はそれを既存 identity のログインと同じ扱いに落とす
+    - fs は1回の書き込み、pg はトランザクション内で account を insert し、identity を `(provider, subject)` への `on conflict do nothing` で insert する。identity が入らなければ `tx.rollback()` で account ごと巻き戻す（孤児を作らない）
+  - fs は1回の書き込み、pg は条件付き UPDATE（`granted_at is null`）で強制する（`createAccountWithIdentity` を除く3つ）
   - **drizzle は例外を包むので、一意制約違反は `cause` を辿って判定すること**（最前面だけ見ると制約違反が予期しない例外として漏れる）。**⚠️ これを実装していた `isUniqueViolation` は 2026-09-09 に消えた**（唯一の呼び手だった単一持ち主の索引ごと落としたため）。この表にはまだ一意索引が在る（`auth_accounts_email_lower_idx`。#1702 で `auth_accounts_email_idx` から `lower(email)` へ移した）ので、翻訳が要る日が来たらここから書き戻す
 - **`/access/*` に行為ごとのスコープを足さないこと。** 「chat は可・記憶の編集は不可」を入れた瞬間、それは地雷表3行目の `permissions.yaml` と同じ形になる
 - **`/health` にトークンを載せ直さないこと。** かつては返していたが、いまその値は `access grant` を通せる資格そのものである。CLI は「提示して `operator` が返るか」で本人確認する（PID 再利用の検知としては同じ強さ）

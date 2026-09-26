@@ -9,11 +9,12 @@ import type {
   AuthAccount,
   AuthIdentity,
   AuthStore,
+  CreateAccountWithIdentityOutcome,
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
 } from '@alteroid/core';
-import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lt, sql, TransactionRollbackError } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -144,6 +145,74 @@ export class PgAuthStore implements AuthStore {
         target: [authIdentities.provider, authIdentities.subject],
         set,
       });
+  }
+
+  /**
+   * 「初めて見る identity」の account 作成を**1つのトランザクションで**行う
+   * （issue #1714）。
+   *
+   * account を insert し、identity を `(provider, subject)` の一意制約に対する
+   * `on conflict do nothing` で insert する。**identity が入らなかった
+   * （＝別の呼び出しが先に同じ identity を作っていた）ら、`tx.rollback()` で
+   * account の insert ごと巻き戻す** —— identity だけ諦めて account を残すと、
+   * どの identity からも参照されない孤児行が残ってしまう。
+   *
+   * 巻き戻した後、トランザクションの外（`findIdentity`）で勝った側の identity
+   * を読み直して返す。`tx.rollback()` は drizzle の `TransactionRollbackError`
+   * を投げて `this.#db.transaction(...)` の呼び出しごと reject させる仕組みなので
+   * （他の1操作のように `returning()` の0行では判定できない——insert は
+   * 「入ったか」を1文では聞けない）、ここだけ例外を捕まえて正常系に変換する。
+   */
+  async createAccountWithIdentity(input: {
+    account: AuthAccount;
+    identity: AuthIdentity;
+  }): Promise<CreateAccountWithIdentityOutcome> {
+    const account = stripNulls(authAccountSchema.parse(input.account));
+    const identity = stripNulls(authIdentitySchema.parse(input.identity));
+
+    try {
+      await this.#db.transaction(async (tx) => {
+        await tx.insert(authAccounts).values({
+          id: account.id,
+          displayName: account.displayName,
+          email: account.email,
+          createdAt: new Date(account.createdAt),
+          lastLoginAt: optionalDate(account.lastLoginAt),
+          grantedAt: optionalDate(account.grantedAt),
+          grantedBy: account.grantedBy,
+          ownerDeclaredAt: optionalDate(account.ownerDeclaredAt),
+        });
+
+        const identityRows = await tx
+          .insert(authIdentities)
+          .values({
+            provider: identity.provider,
+            subject: identity.subject,
+            accountId: identity.accountId,
+            email: identity.email,
+            emailVerified: identity.emailVerified,
+            createdAt: new Date(identity.createdAt),
+            lastLoginAt: new Date(identity.lastLoginAt),
+          })
+          .onConflictDoNothing({ target: [authIdentities.provider, authIdentities.subject] })
+          .returning();
+
+        if (identityRows.length === 0) {
+          // 負けた。account も一緒に巻き戻す（ここで作らない）。
+          tx.rollback();
+        }
+      });
+      return { created: true };
+    } catch (error) {
+      if (!(error instanceof TransactionRollbackError)) throw error;
+      const existing = await this.findIdentity(identity.provider, identity.subject);
+      if (existing === null) {
+        throw new Error(
+          'createAccountWithIdentity: 巻き戻した直後に既存の identity が読めない（他の1操作と矛盾）',
+        );
+      }
+      return { created: false, existing };
+    }
   }
 
   async putAccessToken(token: AccessTokenRecord): Promise<void> {

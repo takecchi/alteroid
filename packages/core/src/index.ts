@@ -200,6 +200,7 @@ export {
   type AuthAccount,
   type AuthIdentity,
   type AuthStore,
+  type CreateAccountWithIdentityOutcome,
   type GrantOutcome,
   type LoginRequest,
   type LoginRequestStatus,

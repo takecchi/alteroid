@@ -4150,6 +4150,60 @@ describe('AuthStore', () => {
     ).toEqual([stored?.grantedBy, stored?.grantedBy]);
   });
 
+  /**
+   * **issue #1714。** 同じ `(provider, subject)` の identity を2つの呼び出しが
+   * 同時に作ろうとしても、account / identity とも1つしか作られないこと。
+   *
+   * **変異**: `createAccountWithIdentity` の「在れば作らない」判定（`existing`
+   * の確認）を外すと、この歯は赤に戻る。
+   */
+  it('createAccountWithIdentity を同じ identity で並行に呼んでも、1つだけ作られる', async () => {
+    const makeInput = (accountId: string) => ({
+      account: {
+        id: accountId,
+        displayName: 'Someone',
+        email: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      },
+      identity: {
+        provider: 'google',
+        subject: 'sub-race',
+        accountId,
+        email: 'race@example.test',
+        emailVerified: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const results = await Promise.all([
+      stores.auth.createAccountWithIdentity(makeInput('account-race-a')),
+      stores.auth.createAccountWithIdentity(makeInput('account-race-b')),
+    ]);
+
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    const loser = results.find((result) => !result.created);
+    expect(loser).toBeDefined();
+    if (loser !== undefined && !loser.created) {
+      expect(loser.existing.subject).toBe('sub-race');
+    }
+
+    const identities = await stores.auth.listIdentities('account-race-a');
+    const identitiesB = await stores.auth.listIdentities('account-race-b');
+    // 勝った accountId 側にだけ identity が1本、負けた側には無い。
+    expect(identities.length + identitiesB.length).toBe(1);
+
+    // 負けた側の account は作られない（孤児が残らない）。
+    const accounts = (await stores.auth.listAccounts()).filter((it) =>
+      it.id.startsWith('account-race-'),
+    );
+    expect(accounts).toHaveLength(1);
+  });
+
   it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {
     await stores.auth.putAccount(account);
     await stores.auth.putLoginRequest({

@@ -4573,6 +4573,63 @@ describe('AuthStore', () => {
   });
 
   /**
+   * **issue #1714。** fs 側の同名の歯（`packages/storage-fs/src/index.test.ts`）
+   * と同じ入力・同じ期待値。同じ `(provider, subject)` の identity を2つの
+   * 呼び出しが同時に作ろうとしても、account / identity とも1つしか作られない
+   * こと——負けた側の account はトランザクションごと巻き戻り、孤児として
+   * 残らない。
+   *
+   * **変異**: `createAccountWithIdentity` の `onConflictDoNothing` を外す、
+   * または `identityRows.length === 0` のときの `tx.rollback()` を外す
+   * （account だけ残る形）と、この歯は赤に戻る。
+   */
+  it('createAccountWithIdentity を同じ identity で並行に呼んでも、1つだけ作られる（負けた側の account は孤児にならない）', async () => {
+    const makeInput = (accountId: string) => ({
+      account: {
+        id: accountId,
+        displayName: 'Someone',
+        email: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      },
+      identity: {
+        provider: 'google',
+        subject: 'sub-race',
+        accountId,
+        email: 'race@example.test',
+        emailVerified: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const results = await Promise.all([
+      stores.auth.createAccountWithIdentity(makeInput('account-race-a')),
+      stores.auth.createAccountWithIdentity(makeInput('account-race-b')),
+    ]);
+
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    const loser = results.find((result) => !result.created);
+    expect(loser).toBeDefined();
+    if (loser !== undefined && !loser.created) {
+      expect(loser.existing.subject).toBe('sub-race');
+    }
+
+    const identities = await stores.auth.listIdentities('account-race-a');
+    const identitiesB = await stores.auth.listIdentities('account-race-b');
+    expect(identities.length + identitiesB.length).toBe(1);
+
+    // 負けた側の account はトランザクションごと巻き戻るので、孤児が残らない。
+    const accounts = (await stores.auth.listAccounts()).filter((it) =>
+      it.id.startsWith('account-race-'),
+    );
+    expect(accounts).toHaveLength(1);
+  });
+
+  /**
    * **⭐ 2周目でだけ壊れる状態を挟む歯。**
    *
    * `migrate` は起動のたびに `STATEMENTS` を頭から通す。単一持ち主の索引
