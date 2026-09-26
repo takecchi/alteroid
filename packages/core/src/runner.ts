@@ -1178,14 +1178,26 @@ interface PendingRequest {
    */
   askedAt: string;
   /**
-   * **`withdrawn` は経路を運ぶための引数であって、文言ではない**（Issue
-   * #1586）。`#settleAll` だけがこれを `true` にして渡す——`answer()`
-   * （クローンの回答）と `#onPermission` の `onAbort`（マネージャー側中断）
-   * はどちらも渡さない（`undefined` のまま）。呼び出し側はこれで
-   * 「畳むときに答えないまま解いたか」を判定し、`reason` の文字列を
+   * **`withdrawn` / `aborted` は経路を運ぶための引数であって、文言ではない**
+   * （Issue #1586 / #1593）。`#settleAll` だけが `withdrawn: true` を渡し、
+   * `#onPermission` の `onAbort`（マネージャー側中断）だけが `aborted: true`
+   * を渡す——`answer()`（クローンの回答）はどちらも渡さない（`undefined` の
+   * まま）。呼び出し側はこれで「答えないまま畳んで解いたか（`withdrawn`）」
+   * 「中断で解いたか（`aborted`）」を判定し、`message`（`reason` の文言）を
    * 嗅がない（AGENTS.md「文字列で本文を嗅がない」と同じ考え方）。
+   *
+   * **`settled` イベントに載るのは `withdrawn` だけである（#1586 のまま）。**
+   * `aborted` は `answered.then()`（`#onPermission`）が `question` の答えを
+   * 強制的に deny へ倒すためだけに使う内部の印で、外への通知の形は変えない
+   * ——中断は `withdrawn` が言う「CLI へ届いていない」とは別の事実だからで
+   * ある（Issue #1593 本文）。
    */
-  settle: (answer: { message: string; decision?: 'allow' | 'deny'; withdrawn?: true }) => void;
+  settle: (answer: {
+    message: string;
+    decision?: 'allow' | 'deny';
+    withdrawn?: true;
+    aborted?: true;
+  }) => void;
   /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
   result: Promise<PermissionResult>;
 }
@@ -3653,7 +3665,12 @@ class RunnerSession {
     const askedAt = new Date().toISOString();
 
     let settle!: PendingRequest['settle'];
-    const answered = new Promise<{ message: string; decision?: 'allow' | 'deny' }>((resolve) => {
+    const answered = new Promise<{
+      message: string;
+      decision?: 'allow' | 'deny';
+      withdrawn?: true;
+      aborted?: true;
+    }>((resolve) => {
       settle = resolve;
     });
 
@@ -3661,16 +3678,32 @@ class RunnerSession {
       // **`decideAnswer` が決定の唯一の実装である（#322）。** `Session#answer()`
       // が同じ関数を同じ引数（`kind` / `decision` / `message`）で呼んでいるので、
       // クローンへ即座に返す値（`Pool#send` の `answered.decision`）と、SDK へ
-      // 実際に返る `behavior` は常に同じ計算から出る。
+      // 実際に返る `behavior` は常に同じ計算から出る。**この呼び出しは変えない**
+      // ——ここが変わると `Session#answer()` との一致（#322）が壊れる。
       const decision = decideAnswer(kind, answer.decision, answer.message);
+      // **畳む（`withdrawn`）・中断（`aborted`）の経路では、`question` も
+      // deny で返す（Issue #1593）。** `decideAnswer` は「クローンが答えた」
+      // ときの計算のままにしておき、ここで別枠として上書きする——`kind` が
+      // `question` のとき `decideAnswer` は常に `allow` を返す（doc のとおり）
+      // ので、`withdrawn` / `aborted` を見ずに `decision` だけで判定すると、
+      // 人間が答えていない問いに `withAnswers(input, answer.message)`
+      // （畳む・中断の理由の文言）が「答え」として乗ってしまう——これが
+      // #1593 の症状そのものである。**判定は `settle` の値が運ぶ経路の印
+      // だけで行い、`message` の文字列は嗅がない**（AGENTS.md の同じ考え方）。
+      // `kind === 'permission'` のときは `decision` が既に `'deny'` なので
+      // ここは実質何も変えない（`#settleAll` も `onAbort` も明示の
+      // `decision:'deny'` を渡している）。
+      const teardown = answer.withdrawn === true || answer.aborted === true;
       const outcome: PermissionResult =
-        decision === 'deny'
+        teardown || decision === 'deny'
           ? { behavior: 'deny', message: answer.message }
           : kind === 'question'
             ? { behavior: 'allow', updatedInput: withAnswers(input, answer.message) }
             : { behavior: 'allow' };
       // **解けたことを覚えるのはここ1箇所。** 回答でも中断でも停止でも、解けた
-      // 事実は同じように残る（経路ごとに覚え忘れる隙を作らない）。
+      // 事実は同じように残る（経路ごとに覚え忘れる隙を作らない）。**再送されて
+      // もここは再実行されない**（`#resolved` から即返す分岐が上に在る）ので、
+      // 一度確定した deny は再送のたびに同じ deny のまま返る。
       this.#resolved.set(id, outcome);
       return outcome;
     });
@@ -3709,8 +3742,16 @@ class RunnerSession {
     this.#status = 'waiting_human';
 
     // マネージャー側で中断されたら宙吊りにしない。
+    // **`aborted: true` を渡すのはここだけである（Issue #1593）。** `withdrawn`
+    // と同じ形の、経路を運ぶだけの印——`settled` イベントには載せない
+    // （`request.settle` は `withdrawn` だけを見る）。ここが立てるのは
+    // `answered.then()` が `question` を deny へ倒すための材料である。
     const onAbort = () =>
-      request.settle({ message: 'マネージャー側で中断された。', decision: 'deny' });
+      request.settle({
+        message: 'マネージャー側で中断された。',
+        decision: 'deny',
+        aborted: true,
+      });
     if (extra.signal.aborted) {
       onAbort();
     } else {
