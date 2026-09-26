@@ -157,6 +157,11 @@ export type LoginRequestStatus = LoginRequest['status'];
  * （器が違うだけで上の層が見るものは同じ）。
  */
 export interface AuthStore {
+  /**
+   * `createdAt` の**実時刻**昇順（issue #1676）。文字列の `localeCompare` で
+   * 並べないこと——`isoDateTime` はオフセット付きの任意の表記を許すので、
+   * 同じ瞬間でも書き方は一意ではなく、文字列比較では実時刻の順が崩れうる。
+   */
   listAccounts(): Promise<AuthAccount[]>;
   getAccount(id: string): Promise<AuthAccount | null>;
   /** 検証済みメールの衝突検査に使う。 */
@@ -164,11 +169,13 @@ export interface AuthStore {
   putAccount(account: AuthAccount): Promise<void>;
 
   findIdentity(provider: string, subject: string): Promise<AuthIdentity | null>;
+  /** `createdAt` の実時刻昇順（`listAccounts` の doc と同じ理由。issue #1676）。 */
   listIdentities(accountId: string): Promise<AuthIdentity[]>;
   putIdentity(identity: AuthIdentity): Promise<void>;
 
   putAccessToken(token: AccessTokenRecord): Promise<void>;
   findAccessTokenBySha256(sha256: string): Promise<AccessTokenRecord | null>;
+  /** `createdAt` の実時刻昇順（`listAccounts` の doc と同じ理由。issue #1676）。 */
   listAccessTokens(accountId: string): Promise<AccessTokenRecord[]>;
 
   putLoginRequest(request: LoginRequest): Promise<void>;

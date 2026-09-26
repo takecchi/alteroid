@@ -4133,6 +4133,97 @@ describe('AuthStore', () => {
     expect(await stores.auth.getAccount('居ない')).toBeNull();
   });
 
+  /**
+   * **issue #1676。** fs / memory（`packages/storage-fs/src/index.test.ts` /
+   * `packages/core/src/auth-service.test.ts` の同名の歯）は直す前、文字列比較の
+   * `localeCompare` で並べていたためここで赤くなっていた。pg は
+   * `timestamptz` 列（`asc(authAccounts.createdAt)`）で実時刻を比べるので、
+   * オフセット表記が違っても崩れない——直した後は3実装とも同じ期待値で緑になる。
+   */
+  it('listAccounts は createdAt の実時刻順（timestamptz 列で比較するのでオフセット表記が違っても崩れない）', async () => {
+    const early = {
+      ...account,
+      id: 'account-early-utc',
+      email: 'early@example.test',
+      createdAt: '2024-01-01T23:00:00+09:00', // 実時刻 2024-01-01T14:00:00Z
+    };
+    const late = {
+      ...account,
+      id: 'account-late-utc',
+      email: 'late@example.test',
+      createdAt: '2024-01-01T15:00:00+00:00', // 実時刻 2024-01-01T15:00:00Z
+    };
+    await stores.auth.putAccount(early);
+    await stores.auth.putAccount(late);
+
+    const ids = (await stores.auth.listAccounts()).map((it) => it.id);
+    expect(ids).toEqual(['account-early-utc', 'account-late-utc']);
+  });
+
+  /**
+   * **issue #1676（同じ族）。** fs / memory 側の同名の歯（`packages/storage-fs/
+   * src/index.test.ts` / `packages/core/src/auth-service.test.ts`）と同じ入力・
+   * 同じ期待値。pg は `createdAt` の `asc()` で並べる（更新しても順が動かない）。
+   */
+  it('listIdentities は createdAt の実時刻順で返す', async () => {
+    await stores.auth.putAccount(account);
+    const first = {
+      provider: 'google',
+      subject: 'sub-first',
+      accountId: 'account-1',
+      email: 'first@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-01-01T00:00:00.000Z',
+    };
+    const second = {
+      provider: 'google',
+      subject: 'sub-second',
+      accountId: 'account-1',
+      email: 'second@example.test',
+      emailVerified: true,
+      createdAt: '2026-01-02T00:00:00.000Z',
+      lastLoginAt: '2026-01-02T00:00:00.000Z',
+    };
+    await stores.auth.putIdentity(second);
+    await stores.auth.putIdentity(first);
+
+    const subjects = (await stores.auth.listIdentities('account-1')).map((it) => it.subject);
+    expect(subjects).toEqual(['sub-first', 'sub-second']);
+  });
+
+  /**
+   * **issue #1676（同じ族）。** fs / memory 側の同名の歯と同じ入力・同じ期待値。
+   */
+  it('listAccessTokens は createdAt の実時刻順で返す', async () => {
+    await stores.auth.putAccount(account);
+    const first = {
+      id: 'token-first',
+      accountId: 'account-1',
+      sha256: 'a'.repeat(64),
+      label: 'first',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    const second = {
+      id: 'token-second',
+      accountId: 'account-1',
+      sha256: 'b'.repeat(64),
+      label: 'second',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    await stores.auth.putAccessToken(second);
+    await stores.auth.putAccessToken(first);
+
+    const ids = (await stores.auth.listAccessTokens('account-1')).map((it) => it.id);
+    expect(ids).toEqual(['token-first', 'token-second']);
+  });
+
   it('許可の2値を書き換えられる（alteroid access grant の実体）', async () => {
     await stores.auth.putAccount(account);
     await stores.auth.putAccount({

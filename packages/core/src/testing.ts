@@ -1016,9 +1016,24 @@ export function createMemoryStores(): Stores {
   const loginRequests = new Map<string, LoginRequest>();
   const identityKey = (provider: string, subject: string) => `${provider} ${subject}`;
 
+  /**
+   * `createdAt` の**実時刻**昇順で並べる（issue #1676。fs 版と同じ理由・同じ形
+   * ——`packages/storage-fs/src/auth.ts` の `compareCreatedAt` の doc）。
+   *
+   * **文字列の `localeCompare` を使わないこと。** `isoDateTime` はオフセット
+   * 付きの任意の表記を許すので、同じ瞬間でも書き方は一意ではない。文字列比較
+   * だとオフセット表記が違う行で実時刻の順が崩れる——pg（`timestamptz` 列の
+   * `asc()`）は崩れないので、fs / メモリもここで揃える。
+   *
+   * 2次キーは持たない（pg 側も持たないので、揃えるものが無い）。
+   * `Array.prototype.sort` は安定なので、ties は元の並び（Map の反復順）を保つ。
+   */
+  const compareCreatedAt = (a: { createdAt: string }, b: { createdAt: string }): number =>
+    Date.parse(a.createdAt) - Date.parse(b.createdAt);
+
   const auth: AuthStore = {
     async listAccounts() {
-      return [...accounts.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return [...accounts.values()].sort(compareCreatedAt);
     },
     async getAccount(id) {
       return accounts.get(id) ?? null;
@@ -1033,7 +1048,10 @@ export function createMemoryStores(): Stores {
       return identities.get(identityKey(provider, subject)) ?? null;
     },
     async listIdentities(accountId) {
-      return [...identities.values()].filter((identity) => identity.accountId === accountId);
+      // fs と同じ理由で明示的に並べる（`compareCreatedAt` の doc）。
+      return [...identities.values()]
+        .filter((identity) => identity.accountId === accountId)
+        .sort(compareCreatedAt);
     },
     async putIdentity(identity) {
       identities.set(identityKey(identity.provider, identity.subject), identity);
@@ -1045,7 +1063,10 @@ export function createMemoryStores(): Stores {
       return [...accessTokens.values()].find((token) => token.sha256 === hash) ?? null;
     },
     async listAccessTokens(accountId) {
-      return [...accessTokens.values()].filter((token) => token.accountId === accountId);
+      // fs と同じ理由で明示的に並べる（`compareCreatedAt` の doc）。
+      return [...accessTokens.values()]
+        .filter((token) => token.accountId === accountId)
+        .sort(compareCreatedAt);
     },
     async putLoginRequest(request) {
       loginRequests.set(request.id, request);

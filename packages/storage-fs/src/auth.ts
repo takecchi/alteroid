@@ -32,6 +32,26 @@ type AuthFile = z.infer<typeof fileSchema>;
 
 const EMPTY: AuthFile = { accounts: [], identities: [], accessTokens: [], loginRequests: [] };
 
+/**
+ * `createdAt` の**実時刻**昇順で並べる（issue #1676）。
+ *
+ * **文字列の `localeCompare` を使わないこと。** `isoDateTime`
+ * （`z.string().datetime({ offset: true })`）はオフセット付きの任意の表記を
+ * 許すので、同じ瞬間でも書き方は一意ではない（例: `+09:00` 表記と `+00:00`
+ * 表記）。文字列比較だとオフセット表記が違う行で実時刻の順が崩れる——
+ * pg（`timestamptz` 列に対する `asc()`）は実時刻で比較するので崩れない。
+ * 3実装で同じ並びにする（fs / pg のどちらのドライバでも同じ IF を満たす、
+ * `AuthStore` の doc）。
+ *
+ * 同じ実時刻どうしの2次キーは持たない——pg の `orderBy` も2次キーを
+ * 持たないので、揃えるものが無い。`Array.prototype.sort` は安定
+ * （ties は元の配列順を保つ）なので、この関数を差し込んでも同じ実時刻の
+ * 行どうしの相対順は変えない。
+ */
+function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): number {
+  return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+}
+
 /** 期限切れのログイン要求をいつまでも抱えない（往復用の一時的な行なので）。 */
 const LOGIN_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -56,7 +76,7 @@ export class FsAuthStore implements AuthStore {
 
   async listAccounts(): Promise<AuthAccount[]> {
     const { accounts } = await this.#read();
-    return [...accounts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return [...accounts].sort(compareCreatedAt);
   }
 
   async getAccount(id: string): Promise<AuthAccount | null> {
@@ -84,7 +104,11 @@ export class FsAuthStore implements AuthStore {
 
   async listIdentities(accountId: string): Promise<AuthIdentity[]> {
     const { identities } = await this.#read();
-    return identities.filter((identity) => identity.accountId === accountId);
+    // **明示的に並べる。** `putIdentity` は既存行を消して末尾へ足す形なので
+    // （直下の doc）、更新されたばかりの identity ほど配列の後ろへ動く——
+    // ソートを外すと「作成順」ではなく「最後に触られた順」になる。pg は
+    // `createdAt` の `asc()` で並べるので、ここも実時刻昇順に揃える（issue #1676）。
+    return identities.filter((identity) => identity.accountId === accountId).sort(compareCreatedAt);
   }
 
   async putIdentity(identity: AuthIdentity): Promise<void> {
@@ -115,7 +139,10 @@ export class FsAuthStore implements AuthStore {
 
   async listAccessTokens(accountId: string): Promise<AccessTokenRecord[]> {
     const { accessTokens } = await this.#read();
-    return accessTokens.filter((token) => token.accountId === accountId);
+    // **明示的に並べる。** `putAccessToken` も既存行を消して末尾へ足す形なので、
+    // `lastUsedAt` の書き戻し（`touch()`）だけで作成順が崩れる。pg は `createdAt`
+    // の `asc()` で並べるので、ここも実時刻昇順に揃える（issue #1676）。
+    return accessTokens.filter((token) => token.accountId === accountId).sort(compareCreatedAt);
   }
 
   async putLoginRequest(request: LoginRequest): Promise<void> {
