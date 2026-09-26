@@ -32,6 +32,7 @@ import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
 import {
   commitmentSchema,
   inboxEventSchema,
+  journalEntrySchema,
   memorySlugSchema,
   practiceSchema,
   practiceVersionSchema,
@@ -487,7 +488,13 @@ export function createMemoryStores(): Stores {
 
   const journal: JournalStore = {
     async append(input: JournalEntryInput) {
-      const entry = { ...input, id: nextId(), at: new Date().toISOString() } as JournalEntry;
+      // fs（`FsJournalStore.append`）/ pg（`PgJournalStore.append`）と同じく、
+      // 形の崩れた entry を書く前に拒む（issue #1668。InboxStore.put と同じ穴）。
+      const entry = journalEntrySchema.parse({
+        ...input,
+        id: nextId(),
+        at: new Date().toISOString(),
+      });
       entries.push(entry);
       // **返すのは写しである**（#1072）。返した行を呼び出し元が書き換えると、
       // fs / pg では店は汚れないが、ここでは汚れていた。
