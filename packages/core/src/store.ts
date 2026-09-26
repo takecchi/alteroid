@@ -1925,9 +1925,19 @@ export interface SessionTranscriptTail {
    * `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰めが
    * 要ったか」を判定するので、ここで「ちょうど `maxChars`」以下を返すと、
    * 実際には切り捨てた行があるのに「本文がもとから短かった」と誤読される
-   * （#1718 で実際に踏んだ——`PgSessionStore.readTail` の停止条件が返す長さ
+   * （#1718 で見つかった——`PgSessionStore.readTail` の停止条件が返す長さ
    * ではなく積んだ累計文字数を見ていたため、境界ちょうどで `maxChars - 1`
-   * 文字しか返さなかった）。本文が `maxChars` 以下なら全文を返す。
+   * 文字しか返さなかった。テストで再現したものであって、本番でこの境界を
+   * 実際に踏んだ観測ではない）。本文が `maxChars` 以下なら全文を返す。
+   *
+   * ⚠️ **この契約の食い違いは、いまの唯一の呼び出し側 `#pickUpLostSession`
+   * （`clone.ts`）では症状として顕在化しない。** `tailOf` は受け取った文字列を
+   * そのまま蒸留へ渡すので、境界ちょうどの回でも渡る内容自体は破損しない
+   * （古い行が1本欠けるだけで、行の途中や壊れた文字は混ざらない）——気づける
+   * 手がかりが無いだけである。**症状が出ていないのは仕組みで防いでいるからでは
+   * なく、いまの呼び出し側の使い方がたまたまこの欠陥をやり過ごせる形だから**
+   * である（`tailOf` の判定自体は「長ければ `maxChars` を超えて返る」という、
+   * この契約が守られている前提の上でしか安全ではない）。
    */
   readTail(key: LostSessionGrave, maxChars: number): Promise<string | null>;
 
