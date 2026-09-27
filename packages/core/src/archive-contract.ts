@@ -159,6 +159,27 @@ import type { TranscriptArchive } from './store.js';
  *     含まれないことを検査する。**この検査も PGlite に対しては実効性が無い**
  *     ——理由は検査34と同じ。
  *
+ * **36〜37 は #1829（`readTail` の `maxChars` が、pg はコードポイント数、
+ * fs・インメモリは JS の UTF-16 コード単位という別々の単位で数えられていた
+ * 食い違い）の検査である。** 補助面の文字（絵文字の多く。1コードポイントが
+ * 2 UTF-16 コード単位になる）を含む本文で、3実装が同じ単位（コードポイント数）
+ * で判定することを測る——ここを通さずに手元だけで見つけた実装（例えば新しい
+ * 4本目）が UTF-16 コード単位のまま `maxChars` を解釈しても、この2つの検査が
+ * 赤くなる。
+ *
+ * 36. 🔴 **コードポイント数では `maxChars` 以下（＝短い。切り詰め不要）だが
+ *     UTF-16 コード単位では `maxChars` を超える本文は、全文がそのまま返る。**
+ *     `readTail` interface doc「本文が `maxChars` 以下なら全文を返す」の
+ *     判定基準がコードポイント数であることを直接測る——UTF-16 コード単位で
+ *     判定する実装は、ここで本文の先頭を静かに失う（Issue #1829 の再現1。
+ *     「3個の絵文字 + 改行 + `KEEP`」相当）。
+ * 37. 🔴 **本文が真に長い（コードポイント数が `maxChars` を超える）ときの
+ *     切り詰めは、サロゲートペアの途中で割らない。** 改行を含まない補助面の
+ *     文字だけの本文で切り詰めても、孤立サロゲート（不正な UTF-16。UTF-8 へ
+ *     変換する経路で黙って `U+FFFD` に化ける）を残さないことを、返る文字列が
+ *     正確に「末尾から `maxChars + 1` 個ぶんの完全なコードポイント」と一致する
+ *     形で測る（Issue #1829 の再現2）。
+ *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
  * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
@@ -1012,5 +1033,77 @@ export async function verifyTranscriptArchiveContract(
         '（選んだら、他のどこにも残っていない本文を持つ行を消してよいと言っていることになる）',
       { pruneRow2, pruneRow3, pruneSelection },
     );
+  }
+
+  // --- ここから #1829（readTail の maxChars の単位——コードポイント数か
+  // UTF-16 コード単位か——が pg とそれ以外で食い違っていた）-------------------
+
+  // 36. 🔴 コードポイント数では maxChars 以下だが UTF-16 コード単位では
+  // maxChars を超える本文は、全文がそのまま返る（先頭を静かに失わない）。
+  //
+  // 5個の絵文字（5 コードポイント / 10 UTF-16 コード単位）+ 改行 + "KEEP"
+  // （4文字）＝ コードポイント数 10、UTF-16 長 15。maxChars=10 で読むと：
+  // コードポイント数(10) <= maxChars(10) ⟹ 切り詰め不要・全文を返すはず。
+  // UTF-16 長(15) は maxChars(10) を超えるので、UTF-16 コード単位で判定する
+  // 実装はここで（誤って）切り詰め、絵文字が失われる。
+  const astralShortSessionId = 'archive-contract-astral-short-body';
+  const astralShortBody = `${'\u{1F600}'.repeat(5)}\nKEEP`;
+  const astralShortCodePoints = [...astralShortBody].length;
+  if (astralShortCodePoints !== 10) {
+    fail('#1829: 検査36の前提（本文のコードポイント数は10）が崩れている', {
+      astralShortBody,
+      astralShortCodePoints,
+    });
+  }
+  const astralShortId = (await archive.archive(astralShortSessionId, astralShortBody)).id;
+  const astralShortTail = await archive.readTail(astralShortId, astralShortCodePoints);
+  if (astralShortTail.kind !== 'body') {
+    fail('#1829: 検査36はbodyが返ることを前提にする', astralShortTail);
+  }
+  if (astralShortTail.body !== astralShortBody) {
+    fail(
+      '#1829: maxChars をコードポイント数で数えていれば、本文（コードポイント数' +
+        '10）は maxChars(10) 以下なので全文が返るはず。UTF-16 コード単位（長さ15）' +
+        'で数える実装は、ここで本文の先頭（絵文字）を静かに失う',
+      { expected: astralShortBody, actual: astralShortTail.body },
+    );
+  }
+
+  // 37. 🔴 本文が真にコードポイント数で maxChars を超えるときの切り詰めは、
+  // サロゲートペアの途中で割らない——返る文字列は「末尾から maxChars + 1 個
+  // ぶんの完全なコードポイント」と厳密に一致する。
+  //
+  // 改行を含まない10個の絵文字（10 コードポイント）。maxChars=6 で読むと
+  // コードポイント数(10) > maxChars+1(7) なので真に切り詰めが起き、末尾7個
+  // （= 7絵文字ぶん、14 UTF-16 コード単位）が返るはず。UTF-16 コード単位で
+  // 数える・素朴にスライスする実装は、ここでサロゲートペアを割って孤立
+  // サロゲート（不正な UTF-16）を残しうる。
+  const astralTruncateSessionId = 'archive-contract-astral-truncate';
+  const astralTruncateBody = '\u{1F600}'.repeat(10);
+  const astralTruncateId = (
+    await archive.archive(astralTruncateSessionId, astralTruncateBody)
+  ).id;
+  const astralTruncateMaxChars = 6;
+  const astralTruncateTail = await archive.readTail(astralTruncateId, astralTruncateMaxChars);
+  if (astralTruncateTail.kind !== 'body') {
+    fail('#1829: 検査37はbodyが返ることを前提にする', astralTruncateTail);
+  }
+  const expectedAstralTruncateTail = '\u{1F600}'.repeat(astralTruncateMaxChars + 1);
+  if (astralTruncateTail.body !== expectedAstralTruncateTail) {
+    fail(
+      '#1829: 真に長い本文の切り詰めは、末尾から maxChars+1 個ぶんの完全な' +
+        'コードポイント（サロゲートペアを割らない）と厳密に一致するはず。' +
+        '孤立サロゲートを残す実装・単位を取り違えた実装はここで割れる',
+      { expected: expectedAstralTruncateTail, actual: astralTruncateTail.body },
+    );
+  }
+  // ⚠️ 上の厳密な文字列一致は孤立サロゲートの不在も含意するが、意図を直接
+  // 示すため、孤立サロゲートの不在をここでも明示的に検査する。
+  const loneSurrogatePattern =
+    /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
+  if (loneSurrogatePattern.test(astralTruncateTail.body)) {
+    fail('#1829: 切り詰めた本文に孤立サロゲート（不正なUTF-16）が残っている', {
+      body: astralTruncateTail.body,
+    });
   }
 }
