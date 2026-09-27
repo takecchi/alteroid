@@ -1080,9 +1080,7 @@ export async function verifyTranscriptArchiveContract(
   // サロゲート（不正な UTF-16）を残しうる。
   const astralTruncateSessionId = 'archive-contract-astral-truncate';
   const astralTruncateBody = '\u{1F600}'.repeat(10);
-  const astralTruncateId = (
-    await archive.archive(astralTruncateSessionId, astralTruncateBody)
-  ).id;
+  const astralTruncateId = (await archive.archive(astralTruncateSessionId, astralTruncateBody)).id;
   const astralTruncateMaxChars = 6;
   const astralTruncateTail = await archive.readTail(astralTruncateId, astralTruncateMaxChars);
   if (astralTruncateTail.kind !== 'body') {
