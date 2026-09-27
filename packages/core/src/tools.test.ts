@@ -13284,7 +13284,7 @@ describe('journalEntrySchema の subagent_stall（Issue #357）', () => {
  *
  * **SDK が返す数の正しさは測っていない。** 日誌へ直接書いた値を、整形が
  * そのまま出すかだけを見る。値の出所（`#observeContextUsage` の写し方）は
- * `clone.test.ts` の側が持つ。
+ * `clone-turn-usage.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の側が持つ。
  */
 describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
   /** 内訳を持つ `turn_usage` の1行を日誌へ直接積む。 */

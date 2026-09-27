@@ -9,7 +9,8 @@ import { captureStdout } from './test-support.js';
 /**
  * `alteroid permission` — 人間が承認した Bash 許可（Issue #863）を CLI から
  * 一覧・取り消しできること。`request_permission` / `answerApproval` 自体の
- * 意味論（何が記録されるか）は `packages/core/src/clone.test.ts` /
+ * 意味論（何が記録されるか）は `packages/core/src/clone-core-loop.test.ts`（issue #863。
+ * 旧 `clone.test.ts` は #1744 で分割済み）/
  * `packages/core/src/tools.test.ts` が持つ——ここで固定したいのは、CLI が
  * `GET /permission-grants` / `POST /permission-grants/:id/revoke`
  * （`apps/daemon/src/app.ts`）と交わす契約と、規則の広さの表示（判定は

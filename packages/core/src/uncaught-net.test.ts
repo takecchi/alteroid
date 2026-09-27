@@ -104,7 +104,8 @@ describe('未捕捉の例外の網（#438）', () => {
    * `dist` を読むのは、素の node に `.ts` を食わせられないからである（Node の
    * 型剥がしは `./x.js` の指定を `./x.ts` へ読み替えない）。**この repo は
    * build → typecheck → test の順が前提**（`scripts/verify-core.mjs` の `STEPS`、
-   * `AGENTS.md`「開発手順」）なので、テストの時点で `dist` は在る。
+   * `.claude/skills/dev-setup/SKILL.md` の「build が先」の項——この項は #1753 で
+   * `AGENTS.md`「開発手順」から移った）なので、テストの時点で `dist` は在る。
    *
    * **⚠️ ここが見ているのは `dist` である。** `src` だけを直して build せずに
    * このテストだけ回すと、**古い `dist` に対して緑が出る。** 一式（`pnpm verify`）

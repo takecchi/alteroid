@@ -24,7 +24,8 @@ import { captureStderr, createMemoryStores } from './testing.js';
  * 無傷であること・後始末の網羅性・途中で止まったときの一貫性である。
  *
  * `Clone` の private field（`#unread` / `#redelivered` / `#pendingCollapse`）は
- * 直接覗かない（`clone.test.ts` の「`#redelivered` の Map を直接覗かない ──
+ * 直接覗かない（`clone-quota-hold.test.ts`——旧 `clone.test.ts`。#1744 で
+ * 分割済み——の「`#redelivered` の Map を直接覗かない ──
  * private field を覗く形は…」と同じ理由。JS の `#` は本物の private で、
  * クラス定義の外からは構文上アクセスできない）。**すべて観測できる外部
  * 挙動を通して確かめる。**

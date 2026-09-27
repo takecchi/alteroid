@@ -534,7 +534,7 @@ describe('1回だけの許可には寿命が付く（issue #1105 本文の設計
     }
   });
 
-  it('寿命の範囲内なら allow を返す（対照）', async () => {
+  it('寿命の範囲内なら allow を返す（対照・1ms 手前）', async () => {
     const { started, host: h } = await startSession();
     const now = Date.now();
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
@@ -561,6 +561,46 @@ describe('1回だけの許可には寿命が付く（issue #1105 本文の設計
       });
       const asRecord = retry as { hookSpecificOutput?: Record<string, unknown> };
       expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('allow');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  /**
+   * issue #1768 —— 境界（ちょうど `ONE_SHOT_ALLOW_TTL_MS` 経過した時点）を固定する。
+   *
+   * **以前の実装（`grant.expiresAt < Date.now()`）は、ちょうど寿命が尽きた
+   * ミリ秒を「まだ有効」の側へ倒していた。** 上の2本（1ms 手前・1ms 過ぎ）は
+   * 境界そのものを踏んでいない —— この歯だけがちょうどの1点を固定する。
+   * 許しすぎる（開く）側の穴なので、この歯は `<=` へ直す前は赤くなる。
+   */
+  it('寿命ちょうど（境界の1点）では allow を返さない', async () => {
+    const { started, events, host: h } = await startSession();
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const denialPromise = firePermissionDenied(started.options, {
+        hook_event_name: 'PermissionDenied',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo ttl-exact-probe' },
+        tool_use_id: 'tu-ttl-3',
+        reason: '分類器が拒否した（テスト）',
+      });
+      await tick();
+      await h.answer('mgr-1', { requestId: 'tu-ttl-3', decision: 'allow', message: 'どうぞ' });
+      await denialPromise;
+
+      // 寿命（10分）ちょうど。
+      nowSpy.mockReturnValue(now + 10 * 60 * 1000);
+
+      const retry = await firePreToolUse(started.options, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo ttl-exact-probe' },
+        tool_use_id: 'tu-ttl-3-retry',
+      });
+      expect(retry).toEqual({ continue: true });
+      expect(noteEvents(events).some((n) => n.text.includes('期限切れ'))).toBe(true);
     } finally {
       nowSpy.mockRestore();
     }

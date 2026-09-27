@@ -824,11 +824,33 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      *
      * ここが叩けてしまうと、マネージャーは自分に配られる鍵を自分で書き換えられる。
      * 門番（`control`）を外さないこと。
+     *
+     * **既定の 400 を使わない**（横断レビュー C の14回目、#1790）。`hook` を
+     * 渡さないと `@hono/zod-validator` は `c.json(result, 400)`
+     * （`result = { success: false, error: <ZodError> }`）を返す——ここは鍵の
+     * 値そのものを運ぶ唯一の口なので、既定の形をそのまま使う理由が無い。
+     * **兄弟の `/mcp-servers`（下）は最初からこの形の `hook` を持っていたが、
+     * ここには無かった**。いまの版で本文が値を漏らすことは無い（`ZodError` の
+     * issue は `path` と `message` だけで、規則違反の `name` そのものや配列の
+     * 他要素の `value` は載らない）が、それは「たまたま漏れていない」であって
+     * 「漏れない」と保証されているわけではない——`hook` を持たない経路は、
+     * 将来ここへ`data`や`input`を足す変更（zod の版が変わる／エラーの整形を
+     * 変える）が入った瞬間に、無条件で本文へ流れる構造になっている。**兄弟と
+     * 揃えて、送られてきた本文を1文字も返さない形に固定しておく。**
      */
-    .post('/credentials', zValidator('json', runnerSetCredentialsCommandSchema), async (c) => {
-      const fingerprints = await host.setCredentials(c.req.valid('json').credentials);
-      return c.json({ ok: true, credentials: fingerprints });
-    })
+    .post(
+      '/credentials',
+      zValidator('json', runnerSetCredentialsCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '鍵の入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const fingerprints = await host.setCredentials(c.req.valid('json').credentials);
+        return c.json({ ok: true, credentials: fingerprints });
+      },
+    )
 
     /**
      * 実行環境プロファイル（`.zprofile` 相当）の差し替え。

@@ -276,6 +276,59 @@ describe('置かせない名前', () => {
     }
   });
 
+  /**
+   * **runner の受け口（`runnerCredentialSchema.name`。`runner-protocol.ts`）と
+   * 同じ128文字の上限をここでも課す**（横断レビュー C の14回目、#1790）。
+   *
+   * これが無いと、正本には書けるのに runner へは wire schema の上限で必ず
+   * 弾かれる行が生まれる——`apply()` 自体は成功を返し、`pushAll` は runner
+   * ごとの失敗を `{ ok: false }` として飲み込むだけなので、誰も気づけないまま
+   * 「正本と runner がずっと食い違っている」状態が固定する。
+   */
+  it('runner の受け口と同じ128文字の上限を超える名前は拒む', async () => {
+    const runner = fakeRunner();
+    const { stores, service } = serviceOf([runner]);
+    // 形（英大文字・数字・_ のみ）は満たすが、長さだけが違反——長さの検査を
+    // 単独で測るため、regex の違反と混ぜない。
+    const tooLong = 'A'.repeat(129);
+
+    await expect(
+      service.apply([{ name: tooLong, value: 'fake-token-should-not-leak' }]),
+    ).rejects.toThrow(/長すぎる/);
+
+    // 何も書いていない（落ちるなら、何も書く前に落ちる）。
+    expect(await stores.credentials.list()).toEqual([]);
+    expect(runner.received).toEqual([]);
+  });
+
+  it('ちょうど128文字の名前は通る（上限は「以下」であって「未満」ではない）', async () => {
+    const runner = fakeRunner();
+    const { stores, service } = serviceOf([runner]);
+    const exactly128 = 'A'.repeat(128);
+
+    await expect(
+      service.apply([{ name: exactly128, value: 'fake-token-ok' }]),
+    ).resolves.toBeDefined();
+
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual([exactly128]);
+    expect(runner.held.get(exactly128)).toBe('fake-token-ok');
+  });
+
+  it('上限超えのエラーは、名前そのものを1文字も含まない（際限なく伸びる名前をそのまま返さない）', async () => {
+    const { service } = serviceOf();
+    const tooLong = 'B'.repeat(500);
+
+    try {
+      await service.apply([{ name: tooLong, value: 'fake-x' }]);
+      expect.unreachable('拒まれるはず');
+    } catch (error) {
+      const message = String(error);
+      expect(message).not.toContain(tooLong);
+      expect(message).toContain('500');
+      expect(message).toContain('128');
+    }
+  });
+
   it('同じ名前を2回渡したら拒む（前の行が黙って捨てられない）', async () => {
     const { service } = serviceOf();
 

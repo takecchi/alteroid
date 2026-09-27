@@ -215,7 +215,8 @@ export function classifyContextWindowFailure(text: string): ContextWindowFailure
  * 日誌へ付け足す1文。**`#reportFailure` が既存の
  * `内部ターンが失敗した: ${message}` / `人間との対話ターンが失敗した:
  * ${message}` の末尾へ足す形で使う**——先頭を変えると、既存の
- * `text.startsWith(...)` の歯（`clone.test.ts`）を壊す。
+ * `text.startsWith(...)` の歯（`clone-turn-failure-trace.test.ts`。旧
+ * `clone.test.ts`。#1744 で分割済み）を壊す。
  *
  * 3つ全部を満たす:
  *

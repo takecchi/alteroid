@@ -20,17 +20,38 @@
  *
  * ⟹ **この道具は「同じ sha の check-runs を並べて世代を選ぶ」経路を使わない。**
  * 代わりに `actions/runs?head_sha=<sha>` で実際の run 一覧を取り、
- * **workflow 名ごとに、rerun でなければ `created_at`（同値なら `id`）、
- * rerun（`run_attempt` が2以上）が絡む比較だけ `run_started_at`（その
- * attempt を始めた時刻）で最新の run を選び**（`effectiveTimestamp` /
- * `newerRun` の doc。Issue #1748 / #1761）、
- * **その run 自身の `actions/runs/<id>/jobs` を読む**。
+ * **workflow 名ごとに、rerun が絡まなければ `created_at`（同値なら `id`）で
+ * 最新の run を選び**（`effectiveTimestamp` / `newerRun` の doc。
+ * Issue #1748 / #1761）、**その run 自身の `actions/runs/<id>/jobs` を読む**。
+ *
+ * ⭐ **15回目の横断レビューで、rerun が絡む比較そのものを時刻で決める形を
+ * やめた。** #1748 → #1761 → PR #1778 は「rerun のときだけ鍵を
+ * `created_at` → `updated_at` → `run_started_at` と替える」形で3回直った
+ * が、そのたびに「rerun がどれだけ待たされるか」という新しい窓を晒す
+ * だけだった（`run_started_at` 自体もキューで長く待たされれば遅れる。
+ * `scripts/check-pr-green-1778-queued-rerun-open-side.repro.test.ts`）。
+ * ⟹ **同じ `name + event` の run のうち、rerun（`run_attempt > 1`）が
+ * 絡み、かつ結論（`conclusion`）が食い違うときは、どの時刻を比べても
+ * 決めず、`undecidable-rerun-conflict` という第3の状態を返す**
+ * （`pickLatestRunPerWorkflow` の `hasRerunConflict` の doc）。**結論が
+ * 揃っている場合と rerun が絡まない場合は、これまでどおり時刻で選ぶ**
+ * ——#933 / #997 / #1126 の実測はそのまま壊れない。
+ *
+ * ⭐ **PR #1801 のレビューで、上の `hasRerunConflict` が「全部 completed」を
+ * 前提にしているため、rerun が絡み、かつ完了していない run が同じ鍵に
+ * 混ざるとまだ時刻の比較へフォールバックし、開く側に倒れる形が見つかった**
+ * （未完了の run が丸ごと捨てられ、あとで failure になるはずの run を
+ * 見ずに `green` と言ってしまう）。⟹ その場合は「食い違い」ではなく
+ * 「保留」（`pending`）を返す（`hasUnresolvedRerunGroup` の doc）。
  *
  * ⚠️ **これで「確定」ではない。** 実測できたのは1 sha・2世代・1 workflow・
  * 4ジョブの標本（#933）と、そこへ rerun が絡んだ1 sha・2世代・1 workflow の
  * 標本（#1748。`check-pr-green.test.ts` のコメント参照）だけである。
  * **`pull_request` と `workflow_dispatch` が混ざる場合はまだ測っていない**
- * （rerun で3世代目が生える場合は #1748 で測った——次項）。
+ * （rerun で3世代目が生える場合は #1748 で測った——次項。rerun が絡み
+ * 結論が食い違う場合は15回目の横断レビューで測り、上のとおり対処した。
+ * rerun が絡み未完了の run が混ざる場合は PR #1801 のレビューで測り、
+ * すぐ上のとおり対処した）。
  *
  * ⛔ **同じ workflow 名で `event` が違う run が同じ sha に同居する場合は
  * 実測済みで、`created_at` だけでまとめると赤を見落とす（Issue #1225）。**
@@ -134,6 +155,45 @@
  * 後ろへ回るという、このファイル冒頭の doc の記述のとおり）。⟹
  * check-run id は rerun の無い draft→ready のレースで既に破綻することが
  * 分かっているので、rerun の場合分けの鍵には使わない。
+ *
+ * ## ⭐ 15回目の横断レビュー —— この関数（時刻の比較）そのものが、もう
+ * rerun が絡む世代選びの最終手段ではなくなった
+ *
+ * 直上の #1761 の直し（`updated_at` → `run_started_at`）は「開く側の穴を
+ * 塞いだ」と主張したが、**縮めただけで塞いではいなかった。**
+ * `run_started_at` も「実際に走り始めた時刻」でしかなく、ランナーが
+ * 混雑してキューに長く並べば、その分だけ `created_at` から遅れる ——
+ * rerun がキューで長く待たされているあいだに、無関係な**別の run**
+ * （本当に新しい世代で、結論が違う）が先に作られて先に完了しうる、という
+ * #1761 と同じ形の窓を、「rerun の完了を待つ間」から「rerun がキューで
+ * 待たされる間」へ**移しただけ**だった（再現は
+ * `scripts/check-pr-green-1778-queued-rerun-open-side.repro.test.ts`）。
+ *
+ * ⟹ **違う時刻（作成・実行開始・完了のどれでも）を比べて、どちらが新しい
+ * 世代かを時刻だけで当てにいく形そのものをやめる。** 同じ `name + event`
+ * の run のうち、**再実行された run（`run_attempt > 1`）が絡み、かつ
+ * 結論（`conclusion`）が食い違うとき**は、この `effectiveTimestamp` /
+ * `newerRun` へ進ませず、`pickLatestRunPerWorkflow` の時点で「判定できない」
+ * という第3の状態（verdict `undecidable-rerun-conflict`。下の
+ * `hasRerunConflict` / `makeRerunConflictMarker` を見よ）へ倒す。
+ * **結論が揃っている**（rerun が絡んでも全部 `success` 等）ときは、
+ * どちらを選んでも答えは変わらないので、これまでどおりこの関数
+ * （rerun のときだけ `run_started_at`、それ以外は `created_at`）で選んで
+ * よい —— #933 / #997 / #1126 の実測はそのまま壊れない。**rerun が絡まない**
+ * 比較も、これまでどおり `created_at` で選ぶ（この節は rerun が絡み、
+ * かつ結論が食い違う場合だけに効く）。
+ *
+ * ⚠️ **#1748 の実例（sha `031bf92…`。draft 由来の `skipped` と、rerun 後の
+ * `success`）は、この方針だと `undecidable-rerun-conflict` になる。**
+ * `skipped` と `success` は結論として食い違うと数えるためである。これは
+ * 「緑でないのに green と言う」（開く側）よりは安全側だが、「緑だと
+ * 確定できるのに判定できないと言う」という閉じる側の再発ではある ——
+ * `run_started_at` を選んだ #1761 のときと同じ非対称（開く側より閉じる側
+ * に倒れるほうを選ぶ）を、ここでも踏襲している。draft 由来の `skipped` を
+ * 「食い違い」に数えない、というより良い線があるかもしれない（例: 同じ
+ * 鍵に `success` が1つでもあれば `skipped` は比較に混ぜない）が、**それが
+ * 開く側へ倒れないと確かめられていない**ので、ここでは採らない —— 採る
+ * かどうかは次にこの doc を読む者（人間）が決める。
  */
 function effectiveTimestamp(run) {
   const attempt = run.run_attempt ?? 1;
@@ -214,14 +274,149 @@ export function isFullCommitSha(sha) {
   return typeof sha === 'string' && /^[0-9a-f]{40}$/i.test(sha);
 }
 
+/**
+ * 同じ `name + event` の鍵にまとまった run の集合が、「rerun が絡み、かつ
+ * 結論が食い違う」ため時刻の比較で世代を選んではいけない標本かを見る
+ * （15回目の横断レビュー。`effectiveTimestamp` の doc「⭐ 15回目の横断
+ * レビュー」を見よ）。
+ *
+ * - **2本未満なら食い違いようがない。** false。
+ * - **どれか1本でも `status !== 'completed'`（まだ走っている）なら、この
+ *   関数の仕事ではない。** false を返し、`pending` の判定（`evaluatePrGreen`）
+ *   にまかせる——「未完了」と「食い違い」を混ぜない。
+ * - **`run_attempt > 1` の run が1本も無ければ、rerun は絡んでいない。**
+ *   false。この場合は「rerun が絡まない場合はこれまでどおり `created_at`」
+ *   という既存の約束（#933 / #997 / #1126）をそのまま守る。
+ * - **`conclusion` が全部同じなら「食い違い」ではない。** false。rerun が
+ *   絡んでも結論が揃っているなら、どちらを選んでも答えは変わらない。
+ *
+ * 上のどれにも当たらない（2本以上・全部 completed・rerun が絡む・
+ * `conclusion` が割れている）ときだけ true。
+ *
+ * @param {{status:string, run_attempt?:number, conclusion:string|null}[]} sameKeyRuns
+ * @returns {boolean}
+ */
+function hasRerunConflict(sameKeyRuns) {
+  if (sameKeyRuns.length < 2) return false;
+  if (!sameKeyRuns.every((run) => run.status === 'completed')) return false;
+  const hasRerun = sameKeyRuns.some((run) => (run.run_attempt ?? 1) > 1);
+  if (!hasRerun) return false;
+  const conclusions = new Set(sameKeyRuns.map((run) => run.conclusion));
+  return conclusions.size > 1;
+}
+
+/**
+ * `hasRerunConflict` は `sameKeyRuns.every(status === 'completed')` を前提に
+ * 発火する。**全部完了していなければ発火せず、`newerRun` / `effectiveTimestamp`
+ * による時刻の比較へフォールバックしていた——ここにも開く側の穴が残る**
+ * （PR #1801 のレビューコメントで指摘された）。
+ *
+ * ## 具体形
+ *
+ * - run A: rerun（`run_attempt=2`）が待ち行列で長く待たされたあと、
+ *   `success` で完了した（`run_started_at` が遅い）。
+ * - run B: A の再実行を頼んだ**あと**に作られた、本当に新しい世代の run
+ *   （`run_attempt=1`）。**まだ `in_progress`**——あとで `failure` になる
+ *   予定だが、その結論はまだ確定していない。
+ *
+ * `effectiveTimestamp` は A に `run_started_at`（実行開始時刻）を、B に
+ * `created_at` を使って比べる。**A の `run_started_at` が B の `created_at`
+ * より後なら、`newerRun` は A を「新しい」と選ぶ**——`pickLatestRunPerWorkflow`
+ * は同じ鍵につき1本しか残さないので、**B（まだ結論が出ていない、しかも
+ * あとで failure になる run）がまるごと捨てられる。** ⟹ B がまだ走って
+ * いるのに `green` と言ってしまう。
+ *
+ * ## なぜ「食い違い」ではなく「保留」か
+ *
+ * `hasRerunConflict` は「結論（`conclusion`）が食い違う」ことを条件にするが、
+ * `conclusion` が確定していない（`status !== 'completed'`）run を混ぜて
+ * 比べても、**食い違っているかどうか自体が判定できない**——B が待てば
+ * `success` で終わる可能性もまだ残っている（その場合、結論は食い違わない）。
+ * 一方 `pending` の既存の意味（`evaluatePrGreen` の doc）は「まだ完了して
+ * いない run が在る——待てば決まる」であり、ここの状況にそのまま当てはまる。
+ * ⟹ **この関数が発火した鍵は、時刻で選ばず、`sameKeyRuns` のうち
+ * 完了していない run をそのまま `pickLatestRunPerWorkflow` の戻り値へ残す**
+ * （`makeRerunConflictMarker` のような専用の目印は作らない——`evaluatePrGreen`
+ * が最初から持っている `status !== 'completed'` の `pending` 判定が、素の
+ * run オブジェクトのままでそのまま拾う）。完了済みの run（A）は、この回の
+ * 判定からは落とす——`pending` は最初に返って早期リターンするため、A の
+ * jobs を見ても判定には使われない。
+ *
+ * ## 歯・変異
+ *
+ * 歯: `scripts/check-pr-green.test.ts`「PR #1801 レビュー: rerun が絡む鍵に
+ * 未完了の run が混じると green ではなく pending」。変異: この関数を
+ * 常に `false` を返す形に変えると（＝この分岐を外すと）、その歯が
+ * green を検出して赤くなる（`mutate.mjs apply`/`restore` で確認）。
+ *
+ * @param {{status:string, run_attempt?:number}[]} sameKeyRuns
+ * @returns {boolean}
+ */
+function hasUnresolvedRerunGroup(sameKeyRuns) {
+  if (sameKeyRuns.length < 2) return false;
+  const hasRerun = sameKeyRuns.some((run) => (run.run_attempt ?? 1) > 1);
+  if (!hasRerun) return false;
+  return sameKeyRuns.some((run) => run.status !== 'completed');
+}
+
+/**
+ * `hasRerunConflict` が発火した鍵を、`evaluatePrGreen` が読める「run 風」の
+ * 目印付きオブジェクトへ畳む。
+ *
+ * **`id: null`** —— この鍵のどの run の jobs を見るべきかを、この道具は
+ * もう決めない、という宣言そのものである。ネットワーク層
+ * （`check-pr-green.mjs`）は `rerunConflict` の有無を見て、jobs の問い合わせを
+ * 丸ごとスキップする（`id: null` で `actions/runs/null/jobs` を叩かない
+ * ための目印でもある）。
+ *
+ * `rerunConflict` には、食い違っている run 全部の `id` / `run_attempt` /
+ * `conclusion` を積む——`evaluatePrGreen` が detail として「何を見れば
+ * 決められるか」を出力するために使う。
+ *
+ * @param {{id:number, name:string, event?:string, run_attempt?:number, conclusion:string|null}[]} sameKeyRuns
+ */
+function makeRerunConflictMarker(sameKeyRuns) {
+  const [{ name, event }] = sameKeyRuns;
+  return {
+    id: null,
+    name,
+    event,
+    rerunConflict: sameKeyRuns
+      .map((run) => ({
+        id: run.id,
+        run_attempt: run.run_attempt ?? 1,
+        conclusion: run.conclusion ?? null,
+      }))
+      .sort((a, b) => (a.id > b.id ? 1 : a.id < b.id ? -1 : 0)),
+  };
+}
+
 export function pickLatestRunPerWorkflow(runs) {
   const byKey = new Map();
   for (const run of runs) {
     const key = `${run.name}\u0000${run.event ?? ''}`;
-    const prev = byKey.get(key);
-    byKey.set(key, prev === undefined ? run : newerRun(prev, run));
+    const list = byKey.get(key);
+    if (list === undefined) byKey.set(key, [run]);
+    else list.push(run);
   }
-  return [...byKey.values()].sort((a, b) => {
+  const picked = [];
+  for (const sameKeyRuns of byKey.values()) {
+    if (hasRerunConflict(sameKeyRuns)) {
+      picked.push(makeRerunConflictMarker(sameKeyRuns));
+      continue;
+    }
+    if (hasUnresolvedRerunGroup(sameKeyRuns)) {
+      // 時刻では選ばない（`hasUnresolvedRerunGroup` の doc）。完了していない
+      // run だけを残し、`evaluatePrGreen` 既存の pending 判定（下）に委ねる。
+      // 完了済みの run はこの回の判定には使わないので落とす。
+      for (const run of sameKeyRuns) {
+        if (run.status !== 'completed') picked.push(run);
+      }
+      continue;
+    }
+    picked.push(sameKeyRuns.reduce((a, b) => newerRun(a, b)));
+  }
+  return picked.sort((a, b) => {
     const byName = a.name.localeCompare(b.name);
     if (byName !== 0) return byName;
     return (a.event ?? '').localeCompare(b.event ?? '');
@@ -301,23 +496,53 @@ export function filterRunsByEvent(runs, events) {
 
 /**
  * 選んだ最新 run 群と、それぞれの jobs から、この sha の CI が緑と言えるかを
- * 判定する。**8値で答える**（`green` / `red` / `cancelled` / `out-of-scope` /
- * `skipped` / `pending` / `unmeasurable` / `no-runs`）。2値にすると「まだ
- * 走っている」と「実は赤」が同じ側へ丸まる（`AGENTS.md`「静かに失敗する道具」
- * の3値の原則と同じ形）。Issue #1197 以降は非 success をさらに
- * `red` / `cancelled` / `out-of-scope` / `skipped` の4本へ分ける——
- * `conclusion !== 'success'` の1本判定は、マージ直後の main（push の run。
- * `base-overlap` は pull_request 専用で設計どおり skipped）を「壊した」と
- * 読ませていた。
+ * 判定する。**9値で答える**（`green` / `red` / `cancelled` / `out-of-scope` /
+ * `skipped` / `undecidable-rerun-conflict` / `pending` / `unmeasurable` /
+ * `no-runs`）。2値にすると「まだ走っている」と「実は赤」が同じ側へ丸まる
+ * （`AGENTS.md`「静かに失敗する道具」の3値の原則と同じ形）。Issue #1197
+ * 以降は非 success をさらに `red` / `cancelled` / `out-of-scope` / `skipped`
+ * の4本へ分ける—— `conclusion !== 'success'` の1本判定は、マージ直後の
+ * main（push の run。`base-overlap` は pull_request 専用で設計どおり
+ * skipped）を「壊した」と読ませていた。15回目の横断レビューで
+ * `undecidable-rerun-conflict` を足した（`pickLatestRunPerWorkflow` の
+ * `hasRerunConflict` / `makeRerunConflictMarker` の doc を見よ）——rerun
+ * が絡み結論が食い違う run を、時刻の比較でどちらかへ選ばずに「判定
+ * できない」と言うための第3の状態。PR #1801 のレビューで、rerun が絡む
+ * 鍵に未完了の run が混ざる場合（結論そのものがまだ確定していないので
+ * 「食い違い」とは呼べない）も見つかり、こちらは新しい verdict を足さず
+ * **既存の `pending`** へ倒した（`pickLatestRunPerWorkflow` の
+ * `hasUnresolvedRerunGroup` の doc）。
  *
- * @param {{name:string,id:number,status:string,conclusion:string|null}[]} latestRuns
- *   `pickLatestRunPerWorkflow` の戻り値
+ * @param {{name:string,id:number|null,status?:string,conclusion?:string|null,rerunConflict?:object[]}[]} latestRuns
+ *   `pickLatestRunPerWorkflow` の戻り値（`rerunConflict` を持つ要素は
+ *   `hasRerunConflict` が発火した鍵——`id` が `null` で `status` を持たない）
  * @param {Record<number, {name:string,status:string,conclusion:string|null}[]>} jobsByRunId
  *   run の id → その run の jobs（`actions/runs/<id>/jobs` の `.jobs`）
  */
 export function evaluatePrGreen(latestRuns, jobsByRunId) {
   if (latestRuns.length === 0) {
     return { verdict: 'no-runs', detail: [] };
+  }
+
+  // 15回目の横断レビュー: rerun が絡み結論が食い違う鍵は、pending/noJobs の
+  // どの判定よりも先に見る——`rerunConflict` を持つ要素は `status` を持たず
+  // （`makeRerunConflictMarker`）、下の pending フィルタ（`status !==
+  // 'completed'`）に通すと `undefined !== 'completed'` で誤って `pending`
+  // に化ける。
+  const rerunConflicts = latestRuns.filter((r) => r.rerunConflict !== undefined);
+  if (rerunConflicts.length > 0) {
+    return {
+      verdict: 'undecidable-rerun-conflict',
+      detail: rerunConflicts.flatMap((r) => [
+        `${r.name}${r.event !== undefined ? `（event=${r.event}）` : ''}: ` +
+          '再実行（run_attempt>1）が絡む run 同士で結論が食い違う —— ' +
+          'どちらが最新世代かは時刻の比較（created_at / run_started_at / updated_at のどれでも）では決められない',
+        ...r.rerunConflict.map(
+          (x) => `  run ${x.id}（run_attempt=${x.run_attempt}）= ${x.conclusion ?? '(unknown)'}`,
+        ),
+        '  確かめるには: gh pr view <PR番号> --json mergeStateStatus と、上に並べた各 run の id・run_attempt・結論を直接見ること',
+      ]),
+    };
   }
 
   const pending = latestRuns.filter((r) => r.status !== 'completed');
@@ -515,7 +740,18 @@ export function findMissingRequiredGates({
     };
   }
 
-  const INACTIVE_VERDICTS = new Set(['pending', 'out-of-scope', 'no-runs', 'unmeasurable']);
+  // 15回目の横断レビュー: `undecidable-rerun-conflict` も「required な job の
+  // 集合が確定できた」と言えない状態に加える——`makeRerunConflictMarker` は
+  // `id: null` を持ち jobs を取りに行かないので、その鍵の required な門は
+  // 実際には走っていたとしても `observedNames` に載らない。載せないまま
+  // ここへ進むと「required なのに run が無い」と誤って名指しする。
+  const INACTIVE_VERDICTS = new Set([
+    'pending',
+    'out-of-scope',
+    'no-runs',
+    'unmeasurable',
+    'undecidable-rerun-conflict',
+  ]);
   if (INACTIVE_VERDICTS.has(verdict)) {
     return { status: 'inactive', reason: `verdict=${verdict} のため判定しない` };
   }
@@ -624,6 +860,11 @@ export function formatVerdict(sha, result) {
     case 'skipped':
       return [
         `${header} NG —— skipped の job が在る（draft 由来の skip の疑いがある。緑と数えない）`,
+        ...result.detail,
+      ].join('\n  ');
+    case 'undecidable-rerun-conflict':
+      return [
+        `${header} 判定できなかった —— 再実行(run_attempt>1)が絡む run 同士で結論が食い違い、どちらが最新世代かを時刻の比較では決められない`,
         ...result.detail,
       ].join('\n  ');
     case 'green':

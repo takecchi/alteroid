@@ -37,10 +37,12 @@
  * |---|---|
  * | green | 0 |
  * | out-of-scope | 2 |
- * | red / cancelled / skipped / pending / unmeasurable / no-runs | 1 |
+ * | red / cancelled / skipped / undecidable-rerun-conflict / pending / unmeasurable / no-runs | 1 |
  *
  * **`pending`（まだ走行中）・`red`（赤）・`cancelled`（中断）・`skipped`
- * （draft 由来の疑い）を同じ 1 にしてあるが、出力の文言は別である。** どれも
+ * （draft 由来の疑い）・`undecidable-rerun-conflict`（15回目の横断レビュー。
+ * 再実行が絡む run 同士で結論が食い違い、どちらが最新世代かを時刻の比較
+ * では決められない）を同じ 1 にしてあるが、出力の文言は別である。** どれも
  * 「緑と確定していない」ことが要点なので終了コードは分けず、**何が起きたかは
  * 必ず1行目で名乗る**（`AGENTS.md`「静かに失敗する道具」）。
  *
@@ -265,6 +267,12 @@ export function judgeSha({ sha, repo, events }) {
 
   const jobsByRunId = {};
   for (const run of latestRuns) {
+    // 15回目の横断レビュー: rerun が絡み結論が食い違う鍵は
+    // `pickLatestRunPerWorkflow` が `id: null` の目印（`rerunConflict`）へ
+    // 畳んでいる——「どの run の jobs を見るべきか」をこの道具はもう決めない
+    // という宣言なので、`actions/runs/null/jobs` を叩きに行かない
+    // （`check-pr-green-core.mjs` の `makeRerunConflictMarker` の doc を見よ）。
+    if (run.rerunConflict !== undefined) continue;
     if (run.status !== 'completed') continue; // まだ終わっていない run の jobs は問い合わせるだけ無駄
     const { data: jobsData, error: jobsError } = ghApiJson(
       `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`,

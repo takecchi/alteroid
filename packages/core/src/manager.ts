@@ -2278,14 +2278,28 @@ export interface ManagerPool {
    * - **M が終わった・止められた・畳まれた** —— `#records` は done/lost/
    *   failed/stopped でその managerId 自身を消す（`#load()` の doc）ので、
    *   ここは走っている委譲しか見ない。特別な分岐は要らない。
-   * - **P1 の確認（`runner.ts` の `#onPermissionDenied`）が未決のまま** ——
-   *   `record.job.status === 'waiting_human'` なら知らせ直さない。あの
-   *   確認は通常の許可確認と同じ `#pending` / `record.waiting` を共有する
-   *   ので、この状態は「クローンには既に別の合図（`ask`）が届いている」
-   *   ことを意味する——同じ停止について二重に知らせない。**簡略化**:
-   *   未決の確認がこの停止と同じものかは区別しない（この委譲に何であれ
-   *   未決の確認が1件でもあれば、それだけで「クローンは既に気づける
-   *   状態にある」と判断する）。
+   * - **この拒否自身への P1 の確認（`runner.ts` の `#onPermissionDenied`。
+   *   issue #1105 P1「1回だけの許可」）が未決のまま** —— `record.waiting`
+   *   に、この拒否の `event.toolUseId`（`ManagerRecord.deniedLastRequestId`
+   *   に控えてある）と同じ `requestId` を持つ項目が有れば知らせ直さない。
+   *   `#onPermissionDenied` はこの拒否と同じ `tool_use_id` で `ask` を上げる
+   *   ので、一致は「クローンには既にこの拒否自身への合図が届いている」ことを
+   *   意味する——同じ停止について二重に知らせない。
+   *
+   *   **かつては `record.job.status === 'waiting_human'` かどうかだけで
+   *   委譲ごと丸ごと見送っていた（簡略化）。** `waiting_human` は「この
+   *   委譲のどこかに未決の確認が1件ある」としか言わず、それがいま見ている
+   *   拒否と同じものかは区別していなかった——同じ委譲の中に**無関係な**未決の
+   *   確認（例: 別の道具の通常の許可確認）が1件あるだけで、10分・30分前に
+   *   拒否された**別の**拒否の知らせ直しまで巻き添えで止まっていた（issue
+   *   #1772・横断レビュー14回目 s2）。判定の単位を委譲ごとから拒否ごとへ
+   *   戻したのがこの版で、無関係な確認は見送る理由にならない。
+   *
+   *   **突き合わせが取れない拒否（`#onPermissionDenied` が `ask` を上げな
+   *   かった回。`toolName` / 入力の digest が取れなかった等）は、そもそも
+   *   一致する項目が生まれないので、この条件は常に不成立——見送らない。**
+   *   これは「許しすぎる」側にも「知らせなさすぎる」側にも倒れない。単に
+   *   この条件がそもそも起きない回であるだけである。
    *
    * ## 何回・いつ知らせ直すか
    *
@@ -2996,6 +3010,35 @@ interface ManagerRecord {
    */
   deniedLastReason?: Map<string, DenialReasonSnapshot>;
   /**
+   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められたときの
+   * `permission_denied` イベントの `toolUseId`**（issue #1772、横断レビュー
+   * 14回目 s2）。
+   *
+   * **`renotifyStalledDenials()` が「この拒否そのものへの未決の確認が
+   * `record.waiting` に在るか」を判定するための突き合わせ材料。** `runner.ts`
+   * の `#onPermissionDenied`（issue #1105 P1、「1回だけの許可」）は、この拒否と
+   * 同じ `tool_use_id` を `requestId` にして `ask` を上げる——つまり
+   * **この欄の値と `record.waiting[].requestId` が一致する項目こそが、この
+   * 拒否自身への未決の確認である。** 一致する項目が無ければ、`record.waiting`
+   * に何が在ろうと（＝`record.job.status === 'waiting_human'` であろうと）、
+   * それはこの拒否とは無関係な確認でしかない——見送る理由にならない。
+   *
+   * **`toolName` / 入力の digest が取れなかった回（`#onPermissionDenied` の
+   * doc）は、そもそも `ask` が上がらない。** その場合この欄は値を持つが
+   * `record.waiting` には一致する項目が生まれないので、突き合わせは常に
+   * 「一致しない」——渡された値をそのまま使うだけで、`ask` が上がったかどうかを
+   * 個別に判定する必要は無い。
+   *
+   * **`toolUseId` は `permission_denied` イベントの必須欄**（`runnerEventSchema`。
+   * SDK の型で live / result の両方とも必須）なので、`deniedLastAt` と同じく
+   * 拒否の度に必ず上書きする——欠けて「取れていない」を表す軸ではない。
+   *
+   * プロセス内のこの像だけに載る（`deniedLastAt` と同じ理由・同じ寿命）。
+   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
+   * `onForget`、`deniedLastAt` と同じ）。
+   */
+  deniedLastRequestId?: Map<string, string>;
+  /**
    * この委譲のセッションで、直近に `PostToolUse`（道具の実行が決着した
    * 瞬間。`case 'tool_use'`）を観測した時刻（issue #1105 C）。
    *
@@ -3034,6 +3077,40 @@ interface ManagerRecord {
    * `onForget`、`deniedLastAt` と同じ）。
    */
   deniedRenotify?: Map<string, DenialRenotifyState>;
+  /**
+   * **直近に実際に配った拒否の知らせ直しの「いつ・どの拒否か」**（issue #1772
+   * 段2。`#choosePending` が「許しすぎる」側の穴を塞ぐための材料）。
+   *
+   * ## 何のためか
+   *
+   * `renotifyStalledDenials()` の判定を委譲ごとから拒否ごとへ戻した結果
+   * （このファイルの他の doc を見よ）、**無関係な確認が未決のまま知らせ直しが
+   * 届く**状態が新しく起こり得るようになった。`DENIAL_REPLY_ROUTE` は
+   * 「`requestId` を付けずに `decision` を送るな」と注意するだけで、クローンが
+   * それに反して `decision` だけを付けて答えると、`#choosePending` の「待ちが
+   * ちょうど1件なら黙ってそこへ当てる」規則（#313）により、**その無関係な
+   * 確認へ誤って当ててしまう。** ここに知らせ直しの実績を控えておき、
+   * `#choosePending` が「いま待っている確認は、直近の知らせ直しより**前**に
+   * 作られたものか」を判定できるようにする——前なら、その確認は知らせ直しとは
+   * 無関係に既に待っていたものなので、`requestId` 無しの `decision` を黙って
+   * 当てない。
+   *
+   * ## 値
+   *
+   * `at` は知らせ直しを実際に配った時刻（ISO 8601、`#renotifyStalledDenial`
+   * が実際に `#emit` した回だけに更新する——見送った回・出し切って黙った回は
+   * 更新しない）。`key` はその拒否の `denialKey`（表示用に `decodeDenialKey`
+   * で道具名へ戻せる）。**単一の値（Map ではない）。** 複数の拒否×層の組を
+   * 覚える帳面ではなく、「この委譲へ最後に何が届いたか」という1点だけを見る。
+   *
+   * ## 寿命
+   *
+   * プロセス内のこの像だけに載る（`deniedRenotify` と同じ理由・同じ寿命）。
+   * `denied` が上限で忘れた鍵がこの値の `key` と一致するときは、ここも消す
+   * （`#deniedOf` の `onForget`）——忘れた拒否の道具名を、消えていない値として
+   * 名乗り続けないため。
+   */
+  lastDenialRenotify?: { readonly at: string; readonly key: string };
   /**
    * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
    *
@@ -5237,6 +5314,30 @@ class Pool implements ManagerPool {
         detail: `${requestId ?? ''} という確認は ${managerId} で待っていない（既に解けたか、別のマネージャーのもの）。`,
       };
     }
+    if (pending === 'renotify-pending') {
+      // **「許しすぎる」側の穴を塞ぐ（issue #1772 段2）。** `#choosePending`
+      // の doc・`ManagerRecord.lastDenialRenotify` の doc を見よ。ここに来る
+      // 時点で `record.waiting.length === 1` は保証済み（`#choosePending` が
+      // その枝でだけこの値を返す）。
+      const only = record.waiting[0];
+      const last = record.lastDenialRenotify;
+      const { tool, actor } =
+        last === undefined ? { tool: undefined, actor: undefined } : decodeDenialKey(last.key);
+      const actorLabel =
+        actor === 'manager'
+          ? 'マネージャー自身'
+          : actor === 'worker'
+            ? '作業者'
+            : 'どちらの層か不明';
+      return {
+        outcome: 'unknown',
+        detail:
+          `${managerId} には直前に${tool === undefined ? '' : ` ${codeSpan(tool)}（${actorLabel}）の`}拒否の` +
+          '知らせ直しが届いている。requestId の無い decision は、いま待っている確認' +
+          `（requestId: ${codeSpan(only?.requestId ?? '')}）へ黙って当てない——それが知らせ直しへの` +
+          '返答のつもりでも、この確認とは無関係かもしれない。答えるなら requestId を明示すること。',
+      };
+    }
 
     if (pending) {
       const answered = await runner.answer(managerId, {
@@ -7030,11 +7131,14 @@ class Pool implements ManagerPool {
     const now = this.#now();
     for (const [managerId, record] of [...this.#records]) {
       if (this.#stopped) break;
-      // **P1 の確認が未決、または委譲が終わっている場合は見ない。**
-      // `waiting_human` はここで弾く（interface の doc「取り消す条件」）。
-      // 終わった委譲（done/lost/failed/stopped）はそもそも `#records` に
-      // 残らないので、特別な分岐は要らない。
-      if (record.job.status !== 'running') continue;
+      // **委譲が終わっている場合は見ない。** 終わった委譲（done/lost/failed/
+      // stopped）はそもそも `#records` に残らないので、特別な分岐は要らない
+      // （`#load()` の doc）——`#records` に残るのは `running` / `waiting_human`
+      // だけである。**`waiting_human` を丸ごと弾くのはここではやめた**（issue
+      // #1772・横断レビュー14回目 s2）。同じ委譲の中に無関係な未決の確認が
+      // 1件でもあれば拒否ごと見送っていた簡略化が、無関係な拒否まで巻き添えに
+      // していた——判定は `#renotifyStalledDenial` が拒否1件ごとに行う
+      // （この拒否自身の P1 確認かどうかを `deniedLastRequestId` で突き合わせる）。
       const deniedLastAt = record.deniedLastAt;
       if (deniedLastAt === undefined || deniedLastAt.size === 0) continue;
       for (const [key, deniedAt] of [...deniedLastAt]) {
@@ -7066,6 +7170,26 @@ class Pool implements ManagerPool {
     // `toISOString()` で書いた値なので、実際には起きないはずの防御である。
     if (Number.isNaN(deniedAtMs)) return;
 
+    // **この拒否自身への未決の確認（issue #1105 P1「1回だけの許可」）だけを
+    // 見送る（issue #1772・横断レビュー14回目 s2）。** `record.job.status ===
+    // 'waiting_human'` を「クローンには既に別の合図が届いている」の代理指標に
+    // 使う簡略化をやめ、`record.waiting` にこの拒否と同じ `requestId`
+    // （＝`ManagerRecord.deniedLastRequestId` に控えた `tool_use_id`）を持つ
+    // 項目が実在するときだけ見送る。**突き合わせ材料は `deniedLastRequestId`
+    // （拒否の `event.toolUseId`）と `record.waiting[].requestId` の一致——
+    // `#onPermissionDenied`（runner.ts）がこの拒否と同じ id で `ask` を上げる
+    // ときにだけ一致する。** 一致する項目が無ければ、同じ委譲の中に無関係な
+    // 確認（別の道具の許可確認・質問）が何件未決であっても見送らない——
+    // 無関係な確認はこの拒否の停止とは無関係なので、知らせ直しを止める理由に
+    // ならない（issue #1772 の本文）。
+    const ownRequestId = record.deniedLastRequestId?.get(key);
+    if (
+      ownRequestId !== undefined &&
+      record.waiting.some((item) => item.requestId === ownRequestId)
+    ) {
+      return;
+    }
+
     // **拒否の後に進んだか。** `job.lastReportAt`（`case 'report'`）と
     // `lastToolSettledAt`（`case 'tool_use'`）のどちらかが拒否より後なら
     // 進んでいる——このエピソードの帳面を消して終わる。
@@ -7087,6 +7211,12 @@ class Pool implements ManagerPool {
 
     const nextStage = stage + 1;
     (record.deniedRenotify ??= new Map()).set(key, { deniedAt, stage: nextStage });
+    // **「許しすぎる」側の穴を塞ぐ材料（issue #1772 段2）を、実際に配る直前に
+    // 更新する。** 見送った回（この行より前の早期 return）では更新しない——
+    // `#choosePending` が読むのは「実際にクローンへ届いた知らせ直し」であって
+    // 「知らせ直そうとした事実」ではない。`ManagerRecord.lastDenialRenotify`
+    // の doc を見よ。
+    record.lastDenialRenotify = { at: new Date(now).toISOString(), key };
 
     const { tool, actor } = decodeDenialKey(key);
     const actorLabel =
@@ -10502,6 +10632,10 @@ class Pool implements ManagerPool {
         } else {
           (record.deniedLastReason ??= new Map()).set(key, reasonSnapshot);
         }
+        // この拒否と同じ `tool_use_id` を持つ `ask`（issue #1105 P1「1回だけの
+        // 許可」）が、この拒否自身への未決の確認かどうかを後で突き合わせる材料
+        // （issue #1772・`ManagerRecord.deniedLastRequestId` の doc）。
+        (record.deniedLastRequestId ??= new Map()).set(key, event.toolUseId);
 
         // **escalation は道具ごとの合計で判定する（layer 別ではない）。**
         // 持ち主の指摘（PR #549 レビュー）: 「この層のこのループが繰り返して
@@ -11925,6 +12059,11 @@ class Pool implements ManagerPool {
           record.deniedLastReason?.delete(key);
           // issue #1105 C。`deniedLastAt` と同じ鍵なので同時に消す。
           record.deniedRenotify?.delete(key);
+          // issue #1772（横断レビュー14回目 s2）。同じ鍵なので同時に消す。
+          record.deniedLastRequestId?.delete(key);
+          // issue #1772 段2。`lastDenialRenotify` は単一値（Map ではない）
+          // なので、忘れた鍵を指しているときだけ消す。
+          if (record.lastDenialRenotify?.key === key) record.lastDenialRenotify = undefined;
         }
         const labels = keys.map((key) => {
           const { tool, actor } = decodeDenialKey(key);
@@ -12301,19 +12440,58 @@ class Pool implements ManagerPool {
    * **保守側へ倒すための関門ではない。** 意思が示されていれば従来どおり通す。
    * `requestId` だけを添えた回答は今までどおり `inferDecision` に落ちる
    * （`runner.ts` の `inferDecision` の doc がその読み取りの持ち主である）。
+   *
+   * ## 待ちが1件でも当てない場合がもう1つ増えた（issue #1772 段2）
+   *
+   * `renotifyStalledDenials()` の判定を委譲ごとから拒否ごとへ戻した結果、
+   * **無関係な確認が未決のまま知らせ直しが届く**状態が起こり得るようになった。
+   * `requestId` 無しの `decision` は「待ちがちょうど1件なら黙ってそこへ当てる」
+   * （直上の doc・#313）が既定だが、**その1件が直近の知らせ直しより前から
+   * 待っていたもの**（＝知らせ直しとは無関係に、たまたま1件だけ残っている
+   * 確認）なら、それを黙って選ばない——`'renotify-pending'` を返し、
+   * `send()` が `requestId` を明示するよう求めて断る。**知らせ直しがそもそも
+   * 一度も届いていない委譲、または待ちがその知らせ直しより後に作られた委譲
+   * （＝いま最新の出来事として自然に答えている可能性が高い）は、今までどおり
+   * 当てる。**
    */
   #choosePending(
     record: ManagerRecord,
     requestId: string | undefined,
     decision: ManagerDecision | undefined,
-  ): { requestId: string; summary: string } | null | 'ambiguous' | 'gone' {
+  ): { requestId: string; summary: string } | null | 'ambiguous' | 'gone' | 'renotify-pending' {
     if (requestId !== undefined) {
       return record.waiting.find((item) => item.requestId === requestId) ?? 'gone';
     }
     if (decision === undefined) return null;
     if (record.waiting.length === 0) return null;
-    if (record.waiting.length === 1) return record.waiting[0] ?? null;
+    if (record.waiting.length === 1) {
+      const only = record.waiting[0] ?? null;
+      if (only !== null && this.#predatesLastDenialRenotify(record, only))
+        return 'renotify-pending';
+      return only;
+    }
     return 'ambiguous';
+  }
+
+  /**
+   * `#choosePending` の「待ちが1件」の枝が使う判定。**この確認（`item`）は、
+   * この委譲に直近で実際に配った拒否の知らせ直し（`record.lastDenialRenotify`）
+   * より前から待っていたか。**
+   *
+   * - 知らせ直しが一度も届いていない委譲（`lastDenialRenotify === undefined`）
+   *   は、この関門そのものが無関係——常に偽（今までどおり当てる）。
+   * - `item.askedAt` が取れない回（`RunnerWaiting.askedAt` は optional。
+   *   デーモン再起動を跨いだ引き取り・runner のデプロイの版がずれた窓では
+   *   欠ける）は、前後を比べる材料が無い。**「決まらない」を「見送る」側
+   *   （＝黙って当てない）に倒す** —— ここは許可・拒否を推測する場面であり、
+   *   Issue #1772 の「許しすぎる側を作らないこと」がそのまま当てはまる。
+   *   `requestId` を明示させる方が安全側（当てて誤るより、聞き直す方が安い）。
+   */
+  #predatesLastDenialRenotify(record: ManagerRecord, item: RunnerWaiting): boolean {
+    const last = record.lastDenialRenotify;
+    if (last === undefined) return false;
+    if (item.askedAt === undefined) return true;
+    return item.askedAt < last.at;
   }
 
   /**

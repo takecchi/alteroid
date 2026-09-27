@@ -611,8 +611,9 @@ interface AllowedByGrantRecord {
  *
  * **既定値（50）は実測から出た値ではなく判断である。** 「数十件の桁」という
  * 保守的な線を選んだだけで、369件・6213件という実測の規模から逆算した値では
- * ない（AGENTS.md「固定した数は固定した瞬間から腐り、腐ったことは読む側からは
- * 分からない」）。広げれば1ターンの本文がその分大きくなり、狭めれば束ねる効果が
+ * ない（`.claude/skills/this-container/SKILL.md` の「固定した数は固定した瞬間から
+ * 腐り、腐ったことは読む側からは分からない」——この項は #1753 で AGENTS.md
+ * 「自分が走っている器」から移った）。広げれば1ターンの本文がその分大きくなり、狭めれば束ねる効果が
  * 薄れる——どちらの向きにも実測の裏付けは無いので、環境変数で差し替えられる
  * ようにしてある（north_star 禁止2）。
  */
@@ -802,7 +803,8 @@ const RESUMED_MEMORY_NOTICE =
  *    「待てば返る」を取り消すのではなく、**それだけでは足りない**ことを足す
  * 2. **ASCII の目印（`context_window_failure`）と生の文言を含めない。** あれは日誌の
  *    側（`with: 'self'`）の道具で、人間へ返す1行に持ち込まないという線が
- *    `clone.test.ts` の歯で測られている
+ *    `clone-turn-failure-trace.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）
+ *    の歯で測られている
  * 3. **「どうすべきか」を書かない。** 材料だけ渡して判断は人間とクローンに残す
  *    （`usage-limits.ts` の `describeUsageNotice` と同じ約束）。だから「記憶を削れ」
  *    とも「会話を畳め」とも書かない
@@ -2879,7 +2881,8 @@ class Clone implements CloneHost {
     //
     // 割り込みだけを足すと、待ち行列に残っていた非人間が**1件もモデルへ届かなく
     // なる**（先行の実測では残り5件が5件とも届かず、器に未読5件が残った。この形は
-    // `clone.test.ts` の「stop() の shutdown 蒸留が割り込んでも、非人間は1件も
+    // `clone-turn-queue.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
+    // 「stop() の shutdown 蒸留が割り込んでも、非人間は1件も
     // 消えず到着順も保たれる（Issue #564）」が押さえている）。
     // 末尾積みは順序の指定であると同時に、「受信箱を空にしてから閉じる合流点」
     // としても効いていた —— 先に読ませるなら、その合流点は別に作る必要がある。
@@ -2901,7 +2904,8 @@ class Clone implements CloneHost {
     // 入力の generator を畳み、蒸留の次のターンから先が永久に完了しない。
     // (2) `#read` の `finally` が `if (!this.#stopped)` で丸ごと飛ぶので、
     // セッションが死んだときに宙吊りのターンを誰も解放しない
-    // （`clone.test.ts` の「ターンが失敗しても、発言そのものは日誌に残る」が
+    // （`clone-thinking-and-turn-accept.test.ts`（旧 `clone.test.ts`。#1744 で
+    // 分割済み）の「ターンが失敗しても、発言そのものは日誌に残る」が
     // これで 5 秒の時間切れになった）。**`#stopped` はセッションを畳んだ印であって、
     // 新しい仕事を受けない印ではない** —— 後者は `#inbox.closed` が持つ。
     //
@@ -3054,7 +3058,8 @@ class Clone implements CloneHost {
       // ここは「直前の合図の後始末（`#settleInboxEvent`）が完全に終わっている」
       // と言える唯一の地点である。`post()` は外から同期で呼ばれるので、後始末が
       // 途中の隙間にも割り込む — かつてそこで解除していて、**同じ隙間で2つの
-      // 壊れ方が起きた**（どちらも `clone.test.ts` の「終端を出した直後…」／
+      // 壊れ方が起きた**（どちらも `clone-quota-hold.test.ts`（旧 `clone.test.ts`。
+      // #1744 で分割済み）の「終端を出した直後…」／
       // 「短絡した合図の後始末の直前に…」が名指しで踏んでいる）。
       //
       // 1. **保持したはずの合図が器から消える。** 下の `finally` は
@@ -5645,7 +5650,9 @@ class Clone implements CloneHost {
     if (event.type !== 'manager_message' || event.kind !== 'report') return '';
 
     // ⚠️ **`list()` は同期的に投げうる。** `ManagerPool` は interface なので、
-    // 実装が `Promise` を返す前に throw する形が在りうる（`clone.test.ts` の
+    // 実装が `Promise` を返す前に throw する形が在りうる
+    // （`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
+    // #1744 で分割済み）の
     // 「`managers.list()` が投げても、ターンは落ちず、いまの文言のまま届く」が
     // まさにその形を歯にしている）。⟹ **`.catch()` だけでは拾えない**
     // ——同期の throw は `.then()` へ辿り着く前に呼び出し元へ抜ける。
@@ -6657,7 +6664,8 @@ class Clone implements CloneHost {
     //
     // **文脈窓（コンテキストウィンドウ）を超えた失敗だけ、末尾に目印を足す**
     // （Issue #318 P4）。先頭（`内部ターンが失敗した:` / `人間との対話ターンが
-    // 失敗した:`）は変えない — 変えると `clone.test.ts` の
+    // 失敗した:`）は変えない — 変えると `clone-turn-failure-trace.test.ts`
+    // （旧 `clone.test.ts`。#1744 で分割済み）の
     // `text.startsWith(...)` の歯を壊す。生の `message` は既に逐語で載って
     // いるので、目印はその後ろに足すだけでよい（判定・弱さの断り書きは
     // `context-window-failure.ts` の doc）。
@@ -6750,7 +6758,8 @@ class Clone implements CloneHost {
     // 開いた瞬間に、同じ長さで同じところへ落ちる。**⟹ どちらかへ倒さず、両方言う。**
     //
     // **⛔ ここへ ASCII の目印（`context_window_failure`）と生の文言は持ち込まない。**
-    // あれは日誌の側（`with: 'self'`）の道具であり、`clone.test.ts` の
+    // あれは日誌の側（`with: 'self'`）の道具であり、`clone-turn-failure-trace.test.ts`
+    // （旧 `clone.test.ts`。#1744 で分割済み）の
     // 「人間へ返す1行」の歯がその線を測っている。ここで足すのは日本語の断り1文だけ
     // である（{@link CONTEXT_WINDOW_ALSO_NOTICE}）。
     //

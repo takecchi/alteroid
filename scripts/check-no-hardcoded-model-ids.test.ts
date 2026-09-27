@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
  *
  * ## なぜ要るか
  *
- * `AGENTS.md`「開発手順」が言うとおり、alteroid のコードは具体のモデル id を
+ * `.claude/skills/dev-setup/SKILL.md`（この項は #1753 で `AGENTS.md`「開発手順」
+ * から移った）が言うとおり、alteroid のコードは具体のモデル id を
  * 1つも持たない設計になっている（`CLONE_MODEL` / `MANAGER_MODEL` /
  * `WORKER_MODEL` はエイリアス `fable` / `opus` / `sonnet` で、具体の id への
  * 対応は同梱 SDK のバンドル `sdk.mjs` の `aliases` が持つ）。**この設計判断は

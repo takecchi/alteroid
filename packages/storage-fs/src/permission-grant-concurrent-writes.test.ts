@@ -13,7 +13,8 @@ import { createFsStores } from './index.js';
  * `put()` は無条件の全置換で版チェックを持たないので、この「読んでから書く」
  * が重なると、後から書き戻ったほうが先の変更を丸ごと消していた——**人間が
  * 取り消した許可が、クローンの使用記録の書き込みで生き返る**（直す前の赤い
- * 再現は `packages/core/src/clone.test.ts` の「人間の取り消しが、
+ * 再現は `packages/core/src/clone-core-loop.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の「人間の取り消しが、
  * #onPreToolUse の list() と put() の間に割り込んでも消えない」）。
  *
  * `revoke()` / `markUsed()` はこの「読んでから書く」をストア側の排他区間

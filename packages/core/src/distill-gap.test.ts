@@ -12,7 +12,8 @@ import type { JournalEntry } from './schema.js';
 /**
  * `countsAsUndistilledActivity` の allowlist を直に当てる単体の歯。
  *
- * **`clone.test.ts` の「クローン — 蒸留が間に合わなかった区間の検出」は、
+ * **`clone-distill-timing.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
+ * 「クローン — 蒸留が間に合わなかった区間の検出」は、
  * クローンのループ全体を通した end-to-end の歯を持つが、`token_rotation` /
  * `subagent_stall` のように「器の記帳であって数えない」型を単独で
  * 押す歯は無い。** ここでは `deriveDistillGapFromJournal` の下請けである

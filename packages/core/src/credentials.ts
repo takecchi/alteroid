@@ -293,6 +293,20 @@ export function credentialNamesShadowedByProfile(
 export const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 /**
+ * 鍵の名前として認める最大の文字数（#1790、横断レビュー C の14回目）。
+ *
+ * **runner の受け口（`runnerCredentialSchema.name`。`runner-protocol.ts`）と
+ * ここで共有する。** 分けて書くと、`CredentialService.apply()`（デーモン側の
+ * 正本への書き込み）は無制限のまま名前を受け入れて保存できてしまうのに、
+ * それを runner へ配ろうとした瞬間に runner の wire schema がここより先に
+ * 上限で弾く——正本には書けるのに runner へは永久に配れない行が黙って生まれる
+ * （`CredentialService.apply()` → `pushAll` は runner ごとの失敗を `ok: false`
+ * として飲み込むだけで、`apply()` 自体は成功を返す）。**上限は1箇所（ここ）に
+ * 置き、両側から同じ値を読む。**
+ */
+export const CREDENTIAL_NAME_MAX_LENGTH = 128;
+
+/**
  * 行の形が不正で読み飛ばした跡を、stderr へ出す1行に組み立てる（issue #1740）。
  *
  * `FsCredentialVaultStore`（`packages/storage-fs`）と `PgCredentialVaultStore`

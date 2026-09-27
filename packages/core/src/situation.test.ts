@@ -1409,16 +1409,39 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
   it('⭐ プールを読めなかった回も、不変条件の行は落とさない', () => {
     // **あれはプールの状態に依存しないので、読めなくても真である。**
     // ここを落とすと、読めなかった回だけ事故が再発しうる。
-    for (const input of [
-      { tokens: undefined, active: { tokenId: 'tok-a' }, at: AT },
-      { tokens: [row()], active: undefined, at: AT },
-    ] as const) {
-      const line = describeTokenSituation(input);
-      expect(line).toContain('プールを読めなかった');
-      // **0 や「無し」で埋めていない。**
-      expect(line).not.toContain('いま使える 0');
-      expect(line).toContain('枠を理由に仕事を見送らないこと');
-    }
+    //
+    // **`tokens` が読めない回だけをここに残す。** かつては `active: undefined`
+    // （`tokens` は読めているのに現役の指名だけ読めなかった回）もこの配列に
+    // 混ぜて同じ「プールを読めなかった」を期待していた——**`tokens` は実際に
+    // 読めているので、これは事実と違う言い切りだった**（現行の欠陥をテストが
+    // 仕様として固定していた形。次の `it` へ切り出して期待値を反転した）。
+    const line = describeTokenSituation({
+      tokens: undefined,
+      active: { tokenId: 'tok-a' },
+      at: AT,
+    });
+    expect(line).toContain('プールを読めなかった');
+    // **0 や「無し」で埋めていない。**
+    expect(line).not.toContain('いま使える 0');
+    expect(line).toContain('枠を理由に仕事を見送らないこと');
+  });
+
+  it('`active` だけ読めなかった回は「プールを読めなかった」と言わない（`tokens` は読めている）', () => {
+    // **`tokens` と `active` は別々に読み、別々に落ちうる**（`clone.ts` の
+    // `#situationNoticeFor` が2本を個別に catch している）。`tokens` が
+    // 読めているのに「プールを読めなかった」と書くのは、実際に読めた内訳
+    // （下の「プール N 本」）と同じ行の中で矛盾する主張になる。
+    const line = describeTokenSituation({
+      tokens: [row({ id: 'a', label: 'ready1' }), row({ id: 'b', label: 'ready2' })],
+      active: undefined,
+      at: AT,
+    });
+    expect(line).not.toContain('プールを読めなかった');
+    expect(line).toContain('現役の指名を読めなかった');
+    // **内訳は出せる（`tokens` 自体は読めているため）。**
+    expect(line).toContain('プール 2 本: いま使える 2 / 冷却中 0 / 外されている 0');
+    // **不変条件は落ちない。**
+    expect(line).toContain('枠を理由に仕事を見送らないこと');
   });
 
   it('「必ず通る」へ反転していない（確実性を作らない）', () => {

@@ -9969,7 +9969,8 @@ describe('起動時の生存判定で、聞けなかったことを「居ない�
  * ここに無いことを書いておく。**次に触る人へ: harness に口を足すのが先である。**
  *
  * **同じ取り違え（`rate_limit` を `reached` の形で回し手へ渡す）は、クローン側では
- * 測ってある** — `clone.test.ts` の「⚠️ rate_limit_event は notice ではなく、
+ * 測ってある** — `clone-usage-observation-and-recycle.test.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）の「⚠️ rate_limit_event は notice ではなく、
  * 事実と遷移で渡る」。**片側だけの保証であることを、この注記が持つ。**
  */
 

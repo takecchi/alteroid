@@ -28,11 +28,12 @@ import { createMemoryStores } from './testing.js';
  * emit を取り除く（`#976` 実装前の形へ戻す）と実際に赤くなることを確認
  * 済み（PR 本文に変異試験の結果を記録）。
  *
- * **フェイクの `Query` の作り方は `clone.test.ts` の
+ * **フェイクの `Query` の作り方は `clone-turn-usage.test.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）の
  * `describe('ターンの境界で聞いた文脈占有・compaction・result.usage')` と
  * 同じ形**——`getContextUsage` を呼び出し側が差し替えられる口にしてあり、
  * 省略すれば `Query` がこのメソッドを持たない実機の古い版と同じ形になる
- * （`clone.test.ts` の `fakeSdk` の doc と同じ理由）。`runner-failure.test.ts`
+ * （`clone-test-harness.ts` の `fakeSdk` の doc と同じ理由）。`runner-failure.test.ts`
  * の `fakeSdk` を土台にしている（あちらは `getContextUsage` を持たない）。
  *
  * **別ファイルにしてあるのは `runner-failure.test.ts` と同じ理由**——既存の

@@ -15,6 +15,7 @@ import {
   decideSkip,
   envForStep,
   fingerprint,
+  hasSkipWorktreeOrAssumeUnchanged,
   recordFor,
   recordPathFor,
   splitVerifyArgs,
@@ -742,6 +743,43 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     expect(after).toBe(before);
   });
 
+  it('追跡済みで .gitignore にも当たるファイルは拾う（fingerprint の ls-files -c と同じ範囲。Issue #1785）', async () => {
+    // 上の歯「.gitignore されたファイルは拾わない」が測っているのは
+    // **未追跡のまま作ったファイル**だけである。`git ls-files -c`（fingerprint が
+    // 使う集合の半分）は、追跡済みなら ignore の規則に関わらず常に挙げるので、
+    // `writeTreeFor` の範囲もそこは揃っていなければならない——揃っていなかった
+    // のが Issue #1785（`scripts/t3-check-verified-head-tracked-ignored.repro.test.ts`
+    // の再現）。
+    const dir = await makeRepo();
+    // 先に追跡する（.gitignore が無い時点で追加）。
+    await writeFile(join(dir, 'tracked-but-ignored.txt'), 'original content\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'track before ignoring'], { cwd: dir });
+    // 後から .gitignore にそのファイルを足す（force-add 済みファイルにパターンが
+    // 後から掛かる、というよくある事故と同じ形）。
+    await writeFile(join(dir, '.gitignore'), 'tracked-but-ignored.txt\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'ignore the already-tracked file'], { cwd: dir });
+
+    const tree = writeTreeFor(dir) as string;
+    expect(tree).not.toBeNull();
+    const paths = execFileSync('git', ['ls-tree', '-r', '--name-only', tree], {
+      cwd: dir,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .filter(Boolean);
+    expect(paths).toContain('tracked-but-ignored.txt');
+
+    // **帰結そのものも測る**——このファイルを1つ持つリポジトリで、verify 直後に
+    // 何も変えず commit した HEAD が「一致」になること（歯1の前提）。
+    const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    expect(tree).toBe(headTree);
+  });
+
   it('本物の index を動かさない（git diff --cached が空のまま）', async () => {
     const dir = await makeRepo();
     await writeFile(join(dir, 'untracked.txt'), 'new\n');
@@ -783,6 +821,83 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
   it('git repo でなければ null（判定できないを都合よく倒さない）', async () => {
     const dir = await makeTempDir('write-tree-for-not-a-repo-');
     expect(writeTreeFor(dir)).toBeNull();
+  });
+
+  // ── Issue #1785 レビュー: skip-worktree / assume-unchanged は開く側の穴 ──
+  //
+  // 一時 index を本物の index の写しから始める形（上の一連の歯）は、その写しに
+  // 付いている skip-worktree / assume-unchanged の印もそのまま持ち込む。
+  // これらの印が付いたパスは `git add -A` が作業ツリーの中身を見ない——
+  // `fingerprint`（ディスクを直接読む）とはそこで見ているものが食い違いうる。
+  //
+  // **対策は「印が付いたパスが1つでもあれば、作業ツリーが実際に食い違っている
+  // かどうかに関わらず、無条件に null（判定できない）へ倒す」。** 食い違って
+  // いるかどうかを安く確かめる手段が無い（それを確かめないことこそ、この2つの
+  // 印が git 自身に許している最適化・sparse checkout の前提である）ため、
+  // 「印がある」こと自体を「判定できない」の理由にする——`decideSkip` /
+  // `decideRecord` と同じ「判定できないを都合のよい側へ倒さない」向き。
+
+  it('追跡ファイルに skip-worktree を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
+    const dir = await makeRepo();
+    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], { cwd: dir });
+
+    // **食い違いを起こしていない時点でも null 化する**（印の有無だけで判断する
+    // 設計そのものを固定する歯。「実際に食い違ったときだけ null にする」という
+    // より緩い実装だと、この歯は緑のまま、下の「食い違わせた場合」の歯だけで
+    // 生存する変異が出うる）。
+    expect(writeTreeFor(dir)).toBeNull();
+  });
+
+  it('追跡ファイルに assume-unchanged を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
+    const dir = await makeRepo();
+    execFileSync('git', ['update-index', '--assume-unchanged', 'a.txt'], { cwd: dir });
+
+    expect(writeTreeFor(dir)).toBeNull();
+  });
+
+  it('🔴 帰結の再現: skip-worktree を立てて作業ツリーだけ書き換えても、fingerprint は変化を畳む（writeTreeFor 側が null で守っていなければ「静かな一致」が起きた場面）', async () => {
+    const dir = await makeRepo();
+    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], { cwd: dir });
+
+    const fpBefore = fingerprint(dir);
+    await writeFile(join(dir, 'a.txt'), 'CHANGED after skip-worktree\n');
+    const fpAfter = fingerprint(dir);
+
+    // `fingerprint` はディスクを直接読むので、この変更を畳んでいる
+    // （＝「中身が変わった」と正しく見える）。一方 `writeTreeFor` は
+    // （印を検出していなければ）作業ツリーの変更を見ずに HEAD と同じ tree を
+    // 返し続ける——この2つが指す「検証済みの中身」がずれるのが Issue #1785
+    // レビューの開く側の穴である。ここでは前提（fingerprint 側が変化を見る
+    // こと）だけを確かめ、writeTreeFor 側の守りは上の2本で確かめている。
+    expect(fpAfter).not.toBe(fpBefore);
+  });
+
+  it('印が無ければ null 化しない（過剰に判定できない側へ倒していないことの対照）', async () => {
+    const dir = await makeRepo();
+    await writeFile(join(dir, 'a.txt'), 'plain edit, no flags\n');
+    expect(writeTreeFor(dir)).not.toBeNull();
+  });
+});
+
+describe('hasSkipWorktreeOrAssumeUnchanged（Issue #1785 レビュー）', () => {
+  it('行が無ければ false', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('')).toBe(false);
+  });
+
+  it('通常のタグ（大文字 H・キャッシュ済み）だけなら false', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\nH b.txt\n')).toBe(false);
+  });
+
+  it('skip-worktree（先頭が大文字 S）があれば true', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\nS b.txt\n')).toBe(true);
+  });
+
+  it('assume-unchanged（先頭が英小文字）があれば true', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\nh b.txt\n')).toBe(true);
+  });
+
+  it('末尾の空行を誤検出しない', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\n')).toBe(false);
   });
 });
 

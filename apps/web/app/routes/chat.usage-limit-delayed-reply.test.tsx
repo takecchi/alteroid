@@ -5,7 +5,8 @@
  * > あとリミットきてた場合、あとで良いのでちゃんと返信して欲しい
  *
  * `packages/core` は既に正しい（枠が開いたら保持していた合図を試し直し、返信を
- * 日誌へ載せる。`clone.test.ts` の「症状B」ブロック）。`apps/daemon` も
+ * 日誌へ載せる。`clone-usage-window.test.ts`（旧 `clone.test.ts`。#1744 で
+ * 分割済み）の「症状B」ブロック）。`apps/daemon` も
  * `GET /conversations/:id` にその返信を返す（`conversations-usage-limit.test.ts`）。
  * 残っていたのはこの画面で、**同じタブに居続けるかぎり遅れた返信が出なかった**
  * — この画面で始めた会話は `useConversation(null)` にしていたので、

@@ -263,7 +263,8 @@ function toAgentPreToolRecord(input: unknown): AgentPreToolRecord {
  * `deny` に足す `hookSpecificOutput` の形は、`clone.ts` の `#onPreToolUse`
  * （Issue #863）・`runner.ts` の `#onPreToolUse`（Issue #894）が今日すでに
  * 返している形とちょうど一致させてある——包み直しでその形を1文字も変えない
- * （`agent-hooks.test.ts` 側ではなく `clone.test.ts` の「issue #863」/
+ * （`agent-hooks.test.ts` 側ではなく `clone-core-loop.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の「issue #863」/
  * `runner-pre-tool-use.test.ts` の既存の歯がこれを固定している）。
  *
  * **`never` で網羅性を検査する。** `AgentPreToolDecision` に4つ目の `kind` が

@@ -19,7 +19,14 @@
 import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readlinkSync, unlinkSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -146,24 +153,116 @@ export function recordPathFor(repo) {
  * ## 本物の index も作業ツリーも動かさない
  *
  * `GIT_INDEX_FILE` を差し替えた環境だけを渡すことで、書き込み先を一時
- * ファイルへそらす——本物の `.git/index` は一度も開かない。一時ファイル名は
- * 呼ぶたびに乱数を混ぜる（`AGENTS.md`「同一の git 作業ツリーを複数の
- * プロセスが同時に書き換えることがある」——マネージャーと作業者が同じ
- * ツリーで並行して `pnpm verify` を走らせても、固定名だと一時 index を
- * 取り合う）。
+ * ファイルへそらす——本物の `.git/index` は**コピー元として読むだけで、
+ * 書き込みは一度もしない**（下の「一時 index の初期状態」参照。読むのは
+ * `copyFileSync` の1回きりで、その後の `git add -A` / `git write-tree` は
+ * すべて一時ファイルの上で完結する）。一時ファイル名は呼ぶたびに乱数を
+ * 混ぜる（`AGENTS.md`「同一の git 作業ツリーを複数のプロセスが同時に
+ * 書き換えることがある」——マネージャーと作業者が同じツリーで並行して
+ * `pnpm verify` を走らせても、固定名だと一時 index を取り合う）。
+ *
+ * ## 一時 index の初期状態（Issue #1785）
+ *
+ * **一時 index は、空からではなく「いまの本物の index の写し」から始める。**
+ * 空から始めると（この関数のかつての実装）、一時 index の視点からは
+ * すべてのパスが「まだ一度も追跡されていない」ものに見える。すると
+ * **追跡済みで、かつ .gitignore にも当たるファイル**まで、その一時 index の
+ * 上では「新規の・ignore されたファイル」に化けて `git add -A` に拾われず、
+ * tree から漏れる——一方 `fingerprint` が使う `git ls-files -co
+ * --exclude-standard` は、追跡済みなら ignore の規則に関わらず常に挙げる。
+ * 実際に踏むと、force-add 済みのファイルにパターンが後から掛かる・既存の
+ * 追跡ファイルへ `.gitignore` が後から足される、といったよくある形で
+ * **`pnpm check:verified-head` が、verify した直後の HEAD ですら「不一致」と
+ * 言う**（歯1の前提が崩れる。再現は
+ * `scripts/t3-check-verified-head-tracked-ignored.repro.test.ts`）。
+ *
+ * 本物の index の写しから始めれば、そこに載っている追跡済みパスは
+ * **ignore の規則に関わらず**最初から一時 index に存在する。以降の
+ * `git add -A` は、そのパスを「既に追跡されている」ものとして中身・
+ * モードの更新（や、作業ツリーから消えていれば削除）を行うだけで、
+ * ignore 判定はそこを一度も通らない——`git ls-files -c` が ignore を
+ * 素通りするのと構造的に同じ経路を辿る形にしてある。
  *
  * **`fingerprint` と見る範囲を揃えてある。** `fingerprint` は `git ls-files -co
- * --exclude-standard` が挙げる集合（追跡 + 未追跡、ignore を除く）を畳み、
- * `git add -A` も同じ規則（`--exclude-standard` 相当。ignore されたパスは
- * 拾わない）でその集合をステージするので、両者が見る範囲は一致する。
+ * --exclude-standard` が挙げる集合（追跡なら ignore を問わず全部・未追跡は
+ * ignore を除く）を畳む。一時 index を本物の index の写しから始めたうえでの
+ * `git add -A` も、**追跡済みパス（写しに載っている）は ignore を問わず
+ * 更新し、未追跡の新規パスは `--exclude-standard` 相当で ignore されたものを
+ * 拾わない**——両者が見る集合は一致する。
+ *
+ * 本物の index がまだ存在しない（1回も `git add` していない、コミット0の
+ * 裸の repo）場合は、写す元が無いので一時 index は空から始まる——その時点で
+ * 追跡済みのパスはそもそも1つも無いので、この空スタートは以前の実装と
+ * 同じ意味になる（漏れが起きようがない）。
+ *
+ * ## `skip-worktree` / `assume-unchanged` は開く側の穴になる（Issue #1785 レビュー）
+ *
+ * **写しから始める形そのものが、別の穴を持ち込む。** 本物の index の写しには
+ * `skip-worktree` / `assume-unchanged` の印もそのまま付いてくる。**印の付いた
+ * パスは、`git add -A` が作業ツリーの中身と突き合わせない**（git 自身がその
+ * パスを「作業ツリーを見なくてよい」ものとして最適化している——`skip-worktree`
+ * は sparse checkout で実体が無いことがある前提、`assume-unchanged` は
+ * 「変わっていないと信じてよい」という明示の申告）。
+ *
+ * ⟹ 作業ツリーの中身が index（＝直近の commit）と食い違ったまま `pnpm verify`
+ * を通すと（`fingerprint` はディスクを直接読むので、そのずれを畳んでしまう）、
+ * `writeTreeFor` の tree には **古い（index のままの）中身**が入る。もし
+ * その中身がたまたま `HEAD^{tree}` と一致すれば、`pnpm check:verified-head`
+ * は「verify が測った中身」と「push した commit の中身」が違うのに
+ * **「一致」と言う**——このファイルの他の穴（Issue #1785 本体）とは逆向きの、
+ * より危険な「開く側」の欠陥である。
+ *
+ * **対策: 印が1つでも付いていれば `null`（判定できない）へ倒す。** 印を
+ * 外してから進める案もあるが採らない——`skip-worktree` は sparse checkout の
+ * ように**作業ツリーに実体そのものが無い**ことがある前提の印なので、外して
+ * 「作業ツリーを見に行かせる」と、その前提を壊す（存在しないファイルとして
+ * 削除されるなど、呼び出し側が意図していない書き換えを本物の index の外で
+ * 起こしうる）。判定できない側へ倒せば、`recordFor` の `tree` 引数が
+ * `undefined` になり、`compareVerifiedHead` は「旧形式の記録（tree を持たない）」
+ * と同じ経路で `undecidable` を返す（歯4と同じ向き。新しく分岐を増やして
+ * いない）。
+ *
+ * **検出方法**: 写した直後の一時 index に対して `git ls-files -v` を呼ぶ
+ * （`-t` と同じタグを行頭に出し、`assume-unchanged` の対象は**小文字**に
+ * なる）。行頭が `S`（skip-worktree）か、英小文字（`assume-unchanged`）なら
+ * 検出。**`git add -A` の前に見る**——印が付いたパスは `add -A` を経ても
+ * 状態が変わらないので、前後どちらで見ても同じだが、無駄な `add -A` を
+ * 走らせる前に安全側へ倒せるほうを選んだ。
  *
  * 取れなければ `null`（呼ぶ側は記録しない側へ倒す——`decideSkip` / `decideRecord`
  * と同じ「判定できないを都合のよい側へ倒さない」向き）。
  *
  * **測っていないこと**: 大きなツリーで `git add -A` が一時 index に掛かる
- * 時間。`pnpm verify` 一式（数分）に比べれば軽いと見込んでいるだけで、
- * 実測はしていない（Issue #1763 が自分で挙げている留保）。
+ * 時間（本物の index の写しを1回コピーする分、わずかに増えるはずだが
+ * 実測はしていない）。`pnpm verify` 一式（数分）に比べれば軽いと見込んで
+ * いるだけである（Issue #1763 が自分で挙げている留保）。symlink・実行ビット・
+ * `.gitattributes` の正規化（CRLF 等）は、tracked/untracked のどちらであっても
+ * `git add -A` 自身の扱いは変わらない（写しから始めるかどうかは「ignore
+ * 判定を経由するかどうか」だけを変える）ので、この修正で新たに崩れる・
+ * 揃う性質ではない——手で確認した実測は PR 本文に記す。
  */
+/**
+ * `git ls-files -v` の出力から、`skip-worktree` / `assume-unchanged` の印が
+ * 付いたパスが1本でもあるかを読む（`writeTreeFor` の doc「`skip-worktree` /
+ * `assume-unchanged` は開く側の穴になる（Issue #1785 レビュー）」）。
+ *
+ * **タグは行頭の1文字**（`git ls-files -t` と同じタグ集合）。`skip-worktree`
+ * は `S`（大文字）。`assume-unchanged` は、対象のタグ文字を**小文字**にする
+ * （`-v` の man page どおり）——だから「行頭が `S` か、英小文字」で両方を
+ * まとめて拾える。
+ *
+ * **純関数として切り出した。** `git` を実際に起こさなくても歯が書けるように
+ * するため（`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
+ * `writeTreeFor` からは、実際に起こした `git ls-files -v` の標準出力を渡すだけ。
+ */
+export function hasSkipWorktreeOrAssumeUnchanged(lsFilesVOutput) {
+  return lsFilesVOutput.split('\n').some((line) => {
+    if (line.length === 0) return false;
+    const tag = line[0];
+    return tag === 'S' || (tag >= 'a' && tag <= 'z');
+  });
+}
+
 export function writeTreeFor(repo) {
   const dir = spawnSync('git', ['rev-parse', '--absolute-git-dir'], {
     cwd: repo,
@@ -179,13 +278,35 @@ export function writeTreeFor(repo) {
   );
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
+    // **一時 index を、いまの本物の index の写しから始める**（上の doc「一時 index の
+    // 初期状態（Issue #1785）」）。本物の index は読むだけで、一切書き込まない
+    // （`copyFileSync` の src 側）。コピーできなければ、以降の `git add -A` が
+    // どちらの範囲を見ているか保証できないので、判定できない側（`null`）へ倒す。
+    const realIndexFile = join(gitDir, 'index');
+    if (existsSync(realIndexFile)) {
+      try {
+        copyFileSync(realIndexFile, indexFile);
+      } catch {
+        return null;
+      }
+    }
+
+    // Issue #1785 レビュー: 写した一時 index に `skip-worktree` /
+    // `assume-unchanged` の印が付いたパスがあれば、これから走らせる
+    // `git add -A` はその作業ツリーの中身を見ない（上の doc「`skip-worktree` /
+    // `assume-unchanged` は開く側の穴になる」）。`add -A` の前に見て、
+    // 見つかったら判定できない側（`null`）へ倒す。
+    const lsFilesV = spawnSync('git', ['ls-files', '-v'], { cwd: repo, env, encoding: 'utf8' });
+    if (lsFilesV.status !== 0) return null;
+    if (hasSkipWorktreeOrAssumeUnchanged(lsFilesV.stdout)) return null;
+
     const add = spawnSync('git', ['add', '-A'], { cwd: repo, env });
     if (add.status !== 0) return null;
     const write = spawnSync('git', ['write-tree'], { cwd: repo, env, encoding: 'utf8' });
     if (write.status !== 0) return null;
     return write.stdout.trim();
   } finally {
-    // **後片付けは finally で、失敗を無視する。** `git add -A` が一時 index を
+    // **後片付けは finally で、失敗を無視する。** コピーや `git add -A` が一時 index を
     // 作る前に落ちた場合、消すものが無いだけなので例外を握り潰してよい。
     try {
       unlinkSync(indexFile);

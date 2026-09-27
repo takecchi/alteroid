@@ -967,7 +967,8 @@ describe('本番の配線: redeliveryGate は wake() と同じ部品を呼ぶ', 
  * `withheldEnvKeys` として渡っていることだけを固定する。** `withheldEnvKeys`
  * を受け取った後の挙動（伏せた鍵が子へ渡る env から実際に落ちること・記憶
  * ストアの鍵は残ること・正本やプロファイルより後で落ちて生き残らせない
- * こと）は `packages/core/src/clone.test.ts` の
+ * こと）は `packages/core/src/clone-credentials.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の
  * `withheldEnvKeys（SDK 子プロセスへ渡さない鍵。Issue #1495 ①）` が固定する
  * ——ここは「配ってあるか」だけを見る。
  *
@@ -1323,7 +1324,8 @@ describe('デーモンが止まるとき、token_rotation の畳み残しを吐�
  * 「常に `fold` を返す」実装も、引数の並べ方を間違えた歯なら通ってしまう。
  *
  * ⟹ **ここでは、クローンの状態のほうを本物と同じ順序で動かす。** 動かし方が
- * 本物と一致していることは `packages/core/src/clone.test.ts` の
+ * 本物と一致していることは `packages/core/src/clone-usage-window.test.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）の
  * 「usageReleasePending（…Issue #1051）」が実物の `Clone` で固定している
  * （1件目の `post` で印が立ち、2件目は何も動かさず、印は `#pump` が消費する）。
  *
@@ -1331,7 +1333,7 @@ describe('デーモンが止まるとき、token_rotation の畳み残しを吐�
  * | --- | --- |
  * | `createCloneWakeGate` | `decide` の引数と返り値の対応 |
  * | **ここ** | **本物と同じ順序で状態を動かしたとき、配る件数がいくつになるか** |
- * | `clone.test.ts` の `usageReleasePending` | その順序が実物の `Clone` と一致すること |
+ * | `clone-usage-window.test.ts` の `usageReleasePending` | その順序が実物の `Clone` と一致すること |
  */
 describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', () => {
   /**

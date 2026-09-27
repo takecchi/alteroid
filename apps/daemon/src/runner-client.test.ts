@@ -3053,7 +3053,8 @@ describe('解釈できずに捨てた出来事の跡', () => {
  * **本物のソケットが半開き（half-open）になるところは再現していない。** ここで
  * 作っているのは「`reader.read()` が解決も棄却もしない `ReadableStream`」で
  * あって、TCP や Unix ソケットの実物ではない。runner ⇔ daemon の境界を実際に
- * 跨ぐ試験はこのリポジトリに無い（`clone.test.ts` も in-process のフェイクで
+ * 跨ぐ試験はこのリポジトリに無い（`clone-test-harness.ts` の `fakeSdk`
+ * ——旧 `clone.test.ts`。#1744 で分割済み——も in-process のフェイクで
  * この境界を跨がない）。
  *
  * **だから `signal` から本文の終わり方への配線も、ここでは自分で書いている** ——

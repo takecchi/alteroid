@@ -168,7 +168,9 @@ async function appendPairAtSameMillisecond(
  * 実装を疑う向きに書かれているので、**濡れ衣のまま調査が始まる。**
  *
  * **CI（Linux）では緑だった**ので、「CI が緑だから直っている」とは読めない
- * （AGENTS.md「CI が Linux だけなので、OS 固有の振る舞いは緑として観測される」）。
+ * （`.claude/skills/env-profile/SKILL.md` の「CI が Linux だけなので、OS 固有の
+ * 振る舞いは緑として観測される」——この項は #1759 で AGENTS.md「静かに失敗する
+ * 道具」から移った）。
  *
  * ## なぜ固定の `sleep` にしないか
  *

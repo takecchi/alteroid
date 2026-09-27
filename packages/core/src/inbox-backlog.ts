@@ -415,7 +415,8 @@ const DEDUPE_SEPARATOR = '\u0000';
  *   `b` の2フィールドは同じ文字列になる）。**それでも「絶対に衝突しない」
  *   区切りは無い** ——NUL も本文（人間の発言・webhook 由来）に混ざりうる
  *   （`packages/storage-pg/src/inbox.ts` の `stripNulls` の存在がその証拠。
- *   `AGENTS.md`「静かに失敗する道具」にも NUL 混入の実例が在る）ので、
+ *   `.claude/skills/tool-quirks/SKILL.md` にも NUL 混入の実例が在る
+ *   ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）ので、
  *   「絶対に衝突しない」わけではない
  * - **⚠️ この限界が効くのは、誤差が両側へ散るときだけではない。** 衝突すると
  *   *別の本文が同じ鍵に潰れる*方向にしか働かない——`distinct`（畳んだ後の

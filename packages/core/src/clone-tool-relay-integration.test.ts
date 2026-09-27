@@ -26,7 +26,8 @@ import { CLONE_TOOL_NAMES, createCloneMcpServer, type ToolContext } from './tool
  * ```
  *
  * **⚠️ `packages/core/dist/clone-tool-relay-child.js` のビルド済み成果物に
- * 依存する。** `AGENTS.md`「開発手順」の「build が先」のとおり、`pnpm build`
+ * 依存する。** `.claude/skills/dev-setup/SKILL.md` の「build が先」の項
+ * ——この項は #1753 で `AGENTS.md`「開発手順」から移った——のとおり、`pnpm build`
  * （このパッケージなら `pnpm --filter @alteroid/core build`）を先に走らせる
  * こと——他の統合試験・CI と同じ前提であり、ここだけ特別扱いしない
  * （`dist` が無ければ ENOENT で赤くなる。静かにスキップしない）。

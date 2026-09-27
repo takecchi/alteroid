@@ -1,5 +1,6 @@
 import {
   CREDENTIAL_NAME,
+  CREDENTIAL_NAME_MAX_LENGTH,
   ENV_FILE_OWNED_CREDENTIAL_NAMES,
   fingerprintOf,
   GITHUB_CREDENTIAL_NAMES,
@@ -203,6 +204,22 @@ function assertEntries(
   }
   const seen = new Set<string>();
   for (const entry of entries) {
+    /**
+     * **runner の受け口（`runnerCredentialSchema.name`）と同じ上限をここでも
+     * 課す。** ここで拒まずに `stores.credentials.put()` まで通してしまうと、
+     * 正本には書けたのに runner の wire schema がその上限で必ず弾く行が生まれる
+     * ——`apply()` 自体は成功を返し、`pushAll` は runner ごとの失敗を
+     * `{ ok: false }` として飲み込むだけなので、正本と runner が永久に食い違って
+     * いることに誰も気づけない（#1790）。**長さだけを言い、名前そのものは
+     * メッセージに含めない**——上限超えの名前は任意の長さになりうるので、
+     * エラーメッセージ自身が際限なく伸びるのを避ける。
+     */
+    if (entry.name.length > CREDENTIAL_NAME_MAX_LENGTH) {
+      throw new Error(
+        `鍵の名前が長すぎる（${entry.name.length} 文字。上限は ${CREDENTIAL_NAME_MAX_LENGTH} ` +
+          '文字——runner の受け口と同じ上限）',
+      );
+    }
     if (!CREDENTIAL_NAME.test(entry.name)) {
       throw new Error(
         `鍵の名前として認められない: ${JSON.stringify(entry.name)}（英大文字・数字・_ のみ）`,

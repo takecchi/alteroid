@@ -200,7 +200,8 @@ describe('器が共有であることの告知', () => {
   it('事実の隣に「`cwd` そのものを作業ツリーにしない」という行動を書いている', () => {
     // 状態（共有である）だけでは、置き場所を決める側が `cwd` の下へ作る形を排除できない。
     // ⚠️ 長い一文の丸ごと一致では見ない — 1文字直すだけで壊れるうえ、Markdown の折り返しを
-    // 跨ぐと当たらない（`AGENTS.md`「静かに失敗する道具」の grep の罠4と同じ形）。
+    // 跨ぐと当たらない（`.claude/skills/tool-quirks/SKILL.md` の grep の罠4と同じ形
+    // ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）。
     // 性質を名指しする短い断片で見る。
     const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
     expect(prompt).toContain('そのものを作業ツリーにしない');

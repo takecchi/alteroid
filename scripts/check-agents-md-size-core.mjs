@@ -165,7 +165,8 @@ export const BUDGET_HISTORY = [
 /** 現在の予算（バイト）。`BUDGET_HISTORY` の最新の件から導出する。 */
 export const AGENTS_MD_MAX_BYTES = BUDGET_HISTORY[BUDGET_HISTORY.length - 1].bytes;
 
-/** `cat` が一度に返す上限（バイト）。`AGENTS.md`「踏みやすい地雷」の実測。 */
+/** `cat` が一度に返す上限（バイト）。`.claude/skills/tool-quirks/SKILL.md` の実測
+ * ——この項は #1753 で `AGENTS.md`「踏みやすい地雷」から移った。 */
 export const CAT_WINDOW_BYTES = 30_000;
 
 /**

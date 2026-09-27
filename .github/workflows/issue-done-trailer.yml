@@ -32,8 +32,9 @@ name: Issue done trailer
 # ## なぜ base が default branch のときだけ走るか
 #
 # stacked PR やリリース枝向けの中継 PR が default branch 以外へマージされる
-# ことがある（`AGENTS.md`「リポジトリの約束」の `--delete-branch` の項が記録
-# している stacked PR の実例と同じ族）。**Issue を閉じてよいと言えるのは
+# ことがある（`.claude/skills/tool-quirks/SKILL.md` の `--delete-branch` の項が記録
+# している stacked PR の実例と同じ族——この項は #1753 で `AGENTS.md`「静かに
+# 失敗する道具」から移った）。**Issue を閉じてよいと言えるのは
 # default branch（`main`）へ実際に着地したときだけ**なので、
 # `github.event.pull_request.base.ref == github.event.repository.default_branch`
 # も job の `if:` に含める。

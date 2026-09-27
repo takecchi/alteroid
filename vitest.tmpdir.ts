@@ -30,7 +30,8 @@ import { join } from 'node:path';
  * ## なぜ `afterEach` ではなく `afterAll` か
  * Issue #1436 が挙げていた懸念のひとつ — `beforeAll` で1つ作って複数の
  * `it` にまたがって使っている箇所（例:
- * `packages/core/src/clone.test.ts` の `#696`/`#698` 用 `firePreCompact`
+ * `packages/core/src/clone-summary-reindex-and-tail.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の `#696`/`#698` 用 `firePreCompact`
  * や、この repo の多くのテストファイルが採る「トップレベルの `beforeEach`/
  * `beforeAll` で1つ作り、ファイル内のどの `it` からも読む」形）。
  * `afterEach` で消すと、2本目以降の `it` が読もうとした時点でもう無い。

@@ -163,7 +163,8 @@ describe('inspectBashCommand — 弾いてはいけないもの（有界と読�
  * 通ることを、`backgrounded` の両方の値で測る。
  */
 describe('inspectBashCommand — gh run watch を背景へ置く形', () => {
-  // ⭐ AGENTS.md「CI の完了を待つ形」が逐語で記録した実物2本。**どちらも
+  // ⭐ `.claude/skills/pr-green/SKILL.md`（この項は #1753 で AGENTS.md「CI の
+  // 完了を待つ形」から移った）が逐語で記録した実物2本。**どちらも
   // `&` を持たない** —— 背景化は `Bash` ツールの `run_in_background` 側で
   // 起きていた。だから文字列だけを読む機械では、この2本は検出できない。
   it('実測1: worker a25a28c41 の形を、run_in_background なら弾く', () => {

@@ -213,7 +213,26 @@ describe('pickLatestRunPerWorkflow', () => {
     expect(result.verdict).toBe('green');
   });
 
-  it('Issue #1748 の実例: rerun が絡むと、draft 由来の skip のほうが created_at 上は新しく見える。run_started_at で正しく success を選ぶ', () => {
+  it('Issue #1748 の実例: rerun が絡み結論も食い違うので、15回目の横断レビュー以降は「判定できない」（undecidable-rerun-conflict）と言う（反転）', () => {
+    // ⚠️ **15回目の横断レビューでこの it() は反転した。** 以前はここで
+    // 「run_started_at を鍵にすれば success（rerunSuccess）を正しく選び、
+    // green になる」ことを確かめていた。しかし15回目の横断レビューで、
+    // 時刻（created_at / updated_at / run_started_at のどれでも）を比べて
+    // 世代を選ぶ形そのものに開く側の穴が見つかり（キューで長く待たされた
+    // rerun が、別の run の created_at を追い越す。
+    // `scripts/check-pr-green-1778-queued-rerun-open-side.repro.test.ts`）、
+    // 方針を「rerun が絡み、かつ結論（conclusion）が食い違うときは、時刻を
+    // 比べずに『判定できない』を返す」へ変えた（`pickLatestRunPerWorkflow`
+    // の `hasRerunConflict` の doc）。**この標本は draftOriginSkip
+    // （conclusion=skipped）と rerunSuccess（conclusion=success）で結論が
+    // 食い違うので、新しい方針では `undecidable-rerun-conflict` になる。**
+    // これは「緑でないのに green と言う」開く側の欠陥ではなく、「本当は
+    // green と確定できるのに判定できないと言う」閉じる側の後退だが、
+    // #1761 のときと同じ非対称（開く側より閉じる側に倒れるほうを選ぶ）を
+    // 踏襲した結果として、意図して受け入れている（PR 本文の3点セットを
+    // 見よ）。下の実測コメント自体は書き換えていない——何が起きたかの
+    // 記録として、そのまま残す。
+    //
     // 実測（観測 2026-09-27、sha 031bf92f62e61fc16eee3570a72c7c87ff6b2d7f）:
     // push 直後に `gh pr ready` を打ったところ、concurrency
     // （cancel-in-progress: true）が競り合い、`CI` の run が2本できた。
@@ -264,12 +283,27 @@ describe('pickLatestRunPerWorkflow', () => {
       Date.parse(draftOriginSkip.created_at),
     );
 
+    // 反転後: rerun（run_attempt=2）が絡み、conclusion が skipped と
+    // success で食い違うので、時刻では選ばず「判定できない」の目印
+    // （rerunConflict）へ畳む——どちらの run の id も選ばれない
+    // （`id: null`）。
     const latest = pickLatestRunPerWorkflow([draftOriginSkip, rerunSuccess]);
-    expect(latest).toEqual([rerunSuccess]);
-    // 渡す順序を変えても同じ結果になること（newerRun は対称のはず）。
-    expect(pickLatestRunPerWorkflow([rerunSuccess, draftOriginSkip])).toEqual([rerunSuccess]);
+    expect(latest).toHaveLength(1);
+    expect(latest[0].id).toBeNull();
+    expect(latest[0].rerunConflict).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: draftOriginSkip.id, conclusion: 'skipped' }),
+        expect.objectContaining({ id: rerunSuccess.id, conclusion: 'success' }),
+      ]),
+    );
+    // 渡す順序を変えても同じ結果になること（対称のはず）。
+    expect(pickLatestRunPerWorkflow([rerunSuccess, draftOriginSkip])).toEqual(latest);
 
     // 実測: gh api repos/takecchi/alteroid/actions/runs/36286927781/attempts/2/jobs
+    // ⚠️ この jobsByRunId はもう使われない——`rerunConflict` を持つ latest の
+    // 要素は `id: null` なので、evaluatePrGreen は jobsByRunId を見る前に
+    // undecidable-rerun-conflict を返す（下の assertion）。実測コメントは
+    // 「本来ならこの run の jobs は全部 success だった」という記録として残す。
     const jobsByRunId = {
       36286927781: [
         { name: 'ci', status: 'completed', conclusion: 'success' },
@@ -277,7 +311,14 @@ describe('pickLatestRunPerWorkflow', () => {
       ],
     };
     const result = evaluatePrGreen(latest, jobsByRunId);
-    expect(result.verdict).toBe('green');
+    expect(result.verdict).toBe('undecidable-rerun-conflict');
+    // 「判定できない」の detail は、何を見れば決められるかを言う
+    // （gh pr view --json mergeStateStatus と、各 run の id/attempt/結論）。
+    expect(result.detail.some((line: string) => line.includes('mergeStateStatus'))).toBe(true);
+    expect(result.detail.some((line: string) => line.includes(String(draftOriginSkip.id)))).toBe(
+      true,
+    );
+    expect(result.detail.some((line: string) => line.includes(String(rerunSuccess.id)))).toBe(true);
   });
 
   it('Issue #1748 の変異ガード: run_attempt を無視して常に created_at で選ぶと、#1748 の標本は再び skipped（NG）に戻る', () => {
@@ -305,8 +346,12 @@ describe('pickLatestRunPerWorkflow', () => {
     };
     // 直す前の判定（created_at だけ）は skipped を選ぶ —— これが #1748 の NG。
     expect(naiveNewerByCreatedAtOnly(draftOriginSkip, rerunSuccess)).toEqual(draftOriginSkip);
-    // 直した後の pickLatestRunPerWorkflow は同じ標本で success を選ぶ
-    // （run_attempt を足した完全な標本は直上のテストで確認済み）。
+    // 直した後（#1748 当時）の pickLatestRunPerWorkflow は同じ標本で success
+    // を選んでいた。**15回目の横断レビュー以降は違う**——run_attempt を
+    // 足した完全な標本（直上のテスト）は、結論（skipped/success）が食い違う
+    // ので `undecidable-rerun-conflict`（判定できない）になる。ここで確かめ
+    // ているのは「rerun を無視した素朴な created_at 比較が skipped を選ぶ」
+    // という #1748 当時の回帰の形だけで、それ自体は変わっていない。
   });
 
   it('Issue #1761 の open-side の疑い（14回目の横断レビュー、wip/review14-s5 の再現テスト由来）: rerun の run_started_at が、別の genuinely 新しい run の created_at より前なら、その別 run の failure を隠さない', () => {
@@ -357,25 +402,54 @@ describe('pickLatestRunPerWorkflow', () => {
       Date.parse(genuinelyNewerFailure.created_at),
     );
 
+    // ⚠️ 15回目の横断レビューで、この中間 assertion は反転した。以前は
+    // 「run_started_at を鍵にすれば genuinelyNewerFailure（failure）が
+    // 正しく選ばれる」ことを確かめていた——それ自体は正しかったが、時刻を
+    // 比べて選ぶという方法そのものに開く側の穴が残っていた（rerun が
+    // キューでさらに長く待たされる標本。
+    // `scripts/check-pr-green-1778-queued-rerun-open-side.repro.test.ts`）。
+    // いまは rerun（run_attempt=2）が絡み conclusion が success/failure で
+    // 食い違うので、時刻では選ばず「判定できない」の目印へ畳む。
     const latest = pickLatestRunPerWorkflow([rerunnedOldRun, genuinelyNewerFailure]);
-    expect(latest).toEqual([genuinelyNewerFailure]);
+    expect(latest).toHaveLength(1);
+    expect(latest[0].id).toBeNull();
+    expect(latest[0].rerunConflict).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: rerunnedOldRun.id, conclusion: 'success' }),
+        expect.objectContaining({ id: genuinelyNewerFailure.id, conclusion: 'failure' }),
+      ]),
+    );
 
     const jobsByRunId = {
       500: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
       501: [{ name: 'ci', status: 'completed', conclusion: 'failure' }],
     };
     const result = evaluatePrGreen(latest, jobsByRunId);
-    // 直っていれば、最新世代の failure が見えるので green ではない。
+    // この行自体は反転していない —— 直っていれば「本当は failure が
+    // 隠れているのに green と言う」ことはない、という結論は変わらない。
+    // 変わったのは「red になる」から「undecidable-rerun-conflict になる」
+    // へ、not green の中身のほうである（下で明示する）。
     expect(result.verdict).not.toBe('green');
+    expect(result.verdict).toBe('undecidable-rerun-conflict');
   });
 
-  it('鏡像: rerun の run_started_at が、別の run の created_at より後なら、rerun 側を最新として選んでよい（#1748 の実例と同じ向き）', () => {
-    // 直上のテストと対になる形。rerun の実行開始が別 run の created_at
-    // より「後」なら、別 run は rerun が始まる前に既に存在して完了して
-    // いたことになる —— rerun はそのあとに手で起こされた、本当に新しい
-    // 世代である。この場合は rerun 側を「最新」として選んでよい
-    // （#1748 の実データ、sha 031bf92 と同じ向き。draft 由来の skip の
-    // created_at より rerun の run_started_at のほうが後だった）。
+  it('鏡像: rerun の run_started_at が、別の run の created_at より後でも、conclusion が食い違うなら15回目の横断レビュー以降は判定できない（反転）', () => {
+    // ⚠️ **15回目の横断レビューでこの it() は反転した。** 以前はここで
+    // 「rerun の実行開始が別 run の created_at より後なら、別 run は rerun
+    // が始まる前に既に存在して完了していたことになる —— rerun はそのあとに
+    // 手で起こされた、本当に新しい世代なので green と言ってよい」ことを
+    // 確かめていた（#1748 の実データ、sha 031bf92 と同じ向き）。
+    //
+    // しかし15回目の横断レビューで、「rerun の実行開始と別 run の
+    // created_at の前後関係」だけを見て世代を選ぶ形そのものに開く側の穴が
+    // 見つかった（run_started_at 自身がキューで長く待たされれば、この
+    // 前提が成り立っていても実際には別の run のほうが後から確定した
+    // 失敗でありうる。
+    // `scripts/check-pr-green-1778-queued-rerun-open-side.repro.test.ts`）。
+    // ⟹ rerun が絡み conclusion が食い違う場合は、この前後関係を見ずに
+    // 「判定できない」を返す方針へ変えた——**この標本のように「本来なら
+    // rerun 側が正しい」場合も例外にしない**（例外にすると、時刻を比べる
+    // 経路がまた復活してしまう）。直上のテストと対になる形は保つ。
     const otherRun = {
       id: 501,
       name: 'CI',
@@ -404,15 +478,89 @@ describe('pickLatestRunPerWorkflow', () => {
     );
 
     const latest = pickLatestRunPerWorkflow([otherRun, rerunnedNewerRun]);
-    expect(latest).toEqual([rerunnedNewerRun]);
+    // 反転後: conclusion が failure と success で食い違うので、rerun の
+    // 実行開始が後であっても時刻では選ばず「判定できない」の目印へ畳む。
+    expect(latest).toHaveLength(1);
+    expect(latest[0].id).toBeNull();
+    expect(latest[0].rerunConflict).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: otherRun.id, conclusion: 'failure' }),
+        expect.objectContaining({ id: rerunnedNewerRun.id, conclusion: 'success' }),
+      ]),
+    );
 
     const jobsByRunId = {
       500: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
       501: [{ name: 'ci', status: 'completed', conclusion: 'failure' }],
     };
     const result = evaluatePrGreen(latest, jobsByRunId);
-    // rerun のほうが実行開始で見て後なので、green と言ってよい。
-    expect(result.verdict).toBe('green');
+    // 反転後: rerun の実行開始が後であっても、conclusion が食い違う以上は
+    // green と言い切らない。
+    expect(result.verdict).toBe('undecidable-rerun-conflict');
+  });
+
+  it('PR #1801 レビュー: rerun が絡む鍵に未完了の run が混じると、時刻では選ばず pending になる（green ではない）', () => {
+    // `hasRerunConflict` は `sameKeyRuns.every(status === 'completed')` を
+    // 前提に発火する。全部完了していなければ発火せず、`newerRun` /
+    // `effectiveTimestamp` による時刻の比較へフォールバックしていた——
+    // ここにも開く側の穴が残っていた（PR #1801 のレビューコメント）。
+    //
+    // - run A: rerun（run_attempt=2）がキューで長く待たされた
+    //   （run_started_at=10:35:00Z）あと success で完了した。
+    // - run B: A の再実行を頼んだあとに作られた、本当に新しい世代の run
+    //   （run_attempt=1、created_at=10:20:00Z）。まだ in_progress——あとで
+    //   failure になる予定だが、結論はまだ確定していない。
+    //
+    // 直す前: effectiveTimestamp(A)=run_started_at(10:35:00Z) が
+    // effectiveTimestamp(B)=created_at(10:20:00Z) より後なので、newerRun は
+    // A を選ぶ。B（まだ結論が出ていない）はまるごと捨てられ、
+    // evaluatePrGreen([A], ...) は A の jobs がすべて success なので green を
+    // 返してしまう——B がまだ走っているのに、である。
+    const rerunnedQueuedRun = {
+      id: 500,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 2,
+      created_at: '2026-09-20T10:00:00Z',
+      run_started_at: '2026-09-20T10:35:00Z',
+      updated_at: '2026-09-20T10:36:00Z',
+      status: 'completed',
+      conclusion: 'success',
+    };
+    const stillRunningNewerRun = {
+      id: 502,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 1,
+      created_at: '2026-09-20T10:20:00Z',
+      status: 'in_progress',
+      conclusion: null,
+    };
+
+    // 前提: 直す前なら A が「新しい」と選ばれてしまう関係にあること。
+    expect(Date.parse(rerunnedQueuedRun.run_started_at)).toBeGreaterThan(
+      Date.parse(stillRunningNewerRun.created_at),
+    );
+
+    const latest = pickLatestRunPerWorkflow([rerunnedQueuedRun, stillRunningNewerRun]);
+    // 時刻では選ばず、未完了の run（B）だけを残す——完了済みの A はこの回の
+    // 判定には使わない。
+    expect(latest).toHaveLength(1);
+    expect(latest[0].id).toBe(stillRunningNewerRun.id);
+    expect(latest[0].status).toBe('in_progress');
+
+    const jobsByRunId = {
+      500: [
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    // B がまだ走っているので green ではなく pending —— 既存の pending の
+    // 意味（待てば決まる）にそのまま乗る。undecidable-rerun-conflict では
+    // ない——結論がまだ確定していないので「食い違い」とは呼べない。
+    expect(result.verdict).toBe('pending');
+    expect(result.verdict).not.toBe('green');
   });
 });
 
