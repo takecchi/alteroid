@@ -153,7 +153,15 @@ describe('FsJobStore — jobs.json の不正な1行を読み飛ばす（issue #1
     expect(lines).toHaveLength(0);
   });
 
-  it('clear() は正しい行を消すが、壊れた行は（消せないので）元の形のまま残す', async () => {
+  // 以前はここで「clear() は正しい行を消すが、壊れた行は（消せないので）
+  // 元の形のまま残す」を確かめていた——`invalidJobsRaw` を消さずに持ち回る
+  // 実装が正しいという前提だった。だが `JobStore.clear()` の doc は
+  // 「委譲と承認待ちを両方消す」であり、pg 実装の `clear()` は表の行を
+  // `DELETE` で全部消すので不正な行も一緒に消える——fs だけが不正な行を
+  // 残すのは pg との非対称で、#1868 の直しの範囲として一緒に塞いだ
+  // （この歯は直す前の `b1f410f` の版では赤——`raw.jobs` に `mgr-bad` の行が
+  // 残るので `toEqual([])` に落ちる）。
+  it('clear() は正しい行も壊れた行も両方消す——jobs.json に委譲の行が1つも残らない（issue #1868）', async () => {
     await writeRawJobsFile();
     const stores = createFsStores(root);
 
@@ -164,8 +172,8 @@ describe('FsJobStore — jobs.json の不正な1行を読み飛ばす（issue #1
     expect(removed).toEqual({ jobs: 1, approvals: 0 });
 
     const raw = JSON.parse(await readFile(jobsPath, 'utf8')) as { jobs: unknown[] };
-    expect(findRowById(raw.jobs, 'mgr-bad')).toEqual(BAD_JOB_RAW);
-    expect(findRowById(raw.jobs, 'mgr-good')).toBeUndefined();
+    // **不正な行ごと消える**——ファイルに委譲の行が1つも残らない。
+    expect(raw.jobs).toEqual([]);
 
     let found: Job[] = [];
     await captureStderr(async () => {

@@ -166,16 +166,21 @@ export class FsJobStore implements JobStore {
   /**
    * ジョブと承認待ちを両方消す（`JobStore.clear` の doc）。
    *
-   * **壊れた行（`invalidJobsRaw`）は消さない。** ここが消すのは「検査を通った
-   * 台帳の中身」であって、読めない行はワークスペースのリセットでも「元の形の
-   * まま残す」という `putJob` / `updateJob` と同じ約束を保つ——読めない行を
-   * 判断材料も無いまま黙って消すと、手で直せたはずの跡が失われる。
+   * **壊れた行（`invalidJobsRaw`）も一緒に消す**（issue #1868）。以前はここで
+   * 壊れた行を残していた——`putJob` / `updateJob` が「読めない行を判断材料も
+   * 無いまま黙って消さない」約束を守るのと同じ理由からだったが、`clear()` は
+   * それらとは性質が違う。`clear()` はワークスペースのリセット専用の全消去
+   * 操作で、pg 実装は表の行を `DELETE` で全部消す（`PgJobStore.clear` の
+   * doc）——行の中身が壊れているかどうかは関係なく消える。fs だけが
+   * `invalidJobsRaw` を生かして残すと、同じ `clear()` の意味が実装ごとに
+   * 変わってしまう（fs だけ「リセットしたのに壊れた行が残っている」状態に
+   * なる）。
    */
   async clear(): Promise<{ jobs: number; approvals: number }> {
     let removed = { jobs: 0, approvals: 0 };
     await this.#update((file) => {
       removed = { jobs: file.jobs.length, approvals: file.approvals.length };
-      return { jobs: [], invalidJobsRaw: file.invalidJobsRaw, approvals: [] };
+      return { jobs: [], invalidJobsRaw: [], approvals: [] };
     });
     return removed;
   }
