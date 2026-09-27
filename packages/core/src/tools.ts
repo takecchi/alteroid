@@ -10547,8 +10547,19 @@ export function createCloneTools(context: ToolContext) {
         //
         // **`part === 'request'` では何もしない。** 依頼文はそもそも報告では
         // ないので、失敗の有無で呼び方が変わる欄ではない。
+        //
+        // **`foldedTurn !== undefined` の回も出さない（Issue #1798）。**
+        // `found.lastFailure` は `manager.ts` の `case 'report'` が
+        // `record.job.status === 'stopped'` の間は一切触らない欄なので
+        // （`lastFoldedTurn` だけを書いて早期 return する分岐）、foldedTurn が
+        // 在る回の `lastFailure` は必ず畳まれる**前**の、無関係な古いターンを
+        // 指す。`describeManagerFailure` の注記は「この行の下に出る本文は
+        // runner が包んだエラー文…であって報告ではない」と言い切るが、実際に
+        // 下へ出るのは `foldedTurn.text`（普通の発話でありうる）——注記が予告
+        // する本文の種類と実際の本文が食い違う（#1798 の実測）。当てはまらない
+        // 注記は出さない。
         const failure =
-          part === 'request'
+          part === 'request' || foldedTurn !== undefined
             ? null
             : describeManagerFailure(
                 found.lastFailure,
@@ -10559,11 +10570,24 @@ export function createCloneTools(context: ToolContext) {
         // 掘れる（Issue #713 段3）。** `manager_list` の `systemErrorLine` と
         // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
         // このセッションの落ち方の話ではない）。
+        //
+        // **確かめた: foldedTurn の回との食い違いは無い（#1797/#1798 の監査）。**
+        // `describeManagerSystemError` は `found.status !== 'failed'` で
+        // `null` を返す。`foldedTurn` が在る回は `manager.ts` の `case
+        // 'report'` が `record.job.status === 'stopped'` の間だけ書く欄で、
+        // その分岐も `case 'closed'` の対応する早期 return も `status` を
+        // 動かさない——`status` が `'stopped'` から離れるのは `send()` が
+        // 直接 `'running'` へ書く経路だけで、`'failed'` へは行かない。
+        // ⟹ 通常の到達経路では foldedTurn と `status === 'failed'` は同時に
+        // 立たないので、このまま出しても本文の種類を誤って予告しない
+        // （systemError の文言自体も「本文はこれです」という予告はしていない）。
         const systemError = part === 'request' ? null : describeManagerSystemError(found);
         // **同じ場所で掘れる（Issue #1517「最小の形」2）。** `manager_list`
         // の `cgroupEventsLine` と同じ材料——`systemError` と同じ軸ではない
         // ので、両方が同時に出ることがある。`part === 'request'` では出さない
-        // （`failure` / `systemError` と同じ線）。
+        // （`failure` / `systemError` と同じ線）。**確かめた: 同じ理由
+        // （`status === 'failed'` ガード）で foldedTurn の回とは食い違わない
+        // （すぐ上の `systemError` の注記と同じ監査）。**
         const cgroupEvents = part === 'request' ? null : describeManagerCgroupEvents(found);
         // **拒否も同じ場所で掘れる（Issue #830）。** `manager_list` の `denialLine`
         // と同じ材料を、同じ字面（`describeDenials`）で出す。**報告が在る回でも
@@ -10572,10 +10596,27 @@ export function createCloneTools(context: ToolContext) {
         //
         // **`part === 'request'` では出さない。** 依頼文はこのセッションで何が
         // 止められたかの話ではない（`failure` / `systemError` と同じ線）。
+        //
+        // **foldedTurn の回は `found.lastReportAt` の代わりに `foldedTurn.at`
+        // を渡す（#1797/#1798 の監査で見つけた、同根の食い違い）。**
+        // `describeDenials` → `describeDenialFollowUp` は「拒否の後に委譲が
+        // 進んだか」を `lastReportAt` と拒否の時刻の前後で判定する。だが
+        // `found.lastReportAt` は `case 'report'` の `status === 'stopped'`
+        // 分岐では更新されない（`lastFoldedTurn` だけを書く）ので、foldedTurn
+        // が在る回の `lastReportAt` は畳まれる前の古い値のままになりうる——
+        // 拒否がその後（停止後）に記録され、さらにその後に畳まれたターンが
+        // 届いた場合、古い `lastReportAt` だけを見ると「拒否の後の報告はまだ
+        // 届いていない」と誤って判定する（実際には foldedTurn が拒否の後に
+        // 届いている）。`foldedTurn.at` は `lastReportAt` より必ず新しい
+        // （foldedTurn は `lastReportAt` を書いた後にしか書かれない分岐でしか
+        // 生まれない）ので、在ればそちらを使う。
         const denied =
           part === 'request'
             ? null
-            : describeDenials(context.managers.denials(managerId), found.lastReportAt);
+            : describeDenials(
+                context.managers.denials(managerId),
+                foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
+              );
         // **一覧と同じ分類を、掘った先でも同じ字面で出す（Issue #857）。**
         // `manager_list` で順位が付いた理由（本文が届いているか）が、
         // 掘った先で消えないようにする。
@@ -10583,6 +10624,13 @@ export function createCloneTools(context: ToolContext) {
         // **`part === 'request'` では出さない。** 依頼文は「何が観測されて
         // いないか」の話ではない（`failure` / `systemError` / `denied` と
         // 同じ線）。
+        //
+        // **確かめた: foldedTurn の回との食い違いは無い（#1797/#1798 の監査）。**
+        // `classifyUnobservedOutcome` は `isManagerOutcomeUnobserved(found.status)`
+        // （`status === 'lost' || status === 'failed'`）で弾く。`systemError`
+        // の注記と同じ理由で、通常の到達経路では foldedTurn と `status ===
+        // 'failed'`（`'lost'` も同様、`case 'report'` の `stopped` 早期
+        // return は `status` を動かさない）は同時に立たない。
         const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
         const label =
           part === 'request'
@@ -10607,25 +10655,43 @@ export function createCloneTools(context: ToolContext) {
         const reportAgeStatus =
           part === 'request'
             ? ''
-            : // **文言に「直近の報告」を含めない。** `label` が「直近のターンの
-              // 中身」へ切り替わった回（`isFoldedTurnReport` / `foldedTurn`）で
-              // ここに「直近の報告」という字面が混ざると、見出しを切り替えた
-              // 意味（Issue #714 / #917 / #1038）が薄れる——読む側が「結局
-              // 直近の報告ではないか」と読める。
-              ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
+            : foldedTurn !== undefined
+              ? // **Issue #1797: foldedTurn の回は `lastReportAt` の欄ごと
+                // 出さない。** `found.lastReportAt` は畳まれる前の、無関係な
+                // 別のターンの受信時刻である（`case 'report'` の `stopped`
+                // 早期 return は `lastReportAt` を更新しない）。ここへ出すと、
+                // いま読んでいる畳まれた本文の齢であるかのように見える——
+                // その受信時刻は既に `label`（`(${foldedTurn.at} 受信)`）が
+                // 言っているので、ここでは繰り返さず、いまの status だけ添える。
+                ` — いまの status: \`${found.status}\``
+              : // **文言に「直近の報告」を含めない。** `label` が「直近のターンの
+                // 中身」へ切り替わった回（`isFoldedTurnReport` / `foldedTurn`）で
+                // ここに「直近の報告」という字面が混ざると、見出しを切り替えた
+                // 意味（Issue #714 / #917 / #1038）が薄れる——読む側が「結局
+                // 直近の報告ではないか」と読める。
+                ` — lastReportAt: ${found.lastReportAt ?? '一度も届いていない'} / いまの status: \`${found.status}\``;
         const head = `マネージャー ${managerId} の${label}（${describePage(part1)}）${reportAgeStatus}`;
         // **焼いた status といまの status が食い違えば ⚠ を出す（Issue
         // #1036）。** 生成元は `describeReportDrift` 1箇所——`manager_list`
         // と割れない。一致している回・比較できない回（この欄を持たない古い
         // 行・報告が一度も無い回）は1文字も増えない。`part === 'request'`
         // では出さない（同上）。
+        //
+        // **foldedTurn の回は、その材料で組む（Issue #1797）。**
+        // `found.lastReportAt` / `found.lastReportStatus` は畳まれる前の
+        // 別のターンの値なので、そのまま渡すと「いま読んでいる畳まれた本文」
+        // とは無関係な drift を語ることになる（#1797 の実測）。`foldedTurn` は
+        // `manager.ts` の `case 'report'` が `record.job.status === 'stopped'`
+        // の間だけ書く欄なので、書かれた瞬間の status は構造的に `'stopped'`
+        // だったと分かる——専用の記録欄が無くても合成できる。`lastReportAt` も
+        // `foldedTurn.at`（この本文が実際に届いた時刻）を使う。
         const drift =
           part === 'request'
             ? ''
             : describeReportDrift({
                 managerId,
-                lastReportAt: found.lastReportAt,
-                lastReportStatus: found.lastReportStatus,
+                lastReportAt: foldedTurn !== undefined ? foldedTurn.at : found.lastReportAt,
+                lastReportStatus: foldedTurn !== undefined ? 'stopped' : found.lastReportStatus,
                 status: found.status,
                 now: new Date(),
               });
