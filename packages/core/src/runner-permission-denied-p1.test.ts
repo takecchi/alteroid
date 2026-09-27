@@ -340,6 +340,51 @@ describe('allow の一往復（issue #1105 P1）', () => {
   });
 });
 
+describe('同じ型の別の作業者には許可を使わせない（issue #1105 P1）', () => {
+  /**
+   * 担い手の鍵は作業者の個体（`agent_id`）で作る。表示用の `actor` は型
+   * （`agent_type`）までしか区別しないので、それを鍵にすると、同じ型の作業者が
+   * 並行に2体いるとき、片方への許可をもう片方が使える。
+   */
+  it('agent_type が同じでも agent_id が違えば通さず、許可を受けた作業者自身なら通す', async () => {
+    const { started, host: h } = await startSession();
+
+    const denialPromise = firePermissionDenied(started.options, {
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo same-type-probe' },
+      tool_use_id: 'tu-same-type-1',
+      reason: '分類器が拒否した（テスト）',
+      agent_id: 'agent-a',
+      agent_type: 'worker',
+    });
+    await tick();
+    await h.answer('mgr-1', { requestId: 'tu-same-type-1', decision: 'allow', message: 'どうぞ' });
+    await denialPromise;
+
+    const fromOther = await firePreToolUse(started.options, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo same-type-probe' },
+      tool_use_id: 'tu-same-type-1-other',
+      agent_id: 'agent-b',
+      agent_type: 'worker',
+    });
+    expect(fromOther).toEqual({ continue: true });
+
+    const fromSelf = await firePreToolUse(started.options, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo same-type-probe' },
+      tool_use_id: 'tu-same-type-1-self',
+      agent_id: 'agent-a',
+      agent_type: 'worker',
+    });
+    const asRecord = fromSelf as { hookSpecificOutput?: Record<string, unknown> };
+    expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('allow');
+  });
+});
+
 describe('deny では retry を返さない（issue #1105 P1）', () => {
   it('クローンが deny と答えると no-retry になり、一言を note として降ろす', async () => {
     const { started, events, host: h } = await startSession();

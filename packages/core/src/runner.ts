@@ -3994,7 +3994,11 @@ class RunnerSession {
     }
 
     const inputHead = buildDenialInputHead(record.toolInput, this.#env);
-    const permitKey = oneShotAllowKey(actor, toolName, digestOf(rawLine));
+    const permitKey = oneShotAllowKey(
+      oneShotActorOf(this.#id, record),
+      toolName,
+      digestOf(rawLine),
+    );
     const id = record.toolUseId ?? randomUUID();
 
     // **既存の許可確認と同じ重複排除**（`#onPermission` と同じ理由——SDK は
@@ -4253,7 +4257,7 @@ class RunnerSession {
       record.agentId === undefined
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-    const key = oneShotAllowKey(actor, toolName, digestOf(rawLine));
+    const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(rawLine));
     const grant = this.#oneShotAllows.get(key);
     if (grant === undefined) return { kind: 'continue' };
     // 使い切る。一致しても1回だけ。
@@ -6064,6 +6068,21 @@ function digestOf(value: string): string {
  * 現れない制御文字であることが分かっているため（`actor` は
  * `manager:<id>`/`worker:<id>:<type>` の固定書式、`tool` は SDK の道具名）。
  */
+/**
+ * 1回だけの許可（issue #1105 P1）の鍵に入れる担い手。**表示用の `actor`
+ * （`worker:<マネージャー>:<agentType>`）を使わない**——あれは型までしか
+ * 区別しないので、同じ型の作業者が並行に2体いると、片方への許可をもう片方が
+ * 使えてしまう。作業者は `agentId`（SDK が作業者ごとに振る id）で区別する。
+ */
+function oneShotActorOf(
+  managerId: string,
+  record: { readonly agentId?: string | undefined },
+): string {
+  return record.agentId === undefined
+    ? `manager:${managerId}`
+    : `worker:${managerId}:agent=${record.agentId}`;
+}
+
 function oneShotAllowKey(actor: string, tool: string, digest: string): string {
   return `${actor}\u0000${tool}\u0000${digest}`;
 }
