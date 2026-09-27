@@ -812,6 +812,17 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
     return dir;
   }
 
+  /**
+   * `runPlan` が子（`node mutate.mjs run`）へ渡す env をここへ切り出した
+   * （#1854）。**切り出しは出力・挙動を1文字も変えていない**——`runPlan` は
+   * 変わらずこの関数の戻り値をそのまま `env` として渡す。同じファイルの他の
+   * 呼び出し（`mutateCliChildEnv()` 単体）は PR #1879 で直っていたが、ここは
+   * `fakeDir` を `PATH` の先頭へ足す必要があるぶん取りこぼされていた。
+   */
+  function buildRunPlanEnv(fakeDir: string): NodeJS.ProcessEnv {
+    return { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ''}` };
+  }
+
   function runPlan(root: string, plan: unknown[]) {
     const planPath = path.join(root, 'plan.json');
     fs.writeFileSync(planPath, JSON.stringify(plan));
@@ -819,10 +830,23 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
     const result = spawnSync('node', [MUTATE_CLI, 'run', '--plan', planPath, '--root', root], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
-      env: { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ''}` },
+      env: buildRunPlanEnv(fakeDir),
     });
     return { status: result.status, out: (result.stdout ?? '') + (result.stderr ?? '') };
   }
+
+  it('親の process.env にある偽の値は、子へ渡す env に含まれない（#1854）', () => {
+    const key = 'ALTEROID_TEST_FAKE_1854';
+    const before = process.env[key];
+    process.env[key] = 'not-a-real-value';
+    try {
+      const env = buildRunPlanEnv(makeFakePnpmDir());
+      expect(env).not.toHaveProperty(key);
+    } finally {
+      if (before === undefined) delete process.env[key];
+      else process.env[key] = before;
+    }
+  });
 
   it('⭐ 印だけで赤くなる歯しか落ちなければ「生存」と判定し、差し引いた名前を列挙する', () => {
     const root = makeTmpGitRepo();

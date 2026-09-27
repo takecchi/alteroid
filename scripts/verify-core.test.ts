@@ -1162,16 +1162,38 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
     return { toolsDir, logPath, binDir };
   }
 
+  /**
+   * `runVerify` が子（`node verify.mjs`）へ渡す env をここへ切り出した
+   * （#1854）。**切り出しは出力・挙動を1文字も変えていない**——`runVerify` は
+   * 変わらずこの関数の戻り値をそのまま `env` として渡す。
+   */
+  function buildRunVerifyEnv(binDir: string, logPath: string): NodeJS.ProcessEnv {
+    return { ...process.env, PATH: binDir + ':' + process.env.PATH, FAKE_PNPM_LOG: logPath };
+  }
+
   function runVerify(repoDir: string, binDir: string, logPath: string, args: string[]) {
     return spawnSync('node', [join(repoDir, 'scripts', 'verify.mjs'), ...args], {
       cwd: repoDir,
-      env: { ...process.env, PATH: binDir + ':' + process.env.PATH, FAKE_PNPM_LOG: logPath },
+      env: buildRunVerifyEnv(binDir, logPath),
       // ⛔ 'inherit' にしないこと — vitest.setup.ts の歯（本物の stdout へ
       // 直書きしたテストを赤にする）を避けるため、必ず 'pipe' で受ける。
       stdio: 'pipe',
       encoding: 'utf8',
     });
   }
+
+  it('親の process.env にある偽の値は、子へ渡す env に含まれない（#1854）', () => {
+    const key = 'ALTEROID_TEST_FAKE_1854';
+    const before = process.env[key];
+    process.env[key] = 'not-a-real-value';
+    try {
+      const env = buildRunVerifyEnv('/fake/bin/dir', '/fake/log/path');
+      expect(env).not.toHaveProperty(key);
+    } finally {
+      if (before === undefined) delete process.env[key];
+      else process.env[key] = before;
+    }
+  });
 
   const recordPath = (repoDir: string) => join(repoDir, '.git', 'alteroid-verify.json');
   const logLines = (logPath: string) => readFileSync(logPath, 'utf8').split('\n').filter(Boolean);

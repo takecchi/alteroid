@@ -188,12 +188,24 @@ describe('mutate.mjs CLI: baseline / run の Errors 行チェック（門2）', 
     return dir;
   }
 
+  /**
+   * `runCli` が子（`node mutate.mjs`）へ渡す env をここへ切り出した
+   * （#1854）。**切り出しは出力・挙動を1文字も変えていない**——`runCli` は
+   * 変わらずこの関数の戻り値をそのまま `env` として渡す。切り出した理由は、
+   * 「親の `process.env` にある偽の値が、この env に混ざらないこと」を
+   * `runCli`（実プロセスを起こす、重い経路）を通さずに直接検査できるように
+   * するためである。
+   */
+  function buildRunCliEnv(fakeDir: string): NodeJS.ProcessEnv {
+    return { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ''}` };
+  }
+
   function runCli(
     args: string[],
     fakePnpmOutput: string,
   ): { status: number | null; stdout: string; stderr: string } {
     const fakeDir = makeFakePnpmDir(fakePnpmOutput);
-    const env = { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ''}` };
+    const env = buildRunCliEnv(fakeDir);
     try {
       const stdout = execFileSync('node', [MUTATE_JS, ...args], {
         cwd: ROOT,
@@ -206,6 +218,19 @@ describe('mutate.mjs CLI: baseline / run の Errors 行チェック（門2）', 
       return { status: e.status, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
     }
   }
+
+  it('親の process.env にある偽の値は、子へ渡す env に含まれない（#1854）', () => {
+    const key = 'ALTEROID_TEST_FAKE_1854';
+    const before = process.env[key];
+    process.env[key] = 'not-a-real-value';
+    try {
+      const env = buildRunCliEnv(makeFakePnpmDir(''));
+      expect(env).not.toHaveProperty(key);
+    } finally {
+      if (before === undefined) delete process.env[key];
+      else process.env[key] = before;
+    }
+  });
 
   it('baseline: Errors 行があるとき exit 1 で拒否し、「ベースライン成立。」と名乗らない', () => {
     // ⚠️ ここが偽陽性の実測——劣化前のこの1行が示す事実そのものが、この歯の
