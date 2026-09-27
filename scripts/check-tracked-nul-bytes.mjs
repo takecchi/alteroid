@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * 追跡済みファイル（`git ls-files`）に NUL バイト（コードポイント0）が
- * 混入していないかを見る（#260）。
+ * 追跡済み + 未追跡だが ignore されていないファイルに NUL バイト
+ * （コードポイント0）が混入していないかを見る（#260、Issue #1817）。
  *
  * ## なぜ要るか
  *
@@ -14,25 +14,29 @@
  * との違い
  *
  * あちらは `apps/web` のビルド生成物（`pnpm build` 後にしか存在しない）を見る。
- * こちらは `git ls-files` が返す追跡済みファイルそのものを見るので、
- * `pnpm build` を要らず、素の `pnpm test` だけで走る。**対象を `git ls-files`
- * に限るのは、`node_modules` や生成物（`apps/web/build` 等）を歩かないため**
- * （それらは追跡外か `.gitignore` 済みで、混入しても実害が repo に残らない）。
+ * こちらは対象ファイルそのものを見るので、`pnpm build` を要らず、素の
+ * `pnpm test` だけで走る。**対象を git（追跡済み + 未追跡だが ignore されて
+ * いないファイル）に限るのは、`node_modules` や生成物（`apps/web/build` 等）を
+ * 歩かないため**（それらは追跡外か `.gitignore` 済みで、混入しても実害が repo
+ * に残らない）。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルに NUL バイトが混入しても、手元の `pnpm verify`（実体は
+ * `pnpm test`）は緑のまま、push 後の CI で初めて赤くなる穴があった（Issue
+ * #1817。歯は `scripts/check-tracked-nul-bytes.test.ts`）。
  *
  * ## 判定ロジックの置き場所
  *
  * パターン定義と走査そのものは `check-tracked-nul-bytes-core.mjs` に切り出して
  * ある（`verify.mjs` / `verify-core.mjs` と同じ分け方 — 理由はそちらの doc）。
- * このファイルは「`git ls-files` で列挙して、読んで、渡して、終了コードを
- * 決める」だけ。
+ * このファイルは「対象を列挙して、読んで、渡して、終了コードを決める」だけ。
  */
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { findNulByteHits } from './check-tracked-nul-bytes-core.mjs';
+import { findNulByteHits, listScannableFiles } from './check-tracked-nul-bytes-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -44,24 +48,10 @@ function logError(text) {
   process.stderr.write(text + '\n');
 }
 
-/** `git ls-files -z` で追跡済みファイルの相対パスを列挙する（NUL 区切り＝
- * ファイル名自体に改行等が混ざっても壊れない。皮肉だが対象自体は NUL では
- * 分けられない——パスの中に NUL が来ることは無いため区切りとして安全）。 */
-function listTrackedFiles() {
-  const out = execFileSync('git', ['ls-files', '-z'], {
-    cwd: ROOT,
-    maxBuffer: 1024 * 1024 * 64,
-  });
-  return out
-    .toString('utf8')
-    .split('\0')
-    .filter((path) => path.length > 0);
-}
-
 function main() {
   let paths;
   try {
-    paths = listTrackedFiles();
+    paths = listScannableFiles(ROOT);
   } catch (error) {
     logError(`check-tracked-nul-bytes: \`git ls-files\` を実行できない: ${error}`);
     process.exitCode = 1;
@@ -69,7 +59,7 @@ function main() {
   }
 
   if (paths.length === 0) {
-    logError('check-tracked-nul-bytes: 追跡済みファイルが0件（git repo の外で走らせていないか）');
+    logError('check-tracked-nul-bytes: 対象ファイルが0件（git repo の外で走らせていないか）');
     process.exitCode = 1;
     return;
   }
@@ -102,7 +92,7 @@ function main() {
   }
 
   // **必ず1行出す**（AGENTS.md「静かに失敗する道具」— 出ていなければ走っていないと読める）。
-  log(`check-tracked-nul-bytes: OK — 追跡済み${files.length}ファイルとも0件`);
+  log(`check-tracked-nul-bytes: OK — ${files.length}ファイルとも0件`);
 }
 
 main();

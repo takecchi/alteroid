@@ -278,8 +278,17 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
    * 回ってきていない」と事実として言い切っていた。**下部の段落（「それでこの仕事が
    * 止まったかどうかは見ていない」）とは矛盾していた** — こちらは正しいので消さず、
    * subtitle 側だけを直す。
+   *
+   * **Issue #1844 — #1289 の直しは (a)/(b) の場合分けにしたが、この画面だけ
+   * 「人間にもクローンにも」という対象範囲の広い字面をそのまま(a)節の中へ
+   * 残していた。** 一覧（`managers.tsx` の `ManagerDenialNote`）・クローン向け
+   * 正本（`packages/core/src/tools.ts` の `describeDenials`）・実際に escalation
+   * を判定している箇所（`packages/core/src/manager.ts` の
+   * `case 'permission_denied'`）はいずれも「この確認は**クローンには**
+   * 回ってきていない」とだけ言っており、対象を人間にまで広げていない。
+   * ここも同じ範囲（クローンには、まで）へ揃える——下の期待値を反転させた。
    */
-  it('subtitle が拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
+  it('subtitle が拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289 / #1844）', async () => {
     renderDetail({
       ...BASE,
       status: 'running',
@@ -298,11 +307,14 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
       '分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない',
     );
 
+    // **#1844: 対象範囲を人間にまで広げた字面が戻っていないこと。**
+    // 一覧・クローン向け正本（`tools.ts`）・escalation の判定箇所（`manager.ts`）
+    // と同じ「クローンには」までに揃える。
+    expect(text).not.toContain('この確認は人間にもクローンにも回ってきていない');
+
     // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
     // `PreToolUse` フックの両方が、条件付きの文として載る。
-    expect(text).toContain(
-      '器の分類器か deny 規則なら、この確認は人間にもクローンにも回ってきていない',
-    );
+    expect(text).toContain('器の分類器か deny 規則なら、この確認はクローンには回ってきていない');
     expect(text).toContain('PreToolUse');
     expect(text).toContain('bash-wait-guard.ts');
     expect(text).toContain('自力で抜けられることがある');
@@ -1453,6 +1465,62 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       // 個別ケース。強調が要るなら `<strong>` を使う）。
       expect(screen.getByText(/この印は枠\(利用上限\)で止まっている間だけ意味を持つ/)).toBeTruthy();
       expect(document.body.textContent).not.toContain('**');
+    });
+
+    /**
+     * core が1本化した安全弁（`STALE_TOKEN_RESTART_ADVICE`）の骨を、この画面の
+     * 語で運べているかを見る（Issue #1845 / そのレビュー指摘）。**削っては
+     * いけないのは3つ**——
+     * (1) 止める前に確かめること・確かめ先の主（リモート）を名指しすること、
+     * (2) 失われるのは会話だけではないこと、
+     * (3) `lastUnpushedWorkObservation` が無い委譲では、存在しない
+     *     「未push観測」を指さないこと——最初のレビューでは確かめ先の主を
+     *     「未push観測」に置いたが、観測が一度も無い委譲では
+     *     `UnpushedWorkObservationNote` 自身が `null` を返して何も描かない
+     *     （指した先が画面に無い）うえ、在っても「最後の1回であって、いまの
+     *     状態ではない」（`describeUnpushedWorkObservation` の断り）ので、
+     *     主役には据えられない。だから主は `LostNote` と同じ「リモート」に
+     *     揃え、「未push観測」は在るときだけ足す補助にした。
+     */
+    it('stale の「起こし直すこと」に、止める前に確かめる案内と「会話だけではない」を添える（#1845）', async () => {
+      renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
+
+      expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+      // (1) 確かめろ、確かめ先の主（リモート）を名指しする。`LostNote` と同じ語。
+      expect(
+        screen.getByText(/止める前に、まずリモート（PR・ブランチ・コミット）を確かめること/),
+      ).toBeTruthy();
+      // (2) #914 が名指しした過小な言い方（「会話は失われる」）へ戻っていない。
+      expect(screen.getByText(/失われるのは会話だけではない/)).toBeTruthy();
+      expect(document.body.textContent ?? '').not.toContain('会話は失われる');
+      // (3) 未push観測が無いのだから、それを指す一文も出ない。
+      expect(screen.queryByText(/下の「未push観測」/)).toBeNull();
+    });
+
+    it('stale かつ未push観測が在るときだけ、それを見る案内を補助として添える（#1845 のレビュー指摘）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'running',
+        resetTimeSkewMatch: 'stale',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+        },
+      });
+
+      expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+      // 主（リモート）は観測の有無に関わらず出る。
+      expect(
+        screen.getByText(/止める前に、まずリモート（PR・ブランチ・コミット）を確かめること/),
+      ).toBeTruthy();
+      // 補助（未push観測）は在るときだけ、かつ「いまの状態ではない」の断りごと出る。
+      expect(
+        screen.getByText(/下の「未push観測」にも最後の観測が出ている（いまの状態ではない）/),
+      ).toBeTruthy();
+      // 実際の「未push観測」欄自体も出ている（指した先が画面に実在する）。
+      expect(screen.getByText(/branch=feat\/x/)).toBeTruthy();
     });
 
     it('active なら「待てば戻る」を出す', async () => {

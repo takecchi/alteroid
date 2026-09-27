@@ -110,6 +110,35 @@ import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js'
  * （エラーにはならない——`findManagerScratchRoots` は該当ディレクトリが
  * 無ければ空配列を返すだけである）。
  *
+ * ## 3.7. Issue #1865 で、起点より下（子ディレクトリ）の読み失敗も数えるようにした
+ *
+ * Issue #1826 / PR #1838 は探索の**起点そのもの**（`job.cwd`）が読めない
+ * ケースを塞いだが、**起点より下の子ディレクトリ**の読み失敗は「黙って
+ * 諦める」設計のまま、失敗した事実そのものが戻り値のどこにも残らなかった
+ * （{@link findGitDirs} の `walk` の `catch { return; }`）。件数の上限に
+ * 当たったときは {@link FindGitDirsResult.truncatedAtCount} で「打ち切った」
+ * と名乗るのに、権限・競合で読めなかった場合だけ何も名乗らず「0本」と
+ * 区別が付かなかった——`manager-auto-fold.ts` の自動畳み込みの安全弁は
+ * `worktrees` が全部 clean（または0本）なら `'clear'` を返すので、
+ * 読めなかった子ディレクトリの下に残っていたかもしれない未 push の実装を
+ * 検知しないまま自動で畳んでしまう（**許しすぎる側**の穴）。
+ *
+ * **子ディレクトリの読み失敗を黙って諦める設計そのものは変えていない**——
+ * 見つかった分（`paths`）を正として返す約束は保ったまま、失敗した延べ
+ * 回数だけを {@link FindGitDirsResult.unreadableDirCount} に数える。0件の
+ * ときは省略する（`truncatedAtCount` と同じ「黙って0の行を作らない」
+ * 作法）。呼び出し元（`manager-auto-fold.ts` の安全弁・`tools.ts` の
+ * `describeUnpushedWork`）は、これを `scratchRootsUnknown` /
+ * `truncatedAtCount` / `stoppedEarly` と同じ強さで「確かめられなかった」
+ * 側に倒す。
+ *
+ * ⚠️ **`chmod 000` は非 root では効くが、root で走る CI では効かない**
+ * （権限ビットを root は無視できる。同じ注意は既存の `rootUnreadable` の
+ * 歯にも書いてある）。root かどうかに関係なく子ディレクトリの読み失敗を
+ * 再現するため、`readdir` 自体を差し替えられるようにした
+ * （{@link ReaddirFn}、{@link ComputeUnpushedWorkOptions.readdirFn}）。
+ * 本番は既定（実物の `readdir`）のままで1バイトも変わらない。
+ *
  * ## テスト可能にするための切り出しである
  *
  * `git` の起動そのものは呼び出し側（`packages/core/src/runner.ts` の
@@ -167,6 +196,28 @@ export type ProcessSpawnFn = (options: {
   signal: AbortSignal;
 }) => ChildProcess;
 
+/**
+ * `node:fs/promises` の `Dirent` が満たせる、`findGitDirs` の `walk` が
+ * 実際に使う最小の形（`name` と `isDirectory()` だけ）。
+ *
+ * **なぜ差し替え可能にするか（Issue #1865）** — 子ディレクトリの `readdir`
+ * 失敗を歯で確かめたいが、`chmod 000` は非 root では効いても **root で走る
+ * CI では効かない**（root は権限ビットを無視できる。同じ注意は
+ * `unpushed-work.test.ts` の「起点（job.cwd）に読み取り権限が無い」の歯にも
+ * 書いてある）。root かどうかに関係なく同じ結果を得るため、実際の
+ * ディレクトリ権限には触れず、`readdir` の呼び出し自体を差し替えられるように
+ * する——本番は既定（実物の `readdir`）のまま1バイトも変わらない。
+ */
+export interface DirEntryLike {
+  readonly name: string;
+  isDirectory(): boolean;
+}
+
+/** {@link DirEntryLike} の一覧を返す口。既定は実物の `readdir`。 */
+export type ReaddirFn = (dir: string) => Promise<readonly DirEntryLike[]>;
+
+const defaultReaddirFn: ReaddirFn = (dir) => readdir(dir, { withFileTypes: true });
+
 /** `.git` の探索の既定値。 */
 export const DEFAULT_MAX_DEPTH = 3;
 export const DEFAULT_MAX_WORKTREES = 20;
@@ -200,6 +251,24 @@ export interface FindGitDirsResult {
    * `paths` は常に空になる）。だからここだけ別の欄で名乗る。
    */
   readonly rootUnreadable?: string;
+  /**
+   * **起点より下（子ディレクトリ）**で `readdir` に失敗した延べ回数
+   * （Issue #1865）。省略 = 0件（子ディレクトリの読み失敗は無かった）。
+   *
+   * ⚠️ **{@link rootUnreadable} とは別軸のまま**——起点自身の失敗はここに
+   * 含めない。子ディレクトリの読み失敗そのものを黙って諦める設計（下の
+   * doc「読めないディレクトリ……」）はこの PR でも変えていない。**`paths`
+   * は「見つかった分」のまま返す**——この件数は「見つかった分が全体を
+   * 尽くしているとは限らない」ことを示す添え物であって、`paths` から何かを
+   * 差し引く材料ではない。
+   */
+  readonly unreadableDirCount?: number;
+  /**
+   * 上の失敗のうち最初の1件（`<パス>: <エラーメッセージ>`）。診断用の
+   * サンプル1件であって、全件の一覧ではない——{@link unreadableDirCount} が
+   * 載っているときだけ載る。
+   */
+  readonly unreadableDirSample?: string;
 }
 
 /**
@@ -209,9 +278,11 @@ export interface FindGitDirsResult {
  * - `node_modules` という名のディレクトリはその中へ潜らない。
  * - `.git` を見つけたら、その中へは潜らない（`.git` の中身は探索対象ではない）。
  * - **子ディレクトリ**が読めない（権限・競合で消えた等）は黙って諦める——
- *   「読めなかった」ことをこの関数の戻り値の形では表現しない（見つかった
- *   分だけを正としてよい。全体が「確かめられなかった」に落ちる話ではない。
- *   **この PR では変えていない**）。
+ *   探索そのものは止めない（見つかった分だけを正としてよい。全体が
+ *   「確かめられなかった」に落ちる話ではない。**この PR では変えていない**）。
+ *   ただし失敗した延べ回数だけは {@link FindGitDirsResult.unreadableDirCount}
+ *   に数える（Issue #1865）——「見つかった分」と「見つかった分が全体かどうか
+ *   分からない、という事実」は両立する。
  * - **起点（`root` 自身）**が読めないときだけは別扱いにする（Issue #1826）。
  *   ここが読めないと「見つかった分だけを正としてよい」という前提そのものが
  *   崩れる——1本も見ていないのに `paths: []` を返すと、「探索して0本
@@ -220,26 +291,36 @@ export interface FindGitDirsResult {
  */
 export async function findGitDirs(
   root: string,
-  options: { maxDepth?: number; maxCount?: number } = {},
+  options: { maxDepth?: number; maxCount?: number; readdirFn?: ReaddirFn } = {},
 ): Promise<FindGitDirsResult> {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxCount = options.maxCount ?? DEFAULT_MAX_WORKTREES;
+  const readdirFn = options.readdirFn ?? defaultReaddirFn;
   const found: string[] = [];
   let truncated = false;
   let rootUnreadable: string | undefined;
+  let unreadableDirCount = 0;
+  let unreadableDirSample: string | undefined;
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (truncated) return;
     let entries;
     try {
-      entries = await readdir(dir, { withFileTypes: true });
+      entries = await readdirFn(dir);
     } catch (error) {
       // **起点そのもの（`dir === root`）だけを特別扱いする。** 子ディレクトリの
       // 読み失敗はこれまでどおり黙って諦める（このファイルの他の呼び出し元
       // ——`findManagerScratchRoots` 経由の `/tmp` スクラッチ探索・より深い
-      // 階層——には一切影響しない）。
+      // 階層——には一切影響しない）。**ただし件数だけは数える**（Issue #1865。
+      // 起点の失敗は既に別の欄（`rootUnreadable`）で名乗っているので、ここには
+      // 二重に含めない）。
       if (dir === root) {
         rootUnreadable = error instanceof Error ? error.message : String(error);
+      } else {
+        unreadableDirCount += 1;
+        if (unreadableDirSample === undefined) {
+          unreadableDirSample = `${dir}: ${error instanceof Error ? error.message : String(error)}`;
+        }
       }
       return;
     }
@@ -266,7 +347,11 @@ export async function findGitDirs(
 
   await walk(root, 0);
   if (rootUnreadable !== undefined) return { paths: found, rootUnreadable };
-  return truncated ? { paths: found, truncatedAtCount: maxCount } : { paths: found };
+  return {
+    paths: found,
+    ...(truncated ? { truncatedAtCount: maxCount } : {}),
+    ...(unreadableDirCount > 0 ? { unreadableDirCount, unreadableDirSample } : {}),
+  };
 }
 
 /** `/tmp` 直下のディレクトリ名を、委譲の id と結び付けるための当てはめ規則。 */
@@ -369,15 +454,23 @@ export async function findManagerScratchRoots(
  * そちらは `findManagerScratchRoots` の入口（`tmpRootDir` 自体）が既に別の
  * 形（`scratchRootsUnknown`）で「確かめられなかった」を名乗っており
  * （#1765 段2）、ここでまた別の形で名乗ると二重になる。
+ *
+ * **`unreadableDirCount`（Issue #1865）は起点をまたいで合算する。** どの
+ * 起点で起きた失敗も同じ意味（「見つかった分が全体かどうか分からない」）を
+ * 持つので、起点ごとに分けて持ち回る理由が無い。`unreadableDirSample` は
+ * 最初に見つかった1件だけを残す（複数の起点をまたいで最初の1件、という
+ * 意味は `findGitDirs` 単体のときと変わらない）。
  */
 async function findGitDirsAcrossRoots(
   roots: readonly string[],
-  options: { maxDepth?: number; maxCount?: number },
+  options: { maxDepth?: number; maxCount?: number; readdirFn?: ReaddirFn },
 ): Promise<FindGitDirsResult> {
   const maxCount = options.maxCount ?? DEFAULT_MAX_WORKTREES;
   const seen = new Set<string>();
   const found: string[] = [];
   let truncated = false;
+  let unreadableDirCount = 0;
+  let unreadableDirSample: string | undefined;
 
   for (const [index, root] of roots.entries()) {
     if (found.length >= maxCount) {
@@ -385,9 +478,17 @@ async function findGitDirsAcrossRoots(
       break;
     }
     const remaining = maxCount - found.length;
-    const result = await findGitDirs(root, { maxDepth: options.maxDepth, maxCount: remaining });
+    const result = await findGitDirs(root, {
+      maxDepth: options.maxDepth,
+      maxCount: remaining,
+      readdirFn: options.readdirFn,
+    });
     if (index === 0 && result.rootUnreadable !== undefined) {
       return { paths: [], rootUnreadable: result.rootUnreadable };
+    }
+    if (result.unreadableDirCount !== undefined) {
+      unreadableDirCount += result.unreadableDirCount;
+      unreadableDirSample ??= result.unreadableDirSample;
     }
     for (const p of result.paths) {
       const resolved = path.resolve(p);
@@ -401,7 +502,11 @@ async function findGitDirsAcrossRoots(
     }
   }
 
-  return truncated ? { paths: found, truncatedAtCount: maxCount } : { paths: found };
+  return {
+    paths: found,
+    ...(truncated ? { truncatedAtCount: maxCount } : {}),
+    ...(unreadableDirCount > 0 ? { unreadableDirCount, unreadableDirSample } : {}),
+  };
 }
 
 interface GitRunResult {
@@ -663,6 +768,13 @@ export interface ComputeUnpushedWorkOptions {
    * テストでは一時ディレクトリへ差し替える。`managerId` を渡さないときは参照されない。
    */
   tmpRootDir?: string;
+  /**
+   * `.git` を探す `readdir` の呼び口。省略時は実物の `readdir`
+   * （{@link ReaddirFn} の doc）。**テスト以外で渡す理由は無い**——子
+   * ディレクトリの読み失敗（Issue #1865）を、root かどうかに関係なく
+   * 決定的に再現するための差し替え口である。
+   */
+  readdirFn?: ReaddirFn;
 }
 
 /**
@@ -727,6 +839,7 @@ export async function computeUnpushedWork(
   const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths], {
     maxDepth: options.maxDepth,
     maxCount: options.maxWorktrees,
+    readdirFn: options.readdirFn,
   });
   if (found.rootUnreadable !== undefined) {
     throw new Error(
@@ -769,6 +882,14 @@ export async function computeUnpushedWork(
     worktrees,
     ...(found.truncatedAtCount === undefined ? {} : { truncatedAtCount: found.truncatedAtCount }),
     ...(stoppedEarly ? { stoppedEarly: true } : {}),
+    ...(found.unreadableDirCount === undefined
+      ? {}
+      : {
+          unreadableDirCount: found.unreadableDirCount,
+          ...(found.unreadableDirSample === undefined
+            ? {}
+            : { unreadableDirSample: found.unreadableDirSample }),
+        }),
     ...(scratchRoots.unknownReason === undefined
       ? {}
       : { scratchRootsUnknown: scratchRoots.unknownReason }),

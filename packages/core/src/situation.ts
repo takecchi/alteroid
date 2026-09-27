@@ -262,17 +262,37 @@ const USAGE_STOPPED_LABEL = '枠(利用上限)で止まっている';
  *
  * `LAST_FAILURE_NOTICE` と同じ理由——外すと「置けない」と読まれ、この
  * ファイル冒頭の「空き枠を作らない」を壊す。
+ *
+ * ## ⚠️ Issue #1796: 「ずっと `done`/`running` のまま座る」は原則であって保証ではない
+ *
+ * `usageStoppedAt` を下ろすのは `manager.ts` の `#clearUsageStoppedMark`
+ * だけで、`#settleUsageWake` → `#nudgeForUsageRotation` の `send()` が
+ * 届かず `'skipped'` になると印は残ったまま、その直後にセッションそのものが
+ * `closed` として畳まれ `status` が `failed` / `lost`
+ * （{@link isManagerOutcomeUnobserved}。`digest.ts` の doc）へ確定することが
+ * ある。**`stopped` も同じ穴を持つ**——`abort()` も `usageStoppedAt` に触れない
+ * ので、枠で止まっていた委譲がそのまま人間・クローンに止められても印は残ったまま
+ * `status: stopped` になる（`tools.ts` の `describeUsageStopped` の doc。
+ * `isLive()` は `stopped` を `lost` と同じ「確認済みで死んでいる」側に置く）。
+ * **この3つ（`failed` / `lost` / `stopped`）はどれも、この本文の例外である**——
+ * その回は `usageStoppedAt` が残ったまま `status` が動く。**この集計（本数だけ）
+ * からはその例外を見分けられない**——どの委譲がそれかは `manager_list` の各行の
+ * 注記（`tools.ts` の `describeUsageStopped`。#1796 で分岐を追加した）を見ること。
  */
 const USAGE_STOPPED_NOTICE =
   `**${USAGE_STOPPED_LABEL}委譲は、区分の中では見分けが付かない。** ` +
-  '鍵が回ってこの委譲が起こし直されるまで、その間ずっと `done`（手が空いている）または' +
-  '`running` のまま座る——セッションは生きているので `status` は動かさない（それは仕様である）。' +
+  '通常は鍵が回ってこの委譲が起こし直されるまで、その間ずっと `done`（手が空いている）または' +
+  '`running` のまま座る——セッションが生きている間は `status` を動かさない（それは仕様である）。' +
   '⟹ **この本数のぶん、「手が空いている」は「仕事を終えて空いた」を意味しない。** ' +
+  '**ただし、印が下りる前にセッションそのものが `failed` / `lost` / `stopped` として' +
+  '畳まれることがある**（Issue #1796）——その回は `status` がそちらへ確定していて、' +
+  'この本数の集計だけではどの委譲がそれかは見分けられない。' +
   `${LAST_FAILURE_LABEL}（上）と重なることが多いが同じ軸ではない` +
   '——あちらは失敗の理由を問わない全体、こちらは利用上限に当たった委譲だけを名指しする。' +
   '中身は `manager_report <managerId>` で読める' +
   '——絞りでは切り出せないが（`status` の値ではないため）、' +
-  '`manager_list` の各行に付く注記（⚠ 枠(利用上限)で止まっている）で名指しされる。';
+  '`manager_list` の各行に付く注記（⚠ 枠(利用上限)で止まっている）で名指しされる' +
+  '（`status` も一緒に読めば、生きているか否かはその行だけで判定できる）。';
 
 /**
  * **`running` のまま、宛先の runner が名簿から entry ごと消えている**という

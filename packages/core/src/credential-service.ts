@@ -397,7 +397,16 @@ export function resolveCredentialRows(
     (row) =>
       !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name) && scopeAppliesTo(row.scope, target),
   );
-  const held = new Set(scoped.map((row) => row.name));
+  // **「正本にその名前の行があるか」は、scope で絞る前の行で決める**（issue #1867）。
+  // 器の env を最後の土台として埋めるのは「正本に行が無い」名前だけである（直上の doc）。
+  // scope で絞った後の集合を使うと、`scope: 'app'` の行は manager から見て「行が無い」
+  // 扱いになり、器の env の値が manager へ配られてしまう——運用者が scope で明示した
+  // 「この名前は manager にとって意味が無い」を破る。
+  const held = new Set(
+    authoritative
+      .filter((row) => !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name))
+      .map((row) => row.name),
+  );
 
   const cloneEnvWins = (name: string): boolean => {
     if (!GITHUB_CREDENTIAL_NAMES.includes(name)) return false;

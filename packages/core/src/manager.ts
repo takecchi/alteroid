@@ -10407,6 +10407,15 @@ class Pool implements ManagerPool {
         // 断片を先に `codeSpan()` へ通してから連結する形になる。`manager.ts` の
         // 中では覆らない。
         //
+        // **`manager_message.foldedTurn` へ運ぶ（Issue #1848）。** `tools.ts` の
+        // `isFoldedTurnReport`（`lastFailure` / `lastUnreported` の有無）と
+        // 同じ軸・同じ判定を、台帳ではなくいま届くこの1件の側で見る——判定は
+        // 構造化された印（`event.failure` / `event.unreported`）だけで行い、
+        // 本文の文言は見ない（`schema.ts` の `manager_message.foldedTurn` の
+        // doc）。**このすぐ下の分岐（即配る／合流窓へ積む）とは独立の軸**——
+        // `event.synthesized` の有無で「配り方」が決まり、この `foldedTurn` で
+        // 「見出し」が決まる。
+        const foldedTurn = event.failure !== undefined || event.unreported !== undefined;
         // **`event.synthesized` が立っていれば、即配らずに合流窓へ積む**
         // （「一枠落ち一合図」——`runnerEventSchema` の `report.synthesized` の
         // doc）。これが立つのは `runner.ts` が `failedReportText` を使った
@@ -10416,10 +10425,26 @@ class Pool implements ManagerPool {
         // 窓では必ず「起こす側」へ倒れる（安全側）。値（族の名前）をそのまま
         // `label` として使う——runner.ts と manager.ts は同じ語彙を共有する
         // （`SynthesizedNoticeLabel` の doc）。
+        //
+        // **`foldedTurn` は合流窓へ積む枝では渡さない。** `#queueSynthesizedNotice`
+        // は複数の断片を跨いで1本にまとめる口なので、単発の bool を渡す場所が
+        // 無い——`#flushSynthesizedNoticeFor` 側で `label === 'turn_failed'`
+        // （`event.failure` が付く回だけが立てる族）から同じ判定をやり直す
+        // （そちらの doc）。**即配る枝（`event.failure` が実際には立たない
+        // 経路——`unreportedText` は `synthesized` を伴わない）だけ、ここで
+        // 計算した値をそのまま渡す。**
         if (event.synthesized !== undefined) {
           this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text);
         } else {
-          this.#emit(event.managerId, 'report', event.text);
+          this.#emit(
+            event.managerId,
+            'report',
+            event.text,
+            undefined,
+            undefined,
+            'full',
+            foldedTurn,
+          );
         }
         return;
       }
@@ -12801,9 +12826,23 @@ class Pool implements ManagerPool {
     requestId?: string,
     markup?: TextMarkup,
     withheldSuffixDetail: 'full' | 'flush' = 'full',
+    // **`case 'report'` の即配る枝だけが渡す口（Issue #1848）。** 既定は
+    // `false`——他の呼び出し元（`case 'ask'` / 自己申告の通知の数々）はこれ
+    // まで運ぶ材料（`event.failure` / `event.unreported`）を持たないので、
+    // これまでどおり何も渡さず、字面は1バイトも変わらない。
+    foldedTurn = false,
   ): void {
     this.#flushSynthesizedNotices();
-    this.#deliver(managerId, kind, text, requestId, markup, withheldSuffixDetail);
+    this.#deliver(
+      managerId,
+      kind,
+      text,
+      requestId,
+      markup,
+      withheldSuffixDetail,
+      false,
+      foldedTurn,
+    );
   }
 
   #deliver(
@@ -12823,6 +12862,12 @@ class Pool implements ManagerPool {
     // 失敗の知らせ）。受信箱の `manager_message.synthesized` へ写す——クローンは
     // 枠の冷却中、これでは解除を試さない（`schema.ts` の同名の欄の doc）。
     synthesized = false,
+    // **`case 'report'`（即配る枝）と `#flushSynthesizedNoticeFor` の両方が
+    // 渡す口（Issue #1848）。** 受信箱の `manager_message.foldedTurn` へ写す——
+    // `clone.ts` の `managerPrompt` がこれを見て見出しを切り替える
+    // （`schema.ts` の同名の欄の doc）。既定は `false`——他の呼び出し元は
+    // これまでどおり何も渡さない。
+    foldedTurn = false,
   ): void {
     // **その managerId に握り潰した「背景処理の完了待ちで畳んだ報告」
     // （`#withheldReports`）が積んであれば、いま配るこの `text` の末尾へ
@@ -12914,6 +12959,10 @@ class Pool implements ManagerPool {
       ...this.#statusAtDelivery(managerId),
       // **立っていない回はキーごと書かない**（上の `requestId` / `markup` と同じ形）。
       ...(synthesized ? { synthesized: true as const } : {}),
+      // **同じ形（Issue #1848）。** `clone.ts` の `managerPrompt` が見出しを
+      // 切り替えるための構造化された印——`schema.ts` の `manager_message.foldedTurn`
+      // の doc。
+      ...(foldedTurn ? { foldedTurn: true as const } : {}),
     });
   }
 
@@ -13094,10 +13143,21 @@ class Pool implements ManagerPool {
       });
       return;
     }
+    // **`turn_failed` 束だけが `event.failure` 由来の折り畳みである
+    // （Issue #1848）。** 他の族——`rate_limit` / `usage_notice` /
+    // `resume_fallback` / `closed_failed`——はこの `report` イベントの
+    // `event.failure` / `event.unreported` を経由しない、`manager.ts` 自身が
+    // 組み立てる別の合図なので、ここでは対象にしない——scope はあくまで
+    // `isFoldedTurnReport` と同じ2軸（`schema.ts` の `manager_message.foldedTurn`
+    // の doc）。**本文の文言ではなく `label`（構造化された族の名前）で判定する。**
+    // 束の中に1つでも `turn_failed` があれば、その束は完遂した報告ではない
+    // ——他の族と合流していても、混ざった時点でどのみち「本人が書いた報告」
+    // ではなくなっている。
+    const foldedTurn = entry.fragments.some((fragment) => fragment.label === 'turn_failed');
     // **`#deliver` より先に `set` しないこと。** `#deliver` は直前の連鎖の
     // 件数を末尾の1行として運んでから帳面を消すので、先に上書きすると
     // 「配らなかった件数」がクローンへ届かないまま消える。
-    this.#deliver(managerId, 'report', text, undefined, undefined, 'full', true);
+    this.#deliver(managerId, 'report', text, undefined, undefined, 'full', true, foldedTurn);
     // **対象外の束では新しい連鎖を立てない。** `eligible` でない配達
     // （`rate_limit` / `usage_notice` / 混在した束）は、この関数に関する
     // 限り「連鎖を継がない」——`#deliver` 自身が既存の連鎖を必ず断つので

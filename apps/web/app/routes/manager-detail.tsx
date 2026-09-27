@@ -786,7 +786,7 @@ function DenialsCard({
     <Card>
       <CardHeader
         title="確認へ上がらず止められた道具"
-        subtitle="まず担い手自身の拒否文を読ませること。出所はこの数からは取れない。(a) 器の分類器か deny 規則なら、この確認は人間にもクローンにも回ってきていない。(b) alteroid 自身の PreToolUse フック（bash-wait-guard.ts 等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある"
+        subtitle="まず担い手自身の拒否文を読ませること。出所はこの数からは取れない。(a) 器の分類器か deny 規則なら、この確認はクローンには回ってきていない。(b) alteroid 自身の PreToolUse フック（bash-wait-guard.ts 等）なら、理由と代替案は担い手へ直接返っており、自力で抜けられることがある"
       />
       <ul className="px-4 py-3 text-sm">
         {recent.map((entry) => (
@@ -1039,17 +1039,68 @@ function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
  * **未知の値でも落ちない**（#1623 / #1630 の流儀）。既知の2値
  * （`'stale'` / `'active'`）のどちらでもなければ、その旨をそのまま出す——
  * 版のずれで新しいデーモンがこの画面の知らない値を返しても、画面ごと落ちない。
+ *
+ * **`'stale'` の「起こし直すこと」には、core が1本化した安全弁を添える**
+ * （Issue #1845）。`packages/core/src/usage-limits.ts` の
+ * `STALE_TOKEN_RESTART_ADVICE`（#1175 / #1287 を経て、`tools.ts` の呼び出し
+ * 箇所5箇所がこの1本だけを呼ぶ形に揃えた正本）が運ぶ核は2つ——(1) 止める前に、
+ * その委譲がターンの途中かどうかを確かめること (2) 失われるのは会話だけでは
+ * なく、進行中だった作業も失われること。この画面はその定数を import しない。
+ *
+ * - **定数の文面はクローンの道具の名（`manager_stop` の断り）を名指しするが、
+ *   その道具はこの画面には無い。** 人間はここでは「停止する」ボタンを押す
+ *   だけで、押した瞬間に `abortManager` が呼ばれて一覧へ戻る（クローン向けの
+ *   断りに相当する確認の一手が無い）。定数をそのまま転記すると、押しても
+ *   出てこない道具名を人間に読ませることになる
+ * - **`LostNote`（このファイル、上）が既に採っている作法に倣う**——
+ *   確かめ先の主は「起こし直す前に、まずリモート（PR・ブランチ・コミット）を
+ *   確かめること」と同じ語にする。**`UnpushedWorkObservationNote`
+ *   （「未push観測」）は主ではなく補助——最初のレビューでは確かめ先の主に
+ *   据えたが、2つ理由で降格した**:
+ *   1. `manager.lastUnpushedWorkObservation` が `undefined` なら
+ *      `UnpushedWorkObservationNote` 自身が `null` を返して**何も描かない**
+ *      （一度も観測が無い委譲では、指した先が画面に存在しない）
+ *   2. 在っても、それは「`manager_stop` の断り・`report` 終わり・`git push`
+ *      検出のいずれかで取った**最後の1回**であって、いまの状態そのものでは
+ *      ない」（`describeUnpushedWorkObservation` の doc・この下の
+ *      `unpushedWorkText` の `provenance` と同じ注意）——**それだけを見て
+ *      「確かめた」とは言えない**
+ * - **⟹ 観測の有無で文言を分ける。** 観測が在るときだけ、「未push観測」にも
+ *   最後の観測が出ている（いまの状態ではないという断りごと）という一文を
+ *   補助として足す。無いときはその一文自体を出さない——`AGENTS.md`
+ *   「無い欄は行ごと出さない」と同じ向きで、存在しない参照先を指さない
+ * - **定数を import しない代わりに、上の核2つは1文字も削らない。**
+ *   `pnpm check:stale-token-restart-advice` が生成元の外で禁じているのは
+ *   助言の行動そのものを指す逐語と、#914 が名指しした過小な旧文言の2つの
+ *   逐語であって、意味を保った言い換えではない
+ *   （`check-stale-token-restart-advice-core.mjs` の doc「言い換えは
+ *   捕まえられない」。⚠ この doc 自身が禁じられた逐語を引用すると、将来この
+ *   検査が `.tsx` まで対象を広げたときに自分自身へ誤検知するので、ここでは
+ *   逐語を引用しない）
  */
 function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
   const value = manager.resetTimeSkewMatch;
   if (value === undefined) return null;
   if (value === 'stale') {
+    const hasUnpushedWorkObservation = manager.lastUnpushedWorkObservation !== undefined;
     return (
       <>
         ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の
         冷却期限と一致した）。このセッションは古い鍵を掴んだまま走っている可能性がある ——
         鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。
-        この行が消えないまま 429 が続くようなら、起こし直すこと。
+        この行が消えないまま 429 が続くようなら、
+        <strong className="font-medium">
+          止める前に、まずリモート（PR・ブランチ・コミット）を確かめること
+        </strong>
+        。
+        {hasUnpushedWorkObservation && (
+          <>
+            下の「未push観測」にも最後の観測が出ている（いまの状態ではない）ので、合わせて見ること。
+          </>
+        )}
+        確かめずに止めると、
+        <strong className="font-medium">失われるのは会話だけではない</strong>
+        ——そのターンで進行中だった作業も一緒に失われうる。確かめたうえで、起こし直すこと。
         <strong className="font-medium">この印は枠(利用上限)で止まっている間だけ意味を持つ</strong>
         ——枠から下りれば一緒に消える。
       </>

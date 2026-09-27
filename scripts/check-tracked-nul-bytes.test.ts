@@ -1,13 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFile as writeFileAsync } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { makeTempDirSync } from '../vitest.tmpdir.js';
+import { makeTempDir, makeTempDirSync } from '../vitest.tmpdir.js';
 
+// prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { findNulByteHits, NUL_CHAR } from './check-tracked-nul-bytes-core.mjs';
+import { findNulByteHits, listScannableFiles, NUL_CHAR } from './check-tracked-nul-bytes-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -22,13 +24,14 @@ const ROOT = join(import.meta.dirname, '..');
  * 2. **一時ファイル経由の検出**（`check-tracked-nul-bytes.mjs` の実際の読み込み
  *    経路——`readFileSync(path, 'utf8')`——を通しても NUL が検出できることを、
  *    リポジトリを汚さない一時ファイルで確かめる）
- * 3. **実際に追跡済みの全ファイルに対する検査そのもの**（下の
+ * 3. **実際の対象ファイル全体に対する検査そのもの**（下の
  *    `describe('実リポジトリの検査')`）— `check-web-bundle-node-traces` と
  *    同じ理由で、この歯はワークフローを変更せずに `pnpm test`（vitest。
  *    `.github/workflows/ci.yml` の既存の `pnpm test` ステップが
  *    `scripts/**\/*.test.ts` を拾う。`vitest.config.ts` の `include` 参照）
- *    へ足す。`pnpm build` は要らない（`git ls-files` は追跡済みの source を
- *    見るだけなので、生成物に依存しない）。
+ *    へ足す。`pnpm build` は要らない（`listScannableFiles` は source を
+ *    見るだけなので、生成物に依存しない）。**対象は追跡済み + 未追跡だが
+ *    ignore されていないファイル**（Issue #1817。以前は追跡済みだけだった）。
  *
  * ## 経緯: 3.は一時期、既知の理由で赤かった
  *
@@ -90,13 +93,9 @@ describe('check-tracked-nul-bytes: 一時ファイル経由の検出', () => {
   });
 });
 
-describe('実リポジトリの検査（git ls-files が返す追跡済み全ファイル）', () => {
-  it('追跡済みファイルに NUL バイトが1つも無い', () => {
-    const out = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, maxBuffer: 1024 * 1024 * 64 });
-    const paths = out
-      .toString('utf8')
-      .split('\0')
-      .filter((path: string) => path.length > 0);
+describe('実リポジトリの検査（listScannableFiles が返す対象全ファイル）', () => {
+  it('対象ファイルに NUL バイトが1つも無い', () => {
+    const paths = listScannableFiles(ROOT) as string[];
     expect(paths.length).toBeGreaterThan(0);
 
     const files = [];
@@ -122,5 +121,45 @@ describe('実リポジトリの検査（git ls-files が返す追跡済み全フ
             '\n除外リストは無い（#260）。表記を読める形へ書き換えて解消するか、' +
             '除外が本当に必要ならこのテストと doc の両方を更新すること。',
     ).toEqual([]);
+  });
+});
+
+describe('listScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
+  async function makeRepoWithUntrackedFile(): Promise<string> {
+    const dir = await makeTempDir('check-tracked-nul-bytes-1817-');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await writeFileAsync(join(dir, 'tracked.txt'), 'tracked\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    // まだ `git add` していない新規ファイル（NUL バイトを含む）。
+    await writeFileAsync(
+      join(dir, 'new-untracked.txt'),
+      Buffer.from(['a', NUL_CHAR, 'b'].join('')),
+    );
+    return dir;
+  }
+
+  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('new-untracked.txt');
+  });
+
+  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れ、NUL 混入を検出する', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const paths = listScannableFiles(dir) as string[];
+    expect(paths).toContain('new-untracked.txt');
+
+    const files = paths.map((path) => ({
+      path,
+      content: readFileSync(join(dir, path), 'utf8'),
+    }));
+    const hits = findNulByteHits(files);
+    expect(hits.map((h: { path: string }) => h.path)).toContain('new-untracked.txt');
   });
 });

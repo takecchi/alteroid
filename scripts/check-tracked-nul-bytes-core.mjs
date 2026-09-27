@@ -67,6 +67,8 @@
  *   結果側（バイトそのもの）を見るだけで、経路には触れない
  */
 
+import { listGitScannableFiles } from './git-scannable-files-core.mjs';
+
 /** NUL（コードポイント0）を指す1文字。エスケープ表記ではなく `String.fromCharCode`
  * で作る——理由はこのファイル冒頭の「この検査を書く最中に…」節。 */
 export const NUL_CHAR = String.fromCharCode(0);
@@ -93,4 +95,17 @@ export function findNulByteHits(files) {
     }
   }
   return hits;
+}
+
+/**
+ * 走査対象を列挙する: 追跡済み + 未追跡だが ignore されていないファイル
+ * （`scripts/git-scannable-files-core.mjs`、Issue #1817）。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルに NUL バイトが混入しても、手元の `pnpm verify`（実体は
+ * `pnpm test`）は緑のまま、push 後の CI で初めて赤くなる穴があった（Issue
+ * #1817）。`root` はテスト用（既定は実リポジトリの根）。
+ */
+export function listScannableFiles(root) {
+  return listGitScannableFiles({ cwd: root });
 }

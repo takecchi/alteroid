@@ -5759,6 +5759,66 @@ describe('クローンの道具', () => {
     expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
   });
 
+  /**
+   * ⭐ Issue #1865 — `unreadableDirCount`（起点より下の子ディレクトリの
+   * readdir 失敗。`unpushed-work.ts` の `findGitDirs`）が載っているとき、
+   * 見つかった作業ツリーの一覧は出しつつ、そこに「全部」ではないことを言う。
+   * `scratchRootsUnknown` / `truncatedAtCount` / `stoppedEarly` と同じ扱い。
+   */
+  it('manager_stop の running 断りは unreadableDirCount を、打ち切りと同じ強さで注記する', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', {
+      kind: 'ok',
+      result: {
+        cwd: '/workspace',
+        worktrees: [
+          {
+            relativePath: 'mgr-1/repo',
+            branch: 'main',
+            unpushedCommitCount: 0,
+            uncommittedChangeCount: 0,
+          },
+        ],
+        unreadableDirCount: 2,
+        unreadableDirSample: '/workspace/mgr-1/locked: EACCES',
+      },
+    });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('mgr-1/repo');
+    expect(reply).toContain('2');
+    expect(reply).toContain('子ディレクトリ');
+  });
+
+  /**
+   * ⭐ Issue #1865 の核 — `worktrees` が0本のときの早期 return
+   * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
+   * `unreadableDirCount` を握り潰していないこと。
+   */
+  it('manager_stop の running 断りは、作業ツリー0本でも unreadableDirCount を握り潰さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', {
+      kind: 'ok',
+      result: {
+        cwd: '/workspace',
+        worktrees: [],
+        unreadableDirCount: 4,
+      },
+    });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('4');
+    expect(reply).toContain('子ディレクトリ');
+    // 旧文言（`〜の下を探索した）。` で言い切って終わる形）そのものは出ない
+    // ——「見つからなかった」と「確認できていない」を同じ1文の中で
+    // 両立させ、断定では終わらせない。
+    expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
+  });
+
   it('manager_stop は force: true のとき unpushedWork を呼ばない（往復を払わない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });

@@ -942,6 +942,13 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
         emit: 'never',
         why: '機構が合成した失敗の知らせの印（クローンの枠の再武装の判定材料。2026-09-24）で、この関数は参照しない。',
       },
+      foldedTurn: {
+        emit: 'never',
+        why:
+          '失敗・未受信で畳まれたターンの印（`clone.ts` の `managerPrompt` が見出しを' +
+          '切り替える判定材料。Issue #1848）で、この関数は参照しない。`synthesized` と同じ' +
+          '「bool のタグで自由文を運ばない」欄。',
+      },
     },
   } satisfies { [T in InboxEventType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
@@ -1019,6 +1026,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       markup: 'none',
       statusAtDelivery: 'running',
       synthesized: true,
+      foldedTurn: true,
     },
   };
 

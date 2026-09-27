@@ -1,9 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../vitest.tmpdir.js';
+
+import {
+  listGitScannableFiles,
+  // @ts-expect-error -- 素の .mjs
+} from './git-scannable-files-core.mjs';
 
 /**
  * **`-v` と `-c` を併せた `grep` を repo に書かせない歯**。
@@ -97,14 +105,51 @@ export function hasGrepVc(line: string): boolean {
   return false;
 }
 
-/** 追跡ファイルのうち走査する対象。`git ls-files -z` が挙げるものだけを見る。 */
-export function scannableFiles(): string[] {
-  const listed = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
-  return listed
-    .split('\0')
-    .filter((p) => p.length > 0)
-    .filter((p) => !EXCLUDED.includes(p));
+/**
+ * 走査する対象。追跡済み + 未追跡だが ignore されていないファイル
+ * （`scripts/git-scannable-files-core.mjs`、Issue #1817）のうち `EXCLUDED` を
+ * 除いたもの。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルに `grep -vc` を書いても、手元の `pnpm verify` は緑のまま、
+ * push 後の CI で初めて赤くなる穴があった。`root` を引数で受けるのはテスト用
+ * （下の `describe('scannableFiles は未追跡ファイルも対象に入れる（#1817）')`
+ * が一時 git リポジトリに対して呼ぶ）。
+ */
+export function scannableFiles(root: string = ROOT): string[] {
+  return (listGitScannableFiles({ cwd: root }) as string[]).filter((p) => !EXCLUDED.includes(p));
 }
+
+describe('scannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
+  async function makeRepoWithUntrackedFile(): Promise<string> {
+    const dir = await makeTempDir('check-no-grep-vc-1817-');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await writeFile(path.join(dir, 'tracked.sh'), 'echo ok\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    // まだ `git add` していない新規ファイル。
+    await writeFile(path.join(dir, 'new-untracked.sh'), "grep -vc 'x' file\n");
+    return dir;
+  }
+
+  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('new-untracked.sh');
+  });
+
+  it('🟢（直した後）: scannableFiles は同じ新規ファイルを対象に入れる', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const files = scannableFiles(dir);
+    expect(files).toContain('new-untracked.sh');
+    expect(files).toContain('tracked.sh');
+  });
+});
 
 describe('-v と -c を併せた grep', () => {
   it('壊れる書き方を全部見つける', () => {

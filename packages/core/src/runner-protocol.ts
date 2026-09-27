@@ -778,6 +778,29 @@ export const unpushedWorkResultSchema = z.object({
    * （#1765 段2。`AGENTS.md`「取れない軸に0の行を作る」の裏）。
    */
   scratchRootsUnknown: z.string().optional(),
+  /**
+   * 探索の起点より下（子ディレクトリ）で `readdir` に失敗した延べ回数
+   * （`unpushed-work.ts` の `findGitDirs`。Issue #1865）。**省略 = 0件**
+   * （子ディレクトリの読み失敗は無かった）。
+   *
+   * ⚠️ **`scratchRootsUnknown` とは別軸。** あちらは `/tmp` スクラッチの
+   * 探索の**起点**（`tmpRootDir` 自体）が読めない場合、こちらは `job.cwd`
+   * の下を辿る途中の**子ディレクトリ**が読めない場合である。
+   *
+   * ⚠️ **省略を「子ディレクトリはすべて読めた」と読んでよいが、この欄が
+   * 載っているとき、`worktrees` はそこで探索を諦めた子ディレクトリの下に
+   * 在ったかもしれない作業ツリーを1本も含んでいない可能性がある**——
+   * 見つからなかったのではなく、探せなかった（`truncatedAtCount` /
+   * `stoppedEarly` / `scratchRootsUnknown` と同じ「取れない軸に0の行を
+   * 作らない」作法）。
+   */
+  unreadableDirCount: z.number().int().positive().optional(),
+  /**
+   * 上の失敗のうち最初の1件（`<パス>: <エラーメッセージ>`）。診断用の
+   * サンプル1件であって、全件の一覧ではない——{@link unreadableDirCount}
+   * が載っているときだけ載る。
+   */
+  unreadableDirSample: z.string().optional(),
 });
 export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
 
