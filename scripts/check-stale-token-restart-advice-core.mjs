@@ -29,9 +29,10 @@
  *
  * - **生成元のファイル自身**（{@link GENERATOR_PATH}）。定数の本体も、経緯を
  *   説明する doc の中の引用も、ここに在るのが正しい
- * - **`*.test.ts`**。順序の歯（`tools.test.ts`）は助言の字面を引いて「前提が
- *   助言より前に在る」ことを測っている。⟹ **テストは生成元の出力を当てる側**で
- *   あって、クローンへ配られる文章を作る側ではない
+ * - **`*.test.ts` / `*.test.tsx` / `*.test.jsx`**。順序の歯（`tools.test.ts`・
+ *   `apps/web` の `*.test.tsx`）は助言の字面を引いて「前提が助言より前に在る」
+ *   ことを測っている。⟹ **テストは生成元の出力を当てる側**であって、クローンへ
+ *   配られる文章を作る側ではない
  * - **この検査自身の core**（{@link CHECKER_CORE_PATH}）。**探す字面を定義して
  *   いるファイルなので、必ず両方の字面を含む。**免除しないと、門は生えた瞬間から
  *   自分自身を指して赤くなり続ける（実際にそうなっていた——`ci` の
@@ -84,7 +85,13 @@ export const CHECKER_CORE_PATH = 'scripts/check-stale-token-restart-advice-core.
 
 /** そのパスが免除されるか（生成元自身か、この検査自身の core か、テストか）。 */
 export function isExempt(path) {
-  return path === GENERATOR_PATH || path === CHECKER_CORE_PATH || path.endsWith('.test.ts');
+  return (
+    path === GENERATOR_PATH ||
+    path === CHECKER_CORE_PATH ||
+    path.endsWith('.test.ts') ||
+    path.endsWith('.test.tsx') ||
+    path.endsWith('.test.jsx')
+  );
 }
 
 /**
@@ -114,8 +121,15 @@ export function findStaleTokenAdviceHits(files) {
   return hits;
 }
 
-/** 助言が文字列として載りうる拡張子。 */
-export const TARGET_SUFFIXES = ['.ts', '.mjs', '.js'];
+/**
+ * 助言が文字列として載りうる拡張子。
+ *
+ * **`.tsx` / `.jsx` も含む（Issue #1873）。** 以前は `.ts` / `.mjs` / `.js` だけ
+ * だったため、`apps/web`（React コンポーネントは `.tsx`）が走査から漏れていた。
+ * 助言はソースの中の文字列として配られるものであり、それは JSX/TSX の中の
+ * 文字列リテラルでも同じである——Web の画面だけを対象外にする理由が無い。
+ */
+export const TARGET_SUFFIXES = ['.ts', '.mjs', '.js', '.tsx', '.jsx'];
 
 /**
  * 走査対象を列挙する: 追跡済み + 未追跡だが ignore されていないファイル

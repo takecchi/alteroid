@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -12,6 +12,11 @@ import { makeTempDir } from '../vitest.tmpdir.js';
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { BANNED_PHRASES, CHECKER_CORE_PATH, GENERATOR_PATH, findRestartBeforeCheckAdviceHits, isExempt, listScannableSources } from './check-restart-before-check-advice-core.mjs';
+
+import {
+  listGitScannableFiles,
+  // @ts-expect-error -- 素の .mjs
+} from './git-scannable-files-core.mjs';
 
 type Hit = { path: string; id: string; text: string; why: string; line: number };
 type Phrase = { id: string; text: string; why: string };
@@ -191,5 +196,75 @@ describe('check-restart-before-check-advice: listScannableSources（Issue #1817�
     expect(files).toContain('new-untracked.ts');
     expect(files).toContain('tracked.ts');
     expect(files).not.toContain('new-untracked.md');
+  });
+});
+
+/**
+ * **`apps/web` の `.tsx` が走査から漏れていた穴**（Issue #1873）。
+ *
+ * 一時の git リポジトリに `apps/web/app/routes/manager-detail.tsx` を作り、
+ * 生成元（`packages/core/src/usage-limits.ts`）を通さずに旧字面の助言を
+ * そのまま埋め込む。直す前の拡張子フィルタ（`.ts` / `.mjs` / `.js`）だと
+ * このファイルは対象にすら入らない ⟹ `findRestartBeforeCheckAdviceHits` まで
+ * 届く前に見落とされ、検査は「異常なし」で緑のまま終わる。
+ */
+describe('check-restart-before-check-advice: apps/web の .tsx を走査する（Issue #1873）', () => {
+  const oldPhrase = (BANNED_PHRASES as Phrase[]).find((p) => p.id === 'old');
+
+  async function makeRepoWithTsxFile(): Promise<string> {
+    const dir = await makeTempDir('check-restart-before-check-advice-1873-');
+    const git = (...gitArgs: string[]) =>
+      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await mkdir(join(dir, 'apps/web/app/routes'), { recursive: true });
+    // 生成元を通さず、Web の画面コンポーネントに助言の逐語を直書きした形。
+    await writeFile(
+      join(dir, 'apps/web/app/routes/manager-detail.tsx'),
+      `export const Notice = () => <p>${oldPhrase?.text} — 同じ仕事が2本になる。</p>;\n`,
+    );
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    return dir;
+  }
+
+  it('🔴（直す前の形）: 拡張子フィルタを .ts/.mjs/.js に絞ると apps/web の .tsx を見落とす', async () => {
+    const dir = await makeRepoWithTsxFile();
+    const oldSuffixes = ['.ts', '.mjs', '.js'];
+    const oldForm = (listGitScannableFiles({ cwd: dir }) as string[]).filter((path) =>
+      oldSuffixes.some((suffix) => path.endsWith(suffix)),
+    );
+    expect(oldForm).not.toContain('apps/web/app/routes/manager-detail.tsx');
+
+    // ⟹ 見落とされたファイルは findRestartBeforeCheckAdviceHits にすら渡らないので、
+    // 生成元を通さない逐語があっても検査は「異常なし」を返す（空振り）。
+    const hits = findRestartBeforeCheckAdviceHits(
+      oldForm.map((path) => ({
+        path,
+        content: readFileSync(join(dir, path), 'utf8'),
+      })),
+    ) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('🟢（直した後）: listScannableSources は apps/web の .tsx も対象に入れ、直書きを捕まえる', async () => {
+    const dir = await makeRepoWithTsxFile();
+    const files = listScannableSources(dir) as string[];
+    expect(files).toContain('apps/web/app/routes/manager-detail.tsx');
+
+    const hits = findRestartBeforeCheckAdviceHits(
+      files.map((path) => ({
+        path,
+        content: readFileSync(join(dir, path), 'utf8'),
+      })),
+    ) as Hit[];
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.path).toBe('apps/web/app/routes/manager-detail.tsx');
+    expect(hits[0]?.id).toBe('old');
+  });
+
+  it('.test.tsx は免除される（Web のテストが助言の字面を引いて当てる側であるため）', () => {
+    expect(isExempt('apps/web/app/routes/manager-detail.test.tsx')).toBe(true);
   });
 });

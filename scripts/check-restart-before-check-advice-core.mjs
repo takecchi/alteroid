@@ -37,9 +37,10 @@
  *
  * - **生成元のファイル自身**（{@link GENERATOR_PATH}）。定数の本体も、経緯を
  *   説明する doc の中の引用も、ここに在るのが正しい
- * - **`*.test.ts`**。`tools.test.ts` / `situation.test.ts` の歯は、生成された
- *   本文に助言の字面が実際に含まれることを引いて測っている。⟹ **テストは
- *   生成元の出力を当てる側**であって、クローンへ配られる文章を作る側ではない
+ * - **`*.test.ts` / `*.test.tsx` / `*.test.jsx`**。`tools.test.ts` /
+ *   `situation.test.ts`・`apps/web` の `*.test.tsx` の歯は、生成された本文に
+ *   助言の字面が実際に含まれることを引いて測っている。⟹ **テストは生成元の
+ *   出力を当てる側**であって、クローンへ配られる文章を作る側ではない
  * - **この検査自身の core**（{@link CHECKER_CORE_PATH}）。**探す字面を定義して
  *   いるファイルなので、必ず全部の字面を含む。**免除しないと、門は生えた瞬間
  *   から自分自身を指して赤くなり続ける（`check-stale-token-restart-advice-core.mjs`
@@ -98,7 +99,13 @@ export const CHECKER_CORE_PATH = 'scripts/check-restart-before-check-advice-core
 
 /** そのパスが免除されるか（生成元自身か、この検査自身の core か、テストか）。 */
 export function isExempt(path) {
-  return path === GENERATOR_PATH || path === CHECKER_CORE_PATH || path.endsWith('.test.ts');
+  return (
+    path === GENERATOR_PATH ||
+    path === CHECKER_CORE_PATH ||
+    path.endsWith('.test.ts') ||
+    path.endsWith('.test.tsx') ||
+    path.endsWith('.test.jsx')
+  );
 }
 
 /**
@@ -128,8 +135,15 @@ export function findRestartBeforeCheckAdviceHits(files) {
   return hits;
 }
 
-/** 助言が文字列として載りうる拡張子。 */
-export const TARGET_SUFFIXES = ['.ts', '.mjs', '.js'];
+/**
+ * 助言が文字列として載りうる拡張子。
+ *
+ * **`.tsx` / `.jsx` も含む（Issue #1873）。** 以前は `.ts` / `.mjs` / `.js` だけ
+ * だったため、`apps/web`（React コンポーネントは `.tsx`）が走査から漏れていた。
+ * 助言はソースの中の文字列として配られるものであり、それは JSX/TSX の中の
+ * 文字列リテラルでも同じである——Web の画面だけを対象外にする理由が無い。
+ */
+export const TARGET_SUFFIXES = ['.ts', '.mjs', '.js', '.tsx', '.jsx'];
 
 /**
  * 走査対象を列挙する: 追跡済み + 未追跡だが ignore されていないファイル
