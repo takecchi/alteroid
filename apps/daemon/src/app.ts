@@ -1406,7 +1406,14 @@ export function createApp(deps: AppDeps) {
     if (account === null) {
       return c.json({ error: 'トークンが無効か期限切れ（alteroid login をやり直す）' }, 401);
     }
-    if (!isAccountGranted(account)) {
+    // **`POST /auth/logout` だけは、許可の無いアカウントも通す（issue #1757）。**
+    // 自分のトークンを失効させるのに、使う許可は要らない。ここで 403 にすると、
+    // 許可待ちのトークンは失効させられないまま残り、**後から `access grant` した
+    // 瞬間に、捨てたつもりのトークンが使える鍵として生き返る**（CLI の
+    // `alteroid logout` も 403 を「失敗」と読んで手元を消せなくなる）。
+    // ログアウトの口がする操作は「提示したトークン自身を失効させる」だけなので、
+    // 通しても許可の無いアカウントに何かを許すことにはならない。
+    if (!isAccountGranted(account) && c.req.path !== '/auth/logout') {
       // ログインは通っているが使う許可が無い。**401 ではなく 403** で返す
       // （やり直しても解決しない。人間が alteroid access grant を実行する）。
       return c.json({ error: 'このアカウントには alteroid を使う許可が無い' }, 403);

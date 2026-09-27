@@ -349,6 +349,34 @@ describe('認証が有効なとき', () => {
       expect((await app.request('/memory', { headers: OPERATOR })).status).toBe(200);
     });
 
+    /**
+     * **許可の無いアカウントも、自分のトークンは失効させられる。** ここで 403 に
+     * すると、許可待ちのトークンは失効させられないまま残り、後から
+     * `access grant` した瞬間に、捨てたつもりのトークンが使える鍵として
+     * 生き返る（`app.ts` の `authenticate` の該当箇所）。
+     */
+    it('許可待ちのトークンも失効させられ、後から許可を与えても生き返らない', async () => {
+      const claimed = await loginThrough(app);
+      expect(claimed.granted).toBe(false);
+      const auth = { authorization: `Bearer ${claimed.token}` };
+      // 許可待ちのあいだ、ほかの口はいままでどおり 403。
+      expect((await app.request('/memory', { headers: auth })).status).toBe(403);
+
+      const logout = await app.request('/auth/logout', {
+        ...post,
+        headers: { ...post.headers, ...auth },
+      });
+      expect(logout.status).toBe(200);
+
+      const granted = await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(granted.status).toBe(200);
+      // 許可が付いた後も、ログアウトしたトークンは通らない。
+      expect((await app.request('/memory', { headers: auth })).status).toBe(401);
+    });
+
     it('認証なしでは401（公開の口になっていない——/auth/me と同じ例外）', async () => {
       const response = await app.request('/auth/logout', post);
       expect(response.status).toBe(401);
