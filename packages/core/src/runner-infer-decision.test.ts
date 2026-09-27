@@ -239,8 +239,8 @@ describe('inferDecision / 否定の語を含む承認の言い方は unreadable�
  * `NEGATED_APPROVAL_PHRASES` に2つ足して `unreadable` へ着地させるだけ
  * である（SDK から見える結果は deny のまま）。
  */
-describe("inferDecision / \"don't worry\" と \"no worries\" は unreadable（issue #1890）", () => {
-  it('「Yes, please proceed. Don\'t worry, I trust your judgement.」は unreadable', () => {
+describe('inferDecision / "don\'t worry" と "no worries" は unreadable（issue #1890）', () => {
+  it("「Yes, please proceed. Don't worry, I trust your judgement.」は unreadable", () => {
     expect(inferDecision("Yes, please proceed. Don't worry, I trust your judgement.")).toBe(
       'unreadable',
     );
@@ -270,12 +270,10 @@ describe("inferDecision / \"don't worry\" と \"no worries\" は unreadable（is
     },
   );
 
-  it.each([
-    'no problem',
-    'no objection',
-    "don't hesitate",
-    "don't mind",
-  ])('対照: #1877 の既存4語「%s」は引き続き unreadable（今回の変更で壊れていない）', (message) => {
-    expect(inferDecision(message)).toBe('unreadable');
-  });
+  it.each(['no problem', 'no objection', "don't hesitate", "don't mind"])(
+    '対照: #1877 の既存4語「%s」は引き続き unreadable（今回の変更で壊れていない）',
+    (message) => {
+      expect(inferDecision(message)).toBe('unreadable');
+    },
+  );
 });
