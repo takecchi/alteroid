@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   SELFTEST_RECOVERY_COMMANDS,
   selftestMarkerPresentMessage,
@@ -103,7 +104,7 @@ describe('mutate-selftest: 印が残った状態で selftest を起こすと、�
     const result = spawnSync(
       'node',
       [MUTATE_CLI, 'selftest', '--scenario', 'backup-corruption', '--root', tmp],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
+      { cwd: REPO_ROOT, encoding: 'utf8', env: mutateCliChildEnv() },
     );
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
 

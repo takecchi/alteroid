@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   BACKUP_DIR,
   DEFAULT_ROOT,
@@ -59,6 +60,7 @@ function runCli(args: string[]) {
   return spawnSync('node', [MUTATE_CLI, ...args], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
+    env: mutateCliChildEnv(),
   });
 }
 

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   buildScaffoldControlMarker,
   decideJudgementCategory,
@@ -1021,13 +1022,14 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
           `setRootOverride(${JSON.stringify(root)});\n` +
           'writeMarkerFile(buildScaffoldControlMarker());\n',
       ],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', env: mutateCliChildEnv() },
     );
     expect(fs.existsSync(path.join(root, 'MUTATION-IN-PROGRESS.json'))).toBe(true);
 
     const statusResult = spawnSync('node', [MUTATE_CLI, 'status', '--root', root], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
+      env: mutateCliChildEnv(),
     });
     expect(statusResult.status).toBe(2); // 印が在る＝非0（誰かが片付ける必要が在る）
     const statusOut = (statusResult.stdout ?? '') + (statusResult.stderr ?? '');
@@ -1040,6 +1042,7 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
     const restoreResult = spawnSync('node', [MUTATE_CLI, 'restore', '--root', root], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
+      env: mutateCliChildEnv(),
     });
     expect(restoreResult.status).toBe(1);
     const restoreOut = (restoreResult.stdout ?? '') + (restoreResult.stderr ?? '');

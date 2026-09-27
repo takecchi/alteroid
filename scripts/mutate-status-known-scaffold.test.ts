@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   DEFAULT_ROOT,
   setRootOverride,
@@ -62,6 +63,7 @@ function runCli(args: string[]) {
   return spawnSync('node', [MUTATE_CLI, ...args], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
+    env: mutateCliChildEnv(),
   });
 }
 
@@ -297,11 +299,15 @@ describe('mutate.mjs CLI: status は marker が無くても既知の足場を名
         backupPath: '.mutation-testing/backups/does-not-matter.bak',
         headBefore: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
         originalContent,
-        md5Pre: execFileSync('node', [
-          '-e',
-          "process.stdout.write(require('crypto').createHash('md5').update(process.argv[1],'utf8').digest('hex'))",
-          originalContent,
-        ]).toString(),
+        md5Pre: execFileSync(
+          'node',
+          [
+            '-e',
+            "process.stdout.write(require('crypto').createHash('md5').update(process.argv[1],'utf8').digest('hex'))",
+            originalContent,
+          ],
+          { env: mutateCliChildEnv() },
+        ).toString(),
         manualRestore: { command: 'noop', verifyMd5Command: 'noop', expectedMd5: 'deadbeef' },
         alternativeWithCaveat: 'noop',
       }),
