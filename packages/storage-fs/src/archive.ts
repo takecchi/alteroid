@@ -18,6 +18,8 @@ import {
   type TranscriptArchive,
 } from '@alteroid/core';
 
+import { withPathLock } from './file-lock.js';
+
 /**
  * 同じミリ秒に同じセッションへ積まれたときに、枝番を試す上限（#905）。
  *
@@ -81,29 +83,71 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * **衝突していない id の形は1文字も変わらない**ので、既存の退避に移行は
    * 要らない。**先頭が `sanitize(sessionId)` である性質も保たれる**（id の
    * 前方一致が効く。#698 §6-5）。
+   *
+   * **「直前を引く → 判定する → 書く」を `sessionId` ごとの `withPathLock`
+   * で直列化する（#1732）。** 以前はここにロックが無く、同じ `sessionId` への
+   * 並行 `archive()`（同一プロセス内の `Promise.all` だけで踏める——実測:
+   * 真に前方一致する8本を並行に積むと8本とも `'first'` になった）が
+   * `#findPreviousArchiveForSession` を同じ状態で読み、同じ「直前」を見て
+   * 同じ判定を出す競合を起こしていた。pg 側（`packages/storage-pg/src/archive.ts`
+   * の `archive()`）と同じ形の欠陥で、直し方も同じ形——`sessionId` 単位で
+   * 直列化する。**`withPathLock` はプロセス内・プロセス間の両方を排他する**
+   * （advisory な強さは `file-lock.ts` の doc）ので、fs ストアを共有する複数
+   * プロセス（#1113 が想定する形）にもこれで効く。
+   *
+   * ⚠️ **`at`（と `stamp` / `base`）はロックを取った**後**で決める。** pg 側の
+   * `archive()` と同じ理由——ロックの外で `new Date()` を取ると、「`at` が
+   * 早いのに、ロックは後から取った側」が起こりうる。`list()` の並び
+   * （`at` 昇順）と、実際にロックを取れた順（＝読み書きが起きた順）がずれ、
+   * `comparedTo` の鎖が並びと一致しなくなる——`selectArchiveRemovalTargets`
+   * （`packages/core/src/archive-prune.ts`）は配列上の隣接関係と `continuity`
+   * だけで含有を推定するので、鎖と並びがずれれば同じように欺かれる。
+   *
+   * **`mkdir` はロックの内側に置く。** `file-lock.ts` の `withPathLock` の doc
+   * 「⚠️ ここで `mkdir` を先に呼んではいけない」と同じ理由——呼ぶ前に
+   * `await mkdir(...)` を挟むと、複数の同時呼び出しが `withPathLock` へ実際に
+   * 到達する順序が mkdir の完了順にずれ、プロセス内の直列化（FIFO）が乱れる。
+   * `withPathLock` 自身は呼んだ時点で同期的にキューへ並ぶことに依存している
+   * ので、呼ぶ前には何も `await` しない。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
-    await mkdir(this.#dir, { recursive: true });
-    const previous = await this.#findPreviousArchiveForSession(sessionId);
-    const fingerprint = fingerprintArchiveBody(transcript);
-    const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
-    const at = new Date();
-    const stamp = at.toISOString().replace(/[:.]/g, '-');
-    const base = `${sanitize(sessionId)}-${stamp}`;
-    const name = await this.#writeBodyExclusively(base, transcript);
-    // **本体より先に meta を書かない理由は無い**（`remove()` の
-    // 「印を書いてから本体を切り詰める」とは違い、こちらは新規作成で
-    // 競合が無い）。実測上の心配は要らないが、本体が読めればこの id は
-    // 実在するので、meta を本体の後に書いても `list()` が拾えない窓は
-    // `#fallbackMeta` が埋める。
-    await this.#writeMeta(name, {
-      sessionId,
-      at: at.toISOString(),
-      bodyChars: fingerprint.bodyChars,
-      bodyMd5: fingerprint.bodyMd5,
-      continuity,
+    return withPathLock(this.#sessionLockPath(sessionId), async () => {
+      await mkdir(this.#dir, { recursive: true });
+      // **`at` はロックを取った後で決める（#1732）。** 上の doc「⚠️」参照。
+      const at = new Date();
+      const previous = await this.#findPreviousArchiveForSession(sessionId);
+      const fingerprint = fingerprintArchiveBody(transcript);
+      const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
+      const stamp = at.toISOString().replace(/[:.]/g, '-');
+      const base = `${sanitize(sessionId)}-${stamp}`;
+      const name = await this.#writeBodyExclusively(base, transcript);
+      // **本体より先に meta を書かない理由は無い**（`remove()` の
+      // 「印を書いてから本体を切り詰める」とは違い、こちらは新規作成で
+      // 競合が無い）。実測上の心配は要らないが、本体が読めればこの id は
+      // 実在するので、meta を本体の後に書いても `list()` が拾えない窓は
+      // `#fallbackMeta` が埋める。
+      await this.#writeMeta(name, {
+        sessionId,
+        at: at.toISOString(),
+        bodyChars: fingerprint.bodyChars,
+        bodyMd5: fingerprint.bodyMd5,
+        continuity,
+      });
+      return { id: name, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
     });
-    return { id: name, continuity, ...(comparedTo === undefined ? {} : { comparedTo }) };
+  }
+
+  /**
+   * `archive()` の並行呼び出しを直列化するロックの対象パス（#1732）。
+   *
+   * **`.jsonl` / `.meta.json` / `.removed` のどれとも拡張子が被らない**
+   * （`sanitize(sessionId)` の後ろに `.session-lock` を付け、`withPathLock` が
+   * さらに `.lock` を足す＝実体は `<sanitize(sessionId)>.session-lock.lock`）
+   * ので、`#listIds()`（`.jsonl` だけを見る）にも `#readMeta` 系にも紛れ込まない。
+   * `sessionId` 単位——他のセッションの `archive()` を待たせない。
+   */
+  #sessionLockPath(sessionId: string): string {
+    return join(this.#dir, `${sanitize(sessionId)}.session-lock`);
   }
 
   /**

@@ -26,6 +26,18 @@ import { archive } from './schema.js';
  */
 const MAX_ARCHIVE_ID_ATTEMPTS = 1000;
 
+/**
+ * `archive()` の advisory lock（#1732）の名前空間。
+ *
+ * `pg_advisory_xact_lock(hashtext(namespace), hashtext(sessionId))` の
+ * 1つ目の鍵——**この文字列を変えると、古いロックと新しいロックが別の鍵に
+ * 分かれる**（デプロイをまたいで在庫が残っていても実害は無いが、意味は無い）。
+ * `grep -rn advisory packages` した時点（#1732 時点）で pg 側に他の advisory
+ * lock は無かった——将来 pg 側に別の advisory lock を足すなら、鍵空間の衝突を
+ * 避けるためにこことは別の名前空間文字列を選ぶこと。
+ */
+const ARCHIVE_SESSION_LOCK_NAMESPACE = 'alteroid.archive.session';
+
 /** `n` 回目の候補 id（1回目は枝番無し＝従来と同じ形）。fs 側と同じ形を作る。 */
 function archiveIdCandidate(base: string, attempt: number): string {
   return attempt === 1 ? `${base}.jsonl` : `${base}-${attempt}.jsonl`;
@@ -65,9 +77,49 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * 100MB 級の行がある `archive` で、判定のためだけに本文を読み直すと
    * Issue #698 の動機そのものを壊す（`list()` の doc と同じ理由）。
    *
-   * **「直前を引く → 判定する → insert する」を1トランザクションに閉じる。**
-   * 割ると、同じ `sessionId` への並行 `archive()` が同じ「直前」を見て
-   * 同じ判定を出す競合が起きる（`PgUsageStore.record` と同じ理由）。
+   * **「直前を引く → 判定する → insert する」を1トランザクションに閉じるだけでは
+   * 足りない（#1732）。** 以前のここの doc は「割ると、同じ `sessionId` への
+   * 並行 `archive()` が同じ「直前」を見て同じ判定を出す競合が起きる」と書いて
+   * いたが、それはトランザクションで閉じれば防げるという前提だった——**その
+   * 前提が誤りだった。** PostgreSQL の既定の分離レベル（READ COMMITTED）は
+   * 「同じトランザクションに閉じる」ことと「読んだ行をロックする」ことを
+   * 保証しない。`FOR UPDATE` も advisory lock も無い1トランザクションでは、
+   * 2つの `archive()` が同じ `sessionId` へ重なって走ったとき、片方の insert が
+   * commit する前にもう片方の `select max(at) ...` が走れば、**両方が同じ
+   * 「直前」を読んで同じ判定を出す**——実測（真に前方一致する8本を並行に
+   * 積んで、8本とも `'first'` になった。逐次なら `'first'` 1本・`'continues'`
+   * 7本のはず）。この誤判定は `archive-prune.ts` の `selectArchiveRemovalTargets`
+   * （`continuity === 'continues'` と配列上の隣接関係だけで含有を推定し、
+   * 実際に何と比較したか＝`comparedTo` を見ない）を欺き、`requireContainment:
+   * true`（`archive_remove_many` / 自動の畳みの既定・固定値）でも、他のどこにも
+   * 残っていない本文を持つ行を削除対象に選ばせる（Issue #1732 の再現）。
+   *
+   * **塞ぎ方: トランザクションの先頭で `sessionId` ごとの advisory lock
+   * （`pg_advisory_xact_lock`）を取り、同じ `sessionId` への `archive()` を
+   * 直列化する。** トランザクション終了（commit/rollback）で自動的に解放される
+   * ので、明示の unlock は要らない。鍵は `hashtext(namespace)` /
+   * `hashtext(sessionId)` の組——`ARCHIVE_SESSION_LOCK_NAMESPACE` の doc参照。
+   * 異なる `sessionId` は別の鍵になるので、他セッションの `archive()` を
+   * 待たせない（advisory lock はセッション単位の粒度で、テーブル全体を
+   * 塞がない）。
+   *
+   * ## ⚠️ `at`（と `stamp` / `base`）は advisory lock を取った**後**に決める
+   *
+   * 以前は `at = new Date()` をトランザクションの**外**（`db.transaction(...)`
+   * を呼ぶ前）で取っていた。ロックだけを足してここを直さないと、**「`at` が
+   * 早いのに、ロックは後から取った側」が起こる**——先に `new Date()` を呼んだ
+   * 側がロック待ちで足止めされているあいだに、後から `new Date()` を呼んだ側が
+   * 先にロックを取って読み書きを終えてしまう。すると `list()` の並び
+   * （`at` 昇順）と「実際にロックを取って `select` した順」がずれ、`at` が早い
+   * 行のほうが後から insert されて `comparedTo` の鎖が `at` の並びと一致しない
+   * ——`selectArchiveRemovalTargets` は `at` 昇順に並べた配列上の隣接関係で
+   * 含有を推定するので、鎖と並びがずれれば同じように欺かれる（この Issue が
+   * 直そうとしている脆弱性がそのまま残る）。**⟹ `at` はロックを取った後、
+   * `select` の直前で決める。** これで「ロックを取れた順」＝「`at` の順」＝
+   * 「`list()` の並び」＝「`comparedTo` の鎖」が揃う。
+   *
+   * `body` / `fingerprint`（指紋）は `transcript` だけから決まり、順序に
+   * 関わらないので、ロックの前で計算したままでよい。
    *
    * **id が衝突したら枝番を上げる（#905）。** `stamp` はミリ秒精度なので、
    * 同じセッションへ同じミリ秒に2回積むと id が衝突する。**`onConflictDoUpdate`
@@ -100,12 +152,19 @@ export class PgTranscriptArchive implements TranscriptArchive {
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
     const body = stripNulls(transcript);
-    const at = new Date();
-    const stamp = at.toISOString().replace(/[:.]/g, '-');
-    const base = `${sanitize(sessionId)}-${stamp}`;
     // 指紋は生の本文で取る（上の doc。#1709）。保存する `body` は NUL を除いた値。
     const fingerprint = fingerprintArchiveBody(transcript);
     return this.#db.transaction(async (tx) => {
+      // **同じ sessionId への archive() を直列化する（#1732）。** トランザクション
+      // 終了で自動解放されるので unlock は不要。上の doc「塞ぎ方」参照。
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${ARCHIVE_SESSION_LOCK_NAMESPACE}), hashtext(${sessionId}))`,
+      );
+      // **`at` はロックを取った後で決める（#1732）。** 上の doc「⚠️」参照——
+      // ここより前で `new Date()` を呼ぶと、ロック待ちの順と `at` の順がずれる。
+      const at = new Date();
+      const stamp = at.toISOString().replace(/[:.]/g, '-');
+      const base = `${sanitize(sessionId)}-${stamp}`;
       const candidateRows = await tx
         .select({
           id: archive.id,

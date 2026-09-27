@@ -1,3 +1,4 @@
+import { selectArchiveRemovalTargets } from './archive-prune.js';
 import type { TranscriptArchive } from './store.js';
 
 /**
@@ -124,6 +125,39 @@ import type { TranscriptArchive } from './store.js';
  *     同着グループより新しい）を指す——**同着グループの枝番の大小に
  *     引きずられない**（`at` を見ずに枝番の大小だけで選ぶ変異はここで
  *     赤くなる）
+ *
+ * **34〜35 は #1732（並行 `archive()` で `continuity`/`comparedTo` が壊れる窓）の
+ * 検査である:**
+ *
+ * 34. 🔴 **並行に `archive()` を呼んでも、`comparedTo` の鎖は `list()` の並び
+ *     （`at` 昇順）と必ず一致する。** 同じ `sessionId` へ真に前方一致する本文を
+ *     `Promise.all` で並行に積み、`at` 昇順に並べたとき、各行の `comparedTo`
+ *     （`first` なら `undefined`）が「1つ前の行の id」と一致するかを検査する。
+ *     一致しなければ、窓（同じ「直前」を複数の呼び出しが同時に読んで同じ判定を
+ *     出す競合）が塞がっていない。
+ *
+ *     ⚠️ **この検査は3実装に同じ入力を通すが、実効性は実装ごとに違う。**
+ *     インメモリ（`packages/core/src/testing.ts`）は判定から書き込みまでに
+ *     `await` が無く、そもそも窓を持たない——常に緑。fs 実装は同一プロセス内の
+ *     `Promise.all` だけで真の並行が起きる（`node:fs/promises` の readdir /
+ *     readFile / writeFile は実際に interleave する）ので、ロックを外す変異で
+ *     実際に赤くなる。**pg 実装をテストする driver（PGlite）は単一接続で全
+ *     クエリを直列化するため、この検査は pg 実装に対しては窓が塞がっているかを
+ *     判定できない**——ロックがあってもなくても PGlite 上では真の並行が起きず、
+ *     常に緑になる。pg 実装の窓が実在すること、および直したことの実測は実
+ *     PostgreSQL でしか取れない（Issue #1732 の再現手順、および同 Issue を
+ *     直した PR の報告を見よ。この点は本関数の限界として正直に書き残す）。
+ *
+ * 35. 🔴 **並行に分岐した2本を積んでも、`selectArchiveRemovalTargets`
+ *     （`archive-prune.ts`、`requireContainment: true` の既定）が非包含行を
+ *     削除対象に選ばない。** 検査34と同じ窓が実害化する経路——`continuity` の
+ *     誤判定は「配列上の隣接関係と `continuity === 'continues'` だけで含有を
+ *     推定し、実際に何と比較したか（`comparedTo`）を見ない」
+ *     `selectArchiveRemovalTargets` を欺きうる（Issue #1732 の本体）。1本目
+ *     `AAAA\n` の後に、互いに無関係な2本（`AAAA\n` を継続するが内容は別）を
+ *     並行に積み、`requireContainment: true` の選定結果にどちらの id も
+ *     含まれないことを検査する。**この検査も PGlite に対しては実効性が無い**
+ *     ——理由は検査34と同じ。
  *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
@@ -912,6 +946,71 @@ export async function verifyTranscriptArchiveContract(
       '#908の陰性対照B: 同着グループの直後の2本目は、枝番の大小(4 > 1)ではなくatの新しさで' +
         '直前(afterTie1。枝番1)を選ぶ——atを見ない変異はここで赤くなる',
       { branchWrite4, afterTie1, afterTie2 },
+    );
+  }
+
+  // --- ここから #1732（並行 archive() で continuity/comparedTo が壊れる窓） -----
+
+  // 34. 🔴 並行に archive() を呼んでも、comparedTo の鎖は list() の並び
+  // （at 昇順）と必ず一致する。上のdoc「⚠️」参照——PGliteに対しては窓の
+  // 有無を判定できない（常に緑）。fs / 実 PostgreSQL に対しては実効性のある歯。
+  const concurrentSessionId = 'archive-contract-concurrent-lock-window';
+  const concurrentBase = 'CONCURRENT-CHAIN-LINE\n';
+  const concurrentBodies = Array.from({ length: 8 }, (_, i) => concurrentBase.repeat((i + 1) * 20));
+  const concurrentWrites = await Promise.all(
+    concurrentBodies.map((b) => archive.archive(concurrentSessionId, b)),
+  );
+  // list() は新しい順（#698）なので、反転して「積んだ順（at昇順、同着は
+  // 枝番昇順——list() 自身が #908 で tie-break 済み）」にする。
+  const concurrentOldestFirst = (await archive.list())
+    .filter((entry) => entry.sessionId === concurrentSessionId)
+    .slice()
+    .reverse();
+  if (concurrentOldestFirst.length !== 8) {
+    fail('#1732: 並行に積んだ8本が全部list()に出る（重複・欠落が無い）', concurrentOldestFirst);
+  }
+  for (let i = 0; i < concurrentOldestFirst.length; i += 1) {
+    const entry = concurrentOldestFirst[i];
+    if (entry === undefined) continue;
+    const write = concurrentWrites.find((w) => w.id === entry.id);
+    if (write === undefined) fail('#1732: list()の行がarchive()の戻り値のどれかと一致する', entry);
+    const expectedComparedTo = i === 0 ? undefined : concurrentOldestFirst[i - 1]?.id;
+    if ((write?.comparedTo ?? undefined) !== expectedComparedTo) {
+      fail(
+        '#1732: 並行に積んでも、comparedToはat昇順の直前の行のidと一致する' +
+          '（一致しなければ、同じ「直前」を複数の呼び出しが同時に読む窓が塞がっていない）',
+        { index: i, entry, write, expectedComparedTo },
+      );
+    }
+  }
+
+  // 35. 🔴 並行に分岐した2本を積んでも、selectArchiveRemovalTargets
+  // （requireContainment: true の既定）が非包含行を削除対象に選ばない。
+  // 上のdoc参照——PGliteに対しては実効性が無い（理由は検査34と同じ）。
+  const pruneDangerSessionId = 'archive-contract-concurrent-prune-danger';
+  const pruneRow1 = await archive.archive(pruneDangerSessionId, 'AAAA\n');
+  if (pruneRow1.continuity !== 'first') {
+    fail('#1732: prune-danger シナリオの1本目はfirstで確定させる', pruneRow1);
+  }
+  const [pruneRow2, pruneRow3] = await Promise.all([
+    archive.archive(pruneDangerSessionId, 'AAAA\nUNIQUE-CONTENT-B\n'),
+    archive.archive(pruneDangerSessionId, 'AAAA\nDIFFERENT-BRANCH-C\n'),
+  ]);
+  const pruneDangerEntries = (await archive.list()).filter(
+    (entry) => entry.sessionId === pruneDangerSessionId,
+  );
+  const pruneSelection = selectArchiveRemovalTargets(
+    pruneDangerEntries,
+    { sessionIds: [pruneDangerSessionId] },
+    { requireContainment: true },
+  );
+  const pruneTargetIds = new Set(pruneSelection.targets.map((t) => t.id));
+  if (pruneTargetIds.has(pruneRow2.id) || pruneTargetIds.has(pruneRow3.id)) {
+    fail(
+      '#1732: 互いに無関係な分岐を並行に積んでも、selectArchiveRemovalTargets' +
+        '（requireContainment: true）はどちらも削除対象に選ばない' +
+        '（選んだら、他のどこにも残っていない本文を持つ行を消してよいと言っていることになる）',
+      { pruneRow2, pruneRow3, pruneSelection },
     );
   }
 }
