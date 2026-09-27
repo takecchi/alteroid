@@ -115,6 +115,14 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    *
    * **索引の並びをそのまま逆から読む** —— `session_entries_key_idx` は
    * `(project_key, session_id, subpath, seq)` なので、`desc(seq)` はソートを起こさない。
+   *
+   * **本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に上回る**
+   * （`TranscriptArchive.readTail` と同じ強さの契約。`SessionTranscriptTail.readTail`
+   * の doc「契約」節）。⟹ 停止条件は `chars`（積んだ行の長さ + 区切りぶんの
+   * 累計）ではなく、**実際に返す長さ**で判定する——`lines.reverse().join('\n')`
+   * が使う区切りは `lines.length - 1` 個なので、返す長さは常に `chars - 1`
+   * である。「返す長さ（`chars - 1`）が `maxChars` を厳密に上回る」は
+   * 「`chars > maxChars + 1`」と同値（#1718）。
    */
   async readTail(key: LostSessionGrave, maxChars: number): Promise<string | null> {
     const rows = await this.#db
@@ -133,13 +141,19 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
 
     // **新しい方から積んで、足りたら止める。** 生ログは1行1レコードの JSONL なので、
     // ここで組み直したものは器の外に在るファイルと同じ形になる。
+    //
+    // **`chars > maxChars + 1` で止める（`chars >= maxChars` ではない）。** 上の
+    // doc のとおり、返す長さは `chars - 1` なので、`chars` がちょうど `maxChars`
+    // に達しただけで止めると、返す長さは `maxChars - 1` ＝ `maxChars` を
+    // **下回る**（#1718 の欠陥そのもの）。`chars > maxChars + 1` まで待てば、
+    // 返す長さ（`chars - 1`）は必ず `maxChars` を上回る。
     const lines: string[] = [];
     let chars = 0;
     for (const row of rows) {
       const line = JSON.stringify(row.entry);
       lines.push(line);
       chars += line.length + 1;
-      if (chars >= maxChars) break;
+      if (chars > maxChars + 1) break;
     }
     return lines.reverse().join('\n');
   }

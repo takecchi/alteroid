@@ -442,6 +442,57 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
   });
 });
 
+/**
+ * **応答の「全 id は日誌に N 件に分けて残してある」の N は、実際に書いた日誌の行の数で言う。**
+ * 1件も閉じられなかった塊は日誌に書かない（上の12番）ので、塊の数（`chunks.length`）で
+ * 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗っていた（PR #1711 で直したが、
+ * 専用の歯は `archive_remove_many` にしか無かった——`archive-remove-many-raced.test.ts`
+ * の「応答が言う『日誌に N 件』は、実際に書いた件数である」と同じ形で、ここに足す）。
+ */
+describe('commitment_close_many の応答が言う「日誌に N 件」は、実際に書いた件数である', () => {
+  it('2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
+    const stores = createMemoryStores();
+    const entries = Array.from({ length: 250 }, (_, i) => entryAt(i, 'external'));
+    await openAll(stores, entries);
+    const allIds = entries.map((entry) => entry.id);
+    // `chunkIdsByChars` は道具本体が使っているのと同じ export。同じ引数
+    // （id の並び・予算）で呼べば、道具の中で実際に切れる境界と一致する。
+    const CLOSE_MANY_JOURNAL_ID_CHARS_COPY = 3_600;
+    const chunksExpected = chunkIdsByChars(allIds, CLOSE_MANY_JOURNAL_ID_CHARS_COPY);
+    expect(chunksExpected.length).toBeGreaterThanOrEqual(2); // 2個目以降を丸ごと競合にするのに要る
+
+    // **1つ目の塊は本当に閉じ、2つ目以降は「呼ぶ直前に他経路が丸ごと先に閉じていた」を
+    // 模す。** `archive-remove-many-raced.test.ts` と同じ作法——本物の `closeMany` 実装
+    // だけで競合を作る（フェイクの戻り値を手で組み立てない）。2回目以降の呼びでは、
+    // 本物の `closeMany` を1回先打ちして「別経路」が閉じたことにしてから、道具自身の
+    // 呼びをもう一度本物へ通す（その時点では既に閉じているので `[]` が返る）。
+    const originalCloseMany = stores.commitments.closeMany.bind(stores.commitments);
+    let calls = 0;
+    stores.commitments.closeMany = async (ids, at, reason, by) => {
+      calls += 1;
+      if (calls > 1) {
+        await originalCloseMany(ids, at, '別経路が先に閉じた', 'human');
+      }
+      return originalCloseMany(ids, at, reason, by);
+    };
+
+    const reply = await closer(stores)({
+      origin: ['external'],
+      reason: '250件を一括で片付けた',
+      dryRun: false,
+    });
+
+    const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
+    expect(claimed, '省略の断り書きが出ていない（20件を超えて閉じていない）').not.toBeNull();
+    const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
+    expect(chunkEntries.length).toBeGreaterThan(0);
+    // **この歯が意味を持つための前提**: 実際に複数の塊に割れているのに、日誌に書いた
+    // のは1つ目の塊だけ（＝ journaledChunks < chunks.length）であること。
+    expect(chunkEntries.length).toBeLessThan(chunksExpected.length);
+    expect(Number(claimed?.[1])).toBe(chunkEntries.length);
+  });
+});
+
 describe('chunkIdsByChars（id の列を文字数の予算で塊に割る）', () => {
   it('14a. 塊を全部つなげると元の列に戻る（1つも落とさない・順序も保つ）', () => {
     const ids = Array.from({ length: 40 }, () => randomUUID());
@@ -471,5 +522,85 @@ describe('chunkIdsByChars（id の列を文字数の予算で塊に割る）', (
 
   it('14c. 空配列を渡すと空配列が返る', () => {
     expect(chunkIdsByChars([], 100)).toEqual([]);
+  });
+
+  /**
+   * 14d. **境界: 塊の合計（区切り込み）がちょうど予算に一致するとき、
+   * 分割しない。**
+   *
+   * 実装は `width + added > budget` のときだけ塊を切る（`>` であって
+   * `>=` ではない）——ちょうど一致は「超えていない」なので同じ塊に留まる。
+   * `id.length` を2つと区切り1文字ぶんを足してちょうど budget になるよう
+   * 仕込む。
+   */
+  it('14d. 境界: 塊の合計（区切り込み）がちょうど予算に一致するとき、分割しない', () => {
+    const a = 'a'.repeat(10);
+    const b = 'b'.repeat(9); // 10 + 1(区切り) + 9 = 20 = budget ちょうど
+    const budget = 20;
+    expect(chunkIdsByChars([a, b], budget).length).toBe(1);
+    expect(chunkIdsByChars([a, b], budget)).toEqual([[a, b]]);
+
+    // 陰性対照: 1文字でも超えると2塊に割れる。
+    const bPlusOne = 'b'.repeat(10); // 10 + 1 + 10 = 21 > 20
+    const split = chunkIdsByChars([a, bPlusOne], budget);
+    expect(split.length).toBe(2);
+    expect(split).toEqual([[a], [bPlusOne]]);
+  });
+
+  /**
+   * 14e. **境界: 1件だけで予算を超える id が列の途中・先頭・末尾のどこに
+   * 在っても、単独の塊として残り、空の塊は1つも生まれず、無限ループにも
+   * ならない。**
+   *
+   * 14b は「途中に挟まった」形だけを見ている。ここは先頭・末尾という
+   * 別の位置も見て、位置に依らないことを確かめる。
+   */
+  it('14e. 境界: 予算超えの id が先頭・末尾に在っても単独の塊になり、空の塊は生まれない', () => {
+    const tooLong = 'x'.repeat(50);
+    const budget = 10;
+
+    const headChunks = chunkIdsByChars([tooLong, 'a', 'b'], budget);
+    expect(headChunks[0]).toEqual([tooLong]);
+    expect(headChunks.every((chunk) => chunk.length > 0)).toBe(true);
+    expect(headChunks.flat()).toEqual([tooLong, 'a', 'b']);
+
+    const tailChunks = chunkIdsByChars(['a', 'b', tooLong], budget);
+    expect(tailChunks.at(-1)).toEqual([tooLong]);
+    expect(tailChunks.every((chunk) => chunk.length > 0)).toBe(true);
+    expect(tailChunks.flat()).toEqual(['a', 'b', tooLong]);
+
+    // 予算超えの id が連続しても、1つずつ単独の塊になる（まとめられない・
+    // 空の塊を挟まない）。
+    const allTooLong = chunkIdsByChars([tooLong, tooLong], budget);
+    expect(allTooLong).toEqual([[tooLong], [tooLong]]);
+  });
+
+  /**
+   * 14f. **`chunkIdsByChars` は、区切りを1文字ぶんとして数えている
+   * （内部の前提そのものを固定する）。**
+   *
+   * ⚠️ **この歯が測っているのは `chunkIdsByChars` の内部だけである。**
+   * `tools.ts` / `apps/daemon/src/app.ts` の呼び出し側は、日誌へ書くとき
+   * 実際に `chunk.join(' ')`（半角スペース1文字）で塊をつなぐ——これは
+   * 別途 grep で確認した事実であって、この歯はそれを検査していない。
+   * **呼び出し側の区切りが2文字以上（例: `', '`）に変わっても、この歯は
+   * 赤くならない**——呼び出し側は見ていない。もし呼び出し側の区切りが
+   * 変わってこの前提とずれれば、`chunkIdsByChars` が守っている予算は
+   * 呼び出し側にとって過小になり（実際に繋いだ文字列が budget を超えうる）、
+   * それはこの歯ではなく呼び出し側のテストで捕まえる必要がある。
+   * この歯が固定するのは「区切りは1文字」という `chunkIdsByChars` 内部の
+   * 前提だけで、前提が壊れたら（誰かが `chunkIdsByChars` の中の `+ 1` を
+   * 書き換えたら）赤くなる。
+   */
+  it('14f. 区切りは1文字ぶんとして数えている（chunkIdsByChars 内部の前提）', () => {
+    const ids = ['aa', 'bb', 'cc']; // 2+1+2+1+2 = 8
+    const budget = 8;
+    const chunks = chunkIdsByChars(ids, budget);
+    expect(chunks).toEqual([ids]);
+    expect(chunks[0]!.join(' ').length).toBe(budget);
+
+    // 1文字減らすと入りきらず割れる。
+    const chunksMinusOne = chunkIdsByChars(ids, budget - 1);
+    expect(chunksMinusOne.length).toBeGreaterThan(1);
   });
 });
