@@ -4689,6 +4689,12 @@ export function createApp(deps: AppDeps) {
               '宛先を「無かった」と取り立てて言うほどの情報ではない）。',
             content: { 'application/json': { schema: resolver(okResponseSchema) } },
           },
+          400: {
+            description:
+              '`runnerId` が無い、または文字列として不正（`jsonBody` の hook が断る。' +
+              'PR #1747 が揃えた形——送られた値は1文字も含めない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(runnersVacateCommandSchema, (where) => ({
@@ -5565,6 +5571,12 @@ export function createApp(deps: AppDeps) {
           200: {
             description: '消した（または前から消されていた）。',
             content: { 'application/json': { schema: resolver(archiveRemoveResponseSchema) } },
+          },
+          400: {
+            description:
+              'クエリ引数 `overrideReason` の形が不正（`queryParams` の hook が断る。' +
+              'PR #1747 が揃えた形——送られた値は1文字も含めない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
             description: '該当するアーカイブが無い。',

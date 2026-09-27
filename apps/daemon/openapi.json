@@ -14008,23 +14008,17 @@
             }
           },
           "400": {
-            "description": "Validation Error",
+            "description": "`runnerId` が無い、または文字列として不正（`jsonBody` の hook が断る。PR #1747 が揃えた形——送られた値は1文字も含めない）。",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "enum": [false]
-                    },
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "data": {}
+                      "type": "string"
+                    }
                   },
-                  "required": ["success", "error", "data"]
+                  "required": ["error"]
                 }
               }
             }
@@ -15542,23 +15536,17 @@
             }
           },
           "400": {
-            "description": "Validation Error",
+            "description": "クエリ引数 `overrideReason` の形が不正（`queryParams` の hook が断る。PR #1747 が揃えた形——送られた値は1文字も含めない）。",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "enum": [false]
-                    },
                     "error": {
-                      "type": "array",
-                      "items": {}
-                    },
-                    "data": {}
+                      "type": "string"
+                    }
                   },
-                  "required": ["success", "error", "data"]
+                  "required": ["error"]
                 }
               }
             }

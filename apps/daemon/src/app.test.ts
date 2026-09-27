@@ -6540,6 +6540,81 @@ describe('OpenAPI', () => {
   });
 
   /**
+   * **13回目の横断レビューで見つかった穴（PR #1747 の積み残し）。**
+   *
+   * PR #1747 は 400 の宣言を9経路で「実際の応答の形（`{ error: string }`）」に
+   * 揃えたと書いていたが、`describeRoute` 自体に 400 を書いていない経路が
+   * 2本残っていた（`POST /runners/vacate` / `DELETE /archive/{id}`）。
+   *
+   * **機序**: `hono-openapi`（`node_modules/hono-openapi/dist/index.js` の
+   * `describeResponse`）は、経路に validator 系ミドルウェアが1つでも付いていて
+   * （`hasValidation`）、かつ `describeRoute` の `responses` に `400` が
+   * **無ければ**、既定の validation error 用スキーマ
+   * （`{ success: boolean（enum:false）, error: array, data: {} }`）を自動で
+   * 差し込む（`ctx.options.defaultValidationErrorResponse !== false &&
+   * !schema.responses["400"]` の分岐）。これは実装の `jsonBody`/`queryParams`
+   * の hook が実際に返す形（`errorResponseSchema`＝ `{ error: string }` だけ）
+   * とは無関係に、**宣言が無いというだけで**自動生成される——実際に
+   * `POST /runners/vacate` へ壊れた本文を送って確かめると、実際の応答は
+   * `{ error: string }` だけで `data`/`success` は無い（上の
+   * 「POST /runners/vacate（#485 PR-2）」の歯が実測している）。
+   *
+   * ⟹ 直し方は他の9経路と同じ——`describeRoute` に `400` を明示し、
+   * `resolver(errorResponseSchema)` を宣言する（宣言さえあれば
+   * `hono-openapi` は自動生成をしない）。
+   *
+   * ここは生成物 `apps/daemon/openapi.json`（`pnpm build` の出力そのもの。
+   * 手では書いていない）を読み、**全経路**の全ステータスの中に、旧い形
+   * （`success`/`data` を持つスキーマ）を宣言している 400 が1つも無いことを
+   * 機械的に確かめる——次にまた「describeRoute に 400 を書き忘れる」経路が
+   * 増えても、この歯が拾う。
+   *
+   * ## ⚠️ この歯が測っていないこと
+   *
+   * - **生成物が最新であることはこの歯自身では確かめない**——それは門
+   *   （`git diff --exit-code -- apps/daemon/openapi.json`）が持つ。ここは
+   *   コミット済みの生成物の中身だけを見る
+   * - **`DELETE /archive/{id}` の 400 が実際に HTTP から到達可能かは測って
+   *   いない。** クエリ引数 `overrideReason` は `z.string().optional()` だけで、
+   *   Hono の `c.req.query()` は同名キーの重複を単一の文字列（後勝ち）に畳む
+   *   ため、通常の HTTP リクエストではこの経路の query バリデータが失敗する
+   *   入力を作れなかった（実測——重複クエリを送っても 404 になり、400 には
+   *   ならなかった）。それでも `queryParams()` というバリデータ付きの
+   *   ミドルウェアが付いている以上 `hono-openapi` は 400 を自動生成するため、
+   *   宣言の食い違いという穴そのものは実在する
+   */
+  it('生成物 openapi.json のどの経路の 400 も、旧い形（success/data を持つ）を宣言していない', () => {
+    interface JsonSchema {
+      properties?: Record<string, unknown>;
+    }
+    interface Operation {
+      responses?: Record<string, { content?: Record<string, { schema?: JsonSchema }> }>;
+    }
+    const spec = JSON.parse(readFileSync(new URL('../openapi.json', import.meta.url), 'utf8')) as {
+      paths: Record<string, Record<string, Operation>>;
+    };
+
+    const offenders: string[] = [];
+    for (const [path, methods] of Object.entries(spec.paths)) {
+      for (const [method, operation] of Object.entries(methods)) {
+        const schema = operation?.responses?.['400']?.content?.['application/json']?.schema;
+        const properties = schema?.properties ? Object.keys(schema.properties) : [];
+        if (properties.includes('success') || properties.includes('data')) {
+          offenders.push(`${method.toUpperCase()} ${path}（${properties.join(', ')}）`);
+        }
+      }
+    }
+
+    expect(
+      offenders,
+      '【赤の意味】以下の経路の 400 が、旧い形（success/data を持つ既定の validation ' +
+        'error スキーマ）のまま宣言されている。describeRoute の responses に 400 を' +
+        '明示し、resolver(errorResponseSchema) を宣言すること:\n' +
+        offenders.join('\n'),
+    ).toEqual([]);
+  });
+
+  /**
    * ⭐ **HTTP の面の description も、同じ族である（#701 / #756）。**
    *
    * `POST /schedule` の description は「既定の定期ジョブの名前は奪えない」と言い、
@@ -6761,6 +6836,17 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
     const response = await app.request('/runners/vacate', json({}));
     expect(response.status).toBe(400);
     expect(fake.vacateCalls).toEqual([]);
+
+    // **横断レビュー（13回目）で見つかった穴（PR #1747 の積み残し）。** `jsonBody`
+    // の hook は実際には `{ error: string }` しか返さないのに、`describeRoute` が
+    // 400 を宣言していなかったため、hono-openapi が既定の旧い形
+    // （`{ data, error, success }`）を openapi.json へ自動で差し込んでいた。
+    // ここは実際の応答本文がその旧い形を持たないことを見る（宣言側の歯は
+    // 'OpenAPI' describe の対応するテストが持つ）。
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('data');
+    expect(body).not.toHaveProperty('success');
+    expect(typeof body.error).toBe('string');
   });
 });
 
