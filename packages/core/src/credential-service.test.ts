@@ -862,6 +862,42 @@ describe('resolveCredentialRows（正本と器の env から配る値を1本で�
     expect(resolveCredentialRows(rows, {}, 'clone')).toEqual(rows);
     expect(resolveCredentialRows(rows, {}, 'manager')).toEqual(rows);
   });
+
+  /**
+   * **scope で宛先から外れた行を、器の env で埋め戻さない（issue #1867）。**
+   * 器の env を最後の土台として埋めるのは「正本に**行が無い**」名前だけである
+   * （`resolveCredentialRows` の doc）。以前は、scope で絞った後の集合を「持って
+   * いる名前」として使っていたので、`scope: 'app'` の行は manager から見て「行が
+   * 無い」扱いになり、器の env の値が manager へ配られていた。
+   *
+   * 経緯: この歯は、層ごとのバグ探しの作業者が main の上で赤を取った再現
+   * （枝 `test/hunt-vault` の `b8eef89`）を、直した後の保証の形に書き換えたもの。
+   */
+  it('scope: app の GH_TOKEN は、器の env に値があっても manager へ配らない（issue #1867）', () => {
+    const rows: StoredCredential[] = [
+      {
+        name: 'GH_TOKEN',
+        value: 'ghp_FAKE_VAULT_VALUE',
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'app',
+      },
+    ];
+    const resolved = resolveCredentialRows(
+      rows,
+      { GH_TOKEN: 'ghp_FAKE1234FAKE5678FAKE9012' },
+      'manager',
+    );
+    expect(resolved).toEqual([]);
+  });
+
+  it('対照: 正本に行が無ければ、いままでどおり器の env の GH_TOKEN を manager へ配る（issue #1867）', () => {
+    const resolved = resolveCredentialRows(
+      [],
+      { GH_TOKEN: 'ghp_FAKE1234FAKE5678FAKE9012' },
+      'manager',
+    );
+    expect(resolved.map((row) => row.name)).toEqual(['GH_TOKEN']);
+  });
 });
 
 /**
