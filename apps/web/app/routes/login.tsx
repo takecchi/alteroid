@@ -232,7 +232,15 @@ function SignIn() {
  */
 function Ungranted() {
   const auth = useAuth();
-  const { logout } = auth;
+  /**
+   * **`auth.logout()` ではなく `discardCredential()` を使う。** 許可の無い
+   * アカウントの `/auth/logout` はサーバ側の `authenticate` 門番自体が 403 を
+   * 返す（ログイン済みだが未許可、という同じ理由で `/auth/me` も 403 になるのと
+   * 同じ経路）——`logout()` を呼んでも鍵は捨てられず、この画面から動けなくなる。
+   * ここでの目的は「サーバ側を失効させること」ではなく「この画面から離れて
+   * 別のアカウントで試すこと」なので、鍵だけを即座に捨てる操作で足りる。
+   */
+  const { discardCredential } = auth;
   const command = `alteroid access grant ${auth.account?.id ?? '<アカウント id>'}`;
 
   return (
@@ -273,7 +281,7 @@ function Ungranted() {
         <Button variant="primary" onClick={() => void auth.revalidate()}>
           許可されたか確認する
         </Button>
-        <Button onClick={logout}>別のアカウントでログイン</Button>
+        <Button onClick={discardCredential}>別のアカウントでログイン</Button>
       </div>
     </Shell>
   );

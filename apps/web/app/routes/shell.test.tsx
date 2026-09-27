@@ -10,7 +10,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, stubFetch } from '~/test-support';
+import { storeCredential, type Credential } from '~/lib/auth';
+import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Shell from './shell';
 
@@ -117,6 +118,79 @@ describe('接続できないとき', () => {
 
     await waitFor(() => {
       expect(localStorage.getItem('alteroid.apiBaseUrl')).toBeNull();
+    });
+  });
+});
+
+const AUTH_HEALTH = {
+  ok: true,
+  pid: 1,
+  operator: false,
+  storage: '/tmp/alteroid',
+  auth: { enabled: true, providers: [{ id: 'google', label: 'Google', kind: 'oauth2' }] },
+};
+
+const CREDENTIAL: Credential = {
+  token: 'alt_shell',
+  account: { id: 'acc-1', displayName: null, email: 'me@example.com' },
+  grantedAtClaim: true,
+  createdAt: '2026-08-13T00:00:00.000Z',
+};
+
+/**
+ * フッターのログアウト（issue #1757）——`auth.logout()` の実体。
+ * `use-auth.test.tsx` がフック本体を、ここは画面（ボタン・エラー表示）を見る。
+ */
+describe('フッターのログアウト（issue #1757）', () => {
+  beforeEach(() => {
+    storeTestBaseUrl();
+    storeCredential(TEST_BASE_URL, CREDENTIAL);
+  });
+
+  it('成功 → サーバ側のトークンを失効させ、鍵を捨てる', async () => {
+    stubFetch((url) => {
+      if (url.endsWith('/health')) return json(AUTH_HEALTH);
+      if (url.endsWith('/auth/me')) {
+        return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+      }
+      if (url.endsWith('/auth/logout')) return json({ ok: true });
+      return undefined;
+    });
+
+    renderShell();
+
+    const button = await screen.findByRole('button', { name: 'ログアウト' });
+    fireEvent.click(button);
+
+    // 鍵が消えている（`anonymous` へ落ちる）。
+    await waitFor(() => {
+      expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
+    });
+  });
+
+  it('失敗 → 鍵は残したままエラーを出し、「この画面から鍵だけを捨てる」で個別に捨てられる', async () => {
+    stubFetch((url) => {
+      if (url.endsWith('/health')) return json(AUTH_HEALTH);
+      if (url.endsWith('/auth/me')) {
+        return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+      }
+      if (url.endsWith('/auth/logout')) return json({ error: 'internal' }, 500);
+      return undefined;
+    });
+
+    renderShell();
+
+    const button = await screen.findByRole('button', { name: 'ログアウト' });
+    fireEvent.click(button);
+
+    await screen.findByText(/サーバ側を失効させられなかった/);
+    // 鍵はまだ残っている（自動では捨てない）。
+    expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'この画面から鍵だけを捨てる' }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
     });
   });
 });

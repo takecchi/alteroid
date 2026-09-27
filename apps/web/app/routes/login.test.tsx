@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 function renderUngranted() {
-  stubFetch((url) => {
+  const stub = stubFetch((url) => {
     if (url.endsWith('/health')) return json(HEALTH);
     if (url.endsWith('/auth/me')) return json({ error: '使う許可が無い' }, 403);
     return undefined;
@@ -61,6 +61,7 @@ function renderUngranted() {
       <Login />
     </Providers>,
   );
+  return stub;
 }
 
 /**
@@ -135,6 +136,43 @@ describe('ログイン画面のどの分岐からでも接続先を変えられ�
     // 時点で切り替わる）。カードが二重に出ていないことを測るという役目は変えず、
     // 分岐に関係なく必ず在るボタンへ当て直す。
     expect(screen.getAllByRole('button', { name: '既定に戻す' })).toHaveLength(1);
+  });
+});
+
+/**
+ * issue #1757。`Ungranted` の「別のアカウントでログイン」は `auth.logout()`
+ * ではなく `discardCredential()` を呼ぶ——未許可のアカウントで `/auth/logout`
+ * を呼んでも、`authenticate` 門番自体が（`/auth/me` と同じ理由で）403 を返し、
+ * 鍵を捨てられずこの画面から動けなくなる。ここでの目的は「サーバ側の失効」では
+ * なく「この画面から離れて別のアカウントを試すこと」なので、鍵だけを即座に
+ * 捨てる形が正しい。
+ */
+describe('Ungranted の「別のアカウントでログイン」（issue #1757）', () => {
+  it('サーバへは何も呼ばずに、その場で鍵を捨てる', async () => {
+    // 鍵を捨てると `anonymous` へ落ちて `SignIn`（`useNavigate` を使う）が
+    // 描かれるので、`Router` の中で描く（`renderSignIn` と同じ理由）。
+    const stub = stubFetch((url) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      if (url.endsWith('/auth/me')) return json({ error: '使う許可が無い' }, 403);
+      return undefined;
+    });
+    const router = createMemoryRouter([{ path: '/login', Component: Login }], {
+      initialEntries: ['/login'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    const button = await screen.findByRole('button', { name: '別のアカウントでログイン' });
+
+    button.click();
+
+    await screen.findByLabelText('接続先');
+    // /auth/logout は1回も呼ばれていない。
+    expect(stub.calls.some((url) => url.endsWith('/auth/logout'))).toBe(false);
+    // 鍵は消えている（SignIn 側へ落ちたことがそれ自体で見えている）。
+    expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
   });
 });
 

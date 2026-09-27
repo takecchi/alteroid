@@ -29,12 +29,13 @@
  *
  * **3つとも「判定できないことを、判定した結果として出さない」という同じ形である。**
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { storeCredential, type Credential } from '~/lib/auth';
 import type { DaemonRevision, RunnerSummary } from '~/lib/types';
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Settings from './settings';
 
@@ -450,6 +451,79 @@ describe('横並びの積み替え（本4-A）: アカウントの dl', () => {
     expect(tokens).toContain('mt-3');
     expect(tokens).toContain('first:mt-0');
     expect(tokens).toContain('sm:mt-0');
+  });
+});
+
+const AUTH_HEALTH = {
+  ok: true,
+  pid: 1,
+  operator: false,
+  storage: '/tmp/alteroid',
+  auth: { enabled: true, providers: [{ id: 'google', label: 'Google', kind: 'oauth2' }] },
+};
+
+const CREDENTIAL: Credential = {
+  token: 'alt_settings',
+  account: { id: 'acc-1', displayName: null, email: 'me@example.com' },
+  grantedAtClaim: true,
+  createdAt: '2026-08-13T00:00:00.000Z',
+};
+
+/** ログインしてある `Account` を描く（`renderSettings` は認証を対象外にしているため別立て）。 */
+function renderAuthedAccount(logoutRoute: (url: string) => Response | undefined) {
+  storeCredential(TEST_BASE_URL, CREDENTIAL);
+  stubFetch((url) => {
+    if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+    if (url.endsWith('/health')) return json(AUTH_HEALTH);
+    if (url.endsWith('/auth/me')) {
+      return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+    }
+    const logoutResponse = logoutRoute(url);
+    if (logoutResponse !== undefined) return logoutResponse;
+    return json({});
+  });
+  const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+    initialEntries: ['/'],
+  });
+  render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+}
+
+/**
+ * `Account` のログアウトボタン（issue #1757）——`auth.logout()` の実体は
+ * `use-auth.test.tsx` が見る。ここは画面（ボタン・エラー表示）を見る。
+ */
+describe('Account のログアウト（issue #1757）', () => {
+  it('成功 → サーバ側のトークンを失効させ、鍵を捨てる', async () => {
+    renderAuthedAccount((url) => (url.endsWith('/auth/logout') ? json({ ok: true }) : undefined));
+
+    const button = await screen.findByRole('button', { name: 'ログアウト' });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
+    });
+  });
+
+  it('失敗 → 鍵は残したままエラーを出し、「この画面から鍵だけを捨てる」で個別に捨てられる', async () => {
+    renderAuthedAccount((url) =>
+      url.endsWith('/auth/logout') ? json({ error: 'internal' }, 500) : undefined,
+    );
+
+    const button = await screen.findByRole('button', { name: 'ログアウト' });
+    fireEvent.click(button);
+
+    await screen.findByText(/サーバ側を失効させられなかった/);
+    expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'この画面から鍵だけを捨てる' }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
+    });
   });
 });
 
