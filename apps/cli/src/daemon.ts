@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { openSync } from 'node:fs';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -323,5 +323,121 @@ export async function ensureRunning(): Promise<DaemonRuntimeInfo> {
   // `unknown` のときも `start()` へ渡す — 安全側の判断（起こすかどうか）は
   // `start()` に一本化してある。ここで別の分岐を持つと、2箇所が同じ判断を
   // 別々に持つことになり、片方だけ直して他方が古いままになりうる。
+  // **`startWithRecovery()` はここからは絶対に呼ばない。** 回復（状態
+  // ファイルの退避 → 起動し直し）は、人間が明示のフラグを付けたときだけ
+  // 起きる操作であって、`chat` などが毎回通るこの経路の既定にしてはいけない
+  // （Issue #1851）。
   return start();
+}
+
+/**
+ * 指定したパスが存在するかどうか（`stat` が成功するか）。**内容は見ない** —
+ * 退避先の名前が既に使われているかどうかだけを知りたい（`quarantineRuntimeFile`
+ * が使う）。
+ */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 状態ファイル（`runtimeFile()`）を **消すのではなく名前を変えて退避する。**
+ * `daemon.json` → `daemon.json.stale-<UTC の時刻>`（コロン・ドットはファイル名に
+ * 使えない環境があるので `-` に置き換える）。**退避先が既に在れば、上書きせず
+ * 別の名前にする**（同じ秒に2回 `--force` を打った場合など）。
+ *
+ * 呼び出し前提: `runtimeFile()` が実際に存在すること（`presence === 'unknown'`
+ * は `readRuntimeInfo()` が成功した場合にしか立たないので、`startWithRecovery`
+ * から呼ぶ限りこの前提は常に満たされる）。
+ */
+async function quarantineRuntimeFile(): Promise<string> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const base = `${runtimeFile()}.stale-${stamp}`;
+  let target = base;
+  let attempt = 0;
+  while (await pathExists(target)) {
+    attempt += 1;
+    target = `${base}-${attempt}`;
+  }
+  await rename(runtimeFile(), target);
+  return target;
+}
+
+/**
+ * 退避した記録の PID が生きているかを**表示だけする**（止めはしない。
+ * Issue #1851）。`process.kill(pid, 0)` はシグナルを送らず存在確認だけする
+ * 慣用の形——例外を投げなければ生きている。`ESRCH` は「その PID のプロセスは
+ * 居ない」、`EPERM` は「居るが権限が無くてシグナルを送れない」（＝存在はする）
+ * ので生きている側に数える。それ以外の失敗は判定できないので `null`。
+ */
+function pidAppearsAlive(pid: number): boolean | null {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    if (code === 'EPERM') return true;
+    return null;
+  }
+}
+
+/**
+ * `alteroid daemon start --force` の中身（Issue #1851。#1823 の帰結）。
+ *
+ * PR #1779 / #1823 で `start()` は `presence === 'unknown'`（本人確認が
+ * ずっと確かめられない）のとき、安全側に倒れて spawn せず例外を投げる。
+ * これは正しい既定だが、`verify()` がずっと `unknown` を返す状況
+ * （無関係な別プロセスが同じポートを掴んでいる・ファイアウォールで応答が
+ * 黙って落ちる、など）では、`stop()` も `start()` も状態ファイルに触れず
+ * CLI からは回復できない——手で `runtimeFile()` を消すしかなかった。
+ *
+ * ここは**その手動の回避策を、明示のフラグの下でだけ再現する**。
+ * 既定の安全弁（`start()` / `ensureRunning()`）は1文字も変えていない——
+ * この関数は `start()` を**呼ぶ側**であって、`start()` 自体の分岐には
+ * 触れていない。
+ *
+ * 分岐（`presence` ごと）:
+ * - `present`（本人確認できた）: 退避しない。**二重に起こさない** —
+ *   `--force` を付けていても、本物が既に動いているなら何もせず返す。
+ * - `absent`（居ないと確定——接続拒否 or 応答があった上での否定）:
+ *   退避は要らない。今までどおりの経路（`start()`）で片付ける。
+ * - `unknown`（確かめられなかった）: ここが本題。状態ファイルを退避 →
+ *   退避した記録の PID が生きているかを表示だけ → `start()` を呼んで
+ *   起こし直す（退避済みなので `start()` からは `absent` に見え、通常の
+ *   spawn 経路を通る）。
+ */
+export type StartWithRecoveryOutcome =
+  | { kind: 'already-present'; info: DaemonRuntimeInfo }
+  | { kind: 'started'; info: DaemonRuntimeInfo }
+  | {
+      kind: 'recovered';
+      info: DaemonRuntimeInfo;
+      quarantinedTo: string;
+      previousPid: number;
+      previousPidAlive: boolean | null;
+    };
+
+export async function startWithRecovery(): Promise<StartWithRecoveryOutcome> {
+  const current = await status();
+  if (current.presence === 'present' && current.info) {
+    return { kind: 'already-present', info: current.info };
+  }
+  if (current.presence === 'absent') {
+    return { kind: 'started', info: await start() };
+  }
+  // presence === 'unknown'。`status()` は `readRuntimeInfo()` が読めたときだけ
+  // `verify()` を呼ぶので、ここでは常に `info` が存在する（型のためだけの防御）。
+  if (!current.info) {
+    throw new Error('内部エラー: unknown と判定されたのに状態ファイルを読めていません');
+  }
+  const previousPid = current.info.pid;
+  const previousPidAlive = pidAppearsAlive(previousPid);
+  const quarantinedTo = await quarantineRuntimeFile();
+  const info = await start();
+  return { kind: 'recovered', info, quarantinedTo, previousPid, previousPidAlive };
 }

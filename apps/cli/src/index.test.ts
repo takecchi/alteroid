@@ -25,6 +25,8 @@ vi.mock('./daemon.js', () => ({
   stop: vi.fn(),
   status: vi.fn(),
   storageOf: vi.fn(),
+  // Issue #1851（`daemon start --force`）— `--force` を付けたときだけ通る道。
+  startWithRecovery: vi.fn(),
 }));
 
 vi.mock('./paths.js', () => ({
@@ -91,6 +93,112 @@ describe('alteroid daemon start', () => {
     await daemonStartCommand();
 
     expect(read()).toBe('alteroidd を起動しました (pid 4242, port 4517)\n');
+  });
+
+  // ⭐ Issue #1851 — `--force` を付けていない既定の経路は1文字も変えていない。
+  // `daemon.start()` だけを呼び、回復専用の `daemon.startWithRecovery()` には
+  // 一切触れないことを固定する。
+  it('⭐ --force を付けていなければ daemon.start() だけを呼ぶ（startWithRecovery には触れない）', async () => {
+    vi.mocked(daemon.start).mockResolvedValue({
+      pid: 1,
+      port: 2,
+      startedAt: '2026-08-24T00:00:00.000Z',
+      token: 't',
+    });
+    captureStdout();
+
+    await daemonStartCommand({});
+    await daemonStartCommand(); // 引数省略でも同じ（既定値 {}）
+
+    expect(daemon.start).toHaveBeenCalledTimes(2);
+    expect(daemon.startWithRecovery).not.toHaveBeenCalled();
+  });
+
+  describe('--force あり（daemon.startWithRecovery() の結果を文言に変換する）', () => {
+    it('already-present なら「既に動いています」と言い、退避も再起動もしていないと言う', async () => {
+      vi.mocked(daemon.startWithRecovery).mockResolvedValue({
+        kind: 'already-present',
+        info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+      });
+      const read = captureStdout();
+
+      await daemonStartCommand({ force: true });
+
+      const text = read();
+      expect(text).toContain('既に動いています');
+      expect(text).toContain('pid 99');
+      expect(text).not.toContain('退避しました');
+      expect(daemon.start).not.toHaveBeenCalled();
+    });
+
+    it('started（absent からの通常起動）なら、これまでと同じ起動文言を出す', async () => {
+      vi.mocked(daemon.startWithRecovery).mockResolvedValue({
+        kind: 'started',
+        info: { pid: 55, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+      });
+      const read = captureStdout();
+
+      await daemonStartCommand({ force: true });
+
+      expect(read()).toBe('alteroidd を起動しました (pid 55, port 4517)\n');
+    });
+
+    it('recovered なら、退避先のパス・前のデーモンの生死・二重起動の危険を順に言ってから起動を報告する', async () => {
+      vi.mocked(daemon.startWithRecovery).mockResolvedValue({
+        kind: 'recovered',
+        info: { pid: 77, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+        quarantinedTo: '/home/test/.alteroid/state/daemon.json.stale-2026-09-28T01-00-00-000Z',
+        previousPid: 4242,
+        previousPidAlive: true,
+      });
+      const read = captureStdout();
+
+      await daemonStartCommand({ force: true });
+
+      const text = read();
+      expect(text).toContain(
+        '退避しました: /home/test/.alteroid/state/daemon.json.stale-2026-09-28T01-00-00-000Z',
+      );
+      expect(text).toContain('pid 4242');
+      expect(text).toContain('まだ生きているように見えます');
+      expect(text).toContain('二重起動');
+      expect(text).toContain('alteroidd を起動しました (pid 77, port 4517)');
+    });
+
+    it('recovered かつ前の pid が既に居ない（previousPidAlive: false）なら、そう正直に言う', async () => {
+      vi.mocked(daemon.startWithRecovery).mockResolvedValue({
+        kind: 'recovered',
+        info: { pid: 77, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+        quarantinedTo: '/home/test/.alteroid/state/daemon.json.stale-x',
+        previousPid: 4242,
+        previousPidAlive: false,
+      });
+      const read = captureStdout();
+
+      await daemonStartCommand({ force: true });
+
+      const text = read();
+      expect(text).toContain('既に居ないようです');
+      expect(text).not.toContain('まだ生きているように見えます');
+    });
+
+    it('recovered かつ前の pid の生死が判定できない（previousPidAlive: null）なら、確認できなかったと言う', async () => {
+      vi.mocked(daemon.startWithRecovery).mockResolvedValue({
+        kind: 'recovered',
+        info: { pid: 77, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+        quarantinedTo: '/home/test/.alteroid/state/daemon.json.stale-x',
+        previousPid: 4242,
+        previousPidAlive: null,
+      });
+      const read = captureStdout();
+
+      await daemonStartCommand({ force: true });
+
+      const text = read();
+      expect(text).toContain('確認できませんでした');
+      expect(text).not.toContain('まだ生きているように見えます');
+      expect(text).not.toContain('既に居ないようです');
+    });
   });
 });
 
@@ -236,5 +344,21 @@ describe('サブコマンドの登録（入口が在ること）', () => {
 
     expect(optionsOf('edit')).toEqual(['--kind', '--title']);
     expect(optionsOf('set')).toEqual(['--file', '--kind', '--title']);
+  });
+
+  /**
+   * **`--force` が無いと、Issue #1851 の回復（状態ファイルの退避 → 起こし
+   * 直し）を CLI から1件も引けない。** `--force` を持つのは `daemon start`
+   * だけ——`stop` / `status` には要らない（フラグは起動側の回復専用）。
+   */
+  it('alteroid daemon start は --force を受ける（Issue #1851。stop / status は受けない）', () => {
+    const daemonCmd = program.commands.find((c) => c.name() === 'daemon');
+    const optionsOf = (name: string): string[] =>
+      (daemonCmd?.commands.find((c) => c.name() === name)?.options ?? []).map((o) => o.long ?? '');
+
+    expect(subcommandNames('daemon')).toEqual(['start', 'status', 'stop']);
+    expect(optionsOf('start')).toEqual(['--force']);
+    expect(optionsOf('stop')).toEqual([]);
+    expect(optionsOf('status')).toEqual([]);
   });
 });

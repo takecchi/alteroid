@@ -94,10 +94,57 @@ export async function initCommand(): Promise<void> {
   stdout.write('\n次: alteroid chat\n');
 }
 
-/** `alteroid daemon start`。切り出した理由は {@link initCommand} と同じ（#333）。 */
-export async function daemonStartCommand(): Promise<void> {
-  const info = await daemon.start();
-  stdout.write(`alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`);
+/**
+ * `alteroid daemon start`。切り出した理由は {@link initCommand} と同じ（#333）。
+ *
+ * `--force` を付けたときだけ {@link daemon.startWithRecovery} を通す
+ * （Issue #1851）。**既定（`options.force` が無い/false）の経路は1文字も
+ * 変えていない** — 従来どおり `daemon.start()` を直接呼ぶだけで、`start()` /
+ * `ensureRunning()` の安全弁（`unknown` なら起こさない）はそのまま効く。
+ */
+export async function daemonStartCommand(options: { force?: boolean } = {}): Promise<void> {
+  if (!options.force) {
+    const info = await daemon.start();
+    stdout.write(`alteroidd を起動しました (pid ${info.pid}, port ${info.port})\n`);
+    return;
+  }
+
+  const outcome = await daemon.startWithRecovery();
+  switch (outcome.kind) {
+    case 'already-present':
+      // 本人確認できているデーモンが既に居る——`--force` を付けていても、
+      // 本物を二重に起こさない（Issue #1851）。
+      stdout.write(
+        `alteroidd は既に動いています (pid ${outcome.info.pid}, port ${outcome.info.port})。` +
+          ' 本人確認できたので --force は使いませんでした（退避も再起動もしていません）。\n',
+      );
+      return;
+    case 'started':
+      // 居ないと確定できた（absent）——退避は要らず、今までどおりの経路。
+      stdout.write(
+        `alteroidd を起動しました (pid ${outcome.info.pid}, port ${outcome.info.port})\n`,
+      );
+      return;
+    case 'recovered':
+      stdout.write(`確かめられなかった状態ファイルを退避しました: ${outcome.quarantinedTo}\n`);
+      if (outcome.previousPidAlive === true) {
+        stdout.write(
+          `前のデーモン (pid ${outcome.previousPid}) はまだ生きているように見えます。` +
+            ' 二重起動になっている可能性があります。自分で確認してください。\n',
+        );
+      } else if (outcome.previousPidAlive === false) {
+        stdout.write(`前のデーモン (pid ${outcome.previousPid}) は既に居ないようです。\n`);
+      } else {
+        stdout.write(`前のデーモン (pid ${outcome.previousPid}) の生死は確認できませんでした。\n`);
+      }
+      stdout.write(
+        'これは二重起動の危険を引き受ける操作です。データの不整合が無いか自分で確認してください。\n',
+      );
+      stdout.write(
+        `alteroidd を起動しました (pid ${outcome.info.pid}, port ${outcome.info.port})\n`,
+      );
+      return;
+  }
 }
 
 /** `alteroid daemon stop`。切り出した理由は {@link initCommand} と同じ（#333）。 */
@@ -811,8 +858,12 @@ const daemonCommand = program.command('daemon').description('常駐デーモン�
 daemonCommand
   .command('start')
   .description('デーモンを起こす')
-  .action(async () => {
-    await daemonStartCommand();
+  .option(
+    '--force',
+    '本人確認できない（unknown）状態ファイルを退避してから起こし直す（二重起動の危険を引き受ける。Issue #1851）',
+  )
+  .action(async (options: { force?: boolean }) => {
+    await daemonStartCommand(options);
   });
 
 daemonCommand

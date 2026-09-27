@@ -13,6 +13,12 @@ vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
   mkdir: vi.fn(async () => undefined),
   rm: vi.fn(async () => undefined),
+  // Issue #1851（`daemon start --force`）が使う2つ。`rename` は状態ファイルの
+  // 退避、`stat` は退避先の名前が既に使われていないかの確認。
+  rename: vi.fn(async () => undefined),
+  stat: vi.fn(async () => {
+    throw enoent();
+  }),
 }));
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => undefined) }));
 vi.mock('./paths.js', () => ({
@@ -21,11 +27,12 @@ vi.mock('./paths.js', () => ({
 }));
 
 import { spawn } from 'node:child_process';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rename, rm, stat } from 'node:fs/promises';
 
 import {
   ensureRunning,
   start,
+  startWithRecovery,
   status,
   stop,
   stopDaemon,
@@ -228,6 +235,14 @@ beforeEach(() => {
   // 「stop() — verify() の3値目」の describe が `rm` の呼び有無を見る
   // （Issue #1818）。実装（`async () => undefined`）は変えずに履歴だけ消す。
   vi.mocked(rm).mockClear();
+  // Issue #1851（`daemon start --force`）— `rename` の履歴もクリアし、`stat`
+  // は既定で「無い」（ENOENT）に戻す。個別のテストが必要なぶんだけ上書きする。
+  vi.mocked(rename).mockClear();
+  vi.mocked(stat)
+    .mockReset()
+    .mockImplementation(async () => {
+      throw enoent();
+    });
 });
 
 afterEach(() => {
@@ -422,6 +437,24 @@ describe('ensureRunning() — start() の安全側の判断をそのまま伝え
     await expect(ensureRunning()).rejects.toThrow(/確かめられませんでした/);
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  // ⭐ Issue #1851 — `--force` の回復経路（状態ファイルの退避 → 起こし直し）は
+  // 明示のフラグを付けたときだけ通る道であって、`chat` などが毎回通る
+  // `ensureRunning()` からは絶対に踏まないこと。`rename` が一度も呼ばれて
+  // いなければ、`quarantineRuntimeFile()`（`startWithRecovery` 専用）を
+  // 経由していないと言える——`ensureRunning()` の中身のどこにも
+  // `startWithRecovery` という名前が無いことは型のうえでも自明だが、ここでは
+  // 実行時の副作用で固定する。
+  it('⭐ unknown のとき、状態ファイルの退避（rename）にも一切触れない — 回復経路を通らない（Issue #1851）', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('timeout')));
+
+    await expect(ensureRunning()).rejects.toThrow(/確かめられませんでした/);
+    expect(
+      rename,
+      'ensureRunning() は startWithRecovery() の退避処理を呼んではいけない',
+    ).not.toHaveBeenCalled();
+  });
 });
 
 describe('stop() — verify() の3値目（unknown）を、状態ファイルを消さずにそのまま伝える（Issue #1818）', () => {
@@ -500,5 +533,194 @@ describe('stop() — verify() の3値目（unknown）を、状態ファイルを
       spawn,
       '本人確認できていない（本物が生きているかもしれない）のに2本目を起こしていないか',
     ).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #1851（#1823 の帰結）— `verify()` がずっと unknown を返す状況では、
+// `stop()` も `start()` も状態ファイルに触れず CLI からは回復できない。
+// `alteroid daemon start --force` はそれを明示のフラグの下でだけ回復する。
+// **既定の安全弁（`start()` / `ensureRunning()`）は1文字も変えていない** —
+// 上の全 describe がそのことを既に固定している。ここで見るのは
+// `startWithRecovery()` という**別の入口**の中身だけである。
+describe('startWithRecovery() — --force の中身（Issue #1851）', () => {
+  it('present（本人確認できた）なら退避しない・起こし直さない（二重起動しない）', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+
+    const outcome = await startWithRecovery();
+
+    expect(outcome).toEqual({ kind: 'already-present', info: INFO });
+    expect(rename).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('absent（居ないと確定）なら退避せず、今までどおりの経路（start()）で起こす', async () => {
+    // 呼び順: (1) startWithRecovery 冒頭の status() → absent
+    //         (2) start() 冒頭の status() → absent（同じくファイルが無い）
+    //         (3) spawn 後のポーリング → 見つかる
+    vi.mocked(readFile)
+      .mockRejectedValueOnce(enoent())
+      .mockRejectedValueOnce(enoent())
+      .mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+
+    const outcome = await startWithRecovery();
+
+    expect(outcome).toEqual({ kind: 'started', info: INFO });
+    expect(rename).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  // ⭐ 本 Issue の核 — unknown のときだけ、状態ファイルを退避してから
+  // 起こし直す。元のファイルは消えず（`rm` は呼ばれない）、別名で残る。
+  it('⭐ unknown（確かめられなかった）なら状態ファイルを退避し、起こし直す。元のファイルは rm しない', async () => {
+    // 呼び順: (1) startWithRecovery 冒頭の status() → unknown（fetch が失敗）
+    //         (2) start() 冒頭の status() → absent（退避済みなので読めない）
+    //         (3) spawn 後のポーリング → 新しい記録が見つかり本人確認できる
+    vi.mocked(readFile)
+      .mockResolvedValueOnce(JSON.stringify(INFO))
+      .mockRejectedValueOnce(enoent())
+      .mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error('network blip'))
+        .mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+    // pid の生存表示そのものは下の describe が個別に見る——ここでは
+    // `process.kill` の戻り値には触れず、実物のまま呼ばせる（無害:
+    // signal 0 は存在確認だけで、実在しない pid 4242 に対しては ESRCH で
+    // 例外になるだけである）。
+
+    const outcome = await startWithRecovery();
+
+    expect(outcome.kind).toBe('recovered');
+    if (outcome.kind !== 'recovered') throw new Error('unreachable');
+    expect(outcome.previousPid).toBe(INFO.pid);
+    expect(outcome.quarantinedTo).toMatch(/daemon\.json\.stale-\d{4}-\d{2}-\d{2}T/);
+    expect(outcome.quarantinedTo).not.toContain(':'); // ファイル名に使える形
+    // 退避＝rename であって削除ではない。`rm`（clearInfo 側の消去）は呼ばない。
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rm).not.toHaveBeenCalled();
+    const [renamedFrom, renamedTo] = vi.mocked(rename).mock.calls[0] ?? [];
+    expect(renamedFrom).toBe('/home/test/.alteroid/state/daemon.json');
+    expect(renamedTo).toBe(outcome.quarantinedTo);
+    // 退避したあとは start() が absent 経路として1本だけ spawn する。
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('退避先の名前が既に在れば、上書きせず別の名前にする', async () => {
+    vi.mocked(readFile)
+      .mockResolvedValueOnce(JSON.stringify(INFO))
+      .mockRejectedValueOnce(enoent())
+      .mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error('network blip'))
+        .mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+    );
+    // 最初の候補（サフィックス無し）だけ「既に在る」と応答し、2番目以降は無い。
+    let calls = 0;
+    vi.mocked(stat).mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return {} as never; // 存在する
+      throw enoent();
+    });
+
+    const outcome = await startWithRecovery();
+
+    expect(outcome.kind).toBe('recovered');
+    if (outcome.kind !== 'recovered') throw new Error('unreachable');
+    // 衝突したので、素のタイムスタンプではなく `-1` 付きの名前に倒れている。
+    expect(outcome.quarantinedTo).toMatch(/\.stale-.+-1$/);
+    expect(rename).toHaveBeenCalledTimes(1);
+    const [, renamedTo] = vi.mocked(rename).mock.calls[0] ?? [];
+    expect(renamedTo).toBe(outcome.quarantinedTo);
+  });
+
+  describe('退避した記録の PID の生存表示（止めはしない。Issue #1851）', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('process.kill が例外を投げなければ「生きている」と表示する（止めない — terminate は呼ばない）', async () => {
+      vi.mocked(readFile)
+        .mockResolvedValueOnce(JSON.stringify(INFO))
+        .mockRejectedValueOnce(enoent())
+        .mockResolvedValue(JSON.stringify(INFO));
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockRejectedValueOnce(new Error('network blip'))
+          .mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+      );
+      const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+      const outcome = await startWithRecovery();
+
+      expect(outcome.kind).toBe('recovered');
+      if (outcome.kind !== 'recovered') throw new Error('unreachable');
+      expect(outcome.previousPidAlive).toBe(true);
+      expect(kill).toHaveBeenCalledWith(INFO.pid, 0);
+      // 表示だけ——止める（SIGTERM 等の実シグナル）呼び出しは無い。
+      expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it('process.kill が ESRCH を投げたら「居ない」と表示する', async () => {
+      vi.mocked(readFile)
+        .mockResolvedValueOnce(JSON.stringify(INFO))
+        .mockRejectedValueOnce(enoent())
+        .mockResolvedValue(JSON.stringify(INFO));
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockRejectedValueOnce(new Error('network blip'))
+          .mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+      );
+      vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+      });
+
+      const outcome = await startWithRecovery();
+
+      expect(outcome.kind).toBe('recovered');
+      if (outcome.kind !== 'recovered') throw new Error('unreachable');
+      expect(outcome.previousPidAlive).toBe(false);
+    });
+
+    it('process.kill が EPERM を投げたら（権限が無いだけで存在はする）「生きている」扱いにする', async () => {
+      vi.mocked(readFile)
+        .mockResolvedValueOnce(JSON.stringify(INFO))
+        .mockRejectedValueOnce(enoent())
+        .mockResolvedValue(JSON.stringify(INFO));
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockRejectedValueOnce(new Error('network blip'))
+          .mockResolvedValue({ ok: true, json: async () => ({ operator: true }) }),
+      );
+      vi.spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      });
+
+      const outcome = await startWithRecovery();
+
+      expect(outcome.kind).toBe('recovered');
+      if (outcome.kind !== 'recovered') throw new Error('unreachable');
+      expect(outcome.previousPidAlive).toBe(true);
+    });
   });
 });
