@@ -443,10 +443,24 @@ export function isDeclaredOwner(account: AuthAccount): boolean {
   return isAccountGranted(account) && account.ownerDeclaredAt !== null;
 }
 
+/**
+ * **判定できない期限は「使えない」に倒す（issue #1789）。**
+ *
+ * `expiresAt` が解釈できない文字列だと `Date.parse` は `NaN` を返し、
+ * `NaN <= now` は `false` になる。以前はこの形で比べていたので、壊れた期限の
+ * トークンが期限の検査を素通りして「使える」に倒れていた。スキーマ
+ * （`isoDateTime`）は書き込みの時点で解釈できない値を拒むが、検査を迂回して
+ * 保存された値（手で書き換えた保存先・スキーマの版のずれ）はここへ届きうる。
+ * **資格の判定は、判定できないときに閉じる側へ倒す。** 比べる向きも
+ * 「期限より前なら開く」にしてある——`NaN` との比較はどれも `false` なので、
+ * この形なら書き方を間違えても閉じる側に落ちる（`isLoginRequestOpen` と同じ形）。
+ */
 export function isAccessTokenUsable(token: AccessTokenRecord, now: Date): boolean {
   if (token.revokedAt !== null) return false;
-  if (token.expiresAt !== null && Date.parse(token.expiresAt) <= now.getTime()) return false;
-  return true;
+  if (token.expiresAt === null) return true;
+  const expiresAt = Date.parse(token.expiresAt);
+  if (Number.isNaN(expiresAt)) return false;
+  return expiresAt > now.getTime();
 }
 
 export function isLoginRequestOpen(request: LoginRequest, now: Date): boolean {
