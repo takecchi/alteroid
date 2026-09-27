@@ -34,8 +34,9 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
  *    のとおり、この観測は `Host#shutdown()` の呼び出しにだけ付く
  * 3. 取れなかったとき: `finishUnpushedWorkFn` が失敗しても畳み自体は完了し、
  *    `kind: 'unavailable'` + `reason` が載る
- * 4. 既定（差し替えなし）: 本物の `this.unpushedWork()` を呼び、cwd が無くても
- *    `kind: 'ok'`（0本）で載る
+ * 4. 既定（差し替えなし）: 本物の `this.unpushedWork()` を呼び、cwd（探索の
+ *    起点）が読めなければ `kind: 'unavailable'` になる（Issue #1826 で
+ *    反転——直す前は `kind: 'ok'`〈0本〉だった）
  * 5. 複数セッション: `Host#shutdown()` は `#sessions` の全セッションぶん、
  *    それぞれ1本ずつ運ぶ（`Promise.all` で並行に畳むことの副作用）
  * 6. スキーマ: `unpushedWork` 欄は必須（`closed.unpushedWork` と違い
@@ -171,7 +172,13 @@ describe('未 push の観測が shutdown_unpushed_work として運ばれる（I
     expect(delivered.unpushedWork.reason).toContain('runner が答えなかった');
   });
 
-  it('4. 既定（差し替えなし）: 本物の this.unpushedWork() を呼び、cwd が無くても kind:ok（0本）で載る', async () => {
+  it('4. 既定（差し替えなし）: 本物の this.unpushedWork() を呼び、cwd（探索の起点）が読めなければ kind:unavailable になる', async () => {
+    // ⚠️ **この期待値は Issue #1826 で反転した（元は「cwd が読めないだけでは
+    // 例外を投げない設計」を理由に `kind: 'ok' + worktrees: []`〈＝『0本
+    // 見つかった』〉を期待していた）。** `runner-closed-unpushed-work.test.ts`
+    // の同型の歯（3.）と同じ理由——詳細はあちらの doc を見よ。**保証は弱く
+    // なっていない**——この標本（cwd が存在しない）は最初から「実際に
+    // 確かめた」を満たしていなかった。
     const { host, events } = setup();
     await host.start({ managerId: 'mgr-1', request: '最初の依頼', cwd: '/work/project' });
 
@@ -179,10 +186,10 @@ describe('未 push の観測が shutdown_unpushed_work として運ばれる（I
 
     const found = shutdownUnpushedWorkEvents(events);
     expect(found).toHaveLength(1);
-    expect(found[0]?.unpushedWork).toMatchObject({
-      kind: 'ok',
-      result: { cwd: '/work/project', worktrees: [] },
-    });
+    expect(found[0]?.unpushedWork).toMatchObject({ kind: 'unavailable' });
+    const unpushedWork = found[0]?.unpushedWork;
+    if (unpushedWork?.kind !== 'unavailable') throw new Error('unavailable ではない');
+    expect(unpushedWork.reason).toContain('/work/project');
   });
 
   it('5. 複数セッション: Host#shutdown() は全セッションぶん、それぞれ1本ずつ運ぶ', async () => {

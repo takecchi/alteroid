@@ -187,6 +187,19 @@ export interface FindGitDirsResult {
    * **黙って切らない**——値は上限そのもの（何件で打ち切ったか）。
    */
   readonly truncatedAtCount?: number;
+  /**
+   * **探索の起点そのもの（`root` 自身）を `readdir` できなかったときだけ
+   * 載る理由**（Issue #1826）。省略 = 起点は読めた（`paths` が空でも
+   * 「起点の下に0本だった」と確かめられている）。
+   *
+   * **起点より下の子ディレクトリの読み失敗とは別軸である。** あちらは
+   * 意図して黙って諦める設計のまま変えていない（下の doc「読めない
+   * ディレクトリ……」）——見つからなかった子ツリーが在っても、見つかった
+   * 分だけを正としてよいという前提はそこでは壊れていない。**起点自身が
+   * 読めないと、その前提そのものが成り立たない**（1本も見えていないので、
+   * `paths` は常に空になる）。だからここだけ別の欄で名乗る。
+   */
+  readonly rootUnreadable?: string;
 }
 
 /**
@@ -195,9 +208,15 @@ export interface FindGitDirsResult {
  *
  * - `node_modules` という名のディレクトリはその中へ潜らない。
  * - `.git` を見つけたら、その中へは潜らない（`.git` の中身は探索対象ではない）。
- * - 読めないディレクトリ（権限・競合で消えた等）は黙って諦める——「読めなかった」
- *   ことをこの関数の戻り値の形では表現しない（見つかった分だけを正としてよい。
- *   全体が「確かめられなかった」に落ちる話ではない）。
+ * - **子ディレクトリ**が読めない（権限・競合で消えた等）は黙って諦める——
+ *   「読めなかった」ことをこの関数の戻り値の形では表現しない（見つかった
+ *   分だけを正としてよい。全体が「確かめられなかった」に落ちる話ではない。
+ *   **この PR では変えていない**）。
+ * - **起点（`root` 自身）**が読めないときだけは別扱いにする（Issue #1826）。
+ *   ここが読めないと「見つかった分だけを正としてよい」という前提そのものが
+ *   崩れる——1本も見ていないのに `paths: []` を返すと、「探索して0本
+ *   だった」と「探索できなかった」が同じ形になる。{@link FindGitDirsResult.rootUnreadable}
+ *   に理由を残す（`paths` は常に空）。
  */
 export async function findGitDirs(
   root: string,
@@ -207,13 +226,21 @@ export async function findGitDirs(
   const maxCount = options.maxCount ?? DEFAULT_MAX_WORKTREES;
   const found: string[] = [];
   let truncated = false;
+  let rootUnreadable: string | undefined;
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (truncated) return;
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      // **起点そのもの（`dir === root`）だけを特別扱いする。** 子ディレクトリの
+      // 読み失敗はこれまでどおり黙って諦める（このファイルの他の呼び出し元
+      // ——`findManagerScratchRoots` 経由の `/tmp` スクラッチ探索・より深い
+      // 階層——には一切影響しない）。
+      if (dir === root) {
+        rootUnreadable = error instanceof Error ? error.message : String(error);
+      }
       return;
     }
     const subdirs: string[] = [];
@@ -238,6 +265,7 @@ export async function findGitDirs(
   }
 
   await walk(root, 0);
+  if (rootUnreadable !== undefined) return { paths: found, rootUnreadable };
   return truncated ? { paths: found, truncatedAtCount: maxCount } : { paths: found };
 }
 
@@ -330,6 +358,17 @@ export async function findManagerScratchRoots(
  * 探索せずに打ち切る——上限は起点ごとではなく全体に効く約束だからである。
  * 重複除去は `path.resolve` で正規化した文字列の同一性で行う（シンボリック
  * リンクの解決まではしない——`findGitDirs` 自身がしていないのと同じ理由）。
+ *
+ * **呼び出し元（`computeUnpushedWork`）は常に `[cwd, ...scratchRoots.paths]`
+ * の形で渡す——1本目（`roots[0]`）は必ず `job.cwd` である**（Issue #1826）。
+ * その1本目が {@link FindGitDirsResult.rootUnreadable} を持って返ってきたら、
+ * 残りの起点を探索せずに即座に `rootUnreadable` を上へ運ぶ——`job.cwd` が
+ * 読めないなら、そこから先に集めた `paths` は「見つかった分だけを正として
+ * よい」という前提が既に崩れているので、部分的な結果を混ぜて返さない。
+ * **2本目以降（`/tmp` スクラッチ起点）の読み失敗はここでは扱わない**——
+ * そちらは `findManagerScratchRoots` の入口（`tmpRootDir` 自体）が既に別の
+ * 形（`scratchRootsUnknown`）で「確かめられなかった」を名乗っており
+ * （#1765 段2）、ここでまた別の形で名乗ると二重になる。
  */
 async function findGitDirsAcrossRoots(
   roots: readonly string[],
@@ -340,13 +379,16 @@ async function findGitDirsAcrossRoots(
   const found: string[] = [];
   let truncated = false;
 
-  for (const root of roots) {
+  for (const [index, root] of roots.entries()) {
     if (found.length >= maxCount) {
       truncated = true;
       break;
     }
     const remaining = maxCount - found.length;
     const result = await findGitDirs(root, { maxDepth: options.maxDepth, maxCount: remaining });
+    if (index === 0 && result.rootUnreadable !== undefined) {
+      return { paths: [], rootUnreadable: result.rootUnreadable };
+    }
     for (const p of result.paths) {
       const resolved = path.resolve(p);
       if (seen.has(resolved)) continue;
@@ -641,15 +683,35 @@ function describeWorktreePath(cwd: string, repoRoot: string): string {
  * `cwd` の下（と、`options.managerId` を渡したときはそれに当たる `/tmp`
  * 直下のスクラッチディレクトリ——冒頭の doc「3.6.」）を探索し、見つかった
  * 作業ツリーそれぞれについて未 push の実装と未コミットの変更を数える。
- * **この関数自体は例外を投げない**——個々の git 呼び出しが失敗しても、
- * その1本だけが「確かめられなかった」を名乗り、他の作業ツリーの結果には
- * 影響しない。
+ * **個々の git 呼び出しが失敗しても投げない**——その1本だけが「確かめられ
+ * なかった」を名乗り、他の作業ツリーの結果には影響しない。
  *
  * **この約束は `findManagerScratchRoots` の入口（`tmpRootDir` 自体が読める
  * か）までは元々及んでいなかった（#1765 段2で塞いだ穴）。** `managerId` を
  * 渡したのに `/tmp` 直下を読めなかった場合は、`worktrees` を空にするのでは
  * なく `result.scratchRootsUnknown` に理由を残す——ここも「個々の呼び出しが
  * 確かめられなかったを名乗る」対象に含める。
+ *
+ * **⚠️ ただし探索の起点（`cwd` 自身）が `readdir` できないときだけは例外**
+ * **として投げる**（Issue #1826）。他の欄（`scratchRootsUnknown` /
+ * `stoppedEarly` / `truncatedAtCount`）と同じように新しい欄を足す形も
+ * 検討したが採らなかった——`cwd` は `job.cwd` そのもので、これが読めない
+ * ということは他のどの欄も足場を持たない（1本も見ていないので、部分的な
+ * `worktrees` すら作れない）。**この関数はワイヤー形（`UnpushedWorkResult`）
+ * を返す約束なので、値としての `unavailable` は作らず、例外で「取れな
+ * かった」を運ぶ**——呼び出し元は3箇所とも、既にこの形（例外 →
+ * `kind: 'unavailable'`）を扱う口を持っている:
+ * - `RunnerSession#finish()` / `#stop()`（`runner.ts`）は
+ *   `#finishUnpushedWorkFn(...).then(...).catch((error) => ({ kind:
+ *   'unavailable', reason: … }))` を既に持つ（`closed.unpushedWork` /
+ *   `shutdown_unpushed_work.unpushedWork` のどちらも）
+ * - `apps/runner/src/app.ts` の `GET /managers/:id/unpushed-work` は
+ *   catch を持たないので Hono の既定エラーハンドラ（500）へ落ちる。
+ *   `apps/daemon/src/runner-client.ts` の `RunnerClient#unpushedWork()` は
+ *   非 2xx を含めあらゆる失敗を `catch { return undefined; }` で拾い、
+ *   `packages/core/src/manager.ts` の `#probeUnpushedWork` が
+ *   `result === undefined` を `kind: 'unavailable'` に変換する——この経路は
+ *   3箇所とも変更していない（現物を読んで確かめた。PR 本文に逐語を残す）。
  */
 export async function computeUnpushedWork(
   cwd: string,
@@ -666,6 +728,11 @@ export async function computeUnpushedWork(
     maxDepth: options.maxDepth,
     maxCount: options.maxWorktrees,
   });
+  if (found.rootUnreadable !== undefined) {
+    throw new Error(
+      `未 push の観測の探索起点（job.cwd）を読めなかった: ${cwd} — ${found.rootUnreadable}`,
+    );
+  }
   const timeoutMs = options.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   const worktrees: UnpushedWorkTree[] = [];
   let stoppedEarly = false;

@@ -126,18 +126,30 @@ describe('未 push の観測が closed に載る（Issue #1266 候補(2)）', ()
     expect(delivered.unpushedWork.reason).toContain('runner が答えなかった');
   });
 
-  it('3. 既定（差し替えなし）: 本物の this.unpushedWork() を呼び、cwd が無くても kind:ok（0本）で載る', async () => {
+  it('3. 既定（差し替えなし）: 本物の this.unpushedWork() を呼び、cwd（探索の起点）が読めなければ kind:unavailable になる', async () => {
     // `finishUnpushedWorkFn` を渡さない——既定のまま（本物の
-    // `computeUnpushedWork`）。`/work/project` は実在しないので `worktrees: []`
-    // で解決するはず（`computeUnpushedWork` は cwd が読めないだけでは例外を
-    // 投げない設計）。
+    // `computeUnpushedWork`）。`/work/project` は実在しない。
+    //
+    // ⚠️ **この期待値は Issue #1826 で反転した（元は「cwd が読めないだけでは
+    // 例外を投げない設計」を理由に `kind: 'ok' + worktrees: []`〈＝『0本
+    // 見つかった』〉を期待していた）。** それは「探索の起点そのものが
+    // 見えていない」ことと「起点の下に本当に0本だった」ことを区別できない
+    // 欠陥をそのまま仕様として固定していた（AGENTS.md「取れない軸に0の行を
+    // 作る」）。`computeUnpushedWork` はいま探索の起点（`cwd` 自身）が
+    // `readdir` できないとき例外を投げるようになり（`unpushed-work.ts` の
+    // doc）、ここ（`#finishUnpushedWorkFn(...).catch(...)`）がそれを
+    // `kind: 'unavailable'` へ変換する——「取れなかった」が正しく運ばれる
+    // ようになったことを固定する。**保証は弱くなっていない**——`kind: 'ok'`
+    // が要求する「実際に確かめた」という中身を、この標本（cwd が存在しない）
+    // では最初から満たしていなかった。
     const closed = await closedAfterThrowing(new Error('何か'));
     const delivered = throughDaemonBoundary(closed);
 
-    expect(delivered.unpushedWork).toMatchObject({
-      kind: 'ok',
-      result: { cwd: '/work/project', worktrees: [] },
-    });
+    expect(delivered.unpushedWork).toMatchObject({ kind: 'unavailable' });
+    if (delivered.unpushedWork?.kind !== 'unavailable') {
+      throw new Error('unavailable ではない');
+    }
+    expect(delivered.unpushedWork.reason).toContain('/work/project');
   });
 
   it('4. 古い runner 相当（構造上は常に載る欄だが、値が省ける版との互換を境界側で確かめる）: unpushedWork 欄を持たない closed も境界を通る', () => {
