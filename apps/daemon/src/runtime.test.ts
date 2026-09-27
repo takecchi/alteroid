@@ -1,8 +1,9 @@
-import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { runtimeFilePath, writeRuntimeInfo } from './runtime.js';
 
@@ -39,11 +40,7 @@ describe('writeRuntimeInfo（daemon.json）のパーミッション（issue #187
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'alteroid-runtime-perm-'));
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    dir = await makeTempDir('alteroid-runtime-perm-');
   });
 
   it('新規作成: umask が緩い環境でも、operator token を含む daemon.json を group/other へ読めるままにしない', async () => {
