@@ -1,9 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../vitest.tmpdir.js';
 
 import {
   collectMarkedQuotes,
@@ -312,29 +315,130 @@ describe('check-sdk-quotes: 引用行の探し方（空行を跨ぐ）', () => {
   });
 });
 
-describe('check-sdk-quotes: listScannableFiles', () => {
-  // `git ls-files -sz` の出力の形（`<mode> <sha> <stage>\t<path>\0`）を模す。
-  const lsFiles = (entries: string[]) => () => entries.join('\0') + '\0';
+describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイルも見る）', () => {
+  /**
+   * **一時の git リポジトリを実際に作る**（本物の repo の根は汚さない。
+   * `makeTempDir` — `vitest.tmpdir.ts`）。symlink の重複除去がいまは
+   * `fs.lstatSync` に依存しているので、モードを文字列で模した `git ls-files -sz`
+   * の出力では測れない——実物のファイルシステムに対して測る必要がある
+   * （`scripts/git-scannable-files.test.ts` / `check-tracked-nul-bytes.test.ts`
+   * と同じ形）。
+   */
+  async function initRepo(): Promise<string> {
+    const dir = await makeTempDir('check-sdk-quotes-1817-');
+    git(dir, 'init', '-q');
+    git(dir, 'config', 'user.email', 'test@example.invalid');
+    git(dir, 'config', 'user.name', 'test');
+    return dir;
+  }
 
-  it('⚠️ symlink を外す（`CLAUDE.md` → `AGENTS.md` を2度数えない）', () => {
-    const listed = lsFiles([
-      '100644 aaaaaaa 0\tAGENTS.md',
-      '120000 bbbbbbb 0\tCLAUDE.md',
-      '100644 ccccccc 0\tpackages/core/src/a.ts',
-    ]);
-    const files = listScannableFiles('/repo', listed, () => 'content') as { path: string }[];
-    expect(files.map((f) => f.path)).toEqual(['AGENTS.md', 'packages/core/src/a.ts']);
+  function git(dir: string, ...args: string[]) {
+    return execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+  }
+
+  it('走査しない拡張子と、この検査自身は外す（未追跡ファイルにも同じ絞り込みが掛かる）', async () => {
+    const dir = await initRepo();
+    await writeFile(join(dir, 'pnpm-lock.yaml'), 'lock\n');
+    await mkdir(join(dir, 'scripts'), { recursive: true });
+    await writeFile(join(dir, 'scripts', 'check-sdk-quotes-core.mjs'), 'ignored\n');
+    await writeFile(join(dir, 'scripts', 'check-sdk-quotes.test.ts'), 'ignored\n');
+    await writeFile(join(dir, 'scripts', 'verify-core.mjs'), 'kept\n');
+    // まだ `git add` していない（未追跡）。旧い実装（追跡済みだけ）ならここで
+    // 全部見えないが、直した実装は未追跡でも同じ絞り込みを掛けたうえで拾う。
+    const files = listScannableFiles(dir) as { path: string }[];
+    expect(files.map((f) => f.path)).toEqual(['scripts/verify-core.mjs']);
   });
 
-  it('走査しない拡張子と、この検査自身は外す', () => {
-    const listed = lsFiles([
-      '100644 aaaaaaa 0\tpnpm-lock.yaml',
-      '100644 bbbbbbb 0\tscripts/check-sdk-quotes-core.mjs',
-      '100644 ccccccc 0\tscripts/check-sdk-quotes.test.ts',
-      '100644 ddddddd 0\tscripts/verify-core.mjs',
-    ]);
-    const files = listScannableFiles('/repo', listed, () => 'content') as { path: string }[];
-    expect(files.map((f) => f.path)).toEqual(['scripts/verify-core.mjs']);
+  it('🔴（直す前の形）: 素の `git ls-files -z`（追跡済みのみ）は未追跡ファイルを見落とす', async () => {
+    const dir = await initRepo();
+    await writeFile(join(dir, 'tracked.ts'), '// [sdk-verbatim Foo]\n// > old quote\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'init');
+    // 新しい違反を、まだ `git add` していない新規ファイルへ仕込む（#1817 の再現）。
+    await writeFile(join(dir, 'new-untracked.ts'), '// [sdk-verbatim Foo]\n// > this is wrong\n');
+
+    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('new-untracked.ts');
+
+    // 旧い実装が読んでいたのはこの集合だけなので、新規ファイルの違反は
+    // `collectMarkedQuotes` にすら渡らない ⟹ 検査は緑のまま（見落とし）。
+    const oldFiles = oldForm
+      .filter((p) => p.endsWith('.ts'))
+      .map((p) => ({ path: p, content: readFileSync(join(dir, p), 'utf8') }));
+    const oldQuotes = collectMarkedQuotes(oldFiles);
+    const oldDefects = findQuoteDefects(
+      oldQuotes,
+      'export declare type Foo = string; // old quote',
+    );
+    expect(oldDefects).toEqual([]);
+  });
+
+  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れ、違反を検出する', async () => {
+    const dir = await initRepo();
+    await writeFile(join(dir, 'tracked.ts'), '// [sdk-verbatim Foo]\n// > old quote\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'init');
+    await writeFile(join(dir, 'new-untracked.ts'), '// [sdk-verbatim Foo]\n// > this is wrong\n');
+
+    const files = listScannableFiles(dir) as { path: string }[];
+    expect(files.map((f) => f.path)).toContain('new-untracked.ts');
+
+    const quotes = collectMarkedQuotes(files);
+    // SDK 側には `old quote` はあるが `this is wrong` は無い ⟹ 新規ファイルの
+    // 引用だけが当たらない。
+    const defects = findQuoteDefects(quotes, 'export declare type Foo = string; // old quote') as {
+      path: string;
+    }[];
+    expect(defects.map((d) => d.path)).toContain('new-untracked.ts');
+  });
+
+  it('⚠️ symlink を外す（未追跡の symlink + 実体の両方があっても1回だけ数える）', async () => {
+    const dir = await initRepo();
+    await writeFile(join(dir, 'real.ts'), 'export const a = 1;\n');
+    // まだ `git add` していない symlink（未追跡）。以前の実装は git のモード
+    // 情報（`-s` の `120000`）に頼っていたため、未追跡のエントリにはモードが
+    // 無く、この形では重複を判定できなかった。
+    symlinkSync('real.ts', join(dir, 'link.ts'));
+
+    const files = listScannableFiles(dir) as { path: string }[];
+    const paths = files.map((f) => f.path);
+    expect(paths).toContain('real.ts');
+    expect(paths).not.toContain('link.ts');
+    // 実体は1回だけ数える。
+    expect(paths.filter((p) => p === 'real.ts')).toHaveLength(1);
+  });
+
+  it('追跡済みの symlink でも、今までどおり重複を除く（`git add` 後）', async () => {
+    const dir = await initRepo();
+    await writeFile(join(dir, 'real.ts'), 'export const a = 1;\n');
+    symlinkSync('real.ts', join(dir, 'link.ts'));
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'init: real + symlink');
+
+    const files = listScannableFiles(dir) as { path: string }[];
+    const paths = files.map((f) => f.path);
+    expect(paths).toContain('real.ts');
+    expect(paths).not.toContain('link.ts');
+  });
+
+  it('作業ツリーに無い追跡済みファイル（削除したが commit していない）は、落とさずに飛ばす', async () => {
+    const dir = await initRepo();
+    await writeFile(join(dir, 'gone.ts'), '// [sdk-verbatim Foo]\n// > old quote\n');
+    await writeFile(join(dir, 'stays.ts'), 'export const a = 1;\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'init');
+    // `git rm` していない削除（index にはまだ在るが、作業ツリーには無い）。
+    await rm(join(dir, 'gone.ts'));
+
+    let files: { path: string }[] = [];
+    expect(() => {
+      files = listScannableFiles(dir) as { path: string }[];
+    }).not.toThrow();
+    const paths = files.map((f) => f.path);
+    expect(paths).not.toContain('gone.ts');
+    expect(paths).toContain('stays.ts');
   });
 });
 
@@ -442,7 +546,7 @@ describe('実物の検査（インストール済みの sdk.d.ts に当てる）
     };
     expect(sdk.text.length).toBeGreaterThan(1000);
 
-    const files = listScannableFiles(REPO_ROOT, execFileSync, readFileSync) as { path: string }[];
+    const files = listScannableFiles(REPO_ROOT) as { path: string }[];
     // **走査そのものが空振りしていないことを先に確かめる**（glob を壊した回に緑で通らない）。
     expect(files.length).toBeGreaterThan(100);
 

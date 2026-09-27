@@ -72,6 +72,10 @@
  *   型の歯を省かないこと。**
  */
 
+import { lstatSync, readFileSync } from 'node:fs';
+
+import { listGitScannableFiles } from './git-scannable-files-core.mjs';
+
 /**
  * 印の語。`grep -rn "[sdk-verbatim"` で全部引ける。
  *
@@ -315,29 +319,50 @@ export function findQuoteDefects(quotes, sdkTypesText) {
 }
 
 /**
- * 走査対象のファイルを集める（`git ls-files` が挙げる追跡ファイルだけ）。
+ * 走査対象のファイルを集める（追跡済み + 未追跡だが ignore されていないファイル。
+ * `scripts/git-scannable-files-core.mjs` の `listGitScannableFiles`、Issue #1817）。
  *
- * **追跡ファイルに限るのは意図である。** 未追跡のファイルは PR に載らないので、
- * そこで印が腐っても誰も踏まない。逆に `node_modules` を除く仕掛けが要らなくなる。
+ * ## 以前は「追跡ファイルに限る」が意図だった。その意図はいまも半分生きている
+ *
+ * 旧い doc はこう書いていた——「未追跡のファイルは PR に載らないので、そこで
+ * 印が腐っても誰も踏まない。逆に `node_modules` を除く仕掛けが要らなくなる」。
+ * **後半（`node_modules` 等を歩かない）はいまも正しい**——`listGitScannableFiles`
+ * は `--exclude-standard` で `.gitignore` 済みを外すので、`node_modules` は
+ * 依然として対象に入らない。
+ *
+ * **前半（未追跡は誰も踏まない）は誤りだった。** #1817 が指すのは「これから
+ * commit される新しいファイル」であり、そのファイルはまだ追跡されていない
+ * だけで、じきに誰かが踏む——手元の `pnpm verify`（実体は `pnpm test`）が緑の
+ * まま `git add && git commit && git push` すると、追跡済みになった瞬間に
+ * CI で初めて赤くなる（他の7箇所の検査と同じ穴。`git-scannable-files-core.mjs`
+ * の doc を見よ）。**この検査だけ広げずに残す理由には、もうならない。**
+ *
+ * ## 見送っていた理由（symlink の重複除去）は、モードを別の場所から取れば済んだ
+ *
+ * PR #1859 はこの検査を見送った——理由は「symlink の重複を除く仕組みが
+ * `git ls-files -s` のモード（`120000`）に依存しており、`-co --exclude-standard`
+ * は未追跡のエントリにモードを返さない」。**この事実は正しいが、結論
+ * （「広げられない」）は誤りだった。** モードを git 由来にこだわる理由は無い——
+ * `fs.lstatSync(path).isSymbolicLink()` で同じ判定を、追跡・未追跡の別なく
+ * 一様に取れる（`scripts/verify-core.mjs` の `fingerprint` が同じ形で
+ * symlink を見分けている。あちらも `listGitScannableFiles` と同じ集合に対して
+ * `lstatSync` を掛けている）。
+ *
+ * ## 作業ツリーに無い、追跡済みのファイル（`git rm` していない削除）
+ *
+ * 追跡済みだが作業ツリーから物理的に消えているファイルは、`git ls-files`
+ * （`-c` 側）には残り続ける。**以前はここで `readFileSync` が素で例外を投げ、
+ * 検査全体が未処理の例外で落ちていた**（`main()` 側は `resolveSdkTypes` しか
+ * try/catch していない）。**いまは `lstatSync` が失敗した時点で、その1件だけを
+ * 静かに読み飛ばす**——中身が無いファイルには当てる引用も無いので、検査の
+ * 完全性は損なわれない。読めない1件のために検査全体を丸ごと止めるより安全側
+ * である（この判断はここだけの話で、AGENTS.md の「静かに失敗する道具」— 検査
+ * そのものが1件も走らず緑になる — とは別の話であることに注意。1件を飛ばして
+ * も残りは検査されるし、`resolveSdkTypes` の「見つからなければ投げる」は
+ * そのままである）。
  */
-export function listScannableFiles(repoRoot, execFileSync, readFileSync) {
-  // `-s` はモードを頭に付けて出す（`100644 <sha> 0\t<path>`）。**symlink（`120000`）を
-  // 外すために要る** — この repo の `CLAUDE.md` は `AGENTS.md` への symlink であり、
-  // 素の `git ls-files` で両方拾うと **同じ中身を2度数え、同じ欠陥を2行出す。**
-  // 「55件のうち8件」が実は「51件のうち4件」だった、という数え違いがここで生まれる。
-  const listed = execFileSync('git', ['ls-files', '-sz'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  })
-    .split('\0')
-    .filter((entry) => entry.length > 0)
-    .map((entry) => {
-      const tab = entry.indexOf('\t');
-      return { mode: entry.slice(0, 6), path: entry.slice(tab + 1) };
-    })
-    .filter((entry) => entry.mode !== '120000')
-    .map((entry) => entry.path);
+export function listScannableFiles(repoRoot) {
+  const listed = listGitScannableFiles({ cwd: repoRoot });
 
   const paths = listed.filter(
     (p) =>
@@ -345,7 +370,31 @@ export function listScannableFiles(repoRoot, execFileSync, readFileSync) {
       !EXCLUDED_PREFIXES.some((prefix) => p.startsWith(prefix)),
   );
 
-  return paths.map((p) => ({ path: p, content: readFileSync(`${repoRoot}/${p}`, 'utf8') }));
+  const files = [];
+  for (const p of paths) {
+    const fullPath = `${repoRoot}/${p}`;
+    let stat;
+    try {
+      stat = lstatSync(fullPath);
+    } catch {
+      // 追跡済みだが作業ツリーに実体が無い（`git rm` していない削除など）。
+      // 読みようが無いので、この1件だけ飛ばす（上の doc）。
+      continue;
+    }
+    // **symlink は畳まない**（`CLAUDE.md` → `AGENTS.md` を2度数えないため。
+    // 追跡・未追跡のどちらでも同じ判定になる——モードを git ではなく
+    // ファイルシステムから取っているため）。
+    if (stat.isSymbolicLink()) continue;
+    let content;
+    try {
+      content = readFileSync(fullPath, 'utf8');
+    } catch {
+      // lstat は通ったが読めない（権限・競合など）。同じ理由で1件だけ飛ばす。
+      continue;
+    }
+    files.push({ path: p, content });
+  }
+  return files;
 }
 
 /**

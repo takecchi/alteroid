@@ -14,7 +14,6 @@
  * **この CLI は手元で1本だけ回して読むための口**であり、CI の手順を増やさない。
  */
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import process from 'node:process';
@@ -49,7 +48,7 @@ function main() {
     return;
   }
 
-  const files = listScannableFiles(REPO_ROOT, execFileSync, readFileSync);
+  const files = listScannableFiles(REPO_ROOT);
   const quotes = collectMarkedQuotes(files);
   const defects = findQuoteDefects(quotes, sdk.text);
 
