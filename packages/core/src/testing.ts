@@ -1135,6 +1135,12 @@ export function createMemoryStores(): Stores {
       // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
       accounts.set(account.id, authAccountSchema.parse(account));
     },
+    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1870）。
+    async markAccountLoggedIn(accountId, at) {
+      const account = accounts.get(accountId);
+      if (account === undefined) return;
+      accounts.set(accountId, authAccountSchema.parse({ ...account, lastLoginAt: at }));
+    },
     async findIdentity(provider, subject) {
       return identities.get(identityKey(provider, subject)) ?? null;
     },

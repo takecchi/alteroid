@@ -242,8 +242,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
           await fail(request, 'exchange_failed');
           return { status: 'error', reason: 'exchange_failed' };
         }
-        account = { ...found, lastLoginAt: at };
-        await store.putAccount(account);
+        account = await touchAccountLogin(store, found, at);
         // プロバイダ側のメールだけ追従する。**account.email は触らない**
         // （本人が選んだ連絡先を、プロバイダ側の変更で書き換えない）。
         await store.putIdentity({
@@ -319,8 +318,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
             await fail(request, 'exchange_failed');
             return { status: 'error', reason: 'exchange_failed' };
           }
-          account = { ...found, lastLoginAt: at };
-          await store.putAccount(account);
+          account = await touchAccountLogin(store, found, at);
           await store.putIdentity({
             ...outcome.existing,
             email: profile.email,
@@ -483,6 +481,26 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
 async function findGrantedAccounts(store: AuthStore): Promise<AuthAccount[]> {
   const accounts = await store.listAccounts();
   return accounts.filter((account) => account.grantedAt !== null);
+}
+
+/**
+ * ログイン成功時の `lastLoginAt` の書き戻し（issue #1870）。**行を丸ごと
+ * 書き戻さない** — `found`（`getAccount` で読んだときの写し）を
+ * `putAccount` に渡すと、読んでから書くまでの間に完了した access grant /
+ * access revoke / owner 宣言を、写しに残った古い値で上書きしてしまう
+ * （`touch()` が #1782 で塞いだのと同じ形）。`markAccountLoggedIn` で
+ * `lastLoginAt` だけを進め、`completeLogin` の戻り値（`granted`）に使う
+ * `account` は書き込み後に読み直して最新の状態を返す——`grantedAt` を
+ * 巻き込まないことと、呼び手が見る `granted` が古いスナップショットのまま
+ * にならないことの両方を、この1関数で保証する。
+ */
+async function touchAccountLogin(
+  store: AuthStore,
+  found: AuthAccount,
+  at: string,
+): Promise<AuthAccount> {
+  await store.markAccountLoggedIn(found.id, at);
+  return (await store.getAccount(found.id)) ?? { ...found, lastLoginAt: at };
 }
 
 async function touch(store: AuthStore, record: AccessTokenRecord, at: Date): Promise<void> {

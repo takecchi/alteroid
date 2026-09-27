@@ -101,6 +101,21 @@ export class PgAuthStore implements AuthStore {
       .onConflictDoUpdate({ target: authAccounts.id, set });
   }
 
+  /**
+   * `last_login_at` だけを書く。**条件無しの UPDATE 1文で、他の列には触らない**
+   * （issue #1870）。`putAccount` の upsert は `granted_at` / `granted_by` /
+   * `owner_declared_at` を無条件に `set` に含むので、読んだときの写しで呼ぶと、
+   * そのあいだに完了した access grant / access revoke / owner 宣言を踏みつぶす
+   * （`markAccessTokenUsed` が #1782 で塞いだのと同じ形）。無い id では0行の
+   * 更新になる（投げない）。
+   */
+  async markAccountLoggedIn(accountId: string, at: string): Promise<void> {
+    await this.#db
+      .update(authAccounts)
+      .set({ lastLoginAt: new Date(at) })
+      .where(eq(authAccounts.id, accountId));
+  }
+
   async findIdentity(provider: string, subject: string): Promise<AuthIdentity | null> {
     const rows = await this.#db
       .select()

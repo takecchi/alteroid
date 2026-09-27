@@ -192,6 +192,24 @@ export interface AuthStore {
    */
   findAccountByEmail(email: string): Promise<AuthAccount | null>;
   putAccount(account: AuthAccount): Promise<void>;
+  /**
+   * この account の `lastLoginAt` だけを `at` にする（1操作。issue #1870）。
+   *
+   * **`lastLoginAt` 以外の欄には触らない。とくに `grantedAt` / `grantedBy` /
+   * `ownerDeclaredAt` を書き戻さない。** `completeLogin`（`auth-service.ts`）の
+   * 再ログイン分岐（既存 identity・同時ログインで負けた側の両方）は、以前
+   * `getAccount` で読んだ行を `putAccount` で丸ごと書き戻していた。読んでから
+   * 書くまでのあいだに `access grant` / `access revoke` / owner 宣言が完了
+   * すると、その結果が読んだときの古いスナップショットで上書きされていた
+   * （`markAccessTokenUsed` が #1782 で塞いだ lost update と同じ形——対象が
+   * アクセストークンの `lastUsedAt` から account の `lastLoginAt` に変わっただけ）。
+   *
+   * その id の行が無いときは何もしない（投げない）。
+   *
+   * ドライバはそれぞれの器で原子性を出す — fs は1つの排他区間、pg は
+   * 条件無しの UPDATE 1文で、`last_login_at` だけを書く。
+   */
+  markAccountLoggedIn(accountId: string, at: string): Promise<void>;
 
   findIdentity(provider: string, subject: string): Promise<AuthIdentity | null>;
   /**
