@@ -1451,12 +1451,15 @@ export interface TranscriptArchive {
    *   全文へ倒さない）。
    *
    * ⚠️ **`SessionTranscriptTail.readTail`（`packages/storage-pg/src/session-store.ts`
-   * の `PgSessionStore`）は別のインターフェースで、今回の統一の対象では
-   * ない。** あちらは JS の `.length`（UTF-16 コード単位）で `maxChars` を
-   * 数えたままである——`#pickUpLostSession` が `tailOf` へ渡す前段として
-   * 同じ族の単位の不整合を持ちうるが、`TranscriptArchive` とは別の実装・
-   * 別の Issue（#1718）の系譜なので、ここでは直していない（issue #1829 の
-   * PR 本文に「確かめていないこと」として明記する）。
+   * の `PgSessionStore`）は別のインターフェースで、この doc が説明する統一
+   * （#1829・PR #1839）の対象ではなかった。** PR #1839 の時点ではあちらは
+   * JS の `.length`（UTF-16 コード単位）で `maxChars` を数えたままで、
+   * `#pickUpLostSession` が `tailOf` へ渡す前段として同じ族の単位の不整合を
+   * 持ちうることが「確かめていないこと」として明記されていた。**その後
+   * issue #1849 で実際に赤（絵文字混じりの本文で古い行が静かに落ちる）が
+   * 出ることを確かめ、`tailByCodePoints` ベースへ揃えて直した**——いまは
+   * `TranscriptArchive` の3実装・`tailOf`・`SessionTranscriptTail.readTail`
+   * のすべてがコードポイント数で `maxChars` を数える。
    */
   readTail(id: string, maxChars: number): Promise<ArchiveRead>;
   /**
@@ -1944,16 +1947,27 @@ export interface SessionTranscriptTail {
    *
    * ## 契約
    *
+   * 🔴 **`maxChars` はコードポイント数で数える（issue #1849）。** JS の
+   * `.length`（UTF-16 コード単位）ではない——補助面の文字（絵文字の多く）
+   * は 1 コードポイントが 2 コード単位になるため、この2つはずれる
+   * （`TranscriptArchive.readTail` interface doc・`tailByCodePoints`
+   * （`packages/core/src/excerpt.ts`）の doc と同じ区別）。単位の変換は
+   * `tailByCodePoints` の唯一の出所へ寄せる——実装ごとに手で書き直さない。
+   *
    * 🔴 **本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に
    * 上回ること（同じ数で切り詰めない）。** `TranscriptArchive.readTail`
    * （`readTail` interface doc）と同じ契約である——呼び出し側（`tailOf`）は
-   * `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰めが
-   * 要ったか」を判定するので、ここで「ちょうど `maxChars`」以下を返すと、
-   * 実際には切り捨てた行があるのに「本文がもとから短かった」と誤読される
+   * `tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS)` の結果が
+   * 元の文字列と一致するかで「切り詰めが要ったか」を**コードポイント数**で
+   * 判定するので、ここで「ちょうど `maxChars`」以下を返すと、実際には
+   * 切り捨てた行があるのに「本文がもとから短かった」と誤読される
    * （#1718 で見つかった——`PgSessionStore.readTail` の停止条件が返す長さ
    * ではなく積んだ累計文字数を見ていたため、境界ちょうどで `maxChars - 1`
    * 文字しか返さなかった。テストで再現したものであって、本番でこの境界を
-   * 実際に踏んだ観測ではない）。本文が `maxChars` 以下なら全文を返す。
+   * 実際に踏んだ観測ではない。**その後、単位そのものが UTF-16 コード単位の
+   * ままだったことも同じ族の穴として見つかった（#1849）——境界ちょうどを
+   * 狙わなくても、絵文字が十分に多い本文では恒常的に起こりえた**）。本文が
+   * `maxChars` 以下なら全文を返す。
    *
    * ⚠️ **この契約の食い違いは、いまの唯一の呼び出し側 `#pickUpLostSession`
    * （`clone.ts`）では症状として顕在化しない。** `tailOf` は受け取った文字列を

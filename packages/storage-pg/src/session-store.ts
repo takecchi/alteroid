@@ -1,3 +1,4 @@
+import { tailByCodePoints } from '@alteroid/core';
 import type { LostSessionGrave, SessionTranscriptTail } from '@alteroid/core';
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
@@ -118,11 +119,18 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    *
    * **本文が `maxChars` より長いとき、返す量は `maxChars` を厳密に上回る**
    * （`TranscriptArchive.readTail` と同じ強さの契約。`SessionTranscriptTail.readTail`
-   * の doc「契約」節）。⟹ 停止条件は `chars`（積んだ行の長さ + 区切りぶんの
-   * 累計）ではなく、**実際に返す長さ**で判定する——`lines.reverse().join('\n')`
-   * が使う区切りは `lines.length - 1` 個なので、返す長さは常に `chars - 1`
-   * である。「返す長さ（`chars - 1`）が `maxChars` を厳密に上回る」は
-   * 「`chars > maxChars + 1`」と同値（#1718）。
+   * の doc「契約」節）。
+   *
+   * 🔴 **`maxChars` はコードポイント数で数える（issue #1849）。** 以前はここを
+   * JS の `.length`（UTF-16 コード単位）の累計で判定していた——補助面の文字
+   * （絵文字の多く。1コードポイントが2コード単位になる）が境目に絡むと、
+   * コード単位では `maxChars + 1` を超えていても、実際のコードポイント数は
+   * それ以下のことがあり、契約（返す量は `maxChars` を厳密に上回る）を破って
+   * 古い行を静かに落としていた（呼び出し側 `tailOf` は `tailByCodePoints` で
+   * コードポイント数を見て「切り詰めが要ったか」を判定するため）。単位の変換は
+   * `tailByCodePoints`（`packages/core/src/excerpt.ts`。#1829 の唯一の出所）へ
+   * 委ねる——ここで独自に UTF-16 コード単位やコードポイントの数え上げを
+   * 作り直さない。
    */
   async readTail(key: LostSessionGrave, maxChars: number): Promise<string | null> {
     const rows = await this.#db
@@ -142,20 +150,21 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     // **新しい方から積んで、足りたら止める。** 生ログは1行1レコードの JSONL なので、
     // ここで組み直したものは器の外に在るファイルと同じ形になる。
     //
-    // **`chars > maxChars + 1` で止める（`chars >= maxChars` ではない）。** 上の
-    // doc のとおり、返す長さは `chars - 1` なので、`chars` がちょうど `maxChars`
-    // に達しただけで止めると、返す長さは `maxChars - 1` ＝ `maxChars` を
-    // **下回る**（#1718 の欠陥そのもの）。`chars > maxChars + 1` まで待てば、
-    // 返す長さ（`chars - 1`）は必ず `maxChars` を上回る。
-    const lines: string[] = [];
-    let chars = 0;
+    // **`tailByCodePoints(joined, maxChars + 1)` が `joined` と一致する限り
+    // （＝コードポイント数がまだ `maxChars + 1` 以下）行を足し続け、超えた回で
+    // 打ち切る。** 超えたと分かった時点で既にその行までは足してあるので、
+    // 返す長さ（コードポイント数）は必ず `maxChars` を厳密に上回る——#1718 の
+    // 「`chars > maxChars + 1` で止める」と同じ強さを、単位をコードポイントへ
+    // 揃えたうえで保つ。`tailByCodePoints` は UTF-16 長が `maxChars + 1` 以下の
+    // 間は走査せず即座に一致を返す（`excerpt.ts` の「高速路」）ので、通常の
+    // （行数が少なく収まる）回はコストが増えない。
+    let joined = '';
     for (const row of rows) {
       const line = JSON.stringify(row.entry);
-      lines.push(line);
-      chars += line.length + 1;
-      if (chars > maxChars + 1) break;
+      joined = joined === '' ? line : `${line}\n${joined}`;
+      if (tailByCodePoints(joined, maxChars + 1) !== joined) break;
     }
-    return lines.reverse().join('\n');
+    return joined;
   }
 
   /**
