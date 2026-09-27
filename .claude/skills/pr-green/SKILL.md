@@ -124,6 +124,7 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
       ```
 
       ⟹ **上の項が持つ「`run.conclusion == "success"` は緑の根拠にならない」には鏡像が在る —— `run.conclusion == "failure"` も「マージが止まる」の根拠にならない。** どちらの向きでも、**ジョブの内訳まで降りないと required の状態は読めない。**
+  - **push・`gh pr ready` の前に `pnpm check:verified-head`（既定 `HEAD`）で、push する commit の中身が `pnpm verify` を通したツリーそのものかを確かめる**（Issue #1763・#1192 の N7。CI の緑とは別軸——「緑を見てから1行直して push した」を手元で捕まえる道具であって、CI には配線していない）。
   - `gh pr ready` の後は**本物の run が作られたことを確かめる**。作られないなら `gh pr close` → `gh pr reopen` で起こす（**枝を1バイトも触らない**ので安全。空コミットでもよい）
     - **⚠️ ただし「作られていない」を、早すぎる問い合わせで自分から作らないこと。** 実測（2026-09-17、PR #1154）: `gh pr ready` と**同じ1呼びの中で** `gh api "repos/…/actions/runs?head_sha=<sha>"` を打つと、**新しい run は1本も返らない。** timeline の `ready_for_review` は `02:44:06Z`、run 4本の `created_at` は `02:44:08Z` で、**22秒後（`02:44:28Z`）に引き直したら4本とも見えた。** ⟹ **0本は「起きていない」ではなく「まだ見えていない」ことがある。**
       - **⚠️ そしてここで `close` → `reopen` を打つと、同じ concurrency group に2世代目が生まれて1世代目が切られる**（`cancel-in-progress: true`）。**この帰結そのものは測っていない —— 機構からの推論である。** 言えるのは「間を置いてもう一度引いてから判断すること」までである
