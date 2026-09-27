@@ -4571,8 +4571,9 @@ class Pool implements ManagerPool {
    */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
-   * `ProfileService` / `McpServerService` の `onPushed`（即時の配布の結果）の購読を
-   * 外す関数（Issue #1699。`#recordDirectPushResults` の doc）。`stop()` で外す。
+   * `ProfileService` / `McpServerService` / `CredentialService` の `onPushed`
+   * （即時の配布の結果）の購読を外す関数（Issue #1699 / #1717。
+   * `#recordDirectPushResults` の doc）。`stop()` で外す。
    */
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
@@ -4613,10 +4614,11 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
-    // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699）。**
+    // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
+      credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
     ]) {
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
@@ -11105,22 +11107,27 @@ class Pool implements ManagerPool {
    * 次の `hello` を待たずに拾うためのものである。
    */
   /**
-   * **`apply()` の即時の配布の結果を、名乗りのときの配布と同じ帳面に積む（Issue #1699）。**
+   * **`apply()` の即時の配布の結果を、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
    *
-   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` は、保存の直後に繋がっている
-   * runner へその場で直接配る（`McpServerService.apply` / `ProfileService.apply`）。
+   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials`（CLI の
+   * `alteroid credential set` もこれを叩く）は、保存の直後に繋がっている runner へその場で直接配る
+   * （`McpServerService.apply` / `ProfileService.apply` / `CredentialService.apply`）。
    * この経路が帳面（`#pushHealth`）も挑み直し（`#schedulePushRetry`）も通らなかった
    * ので、一時的な障害で配り損ねても `runner_list` の「直近の押し込み」は前の「ok」の
-   * ままで、挑み直しも予約されず、runner が名乗り直すまで古い版のまま走っていた。
-   * **名乗りのときの配布（`#pushProfile` / `#pushMcpServers`）と同じく、失敗は
-   * `failed` として帳面に書き、`#settlePushRetry` で挑み直しを予約する**
+   * ままで、挑み直しも予約されず、runner が名乗り直すまで古い版のまま走っていた
+   * （credentials だけ #1704 で塞ぎ忘れていたのが #1717）。
+   * **名乗りのときの配布（`#pushProfile` / `#pushMcpServers` / `#pushCredentials`）と
+   * 同じく、失敗は `failed` として帳面に書き、`#settlePushRetry` で挑み直しを予約する**
    * （「間隔は伸ばすが、諦めはしない」の約束を1つにする）。成功は `ok` で上書きする。
    *
-   * 日誌の行は書かない。即時の配布の失敗は、呼び出し元（`app.ts` の `PUT`）が既に
-   * 日誌へ残している——ここで書くと二重になる。
+   * 日誌の行はここでは書かない。即時の配布の失敗を日誌へ残すかは呼び出し元が持つ
+   * ——`PUT /mcp-servers`（`app.ts`）と `profile_write`（`tools.ts`）は残しており、
+   * ここでも書くと二重になる。⚠️ **`PUT /profile` と `PUT /credentials` は残して
+   * いない**（応答の `runners` とこの帳面にだけ出る）。「全経路が日誌に残す」と
+   * 読まないこと。
    */
   #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers',
+    kind: 'profile' | 'mcpServers' | 'credentials',
     results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
   ): void {
     if (this.#stopped) return;

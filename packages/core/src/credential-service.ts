@@ -63,6 +63,20 @@ export interface CredentialService {
    */
   apply(entries: readonly CredentialEntry[]): Promise<ApplyCredentialsResult>;
   /**
+   * **`apply()` の即時の配布の結果を知らせる（Issue #1699 の隣、#1717）。** 返り値は購読を外す関数。
+   *
+   * `apply()` は保存の直後に、繋がっている runner へその場で直接配る
+   * （`pushAll`）。この経路は `ManagerPool` の押し込みの帳面（`#pushHealth`）と
+   * 挑み直し（`#schedulePushRetry`）を通らなかったので、一時的な障害で配り
+   * 損ねても `runner_list` は前の「ok」のままで、挑み直しも予約されなかった
+   * （`McpServerService` / `ProfileService` は #1704 で同じ形の口を足している。
+   * `CredentialService` だけ足し忘れていたのが #1717）。`ManagerPool` がここを
+   * 購読し、同じ帳面に積む——約束を1つにする。
+   *
+   * **任意の口である。** 偽物（テスト）は持たなくてよい。
+   */
+  onPushed?(listener: (results: ApplyCredentialsResult['runners']) => void): () => void;
+  /**
    * 1台の runner へ、いま正本に在るものを降ろし直す。
    *
    * **runner は記憶ストアを読めない**ので、器が作り直されたときに降ろすのはこちら
@@ -502,6 +516,8 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     return next;
   }
 
+  const pushListeners = new Set<(results: ApplyCredentialsResult['runners']) => void>();
+
   return {
     vaultSnapshot: () => cachedVaultRows,
 
@@ -550,8 +566,24 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
         const upserted = rows.filter((row) => scopeAppliesTo(row.scope, 'manager'));
         const payload = [...upserted.map(({ name, value }) => ({ name, value })), ...removed];
 
-        return { fingerprints: fingerprintsOf(rows), runners: await pushAll(payload) };
+        const pushed = await pushAll(payload);
+        // 購読者（`ManagerPool`）の例外で、人間への応答を落とさない
+        // （`mcp-server-service.ts` の同じ形と同じ理由）。
+        for (const listener of pushListeners) {
+          try {
+            listener(pushed);
+          } catch {
+            // 帳面に積めなかっただけで、配布の結果そのものは下で返す。
+          }
+        }
+
+        return { fingerprints: fingerprintsOf(rows), runners: pushed };
       }),
+
+    onPushed: (listener) => {
+      pushListeners.add(listener);
+      return () => pushListeners.delete(listener);
+    },
 
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {

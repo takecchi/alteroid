@@ -575,6 +575,51 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       ).toBe(true);
     }
   });
+
+  /**
+   * **応答の「全 id は日誌に N 件に分けて残してある」の N は、実際に書いた日誌の行の数で
+   * 言う。** 1件も消せなかった塊は日誌に書かない（上の10番）ので、塊の数
+   * （`chunks.length`）で言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗って
+   * いた（PR #1711 で直したが、専用の歯は `archive_remove_many` にしか無かった——
+   * `archive-remove-many-raced.test.ts` の「応答が言う『日誌に N 件』は、実際に書いた
+   * 件数である」と同じ形で、ここに足す）。
+   */
+  it('12. 2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
+    const stores = createMemoryStores();
+    const events = Array.from({ length: 250 }, (_, i) => managerEventWithUuid(i));
+    await putAll(stores, events);
+    const allIds = events.map((event) => event.id);
+    const chunksExpected = chunkIdsByChars(allIds, 3_600);
+    expect(chunksExpected.length).toBeGreaterThanOrEqual(2); // 2個目以降を丸ごと競合にするのに要る
+
+    // **1つ目の塊は本当に消し、2つ目以降は「呼ぶ直前に他経路が丸ごと先に消していた」を
+    // 模す。** `archive-remove-many-raced.test.ts` と同じ作法——本物の `removeMany`
+    // 実装だけで競合を作る（フェイクの戻り値を手で組み立てない）。2回目以降の呼びでは、
+    // 本物の `removeMany` を1回先打ちして「別経路」が消したことにしてから、道具自身の
+    // 呼びをもう一度本物へ通す（その時点では既に消えているので `[]` が返る）。
+    const originalRemoveMany = stores.inbox.removeMany.bind(stores.inbox);
+    let calls = 0;
+    stores.inbox.removeMany = async (ids: readonly string[]) => {
+      calls += 1;
+      if (calls > 1) await originalRemoveMany(ids);
+      return originalRemoveMany(ids);
+    };
+
+    const reply = await remover(stores)({
+      types: ['manager_message'],
+      reason: '250件を一括で畳んだ',
+      dryRun: false,
+    });
+
+    const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
+    expect(claimed, '省略の断り書きが出ていない（20件を超えて消していない）').not.toBeNull();
+    const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
+    expect(chunkEntries.length).toBeGreaterThan(0);
+    // **この歯が意味を持つための前提**: 実際に複数の塊に割れているのに、日誌に書いた
+    // のは1つ目の塊だけ（＝ journaledChunks < chunks.length）であること。
+    expect(chunkEntries.length).toBeLessThan(chunksExpected.length);
+    expect(Number(claimed?.[1])).toBe(chunkEntries.length);
+  });
 });
 
 /**

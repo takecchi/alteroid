@@ -1985,9 +1985,16 @@ export const archiveRemoveManyRequestSchema = z.object({
  * `POST /archive/remove` の doc）。
  *
  * `raced` は、guard までは通ったが実際に `stores.archive.remove()` する
- * までの間に他経路が先に消していた（`result.kind === 'missing'`）件数——
- * `dryRun: true` では `remove()` 自体を呼ばないので常に0（測れないことを
- * 隠さず0の理由を明記する。0件でも欄は省かない）。
+ * までの間に他経路が先に消していた件数——`result.kind` が `'missing'`
+ * （行自体がもう無い）か `'already'`（本文はすでに他経路が墓標にして
+ * いた。`remove()` は行を消さず本文だけを落とすので、通常はこちらで
+ * 観測される）のどちらでも数える（#1707。以前は `'missing'` だけを
+ * 数え、`'already'` の行は「この呼びが消した」側——`removedIds` /
+ * `removedBytes` / 日誌——へ計上していた。選定の時点で既に消えていた
+ * 行は `skipped.alreadyRemoved` で除いてあるので、ここで `'already'` が
+ * 返るのは選んだ後に他経路が消した回だけである）。`dryRun: true` では
+ * `remove()` 自体を呼ばないので常に0（測れないことを隠さず0の理由を
+ * 明記する。0件でも欄は省かない）。
  *
  * **不変条件（5欄で1行は必ず1回だけ数える。歯で撃つこと）:**
  * ```

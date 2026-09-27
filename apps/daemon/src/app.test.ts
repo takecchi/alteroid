@@ -2591,6 +2591,77 @@ describe('HTTP API', () => {
       expect(entry?.decision).toContain(idA);
       expect(entry?.grounds).toBe('人間が直接 API から操作した');
     });
+
+    /**
+     * ⭐ **`already` も `raced` に数えることを、HTTP の口そのもので撃つ歯**（#1706 / #1707）。
+     *
+     * `archive_remove_many`（`packages/core/src/archive-remove-many-raced.test.ts`）と
+     * `foldArchiveOnce`（`apps/daemon/src/archive-folder.test.ts`）には同じ形の歯が
+     * あるが、`POST /archive/remove` 自身（この HTTP の口）には無かった——3か所とも
+     * 同じ実行ループの形（`result.kind === 'missing' || result.kind === 'already'`）を
+     * 持つのに、HTTP 層だけ「選んだ後に他経路が先に消していた行を、この呼びが
+     * 消したことにしない」ことを確かめる歯が欠けていた。
+     *
+     * 競合は、この HTTP ハンドラ自身がその id に `remove()` を呼ぶ瞬間に、本物の
+     * `remove()` を1回先に打つラッパーで作る（フェイクの `kind` を手で組み立てない
+     * ——`archive-remove-many-raced.test.ts` と同じ手口）。
+     */
+    it('選んだ後に他経路が先に本文を墓標にしていた行（remove() が already を返す）は raced に数え、removedIds/removedBytes/日誌には載せない', async () => {
+      const idOld = (await stores.archive.archive('sess-http-race', 'AAA')).id;
+      const rowNew = await stores.archive.archive('sess-http-race', 'AAABBB'); // newest, 前方一致
+      expect(rowNew.continuity, '前方一致の前提が崩れている（テストの組み立てミス）').toBe(
+        'continues',
+      );
+
+      // list() の時点ではまだ生きている必要があるので、事前に消すのではなく、
+      // ハンドラ自身の remove() 呼び出しを横取りして、内側でもう1回 remove()
+      // を先打ちする（「別経路が list() の後・remove() の前に消した」を、
+      // 本物の ArchiveStore.remove() の返り値だけで再現する）。
+      const originalRemove = stores.archive.remove.bind(stores.archive);
+      let armed = true;
+      stores.archive.remove = async (id: string) => {
+        if (id === idOld && armed) {
+          armed = false;
+          await originalRemove(id); // 「別の経路」が先に消す
+        }
+        return originalRemove(id);
+      };
+
+      const response = await app.request(
+        '/archive/remove',
+        json({ minStoredBytes: 0, reason: '競合を起こす', dryRun: false }),
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        targeted: number;
+        removedIds: string[];
+        removedBytes: number;
+        raced: number;
+      };
+
+      // 実状態: idOld は（他経路によって）確かに tombstone されている。
+      expect(await stores.archive.read(idOld)).toMatchObject({ kind: 'removed' });
+
+      // この呼びは idOld を自分では tombstone していない——raced に数え、
+      // removedIds / removedBytes には載せない（発見の本体。直し前は
+      // removedIds に idOld を含め、removedBytes を二重に数えていた）。
+      expect(body.targeted).toBe(1);
+      expect(body.raced).toBe(1);
+      expect(body.removedIds).toEqual([]);
+      expect(body.removedBytes).toBe(0);
+
+      const journalEntries = (await stores.journal.list({ types: ['decision'] })) as {
+        type: 'decision';
+        decision: string;
+      }[];
+      const entry = journalEntries.find((e) => e.decision.includes(idOld));
+      expect(
+        entry,
+        '実際には行っていない tombstone を「行った」と日誌へ書く' +
+          '（このハンドラは idOld に対して remove() を呼んだが、既に他経路が' +
+          '消していたので already が返っただけである）。',
+      ).toBeUndefined();
+    });
   });
 
   it('manager_id から一覧・状態・生ログへ降りられる（可観測性の下2層）', async () => {
