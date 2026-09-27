@@ -745,6 +745,7 @@ export {
   ENV_FILE_OWNED_CREDENTIAL_NAMES,
   isWithheldCredentialName,
   createCredentialStore,
+  describeSkippedCredentialRow,
   fingerprintOf,
   type CredentialEntry,
   type CredentialFingerprint,
