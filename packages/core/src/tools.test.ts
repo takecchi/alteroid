@@ -6750,6 +6750,60 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('/workspace/mgr-1/repo');
   });
 
+  /**
+   * **Issue #1885** — 台帳の観測が「確かめきれなかった」ことの4欄
+   * （`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
+   * `unreadableDirCount`）のどれかを持つとき、`manager_list` の行はそれを
+   * 「この観測は探しきっていない」と名乗る。**直す前は
+   * `unpushedWorkObservationWorktreesText` が無いので、この歯は赤くなる**
+   * （文言そのものが1文字も出ない）。
+   */
+  it('manager_list は observed な未push観測が確かめきれなかったことを持つとき「探しきっていない」と名乗る（Issue #1885）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-20T00:00:00.000Z',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [{ relativePath: '.', branch: 'feat/example' }],
+      truncatedAtCount: 200,
+      unreadableDirCount: 2,
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('feat/example');
+    expect(reply).toContain('この観測は探しきっていない');
+    expect(reply).toContain('件数の上限（200）で打ち切った');
+    expect(reply).toContain('子ディレクトリの読み失敗が2件あった');
+    expect(reply).toContain('ここに無い作業ツリーが在りうる');
+  });
+
+  /**
+   * **Issue #1885 の対照**——4欄がどれも無い（古い台帳の行と同じ形）観測は
+   * 今日と1バイトも変わらない。「この観測は探しきっていない」は出ない。
+   */
+  it('manager_list は確かめきれなかった申告が無い観測では「探しきっていない」を出さない（Issue #1885。古い台帳の行と同じ形）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-20T00:00:00.000Z',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [{ relativePath: '.', branch: 'feat/example' }],
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).not.toContain('探しきっていない');
+  });
+
   it('manager_list は unavailable な未push観測で reason を出す（Issue #1266。branch が取れなかったと分かる）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });

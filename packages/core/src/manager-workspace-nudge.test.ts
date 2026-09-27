@@ -262,6 +262,70 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
     expect(message).toContain('これより後に作った枝は含まれない');
   });
 
+  /**
+   * **Issue #1885** — 台帳の観測が「確かめきれなかった」ことの4欄を持つ
+   * とき、`runnerSwapNudge`（マネージャー向け）とクローン向け
+   * （`#notifyRestored` 経由の `cloneText`）は、どちらも「見つかった作業
+   * ツリーごとに次のとおり」の前に「探しきっていない」旨を1文足す——
+   * 判定は `workspaceAfterSwap` 1箇所だけに持つので、両方の宛先に同時に
+   * 効く。直す前は `WorkspaceAfterSwap` がこの情報を運ばないので、この歯は
+   * 赤くなる。
+   */
+  it('unknown + 未 push 観測あり・確かめきれなかった申告あり: マネージャー向け・クローン向けの両方が「探しきっていない」と名乗る（Issue #1885）', async () => {
+    const observation: LastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-24T05:00:00.000Z',
+      cwd: '/work/project',
+      worktrees: [
+        {
+          relativePath: 'repo',
+          branch: 'feature/x',
+          remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
+        },
+      ],
+      truncatedAtCount: 50,
+      unreadableDirCount: 1,
+    };
+    const job = jobWith(
+      'mgr-unknown-incomplete',
+      { kind: 'unknown', runnerId: 'runner-primary', path: '/data/work', reason: '未確認' },
+      observation,
+    );
+    const { message, cloneText } = await runnerSwapNudge(job);
+
+    for (const text of [message, cloneText]) {
+      expect(text).toContain('この観測は探しきっていない');
+      expect(text).toContain('件数の上限（50）で打ち切った');
+      expect(text).toContain('子ディレクトリの読み失敗が1件あった');
+      expect(text).toContain('ここに無い作業ツリーが在りうる');
+      // clone の指示（列挙）そのものは変わらず出る。
+      expect(text).toContain('github.com/acme/widgets.git の feature/x を clone し直せ');
+    }
+  });
+
+  it('unknown + 未 push 観測あり・確かめきれなかった申告なし: 今日と同じく「探しきっていない」は出ない（Issue #1885 の対照）', async () => {
+    const job = jobWith(
+      'mgr-unknown-complete',
+      { kind: 'unknown', runnerId: 'runner-primary', path: '/data/work', reason: '未確認' },
+      {
+        kind: 'observed',
+        at: '2026-09-24T05:00:00.000Z',
+        cwd: '/work/project',
+        worktrees: [
+          {
+            relativePath: 'repo',
+            branch: 'feature/x',
+            remoteOrigin: { host: 'github.com', path: 'acme/widgets.git' },
+          },
+        ],
+      },
+    );
+    const { message, cloneText } = await runnerSwapNudge(job);
+
+    expect(message).not.toContain('探しきっていない');
+    expect(cloneText).not.toContain('探しきっていない');
+  });
+
   it('runner-volume + 未 push 観測あり: それでも clone の指示は出ない（clone の指示は unknown 限定）', async () => {
     const observation: LastUnpushedWorkObservation = {
       kind: 'observed',

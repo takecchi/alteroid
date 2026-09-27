@@ -1615,6 +1615,47 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(screen.getByText(/origin=https:\/\/github\.com\/o\/r\.git\?\*\*\*/)).toBeTruthy();
     });
 
+    /**
+     * **Issue #1885** — 観測が「確かめきれなかった」ことの4欄を持つとき、
+     * この画面も「探しきっていない」旨を出す（クローンの `manager_list` /
+     * `manager_report` と同じ判定・同じ生成元）。直す前はこの文言が1文字も
+     * 出ないので、この歯は赤くなる。
+     */
+    it('observed かつ確かめきれなかった申告があるとき「探しきっていない」を出す（Issue #1885）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+          truncatedAtCount: 200,
+          unreadableDirCount: 2,
+        },
+      });
+
+      expect(await screen.findByText(/branch=feat\/x/)).toBeTruthy();
+      expect(screen.getByText(/この観測は探しきっていない/)).toBeTruthy();
+      expect(screen.getByText(/件数の上限（200）で打ち切った/)).toBeTruthy();
+    });
+
+    it('observed かつ確かめきれなかった申告が無いとき「探しきっていない」を出さない（Issue #1885 の対照）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'done',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+        },
+      });
+
+      expect(await screen.findByText(/branch=feat\/x/)).toBeTruthy();
+      expect(screen.queryByText(/探しきっていない/)).toBeNull();
+    });
+
     it('知らない kind でも落ちない（#1623 / #1630 の流儀）', async () => {
       renderDetail({
         ...BASE,

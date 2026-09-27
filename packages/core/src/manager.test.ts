@@ -6078,6 +6078,94 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
   });
 
   /**
+   * **Issue #1885** — `runner.unpushedWork()` が「確かめきれなかった」ことの
+   * 4欄（`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
+   * `unreadableDirCount`）を返したとき、台帳（`unpushedWorkObservationOf`）は
+   * それをそのまま写す。**`unreadableDirSample`（絶対パスを含む1件）だけは
+   * 写さない**——`observedWorktreeBranchSchema` の doc が引く「絶対パスその
+   * ものは出さない」線の外になるため。
+   *
+   * 直す前は `unpushedWorkObservationOf` が `worktrees` しか写さないので、
+   * この歯は赤くなる（4欄とも `undefined` のまま台帳に残る）。
+   */
+  it('report でターンが終わると、確かめきれなかったことの4欄が台帳に残り、unreadableDirSample だけは残らない（Issue #1885）', async () => {
+    const fake = swappableRunner('runner-primary');
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork() {
+        return {
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/1885-incomplete' }],
+          truncatedAtCount: 50,
+          stoppedEarly: true,
+          scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった: EACCES）',
+          unreadableDirCount: 3,
+          unreadableDirSample: '/workspace/mgr-1/locked: EACCES',
+        };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.report(managerId, '完了しました');
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+
+    const job = await jobOf(s, managerId);
+    expect(job?.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'observed',
+      truncatedAtCount: 50,
+      stoppedEarly: true,
+      scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった: EACCES）',
+      unreadableDirCount: 3,
+    });
+    // **`unreadableDirSample` は台帳に無い**——写さないと決めた1点。
+    expect(job?.lastUnpushedWorkObservation).not.toHaveProperty('unreadableDirSample');
+
+    await s.pool.stop();
+  });
+
+  /**
+   * **Issue #1885 の対照**——4欄がどれも載っていない `UnpushedWorkResult`
+   * （いまある大多数の呼び出し）は、台帳にもこの4欄が1つも増えない
+   * （`Object.keys` で数える——`undefined` を書き込んでも `toMatchObject` は
+   * 気づかないため、ここだけは `toEqual` に近い形で確かめる）。
+   */
+  it('確かめきれなかった申告が無い観測は、台帳にもこの4欄が1つも増えない（Issue #1885）', async () => {
+    const fake = swappableRunner('runner-primary');
+    const runner: RunnerClient = {
+      ...fake.runner,
+      async unpushedWork() {
+        return {
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/1885-complete' }],
+        };
+      },
+    };
+    const stores = createMemoryStores();
+    const s = setup(undefined, { stores, runner });
+    const { managerId } = await s.pool.start({ request: '確認' });
+
+    fake.report(managerId, '完了しました');
+
+    await expect
+      .poll(async () => (await jobOf(s, managerId))?.lastUnpushedWorkObservation, {
+        timeout: 2000,
+      })
+      .toMatchObject({ kind: 'observed' });
+
+    const observation = (await jobOf(s, managerId))?.lastUnpushedWorkObservation;
+    expect(Object.keys(observation ?? {}).sort()).toEqual(['at', 'cwd', 'kind', 'source', 'worktrees']);
+
+    await s.pool.stop();
+  });
+
+  /**
    * **配達の順序の歯**: `report` の配達（台帳の `lastReport` / inbox）は、
    * `unpushedWork` の runner との往復が終わるのを待たない。`unpushedWork` を
    * 手で握って（`gate`）戻らないようにしても、配達はその間に終わっている
