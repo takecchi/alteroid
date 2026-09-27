@@ -228,8 +228,7 @@ describe('alteroid logout', () => {
 
   it('サーバへ届かない（接続拒否）→ 手元の資格を消さず、失敗で終わる', async () => {
     vi.mocked(credentials.readCredential).mockResolvedValue(STORED);
-    globalThis.fetch = (() =>
-      Promise.reject(new Error('connect ECONNREFUSED'))) as typeof fetch;
+    globalThis.fetch = (() => Promise.reject(new Error('connect ECONNREFUSED'))) as typeof fetch;
 
     await expect(logoutCommand()).rejects.toThrow('サーバ側のトークンをまだ失効できていません');
     expect(credentials.clearCredential).not.toHaveBeenCalled();

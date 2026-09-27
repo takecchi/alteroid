@@ -698,10 +698,11 @@ describe('createAuthService', () => {
         provider: 'fake',
         redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
       });
-      const state = decodeState(
-        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
-      );
-      await service.completeLogin({ state: `${state?.requestId}.${state?.nonce}`, code: 'code-alice' });
+      const state = decodeState(new URL(second.authorizationUrl).searchParams.get('state') ?? '');
+      await service.completeLogin({
+        state: `${state?.requestId}.${state?.nonce}`,
+        code: 'code-alice',
+      });
       const secondClaimed = await service.claim({
         requestId: second.requestId,
         claimSecret: second.claimSecret,

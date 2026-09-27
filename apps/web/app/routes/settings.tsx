@@ -96,9 +96,7 @@ function Account() {
             </div>
             {logoutError !== null && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-danger">
-                <span className="break-words">
-                  サーバ側を失効させられなかった: {logoutError}
-                </span>
+                <span className="break-words">サーバ側を失効させられなかった: {logoutError}</span>
                 <button
                   type="button"
                   onClick={() => {

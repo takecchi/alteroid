@@ -120,9 +120,7 @@ export async function loginCommand(options: { provider?: string }): Promise<void
 }
 
 type ServerLogoutOutcome =
-  | { kind: 'revoked' }
-  | { kind: 'already-invalid' }
-  | { kind: 'failed'; detail: string };
+  { kind: 'revoked' } | { kind: 'already-invalid' } | { kind: 'failed'; detail: string };
 
 /**
  * `POST /auth/logout` を叩く。**投げない**（成否をどう扱うかは呼び手の仕事）。
