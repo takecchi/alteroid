@@ -1053,9 +1053,22 @@ function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
  *   断りに相当する確認の一手が無い）。定数をそのまま転記すると、押しても
  *   出てこない道具名を人間に読ませることになる
  * - **`LostNote`（このファイル、上）が既に採っている作法に倣う**——
- *   クローン向けの原文を、画面が既に持っている確かめ先（`LostNote` は
- *   「最後の報告」とセッションログ、ここは診断カード自身が持つ
- *   `UnpushedWorkObservationNote`）へ差し替えた画面の語で言い換える
+ *   確かめ先の主は「起こし直す前に、まずリモート（PR・ブランチ・コミット）を
+ *   確かめること」と同じ語にする。**`UnpushedWorkObservationNote`
+ *   （「未push観測」）は主ではなく補助——最初のレビューでは確かめ先の主に
+ *   据えたが、2つ理由で降格した**:
+ *   1. `manager.lastUnpushedWorkObservation` が `undefined` なら
+ *      `UnpushedWorkObservationNote` 自身が `null` を返して**何も描かない**
+ *      （一度も観測が無い委譲では、指した先が画面に存在しない）
+ *   2. 在っても、それは「`manager_stop` の断り・`report` 終わり・`git push`
+ *      検出のいずれかで取った**最後の1回**であって、いまの状態そのものでは
+ *      ない」（`describeUnpushedWorkObservation` の doc・この下の
+ *      `unpushedWorkText` の `provenance` と同じ注意）——**それだけを見て
+ *      「確かめた」とは言えない**
+ * - **⟹ 観測の有無で文言を分ける。** 観測が在るときだけ、「未push観測」にも
+ *   最後の観測が出ている（いまの状態ではないという断りごと）という一文を
+ *   補助として足す。無いときはその一文自体を出さない——`AGENTS.md`
+ *   「無い欄は行ごと出さない」と同じ向きで、存在しない参照先を指さない
  * - **定数を import しない代わりに、上の核2つは1文字も削らない。**
  *   `pnpm check:stale-token-restart-advice` が生成元の外で禁じているのは
  *   助言の行動そのものを指す逐語と、#914 が名指しした過小な旧文言の2つの
@@ -1069,6 +1082,7 @@ function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
   const value = manager.resetTimeSkewMatch;
   if (value === undefined) return null;
   if (value === 'stale') {
+    const hasUnpushedWorkObservation = manager.lastUnpushedWorkObservation !== undefined;
     return (
       <>
         ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の
@@ -1076,9 +1090,15 @@ function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
         鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。
         この行が消えないまま 429 が続くようなら、
         <strong className="font-medium">
-          止める前に、まず下の「未push観測」で進行中の作業を確かめること
+          止める前に、まずリモート（PR・ブランチ・コミット）を確かめること
         </strong>
-        。確かめずに止めると、
+        。
+        {hasUnpushedWorkObservation && (
+          <>
+            下の「未push観測」にも最後の観測が出ている（いまの状態ではない）ので、合わせて見ること。
+          </>
+        )}
+        確かめずに止めると、
         <strong className="font-medium">失われるのは会話だけではない</strong>
         ——そのターンで進行中だった作業も一緒に失われうる。確かめたうえで、起こし直すこと。
         <strong className="font-medium">この印は枠(利用上限)で止まっている間だけ意味を持つ</strong>

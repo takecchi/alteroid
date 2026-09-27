@@ -1457,21 +1457,58 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
 
     /**
      * core が1本化した安全弁（`STALE_TOKEN_RESTART_ADVICE`）の骨を、この画面の
-     * 語で運べているかを見る（Issue #1845）。**削ってはいけないのは2つ**——
-     * (1) 止める前に確かめること・確かめる先を名指しすること、
-     * (2) 失われるのは会話だけではないこと。
+     * 語で運べているかを見る（Issue #1845 / そのレビュー指摘）。**削っては
+     * いけないのは3つ**——
+     * (1) 止める前に確かめること・確かめ先の主（リモート）を名指しすること、
+     * (2) 失われるのは会話だけではないこと、
+     * (3) `lastUnpushedWorkObservation` が無い委譲では、存在しない
+     *     「未push観測」を指さないこと——最初のレビューでは確かめ先の主を
+     *     「未push観測」に置いたが、観測が一度も無い委譲では
+     *     `UnpushedWorkObservationNote` 自身が `null` を返して何も描かない
+     *     （指した先が画面に無い）うえ、在っても「最後の1回であって、いまの
+     *     状態ではない」（`describeUnpushedWorkObservation` の断り）ので、
+     *     主役には据えられない。だから主は `LostNote` と同じ「リモート」に
+     *     揃え、「未push観測」は在るときだけ足す補助にした。
      */
     it('stale の「起こし直すこと」に、止める前に確かめる案内と「会話だけではない」を添える（#1845）', async () => {
       renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
 
       expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
-      // (1) 確かめろ、確かめる先（この画面の「未push観測」）を名指しする。
+      // (1) 確かめろ、確かめ先の主（リモート）を名指しする。`LostNote` と同じ語。
       expect(
-        screen.getByText(/止める前に、まず下の「未push観測」で進行中の作業を確かめること/),
+        screen.getByText(/止める前に、まずリモート（PR・ブランチ・コミット）を確かめること/),
       ).toBeTruthy();
       // (2) #914 が名指しした過小な言い方（「会話は失われる」）へ戻っていない。
       expect(screen.getByText(/失われるのは会話だけではない/)).toBeTruthy();
       expect(document.body.textContent ?? '').not.toContain('会話は失われる');
+      // (3) 未push観測が無いのだから、それを指す一文も出ない。
+      expect(screen.queryByText(/下の「未push観測」/)).toBeNull();
+    });
+
+    it('stale かつ未push観測が在るときだけ、それを見る案内を補助として添える（#1845 のレビュー指摘）', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'running',
+        resetTimeSkewMatch: 'stale',
+        lastUnpushedWorkObservation: {
+          kind: 'observed',
+          at: '2026-08-16T03:50:00.000Z',
+          cwd: '/work/project',
+          worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+        },
+      });
+
+      expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+      // 主（リモート）は観測の有無に関わらず出る。
+      expect(
+        screen.getByText(/止める前に、まずリモート（PR・ブランチ・コミット）を確かめること/),
+      ).toBeTruthy();
+      // 補助（未push観測）は在るときだけ、かつ「いまの状態ではない」の断りごと出る。
+      expect(
+        screen.getByText(/下の「未push観測」にも最後の観測が出ている（いまの状態ではない）/),
+      ).toBeTruthy();
+      // 実際の「未push観測」欄自体も出ている（指した先が画面に実在する）。
+      expect(screen.getByText(/branch=feat\/x/)).toBeTruthy();
     });
 
     it('active なら「待てば戻る」を出す', async () => {
