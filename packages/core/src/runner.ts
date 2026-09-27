@@ -4282,11 +4282,7 @@ class RunnerSession {
       record.agentId === undefined
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-    const key = oneShotAllowKey(
-      oneShotActorOf(this.#id, record),
-      toolName,
-      digestOf(matchInput),
-    );
+    const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(matchInput));
     const grant = this.#oneShotAllows.get(key);
     if (grant === undefined) return { kind: 'continue' };
     // 使い切る。一致しても1回だけ。

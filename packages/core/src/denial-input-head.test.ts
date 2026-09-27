@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDenialInputHead, DENIAL_INPUT_HEAD_LIMIT, matchInputOf } from './denial-input-head.js';
+import {
+  buildDenialInputHead,
+  DENIAL_INPUT_HEAD_LIMIT,
+  matchInputOf,
+} from './denial-input-head.js';
 
 /**
  * `buildDenialInputHead`（拒否より前に見た入力の先頭。issue #1105）。
