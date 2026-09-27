@@ -1159,3 +1159,122 @@ describe('聞けなかった器は、聞けた器より前に出ない（#712 �
     await registry.stop();
   });
 });
+
+/**
+ * Issue #1394 の「残り」——「自動畳みの契機が `runner_list resources:true` の
+ * 1つだけ」に2つ目を足す。**この配置（`select` / `#place`）は、追加の判定・
+ * 実行を何も持たない**——`RunnerRegistryOptions.onPlacementResources` は、
+ * 配置のために全台へ既に払った `resources()` の結果を横流しするだけの、
+ * 配置の外への通知口である。判定・実行（段⑤〜⑦）は呼び出し元
+ * （`ManagerPool#autoFoldOnPlacementPressure`。`manager.test.ts` の
+ * 「もう1つの契機」が固定している）が持つ。ここで確かめるのは、この通知口
+ * 自体が「新しい往復を足さない」「既存の3値（見ていない／見て0件／見て
+ * 何か在った）を混ぜない」という約束を守っていることだけである。
+ */
+describe('配置の resources を配置の外へ渡す（RunnerRegistryOptions.onPlacementResources、#1394）', () => {
+  it('配置が決まった直後に、#place が既に払った resources の結果をそのまま渡す（新しい往復を足さない）', async () => {
+    const a = new FakeRunner('runner-a', { managers: 0, pids: { current: 900, max: 1000 } });
+    const b = new FakeRunner('runner-b', { managers: 0, pids: { current: 100, max: 1000 } });
+    const received: { runnerId: string; resources: RunnerPlacementResources | undefined }[][] = [];
+    const registry = createRunnerRegistry([a, b], {
+      onPlacementResources: (reports) => {
+        received.push([...reports]);
+      },
+    });
+
+    await registry.select({});
+
+    expect(received).toHaveLength(1);
+    expect(new Set(received[0]?.map((r) => r.runnerId))).toEqual(new Set(['runner-a', 'runner-b']));
+    expect(received[0]?.find((r) => r.runnerId === 'runner-a')?.resources).toEqual(a.report);
+    expect(received[0]?.find((r) => r.runnerId === 'runner-b')?.resources).toEqual(b.report);
+    // **新しい往復は無い。** `#place` が配置のために聞いた1回（`asked`）だけが
+    // そのまま使われる——`onPlacementResources` を配線したことで `resources()`
+    // がもう1回呼ばれるなら、ここが2になるはずである。
+    expect(a.asked).toBe(1);
+    expect(b.asked).toBe(1);
+
+    await registry.stop();
+  });
+
+  it('1台しか無ければ #place を経由しないので、onPlacementResources も呼ばれない（既知の制約）', async () => {
+    // **`select()` は「1台しか無いなら聞きに行かない」**（`Registry#select` の
+    // doc）——この2つ目の契機は `#place` に相乗りしているので、単一 runner
+    // 構成では配置のたびに評価される機会が無い。逼迫はもう1つの契機
+    // （`runner_list resources:true`）でなら拾える——「配置のたびに評価される
+    // わけではない」という制約をここに固定する。
+    const only = new FakeRunner('runner-only', { managers: 0, pids: { current: 999, max: 1000 } });
+    let called = false;
+    const registry = createRunnerRegistry([only], {
+      onPlacementResources: () => {
+        called = true;
+      },
+    });
+
+    await registry.select({});
+
+    expect(called).toBe(false);
+    expect(only.asked).toBe(0);
+
+    await registry.stop();
+  });
+
+  it('runnerId をまだ聞けていない器（runnerIdKnown が false）は渡さない（既定値との取り違えを避ける）', async () => {
+    const known = new FakeRunner('runner-known', {
+      managers: 0,
+      pids: { current: 900, max: 1000 },
+    });
+    const unknownInner = new FakeRunner('runner-primary', {
+      managers: 0,
+      pids: { current: 900, max: 1000 },
+    });
+    // **`runnerIdKnown` だけを偽装する。** `RunnerClient.runnerId` の doc の
+    // とおり、名乗りをまだ聞けていない器も既定値（多くは `'runner-primary'`）を
+    // 持つ——ここでは実際に衝突する名前を選び、`runnerIdKnown` を見ずに
+    // `runnerId` だけで渡すと「もう1台の runner-primary」を騙ってしまうことを
+    // 確かめられる形にした。
+    const unknown = new Proxy(unknownInner, {
+      get(target, prop, receiver) {
+        if (prop === 'runnerIdKnown') return false;
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as FakeRunner;
+    const received: { runnerId: string }[][] = [];
+    const registry = createRunnerRegistry([known, unknown], {
+      onPlacementResources: (reports) => {
+        received.push([...reports]);
+      },
+    });
+
+    await registry.select({});
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.map((r) => r.runnerId)).toEqual(['runner-known']);
+
+    await registry.stop();
+  });
+
+  it('資源を聞けなかった（unreachable）器も、runnerId が分かっていれば resources: undefined として渡す（居なかったことにしない）', async () => {
+    const broken = new FakeRunner('runner-broken', { managers: 0 });
+    broken.fails = true;
+    const healthy = new FakeRunner('runner-healthy', {
+      managers: 0,
+      pids: { current: 900, max: 1000 },
+    });
+    const received: { runnerId: string; resources: RunnerPlacementResources | undefined }[][] = [];
+    const registry = createRunnerRegistry([broken, healthy], {
+      onPlacementResources: (reports) => {
+        received.push([...reports]);
+      },
+    });
+
+    await registry.select({});
+
+    expect(received).toHaveLength(1);
+    const brokenReport = received[0]?.find((r) => r.runnerId === 'runner-broken');
+    expect(brokenReport).toBeDefined();
+    expect(brokenReport?.resources).toBeUndefined();
+
+    await registry.stop();
+  });
+});

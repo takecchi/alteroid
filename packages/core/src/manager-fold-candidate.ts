@@ -14,9 +14,16 @@ import type { JobStatus } from './schema.js';
  * `ManagerPool.abort()` を呼ぶようになった。** 畳む・呼ぶのはあちら側で、
  * この関数自体は今日も判定しかしない——「この関数が畳む」わけではないが、
  * 「この関数の結果を使ってどこかが畳むことはある」に変わっている。契機は
- * `ManagerPool#runners()` が `resources: true` で pids を受け取った時点
- * （新しい周期処理は足していない）。読み手が「表示だけの機能」と早合点
- * しないよう、ここに一言残す。
+ * 2つある——どちらも「デーモンが既に払った往復」の結果を拾うだけで、
+ * この判定のために新しい周期処理・新しい往復は足していない:
+ *
+ * 1. `ManagerPool#runners()` が `resources: true` で pids を受け取った時点
+ *    （`runner_list resources:true`）
+ * 2. `manager_start` の自動配置（`RunnerRegistry#place`）が全台の resources
+ *    を聞いた時点（`ManagerPool#autoFoldOnPlacementPressure`。同 Issue の
+ *    「残り」——契機が (1) だけだったところに足した）
+ *
+ * 読み手が「表示だけの機能」と早合点しないよう、ここに一言残す。
  *
  * ## 候補の条件（すべて AND）
  *
