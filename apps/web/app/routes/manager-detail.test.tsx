@@ -1455,6 +1455,25 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(document.body.textContent).not.toContain('**');
     });
 
+    /**
+     * core が1本化した安全弁（`STALE_TOKEN_RESTART_ADVICE`）の骨を、この画面の
+     * 語で運べているかを見る（Issue #1845）。**削ってはいけないのは2つ**——
+     * (1) 止める前に確かめること・確かめる先を名指しすること、
+     * (2) 失われるのは会話だけではないこと。
+     */
+    it('stale の「起こし直すこと」に、止める前に確かめる案内と「会話だけではない」を添える（#1845）', async () => {
+      renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'stale' });
+
+      expect(await screen.findByText(/認証トークンの世代ずれの疑い/)).toBeTruthy();
+      // (1) 確かめろ、確かめる先（この画面の「未push観測」）を名指しする。
+      expect(
+        screen.getByText(/止める前に、まず下の「未push観測」で進行中の作業を確かめること/),
+      ).toBeTruthy();
+      // (2) #914 が名指しした過小な言い方（「会話は失われる」）へ戻っていない。
+      expect(screen.getByText(/失われるのは会話だけではない/)).toBeTruthy();
+      expect(document.body.textContent ?? '').not.toContain('会話は失われる');
+    });
+
     it('active なら「待てば戻る」を出す', async () => {
       renderDetail({ ...BASE, status: 'running', resetTimeSkewMatch: 'active' });
 

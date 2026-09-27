@@ -1039,6 +1039,31 @@ function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
  * **未知の値でも落ちない**（#1623 / #1630 の流儀）。既知の2値
  * （`'stale'` / `'active'`）のどちらでもなければ、その旨をそのまま出す——
  * 版のずれで新しいデーモンがこの画面の知らない値を返しても、画面ごと落ちない。
+ *
+ * **`'stale'` の「起こし直すこと」には、core が1本化した安全弁を添える**
+ * （Issue #1845）。`packages/core/src/usage-limits.ts` の
+ * `STALE_TOKEN_RESTART_ADVICE`（#1175 / #1287 を経て、`tools.ts` の呼び出し
+ * 箇所5箇所がこの1本だけを呼ぶ形に揃えた正本）が運ぶ核は2つ——(1) 止める前に、
+ * その委譲がターンの途中かどうかを確かめること (2) 失われるのは会話だけでは
+ * なく、進行中だった作業も失われること。この画面はその定数を import しない。
+ *
+ * - **定数の文面はクローンの道具の名（`manager_stop` の断り）を名指しするが、
+ *   その道具はこの画面には無い。** 人間はここでは「停止する」ボタンを押す
+ *   だけで、押した瞬間に `abortManager` が呼ばれて一覧へ戻る（クローン向けの
+ *   断りに相当する確認の一手が無い）。定数をそのまま転記すると、押しても
+ *   出てこない道具名を人間に読ませることになる
+ * - **`LostNote`（このファイル、上）が既に採っている作法に倣う**——
+ *   クローン向けの原文を、画面が既に持っている確かめ先（`LostNote` は
+ *   「最後の報告」とセッションログ、ここは診断カード自身が持つ
+ *   `UnpushedWorkObservationNote`）へ差し替えた画面の語で言い換える
+ * - **定数を import しない代わりに、上の核2つは1文字も削らない。**
+ *   `pnpm check:stale-token-restart-advice` が生成元の外で禁じているのは
+ *   助言の行動そのものを指す逐語と、#914 が名指しした過小な旧文言の2つの
+ *   逐語であって、意味を保った言い換えではない
+ *   （`check-stale-token-restart-advice-core.mjs` の doc「言い換えは
+ *   捕まえられない」。⚠ この doc 自身が禁じられた逐語を引用すると、将来この
+ *   検査が `.tsx` まで対象を広げたときに自分自身へ誤検知するので、ここでは
+ *   逐語を引用しない）
  */
 function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
   const value = manager.resetTimeSkewMatch;
@@ -1049,7 +1074,13 @@ function resetTimeSkewText(manager: ManagerSummary): ReactNode | null {
         ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、現役ではない鍵の
         冷却期限と一致した）。このセッションは古い鍵を掴んだまま走っている可能性がある ——
         鍵が通る状態へ戻っても、このセッション自身はターンの境界に達するまで戻らない。
-        この行が消えないまま 429 が続くようなら、起こし直すこと。
+        この行が消えないまま 429 が続くようなら、
+        <strong className="font-medium">
+          止める前に、まず下の「未push観測」で進行中の作業を確かめること
+        </strong>
+        。確かめずに止めると、
+        <strong className="font-medium">失われるのは会話だけではない</strong>
+        ——そのターンで進行中だった作業も一緒に失われうる。確かめたうえで、起こし直すこと。
         <strong className="font-medium">この印は枠(利用上限)で止まっている間だけ意味を持つ</strong>
         ——枠から下りれば一緒に消える。
       </>
