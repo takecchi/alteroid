@@ -898,11 +898,19 @@ export interface WidenedLineNumberCitationExemption {
 
 /**
  * 免除は「理由付き」であること（#756 `tool-description-enumeration.test.ts` の
- * 免除表と同じ形）。**⭐ いまは0件——2026-09-10 の実測で、#760 が29件、この PR が
- * 残り1件（`packages/core/src/memory.ts` の `store.ts:48-53` 引用。#760 が
+ * 免除表と同じ形）。2026-09-10 の実測で、#760 が29件、別の PR が残り1件
+ * （`packages/core/src/memory.ts` の `store.ts:48-53` 引用。#760 が
  * 「別委譲が同じファイルを持っているため範囲外にした」としていたが、その委譲は
  * 着地済みで `gh pr list --json files` に `memory.ts` を触る開いた PR は
- * 無かったため、この PR で直した）を直したので、免除するものが無い。**
+ * 無かったため、その PR で直した）を直したので、いったん免除するものが無くなった。
+ *
+ * **#1192 の再編（PR2）で1件足した** — `schema.ts:500-503`。もとは
+ * `AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS`（下）が持っていた、AGENTS.md
+ * 「リポジトリの約束」の実例(2026-08-23) 由来の証拠だが、#1192 で AGENTS.md から
+ * `.claude/agents-md-records/repo-conventions.md` へ逐語のまま移した結果、
+ * この歯の対象範囲（`.claude/**`）に入った。移設は内容を変えていないので、
+ * 免除の理由も変わらない——出典ではなく証拠。
+ *
  * 1件でも新しく免除するなら、ここへ理由つきで足すこと。
  *
  * ⛔ **`scripts/mutate-unhandled-errors.test.ts` が持つ1件（`scripts/check-tracked-nul-bytes.test.ts:43`）
@@ -911,7 +919,17 @@ export interface WidenedLineNumberCitationExemption {
  * 意味が変わる。そちらは `CAPTURED_OUTPUT_NON_CITATIONS`（下）が別枠で持つ。
  */
 export const WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS: readonly WidenedLineNumberCitationExemption[] =
-  [];
+  [
+    {
+      file: '.claude/agents-md-records/repo-conventions.md',
+      token: 'schema.ts:500-503',
+      why:
+        '出典ではなく証拠。AGENTS.md「リポジトリの約束」の実例(2026-08-23) が、この文書が' +
+        'かつて `schema.ts:500-503`（現物は packages/core/src/schema.ts）という出典を書いて' +
+        '行番号が腐った、という過去の実測を逐語で引用している箇所。#1192 の再編（PR2）で ' +
+        'AGENTS.md からこのファイルへ逐語のまま移した。書き換えると証拠そのものが消える。',
+    },
+  ];
 
 export interface CapturedOutputNonCitation {
   readonly file: string;
@@ -967,32 +985,28 @@ export interface AgentsMdLineNumberCitationExemption {
  * #784: 段A（直下の describe 内、AGENTS.md 専用）の解決器を `isRepoFile`
  * （リポジトリ相対パスの完全一致のみ）から `isRepoFileOrBasename`（裸の
  * ファイル名も解決する。#760）へ差し替えたところ、新たに1件が検出される
- * ようになった——`schema.ts:500-503`。
+ * ようになった——`schema.ts:500-503`（AGENTS.md「リポジトリの約束」の
+ * 実例(2026-08-23) の段落。この文書がかつて `schema.ts:500-503`
+ * （現物は `packages/core/src/schema.ts`）という出典を書いていて行番号が
+ * 腐った、という過去の実測そのものを逐語で引用していた箇所）。
  *
- * ⛔ **これは出典ではなく証拠なので、免除する。** AGENTS.md「リポジトリの
- * 約束」節が、この文書がかつて `schema.ts:500-503`（現物は
- * `packages/core/src/schema.ts`）という出典を書いていて行番号が腐った、
- * という**過去の実測そのもの**を逐語で引用している箇所である
- * （実例(2026-08-23) の段落）。書き換えると、腐った過去の実測という証拠が
- * 消える（AGENTS.md「生の出力（スタックトレース・過去の実測）の中の行番号は
- * 書き換えない。あれは出典ではなく証拠である」）。
+ * **⭐ いまは0件——#1192 の再編（PR2、2026-09-27）で、AGENTS.md「リポジトリの
+ * 約束」節の (c) 実測記録・実例を `.claude/agents-md-records/` へ逐語のまま
+ * 移した。** この `schema.ts:500-503` の段落もそのまま移設したので、AGENTS.md
+ * 自体からは対象の文言が消え、段A（AGENTS.md 専用）の免除は不要になった。
+ * 移設先（`.claude/agents-md-records/repo-conventions.md`）は段B
+ * （`.claude/**`）の対象範囲に入るため、同じ免除は
+ * `WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS`（下）へ移した——理由は変わらない
+ * （出典ではなく証拠）。この免除表が空でも「幽霊免除」を測る直下の歯は空配列を
+ * 相手に自明に通る。
  *
- * ⚠️ ここへ足してよいのは、この1件と同じ形（過去の実測・証拠の引用）だけ
- * である。出典として書かれた `path:行番号` はここへ免除せず、逐語か
- * シンボル名へ書き直すこと（`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` の
+ * ⚠️ ここへ足してよいのは、過去の実測・証拠の引用で、かつ AGENTS.md 本体に
+ * 実在するものだけである。出典として書かれた `path:行番号` はここへ免除せず、
+ * 逐語かシンボル名へ書き直すこと（`WIDENED_LINE_NUMBER_CITATION_EXEMPTIONS` の
  * doc comment と同じ考え方）。
  */
 export const AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS: readonly AgentsMdLineNumberCitationExemption[] =
-  [
-    {
-      token: 'schema.ts:500-503',
-      why:
-        '出典ではなく証拠。AGENTS.md「リポジトリの約束」の実例(2026-08-23) が、' +
-        'この文書がかつて `schema.ts:500-503`（現物は packages/core/src/schema.ts）' +
-        'という出典を書いていて行番号が腐った、という過去の実測を逐語で引用している' +
-        '箇所。書き換えると証拠そのものが消える（#784）。',
-    },
-  ];
+  [];
 
 const TRACKED_FILES = listTrackedFiles();
 const WIDENED_SCOPE_FILES = excludeCitationScopeSelf(TRACKED_FILES.filter(isWidenedScopeFile));
@@ -1000,6 +1014,17 @@ const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(TRACKED_FILES);
 
 const agentsMd = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
 const prose = proseLines(agentsMd);
+
+// #1192 の再編（PR2）で、下の2本の実演テストが前提にしていた `schema.ts:500-503`
+// の段落は AGENTS.md からこのファイルへ逐語のまま移った（移設の経緯は
+// `AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS` の doc comment）。同じ具体例を
+// 使って同じ挙動（isRepoFile は裸のファイル名を検出しない）を実演し続けるため、
+// 実演の対象をこのファイルへ差し替える。
+const repoConventionsRecord = readFileSync(
+  path.join(ROOT, '.claude/agents-md-records/repo-conventions.md'),
+  'utf8',
+);
+const repoConventionsRecordProse = proseLines(repoConventionsRecord);
 
 /**
  * **被覆の歯だけが名指しで測る1ファイル。**
@@ -1130,37 +1155,39 @@ describe('AGENTS.md の参照の形（#369）', () => {
     ).toEqual([]);
   });
 
-  it('現状: 段A（AGENTS.md 専用）の解決器 isRepoFile は裸のファイル名（schema.ts:500-503）を検出しない（#784）', () => {
-    // 経緯（#784）: 直上の歯が使っていた `isRepoFile`（このファイル内の関数。
-    // リポジトリ相対パスの完全一致だけを `statSync` で確かめる）は、
-    // `clone.ts:505` のような**裸のファイル名**を1件も解決できない
-    // （#760 の実測: 30件中25件・83%が裸のファイル名）。AGENTS.md
-    // 「リポジトリの約束」節はいままさにこの形（`schema.ts:500-503`）で
-    // 過去の実測を引用しており、これが段Aの死角そのものである——本来なら
-    // `.claude/**` / `*/src/**` 等を測る段B（`isRepoFileOrBasename`。#760）
-    // なら拾える形なのに、段Aは1件も見ない。ここでは、その死角を
-    // 「いまの挙動」としていったん固定する（AGENTS.md「テストを弱めずに
-    // 直す」の「現行の欠陥を仕様として固定しているテストは反転させてよい」）。
+  it('現状: isRepoFileOrBasename は裸のファイル名（schema.ts:500-503、#1192 の再編で移った先の記録ファイル）を検出する（#784・#1192）', () => {
+    // 経緯（#784）: `isRepoFile`（このファイル内の関数。リポジトリ相対パスの
+    // 完全一致だけを `statSync` で確かめる）は、`clone.ts:505` のような
+    // **裸のファイル名**を1件も解決できない（#760 の実測: 30件中25件・83%が
+    // 裸のファイル名）。もともと AGENTS.md「リポジトリの約束」節がいままさに
+    // この形（`schema.ts:500-503`）で過去の実測を引用しており、これが段Aの
+    // 死角そのものだった。
     //
-    // この行が実在することは、下のテストが独立に確認する
-    // （`grep -Fn -- 'schema.ts:500-503' AGENTS.md` が1件当たること）。
+    // 【#1192 の再編（PR2）での追記】この段落は AGENTS.md から
+    // `.claude/agents-md-records/repo-conventions.md` へ逐語のまま移った
+    // （経緯は `AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS` の doc comment）。
+    // 対象が AGENTS.md 本体では無くなったので、この実演は移設先のファイルへ
+    // 差し替える——同じ具体例で、`isRepoFile` は検出せず
+    // `isRepoFileOrBasename` は検出する、という同じ距離を示す。
     //
-    // 【直した後の追記（#784）】直上の本題の歯の解決器を isRepoFileOrBasename へ
-    // 差し替えたので、いまはこの token を検出する——期待値を反転する。検出
-    // されても本題の歯が違反として鳴らないのは、
-    // AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS で明示的に免除しているからで
-    // ある（この token は出典ではなく証拠なので、免除する。上の const の doc
-    // comment 参照）。
-    const found = findLineNumberCitations(prose, isRepoFileOrBasename);
+    // この行が実在することは、下のテストが独立に確認する。
+    const found = findLineNumberCitations(repoConventionsRecordProse, isRepoFileOrBasename);
     expect(found.some((c) => c.token === 'schema.ts:500-503')).toBe(true);
+    const notFoundByPlainIsRepoFile = findLineNumberCitations(
+      repoConventionsRecordProse,
+      isRepoFile,
+    );
+    expect(notFoundByPlainIsRepoFile.some((c) => c.token === 'schema.ts:500-503')).toBe(false);
   });
 
-  it('直上のテストが前提にしている行が、いま現物の AGENTS.md に実在する（#784）', () => {
-    // 上のテストは「見つからない」ことを主張するテストなので、対象の文言
-    // そのものが消えていても同じ結果（false）になる——それでは何も測って
+  it('直上のテストが前提にしている行が、いま現物の記録ファイルに実在する（#784・#1192）', () => {
+    // 上のテストは「見つかる」ことを主張するテストなので、対象の文言
+    // そのものが消えていても同じ結果（false）になりうる——それでは何も測って
     // いないのと区別が付かない。ここで「見る対象がまだそこに在る」ことを
     // 独立に確認する（見る対象が消えたら、こちらが先に落ちて気づける）。
-    expect(agentsMd.split('\n').filter((l) => l.includes('schema.ts:500-503')).length).toBe(1);
+    expect(
+      repoConventionsRecord.split('\n').filter((l) => l.includes('schema.ts:500-503')).length,
+    ).toBe(1);
   });
 
   it('「N行目」で指さない', () => {
@@ -2520,7 +2547,16 @@ export const MISSING_CANON_PATH_EXEMPTIONS: readonly MissingCanonPathExemption[]
   {
     file: 'AGENTS.md',
     token: 'docs/roadmap.md',
-    why: '廃止そのものを説明している2行（「ここには4本目として … 実装計画 … が在ったが、2026-08-26 に廃止した」と「かつて … の進捗チェックボックスだけが例外だったが、その文書は廃止した」）。前者は同じ行に畳んだ住所 `git show 13d7794:…` を持ち、後者は指し先の内容を必要としない過去形の言及である ⟹ どちらも直すものが無い。',
+    why: '廃止そのものを説明している行（「かつて … の進捗チェックボックスだけが例外だったが、その文書は廃止した」）。指し先の内容を必要としない過去形の言及である ⟹ 直すものが無い。',
+  },
+  {
+    file: '.claude/agents-md-records/first-read.md',
+    token: 'docs/roadmap.md',
+    why:
+      '#1192 の再編（PR2）で AGENTS.md から逐語のまま移した、廃止そのものを説明している行' +
+      '（「ここには4本目として … 実装計画 … が在ったが、2026-08-26 に廃止した」）。同じ行に' +
+      "畳んだ住所 `git show 13d7794:…` を持つ ⟹ 直すものが無い。移設前は `file: 'AGENTS.md'` " +
+      'の免除がこの行も兼ねていた。',
   },
   {
     file: 'docs/architecture.md',

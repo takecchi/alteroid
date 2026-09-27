@@ -137,6 +137,16 @@ export const BUDGET_HISTORY = [
       '内容が失われていないことは移設前後のチャンク突き合わせで確かめた。',
     ref: 'https://github.com/takecchi/alteroid/issues/1192',
   },
+  {
+    date: '2026-09-27',
+    bytes: 67144,
+    lines: 355,
+    why:
+      '#1192 の再編 PR2: AGENTS.md に残った節から (c) 実測記録・実例を ' +
+      '.claude/agents-md-records/ へ逐語で移した。規則は本体に残し、各節から1行で辿れる。' +
+      '内容が失われていないことは移設前後のチャンク突き合わせで確かめた。',
+    ref: 'https://github.com/takecchi/alteroid/issues/1192',
+  },
 ];
 
 /** 現在の予算（バイト）。`BUDGET_HISTORY` の最新の件から導出する。 */
