@@ -40,9 +40,16 @@ import type { Stores } from './store.js';
  * `manager.ts` の帳面・`#emit`・`renotifyStalledDenials()` を単体で確かめる。
  */
 
+interface AnsweredCall {
+  requestId: string;
+  message: string;
+  decision?: 'allow' | 'deny';
+}
+
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
+  answeredCalls: AnsweredCall[];
   report(managerId: string, text: string, status: JobStatus): void;
   ask(managerId: string, requestId: string, summary: string): void;
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
@@ -53,6 +60,9 @@ interface ManualRunner {
 function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
+  // **`manager_send` が実際にどの `requestId` へ当てたかを控える**
+  // （issue #1772・「許しすぎる」側の確認用。下の「無関係な確認へ当たる」テスト）。
+  const answeredCalls: AnsweredCall[] = [];
 
   const runner: RunnerClient = {
     runnerId,
@@ -71,8 +81,13 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async send() {
       return true;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
+    async answer(_managerId, answer): Promise<RunnerAnswerOutcome> {
+      answeredCalls.push({
+        requestId: answer.requestId,
+        message: answer.message,
+        ...(answer.decision === undefined ? {} : { decision: answer.decision }),
+      });
+      return { delivered: true };
     },
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
@@ -104,6 +119,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   return {
     runner,
     alive,
+    answeredCalls,
     report(managerId, text, status) {
       emit?.({ type: 'report', managerId, text, status });
     },
@@ -238,6 +254,56 @@ describe('renotifyStalledDenials のクロスtool starvation（横断レビュ�
         delivered,
         'Bash の知らせ直しが届くべきだが、現行コードは無関係な未決確認の影響で止める',
       ).toBeDefined();
+
+      await pool.stop();
+    },
+  );
+
+  it(
+    '（既知の残留リスク・issue #1772 の範囲外）無関係な確認が未決のまま知らせ直しが届いた後、' +
+      'requestId 無しの decision はその無関係な確認へ当たる——`#choosePending` 自体は直していない',
+    async () => {
+      // **この歯は「直った」ことの確認ではない。** `renotifyStalledDenials()` の
+      // 判定を委譲ごとから拒否ごとへ戻した結果、無関係な未決の確認が1件だけ
+      // 在る状態のままクローンへ知らせ直しが届くようになった——それ自体は
+      // このファイルの主張（上のテスト）どおり直っている。**それでも
+      // `DENIAL_REPLY_ROUTE` は `requestId` を付けずに `decision` を送るなと
+      // 注意するだけで、`#choosePending`（`manager_send` が宛先を選ぶ判定）
+      // 自体はこの PR の範囲外（renotify 周りだけを触る指示）——クローンが
+      // その注意に反して `decision` だけを付けて返すと、待ちがちょうど1件
+      // （この無関係な確認）なので、そちらへ当たってしまう。** この歯は
+      // その現状（直していないこと）を実測で固定し、PR 本文で報告する
+      // ための対照である。
+      const { pool, stores, fake, advance } = await runningManualSetup();
+
+      fake.denied('mgr-denial-renotify-cross', 'Bash', {
+        actor: 'manager:mgr-denial-renotify-cross',
+      });
+      await waitForDenialJournaled(stores, 'Bash');
+      advance(TEN_MINUTES_MS + 1);
+
+      // Bash の拒否とは無関係な確認が1件、未決のまま残っている。
+      fake.ask('mgr-denial-renotify-cross', 'req-unrelated-2', '無関係などの許可確認');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      await pool.renotifyStalledDenials();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // クローンが `DENIAL_REPLY_ROUTE` の注意に反して、`requestId` を付けずに
+      // `decision` だけを付けて答えたとする（例: 知らせ直しを Bash への確認だと
+      // 誤解した）。
+      const result = await pool.send('mgr-denial-renotify-cross', 'よし、許可します', {
+        decision: 'allow',
+      });
+
+      // **実測: これは「答えた」ことになり、無関係な確認（`req-unrelated-2`）
+      // へ当たる。** Bash の拒否自体は `requestId` を持たない（`#choosePending`
+      // の doc）ので、当たり得るとしたら他に待っている確認しかない——それが
+      // ここでは無関係な確認の1件だけである。
+      expect(result.outcome).toBe('answered');
+      expect(fake.answeredCalls).toHaveLength(1);
+      expect(fake.answeredCalls[0]?.requestId).toBe('req-unrelated-2');
+      expect(fake.answeredCalls[0]?.decision).toBe('allow');
 
       await pool.stop();
     },
