@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import process from 'node:process';
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -674,5 +675,78 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
     });
 
     expect(result.scratchRootsUnknown).toBeUndefined();
+  });
+});
+
+describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めない（Issue #1826）', () => {
+  // `findManagerScratchRoots` は「探索の起点そのもの（`tmpRootDir` 自体）が
+  // 読めない」場面を #1765 段2（PR #1779）で `unknownReason` として名乗る
+  // ようになったが、同じ形の穴がもう一方の起点（`job.cwd`。こちらが主経路で、
+  // `/tmp` スクラッチはあくまで追加の起点）には残っていた——`findGitDirs` の
+  // `walk` は任意階層の `readdir` 失敗を意図して黙って諦める設計だが、それが
+  // 探索の**起点そのもの**の失敗にまで及び、「本当に0本だった」と「起点が
+  // 見えていない」を区別できなくしていた（Issue #1826）。
+
+  it('起点（job.cwd）が存在しない（ENOENT）とき、0本と混ぜずに例外で「確かめられなかった」を運ぶ', async () => {
+    const missingCwd = join(makeTempDirSync('alteroid-unpushed-work-missing-'), 'does-not-exist');
+
+    await expect(
+      computeUnpushedWork(missingCwd, { spawn: realSpawn, env: process.env }),
+    ).rejects.toThrow();
+  });
+
+  it('起点（job.cwd）に読み取り権限が無い（EACCES）とき、0本と混ぜずに例外で「確かめられなかった」を運ぶ', async () => {
+    const lockedCwd = join(makeTempDirSync('alteroid-unpushed-work-locked-'), 'locked');
+    mkdirSync(lockedCwd, { recursive: true });
+    chmodSync(lockedCwd, 0o000);
+    try {
+      // **root は権限ビットを無視できる**——`chmod 000` した後でも `readdir`
+      // が普通に成功しうる（CI が root で走ることもある。#1826 の依頼で
+      // 名指しされている）。そのときは「本当に空だった」が正しい答えなので、
+      // ここを `it.skip` にはしない（skip は CI で黙って飛ばされ、以後この
+      // 分岐が測られなくなる）——実際に読めたかどうかをその場で判定し、
+      // どちらの分岐でも意味のある assertion を必ず実行する。
+      const readableAsRoot = (() => {
+        try {
+          readdirSync(lockedCwd);
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+
+      if (readableAsRoot) {
+        const result = await computeUnpushedWork(lockedCwd, {
+          spawn: realSpawn,
+          env: process.env,
+        });
+        expect(result.worktrees).toHaveLength(0);
+      } else {
+        await expect(
+          computeUnpushedWork(lockedCwd, { spawn: realSpawn, env: process.env }),
+        ).rejects.toThrow();
+      }
+    } finally {
+      chmodSync(lockedCwd, 0o755);
+    }
+  });
+
+  it('起点より下（子ディレクトリ）の読み失敗は、これまでどおり黙って諦める（この PR では変えない）', async () => {
+    const top = makeTempDirSync('alteroid-unpushed-work-nested-locked-');
+    initRepo(join(top, 'visible'));
+    commitFile(join(top, 'visible'), 'a.txt', 'x\n', 'x');
+    const lockedChild = join(top, 'locked-child');
+    mkdirSync(lockedChild, { recursive: true });
+    chmodSync(lockedChild, 0o000);
+    try {
+      // 子ディレクトリが読めなくても、起点（`top`）自体は読めるので例外には
+      // ならない——見つかった分（`visible`）だけを正として返す、という
+      // 従来の設計（`findGitDirs` の doc）をこの PR では変えていないことを
+      // 固定する。
+      const result = await computeUnpushedWork(top, { spawn: realSpawn, env: process.env });
+      expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
+    } finally {
+      chmodSync(lockedChild, 0o755);
+    }
   });
 });
