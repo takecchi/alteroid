@@ -83,21 +83,17 @@ import { createApp } from './app.js';
 export const errorResponseSchema = z.object({ error: z.string() });
 
 /**
- * `validator('query', ...)` が検査に落ちたときの応答（hono-openapi の既定フック）。
- * `@hono/zod-validator` の 400 とは形が違う（`error` が issue の配列で入る）ので、
- * 手書きの `errorResponseSchema` とは別に持つ。
- *
- * **`json` の経路はもうこの形を返さない（#424）。** `data` にリクエスト本文が
- * 丸写しされる既定であり、資格を運ぶ経路でそれが実際に秘密を応答へ出していた。
- * `app.ts` の `jsonBody` が全経路で `hook` を挟み、`{ error: string }`
- * （＝`errorResponseSchema`）へ畳んでいる。**この形を `json` の経路の 400 の
- * 宣言に書かないこと** —— 書くと spec だけが「まだ `data` が返る」と言い続ける。
+ * **`validationErrorResponseSchema`（`{ data, error: <issue配列>, success: false }`）は
+ * ここに在ったが、いまは無い。** `hook` を渡さない `validator(...)` が検査に
+ * 落ちたときの、`@hono/standard-validator` の既定 400 の形——`json` の経路は
+ * issue #424（`jsonBody` が全経路に `hook` を配った）で先に卒業していたが、
+ * **`query` の経路（10箇所）は当時 `hook` を渡していないまま残っており、
+ * この形をいまも宣言していた。** HTTP 側の数値クエリ引数の検査を揃える PR
+ * （`app.ts` の `queryParams`——`jsonBody` と対になるラッパー）で `query` も
+ * 卒業させたので、この形を返す経路は1つも無くなった。**削除した。**
+ * 経緯そのものは `git log -p --follow -- apps/daemon/src/openapi.ts` で
+ * `validationErrorResponseSchema` を辿れば読める。
  */
-export const validationErrorResponseSchema = z.object({
-  data: z.unknown(),
-  error: z.array(z.unknown()),
-  success: z.literal(false),
-});
 
 // ---------------------------------------------------------------------------
 // /health

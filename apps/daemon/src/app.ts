@@ -183,7 +183,6 @@ import {
   tokensResponseSchema,
   tokensUpdateRequestSchema,
   usageResponseSchema,
-  validationErrorResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
 import {
@@ -1152,6 +1151,37 @@ function jsonBody<Schema extends z.ZodTypeAny>(
 }
 
 /**
+ * `validator('query', schema)` を常にこの形で呼ぶための薄いラッパー（`jsonBody`
+ * と対になる。HTTP 側の数値クエリ引数の検査を揃える PR）。**`app.ts` の中で
+ * `validator('query', ...)` を直接書かないこと。**
+ *
+ * `jsonBody` は issue #424 で全 `json` 経路に `hook` を配ったが、**クエリの
+ * 10経路（`GET /conversations` 等）は当時 `hook` を渡していないまま残っていた。**
+ * `hook` を渡さない `validator('query', ...)` は `@hono/standard-validator` の
+ * 既定の 400（`{ data: <クエリそのもの>, error: <zod の issue 配列（英語）>,
+ * success: false }`）に落ちる——`whereValidationFailed` の doc に書いた実測と
+ * 同じ形。`GET /journal?limit=0` のような数値の範囲外の値を渡すと、この既定の
+ * 400 がそのまま返っていた。
+ *
+ * 既定の `onInvalid` は `jsonBody` と同じ形 `{ error: '入力の形が不正: <path>' }`
+ * を返す。**個別の文言が要る経路はいまのところ無い**（10経路とも既定でよい）。
+ * どちらの形でも、混ぜてよいのは `where`（issue の `path` を畳んだもの）だけで、
+ * 送られてきた値は1文字も混ぜない（`whereValidationFailed` の不変条件をそのまま
+ * 受け継ぐ）。
+ */
+function queryParams<Schema extends z.ZodTypeAny>(
+  schema: Schema,
+  onInvalid: (where: string) => Record<string, unknown> = (where) => ({
+    error: '入力の形が不正' + (where === '' ? '' : `: ${where}`),
+  }),
+) {
+  return validator('query', schema, (result, c) => {
+    if (result.success) return;
+    return c.json(onInvalid(whereValidationFailed(result.error)), 400);
+  });
+}
+
+/**
  * 一覧・詳細で返すマネージャー（状態に、確認へ上がらず止められた件数を**添える**）。
  *
  * **2つの出どころを外向きの面でだけ合流させる。** 状態は台帳から作った
@@ -1857,11 +1887,11 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('query', conversationsQuery),
+      queryParams(conversationsQuery),
       async (c) => {
         const { limit, scan } = c.req.valid('query');
         /**
@@ -1948,7 +1978,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
             description:
@@ -1958,7 +1988,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('query', conversationQuery),
+      queryParams(conversationQuery),
       async (c) => {
         const id = c.req.param('id');
         const { scan, includeSuperseded: includeSupersededRaw } = c.req.valid('query');
@@ -2079,7 +2109,7 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           503: {
             description: '出来事の流れが配線されていない（能力を落とさず、黙って隠さない）。',
@@ -2087,7 +2117,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('query', journalStreamQuery),
+      queryParams(journalStreamQuery),
       (c) => {
         const bus = deps.journalEvents;
         if (bus === undefined) {
@@ -2590,13 +2620,13 @@ export function createApp(deps: AppDeps) {
               '`afterAt` の形式が不正、または `afterId`/`afterAt` が指す行が見当たらない。',
             content: {
               'application/json': {
-                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+                schema: resolver(errorResponseSchema),
               },
             },
           },
         },
       }),
-      validator('query', journalQuery),
+      queryParams(journalQuery),
       async (c) => {
         const { limit, since, until, type, q, order, afterId, afterAt, horizon } =
           c.req.valid('query');
@@ -2721,11 +2751,11 @@ export function createApp(deps: AppDeps) {
           },
           400: {
             description: 'クエリが不正。',
-            content: { 'application/json': { schema: resolver(validationErrorResponseSchema) } },
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
       }),
-      validator('query', usageQuery),
+      queryParams(usageQuery),
       async (c) => {
         const { from, to, managerId, layer, site, tokenId } = c.req.valid('query');
         const aggregate = await stores.usage.aggregate({
@@ -2789,13 +2819,13 @@ export function createApp(deps: AppDeps) {
               'クエリが不正、または `beforeDate` / `beforeAt` の片方だけが渡された・形式が不正。',
             content: {
               'application/json': {
-                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+                schema: resolver(errorResponseSchema),
               },
             },
           },
         },
       }),
-      validator('query', reportsQuery),
+      queryParams(reportsQuery),
       async (c) => {
         const { limit, beforeDate, beforeAt } = c.req.valid('query');
 
@@ -2907,13 +2937,13 @@ export function createApp(deps: AppDeps) {
             description: 'クエリが不正、または `cursor` が壊れている・`order` と食い違う。',
             content: {
               'application/json': {
-                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+                schema: resolver(errorResponseSchema),
               },
             },
           },
         },
       }),
-      validator('query', approvalsQuery),
+      queryParams(approvalsQuery),
       async (c) => {
         const { pending, order, limit, cursor, conversationId } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う。** `order` は既定値を持つので
@@ -3536,13 +3566,13 @@ export function createApp(deps: AppDeps) {
               'または `cursor` が壊れている・`includeClosed` と食い違う。',
             content: {
               'application/json': {
-                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+                schema: resolver(errorResponseSchema),
               },
             },
           },
         },
       }),
-      validator('query', commitmentsQuery),
+      queryParams(commitmentsQuery),
       async (c) => {
         const { includeClosed, limit, cursor } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う。** `includeClosed` は既定値を持つので
@@ -4102,13 +4132,13 @@ export function createApp(deps: AppDeps) {
               'または錨が指す行が見当たらない。',
             content: {
               'application/json': {
-                schema: resolver(z.union([validationErrorResponseSchema, errorResponseSchema])),
+                schema: resolver(errorResponseSchema),
               },
             },
           },
         },
       }),
-      validator('query', managersQuery),
+      queryParams(managersQuery),
       async (c) => {
         const { status, limit, afterId, afterStartedAt } = c.req.valid('query');
         // **opt-in の判定は生のクエリで行う**（`commitmentsQuery` のハンドラと同じ理由
@@ -5486,7 +5516,7 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      validator('query', archiveRemoveQuery),
+      queryParams(archiveRemoveQuery),
       async (c) => {
         const id = c.req.param('id');
         const { overrideReason } = c.req.valid('query');
