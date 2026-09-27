@@ -14,6 +14,11 @@ export default tseslint.config(
       '**/.react-router/',
       // 正典を焼き込んだ写し（packages/core/scripts/write-canon.mjs が作る）
       'packages/core/src/generated/',
+      // 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore /
+      // .prettierignore と同じ。#1819 は git と prettier からだけ外していたので、
+      // `.scratch/` に `.ts` を置くと `pnpm lint` が落ちた。3つが揃っていることは
+      // `scripts/scratch-ignore-alignment.test.ts` が測る）。
+      '**/.scratch/',
     ],
   },
   js.configs.recommended,
