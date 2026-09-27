@@ -258,7 +258,12 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 続けて畳まれた合図の到着間隔の計器。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（#325 段3 が足した `#pushMcpServers`。MCP サーバの登録を runner へ降ろせなかった
   // ことを `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
-  'manager.ts': 44,
+  // + 2（issue #1716。`#onEvent` の `case 'resume_failed'` / `case 'closed'` に
+  // 足した、委譲が既に別の runner へ移っていた（`fromRunnerId` 不一致）ときの
+  // 見送りを日誌へ残す1本ずつ。`EXCHANGE_KIND_FAILURE_PREFIX` /
+  // `EXCHANGE_KIND_DECISION_PREFIX` で、それぞれ直前の `status === 'stopped'`
+  // ガードと同じ接頭辞を使う）。
+  'manager.ts': 46,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

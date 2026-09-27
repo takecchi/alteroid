@@ -193,7 +193,11 @@ describe('abort の await の間に、同じ委譲が別の runner へ引き取�
 
   function setup(stores: ReturnType<typeof createMemoryStores>, registry: RunnerRegistry) {
     const inbox: InboxEvent[] = [];
-    const pool = createManagerPool({ stores, post: (event) => inbox.push(event), runners: registry });
+    const pool = createManagerPool({
+      stores,
+      post: (event) => inbox.push(event),
+      runners: registry,
+    });
     return { pool, inbox };
   }
 
