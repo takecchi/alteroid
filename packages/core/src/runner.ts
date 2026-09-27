@@ -6376,11 +6376,24 @@ function hasApprovalMarker(message: string): boolean {
  * `no problem, but stop` / `don't hesitate to cancel`。
  * `hasNegatedApprovalDenial` を見よ）。
  *
- * 一覧は issue #1877 が名指した4つに限る（狭いリストのぶん `unreadable`
- * 側へ寄る。一覧に無い否定込みの承認は、今までどおり `DENIAL_WORDS` が
- * `deny` にする）。大文字小文字は問わない。
+ * 一覧はもともと issue #1877 が名指した4つ（`no problem` / `no objection` /
+ * `don't hesitate` / `don't mind`）だった。issue #1890 で `don't worry` /
+ * `no worries` の2つを足し、計6つになった——`don't hesitate` / `don't mind`
+ * と同格の「心配しないで＝進めてよい」という言い回しが、この一覧に無い
+ * ままだったので `DENIAL_WORDS` の `\bdon't\b` / `\bno\b` に先に捕まり、
+ * #1877 の救済（`unreadable`）にすら届かず案内の無い `deny` になっていた
+ * （#1890 の再現テストで確認）。狭いリストのぶん `unreadable` 側へ寄る。
+ * 一覧に無い否定込みの承認は、今までどおり `DENIAL_WORDS` が `deny` に
+ * する——この方針そのものは #1890 でも変えていない。大文字小文字は問わない。
  */
-const NEGATED_APPROVAL_PHRASES = ['no problem', 'no objection', "don't hesitate", "don't mind"];
+const NEGATED_APPROVAL_PHRASES = [
+  'no problem',
+  'no objection',
+  "don't hesitate",
+  "don't mind",
+  "don't worry",
+  'no worries',
+];
 
 /** 正規表現の特殊文字をエスケープする（`NEGATED_APPROVAL_PHRASES` の素の文字列を安全に埋め込むため）。 */
 function escapeRegExp(value: string): string {
