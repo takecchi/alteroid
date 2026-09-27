@@ -7,6 +7,7 @@ import {
   noteBackgroundFailure,
   noteDroppedRecord,
   noteManagerIdCollision,
+  noteResumeAfterStopFoldFailed,
   noteUnreadableRecord,
   noteWithheldReportsDiscarded,
   runnerEventShape,
@@ -2631,7 +2632,34 @@ type ResumeOutcome =
    * のどれも書き換えない設計（`apps/daemon/src/runner-client.ts` の該当箇所の
    * doc）ので、同じ runner インスタンスが繋がっている限り自然には解けない。
    */
-  | 'workspace-path-unknown';
+  | 'workspace-path-unknown'
+  /**
+   * **止めた意思を優先した（Issue #1703）。** `abort()` が「止めた」と確かめた
+   * （`ManagerRecord.stopConfirmedAt` が立っている）委譲に対して、別の契機
+   * （典型は `send()`）が同時に resume を進めていた回。
+   *
+   * `#resume` はこの印を2箇所で見る:
+   *
+   * 1. **`runner.resume()` を呼ぶ前** — 印が既に立っていれば、resume その
+   *    ものを出さずにこの値を返す。新しいセッションは1つも作らない。
+   * 2. **`runner.resume()` が返った後** — 呼ぶ前には印が無かったが、
+   *    待っている間に abort() が確定させた回。ここでは既にセッションが
+   *    runner 側に立ってしまっているので、`record.attached` などを書く前に
+   *    `#confirmStoppedAndReleaseLease` で畳み直す（`#claimForResume` が
+   *    この回のために立て直した貸し出しも、そこで一緒に返す）。
+   *
+   * **`no-session` / `unreadable` などとは違う。** あちらは「戻れなかった」
+   * （runner 側の事情や一時的な障害）だが、こちらは「戻る必要が既に無くなった」
+   * ——止めた側の判断のほうが正しいので優先する、という選択の結果である。
+   * だから `resumeFailureDetail` はここで「新しく起こし直すこと」とは言わない
+   * （待てば直るのでも、起こし直せば直るのでもなく、**止まったままでよい**）。
+   *
+   * **恒久である。** 同じ委譲へもう一度 `send()` すれば、`#load()` / 台帳から
+   * 読み直した `status: 'stopped'` を見て、通常の「止まった委譲へ話しかけた」
+   * 経路（`send()` の `!attached` 分岐）を通る——resume を挑むかどうかは
+   * その経路の判断に任せ、ここでは何も予約しない。
+   */
+  | 'stopped-meanwhile';
 
 /** デーモン側が持つ1マネージャーの像（正本は JobStore）。 */
 interface ManagerRecord {
@@ -2827,6 +2855,33 @@ interface ManagerRecord {
    * `#restoreJobs` が同じ照合をやり直す。
    */
   reattachedAcrossRestart?: true;
+  /**
+   * **`abort()` が「止めた」と確かめた瞬間の時刻**（ISO8601。Issue #1703）。
+   *
+   * 立てるのは `abort()` の `outcome === 'stopped'` の分岐（`sessionGone ===
+   * true` を確かめた回）だけで、`not_stopped` / `unknown` では立てない——
+   * 台帳を1文字も書かないのと同じ理由で、確かめていない停止をここでも
+   * 確定させない。
+   *
+   * **何のために在るか。** `send()` と `abort()` はどちらも
+   * `this.#records.get(managerId) ?? (await this.#load(managerId))` で
+   * 始まり、孤児（`#records` に像を持たない）委譲では同時に走りうる
+   * （`#load()` の doc）。`#load()` を直して2つが同じ `ManagerRecord` を
+   * 共有するようになっても、`abort()` が「止めた」と書いた**後**に
+   * `send()` の resume が成功する順序はまだ残る——resume は実 I/O
+   * （`runner.resume()`）なので、台帳の読み直しでは間に合わない。
+   *
+   * `#resume` はこの印を2箇所で見る（`ResumeOutcome.stopped-meanwhile` の
+   * doc）。**印が立った後に resume 側が `record.attached` / `job.status`
+   * を書き換えることはない**——止めた意思が常に勝つ。
+   *
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。台帳への書き込みは
+   * `abort()` 自身が `job.status = 'stopped'` として既に行っており、この印は
+   * それとは別に「resume 側へ知らせるための、同じ `ManagerRecord` 越しの
+   * 合図」である——デーモンを作り直せば消えるが、そのときには
+   * `#retire()`／`#records` の像も一緒に消えているので、失っても嘘は残らない。
+   */
+  stopConfirmedAt?: string;
 }
 
 /**
@@ -4571,8 +4626,9 @@ class Pool implements ManagerPool {
    */
   readonly #pushRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
-   * `ProfileService` / `McpServerService` の `onPushed`（即時の配布の結果）の購読を
-   * 外す関数（Issue #1699。`#recordDirectPushResults` の doc）。`stop()` で外す。
+   * `ProfileService` / `McpServerService` / `CredentialService` の `onPushed`
+   * （即時の配布の結果）の購読を外す関数（Issue #1699 / #1717。
+   * `#recordDirectPushResults` の doc）。`stop()` で外す。
    */
   readonly #unsubscribeDirectPushes: (() => void)[] = [];
   /** 次に待つ時間。全部直ったら忘れる（`#reattachDelays` と同じ形）。 */
@@ -4613,10 +4669,11 @@ class Pool implements ManagerPool {
     this.#profile = profile;
     this.#credentials = credentials;
     this.#mcpServers = mcpServers;
-    // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699）。**
+    // **即時の配布の結果も、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
     for (const unsubscribe of [
       profile?.onPushed?.((results) => this.#recordDirectPushResults('profile', results)),
       mcpServers?.onPushed?.((results) => this.#recordDirectPushResults('mcpServers', results)),
+      credentials?.onPushed?.((results) => this.#recordDirectPushResults('credentials', results)),
     ]) {
       if (unsubscribe !== undefined) this.#unsubscribeDirectPushes.push(unsubscribe);
     }
@@ -5013,6 +5070,24 @@ class Pool implements ManagerPool {
       );
       if (resumed !== 'resumed') {
         /*
+         * **`stopped-meanwhile` は「確かめられなかった」側ではない（Issue
+         * #1703）。** `abort()` と同時に走って `#resume` が畳み直した回で、
+         * runner にこの委譲のセッションが無いことは**確かめてある**——
+         * `missing`（`record.sessionMissingSince` の有無）に頼らず、ここで
+         * 直接 `session_missing` を選ぶ。**`running` は書かず、`delivered`
+         * も返さない**——止められた委譲を「届いた」と言わないための分岐その
+         * ものである。`sendFailureDetail` の「宛先の runner はセッションを
+         * 持っていない（そう答えた）」という前置きも付けない——404 で
+         * 訂正した回とは事実の出所が違う（こちらは自分で畳んだ）ので、
+         * `resumeFailureDetail` の専用の文言だけをそのまま返す。
+         */
+        if (resumed === 'stopped-meanwhile') {
+          return {
+            outcome: 'session_missing',
+            detail: resumeFailureDetail(managerId, resumed, record.leaseRefusal),
+          };
+        }
+        /*
          * **言い方の持ち主は `resumeFailureDetail` 1つである。** 貸し出し期限で
          * 断られた回だけは、期限の根拠（誰が握っていて、いつから引き取れるか）が
          * 判定側にしか無いので、その1行を渡して言わせる。
@@ -5040,6 +5115,43 @@ class Pool implements ManagerPool {
         record.sessionMissingKind = undefined;
         reentered = true;
       }
+    }
+
+    /*
+     * **止めた意思を優先する（チェックポイント3。Issue #1703）。**
+     *
+     * `#resume` の2つのチェックポイント（`runner.resume()` の前後）を両方
+     * 通って `'resumed'` が返ってきた**後**にも、まだ隙間が残っている——
+     * `#resume` の戻り値が `#resumeOnce` の `finally` を抜けて、ここ（`send()`）
+     * まで戻ってくる間は、`await` を挟むたびに別の Promise 継続（ここでは
+     * `abort()` 側の `#confirmStoppedAndReleaseLease` の続き）が割り込みうる。
+     * **実測でこの隙間が埋まった** — `#resume` の2つのチェックポイントが
+     * どちらも「まだ立っていない」を見た**直後**に `abort()` が印を立て、
+     * その次の tick でここへ戻ってくる、という順序が実際に起きた
+     * （`manager-orphan-load-race.test.ts` の生ログ）。
+     *
+     * **だから、実際に台帳へ書く直前でもう一度見る。** `#resume` 側の2点は
+     * 「新しいセッションを作ってしまわない／作ってしまったら畳む」を担い、
+     * ここは「（担いきれなかった隙間を埋めて）`running` を書かない」を担う——
+     * 責務は重なっていない。**畳み直しは `abort()` 自身と同じ
+     * `#confirmStoppedAndReleaseLease` を使う**（`record.attached` は
+     * `abort()` が既に `false` に戻しているので、ここでは触れない）。
+     */
+    if (record.stopConfirmedAt !== undefined) {
+      const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
+        record,
+        runner,
+        managerId,
+      );
+      if (foldOutcome === 'stopped') {
+        await this.#persist(record);
+      } else {
+        noteResumeAfterStopFoldFailed(managerId, foldOutcome);
+      }
+      return {
+        outcome: 'session_missing',
+        detail: resumeFailureDetail(managerId, 'stopped-meanwhile', record.leaseRefusal),
+      };
     }
 
     record.job.status = 'running';
@@ -7223,14 +7335,28 @@ class Pool implements ManagerPool {
    * （このコミットの diff がその根拠——ロジックの行は移動のみ、呼び出し元は
    * 分解代入で受け取るだけになった）。
    *
+   * **呼び出し元は3つある**（Issue #1703 で `#resume` が加わった）:
+   * `abort()`（明示的な停止）、`vacate()`（drain。#485 PR-2）、そして
+   * `#resume`（止められた後に resume が runner へ届いてしまった回の畳み直し。
+   * `ResumeOutcome.stopped-meanwhile` の doc）。
+   *
    * **呼び出し元が決めること（ここでは決めない）:**
    * - `record.job.status` を `'stopped'` にするか——`abort()` はする。`vacate()`
-   *   はしない（drain は終わらせるのではなく移すため。終端にすると
-   *   `#reattach()` の `status !== 'running' && status !== 'waiting_human'` の
-   *   関門に引っかかり、二度と移送されなくなる）
+   *   と `#resume` はしない（`vacate()` は drain が終わらせるのではなく移す
+   *   ためで、終端にすると `#reattach()` の `status !== 'running' &&
+   *   status !== 'waiting_human'` の関門に引っかかり、二度と移送されなくなる。
+   *   `#resume` は既に `abort()` が `'stopped'` を書いて `#persist()` 済みの
+   *   台帳へ、同じ値を重ねて書く理由が無い）
    * - `#retire(managerId)` を呼ぶか——同上の理由で `abort()` だけが呼ぶ
+   *   （`vacate()` も `#resume` も呼ばない。`#resume` の側は、この委譲を
+   *   `#records` から外す判断も `abort()` が既に済ませている）
    * - `record.waiting` / `record.attached` / `#persist()` — `outcome ===
-   *   'stopped'` の後始末は呼び出し元の責任のまま（ここは持ち出さない）
+   *   'stopped'` の後始末は呼び出し元の責任のまま（ここは持ち出さない）。
+   *   `#resume` は `record.attached` には触れない（`abort()` が既に `false`
+   *   にしている）が、貸し出しの解放は `#persist()` で書く——書かないと、
+   *   `#claimForResume` がこの回のために立て直した貸し出しが台帳に残ったまま
+   *   になる（`vacate()` が同じ理由で貸し出しの解放だけ `#persist` するのと
+   *   同じ形）
    *
    * **⚠️ さらに「誰に確かめたか」を見る。** 止まったかどうかの判定は呼び出し元が
    * 引いた宛先に `list()` を聞き直して出しているが、`Registry#get` は同じ名前を
@@ -7467,6 +7593,30 @@ class Pool implements ManagerPool {
       return { outcome: 'unknown', detail: this.#runnerNotOpenDetail(record) };
     }
 
+    /*
+     * **止めた意思を先に立てる（Issue #1716）。** まだ「止まった」と確かめて
+     * すらいないが、これから `#confirmStoppedAndReleaseLease` を await する
+     * 間に、別の契機が同じ `ManagerRecord`（`#load()` の共有。Issue #1703）を
+     * 握って `resume()` を進めることがある——`send()` が同じ runner-a へ話し
+     * かける形（#1703 本体）だけでなく、**別の runner の名乗り（`#reattach`）
+     * が同じ委譲を引き取って runner-b へ resume する形**もありうる（#1716）。
+     * `#resume` はこの印（`record.stopConfirmedAt`）を2箇所で見て、まだ
+     * resume を出していなければ出さず、既に出してしまっていれば畳み直す
+     * （`ResumeOutcome.stopped-meanwhile` の doc）——**印が「確定した事実」
+     * ではなく「これから確かめに行く意思」の段階でも、resume 側からは同じ
+     * 優先順位で扱ってよい。** 待たせて損はない（`send()` 同様、待てば
+     * `#load()` からやり直せる）が、待たずに resume してしまうと Issue #1716
+     * の事故（runner-b で走り続ける委譲を「止まった」と言う）が起きる。
+     *
+     * **確かめられなければ、この印を下ろす**（下の `outcome !== 'stopped'`
+     * の分岐）。台帳は引き続き、実際に `outcome === 'stopped'` を確かめてから
+     * しか書かない——ここは「意思の共有」であって「確定の記録」ではない。
+     */
+    record.stopConfirmedAt = new Date(this.#now()).toISOString();
+    // **await の前の宛先を覚えておく（Issue #1716 の「二重の網」）。** await の
+    // 後にこの値と食い違っていたら、委譲は別の runner へ移っている。
+    const runnerIdBeforeConfirm = record.job.runnerId;
+
     // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
     // 越しの runner では期限切れ（`RunnerUnknownError`）や明確な失敗（接続拒否等）
     // が投げられる（`runner-client.ts` の `#call`）。投げたまま素通しすると、日誌の
@@ -7474,11 +7624,48 @@ class Pool implements ManagerPool {
     // が 500 になる — **「止めた事実は日誌に残る」という約束がいちばん要る場面で
     // 消える**。捕まえて、権威は下の `sessionGone` の探りに置く（stop の RPC が
     // 返らなくても、届いていて実際に止まっていることがある）。
-    const { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
+    let { outcome, stopError, sessionGone } = await this.#confirmStoppedAndReleaseLease(
       record,
       runner,
       managerId,
     );
+
+    /*
+     * **二重の網（Issue #1716）。** 上の印が主な防御だが、印を立てる**前**
+     * （`#ensureConnected` / `#load` / `#runnerOf` の await）にも同じ形の窓が
+     * 開く——印が立つより前に `#reattach` が resume を終えていれば、印では
+     * 塞げない。だから、await から戻った直後にもう一度確かめる:
+     * `record.job.runnerId` が await の前と食い違っていたら、委譲は既に
+     * 別の runner（新しい持ち主）へ移っている。
+     *
+     * **「降りて新しい持ち主に任せる」ではなく「止めた意思を優先する」
+     * （#1703 と同じ方針）。** 新しい runner でも実際に止まったと確かめて
+     * からでなければ `stopped` を語らない。確かめられなければ `outcome` を
+     * 書き換え、下の分岐（`not_stopped` / `unknown` と同じ「台帳を書かない」
+     * 側）へ合流させる。
+     */
+    if (outcome === 'stopped' && record.job.runnerId !== runnerIdBeforeConfirm) {
+      const movedRunner = await this.#runnerOf(record);
+      if (movedRunner === null) {
+        // 移った先が開いていない——確かめようが無い。
+        outcome = 'unknown';
+        stopError = undefined;
+        sessionGone = undefined;
+      } else {
+        const moved = await this.#confirmStoppedAndReleaseLease(record, movedRunner, managerId);
+        outcome = moved.outcome;
+        stopError = moved.stopError;
+        sessionGone = moved.sessionGone;
+      }
+    }
+
+    if (outcome !== 'stopped') {
+      // **確かめられなかった。印を下ろす（Issue #1716）。** 台帳を1文字も
+      // 書かない既存の約束（下）はそのまま——印だけが、確かめられた事実に
+      // 追いつかないまま残ることを防ぐ。次にこの委譲へ触れる `#resume` は、
+      // 印の無い（＝止まっていない）ものとして扱ってよい。
+      delete record.stopConfirmedAt;
+    }
 
     // **止めた委譲が「握り潰した報告」を抱えたまま終わったという事実を、
     // 依頼者（クローン）へ能動的に届けるための控え。**
@@ -7911,7 +8098,7 @@ class Pool implements ManagerPool {
       // 本文・`ask` の要旨・`closed` の理由は外から来るので載せない。
       await runner.connect(
         (event) =>
-          void this.#onEvent(event).catch((error: unknown) => {
+          void this.#onEvent(event, runner.runnerId).catch((error: unknown) => {
             noteBackgroundFailure('runner からの合図の処理', runnerEventShape(event), error);
             throw error;
           }),
@@ -8940,6 +9127,21 @@ class Pool implements ManagerPool {
     // 終端する。** 引けなかったことは引けなかったこととして返す。
     if (material.kind === 'unreadable') return 'unreadable';
 
+    /*
+     * **止めた意思を優先する（チェックポイント1。Issue #1703）。** `abort()`
+     * が同じ `ManagerRecord`（`#load()` の共有の直し）に対して「止めた」と
+     * 確かめていれば（`record.stopConfirmedAt` が立っていれば）、ここで
+     * `runner.resume()` そのものを出さない——新しいセッションを1つも作らない。
+     *
+     * **`#claimForResume` の後・`runner.resume()` の直前に置く。** ここより
+     * 前（`#claimForResume` の前）に置くと、確認してから実際に呼ぶまでの
+     * 間隔が開き、その隙間で `abort()` が「止めた」と確定させる窓が広がる
+     * だけで得るものが無い（下のチェックポイント2が、この後の窓は結局
+     * 引き受ける）。**呼ぶ前に確実に見送れる回はここで見送り、実 I/O
+     * （`runner.resume()`）そのものを1つ減らす。**
+     */
+    if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
+
     await runner.resume({
       managerId: record.job.id,
       sessionId,
@@ -8953,6 +9155,41 @@ class Pool implements ManagerPool {
         ? {}
         : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
     });
+
+    /*
+     * **止めた意思を優先する（チェックポイント2。Issue #1703）。**
+     * チェックポイント1を通った後、`await runner.resume(...)` が返るまでの
+     * 間に `abort()` が「止めた」と確かめていれば、runner にはたったいま
+     * 起こしたセッションが実在する——ここで `record.attached` などを書くと、
+     * 止めたつもりの委譲が「走っているはず」を名乗ったまま誰にも追われなく
+     * なる（Issue #1703 の本体そのもの）。
+     *
+     * **畳み直すのは `abort()` 自身が使う `#confirmStoppedAndReleaseLease`
+     * に任せる。** `runner.stop()` を呼び、一覧から消えたことを確かめ、
+     * `#claimForResume` がこの回のために立て直した貸し出しを（判定つきで）
+     * 返す——`vacate()` が drain で同じ関数を使うのと同じ形。**`record.job.status`
+     * は書かない**——`abort()` が既に `'stopped'` を書いて `#persist()` 済み
+     * である。
+     *
+     * **畳み直せなかった（`outcome !== 'stopped'`）ときは黙らない。** 台帳には
+     * 「止めた」が残っているのに runner 側にセッションが生き残る、という
+     * いちばん危ない不一致なので、跡を stderr へ残す
+     * （`noteResumeAfterStopFoldFailed`）。
+     */
+    if (record.stopConfirmedAt !== undefined) {
+      const { outcome: foldOutcome } = await this.#confirmStoppedAndReleaseLease(
+        record,
+        runner,
+        record.job.id,
+      );
+      if (foldOutcome === 'stopped') {
+        await this.#persist(record);
+      } else {
+        noteResumeAfterStopFoldFailed(record.job.id, foldOutcome);
+      }
+      return 'stopped-meanwhile';
+    }
+
     record.attached = true;
     record.job.runnerId = runner.runnerId;
     // **宛先が変わった瞬間でもある**（#579）。`runner.resume()` が返った時点で、
@@ -8962,12 +9199,14 @@ class Pool implements ManagerPool {
     /*
      * **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
      *
-     * **ここより後に `'resumed'` 以外へ落ちる枝は無い**（この関数はこの下で
-     * `return 'resumed'` するだけである）ので、この地点は「resume が成功した回」
-     * と一致する。**逆に、ここより前で返る枝（`held-by-lease` /
-     * `workspace-path-unknown` / `unreadable`、および `runner.resume()` が
-     * 投げた回）ではこの欄が動かない** — そこが要点で、**貸し出しだけが新しい器へ
-     * 進んで告げる1行が届かなかった回に、次の `send()` がもう一度告げられる。**
+     * **ここより後に `'resumed'` 以外へ落ちる枝は、上のチェックポイント2
+     * （`stopConfirmedAt`）だけである**（この関数はこの下で `return 'resumed'`
+     * するだけである）ので、この地点は「resume が成功し、かつ止められて
+     * もいない回」と一致する。**逆に、ここより前で返る枝（`held-by-lease` /
+     * `workspace-path-unknown` / `unreadable` / `stopped-meanwhile`、および
+     * `runner.resume()` が投げた回）ではこの欄が動かない** — そこが要点で、
+     * **貸し出しだけが新しい器へ進んで告げる1行が届かなかった回に、次の
+     * `send()` がもう一度告げられる。**
      *
      * 写すのは、この回に関門（`#claimForResume`）が判定した相手である
      * （`grantLease` / `touchLease` が直前に置いた値）。**名簿を引き直さない** —
@@ -9040,8 +9279,22 @@ class Pool implements ManagerPool {
    *
    * 記録（日誌・台帳・アーカイブ・生ログ）はすべてここで行う。runner は記憶へ
    * 到達する鍵を持たないので、書けるのはデーモンだけである。
+   *
+   * **`fromRunnerId`（Issue #1716 の「確かめていないこと」）。** どの runner の
+   * SSE 接続から来た出来事かを、呼び出し元（`#connectTo`）の閉包から渡す
+   * ——`RunnerEvent` 自身はこれを運ばない（`runnerEventSchema` に `runnerId`
+   * が無い。ワイヤの形は変えていない）。**`case 'closed'` / `case
+   * 'resume_failed'` だけがこれを見る**（下の該当箇所）——古い runner から
+   * 遅れて届いた、この委譲がもう別の runner へ移った後の出来事が、いま
+   * 現に走っている委譲の台帳・貸し出しを巻き戻すのを防ぐため（abort() /
+   * `#reattach` の「await の間に別の runner へ移る」窓と同じ形の穴が、
+   * ここでは「イベントが並行に届く」形で開く。`void this.#onEvent(event)`
+   * で起こされるので、複数の出来事が並行に処理されうる——上の doc 参照）。
+   * **他の `case` には広げていない**（Issue の「確かめていないこと」が
+   * 名指ししたのはこの2つだけで、他の分岐まで同じ確認を足すのは、この
+   * 変更が答えるべき範囲を超える）。
    */
-  async #onEvent(event: RunnerEvent): Promise<void> {
+  async #onEvent(event: RunnerEvent, fromRunnerId: string): Promise<void> {
     if (event.type === 'hello') {
       // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
       // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
@@ -10550,6 +10803,59 @@ class Pool implements ManagerPool {
           });
           return;
         }
+        /*
+         * **移った後に届いた、古い runner の resume_failed で巻き戻さない
+         * （Issue #1716 の「確かめていないこと」）。** `#reattach` が
+         * `record.job.runnerId` を新しい runner へ書き換えた**後**に、
+         * 前の runner から遅れてこのイベントが届くことがある——`resume_failed`
+         * は `#resume` が実 I/O（SDK の検証）を投げた後、別経路（SSE）で
+         * 遅れて届くので、その間に台帳が別の runner へ移っていても不思議は
+         * ない。**`record.job.runnerId` が未記録（`undefined`）の古いジョブは
+         * 判定材料が無いので、これまでどおり処理する**（能力を削らない。
+         * `mayClaim` の `undecidable` と同じ判断）。
+         *
+         * **⚠️ ただし「不一致」だけでは「移った」と言い切れない（レビューで
+         * 指摘）。** `RunnerClient.runnerId` は `/health` を聞けるまで既定値
+         * `'runner-primary'` を名乗る（`runnerIdKnown` の doc）。`start()` は
+         * `input.cwd` が明示されていれば `/health` 前でも通るので、その委譲の
+         * `job.runnerId` には `'runner-primary'` が焼かれたまま残ることがある
+         * ——`record.job.runnerId` を書き直すのは `#resume` の1箇所だけで、
+         * `start()` 経由の attach はここを通らない。その状態で本当に
+         * `runner-a`（実 id）から `closed`/`resume_failed` が届くと、
+         * `job.runnerId`（`'runner-primary'`）と `fromRunnerId`（`'runner-a'`）
+         * は**同じ runner を指しながら文字列としては不一致**になる——素朴な
+         * 不一致判定は、この委譲が本当に終わった事実を「移った」と誤読して
+         * 捨ててしまう。運用者が runner の id を付け替えた後の既存の委譲も
+         * 同じ形になる。
+         *
+         * **⟹ 捨てるのは「委譲が、いま名簿に居る別の runner へ移ったと
+         * 分かっている」ときだけにする。** `record.job.runnerId` が
+         * `#registeredRunnerIds()`（名簿にいま実際に居る id の集合）に
+         * 含まれているときだけ「別の実在する runner を指している」と言え、
+         * それでも `fromRunnerId` と食い違うなら本当に移った後だと判定できる。
+         * `#registeredRunnerIds()` が `null`（名乗っていない entry が名簿に
+         * 在り、判定材料が無い）のときは、`'runner-primary'` のような既定値の
+         * 可能性を否定できないので、従来どおり（＝以前の振る舞い＝安全側）で
+         * イベントを適用する。
+         */
+        const registeredRunnerIdsForResumeFailed = this.#registeredRunnerIds();
+        if (
+          record.job.runnerId !== undefined &&
+          record.job.runnerId !== fromRunnerId &&
+          registeredRunnerIdsForResumeFailed !== null &&
+          registeredRunnerIdsForResumeFailed.has(record.job.runnerId)
+        ) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+              `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）前のセッション` +
+              `（${event.sessionId}）を開き直せなかった: ${event.reason}`,
+          });
+          return;
+        }
         // **「resume を投げた」は「戻れた」ではない。** ここが来るということは、
         // `#resume` が `true` を返した後に SDK が会話を見つけられなかったという
         // ことである。台帳と受信箱を、実際に起きたことへ揃え直す。
@@ -10626,6 +10932,65 @@ class Pool implements ManagerPool {
             text:
               `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （停止済みのため無視）runner 側の終了イベント` +
               `（status=${event.status}）を受け取った: ${event.reason}`,
+          });
+          return;
+        }
+        /*
+         * **移った後に届いた、古い runner の closed で巻き戻さない（Issue
+         * #1716 の「確かめていないこと」。実測で赤を取った。）** `#reattach`
+         * が同じ委譲を別の runner へ引き取った**後**に、前の runner の
+         * `RunnerSession#finish()` が（自身のプロセスがまだ生きていて、遅れて
+         * 気づいた等の理由で）このイベントを出すことがある。上の `stopped`
+         * ガードは `abort()` 経由の終端しか見ないので、**`#reattach` 経由で
+         * 「別の runner で走り続けている」場合はすり抜ける**——無条件に
+         * 処理すると `record.job.status` を `event.status`（`done` /
+         * `lost` / `failed`）へ書き換え、`releaseLease` で**いま現に
+         * 使われている新しい runner の貸し出しを解放してしまう**（実測:
+         * runner-b が引き取って `running` で走っている委譲へ runner-a の
+         * 古い `closed`（`status: 'lost'`）を流すと、台帳が `lost` へ
+         * 戻り、runner-b の貸し出しの `releasedAt` が立った——他の器が
+         * 同じ委譲を無条件で奪える状態になる）。
+         *
+         * **`record.job.runnerId` が未記録（`undefined`）の古いジョブは
+         * 判定材料が無いので、これまでどおり処理する。**
+         *
+         * **⚠️ ただし「不一致」だけでは「移った」と言い切れない（レビューで
+         * 指摘。`case 'resume_failed'` の同じ doc に詳しい）。**
+         * `RunnerClient.runnerId` は `/health` を聞けるまで既定値
+         * `'runner-primary'` を名乗り（`runnerIdKnown` の doc）、`start()` は
+         * `input.cwd` があれば `/health` 前でも通るので、`job.runnerId` に
+         * この既定値が焼かれたまま残ることがある——`record.job.runnerId` を
+         * 書き直すのは `#resume` の1箇所だけで、`start()` 経由の attach は
+         * ここを通らない。そのとき本当に同じ runner から `closed` が届いても
+         * `job.runnerId`（既定値）と `fromRunnerId`（実 id）は文字列としては
+         * 不一致になる——素朴な不一致判定だと、この委譲が本当に終わった事実を
+         * 「移った」と誤読して捨ててしまい、台帳が `running` のまま残る。
+         * 運用者が runner の id を付け替えた後の既存の委譲も同じ形になる。
+         *
+         * **⟹ 捨てるのは「委譲が、いま名簿に居る別の runner へ移ったと
+         * 分かっている」ときだけにする。** `record.job.runnerId` が
+         * `#registeredRunnerIds()`（名簿にいま実際に居る id の集合）に
+         * 含まれているときだけ「別の実在する runner を指している」と言え、
+         * それでも `fromRunnerId` と食い違うなら本当に移った後だと判定できる。
+         * `#registeredRunnerIds()` が `null`（名乗っていない entry が名簿に
+         * 在り、判定材料が無い）のときは、既定値の可能性を否定できないので、
+         * 従来どおり（＝以前の振る舞い＝安全側）でイベントを適用する。
+         */
+        const registeredRunnerIdsForClosed = this.#registeredRunnerIds();
+        if (
+          record.job.runnerId !== undefined &&
+          record.job.runnerId !== fromRunnerId &&
+          registeredRunnerIdsForClosed !== null &&
+          registeredRunnerIdsForClosed.has(record.job.runnerId)
+        ) {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text:
+              `${EXCHANGE_KIND_DECISION_PREFIX}[${event.managerId}] （runner-id 不一致のため無視。` +
+              `いまの宛先は ${record.job.runnerId}、この出来事は ${fromRunnerId} から）runner 側の` +
+              `終了イベント（status=${event.status}）を受け取った: ${event.reason}`,
           });
           return;
         }
@@ -11105,22 +11470,27 @@ class Pool implements ManagerPool {
    * 次の `hello` を待たずに拾うためのものである。
    */
   /**
-   * **`apply()` の即時の配布の結果を、名乗りのときの配布と同じ帳面に積む（Issue #1699）。**
+   * **`apply()` の即時の配布の結果を、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
    *
-   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` は、保存の直後に繋がっている
-   * runner へその場で直接配る（`McpServerService.apply` / `ProfileService.apply`）。
+   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials`（CLI の
+   * `alteroid credential set` もこれを叩く）は、保存の直後に繋がっている runner へその場で直接配る
+   * （`McpServerService.apply` / `ProfileService.apply` / `CredentialService.apply`）。
    * この経路が帳面（`#pushHealth`）も挑み直し（`#schedulePushRetry`）も通らなかった
    * ので、一時的な障害で配り損ねても `runner_list` の「直近の押し込み」は前の「ok」の
-   * ままで、挑み直しも予約されず、runner が名乗り直すまで古い版のまま走っていた。
-   * **名乗りのときの配布（`#pushProfile` / `#pushMcpServers`）と同じく、失敗は
-   * `failed` として帳面に書き、`#settlePushRetry` で挑み直しを予約する**
+   * ままで、挑み直しも予約されず、runner が名乗り直すまで古い版のまま走っていた
+   * （credentials だけ #1704 で塞ぎ忘れていたのが #1717）。
+   * **名乗りのときの配布（`#pushProfile` / `#pushMcpServers` / `#pushCredentials`）と
+   * 同じく、失敗は `failed` として帳面に書き、`#settlePushRetry` で挑み直しを予約する**
    * （「間隔は伸ばすが、諦めはしない」の約束を1つにする）。成功は `ok` で上書きする。
    *
-   * 日誌の行は書かない。即時の配布の失敗は、呼び出し元（`app.ts` の `PUT`）が既に
-   * 日誌へ残している——ここで書くと二重になる。
+   * 日誌の行はここでは書かない。即時の配布の失敗を日誌へ残すかは呼び出し元が持つ
+   * ——`PUT /mcp-servers`（`app.ts`）と `profile_write`（`tools.ts`）は残しており、
+   * ここでも書くと二重になる。⚠️ **`PUT /profile` と `PUT /credentials` は残して
+   * いない**（応答の `runners` とこの帳面にだけ出る）。「全経路が日誌に残す」と
+   * 読まないこと。
    */
   #recordDirectPushResults(
-    kind: 'profile' | 'mcpServers',
+    kind: 'profile' | 'mcpServers' | 'credentials',
     results: readonly { runnerId: string; ok: boolean; error?: string; unsupported?: true }[],
   ): void {
     if (this.#stopped) return;
@@ -11398,10 +11768,38 @@ class Pool implements ManagerPool {
     return 'ambiguous';
   }
 
-  /** 台帳から像を作る（再起動後に届いたイベントの受け皿）。 */
+  /**
+   * 台帳から像を作る（再起動後に届いたイベントの受け皿）。
+   *
+   * **既に `#records` へ像が在れば、それを返す。新しく作らない（Issue #1703）。**
+   * `send()` / `abort()` はどちらも `this.#records.get(managerId) ??
+   * (await this.#load(managerId))` で始まる——孤児（`#records` に像を持たない）
+   * 委譲へ2つの契機が同時に来ると、`await` を挟む `listJobs()` の間にどちらも
+   * 「まだ居ない」を見た状態で `#load()` へ入る。**以前はここで無条件に
+   * `{ ...job }` を作って `#records` へ上書きしていたので、2つの呼び出しは
+   * 別々の `Job` のコピーを掴んで独立に進み、それぞれが独立に `#persist()`
+   * （＝ `putJob()`、ジョブ丸ごとの上書き）を呼んでいた**——後から書いた側が
+   * 先に書かれた変更ごと上書きする、CAS の無い「読んでから書く」の穴だった
+   * （#1674 と同じ族）。
+   *
+   * ここで `#records.get(managerId)` を再確認してから作ることで、2つの
+   * `#load()` は同じ `ManagerRecord`（同じオブジェクト参照）を共有する。
+   * **`listJobs()` の `await` から戻った直後、次の `await` を挟むまでは
+   * 同期区間である**——JS のイベントループはマイクロタスクを次の `await`
+   * まで割り込ませずに実行するので、先に戻った側の「確認して無ければ作って
+   * 登録する」が丸ごと終わってから、後から戻った側の確認が走る。⟹ 追加の
+   * ロックを持ち込まなくても、この確認だけで2つの呼び出しは同じ像を握る。
+   *
+   * **これだけでは足りない。** 像を共有しても、`send()` が resume の成功を
+   * 受けて後から `job.status = 'running'` を書くことは変わらない——そちらは
+   * `ManagerRecord.stopConfirmedAt` と `ResumeOutcome.stopped-meanwhile`
+   * （`#resume` の doc）が塞ぐ。
+   */
   async #load(managerId: string): Promise<ManagerRecord | null> {
     const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
     if (!job) return null;
+    const existing = this.#records.get(managerId);
+    if (existing !== undefined) return existing;
     const record: ManagerRecord = { job: { ...job }, waiting: [], attached: false };
     this.#records.set(managerId, record);
     return record;
@@ -12188,6 +12586,16 @@ function resumeFailureDetail(
         '（cwd の形が不正なのではない）。manager_send に cwd を渡す口は無いので、送り直しでは直らない。' +
         '新しく起こし直すと続きは失われる——起こし直す前に、この runner が workspacePath を' +
         '名乗れているか（別の runner への切り替えも含め）を確かめること。'
+      );
+    case 'stopped-meanwhile':
+      // **他の枝と違い、「新しく起こし直すこと」を言わない（Issue #1703）。**
+      // 戻れなかったのではなく、戻る必要が無くなった——止めた側の判断のほうが
+      // 優先される。ここで起こし直すと、止めた意思をこの1本の応答が覆す。
+      return (
+        `${managerId} は resume している最中に止められた（止めた意思を優先し、` +
+        '起こしかけた・起こしてしまったセッションは畳んだ）。台帳の status は ' +
+        '`stopped` のまま——新しく起こし直さないこと。再開してよいかは、止めた側' +
+        '（人間・クローン）の判断に従うこと。'
       );
     default: {
       const exhaustive: never = outcome;

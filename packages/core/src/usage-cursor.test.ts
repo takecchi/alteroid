@@ -3,13 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeUsageCursor,
   encodeUsageCursor,
+  findUsageCursorTies,
   resolveUsageCursor,
   type UsageCursorEntry,
 } from './usage-cursor.js';
 
 /**
  * `resolveUsageCursor`（`usage_read` の axis 継続点、`self_status` の
- * `ledgerCursor` 継続点、共通の部品。issue #1673）の分岐対応表。
+ * `ledgerCursor` 継続点、共通の部品。issue #1673 / #1719）の分岐対応表。
  *
  * | 分岐 | 内容 |
  * | --- | --- |
@@ -22,6 +23,9 @@ import {
  * | B7 | asOf より前に更新された行は risen に出ない（黙って再掲しない） |
  * | B8 | anchor.asOf が無ければ risen は常に空 |
  * | B9 | `date` 軸はラベル降順（費用を見ない） |
+ * | B10 | asOf とちょうど同着（`updatedAt === asOf`）で追い越した行は risen に出る（#1719） |
+ * | B11 | 同着でも、錨の `tiedAtAsOf` に控えた組と一致する行（＝初回にもう見せていて、伸びてもいない行）は risen に出ない（#1719） |
+ * | B12 | `tiedAtAsOf` を持たない旧形式の cursor は、同着を risen に含めない（`>` のみで読む。後方互換） |
  */
 function entry(label: string, cost: number, updatedAt: string): UsageCursorEntry {
   return { label, cost, updatedAt };
@@ -154,5 +158,120 @@ describe('resolveUsageCursor（分岐）', () => {
       page: [],
       risen: [],
     });
+  });
+
+  /**
+   * issue #1719 の再現（本文の再現テストを取り込み、実際の錨の作り方
+   * （`findUsageCursorTies`。`tools.ts` の `usage_read` / `self_status` の
+   * 両方が呼ぶ）に合わせて構成し直したもの）。
+   *
+   * 初回呼び出し時点、mgr-15 は cost=0.5 で錨（mgr-14, cost=1）より下位・
+   * 非表示だった——ただし、ちょうどそのタイミング（`asOf` を作った瞬間）に
+   * 更新されていた。錨の候補集合（`isAfterAnchor` が偽の側＝既に見せた側）
+   * には mgr-15 は入らない（cost が低いので `isAfterAnchor` は真）ので、
+   * `tiedAtAsOf` は空になる——これが `findUsageCursorTies` の実際の出力である。
+   *
+   * 2回目の呼び出し時点、mgr-15 は同じミリ秒（`asOf`）のまま cost が
+   * 0.5→100 へ伸びて錨を追い越した（並行する委譲が同じ tick で書いた形）。
+   * 修正前は次の2つがどちらも偽になり、mgr-15 が page にも risen にも
+   * 出なかった——`isAfterAnchor`（費用が違うので偽）、
+   * `entry.updatedAt > asOf`（同着なので偽）。
+   */
+  it('B10: #1719 の再現——asOf と同着で追い越した行（mgr-15）は risen に出る（取りこぼされない）', () => {
+    const asOf = '2026-08-14T10:00:00.000Z';
+    const anchorSeed = { label: 'mgr-14', cost: 1 };
+
+    // 初回呼び出し時点のエントリ。mgr-15 がちょうど asOf を作った行
+    // （cost=0.5 でまだ錨より下位＝非表示側）。
+    const entriesAtCreation = [
+      entry('mgr-15', 0.5, asOf),
+      entry('mgr-14', 1, '2026-08-14T09:00:00.000Z'),
+      entry('mgr-13', 2, '2026-08-14T08:00:00.000Z'),
+    ];
+    const cursor = encodeUsageCursor({
+      axis: 'manager',
+      ...anchorSeed,
+      asOf,
+      tiedAtAsOf: findUsageCursorTies(entriesAtCreation, 'manager', anchorSeed, asOf),
+    });
+
+    // 2回目の呼び出し時点。mgr-15 が 0.5→100 へ伸びて錨を追い越した。
+    const entries = [
+      entry('mgr-15', 100, asOf),
+      entry('mgr-14', 1, '2026-08-14T09:00:00.000Z'),
+      entry('mgr-13', 2, '2026-08-14T08:00:00.000Z'),
+    ];
+
+    const result = resolveUsageCursor(entries, 'manager', cursor);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    const allReturned = [...result.page, ...result.risen].map((e) => e.label);
+    expect(allReturned).toContain('mgr-15');
+    expect(result.risen.map((e) => e.label)).toEqual(['mgr-15']);
+  });
+
+  it('B11: asOf を作った行そのもの（伸びていない）は、呼ぶたびに risen へ載り続けない', () => {
+    const asOf = '2026-08-14T10:00:00.000Z';
+    const anchorSeed = { label: 'mgr-14', cost: 1 };
+
+    // 初回呼び出し時点。mgr-14 自身がちょうど asOf を作った行（＝錨自身）。
+    const entriesAtCreation = [
+      entry('mgr-14', 1, asOf),
+      entry('mgr-13', 2, '2026-08-14T08:00:00.000Z'),
+    ];
+    const cursor = encodeUsageCursor({
+      axis: 'manager',
+      ...anchorSeed,
+      asOf,
+      tiedAtAsOf: findUsageCursorTies(entriesAtCreation, 'manager', anchorSeed, asOf),
+    });
+
+    // 続きの呼び出し。mgr-14 は cost も updatedAt も1文字も変わっていない。
+    // 単純に `>` を `>=` にしただけの直し方だと、ここが恒久的に risen へ載る。
+    const entries = [entry('mgr-14', 1, asOf), entry('mgr-13', 2, '2026-08-14T08:00:00.000Z')];
+    const result = resolveUsageCursor(entries, 'manager', cursor);
+    expect(result.kind === 'ok' && result.risen).toEqual([]);
+  });
+
+  it('B12: tiedAtAsOf を持たない旧形式の cursor は、同着を risen に含めない（後方互換）', () => {
+    const asOf = '2026-08-14T10:00:00.000Z';
+    // この修正より前に作られた cursor を模す——`tiedAtAsOf` の欄そのものが無い。
+    const raw = Buffer.from(
+      JSON.stringify({ axis: 'manager', label: 'mgr-14', cost: 1, asOf }),
+      'utf8',
+    ).toString('base64url');
+
+    const entries = [
+      entry('mgr-15', 100, asOf), // 新形式なら risen に出るはずの同着
+      entry('mgr-14', 1, '2026-08-14T09:00:00.000Z'),
+    ];
+    const result = resolveUsageCursor(entries, 'manager', raw);
+    // malformed でも wrong-axis でもなく、これまでどおり読める。
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.page).toEqual([]);
+    // `>` のみで読むので、同着（mgr-15）は risen に出ない——修正前と同じ
+    // （既知の）挙動のまま。新形式の cursor でだけ #1719 が直る。
+    expect(result.risen).toEqual([]);
+  });
+});
+
+describe('findUsageCursorTies（部品。issue #1719）', () => {
+  it('asOf が無ければ、同着そのものが定義できないので空', () => {
+    const entries = [entry('mgr-14', 1, '2026-08-14T09:00:00.000Z')];
+    expect(
+      findUsageCursorTies(entries, 'manager', { label: 'mgr-14', cost: 1 }, undefined),
+    ).toEqual([]);
+  });
+
+  it('錨の候補集合（isAfterAnchor が偽の側）だけを拾う。まだ見せていない側の同着は含めない', () => {
+    const asOf = '2026-08-14T10:00:00.000Z';
+    const entries = [
+      entry('mgr-15', 0.5, asOf), // isAfterAnchor=true（cost が錨より低い）→ 対象外
+      entry('mgr-14', 1, asOf), // 錨自身。not-after 側 → 対象（同着）
+      entry('mgr-13', 2, '2026-08-14T08:00:00.000Z'), // not-after 側だが同着していない → 対象外
+    ];
+    const ties = findUsageCursorTies(entries, 'manager', { label: 'mgr-14', cost: 1 }, asOf);
+    expect(ties).toEqual([{ label: 'mgr-14', cost: 1 }]);
   });
 });

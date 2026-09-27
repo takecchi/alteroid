@@ -269,6 +269,40 @@ export function noteWithheldReportsDiscarded(
 }
 
 /**
+ * `abort()` が「止めた」と確かめた後に `send()` 側の resume が runner へ届いて
+ * しまい（`manager.ts` の `#resume` チェックポイント2）、畳み直そうとした
+ * `#confirmStoppedAndReleaseLease` が `'stopped'` 以外を返したことを stderr へ
+ * 1行だけ残す（Issue #1703）。
+ *
+ * **これは失敗ではなく、台帳と実際の食い違いが残っている可能性の跡である。**
+ * `noteWithheldReportsDiscarded` と同じ「第三の状況」——書き込みや読み出しが
+ * 失敗したわけではなく、**台帳には `status: 'stopped'` が書けているのに、
+ * runner 側では畳み直しを確かめられなかった**、という状態である。
+ *
+ * **`noteDroppedRecord` を流用しないのは、あれが「記録できませんでした」と
+ * 書くからである。** ここで書けなかったのは記録ではなく、runner 側の実際の
+ * 停止確認——文言を混ぜると、跡そのものが何が起きたかを取り違えさせる。
+ *
+ * **本文は載せない。** `managerId` はこちらが発行した id、`outcome` は
+ * `#confirmStoppedAndReleaseLease` の戻り値の型（`'stopped' | 'not_stopped' |
+ * 'unknown'`。実際に渡ってくるのは `'not_stopped' | 'unknown'` 側だけ——
+ * `'stopped'` ならこの関数は呼ばれない）の列挙値で、どちらも外から来た自由文
+ * ではない。
+ *
+ * @param managerId どの委譲か（こちらが発行した id）。
+ * @param outcome `#confirmStoppedAndReleaseLease` が返した `outcome`
+ *   （`'stopped'` 以外——`'stopped'` ならこの関数は呼ばれない）。
+ */
+export function noteResumeAfterStopFoldFailed(managerId: string, outcome: string): void {
+  note(
+    `止められた後に resume したセッションを畳めなかった` +
+      `（managerId=${tag(managerId)} outcome=${tag(outcome)}）。` +
+      '台帳の status は stopped のままだが、runner 側で本当に畳めたかは未確認——' +
+      '手で確かめること。',
+  );
+}
+
+/**
  * **背景で起こした処理**（`void f()` の形で切り離したもの）が例外で終わったことを
  * stderr へ1行だけ残す（#438 案D）。
  *

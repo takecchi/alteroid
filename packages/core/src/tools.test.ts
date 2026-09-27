@@ -12357,6 +12357,60 @@ describe('usage_read の5軸と、打ち切りから続きへ辿る道', () => {
   });
 
   /**
+   * **issue #1719 の再現（`usage_read` の軸モード。道具の層の歯）。**
+   *
+   * `usage-cursor.test.ts` の B10 は `findUsageCursorTies` を直接呼んで錨を
+   * 組み立てるので、`tools.ts` 側の呼び出し（`encodeUsageCursor` に
+   * `tiedAtAsOf: findUsageCursorTies(...)` を渡す行）が丸ごと抜けても気づけ
+   * ない——道具の層の歯が別に要る理由である。
+   *
+   * **通るのは軸モードの「続きへ辿る」側**（`USAGE_AXIS_PAGE`＝100 で打ち切る
+   * 側）——まとめ表示の `USAGE_AXIS_LIMIT`＝14 側ではない。1回目の呼び出しから
+   * `axis: 'manager'` を指定しているので、まとめ表示を経由せず、100件目で
+   * 直接打ち切られる。
+   */
+  it('#1719: 軸モードの続きへ辿る間に、最下位の行が asOf と同じミリ秒のまま追い越しても欠落しない（同着）', async () => {
+    const h = harness();
+    const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
+    for (let i = 0; i < 100; i += 1) {
+      await record(h, {
+        layer: 'manager',
+        site: 'session',
+        managerId: `mgr-${String(i).padStart(3, '0')}`,
+        costUsd: 100 - i,
+        at: FIRST_CALL_AT,
+      });
+    }
+    // 100件目（mgr-099, 費用1）の錨より下位・非表示。かつ asOf をちょうど作る行。
+    await record(h, {
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-100',
+      costUsd: 0.5,
+      at: FIRST_CALL_AT,
+    });
+
+    // 1回目から axis を指定する＝軸モード。まとめ表示を経由しない。
+    const first = await h.call('usage_read', { axis: 'manager' });
+    expect(first).not.toContain('mgr-100');
+    const cursor = extractUsageCursor(first, 'manager');
+
+    // 前回と同じミリ秒（asOf と同着）のまま、mgr-100 が費用を積んで錨を追い越す。
+    await record(h, {
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-100',
+      costUsd: 500,
+      at: FIRST_CALL_AT,
+    });
+
+    const continuation = await h.call('usage_read', { axis: 'manager', cursor });
+
+    expect(continuation).toContain('順位が上がった');
+    expect(continuation).toContain('mgr-100');
+  });
+
+  /**
    * **記録が増えない対照。** cursor（keyset）に切り替えても、通常の場合
    * （途中で記録が増えない）は複数頁を欠落・重複なく辿れること。
    */
@@ -21085,6 +21139,39 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
 
     // まとめを見てから続きを取りに行くまでの間に、mgr-000 が費用を積んで最上位へ移る。
     await bump(h, 'mgr-000', 1000, '2026-08-14T11:00:00.000Z');
+
+    const reply = await h.call('self_status', { ledgerCursor: cursor });
+
+    expect(reply).toContain('順位が上がった');
+    expect(reply).toContain('managerId: "mgr-000"');
+  });
+
+  /**
+   * **issue #1719 の再現（`self_status` の `ledgerCursor`。道具の層の歯）。**
+   *
+   * 直上の #1673 の歯と同じ形だが、`bump` の時刻を「後で」ではなく asOf と
+   * **同じミリ秒**にしてある。`usage-cursor.test.ts` の B10/B11/B12 は
+   * `findUsageCursorTies` を直接呼ぶ単体テストなので、`tools.ts` の
+   * `renderLedgerCrossReference`（`entries.slice(0, USAGE_AXIS_LIMIT)` を
+   * 打ち切る側）で `tiedAtAsOf: findUsageCursorTies(...)` の行が丸ごと
+   * 抜けても気づけない——道具の層の歯が別に要る理由である。
+   *
+   * **通るのは「まとめ表示」側**（`entries.length > USAGE_AXIS_LIMIT` で
+   * 打ち切る側。`ledgerCursor` を渡した続きの呼び出しで、さらに
+   * `USAGE_AXIS_PAGE`＝100 を超えて打ち切る側ではない——件数が15件なので
+   * そちらには届かない）。
+   */
+  it('#1719: 前回の呼び出しと同じミリ秒のまま記録が増えると、順位が上がった行が別枠で出る（同着）', async () => {
+    const h = harness(() => RUNTIME);
+    const FIRST_CALL_AT = '2026-08-14T10:00:00.000Z';
+    await seed(h, 15, FIRST_CALL_AT); // mgr-000(費用1, 最下位) .. mgr-014(費用15, 最上位)
+
+    const first = await h.call('self_status', {});
+    const cursor = extractLedgerCursor(first);
+    expect(first).not.toContain('"mgr-000"');
+
+    // 前回の呼び出しと同じミリ秒（asOf と同着）のまま、mgr-000 が費用を積んで最上位へ移る。
+    await bump(h, 'mgr-000', 1000, FIRST_CALL_AT);
 
     const reply = await h.call('self_status', { ledgerCursor: cursor });
 

@@ -5621,7 +5621,13 @@ export function createApp(deps: AppDeps) {
           '**下見（既定）でも走行中の委譲の判定は評価する**——`targeted` /' +
           '`skipped.inUse` は下見と実行で同じ値になる。下見が返さない実行だけの' +
           '事実は `removedBytes`（下見は常に0）と `raced`（下見は常に0。' +
-          '`remove()` 自体を呼ばないので測れない）だけである。',
+          '`remove()` 自体を呼ばないので測れない）だけである。' +
+          '**実行時の `raced` は、選定と走行中チェックを通った行が、実際に' +
+          'tombstone する瞬間には他経路（別の一括呼び出し・自動の畳み・' +
+          '単発の `DELETE /archive/:id` など）にすでに tombstone されて' +
+          'いた件数である。** この行はこの呼びが消したことにしない——' +
+          '`removedIds` にも `removedBytes` にも日誌にも載らず、`raced` だけで' +
+          '数える。',
         responses: {
           200: {
             description: '試算、または実際に消した結果。',
