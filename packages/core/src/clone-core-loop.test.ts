@@ -2574,7 +2574,6 @@ describe('クローン', () => {
     },
   );
 
-
   it(
     '会話 id を持つ承認に答えると、返答が with: "human" としてその会話 id と共に' +
       '日誌へ積まれ、会話の窓（readConversationWindow）からも読める（#768）',
