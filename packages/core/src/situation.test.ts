@@ -15,6 +15,7 @@ import {
   describeSituation,
   describeSituationUnavailable,
   describeTokenSituation,
+  latestManagerStartAt,
   RECENT_MANAGER_START_WINDOW_MS,
 } from './situation.js';
 
@@ -457,6 +458,50 @@ describe('countRecentManagerStarts（#1103 案1）', () => {
   });
 });
 
+/**
+ * #1103 コメント 2026-09-27。「最後に `manager_start` した時刻」の最大値。
+ * `countRecentManagerStarts` と違い**窓を掛けない**——窓の外の開始こそが
+ * この関数の値打ちである（`latestManagerStartAt` の doc「窓を掛けない」）。
+ */
+describe('latestManagerStartAt（#1103 コメント 2026-09-27）', () => {
+  const AT = Date.parse('2026-09-16T14:51:00.000Z');
+
+  function startedMsAgo(msAgo: number): ManagerSummary {
+    return { ...summary('x', 'running', true), startedAt: new Date(AT - msAgo).toISOString() };
+  }
+
+  it('最大値（いちばん最近の開始）を返す。並び順に依存しない', () => {
+    // **わざと新しい順ではない並びで渡す**——実装が「最後に見た値」や
+    // 「最初に見た値」を返しているだけなら、並びを変えると落ちる。
+    const managers = [
+      startedMsAgo(4 * 60 * 60 * 1000), // 4時間前
+      startedMsAgo(30 * 60 * 60 * 1000), // 30時間前（いちばん古い）
+      startedMsAgo(60 * 60 * 1000), // 1時間前（いちばん新しい＝最大値）
+    ];
+    expect(latestManagerStartAt(managers)).toBe(AT - 60 * 60 * 1000);
+  });
+
+  it('1本も居なければ undefined を返す（0 でも -Infinity でもない）', () => {
+    expect(latestManagerStartAt([])).toBeUndefined();
+  });
+
+  it('startedAt が壊れている委譲は最大値の候補から除く', () => {
+    const managers = [
+      { ...summary('a', 'running', true), startedAt: 'not-a-date' },
+      startedMsAgo(2 * 60 * 60 * 1000),
+    ];
+    expect(latestManagerStartAt(managers)).toBe(AT - 2 * 60 * 60 * 1000);
+  });
+
+  it('全部の startedAt が壊れていれば undefined を返す', () => {
+    const managers = [
+      { ...summary('a', 'running', true), startedAt: 'not-a-date' },
+      { ...summary('b', 'running', true), startedAt: '' },
+    ];
+    expect(latestManagerStartAt(managers)).toBeUndefined();
+  });
+});
+
 describe('countRunnerStates', () => {
   /** **6値を畳まない**（`manager.ts` の `RunnerOverview.state` の doc）。 */
   it('RunnerLiveness の6値をそれぞれ別に数える', () => {
@@ -659,6 +704,128 @@ describe('describeSituation', () => {
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
     expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本');
+  });
+
+  /**
+   * #1103 コメント 2026-09-27。**issue 本文の実測そのもの**（4時間36分、
+   * 10:15Z マージ → 14:51Z 気づいた）を、そのまま `startedAt` / `at` に
+   * 置いている——例文の字面（「0 本（最後に起こしたのは 4時間36分前）」）
+   * と一致することを固定する歯。最後の開始は窓の外（4時間36分前 > 3時間）
+   * なので `recentStarts` は 0 のままである。
+   */
+  it('⭐ 0 本のときも、最後に起こした経過が括弧で添えられる（issue本文の実測どおり）', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const LAST_START = Date.parse('2026-09-16T10:15:00.000Z'); // 4時間36分前
+    const text = describeSituation({
+      managers: [{ ...summary('a', 'done', true), startedAt: new Date(LAST_START).toISOString() }],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain(
+      '直近3時間に新しく起こした委譲: 0 本（最後に起こしたのは 4時間36分前）。',
+    );
+  });
+
+  /**
+   * #1103 コメント 2026-09-27。**1 本以上のときも同じ括弧が添えられる**——
+   * 依頼文の例（「2 本（最後に起こしたのは 12分前）」）の字面を固定する。
+   * ここでは窓の中の1本がそのまま最後の開始でもある（分だけの粒度）。
+   */
+  it('⭐ 1本以上のときも、最後に起こした経過が括弧で添えられる（分だけの粒度）', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({
+      managers: [
+        {
+          ...summary('a', 'running', true),
+          startedAt: new Date(AT - 12 * 60 * 1000).toISOString(),
+        },
+        {
+          ...summary('b', 'running', true),
+          startedAt: new Date(AT - 30 * 60 * 1000).toISOString(),
+        },
+      ],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain(
+      '直近3時間に新しく起こした委譲: 2 本（最後に起こしたのは 12分前）。',
+    );
+  });
+
+  /**
+   * #1103 コメント 2026-09-27。**分未満は「1分未満前」に丸める**
+   * （`formatElapsedSinceLastStart` の粒度）。
+   */
+  it('⭐ 最後の開始が1分未満前なら「1分未満前」と出る', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({
+      managers: [
+        { ...summary('a', 'running', true), startedAt: new Date(AT - 30 * 1000).toISOString() },
+      ],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain(
+      '直近3時間に新しく起こした委譲: 1 本（最後に起こしたのは 1分未満前）。',
+    );
+  });
+
+  /**
+   * #1103 コメント 2026-09-27。**時計のずれで `startedAt` が `at` より未来**
+   * （負の経過）でも、節そのものは落ちず「1分未満前」へ丸める
+   * （`formatElapsedSinceLastStart` の doc「未来向きの扱い」）。
+   */
+  it('⭐ 最後の開始が観測時刻より未来（時計のずれ）でも「1分未満前」に丸まる', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({
+      managers: [
+        {
+          ...summary('a', 'running', true),
+          startedAt: new Date(AT + 10 * 60 * 1000).toISOString(),
+        },
+      ],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    // 「1 本」（窓の中——未来の開始も `at` 以下ではないので実は境界外だが、
+    // ここで固定したいのは括弧の丸め方であって本数ではない）。
+    expect(countsLine).toContain('（最後に起こしたのは 1分未満前）。');
+  });
+
+  /**
+   * #1103 コメント 2026-09-27。**委譲が0本なら括弧そのものが出ない**
+   * （出せる値が無い。`latestManagerStartAt` が `undefined` を返す）。
+   */
+  it('⭐ 委譲が0本なら括弧は出ない', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({ managers: [], runners: [], at: AT });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本。');
+    expect(countsLine).not.toContain('（');
+  });
+
+  /**
+   * #1103 コメント 2026-09-27。**全ての `startedAt` が `Date.parse` で
+   * `NaN` なら括弧は出ない**——委譲は1本以上居るが、経過を言える値が
+   * 1つも無い（`latestManagerStartAt` の「壊れた `startedAt` は無視する」）。
+   */
+  it('⭐ 全ての startedAt が壊れていれば括弧は出ない（委譲は1本以上居る）', () => {
+    const AT = Date.parse('2026-09-16T14:51:00.000Z');
+    const text = describeSituation({
+      managers: [
+        { ...summary('a', 'running', true), startedAt: 'not-a-date' },
+        { ...summary('b', 'running', true), startedAt: '' },
+      ],
+      runners: [],
+      at: AT,
+    });
+    const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
+    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本。');
+    expect(countsLine).not.toContain('（');
   });
 
   /**

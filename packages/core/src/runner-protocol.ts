@@ -744,6 +744,18 @@ export const unpushedWorkResultSchema = z.object({
    * 分は全部載せ、調べられなかった分は各欄の `*Unknown` に理由が付く。
    */
   stoppedEarly: z.literal(true).optional(),
+  /**
+   * `findManagerScratchRoots`（`unpushed-work.ts`）が `/tmp` 直下のスクラッチ
+   * ディレクトリの有無そのものを確かめられなかったときだけ載る（理由）。
+   * **`managerId` を渡さなかった呼び出しでは載らない**——その探索自体を
+   * 行っていないため（省略と「確かめて0件だった」を区別しないでよい）。
+   *
+   * ⚠️ **省略を「/tmp にスクラッチディレクトリは無かった」と読まないこと。**
+   * この欄が載っているとき、`worktrees` は `/tmp` 由来の作業ツリーを1本も
+   * 含んでいない可能性がある——見つからなかったのではなく、探せなかった
+   * （#1765 段2。`AGENTS.md`「取れない軸に0の行を作る」の裏）。
+   */
+  scratchRootsUnknown: z.string().optional(),
 });
 export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
 

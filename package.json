@@ -18,6 +18,7 @@
     "check:restart-before-check-advice": "node ./scripts/check-restart-before-check-advice.mjs",
     "check:sdk-quotes": "node ./scripts/check-sdk-quotes.mjs",
     "check:stale-token-restart-advice": "node ./scripts/check-stale-token-restart-advice.mjs",
+    "check:verified-head": "node ./scripts/check-verified-head.mjs",
     "check:web-bundle-node-traces": "node ./scripts/check-web-bundle-node-traces.mjs",
     "check:web-bundle-size": "node ./scripts/check-web-bundle-size.mjs",
     "check:web-css-comment-classnames": "node ./scripts/check-web-css-comment-classnames.mjs",

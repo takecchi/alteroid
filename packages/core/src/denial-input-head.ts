@@ -173,14 +173,30 @@ function redactKnownSecretPatterns(text: string): string {
  * ——循環参照など `JSON.stringify` が例外を投げる形も含む
  * （`denial-shape.ts` の `charsOf` と同じ判断）。
  *
- * **`export` する（issue #1105 P1）。** `runner.ts` の1回限りの許可の一致鍵
- * （`#consumeOneShotAllow` / `#onPermissionDenied`）は、この関数が返す
- * **伏せ字にする前・切る前の完全な文字列**をダイジェストの材料にする——
- * `buildDenialInputHead`（表示用。伏せ字つき・160字に切る）をそのまま使うと、
- * 先頭160字が同じで残りが違う別の入力が誤って一致しうる（issue #1105 の
- * 要求「入力が1文字違えば返さない」）。ここで1つの実装を共有することで、
- * 「1行に畳む」というロジック自体は表示用途・一致判定用途のどちらでも
- * 同じになる（畳み方が2箇所でずれる事故を防ぐ）。
+ * **`export` する。** `buildDenialInputHead`（表示用。伏せ字つき・160字に切る）
+ * がこの関数を土台にする。
+ *
+ * ## ⚠️ 一致鍵には使わない（issue #1768）
+ *
+ * `runner.ts` の1回限りの許可の一致鍵（`#consumeOneShotAllow` /
+ * `#onPermissionDenied`）は、**この関数の返り値を使わない。**
+ * 以前はここが「伏せ字にする前・切る前の完全な文字列」を返すという説明の
+ * もとで一致鍵の材料にも使われていたが、その説明は `command` という文字列欄を
+ * 持たない入力（`JSON.stringify` へ落ちる形）にしか当てはまっていなかった。
+ * `Bash` のように `command` を持つオブジェクトでは、**この関数は `command` の
+ * 値だけを返し、`run_in_background` / `timeout` / `dangerouslyDisableSandbox`
+ * のようなほかの欄を丸ごと捨てる**（すぐ下の実装のとおり）。一致鍵にこれを
+ * 使うと、`command` が同じでほかの欄だけが違う撃ち直し（前景/背景・
+ * サンドボックスの有無など、実行の意味論を変える差分）にまで、クローンが
+ * 出した1回だけの許可が及んでしまう——「入力が1文字違えば返さない」という
+ * 要求を満たさない、**許しすぎる側の穴**だった（issue #1768。横断レビュー
+ * 14回目、PR #1750 の歯が `command` の文字列しか変えない対照しか持たな
+ * かったため、この穴には気づかれていなかった）。
+ *
+ * **一致鍵には {@link matchInputOf} を使う**——入力全体（`command` を含む
+ * 全欄）をキー順に依らない形で畳んだもの。表示（`buildDenialInputHead`）は
+ * 「読みやすい短い1行」を目的にしているので `rawLineOf` のままでよく、
+ * 今回変えたのは**鍵の側だけ**である。
  */
 export function rawLineOf(toolInput: unknown): string | undefined {
   if (toolInput === undefined) return undefined;
@@ -194,6 +210,66 @@ export function rawLineOf(toolInput: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * `toolInput` **全体**を、1回だけの許可（issue #1105 P1）の一致鍵に使うための
+ * 文字列へ正規化する（issue #1768）。
+ *
+ * ## `rawLineOf` との違い（なぜ別の関数が要ったか）
+ *
+ * `rawLineOf` は表示用に作った関数で、`command` という文字列欄を持つ入力からは
+ * **その欄だけ**を取り出し、ほかの欄を捨てる。一致鍵にそれを使うと、`command`
+ * が同じでほかの欄（`run_in_background` / `timeout` /
+ * `dangerouslyDisableSandbox` 等）だけが違う撃ち直しにまで許可が及ぶ——
+ * issue #1768 が見つけた「許しすぎる側」の穴そのもの。この関数は**入力の
+ * 全欄**をダイジェストの材料にすることでそれを塞ぐ。
+ *
+ * ## 正規化の中身——キー順に依らない
+ *
+ * オブジェクトはすべての階層でキーを辞書順に並べ替えてから `JSON.stringify`
+ * する。SDK がオブジェクトのキー順を安定して返す保証は無いので、**同じ入力が
+ * キー順の違いだけで別の鍵にならない**ようにするためである（配列の要素順序は
+ * 変えない——配列は「順序を持つ値」として入力の一部だから）。
+ *
+ * ## `description` のような欄も除外していない
+ *
+ * Bash の `description` は実行の意味論を変えない欄だが、あえて鍵から外して
+ * いない。「どの欄が意味を持つか」を道具ごとに知る前提を鍵に持ち込むと、
+ * 新しい道具・新しい欄が増えるたびに見直しが要る——**迷ったら入力全体を鍵に
+ * する**（厳しい側。同じ内容の撃ち直しだけが通る。1個でも欄が増減・変化した
+ * 撃ち直しは、たとえ意味を変えない欄の変化でも、あらためて分類器の判定を
+ * 受ける）。この判断で通らなくなる撃ち直しは、クローンにもう一度「1回だけ
+ * 許可する」を求めるだけで、安全側にしか倒れない。
+ *
+ * ## `undefined` を返すのは入力が無い・畳めないときだけ
+ *
+ * `toolInput === undefined` か、循環参照などで `JSON.stringify` が例外を
+ * 投げる形（`rawLineOf` と同じ判断）。一致鍵が作れない入力は、呼び出し側
+ * （`#onPermissionDenied` / `#consumeOneShotAllow`）が「1回だけの許可を
+ * 出さない・使わない」という安全側の扱いにする。
+ */
+export function matchInputOf(toolInput: unknown): string | undefined {
+  if (toolInput === undefined) return undefined;
+  try {
+    return JSON.stringify(sortKeysDeep(toolInput));
+  } catch {
+    return undefined;
+  }
+}
+
+/** オブジェクトのキーをすべての階層で辞書順に並べ替える（配列の要素順序は変えない）。 */
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) {
+      sorted[key] = sortKeysDeep(source[key]);
+    }
+    return sorted;
+  }
+  return value;
 }
 
 /**

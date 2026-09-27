@@ -268,28 +268,56 @@ export function matchesManagerScratchDirName(name: string, managerId: string): b
   return managerId.startsWith(`mgr-${hex}`);
 }
 
+/** {@link findManagerScratchRoots} の戻り値。 */
+export interface FindManagerScratchRootsResult {
+  /** 当たったディレクトリの絶対パス。`unknownReason` が載っているときは常に空。 */
+  readonly paths: readonly string[];
+  /**
+   * `tmpRootDir` 自体を読めなかった（存在しない・権限が無い等）ときの理由。
+   * **省略 = 読めた**（`paths` が空でも「無かった」と確認できている）。
+   *
+   * ⚠️ **`findGitDirs` の「読めないディレクトリは黙って諦める」とは狙いが
+   * 違う。** あちらは探索途中の任意の1階層の読み取り失敗で、見つかった分を
+   * そのまま正としてよい（未探索の枝が在っても全体の答えは変わらない設計）。
+   * こちらは探索の**起点そのもの**（`tmpRootDir` 自体）が読めない場合で、
+   * 読めなければ「当たるディレクトリが1つも無かった」のか「そもそも見えて
+   * いない」のかを`paths: []` だけでは呼び出し側が区別できない——
+   * だから理由を別の欄に残す（#1765 段2。呼び出し側 `computeUnpushedWork`
+   * はこれを `UnpushedWorkResult.scratchRootsUnknown` へそのまま伝える）。
+   */
+  readonly unknownReason?: string;
+}
+
 /**
  * `tmpRootDir`（既定は実際の `/tmp`）の直下を読み、`managerId` のスクラッチ
  * ディレクトリとして当たるものの絶対パスを返す（冒頭の doc「3.6.」）。
  *
  * **`tmpRootDir` の直下の名前一覧を読む以外、何もしない。** 当たらなかった
- * エントリの中へは降りない・stat もしない。`tmpRootDir` 自体を読めなければ
- * （存在しない・権限が無い等）空配列を返す——`findGitDirs` が個々の
- * ディレクトリの読み取り失敗を黙って諦めるのと同じ扱いである。
+ * エントリの中へは降りない・stat もしない。**`tmpRootDir` 自体を読めなければ
+ * `paths: []` へ静かに畳まず、`unknownReason` に理由を残す**——ここを `[]`
+ * に潰すと、呼び出し側（`computeUnpushedWork` → `manager-auto-fold.ts` の
+ * 自動畳み込みの安全弁）が「他マネージャー/作業者のスクラッチディレクトリに
+ * 未 push の実装は無かった」と読んでしまい、実際には確かめられていないだけの
+ * ケースを見落とす（#1765 段2）。
  */
 export async function findManagerScratchRoots(
   tmpRootDir: string,
   managerId: string,
-): Promise<string[]> {
+): Promise<FindManagerScratchRootsResult> {
   let entries;
   try {
     entries = await readdir(tmpRootDir, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      paths: [],
+      unknownReason: `確かめられなかった（${tmpRootDir} を読めなかった: ${detail}）`,
+    };
   }
-  return entries
+  const paths = entries
     .filter((entry) => entry.isDirectory() && matchesManagerScratchDirName(entry.name, managerId))
     .map((entry) => path.join(tmpRootDir, entry.name));
+  return { paths };
 }
 
 /**
@@ -616,19 +644,25 @@ function describeWorktreePath(cwd: string, repoRoot: string): string {
  * **この関数自体は例外を投げない**——個々の git 呼び出しが失敗しても、
  * その1本だけが「確かめられなかった」を名乗り、他の作業ツリーの結果には
  * 影響しない。
+ *
+ * **この約束は `findManagerScratchRoots` の入口（`tmpRootDir` 自体が読める
+ * か）までは元々及んでいなかった（#1765 段2で塞いだ穴）。** `managerId` を
+ * 渡したのに `/tmp` 直下を読めなかった場合は、`worktrees` を空にするのでは
+ * なく `result.scratchRootsUnknown` に理由を残す——ここも「個々の呼び出しが
+ * 確かめられなかったを名乗る」対象に含める。
  */
 export async function computeUnpushedWork(
   cwd: string,
   options: ComputeUnpushedWorkOptions,
 ): Promise<UnpushedWorkResult> {
-  const scratchRoots =
+  const scratchRoots: FindManagerScratchRootsResult =
     options.managerId === undefined
-      ? []
+      ? { paths: [] }
       : await findManagerScratchRoots(
           options.tmpRootDir ?? MANAGER_SCRATCH_TMP_ROOT,
           options.managerId,
         );
-  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots], {
+  const found = await findGitDirsAcrossRoots([cwd, ...scratchRoots.paths], {
     maxDepth: options.maxDepth,
     maxCount: options.maxWorktrees,
   });
@@ -668,5 +702,8 @@ export async function computeUnpushedWork(
     worktrees,
     ...(found.truncatedAtCount === undefined ? {} : { truncatedAtCount: found.truncatedAtCount }),
     ...(stoppedEarly ? { stoppedEarly: true } : {}),
+    ...(scratchRoots.unknownReason === undefined
+      ? {}
+      : { scratchRootsUnknown: scratchRoots.unknownReason }),
   };
 }

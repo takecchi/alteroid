@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDenialInputHead, DENIAL_INPUT_HEAD_LIMIT } from './denial-input-head.js';
+import {
+  buildDenialInputHead,
+  DENIAL_INPUT_HEAD_LIMIT,
+  matchInputOf,
+} from './denial-input-head.js';
 
 /**
  * `buildDenialInputHead`（拒否より前に見た入力の先頭。issue #1105）。
@@ -217,5 +221,69 @@ describe('buildDenialInputHead / 伏せてから切る（境界にトークン�
     const head = buildDenialInputHead({ command: raw }, undefined);
     expect(head).toBe(raw);
     expect(head).not.toContain('…');
+  });
+});
+
+/**
+ * `matchInputOf`（1回だけの許可の一致鍵。issue #1768）。
+ *
+ * **`rawLineOf` / `buildDenialInputHead` と違い、`command` だけを特別扱い
+ * しない。** `command` を持つオブジェクトでも、`command` 以外の欄が一致鍵に
+ * 反映されることが本体（issue #1768 が見つけた穴そのものの裏返し）。
+ */
+describe('matchInputOf / 一致鍵は入力全体を見る（issue #1768）', () => {
+  it('command 欄だけの入力と、command 以外の欄も持つ入力は別の鍵になる', () => {
+    const commandOnly = matchInputOf({ command: 'echo x' });
+    const withExtra = matchInputOf({ command: 'echo x', run_in_background: true });
+    expect(commandOnly).not.toEqual(withExtra);
+  });
+
+  it('run_in_background だけが違う入力は別の鍵になる（issue #1768 の「赤を取った例」）', () => {
+    const foreground = matchInputOf({ command: 'echo x', run_in_background: false });
+    const background = matchInputOf({ command: 'echo x', run_in_background: true });
+    expect(foreground).not.toEqual(background);
+  });
+
+  it('dangerouslyDisableSandbox だけが違う入力は別の鍵になる（issue #1768 の「測っていないが同じ形」）', () => {
+    const sandboxed = matchInputOf({ command: 'echo x', dangerouslyDisableSandbox: false });
+    const unsandboxed = matchInputOf({ command: 'echo x', dangerouslyDisableSandbox: true });
+    expect(sandboxed).not.toEqual(unsandboxed);
+  });
+
+  it('欄の並び順だけが違う、内容が同一の入力は同じ鍵になる（キー順に依らない）', () => {
+    const a = matchInputOf({ command: 'echo x', run_in_background: false, timeout: 5000 });
+    const b = matchInputOf({ timeout: 5000, command: 'echo x', run_in_background: false });
+    expect(a).toEqual(b);
+  });
+
+  it('ネストしたオブジェクトのキー順も無視する', () => {
+    const a = matchInputOf({ command: 'echo x', nested: { z: 1, a: 2 } });
+    const b = matchInputOf({ nested: { a: 2, z: 1 }, command: 'echo x' });
+    expect(a).toEqual(b);
+  });
+
+  it('配列の要素順序は変えない（順序を持つ値として扱う）', () => {
+    const a = matchInputOf({ command: 'echo x', items: [1, 2] });
+    const b = matchInputOf({ command: 'echo x', items: [2, 1] });
+    expect(a).not.toEqual(b);
+  });
+
+  it('入力そのものが無い（undefined）→ undefined を返す', () => {
+    expect(matchInputOf(undefined)).toBe(undefined);
+  });
+
+  it('循環参照など JSON.stringify が例外を投げる形 → undefined を返す（測れなかった扱い）', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(matchInputOf(circular)).toBe(undefined);
+  });
+
+  it('素の文字列はそのままキーの材料になる', () => {
+    expect(matchInputOf('plain text input')).toBe(JSON.stringify('plain text input'));
+  });
+
+  it('同じ内容を2回渡すと同じ鍵になる（安定性）', () => {
+    const input = { command: 'echo x', run_in_background: false };
+    expect(matchInputOf(input)).toEqual(matchInputOf({ ...input }));
   });
 });

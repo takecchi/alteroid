@@ -268,3 +268,112 @@ describe('inspectBashCommand — 背景の判定で誤爆しない（⭐ 偽陽�
     expect(inspectBashCommand('gh run watch 123 --exit-status').blocked).toBe(false);
   });
 });
+
+/**
+ * `gh pr merge --delete-branch`（Issue #1764）。
+ *
+ * **上の3形・`gh-run-watch-background` とは害の種類が違う。** あちらは
+ * 「コマンドが終わらない」ことを弾いているが、こちらは一瞬で終わる ——
+ * 害は「終わった後に取り返しが付かない」ことのほうである（積んだ PR が
+ * 黙って閉じ、閉じたあとは reopen も --base の付け替えも拒まれる。実測は
+ * `.claude/skills/tool-quirks/SKILL.md`、2026-09-15T07:3xZ、PR #1008/#1010）。
+ *
+ * **2群に分けるのは他の形と同じだが、Issue 本文が明示した順で書く** ——
+ * 「弾く形」より先に「弾いてはいけないもの」を厚く測る。この文字列は
+ * PR 本文・Issue 本文・説明文の中に頻出するので、`gh-run-watch-background`
+ * と同じ理由で偽陽性のほうが高くつく。
+ */
+describe('inspectBashCommand — gh pr merge --delete-branch: 弾いてはいけないもの（⚠️ 偽陽性を先に測る）', () => {
+  it('--delete-branch を付けていない gh pr merge は通す', () => {
+    expect(inspectBashCommand('gh pr merge 123 --squash').blocked).toBe(false);
+  });
+
+  it('ヒアドキュメントの本文の中に在る gh pr merge --delete-branch は通す', () => {
+    const command = "cat > body.md <<'EOF'\ngh pr merge 1 --delete-branch を使った\nEOF";
+    expect(inspectBashCommand(command).blocked).toBe(false);
+  });
+
+  it('引用符の中に在る gh pr merge --delete-branch は通す', () => {
+    expect(inspectBashCommand('echo "gh pr merge 1 --delete-branch は使わない"').blocked).toBe(
+      false,
+    );
+  });
+
+  it('gh pr create --body の引用符の中に在る --delete-branch は通す（Issue 本文の例そのまま）', () => {
+    expect(
+      inspectBashCommand(
+        'gh pr create --title x --body "この PR は --delete-branch を使っていません"',
+      ).blocked,
+    ).toBe(false);
+  });
+
+  it('gh pr merge 以外のコマンドの引数に現れる --delete-branch は通す（Issue 本文の例そのまま）', () => {
+    expect(inspectBashCommand("grep -- '--delete-branch' notes.md").blocked).toBe(false);
+  });
+
+  it('-d を含む別の語（-dev 等）と誤認しない', () => {
+    expect(inspectBashCommand('gh pr merge 123 -dev').blocked).toBe(false);
+  });
+
+  // ⚠️ 弾けない形（doc「この検出器が弾けないと分かっている形」）。構文
+  // （コマンド位置）しか見ていないので、`bash -c` の引用符の中に本物の
+  // `gh pr merge --delete-branch` が在っても、この検出器はここでは検出
+  // できない。直していない既知の穴として歯に明記する
+  // （既存のテストの末尾の作法。`gh-run-watch-background` は逆に「弾く」歯
+  // だけを持つので、この穴は `bash-wait-guard.ts` 冒頭の doc の弱さの節と
+  // 同じ位置づけである）。
+  it('⚠️ 弾けない形: bash -c の引用符の中は構文しか見ないので通ってしまう', () => {
+    expect(inspectBashCommand("bash -c 'gh pr merge 1 --delete-branch'").blocked).toBe(false);
+  });
+});
+
+describe('inspectBashCommand — gh pr merge --delete-branch を弾く', () => {
+  it('--delete-branch を弾く', () => {
+    const verdict = inspectBashCommand('gh pr merge 123 --delete-branch');
+    expect(verdict.blocked).toBe(true);
+    if (!verdict.blocked) throw new Error('unreachable');
+    expect(verdict.form).toBe('gh-pr-merge-delete-branch');
+    expect(verdict.reason).toContain('--delete-branch');
+    expect(verdict.reason).toContain('delete_branch_on_merge');
+  });
+
+  it('-d（短縮形）も弾く', () => {
+    expect(inspectBashCommand('gh pr merge 123 -d').blocked).toBe(true);
+  });
+
+  it('フラグの順序に依存しない（--delete-branch が先でも後でも弾く）', () => {
+    expect(inspectBashCommand('gh pr merge 123 --delete-branch --squash').blocked).toBe(true);
+    expect(inspectBashCommand('gh pr merge 123 --squash --delete-branch').blocked).toBe(true);
+  });
+
+  it('コマンドの位置（; && || | の直後）に在れば弾く', () => {
+    expect(inspectBashCommand('git fetch; gh pr merge 123 --delete-branch').blocked).toBe(true);
+    expect(inspectBashCommand('git fetch && gh pr merge 123 --delete-branch').blocked).toBe(true);
+    expect(inspectBashCommand('false || gh pr merge 123 --delete-branch').blocked).toBe(true);
+    expect(inspectBashCommand('echo hi | gh pr merge 123 --delete-branch').blocked).toBe(true);
+  });
+
+  it('複数行スクリプトの2行目に在っても弾く（改行もコマンド位置）', () => {
+    expect(inspectBashCommand('git fetch\ngh pr merge 123 --delete-branch').blocked).toBe(true);
+  });
+
+  // ⭐ これが「無限待ち」の3形と違ってこの形だけ持つ歯である —— timeout は
+  // 待ちを有界にするだけで、PR を巻き添えで閉じる危険は消えない
+  // （`isTimeoutWrapped` の早期 return より先に見ている。doc「timeout N
+  // ... に包まれていても見る」）。
+  it('timeout でラップされていても弾く（待ちの有界性とは無関係の危険）', () => {
+    expect(inspectBashCommand('timeout 30 gh pr merge 123 --delete-branch').blocked).toBe(true);
+  });
+
+  it('拒否の理由に具体的な逃げ道が入っている（Issue 本文が指定した文言）', () => {
+    const verdict = inspectBashCommand('gh pr merge 123 --delete-branch');
+    if (!verdict.blocked) throw new Error('unreachable');
+    expect(verdict.reason).toContain('外して打つ');
+    expect(verdict.reason).toContain('delete_branch_on_merge');
+  });
+
+  it('actor と 形=gh-pr-merge-delete-branch は runner-pre-tool-use.test.ts の配線の歯が持つ（ここでは判定器の戻り値だけを見る）', () => {
+    const verdict = inspectBashCommand('gh pr merge 123 --delete-branch');
+    expect(verdict).toMatchObject({ blocked: true, form: 'gh-pr-merge-delete-branch' });
+  });
+});

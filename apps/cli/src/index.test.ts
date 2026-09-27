@@ -115,9 +115,9 @@ describe('alteroid daemon stop', () => {
 });
 
 describe('alteroid daemon status', () => {
-  it('稼働中なら pid・port・起動時刻・記憶の場所（デーモンに聞いた値）を出す', async () => {
+  it('稼働中（presence: present）なら pid・port・起動時刻・記憶の場所（デーモンに聞いた値）を出す', async () => {
     vi.mocked(daemon.status).mockResolvedValue({
-      running: true,
+      presence: 'present',
       info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
     });
     vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
@@ -133,8 +133,8 @@ describe('alteroid daemon status', () => {
     expect(text).not.toContain('/home/test/.alteroid');
   });
 
-  it('停止中なら「停止中」と言い、記憶の場所はローカルの alteroidRoot() に落ちる', async () => {
-    vi.mocked(daemon.status).mockResolvedValue({ running: false, info: null });
+  it('停止中（presence: absent）なら「停止中」と言い、記憶の場所はローカルの alteroidRoot() に落ちる', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({ presence: 'absent', info: null });
     const read = captureStdout();
 
     await daemonStatusCommand();
@@ -142,6 +142,25 @@ describe('alteroid daemon status', () => {
     const text = read();
     expect(text).toContain('停止中');
     expect(text).toContain('記憶: /home/test/.alteroid');
+    expect(daemon.storageOf).not.toHaveBeenCalled();
+  });
+
+  // ⭐ #1765 段2 の歯 — 「判定できない」という3つ目の状態（presence: 'unknown'）を
+  // 「停止中」に畳まないこと。畳むと、実際には生きているデーモンを見落として
+  // いても「停止中」という確定的な文言で報告してしまう（誤報）。
+  it('確かめられなかった（presence: unknown）なら「停止中」とは言わず、確認できないと言う', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({
+      presence: 'unknown',
+      info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+    });
+    const read = captureStdout();
+
+    await daemonStatusCommand();
+
+    const text = read();
+    expect(text).not.toContain('停止中');
+    expect(text).not.toContain('稼働中');
+    expect(text).toContain('確認できません');
     expect(daemon.storageOf).not.toHaveBeenCalled();
   });
 });

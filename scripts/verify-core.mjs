@@ -18,9 +18,10 @@
 // この repo の script はどれもこの形で揃えてあり、eslint の `no-undef` もそう要求する）。
 import { Buffer } from 'node:buffer';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readlinkSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, lstatSync, readFileSync, readlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import process from 'node:process';
 
 /**
  * ツリーの指紋。**読めなければ `null`** を返し、呼ぶ側は必ず走る側へ倒す
@@ -125,6 +126,73 @@ export function recordPathFor(repo) {
   const trimmed = dir.stdout.trim();
   if (trimmed === '') return null;
   return join(trimmed, 'alteroid-verify.json');
+}
+
+/**
+ * 一時 index に `git add -A` して `git write-tree` し、そのときの作業ツリーの
+ * 中身を tree の sha として得る（Issue #1763・#1192 の N7）。
+ *
+ * ## なぜ tree なのか（`fingerprint` の `HEAD` と対になる問題）
+ *
+ * `fingerprint` は `HEAD` の sha を畳んでいる（`feed('HEAD', …)`）。ふつうの
+ * 順序は「直す → `pnpm verify` → commit → push」なので、commit した瞬間に
+ * `HEAD` が動き、指紋は必ず一致しなくなる——**指紋をそのまま「push した
+ * commit の中身が検証済みか」の判定へ転用すると、正しい順序で作業しても
+ * 毎回「未検証」になる（偽陽性しか出ない）。** tree の sha は commit を
+ * 作っても変わらない（commit は既存の tree に親と作者情報を付けるだけの
+ * こともある）ので、`pnpm check:verified-head`（`check-verified-head-core.mjs`）
+ * は `HEAD` ではなく tree を比べる。
+ *
+ * ## 本物の index も作業ツリーも動かさない
+ *
+ * `GIT_INDEX_FILE` を差し替えた環境だけを渡すことで、書き込み先を一時
+ * ファイルへそらす——本物の `.git/index` は一度も開かない。一時ファイル名は
+ * 呼ぶたびに乱数を混ぜる（`AGENTS.md`「同一の git 作業ツリーを複数の
+ * プロセスが同時に書き換えることがある」——マネージャーと作業者が同じ
+ * ツリーで並行して `pnpm verify` を走らせても、固定名だと一時 index を
+ * 取り合う）。
+ *
+ * **`fingerprint` と見る範囲を揃えてある。** `fingerprint` は `git ls-files -co
+ * --exclude-standard` が挙げる集合（追跡 + 未追跡、ignore を除く）を畳み、
+ * `git add -A` も同じ規則（`--exclude-standard` 相当。ignore されたパスは
+ * 拾わない）でその集合をステージするので、両者が見る範囲は一致する。
+ *
+ * 取れなければ `null`（呼ぶ側は記録しない側へ倒す——`decideSkip` / `decideRecord`
+ * と同じ「判定できないを都合のよい側へ倒さない」向き）。
+ *
+ * **測っていないこと**: 大きなツリーで `git add -A` が一時 index に掛かる
+ * 時間。`pnpm verify` 一式（数分）に比べれば軽いと見込んでいるだけで、
+ * 実測はしていない（Issue #1763 が自分で挙げている留保）。
+ */
+export function writeTreeFor(repo) {
+  const dir = spawnSync('git', ['rev-parse', '--absolute-git-dir'], {
+    cwd: repo,
+    encoding: 'utf8',
+  });
+  if (dir.status !== 0) return null;
+  const gitDir = dir.stdout.trim();
+  if (gitDir === '') return null;
+
+  const indexFile = join(
+    gitDir,
+    'alteroid-verify-index.' + process.pid + '.' + randomBytes(6).toString('hex'),
+  );
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const add = spawnSync('git', ['add', '-A'], { cwd: repo, env });
+    if (add.status !== 0) return null;
+    const write = spawnSync('git', ['write-tree'], { cwd: repo, env, encoding: 'utf8' });
+    if (write.status !== 0) return null;
+    return write.stdout.trim();
+  } finally {
+    // **後片付けは finally で、失敗を無視する。** `git add -A` が一時 index を
+    // 作る前に落ちた場合、消すものが無いだけなので例外を握り潰してよい。
+    try {
+      unlinkSync(indexFile);
+    } catch {
+      // 意図的に無視（上のコメント）。
+    }
+  }
 }
 
 /**
@@ -587,7 +655,16 @@ export function decideRecord({ scope, moved, recordPath }) {
  * `now` は引数で受ける（既定値だけが `new Date()` を呼ぶ）。純粋なロジック
  * （`decideRecord` 等）からは呼ばれない——`verify.mjs` が一式の終わりに
  * 一度だけ呼ぶ想定。
+ *
+ * **`tree`（Issue #1763・#1192 の N7）は任意である。** 渡さなければ（`undefined`）
+ * 従来どおり `fingerprint` / `at` / `day` の3つだけの記録を返す——**既存の呼び出し
+ * （`scripts/verify-core.test.ts` の `recordFor('abc123', now)` 等）を1文字も
+ * 壊さない。** 渡した場合だけ `tree` を足す。`tree` が無い記録（旧形式）は
+ * `pnpm check:verified-head` から見ると「判定できない」に倒れる
+ * （`check-verified-head-core.mjs` の `compareVerifiedHead`）——`decideSkip` の
+ * 「旧形式の記録も安全側（走る）へ倒す」と同じ向き。
  */
-export function recordFor(fingerprint, now = new Date()) {
-  return { fingerprint, at: now.toISOString(), day: now.toISOString().slice(0, 10) };
+export function recordFor(fingerprint, now = new Date(), tree = undefined) {
+  const record = { fingerprint, at: now.toISOString(), day: now.toISOString().slice(0, 10) };
+  return tree === undefined ? record : { ...record, tree };
 }

@@ -21,8 +21,9 @@
  * ⟹ **この道具は「同じ sha の check-runs を並べて世代を選ぶ」経路を使わない。**
  * 代わりに `actions/runs?head_sha=<sha>` で実際の run 一覧を取り、
  * **workflow 名ごとに、rerun でなければ `created_at`（同値なら `id`）、
- * rerun（`run_attempt` が2以上）が絡む比較だけ `updated_at` で最新の run を
- * 選び**（`effectiveTimestamp` / `newerRun` の doc。Issue #1748）、
+ * rerun（`run_attempt` が2以上）が絡む比較だけ `run_started_at`（その
+ * attempt を始めた時刻）で最新の run を選び**（`effectiveTimestamp` /
+ * `newerRun` の doc。Issue #1748 / #1761）、
  * **その run 自身の `actions/runs/<id>/jobs` を読む**。
  *
  * ⚠️ **これで「確定」ではない。** 実測できたのは1 sha・2世代・1 workflow・
@@ -46,26 +47,56 @@
  */
 
 /**
- * run 自身の「実効の新しさ」を表す時刻を返す（Issue #1748）。
+ * run 自身の「実効の新しさ」を表す時刻を返す（Issue #1748 / #1761）。
  *
  * `run_attempt` が2以上（＝ `gh run rerun` で再実行された run）のときだけ
- * `updated_at` を使い、それ以外（`run_attempt` が1、または省略——古い呼び
- * 出し元・テストとの互換）は `created_at` を使う。
+ * `run_started_at`（その attempt を実際に始めた時刻）を使い、それ以外
+ * （`run_attempt` が1、または省略——古い呼び出し元・テストとの互換）は
+ * `created_at` を使う。
  *
- * ## なぜ分けるか
+ * ## なぜ `updated_at` ではないか（Issue #1761、開く側の穴）
+ *
+ * 最初の直し（#1748）は rerun の鍵に `updated_at` を使っていたが、
+ * `updated_at` は**その attempt が完了した時刻**であって、rerun には
+ * 時間がかかりうる。rerun の実行中に、rerun とは無関係な**別の run**
+ * （本当に新しい世代で、失敗した run）が作られて完了すると、その別
+ * run の `created_at` は rerun の `updated_at`（完了時刻）より前になり
+ * うる —— つまり「rerun が終わるまでの間に生まれた、本当に新しい世代の
+ * 失敗」が `updated_at` に追い越されて評価から消え、`green` と言って
+ * しまう（14回目の横断レビュー、`wip/review14-s5` の再現テストが具体形
+ * を持つ。`scripts/check-pr-green.test.ts` の「PR #1761 の open-side」
+ * を参照）。
+ *
+ * `run_started_at` はその attempt が**実行を開始した**時刻で、完了を
+ * 待たずに決まる——rerun が長引いても動かない。⟹ rerun の鍵を
+ * `run_started_at` にすれば、rerun 中に生まれた別の run の `created_at`
+ * を rerun 側の完了待ちで追い越すことが構造的に無くなる。
+ *
+ * ## なぜ分けるか（`run_attempt` で場合分けする理由。#1748 から変えていない）
  *
  * `created_at` は run が最初に作られた時刻のまま固定で、**rerun しても
- * 動かない。** 一方 `updated_at` は状態が変わるたびに更新され、rerun の
- * 完了時刻まで動く。だから rerun が絡む run では `created_at` は「実効の
- * 新しさ」を失うが、`updated_at` に乗り換えれば直る。
+ * 動かない。** 一方 `run_started_at` は attempt ごとに実行が始まった
+ * 時刻を持つ。だから rerun が絡む run では `created_at` は「実効の
+ * 新しさ」を失うが、`run_started_at` に乗り換えれば直る。
  *
- * ただし `updated_at` を**常に**使うと、直上の「その run が実際にジョブを
- * 実行したか」と同じ形の罠を生みうる —— 別の生成（同じ workflow 名・
- * 同じ event）が同居する draft→ready のレースでは、`created_at` は
- * run が作られた実測の順序を正しく持つ（下の実測）。`run_attempt` で
- * 場合分けすることで、rerun が絡まない大多数の比較はこれまでどおり
- * `created_at` のまま（#933 / #997 / #1126 の実測を壊さない）にし、
- * rerun が絡む比較だけ `updated_at` に寄せる。
+ * ただし `run_started_at` を**常に**使うと、直上の「その run が実際に
+ * ジョブを実行したか」と同じ形の罠を生みうる —— 別の生成（同じ
+ * workflow 名・同じ event）が同居する draft→ready のレースでは、
+ * `created_at` は run が作られた実測の順序を正しく持つ（下の実測）。
+ * `run_attempt` で場合分けすることで、rerun が絡まない大多数の比較は
+ * これまでどおり `created_at` のまま（#933 / #997 / #1126 の実測を
+ * 壊さない）にし、rerun が絡む比較だけ `run_started_at` に寄せる。
+ *
+ * ## `run_started_at` が無いとき（開く側に倒れない値へ倒す。#1761）
+ *
+ * `run.run_started_at` が無い（`null`/`undefined`）場合は `created_at`
+ * にフォールバックする。**`created_at` は attempt が始まる前の時刻**
+ * （run が作られるのは実行が始まるより前か同時なので、常に
+ * `created_at <= run_started_at`）なので、フォールバックした比較は
+ * 実際より**古く**見える側にしか倒れない。古く見える分には、他の
+ * 本当に新しい run に追い越されるだけで、閉じる側（#1748 の NG）が
+ * 再発することはあっても、開く側（誤って `green` と言う）には倒れない
+ * ——後者のほうが実害が大きいため、この非対称を選んでいる。
  *
  * ## 実測（Issue #1748、sha `031bf92f62e61fc16eee3570a72c7c87ff6b2d7f`）
  *
@@ -76,16 +107,21 @@
  *   `conclusion=skipped`。draft と評価された扱いのまま残った）
  * - run `36286927781`（`run_attempt` は1→cancelled→2）。attempt 1 は
  *   `created_at=01:54:10Z`（`36286928087` より**1秒早い**）で `cancelled`。
- *   `gh run rerun` した attempt 2 は `updated_at=02:16:15Z`（22分後）で
- *   `success`。attempt を重ねても run 自身の `created_at`（`01:54:10Z`）は
- *   動かない。
+ *   `gh run rerun` した attempt 2 は `run_started_at=02:02:08Z`（実行が
+ *   実際に始まった時刻）で、`updated_at=02:16:15Z`（22分後）に `success`
+ *   で完了した。attempt を重ねても run 自身の `created_at`（`01:54:10Z`）
+ *   は動かない。
  *
  * ⟹ `created_at` だけで比べると、後から作られた draft 由来の
  * `36286928087`（`01:54:11Z`）が rerun 後の `36286927781`
  * （`created_at` は動かず `01:54:10Z` のまま）より新しく見え、**skipped の
  * ほうを「最新世代」に選んでしまう。** `run_attempt` が2以上の
- * `36286927781` だけ `updated_at`（`02:16:15Z`）で比べれば、正しく
- * rerun 後の success が選ばれる。
+ * `36286927781` だけ `run_started_at`（`02:02:08Z`）で比べても、
+ * `36286928087` の `created_at`（`01:54:11Z`）より後なので、正しく
+ * rerun 後の success が選ばれる（`updated_at` だけでなく
+ * `run_started_at` でも #1748 の実データは green のままである。
+ * 2026-09-27 に `gh api repos/takecchi/alteroid/actions/runs/36286927781`
+ * とその `/attempts/1` `/attempts/2` を実際に叩いて確認済み）。
  *
  * ⚠️ **`check-run`（job）の `id` を世代選びの鍵にする案は採らない。**
  * 同じ Issue で確かめたところ、rerun 後の attempt はジョブごとに新しい
@@ -101,17 +137,18 @@
  */
 function effectiveTimestamp(run) {
   const attempt = run.run_attempt ?? 1;
-  const key = attempt > 1 ? (run.updated_at ?? run.created_at) : run.created_at;
+  const key = attempt > 1 ? (run.run_started_at ?? run.created_at) : run.created_at;
   return Date.parse(key);
 }
 
 /**
  * 2つの run のうち新しいほうを返す。
  *
- * 第一キーは `effectiveTimestamp`（rerun のときだけ `updated_at`、それ以外は
- * `created_at`。上の doc）。同秒で並んだときは `created_at` そのもの、それも
- * 同じなら `id`（run 自身の id。job の id ではない）で決める —— この標本では
- * run の `id` は作成順と一致した（`34743503505` < `34743508004`）。
+ * 第一キーは `effectiveTimestamp`（rerun のときだけ `run_started_at`、
+ * それ以外は `created_at`。上の doc）。同秒で並んだときは `created_at`
+ * そのもの、それも同じなら `id`（run 自身の id。job の id ではない）で
+ * 決める —— この標本では run の `id` は作成順と一致した
+ * （`34743503505` < `34743508004`）。
  */
 function newerRun(a, b) {
   const ea = effectiveTimestamp(a);

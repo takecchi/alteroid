@@ -15,8 +15,25 @@ export interface DaemonRuntimeInfo {
   token: string;
 }
 
+/**
+ * 本人確認の結果。2値（`boolean`）にすると「確かめられなかった」が黙って
+ * 「居ない」側へ倒れる（`AGENTS.md`「静かに失敗する道具」の「判定できないと
+ * いう3つ目の状態を持つ」）。ここは明示的に3値目を持つ。
+ *
+ * - `present` — 本人だと確認できた
+ * - `absent` — 居ないと確認できた。応答があった上での否定（401/403/404 等・
+ *   `operator` が `true` ではない）に加え、**接続拒否（`ECONNREFUSED`）も
+ *   含む**——OS が「そのポートに listen しているプロセスが無い」と積極的に
+ *   返してきた場合は、応答が無いのではなく「居ない」と確定できる
+ *   （`isConnectionRefused`。#1765 の回帰修正）
+ * - `unknown` — 確かめられなかった（タイムアウト・接続拒否以外の例外・
+ *   不正な応答）。**「居ない」ではない。** 居るかもしれないが、確認する
+ *   手段が今回は無かった、という意味
+ */
+export type Presence = 'present' | 'absent' | 'unknown';
+
 export interface DaemonStatus {
-  running: boolean;
+  presence: Presence;
   info: DaemonRuntimeInfo | null;
 }
 
@@ -50,11 +67,52 @@ async function readRuntimeInfo(): Promise<DaemonRuntimeInfo | null> {
 }
 
 /**
+ * **接続拒否（誰も listen していないと確定できる）かどうか。**
+ *
+ * Node の `fetch`（undici）は接続に失敗すると `TypeError: fetch failed` を
+ * 投げ、実際の理由は `error.cause` に載る（実測: Node 22.23.3 / undici 内蔵版。
+ * `http://127.0.0.1:<閉じたポート>/` へ `fetch` した実物で確認した——
+ * `err.cause.code === 'ECONNREFUSED'`、`err.cause.syscall === 'connect'`）。
+ * **タイムアウト**（`AbortSignal.timeout` が発火したとき）は形が違う——
+ * `err.name === 'TimeoutError'` で `err.cause` は無い（同じく実測）。
+ *
+ * `ECONNREFUSED` は OS の TCP スタックが「そのポートに listen している
+ * プロセスが無い」と積極的に返してきた場合だけに立つ——応答が無い
+ * （タイムアウト）・経路が無い（`ECONNRESET`・`EHOSTUNREACH` 等）・
+ * 相手はいるが求めた形で応答しない（JSON 不正等）とは区別できる。
+ * **だからこれだけを `'absent'`（居ないと確定）に倒し、それ以外の失敗は
+ * 全部 `'unknown'` のままにする**（#1765 の回帰修正 — 元は全例外を
+ * `'unknown'` にしていたため、デーモンが異常終了して古い状態ファイルが
+ * 残った場合に `start()` が永久に spawn できなくなっていた）。
+ */
+function isConnectionRefused(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const cause: unknown = (error as { cause?: unknown }).cause;
+  if (!(cause instanceof Error)) return false;
+  return (cause as NodeJS.ErrnoException).code === 'ECONNREFUSED';
+}
+
+/**
  * 本人確認。ポートが空いていることではなく、**そこにいるのが自分の記録した
  * デーモンであること**を確かめる。PID は使わない — 異常終了で状態ファイルが
  * 残ったあと、OS が同じ PID を別プロセスに配ることがあるため。
+ *
+ * **タイムアウト・接続拒否以外の例外は `absent` ではなく `unknown` を返す。**
+ * 応答が遅い・一時的にネットワークが不調・JSON が壊れている、といった
+ * 「確かめられなかった」場合を「居ない」に畳むと、本当は生きているデーモンに
+ * 対して呼び出し側が「居ない」と誤解し、安全のはずの分岐を誤った前提の上で
+ * 実行してしまう（#1765）。
+ *
+ * **ただし接続拒否（{@link isConnectionRefused}）だけは `absent` にする。**
+ * デーモンが異常終了して状態ファイルだけが残った場合、そのポートには誰も
+ * listen していない——これは「確かめられなかった」ではなく「居ないと確定
+ * できた」である。ここを `unknown` のままにすると、`start()` が安全側の
+ * つもりで spawn を拒み続け、状態ファイルを手で消すまで `alteroid` の
+ * どのコマンドもデーモンを起こせなくなる（#1765 の回帰。`chat` のたびに
+ * `ensureRunning()` を通るので、クラッシュのたびに CLI が使えなくなる形で
+ * 表に出る）。
  */
-async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
+async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
   try {
     // **トークンを送って、認められるかを見る。** かつては `/health` が返す token と
     // 突き合わせていたが、この値は「許可を付与できる資格」そのものになったので、
@@ -64,11 +122,16 @@ async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
       headers: { authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1500),
     });
-    if (!response.ok) return false;
+    // 応答があった上での否定（401/403/404 等）は「本人ではない」と確定できる。
+    if (!response.ok) return 'absent';
     const body = (await response.json()) as { operator?: unknown };
-    return body.operator === true;
-  } catch {
-    return false;
+    return body.operator === true ? 'present' : 'absent';
+  } catch (error) {
+    // 接続拒否（誰も listen していないと確定できる）だけは `absent`。
+    // タイムアウト・`ECONNRESET`・DNS 失敗・不正な応答の JSON パース失敗
+    // など、それ以外はすべて「確かめられなかった」として `unknown` に残す。
+    if (isConnectionRefused(error)) return 'absent';
+    return 'unknown';
   }
 }
 
@@ -93,8 +156,8 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
 
 export async function status(): Promise<DaemonStatus> {
   const info = await readRuntimeInfo();
-  if (!info) return { running: false, info: null };
-  return { running: await verify(info), info };
+  if (!info) return { presence: 'absent', info: null };
+  return { presence: await verify(info), info };
 }
 
 function daemonEntrypoint(): string {
@@ -105,7 +168,18 @@ function daemonEntrypoint(): string {
 /** 常駐は自律の前提（PRD）。chat のたびに起こすのではなく、居なければ起こす。 */
 export async function start(): Promise<DaemonRuntimeInfo> {
   const current = await status();
-  if (current.running && current.info) return current.info;
+  if (current.presence === 'present' && current.info) return current.info;
+  if (current.presence === 'unknown') {
+    // **安全側 — 確かめられないまま2本目を起こさない。** 記録された状態ファイルは
+    // 片付けない: 応答が無かっただけで、既に生きている本物のデーモンかも
+    // しれない。ここで新しいプロセスを spawn すると、ポート衝突や記憶ストア
+    // への二重書き込みの疑いに繋がる（#1765 段2）。
+    throw new Error(
+      '既存の alteroidd の生死を確かめられませんでした（応答が無いかタイムアウトしました）。' +
+        '二重起動を避けるため起動を中止しました。ネットワークや負荷を確認してから、' +
+        '必要なら `alteroid daemon status` で状態を見てからやり直してください。',
+    );
+  }
 
   // 子プロセスの出力を捨てない。捨てると「起動しない理由」が永久に分からなくなる。
   await mkdir(stateDir(), { recursive: true });
@@ -122,7 +196,7 @@ export async function start(): Promise<DaemonRuntimeInfo> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await sleep(250);
     const next = await status();
-    if (next.running && next.info) return next.info;
+    if (next.presence === 'present' && next.info) return next.info;
   }
   throw new Error(`デーモンの起動を確認できませんでした（ログ: ${logPath}）`);
 }
@@ -178,7 +252,14 @@ export async function stopDaemon(deps: StopDeps): Promise<StopOutcome> {
 export async function stop(): Promise<StopOutcome> {
   return stopDaemon({
     readInfo: readRuntimeInfo,
-    verify,
+    // `StopDeps.verify` は `boolean` の契約（本人確認できたときだけ PID に触る）。
+    // `unknown` は「本人だと確認できた」わけではないので `false` 側へ畳む —
+    // これは #1765 段2 より前からの `stopDaemon` の挙動と1文字も変えていない
+    // （このファイルの `verify` が返す型を変えただけで、`stop()` の外から見た
+    // 挙動は変えない。`start()` 側の安全側の変更とは別の対象である）。
+    async verify(info) {
+      return (await verify(info)) === 'present';
+    },
     async requestShutdown(info) {
       const response = await fetch(`${baseUrl(info)}/shutdown`, {
         method: 'POST',
@@ -210,6 +291,9 @@ export async function stop(): Promise<StopOutcome> {
 /** 起動していなければ起こしてから接続先を返す。 */
 export async function ensureRunning(): Promise<DaemonRuntimeInfo> {
   const current = await status();
-  if (current.running && current.info) return current.info;
+  if (current.presence === 'present' && current.info) return current.info;
+  // `unknown` のときも `start()` へ渡す — 安全側の判断（起こすかどうか）は
+  // `start()` に一本化してある。ここで別の分岐を持つと、2箇所が同じ判断を
+  // 別々に持つことになり、片方だけ直して他方が古いままになりうる。
   return start();
 }

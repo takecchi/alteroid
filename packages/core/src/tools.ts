@@ -4023,7 +4023,15 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
   }
   const { result } = probe;
   if (result.worktrees.length === 0) {
-    return `未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（${result.cwd} の下を探索した）。`;
+    // ⚠️ #1765 段2 — `scratchRootsUnknown` が載っているときは「見つからな
+    // かった」と言い切らない。他マネージャー/作業者の /tmp スクラッチ
+    // ディレクトリの有無を確かめられなかっただけで、そこに未 push の実装が
+    // 残っている可能性がある（見つからなかったのではなく、探せなかった）。
+    return result.scratchRootsUnknown === undefined
+      ? `未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（${result.cwd} の下を探索した）。`
+      : `未 push の実装・未コミットの変更: ${result.cwd} の下には作業ツリーが見つからなかったが、` +
+          `他マネージャー/作業者の /tmp スクラッチディレクトリの有無は確かめられなかった` +
+          `（${result.scratchRootsUnknown}）。**確認できていない。**`;
   }
   const lines = result.worktrees.map((worktree) => {
     const branch = worktree.branch ?? '(枝を指していない、または確かめられなかった)';
@@ -4045,11 +4053,18 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
     result.stoppedEarly === true
       ? '\n  ⚠️ 呼び出し元の期限切れで、一部の作業ツリーは調べる前に打ち切った（各行の理由を見よ）。'
       : '';
+  const scratchRootsUnknownNote =
+    result.scratchRootsUnknown === undefined
+      ? ''
+      : `\n  ⚠️ 他マネージャー/作業者の /tmp スクラッチディレクトリの有無を確かめられなかった` +
+        `（${result.scratchRootsUnknown}）——そこに未 push の実装が残っている可能性があり、` +
+        '上の一覧には含まれていない。';
   return (
     `未 push の実装・未コミットの変更（${result.cwd} の下、${String(result.worktrees.length)}本の作業ツリー）:\n` +
     lines.join('\n') +
     truncatedNote +
     stoppedEarlyNote +
+    scratchRootsUnknownNote +
     '\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、' +
     '実際には push 済みでも多めに出ることがある（安全側の誤り）。'
   );
