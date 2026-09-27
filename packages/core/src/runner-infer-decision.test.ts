@@ -170,3 +170,59 @@ describe('inferDecision / 3値化（issue #1827/#1837 の反転）', () => {
     });
   });
 });
+
+/**
+ * issue #1877: 否定の語を含む承認の言い方（英語）が `deny` と読まれる穴。
+ *
+ * `no problem` / `no objection(s)` / `don't hesitate` / `don't mind` は
+ * 意味としては承認だが、`DENIAL_WORDS` の `no` / `don't` が語境界で一致
+ * してしまい、`inferDecision` の1段目（`DENIAL_PHRASES`/`DENIAL_WORDS`）
+ * で `deny` が確定していた——3値化（#1827/#1837）で新設された `unreadable`
+ * （承認とも拒否とも読めない回。SDK へは deny のまま返るが、クローンには
+ * 「decision を付けて答え直せ」と伝わる）にすら届かず、`問題ない` のような
+ * 日本語の否定込み承認（`ない` が `NEGATION_MARKERS_JA` に在るので
+ * `hasApprovalMarker && !hasNegationMarker` で自然に unreadable へ落ちる）
+ * と扱いが揃っていなかった。
+ *
+ * 直し方は `allow` へ倒すことではない——`allow` へ寄せると #1827 が閉じた
+ * 「迷ったら通さない」の既定を緩めることになる。ここでの直しは
+ * `unreadable` への着地であり、SDK から見える結果（deny）は1文字も
+ * 変わらない。
+ */
+describe('inferDecision / 否定の語を含む承認の言い方は unreadable（issue #1877）', () => {
+  it.each([
+    'no problem',
+    'No problem!',
+    'There is no problem with that.',
+    'no objection',
+    'no objections',
+    "don't hesitate",
+    "Don't hesitate, go for it.",
+    "don't mind",
+    "I don't mind at all.",
+  ])('「%s」は unreadable（deny へ化けない）', (message) => {
+    expect(inferDecision(message)).toBe('unreadable');
+  });
+
+  it('decideAnswer（permission・decision なし）も、SDK へは deny を返しつつ unreadable: true を運ぶ', () => {
+    expect(decideAnswer('permission', undefined, 'no problem')).toEqual({
+      decision: 'deny',
+      unreadable: true,
+    });
+  });
+
+  it.each(['no problem, but stop', "don't hesitate to cancel", 'no objection, I refuse'])(
+    '対照: 同じ回答に別の本物の否定が在れば「%s」は deny のまま',
+    (message) => {
+      expect(inferDecision(message)).toBe('deny');
+    },
+  );
+
+  it("対照: 既存の歯を壊していない —— 「won't approve」は今までどおり deny", () => {
+    expect(inferDecision("won't approve")).toBe('deny');
+  });
+
+  it('対照: 既存の歯を壊していない —— 日本語「問題ない」は今までどおり unreadable', () => {
+    expect(inferDecision('問題ない')).toBe('unreadable');
+  });
+});
