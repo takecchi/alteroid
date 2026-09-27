@@ -2196,7 +2196,7 @@ function describeStringLengthViolation(
  * 手で書くと片方だけ直して食い違う（#923 と同じ形）ため、値そのものではなく
  * `workKindSchema` を両方（検査・説明文）から参照する。
  */
-function formatWorkKindRangeJa(): string {
+export function formatWorkKindRangeJa(): string {
   return formatStringLengthJa({
     min: workKindSchema.minLength ?? undefined,
     max: workKindSchema.maxLength ?? undefined,
@@ -2221,6 +2221,23 @@ function describeWorkKindViolation(value: string | undefined): string | null {
  * でも使う共有のスキーマなので1文字も変えていない。
  */
 const workKindToolInputSchema = z.string();
+
+/**
+ * `inbox_remove_many` の `types` の**道具の入力スキーマ側**に見せる形。
+ * issue #1752。
+ *
+ * `inboxRemoveManyTypesSchema`（`inbox-backlog.ts`）は `z.array(z.enum(...)).
+ * min(1)` で、その `.min(1)` を入力スキーマ側に置くと SDK の `tool()` が
+ * ハンドラより前に検証してしまう（この issue が直す穴そのもの）。**ここは
+ * 型（許される5種類の enum の配列）だけを固定し、件数の検査は
+ * `inboxRemoveManyTypesSchema.safeParse` を直接呼ぶ形でハンドラの先頭へ渡す**
+ * ——`types` は入力スキーマの時点で要素が5種類の enum であることを保証
+ * 済みなので、ハンドラで `inboxRemoveManyTypesSchema.safeParse` が失敗しうる
+ * 理由は配列の件数（0件）だけである。`inboxRemoveManyTypesSchema` 自体
+ * （`inbox-backlog.ts`）は `inbox-remove-many.test.ts` の 2d が直接検査する
+ * 対象なので1文字も変えていない。
+ */
+const inboxRemoveManyTypesToolInputSchema = z.array(z.enum(CLONE_REMOVABLE_INBOX_EVENT_TYPES));
 
 /**
  * 配列引数の件数の制約（下限）を日本語の1句で言い切る（例: `1件以上`）。
@@ -7594,41 +7611,47 @@ export function createCloneTools(context: ToolContext) {
         '行は消えない（`closedAt` / `closedReason` が付くだけ）。**閉じた id は全部日誌に残る。**',
       ].join(''),
       {
+        // **issue #1752。** 配列の `.min(1)` は入力スキーマ側ではなくハンドラの
+        // 先頭（下の `describeArrayLengthViolation` 呼び出し）で見る。ここは型
+        // （enum の配列）だけを固定する。
         origin: z
           .array(z.enum(commitmentOriginSchema.options))
-          .min(1)
           .describe(
-            '閉じる対象の起点（必須）。在る起点を全部（human / manager / external / self）並べると断られる。' +
+            `閉じる対象の起点（必須。${formatArrayLengthJa({ min: 1 })}）。在る起点を全部（human / manager / external / self）並べると断られる。` +
               'manager の行を巻き込むつもりなら manager と自分で打つこと',
           ),
+        // **issue #1752。** 配列そのものの `.min(1)` と要素側の `.min(1)` は
+        // どちらも入力スキーマ側ではなくハンドラの先頭（下の
+        // `describeArrayLengthViolation` / `describeStringArrayElementLengthViolation`
+        // 呼び出し）で見る。ここは型（文字列の配列）だけを固定する。
         source: z
-          .array(z.string().min(1))
-          .min(1)
+          .array(z.string())
           .optional()
           .describe(
-            '出所の**完全一致**（例 ["token-pool"]）。q の部分一致とは別物で、' +
+            `出所の**完全一致**（例 ["token-pool"]。配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。q の部分一致とは別物で、` +
               '器が自分へ出している合図だけを狙い撃つためにある',
           ),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。
         q: z
           .string()
-          .min(1)
           .optional()
           .describe(
-            '本文か出所への部分一致（大文字小文字を区別しない）。commitment_list の q と同じ当て方',
+            `本文か出所への部分一致（大文字小文字を区別しない。${formatStringLengthJa({ min: 1 })}）。commitment_list の q と同じ当て方`,
           ),
+        // **issue #1752。** 同上。
         until: z
           .string()
-          .min(1)
           .optional()
           .describe(
-            'この時刻までに載った行だけを対象にする（ISO8601。その瞬間ちょうどの行は含む）。' +
+            `この時刻までに載った行だけを対象にする（ISO8601。${formatStringLengthJa({ min: 1 })}。その瞬間ちょうどの行は含む）。` +
               '閉じている最中に届いた新しい行を巻き込まないために使う',
           ),
+        // **issue #1752。** 同上。
         reason: z
           .string()
-          .min(1)
           .describe(
-            '何をもってこの絞り込みに当たる行が片付いたとするか。人間はこれを読んで後から否定する',
+            `何をもってこの絞り込みに当たる行が片付いたとするか（${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
           ),
         dryRun: z
           .boolean()
@@ -7653,6 +7676,19 @@ export function createCloneTools(context: ToolContext) {
           max: CLOSE_MANY_LIMIT_MAX,
         });
         if (limitError !== null) return text(limitError);
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const originError = describeArrayLengthViolation('origin', origin, { min: 1 });
+        if (originError !== null) return text(originError);
+        const sourceLengthError = describeArrayLengthViolation('source', source, { min: 1 });
+        if (sourceLengthError !== null) return text(sourceLengthError);
+        const sourceElementError = describeStringArrayElementLengthViolation('source', source);
+        if (sourceElementError !== null) return text(sourceElementError);
+        const qError = describeStringLengthViolation('q', q, { min: 1 });
+        if (qError !== null) return text(qError);
+        const untilLengthError = describeStringLengthViolation('until', until, { min: 1 });
+        if (untilLengthError !== null) return text(untilLengthError);
+        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        if (reasonError !== null) return text(reasonError);
         // 🔴 **絞り込みの無い呼びを断る（issue #844 の受け入れ基準）。**
         // `origin` が4値全部を含む呼びは「絞り込みが無い」のと同じであり、
         // **「全部閉じる」が事故で撃てる形を作らない。** そしてこの1つの規則が、
@@ -7950,41 +7986,45 @@ export function createCloneTools(context: ToolContext) {
         '（`InboxStore` の doc）。**消した id は全部日誌に残る。**',
       ].join(''),
       {
-        // **`inboxRemoveManyTypesSchema` をそのまま使う（自分で組み立て直さない）。**
-        // `inbox-backlog.ts` の doc「なぜ切り出したか」——ここが本当に使っている
-        // スキーマそのものを `inbox-remove-many.test.ts` の 2d が直接検査できる
-        // ようにするため。ここで `z.array(z.enum(...))` を再構築すると、テストが
-        // 検証する対象と実際に道具が使う対象が別の値に戻ってしまう。
-        types: inboxRemoveManyTypesSchema.describe(
-          '消す対象の種類（必須）。選べる5種類 ' +
+        // **issue #1752。** `inboxRemoveManyTypesSchema` の `.min(1)` は入力
+        // スキーマ側ではなくハンドラの先頭（下の `inboxRemoveManyTypesSchema.
+        // safeParse` 呼び出し）で見る（`inboxRemoveManyTypesToolInputSchema`
+        // の doc）。ここは型（許される5種類の enum の配列）だけを固定する。
+        types: inboxRemoveManyTypesToolInputSchema.describe(
+          `消す対象の種類（必須。${formatArrayLengthJa({ min: 1 })}）。選べる5種類 ` +
             `(${CLONE_REMOVABLE_INBOX_EVENT_TYPES.join(' / ')}) を全部並べると断られる。` +
             '人間起点の human_message / human_answer はここに無い——選べない' +
             '（自分の受信箱から人間の発言・回答を自分の判断で畳むことはできない）。' +
             '例: 委譲先の429の写しを畳むなら manager_message だけを狙う',
         ),
+        // **issue #1752。** 配列そのものの `.min(1)` と要素側の `.min(1)` は
+        // どちらも入力スキーマ側ではなくハンドラの先頭（下の
+        // `describeArrayLengthViolation` / `describeStringArrayElementLengthViolation`
+        // 呼び出し）で見る。ここは型（文字列の配列）だけを固定する（issue 本文の
+        // 再現テスト対象）。
         sources: z
-          .array(z.string().min(1))
-          .min(1)
+          .array(z.string())
           .optional()
           .describe(
-            '送信元の**完全一致**。`manager_list` の内訳（送信元）に出る表記' +
+            `送信元の**完全一致**（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。\`manager_list\` の内訳（送信元）に出る表記` +
               '（例 "external:token-pool" / "manager:mgr-xxx"）をそのまま渡す。' +
               '送信元を言えない種類（distill / timer / self_initiative）の行は、' +
               'これを渡すと必ず対象から外れる',
           ),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。
         before: z
           .string()
-          .min(1)
           .optional()
           .describe(
-            'この時刻**以前**（ISO8601、その瞬間ちょうども含む）に積まれた行だけを対象にする。' +
+            `この時刻**以前**（ISO8601、その瞬間ちょうども含む。${formatStringLengthJa({ min: 1 })}）に積まれた行だけを対象にする。` +
               '消している最中に届いた新しい行を巻き込まないために使う',
           ),
+        // **issue #1752。** 同上。
         reason: z
           .string()
-          .min(1)
           .describe(
-            '何をもってこの絞り込みに当たる行を畳んでよいとしたか。人間はこれを読んで後から否定する',
+            `何をもってこの絞り込みに当たる行を畳んでよいとしたか（${formatStringLengthJa({ min: 1 })}）。人間はこれを読んで後から否定する`,
           ),
         dryRun: z
           .boolean()
@@ -8009,6 +8049,25 @@ export function createCloneTools(context: ToolContext) {
           max: REMOVE_MANY_LIMIT_MAX,
         });
         if (limitError !== null) return text(limitError);
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
+        // 再現テスト対象）。** `types` は要素側が入力スキーマの enum で保証
+        // 済みなので、`inboxRemoveManyTypesSchema.safeParse` が失敗しうる理由は
+        // 配列の件数（0件）だけである（`inboxRemoveManyTypesToolInputSchema` の
+        // doc）。
+        if (!inboxRemoveManyTypesSchema.safeParse(types).success) {
+          return text(`types は使えない（${formatArrayLengthJa({ min: 1 })}）。`);
+        }
+        const sourcesLengthError = describeArrayLengthViolation('sources', sources, { min: 1 });
+        if (sourcesLengthError !== null) return text(sourcesLengthError);
+        const sourcesElementError = describeStringArrayElementLengthViolation(
+          'sources',
+          sources,
+        );
+        if (sourcesElementError !== null) return text(sourcesElementError);
+        const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
+        if (beforeLengthError !== null) return text(beforeLengthError);
+        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        if (reasonError !== null) return text(reasonError);
         // 🔴 **絞り込みの無い呼びを断る（#972。commitment_close_many の origin と同じ形）。**
         // ⚠️ **ここでの「全部」は選べる5種類（human_message / human_answer を
         // 除いた集合）を指す**——その2種はそもそも `types` の値になりえない
@@ -9208,14 +9267,21 @@ export function createCloneTools(context: ToolContext) {
             'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
               '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
           ),
-        workKind: workKindSchema.describe(
-          '**この委譲は何の種類の仕事だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認）。' +
+        // **issue #1752。** `workKindSchema` の `.min(1).max(128)` は入力スキーマ
+        // 側ではなくハンドラの先頭（下の `describeWorkKindViolation` 呼び出し）
+        // で見る（`workKindToolInputSchema` の doc）。ここは型（文字列）だけを
+        // 固定する。
+        workKind: workKindToolInputSchema.describe(
+          `**この委譲は何の種類の仕事だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認。${formatWorkKindRangeJa()}）。` +
             '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
             '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）',
         ),
       },
       async ({ managerId, appraisal, reason, workKind }) => {
         if (!context.managers) return NO_POOL;
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const workKindError = describeWorkKindViolation(workKind);
+        if (workKindError !== null) return text(workKindError);
         // **日誌も「前の値」も `ManagerPool.appraise` が持つ。** ここで書き下ろすと、
         // 人間の口（HTTP）と2箇所になり、片方だけ直したときに黙ってずれる。
         const result = await context.managers.appraise(
@@ -10442,14 +10508,25 @@ export function createCloneTools(context: ToolContext) {
         '日誌には人間との往復（あなたの発言）として残る。',
       ].join(' '),
       {
-        text: z.string().min(1).describe('人間へ届ける本文'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
+        text: z.string().describe(`人間へ届ける本文（${formatStringLengthJa({ min: 1 })}）`),
         conversationId: z
           .string()
-          .min(1)
           .optional()
-          .describe('書く先の会話 id（conversation_read の一覧で分かる）。省略すると新しい会話'),
+          .describe(
+            `書く先の会話 id（conversation_read の一覧で分かる。${formatStringLengthJa({ min: 1 })}）。省略すると新しい会話`,
+          ),
       },
       async ({ text: body, conversationId }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const textError = describeStringLengthViolation('text', body, { min: 1 });
+        if (textError !== null) return text(textError);
+        const conversationIdError = describeStringLengthViolation('conversationId', conversationId, {
+          min: 1,
+        });
+        if (conversationIdError !== null) return text(conversationIdError);
         const current = getConversationId();
         if (conversationId !== undefined && conversationId === current) {
           return {
@@ -11123,17 +11200,23 @@ export function createCloneTools(context: ToolContext) {
         '消した id は全部日誌に残る（塊に分けて書く。応答には先頭だけを出す）。',
       ].join(' '),
       {
+        // **issue #1752。** 配列そのものの `.min(1)` と要素側の `.min(1)` は
+        // どちらも入力スキーマ側ではなくハンドラの先頭（下の
+        // `describeArrayLengthViolation` / `describeStringArrayElementLengthViolation`
+        // 呼び出し）で見る。ここは型（文字列の配列）だけを固定する。
         sessionIds: z
-          .array(z.string().min(1))
-          .min(1)
-          .optional()
-          .describe('対象セッションの完全一致。省略すると全セッションが対象になりうる'),
-        before: z
-          .string()
-          .min(1)
+          .array(z.string())
           .optional()
           .describe(
-            'この時刻より前（ISO8601、排他）に積まれた行だけを対象にする' +
+            `対象セッションの完全一致（配列は${formatArrayLengthJa({ min: 1 })}、各要素は${formatStringLengthJa({ min: 1 })}）。省略すると全セッションが対象になりうる`,
+          ),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。
+        before: z
+          .string()
+          .optional()
+          .describe(
+            `この時刻より前（ISO8601、排他。${formatStringLengthJa({ min: 1 })}）に積まれた行だけを対象にする` +
               '（例 2026-09-15T00:00:00.000Z）',
           ),
         // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
@@ -11144,7 +11227,12 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `storedBytes がこれ以上の行だけを対象にする（${formatIntRangeJa({ min: 0 })}）`,
           ),
-        summary: z.string().min(1).describe('なぜ消したかの一行要約（日誌に残る。本文は残らない）'),
+        // **issue #1752。** 同上。
+        summary: z
+          .string()
+          .describe(
+            `なぜ消したかの一行要約（日誌に残る。本文は残らない。${formatStringLengthJa({ min: 1 })}）`,
+          ),
         dryRun: z
           .boolean()
           .optional()
@@ -11153,6 +11241,20 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ sessionIds, before, minStoredBytes, summary, dryRun }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const sessionIdsLengthError = describeArrayLengthViolation('sessionIds', sessionIds, {
+          min: 1,
+        });
+        if (sessionIdsLengthError !== null) return text(sessionIdsLengthError);
+        const sessionIdsElementError = describeStringArrayElementLengthViolation(
+          'sessionIds',
+          sessionIds,
+        );
+        if (sessionIdsElementError !== null) return text(sessionIdsElementError);
+        const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
+        if (beforeLengthError !== null) return text(beforeLengthError);
+        const summaryError = describeStringLengthViolation('summary', summary, { min: 1 });
+        if (summaryError !== null) return text(summaryError);
         // 🔴 絞り込みの無い呼びを断る（`POST /archive/remove` と同じ判定・同じ理由）。
         if (sessionIds === undefined && before === undefined && minStoredBytes === undefined) {
           return text(
