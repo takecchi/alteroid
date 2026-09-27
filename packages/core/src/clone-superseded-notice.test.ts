@@ -131,6 +131,7 @@ function stubPool(managers: ManagerSummary[]): ManagerPool {
     probeTurnEnds: () => Promise.resolve(),
     flushWithheldReports: () => Promise.resolve(),
     settleStalledUsageWakes: () => Promise.resolve([]),
+    renotifyStalledDenials: () => Promise.resolve(),
     stop: () => Promise.resolve(),
   };
 }

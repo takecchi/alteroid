@@ -90,6 +90,7 @@ function fakeClone(stores: Stores) {
     async settleStalledUsageWakes() {
       return [];
     },
+    async renotifyStalledDenials() {},
     async stop() {},
   };
 

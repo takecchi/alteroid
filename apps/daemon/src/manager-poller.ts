@@ -29,6 +29,14 @@ import type { ManagerPool } from '@alteroid/core';
  * `probeTurnEnds()` が計算し直した値でなければ古い助言のまま判定することに
  * なる（`settleStalledUsageWakes()` の doc）。`flushWithheldReports()` と
  * どちらが先でも安全だが、`probeTurnEnds()` の直後という並びに揃えてある。
+ *
+ * **`ManagerPool#renotifyStalledDenials()`（issue #1105 C）は一番後ろ。**
+ * 止まった委譲が黙って放置されないよう、分類器の拒否から時間が経っても
+ * 動きが無い委譲へもう一度知らせる（`manager.ts` の同メソッドの doc）。
+ * 他の3つのどれとも順序に依存は無い——読む像（`deniedLastAt` /
+ * `job.lastReportAt` / `lastToolSettledAt` / `job.status`）はこの回では
+ * 他の3つに書き換えられない。末尾に置くのは「新しい関心事は末尾に足す」
+ * というこのファイルの慣例に揃えるだけである。
  */
 export const MANAGER_POLL_INTERVAL_MS = 60_000;
 
@@ -86,6 +94,10 @@ export function startManagerPolling(options: ManagerPollerOptions): ManagerPolle
       // 失敗でループを止めない設計だが（`manager.ts` の doc）、契約が将来
       // 変わってもこのポーラーが原因でデーモンごと落ちることはない。
       .then(() => options.managers.settleStalledUsageWakes().catch(() => undefined))
+      // **さらにその後ろに `renotifyStalledDenials()`（issue #1105 C）。**
+      // 同じ理由で `.catch()` により二重に握る——止まった委譲へ知らせ直す
+      // 逃げ道が、このポーラー自身の失敗でデーモンごと落ちることはない。
+      .then(() => options.managers.renotifyStalledDenials().catch(() => undefined))
       // **戻り値（起こせた managerId の一覧）はこのポーラーからは捨てる。**
       // `probe()` の型は `Promise<void>` で揃えてある——呼び出し元
       // （テストの `refresh()`）は「1周した」ことだけを知ればよい。

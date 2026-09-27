@@ -233,6 +233,8 @@ function fakeClone() {
     async settleStalledUsageWakes() {
       return [];
     },
+    // HTTP 境界の検証では触らない（issue #1105 C。契機はデーモンのポーラーにある）。
+    async renotifyStalledDenials() {},
     async stop() {},
   };
 

@@ -400,6 +400,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async settleStalledUsageWakes() {
       return [];
     },
+    // クローンの道具はこの口を呼ばない（issue #1105 C。契機はデーモンのポーラーにある）。
+    async renotifyStalledDenials() {},
     async stop() {},
   };
 

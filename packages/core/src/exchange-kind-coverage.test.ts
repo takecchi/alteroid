@@ -263,7 +263,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // 見送りを日誌へ残す1本ずつ。`EXCHANGE_KIND_FAILURE_PREFIX` /
   // `EXCHANGE_KIND_DECISION_PREFIX` で、それぞれ直前の `status === 'stopped'`
   // ガードと同じ接頭辞を使う）。
-  'manager.ts': 46,
+  // + 1（issue #1105 C。`renotifyStalledDenials()` が知らせ直しを2回とも
+  // 出し切ったときに1本、`EXCHANGE_KIND_THINNING_PREFIX` で書く）。
+  'manager.ts': 47,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {
