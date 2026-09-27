@@ -885,11 +885,12 @@ class Host implements RunnerHost {
    * （例: `/workspace` の下へ clone した作業ツリー）が、移送先の器には無い。
    * 確かめずに `query()` へそのまま渡すと、SDK は spawn の `chdir` で
    * `ENOENT` になる——**しかも実測では、原因が「実行ファイルの libc が
-   * 合わない」ように見える**（`.scratch/sdk-cwd-probe-output.txt`
-   * 2026-09-27 の実測: `ReferenceError: Claude Code native binary at
-   * <path> exists but failed to launch. This usually means the binary
-   * does not match this system's libc — …`。同じ binary は存在する `cwd`
-   * では正常に spawn する——実測は PR 本文にも逐語で残す）。原因を辿り
+   * 合わない」ように見える**（2026-09-27、`@anthropic-ai/claude-agent-sdk`
+   * 0.3.283、資格情報無しで実測: `ReferenceError: Claude Code native binary
+   * at <path> exists but failed to launch. This usually means the binary
+   * does not match this system's libc — …`。同じ binary・同じ環境で `cwd`
+   * を実在するディレクトリに変えると正常に spawn する——libc は無関係で、
+   * 原因は cwd 側にある。この PR の本文に実測の全文がある）。原因を辿り
    * にくい形で、セッションそのものが開けなくなる。
    *
    * **安全側へ倒す。** 存在しないディレクトリを渡して開けないままにするより、
