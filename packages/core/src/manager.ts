@@ -2278,14 +2278,28 @@ export interface ManagerPool {
    * - **M が終わった・止められた・畳まれた** —— `#records` は done/lost/
    *   failed/stopped でその managerId 自身を消す（`#load()` の doc）ので、
    *   ここは走っている委譲しか見ない。特別な分岐は要らない。
-   * - **P1 の確認（`runner.ts` の `#onPermissionDenied`）が未決のまま** ——
-   *   `record.job.status === 'waiting_human'` なら知らせ直さない。あの
-   *   確認は通常の許可確認と同じ `#pending` / `record.waiting` を共有する
-   *   ので、この状態は「クローンには既に別の合図（`ask`）が届いている」
-   *   ことを意味する——同じ停止について二重に知らせない。**簡略化**:
-   *   未決の確認がこの停止と同じものかは区別しない（この委譲に何であれ
-   *   未決の確認が1件でもあれば、それだけで「クローンは既に気づける
-   *   状態にある」と判断する）。
+   * - **この拒否自身への P1 の確認（`runner.ts` の `#onPermissionDenied`。
+   *   issue #1105 P1「1回だけの許可」）が未決のまま** —— `record.waiting`
+   *   に、この拒否の `event.toolUseId`（`ManagerRecord.deniedLastRequestId`
+   *   に控えてある）と同じ `requestId` を持つ項目が有れば知らせ直さない。
+   *   `#onPermissionDenied` はこの拒否と同じ `tool_use_id` で `ask` を上げる
+   *   ので、一致は「クローンには既にこの拒否自身への合図が届いている」ことを
+   *   意味する——同じ停止について二重に知らせない。
+   *
+   *   **かつては `record.job.status === 'waiting_human'` かどうかだけで
+   *   委譲ごと丸ごと見送っていた（簡略化）。** `waiting_human` は「この
+   *   委譲のどこかに未決の確認が1件ある」としか言わず、それがいま見ている
+   *   拒否と同じものかは区別していなかった——同じ委譲の中に**無関係な**未決の
+   *   確認（例: 別の道具の通常の許可確認）が1件あるだけで、10分・30分前に
+   *   拒否された**別の**拒否の知らせ直しまで巻き添えで止まっていた（issue
+   *   #1772・横断レビュー14回目 s2）。判定の単位を委譲ごとから拒否ごとへ
+   *   戻したのがこの版で、無関係な確認は見送る理由にならない。
+   *
+   *   **突き合わせが取れない拒否（`#onPermissionDenied` が `ask` を上げな
+   *   かった回。`toolName` / 入力の digest が取れなかった等）は、そもそも
+   *   一致する項目が生まれないので、この条件は常に不成立——見送らない。**
+   *   これは「許しすぎる」側にも「知らせなさすぎる」側にも倒れない。単に
+   *   この条件がそもそも起きない回であるだけである。
    *
    * ## 何回・いつ知らせ直すか
    *
@@ -2995,6 +3009,35 @@ interface ManagerRecord {
    * `onForget`、`deniedLastAt` と同じ）。
    */
   deniedLastReason?: Map<string, DenialReasonSnapshot>;
+  /**
+   * `denied` と同じ鍵（`denialKey`）で、その組が**最後に止められたときの
+   * `permission_denied` イベントの `toolUseId`**（issue #1772、横断レビュー
+   * 14回目 s2）。
+   *
+   * **`renotifyStalledDenials()` が「この拒否そのものへの未決の確認が
+   * `record.waiting` に在るか」を判定するための突き合わせ材料。** `runner.ts`
+   * の `#onPermissionDenied`（issue #1105 P1、「1回だけの許可」）は、この拒否と
+   * 同じ `tool_use_id` を `requestId` にして `ask` を上げる——つまり
+   * **この欄の値と `record.waiting[].requestId` が一致する項目こそが、この
+   * 拒否自身への未決の確認である。** 一致する項目が無ければ、`record.waiting`
+   * に何が在ろうと（＝`record.job.status === 'waiting_human'` であろうと）、
+   * それはこの拒否とは無関係な確認でしかない——見送る理由にならない。
+   *
+   * **`toolName` / 入力の digest が取れなかった回（`#onPermissionDenied` の
+   * doc）は、そもそも `ask` が上がらない。** その場合この欄は値を持つが
+   * `record.waiting` には一致する項目が生まれないので、突き合わせは常に
+   * 「一致しない」——渡された値をそのまま使うだけで、`ask` が上がったかどうかを
+   * 個別に判定する必要は無い。
+   *
+   * **`toolUseId` は `permission_denied` イベントの必須欄**（`runnerEventSchema`。
+   * SDK の型で live / result の両方とも必須）なので、`deniedLastAt` と同じく
+   * 拒否の度に必ず上書きする——欠けて「取れていない」を表す軸ではない。
+   *
+   * プロセス内のこの像だけに載る（`deniedLastAt` と同じ理由・同じ寿命）。
+   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
+   * `onForget`、`deniedLastAt` と同じ）。
+   */
+  deniedLastRequestId?: Map<string, string>;
   /**
    * この委譲のセッションで、直近に `PostToolUse`（道具の実行が決着した
    * 瞬間。`case 'tool_use'`）を観測した時刻（issue #1105 C）。
@@ -7030,11 +7073,14 @@ class Pool implements ManagerPool {
     const now = this.#now();
     for (const [managerId, record] of [...this.#records]) {
       if (this.#stopped) break;
-      // **P1 の確認が未決、または委譲が終わっている場合は見ない。**
-      // `waiting_human` はここで弾く（interface の doc「取り消す条件」）。
-      // 終わった委譲（done/lost/failed/stopped）はそもそも `#records` に
-      // 残らないので、特別な分岐は要らない。
-      if (record.job.status !== 'running') continue;
+      // **委譲が終わっている場合は見ない。** 終わった委譲（done/lost/failed/
+      // stopped）はそもそも `#records` に残らないので、特別な分岐は要らない
+      // （`#load()` の doc）——`#records` に残るのは `running` / `waiting_human`
+      // だけである。**`waiting_human` を丸ごと弾くのはここではやめた**（issue
+      // #1772・横断レビュー14回目 s2）。同じ委譲の中に無関係な未決の確認が
+      // 1件でもあれば拒否ごと見送っていた簡略化が、無関係な拒否まで巻き添えに
+      // していた——判定は `#renotifyStalledDenial` が拒否1件ごとに行う
+      // （この拒否自身の P1 確認かどうかを `deniedLastRequestId` で突き合わせる）。
       const deniedLastAt = record.deniedLastAt;
       if (deniedLastAt === undefined || deniedLastAt.size === 0) continue;
       for (const [key, deniedAt] of [...deniedLastAt]) {
@@ -7065,6 +7111,23 @@ class Pool implements ManagerPool {
     // 3つ目の状態を持つ」）。`deniedLastAt` は常にこのファイルが
     // `toISOString()` で書いた値なので、実際には起きないはずの防御である。
     if (Number.isNaN(deniedAtMs)) return;
+
+    // **この拒否自身への未決の確認（issue #1105 P1「1回だけの許可」）だけを
+    // 見送る（issue #1772・横断レビュー14回目 s2）。** `record.job.status ===
+    // 'waiting_human'` を「クローンには既に別の合図が届いている」の代理指標に
+    // 使う簡略化をやめ、`record.waiting` にこの拒否と同じ `requestId`
+    // （＝`ManagerRecord.deniedLastRequestId` に控えた `tool_use_id`）を持つ
+    // 項目が実在するときだけ見送る。**突き合わせ材料は `deniedLastRequestId`
+    // （拒否の `event.toolUseId`）と `record.waiting[].requestId` の一致——
+    // `#onPermissionDenied`（runner.ts）がこの拒否と同じ id で `ask` を上げる
+    // ときにだけ一致する。** 一致する項目が無ければ、同じ委譲の中に無関係な
+    // 確認（別の道具の許可確認・質問）が何件未決であっても見送らない——
+    // 無関係な確認はこの拒否の停止とは無関係なので、知らせ直しを止める理由に
+    // ならない（issue #1772 の本文）。
+    const ownRequestId = record.deniedLastRequestId?.get(key);
+    if (ownRequestId !== undefined && record.waiting.some((item) => item.requestId === ownRequestId)) {
+      return;
+    }
 
     // **拒否の後に進んだか。** `job.lastReportAt`（`case 'report'`）と
     // `lastToolSettledAt`（`case 'tool_use'`）のどちらかが拒否より後なら
@@ -10502,6 +10565,10 @@ class Pool implements ManagerPool {
         } else {
           (record.deniedLastReason ??= new Map()).set(key, reasonSnapshot);
         }
+        // この拒否と同じ `tool_use_id` を持つ `ask`（issue #1105 P1「1回だけの
+        // 許可」）が、この拒否自身への未決の確認かどうかを後で突き合わせる材料
+        // （issue #1772・`ManagerRecord.deniedLastRequestId` の doc）。
+        (record.deniedLastRequestId ??= new Map()).set(key, event.toolUseId);
 
         // **escalation は道具ごとの合計で判定する（layer 別ではない）。**
         // 持ち主の指摘（PR #549 レビュー）: 「この層のこのループが繰り返して
@@ -11925,6 +11992,8 @@ class Pool implements ManagerPool {
           record.deniedLastReason?.delete(key);
           // issue #1105 C。`deniedLastAt` と同じ鍵なので同時に消す。
           record.deniedRenotify?.delete(key);
+          // issue #1772（横断レビュー14回目 s2）。同じ鍵なので同時に消す。
+          record.deniedLastRequestId?.delete(key);
         }
         const labels = keys.map((key) => {
           const { tool, actor } = decodeDenialKey(key);
