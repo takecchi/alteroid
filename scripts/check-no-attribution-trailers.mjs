@@ -97,8 +97,9 @@ function parseArgs(argv) {
 
 /**
  * `gh pr view <N> --json body,commits` を叩く。**1回で両方取る**
- * （`AGENTS.md`「静かに失敗する道具」——`gh issue view --comments` が本文を
- * 落とす罠と同じ形を、2回に分けないことで避ける）。
+ * （`.claude/skills/tool-quirks/SKILL.md` の `gh issue view <N> --comments` の項
+ * ——本文を落とす罠と同じ形を、2回に分けないことで避ける。この項は #1753 で
+ * AGENTS.md「静かに失敗する道具」から移った）。
  *
  * 例外は握り潰すが、中身（stderr）は捨てない（`check-pr-green.mjs` /
  * `check-base-overlap.mjs` の `fetch*` と同じ形）。

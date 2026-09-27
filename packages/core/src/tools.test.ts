@@ -16067,7 +16067,28 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
           z.object(shape!).safeParse({ ...base, workKind: 'まだ誰も名付けていない種類' }).success,
           name,
         ).toBe(true);
-        expect(z.object(shape!).safeParse({ ...base, workKind: '' }).success, name).toBe(false);
+        // **追記（issue #1752。テストを弱めずに直す）。**
+        // 事実: 以前はここが `.toBe(false)` だった——`workKind` の
+        // `.min(1).max(128)`（`workKindSchema`）が道具の入力スキーマ側に
+        // 直接乗っていたので、空文字は `z.object(shape!).safeParse` の時点で
+        // 落ちた。
+        // なぜ変えたか: issue #1752 で、入力スキーマ側に型以外の制約
+        // （`.min()`/`.max()`）を持たせると SDK の `tool()` がハンドラより
+        // **前**に検証してしまい、英語の zod の JSON がそのまま返る穴を
+        // 数値の欄に続いて非数値の欄でも直した。`workKind` の長さの検査は
+        // ハンドラの先頭（`describeWorkKindViolation`。`workKindSchema.
+        // safeParse` を直接呼ぶ）へ移り、道具の入力スキーマ側は型
+        // （文字列）だけを固定する `workKindToolInputSchema` になった——
+        // だから「入力スキーマの shape だけを見る」ここの safeParse は、
+        // いまは空文字も通す（`true`）のが正しい。
+        // 保証が弱くなっていないこと: 「workKind に空文字を渡すと断られる」
+        // という保証そのものは消えていない——測る場所が変わっただけである。
+        // 実際に断られることは
+        // `tool-non-numeric-args-handler-validation-1752.test.ts`
+        // （本物の MCP 往復・`commitment_appraise` / `manager_appraise` /
+        // `commitment_close` の3道具を table-driven で測る）が、マーカー
+        // 無しの日本語の平文で断られることまで含めて検査する。
+        expect(z.object(shape!).safeParse({ ...base, workKind: '' }).success, name).toBe(true);
       }
     });
 

@@ -119,22 +119,88 @@ export async function loginCommand(options: { provider?: string }): Promise<void
   }
 }
 
-export async function logoutCommand(): Promise<void> {
+type ServerLogoutOutcome =
+  { kind: 'revoked' } | { kind: 'already-invalid' } | { kind: 'failed'; detail: string };
+
+/**
+ * `POST /auth/logout` を叩く。**投げない**（成否をどう扱うかは呼び手の仕事）。
+ *
+ * 3つを区別する（issue #1757 の設計）——`revoked`（成功）と `already-invalid`
+ * （401。既に使えない）はどちらも手元の資格を消してよい。それ以外
+ * （届かない・5xx・その他）は `failed` で、手元の資格は消してはいけない
+ * （消すと、以後サーバ側を失効させる手段が `alteroid access revoke` しか
+ * 残らない）。
+ */
+async function requestServerLogout(baseUrl: string, token: string): Promise<ServerLogoutOutcome> {
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/auth/logout`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: '{}',
+    });
+  } catch (error) {
+    return {
+      kind: 'failed',
+      detail: `${baseUrl} に届きませんでした（${error instanceof Error ? error.message : String(error)}）`,
+    };
+  }
+  if (response.ok) return { kind: 'revoked' };
+  if (response.status === 401) return { kind: 'already-invalid' };
+  return { kind: 'failed', detail: await errorText(response) };
+}
+
+export async function logoutCommand(options: { localOnly?: boolean } = {}): Promise<void> {
   const target = await resolveTarget();
-  const removed = await clearCredential(target.baseUrl);
-  stdout.write(
-    removed
-      ? `${target.baseUrl} のログイン情報を消しました\n`
-      : `${target.baseUrl} のログイン情報はありません\n`,
-  );
-  if (!target.remote) {
-    // 手元のデーモンは状態ファイルの token で通るので、消しても繋がり続ける。
-    // 黙っていると「ログアウトしたのに使える」と見え、境界を誤解させる。
+  const stored = await readCredential(target.baseUrl);
+
+  const operatorNote = (): void => {
+    if (!target.remote) {
+      // 手元のデーモンは状態ファイルの token で通るので、消しても繋がり続ける。
+      // 黙っていると「ログアウトしたのに使える」と見え、境界を誤解させる。
+      stdout.write(
+        '（手元のデーモンへは、実行環境の持ち主として引き続き接続できます。\n' +
+          ' これは ~/.alteroid/state/daemon.json を読めることに基づく資格です）\n',
+      );
+    }
+  };
+
+  if (stored === null) {
+    stdout.write(`${target.baseUrl} のログイン情報はありません\n`);
+    operatorNote();
+    return;
+  }
+
+  if (options.localOnly === true) {
+    await clearCredential(target.baseUrl);
     stdout.write(
-      '（手元のデーモンへは、実行環境の持ち主として引き続き接続できます。\n' +
-        ' これは ~/.alteroid/state/daemon.json を読めることに基づく資格です）\n',
+      '⚠ --local-only: サーバ側のトークンは失効させていません' +
+        '（期限が来るか、alteroid access revoke で失効するまで有効なままです）。\n' +
+        `${target.baseUrl} の手元のログイン情報だけを消しました\n`,
+    );
+    operatorNote();
+    return;
+  }
+
+  const outcome = await requestServerLogout(target.baseUrl, stored.token);
+  if (outcome.kind === 'failed') {
+    // **手元の資格を消さない。** サーバ側ではまだ失効していないので、消すと
+    // 失効させる手段が `alteroid access revoke`（デーモンが動いている環境での
+    // 操作）しか残らない。
+    throw new Error(
+      `サーバ側のトークンをまだ失効できていません: ${outcome.detail}\n` +
+        'もう一度試すか、--local-only を付けて手元だけを消してください' +
+        '（その場合、トークンは期限が来るか alteroid access revoke で失効するまで有効です）。',
     );
   }
+
+  await clearCredential(target.baseUrl);
+  stdout.write(
+    outcome.kind === 'revoked'
+      ? `サーバ側のトークンを失効させ、${target.baseUrl} のログイン情報を消しました\n`
+      : `サーバ側では既に無効でした。${target.baseUrl} のログイン情報を消しました\n`,
+  );
+  operatorNote();
 }
 
 export async function whoamiCommand(): Promise<void> {

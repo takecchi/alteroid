@@ -83,6 +83,22 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（fs 実�
     await expect(stores.auth.putAccessToken(invalidToken)).rejects.toThrow();
   });
 
+  it('revokeAccessToken() は isoDateTime でない at を拒む（throw する。issue #1757）', async () => {
+    await stores.auth.putAccount(account);
+    const token: AccessTokenRecord = {
+      id: 'token-revoke-1',
+      accountId: account.id,
+      sha256: 'a'.repeat(64),
+      label: 'laptop',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    await stores.auth.putAccessToken(token);
+    await expect(stores.auth.revokeAccessToken(token.id, '不正な日時')).rejects.toThrow();
+  });
+
   it('putLoginRequest() は空文字の nonce を拒む（throw する）', async () => {
     const invalidRequest: LoginRequest = {
       id: 'login-1',

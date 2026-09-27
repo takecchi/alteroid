@@ -16,6 +16,7 @@ import type {
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
+  RevokeAccessTokenOutcome,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -230,6 +231,33 @@ export class FsAuthStore implements AuthStore {
     return accessTokens
       .filter((token) => token.accountId === accountId)
       .sort(compareAccessTokenOrder);
+  }
+
+  /**
+   * この1本のアクセストークンだけを失効させる。**1つの排他区間の中で**行う
+   * （issue #1757）。
+   *
+   * `revokedAt` が空のときだけ立てる——同じトークンへ同時にログアウトが来ても、
+   * 先に書いた側の時刻が残る（後から来た側は `already_revoked` を見る）。
+   */
+  async revokeAccessToken(id: string, at: string): Promise<RevokeAccessTokenOutcome> {
+    return this.#mutate<RevokeAccessTokenOutcome>(
+      (file): { next: AuthFile | null; result: RevokeAccessTokenOutcome } => {
+        const token = file.accessTokens.find((it) => it.id === id);
+        if (token === undefined) return { next: null, result: { status: 'not_found' as const } };
+        if (token.revokedAt !== null) {
+          return { next: null, result: { status: 'already_revoked' as const, token } };
+        }
+        const revoked = accessTokenRecordSchema.parse({ ...token, revokedAt: at });
+        return {
+          next: {
+            ...file,
+            accessTokens: file.accessTokens.map((it) => (it.id === id ? revoked : it)),
+          },
+          result: { status: 'revoked' as const, token: revoked },
+        };
+      },
+    );
   }
 
   async putLoginRequest(request: LoginRequest): Promise<void> {

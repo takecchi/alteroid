@@ -17113,6 +17113,90 @@
         }
       }
     },
+    "/auth/logout": {
+      "post": {
+        "operationId": "postAuthLogout",
+        "tags": ["auth"],
+        "summary": "いま提示しているアクセストークンを失効させる",
+        "description": "同じアカウントの他のトークンは巻き込まない。**operator の資格（状態ファイルの token）では呼べない**——失効させる対象（アクセストークン）を持たないため。",
+        "requestBody": {
+          "required": true,
+          "description": "**中身は読まないので `{}` を送ればよい。** 本文そのものではなく `content-type: application/json` が要る（ブラウザの単純リクエストでログアウトさせられないため）。",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "失効させた（既に失効済みだった場合を含む）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": ["ok"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "operator の資格では失効させられない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "資格が無い、またはトークンが既に無効。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/access": {
       "get": {
         "operationId": "getAccess",

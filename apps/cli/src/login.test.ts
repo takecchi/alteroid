@@ -174,24 +174,77 @@ describe('alteroid login', () => {
 });
 
 describe('alteroid logout', () => {
-  it('手元のデーモンなら、消した事実に加えて実行環境の持ち主として繋がり続けることを言う', async () => {
-    vi.mocked(credentials.clearCredential).mockResolvedValue(true);
+  const STORED = {
+    token: 'tok-1',
+    accountId: 'acc-1',
+    label: 'person@example.com',
+    createdAt: '2026-08-01T00:00:00.000Z',
+  };
+
+  it('手元に資格が無ければ、サーバへは何も呼ばずに「無い」旨と、手元デーモンの注記を言う', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(null);
     const read = captureStdout();
 
     await logoutCommand();
 
     const text = read();
-    expect(text).toContain('http://127.0.0.1:4517 のログイン情報を消しました');
+    expect(text).toContain('http://127.0.0.1:4517 のログイン情報はありません');
     expect(text).toContain('実行環境の持ち主として引き続き接続できます');
+    expect(sent).toHaveLength(0);
   });
 
-  it('消すログイン情報が無ければ、無い旨だけを言う', async () => {
-    vi.mocked(credentials.clearCredential).mockResolvedValue(false);
+  it('成功（200）→ サーバ側を失効させたと言って、手元の資格も消す', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(STORED);
+    replies.push({ status: 200, body: { ok: true } });
     const read = captureStdout();
 
     await logoutCommand();
 
-    expect(read()).toContain('http://127.0.0.1:4517 のログイン情報はありません');
+    expect(sent).toEqual([{ url: 'http://127.0.0.1:4517/auth/logout', method: 'POST' }]);
+    expect(credentials.clearCredential).toHaveBeenCalledWith('http://127.0.0.1:4517');
+    const text = read();
+    expect(text).toContain('サーバ側のトークンを失効させ');
+    expect(text).toContain('http://127.0.0.1:4517 のログイン情報を消しました');
+  });
+
+  it('401（既に無効）→ そう言って、手元の資格も消す', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(STORED);
+    replies.push({ status: 401, body: { error: 'トークンが無効か期限切れ' } });
+    const read = captureStdout();
+
+    await logoutCommand();
+
+    expect(credentials.clearCredential).toHaveBeenCalledWith('http://127.0.0.1:4517');
+    expect(read()).toContain('サーバ側では既に無効でした');
+  });
+
+  it('500 → 手元の資格を消さず、もう一度試すか --local-only を案内して失敗で終わる', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(STORED);
+    replies.push({ status: 500, body: { error: 'internal' } });
+
+    await expect(logoutCommand()).rejects.toThrow('サーバ側のトークンをまだ失効できていません');
+    expect(credentials.clearCredential).not.toHaveBeenCalled();
+  });
+
+  it('サーバへ届かない（接続拒否）→ 手元の資格を消さず、失敗で終わる', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(STORED);
+    globalThis.fetch = (() => Promise.reject(new Error('connect ECONNREFUSED'))) as typeof fetch;
+
+    await expect(logoutCommand()).rejects.toThrow('サーバ側のトークンをまだ失効できていません');
+    expect(credentials.clearCredential).not.toHaveBeenCalled();
+  });
+
+  it('--local-only → サーバへは呼ばず、警告を出して手元だけを消す', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(STORED);
+    const read = captureStdout();
+
+    await logoutCommand({ localOnly: true });
+
+    expect(sent).toHaveLength(0);
+    expect(credentials.clearCredential).toHaveBeenCalledWith('http://127.0.0.1:4517');
+    const text = read();
+    expect(text).toContain('--local-only');
+    expect(text).toContain('手元のログイン情報だけを消しました');
   });
 });
 

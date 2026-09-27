@@ -16,8 +16,11 @@
  */
 import useSWR from 'swr';
 
-import { ApiError, unwrap, useApiContext } from '~/lib/api';
+import { ApiError, expectOk, unwrap, useApiContext } from '~/lib/api';
 import type { StoredAccount } from '~/lib/auth';
+
+/** `logout()` の結果。失敗のときは人間に見せてよい1行を持つ。 */
+export type LogoutResult = { ok: true } | { ok: false; message: string };
 
 export type AuthStatus = 'checking' | 'open' | 'anonymous' | 'ungranted' | 'ready';
 
@@ -115,7 +118,48 @@ export function useAuth() {
     error: query.error as unknown,
     isLoading: query.isLoading,
     revalidate: query.mutate,
-    /** ログアウト。**鍵を捨てるだけ**（デーモン側の失効は CLI の仕事）。 */
-    logout: () => setCredential(null),
+    /**
+     * ログアウト（issue #1757）。**先にサーバ側のトークンを失効させてから**
+     * 鍵を捨てる——鍵だけ捨ててサーバ側を生かしたままにする元の欠陥（issue
+     * 本文）を、CLI と同じ設計で塞ぐ。
+     *
+     * - 鍵が無ければ何もしない（失効させる対象が無い）
+     * - 成功（2xx）／401（既に無効）→ 鍵を捨てて `{ ok: true }`
+     * - それ以外（403・5xx・ネットワーク到達不能等）→ **鍵は捨てない** —
+     *   捨てると、以後サーバ側を失効させる手段が無くなる（`alteroid access
+     *   revoke` は端末からしか打てない）。呼び手は `{ ok: false, message }`
+     *   を見て、その旨を出し、`discardCredential()`（鍵だけを捨てる別の
+     *   操作）を案内する。
+     */
+    async logout(): Promise<LogoutResult> {
+      if (credential === null) return { ok: true };
+      try {
+        const result = await client.api.POST('/auth/logout', { body: {} });
+        if (result.response.status === 401) {
+          setCredential(null);
+          return { ok: true };
+        }
+        expectOk(result);
+        setCredential(null);
+        return { ok: true };
+      } catch (error) {
+        const message = error instanceof ApiError ? error.message : describeNetworkFailure(error);
+        return { ok: false, message };
+      }
+    },
+    /**
+     * サーバへは呼ばずに、この画面から鍵だけを捨てる。
+     *
+     * **`logout()` が失敗したときの逃げ道**（サーバ側は生きたままだが、この
+     * 画面からは切り離す）。旧来の「ログアウトは鍵を捨てるだけ」の挙動を
+     * 明示的な操作として残したもの。**許可の無いアカウントも `logout()` を
+     * 使える**（`/auth/logout` は許可待ちのトークンも通す。issue #1757 ——
+     * 捨てたつもりのトークンが、後の `access grant` で生き返らないため）。
+     */
+    discardCredential: () => setCredential(null),
   };
+}
+
+function describeNetworkFailure(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

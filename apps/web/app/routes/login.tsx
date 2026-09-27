@@ -232,7 +232,20 @@ function SignIn() {
  */
 function Ungranted() {
   const auth = useAuth();
-  const { logout } = auth;
+  /**
+   * **ここでも `auth.logout()`（サーバ側の失効）を使う（issue #1757）。**
+   * 許可待ちのトークンを鍵だけ捨てて離れると、サーバ側では生きたまま残り、
+   * **後から `access grant` された瞬間に使える鍵として生き返る。**
+   * `/auth/logout` は許可の無いアカウントも通す（`app.ts` の `authenticate`
+   * の該当箇所）。失敗したら、ほかの画面と同じく鍵だけを捨てる操作を残す。
+   */
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const switchAccount = () => {
+    setLogoutError(null);
+    void auth.logout().then((result) => {
+      if (!result.ok) setLogoutError(result.message);
+    });
+  };
   const command = `alteroid access grant ${auth.account?.id ?? '<アカウント id>'}`;
 
   return (
@@ -273,8 +286,23 @@ function Ungranted() {
         <Button variant="primary" onClick={() => void auth.revalidate()}>
           許可されたか確認する
         </Button>
-        <Button onClick={logout}>別のアカウントでログイン</Button>
+        <Button onClick={switchAccount}>別のアカウントでログイン</Button>
       </div>
+      {logoutError !== null && (
+        <div role="alert" className="mt-3 break-words text-xs text-danger">
+          サーバ側を失効させられなかった: {logoutError}
+          <button
+            type="button"
+            onClick={() => {
+              setLogoutError(null);
+              auth.discardCredential();
+            }}
+            className="ml-1 underline hover:text-fg"
+          >
+            この画面から鍵だけを捨てる
+          </button>
+        </div>
+      )}
     </Shell>
   );
 }

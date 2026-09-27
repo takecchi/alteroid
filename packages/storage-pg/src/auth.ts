@@ -13,6 +13,7 @@ import type {
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
+  RevokeAccessTokenOutcome,
 } from '@alteroid/core';
 import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 
@@ -274,6 +275,35 @@ export class PgAuthStore implements AuthStore {
       .where(eq(authAccessTokens.accountId, accountId))
       .orderBy(asc(authAccessTokens.createdAt), asc(authAccessTokens.id));
     return rows.map((row) => this.#toAccessToken(row));
+  }
+
+  /**
+   * この1本のアクセストークンだけを失効させる（issue #1757）。
+   *
+   * **条件付き UPDATE（`revoked_at is null`）で強制する** —— `grantAccess` と
+   * 同じ理由。同じトークンへ同時にログアウトが来たとき、先に書いた側の時刻を
+   * 後から来た側が上書きしない。更新が0行なら、既に失効済みか、そもそも
+   * その id の行が無いかのどちらかなので、読み直して区別する。
+   */
+  async revokeAccessToken(id: string, at: string): Promise<RevokeAccessTokenOutcome> {
+    const rows = await this.#db
+      .update(authAccessTokens)
+      .set({ revokedAt: new Date(at) })
+      .where(and(eq(authAccessTokens.id, id), isNull(authAccessTokens.revokedAt)))
+      .returning();
+    const row = rows[0];
+    if (row !== undefined) return { status: 'revoked', token: this.#toAccessToken(row) };
+
+    // 更新できなかった。行そのものが無いのか、既に失効済みなのかを分けて返す。
+    const existingRows = await this.#db
+      .select()
+      .from(authAccessTokens)
+      .where(eq(authAccessTokens.id, id))
+      .limit(1);
+    const existing = existingRows[0];
+    return existing === undefined
+      ? { status: 'not_found' }
+      : { status: 'already_revoked', token: this.#toAccessToken(existing) };
   }
 
   async putLoginRequest(request: LoginRequest): Promise<void> {

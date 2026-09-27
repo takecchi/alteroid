@@ -36,6 +36,14 @@ export default function Settings() {
 
 function Account() {
   const auth = useAuth();
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+
+  const handleLogout = () => {
+    setLogoutError(null);
+    void auth.logout().then((result) => {
+      if (!result.ok) setLogoutError(result.message);
+    });
+  };
 
   return (
     <Card>
@@ -78,14 +86,29 @@ function Account() {
               )}
             </dl>
             <div className="mt-3 flex items-center gap-2">
-              <Button size="sm" onClick={auth.logout}>
+              <Button size="sm" onClick={handleLogout}>
                 ログアウト
               </Button>
               <span className="text-[11px] text-muted">
-                この画面から鍵を捨てるだけ。デーモン側で失効させるなら{' '}
+                サーバ側のアクセストークンも失効させる。アカウントごと締め出すなら{' '}
                 <code className="font-mono">alteroid access revoke</code>
               </span>
             </div>
+            {logoutError !== null && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-danger">
+                <span className="break-words">サーバ側を失効させられなかった: {logoutError}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLogoutError(null);
+                    auth.discardCredential();
+                  }}
+                  className="shrink-0 underline hover:text-fg"
+                >
+                  この画面から鍵だけを捨てる
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

@@ -308,6 +308,7 @@ assertBodyRequired<paths['/schedule/{kind}/run']['post']['requestBody']>(true);
 assertBodyRequired<paths['/access/{accountId}/grant']['post']['requestBody']>(true);
 assertBodyRequired<paths['/access/{accountId}/revoke']['post']['requestBody']>(true);
 assertBodyRequired<paths['/shutdown']['post']['requestBody']>(true);
+assertBodyRequired<paths['/auth/logout']['post']['requestBody']>(true);
 
 /**
  * **既定ヘッダを注入しない素の生成クライアントで、実際に門番を越えられることを見る。**
@@ -380,6 +381,10 @@ it('既定ヘッダを注入しない素の生成クライアントでも 415 �
     {
       name: 'POST /shutdown',
       status: async () => (await bare.POST('/shutdown', { body: {} })).response.status,
+    },
+    {
+      name: 'POST /auth/logout',
+      status: async () => (await bare.POST('/auth/logout', { body: {} })).response.status,
     },
   ];
 

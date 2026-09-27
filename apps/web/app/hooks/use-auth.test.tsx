@@ -10,6 +10,7 @@
  * しないログインへ人を戻すことになるので、**そちらは捨てない**。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { useAuth } from '~/hooks/use-auth';
@@ -210,5 +211,123 @@ describe('接続先を切り替えた後に、古い相手の 401 が届いた�
     // 以降も切り替えた先の鍵を提示し続ける
     const last = stub.entries.filter((entry) => entry.url.startsWith(OTHER)).at(-1);
     expect(last?.authorization).toBe(`Bearer ${OTHER_CREDENTIAL.token}`);
+  });
+});
+
+/**
+ * `logout()`（issue #1757）——先にサーバ側のトークンを失効させてから鍵を捨てる。
+ * `discardCredential()` はサーバへ呼ばずに鍵だけを捨てる、後始末の逃げ道。
+ */
+describe('logout（issue #1757）', () => {
+  function LogoutProbe() {
+    const auth = useAuth();
+    const [result, setResult] = useState('idle');
+    return (
+      <div>
+        <div data-testid="status">{auth.status}</div>
+        <div data-testid="result">{result}</div>
+        <button
+          type="button"
+          onClick={() => {
+            void auth.logout().then((r) => setResult(r.ok ? 'ok' : `error:${r.message}`));
+          }}
+        >
+          logout
+        </button>
+        <button type="button" onClick={() => auth.discardCredential()}>
+          discard
+        </button>
+      </div>
+    );
+  }
+
+  function renderLogoutProbe() {
+    return render(
+      <Providers>
+        <LogoutProbe />
+      </Providers>,
+    );
+  }
+
+  it('成功（200）→ POST /auth/logout を1回呼び、鍵を捨てる', async () => {
+    const stub = stubFetch((url) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      if (url.endsWith('/auth/me')) {
+        return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+      }
+      if (url.endsWith('/auth/logout')) return json({ ok: true });
+      return undefined;
+    });
+    renderLogoutProbe();
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('ready'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+
+    await waitFor(() => expect(screen.getByTestId('result').textContent).toBe('ok'));
+    expect(localStorage.getItem(CREDENTIAL_KEY)).toBeNull();
+    const logoutCalls = stub.entries.filter((entry) => entry.url.endsWith('/auth/logout'));
+    expect(logoutCalls).toHaveLength(1);
+    expect(logoutCalls[0]?.authorization).toBe(`Bearer ${CREDENTIAL.token}`);
+  });
+
+  it('401（既に無効）→ 成功と同じく鍵を捨てる', async () => {
+    stubFetch((url) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      if (url.endsWith('/auth/me')) {
+        return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+      }
+      if (url.endsWith('/auth/logout')) {
+        return json({ error: 'トークンが無効か期限切れ' }, 401);
+      }
+      return undefined;
+    });
+    renderLogoutProbe();
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('ready'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+
+    await waitFor(() => expect(screen.getByTestId('result').textContent).toBe('ok'));
+    expect(localStorage.getItem(CREDENTIAL_KEY)).toBeNull();
+  });
+
+  it('失敗（500）→ 鍵は残す。discardCredential() で鍵だけを別途捨てられる', async () => {
+    stubFetch((url) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      if (url.endsWith('/auth/me')) {
+        return json({ kind: 'account', account: CREDENTIAL.account, granted: true });
+      }
+      if (url.endsWith('/auth/logout')) return json({ error: 'internal' }, 500);
+      return undefined;
+    });
+    renderLogoutProbe();
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('ready'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('result').textContent?.startsWith('error:')).toBe(true);
+    });
+    // 失敗しただけでは鍵を捨てない。
+    expect(localStorage.getItem(CREDENTIAL_KEY)).not.toBeNull();
+
+    // 「この画面から鍵だけを捨てる」操作で、別途捨てられる。
+    fireEvent.click(screen.getByRole('button', { name: 'discard' }));
+    await waitFor(() => expect(localStorage.getItem(CREDENTIAL_KEY)).toBeNull());
+  });
+
+  it('鍵が無ければサーバへは呼ばず、ok を返す', async () => {
+    localStorage.clear();
+    storeTestBaseUrl();
+    const stub = stubFetch((url) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      return undefined;
+    });
+    renderLogoutProbe();
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('anonymous'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'logout' }));
+
+    await waitFor(() => expect(screen.getByTestId('result').textContent).toBe('ok'));
+    expect(stub.calls.some((url) => url.endsWith('/auth/logout'))).toBe(false);
   });
 });
