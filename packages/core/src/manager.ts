@@ -3078,6 +3078,40 @@ interface ManagerRecord {
    */
   deniedRenotify?: Map<string, DenialRenotifyState>;
   /**
+   * **直近に実際に配った拒否の知らせ直しの「いつ・どの拒否か」**（issue #1772
+   * 段2。`#choosePending` が「許しすぎる」側の穴を塞ぐための材料）。
+   *
+   * ## 何のためか
+   *
+   * `renotifyStalledDenials()` の判定を委譲ごとから拒否ごとへ戻した結果
+   * （このファイルの他の doc を見よ）、**無関係な確認が未決のまま知らせ直しが
+   * 届く**状態が新しく起こり得るようになった。`DENIAL_REPLY_ROUTE` は
+   * 「`requestId` を付けずに `decision` を送るな」と注意するだけで、クローンが
+   * それに反して `decision` だけを付けて答えると、`#choosePending` の「待ちが
+   * ちょうど1件なら黙ってそこへ当てる」規則（#313）により、**その無関係な
+   * 確認へ誤って当ててしまう。** ここに知らせ直しの実績を控えておき、
+   * `#choosePending` が「いま待っている確認は、直近の知らせ直しより**前**に
+   * 作られたものか」を判定できるようにする——前なら、その確認は知らせ直しとは
+   * 無関係に既に待っていたものなので、`requestId` 無しの `decision` を黙って
+   * 当てない。
+   *
+   * ## 値
+   *
+   * `at` は知らせ直しを実際に配った時刻（ISO 8601、`#renotifyStalledDenial`
+   * が実際に `#emit` した回だけに更新する——見送った回・出し切って黙った回は
+   * 更新しない）。`key` はその拒否の `denialKey`（表示用に `decodeDenialKey`
+   * で道具名へ戻せる）。**単一の値（Map ではない）。** 複数の拒否×層の組を
+   * 覚える帳面ではなく、「この委譲へ最後に何が届いたか」という1点だけを見る。
+   *
+   * ## 寿命
+   *
+   * プロセス内のこの像だけに載る（`deniedRenotify` と同じ理由・同じ寿命）。
+   * `denied` が上限で忘れた鍵がこの値の `key` と一致するときは、ここも消す
+   * （`#deniedOf` の `onForget`）——忘れた拒否の道具名を、消えていない値として
+   * 名乗り続けないため。
+   */
+  lastDenialRenotify?: { readonly at: string; readonly key: string };
+  /**
    * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
    *
    * 断ったことを呼び出し側へ返すためだけの覚えである。`#resume` の返り値は真偽値で、
@@ -5280,6 +5314,25 @@ class Pool implements ManagerPool {
         detail: `${requestId ?? ''} という確認は ${managerId} で待っていない（既に解けたか、別のマネージャーのもの）。`,
       };
     }
+    if (pending === 'renotify-pending') {
+      // **「許しすぎる」側の穴を塞ぐ（issue #1772 段2）。** `#choosePending`
+      // の doc・`ManagerRecord.lastDenialRenotify` の doc を見よ。ここに来る
+      // 時点で `record.waiting.length === 1` は保証済み（`#choosePending` が
+      // その枝でだけこの値を返す）。
+      const only = record.waiting[0];
+      const last = record.lastDenialRenotify;
+      const { tool, actor } = last === undefined ? { tool: undefined, actor: undefined } : decodeDenialKey(last.key);
+      const actorLabel =
+        actor === 'manager' ? 'マネージャー自身' : actor === 'worker' ? '作業者' : 'どちらの層か不明';
+      return {
+        outcome: 'unknown',
+        detail:
+          `${managerId} には直前に${tool === undefined ? '' : ` ${codeSpan(tool)}（${actorLabel}）の`}拒否の` +
+          '知らせ直しが届いている。requestId の無い decision は、いま待っている確認' +
+          `（requestId: ${codeSpan(only?.requestId ?? '')}）へ黙って当てない——それが知らせ直しへの` +
+          '返答のつもりでも、この確認とは無関係かもしれない。答えるなら requestId を明示すること。',
+      };
+    }
 
     if (pending) {
       const answered = await runner.answer(managerId, {
@@ -7150,6 +7203,12 @@ class Pool implements ManagerPool {
 
     const nextStage = stage + 1;
     (record.deniedRenotify ??= new Map()).set(key, { deniedAt, stage: nextStage });
+    // **「許しすぎる」側の穴を塞ぐ材料（issue #1772 段2）を、実際に配る直前に
+    // 更新する。** 見送った回（この行より前の早期 return）では更新しない——
+    // `#choosePending` が読むのは「実際にクローンへ届いた知らせ直し」であって
+    // 「知らせ直そうとした事実」ではない。`ManagerRecord.lastDenialRenotify`
+    // の doc を見よ。
+    record.lastDenialRenotify = { at: new Date(now).toISOString(), key };
 
     const { tool, actor } = decodeDenialKey(key);
     const actorLabel =
@@ -11994,6 +12053,9 @@ class Pool implements ManagerPool {
           record.deniedRenotify?.delete(key);
           // issue #1772（横断レビュー14回目 s2）。同じ鍵なので同時に消す。
           record.deniedLastRequestId?.delete(key);
+          // issue #1772 段2。`lastDenialRenotify` は単一値（Map ではない）
+          // なので、忘れた鍵を指しているときだけ消す。
+          if (record.lastDenialRenotify?.key === key) record.lastDenialRenotify = undefined;
         }
         const labels = keys.map((key) => {
           const { tool, actor } = decodeDenialKey(key);
@@ -12370,19 +12432,57 @@ class Pool implements ManagerPool {
    * **保守側へ倒すための関門ではない。** 意思が示されていれば従来どおり通す。
    * `requestId` だけを添えた回答は今までどおり `inferDecision` に落ちる
    * （`runner.ts` の `inferDecision` の doc がその読み取りの持ち主である）。
+   *
+   * ## 待ちが1件でも当てない場合がもう1つ増えた（issue #1772 段2）
+   *
+   * `renotifyStalledDenials()` の判定を委譲ごとから拒否ごとへ戻した結果、
+   * **無関係な確認が未決のまま知らせ直しが届く**状態が起こり得るようになった。
+   * `requestId` 無しの `decision` は「待ちがちょうど1件なら黙ってそこへ当てる」
+   * （直上の doc・#313）が既定だが、**その1件が直近の知らせ直しより前から
+   * 待っていたもの**（＝知らせ直しとは無関係に、たまたま1件だけ残っている
+   * 確認）なら、それを黙って選ばない——`'renotify-pending'` を返し、
+   * `send()` が `requestId` を明示するよう求めて断る。**知らせ直しがそもそも
+   * 一度も届いていない委譲、または待ちがその知らせ直しより後に作られた委譲
+   * （＝いま最新の出来事として自然に答えている可能性が高い）は、今までどおり
+   * 当てる。**
    */
   #choosePending(
     record: ManagerRecord,
     requestId: string | undefined,
     decision: ManagerDecision | undefined,
-  ): { requestId: string; summary: string } | null | 'ambiguous' | 'gone' {
+  ): { requestId: string; summary: string } | null | 'ambiguous' | 'gone' | 'renotify-pending' {
     if (requestId !== undefined) {
       return record.waiting.find((item) => item.requestId === requestId) ?? 'gone';
     }
     if (decision === undefined) return null;
     if (record.waiting.length === 0) return null;
-    if (record.waiting.length === 1) return record.waiting[0] ?? null;
+    if (record.waiting.length === 1) {
+      const only = record.waiting[0] ?? null;
+      if (only !== null && this.#predatesLastDenialRenotify(record, only)) return 'renotify-pending';
+      return only;
+    }
     return 'ambiguous';
+  }
+
+  /**
+   * `#choosePending` の「待ちが1件」の枝が使う判定。**この確認（`item`）は、
+   * この委譲に直近で実際に配った拒否の知らせ直し（`record.lastDenialRenotify`）
+   * より前から待っていたか。**
+   *
+   * - 知らせ直しが一度も届いていない委譲（`lastDenialRenotify === undefined`）
+   *   は、この関門そのものが無関係——常に偽（今までどおり当てる）。
+   * - `item.askedAt` が取れない回（`RunnerWaiting.askedAt` は optional。
+   *   デーモン再起動を跨いだ引き取り・runner のデプロイの版がずれた窓では
+   *   欠ける）は、前後を比べる材料が無い。**「決まらない」を「見送る」側
+   *   （＝黙って当てない）に倒す** —— ここは許可・拒否を推測する場面であり、
+   *   Issue #1772 の「許しすぎる側を作らないこと」がそのまま当てはまる。
+   *   `requestId` を明示させる方が安全側（当てて誤るより、聞き直す方が安い）。
+   */
+  #predatesLastDenialRenotify(record: ManagerRecord, item: RunnerWaiting): boolean {
+    const last = record.lastDenialRenotify;
+    if (last === undefined) return false;
+    if (item.askedAt === undefined) return true;
+    return item.askedAt < last.at;
   }
 
   /**
