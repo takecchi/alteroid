@@ -319,6 +319,25 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         return { status: 'pending' };
       }
 
+      /**
+       * ここに来るのは `status === 'authenticated'` だけ（`failed` / `consumed` /
+       * `pending` / `processing` は上で全部返している）。
+       *
+       * **`expiresAt` はブラウザの往復が終わるまでの寿命ではなく、要求そのものの
+       * 寿命である**（`AuthServiceOptions.loginTtlSeconds` の doc）。ブラウザが
+       * TTL 内に戻ってきて `completeLogin` が `authenticated` にしたとしても、
+       * その後 CLI 側の引き取りが TTL を過ぎているなら同じく無効として扱う——
+       * ここだけ無期限に引き取れると、`expiresAt` を過ぎた `claimSecret` が
+       * いつまでも使える鍵になってしまう。
+       *
+       * **`pending`/`processing` の期限切れと同じく、ここでも `failed` へは
+       * 書き換えない。** ストアへの書き込みは「交換へ進む／トークンを発行する」
+       * という前進のときだけに絞ってある——読むだけの経路（`claim` の期限切れ
+       * 判定）にまで書き込みを足すと、書く理由が「不変条件の保存」から「観測の
+       * ついで」へ広がってしまう。
+       */
+      if (!isLoginRequestOpen(request, now())) return { status: 'error', reason: 'expired' };
+
       const accountId = request.accountId;
       if (accountId === null) return { status: 'error', reason: 'failed' };
       const account = await store.getAccount(accountId);

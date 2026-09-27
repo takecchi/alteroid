@@ -508,6 +508,115 @@ describe('createAuthService', () => {
     expect(result).toEqual({ status: 'pending' });
   });
 
+  /**
+   * `authenticated`（ブラウザ側は終わっているが、まだ CLI が引き取っていない）の
+   * ときも、要求そのものの TTL（`loginTtlSeconds`）は効くこと。
+   *
+   * **`expiresAt` はブラウザの往復のための寿命であって、ブラウザが終わった後の
+   * 猶予ではない**（`startLogin` の doc「ブラウザ往復に必要な分だけ開ける」）。
+   * ここが漏れていると、TTL をとっくに過ぎた `claimSecret` がいつまでも
+   * 使える鍵になる。
+   */
+  describe('claim() と要求の TTL（authenticated になった後）', () => {
+    function buildExpiringService(loginTtlSeconds: number) {
+      const clockBox = { now: new Date('2026-01-01T00:00:00.000Z') };
+      const expiring = createAuthService({
+        store,
+        providers: createAuthProviderRegistry([fakeProvider({ 'code-alice': ALICE })]),
+        newId: () => `id-${++counter}`,
+        now: () => clockBox.now,
+        loginTtlSeconds,
+      });
+      return { expiring, clockBox };
+    }
+
+    async function loginThrough(expiring: AuthService) {
+      const started = await expiring.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const state = decodeState(new URL(started.authorizationUrl).searchParams.get('state') ?? '');
+      const completed = await expiring.completeLogin({
+        state: `${state?.requestId}.${state?.nonce}`,
+        code: 'code-alice',
+      });
+      expect(completed.status).toBe('ok');
+      return started;
+    }
+
+    it('ブラウザは TTL 内に終えても、CLI の引き取りが TTL を過ぎていれば claim できない', async () => {
+      const { expiring, clockBox } = buildExpiringService(60);
+      const started = await loginThrough(expiring);
+
+      // ブラウザは10秒後に終えた（TTL=60秒の内側）。CLI 側の引き取りは
+      // さらに1時間後——TTL をとっくに過ぎている。
+      clockBox.now = new Date(clockBox.now.getTime() + 10_000 + 3_600_000);
+
+      const claimed = await expiring.claim({
+        requestId: started.requestId,
+        claimSecret: started.claimSecret,
+      });
+      expect(claimed).toEqual({ status: 'error', reason: 'expired' });
+    });
+
+    it('境界: expiresAt ちょうどは閉じている（isLoginRequestOpen は `>` なので期限切れ扱い）', async () => {
+      const { expiring, clockBox } = buildExpiringService(60);
+      const started = await loginThrough(expiring);
+
+      clockBox.now = new Date(Date.parse(started.expiresAt));
+      const claimed = await expiring.claim({
+        requestId: started.requestId,
+        claimSecret: started.claimSecret,
+      });
+      expect(claimed).toEqual({ status: 'error', reason: 'expired' });
+    });
+
+    it('境界: expiresAt の1ms前はまだ開いている（claim できる）', async () => {
+      const { expiring, clockBox } = buildExpiringService(60);
+      const started = await loginThrough(expiring);
+
+      clockBox.now = new Date(Date.parse(started.expiresAt) - 1);
+      const claimed = await expiring.claim({
+        requestId: started.requestId,
+        claimSecret: started.claimSecret,
+      });
+      expect(claimed.status).toBe('ready');
+    });
+
+    it('期限切れでも要求を failed へは書き換えない（pending/processing の期限切れと同じ「書かずに返す」扱い）', async () => {
+      const { expiring, clockBox } = buildExpiringService(60);
+      const started = await loginThrough(expiring);
+
+      clockBox.now = new Date(clockBox.now.getTime() + 3_600_000);
+      await expiring.claim({ requestId: started.requestId, claimSecret: started.claimSecret });
+
+      const stored = await store.getLoginRequest(started.requestId);
+      expect(stored?.status).toBe('authenticated');
+      expect(stored?.error).toBeNull();
+    });
+
+    it('優先順位は変わらない: 期限切れの前に引き取り済み（consumed）なら、期限切れではなく従来どおり invalid_request', async () => {
+      const { expiring, clockBox } = buildExpiringService(60);
+      const started = await loginThrough(expiring);
+
+      // TTL 内に一度引き取る（consumed になる）。
+      const first = await expiring.claim({
+        requestId: started.requestId,
+        claimSecret: started.claimSecret,
+      });
+      expect(first.status).toBe('ready');
+
+      // その後 TTL を過ぎてから二度目を投げても、`expired` ではなく
+      // 「一度きり」の `invalid_request` のまま（`consumed` の判定が先に来る）。
+      clockBox.now = new Date(clockBox.now.getTime() + 3_600_000);
+      const second = await expiring.claim({
+        requestId: started.requestId,
+        claimSecret: started.claimSecret,
+      });
+      expect(second).toEqual({ status: 'error', reason: 'invalid_request' });
+    });
+  });
+
   it('state が偽物ならログインを成立させない', async () => {
     await service.startLogin({
       provider: 'fake',
