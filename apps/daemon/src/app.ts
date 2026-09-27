@@ -4855,7 +4855,10 @@ export function createApp(deps: AppDeps) {
           .join(', ');
         await deps.stores.journal.append({
           type: 'decision',
-          decision: `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}）`,
+          decision:
+            result.sha256 === undefined
+              ? '実行環境プロファイルを外した'
+              : `実行環境プロファイルを更新した（sha256 ${result.sha256}・${String(result.bytes)} bytes）`,
           grounds:
             `${describeActor(c.get('principal'))}（PUT /profile）。` +
             '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
@@ -5217,7 +5220,7 @@ export function createApp(deps: AppDeps) {
             `${describeActor(c.get('principal'))}（PUT /credentials）。` +
             '値は書かない（鍵そのものである）。' +
             `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
-            '。走行中のマネージャーにも次の git / gh 呼び出しから届く。',
+            '。',
         });
 
         return c.json(

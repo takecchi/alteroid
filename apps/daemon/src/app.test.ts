@@ -7600,7 +7600,7 @@ describe('実行環境プロファイル', () => {
       body: JSON.stringify({ script: secretScript }),
     });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { sha256: string };
+    const body = (await response.json()) as { sha256: string; bytes: number };
 
     const journal = await stores.journal.list({ types: ['decision'] });
     const entry = journal.find(
@@ -7609,6 +7609,7 @@ describe('実行環境プロファイル', () => {
     expect(entry).toBeDefined();
     const serialized = JSON.stringify(entry);
     expect(serialized).toContain(body.sha256);
+    expect(serialized).toContain(`${String(body.bytes)} bytes`);
     expect(serialized).toContain('runner-primary=ok');
     expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
     expect(serialized).not.toContain('leak-if-you-see-this');
