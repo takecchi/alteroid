@@ -42,6 +42,10 @@ import {
   schedulePhaseSchema,
 } from './schema.js';
 import {
+  accessTokenRecordSchema,
+  authAccountSchema,
+  authIdentitySchema,
+  loginRequestSchema,
   sha256Hex,
   type AccessTokenRecord,
   type AuthAccount,
@@ -606,7 +610,9 @@ export function createMemoryStores(): Stores {
       return [...jobs.values()].map(isolate);
     },
     async putJob(job) {
-      jobs.set(job.id, isolate(job));
+      // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1715。同じストアの
+      // `updateJob` は #1652 で先に直っていたが、`putJob` だけ食い違って残った）。
+      jobs.set(job.id, isolate(jobSchema.parse(job)));
     },
     // **判定と書き込みのあいだに `await` を1つも挟まないこと（issue #1041 と
     // 同じ理由）。** プロセス内の `Map` は同期アクセスなので、fs の
@@ -1110,7 +1116,8 @@ export function createMemoryStores(): Stores {
       );
     },
     async putAccount(account) {
-      accounts.set(account.id, account);
+      // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
+      accounts.set(account.id, authAccountSchema.parse(account));
     },
     async findIdentity(provider, subject) {
       return identities.get(identityKey(provider, subject)) ?? null;
@@ -1122,10 +1129,14 @@ export function createMemoryStores(): Stores {
         .sort(compareIdentityOrder);
     },
     async putIdentity(identity) {
-      identities.set(identityKey(identity.provider, identity.subject), identity);
+      // 本物（fs / pg）と同じく `authIdentitySchema` を通す（issue #1715）。
+      const parsed = authIdentitySchema.parse(identity);
+      identities.set(identityKey(parsed.provider, parsed.subject), parsed);
     },
     async putAccessToken(token) {
-      accessTokens.set(token.id, token);
+      // 本物（fs / pg）と同じく `accessTokenRecordSchema` を通す（issue #1715）。
+      const parsed = accessTokenRecordSchema.parse(token);
+      accessTokens.set(parsed.id, parsed);
     },
     async findAccessTokenBySha256(hash) {
       return [...accessTokens.values()].find((token) => token.sha256 === hash) ?? null;
@@ -1137,7 +1148,9 @@ export function createMemoryStores(): Stores {
         .sort(compareAccessTokenOrder);
     },
     async putLoginRequest(request) {
-      loginRequests.set(request.id, request);
+      // 本物（fs / pg）と同じく `loginRequestSchema` を通す（issue #1715）。
+      const parsed = loginRequestSchema.parse(request);
+      loginRequests.set(parsed.id, parsed);
     },
     async getLoginRequest(id) {
       return loginRequests.get(id) ?? null;
@@ -1155,7 +1168,9 @@ export function createMemoryStores(): Stores {
       const found = loginRequests.get(id);
       if (found === undefined || found.status !== 'authenticated') return null;
       const consumed = { ...found, status: 'consumed' as const };
-      const token = issue(consumed);
+      // 本物（fs / pg）と同じく、issue() が返した値も `accessTokenRecordSchema`
+      // を通す（issue #1715）。
+      const token = accessTokenRecordSchema.parse(issue(consumed));
       loginRequests.set(id, consumed);
       accessTokens.set(token.id, token);
       return { request: consumed, token };
@@ -1164,7 +1179,8 @@ export function createMemoryStores(): Stores {
       const account = accounts.get(accountId);
       if (account === undefined) return { status: 'not_found' };
       if (account.grantedAt !== null) return { status: 'granted', account };
-      const granted = { ...account, grantedAt: at, grantedBy: by };
+      // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
+      const granted = authAccountSchema.parse({ ...account, grantedAt: at, grantedBy: by });
       accounts.set(accountId, granted);
       return { status: 'granted', account: granted };
     },
@@ -1174,7 +1190,8 @@ export function createMemoryStores(): Stores {
       const account = accounts.get(accountId);
       if (account === undefined) return { status: 'not_found' };
       if (declaredAt !== null && account.grantedAt === null) return { status: 'not_granted' };
-      const updated = { ...account, ownerDeclaredAt: declaredAt };
+      // 本物（fs / pg）と同じく `authAccountSchema` を通す（issue #1715）。
+      const updated = authAccountSchema.parse({ ...account, ownerDeclaredAt: declaredAt });
       accounts.set(accountId, updated);
       return { status: 'ok', account: updated };
     },
