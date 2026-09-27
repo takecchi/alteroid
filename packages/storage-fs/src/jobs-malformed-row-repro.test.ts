@@ -137,7 +137,8 @@ describe('FsJobStore — jobs.json の不正な1行を読み飛ばす（issue #1
 
     const raw = JSON.parse(await readFile(jobsPath, 'utf8')) as { jobs: unknown[] };
     const rowsWithId = raw.jobs.filter(
-      (row) => typeof row === 'object' && row !== null && (row as { id?: unknown }).id === 'mgr-bad',
+      (row) =>
+        typeof row === 'object' && row !== null && (row as { id?: unknown }).id === 'mgr-bad',
     );
 
     // **その id は1行だけ**（新しい値）——古い壊れた行と共存しない。
