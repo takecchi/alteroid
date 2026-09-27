@@ -5,6 +5,43 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * 🔴 実運用の食い違い調査（2026-09-23、マネージャーからの委譲。Issue #1051 続き）。
+ *
+ * ## 観測されていた症状
+ *
+ * 本番の日誌（`token_rotation`）では特定の時間帯、「recovered（turn_success）:
+ * alteroid03」と「exhausted: 候補の最速回復は alteroid09」が3.5秒周期で交互に
+ * 記録されていた。ところが**そのあいだにクローンが実際に受け取った「戻った」
+ * 通知の本文は「alteroid09」を名乗っていた**——journal 側の最新の recovered が
+ * 03 なのに、クローンへ渡った文面は 09 だった、という食い違い。
+ *
+ * ## この束が確かめる機序
+ *
+ * `apps/daemon/src/index.ts`（`reopenedTokenOf` → `settleTokenOutcome` →
+ * `wake()` → `CloneWakeGate.decide` → `clone.post(...)`）を読む限り、1回の
+ * `settleTokenOutcome` 呼び出しの中では tokenId が入れ替わる余地はない
+ * （daemon 側の対照は `apps/daemon/src/index.test.ts` が別途固定する——この
+ * ファイルからは `apps/daemon` を import できない。依存は core → daemon の
+ * 一方向であり、ここに daemon 側の配線の対照を置くこと自体が向きを逆にする）。
+ *
+ * **入れ替わりうるのはクローン側 —— `#pump` の FIFO 再武装である**
+ * （`clone.ts` の `#deferred` / `#pump` 先頭 / `usageBlockAlwaysRearms`）。
+ * クローンが枠で止まっている間に届いた「戻った」通知は、たとえ
+ * `usageBlockAlwaysRearms` が真でも**即座には処理されない**——`post()` は
+ * `#releaseRequested = true` を立てるだけで、実際に投げ直すのは `#pump` の
+ * 先頭であり、そこは**保持している合図を FIFO の先頭から**戻す
+ * （`#deferred.splice(0)` → `unshift([...held, event])`）。⟹ 新しく届いた
+ * 通知（journal 上「最新」）よりも**先に保持されていた古い通知の本文**が先に
+ * モデルへ渡り、しかもそのリトライがそのとき通れば「成功したターン」として
+ * 残る——古い本文がそのまま「いま起きたこと」として扱われる形である。
+ *
+ * **下のテストは、その機序をこの層で再現する陽性対照である。** この束は
+ * 直す前の commit（`#pendingTokenPoolNotice` を導入する前）でこの機序が
+ * 実在することを固定し、直した後は次の describe（`token-pool の「戻った」
+ * 通知は同時に未処理で1件まで`）の不変条件テストへ主役を譲る——直した後の
+ * この束の意味は「turn 1 の本文が変わった」という差分そのものになる。
+ */
 describe('🔴 実運用食い違い調査（2026-09-23）: token-pool の「戻った」通知の tokenId', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
@@ -336,15 +373,3 @@ describe('クローン — token-pool の「戻った」通知は同時に未処
     await second.clone.stop();
   });
 });
-
-/**
- * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
- * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
- *
- * タイマーは持たない。「試す」の契機は常に**新しい合図の到着**である。`post()`
- * は解除の印を立てるだけで、保持していた合図を FIFO の順で受信箱へ戻すのは
- * `#pump` の先頭である（**そこへ寄せてあるのが競合を塞いでいる本体** —
- * 下の「終端を出した直後…」／「短絡した合図の後始末の直前に…」の2本が、
- * 寄せる前に何が失われていたかを名指しで踏む）。戻した先頭が枠でまた落ちれば
- * `#usageBlocked` が再び立ち、残りはまた保持される（`#pump` の枠チェック）。
- */

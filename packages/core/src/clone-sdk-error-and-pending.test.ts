@@ -7,6 +7,35 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor, waitForDone } from './clone-test-harness.js';
 import type { Setup } from './clone-test-harness.js';
 
+/**
+ * **エラーが「応答」として保存される穴**（この改修の本体）。
+ *
+ * 実際に起きた壊れ方は、日報の本文が丸ごとこれになっていた、というものである。
+ *
+ * ```
+ * You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message
+ * ```
+ *
+ * 経路は3つ重なっていた（`sdk-failure.ts` の doc）。
+ *
+ * 1. `assistant.error`（SDK が「これは応答ではない」と付ける印）を1度も見ておらず、
+ *    text ブロックを無条件に `turn.text` へ足していた
+ * 2. `isSuccessResult` が `subtype === 'success'` だけを見ており、`is_error: true`
+ *    を成功として通していた
+ * 3. `#runTurn` の戻り値が `string` 一本で成否を運ばず、日報はそれを本文にした
+ *
+ * **さらに、失敗したときに書かれた1件が再試行を殺していた** — 上限の合図は保持
+ * されて配り直されるのに、その1件があるせいで `#dailyReport` の早期 return と
+ * `missingDailyReportDates` の両方が「もう書いた」と判断する。
+ *
+ * だからここで見るのは4つである。
+ *
+ * - エラーの文言が日報の本文にならないこと
+ * - **枠で保持している回は日報の行を1つも書かないこと**（再試行を殺さない）
+ * - 枠ではない失敗では `unavailable` の印付きで書き、印の行は「日報がある」と
+ *   数えないこと
+ * - `assistant.error` / `is_error` のどちらの経路でも、本文が応答にならないこと
+ */
 describe('クローン — SDK のエラーを応答として扱わない（日報がエラー文になる穴）', () => {
   /** 実機で観測された文言そのまま（`USAGE_LIMIT_ERROR_PREFIXES` の1つめに当たる）。 */
   const orgSpendLimit =

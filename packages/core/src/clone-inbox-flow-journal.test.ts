@@ -6,6 +6,23 @@ import type { Commitment } from './schema.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { fakeGatedSdk, fakeSdk, setup, waitFor, waitForDone } from './clone-test-harness.js';
 
+/**
+ * 受信箱の到着・配達・消し込み・滞留を、ターンの境界で `inbox_flow` として
+ * 日誌へ残す（Issue #783 段0「測るだけ」）。欄の意味は `schema.ts` の
+ * `inbox_flow` の doc、数える場所は `clone.ts` の `#remember` / `#inbox.push`
+ * （3箇所）/ `#forget` を見よ。
+ *
+ * ## `settled` は同じ窓には乗らないことがある（重要な非対称）
+ *
+ * この型は `context_usage` と同じ境界（`case 'turn_ended'`）で書く。だが
+ * `#forget`（＝ `settled` を数える場所）は、その書き込みより**後**——
+ * `#pump` の `finally`（`#handle` が返ってから）でしか呼ばれない
+ * （`clone.ts` の `#pump` のループ本体）。⟹ **1件の人間の発言を処理した
+ * その回の `inbox_flow` 行には、その発言自身の `settled` はまだ乗らない**
+ * ——次にもう1件処理があったとき、その回の行に「前回ぶんの `settled`」が
+ * 乗る（下の「2件目の窓には、1件目の消し込みが型別で載る」がこれを固定
+ * する）。**データが失われるのではなく、窓が1つずれるだけである。**
+ */
 describe('inbox_flow（受信箱の到着・配達・消し込み・滞留を日誌へ残す。Issue #783 段0）', () => {
   it('人間の発言を1件処理すると、その窓の arrived / delivered に human_message が型別で載る', async () => {
     const s = setup(() => 'わかった');
@@ -369,41 +386,3 @@ describe('inbox_flow.retained（メモリ上の索引の残数。Issue #1264）'
     await clone.stop();
   });
 });
-
-/**
- * 🔴 実運用の食い違い調査（2026-09-23、マネージャーからの委譲。Issue #1051 続き）。
- *
- * ## 観測されていた症状
- *
- * 本番の日誌（`token_rotation`）では特定の時間帯、「recovered（turn_success）:
- * alteroid03」と「exhausted: 候補の最速回復は alteroid09」が3.5秒周期で交互に
- * 記録されていた。ところが**そのあいだにクローンが実際に受け取った「戻った」
- * 通知の本文は「alteroid09」を名乗っていた**——journal 側の最新の recovered が
- * 03 なのに、クローンへ渡った文面は 09 だった、という食い違い。
- *
- * ## この束が確かめる機序
- *
- * `apps/daemon/src/index.ts`（`reopenedTokenOf` → `settleTokenOutcome` →
- * `wake()` → `CloneWakeGate.decide` → `clone.post(...)`）を読む限り、1回の
- * `settleTokenOutcome` 呼び出しの中では tokenId が入れ替わる余地はない
- * （daemon 側の対照は `apps/daemon/src/index.test.ts` が別途固定する——この
- * ファイルからは `apps/daemon` を import できない。依存は core → daemon の
- * 一方向であり、ここに daemon 側の配線の対照を置くこと自体が向きを逆にする）。
- *
- * **入れ替わりうるのはクローン側 —— `#pump` の FIFO 再武装である**
- * （`clone.ts` の `#deferred` / `#pump` 先頭 / `usageBlockAlwaysRearms`）。
- * クローンが枠で止まっている間に届いた「戻った」通知は、たとえ
- * `usageBlockAlwaysRearms` が真でも**即座には処理されない**——`post()` は
- * `#releaseRequested = true` を立てるだけで、実際に投げ直すのは `#pump` の
- * 先頭であり、そこは**保持している合図を FIFO の先頭から**戻す
- * （`#deferred.splice(0)` → `unshift([...held, event])`）。⟹ 新しく届いた
- * 通知（journal 上「最新」）よりも**先に保持されていた古い通知の本文**が先に
- * モデルへ渡り、しかもそのリトライがそのとき通れば「成功したターン」として
- * 残る——古い本文がそのまま「いま起きたこと」として扱われる形である。
- *
- * **下のテストは、その機序をこの層で再現する陽性対照である。** この束は
- * 直す前の commit（`#pendingTokenPoolNotice` を導入する前）でこの機序が
- * 実在することを固定し、直した後は次の describe（`token-pool の「戻った」
- * 通知は同時に未処理で1件まで`）の不変条件テストへ主役を譲る——直した後の
- * この束の意味は「turn 1 の本文が変わった」という差分そのものになる。
- */

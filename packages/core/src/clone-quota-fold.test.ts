@@ -11,6 +11,43 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, setup, wireEvents, waitFor, waitForTerminal } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
+/**
+ * **枠（利用上限）に当たり続けて1度も成功しないセッションは、文脈窓のときと
+ * 同じ手当てで畳んで作り直す**（Issue #1240）。
+ *
+ * ## 何が壊れていたか
+ *
+ * `#usageBlocked` が立っている間、新しい合図（tick 等）が届くたびに保持分を
+ * 1回だけ再試行する設計そのもの（`post()` の「1合図につき1試行」）は直して
+ * いない。**壊れていたのは、その再試行が同じ理由（枠）で失敗し続けても、
+ * 資源の持ち越し（`composeTurnInputText` の8本＝配り直し・上書き・鮮度・
+ * 切り詰め・未了の台帳・いまの全体の状況の断り書き＋本文）が無条件に同じ
+ * セッションへ積み上がり続けていたことである。** 文脈窓で落ちたとき専用の
+ * 畳み直し（`#noteContextWindowFold` / #553）は失敗メッセージの文言分類
+ * （`classifyContextWindowFailure`）を待つが、枠が閉じている間は
+ * compaction 自体が API 呼び出しなので、「長すぎる」と教えてくれる合成
+ * メッセージ自体が429で生成できず、実測が来ないまま持ち越しが伸び続ける。
+ *
+ * ## 直した後
+ *
+ * `#usageBlockedAccumulatedChars`（このセッションで1度も答えを返さないまま
+ * `#pushInput` へ積んだ文字数の合計）が既定の閾値
+ * （`UNPRODUCTIVE_USAGE_BLOCK_FOLD_CHAR_THRESHOLD`。実装は 200,000）に
+ * 達したら、`#noteContextWindowFold` と同じ `#recycleForContextWindow` を
+ * 使って畳む——文脈窓の実測を待たない。
+ *
+ * ## なぜ回数ではなく文字数で駆動するか
+ *
+ * **最初の版は「連続で当たった回数」で閾値を決めていて、既存の回帰テスト
+ * （`クローン — 枠で保持している間、中身を持たない合図で在庫を作らない` の
+ * 歯2・歯3、`クローン — 枠で保持している間、人間へ返す1行を積み上げない` の
+ * 歯1〜3）を壊した。** それらは「小さい本文の合図が3〜5回届いても、同じ
+ * セッションが受け切り続ける」ことを固定した歯である。回数で畳むと、その
+ * 小さい再試行数と本物の事故の再試行数が同じ桁になり、閾値をテストが壊れ
+ * ない大きさまで上げると本物の事故を1回も捕まえられなくなる。**⟹ 文字数へ
+ * 直した。** 大きな本文（`BIG_BODY`。1本 90,000 文字）を使って、**この
+ * describe が測りたいものだけ**を踏む。
+ */
 describe('クローン — 枠に当たり続けたセッションは畳んで作り直す（Issue #1240）', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 

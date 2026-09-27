@@ -8,6 +8,17 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitForDone } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * PreCompact のサイドセッション（`#distillFromTranscript`）が起こすターンの
+ * 入力を日誌に残す（Issue #243 の7本目。既存6経路は `clone-turn-input.test.ts`
+ * が持つ）。
+ *
+ * この経路は `#runInternal` / `#runTurn` を経由せず `this.#queryFn` を直接
+ * 呼ぶので、あちらのテストが使う `bootClone`（ストリーミング入力専用の
+ * 簡約フェイク）では起こせない——ここは1つ上の「クローンの消費が台帳に載る」と
+ * 同じ `fakeSdk`（文字列プロンプトも扱える。`typeof prompt === 'string'` 分岐）
+ * と `firePreCompact` の骨格を使う。
+ */
 describe('クローン — PreCompact サイドセッションの入力を日誌に残す（#243）', () => {
   const TRANSCRIPT = 'PRECOMPACT-TRANSCRIPT-MARKER-7f2a 要約に潰される直前の生ログの中身';
 
@@ -200,19 +211,3 @@ describe('クローン — 蒸留の末尾は全文を読まずに取る（渡�
     await s.clone.stop();
   });
 });
-
-/**
- * 起動時に、**前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b。
- * `#pickUpTranscriptGrave`）。
- *
- * ## なぜ歯が要るか
- *
- * 印（墓標）が立つのは蒸留が落ちた回で、**主な理由は枠が閉じていること**である。
- * 枠は待てば開くが、**拾い直す手が無ければ、開いても誰も戻らない。**
- *
- * ## ⚠️ この歯が測っていないこと
- *
- * **枠が閉じたまま何度も起動する回**は測っていない（印が残り続けることは
- * 「印を下ろすのは成功したときだけ」という1本の条件から出るが、実際に回して
- * いない）。
- */

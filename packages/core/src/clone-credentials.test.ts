@@ -5,6 +5,13 @@ import { createRunnerRegistry } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 import { fakeSdk, waitFor } from './clone-test-harness.js';
 
+/**
+ * 認証トークンのプールの現役をクローンへ届ける口（Issue #393 PR3）。
+ *
+ * **ここで固定するのは3つ** — 呼ばれるたびに読み直すこと（凍らないこと）、
+ * 渡さなければ今までどおりであること、そして**プロファイルが同じ名前を宣言して
+ * いると鍵が上書きされること**（塞がない代わりに測っておく）。
+ */
 describe('credentials（SDK 子プロセスへ重ねる鍵の現在値）', () => {
   let postSeq = 0;
 
@@ -413,10 +420,3 @@ describe('withheldEnvKeys（SDK 子プロセスへ渡さない鍵。Issue #1495 
     expect(calls[0]?.options.env).not.toHaveProperty('ALTEROID_GOOGLE_CLIENT_SECRET');
   });
 });
-
-/**
- * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
- *
- * **ここが固定するのは「何を渡すか」である。** クローンは回すかどうかを判断しない
- * ——判断も選択も撒きも回し手が持つ。
- */

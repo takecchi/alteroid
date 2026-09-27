@@ -983,22 +983,3 @@ describe('クローン — 人間が待っている合図を待ち行列の先�
     await s.clone.stop();
   }, 15_000);
 });
-
-/**
- * Issue #562 PR-2: `#mergedHumanBatch` は人間の発言しか束ねない。マネージャーから
- * 連続して届いた報告（`kind === 'report'`）は1件ずつ別のターンで読まれ、7本
- * `manager_stop` が届けば7ターン消費する（`manager.ts` の実測、逐語は
- * `grep -Fn -- 'きっかり7ターン' packages/core/src/manager.ts`）。
- *
- * ここは、同じ `managerId` の連続する `report` を1ターンにまとめて読む
- * `#mergedManagerReportBatch` / `#runManagerReportBatch` の歯である。
- *
- * **`manager_message` はどの起点よりも `#emit` が効かない。** `#conversationOf`
- * が `manager_message` に対して常に `null` を返すので（`#handle` の
- * `manager_message` 分岐は内部ターン）、`done` / `error` / `usage_limited` の
- * どれも chat の購読者には届かない（`#emit` は `conversationId === null` を
- * 即 return する）。**だからここでは `waitForEvents`/`waitForTerminal`（chat
- * ストリームを見る）を使わず、`s.calls[0].inputs`（実際に SDK へ渡った入力）を
- * ポーリングして待つ** —— 既存の「歯2: 中身を持つ合図・別の日のタイマーは
- * 畳まれず」ブロックが manager_message を混ぜるときと同じ形である。
- */

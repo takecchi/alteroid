@@ -8,6 +8,12 @@ import type { ChatStreamEvent } from './schema.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, setup, wireEvents, waitFor, waitForTerminal } from './clone-test-harness.js';
 
+/**
+ * 枠の観測を回し手へ渡す口（Issue #393 PR3）。
+ *
+ * **ここが固定するのは「何を渡すか」である。** クローンは回すかどうかを判断しない
+ * ——判断も選択も撒きも回し手が持つ。
+ */
 describe('onUsageObservation（回し手へ渡す観測）', () => {
   let seq = 0;
 
@@ -912,13 +918,3 @@ describe('recycleSessionForToken（回した後のセッション作り直し）
     expect(sessions.length).toBeGreaterThan(1);
   });
 });
-
-/**
- * 蒸留が間に合わなかった区間の検出（Issue #564 の (b)。`distill-gap.ts`）。
- *
- * **歯が固定しているのは「開始ではなく成功で数える」ことである。** 日誌には
- * 蒸留を**始めた**印（`ターンの入力: distill`）が前から在り、そちらを使うと
- * 「開始したが完了しなかった回」——まさに検出したい形——が「蒸留した」として
- * 数えられる。歯2がそこを直接押す（失敗した蒸留では開始の印だけが残り、成功の
- * 印は残らない）。
- */

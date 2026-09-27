@@ -18,6 +18,15 @@ import {
 } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * **`usageBlocked`（Issue #783）**: クローンがいま枠（利用上限）で止まっているかを
+ * 読む読み取り専用の窓（`CloneHost.usageBlocked`）。
+ *
+ * `apps/daemon/src/index.ts` の `wake()` はここを見て、「認証トークンが通る状態に
+ * 戻った」の合図をクローンへ配るか畳むかを決める（`CloneWakeGate`）。実装は
+ * `#usageBlocked !== null` を読むだけの薄い窓なので、既存の「枠に当たったら保持
+ * する」歯と同じ入り口（支出上限のエラー文言）を借りて確かめる。
+ */
 describe('usageBlocked（クローンがいま枠で止まっているかを読む窓。Issue #783）', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
@@ -587,33 +596,3 @@ describe('クローン — 枠が回復した後の返信は、人間の側か�
     await broken.clone.stop();
   });
 });
-
-/**
- * **エラーが「応答」として保存される穴**（この改修の本体）。
- *
- * 実際に起きた壊れ方は、日報の本文が丸ごとこれになっていた、というものである。
- *
- * ```
- * You've hit your org's monthly spend limit · ask your admin to raise it at claude.ai/settings/usage?from=cc_cli_limit_message
- * ```
- *
- * 経路は3つ重なっていた（`sdk-failure.ts` の doc）。
- *
- * 1. `assistant.error`（SDK が「これは応答ではない」と付ける印）を1度も見ておらず、
- *    text ブロックを無条件に `turn.text` へ足していた
- * 2. `isSuccessResult` が `subtype === 'success'` だけを見ており、`is_error: true`
- *    を成功として通していた
- * 3. `#runTurn` の戻り値が `string` 一本で成否を運ばず、日報はそれを本文にした
- *
- * **さらに、失敗したときに書かれた1件が再試行を殺していた** — 上限の合図は保持
- * されて配り直されるのに、その1件があるせいで `#dailyReport` の早期 return と
- * `missingDailyReportDates` の両方が「もう書いた」と判断する。
- *
- * だからここで見るのは4つである。
- *
- * - エラーの文言が日報の本文にならないこと
- * - **枠で保持している回は日報の行を1つも書かないこと**（再試行を殺さない）
- * - 枠ではない失敗では `unavailable` の印付きで書き、印の行は「日報がある」と
- *   数えないこと
- * - `assistant.error` / `is_error` のどちらの経路でも、本文が応答にならないこと
- */

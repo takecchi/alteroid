@@ -5,6 +5,21 @@ import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitFor, waitForDone } from './clone-test-harness.js';
 
+/**
+ * 起動時に、**前の器が記憶へ移せなかった区間を拾い直す**（#564 E1b。
+ * `#pickUpTranscriptGrave`）。
+ *
+ * ## なぜ歯が要るか
+ *
+ * 印（墓標）が立つのは蒸留が落ちた回で、**主な理由は枠が閉じていること**である。
+ * 枠は待てば開くが、**拾い直す手が無ければ、開いても誰も戻らない。**
+ *
+ * ## ⚠️ この歯が測っていないこと
+ *
+ * **枠が閉じたまま何度も起動する回**は測っていない（印が残り続けることは
+ * 「印を下ろすのは成功したときだけ」という1本の条件から出るが、実際に回して
+ * いない）。
+ */
 describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () => {
   /** 日誌の self/outbound を text で読む。 */
   async function selfTexts(stores: Stores): Promise<string[]> {
@@ -466,11 +481,3 @@ describe('クローン — 捨てた resume 素材の区間を拾い直す（#56
     await s.clone.stop();
   });
 });
-
-/**
- * `UsageFold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
- * 台帳は日 × actor × モデル × 層 × 場所に畳むので、「そのターンがいくらだったか」
- * は台帳のどこにも残らない。ここは `#recordUsage` が `turn_usage` として
- * 日誌へ残すことを見る（`manager.ts` の `case 'usage'` にも対になる形を足した
- * — 片方だけだと非対称が残る）。
- */

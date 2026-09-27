@@ -18,6 +18,17 @@ import {
 } from './clone-test-harness.js';
 import type { FakeCall, Setup } from './clone-test-harness.js';
 
+/**
+ * 枠（利用上限）に当たったら、合図を捨てずに保持し、次の合図が来たときに
+ * 試し直す（`clone.ts` の `#usageBlocked` / `#deferred`）。
+ *
+ * タイマーは持たない。「試す」の契機は常に**新しい合図の到着**である。`post()`
+ * は解除の印を立てるだけで、保持していた合図を FIFO の順で受信箱へ戻すのは
+ * `#pump` の先頭である（**そこへ寄せてあるのが競合を塞いでいる本体** —
+ * 下の「終端を出した直後…」／「短絡した合図の後始末の直前に…」の2本が、
+ * 寄せる前に何が失われていたかを名指しで踏む）。戻した先頭が枠でまた落ちれば
+ * `#usageBlocked` が再び立ち、残りはまた保持される（`#pump` の枠チェック）。
+ */
 describe('クローン — 枠（利用上限）が閉じたら保持して次の合図で試す', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
@@ -1463,13 +1474,3 @@ describe('クローン — 枠で保持している間、中身を持たない�
     await s.clone.stop();
   }, 30_000);
 });
-
-/**
- * **`usageBlocked`（Issue #783）**: クローンがいま枠（利用上限）で止まっているかを
- * 読む読み取り専用の窓（`CloneHost.usageBlocked`）。
- *
- * `apps/daemon/src/index.ts` の `wake()` はここを見て、「認証トークンが通る状態に
- * 戻った」の合図をクローンへ配るか畳むかを決める（`CloneWakeGate`）。実装は
- * `#usageBlocked !== null` を読むだけの薄い窓なので、既存の「枠に当たったら保持
- * する」歯と同じ入り口（支出上限のエラー文言）を借りて確かめる。
- */

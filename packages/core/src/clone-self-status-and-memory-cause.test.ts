@@ -14,6 +14,19 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, wireEvents, waitFor, waitForDone } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * `self_status`（`self.ts` の `CloneRuntimeFacts`）の配線。
+ *
+ * **`createSdkMcpServer` は道具を MCP の transport の裏へ隠すので、テストから
+ * ハンドラを直接呼べない。** `mcpServerFactory`（クローンの `CloneOptions`。
+ * 主にテスト用、既定は `createCloneMcpServer`）でその境界を覗く — 差し替えた
+ * 関数は渡ってきた `context`（クローンが実際に組み立てたもの。`runtime` を含む）
+ * を控えたうえで、本物の `createCloneMcpServer(context)` をそのまま呼ぶ。
+ * 道具の実装もクローンが渡す `context` も本物のまま、呼び出しの境界だけを覗ける。
+ *
+ * `self_status` 自身のハンドラは、控えた `context` から独立に
+ * `createCloneTools(context)` を呼んで取り出す（`tools.test.ts` と同じ形）。
+ */
 describe('クローン — self_status（runtime facts の配線）', () => {
   function setupCapturing(
     env: NodeJS.ProcessEnv = {},
@@ -831,8 +844,3 @@ describe('クローン — memory_update の cause 配線（蒸留と通常タ�
     await s.clone.stop();
   });
 });
-
-/**
- * 起点4つ（PRD「自律」）。人間の発言以外の3つは、**人間が一切入力していない状態**で
- * 起きることが本質なので、どのテストも human_message を送らずに始める。
- */

@@ -4,6 +4,13 @@ import { CLONE_ACTOR_ID } from './usage.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitFor, waitForDone, isTerminal, waitForTerminal } from './clone-test-harness.js';
 
+/**
+ * `UsageFold.delta`（ターン1回ぶんの増分）は台帳へ積むだけで捨てていた。
+ * 台帳は日 × actor × モデル × 層 × 場所に畳むので、「そのターンがいくらだったか」
+ * は台帳のどこにも残らない。ここは `#recordUsage` が `turn_usage` として
+ * 日誌へ残すことを見る（`manager.ts` の `case 'usage'` にも対になる形を足した
+ * — 片方だけだと非対称が残る）。
+ */
 describe('クローン — ターン1回ぶんの増分を turn_usage として日誌に残す', () => {
   /** `costUsd` に加え cache read/write も動かせる `modelUsage` の素材。 */
   function usageOf(
@@ -745,21 +752,3 @@ describe('クローン — ターン1回ぶんの増分を turn_usage として�
     });
   });
 });
-
-/**
- * 受信箱の到着・配達・消し込み・滞留を、ターンの境界で `inbox_flow` として
- * 日誌へ残す（Issue #783 段0「測るだけ」）。欄の意味は `schema.ts` の
- * `inbox_flow` の doc、数える場所は `clone.ts` の `#remember` / `#inbox.push`
- * （3箇所）/ `#forget` を見よ。
- *
- * ## `settled` は同じ窓には乗らないことがある（重要な非対称）
- *
- * この型は `context_usage` と同じ境界（`case 'turn_ended'`）で書く。だが
- * `#forget`（＝ `settled` を数える場所）は、その書き込みより**後**——
- * `#pump` の `finally`（`#handle` が返ってから）でしか呼ばれない
- * （`clone.ts` の `#pump` のループ本体）。⟹ **1件の人間の発言を処理した
- * その回の `inbox_flow` 行には、その発言自身の `settled` はまだ乗らない**
- * ——次にもう1件処理があったとき、その回の行に「前回ぶんの `settled`」が
- * 乗る（下の「2件目の窓には、1件目の消し込みが型別で載る」がこれを固定
- * する）。**データが失われるのではなく、窓が1つずれるだけである。**
- */

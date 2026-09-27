@@ -24,6 +24,34 @@ import {
 } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * マネージャーからの質問・許可確認が、答え直す必要の無いものとして再提示される
+ * バグ（クローンが解決済みの確認へ二重に答え、`manager_send` が「その確認は
+ * 待っていない」と弾く）の直し。
+ *
+ * 実測（2026-08-22）: 解決済みの確認が「まだ止まっている」としてクローンへ再提示
+ * され、クローンが騙されて同じ requestId へ二重に回答した。原因は `managerPrompt()`
+ * が `InboxEvent` だけを見る純関数で、その確認がいまも `ManagerPool` の `waiting`
+ * に載っているかを1度も確かめていなかったこと。
+ *
+ * ここで固定するのは3つ:
+ * 1. いま実際に待っている確認は、従来の文言（「返事をするまで…止まっている」）で
+ *    届く（生きている確認）
+ * 2. `waiting` から消えた確認は、その文言では届かない（＝答え直せと言わない）
+ * 3. `managers.list()` が投げても、ターンは落ちず、従来の文言のままで届く
+ *    （確かめられなかった側は安全側＝雑音へ倒す。喪失させない）
+ *
+ * ⚠️ **この直しは「解決済みなら必ず正しい文言が出る」ことまでは保証しない。**
+ * `manager.ts` の `send()`（`manager_send` の実体）は `runner.answer()` が成功
+ * しても `record.waiting` を同期では書き換えない。`waiting` からその requestId が
+ * 消えるのは、あとから非同期で届く別種の `RunnerEvent`（`'settled'`。
+ * `manager.ts` の `#onEvent` 内）のハンドラだけである。**答えた直後・
+ * `'settled'` が処理を終える前の窓で合図が配られると、`waiting` にはまだ
+ * 載っているので、この直しを入れても従来どおり「まだ止まっている」の文言が出る。**
+ * 安全側（雑音）へ倒れているので方針には反しないが、「もう完全に守られている」
+ * とは読まないこと。ここを完全に閉じるには回答の受理そのものを冪等にする必要が
+ * あり、この直しの範囲外である。
+ */
 describe('クローン — マネージャーの確認がいまも待たれているかを確かめてから文言を出す', () => {
   /**
    * `escalation.test.ts` の `fakeManagerSdk()` と同じ形。委譲先（マネージャー）の
@@ -675,17 +703,3 @@ describe('クローン — shutdown 蒸留の重複防止', () => {
     await s.clone.stop();
   });
 });
-
-/**
- * `self_status`（`self.ts` の `CloneRuntimeFacts`）の配線。
- *
- * **`createSdkMcpServer` は道具を MCP の transport の裏へ隠すので、テストから
- * ハンドラを直接呼べない。** `mcpServerFactory`（クローンの `CloneOptions`。
- * 主にテスト用、既定は `createCloneMcpServer`）でその境界を覗く — 差し替えた
- * 関数は渡ってきた `context`（クローンが実際に組み立てたもの。`runtime` を含む）
- * を控えたうえで、本物の `createCloneMcpServer(context)` をそのまま呼ぶ。
- * 道具の実装もクローンが渡す `context` も本物のまま、呼び出しの境界だけを覗ける。
- *
- * `self_status` 自身のハンドラは、控えた `context` から独立に
- * `createCloneTools(context)` を呼んで取り出す（`tools.test.ts` と同じ形）。
- */

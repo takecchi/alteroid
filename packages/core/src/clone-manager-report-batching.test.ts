@@ -4,6 +4,24 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, lineStartingWith, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * Issue #562 PR-2: `#mergedHumanBatch` は人間の発言しか束ねない。マネージャーから
+ * 連続して届いた報告（`kind === 'report'`）は1件ずつ別のターンで読まれ、7本
+ * `manager_stop` が届けば7ターン消費する（`manager.ts` の実測、逐語は
+ * `grep -Fn -- 'きっかり7ターン' packages/core/src/manager.ts`）。
+ *
+ * ここは、同じ `managerId` の連続する `report` を1ターンにまとめて読む
+ * `#mergedManagerReportBatch` / `#runManagerReportBatch` の歯である。
+ *
+ * **`manager_message` はどの起点よりも `#emit` が効かない。** `#conversationOf`
+ * が `manager_message` に対して常に `null` を返すので（`#handle` の
+ * `manager_message` 分岐は内部ターン）、`done` / `error` / `usage_limited` の
+ * どれも chat の購読者には届かない（`#emit` は `conversationId === null` を
+ * 即 return する）。**だからここでは `waitForEvents`/`waitForTerminal`（chat
+ * ストリームを見る）を使わず、`s.calls[0].inputs`（実際に SDK へ渡った入力）を
+ * ポーリングして待つ** —— 既存の「歯2: 中身を持つ合図・別の日のタイマーは
+ * 畳まれず」ブロックが manager_message を混ぜるときと同じ形である。
+ */
 describe('クローン — 同じマネージャーの連続する report をまとめて読む（#562）', () => {
   const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
@@ -1145,41 +1163,3 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
     await s.clone.stop();
   }, 15_000);
 });
-
-/**
- * 割り込める起点の集合そのものを固定する。
- *
- * ## なぜ doc では守れないのか
- *
- * 人間以外が餓死しない理由は**割り込みの量が有界だから**で、有界なのは
- * **割り込めるのが人間の速さでしか来ないものだけ**だからである（`isHumanOriginated`
- * の doc）。`external`（webhook）や `timer` を1つ足すと、**割り込みの量が機械の
- * 速さで決まるようになり、有界性の根拠が消える。**
- *
- * ## この集合は畳み込みの前提でもある（守っているものが2つある）
- *
- * **⚠️ この2つ目は、設計時に意図したものではない。** 人間優先を入れる過程で
- * 「出荷される設定を測る歯が無くなる」を塞ごうとして、初めて見つかった。
- * **だからここには「なぜそう決めたか」の記録が無い** — 探しても出てこないのは
- * 記録漏れではなく、**誰も一度も決めていない**からである。**暗黙の前提がほかにも
- * 在りうると疑うこと。**
- *
- * **tick（`timer` / `self_initiative`）を `true` にすると、tick どうしが並べ替わり
- * うるようになり、畳み込み（`#foldsIntoHeldTick`）が黙って効かなくなる** —
- * 「先に届いた tick が `#deferred` へ入る前に次の tick が処理される」が起こりうる
- * ためで、#168 の歯「発意 tick を続けて送っても、保持する在庫は1件のまま増えない」
- * が守っているものが崩れる。**有界性だけを検討して足さないこと。**
- *
- * **そしてそれは緑のまま起きる。** 順序の歯（上の3本）は有限件数しか流さないので、
- * 集合が広がっても通る。**踏んでも出力に何も出ない**種類の壊れ方なので、doc に
- * 書いておくだけでは守れない（この repo は「読んだのに踏んだ」を何度も記録して
- * いる）。**気づく主体を `vitest` にする。**
- *
- * ## どう守っているか
- *
- * `InboxEvent` は `type` による判別可能な共用体なので、`Record<InboxEventType, …>`
- * にすると**新しい起点が増えた瞬間にコンパイルが落ちる。** 落ちた人は「これは人間
- * 起点か」を宣言させられ、その場で上の doc に当たる。**先例は #159**（画面から
- * 消した状態の数え上げを、テスト側の `Record<ManagerStatus, true>` へ移して
- * 「状態が増えるとコンパイルが落ちる」形にしたもの）。
- */

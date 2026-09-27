@@ -9,6 +9,10 @@ import { createMemoryStores, humanMessage } from './testing.js';
 import { fakeSdk, setup, waitFor, waitForExpect, waitForTerminal } from './clone-test-harness.js';
 import type { Setup } from './clone-test-harness.js';
 
+/**
+ * 起点4つ（PRD「自律」）。人間の発言以外の3つは、**人間が一切入力していない状態**で
+ * 起きることが本質なので、どのテストも human_message を送らずに始める。
+ */
 describe('クローン — 自律（人間以外の起点）', () => {
   const inputsOf = (s: Setup) => () => (s.calls[0]?.inputs ?? []).join('\n');
 

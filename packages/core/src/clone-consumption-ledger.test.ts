@@ -19,6 +19,14 @@ import {
 } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
+/**
+ * クローン自身の消費を台帳へ載せる。
+ *
+ * **ここが無かったことが依頼の出発点である。** `clone.ts` の `case 'result'` は
+ * 本文を日誌へ書くだけで `modelUsage` を1バイトも読んでいなかった。人間は
+ * `claude.ai/settings/usage` で自分の消費を見られるのだから、その写像である
+ * クローンが自分の分を読めないのは能力の削除である（north_star 禁止1）。
+ */
 describe('クローンの消費が台帳に載る（誰が・どこで）', () => {
   /** モデル id を1つだけ持つ `modelUsage`。費用だけを動かす。 */
   function usage(model: string, costUsd: number) {
@@ -396,15 +404,3 @@ describe('クローンの消費が台帳に載る（誰が・どこで）', () =
     });
   });
 });
-
-/**
- * PreCompact のサイドセッション（`#distillFromTranscript`）が起こすターンの
- * 入力を日誌に残す（Issue #243 の7本目。既存6経路は `clone-turn-input.test.ts`
- * が持つ）。
- *
- * この経路は `#runInternal` / `#runTurn` を経由せず `this.#queryFn` を直接
- * 呼ぶので、あちらのテストが使う `bootClone`（ストリーミング入力専用の
- * 簡約フェイク）では起こせない——ここは1つ上の「クローンの消費が台帳に載る」と
- * 同じ `fakeSdk`（文字列プロンプトも扱える。`typeof prompt === 'string'` 分岐）
- * と `firePreCompact` の骨格を使う。
- */
