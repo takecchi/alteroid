@@ -84,6 +84,7 @@ import {
   renderListingEntry,
   renderListingFromEnd,
 } from './excerpt.js';
+import { commandHeadWord, type RecentDenial } from './denial-shape.js';
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import {
@@ -462,6 +463,19 @@ export interface ToolContext {
    * `string | undefined` のまま変えていない。
    */
   conversationId: () => string | undefined;
+  /**
+   * 直近の拒否の控え（古い順。issue #1802）。`request_permission` が、直前に
+   * その操作が拒否された証拠（器が返した理由の原文・時刻・道具・先頭の語）を
+   * 質問文へ添えるために読む。**コマンドの値は含まない**（`RecentDenial` の doc）。
+   *
+   * **任意の欄にしてある。** 他の口（`conversationId` など）は渡し忘れを型で
+   * 止めるために必須にしているが、この口はテストでの組み立てが130か所を超え、
+   * 一括で足すと別の文脈を巻き込む。その代わり、**渡されなかったことを黙らない**
+   * ——`request_permission` は「この層は拒否の記録を読む口を持たない」と質問文に
+   * 書き、「照合できる拒否が無い」とは言い分ける。クローンは本セッションと
+   * 蒸留のサイドクエリの両方に渡す（`clone.ts` の2か所）。
+   */
+  recentDenials?: () => readonly RecentDenial[];
   /**
    * **`conversation_post` が書いた1通を、その会話をいま開いている画面へ流す口**
    * （issue #1393）。
@@ -4165,6 +4179,58 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
 }
 
 /** ツール定義そのもの。MCP の配線を通さずに単体テストできるよう分けてある。 */
+/** 質問文へ引用する拒否の原文の、欄ごとの上限（issue #1802）。 */
+const PERMISSION_EVIDENCE_EXCERPT = 400;
+
+/**
+ * `request_permission` の質問文へ添える、直前の拒否の証拠の1行（issue #1802）。
+ *
+ * **規則の道具と、規則の中身の先頭の語が同じ拒否のうち、いちばん新しい1件**を
+ * 引く。載せるのは、器が返した原文（分類・理由・拒否文）と、時刻・道具・先頭の語
+ * だけで、**コマンドの値は載せない**（控えがもともと持たない）。クローンの要約を
+ * 挟まない——要約の誤りが承認画面へ載るのを防ぐのが目的である（#863 の
+ * `[CI Bypass]` の実例）。
+ *
+ * 見つからないとき・読む口が無いときも、**そのことを1行で言う**（黙って省くと、
+ * 人間は「証拠が無い」ことを読めない）。
+ */
+export function describePermissionEvidence(
+  rule: string,
+  recentDenials: (() => readonly RecentDenial[]) | undefined,
+): string {
+  if (recentDenials === undefined) {
+    return '直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。';
+  }
+  const wrapped = /^([A-Za-z][A-Za-z0-9_]*)\((.*)\)$/s.exec(rule);
+  const tool = wrapped?.[1];
+  const content = wrapped?.[2]?.replace(/:\*$/, '');
+  const headWord = content === undefined ? undefined : commandHeadWord(content);
+  if (tool === undefined || headWord === undefined) {
+    return '直前の拒否: 規則から道具と先頭の語が取れないので、照合していない。';
+  }
+  const found = [...recentDenials()]
+    .reverse()
+    .find((it) => it.tool === tool && it.headWord === headWord);
+  if (found === undefined) {
+    return `直前の拒否: この規則と照合できる直前の拒否（${tool} / 先頭の語 ${headWord}）は、このセッションの記録に無い。`;
+  }
+  const parts = [
+    `時刻 ${found.at}`,
+    `道具 ${found.tool}`,
+    `先頭の語 ${headWord}`,
+    found.reasonType === undefined
+      ? undefined
+      : `分類 ${excerptLine(found.reasonType, PERMISSION_EVIDENCE_EXCERPT)}`,
+    found.reason === undefined
+      ? undefined
+      : `理由 ${excerptLine(found.reason, PERMISSION_EVIDENCE_EXCERPT)}`,
+    found.message === undefined
+      ? undefined
+      : `拒否文 ${excerptLine(found.message, PERMISSION_EVIDENCE_EXCERPT)}`,
+  ].filter((part): part is string => part !== undefined);
+  return `直前の拒否（器が返した原文。クローンの要約ではない。長い欄は ${PERMISSION_EVIDENCE_EXCERPT} 字で切る）: ${parts.join(' / ')}`;
+}
+
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
   // **ここで1回だけ解決しない。** `memoryCause` はターンごとに変わりうる値
@@ -6048,6 +6114,7 @@ export function createCloneTools(context: ToolContext) {
         '両方とも検算する（allows が1つでも規則に一致しない・denies が1つでも一致してしまうなら、',
         'この道具はキューに積む前に拒否する）。',
         '積むだけで人間の応答は待たない。人間が定型文でちょうど答えなければ許可は記録されない。',
+        '質問文には、同じ道具・同じ先頭の語の直前の拒否（器が返した理由の原文・時刻）が自動で添えられる（コマンドの値は添えない）。',
       ].join(' '),
       {
         rule: z.string().describe('Bash(<完全な文字列>) または Bash(<前方一致>:*) の形の規則'),
@@ -6071,6 +6138,7 @@ export function createCloneTools(context: ToolContext) {
         const question =
           `以降 ${rule} を聞かずに通してよいか。理由: ${reason}\n` +
           `通る例: ${allows.join(' / ')}\n通らない例: ${denies.join(' / ')}\n` +
+          `${describePermissionEvidence(rule, context.recentDenials)}\n` +
           `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とだけ答える（句点や言い換えがあると記録しない）。`;
         const approval: PendingApproval = {
           id: randomUUID(),

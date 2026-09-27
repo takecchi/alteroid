@@ -280,3 +280,61 @@ export function denialInputShape(input: unknown): string | undefined {
 
   return `欄=${keyList}${headPart} / ${size}`;
 }
+
+/**
+ * 直近の拒否の控え（{@link RecentDenial}）を、上限つきで古い順に持つ帳面（Issue #1802）。
+ *
+ * **`Clone` の private な帳面から切り出したのは、歯で測るためである**（振る舞いは
+ * `Clone#noteDenial` の中に書いていた場合と同じ）。上限は回数制限ではなく、長く
+ * 走るセッションでメモリが伸び続けないための蓋で、溢れたら古いものから黙って落とす
+ * ——控えは証拠の写しであって、原本は日誌の `#noteDenial` の行に残っている。
+ */
+export class RecentDenialLog {
+  readonly #limit: number;
+  readonly #entries: { toolUseId: string; denial: RecentDenial }[] = [];
+
+  constructor(limit: number) {
+    this.#limit = limit;
+  }
+
+  /** 1件控える。**コマンドの値は持たない**——先頭の語だけを安全な判定で取る。 */
+  remember(
+    toolUseId: string,
+    at: string,
+    tool: string,
+    denial: { input?: unknown; reasonType?: string; reason?: string; message?: string },
+  ): void {
+    const headWord = denialCommandHeadWord(denial.input);
+    this.#entries.push({
+      toolUseId,
+      denial: {
+        at,
+        tool,
+        ...(headWord === undefined ? {} : { headWord }),
+        ...(denial.reasonType === undefined ? {} : { reasonType: denial.reasonType }),
+        ...(denial.reason === undefined ? {} : { reason: denial.reason }),
+        ...(denial.message === undefined ? {} : { message: denial.message }),
+      },
+    });
+    if (this.#entries.length > this.#limit) {
+      this.#entries.splice(0, this.#entries.length - this.#limit);
+    }
+  }
+
+  /**
+   * 先に入力なしで控えた1件に、後から届いた入力（合図の出所: result）から先頭の語を
+   * 埋める。走行中の合図は入力を運ばないことがある。既に埋まっていれば触らない。
+   */
+  fillHeadWord(toolUseId: string, input: unknown): void {
+    const headWord = denialCommandHeadWord(input);
+    if (headWord === undefined) return;
+    const entry = this.#entries.find((it) => it.toolUseId === toolUseId);
+    if (entry === undefined || entry.denial.headWord !== undefined) return;
+    entry.denial = { ...entry.denial, headWord };
+  }
+
+  /** 古い順の控え。`toolUseId` は外へ出さない。 */
+  list(): readonly RecentDenial[] {
+    return this.#entries.map((it) => it.denial);
+  }
+}

@@ -48,7 +48,12 @@ import {
 } from './clone-tools-transport.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { restoredInboxEventVerdict, type RestoredInboxEventVerdict } from './inbox-staleness.js';
-import { denialInputAbsence, denialInputShape, type DeniedRecord } from './denial-shape.js';
+import {
+  denialInputAbsence,
+  denialInputShape,
+  RecentDenialLog,
+  type DeniedRecord,
+} from './denial-shape.js';
 import {
   buildActivityDigest,
   type ManagerAwaitingBackgroundMap,
@@ -548,6 +553,16 @@ const TOOL_USE_ERROR_EXCERPT = 500;
  * （AGENTS.md 地雷2）。溢れたら `#deniedToolUses` の `onForget` が日誌へ残す。
  */
 const DENIED_TOOL_USE_MEMORY_LIMIT = 512;
+
+/**
+ * `request_permission` へ渡す直近の拒否の控え（{@link RecentDenial}）の件数の
+ * 上限（Issue #1802）。要求へ添えるのは「同じ道具・同じ先頭の語の、いちばん
+ * 新しい1件」だけなので、たくさん持つ理由が無い。**回数制限ではなく、長く走る
+ * セッションでメモリが伸び続けないための蓋である**（AGENTS.md 地雷2）。溢れた
+ * 分は古いものから黙って落とす——控えは証拠の写しであって、原本は日誌の
+ * `#noteDenial` の行に残っている。
+ */
+const RECENT_DENIAL_LIMIT = 32;
 
 /**
  * `#onPreToolUse` が許可 DB の規則に一致して `allow` を返した呼び出しを、
@@ -1663,6 +1678,15 @@ class Clone implements CloneHost {
    * で `createRecentMap` に揃える。上限に達して忘れた id へ後から拒否が届いて
    * も、もう検出できない——`onForget` がその代償を日誌へ残す。
    */
+  /**
+   * 直近の拒否の控え（Issue #1802）。`#noteDenial` が日誌に書くのと同じ契機で
+   * 1件足し、`request_permission` が `ToolContext.recentDenials` 経由で読む。
+   * **コマンドの値は持たない**（{@link RecentDenial} の doc）。`toolUseId` は、
+   * 後から入力付きの記録（合図の出所: result）が届いたときに先頭の語を埋める
+   * ためだけに持ち、道具へは渡さない。古い順に並べ、上限（{@link RECENT_DENIAL_LIMIT}）
+   * を越えたら先頭から落とす。
+   */
+  readonly #recentDenials = new RecentDenialLog(RECENT_DENIAL_LIMIT);
   readonly #allowedByGrantToolUses = createRecentMap<AllowedByGrantRecord>({
     limit: ALLOWED_BY_GRANT_MEMORY_LIMIT,
     onForget: (ids) => {
@@ -9164,6 +9188,8 @@ class Clone implements CloneHost {
       // `emit` の1行上と同じ薄い closure —— `#turn?.conversationId` が無ければ
       // （マネージャー発の確認・蒸留・timer など内部ターン）undefined を返す。
       conversationId: () => this.#sdkSession.turn?.conversationId ?? undefined,
+      // **`request_permission` が直前の拒否の証拠を添えるための口**（issue #1802）。
+      recentDenials: () => this.#recentDenials.list(),
       // **`conversation_post` の1通を、その会話を開いている画面へ流す口**
       // （issue #1393）。1通で閉じる逐次配信なので、本文の直後に `done` を出す。
       postToConversation: (conversationId, text) => {
@@ -9747,6 +9773,7 @@ class Clone implements CloneHost {
     if (seen !== undefined) {
       if (seen.input || denial.input === undefined) return;
       this.#deniedToolUses.set(toolUseId, { input: true });
+      this.#recentDenials.fillHeadWord(toolUseId, denial.input);
       const later = denialInputShape(denial.input);
       if (later !== undefined) {
         await this.#journal({
@@ -9761,6 +9788,7 @@ class Clone implements CloneHost {
       return;
     }
     this.#deniedToolUses.set(toolUseId, { input: denial.input !== undefined });
+    this.#recentDenials.remember(toolUseId, new Date().toISOString(), tool, denial);
 
     // `decision_reason` / `decision_reason_type` / `message` は3つとも
     // `via: 'result'` では必ず欠け、`via: 'live'` でも SDK が付けてこなければ
@@ -10232,6 +10260,8 @@ class Clone implements CloneHost {
           // サイドクエリは常に内部ターンで人間の会話には紐づいていないので、
           // 関数は渡すが常に `undefined` を返す。
           conversationId: () => undefined,
+          // **同じ実体を渡す**（issue #1802。上の `dropQueuedInboxEvents` と同じ理由）。
+          recentDenials: () => this.#recentDenials.list(),
         }),
         externalMcpServers,
         systemPrompt: buildCloneSystemPrompt({
