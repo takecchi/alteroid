@@ -182,6 +182,45 @@ describe('manager_report は manager_list の3軸を継承する（Issue #1847�
   });
 
   /**
+   * **#1857 との合流点。** `describeUsageStopped`（生成元は1箇所、`manager_list`
+   * と共有）は status で文言を分けるようになった（Issue #1796）——`stopped`
+   * （畳まれたターンが在る回はこの値になる。`manager.ts` の `case 'report'`
+   * の `stopped` 早期return分岐が `lastFoldedTurn` だけを書く）では「セッション
+   * は生きている」と言い切らない。`manager_report` はその生成元をそのまま
+   * 呼ぶだけ（`tools.ts` に foldedTurn 専用の分岐は無い）なので、単に
+   * reuse するだけでここが正しく振る舞うことを固定する——`describeUsageStopped`
+   * 側の歯（`tools-usage-stopped.test.ts`）は `manager_list` しか測っていない。
+   *
+   * **アサーションの文言は意図して読点の有無で分けてある**（`tools-usage-stopped.test.ts`
+   * の同名の歯と同じ理由）——健全な回の文言は「セッションは生きているので、
+   * 鍵が回れば」（読点あり）、`stopped` の文言は「セッションは生きているので
+   * 鍵が回れば」（読点なし、否定文の中の引用）で、読点を落とすと後者にも
+   * 誤って一致してしまう。
+   */
+  it('usageStoppedAt + 畳まれたターン（status: stopped）の回は、manager_report も「セッションは生きている」と言わない（#1796/#1847の合流）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0]!;
+    target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
+    target.status = 'stopped';
+    target.lastFoldedTurn = {
+      text: '停止後に届いた畳まれた本文',
+      at: '2026-09-26T00:00:00.000Z',
+    };
+
+    const reply = await h.call('manager_report', { managerId: target.managerId });
+
+    expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
+    expect(reply).toContain('2026-09-25T01:23:45.000Z');
+    expect(reply).toContain('status: stopped');
+    expect(reply).not.toContain('セッションは生きているので、鍵が回ればこの委譲は続く');
+    // **畳まれたターン自体の表示（#1862）も同時に壊れていないことを確かめる**
+    // ——同じ応答に両方の注記が並ぶので、片方の実装がもう片方を消していないか。
+    expect(reply).toContain('停止後に届いた畳まれた本文');
+    expect(reply).toContain('停止後に届いた、畳まれたターンの中身');
+  });
+
+  /**
    * **軸2: runner が名簿から消えている。** 生成元は `describeRunnerVanished`
    * 1箇所——`manager_list` と `manager_report` は同じ文言を共有する。
    */
