@@ -4347,7 +4347,9 @@ class RunnerSession {
    * 一致した鍵は `get` の直後に必ず `delete` する——一致してもしなくても
    * 1回で終わり（issue #1105 本文の設計判断3）。寿命
    * （`ONE_SHOT_ALLOW_TTL_MS`）を過ぎていたら `allow` を返さず、分類器の
-   * 判定へそのまま委ねる（安全側）。
+   * 判定へそのまま委ねる（安全側）。**ちょうど寿命が尽きたミリ秒も「過ぎた」
+   * 側に含める**（issue #1768。以前は `<` で比べていたため、この1点だけ
+   * 「まだ有効」に倒れていた——許しすぎる側の穴だった）。
    */
   #consumeOneShotAllow(record: AgentPreToolRecord): AgentPreToolDecision {
     const toolName = record.toolName;
@@ -4365,7 +4367,7 @@ class RunnerSession {
     // 使い切る。一致しても1回だけ。
     this.#oneShotAllows.delete(key);
 
-    if (grant.expiresAt < Date.now()) {
+    if (grant.expiresAt <= Date.now()) {
       this.#emit({
         type: 'note',
         managerId: this.#id,
