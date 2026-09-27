@@ -70,6 +70,14 @@ export interface AutoFoldUnpushedWorkProbe {
     readonly truncatedAtCount?: number;
     /** 期限切れで一部の作業ツリーを調べる前に打ち切っていたら `true`。 */
     readonly stoppedEarly?: true;
+    /**
+     * 他マネージャー/作業者の `/tmp` スクラッチディレクトリの有無を確かめ
+     * られなかったときだけ載る理由（`UnpushedWorkResult.scratchRootsUnknown`
+     * の写し。#1765 段2）。**載っているとき、`worktrees` はそこに在ったかも
+     * しれない未 push の実装を1本も含んでいない可能性がある**——`truncatedAtCount`
+     * / `stoppedEarly` と同じ強さで畳んではいけない状態である。
+     */
+    readonly scratchRootsUnknown?: string;
   };
 }
 
@@ -81,8 +89,9 @@ export type AutoFoldUnpushedWorkVerdict = 'clear' | 'blocked';
  * **`'clear'` を返すのは、すべての作業ツリーについて未 push のコミットも
  * 未コミットの変更も無いと確かめられたときだけ。** それ以外は全部
  * `'blocked'` に倒す——確かめられなかった（`unavailable`）・打ち切った
- * （`truncatedAtCount` / `stoppedEarly`）・1件でも未 push/未コミットが在る
- * （数値そのもの）・数値自体が取れていない（`*Unknown`）のどれもここに
+ * （`truncatedAtCount` / `stoppedEarly`）・スクラッチディレクトリの有無を
+ * 確かめられなかった（`scratchRootsUnknown`）・1件でも未 push/未コミットが
+ * 在る（数値そのもの）・数値自体が取れていない（`*Unknown`）のどれもここに
  * 含める。**「取れない」を「無かった」へ倒さない**（AGENTS.md「取れない軸に
  * 0の行を作る」の裏）——このファイルは判定できない状態を全部安全側
  * （畳まない）へ吸収する。
@@ -100,6 +109,7 @@ export function evaluateAutoFoldUnpushedWork(
   if (probe.kind === 'unavailable' || probe.result === undefined) return 'blocked';
   const { result } = probe;
   if (result.truncatedAtCount !== undefined || result.stoppedEarly === true) return 'blocked';
+  if (result.scratchRootsUnknown !== undefined) return 'blocked';
   for (const worktree of result.worktrees) {
     if (worktree.unpushedCommitCount === undefined || worktree.unpushedCommitCount > 0) {
       return 'blocked';
@@ -127,6 +137,9 @@ export function describeAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkPro
   }
   if (result.stoppedEarly === true) {
     return '呼び出しの期限切れで、一部の作業ツリーを調べる前に打ち切っていた（全部は見ていない）';
+  }
+  if (result.scratchRootsUnknown !== undefined) {
+    return `他マネージャー/作業者の /tmp スクラッチディレクトリの有無を確かめられなかった（${result.scratchRootsUnknown}）`;
   }
   const flagged = result.worktrees.filter(
     (worktree) =>
@@ -164,6 +177,7 @@ export function classifyAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkPro
     kind: 'ok',
     truncatedAtCount: result.truncatedAtCount ?? null,
     stoppedEarly: result.stoppedEarly === true,
+    scratchRootsUnknown: result.scratchRootsUnknown ?? null,
     worktrees: result.worktrees.map((worktree) => ({
       unpushedCommitCount: worktree.unpushedCommitCount ?? null,
       uncommittedChangeCount: worktree.uncommittedChangeCount ?? null,

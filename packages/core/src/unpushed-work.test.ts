@@ -489,7 +489,10 @@ describe('findManagerScratchRoots', () => {
 
     const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
 
-    expect(found.sort()).toEqual([join(tmpRoot, 'mgr-abcd'), join(tmpRoot, 'mgr-abcd1234')].sort());
+    expect(found.unknownReason).toBeUndefined();
+    expect([...found.paths].sort()).toEqual(
+      [join(tmpRoot, 'mgr-abcd'), join(tmpRoot, 'mgr-abcd1234')].sort(),
+    );
   });
 
   it('当たらなかったディレクトリの中へは降りない（stat もしない）', async () => {
@@ -500,7 +503,7 @@ describe('findManagerScratchRoots', () => {
 
     const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
 
-    expect(found).toEqual([]);
+    expect(found).toEqual({ paths: [] });
   });
 
   it('当たらないディレクトリの奥に在る一致名も拾わない（/tmp 全体を再帰しない）', async () => {
@@ -508,15 +511,24 @@ describe('findManagerScratchRoots', () => {
 
     const found = await findManagerScratchRoots(tmpRoot, 'mgr-abcd1234-xxxxxxxx');
 
-    expect(found).toEqual([]);
+    expect(found).toEqual({ paths: [] });
   });
 
-  it('tmpRootDir を読めなければ空配列を返す（黙って諦める）', async () => {
+  // ⭐ #1765 段2 — 以前は空配列 `[]` に潰していた（「読めなかった」と
+  // 「読めて0件だった」を区別できず、呼び出し側の安全弁（`manager-auto-fold.ts`
+  // の `evaluateAutoFoldUnpushedWork`）がここを「他マネージャー/作業者の
+  // スクラッチディレクトリに未pushは無かった」と誤読しうった）。
+  // **反転させたテスト**——元は「tmpRootDir を読めなければ空配列を返す
+  // （黙って諦める）」という名前で、その挙動をそのまま仕様として固定していた。
+  it('⭐ tmpRootDir を読めなければ、paths を空にしたまま unknownReason に理由を残す（黙って諦めない）', async () => {
     const found = await findManagerScratchRoots(
       join(tmpRoot, 'does-not-exist'),
       'mgr-abcd1234-xxxxxxxx',
     );
-    expect(found).toEqual([]);
+
+    expect(found.paths).toEqual([]);
+    expect(found.unknownReason).toBeDefined();
+    expect(found.unknownReason).toContain('確かめられなかった');
   });
 });
 
@@ -633,5 +645,34 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     expect(result.worktrees).toHaveLength(3);
     expect(result.truncatedAtCount).toBe(3);
+  });
+
+  // ⭐ #1765 段2 — `findManagerScratchRoots` が `tmpRootDir` を読めなかった
+  // ときに `[]` へ潰さず名乗るようになった「確かめられなかった」を、
+  // `computeUnpushedWork` が `scratchRootsUnknown` としてそのまま伝えること。
+  it('⭐ /tmp のスクラッチディレクトリを確かめられなかったら、0本と混ぜずに scratchRootsUnknown で名乗る', async () => {
+    // cwd 自体には作業ツリーが無いので、この観測が唯一の手がかりである。
+    const unreadableTmpRoot = join(tmpRoot, 'does-not-exist');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: unreadableTmpRoot,
+    });
+
+    expect(result.worktrees).toHaveLength(0);
+    expect(result.scratchRootsUnknown).toBeDefined();
+    expect(result.scratchRootsUnknown).toContain('確かめられなかった');
+  });
+
+  it('managerId を渡さなければ、tmpRootDir が読めなくても scratchRootsUnknown は載らない（この探索自体を行っていない）', async () => {
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      tmpRootDir: join(tmpRoot, 'does-not-exist'),
+    });
+
+    expect(result.scratchRootsUnknown).toBeUndefined();
   });
 });

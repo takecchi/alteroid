@@ -131,6 +131,36 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
       }),
     ).toBe('blocked');
   });
+
+  // ⭐ #1765 段2 — `findManagerScratchRoots` が `tmpRootDir` を読めなかった
+  // ときに空配列へ潰さず名乗るようになった「確かめられなかった」を、この
+  // 安全弁がちゃんと `truncatedAtCount` / `stoppedEarly` と同じ強さで
+  // 「blocked」へ倒すこと。ここを見落とすと、他マネージャー/作業者の
+  // スクラッチディレクトリに残っていたかもしれない未 push の実装を
+  // 検知しないまま自動で畳んでしまう。
+  it('⭐ scratchRootsUnknown（/tmp を確かめられなかった）だけでも blocked——worktrees が全部 clean でも救われない', () => {
+    expect(
+      evaluateAutoFoldUnpushedWork({
+        kind: 'ok',
+        result: {
+          worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }],
+          scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった）',
+        },
+      }),
+    ).toBe('blocked');
+  });
+
+  it('⭐ scratchRootsUnknown は worktrees が0本（見つからなかった）のときも blocked', () => {
+    expect(
+      evaluateAutoFoldUnpushedWork({
+        kind: 'ok',
+        result: {
+          worktrees: [],
+          scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった）',
+        },
+      }),
+    ).toBe('blocked');
+  });
 });
 
 describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピーを作らない）', () => {
@@ -155,6 +185,15 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
       result: { worktrees: [], stoppedEarly: true },
     });
     expect(text).toContain('期限切れ');
+  });
+
+  it('⭐ scratchRootsUnknown の理由を言う（#1765 段2）', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], scratchRootsUnknown: '確かめられなかった（テスト用の理由）' },
+    });
+    expect(text).toContain('/tmp');
+    expect(text).toContain('確かめられなかった（テスト用の理由）');
   });
 
   it('汚れた作業ツリーの本数を言う', () => {
@@ -240,6 +279,15 @@ describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌�
     const b = classifyAutoFoldUnpushedWorkProbe({
       kind: 'ok',
       result: { worktrees: [], stoppedEarly: true },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('⭐ scratchRootsUnknown の有無が違えば鍵も変わる（#1765 段2）', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({ kind: 'ok', result: { worktrees: [] } });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], scratchRootsUnknown: '確かめられなかった' },
     });
     expect(a).not.toBe(b);
   });

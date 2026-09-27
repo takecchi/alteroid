@@ -15,8 +15,20 @@ export interface DaemonRuntimeInfo {
   token: string;
 }
 
+/**
+ * 本人確認の結果。2値（`boolean`）にすると「確かめられなかった」が黙って
+ * 「居ない」側へ倒れる（`AGENTS.md`「静かに失敗する道具」の「判定できないと
+ * いう3つ目の状態を持つ」）。ここは明示的に3値目を持つ。
+ *
+ * - `present` — 本人だと確認できた
+ * - `absent` — 応答があった上で、本人ではない（または居ない）と確認できた
+ * - `unknown` — 確かめられなかった（例外・タイムアウト・不正な応答）。
+ *   **「居ない」ではない。** 居るかもしれないが、確認する手段が今回は無かった、という意味
+ */
+export type Presence = 'present' | 'absent' | 'unknown';
+
 export interface DaemonStatus {
-  running: boolean;
+  presence: Presence;
   info: DaemonRuntimeInfo | null;
 }
 
@@ -53,8 +65,14 @@ async function readRuntimeInfo(): Promise<DaemonRuntimeInfo | null> {
  * 本人確認。ポートが空いていることではなく、**そこにいるのが自分の記録した
  * デーモンであること**を確かめる。PID は使わない — 異常終了で状態ファイルが
  * 残ったあと、OS が同じ PID を別プロセスに配ることがあるため。
+ *
+ * **例外・タイムアウトは `absent` ではなく `unknown` を返す。** 応答が遅い・
+ * 一時的にネットワークが不調・JSON が壊れている、といった「確かめられ
+ * なかった」場合を「居ない」に畳むと、本当は生きているデーモンに対して
+ * 呼び出し側が「居ない」と誤解し、安全のはずの分岐を誤った前提の上で
+ * 実行してしまう（#1765）。
  */
-async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
+async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
   try {
     // **トークンを送って、認められるかを見る。** かつては `/health` が返す token と
     // 突き合わせていたが、この値は「許可を付与できる資格」そのものになったので、
@@ -64,11 +82,15 @@ async function verify(info: DaemonRuntimeInfo): Promise<boolean> {
       headers: { authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1500),
     });
-    if (!response.ok) return false;
+    // 応答があった上での否定（401/403/404 等）は「本人ではない」と確定できる。
+    if (!response.ok) return 'absent';
     const body = (await response.json()) as { operator?: unknown };
-    return body.operator === true;
+    return body.operator === true ? 'present' : 'absent';
   } catch {
-    return false;
+    // fetch の例外（接続不可・DNS 失敗・不正な応答の JSON パース失敗）と
+    // `AbortSignal.timeout(1500)` によるタイムアウトは、どちらもここに来る。
+    // 応答が無かっただけで、本人が居ないと確認できたわけではない。
+    return 'unknown';
   }
 }
 
@@ -93,8 +115,8 @@ export async function storageOf(info: DaemonRuntimeInfo | null): Promise<string 
 
 export async function status(): Promise<DaemonStatus> {
   const info = await readRuntimeInfo();
-  if (!info) return { running: false, info: null };
-  return { running: await verify(info), info };
+  if (!info) return { presence: 'absent', info: null };
+  return { presence: await verify(info), info };
 }
 
 function daemonEntrypoint(): string {
@@ -105,7 +127,18 @@ function daemonEntrypoint(): string {
 /** 常駐は自律の前提（PRD）。chat のたびに起こすのではなく、居なければ起こす。 */
 export async function start(): Promise<DaemonRuntimeInfo> {
   const current = await status();
-  if (current.running && current.info) return current.info;
+  if (current.presence === 'present' && current.info) return current.info;
+  if (current.presence === 'unknown') {
+    // **安全側 — 確かめられないまま2本目を起こさない。** 記録された状態ファイルは
+    // 片付けない: 応答が無かっただけで、既に生きている本物のデーモンかも
+    // しれない。ここで新しいプロセスを spawn すると、ポート衝突や記憶ストア
+    // への二重書き込みの疑いに繋がる（#1765 段2）。
+    throw new Error(
+      '既存の alteroidd の生死を確かめられませんでした（応答が無いかタイムアウトしました）。' +
+        '二重起動を避けるため起動を中止しました。ネットワークや負荷を確認してから、' +
+        '必要なら `alteroid daemon status` で状態を見てからやり直してください。',
+    );
+  }
 
   // 子プロセスの出力を捨てない。捨てると「起動しない理由」が永久に分からなくなる。
   await mkdir(stateDir(), { recursive: true });
@@ -122,7 +155,7 @@ export async function start(): Promise<DaemonRuntimeInfo> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await sleep(250);
     const next = await status();
-    if (next.running && next.info) return next.info;
+    if (next.presence === 'present' && next.info) return next.info;
   }
   throw new Error(`デーモンの起動を確認できませんでした（ログ: ${logPath}）`);
 }
@@ -178,7 +211,14 @@ export async function stopDaemon(deps: StopDeps): Promise<StopOutcome> {
 export async function stop(): Promise<StopOutcome> {
   return stopDaemon({
     readInfo: readRuntimeInfo,
-    verify,
+    // `StopDeps.verify` は `boolean` の契約（本人確認できたときだけ PID に触る）。
+    // `unknown` は「本人だと確認できた」わけではないので `false` 側へ畳む —
+    // これは #1765 段2 より前からの `stopDaemon` の挙動と1文字も変えていない
+    // （このファイルの `verify` が返す型を変えただけで、`stop()` の外から見た
+    // 挙動は変えない。`start()` 側の安全側の変更とは別の対象である）。
+    async verify(info) {
+      return (await verify(info)) === 'present';
+    },
     async requestShutdown(info) {
       const response = await fetch(`${baseUrl(info)}/shutdown`, {
         method: 'POST',
@@ -210,6 +250,9 @@ export async function stop(): Promise<StopOutcome> {
 /** 起動していなければ起こしてから接続先を返す。 */
 export async function ensureRunning(): Promise<DaemonRuntimeInfo> {
   const current = await status();
-  if (current.running && current.info) return current.info;
+  if (current.presence === 'present' && current.info) return current.info;
+  // `unknown` のときも `start()` へ渡す — 安全側の判断（起こすかどうか）は
+  // `start()` に一本化してある。ここで別の分岐を持つと、2箇所が同じ判断を
+  // 別々に持つことになり、片方だけ直して他方が古いままになりうる。
   return start();
 }
