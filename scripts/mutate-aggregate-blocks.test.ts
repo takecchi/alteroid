@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   assertAggregateBlocksUnambiguous,
   countAggregateBlocks,
@@ -445,7 +446,8 @@ describe('mutate.mjs CLI: baseline / run の先頭 baseline 確認（判定の�
    * するためである。
    */
   function buildRunCliEnv(fakeDir: string): NodeJS.ProcessEnv {
-    return { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ''}` };
+    const base = mutateCliChildEnv();
+    return { ...base, PATH: `${fakeDir}:${base.PATH ?? ''}` };
   }
 
   function runCli(

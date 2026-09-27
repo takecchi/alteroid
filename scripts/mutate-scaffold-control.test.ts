@@ -820,7 +820,8 @@ describe('mutate.mjs run: 足場の赤を差し引いて判定する（端から
    * `fakeDir` を `PATH` の先頭へ足す必要があるぶん取りこぼされていた。
    */
   function buildRunPlanEnv(fakeDir: string): NodeJS.ProcessEnv {
-    return { ...process.env, PATH: `${fakeDir}:${process.env.PATH ?? ''}` };
+    const base = mutateCliChildEnv();
+    return { ...base, PATH: `${fakeDir}:${base.PATH ?? ''}` };
   }
 
   function runPlan(root: string, plan: unknown[]) {
