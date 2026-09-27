@@ -53,7 +53,10 @@ describe('pnpm check:verified-head（Issue #1763）', () => {
   function recordVerifySuccess(dir: string, now = new Date('2026-09-27T00:00:00.000Z')): string {
     const tree = writeTreeFor(dir) as string;
     expect(tree).not.toBeNull();
-    writeFileSync(recordPath(dir), JSON.stringify(recordFor('fp-unused', now, tree), null, 2) + '\n');
+    writeFileSync(
+      recordPath(dir),
+      JSON.stringify(recordFor('fp-unused', now, tree), null, 2) + '\n',
+    );
     return tree;
   }
 
@@ -152,7 +155,11 @@ describe('pnpm check:verified-head（Issue #1763）', () => {
     });
 
     it('記録の置き場そのものが取れない（recordPath が null）', () => {
-      const result = compareVerifiedHead({ repo: '/does/not/matter', rev: 'HEAD', recordPath: null });
+      const result = compareVerifiedHead({
+        repo: '/does/not/matter',
+        rev: 'HEAD',
+        recordPath: null,
+      });
       expect(result.verdict).toBe('undecidable');
       expect(result.reason).toBe('no-record-path');
     });
@@ -172,7 +179,9 @@ describe('pnpm check:verified-head（Issue #1763）', () => {
 
     // **中身を1文字も変えずに、空コミット相当（同じ tree のまま作者情報だけ変える commit）を作る。**
     // fingerprint は HEAD の sha を畳むので変わるはずだが、tree の比較はここで動かない。
-    execFileSync('git', ['commit', '--allow-empty', '-qm', 'empty commit, same tree'], { cwd: dir });
+    execFileSync('git', ['commit', '--allow-empty', '-qm', 'empty commit, same tree'], {
+      cwd: dir,
+    });
 
     const result = compareVerifiedHead({ repo: dir, rev: 'HEAD', recordPath: recordPath(dir) });
     expect(result.verdict).toBe('match');

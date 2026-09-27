@@ -443,7 +443,10 @@ if (recordDecision.record) {
   // **記録の失敗で一式を落とさない。** ここまでで検証は全部通っている。記録は
   // 次回を速くするためのものなので、書けなかったら「書けなかった」と言って 0 で返す。
   try {
-    writeFileSync(RECORD, JSON.stringify(recordFor(after, new Date(), verifiedTree), null, 2) + '\n');
+    writeFileSync(
+      RECORD,
+      JSON.stringify(recordFor(after, new Date(), verifiedTree), null, 2) + '\n',
+    );
   } catch (error) {
     process.stdout.write('（指紋を記録できなかった: ' + error.message + '。次も必ず走る）\n');
   }

@@ -664,7 +664,11 @@ describe('recordFor（Issue #1191）: 記録の組み立て', () => {
   it('tree を渡さなければ記録に tree が含まれない（既存の呼び出しを壊さない）', () => {
     const now = new Date('2026-09-27T00:00:00.000Z');
     const rec = recordFor('abc123', now);
-    expect(rec).toEqual({ fingerprint: 'abc123', at: '2026-09-27T00:00:00.000Z', day: '2026-09-27' });
+    expect(rec).toEqual({
+      fingerprint: 'abc123',
+      at: '2026-09-27T00:00:00.000Z',
+      day: '2026-09-27',
+    });
     expect('tree' in rec).toBe(false);
   });
 
