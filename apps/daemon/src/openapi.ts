@@ -779,6 +779,19 @@ export const managerSummarySchema = z.object({
    */
   sessionMissingKind: z.enum(['resume-failed', 'unlisted']).optional(),
   /**
+   * **器が止まる直前の未 push 観測が、台帳に届いているか**（#1266 候補C。
+   * `packages/core/src/manager.ts` の `ManagerSummary.shutdownObservationArrivedAfterSwap`）。
+   *
+   * `true` のときだけ、`lastUnpushedWorkObservation` を「止まる直前の観測」と
+   * 読んでよい。`false` は「届いていない、または判定できない」であって、
+   * **未 push の作業が無かったことを意味しない**（送信は best-effort）。
+   *
+   * **`sessionMissingSince` が在るときだけ載る**（単独では出ない）。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（真上と同じ断り）。
+   */
+  shutdownObservationArrivedAfterSwap: z.boolean().optional(),
+  /**
    * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
    * という助言**（Issue #567。`packages/core/src/manager.ts` の
    * `ManagerSummary.turnEndedAt`）。

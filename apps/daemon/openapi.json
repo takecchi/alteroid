@@ -12152,6 +12152,9 @@
                             "type": "string",
                             "enum": ["resume-failed", "unlisted"]
                           },
+                          "shutdownObservationArrivedAfterSwap": {
+                            "type": "boolean"
+                          },
                           "turnEndedAt": {
                             "type": "string"
                           },
@@ -12716,6 +12719,9 @@
                         "sessionMissingKind": {
                           "type": "string",
                           "enum": ["resume-failed", "unlisted"]
+                        },
+                        "shutdownObservationArrivedAfterSwap": {
+                          "type": "boolean"
                         },
                         "turnEndedAt": {
                           "type": "string"
