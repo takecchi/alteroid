@@ -183,6 +183,7 @@ import type {
   PendingApproval,
   ScheduleSpec,
   ScheduledRequest,
+  UnpushedWorkObservationSource,
 } from './schema.js';
 import { describeRevisionStatus } from './revision.js';
 import {
@@ -3501,6 +3502,55 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
   return null;
 }
 
+/** `observation.worktrees` を1行にする（`describeUnpushedWorkObservation` の両方の分岐が使う）。 */
+function formatUnpushedWorkObservationWorktrees(
+  worktrees: readonly { relativePath: string; branch: string | null }[],
+): string {
+  return worktrees.length === 0
+    ? '見つかった作業ツリー0本'
+    : worktrees
+        .map(
+          (wt) =>
+            `${wt.relativePath}: branch=${wt.branch === null ? 'null（取れなかった）' : wt.branch}`,
+        )
+        .join(' / ');
+}
+
+/**
+ * `lastUnpushedWorkObservation.source` を人間可読な1句にする（クローンの
+ * 指摘を受けて追加）。**`undefined` は「その経路だ」と見なさない**——
+ * この欄を書かなかった版・呼び出しが在ったことをそのまま名乗る
+ * （`unpushedWorkObservationSourceSchema` の doc「無いことは、どれかの
+ * 経路だと見なさない」と同じ注意）。
+ */
+function describeUnpushedWorkObservationSource(
+  source: UnpushedWorkObservationSource | undefined,
+): string {
+  if (source === undefined) {
+    return '経路不明（この欄を書かない版が残した行、または経路を渡さなかった呼び出し）';
+  }
+  switch (source) {
+    case 'stop-refusal':
+      return 'manager_stop（running・非force）の断り';
+    case 'report':
+      return 'ターンが report で終わったとき';
+    case 'tool_use':
+      return 'Bash で git push か新しい枝を作る操作を検出したとき';
+    case 'auto-fold':
+      return 'done を自動で畳む前の安全弁（auto-fold）';
+    case 'vacate':
+      return 'runner を意図して空ける直前（vacate）';
+    case 'closed':
+      return 'runner が closed を出す直前に先取り';
+    case 'shutdown':
+      return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
+    default: {
+      const exhaustive: never = source;
+      throw new Error(`未知の unpushedWork observation source: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
 /**
  * `manager_stop`（running・非 force）の断り、委譲のターンが `report` で
  * 終わったとき（Issue #1266 の (4)）、または Bash で `git push` か新しい枝を
@@ -3541,10 +3591,60 @@ function describeResetTimeSkew(manager: ManagerSummary): string | null {
  * `#observeUnpushedWorkOnce` の doc）。**時刻だけを出すと、読み手はそれを
  * 「いまの状態」と誤読する**——だから毎回、どの経路が更新するかを行の中に
  * 書く（JSDoc に書いてもクローンには届かない。`resources: true` の説明文と
- * 同じ理由）。
+ * 同じ理由）。**このパラグラフの生の日本語文言はテスト
+ * （`tools.test.ts` の「manager_list は observed な未push観測」）が固定
+ * しているので、書き換える前に確かめること。**
+ *
+ * ## 器の入れ替え（redeploy 等）で応答不能な委譲は、別の言い方をする
+ * （クローンの指摘を受けて追加）
+ *
+ * `manager.sessionMissingSince !== undefined`（＝この委譲はいま器の入れ替え
+ * 等で応答不能）なら、上の「残る族」の一般論ではなく、**この委譲について
+ * 「止まる直前の観測が届いたか」を専用に言う**——`manager.
+ * shutdownObservationArrivedAfterSwap` の doc のとおり判定する。
+ *
+ * - **届いた**（`true`）: 「器が止まる直前（`at`）の観測」と言い切る。
+ * - **届いていない**（`false`。観測が無い／古いセッションのもの／`source`
+ *   が `'shutdown'` ではない、のどれか——読み手には区別しない）:
+ *   「届いていない。best-effort の送信のため、未 push が無かったことを
+ *   意味しない」と明示したうえで、**いま表示中の観測**（在れば `at` と
+ *   `source`、無ければ「無い」）を添える。**0件の値を新しく作らない**
+ *   ——観測が無いときに偽の `at`/`source` を書かない。
+ *
+ * **観測そのものが `undefined` でも、この分岐では `null` を返さない**
+ * （下の通常分岐と違う）——器の入れ替えで応答不能という、この委譲にとって
+ * いちばん重要な瞬間に何も言わないと、「0件」と「沈黙」が読み手からは
+ * 区別できなくなる（この関数を追加した理由そのものと同じ穴）。
  */
 function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
   const observation = manager.lastUnpushedWorkObservation;
+
+  if (manager.sessionMissingSince !== undefined) {
+    if (manager.shutdownObservationArrivedAfterSwap === true && observation !== undefined) {
+      if (observation.kind === 'unavailable') {
+        return (
+          `  未push観測: 器が止まる直前（${observation.at}）に取ろうとしたが取れなかった: ` +
+          observation.reason
+        );
+      }
+      return (
+        `  未push観測: 器が止まる直前（${observation.at}）の観測: ` +
+        formatUnpushedWorkObservationWorktrees(observation.worktrees)
+      );
+    }
+    const shown =
+      observation === undefined
+        ? '表示中の観測は無い（一度も取れていない）'
+        : observation.kind === 'unavailable'
+          ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
+          : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}`;
+    return (
+      '  ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
+      '（best-effort の送信のため。未pushが無かったことを意味しない）。' +
+      shown
+    );
+  }
+
   if (observation === undefined) return null;
   const provenance =
     'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
@@ -3556,16 +3656,10 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
       `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
     );
   }
-  const worktrees =
-    observation.worktrees.length === 0
-      ? '見つかった作業ツリー0本'
-      : observation.worktrees
-          .map(
-            (wt) =>
-              `${wt.relativePath}: branch=${wt.branch === null ? 'null（取れなかった）' : wt.branch}`,
-          )
-          .join(' / ');
-  return `  未push観測（${provenance}、${observation.at}）: ${worktrees}`;
+  return (
+    `  未push観測（${provenance}、${observation.at}）: ` +
+    formatUnpushedWorkObservationWorktrees(observation.worktrees)
+  );
 }
 
 /**
@@ -9370,6 +9464,7 @@ export function createCloneTools(context: ToolContext) {
           const unpushedWork = await pool
             .unpushedWork(managerId, {
               signal: AbortSignal.timeout(MANAGER_STOP_UNPUSHED_WORK_TIMEOUT_MS),
+              source: 'stop-refusal',
             })
             .catch((error: unknown): ManagerUnpushedWork => ({
               kind: 'unavailable',

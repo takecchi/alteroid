@@ -3604,17 +3604,79 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  * `grep -rn 'unpushedWork' --include=*.ts packages/ apps/` で当たる。
  * **この欄が在ることを「常に最新の枝が分かる」とは読まないこと。**
  *
+ * ## `source`（どの経路で取ったか。クローンの指摘を受けて追加）
+ *
+ * **時刻（`at`）だけでは足りない。** 器の入れ替えで委譲のセッションを見失った
+ * とき（`ManagerRecord.sessionMissingSince` が立つ）、台帳にはその**前**の
+ * ターン・報告が残した観測がそのまま残る——読み手はそれを「入れ替わった器が
+ * 止まる直前にも0件だった」と誤読しうる（実際には、その観測はもっと前の、
+ * 生きていたセッションの間に取られたものでしかない）。**`source` は、この
+ * 観測を残した経路そのものを名乗る**——`unpushedWorkObservationSourceSchema`
+ * の各値を見よ。
+ *
+ * **`.optional()` にしてある。** この欄を書かなかった版が書いた行（この
+ * `source` を足す前に書かれた既存の行、または呼び出し元が明示的に
+ * source を渡さなかった回）には無い——**無いことを、どれかの経路だと
+ * 見なさない。**「不明」のまま扱う（`AGENTS.md`「取れない軸に0の行を作る」
+ * と同じ注意——ここでは「経路 0（無い）」という値を作らず、欄ごと省く）。
+ *
+ * **読む側の使い方**（`tools.ts` の `describeUnpushedWorkObservation` が
+ * 実装を持つ）: 委譲がいま器の入れ替えで応答不能（`sessionMissingSince` が
+ * 立っている）なら、`source === 'shutdown'` かつ `at` がいまの
+ * `runnerSessionSince`（このセッションが今の宛先に置かれたと確かめた時刻）
+ * 以降であることを確かめてから、初めて「止まる直前の観測が届いた」と言う。
+ * 満たさなければ（`source` が無い・古いセッションのものである・値そのものが
+ * 別経路である）、「届いていない」側に倒す。
+ *
  * ## 答えないこと
  *
  * この欄が答えるのは「どこ（どの枝）を見ればよいか」までである。**「成果が
  * 届いたか」（push 済みか・PR が在るか）は含まない**——それは `git ls-remote`
  * / `gh pr list` の側の答えであって、この欄の役割ではない。
  */
+/**
+ * `lastUnpushedWorkObservation` を残した経路（クローンの指摘を受けて追加）。
+ *
+ * **本文の「残る族」が挙げる5つの発火点は、実は7つの書き込み経路に対応する**
+ * ——`pool.unpushedWork()`（`ManagerPool` の公開メソッド）を経由する4つ
+ * （呼び出し元が違うだけで同じ実装 `#recordUnpushedWorkObservation` に
+ * 収束する）と、runner が先取りして運ぶ直接書き込みの2つに分かれる:
+ *
+ * | 値 | 書き込む場所 | 発火点 |
+ * | --- | --- | --- |
+ * | `'stop-refusal'` | `tools.ts`（`manager_stop` running・非force の断り） | Issue #1037 |
+ * | `'report'` | `manager.ts` `case 'report'` → `#observeUnpushedWorkOnce` | Issue #1266 (4) |
+ * | `'tool_use'` | `manager.ts` `case 'tool_use'` → `#observeUnpushedWorkOnce` | Issue #1376 |
+ * | `'auto-fold'` | `manager.ts` `#autoFoldOne`（`done` を自動で畳む前の安全弁） | Issue #1394 段⑥ |
+ * | `'vacate'` | `manager.ts` `vacate()`（`runner.stop()` 直前の握手） | Issue #1266 候補(2)。#1453/#1472 |
+ * | `'closed'` | `manager.ts` `case 'closed'`（runner の `#finish()` が先取り） | Issue #1266 候補(2) |
+ * | `'shutdown'` | `manager.ts` `case 'shutdown_unpushed_work'`（runner の `stop()` が先取り） | Issue #1266 候補(C) |
+ *
+ * **`'auto-fold'` と `'vacate'` は、本文の「残る族」1〜5の番号付けには
+ * 出てこない。** どちらも `pool.unpushedWork()` を呼ぶので観測は残るが、
+ * 「断り」でも「終端」でもないので5つの発火点の説明には数えていなかった
+ * ——`source` を足すために全呼び出し元を洗い直して見つかった、既存の
+ * 数え漏れである（本文は直していない。数え上げの持ち主をここへ移した）。
+ */
+export const unpushedWorkObservationSourceSchema = z.enum([
+  'stop-refusal',
+  'report',
+  'tool_use',
+  'auto-fold',
+  'vacate',
+  'closed',
+  'shutdown',
+]);
+
+export type UnpushedWorkObservationSource = z.infer<typeof unpushedWorkObservationSourceSchema>;
+
 export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('observed'),
     /** 観測した時刻。 */
     at: isoDateTime,
+    /** どの経路で取ったか（`unpushedWorkObservationSourceSchema` の doc）。 */
+    source: unpushedWorkObservationSourceSchema.optional(),
     /** 探索の起点（`unpushedWorkResultSchema.cwd` の写し）。 */
     cwd: z.string(),
     /** 見つかった作業ツリーぶんの枝名。0本のこともある。 */
@@ -3624,6 +3686,8 @@ export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
     kind: z.literal('unavailable'),
     /** 確かめようとした時刻。 */
     at: isoDateTime,
+    /** どの経路で取ろうとしたか（`unpushedWorkObservationSourceSchema` の doc）。 */
+    source: unpushedWorkObservationSourceSchema.optional(),
     /** 取れなかった理由（`ManagerUnpushedWork` の `reason` の写し）。 */
     reason: z.string(),
   }),

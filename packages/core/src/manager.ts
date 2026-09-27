@@ -89,6 +89,7 @@ import type {
   JournalEntryInput,
   LastUnpushedWorkObservation,
   TextMarkup,
+  UnpushedWorkObservationSource,
   WorkspaceLocator,
 } from './schema.js';
 import type { Stores } from './store.js';
@@ -396,6 +397,34 @@ export interface ManagerSummary {
    * という観測より強い。
    */
   sessionMissingKind?: SessionMissingKind;
+  /**
+   * **`sessionMissingSince` が立っているとき（＝この委譲は器の入れ替え等で
+   * いま応答不能）だけ載る、もう1つの companion 欄**（クローンの指摘を
+   * 受けて追加）。`sessionMissingSince` が無ければ**欄ごと消える**——判定
+   * そのものが要らない状態だからである。
+   *
+   * **答えるのは「止まる直前（＝この委譲がいまの宛先を失った、その時点）の
+   * 未 push 観測が、いま台帳に乗っているか」だけである。** `true` なら
+   * `job.lastUnpushedWorkObservation` は **`source: 'shutdown'` かつ、いまの
+   * （失われた）セッションが置かれてから取られた**——`describeUnpushedWorkObservation`
+   * （`tools.ts`）はこのときだけ「器が止まる直前の観測」と言ってよい。
+   *
+   * **`false` の意味は2つある（区別しない）。** (a) 観測そのものが無い、
+   * (b) 観測はあるが `source` が `'shutdown'` ではない、または
+   * `runnerSessionSince`（このセッションが置かれたと確かめた時刻）より
+   * **前**——つまり、いま失った器より**前**のセッションが残した観測で
+   * ある。どちらも「止まる直前の値だとは言えない」という一点では同じ
+   * なので、読み手が取る一手（0件と混同しない・古いかもしれないと疑う）
+   * も同じである。**判定できない場合もここへ倒す**（`runnerSessionSince`
+   * 自体が無い——デーモンを作り直した直後で像が新しく、比較する基準が
+   * 無いとき）——「不明」を「届いた」の側に倒さない。
+   *
+   * **既存の観測は変わらず出す。** この欄は「新しい主張」を1つ足すだけで、
+   * `lastUnpushedWorkObservation` 自体の値・欄の有無は一切変えない
+   * （`workspaceAfterSwap` が `cloneHints` の有無を別欄で言うのと同じ
+   * 作法——判定と生データを混ぜない）。
+   */
+  shutdownObservationArrivedAfterSwap?: boolean;
   /**
    * **デーモンが生ログの末尾を読んで計算した、直近のターンが終わっているらしい
    * という助言**（Issue #567）。`probeTurnEnd`（このファイル）が見つけた行の
@@ -818,19 +847,26 @@ export type ManagerUnpushedWork =
 
 /**
  * `ManagerUnpushedWork` を台帳の形（`LastUnpushedWorkObservation`）へ変換
- * するだけ（副作用なし）。`#recordUnpushedWorkObservation`（既存4つの
- * 呼び出し元）と `case 'closed'`（Issue #1266 候補(2)、5つ目の呼び出し元
- * ——`runner.ts` の `#finish()` が先取りして運ぶ）の両方から使う——変換
- * ロジックを2箇所で手で合わせない。
+ * するだけ（副作用なし）。`#recordUnpushedWorkObservation`（`pool.unpushedWork()`
+ * を経由する4つの呼び出し元）と `case 'closed'` / `case
+ * 'shutdown_unpushed_work'`（runner が先取りして運ぶ直接書き込みの2つ）の
+ * 両方から使う——変換ロジックを複数箇所で手で合わせない。
+ *
+ * **`source` は呼び出し元が明示すること（クローンの指摘を受けて追加）。**
+ * 省けば `undefined`——「不明」のまま台帳へ残る（`unpushedWorkObservationOf`
+ * 自身は推測で埋めない）。値の意味は `schema.ts` の
+ * `unpushedWorkObservationSourceSchema` の doc を見よ。
  */
 function unpushedWorkObservationOf(
   outcome: ManagerUnpushedWork,
   at: string,
+  source: UnpushedWorkObservationSource | undefined,
 ): LastUnpushedWorkObservation {
   return outcome.kind === 'ok'
     ? {
         kind: 'observed',
         at,
+        ...(source === undefined ? {} : { source }),
         // **出してよい範囲を継ぐ**（`observedWorktreeBranchSchema` の doc）。
         // `unpushedCommitCount` 等は書き写さない——この欄が答えるのは
         // 「どの枝を見ればよいか」までである。`remoteOrigin` は
@@ -843,7 +879,12 @@ function unpushedWorkObservationOf(
           ...(worktree.remoteOrigin === undefined ? {} : { remoteOrigin: worktree.remoteOrigin }),
         })),
       }
-    : { kind: 'unavailable', at, reason: outcome.reason };
+    : {
+        kind: 'unavailable',
+        at,
+        ...(source === undefined ? {} : { source }),
+        reason: outcome.reason,
+      };
 }
 
 /**
@@ -1850,14 +1891,18 @@ export interface ManagerPool {
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
    * 未 push の実装・未コミットの変更を runner に問い合わせる。**呼び出し元は
-   * 3つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
+   * 5つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
    * か」を実物の数字で言うためだけに呼ぶ（Issue #1039）、(b) ターンが
    * `report` で終わったとき、その委譲について1回だけ台帳へ観測を残すため
    * `#observeUnpushedWorkOnce`（`case 'report'`）が呼ぶ（Issue #1266
    * の (4)）、(c) Bash で `git push` か、新しい枝を作る操作（`git checkout
    * -b` 等）を検出したとき、同じ `#observeUnpushedWorkOnce`（`case
    * 'tool_use'`）が呼ぶ（Issue #1376 の続き。前者は push を検出したときの
-   * 続き、後者は枝ができたときを足した分）。**`manager_list` からは呼ばない**
+   * 続き、後者は枝ができたときを足した分）、(d) `#autoFoldOne`（`done` を
+   * 自動で畳む前の安全弁。Issue #1394 段⑥）、(e) `vacate()`（`runner.stop()`
+   * 直前の握手。Issue #1266 候補(2)。#1453/#1472）。**(d)(e) は `source` を
+   * 足すために全呼び出し元を洗い直して見つかった、この doc の数え漏れ
+   * だった**（クローンの指摘を受けて直した）。**`manager_list` からは呼ばない**
    * ——この一覧のために自動で
    * 往復を足さない、という既存の作法（`runners()` の doc）と同じ理由。
    * **`force: true` の経路からも呼ばない**（もう決めた後なので、往復を払う
@@ -1875,8 +1920,19 @@ export interface ManagerPool {
    * 省略可能にすると「この口を持たない」と「観測できなかった」が同じ形に
    * 潰れる。spec 生成専用のスタブ（`apps/daemon/src/openapi.ts`）へは1行
    * 足すだけで済む。
+   *
+   * **`options.source`（クローンの指摘を受けて追加）。** 台帳に残す観測へ、
+   * 呼び出し元自身の経路を刻む——`schema.ts` の
+   * `unpushedWorkObservationSourceSchema` の doc を見よ。**この引数は
+   * `.optional()` のまま残す**（`ManagerPool` の外部実装・spec 生成用の
+   * スタブを壊さないため）——省いた呼び出しは `source` 無しの観測になる
+   * （「不明」のまま。0件や偽の経路名を作らない）。**この関数の内部の5つの
+   * 呼び出し元は全員、必ず明示する。**
    */
-  unpushedWork(managerId: string, options?: { signal?: AbortSignal }): Promise<ManagerUnpushedWork>;
+  unpushedWork(
+    managerId: string,
+    options?: { signal?: AbortSignal; source?: UnpushedWorkObservationSource },
+  ): Promise<ManagerUnpushedWork>;
   /**
    * この archive id が、いまデーモンが走行中として抱えている（`#records` に
    * 居る）マネージャーのどれかの退避なら、その managerId を返す（#698）。
@@ -6024,6 +6080,7 @@ class Pool implements ManagerPool {
       // 増やさない）——`case 'report'` の fire-and-forget 観測と同じ「安全側に
       // 短く取った未検証の既定値」という理由がそのまま当てはまる。
       signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+      source: 'auto-fold',
     }).catch((error: unknown): ManagerUnpushedWork => ({
       kind: 'unavailable',
       reason: `確かめようとして例外が飛んだ: ${String(error)}`,
@@ -6230,7 +6287,7 @@ class Pool implements ManagerPool {
 
   async unpushedWork(
     managerId: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; source?: UnpushedWorkObservationSource },
   ): Promise<ManagerUnpushedWork> {
     // **`#records` にしか見ない。** `manager_stop` の running 断りから呼ばれる
     // ときは常に走行中なので像が在るはずだが、念のため無ければ「確かめられ
@@ -6250,7 +6307,7 @@ class Pool implements ManagerPool {
       return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
     }
     const outcome = await this.#probeUnpushedWork(managerId, record, options);
-    await this.#recordUnpushedWorkObservation(record, outcome);
+    await this.#recordUnpushedWorkObservation(record, outcome, options?.source);
     return outcome;
   }
 
@@ -6292,16 +6349,18 @@ class Pool implements ManagerPool {
    * という既存の書き方（`case 'archive'` 等）をそのままなぞる——新しい書き込み
    * 経路を作らない。
    *
-   * ⛔ **ここが呼ばれるのは4つの経路だけである**——`manager_stop`
-   * （running・非 force）の断り（`tools.ts`）、ターンが `report` で終わった
-   * とき、Bash で `git push` を検出したとき（後の2つはどちらも
-   * `#observeUnpushedWorkOnce`。前者は `case 'report'` から、Issue #1266 の
-   * (4)。後者は `case 'tool_use'` から、Issue #1376 の続き）、そして日常の
-   * redeploy で runner が `closed` を出さずに畳む直前（`case
+   * ⛔ **ここが直接呼ばれるのは2箇所だけである**——`unpushedWork()`（公開
+   * メソッド。`source` はそちらの `options.source` をそのまま受け取る）と、
+   * 日常の redeploy で runner が `closed` を出さずに畳む直前（`case
    * 'shutdown_unpushed_work'`、Issue #1266 候補(C)。`runner.ts` の
-   * `RunnerSession#stop()` が `Host#shutdown()` 経由のときだけ運ぶ）。**この
-   * 4つ目は best-effort であり、届かない回はこの関数自体が呼ばれない**
-   * （`shutdown_unpushed_work` の doc）。
+   * `RunnerSession#stop()` が `Host#shutdown()` 経由のときだけ運ぶ。**この
+   * 経路は best-effort であり、届かない回はこの関数自体が呼ばれない**
+   * ——`shutdown_unpushed_work` の doc）。
+   *
+   * `unpushedWork()` 自体は4つの呼び出し元を持つ（`schema.ts` の
+   * `unpushedWorkObservationSourceSchema` の doc の表——`stop-refusal` /
+   * `report` / `tool_use` / `auto-fold` / `vacate`。前2つは
+   * `#observeUnpushedWorkOnce` 経由）。
    *
    * **`force: true` で止めたとき・`manager_list` 自身は、どの呼び出し元から
    * も `unpushedWork()` 自体が呼ばれないので、この関数にも来ない**
@@ -6310,6 +6369,11 @@ class Pool implements ManagerPool {
    * Issue #1266 候補(2)。枠落ち・失敗の経路）は、この関数を経由せず自分で
    * 同じ変換（{@link unpushedWorkObservationOf}）と同じ上書きガードを直接
    * 使う。理由は下の「上書きガード」を見よ）。
+   *
+   * **`source`（クローンの指摘を受けて追加）。** 呼び出し元が自分の経路を
+   * 名乗る——省く経路は無い（このメソッドの2つの呼び出し元は両方とも
+   * 明示的に渡す）。値の意味は `schema.ts` の
+   * `unpushedWorkObservationSourceSchema` の doc を見よ。
    *
    * ## 上書きガード（Issue #1266 候補(2)）
    *
@@ -6325,14 +6389,17 @@ class Pool implements ManagerPool {
    * ある（このガードがあるので、どちらが先に着いても新しいほうが勝つ）。
    * 比較は `at`（ISO8601・UTC・`Z` 終端）の辞書式比較——`runnerBacklog()` の
    * `observedAt` 比較と同じ作法。同点は新しいほうを勝たせる（`>`
-   * 厳密な超過だけを弾く条件にする）。
+   * 厳密な超過だけを弾く条件にする）。**`source` はこの比較に加わらない**
+   * ——新しければ経路が何であれ勝つ（古い観測を「経路が偉いから」残す形は
+   * 作らない）。
    */
   async #recordUnpushedWorkObservation(
     record: ManagerRecord,
     outcome: ManagerUnpushedWork,
+    source: UnpushedWorkObservationSource | undefined,
   ): Promise<void> {
     const at = new Date(this.#now()).toISOString();
-    const observation = unpushedWorkObservationOf(outcome, at);
+    const observation = unpushedWorkObservationOf(outcome, at, source);
     if (
       !isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)
     ) {
@@ -6383,12 +6450,20 @@ class Pool implements ManagerPool {
    * `unpushedWork()` の中で `{ kind: 'unavailable', reason }` に畳まれ、
    * `#recordUnpushedWorkObservation` がそのまま台帳へ書く——ここでは特別
    * 扱いしない。
+   *
+   * ## `source`（クローンの指摘を受けて追加）
+   *
+   * 呼び出し元（`case 'report'` / `case 'tool_use'`）が自分のトリガーを
+   * 名乗る——この関数は2つのトリガーで実装を共有するが、**台帳に残る
+   * `source` はトリガーごとに正しく分かれる**（同じ関数を共有している
+   * ことと、書き込まれる観測の経路が同じであることは別である）。
    */
-  #observeUnpushedWorkOnce(managerId: string): void {
+  #observeUnpushedWorkOnce(managerId: string, source: 'report' | 'tool_use'): void {
     if (this.#unpushedWorkObservationInFlight.has(managerId)) return;
     this.#unpushedWorkObservationInFlight.add(managerId);
     void this.unpushedWork(managerId, {
       signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+      source,
     })
       .catch(() => undefined)
       .finally(() => {
@@ -7199,6 +7274,7 @@ class Pool implements ManagerPool {
          */
         await this.unpushedWork(job.id, {
           signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+          source: 'vacate',
         }).catch(() => undefined);
         const { outcome } = await this.#confirmStoppedAndReleaseLease(record, runner, job.id);
         /*
@@ -9789,7 +9865,7 @@ class Pool implements ManagerPool {
         // 止めたマネージャーとして扱い、`record.job.status` も動かさず
         // `#emit()` もしない——同じ理由でここも呼ばない（止めた委譲へ
         // 向けて runner との往復を新たに起こす意味が無い）。
-        this.#observeUnpushedWorkOnce(event.managerId);
+        this.#observeUnpushedWorkOnce(event.managerId, 'report');
         /*
          * **借りていた起こし直しを、ここで返す**（`#settleUsageWake`）。
          *
@@ -10234,7 +10310,7 @@ class Pool implements ManagerPool {
               typeof command === 'string' &&
               (bashCommandLooksLikeGitPush(command) || bashCommandLooksLikeGitBranchCreate(command))
             ) {
-              this.#observeUnpushedWorkOnce(event.managerId);
+              this.#observeUnpushedWorkOnce(event.managerId, 'tool_use');
             }
           }
         } catch {
@@ -11412,7 +11488,7 @@ class Pool implements ManagerPool {
          */
         if (event.unpushedWork !== undefined) {
           const at = new Date(this.#now()).toISOString();
-          const observation = unpushedWorkObservationOf(event.unpushedWork, at);
+          const observation = unpushedWorkObservationOf(event.unpushedWork, at, 'closed');
           if (
             isUnpushedWorkObservationAtLeastAsNewAs(
               observation,
@@ -11574,21 +11650,23 @@ class Pool implements ManagerPool {
          * （`runner-protocol.ts` の同イベントの doc・`AGENTS.md`「取れない軸に
          * 0の行を作る」と同じ注意）。
          *
-         * **`#recordUnpushedWorkObservation`（既存4呼び出し元と同じ実装）へ
-         * そのまま渡す。** `event.unpushedWork` の型
-         * （`runnerUnpushedWorkOutcomeSchema`）は `ManagerUnpushedWork` と
-         * 構造的に一致する——ここでは他に同時に書く欄が無いので、`case
-         * 'closed'` のように変換・上書きガード・`#persist` を自前で並べる
-         * 必要が無く、既存の関数（変換は {@link unpushedWorkObservationOf}、
-         * 上書きガードは {@link isUnpushedWorkObservationAtLeastAsNewAs}、
-         * 両方とも自分で `#persist` まで済ませる）へそのまま委ねられる。
+         * **`#recordUnpushedWorkObservation`へそのまま渡す。**
+         * `event.unpushedWork` の型（`runnerUnpushedWorkOutcomeSchema`）は
+         * `ManagerUnpushedWork` と構造的に一致する——ここでは他に同時に書く
+         * 欄が無いので、`case 'closed'` のように変換・上書きガード・
+         * `#persist` を自前で並べる必要が無く、既存の関数（変換は
+         * {@link unpushedWorkObservationOf}、上書きガードは
+         * {@link isUnpushedWorkObservationAtLeastAsNewAs}、両方とも自分で
+         * `#persist` まで済ませる）へそのまま委ねられる。**`source: 'shutdown'`
+         * を明示する**（クローンの指摘を受けて追加。`schema.ts` の
+         * `unpushedWorkObservationSourceSchema` の doc を見よ）。
          *
          * **`record.job.status` には触れない。** この事象は `stop()` が
          * `closed` を出さない設計そのものを変えていない——観測を積み増す
          * だけで、`status`・`lease`・`runnerId` の不一致チェックのような
          * `case 'closed'` が持つ他の判断は一切持ち込まない。
          */
-        await this.#recordUnpushedWorkObservation(record, event.unpushedWork);
+        await this.#recordUnpushedWorkObservation(record, event.unpushedWork, 'shutdown');
         return;
       }
 
@@ -13611,6 +13689,16 @@ function summaryOf(
           ...(record.sessionMissingKind === undefined
             ? {}
             : { sessionMissingKind: record.sessionMissingKind }),
+          // **同じ companion の作法（クローンの指摘を受けて追加）。**
+          // `sessionMissingSince` が立っているときだけ計算し、判定できない
+          // とき（`record.runnerSessionSince` 自体が無い）も `false`
+          // （＝届いていない）側に倒す——`ManagerSummary.
+          // shutdownObservationArrivedAfterSwap` の doc「判定できない場合も
+          // ここへ倒す」。
+          shutdownObservationArrivedAfterSwap:
+            job.lastUnpushedWorkObservation?.source === 'shutdown' &&
+            record.runnerSessionSince !== undefined &&
+            job.lastUnpushedWorkObservation.at >= record.runnerSessionSince,
         }),
     // **同上（Issue #567）。** 呼ぶ側は `record.turnEndedAt` 等をそのまま渡せば
     // よい（像が正本である）。3欄は `probeTurnEnd` の1回の呼び出しで一緒に

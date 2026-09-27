@@ -11538,6 +11538,213 @@ describe('生存確認が観測した sessions から sessionMissingSince を立
 });
 
 /**
+ * `ManagerSummary.shutdownObservationArrivedAfterSwap`（クローンの指摘を
+ * 受けて追加。PR #1266 候補C へのコメント）。
+ *
+ * **動機の再確認。** 器の入れ替えでいま応答不能な委譲（`sessionMissingSince`
+ * が立つ）の `lastUnpushedWorkObservation` は、**その入れ替えより前の、もっと
+ * 古いターン・セッションが残したものかもしれない**——時刻（`at`）だけでは
+ * 「これは止まる直前の値だ」と言い切れない。この欄は、`source: 'shutdown'`
+ * かつ `at` が「いまの（失われた）セッションが置かれた時刻
+ * （`runnerSessionSince`）」以降であることまで確かめてから `true` にする。
+ *
+ * 足場は `withEntrySessions`（直前の describe ブロックの薄い皮）をそのまま
+ * 使う——`sessions: []` を差し込むと `#noteMissingSessions` が
+ * `sessionMissingSince` を立てる、という同じ経路で `sessionMissingSince` を
+ * 作る。
+ */
+describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受けて追加。PR #1266 候補C）', () => {
+  function withEntrySessions(
+    registry: RunnerRegistry,
+    patches: () => ReadonlyMap<string, { sessions: readonly string[]; sessionsObservedAt: string }>,
+  ): RunnerRegistry {
+    return {
+      list: () => registry.list(),
+      get: (id) => registry.get(id),
+      select: (input) => registry.select(input),
+      register: (source) => registry.register(source),
+      unregister: (label) => registry.unregister(label),
+      vacate: (id) => registry.vacate(id),
+      noteManagerFailed: (id) => registry.noteManagerFailed(id),
+      subscribe: (onOpen) => registry.subscribe(onOpen),
+      stop: () => registry.stop(),
+      entries: () =>
+        registry.entries().map((entry) => {
+          const patch = patches().get(entry.label);
+          return patch === undefined ? entry : { ...entry, ...patch };
+        }),
+    };
+  }
+
+  it('runnerSessionSince より後に取れた source:shutdown の観測は「届いた」と判定する', async () => {
+    let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+    const managerId = summary.managerId;
+
+    // **止まる直前に取れた観測**（runnerSessionSince より後）。
+    clock += 5_000;
+    a.unpushedWorkResult = {
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '.', branch: 'feat/shutdown-arrived' }],
+    };
+    await pool.unpushedWork(managerId, { source: 'shutdown' });
+
+    // 器の入れ替えを観測させる。
+    clock += 10_000;
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === managerId);
+
+    expect(found?.sessionMissingSince).toBeDefined();
+    expect(found?.shutdownObservationArrivedAfterSwap).toBe(true);
+    expect(found?.lastUnpushedWorkObservation).toMatchObject({
+      source: 'shutdown',
+      worktrees: [{ branch: 'feat/shutdown-arrived' }],
+    });
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('runnerSessionSince より前（古いセッションが残した）source:shutdown の観測は「届いていない」に倒す', async () => {
+    let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+    const managerId = summary.managerId;
+
+    // **古いセッションの間**に shutdown 観測が残る（例えば前回の redeploy で
+    // 一度失って、resume で戻ってきた回）。
+    clock += 1_000;
+    a.unpushedWorkResult = {
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '.', branch: 'feat/stale-shutdown' }],
+    };
+    await pool.unpushedWork(managerId, { source: 'shutdown' });
+
+    // **新しいセッションが置かれる**（`case 'session'` が
+    // `runnerSessionSince` を更新する）——`lastUnpushedWorkObservation` は
+    // 触れない。
+    clock += 2_000;
+    a.onEvent?.({ type: 'session', managerId, sessionId: 'sess-resumed' });
+    await expect
+      .poll(async () => (await stores.jobs.listJobs())[0]?.sessionId, { timeout: 2000 })
+      .toBe('sess-resumed');
+
+    // その後の redeploy で、今度は shutdown 観測が届かないまま器の入れ替えを
+    // 観測する。
+    clock += 10_000;
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === managerId);
+
+    expect(found?.sessionMissingSince).toBeDefined();
+    // **ここが本題**——観測自体は残っている（`source: 'shutdown'`）が、
+    // `runnerSessionSince`（新しいセッションが置かれた時刻）より**前**なので
+    // 「届いた」とは言わない。
+    expect(found?.shutdownObservationArrivedAfterSwap).toBe(false);
+    expect(found?.lastUnpushedWorkObservation).toMatchObject({
+      source: 'shutdown',
+      worktrees: [{ branch: 'feat/stale-shutdown' }],
+    });
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('source が shutdown 以外（例: report）の観測は、runnerSessionSince より後でも「届いていない」に倒す', async () => {
+    let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+    const managerId = summary.managerId;
+
+    clock += 5_000;
+    a.unpushedWorkResult = { cwd: '/work/project', worktrees: [] };
+    await pool.unpushedWork(managerId, { source: 'report' });
+
+    clock += 10_000;
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === managerId);
+
+    expect(found?.sessionMissingSince).toBeDefined();
+    expect(found?.shutdownObservationArrivedAfterSwap).toBe(false);
+    expect(found?.lastUnpushedWorkObservation).toMatchObject({ source: 'report' });
+
+    await pool.stop();
+    await real.stop();
+  });
+
+  it('sessionMissingSince が立っていなければ欄ごと消える（判定そのものが要らない）', async () => {
+    let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+    const managerId = summary.managerId;
+
+    clock += 5_000;
+    a.unpushedWorkResult = {
+      cwd: '/work/project',
+      worktrees: [{ relativePath: '.', branch: 'feat/normal' }],
+    };
+    await pool.unpushedWork(managerId, { source: 'shutdown' });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === managerId);
+
+    expect(found?.sessionMissingSince).toBeUndefined();
+    expect(found?.shutdownObservationArrivedAfterSwap).toBeUndefined();
+
+    await pool.stop();
+    await registry.stop();
+  });
+});
+
+/**
  * `ManagerSummary.sessionMissingKind`（#579）—— `sessionMissingSince` が**何を
  * 確かめた印なのか**を名乗る欄そのものの歯。
  *

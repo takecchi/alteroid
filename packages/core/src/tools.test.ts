@@ -6572,6 +6572,110 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **クローンの指摘（PR #1777 へのコメント）を受けて追加。** 器の入れ替え
+   * （redeploy 等）でいま応答不能な委譲（`sessionMissingSince` が立つ）に
+   * 残っている観測は、器が入れ替わる**前**の、もっと古いターンのものかも
+   * しれない——読み手はそれを「入れ替わった器が止まる直前にも0件だった」と
+   * 誤読しうる。この4本は、その誤読を防ぐ専用の分岐（`sessionMissingSince`
+   * が立っているときだけの言い方）を固定する。
+   */
+  it('manager_list は器の入れ替えで応答不能・shutdown 由来の観測が届いていれば「止まる直前の観測」と言い切る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
+    target.shutdownObservationArrivedAfterSwap = true;
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-27T00:00:09.000Z',
+      source: 'shutdown',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [{ relativePath: '.', branch: 'feat/arrived-after-swap' }],
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('器が止まる直前');
+    expect(reply).toContain('2026-09-27T00:00:09.000Z');
+    expect(reply).toContain('feat/arrived-after-swap');
+    // **「届いていない」の側の文言は出ない**——両立させると読み手がどちらを
+    // 信じればよいか分からなくなる。
+    expect(reply).not.toContain('届いていない');
+  });
+
+  it('manager_list は器の入れ替えで応答不能・shutdown 側が unavailable でも「届いた」側で言う（取れなかったが、応答はあった）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
+    target.shutdownObservationArrivedAfterSwap = true;
+    target.lastUnpushedWorkObservation = {
+      kind: 'unavailable',
+      at: '2026-09-27T00:00:09.000Z',
+      source: 'shutdown',
+      reason: '確かめようとして例外が飛んだ: Error: なにか',
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('器が止まる直前');
+    expect(reply).toContain('取れなかった');
+    expect(reply).toContain('確かめようとして例外が飛んだ: Error: なにか');
+  });
+
+  it('manager_list は器の入れ替えで応答不能・shutdown 由来の観測が届いていなければ「届いていない」と明示し、古い観測は0件と見せない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
+    // **`shutdownObservationArrivedAfterSwap` を立てない**——古い（report 由来の）
+    // 観測しか無い状態を模す。
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-26T12:00:00.000Z',
+      source: 'report',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [],
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('届いていない');
+    // **best-effort の理由も添える**——「未pushが無かった」という誤読を防ぐ。
+    expect(reply).toContain('best-effort');
+    expect(reply).toContain('未pushが無かったことを意味しない');
+    // **古い観測の時刻と経路を出す**（0件と見せない・古い観測を隠さない）。
+    expect(reply).toContain('2026-09-26T12:00:00.000Z');
+    expect(reply).toContain('report');
+    // **「止まる直前の観測」という言い切りは出ない**——届いた側の文言と排他。
+    expect(reply).not.toContain('器が止まる直前（');
+  });
+
+  it('manager_list は器の入れ替えで応答不能・観測そのものが一度も無ければ「無い」と明示する（沈黙にしない。予算のルールの例外）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
+    // lastUnpushedWorkObservation は一度もセットしない。
+
+    const reply = await h.call('manager_list', {});
+
+    // **ここが「未push観測が無いなら1文字も足さない」の唯一の例外である**
+    // ——器の入れ替えで応答不能という、いちばん重要な瞬間に沈黙すると、
+    // 「0件」と「一度も取れていない」が読み手からは区別できなくなる。
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('届いていない');
+    expect(reply).toContain('表示中の観測は無い');
+  });
+
+  /**
    * **Issue #1036 の本題。** `manager_report` は以前 `lastReportAt` も
    * `status` も1文字も出していなかった——読み手は直近に完了したターンの
    * 中身を、いまの状態として読むしかなかった（#1036 の事故）。
