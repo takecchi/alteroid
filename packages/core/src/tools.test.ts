@@ -57,11 +57,17 @@ import {
   TRACELESS_CLONE_TOOLS,
   type ToolContext,
 } from './tools.js';
+import type { RecentDenial } from './denial-shape.js';
 import type { AccountUsageState } from './usage-snapshot.js';
 import { usageDate } from './usage.js';
 
 interface Harness {
   stores: Stores;
+  /**
+   * `ToolContext.recentDenials` が返す直近の拒否の控え（issue #1802）。歯が
+   * 直接積む（本物ではクローンの `#noteDenial` が積む）。
+   */
+  recentDenials: RecentDenial[];
   /** 道具へ渡したプールそのもの。欄を後から差し替える歯（#1394 段(C)）が使う。 */
   managers: ManagerPool;
   emitted: ChatStreamEvent[];
@@ -203,6 +209,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const running: ManagerSummary[] = [];
   const denied = new Map<string, ManagerDenial[]>();
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
+  const recentDenials: RecentDenial[] = [];
   let abortSessionGone: boolean | undefined = true;
   // **指名しなかったときに Pool.start() が返す runnerId。** 本物は資源で選んだ
   // 器の runnerId を返す——ここでは差し替え可能な既定値でそれを真似る。
@@ -444,10 +451,12 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     // （省略）。
     queuedInMemory: () => queuedInMemory,
     postToConversation: (id, body) => posted.push({ conversationId: id, text: body }),
+    recentDenials: () => recentDenials,
   });
 
   return {
     stores,
+    recentDenials,
     managers,
     emitted,
     posted,
@@ -5036,6 +5045,86 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('拒否した');
       expect(await h.stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    });
+
+    /**
+     * **直前の拒否の証拠を、質問文へ自動で添える（issue #1802）。** 器が返した
+     * 理由の原文・時刻・道具・先頭の語だけを載せ、コマンドの値は載せない。
+     * 人間がクローンの要約ではなく原文を読んで承認できるようにするためである。
+     */
+    describe('直前の拒否の証拠（issue #1802）', () => {
+      const FAKE_SECRET = 'ghp_FAKE1234FAKE5678FAKE9012';
+      const request = {
+        rule: 'Bash(gh release edit --repo x/y --draft=false:*)',
+        allows: ['gh release edit --repo x/y --draft=false v1'],
+        denies: ['gh release delete v1'],
+        reason: '公開したい',
+      };
+      async function pendingQuestion(h: Harness): Promise<string> {
+        await h.call('request_permission', request);
+        const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+        return pending?.question ?? '';
+      }
+
+      it('同じ道具・同じ先頭の語の拒否があれば、理由の原文・時刻・先頭の語が載り、コマンドの値は載らない', async () => {
+        const h = harness();
+        h.recentDenials.push({
+          at: '2026-09-27T10:00:00.000Z',
+          tool: 'Bash',
+          headWord: 'gh',
+          reasonType: '[CI Bypass]',
+          reason: 'Blocked by classifier',
+          message: `Permission for this action was denied (${'x'.repeat(3)})`,
+        });
+        const question = await pendingQuestion(h);
+        expect(question).toContain('直前の拒否（器が返した原文。クローンの要約ではない');
+        expect(question).toContain('時刻 2026-09-27T10:00:00.000Z');
+        expect(question).toContain('先頭の語 gh');
+        expect(question).toContain('分類 [CI Bypass]');
+        expect(question).toContain('理由 Blocked by classifier');
+        // 控えはもともとコマンドの値を持たないが、念のため偽の値が載らないことも見る。
+        expect(question).not.toContain(FAKE_SECRET);
+      });
+
+      it('先頭の語が違う拒否しか無ければ、照合できる拒否が無いと明記する（黙って省かない）', async () => {
+        const h = harness();
+        h.recentDenials.push({
+          at: '2026-09-27T10:00:00.000Z',
+          tool: 'Bash',
+          headWord: 'curl',
+          reason: 'x',
+        });
+        const question = await pendingQuestion(h);
+        expect(question).toContain(
+          'この規則と照合できる直前の拒否（Bash / 先頭の語 gh）は、このセッションの記録に無い',
+        );
+      });
+
+      it('同じ先頭の語の拒否が2件あれば、新しいほうが載る', async () => {
+        const h = harness();
+        h.recentDenials.push({
+          at: '2026-09-27T10:00:00.000Z',
+          tool: 'Bash',
+          headWord: 'gh',
+          reason: '古い理由',
+        });
+        h.recentDenials.push({
+          at: '2026-09-27T11:00:00.000Z',
+          tool: 'Bash',
+          headWord: 'gh',
+          reason: '新しい理由',
+        });
+        const question = await pendingQuestion(h);
+        expect(question).toContain('理由 新しい理由');
+        expect(question).not.toContain('古い理由');
+      });
+
+      it('読む口が渡されていない層では、照合していないことを明記する', async () => {
+        const { describePermissionEvidence } = await import('./tools.js');
+        expect(describePermissionEvidence(request.rule, undefined)).toBe(
+          '直前の拒否: この層は拒否の記録を読む口を持たない（照合していない）。',
+        );
+      });
     });
   });
 
