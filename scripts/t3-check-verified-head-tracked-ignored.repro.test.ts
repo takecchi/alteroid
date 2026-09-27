@@ -69,11 +69,10 @@ describe('PR #1774 再現: 追跡+ignore のファイルで fingerprint と writ
 
   it('前提確認: git ls-files -c は無視パターンに関わらず追跡ファイルを見せ続ける', async () => {
     const dir = await makeRepoWithTrackedIgnoredFile();
-    const out = execFileSync(
-      'git',
-      ['ls-files', '-co', '--exclude-standard'],
-      { cwd: dir, encoding: 'utf8' },
-    );
+    const out = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
     expect(out.split('\n').filter(Boolean)).toContain('tracked-but-ignored.txt');
   });
 
