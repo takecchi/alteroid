@@ -7969,20 +7969,26 @@ class Pool implements ManagerPool {
           }
           continue;
         }
+        /*
+         * **`#resumeOnce` から戻った直後、他の await を挟む前に読む（Issue #1814）。**
+         * `record.cwdSwapNotice` は `#resume()` の中でしか書かれないプロセス内の
+         * 一度きりの通知で、`#resumeOnce` は自分の中の `#resuming` の関門を
+         * `finally` で既に外している——ここから先に `await` を挟むと、その隙間で
+         * 別の契機（同じ runner からのもう一度の `hello` 等）が同じ `record` へ
+         * 新しい resume を仕掛け、読む前に上書きされうる。`nudge` を組んだ時点
+         * では、runner が頼んだ `cwd` を実際に使ったかを知らなかったので、ここで
+         * 初めて分かる——読んだ後は `swapNotice`（ローカル変数）に固定するので、
+         * この先で `record.cwdSwapNotice` 自体が書き換わっても揺れない。
+         */
+        const swapNotice = cwdSwapNoticeClause(record);
         // **受理は「戻れた」ではない。** この `await` の間に「戻れなかった」が確定
         // していることがある（runner は別プロセスで、失敗は SSE で追いかけてくる）。
         // ここで無条件に上書きすると、書いたばかりの終端状態が `running` へ巻き戻る。
         if (record.job.status === 'lost') continue;
         record.job.status = 'running';
         await this.#persist(record);
-        /*
-         * **`nudge` を組んだ時点では、runner が頼んだ `cwd` を実際に使ったかを
-         * 知らなかった（Issue #1814）。** `#resumeOnce` から戻った今なら分かる
-         * ——`record.cwdSwapNotice` に立っていれば、追加の一言として送る。
-         * `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
-         * resume は既に成功しているので、この一言が届かなくても致命ではない）。
-         */
-        const swapNotice = cwdSwapNoticeClause(record);
+        // `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
+        // resume は既に成功しているので、この一言が届かなくても致命ではない）。
         if (swapNotice !== undefined) {
           await runner.send(job.id, swapNotice).catch(() => undefined);
         }
@@ -9171,6 +9177,10 @@ class Pool implements ManagerPool {
             continue;
           }
           if (outcome !== 'resumed') continue;
+          // **`#resumeOnce` から戻った直後、他の await を挟む前に読む**
+          // （Issue #1814。`#restoreJobs` と同じ理由・同じ形——doc はそちらに
+          // 逐語で在る）。
+          const swapNotice = cwdSwapNoticeClause(record);
           // 受理と「戻れた」を取り違えない（`restore` と同じ理由）。
           if (record.job.status === 'lost') continue;
           // **戻れたので古い観測は捨てる**（#563）。残すと「いま話しかけられない」と
@@ -9180,9 +9190,8 @@ class Pool implements ManagerPool {
           record.sessionMissingKind = undefined;
           record.job.status = 'running';
           await this.#persist(record);
-          // **`message` を組んだ時点では知らなかったことを、resume が返った今
-          // 追加で送る（Issue #1814）。** `#restoreJobs` と同じ理由・同じ形。
-          const swapNotice = cwdSwapNoticeClause(record);
+          // `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
+          // resume は既に成功しているので、この一言が届かなくても致命ではない）。
           if (swapNotice !== undefined) {
             await runner.send(job.id, swapNotice).catch(() => undefined);
           }
