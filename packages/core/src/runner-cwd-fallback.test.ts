@@ -44,8 +44,9 @@ function fakeSdk(): {
 
       // 読み手は要る（`runner-fence.test.ts` の同じ注記）。
       void (async () => {
-        for await (const _message of params.prompt) {
+        for await (const message of params.prompt) {
           // 読み捨てるだけでよい——このテストが確かめたいのは cwd だけ。
+          void message;
         }
       })();
 
@@ -70,9 +71,11 @@ afterEach(async () => {
   hosts = [];
 });
 
-function setup(options: {
-  existingDirs: readonly string[];
-} & Partial<Pick<RunnerHostOptions, 'workspacePath'>>): {
+function setup(
+  options: {
+    existingDirs: readonly string[];
+  } & Partial<Pick<RunnerHostOptions, 'workspacePath'>>,
+): {
   host: RunnerHost;
   events: RunnerEvent[];
   fake: ReturnType<typeof fakeSdk>;
