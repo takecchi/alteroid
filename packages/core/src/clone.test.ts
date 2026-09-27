@@ -3267,9 +3267,8 @@ describe('クローン', () => {
 
           const entries = await s.stores.journal.list({ types: ['exchange'] });
           expect(
-            entries.filter((entry) =>
-              (entry as { text: string }).text.includes(UNSETTLED_MARK),
-            ).length,
+            entries.filter((entry) => (entry as { text: string }).text.includes(UNSETTLED_MARK))
+              .length,
           ).toBe(1);
 
           await s.clone.stop();
