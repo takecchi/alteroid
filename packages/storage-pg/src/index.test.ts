@@ -4630,6 +4630,66 @@ describe('AuthStore', () => {
   });
 
   /**
+   * **issue #1714（レビュー修正）。** 2つの候補 account が**同じ検証済み
+   * メール**を持つ状態で同時に作られると、`auth_accounts_email_lower_idx`
+   * （#1702。`lower(email)` の一意索引）に当たりうる——`completeLogin` の
+   * 外側の衝突検査（`findAccountByEmail`）は、同じ identity の2つのログインが
+   * 同時に着けば両方が「衝突なし」を見るので、候補 account に同じ検証済み
+   * メールを載せる（直上の歯は `email: null` なので、この形を測っていない）。
+   *
+   * **account を先に insert する実装だと、負けた側は identity の一意制約に
+   * 辿り着く前にメールの一意制約違反という別の例外で落ちる**（`completeLogin`
+   * は例外を投げてログインごと失敗する。`tx.rollback()` は起こらない）。
+   * identity を先に insert する実装なら、負けた側は identity 側の一意制約
+   * だけで do nothing になり、メールの索引には当たらない。
+   *
+   * **変異**: account の insert を identity より先に戻すと、この歯は赤に戻る
+   * （`AssertionError` ではなく `duplicate key value violates unique
+   * constraint "auth_accounts_email_lower_idx"` で reject する）。
+   */
+  it('createAccountWithIdentity: 2つの候補が同じ検証済みメールを持っていても、投げずに1つだけ作られる', async () => {
+    const makeInput = (accountId: string) => ({
+      account: {
+        id: accountId,
+        displayName: 'Someone',
+        email: 'shared@example.test',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      },
+      identity: {
+        provider: 'google',
+        subject: 'sub-email-race',
+        accountId,
+        email: 'shared@example.test',
+        emailVerified: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const results = await Promise.all([
+      stores.auth.createAccountWithIdentity(makeInput('account-email-race-a')),
+      stores.auth.createAccountWithIdentity(makeInput('account-email-race-b')),
+    ]);
+
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    const loser = results.find((result) => !result.created);
+    expect(loser).toBeDefined();
+    if (loser !== undefined && !loser.created) {
+      expect(loser.existing.subject).toBe('sub-email-race');
+    }
+
+    const accounts = (await stores.auth.listAccounts()).filter((it) =>
+      it.id.startsWith('account-email-race-'),
+    );
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.email).toBe('shared@example.test');
+  });
+
+  /**
    * **⭐ 2周目でだけ壊れる状態を挟む歯。**
    *
    * `migrate` は起動のたびに `STATEMENTS` を頭から通す。単一持ち主の索引
@@ -4875,6 +4935,89 @@ describe('AuthStore', () => {
       expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
       // 大小文字を区別せずに衝突を検出しているので null（#1702）。
       expect(claimedImpostorCase.account.email).toBeNull();
+    });
+  });
+
+  /**
+   * **issue #1714（レビュー修正）。** `packages/core/src/auth-service.test.ts`
+   * の同名の歯（メモリ実装）と同じ入力・同じ期待値を、`createAuthService`
+   * （実コード。器だけ pg へ差し替える）に対して確かめる。
+   *
+   * **ここが本番の形にいちばん近い。** メモリはどんな入力でも一意制約を
+   * 持たないので、`AuthStore.createAccountWithIdentity` の内部の順序を
+   * 間違えても検出できない——`auth_accounts_email_lower_idx`（#1702）が
+   * 実在する pg でだけ、account を先に insert する誤りが本物の一意制約違反
+   * として現れる。この歯は最初の実装（account が先）では
+   * `duplicate key value violates unique constraint
+   * "auth_accounts_email_lower_idx"` で reject していた。
+   */
+  describe('同じ identity の同時ログイン（pg。issue #1714 のレビュー修正）', () => {
+    function fakeProvider(profiles: Record<string, OAuthProfile>): OAuthProvider {
+      return {
+        kind: 'oauth2',
+        id: 'fake',
+        label: 'Fake',
+        authorizationUrl: (request) => `https://example.test/authorize?state=${request.state}`,
+        exchange: async ({ code }) => {
+          const profile = profiles[code];
+          if (profile === undefined) throw new Error(`未知の code: ${code}`);
+          return profile;
+        },
+      };
+    }
+
+    it('同じ identity で2つのログインが同時に完了しても、アカウントは1つで両方が同じ accountId になる', async () => {
+      const service = createAuthService({
+        store: stores.auth,
+        providers: createAuthProviderRegistry([
+          fakeProvider({
+            'code-alice': {
+              subject: 'sub-alice-pg-race',
+              email: 'alice-pg-race@example.test',
+              emailVerified: true,
+              displayName: 'Alice',
+            },
+          }),
+        ]),
+      });
+
+      const first = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const second = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const stateFirst = decodeState(
+        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      const stateSecond = decodeState(
+        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      expect(stateFirst).not.toBeNull();
+      expect(stateSecond).not.toBeNull();
+
+      const [resultA, resultB] = await Promise.all([
+        service.completeLogin({
+          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+          code: 'code-alice',
+        }),
+        service.completeLogin({
+          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+          code: 'code-alice',
+        }),
+      ]);
+
+      expect(resultA.status).toBe('ok');
+      expect(resultB.status).toBe('ok');
+      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+        throw new Error('ログインできていない');
+      }
+      expect(resultA.accountId).toBe(resultB.accountId);
+
+      const accounts = await stores.auth.listAccounts();
+      expect(accounts.filter((it) => it.email === 'alice-pg-race@example.test')).toHaveLength(1);
     });
   });
 });

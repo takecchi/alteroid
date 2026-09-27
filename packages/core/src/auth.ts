@@ -216,8 +216,17 @@ export interface AuthStore {
    * 別の呼び出しが同じ identity を作る窓ができ、上と同じ形の重複が再発する。
    *
    * ドライバはそれぞれの器で原子性を出す——fs は1回の書き込みで、pg は1つの
-   * トランザクション内で account を insert し、identity を条件付き（一意制約）
-   * で insert する。identity が入らなければ account ごと巻き戻す。
+   * トランザクション内で**先に** identity を条件付き（一意制約）で insert し、
+   * 入ったときだけ account を insert する。
+   *
+   * ⚠️ **pg で account を先に insert してはいけない。** `auth_accounts_email_
+   * lower_idx`（#1702。検証済みメールの一意索引）が本番に在るため、同じ
+   * identity の2つのログインは（`completeLogin` の外側の衝突検査を同時に
+   * 通り抜けて）同じメールを候補 account に載せうる——account を先に insert
+   * すると、負けた側が identity の一意制約へ辿り着く前に**メールの一意制約
+   * 違反という別の例外**で落ちる（`.claude/skills/auth-and-access/SKILL.md`
+   * にも同じ注記がある）。identity を先にすれば、負けた側は identity の一意
+   * 制約だけで do nothing になり、メールの索引には当たらない。
    */
   createAccountWithIdentity(input: {
     account: AuthAccount;

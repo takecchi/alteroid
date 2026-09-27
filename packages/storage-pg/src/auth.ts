@@ -14,7 +14,7 @@ import type {
   LoginRequest,
   OwnerOutcome,
 } from '@alteroid/core';
-import { and, asc, eq, isNotNull, isNull, lt, sql, TransactionRollbackError } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -151,17 +151,32 @@ export class PgAuthStore implements AuthStore {
    * 「初めて見る identity」の account 作成を**1つのトランザクションで**行う
    * （issue #1714）。
    *
-   * account を insert し、identity を `(provider, subject)` の一意制約に対する
-   * `on conflict do nothing` で insert する。**identity が入らなかった
-   * （＝別の呼び出しが先に同じ identity を作っていた）ら、`tx.rollback()` で
-   * account の insert ごと巻き戻す** —— identity だけ諦めて account を残すと、
-   * どの identity からも参照されない孤児行が残ってしまう。
+   * **identity を先に、`(provider, subject)` の一意制約に対する
+   * `on conflict do nothing` で insert する。1行入ったときだけ account を
+   * insert する。** identity が入らなかった（＝別の呼び出しが先に同じ
+   * identity を作っていた）ら、**account の insert そのものへ進まない**——
+   * 同じトランザクション内で既存の identity を読み直して返す。
    *
-   * 巻き戻した後、トランザクションの外（`findIdentity`）で勝った側の identity
-   * を読み直して返す。`tx.rollback()` は drizzle の `TransactionRollbackError`
-   * を投げて `this.#db.transaction(...)` の呼び出しごと reject させる仕組みなので
-   * （他の1操作のように `returning()` の0行では判定できない——insert は
-   * 「入ったか」を1文では聞けない）、ここだけ例外を捕まえて正常系に変換する。
+   * ⚠️ **順序は「account を先」ではいけない**（#1714 の最初の実装がこの順で、
+   * レビューで指摘された）。`auth_accounts_email_lower_idx`（#1702。`lower(email)`
+   * の一意索引）が本番の pg には在る。同じ identity の2つのログインは
+   * `completeLogin` の外側の衝突検査で同じ検証済みメールを候補 account に
+   * 載せるので、account を先に insert すると**負けた側が identity の
+   * `on conflict do nothing` へ辿り着く前に、account 側のメール一意索引で
+   * 一意制約違反として落ちる**（`tx.rollback()` ではなく本物の例外）。
+   * identity を先にすれば、負けた側は identity の一意制約で
+   * do nothing になり、account の insert へ進まない——メールの索引には
+   * そもそも当たらない。
+   *
+   * **`auth_identities.account_id` に外部キーは無い**（`migrate.ts` の
+   * `create table auth_identities` に `references` 節が無いことを DDL で
+   * 確認済み）。だから identity を先に insert しても、まだ存在しない
+   * account を指す一時的な状態を作ることに問題は無い——同じトランザクション内で
+   * 即座に account を insert して埋める。
+   *
+   * account の insert が（この対象とは別の理由で）落ちたら、例外はそのまま
+   * 投げる——トランザクションごと巻き戻るので、先に入れた identity も一緒に
+   * 消える（孤児は作らない）。
    */
   async createAccountWithIdentity(input: {
     account: AuthAccount;
@@ -170,50 +185,58 @@ export class PgAuthStore implements AuthStore {
     const account = stripNulls(authAccountSchema.parse(input.account));
     const identity = stripNulls(authIdentitySchema.parse(input.identity));
 
-    try {
-      await this.#db.transaction(async (tx) => {
-        await tx.insert(authAccounts).values({
-          id: account.id,
-          displayName: account.displayName,
-          email: account.email,
-          createdAt: new Date(account.createdAt),
-          lastLoginAt: optionalDate(account.lastLoginAt),
-          grantedAt: optionalDate(account.grantedAt),
-          grantedBy: account.grantedBy,
-          ownerDeclaredAt: optionalDate(account.ownerDeclaredAt),
-        });
+    return this.#db.transaction(async (tx) => {
+      const identityRows = await tx
+        .insert(authIdentities)
+        .values({
+          provider: identity.provider,
+          subject: identity.subject,
+          accountId: identity.accountId,
+          email: identity.email,
+          emailVerified: identity.emailVerified,
+          createdAt: new Date(identity.createdAt),
+          lastLoginAt: new Date(identity.lastLoginAt),
+        })
+        .onConflictDoNothing({ target: [authIdentities.provider, authIdentities.subject] })
+        .returning();
 
-        const identityRows = await tx
-          .insert(authIdentities)
-          .values({
-            provider: identity.provider,
-            subject: identity.subject,
-            accountId: identity.accountId,
-            email: identity.email,
-            emailVerified: identity.emailVerified,
-            createdAt: new Date(identity.createdAt),
-            lastLoginAt: new Date(identity.lastLoginAt),
-          })
-          .onConflictDoNothing({ target: [authIdentities.provider, authIdentities.subject] })
-          .returning();
-
-        if (identityRows.length === 0) {
-          // 負けた。account も一緒に巻き戻す（ここで作らない）。
-          tx.rollback();
+      if (identityRows.length === 0) {
+        // 負けた。account へは進まない——ここまでで既に、同じ identity を
+        // 取り合う競合が起こりうる唯一の索引（identity の主キー）を通過して
+        // いる。勝った側の commit は `on conflict do nothing` 自体が待つので、
+        // ここで読み直せば必ず見える。
+        const existingRows = await tx
+          .select()
+          .from(authIdentities)
+          .where(
+            and(
+              eq(authIdentities.provider, identity.provider),
+              eq(authIdentities.subject, identity.subject),
+            ),
+          )
+          .limit(1);
+        const existingRow = existingRows[0];
+        if (existingRow === undefined) {
+          throw new Error(
+            'createAccountWithIdentity: 競合したはずの identity が読めない（他の1操作と矛盾）',
+          );
         }
-      });
-      return { created: true };
-    } catch (error) {
-      if (!(error instanceof TransactionRollbackError)) throw error;
-      const existing = await this.findIdentity(identity.provider, identity.subject);
-      if (existing === null) {
-        throw new Error(
-          'createAccountWithIdentity: 巻き戻した直後に既存の identity が読めない（他の1操作と矛盾）',
-          { cause: error },
-        );
+        return { created: false, existing: this.#toIdentity(existingRow) };
       }
-      return { created: false, existing };
-    }
+
+      await tx.insert(authAccounts).values({
+        id: account.id,
+        displayName: account.displayName,
+        email: account.email,
+        createdAt: new Date(account.createdAt),
+        lastLoginAt: optionalDate(account.lastLoginAt),
+        grantedAt: optionalDate(account.grantedAt),
+        grantedBy: account.grantedBy,
+        ownerDeclaredAt: optionalDate(account.ownerDeclaredAt),
+      });
+
+      return { created: true };
+    });
   }
 
   async putAccessToken(token: AccessTokenRecord): Promise<void> {
