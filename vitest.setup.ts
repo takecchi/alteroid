@@ -1,6 +1,14 @@
 import { afterAll, afterEach, expect } from 'vitest';
 
+import { scrubSecretEnv } from './vitest.env-scrub.js';
 import { drainCreatedTempDirsForCurrentFile } from './vitest.tmpdir.js';
+
+/**
+ * **器の本物の秘密を、テストが始まる前に環境から外す。** 理由と規則は
+ * `vitest.env-scrub.ts` に在る。ほかの何よりも先に呼ぶ — この後に読み込まれる
+ * テストのコードと、そこから起こされる子プロセスに、値を渡さないため。
+ */
+scrubSecretEnv(process.env);
 
 /**
  * **テストが本物の stdout へ書いたら、そのテストを落とす。**
