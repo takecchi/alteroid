@@ -43,11 +43,7 @@ interface ManualRunner {
   ask(managerId: string, requestId: string, summary: string): void;
   answerAsk(requestId: string): void;
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
-  denied(
-    managerId: string,
-    tool: string,
-    fields: { actor?: string; inputHead?: string } = {},
-  ): void;
+  denied(managerId: string, tool: string, fields?: { actor?: string; inputHead?: string }): void;
   toolUse(managerId: string, actor: string, tool: string): void;
 }
 
@@ -221,7 +217,9 @@ async function waitForDenialJournaledCount(
       JSON.stringify(entry).includes(`${tool} の実行が確認へ上がらずに止められた`),
     );
     if (matches.length < count) {
-      throw new Error(`${String(count)} 件目の拒否がまだ日誌に載っていない（いまは ${String(matches.length)} 件）`);
+      throw new Error(
+        `${String(count)} 件目の拒否がまだ日誌に載っていない（いまは ${String(matches.length)} 件）`,
+      );
     }
   });
 }

@@ -3665,7 +3665,10 @@ const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
  * 作業者の実行を1回も止めない（地雷表が禁じるのは「暴走を機械的に止める
  * こと」であって、「気づいていない停止を伝えること」ではない）。
  */
-const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [ONE_SHOT_ALLOW_TTL_MS, WITHHELD_REPORT_FLUSH_MS];
+const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
+  ONE_SHOT_ALLOW_TTL_MS,
+  WITHHELD_REPORT_FLUSH_MS,
+];
 
 /**
  * `a` / `b`（どちらも `toISOString()` の ISO 8601 文字列か `undefined`）の
