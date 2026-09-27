@@ -29,6 +29,25 @@ import { usageBaseline, usageDaily, usageLedger, usageTurns } from './schema.js'
 /** `usage_ledger` は単一行。id はこの値に固定する。 */
 const LEDGER_ID = 'default';
 
+/**
+ * `record`（cumulative）の advisory lock（#1739）の名前空間。
+ *
+ * `pg_advisory_xact_lock(hashtext(namespace), hashtext(layer || ':' || managerId))`
+ * の1つ目の鍵——`packages/storage-pg/src/archive.ts` の
+ * `ARCHIVE_SESSION_LOCK_NAMESPACE` とは別の文字列にしてある（`grep -rn advisory
+ * packages` で確認した時点で、pg 側の advisory lock はこの2つだけ）。**2つ目の
+ * 鍵は `layer` と `managerId` を `:` で連結してから1本の文字列として
+ * `hashtext` に通す**——`pg_advisory_xact_lock` は `(bigint)` か `(int4, int4)`
+ * の2引数までしか受けないので、3値（namespace / layer / managerId）を別々の
+ * 引数には割れない。**衝突（別の `(layer, managerId)` の組が同じハッシュ値に
+ * 当たる）の害は「無関係な2つの record() が直列化されるだけ」——`hashtext`
+ * は32bit なので確率はゼロではないが、advisory lock はロックの対象を
+ * 取り違えない（鍵が一致したときに同じロックオブジェクトを共有するだけで、
+ * データの行を取り違えることはない）。害が「待たされる」止まりであることは、
+ * `archive.ts` の同じ設計判断と揃えてある。
+ */
+const USAGE_RECORD_LOCK_NAMESPACE = 'alteroid.usage.record';
+
 function optionalIso(value: Date | null): string | undefined {
   return value === null ? undefined : toIso(value);
 }
@@ -92,10 +111,38 @@ function isBeforeTurns(turnsSince: string | null, from: string | undefined): boo
  * 利用状況の台帳（PostgreSQL）。fs ドライバ（`@alteroid/storage-fs`）と同じ IF を
  * 満たす別の器であって、能力の差を作らない（`store.ts`「省略可能にしないこと」）。
  *
- * **`record` は読み・畳み・書きを1つのトランザクションに閉じる。** 基準を読んで
+ * **`record` は読み・畳み・書きを1つのトランザクションに閉じるだけでは足りない
+ * （#1739。#1732 / #1735 と同じ形の欠陥）。** 以前のここの doc は「基準を読んで
  * から増分を書くまでの隙間を空けると、同じマネージャーの次の result がそこへ
- * 割り込み、同じ増分が2回積まれる（`auth-service` の `claimLoginRequest` と同じ
- * 形の不変条件 — CLAUDE.md「不変条件はストアの1操作に閉じること」）。
+ * 割り込み、同じ増分が2回積まれる」と書いていたが、それはトランザクションで
+ * 閉じれば防げるという前提だった——**その前提が誤りだった。** PostgreSQL の
+ * 既定の分離レベル（READ COMMITTED）は「同じトランザクションに閉じる」ことと
+ * 「読んだ行をロックする」ことを保証しない。`FOR UPDATE` も advisory lock も
+ * 無い1トランザクションでは、2つの `record()`（`accumulation: 'cumulative'`）が
+ * 同じ `(layer, managerId)` へ重なって走ったとき、片方の書きが commit する前に
+ * もう片方の基準読みが走れば、**両方が同じ基準を読んで同じ増分を計算し、
+ * 両方ぶんが `usage_daily` へ加算される**（実測: 基準 1.00、並行の2本を
+ * 1.30 / 1.80 で積むと、正しい合計増分は 0.80（1.80-1.00）のはずが 1.10
+ * （0.30+0.80）——過大計上。`packages/core/src/clone.ts` の `#recordUsage` は
+ * `layer: 'clone', managerId: CLONE_ACTOR_ID`——**全クローンで共有する固定の
+ * managerId** ——なので、2つ以上のクローンが同時に動いていれば毎回この
+ * `(layer, managerId)` へ重なる。`manager.ts` の `case 'usage'` も
+ * `void this.#onEvent(event)` で並行に走る設計なので、同じマネージャーへの
+ * 連続する2件の `usage` イベントが重なりうる）。
+ *
+ * **`accumulation: 'oneshot'` はこの窓の外である。** 基準を読まない
+ * （`baselineRows` は `[]` に固定）ので、比べる相手がそもそも無い——並行に
+ * 積んでも、`usage_daily` / `usage_turns` の `onConflictDoUpdate` が
+ * `... + excluded....`（加算）で単一 SQL 文として原子的に効くだけである
+ * （実測で確認済み。生ログは Issue #1739 の PR 参照）。
+ *
+ * **塞ぎ方は `archive()` と同じ形——`(layer, managerId)` ごとの
+ * `pg_advisory_xact_lock` でトランザクションの先頭を直列化する
+ * （`accumulation === 'cumulative'` のときだけ。`oneshot` は基準を読まないので
+ * ロックを取る理由が無い）。** 鍵の作り方は `USAGE_RECORD_LOCK_NAMESPACE` の
+ * doc参照。`archive()` と違い、ここでは `at` はロックの外（呼び出し側）で
+ * 決まった値を引数として受け取るだけなので、「`at` をロックの後で決める」に
+ * 相当する手当ては要らない——窓は基準の読みにしかない。
  */
 export class PgUsageStore implements UsageStore {
   readonly #db: Db;
@@ -115,13 +162,22 @@ export class PgUsageStore implements UsageStore {
     tokenId?: string;
   }): Promise<UsageFold> {
     return this.#db.transaction(async (tx) => {
+      // **同じ (layer, managerId) への cumulative record() を直列化する
+      // （#1739）。** oneshot は基準を読まないのでロックを取らない——クラス doc
+      // 「塞ぎ方」参照。
+      if (input.accumulation !== 'oneshot') {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${USAGE_RECORD_LOCK_NAMESPACE}), hashtext(${input.layer} || ':' || ${input.managerId}))`,
+        );
+      }
+
       // **累積の器は `query()` 呼び出しの寿命で閉じる**（`usage.ts` の
       // `usageAccumulationSchema`）。1回で閉じる呼び出しに基準を持たせると、前回より
       // 高くついた回だけが差に縮んで黙って目減りする（`foldOneshotUsage`）。
       //
       // 差分計算は自分で書かない（ロジックを二重に持たない）。基準の読みと増分の
-      // 書きを同じトランザクションに収めることで、隙間に次の result が割り込む
-      // 余地を無くす。
+      // 書きを同じトランザクションに収め、advisory lock で直列化することで、
+      // 隙間に次の result が割り込む余地を無くす。
       const baselineRows =
         input.accumulation === 'oneshot'
           ? []
