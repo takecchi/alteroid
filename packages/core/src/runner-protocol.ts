@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { cgroupEventsDeltaSchema } from './cgroup-events.js';
+import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
 import type { McpServers } from './mcp-servers.js';
 import { type RunnerRevisionReport } from './revision.js';
@@ -248,7 +249,7 @@ export const runnerCredentialSchema = z.object({
   name: z
     .string()
     .min(1)
-    .max(128)
+    .max(CREDENTIAL_NAME_MAX_LENGTH)
     .regex(/^[A-Z][A-Z0-9_]*$/, '鍵の名前は英大文字・数字・_ のみ'),
   /** 空文字は「鍵を外す」。未設定へ戻す意思を表せるようにしてある。 */
   value: z.string(),
