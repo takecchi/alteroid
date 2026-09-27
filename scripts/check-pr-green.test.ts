@@ -318,9 +318,7 @@ describe('pickLatestRunPerWorkflow', () => {
     expect(result.detail.some((line: string) => line.includes(String(draftOriginSkip.id)))).toBe(
       true,
     );
-    expect(result.detail.some((line: string) => line.includes(String(rerunSuccess.id)))).toBe(
-      true,
-    );
+    expect(result.detail.some((line: string) => line.includes(String(rerunSuccess.id)))).toBe(true);
   });
 
   it('Issue #1748 の変異ガード: run_attempt を無視して常に created_at で選ぶと、#1748 の標本は再び skipped（NG）に戻る', () => {
