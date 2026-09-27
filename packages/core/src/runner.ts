@@ -5910,11 +5910,9 @@ function failedReportText(
   const bodyHit = failure.via === 'assistant_error';
   const workerNote =
     workerRejections.length > 0
-      ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かで、${
-          bodyHit
-            ? '本体の発言にも拒否の印が付いていたので、本体も当たっている'
-            : '本体も当たったかは SDK からは分からない'
-        }）`
+      ? bodyHit
+        ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かで、本体の発言にも拒否の印が付いていたので、本体も当たっている）`
+        : `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`
       : failedWorkerNotifications > 0
         ? `\n（このターンでは作業者 ${String(failedWorkerNotifications)} 体が失敗で終わった${
             failedWorkerNotificationsNamingLimit > 0
