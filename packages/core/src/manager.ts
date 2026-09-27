@@ -11109,8 +11109,8 @@ class Pool implements ManagerPool {
   /**
    * **`apply()` の即時の配布の結果を、名乗りのときの配布と同じ帳面に積む（Issue #1699 / #1717）。**
    *
-   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials` /
-   * `credential_write` は、保存の直後に繋がっている runner へその場で直接配る
+   * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials`（CLI の
+   * `alteroid credential set` もこれを叩く）は、保存の直後に繋がっている runner へその場で直接配る
    * （`McpServerService.apply` / `ProfileService.apply` / `CredentialService.apply`）。
    * この経路が帳面（`#pushHealth`）も挑み直し（`#schedulePushRetry`）も通らなかった
    * ので、一時的な障害で配り損ねても `runner_list` の「直近の押し込み」は前の「ok」の
@@ -11120,8 +11120,11 @@ class Pool implements ManagerPool {
    * 同じく、失敗は `failed` として帳面に書き、`#settlePushRetry` で挑み直しを予約する**
    * （「間隔は伸ばすが、諦めはしない」の約束を1つにする）。成功は `ok` で上書きする。
    *
-   * 日誌の行は書かない。即時の配布の失敗は、呼び出し元（`app.ts` の `PUT`）が既に
-   * 日誌へ残している——ここで書くと二重になる。
+   * 日誌の行はここでは書かない。即時の配布の失敗を日誌へ残すかは呼び出し元が持つ
+   * ——`PUT /mcp-servers`（`app.ts`）と `profile_write`（`tools.ts`）は残しており、
+   * ここでも書くと二重になる。⚠️ **`PUT /profile` と `PUT /credentials` は残して
+   * いない**（応答の `runners` とこの帳面にだけ出る）。「全経路が日誌に残す」と
+   * 読まないこと。
    */
   #recordDirectPushResults(
     kind: 'profile' | 'mcpServers' | 'credentials',

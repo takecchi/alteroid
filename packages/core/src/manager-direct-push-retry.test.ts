@@ -19,8 +19,8 @@ import { createMemoryStores } from './testing.js';
  * **`apply()` の即時の配布が失敗しても、名乗りのときの配布と同じ帳面に積み、諦めずに
  * 挑み直す（Issue #1699 / #1717）。**
  *
- * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials` /
- * `credential_write` は、保存の直後に繋がっている runner へその場で直接配る
+ * `PUT /mcp-servers` / `PUT /profile` / `profile_write` / `PUT /credentials`（CLI の
+ * `alteroid credential set` もこれを叩く）は、保存の直後に繋がっている runner へその場で直接配る
  * （`McpServerService.apply` / `ProfileService.apply` / `CredentialService.apply`）。
  * この経路は `ManagerPool` の押し込みの帳面（`pushHealthOf`）も挑み直しも通らなかった
  * ので、一時的な障害で配り損ねても `runner_list` の「直近の押し込み」は前の「ok」の
