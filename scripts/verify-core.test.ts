@@ -15,6 +15,7 @@ import {
   decideSkip,
   envForStep,
   fingerprint,
+  hasSkipWorktreeOrAssumeUnchanged,
   recordFor,
   recordPathFor,
   splitVerifyArgs,
@@ -820,6 +821,83 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
   it('git repo でなければ null（判定できないを都合よく倒さない）', async () => {
     const dir = await makeTempDir('write-tree-for-not-a-repo-');
     expect(writeTreeFor(dir)).toBeNull();
+  });
+
+  // ── Issue #1785 レビュー: skip-worktree / assume-unchanged は開く側の穴 ──
+  //
+  // 一時 index を本物の index の写しから始める形（上の一連の歯）は、その写しに
+  // 付いている skip-worktree / assume-unchanged の印もそのまま持ち込む。
+  // これらの印が付いたパスは `git add -A` が作業ツリーの中身を見ない——
+  // `fingerprint`（ディスクを直接読む）とはそこで見ているものが食い違いうる。
+  //
+  // **対策は「印が付いたパスが1つでもあれば、作業ツリーが実際に食い違っている
+  // かどうかに関わらず、無条件に null（判定できない）へ倒す」。** 食い違って
+  // いるかどうかを安く確かめる手段が無い（それを確かめないことこそ、この2つの
+  // 印が git 自身に許している最適化・sparse checkout の前提である）ため、
+  // 「印がある」こと自体を「判定できない」の理由にする——`decideSkip` /
+  // `decideRecord` と同じ「判定できないを都合のよい側へ倒さない」向き。
+
+  it('追跡ファイルに skip-worktree を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
+    const dir = await makeRepo();
+    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], { cwd: dir });
+
+    // **食い違いを起こしていない時点でも null 化する**（印の有無だけで判断する
+    // 設計そのものを固定する歯。「実際に食い違ったときだけ null にする」という
+    // より緩い実装だと、この歯は緑のまま、下の「食い違わせた場合」の歯だけで
+    // 生存する変異が出うる）。
+    expect(writeTreeFor(dir)).toBeNull();
+  });
+
+  it('追跡ファイルに assume-unchanged を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
+    const dir = await makeRepo();
+    execFileSync('git', ['update-index', '--assume-unchanged', 'a.txt'], { cwd: dir });
+
+    expect(writeTreeFor(dir)).toBeNull();
+  });
+
+  it('🔴 帰結の再現: skip-worktree を立てて作業ツリーだけ書き換えても、fingerprint は変化を畳む（writeTreeFor 側が null で守っていなければ「静かな一致」が起きた場面）', async () => {
+    const dir = await makeRepo();
+    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], { cwd: dir });
+
+    const fpBefore = fingerprint(dir);
+    await writeFile(join(dir, 'a.txt'), 'CHANGED after skip-worktree\n');
+    const fpAfter = fingerprint(dir);
+
+    // `fingerprint` はディスクを直接読むので、この変更を畳んでいる
+    // （＝「中身が変わった」と正しく見える）。一方 `writeTreeFor` は
+    // （印を検出していなければ）作業ツリーの変更を見ずに HEAD と同じ tree を
+    // 返し続ける——この2つが指す「検証済みの中身」がずれるのが Issue #1785
+    // レビューの開く側の穴である。ここでは前提（fingerprint 側が変化を見る
+    // こと）だけを確かめ、writeTreeFor 側の守りは上の2本で確かめている。
+    expect(fpAfter).not.toBe(fpBefore);
+  });
+
+  it('印が無ければ null 化しない（過剰に判定できない側へ倒していないことの対照）', async () => {
+    const dir = await makeRepo();
+    await writeFile(join(dir, 'a.txt'), 'plain edit, no flags\n');
+    expect(writeTreeFor(dir)).not.toBeNull();
+  });
+});
+
+describe('hasSkipWorktreeOrAssumeUnchanged（Issue #1785 レビュー）', () => {
+  it('行が無ければ false', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('')).toBe(false);
+  });
+
+  it('通常のタグ（大文字 H・キャッシュ済み）だけなら false', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\nH b.txt\n')).toBe(false);
+  });
+
+  it('skip-worktree（先頭が大文字 S）があれば true', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\nS b.txt\n')).toBe(true);
+  });
+
+  it('assume-unchanged（先頭が英小文字）があれば true', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\nh b.txt\n')).toBe(true);
+  });
+
+  it('末尾の空行を誤検出しない', () => {
+    expect(hasSkipWorktreeOrAssumeUnchanged('H a.txt\n')).toBe(false);
   });
 });
 

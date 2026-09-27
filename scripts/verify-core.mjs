@@ -195,6 +195,40 @@ export function recordPathFor(repo) {
  * 追跡済みのパスはそもそも1つも無いので、この空スタートは以前の実装と
  * 同じ意味になる（漏れが起きようがない）。
  *
+ * ## `skip-worktree` / `assume-unchanged` は開く側の穴になる（Issue #1785 レビュー）
+ *
+ * **写しから始める形そのものが、別の穴を持ち込む。** 本物の index の写しには
+ * `skip-worktree` / `assume-unchanged` の印もそのまま付いてくる。**印の付いた
+ * パスは、`git add -A` が作業ツリーの中身と突き合わせない**（git 自身がその
+ * パスを「作業ツリーを見なくてよい」ものとして最適化している——`skip-worktree`
+ * は sparse checkout で実体が無いことがある前提、`assume-unchanged` は
+ * 「変わっていないと信じてよい」という明示の申告）。
+ *
+ * ⟹ 作業ツリーの中身が index（＝直近の commit）と食い違ったまま `pnpm verify`
+ * を通すと（`fingerprint` はディスクを直接読むので、そのずれを畳んでしまう）、
+ * `writeTreeFor` の tree には **古い（index のままの）中身**が入る。もし
+ * その中身がたまたま `HEAD^{tree}` と一致すれば、`pnpm check:verified-head`
+ * は「verify が測った中身」と「push した commit の中身」が違うのに
+ * **「一致」と言う**——このファイルの他の穴（Issue #1785 本体）とは逆向きの、
+ * より危険な「開く側」の欠陥である。
+ *
+ * **対策: 印が1つでも付いていれば `null`（判定できない）へ倒す。** 印を
+ * 外してから進める案もあるが採らない——`skip-worktree` は sparse checkout の
+ * ように**作業ツリーに実体そのものが無い**ことがある前提の印なので、外して
+ * 「作業ツリーを見に行かせる」と、その前提を壊す（存在しないファイルとして
+ * 削除されるなど、呼び出し側が意図していない書き換えを本物の index の外で
+ * 起こしうる）。判定できない側へ倒せば、`recordFor` の `tree` 引数が
+ * `undefined` になり、`compareVerifiedHead` は「旧形式の記録（tree を持たない）」
+ * と同じ経路で `undecidable` を返す（歯4と同じ向き。新しく分岐を増やして
+ * いない）。
+ *
+ * **検出方法**: 写した直後の一時 index に対して `git ls-files -v` を呼ぶ
+ * （`-t` と同じタグを行頭に出し、`assume-unchanged` の対象は**小文字**に
+ * なる）。行頭が `S`（skip-worktree）か、英小文字（`assume-unchanged`）なら
+ * 検出。**`git add -A` の前に見る**——印が付いたパスは `add -A` を経ても
+ * 状態が変わらないので、前後どちらで見ても同じだが、無駄な `add -A` を
+ * 走らせる前に安全側へ倒せるほうを選んだ。
+ *
  * 取れなければ `null`（呼ぶ側は記録しない側へ倒す——`decideSkip` / `decideRecord`
  * と同じ「判定できないを都合のよい側へ倒さない」向き）。
  *
@@ -207,6 +241,28 @@ export function recordPathFor(repo) {
  * 判定を経由するかどうか」だけを変える）ので、この修正で新たに崩れる・
  * 揃う性質ではない——手で確認した実測は PR 本文に記す。
  */
+/**
+ * `git ls-files -v` の出力から、`skip-worktree` / `assume-unchanged` の印が
+ * 付いたパスが1本でもあるかを読む（`writeTreeFor` の doc「`skip-worktree` /
+ * `assume-unchanged` は開く側の穴になる（Issue #1785 レビュー）」）。
+ *
+ * **タグは行頭の1文字**（`git ls-files -t` と同じタグ集合）。`skip-worktree`
+ * は `S`（大文字）。`assume-unchanged` は、対象のタグ文字を**小文字**にする
+ * （`-v` の man page どおり）——だから「行頭が `S` か、英小文字」で両方を
+ * まとめて拾える。
+ *
+ * **純関数として切り出した。** `git` を実際に起こさなくても歯が書けるように
+ * するため（`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
+ * `writeTreeFor` からは、実際に起こした `git ls-files -v` の標準出力を渡すだけ。
+ */
+export function hasSkipWorktreeOrAssumeUnchanged(lsFilesVOutput) {
+  return lsFilesVOutput.split('\n').some((line) => {
+    if (line.length === 0) return false;
+    const tag = line[0];
+    return tag === 'S' || (tag >= 'a' && tag <= 'z');
+  });
+}
+
 export function writeTreeFor(repo) {
   const dir = spawnSync('git', ['rev-parse', '--absolute-git-dir'], {
     cwd: repo,
@@ -234,6 +290,15 @@ export function writeTreeFor(repo) {
         return null;
       }
     }
+
+    // Issue #1785 レビュー: 写した一時 index に `skip-worktree` /
+    // `assume-unchanged` の印が付いたパスがあれば、これから走らせる
+    // `git add -A` はその作業ツリーの中身を見ない（上の doc「`skip-worktree` /
+    // `assume-unchanged` は開く側の穴になる」）。`add -A` の前に見て、
+    // 見つかったら判定できない側（`null`）へ倒す。
+    const lsFilesV = spawnSync('git', ['ls-files', '-v'], { cwd: repo, env, encoding: 'utf8' });
+    if (lsFilesV.status !== 0) return null;
+    if (hasSkipWorktreeOrAssumeUnchanged(lsFilesV.stdout)) return null;
 
     const add = spawnSync('git', ['add', '-A'], { cwd: repo, env });
     if (add.status !== 0) return null;
