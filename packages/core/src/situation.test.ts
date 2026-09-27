@@ -1415,7 +1415,11 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
     // 混ぜて同じ「プールを読めなかった」を期待していた——**`tokens` は実際に
     // 読めているので、これは事実と違う言い切りだった**（現行の欠陥をテストが
     // 仕様として固定していた形。次の `it` へ切り出して期待値を反転した）。
-    const line = describeTokenSituation({ tokens: undefined, active: { tokenId: 'tok-a' }, at: AT });
+    const line = describeTokenSituation({
+      tokens: undefined,
+      active: { tokenId: 'tok-a' },
+      at: AT,
+    });
     expect(line).toContain('プールを読めなかった');
     // **0 や「無し」で埋めていない。**
     expect(line).not.toContain('いま使える 0');
