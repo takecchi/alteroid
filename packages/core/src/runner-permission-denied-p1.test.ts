@@ -397,9 +397,7 @@ describe('フックの持ち時間切れは安全側（issue #1105 本文の設�
     const decision = await denialPromise;
     expect(decision).toEqual({ continue: true });
 
-    expect(
-      noteEvents(events).some((n) => n.text.includes('フックの持ち時間切れ')),
-    ).toBe(true);
+    expect(noteEvents(events).some((n) => n.text.includes('フックの持ち時間切れ'))).toBe(true);
 
     // **遅れて届いた allow は構造的に捨てられる**——`#pending` から既に
     // 外れているので `answer()` は「もう解けている」として扱う。
@@ -451,9 +449,7 @@ describe('bash-wait-guard の deny が1回だけの許可より先に効く（is
     const asRecord = retry as { hookSpecificOutput?: Record<string, unknown> };
     // **alteroid 自身の門（#894）が勝つ。** 1回だけの許可の allow ではない。
     expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(String(asRecord.hookSpecificOutput?.permissionDecisionReason)).toContain(
-      'gh run watch',
-    );
+    expect(String(asRecord.hookSpecificOutput?.permissionDecisionReason)).toContain('gh run watch');
 
     // **1回だけの許可を消費した形跡（「上書きした」の note）が無い。**
     expect(noteEvents(events).some((n) => n.text.includes('上書きした'))).toBe(false);

@@ -1570,7 +1570,10 @@ class RunnerSession {
    * - `#noteDenial` が、同じ `tool_use_id` の拒否が来た時点で引いて消し、
    *   `note` へ残す
    */
-  readonly #oneShotAllowedToolUses = createRecentMap<{ readonly actor: string; readonly tool: string }>({
+  readonly #oneShotAllowedToolUses = createRecentMap<{
+    readonly actor: string;
+    readonly tool: string;
+  }>({
     limit: ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT,
     onForget: (ids) =>
       this.#emit({
