@@ -1143,7 +1143,9 @@ export function describeSituation(input: {
   // ときは括弧を出さない（出せる値が無い。`latestManagerStartAt` の doc）。
   const latestStart = latestManagerStartAt(input.managers);
   const lastStartClause =
-    latestStart === undefined ? '' : `（最後に起こしたのは ${formatElapsedSinceLastStart(at - latestStart)}）`;
+    latestStart === undefined
+      ? ''
+      : `（最後に起こしたのは ${formatElapsedSinceLastStart(at - latestStart)}）`;
   return block([
     `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
     // **`lost` の区分だけ 0 のとき出さない**（上の doc の2つの理由）。残りの5つは

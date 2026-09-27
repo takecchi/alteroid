@@ -722,7 +722,9 @@ describe('describeSituation', () => {
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 0 本（最後に起こしたのは 4時間36分前）。');
+    expect(countsLine).toContain(
+      '直近3時間に新しく起こした委譲: 0 本（最後に起こしたのは 4時間36分前）。',
+    );
   });
 
   /**
@@ -734,14 +736,22 @@ describe('describeSituation', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
       managers: [
-        { ...summary('a', 'running', true), startedAt: new Date(AT - 12 * 60 * 1000).toISOString() },
-        { ...summary('b', 'running', true), startedAt: new Date(AT - 30 * 60 * 1000).toISOString() },
+        {
+          ...summary('a', 'running', true),
+          startedAt: new Date(AT - 12 * 60 * 1000).toISOString(),
+        },
+        {
+          ...summary('b', 'running', true),
+          startedAt: new Date(AT - 30 * 60 * 1000).toISOString(),
+        },
       ],
       runners: [],
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 2 本（最後に起こしたのは 12分前）。');
+    expect(countsLine).toContain(
+      '直近3時間に新しく起こした委譲: 2 本（最後に起こしたのは 12分前）。',
+    );
   });
 
   /**
@@ -751,12 +761,16 @@ describe('describeSituation', () => {
   it('⭐ 最後の開始が1分未満前なら「1分未満前」と出る', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
-      managers: [{ ...summary('a', 'running', true), startedAt: new Date(AT - 30 * 1000).toISOString() }],
+      managers: [
+        { ...summary('a', 'running', true), startedAt: new Date(AT - 30 * 1000).toISOString() },
+      ],
       runners: [],
       at: AT,
     });
     const countsLine = text.split('\n').find((l) => l.startsWith('委譲 全 '));
-    expect(countsLine).toContain('直近3時間に新しく起こした委譲: 1 本（最後に起こしたのは 1分未満前）。');
+    expect(countsLine).toContain(
+      '直近3時間に新しく起こした委譲: 1 本（最後に起こしたのは 1分未満前）。',
+    );
   });
 
   /**
@@ -767,7 +781,12 @@ describe('describeSituation', () => {
   it('⭐ 最後の開始が観測時刻より未来（時計のずれ）でも「1分未満前」に丸まる', () => {
     const AT = Date.parse('2026-09-16T14:51:00.000Z');
     const text = describeSituation({
-      managers: [{ ...summary('a', 'running', true), startedAt: new Date(AT + 10 * 60 * 1000).toISOString() }],
+      managers: [
+        {
+          ...summary('a', 'running', true),
+          startedAt: new Date(AT + 10 * 60 * 1000).toISOString(),
+        },
+      ],
       runners: [],
       at: AT,
     });
