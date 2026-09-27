@@ -2143,6 +2143,138 @@ function describeIntRangeViolation(
 }
 
 /**
+ * 文字列引数の長さの制約（下限・上限）を日本語の1句で言い切る（例:
+ * `1文字以上` / `1文字以上128文字以下`）。`formatIntRangeJa` の非数値版
+ * ——issue #1752（PR #1729 の続き。数値の欄に続いて非数値の欄を揃える）。
+ *
+ * 理由は `formatIntRangeJa` と同じ——`.min()`/`.max()` を入力スキーマ側から
+ * 外すと、モデルへ配る JSON Schema からも `minLength`/`maxLength` が消える。
+ * `.describe()` とハンドラの断り文（`describeStringLengthViolation`）の
+ * **両方から同じ関数を呼ぶ**ことで、2箇所に手で書き写して食い違う
+ * （#923 と同じ形の腐り）ことを構造的に防ぐ。
+ */
+export function formatStringLengthJa(range: { min?: number; max?: number }): string {
+  const { min, max } = range;
+  if (min !== undefined && max !== undefined) return `${min}文字以上${max}文字以下`;
+  if (min !== undefined) return `${min}文字以上`;
+  if (max !== undefined) return `${max}文字以下`;
+  return '任意の長さ';
+}
+
+/**
+ * 文字列引数の長さの検査を、道具の入力スキーマ側ではなくここ（ハンドラの
+ * 先頭）で行うための共通関数。`describeIntRangeViolation` の非数値版
+ * ——なぜここへ置くかの理由はあちらの doc と同じ（issue #1651 / #1689 /
+ * #1720 / #1752。SDK の `tool()` がハンドラより前に検証し、英語の zod の
+ * JSON がマーカー付きで返る）。
+ *
+ * `value` が `undefined`（省略された）のときは常に許す——`optional()` の
+ * 意味はここでは変えない。
+ */
+function describeStringLengthViolation(
+  field: string,
+  value: string | undefined,
+  range: { min?: number; max?: number },
+): string | null {
+  if (value === undefined) return null;
+  const { min, max } = range;
+  const withinRange =
+    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
+  if (withinRange) return null;
+  return `${field} は使えない（${formatStringLengthJa(range)}のみ）。`;
+}
+
+/**
+ * `workKindSchema`（`schema.ts`。`.min(1).max(128)`）専用の断り文。
+ *
+ * **道具の入力スキーマ側には型（文字列）だけを渡し、長さの検査はここで
+ * `workKindSchema.safeParse` そのものへ委ねる**——`workKindSchema` は
+ * `apps/daemon/src/app.ts`（HTTP 側）でも使われている共有のスキーマなので、
+ * その定義自体（`schema.ts`）は1文字も変えていない。ここで検査に使うのは
+ * 変えていない実物であり、下限・上限の数値をここへ書き写してもいない
+ * （`workKindSchema.minLength` / `.maxLength` から読む）——2箇所に同じ数値を
+ * 手で書くと片方だけ直して食い違う（#923 と同じ形）ため、値そのものではなく
+ * `workKindSchema` を両方（検査・説明文）から参照する。
+ */
+function formatWorkKindRangeJa(): string {
+  return formatStringLengthJa({
+    min: workKindSchema.minLength ?? undefined,
+    max: workKindSchema.maxLength ?? undefined,
+  });
+}
+
+function describeWorkKindViolation(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  if (workKindSchema.safeParse(value).success) return null;
+  return `workKind は使えない（${formatWorkKindRangeJa()}のみ）。`;
+}
+
+/**
+ * `workKind`（`commitment_close` / `commitment_appraise` / `manager_appraise`）
+ * の**道具の入力スキーマ側**に見せる形。issue #1752。
+ *
+ * `workKindSchema` をそのまま入力スキーマへ渡すと、その `.min(1).max(128)`
+ * を SDK の `tool()` がハンドラより前に検証してしまう（この issue が直す穴
+ * そのもの）。**ここは型（文字列）だけを固定し、長さの検査は
+ * `describeWorkKindViolation`（`workKindSchema.safeParse` を直接呼ぶ）へ渡す**
+ * ——`workKindSchema` 自体（`schema.ts`）は HTTP 側（`apps/daemon/src/app.ts`）
+ * でも使う共有のスキーマなので1文字も変えていない。
+ */
+const workKindToolInputSchema = z.string();
+
+/**
+ * 配列引数の件数の制約（下限）を日本語の1句で言い切る（例: `1件以上`）。
+ * `formatIntRangeJa` / `formatStringLengthJa` と同じ理由・同じ対で使う
+ * （issue #1752）。
+ */
+export function formatArrayLengthJa(range: { min?: number; max?: number }): string {
+  const { min, max } = range;
+  if (min !== undefined && max !== undefined) return `${min}件以上${max}件以下`;
+  if (min !== undefined) return `${min}件以上`;
+  if (max !== undefined) return `${max}件以下`;
+  return '任意の件数';
+}
+
+/**
+ * 配列引数の件数の検査を、道具の入力スキーマ側ではなくここ（ハンドラの
+ * 先頭）で行うための共通関数。`describeIntRangeViolation` /
+ * `describeStringLengthViolation` の配列版（issue #1752）。
+ */
+function describeArrayLengthViolation(
+  field: string,
+  value: readonly unknown[] | undefined,
+  range: { min?: number; max?: number },
+): string | null {
+  if (value === undefined) return null;
+  const { min, max } = range;
+  const withinRange =
+    (min === undefined || value.length >= min) && (max === undefined || value.length <= max);
+  if (withinRange) return null;
+  return `${field} は使えない（${formatArrayLengthJa(range)}）。`;
+}
+
+/**
+ * 「配列の各要素が空文字であってはならない」制約（`z.array(z.string().min(1))`
+ * のうち要素側）を、ここ（ハンドラの先頭）で見るための共通関数。配列そのものの
+ * 件数（`.min()`）は `describeArrayLengthViolation` が別に見る——2つは別の
+ * 制約なので、呼び出し側は両方を呼ぶ（issue #1752。`commitment_close_many.
+ * source` / `inbox_remove_many.sources` / `archive_remove_many.sessionIds` が
+ * 元は `z.array(z.string().min(1)).min(1)` だった3件で使う）。
+ */
+function describeStringArrayElementLengthViolation(
+  field: string,
+  value: readonly string[] | undefined,
+): string | null {
+  if (value === undefined) return null;
+  const emptyIndex = value.findIndex((entry) => entry.length === 0);
+  if (emptyIndex === -1) return null;
+  return (
+    `${field} は使えない（${emptyIndex} 番目（0起点）が空文字。各要素とも` +
+    `${formatStringLengthJa({ min: 1 })}）。`
+  );
+}
+
+/**
  * 日誌への追記の失敗が、呼び出し元の道具にとって何を意味するかの3分類
  * （Issue「日誌が書けないと跡が消える」）。
  *
@@ -4607,12 +4739,14 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             '予算に入りきらないとき、どちら側を出すか。head（既定。渡さなければ従来と同じ出力）は先頭から詰めて末尾側を落とす。tail は末尾から詰めて先頭側を落とす。⚠中央はどちらでも出ない。offset を渡すときは見ない。',
           ),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
         q: z
           .string()
-          .min(1)
           .optional()
           .describe(
-            '見出しをこの文字列で絞り込む（大文字小文字を区別しない部分一致。正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。side と併用できる（絞り込んだ結果をどちらから詰めるか）。一致0件と、一致はあるが予算で切れた場合は別の文言で返る。',
+            `見出しをこの文字列で絞り込む（${formatStringLengthJa({ min: 1 })}。大文字小文字を区別しない部分一致。正規表現ではない——メタ文字を含んでいても文字どおりにしか一致しない）。side と併用できる（絞り込んだ結果をどちらから詰めるか）。一致0件と、一致はあるが予算で切れた場合は別の文言で返る。`,
           ),
         // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
         // 先頭（下の `describeIntRangeViolation` 呼び出し）で見る。ここは型
@@ -4634,6 +4768,9 @@ export function createCloneTools(context: ToolContext) {
         // 返っていた——ここで断って日本語の平文にする。
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const qError = describeStringLengthViolation('q', q, { min: 1 });
+        if (qError !== null) return text(qError);
         const doc = await stores.persona.read(slug);
         if (doc === null) return text(`記憶 ${slug} は存在しない。`);
         const { sections } = scanMemorySections(doc.content);
@@ -4704,16 +4841,23 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         slug: z.string().describe('文書のスラッグ（拡張子なし）'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeArrayLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列の配列）だけを固定する。
         sections: z
           .array(z.string())
-          .min(1)
-          .describe('開く節の節id（複数可）。焼き込みのカードか memory_outline に出ているもの'),
+          .describe(
+            `開く節の節id（複数可。${formatArrayLengthJa({ min: 1 })}）。焼き込みのカードか memory_outline に出ているもの`,
+          ),
       },
       async ({ slug, sections: requested }) => {
         // **issue #1662。** `memory_read` と同じ門（doc はそちらにある）。
         if (!memorySlugSchema.safeParse(slug).success) {
           return text(`記憶のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const sectionsError = describeArrayLengthViolation('sections', requested, { min: 1 });
+        if (sectionsError !== null) return text(sectionsError);
         const doc = await stores.persona.read(slug);
         if (doc === null) return text(`記憶 ${slug} は存在しない。`);
         const { sections } = scanMemorySections(doc.content);
@@ -4928,11 +5072,13 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         fromSlug: z.string().describe('節を切り取る側の文書のスラッグ'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeArrayLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列の配列）だけを固定する。
         sections: z
           .array(z.string())
-          .min(1)
           .describe(
-            'memory_outline が出した節id（`[...]` の中身）。複数渡せる——1回で全部移る。渡す順ではなく文書に現れる順で移し先の末尾に並ぶ',
+            `memory_outline が出した節id（\`[...]\` の中身）。複数渡せる——1回で全部移る（${formatArrayLengthJa({ min: 1 })}）。渡す順ではなく文書に現れる順で移し先の末尾に並ぶ`,
           ),
         toSlug: z.string().describe('節を足す側の文書のスラッグ（無ければ作る）'),
         summary: z.string().describe('なぜ移したかの一行要約（日誌に残る。本文は残らない）'),
@@ -4946,6 +5092,9 @@ export function createCloneTools(context: ToolContext) {
         if (!memorySlugSchema.safeParse(toSlug).success) {
           return text(`記憶のスラッグが不正: ${toSlug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const sectionsError = describeArrayLengthViolation('sections', ids, { min: 1 });
+        if (sectionsError !== null) return text(sectionsError);
         if (fromSlug === toSlug) {
           return text(
             `from と to が同じ文書（${fromSlug}）である。節の移動先は別の文書でなければならない` +
@@ -6036,15 +6185,20 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('approvals_list に出ている id'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
         reason: z
           .string()
-          .min(1)
           .describe(
-            'なぜ取り下げるか（不要になった経緯・自分で答えを見つけた等）。' +
+            `なぜ取り下げるか（不要になった経緯・自分で答えを見つけた等。${formatStringLengthJa({ min: 1 })}）。` +
               '人間はこれを読んで後から否定する',
           ),
       },
       async ({ id, reason }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        if (reasonError !== null) return text(reasonError);
         const existing = await stores.jobs.getApproval(id);
         if (!existing) return text(`承認待ち ${id} は無い（id が違う）。`);
         if (existing.answeredAt !== undefined) {
@@ -6163,11 +6317,15 @@ export function createCloneTools(context: ToolContext) {
           .describe('この actor の分だけ（マネージャーの id か "clone"）'),
         layer: usageLayerSchema.optional().describe('誰が使った分だけ（clone / manager）'),
         site: usageSiteSchema.optional().describe('どこで使った分だけ（session / distill）'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
         tokenId: z
           .string()
-          .min(1)
           .optional()
-          .describe('この認証トークンで使った分だけ（token_list の id）'),
+          .describe(
+            `この認証トークンで使った分だけ（token_list の id。${formatStringLengthJa({ min: 1 })}）`,
+          ),
         axis: z
           .enum(USAGE_AXES)
           .optional()
@@ -6183,6 +6341,9 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ from, to, managerId, layer, site, tokenId, axis, cursor }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
+        if (tokenIdError !== null) return text(tokenIdError);
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),
@@ -7049,11 +7210,13 @@ export function createCloneTools(context: ToolContext) {
         '記憶へ書くのは判断の根拠のほうで、両方やってよい。',
       ].join(' '),
       {
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
         body: z
           .string()
-          .min(1)
           .describe(
-            '何を引き受けたか。後日のあなたが読んでそのまま動ける粒度で書く（対象・狙い・どこまでやるか）',
+            `何を引き受けたか。後日のあなたが読んでそのまま動ける粒度で書く（対象・狙い・どこまでやるか。${formatStringLengthJa({ min: 1 })}）`,
           ),
         source: z
           .string()
@@ -7061,6 +7224,10 @@ export function createCloneTools(context: ToolContext) {
           .describe('関係する相手や出所（マネージャー id・会話 id など。分かるときだけ）'),
       },
       async ({ body, source }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄。issue 本文の
+        // 再現テスト対象）。**
+        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        if (bodyError !== null) return text(bodyError);
         const entry = {
           id: randomUUID(),
           at: new Date().toISOString(),
@@ -7133,11 +7300,13 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
         reason: z
           .string()
-          .min(1)
           .describe(
-            '何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由）。' +
+            `何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由。${formatStringLengthJa({ min: 1 })}）。` +
               '人間はこれを読んで後から否定する',
           ),
         appraisal: appraisalSchema
@@ -7152,16 +7321,25 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .optional()
           .describe('なぜその評定なのか（1行）。appraisal を書いたなら、これも書くこと'),
-        workKind: workKindSchema
+        // **issue #1752。** `workKindSchema` の `.min(1).max(128)` は入力スキーマ
+        // 側ではなくハンドラの先頭（下の `describeWorkKindViolation` 呼び出し）
+        // で見る（`workKindToolInputSchema` の doc）。ここは型（文字列）だけを
+        // 固定する。
+        workKind: workKindToolInputSchema
           .optional()
           .describe(
-            '**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認）。' +
+            `**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認。${formatWorkKindRangeJa()}）。` +
               '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
               '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）' +
               '。**appraisal を書いたなら必須**（書かなければ閉じずに断る）',
           ),
       },
       async ({ id, reason, appraisal, appraisalReason, workKind }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
+        if (reasonError !== null) return text(reasonError);
+        const workKindError = describeWorkKindViolation(workKind);
+        if (workKindError !== null) return text(workKindError);
         // **評定を付けるなら種類も要る**（#1308。`workKindSchema` の doc）。閉じる前に
         // 断る —— 閉じてから断ると「片付いたが評定は付かなかった」という、呼んだ側が
         // 意図していない半端な状態が残る。
@@ -7249,13 +7427,20 @@ export function createCloneTools(context: ToolContext) {
             'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
               '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
           ),
-        workKind: workKindSchema.describe(
-          '**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認）。' +
+        // **issue #1752。** `workKindSchema` の `.min(1).max(128)` は入力スキーマ
+        // 側ではなくハンドラの先頭（下の `describeWorkKindViolation` 呼び出し）
+        // で見る（`workKindToolInputSchema` の doc）。ここは型（文字列）だけを
+        // 固定する。
+        workKind: workKindToolInputSchema.describe(
+          `**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認。${formatWorkKindRangeJa()}）。` +
             '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
             '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）',
         ),
       },
       async ({ id, appraisal, reason, workKind }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const workKindError = describeWorkKindViolation(workKind);
+        if (workKindError !== null) return text(workKindError);
         const existing = await stores.commitments.get(id);
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
@@ -7335,14 +7520,19 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
+        // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
+        // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
+        // （文字列）だけを固定する。
         body: z
           .string()
-          .min(1)
           .describe(
-            '直した後の本文（全文。差分ではない）。後日のあなたが読んでそのまま動ける粒度で書く',
+            `直した後の本文（全文。差分ではない）。後日のあなたが読んでそのまま動ける粒度で書く（${formatStringLengthJa({ min: 1 })}）`,
           ),
       },
       async ({ id, body }) => {
+        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
+        const bodyError = describeStringLengthViolation('body', body, { min: 1 });
+        if (bodyError !== null) return text(bodyError);
         const existing = await stores.commitments.get(id);
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // **`origin` の判定はここでする**（`CommitmentStore.editBody` の doc —
