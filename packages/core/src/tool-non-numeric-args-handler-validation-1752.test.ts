@@ -388,7 +388,16 @@ describe('道具の非数値引数（25件）— 範囲外は日本語の平文�
     const bad = await callTool(badRpc, tool, { ...base, [field]: invalid });
     expect(bad.isError, `${tool}.${field}=${JSON.stringify(invalid)}: ${bad.text}`).toBe(false);
     expect(bad.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
-    expect(bad.text).toContain(field);
+    // **`field` 単独ではなく `${field} は使えない` まで見る。** 欄名だけを
+    // 見ると、この道具の別の断り文（絞り込みの漏斗など）が偶然その欄名を
+    // 含んでいるだけで緑になる——実際に `commitment_close_many.origin` は
+    // 検査を丸ごと外しても、`funnel` の行が無条件に `origin=[...]` を含む
+    // ため `toContain('origin')` だけでは生存を見逃した（変異試験で発見。
+    // PR 本文に実測を書く）。`describeStringLengthViolation` /
+    // `describeArrayLengthViolation` / `describeWorkKindViolation` の断り文は
+    // すべて「${field} は使えない（…）。」の形で揃えてあるので、ここまで
+    // 見れば偶然の一致では緑にならない。
+    expect(bad.text).toContain(`${field} は使えない`);
 
     // --- 範囲内（境界値そのもの） ---
     const goodRpc = await connect(stores, managers?.());
@@ -445,7 +454,9 @@ describe('配列の要素が空文字であってはならない制約（issue #
     const result = await callTool(rpc, tool, { ...base, [field]: [''] });
     expect(result.isError, `${tool}.${field}=['']: ${result.text}`).toBe(false);
     expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
-    expect(result.text).toContain(field);
+    // **`field` 単独ではなく `${field} は使えない` まで見る**（上の主表と
+    // 同じ理由——欄名だけでは他の断り文の偶然の一致を見逃す）。
+    expect(result.text).toContain(`${field} は使えない`);
 
     // --- 比較対象: 要素が空文字でなければ今までどおり通る ---
     const goodRpc = await connect(stores);
