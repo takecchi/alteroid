@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,21 +13,27 @@ import { runtimeFilePath, writeRuntimeInfo } from './runtime.js';
  * 該当ミドルウェア）ので、`~/.alteroid/state/credentials.json`
  * （`apps/cli/src/credentials.ts`）と同格か、それ以上に守るべき秘密である。
  *
- * `credentials.ts` の `persist()` は `writeFile(..., { mode: 0o600 })` に加えて
- * 明示の `chmod` まで足している（「一時ファイルの時点で 0600。rename 後に
- * 絞ると、その隙間で他人が読める」）。**`writeRuntimeInfo`（`runtime.ts`）には
- * その手当てが無い** — 素の `writeFile(path, json, 'utf8')` で、パーミッションは
- * プロセスの umask 任せになる。
+ * `credentials.ts` の `persist()` は一時ファイルへ `writeFile(..., { mode: 0o600 })`
+ * ＋明示の `chmod` で書いてから `rename` で本体へ切り替えている（「一時ファイルの
+ * 時点で 0600。rename 後に絞ると、その隙間で他人が読める」）。直す前の
+ * `writeRuntimeInfo`（`runtime.ts`）にはその手当てが無かった——素の
+ * `writeFile(path, json, 'utf8')` で、パーミッションはプロセスの umask 任せに
+ * なっていた。
  *
- * ここで固定したい保証は2つ。
+ * ここで固定したい保証は3つ。
  * 1. **新規作成**: 既定の umask（Linux の典型値 022）でも、書き上がった
  *    `daemon.json` は group/other から読めない。
  * 2. **既存ファイルの書き直し**: `writeFile` の `mode` オプションは、その
  *    ファイルが**新規作成のときだけ**効く（POSIX の `open()` は既存ファイルに
  *    `mode` を適用しない）。だから `mode: 0o600` を足すだけの直し方だと、
  *    過去のバグ入りの版が作った 0644 の `daemon.json` を次の起動が書き直しても
- *    パーミッションはそのまま——`persist()` が rename 前にも明示の `chmod` を
- *    足している理由と同じで、書いた後に必ず `chmod` を掛ける必要がある。
+ *    パーミッションはそのまま——書いた後にパーミッションを絞り直す手当てが要る。
+ * 3. **書き込みの途中に緩いモードの窓を作らない**: 既存ファイルを直接
+ *    `writeFile` で上書きしてから `chmod` する形だと、その2手の間は
+ *    「新しい token を含む中身」が「古い（緩い）パーミッション」のまま乗る。
+ *    `writeRuntimeInfo` は `credentials.ts` の `persist()` と同じく一時ファイル
+ *    ＋`rename` にしたので、そもそも `${path}.tmp` 以外の場所に緩いパーミッション
+ *    の窓ができない（`rename` の完了後には tmp も残らない）。
  */
 describe('writeRuntimeInfo（daemon.json）のパーミッション（issue #1871）', () => {
   let dir: string;
@@ -81,5 +87,17 @@ describe('writeRuntimeInfo（daemon.json）のパーミッション（issue #187
 
     const after = await stat(path);
     expect(after.mode & 0o077).toBe(0);
+  });
+
+  it('一時ファイル経由で書くので、書き終えた後に .tmp が残らない（緩いモードの窓を作らない実装であることの傍証）', async () => {
+    await writeRuntimeInfo(dir, {
+      pid: 9012,
+      port: 4519,
+      startedAt: '2026-09-27T00:00:00.000Z',
+      token: 'operator-secret-token-do-not-leak-3',
+    });
+
+    const entries = await readdir(dir);
+    expect(entries).toEqual(['daemon.json']);
   });
 });
