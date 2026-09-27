@@ -742,6 +742,43 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     expect(after).toBe(before);
   });
 
+  it('追跡済みで .gitignore にも当たるファイルは拾う（fingerprint の ls-files -c と同じ範囲。Issue #1785）', async () => {
+    // 上の歯「.gitignore されたファイルは拾わない」が測っているのは
+    // **未追跡のまま作ったファイル**だけである。`git ls-files -c`（fingerprint が
+    // 使う集合の半分）は、追跡済みなら ignore の規則に関わらず常に挙げるので、
+    // `writeTreeFor` の範囲もそこは揃っていなければならない——揃っていなかった
+    // のが Issue #1785（`scripts/t3-check-verified-head-tracked-ignored.repro.test.ts`
+    // の再現）。
+    const dir = await makeRepo();
+    // 先に追跡する（.gitignore が無い時点で追加）。
+    await writeFile(join(dir, 'tracked-but-ignored.txt'), 'original content\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'track before ignoring'], { cwd: dir });
+    // 後から .gitignore にそのファイルを足す（force-add 済みファイルにパターンが
+    // 後から掛かる、というよくある事故と同じ形）。
+    await writeFile(join(dir, '.gitignore'), 'tracked-but-ignored.txt\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'ignore the already-tracked file'], { cwd: dir });
+
+    const tree = writeTreeFor(dir) as string;
+    expect(tree).not.toBeNull();
+    const paths = execFileSync('git', ['ls-tree', '-r', '--name-only', tree], {
+      cwd: dir,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .filter(Boolean);
+    expect(paths).toContain('tracked-but-ignored.txt');
+
+    // **帰結そのものも測る**——このファイルを1つ持つリポジトリで、verify 直後に
+    // 何も変えず commit した HEAD が「一致」になること（歯1の前提）。
+    const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+    expect(tree).toBe(headTree);
+  });
+
   it('本物の index を動かさない（git diff --cached が空のまま）', async () => {
     const dir = await makeRepo();
     await writeFile(join(dir, 'untracked.txt'), 'new\n');
