@@ -6187,7 +6187,16 @@ function describeQuestion(question: unknown): string | undefined {
   return lines.length > 0 ? [text, ...lines].join('\n') : text;
 }
 
-/** 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。 */
+/**
+ * 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。
+ *
+ * **一覧に無い否定は allow に化ける**（`inferDecision` の設計）ので、漏れは
+ * 許しすぎる側に倒れる。「拒否」「無理」「お断り」のような普通の言い方が
+ * 漏れていた（issue #1827）。部分一致なので、足す語は他の語の一部に
+ * なりにくい形にする（`断` 1字だと「判断」に当たるので `断る` / `お断り` にする）。
+ * 逆に、否定の語を含む承認（「拒否しなくてよい」など）は deny に倒れるが、
+ * それは止める側であって許しすぎる側ではない。
+ */
 const DENIAL_PHRASES = [
   'やめ',
   'だめ',
@@ -6195,15 +6204,26 @@ const DENIAL_PHRASES = [
   '不可',
   '中止',
   '却下',
+  '拒否',
+  '無理',
+  '断る',
+  'お断り',
   'しないで',
   '止めて',
   '待って',
   '許可しない',
+  '許可できな',
+  '許可できません',
   '承認しない',
+  '承認できな',
+  '承認できません',
+  '認めない',
+  '認められない',
 ];
 
 /** 英語側は語境界で見る（`nothing` の `no` を否定と読まないため）。 */
-const DENIAL_WORDS = /\b(deny|denied|no|nope|don't|do not|stop|cancel)\b/i;
+const DENIAL_WORDS =
+  /\b(deny|denied|no|nope|don't|do not|stop|cancel|reject|rejected|refuse|refused|decline|declined)\b/i;
 
 /**
  * `decision` を付け忘れた回答の読み取り。
