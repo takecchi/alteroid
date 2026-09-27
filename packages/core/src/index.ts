@@ -205,6 +205,7 @@ export {
   type LoginRequest,
   type LoginRequestStatus,
   type OwnerOutcome,
+  type RevokeAccessTokenOutcome,
 } from './auth.js';
 export {
   GOOGLE_PROVIDER_ID,
