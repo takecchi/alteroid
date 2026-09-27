@@ -670,7 +670,8 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     // 本体自身（`parentToolUseId` を渡さない）の発言にも拒否の印。**その後の
     // `result` は成功で返る**（`session.finish('')` は `isError` を立てない）
     // ——`assistant.error` の印を見ないと成功と区別が付かない実機の形
-    // （line 356-360 の既存テストと同じ作り）。
+    // （既存テスト「assistant.error が付いた本文は報告に混ぜず、失敗として
+    // 包んで上げる」と同じ作り）。
     await session.say('本体の枠の文言', { error: 'billing_error' });
     await session.finish('');
 
