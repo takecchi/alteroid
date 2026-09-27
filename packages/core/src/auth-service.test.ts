@@ -373,9 +373,7 @@ describe('createAuthService', () => {
       provider: 'fake',
       redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
     });
-    const stateFirst = decodeState(
-      new URL(first.authorizationUrl).searchParams.get('state') ?? '',
-    );
+    const stateFirst = decodeState(new URL(first.authorizationUrl).searchParams.get('state') ?? '');
     const stateSecond = decodeState(
       new URL(second.authorizationUrl).searchParams.get('state') ?? '',
     );

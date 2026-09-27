@@ -322,8 +322,7 @@ export type OwnerOutcome =
 
 /** `createAccountWithIdentity` の結果（issue #1714）。 */
 export type CreateAccountWithIdentityOutcome =
-  | { created: true }
-  | { created: false; existing: AuthIdentity };
+  { created: true } | { created: false; existing: AuthIdentity };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ

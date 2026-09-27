@@ -209,6 +209,7 @@ export class PgAuthStore implements AuthStore {
       if (existing === null) {
         throw new Error(
           'createAccountWithIdentity: 巻き戻した直後に既存の identity が読めない（他の1操作と矛盾）',
+          { cause: error },
         );
       }
       return { created: false, existing };
