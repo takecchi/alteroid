@@ -43,7 +43,11 @@ interface ManualRunner {
   ask(managerId: string, requestId: string, summary: string): void;
   answerAsk(requestId: string): void;
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
-  denied(managerId: string, tool: string, fields?: { actor?: string; inputHead?: string }): void;
+  denied(
+    managerId: string,
+    tool: string,
+    fields?: { actor?: string; inputHead?: string; toolUseId?: string },
+  ): void;
   toolUse(managerId: string, actor: string, tool: string): void;
 }
 
@@ -364,14 +368,19 @@ describe('renotifyStalledDenials（issue #1105 C）', () => {
     await pool.stop();
   });
 
-  it('P1 の確認が未決（waiting_human）のままなら、知らせ直さない', async () => {
+  it('この拒否自身への P1 の確認が未決（waiting_human）のままなら、知らせ直さない（対照。issue #1772）', async () => {
     const { pool, stores, inbox, fake, advance } = await runningManualSetup();
-    fake.denied('mgr-denial-renotify', 'Bash');
+    // **`requestId` を拒否の `toolUseId` と同じ値にする** —— `runner.ts` の
+    // `#onPermissionDenied`（issue #1105 P1「1回だけの許可」）は、この拒否と
+    // 同じ `tool_use_id` を `requestId` にして `ask` を上げる。ここが一致して
+    // いなければ「この拒否自身への確認」を再現したことにならない（issue #1772
+    // の判定単位が拒否ごとになった後は、無関係な確認とこの拒否自身の確認を
+    // 取り違えない歯が要る——この対照テストがそれである）。
+    fake.denied('mgr-denial-renotify', 'Bash', { toolUseId: 'req-same-denial' });
     await waitForDenialJournaled(stores, 'Bash');
-    // クローンへの確認がまだ1件、答えを待っている（P1 の1回だけの許可の
-    // 確認と同じ `ask`/`waiting_human`。どの確認かは区別しない——
-    // interface の doc「簡略化」）。
-    fake.ask('mgr-denial-renotify', 'req-1', '1回だけ許可しますか');
+    // クローンへの確認がまだ1件、答えを待っている——この拒否自身への
+    // P1 の1回だけの許可の確認（`requestId` が拒否の `toolUseId` と一致）。
+    fake.ask('mgr-denial-renotify', 'req-same-denial', '1回だけ許可しますか');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const before = inbox.length;
