@@ -213,7 +213,7 @@ describe('pickLatestRunPerWorkflow', () => {
     expect(result.verdict).toBe('green');
   });
 
-  it('Issue #1748 の実例: rerun が絡むと、draft 由来の skip のほうが created_at 上は新しく見える。updated_at で正しく success を選ぶ', () => {
+  it('Issue #1748 の実例: rerun が絡むと、draft 由来の skip のほうが created_at 上は新しく見える。run_started_at で正しく success を選ぶ', () => {
     // 実測（観測 2026-09-27、sha 031bf92f62e61fc16eee3570a72c7c87ff6b2d7f）:
     // push 直後に `gh pr ready` を打ったところ、concurrency
     // （cancel-in-progress: true）が競り合い、`CI` の run が2本できた。
@@ -224,7 +224,9 @@ describe('pickLatestRunPerWorkflow', () => {
     // run 36286928087（run_attempt=1、created_at=01:54:11Z、conclusion=skipped。
     // draft と評価された扱いのまま残った）と、run 36286927781（attempt 1 は
     // created_at=01:54:10Z——36286928087 より1秒早い——で cancelled。
-    // `gh run rerun` した attempt 2 は success、updated_at=02:16:15Z）。
+    // `gh run rerun` した attempt 2 は success、run_started_at=02:02:08Z
+    // （attempt 2 が実際に走り始めた時刻）、updated_at=02:16:15Z（完了時刻。
+    // #1761 で鍵からは外した——完了を待たない run_started_at のほうを使う）。
     // rerun しても run 自身の created_at（01:54:10Z）は動かない。
     const draftOriginSkip = {
       id: 36286928087,
@@ -242,6 +244,7 @@ describe('pickLatestRunPerWorkflow', () => {
       event: 'pull_request',
       run_attempt: 2,
       created_at: '2026-09-27T01:54:10Z',
+      run_started_at: '2026-09-27T02:02:08Z',
       updated_at: '2026-09-27T02:16:15Z',
       status: 'completed',
       conclusion: 'success',
@@ -252,6 +255,13 @@ describe('pickLatestRunPerWorkflow', () => {
     // 直す前の NG の原因だった。
     expect(Date.parse(draftOriginSkip.created_at)).toBeGreaterThan(
       Date.parse(rerunSuccess.created_at),
+    );
+    // run_started_at（02:02:08Z）も draftOriginSkip の created_at
+    // （01:54:11Z）より後なので、#1761 で updated_at から run_started_at
+    // に鍵を変えても #1748 の実データは green のまま —— 実データで確認済み
+    // （gh api repos/takecchi/alteroid/actions/runs/36286927781/attempts/2）。
+    expect(Date.parse(rerunSuccess.run_started_at)).toBeGreaterThan(
+      Date.parse(draftOriginSkip.created_at),
     );
 
     const latest = pickLatestRunPerWorkflow([draftOriginSkip, rerunSuccess]);
@@ -297,6 +307,112 @@ describe('pickLatestRunPerWorkflow', () => {
     expect(naiveNewerByCreatedAtOnly(draftOriginSkip, rerunSuccess)).toEqual(draftOriginSkip);
     // 直した後の pickLatestRunPerWorkflow は同じ標本で success を選ぶ
     // （run_attempt を足した完全な標本は直上のテストで確認済み）。
+  });
+
+  it('Issue #1761 の open-side の疑い（14回目の横断レビュー、wip/review14-s5 の再現テスト由来）: rerun の run_started_at が、別の genuinely 新しい run の created_at より前なら、その別 run の failure を隠さない', () => {
+    // #1748 の直し（updated_at を鍵にする）は、rerun の「完了」時刻を鍵に
+    // 使っていた。rerun に時間がかかると、rerun が実行中のあいだに生まれた
+    // 別の genuinely 新しい run（本当に新しい世代の failure）の created_at
+    // を updated_at（完了時刻）が追い越し、その failure を評価から消して
+    // green と言ってしまう —— これが開く側の穴（#1761）。
+    //
+    // ここでは rerun の実行開始（run_started_at）が、別 run の created_at
+    // より「前」のケースを固定する:
+    //   - rerunnedOldRun: run_started_at=10:05:00Z に実行を始め、
+    //     updated_at=10:40:00Z（35分後）に success で完了した。
+    //   - genuinelyNewerFailure: created_at=10:20:00Z —— rerun の実行中
+    //     （開始10:05 と完了10:40 のあいだ）に作られ、failure で終わった。
+    // rerun の開始（10:05）は genuinelyNewerFailure の created_at（10:20）
+    // より前なので、run_started_at を鍵にすれば genuinelyNewerFailure が
+    // 正しく「新しい」と判定され、failure が評価に残る（green と言わない）。
+    const rerunnedOldRun = {
+      id: 500,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 2,
+      created_at: '2026-09-20T10:00:00Z',
+      run_started_at: '2026-09-20T10:05:00Z',
+      updated_at: '2026-09-20T10:40:00Z',
+      status: 'completed',
+      conclusion: 'success',
+    };
+    const genuinelyNewerFailure = {
+      id: 501,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 1,
+      created_at: '2026-09-20T10:20:00Z',
+      updated_at: '2026-09-20T10:20:30Z',
+      status: 'completed',
+      conclusion: 'failure',
+    };
+
+    // 前提: rerun の実行開始は、別 run（failure）の created_at より前。
+    expect(Date.parse(rerunnedOldRun.run_started_at)).toBeLessThan(
+      Date.parse(genuinelyNewerFailure.created_at),
+    );
+    // 前提: updated_at（完了時刻）だけを鍵にすると、この前提が逆転する
+    // （#1748 の直しのままだと、これが開く側の穴を生んでいた）。
+    expect(Date.parse(rerunnedOldRun.updated_at)).toBeGreaterThan(
+      Date.parse(genuinelyNewerFailure.created_at),
+    );
+
+    const latest = pickLatestRunPerWorkflow([rerunnedOldRun, genuinelyNewerFailure]);
+    expect(latest).toEqual([genuinelyNewerFailure]);
+
+    const jobsByRunId = {
+      500: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+      501: [{ name: 'ci', status: 'completed', conclusion: 'failure' }],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    // 直っていれば、最新世代の failure が見えるので green ではない。
+    expect(result.verdict).not.toBe('green');
+  });
+
+  it('鏡像: rerun の run_started_at が、別の run の created_at より後なら、rerun 側を最新として選んでよい（#1748 の実例と同じ向き）', () => {
+    // 直上のテストと対になる形。rerun の実行開始が別 run の created_at
+    // より「後」なら、別 run は rerun が始まる前に既に存在して完了して
+    // いたことになる —— rerun はそのあとに手で起こされた、本当に新しい
+    // 世代である。この場合は rerun 側を「最新」として選んでよい
+    // （#1748 の実データ、sha 031bf92 と同じ向き。draft 由来の skip の
+    // created_at より rerun の run_started_at のほうが後だった）。
+    const otherRun = {
+      id: 501,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 1,
+      created_at: '2026-09-20T10:20:00Z',
+      updated_at: '2026-09-20T10:20:30Z',
+      status: 'completed',
+      conclusion: 'failure',
+    };
+    const rerunnedNewerRun = {
+      id: 500,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 2,
+      created_at: '2026-09-20T10:00:00Z',
+      run_started_at: '2026-09-20T10:25:00Z',
+      updated_at: '2026-09-20T10:40:00Z',
+      status: 'completed',
+      conclusion: 'success',
+    };
+
+    // 前提: rerun の実行開始は、別 run（failure）の created_at より後。
+    expect(Date.parse(rerunnedNewerRun.run_started_at)).toBeGreaterThan(
+      Date.parse(otherRun.created_at),
+    );
+
+    const latest = pickLatestRunPerWorkflow([otherRun, rerunnedNewerRun]);
+    expect(latest).toEqual([rerunnedNewerRun]);
+
+    const jobsByRunId = {
+      500: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+      501: [{ name: 'ci', status: 'completed', conclusion: 'failure' }],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    // rerun のほうが実行開始で見て後なので、green と言ってよい。
+    expect(result.verdict).toBe('green');
   });
 });
 
