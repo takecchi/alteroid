@@ -802,7 +802,7 @@ export function describeTokenSituation(input: {
   // **`tokens` と `active` は別々に読み、別々に落ちうる**（`clone.ts` の
   // `#situationNoticeFor` が2本を個別に `.then(value, () => undefined)` で
   // catch している）。⟹ **どちらが落ちたかで倒れ先の意味が違う**——`tokens`
-  // が読めなければプールの内訳（使える/冷却中/外されている）そのものが
+  // が読めなければプールの内訳（使える/冷却中/人間が外している/失効）そのものが
   // 出せないが、`active` だけが読めなくても `tokens` は無事なら内訳は出せる。
   // **この2つを1つの「プールを読めなかった」に潰さない**——潰すと、`tokens`
   // が実際には読めていた回にも「プールを読めなかった」という嘘が出る
@@ -817,7 +817,14 @@ export function describeTokenSituation(input: {
 
   const ready = input.tokens.filter((row) => tokenStateOf(row, input.at) === 'ready');
   const cooling = input.tokens.filter((row) => tokenStateOf(row, input.at) === 'cooling');
-  const withheld = input.tokens.length - ready.length - cooling.length;
+  // **`disabled`（人間が外した）と `invalidated`（失効）は分けて数える（#1794）。**
+  // 以前はここを `input.tokens.length - ready.length - cooling.length` の1本の
+  // 引き算にして「外されている」という1つの数へ合算していた——`token_list`
+  // （`tools.ts`）側はこの2つを別の語（「人間が外した」「失効（原文）」）で分けて
+  // 出しており、この関数自身が持つ {@link TOKEN_STATE_LABEL} も個々のトークンの
+  // 状態を言うときは区別できているのに、プール全体の内訳だけがそれを潰していた。
+  const disabled = input.tokens.filter((row) => tokenStateOf(row, input.at) === 'disabled');
+  const invalidated = input.tokens.filter((row) => tokenStateOf(row, input.at) === 'invalidated');
   const active = input.active;
 
   const current = ((): string => {
@@ -859,8 +866,18 @@ export function describeTokenSituation(input: {
     String(ready.length) +
     ' / 冷却中 ' +
     String(cooling.length) +
-    ' / 外されている ' +
-    String(withheld) +
+    // **語は {@link TOKEN_STATE_LABEL} を使い回す（文言を複製しない）。**
+    // `token_list`（`tools.ts`）側の語（「人間が外した」「失効（原文）」）と字面が
+    // 揃うように、この関数自身が個々のトークンの状態表示（`current` の中の
+    // `TOKEN_STATE_LABEL[state]`）で既に使っている同じ定数から取る。
+    ' / ' +
+    TOKEN_STATE_LABEL.disabled +
+    ' ' +
+    String(disabled.length) +
+    ' / ' +
+    TOKEN_STATE_LABEL.invalidated +
+    ' ' +
+    String(invalidated.length) +
     '。' +
     TOKEN_INVARIANT
   );
