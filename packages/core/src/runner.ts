@@ -40,7 +40,7 @@ import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
-import { buildDenialInputHead, rawLineOf } from './denial-input-head.js';
+import { buildDenialInputHead, matchInputOf } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
   noteMissingRecordSource,
@@ -1538,9 +1538,11 @@ class RunnerSession {
   /**
    * クローンが `#onPermissionDenied` で出した「1回だけの許可」（issue #1105
    * P1）を、`(actor, tool, 入力の完全一致のダイジェスト)` をキーに控えておく
-   * 帳面。**生の入力は保持しない**——鍵に使うのは `digestOf(rawLineOf(...))`
+   * 帳面。**生の入力は保持しない**——鍵に使うのは `digestOf(matchInputOf(...))`
    * というダイジェストだけで、元の文字列は残らない（`#noteDenial` の
    * `toolUseId` の doc と同じ理由——復元できない値だけを鍵にする）。
+   * `matchInputOf` は入力**全体**（`command` だけでなく `run_in_background`
+   * 等ほかの欄も含む）をキー順に依らない形で畳んだもの（issue #1768）。
    *
    * - `#onPermissionDenied` が、クローンが allow と答えた時点で書く
    * - `#consumeOneShotAllow`（`#onPreToolUse` から呼ぶ）が、一致した時点で
@@ -3939,11 +3941,18 @@ class RunnerSession {
    *
    * ## 一致の鍵が作れない入力
    *
-   * `record.toolName` が無い、または `rawLineOf(record.toolInput)` が
-   * `undefined`（1行に畳めない）ときは、クローンへの確認そのものを上げず
+   * `record.toolName` が無い、または `matchInputOf(record.toolInput)` が
+   * `undefined`（畳めない）ときは、クローンへの確認そのものを上げず
    * `no-retry` で終える——一致させる鍵が無い以上、たとえクローンが allow と
    * 答えても撃ち直しを安全に特定できない（issue #1105 の「入力が1文字違えば
    * 返さない」という要求を、作れない鍵にまで緩めない）。
+   *
+   * **鍵は入力全体（`matchInputOf`）で作る。`command` の文字列だけではない**
+   * （issue #1768）。以前は `rawLineOf`（`command` 欄があればそれだけを返す、
+   * 表示用の関数）を鍵にも流用していたため、`command` が同じで
+   * `run_in_background` 等ほかの欄だけが違う撃ち直しにまで、この許可が
+   * 及んでいた。表示（`buildDenialInputHead`。下の `inputHead`）は今までどおり
+   * `rawLineOf` を土台にする——変えたのは鍵の材料だけである。
    *
    * ## フックの持ち時間切れ（issue #1105 本文の設計判断5）
    *
@@ -3987,8 +3996,8 @@ class RunnerSession {
       return { kind: 'no-retry' };
     }
 
-    const rawLine = rawLineOf(record.toolInput);
-    if (rawLine === undefined) {
+    const matchInput = matchInputOf(record.toolInput);
+    if (matchInput === undefined) {
       this.#emit({
         type: 'note',
         managerId: this.#id,
@@ -4003,7 +4012,7 @@ class RunnerSession {
     const permitKey = oneShotAllowKey(
       oneShotActorOf(this.#id, record),
       toolName,
-      digestOf(rawLine),
+      digestOf(matchInput),
     );
     const id = record.toolUseId ?? randomUUID();
 
@@ -4241,10 +4250,20 @@ class RunnerSession {
    *
    * ## 一致の鍵は表示用の伏せ字済みの値ではない
    *
-   * `rawLineOf(record.toolInput)` の完全一致のダイジェストを使う——
+   * `matchInputOf(record.toolInput)` の完全一致のダイジェストを使う——
    * `buildDenialInputHead`（伏せ字つき・160字に切る、表示専用）を鍵にすると、
    * 先頭160字が同じで残りが違う別の入力が誤って一致しうる（issue #1105 の
    * 要求「入力が1文字違えば返さない」）。
+   *
+   * **⚠️ 以前は `rawLineOf(record.toolInput)` を鍵にしていた（issue #1768 で
+   * 修正）。** `rawLineOf` は表示用の関数で、`command` という文字列欄を持つ
+   * 入力からは**その欄だけ**を返し、ほかの欄（`run_in_background` /
+   * `timeout` / `dangerouslyDisableSandbox` 等）を捨てる。`Bash` の入力は
+   * まさにこの形なので、`command` が同じでほかの欄だけが違う撃ち直し
+   * （前景/背景・サンドボックスの有無など、実行の意味論を変える差分）にまで
+   * 1回だけの許可が及んでいた——「入力が1文字違えば返さない」という上の要求
+   * を満たしていなかった、許しすぎる側の穴。`matchInputOf` は入力の**全欄**
+   * （キー順に依らない正規化）を鍵の材料にすることでこれを塞ぐ。
    *
    * ## 使い切る・期限切れは使わない
    *
@@ -4256,14 +4275,18 @@ class RunnerSession {
   #consumeOneShotAllow(record: AgentPreToolRecord): AgentPreToolDecision {
     const toolName = record.toolName;
     if (toolName === undefined) return { kind: 'continue' };
-    const rawLine = rawLineOf(record.toolInput);
-    if (rawLine === undefined) return { kind: 'continue' };
+    const matchInput = matchInputOf(record.toolInput);
+    if (matchInput === undefined) return { kind: 'continue' };
 
     const actor =
       record.agentId === undefined
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-    const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(rawLine));
+    const key = oneShotAllowKey(
+      oneShotActorOf(this.#id, record),
+      toolName,
+      digestOf(matchInput),
+    );
     const grant = this.#oneShotAllows.get(key);
     if (grant === undefined) return { kind: 'continue' };
     // 使い切る。一致しても1回だけ。
