@@ -258,14 +258,29 @@ export function matchInputOf(toolInput: unknown): string | undefined {
   }
 }
 
-/** オブジェクトのキーをすべての階層で辞書順に並べ替える（配列の要素順序は変えない）。 */
+/**
+ * オブジェクトのキーをすべての階層で辞書順に並べ替える（配列の要素順序は変えない）。
+ *
+ * **欄は `Object.defineProperty` で詰める。普通の代入（`sorted[key] = …`）は
+ * 使わない**（issue #1787）。`tool_input` は JSON から作られるので、
+ * `JSON.parse` が `__proto__` という名前の**自前の欄**を持たせうる。普通の
+ * 代入だと、その欄は器のプロトタイプの書き換えに化けて自前の欄にならず、
+ * `JSON.stringify` から欄の有無も中身も消える——`__proto__` の有無や中身だけが
+ * 違う撃ち直しが同じ鍵になる（許しすぎる側）。`defineProperty` は
+ * `JSON.parse` と同じく自前の欄を作るので、この欄も鍵に入る。
+ */
 function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
   if (value !== null && typeof value === 'object') {
     const source = value as Record<string, unknown>;
     const sorted: Record<string, unknown> = {};
     for (const key of Object.keys(source).sort()) {
-      sorted[key] = sortKeysDeep(source[key]);
+      Object.defineProperty(sorted, key, {
+        value: sortKeysDeep(source[key]),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return sorted;
   }

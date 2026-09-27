@@ -349,6 +349,19 @@ export class PgAuthStore implements AuthStore {
       .onConflictDoUpdate({ target: authAccessTokens.id, set });
   }
 
+  /**
+   * `last_used_at` だけを書く。**条件付き UPDATE（`revoked_at is null`）で、
+   * ほかの列には触らない**（issue #1782）。`putAccessToken` の upsert は
+   * `revoked_at` を無条件に `set` に含むので、読んだときの写しで呼ぶと、
+   * そのあいだに完了したログアウトを踏みつぶす。失効済み・無い id では0行の更新になる。
+   */
+  async markAccessTokenUsed(id: string, at: string): Promise<void> {
+    await this.#db
+      .update(authAccessTokens)
+      .set({ lastUsedAt: new Date(at) })
+      .where(and(eq(authAccessTokens.id, id), isNull(authAccessTokens.revokedAt)));
+  }
+
   async findAccessTokenBySha256(hash: string): Promise<AccessTokenRecord | null> {
     const rows = await this.#db
       .select()

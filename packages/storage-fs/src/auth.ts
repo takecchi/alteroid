@@ -225,6 +225,27 @@ export class FsAuthStore implements AuthStore {
     }));
   }
 
+  /**
+   * `lastUsedAt` だけを書く。**1つの排他区間の中で、いまのファイルの行を読んで**
+   * 書く（issue #1782）。呼び手が読んだときの写しは使わない——使うと、そのあいだに
+   * 完了したログアウトの `revokedAt` を書き戻してしまう。失効済み・無い id では
+   * 何も書かない。
+   */
+  async markAccessTokenUsed(id: string, at: string): Promise<void> {
+    await this.#mutate<null>((file): { next: AuthFile | null; result: null } => {
+      const token = file.accessTokens.find((it) => it.id === id);
+      if (token === undefined || token.revokedAt !== null) return { next: null, result: null };
+      const used = accessTokenRecordSchema.parse({ ...token, lastUsedAt: at });
+      return {
+        next: {
+          ...file,
+          accessTokens: file.accessTokens.map((it) => (it.id === id ? used : it)),
+        },
+        result: null,
+      };
+    });
+  }
+
   async findAccessTokenBySha256(hash: string): Promise<AccessTokenRecord | null> {
     const { accessTokens } = await this.#read();
     return accessTokens.find((token) => token.sha256 === hash) ?? null;

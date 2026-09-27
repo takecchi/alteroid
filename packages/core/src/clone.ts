@@ -24,6 +24,7 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
+  AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
 } from './agent-hooks.js';
@@ -564,12 +565,29 @@ const ALLOWED_BY_GRANT_MEMORY_LIMIT = 512;
  * 一切持たない**——覚える必要があるのは「どの許可に、どの規則で一致したか」
  * だけで、これはどちらも人間が既に承認した文字列（`grant.rule`）と、それが
  * 指す DB の行の id（`grant.id`）である。
+ *
+ * **`agentId` は Issue #1803 で足した。** クローンは preset 一式で `Task` を
+ * 持つので、この `allow` は作業者（サブエージェント）の `Bash` 呼び出しにも
+ * 同じ `#onPreToolUse` を通って当たる（`#noteDenial` が層を `agent_id` で見て
+ * いるのと同じ前提——`agent_id` はどちらの層かを見分ける唯一の材料）。
+ * `record.agentId` が読めた回だけ控え、読めなければ省く（本体の呼び出しと
+ * 区別が付かない旧い provider の写しと同じ扱い——他の欄と同じ「作り物を
+ * 出さない」作法）。**この欄の読み手は `#onSubagentStop`（Issue #1803）
+ * だけ**——その作業者の `SubagentStop` が来た時点で、まだ決着していない
+ * （`#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` のどれも
+ * 消していない）控えを、この欄で絞って日誌へ残す。
  */
 interface AllowedByGrantRecord {
   /** 一致した `PermissionGrant.id`。 */
   readonly grantId: string;
   /** 一致した `PermissionGrant.rule`（人間が既に承認した文字列そのもの）。 */
   readonly rule: string;
+  /**
+   * この呼び出しが作業者（サブエージェント）からのものだったときの id
+   * （Issue #1803）。本体の呼び出しなら省く——`AgentPreToolRecord.agentId`
+   * と同じ作法。
+   */
+  readonly agentId?: string;
 }
 
 /**
@@ -1627,6 +1645,17 @@ class Clone implements CloneHost {
    *
    * 一致すれば「hook の allow を追い越した」と判定し、消費してから日誌へ
    * 残す（`#noteGrantFunneled` の doc）。
+   *
+   * ## 決着も拒否も無いまま作業者が終わったら `#onSubagentStop` が読む
+   * （Issue #1803）
+   *
+   * 作業者（サブエージェント）の呼び出しでは、deny 規則が hook の allow を
+   * 上書きした回が `permission_denials` にも走行中の合図にも載らない経路が
+   * ある（静的な読み。確かめていない——`AllowedByGrantRecord.agentId` の
+   * doc）。上の2つの消し口（決着・拒否）のどちらにも掛からないまま、その
+   * 作業者が `SubagentStop` を迎えたら、`#onSubagentStop` が `agentId` で
+   * 絞って控えを日誌へ残し、消費する——`#noteGrantFunneled` と同じ「原因は
+   * 断定しない」流儀（`#onSubagentStop` の doc）。
    *
    * ## 無制限には覚えない
    *
@@ -8968,6 +8997,11 @@ class Clone implements CloneHost {
       // 1件も残らない**（`docs/architecture.md`「非対称な可視性」が求める
       // 「どちらで見たかは日誌に残す」から静かに落ちていた）。
       onPostToolUseFailure: (input) => this.#onPostToolUseFailure(input),
+      // 作業者（サブエージェント）の allow が決着も拒否の記録も無いまま
+      // 取り残されたことを検出する唯一の残った合図（Issue #1803）。中身は
+      // `#onSubagentStop` の doc、配線の理由は `claude-provider.ts` の
+      // `CloneSessionOptionsRequest.onSubagentStop` の doc。
+      onSubagentStop: (record) => this.#onSubagentStop(record),
     });
   }
 
@@ -9274,6 +9308,11 @@ class Clone implements CloneHost {
    * 見分けられるようにする。`toolUseId` が読めない回（古い provider の写し）
    * は控えずに `allow` だけ返す——検出できないだけで、許可そのものは今までと
    * 同じ理由で下す。
+   *
+   * **`record.agentId` が読めれば、同じ控えへ足す（Issue #1803）。** クローンは
+   * `Task` を持つので、この `allow` は作業者（サブエージェント）の `Bash` に
+   * も当たる——`agentId` が省かれれば本体の呼び出しと同じ扱いのまま
+   * （`#onSubagentStop` はこの欄が無い控えを絞らない＝拾わない）。
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     if (record.toolName !== 'Bash') return { kind: 'continue' };
@@ -9300,7 +9339,11 @@ class Clone implements CloneHost {
       const usable = await this.#stores.permissionGrants.markUsed(grant.id, now).catch(() => true);
       if (!usable) continue;
       if (typeof record.toolUseId === 'string') {
-        this.#allowedByGrantToolUses.set(record.toolUseId, { grantId: grant.id, rule: grant.rule });
+        this.#allowedByGrantToolUses.set(record.toolUseId, {
+          grantId: grant.id,
+          rule: grant.rule,
+          ...(typeof record.agentId === 'string' ? { agentId: record.agentId } : {}),
+        });
       }
       return {
         kind: 'allow',
@@ -9840,6 +9883,90 @@ class Clone implements CloneHost {
         `PreToolUse が allow を返したのに、同じ呼び出し（合図の出所: ${via}）が拒否された${why}。` +
         guidance,
     });
+  }
+
+  /**
+   * `#allowedByGrantToolUses` に控えたまま、決着（`#onPostToolUse` /
+   * `#onPostToolUseFailure`）も拒否（`#noteDenial` → `#noteGrantFunneled`）も
+   * 来ないうちに、その控えを作った作業者（サブエージェント）が
+   * `SubagentStop` を迎えた分を日誌へ残す（Issue #1803）。
+   *
+   * ## なぜ要るか
+   *
+   * `#noteGrantFunneled` の検出は、拒否が実際に SDK から届くことに依存する。
+   * **作業者（サブエージェント）の呼び出しでは、この拒否そのものが届かない
+   * 経路がある**——静的な読みだけの観測（Issue #1803 本文、2026-09-26 の
+   * コメント。**生きたセッションでは確かめていない**）によると、背景で走る
+   * 作業者の文脈を組み立てる箇所に `onPermissionDenial=void 0` があり、その
+   * 文脈で deny 規則が hook の allow を上書きしても `permission_denials` にも
+   * 走行中の合図にも載らない。⟹ `#noteDenial` が一度も呼ばれないまま、
+   * `#allowedByGrantToolUses` の控えだけが残り続ける——`SubagentStop` は
+   * その作業者がもう戻ってこないことを知る、唯一の残った合図である。
+   *
+   * ## `agentId` で絞る（本体・別の作業者の控えには触れない）
+   *
+   * `record.agentId` が読めなければ何もしない——本体（クローン自身）のターン
+   * が閉じるのは `Stop` であって `SubagentStop` ではないので、ここへ来る
+   * 時点で作業者の呼び出しのはずだが、`agentId` が省かれた回（旧い provider
+   * の写し）は安全側（何もしない）に倒す。控えは `funneled.agentId ===
+   * record.agentId` で絞ってから消費するので、他の作業者や本体（`agentId`
+   * を持たない控え）には触れない。
+   *
+   * ## 原因は断定しない（`#noteGrantFunneled` と同じ流儀）
+   *
+   * ここで分かるのは「決着も拒否の記録も無いまま作業者が終わった」という
+   * **不在の事実**だけで、`#noteGrantFunneled` よりさらに1段弱い証拠しか
+   * 持たない（実際の拒否を受け取ったわけではない）。**だから「追い越され
+   * た」とは書かず、「決着しなかった」とだけ言う。** 人間が読む注意書きは
+   * `#grantFunneledWarnedOnce` を共有し、grant ごとに初回だけ足す
+   * （`#noteGrantFunneled` の doc「日誌には毎回書く。注意書きは grant ごとに
+   * 初回だけ」と同じ帳面・同じ理由——同じ grant について両方の検出経路が
+   * 交互に鳴っても、注意書きは1度で足りる）。
+   *
+   * ## コマンド本文は書かない
+   *
+   * `AllowedByGrantRecord` はもともとコマンド本文を持たない（`grantId` /
+   * `rule` / `agentId` だけ）ので、ここでも書きようがない——載せるのは
+   * `tool_use_id` / `grantId` / `rule` / `agentId` の4つだけである。
+   *
+   * ## 誤検出の筋（確かめていない）
+   *
+   * 背景処理が `SubagentStop` の**後**に決着する回があるかもしれない——その
+   * 回は実際には道具の実行が続いているのに「決着しなかった」と書くことに
+   * なる。**生きたセッションでは確かめていない**（Issue #1803 本文）。
+   * それでも、この関数が消費した**後**に同じ `tool_use_id` で
+   * `#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` が来ても、
+   * 控えは既に消えているので何も起きない——`RecentMap.delete` は無い鍵を
+   * 渡されても例外を投げず、何も起きたことにしない（歯で固定してある）。
+   * ⟹ 誤検出はありうるが、二重に日誌へ残ることは無い。
+   */
+  async #onSubagentStop(record: AgentSubagentStopRecord): Promise<void> {
+    if (typeof record.agentId !== 'string') return;
+    const agentId = record.agentId;
+
+    for (const [toolUseId, funneled] of this.#allowedByGrantToolUses.entries()) {
+      if (funneled.agentId !== agentId) continue;
+      this.#allowedByGrantToolUses.delete(toolUseId);
+
+      const firstTimeForGrant = !this.#grantFunneledWarnedOnce.has(funneled.grantId);
+      if (firstTimeForGrant) this.#grantFunneledWarnedOnce.add(funneled.grantId);
+      const guidance = firstTimeForGrant
+        ? ' 「hook の allow を追い越した」とは断定しない——決着も拒否の記録も' +
+          '無いまま作業者が終わった、という不在の事実だけがここでは分かる。' +
+          'この許可は、いまは効いていない可能性がある。'
+        : '';
+
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'inbound',
+        text:
+          `${EXCHANGE_KIND_DECISION_PREFIX}許可 DB の規則 ${funneled.rule}（grant ${funneled.grantId}）で ` +
+          `PreToolUse が allow を返した作業者（agentId: ${agentId}）の呼び出し` +
+          `（tool_use_id: ${toolUseId}）が、実行の決着も拒否の記録も無いまま、` +
+          `その作業者の SubagentStop を迎えた。決着しなかった。${guidance}`,
+      });
+    }
   }
 
   /**

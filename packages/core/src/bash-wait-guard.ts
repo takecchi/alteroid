@@ -273,6 +273,33 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * ある（`isTimeoutWrapped` 自身が継続時間の妥当性すら見ていないのと同じ
  * 単純さで揃えた）。
  *
+ * ## `gh` の手前の環境変数・`env` 前置きも読み飛ばす（#1788）
+ *
+ * `GH_TOKEN=xxx gh pr merge 123 --delete-branch` のように、コマンド位置と
+ * `gh` のあいだに環境変数の代入（`NAME=値` の繰り返し）や `env` コマンドを
+ * 挟む形は日常的に書かれる（`gh` の認証トークンを都度指定する等）。
+ * `stripLeadingTimeout`（`TIMEOUT_PREFIX_RE`）は同じ前置きを
+ * `timeout` の手前で明示的に読み飛ばしていたのに、この検出器自身には
+ * その読み飛ばしが無く、素通しされていた（issue #1788 の指摘）。
+ *
+ * `LEADING_ENV_PREFIX_RE_SRC` が読み飛ばすのは次の2つだけ:
+ *
+ * 1. **単純な代入の繰り返し** —— `[A-Za-z_][A-Za-z0-9_]*=\S*` を空白区切りで
+ *    0回以上（`TIMEOUT_PREFIX_RE` と同じ値パターン。**値の中に空白を含む
+ *    引用符形（`X="a b" gh …`）は読み飛ばせない** —— `\S*` は最初の空白で
+ *    区切るため、`"a` までしか値として拾えない。`TIMEOUT_PREFIX_RE` が
+ *    既に持っていた簡略化と同じ弱さで、この PR で新しく増やした弱さではない）。
+ * 2. **`env` コマンド** —— `env`（引数無しでそのまま次のコマンドを起動する
+ *    形）・`env NAME=値 ...`・`env -u NAME ...` のような単純な形だけを見る。
+ *    `env` 自身の全オプション文法（`-i` の組み合わせ・`--split-string` 等）
+ *    までは解いていない。
+ *
+ * どちらも「コマンド位置の直後」でしか読み飛ばさない —— 読み飛ばしの開始
+ * 位置そのものは既存の lookbehind（行頭・`;`・`&`・`|`・改行の直後）が決める
+ * ので、引用符の中やヒアドキュメントの本文にこの形が現れても、開始位置の
+ * 条件そのものは変わらず、素通しは維持される（`echo "GH_TOKEN=x gh pr merge
+ * 1 --delete-branch"` は直前の文字が `"` なので引き続き通る）。
+ *
  * ## ⚠️ この検出器が弾けないと分かっている形
  *
  * - **`bash -c '…'` の中。** 構文（コマンド位置）しか見ていないので、
@@ -289,6 +316,17 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * - **`timeout` に `-k` 等のオプションが付いた形**
  *   （`timeout -k 5 30 gh pr merge 123 --delete-branch`）。直上の doc の
  *   とおり、`timeout` 自身のオプション文法までは解いていない。
+ * - **代入の値が空白を含む引用符形（`X="a b" gh pr merge …`）。** 直上
+ *   「`gh` の手前の環境変数・`env` 前置きも読み飛ばす」の doc のとおり、
+ *   値パターンが `\S*` なので空白の手前までしか代入として読めない
+ *   （`TIMEOUT_PREFIX_RE` と同じ既存の簡略化）。
+ * - **`gh api -X DELETE …/git/refs/heads/<branch>`・`git push origin
+ *   --delete <branch>`・`git push origin :<branch>`。** これらは
+ *   `gh pr merge --delete-branch` と同じ実害（枝を消し、積んだ PR を
+ *   黙って閉じる）に達しうるが、この検出器の対象は issue #1764 が
+ *   明記したとおり「`gh pr merge` の呼び出し」に絞られている。1件ずつ
+ *   検討して足す方針（#1192 のオーナー決定）のため、issue #1788 の指摘は
+ *   ここへ記録するに留め、この PR では歯を足していない。
  */
 const HEREDOC_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s;&|]|$)/g;
 
@@ -306,8 +344,34 @@ function stripHeredocs(command: string): string {
   return command.replace(HEREDOC_RE, (matched) => matched.replace(/[^\n]/g, ' '));
 }
 
-const GH_PR_MERGE_DELETE_BRANCH_RE =
-  /(?<=^|[;&|\n])[ \t]*gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d(?=[\s;&|]|$))/;
+/**
+ * `NAME=値` 形の代入の値の部分——末尾の空白は含まない（呼び出し側が `\s+` を
+ * 付けて繰り返す）。`TIMEOUT_PREFIX_RE` の値パターンと揃えてある——`\S*`
+ * なので、値が空白を含む引用符形（`X="a b"`）は最初の空白までしか読めない
+ * （doc「`gh` の手前の環境変数・`env` 前置きも読み飛ばす」の弱さの節）。
+ */
+const ENV_ASSIGNMENT_BODY_SRC = String.raw`[A-Za-z_][A-Za-z0-9_]*=\S*`;
+
+/** `ENV_ASSIGNMENT_BODY_SRC` に末尾の空白を1個以上足した、繰り返し単位。 */
+const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}\s+`;
+
+/**
+ * `env` コマンド経由の単純な前置き —— `env`（引数無し）・
+ * `env NAME=値 ...`・`env -u NAME ...` の形だけを見る。`env` 自身の全
+ * オプション文法までは解いていない（doc 参照）。
+ */
+const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:(?:-u\s+\S+|${ENV_ASSIGNMENT_BODY_SRC})\s+)*`;
+
+/**
+ * コマンド位置と `gh` のあいだで読み飛ばす前置き全体 —— 単純な代入の繰り返し
+ * のあと、任意で `env` コマンドが続いてもよい（両方とも0回でよい＝前置きが
+ * 無い既存の形もそのまま一致する）。
+ */
+const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC})*(?:${ENV_COMMAND_PREFIX_SRC})?`;
+
+const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
+  String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d(?=[\s;&|]|$))`,
+);
 
 /**
  * 先頭の `[ENV=val ...] timeout <数字><単位?>` を取り除く。剥がした残りの

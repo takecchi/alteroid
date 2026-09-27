@@ -125,6 +125,7 @@ type Scenarios = {
   envOverride: Run;
   credentialsFull: Run;
   credentialsGhOnly: Run;
+  credentialsGitConfigSystemIgnored: Run;
   credentialsNone: Run;
   credentialsSshFails: Run;
   credentialsRunners2: Run;
@@ -223,6 +224,28 @@ async function prepareScenarios(): Promise<Scenarios> {
   });
   task('credentialsGhOnly', async () => {
     s.credentialsGhOnly = await run([MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'));
+  });
+  task('credentialsGitConfigSystemIgnored', async () => {
+    // **#1816 の回帰。** システム設定（`/etc/gitconfig` 相当。`HOME` の有無に
+    // 関係なく常に読まれる）に身元が乗っている器でも、`.env` に無ければ
+    // `git config user.name` の答えを拾わないこと（`childEnv` が常に足す
+    // `GIT_CONFIG_NOSYSTEM=1` を確かめる）。`GIT_CONFIG_SYSTEM` で読み先を
+    // このテスト専用の使い捨てファイルへ差し替え、そこに偽の身元を書いておく
+    // ——`GIT_CONFIG_NOSYSTEM=1` が効いていれば、この偽ファイルごと無視される。
+    const dir = makeTempDirSync('alteroid-fake-system-gitconfig-');
+    const fakeSystemConfig = join(dir, 'gitconfig');
+    writeFileSync(
+      fakeSystemConfig,
+      ['[user]', '\tname = system-leaked-name', '\temail = system-leaked@example.invalid', ''].join(
+        '\n',
+      ),
+    );
+    s.credentialsGitConfigSystemIgnored = await runScriptAsync({
+      script: 'setup.sh',
+      args: ['--yes', '--name', 'test', '--repo', 'takecchi/alteroid', '--branch', 'main'],
+      envFile: [MINIMAL, 'GH_TOKEN=github_pat_test', ''].join('\n'),
+      extraEnv: { GIT_CONFIG_SYSTEM: fakeSystemConfig },
+    });
   });
   task('credentialsNone', async () => {
     s.credentialsNone = await run(MINIMAL);
@@ -538,7 +561,7 @@ describe('シェルスクリプトの書き方', () => {
 describe('テスト自身が setup.sh に渡す環境', () => {
   // ここが緩むと、下の全部が「走らせた人のシェル次第」になる。しかも緩んだことは
   // **落ちたときの差分に本物の鍵が出る**か、**空振りで緑になる**かでしか現れない
-  it('親のシェルからは PATH しか渡さない', () => {
+  it('親のシェルからは PATH しか渡さない（＋ GIT_CONFIG_NOSYSTEM は常に足す）', () => {
     const env = childEnv(
       {
         PATH: '/usr/bin',
@@ -546,6 +569,10 @@ describe('テスト自身が setup.sh に渡す環境', () => {
         GH_TOKEN: 'inherited-must-not-reach-setup',
         CLAUDE_CODE_OAUTH_TOKEN: 'inherited-must-not-reach-setup',
         ALTEROID_RUNNER_TOKEN: 'inherited-must-not-reach-setup',
+        GIT_AUTHOR_NAME: 'inherited-must-not-reach-setup',
+        GIT_AUTHOR_EMAIL: 'inherited-must-not-reach-setup',
+        GIT_COMMITTER_NAME: 'inherited-must-not-reach-setup',
+        GIT_COMMITTER_EMAIL: 'inherited-must-not-reach-setup',
         // 鍵でなくても、これらは投入先の Service 名や偽 CLI の挙動を書き換える
         ALTEROID_APP_SERVICE: 'renamed',
         ALTEROID_ENV_FILE: '/somewhere/else/.env',
@@ -554,8 +581,12 @@ describe('テスト自身が setup.sh に渡す環境', () => {
       '/tmp/bin',
       { FAKE_STATE: '/tmp/state' },
     );
-    expect(Object.keys(env).sort()).toEqual(['FAKE_STATE', 'PATH']);
+    // **GIT_CONFIG_NOSYSTEM は「親から受け継いだ」ものではなく、`childEnv` が
+    // 常に足すもの（#1816）。** システム設定（`/etc/gitconfig` 等）は `HOME` の
+    // 有無に関係なく常に読まれるので、allowlist（PATH だけ）とは別に明示で断つ。
+    expect(Object.keys(env).sort()).toEqual(['FAKE_STATE', 'GIT_CONFIG_NOSYSTEM', 'PATH']);
     expect(env.PATH).toBe('/tmp/bin:/usr/bin');
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe('1');
   });
 });
 
@@ -683,6 +714,17 @@ describe('GitHub の鍵を正本（DB）へ置く', () => {
 
   it('GIT_AUTHOR_* が無ければ GH_TOKEN だけ置く（身元が空なら置かない）', () => {
     const r = scenarios.credentialsGhOnly;
+    expect(r.exitCode).toBe(0);
+    const names = r.credentials.map((c) => c.name);
+    expect(names).toEqual(['GH_TOKEN']);
+  });
+
+  it('システム設定（/etc/gitconfig 相当）に身元が乗っていても、.env に無ければ置かない（#1816）', () => {
+    // このテストを走らせているプロセス自身の環境（GIT_AUTHOR_* や、この器の
+    // システム設定）に何が乗っていても、setup.sh から見える身元は変わらない
+    // ことを確かめる——落ちるなら `git config user.name` の答えを拾ってしまって
+    // いる（`railway/cli-stub.ts` の `childEnv` の doc、#1816）。
+    const r = scenarios.credentialsGitConfigSystemIgnored;
     expect(r.exitCode).toBe(0);
     const names = r.credentials.map((c) => c.name);
     expect(names).toEqual(['GH_TOKEN']);

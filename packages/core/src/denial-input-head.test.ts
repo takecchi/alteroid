@@ -287,3 +287,40 @@ describe('matchInputOf / 一致鍵は入力全体を見る（issue #1768）', ()
     expect(matchInputOf(input)).toEqual(matchInputOf({ ...input }));
   });
 });
+
+/**
+ * `__proto__` という名前の欄も、一致鍵に入れる（issue #1787）。
+ *
+ * `tool_input` は JSON から作られるので、`JSON.parse` が `__proto__` を
+ * **自前の欄**として持たせうる。並べ替えの器へ普通の代入で詰めると、その欄は
+ * 器のプロトタイプの書き換えに化けて `JSON.stringify` から消え、欄の有無も
+ * 中身も鍵に反映されない（許しすぎる側）。
+ */
+describe('matchInputOf / __proto__ という名前の欄も鍵に入れる（issue #1787）', () => {
+  const parse = (json: string) => JSON.parse(json) as Record<string, unknown>;
+
+  it('__proto__ 欄の有無だけが違う入力は別の鍵になる', () => {
+    const bare = parse('{"command":"echo x"}');
+    const withProto = parse('{"command":"echo x","__proto__":{"dangerouslyDisableSandbox":true}}');
+    expect(Object.keys(withProto)).toContain('__proto__');
+    expect(matchInputOf(bare)).not.toEqual(matchInputOf(withProto));
+  });
+
+  it('__proto__ の中身だけが違う入力は別の鍵になる', () => {
+    const a = parse('{"command":"echo x","__proto__":{"dangerouslyDisableSandbox":true}}');
+    const b = parse('{"command":"echo x","__proto__":{"run_in_background":true}}');
+    expect(matchInputOf(a)).not.toEqual(matchInputOf(b));
+  });
+
+  it('ネストした __proto__ 欄も鍵に入る', () => {
+    const a = parse('{"command":"echo x","nested":{"__proto__":{"x":1}}}');
+    const b = parse('{"command":"echo x","nested":{}}');
+    expect(matchInputOf(a)).not.toEqual(matchInputOf(b));
+  });
+
+  it('対照: __proto__ 欄を含めて同一の入力は、キー順が違っても同じ鍵になる', () => {
+    const a = parse('{"command":"echo x","__proto__":{"b":1,"a":2}}');
+    const b = parse('{"__proto__":{"a":2,"b":1},"command":"echo x"}');
+    expect(matchInputOf(a)).toEqual(matchInputOf(b));
+  });
+});

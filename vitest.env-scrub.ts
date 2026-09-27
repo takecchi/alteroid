@@ -26,24 +26,67 @@
 /**
  * 外す名前の規則。**迷ったら外す側へ倒す** — テストが本物の値を要ることは無い
  * （要るなら、そのテストが偽の値を自分で置くべきである）。
+ *
+ * 名前の全体に当てる規則（接頭辞・接続文字列）と、`_` で区切った語に当てる規則
+ * （`SECRET_ENV_NAME_WORDS`）の2段で見る。**語の単位で見るのは、末尾一致だけだと
+ * 語の後ろに何かが付いた名前が漏れるからである**（16回目の横断レビュー:
+ * `ALTEROID_RUNNER_TOKEN_SHA256` は `_TOKEN$` に当たらず、`PGPASSWORD` は
+ * `_PASSWORD$` に当たらなかった）。語の単位なら `GIT_AUTHOR_NAME` の `AUTHOR` の
+ * ような、秘密の語を部分に含むだけの語は巻き込まない。
  */
 export const SECRET_ENV_NAME_PATTERNS: readonly RegExp[] = [
-  /_TOKEN$/i,
-  /_KEY$/i,
-  /_SECRET$/i,
-  /_PASSWORD$/i,
-  /_PASS$/i,
-  /_CREDENTIALS?$/i,
   /^GH_/i,
   /^GITHUB_TOKEN$/i,
   /^CLAUDE_CODE_/i,
   /^ANTHROPIC_/i,
-  /^DATABASE_URL$/i,
+  // 接続文字列はユーザー名とパスワードを埋め込む
+  // （`postgres://alteroid:<password>@db:5432/alteroid`。`compose.yaml` の
+  // `ALTEROID_DATABASE_URL`）。
+  /(^|_)DATABASE_URL$/i,
+  /(^|_)DB_URL$/i,
 ];
+
+/**
+ * `_` で区切った語のうち、どれか1つがこの語そのもの（大小文字を区別しない）なら外す。
+ */
+export const SECRET_ENV_NAME_WORDS: readonly string[] = [
+  'TOKEN',
+  'TOKENS',
+  'SECRET',
+  'SECRETS',
+  'PASSWORD',
+  'PASSWD',
+  'PASS',
+  'PASSPHRASE',
+  'CREDENTIAL',
+  'CREDENTIALS',
+  'KEY',
+  'KEYS',
+  'APIKEY',
+  'PEM',
+  'PAT',
+  'DSN',
+  'COOKIE',
+];
+
+/**
+ * `_` で区切った語が、この語で**終わる**なら外す。区切りの無い書き方
+ * （`PGPASSWORD`、`NPMTOKEN`）を拾うためである。
+ */
+export const SECRET_ENV_NAME_WORD_SUFFIXES: readonly string[] = ['PASSWORD', 'TOKEN', 'SECRET'];
 
 /** その名前の環境変数を、テストの前に外すか。 */
 export function isSecretEnvName(name: string): boolean {
-  return SECRET_ENV_NAME_PATTERNS.some((pattern) => pattern.test(name));
+  if (SECRET_ENV_NAME_PATTERNS.some((pattern) => pattern.test(name))) return true;
+  const words = name
+    .toUpperCase()
+    .split(/_+/)
+    .filter((word) => word !== '');
+  return words.some(
+    (word) =>
+      SECRET_ENV_NAME_WORDS.includes(word) ||
+      SECRET_ENV_NAME_WORD_SUFFIXES.some((suffix) => word.endsWith(suffix)),
+  );
 }
 
 /**

@@ -21,7 +21,7 @@ vi.mock('./paths.js', () => ({
 }));
 
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 
 import {
   ensureRunning,
@@ -30,6 +30,7 @@ import {
   stop,
   stopDaemon,
   type DaemonRuntimeInfo,
+  type Presence,
   type StopDeps,
 } from './daemon.js';
 
@@ -52,7 +53,7 @@ function harness(overrides: Partial<StopDeps> = {}): Harness {
 
   const deps: StopDeps = {
     readInfo: async () => INFO,
-    verify: async () => true,
+    verify: async () => 'present',
     async requestShutdown() {
       state.shutdownRequests += 1;
     },
@@ -89,11 +90,11 @@ describe('alteroid daemon stop', () => {
   });
 
   it('本人確認できたら停止を要求し、居なくなったら記録を片付ける', async () => {
-    let alive = true;
+    let presence: Presence = 'present';
     const h = harness({
-      verify: async () => alive,
+      verify: async () => presence,
       async requestShutdown() {
-        alive = false;
+        presence = 'absent';
       },
     });
 
@@ -104,8 +105,9 @@ describe('alteroid daemon stop', () => {
 
   it('本人確認できない PID には絶対にシグナルを送らない（PID 再利用で無関係なプロセスを殺さない）', async () => {
     // デーモンが SIGKILL やクラッシュで死に、daemon.json だけが残った状態。
-    // その PID を OS が別のプロセスへ再利用している（= 生きているが別人）。
-    const h = harness({ verify: async () => false });
+    // その PID を OS が別のプロセスへ再利用している（= 生きているが別人、
+    // または応答があった上での否定・接続拒否で「居ない」と確定できた）。
+    const h = harness({ verify: async () => 'absent' });
 
     expect(await stopDaemon(h.deps)).toBe('stale');
     expect(h.killed).toEqual([]);
@@ -114,16 +116,31 @@ describe('alteroid daemon stop', () => {
     expect(h.cleared).toBe(1);
   });
 
+  // ⭐ Issue #1818 の核 — 「確かめられなかった」（unknown）は「居ない」
+  // （absent）ではない。以前は `stop()` が呼ぶ側で `boolean` へ畳んでいたため
+  // ここが `absent` と区別できず、`clearInfo()` まで進んで状態ファイルを
+  // 消していた——生きているかもしれない本物のデーモンの記録を、確かめられ
+  // なかっただけで消してしまう形。`StopDeps.verify` が3値を返すようになった
+  // 今は、`unknown` のときは PID にも状態ファイルにも触らない。
+  it('⭐ 本人確認できなかったら（unknown）、PID にも状態ファイルにも触らず unknown を返す（Issue #1818）', async () => {
+    const h = harness({ verify: async () => 'unknown' });
+
+    expect(await stopDaemon(h.deps)).toBe('unknown');
+    expect(h.killed).toEqual([]);
+    expect(h.shutdownRequests).toBe(0);
+    expect(h.cleared).toBe(0);
+  });
+
   it('停止要求が失敗しても、本人確認済みならシグナルで押せる', async () => {
-    let alive = true;
+    let presence: Presence = 'present';
     const h = harness({
-      verify: async () => alive,
+      verify: async () => presence,
       requestShutdown: async () => {
         throw new Error('接続できない');
       },
       terminate(pid) {
         expect(pid).toBe(INFO.pid);
-        alive = false;
+        presence = 'absent';
       },
     });
 
@@ -131,11 +148,31 @@ describe('alteroid daemon stop', () => {
   });
 
   it('応答し続けて止まらないなら unresponsive を返す（黙って殺し続けない）', async () => {
-    const h = harness({ verify: async () => true });
+    const h = harness({ verify: async () => 'present' });
 
     expect(await stopDaemon(h.deps)).toBe('unresponsive');
     // 本人確認済みなので SIGTERM 自体は許されるが、無限には送らない
     expect(h.killed.every((pid) => pid === INFO.pid)).toBe(true);
+    expect(h.killed.length).toBeLessThanOrEqual(1);
+  });
+
+  // Issue #1818 — 停止要求後のループでも、`unknown`（確かめられなかった）を
+  // 「止まった」（absent）へ畳まない。最初の確認だけ `present` を返して
+  // 停止要求まで進ませ、以降はずっと `unknown` を返し続ける——本物のデーモンが
+  // 生きているのか、既に止まったのかを一度も確定できない状況を模している。
+  // ここで状態ファイルを片付けてしまうと、`unresponsive` の意味（応答が
+  // 見えている・記録は生かしたまま）が壊れる。
+  it('⭐ 停止要求後、ずっと unknown のままでも状態ファイルは片付けない（Issue #1818）', async () => {
+    let calls = 0;
+    const h = harness({
+      verify: async () => {
+        calls += 1;
+        return calls === 1 ? 'present' : 'unknown';
+      },
+    });
+
+    expect(await stopDaemon(h.deps)).toBe('unresponsive');
+    expect(h.cleared).toBe(0);
     expect(h.killed.length).toBeLessThanOrEqual(1);
   });
 });
@@ -187,6 +224,10 @@ beforeEach(() => {
   vi.mocked(spawn)
     .mockReset()
     .mockReturnValue({ unref: vi.fn() } as unknown as ReturnType<typeof spawn>);
+  // `rm` の呼び出し履歴も前のテストから持ち越さない——下の
+  // 「stop() — verify() の3値目」の describe が `rm` の呼び有無を見る
+  // （Issue #1818）。実装（`async () => undefined`）は変えずに履歴だけ消す。
+  vi.mocked(rm).mockClear();
 });
 
 afterEach(() => {
@@ -383,15 +424,81 @@ describe('ensureRunning() — start() の安全側の判断をそのまま伝え
   });
 });
 
-describe('stop() — verify() の3値化後も StopDeps.verify（boolean）契約は変えない（#1765 段2の対象外）', () => {
-  // `stop()` は `stopDaemon` へ `verify` を `boolean` の契約で渡す。`unknown`
-  // を `false` へ畳むのは、この PR より前からの `stopDaemon` の挙動と1文字も
-  // 変えていない——`start()` 側の安全側の変更（spawn しない）とは別の対象
-  // である（`daemon.ts` の `stop()` 冒頭のコメントを見よ）。
-  it('unknown（確かめられなかった）は false 側へ畳まれ、stale として扱われる（従来どおり）', async () => {
+describe('stop() — verify() の3値目（unknown）を、状態ファイルを消さずにそのまま伝える（Issue #1818）', () => {
+  // 【経緯・反転した期待値】 元の題は「verify() の3値化後も StopDeps.verify
+  // （boolean）契約は変えない（#1765 段2の対象外）」で、下の1本は
+  // 「unknown（確かめられなかった）は false 側へ畳まれ、stale として
+  // 扱われる（従来どおり）」を期待値にしていた。当時の理由（`stop()` は
+  // `stopDaemon` へ `verify` を `boolean` の契約で渡す。`unknown` を
+  // `false` へ畳むのは、この PR より前からの `stopDaemon` の挙動と1文字も
+  // 変えていない——`start()` 側の安全側の変更〔spawn しない〕とは別の対象
+  // である）は、`false` 側が「居ないと確定できた」ときの `clearInfo()`
+  // （状態ファイルの削除）と共有されていることを見落としていた。
+  // `unknown` もこの経路を通って状態ファイルが消え、直後の
+  // `ensureRunning()` が `absent`（`unknown` ではない）と読んで `start()`
+  // の安全弁を素通りし、2本目の daemon を spawn してしまっていた
+  // （Issue #1818。15回目の横断レビューで見つかった #1779 の見落とし、
+  // 実害そのもの）。ここで期待値を反転する — `StopDeps.verify` は3値の
+  // まま渡し、`unknown` は `stale` ではなく `unknown` を返し、状態ファイル
+  // には触れない。
+  it('unknown（確かめられなかった）は stale に畳まれず、状態ファイルにも触れない unknown を返す（Issue #1818 で修正）', async () => {
     vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network blip')));
 
-    expect(await stop()).toBe('stale');
+    expect(await stop()).toBe('unknown');
+    expect(rm).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠️ 疑い（#1765 の残課題。t8 の横断レビューで追加）——#1779 が
+   * `start()`/`ensureRunning()` に足した「確かめられなければ2本目を
+   * 起こさない」安全弁（`presence: 'unknown'` の分岐）は、`stop()` を
+   * 経由すると素通りできる。
+   *
+   * `stop()` は `verify()` の `unknown` を `false` へ畳み、
+   * `stopDaemon` の `clearInfo()`（`rm(runtimeFile())`）で状態ファイルを
+   * 消してから `'stale'` を返す——本人確認できなかっただけで、本物の
+   * デーモンが生きているかどうかは何も分かっていない。この直後に
+   * `ensureRunning()`（`chat` などから毎回呼ばれる）が走ると、状態
+   * ファイルは既に無いので `status()` は `presence: 'absent'` を返す
+   * ——`'unknown'` ではない。`start()` の安全弁は `presence === 'unknown'`
+   * のときだけ発動するので、`'absent'` はこの弁を素通りして spawn まで
+   * 進む。**「確かめられなかった」が、状態ファイルを消したことで
+   * 「居ないと確定した」にすり替わっている**——取れない軸を0の行として
+   * 扱わない、という #1779 自身の設計原則が、`stop → ensureRunning` の
+   * 経路では守られていない。
+   *
+   * fetch は一貫して同じ理由（ネットワークの不調）で失敗し続ける——
+   * 本物のデーモンが実際にはまだ生きていて、単に応答が遅いだけの場合と
+   * 区別できない状況を模している。
+   *
+   * 【Issue #1818 の修正後】 `stop()` はもう `unknown` を `stale` に
+   * 畳まない——`clearInfo()`（`rm`）を呼ばず、`'unknown'` をそのまま返す。
+   * だから状態ファイルは実際には消えない。ここでは「消えた後の世界」を
+   * `readFile` のモックで模す代わりに、**状態ファイルが実際にそのまま
+   * 残っている**という、修正後に正しい前提のまま `ensureRunning()` を
+   * 呼ぶ——`readFile` は `INFO` を返し続け、`fetch` も同じ理由で失敗し
+   * 続ける。この前提でも spawn されないことを確かめる（`start()` の
+   * 安全弁が `presence: 'unknown'` を受け取って効くこと）。
+   */
+  it('⭐ stop() が unknown を確かめられないまま返した直後、ensureRunning() も確かめられないまま2本目を spawn しない（Issue #1818）', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockRejectedValue(new Error('network blip（本物は生きているが応答が遅いだけ、を模す）')),
+    );
+
+    expect(await stop()).toBe('unknown');
+    // 状態ファイルを消していない——`ensureRunning()` が読む前提そのもの。
+    expect(rm).not.toHaveBeenCalled();
+
+    await ensureRunning().catch(() => undefined);
+
+    expect(
+      spawn,
+      '本人確認できていない（本物が生きているかもしれない）のに2本目を起こしていないか',
+    ).not.toHaveBeenCalled();
   });
 });

@@ -2346,6 +2346,234 @@ describe('クローン', () => {
     },
   );
 
+  describe(
+    '#onSubagentStop が「決着も拒否の記録も無いまま作業者が終わった」ことを検出する' +
+      '（issue #1803）',
+    () => {
+      const GRANT = {
+        id: 'grant-1',
+        rule: 'Bash(gh release edit:*)',
+        allows: ['gh release edit'],
+        denies: ['gh release edit; rm -rf /'],
+        approvalId: 'ap-1',
+        answer: '許可します',
+        grantedAt: '2026-01-01T00:00:00.000Z',
+        route: { principalKind: 'account' as const, accountId: 'acc-1' },
+      };
+
+      /** 検出の記録が付ける文言の目印。**この文言自体が固定なので、ここに1本だけ持つ。** */
+      const UNSETTLED_MARK = 'SubagentStop を迎えた';
+
+      function hooksOf(s: Setup) {
+        const options = (s.calls[0] as FakeCall).options;
+        const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+        const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0];
+        const subagentStop = options.hooks?.SubagentStop?.[0]?.hooks?.[0];
+        if (preToolUse === undefined) throw new Error('PreToolUse フックが登録されていない');
+        if (postToolUse === undefined) throw new Error('PostToolUse フックが登録されていない');
+        if (subagentStop === undefined) throw new Error('SubagentStop フックが登録されていない');
+        return { preToolUse, postToolUse, subagentStop };
+      }
+
+      it(
+        '作業者の allow が決着も拒否も無いまま SubagentStop を迎えたら、日誌に1行残り' +
+          '帳面から消える（もう一度同じ agentId で SubagentStop が来ても増えない）',
+        async () => {
+          const s = setup();
+          await s.stores.permissionGrants.put(GRANT);
+          s.clone.post(humanMessage('やあ'));
+          await waitForDone(s.events);
+          const { preToolUse, subagentStop } = hooksOf(s);
+
+          const decision = (await preToolUse(
+            {
+              tool_name: 'Bash',
+              tool_input: { command: 'gh release edit --draft' },
+              tool_use_id: 'tu-sub-1',
+              agent_id: 'agent-1',
+            } as never,
+            undefined,
+            {} as never,
+          )) as { hookSpecificOutput?: { permissionDecision?: string } };
+          expect(decision.hookSpecificOutput?.permissionDecision).toBe('allow');
+
+          await subagentStop({ agent_id: 'agent-1' } as never, undefined, {} as never);
+
+          const entries = await s.stores.journal.list({ types: ['exchange'] });
+          const unsettled = entries.filter((entry) =>
+            (entry as { text: string }).text.includes(UNSETTLED_MARK),
+          );
+          expect(unsettled.length).toBe(1);
+          const text = (unsettled[0] as { text: string }).text;
+          expect(text).toContain('grant-1');
+          expect(text).toContain('Bash(gh release edit:*)');
+          expect(text).toContain('agent-1');
+          expect(text).toContain('tu-sub-1');
+          expect(text).toContain('決着しなかった');
+          // コマンド本文は書かない。
+          expect(text).not.toContain('gh release edit --draft');
+
+          // 帳面からもう消えている——同じ agentId でもう一度 SubagentStop が
+          // 来ても、控えが無いので何も増えない。
+          await subagentStop({ agent_id: 'agent-1' } as never, undefined, {} as never);
+          const entriesAfter = await s.stores.journal.list({ types: ['exchange'] });
+          expect(
+            entriesAfter.filter((entry) =>
+              (entry as { text: string }).text.includes(UNSETTLED_MARK),
+            ).length,
+          ).toBe(1);
+
+          await s.clone.stop();
+        },
+      );
+
+      it('PostToolUse で決着していれば、その作業者の SubagentStop でも何も出ない', async () => {
+        const s = setup();
+        await s.stores.permissionGrants.put(GRANT);
+        s.clone.post(humanMessage('やあ'));
+        await waitForDone(s.events);
+        const { preToolUse, postToolUse, subagentStop } = hooksOf(s);
+
+        await preToolUse(
+          {
+            tool_name: 'Bash',
+            tool_input: { command: 'gh release edit --draft' },
+            tool_use_id: 'tu-sub-2',
+            agent_id: 'agent-1',
+          } as never,
+          undefined,
+          {} as never,
+        );
+        await postToolUse(
+          {
+            tool_name: 'Bash',
+            tool_use_id: 'tu-sub-2',
+            tool_input: { command: 'gh release edit --draft' },
+            tool_response: { output: 'ok' },
+          } as never,
+          undefined,
+          {} as never,
+        );
+
+        await subagentStop({ agent_id: 'agent-1' } as never, undefined, {} as never);
+
+        const entries = await s.stores.journal.list({ types: ['exchange'] });
+        expect(
+          entries.some((entry) => (entry as { text: string }).text.includes(UNSETTLED_MARK)),
+        ).toBe(false);
+
+        await s.clone.stop();
+      });
+
+      it('別の作業者の SubagentStop では出ない（agentId で絞れている）', async () => {
+        const s = setup();
+        await s.stores.permissionGrants.put(GRANT);
+        s.clone.post(humanMessage('やあ'));
+        await waitForDone(s.events);
+        const { preToolUse, subagentStop } = hooksOf(s);
+
+        await preToolUse(
+          {
+            tool_name: 'Bash',
+            tool_input: { command: 'gh release edit --draft' },
+            tool_use_id: 'tu-sub-3',
+            agent_id: 'agent-1',
+          } as never,
+          undefined,
+          {} as never,
+        );
+
+        // 別の作業者が SubagentStop を迎えても、agent-1 の控えには触れない。
+        await subagentStop({ agent_id: 'agent-2' } as never, undefined, {} as never);
+
+        const entries = await s.stores.journal.list({ types: ['exchange'] });
+        expect(
+          entries.some((entry) => (entry as { text: string }).text.includes(UNSETTLED_MARK)),
+        ).toBe(false);
+
+        await s.clone.stop();
+      });
+
+      it('メインスレッド（agent_id 無し）の控えは、どの SubagentStop でも出ない', async () => {
+        const s = setup();
+        await s.stores.permissionGrants.put(GRANT);
+        s.clone.post(humanMessage('やあ'));
+        await waitForDone(s.events);
+        const { preToolUse, subagentStop } = hooksOf(s);
+
+        // agent_id を持たない ＝ クローン本体の呼び出し。
+        await preToolUse(
+          {
+            tool_name: 'Bash',
+            tool_input: { command: 'gh release edit --draft' },
+            tool_use_id: 'tu-sub-4',
+          } as never,
+          undefined,
+          {} as never,
+        );
+
+        await subagentStop({ agent_id: 'agent-1' } as never, undefined, {} as never);
+
+        const entries = await s.stores.journal.list({ types: ['exchange'] });
+        expect(
+          entries.some((entry) => (entry as { text: string }).text.includes(UNSETTLED_MARK)),
+        ).toBe(false);
+
+        await s.clone.stop();
+      });
+
+      it(
+        'SubagentStop の後に同じ tool_use_id で PostToolUse が来ても例外にならず、' +
+          '二重にも出ない',
+        async () => {
+          const s = setup();
+          await s.stores.permissionGrants.put(GRANT);
+          s.clone.post(humanMessage('やあ'));
+          await waitForDone(s.events);
+          const { preToolUse, postToolUse, subagentStop } = hooksOf(s);
+
+          await preToolUse(
+            {
+              tool_name: 'Bash',
+              tool_input: { command: 'gh release edit --draft' },
+              tool_use_id: 'tu-sub-5',
+              agent_id: 'agent-1',
+            } as never,
+            undefined,
+            {} as never,
+          );
+
+          await subagentStop({ agent_id: 'agent-1' } as never, undefined, {} as never);
+
+          let threw = false;
+          try {
+            await postToolUse(
+              {
+                tool_name: 'Bash',
+                tool_use_id: 'tu-sub-5',
+                tool_input: { command: 'gh release edit --draft' },
+                tool_response: { output: 'ok' },
+              } as never,
+              undefined,
+              {} as never,
+            );
+          } catch {
+            threw = true;
+          }
+          expect(threw).toBe(false);
+
+          const entries = await s.stores.journal.list({ types: ['exchange'] });
+          expect(
+            entries.filter((entry) => (entry as { text: string }).text.includes(UNSETTLED_MARK))
+              .length,
+          ).toBe(1);
+
+          await s.clone.stop();
+        },
+      );
+    },
+  );
+
   it(
     '会話 id を持つ承認に答えると、返答が with: "human" としてその会話 id と共に' +
       '日誌へ積まれ、会話の窓（readConversationWindow）からも読める（#768）',
