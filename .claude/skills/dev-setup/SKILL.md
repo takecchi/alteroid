@@ -18,3 +18,9 @@ description: mise / TS6 / catalog / イメージの検査・SDK の PR をマー
 - **⚠️ 許可されたのは「緑だから流す」ではない。** 実際に PR #1044（0.3.273）をマージしたときの確認がこの水準である —— 飛ばす3版を `npm pack` で落として型定義6本を `diff -u` で突き合わせ（**除去行ゼロ**。唯一の除去は alteroid が import していない `browser-sdk.d.ts` の doc コメント1行）、`dependencies` / `peerDependencies` が不変であることを見て、**alteroid が実際に触っている API 16個**を出現数で照合し、**この文書が SDK の型を根拠に断定している2箇所**（`load_reason` の5値・`AgentDefinition.skills` が `string[]`）を新しい版で引き直している。**⚠️ それでもバンドル本体（`sdk.mjs`）の挙動は見ていない** — 根拠は型定義の全差分と `package.json` の差分だけである。⟹ **型が動いていないことしか言えていない、と自分の報告にも書くこと**
 - **この SDK の版はモデルの版でもある。** エイリアス（`fable` / `opus` / `sonnet`）から具体のモデル id への対応表が SDK のバンドルに焼かれているので（`sdk.mjs` の `aliases`）、**止めると新しいモデルが層に届かない。** コード側に具体のモデル id は1つも無い（`CLONE_MODEL` / `MANAGER_MODEL` / `WORKER_MODEL` はエイリアス）ので、**遅れはここにしか現れない**
 - `minimumReleaseAgeExclude`（`pnpm-workspace.yaml`）に**版番号を書かない。** pnpm 11 の既定は `minimumReleaseAge: 1440` で、SDK は公開直後に取りに行きたい側である。版を併記すると上げるたびに書き直しが要り、忘れた回だけ静かに1日古い版で止まる（実際に 0.3.228 で止まっていた）
+
+## AGENTS.md「リポジトリの約束」から（#1192 の再編 3/3 で移した）
+
+この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
+
+- **生成物（`apps/daemon/openapi.json` / `pnpm-lock.yaml`）は rebase で手で解けない。** 正しい中身は `pnpm build` / `pnpm install` の出力であって、両側の行を合成したものではない。だから並行して PR を抱えているとき、生成物を触る PR が先に main へ入っていれば、後続は rebase して再生成し直すだけで済む。逆順だと、先に入った側の生成物を作り直すために後続の作業へ割り込むことになる。**後続が生成物に触らないならこの理由は成り立たない**ので、順序は自由である

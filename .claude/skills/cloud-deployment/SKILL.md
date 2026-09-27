@@ -47,8 +47,14 @@ description: クラウド構成（docker compose、PostgreSQL、daemon / manager
 
 ## AGENTS.md「依頼者の見立てを検証する」から
 
-** 「もう本番に入っている」という前提は `main` の履歴では確かめられない — 見るのは `gh run list --workflow=release-prod.yml` と `git log origin/release/prod` である（写す仕組みと時刻は下の「リポジトリの約束」が持つ）。実測（2026-08-20T01:44Z 観測）で JST 01:17 のマージが本番へ出たのは3時間20分後、同 06:22 と 07:47 のマージはまだ出ていない
+「もう本番に入っている」という前提は `main` の履歴では確かめられない — 見るのは `gh run list --workflow=release-prod.yml` と `git log origin/release/prod` である（写す仕組みと時刻は下の「リポジトリの約束」が持つ）。実測（2026-08-20T01:44Z 観測）で JST 01:17 のマージが本番へ出たのは3時間20分後、同 06:22 と 07:47 のマージはまだ出ていない
 
 ## AGENTS.md「リポジトリの約束」から
 
 **⚠️ 2026-09-05 に2回から1回へ減った**（`088a2b2`。それまでは UTC 13:17 / 19:17 の2回で、ここには「1日2回、JST 22:17 と翌 4:17」と書いてあった）。**設定どおりの時刻には発火しない** —— 実測（2026-09-15T19:40Z 観測。**単一 cron へ移った 2026-09-05 以降**の `event=schedule` 連続10回）で遅れは **2時間02分〜3時間16分**（中央値 2時間27分）⟹ 実際に走るのは **JST 06:19〜07:33** の幅である。**⚠️ cron の設定が変わったら、それ以前の実測を混ぜないこと。** ここには「13分〜2時間37分 ⟹ **JST 04:29〜06:54**」と書いてあったが、その標本には**2回設定だった頃の run が混じっていて**、下限が1時間以上低く出ていた。**⚠️ そして数字は腐る。腐っても赤くならないので、使う前に自分で測り直すこと** —— `gh run list --repo takecchi/alteroid --workflow=release-prod.yml --limit 100 --json createdAt,event,conclusion` を打ち、`event=schedule` の行だけを見る（`workflow_dispatch` を混ぜると窓が広く見える）。
+
+## AGENTS.md「リポジトリの約束」から（#1192 の再編 3/3 で移した）
+
+この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
+
+器が入れ替わればそれらは畳まれるが、その時刻は**自分の操作と無関係に**来る（「マージする前に確かめる」では守れなくなった代わりに、「自分のマージで自分が死ぬ」が無くなった）。落ちる Service は `railway/daemon.json` / `railway/runner.json` の `watchPatterns` で決まり、`docs/` や `.gitignore` だけの PR ではどちらも落ちない。範囲の内訳と、被害を減らすために置いてある仕組みは [railway/README.md](./railway/README.md)「デプロイは走行中の仕事を畳む操作である」

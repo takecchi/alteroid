@@ -26,3 +26,9 @@ description: 実行環境プロファイル（alteroid profile / profile.sh、.z
 - **更新は1本の列（`profile-service.ts`）を通す。** 人間の口・クローンの道具・runner の再接続時の降ろし直しは同じものを書き換えるので、**インスタンスは1つだけ作って全経路へ渡すこと**。順序は評価 → 正本へ保存 → クローンへ反映 → runner へ配布で、**どの段で落ちても旧版で揃える**（反映に落ちたら正本を書き戻す）。「失敗を返したのに1層だけ新版」を残すと、次の名乗りでそれが配られて分裂が黙って広がる
 - **`credentials` を消さないこと。** あちらは「1つの鍵を、名前を検査したうえで回す」細い口である。効く順序は credentials → profile（人間が明示的に書いたほうが勝つ）
 - 動作確認: `alteroid profile status`（各層へ届いているか。本文は出ない）、`docker compose exec -u 1001 runner env | grep SOME_KEY`
+
+## AGENTS.md「静かに失敗する道具」から（#1192 の再編 3/3 で移した）
+
+この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
+
+- **CI が Linux だけなので、OS 固有の振る舞いは「緑」として観測される** — macOS は CoreFoundation が `__CF_USER_TEXT_ENCODING` を**どの子プロセスへも**注ぐ（`env -i` でも入る）。子の env を親と比べて差分を取る形は、これを「その処理が置いた」と報告する。**環境を数え上げて捨てる形にしないこと** — 注ぐ主体は OS と shell と node の版で変わる。**同じ条件で対象を通さない1回を走らせ、その実測を基準に引く**（`packages/core/src/profile.ts` の `evaluateProfile`）。テストも OS の注入をあてにせず、注入する側を自分で用意して**どの OS でも落ちる形**にする

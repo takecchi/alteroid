@@ -191,13 +191,13 @@ worker a25a28c41 → gh run watch 35196482974 --repo takecchi/alteroid --exit-st
 worker a86fd5bd3 → gh run watch 35195863856 --repo takecchi/alteroid --exit-status 2>&1 | tail -40
 ```
 
-** 3つが同時に効く:
+3つが同時に効く:
 
 - **背景処理を残したまま作業者が畳むと、起こし直しの上限に達して委譲が止まる**（`SubagentStop`）。作業者は報告を出せないまま停止し、**依頼側からは「まだ走っている」と区別が付かない。** 実測: 上の2人はどちらもこれで止まり、うち1人は自分の報告に「ハーネス側の背景処理の再起動上限（同一タスク2回・通算3回）に達した」と書いている
 - ⛔ **`| tail` / `| head` をチェーンの末尾に置かない** — パイプの終了コードは既定で最後のコマンドのものなので（「静かに失敗する道具」の同じ規則）、**`gh run watch` が 404 で即死しても `tail` が 0 を返す。** 実測: そうして**完了通知が「成功」の顔で届いた。** 要るなら `set -o pipefail` を付けるか、出力を変数に取ってから切る
 - **`gh run watch` は run が終わるまで返らない。** 前景に置けば `Bash` の既定 120 秒で「バックグラウンドへ移した」になり（「踏みやすい地雷」の同じ実測）、背景に置けば上の1つ目を踏む。⟹ **どちらに置いても待ちが自分の手から外れる**
 
-** `gh api repos/takecchi/alteroid/commits/<head_sha>/check-runs` を**回数の上限を先に決めて**叩く（例: 20回 × 30秒 = 最大10分で必ず抜ける）。⭐ **head sha を明示すること** — PR 番号だけで引くと、draft 中の `ci.yml` が返す `conclusion: skipped` を緑と読む。**結末は独立した2つの出所で確かめる**（`check-runs` API と `gh run list --commit <sha>`）。
+`gh api repos/takecchi/alteroid/commits/<head_sha>/check-runs` を**回数の上限を先に決めて**叩く（例: 20回 × 30秒 = 最大10分で必ず抜ける）。⭐ **head sha を明示すること** — PR 番号だけで引くと、draft 中の `ci.yml` が返す `conclusion: skipped` を緑と読む。**結末は独立した2つの出所で確かめる**（`check-runs` API と `gh run list --commit <sha>`）。
 
 ## AGENTS.md「依頼者の見立てを検証する」から
 
@@ -213,3 +213,9 @@ worker a86fd5bd3 → gh run watch 35195863856 --repo takecchi/alteroid --exit-st
 - **⚠️ ただし「出所を分けたから正しい」とは書けない。** `git ls-remote` と `gh` が独立していることは**確かめられていない** — どちらも GitHub の同じデータを見ており、**両方が同じ遅れに乗れば揃って古い値を返す。** `git ls-remote` が答えるのは「GitHub の git エンドポイントが、その問い合わせに対していま返す値」までであって、「これが現在である」ではない
 - **正しさを担保しているのは突き合わせではなく、次の2つである** — (a) **sha を明示した `check-runs`**（どの sha の結果かが確定する） (b) **`git merge-base --is-ancestor origin/main <branch>` ＋ 自分が最後に push した sha**（未検証の head が在れば出る）。**⟹「一致したから正しい」ではなく「一致しなくても、別の条件が拾う」が本体である**
 - **⚠️ (b) は sha を揃える話とは別の条件である**（base 側が先端を含むか）。**上の出所の並びに混ぜて数えないこと**
+
+## AGENTS.md「自分が走っている器」から（#1192 の再編 3/3 で移した）
+
+この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
+
+報告の後だと依頼者は draft のまま PR を読むことになる（いまの状態と同じ）。報告の前だと、依頼者が報告を読んだ時点で PR は既に読める状態にある。

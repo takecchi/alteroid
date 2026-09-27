@@ -7,7 +7,7 @@ description: 自分（クローン・マネージャー・作業者）がいま�
 
 ## AGENTS.md「書く先を決める（この文書とスキルの分担）」から
 
-** かつてここにそう書いてあったが、実測（2026-08-22T09:35Z 観測）と食い違っていた。**載り方は層ごとに違い、しかも同じ層でも「どのツールで repo のファイルを触ったか」に依存する。**
+かつてここにそう書いてあったが、実測（2026-08-22T09:35Z 観測）と食い違っていた。**載り方は層ごとに違い、しかも同じ層でも「どのツールで repo のファイルを触ったか」に依存する。**
 
 - **載せる設定そのものは渡っている。** `settingSources: ['user', 'project', 'local']` は `Options` を組み立てる3つの口すべてに在る（`packages/core/src/claude-provider.ts` の `buildCloneSessionOptions` / `buildCloneDistillOptions` / `buildManagerSessionOptions`）。**効いていないのは配置のほうである** — `settingSources` の `'project'` が解決する先はセッションの `cwd` であって、この文書の在り処ではない
 - **クローン**: `cwd` は `paths.root`＝`ALTEROID_HOME`（`apps/daemon/src/index.ts` の `createClone({ cwd: paths.root })`、`Dockerfile` の `ENV ALTEROID_HOME=/data/alteroid`）。**そこにこの文書は無いので、載らない。これはバグではなく設計である** — 同じ箇所に「クローン自身の cwd は workspace とは別に渡す。クローンへ渡している `cwd` と同じ値でなければ、自己認識が嘘になる」と逐語で書いてある。**だから「cwd を repo にすれば直る」はクローンには当てられない**
@@ -51,9 +51,9 @@ description: 自分（クローン・マネージャー・作業者）がいま�
 
 ## AGENTS.md「自分が走っている器」から
 
-** 実測(2026-08-22T15:36Z 観測): 根に `AGENTS.md` と `.git` が在り、`git -C /workspace reflog` の末尾が `HEAD@{2026-08-22 22:20:26 +0900}: clone: from https://github.com/takecchi/alteroid.git` だった。**器がそう作るのではない** — `Dockerfile` は `mkdir -p /workspace` で空のまま作るので、**別のマネージャーが根へ clone した結果である**
+実測(2026-08-22T15:36Z 観測): 根に `AGENTS.md` と `.git` が在り、`git -C /workspace reflog` の末尾が `HEAD@{2026-08-22 22:20:26 +0900}: clone: from https://github.com/takecchi/alteroid.git` だった。**器がそう作るのではない** — `Dockerfile` は `mkdir -p /workspace` で空のまま作るので、**別のマネージャーが根へ clone した結果である**
 
-** 根がチェックアウトになっている器で `/workspace/<自分のID>/repo` へ clone すると、自分のツリーは相手のツリーの内側に入る。相手が根で `pnpm format:check` / `pnpm lint` を打つと、**走査が自分のツリーまで降りて落ちる** — 自分の側は最後まで緑のままである。実測(2026-08-22T15:50Z): 自分の clone の直下に整形前の `.md` を1つ置いただけで `prettier --check .` が `exit 1`（`[warn] zz-nested-probe/BAD.md`）になった。**確かめたのは素のディレクトリで、入れ子の clone そのものでは試していない**（`.gitignore` に載らないので走査対象になる点は同じである）。実際に 2026-08-22、`/workspace` の下に出来た作業ツリーが別のマネージャーの `eslint` / `format:check` を落としている
+根がチェックアウトになっている器で `/workspace/<自分のID>/repo` へ clone すると、自分のツリーは相手のツリーの内側に入る。相手が根で `pnpm format:check` / `pnpm lint` を打つと、**走査が自分のツリーまで降りて落ちる** — 自分の側は最後まで緑のままである。実測(2026-08-22T15:50Z): 自分の clone の直下に整形前の `.md` を1つ置いただけで `prettier --check .` が `exit 1`（`[warn] zz-nested-probe/BAD.md`）になった。**確かめたのは素のディレクトリで、入れ子の clone そのものでは試していない**（`.gitignore` に載らないので走査対象になる点は同じである）。実際に 2026-08-22、`/workspace` の下に出来た作業ツリーが別のマネージャーの `eslint` / `format:check` を落としている
 
 - **`/tmp` へ置く帰結: 器が落ちれば消える。** だから下の「clone して最初の変更を入れたら、その時点で push して draft PR を開く」の理由がそのぶん強くなる。**ただし `/workspace` なら残る、でもない** — 残るのは名前付き volume を当てている compose 構成（`compose.yaml` の `${ALTEROID_WORKSPACE_HOST:-workspace}:/workspace`）だけで、**Railway では volume の宣言が無いので**（`railway/runner.json`）**`/workspace` も `/tmp` も器と一緒に消える**（実測 2026-08-22T15:47Z: `df` で `/workspace` `/tmp` `/data` の3つとも同じ overlay）
 - **この置き場所の規則は、clone する前には読めない。** 規則はこの文書に在り、この文書は clone した後の作業ツリーの中にしか無い（マネージャーのシステムプロンプトは `AGENTS.md` の所在を告げるだけで、置き場所を指定しない — `packages/core/src/prompt.ts` の `buildManagerSystemPrompt`）。**だから置き場所は依頼文が渡すしかない** — 「作業者へ切り出す」の所有権の項目と同じで、**依頼文に書かれていなければ受け手には現れない**
@@ -90,3 +90,15 @@ description: 自分（クローン・マネージャー・作業者）がいま�
 
   - **pids が尽きた器では、状態を見るためのプロセスも起こせない。** 実際に、あるマネージャーが `cat /sys/fs/cgroup/pids.current` すら打てなかった（依頼者の観測）。**＝ 詰まりを検出する手段が、詰まりによって失われる**
   - **器の中から測れなくなったら、外（依頼者の `runner_list resources`）からしか見えない。** 直上の「再試行は混雑を足すので、待つほうが速い」は変わらないが、**「待つ」だけでは器の中からは復帰を観測できない** — 踏んだら連打せず、そのターンを終えて依頼者へ報告する
+
+## AGENTS.md「書く先を決める」から（#1192 の再編 3/3 で移した）
+
+この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
+
+**`skills` はコンテキストのフィルタであってサンドボックスではない**（SDK の型定義に明記がある）ので、一覧に出なくてもファイルはディスク上にあり `Read` / `Bash` から到達できる
+
+## AGENTS.md「自分が走っている器」から（#1192 の再編 3/3 で移した）
+
+この内容は #1192 の再編で AGENTS.md から逐語で移したもの。要約・短縮はしていない。
+
+- **器に postgres 17 と pgvector が在る**（2026-09-15 から。`Dockerfile` の runtime ステージ、#965）。**立て方（`initdb` / `pg_ctl` を uid 1001 のまま直に叩く手順と、`pg_createcluster` が使えない理由）は `.claude/skills/postgres-in-container/SKILL.md` に在る**
