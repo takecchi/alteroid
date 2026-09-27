@@ -80,7 +80,9 @@ const EMPTY: CredentialFile = { credentials: [], invalidRaw: [] };
  * 出すのは「どの欄が」だけである。
  */
 function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
-  const fields = [...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)')))];
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
   return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
 }
 

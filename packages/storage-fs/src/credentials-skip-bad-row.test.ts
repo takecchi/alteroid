@@ -94,14 +94,17 @@ describe('FsCredentialVaultStore — 不正な1行を読み飛ばす（issue #17
 
     await captureStderr(async () => {
       await expect(
-        stores.credentials.put([{ name: 'NEW_KEY', value: 'ghp_FAKEFAKE3333333333333333333333333333' }]),
+        stores.credentials.put([
+          { name: 'NEW_KEY', value: 'ghp_FAKEFAKE3333333333333333333333333333' },
+        ]),
       ).resolves.toBeDefined();
     });
 
     const raw = await readFile(credentialsPath, 'utf8');
     const parsed = JSON.parse(raw) as { credentials: unknown[] };
     const badRow = parsed.credentials.find(
-      (row) => typeof row === 'object' && row !== null && (row as { name?: unknown }).name === BAD_NAME,
+      (row) =>
+        typeof row === 'object' && row !== null && (row as { name?: unknown }).name === BAD_NAME,
     );
 
     // **元の形のまま**——書き換えられず、消えてもいない。
