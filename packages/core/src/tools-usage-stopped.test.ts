@@ -61,14 +61,20 @@ function minimalManagerPool(): { pool: ManagerPool; managers: ManagerSummary[] }
     runnerIdOf: notUsedHere('runnerIdOf') as ManagerPool['runnerIdOf'],
     transcript: notUsedHere('transcript') as ManagerPool['transcript'],
     unpushedWork: notUsedHere('unpushedWork') as ManagerPool['unpushedWork'],
-    runningManagerOwning: notUsedHere('runningManagerOwning') as ManagerPool['runningManagerOwning'],
+    runningManagerOwning: notUsedHere(
+      'runningManagerOwning',
+    ) as ManagerPool['runningManagerOwning'],
     restore: notUsedHere('restore') as ManagerPool['restore'],
-    resumeStoppedByUsage: notUsedHere('resumeStoppedByUsage') as ManagerPool['resumeStoppedByUsage'],
+    resumeStoppedByUsage: notUsedHere(
+      'resumeStoppedByUsage',
+    ) as ManagerPool['resumeStoppedByUsage'],
     reattachRunner: notUsedHere('reattachRunner') as ManagerPool['reattachRunner'],
     relocateFrom: notUsedHere('relocateFrom') as ManagerPool['relocateFrom'],
     vacate: notUsedHere('vacate') as ManagerPool['vacate'],
     probeTurnEnds: notUsedHere('probeTurnEnds') as ManagerPool['probeTurnEnds'],
-    flushWithheldReports: notUsedHere('flushWithheldReports') as ManagerPool['flushWithheldReports'],
+    flushWithheldReports: notUsedHere(
+      'flushWithheldReports',
+    ) as ManagerPool['flushWithheldReports'],
     settleStalledUsageWakes: notUsedHere(
       'settleStalledUsageWakes',
     ) as ManagerPool['settleStalledUsageWakes'],
