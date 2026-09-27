@@ -6411,7 +6411,9 @@ function stripNegatedApprovalPhrases(message: string): string {
  */
 function hasNegatedApprovalDenial(message: string): boolean {
   const remainder = stripNegatedApprovalPhrases(message);
-  return DENIAL_PHRASES.some((phrase) => remainder.includes(phrase)) || DENIAL_WORDS.test(remainder);
+  return (
+    DENIAL_PHRASES.some((phrase) => remainder.includes(phrase)) || DENIAL_WORDS.test(remainder)
+  );
 }
 
 /**
