@@ -134,7 +134,7 @@ describe('POST /managers/:id/messages の hook（#1852）', () => {
       method: 'POST',
       headers: AUTH,
       // `text` が空文字（`.min(1)` に違反）。偽の目印を仕込む。
-      body: JSON.stringify({ text: '' , marker: 'FAKE-message-marker' }),
+      body: JSON.stringify({ text: '', marker: 'FAKE-message-marker' }),
     });
 
     expect(res.status).toBe(400);

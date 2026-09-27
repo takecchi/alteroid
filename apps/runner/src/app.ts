@@ -1213,48 +1213,98 @@ export function createRunnerApp(deps: RunnerAppDeps) {
 
     .get('/managers', (c) => c.json({ managers: host.list() }))
 
-    .post('/managers', zValidator('json', runnerStartCommandSchema), async (c) => {
-      // **`cwd` は実際に開いた値（Issue #1814）。** `command.cwd` の写しではない
-      // ——`Host#start` の doc を見よ。デーモンはこれと自分が送った値を比べて、
-      // 倒れたかどうかを知る。
-      const { cwd } = await host.start(c.req.valid('json'));
-      return c.json({ ok: true, cwd });
-    })
-
-    /** 中断されたセッションの続きへ戻す（生ログはデーモンが持ってくる）。 */
-    .post('/managers/:id/resume', zValidator('json', runnerResumeCommandSchema), async (c) => {
-      const command = c.req.valid('json');
-      if (command.managerId !== c.req.param('id')) {
-        return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
-      }
-      let resumed: { cwd: string };
-      try {
-        resumed = await host.resume(command);
-      } catch (error) {
-        /*
-         * **世代が古い resume は 409、Hono の既定 500 に落とさない。**
-         *
-         * `isRetryableRunnerError`（`runner-protocol.ts`）は 5xx を「待てば直る」に
-         * 分類する。500 のままだと、遅れて届いた古い世代の命令が「一時的な失敗」と
-         * 誤解され、デーモン側の再試行が同じ古い命令を延々と投げ直す——本来は
-         * 「同じものを投げ直しても同じ答えが返る」側（4xx）である。
-         */
-        if (error instanceof RunnerFenceError) {
-          return c.json(
-            { error: 'fenced' as const, expected: error.expected, given: error.given },
-            409,
-          );
+    /**
+     * セッションの起動。委譲の依頼文（`request`）を運ぶ口。
+     *
+     * **既定の 400 を使わない**（Issue #1852）。`hook` を渡さないと
+     * `@hono/zod-validator` は `c.json(result, 400)`
+     * （`result = { success: false, error: <ZodError> }`）を返す——ここは委譲の
+     * 依頼文そのものを運ぶ口なので、既定の形をそのまま使う理由が無い。いまの版
+     * （zod 4.6.5）で本文が値を漏らすことは無い（`ZodError` の issue は `path` と
+     * `message` だけ）が、それは「たまたま漏れていない」であって「漏れない」と
+     * 保証されているわけではない——`/credentials` / `/profile` / `/mcp-servers`
+     * に揃えて、送られてきた本文を1文字も返さない形に固定しておく。
+     */
+    .post(
+      '/managers',
+      zValidator('json', runnerStartCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '起動命令の入力の形が不正（置いていない）' }, 400);
         }
-        throw error;
-      }
-      return c.json({ ok: true, cwd: resumed.cwd });
-    })
+        return undefined;
+      }),
+      async (c) => {
+        // **`cwd` は実際に開いた値（Issue #1814）。** `command.cwd` の写しではない
+        // ——`Host#start` の doc を見よ。デーモンはこれと自分が送った値を比べて、
+        // 倒れたかどうかを知る。
+        const { cwd } = await host.start(c.req.valid('json'));
+        return c.json({ ok: true, cwd });
+      },
+    )
 
-    .post('/managers/:id/messages', zValidator('json', runnerMessageCommandSchema), async (c) => {
-      const delivered = await host.send(c.req.param('id'), c.req.valid('json').text);
-      if (!delivered) return c.json({ error: 'not found' as const }, 404);
-      return c.json({ ok: true });
-    })
+    /**
+     * 中断されたセッションの続きへ戻す（生ログはデーモンが持ってくる）。
+     *
+     * **既定の 400 を使わない**（Issue #1852。`/managers` と同じ理由——ここは
+     * `request` に加えて resume 直後に流す `message` も運ぶ口である）。
+     */
+    .post(
+      '/managers/:id/resume',
+      zValidator('json', runnerResumeCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '再開命令の入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const command = c.req.valid('json');
+        if (command.managerId !== c.req.param('id')) {
+          return c.json({ error: 'manager_id が経路と本文で食い違っている' as const }, 400);
+        }
+        let resumed: { cwd: string };
+        try {
+          resumed = await host.resume(command);
+        } catch (error) {
+          /*
+           * **世代が古い resume は 409、Hono の既定 500 に落とさない。**
+           *
+           * `isRetryableRunnerError`（`runner-protocol.ts`）は 5xx を「待てば直る」に
+           * 分類する。500 のままだと、遅れて届いた古い世代の命令が「一時的な失敗」と
+           * 誤解され、デーモン側の再試行が同じ古い命令を延々と投げ直す——本来は
+           * 「同じものを投げ直しても同じ答えが返る」側（4xx）である。
+           */
+          if (error instanceof RunnerFenceError) {
+            return c.json(
+              { error: 'fenced' as const, expected: error.expected, given: error.given },
+              409,
+            );
+          }
+          throw error;
+        }
+        return c.json({ ok: true, cwd: resumed.cwd });
+      },
+    )
+
+    /**
+     * マネージャーからの1通のメッセージ。
+     *
+     * **既定の 400 を使わない**（Issue #1852。`/managers` と同じ理由——ここは
+     * デーモンから中継されるメッセージ本文（`text`）を運ぶ口である）。
+     */
+    .post(
+      '/managers/:id/messages',
+      zValidator('json', runnerMessageCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: 'メッセージの入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const delivered = await host.send(c.req.param('id'), c.req.valid('json').text);
+        if (!delivered) return c.json({ error: 'not found' as const }, 404);
+        return c.json({ ok: true });
+      },
+    )
 
     /**
      * 止まっていた確認への回答。宛先は `requestId` で指す（推測しない）。
@@ -1264,14 +1314,26 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      * キー自体が消えるので実害は無いが、`runnerAnswerResultSchema` の doc が
      * 言う「report する欄そのものを持たない」を意図どおりに保つため、明示的に
      * 省く（`pendingEvents`/`oldestPendingAt` と同じ作法。#358）。
+     *
+     * **既定の 400 を使わない**（Issue #1852。`/managers` と同じ理由——ここは
+     * 委譲への回答（`message`）を運ぶ口である）。
      */
-    .post('/managers/:id/answers', zValidator('json', runnerAnswerCommandSchema), async (c) => {
-      const outcome = await host.answer(c.req.param('id'), c.req.valid('json'));
-      return c.json({
-        ok: outcome.delivered,
-        ...(outcome.decision === undefined ? {} : { decision: outcome.decision }),
-      });
-    })
+    .post(
+      '/managers/:id/answers',
+      zValidator('json', runnerAnswerCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: '回答の入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const outcome = await host.answer(c.req.param('id'), c.req.valid('json'));
+        return c.json({
+          ok: outcome.delivered,
+          ...(outcome.decision === undefined ? {} : { decision: outcome.decision }),
+        });
+      },
+    )
 
     .delete('/managers/:id', async (c) => {
       await host.stop(c.req.param('id'));
