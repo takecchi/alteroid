@@ -498,6 +498,70 @@ describe('pickLatestRunPerWorkflow', () => {
     // green と言い切らない。
     expect(result.verdict).toBe('undecidable-rerun-conflict');
   });
+
+  it('PR #1801 レビュー: rerun が絡む鍵に未完了の run が混じると、時刻では選ばず pending になる（green ではない）', () => {
+    // `hasRerunConflict` は `sameKeyRuns.every(status === 'completed')` を
+    // 前提に発火する。全部完了していなければ発火せず、`newerRun` /
+    // `effectiveTimestamp` による時刻の比較へフォールバックしていた——
+    // ここにも開く側の穴が残っていた（PR #1801 のレビューコメント）。
+    //
+    // - run A: rerun（run_attempt=2）がキューで長く待たされた
+    //   （run_started_at=10:35:00Z）あと success で完了した。
+    // - run B: A の再実行を頼んだあとに作られた、本当に新しい世代の run
+    //   （run_attempt=1、created_at=10:20:00Z）。まだ in_progress——あとで
+    //   failure になる予定だが、結論はまだ確定していない。
+    //
+    // 直す前: effectiveTimestamp(A)=run_started_at(10:35:00Z) が
+    // effectiveTimestamp(B)=created_at(10:20:00Z) より後なので、newerRun は
+    // A を選ぶ。B（まだ結論が出ていない）はまるごと捨てられ、
+    // evaluatePrGreen([A], ...) は A の jobs がすべて success なので green を
+    // 返してしまう——B がまだ走っているのに、である。
+    const rerunnedQueuedRun = {
+      id: 500,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 2,
+      created_at: '2026-09-20T10:00:00Z',
+      run_started_at: '2026-09-20T10:35:00Z',
+      updated_at: '2026-09-20T10:36:00Z',
+      status: 'completed',
+      conclusion: 'success',
+    };
+    const stillRunningNewerRun = {
+      id: 502,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 1,
+      created_at: '2026-09-20T10:20:00Z',
+      status: 'in_progress',
+      conclusion: null,
+    };
+
+    // 前提: 直す前なら A が「新しい」と選ばれてしまう関係にあること。
+    expect(Date.parse(rerunnedQueuedRun.run_started_at)).toBeGreaterThan(
+      Date.parse(stillRunningNewerRun.created_at),
+    );
+
+    const latest = pickLatestRunPerWorkflow([rerunnedQueuedRun, stillRunningNewerRun]);
+    // 時刻では選ばず、未完了の run（B）だけを残す——完了済みの A はこの回の
+    // 判定には使わない。
+    expect(latest).toHaveLength(1);
+    expect(latest[0].id).toBe(stillRunningNewerRun.id);
+    expect(latest[0].status).toBe('in_progress');
+
+    const jobsByRunId = {
+      500: [
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    // B がまだ走っているので green ではなく pending —— 既存の pending の
+    // 意味（待てば決まる）にそのまま乗る。undecidable-rerun-conflict では
+    // ない——結論がまだ確定していないので「食い違い」とは呼べない。
+    expect(result.verdict).toBe('pending');
+    expect(result.verdict).not.toBe('green');
+  });
 });
 
 describe('evaluatePrGreen', () => {

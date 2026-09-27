@@ -37,12 +37,21 @@
  * 揃っている場合と rerun が絡まない場合は、これまでどおり時刻で選ぶ**
  * ——#933 / #997 / #1126 の実測はそのまま壊れない。
  *
+ * ⭐ **PR #1801 のレビューで、上の `hasRerunConflict` が「全部 completed」を
+ * 前提にしているため、rerun が絡み、かつ完了していない run が同じ鍵に
+ * 混ざるとまだ時刻の比較へフォールバックし、開く側に倒れる形が見つかった**
+ * （未完了の run が丸ごと捨てられ、あとで failure になるはずの run を
+ * 見ずに `green` と言ってしまう）。⟹ その場合は「食い違い」ではなく
+ * 「保留」（`pending`）を返す（`hasUnresolvedRerunGroup` の doc）。
+ *
  * ⚠️ **これで「確定」ではない。** 実測できたのは1 sha・2世代・1 workflow・
  * 4ジョブの標本（#933）と、そこへ rerun が絡んだ1 sha・2世代・1 workflow の
  * 標本（#1748。`check-pr-green.test.ts` のコメント参照）だけである。
  * **`pull_request` と `workflow_dispatch` が混ざる場合はまだ測っていない**
  * （rerun で3世代目が生える場合は #1748 で測った——次項。rerun が絡み
- * 結論が食い違う場合は15回目の横断レビューで測り、上のとおり対処した）。
+ * 結論が食い違う場合は15回目の横断レビューで測り、上のとおり対処した。
+ * rerun が絡み未完了の run が混ざる場合は PR #1801 のレビューで測り、
+ * すぐ上のとおり対処した）。
  *
  * ⛔ **同じ workflow 名で `event` が違う run が同じ sha に同居する場合は
  * 実測済みで、`created_at` だけでまとめると赤を見落とす（Issue #1225）。**
@@ -297,6 +306,60 @@ function hasRerunConflict(sameKeyRuns) {
 }
 
 /**
+ * `hasRerunConflict` は `sameKeyRuns.every(status === 'completed')` を前提に
+ * 発火する。**全部完了していなければ発火せず、`newerRun` / `effectiveTimestamp`
+ * による時刻の比較へフォールバックしていた——ここにも開く側の穴が残る**
+ * （PR #1801 のレビューコメントで指摘された）。
+ *
+ * ## 具体形
+ *
+ * - run A: rerun（`run_attempt=2`）が待ち行列で長く待たされたあと、
+ *   `success` で完了した（`run_started_at` が遅い）。
+ * - run B: A の再実行を頼んだ**あと**に作られた、本当に新しい世代の run
+ *   （`run_attempt=1`）。**まだ `in_progress`**——あとで `failure` になる
+ *   予定だが、その結論はまだ確定していない。
+ *
+ * `effectiveTimestamp` は A に `run_started_at`（実行開始時刻）を、B に
+ * `created_at` を使って比べる。**A の `run_started_at` が B の `created_at`
+ * より後なら、`newerRun` は A を「新しい」と選ぶ**——`pickLatestRunPerWorkflow`
+ * は同じ鍵につき1本しか残さないので、**B（まだ結論が出ていない、しかも
+ * あとで failure になる run）がまるごと捨てられる。** ⟹ B がまだ走って
+ * いるのに `green` と言ってしまう。
+ *
+ * ## なぜ「食い違い」ではなく「保留」か
+ *
+ * `hasRerunConflict` は「結論（`conclusion`）が食い違う」ことを条件にするが、
+ * `conclusion` が確定していない（`status !== 'completed'`）run を混ぜて
+ * 比べても、**食い違っているかどうか自体が判定できない**——B が待てば
+ * `success` で終わる可能性もまだ残っている（その場合、結論は食い違わない）。
+ * 一方 `pending` の既存の意味（`evaluatePrGreen` の doc）は「まだ完了して
+ * いない run が在る——待てば決まる」であり、ここの状況にそのまま当てはまる。
+ * ⟹ **この関数が発火した鍵は、時刻で選ばず、`sameKeyRuns` のうち
+ * 完了していない run をそのまま `pickLatestRunPerWorkflow` の戻り値へ残す**
+ * （`makeRerunConflictMarker` のような専用の目印は作らない——`evaluatePrGreen`
+ * が最初から持っている `status !== 'completed'` の `pending` 判定が、素の
+ * run オブジェクトのままでそのまま拾う）。完了済みの run（A）は、この回の
+ * 判定からは落とす——`pending` は最初に返って早期リターンするため、A の
+ * jobs を見ても判定には使われない。
+ *
+ * ## 歯・変異
+ *
+ * 歯: `scripts/check-pr-green.test.ts`「PR #1801 レビュー: rerun が絡む鍵に
+ * 未完了の run が混じると green ではなく pending」。変異: この関数を
+ * 常に `false` を返す形に変えると（＝この分岐を外すと）、その歯が
+ * green を検出して赤くなる（`mutate.mjs apply`/`restore` で確認）。
+ *
+ * @param {{status:string, run_attempt?:number}[]} sameKeyRuns
+ * @returns {boolean}
+ */
+function hasUnresolvedRerunGroup(sameKeyRuns) {
+  if (sameKeyRuns.length < 2) return false;
+  const hasRerun = sameKeyRuns.some((run) => (run.run_attempt ?? 1) > 1);
+  if (!hasRerun) return false;
+  return sameKeyRuns.some((run) => run.status !== 'completed');
+}
+
+/**
  * `hasRerunConflict` が発火した鍵を、`evaluatePrGreen` が読める「run 風」の
  * 目印付きオブジェクトへ畳む。
  *
@@ -340,6 +403,15 @@ export function pickLatestRunPerWorkflow(runs) {
   for (const sameKeyRuns of byKey.values()) {
     if (hasRerunConflict(sameKeyRuns)) {
       picked.push(makeRerunConflictMarker(sameKeyRuns));
+      continue;
+    }
+    if (hasUnresolvedRerunGroup(sameKeyRuns)) {
+      // 時刻では選ばない（`hasUnresolvedRerunGroup` の doc）。完了していない
+      // run だけを残し、`evaluatePrGreen` 既存の pending 判定（下）に委ねる。
+      // 完了済みの run はこの回の判定には使わないので落とす。
+      for (const run of sameKeyRuns) {
+        if (run.status !== 'completed') picked.push(run);
+      }
       continue;
     }
     picked.push(sameKeyRuns.reduce((a, b) => newerRun(a, b)));
@@ -435,7 +507,11 @@ export function filterRunsByEvent(runs, events) {
  * `undecidable-rerun-conflict` を足した（`pickLatestRunPerWorkflow` の
  * `hasRerunConflict` / `makeRerunConflictMarker` の doc を見よ）——rerun
  * が絡み結論が食い違う run を、時刻の比較でどちらかへ選ばずに「判定
- * できない」と言うための第3の状態。
+ * できない」と言うための第3の状態。PR #1801 のレビューで、rerun が絡む
+ * 鍵に未完了の run が混ざる場合（結論そのものがまだ確定していないので
+ * 「食い違い」とは呼べない）も見つかり、こちらは新しい verdict を足さず
+ * **既存の `pending`** へ倒した（`pickLatestRunPerWorkflow` の
+ * `hasUnresolvedRerunGroup` の doc）。
  *
  * @param {{name:string,id:number|null,status?:string,conclusion?:string|null,rerunConflict?:object[]}[]} latestRuns
  *   `pickLatestRunPerWorkflow` の戻り値（`rerunConflict` を持つ要素は
