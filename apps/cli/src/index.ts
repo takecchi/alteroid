@@ -360,9 +360,13 @@ program
 
 program
   .command('logout')
-  .description('この端末に保存したアクセストークンを消す')
-  .action(async () => {
-    await logoutCommand();
+  .description('サーバ側のアクセストークンを失効させ、この端末の資格も消す')
+  .option(
+    '--local-only',
+    'サーバ側を失効させず、手元の資格だけを消す（トークンは期限か access revoke まで有効）',
+  )
+  .action(async (options: { localOnly?: boolean }) => {
+    await logoutCommand(options);
   });
 
 program
