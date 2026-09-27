@@ -6301,10 +6301,23 @@ const DENIAL_WORDS =
  * 無いときだけ allow」になった——ここに無い言い方は `allow` にならない
  * （狭いリストのぶん `unreadable` 側へ寄る。過剰に拒否と読む側であって
  * 許しすぎる側ではないので、それでよいという判断）。
+ *
+ * **同日、PR #1866 のレビューで `はい` / `yes` / `sure` / `承認します`
+ * を足した。** この4つは初版の一覧に無かったが、`どうぞ` / `go ahead` /
+ * `approved` と同じ強さのはっきりした承認で、`DENIAL_PHRASES` /
+ * `DENIAL_WORDS` の語彙拡張（issue #1837）と同じ形の抜け（普通の言い方が
+ * 一覧に無い）だった——このリスト自体が本 PR で新設したものなので、抜けは
+ * この PR が作った穴として塞ぐ（`AGENTS.md`「範囲外でも気づいたことは
+ * 上げる」の問い1・問い2）。**`進めて`（`よい` を伴わない単独形）は
+ * 意図して足していない**——`よい、そのまま進めて` は本 PR の複数のテスト
+ * （`manager.test.ts` / `runner-client.test.ts` / この下の describe）が
+ * 一貫して `unreadable` の代表例として使っており、単独の `進めて` を
+ * 承認語に足すとそれらの歯を反転させてしまう。ここは PR 本文に書いて
+ * 依頼者・オーナーの判断に委ねる。
  */
-const APPROVAL_PHRASES = ['どうぞ', '進めてよい', '許可する', '承認する'];
+const APPROVAL_PHRASES = ['どうぞ', '進めてよい', '許可する', '承認する', 'はい', '承認します'];
 /** 英語側は語境界で見る。`ok` は大文字小文字を問わず拾う（`/i`）。 */
-const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay)\b/i;
+const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay|yes|sure)\b/i;
 
 /**
  * 否定の印。`DENIAL_PHRASES` / `DENIAL_WORDS` より広く見る一覧だが、

@@ -99,6 +99,23 @@ describe('inferDecision / 3値化（issue #1827/#1837 の反転）', () => {
     },
   );
 
+  /**
+   * **PR #1866 のレビューで見つけた抜け。** `どうぞ` / `go ahead` /
+   * `approved` と同じ強さの、ごく普通の承認の言い方（単独の `はい` /
+   * `yes` / `sure` / 丁寧形の `承認します`）が初版の `APPROVAL_PHRASES` /
+   * `APPROVAL_WORDS` に無く、`unreadable` へ落ちていた（`runner.ts` の
+   * `APPROVAL_PHRASES` の doc を見よ）。**`進めて`（`よい` を伴わない単独形）
+   * はここに含めない**——直下の「承認とも拒否とも読めない」の describe が
+   * `よい、そのまま進めて` を `unreadable` の代表例として固定しており、
+   * 単独の `進めて` を承認語にするとその歯を反転させる。
+   */
+  it.each(['はい', 'yes', 'sure', '承認します'])(
+    'PR #1866 で足した、はっきりした承認「%s」も allow',
+    (message) => {
+      expect(inferDecision(message)).toBe('allow');
+    },
+  );
+
   it.each(["won't approve", 'cannot approve', '承認しません'])(
     '「%s」は allow にならない（否定を承認より先に見る）',
     (message) => {
