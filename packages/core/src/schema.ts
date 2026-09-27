@@ -3537,8 +3537,8 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  * ## 残る族（⛔ この欄が更新されない回）
  *
  * 更新するのは、`pool.unpushedWork()` が呼ばれた回（下の1〜3）と、runner が
- * 自分で先取りして運んだ観測を `manager.ts` の `case 'closed'` が台帳へ写す
- * 回（下の4）の、合わせて4つの経路だけである:
+ * 自分で先取りして運んだ観測を `manager.ts` が台帳へ写す回（下の4・5）の、
+ * 合わせて5つの経路だけである:
  *
  * 1. `manager_stop`（`before.status === 'running' && force !== true`）の断り
  * 2. **委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
@@ -3565,20 +3565,38 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  *    `#onClosed()`（セッションの削除）を呼ぶのでほぼ空振りする、という
  *    理由による（`closed.unpushedWork` の doc）。**上書きガード**
  *    （`manager.ts` の `isUnpushedWorkObservationAtLeastAsNewAs`）——2〜3の
- *    fire-and-forget（`#observeUnpushedWorkOnce`）と4は同じ委譲について
+ *    fire-and-forget（`#observeUnpushedWorkOnce`）と4・5は同じ委譲について
  *    非同期に競走することがあるため、`at` を比べて古い観測では上書きしない。
+ * 5. **日常の redeploy（SIGTERM → `host.shutdown()` → `session.stop()`）で
+ *    runner が止まる直前**（`manager.ts` の `case
+ *    'shutdown_unpushed_work'`。Issue #1266 候補(C)）。`stop()`（`Host#
+ *    shutdown()` 経由）は4と違って `closed` を出さない設計のままだが、
+ *    `RunnerSession#stop()` は畳みの最後に `unpushedWork()` を1回取り、
+ *    `runnerEventSchema` の `shutdown_unpushed_work`（`closed` とは別の
+ *    イベント）として運ぶ。**best-effort である——届く保証は無い。** outbox
+ *    （`RunnerHost` から先）は #629 が示した喪失の窓を持ち、SIGTERM は
+ *    デーモン側の SSE 購読が同じタイミングで切れかけていることがある瞬間
+ *    そのものである。届かなかった回はこの経路自体が発火しないので、
+ *    **この欄は「取れなかった」（`kind: 'unavailable'`）にすらならず、既存の
+ *    観測（無ければ `undefined`）がそのまま残るだけである**——0件も
+ *    `unavailable` も新しく作らない（`shutdown_unpushed_work` の doc・
+ *    `AGENTS.md`「取れない軸に0の行を作る」と同じ注意）。
  *
- * **それでも更新されない回が残る。** `force: true` で止めたとき・
- * `manager_list`・止めた委譲の報告・器の入れ替え（redeploy・
- * `manager_stop`）は `runner.ts` の `stop()` を通り、**`stop()` は `closed`
- * イベント自体を出さない設計**（デーモン側は自分が起こした `stop()` の結果を
- * `runner.list()` で確かめられるので、知らせが要らない）なので、上の4も
- * 発火しない。**runner プロセスそのものが `#finish()` を実行する前に落ちた
- * 回**（コンテナごと OOM-killed・SIGKILL 等）も、`closed` イベント自体が
- * 届かないので同様に拾えない。
+ * **それでも更新されない回が残る。** `force: true` で止めたとき（`Host#
+ * stop(managerId)` 経由の明示停止。`manager_stop force: true` 等）・
+ * `manager_list`・止めた委譲の報告は、5が対象にする「`Host#shutdown()`
+ * 経由の `stop()`」ではないので、5も発火しない——`RunnerSession#stop()` は
+ * `captureUnpushedWork` オプションが立った呼び出し（`Host#shutdown()`）
+ * だけがこの観測を取る（`runner-protocol.ts` の `shutdown_unpushed_work`
+ * の doc「どの `stop()` から出るか」）。**`runner プロセスそのものが
+ * `#finish()` も `#stopBody()` も実行する前に落ちた回**（コンテナごと
+ * OOM-killed・SIGKILL・`FORCED_EXIT_MS` の期限そのものに間に合わなかった
+ * 回等）も、`closed` も `shutdown_unpushed_work` も届かないので同様に
+ * 拾えない。
  * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打たず、新しい
- * 枝も作っておらず、かつ `closed`（4）も届かなかった場合にだけ拾えない**
- * （最後の報告か、最後に検出した `git push`／枝作成／`closed` のうち
+ * 枝も作っておらず、かつ `closed`（4）も `shutdown_unpushed_work`（5、
+ * best-effort）も届かなかった場合にだけ拾えない**（最後の報告か、最後に
+ * 検出した `git push`／枝作成／`closed`／`shutdown_unpushed_work` のうち
  * いちばん遅い時点の観測が残るだけである）。`git push` や枝作成の実行その
  * ものの最中に器が落ちた回も拾えない——検出は runner の `PostToolUse`
  * フック経由なので、コマンドの完了後にしか届かない（`manager.ts` の

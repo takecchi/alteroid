@@ -1015,8 +1015,15 @@ class Host implements RunnerHost {
     // と同じ理由）。
     if (this.#leaseWatcher !== null) clearInterval(this.#leaseWatcher);
     this.#leaseWatcher = null;
+    // **`captureUnpushedWork: true`（Issue #1266 候補(C)）。** ここ（器の
+    // 入れ替え・日常の redeploy）だけが、未 push の観測を
+    // `shutdown_unpushed_work` イベントとして運ぶ——`Host#stop(managerId)`
+    // （デーモンからの明示停止）は渡さない（`RunnerSession#stop` の doc
+    // 「どの `stop()` から出るか」）。
     await Promise.all(
-      [...this.#sessions.values()].map((session) => session.stop('runner が停止した。')),
+      [...this.#sessions.values()].map((session) =>
+        session.stop('runner が停止した。', { captureUnpushedWork: true }),
+      ),
     );
     this.#sessions.clear();
   }
@@ -1403,11 +1410,38 @@ interface RunnerSessionOptions {
 const FINISH_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
 
 /**
- * `RunnerSession#finish()` が `closed` イベントへ運ぶ、未 push の観測1回分の
- * 結果（Issue #1266 候補(2)）。`manager.ts` の `ManagerUnpushedWork` と同じ
- * 形——`runner-protocol.ts` の `closed.unpushedWork` のワイヤー形にそのまま
- * 対応する（`manager.ts` を import せずに同じ形を作るため、ここで独立に
- * 定義している。`runner.ts` → `manager.ts` の逆向き import を増やさない）。
+ * `RunnerSession#stop()`（`Host#shutdown()` 経由・器の入れ替え）が、`closed`
+ * を出さずに畳む直前に取る未 push の観測（Issue #1266 候補(C)）へ渡す期限。
+ *
+ * `FINISH_UNPUSHED_WORK_TIMEOUT_MS`・`manager.ts` の
+ * `UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS` と同じ値・同じ理由——実測に基づく
+ * 値ではなく、安全側に短く取った未検証の既定値である。**同じ値だが同じ定数
+ * にはしていない**——直上の `FINISH_UNPUSHED_WORK_TIMEOUT_MS` の doc が
+ * 説明する重複の判断（呼び出し元ごとに独立して調整できる余地を残す）を、
+ * 同じファイルの中でも同じ形で踏襲する。
+ *
+ * **上限を守る側の計算。** `apps/runner/src/index.ts` の `Host#shutdown()` は
+ * `#sessions` の全セッションへ `Promise.all` で並行に `stop()` を呼ぶ——
+ * セッション数に関わらず、この観測1本ぶん（最大 `STOP_UNPUSHED_WORK_TIMEOUT_MS`）
+ * しか畳みの合計時間に上乗せしない。`FORCED_EXIT_MS`（SIGTERM から55秒。
+ * `host.shutdown()` の後にも `drainAndReportOutbox` が最大3秒待つ）の内側に
+ * 十分収まる値として選んだ——SIGTERM から runner が自分で `exit(0)` する
+ * までの猶予を大きく食わない範囲に留める、という条件をこの値で満たす。
+ */
+const STOP_UNPUSHED_WORK_TIMEOUT_MS = 5_000;
+
+/**
+ * `RunnerSession#finish()` が `closed` イベントへ、`RunnerSession#stop()` が
+ * `shutdown_unpushed_work` イベントへ運ぶ、未 push の観測1回分の結果（Issue
+ * #1266 候補(2)・候補(C)。**2つの呼び出し元で共有する**——どちらも同じ
+ * `#finishUnpushedWorkFn` を同じ形（`.then`/`.catch` で `kind` を畳む）で
+ * 呼ぶだけで、結果の形自体は呼び出し元で変わらない）。`manager.ts` の
+ * `ManagerUnpushedWork` と同じ形——`runner-protocol.ts` の
+ * `runnerUnpushedWorkOutcomeSchema`（`closed.unpushedWork` /
+ * `shutdown_unpushed_work.unpushedWork` の両方が参照する）のワイヤー形に
+ * そのまま対応する（`manager.ts` を import せずに同じ形を作るため、ここで
+ * 独立に定義している。`runner.ts` → `manager.ts` の逆向き import を増やさ
+ * ない）。
  */
 type FinishUnpushedWorkOutcome =
   | { readonly kind: 'ok'; readonly result: UnpushedWorkResult }
@@ -1928,8 +1962,16 @@ class RunnerSession {
    * **`#closing` を控える・待つ・消す3行は `RunnerSdkSession#trackClosing`
    * へ切り出した**（Issue #1190 案X）。`stop()` と `#finish()` が持っていた
    * 同じ3行を1本化しただけで、いつ・何を畳むかはここに残る。
+   *
+   * **`options.captureUnpushedWork`（Issue #1266 候補(C)）。** `true` の
+   * ときだけ、`#stopBody` が畳みの最後に未 push の観測を取り、
+   * `shutdown_unpushed_work` イベントとして運ぶ——`runner-protocol.ts` の
+   * 同イベントの doc「どの `stop()` から出るか」のとおり、`Host#shutdown()`
+   * だけがこれを `true` で呼ぶ。**2本目以降の `stop()`（直上の早期 return）
+   * には効かない**——畳みは1本目が担うので、2本目が渡した値は使われない
+   * （既に走っている畳みが、その1本目の呼び出し時点の値で決まっている）。
    */
-  async stop(reason: string): Promise<void> {
+  async stop(reason: string, options: { captureUnpushedWork?: boolean } = {}): Promise<void> {
     if (this.#sdkSession.stopped) {
       // **Issue #1602 / #1605。畳み中のもの（`#finish()` 由来でも `stop()`
       // 自身の畳み由来でも）があれば、それを待ってから返る。**
@@ -1962,11 +2004,11 @@ class RunnerSession {
       if (closing) await closing;
       return;
     }
-    await this.#sdkSession.trackClosing(() => this.#stopBody(reason));
+    await this.#sdkSession.trackClosing(() => this.#stopBody(reason, options));
   }
 
   /** `stop()` の中身。呼ぶのは `stop()` のラッパーだけである。 */
-  async #stopBody(reason: string): Promise<void> {
+  async #stopBody(reason: string, options: { captureUnpushedWork?: boolean } = {}): Promise<void> {
     this.#sdkSession.markStopped();
 
     // **オーナー判断（2026-09-26、Issue #1533）。報告は「stop が指示された
@@ -2036,6 +2078,41 @@ class RunnerSession {
     // 渡す。** 上の断りのとおり——`#settleAll` が確認を解いた後の `#status` を
     // 読むと、報告の意味が変わってしまう。
     this.#flushUnreported(reason, statusAtStop);
+    // **未 push の観測を、best-effort で運ぶ（Issue #1266 候補(C)）。**
+    //
+    // `options.captureUnpushedWork` が `true` のとき（＝ `Host#shutdown()`
+    // 経由——日常の redeploy）だけ、ここで1回取って
+    // `shutdown_unpushed_work` イベントとして emit する。`Host#stop(managerId)`
+    // 経由（デーモンが明示的に指示する停止）はこのフラグを立てないので、
+    // この分岐に入らない——`runner-protocol.ts` の同イベントの doc「どの
+    // `stop()` から出るか」に理由がある。
+    //
+    // **`#finishBody()` の同じ処理と対になる**——あちらは `closed` を出す
+    // 経路（枠落ち・失敗）、こちらは出さない経路（redeploy）を埋める。
+    // `#finishUnpushedWorkFn` を同じ形（`.then`/`.catch` で `kind` を畳む）
+    // で呼ぶのも同じ理由——2箇所で変換を手で合わせない。
+    //
+    // **例外を投げない。** `computeUnpushedWork` 自身は例外を投げない設計
+    // だが、`#finishBody()` と同じ理由で `.catch()` を添えてある——この
+    // 観測1回の失敗で `stop()` 自体（＝畳みそのもの）を巻き添えにしない
+    // ため。取れなかったときは `kind: 'unavailable'` と理由を載せる。
+    //
+    // **時間の上限（`STOP_UNPUSHED_WORK_TIMEOUT_MS`）を守る。** SIGTERM から
+    // runner が自分で `exit(0)` するまでの猶予（`FORCED_EXIT_MS`）を大きく
+    // 食わないよう、期限を切ったうえで進める——`Host#shutdown()` は全
+    // セッションを並行に畳むので、セッション数に関わらずこの1本ぶんしか
+    // 上乗せしない。
+    if (options.captureUnpushedWork === true) {
+      const unpushedWork = await this.#finishUnpushedWorkFn({
+        signal: AbortSignal.timeout(STOP_UNPUSHED_WORK_TIMEOUT_MS),
+      })
+        .then((result): FinishUnpushedWorkOutcome => ({ kind: 'ok', result }))
+        .catch((error: unknown): FinishUnpushedWorkOutcome => ({
+          kind: 'unavailable',
+          reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+        }));
+      this.#emit({ type: 'shutdown_unpushed_work', managerId: this.#id, unpushedWork });
+    }
     this.#onClosed();
   }
 

@@ -747,6 +747,24 @@ export const unpushedWorkResultSchema = z.object({
 });
 export type UnpushedWorkResult = z.infer<typeof unpushedWorkResultSchema>;
 
+/**
+ * `closed.unpushedWork`（Issue #1266 候補(2)）と `shutdown_unpushed_work`
+ * （このファイルの下・Issue #1266 候補(C)）が共有する形。**`kind: 'ok'` は
+ * 取れたこと**（{@link unpushedWorkResultSchema} をそのまま運ぶ）、**`kind:
+ * 'unavailable'` は確かめようとして取れなかったことそのものを名乗る**
+ * （`AGENTS.md`「取れない軸に0の行を作る」と同じ注意——欄が丸ごと無いのと
+ * `kind: 'unavailable'` を混ぜない）。
+ *
+ * 1箇所にまとめたのは、2つのイベントに手で同じ形を書くと片方だけ直る事故が
+ * 起きるため（`manager.ts` の `unpushedWorkObservationOf` を2箇所で手で
+ * 合わせない、という既存の判断と同じ理由）。
+ */
+export const runnerUnpushedWorkOutcomeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('ok'), result: unpushedWorkResultSchema }),
+  z.object({ kind: z.literal('unavailable'), reason: z.string() }),
+]);
+export type RunnerUnpushedWorkOutcome = z.infer<typeof runnerUnpushedWorkOutcomeSchema>;
+
 export const runnerEventSchema = z.discriminatedUnion('type', [
   /**
    * ストリームの先頭。どの runner に繋がったかを名乗る。
@@ -1793,12 +1811,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * へ実際に書くのは `manager.ts` の `case 'closed'`（5つ目の呼び出し元。
      * 既に新しい観測が乗っていれば `at` を比べて古い値では上書きしない）。
      */
-    unpushedWork: z
-      .discriminatedUnion('kind', [
-        z.object({ kind: z.literal('ok'), result: unpushedWorkResultSchema }),
-        z.object({ kind: z.literal('unavailable'), reason: z.string() }),
-      ])
-      .optional(),
+    unpushedWork: runnerUnpushedWorkOutcomeSchema.optional(),
   }),
   /**
    * 前のセッションを開き直せなかった。
@@ -1821,6 +1834,80 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * 成否をイベントの側で持つ（受け取ったデーモンが人間とクローンへ出す）。
      */
     recovered: z.boolean(),
+  }),
+  /**
+   * 日常の redeploy（SIGTERM → `Host#shutdown()` → `RunnerSession#stop()`）で
+   * runner が止まる直前に取った、未 push の作業ツリーの観測1回分（Issue
+   * #1266 候補(C)）。
+   *
+   * ## なぜ `closed` に載せないか
+   *
+   * `stop()`（`Host#shutdown()` 経由・器の入れ替え。`Host#stop()` 経由の
+   * 明示停止も同じ `#stopBody()` を通るが、こちらはこの欄を送らない——下の
+   * 「どの `stop()` から出るか」を見よ）は意図的に `closed` を出さない
+   * （`railway/README.md`「再デプロイでは待つ」——呼んだ側〈デーモン〉が
+   * 結果を `list()` で確かめられるからという既存の設計判断。この事実は
+   * 変えていない）。`closed` の意味（`status` の終端・貸し出しの解放・
+   * 自己失効の判定・runner-id の不一致チェック）を引き継がずに、この1点
+   * （未 push の観測）だけを運ぶには、`closed` を流用せず別の型を置くほうが
+   * 安全である——流用すると `manager.ts` の `case 'closed'` が持つ「既に
+   * 止めたマネージャーの closed で status を巻き戻さない（R4）」等のガードを
+   * すり抜けて事故る経路が増える。
+   *
+   * ## best-effort である——届かないことがある
+   *
+   * runner は SIGTERM から `FORCED_EXIT_MS`（`apps/runner/src/index.ts`。
+   * 既定55秒）以内に自分で `exit(0)` する。この事象はその途中、`stop()` が
+   * 畳みの最後（`closed` は出さないが、生ログ・報告と同じ「渡し損ねたら
+   * 二度と取れないもの」を運ぶ一連の処理）で送る。**outbox（`RunnerHost`
+   * から先）は #629 が示した喪失の窓を持ち、しかも SIGTERM はデーモン側の
+   * SSE 購読が同じタイミングで切れかけていることがある瞬間そのものである**
+   * ——届く保証は無い。これは「取りに行かない」より確実に前進するが、
+   * 「必ず届く」ではない。
+   *
+   * **届かなかった回は、この欄の更新そのものが起きない。** 台帳側
+   * （`manager.ts` の `case 'shutdown_unpushed_work'`）は「取れなかった」
+   * ケース（`kind: 'unavailable'`）と「届かなかった」ケース（イベント自体が
+   * 来ない）を混ぜない——後者は既存の観測（無ければ `undefined`）がそのまま
+   * 残る。「0件」の値をここで新しく作らないので、`manager_list` 等の読み手が
+   * 古い観測や欠落を「いま0件だった」と読むことはない（`AGENTS.md`「取れない
+   * 軸に0の行を作る」）。
+   *
+   * ## どの `stop()` から出るか
+   *
+   * `RunnerSession#stop()` は `Host#shutdown()`（この事象の対象）と
+   * `Host#stop(managerId)`（`manager_stop` の `force: true` 等、デーモンが
+   * 明示的に指示する停止）の両方から同じ `#stopBody()` を通る。**この欄が
+   * 付くのは `Host#shutdown()` 経由の呼び出しだけ**（`stop()` の
+   * `captureUnpushedWork` オプション）——`Host#stop(managerId)` 経由（デーモン
+   * が指示した明示停止）は対象外のままにしてある。デーモン起点の停止は、
+   * 呼び出し元（`manager.ts`）が停止を指示する**前**に `pool.unpushedWork()`
+   * を自分で呼んで観測を取る余地がある（`vacate()` が候補(B)でこの形を
+   * 既に採っている）——runner 側の `stop()` に一律で足すのは、日常の
+   * redeploy のようにデーモン側に「止める前に取りに行く」機会が無い経路
+   * （器そのものが SIGTERM を受け、デーモンはそれを知らない）に限る、という
+   * 判断である。
+   *
+   * ## 形は `closed.unpushedWork` と同じ
+   *
+   * {@link runnerUnpushedWorkOutcomeSchema} を共有する。**ここでは
+   * `.optional()` にしない**——`closed.unpushedWork` は「この欄を送らない
+   * 古い runner」を壊さないための任意項目だが、この事象はこの欄を運ぶこと
+   * 自体が存在理由なので、送るときは必ず埋まっている。
+   *
+   * ## 台帳への書き込みは呼び出し元が持つ
+   *
+   * ここはワイヤーの形を定義するだけ——`manager.ts` の `case
+   * 'shutdown_unpushed_work'` が `#recordUnpushedWorkObservation`（既存4
+   * 呼び出し元と同じ実装）へ `event.unpushedWork` をそのまま渡す。`case
+   * 'closed'` のように自前で変換・上書きガード・`#persist` を並べていない
+   * ——ここでは他に同時に書く欄が無いので、既存の関数へそのまま委ねられる
+   * （`case 'closed'` が相乗りを選んだのとは逆の理由で、同じ関数へ辿り着く）。
+   */
+  z.object({
+    type: z.literal('shutdown_unpushed_work'),
+    managerId: z.string(),
+    unpushedWork: runnerUnpushedWorkOutcomeSchema,
   }),
 ]);
 

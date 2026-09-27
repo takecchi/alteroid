@@ -6292,21 +6292,24 @@ class Pool implements ManagerPool {
    * という既存の書き方（`case 'archive'` 等）をそのままなぞる——新しい書き込み
    * 経路を作らない。
    *
-   * ⛔ **ここが呼ばれるのは `unpushedWork()` の呼び出し元が
-   * `pool.unpushedWork()` を呼んだ回だけである。呼び出し元は3つ**——
-   * `manager_stop`（running・非 force）の断り（`tools.ts`）、ターンが
-   * `report` で終わったとき、そして Bash で `git push` を検出したとき
-   * （後の2つはどちらも `#observeUnpushedWorkOnce`。前者は `case 'report'`
-   * から、Issue #1266 の (4)。後者は `case 'tool_use'` から、Issue #1376 の
-   * 続き）。**`force: true` で止めたとき・`manager_list`・器の入れ替え
-   * （redeploy・枠落ちでセッションを失う経路。`report` も `git push` の
-   * `tool_use` も届く前に器を失えば拾えない）は、どの呼び出し元からも
-   * `unpushedWork()` 自体が呼ばれないので、この関数にも来ない**
+   * ⛔ **ここが呼ばれるのは4つの経路だけである**——`manager_stop`
+   * （running・非 force）の断り（`tools.ts`）、ターンが `report` で終わった
+   * とき、Bash で `git push` を検出したとき（後の2つはどちらも
+   * `#observeUnpushedWorkOnce`。前者は `case 'report'` から、Issue #1266 の
+   * (4)。後者は `case 'tool_use'` から、Issue #1376 の続き）、そして日常の
+   * redeploy で runner が `closed` を出さずに畳む直前（`case
+   * 'shutdown_unpushed_work'`、Issue #1266 候補(C)。`runner.ts` の
+   * `RunnerSession#stop()` が `Host#shutdown()` 経由のときだけ運ぶ）。**この
+   * 4つ目は best-effort であり、届かない回はこの関数自体が呼ばれない**
+   * （`shutdown_unpushed_work` の doc）。
+   *
+   * **`force: true` で止めたとき・`manager_list` 自身は、どの呼び出し元から
+   * も `unpushedWork()` 自体が呼ばれないので、この関数にも来ない**
    * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意——
    * ただし `case 'closed'`（`runner.ts` の `#finish()` が先取りして運ぶ、
-   * Issue #1266 候補(2)）は、この関数を経由せず自分で同じ変換
-   * （{@link unpushedWorkObservationOf}）と同じ上書きガードを直接使う。
-   * 理由は下の「上書きガード」を見よ）。
+   * Issue #1266 候補(2)。枠落ち・失敗の経路）は、この関数を経由せず自分で
+   * 同じ変換（{@link unpushedWorkObservationOf}）と同じ上書きガードを直接
+   * 使う。理由は下の「上書きガード」を見よ）。
    *
    * ## 上書きガード（Issue #1266 候補(2)）
    *
@@ -6316,6 +6319,10 @@ class Pool implements ManagerPool {
    * `case 'closed'` の直接書き込みは、同じ委譲について非同期に競走する
    * ことがある（`report` は `closed` より先に届くが、その fire-and-forget
    * は runner との往復を含むので `closed` の処理より後に解決しうる）。
+   * **`case 'shutdown_unpushed_work'` も同じ土俵で競走しうる**——最後の
+   * `report` の直後に redeploy が来れば、その fire-and-forget がまだ
+   * runner との往復の途中で、`shutdown_unpushed_work` が先に届くことが
+   * ある（このガードがあるので、どちらが先に着いても新しいほうが勝つ）。
    * 比較は `at`（ISO8601・UTC・`Z` 終端）の辞書式比較——`runnerBacklog()` の
    * `observedAt` 比較と同じ作法。同点は新しいほうを勝たせる（`>`
    * 厳密な超過だけを弾く条件にする）。
@@ -11546,6 +11553,42 @@ class Pool implements ManagerPool {
          * `send()` が載せ直した像をそのまま消す。
          */
         await this.#settleUsageWake(event.managerId, this.#usageStopped.has(event.managerId));
+        return;
+      }
+
+      case 'shutdown_unpushed_work': {
+        /*
+         * **best-effort（Issue #1266 候補(C)）。** `runner.ts` の
+         * `RunnerSession#stop()`（`Host#shutdown()` 経由——日常の redeploy。
+         * SIGTERM → `host.shutdown()` → `session.stop()`。`closed` を出さない
+         * 設計——`railway/README.md`「再デプロイでは待つ」）が、runner が
+         * 止まる直前に取った観測を運ぶ。
+         *
+         * **届く保証は無い。** outbox（`RunnerHost` から先）は #629 が示した
+         * 喪失の窓を持ち、SIGTERM はデーモン側の SSE 購読が同じタイミングで
+         * 切れかけていることがある瞬間そのものである。**届かなかった回は、
+         * この `case` 自体が一度も呼ばれない**——だから「0件」をここで作らない。
+         * 既存の観測（無ければ `undefined` のまま）は触れずに残るので、
+         * `manager_list` 側が「取れなかった（`unavailable`）」と「そもそも
+         * 届いていない（欄が更新されていない）」を混同することはない
+         * （`runner-protocol.ts` の同イベントの doc・`AGENTS.md`「取れない軸に
+         * 0の行を作る」と同じ注意）。
+         *
+         * **`#recordUnpushedWorkObservation`（既存4呼び出し元と同じ実装）へ
+         * そのまま渡す。** `event.unpushedWork` の型
+         * （`runnerUnpushedWorkOutcomeSchema`）は `ManagerUnpushedWork` と
+         * 構造的に一致する——ここでは他に同時に書く欄が無いので、`case
+         * 'closed'` のように変換・上書きガード・`#persist` を自前で並べる
+         * 必要が無く、既存の関数（変換は {@link unpushedWorkObservationOf}、
+         * 上書きガードは {@link isUnpushedWorkObservationAtLeastAsNewAs}、
+         * 両方とも自分で `#persist` まで済ませる）へそのまま委ねられる。
+         *
+         * **`record.job.status` には触れない。** この事象は `stop()` が
+         * `closed` を出さない設計そのものを変えていない——観測を積み増す
+         * だけで、`status`・`lease`・`runnerId` の不一致チェックのような
+         * `case 'closed'` が持つ他の判断は一切持ち込まない。
+         */
+        await this.#recordUnpushedWorkObservation(record, event.unpushedWork);
         return;
       }
 
