@@ -10,6 +10,9 @@ node_modules
 .vscode
 coverage
 *.log
+# 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore / .prettierignore /
+# eslint.config.js と同じ。揃っていることは scripts/scratch-ignore-alignment.test.ts が測る）。
+**/.scratch
 .env
 .env.*
 # docs/ は除外しない。**正典はビルドの入力である** — packages/core が

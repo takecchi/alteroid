@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +11,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * **`.scratch/`（担い手・作業者が作業ツリーの中に置く使い捨ての置き場）は、git・
- * prettier・eslint の3つすべてから外れていなければならない。**
+ * prettier・eslint・docker（`.dockerignore`）のすべてから外れていなければならない。**
  *
  * #1819 は `.gitignore` と `.prettierignore` にだけ足した。`eslint.config.js` の
  * `ignores` は `.gitignore` を読まない別の一覧なので、`.scratch/` に `.ts` を置くと
@@ -23,7 +24,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
  */
 const PROBES = ['.scratch/probe.ts', '.scratch/nested/probe.tsx', '.scratch/notes.md'];
 
-describe('.scratch/ は git・prettier・eslint のすべてから外れている', () => {
+describe('.scratch/ は git・prettier・eslint・docker のすべてから外れている', () => {
   it.each(PROBES)('git は %s を無視する', (path) => {
     // `check-ignore` は無視されるなら exit 0、されないなら exit 1 で投げる。
     expect(() =>
@@ -47,4 +48,23 @@ describe('.scratch/ は git・prettier・eslint のすべてから外れてい�
       expect(await eslint.isPathIgnored(join(ROOT, path))).toBe(true);
     },
   );
+
+  /**
+   * **docker のビルドの文脈からも外す**（`.scratch/` の下書きをイメージへ焼かない）。
+   * `.dockerignore` を判定する API は依存に無いので、行を読んで、`.scratch` を外す
+   * 行（`.scratch` / `.scratch/` / `**\/.scratch` / `**\/.scratch/`）があるかを見る。
+   * docker の `**\/` は0個以上のディレクトリに当たるので、根の `.scratch` も含む。
+   */
+  it('.dockerignore は .scratch を外す', () => {
+    const lines = readFileSync(join(ROOT, '.dockerignore'), 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('#'));
+    const excludes = lines.some((line) =>
+      ['.scratch', '.scratch/', '**/.scratch', '**/.scratch/'].includes(line),
+    );
+    // 【赤の意味】.dockerignore に `.scratch` が無い。作業者の下書きがビルドの文脈へ
+    // 送られ、イメージに焼かれうる。
+    expect(excludes).toBe(true);
+  });
 });
