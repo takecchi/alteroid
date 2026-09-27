@@ -40,11 +40,18 @@ import type { Stores } from './store.js';
  * `manager.ts` の帳面・`#emit`・`renotifyStalledDenials()` を単体で確かめる。
  */
 
+interface AnsweredCall {
+  requestId: string;
+  message: string;
+  decision?: 'allow' | 'deny';
+}
+
 interface ManualRunner {
   runner: RunnerClient;
   alive: RunnerManagerState[];
+  answeredCalls: AnsweredCall[];
   report(managerId: string, text: string, status: JobStatus): void;
-  ask(managerId: string, requestId: string, summary: string): void;
+  ask(managerId: string, requestId: string, summary: string, askedAt?: string): void;
   closed(managerId: string, status: 'done' | 'lost' | 'failed', reason: string): void;
   denied(managerId: string, tool: string, fields?: { actor?: string; inputHead?: string }): void;
   toolUse(managerId: string, actor: string, tool: string): void;
@@ -53,6 +60,9 @@ interface ManualRunner {
 function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
+  // **`manager_send` が実際にどの `requestId` へ当てたかを控える**
+  // （issue #1772・「許しすぎる」側の確認用。下の「無関係な確認へ当たる」テスト）。
+  const answeredCalls: AnsweredCall[] = [];
 
   const runner: RunnerClient = {
     runnerId,
@@ -71,8 +81,13 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async send() {
       return true;
     },
-    async answer(): Promise<RunnerAnswerOutcome> {
-      return { delivered: false };
+    async answer(_managerId, answer): Promise<RunnerAnswerOutcome> {
+      answeredCalls.push({
+        requestId: answer.requestId,
+        message: answer.message,
+        ...(answer.decision === undefined ? {} : { decision: answer.decision }),
+      });
+      return { delivered: true };
     },
     async stop(managerId) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
@@ -104,17 +119,22 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   return {
     runner,
     alive,
+    answeredCalls,
     report(managerId, text, status) {
       emit?.({ type: 'report', managerId, text, status });
     },
-    ask(managerId, requestId, summary) {
+    ask(managerId, requestId, summary, askedAt) {
       emit?.({
         type: 'ask',
         managerId,
         requestId,
         kind: 'permission',
         summary,
-        askedAt: new Date().toISOString(),
+        // **既定は実時間。** ただし `renotifyStalledDenials()` が使う `now`
+        // （このファイルではテスト用の可変クロック）と比べる歯（下の「知らせ
+        // 直しより前から未決の…」テスト）は、実時間とかけ離れた可変クロックの
+        // 値を渡すので、そちらは明示的に `askedAt` を指定する。
+        askedAt: askedAt ?? new Date().toISOString(),
       });
     },
     closed(managerId, status, reason) {
@@ -145,6 +165,8 @@ interface ManualSetup {
   inbox: InboxEvent[];
   fake: ManualRunner;
   advance: (ms: number) => void;
+  /** いまの可変クロックを ISO8601 で返す（`ask()` の `askedAt` を明示するため）。 */
+  nowIso: () => string;
 }
 
 async function runningManualSetup(managerId = 'mgr-denial-renotify-cross'): Promise<ManualSetup> {
@@ -187,7 +209,14 @@ async function runningManualSetup(managerId = 'mgr-denial-renotify-cross'): Prom
     if (inbox.length === 0) throw new Error('reattach の知らせがまだ届いていない');
   });
 
-  return { pool, stores, inbox, fake, advance: (ms) => (clock += ms) };
+  return {
+    pool,
+    stores,
+    inbox,
+    fake,
+    advance: (ms) => (clock += ms),
+    nowIso: () => new Date(clock).toISOString(),
+  };
 }
 
 async function waitForDenialJournaled(stores: Stores, tool: string): Promise<void> {
@@ -238,6 +267,116 @@ describe('renotifyStalledDenials のクロスtool starvation（横断レビュ�
         delivered,
         'Bash の知らせ直しが届くべきだが、現行コードは無関係な未決確認の影響で止める',
       ).toBeDefined();
+
+      await pool.stop();
+    },
+  );
+
+  it(
+    '知らせ直しより前から未決の無関係な確認は、requestId 無しの decision を黙って当てず断る' +
+      '（issue #1772 段2。許しすぎる側の穴を塞ぐ）',
+    async () => {
+      // **`renotifyStalledDenials()` の判定を委譲ごとから拒否ごとへ戻した結果、
+      // 無関係な未決の確認が1件だけ在る状態のままクローンへ知らせ直しが届く
+      // ようになった（上のテスト）。** そのままだと、`DENIAL_REPLY_ROUTE` の
+      // 注意（`requestId` を付けずに `decision` を送るな）にクローンが反した
+      // ときに、`#choosePending` の「待ちがちょうど1件なら当てる」規則（#313）
+      // で無関係な確認へ誤って当たってしまう——これが issue #1772 が指す
+      // 「許しすぎる側」の穴である。ここではそれを実際に塞いだことを確かめる。
+      const { pool, stores, fake, advance, nowIso } = await runningManualSetup();
+
+      fake.denied('mgr-denial-renotify-cross', 'Bash', {
+        actor: 'manager:mgr-denial-renotify-cross',
+      });
+      await waitForDenialJournaled(stores, 'Bash');
+      advance(TEN_MINUTES_MS + 1);
+
+      // Bash の拒否とは無関係な確認が1件、知らせ直しより前から未決のまま
+      // 残っている。**`askedAt` はテスト用の可変クロックの値を明示する**
+      // （`renotifyStalledDenials()` が読む `now` と同じ時間軸で比べるため。
+      // `ask()` の既定の実時間だと、可変クロックとかけ離れていて前後関係が
+      // 意図どおりにならない）。
+      fake.ask('mgr-denial-renotify-cross', 'req-unrelated-2', '無関係などの許可確認', nowIso());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // 知らせ直しの時刻が、いま控えた確認の `askedAt` より確実に後になる
+      // よう、可変クロックを1ms進めてから知らせ直しを送る。
+      advance(1);
+      await pool.renotifyStalledDenials();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // クローンが `DENIAL_REPLY_ROUTE` の注意に反して、`requestId` を付けずに
+      // `decision` だけを付けて答えたとする（例: 知らせ直しを Bash への確認だと
+      // 誤解した）。
+      const result = await pool.send('mgr-denial-renotify-cross', 'よし、許可します', {
+        decision: 'allow',
+      });
+
+      // **あるべき挙動**: 黙って当てず、`requestId` を明示するよう求めて断る。
+      // 無関係な確認（`req-unrelated-2`）へは一切当たらない。
+      expect(result.outcome).toBe('unknown');
+      expect(result.detail).toContain('req-unrelated-2');
+      expect(result.detail).toContain('requestId');
+      expect(result.detail).toContain('Bash');
+      expect(fake.answeredCalls).toHaveLength(0);
+
+      // requestId を明示すれば、今までどおり答えられる。
+      const explicit = await pool.send('mgr-denial-renotify-cross', 'よし', {
+        decision: 'allow',
+        requestId: 'req-unrelated-2',
+      });
+      expect(explicit.outcome).toBe('answered');
+      expect(fake.answeredCalls).toHaveLength(1);
+      expect(fake.answeredCalls[0]?.requestId).toBe('req-unrelated-2');
+
+      await pool.stop();
+    },
+  );
+
+  it(
+    '対照: 知らせ直しの後にできた確認は、requestId 無しの decision でも今までどおり当たる' +
+      '（issue #1772 段2で保つべき既存の能力。#313）',
+    async () => {
+      // 知らせ直しより**後**にできた確認は、いま最新の出来事として自然に
+      // 答えている可能性が高い——ここまで塞ぐと #313 の能力（待ちが1件なら
+      // 意思を示せば通る）を壊す。
+      const { pool, stores, fake, advance } = await runningManualSetup();
+
+      fake.denied('mgr-denial-renotify-cross', 'Bash', {
+        actor: 'manager:mgr-denial-renotify-cross',
+      });
+      await waitForDenialJournaled(stores, 'Bash');
+      advance(TEN_MINUTES_MS + 1);
+
+      await pool.renotifyStalledDenials();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // 知らせ直しが届いた**後**に、新しい確認ができた。
+      fake.ask('mgr-denial-renotify-cross', 'req-after-renotify', '新しい許可確認');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const result = await pool.send('mgr-denial-renotify-cross', 'よし', { decision: 'allow' });
+      expect(result.outcome).toBe('answered');
+      expect(fake.answeredCalls).toHaveLength(1);
+      expect(fake.answeredCalls[0]?.requestId).toBe('req-after-renotify');
+
+      await pool.stop();
+    },
+  );
+
+  it(
+    '対照: 知らせ直しが一度も届いていない委譲は、requestId 無しの decision で今までどおり当たる' +
+      '（issue #1772 段2で保つべき既存の能力。#313）',
+    async () => {
+      const { pool, fake } = await runningManualSetup();
+
+      fake.ask('mgr-denial-renotify-cross', 'req-no-renotify', '許可確認');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const result = await pool.send('mgr-denial-renotify-cross', 'よし', { decision: 'allow' });
+      expect(result.outcome).toBe('answered');
+      expect(fake.answeredCalls).toHaveLength(1);
+      expect(fake.answeredCalls[0]?.requestId).toBe('req-no-renotify');
 
       await pool.stop();
     },
