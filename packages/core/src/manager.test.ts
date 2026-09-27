@@ -9042,6 +9042,76 @@ describe('自動で畳む（ManagerPool.runners の pids 逼迫契機、#1394 �
       await pool.stop();
       await registry.stop();
     });
+
+    /**
+     * コーディネーターの追加指示 —— 2つの契機が重なる場合。配置契機は
+     * `manager_start` の応答を待たせないために fire-and-forget で切り離して
+     * ある（interface の doc）ので、次の配置がすぐ続けば同じ runner の畳みが
+     * 並行に走りうるし、`runner_list resources:true` 契機とも重なりうる。
+     * どちらも `#autoFoldOne` の入口で同期に確認・設置する
+     * `#autoFoldInFlight`（`manager.ts` の doc）が塞ぐ——重なった回は
+     * `'skipped-concurrent'` として見送り、日誌には積まない。
+     */
+    it('2つの配置契機が同じ委譲を同時に拾っても、二重に abort しない（[auto-fold] は1行だけ）', async () => {
+      const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+
+      // **同じ runner・同じ委譲を狙って2回続けて呼ぶ。** どちらも
+      // fire-and-forget なので、呼び出し自体は同期で戻る——内側の非同期
+      // 処理（`this.list()` 以降）が重なる形になる。
+      invoke(pool, 'runner-a', { current: 900, max: 1000 });
+      invoke(pool, 'runner-a', { current: 900, max: 1000 });
+
+      await expect
+        .poll(async () => (await pool.list()).find((m) => m.managerId === id)?.status, {
+          timeout: 2000,
+        })
+        .toBe('stopped');
+
+      const decisions = await stores.journal.list({ types: ['decision'] });
+      const foldDecisions = decisions.filter(
+        (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
+      );
+      // **二重に `abort()` を呼んでいれば2行になる。** ここは1行だけ。
+      expect(foldDecisions).toHaveLength(1);
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('runner_list 契機と配置契機が同時に同じ委譲を拾っても、二重に abort しない', async () => {
+      const { id, pool, registry, stores } = await setupActiveDoneCandidate({
+        unpushedWorkResult: { cwd: '/work/project', worktrees: [] },
+        pids: { current: 900, max: 1000 },
+        capabilities: [RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL],
+      });
+
+      // **`runners({ resources: true })`（runner_list 契機）を await せずに
+      // 走らせたまま、同じ tick で配置契機も呼ぶ。** 2つの契機が重なった
+      // 形を模す——どちらが先に `#autoFoldOne` の門へ着くかは実行順に
+      // 依存するので固定しない。
+      const runnersPromise = pool.runners({ resources: true });
+      invoke(pool, 'runner-a', { current: 900, max: 1000 });
+
+      await runnersPromise;
+      await expect
+        .poll(async () => (await pool.list()).find((m) => m.managerId === id)?.status, {
+          timeout: 2000,
+        })
+        .toBe('stopped');
+
+      const decisions = await stores.journal.list({ types: ['decision'] });
+      const foldDecisions = decisions.filter(
+        (entry) => 'decision' in entry && entry.decision.includes('[auto-fold]'),
+      );
+      expect(foldDecisions).toHaveLength(1);
+
+      await pool.stop();
+      await registry.stop();
+    });
   });
 });
 
