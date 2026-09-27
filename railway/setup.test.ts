@@ -84,6 +84,29 @@ const MINIMAL = ['CLAUDE_CODE_OAUTH_TOKEN=sk-ant-test', 'ALTEROID_RUNNER_TOKEN=d
 type ConfigInputResult = { status: number; stdout: string; stderr: string };
 
 /**
+ * `configInputAsync` の子（`bash -c 'source lib.sh; config_input file'`）へ渡す
+ * 環境。`cli-stub.ts` の `childEnv` と同じ作法（親からの allowlist を絞る）に
+ * 寄せてある——ただしここは偽 CLI を PATH へ足す必要が無い（`config_input` は
+ * `railway` を呼ばず、`node -e '…'` を呼ぶだけ）ので `childEnv` 自体は流用しない。
+ *
+ * 子が実際に使う変数は **`PATH`（`node` を見つけるため）だけ**である。`lib.sh` を
+ * source した直後に走る top-level の代入（`APP_SERVICE` / `RUNNER_SERVICE` /
+ * `ENV_FILE` / `ASSUME_YES`、および `TMP_DIR` 用の `mktemp -d "${TMPDIR:-/tmp}/…"`）
+ * はどれも `${VAR:-既定}` 形で、渡さなければ既定にフォールバックするだけで死なない
+ * ——`setup.sh` 本体を回す `childEnv` 経由の呼び出しも、同じ理由でこれらを渡して
+ * いない（`cli-stub.ts` の `prepare` を見よ）。
+ *
+ * かつてここは `env` を渡していなかった（＝spawn の既定である親の環境を丸ごと
+ * 継承していた）。`cli-stub.ts` の `childEnv` が対処したのと同じ穴で、症状は
+ * 出ない（`config_input` は渡された変数を使わないので、余計な変数が混ざっても
+ * 出力は変わらない）が、テストを走らせているプロセスの環境をすべて子へ渡して
+ * しまっていた（#1832）。
+ */
+function configInputChildEnv(): NodeJS.ProcessEnv {
+  return { PATH: process.env.PATH ?? '' };
+}
+
+/**
  * `railway/*.json を Service の設定へ写す` describe が使う軽い経路
  * （`lib.sh` の `config_input` だけを `bash -c` で走らせる。`setup.sh` 本体は
  * 起こさない）。**軽くても、プロセスを起こしている以上 `it` の中では呼ばない**
@@ -97,7 +120,7 @@ function configInputAsync(config: unknown): Promise<ConfigInputResult> {
     const child = spawn(
       'bash',
       ['-c', 'source "$0"; config_input "$1"', join(RAILWAY_DIR, 'lib.sh'), file],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe'], env: configInputChildEnv() },
     );
     let stdout = '';
     let stderr = '';
@@ -150,6 +173,8 @@ type Scenarios = {
   configUnknownSection: ConfigInputResult;
   configNonDockerfileBuilder: ConfigInputResult;
   configMissingStartCommand: ConfigInputResult;
+  /** `configInputChildEnv()` を渡した子が、偽の機微変数をどう見たか（#1832）。 */
+  configInputEnvLeak: string;
 };
 
 let scenarios: Scenarios;
@@ -467,6 +492,40 @@ async function prepareScenarios(): Promise<Scenarios> {
     });
   });
 
+  // **子自身に言わせる（#1832）。** `configInputChildEnv()` が組み立てたオブジェクトの
+  // 鍵を数えるだけでは、それが実際に `spawn` の `env` へ渡っている保証にならない。
+  // 親の process.env に偽の機微変数を置き、同じ env で立てた子に読ませて確かめる。
+  task('configInputEnvLeak', async () => {
+    const key = 'FAKE_SECRET_FOR_TEST';
+    const before = process.env[key];
+    process.env[key] = 'not-a-real-value';
+    try {
+      s.configInputEnvLeak = await new Promise<string>((resolve, reject) => {
+        const child = spawn('bash', ['-c', `printf '%s' "\${${key}:-}"`], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: configInputChildEnv(),
+        });
+        let stdout = '';
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          stdout += chunk;
+        });
+        child.on('error', (err) => {
+          reject(err);
+        });
+        child.on('close', () => {
+          resolve(stdout);
+        });
+      });
+    } finally {
+      if (before === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = before;
+      }
+    }
+  });
+
   return settle(cpus().length);
 }
 
@@ -556,6 +615,12 @@ describe('テスト自身が setup.sh に渡す環境', () => {
     );
     expect(Object.keys(env).sort()).toEqual(['FAKE_STATE', 'PATH']);
     expect(env.PATH).toBe('/tmp/bin:/usr/bin');
+  });
+
+  // `config_input` だけを走らせる軽い経路（`configInputAsync`）は `childEnv` を
+  // 経由しない別の spawn なので、上のテストではここの穴を見張れない（#1832）。
+  it('config_input を走らせる子にも、親の process.env にある偽の機微変数は届かない', () => {
+    expect(scenarios.configInputEnvLeak).toBe('');
   });
 });
 
