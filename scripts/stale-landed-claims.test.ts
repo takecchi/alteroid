@@ -1,9 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../vitest.tmpdir.js';
+
+import {
+  listGitScannableFiles,
+  // @ts-expect-error -- 素の .mjs
+} from './git-scannable-files-core.mjs';
 
 /**
  * **着地した機能を「待ち」「無い」と言い続けている散文を測る歯**（着地元は
@@ -128,16 +136,18 @@ export function findStaleLandedClaims(
 /** この歯自身。走査対象から名前1つで除く（自己参照——自分の doc / fixture が引っかかるため）。 */
 const SELF_FILE = 'scripts/stale-landed-claims.test.ts';
 
-/** `git ls-files -z` で追跡済みファイルの相対パスを列挙する（他の歯と同じ形）。 */
-function listTrackedFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z'], {
-    cwd: ROOT,
-    maxBuffer: 1024 * 1024 * 64,
-  });
-  return out
-    .toString('utf8')
-    .split('\0')
-    .filter((p) => p.length > 0 && p !== SELF_FILE);
+/**
+ * 追跡済み + 未追跡だが `.gitignore` 対象ではないファイルの相対パスを列挙する
+ * （`scripts/git-scannable-files-core.mjs`、Issue #1817）。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルに着地済み機能を「待ち」と書いても、手元の `pnpm verify` は
+ * 緑のまま、push 後の CI で初めて赤くなる穴があった。`root` を引数で受ける
+ * のはテスト用（下の `describe('listScannableFiles は未追跡ファイルも対象に
+ * 入れる（#1817）')` が一時 git リポジトリに対して呼ぶ）。
+ */
+export function listScannableFiles(root: string = ROOT): string[] {
+  return (listGitScannableFiles({ cwd: root }) as string[]).filter((p) => p !== SELF_FILE);
 }
 
 const FENCING_FORBIDDEN: readonly RegExp[] = [
@@ -337,7 +347,7 @@ describe('着地した機能を「待ち」と言い続けている散文（fenc
   });
 
   it('本物: 追跡ファイルのどこにも、着地済み機能を「待ち」と言う散文が残っていない（回帰）', () => {
-    const files = listTrackedFiles();
+    const files = listScannableFiles();
     // 「走査対象が0件なので緑」を緑と読まないための足場（check-no-grep-vc.test.ts と同じ形）。
     expect(files.length).toBeGreaterThan(100);
 
@@ -381,5 +391,36 @@ describe('着地した機能を「待ち」と言い続けている散文（fenc
           `${v.file}:${v.line} [${v.feature}] /${v.pattern}/ ← "${v.text}"\n  赤の意味: ${v.redMeaning}`,
       ),
     ).toEqual([]);
+  });
+});
+
+describe('listScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
+  async function makeRepoWithUntrackedFile(): Promise<string> {
+    const dir = await makeTempDir('stale-landed-claims-1817-');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await writeFile(path.join(dir, 'tracked.md'), 'tracked\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    // まだ `git add` していない新規ファイル。
+    await writeFile(path.join(dir, 'new-untracked.md'), 'new\n');
+    return dir;
+  }
+
+  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('new-untracked.md');
+  });
+
+  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れる', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const files = listScannableFiles(dir);
+    expect(files).toContain('new-untracked.md');
+    expect(files).toContain('tracked.md');
   });
 });
