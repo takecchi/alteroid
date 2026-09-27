@@ -788,6 +788,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       },
       onPostToolUseFailure: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
     });
 
     const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
@@ -832,6 +833,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       },
       onPostToolUseFailure: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
     });
 
     const result = await invokeHook(options.hooks?.PostToolUse?.[0]?.hooks[0], {
@@ -870,6 +872,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
         captured = record;
       },
       onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
     });
 
     const result = await invokeHook(options.hooks?.PostToolUseFailure?.[0]?.hooks[0], {
@@ -1036,6 +1039,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPostToolUse: () => {},
       onPostToolUseFailure: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
     });
 
     const signal = new AbortController().signal;
@@ -1075,6 +1079,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onPostToolUse: () => {},
       onPostToolUseFailure: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onSubagentStop: () => {},
     });
 
     const signal = new AbortController().signal;
@@ -1350,6 +1355,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
         captured = record;
         return { kind: 'continue' };
       },
+      onSubagentStop: () => {},
     });
 
     const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
@@ -1390,6 +1396,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
         captured = record;
         return { kind: 'continue' };
       },
+      onSubagentStop: () => {},
     });
 
     await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {
@@ -1422,6 +1429,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
         kind: 'allow',
         reason: '人間が承認した許可に一致した（Bash(gh release edit:*)）',
       }),
+      onSubagentStop: () => {},
     });
 
     const result = await invokeHook(options.hooks?.PreToolUse?.[0]?.hooks[0], {

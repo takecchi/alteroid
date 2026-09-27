@@ -263,13 +263,25 @@ export type RunOptions = {
  * 1つ増やしたときに**ここを直さなくても穴が開かない**ようにするためである。
  * 引き継ぐ名前を足したくなったら、それが `.env` の作り物より強い入力にならないか
  * （＝走らせる場所で結論が変わらないか）を先に考えること。
+ *
+ * **`GIT_CONFIG_NOSYSTEM=1` は常に足す（#1816）。** 環境変数を allowlist で
+ * 絞っても、`git config` は環境変数だけでなく**システム設定**（`/etc/gitconfig`
+ * など、コンパイル時に決まる固定パス）も読む——これは `HOME` の有無に関係なく
+ * 常に読まれるので、上の allowlist では防げない。`setup.sh` は `.env` に
+ * `GIT_AUTHOR_NAME` 等が無いとき `git config user.name` の答えを対話の既定値に
+ * する（`railway/setup.sh` の `GIT_AUTHOR_NAME_VALUE` 周り）ため、この器の
+ * システム設定に本物の身元が乗っていると、`.env` に書いていないのに身元が
+ * 「在る」ことになってしまう（`railway/setup.test.ts` の「GIT_AUTHOR_* が無ければ
+ * GH_TOKEN だけ置く」が壊れる）。**ローカル設定（呼び出し元 cwd の `.git/config`）は
+ * ここでは防げない**——`runScriptAsync` 側で spawn の `cwd` を専用ディレクトリへ
+ * 切り替えることで防ぐ（そちらのコメントに詳しい）。
  */
 export function childEnv(
   parent: NodeJS.ProcessEnv,
   bin: string,
   extra: Record<string, string>,
 ): Record<string, string> {
-  return { PATH: `${bin}:${parent.PATH ?? ''}`, ...extra };
+  return { PATH: `${bin}:${parent.PATH ?? ''}`, GIT_CONFIG_NOSYSTEM: '1', ...extra };
 }
 
 type Prepared = {
@@ -406,6 +418,13 @@ export function runScriptAsync(options: RunOptions): Promise<Run> {
   return new Promise((resolve, reject) => {
     const child = spawn('bash', [join(RAILWAY_DIR, options.script), ...options.args], {
       env: prepared.env,
+      // **cwd を呼び出し元（本物のリポジトリ）から切り離す（#1816）。** 既定の
+      // cwd（node の `spawn` は `process.cwd()`）のままだと、`setup.sh` が呼ぶ
+      // `git config user.name`（`-C` を付けていない）が cwd から上向きに `.git`
+      // を探し、本物のリポジトリのローカル設定を拾ってしまう。`prepared.dir` は
+      // 使い捨てのディレクトリで `.git` を持たないので、上向き探索は空振りする
+      // （システム設定は上の `GIT_CONFIG_NOSYSTEM=1` が別途断つ）。
+      cwd: prepared.dir,
       // stdout は誰も読まない（同期版でも `result.stdout` は使っていない）ので
       // 'ignore' で捨てる——'pipe' のまま誰も drain しないと、OS のパイプが
       // 埋まって子プロセスを止めてしまう

@@ -12,6 +12,7 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentStopRecord,
+  AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
@@ -37,14 +38,18 @@ import { WORKER_AGENT_NAME } from './runner.js';
 
 // **観測専用フックへ渡す中立の noop。** `onPostToolUse` / `onPostToolUseFailure` /
 // `onPreCompact` / `onUserPromptSubmit` / `onStop` のうち中立の型
-// （`AgentObservationHook`）へ移した欄はこちらを渡す（`onSubagentStop` と
-// `ManagerSessionOptionsRequest.onPostToolUse` は文脈を返しうるので
-// `AgentContextHook` の `noopContextHook` を渡す。#486 中立の口の4本目）。
+// （`AgentObservationHook`）へ移した欄はこちらを渡す（`ManagerSessionOptionsRequest.
+// onPostToolUse` / `.onSubagentStop` は文脈を返しうるので `AgentContextHook` の
+// `noopContextHook` を渡す。#486 中立の口の4本目）。**`CloneSessionOptionsRequest.
+// onSubagentStop`（Issue #1803）はクローン側の他の観測専用フックと同じ
+// `AgentObservationHook` なので、こちらの並びに数える** —— マネージャー側の
+// 同名の欄（`AgentContextHook`）とは型が違う。
 const noopAuditHook: (record: AgentToolAuditRecord) => void = () => undefined;
 const noopAuditFailureHook: (record: AgentToolAuditFailureRecord) => void = () => undefined;
 const noopPreCompactHook: (record: AgentPreCompactRecord) => void = () => undefined;
 const noopUserPromptSubmitHook: (record: AgentUserPromptSubmitRecord) => void = () => undefined;
 const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
+const noopSubagentStopObservationHook: (record: AgentSubagentStopRecord) => void = () => undefined;
 // `onPreToolUse` は判断を返す中立の型（`AgentPreToolHook`）へ移した
 // （#486 中立の口の3本目）——`AgentObservationHook` ではないので上の並びとは
 // 別に持つ。
@@ -69,6 +74,7 @@ function cloneOptions(): Options {
     onPostToolUse: noopAuditHook,
     onPostToolUseFailure: noopAuditFailureHook,
     onPreToolUse: noopPreToolHook,
+    onSubagentStop: noopSubagentStopObservationHook,
   });
 }
 

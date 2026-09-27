@@ -422,6 +422,26 @@ function toAgentSubagentStopRecord(input: unknown): AgentSubagentStopRecord {
 }
 
 /**
+ * `SubagentStop` 版の {@link wrapPreCompactHook}。同じ理由で `{ continue: true }`
+ * 固定・`await` 保持（Issue #1803）。
+ *
+ * **クローン本セッション専用。** `runner.ts` 側（`ManagerSessionOptionsRequest.
+ * onSubagentStop`）は起こし直しの文脈を返すことがあるので `AgentContextHook` +
+ * `wrapContextHook` を使うが、`clone.ts` の `#onSubagentStop`（作業者の allow が
+ * 取り残されたことを日誌へ残すだけ）はどの分岐でも `{ continue: true }` だけを
+ * 返す——`wrapStopHook` / `wrapUserPromptSubmitHook` と同じ「観測専用」の形に
+ * 揃える（`CloneSessionOptionsRequest.onSubagentStop` の doc）。
+ */
+function wrapSubagentStopObservationHook(
+  hook: AgentObservationHook<AgentSubagentStopRecord>,
+): HookCallback {
+  return async (input) => {
+    await hook(toAgentSubagentStopRecord(input));
+    return { continue: true };
+  };
+}
+
+/**
  * 中立の {@link AgentContextHook} を SDK の `HookCallback` へ包み直す
  * （#486 中立の口の4本目）。`ManagerSessionOptionsRequest.onPostToolUse`
  * （記録は {@link AgentToolAuditRecord}）と `.onSubagentStop`（記録は
@@ -559,6 +579,24 @@ export interface CloneSessionOptionsRequest {
    * 返している形と1文字も変えていない（`wrapPreToolHook` の doc）。
    */
   onPreToolUse: AgentPreToolHook;
+  /**
+   * 作業者（サブエージェント）セッションが停止した瞬間の観測フック
+   * （Issue #1803）。**観測専用**（`onPostToolUse` と同じ理由）——`clone.ts` の
+   * `#onSubagentStop` はどの分岐でも `void` しか返さず、SDK へは常に
+   * `{ continue: true }` だけを返す（`wrapSubagentStopObservationHook` が包む）。
+   *
+   * **`runner.ts` 側（`ManagerSessionOptionsRequest.onSubagentStop`）とは型が
+   * 違う。** あちらは作業者を実際に起こし直す文脈（`addContext`）を返しうる
+   * ので `AgentContextHook` を使うが、こちらは `onPreToolUse` が控えた
+   * `AllowedByGrantRecord`（Issue #863 残項目）のうち、その作業者の
+   * `agentId` を持ち、まだ決着していない分を日誌へ残すだけ——実行・継続を
+   * 左右する判断は無い。中身は `clone.ts` の `#onSubagentStop` の doc を見よ。
+   *
+   * **`buildCloneDistillOptions`（蒸留）には配線しない** ——蒸留は `Task` を
+   * 呼ばない設計なので `SubagentStop` が発火する前提がそもそも無い
+   * （`onPreToolUse` の「このセッションにしか配線しない」と同じ絞り方）。
+   */
+  onSubagentStop: AgentObservationHook<AgentSubagentStopRecord>;
 }
 
 /** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions` から移した。 */
@@ -577,6 +615,7 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
     onPostToolUse,
     onPostToolUseFailure,
     onPreToolUse,
+    onSubagentStop,
   } = request;
 
   return {
@@ -672,6 +711,14 @@ export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): O
       PostToolUseFailure: [
         {
           hooks: [wrapToolAuditFailureHook(onPostToolUseFailure)],
+        },
+      ],
+      // 作業者（サブエージェント）が停止した瞬間の観測（Issue #1803）。
+      // **観測専用**——`CloneSessionOptionsRequest.onSubagentStop` の doc。
+      // `wrapSubagentStopObservationHook` が `{ continue: true }` 固定で包む。
+      SubagentStop: [
+        {
+          hooks: [wrapSubagentStopObservationHook(onSubagentStop)],
         },
       ],
     },
