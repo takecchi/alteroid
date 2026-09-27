@@ -798,7 +798,17 @@ export function describeTokenSituation(input: {
   // **読めなかったことを 0 や「無し」で埋めない**（`AGENTS.md` の地雷
   // 「取れない軸に 0 の行を作る」）。**それでも不変条件の行は落とさない** ——
   // あれはプールの状態に依存しないので、読めなくても真である。
-  if (input.tokens === undefined || input.active === undefined) {
+  //
+  // **`tokens` と `active` は別々に読み、別々に落ちうる**（`clone.ts` の
+  // `#situationNoticeFor` が2本を個別に `.then(value, () => undefined)` で
+  // catch している）。⟹ **どちらが落ちたかで倒れ先の意味が違う**——`tokens`
+  // が読めなければプールの内訳（使える/冷却中/外されている）そのものが
+  // 出せないが、`active` だけが読めなくても `tokens` は無事なら内訳は出せる。
+  // **この2つを1つの「プールを読めなかった」に潰さない**——潰すと、`tokens`
+  // が実際には読めていた回にも「プールを読めなかった」という嘘が出る
+  // （`AGENTS.md`「Issue の『確かめていないこと』は……仕事の指定である」で
+  // 見つかった。以前はここが両方を同じ分岐で判定していた）。
+  if (input.tokens === undefined) {
     return (
       '認証トークン: **プールを読めなかった**（塞がっているかどうかは、ここからは言えない）。' +
       TOKEN_INVARIANT
@@ -811,6 +821,13 @@ export function describeTokenSituation(input: {
   const active = input.active;
 
   const current = ((): string => {
+    if (active === undefined) {
+      // **`tokens` は読めているので、内訳（下の「プール N 本」）はそのまま
+      // 出す。** 読めなかったのは「どれが現役か」だけである——ここを
+      // 「プールを読めなかった」と書くと、実際に読めた内訳と同じ行の中で
+      // 矛盾した2つの主張が並ぶ（内訳は出るのに「読めなかった」とも言う）。
+      return '**現役の指名を読めなかった**（プールの内訳は下のとおり読めている）';
+    }
     if (active === null) {
       // **「1本目が現役」と書かない**（`TokenPoolStore.readActive` の doc）。
       return '現役の指名は**まだ一度も無い**（器の環境変数のまま走っている）';
