@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { fingerprintOf } from './credentials.js';
+import { tailByCodePoints } from './excerpt.js';
 import type { Stores } from './store.js';
 import { createMemoryStores, humanMessage } from './testing.js';
 import { setup, waitFor, waitForDone } from './clone-test-harness.js';
@@ -141,17 +142,23 @@ describe('クローン — 拾い直しは退避の全文をヒープへ載せ�
    * `tailOf`（`clone.ts`、非公開）のアルゴリズムそのままの再実装。
    *
    * ⚠️ `tailOf` は export されていない（蒸留の外へ漏らさない設計）ので、
-   * ここでは doc に書かれた契約（末尾 maxChars 文字を切り、最初の改行より
-   * 前を捨てる）をそのまま複製している。**この歯が測りたいのは `tailOf`
-   * 自体の正しさではなく、`#pickUpTranscriptGrave` が `readTail()` 経由で
-   * 渡すものが「全文に `tailOf` を適用した結果」と一致するか**である——
-   * `readTail()` の契約（末尾から少なくとも maxChars 文字ぶんを返す。
-   * それより多く返してもよい）が保たれている限り、超過ぶんの有無に関わらず
-   * この結果は変わらないはずである。
+   * ここでは doc に書かれた契約（末尾 maxChars コードポイントを切り、最初の
+   * 改行より前を捨てる）をそのまま複製している。**この歯が測りたいのは
+   * `tailOf` 自体の正しさではなく、`#pickUpTranscriptGrave` が `readTail()`
+   * 経由で渡すものが「全文に `tailOf` を適用した結果」と一致するか**である
+   * ——`readTail()` の契約（末尾から少なくとも maxChars コードポイントぶんを
+   * 返す。それより多く返してもよい）が保たれている限り、超過ぶんの有無に
+   * 関わらずこの結果は変わらないはずである。
+   *
+   * **`maxChars` はコードポイント数で数える（issue #1829）。** 単位の変換は
+   * `tailOf` 自身と同じく `tailByCodePoints`（`excerpt.ts`）へ委ねる——ここで
+   * 独自に UTF-16 コード単位のロジックを再実装すると、`tailOf` 本体が
+   * コードポイント単位へ直った後もこの歯だけ旧い単位のままになり、
+   * 「直したのに歯は古い前提のまま緑」という腐り方をする。
    */
   function expectedTailOf(fullBody: string, maxChars: number): string {
-    if (fullBody.length <= maxChars) return fullBody;
-    const cut = fullBody.slice(-maxChars);
+    const cut = tailByCodePoints(fullBody, maxChars);
+    if (cut === fullBody) return fullBody;
     const newline = cut.indexOf('\n');
     return newline === -1 ? cut : cut.slice(newline + 1);
   }
@@ -252,6 +259,56 @@ describe('クローン — 拾い直しは退避の全文をヒープへ載せ�
     // **長さだけでは、別の同じ長さの何かを渡しても通る**——指紋まで見る。
     expect(chars).toBe(expected.length);
     expect(fp).toBe(fingerprintOf(expected));
+  });
+
+  /**
+   * issue #1829 の再現をエンドツーエンドで固定する歯。
+   *
+   * 補助面の文字（絵文字。1コードポイントが2 UTF-16 コード単位になる）を
+   * 含む本文で、**コードポイント数では短い（切り詰め不要）が UTF-16 コード
+   * 単位では `DISTILL_TAIL_CHARS_MIRROR` を超える**という組み合わせを作る。
+   * 直す前は、この本文の先頭にある絵文字が `#pickUpTranscriptGrave` →
+   * `readTail()` → `tailOf()` の経路で静かに消えていた——`archive-contract.ts`
+   * の検査36・37は `readTail()` 単体をこの単位で測るが、こちらは実際の
+   * 起動時の拾い直し（本物の `TranscriptArchive` 実装・本物の `tailOf`）を
+   * 通して、蒸留へ渡る入力そのものに絵文字が残ることを確かめる。
+   */
+  it('歯3: 補助面の文字（絵文字）は、コードポイント数で短ければ蒸留の入力から消えない（issue #1829）', async () => {
+    const stores = createMemoryStores();
+    // 3個の絵文字（3 コードポイント / 6 UTF-16 コード単位）+ 改行 + 埋め草。
+    // コードポイント数の合計をちょうど DISTILL_TAIL_CHARS_MIRROR に合わせる
+    // ——絵文字が3つぶん UTF-16 長を押し上げるので、UTF-16 長はそれを超える。
+    const overhead = 3 + 1; // 絵文字3個 + 改行1個（コードポイント数）
+    const filler = 'x'.repeat(DISTILL_TAIL_CHARS_MIRROR - overhead);
+    const fullBody = `${'\u{1F600}'.repeat(3)}\n${filler}`;
+    const codePoints = [...fullBody].length;
+    expect(codePoints, '前提: コードポイント数はDISTILL_TAIL_CHARS_MIRROR以下').toBe(
+      DISTILL_TAIL_CHARS_MIRROR,
+    );
+    expect(
+      fullBody.length,
+      '前提: UTF-16長（.length）はDISTILL_TAIL_CHARS_MIRRORを超える——ここが偽だと' +
+        '旧実装の誤判定を再現できていない',
+    ).toBeGreaterThan(DISTILL_TAIL_CHARS_MIRROR);
+
+    const archiveId = (await stores.archive.archive('sess-astral-boundary', fullBody)).id;
+    await stores.sessions.setTranscriptGrave({ archiveId });
+
+    const s = setup(undefined, stores);
+    await waitFor(async () => {
+      const rows = (await stores.journal.list({ types: ['exchange'] })).filter(
+        (entry) => entry.type === 'exchange',
+      );
+      return rows.some((entry) => entry.text.includes('ターンの入力: pre_compact_distill'));
+    }, '蒸留の入力が日誌へ残ること');
+    await s.clone.stop();
+
+    // **蒸留へ実際に渡った本文に絵文字が残っている**——消えていたら
+    // issue #1829 の再現そのものである。
+    expect(
+      s.calls.some((call) => call.inputs.some((input) => input.includes('\u{1F600}'))),
+      '絵文字が蒸留の入力から静かに消えている（issue #1829 の再現）',
+    ).toBe(true);
   });
 });
 

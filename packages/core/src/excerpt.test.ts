@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  codePointStartBoundary,
   describePage,
   excerpt,
   excerptLine,
@@ -8,6 +9,7 @@ import {
   renderListing,
   renderListingEntry,
   renderListingFromEnd,
+  tailByCodePoints,
 } from './excerpt.js';
 
 /**
@@ -247,5 +249,71 @@ describe('サロゲートペアを割らない（issue #1549）', () => {
   it('page: limit が1で先頭が絵文字でも、止まらずに1コード単位は進む', () => {
     const part = page('😀X', 0, 1);
     expect(part.to).toBe(1);
+  });
+});
+
+/**
+ * `TranscriptArchive.readTail`（pg・fs・インメモリの3実装）と `clone.ts` の
+ * `tailOf` が共有する、コードポイント単位の「末尾を切る」唯一の出所
+ * （issue #1829）。
+ */
+describe('tailByCodePoints（末尾をコードポイント数で切る。issue #1829）', () => {
+  it('本文全体のコードポイント数が maxCodePoints 以下なら、全文をそのまま返す', () => {
+    expect(tailByCodePoints('abcde', 5)).toBe('abcde');
+    expect(tailByCodePoints('abcde', 100)).toBe('abcde');
+  });
+
+  it('本文が短くても maxCodePoints が0以下なら空文字を返す', () => {
+    expect(tailByCodePoints('abcde', 0)).toBe('');
+    expect(tailByCodePoints('abcde', -1)).toBe('');
+  });
+
+  it('真に長いときは末尾から maxCodePoints 個ぶんだけを返す（ASCII）', () => {
+    expect(tailByCodePoints('abcdefghij', 3)).toBe('hij');
+  });
+
+  it('🔴 コードポイント数では maxCodePoints 以下だが UTF-16 長では超える本文も、全文を返す（絵文字。issue #1829 本体）', () => {
+    // 5個の絵文字（5 コードポイント / 10 UTF-16 コード単位）。
+    const text = '\u{1F600}'.repeat(5);
+    expect([...text]).toHaveLength(5);
+    expect(text.length).toBe(10);
+    // maxCodePoints=5: コードポイント数(5) <= 5 ⟹ 切り詰め不要、全文を返す。
+    // UTF-16 長(10) だけを見る実装は、ここで誤って切り詰める。
+    expect(tailByCodePoints(text, 5)).toBe(text);
+  });
+
+  it('🔴 真に長いとき（絵文字）は、サロゲートペアの途中で切らない', () => {
+    // 10個の絵文字。末尾から4個ぶん（maxCodePoints=4）を要求する。
+    const text = '\u{1F600}'.repeat(10);
+    const result = tailByCodePoints(text, 4);
+    expect(result).toBe('\u{1F600}'.repeat(4));
+    // 孤立サロゲート（不正な UTF-16）を含まない。
+    const lastCode = result.charCodeAt(0);
+    expect(lastCode >= 0xdc00 && lastCode <= 0xdfff).toBe(false);
+  });
+
+  it('絵文字とASCIIが混在していても、末尾のコードポイント数どおりに切る', () => {
+    // "AB" + 3絵文字 + "CD"（コードポイント数7）。末尾3個 ⟹ 最後の絵文字 + "CD"。
+    const text = `AB${'\u{1F600}'.repeat(3)}CD`;
+    expect(tailByCodePoints(text, 3)).toBe('\u{1F600}CD');
+  });
+});
+
+describe('codePointStartBoundary（末尾を残す境界。issue #1829）', () => {
+  it('境目が絵文字の途中（低位サロゲートの位置）なら1つ手前へ戻す', () => {
+    const text = 'A😀B'; // A(0) high(1) low(2) B(3)
+    expect(codePointStartBoundary(text, 2)).toBe(1);
+  });
+
+  it('境目が絵文字の境界どおりなら変えない', () => {
+    const text = 'A😀B';
+    expect(codePointStartBoundary(text, 1)).toBe(1);
+    expect(codePointStartBoundary(text, 3)).toBe(3);
+  });
+
+  it('start が0以下、または文字列の長さ以上なら変えない', () => {
+    const text = 'A😀B';
+    expect(codePointStartBoundary(text, 0)).toBe(0);
+    expect(codePointStartBoundary(text, text.length)).toBe(text.length);
   });
 });

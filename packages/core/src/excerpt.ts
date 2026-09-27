@@ -14,6 +14,21 @@ function count(value: number): string {
 }
 
 /**
+ * UTF-16 の高位サロゲート（`0xD800`〜`0xDBFF`）かどうか。補助面の文字
+ * （絵文字の多く）は「高位サロゲート＋低位サロゲート」の2コード単位で1文字
+ * になる——この2つの述語が、サロゲートペアを割らない判定の唯一の出所である
+ * （issue #1829。`codePointBoundary` / `tailByCodePoints` が共有する）。
+ */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** UTF-16 の低位サロゲート（`0xDC00`〜`0xDFFF`）かどうか。 */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/**
  * `end` の位置で切ると2コード単位の文字（補助面の文字。絵文字の多く）を半分に
  * 割るなら、1つ手前へ戻した位置を返す（issue #1549）。
  *
@@ -25,8 +40,65 @@ function count(value: number): string {
  */
 export function codePointBoundary(text: string, end: number): number {
   if (end <= 0 || end >= text.length) return end;
-  const last = text.charCodeAt(end - 1);
-  return last >= 0xd800 && last <= 0xdbff ? end - 1 : end;
+  return isHighSurrogate(text.charCodeAt(end - 1)) ? end - 1 : end;
+}
+
+/**
+ * `text.slice(start)`（**末尾**を残す）が2コード単位の文字（補助面の文字。
+ * 絵文字の多く）を割るなら、1つ手前へ戻した位置を返す（issue #1829）。
+ *
+ * `codePointBoundary` の向き違い版——あちらは `text.slice(0, end)`（先頭を
+ * 残す）の境界を、**高位**サロゲートの直後で止めない形に寄せる。こちらは
+ * **低位**サロゲートから始まらない形に寄せる（戻すのは高位サロゲート側へ、
+ * つまり窓を1文字ぶん広げる方向——`tailByCodePoints` の doc「それより多く
+ * 返してよい」と同じ向き）。
+ */
+export function codePointStartBoundary(text: string, start: number): number {
+  if (start <= 0 || start >= text.length) return start;
+  return isLowSurrogate(text.charCodeAt(start)) ? start - 1 : start;
+}
+
+/**
+ * 文字列の末尾から、少なくとも `maxCodePoints` コードポイントぶんを返す
+ * （issue #1829）。
+ *
+ * **`TranscriptArchive.readTail`（pg・fs・インメモリの3実装）と `clone.ts` の
+ * `tailOf` が共有する、「単位の変換」の唯一の出所である。** 以前は pg が
+ * PostgreSQL の `right()`（コードポイント数で切る）を使う一方、fs・インメモリ・
+ * `tailOf` は JS の `.length`（UTF-16 コード単位）で切っていた——補助面の文字
+ * （絵文字の多く。1コードポイントが2コード単位になる）が境目に絡むと、pg だけ
+ * 「まだ短い」と判定した本文を、他の実装・`tailOf` は「もう長い」と誤判定し、
+ * **本当は消えるはずのない本文の先頭が静かに消える**、あるいは**サロゲート
+ * ペアの途中で切って孤立サロゲート（不正な UTF-16）を作る**（Issue #1829）。
+ * ⟹ **`maxCodePoints` はコードポイント数で統一する。**
+ *
+ * **サロゲートペアの途中では切らない**（`codePointStartBoundary` を1コード
+ * ポイントぶんずつ繰り返し適用する）。
+ *
+ * **本文全体のコードポイント数が `maxCodePoints` 以下なら、本文全体をそのまま
+ * 返す。** 走査は末尾から高々 `maxCodePoints` 文字ぶんで止まる——本文が
+ * 数十 MB あっても、全体を数え上げには行かない（`text.length`（UTF-16 長）が
+ * `maxCodePoints` 以下なら、コードポイント数は必ずそれ以下——コードポイント数は
+ * UTF-16 長を超えないため——なので、その場合は走査せず即座に返す）。
+ *
+ * 呼び出し側が「切り詰めが起きたか」を判定したいときは、戻り値が渡した
+ * `text` と一致するかどうかで見る（一致しなければ、真に `maxCodePoints` 個を
+ * 超えるコードポイントが在ったということ——`text.slice(...)` は同じ値でも
+ * 必ず短くなるので、一致判定に揺れは無い）。
+ */
+export function tailByCodePoints(text: string, maxCodePoints: number): string {
+  if (maxCodePoints <= 0) return '';
+  // 高速路: UTF-16 長が maxCodePoints 以下 ⟹ コードポイント数もそれ以下
+  // （コードポイント数は UTF-16 長を超えない）。走査せずに全文を返してよい。
+  if (text.length <= maxCodePoints) return text;
+  let index = text.length;
+  for (let remaining = maxCodePoints; remaining > 0 && index > 0; remaining -= 1) {
+    // 1コード単位ぶん戻ったうえで、サロゲートペアを割らない位置へ寄せる
+    // （`codePointBoundary` の向き違い版）——戻り値が `index - 2` になれば
+    // その1歩でペアごと（＝1コードポイントぶん）進んだことになる。
+    index = codePointStartBoundary(text, index - 1);
+  }
+  return text.slice(index);
 }
 
 /**

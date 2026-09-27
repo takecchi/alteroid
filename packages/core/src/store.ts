@@ -1408,22 +1408,39 @@ export interface TranscriptArchive {
    * - **戻りの形は `read()` と同じ3状態**（`body` / `removed` / `missing`）。
    *   `#pickUpTranscriptGrave` はこの3状態で日誌の文面を分けているので、
    *   区別を潰さないこと。
+   * - 🔴 **`maxChars` はコードポイント数で数える（issue #1829）。** JS の
+   *   `.length`（UTF-16 コード単位）ではない——補助面の文字（絵文字の多く）
+   *   は 1 コードポイントが 2 コード単位になるため、この2つはずれる
+   *   （`ArchiveBodyFingerprint.bodyChars` の doc と同じ区別。あちらは
+   *   `archive()` の指紋、こちらは `readTail()` の読み出し量で、対象は
+   *   違うが単位の注意は同じ）。**以前は pg だけがコードポイント数
+   *   （PostgreSQL の `right()`）で数え、fs・インメモリ・呼び出し側の
+   *   `tailOf`（`clone.ts`）は UTF-16 コード単位で数えていた**——補助面の
+   *   文字が境目に絡むと、pg が「まだ短い（切り詰め不要）」と判定した本文を
+   *   他の実装・`tailOf` は「もう長い」と誤判定し、本当は消えるはずのない
+   *   本文の先頭が静かに消える、あるいはサロゲートペアの途中で切って孤立
+   *   サロゲート（不正な UTF-16）を作っていた。単位の変換は
+   *   `tailByCodePoints`（`excerpt.ts`）の唯一の出所へ寄せる——実装ごとに
+   *   手で書き直さない。
    * - `kind: 'body'` のとき返すのは、**本文の末尾から少なくとも `maxChars`
-   *   文字ぶん**。実装が窓をバイトで切る都合で、**それより多く返してよい**
-   *   （`clone.ts` の `readTranscriptTail` と同じ）。本文が `maxChars` 以下
-   *   なら全文を返す。
+   *   コードポイントぶん**。実装が窓をバイトで切る都合で、**それより多く
+   *   返してよい**（`clone.ts` の `readTranscriptTail` と同じ）。本文が
+   *   `maxChars` 以下なら全文を返す。
    * - 🔴 **本文が `maxChars` より長いとき、返す量は `maxChars` を
    *   **厳密に**上回ること（同じ数で切り詰めない）。** 呼び出し側
-   *   （`tailOf`）は `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS`
-   *   で「切り詰めが要るか」を判定する——ここで「ちょうど `maxChars`」を
-   *   返すと、それが「切り詰め済みの窓」なのか「本文がもとから短かった」
-   *   なのかを呼び出し側は区別できず、前者を後者と誤読して行の途中の
-   *   窓をそのまま蒸留へ渡してしまう（clone.test.ts「歯2」で実測。窓の
-   *   境界をちょうど `maxChars` に合わせる実装で実際に踏んだ）。⟹
-   *   **実装は、切り詰めが起きるときは必ず `maxChars + 1` 文字ぶん以上を
-   *   返すこと**（pg は `right(body, maxChars + 1)`、fs は窓のバイト数を
-   *   `(maxChars + 1) * MAX_UTF8_BYTES_PER_UTF16_UNIT` にする、インメモリ
-   *   は `maxChars + 1` 文字でスライスする）。
+   *   （`tailOf`）は「`tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS)`
+   *   の結果が元の文字列と一致するか」で「切り詰めが要るか」を判定する
+   *   ——ここで「ちょうど `maxChars`」を返すと、それが「切り詰め済みの窓」
+   *   なのか「本文がもとから短かった」なのかを呼び出し側は区別できず、
+   *   前者を後者と誤読して行の途中の窓をそのまま蒸留へ渡してしまう
+   *   （clone.test.ts「歯2」で実測。窓の境界をちょうど `maxChars` に合わせる
+   *   実装で実際に踏んだ）。⟹ **実装は、切り詰めが起きるときは必ず
+   *   `maxChars + 1` コードポイントぶん以上を返すこと**（pg は
+   *   `right(body, maxChars + 1)`、fs は窓のバイト数を
+   *   `(maxChars + 1) * MAX_UTF8_BYTES_PER_CODE_POINT` にしたうえで
+   *   `tailByCodePoints` で正確に揃える、インメモリは
+   *   `tailByCodePoints(body, maxChars + 1)`）。
+   * - **サロゲートペアの途中では切らない**（`tailByCodePoints` の doc）。
    * - **行の途中・文字の途中から始まりうる。整えるのは呼び出し側
    *   （`tailOf`）である**——器ごとに整え方が分かれると、蒸留へ渡るものが
    *   器で変わる（`SessionTranscriptTail.readTail` の doc、逐語で同じ注意）。
@@ -1432,6 +1449,14 @@ export interface TranscriptArchive {
    *   （`SessionTranscriptTail.measureSize` の doc と同じ規律）。
    * - `maxChars` は正の整数。**不正な値は fail-closed で拒む**（黙って
    *   全文へ倒さない）。
+   *
+   * ⚠️ **`SessionTranscriptTail.readTail`（`packages/storage-pg/src/session-store.ts`
+   * の `PgSessionStore`）は別のインターフェースで、今回の統一の対象では
+   * ない。** あちらは JS の `.length`（UTF-16 コード単位）で `maxChars` を
+   * 数えたままである——`#pickUpLostSession` が `tailOf` へ渡す前段として
+   * 同じ族の単位の不整合を持ちうるが、`TranscriptArchive` とは別の実装・
+   * 別の Issue（#1718）の系譜なので、ここでは直していない（issue #1829 の
+   * PR 本文に「確かめていないこと」として明記する）。
    */
   readTail(id: string, maxChars: number): Promise<ArchiveRead>;
   /**

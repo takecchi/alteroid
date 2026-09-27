@@ -5,6 +5,7 @@ import {
   type ArchiveContinuity,
 } from './archive-continuity.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
+import { tailByCodePoints } from './excerpt.js';
 import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { matchesJournalSearch } from './journal-search.js';
 import type {
@@ -959,13 +960,20 @@ export function createMemoryStores(): Stores {
     // ——ここでの契約の本体は「末尾を返す」「maxChars 以下なら全文」の2つで、
     // 判定の順序（印を先に見る）は read() と揃える。
     //
-    // **切り詰めるときは `maxChars + 1` 文字を返す**（`maxChars` ちょうどに
-    // しない）——`readTail` interface doc の「本文が `maxChars` より長いとき、
-    // 返す量は `maxChars` を厳密に上回ること」に従う。ここを `maxChars`
-    // ちょうどにすると、呼び出し側の `tailOf`（`clone.ts`）が
-    // `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰め済みの
-    // 窓」を「本文がもとから短かった」と誤読し、行の途中の窓がそのまま蒸留へ
-    // 渡る（clone.test.ts「歯2」で実測）。
+    // **`maxChars` はコードポイント数で数える（issue #1829）。** 以前は
+    // `body.length`（JS の UTF-16 コード単位）で判定し `body.slice(-(maxChars+1))`
+    // で切っていた——補助面の文字（絵文字の多く）を含む本文では、pg
+    // （PostgreSQL の `right()`。コードポイント数で数える）と食い違ったり、
+    // サロゲートペアの途中で切って孤立サロゲートを作ったりしていた
+    // （`readTail` interface doc）。単位の変換は `tailByCodePoints`
+    // （`excerpt.ts`）の唯一の出所へ寄せる。
+    //
+    // **切り詰めるときは `maxChars + 1` コードポイントを返す**（`maxChars`
+    // ちょうどにしない）——`readTail` interface doc の「本文が `maxChars`
+    // より長いとき、返す量は `maxChars` を厳密に上回ること」に従う。ここを
+    // `maxChars` ちょうどにすると、呼び出し側の `tailOf`（`clone.ts`）が
+    // 「切り詰め済みの窓」を「本文がもとから短かった」と誤読し、行の途中の
+    // 窓がそのまま蒸留へ渡る（clone.test.ts「歯2」で実測）。
     async readTail(id, maxChars) {
       if (!Number.isInteger(maxChars) || maxChars <= 0) {
         throw new Error(
@@ -976,7 +984,7 @@ export function createMemoryStores(): Stores {
       if (removal !== undefined) return { kind: 'removed', ...removal };
       const body = archives.get(id);
       if (body === undefined) return { kind: 'missing' };
-      return { kind: 'body', body: body.length <= maxChars ? body : body.slice(-(maxChars + 1)) };
+      return { kind: 'body', body: tailByCodePoints(body, maxChars + 1) };
     },
     async remove(id) {
       const removal = archiveRemovals.get(id);

@@ -341,6 +341,14 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * だけ**である（`list()` が `pg_column_size(body)` で本文に触れずに大きさを
    * 測るのと同じ理由・同じ形）。
    *
+   * **`right()` は第2引数をコードポイント数（PostgreSQL の文字集合における
+   * 文字数）で数える。** これは `readTail` interface doc が要求する
+   * 「`maxChars` はコードポイント数」（issue #1829）とちょうど一致するので、
+   * この実装は元から単位が合っている——直したのは fs・インメモリ・呼び出し側
+   * の `tailOf`（`clone.ts`）側（それらは以前 JS の `.length`＝UTF-16 コード
+   * 単位で数えていた）。サロゲートペア（JS 側の話）という概念自体を
+   * PostgreSQL 側は持たないので、この関数はそれを割りようがない。
+   *
    * **`+ 1` は「ちょうど `maxChars`」を避けるためである**（`readTail`
    * interface doc「本文が `maxChars` より長いとき、返す量は `maxChars` を
    * 厳密に上回ること」）。`right()` は `n` が本文の長さ以上なら本文全体を

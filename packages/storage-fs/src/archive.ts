@@ -2,12 +2,13 @@ import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/pro
 import { join, resolve, sep } from 'node:path';
 
 import {
-  MAX_UTF8_BYTES_PER_UTF16_UNIT,
+  MAX_UTF8_BYTES_PER_CODE_POINT,
   archiveIdBranch,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
   fingerprintArchiveBody,
   matchArchiveIdStamp,
+  tailByCodePoints,
   tallyArchiveContinuity,
   type ArchiveContinuity,
   type ArchiveEntry,
@@ -293,23 +294,35 @@ export class FsTranscriptArchive implements TranscriptArchive {
   /**
    * 末尾だけを読む（#1283 の OOM、読み出し側。`TranscriptArchive.readTail`）。
    *
+   * **`maxChars` はコードポイント数で数える（issue #1829）。** 以前はここが
+   * 読んだバイト列を UTF-8 デコードしただけの文字列をそのまま返していた
+   * ——それは「窓のバイト数の都合で `maxChars` より多く返る」ぶんを一切
+   * 削っておらず、しかも量の見積もりが UTF-16 コード単位（1コードユニット
+   * あたり最大3バイト）を基準にしていた。pg（PostgreSQL の `right()`。
+   * コードポイント数で数える）と揃えるため、いまは (1) 窓のバイト数を
+   * コードポイントあたりの最大バイト数（`MAX_UTF8_BYTES_PER_CODE_POINT`）で
+   * 見積もり、(2) デコード後の文字列を `tailByCodePoints`
+   * （`@alteroid/core`。3実装が共有する唯一の変換）でコードポイント単位に
+   * 正確に切り直す。
+   *
    * **`clone.ts` の `readTranscriptTail` と同じ形**——file handle でファイルの
-   * 末尾から `(maxChars + 1) * {@link MAX_UTF8_BYTES_PER_UTF16_UNIT}` バイト
+   * 末尾から `(maxChars + 1) * {@link MAX_UTF8_BYTES_PER_CODE_POINT}` バイト
    * だけを読む。`readFile()`（`read()` が使うもの）のように全文を1本の文字列
    * へ起こしてから切ると、切る前に本文の全体がプロセスのメモリへ載ってしまい、
    * この関数自身が避けたい OOM を起こす。
    *
-   * **`maxChars` ではなく `maxChars + 1` を掛ける。** `MAX_UTF8_BYTES_PER_UTF16_UNIT`
-   * 倍だけでは「窓が実際にファイルを切り詰めたとき、デコード後の文字数が
-   * ちょうど `maxChars` になる」場合を防げない（全部が3バイト/コードユニット
-   * の内容だと、最悪ケースでちょうど `maxChars` に達する）。ちょうどだと、
-   * 呼び出し側の `tailOf`（`clone.ts`）が
-   * `transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS` で「切り詰め済みの
-   * 窓」を「本文がもとから短かった」と誤読し、行の途中の窓がそのまま蒸留へ
-   * 渡る（`readTail` interface doc、clone.test.ts「歯2」で実測——ただし
-   * 実測したのは in-memory 実装で、こちらは理論上の最悪ケースであり実測は
-   * していない）。`+ 1` を先に掛けておけば、切り詰めが起きるときのデコード後
-   * 文字数は常に `maxChars` を厳密に上回る。
+   * **`maxChars` ではなく `maxChars + 1` を掛ける。** `MAX_UTF8_BYTES_PER_CODE_POINT`
+   * 倍だけでは「窓が実際にファイルを切り詰めたとき、デコード後のコードポイント数が
+   * ちょうど `maxChars` になる」場合を防げない（全部が4バイト/コードポイント
+   * の内容——補助面の文字——だと、最悪ケースでちょうど `maxChars` に達する）。
+   * ちょうどだと、呼び出し側の `tailOf`（`clone.ts`）が「切り詰め済みの窓」を
+   * 「本文がもとから短かった」と誤読し、行の途中の窓がそのまま蒸留へ渡る
+   * （`readTail` interface doc、clone.test.ts「歯2」で実測——ただし実測したのは
+   * in-memory 実装で、こちらは理論上の最悪ケースであり実測はしていない）。
+   * `+ 1` を先に掛けておけば、切り詰めが起きるときのデコード後コードポイント数は
+   * 常に `maxChars` を厳密に上回る——そのうえで下の `tailByCodePoints` が
+   * 「厳密に `maxChars` を上回る量」へ正確に揃える（窓のバイト数の見積もりが
+   * 生む超過ぶんは、ここで削られる）。
    *
    * **`bytesRead` で切る。** `handle.read()` は要求より短く返しうるので、
    * `buffer` をそのまま文字列にすると末尾に NUL が並ぶ（`readTranscriptTail`
@@ -339,11 +352,19 @@ export class FsTranscriptArchive implements TranscriptArchive {
     }
     try {
       const { size } = await handle.stat();
-      const window = (maxChars + 1) * MAX_UTF8_BYTES_PER_UTF16_UNIT;
+      const window = (maxChars + 1) * MAX_UTF8_BYTES_PER_CODE_POINT;
       const length = Math.min(size, window);
       const buffer = Buffer.alloc(length);
       const { bytesRead } = await handle.read(buffer, 0, length, size - length);
-      return { kind: 'body', body: buffer.subarray(0, bytesRead).toString('utf8') };
+      const decoded = buffer.subarray(0, bytesRead).toString('utf8');
+      // **窓のバイト数の超過ぶんをコードポイント単位で削る。** 上の doc
+      // 「+1 を先に掛ける」理由により、`decoded` はファイル全体を読んだ
+      // のでない限り `maxChars + 1` コードポイントより多く持ちうる——
+      // `tailByCodePoints` に通せば、pg・インメモリと同じ「厳密に `maxChars`
+      // を上回る、サロゲートペアを割らない」量へ揃う。窓がファイル全体に
+      // 届いていた（`length === size`）ときは、この呼びは全文をそのまま
+      // 返す（`tailByCodePoints` 自身がそう判定する）。
+      return { kind: 'body', body: tailByCodePoints(decoded, maxChars + 1) };
     } finally {
       await handle.close();
     }

@@ -525,6 +525,13 @@ export {
   type ArchiveIdStampMatch,
 } from './archive-id.js';
 /**
+ * `TranscriptArchive.readTail`（pg・fs・インメモリの3実装）と `clone.ts` の
+ * `tailOf` が共有する、コードポイント単位の「末尾を切る」唯一の出所
+ * （issue #1829）。`storage-fs` / `storage-pg` はパッケージが別なので、
+ * ここ（`@alteroid/core` の公開バレル）を経由しないと届かない。
+ */
+export { tailByCodePoints } from './excerpt.js';
+/**
  * `archive` を絞り込んで一括で tombstone する対象を選ぶ純関数（#698）。
  *
  * **外へ出しているのは純関数だけである。** `TranscriptArchive.list()` で
@@ -1074,7 +1081,7 @@ export {
   CLONE_PERMISSION_MODE_ENV_KEY,
   DAEMON_RUNNER_REGISTRY_SOURCE,
   DAEMON_TOKEN_POOL_REOPENED_SOURCE,
-  MAX_UTF8_BYTES_PER_UTF16_UNIT,
+  MAX_UTF8_BYTES_PER_CODE_POINT,
   createClone,
   isDaemonSelfNotice,
   placedCloneModel,

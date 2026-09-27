@@ -60,7 +60,7 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
-import { excerpt, excerptLine, renderListingFromEnd } from './excerpt.js';
+import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
 import { readConversationWindow } from './conversation.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
@@ -12324,17 +12324,23 @@ function rejectedRateLimitNotice(facts: RateLimitFacts): UsageLimitNotice {
 }
 
 /**
- * UTF-8 で 1 つの UTF-16 code unit を表すのに要るバイト数の**上限**。
+ * UTF-8 で 1 つのコードポイントを表すのに要るバイト数の**上限**（issue #1829。
+ * 以前は「1 UTF-16 code unit あたり」で数えていたが、`maxChars`（末尾を切る
+ * 予算）をコードポイント数で統一したので、こちらもコードポイント単位へ揃える）。
  *
- * BMP の文字は 1〜3 バイトで 1 code unit、それ以外は 4 バイトで 2 code unit
- * （サロゲートペア）＝ 1 code unit あたり 2 バイトである。**⟹ 上限は 3 である。**
+ * BMP の文字（コードポイント1つ＝ 1 code unit）は 1〜3 バイト、補助面の文字
+ * （コードポイント1つ＝サロゲートペア＝ 2 code unit。絵文字の多くを含む）は
+ * 常に 4 バイトである。**⟹ 上限は 4 である**（旧・code unit あたりの上限
+ * だった 3 より大きい——補助面の文字は「2 code unit で 4 バイト」なので
+ * code unit あたりでは 2 バイトで済むが、コードポイントあたりでは 4 バイト
+ * まるごと要るため）。
  *
  * **export してある**——`packages/storage-fs/src/archive.ts` の
- * `FsTranscriptArchive.readTail`（#1283）が同じ「3倍読んでから文字数で切る」
- * 形を使う。根拠をもう1か所へ複製すると、直したときに片方だけ直る事故が
+ * `FsTranscriptArchive.readTail`（#1283）が同じ「N倍読んでから切る」形を
+ * 使う。根拠をもう1か所へ複製すると、直したときに片方だけ直る事故が
  * 起きるため、ここを唯一の出所にする。
  */
-export const MAX_UTF8_BYTES_PER_UTF16_UNIT = 3;
+export const MAX_UTF8_BYTES_PER_CODE_POINT = 4;
 
 /**
  * 生ログの**末尾だけ**を読む（全文を 1 本の文字列にしない）。
@@ -12352,28 +12358,34 @@ export const MAX_UTF8_BYTES_PER_UTF16_UNIT = 3;
  * ⟹ **蒸留に要るのは末尾だけである**（{@link tailOf}）。全文を文字列にする理由が
  * 最初から無い。
  *
- * ## なぜ {@link MAX_UTF8_BYTES_PER_UTF16_UNIT} 倍読むのか
+ * ## なぜ {@link MAX_UTF8_BYTES_PER_CODE_POINT} 倍読むのか
  *
- * {@link tailOf} が切るのは**文字**であってバイトではない。⟹ 末尾から
+ * {@link tailOf} が切るのは**コードポイント**であってバイトではない。⟹ 末尾から
  * {@link DISTILL_TRANSCRIPT_TAIL_CHARS} **バイト**だけ読むと、日本語混じりの生ログでは
  * 渡る文字数が半分以下になる（1 文字 3 バイト）。**それは能力の削減である。**
  *
- * 3 倍読めば、末尾 {@link DISTILL_TRANSCRIPT_TAIL_CHARS} code unit 以上を必ず含む
- * （{@link MAX_UTF8_BYTES_PER_UTF16_UNIT} の doc）。そのうえで {@link tailOf} に
+ * **`+ 1` を掛けてから倍する。** 本文が長いときに `tailOf` が「切り詰め済みの窓」を
+ * 「本文がもとから短かった」と誤読しないためには、窓に**厳密に `DISTILL_TRANSCRIPT_TAIL_CHARS`
+ * を上回るコードポイント数**が入っている必要がある（`TranscriptArchive.readTail`
+ * interface doc、`tailOf` の doc と同じ理由）。`(DISTILL_TRANSCRIPT_TAIL_CHARS + 1)`
+ * 倍読めば、末尾が genuinely 長いときは必ずそれを満たす。
+ *
+ * 4 倍読めば、末尾 `(DISTILL_TRANSCRIPT_TAIL_CHARS + 1)` コードポイント以上を必ず含む
+ * （{@link MAX_UTF8_BYTES_PER_CODE_POINT} の doc）。そのうえで {@link tailOf} に
  * 切らせるので、**渡るものは全文を読んでいたときと同一である。**
  *
  * ## 窓の先頭が壊れることは問題にならない
  *
- * 窓の先頭は文字の途中を切りうる（`U+FFFD` になる）。{@link tailOf} は切り詰めるときに
- * **最初の改行より前を捨てる**ので、そこで一緒に落ちる（`tailOf` の doc「行の途中と
- * 壊れた文字で始めないように整える」がもともとその仕事をしている）。窓がファイル全体に
- * 届いたときは切り詰めが起きないので、そもそも壊れない。
+ * 窓の先頭はバイト列の途中を切りうる（デコードで `U+FFFD` になる）。{@link tailOf}
+ * は切り詰めるときに**最初の改行より前を捨てる**ので、そこで一緒に落ちる（`tailOf` の
+ * doc「行の途中と壊れた文字で始めないように整える」がもともとその仕事をしている）。
+ * 窓がファイル全体に届いたときは切り詰めが起きないので、そもそも壊れない。
  */
 async function readTranscriptTail(path: string): Promise<string> {
   const handle = await open(path, 'r');
   try {
     const { size } = await handle.stat();
-    const window = DISTILL_TRANSCRIPT_TAIL_CHARS * MAX_UTF8_BYTES_PER_UTF16_UNIT;
+    const window = (DISTILL_TRANSCRIPT_TAIL_CHARS + 1) * MAX_UTF8_BYTES_PER_CODE_POINT;
     const length = Math.min(size, window);
     const buffer = Buffer.alloc(length);
     // 末尾から読む。`size <= window` なら `position` は 0 ＝ 全文である。
@@ -12423,10 +12435,25 @@ function withProjectKeyProbe(
 /**
  * 蒸留に渡す末尾。全文はアーカイブに残っているので、ここでは直近だけでよい。
  * 行の途中と壊れた文字で始めないように整える。
+ *
+ * **`DISTILL_TRANSCRIPT_TAIL_CHARS` はコードポイント数で数える（issue #1829）。**
+ * 以前は JS の `.length`（UTF-16 コード単位）で切っていた——補助面の文字
+ * （絵文字の多く。1コードポイントが2コード単位になる）を含む本文では、
+ * `TranscriptArchive.readTail`（pg 実装。PostgreSQL の `right()` はコードポイント
+ * 数で数える）が「まだ短い（切り詰めていない）」と判定した本文の末尾を、
+ * ここが「もう長い」と誤判定し、**本当は消えるはずのない本文の先頭を静かに
+ * 消していた**（`slice()` がサロゲートペアを割って孤立サロゲートを作ることも
+ * あった）。単位の変換は `tailByCodePoints`（`excerpt.ts`）の唯一の出所へ寄せる。
+ *
+ * **判定は「切り詰めた結果が元の文字列と一致するか」で行う**——`tailByCodePoints`
+ * は本文全体のコードポイント数が `DISTILL_TRANSCRIPT_TAIL_CHARS` 以下ならその
+ * 本文をそのまま返す（`transcript` と値が一致する）ので、一致すれば「正真正銘の
+ * 先頭」であり、行の途中を整える必要は無い。一致しなければ真に超えていた
+ * ということなので、そこから最初の改行までを捨てる。
  */
 function tailOf(transcript: string): string {
-  if (transcript.length <= DISTILL_TRANSCRIPT_TAIL_CHARS) return transcript;
-  const cut = transcript.slice(-DISTILL_TRANSCRIPT_TAIL_CHARS);
+  const cut = tailByCodePoints(transcript, DISTILL_TRANSCRIPT_TAIL_CHARS);
+  if (cut === transcript) return transcript;
   const newline = cut.indexOf('\n');
   return newline === -1 ? cut : cut.slice(newline + 1);
 }
