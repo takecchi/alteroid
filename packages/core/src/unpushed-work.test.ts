@@ -906,3 +906,74 @@ describe('computeUnpushedWork — 起点より下（子ディレクトリ）の�
     expect(unpushedWorkResultSchema.safeParse(result).success).toBe(true);
   });
 });
+
+describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ）自体の読み失敗を数える（Issue #1891）', () => {
+  // PR #1869（Issue #1865）は「起点より下（子ディレクトリ）」の読み失敗を
+  // unreadableDirCount に数えるようにしたが、それは `findGitDirsAcrossRoots`
+  // が2本目以降の起点（`/tmp` のスクラッチ起点）ごとに呼ぶ `findGitDirs` の
+  // 内部の話だった。**起点そのもの**（`root === dir` のケース）が読めない
+  // 場合、`findGitDirs` は `rootUnreadable` を返すが、
+  // `findGitDirsAcrossRoots` は `index === 0`（job.cwd）のときしかそれを
+  // 読んでいなかった——2本目以降の `rootUnreadable` は変数に代入されすら
+  // せず、そのまま捨てられていた。結果は `worktrees: []` かつ
+  // `unreadableDirCount` も `scratchRootsUnknown` も付かず、「探しきって0本
+  // だった」と見分けが付かない。`manager-auto-fold.ts` の自動畳みの安全弁は
+  // `worktrees` が全部 clean（または0本）なら `'clear'` を返すため、この
+  // 穴は許しすぎる側（未 push の実装を見落として自動で畳む）に効く。
+
+  it('⭐ スクラッチ起点自体（2本目以降）が readdir できないとき、0本と混ぜずに unreadableDirCount に数える', async () => {
+    const tmpRoot = makeTempDirSync('alteroid-unpushed-work-scratch-root-unreadable-');
+    const cwd = makeTempDirSync('alteroid-unpushed-work-cwd-'); // job.cwd 相当。空。
+    const managerId = 'mgr-abcd1234-abcdefgh';
+    const scratchRoot = join(tmpRoot, 'mgr-abcd');
+    // `findManagerScratchRoots` は実物の readdir で tmpRoot 直下を列挙する
+    // （readdirFn を通らない）ので、当たらせるにはディレクトリが実在する
+    // 必要がある——その中身を readdirFn 経由で読むところだけを模擬で壊す。
+    mkdirSync(scratchRoot, { recursive: true });
+
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === scratchRoot) {
+        throw Object.assign(
+          new Error('EACCES: permission denied, scandir (テスト用の模擬失敗)'),
+          { code: 'EACCES' },
+        );
+      }
+      return readdir(dir, { withFileTypes: true });
+    };
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+      readdirFn,
+    });
+
+    expect(result.worktrees).toHaveLength(0);
+    expect(result.unreadableDirCount).toBeGreaterThanOrEqual(1);
+    expect(result.unreadableDirSample).toContain(scratchRoot);
+    // job.cwd 自体は読めているので、これ（Issue #1826 の経路）には出ない。
+    expect(result.scratchRootsUnknown).toBeUndefined();
+  });
+
+  it('対照: スクラッチ起点が読めるときは、これまでどおり unreadableDirCount は省略される', async () => {
+    const tmpRoot = makeTempDirSync('alteroid-unpushed-work-scratch-root-readable-');
+    const cwd = makeTempDirSync('alteroid-unpushed-work-cwd-');
+    const managerId = 'mgr-abcd1234-abcdefgh';
+    initRepo(join(tmpRoot, 'mgr-abcd', 'repo'));
+    commitFile(join(tmpRoot, 'mgr-abcd', 'repo'), 'a.txt', 'x\n', 'x');
+
+    const result = await computeUnpushedWork(cwd, {
+      spawn: realSpawn,
+      env: process.env,
+      managerId,
+      tmpRootDir: tmpRoot,
+    });
+
+    expect(result.worktrees.map((wt) => wt.relativePath)).toEqual([
+      join(tmpRoot, 'mgr-abcd', 'repo'),
+    ]);
+    expect(result.unreadableDirCount).toBeUndefined();
+    expect(result.unreadableDirSample).toBeUndefined();
+  });
+});
