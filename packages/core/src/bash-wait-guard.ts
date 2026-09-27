@@ -265,36 +265,54 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * あって、`gh pr merge --delete-branch` の危険（終わらないことではなく
  * 戻せないこと）には無関係である。`timeout 30 gh pr merge 123
  * --delete-branch` を「有界だから安全」と読むと、この検出器がまるごと
- * 迂回されてしまう。だから `stripLeadingTimeout` で先頭の
- * `[ENV=val...] timeout <数字><単位?>` だけを取り除いてから見る —— これで
- * 剥がした残りの先頭が `^`（コマンド位置の一員）に当たる。**`timeout` 自身
- * のオプション（`-k` / `--signal` 等）までは解いていない** —— 見ているのは
- * 「`timeout` の直後が数字の継続時間である」という最も普通の書き方だけで
- * ある（`isTimeoutWrapped` 自身が継続時間の妥当性すら見ていないのと同じ
- * 単純さで揃えた）。
+ * 迂回されてしまう。だから `timeout <数字><単位?>` 前置きは、下の
+ * `LEADING_ENV_PREFIX_SRC`（コマンド位置と `gh` のあいだの前置き全体）の
+ * 一部として読み飛ばす。**`timeout` 自身のオプション（`-k` / `--signal`
+ * 等）までは解いていない** —— 見ているのは「`timeout` の直後が数字の
+ * 継続時間である」という最も普通の書き方だけである（`isTimeoutWrapped`
+ * 自身が継続時間の妥当性すら見ていないのと同じ単純さで揃えた）。
  *
- * ## `gh` の手前の環境変数・`env` 前置きも読み飛ばす（#1788）
+ * ⚠️ **issue #1886 まではこれが2つの別の仕組みに分かれていた**——
+ * `stripLeadingTimeout`（`TIMEOUT_PREFIX_RE`）が**コマンド文字列全体の
+ * 先頭**の `[ENV=val...] timeout <数字><単位?>` だけを取り除き、この
+ * 検出器自身は `&&` / `;` / `|` / 改行の**後ろ**のコマンド位置に来た
+ * `timeout` を読み飛ばす手段を持っていなかった。⟹ `cd <dir> && timeout 20
+ * gh pr merge <N> --squash --delete-branch` のように、AGENTS.md
+ * 「自分が走っている器」が勧める `timeout <秒> …` の書き方そのものが
+ * すり抜けていた（本番 runner での実測は issue #1886）。#1886 で
+ * `stripLeadingTimeout`/`TIMEOUT_PREFIX_RE` を廃止し、同じパターン
+ * （`TIMEOUT_COMMAND_PREFIX_SRC`）を `LEADING_ENV_PREFIX_SRC` へ統合した
+ * ——これで文字列全体の先頭も `&&` 等の後ろのコマンド位置も、同じ1つの
+ * 仕組みで読み飛ばされる（`hasGhPrMergeDeleteBranch` はもう前処理として
+ * `timeout` を剥がさず、`GH_PR_MERGE_DELETE_BRANCH_RE` 自身がコマンド
+ * 位置ごとに判定する）。
+ *
+ * ## `gh` の手前の環境変数・`timeout`・`env` 前置きも読み飛ばす（#1788 / #1886）
  *
  * `GH_TOKEN=xxx gh pr merge 123 --delete-branch` のように、コマンド位置と
- * `gh` のあいだに環境変数の代入（`NAME=値` の繰り返し）や `env` コマンドを
- * 挟む形は日常的に書かれる（`gh` の認証トークンを都度指定する等）。
- * `stripLeadingTimeout`（`TIMEOUT_PREFIX_RE`）は同じ前置きを
- * `timeout` の手前で明示的に読み飛ばしていたのに、この検出器自身には
- * その読み飛ばしが無く、素通しされていた（issue #1788 の指摘）。
+ * `gh` のあいだに環境変数の代入（`NAME=値` の繰り返し）や `env` コマンド、
+ * `timeout` 前置きを挟む形は日常的に書かれる（`gh` の認証トークンを都度
+ * 指定する・待ちに上限を持たせる等）。以前はこの3つのうち環境変数と `env`
+ * コマンドしか読み飛ばせず（issue #1788 の指摘で追加）、`timeout` は
+ * コマンド文字列全体の先頭でしか読み飛ばせなかった（issue #1886 の指摘）。
  *
- * `LEADING_ENV_PREFIX_RE_SRC` が読み飛ばすのは次の2つだけ:
+ * `LEADING_ENV_PREFIX_SRC` が読み飛ばすのは次の3つだけ、かつ**この順序**
+ * でしか組み合わせを認めない —— (1) 環境変数の代入の繰り返し (2) 任意で
+ * `timeout <数字><単位?>` を1回だけ (3) 任意で `env` コマンド:
  *
  * 1. **単純な代入の繰り返し** —— `[A-Za-z_][A-Za-z0-9_]*=\S*` を空白区切りで
- *    0回以上（`TIMEOUT_PREFIX_RE` と同じ値パターン。**値の中に空白を含む
- *    引用符形（`X="a b" gh …`）は読み飛ばせない** —— `\S*` は最初の空白で
- *    区切るため、`"a` までしか値として拾えない。`TIMEOUT_PREFIX_RE` が
- *    既に持っていた簡略化と同じ弱さで、この PR で新しく増やした弱さではない）。
- * 2. **`env` コマンド** —— `env`（引数無しでそのまま次のコマンドを起動する
+ *    0回以上（**値の中に空白を含む引用符形（`X="a b" gh …`）は読み飛ばせ
+ *    ない** —— `\S*` は最初の空白で区切るため、`"a` までしか値として拾え
+ *    ない。既存の簡略化と同じ弱さで、この PR で新しく増やした弱さではない）。
+ * 2. **`timeout <数字><単位?>`** —— `TIMEOUT_COMMAND_PREFIX_SRC`。**1回だけ**
+ *    読み飛ばす（`timeout 5 timeout 10 gh …` のような入れ子・重複は見ない
+ *    —— 現実的な書き方ではないと判断した）。
+ * 3. **`env` コマンド** —— `env`（引数無しでそのまま次のコマンドを起動する
  *    形）・`env NAME=値 ...`・`env -u NAME ...` のような単純な形だけを見る。
  *    `env` 自身の全オプション文法（`-i` の組み合わせ・`--split-string` 等）
  *    までは解いていない。
  *
- * どちらも「コマンド位置の直後」でしか読み飛ばさない —— 読み飛ばしの開始
+ * どれも「コマンド位置の直後」でしか読み飛ばさない —— 読み飛ばしの開始
  * 位置そのものは既存の lookbehind（行頭・`;`・`&`・`|`・改行の直後）が決める
  * ので、引用符の中やヒアドキュメントの本文にこの形が現れても、開始位置の
  * 条件そのものは変わらず、素通しは維持される（`echo "GH_TOKEN=x gh pr merge
@@ -317,9 +335,16 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   （`timeout -k 5 30 gh pr merge 123 --delete-branch`）。直上の doc の
  *   とおり、`timeout` 自身のオプション文法までは解いていない。
  * - **代入の値が空白を含む引用符形（`X="a b" gh pr merge …`）。** 直上
- *   「`gh` の手前の環境変数・`env` 前置きも読み飛ばす」の doc のとおり、
- *   値パターンが `\S*` なので空白の手前までしか代入として読めない
- *   （`TIMEOUT_PREFIX_RE` と同じ既存の簡略化）。
+ *   「`gh` の手前の環境変数・`timeout`・`env` 前置きも読み飛ばす」の doc の
+ *   とおり、値パターンが `\S*` なので空白の手前までしか代入として読めない
+ *   （既存の簡略化）。
+ * - **`timeout` の後ろに環境変数の代入や `env` コマンドが来る順序**
+ *   （`timeout 20 GH_TOKEN=x gh pr merge …`）・**`env` コマンドの後ろに
+ *   `timeout` が来る順序**（`env FOO=1 timeout 20 gh pr merge …`）。
+ *   `LEADING_ENV_PREFIX_SRC` は「環境変数の代入→`timeout`→`env` コマンド」
+ *   の順序だけを認め、それ以外の並びは未対応（issue #1886 で確認した実例
+ *   ——`GH_PAGER=cat timeout 20 gh pr merge …`——の順序に絞って直した。他の
+ *   並びは1件ずつ検討する方針のため、この PR では歯を足していない）。
  * - **`gh api -X DELETE …/git/refs/heads/<branch>`・`git push origin
  *   --delete <branch>`・`git push origin :<branch>`。** これらは
  *   `gh pr merge --delete-branch` と同じ実害（枝を消し、積んだ PR を
@@ -327,6 +352,9 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   明記したとおり「`gh pr merge` の呼び出し」に絞られている。1件ずつ
  *   検討して足す方針（#1192 のオーナー決定）のため、issue #1788 の指摘は
  *   ここへ記録するに留め、この PR では歯を足していない。
+ * - **`sudo` / `nice` / `xargs` など `timeout` 以外の前置き。** issue #1886
+ *   の「確かめていないこと」に明記されたとおり、この PR は `timeout` だけを
+ *   扱う（1件ずつ検討する方針、#1192 のオーナー決定）。
  */
 const HEREDOC_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s;&|]|$)/g;
 
@@ -346,14 +374,26 @@ function stripHeredocs(command: string): string {
 
 /**
  * `NAME=値` 形の代入の値の部分——末尾の空白は含まない（呼び出し側が `\s+` を
- * 付けて繰り返す）。`TIMEOUT_PREFIX_RE` の値パターンと揃えてある——`\S*`
- * なので、値が空白を含む引用符形（`X="a b"`）は最初の空白までしか読めない
- * （doc「`gh` の手前の環境変数・`env` 前置きも読み飛ばす」の弱さの節）。
+ * 付けて繰り返す）。**値の中に空白を含む引用符形（`X="a b"`）は最初の空白
+ * までしか読めない**——`\S*` は最初の空白で区切るため
+ * （doc「`gh` の手前の環境変数・`timeout`・`env` 前置きも読み飛ばす」の
+ * 弱さの節）。
  */
 const ENV_ASSIGNMENT_BODY_SRC = String.raw`[A-Za-z_][A-Za-z0-9_]*=\S*`;
 
 /** `ENV_ASSIGNMENT_BODY_SRC` に末尾の空白を1個以上足した、繰り返し単位。 */
 const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}\s+`;
+
+/**
+ * `timeout <数字><単位?>` 前置き——1回だけ読み飛ばす（doc「`timeout N ...`
+ * に包まれていても見る」）。**issue #1886 より前は、これと同じパターンが
+ * `TIMEOUT_PREFIX_RE` としてコマンド文字列全体の先頭（`stripLeadingTimeout`
+ * 経由）でしか使われておらず、`&&` 等の後ろのコマンド位置では読み飛ばせな
+ * かった。** `LEADING_ENV_PREFIX_SRC` へ統合したことで、コマンド位置ならど
+ * こでも同じ1つのパターンが効く。`timeout` 自身のオプション（`-k` 等）ま
+ * では解いていない——直後が数字の継続時間である最も普通の書き方だけを見る。
+ */
+const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+\d+[a-zA-Z]*\s+`;
 
 /**
  * `env` コマンド経由の単純な前置き —— `env`（引数無し）・
@@ -364,28 +404,22 @@ const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:(?:-u\s+\S+|${ENV_ASSIGNMEN
 
 /**
  * コマンド位置と `gh` のあいだで読み飛ばす前置き全体 —— 単純な代入の繰り返し
- * のあと、任意で `env` コマンドが続いてもよい（両方とも0回でよい＝前置きが
- * 無い既存の形もそのまま一致する）。
+ * のあと、任意で `timeout <数字><単位?>` を1回、そのあと任意で `env` コマン
+ * ドが続いてもよい（すべて0回でよい＝前置きが無い既存の形もそのまま一致
+ * する）。**この順序（環境変数の代入 → `timeout` → `env` コマンド）でしか
+ * 組み合わせを認めない**——issue #1886 が確かめた実例
+ * （`GH_PAGER=cat timeout 20 gh pr merge …`）の順序に絞ってあり、`timeout`
+ * の後ろに来る代入や `env` コマンドの後ろに来る `timeout` は未対応（doc
+ * 「この検出器が弾けないと分かっている形」）。
  */
-const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC})*(?:${ENV_COMMAND_PREFIX_SRC})?`;
+const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC})*(?:${TIMEOUT_COMMAND_PREFIX_SRC})?(?:${ENV_COMMAND_PREFIX_SRC})?`;
 
 const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
   String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d(?=[\s;&|]|$))`,
 );
 
-/**
- * 先頭の `[ENV=val ...] timeout <数字><単位?>` を取り除く。剥がした残りの
- * 先頭が「コマンド位置」の `^` に当たるようにするためだけの前処理
- * （doc「`timeout N ...` に包まれていても見る」）。
- */
-const TIMEOUT_PREFIX_RE = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\s+\d+[a-zA-Z]*\s+/;
-
-function stripLeadingTimeout(command: string): string {
-  return command.replace(TIMEOUT_PREFIX_RE, '');
-}
-
 function hasGhPrMergeDeleteBranch(command: string): boolean {
-  return GH_PR_MERGE_DELETE_BRANCH_RE.test(stripLeadingTimeout(stripHeredocs(command)));
+  return GH_PR_MERGE_DELETE_BRANCH_RE.test(stripHeredocs(command));
 }
 
 /**
