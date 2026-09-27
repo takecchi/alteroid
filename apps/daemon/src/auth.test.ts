@@ -126,7 +126,10 @@ function withLeakedAccountField(auth: Stores['auth']): Stores['auth'] {
   };
 }
 
-function buildApp(plan: Partial<AuthPlan> = {}, options: { leakAccountField?: boolean } = {}) {
+function buildApp(
+  plan: Partial<AuthPlan> = {},
+  options: { leakAccountField?: boolean; sseHeartbeatMs?: number } = {},
+) {
   stores = createMemoryStores();
   nextSubject = 'sub-1';
   if (options.leakAccountField === true) {
@@ -148,6 +151,9 @@ function buildApp(plan: Partial<AuthPlan> = {}, options: { leakAccountField?: bo
     stores,
     token: 'test-token',
     shutdown: () => undefined,
+    // SSE の歯（issue #1820）が使う。流れる出来事は無くてよい（心拍と開閉だけを見る）。
+    journalEvents: { subscribe: () => () => undefined },
+    ...(options.sseHeartbeatMs === undefined ? {} : { sseHeartbeatMs: options.sseHeartbeatMs }),
     auth: {
       plan: resolved,
       service: createAuthService({
@@ -1249,5 +1255,127 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
     const claimed = await loginThrough(vaultApp);
     const response = await postOwner(claimed.account.id, OPERATOR);
     expect(response.status).toBe(409);
+  });
+});
+
+/**
+ * **開いている SSE は、心拍ごとに資格を確かめ直し、使えなくなったら閉じる（issue #1820）。**
+ *
+ * 以前は、SSE（chat / journal）は接続を張るときに1回だけ `authenticate` を通り、
+ * その後はトークンを見直さなかった。そのため、ログアウト（PR #1770）や許可の取り消しの
+ * 後も、すでに開いている流れはそのまま流れ続けた。
+ */
+describe('開いている SSE の資格の確かめ直し（issue #1820）', () => {
+  const HEARTBEAT_MS = 10;
+
+  /** 流れが閉じる（done）か、期限が来るまで読む。読んだ本文も返す。 */
+  async function readUntilEnd(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    timeoutMs: number,
+  ): Promise<{ done: boolean; text: string }> {
+    const decoder = new TextDecoder();
+    let text = '';
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { done: false, text };
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), remaining)),
+      ]);
+      if (result === 'timeout') return { done: false, text };
+      if (result.done) return { done: true, text };
+      text += decoder.decode(result.value, { stream: true });
+    }
+  }
+
+  async function grantedLogin(app: ReturnType<typeof createApp>) {
+    const claimed = await loginThrough(app);
+    await app.request(`/access/${claimed.account.id}/grant`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    return claimed;
+  }
+
+  async function openJournal(app: ReturnType<typeof createApp>, headers: Record<string, string>) {
+    const response = await app.request('/journal/stream', { headers });
+    expect(response.status).toBe(200);
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const first = await readUntilEnd(reader, 1000);
+    expect(first.text).toContain('event: open');
+    return reader;
+  }
+
+  it('journal: ログアウトした後の心拍で、流れが閉じる', async () => {
+    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const claimed = await grantedLogin(app);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    const reader = await openJournal(app, auth);
+
+    const logout = await app.request('/auth/logout', {
+      ...post,
+      headers: { ...post.headers, ...auth },
+    });
+    expect(logout.status).toBe(200);
+
+    expect((await readUntilEnd(reader, 2000)).done).toBe(true);
+  });
+
+  it('journal: アカウントの許可を取り消した後の心拍で、流れが閉じる', async () => {
+    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const claimed = await grantedLogin(app);
+    const reader = await openJournal(app, { authorization: `Bearer ${claimed.token}` });
+
+    const revoked = await app.request(`/access/${claimed.account.id}/revoke`, {
+      ...post,
+      headers: { ...post.headers, ...OPERATOR },
+    });
+    expect(revoked.status).toBe(200);
+
+    expect((await readUntilEnd(reader, 2000)).done).toBe(true);
+  });
+
+  it('chat: ログアウトした後の心拍で、理由を error イベントで伝えてから閉じる', async () => {
+    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const claimed = await grantedLogin(app);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    const response = await app.request('/chat', {
+      ...post,
+      headers: { ...post.headers, ...auth },
+      body: JSON.stringify({ text: 'こんにちは' }),
+    });
+    expect(response.status).toBe(200);
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    expect((await readUntilEnd(reader, 1000)).text).toContain('event: open');
+
+    await app.request('/auth/logout', { ...post, headers: { ...post.headers, ...auth } });
+
+    const rest = await readUntilEnd(reader, 2000);
+    expect(rest.done).toBe(true);
+    expect(rest.text).toContain('event: error');
+    expect(rest.text).toContain('資格が使えなくなった');
+    // 応答に鍵を載せない。
+    expect(rest.text).not.toContain(claimed.token);
+  });
+
+  it('対照: ログアウトしなければ、心拍が何度来ても流れは開いたまま', async () => {
+    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const claimed = await grantedLogin(app);
+    const reader = await openJournal(app, { authorization: `Bearer ${claimed.token}` });
+
+    const result = await readUntilEnd(reader, 200);
+    expect(result.done).toBe(false);
+    expect(result.text).toContain(': hb');
+    await reader.cancel();
+  });
+
+  it('operator の資格で張った流れは、確かめ直さない（いままでどおり開いたまま）', async () => {
+    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const reader = await openJournal(app, OPERATOR);
+
+    const result = await readUntilEnd(reader, 200);
+    expect(result.done).toBe(false);
+    await reader.cancel();
   });
 });
