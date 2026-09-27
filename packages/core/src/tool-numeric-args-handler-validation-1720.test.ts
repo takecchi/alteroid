@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { RECENT_TRACE_LIMIT } from './dropped-record.js';
 import { createMemoryStores } from './testing.js';
 import {
+  CLOSE_MANY_LIMIT_MAX,
   createCloneMcpServer,
+  formatIntRangeJa,
   MCP_INPUT_VALIDATION_ERROR_MARKER,
   REMOVE_MANY_LIMIT_MAX,
 } from './tools.js';
@@ -114,6 +116,8 @@ interface Case {
   tool: string;
   base: Record<string, unknown>;
   field: string;
+  /** ハンドラの先頭の検査（`describeIntRangeViolation`）に渡している範囲そのもの。 */
+  range: { min?: number; max?: number };
   invalid: number;
   valid: number;
 }
@@ -124,6 +128,7 @@ const cases: Case[] = [
     tool: 'memory_read',
     base: { slug: 'probe' },
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -132,6 +137,7 @@ const cases: Case[] = [
     tool: 'memory_outline',
     base: { slug: 'probe' },
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -140,6 +146,7 @@ const cases: Case[] = [
     tool: 'journal_read',
     base: {},
     field: 'limit',
+    range: { min: 1, max: 200 },
     invalid: 0,
     valid: 1,
   },
@@ -148,6 +155,7 @@ const cases: Case[] = [
     tool: 'journal_read',
     base: {},
     field: 'limit',
+    range: { min: 1, max: 200 },
     invalid: 201,
     valid: 200,
   },
@@ -156,6 +164,7 @@ const cases: Case[] = [
     tool: 'journal_read',
     base: {},
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -164,6 +173,7 @@ const cases: Case[] = [
     tool: 'approvals_list',
     base: {},
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -172,6 +182,7 @@ const cases: Case[] = [
     tool: 'schedule_list',
     base: {},
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -180,6 +191,7 @@ const cases: Case[] = [
     tool: 'commitment_list',
     base: {},
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -188,6 +200,7 @@ const cases: Case[] = [
     tool: 'commitment_close_many',
     base: { origin: ['self'], reason: 'x' },
     field: 'limit',
+    range: { min: 1, max: CLOSE_MANY_LIMIT_MAX },
     invalid: 0,
     valid: 1,
   },
@@ -196,6 +209,7 @@ const cases: Case[] = [
     tool: 'commitment_close_many',
     base: { origin: ['self'], reason: 'x' },
     field: 'limit',
+    range: { min: 1, max: CLOSE_MANY_LIMIT_MAX },
     invalid: 2_001,
     valid: 2_000,
   },
@@ -204,6 +218,7 @@ const cases: Case[] = [
     tool: 'inbox_remove_many',
     base: { types: ['manager_message'], reason: 'x' },
     field: 'limit',
+    range: { min: 1, max: REMOVE_MANY_LIMIT_MAX },
     invalid: 0,
     valid: 1,
   },
@@ -212,6 +227,7 @@ const cases: Case[] = [
     tool: 'inbox_remove_many',
     base: { types: ['manager_message'], reason: 'x' },
     field: 'limit',
+    range: { min: 1, max: REMOVE_MANY_LIMIT_MAX },
     invalid: REMOVE_MANY_LIMIT_MAX + 1,
     valid: REMOVE_MANY_LIMIT_MAX,
   },
@@ -220,6 +236,7 @@ const cases: Case[] = [
     tool: 'profile_read',
     base: {},
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -228,6 +245,7 @@ const cases: Case[] = [
     tool: 'practice_read',
     base: { slug: 'probe' },
     field: 'version',
+    range: { min: 1 },
     invalid: 0,
     valid: 1,
   },
@@ -236,6 +254,7 @@ const cases: Case[] = [
     tool: 'self_read',
     base: { document: 'PRD.md' },
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -244,6 +263,7 @@ const cases: Case[] = [
     tool: 'self_dropped',
     base: {},
     field: 'limit',
+    range: { min: 1, max: RECENT_TRACE_LIMIT },
     invalid: 0,
     valid: 1,
   },
@@ -252,6 +272,7 @@ const cases: Case[] = [
     tool: 'self_dropped',
     base: {},
     field: 'limit',
+    range: { min: 1, max: RECENT_TRACE_LIMIT },
     invalid: RECENT_TRACE_LIMIT + 1,
     valid: RECENT_TRACE_LIMIT,
   },
@@ -260,6 +281,7 @@ const cases: Case[] = [
     tool: 'self_dropped',
     base: {},
     field: 'offset',
+    range: { min: 0, max: RECENT_TRACE_LIMIT },
     invalid: -1,
     valid: 0,
   },
@@ -268,6 +290,7 @@ const cases: Case[] = [
     tool: 'self_dropped',
     base: {},
     field: 'offset',
+    range: { min: 0, max: RECENT_TRACE_LIMIT },
     invalid: RECENT_TRACE_LIMIT + 1,
     valid: RECENT_TRACE_LIMIT,
   },
@@ -276,6 +299,7 @@ const cases: Case[] = [
     tool: 'manager_report',
     base: { managerId: 'probe' },
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -284,6 +308,7 @@ const cases: Case[] = [
     tool: 'conversation_read',
     base: {},
     field: 'scan',
+    range: { min: 1, max: 10_000 },
     invalid: 0,
     valid: 1,
   },
@@ -292,6 +317,7 @@ const cases: Case[] = [
     tool: 'conversation_read',
     base: {},
     field: 'scan',
+    range: { min: 1, max: 10_000 },
     invalid: 10_001,
     valid: 10_000,
   },
@@ -300,6 +326,7 @@ const cases: Case[] = [
     tool: 'conversation_read',
     base: {},
     field: 'limit',
+    range: { min: 1, max: 200 },
     invalid: 0,
     valid: 1,
   },
@@ -308,6 +335,7 @@ const cases: Case[] = [
     tool: 'conversation_read',
     base: {},
     field: 'limit',
+    range: { min: 1, max: 200 },
     invalid: 201,
     valid: 200,
   },
@@ -316,6 +344,7 @@ const cases: Case[] = [
     tool: 'conversation_read',
     base: {},
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -324,6 +353,7 @@ const cases: Case[] = [
     tool: 'manager_transcript',
     base: { managerId: 'probe' },
     field: 'offset',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -332,6 +362,7 @@ const cases: Case[] = [
     tool: 'archive_remove_many',
     base: { summary: 'x' },
     field: 'minStoredBytes',
+    range: { min: 0 },
     invalid: -1,
     valid: 0,
   },
@@ -391,5 +422,66 @@ describe('道具の数値引数（20件）— 範囲外は日本語の平文、�
     expect(result.isError, `${tool}.${field}=${value}: ${result.text}`).toBe(false);
     expect(result.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
     expect(result.text).toContain(field);
+  });
+});
+
+/**
+ * レビュー指摘（issue #1720 の PR #1729）。
+ *
+ * 入力スキーマ側から `.int()`/`.min()`/`.max()`/`.positive()` を外すと、
+ * モデルへ配る JSON Schema（`tools/list` が返す `inputSchema`）からも
+ * `minimum`/`maximum`/`type: integer` が消える——範囲をハンドラの先頭で
+ * 検査するだけでは、**モデルからは上限・下限が見えなくなる**という能力の
+ * 後退が残る。
+ *
+ * ここでは、上の表（`cases`）が持つ `range`（ハンドラの先頭の検査に渡している
+ * のと同じ値）を使って、`.describe()` の説明文に `formatIntRangeJa(range)`
+ * ——ハンドラの断り文を組み立てているのと**同じ関数**の戻り値——がそのまま
+ * 含まれていることを測る。値を2箇所に手で書き写すのではなく関数を共有して
+ * いるので、どちらか一方だけ直して食い違う（#923 と同じ形の腐り）ことは
+ * 構造的に起きない——この歯が測っているのは「その共有をやめていないか」
+ * である。
+ *
+ * `schedule_create.everyMinutes`（PR #1689 で対応済み、`describeIntRangeViolation`
+ * ではなく独自の分岐で検査している）も同じレビュー指摘の対象なので、
+ * 表とは別に1件だけ足す。
+ */
+describe('道具の JSON Schema の説明文に、検査と同じ範囲の文字列が入っている（issue #1720 レビュー指摘）', () => {
+  it('20件の欄それぞれで、.describe() の文言に formatIntRangeJa(range) がそのまま含まれる', async () => {
+    const rpc = await connect(createMemoryStores());
+    const response = await rpc.call('tools/list', {});
+    const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
+
+    // **同じ (tool, field) の組を2回測らない。** `cases` は境界ごとに複数行
+    // （min 側・max 側）を持つが、range は同じ値なので重複して測る意味が無い。
+    const seen = new Set<string>();
+    for (const { tool, field, range } of cases) {
+      const key = `${tool}.${field}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const schema = tools.find((entry) => entry.name === tool)?.inputSchema as
+        { properties?: Record<string, { description?: string }> } | undefined;
+      const description = schema?.properties?.[field]?.description;
+      expect(description, `${key}: JSON Schema にこの欄が無い`).toBeTruthy();
+      expect(description, `${key}: 説明文「${description}」に範囲の文言が無い`).toContain(
+        formatIntRangeJa(range),
+      );
+    }
+    // **表そのものが空にすり替わっていないこと。** 20件を1つずつ測るはずが
+    // ループの中身ごと消えても、`for` が空配列を回せば全部緑になる——上の
+    // アサーションが1本も走らなかったことに気づけない。
+    expect(seen.size).toBe(20);
+  });
+
+  it('schedule_create.everyMinutes（PR #1689 対応済み。同じレビュー指摘の対象）', async () => {
+    const rpc = await connect(createMemoryStores());
+    const response = await rpc.call('tools/list', {});
+    const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
+    const schema = tools.find((entry) => entry.name === 'schedule_create')?.inputSchema as
+      { properties?: Record<string, { description?: string }> } | undefined;
+    const description = schema?.properties?.['everyMinutes']?.description;
+    expect(description).toBeTruthy();
+    expect(description).toContain(formatIntRangeJa({ min: 1 }));
   });
 });
