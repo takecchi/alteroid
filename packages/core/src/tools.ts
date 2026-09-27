@@ -4154,15 +4154,28 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
   }
   const { result } = probe;
   if (result.worktrees.length === 0) {
-    // ⚠️ #1765 段2 — `scratchRootsUnknown` が載っているときは「見つからな
-    // かった」と言い切らない。他マネージャー/作業者の /tmp スクラッチ
-    // ディレクトリの有無を確かめられなかっただけで、そこに未 push の実装が
-    // 残っている可能性がある（見つからなかったのではなく、探せなかった）。
-    return result.scratchRootsUnknown === undefined
+    // ⚠️ #1765 段2 / #1865 — `scratchRootsUnknown` / `unreadableDirCount` の
+    // どちらかが載っているときは「見つからなかった」と言い切らない。前者は
+    // /tmp スクラッチの有無、後者は job.cwd の下の子ディレクトリの読み失敗
+    // ——どちらも「探せなかっただけで、そこに未 push の実装が残っている
+    // 可能性がある」という同じ形なので、握り潰さず並べて注記する。
+    const uncertain: string[] = [];
+    if (result.scratchRootsUnknown !== undefined) {
+      uncertain.push(
+        '他マネージャー/作業者の /tmp スクラッチディレクトリの有無は確かめられなかった' +
+          `（${result.scratchRootsUnknown}）`,
+      );
+    }
+    if (result.unreadableDirCount !== undefined) {
+      uncertain.push(
+        `${result.cwd} の下の子ディレクトリの読み取りに${String(result.unreadableDirCount)}回失敗した` +
+          '——その下に未 push の実装が残っていた可能性がある',
+      );
+    }
+    return uncertain.length === 0
       ? `未 push の実装・未コミットの変更: 作業ツリーが見つからなかった（${result.cwd} の下を探索した）。`
       : `未 push の実装・未コミットの変更: ${result.cwd} の下には作業ツリーが見つからなかったが、` +
-          `他マネージャー/作業者の /tmp スクラッチディレクトリの有無は確かめられなかった` +
-          `（${result.scratchRootsUnknown}）。**確認できていない。**`;
+          `${uncertain.join('、')}。**確認できていない。**`;
   }
   const lines = result.worktrees.map((worktree) => {
     const branch = worktree.branch ?? '(枝を指していない、または確かめられなかった)';
@@ -4190,12 +4203,18 @@ function describeUnpushedWork(probe: ManagerUnpushedWork): string {
       : `\n  ⚠️ 他マネージャー/作業者の /tmp スクラッチディレクトリの有無を確かめられなかった` +
         `（${result.scratchRootsUnknown}）——そこに未 push の実装が残っている可能性があり、` +
         '上の一覧には含まれていない。';
+  const unreadableDirNote =
+    result.unreadableDirCount === undefined
+      ? ''
+      : `\n  ⚠️ ${result.cwd} の下で子ディレクトリの読み取りに${String(result.unreadableDirCount)}件` +
+        '失敗した——そこに未 push の実装が残っている可能性があり、上の一覧には含まれていない。';
   return (
     `未 push の実装・未コミットの変更（${result.cwd} の下、${String(result.worktrees.length)}本の作業ツリー）:\n` +
     lines.join('\n') +
     truncatedNote +
     stoppedEarlyNote +
     scratchRootsUnknownNote +
+    unreadableDirNote +
     '\n  ⚠️ 未 push の数は fetch していない remote-tracking ref を基準にしており、' +
     '実際には push 済みでも多めに出ることがある（安全側の誤り）。'
   );
