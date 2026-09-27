@@ -1450,13 +1450,19 @@ export interface RunnerFleetOverview {
  * - `'raced'`: 候補と判定した時点より後、実際に畳もうとする直前に状態を
  *   読み直したら既に `done` ではなくなっていた（誰か・何かが先に触った）ので
  *   安全側に倒して何もしなかった
+ * - `'skipped-concurrent'`: 同じ委譲を、2つの契機（`runner_list
+ *   resources:true` / `manager_start` の自動配置）のもう一方が同時に処理中
+ *   だったので、この回は何もしなかった（`#autoFoldInFlight` の doc）。
+ *   「判定できない」ではない——他方の実行が同じ判定をちょうど進めている
+ *   だけなので、未pushの安全弁の見送りとは別の理由として扱う
  * - `'not-stopped'` / `'unknown'`: `abort()` を呼んだが、`stopped` 以外の
  *   outcome が返った（runner に確認が取れない等）
  */
 export interface AutoFoldOutcome {
   readonly managerId: string;
   readonly runnerId: string;
-  readonly outcome: 'folded' | 'blocked-unpushed-work' | 'raced' | 'not-stopped' | 'unknown';
+  readonly outcome:
+    'folded' | 'blocked-unpushed-work' | 'raced' | 'skipped-concurrent' | 'not-stopped' | 'unknown';
   readonly detail: string;
 }
 
@@ -1887,6 +1893,37 @@ export interface ManagerPool {
    * ため —— 持たないプールは「確かめられない」＝ `false` として読む。
    */
   runnerHasCapability?(runnerId: string, capability: string): boolean;
+  /**
+   * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
+   * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
+   * その runner の pids が逼迫していれば手が空いた委譲を畳む。
+   *
+   * **新しい往復・新しい周期処理は無い。** 呼び出し元（`apps/daemon/src/index.ts`
+   * の `RunnerRegistryOptions.onPlacementResources`）は、`#place` が配置のために
+   * 既に払った `resources()` の結果をそのまま渡すだけで、ここから runner へ
+   * 追加で何かを聞きに行くことは無い（門をくぐった先で `unpushedWork()` を
+   * 呼ぶ分は既存の段⑥⑦と同じ——`runner_list resources:true` 経由の契機
+   * （段④）と実際に畳む処理そのものを共有する。`#autoFoldIdleOnRunnerIfUnderPressure`
+   * を呼ぶだけで、判定・実行のロジックを2つに増やさない）。
+   *
+   * **`manager_start` の応答を待たせないこと。** この口自体は同期で完結する
+   * （`void` で内側の非同期処理を切り離す）——呼び出し元は戻り値を待たずに
+   * 呼べる。理由: 配置（`#place`）は既に `reports` を集め終えた後にこの口を
+   * 呼ぶので、ここで畳んだ分の pids が今回の配置のスコアに反映されることは
+   * ない（点数計算はもう終わっている）。にもかかわらず畳み終わるまで
+   * `manager_start` の応答を待たせると、`unpushedWork()`（runner への
+   * HTTP 往復を含む）の分だけ配置が遅くなる——得るものが無いのに払う代償
+   * だけがある。だから待たない側を選んだ（次の配置以降で pids が解放されて
+   * いる形で効く）。
+   *
+   * **省略可能**にしてあるのは、`runnerHasCapability?` と同じ理由——テストの
+   * 偽のプールが持たなくても型が通るようにするため。持たないプールは
+   * 「この契機を持たない」＝呼び出し元が `?.()` で素通りする。
+   */
+  autoFoldOnPlacementPressure?(
+    runnerId: string,
+    pids: { readonly current: number; readonly max: number },
+  ): void;
   /** manager_id からセッションの生ログへ降りる（可観測性の最下段）。 */
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
@@ -4765,6 +4802,42 @@ class Pool implements ManagerPool {
     string,
     { readonly lastReportAt: string | undefined; readonly reasonKey: string }
   >();
+  /**
+   * Issue #1394 続き — 2つの契機（`runner_list resources:true` /
+   * `manager_start` の自動配置）が同じ委譲を同時に候補として拾うことへの壁。
+   *
+   * **なぜ要るか。** 段④の契機は2つあり、どちらも `#autoFoldOne` へ辿り着く
+   * 経路を持つ。配置契機（`autoFoldOnPlacementPressure`）は `manager_start`
+   * の応答を待たせないために fire-and-forget（`void`）で切り離してあるので、
+   * 次の `manager_start` が続けて来れば同じ runner のぶんがもう1本並行に
+   * 走りうる。`runner_list resources:true` の契機（`runners()`）とも、
+   * 呼び出しのタイミングが重なれば同様に並行しうる——どちらも同じ
+   * `managerId` を候補として拾えば、`#autoFoldOne` が同時に2回走り、
+   * どちらも `fresh.status === 'done'` を読んでから `abort()` を呼びうる
+   * （`#autoFoldOne` の「競合の再確認」は**判定してからここに来るまでの間**
+   * の競合しか見ておらず、**同時に2つの実行が両方ともその窓を通り抜ける**
+   * 形までは塞いでいない）。塞がないと `abort()` を二重に呼び、日誌に
+   * `[auto-fold]` が2行積まれる。
+   *
+   * **`managerId` 単位で持つ。** runner 単位（`runnerId`）だと、同じ runner
+   * 上の**別の**候補まで待たせてしまい、無関係な委譲の畳みが遅れる
+   * （north_star 禁止2と同じ論法——制限を広く取りすぎない）。二重実行を
+   * 防ぎたいのは「同じ委譲」の粒度なので、鍵もそこに合わせる。
+   *
+   * **重なった回は黙って飛ばす（`'skipped-concurrent'`）。日誌は積まない。**
+   * これは「判定できない」ではない——他方の実行が同じ判定をちょうど進めて
+   * いるだけで、状態が読めないわけではない。だから未pushの安全弁
+   * （`evaluateAutoFoldUnpushedWork`）と同じ「畳まない側へ倒す」理由には
+   * 数えない。`AutoFoldOutcome.outcome` には残す（`autoFolded` の応答からは
+   * 見える）ので、観測そのものが消えるわけではない。
+   *
+   * **`#autoFoldOne` の最初（どの `await` より前）で確認・設置し、
+   * `finally` で必ず外す。** JS はシングルスレッドなので、この確認と設置が
+   * 同期のまま完結していれば、2つの呼び出しがどちらの top-level 経路から
+   * 来ても——`await` の継ぎ目でしか処理系は切り替わらないため——先着した
+   * ほうが必ず先に鍵を取る。
+   */
+  readonly #autoFoldInFlight = new Set<string>();
   /** 起動時の引き取りが走っている間だけ立つ。`#reattach` はこれを待つ。 */
   #restoring: Promise<void> | null = null;
   /**
@@ -5925,11 +5998,15 @@ class Pool implements ManagerPool {
           ...(pushHealth === undefined ? {} : { pushHealth }),
         };
 
-        // **Issue #1394 段④ — 契機はここ。** `resources()` の結果として pids を
-        // 実際に受け取った、まさにこの時点を使う——新しい周期処理は足していない
-        // （このコメントの上、直近30行の `resources` はこの呼び出しが
+        // **Issue #1394 段④ — 契機の1つ目はここ。** `resources()` の結果として
+        // pids を実際に受け取った、まさにこの時点を使う——新しい周期処理は
+        // 足していない（このコメントの上、直近30行の `resources` はこの呼び出しが
         // `options.resources` 付きで呼ばれたときにしか払わない往復であり、
-        // それは既存の opt-in のままである）。
+        // それは既存の opt-in のままである）。**2つ目の契機
+        // （`autoFoldOnPlacementPressure` / `manager_start` の自動配置）は
+        // こことは別の入り口を持つ**——判定・実行のロジックは
+        // `#autoFoldIdleOnRunnerIfUnderPressure` を共有していて、2つに増えて
+        // いない。
         // **`undefined` ＝ この runner の pids は見ていない（`resources` を
         // 訊けなかった・pids が読めなかった・逼迫していなかった）。`[]` ＝
         // 見たが候補が無かった（または全部見送った）。この2つを混ぜない**
@@ -5978,6 +6055,16 @@ class Pool implements ManagerPool {
    * 逼迫していれば、その runner に割り当てられた委譲だけを対象に、段⑤の
    * 判定（`isManagerFoldCandidate`）を通し、候補になったものだけ
    * {@link #autoFoldOne} へ渡す。
+   *
+   * **呼び出し元は2つある**（同 Issue の「残り」— 契機を1つ足した）。
+   * どちらもこの1つの判定・実行を共有する——2つに増やさない:
+   *
+   * 1. `runners()`（`runner_list resources:true`）。`managers` を自分で
+   *    `await this.list()` して渡す
+   * 2. `autoFoldOnPlacementPressure`（`manager_start` の自動配置）。契機の
+   *    門を先に通してから `this.list()` を呼ぶので、`managers` は常に
+   *    「渡された時点のもの」——このメソッド自体はどちらの呼び出しかを
+   *    区別しない
    */
   async #autoFoldIdleOnRunnerIfUnderPressure(
     runnerId: string,
@@ -6031,6 +6118,15 @@ class Pool implements ManagerPool {
    * 呼ばれた時点で段⑤の5条件は満たしている——ここが持つのはその先の2つの
    * 安全弁である:
    *
+   * 0. **同じ委譲の二重実行の壁。** 2つの契機（`runner_list resources:true` /
+   *    `manager_start` の自動配置）が同じ委譲を同時に候補として拾うと、
+   *    ここが並行に2回走りうる——1の「競合の再確認」は判定してからここに
+   *    来るまでの窓しか見ておらず、**同時に2つの実行が両方ともその窓を
+   *    通り抜ける**形までは塞がない。だから最初（どの `await` より前）に
+   *    `#autoFoldInFlight` を確認・設置する（`#autoFoldInFlight` の doc）。
+   *    既に入っていれば `'skipped-concurrent'` で即座に戻り、日誌には残さない
+   *    ——「判定できない」ではなく「他方が処理中」なので、未pushの安全弁と
+   *    同じ理由の見送りには数えない。
    * 1. **競合の再確認。** 候補と判定してからここに来るまでの間（同じ呼び出し
    *    内の他の委譲の await を挟む）に、誰か・何かが先にこの委譲へ触れて
    *    `status` が `done` でなくなっているかもしれない。読み直して違って
@@ -6063,90 +6159,113 @@ class Pool implements ManagerPool {
   ): Promise<AutoFoldOutcome> {
     const pidsNote = `pids ${String(pids.current)}/${String(pids.max)}`;
 
-    const fresh = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
-    if (fresh === undefined || fresh.status !== 'done') {
+    // **0. 同じ委譲の二重実行の壁。** ここより下は `await` を挟むが、この
+    // 確認と設置自体は同期のまま完結する——だから、もう一方の契機からの
+    // 呼び出しがこの行より先に来ていれば、そちらが必ず先に鍵を取っている
+    // （`#autoFoldInFlight` の doc）。
+    if (this.#autoFoldInFlight.has(managerId)) {
       return {
         managerId,
         runnerId,
-        outcome: 'raced',
-        detail: `候補と判定した後、実際に畳む前に状態を読み直したら done ではなくなっていた（${
-          fresh === undefined ? '台帳から消えている' : `いまは ${fresh.status}`
-        }）。安全側に倒して何もしなかった。`,
+        outcome: 'skipped-concurrent',
+        detail:
+          'この委譲は、もう一方の契機（runner_list resources:true / manager_start の自動配置）が' +
+          '同時に処理中だったので、この回は見送った（二重に abort() を呼ばないため。' +
+          '判定できなかったわけではない）。',
       };
     }
-
-    const unpushed = await this.unpushedWork(managerId, {
-      // **`UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS` を使い回す**（新しい定数を
-      // 増やさない）——`case 'report'` の fire-and-forget 観測と同じ「安全側に
-      // 短く取った未検証の既定値」という理由がそのまま当てはまる。
-      signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
-      source: 'auto-fold',
-    }).catch((error: unknown): ManagerUnpushedWork => ({
-      kind: 'unavailable',
-      reason: `確かめようとして例外が飛んだ: ${String(error)}`,
-    }));
-    const verdict = evaluateAutoFoldUnpushedWork(unpushed);
-    if (verdict !== 'clear') {
-      const reason = describeAutoFoldUnpushedWorkProbe(unpushed);
-      // **Issue #1394 の留保 — 同じ委譲・同じ理由の見送りを日誌へ積み続け
-      // ない。** 鍵は「候補判定時点の `lastReportAt`（新しいターンを回した
-      // か。`candidateLastReportAt` の doc——`Job.updatedAt` は使わない）」
-      // ＋「理由の分類（{@link classifyAutoFoldUnpushedWorkProbe}。表示用の
-      // `reason` 本文そのものではない——文言だけ直っても別の理由と誤読しない
-      // ため）」の組。前回書いた組と同じなら日誌には書かない
-      // （`#autoFoldSkipJournalWritten` の doc）。
-      const reasonKey = classifyAutoFoldUnpushedWorkProbe(unpushed);
-      const memoKey = { lastReportAt: candidateLastReportAt, reasonKey };
-      const previous = this.#autoFoldSkipJournalWritten.get(managerId);
-      const unchanged =
-        previous !== undefined &&
-        previous.lastReportAt === memoKey.lastReportAt &&
-        previous.reasonKey === memoKey.reasonKey;
-      if (!unchanged) {
-        await this.#journal({
-          type: 'decision',
-          decision:
-            `[auto-fold-skip] ${managerId} は pids 逼迫（runner=${runnerId}、${pidsNote}）で` +
-            `畳む候補だったが、畳まなかった: ${reason}。`,
-          grounds: 'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
-        });
-        this.#autoFoldSkipJournalWritten.set(managerId, memoKey);
-        pruneOldestEntries(this.#autoFoldSkipJournalWritten, AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT);
+    this.#autoFoldInFlight.add(managerId);
+    try {
+      const fresh = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
+      if (fresh === undefined || fresh.status !== 'done') {
+        return {
+          managerId,
+          runnerId,
+          outcome: 'raced',
+          detail: `候補と判定した後、実際に畳む前に状態を読み直したら done ではなくなっていた（${
+            fresh === undefined ? '台帳から消えている' : `いまは ${fresh.status}`
+          }）。安全側に倒して何もしなかった。`,
+        };
       }
+
+      const unpushed = await this.unpushedWork(managerId, {
+        // **`UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS` を使い回す**（新しい定数を
+        // 増やさない）——`case 'report'` の fire-and-forget 観測と同じ「安全側に
+        // 短く取った未検証の既定値」という理由がそのまま当てはまる。
+        source: 'auto-fold',
+        signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+      }).catch((error: unknown): ManagerUnpushedWork => ({
+        kind: 'unavailable',
+        reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+      }));
+      const verdict = evaluateAutoFoldUnpushedWork(unpushed);
+      if (verdict !== 'clear') {
+        const reason = describeAutoFoldUnpushedWorkProbe(unpushed);
+        // **Issue #1394 の留保 — 同じ委譲・同じ理由の見送りを日誌へ積み続け
+        // ない。** 鍵は「候補判定時点の `lastReportAt`（新しいターンを回した
+        // か。`candidateLastReportAt` の doc——`Job.updatedAt` は使わない）」
+        // ＋「理由の分類（{@link classifyAutoFoldUnpushedWorkProbe}。表示用の
+        // `reason` 本文そのものではない——文言だけ直っても別の理由と誤読しない
+        // ため）」の組。前回書いた組と同じなら日誌には書かない
+        // （`#autoFoldSkipJournalWritten` の doc）。
+        const reasonKey = classifyAutoFoldUnpushedWorkProbe(unpushed);
+        const memoKey = { lastReportAt: candidateLastReportAt, reasonKey };
+        const previous = this.#autoFoldSkipJournalWritten.get(managerId);
+        const unchanged =
+          previous !== undefined &&
+          previous.lastReportAt === memoKey.lastReportAt &&
+          previous.reasonKey === memoKey.reasonKey;
+        if (!unchanged) {
+          await this.#journal({
+            type: 'decision',
+            decision:
+              `[auto-fold-skip] ${managerId} は pids 逼迫（runner=${runnerId}、${pidsNote}）で` +
+              `畳む候補だったが、畳まなかった: ${reason}。`,
+            grounds: 'デーモンの自動畳み（Issue #1394 段④⑥）: 未pushの安全弁が clear ではなかった',
+          });
+          this.#autoFoldSkipJournalWritten.set(managerId, memoKey);
+          pruneOldestEntries(
+            this.#autoFoldSkipJournalWritten,
+            AUTO_FOLD_SKIP_JOURNAL_TRACKING_LIMIT,
+          );
+        }
+        return {
+          managerId,
+          runnerId,
+          outcome: 'blocked-unpushed-work',
+          detail: reason,
+        };
+      }
+
+      await this.#journal({
+        type: 'decision',
+        decision:
+          `[auto-fold] ${managerId} を pids 逼迫（runner=${runnerId}、${pidsNote}）を理由に自動で畳む` +
+          '（手が空いている・背景処理待ちの印なし・未pushの作業なし、のすべてを満たした）。',
+        grounds:
+          'デーモンの自動畳み（Issue #1394 段④⑥⑦）: pidsが上限の80%以上・段⑤の畳む候補の5条件・' +
+          '未push安全弁のすべてを満たした',
+      });
+
+      const result = await this.abort(
+        managerId,
+        `pids 逼迫（${pidsNote}）を受けてデーモンが自動で畳んだ`,
+        'auto-fold',
+      );
       return {
         managerId,
         runnerId,
-        outcome: 'blocked-unpushed-work',
-        detail: reason,
+        outcome:
+          result.outcome === 'stopped'
+            ? 'folded'
+            : result.outcome === 'not_stopped'
+              ? 'not-stopped'
+              : 'unknown',
+        detail: result.detail,
       };
+    } finally {
+      this.#autoFoldInFlight.delete(managerId);
     }
-
-    await this.#journal({
-      type: 'decision',
-      decision:
-        `[auto-fold] ${managerId} を pids 逼迫（runner=${runnerId}、${pidsNote}）を理由に自動で畳む` +
-        '（手が空いている・背景処理待ちの印なし・未pushの作業なし、のすべてを満たした）。',
-      grounds:
-        'デーモンの自動畳み（Issue #1394 段④⑥⑦）: pidsが上限の80%以上・段⑤の畳む候補の5条件・' +
-        '未push安全弁のすべてを満たした',
-    });
-
-    const result = await this.abort(
-      managerId,
-      `pids 逼迫（${pidsNote}）を受けてデーモンが自動で畳んだ`,
-      'auto-fold',
-    );
-    return {
-      managerId,
-      runnerId,
-      outcome:
-        result.outcome === 'stopped'
-          ? 'folded'
-          : result.outcome === 'not_stopped'
-            ? 'not-stopped'
-            : 'unknown',
-      detail: result.detail,
-    };
   }
 
   /**
@@ -6233,6 +6352,39 @@ class Pool implements ManagerPool {
 
   runnerHasCapability(runnerId: string, capability: string): boolean {
     return this.#runnerCapabilities.get(runnerId)?.has(capability) ?? false;
+  }
+
+  /**
+   * Issue #1394 の2つ目の契機。**契機の門をここでも先に通す**——`isPidsUnderPressure`
+   * が偽なら `this.list()`（配置とは別の読み取り）を1回も払わずに戻る。
+   * `#autoFoldIdleOnRunnerIfUnderPressure` 自身も同じ門を持つが、あちらは
+   * `managers` を呼び出し元（`runners()`）が既に持っている前提で書かれている
+   * ——ここは配置の契機なのでまだ `managers` を取っていない。逼迫していない
+   * 回（大半）でその取得を払わないために、ここで先に確かめる。
+   *
+   * **戻り値を待たない。** interface の doc のとおり——配置（`#place`）の
+   * 応答を、畳み終わるまで待たせないため。内側の非同期処理が失敗しても、
+   * ここでは再送・再試行をしない（次の配置か `runner_list resources:true`
+   * の契機で改めて評価される）——ただし失敗の事実そのものは日誌に残す。
+   */
+  autoFoldOnPlacementPressure(
+    runnerId: string,
+    pids: { readonly current: number; readonly max: number },
+  ): void {
+    if (!isPidsUnderPressure(pids)) return;
+    void this.list()
+      .then((managers) => this.#autoFoldIdleOnRunnerIfUnderPressure(runnerId, pids, managers))
+      .catch((error: unknown) => {
+        void this.#journal({
+          type: 'decision',
+          decision:
+            `[auto-fold-skip] runner=${runnerId} の配置契機（manager_start の自動配置）で` +
+            `畳み処理そのものが例外で落ち、判定できなかった: ${String(error)}`,
+          grounds:
+            'デーモンの自動畳み（Issue #1394 の2つ目の契機。manager_start の配置経由）: ' +
+            '例外により判定不能（判定できないときは畳まない側へ倒す）',
+        });
+      });
   }
 
   async runnerIdOf(managerId: string): Promise<string | undefined> {

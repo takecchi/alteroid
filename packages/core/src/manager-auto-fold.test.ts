@@ -208,6 +208,64 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
     });
     expect(text).toContain('1本');
   });
+
+  /**
+   * 「未 push（未コミット）がある」と「判定できない」を本文の中で分ける
+   * （コーディネーターの追加指示）。以前は1本の文言に混ぜていた——
+   * `evaluateAutoFoldUnpushedWorkProbe.test` 側の判定（'blocked'）は
+   * 変えていないので、ここは表示だけを見る。
+   */
+  it('件数が0より大きい（未pushがある）作業ツリーだけなら、判定できない側の文言は出さない', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: {
+        worktrees: [{ unpushedCommitCount: 3, uncommittedChangeCount: 0 }],
+      },
+    });
+    expect(text).toContain('未pushの実装・未コミットの変更がある作業ツリーが1本');
+    expect(text).not.toContain('判定できない');
+  });
+
+  it('件数が undefined（判定できない）作業ツリーだけなら、未pushがある側の文言は出さない', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: {
+        worktrees: [{ unpushedCommitCount: undefined, uncommittedChangeCount: 0 }],
+      },
+    });
+    expect(text).toContain('確認できなかった（判定できない）作業ツリーが1本');
+    expect(text).not.toContain('未pushの実装・未コミットの変更がある作業ツリーが');
+  });
+
+  it('両方が混在するときは、両方の本数を分けて言う', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: {
+        worktrees: [
+          // 件数が取れていて正（未pushがある）。
+          { unpushedCommitCount: 2, uncommittedChangeCount: 0 },
+          // 件数が取れていない（判定できない）。
+          { unpushedCommitCount: undefined, uncommittedChangeCount: 0 },
+        ],
+      },
+    });
+    expect(text).toContain('未pushの実装・未コミットの変更がある作業ツリーが1本');
+    expect(text).toContain('確認できなかった（判定できない）作業ツリーが1本');
+  });
+
+  it('同じ作業ツリーが両方の数え方に該当することがある（片方は取れず、片方は正）', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: {
+        // unpushedCommitCount は取れていない（判定できない側）が、
+        // uncommittedChangeCount は取れていて正（未pushがある側）。
+        // 1本の作業ツリーが両方の数えに1ずつ入ることを確かめる。
+        worktrees: [{ unpushedCommitCount: undefined, uncommittedChangeCount: 5 }],
+      },
+    });
+    expect(text).toContain('未pushの実装・未コミットの変更がある作業ツリーが1本');
+    expect(text).toContain('確認できなかった（判定できない）作業ツリーが1本');
+  });
 });
 
 /**

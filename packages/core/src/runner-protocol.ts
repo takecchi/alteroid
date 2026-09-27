@@ -2957,6 +2957,39 @@ export interface RunnerRegistryOptions {
    */
   selectWaitMs?: number;
   /**
+   * Issue #1394 の2つ目の契機 — `#place`（`select` の自動配置）が全台へ
+   * `resources()` を聞いた結果を、そのまま横流しする。
+   *
+   * **新しい往復ではない。** `#place` は元々、配置を決めるために開けている
+   * 全台へ同時に `resources()` を聞いている（`PLACEMENT_PROBE_MS` の期限
+   * 付き）——ここはその結果（`reports`）を、配置を決めた**後**にもう一度
+   * 使い回すだけで、追加の HTTP 往復は一切発生しない。
+   *
+   * **runnerId が分かっている器だけを渡す。** `client.runnerId` は
+   * `runnerIdKnown` が `false` でも既定値（`'runner-primary'`）を持つ
+   * （`RunnerClient.runnerId` の doc）——名乗りをまだ聞けていない器を、
+   * 名乗った器と取り違えないため、`runnerIdKnown` が `true` の分だけを渡す。
+   *
+   * **同期で完結すること。** ここで返り値を待つ・await する呼び出し元は
+   * 書かないこと——`select()`（延いては `manager_start` の応答）を、この
+   * コールバックの中身が終わるまで待たせることになる。呼び出し側
+   * （`apps/daemon/src/index.ts`）は fire-and-forget で受ける
+   * （`relocateOnLost` / `takeOverOnSwap` と同じ「`let` で後から差し替える」
+   * 形を踏襲している——`RunnerRegistry` は `ManagerPool` より先に作られる
+   * ので、直接 import して繋ぐことはできない。この口はコールバックという
+   * 形で依存の向きを逆にしない）。
+   *
+   * **これは `RunnerRegistry` の中に畳む判断を持ち込むものではない。** 判定・
+   * 実行はすべて呼び出し元（`ManagerPool`）の仕事のままで、ここは「配置が
+   * 既に持っている情報を、配置の外へ渡す」だけの薄い通知口である。
+   */
+  onPlacementResources?: (
+    reports: readonly {
+      readonly runnerId: string;
+      readonly resources: RunnerPlacementResources | undefined;
+    }[],
+  ) => void;
+  /**
    * いまの時刻（ミリ秒）。**主にテスト用で、既定は `Date.now` である。**
    *
    * **なぜ注入できる形にしたか。** 直近の失敗を覚えておく窓（#712 /
@@ -3263,6 +3296,14 @@ class Registry implements RunnerRegistry {
   readonly #onSwap:
     | ((swap: { label: string; runnerId?: string; before: string; after: string }) => void)
     | undefined;
+  readonly #onPlacementResources:
+    | ((
+        reports: readonly {
+          readonly runnerId: string;
+          readonly resources: RunnerPlacementResources | undefined;
+        }[],
+      ) => void)
+    | undefined;
   readonly #retryBaseMs: number;
   readonly #retryMaxMs: number;
   readonly #selectWaitMs: number;
@@ -3280,6 +3321,7 @@ class Registry implements RunnerRegistry {
     this.#notify = options.notify;
     this.#onLost = options.onLost;
     this.#onSwap = options.onSwap;
+    this.#onPlacementResources = options.onPlacementResources;
     this.#retryBaseMs = options.retryBaseMs ?? REGISTRY_RETRY_BASE_MS;
     this.#retryMaxMs = options.retryMaxMs ?? REGISTRY_RETRY_MAX_MS;
     this.#selectWaitMs = options.selectWaitMs ?? SELECT_WAIT_MS;
@@ -3654,6 +3696,21 @@ class Registry implements RunnerRegistry {
         }
       }),
     );
+
+    // **Issue #1394 の2つ目の契機。** 配置のために既に払った `resources()` の
+    // 結果を、配置を決めた直後に横流しするだけ——新しい往復は無い（doc は
+    // `RunnerRegistryOptions.onPlacementResources` 参照）。**同期で呼ぶだけで
+    // 待たない**——`onPlacementResources` の実装（`ManagerPool#autoFoldOnPlacementPressure`）
+    // 自身が内側の非同期処理を `void` で切り離しているので、ここで await する
+    // 必要も無い。`runnerIdKnown` が `false` の器（名乗りをまだ聞けていない・
+    // 既定値 `'runner-primary'` を名乗っている）は、名乗った器と取り違えない
+    // ために渡さない（`RunnerClient.runnerId` の doc）。
+    this.#onPlacementResources?.(
+      reports.flatMap((r) =>
+        r.client.runnerIdKnown ? [{ runnerId: r.client.runnerId, resources: r.resources }] : [],
+      ),
+    );
+
     return chooseByResources(reports) ?? fallback;
   }
 

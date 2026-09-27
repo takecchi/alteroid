@@ -47,6 +47,7 @@ import {
   writeStderrSync,
   type InboxEvent,
   type RunnerClient,
+  type RunnerPlacementResources,
   type RunnerSource,
   type SelfFacts,
   type Stores,
@@ -1115,6 +1116,22 @@ export async function main(): Promise<void> {
    * 動きうる）。
    */
   let relocateOnLost: (runnerId?: string) => void = () => {};
+  /**
+   * Issue #1394 の2つ目の契機 — `manager_start` の自動配置（`#place`）が
+   * 全台へ既に払った resources の応答を、`ManagerPool#autoFoldOnPlacementPressure`
+   * へ横流しする口。**宛先は後から差し替える。**
+   *
+   * `takeOverOnSwap` / `relocateOnLost` と同じ形にしてある——`RunnerRegistry`
+   * （`createRunnerRegistry`）は `ManagerPool`（`clone.managers`）より先に
+   * 作られるので、直に `clone.managers` を触る形にはできない（まだ
+   * 初期化されていない `const` を触る経路が残る）。
+   */
+  let autoFoldOnPlacementResources: (
+    reports: readonly {
+      readonly runnerId: string;
+      readonly resources: RunnerPlacementResources | undefined;
+    }[],
+  ) => void = () => {};
   const runners = createRunnerRegistry([], {
     notify: ({ label, error }) => {
       announce(
@@ -1232,6 +1249,16 @@ export async function main(): Promise<void> {
         warn: (message) => process.stderr.write(`alteroidd: ${message}\n`),
       });
       takeOverOnSwap(runnerId);
+    },
+    /**
+     * Issue #1394 の2つ目の契機。**`await` しない——同期のまま呼ぶだけ。**
+     * `autoFoldOnPlacementResources` の中身（`ManagerPool#autoFoldOnPlacementPressure`）
+     * 自身が内側の非同期処理を切り離しているので、ここで待つ必要も無い。
+     * `select()`（延いては `manager_start` の応答）を待たせないための形
+     * （`RunnerRegistryOptions.onPlacementResources` の doc）。
+     */
+    onPlacementResources: (reports) => {
+      autoFoldOnPlacementResources(reports);
     },
   });
   const runnerDescription = describeRunner();
@@ -2214,6 +2241,26 @@ export async function main(): Promise<void> {
    */
   relocateOnLost = (runnerId) => {
     if (runnerId !== undefined) clone.managers.relocateFrom(runnerId);
+  };
+  /**
+   * Issue #1394 の2つ目の契機 — `#place` から横流しされた resources を、
+   * pids が逼迫している runner についてだけ `ManagerPool#autoFoldOnPlacementPressure`
+   * へ渡す。
+   *
+   * **`resources?.pids` が取れなかった器は渡さない。** 「聞けなかった」を
+   * 「逼迫していない」に倒さない（AGENTS.md「取れない軸に0の行を作る」）——
+   * `autoFoldOnPlacementPressure` 自身も `pids` を受け取る前提の型なので、
+   * ここで弾かないと `undefined` を渡すために型を緩めることになる。
+   *
+   * **`clone.managers.autoFoldOnPlacementPressure` は省略可能。** テストの
+   * 偽のプール（`ManagerPool` を満たすスタブ）が持たない場合は `?.()` で
+   * 素通りする——本番の `createManagerPool()` は常に持つ。
+   */
+  autoFoldOnPlacementResources = (reports) => {
+    for (const report of reports) {
+      if (report.resources?.pids === undefined) continue;
+      clone.managers.autoFoldOnPlacementPressure?.(report.runnerId, report.resources.pids);
+    }
   };
 
   // 画面（apps/web）を別オリジンに置く配置のための境界設定。既定は空＝今まで通り

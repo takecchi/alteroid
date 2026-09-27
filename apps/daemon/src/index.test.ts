@@ -219,6 +219,89 @@ describe('index.ts の原文で測る配線（onLost が日誌へ残るか。#13
 });
 
 /**
+ * Issue #1394 の「残り」——自動畳みの契機が `runner_list resources:true` の
+ * 1つだけだったところに、2つ目（`manager_start` の自動配置）を足した配線。
+ *
+ * ## なぜ原文を読むのか
+ *
+ * 隣の `onSwap` / `onLost` と同じ事情——`onPlacementResources` も
+ * `createRunnerRegistry` へ渡すオプションの1つで、`autoFoldOnPlacementResources`
+ * も局所変数（`let`）に載っている。`main()` を呼ばずに触れる口が無い。
+ *
+ * ## 何を固定するか
+ *
+ * (1) `onPlacementResources` のブロックが `autoFoldOnPlacementResources(` を
+ * 呼んでいること（配線が外れて「何も起きない」に戻る変異を捕まえる）
+ * (2) `autoFoldOnPlacementResources` の再代入が、`resources?.pids` が
+ * `undefined` の報告を弾いてから `clone.managers.autoFoldOnPlacementPressure`
+ * を呼んでいること（「取れない」を「逼迫していない」へ倒さず、かつ
+ * `pids: undefined` をそのまま渡さないことの両方を1本で見る）
+ * (3) `clone.managers.autoFoldOnPlacementPressure` を呼ぶのはこの1箇所だけ
+ * であること
+ *
+ * **この歯が測らないもの**: 実際に畳まれること（`packages/core` 側の歯
+ * — `manager.test.ts` の「もう1つの契機」— が持つ）。ここが約束するのは
+ * 配線だけである。
+ */
+describe('index.ts の原文で測る配線（onPlacementResources → 自動畳みの2つ目の契機、#1394）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+
+  /** 隣の describe の `blockOf` と同じ実装（自己完結のためここでも定義する）。 */
+  const blockOf = (opener: RegExp): string[] => {
+    const lines = source.split('\n');
+    const heads = lines.filter((line) => opener.test(line));
+    // **1つに定まらないなら、以下の判定は別の場所を見ている。**
+    expect(heads).toHaveLength(1);
+    const start = lines.findIndex((line) => opener.test(line));
+    const indent = (/^\s*/.exec(lines[start] ?? '')?.[0] ?? '').length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
+      if (line.trim() === '') continue;
+      if ((/^\s*/.exec(line)?.[0] ?? '').length <= indent) return lines.slice(start, i + 1);
+    }
+    throw new Error('ブロックの終わりが見つからない（字下げの前提が崩れている）');
+  };
+
+  /** 注釈の行は経路ではない。 */
+  const code = (lines: string[]): string[] =>
+    lines.filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
+
+  it('配置が資源の結果を横流ししてきたら、2つ目の契機の口を実際に呼ぶ', () => {
+    const calls = code(blockOf(/^\s*onPlacementResources:\s*\(/)).filter((line) =>
+      line.includes('autoFoldOnPlacementResources('),
+    );
+
+    // 受け取るだけで渡さない配線に戻すと、この契機はまるごと死ぬ
+    // （`#place` は横流ししているのに、誰も畳みへ繋がない）。
+    expect(calls).not.toEqual([]);
+  });
+
+  it('pids が取れなかった報告は弾き、取れたものだけ ManagerPool へ渡す', () => {
+    const body = code(blockOf(/^\s*autoFoldOnPlacementResources\s*=\s*\(/)).join('\n');
+
+    // **弾く門がある。** 「取れない」を「逼迫していない」へ倒さない
+    // （AGENTS.md「取れない軸に0の行を作る」）——`pids === undefined` の報告を
+    // そのまま `autoFoldOnPlacementPressure` へ渡すと、呼び出し先の型
+    // （`pids: { current; max }`、optional ではない）を満たせなくなる。
+    expect(body.includes('resources?.pids === undefined')).toBe(true);
+    // **本体へ渡すのは runnerId と pids の組。** 引数を落とすと、渡した先の
+    // 契機の門（`isPidsUnderPressure`）が呼べない。
+    expect(body.includes('autoFoldOnPlacementPressure')).toBe(true);
+    expect(body.includes('report.runnerId')).toBe(true);
+    expect(body.includes('report.resources.pids')).toBe(true);
+  });
+
+  it('ManagerPool.autoFoldOnPlacementPressure を呼ぶのはこの1箇所だけ', () => {
+    const calls = code(source.split('\n')).filter((line) =>
+      line.includes('autoFoldOnPlacementPressure'),
+    );
+    const invocations = calls.filter((line) => line.includes('clone.managers'));
+
+    expect(invocations).toHaveLength(1);
+  });
+});
+
+/**
  * **「認証トークンが通る状態に戻った」の判定**（人間の決定 2026-09-07）。
  *
  * 人間の逐語: 「limitが来て止まってトークン回して復活したら復活させたことを
