@@ -139,7 +139,7 @@ export const BUDGET_HISTORY = [
   },
   {
     date: '2026-09-27',
-    bytes: 67144,
+    bytes: 67193,
     lines: 355,
     why:
       '#1192 の再編 PR2: AGENTS.md に残った節から (c) 実測記録・実例を ' +
