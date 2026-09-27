@@ -187,7 +187,14 @@ describe('apply() の即時の配布の失敗も、同じ帳面に積んで挑�
     // 挑み直しが予約されていれば、この時点で `setCredentials` がもう一度呼ばれ、
     // `calls` は2以上になっているはずである（直す前は無予約のまま1で止まっていた）。
     expect(calls).toBeGreaterThan(1);
-    expect(s.pool.pushHealthOf('runner-test')?.credentials?.status).toBe('ok');
+    // **`ok` に戻るのは待って確かめる。** 挑み直しの2回目は本物の `setCredentials`
+    // （鍵の器＝一時ディレクトリへの実ファイルの書き込み）を通るので、偽の時計を
+    // 進めても、その I/O が終わっているとは限らない（CI の混んだ器で `failed` の
+    // まま読んで落ちた。PR #1735 の run 36283716103）。`vi.waitFor` は偽の時計の
+    // 下でも本物の時計で待つ。待つ上限は既定の 1 秒で、`ok` に戻らなければ落ちる。
+    await vi.waitFor(() => {
+      expect(s.pool.pushHealthOf('runner-test')?.credentials?.status).toBe('ok');
+    });
 
     await s.pool.stop();
   });
