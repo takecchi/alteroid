@@ -52,3 +52,7 @@ MUTATION-IN-PROGRESS.json
 # misc
 *.log
 .DS_Store
+
+# 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（共有の /tmp へ書かないための置き場）。
+# コミットしない。
+.scratch/

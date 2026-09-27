@@ -16,3 +16,7 @@ docs/
 # prettier --check . が中身の形式次第で落ちる問題（Issue #332 の3）だけを塞ぐ。
 MUTATION-IN-PROGRESS.json
 .mutation-testing/
+
+# 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore と同じ）。
+# 中身の形式次第で prettier --check . が落ちないように外す。
+.scratch/
