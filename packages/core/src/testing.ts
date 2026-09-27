@@ -888,6 +888,14 @@ export function createMemoryStores(): Stores {
   };
 
   const archive: TranscriptArchive = {
+    /**
+     * **「直前を引く → 判定する → 書く」のあいだに `await` を1つも挟まない（#1722 / #1732）。**
+     * 同じセッションへの並行 `archive()` が同じ「直前」を見ないのは、JS が1本の
+     * スレッドでこの同期の区間を割り込ませずに走らせるからであって、排他の仕組みを
+     * 持っているからではない。fs は `withPathLock`、pg は `pg_advisory_xact_lock` で
+     * 同じことを守っている（PR #1735）。ここに `await` を足すと窓が開く。そのときは
+     * `archive-contract.ts` の並行の検査（#1732）が赤くなる。
+     */
     async archive(sessionId, transcript): Promise<ArchiveWrite> {
       const id = `${sessionId}-${nextId()}`;
       const previous = findPreviousArchiveForSession(sessionId);
