@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import * as droppedRecord from './dropped-record.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
@@ -37,6 +38,14 @@ import type { RunnerEvent } from './runner-protocol.js';
  * 近づいた形である**（PR 本文に同じ断り書きがある）。下の `経路A（stop()）`
  * と `(a)〜(c)` のテストは、この変更を受けて期待値を書き換えてある——元の
  * 期待値・コメントは各テストに history として残してある。
+ *
+ * **2026-09-28 追記: 残る1点（`noteUnclassifiedFailuresSummary` と
+ * `flushUsage` の前後）を固定する歯を足した。** Issue #1533 の閉じるコメントは
+ * この前後を「揃えない」と判定した（外から観測できる差が無いと判断したため）。
+ * `#1533 (3): noteUnclassifiedFailuresSummary と flushUsage…` の describe が、
+ * 「揃えない」という判断そのもの——**経路によって前後が逆のままであること**を
+ * characterization として固定する（Issue #1744 の負債1「ハブの順序」の下調べを
+ * 受けた作業）。
  *
  * ## 何を1本の時系列に積むか
  *
@@ -781,6 +790,93 @@ describe('#1533 (a)〜(e): 観測できる差があるかどうか', () => {
       return copy;
     };
     expect([...withoutClosed(typesA)].sort()).toEqual([...withoutClosed(typesB)].sort());
+  });
+});
+
+/**
+ * **#1533 (3): `noteUnclassifiedFailuresSummary` と `flushUsage` の前後は、
+ * 「揃えない」と決めた差である。この歯は、その判断どおり経路で前後が逆の
+ * ままであること自体を固定する。**
+ *
+ * Issue #1533 の閉じるコメント（2026-09-25）はこの前後を検討した末、
+ * 「揃えない。外から観測できる差は無いと判定した」と書いた——
+ * `noteUnclassifiedFailuresSummary`（`dropped-record.ts`）は `seen.size === 0`
+ * なら何もしない stderr への1行、`flushUsage` はデーモンへ `usage` イベントを
+ * 出す別の口で、互いの値を読まないため、前後を揃える理由が無いという判断
+ * だった。**この歯はどちらが正しいかを主張しない**——上の `(a)〜(e)` が
+ * 「直った/揃った」側を固定するのと対で、こちらは唯一「揃えない」と決めた側を
+ * 固定する（Issue #1744 の負債1「ハブの順序」の下調べが「守っていない順序」
+ * として指摘した箇所）。
+ *
+ * **測り方。** `flushUsage` は既存の timeline に `'emit:usage'` として乗るが、
+ * `noteUnclassifiedFailuresSummary` は stderr への同期の副作用しか持たず、
+ * emit を経由しないためこの timeline には現れない。`dropped-record.ts` の
+ * `noteUnclassifiedFailuresSummary` を実装を保ったまま薄くラップし
+ * （`apps/runner/src/events-finally-order.test.ts` が `startSseHeartbeat` に
+ * 対して使っているのと同じ手法——本物の関数を内部で呼ぶだけで、ロジックは
+ * 1行も変えない）、呼ばれた瞬間に `'call:noteUnclassifiedFailuresSummary'` を
+ * 同じ timeline へ積む。
+ *
+ * **本体（`runner.ts`）は1行も変えていない。**
+ */
+describe('#1533 (3): noteUnclassifiedFailuresSummary と flushUsage の前後は経路で逆順（揃えないという判断を固定する）', () => {
+  it('経路Aは flushUsage の後、経路Bは flushUsage の前——揃えないと決めた差が今も逆順のまま残っている', async () => {
+    const realSummary = droppedRecord.noteUnclassifiedFailuresSummary;
+    // **経路A・経路Bのどちらの timeline へ積むかは、実行中に差し替える。**
+    // スパイ自体はモジュール単位（`droppedRecord`）に1本しか立てられないため、
+    // 「いまどちらの `setup()` を測っているか」をこの変数で切り替える。
+    let sink: string[] | undefined;
+    const summarySpy = vi
+      .spyOn(droppedRecord, 'noteUnclassifiedFailuresSummary')
+      .mockImplementation((seen, managerId) => {
+        sink?.push('call:noteUnclassifiedFailuresSummary');
+        return realSummary(seen, managerId);
+      });
+
+    try {
+      // 経路A（stop()）
+      const a = setup();
+      await a.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+      const sessionA = await firstSession(a.sessions);
+      const pathA = join(dir, 'diff3-a.jsonl');
+      writeFileSync(pathA, 'x', 'utf8');
+      await primeState(sessionA, pathA);
+      sink = a.timeline;
+      await a.host.stop('mgr-1');
+
+      const usageIdxA = a.timeline.indexOf('emit:usage');
+      const summaryIdxA = a.timeline.indexOf('call:noteUnclassifiedFailuresSummary');
+      expect(usageIdxA).toBeGreaterThanOrEqual(0);
+      expect(summaryIdxA).toBeGreaterThanOrEqual(0);
+      // 経路A（#stopBody）: flushUsage → closeWorkerWaitWindow →
+      // noteUnclassifiedFailuresSummary の順（runner.ts の #stopBody）。
+      expect(summaryIdxA).toBeGreaterThan(usageIdxA);
+
+      // 経路B（#finish、ストリームが自然終了する代表経路）
+      const b = setup();
+      await b.host.start({ managerId: 'mgr-1', request: '調べて', cwd: dir });
+      const sessionB = await firstSession(b.sessions);
+      const pathB = join(dir, 'diff3-b.jsonl');
+      writeFileSync(pathB, 'x', 'utf8');
+      await primeState(sessionB, pathB);
+      sink = b.timeline;
+      sessionB.end();
+      await vi.waitFor(() => {
+        if (!b.events.some((e) => e.type === 'closed')) throw new Error('closed 待ち');
+      });
+
+      const usageIdxB = b.timeline.indexOf('emit:usage');
+      const summaryIdxB = b.timeline.indexOf('call:noteUnclassifiedFailuresSummary');
+      expect(usageIdxB).toBeGreaterThanOrEqual(0);
+      expect(summaryIdxB).toBeGreaterThanOrEqual(0);
+      // 経路B（#finishBody）: noteUnclassifiedFailuresSummary → flushUsage →
+      // closeWorkerWaitWindow の順（runner.ts の #finishBody）。
+      expect(summaryIdxB).toBeLessThan(usageIdxB);
+
+      // ⟹ 前後が経路で逆であること自体（Issue #1533 が「揃えない」と決めた差）。
+    } finally {
+      summarySpy.mockRestore();
+    }
   });
 });
 
