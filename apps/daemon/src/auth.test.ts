@@ -281,6 +281,123 @@ describe('認証が有効なとき', () => {
   });
 
   /**
+   * `POST /auth/logout`（issue #1757）。ログアウトでサーバ側のアクセス
+   * トークンも失効させる——`alteroid logout` が手元の資格を消すだけで
+   * サーバ側は生き続ける、という元の欠陥（issue 本文）に対する固定。
+   */
+  describe('POST /auth/logout', () => {
+    it('提示したトークンだけを失効させ、以後は同じトークンで401（応答に鍵は載せない）', async () => {
+      const claimed = await loginThrough(app);
+      const auth = { authorization: `Bearer ${claimed.token}` };
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect((await app.request('/memory', { headers: auth })).status).toBe(200);
+
+      const logout = await app.request('/auth/logout', {
+        ...post,
+        headers: { ...post.headers, ...auth },
+      });
+      expect(logout.status).toBe(200);
+      const body: unknown = await logout.json();
+      expect(body).toEqual({ ok: true });
+      // 応答にトークンの値や sha256 を載せない。
+      expect(JSON.stringify(body)).not.toContain(claimed.token);
+
+      // 同じトークンはもう通らない。
+      expect((await app.request('/memory', { headers: auth })).status).toBe(401);
+      // 二度目のログアウトも401（`authenticate` 自体がもう通さない——
+      // ミドルウェア層で弾かれ、ハンドラの内側の「二重ログアウト」分岐には
+      // そもそも到達しない）。
+      const again = await app.request('/auth/logout', {
+        ...post,
+        headers: { ...post.headers, ...auth },
+      });
+      expect(again.status).toBe(401);
+    });
+
+    it('同じアカウントの別のトークン（別端末からの2本目のログイン）は巻き込まない', async () => {
+      const first = await loginThrough(app);
+      await app.request(`/access/${first.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      // 同じ人がもう一度ログインする（同じ identity → 同じアカウント、別トークン）。
+      const second = await loginThrough(app);
+      expect(second.account.id).toBe(first.account.id);
+
+      const logout = await app.request('/auth/logout', {
+        ...post,
+        headers: { ...post.headers, authorization: `Bearer ${first.token}` },
+      });
+      expect(logout.status).toBe(200);
+
+      const firstAuth = { authorization: `Bearer ${first.token}` };
+      const secondAuth = { authorization: `Bearer ${second.token}` };
+      expect((await app.request('/memory', { headers: firstAuth })).status).toBe(401);
+      // ⟹ アカウント単位ではなくトークン単位——別のトークンはまだ通る。
+      expect((await app.request('/memory', { headers: secondAuth })).status).toBe(200);
+    });
+
+    it('operator の資格（状態ファイルの token）では断られる（4xx。失効させる対象を持たない）', async () => {
+      const response = await app.request('/auth/logout', {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(response.status).toBe(400);
+      // 何も失効させていないことを、実行環境の持ち主として引き続き通ることで確かめる。
+      expect((await app.request('/memory', { headers: OPERATOR })).status).toBe(200);
+    });
+
+    /**
+     * **許可の無いアカウントも、自分のトークンは失効させられる。** ここで 403 に
+     * すると、許可待ちのトークンは失効させられないまま残り、後から
+     * `access grant` した瞬間に、捨てたつもりのトークンが使える鍵として
+     * 生き返る（`app.ts` の `authenticate` の該当箇所）。
+     */
+    it('許可待ちのトークンも失効させられ、後から許可を与えても生き返らない', async () => {
+      const claimed = await loginThrough(app);
+      expect(claimed.granted).toBe(false);
+      const auth = { authorization: `Bearer ${claimed.token}` };
+      // 許可待ちのあいだ、ほかの口はいままでどおり 403。
+      expect((await app.request('/memory', { headers: auth })).status).toBe(403);
+
+      const logout = await app.request('/auth/logout', {
+        ...post,
+        headers: { ...post.headers, ...auth },
+      });
+      expect(logout.status).toBe(200);
+
+      const granted = await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(granted.status).toBe(200);
+      // 許可が付いた後も、ログアウトしたトークンは通らない。
+      expect((await app.request('/memory', { headers: auth })).status).toBe(401);
+    });
+
+    it('認証なしでは401（公開の口になっていない——/auth/me と同じ例外）', async () => {
+      const response = await app.request('/auth/logout', post);
+      expect(response.status).toBe(401);
+    });
+
+    it('ブラウザの単純リクエストでは通らない（content-type の門番）', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      const response = await app.request('/auth/logout', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${claimed.token}` },
+      });
+      expect(response.status).toBe(415);
+    });
+  });
+
+  /**
    * ⚠️ 2026-09-06、オーナー決定で反転した。以前はここで「許可の付与は実行環境の
    * 持ち主だけができる（許可された利用者でも 403）」を固定していた——`自分で
    * 自分を通せてしまうと、境界が成り立たない`という理由からで、`/access/:id/grant`

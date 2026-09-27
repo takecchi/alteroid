@@ -64,6 +64,19 @@ export type ClaimResult =
   | { status: 'error'; reason: 'invalid_request' | 'invalid_secret' | 'expired' | 'failed' };
 
 /**
+ * `logout` の結果（issue #1757）。
+ *
+ * - `ok` — いま提示されている、このトークンを失効させた（既に失効済みだった
+ *   場合を含む——`AuthStore.revokeAccessToken` の `revoked` / `already_revoked`
+ *   はどちらも呼び手からは「もう使えない」という同じ事実なので、ここでは
+ *   1つに畳む。畳んだ理由は `logout` の doc にある）
+ * - `not_found` — 提示された値に対応するアクセストークンの行が無い（通常は
+ *   起こらない——`authenticate` を通って `Principal` を得た直後に呼ぶ経路
+ *   でしか使わないため。防御的に残す）
+ */
+export type LogoutResult = { status: 'ok' } | { status: 'not_found' };
+
+/**
  * 許可の付与の結果（ストア側の `GrantOutcome` と同じもの）。
  * **再定義しない** — 分けた瞬間、片方だけ直して意味がずれる。
  */
@@ -75,6 +88,25 @@ export interface AuthService {
   claim(input: { requestId: string; claimSecret: string }): Promise<ClaimResult>;
   /** `Authorization: Bearer ...` の値からアカウントを引く。許可の判定はしない。 */
   authenticate(bearer: string): Promise<AuthAccount | null>;
+  /**
+   * **いま提示されている、この1本のアクセストークンだけを失効させる**
+   * （issue #1757、`alteroid logout` / Web のログアウトの実体）。
+   *
+   * `authenticate` と対になる——`authenticate` が bearer からアカウントを
+   * 引くのと同じ経路（sha256 で `AuthStore.findAccessTokenBySha256` を引く）を
+   * たどり、見つかった行の id だけを `AuthStore.revokeAccessToken` に渡す。
+   * **同じアカウントの他のトークンには触らない。** アカウントごと締め出す
+   * `revoke()` とは別の操作である（`revoke()` の doc）。
+   *
+   * **operator の資格（`ACCESS_TOKEN_PREFIX` を持たない状態ファイルの token）は
+   * ここへは来ない。** ここは `bearer` の形（`alt_` 接頭辞）を見ないので、
+   * operator の token を渡されても `findAccessTokenBySha256` が見つけられず
+   * `not_found` になるだけである——**operator を弾く判断は呼び手（HTTP 層）の
+   * 仕事**にしてある。理由は「どの資格で認証されたか」（`Principal`）を
+   * 知っているのが HTTP 層（`apps/daemon/src/app.ts` の `authenticate`
+   * ミドルウェア）だけで、`AuthService` はその型を知らない層だからである。
+   */
+  logout(bearer: string): Promise<LogoutResult>;
   grant(accountId: string, by: string): Promise<GrantResult>;
   revoke(accountId: string): Promise<AuthAccount | null>;
   /** 実行環境の持ち主として宣言する／取り消す（issue #1198）。operator トークンだけが呼ぶ。 */
@@ -384,6 +416,16 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
 
       await touch(store, record, at);
       return account;
+    },
+
+    async logout(bearer) {
+      const record = await store.findAccessTokenBySha256(sha256Hex(bearer));
+      if (record === null) return { status: 'not_found' };
+      // `revokeAccessToken` は `revoked` / `already_revoked` を分けて返すが、
+      // 呼び手（ログアウト）にとってはどちらも「もう使えない」という同じ
+      // 事実である——二重ログアウトを特別扱いしない（`LogoutResult` の doc）。
+      const outcome = await store.revokeAccessToken(record.id, now().toISOString());
+      return outcome.status === 'not_found' ? { status: 'not_found' } : { status: 'ok' };
     },
 
     async grant(accountId, by) {

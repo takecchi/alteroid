@@ -405,6 +405,50 @@ describe('run_in_background を判定器へ渡す', () => {
 });
 
 /**
+ * `gh pr merge --delete-branch` の配線（Issue #1764）。
+ *
+ * 判定ロジックの網羅性は `bash-wait-guard.test.ts` が持つ。ここで固定する
+ * のは、この形が `until-sleep` / `tail-f` / `gh-run-watch-background` と
+ * 同じ配線（`deny` の戻り値・`escalate` を立てない `note`・
+ * `形=gh-pr-merge-delete-branch`）に乗ることだけである
+ * （直上「Bash の待つだけのループを弾く」の2本の歯と同じ作法）。
+ */
+describe('gh pr merge --delete-branch の配線', () => {
+  it('deny し、note に 形=gh-pr-merge-delete-branch を書く', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh pr merge 123 --delete-branch' },
+    });
+
+    const asRecord = result as { continue?: boolean; hookSpecificOutput?: Record<string, unknown> };
+    expect(asRecord.continue).toBe(true);
+    const output = asRecord.hookSpecificOutput;
+    expect(output?.hookEventName).toBe('PreToolUse');
+    expect(output?.permissionDecision).toBe('deny');
+    expect(String(output?.permissionDecisionReason)).toContain('--delete-branch');
+
+    const notes = waitGuardNotes(events);
+    expect(notes.length).toBe(1);
+    expect(notes[0]?.text).toContain('形=gh-pr-merge-delete-branch');
+    expect(notes[0]?.escalate).toBeUndefined();
+    expect(() => runnerEventSchema.parse(notes[0])).not.toThrow();
+  });
+
+  it('--delete-branch の無い gh pr merge は通す', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh pr merge 123 --squash' },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(waitGuardNotes(events).length).toBe(0);
+  });
+});
+
+/**
  * **issue #1105 — `PreToolUse` が拒否より前に見た入力の先頭が、同じ
  * `tool_use_id` の走行中の拒否（`system/permission_denied`）へ `inputHead`
  * として乗る。**

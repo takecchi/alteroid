@@ -124,16 +124,22 @@ export async function daemonStopCommand(): Promise<void> {
 
 /** `alteroid daemon status`。切り出した理由は {@link initCommand} と同じ（#333）。 */
 export async function daemonStatusCommand(): Promise<void> {
-  const { running, info } = await daemon.status();
-  if (running && info) {
+  const { presence, info } = await daemon.status();
+  if (presence === 'present' && info) {
     stdout.write(`稼働中: pid ${info.pid}, http://127.0.0.1:${info.port}\n`);
     stdout.write(`  起動: ${info.startedAt}\n`);
+  } else if (presence === 'unknown') {
+    // 「居ない」と確定できたわけではない — 応答が無かっただけかもしれない。
+    // ここで「停止中」と言い切ると、生きているデーモンを見落とした誤報になる。
+    stdout.write(
+      '確認できません（応答が無いかタイムアウトしました。状態ファイルは残っています）\n',
+    );
   } else {
     stdout.write('停止中\n');
   }
   // 記憶がどこにあるかは**デーモンに聞く**。クラウド構成では PostgreSQL に
   // あるので、CLI 側のパスを表示すると人間が器を取り違える。
-  const storage = running ? await daemon.storageOf(info) : null;
+  const storage = presence === 'present' ? await daemon.storageOf(info) : null;
   stdout.write(`  記憶: ${storage ?? alteroidRoot()}\n`);
 }
 
@@ -360,9 +366,13 @@ program
 
 program
   .command('logout')
-  .description('この端末に保存したアクセストークンを消す')
-  .action(async () => {
-    await logoutCommand();
+  .description('サーバ側のアクセストークンを失効させ、この端末の資格も消す')
+  .option(
+    '--local-only',
+    'サーバ側を失効させず、手元の資格だけを消す（トークンは期限か access revoke まで有効）',
+  )
+  .action(async (options: { localOnly?: boolean }) => {
+    await logoutCommand(options);
   });
 
 program

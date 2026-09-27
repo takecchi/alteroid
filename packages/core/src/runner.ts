@@ -40,7 +40,7 @@ import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
-import { buildDenialInputHead, rawLineOf } from './denial-input-head.js';
+import { buildDenialInputHead, matchInputOf } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
   noteMissingRecordSource,
@@ -1572,9 +1572,11 @@ class RunnerSession {
   /**
    * クローンが `#onPermissionDenied` で出した「1回だけの許可」（issue #1105
    * P1）を、`(actor, tool, 入力の完全一致のダイジェスト)` をキーに控えておく
-   * 帳面。**生の入力は保持しない**——鍵に使うのは `digestOf(rawLineOf(...))`
+   * 帳面。**生の入力は保持しない**——鍵に使うのは `digestOf(matchInputOf(...))`
    * というダイジェストだけで、元の文字列は残らない（`#noteDenial` の
    * `toolUseId` の doc と同じ理由——復元できない値だけを鍵にする）。
+   * `matchInputOf` は入力**全体**（`command` だけでなく `run_in_background`
+   * 等ほかの欄も含む）をキー順に依らない形で畳んだもの（issue #1768）。
    *
    * - `#onPermissionDenied` が、クローンが allow と答えた時点で書く
    * - `#consumeOneShotAllow`（`#onPreToolUse` から呼ぶ）が、一致した時点で
@@ -4016,11 +4018,18 @@ class RunnerSession {
    *
    * ## 一致の鍵が作れない入力
    *
-   * `record.toolName` が無い、または `rawLineOf(record.toolInput)` が
-   * `undefined`（1行に畳めない）ときは、クローンへの確認そのものを上げず
+   * `record.toolName` が無い、または `matchInputOf(record.toolInput)` が
+   * `undefined`（畳めない）ときは、クローンへの確認そのものを上げず
    * `no-retry` で終える——一致させる鍵が無い以上、たとえクローンが allow と
    * 答えても撃ち直しを安全に特定できない（issue #1105 の「入力が1文字違えば
    * 返さない」という要求を、作れない鍵にまで緩めない）。
+   *
+   * **鍵は入力全体（`matchInputOf`）で作る。`command` の文字列だけではない**
+   * （issue #1768）。以前は `rawLineOf`（`command` 欄があればそれだけを返す、
+   * 表示用の関数）を鍵にも流用していたため、`command` が同じで
+   * `run_in_background` 等ほかの欄だけが違う撃ち直しにまで、この許可が
+   * 及んでいた。表示（`buildDenialInputHead`。下の `inputHead`）は今までどおり
+   * `rawLineOf` を土台にする——変えたのは鍵の材料だけである。
    *
    * ## フックの持ち時間切れ（issue #1105 本文の設計判断5）
    *
@@ -4064,8 +4073,8 @@ class RunnerSession {
       return { kind: 'no-retry' };
     }
 
-    const rawLine = rawLineOf(record.toolInput);
-    if (rawLine === undefined) {
+    const matchInput = matchInputOf(record.toolInput);
+    if (matchInput === undefined) {
       this.#emit({
         type: 'note',
         managerId: this.#id,
@@ -4080,7 +4089,7 @@ class RunnerSession {
     const permitKey = oneShotAllowKey(
       oneShotActorOf(this.#id, record),
       toolName,
-      digestOf(rawLine),
+      digestOf(matchInput),
     );
     const id = record.toolUseId ?? randomUUID();
 
@@ -4318,10 +4327,20 @@ class RunnerSession {
    *
    * ## 一致の鍵は表示用の伏せ字済みの値ではない
    *
-   * `rawLineOf(record.toolInput)` の完全一致のダイジェストを使う——
+   * `matchInputOf(record.toolInput)` の完全一致のダイジェストを使う——
    * `buildDenialInputHead`（伏せ字つき・160字に切る、表示専用）を鍵にすると、
    * 先頭160字が同じで残りが違う別の入力が誤って一致しうる（issue #1105 の
    * 要求「入力が1文字違えば返さない」）。
+   *
+   * **⚠️ 以前は `rawLineOf(record.toolInput)` を鍵にしていた（issue #1768 で
+   * 修正）。** `rawLineOf` は表示用の関数で、`command` という文字列欄を持つ
+   * 入力からは**その欄だけ**を返し、ほかの欄（`run_in_background` /
+   * `timeout` / `dangerouslyDisableSandbox` 等）を捨てる。`Bash` の入力は
+   * まさにこの形なので、`command` が同じでほかの欄だけが違う撃ち直し
+   * （前景/背景・サンドボックスの有無など、実行の意味論を変える差分）にまで
+   * 1回だけの許可が及んでいた——「入力が1文字違えば返さない」という上の要求
+   * を満たしていなかった、許しすぎる側の穴。`matchInputOf` は入力の**全欄**
+   * （キー順に依らない正規化）を鍵の材料にすることでこれを塞ぐ。
    *
    * ## 使い切る・期限切れは使わない
    *
@@ -4333,14 +4352,14 @@ class RunnerSession {
   #consumeOneShotAllow(record: AgentPreToolRecord): AgentPreToolDecision {
     const toolName = record.toolName;
     if (toolName === undefined) return { kind: 'continue' };
-    const rawLine = rawLineOf(record.toolInput);
-    if (rawLine === undefined) return { kind: 'continue' };
+    const matchInput = matchInputOf(record.toolInput);
+    if (matchInput === undefined) return { kind: 'continue' };
 
     const actor =
       record.agentId === undefined
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
-    const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(rawLine));
+    const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(matchInput));
     const grant = this.#oneShotAllows.get(key);
     if (grant === undefined) return { kind: 'continue' };
     // 使い切る。一致しても1回だけ。
@@ -5954,6 +5973,22 @@ function unreportedText(said: readonly string[], reason: string): string {
  * `openedWorkers`（開いた数だけ）という並びを保つ**——情報の具体さの順であって、
  * 3つを足し合わせて全部載せることはしない（本文が太るだけで、いちばん確かな
  * 証拠が埋もれる）。
+ *
+ * **`failure.via === 'assistant_error'` のときは、3行とも「本体も当たったかは
+ * 分からない」を「本体も当たっている」へ言い切る（Issue #1373 続きのコメント）。**
+ * この via は、本体自身の assistant メッセージ（`parentToolUseId === null`）に
+ * SDK の拒否の印が付いてターンが失敗した回にしか立たない——`#apply` の
+ * `case 'assistant_message'` が `parentToolUseId === null` のときだけ
+ * `this.#turnTally.setRejected(rejected)` を呼び、`case 'turn_ended'` の
+ * `const failure = event.failure ?? rejected` は `result` 側の印
+ * （`event.failure`）を `rejected` より優先するので、`via` が `'assistant_error'`
+ * のまま残るのは `result` 側に印が無かった回だけである。つまりこの回は
+ * 「作業者が当たったかは分からない」ではなく「本体自身が当たったことは
+ * 分かっている」——`result_subtype` / `result_is_error`（`result` 側にしか印が
+ * 無い回）は従来どおり「分からない」のまま変えない。`openedWorkers` の行だけは
+ * 意味が逆になる点に注意——「作業者が当たったかは分からないが、本体は
+ * 当たっている」という言い方にする（他の2行は「作業者が当たったことは確か」を
+ * 保ったまま「本体も当たっている」を足す）。
  */
 function failedReportText(
   said: readonly string[],
@@ -5965,17 +6000,31 @@ function failedReportText(
   failedWorkerNotificationsNamingLimit = 0,
 ): string {
   const body = failure.text.length > 0 ? failure.text : result;
+  // **本体自身の assistant メッセージに拒否の印が付いてターンが失敗した回だけ、
+  // 「本体も当たったかは分からない」を「本体も当たっている」へ言い切れる**
+  // （このすぐ上の doc の「`via === 'assistant_error'`」節）。
+  const bodyHit = failure.via === 'assistant_error';
   const workerNote =
     workerRejections.length > 0
-      ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`
+      ? bodyHit
+        ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かで、本体の発言にも拒否の印が付いていたので、本体も当たっている）`
+        : `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`
       : failedWorkerNotifications > 0
         ? `\n（このターンでは作業者 ${String(failedWorkerNotifications)} 体が失敗で終わった${
             failedWorkerNotificationsNamingLimit > 0
               ? `（うち ${String(failedWorkerNotificationsNamingLimit)} 体は枠(429)を名乗った）`
               : ''
-          }。本体も当たったかは SDK からは分からない）`
+          }。${
+            bodyHit
+              ? '本体の発言にも拒否の印が付いていたので、本体も当たっている'
+              : '本体も当たったかは SDK からは分からない'
+          }）`
         : openedWorkers > 0
-          ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
+          ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。${
+              bodyHit
+                ? '作業者が当たったかは SDK からは分からないが、本体の発言には拒否の印が付いていたので、本体は当たっている'
+                : 'どちらが当たったかは SDK からは分からない'
+            }）`
           : '';
   const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}${workerNote}`;
   const partial = said.join('\n\n').trim();

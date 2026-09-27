@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 function renderUngranted() {
-  stubFetch((url) => {
+  const stub = stubFetch((url) => {
     if (url.endsWith('/health')) return json(HEALTH);
     if (url.endsWith('/auth/me')) return json({ error: '使う許可が無い' }, 403);
     return undefined;
@@ -61,6 +61,7 @@ function renderUngranted() {
       <Login />
     </Providers>,
   );
+  return stub;
 }
 
 /**
@@ -135,6 +136,66 @@ describe('ログイン画面のどの分岐からでも接続先を変えられ�
     // 時点で切り替わる）。カードが二重に出ていないことを測るという役目は変えず、
     // 分岐に関係なく必ず在るボタンへ当て直す。
     expect(screen.getAllByRole('button', { name: '既定に戻す' })).toHaveLength(1);
+  });
+});
+
+/**
+ * issue #1757。`Ungranted` の「別のアカウントでログイン」も、ほかの画面と同じく
+ * `auth.logout()`（サーバ側の失効）を呼ぶ。許可待ちのトークンを鍵だけ捨てて
+ * 離れると、サーバ側では生きたまま残り、**後から `access grant` された瞬間に
+ * 使える鍵として生き返る**からである（`/auth/logout` は許可の無いアカウントも
+ * 通す。`app.ts` の `authenticate`）。
+ *
+ * **経緯**: この describe は最初、「サーバへは何も呼ばずに、その場で鍵を捨てる」
+ * を固定していた（許可の無いアカウントでは `/auth/logout` が 403 になる前提
+ * だった）。その前提をサーバ側で塞いだので、期待を反転した。
+ */
+describe('Ungranted の「別のアカウントでログイン」（issue #1757）', () => {
+  function renderUngrantedInRouter(logout: () => Response) {
+    // 鍵を捨てると `anonymous` へ落ちて `SignIn`（`useNavigate` を使う）が
+    // 描かれるので、`Router` の中で描く（`renderSignIn` と同じ理由）。
+    const stub = stubFetch((url) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      if (url.endsWith('/auth/me')) return json({ error: '使う許可が無い' }, 403);
+      if (url.endsWith('/auth/logout')) return logout();
+      return undefined;
+    });
+    const router = createMemoryRouter([{ path: '/login', Component: Login }], {
+      initialEntries: ['/login'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return stub;
+  }
+
+  it('サーバ側で失効させてから鍵を捨てる', async () => {
+    const stub = renderUngrantedInRouter(() => json({ ok: true }));
+    const button = await screen.findByRole('button', { name: '別のアカウントでログイン' });
+
+    button.click();
+
+    await screen.findByLabelText('接続先');
+    // /auth/logout を呼んでいる（鍵だけを捨てて離れていない）。
+    expect(stub.calls.some((url) => url.endsWith('/auth/logout'))).toBe(true);
+    expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
+  });
+
+  it('失効に失敗したら鍵を残してその旨を出し、鍵だけを捨てる操作で捨てられる', async () => {
+    renderUngrantedInRouter(() => json({ error: '落ちた' }, 500));
+    const button = await screen.findByRole('button', { name: '別のアカウントでログイン' });
+
+    button.click();
+
+    await screen.findByText(/サーバ側を失効させられなかった/);
+    expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).not.toBeNull();
+
+    screen.getByRole('button', { name: 'この画面から鍵だけを捨てる' }).click();
+
+    await screen.findByLabelText('接続先');
+    expect(localStorage.getItem(`alteroid.credential:${TEST_BASE_URL}`)).toBeNull();
   });
 });
 

@@ -536,6 +536,32 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     await s.pool.stop();
   });
 
+  it('本体自身の発言にも SDK の拒否の印が付いていれば（via: assistant_error）、状況証拠の行は「作業者が当たったかは分からないが、本体は当たっている」の意味になる（openedWorkers だけの経路。Issue #1373 続きのコメント）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskStarted('task-2');
+    // 本体自身（`parentToolUseId` を渡さない）の発言に拒否の印。その後の
+    // `result` は成功で返る（`assistant.error` の印を見ないと区別が付かない）。
+    await session.say('本体の枠の文言', { error: 'billing_error' });
+    await session.finish('');
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n本体の枠の文言\n（このターンでは作業者が 2 体開いていた。作業者が当たったかは SDK からは分からないが、本体の発言には拒否の印が付いていたので、本体は当たっている）',
+    );
+    expect(text).not.toContain('どちらが当たったかは SDK からは分からない');
+
+    await s.pool.stop();
+  });
+
   it('陽性対照A: 作業者を開いていないターンが失敗で終わっても、本文は従来と1文字も変わらない', async () => {
     const s = setup();
     await s.pool.start({ request: '調べて' });
@@ -626,6 +652,36 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     );
     // 作業者の拒否の文言は、マネージャーの報告本文へは混ざらない。
     expect(text).not.toContain('作業者の枠の文言');
+
+    await s.pool.stop();
+  });
+
+  it('本体自身の発言にも SDK の拒否の印が付いていれば（via: assistant_error）、「本体も当たったかは分からない」ではなく「本体も当たっている」と言い切る（Issue #1373 続きのコメント）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.say('作業者の枠の文言', { error: 'rate_limit', parentToolUseId: 'toolu-1' });
+    // 本体自身（`parentToolUseId` を渡さない）の発言にも拒否の印。**その後の
+    // `result` は成功で返る**（`session.finish('')` は `isError` を立てない）
+    // ——`assistant.error` の印を見ないと成功と区別が付かない実機の形
+    // （既存テスト「assistant.error が付いた本文は報告に混ぜず、失敗として
+    // 包んで上げる」と同じ作り）。
+    await session.say('本体の枠の文言', { error: 'billing_error' });
+    await session.finish('');
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n本体の枠の文言\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: rate_limit ×1。作業者が当たったことは確かで、本体の発言にも拒否の印が付いていたので、本体も当たっている）',
+    );
+    // 差し替え前の文言（「本体も当たったかは SDK からは分からない」）は残っていない。
+    expect(text).not.toContain('分からない');
 
     await s.pool.stop();
   });
@@ -735,6 +791,32 @@ describe("失敗で終わったターンの本文に、task_notification の sta
     );
     expect(text).not.toContain('体開いていた');
     expect(text).not.toContain('枠(429)');
+
+    await s.pool.stop();
+  });
+
+  it('本体自身の発言にも SDK の拒否の印が付いていれば（via: assistant_error）、「本体も当たったかは分からない」ではなく「本体も当たっている」と言い切る（failedWorkerNotifications の経路。Issue #1373 続きのコメント）', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('task-1');
+    await session.taskNotification('task-1', { status: 'failed', summary: '何か失敗した' });
+    // 本体自身（`parentToolUseId` を渡さない）の発言に拒否の印。その後の
+    // `result` は成功で返る（`assistant.error` の印を見ないと区別が付かない）。
+    await session.say('本体の枠の文言', { error: 'billing_error' });
+    await session.finish('');
+
+    const texts = await reportTexts(s.inbox, 1);
+    const text = texts[0] ?? '';
+    expect(text).toBe(
+      '（このターンは応答を返さずに終わった: billing_error / assistant_error）\n本体の枠の文言\n（このターンでは作業者 1 体が失敗で終わった。本体の発言にも拒否の印が付いていたので、本体も当たっている）',
+    );
+    expect(text).not.toContain('本体も当たったかは SDK からは分からない');
 
     await s.pool.stop();
   });

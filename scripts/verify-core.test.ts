@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { rm, writeFile, mkdir, chmod, symlink, unlink } from 'node:fs/promises';
+import { rm, writeFile, mkdir, chmod, symlink, unlink, readFile, readdir } from 'node:fs/promises';
 import { writeFileSync, readFileSync, statSync, copyFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ import {
   splitVerifyArgs,
   STEPS,
   testRan,
+  writeTreeFor,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 } from './verify-core.mjs';
 
@@ -657,6 +658,131 @@ describe('recordFor（Issue #1191）: 記録の組み立て', () => {
     const before = new Date().toISOString().slice(0, 10);
     const rec = recordFor('fp');
     expect(rec.day).toBe(before);
+  });
+
+  /** Issue #1763・#1192 の N7: `tree` は任意の第3引数。 */
+  it('tree を渡さなければ記録に tree が含まれない（既存の呼び出しを壊さない）', () => {
+    const now = new Date('2026-09-27T00:00:00.000Z');
+    const rec = recordFor('abc123', now);
+    expect(rec).toEqual({
+      fingerprint: 'abc123',
+      at: '2026-09-27T00:00:00.000Z',
+      day: '2026-09-27',
+    });
+    expect('tree' in rec).toBe(false);
+  });
+
+  it('tree を渡すと記録に tree として足される', () => {
+    const now = new Date('2026-09-27T00:00:00.000Z');
+    const rec = recordFor('abc123', now, 'deadbeef');
+    expect(rec).toEqual({
+      fingerprint: 'abc123',
+      at: '2026-09-27T00:00:00.000Z',
+      day: '2026-09-27',
+      tree: 'deadbeef',
+    });
+  });
+});
+
+/**
+ * `writeTreeFor`（Issue #1763・#1192 の N7）: 一時 index に `git add -A` して
+ * `git write-tree` し、そのときの作業ツリーの中身を tree の sha として得る。
+ *
+ * **`pnpm verify` が成功した瞬間の「push する commit の中身が検証済みか」を
+ * 後から確かめられるようにする土台。** `check-verified-head.test.ts` は
+ * この関数が返した tree と `<rev>^{tree}` を比べる側（`compareVerifiedHead`）
+ * を確かめるので、ここでは `writeTreeFor` 自身——**本物の index・作業ツリーを
+ * 動かさないこと**と、**見る範囲が `fingerprint` と揃っていること**——を測る。
+ */
+describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
+  async function makeRepo(): Promise<string> {
+    const dir = await makeTempDir('write-tree-for-');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await writeFile(join(dir, 'a.txt'), 'one\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    return dir;
+  }
+
+  it('追跡ファイルだけの状態では、commit した tree と一致する', async () => {
+    const dir = await makeRepo();
+    const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+      cwd: dir,
+      encoding: 'utf8',
+    }).trim();
+
+    const tree = writeTreeFor(dir);
+    expect(tree).toBe(headTree);
+  });
+
+  it('未追跡のファイルを拾う（fingerprint が漏らさないのと同じ範囲）', async () => {
+    const dir = await makeRepo();
+    const before = writeTreeFor(dir);
+
+    await writeFile(join(dir, 'untracked.txt'), 'new\n');
+    const after = writeTreeFor(dir);
+
+    expect(after).not.toBe(before);
+  });
+
+  it('.gitignore されたファイルは拾わない（fingerprint の --exclude-standard と同じ範囲）', async () => {
+    const dir = await makeRepo();
+    await writeFile(join(dir, '.gitignore'), 'ignored/\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'add gitignore'], { cwd: dir });
+
+    const before = writeTreeFor(dir);
+    await mkdir(join(dir, 'ignored'), { recursive: true });
+    await writeFile(join(dir, 'ignored', 'x'), 'noise\n');
+    const after = writeTreeFor(dir);
+
+    expect(after).toBe(before);
+  });
+
+  it('本物の index を動かさない（git diff --cached が空のまま）', async () => {
+    const dir = await makeRepo();
+    await writeFile(join(dir, 'untracked.txt'), 'new\n');
+
+    writeTreeFor(dir);
+
+    const staged = execFileSync('git', ['diff', '--cached', '--name-only'], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    expect(staged.trim()).toBe('');
+    // 未追跡のままであることも確認する（index へ紛れ込んでいれば `??` は消える）。
+    const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+    expect(status).toContain('?? untracked.txt');
+  });
+
+  it('本物の作業ツリーを動かさない（呼んだ前後でファイルの中身が変わらない）', async () => {
+    const dir = await makeRepo();
+    const before = await readFile(join(dir, 'a.txt'), 'utf8');
+
+    writeTreeFor(dir);
+
+    const after = await readFile(join(dir, 'a.txt'), 'utf8');
+    expect(after).toBe(before);
+  });
+
+  it('呼ぶたびに一時 index ファイルを片付ける（残り続けない）', async () => {
+    const dir = await makeRepo();
+    writeTreeFor(dir);
+    writeTreeFor(dir);
+
+    const gitDirEntries = await readdir(join(dir, '.git'));
+    const leftoverTempIndexes = gitDirEntries.filter((name) =>
+      name.startsWith('alteroid-verify-index.'),
+    );
+    expect(leftoverTempIndexes).toEqual([]);
+  });
+
+  it('git repo でなければ null（判定できないを都合よく倒さない）', async () => {
+    const dir = await makeTempDir('write-tree-for-not-a-repo-');
+    expect(writeTreeFor(dir)).toBeNull();
   });
 });
 

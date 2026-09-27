@@ -551,6 +551,19 @@ export function countManagerSituation(managers: readonly ManagerSummary[]): Mana
  * 上げの材料だけで、それが合図かどうかの判定はクローンに委ねる——0 本という
  * 値そのものが、閾値なしで既に合図である（{@link countRecentManagerStarts}
  * の doc）。
+ *
+ * ## なぜ「最後に起こした経過」を足したか（#1103 コメント 2026-09-27）
+ *
+ * 「0 本」は、最後の開始が3時間5分前でも30時間前でも同じ字面になる——本文の
+ * 実測（4時間36分）を「どれだけ続いているか」として読む材料が、案1だけでは
+ * 節に無かった。窓の断面の問題が、窓の端の問題に置き換わっただけだった。
+ * ⟹ {@link latestManagerStartAt} の最大値からの経過を、同じ行へ括弧で添え
+ * ている。**これも閾値・⚠ を持たない**——上の「閾値ではなく本数だけを出す」
+ * と同じ理由で、経過そのものを見せるところまでで止め、「長すぎる」の判定は
+ * 引き続きクローンに委ねる。2026-09-23 の判断（案2・案3は案1の効き目を
+ * 見てから決める）にも触れていない——{@link countRecentManagerStarts} の
+ * 数え方も窓の長さも1文字も変えていない、案1の行に添える材料を1つ増やし
+ * ただけである。
  */
 export const RECENT_MANAGER_START_WINDOW_MS = 3 * 60 * 60 * 1000;
 
@@ -605,6 +618,74 @@ export function countRecentManagerStarts(managers: readonly ManagerSummary[], at
     if (startedAtMs >= from && startedAtMs <= at) count += 1;
   }
   return count;
+}
+
+/**
+ * `ManagerSummary.startedAt` の最大値（＝最後に `manager_start` した時刻。
+ * epoch ms）を返す（#1103 コメント 2026-09-27）。
+ *
+ * ## 窓を掛けない——{@link countRecentManagerStarts} とは見る集合が違う
+ *
+ * `countRecentManagerStarts` は `[at - 窓, at]` の中だけを数えるが、ここは
+ * **全委譲**（窓の外も含む）を見る。#1103 の残った穴は「0 本」が最後の開始
+ * 3時間5分前でも30時間前でも同じ字面になることだったので、窓の外にこそ
+ * この値が要る——窓を掛けたら、いちばん見たい値（直近の開始が窓の外に
+ * あること）が消えてしまう。
+ *
+ * ## 壊れた `startedAt` は無視する
+ *
+ * {@link countRecentManagerStarts} の doc「壊れた `startedAt` は数えない」
+ * と同じ理由・同じ倣いで、`Date.parse` が `NaN` を返す委譲は最大値の候補
+ * から外す。**1本も居ない・全部が `NaN` なら `undefined`**——「経過を言え
+ * ない」を、呼び出し側が `0` や `-Infinity` のような偽の値と取り違えない
+ * 形で返す。
+ */
+export function latestManagerStartAt(managers: readonly ManagerSummary[]): number | undefined {
+  let latest: number | undefined;
+  for (const manager of managers) {
+    const startedAtMs = Date.parse(manager.startedAt);
+    if (Number.isNaN(startedAtMs)) continue;
+    if (latest === undefined || startedAtMs > latest) latest = startedAtMs;
+  }
+  return latest;
+}
+
+/**
+ * 「最後に起こしたのは…前」の経過を字面にする専用の小さな関数（#1103
+ * コメント 2026-09-27）。`elapsedMs` は `at - latestManagerStartAt(managers)`。
+ *
+ * ## 既存の3つの実装とは意図して共有しない
+ *
+ * `clone.ts` の `formatElapsed`・`manager-activity.ts` の
+ * `formatMinutesAgo`・`tools.ts` の `describeZombieAge` は、どの2つも共通化
+ * されておらず、どちらの doc も理由を「新しい依存をそのファイルへ増やさ
+ * ない」「丸め方の粒度が違う」と書いている（`manager-activity.ts` の
+ * `formatMinutesAgo` の doc）。ここでも同じ倣いに揃えて複製する——**粒度は
+ * `formatMinutesAgo` / `describeZombieAge` と同じ**（分未満・分・時間+分・
+ * 日+時間）にしてある。#1103 の実測そのもの（「4時間36分前」）と、issue の
+ * 期待する例文の字面が、ちょうどこの粒度だったため。
+ *
+ * ## 未来向き（時計のずれで `startedAt` が `at` より後）の扱い
+ *
+ * **負の経過は「1分未満前」へ丸める。** 特別な分岐は足していない——
+ * `Math.floor(elapsedMs / 60000)` は負の値もそのまま `minutes < 1` の枝へ
+ * 落ちるので、自然にそこへ吸収される。`describeReportDrift`
+ * （`manager-activity.ts`）は同じ状況（`elapsedMs < 0`）を「経過を言わない」
+ * （時刻抜きの散文だけを残す）へ倒しているが、**ここにはその散文が無い**
+ * ——この節の中身は経過そのものなので、丸ごと省くと #1103 が欲しかった
+ * 「最後はいつだったか」の合図そのものが消える。**「たった今」にいちばん
+ * 近い、安全側の言い方**（丸めて分未満）へ倒す判断である。
+ */
+function formatElapsedSinceLastStart(elapsedMs: number): string {
+  const minutes = Math.floor(elapsedMs / 60000);
+  if (minutes < 1) return '1分未満前';
+  if (minutes < 60) return `${minutes}分前`;
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  if (hours < 24) return `${hours}時間${remainderMinutes}分前`;
+  const days = Math.floor(hours / 24);
+  const remainderHours = hours % 24;
+  return `${days}日${remainderHours}時間前`;
 }
 
 /**
@@ -1056,6 +1137,15 @@ export function describeSituation(input: {
   // doc「`at` は呼び出し側の観測時刻をそのまま使う」。ここで独自に
   // `Date.now()` を引き直すと、節が名乗る時刻とこの本数の観測時刻がずれる。
   const recentStarts = countRecentManagerStarts(input.managers, at);
+  // **#1103 コメント 2026-09-27。** `latestManagerStartAt` も窓を掛けない全
+  // 委譲を見る——`at` は同じ観測時刻をそのまま使う（上と同じ理由）。1本も
+  // 居ない・全部 `startedAt` が壊れているときは `undefined` になり、その
+  // ときは括弧を出さない（出せる値が無い。`latestManagerStartAt` の doc）。
+  const latestStart = latestManagerStartAt(input.managers);
+  const lastStartClause =
+    latestStart === undefined
+      ? ''
+      : `（最後に起こしたのは ${formatElapsedSinceLastStart(at - latestStart)}）`;
   return block([
     `${SITUATION_HEAD}（${readAtLabel(at)} に数えた材料だけ。ここから何をするかは決めない）。`,
     // **`lost` の区分だけ 0 のとき出さない**（上の doc の2つの理由）。残りの5つは
@@ -1097,7 +1187,12 @@ export function describeSituation(input: {
       // ——{@link RECENT_MANAGER_START_WINDOW_MS} の doc「閾値ではなく本数
       // だけを出す」。だから他の横断する軸（`lastTurnFailed` 等）と違い、
       // ここは三項演算子で 0 を隠さない。
-      `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本。`,
+      //
+      // **括弧（最後に起こした経過）は本数の直後、`。` の直前に置く**（#1103
+      // コメント 2026-09-27）。`lastStartClause` は値が無ければ空文字なので、
+      // 出す/出さないの分岐はここには無い——`latestManagerStartAt` が
+      // `undefined` を返した時点で、この式は既に何も足さない。
+      `直近${RECENT_MANAGER_START_WINDOW_HOURS}時間に新しく起こした委譲: ${recentStarts} 本${lastStartClause}。`,
     // **本数の直後に置く（#688）。** この節は `distill` 以外の全ターンの入口に
     // 載る（`clone.ts` の `#situationNoticeFor`）ので、**いちばん確実に読まれる
     // 場所**である。数と、そこから何を確かめるかを離すと、数だけが読まれる。

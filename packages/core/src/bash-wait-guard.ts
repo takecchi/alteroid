@@ -72,10 +72,27 @@
  * this"` の `do` は直前が空白なので、この検出器はまだコマンド位置の `do`
  * と区別できない）。完全な shell 構文解析器ではないことの直接の帰結であり、
  * この PR でも直していない。
+ *
+ * ## このファイルが「待ちの形」以外も持つようになった経緯（#1764）
+ *
+ * ファイル名・doc の冒頭は今も #894（無限待ちの形）のままだが、#1764 で
+ * `gh pr merge --delete-branch`（取り返しの付かない操作の形）をここへ足した。
+ * 待ちの形とは害の種類が違う —— こちらは「終わらないこと」ではなく
+ * 「終わった後に戻せないこと」を弾く。別ファイルに分けなかったのは、
+ * `PreToolUse` から `Bash` の `command` を検査して deny する配線
+ * （`runner.ts` の `#onPreToolUse`）がすでにここ1本しかなく、判定器を
+ * 分けても呼び出し側の配線は増えないため —— 増えるのはこのファイルの
+ * 行数だけだった。ファイル名は変えない（`inspectBashCommand` という
+ * 入口の名前も変えていないので、呼び出し側の変更は0行で済んでいる）。
  */
 
 /** 弾いた形の種別。テストと呼び出し側の note 文言がここへ分岐する。 */
-export type WaitGuardForm = 'until-sleep' | 'while-sleep' | 'tail-f' | 'gh-run-watch-background';
+export type WaitGuardForm =
+  | 'until-sleep'
+  | 'while-sleep'
+  | 'tail-f'
+  | 'gh-run-watch-background'
+  | 'gh-pr-merge-delete-branch';
 
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
@@ -204,6 +221,109 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
 }
 
 /**
+ * `gh pr merge --delete-branch` / `-d`（#1764）。
+ *
+ * ## なぜ「無限待ち」の3形・`gh-run-watch-background` と害の種類が違うか
+ *
+ * 上のどの形も「コマンドが終わらない」ことを弾いている。こちらは一瞬で
+ * 終わる —— 害は終わらないことではなく、**終わった後に取り返しが付かない**
+ * ことである。積んだ PR（この枝を base にしている PR）が在ると、マージと
+ * 同時にその PR も黙って閉じ、閉じたあとは `reopen` も `--base` の付け替え
+ * も拒まれる（実測 2026-09-15T07:3xZ、PR #1008 と #1010。
+ * `.claude/skills/tool-quirks/SKILL.md` に生出力が在る）。この repo は
+ * `delete_branch_on_merge=true` なので、**付けなくても枝は消える**
+ * —— 正当な用途がほぼ無いぶん、逃げ道は「外して打つ」の1つで済む。
+ *
+ * ## 弾くのは「コマンドの位置に在る `gh pr merge`」だけ（#1764 の指定）
+ *
+ * この文字列は PR 本文・Issue 本文・説明の中に頻繁に書かれる
+ * （`gh-run-watch-background` と同じ理由——2026-09-17 の注意）。だから
+ * ヒアドキュメントの本文・引用符の中・別のコマンドの引数に現れる形は
+ * **通す**。行頭、または `;` `&&` `||` `|` の直後に在る `gh pr merge` の
+ * 呼び出しだけを見る —— `do`/`done` の lookbehind
+ * （`(?<=^|[\s;&|])`）と同じ考え方で、直前の1文字が
+ * 開始・`;`・`&`・`|`・改行のどれかであることだけを要求する。引用符の中の
+ * `gh` は直前の文字が引用符そのもの（空白でも演算子でもない）なので、この
+ * 条件だけで自然に落ちる —— `do`/`done` の弱さ（引用符の中の空白を演算子と
+ * 区別できない）とは違い、`gh pr merge` の直前に来る文字は演算子か行頭しか
+ * 認めていないので、`echo "gh pr merge …"` のような形は素通しできる。
+ *
+ * ## ヒアドキュメントだけは別扱いが要る（`stripHeredocs`）
+ *
+ * 改行はコマンド位置の印として扱っているので、ヒアドキュメントの本文の
+ * 行頭もそのままでは「コマンド位置」に見えてしまう（本文の中の改行は
+ * シェルにとって単なる文字であって、実際に新しいコマンドを始めてはい
+ * ない）。引用符と違い、ヒアドキュメントは開始トークン（`<<'EOF'` 等）と
+ * 終端トークン（行頭の `EOF`）を機械的に見分けられるので、検査の前に本文
+ * を空白へ潰しておく。
+ *
+ * ## `timeout N ...` に包まれていても見る（この判定器だけの上乗せ）
+ *
+ * `isTimeoutWrapped` はモジュール全体の約束として「先頭が `timeout` なら
+ * 中身がどんな形でも有界」と読むが、それは**待ちの形**についての約束で
+ * あって、`gh pr merge --delete-branch` の危険（終わらないことではなく
+ * 戻せないこと）には無関係である。`timeout 30 gh pr merge 123
+ * --delete-branch` を「有界だから安全」と読むと、この検出器がまるごと
+ * 迂回されてしまう。だから `stripLeadingTimeout` で先頭の
+ * `[ENV=val...] timeout <数字><単位?>` だけを取り除いてから見る —— これで
+ * 剥がした残りの先頭が `^`（コマンド位置の一員）に当たる。**`timeout` 自身
+ * のオプション（`-k` / `--signal` 等）までは解いていない** —— 見ているのは
+ * 「`timeout` の直後が数字の継続時間である」という最も普通の書き方だけで
+ * ある（`isTimeoutWrapped` 自身が継続時間の妥当性すら見ていないのと同じ
+ * 単純さで揃えた）。
+ *
+ * ## ⚠️ この検出器が弾けないと分かっている形
+ *
+ * - **`bash -c '…'` の中。** 構文（コマンド位置）しか見ていないので、
+ *   単一引用符の中の `gh pr merge --delete-branch` は「引用符の中」という
+ *   条件だけで素通しされる。これは他の文字列だけを読む判定器と同じ限界
+ *   であり、この PR でも直していない（歯は
+ *   `bash-wait-guard.test.ts` の末尾に明記する）。
+ * - **`--delete-branch=false` のような明示的な無効化。** `\b` は文字種の
+ *   境界でしか見ないので、`--delete-branch` の直後が `=false` でも弾く
+ *   （確かめていない・稀な形と判断して対応していない）。
+ * - **`-sd` のような短縮オプションの束ね書き。** `-d` は前後が空白/演算子/
+ *   端であることを要求するので、他の短縮フラグと連結した形（`gh` の
+ *   フラグパーサが許すかどうかも含め未確認）は弾けない。
+ * - **`timeout` に `-k` 等のオプションが付いた形**
+ *   （`timeout -k 5 30 gh pr merge 123 --delete-branch`）。直上の doc の
+ *   とおり、`timeout` 自身のオプション文法までは解いていない。
+ */
+const HEREDOC_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s;&|]|$)/g;
+
+/**
+ * ヒアドキュメントの本体（開始トークン〜終端トークンまで全体）を、改行を
+ * 残したまま空白へ潰す。オフセットを使う後続処理は無いので長さを保つ必要は
+ * 無いが、この関数の入力を別の検査へ流用しても混乱しないよう保守的にそう
+ * している。
+ *
+ * ⚠️ **完全な shell 構文解析ではない。** ネストしたヒアドキュメント・
+ * `<<~`（インデント除去）等は個別に見ていない（`<<-` の `-` 自体は
+ * トークンとして読むので、その形自体は拾える）。
+ */
+function stripHeredocs(command: string): string {
+  return command.replace(HEREDOC_RE, (matched) => matched.replace(/[^\n]/g, ' '));
+}
+
+const GH_PR_MERGE_DELETE_BRANCH_RE =
+  /(?<=^|[;&|\n])[ \t]*gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d(?=[\s;&|]|$))/;
+
+/**
+ * 先頭の `[ENV=val ...] timeout <数字><単位?>` を取り除く。剥がした残りの
+ * 先頭が「コマンド位置」の `^` に当たるようにするためだけの前処理
+ * （doc「`timeout N ...` に包まれていても見る」）。
+ */
+const TIMEOUT_PREFIX_RE = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\s+\d+[a-zA-Z]*\s+/;
+
+function stripLeadingTimeout(command: string): string {
+  return command.replace(TIMEOUT_PREFIX_RE, '');
+}
+
+function hasGhPrMergeDeleteBranch(command: string): boolean {
+  return GH_PR_MERGE_DELETE_BRANCH_RE.test(stripLeadingTimeout(stripHeredocs(command)));
+}
+
+/**
  * `Bash` ツールの呼び出しのうち、コマンド文字列に現れない事実。
  *
  * **省略時は「背景ではない」に倒す**（fail-open）。呼び出し側が形の崩れた
@@ -226,7 +346,33 @@ export function inspectBashCommand(
   const trimmed = command.trim();
   if (trimmed.length === 0) return { blocked: false };
 
-  // 全体が timeout に包まれていれば、中身がどんな形でも有界だと読める。
+  // `gh pr merge --delete-branch` は「無限待ち」とは害の種類が違う
+  // （終わらないことではなく、終わった後に戻せないこと）ので、
+  // `timeout` ラップの早期 return より先に見る。`timeout 30 gh pr merge
+  // 123 --delete-branch` は待ちを有界にするだけで、PR を巻き添えで
+  // 閉じる危険は1文字も消えない —— ここで先に見ないと、下の
+  // `isTimeoutWrapped` がこの形を「有界だから安全」と誤読して素通しする。
+  if (hasGhPrMergeDeleteBranch(trimmed)) {
+    return {
+      blocked: true,
+      form: 'gh-pr-merge-delete-branch',
+      reason:
+        '`gh pr merge` に `--delete-branch`（または `-d`）が付いている。' +
+        '**取り返しが付かない** —— この枝を base にしている PR が在ると、' +
+        'マージと同時にその PR も黙って閉じ、閉じたあとは `reopen` も `--base` の' +
+        '付け替えも拒まれる' +
+        '（実測 2026-09-15T07:3xZ、PR #1008 と #1010。' +
+        '`.claude/skills/tool-quirks/SKILL.md` に生出力が在る）。' +
+        '代わりに次を使うこと: `--delete-branch` を外して打つ' +
+        '（この repo は `delete_branch_on_merge` でマージ後に枝を消すので、' +
+        '付けなくても枝は消える。積んだ PR が在るなら、先に依存側の base を' +
+        '`gh pr edit <N> --base main` で付け替えてから base 側をマージすること）。',
+    };
+  }
+
+  // 全体が timeout に包まれていれば、中身がどんな形でも有界だと読める
+  // （待ちの形についてのみ。上の delete-branch はこの早期 return より先に
+  // 見ているので、ここでは影響されない）。
   if (isTimeoutWrapped(trimmed)) return { blocked: false };
 
   if (isBackgroundedGhRunWatch(trimmed, invocation.backgrounded === true)) {

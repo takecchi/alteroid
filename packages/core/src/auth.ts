@@ -240,6 +240,32 @@ export interface AuthStore {
    * と同じ理由。issue #1676 / #1688）。
    */
   listAccessTokens(accountId: string): Promise<AccessTokenRecord[]>;
+  /**
+   * この1本のアクセストークンだけを失効させる（1操作。issue #1757）。
+   *
+   * **`revokedAt` が空のときだけ立てる。先に立っていた時刻は動かさない**
+   * （冪等——同じトークンに二度失効を掛けても、最初に失効した時刻のまま）。
+   * `AuthStore` の他の1操作（`grantAccess` / `setAccountOwner`）と同じ理由——
+   * 「読む→検査→書く」に割ると、同じトークンへの同時ログアウトで、後から来た
+   * 側が `revokedAt` を上書きしうる（このトークンは1件しか無いので「上書き」の
+   * 実害は薄いが、規約は他の1操作と揃えておく——3実装が同じ形を守るほうが、
+   * 後から読む者にとって驚きが無い）。
+   *
+   * **アカウントごとの `revoke()`（`access revoke`。許可そのものを落とす）とは
+   * 別の操作である。** こちらは指定した **id の1本だけ** を失効させ、同じ
+   * アカウントの他のトークンには触らない——ログアウトは「いま提示している
+   * 資格」だけを失効させる操作であって、アカウント全体の締め出しではない。
+   *
+   * 戻り値は3つを区別する（`grantAccess` の `GrantOutcome` と同じ流儀）:
+   * - `not_found` — その id のトークンが無い
+   * - `already_revoked` — 既に失効済み（今回は何も書いていない。`token` は
+   *   失効済みの現在の行）
+   * - `revoked` — いま失効させた（`token` は失効後の行）
+   *
+   * ドライバはそれぞれの器で原子性を出す — fs は1回の書き込み、pg は
+   * 条件付き UPDATE（`revoked_at is null`）で強制する。
+   */
+  revokeAccessToken(id: string, at: string): Promise<RevokeAccessTokenOutcome>;
 
   putLoginRequest(request: LoginRequest): Promise<void>;
   getLoginRequest(id: string): Promise<LoginRequest | null>;
@@ -324,6 +350,12 @@ export interface AuthStore {
 
 /** 許可の付与の結果。 */
 export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { status: 'not_found' };
+
+/** `revokeAccessToken` の結果（issue #1757）。3つを区別する——`AuthStore.revokeAccessToken` の doc。 */
+export type RevokeAccessTokenOutcome =
+  | { status: 'not_found' }
+  | { status: 'already_revoked'; token: AccessTokenRecord }
+  | { status: 'revoked'; token: AccessTokenRecord };
 
 /** `setAccountOwner` の結果。 */
 export type OwnerOutcome =

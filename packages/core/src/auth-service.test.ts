@@ -670,6 +670,66 @@ describe('createAuthService', () => {
     expect(await service.authenticate('alt_でたらめ')).toBeNull();
     expect(await service.authenticate('接頭辞すら違う')).toBeNull();
   });
+
+  /**
+   * `logout`（issue #1757）。**アカウント全体を締め出す `revoke()` とは別**
+   * ——いま提示している1本だけを失効させる。
+   */
+  describe('logout', () => {
+    it('提示したトークンだけを失効させ、以後は authenticate が通らない', async () => {
+      const { requestId, claimSecret } = await login('code-alice');
+      const claimed = await service.claim({ requestId, claimSecret });
+      if (claimed.status !== 'ready') throw new Error('ログインできていない');
+
+      const result = await service.logout(claimed.token);
+      expect(result).toEqual({ status: 'ok' });
+      expect(await service.authenticate(claimed.token)).toBeNull();
+    });
+
+    it('同じアカウントの別のトークンは巻き込まない（アカウント単位ではなくトークン単位）', async () => {
+      const { requestId, claimSecret } = await login('code-alice');
+      const claimed = await service.claim({ requestId, claimSecret });
+      if (claimed.status !== 'ready') throw new Error('ログインできていない');
+
+      // 同じアカウントで、別の端末からもう1本ログインする（許可は複数の
+      // ログイン手段・端末から入れる前提——`.claude/skills/auth-and-access/
+      // SKILL.md`）。
+      const second = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const state = decodeState(new URL(second.authorizationUrl).searchParams.get('state') ?? '');
+      await service.completeLogin({
+        state: `${state?.requestId}.${state?.nonce}`,
+        code: 'code-alice',
+      });
+      const secondClaimed = await service.claim({
+        requestId: second.requestId,
+        claimSecret: second.claimSecret,
+      });
+      if (secondClaimed.status !== 'ready') throw new Error('2本目のログインができていない');
+      expect(secondClaimed.account.id).toBe(claimed.account.id);
+
+      await service.logout(claimed.token);
+
+      expect(await service.authenticate(claimed.token)).toBeNull();
+      // ⟹ 別のトークンはまだ通る。
+      expect(await service.authenticate(secondClaimed.token)).not.toBeNull();
+    });
+
+    it('もう一度ログアウトしても ok のまま（冪等——二度目の呼び出しで落ちない）', async () => {
+      const { requestId, claimSecret } = await login('code-alice');
+      const claimed = await service.claim({ requestId, claimSecret });
+      if (claimed.status !== 'ready') throw new Error('ログインできていない');
+
+      await service.logout(claimed.token);
+      expect(await service.logout(claimed.token)).toEqual({ status: 'ok' });
+    });
+
+    it('でたらめなトークンでは not_found', async () => {
+      expect(await service.logout('alt_でたらめ')).toEqual({ status: 'not_found' });
+    });
+  });
 });
 
 /**

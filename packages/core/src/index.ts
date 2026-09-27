@@ -205,6 +205,7 @@ export {
   type LoginRequest,
   type LoginRequestStatus,
   type OwnerOutcome,
+  type RevokeAccessTokenOutcome,
 } from './auth.js';
 export {
   GOOGLE_PROVIDER_ID,
@@ -227,6 +228,7 @@ export {
   type CompleteLoginError,
   type CompleteLoginResult,
   type GrantResult,
+  type LogoutResult,
   type StartLoginInput,
   type StartLoginResult,
 } from './auth-service.js';

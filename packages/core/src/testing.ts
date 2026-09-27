@@ -1169,6 +1169,16 @@ export function createMemoryStores(): Stores {
         .filter((token) => token.accountId === accountId)
         .sort(compareAccessTokenOrder);
     },
+    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1757）。
+    async revokeAccessToken(id, at) {
+      const token = accessTokens.get(id);
+      if (token === undefined) return { status: 'not_found' };
+      if (token.revokedAt !== null) return { status: 'already_revoked', token };
+      // 本物（fs / pg）と同じく `accessTokenRecordSchema` を通す（issue #1715 と同じ規約）。
+      const revoked = accessTokenRecordSchema.parse({ ...token, revokedAt: at });
+      accessTokens.set(id, revoked);
+      return { status: 'revoked', token: revoked };
+    },
     async putLoginRequest(request) {
       // 本物（fs / pg）と同じく `loginRequestSchema` を通す（issue #1715）。
       const parsed = loginRequestSchema.parse(request);

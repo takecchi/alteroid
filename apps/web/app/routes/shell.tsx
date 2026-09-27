@@ -348,8 +348,16 @@ function LiveIndicator({ status }: { status: LiveStatus }) {
 function HealthFooter() {
   const { data, error } = useHealth();
   const auth = useAuth();
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   const who = auth.account?.email ?? auth.account?.displayName ?? (auth.operator ? '持ち主' : null);
+
+  const handleLogout = () => {
+    setLogoutError(null);
+    void auth.logout().then((result) => {
+      if (!result.ok) setLogoutError(result.message);
+    });
+  };
 
   return (
     <div className="border-t border-border px-4 py-3 text-[11px] text-muted">
@@ -368,18 +376,35 @@ function HealthFooter() {
 
       {/* 認証を要求していないデーモンでは、居ない人を出さない。 */}
       {auth.status !== 'open' && (
-        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
-          <span className="min-w-0 truncate" title={auth.account?.id}>
-            {who ?? '—'}
-          </span>
-          <button
-            type="button"
-            onClick={auth.logout}
-            className="shrink-0 underline hover:text-fg"
-            title="この画面から鍵を捨てる（デーモン側の失効は alteroid access revoke）"
-          >
-            ログアウト
-          </button>
+        <div className="mt-2 border-t border-border pt-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate" title={auth.account?.id}>
+              {who ?? '—'}
+            </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="shrink-0 underline hover:text-fg"
+              title="サーバ側のアクセストークンも失効させる（アカウントごと締め出すなら alteroid access revoke）"
+            >
+              ログアウト
+            </button>
+          </div>
+          {logoutError !== null && (
+            <div className="mt-1.5 break-words text-danger">
+              サーバ側を失効させられなかった: {logoutError}
+              <button
+                type="button"
+                onClick={() => {
+                  setLogoutError(null);
+                  auth.discardCredential();
+                }}
+                className="ml-1 shrink-0 underline hover:text-fg"
+              >
+                この画面から鍵だけを捨てる
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

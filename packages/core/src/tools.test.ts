@@ -5610,6 +5610,66 @@ describe('クローンの道具', () => {
     expect(reply).toContain('force');
   });
 
+  /**
+   * ⭐ #1765 段2 — `scratchRootsUnknown`（`findManagerScratchRoots` が
+   * `/tmp` を読めなかった）が載っているとき、見つかった作業ツリーの一覧は
+   * 出しつつ、そこに「全部」ではないことを言う。`truncatedAtCount` /
+   * `stoppedEarly` と同じ扱いにする歯。
+   */
+  it('manager_stop の running 断りは scratchRootsUnknown を、打ち切りと同じ強さで注記する', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', {
+      kind: 'ok',
+      result: {
+        cwd: '/workspace',
+        worktrees: [
+          {
+            relativePath: 'mgr-1/repo',
+            branch: 'main',
+            unpushedCommitCount: 0,
+            uncommittedChangeCount: 0,
+          },
+        ],
+        scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった: EACCES）',
+      },
+    });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('mgr-1/repo');
+    expect(reply).toContain('/tmp');
+    expect(reply).toContain('確かめられなかった（/tmp を読めなかった: EACCES）');
+  });
+
+  /**
+   * ⭐ #1765 段2 の核 — `worktrees` が0本のときの早期 return
+   * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
+   * `scratchRootsUnknown` を握り潰していないこと。ここを見落とすと、
+   * 「見つからなかった」という確定的な文言と「確かめられなかった」が
+   * 同時に返る自己矛盾は避けられても、後者が1文字も出ない黙った欠落になる。
+   */
+  it('manager_stop の running 断りは、作業ツリー0本でも scratchRootsUnknown を握り潰さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setUnpushedWork('mgr-1', {
+      kind: 'ok',
+      result: {
+        cwd: '/workspace',
+        worktrees: [],
+        scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった: EACCES）',
+      },
+    });
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('確かめられなかった（/tmp を読めなかった: EACCES）');
+    // 旧文言（`〜の下を探索した）。` で言い切って終わる形）そのものは出ない
+    // ——「見つからなかった」と「確かめられなかった」を同じ1文の中で
+    // 両立させ、断定では終わらせない。
+    expect(reply, '確認できていないのに断定していないか').not.toContain('の下を探索した）。');
+  });
+
   it('manager_stop は force: true のとき unpushedWork を呼ばない（往復を払わない）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });

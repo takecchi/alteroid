@@ -146,6 +146,7 @@ import {
   recordPathFor,
   splitVerifyArgs,
   STEPS,
+  writeTreeFor,
 } from './verify-core.mjs';
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -418,10 +419,34 @@ const scope = classifyTestScope(passthrough);
 const recordDecision = decideRecord({ scope, moved, recordPath: RECORD });
 
 if (recordDecision.record) {
+  // **verify が通ったこの瞬間の作業ツリーの中身も、tree の sha として記録する
+  // （Issue #1763・#1192 の N7）。** `pnpm check:verified-head` が、後で push
+  // する commit の tree とこれを突き合わせて「その commit の中身は、この
+  // verify が通ったツリーそのものか」を判定する。`writeTreeFor` は一時 index
+  // に `git add -A` するだけで、本物の index も作業ツリーも動かさない
+  // （`verify-core.mjs` の doc）。
+  //
+  // **`after`（指紋）を取った直後にすぐ呼ぶ。** 何かが割り込んで動かした分は
+  // 上の `moved` が既に検知して記録全体を止めるので、ここは「動いていない」と
+  // 決まった後の1回だけ通る。とはいえ `after` を取った瞬間とここで
+  // `writeTreeFor` が動く瞬間のあいだにも原理上は窓が残る——`fingerprint` と
+  // `write-tree` を1回の git 呼び出しにまとめる術は無いので、これは受け入れる
+  // （直前の「動いていたら記録しない」判定と同じ性質の限界であり、新しく
+  // 増えた窓ではない）。
+  //
+  // **取れなければ（`null`）記録から tree を落とす。** `recordFor` の第3引数に
+  // `undefined` を渡すのと同じ扱いにして、古い形式（`tree` を持たない）として
+  // 書く——`pnpm check:verified-head` はそれを「判定できない」と読む
+  // （「一致」へは倒さない。`AGENTS.md`「『判定できない』という3つ目の状態を持つ」）。
+  const verifiedTree = writeTreeFor(REPO) ?? undefined;
+
   // **記録の失敗で一式を落とさない。** ここまでで検証は全部通っている。記録は
   // 次回を速くするためのものなので、書けなかったら「書けなかった」と言って 0 で返す。
   try {
-    writeFileSync(RECORD, JSON.stringify(recordFor(after), null, 2) + '\n');
+    writeFileSync(
+      RECORD,
+      JSON.stringify(recordFor(after, new Date(), verifiedTree), null, 2) + '\n',
+    );
   } catch (error) {
     process.stdout.write('（指紋を記録できなかった: ' + error.message + '。次も必ず走る）\n');
   }

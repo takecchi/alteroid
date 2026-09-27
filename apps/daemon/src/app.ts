@@ -1095,12 +1095,16 @@ function noBodyPostResponses() {
  * 必ず通る（応答に秘密は載っていない）。`/auth/*` はログインそのものの経路なので、
  * ここを閉じるとログインできない。`/openapi.json` と `/docs` は仕様の公開である。
  *
- * **`/auth/me` だけは例外で認証が要る。** 「いま自分が誰か」は認証済みでなければ
- * 答えようが無い。
+ * **`/auth/me` と `/auth/logout` だけは例外で認証が要る。** 「いま自分が誰か」は
+ * 認証済みでなければ答えようが無い。**`/auth/logout`（issue #1757）も同じ理由**
+ * ——失効させる先はいま提示している資格そのものなので、資格の提示なしに叩ける
+ * 素通しの口にしてはいけない（素通しにすると、誰でも他人のトークンの id さえ
+ * 知れば失効させられる口になる——ここは「提示したものを失効させる」設計なので、
+ * 提示が無ければそもそも何も失効させられない）。
  */
 function isPublicPath(path: string): boolean {
   if (path === '/health' || path === '/openapi.json' || path === '/docs') return true;
-  if (path === '/auth/me') return false;
+  if (path === '/auth/me' || path === '/auth/logout') return false;
   return path === '/auth' || path.startsWith('/auth/');
 }
 
@@ -1402,7 +1406,14 @@ export function createApp(deps: AppDeps) {
     if (account === null) {
       return c.json({ error: 'トークンが無効か期限切れ（alteroid login をやり直す）' }, 401);
     }
-    if (!isAccountGranted(account)) {
+    // **`POST /auth/logout` だけは、許可の無いアカウントも通す（issue #1757）。**
+    // 自分のトークンを失効させるのに、使う許可は要らない。ここで 403 にすると、
+    // 許可待ちのトークンは失効させられないまま残り、**後から `access grant` した
+    // 瞬間に、捨てたつもりのトークンが使える鍵として生き返る**（CLI の
+    // `alteroid logout` も 403 を「失敗」と読んで手元を消せなくなる）。
+    // ログアウトの口がする操作は「提示したトークン自身を失効させる」だけなので、
+    // 通しても許可の無いアカウントに何かを許すことにはならない。
+    if (!isAccountGranted(account) && c.req.path !== '/auth/logout') {
       // ログインは通っているが使う許可が無い。**401 ではなく 403** で返す
       // （やり直しても解決しない。人間が alteroid access grant を実行する）。
       return c.json({ error: 'このアカウントには alteroid を使う許可が無い' }, 403);
@@ -6571,6 +6582,81 @@ export function createApp(deps: AppDeps) {
             granted: isAccountGranted(principal.account),
           }),
         );
+      },
+    )
+
+    /**
+     * ログアウト（issue #1757）。**いま提示している、この1本のアクセストークン
+     * だけを失効させる。** 同じアカウントの他のトークン（別端末・別ログイン）は
+     * 触らない——アカウントごと締め出すのは `POST /access/:accountId/revoke` の
+     * 役目で、ここはそれとは別の操作である。
+     *
+     * **資格は `authenticate` だけ**（`isPublicPath` の例外——上の doc）。
+     * 提示が無ければそもそも何を失効させるかが決まらない。
+     *
+     * **operator の資格（状態ファイルの token）では失効させられない。** operator は
+     * `AccessTokenRecord` を1本も持たない実行環境の持ち主そのもの（`Principal`
+     * の doc）なので、「いま提示している資格を失効させる」という操作の対象が
+     * 無い——これは「一段弱い」のではなく**別の種類の資格**である。4xx で
+     * 断り、`alteroid access revoke` へ誘導する。
+     *
+     * **応答にトークンの値も sha256 も載せない。** 失効の成否（`ok: true`）
+     * だけを返す——`okResponseSchema` は他の「本文を持たない成功」と同じ形。
+     */
+    .post(
+      '/auth/logout',
+      describeRoute({
+        tags: ['auth'],
+        summary: 'いま提示しているアクセストークンを失効させる',
+        description:
+          '同じアカウントの他のトークンは巻き込まない。**operator の資格（状態ファイルの ' +
+          'token）では呼べない**——失効させる対象（アクセストークン）を持たないため。',
+        requestBody: noBodyPostRequestBody(
+          '**中身は読まないので `{}` を送ればよい。** 本文そのものではなく ' +
+            '`content-type: application/json` が要る（ブラウザの単純リクエストで' +
+            'ログアウトさせられないため）。',
+        ),
+        responses: {
+          200: {
+            description: '失効させた（既に失効済みだった場合を含む）。',
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+          },
+          400: {
+            description: 'operator の資格では失効させられない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          401: {
+            description: '資格が無い、またはトークンが既に無効。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          ...noBodyPostResponses(),
+        },
+      }),
+      deliberateClient,
+      async (c) => {
+        const principal = c.get('principal');
+        if (principal.kind === 'operator') {
+          return c.json(
+            {
+              error:
+                '実行環境の持ち主の資格ではログアウトできない（アクセストークンを持たない）。' +
+                '特定のアカウントを締め出すなら alteroid access revoke を使う',
+            },
+            400,
+          );
+        }
+        // `authenticate` ミドルウェアが bearer からこの principal を解決した
+        // ので、ここで bearer が無いことは無いはずだが、型では narrow できない
+        // ため防御的に扱う（`AuthService.logout` の doc）。
+        const bearer = bearerOf(c.req.header('authorization'));
+        if (bearer === null) {
+          return c.json({ error: 'ログインが要る（alteroid login）' as const }, 401);
+        }
+        const result = await authService.logout(bearer);
+        if (result.status === 'not_found') {
+          return c.json({ error: 'トークンが無効か期限切れ（alteroid login をやり直す）' }, 401);
+        }
+        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 
