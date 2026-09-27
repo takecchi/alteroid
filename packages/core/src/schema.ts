@@ -764,6 +764,42 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
      * `true` だけで、立っていないことを `false` で作らない。
      */
     synthesized: z.literal(true).optional(),
+    /**
+     * **この `report` が「完遂した報告」ではなく、畳まれたターンの中身である
+     * こと**（Issue #1848）。
+     *
+     * `manager.ts` の `case 'report'` が、runner 側の構造化された印
+     * （`event.failure` / `event.unreported`。`sdk-failure.ts` の失敗検知・
+     * `runner.ts` の `#flushUnreported` の doc）のどちらかを見た回にだけ立てる
+     * ——`tools.ts` の `isFoldedTurnReport`（`ManagerSummary.lastFailure` /
+     * `lastUnreported` の有無）と**同じ軸・同じ判定**を、台帳ではなく
+     * いま届くこの1件の側で見ている。
+     *
+     * ## なぜ運ぶか
+     *
+     * `clone.ts` の `managerPrompt` は、これまで `kind === 'report'` を無条件に
+     * 「（報告）」と見出しを打っていた。`runner.ts` の `failedReportText()` /
+     * `unreportedText()` が包んだ本文（「（このターンは応答を返さずに終わった:
+     * …）」「（このターンは結果を受け取らないまま畳まれた: …）」）が来た回も
+     * 同じ見出しになり、クローンが包みの内側だけを読んで報告として扱う——
+     * `manager_list` / `manager_report` が #714 / #917 で直した読み違えが、
+     * 最初に届くこの経路にだけ残っていた。
+     *
+     * **判定は構造化された印だけで行う。** 本文の文言（「（このターンは…）」）を
+     * 見て判定しない——`isFoldedTurnReport` の doc・`sdk-failure.ts` の
+     * 「検知は構造化された印だけで行う」と同じ理由。
+     *
+     * **立っていない回はキーごと書かない**（`synthesized` と同じ形の1つ上。
+     * 値は `true` だけで、立っていないことを `false` で作らない）。**この欄を
+     * 持たない古い行（この変更より前に積まれた行・`#restoreUnread` が読み直す
+     * 版違いの行）は「折り畳まれていない」側へ倒れる**——`managerPrompt` は
+     * キーが無ければこれまでどおり「（報告）」を打つ。安全側の倒れ先が
+     * `synthesized` と逆（あちらは「版がずれたら起こす側」、こちらは「版が
+     * ずれたら黙って報告扱い」）に見えるが、**どちらも「新しい情報が無ければ
+     * 何もしない」という同じ規則の帰結である**——この欄は見出しの表示を
+     * 変えるだけで、クローンのターンを起こすかどうかには関わらない。
+     */
+    foldedTurn: z.literal(true).optional(),
   }),
 ]);
 
