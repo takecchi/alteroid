@@ -129,7 +129,7 @@ export const BUDGET_HISTORY = [
   },
   {
     date: '2026-09-27',
-    bytes: 89312,
+    bytes: 89868,
     lines: 350,
     why:
       '#1192 の再編 PR1: 道具の癖と部分系の手順を .claude/skills/ へ逐語で移した' +
