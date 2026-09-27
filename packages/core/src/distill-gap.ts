@@ -269,7 +269,8 @@ export interface DistillGap {
  * `JournalQuery.until` は**その時刻を含む**（`store.ts` の doc:「この時刻以前」）
  * ので、読み出しの上限としてだけ渡し、**数える側では `at < until` で切り直す。**
  *
- * **含む側にしていたら、既存の歯が1本落ちた**（`clone.test.ts` の「新規に開いた
+ * **含む側にしていたら、既存の歯が1本落ちた**（`clone-memory-and-commitment-fixes.test.ts`
+ * ——旧 `clone.test.ts`。#1744 で分割済み——の「新規に開いた
  * セッションでは resume の断りを出さない」。単体では緑、全件を通したときだけ赤 ——
  * 2026-08-28 観測）。器の生成と、その直後に `post` された最初の発言の記帳が
  * **同じミリ秒に並んだ**ためである。`#record` は `post` の中で書き、`post` は

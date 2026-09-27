@@ -131,7 +131,8 @@ export interface TokenPoolReopenedPayload {
  * **`payload` は `z.unknown()` である**（`schema.ts` の `inboxEventSchema` の
  * `external` 枝）ので、実行時に形を確かめてから読む。**持っていなければ
  * `undefined` を返す** —— 古い（この直しより前に積まれた）通知や、
- * `payload` を省略した通知（`clone.test.ts` の `DAEMON_TOKEN_POOL_REOPENED_SOURCE`
+ * `payload` を省略した通知（`clone-quota-fold.test.ts`——旧 `clone.test.ts`。
+ * #1744 で分割済み——の `DAEMON_TOKEN_POOL_REOPENED_SOURCE`
  * の歯がまさにこの形で作る）がここに当たる。**判定できないときは能力を
  * 削らない側へ倒す**（AGENTS.md 地雷2）—— 呼び手はみな `undefined` を
  * 「使い回しではない（＝従来どおり扱う）」側へ読む。

@@ -2,7 +2,8 @@
  * 症状B（人間の報告）: 「利用上限に当たった状態で話しかけると、枠が回復した
  * 後も、待たされていた発言への返信が届かない」。
  *
- * `clone.test.ts` の「症状B」ブロックは `packages/core` だけで確かめており、
+ * `clone-usage-window.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
+ * 「症状B」ブロックは `packages/core` だけで確かめており、
  * `GET /conversations/:id`（`apps/daemon/src/app.ts` の
  * `'/conversations/:id'` ルート）が実際に何を返すかは見ていない。ここでは
  * **本物の `createClone`（偽 SDK のみ差し替え）と本物の `createApp` を
@@ -35,7 +36,8 @@ import { createApp } from './app.js';
 const spendLimitMessage = "You've hit your individual spend limit for this account.";
 
 /**
- * `packages/core/src/clone.test.ts` の `fakeSdk` の簡約版。
+ * `packages/core/src/clone-test-harness.ts` の `fakeSdk` の簡約版（旧
+ * `clone.test.ts`。#1744 で分割済み）。
  *
  * ここで確かめたいのは `apps/daemon` の HTTP 経路と実クローンを組み合わせた
  * ときの挙動であって、SDK の全形はいらない。**`turnIndex` ごとに成功/失敗を

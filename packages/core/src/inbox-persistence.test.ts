@@ -1428,7 +1428,8 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
  * 読んで使い回してはいけない」）ので、並行して動く `#pump` が途中で
  * `usageBlocked` を動かしうる。
  *
- * `fakeSdkWithResultFor`（下）は `packages/core/src/clone.test.ts` の
+ * `fakeSdkWithResultFor`（下）は `packages/core/src/clone-test-harness.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）の
  * `fakeSdk` の `resultFor` と同じ発想の縮小版——ターンごとに `result` を
  * 差し替えられる最小限の形だけをこのファイルに閉じて持つ（他の歯の挙動を
  * 変えない）。

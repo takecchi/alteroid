@@ -1319,7 +1319,8 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
  *    「テストを弱めずに直す」の「型で塞いだ分岐にも、実行時の倒れ先の歯を
  *    足す」）
  *
- * **`clone.test.ts`「issue #863」/ `runner-pre-tool-use.test.ts` は、この
+ * **`clone-core-loop.test.ts`「issue #863」（旧 `clone.test.ts`。#1744 で
+ * 分割済み）/ `runner-pre-tool-use.test.ts` は、この
  * 包み直しを経由した SDK 境界での挙動をすでに固定している**（実物の
  * `#onPreToolUse` を配線した状態で、生の SDK 入出力を確かめる歯——今回は
  * 1文字も変えていない）。ここではそれとは違う層——`wrapPreToolHook` 自身が

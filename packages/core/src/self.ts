@@ -452,8 +452,9 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     `- ${CLONE_RUNTIME_ITEMS.mcpServers}: ${mcpServers}`,
     `- ${CLONE_RUNTIME_ITEMS.sessionId}: ${facts.sessionId ?? unknownBecause(INIT_NOT_OBSERVED)}`,
     `- ${CLONE_RUNTIME_ITEMS.resumedFrom}: ${facts.resumedFrom ?? '（新規に開いた。前のセッションを引き継いでいない）'}`,
-    // **`文字` の直後に注記を足す（既存の文言・区切りは変えない）。** `clone.test.ts`
-    // が `焼き込んだ記憶の文字数（このセッションを組み立てた時点）: N 文字` を
+    // **`文字` の直後に注記を足す（既存の文言・区切りは変えない）。**
+    // `clone-self-status-and-memory-cause.test.ts`（旧 `clone.test.ts`。#1744 で
+    // 分割済み）が `焼き込んだ記憶の文字数（このセッションを組み立てた時点）: N 文字` を
     // `toContain` で固定しているので、その部分文字列を残したまま末尾へ足す
     // （`String#includes` は前方一致ではなく部分一致なので、後ろへ足しても壊れない）。
     `- ${CLONE_RUNTIME_ITEMS.injectedMemoryChars}: ${facts.injectedMemoryChars.toLocaleString('en-US')} 文字（トークンの近似。実トークンは下の2行）`,

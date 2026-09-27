@@ -32,7 +32,8 @@ import type { UsageTotals } from './usage.js';
  *
  * **マネージャーが `record` へ何を渡すか、だけ**である。列の意味・鍵・軸の始点は
  * storage の2つの器（`@alteroid/storage-fs` / `@alteroid/storage-pg` の
- * `usage.test.ts`）が持ち、クローン側の同じ問いは `clone.test.ts` が持つ。
+ * `usage.test.ts`）が持ち、クローン側の同じ問いは `clone-consumption-ledger.test.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）が持つ。
  */
 
 /** 走っている仕事1本ぶんの台帳の行。`restore()` が引き取る対象になる。 */

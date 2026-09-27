@@ -40,7 +40,8 @@ import { createCloneTools } from './tools.js';
  * テストがここにある。
  */
 
-/** SDK を呼ばずにターンを1往復させる偽物（`clone.test.ts` の同名関数と同じ形）。 */
+/** SDK を呼ばずにターンを1往復させる偽物（`clone-test-harness.ts`——旧 `clone.test.ts`。
+ * #1744 で分割済み——の同名関数と同じ形）。 */
 function fakeSdk(
   reply: (input: string) => string = () => 'わかった',
   options: { failWith?: string } = {},

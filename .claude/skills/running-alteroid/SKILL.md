@@ -20,4 +20,4 @@ description: alteroid をローカルで動かして挙動を確かめるとき�
   - コミット済みの spec とコードがずれたら CI が落ちる（`.github/workflows/ci.yml` の「OpenAPI spec がコードと一致しているか」）。**経路やスキーマを変えたら `pnpm build` して `openapi.json` の差分も一緒にコミットすること**
   - 外部向けの生成クライアントは `packages/api-client`（`openapi-typescript` + `openapi-fetch`）。**CLI はこれを使わない** — 同一リポジトリからは `hono/client` の型共有で足りているので無理に置き換えない。生成クライアントは外へ出す成果物である
   - 対象は**デーモンの API だけ**。runner の API は制御面であって外へ出すものではない（触れると自分宛の許可確認に自分で答えられる）
-- クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone.test.ts`）。マネージャー側は runner に偽の `query` を渡す（`createLocalRunner({ queryFn })` → `createRunnerRegistry`。`packages/core/src/manager.test.ts`）。デーモンと runner の境界そのものは `apps/daemon/src/runner-client.test.ts` が実際の HTTP 経路で通している
+- クローンの挙動を SDK 抜きで検証したいときは `createClone({ queryFn })` に偽の `query` を渡す（`packages/core/src/clone-test-harness.ts` の `fakeSdk` / `setup`。旧 `clone.test.ts` は issue #1744 で分割済み）。マネージャー側は runner に偽の `query` を渡す（`createLocalRunner({ queryFn })` → `createRunnerRegistry`。`packages/core/src/manager.test.ts`）。デーモンと runner の境界そのものは `apps/daemon/src/runner-client.test.ts` が実際の HTTP 経路で通している
