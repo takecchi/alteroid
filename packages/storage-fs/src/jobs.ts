@@ -175,11 +175,20 @@ export class FsJobStore implements JobStore {
    * `invalidJobsRaw` を生かして残すと、同じ `clear()` の意味が実装ごとに
    * 変わってしまう（fs だけ「リセットしたのに壊れた行が残っている」状態に
    * なる）。
+   *
+   * **返す件数も、消した壊れた行を数える**（issue #1892）。pg 実装は
+   * `DELETE … RETURNING` の行数をそのまま返すので、壊れた行も件数に入る。
+   * fs だけが検査を通った行だけを数えると、同じ状態で呼んだ `clear()` の
+   * 件数が実装ごとに食い違い、`POST /reset` の応答が実際に消えた件数より
+   * 少なく出る。
    */
   async clear(): Promise<{ jobs: number; approvals: number }> {
     let removed = { jobs: 0, approvals: 0 };
     await this.#update((file) => {
-      removed = { jobs: file.jobs.length, approvals: file.approvals.length };
+      removed = {
+        jobs: file.jobs.length + file.invalidJobsRaw.length,
+        approvals: file.approvals.length,
+      };
       return { jobs: [], invalidJobsRaw: [], approvals: [] };
     });
     return removed;
