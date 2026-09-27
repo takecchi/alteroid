@@ -110,23 +110,33 @@ describe('gh-pr-merge-delete-branch: timeout 前置きを足しても偽陽性�
 });
 
 /**
- * この PR が対応していない前置きの順序（`bash-wait-guard.ts` の doc
- * 「この検出器が弾けないと分かっている形」に明記済み）。`LEADING_ENV_PREFIX_SRC`
- * は「環境変数の代入 → `timeout` → `env` コマンド」の順序だけを認めるので、
- * それ以外の並びは弾けない——issue #1886 が確かめた実例の順序に絞って
- * 直したためで、見落としではなく意図した範囲外であることを歯で示す。
+ * 前置きの並び順を問わず弾く（#1886）。`LEADING_ENV_PREFIX_SRC` は環境変数の
+ * 代入・`timeout <数字><単位?>`・`env` コマンドを、どの順でも何回でも読み飛ばす。
+ * 並びを1つに絞ると、残りの並びが同じ穴（前置きを挟むとすり抜ける）として残る。
  */
-describe('gh-pr-merge-delete-branch: 対応していない前置きの順序（doc に明記済み、範囲外）', () => {
-  it('timeout の後ろに env-var 前置きが来る順序は弾かない（未対応）', () => {
+describe('gh-pr-merge-delete-branch: 前置きの並び順を問わず弾く', () => {
+  it('timeout の後ろに env-var 前置きが来る順序でも弾く', () => {
     expect(
       inspectBashCommand('cd /tmp && timeout 20 GH_TOKEN=xxx gh pr merge 1 --delete-branch')
         .blocked,
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it('`env` コマンドの後ろに timeout が来る順序は弾かない（未対応）', () => {
+  it('`env` コマンドの後ろに timeout が来る順序でも弾く', () => {
     expect(
       inspectBashCommand('cd /tmp && env FOO=1 timeout 20 gh pr merge 1 --delete-branch').blocked,
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it('timeout の後ろに `env` コマンドと env-var 前置きが続く順序でも弾く', () => {
+    expect(
+      inspectBashCommand('timeout 20 env FOO=1 GH_PAGER=cat gh pr merge 1 --delete-branch')
+        .blocked,
+    ).toBe(true);
+  });
+
+  it('前置きの並びを変えても、無関係なコマンドは引き続き通す', () => {
+    expect(inspectBashCommand('cd /tmp && env FOO=1 timeout 20 pnpm test').blocked).toBe(false);
+    expect(inspectBashCommand('timeout 20 GH_PAGER=cat gh pr view 1').blocked).toBe(false);
   });
 });
