@@ -121,8 +121,12 @@ class LegStateRunner implements RunnerClient {
 
   // 以下は名簿が触らない口。
   async connect(): Promise<void> {}
-  async start(): Promise<{ cwd?: string }> { return {}; }
-  async resume(): Promise<{ cwd?: string }> { return {}; }
+  async start(): Promise<{ cwd?: string }> {
+    return {};
+  }
+  async resume(): Promise<{ cwd?: string }> {
+    return {};
+  }
   async send(): Promise<boolean> {
     return true;
   }

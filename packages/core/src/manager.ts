@@ -7828,7 +7828,11 @@ class Pool implements ManagerPool {
             status: living.state.status,
             runnerId: living.runner.runnerId,
             cwd: living.state.cwd,
-            workspace: workspaceLocatorFrom(this.#workspace, living.runner.runnerId, living.state.cwd),
+            workspace: workspaceLocatorFrom(
+              this.#workspace,
+              living.runner.runnerId,
+              living.state.cwd,
+            ),
             ...(living.state.sessionId === undefined ? {} : { sessionId: living.state.sessionId }),
           },
           waiting: living.state.waiting,
