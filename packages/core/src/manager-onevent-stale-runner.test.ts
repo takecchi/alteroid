@@ -68,6 +68,30 @@ import { createMemoryStores } from './testing.js';
  * **他の `case`（`session` / `report` / `ask` 等）には広げていない。** Issue
  * #1716 が名指しして疑ったのはこの2つだけで、他の分岐まで同じ確認を足すのは
  * この変更が答えるべき範囲を超える——広げるなら別に判断すること。
+ *
+ * ## ⚠️ 「不一致」だけでは足りなかった（レビューで発見・修正）
+ *
+ * 最初の実装は `record.job.runnerId !== fromRunnerId` だけで「移った」と
+ * 判定していたが、これは**正しいイベントまで誤って捨てる**穴を持っていた。
+ * `RunnerClient.runnerId` は `/health` を聞けるまで既定値 `'runner-primary'`
+ * を名乗り（`runnerIdKnown` の doc）、`start()` は `input.cwd` が明示されて
+ * いれば `/health` 前でも通るので、`job.runnerId` にこの既定値が焼かれたまま
+ * 残ることがある——`record.job.runnerId` を書き直すのは `#resume` の1箇所
+ * だけで、`start()` 経由の attach はここを通らない。そのとき**本当に同じ
+ * runner から**届いた `closed`/`resume_failed` でも、`job.runnerId`
+ * （既定値）と `fromRunnerId`（実 id）は文字列としては不一致になり、
+ * 素朴な判定だと「移った」と誤読して捨ててしまう——台帳が `running` の
+ * まま残る（直したかった穴と逆向きの、同じくらい悪い結果）。運用者が
+ * runner の id を付け替えた後の既存の委譲も同じ形になる。
+ *
+ * **⟹ 捨てるのは「委譲が、いま名簿に居る別の runner へ移ったと分かって
+ * いる」ときだけにする。** `record.job.runnerId` が `#registeredRunnerIds()`
+ * （名簿にいま実際に居る id の集合。名乗っていない entry が1本でも在れば
+ * `null` ＝判定不能）に含まれているときだけ「別の実在する runner を指して
+ * いる」と言え、それでも `fromRunnerId` と食い違うなら本当に移った後だと
+ * 判定できる。`#registeredRunnerIds()` が `null` のときは、既定値の可能性を
+ * 否定できないので、従来どおり（＝以前の振る舞い＝安全側）でイベントを
+ * 適用する。この歯（下の最後の `it`）はこの区別を直接測る。
  */
 describe('#onEvent: 移った後に届く古い runner の出来事', () => {
   function entryOf(label: string, state: RunnerLiveness, runnerId?: string): RunnerEntry {
@@ -320,4 +344,58 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
     expect(after?.lease?.runnerId).toBe('runner-b');
     expect(after?.lease?.releasedAt).toBeUndefined();
   });
+
+  /**
+   * **レビューで見つかった反対向きの穴（上の「⚠️」節）を直接測る。**
+   *
+   * `job.runnerId` が `'runner-primary'`（`RunnerClient.runnerId` の既定値。
+   * `/health` を聞く前の `start()` 経由の attach ではこの値のまま残る）で、
+   * 名簿には `'runner-primary'` という id の runner が1台も居ない（実在する
+   * のは `'runner-a'` だけ）状態を作る。この状態で `runner-a` から本物の
+   * `closed` が届いたとき、`record.job.runnerId`（`'runner-primary'`）が
+   * `#registeredRunnerIds()`（`{'runner-a'}`）に含まれないので「別の実在する
+   * runner を指している」とは言えない——`fromRunnerId` との不一致だけを見て
+   * 捨てると、この委譲は永遠に `running` のまま残ってしまう。
+   */
+  it(
+    'job.runnerId が名簿に居ない既定値（runner-primary）のままでも、' +
+      'いまの runner から届く closed は捨てずに適用する',
+    async () => {
+      const stores = createMemoryStores();
+      await stores.jobs.putJob(jobWith('mgr-default-id', 'runner-primary'));
+      const fake = createFakeRegistry();
+      // 名簿に居るのは runner-a だけ——runner-primary という id の runner は
+      // 実在しない（`job.runnerId` が既定値のまま焼かれているだけ）。
+      fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+      const runnerA = fakeRunner('runner-a');
+      fake.addClient(runnerA.client);
+      const inbox: InboxEvent[] = [];
+      const pool = createManagerPool({
+        stores,
+        post: (event) => inbox.push(event),
+        runners: fake.registry,
+      });
+
+      // `#ensureConnected()` を踏ませて `runnerA.emit` を得る（他のテストと同じ形）。
+      await pool.abort('mgr-does-not-exist');
+      expect(runnerA.emit).toBeDefined();
+
+      runnerA.emit?.({
+        type: 'closed',
+        managerId: 'mgr-default-id',
+        status: 'done',
+        reason: '普通に終わった（runner-a 自身から）',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const after = (await stores.jobs.listJobs()).find((j) => j.id === 'mgr-default-id');
+      // **本題**: 「不一致」だけで捨てていた旧実装ではここが `running`
+      // のまま残っていた（誤って「移った」と判定したため）。名簿に
+      // `runner-primary` が実在しないと確かめられる以上、このイベントは
+      // 適用してよい。
+      expect(after?.status).toBe('done');
+    },
+  );
 });

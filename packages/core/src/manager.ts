@@ -10811,8 +10811,38 @@ class Pool implements ManagerPool {
          * ない。**`record.job.runnerId` が未記録（`undefined`）の古いジョブは
          * 判定材料が無いので、これまでどおり処理する**（能力を削らない。
          * `mayClaim` の `undecidable` と同じ判断）。
+         *
+         * **⚠️ ただし「不一致」だけでは「移った」と言い切れない（レビューで
+         * 指摘）。** `RunnerClient.runnerId` は `/health` を聞けるまで既定値
+         * `'runner-primary'` を名乗る（`runnerIdKnown` の doc）。`start()` は
+         * `input.cwd` が明示されていれば `/health` 前でも通るので、その委譲の
+         * `job.runnerId` には `'runner-primary'` が焼かれたまま残ることがある
+         * ——`record.job.runnerId` を書き直すのは `#resume` の1箇所だけで、
+         * `start()` 経由の attach はここを通らない。その状態で本当に
+         * `runner-a`（実 id）から `closed`/`resume_failed` が届くと、
+         * `job.runnerId`（`'runner-primary'`）と `fromRunnerId`（`'runner-a'`）
+         * は**同じ runner を指しながら文字列としては不一致**になる——素朴な
+         * 不一致判定は、この委譲が本当に終わった事実を「移った」と誤読して
+         * 捨ててしまう。運用者が runner の id を付け替えた後の既存の委譲も
+         * 同じ形になる。
+         *
+         * **⟹ 捨てるのは「委譲が、いま名簿に居る別の runner へ移ったと
+         * 分かっている」ときだけにする。** `record.job.runnerId` が
+         * `#registeredRunnerIds()`（名簿にいま実際に居る id の集合）に
+         * 含まれているときだけ「別の実在する runner を指している」と言え、
+         * それでも `fromRunnerId` と食い違うなら本当に移った後だと判定できる。
+         * `#registeredRunnerIds()` が `null`（名乗っていない entry が名簿に
+         * 在り、判定材料が無い）のときは、`'runner-primary'` のような既定値の
+         * 可能性を否定できないので、従来どおり（＝以前の振る舞い＝安全側）で
+         * イベントを適用する。
          */
-        if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) {
+        const registeredRunnerIdsForResumeFailed = this.#registeredRunnerIds();
+        if (
+          record.job.runnerId !== undefined &&
+          record.job.runnerId !== fromRunnerId &&
+          registeredRunnerIdsForResumeFailed !== null &&
+          registeredRunnerIdsForResumeFailed.has(record.job.runnerId)
+        ) {
           await this.#journal({
             type: 'exchange',
             with: 'manager',
@@ -10921,8 +10951,36 @@ class Pool implements ManagerPool {
          *
          * **`record.job.runnerId` が未記録（`undefined`）の古いジョブは
          * 判定材料が無いので、これまでどおり処理する。**
+         *
+         * **⚠️ ただし「不一致」だけでは「移った」と言い切れない（レビューで
+         * 指摘。`case 'resume_failed'` の同じ doc に詳しい）。**
+         * `RunnerClient.runnerId` は `/health` を聞けるまで既定値
+         * `'runner-primary'` を名乗り（`runnerIdKnown` の doc）、`start()` は
+         * `input.cwd` があれば `/health` 前でも通るので、`job.runnerId` に
+         * この既定値が焼かれたまま残ることがある——`record.job.runnerId` を
+         * 書き直すのは `#resume` の1箇所だけで、`start()` 経由の attach は
+         * ここを通らない。そのとき本当に同じ runner から `closed` が届いても
+         * `job.runnerId`（既定値）と `fromRunnerId`（実 id）は文字列としては
+         * 不一致になる——素朴な不一致判定だと、この委譲が本当に終わった事実を
+         * 「移った」と誤読して捨ててしまい、台帳が `running` のまま残る。
+         * 運用者が runner の id を付け替えた後の既存の委譲も同じ形になる。
+         *
+         * **⟹ 捨てるのは「委譲が、いま名簿に居る別の runner へ移ったと
+         * 分かっている」ときだけにする。** `record.job.runnerId` が
+         * `#registeredRunnerIds()`（名簿にいま実際に居る id の集合）に
+         * 含まれているときだけ「別の実在する runner を指している」と言え、
+         * それでも `fromRunnerId` と食い違うなら本当に移った後だと判定できる。
+         * `#registeredRunnerIds()` が `null`（名乗っていない entry が名簿に
+         * 在り、判定材料が無い）のときは、既定値の可能性を否定できないので、
+         * 従来どおり（＝以前の振る舞い＝安全側）でイベントを適用する。
          */
-        if (record.job.runnerId !== undefined && record.job.runnerId !== fromRunnerId) {
+        const registeredRunnerIdsForClosed = this.#registeredRunnerIds();
+        if (
+          record.job.runnerId !== undefined &&
+          record.job.runnerId !== fromRunnerId &&
+          registeredRunnerIdsForClosed !== null &&
+          registeredRunnerIdsForClosed.has(record.job.runnerId)
+        ) {
           await this.#journal({
             type: 'exchange',
             with: 'manager',
