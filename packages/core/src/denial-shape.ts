@@ -79,6 +79,46 @@ export interface DeniedRecord {
 }
 
 /**
+ * `Clone` がプロセスの中だけに控える、直近の拒否1件（Issue #1802）。
+ *
+ * **`request_permission` が、直前にその操作が拒否された証拠を人間へ見せる
+ * ための材料。** クローンが人間の代わりに拒否理由を要約すると、要約の誤りが
+ * そのまま承認画面へ載る（Issue #863・#1802 の実例:
+ * `[CI Bypass]` という4文字の分類を「CI の迂回」と要約して事実と反対の記録に
+ * なった）。だから `reason` / `message` は**器が返した原文**のまま持ち、
+ * `request_permission` もそれをそのまま引用する——クローンの解釈を挟まない。
+ *
+ * **持たないもの——コマンドの値。** `denial-shape.ts` 冒頭の「値を出さない」
+ * 規約は**入力**（コマンド本文）に対する線であって、`reason` / `reasonType` /
+ * `message`（分類器・器が返した自由文）には掛からない——`Clone#noteDenial` は
+ * 元々この3つを日誌の一文へそのまま埋め込んでいる（`clone.ts` 参照）。
+ * `headWord` だけは入力由来の値なので、{@link denialCommandHeadWord} を通した
+ * 安全な形（`denialInputShape` と同じ判定）に限る。
+ *
+ * **セッションを跨いで持ち越さない。** `Clone` インスタンスの private
+ * フィールドが持つだけで、ストアにも日誌にも永続化しない——器を作り直せば
+ * 消える（`#deniedToolUses` と同じ性質）。
+ */
+export interface RecentDenial {
+  /** この拒否を観測した時刻（ISO 8601）。 */
+  readonly at: string;
+  /** 止められた道具の名前（SDK の綴りそのまま。例: `Bash`）。 */
+  readonly tool: string;
+  /**
+   * `command` 欄の先頭の語——{@link denialCommandHeadWord} が安全な形だと
+   * 判定したときだけ持つ。取れなかった・危ない形だったときは欄ごと省く
+   * （`denialInputShape` の `(伏せた)` のようなプレースホルダは置かない）。
+   */
+  readonly headWord?: string;
+  /** 拒否理由の分類（器が返した原文。例: `[CI Bypass]`）。 */
+  readonly reasonType?: string;
+  /** 拒否理由（器が返した原文）。 */
+  readonly reason?: string;
+  /** モデルへ返した拒否文（器が返した原文）。 */
+  readonly message?: string;
+}
+
+/**
  * 入力が付いていない回に、なぜ無いのかを言う一文。
  *
  * **空文字を置かない。** `brief(undefined)` が `''` を返していたせいで、
@@ -145,13 +185,19 @@ const MAX_KEYS = 8;
 const COMMAND_KEYS = new Set(['command']);
 
 /**
- * `input` から先頭の語を取る。取れない・出してよい形でないなら `undefined`。
+ * 文字列の先頭の語を取る。取れない・出してよい形でないなら `undefined`。
  *
- * **`undefined` は「取れなかった」であって「危なかった」ではない。** 呼び出し側は
- * 区別せず {@link WITHHELD_HEAD_WORD} に落とす——読む側にとってはどちらも
+ * **`undefined` は「取れなかった」であって「危なかった」ではない。** `denialInputShape`
+ * は区別せず {@link WITHHELD_HEAD_WORD} に落とす——読む側にとってはどちらも
  * 「この行からは読めない」で同じだからである。
+ *
+ * **`export` する（Issue #1802）。** `request_permission` が `rule`（`Bash(...)`
+ * の中身）の先頭の語を取るのにも、`Clone#noteDenial` が拒否の控え
+ * （{@link RecentDenial}）へ先頭の語を控えるのにも、**同じ判定**を通す——
+ * 別々に書くと、同じコマンドなのに一方は安全と判定し一方は伏せるという
+ * 食い違いが起きる。
  */
-function headWordOf(value: string): string | undefined {
+export function commandHeadWord(value: string): string | undefined {
   const head = value.trimStart().split(/\s/, 1)[0];
   if (head === undefined || head === '') return undefined;
   if (!SAFE_HEAD_WORD.test(head)) return undefined;
@@ -160,6 +206,25 @@ function headWordOf(value: string): string | undefined {
     return undefined;
   }
   return head;
+}
+
+/**
+ * `command` らしき欄を持つ入力から、先頭の語だけを取り出す（Issue #1802）。
+ *
+ * `denialInputShape` が埋め込み表示用に取るのと**同じ欄（{@link COMMAND_KEYS}）・
+ * 同じ判定（{@link commandHeadWord}）**を通す。`denialInputShape` と違い、
+ * 取れなかったときに {@link WITHHELD_HEAD_WORD}（表示用のプレースホルダ）を
+ * 返さず `undefined` のまま返す——呼び出し側（`Clone#noteDenial`）は「欄ごと
+ * 省く」設計なので、プレースホルダの文字列より `undefined` のほうが
+ * 「この値を控えに書くかどうか」の分岐にそのまま使える。
+ */
+export function denialCommandHeadWord(input: unknown): string | undefined {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const keys = Object.keys(input as Record<string, unknown>);
+  const commandKey = keys.find((key) => COMMAND_KEYS.has(key));
+  if (commandKey === undefined) return undefined;
+  const commandValue = (input as Record<string, unknown>)[commandKey];
+  return typeof commandValue === 'string' ? commandHeadWord(commandValue) : undefined;
 }
 
 /** `JSON.stringify` が落ちない形で長さを測る。測れなければ `undefined`。 */
@@ -211,7 +276,7 @@ export function denialInputShape(input: unknown): string | undefined {
   const headPart =
     typeof commandValue !== 'string'
       ? ''
-      : ` / 先頭の語=${headWordOf(commandValue) ?? WITHHELD_HEAD_WORD}`;
+      : ` / 先頭の語=${commandHeadWord(commandValue) ?? WITHHELD_HEAD_WORD}`;
 
   return `欄=${keyList}${headPart} / ${size}`;
 }
