@@ -231,20 +231,20 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
          * 結合（同一人物の複数ログイン手段を束ねる）は identity 側に accountId が
          * あるので後から足せる。
          *
-         * **メールの衝突検査（大小文字違いの攻撃者を弾く）はここ（読んでから
-         * 書く外側）で行う。** 同じ `(provider, subject)` を同時に取り合う競合
-         * とは別の話なので、`createAccountWithIdentity` の中には入れない。
+         * **メールの衝突検査（大小文字違いの攻撃者を弾く）は
+         * `createAccountWithIdentity` の1操作の中で行う（issue #1751 / #1741）。**
+         * 直す前はここ（読んでから書く外側）に `findAccountByEmail` を置いていたが、
+         * **別々の** identity が同じ検証済みメールで同時に初回ログインすると、
+         * 両方がここで「衝突なし」を見てしまい、両方の候補にメールが乗った
+         * （memory / fs は重複したアカウントができ、pg は一意索引の生の例外で
+         * 片方が reject された）。だから衝突の有無は候補を渡すだけにして、
+         * 判断そのものはストアの1操作の結果（`outcome.account`）に委ねる——
+         * ここでは判断しない。
          */
-        const collision =
-          profile.email !== null && profile.emailVerified
-            ? await store.findAccountByEmail(profile.email)
-            : null;
-
         const candidateAccount: AuthAccount = {
           id: newId(),
           displayName: profile.displayName,
-          // 衝突するときは連絡先を空にしておく（検証済みメールの一意性を壊さない）。
-          email: collision === null && profile.emailVerified ? profile.email : null,
+          email: profile.emailVerified ? profile.email : null,
           createdAt: at,
           lastLoginAt: at,
           grantedAt: null,
@@ -253,13 +253,16 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         };
 
         /**
-         * **account の作成と identity の作成を1操作で行う**（issue #1714）。
+         * **account の作成・identity の作成・メールの衝突検査を1操作で行う**
+         * （issue #1714 / #1751 / #1741）。
          *
          * 上の `findIdentity` は早期の門前払いでしかない。同じ
          * `(provider, subject)` の2つのログインが同時に着くと、両方がここまで
          * `null` を見て進む。「読む→検査→書く」に割ったままだと両方が別の
          * account を作ってしまうので、`putAccount` + `putIdentity` の対を
-         * ストアの1操作へ渡し、在れば作らず既存を返させる。
+         * ストアの1操作へ渡し、在れば作らず既存を返させる。メールの衝突検査も
+         * 同じ理由で同じ操作の中にある——**この結果だけを信じる**（渡した
+         * `candidateAccount` をそのまま使わない）。
          */
         const outcome = await store.createAccountWithIdentity({
           account: candidateAccount,
@@ -275,7 +278,7 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         });
 
         if (outcome.created) {
-          account = candidateAccount;
+          account = outcome.account;
         } else {
           // 負けた側。既存 identity のログインと同じ扱いに落とす
           // （直上の `existing !== null` の分岐と同じ処理）。

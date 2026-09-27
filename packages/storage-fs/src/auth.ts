@@ -175,11 +175,14 @@ export class FsAuthStore implements AuthStore {
   }
 
   /**
-   * 「初めて見る identity」の account 作成を**1回の書き込みで**行う（issue #1714）。
+   * 「初めて見る identity」の account 作成を**1回の書き込みで**行う（issue #1714。
+   * 検証済みメールの衝突検査も同じ書き込みの中で行う——issue #1751 / #1741）。
    *
    * `#mutate` の判定・書き込みは同期的に評価されるので（`#mutate` の doc）、
-   * ここで見た「identity が無い」は書き込みの瞬間まで有効——同じ排他区間の
-   * 外から割り込む隙間が無い。在れば `next: null` で何も書かずに既存を返す。
+   * ここで見た「identity が無い」「メールが衝突しているか」はどちらも
+   * 書き込みの瞬間まで有効——同じ排他区間の外から割り込む隙間が無い。
+   * identity が在れば `next: null` で何も書かずに既存を返す。メールが
+   * 大小文字を区別せずに他の account と衝突していれば、空のメールで保存する。
    */
   async createAccountWithIdentity(input: {
     account: AuthAccount;
@@ -193,7 +196,15 @@ export class FsAuthStore implements AuthStore {
         if (existing !== undefined) {
           return { next: null, result: { created: false, existing } };
         }
-        const account = authAccountSchema.parse(input.account);
+        // 大小文字を区別しない（#1702）。memory / pg の実装と同じ規約。
+        const needle = input.account.email?.toLowerCase() ?? null;
+        const emailCollides =
+          needle !== null &&
+          file.accounts.some(
+            (it) => it.email !== null && it.email.toLowerCase() === needle,
+          );
+        const accountInput = emailCollides ? { ...input.account, email: null } : input.account;
+        const account = authAccountSchema.parse(accountInput);
         const identity = authIdentitySchema.parse(input.identity);
         return {
           next: {
@@ -201,7 +212,7 @@ export class FsAuthStore implements AuthStore {
             accounts: [...file.accounts.filter((it) => it.id !== account.id), account],
             identities: [...file.identities, identity],
           },
-          result: { created: true },
+          result: { created: true, account },
         };
       },
     );

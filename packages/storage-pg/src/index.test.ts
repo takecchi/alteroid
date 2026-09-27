@@ -40,6 +40,7 @@ import {
   seedPgWorkspace,
   type PgStores,
 } from './index.js';
+import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX } from './migrate.js';
 import {
   agentTokens,
   archive,
@@ -5009,6 +5010,263 @@ describe('AuthStore', () => {
       expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
       // 大小文字を区別せずに衝突を検出しているので null（#1702）。
       expect(claimedImpostorCase.account.email).toBeNull();
+    });
+
+    /**
+     * **issue #1751（同じ穴が #1741 にも起票されている。pg）。**
+     *
+     * `createAccountWithIdentity`（#1714）が当初1操作にしたのは同じ
+     * `(provider, subject)` の競合だけだった。メールの衝突検査
+     * （`findAccountByEmail`）は `completeLogin` の読んでから書く側に残って
+     * いたので、**別々の** identity が大小文字だけ違う検証済みメールで同時に
+     * ログインしてくると、両方が「衝突なし」を見て、両方が
+     * `createAccountWithIdentity` へ進んでいた。pg には
+     * `auth_accounts_email_lower_idx`（#1702）があるので、**直す前は片方が
+     * 生の一意制約違反（23505）で reject していた**（`allSettled` で見た実測。
+     * `Promise.all` にすると片方の reject がテスト自体を失敗させていた）。
+     *
+     * いまは衝突検査自体を `createAccountWithIdentity` の1トランザクションへ
+     * 移したので、**両方とも `ok` で返り、例外は1本も出ない**——`Promise.all`
+     * に戻して確かめる（`allSettled` のままだと reject が起きても検出できない）。
+     *
+     * **変異**: `packages/storage-pg/src/auth.ts` の `createAccountWithIdentity`
+     * にある事前 select、または2回目の `onConflictDoNothing` の insert（メールを
+     * 空にした入れ直し）を外すと、この歯は赤に戻る（`AssertionError` ではなく
+     * `duplicate key value violates unique constraint "auth_accounts_email_
+     * lower_idx"` で reject する）。
+     */
+    it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、投げずに検証済みメールを持つアカウントは1つだけ', async () => {
+      const service = createAuthService({
+        store: stores.auth,
+        providers: createAuthProviderRegistry([
+          fakeProvider({
+            'code-alice': {
+              subject: 'sub-alice',
+              email: 'alice@example.test',
+              emailVerified: true,
+              displayName: 'Alice',
+            },
+            'code-impostor-case': {
+              subject: 'sub-impostor-case',
+              email: 'ALICE@EXAMPLE.TEST',
+              emailVerified: true,
+              displayName: 'Not Alice (case)',
+            },
+          }),
+        ]),
+      });
+
+      const first = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const second = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const stateFirst = decodeState(
+        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      const stateSecond = decodeState(
+        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      expect(stateFirst).not.toBeNull();
+      expect(stateSecond).not.toBeNull();
+
+      const [resultA, resultB] = await Promise.all([
+        service.completeLogin({
+          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+          code: 'code-alice',
+        }),
+        service.completeLogin({
+          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+          code: 'code-impostor-case',
+        }),
+      ]);
+
+      expect(resultA.status).toBe('ok');
+      expect(resultB.status).toBe('ok');
+      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+        throw new Error('ログインできていない');
+      }
+      expect(resultA.accountId).not.toBe(resultB.accountId);
+
+      const accounts = await stores.auth.listAccounts();
+      expect(accounts).toHaveLength(2);
+      const withVerifiedEmail = accounts.filter((account) => account.email !== null);
+      expect(withVerifiedEmail).toHaveLength(1);
+    });
+
+    /** **issue #1741（大小文字が同じ版。#1751 と同じ穴）。** */
+    it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、投げずに検証済みメールを持つアカウントは1つだけ', async () => {
+      const service = createAuthService({
+        store: stores.auth,
+        providers: createAuthProviderRegistry([
+          fakeProvider({
+            'code-alice': {
+              subject: 'sub-alice',
+              email: 'alice@example.test',
+              emailVerified: true,
+              displayName: 'Alice',
+            },
+            'code-impostor-samecase': {
+              subject: 'sub-impostor-samecase',
+              email: 'alice@example.test',
+              emailVerified: true,
+              displayName: 'Not Alice (same case)',
+            },
+          }),
+        ]),
+      });
+
+      const first = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const second = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const stateFirst = decodeState(
+        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      const stateSecond = decodeState(
+        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      expect(stateFirst).not.toBeNull();
+      expect(stateSecond).not.toBeNull();
+
+      const [resultA, resultB] = await Promise.all([
+        service.completeLogin({
+          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+          code: 'code-alice',
+        }),
+        service.completeLogin({
+          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+          code: 'code-impostor-samecase',
+        }),
+      ]);
+
+      expect(resultA.status).toBe('ok');
+      expect(resultB.status).toBe('ok');
+      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+        throw new Error('ログインできていない');
+      }
+      expect(resultA.accountId).not.toBe(resultB.accountId);
+
+      const accounts = await stores.auth.listAccounts();
+      expect(accounts).toHaveLength(2);
+      const withVerifiedEmail = accounts.filter((account) => account.email !== null);
+      expect(withVerifiedEmail).toHaveLength(1);
+    });
+
+    /**
+     * **ストアの層（issue #1751 / #1741）。** `completeLogin` を経由せず、
+     * `AuthStore.createAccountWithIdentity` を直接、**別々の** identity・
+     * **同じ**候補メールで並行に呼ぶ。core（memory）・fs 側の同名の歯と同じ
+     * 入力・同じ期待値。
+     *
+     * **変異**: `createAccountWithIdentity` の事前 select、または2回目の
+     * insert（メールを空にした入れ直し）を外すと、この歯は赤に戻る。
+     */
+    it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
+      const makeInput = (accountId: string, subject: string) => ({
+        account: {
+          id: accountId,
+          displayName: 'Someone',
+          email: 'shared@example.test',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          lastLoginAt: '2026-01-01T00:00:00.000Z',
+          grantedAt: null,
+          grantedBy: null,
+          ownerDeclaredAt: null,
+        },
+        identity: {
+          provider: 'google',
+          subject,
+          accountId,
+          email: 'shared@example.test',
+          emailVerified: true,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          lastLoginAt: '2026-01-01T00:00:00.000Z',
+        },
+      });
+
+      const results = await Promise.all([
+        stores.auth.createAccountWithIdentity(makeInput('account-diff-identity-a', 'sub-diff-a')),
+        stores.auth.createAccountWithIdentity(makeInput('account-diff-identity-b', 'sub-diff-b')),
+      ]);
+
+      expect(results.every((result) => result.created)).toBe(true);
+      const emails = results.map((result) => (result.created ? result.account.email : null));
+      expect(emails.filter((email) => email !== null)).toHaveLength(1);
+
+      const accounts = (await stores.auth.listAccounts()).filter((it) =>
+        it.id.startsWith('account-diff-identity-'),
+      );
+      expect(accounts).toHaveLength(2);
+      expect(accounts.filter((it) => it.email !== null)).toHaveLength(1);
+    });
+
+    /**
+     * **#1702 の重複状態（旧索引だけの DB）でも投げないこと。** `migrate.test.ts`
+     * の `makeOldFormatDb` と同じ作り方——空の DB へ `migrate` を通した直後に
+     * 新索引（`auth_accounts_email_lower_idx`）を drop し、大小文字を区別する
+     * 旧索引（`auth_accounts_email_idx`）を作り直す。この DB には「大小文字
+     * だけが違う検証済みメール」を拒む制約が無いので、DB 制約側の
+     * `onConflictDoNothing` はここでは効かない——効くのはアプリの層の事前
+     * select だけである。
+     *
+     * ⚠️ **確かめるのは「投げないこと」だけである。** 事前 select と insert の
+     * 間の競合windowは塞がっていない（`auth.ts` の doc）ので、大小文字違いの
+     * 重複ができないことまでは保証しない——ここでは重複の有無を assert しない。
+     */
+    it('#1702 の重複状態（旧索引だけの DB）でも、別々の identity・大小文字違いの候補メールで並行に呼んでも投げない', async () => {
+      const localClient = new PGlite();
+      const localDb = drizzle(localClient);
+      await migrate(localDb);
+      await localDb.execute(
+        sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`),
+      );
+      await localDb.execute(
+        sql.raw('create unique index if not exists auth_accounts_email_idx on auth_accounts (email)'),
+      );
+      const localStores = createPgStoresFromDb(localDb);
+
+      const makeInput = (accountId: string, subject: string, email: string) => ({
+        account: {
+          id: accountId,
+          displayName: 'Someone',
+          email,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          lastLoginAt: '2026-01-01T00:00:00.000Z',
+          grantedAt: null,
+          grantedBy: null,
+          ownerDeclaredAt: null,
+        },
+        identity: {
+          provider: 'google',
+          subject,
+          accountId,
+          email,
+          emailVerified: true,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          lastLoginAt: '2026-01-01T00:00:00.000Z',
+        },
+      });
+
+      await expect(
+        Promise.all([
+          localStores.auth.createAccountWithIdentity(
+            makeInput('account-old-format-a', 'sub-old-format-a', 'alice@example.test'),
+          ),
+          localStores.auth.createAccountWithIdentity(
+            makeInput('account-old-format-b', 'sub-old-format-b', 'ALICE@EXAMPLE.TEST'),
+          ),
+        ]),
+      ).resolves.toBeDefined();
+
+      await localClient.close();
     });
   });
 

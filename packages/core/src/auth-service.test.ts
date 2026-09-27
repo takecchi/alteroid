@@ -94,6 +94,13 @@ describe('createAuthService', () => {
             emailVerified: true,
             displayName: 'Not Alice (case)',
           },
+          // 大小文字まで完全に同じ版（#1741）。
+          'code-impostor-samecase': {
+            subject: 'sub-impostor-samecase',
+            email: 'alice@example.test',
+            emailVerified: true,
+            displayName: 'Not Alice (same case)',
+          },
         }),
       ]),
       newId: () => `id-${++counter}`,
@@ -401,6 +408,164 @@ describe('createAuthService', () => {
     const accounts = await store.listAccounts();
     expect(accounts).toHaveLength(1);
     expect(await store.listIdentities(resultA.accountId)).toHaveLength(1);
+  });
+
+  /**
+   * **issue #1751（同じ穴が issue #1741 にも起票されている。大小文字が同じ版）。**
+   *
+   * `createAccountWithIdentity`（#1714）は当初、同じ `(provider, subject)` の
+   * 同時ログインだけを1操作にしていた。メールの衝突検査（`findAccountByEmail`、
+   * #1702）は `completeLogin` の「読んでから書く」側に残っていたので、**別々の
+   * identity**（= 別の `(provider, subject)`）が同時に初めてログインしてくると、
+   * 両方が `findAccountByEmail` で衝突なしを見て、両方の候補 account に検証済み
+   * メールが乗っていた。いまは衝突検査自体を `createAccountWithIdentity` の
+   * 1操作の中へ移した——ここでは大小文字だけが違う版（#1702 が「同じメール」と
+   * 扱うと決めた組）で確かめる。
+   *
+   * **変異**: `testing.ts` の `createAccountWithIdentity` にある `emailCollides`
+   * の判定を外す（常に `false` にする）と、この歯は赤に戻る。
+   */
+  it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
+    const first = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const second = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const stateFirst = decodeState(new URL(first.authorizationUrl).searchParams.get('state') ?? '');
+    const stateSecond = decodeState(
+      new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+    );
+    expect(stateFirst).not.toBeNull();
+    expect(stateSecond).not.toBeNull();
+
+    const [resultA, resultB] = await Promise.all([
+      service.completeLogin({
+        state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+        code: 'code-alice',
+      }),
+      service.completeLogin({
+        state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+        code: 'code-impostor-case',
+      }),
+    ]);
+
+    expect(resultA.status).toBe('ok');
+    expect(resultB.status).toBe('ok');
+    if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+      throw new Error('ログインできていない');
+    }
+    // 別 identity なので別アカウントであるべき。
+    expect(resultA.accountId).not.toBe(resultB.accountId);
+
+    const accounts = await store.listAccounts();
+    // 両方とも別アカウントとして作られる（許可は広げない。1操作の中で
+    // メールだけを空にする——アカウントの作成自体は塞がない）。
+    expect(accounts).toHaveLength(2);
+    const withVerifiedEmail = accounts.filter((account) => account.email !== null);
+    // #1702 の意図（検証済みメールの一意性を壊さない）が保たれているので、
+    // 大小文字だけが違う同じメールを持つアカウントはちょうど1つ。
+    expect(withVerifiedEmail).toHaveLength(1);
+  });
+
+  /**
+   * **issue #1741（大小文字が同じ版。#1751 と同じ穴）。** #1702 の決定により
+   * 大小文字違いと同じ扱いになるはずだが、**大小文字がそもそも同じ**組み合わせ
+   * でも同じ経路（`createAccountWithIdentity` の1操作）を通ることを別に確かめる
+   * ——大小文字を無視する比較の実装ミスで「違うときだけ」効いて「同じとき」は
+   * 効かない、という取り違えを潰す。
+   */
+  it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
+    const first = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const second = await service.startLogin({
+      provider: 'fake',
+      redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+    });
+    const stateFirst = decodeState(new URL(first.authorizationUrl).searchParams.get('state') ?? '');
+    const stateSecond = decodeState(
+      new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+    );
+    expect(stateFirst).not.toBeNull();
+    expect(stateSecond).not.toBeNull();
+
+    const [resultA, resultB] = await Promise.all([
+      service.completeLogin({
+        state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+        code: 'code-alice',
+      }),
+      service.completeLogin({
+        state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+        code: 'code-impostor-samecase',
+      }),
+    ]);
+
+    expect(resultA.status).toBe('ok');
+    expect(resultB.status).toBe('ok');
+    if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+      throw new Error('ログインできていない');
+    }
+    expect(resultA.accountId).not.toBe(resultB.accountId);
+
+    const accounts = await store.listAccounts();
+    expect(accounts).toHaveLength(2);
+    const withVerifiedEmail = accounts.filter((account) => account.email !== null);
+    expect(withVerifiedEmail).toHaveLength(1);
+  });
+
+  /**
+   * **ストアの層（issue #1751 / #1741）。** `completeLogin` を経由せず、
+   * `AuthStore.createAccountWithIdentity` を直接、**別々の** identity・
+   * **同じ**候補メールで並行に呼ぶ。fs / pg 側の同名の歯
+   * （`packages/storage-fs/src/index.test.ts` /
+   * `packages/storage-pg/src/index.test.ts`）と同じ入力・同じ期待値。
+   *
+   * **変異**: `testing.ts` の `createAccountWithIdentity` にある
+   * `emailCollides` の判定を外すと、この歯は赤に戻る（両方の account に
+   * `email` が乗る）。
+   */
+  it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
+    const makeInput = (accountId: string, subject: string) => ({
+      account: {
+        id: accountId,
+        displayName: 'Someone',
+        email: 'shared@example.test',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      },
+      identity: {
+        provider: 'google',
+        subject,
+        accountId,
+        email: 'shared@example.test',
+        emailVerified: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const results = await Promise.all([
+      store.createAccountWithIdentity(makeInput('account-diff-identity-a', 'sub-diff-a')),
+      store.createAccountWithIdentity(makeInput('account-diff-identity-b', 'sub-diff-b')),
+    ]);
+
+    // 別々の identity なので、どちらも作られる（負けない）。
+    expect(results.every((result) => result.created)).toBe(true);
+    const emails = results.map((result) => (result.created ? result.account.email : null));
+    expect(emails.filter((email) => email !== null)).toHaveLength(1);
+
+    const accounts = (await store.listAccounts()).filter((it) =>
+      it.id.startsWith('account-diff-identity-'),
+    );
+    expect(accounts).toHaveLength(2);
+    expect(accounts.filter((it) => it.email !== null)).toHaveLength(1);
   });
 
   it('同じ claim を並行に投げても、有効なトークンは1本しか出ない', async () => {

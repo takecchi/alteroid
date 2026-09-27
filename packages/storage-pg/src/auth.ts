@@ -149,7 +149,8 @@ export class PgAuthStore implements AuthStore {
 
   /**
    * 「初めて見る identity」の account 作成を**1つのトランザクションで**行う
-   * （issue #1714）。
+   * （issue #1714。検証済みメールの衝突検査も同じトランザクションの中——
+   * issue #1751 / #1741）。
    *
    * **identity を先に、`(provider, subject)` の一意制約に対する
    * `on conflict do nothing` で insert する。1行入ったときだけ account を
@@ -174,9 +175,16 @@ export class PgAuthStore implements AuthStore {
    * account を指す一時的な状態を作ることに問題は無い——同じトランザクション内で
    * 即座に account を insert して埋める。
    *
-   * account の insert が（この対象とは別の理由で）落ちたら、例外はそのまま
-   * 投げる——トランザクションごと巻き戻るので、先に入れた identity も一緒に
-   * 消える（孤児は作らない）。
+   * **account の insert 自体も、いまは生の insert ではない（issue #1751 /
+   * #1741）。** `completeLogin` の外側にあった `findAccountByEmail` を消した
+   * ので、**別々の** identity が同じ検証済みメールを同時に候補 account へ
+   * 載せる形が、この操作の内側でだけ起こりうる。account の insert は
+   * `onConflictDoNothing()` ＋ 事前の大小文字を区別しない select の2段構えで
+   * 行う（実装本体の doc に詳細がある）——生の一意制約違反では落ちず、
+   * 衝突していればメールを空にして入れ直す。account の insert がそれでも
+   * 通らない（id の衝突など、メールの手当てが効かない理由）場合だけ、例外を
+   * そのまま投げる——トランザクションごと巻き戻るので、先に入れた identity
+   * も一緒に消える（孤児は作らない）。
    */
   async createAccountWithIdentity(input: {
     account: AuthAccount;
@@ -224,10 +232,48 @@ export class PgAuthStore implements AuthStore {
         return { created: false, existing: this.#toIdentity(existingRow) };
       }
 
-      await tx.insert(authAccounts).values({
+      /**
+       * **検証済みメールの衝突検査も、この同じトランザクションの中で行う**
+       * （issue #1751 / #1741）。ここまでで identity の一意制約は通過している
+       * ので、ここから先で起こりうる衝突は「**別々の** identity が同じ検証済み
+       * メールを同時に候補 account へ載せた」形だけである。
+       *
+       * 2段構えにする。
+       *
+       * 1. **事前 select**（大小文字を区別しない、`findAccountByEmail` と同じ
+       *    `lower()` 比較）。#1702 の重複状態（`auth_accounts_email_lower_idx`
+       *    が作れず、大小文字を区別する旧索引 `auth_accounts_email_idx` だけが
+       *    在る DB）では、DB 制約は大小文字違いの衝突を拒まない——ここが
+       *    唯一の防波堤になる。ただし select から insert までの間に別の
+       *    トランザクションが割り込む窓は残る（下の注記）。
+       * 2. **`onConflictDoNothing()`（target 無し＝無条件）での insert。**
+       *    新索引がある DB では、事前 select と insert の間に別のトランザクション
+       *    が同じメールを先に commit しても、ここで do nothing になる
+       *    （生の 23505 では落ちない）。0行のまま返ってきたら、メールを空に
+       *    して同じ id で入れ直す。
+       *
+       * **target を明示しない理由**: 索引は `lower(email)` という式索引で、
+       * かつ `id` の主キー制約もこのテーブルに在る。式索引をピンポイントで
+       * 狙うより、「この insert で起きた conflict はひとまずメールが原因と
+       * 仮定して空で入れ直し、それでも入らなければ id の衝突として例外にする」
+       * ほうが単純——2回目の insert（同じ id・メールは null）が通れば
+       * 1回目の失敗はメール起因だったと分かり、2回目も0行なら id 起因だったと
+       * 分かる。`id` は乱数（`newId()`）なので id 衝突は実質起きない
+       * （**確かめてはいない** —— id 生成の一意性は `newId()` 側の責務で、
+       * ここでは「万一起きたら空メールでの回避を試みずに例外にする」という
+       * fail-closed のふるまいだけを保証する）。
+       *
+       * ⚠️ **#1702 の重複状態でも、事前 select と insert の間の競合windowは
+       * 完全には塞がらない。** 新索引が無い DB では、2つのトランザクションが
+       * 互いにまだ commit していない状態で両方が select を通過すると、
+       * どちらも「衝突なし」を見て両方とも実メールで insert し、DB 制約も
+       * 検出しないので、大小文字違いの重複が残ることがある——これは #1702
+       * 以前から在った「同時性の窓」の範囲内で、新しく直した穴ではない。
+       */
+      const values = (email: string | null) => ({
         id: account.id,
         displayName: account.displayName,
-        email: account.email,
+        email,
         createdAt: new Date(account.createdAt),
         lastLoginAt: optionalDate(account.lastLoginAt),
         grantedAt: optionalDate(account.grantedAt),
@@ -235,7 +281,54 @@ export class PgAuthStore implements AuthStore {
         ownerDeclaredAt: optionalDate(account.ownerDeclaredAt),
       });
 
-      return { created: true };
+      let emailForInsert = account.email;
+      if (emailForInsert !== null) {
+        const collisionRows = await tx
+          .select({ id: authAccounts.id })
+          .from(authAccounts)
+          .where(sql`lower(${authAccounts.email}) = lower(${emailForInsert})`)
+          .limit(1);
+        if (collisionRows.length > 0) {
+          emailForInsert = null;
+        }
+      }
+
+      let insertedRows = await tx
+        .insert(authAccounts)
+        .values(values(emailForInsert))
+        .onConflictDoNothing()
+        .returning();
+
+      if (insertedRows.length === 0) {
+        if (emailForInsert === null) {
+          // メールを空にした状態でも一意制約に当たった——email 列は
+          // NULL どうしを衝突として扱わないので、残る一意制約は id（主キー）
+          // しかない。メールを空にする手当ては効かない種類の衝突なので、
+          // 例外として投げる。
+          throw new Error(
+            'createAccountWithIdentity: account の insert が id の衝突などで通らない',
+          );
+        }
+        // 負けた——事前 select の後、この insert までの間に別のトランザクション
+        // が同じ（大小文字違いを含む）検証済みメールを先に commit した。
+        // メールを空にして、同じ id で入れ直す。
+        insertedRows = await tx
+          .insert(authAccounts)
+          .values(values(null))
+          .onConflictDoNothing()
+          .returning();
+        if (insertedRows.length === 0) {
+          throw new Error(
+            'createAccountWithIdentity: メールを空にしても account の insert が通らない（id の衝突）',
+          );
+        }
+      }
+
+      const insertedRow = insertedRows[0];
+      if (insertedRow === undefined) {
+        throw new Error('createAccountWithIdentity: insert の returning が空（矛盾）');
+      }
+      return { created: true, account: this.#toAccount(insertedRow) };
     });
   }
 

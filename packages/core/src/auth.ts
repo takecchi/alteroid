@@ -180,6 +180,15 @@ export interface AuthStore {
    * `ALICE@EXAMPLE.TEST` は同じメールとして扱う——3実装（memory / fs / pg）
    * とも比較の前に小文字化する（pg は `lower(email) = lower($1)`）。保存する
    * メールそのもの（表示用）は正規化しない——比較のときだけ小文字にそろえる。
+   *
+   * ⚠️ **issue #1751 / #1741 以降、`completeLogin`（`auth-service.ts`）はこれを
+   * 呼ばない。** 衝突検査は `createAccountWithIdentity` の1操作の中へ移した
+   * （このメソッドの doc）——「読んでから書く」形の外側検査だと、別々の
+   * identity が同じ検証済みメールで同時に初回ログインしたとき、両方が
+   * 「衝突なし」を見てしまうため。**このメソッドは現時点でテスト以外の
+   * 呼び手が無い。** IF には残す（衝突検査という概念そのものに用途が
+   * 他に出てくる可能性があるため）が、新しい呼び手を足すときは、それが
+   * 「読んでから書く」形の穴を再び作っていないか確かめること。
    */
   findAccountByEmail(email: string): Promise<AuthAccount | null>;
   putAccount(account: AuthAccount): Promise<void>;
@@ -207,13 +216,30 @@ export interface AuthStore {
    * 二度とそのアカウントではログインできない）。
    *
    * その `(provider, subject)` の identity が**無ければ** `account` と
-   * `identity` を一緒に作って `{ created: true }` を返す。**在れば何も書かず**
-   * 既存の identity を `{ created: false, existing }` で返す——呼び手
-   * （`completeLogin`）はこれを「既存 identity のログイン」と同じ扱いに落とす
-   * （既存アカウントで認証し、`lastLoginAt` と identity のメールを追従させる）。
+   * `identity` を一緒に作って `{ created: true, account }` を返す。**在れば
+   * 何も書かず**既存の identity を `{ created: false, existing }` で返す——
+   * 呼び手（`completeLogin`）はこれを「既存 identity のログイン」と同じ扱いに
+   * 落とす（既存アカウントで認証し、`lastLoginAt` と identity のメールを
+   * 追従させる）。
    *
    * **「読む → 検査 → 書く」に割ってはいけない。** 割ると、検査と書き込みの間に
    * 別の呼び出しが同じ identity を作る窓ができ、上と同じ形の重複が再発する。
+   *
+   * ⚠️ **検証済みメールの衝突検査も、この1操作の中で行う（issue #1751 /
+   * #1741）。** `completeLogin` は `account.email` に「候補のメール」（検証済み
+   * ならプロバイダのメールをそのまま）を載せて渡す——**衝突の有無はここが
+   * 決める。** `account.email` が空でなく、**別の** account が大小文字を
+   * 区別せずに同じメールを既に持っているなら、**空のメールで作る**（検証済み
+   * メールの一意性を壊さない）。`{ created: true }` の `account` には**実際に
+   * 保存した account**（衝突していればメールが空の版）を載せる——呼び手は
+   * これを見て、自分が渡した候補がそのまま通ったかどうかを知る。
+   *
+   * **なぜ `findAccountByEmail` の外側検査（直す前の形）では不十分だったか**:
+   * 同じ `(provider, subject)` の競合はこの操作の内側（identity の一意制約）で
+   * 塞がるが、**別々の** identity が同じ検証済みメールで同時に初回ログイン
+   * すると、外側の `findAccountByEmail` は両方とも「衝突なし」を見る——
+   * どちらの候補にもメールが乗ってしまう。衝突検査を「読んでから書く」の
+   * 外側に置く限り、この形の競合は塞げない。
    *
    * ドライバはそれぞれの器で原子性を出す——fs は1回の書き込みで、pg は1つの
    * トランザクション内で**先に** identity を条件付き（一意制約）で insert し、
@@ -221,12 +247,16 @@ export interface AuthStore {
    *
    * ⚠️ **pg で account を先に insert してはいけない。** `auth_accounts_email_
    * lower_idx`（#1702。検証済みメールの一意索引）が本番に在るため、同じ
-   * identity の2つのログインは（`completeLogin` の外側の衝突検査を同時に
-   * 通り抜けて）同じメールを候補 account に載せうる——account を先に insert
-   * すると、負けた側が identity の一意制約へ辿り着く前に**メールの一意制約
-   * 違反という別の例外**で落ちる（`.claude/skills/auth-and-access/SKILL.md`
-   * にも同じ注記がある）。identity を先にすれば、負けた側は identity の一意
-   * 制約だけで do nothing になり、メールの索引には当たらない。
+   * identity の2つのログインが同じ検証済みメールを候補 account に載せうる
+   * （メールの衝突検査はこの操作の中にあるが、識別は identity の一意制約が
+   * 先に効くことに変わりはない）——account を先に insert すると、負けた側が
+   * identity の一意制約へ辿り着く前に**メールの一意制約違反という別の例外**
+   * で落ちる（`.claude/skills/auth-and-access/SKILL.md` にも同じ注記がある）。
+   * identity を先にすれば、負けた側は identity の一意制約だけで do nothing
+   * になり、メールの索引には当たらない。**別々の** identity が同じメールで
+   * 競合する場合（#1751 / #1741 が直した形）は、account の insert 自体が
+   * `on conflict do nothing` で試され、入らなければメールを空にして入れ直す
+   * ——実装は `packages/storage-pg/src/auth.ts` の doc を見ること。
    */
   createAccountWithIdentity(input: {
     account: AuthAccount;
@@ -329,9 +359,17 @@ export type GrantOutcome = { status: 'granted'; account: AuthAccount } | { statu
 export type OwnerOutcome =
   { status: 'ok'; account: AuthAccount } | { status: 'not_found' } | { status: 'not_granted' };
 
-/** `createAccountWithIdentity` の結果（issue #1714）。 */
+/**
+ * `createAccountWithIdentity` の結果（issue #1714）。
+ *
+ * **`created: true` の `account` は、渡した候補そのものとは限らない**
+ * （issue #1751 / #1741）。別のアカウントが大小文字を区別せずに同じメールを
+ * 既に持っていたら、ストアはメールを空にして保存し、その**保存した版**を
+ * ここへ載せる。呼び手は渡した候補を使い回さず、必ずこの `account` を見ること。
+ */
 export type CreateAccountWithIdentityOutcome =
-  { created: true } | { created: false; existing: AuthIdentity };
+  | { created: true; account: AuthAccount }
+  | { created: false; existing: AuthIdentity };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ

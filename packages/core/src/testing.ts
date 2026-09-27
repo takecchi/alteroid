@@ -1147,13 +1147,24 @@ export function createMemoryStores(): Stores {
       const key = identityKey(identity.provider, identity.subject);
       const existing = identities.get(key);
       if (existing !== undefined) return { created: false, existing };
+      // **検証済みメールの衝突検査もここで行う（issue #1751 / #1741）。**
+      // 大小文字を区別しない（`findAccountByEmail` と同じ比較）。ここも
+      // 同期のまま判定から書き込みまで進む——await を挟まないので、別々の
+      // identity を同時に作ろうとする2本目が割り込む窓は無い。
+      const needle = account.email?.toLowerCase() ?? null;
+      const emailCollides =
+        needle !== null &&
+        [...accounts.values()].some(
+          (other) => other.email !== null && other.email.toLowerCase() === needle,
+        );
+      const accountToSave = emailCollides ? { ...account, email: null } : account;
       // 本物（fs / pg）と同じく `authAccountSchema` / `authIdentitySchema` を
       // 通す（issue #1715。fs と同じ並び——account を先に parse する）。
-      const parsedAccount = authAccountSchema.parse(account);
+      const parsedAccount = authAccountSchema.parse(accountToSave);
       const parsedIdentity = authIdentitySchema.parse(identity);
       accounts.set(parsedAccount.id, parsedAccount);
       identities.set(key, parsedIdentity);
-      return { created: true };
+      return { created: true, account: parsedAccount };
     },
     async putAccessToken(token) {
       // 本物（fs / pg）と同じく `accessTokenRecordSchema` を通す（issue #1715）。

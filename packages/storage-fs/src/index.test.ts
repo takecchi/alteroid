@@ -4213,6 +4213,54 @@ describe('AuthStore', () => {
     expect(accounts).toHaveLength(1);
   });
 
+  /**
+   * **issue #1751 / #1741。** 同じ identity ではなく**別々の** identity が
+   * 同じ候補メールで `createAccountWithIdentity` を並行に呼んでも、投げずに
+   * どちらも作られ、メールが載るのは1つだけであること。core（memory）・pg
+   * 側の同名の歯と同じ入力・同じ期待値。
+   *
+   * **変異**: `createAccountWithIdentity` の `emailCollides` 判定を外すと、
+   * この歯は赤に戻る（両方の account に `email` が乗る）。
+   */
+  it('createAccountWithIdentity を別々の identity・同じ候補メールで並行に呼んでも、投げずにメールが載るのは1つだけ', async () => {
+    const makeInput = (accountId: string, subject: string) => ({
+      account: {
+        id: accountId,
+        displayName: 'Someone',
+        email: 'shared@example.test',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      },
+      identity: {
+        provider: 'google',
+        subject,
+        accountId,
+        email: 'shared@example.test',
+        emailVerified: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastLoginAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+
+    const results = await Promise.all([
+      stores.auth.createAccountWithIdentity(makeInput('account-diff-identity-a', 'sub-diff-a')),
+      stores.auth.createAccountWithIdentity(makeInput('account-diff-identity-b', 'sub-diff-b')),
+    ]);
+
+    expect(results.every((result) => result.created)).toBe(true);
+    const emails = results.map((result) => (result.created ? result.account.email : null));
+    expect(emails.filter((email) => email !== null)).toHaveLength(1);
+
+    const accounts = (await stores.auth.listAccounts()).filter((it) =>
+      it.id.startsWith('account-diff-identity-'),
+    );
+    expect(accounts).toHaveLength(2);
+    expect(accounts.filter((it) => it.email !== null)).toHaveLength(1);
+  });
+
   it('トークンの保存が落ちたら、ログイン要求は authenticated のまま残る', async () => {
     await stores.auth.putAccount(account);
     await stores.auth.putLoginRequest({
@@ -4414,6 +4462,146 @@ describe('AuthStore', () => {
       expect(claimedImpostorCase.account.id).not.toBe(claimedAlice.account.id);
       // 大小文字を区別せずに衝突を検出しているので null（#1702）。
       expect(claimedImpostorCase.account.email).toBeNull();
+    });
+
+    /**
+     * **issue #1751（同じ穴が #1741 にも起票されている。fs）。**
+     *
+     * `createAccountWithIdentity`（#1714）が当初1操作にしたのは同じ
+     * `(provider, subject)` の競合だけだった。メールの衝突検査
+     * （`findAccountByEmail`）は `completeLogin` の読んでから書く側に残って
+     * いたので、**別々の identity** が大小文字だけ違う検証済みメールで同時に
+     * ログインしてくると、fs でも両方が「衝突なし」を見て、検証済みメールを
+     * 持つアカウントが2つできていた（fs にはメールの一意制約が無い）。いまは
+     * 衝突検査自体を `createAccountWithIdentity` の1操作（`#mutate` の中）へ
+     * 移した。
+     *
+     * **変異**: `packages/storage-fs/src/auth.ts` の `createAccountWithIdentity`
+     * にある `emailCollides` の判定を外すと、この歯は赤に戻る。
+     */
+    it('r2: 別々の identity が大小文字だけ違う検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
+      const service = createAuthService({
+        store: stores.auth,
+        providers: createAuthProviderRegistry([
+          fakeProvider({
+            'code-alice': {
+              subject: 'sub-alice',
+              email: 'alice@example.test',
+              emailVerified: true,
+              displayName: 'Alice',
+            },
+            'code-impostor-case': {
+              subject: 'sub-impostor-case',
+              email: 'ALICE@EXAMPLE.TEST',
+              emailVerified: true,
+              displayName: 'Not Alice (case)',
+            },
+          }),
+        ]),
+      });
+
+      const first = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const second = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const stateFirst = decodeState(
+        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      const stateSecond = decodeState(
+        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      expect(stateFirst).not.toBeNull();
+      expect(stateSecond).not.toBeNull();
+
+      const [resultA, resultB] = await Promise.all([
+        service.completeLogin({
+          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+          code: 'code-alice',
+        }),
+        service.completeLogin({
+          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+          code: 'code-impostor-case',
+        }),
+      ]);
+
+      expect(resultA.status).toBe('ok');
+      expect(resultB.status).toBe('ok');
+      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+        throw new Error('ログインできていない');
+      }
+      expect(resultA.accountId).not.toBe(resultB.accountId);
+
+      const accounts = await stores.auth.listAccounts();
+      expect(accounts).toHaveLength(2);
+      const withVerifiedEmail = accounts.filter((account) => account.email !== null);
+      expect(withVerifiedEmail).toHaveLength(1);
+    });
+
+    /** **issue #1741（大小文字が同じ版。#1751 と同じ穴）。** */
+    it('#1741: 別々の identity が大小文字まで同じ検証済みメールで同時にログインしても、検証済みメールを持つアカウントは1つだけ', async () => {
+      const service = createAuthService({
+        store: stores.auth,
+        providers: createAuthProviderRegistry([
+          fakeProvider({
+            'code-alice': {
+              subject: 'sub-alice',
+              email: 'alice@example.test',
+              emailVerified: true,
+              displayName: 'Alice',
+            },
+            'code-impostor-samecase': {
+              subject: 'sub-impostor-samecase',
+              email: 'alice@example.test',
+              emailVerified: true,
+              displayName: 'Not Alice (same case)',
+            },
+          }),
+        ]),
+      });
+
+      const first = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const second = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const stateFirst = decodeState(
+        new URL(first.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      const stateSecond = decodeState(
+        new URL(second.authorizationUrl).searchParams.get('state') ?? '',
+      );
+      expect(stateFirst).not.toBeNull();
+      expect(stateSecond).not.toBeNull();
+
+      const [resultA, resultB] = await Promise.all([
+        service.completeLogin({
+          state: `${stateFirst?.requestId}.${stateFirst?.nonce}`,
+          code: 'code-alice',
+        }),
+        service.completeLogin({
+          state: `${stateSecond?.requestId}.${stateSecond?.nonce}`,
+          code: 'code-impostor-samecase',
+        }),
+      ]);
+
+      expect(resultA.status).toBe('ok');
+      expect(resultB.status).toBe('ok');
+      if (resultA.status !== 'ok' || resultB.status !== 'ok') {
+        throw new Error('ログインできていない');
+      }
+      expect(resultA.accountId).not.toBe(resultB.accountId);
+
+      const accounts = await stores.auth.listAccounts();
+      expect(accounts).toHaveLength(2);
+      const withVerifiedEmail = accounts.filter((account) => account.email !== null);
+      expect(withVerifiedEmail).toHaveLength(1);
     });
   });
 });
