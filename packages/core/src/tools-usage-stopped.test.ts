@@ -155,4 +155,29 @@ describe('manager_list: usageStoppedAt の注記は status で言い分ける（
     expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
     expect(reply).not.toContain('セッションは生きているので、鍵が回ればこの委譲は続く');
   });
+
+  /**
+   * `abort()` は `usageStoppedAt` に触れない（`manager.ts` の `#confirmStoppedAndReleaseLease`
+   * を確認済み）——枠で止まっていた委譲がそのまま人間・クローンに止められると、
+   * 印が残ったまま `status: 'stopped'` になる。**`isManagerOutcomeUnobserved`
+   * （`failed` / `lost`）はこの回を含まない**——最初の実装（PR #1857 の下書き）は
+   * ここを見落として `stopped` を除いており、この歯を実際に反転して確かめた
+   * （直す前は「セッションは生きている」を言ったままだった）。「望んだ終端か」と
+   * 「セッションが生きているか」は別の軸で、`stopped` も `failed`/`lost` と同じく
+   * `isLive()` が確認済みで死んでいると扱う側である（`manager.ts` の `isLive()`
+   * の doc「`stopped` も `lost` と同じ列に置く」）。
+   */
+  it('status: stopped では「セッションは生きている」と言い切らない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.managers[0];
+    if (!target) throw new Error('準備に失敗');
+    target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
+    target.status = 'stopped';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
+    expect(reply).not.toContain('セッションは生きているので、鍵が回ればこの委譲は続く');
+  });
 });
