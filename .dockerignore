@@ -13,6 +13,13 @@ coverage
 # 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore / .prettierignore /
 # eslint.config.js と同じ。揃っていることは scripts/scratch-ignore-alignment.test.ts が測る）。
 **/.scratch
+# .gitignore が外している、ほかの共有の置き場。`workspace` は対象のリポジトリの clone
+# （`.git/config` に資格が入りうる）、`.pnpm-store` は依存の実体、`.mutation-testing` と
+# MUTATION-IN-PROGRESS.json は変異の控えと印。どれもイメージに焼かない。
+workspace
+.pnpm-store
+.mutation-testing
+MUTATION-IN-PROGRESS.json
 .env
 .env.*
 # docs/ は除外しない。**正典はビルドの入力である** — packages/core が

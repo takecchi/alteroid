@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -62,6 +62,7 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
       'MCP_CLIENT_PRIVATE_KEY_PEM',
       'SENTRY_DSN',
       'NPMTOKEN',
+      'ALTEROID_GOOGLE_CLIENT_ID',
     ]) {
       expect(isSecretEnvName(name), name).toBe(true);
     }
@@ -85,15 +86,33 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
    * （16回目の横断レビューの `ALTEROID_DATABASE_URL` がその形だった）。ここで
    * 突き合わせれば、足し忘れは赤になる。
    *
-   * `WITHHELD_ENV_KEYS` は、ソースの文字列から読む（`@alteroid/core` を import すると
-   * build の順序に縛られるため）。
+   * **一覧は、ソースの文字列ではなく、実際に import した値で読む。** 最初はソースを正規表現で
+   * 読んでいたが、それだとスプレッド（`...OTHER_KEYS`）で混ぜた名前が見えず、黙って緑になった
+   * （17回目の横断レビュー）。製品が子プロセスから隠している一覧は2つある:
+   * `packages/core/src/runner.ts` の `WITHHELD_ENV_KEYS` と、`apps/daemon/src/auth.ts` の
+   * `AUTH_WITHHELD_ENV_KEYS`（Google の OAuth の client の資格）。一覧を増やしたら、ここの
+   * `SOURCES` に足すこと。
+   *
+   * import の先を変数にしているのは、`tsconfig.vitest.json` の型検査が製品のコードまで
+   * 降りないようにするためである（製品の型は各パッケージの typecheck が見る）。
    */
-  it('WITHHELD_ENV_KEYS の名前は、規則で外れるか、資格ではないと明示してある', () => {
-    const source = readFileSync(join(REPO_ROOT, 'packages/core/src/runner.ts'), 'utf8');
-    const block = /export const WITHHELD_ENV_KEYS = \[([\s\S]*?)\] as const;/.exec(source);
-    expect(block, 'WITHHELD_ENV_KEYS の定義が見つからない（形が変わった）').not.toBeNull();
-    const withheld = [...(block?.[1] ?? '').matchAll(/'([A-Z0-9_]+)'/g)].map((m) => m[1]!);
-    expect(withheld.length).toBeGreaterThan(0);
+  it('製品が子プロセスから隠す名前は、規則で外れるか、資格ではないと明示してある', async () => {
+    const SOURCES: readonly { file: string; exportName: string }[] = [
+      { file: 'packages/core/src/runner.ts', exportName: 'WITHHELD_ENV_KEYS' },
+      { file: 'apps/daemon/src/auth.ts', exportName: 'AUTH_WITHHELD_ENV_KEYS' },
+    ];
+    const withheld: string[] = [];
+    for (const { file, exportName } of SOURCES) {
+      const modulePath: string = pathToFileURL(join(REPO_ROOT, file)).href;
+      const mod = (await import(modulePath)) as Record<string, unknown>;
+      const keys = mod[exportName];
+      expect(Array.isArray(keys), `${file} の ${exportName} が配列として読めない`).toBe(true);
+      expect((keys as unknown[]).length, `${file} の ${exportName} が空`).toBeGreaterThan(0);
+      for (const key of keys as unknown[]) {
+        expect(typeof key, `${file} の ${exportName} に文字列でない値がある`).toBe('string');
+        withheld.push(key as string);
+      }
+    }
     // 資格ではないが、別の理由（子プロセスの隔離）で隠している名前。足すときは理由を書く。
     const NOT_SECRET = new Set([
       'ALTEROID_HOME', // 状態の置き場所（パス）

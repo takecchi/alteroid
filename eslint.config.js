@@ -19,6 +19,16 @@ export default tseslint.config(
       // `.scratch/` に `.ts` を置くと `pnpm lint` が落ちた。3つが揃っていることは
       // `scripts/scratch-ignore-alignment.test.ts` が測る）。
       '**/.scratch/',
+      // .gitignore が外している、ほかの共有の置き場（#1830 の後の横断レビュー）。`workspace/` は
+      // マネージャー・作業者が対象のリポジトリを clone する場所（compose.yaml）、`coverage/` は
+      // html のレポートの JS、`.pnpm-store/` は依存の実体、`.mutation-testing/` は変異の控え。
+      // どれも、中身次第で `pnpm lint` を落とす。
+      'workspace/',
+      '**/coverage/',
+      '.pnpm-store/',
+      '.mutation-testing/',
+      '.idea/',
+      '.vscode/',
     ],
   },
   js.configs.recommended,

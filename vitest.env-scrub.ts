@@ -44,6 +44,10 @@ export const SECRET_ENV_NAME_PATTERNS: readonly RegExp[] = [
   // `ALTEROID_DATABASE_URL`）。
   /(^|_)DATABASE_URL$/i,
   /(^|_)DB_URL$/i,
+  // OAuth の client の ID。単独では秘密ではないが、この repo は client secret と組にして
+  // 子プロセスから隠している（`apps/daemon/src/auth.ts` の `AUTH_WITHHELD_ENV_KEYS`。
+  // 握られると誰でもアクセストークンを発行できる）。
+  /_CLIENT_ID$/i,
 ];
 
 /**
