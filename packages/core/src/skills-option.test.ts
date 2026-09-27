@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   AgentContextHook,
+  AgentPermissionDeniedHook,
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentStopRecord,
@@ -48,6 +49,9 @@ const noopStopHook: (record: AgentStopRecord) => void = () => undefined;
 // （#486 中立の口の3本目）——`AgentObservationHook` ではないので上の並びとは
 // 別に持つ。
 const noopPreToolHook: AgentPreToolHook = () => ({ kind: 'continue' });
+// `onPermissionDenied`（issue #1105 P1）はマネージャー専用・非同期必須の中立の型
+// （`AgentPermissionDeniedHook`）。
+const noopPermissionDeniedHook: AgentPermissionDeniedHook = async () => ({ kind: 'no-retry' });
 const noopContextHook: AgentContextHook<unknown> = () => ({ kind: 'continue' });
 const mcpServer = { type: 'sdk', name: 'test', instance: {} } as unknown as McpServerConfig;
 const sessionStore = {} as unknown as SessionStore;
@@ -87,6 +91,7 @@ function managerOptions(): Options {
     onSubagentStop: noopContextHook,
     onStop: noopStopHook,
     onPreToolUse: noopPreToolHook,
+    onPermissionDenied: noopPermissionDeniedHook,
     managerAutoMemoryEnabled: false,
   });
 }
