@@ -55,6 +55,24 @@ describe('AuthStore の書き込み — 形式不正な入力の扱い（pg 実�
     await expect(stores.auth.putIdentity(invalidIdentity)).rejects.toThrow();
   });
 
+  it('createAccountWithIdentity() は空文字の id の account を拒む（throw する）', async () => {
+    const invalidAccount: AuthAccount = { ...account, id: '' };
+    await expect(
+      stores.auth.createAccountWithIdentity({
+        account: invalidAccount,
+        identity: {
+          provider: 'google',
+          subject: 'sub-invalid-account',
+          accountId: invalidAccount.id,
+          email: 'owner@example.test',
+          emailVerified: true,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          lastLoginAt: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it('putAccessToken() は長さ64でない sha256 を拒む（throw する）', async () => {
     await stores.auth.putAccount(account);
     const invalidToken: AccessTokenRecord = {

@@ -1139,8 +1139,12 @@ export function createMemoryStores(): Stores {
       const key = identityKey(identity.provider, identity.subject);
       const existing = identities.get(key);
       if (existing !== undefined) return { created: false, existing };
-      accounts.set(account.id, account);
-      identities.set(key, identity);
+      // 本物（fs / pg）と同じく `authAccountSchema` / `authIdentitySchema` を
+      // 通す（issue #1715。fs と同じ並び——account を先に parse する）。
+      const parsedAccount = authAccountSchema.parse(account);
+      const parsedIdentity = authIdentitySchema.parse(identity);
+      accounts.set(parsedAccount.id, parsedAccount);
+      identities.set(key, parsedIdentity);
       return { created: true };
     },
     async putAccessToken(token) {
