@@ -678,7 +678,11 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     renderDetail({
       ...BASE,
       status: 'done',
-      lastFailure: { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' },
+      lastFailure: {
+        code: 'billing_error',
+        via: 'assistant_error',
+        at: '2026-08-20T10:00:00.000Z',
+      },
     });
 
     expect(await screen.findByText('待機中')).toBeTruthy();

@@ -225,8 +225,7 @@ export function ManagerFailureNote({
   return (
     <p className="mt-1 text-[11px] text-danger">
       ⚠ 直近のターンは報告ではなく失敗で終わっている: {failure.code}（{failure.via}）。
-      {!terminal &&
-        'セッションは生きているので、原因が解ければ話しかければ続く。'}
+      {!terminal && 'セッションは生きているので、原因が解ければ話しかければ続く。'}
       {terminal &&
         (status === 'stopped'
           ? 'この仕事はもう終わっている。このセッションは、その後人間・クローンが明示的に停止させ、確かめたうえで既に終端している。原因の有無にかかわらず、このセッションはもう続かない。'

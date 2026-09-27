@@ -728,7 +728,9 @@ function terminalFailureNote(status: ManagerStatus): ReactNode {
       <>
         <strong className="font-medium">この仕事はもう終わっている</strong>
         。このセッションは、その後
-        <strong className="font-medium">人間・クローンが明示的に停止させ、確かめたうえで既に終端している</strong>
+        <strong className="font-medium">
+          人間・クローンが明示的に停止させ、確かめたうえで既に終端している
+        </strong>
         。原因の有無にかかわらず、このセッションはもう続かない。
       </>
     );
