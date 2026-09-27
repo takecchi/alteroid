@@ -5321,9 +5321,14 @@ class Pool implements ManagerPool {
       // その枝でだけこの値を返す）。
       const only = record.waiting[0];
       const last = record.lastDenialRenotify;
-      const { tool, actor } = last === undefined ? { tool: undefined, actor: undefined } : decodeDenialKey(last.key);
+      const { tool, actor } =
+        last === undefined ? { tool: undefined, actor: undefined } : decodeDenialKey(last.key);
       const actorLabel =
-        actor === 'manager' ? 'マネージャー自身' : actor === 'worker' ? '作業者' : 'どちらの層か不明';
+        actor === 'manager'
+          ? 'マネージャー自身'
+          : actor === 'worker'
+            ? '作業者'
+            : 'どちらの層か不明';
       return {
         outcome: 'unknown',
         detail:
@@ -7178,7 +7183,10 @@ class Pool implements ManagerPool {
     // 無関係な確認はこの拒否の停止とは無関係なので、知らせ直しを止める理由に
     // ならない（issue #1772 の本文）。
     const ownRequestId = record.deniedLastRequestId?.get(key);
-    if (ownRequestId !== undefined && record.waiting.some((item) => item.requestId === ownRequestId)) {
+    if (
+      ownRequestId !== undefined &&
+      record.waiting.some((item) => item.requestId === ownRequestId)
+    ) {
       return;
     }
 
@@ -12458,7 +12466,8 @@ class Pool implements ManagerPool {
     if (record.waiting.length === 0) return null;
     if (record.waiting.length === 1) {
       const only = record.waiting[0] ?? null;
-      if (only !== null && this.#predatesLastDenialRenotify(record, only)) return 'renotify-pending';
+      if (only !== null && this.#predatesLastDenialRenotify(record, only))
+        return 'renotify-pending';
       return only;
     }
     return 'ambiguous';
