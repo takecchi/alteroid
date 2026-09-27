@@ -22,10 +22,9 @@ import { createMemoryStores, humanMessage } from './testing.js';
  * ターンを回す（`#runHumanTurn` / `#runManagerReportBatch` / `#runExternalBatch` /
  * `#handle` のどれか）**前**に、`CloneNotices#set` を6回——
  * `mergedBatchTruncation`（リセット）→ `redelivery` → `commitment` → `situation` →
- * `validity` → `superseded` の順で——呼ぶ（`clone.ts:3266,3272,3278,3290,3302,3312`。
- * 行番号は #1744 の下調べ時点の現物で、腐りうる — 動かなければ `grep -Fn --
+ * `validity` → `superseded` の順で——呼ぶ。現物は `grep -Fn --
  * "this.#notices.set('mergedBatchTruncation', '');" packages/core/src/clone.ts`
- * のように逐語で引き直すこと）。
+ * から辿れる（残り5回はこの直後、同じ関数の中に1本ずつ続く）。
  *
  * この歯は、その6回の呼び出し順を `CloneNotices.prototype.set` への spy で
  * タイムラインとして記録し、固定する。**production コード（`clone.ts` /
@@ -36,14 +35,15 @@ import { createMemoryStores, humanMessage } from './testing.js';
  * - **`redelivery`/`commitment`/`situation`/`validity`/`superseded` の
  *   あいだに条件付きで挟まる `#noteRedeliveryPredicateHitB`
  *   （`validityNotice !== '' && event.type === 'manager_message'` のときだけ、
- *   `validity` の set の直後・`superseded` の set の前に呼ばれる。
- *   `clone.ts:3309`-`3311`）は、この歯では確かめていない。
+ *   `validity` の set の直後・`superseded` の set の前に呼ばれる——現物は
+ *   `grep -Fn -- 'await this.#noteRedeliveryPredicateHitB(event.managerId);' packages/core/src/clone.ts`
+ *   から辿れる）は、この歯では確かめていない。
  *   **確かめられない理由**: `#noteRedeliveryPredicateHitB` は private メソッドで、
  *   `CloneNotices.prototype.set` のような prototype 越しの spy を当てる経路が
  *   無い（private メソッドは外から参照を取れない）。この歯が固定するのは
  *   あくまで `CloneNotices#set` という**公開 API 越しに観測できる順序**だけ
  *   である。
- * - `Clone#handle`（`clone.ts:7427`）の内部にある `#sdkSession.query` の有無
+ * - `Clone#handle`（`clone.ts` の同名メソッド）の内部にある `#sdkSession.query` の有無
  *   チェック → `#distillMemory.hasUndistilledActivity` チェック →
  *   `#distillMemory.markDistilled()` → `#runTurn` という順序は、この歯の対象外
  *   である（別の下調べ項目。時間の都合で未着手）。
@@ -51,9 +51,10 @@ import { createMemoryStores, humanMessage } from './testing.js';
  *   のうちどれが束を作るか（＝どの dispatch 先が選ばれるか）による違いは、
  *   この歯では human_message の1件だけを確認しており、他の2経路
  *   （manager report・external）でも同じ順序になるかは確認していない
- *   （束を計算する3つの関数はどれも、6回の `set` より前で呼ばれる——
- *   `clone.ts:3267`-`3269`——ので、経路によって順序が変わる理由は現物からは
- *   読めないが、実測はしていない）。
+ *   （束を計算する3つの関数はどれも、6回の `set` より前で呼ばれる——現物は
+ *   `grep -Fn -- 'const mergedHuman = this.#mergedHumanBatch(event);' packages/core/src/clone.ts`
+ *   から辿れる——ので、経路によって順序が変わる理由は現物からは読めないが、
+ *   実測はしていない）。
  */
 
 /** `clone.test.ts` の `fakeSdk` を大きく簡略化したもの。この歯が要るのは
