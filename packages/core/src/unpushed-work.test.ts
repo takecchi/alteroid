@@ -490,7 +490,15 @@ describe('computeUnpushedWork — タイムアウト', () => {
     // ——フェイクの ChildProcess を作ると、abort の配線そのものは
     // 何も検査していないことになる。
     const hangingSpawn: ProcessSpawnFn = (options) =>
-      spawn('sleep', ['5'], { signal: options.signal, stdio: ['ignore', 'pipe', 'pipe'] });
+      spawn('sleep', ['5'], {
+        signal: options.signal,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // `sleep` を見つけるのに要るのは `PATH` だけ（#1854）。他の call site
+        // （上の `realSpawn`）は本物の `git` を呼ぶので env をそのまま渡している
+        // が、こちらは abort の配線だけを測る回なので、器の本物の秘密を
+        // 継承しない allowlist に絞る。
+        env: { PATH: process.env.PATH ?? '' },
+      });
 
     const startedAt = Date.now();
     const result = await computeUnpushedWork(root, {

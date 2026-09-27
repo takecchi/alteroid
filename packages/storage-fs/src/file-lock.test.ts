@@ -342,7 +342,16 @@ main().catch((error) => {
         const child = spawn(
           process.execPath,
           ['--experimental-strip-types', childPath, target, logPath, String(holdMs)],
-          { stdio: 'inherit' },
+          {
+            stdio: 'inherit',
+            // 起こす node は `process.execPath`（絶対パス）で直接指すので `PATH`
+            // すら不要だが、器の本物の秘密（`GH_TOKEN` 等）を継承しない形に揃える
+            // （#1854。`file-lock.ts` はこのファイル自身が `grep -Fn -- 'process.env'
+            // packages/storage-fs/src/file-lock.ts` で確かめたとおり `process.env` を
+            // 一切読まないので、空でも動作は変わらない——`PATH` を残すのは他の
+            // allowlist と形を揃えるためだけである）。
+            env: { PATH: process.env.PATH ?? '' },
+          },
         );
         child.on('error', reject);
         child.on('exit', (code) => {

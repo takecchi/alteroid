@@ -155,6 +155,14 @@ describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に
         cwd: scratchRoot,
         stdio: 'pipe',
         timeout: 60_000,
+        // 子の vitest（`node` の shebang 経由で起こす）が要るのは `PATH` だけ
+        // （#1854。#1832 / PR #1840 の `configInputChildEnv` と同じ作法）。
+        // ここで再利用する `vitest.setup.ts` は先頭で `scrubSecretEnv` を
+        // 呼ぶが、あれは「渡ってきた env から機微な名前を外す」側の歯であって
+        // 「そもそも何を渡すか」を決める側ではない——絞らずに渡せば、外され
+        // なかった変数（`isSecretEnvName` の規則に当たらない名前）はそのまま
+        // 子の `process.env` に残る。
+        env: { PATH: process.env.PATH ?? '' },
       });
 
       const manifestAContent = JSON.parse(readFileSync(manifestA, 'utf8')) as { dir: string };
