@@ -107,8 +107,7 @@ async function callTool(
 ): Promise<{ isError: boolean; text: string }> {
   const response = await rpc.call('tools/call', { name, arguments: args });
   const result = response['result'] as
-    | { content?: { type: string; text?: string }[]; isError?: boolean }
-    | undefined;
+    { content?: { type: string; text?: string }[]; isError?: boolean } | undefined;
   if (result === undefined) {
     return { isError: true, text: JSON.stringify(response['error']) };
   }
@@ -296,7 +295,8 @@ const cases: Case[] = [
     hint: formatStringLengthJa({ min: 1 }),
   },
   {
-    label: 'inbox_remove_many.types（共有スキーマ inboxRemoveManyTypesSchema の配列 .min(1)。' +
+    label:
+      'inbox_remove_many.types（共有スキーマ inboxRemoveManyTypesSchema の配列 .min(1)。' +
       'PR #1729 の非数値の欄の表には無かった——今回の読み直しで見つけた）',
     tool: 'inbox_remove_many',
     base: { reason: 'x' },
@@ -434,7 +434,8 @@ const elementCases: ElementCase[] = [
     field: 'source',
   },
   {
-    label: 'inbox_remove_many.sources（要素の空文字。issue 本文の再現テスト対象と同じ配列だが要素側）',
+    label:
+      'inbox_remove_many.sources（要素の空文字。issue 本文の再現テスト対象と同じ配列だが要素側）',
     tool: 'inbox_remove_many',
     base: { types: ['manager_message'], reason: 'x' },
     field: 'sources',
@@ -493,8 +494,7 @@ describe('道具の JSON Schema の説明文に、検査と同じ文言が入っ
       seen.add(key);
 
       const schema = tools.find((entry) => entry.name === tool)?.inputSchema as
-        | { properties?: Record<string, { description?: string }> }
-        | undefined;
+        { properties?: Record<string, { description?: string }> } | undefined;
       const description = schema?.properties?.[field]?.description;
       expect(description, `${key}: JSON Schema にこの欄が無い`).toBeTruthy();
       expect(description, `${key}: 説明文「${description}」に制約の文言が無い`).toContain(hint);

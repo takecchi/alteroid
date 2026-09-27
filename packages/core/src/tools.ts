@@ -8059,10 +8059,7 @@ export function createCloneTools(context: ToolContext) {
         }
         const sourcesLengthError = describeArrayLengthViolation('sources', sources, { min: 1 });
         if (sourcesLengthError !== null) return text(sourcesLengthError);
-        const sourcesElementError = describeStringArrayElementLengthViolation(
-          'sources',
-          sources,
-        );
+        const sourcesElementError = describeStringArrayElementLengthViolation('sources', sources);
         if (sourcesElementError !== null) return text(sourcesElementError);
         const beforeLengthError = describeStringLengthViolation('before', before, { min: 1 });
         if (beforeLengthError !== null) return text(beforeLengthError);
@@ -10523,9 +10520,13 @@ export function createCloneTools(context: ToolContext) {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const textError = describeStringLengthViolation('text', body, { min: 1 });
         if (textError !== null) return text(textError);
-        const conversationIdError = describeStringLengthViolation('conversationId', conversationId, {
-          min: 1,
-        });
+        const conversationIdError = describeStringLengthViolation(
+          'conversationId',
+          conversationId,
+          {
+            min: 1,
+          },
+        );
         if (conversationIdError !== null) return text(conversationIdError);
         const current = getConversationId();
         if (conversationId !== undefined && conversationId === current) {
