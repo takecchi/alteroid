@@ -400,3 +400,33 @@ describe('JSON 本文の数値欄は jsonBody() 経由で既に安全（回帰�
     expect(text).not.toMatch(/"code"|"success"/);
   });
 });
+
+/**
+ * パス引数（`c.req.param()`）の手組みの数値検査（`Number(raw)` +
+ * `Number.isInteger` + `<= 0` 判定、issue #1670）も、この PR の対象では
+ * ないが「数値の欄を1つ残らず数える」の一環として実測しておく。**この経路は
+ * 元から自前で日本語の平文を返しており、`validator`/`jsonBody`/`queryParams`
+ * のどれも経由しない**（`app.ts` の `GET /practices/:slug/versions/:version`）。
+ */
+describe('パス引数の数値（version）は元から自前の日本語平文で400（変更対象ではない。回帰確認）', () => {
+  it('version=abc（非整数）は「版番号が不正」で400', async () => {
+    const res = await app.request('/practices/daily-report/versions/abc');
+    const text = await res.text();
+    expect(res.status, `本文: ${text}`).toBe(400);
+    expect(JSON.parse(text)).toEqual({ error: '版番号が不正' });
+  });
+
+  it('version=0（正の整数ではない）は「版番号が不正」で400', async () => {
+    const res = await app.request('/practices/daily-report/versions/0');
+    const text = await res.text();
+    expect(res.status, `本文: ${text}`).toBe(400);
+    expect(JSON.parse(text)).toEqual({ error: '版番号が不正' });
+  });
+
+  it('version=-1（負）は「版番号が不正」で400', async () => {
+    const res = await app.request('/practices/daily-report/versions/-1');
+    const text = await res.text();
+    expect(res.status, `本文: ${text}`).toBe(400);
+    expect(JSON.parse(text)).toEqual({ error: '版番号が不正' });
+  });
+});
