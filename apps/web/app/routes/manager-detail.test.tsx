@@ -278,8 +278,17 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
    * 回ってきていない」と事実として言い切っていた。**下部の段落（「それでこの仕事が
    * 止まったかどうかは見ていない」）とは矛盾していた** — こちらは正しいので消さず、
    * subtitle 側だけを直す。
+   *
+   * **Issue #1844 — #1289 の直しは (a)/(b) の場合分けにしたが、この画面だけ
+   * 「人間にもクローンにも」という対象範囲の広い字面をそのまま(a)節の中へ
+   * 残していた。** 一覧（`managers.tsx` の `ManagerDenialNote`）・クローン向け
+   * 正本（`packages/core/src/tools.ts` の `describeDenials`）・実際に escalation
+   * を判定している箇所（`packages/core/src/manager.ts` の
+   * `case 'permission_denied'`）はいずれも「この確認は**クローンには**
+   * 回ってきていない」とだけ言っており、対象を人間にまで広げていない。
+   * ここも同じ範囲（クローンには、まで）へ揃える——下の期待値を反転させた。
    */
-  it('subtitle が拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289）', async () => {
+  it('subtitle が拒否の出所を断定せず、2つの場合分けと「まず担い手の拒否文を読ませる」案内が載る（#1289 / #1844）', async () => {
     renderDetail({
       ...BASE,
       status: 'running',
@@ -298,11 +307,14 @@ describe('詳細でも、拒否は状態を置き換えずに状態へ添える'
       '分類器か deny 規則がその場で拒否した。この確認は人間にもクローンにも回ってきていない',
     );
 
+    // **#1844: 対象範囲を人間にまで広げた字面が戻っていないこと。**
+    // 一覧・クローン向け正本（`tools.ts`）・escalation の判定箇所（`manager.ts`）
+    // と同じ「クローンには」までに揃える。
+    expect(text).not.toContain('この確認は人間にもクローンにも回ってきていない');
+
     // 2つの場合分け——器側（分類器・deny 規則）と alteroid 自身の
     // `PreToolUse` フックの両方が、条件付きの文として載る。
-    expect(text).toContain(
-      '器の分類器か deny 規則なら、この確認は人間にもクローンにも回ってきていない',
-    );
+    expect(text).toContain('器の分類器か deny 規則なら、この確認はクローンには回ってきていない');
     expect(text).toContain('PreToolUse');
     expect(text).toContain('bash-wait-guard.ts');
     expect(text).toContain('自力で抜けられることがある');
