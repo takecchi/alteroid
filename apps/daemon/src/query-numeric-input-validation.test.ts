@@ -99,6 +99,7 @@ function stubManagerPool(): ManagerPool {
     async settleStalledUsageWakes() {
       return [];
     },
+    async renotifyStalledDenials() {},
     async stop() {},
   };
 }

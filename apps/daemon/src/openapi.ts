@@ -2392,6 +2392,9 @@ export async function buildOpenApiDocument(): Promise<unknown> {
     settleStalledUsageWakes() {
       throw new Error('spec 生成専用のスタブ: 枠で止まった借りは清算しない');
     },
+    renotifyStalledDenials() {
+      throw new Error('spec 生成専用のスタブ: 止まった拒否は知らせ直さない');
+    },
     stop() {
       throw new Error('spec 生成専用のスタブ');
     },

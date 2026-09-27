@@ -19,10 +19,10 @@
  * - **言えないこと**: **これが最後の世代だという保証。** 呼んだ直後にもう1本
  *   run が作られうる（`gh pr ready` が新しい run を起こす、再実行される、
  *   等）。緑は「いま見た時点でそうだった」だけを言う。
- * - **測っていないこと**: 再実行（`rerun`）で3世代目が生える sha、`pull_request`
- *   と `workflow_dispatch` が混ざる sha は実測していない（同じ名前で `push` と
- *   `schedule` が混ざる sha は Issue #1225 で実測し、対処した。
- *   `check-pr-green-core.mjs` の doc）。
+ * - **測っていないこと**: `pull_request` と `workflow_dispatch` が混ざる sha は
+ *   実測していない（同じ名前で `push` と `schedule` が混ざる sha は Issue #1225
+ *   で実測し、対処した。再実行（`rerun`）で3世代目が生える sha は Issue #1748
+ *   で実測し、対処した。`check-pr-green-core.mjs` の doc）。
  * - **書き換えない。** 読むだけである。
  *
  * ## 使い方
@@ -61,7 +61,7 @@
  * 同じ判定器を使うため。** 判定ロジックを2箇所に持つと、世代選び（workflow名＋
  * event の組・`created_at`/`id` のtiebreak）や `red`/`cancelled`/`out-of-scope`
  * の切り分けが2つの実装でじわじわずれていく——実際 `check-pr-green-core.mjs`
- * はこの世代選びだけで3回直っている（#933 → #1225）。⟹ ネットワーク層（`gh api`
+ * はこの世代選びだけで4回直っている（#933 → #1225 → #1748）。⟹ ネットワーク層（`gh api`
  * の呼び出しと結果の取りまとめ）を `judgeSha({ sha, repo })` として切り出し、
  * `main()` もこれを呼ぶ形に寄せた。**CLI としての出力・終了コードは1文字も
  * 変えていない**——`main()` は `import.meta.url` が直接起動されたときの

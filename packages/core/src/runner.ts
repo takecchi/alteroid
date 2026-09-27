@@ -1091,8 +1091,14 @@ const ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT = 512;
  * 合わず失効する」が増え、長すぎれば「状況が変わった後に古い許可が生きて
  * いる」が増える**——このバランスを取った経験的な値であって、測定に基づく
  * ものではない。
+ *
+ * **`export` している。** issue #1105 C（`manager.ts` の
+ * `renotifyStalledDenials()`）が、拒否から知らせ直すまでの最初の待ち時間の
+ * 根拠としてこの値をそのまま借りる——分類器の拒否にクローンの allow が
+ * 間に合う見込みの窓（この定数）と、知らせ直す最初のタイミングを同じ桁に
+ * 揃えるためで、新しい値を独自に決め直さない。
  */
-const ONE_SHOT_ALLOW_TTL_MS = 10 * 60 * 1000;
+export const ONE_SHOT_ALLOW_TTL_MS = 10 * 60 * 1000;
 
 /**
  * `CUT_OFF_WORKERS_LIMIT` / `PENDING_CUT_OFF_NOTIFICATIONS_LIMIT`（#901）の

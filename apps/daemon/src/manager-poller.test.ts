@@ -5,25 +5,28 @@ import { startManagerPolling } from './manager-poller.js';
 
 /**
  * `ManagerPool` の全メソッドを実装するが、このポーラーが呼ぶのは
- * `probeTurnEnds()` / `flushWithheldReports()` / `settleStalledUsageWakes()`
- * だけ——それ以外は呼ばれない前提で投げる（`usage-poller.test.ts` と同じ
- * 足場の作法）。
+ * `probeTurnEnds()` / `flushWithheldReports()` / `settleStalledUsageWakes()` /
+ * `renotifyStalledDenials()`（issue #1105 C）だけ——それ以外は呼ばれない
+ * 前提で投げる（`usage-poller.test.ts` と同じ足場の作法）。
  */
 function fakeManagers(
   run: () => Promise<void> | void,
   flush: () => Promise<void> | void = () => undefined,
   settle: () => Promise<void> | void = () => undefined,
+  renotify: () => Promise<void> | void = () => undefined,
 ): {
   managers: ManagerPool;
   calls: () => number;
   flushCalls: () => number;
   settleCalls: () => number;
+  renotifyCalls: () => number;
   /** どちらが先に呼ばれたか記録する(順序を固定する試験用)。 */
   order: () => readonly string[];
 } {
   let calls = 0;
   let flushCalls = 0;
   let settleCalls = 0;
+  let renotifyCalls = 0;
   const order: string[] = [];
   const managers: ManagerPool = {
     start: () => {
@@ -80,6 +83,11 @@ function fakeManagers(
       await settle();
       return [];
     },
+    async renotifyStalledDenials() {
+      renotifyCalls += 1;
+      order.push('renotifyStalledDenials');
+      await renotify();
+    },
     stop: () => Promise.resolve(),
   };
   return {
@@ -87,6 +95,7 @@ function fakeManagers(
     calls: () => calls,
     flushCalls: () => flushCalls,
     settleCalls: () => settleCalls,
+    renotifyCalls: () => renotifyCalls,
     order: () => order,
   };
 }
@@ -160,7 +169,12 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     expect(calls()).toBeGreaterThanOrEqual(1);
     expect(flushCalls()).toBeGreaterThanOrEqual(1);
     // **順序そのものが要点**（`probeTurnEnds` の中に入れていないこと）。
-    expect(order()).toEqual(['probeTurnEnds', 'flushWithheldReports', 'settleStalledUsageWakes']);
+    expect(order()).toEqual([
+      'probeTurnEnds',
+      'flushWithheldReports',
+      'settleStalledUsageWakes',
+      'renotifyStalledDenials',
+    ]);
 
     poller.stop();
   });
@@ -214,7 +228,12 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
     expect(calls()).toBeGreaterThanOrEqual(1);
     expect(flushCalls()).toBeGreaterThanOrEqual(1);
     expect(settleCalls()).toBeGreaterThanOrEqual(1);
-    expect(order()).toEqual(['probeTurnEnds', 'flushWithheldReports', 'settleStalledUsageWakes']);
+    expect(order()).toEqual([
+      'probeTurnEnds',
+      'flushWithheldReports',
+      'settleStalledUsageWakes',
+      'renotifyStalledDenials',
+    ]);
 
     poller.stop();
   });
@@ -241,6 +260,69 @@ describe('ターン終了の助言を定期的に取り直す（Issue #567）', 
       () => undefined,
       () => {
         throw new Error('清算に失敗した（模擬）');
+      },
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    expect(calls()).toBeGreaterThanOrEqual(1);
+
+    poller.stop();
+  });
+
+  /**
+   * `renotifyStalledDenials()`（issue #1105 C。止まった委譲が黙って放置
+   * されない逃げ道）が、この周期の**さらに後ろ**に相乗りすることを固定する
+   * （`manager-poller.ts` の doc）。
+   */
+  it('settleStalledUsageWakes() の後ろで renotifyStalledDenials() も呼ぶ', async () => {
+    const { calls, flushCalls, settleCalls, renotifyCalls, managers, order } = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => undefined,
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await poller.refresh();
+    expect(calls()).toBeGreaterThanOrEqual(1);
+    expect(flushCalls()).toBeGreaterThanOrEqual(1);
+    expect(settleCalls()).toBeGreaterThanOrEqual(1);
+    expect(renotifyCalls()).toBeGreaterThanOrEqual(1);
+    expect(order()).toEqual([
+      'probeTurnEnds',
+      'flushWithheldReports',
+      'settleStalledUsageWakes',
+      'renotifyStalledDenials',
+    ]);
+
+    poller.stop();
+  });
+
+  it('settleStalledUsageWakes() が投げても renotifyStalledDenials() は走る', async () => {
+    const { managers, renotifyCalls } = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => {
+        throw new Error('清算に失敗した（模擬）');
+      },
+      () => undefined,
+    );
+    const poller = startManagerPolling({ managers, intervalMs: 10_000 });
+
+    await expect(poller.refresh()).resolves.toBeUndefined();
+    expect(renotifyCalls()).toBeGreaterThanOrEqual(1);
+
+    poller.stop();
+  });
+
+  it('renotifyStalledDenials() が投げても、ポーラー自身は落ちない', async () => {
+    const { managers, calls } = fakeManagers(
+      () => undefined,
+      () => undefined,
+      () => undefined,
+      () => {
+        throw new Error('知らせ直しに失敗した（模擬）');
       },
     );
     const poller = startManagerPolling({ managers, intervalMs: 10_000 });

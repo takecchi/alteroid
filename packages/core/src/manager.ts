@@ -72,7 +72,7 @@ import type {
   RunnerWaiting,
   UnpushedWorkResult,
 } from './runner-protocol.js';
-import { brief } from './runner.js';
+import { brief, ONE_SHOT_ALLOW_TTL_MS } from './runner.js';
 import {
   describeAppraisal,
   formatAppraisalDecision,
@@ -1046,6 +1046,28 @@ interface DenialReasonSnapshot {
   reason?: string;
   message?: string;
   inputHead?: string;
+}
+
+/**
+ * `ManagerRecord.deniedRenotify` の値。issue #1105 C（`renotifyStalledDenials`）
+ * が「同じ拒否について、これまでに何回知らせ直したか」を覚えるための最小限の形。
+ *
+ * **`deniedAt` を一緒に持つ理由。** `denialKey` は道具×層の組でしかない——
+ * 同じ鍵が新しい拒否で上書きされても（`deniedLastAt` が進んでも）鍵の文字列は
+ * 変わらない。ここに古い `deniedAt` を照合用に残しておくことで、
+ * `renotifyStalledDenials` は「いま見ている拒否と、この帳面が数えている拒否が
+ * 同じものか」を区別できる——一致しなければ**新しいエピソード**として `stage`
+ * を 0 から数え直す（同じ鍵が再び長く止まったら、それは新しい注意に値する）。
+ */
+interface DenialRenotifyState {
+  /** このエピソードを紐づける拒否の時刻。`deniedLastAt` の値の写し。 */
+  readonly deniedAt: string;
+  /**
+   * これまでに出した知らせ直しの本数（0 〜 `DENIAL_RENOTIFY_DELAYS_MS.length`）。
+   * `DENIAL_RENOTIFY_DELAYS_MS.length` に達したら、それ以上は出さない
+   * （出し切ったことは日誌に1行残す。`renotifyStalledDenials` の doc）。
+   */
+  stage: number;
 }
 
 /**
@@ -2143,6 +2165,69 @@ export interface ManagerPool {
    */
   settleStalledUsageWakes(): Promise<string[]>;
   /**
+   * **止まった委譲が黙って放置されない逃げ道（issue #1105 C）。** 分類器の
+   * 拒否（`case 'permission_denied'`）から`DENIAL_RENOTIFY_DELAYS_MS`
+   * （10分・30分）経っても動きが無い委譲へ、もう一度知らせる。
+   *
+   * ## 何を「進んだ」とみなすか
+   *
+   * `record.job.lastReportAt`（`case 'report'`）と
+   * `record.lastToolSettledAt`（`case 'tool_use'`。`PostToolUse` の決着）の
+   * どちらかが、その拒否（`record.deniedLastAt` の値）より後なら「進んだ」
+   * ——知らせ直しは送らず、このエピソードの帳面（`record.deniedRenotify`）を
+   * 消す。**`PostToolUseFailure` は見ていない**（型付きの欄を持たない
+   * `note` としてしか届かず、文字列を嗅ぐと `case 'note'` の既存の規則
+   * 「欄で判定し、本文を嗅がない」を破る。含めるなら別の Issue で `note`
+   * に型付きの欄を足す——**確認していない**）。
+   *
+   * ## 取り消す条件
+   *
+   * - **M が終わった・止められた・畳まれた** —— `#records` は done/lost/
+   *   failed/stopped でその managerId 自身を消す（`#load()` の doc）ので、
+   *   ここは走っている委譲しか見ない。特別な分岐は要らない。
+   * - **P1 の確認（`runner.ts` の `#onPermissionDenied`）が未決のまま** ——
+   *   `record.job.status === 'waiting_human'` なら知らせ直さない。あの
+   *   確認は通常の許可確認と同じ `#pending` / `record.waiting` を共有する
+   *   ので、この状態は「クローンには既に別の合図（`ask`）が届いている」
+   *   ことを意味する——同じ停止について二重に知らせない。**簡略化**:
+   *   未決の確認がこの停止と同じものかは区別しない（この委譲に何であれ
+   *   未決の確認が1件でもあれば、それだけで「クローンは既に気づける
+   *   状態にある」と判断する）。
+   *
+   * ## 何回・いつ知らせ直すか
+   *
+   * `DENIAL_RENOTIFY_DELAYS_MS` の2回まで。**数える単位は「その拒否1件
+   * （`deniedLastAt` の値＝時刻）」であって「拒否の累計件数」ではない**
+   * ——同じ道具×層が新しく拒否されて `deniedLastAt` が進めば、古い
+   * エピソードの帳面を消して新しいエピソードとして数え直す（新しい停止は
+   * 新しい注意に値する）。2回とも出したら、それ以上は黙るが、黙ったことを
+   * 日誌へ1行残す（AGENTS.md「静かに失敗する道具」——上限に達したことが
+   * 読み手から見えなくならないように）。
+   *
+   * ## タイマーの置き場所（デーモン／`ManagerPool`。runner ではない）
+   *
+   * `flushWithheldReports()` と同じ理由——runner はマネージャーのセッション
+   * が畳まれるたびに消える器で、拒否から10分後・30分後まで生き続ける保証が
+   * 無い。デーモンは常駐なので、境界を跨いで時間を見張れる。
+   *
+   * **それでもデーモン自身も夜間の器の入れ替えで畳まれる**（AGENTS.md
+   * 「デプロイの引き金はマージではない」）。`deniedRenotify` / `deniedLastAt`
+   * はどちらもプロセス内の像だけに載る（`denied` と同じ設計）ので、
+   * **デーモンを作り直すと、その時点で未送の知らせ直しの予定は黙って消える**
+   * ——これは新しい弱さではなく、`denied` の件数・`#withheldReports` の
+   * 在庫と同じ寿命である。それでも消えた事実そのものは何も出さない
+   * （気づく手段が無い）——**確かめていない・直していない**。
+   *
+   * 呼ぶのは `apps/daemon/src/manager-poller.ts`（60秒周期。
+   * `probeTurnEnds()` → `flushWithheldReports()` → `settleStalledUsageWakes()`
+   * の一番後ろに並べる。順序に依存は無い——ここが読む4つの像はどれもこの
+   * 回では他の3つに書き換えられないので、末尾に置くのは「新しい関心事は
+   * 末尾に足す」というこのファイルの慣例に揃えるだけである）。
+   *
+   * **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+   */
+  renotifyStalledDenials(): Promise<void>;
+  /**
    * このプールを止める。
    *
    * **機構が合成した知らせの合流窓（`#synthesizedNotices`）に残っている積みを
@@ -2817,6 +2902,45 @@ interface ManagerRecord {
    * `onForget`、`deniedLastAt` と同じ）。
    */
   deniedLastReason?: Map<string, DenialReasonSnapshot>;
+  /**
+   * この委譲のセッションで、直近に `PostToolUse`（道具の実行が決着した
+   * 瞬間。`case 'tool_use'`）を観測した時刻（issue #1105 C）。
+   *
+   * **`renotifyStalledDenials()` の「拒否の後に進んだか」の判定材料の
+   * 1つ**（もう1つは `job.lastReportAt`）。`deniedLastAt` の値より後なら
+   * 「進んだ」——道具が1回でも決着していれば、手は止まっていない。
+   *
+   * **`PostToolUseFailure`（`runner.ts` の `#onPostToolUseFailure`）は
+   * 見ていない。** あちらは型付きの欄を持たない `note`
+   * （`TOOL_USE_FAILURE_NOTE_PREFIX`）としてしか届かず、ここで文字列を
+   * 嗅いで判定に使うと `case 'note'` の既存の規則（欄で判定し、文字列で
+   * 本文を嗅がない）を破る。含めるなら `note` に型付きの欄を足す、別の
+   * Issue の仕事——**確認していない・直していない**。
+   *
+   * **成功した道具呼び出しの層は問わない**（マネージャー自身・作業者の
+   * どちらでもここを進める）——止まっているかどうかは委譲全体の話で、
+   * どの道具×層の拒否だったかとは別の軸である。
+   *
+   * プロセス内の像だけに載る（`denied` / `deniedLastAt` と同じ理由。
+   * ストアへは書かない）。
+   */
+  lastToolSettledAt?: string;
+  /**
+   * `renotifyStalledDenials()`（issue #1105 C）が、拒否から時間が経っても
+   * 動きが無い委譲へ知らせ直した回数を覚える帳面。鍵は `denied` と同じ
+   * `denialKey`。値の `deniedAt` は、知らせ直した時点で見ていた
+   * `deniedLastAt` の値の写し——**同じ鍵に新しい拒否が来て `deniedLastAt`
+   * が進んだら、これは古いエピソードの記録になる**（`renotifyStalledDenials`
+   * が `deniedAt` の不一致を見て、新しいエピソードとして数え直す）。
+   *
+   * **プロセス内のこの像だけに載る**（`denied` と同じ理由・同じ寿命）。
+   * デーモンを作り直したら消える——数え直しではなく「まだ知らせていない」
+   * から始まる（`renotifyStalledDenials` の doc の「タイマーの置き場所」）。
+   *
+   * `denied` が上限で忘れた鍵は、ここからも同時に消す（`#deniedOf` の
+   * `onForget`、`deniedLastAt` と同じ）。
+   */
+  deniedRenotify?: Map<string, DenialRenotifyState>;
   /**
    * **貸し出し期限を理由に引き取りを断った直近の1件**（M5 PR4）。
    *
@@ -3513,6 +3637,54 @@ interface WithheldReportMemory {
  * この2つの間を取った値である。
  */
 const WITHHELD_REPORT_FLUSH_MS = 30 * 60_000;
+
+/**
+ * `renotifyStalledDenials()`（issue #1105 C）が、拒否から動きが無い委譲へ
+ * 知らせ直すまでの待ち時間。**配列の長さがそのまま知らせ直しの上限回数
+ * （2回）を兼ねる**——増減したいときはここだけ変える。
+ *
+ * **新しい値を独自に決めていない。両方ともこのファイルに既にある値を
+ * 借りている。**
+ *
+ * - **1回目（`ONE_SHOT_ALLOW_TTL_MS`、10分）**——issue #1105 P1 の1回だけの
+ *   許可の寿命と同じ桁（`runner.ts` の同名の定数の doc）。分類器の拒否に
+ *   クローンの allow が間に合う見込みの窓がここまでなので、そこまで動きが
+ *   無ければ「その窓を使わずに止まっている」と読める最初のタイミングである。
+ * - **2回目（`WITHHELD_REPORT_FLUSH_MS`、30分）**——このファイルが「時間で
+ *   必ず何かを起こす」他の場面（`flushWithheldReports()`）に既に使っている
+ *   既定値と同じ。**値を import や参照で結びつけていない**（意図的な選択。
+ *   `flushWithheldReports` は「背景処理の完了待ち」という別の関心事の期限
+ *   で、あちらの env（`ALTEROID_WITHHELD_REPORT_FLUSH_MS`）を差し替えても
+ *   こちらの2回目の待ち時間は動かさない——無関係な2つの設定が同じ環境変数で
+ *   一緒に動く方が驚きが大きいと判断した）。
+ *
+ * **`renotifyStalledDenials` の「知らせ直し」は AGENTS.md 地雷表「ターン数
+ * 上限・実行回数上限で暴走を止める」とは別物である。** ここが数えるのは
+ * この Issue が新設した通知の回数であって、道具の実行回数でもターン数でも
+ * ない——`#emit()` は既存の受信箱への1本の報告と同じで、クローンの判断や
+ * 作業者の実行を1回も止めない（地雷表が禁じるのは「暴走を機械的に止める
+ * こと」であって、「気づいていない停止を伝えること」ではない）。
+ */
+const DENIAL_RENOTIFY_DELAYS_MS: readonly number[] = [
+  ONE_SHOT_ALLOW_TTL_MS,
+  WITHHELD_REPORT_FLUSH_MS,
+];
+
+/**
+ * `a` / `b`（どちらも `toISOString()` の ISO 8601 文字列か `undefined`）の
+ * うち、時刻として後のほうを返す。両方 `undefined` なら `undefined`。
+ *
+ * **`renotifyStalledDenials` の「進んだか」の判定専用。** ISO 8601 は
+ * 同じ精度・同じタイムゾーン（UTC・`Z`）で書かれていれば文字列比較が時刻の
+ * 比較と一致する——このファイルの `describeDenialFollowUp` が時刻の比較を
+ * 文字列比較で行っているのと同じ前提（両方ともデーモンが `toISOString()`
+ * で書いた値である）。
+ */
+function laterIso(a: string | undefined, b: string | undefined): string | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return a > b ? a : b;
+}
 
 /**
  * `WITHHELD_REPORT_FLUSH_MS` を人間が差し替えるための環境変数。
@@ -6613,6 +6785,104 @@ class Pool implements ManagerPool {
       }
     }
     return nudged;
+  }
+
+  /**
+   * 止まった委譲が黙って放置されない逃げ道（issue #1105 C）。doc は
+   * `ManagerPool` interface を参照。
+   */
+  async renotifyStalledDenials(): Promise<void> {
+    if (this.#stopped) return;
+    const now = this.#now();
+    for (const [managerId, record] of [...this.#records]) {
+      if (this.#stopped) break;
+      // **P1 の確認が未決、または委譲が終わっている場合は見ない。**
+      // `waiting_human` はここで弾く（interface の doc「取り消す条件」）。
+      // 終わった委譲（done/lost/failed/stopped）はそもそも `#records` に
+      // 残らないので、特別な分岐は要らない。
+      if (record.job.status !== 'running') continue;
+      const deniedLastAt = record.deniedLastAt;
+      if (deniedLastAt === undefined || deniedLastAt.size === 0) continue;
+      for (const [key, deniedAt] of [...deniedLastAt]) {
+        try {
+          this.#renotifyStalledDenial(managerId, record, key, deniedAt, now);
+        } catch (error) {
+          // **1件の失敗で残りを止めない**（`probeTurnEnds` と同じ形）。
+          noteDroppedRecord('止まった拒否の知らせ直し', `managerId=${managerId}・鍵=${key}`, error);
+        }
+      }
+    }
+  }
+
+  /**
+   * `renotifyStalledDenials()` の1鍵ぶん。**同期**——`#emit` は同期であり、
+   * `#journal` は fire-and-forget（待たない。他の「出し切ったので黙る」跡
+   * （例: `#deniedOf` の `onForget`）と同じ形）。
+   */
+  #renotifyStalledDenial(
+    managerId: string,
+    record: ManagerRecord,
+    key: string,
+    deniedAt: string,
+    now: number,
+  ): void {
+    const deniedAtMs = Date.parse(deniedAt);
+    // **読めない時刻は症状として扱わない**（AGENTS.md「判定できないという
+    // 3つ目の状態を持つ」）。`deniedLastAt` は常にこのファイルが
+    // `toISOString()` で書いた値なので、実際には起きないはずの防御である。
+    if (Number.isNaN(deniedAtMs)) return;
+
+    // **拒否の後に進んだか。** `job.lastReportAt`（`case 'report'`）と
+    // `lastToolSettledAt`（`case 'tool_use'`）のどちらかが拒否より後なら
+    // 進んでいる——このエピソードの帳面を消して終わる。
+    const progressedAt = laterIso(record.job.lastReportAt, record.lastToolSettledAt);
+    if (progressedAt !== undefined && progressedAt > deniedAt) {
+      record.deniedRenotify?.delete(key);
+      return;
+    }
+
+    // **同じ鍵に新しい拒否が来ていたら、古いエピソードの帳面は使わない。**
+    // 新しい拒否は新しい注意に値する——`stage` を 0 から数え直す。
+    const existing = record.deniedRenotify?.get(key);
+    const stage = existing?.deniedAt === deniedAt ? existing.stage : 0;
+    const delayMs = DENIAL_RENOTIFY_DELAYS_MS[stage];
+    if (delayMs === undefined) return; // 出し切って黙っている（stage が上限に達した）
+
+    const dueAt = deniedAtMs + delayMs;
+    if (now < dueAt) return; // まだこの段の時間に達していない
+
+    const nextStage = stage + 1;
+    (record.deniedRenotify ??= new Map()).set(key, { deniedAt, stage: nextStage });
+
+    const { tool, actor } = decodeDenialKey(key);
+    const actorLabel =
+      actor === 'manager' ? 'マネージャー自身' : actor === 'worker' ? '作業者' : 'どちらの層か不明';
+    const reason = record.deniedLastReason?.get(key);
+    const elapsedMinutes = Math.round((now - deniedAtMs) / 60_000);
+
+    this.#emit(
+      managerId,
+      'report',
+      `[${managerId}] ${codeSpan(tool)} の拒否（${actorLabel}）から${String(elapsedMinutes)}分、` +
+        `動きが無い（知らせ直し ${String(nextStage)}/${String(DENIAL_RENOTIFY_DELAYS_MS.length)} 回目。` +
+        'issue #1105 C）。' +
+        (reason?.inputHead === undefined
+          ? ''
+          : `\n拒否より前に見た入力の先頭（伏せ字・最大160字）: ${codeSpan(reason.inputHead)}`) +
+        DENIAL_REPLY_ROUTE +
+        '\n全件は日誌に残っている（`journal_read` で辿れる）。',
+    );
+
+    if (nextStage === DENIAL_RENOTIFY_DELAYS_MS.length) {
+      void this.#journal({
+        type: 'exchange',
+        with: 'manager',
+        role: 'inbound',
+        text:
+          `${EXCHANGE_KIND_THINNING_PREFIX}[${managerId}] ${tool} の拒否（${actorLabel}）の知らせ直しを` +
+          `${String(nextStage)}回とも出したので、これ以上は黙る（issue #1105 C）。`,
+      });
+    }
   }
 
   /**
@@ -9898,6 +10168,10 @@ class Pool implements ManagerPool {
       }
 
       case 'tool_use': {
+        // **拒否の後に「進んだ」判定の材料（issue #1105 C）。** 道具の実行が
+        // 決着した＝手は止まっていない。層は問わない（`renotifyStalledDenials`
+        // の doc「成功した道具呼び出しの層は問わない」）。
+        record.lastToolSettledAt = new Date(this.#now()).toISOString();
         await this.#journal({
           type: 'tool_use',
           actor: event.actor,
@@ -11376,6 +11650,8 @@ class Pool implements ManagerPool {
         for (const key of keys) {
           record.deniedLastAt?.delete(key);
           record.deniedLastReason?.delete(key);
+          // issue #1105 C。`deniedLastAt` と同じ鍵なので同時に消す。
+          record.deniedRenotify?.delete(key);
         }
         const labels = keys.map((key) => {
           const { tool, actor } = decodeDenialKey(key);

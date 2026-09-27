@@ -20,13 +20,16 @@
  *
  * ⟹ **この道具は「同じ sha の check-runs を並べて世代を選ぶ」経路を使わない。**
  * 代わりに `actions/runs?head_sha=<sha>` で実際の run 一覧を取り、
- * **workflow 名ごとに `created_at`（同値なら `id`）で最新の run を選び**、
+ * **workflow 名ごとに、rerun でなければ `created_at`（同値なら `id`）、
+ * rerun（`run_attempt` が2以上）が絡む比較だけ `updated_at` で最新の run を
+ * 選び**（`effectiveTimestamp` / `newerRun` の doc。Issue #1748）、
  * **その run 自身の `actions/runs/<id>/jobs` を読む**。
  *
  * ⚠️ **これで「確定」ではない。** 実測できたのは1 sha・2世代・1 workflow・
- * 4ジョブの標本だけである（`check-pr-green.test.ts` のコメント参照）。
- * 再実行（`rerun`）で3世代目が生える場合、`pull_request` と
- * `workflow_dispatch` が混ざる場合は測っていない。
+ * 4ジョブの標本（#933）と、そこへ rerun が絡んだ1 sha・2世代・1 workflow の
+ * 標本（#1748。`check-pr-green.test.ts` のコメント参照）だけである。
+ * **`pull_request` と `workflow_dispatch` が混ざる場合はまだ測っていない**
+ * （rerun で3世代目が生える場合は #1748 で測った——次項）。
  *
  * ⛔ **同じ workflow 名で `event` が違う run が同じ sha に同居する場合は
  * 実測済みで、`created_at` だけでまとめると赤を見落とす（Issue #1225）。**
@@ -43,16 +46,77 @@
  */
 
 /**
+ * run 自身の「実効の新しさ」を表す時刻を返す（Issue #1748）。
+ *
+ * `run_attempt` が2以上（＝ `gh run rerun` で再実行された run）のときだけ
+ * `updated_at` を使い、それ以外（`run_attempt` が1、または省略——古い呼び
+ * 出し元・テストとの互換）は `created_at` を使う。
+ *
+ * ## なぜ分けるか
+ *
+ * `created_at` は run が最初に作られた時刻のまま固定で、**rerun しても
+ * 動かない。** 一方 `updated_at` は状態が変わるたびに更新され、rerun の
+ * 完了時刻まで動く。だから rerun が絡む run では `created_at` は「実効の
+ * 新しさ」を失うが、`updated_at` に乗り換えれば直る。
+ *
+ * ただし `updated_at` を**常に**使うと、直上の「その run が実際にジョブを
+ * 実行したか」と同じ形の罠を生みうる —— 別の生成（同じ workflow 名・
+ * 同じ event）が同居する draft→ready のレースでは、`created_at` は
+ * run が作られた実測の順序を正しく持つ（下の実測）。`run_attempt` で
+ * 場合分けすることで、rerun が絡まない大多数の比較はこれまでどおり
+ * `created_at` のまま（#933 / #997 / #1126 の実測を壊さない）にし、
+ * rerun が絡む比較だけ `updated_at` に寄せる。
+ *
+ * ## 実測（Issue #1748、sha `031bf92f62e61fc16eee3570a72c7c87ff6b2d7f`）
+ *
+ * push 直後に `gh pr ready` を打ったところ、concurrency（`cancel-in-progress:
+ * true`）が競り合い、`CI` の run が2本できた:
+ *
+ * - run `36286928087`（`run_attempt=1`、`created_at=01:54:11Z`、
+ *   `conclusion=skipped`。draft と評価された扱いのまま残った）
+ * - run `36286927781`（`run_attempt` は1→cancelled→2）。attempt 1 は
+ *   `created_at=01:54:10Z`（`36286928087` より**1秒早い**）で `cancelled`。
+ *   `gh run rerun` した attempt 2 は `updated_at=02:16:15Z`（22分後）で
+ *   `success`。attempt を重ねても run 自身の `created_at`（`01:54:10Z`）は
+ *   動かない。
+ *
+ * ⟹ `created_at` だけで比べると、後から作られた draft 由来の
+ * `36286928087`（`01:54:11Z`）が rerun 後の `36286927781`
+ * （`created_at` は動かず `01:54:10Z` のまま）より新しく見え、**skipped の
+ * ほうを「最新世代」に選んでしまう。** `run_attempt` が2以上の
+ * `36286927781` だけ `updated_at`（`02:16:15Z`）で比べれば、正しく
+ * rerun 後の success が選ばれる。
+ *
+ * ⚠️ **`check-run`（job）の `id` を世代選びの鍵にする案は採らない。**
+ * 同じ Issue で確かめたところ、rerun 後の attempt はジョブごとに新しい
+ * check-run id を得て、この標本では新しい id が正しく success 側を指した
+ * （`108530421811` > `108529330063`）。しかし #933 の実測（sha
+ * `1e619f43858160fb5d9a6b1895d236e35d4771cf`）を同じ観点で引き直すと、
+ * `base-overlap` という1門だけ check-run id が逆転している
+ * （skipped 側の check-run id `103687100128` が、success 側の
+ * `103687095766` より**大きい**——`if:` の評価が遅れた job だけ id でも
+ * 後ろへ回るという、このファイル冒頭の doc の記述のとおり）。⟹
+ * check-run id は rerun の無い draft→ready のレースで既に破綻することが
+ * 分かっているので、rerun の場合分けの鍵には使わない。
+ */
+function effectiveTimestamp(run) {
+  const attempt = run.run_attempt ?? 1;
+  const key = attempt > 1 ? (run.updated_at ?? run.created_at) : run.created_at;
+  return Date.parse(key);
+}
+
+/**
  * 2つの run のうち新しいほうを返す。
  *
- * `created_at` を第一キーにする —— `actions/runs` 応答が返す `created_at` は
- * GitHub が run を作った実測の時刻で、`check-runs` の `started_at`（job が
- * 実際に走り出した時刻。`if:` で後段になった job ほど遅れる）とは別物である。
- * 同秒で並んだときだけ `id`（run 自身の id。job の id ではない）で決める —
- * この標本では run の `id` は作成順と一致した（`34743503505` <
- * `34743508004`）。
+ * 第一キーは `effectiveTimestamp`（rerun のときだけ `updated_at`、それ以外は
+ * `created_at`。上の doc）。同秒で並んだときは `created_at` そのもの、それも
+ * 同じなら `id`（run 自身の id。job の id ではない）で決める —— この標本では
+ * run の `id` は作成順と一致した（`34743503505` < `34743508004`）。
  */
 function newerRun(a, b) {
+  const ea = effectiveTimestamp(a);
+  const eb = effectiveTimestamp(b);
+  if (ea !== eb) return ea > eb ? a : b;
   const ta = Date.parse(a.created_at);
   const tb = Date.parse(b.created_at);
   if (ta !== tb) return ta > tb ? a : b;
