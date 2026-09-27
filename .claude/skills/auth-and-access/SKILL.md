@@ -35,5 +35,9 @@ description: ログイン・アクセス許可（alteroid login / access grant�
   - 環境変数名に `ALTEROID_` を付けてあるのは、人間が MCP で使う素の `GOOGLE_CLIENT_ID` を巻き添えで伏せないため
 - ログイン手段を足すのは `packages/core/src/auth-providers.ts` に1つ書いて登録するだけ。**メール+パスワードは `oauth2` の枠に押し込まない**（`kind: 'password'` の枠を型として用意してある — パスワードは「外部の identity」ではなく「本人が持つ資格情報」で、概念が違う）
 - **メールが一致しても既存アカウントへ相乗りさせない。** 別プロバイダで他人のメールを名乗れる以上、自動結合は乗っ取り経路になる。必ず別アカウントを作り、許可は人間が明示的に与える
-- 動作確認: `alteroid login` / `alteroid whoami` / `alteroid access list|grant|revoke`。別のデーモンへ繋ぐなら `ALTEROID_URL=https://…`（手元のデーモンには**ログイン不要**で、状態ファイルを読めることで通る）
+- **ログアウトはサーバ側のトークンも失効させる（issue #1757）。** `alteroid logout` / Web の画面のログアウトは、まず `POST /auth/logout`（**認証が要る**——`/auth/me` と同じ `isPublicPath` の例外）を呼び、**いま提示している1本のアクセストークンだけ**を失効させる（`AuthStore.revokeAccessToken`。同じアカウントの他のトークンは触らない——アカウントごと締め出すのは `access revoke` の役目で別の操作）。**冪等**——`revokedAt` は空のときだけ立て、先に立った時刻は動かさない
+  - **CLI**: 成功または 401（既に無効）なら手元の資格を消す。**サーバへ届かない・5xx・その他の失敗では手元の資格を消さない**（消すと、失効させる手段が `access revoke` しか残らない）。`--local-only` を付ければ、警告付きで手元だけを消せる（トークンは期限か `access revoke` まで有効なまま）
+  - **operator の資格（状態ファイルの token）では呼べない。** operator はアクセストークンを1本も持たない別種の資格なので、`POST /auth/logout` は 4xx で断る（`alteroid access revoke` へ誘導する）
+  - **Web**: 成功／401 なら鍵を捨てる。失敗したら鍵は残したままエラーを出し、「この画面から鍵だけを捨てる」を別に出す（`useAuth()` の `logout()` / `discardCredential()`）。ただし `Ungranted`（許可待ち）画面の「別のアカウントでログイン」は `discardCredential()` を使う——未許可のアカウントは `authenticate` 門番自体が 403 を返すので `logout()` では鍵を捨てられない
+- 動作確認: `alteroid login` / `alteroid logout` / `alteroid whoami` / `alteroid access list|grant|revoke`。別のデーモンへ繋ぐなら `ALTEROID_URL=https://…`（手元のデーモンには**ログイン不要**で、状態ファイルを読めることで通る）
 - コンテナでは `docker compose exec app alteroid access grant <id>`。Redirect URI は `<ALTEROID_PUBLIC_URL>/auth/google/callback` の1本だけ登録すればよい
