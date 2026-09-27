@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import process from 'node:process';
 
@@ -7,7 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { unpushedWorkTreeSchema } from './runner-protocol.js';
+import { unpushedWorkResultSchema, unpushedWorkTreeSchema } from './runner-protocol.js';
 import {
   computeUnpushedWork,
   DEFAULT_MAX_DEPTH,
@@ -16,6 +17,7 @@ import {
   matchesManagerScratchDirName,
   parseRemoteOriginUrl,
   type ProcessSpawnFn,
+  type ReaddirFn,
 } from './unpushed-work.js';
 
 /**
@@ -121,6 +123,84 @@ describe('findGitDirs', () => {
 
     expect(found.paths).toHaveLength(2);
     expect(found.truncatedAtCount).toBe(2);
+  });
+
+  /**
+   * ⭐ Issue #1865 — 起点より下（子ディレクトリ）の `readdir` 失敗を数える。
+   *
+   * ⚠️ **`chmod 000` は使わない。** 非 root では効くが、root で走る CI では
+   * 効かない（root は権限ビットを無視できる）——`root のときは skip` という
+   * 形も使わない（AGENTS.md「取れない軸に0の行を作る」の裏——skip は CI で
+   * 黙って飛ばされ、以後この分岐が測られなくなる）。**`readdirFn` を差し
+   * 替えて、root かどうかに関係なく同じ失敗を決定的に起こす。**
+   */
+  it('⭐ 子ディレクトリの readdir が失敗したら unreadableDirCount に数え、見つかった分はそのまま返す（Issue #1865）', async () => {
+    initRepo(join(root, 'visible'));
+    const brokenChild = join(root, 'broken-child');
+    mkdirSync(brokenChild, { recursive: true });
+
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === brokenChild) {
+        throw Object.assign(new Error('EACCES: permission denied, scandir (テスト用の模擬失敗)'), {
+          code: 'EACCES',
+        });
+      }
+      return readdir(dir, { withFileTypes: true });
+    };
+
+    const found = await findGitDirs(root, { readdirFn });
+
+    expect(found.paths).toEqual([join(root, 'visible')]);
+    expect(found.unreadableDirCount).toBe(1);
+    expect(found.unreadableDirSample).toContain(brokenChild);
+    expect(found.unreadableDirSample).toContain('EACCES');
+  });
+
+  it('複数の子ディレクトリが読めなくても件数として数える（サンプルは最初の1件だけ）', async () => {
+    initRepo(join(root, 'visible'));
+    const brokenA = join(root, 'broken-a');
+    const brokenB = join(root, 'broken-b');
+    mkdirSync(brokenA, { recursive: true });
+    mkdirSync(brokenB, { recursive: true });
+
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === brokenA || dir === brokenB) {
+        throw new Error(`模擬失敗: ${dir}`);
+      }
+      return readdir(dir, { withFileTypes: true });
+    };
+
+    const found = await findGitDirs(root, { readdirFn });
+
+    expect(found.paths).toEqual([join(root, 'visible')]);
+    expect(found.unreadableDirCount).toBe(2);
+    expect(found.unreadableDirSample).toBeDefined();
+  });
+
+  it('対照: 子ディレクトリがすべて読めるときは unreadableDirCount / unreadableDirSample が省略される', async () => {
+    initRepo(join(root, 'visible'));
+    mkdirSync(join(root, 'plain-child'), { recursive: true });
+
+    const found = await findGitDirs(root);
+
+    expect(found.paths).toEqual([join(root, 'visible')]);
+    expect(found.unreadableDirCount).toBeUndefined();
+    expect(found.unreadableDirSample).toBeUndefined();
+  });
+
+  it('起点自身の readdir 失敗（rootUnreadable）は unreadableDirCount に数えない（別軸のまま）', async () => {
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === root) {
+        throw new Error('模擬: 起点そのものが読めない');
+      }
+      return readdir(dir, { withFileTypes: true });
+    };
+
+    const found = await findGitDirs(root, { readdirFn });
+
+    expect(found.rootUnreadable).toBeDefined();
+    expect(found.unreadableDirCount).toBeUndefined();
+    expect(found.paths).toEqual([]);
   });
 });
 
@@ -731,7 +811,7 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
     }
   });
 
-  it('起点より下（子ディレクトリ）の読み失敗は、これまでどおり黙って諦める（この PR では変えない）', async () => {
+  it('起点より下（子ディレクトリ）の読み失敗があっても、見つかった分（visible）はそのまま返す', async () => {
     const top = makeTempDirSync('alteroid-unpushed-work-nested-locked-');
     initRepo(join(top, 'visible'));
     commitFile(join(top, 'visible'), 'a.txt', 'x\n', 'x');
@@ -741,12 +821,88 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
     try {
       // 子ディレクトリが読めなくても、起点（`top`）自体は読めるので例外には
       // ならない——見つかった分（`visible`）だけを正として返す、という
-      // 従来の設計（`findGitDirs` の doc）をこの PR では変えていないことを
-      // 固定する。
+      // 従来の設計（`findGitDirs` の doc）は変えていない。**この `chmod 000`
+      // は root では効かないので `unreadableDirCount` の有無はここでは断定
+      // しない**——その決定的な再現と検証は次の describe ブロック
+      // （`readdirFn` を差し替える形。Issue #1865）が持つ。
       const result = await computeUnpushedWork(top, { spawn: realSpawn, env: process.env });
       expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
     } finally {
       chmodSync(lockedChild, 0o755);
     }
+  });
+});
+
+describe('computeUnpushedWork — 起点より下（子ディレクトリ）の読み失敗を数える（Issue #1865）', () => {
+  // `findGitDirs` の `walk` は、任意階層（起点そのものを除く）の `readdir`
+  // 失敗を黙って諦める設計のままだが、失敗した事実そのものはこれまで
+  // `computeUnpushedWork` の戻り値のどこにも残らなかった——`truncatedAtCount`
+  // が「打ち切った」と名乗るのに、権限・競合で読めなかった場合だけ何も
+  // 名乗らず「0本」と区別が付かない。`manager-auto-fold.ts` の自動畳み込みの
+  // 安全弁は `worktrees` が全部 clean（または0本）なら `'clear'` を返すため、
+  // 読めなかった子ディレクトリの下に残っていたかもしれない未 push の実装を
+  // 検知しないまま自動で畳んでしまう（許しすぎる側の穴）。
+  //
+  // ⚠️ **`chmod 000` は使わない**——root で走る CI では効かない（直前の
+  // describe ブロックの注記のとおり）。`readdirFn` を差し替えて、root か
+  // どうかに関係なく同じ失敗を決定的に起こす。
+
+  it('⭐ 子ディレクトリの読み失敗が UnpushedWorkResult.unreadableDirCount に載る', async () => {
+    const top = makeTempDirSync('alteroid-unpushed-work-child-unreadable-');
+    initRepo(join(top, 'visible'));
+    commitFile(join(top, 'visible'), 'a.txt', 'x\n', 'x');
+    const brokenChild = join(top, 'broken-child');
+    mkdirSync(brokenChild, { recursive: true });
+
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === brokenChild) {
+        throw Object.assign(new Error('EACCES: permission denied, scandir (テスト用の模擬失敗)'), {
+          code: 'EACCES',
+        });
+      }
+      return readdir(dir, { withFileTypes: true });
+    };
+
+    const result = await computeUnpushedWork(top, {
+      spawn: realSpawn,
+      env: process.env,
+      readdirFn,
+    });
+
+    expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
+    expect(result.unreadableDirCount).toBe(1);
+    expect(result.unreadableDirSample).toContain(brokenChild);
+  });
+
+  it('対照: すべての子ディレクトリが読めるときは unreadableDirCount が省略される', async () => {
+    const top = makeTempDirSync('alteroid-unpushed-work-all-readable-');
+    initRepo(join(top, 'visible'));
+    commitFile(join(top, 'visible'), 'a.txt', 'x\n', 'x');
+    mkdirSync(join(top, 'plain-child'), { recursive: true });
+
+    const result = await computeUnpushedWork(top, { spawn: realSpawn, env: process.env });
+
+    expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
+    expect(result.unreadableDirCount).toBeUndefined();
+    expect(result.unreadableDirSample).toBeUndefined();
+  });
+
+  it('unpushedWorkResultSchema がパースを受け付ける（スキーマ側にも足したことの固定）', async () => {
+    const top = makeTempDirSync('alteroid-unpushed-work-schema-');
+    initRepo(join(top, 'visible'));
+    const brokenChild = join(top, 'broken-child');
+    mkdirSync(brokenChild, { recursive: true });
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === brokenChild) throw new Error('模擬失敗');
+      return readdir(dir, { withFileTypes: true });
+    };
+
+    const result = await computeUnpushedWork(top, {
+      spawn: realSpawn,
+      env: process.env,
+      readdirFn,
+    });
+
+    expect(unpushedWorkResultSchema.safeParse(result).success).toBe(true);
   });
 });
