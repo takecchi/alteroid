@@ -1394,9 +1394,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
       at: AT,
     });
 
-    expect(line).toContain(
-      'プール 5 本: いま使える 2 / 冷却中 1 / 人間が外している 1 / 失効 1',
-    );
+    expect(line).toContain('プール 5 本: いま使える 2 / 冷却中 1 / 人間が外している 1 / 失効 1');
     expect(line).not.toContain('外されている');
   });
 
@@ -1454,9 +1452,7 @@ describe('枠を理由に見送らせない（describeTokenSituation）', () => 
     // 外されている 0」（合算した1区分。#1794 参照）を期待していた。分割後は
     // 「人間が外している」「失効」がそれぞれ0件でも出す（既存の「いま使える 0」を
     // 出す作法に揃えた）。
-    expect(line).toContain(
-      'プール 2 本: いま使える 2 / 冷却中 0 / 人間が外している 0 / 失効 0',
-    );
+    expect(line).toContain('プール 2 本: いま使える 2 / 冷却中 0 / 人間が外している 0 / 失効 0');
     // **不変条件は落ちない。**
     expect(line).toContain('枠を理由に仕事を見送らないこと');
   });

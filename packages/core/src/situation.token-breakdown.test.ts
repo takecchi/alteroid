@@ -17,7 +17,9 @@ import { describeTokenSituation, type TokenSituationRow } from './situation.js';
 describe('describeTokenSituation のプール内訳（#1794 人間が外した／失効の分割）', () => {
   const AT = Date.parse('2026-09-27T00:00:00.000Z');
 
-  const row = (over: Partial<TokenSituationRow> & { id: string; label: string }): TokenSituationRow => ({
+  const row = (
+    over: Partial<TokenSituationRow> & { id: string; label: string },
+  ): TokenSituationRow => ({
     ...over,
   });
 
@@ -26,7 +28,11 @@ describe('describeTokenSituation のプール内訳（#1794 人間が外した�
     const line = describeTokenSituation({
       tokens: [
         row({ id: 'a', label: 'A-disabled-by-human', disabledAt: '2026-09-01T00:00:00.000Z' }),
-        row({ id: 'b', label: 'B-invalidated-by-system', invalidatedAt: '2026-09-02T00:00:00.000Z' }),
+        row({
+          id: 'b',
+          label: 'B-invalidated-by-system',
+          invalidatedAt: '2026-09-02T00:00:00.000Z',
+        }),
         row({ id: 'c', label: 'C-ready' }),
       ],
       active: null,
