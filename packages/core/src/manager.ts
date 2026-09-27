@@ -11484,10 +11484,9 @@ class Pool implements ManagerPool {
    * （「間隔は伸ばすが、諦めはしない」の約束を1つにする）。成功は `ok` で上書きする。
    *
    * 日誌の行はここでは書かない。即時の配布の失敗を日誌へ残すかは呼び出し元が持つ
-   * ——`PUT /mcp-servers`（`app.ts`）と `profile_write`（`tools.ts`）は残しており、
-   * ここでも書くと二重になる。⚠️ **`PUT /profile` と `PUT /credentials` は残して
-   * いない**（応答の `runners` とこの帳面にだけ出る）。「全経路が日誌に残す」と
-   * 読まないこと。
+   * ——`PUT /mcp-servers` / `PUT /profile` / `PUT /credentials`（すべて `app.ts`）と
+   * `profile_write`（`tools.ts`）はどれも残しており（Issue #1733）、ここでも書くと
+   * 二重になる。
    */
   #recordDirectPushResults(
     kind: 'profile' | 'mcpServers' | 'credentials',

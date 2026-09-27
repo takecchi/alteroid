@@ -4829,6 +4829,8 @@ export function createApp(deps: AppDeps) {
         const result = await deps.profile.apply(c.req.valid('json').script);
 
         if (!result.stored) {
+          // **読めなかったのはシステムの結果であって判断ではない**（`profile_write`
+          // の同じ doc と同じ理由）。保存も配布もしていないので、日誌に残す事実も無い。
           return c.json(
             {
               error: 'プロファイルが読めなかったので保存していない' as const,
@@ -4839,6 +4841,27 @@ export function createApp(deps: AppDeps) {
             400,
           );
         }
+
+        /**
+         * **差し替えた事実と配布の成否を日誌へ残す（値は1文字も書かない。Issue
+         * #1733）。** `profile_write`（`tools.ts`）と同じ深さ（sha256・bytes）
+         * まで、`PUT /mcp-servers` と同じ形（名前と成否だけの配布結果）で残す。
+         * ここは人間がこの口から直に叩く経路なので、`profile_write` の
+         * `summary`（クローンが書く一行要約）に代わるものが無い——その代わりに
+         * 「誰が・どの口から」を `describeActor` で補う。
+         */
+        const delivered = result.runners
+          .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
+          .join(', ');
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}）`,
+          grounds:
+            `${describeActor(c.get('principal'))}（PUT /profile）。` +
+            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
+            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+            '（マネージャー・作業者には次に開くセッションから効く）。',
+        });
 
         return c.json(
           profileUpdateResponseSchema.parse({
@@ -5148,9 +5171,10 @@ export function createApp(deps: AppDeps) {
         if (deps.credentials === undefined) {
           return c.json({ error: '鍵の正本の器が無い' as const }, 503);
         }
+        const entries = c.req.valid('json').credentials;
         let result;
         try {
-          result = await deps.credentials.apply(c.req.valid('json').credentials);
+          result = await deps.credentials.apply(entries);
         } catch (error) {
           /**
            * **置かせない名前（伏せる鍵・プールが正本を持つ名前）はここへ来る。**
@@ -5158,10 +5182,44 @@ export function createApp(deps: AppDeps) {
            * 理由を返す——「置けなかった」だけでは、人間は名前を疑うのか権限を
            * 疑うのか分からない。**`String(error)` に値は入らない**（サービス側の
            * 例外文は名前しか載せていない。`credential-service.ts` の
-           * `assertEntries`）。
+           * `assertEntries`）。**1文字も置いていないので、日誌に残す事実も無い**
+           * （`PUT /profile` の読めなかった経路と同じ判断）。
            */
           return c.json({ error: String(error) }, 400);
         }
+
+        /**
+         * **差し替えた事実と配布の成否を日誌へ残す（名前と指紋だけ。値は1文字も
+         * 書かない。Issue #1733）。**
+         *
+         * ⚠️ **`result.fingerprints` を丸ごと流さないこと。** `secret === false`
+         * の行は `value`（平文）を伴って返ってくる（`credential-service.ts` の
+         * `fingerprintOfRow`）——ここでは `name` / `sha256` だけを個別に読む。
+         */
+        const setNames = entries.filter((e) => e.value.length > 0).map((e) => e.name);
+        const removedNames = entries.filter((e) => e.value.length === 0).map((e) => e.name);
+        const sha256ByName = new Map(result.fingerprints.map((f) => [f.name, f.sha256]));
+        const changed = [
+          setNames.length === 0
+            ? null
+            : `置いた: ${setNames.map((name) => `${name}=${sha256ByName.get(name) ?? '不明'}`).join(', ')}`,
+          removedNames.length === 0 ? null : `外した: ${removedNames.join(', ')}`,
+        ]
+          .filter((part) => part !== null)
+          .join('。');
+        const delivered = result.runners
+          .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
+          .join(', ');
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: `環境変数（鍵）を差し替えた（${changed}）`,
+          grounds:
+            `${describeActor(c.get('principal'))}（PUT /credentials）。` +
+            '値は書かない（鍵そのものである）。' +
+            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+            '。走行中のマネージャーにも次の git / gh 呼び出しから届く。',
+        });
+
         return c.json(
           // **サービスの返す形をそのまま流さない。** 宣言（`credentials`）と
           // サービスの語彙（`fingerprints`）が違うので、`parse` で落ちる形に

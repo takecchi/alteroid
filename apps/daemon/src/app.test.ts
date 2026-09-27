@@ -7575,6 +7575,124 @@ describe('実行環境プロファイル', () => {
     // 降ろしてもいない
     expect(runner.received).toEqual([]);
   });
+
+  /**
+   * 差し替えた事実が日誌に残ること（Issue #1733）。`profile_write`
+   * （`packages/core/src/tools.ts`）と同じ深さ（sha256）まで、`PUT /mcp-servers`
+   * と同じ形（runner ごとの名前と成否だけ）で残す。**スクリプト本文は1文字も
+   * 書かない**——鍵の値がそのまま入りうる本文だからである。
+   */
+  it('日誌に、sha256 と配布の成否まで残り、スクリプト本文は1文字も書かない', async () => {
+    const runner = fakeRunner('runner-primary');
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf([runner]),
+      profile: profileService(stores, { runners: [runner] }),
+    });
+    const secretScript = 'export DUMMY_PROFILE_SECRET_MARKER=leak-if-you-see-this';
+
+    const response = await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: secretScript }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { sha256: string };
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('実行環境プロファイル'),
+    );
+    expect(entry).toBeDefined();
+    const serialized = JSON.stringify(entry);
+    expect(serialized).toContain(body.sha256);
+    expect(serialized).toContain('runner-primary=ok');
+    expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
+    expect(serialized).not.toContain('leak-if-you-see-this');
+  });
+
+  it('外したこと（空文字）も日誌に残る', async () => {
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: profileService(stores),
+    });
+    await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export OK=1' }),
+    });
+    await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: '' }),
+    });
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const decisions = journal
+      .map((e) => (e.type === 'decision' ? e.decision : ''))
+      .filter((decision) => decision.includes('実行環境プロファイル'));
+    // journal.list の既定は 'desc'（新しい順）——直近（先頭）が2回目の PUT。
+    expect(decisions[0]).toContain('外した');
+  });
+
+  it('runner が1台落ちても、配布の失敗が日誌に残る（スクリプト本文は書かない）', async () => {
+    const runner = fakeRunner('runner-broken');
+    runner.setProfile = async () => {
+      throw new Error('つながらない');
+    };
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf([runner]),
+      profile: profileService(stores, { runners: [runner] }),
+    });
+    const secretScript = 'export DUMMY_PROFILE_SECRET_MARKER=leak-if-you-see-this';
+
+    const response = await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: secretScript }),
+    });
+    expect(response.status).toBe(200);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('実行環境プロファイル'),
+    );
+    const serialized = JSON.stringify(entry);
+    expect(serialized).toContain('runner-broken=失敗');
+    expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
+  });
+
+  it('読めなかった（保存していない）ときは日誌にも残らない', async () => {
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: profileService(stores, { rejects: '壊れている' }),
+    });
+
+    const response = await withProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'if [ ; then' }),
+    });
+    expect(response.status).toBe(400);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    expect(
+      journal.some((e) => e.type === 'decision' && e.decision.includes('実行環境プロファイル')),
+    ).toBe(false);
+  });
 });
 
 /**
@@ -7721,6 +7839,81 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       { runnerId: 'runner-broken', ok: false, error: expect.stringContaining('つながらない') },
     ]);
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
+  });
+
+  /**
+   * 差し替えた事実が日誌に残ること（Issue #1733。#1717 のレビューで見つかった
+   * 不揃い——`PUT /mcp-servers` / `profile_write` は残していたが、`PUT /profile`
+   * `PUT /credentials` だけ残していなかった）。
+   *
+   * **`secret: false` の行も混ぜる。** `CredentialService.apply()` が返す
+   * `result.fingerprints` は、secret でない行に限って `value`（平文）を伴う
+   * （`credential-service.ts` の `fingerprintOfRow`）——ここを見落として
+   * 丸ごと日誌へ流すと、値が1文字も書かれていないはずの日誌に鍵が漏れる。
+   */
+  it('日誌に、名前と指紋・配布の成否まで残り、値は1文字も書かない（secret:false でも）', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withCredentials([runner]);
+
+    const response = await put(withVault, [
+      { name: 'NPM_TOKEN', value: DUMMY_VALUE },
+      { name: 'PUBLIC_NAME', value: 'not-a-secret-either-DUMMY', secret: false },
+    ]);
+    expect(response.status).toBe(200);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('環境変数（鍵）'),
+    );
+    expect(entry).toBeDefined();
+    const serialized = JSON.stringify(entry);
+    expect(serialized).toContain('NPM_TOKEN=');
+    expect(serialized).toContain('PUBLIC_NAME=');
+    expect(serialized).toContain('runner-1=ok');
+    expect(serialized).not.toContain(DUMMY_VALUE);
+    expect(serialized).not.toContain('not-a-secret-either-DUMMY');
+  });
+
+  it('外した名前も日誌に残る', async () => {
+    const withVault = withCredentials();
+    await put(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+    await put(withVault, [{ name: 'NPM_TOKEN', value: '' }]);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const decisions = journal
+      .map((e) => (e.type === 'decision' ? e.decision : ''))
+      .filter((decision) => decision.includes('環境変数（鍵）'));
+    // journal.list の既定は 'desc'（新しい順）——直近（先頭）が2回目の PUT。
+    expect(decisions[0]).toContain('外した: NPM_TOKEN');
+  });
+
+  it('runner が1台落ちても、配布の失敗が日誌に残る（値は書かない）', async () => {
+    const broken = fakeRunner('runner-broken');
+    broken.setCredentials = async () => {
+      throw new Error('つながらない');
+    };
+    const withVault = withCredentials([broken]);
+
+    await put(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    const entry = journal.find(
+      (e) => e.type === 'decision' && e.decision.includes('環境変数（鍵）'),
+    );
+    const serialized = JSON.stringify(entry);
+    expect(serialized).toContain('runner-broken=失敗');
+    expect(serialized).not.toContain(DUMMY_VALUE);
+  });
+
+  it('置かせない名前・伏せる鍵は 400 で、1文字も置いていないので日誌にも残らない', async () => {
+    const withVault = withCredentials();
+    await put(withVault, [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE }]);
+    await put(withVault, [{ name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' }]);
+
+    const journal = await stores.journal.list({ types: ['decision'] });
+    expect(
+      journal.some((e) => e.type === 'decision' && e.decision.includes('環境変数（鍵）')),
+    ).toBe(false);
   });
 });
 
