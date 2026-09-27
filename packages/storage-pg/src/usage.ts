@@ -123,12 +123,13 @@ function isBeforeTurns(turnsSince: string | null, from: string | undefined): boo
  * もう片方の基準読みが走れば、**両方が同じ基準を読んで同じ増分を計算し、
  * 両方ぶんが `usage_daily` へ加算される**（実測: 基準 1.00、並行の2本を
  * 1.30 / 1.80 で積むと、正しい合計増分は 0.80（1.80-1.00）のはずが 1.10
- * （0.30+0.80）——過大計上。`packages/core/src/clone.ts` の `#recordUsage` は
- * `layer: 'clone', managerId: CLONE_ACTOR_ID`——**全クローンで共有する固定の
- * managerId** ——なので、2つ以上のクローンが同時に動いていれば毎回この
- * `(layer, managerId)` へ重なる。`manager.ts` の `case 'usage'` も
- * `void this.#onEvent(event)` で並行に走る設計なので、同じマネージャーへの
- * 連続する2件の `usage` イベントが重なりうる）。
+ * （0.30+0.80）——過大計上。重なりうる経路（読みによる判定。本番での頻度は
+ * 測っていない）: `manager.ts` の `case 'usage'` は `void this.#onEvent(event)` で
+ * 並行に走る設計なので、同じマネージャーへの連続する2件の `usage` イベントが
+ * 重なりうる。クローンの累積の record（`clone.ts` の `#recordUsage`、
+ * `managerId: CLONE_ACTOR_ID`）はクローンの1本のセッションから来るので、
+ * 重なりやすいとは読んでいない（デーモンに脳は1つ——architecture
+ * 「脳は1インスタンス」）。
  *
  * **`accumulation: 'oneshot'` はこの窓の外である。** 基準を読まない
  * （`baselineRows` は `[]` に固定）ので、比べる相手がそもそも無い——並行に
