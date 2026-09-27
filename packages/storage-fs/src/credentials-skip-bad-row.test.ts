@@ -120,4 +120,81 @@ describe('FsCredentialVaultStore — 不正な1行を読み飛ばす（issue #17
     const rows = await stores.credentials.list();
     expect(rows.map((row) => row.name).sort()).toEqual(['GH_TOKEN', 'NEW_KEY']);
   });
+
+  /**
+   * issue #1740 のフォローアップ。人間が壊れた行を `alteroid credential set
+   * GH_TOKEN …` で「直した」つもりなのに、同じ名前の壊れた行が `invalidRaw`
+   * として残り続けると、ファイルに同じ名前が2行並び、以後 `list()` のたびに
+   * 直したはずの跡が出続ける——これは驚きになる。pg は名前が主キーなので
+   * この重複は起こらない（`onConflictDoUpdate` で1行に畳まれる）。
+   */
+  it('put() は、書き込む名前と一致する不正な行を置き換える（別名・名前の取れない行はそのまま残す）', async () => {
+    const FAKE_OTHER_VALUE = 'ghp_FAKEFAKE4444444444444444444444444444';
+    const FAKE_UNNAMED_VALUE = 'ghp_FAKEFAKE5555555555555555555555555555';
+    const FAKE_NEW_VALUE = 'ghp_FAKEFAKE6666666666666666666666666666';
+
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      credentialsPath,
+      `${JSON.stringify(
+        {
+          credentials: [
+            // 名前は正しいが scope が不正（enum に無い値）——書き込む名前と一致する。
+            {
+              name: 'GH_TOKEN',
+              value: FAKE_BAD_VALUE,
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              scope: 'not-a-real-scope',
+              secret: true,
+            },
+            // 完全に正しい別の行——触れられずに残るはず。
+            {
+              name: 'OTHER_TOKEN',
+              value: FAKE_OTHER_VALUE,
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              scope: 'all',
+              secret: true,
+            },
+            // 名前欄が無く、extractRowName で名前を取れない不正な行——
+            // 書き込む名前と比べようが無いので、そのまま残るはず。
+            { value: FAKE_UNNAMED_VALUE, updatedAt: '2026-01-01T00:00:00.000Z', scope: 'all' },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const stores = createFsStores(root);
+
+    await captureStderr(async () => {
+      await expect(
+        stores.credentials.put([{ name: 'GH_TOKEN', value: FAKE_NEW_VALUE }]),
+      ).resolves.toBeDefined();
+    });
+
+    const raw = await readFile(credentialsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { credentials: unknown[] };
+    const named = parsed.credentials as { name?: unknown }[];
+
+    // **その名前は1行だけ**（新しい値）——古い壊れた行と共存しない。
+    expect(named.filter((row) => row.name === 'GH_TOKEN')).toEqual([
+      expect.objectContaining({ name: 'GH_TOKEN', value: FAKE_NEW_VALUE }),
+    ]);
+    // 別の正しい行は触れられていない。
+    expect(named.filter((row) => row.name === 'OTHER_TOKEN')).toEqual([
+      expect.objectContaining({ name: 'OTHER_TOKEN', value: FAKE_OTHER_VALUE }),
+    ]);
+    // 名前の取れない不正な行は、そのまま残る。
+    expect(named.some((row) => row.name === undefined)).toBe(true);
+
+    // **次の list() で、直したはずの GH_TOKEN についての跡は出ない**——
+    // 直した名前の壊れた行が消えている証拠。名前の取れない行は依然壊れて
+    // いるので、そちら自身の跡（GH_TOKEN を名乗らない）は出てもよい。
+    const lines = await captureStderr(async () => {
+      const rows = await stores.credentials.list();
+      expect(rows.map((row) => row.name).sort()).toEqual(['GH_TOKEN', 'OTHER_TOKEN']);
+      expect(rows.find((row) => row.name === 'GH_TOKEN')?.value).toBe(FAKE_NEW_VALUE);
+    });
+    expect(lines.join('')).not.toContain('GH_TOKEN');
+  });
 });

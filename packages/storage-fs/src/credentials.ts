@@ -143,7 +143,22 @@ export class FsCredentialVaultStore implements CredentialVaultStore {
       // 返すと、次の `#update` のシリアライズで不正な行が消える（issue
       // #1740 —— 直すための書き込みが、直っていない行を道連れに消していい
       // 理由は無い）。
-      return { credentials: [...rows.values()], invalidRaw: file.invalidRaw };
+      //
+      // **⚠️ ただし、この `put()` が書き込む名前と一致する不正な行は外す**
+      // （issue #1740 のフォローアップ）。人間が `alteroid credential set
+      // GH_TOKEN …` で直したつもりなのに、同じ名前の壊れた行が `invalidRaw`
+      // として残り続けると、ファイルに同じ名前の行が2つ並び、以後 `list()` の
+      // たびに直したはずの跡が出続ける——「直した」という人間の意図に対する
+      // 驚きになる。pg は名前が主キーなので、この重複はそもそも起こり得ない
+      // （同じ名前は `onConflictDoUpdate` で1行に畳まれる）。fs もそれに合わせる。
+      // **名前が取れない行・違う名前の行はここでは触らない**（元の形のまま
+      // 残す、という #1740 の基本方針そのものは変えない）。
+      const writtenNames = new Set(entries.map((entry) => entry.name));
+      const invalidRaw = file.invalidRaw.filter((raw) => {
+        const name = extractRowName(raw);
+        return name === undefined || !writtenNames.has(name);
+      });
+      return { credentials: [...rows.values()], invalidRaw };
     });
     return [...written.credentials].sort((a, b) => a.name.localeCompare(b.name));
   }
