@@ -12185,6 +12185,13 @@
                           "cwd": {
                             "type": "string"
                           },
+                          "cwdConfirmed": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "requestedCwd": {
+                            "type": "string"
+                          },
                           "request": {
                             "type": "string"
                           },
@@ -12751,6 +12758,13 @@
                           }
                         },
                         "cwd": {
+                          "type": "string"
+                        },
+                        "cwdConfirmed": {
+                          "type": "boolean",
+                          "const": true
+                        },
+                        "requestedCwd": {
                           "type": "string"
                         },
                         "request": {
