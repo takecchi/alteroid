@@ -40,10 +40,16 @@ export interface DaemonStatus {
 export type StopOutcome =
   | 'stopped'
   | 'not-running'
-  /** 状態ファイルは残っているが本人確認できない。PID は信用できないので触らない。 */
+  /** 居ないと確定できた（応答があった上での否定、または接続拒否）。PID は
+   * 信用できないので触らず、状態ファイルだけ片付ける。 */
   | 'stale'
   /** 応答はあるが止まらない。 */
-  | 'unresponsive';
+  | 'unresponsive'
+  /** 確かめられなかった（タイムアウト等）。PID にも状態ファイルにも触って
+   * いない——「居ない」と決め付けて片付けると、直後の `ensureRunning()` が
+   * `absent`（＝居ないと確定済み）と読んでしまい、`start()` の安全弁
+   * （`unknown` のときは spawn しない）を素通りする（Issue #1818）。 */
+  | 'unknown';
 
 function runtimeFile(): string {
   return join(stateDir(), 'daemon.json');
@@ -204,7 +210,12 @@ export async function start(): Promise<DaemonRuntimeInfo> {
 /** `stopDaemon` が触る外界。テストで差し替えるためだけに切り出してある。 */
 export interface StopDeps {
   readInfo(): Promise<DaemonRuntimeInfo | null>;
-  verify(info: DaemonRuntimeInfo): Promise<boolean>;
+  /**
+   * 3値（{@link Presence}）で返す。**`boolean` に畳まない** — 畳むと
+   * 「確かめられなかった」が「居ない」側へ倒れ、`stopDaemon` が状態ファイルを
+   * 消してしまう（Issue #1818。旧 `StopDeps.verify: boolean` 契約の穴）。
+   */
+  verify(info: DaemonRuntimeInfo): Promise<Presence>;
   requestShutdown(info: DaemonRuntimeInfo): Promise<void>;
   /** SIGTERM。**本人確認できたときだけ**呼んでよい。 */
   terminate(pid: number): void;
@@ -219,18 +230,36 @@ export interface StopDeps {
  * PID は、デーモンが SIGKILL やクラッシュや OS 再起動で正常終了できなかった場合に
  * 残る。その PID を OS が別プロセスへ再利用していたら、シグナルはそのプロセスを
  * 殺してしまう。本人だと確かめられないときは、状態ファイルを片付けて手を引く。
+ *
+ * **「確かめられなかった」（`unknown`）と「居ないと確定できた」（`absent`）は
+ * 別に扱う（Issue #1818）。** 以前は `StopDeps.verify` が `boolean` で、
+ * `unknown` を `false` へ畳んでいた——`false` の側は「記録は残っているが本人
+ * ではない」という**確定した否定**の意味で `clearInfo()`（状態ファイルの
+ * 削除）まで行っていたため、`unknown` もここを通って状態ファイルが消えて
+ * いた。直後に `ensureRunning()` が走ると、状態ファイルが無いので
+ * `status()` は `absent` を返す——`unknown` ではない。`start()` の安全弁は
+ * `presence === 'unknown'` のときしか働かないので、この `absent` は弁を
+ * 素通りして2本目の spawn まで進んでしまう。**「確かめられなかった」を
+ * 状態ファイルの削除で「居ないと確定した」にすり替えないこと** — `unknown`
+ * のときは PID にも状態ファイルにも触らず、`'unknown'` をそのまま返す。
  */
 export async function stopDaemon(deps: StopDeps): Promise<StopOutcome> {
   const info = await deps.readInfo();
   if (!info) return 'not-running';
 
-  if (!(await deps.verify(info))) {
+  const presence = await deps.verify(info);
+  if (presence === 'unknown') {
+    // 確かめられなかった。生きているかもしれない本物のデーモンを見捨てない
+    // ——PID にも状態ファイルにも触らない（Issue #1818）。
+    return 'unknown';
+  }
+  if (presence === 'absent') {
     // 記録は残っているが本人ではない（または既に居ない）。PID には触らない。
     await deps.clearInfo();
     return 'stale';
   }
 
-  // ここから先は本人だと確認できている。
+  // ここから先は本人だと確認できている（presence === 'present'）。
   try {
     await deps.requestShutdown(info);
   } catch {
@@ -239,7 +268,11 @@ export async function stopDaemon(deps: StopDeps): Promise<StopOutcome> {
 
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await deps.wait(250);
-    if (!(await deps.verify(info))) {
+    // ここは `absent`（居ないと確定）のときだけ止まったと判定する。
+    // `unknown` はループを継続する——`present` だったときと同様、
+    // 「まだ止まったと確認できていない」以上のことは言えない（Issue #1818 と
+    // 同じ理由: 確かめられないことを片方の確定へ倒さない）。
+    if ((await deps.verify(info)) === 'absent') {
       await deps.clearInfo();
       return 'stopped';
     }
@@ -252,14 +285,9 @@ export async function stopDaemon(deps: StopDeps): Promise<StopOutcome> {
 export async function stop(): Promise<StopOutcome> {
   return stopDaemon({
     readInfo: readRuntimeInfo,
-    // `StopDeps.verify` は `boolean` の契約（本人確認できたときだけ PID に触る）。
-    // `unknown` は「本人だと確認できた」わけではないので `false` 側へ畳む —
-    // これは #1765 段2 より前からの `stopDaemon` の挙動と1文字も変えていない
-    // （このファイルの `verify` が返す型を変えただけで、`stop()` の外から見た
-    // 挙動は変えない。`start()` 側の安全側の変更とは別の対象である）。
-    async verify(info) {
-      return (await verify(info)) === 'present';
-    },
+    // `StopDeps.verify` は3値（`Presence`）の契約——このファイルの `verify`
+    // がそのまま渡せる（Issue #1818。以前はここで `boolean` へ畳んでいた）。
+    verify,
     async requestShutdown(info) {
       const response = await fetch(`${baseUrl(info)}/shutdown`, {
         method: 'POST',

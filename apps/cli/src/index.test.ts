@@ -104,6 +104,14 @@ describe('alteroid daemon stop', () => {
         'プロセスが残っている場合は手で確認して終了してください。\n',
     ],
     ['unresponsive', 'alteroidd が停止要求に応じません。ログを確認してください。\n'],
+    // Issue #1818 — 「確かめられなかった」を「停止した」「片付けた」のように
+    // 言い切らない。状態ファイルは残したことまで正直に言う。
+    [
+      'unknown',
+      'alteroidd の生死を確認できませんでした（応答が無いかタイムアウトしました）。\n' +
+        '状態ファイルは残したままにしました。ネットワークや負荷を確認してから、' +
+        '`alteroid daemon status` で様子を見てください。\n',
+    ],
   ] as const)('%s のときは決まった文言を1つだけ出す', async (outcome, expected) => {
     vi.mocked(daemon.stop).mockResolvedValue(outcome);
     const read = captureStdout();

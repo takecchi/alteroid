@@ -119,6 +119,17 @@ export async function daemonStopCommand(): Promise<void> {
     case 'unresponsive':
       stdout.write('alteroidd が停止要求に応じません。ログを確認してください。\n');
       return;
+    case 'unknown':
+      // 確かめられなかっただけで、「居ない」と確定したわけではない
+      // （Issue #1818）。状態ファイルは残したままにしたので、そう正直に言う
+      // ——ここで「停止しました」「片付けました」と言うと、実際には生きて
+      // いるかもしれない本物のデーモンを見捨てたことになる。
+      stdout.write(
+        'alteroidd の生死を確認できませんでした（応答が無いかタイムアウトしました）。\n' +
+          '状態ファイルは残したままにしました。ネットワークや負荷を確認してから、' +
+          '`alteroid daemon status` で様子を見てください。\n',
+      );
+      return;
   }
 }
 
