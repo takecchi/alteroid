@@ -3932,6 +3932,59 @@ describe('PgSessionStore（SDK のセッション永続化）', () => {
     expect(tail).toContain('u3');
   });
 
+  /**
+   * **絵文字混じりの本文で、契約（`maxChars` を厳密に上回る）が破れる**（issue
+   * #1849。`SessionTranscriptTail.readTail` の doc「契約」節）。
+   *
+   * この実装は `line.length + 1` を UTF-16 コード単位で積んでいる。補助面の
+   * 文字（絵文字の多く）は1コードポイントが2コード単位になるため、
+   * **コード単位で数えた `chars` が `maxChars + 1` を超えても、実際の
+   * コードポイント数はそれより少ないことがある。** そのときこの実装は
+   * 「もう十分」と誤判定して古い行を落とすが、返した本文自体は
+   * コードポイント数で見ると `maxChars` を超えていない——呼び出し側
+   * （`clone.ts` の `tailOf` → `tailByCodePoints`）はコードポイント数で
+   * 「切り詰めが要ったか」を判定するので、この食い違いは「本文がもとから
+   * 短かった」と誤読され、古い行（`OLDEST-MARKER`）が静かに消える
+   * （`TranscriptArchive.readTail` の doc「⚠️ …あちらは JS の `.length`
+   * （UTF-16 コード単位）で `maxChars` を数えたままである」がまさにこの穴）。
+   */
+  it('赤: 絵文字混じりの本文では、返る長さがコードポイント数で maxChars を上回らないことがある', async () => {
+    const tailKey = { projectKey: 'proj', sessionId: 'sess-tail-surrogate' };
+    const oldest = { type: 'user' as const, uuid: 'oldest', body: 'OLDEST-MARKER' };
+    // 絵文字3つ（それぞれ1コードポイント＝2 UTF-16 コード単位）。
+    const newest = {
+      type: 'assistant' as const,
+      uuid: 'newest',
+      body: '\u{1F600}\u{1F600}\u{1F600}',
+    };
+
+    await stores.sessionStore.append(tailKey, [oldest]);
+    await stores.sessionStore.append(tailKey, [newest]);
+
+    // pg は jsonb に積むときにキーをアルファベット順へ並べ替える（既存の境界
+    // テストと同じ注意）。
+    const newestLine = JSON.stringify({ body: newest.body, type: newest.type, uuid: newest.uuid });
+    const newestLineCodePoints = [...newestLine].length;
+    const newestLineCodeUnits = newestLine.length;
+    // 絵文字3つぶん、コード単位のほうがコードポイントより大きいことを
+    // 前提として確かめておく（この差が無ければ、この赤は再現しない）。
+    expect(newestLineCodeUnits).toBeGreaterThan(newestLineCodePoints);
+
+    // newest 1行だけの「コードポイント数」はこの maxChars を超えないが、
+    // 「UTF-16 コード単位数」は超える値を選ぶ。
+    const maxChars = newestLineCodePoints + 1;
+    expect(newestLineCodeUnits + 1).toBeGreaterThan(maxChars + 1);
+
+    const tail = await stores.sessionStore.readTail(tailKey, maxChars);
+
+    expect(tail).not.toBeNull();
+    // 契約: 本文（oldest + newest）は maxChars よりずっと長いので、返る量は
+    // **コードポイント数で** maxChars を厳密に上回ること。
+    expect([...(tail ?? '')].length).toBeGreaterThan(maxChars);
+    // 古い行を落としていないこと。
+    expect(tail).toContain('OLDEST-MARKER');
+  });
+
   it('積んだ順に読み戻せる', async () => {
     await stores.sessionStore.append(key, [
       { type: 'user', uuid: 'u1', timestamp: '2026-08-01T00:00:00.000Z' },
