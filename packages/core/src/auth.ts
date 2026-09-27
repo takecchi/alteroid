@@ -264,6 +264,23 @@ export interface AuthStore {
   }): Promise<CreateAccountWithIdentityOutcome>;
 
   putAccessToken(token: AccessTokenRecord): Promise<void>;
+  /**
+   * このアクセストークンの `lastUsedAt` だけを `at` にする（1操作。issue #1782）。
+   *
+   * **`lastUsedAt` 以外の欄には触らない。とくに `revokedAt` を書き戻さない。**
+   * 以前の `touch()` は、読んだときの行の写しを `putAccessToken` で丸ごと
+   * 書き戻していた。そのため、読んでから書くまでのあいだに完了したログアウト
+   * （`revokeAccessToken`）の `revokedAt` が `null` に戻り、ログアウトした
+   * トークンが黙って生き返っていた（許可 DB の #1680 / #1694 と同じ形の lost
+   * update）。
+   *
+   * **失効済みのトークンには書かない**（使われた記録を、失効したトークンに
+   * 残さない）。その id の行が無いときも何もしない。
+   *
+   * ドライバはそれぞれの器で原子性を出す — fs は1つの排他区間、pg は
+   * 条件付き UPDATE（`revoked_at is null`）で、`last_used_at` だけを書く。
+   */
+  markAccessTokenUsed(id: string, at: string): Promise<void>;
   findAccessTokenBySha256(sha256: string): Promise<AccessTokenRecord | null>;
   /**
    * `createdAt` の実時刻昇順、**同着は `id` で決める**（`listAccounts` の doc

@@ -1171,6 +1171,12 @@ export function createMemoryStores(): Stores {
       const parsed = accessTokenRecordSchema.parse(token);
       accessTokens.set(parsed.id, parsed);
     },
+    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1782）。
+    async markAccessTokenUsed(id, at) {
+      const token = accessTokens.get(id);
+      if (token === undefined || token.revokedAt !== null) return;
+      accessTokens.set(id, accessTokenRecordSchema.parse({ ...token, lastUsedAt: at }));
+    },
     async findAccessTokenBySha256(hash) {
       return [...accessTokens.values()].find((token) => token.sha256 === hash) ?? null;
     },

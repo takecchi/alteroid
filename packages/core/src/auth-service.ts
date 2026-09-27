@@ -488,5 +488,8 @@ async function findGrantedAccounts(store: AuthStore): Promise<AuthAccount[]> {
 async function touch(store: AuthStore, record: AccessTokenRecord, at: Date): Promise<void> {
   const previous = record.lastUsedAt === null ? 0 : Date.parse(record.lastUsedAt);
   if (at.getTime() - previous < LAST_USED_THROTTLE_MS) return;
-  await store.putAccessToken({ ...record, lastUsedAt: at.toISOString() });
+  // **行を丸ごと書き戻さない**（issue #1782）。読んだときの写し（`record`）を
+  // `putAccessToken` で書き戻すと、そのあいだに完了したログアウトの
+  // `revokedAt` を `null` に戻してしまう。`lastUsedAt` だけを書く1操作に渡す。
+  await store.markAccessTokenUsed(record.id, at.toISOString());
 }

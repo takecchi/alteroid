@@ -126,4 +126,36 @@ describe('AuthService.authenticate と AuthService.logout の競合（issue #178
     const revived = await service.authenticate(claimed.token);
     expect(revived).toBeNull();
   });
+
+  it('markAccessTokenUsed は lastUsedAt だけを書き、失効済みと無い id には書かない（issue #1782）', async () => {
+    const store = createFsStores(await makeTempDir('alteroid-test-')).auth;
+    const token = {
+      id: 'token-mark',
+      accountId: 'account-mark',
+      sha256: 'b'.repeat(64),
+      label: 'laptop',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    };
+    await store.putAccessToken(token);
+
+    await store.markAccessTokenUsed(token.id, '2026-09-02T00:00:00.000Z');
+    const used = await store.findAccessTokenBySha256(token.sha256);
+    expect(used?.lastUsedAt).toBe('2026-09-02T00:00:00.000Z');
+    expect(used?.revokedAt).toBeNull();
+
+    await store.revokeAccessToken(token.id, '2026-09-03T00:00:00.000Z');
+    await store.markAccessTokenUsed(token.id, '2026-09-04T00:00:00.000Z');
+    const afterRevoke = await store.findAccessTokenBySha256(token.sha256);
+    // 失効は残り、使った記録も進まない。
+    expect(afterRevoke?.revokedAt).toBe('2026-09-03T00:00:00.000Z');
+    expect(afterRevoke?.lastUsedAt).toBe('2026-09-02T00:00:00.000Z');
+
+    // 無い id では何も起きない（投げない）。
+    await expect(
+      store.markAccessTokenUsed('no-such-token', '2026-09-05T00:00:00.000Z'),
+    ).resolves.toBeUndefined();
+  });
 });
