@@ -3700,6 +3700,23 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
 }
 
 /**
+ * {@link describeUnpushedWorkObservation} を `manager_report` の注記群へ
+ * 入れる形にする（Issue #1847）。
+ *
+ * **生成元は変えない。** `describeUnpushedWorkObservation` は他の3軸
+ * （`usageStoppedLine` / `runnerVanishedLine` の先例）と違って専用の `*Line`
+ * ラッパーを持たず、`manager_list` の一覧表示用の2字下げを自分の戻り値へ
+ * 直接埋め込んでいる。`manager_report` はインデントの無い地の文が並ぶ形式
+ * （`failureNote` 等はどれも先頭に空白を持たない）なので、ここでその2字下げ
+ * だけを落として使う——判定・文言そのものは `describeUnpushedWorkObservation`
+ * から1文字も変えていない。
+ */
+function unpushedWorkReportNote(manager: ManagerSummary): string | null {
+  const note = describeUnpushedWorkObservation(manager);
+  return note === null ? null : note.trimStart();
+}
+
+/**
  * `runner_list`（器ごとの内訳・`unassigned` の両方）が積む1行の末尾に足す、
  * 認証トークンの世代の食い違いだけの短い印（Issue #914 提案1）。
  *
@@ -10499,6 +10516,17 @@ export function createCloneTools(context: ToolContext) {
           // 増やさない。「報告はまだ無い」を返す直前、report のときだけ生ログを
           // 見て「まだ書いていない」と「書いたのに届いていない」を分ける。
           const missing = await describeMissingReport(context.managers, managerId, found.status);
+          // **manager_list 専用の3軸を継承する（Issue #1847）。** `manager_list`
+          // は `usageStoppedLine` / `runnerVanishedLine` / `describeUnpushedWorkObservation`
+          // の3行を `failureLine` 等と同じ場所に出しているが、`manager_report`
+          // は1つも継承していなかった——「manager_list は抜粋なので、欠落に
+          // 気づいたらここで全部読むこと」という案内自体がここで嘘になっていた。
+          // 材料の生成元は変えず（`describeUsageStopped` / `describeRunnerVanished`
+          // 1箇所ずつ、`manager_list` と割れない）、報告の有無とは別の軸なので
+          // 「報告が空の回だからこちらも出さない」にはしない——直上の
+          // `describeManagerSystemError` の doc と同じ理由。
+          const usageStopped = describeUsageStopped(found);
+          const runnerVanished = describeRunnerVanished(found);
           // **#713 段3: 報告が一度も届いていない回でも、セッションが `failed`
           // として畳まれた落ち方は分かることがある。** `describeManagerSystemError`
           // は `lastReport` の有無を見ていない——`lastSystemError` は `case
@@ -10524,8 +10552,22 @@ export function createCloneTools(context: ToolContext) {
           // もう片方も出さない、にはしない。字面の生成元は
           // `describeUnobservedOutcome` 1箇所で、`manager_list` と割れない。
           const unobserved = describeUnobservedOutcome(found);
+          // **3軸のうち3つ目（Issue #1847）。** `describeUnpushedWorkObservation`
+          // は `manager_list` の一覧表示用に先頭2字下げを埋め込んで返す——
+          // `manager_report` はインデントの無い地の文なので、`unpushedWorkReportNote`
+          // でその飾りだけを落とす（判定・文言そのものは1文字も変えない）。
+          const unpushedWork = unpushedWorkReportNote(found);
           return text(
-            [missing, systemError, cgroupEvents, denied, unobserved]
+            [
+              missing,
+              usageStopped,
+              runnerVanished,
+              systemError,
+              cgroupEvents,
+              denied,
+              unobserved,
+              unpushedWork,
+            ]
               .filter((s) => s !== null)
               .join('\n\n'),
           );
@@ -10555,6 +10597,14 @@ export function createCloneTools(context: ToolContext) {
                 found.lastReport,
                 tokenGenerationMismatched(found),
               );
+        // **manager_list 専用の3軸のうち2つ（Issue #1847）。** `manager_list`
+        // の `usageStoppedLine` / `runnerVanishedLine` と同じ材料を、同じ
+        // 生成元（`describeUsageStopped` / `describeRunnerVanished` それぞれ
+        // 1箇所）でそのまま出す——`failure` とは別の軸なので、両方が同時に
+        // 出ることがある（`usageStoppedLine` の doc）。`part === 'request'`
+        // では出さない（`failure` と同じ線）。
+        const usageStopped = part === 'request' ? null : describeUsageStopped(found);
+        const runnerVanished = part === 'request' ? null : describeRunnerVanished(found);
         // **セッションそのものが `failed` として畳まれた落ち方も同じ場所で
         // 掘れる（Issue #713 段3）。** `manager_list` の `systemErrorLine` と
         // 同じ材料——`part === 'request'` では出さない（依頼文はそもそも
@@ -10584,6 +10634,13 @@ export function createCloneTools(context: ToolContext) {
         // いないか」の話ではない（`failure` / `systemError` / `denied` と
         // 同じ線）。
         const unobserved = part === 'request' ? null : describeUnobservedOutcome(found);
+        // **3軸のうち3つ目（Issue #1847）。** `manager_list` の
+        // `describeUnpushedWorkObservation` と同じ材料——`unpushedWorkReportNote`
+        // はその2字下げ（`manager_list` の一覧表示専用の飾り）だけを落とす
+        // ラッパーで、判定・文言は変えていない（doc を参照）。`part === 'request'`
+        // では出さない（`failure` / `systemError` / `denied` / `unobserved` と
+        // 同じ線）。
+        const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found);
         const label =
           part === 'request'
             ? '依頼文'
@@ -10634,6 +10691,13 @@ export function createCloneTools(context: ToolContext) {
         // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
         // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
         const failureNote = failure === null ? '' : `${failure}\n\n`;
+        // **`failureNote` と同じ順・同じ理由で本文の上に置く（Issue #1847）。**
+        // `usageStoppedLine`（すぐ上）とは軸が違うので別行——両方が同時に
+        // 出ることがある。**対象外の委譲では1文字も増えない。**
+        const usageStoppedNote = usageStopped === null ? '' : `${usageStopped}\n\n`;
+        // **同じ順・同じ理由（Issue #1847）。** `runnerVanishedLine` と同じ材料。
+        // **対象外の委譲では1文字も増えない。**
+        const runnerVanishedNote = runnerVanished === null ? '' : `${runnerVanished}\n\n`;
         // **`failureNote` と同じ順・同じ理由で本文の上に置く。** 両方が同時に
         // 出ることもある（`lastFailure` は `case 'closed'` では消えない——
         // `tools.ts` の `describeManagerSystemError` の doc）。**出ていない
@@ -10651,6 +10715,11 @@ export function createCloneTools(context: ToolContext) {
         // 「完遂した報告とは限らない」を読み終えてから知ることになる。
         // **対象外の委譲では1文字も増えない。**
         const unobservedNote = unobserved === null ? '' : `${unobserved}\n\n`;
+        // **同じ順・同じ理由で本文の上に置く（Issue #1847）。** `manager_list`
+        // では `describeUnpushedWorkObservation` を一覧の末尾（他の軸より後）
+        // に置いているのと同じ相対位置——ここでも他の注記より後、本文より前。
+        // **対象外の委譲では1文字も増えない。**
+        const unpushedWorkNote = unpushedWork === null ? '' : `${unpushedWork}\n\n`;
         const tail = part1.more
           ? `\n\n…（ここで切れている。続きは manager_report managerId=${managerId}` +
             `${part === 'request' ? ' part=request' : ''} offset=${part1.to}）`
@@ -10662,7 +10731,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${driftNote}${failureNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
