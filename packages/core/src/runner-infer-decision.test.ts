@@ -226,3 +226,56 @@ describe('inferDecision / 否定の語を含む承認の言い方は unreadable�
     expect(inferDecision('問題ない')).toBe('unreadable');
   });
 });
+
+/**
+ * issue #1890: `don't worry` / `no worries` が #1877 の一覧に無く、
+ * 案内の無い `deny` に化ける穴。
+ *
+ * `don't hesitate` / `don't mind` と同格の「心配しないで＝進めてよい」と
+ * いう言い回しなのに、`NEGATED_APPROVAL_PHRASES` に入っていなかったため
+ * `DENIAL_WORDS` の `\bdon't\b` / `\bno\b` が先に `deny` を確定させ、
+ * #1877 が作った救済（`unreadable`。答え直しの案内付き）にすら届いて
+ * いなかった。直し方は #1877 と同じ形——`allow` へは倒さず、
+ * `NEGATED_APPROVAL_PHRASES` に2つ足して `unreadable` へ着地させるだけ
+ * である（SDK から見える結果は deny のまま）。
+ */
+describe("inferDecision / \"don't worry\" と \"no worries\" は unreadable（issue #1890）", () => {
+  it('「Yes, please proceed. Don\'t worry, I trust your judgement.」は unreadable', () => {
+    expect(inferDecision("Yes, please proceed. Don't worry, I trust your judgement.")).toBe(
+      'unreadable',
+    );
+  });
+
+  it('decideAnswer（permission・decision なし）も、SDK へは deny を返しつつ unreadable: true を運ぶ', () => {
+    expect(
+      decideAnswer(
+        'permission',
+        undefined,
+        "Yes, please proceed. Don't worry, I trust your judgement.",
+      ),
+    ).toEqual({
+      decision: 'deny',
+      unreadable: true,
+    });
+  });
+
+  it('「No worries, go ahead.」も unreadable', () => {
+    expect(inferDecision('No worries, go ahead.')).toBe('unreadable');
+  });
+
+  it.each(["Don't worry, but stop.", 'no worries — cancel it'])(
+    '対照: 同じ回答に別の本物の否定が在れば「%s」は deny のまま',
+    (message) => {
+      expect(inferDecision(message)).toBe('deny');
+    },
+  );
+
+  it.each([
+    'no problem',
+    'no objection',
+    "don't hesitate",
+    "don't mind",
+  ])('対照: #1877 の既存4語「%s」は引き続き unreadable（今回の変更で壊れていない）', (message) => {
+    expect(inferDecision(message)).toBe('unreadable');
+  });
+});
