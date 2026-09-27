@@ -1102,6 +1102,10 @@ function noBodyPostResponses() {
  * 知れば失効させられる口になる——ここは「提示したものを失効させる」設計なので、
  * 提示が無ければそもそも何も失効させられない）。
  */
+/** 資格が使えなくなって chat の流れを閉じるときに送る `error` の文（issue #1820）。 */
+const SSE_CREDENTIAL_LOST_MESSAGE =
+  'この接続の資格が使えなくなった（ログアウト・許可の取り消し・期限切れのどれか）ので、流れを閉じる。';
+
 function isPublicPath(path: string): boolean {
   if (path === '/health' || path === '/openapi.json' || path === '/docs') return true;
   if (path === '/auth/me' || path === '/auth/logout') return false;
@@ -1361,6 +1365,56 @@ export function createApp(deps: AppDeps) {
       providers: createAuthProviderRegistry(authPlan.providers),
       tokenTtlDays: authPlan.tokenTtlDays,
     });
+
+  /**
+   * **開いている SSE の資格を、心拍ごとに確かめ直す口（issue #1820）。**
+   *
+   * SSE（chat / journal）は、接続を張るときに1回だけ `authenticate` の中間層を通る。
+   * 以前はその後トークンを見直さなかったので、ログアウト（`POST /auth/logout`）・
+   * アカウントの許可の取り消し（`access revoke`）・期限切れの後も、すでに開いている
+   * 流れはそのまま流れ続けた。ここは、心拍（`startSseHeartbeat`）の1拍ごとに、
+   * 接続を張ったときの bearer を `authenticate` と同じ判定（使えるか・許可があるか）に
+   * かけ直し、駄目なら `lost` を立てる。流れの側は、次にループが回ったときに閉じる。
+   *
+   * - **operator の資格（状態ファイルの token・認証を切った構成）で張った流れは、
+   *   確かめ直さない**（いままでどおり）。失効させる口がそもそも無い資格である
+   * - **判定できない（ストアが投げた）ときは、閉じる側へ倒す**（資格の判定は、
+   *   判定できないときに閉じる。#1789 と同じ向き）。閉じてもクライアントは張り直せる
+   * - 1回の確かめ直しで行うのは、ストアの読み出し2回（トークンの行とアカウント）と、
+   *   使った時刻の書き込み（`markAccessTokenUsed`。既存の間引きで 60 秒に1回まで）。
+   *   前の確かめ直しが終わっていなければ、重ねない
+   */
+  function watchSseCredential(principal: Principal, authorization: string | undefined) {
+    const bearer = principal.kind === 'account' ? bearerOf(authorization) : null;
+    let lost = false;
+    let checking = false;
+    return {
+      /** 資格が使えなくなったと分かったか。 */
+      lost: () => lost,
+      /** 心拍の1拍ごとに呼ぶ。使えなくなったと分かったら `wake` で流れを起こす。 */
+      tick(wake: () => void): void {
+        if (bearer === null || lost || checking) return;
+        checking = true;
+        void authService
+          .authenticate(bearer)
+          .then(
+            (account) => {
+              if (account === null || !isAccountGranted(account)) {
+                lost = true;
+                wake();
+              }
+            },
+            () => {
+              lost = true;
+              wake();
+            },
+          )
+          .finally(() => {
+            checking = false;
+          });
+      },
+    };
+  }
   const providerList = authPlan.providers.map(({ id, label, kind }) => ({ id, label, kind }));
   /**
    * プロバイダへ登録する戻り先。**1プロバイダにつき1本だけ**にしてある。
@@ -1745,7 +1799,17 @@ export function createApp(deps: AppDeps) {
 
             // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
             // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
-            const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+            // **1拍ごとに資格も確かめ直す**（issue #1820。`watchSseCredential` の doc）。
+            const credential = watchSseCredential(
+              c.get('principal'),
+              c.req.header('authorization'),
+            );
+            const stopHeartbeat = startSseHeartbeat(
+              stream,
+              sseHeartbeatMs,
+              () => wake?.(),
+              () => credential.tick(() => wake?.()),
+            );
 
             try {
               /*
@@ -1778,6 +1842,15 @@ export function createApp(deps: AppDeps) {
 
               for (;;) {
                 if (stream.aborted || stream.closed) break;
+                if (credential.lost()) {
+                  // **閉じる前に理由を1つ送る**（issue #1820）。画面が「接続が切れた」と
+                  // 区別できるように、既存の `error` イベントの形で言う。
+                  await stream.writeSSE({
+                    event: 'error',
+                    data: JSON.stringify({ type: 'error', message: SSE_CREDENTIAL_LOST_MESSAGE }),
+                  });
+                  break;
+                }
                 const event = queue.shift();
                 if (event === undefined) {
                   if (finished) break;
@@ -2160,13 +2233,25 @@ export function createApp(deps: AppDeps) {
 
             // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
             // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
-            const stopHeartbeat = startSseHeartbeat(stream, sseHeartbeatMs, () => wake?.());
+            // **1拍ごとに資格も確かめ直す**（issue #1820）。使えなくなったら閉じるだけで、
+            // 理由のイベントは流さない——この流れのデータは日誌の1件の形で読まれるので、
+            // 日誌でないものを混ぜない（読み手は切断として扱い、張り直しで 401 を受ける）。
+            const credential = watchSseCredential(
+              c.get('principal'),
+              c.req.header('authorization'),
+            );
+            const stopHeartbeat = startSseHeartbeat(
+              stream,
+              sseHeartbeatMs,
+              () => wake?.(),
+              () => credential.tick(() => wake?.()),
+            );
 
             try {
               await stream.writeSSE({ event: 'open', data: JSON.stringify({ ok: true }) });
 
               for (;;) {
-                if (closed || stream.aborted || stream.closed) break;
+                if (closed || credential.lost() || stream.aborted || stream.closed) break;
                 const entry = queue.shift();
                 if (entry === undefined) {
                   await new Promise<void>((resolve) => {

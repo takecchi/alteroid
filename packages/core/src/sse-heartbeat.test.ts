@@ -192,3 +192,31 @@ it('既定間隔は、よくある無通信切断（30秒）の窓に2回入る'
   // 短すぎもしない（接続数×頻度で無駄な書き込みになる）
   expect(DEFAULT_SSE_HEARTBEAT_MS).toBeGreaterThanOrEqual(5_000);
 });
+
+it('onBeat は1拍ごとに1回呼ばれ、接続が死んだ拍では呼ばれない（issue #1820）', () => {
+  const { stream } = fakeStream();
+  let beats = 0;
+  let woken = 0;
+  const stop = startSseHeartbeat(
+    stream,
+    1000,
+    () => {
+      woken += 1;
+    },
+    () => {
+      beats += 1;
+    },
+  );
+
+  vi.advanceTimersByTime(3000);
+  expect(beats).toBe(3);
+  expect(woken).toBe(0);
+
+  stream.closed = true;
+  vi.advanceTimersByTime(1000);
+  // 死んだ拍では onBeat を呼ばず、wake だけを呼ぶ。
+  expect(beats).toBe(3);
+  expect(woken).toBe(1);
+
+  stop();
+});

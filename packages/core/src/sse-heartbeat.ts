@@ -122,6 +122,12 @@ export function startSseHeartbeat(
   stream: SseHeartbeatStream,
   intervalMs: number,
   wake: () => void,
+  /**
+   * **1拍ごとに呼ぶ口**（任意。issue #1820）。`wake` は接続が死んだときにしか
+   * 呼ばれないので、拍ごとの仕事（開いている SSE の資格の確かめ直し）はこちらへ
+   * 乗せる。心拍のタイマーを増やさないためである。接続が死んだ拍では呼ばない。
+   */
+  onBeat?: () => void,
 ): () => void {
   const timer = setInterval(() => {
     if (stream.aborted || stream.closed) {
@@ -146,6 +152,7 @@ export function startSseHeartbeat(
      * 自衛も残る。
      */
     void stream.write(HEARTBEAT_FRAME).catch(() => {});
+    onBeat?.();
   }, intervalMs);
   /*
    * **`unref()` する。** heartbeat は「接続が在るあいだ回る」ものであって、
