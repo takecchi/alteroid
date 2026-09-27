@@ -52,6 +52,7 @@ import {
   describeUnobservedOutcome,
   isManagerAwaitingJudgement,
   isManagerInFlight,
+  isManagerOutcomeUnobserved,
   JUDGEMENT_RANK_NOT_APPLICABLE,
 } from './digest.js';
 import {
@@ -2976,9 +2977,29 @@ function failureLine(manager: ManagerSummary): string | null {
  * 途中で先に届くことがあり、その回はまだ `lastFailure` が立っていない）。
  * **この一覧では両方とも出す**（`failureLine` の直後に並べる）。
  *
- * **`status` を置き換えない。** 枠に当たってもセッションは生きているので、
+ * **`status` を置き換えない。** 枠に当たってもセッションは生きているうちは、
  * 台帳の `status` は `done` / `running` のまま動かさない
  * （`describeManagerFailure` と同じ理由）。
+ *
+ * ## ⚠️ Issue #1796: `status` がセッションの死を既に確定させている回は分けて言う
+ *
+ * `usageStoppedAt` を下ろすのは `#clearUsageStoppedMark`（`manager.ts`）
+ * だけで、`#settleUsageWake` → `#nudgeForUsageRotation` の `send()` が
+ * 届かず `'skipped'` になると印は残ったままになる。そのすぐ後に
+ * セッションそのものが `closed` として畳まれ `status` が `failed` / `lost`
+ * （{@link isManagerOutcomeUnobserved}——「終端していて誰も望んでいない
+ * 終わり方をした」。`digest.ts` の doc）へ確定すると、印だけが古い前提を
+ * 引きずって残る。**この回まで「セッションは生きている」と言い切ると、
+ * 同じ応答に並ぶ `systemErrorLine`（「セッションは失敗で畳まれた」）と
+ * 正面から矛盾する**（Issue #1796 の再現）。
+ *
+ * **`isManagerOutcomeUnobserved` を分岐に使う。** `manager.ts` の
+ * `#nudgeForUsageRotation` 自身のホワイトリスト（`done` / `failed` / `lost`
+ * を「起こす」対象とする表）と同じ集合のうち、`done`（まだ生きている）を
+ * 除いた側——「セッションそのものが終端し、依頼者が望まない終わり方をした」
+ * 側だけを言い分ける。`stopped`（人間・クローンが自分で止めた、望んだ終端）
+ * はこの述語に含めない——`isManagerOutcomeUnobserved` の doc と同じ理由で、
+ * ここでも意図して除く。
  *
  * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
  * と同じ約束——一覧は文字数の予算 `LIST_BUDGET` に張り付いている）。
@@ -2990,6 +3011,16 @@ function failureLine(manager: ManagerSummary): string | null {
  */
 function describeUsageStopped(manager: ManagerSummary): string | null {
   if (manager.usageStoppedAt === undefined) return null;
+  if (isManagerOutcomeUnobserved(manager.status)) {
+    return (
+      `⚠ 枠(利用上限)で止まっている（${manager.usageStoppedAt} から）。` +
+      `ただし status: ${manager.status}——セッションそのものが、依頼者が望まない` +
+      '終わり方で既に終端している。「セッションは生きているので鍵が回れば続く」' +
+      'はここでは成り立たない——起こし直すには manager_send で resume を試みる' +
+      'しかなく、届く保証は無い（届いた事実の判定は `systemErrorLine` 等の' +
+      '別の行を見ること）。'
+    );
+  }
   return (
     `⚠ 枠(利用上限)で止まっている（${manager.usageStoppedAt} から）。` +
     'セッションは生きているので、鍵が回ればこの委譲は続く' +
