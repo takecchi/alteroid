@@ -24,6 +24,8 @@ import type {
 } from './agent-events.js';
 import type {
   AgentContextOutcome,
+  AgentPermissionDeniedDecision,
+  AgentPermissionDeniedRecord,
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
@@ -38,7 +40,7 @@ import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
-import { buildDenialInputHead } from './denial-input-head.js';
+import { buildDenialInputHead, rawLineOf } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
   noteMissingRecordSource,
@@ -1058,6 +1060,41 @@ const DENIED_MEMORY_LIMIT = 512;
 const PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT = 512;
 
 /**
+ * クローンが出した「1回だけの許可」（issue #1105 P1）を、`PreToolUse` の
+ * 撃ち直しが消費するまで控えておく件数の上限。**`PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT`
+ * と同じ理由・同じ値に揃える**——同時に飛び交う分類器の拒否の数程度が
+ * 埋まるはずで、上限を切っておくのは異常系（大量の拒否が同時に起きた・
+ * 撃ち直しが一度も来ない）に備えるためである。達したら `note` で上へ言う。
+ */
+const ONE_SHOT_ALLOW_MEMORY_LIMIT = 512;
+
+/**
+ * `PreToolUse` が撃ち直しの `#onPreToolUse` で allow を返した呼び出し
+ * （issue #1105 P1）を、決着する（`#onPostToolUse` / `#onPostToolUseFailure`）
+ * か拒否が来る（`#noteDenial`）まで覚えておく件数の上限。**`clone.ts` の
+ * `ALLOWED_BY_GRANT_MEMORY_LIMIT`（issue #863 残項目）と同じ理由・同じ値。**
+ */
+const ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT = 512;
+
+/**
+ * 1回だけの許可の寿命（issue #1105 本文の設計判断3「控えには寿命を付け、
+ * 使われずに残り続けないようにする」）。
+ *
+ * **10分にした理由。** この許可は `#onPermissionDenied` がクローンの回答を
+ * 待つ間にしか生まれない（回答を待つあいだにフックの持ち時間が尽きたら
+ * `#onPermissionDenied` は許可を出さずに `no-retry` で終わる——`#onPermissionDenied`
+ * の doc）。フックの持ち時間の既定は 600000ms（10分。issue #1105 のコメント
+ * が静的に読んだ SDK の既定値）なので、**許可が生まれた時点で、そこから
+ * 最長でも10分は経っていない**——クローンが答えてから撃ち直しが起きるまで
+ * にかかる時間は、その最初の10分より充分短いと見込んで、同じ桁（10分）を
+ * そのまま撃ち直しの猶予として与える。**短すぎれば「許可は出たのに間に
+ * 合わず失効する」が増え、長すぎれば「状況が変わった後に古い許可が生きて
+ * いる」が増える**——このバランスを取った経験的な値であって、測定に基づく
+ * ものではない。
+ */
+const ONE_SHOT_ALLOW_TTL_MS = 10 * 60 * 1000;
+
+/**
  * `CUT_OFF_WORKERS_LIMIT` / `PENDING_CUT_OFF_NOTIFICATIONS_LIMIT`（#901）の
  * 定義は `runner-cut-off-workers.ts` へ切り出した（Issue #1190 段0）。どちらも
  * 元から `export` していなかったので（テストからの直参照が無い）、再輸出は
@@ -1490,6 +1527,63 @@ class RunnerSession {
           `PreToolUse で控えた入力の先頭の記憶が上限（${PRE_TOOL_INPUT_HEAD_MEMORY_LIMIT}件）に` +
           `達したので、古い ${ids.length} 件（tool_use_id のみ。本文は書かない）を忘れた: ` +
           `${ids.join(', ')}。この tool_use_id の拒否が後から届いても、inputHead は付かない。`,
+      }),
+  });
+  /**
+   * クローンが `#onPermissionDenied` で出した「1回だけの許可」（issue #1105
+   * P1）を、`(actor, tool, 入力の完全一致のダイジェスト)` をキーに控えておく
+   * 帳面。**生の入力は保持しない**——鍵に使うのは `digestOf(rawLineOf(...))`
+   * というダイジェストだけで、元の文字列は残らない（`#noteDenial` の
+   * `toolUseId` の doc と同じ理由——復元できない値だけを鍵にする）。
+   *
+   * - `#onPermissionDenied` が、クローンが allow と答えた時点で書く
+   * - `#consumeOneShotAllow`（`#onPreToolUse` から呼ぶ）が、一致した時点で
+   *   **必ず消す**——一致してもしなくても、`get` した鍵は使い切る（同じ入力
+   *   で二度目の撃ち直しには使えない。issue #1105 本文の設計判断3）
+   * - 寿命（`ONE_SHOT_ALLOW_TTL_MS`）を過ぎていたら、`#consumeOneShotAllow`
+   *   は消しはするが `allow` は返さない（期限切れの許可を使わない）
+   */
+  readonly #oneShotAllows = createRecentMap<{ readonly expiresAt: number }>({
+    limit: ONE_SHOT_ALLOW_MEMORY_LIMIT,
+    onForget: (ids) =>
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器の拒否への1回だけの許可の記憶が上限（${ONE_SHOT_ALLOW_MEMORY_LIMIT}件）に` +
+          `達したので、古い ${ids.length} 件（鍵のみ。中身は書かない）を忘れた: ${ids.join(', ')}。` +
+          `使われないまま忘れたので実害は無い（issue #1105 P1）。`,
+      }),
+  });
+  /**
+   * `#consumeOneShotAllow` が1回だけの許可（issue #1105 P1）で `allow` を
+   * 返した呼び出しの `tool_use_id` を、決着するまで控える帳面。**`clone.ts`
+   * の `#allowedByGrantToolUses`（issue #863 残項目）とまったく同じ形**——
+   * SDK が `PreToolUse` の `allow` をそれでも拒否することがありうる（静的な
+   * 実測。リモートの機能フラグ `tengu_virtual_knuth` / deny 規則の上書き）ので、
+   * 「allow を返した直後の同じ呼び出しが、それでも拒否された」を
+   * `#noteDenial` 側で見分けられるようにする。
+   *
+   * - `#consumeOneShotAllow` が、一致して `allow` を返した時点で書く
+   * - `#onPostToolUse` / `#onPostToolUseFailure` が、決着した時点で消す
+   *   （`#preToolInputHeads` と同じ理由・同じ形）
+   * - `#noteDenial` が、同じ `tool_use_id` の拒否が来た時点で引いて消し、
+   *   `note` へ残す
+   */
+  readonly #oneShotAllowedToolUses = createRecentMap<{
+    readonly actor: string;
+    readonly tool: string;
+  }>({
+    limit: ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT,
+    onForget: (ids) =>
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `1回だけの許可で allow を返した呼び出しの記憶が上限` +
+          `（${ONE_SHOT_ALLOWED_TOOL_USE_MEMORY_LIMIT}件）に達したので、古い ${ids.length} 件を` +
+          `忘れた: ${ids.join(', ')}。この tool_use_id への拒否が後から届いても、` +
+          `「許可を追い越した」とは検出できない（issue #1105 P1）。`,
       }),
   });
   /**
@@ -2052,6 +2146,9 @@ class RunnerSession {
       // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
       // 理由は `#onPreToolUse` の doc を見よ。
       onPreToolUse: (record) => this.#onPreToolUse(record),
+      // **分類器の拒否に、クローンの判断で1回だけの許可を出す**（issue #1105
+      // P1）。理由は `#onPermissionDenied` の doc を見よ。
+      onPermissionDenied: (record) => this.#onPermissionDenied(record),
       onPostToolUse: (record) => this.#onPostToolUse(record),
       // **`PostToolUse` と排他**（Issue #924 の実測分岐。#929）。理由は
       // `#onPostToolUseFailure` の doc を見よ。
@@ -3194,6 +3291,30 @@ class RunnerSession {
   #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): void {
     const tool = denial.tool ?? '(不明な道具)';
     const input = denial.input;
+
+    // **1回だけの許可で allow を返した呼び出しを、SDK がそれでも拒否したかの
+    // 検出**（issue #1105 P1、`clone.ts` の `#allowedByGrantToolUses`/
+    // `#noteGrantFunneled` と同じ形。issue #863 残項目）。**必ず SDK が実際に
+    // 付けてきた `denial.toolUseId` で引く**——下で組む代用の `toolUseId`
+    // ではない。代用値はここで意味を持つ実在の id ではないので、それで引くと
+    // 無関係な一致が起きうる。
+    if (typeof denial.toolUseId === 'string') {
+      const funneled = this.#oneShotAllowedToolUses.get(denial.toolUseId);
+      if (funneled !== undefined) {
+        this.#oneShotAllowedToolUses.delete(denial.toolUseId);
+        this.#emit({
+          type: 'note',
+          managerId: this.#id,
+          text:
+            `1回だけの許可（issue #1105 P1、${funneled.actor}・${funneled.tool}）で allow を` +
+            `返した呼び出しが、それでも拒否された（合図の出所: ${via}）。分類器がこの allow を` +
+            `分類器へ回した（リモートの機能フラグ）か、deny 規則が上書きしたかのどちらか` +
+            `（あるいは両方）で、alteroid 側からは切り分けられない。この許可はいまは効いて` +
+            `いない可能性がある。`,
+        });
+      }
+    }
+
     // id が無ければ道具と入力から作る。**取りこぼすより重複を許す。**
     //
     // **⚠️ この代用鍵は live と result で一致しない。** 走行中の合図に入力は付かず
@@ -3788,6 +3909,222 @@ class RunnerSession {
   }
 
   /**
+   * 分類器（auto mode classifier）にその場で拒否された道具の呼び出しへ、
+   * クローンの判断で「1回だけの許可」を出す（issue #1105 P1）。
+   *
+   * ## 何をするか・何をしないか
+   *
+   * SDK の `PermissionDenied` フックが返せるのは `retry?: boolean` の1個
+   * だけ——「もう一度試してよい」とモデルの文脈に一文足すだけで、実行その
+   * ものを許可する力は持たない。**このメソッドがすることは2つに分かれる。**
+   *
+   * 1. `#onPermission` とほぼ同じ形の待ち行列を積み、クローンの答え
+   *    （`allow`/`deny`）を待つ——`ask`/`settled` イベント・`#pending`/
+   *    `#resolved`・`decideAnswer` をすべて共有する（既存の許可確認と同じ
+   *    経路。issue #1105 本文の設計判断1）。**`#onPermission` の実装を
+   *    直接は再利用していない**——あちらは最終的に `PermissionResult`
+   *    （SDK の `canUseTool` へ返す形）を組み立てる関数で、ここは
+   *    `retry?: boolean` へ写す別の形を組み立てる。両方に手を入れると
+   *    デリケートな挙動（`extra.requestId` の再送・`withdrawn`/`aborted`
+   *    の扱い）を壊しかねないため、あえて並行した実装にしてある。
+   * 2. `allow` なら `#oneShotAllows` へ控えて `retry: true` を返す。撃ち直しの
+   *    実際の許可は `#onPreToolUse`（`#consumeOneShotAllow`）が担う。`deny`
+   *    なら控えず、クローンの一言を `note`（P0 と同じ経路）で降ろす。
+   *
+   * ## 一致の鍵が作れない入力
+   *
+   * `record.toolName` が無い、または `rawLineOf(record.toolInput)` が
+   * `undefined`（1行に畳めない）ときは、クローンへの確認そのものを上げず
+   * `no-retry` で終える——一致させる鍵が無い以上、たとえクローンが allow と
+   * 答えても撃ち直しを安全に特定できない（issue #1105 の「入力が1文字違えば
+   * 返さない」という要求を、作れない鍵にまで緩めない）。
+   *
+   * ## フックの持ち時間切れ（issue #1105 本文の設計判断5）
+   *
+   * `record.signal`（SDK の `options.signal`）が落ちたら、**安全側（`no-retry`）
+   * で確定させ、`#pending` からもその場で外す。** これにより:
+   *
+   * - 遅れて届いたクローンの `allow` は**構造的に**捨てられる——`#pending`
+   *   から既に外れているので、`manager_send` はこの `requestId` を
+   *   「もう解けている」として扱う（`Session#answer()` の `find` が外れる）。
+   *   「捨てるか控えるか」を実行時の分岐で選んでいるのではなく、settle した
+   *   時点で選択の余地そのものを無くす形にした——安全側という既定を、後から
+   *   の競合状態に依存せずに保証するためである
+   * - **次の同じ入力のために控え直す、という道は採らない。** 時間切れが起きた
+   *   時点でクローンはまだ答えていない（答えていれば時間切れの前に解けて
+   *   いる）ので、「控える中身」がそもそも存在しない
+   *
+   * **時間切れは `settled.withdrawn` とは別の事実として `note` で残す。**
+   * `withdrawn` は `#settleAll`（セッション全体を畳むときに未決の確認を
+   * 一括で解く経路）専用の印であって、ここ（1件のフックの持ち時間切れ）とは
+   * 発生源が違う——同じ印を使い回すと、`manager.ts` の `case 'settled'` が
+   * 「CLI に一度も届かなかった」と「フックの時間切れで安全側に倒れた」を
+   * 区別できなくなる。
+   */
+  async #onPermissionDenied(
+    record: AgentPermissionDeniedRecord,
+  ): Promise<AgentPermissionDeniedDecision> {
+    const actor =
+      record.agentId === undefined
+        ? `manager:${this.#id}`
+        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const toolName = record.toolName;
+
+    if (toolName === undefined) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器の拒否（${actor}）が道具名を持たない合図で届いたので、クローンへは確認を上げず、` +
+          `1回だけの許可も出さない（issue #1105 P1）。`,
+      });
+      return { kind: 'no-retry' };
+    }
+
+    const rawLine = rawLineOf(record.toolInput);
+    if (rawLine === undefined) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器が ${actor} の ${toolName} 呼び出しを拒否したが、入力を1回だけの許可の鍵へ畳め` +
+          `なかったため、クローンへは確認を上げず1回だけの許可も出さない（issue #1105 P1）。`,
+      });
+      return { kind: 'no-retry' };
+    }
+
+    const inputHead = buildDenialInputHead(record.toolInput, this.#env);
+    const permitKey = oneShotAllowKey(
+      oneShotActorOf(this.#id, record),
+      toolName,
+      digestOf(rawLine),
+    );
+    const id = record.toolUseId ?? randomUUID();
+
+    // **既存の許可確認と同じ重複排除**（`#onPermission` と同じ理由——SDK は
+    // 同じ確認を再送しうる）。
+    const already = this.#pending.find((request) => request.id === id);
+    if (already) {
+      const outcome = await already.result;
+      return outcome.behavior === 'allow' ? { kind: 'retry' } : { kind: 'no-retry' };
+    }
+    const resolved = this.#resolved.get(id);
+    if (resolved !== undefined) {
+      return resolved.behavior === 'allow' ? { kind: 'retry' } : { kind: 'no-retry' };
+    }
+
+    const kind = 'permission';
+    const summary =
+      `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n` +
+      `理由: ${record.reason ?? '(無し)'}\n` +
+      `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
+    const askedAt = new Date().toISOString();
+
+    let settle!: (answer: { message: string; decision?: 'allow' | 'deny'; aborted?: true }) => void;
+    const answered = new Promise<{
+      message: string;
+      decision?: 'allow' | 'deny';
+      aborted?: true;
+    }>((resolve) => {
+      settle = resolve;
+    });
+
+    const result = answered.then((answer) => {
+      // **`decideAnswer` を共有する**（#322 と同じ考え方——`#onPermission` と
+      // 別々に判定を書くと、runner.ts 側が変わったときに黙ってずれる）。
+      const decision = decideAnswer(kind, answer.decision, answer.message);
+      const outcome: PermissionResult =
+        answer.aborted === true || decision === 'deny'
+          ? { behavior: 'deny', message: answer.message }
+          : { behavior: 'allow' };
+      this.#resolved.set(id, outcome);
+      return outcome;
+    });
+
+    let done = false;
+    let unlisten = () => undefined as void;
+
+    const request: PendingRequest = {
+      id,
+      kind,
+      summary,
+      askedAt,
+      result,
+      settle: (value) => {
+        if (done) return;
+        done = true;
+        unlisten();
+        const at = this.#pending.indexOf(request);
+        if (at !== -1) this.#pending.splice(at, 1);
+        if (this.#sdkSession.status === 'waiting_human' && this.#pending.length === 0) {
+          this.#sdkSession.setStatus('running');
+        }
+        this.#emit({ type: 'settled', managerId: this.#id, requestId: id });
+        settle(value);
+      },
+    };
+
+    this.#pending.push(request);
+    this.#sdkSession.setStatus('waiting_human');
+
+    // **フックの持ち時間切れ（既定 600000ms。静的な実測）を安全側で確定させる**
+    // （このメソッドの doc「フックの持ち時間切れ」）。
+    let timedOut = false;
+    const onTimeout = () => {
+      timedOut = true;
+      request.settle({
+        message: 'フックの持ち時間が尽きたので、安全側でこの1回だけの許可は出さない。',
+        decision: 'deny',
+        aborted: true,
+      });
+    };
+    const signal = record.signal;
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onTimeout();
+      } else {
+        signal.addEventListener('abort', onTimeout, { once: true });
+        unlisten = () => signal.removeEventListener('abort', onTimeout);
+      }
+    }
+
+    this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
+
+    const outcome = await result;
+
+    if (timedOut) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器の拒否（${actor}・${toolName}）への1回だけの許可の確認が、フックの持ち時間切れで` +
+          `終わった。安全側で retry は返さない。答えが遅れて届いても、この確認は既に解決済みなので` +
+          `反映しない（issue #1105 P1）。`,
+      });
+      return { kind: 'no-retry' };
+    }
+
+    if (outcome.behavior === 'deny') {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `クローンが分類器の拒否（${actor}・${toolName}）への1回だけの許可を出さなかった: ${outcome.message}`,
+      });
+      return { kind: 'no-retry' };
+    }
+
+    this.#oneShotAllows.set(permitKey, { expiresAt: Date.now() + ONE_SHOT_ALLOW_TTL_MS });
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text:
+        `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直せば通る` +
+        `（${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分以内。issue #1105 P1）。`,
+    });
+    return { kind: 'retry' };
+  }
+
+  /**
    * `Bash` へ渡すコマンドが「無限に待つだけの形」なら実行そのものを止める
    * （#894 段1・案(A)）。
    *
@@ -3834,38 +4171,124 @@ class RunnerSession {
    * （kiritan の実測、issue #1105 本文）。控えは `#noteDenial` が
    * `system/permission_denied`（`tool_input` を持たない走行中の合図）へ
    * `inputHead` を足すための材料になる。
+   *
+   * ## 末尾で1回だけの許可を消費する（issue #1105 P1）
+   *
+   * `bash-wait-guard` の deny（直上）より**後**に置く——`#consumeOneShotAllow`
+   * の doc が言うとおり、クローンの1回だけの許可で alteroid 自身の門（#894）
+   * を上書きしないため。`Bash` が弾かれなかった回・`Bash` 以外の全道具が
+   * ここへ落ちる。
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
     this.#capturePreToolInputHead(record);
 
-    if (record.toolName !== 'Bash') return { kind: 'continue' };
+    if (record.toolName === 'Bash') {
+      const toolInput = record.toolInput as
+        { command?: unknown; run_in_background?: unknown } | null | undefined;
+      const command = toolInput?.command;
+      if (typeof command === 'string') {
+        // **`run_in_background` はコマンド文字列に現れない。** 背景へ置いた
+        // ことを判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
+        // `isBackgroundedGhRunWatch` の doc）。**`=== true` で受ける** ——
+        // 欠けていても形が崩れていても `false`（＝前景）になり、通す側へ倒れる。
+        const verdict = inspectBashCommand(command, {
+          backgrounded: toolInput?.run_in_background === true,
+        });
+        if (verdict.blocked) {
+          const actor =
+            record.agentId === undefined
+              ? `manager:${this.#id}`
+              : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
 
-    const toolInput = record.toolInput as
-      { command?: unknown; run_in_background?: unknown } | null | undefined;
-    const command = toolInput?.command;
-    if (typeof command !== 'string') return { kind: 'continue' };
+          this.#emit({
+            type: 'note',
+            managerId: this.#id,
+            text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
+          });
 
-    // **`run_in_background` はコマンド文字列に現れない。** 背景へ置いたことを
-    // 判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
-    // `isBackgroundedGhRunWatch` の doc）。**`=== true` で受ける** —— 欠けていても
-    // 形が崩れていても `false`（＝前景）になり、通す側へ倒れる。
-    const verdict = inspectBashCommand(command, {
-      backgrounded: toolInput?.run_in_background === true,
-    });
-    if (!verdict.blocked) return { kind: 'continue' };
+          return { kind: 'deny', reason: verdict.reason };
+        }
+      }
+    }
+
+    return this.#consumeOneShotAllow(record);
+  }
+
+  /**
+   * クローンが `#onPermissionDenied` で出した「1回だけの許可」（issue #1105
+   * P1）を、同じ `(actor, tool, 入力の完全一致のダイジェスト)` であれば
+   * 1回だけ使う。
+   *
+   * ## 呼び出し順序で「alteroid 自身の門」を上書きしない
+   *
+   * `#onPreToolUse` からは、`bash-wait-guard`（#894）の deny が**確定した後**
+   * にしか呼ばれない。⟹ 待つだけの `Bash` はクローンの許可があっても通らない
+   * ——issue #1105 本文の設計判断3「既存の `PreToolUse` の deny は、1回限りの
+   * 許可より先に効かせる」をこの順序そのもので担保する。
+   *
+   * ## 全道具が対象（`Bash` に絞らない）
+   *
+   * 分類器は `Bash` 以外（`Edit` / `Write` / `NotebookEdit` 等）にも掛かる
+   * （issue #1105 の静的な実測、2026-09-26 のコメント）。`#onPermissionDenied`
+   * はどの道具の拒否でも許可を出せるので、ここで `Bash` に絞ると撃ち直しの
+   * ほとんどが通せなくなる。
+   *
+   * ## 一致の鍵は表示用の伏せ字済みの値ではない
+   *
+   * `rawLineOf(record.toolInput)` の完全一致のダイジェストを使う——
+   * `buildDenialInputHead`（伏せ字つき・160字に切る、表示専用）を鍵にすると、
+   * 先頭160字が同じで残りが違う別の入力が誤って一致しうる（issue #1105 の
+   * 要求「入力が1文字違えば返さない」）。
+   *
+   * ## 使い切る・期限切れは使わない
+   *
+   * 一致した鍵は `get` の直後に必ず `delete` する——一致してもしなくても
+   * 1回で終わり（issue #1105 本文の設計判断3）。寿命
+   * （`ONE_SHOT_ALLOW_TTL_MS`）を過ぎていたら `allow` を返さず、分類器の
+   * 判定へそのまま委ねる（安全側）。
+   */
+  #consumeOneShotAllow(record: AgentPreToolRecord): AgentPreToolDecision {
+    const toolName = record.toolName;
+    if (toolName === undefined) return { kind: 'continue' };
+    const rawLine = rawLineOf(record.toolInput);
+    if (rawLine === undefined) return { kind: 'continue' };
 
     const actor =
       record.agentId === undefined
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(rawLine));
+    const grant = this.#oneShotAllows.get(key);
+    if (grant === undefined) return { kind: 'continue' };
+    // 使い切る。一致しても1回だけ。
+    this.#oneShotAllows.delete(key);
+
+    if (grant.expiresAt < Date.now()) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `分類器の拒否への1回だけの許可（${actor}・${toolName}）は期限切れだったので使わなかった` +
+          `（issue #1105 P1）。分類器の判定へそのまま委ねる。`,
+      });
+      return { kind: 'continue' };
+    }
+
+    // **#1603 と同じ形の検出材料を控える**（`#noteDenial` が引く）。
+    if (typeof record.toolUseId === 'string') {
+      this.#oneShotAllowedToolUses.set(record.toolUseId, { actor, tool: toolName });
+    }
 
     this.#emit({
       type: 'note',
       managerId: this.#id,
-      text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
+      text: `クローンの1回だけの許可（issue #1105 P1）で、分類器の拒否（${actor}・${toolName}）を上書きした。`,
     });
 
-    return { kind: 'deny', reason: verdict.reason };
+    return {
+      kind: 'allow',
+      reason: 'クローンが分類器の拒否をこの1回だけ上書きした（issue #1105 P1）。',
+    };
   }
 
   /**
@@ -3902,9 +4325,16 @@ class RunnerSession {
    *
    * **成功で決着した呼び出しぶんの入力の先頭も、ここで帳面から消す**
    * （`#preToolInputHeads`。issue #1105）——控えっぱなしにしない。
+   *
+   * **`#oneShotAllowedToolUses` も同じ理由で消す**（issue #1105 P1）。
+   * `PreToolUse` は実行より前にしか発火しないので、成功で終わった呼び出しに
+   * 後から拒否が届くことはない。
    */
   async #onPostToolUse(record: AgentToolAuditRecord): Promise<AgentContextOutcome> {
-    if (typeof record.toolUseId === 'string') this.#preToolInputHeads.delete(record.toolUseId);
+    if (typeof record.toolUseId === 'string') {
+      this.#preToolInputHeads.delete(record.toolUseId);
+      this.#oneShotAllowedToolUses.delete(record.toolUseId);
+    }
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
     // 道具が動いた＝このセッションは生きている（生ログからの作り直しはもうしない）。
@@ -4191,9 +4621,15 @@ class RunnerSession {
    * 呼び出しは拒否ではなく失敗（実行できた・実行しようとしたが例外や
    * 中断で終わった）なので `#noteDenial` を経由しない——ここで消さないと、
    * 拒否ではなく失敗で終わった分の控えが上限による `onForget` まで残る。
+   *
+   * **`#oneShotAllowedToolUses` の掃除も同じ理由で拾う**（issue #1105 P1、
+   * `#onPostToolUse` と同じ形）。
    */
   async #onPostToolUseFailure(record: AgentToolAuditFailureRecord): Promise<void> {
-    if (typeof record.toolUseId === 'string') this.#preToolInputHeads.delete(record.toolUseId);
+    if (typeof record.toolUseId === 'string') {
+      this.#preToolInputHeads.delete(record.toolUseId);
+      this.#oneShotAllowedToolUses.delete(record.toolUseId);
+    }
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
     // 道具が動いた＝このセッションは生きている（成功側と同じ）。
@@ -5620,6 +6056,35 @@ export function decideAnswer(
  */
 function digestOf(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+/**
+ * 1回だけの許可（issue #1105 P1）の帳面（`#oneShotAllows`）の鍵を組む。
+ *
+ * **3つ揃って初めて一致する。** `actor` が違えば別の担い手、`tool` が違えば
+ * 別の道具、`digest` が違えば1文字でも違う入力——issue #1105 本文の要求
+ * 「同じ入力で撃ち直したら…」「別の担い手なら返さない」をこの鍵の作りその
+ * ものが担保する。区切りに `\u0000` を使うのは、`actor` / `tool` の値には
+ * 現れない制御文字であることが分かっているため（`actor` は
+ * `manager:<id>`/`worker:<id>:<type>` の固定書式、`tool` は SDK の道具名）。
+ */
+/**
+ * 1回だけの許可（issue #1105 P1）の鍵に入れる担い手。**表示用の `actor`
+ * （`worker:<マネージャー>:<agentType>`）を使わない**——あれは型までしか
+ * 区別しないので、同じ型の作業者が並行に2体いると、片方への許可をもう片方が
+ * 使えてしまう。作業者は `agentId`（SDK が作業者ごとに振る id）で区別する。
+ */
+function oneShotActorOf(
+  managerId: string,
+  record: { readonly agentId?: string | undefined },
+): string {
+  return record.agentId === undefined
+    ? `manager:${managerId}`
+    : `worker:${managerId}:agent=${record.agentId}`;
+}
+
+function oneShotAllowKey(actor: string, tool: string, digest: string): string {
+  return `${actor}\u0000${tool}\u0000${digest}`;
 }
 
 export function brief(value: unknown, limit = 200): string {

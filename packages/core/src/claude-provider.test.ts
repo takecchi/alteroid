@@ -971,6 +971,7 @@ describe('ツール監査フックの包み直し（#486）', () => {
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1111,6 +1112,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1149,6 +1151,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1190,6 +1193,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
       onSubagentStop: () => ({ kind: 'continue' }),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1230,6 +1234,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
         captured = record;
       },
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1272,6 +1277,7 @@ describe('観測専用フックの包み直し（#486 中立の口2本目）', (
         captured = record;
       },
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1459,6 +1465,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
         captured = record;
         return { kind: 'continue' };
       },
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1505,6 +1512,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
         kind: 'deny',
         reason: '無限に待つだけの形（代替: timeout でラップする）',
       }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1550,6 +1558,7 @@ describe('PreToolUse の中立の判断の包み直し（#486 中立の口の3�
       // （`memory.test.ts` の `bogus` と同じ流儀。`wrapPreToolHook` の doc
       // 「実行時にここへ来るのは型で弾かれたはずの値が渡ったとき」）。
       onPreToolUse: () => ({ kind: 'ask' }) as unknown as AgentPreToolDecision,
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
 
@@ -1604,6 +1613,7 @@ describe('文脈を返すフックの中立の包み直し（#486 中立の口�
       onSubagentStop: hooks.onSubagentStop ?? (() => ({ kind: 'continue' })),
       onStop: () => {},
       onPreToolUse: () => ({ kind: 'continue' }),
+      onPermissionDenied: async () => ({ kind: 'no-retry' }),
       managerAutoMemoryEnabled: false,
     });
   }

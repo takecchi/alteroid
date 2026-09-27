@@ -3,6 +3,7 @@ import type {
   HookCallback,
   McpServerConfig,
   Options,
+  PermissionDeniedHookInput,
   PostToolUseFailureHookInput,
   PostToolUseHookInput,
   PreCompactHookInput,
@@ -27,6 +28,8 @@ import type { AgentProvider } from './agent-ports.js';
 import type {
   AgentContextHook,
   AgentObservationHook,
+  AgentPermissionDeniedHook,
+  AgentPermissionDeniedRecord,
   AgentPreCompactRecord,
   AgentPreToolHook,
   AgentPreToolRecord,
@@ -303,6 +306,78 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
           'PreToolUse の中立な判断の包み直し',
           '',
           new Error(`未知の AgentPreToolDecision.kind が渡った: ${JSON.stringify(unreachable)}`),
+        );
+        return { continue: true };
+      }
+    }
+  };
+}
+
+/**
+ * `PermissionDenied` の生入力を {@link AgentPermissionDeniedRecord} へ写す。
+ * 無い欄は省く（他の `toAgent*Record` と同じ作法。issue #1105 P1）。
+ *
+ * **`signal` はここで詰める。** `PermissionDeniedHookInput` 自体には `signal`
+ * という欄は無い——`HookCallback` の第3引数（`options.signal`）でしか渡って
+ * こない。他の `toAgent*Record` はどれも第1引数（生入力）だけを読むが、
+ * この関数だけは呼び出し側（`wrapPermissionDeniedHook`）から `signal` を
+ * 別に受け取って合流させる。
+ */
+function toAgentPermissionDeniedRecord(
+  input: unknown,
+  signal: AbortSignal,
+): AgentPermissionDeniedRecord {
+  const raw = input as Partial<PermissionDeniedHookInput> | null | undefined;
+  return {
+    ...(typeof raw?.tool_name === 'string' ? { toolName: raw.tool_name } : {}),
+    toolInput: raw?.tool_input,
+    ...(typeof raw?.tool_use_id === 'string' ? { toolUseId: raw.tool_use_id } : {}),
+    ...(typeof raw?.reason === 'string' ? { reason: raw.reason } : {}),
+    ...(typeof raw?.agent_id === 'string' ? { agentId: raw.agent_id } : {}),
+    ...(typeof raw?.agent_type === 'string' ? { agentType: raw.agent_type } : {}),
+    signal,
+  };
+}
+
+/**
+ * 中立の `PermissionDenied` 判断フックを SDK の `HookCallback` へ包み直す
+ * （issue #1105 P1）。
+ *
+ * **`wrapPreToolHook` と同じ形の「中立の判断→SDK 形」の包み直しだが、
+ * SDK 側が持てる語彙がそちらよりずっと狭い。** `PermissionDeniedHookSpecificOutput`
+ * は `retry?: boolean` の1個しか持たない——`allow`/`deny` を運ぶ
+ * `hookSpecificOutput` は無い。だから `kind: 'retry'` のときだけ
+ * `retry: true` を足し、`kind: 'no-retry'` は素の `{ continue: true }`
+ * （＝何も足さない。`retry` を省けば `undefined` と同じ扱いになるはずだが、
+ * `false` を明示せず省く——「不在」と「明示的な false」を型のうえで
+ * 区別する必要が今のところ無いので、無い方をそのまま使う）。
+ *
+ * **`never` で網羅性を検査する。** `wrapPreToolHook` と同じ形——
+ * `AgentPermissionDeniedDecision` に3つ目の `kind` が増えたら、この
+ * `switch` の `default` 節で `tsc` が落ちる。**ただし投げない**——理由も
+ * 同じ（フックの中で例外を投げるとそのターンが壊れる）。安全側
+ * （`{ continue: true }` ＝ retry を足さない）へ倒し、
+ * `noteBackgroundFailure` で跡だけ残す。
+ */
+function wrapPermissionDeniedHook(hook: AgentPermissionDeniedHook): HookCallback {
+  return async (input, _toolUseID, options) => {
+    const decision = await hook(toAgentPermissionDeniedRecord(input, options.signal));
+    switch (decision.kind) {
+      case 'retry':
+        return {
+          continue: true,
+          hookSpecificOutput: { hookEventName: 'PermissionDenied', retry: true },
+        };
+      case 'no-retry':
+        return { continue: true };
+      default: {
+        const unreachable: never = decision;
+        noteBackgroundFailure(
+          'PermissionDenied の中立な判断の包み直し',
+          '',
+          new Error(
+            `未知の AgentPermissionDeniedDecision.kind が渡った: ${JSON.stringify(unreachable)}`,
+          ),
         );
         return { continue: true };
       }
@@ -780,6 +855,34 @@ export interface ManagerSessionOptionsRequest {
    */
   onPreToolUse: AgentPreToolHook;
   /**
+   * **分類器（auto mode classifier）にその場で拒否された道具の呼び出しへ、
+   * クローンの判断で「1回だけの許可」を出す口**（issue #1105 P1）。
+   *
+   * SDK の `PermissionDenied` フックは `retry?: boolean` の1個しか返せない
+   * ——「もう一度試してよい」とモデルの文脈に一文足すだけで、実行そのものを
+   * 許可する力は持たない。実際に道具を通すのは、撃ち直しの後に
+   * `onPreToolUse` が同じ入力を見つけて `allow` を返す番である
+   * （`runner.ts` の `#consumeOneShotAllow`）。**この欄自身はクローンを待つ
+   * ——`retry` を返すまでに、既存の許可確認（`requestId` 付きの `ask`）と
+   * 同じ経路でクローンへ上げ、答えを待つ**（`runner.ts` の
+   * `#onPermissionDenied` の doc）。
+   *
+   * **optional にしない。理由は上の6本と同じ**（安全弁は provider を足す側が
+   * 黙って落とせない要件である。ただし黙って落とした場合の帰結はここでは
+   * 「1回限りの許可という機能が無い」というだけで、既存の分類器の拒否その
+   * ものには触れない——`AgentPermissionDeniedDecision` の `no-retry` は
+   * 「何もしない」の既定値でもある）。
+   *
+   * **中立の型（`AgentPermissionDeniedHook`）へ移してある。**
+   * `wrapPermissionDeniedHook` が SDK の `HookCallback` へ包み直す。
+   *
+   * **クローン側（`buildCloneSessionOptions` / `buildCloneDistillOptions`）
+   * には同じ引数を持たせない。** issue #1105 の依頼範囲がマネージャー層
+   * （このファイルと `runner.ts`）に限られている——クローン自身の
+   * `PreToolUse`（許可 DB の規則。issue #863）とは別の話である。
+   */
+  onPermissionDenied: AgentPermissionDeniedHook;
+  /**
    * `ALTEROID_MANAGER_AUTO_MEMORY` を解いた結果（`runner.ts` の
    * `resolveManagerAutoMemoryEnabled`）。**このセッションが auto-memory を
    * 開いてよいか**であって、開いたか・使ったかの観測ではない。
@@ -828,6 +931,7 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
     onSubagentStop,
     onStop,
     onPreToolUse,
+    onPermissionDenied,
     managerAutoMemoryEnabled,
     mcpServers,
   } = request;
@@ -938,6 +1042,13 @@ export function buildManagerSessionOptions(request: ManagerSessionOptionsRequest
       // `#onPreToolUse` の doc を見よ。`wrapPreToolHook` が中立の判断を
       // SDK の `HookCallback` へ包み直す。
       PreToolUse: [{ hooks: [wrapPreToolHook(onPreToolUse)] }],
+      // **分類器（auto mode classifier）の拒否に、クローンの1回だけの許可を
+      // 出す口**（issue #1105 P1）。`wrapPermissionDeniedHook` が中立の
+      // `retry`/`no-retry` を SDK の `HookCallback` へ包み直す——実際に道具を
+      // 通すのは、撃ち直しの後の `PreToolUse`（直上）の役目である。理由は
+      // `ManagerSessionOptionsRequest.onPermissionDenied` の doc と
+      // `runner.ts` の `#onPermissionDenied` の doc を見よ。
+      PermissionDenied: [{ hooks: [wrapPermissionDeniedHook(onPermissionDenied)] }],
       // 観測に加えて #901 の打ち切り注記を追加の文脈として返しうる
       // （`ManagerSessionOptionsRequest.onPostToolUse` の doc）。`wrapContextHook` が
       // 中立の `continue` / `addContext` を SDK の形へ包み直す。

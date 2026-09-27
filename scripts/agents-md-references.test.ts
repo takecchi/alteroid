@@ -388,10 +388,11 @@ export const FENCE_COVERAGE_EXEMPTIONS: readonly FenceCoverageExemption[] = [
     file: '.claude/skills/grep-counting/SKILL.md',
     why: 'AGENTS.md「grep が静かに取りこぼす形は6つある」を逐語で移設した先（2026-09-17）。6形のうち5形が shim / GNU grep / rg の出力を並べて見せる形なので、本文がフェンスで占められる。フェンス記号10本＝5対で対応は揃っており、落とした区間の開始行はすべて開きフェンスである（(a) の形ではない）。',
   },
-  {
-    file: '.claude/skills/pr-green/SKILL.md',
-    why: 'AGENTS.md「statusCheckRollup」〜「draft の run が conclusion: success を名乗る」を逐語で移設した先（2026-09-17）。check-runs / actions/runs / jobs の生の応答を世代ごとに並べて比べる節なので、本文がフェンスで占められる。フェンス記号16本＝8対で対応は揃っており、落とした区間の開始行はすべて開きフェンスである（(a) の形ではない）。',
-  },
+  // ⚠️ `.claude/skills/pr-green/SKILL.md` の免除は 2026-09-27（#1192 の再編 PR1）に外した。
+  // AGENTS.md「CI の完了を待つ形」「依頼者の見立てを検証する」からの逐語移設でプローズ
+  // （フェンスの外の本文）が大きく増え、フェンスの割合が閾値を再び下回った
+  // （幽霊免除の歯が実測で検出した）。機構が変わったのではなく、この PR の移設で
+  // 比率が動いただけである。
 ];
 
 // ---------------------------------------------------------------------------
@@ -1055,8 +1056,19 @@ describe('AGENTS.md の参照の形（#369）', () => {
     // AGENTS.md から消えた ⟹ **この歯が落ちたのは正しい**（見張り役の逐語が実在しなくなった）。
     // 差し替え先は「`gh pr merge --delete-branch`」の節の生出力で、AGENTS.md のフェンスの中に
     // だけ在ることを確かめてある。**節ごと移設されればまた落ちる。そのときも同じ直し方をする。**
-    expect(agentsMd).toContain('Cannot change the base branch of a closed pull request');
-    expect(prose.map((l) => l.text).join('\n')).not.toContain(
+    //
+    // ⚠ 2026-09-27 に再び踏んだ（#1192 の再編 PR1）。この逐語を含む節
+    // （`gh pr merge --delete-branch`）自体が `.claude/skills/tool-quirks/SKILL.md` へ
+    // 丸ごと移設され、AGENTS.md はコードフェンスを1つも持たない文書になった ⟹
+    // AGENTS.md 自身ではこの確認が成立しない（フェンスが無いので「フェンスの中にしか
+    // 無い逐語」を選べない）。**この歯が見張っているのは「proseLines がフェンスを
+    // 正しく除外するか」であって、対象ファイルが AGENTS.md である必要は無い** ——
+    // 同じ逐語がそのままフェンスごと移った先（tool-quirks/SKILL.md）で同じことを
+    // 確かめる。
+    const tqText = readRepoFile('.claude/skills/tool-quirks/SKILL.md');
+    const tqProse = proseLines(tqText);
+    expect(tqText).toContain('Cannot change the base branch of a closed pull request');
+    expect(tqProse.map((l) => l.text).join('\n')).not.toContain(
       'Cannot change the base branch of a closed pull request',
     );
     expect(prose.length).toBeGreaterThan(100);

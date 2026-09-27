@@ -172,8 +172,17 @@ function redactKnownSecretPatterns(text: string): string {
  * `undefined` を返すのは「入力そのものが無かった・1行にできなかった」ときだけ
  * ——循環参照など `JSON.stringify` が例外を投げる形も含む
  * （`denial-shape.ts` の `charsOf` と同じ判断）。
+ *
+ * **`export` する（issue #1105 P1）。** `runner.ts` の1回限りの許可の一致鍵
+ * （`#consumeOneShotAllow` / `#onPermissionDenied`）は、この関数が返す
+ * **伏せ字にする前・切る前の完全な文字列**をダイジェストの材料にする——
+ * `buildDenialInputHead`（表示用。伏せ字つき・160字に切る）をそのまま使うと、
+ * 先頭160字が同じで残りが違う別の入力が誤って一致しうる（issue #1105 の
+ * 要求「入力が1文字違えば返さない」）。ここで1つの実装を共有することで、
+ * 「1行に畳む」というロジック自体は表示用途・一致判定用途のどちらでも
+ * 同じになる（畳み方が2箇所でずれる事故を防ぐ）。
  */
-function rawLineOf(toolInput: unknown): string | undefined {
+export function rawLineOf(toolInput: unknown): string | undefined {
   if (toolInput === undefined) return undefined;
   if (typeof toolInput === 'string') return toolInput;
   if (typeof toolInput === 'object' && toolInput !== null && !Array.isArray(toolInput)) {

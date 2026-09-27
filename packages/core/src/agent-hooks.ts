@@ -377,3 +377,74 @@ export type AgentContextOutcome = { kind: 'continue' } | { kind: 'addContext'; t
  * この型を使う——記録の型（`T`）が違うだけで、返せる判断の形は同じである。
  */
 export type AgentContextHook<T> = (record: T) => AgentContextOutcome | Promise<AgentContextOutcome>;
+
+/**
+ * `PermissionDenied`（分類器・deny 規則が確認へ上げずにその場でツール呼び
+ * 出しを拒否した直後）1件の中立の記録（issue #1105 P1）。
+ *
+ * **すべて任意である。** 無い欄は作り物を出さずに省く（上の Record 型と
+ * 同じ作法）。
+ *
+ * **静的に読んだ SDK の挙動（issue #1105 のコメント、2026-09-26。生きた
+ * セッションでは確かめていない）: このフックは `decisionReason.type ===
+ * 'classifier'` かつ `classifier === 'auto-mode'` のときだけ呼ばれる。**
+ * ⟹ alteroid のコード側には「本当に分類器の拒否か」を判定する材料が無い
+ * ——SDK がこのフックを呼んだ時点で、分類器の拒否だという前提のまま読む。
+ * この前提が崩れていた場合（例: 将来の SDK 版で呼ばれる条件が広がる）を
+ * 検出する手段は、いまのところ無い。
+ */
+export interface AgentPermissionDeniedRecord {
+  /** 拒否された道具の名前。読めなければ省く。 */
+  toolName?: string;
+  /** 道具へ渡そうとしていた入力。 */
+  toolInput?: unknown;
+  /**
+   * SDK の `tool_use_id`。**`PermissionDeniedHookInput` では必須**（SDK の
+   * 型）だが、ここでは他の欄と同じく任意にする——`Partial<...>` 経由で読む
+   * 以上、実行時に文字列でなければ省く作法をここだけ崩さない。
+   */
+  toolUseId?: string;
+  /** 拒否の理由（provider の自由文）。読めなければ省く。 */
+  reason?: string;
+  /** 呼び出しが作業者（サブエージェント）からのものだったときの id。本体の呼び出しなら省く。 */
+  agentId?: string;
+  /** 作業者の型名。**`agentId` が無ければ意味を持たない。** */
+  agentType?: string;
+  /**
+   * このフックの持ち時間が尽きたとき（あるいはセッションが畳まれたとき）に
+   * 落ちる合図。SDK の `HookCallback` が渡す `options.signal` をそのまま
+   * 運ぶ——`runner.ts` の `#onPermissionDenied` は、クローンの回答を待つ
+   * あいだこれを聴き、落ちたら安全側（`no-retry`）で確定させる（issue #1105
+   * 本文の設計判断5）。
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * `PermissionDenied` が返せる判断（issue #1105 P1）。
+ *
+ * SDK 側が実際に受け取れるのは `retry?: boolean` という1個の任意欄だけ
+ * （`PermissionDeniedHookSpecificOutput`）——`PreToolUse` の `allow`/`deny`
+ * のような「実行そのものを許可・拒否する」経路はここには無い。返せるのは
+ * 「もう一度試してよい、とモデルの文脈に一文足すだけ」という弱い口である
+ * （実際に道具を通すのは、撃ち直しの後の `PreToolUse` の役目——
+ * `AgentPreToolDecision` の `allow`）。
+ *
+ * - `retry`: クローンが1回限りの許可を出した。同じ入力で撃ち直せば、
+ *   `PreToolUse`（`runner.ts` の `#consumeOneShotAllow`）が今度は通す。
+ * - `no-retry`: クローンが拒否した・答えが時間切れになった・入力を安全に
+ *   一致判定できる形へ畳めなかった、のいずれか。**安全側（許可しない）が
+ *   既定**（issue #1105 本文の設計判断5）。
+ */
+export type AgentPermissionDeniedDecision = { kind: 'retry' } | { kind: 'no-retry' };
+
+/**
+ * 判断を返す `PermissionDenied` フックの中立の関数型（issue #1105 P1）。
+ * `PreToolUse`（{@link AgentPreToolHook}）と違い同期では返せない——クローンの
+ * 回答を待つ非同期の処理そのものがこの型の存在理由なので、`Promise` を必須
+ * にする（`AgentPreToolHook` は同期・非同期のどちらでも書けるようにして
+ * あるが、ここは書き手に「待つ」ことを型で示す）。
+ */
+export type AgentPermissionDeniedHook = (
+  record: AgentPermissionDeniedRecord,
+) => Promise<AgentPermissionDeniedDecision>;

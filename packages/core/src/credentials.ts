@@ -293,6 +293,33 @@ export function credentialNamesShadowedByProfile(
 export const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 /**
+ * 行の形が不正で読み飛ばした跡を、stderr へ出す1行に組み立てる（issue #1740）。
+ *
+ * `FsCredentialVaultStore`（`packages/storage-fs`）と `PgCredentialVaultStore`
+ * （`packages/storage-pg`）の両方が使う——**その行だけを飛ばし、残りは返す**という
+ * 直し方を2実装でそろえるとき、跡の形までそろえないと「食い違っている」がまた
+ * 別の形で再発する。
+ *
+ * **`value`（鍵の値そのもの）は引数に取らない。** 呼び手が選んで渡した `reason` /
+ * `name` だけを載せる——zod のエラーをそのまま出すと、`received` 等の欄に入力値が
+ * 混ざりうるため、載せる欄はここで固定してある。
+ */
+export function describeSkippedCredentialRow(params: {
+  /** 0始まりの位置（配列のインデックス、または読んだ行の通し番号）。 */
+  index: number;
+  /** 飛ばした理由の要旨。**値そのものを含めないこと**（呼び手の責務）。 */
+  reason: string;
+  /** 名前が文字列として取れたときだけ渡す。 */
+  name?: string;
+}): string {
+  const nameNote = params.name === undefined ? '' : ` name=${JSON.stringify(params.name)}`;
+  return (
+    `alteroid: credentials の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${nameNote}`
+  );
+}
+
+/**
  * 鍵として配ってはいけない名前か。
  *
  * `WITHHELD_ENV_KEYS`（記憶ストアの所在・制御面の合鍵）を鍵の名前として渡されると、

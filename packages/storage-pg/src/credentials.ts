@@ -1,5 +1,6 @@
 import {
   CREDENTIAL_NAME,
+  describeSkippedCredentialRow,
   type CredentialEntry,
   type CredentialVaultStore,
   type StoredCredential,
@@ -31,30 +32,40 @@ export class PgCredentialVaultStore implements CredentialVaultStore {
       .select()
       .from(managerCredentials)
       .orderBy(asc(managerCredentials.name));
-    return (
-      rows
-        /**
-         * **名前の形をここでも見る。** 入口（HTTP のスキーマ・`CredentialStore#set`）
-         * でも見ているが、DB は人間が直接 `insert` できるので、読むときにもう一度
-         * 見ないと `../../x` のような名前がそのまま runner へ降りて器の外を指す。
-         * 守りを1枚に寄せない（fs 版の `rowSchema` と同じ理由）。
-         *
-         * **落とした行を黙って消さない**わけではない——ここは読みの口なので、
-         * 降ろす集合から外すだけである。手で入れた行が効かないことは、
-         * `GET /credentials` に出ない（＝指紋が出ない）ことで見える。
-         */
-        .filter((row) => CREDENTIAL_NAME.test(row.name))
-        .map((row) => ({
-          name: row.name,
-          value: row.value,
-          updatedAt: row.updatedAt.toISOString(),
-          // **列は `not null default` 済みなので常に文字列/真偽値が来る**——
-          // ここでの `??` はテスト用の PGlite に旧スキーマの行が残っている
-          // 場合の保険であって、通常運用では素通りするだけである。
-          scope: (row.scope ?? 'all') as StoredCredential['scope'],
-          secret: row.secret ?? true,
-        }))
-    );
+    const kept: StoredCredential[] = [];
+    rows.forEach((row, index) => {
+      /**
+       * **名前の形をここでも見る。** 入口（HTTP のスキーマ・`CredentialStore#set`）
+       * でも見ているが、DB は人間が直接 `insert` できるので、読むときにもう一度
+       * 見ないと `../../x` のような名前がそのまま runner へ降りて器の外を指す。
+       * 守りを1枚に寄せない（fs 版の `rowSchema` と同じ理由）。
+       *
+       * **落とした行を黙って消さない**わけではない——ここは読みの口なので、
+       * 降ろす集合から外すだけである。手で入れた行が効かないことは、
+       * `GET /credentials` に出ない（＝指紋が出ない）ことに加えて、stderr の
+       * 跡（`describeSkippedCredentialRow`。issue #1740。**値は出さない**）でも
+       * 見える——fs 版が行ごとに `#read()` で出す跡と、同じ形にそろえてある。
+       * DB 側は行が表そのものに残る（fs 版のように書き戻す必要はない——
+       * ここは読みの口で、書き込みは `put()` の upsert/delete が別に扱う）。
+       */
+      if (!CREDENTIAL_NAME.test(row.name)) {
+        process.stderr.write(
+          `${describeSkippedCredentialRow({ index, reason: 'name の形式が不正', name: row.name })}\n`,
+        );
+        return;
+      }
+      kept.push({
+        name: row.name,
+        value: row.value,
+        updatedAt: row.updatedAt.toISOString(),
+        // **列は `not null default` 済みなので常に文字列/真偽値が来る**——
+        // ここでの `??` はテスト用の PGlite に旧スキーマの行が残っている
+        // 場合の保険であって、通常運用では素通りするだけである。
+        scope: (row.scope ?? 'all') as StoredCredential['scope'],
+        secret: row.secret ?? true,
+      });
+    });
+    return kept;
   }
 
   async put(entries: readonly CredentialEntry[]): Promise<StoredCredential[]> {

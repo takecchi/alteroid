@@ -3522,9 +3522,17 @@ describe('FsCredentialVaultStore', () => {
     expect(info.mode & 0o777).toBe(0o600);
   });
 
-  it('手で書いた壊れた名前の行は読みで落ちる（器の外を指す名前を降ろさない）', async () => {
+  it('手で書いた壊れた名前の行は読みで飛ばす（器の外を指す名前を降ろさない）', async () => {
     // **ファイルは人間が開ける。** 入口の検査だけに頼ると、手で書いた
     // `../../x` がそのまま runner へ降りて器の外を指す。
+    //
+    // **⚠️ 反転（issue #1740）。** 以前はここで `list()` が例外を投げることを
+    // 期待していた——「器の外を指す名前を降ろさない」という目的自体は同じだが、
+    // 当時の実装は不正な1行のために配列全体（`fileSchema.parse`）を検査して
+    // いたため、**この壊れた行と同居する他の正しい行まで読めなくなる**という
+    // 副作用を仕様として固定してしまっていた。いまは pg 実装と同じく行ごとに
+    // 検査し、不正な行だけを飛ばす——「器の外を指す名前を降ろさない」目的は
+    // 達成したまま、正しい行は読める（詳細は `credentials.ts` の `#read()`）。
     await stores.credentials.put([{ name: 'NPM_TOKEN', value: 'npm_x' }]);
     await writeFile(
       stores.paths.credentials,
@@ -3536,7 +3544,8 @@ describe('FsCredentialVaultStore', () => {
       'utf8',
     );
 
-    await expect(stores.credentials.list()).rejects.toThrow();
+    // 唯一の行が壊れているので、降ろす集合は空になる（投げない）。
+    await expect(stores.credentials.list()).resolves.toEqual([]);
   });
 
   /**
