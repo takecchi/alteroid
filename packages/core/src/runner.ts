@@ -5877,6 +5877,22 @@ function unreportedText(said: readonly string[], reason: string): string {
  * `openedWorkers`（開いた数だけ）という並びを保つ**——情報の具体さの順であって、
  * 3つを足し合わせて全部載せることはしない（本文が太るだけで、いちばん確かな
  * 証拠が埋もれる）。
+ *
+ * **`failure.via === 'assistant_error'` のときは、3行とも「本体も当たったかは
+ * 分からない」を「本体も当たっている」へ言い切る（Issue #1373 続きのコメント）。**
+ * この via は、本体自身の assistant メッセージ（`parentToolUseId === null`）に
+ * SDK の拒否の印が付いてターンが失敗した回にしか立たない——`#apply` の
+ * `case 'assistant_message'` が `parentToolUseId === null` のときだけ
+ * `this.#turnTally.setRejected(rejected)` を呼び、`case 'turn_ended'` の
+ * `const failure = event.failure ?? rejected` は `result` 側の印
+ * （`event.failure`）を `rejected` より優先するので、`via` が `'assistant_error'`
+ * のまま残るのは `result` 側に印が無かった回だけである。つまりこの回は
+ * 「作業者が当たったかは分からない」ではなく「本体自身が当たったことは
+ * 分かっている」——`result_subtype` / `result_is_error`（`result` 側にしか印が
+ * 無い回）は従来どおり「分からない」のまま変えない。`openedWorkers` の行だけは
+ * 意味が逆になる点に注意——「作業者が当たったかは分からないが、本体は
+ * 当たっている」という言い方にする（他の2行は「作業者が当たったことは確か」を
+ * 保ったまま「本体も当たっている」を足す）。
  */
 function failedReportText(
   said: readonly string[],
@@ -5888,17 +5904,33 @@ function failedReportText(
   failedWorkerNotificationsNamingLimit = 0,
 ): string {
   const body = failure.text.length > 0 ? failure.text : result;
+  // **本体自身の assistant メッセージに拒否の印が付いてターンが失敗した回だけ、
+  // 「本体も当たったかは分からない」を「本体も当たっている」へ言い切れる**
+  // （このすぐ上の doc の「`via === 'assistant_error'`」節）。
+  const bodyHit = failure.via === 'assistant_error';
   const workerNote =
     workerRejections.length > 0
-      ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かだが、本体も当たったかは SDK からは分からない）`
+      ? `\n（このターンでは作業者の発言に SDK の拒否の印が付いていた: ${describeRejectionCodes(workerRejections)}。作業者が当たったことは確かで、${
+          bodyHit
+            ? '本体の発言にも拒否の印が付いていたので、本体も当たっている'
+            : '本体も当たったかは SDK からは分からない'
+        }）`
       : failedWorkerNotifications > 0
         ? `\n（このターンでは作業者 ${String(failedWorkerNotifications)} 体が失敗で終わった${
             failedWorkerNotificationsNamingLimit > 0
               ? `（うち ${String(failedWorkerNotificationsNamingLimit)} 体は枠(429)を名乗った）`
               : ''
-          }。本体も当たったかは SDK からは分からない）`
+          }。${
+            bodyHit
+              ? '本体の発言にも拒否の印が付いていたので、本体も当たっている'
+              : '本体も当たったかは SDK からは分からない'
+          }）`
         : openedWorkers > 0
-          ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。どちらが当たったかは SDK からは分からない）`
+          ? `\n（このターンでは作業者が ${String(openedWorkers)} 体開いていた。${
+              bodyHit
+                ? '作業者が当たったかは SDK からは分からないが、本体の発言には拒否の印が付いていたので、本体は当たっている'
+                : 'どちらが当たったかは SDK からは分からない'
+            }）`
           : '';
   const head = `（このターンは応答を返さずに終わった: ${failure.code} / ${failure.via}）\n${body}${workerNote}`;
   const partial = said.join('\n\n').trim();
