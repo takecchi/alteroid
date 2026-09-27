@@ -6357,6 +6357,64 @@ function hasApprovalMarker(message: string): boolean {
 }
 
 /**
+ * 否定の語を含む、はっきりした承認の言い方（issue #1877）。
+ *
+ * `no problem` / `no objection(s)` / `don't hesitate` / `don't mind` は
+ * 意味としては承認だが、`DENIAL_WORDS` が `no` / `don't` を語境界で拾う
+ * ため、`inferDecision` の1段目（`DENIAL_PHRASES`/`DENIAL_WORDS`）で
+ * `deny` が確定してしまい、3値目の `unreadable`（PR #1866）にすら
+ * 届いていなかった。日本語の `問題ない` は `ない` が `NEGATION_MARKERS_JA`
+ * に在り `hasApprovalMarker`/`hasNegationMarker` の組み合わせで自然に
+ * `unreadable` へ落ちるが、英語のこの4つは `DENIAL_PHRASES`/
+ * `DENIAL_WORDS` のほうが先に走るので、同じ扱いにならなかった。
+ *
+ * ここに当たったら `allow` ではなく `unreadable` に倒す——SDK から見える
+ * 結果はどちらの分岐でも `deny` のままで、許しすぎる側へは1文字も動かない
+ * （`decideAnswer` の doc）。ただし同じ回答に、ここで一致した部分を
+ * 除いた**残り**に本物の否定（`DENIAL_PHRASES`/`DENIAL_WORDS`）が
+ * まだ在れば、そちらを優先して今までどおり `deny` にする（例:
+ * `no problem, but stop` / `don't hesitate to cancel`。
+ * `hasNegatedApprovalDenial` を見よ）。
+ *
+ * 一覧は issue #1877 が名指した4つに限る（狭いリストのぶん `unreadable`
+ * 側へ寄る。一覧に無い否定込みの承認は、今までどおり `DENIAL_WORDS` が
+ * `deny` にする）。大文字小文字は問わない。
+ */
+const NEGATED_APPROVAL_PHRASES = ['no problem', 'no objection', "don't hesitate", "don't mind"];
+
+/** 正規表現の特殊文字をエスケープする（`NEGATED_APPROVAL_PHRASES` の素の文字列を安全に埋め込むため）。 */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasNegatedApprovalPhrase(message: string): boolean {
+  const lower = message.toLowerCase();
+  return NEGATED_APPROVAL_PHRASES.some((phrase) => lower.includes(phrase));
+}
+
+/**
+ * `NEGATED_APPROVAL_PHRASES` に当たった回答から、一致した句を取り除いた
+ * 残りを返す（大文字小文字を問わず、複数回の出現もすべて取り除く）。
+ */
+function stripNegatedApprovalPhrases(message: string): string {
+  return NEGATED_APPROVAL_PHRASES.reduce(
+    (remainder, phrase) => remainder.replace(new RegExp(escapeRegExp(phrase), 'gi'), ' '),
+    message,
+  );
+}
+
+/**
+ * `NEGATED_APPROVAL_PHRASES` に当たった回答が、それでも `deny` であるべきか
+ * ——一致した句を取り除いた**残り**に、本物の否定（`DENIAL_PHRASES`/
+ * `DENIAL_WORDS`）がまだ見つかるかで判定する。見つからなければ
+ * `unreadable`（呼び出し元）に任せる。
+ */
+function hasNegatedApprovalDenial(message: string): boolean {
+  const remainder = stripNegatedApprovalPhrases(message);
+  return DENIAL_PHRASES.some((phrase) => remainder.includes(phrase)) || DENIAL_WORDS.test(remainder);
+}
+
+/**
  * `decision` を付け忘れた回答の読み取り。3値である——`allow` / `deny` /
  * `unreadable`。
  *
@@ -6370,6 +6428,12 @@ function hasApprovalMarker(message: string): boolean {
  * ここで既定そのものを閉じる側へ倒す判断をした——ただし「許可の確認では
  * 常に `decision` 必須」までは広げていない:
  *
+ * 0. **否定の語を含む、はっきりした承認の言い方（issue #1877、新設）は
+ *    `NEGATED_APPROVAL_PHRASES` を見る。** 残りに本物の否定が無ければ
+ *    `unreadable`。在れば 1. と同じ `deny` に合流する
+ *    （`hasNegatedApprovalDenial`）。**この判定は 1. より先に走る**
+ *    ——そうしないと `no problem` の `no` が 1. で先に `deny` を確定させ、
+ *    ここへ来る前に終わってしまう。
  * 1. 否定が読み取れた回（`DENIAL_PHRASES` / `DENIAL_WORDS`）は、今までどおり
  *    `deny`。**否定は承認より先に見る**——`won't approve` は `approve` を
  *    含むが `won't` がここで先に `deny` を確定させる。
@@ -6390,6 +6454,9 @@ function hasApprovalMarker(message: string): boolean {
  * ——この事実は反転の前後で変わっていない。
  */
 export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' {
+  if (hasNegatedApprovalPhrase(message)) {
+    return hasNegatedApprovalDenial(message) ? 'deny' : 'unreadable';
+  }
   if (DENIAL_PHRASES.some((phrase) => message.includes(phrase))) return 'deny';
   if (DENIAL_WORDS.test(message)) return 'deny';
   if (hasApprovalMarker(message) && !hasNegationMarker(message)) return 'allow';
