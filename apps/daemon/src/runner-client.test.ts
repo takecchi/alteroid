@@ -307,8 +307,18 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
    * ——境界越しに確定値が正しく運ばれることの証明にはならない。ここでは
    * **decision を渡さず**、SDK へ実際に返った behavior と journal の両方を
    * 見る。
+   *
+   * **反転（issue #1827/#1837、オーナーの判断。2026-09-28）:** このテストは
+   * 元は `よい、そのまま進めて`（承認の語を含まない、承認とも拒否とも
+   * 機械的に読めない言い方）が `[allow]` として境界越しに journal へ戻る
+   * ことを主張していた——「読み取れなければ allow」という当時の既定を
+   * そのまま固定するアサーションだった。オーナーが既定を「読み取れなければ
+   * 拒否して答え直しを求める」へ反転したので、ここも反転する。**この歯の
+   * 本題（decision を省略した回答の確定値が、境界（HTTP）越しに journal へ
+   * 正しく運ばれること）は変えていない**——`[allow]` の代わりに
+   * `[unreadable]` が境界越しに正しく運ばれることを見る形にしただけである。
    */
-  it('decision を明示しない回答でも、確定した allow/deny が境界越しに journal へ残る（#322）', async () => {
+  it('decision を明示しない回答は、承認とも拒否とも読めなければ unreadable として境界越しに journal へ残る（#322。issue #1827/#1837 で反転）', async () => {
     const r = await open();
     const { managerId } = await r.pool.start({ request: 'デプロイして' });
     await expect.poll(() => r.sessions.length, { timeout: 2000 }).toBe(1);
@@ -324,13 +334,13 @@ describe('デーモン ↔ manager-runner（HTTP 境界）', () => {
     // 戻ることである。
     const result = await r.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-2' });
     expect(result.outcome).toBe('answered');
-    expect(await asked).toEqual({ behavior: 'allow' });
+    expect(await asked).toMatchObject({ behavior: 'deny' });
 
     const escalations = (await r.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
     expect(escalations.map((entry) => entry.answer)).toEqual([
-      '[allow] よい、そのまま進めて',
+      '[unreadable] よい、そのまま進めて',
       undefined,
     ]);
   });

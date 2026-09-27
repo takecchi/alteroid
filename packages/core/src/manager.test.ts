@@ -1216,7 +1216,26 @@ describe('マネージャー', () => {
     await s.pool.stop();
   });
 
-  it('肯定の返事は通す（迷ったら止める、にはしない）', async () => {
+  /*
+   * **反転（issue #1827/#1837、オーナーの判断。2026-09-28）:** このテストは
+   * 元は「肯定の返事は通す（迷ったら止める、にはしない）」という名で、
+   * `inferDecision` が「否定が読み取れたときだけ拒否する」設計だった頃の
+   * 挙動——承認の語が無くても、否定が読めなければ allow に倒れる——を
+   * そのまま仕様として固定していた（コメントの逐語も残す。上の2行）。
+   *
+   * オーナーは「読み取れなければ allow」という既定を「読み取れなければ
+   * 拒否して答え直しを求める」へ反転した——承認とも拒否とも読めない
+   * `よい、そのまま進めて`（承認の語 `どうぞ`/`進めてよい`/`許可する` 等を
+   * 含まない）は、いまは `unreadable`（SDK へは deny）になる。**能力は
+   * 削っていない**——`はい、どうぞ` / `OK、進めてよい` / `許可する` /
+   * `go ahead` / `approved` のようにはっきり承認と読める言い方は、今までと
+   * 変わらず allow のままである（`runner-infer-decision.test.ts` の
+   * 「3値化」describe が見る）。直後のテストで、拒否された後に同じ道具を
+   * 撃ち直せば新しい確認が上がり、`decision: 'allow'` を付けて答え直せば
+   * 通ることも確かめる（PR 本文の3点セット: 変更した事実／なぜ必要になった
+   * か／なぜ保証が弱くなっていないか、を参照）。
+   */
+  it('承認とも拒否とも読めない言い方は、既定を閉じる側にして拒否する（旧: 肯定の返事は通す。issue #1827/#1837 で反転）', async () => {
     const s = setup();
     const { managerId } = await s.pool.start({ request: '調べて' });
     const session = s.sessions[0] as FakeSession;
@@ -1225,16 +1244,49 @@ describe('マネージャー', () => {
     // いるのは decision 無しでの読み取りが allow へ倒れることである）。
     const asked = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-read');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-read' });
+    const result = await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-read' });
 
-    expect(await asked).toEqual({ behavior: 'allow' });
+    expect(await asked).toMatchObject({ behavior: 'deny' });
 
-    // **#322: こちらも同じ理由。** decision を書き忘れた肯定の回答が
-    // journal では `[allow]` として残ることを見る（直上の deny 側と対）。
+    // **クローンへ返る detail に、答え直しを求める旨が載る。**
+    expect(result.outcome).toBe('answered');
+    expect(result.detail).toContain('読み取れず');
+    expect(result.detail).toContain("decision: 'allow'");
+
+    // journal にも `[unreadable]` として残り、本当の deny（`[deny]`）とも
+    // 「報告されなかった」（`[unknown]`）とも区別できる。
     const escalations = (await s.stores.journal.list({ types: ['escalation'] })) as {
       answer?: string;
     }[];
-    expect(escalations[0]?.answer).toBe('[allow] よい、そのまま進めて');
+    expect(escalations[0]?.answer).toBe('[unreadable] よい、そのまま進めて');
+
+    await s.pool.stop();
+  });
+
+  it('unreadable で拒否された後、同じ道具を撃ち直すと新しい確認が上がり、decision: allow を付けて答え直せば通る（issue #1827/#1837）', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+
+    const firstAsk = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-retry-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await s.pool.send(managerId, 'よい、そのまま進めて', { requestId: 'req-retry-1' });
+    expect(await firstAsk).toMatchObject({ behavior: 'deny' });
+
+    // **SDK が同じ道具を撃ち直す**（クローン視点では「答え直せ」を受けて
+    // 同じ Read をもう一度呼ぶ）。dedup の鍵は requestId なので、新しい
+    // requestId の ask は独立した新しい確認として上がる——`#resolved` の
+    // キャッシュに阻まれない。
+    const secondAsk = session.ask('Read', { file_path: '/work/a.ts' }, undefined, 'req-retry-2');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await s.pool.list()).find((m) => m.managerId === managerId)?.waiting).toHaveLength(1);
+
+    const retried = await s.pool.send(managerId, 'よい、そのまま進めて', {
+      requestId: 'req-retry-2',
+      decision: 'allow',
+    });
+    expect(retried.outcome).toBe('answered');
+    expect(await secondAsk).toEqual({ behavior: 'allow' });
 
     await s.pool.stop();
   });
