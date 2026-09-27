@@ -861,12 +861,40 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      * **置く前に評価する。** 構文を間違えたスクリプトを `BASH_ENV` に載せると、
      * 以後すべてのコマンドが壊れた環境で走り、原因はどこにも出ない。壊れていれば
      * 置かずに理由を返す（前のものが残る）。
+     *
+     * **既定の 400 を使わない**（#1790 の「確かめていないこと」で名指しされていた
+     * 同じ形の穴、#1806）。`hook` を渡さないと `@hono/zod-validator` は
+     * `c.json(result, 400)`（`result = { success: false, error: <ZodError> }`）を
+     * 返す——ここは `GH_TOKEN` のような鍵を丸ごと含みうるシェルスクリプトを運ぶ
+     * 唯一の口なので、既定の形をそのまま使う理由が無い。いまの版で本文が値を
+     * 漏らすことは無い（`ZodError` の issue は `path` と `message` だけ）が、
+     * それは「たまたま漏れていない」であって「漏れない」と保証されているわけ
+     * ではない——`/credentials` と `/mcp-servers` に揃えて、送られてきた本文を
+     * 1文字も返さない形に固定しておく。
+     *
+     * **大きさの上限は付けていない。** `runnerSetProfileCommandSchema` は
+     * `script` 1本だけを持ち、`/credentials` の `CREDENTIAL_NAME_MAX_LENGTH` の
+     * ような「共有すべき既存の上限」が daemon 側（`apps/daemon/src/openapi.ts` の
+     * `profileUpdateRequestSchema`）にも core 側（`profile-service.ts` /
+     * `profile.ts`）にも見つからない——どちらも `script: z.string()` で、大きさの
+     * 上限を持たない。既存の上限を1箇所へ共有するのではなく新しい上限をここで
+     * 発明することになるため、上限は付けない（north_star の禁止2「追加制限禁止」
+     * に当たりうる。#1806 に詳細）。
      */
     .get('/profile', (c) => c.json({ ok: true, profile: host.profile() }))
-    .post('/profile', zValidator('json', runnerSetProfileCommandSchema), async (c) => {
-      const result = await host.setProfile(c.req.valid('json').script);
-      return c.json(result);
-    })
+    .post(
+      '/profile',
+      zValidator('json', runnerSetProfileCommandSchema, (result, c) => {
+        if (!result.success) {
+          return c.json({ ok: false, error: 'プロファイルの入力の形が不正（置いていない）' }, 400);
+        }
+        return undefined;
+      }),
+      async (c) => {
+        const result = await host.setProfile(c.req.valid('json').script);
+        return c.json(result);
+      },
+    )
 
     /**
      * 人間の MCP 連携の登録の差し替え（#325 段3）。
