@@ -40,7 +40,34 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
-const MUTATE_CLI = path.join(REPO_ROOT, '.claude/skills/mutation-testing/mutate.mjs');
+
+/**
+ * #1705 のやり直し（PR #1712 の続き）。理由の全文は
+ * `scripts/mutate-root-override.test.ts` の同名関数の doc を参照
+ * （この歯も同じ形の TOCTOU を持っていたため、同じ直し方を当てる）。
+ *
+ * 要約: 本物の REPO_ROOT は共有資源なので、そこへの「開始時と終わりの
+ * `existsSync` の差分」でも外部干渉の窓が残る。ハーネスの `.mjs` 3ファイル
+ * （同ディレクトリの `import` はこの3つだけ）をこのテスト専用の使い捨て
+ * ツリーへ丸ごと写し、そのコピー側の CLI を `--root <path>` 付きで起こせば、
+ * コピー自身の既定 ROOT（DEFAULT_ROOT）はこのテストの呼び出し以外の
+ * 何者にも触られない。
+ */
+function makeIsolatedHarnessCopy(prefix: string) {
+  const harnessRoot = makeTempDirSync(prefix);
+  const srcDir = path.join(REPO_ROOT, '.claude/skills/mutation-testing');
+  const destDir = path.join(harnessRoot, '.claude/skills/mutation-testing');
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const file of ['mutate.mjs', 'mutate-core.mjs', 'mutate-selftest.mjs']) {
+    fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
+  }
+  return {
+    harnessRoot,
+    cli: path.join(destDir, 'mutate.mjs'),
+    /** このコピー自身の既定 ROOT（DEFAULT_ROOT）の下に来る印のパス。 */
+    markerPath: path.join(harnessRoot, 'MUTATION-IN-PROGRESS.json'),
+  };
+}
 
 // ── 純粋な層: 文面を組む関数（副作用なし） ─────────────────────────
 
@@ -88,14 +115,17 @@ describe('mutate-selftest: selftestMarkerPresentMessage は復元経路を名指
 
 describe('mutate-selftest: 印が残った状態で selftest を起こすと、その案内が実際に出る', () => {
   it('印を置いた ROOT では backup-corruption が復元経路を出して止まる', () => {
-    // #1705: 「実 ROOT に印が絶対に無い」ではなく「このテストの --root tmp
-    // 呼び出しが実 ROOT の印の状態を変えていない」を見る。理由と実測は
-    // `scripts/mutate-root-override.test.ts` 歯1の同じ注記を参照（この歯も
-    // 同じ形の `expect(...).toBe(false)` を実 ROOT に対して持っていたため、
-    // #1705 で同じ壊れ方をした）。
-    const repoRootMarkerBeforeTest = fs.existsSync(
-      path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'),
-    );
+    // 元の注記（#1705 最初の直し・PR #1712）: 「実 ROOT に印が絶対に無い」
+    // ではなく「このテストの --root tmp 呼び出しが実 ROOT の印の状態を
+    // 変えていない」を見る形にした（`scripts/mutate-root-override.test.ts`
+    // 歯1の同じ注記を参照。この歯も同じ形の `expect(...).toBe(false)` を
+    // 実 ROOT に対して持っていたため、#1705 で同じ壊れ方をした）。
+    //
+    // **#1705 のやり直し（この続き）**: その「開始時と終わりの差分」でも
+    // TOCTOU の窓は残っていた。実 ROOT を見るのをやめ、このテスト専用の
+    // 使い捨てツリー（`makeIsolatedHarnessCopy`）へハーネスを丸ごと写し、
+    // その CLI を起こす。
+    const harness = makeIsolatedHarnessCopy('mutate-selftest-marker-guidance-harness-');
     const tmp = makeTempDirSync('mutate-selftest-marker-guidance-');
     // 中身は読まれない —— `requireNoMarker` は存在だけを見て、シナリオの
     // いちばん最初（`ensureFixtureClean` より前）で止まる。
@@ -103,8 +133,8 @@ describe('mutate-selftest: 印が残った状態で selftest を起こすと、�
 
     const result = spawnSync(
       'node',
-      [MUTATE_CLI, 'selftest', '--scenario', 'backup-corruption', '--root', tmp],
-      { cwd: REPO_ROOT, encoding: 'utf8', env: mutateCliChildEnv() },
+      [harness.cli, 'selftest', '--scenario', 'backup-corruption', '--root', tmp],
+      { cwd: harness.harnessRoot, encoding: 'utf8', env: mutateCliChildEnv() },
     );
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
 
@@ -113,10 +143,39 @@ describe('mutate-selftest: 印が残った状態で selftest を起こすと、�
     expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.status);
     expect(output).toContain(SELFTEST_RECOVERY_COMMANDS.restore);
 
-    // 実リポジトリ側へ漏れていないこと（対象の取り違えが起きていないこと）。
-    // 「絶対に無い」ではなく「テスト開始時から変わっていない」を見る（上の注記）。
-    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(
-      repoRootMarkerBeforeTest,
+    // このハーネスのコピー自身の既定 ROOT には何も漏れていないこと
+    // （対象の取り違えが起きていないこと）。harness.harnessRoot はこの
+    // テストの呼び出し以外に触られない専用ツリーである。
+    expect(fs.existsSync(harness.markerPath)).toBe(false);
+  });
+
+  it('歯（#1705 追加、消される向き）: このコピーの既定 ROOT にあらかじめ印の形のファイルが在っても、selftest の --root 実行はそれへ1バイトも触れない', () => {
+    // **前の形（開始時に印が無い状態から始める）は「消される向き」を
+    // 測れていなかった。** ここでは既定 ROOT に印の形のファイルをあらかじめ
+    // 置き、selftest の実行前後でそれが1バイトも変わらないことを見る。
+    //
+    // **拒否されないことの確認（コードを読んで判断）**: この選定シナリオ
+    // （backup-corruption）が見る印は `--root` の対象（tmp）側であって
+    // （現に直前のテストで tmp 自身へ印を置いて「印が既にある」を発生させて
+    // いる）、ハーネスの既定 ROOT（`DEFAULT_ROOT`）を直接読み書きする経路は
+    // `mutate-core.mjs`/`mutate-selftest.mjs`/`mutate.mjs` のどこにも無い
+    // （`--root` の解釈は `main()` の最初で終わり、以降は可変 export
+    // `ROOT`/`MARKER_PATH`/`BACKUP_DIR` だけを経由する）。⟹ ここに印を
+    // 置いても selftest は起動を拒否しない。
+    const harness = makeIsolatedHarnessCopy('mutate-selftest-marker-guidance-harness-erase-');
+    const preplacedMarkerContent = '{"probe":"mutate-selftest-marker-guidance-preexisting-marker"}\n';
+    fs.writeFileSync(harness.markerPath, preplacedMarkerContent);
+
+    const tmp = makeTempDirSync('mutate-selftest-marker-guidance-erase-');
+    fs.writeFileSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'), '{}\n');
+
+    const result = spawnSync(
+      'node',
+      [harness.cli, 'selftest', '--scenario', 'backup-corruption', '--root', tmp],
+      { cwd: harness.harnessRoot, encoding: 'utf8', env: mutateCliChildEnv() },
     );
+
+    expect(result.status).not.toBe(0);
+    expect(fs.readFileSync(harness.markerPath, 'utf8')).toBe(preplacedMarkerContent);
   });
 });

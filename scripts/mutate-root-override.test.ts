@@ -76,6 +76,63 @@ function makeTmpGitRepo(): string {
   return dir;
 }
 
+/**
+ * #1705 のやり直し（PR #1712 の続き）。
+ *
+ * **PR #1712 は「開始時と終わりの `existsSync` の差分で見る」形に直したが、
+ * 2回の `existsSync` の間の窓は残っていた。** REPO_ROOT（このチェックアウト）
+ * は共有資源で、外部（同じ clone で `mutate.mjs apply`/`restore` を打つ人や
+ * 別のプロセス）がその窓の中で印を置いたり消したりすれば、このテストは
+ * 自分が何も壊していないのに落ちる——TOCTOU そのものは直っていなかった。
+ *
+ * **直し方**: 本物の REPO_ROOT を見るのをやめる。ハーネスの `.mjs` 3ファイル
+ * （同ディレクトリの `import` はこの3つだけ——
+ * `grep -Fn -- '^import' .claude/skills/mutation-testing/*.mjs` で確認済み。
+ * `mutate-selftest.mjs` 内の `'./mutation-selftest-render.js'` は実体のある
+ * import ではなく、selftest が生成するフィクスチャのソース文字列の中の
+ * 相対パスである——`grep -Fn -- 'mutation-selftest-render' .claude/skills/mutation-testing/mutate-selftest.mjs`
+ * で該当箇所が `body:` テンプレート文字列の中であることを確認できる）を、
+ * このテスト専用の使い捨てツリーへ丸ごと写し、**そのコピー側の CLI** を
+ * `--root <tmp>` 付きで起こす。
+ *
+ * このコピーの既定 ROOT（`mutate-core.mjs` の `DEFAULT_ROOT` — スクリプト
+ * 自身の位置から3階層上）は、コピー先のディレクトリそのものになる。そして
+ * `--root` を渡す限り、`applyRootArgAndAnnounce`（`mutate.mjs`）が `main()` の
+ * 最初で `ROOT`/`MARKER_PATH`/`BACKUP_DIR`（module scope の可変 export）を
+ * 上書きし、以降の全処理（`markerExists`/`writeMarkerFile`/`clearMarker` 等）は
+ * この可変な `ROOT` だけを経由する——`DEFAULT_ROOT` を直接参照する経路は無い
+ * （`grep -Fn -- 'DEFAULT_ROOT' .claude/skills/mutation-testing/mutate-core.mjs`
+ * が返すのは定義行と `setRootOverride` 内の一時比較だけ）。`process.cwd()` にも
+ * 依存しない（`grep -Fn -- 'process.cwd()' .claude/skills/mutation-testing/*.mjs`
+ * はゼロ件）。⟹ コピー先自身の既定 ROOT は、このテストの呼び出し以外の
+ * 何者にも触られない専用ツリーであり、そこに対する「印が増えていない・
+ * 減っていない」という主張は外部干渉の入り込む窓を持たない。
+ */
+function makeIsolatedHarnessCopy(prefix: string) {
+  const harnessRoot = makeTempDirSync(prefix);
+  const srcDir = path.join(REPO_ROOT, '.claude/skills/mutation-testing');
+  const destDir = path.join(harnessRoot, '.claude/skills/mutation-testing');
+  fs.mkdirSync(destDir, { recursive: true });
+  for (const file of ['mutate.mjs', 'mutate-core.mjs', 'mutate-selftest.mjs']) {
+    fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
+  }
+  return {
+    harnessRoot,
+    cli: path.join(destDir, 'mutate.mjs'),
+    /** このコピー自身の既定 ROOT（DEFAULT_ROOT）の下に来る印のパス。 */
+    markerPath: path.join(harnessRoot, 'MUTATION-IN-PROGRESS.json'),
+  };
+}
+
+/** ハーネスのコピー（`makeIsolatedHarnessCopy` の戻り値）を実プロセスとして起こす。 */
+function runIsolatedCli(harness: { cli: string; harnessRoot: string }, args: string[]) {
+  return spawnSync('node', [harness.cli, ...args], {
+    cwd: harness.harnessRoot,
+    encoding: 'utf8',
+    env: mutateCliChildEnv(),
+  });
+}
+
 // ── 純粋な層: readRootArg（argv 解析。副作用なし） ──────────────────
 
 describe('mutate-core: readRootArg（--root の argv 解析）', () => {
@@ -198,23 +255,29 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
   });
 
   it('歯1: --root <path> を渡すと apply/restore が MARKER_PATH / BACKUP_DIR も含めてそのツリーを使う', () => {
-    // #1705: 「実 ROOT に印が絶対に無い」ではなく「このテストの --root tmp
-    // 呼び出しが実 ROOT の印の状態を変えていない」を見る。実 ROOT で
-    // （--root を付けずに）`mutate.mjs apply` を動かすのは、このハーネスの
-    // 主要な使い方そのもの（SKILL.md 本文の大半がその手順を説明している）
-    // なので、並行して誰か（人・別のエージェント）が実際にそれをしていれば
-    // 印は最初から在る。それを「無い」と決め打つと、このテストが触ってすら
-    // いない外部の状態で誤って赤くなる——#1705 で実測済み: 実 ROOT へ
-    // `mutate.mjs apply`（--root なし）で印を置いた状態でこのファイルだけを
-    // 走らせると、直後の `toBe(false)` の行だけが
-    // `AssertionError: expected true to be false` で落ちた（他の全アサーション
-    // は通っていた）。この歯が測りたいのは「対象の取り違え」（tmp のはずが
-    // 実 ROOT に漏れる)であって「実 ROOT が絶対的に空か」ではないので、
-    // 開始時点の状態を基準にした差分で見る——漏れがあれば基準からの差分と
-    // して確実に検出され、既存の外部状態には影響されない。
-    const repoRootMarkerBeforeTest = fs.existsSync(
-      path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'),
-    );
+    // 元の注記（#1705 最初の直し・PR #1712）: 「実 ROOT に印が絶対に無い」
+    // ではなく「このテストの --root tmp 呼び出しが実 ROOT の印の状態を
+    // 変えていない」を見る形にした。実 ROOT で（--root を付けずに）
+    // `mutate.mjs apply` を動かすのは、このハーネスの主要な使い方そのもの
+    // （SKILL.md 本文の大半がその手順を説明している）なので、並行して
+    // 誰か（人・別のエージェント）が実際にそれをしていれば印は最初から在る。
+    // それを「無い」と決め打つと、このテストが触ってすらいない外部の状態で
+    // 誤って赤くなる——#1705 で実測済み: 実 ROOT へ `mutate.mjs apply`
+    // （--root なし）で印を置いた状態でこのファイルだけを走らせると、直後の
+    // `toBe(false)` の行だけが `AssertionError: expected true to be false`
+    // で落ちた（他の全アサーションは通っていた）。
+    //
+    // **#1705 のやり直し（この続き）**: 上の「開始時と終わりの差分」でも
+    // TOCTOU の窓（2回の `existsSync` の間）は残っていた。実 ROOT は共有
+    // 資源なので、その窓の中で外部が印を置いたり消したりすれば、やはり
+    // このテストは自分が何も壊していないのに落ちうる。この歯が測りたいのは
+    // 「対象の取り違え」（tmp のはずが別の ROOT に漏れる）であって「実 ROOT が
+    // 絶対的に空か」でも「実 ROOT が開始時から変わっていないか」でもないので、
+    // 実 ROOT そのものを見るのをやめ、このテスト専用の使い捨てツリー
+    // （`makeIsolatedHarnessCopy` の戻り値）へハーネスを丸ごと写し、その
+    // コピー自身の既定 ROOT（他の誰にも触られない）が変わっていないかを見る
+    // （理由の全文は `makeIsolatedHarnessCopy` の doc）。
+    const harness = makeIsolatedHarnessCopy('mutate-root-override-harness-');
     const tmp = makeTmpGitRepo();
     const specPath = path.join(tmp, 'spec.json');
     fs.writeFileSync(
@@ -235,7 +298,7 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
       }),
     );
 
-    const applyResult = runCli(['apply', '--spec', specPath, '--root', tmp]);
+    const applyResult = runIsolatedCli(harness, ['apply', '--spec', specPath, '--root', tmp]);
     expect(applyResult.status).toBe(0);
 
     // ROOT: target.txt がこのツリーの中で実際に書き換わっている。
@@ -247,15 +310,63 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
       fs.existsSync(path.join(tmp, '.mutation-testing', 'backups', 'root-override-probe.bak')),
     ).toBe(true);
 
-    // 実リポジトリ側には何も漏れていないこと（対象の取り違えが起きていないこと）。
-    // 「絶対に無い」ではなく「テスト開始時から変わっていない」を見る（上の注記）。
-    expect(fs.existsSync(path.join(REPO_ROOT, 'MUTATION-IN-PROGRESS.json'))).toBe(
-      repoRootMarkerBeforeTest,
-    );
+    // このハーネスのコピー自身の既定 ROOT には何も漏れていないこと
+    // （対象の取り違えが起きていないこと）。harness.harnessRoot はこの
+    // テストの呼び出し以外に触られないので、外部干渉の窓を持たずに
+    // 「増えていない」を言い切れる。
+    expect(fs.existsSync(harness.markerPath)).toBe(false);
 
-    const restoreResult = runCli(['restore', '--root', tmp]);
+    const restoreResult = runIsolatedCli(harness, ['restore', '--root', tmp]);
     expect(restoreResult.status).toBe(0);
     expect(fs.readFileSync(path.join(tmp, 'target.txt'), 'utf8')).toBe('hello world\n');
     expect(fs.existsSync(path.join(tmp, 'MUTATION-IN-PROGRESS.json'))).toBe(false);
+
+    // restore の後も、このコピー自身の既定 ROOT はやはり触られていない。
+    expect(fs.existsSync(harness.markerPath)).toBe(false);
+  });
+
+  it('歯1b（#1705 追加、消される向き）: このコピーの既定 ROOT にあらかじめ印の形のファイルが在っても、--root <tmp> の apply/restore はそれへ1バイトも触れない', () => {
+    // **前の形（開始時に印が無い状態から始める）は「消される向き」を測れて
+    // いなかった** —— 何も無い場所から「無い」ままでは、誰かが印を消して
+    // しまう欠陥があっても観測にすら現れない。ここでは既定 ROOT に印の形の
+    // ファイルをあらかじめ置き、apply/restore の前後でそれが1バイトも
+    // 変わらないことを見る。
+    //
+    // **拒否されないことの確認（コードを読んで判断）**: `applyMutation` /
+    // `restoreMutation` が呼ぶ `markerExists()`（`mutate-core.mjs`）は
+    // `fs.existsSync(MARKER_PATH)` で、`MARKER_PATH` は `--root` の上書き後は
+    // 常に上書き先（tmp）を指す可変 export である（`setRootOverride` が
+    // `ROOT`/`MARKER_PATH`/`BACKUP_DIR` を同時に書き換える）。`--root` の
+    // 解釈は `main()` の最初（`applyRootArgAndAnnounce`）で終わっているので、
+    // 以降のどの処理も `DEFAULT_ROOT`（＝このハーネスのコピー自身の既定 ROOT）
+    // 側の印を読み書きしない。⟹ ここに印を置いても apply/restore は起動を
+    // 拒否しない（`assertNoBlockingMarker` も `baseline`/`run` からしか
+    // 呼ばれず、`apply`/`restore` の経路には無い——`grep -Fn -- 'assertNoBlockingMarker' .claude/skills/mutation-testing/mutate.mjs`）。
+    const harness = makeIsolatedHarnessCopy('mutate-root-override-harness-erase-');
+    const preplacedMarkerContent = '{"probe":"mutate-root-override-preexisting-marker"}\n';
+    fs.writeFileSync(harness.markerPath, preplacedMarkerContent);
+
+    const tmp = makeTmpGitRepo();
+    const specPath = path.join(tmp, 'spec.json');
+    fs.writeFileSync(
+      specPath,
+      JSON.stringify({
+        id: 'root-override-erase-probe',
+        file: 'target.txt',
+        from: 'hello',
+        to: 'HELLO',
+        expect: 1,
+        target: null,
+        mustFail: ['root-override-erase-probe はこの歯で judge を呼ばない（apply/restore のみを測る）'],
+      }),
+    );
+
+    const applyResult = runIsolatedCli(harness, ['apply', '--spec', specPath, '--root', tmp]);
+    expect(applyResult.status).toBe(0);
+    expect(fs.readFileSync(harness.markerPath, 'utf8')).toBe(preplacedMarkerContent);
+
+    const restoreResult = runIsolatedCli(harness, ['restore', '--root', tmp]);
+    expect(restoreResult.status).toBe(0);
+    expect(fs.readFileSync(harness.markerPath, 'utf8')).toBe(preplacedMarkerContent);
   });
 });
