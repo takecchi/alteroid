@@ -21,9 +21,14 @@ export interface DaemonRuntimeInfo {
  * いう3つ目の状態を持つ」）。ここは明示的に3値目を持つ。
  *
  * - `present` — 本人だと確認できた
- * - `absent` — 応答があった上で、本人ではない（または居ない）と確認できた
- * - `unknown` — 確かめられなかった（例外・タイムアウト・不正な応答）。
- *   **「居ない」ではない。** 居るかもしれないが、確認する手段が今回は無かった、という意味
+ * - `absent` — 居ないと確認できた。応答があった上での否定（401/403/404 等・
+ *   `operator` が `true` ではない）に加え、**接続拒否（`ECONNREFUSED`）も
+ *   含む**——OS が「そのポートに listen しているプロセスが無い」と積極的に
+ *   返してきた場合は、応答が無いのではなく「居ない」と確定できる
+ *   （`isConnectionRefused`。#1765 の回帰修正）
+ * - `unknown` — 確かめられなかった（タイムアウト・接続拒否以外の例外・
+ *   不正な応答）。**「居ない」ではない。** 居るかもしれないが、確認する
+ *   手段が今回は無かった、という意味
  */
 export type Presence = 'present' | 'absent' | 'unknown';
 
@@ -62,15 +67,50 @@ async function readRuntimeInfo(): Promise<DaemonRuntimeInfo | null> {
 }
 
 /**
+ * **接続拒否（誰も listen していないと確定できる）かどうか。**
+ *
+ * Node の `fetch`（undici）は接続に失敗すると `TypeError: fetch failed` を
+ * 投げ、実際の理由は `error.cause` に載る（実測: Node 22.23.3 / undici 内蔵版。
+ * `http://127.0.0.1:<閉じたポート>/` へ `fetch` した実物で確認した——
+ * `err.cause.code === 'ECONNREFUSED'`、`err.cause.syscall === 'connect'`）。
+ * **タイムアウト**（`AbortSignal.timeout` が発火したとき）は形が違う——
+ * `err.name === 'TimeoutError'` で `err.cause` は無い（同じく実測）。
+ *
+ * `ECONNREFUSED` は OS の TCP スタックが「そのポートに listen している
+ * プロセスが無い」と積極的に返してきた場合だけに立つ——応答が無い
+ * （タイムアウト）・経路が無い（`ECONNRESET`・`EHOSTUNREACH` 等）・
+ * 相手はいるが求めた形で応答しない（JSON 不正等）とは区別できる。
+ * **だからこれだけを `'absent'`（居ないと確定）に倒し、それ以外の失敗は
+ * 全部 `'unknown'` のままにする**（#1765 の回帰修正 — 元は全例外を
+ * `'unknown'` にしていたため、デーモンが異常終了して古い状態ファイルが
+ * 残った場合に `start()` が永久に spawn できなくなっていた）。
+ */
+function isConnectionRefused(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const cause: unknown = (error as { cause?: unknown }).cause;
+  if (!(cause instanceof Error)) return false;
+  return (cause as NodeJS.ErrnoException).code === 'ECONNREFUSED';
+}
+
+/**
  * 本人確認。ポートが空いていることではなく、**そこにいるのが自分の記録した
  * デーモンであること**を確かめる。PID は使わない — 異常終了で状態ファイルが
  * 残ったあと、OS が同じ PID を別プロセスに配ることがあるため。
  *
- * **例外・タイムアウトは `absent` ではなく `unknown` を返す。** 応答が遅い・
- * 一時的にネットワークが不調・JSON が壊れている、といった「確かめられ
- * なかった」場合を「居ない」に畳むと、本当は生きているデーモンに対して
- * 呼び出し側が「居ない」と誤解し、安全のはずの分岐を誤った前提の上で
+ * **タイムアウト・接続拒否以外の例外は `absent` ではなく `unknown` を返す。**
+ * 応答が遅い・一時的にネットワークが不調・JSON が壊れている、といった
+ * 「確かめられなかった」場合を「居ない」に畳むと、本当は生きているデーモンに
+ * 対して呼び出し側が「居ない」と誤解し、安全のはずの分岐を誤った前提の上で
  * 実行してしまう（#1765）。
+ *
+ * **ただし接続拒否（{@link isConnectionRefused}）だけは `absent` にする。**
+ * デーモンが異常終了して状態ファイルだけが残った場合、そのポートには誰も
+ * listen していない——これは「確かめられなかった」ではなく「居ないと確定
+ * できた」である。ここを `unknown` のままにすると、`start()` が安全側の
+ * つもりで spawn を拒み続け、状態ファイルを手で消すまで `alteroid` の
+ * どのコマンドもデーモンを起こせなくなる（#1765 の回帰。`chat` のたびに
+ * `ensureRunning()` を通るので、クラッシュのたびに CLI が使えなくなる形で
+ * 表に出る）。
  */
 async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
   try {
@@ -86,10 +126,11 @@ async function verify(info: DaemonRuntimeInfo): Promise<Presence> {
     if (!response.ok) return 'absent';
     const body = (await response.json()) as { operator?: unknown };
     return body.operator === true ? 'present' : 'absent';
-  } catch {
-    // fetch の例外（接続不可・DNS 失敗・不正な応答の JSON パース失敗）と
-    // `AbortSignal.timeout(1500)` によるタイムアウトは、どちらもここに来る。
-    // 応答が無かっただけで、本人が居ないと確認できたわけではない。
+  } catch (error) {
+    // 接続拒否（誰も listen していないと確定できる）だけは `absent`。
+    // タイムアウト・`ECONNRESET`・DNS 失敗・不正な応答の JSON パース失敗
+    // など、それ以外はすべて「確かめられなかった」として `unknown` に残す。
+    if (isConnectionRefused(error)) return 'absent';
     return 'unknown';
   }
 }

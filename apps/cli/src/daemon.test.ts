@@ -1,3 +1,5 @@
+import { createServer } from 'node:net';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `verify()`（本人確認）が `status()` → `start()` に3値（居る／居ない／確かめ
@@ -142,6 +144,44 @@ function enoent(): NodeJS.ErrnoException {
   return Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
 }
 
+/**
+ * `fetch`（undici）が接続拒否のとき実際に投げる形（実測: Node 22.23.3 —
+ * 閉じたポートへ本物の `fetch` を打って確認した。`TypeError: fetch failed`
+ * の `cause` に `code: 'ECONNREFUSED'` を持つ素の `Error` が載る）。モックで
+ * 高速に境界を確かめるための合成値——実物との突き合わせは下の
+ * 「本物の閉じたポート」テストが別に持つ。
+ */
+function connectionRefusedError(): Error {
+  return Object.assign(new TypeError('fetch failed'), {
+    cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), {
+      code: 'ECONNREFUSED',
+      errno: -111,
+      syscall: 'connect',
+    }),
+  });
+}
+
+/**
+ * OS に一時的にポートを割り当てさせ、直後に close する——**割り当てられた
+ * 瞬間から誰も listen していないことが確定している**ポート番号を得る
+ * （小さな競合の窓はあるが、テストでは十分安定する標準的な手法）。
+ */
+async function findClosedPort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : undefined;
+      server.close((closeErr) => {
+        if (closeErr) reject(closeErr);
+        else if (port === undefined) reject(new Error('OS がポートを割り当てなかった'));
+        else resolve(port);
+      });
+    });
+  });
+}
+
 beforeEach(() => {
   vi.mocked(readFile).mockReset();
   vi.mocked(spawn)
@@ -222,6 +262,53 @@ describe('verify（本人確認）と status() — 3値目「確かめられな�
 
     expect((await status()).presence).toBe('unknown');
   });
+
+  // ⭐ #1765 の回帰修正 — デーモンが異常終了して状態ファイルだけが残った
+  // ケース。そのポートには誰も listen していないので「居ないと確定できる」
+  // ——これを unknown のままにすると、下の describe('start()') が固定する
+  // とおり `start()` が永久に spawn を拒むようになっていた。
+  it('⭐ 接続拒否（ECONNREFUSED）は unknown ではなく absent（#1765 の回帰修正）', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(connectionRefusedError()));
+
+    expect((await status()).presence).toBe('absent');
+  });
+
+  // 分類の境界 — 接続拒否と紛らわしい形でも `cause.code` が
+  // `ECONNREFUSED` でなければ unknown のまま（例: 相手はいたが接続を
+  // 切られた `ECONNRESET`。「居ない」と「拒まれた」は別の情報である）。
+  it('分類の境界: cause.code が ECONNREFUSED 以外（例: ECONNRESET）なら unknown', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    const notRefused = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(notRefused));
+
+    expect((await status()).presence).toBe('unknown');
+  });
+
+  // 分類の境界 — `cause` が `Error` ではない（`code` を持ちようがない）
+  // 形でも unknown。`instanceof Error` の防御が無いと、`cause` が文字列や
+  // オブジェクトのときに `(cause as any).code` が例外なく `undefined` と
+  // 評価されて判定は結局 false になるが、**その前提を歯として固定する**。
+  it('分類の境界: cause が Error ではない値なら unknown', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    const weird = Object.assign(new TypeError('fetch failed'), { cause: 'not an error object' });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(weird));
+
+    expect((await status()).presence).toBe('unknown');
+  });
+
+  // ⭐⭐ モックだけに頼らない——実際に閉じている TCP ポートへ本物の fetch を
+  // 打ち、Node/undici が実際にどう例外を投げるかで固定する
+  // （`connectionRefusedError()` が合成した形が現物と一致しているかの検算）。
+  it('⭐⭐ 本物の閉じたポートへ fetch すると absent になる（モックではなく実物の Node/undici の挙動で固定）', async () => {
+    const closedPort = await findClosedPort();
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ ...INFO, port: closedPort }));
+    // fetch は stub しない — 実物の fetch が実物の閉じたポートへ繋ぎに行く
+
+    expect((await status()).presence).toBe('absent');
+  });
 });
 
 describe('start() — 確かめられなかったときは2本目のデーモンを起こさない（#1765 段2）', () => {
@@ -257,6 +344,31 @@ describe('start() — 確かめられなかったときは2本目のデーモン
     );
 
     await expect(start()).resolves.toEqual(INFO);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  // ⭐⭐ #1765 の回帰そのもの — デーモンが異常終了して状態ファイルだけが
+  // 残ったケース。この修正の前は verify() の全例外（接続拒否を含む）が
+  // unknown に畳まれ、start() が「確かめられなかった」として spawn を
+  // 拒み続けていた——状態ファイルを手で消すまで二度と alteroidd を
+  // 起こせなくなる回帰だった（`chat` のたびに `ensureRunning()` を通るので、
+  // クラッシュのたびに CLI が使えなくなる形で表に出る）。
+  it('⭐⭐ 接続拒否（モック）なら absent——start() は2本目として spawn に進む（#1765 の回帰修正）', async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(connectionRefusedError()));
+
+    // 起動後のポーリングでも同じ理由で拒否され続ける（新しいデーモンは
+    // 実際には上がらない）ので、ここで見るのは「spawn まで進んだか」で
+    // あって「起動を確認できたか」ではない。
+    await expect(start()).rejects.toThrow(/デーモンの起動を確認できませんでした/);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('⭐⭐ 接続拒否（本物の閉じたポート）でも同じく spawn に進む（モックではなく実物の挙動で固定）', async () => {
+    const closedPort = await findClosedPort();
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ ...INFO, port: closedPort }));
+
+    await expect(start()).rejects.toThrow(/デーモンの起動を確認できませんでした/);
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
