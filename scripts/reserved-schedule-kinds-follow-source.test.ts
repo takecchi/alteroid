@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +10,12 @@ import {
   RESERVED_SCHEDULE_KIND_ENV_KEYS,
   RESERVED_SCHEDULE_KINDS,
 } from '../packages/core/src/schedule.js';
+import { makeTempDir } from '../vitest.tmpdir.js';
+
+import {
+  listGitScannableFiles,
+  // @ts-expect-error -- 素の .mjs
+} from './git-scannable-files-core.mjs';
 
 /**
  * **`.claude/**` が予約スケジュール kind を手で数え直さないことを測る歯。**
@@ -32,7 +39,8 @@ import {
  *
  * ## 測っているもの
  *
- * 1. `git ls-files` が挙げる `.claude/**` の追跡済みファイルのうち、
+ * 1. `listClaudeScannableFiles`（追跡済み + 未追跡だが ignore されていない
+ *    ファイル、#1817）が挙げる `.claude/**` のうち、
  *    `RESERVED_SCHEDULE_KINDS` という字面を含むか、予約 kind のどれかを
  *    **語として**含むものを対象に取る（`isInScope`）。
  * 2. 対象の各ファイルが、`RESERVED_SCHEDULE_KINDS` の**全要素**を語として
@@ -61,17 +69,51 @@ import {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-/** `git ls-files -z` で `.claude/**` 配下の追跡済みファイルを列挙する。 */
-function listClaudeTrackedFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z', '--', '.claude'], {
-    cwd: ROOT,
-    maxBuffer: 1024 * 1024 * 64,
-  });
-  return out
-    .toString('utf8')
-    .split('\0')
-    .filter((p) => p.length > 0);
+/**
+ * `.claude/**` 配下の、追跡済み + 未追跡だが ignore されていないファイルを
+ * 列挙する（Issue #1817。以前は `git ls-files -z`——追跡済みだけ——で、
+ * まだ `git add` していない新規の `.claude/**` ファイルを見落としていた）。
+ * `root` はテスト用（下の `describe('listClaudeScannableFiles は未追跡
+ * ファイルも対象に入れる（#1817）')` が一時 git リポジトリに対して呼ぶ）。
+ */
+export function listClaudeScannableFiles(root: string = ROOT): string[] {
+  return listGitScannableFiles({ cwd: root, pathspec: ['.claude'] }) as string[];
 }
+
+describe('listClaudeScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
+  async function makeRepoWithUntrackedClaudeFile(): Promise<string> {
+    const dir = await makeTempDir('reserved-schedule-kinds-1817-');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await mkdir(path.join(dir, '.claude', 'skills', 'example'), { recursive: true });
+    await writeFile(path.join(dir, '.claude', 'skills', 'example', 'SKILL.md'), 'tracked\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    // まだ `git add` していない新規の `.claude/**` ファイル。
+    await writeFile(path.join(dir, '.claude', 'skills', 'example', 'NEW.md'), 'new\n');
+    return dir;
+  }
+
+  it('🔴（直す前の形）: `git ls-files -z -- .claude` は新規ファイルを見落とす', async () => {
+    const dir = await makeRepoWithUntrackedClaudeFile();
+    const oldForm = execFileSync('git', ['ls-files', '-z', '--', '.claude'], {
+      cwd: dir,
+      encoding: 'utf8',
+    })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('.claude/skills/example/NEW.md');
+  });
+
+  it('🟢（直した後）: listClaudeScannableFiles は同じ新規ファイルを対象に入れる', async () => {
+    const dir = await makeRepoWithUntrackedClaudeFile();
+    const files = listClaudeScannableFiles(dir);
+    expect(files).toContain('.claude/skills/example/NEW.md');
+    expect(files).toContain('.claude/skills/example/SKILL.md');
+  });
+});
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -125,8 +167,8 @@ export interface ReservedScheduleKindInSkillsExemption {
 export const RESERVED_SCHEDULE_KIND_IN_SKILLS_EXEMPTIONS: readonly ReservedScheduleKindInSkillsExemption[] =
   [];
 
-const CLAUDE_TRACKED_FILES = listClaudeTrackedFiles();
-const TARGET_FILES = CLAUDE_TRACKED_FILES.filter((file) =>
+const CLAUDE_SCANNABLE_FILES = listClaudeScannableFiles();
+const TARGET_FILES = CLAUDE_SCANNABLE_FILES.filter((file) =>
   isInScope(readRepoFile(file), RESERVED_SCHEDULE_KINDS),
 );
 

@@ -4,26 +4,31 @@
  * （Issue #1175）。**なぜ要るか・何を免除しているかは
  * `check-stale-token-restart-advice-core.mjs` の doc に書いてある。**
  *
- * ここは「`git ls-files` で列挙して、読んで、渡して、終了コードを決める」だけ
+ * ここは「対象を列挙して、読んで、渡して、終了コードを決める」だけ
  * （`check-tracked-nul-bytes.mjs` と同じ分け方）。
  *
- * **対象を `git ls-files` に限る**のは、`node_modules` や生成物を歩かないため。
- * 拡張子は `.ts` / `.mjs` / `.js` に絞る——助言はソースの中の文字列として配られる
- * ものであり、`docs/` の散文（正典）はここでは扱わない（あちらは人が読む記録で、
- * クローンの道具の説明文ではない）。
+ * **対象を `git`（追跡済み + 未追跡だが ignore されていないファイル）に限る**
+ * のは、`node_modules` や生成物を歩かないため。拡張子は `.ts` / `.mjs` / `.js`
+ * に絞る——助言はソースの中の文字列として配られるものであり、`docs/` の散文
+ * （正典）はここでは扱わない（あちらは人が読む記録で、クローンの道具の説明文
+ * ではない）。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルに生成元の外の字面を書いても、手元の `pnpm verify` は緑のまま、
+ * push 後の CI で初めて赤くなる穴があった（Issue #1817。`listScannableSources`
+ * の歯は `scripts/check-stale-token-restart-advice.test.ts` に在る）。
  */
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { findStaleTokenAdviceHits } from './check-stale-token-restart-advice-core.mjs';
+import {
+  findStaleTokenAdviceHits,
+  listScannableSources,
+} from './check-stale-token-restart-advice-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
-
-/** 助言が文字列として載りうる拡張子。 */
-const TARGET_SUFFIXES = ['.ts', '.mjs', '.js'];
 
 function log(text) {
   process.stdout.write(text + '\n');
@@ -33,22 +38,10 @@ function logError(text) {
   process.stderr.write(text + '\n');
 }
 
-function listTrackedSources() {
-  const out = execFileSync('git', ['ls-files', '-z'], {
-    cwd: ROOT,
-    maxBuffer: 1024 * 1024 * 64,
-  });
-  return out
-    .toString('utf8')
-    .split('\0')
-    .filter((path) => path.length > 0)
-    .filter((path) => TARGET_SUFFIXES.some((suffix) => path.endsWith(suffix)));
-}
-
 function main() {
   let paths;
   try {
-    paths = listTrackedSources();
+    paths = listScannableSources(ROOT);
   } catch (error) {
     logError(`check-stale-token-restart-advice: \`git ls-files\` を実行できない: ${error}`);
     process.exitCode = 1;

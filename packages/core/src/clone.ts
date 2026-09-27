@@ -11675,6 +11675,13 @@ async function confirmationLiveness(
  * **純関数として保つため、ここでは `new Date()` を呼ばない** ——呼び出し元
  * （`#handle` の `'manager_message'` 分岐）から渡す。既定値は本番の呼び出しを
  * 短く保つためのものであって、テストは明示的に `now` を渡して固定すること。
+ *
+ * `event.foldedTurn` が立っている回（Issue #1848）は、見出しを「（報告）」
+ * ではなく「（直近のターンの中身）」にする——`tools.ts` の `isFoldedTurnReport`
+ * が `manager_list` / `manager_report` の見出しを切り替えるのと同じ語・同じ
+ * 軸（`manager.ts` の `case 'report'` が `event.failure` / `event.unreported`
+ * から立てる。`schema.ts` の `manager_message.foldedTurn` の doc）。**判定は
+ * この構造化された印だけで行い、本文の文言は見ない。**
  */
 function managerPrompt(
   event: Extract<InboxEvent, { type: 'manager_message' }>,
@@ -11686,8 +11693,9 @@ function managerPrompt(
 
   if (event.kind === 'report') {
     const closed = closedReportNotice(settlement);
+    const reportLabel = event.foldedTurn === true ? '直近のターンの中身' : '報告';
     return [
-      `${head}（報告）`,
+      `${head}（${reportLabel}）`,
       '',
       // **本文に束と同じ予算を掛ける（issue #955）。** 単発の報告も、新しい
       // セッションの最初のターンに載れば束と同じ形で文脈窓を越えうる——

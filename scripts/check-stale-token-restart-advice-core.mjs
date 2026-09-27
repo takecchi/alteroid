@@ -52,6 +52,8 @@
  *   あるのは、あれを誤って捕まえないためである
  */
 
+import { listGitScannableFiles } from './git-scannable-files-core.mjs';
+
 /** 助言の唯一の生成元。ここだけは字面を持ってよい。 */
 export const GENERATOR_PATH = 'packages/core/src/usage-limits.ts';
 
@@ -110,4 +112,25 @@ export function findStaleTokenAdviceHits(files) {
     }
   }
   return hits;
+}
+
+/** 助言が文字列として載りうる拡張子。 */
+export const TARGET_SUFFIXES = ['.ts', '.mjs', '.js'];
+
+/**
+ * 走査対象を列挙する: 追跡済み + 未追跡だが ignore されていないファイル
+ * （`scripts/git-scannable-files-core.mjs`、Issue #1817）のうち、
+ * {@link TARGET_SUFFIXES} のどれかで終わるもの。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルに生成元の外の字面を書いても、手元の `pnpm verify` は緑のまま、
+ * push 後の CI で初めて赤くなる穴があった（Issue #1817）。
+ *
+ * `root` はテスト用（既定は実リポジトリの根。呼び出し元の
+ * `check-stale-token-restart-advice.mjs` は明示して呼ぶ）。
+ */
+export function listScannableSources(root) {
+  return listGitScannableFiles({ cwd: root }).filter((path) =>
+    TARGET_SUFFIXES.some((suffix) => path.endsWith(suffix)),
+  );
 }

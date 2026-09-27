@@ -1,12 +1,17 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../vitest.tmpdir.js';
 
 // ⚠ **1行に畳んである。** `@ts-expect-error` は次の1行にしか効かないので、
 // 多行 import にすると `from` の行（実際に TS7016 が出る場所）へ届かない。
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { BANNED_PHRASES, CHECKER_CORE_PATH, GENERATOR_PATH, findRestartBeforeCheckAdviceHits, isExempt } from './check-restart-before-check-advice-core.mjs';
+import { BANNED_PHRASES, CHECKER_CORE_PATH, GENERATOR_PATH, findRestartBeforeCheckAdviceHits, isExempt, listScannableSources } from './check-restart-before-check-advice-core.mjs';
 
 type Hit = { path: string; id: string; text: string; why: string; line: number };
 type Phrase = { id: string; text: string; why: string };
@@ -151,5 +156,40 @@ describe('check-restart-before-check-advice', () => {
     ]) as Hit[];
 
     expect(hits).toEqual([]);
+  });
+});
+
+describe('check-restart-before-check-advice: listScannableSources（Issue #1817）', () => {
+  async function makeRepoWithUntrackedFiles(): Promise<string> {
+    const dir = await makeTempDir('check-restart-before-check-advice-1817-');
+    const git = (...gitArgs: string[]) =>
+      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await writeFile(join(dir, 'tracked.ts'), 'export const ok = 1;\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    // まだ `git add` していない新規ファイル（拡張子フィルタに掛かるものと
+    // 掛からないものの両方を置く）。
+    await writeFile(join(dir, 'new-untracked.ts'), '// new file, not staged yet\n');
+    await writeFile(join(dir, 'new-untracked.md'), '# not scanned\n');
+    return dir;
+  }
+
+  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
+    const dir = await makeRepoWithUntrackedFiles();
+    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('new-untracked.ts');
+  });
+
+  it('🟢（直した後）: listScannableSources は同じ新規ファイルを対象に入れる', async () => {
+    const dir = await makeRepoWithUntrackedFiles();
+    const files = listScannableSources(dir) as string[];
+    expect(files).toContain('new-untracked.ts');
+    expect(files).toContain('tracked.ts');
+    expect(files).not.toContain('new-untracked.md');
   });
 });

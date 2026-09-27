@@ -161,6 +161,35 @@ describe('evaluateAutoFoldUnpushedWork（#1394 段⑥ 安全弁）', () => {
       }),
     ).toBe('blocked');
   });
+
+  /**
+   * ⭐ Issue #1865 — `unreadableDirCount`（起点より下の子ディレクトリの
+   * readdir 失敗）だけでも blocked——worktrees が全部 clean でも救われない。
+   * `scratchRootsUnknown` / `truncatedAtCount` / `stoppedEarly` と同じ強さ。
+   */
+  it('⭐ unreadableDirCount（子ディレクトリの読み失敗）だけでも blocked——worktrees が全部 clean でも救われない', () => {
+    expect(
+      evaluateAutoFoldUnpushedWork({
+        kind: 'ok',
+        result: {
+          worktrees: [{ unpushedCommitCount: 0, uncommittedChangeCount: 0 }],
+          unreadableDirCount: 1,
+        },
+      }),
+    ).toBe('blocked');
+  });
+
+  it('⭐ unreadableDirCount は worktrees が0本（見つからなかった）のときも blocked', () => {
+    expect(
+      evaluateAutoFoldUnpushedWork({
+        kind: 'ok',
+        result: {
+          worktrees: [],
+          unreadableDirCount: 3,
+        },
+      }),
+    ).toBe('blocked');
+  });
 });
 
 describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピーを作らない）', () => {
@@ -194,6 +223,16 @@ describe('describeAutoFoldUnpushedWorkProbe（表示専用。判定のコピー�
     });
     expect(text).toContain('/tmp');
     expect(text).toContain('確かめられなかった（テスト用の理由）');
+  });
+
+  it('⭐ unreadableDirCount の理由を件数付きで言う（Issue #1865）', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], unreadableDirCount: 5, unreadableDirSample: '/tmp/x: EACCES' },
+    });
+    expect(text).toContain('5');
+    expect(text).toContain('子ディレクトリ');
+    expect(text).toContain('/tmp/x: EACCES');
   });
 
   it('汚れた作業ツリーの本数を言う', () => {
@@ -346,6 +385,15 @@ describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌�
     const b = classifyAutoFoldUnpushedWorkProbe({
       kind: 'ok',
       result: { worktrees: [], scratchRootsUnknown: '確かめられなかった' },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('⭐ unreadableDirCount の有無が違えば鍵も変わる（Issue #1865）', () => {
+    const a = classifyAutoFoldUnpushedWorkProbe({ kind: 'ok', result: { worktrees: [] } });
+    const b = classifyAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], unreadableDirCount: 2 },
     });
     expect(a).not.toBe(b);
   });

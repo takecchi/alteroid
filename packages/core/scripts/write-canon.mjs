@@ -71,6 +71,16 @@ function titleOf(markdown, fallback) {
  * 渡した値）、`'workspace'` はビルド時の git 作業ツリーから拾った値、`''` は
  * どちらも取れなかったことを意味する。値だけでは「本当にこのイメージの中身の
  * sha か、単にビルド環境に置いてあった値か」が読む側から区別できない。
+ *
+ * **`'workspace'` が指すのは `repoRoot` 自身の作業ツリーであって、その祖先の
+ * どこかにある無関係な repo ではない。** `git rev-parse` は既定で `.git` が
+ * 見つかるまで親ディレクトリを遡る——`repoRoot`（このスクリプト自身の位置から
+ * 3階層上に固定で決まる）に `.git` が無いと、遡った先で拾った**別の repo**の
+ * HEAD を「このビルドの workspace revision」と偽って返してしまう（#1843）。
+ * `GIT_CEILING_DIRECTORIES` で `repoRoot` の親を天井にし、`repoRoot` 自身に
+ * `.git` が無ければ即座に「取れなかった」へ倒す——遡って拾った値を workspace
+ * のふりで返さない、という上の「分からないことを隠さない」と同じ約束を
+ * 探索範囲にも適用する。
  */
 function revision() {
   const fromEnv = (process.env.ALTEROID_BUILD_REV ?? '').trim();
@@ -80,6 +90,7 @@ function revision() {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
+      env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(repoRoot) },
     }).trim();
     return { value, source: 'workspace' };
   } catch {

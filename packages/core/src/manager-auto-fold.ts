@@ -78,6 +78,17 @@ export interface AutoFoldUnpushedWorkProbe {
      * / `stoppedEarly` と同じ強さで畳んではいけない状態である。
      */
     readonly scratchRootsUnknown?: string;
+    /**
+     * 探索の起点より下（子ディレクトリ）で `readdir` に失敗した延べ回数の
+     * 写し（`UnpushedWorkResult.unreadableDirCount`。Issue #1865）。
+     * **載っているとき、`worktrees` はそこに在ったかもしれない未 push の
+     * 実装を1本も含んでいない可能性がある**——`truncatedAtCount` /
+     * `stoppedEarly` / `scratchRootsUnknown` と同じ強さで畳んではいけない
+     * 状態である。
+     */
+    readonly unreadableDirCount?: number;
+    /** 上の失敗のうち最初の1件（診断用サンプル）の写し。 */
+    readonly unreadableDirSample?: string;
   };
 }
 
@@ -90,7 +101,8 @@ export type AutoFoldUnpushedWorkVerdict = 'clear' | 'blocked';
  * 未コミットの変更も無いと確かめられたときだけ。** それ以外は全部
  * `'blocked'` に倒す——確かめられなかった（`unavailable`）・打ち切った
  * （`truncatedAtCount` / `stoppedEarly`）・スクラッチディレクトリの有無を
- * 確かめられなかった（`scratchRootsUnknown`）・1件でも未 push/未コミットが
+ * 確かめられなかった（`scratchRootsUnknown`）・起点より下の子ディレクトリの
+ * 読み失敗があった（`unreadableDirCount`）・1件でも未 push/未コミットが
  * 在る（数値そのもの）・数値自体が取れていない（`*Unknown`）のどれもここに
  * 含める。**「取れない」を「無かった」へ倒さない**（AGENTS.md「取れない軸に
  * 0の行を作る」の裏）——このファイルは判定できない状態を全部安全側
@@ -110,6 +122,7 @@ export function evaluateAutoFoldUnpushedWork(
   const { result } = probe;
   if (result.truncatedAtCount !== undefined || result.stoppedEarly === true) return 'blocked';
   if (result.scratchRootsUnknown !== undefined) return 'blocked';
+  if (result.unreadableDirCount !== undefined) return 'blocked';
   for (const worktree of result.worktrees) {
     if (worktree.unpushedCommitCount === undefined || worktree.unpushedCommitCount > 0) {
       return 'blocked';
@@ -168,6 +181,14 @@ export function describeAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkPro
   if (result.scratchRootsUnknown !== undefined) {
     return `他マネージャー/作業者の /tmp スクラッチディレクトリの有無を確かめられなかった（${result.scratchRootsUnknown}）`;
   }
+  if (result.unreadableDirCount !== undefined) {
+    const sample =
+      result.unreadableDirSample === undefined ? '' : `（例: ${result.unreadableDirSample}）`;
+    return (
+      `作業ツリーの探索中に子ディレクトリの読み取りに${String(result.unreadableDirCount)}回` +
+      `失敗していた（見つかった分がすべてとは限らない）${sample}`
+    );
+  }
   // **「判定できない」——どちらかの件数が `undefined`。**
   const undetermined = result.worktrees.filter(
     (worktree) =>
@@ -218,6 +239,7 @@ export function classifyAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkPro
     truncatedAtCount: result.truncatedAtCount ?? null,
     stoppedEarly: result.stoppedEarly === true,
     scratchRootsUnknown: result.scratchRootsUnknown ?? null,
+    unreadableDirCount: result.unreadableDirCount ?? null,
     worktrees: result.worktrees.map((worktree) => ({
       unpushedCommitCount: worktree.unpushedCommitCount ?? null,
       uncommittedChangeCount: worktree.uncommittedChangeCount ?? null,

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, cp } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, cp } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,8 +39,14 @@ const CANON_FILES = ['north_star.md', 'PRD.md', 'architecture.md'];
 async function runIsolated(options: {
   env?: NodeJS.ProcessEnv;
   git?: boolean;
+  /**
+   * 指定があれば、新しく `makeTempDir` で作らずこのパスを隔離ルートとして使う
+   * （#1843: 呼び出し元が用意した「外側に git 作業ツリーを持つ祖先」の下へ
+   * ネストしたルートを渡すためのテスト用の口。`mkdir` 済みであること）。
+   */
+  root?: string;
 }): Promise<{ revision: string; source: string; builtAt: string }> {
-  const root = await makeTempDir('write-canon-');
+  const root = options.root ?? (await makeTempDir('write-canon-'));
 
   const scriptDir = join(root, 'packages', 'core', 'scripts');
   const docsDir = join(root, 'docs');
@@ -122,6 +128,39 @@ describe('write-canon.mjs の版の出所判定', () => {
 
     // **本体はここ。** 「取れなかった」ときに空文字以外の何か（'unknown' 等）へ
     // 化けていないことを明示する。
+    expect(revision).toBe('');
+    expect(source).toBe('');
+  });
+
+  // #1843: `TMPDIR` を作業ツリーの中（例: `.scratch/tmp`）に向けると、直上のテストが
+  // 偽の赤になっていた——`makeTempDir` が作る隔離ルート自身には `.git` が無くても、
+  // `git rev-parse` は既定で親ディレクトリを遡るため、`TMPDIR` の祖先に在る**外側の
+  // repo**（この alteroid 自身の作業ツリー）の HEAD を拾ってしまっていた。
+  //
+  // **`TMPDIR` を直接いじらない。** 環境変数に依存すると、この歯自体が「たまたま
+  // 走らせた器の `TMPDIR` の位置」次第で赤にも緑にもなり、CI で毎回同じ土俵に
+  // 立てない。代わりに「隔離ルートの祖先に git 作業ツリーが在る」状況そのものを
+  // 直接組み立てる——`TMPDIR` がどこを指していても、この状況は必ず再現できる。
+  it('⭐ 隔離した作業ツリーの祖先ディレクトリが git 作業ツリーでも、隔離した作業ツリー自身に .git が無ければ空文字のまま（#1843: TMPDIR が作業ツリーの中にあると起きていた ascension を、TMPDIR に依らず固定する）', async () => {
+    // 「外側の repo」——TMPDIR が作業ツリーの中を指すときの alteroid 自身の
+    // 作業ツリーに相当する役。
+    const outer = await makeTempDir('write-canon-outer-');
+    const runOuterGit = (args: string[]): void => {
+      execFileSync('git', args, { cwd: outer, stdio: 'ignore' });
+    };
+    runOuterGit(['init', '-q']);
+    runOuterGit(['config', 'user.email', 'write-canon-outer-test@example.com']);
+    runOuterGit(['config', 'user.name', 'write-canon-outer-test']);
+    await writeFile(join(outer, 'seed.txt'), 'x\n', 'utf8');
+    runOuterGit(['add', '.']);
+    runOuterGit(['commit', '-q', '-m', 'outer seed']);
+
+    // 隔離ルートは、その外側の repo の**中に**ネストする（`git init` はしない）。
+    const nestedRoot = join(outer, 'nested', 'isolated-root');
+    await mkdir(nestedRoot, { recursive: true });
+
+    const { revision, source } = await runIsolated({ git: false, root: nestedRoot });
+
     expect(revision).toBe('');
     expect(source).toBe('');
   });

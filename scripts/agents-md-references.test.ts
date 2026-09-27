@@ -1,9 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, statSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { makeTempDir } from '../vitest.tmpdir.js';
+
+import {
+  listGitScannableFiles,
+  // @ts-expect-error -- 素の .mjs
+} from './git-scannable-files-core.mjs';
 
 /**
  * **`AGENTS.md` が他のファイルを指すときの形を固定する歯**（#369）。
@@ -848,17 +856,50 @@ export function excludeCitationScopeSelf(files: readonly string[]): string[] {
   return files.filter((f) => f !== CITATION_SCOPE_SELF_FILE);
 }
 
-/** `git ls-files -z` で追跡済みファイルの相対パスを列挙する（`check-tracked-nul-bytes.mjs` と同じ形）。 */
-function listTrackedFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z'], {
-    cwd: ROOT,
-    maxBuffer: 1024 * 1024 * 64,
-  });
-  return out
-    .toString('utf8')
-    .split('\0')
-    .filter((p) => p.length > 0);
+/**
+ * 追跡済み + 未追跡だが `.gitignore` 対象ではないファイルの相対パスを列挙する
+ * （`scripts/git-scannable-files-core.mjs`、Issue #1817）。
+ *
+ * **以前は `git ls-files -z`（追跡済みだけ）だった。** まだ `git add` していない
+ * 新規ファイルは対象に入らず、手元の `pnpm verify` は緑のまま、`git add` して
+ * push した後の CI で初めて赤くなる穴があった（#1808 の実測、Issue #1817）。
+ * `root` を引数で受けるのはテスト用（すぐ下の `describe('listScannableFiles
+ * は未追跡ファイルも対象に入れる（#1817）')` が一時 git リポジトリに対して呼ぶ）。
+ */
+export function listScannableFiles(root: string = ROOT): string[] {
+  return listGitScannableFiles({ cwd: root }) as string[];
 }
+
+describe('listScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
+  async function makeRepoWithUntrackedFile(): Promise<string> {
+    const dir = await makeTempDir('agents-md-references-1817-');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.invalid');
+    git('config', 'user.name', 'test');
+    await writeFile(path.join(dir, 'tracked.ts'), 'export const ok = 1;\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    // PR #1808 と同じ形: まだ `git add` していない新規ファイル。
+    await writeFile(path.join(dir, 'new-untracked.ts'), '// see clone.ts:505 for the fence rule\n');
+    return dir;
+  }
+
+  it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => p.length > 0);
+    expect(oldForm).not.toContain('new-untracked.ts');
+  });
+
+  it('🟢（直した後）: listScannableFiles は同じ新規ファイルを対象に入れる', async () => {
+    const dir = await makeRepoWithUntrackedFile();
+    const files = listScannableFiles(dir);
+    expect(files).toContain('new-untracked.ts');
+    expect(files).toContain('tracked.ts');
+  });
+});
 
 /**
  * **この PR の本体。** `isRepoFile`（上）はリポジトリ相対の解決だけで、`clone.ts:505`
@@ -1008,9 +1049,9 @@ export interface AgentsMdLineNumberCitationExemption {
 export const AGENTS_MD_LINE_NUMBER_CITATION_EXEMPTIONS: readonly AgentsMdLineNumberCitationExemption[] =
   [];
 
-const TRACKED_FILES = listTrackedFiles();
-const WIDENED_SCOPE_FILES = excludeCitationScopeSelf(TRACKED_FILES.filter(isWidenedScopeFile));
-const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(TRACKED_FILES);
+const SCANNABLE_FILES = listScannableFiles();
+const WIDENED_SCOPE_FILES = excludeCitationScopeSelf(SCANNABLE_FILES.filter(isWidenedScopeFile));
+const isRepoFileOrBasename = buildBasenameAwareRepoFileResolver(SCANNABLE_FILES);
 
 const agentsMd = readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
 const prose = proseLines(agentsMd);
@@ -1933,7 +1974,7 @@ describe('findFenceCoverageViolations / formatFenceCoverageViolation（合成 fi
 // 気づける形にする」「取れなかった軸に0の行を作らない」「集合の数え方に grep を
 // 単独で使わない」という条件のもとで、`FENCE_COVERAGE_SELF_FILE` を名指しできる
 // 根拠（食い違うファイルはリポジトリ全体でこの1本だけ）を機械に見張らせる。
-describe('findFenceRuleDivergences（実在 corpus。TRACKED_FILES 全体。#786 残り）', () => {
+describe('findFenceRuleDivergences（実在 corpus。SCANNABLE_FILES 全体。#786 残り）', () => {
   it('FENCE_RULE_DIVERGENCE_FILES の why が全部、非空である', () => {
     const blank = FENCE_RULE_DIVERGENCE_FILES.filter((f) => f.why.trim().length === 0).map(
       (f) => f.file,
@@ -1945,10 +1986,11 @@ describe('findFenceRuleDivergences（実在 corpus。TRACKED_FILES 全体。#786
   });
 
   it('食い違うファイルの集合が FENCE_RULE_DIVERGENCE_FILES と完全一致する（増えても減っても赤）', () => {
-    // `TRACKED_FILES` は `git ls-files -z`（`listTrackedFiles`）が返す全追跡ファイル
-    // そのもの——grep は使わない。取得できなければ execFileSync が例外を投げて
-    // ここまで来ないので、「対象が無かった」と「取れなかった」を混同しない。
-    const entries = TRACKED_FILES.map((file) => ({ file, text: readRepoFile(file) }));
+    // `SCANNABLE_FILES` は `listScannableFiles`（追跡済み + 未追跡だが ignore
+    // されていないファイル、Issue #1817）が返す集合そのもの——grep は使わない。
+    // 取得できなければ execFileSync が例外を投げてここまで来ないので、
+    // 「対象が無かった」と「取れなかった」を混同しない。
+    const entries = SCANNABLE_FILES.map((file) => ({ file, text: readRepoFile(file) }));
     // 対象集合そのものが空/激減していないことの確認（「0件だから一致」という
     // 見かけ上の緑を、コーパスが取れていない場合と区別するための下限）。
     expect(entries.length).toBeGreaterThan(400);
@@ -2566,13 +2608,14 @@ export const MISSING_CANON_PATH_EXEMPTIONS: readonly MissingCanonPathExemption[]
 ];
 
 /**
- * この歯が読む corpus。**追跡済みの全ファイルから symlink と歯自身を除いたもの**
- * （射程の doc を見よ）。上の3本と違って範囲を `src` や `.claude` で絞っていないのは、
+ * この歯が読む corpus。**対象ファイル全体（追跡済み + 未追跡だが ignore されて
+ * いないもの、#1817）から symlink と歯自身を除いたもの**（射程の doc を見よ）。
+ * 上の3本と違って範囲を `src` や `.claude` で絞っていないのは、
  * **正典への腐った住所はどこにでも書けるから**である（実際 #904 の6件は
  * `apps/cli` `apps/daemon` `apps/web` `packages/core` の4ワークスペースに散っていた）。
  */
 const CANON_PATH_SCOPE_FILES = excludeCitationScopeSelf(
-  TRACKED_FILES.filter((f) => !lstatSync(path.join(ROOT, f)).isSymbolicLink()),
+  SCANNABLE_FILES.filter((f) => !lstatSync(path.join(ROOT, f)).isSymbolicLink()),
 );
 
 describe('正典のパスを名指しした住所が実在すること（#904）', () => {
