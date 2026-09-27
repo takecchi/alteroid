@@ -109,7 +109,11 @@ export function tailByCodePoints(text: string, maxCodePoints: number): string {
  */
 export function countCodePoints(text: string): number {
   let count = 0;
-  for (const _ of text) count += 1;
+  for (let index = 0; index < text.length; count += 1) {
+    // 補助面（上位・下位のサロゲートが揃った組）だけが2コード単位ぶん進む。
+    // 孤立したサロゲートは `codePointAt` がそのまま返す（0xFFFF 以下）ので1つ。
+    index += (text.codePointAt(index) ?? 0) > 0xffff ? 2 : 1;
+  }
   return count;
 }
 
