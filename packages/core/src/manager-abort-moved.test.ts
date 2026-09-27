@@ -126,10 +126,11 @@ describe('abort の await の間に、同じ委譲が別の runner へ引き取�
       async connect() {
         /* この試験群は hello イベントの配送経路を使わない。 */
       },
-      async start() {
+      async start(): Promise<{ cwd?: string }> {
         /* この試験群では使わない。 */
+        return {};
       },
-      async resume(command) {
+      async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           managerId: command.managerId,
@@ -139,6 +140,7 @@ describe('abort の await の間に、同じ委譲が別の runner へ引き取�
           waiting: [],
           sessionId: command.sessionId,
         });
+        return {};
       },
       async send() {
         return true;

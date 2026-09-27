@@ -141,7 +141,7 @@ describe('解決済みの許可確認が再送されたとき', () => {
       async connect(onEvent) {
         emit = onEvent;
       },
-      async start(command) {
+      async start(command): Promise<{ cwd?: string }> {
         alive.push({
           managerId: command.managerId,
           status: 'running',
@@ -149,9 +149,11 @@ describe('解決済みの許可確認が再送されたとき', () => {
           request: command.request,
           waiting: [],
         });
+        return {};
       },
-      async resume() {
+      async resume(): Promise<{ cwd?: string }> {
         /* この検証では使わない */
+        return {};
       },
       async send() {
         /* この検証では使わない */

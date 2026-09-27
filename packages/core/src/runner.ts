@@ -442,9 +442,16 @@ export interface RunnerHost {
    * から効く。
    */
   setMcpServers(input: unknown): RunnerMcpServersFingerprint | undefined;
-  start(command: RunnerStartCommand): Promise<void>;
-  /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
-  resume(command: RunnerResumeCommand): Promise<void>;
+  /**
+   * 戻り値の `cwd` は、実際にセッションが開いた作業ディレクトリ（Issue #1814）。
+   * `command.cwd` の写しではない——`Host#resolveCwd` の doc を見よ。
+   */
+  start(command: RunnerStartCommand): Promise<{ cwd: string }>;
+  /**
+   * `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。
+   * 戻り値の `cwd` は `start` と同じ約束（Issue #1814）。
+   */
+  resume(command: RunnerResumeCommand): Promise<{ cwd: string }>;
   send(managerId: string, text: string): Promise<boolean>;
   /**
    * `delivered: false` = その確認は runner 側に無い。`decision` は確定した
@@ -940,7 +947,14 @@ class Host implements RunnerHost {
     return session;
   }
 
-  async start(command: RunnerStartCommand): Promise<void> {
+  /**
+   * **戻り値の `cwd` は、このセッションが実際に開いた値である**（Issue #1814）。
+   * `command.cwd` をそのまま名乗るのではなく、`#resolveCwd()` を通した後の
+   * 値（`session.cwd`）を返す——呼び出し元（デーモン）は、頼んだ `cwd` が
+   * この器に無くて `workspacePath` へ倒れたかどうかを、この値と自分が送った
+   * 値を比べて初めて知れる。
+   */
+  async start(command: RunnerStartCommand): Promise<{ cwd: string }> {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
@@ -955,6 +969,7 @@ class Host implements RunnerHost {
       this.#sessions.delete(command.managerId);
       throw error;
     }
+    return { cwd: session.cwd };
   }
 
   /**
@@ -995,13 +1010,20 @@ class Host implements RunnerHost {
    * - どちらでもなければ（名簿から既に消えていれば）、そのまま「初めて見る
    *   セッション」の経路（下）へ合流する。
    */
-  async resume(command: RunnerResumeCommand): Promise<void> {
+  /**
+   * **戻り値の `cwd` は、`start()` と同じ約束を持つ**（Issue #1814）——実際に
+   * このセッションが開いている値であって、`command.cwd` の写しではない。
+   * 「走っているセッションへ合流するだけ」の短絡（`alive` / `afterWait`）も、
+   * 合流先のセッションが `#create()` の時点で解決した値をそのまま返す——
+   * 新しく作り直したわけではないので `#resolveCwd` を呼び直す理由が無い。
+   */
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
     const alive = this.#sessions.get(command.managerId);
     if (alive) {
       alive.checkFence(command.lease);
       if (!alive.stopping) {
         if (command.message !== undefined) alive.push(command.message);
-        return;
+        return { cwd: alive.cwd };
       }
       try {
         await alive.stop('resume 待ちのため、畳み中のセッションの完了を待った。');
@@ -1014,7 +1036,7 @@ class Host implements RunnerHost {
         if (!afterWait.stopping) {
           // 並行した resume が先に新しいセッションを作っていた。合流する。
           if (command.message !== undefined) afterWait.push(command.message);
-          return;
+          return { cwd: afterWait.cwd };
         }
         // 畳みが途中の例外で `#onClosed()` まで届かず、畳み済みの古い
         // セッションが名簿に残ったままだった。手で取り除いて作り直す。
@@ -1028,6 +1050,7 @@ class Host implements RunnerHost {
     // （`start` と同じ形）。
     session.checkFence(command.lease);
     session.resume(command.sessionId, command.entries, command.message);
+    return { cwd: session.cwd };
   }
 
   async send(managerId: string, text: string): Promise<boolean> {
@@ -1792,6 +1815,18 @@ class RunnerSession {
   /** 見張り（`Host#checkLeaseExpiry`）が読む、いまの貸し出し期限。 */
   get leaseTtlMs(): number | undefined {
     return this.#sdkSession.leaseTtlMs;
+  }
+
+  /**
+   * このセッションが実際に開いた作業ディレクトリ（Issue #1814）。
+   *
+   * `#create()` の時点で `Host#resolveCwd()` を通した後の値——**渡された
+   * `cwd` そのものとは限らない**（省略・実在しない場合は `workspacePath` へ
+   * 倒れている）。`Host#start` / `Host#resume` が呼び出し元へ返す実際の値の
+   * 出どころはここ1箇所である。
+   */
+  get cwd(): string {
+    return this.#cwd;
   }
 
   /**

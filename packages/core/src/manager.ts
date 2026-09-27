@@ -519,7 +519,33 @@ export interface ManagerSummary {
    * **切らない・殺さない・止めない**（`turnEndedAt` と同じ約束）。
    */
   toolUseStallPending?: PendingToolUse[];
+  /**
+   * **runner が実際に開いた値へ揃える（可能なら）**（Issue #1814）。`job.cwd`
+   * の写し——`runner.start()` / `runner.resume()` の応答が実際の値を返せば
+   * （`cwdConfirmed` が立つ回）、ここは頼んだ値ではなく実際の値になる。
+   *
+   * `manager_start`（`start()`）が返す `ManagerSummary` にだけ、この委譲が
+   * 起こったその回に限って {@link cwdConfirmed} / {@link requestedCwd} が
+   * 添う——`manager_list` 等、後から読む一覧はこの欄（揃え直した後の値）
+   * だけを見る。
+   */
   cwd: string;
+  /**
+   * **`start()` の応答にだけ載る**（Issue #1814）。`cwd` が runner の応答から
+   * 実際に確認できたかどうか——`true` のときだけ載る（`undefined` は「古い
+   * runner で確認できなかった」で、`false` を書いて欠落を偽の値へ倒さない。
+   * `AGENTS.md`「取れない軸に 0 の行を作る」）。
+   *
+   * `manager_list` などが返す `ManagerSummary` にはそもそも載らない——後から
+   * 読む一覧に「いつ確認したか分からない確認済み」を持たせない。
+   */
+  cwdConfirmed?: true;
+  /**
+   * **`cwdConfirmed` が真で、かつ実際の値（{@link cwd}）が頼んだ値と違う回
+   * だけ載る**（Issue #1814）。`runner.start()` へ実際に送った `cwd`
+   * （頼んだ値）——`Host#resolveCwd` が倒したことを、両方の値を見せて示す。
+   */
+  requestedCwd?: string;
   request: string;
   startedAt: string;
   updatedAt: string;
@@ -3133,6 +3159,23 @@ interface ManagerRecord {
    */
   leaseRefusal?: { detail: string; claimableAt?: number; kind: LeaseRefusalKind };
   /**
+   * **直近の `#resume()` が、runner から「頼んだ `cwd` はこの器に無かったので
+   * 倒して開いた」と確認できた回だけに立つ**（Issue #1814）。
+   *
+   * `#resume()` は `runner.resume()` の応答が返るまで倒れたかどうかを知らない
+   * ので、呼び出し元（`#reattach` / `#restoreJobs`）が resume より前に組み立てる
+   * 「移送の一言」へは直接混ぜられない。ここへ置いて、呼び出し元が
+   * `#resumeOnce` から戻った直後に読み、必要な一言を追加で送る（`runner.send`）
+   * ための橋渡しである。
+   *
+   * **プロセス内の像にしか置かない**（`Job` へは書かない）。`#resume()` が
+   * 呼ばれるたびに前回の値を上書きする——読む側は呼んだ直後にだけ読み、
+   * 読んだら用が済む一度きりの通知である。**倒れなかった回・応答が
+   * `cwd` を持たない回（古い runner）はここを触らない**——「未確認」を
+   * 前回の通知で埋めない。
+   */
+  cwdSwapNotice?: { readonly requested: string; readonly actual: string };
+  /**
    * **`ManagerPool#restore()` の living 枝で引き取られ、まだこのプロセスで
    * `#rememberTokenIdentity` を通っていないこと**（Issue #988）。
    *
@@ -5214,8 +5257,9 @@ class Pool implements ManagerPool {
     this.#rememberTokenIdentity(managerId);
 
     // 委譲はノンブロッキング。起こして即返し、クローンは次の判断へ移る。
+    let started: { cwd?: string };
     try {
-      await runner.start({
+      started = await runner.start({
         managerId,
         request: input.request,
         cwd,
@@ -5231,6 +5275,31 @@ class Pool implements ManagerPool {
     // runner がセッションを載せてから返る。これより前の生存確認の観測は、この
     // 委譲について何も言っていない（`ManagerRecord.runnerSessionSince` の doc）。
     record.runnerSessionSince = new Date(this.#now()).toISOString();
+    /*
+     * **runner が実際に開いた cwd を台帳へ揃える（Issue #1814）。**
+     *
+     * `started.cwd` は省略されうる（古い runner）——**返らなければ何もしない。**
+     * `record.job.cwd` は上で既に `cwd`（頼んだ値）を持っているので、そのままで
+     * 「未確認」を表せる（頼んだ値で埋めているのではなく、埋まっていたものが
+     * そのまま残るだけ）。
+     *
+     * 返って、かつ頼んだ `cwd` と違えば（＝ `Host#resolveCwd` が倒した）、
+     * `job.cwd` と `workspace` locator をその値へ揃える。呼び出し元
+     * （`manager_start` のツール応答、`tools.ts`）へは `cwdConfirmed` /
+     * `requestedCwd` を通して「頼んだ値と実際の値が違う」ことを伝える——
+     * `ManagerSummary.cwd` だけを見る既存の読み手（`manager_list` の `cwd:`
+     * 行、Web UI）は、揃え直した後の実際の値を見ることになる。
+     */
+    let cwdConfirmed: true | undefined;
+    let requestedCwd: string | undefined;
+    if (started.cwd !== undefined) {
+      cwdConfirmed = true;
+      if (started.cwd !== cwd) {
+        requestedCwd = cwd;
+        record.job.cwd = started.cwd;
+        record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, started.cwd);
+      }
+    }
     // **セッションが実際にこの器へ載った**（#669。`Job.sessionInstanceId` の doc）。
     // 写すのは、この回に貸し出しを立てた相手である——名簿を引き直さない。
     // **名乗らない値では上書きしない**（`undefined` を書くと、一度名乗った器の
@@ -5246,7 +5315,7 @@ class Pool implements ManagerPool {
     });
     const silent = this.#silentRunners();
     const registeredRunnerIds = this.#registeredRunnerIds();
-    return summaryOf(
+    const summary = summaryOf(
       record,
       isLive(record, silent),
       lostSinceOf(record, silent),
@@ -5266,6 +5335,19 @@ class Pool implements ManagerPool {
       // 直接渡さない——`ManagerSummary.usageStoppedAt` の doc のとおり。
       this.#usageStopped.has(record.job.id) ? record.job.usageStoppedAt : undefined,
     );
+    /*
+     * **`summaryOf` の一般形へは混ぜない（Issue #1814）。** `cwdConfirmed` /
+     * `requestedCwd` は「いま起こした、まさにこの回」にしか意味を持たない
+     * 一時的な情報で、`manager_list` のような後からの一覧が同じ意味で持てる
+     * ものではない。`summaryOf` の引数を増やすと、この2つを持たない全ての
+     * 呼び出し元（`#restoreJobs` / `#reattach` など）が「該当なし」を明示的に
+     * 渡す羽目になる——`start()` だけの関心をそこまで広げない。
+     */
+    return {
+      ...summary,
+      ...(cwdConfirmed === undefined ? {} : { cwdConfirmed }),
+      ...(requestedCwd === undefined ? {} : { requestedCwd }),
+    };
   }
 
   /**
@@ -7730,11 +7812,23 @@ class Pool implements ManagerPool {
         // セッションが二重に起こされることはない。
         const attached =
           living.state.status === 'running' || living.state.status === 'waiting_human';
+        /*
+         * **台帳の `cwd` を、runner が実際に持っているセッションの値へ揃える
+         * （Issue #1814 の範囲外の気づき。PR #1807 の doc が指していたもの）。**
+         *
+         * `living.state.cwd`（`GET /managers` の応答。`RunnerSession#state()`
+         * が返す、実際にセッションが開いている値）はここで既に読めているのに、
+         * 今までは使わずに古い `job.cwd`（台帳に残っていた、頼んだだけの値）を
+         * そのまま持ち越していた——器の再起動を跨いだ委譲の `manager_list` /
+         * Web UI が、実際とは違う `cwd` を名乗り続ける形になりうる。
+         */
         const record: ManagerRecord = {
           job: {
             ...job,
             status: living.state.status,
             runnerId: living.runner.runnerId,
+            cwd: living.state.cwd,
+            workspace: workspaceLocatorFrom(this.#workspace, living.runner.runnerId, living.state.cwd),
             ...(living.state.sessionId === undefined ? {} : { sessionId: living.state.sessionId }),
           },
           waiting: living.state.waiting,
@@ -7877,11 +7971,24 @@ class Pool implements ManagerPool {
         if (record.job.status === 'lost') continue;
         record.job.status = 'running';
         await this.#persist(record);
+        /*
+         * **`nudge` を組んだ時点では、runner が頼んだ `cwd` を実際に使ったかを
+         * 知らなかった（Issue #1814）。** `#resumeOnce` から戻った今なら分かる
+         * ——`record.cwdSwapNotice` に立っていれば、追加の一言として送る。
+         * `runner.send()` の失敗は無視する（畳んで待つのと同じ理由——本体の
+         * resume は既に成功しているので、この一言が届かなくても致命ではない）。
+         */
+        const swapNotice = cwdSwapNoticeClause(record);
+        if (swapNotice !== undefined) {
+          await runner.send(job.id, swapNotice).catch(() => undefined);
+        }
         await this.#journal({
           type: 'exchange',
           with: 'manager',
           role: 'outbound',
-          text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}`,
+          text:
+            `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （再起動後の再開）${nudge}` +
+            (swapNotice === undefined ? '' : ` ${swapNotice}`),
         });
         this.#notifyRestored(record, 'resumed');
         resumed.push(
@@ -9069,11 +9176,19 @@ class Pool implements ManagerPool {
           record.sessionMissingKind = undefined;
           record.job.status = 'running';
           await this.#persist(record);
+          // **`message` を組んだ時点では知らなかったことを、resume が返った今
+          // 追加で送る（Issue #1814）。** `#restoreJobs` と同じ理由・同じ形。
+          const swapNotice = cwdSwapNoticeClause(record);
+          if (swapNotice !== undefined) {
+            await runner.send(job.id, swapNotice).catch(() => undefined);
+          }
           await this.#journal({
             type: 'exchange',
             with: 'manager',
             role: 'outbound',
-            text: `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}`,
+            text:
+              `${EXCHANGE_KIND_RECOVERY_PREFIX}[${job.id}] （${relocating ? '別の器への移送' : 'runner 入れ替え'}後の再開）${message}` +
+              (swapNotice === undefined ? '' : ` ${swapNotice}`),
           });
           this.#notifyRestored(record, 'resumed', cause);
         } catch (error) {
@@ -9777,10 +9892,14 @@ class Pool implements ManagerPool {
      */
     if (record.stopConfirmedAt !== undefined) return 'stopped-meanwhile';
 
-    await runner.resume({
+    // **runner へ実際に頼む値**（Issue #1783 の直しがここへ倒す先を確かめる。
+    // `#resolveCwd` の doc）。応答の `cwd` と比べる基準はこの値であって、
+    // `record.job.cwd`（`undefined` のことがある）ではない。
+    const requestedCwd = cwd ?? runner.workspacePath;
+    const resumed = await runner.resume({
       managerId: record.job.id,
       sessionId,
-      cwd: cwd ?? runner.workspacePath,
+      cwd: requestedCwd,
       request: request ?? record.job.summary,
       ...(message === undefined ? {} : { message }),
       ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
@@ -9790,6 +9909,34 @@ class Pool implements ManagerPool {
         ? {}
         : { lease: { fence: record.job.lease.fence, ttlMs: record.job.lease.ttlMs } }),
     });
+    /*
+     * **runner が実際に開いた cwd を台帳へ揃える（Issue #1814）。**
+     *
+     * `resumed.cwd` は省略されうる（古い runner。`runnerSessionOpenResultSchema`
+     * の doc）——**返らなければ何もしない。** 「未確認」を `requestedCwd` で
+     * 埋めると、倒れていた回まで「頼んだとおり開けた」と嘘をつく。
+     *
+     * 返って、かつ `requestedCwd` と違えば（＝ `Host#resolveCwd` が倒した）、
+     * 台帳の `job.cwd` をこの値へ揃える——`jobSchema.cwd` の doc（「人間が
+     * Claude Code を開く場所と同じ」）が指しているのは実際の値であって、
+     * 頼んだだけの値ではない。`workspace` locator も同じ path で作り直す
+     * （`workspaceLocatorFrom` は path しか見ないので、そのままでは古い path
+     * を持ち越す）。
+     *
+     * **呼び出し元（`#reattach` / `#restoreJobs`）へは `record.cwdSwapNotice`
+     * で伝える。** `runner.resume()` の応答が返るまで倒れたかどうかが分から
+     * ないので、呼び出し元が resume より前に組み立てる「移送の一言」へは
+     * 直接混ぜられない——応答が返った後にしか分からないことを、呼ぶ前に
+     * 組んだ文言へ混ぜようとしない。
+     */
+    // **前回の通知を持ち越さない。** 今回倒れていなければ、古い通知は用済み
+    // ——呼び出し元に「今回も倒れた」と誤解させない。
+    record.cwdSwapNotice = undefined;
+    if (resumed.cwd !== undefined && resumed.cwd !== requestedCwd) {
+      record.job.cwd = resumed.cwd;
+      record.job.workspace = workspaceLocatorFrom(this.#workspace, runner.runnerId, resumed.cwd);
+      record.cwdSwapNotice = { requested: requestedCwd, actual: resumed.cwd };
+    }
 
     /*
      * **止めた意思を優先する（チェックポイント2。Issue #1703）。**
@@ -13664,6 +13811,27 @@ function restartNudge(
     );
   }
   return `${head}中断していた作業の続きを進めよ。`;
+}
+
+/**
+ * `record.cwdSwapNotice` から、resume 成功直後に追加で送る一言を作る
+ * （Issue #1814）。**`restartNudge` とは別に持つ。** あちらは resume を
+ * 呼ぶ**前**に組み立てる文言で、runner が実際に何を使ったかは resume が
+ * 返るまで分からない——だから同じ文字列へは混ぜられず、**成功が確定した
+ * 直後にだけ分かる追加の一言**として別に持つ。
+ *
+ * **`undefined` は「今回は足さない」であって「未確認」ではない。** 倒れて
+ * いない回・runner が確認を返さなかった回（古い runner）のどちらも
+ * `record.cwdSwapNotice` が立たないので、ここでは区別しない——呼び出し側は
+ * 「足すか足さないか」だけを知ればよい（`ManagerRecord.cwdSwapNotice` の doc）。
+ */
+function cwdSwapNoticeClause(record: ManagerRecord): string | undefined {
+  const notice = record.cwdSwapNotice;
+  if (notice === undefined) return undefined;
+  return (
+    `[system] 元の cwd（${notice.requested}）はこの器に無かったので、` +
+    `${notice.actual} で開いた。`
+  );
 }
 
 /**

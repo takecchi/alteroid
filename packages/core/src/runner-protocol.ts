@@ -215,6 +215,27 @@ export const runnerResumeCommandSchema = z.object({
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
 
 /**
+ * `POST /managers`（start）・`POST /managers/:id/resume` の**応答**（Issue #1814）。
+ *
+ * **`cwd` は省略されうる。** ローリング再デプロイの窓では、まだこの変更前の runner
+ * が `{ ok: true }` だけを返す——実際に開いた `cwd` を確認できていないのではなく、
+ * **報告する欄そのものを持っていない。** 受け取る側（`HttpRunner`）は、欠けた回を
+ * 「頼んだ値のまま」へ倒さず「確認できなかった」と読める形（`cwd` キーを省いたまま）
+ * で運ぶこと——`runnerAnswerResultSchema` の `decision` と同じ作法（欠けた軸に
+ * 0（＝頼んだ値）を書かない。`AGENTS.md`「取れない軸に 0 の行を作る」）。
+ *
+ * **`start` と `resume` で1つを共有する。** どちらも `Host#create()` を経由して
+ * 実際に開く値を確定させる点で同じなので、応答の形を分ける理由が無い
+ * （`Host#resolveCwd` の doc）。
+ */
+export const runnerSessionOpenResultSchema = z.object({
+  ok: z.boolean(),
+  cwd: z.string().optional(),
+});
+
+export type RunnerSessionOpenResult = z.infer<typeof runnerSessionOpenResultSchema>;
+
+/**
  * **`lease` を持たせない。** これは既に開いている（＝ `start` / `resume` を通って
  * 世代の検査を済ませた）セッションへ届く命令であって、世代を新しく主張する側では
  * ない。世代で締め出されたプロセスのセッションは、そのプロセス自身が自己失効
@@ -2345,8 +2366,16 @@ export interface RunnerClient {
    * `never-connected`」のような嘘を書かせない。
    */
   readonly legState?: RunnerLegState;
-  start(command: RunnerStartCommand): Promise<void>;
-  resume(command: RunnerResumeCommand): Promise<void>;
+  /**
+   * 戻り値の `cwd` は、runner が実際に開いた作業ディレクトリ（Issue #1814）。
+   * **省略されうる**（`runnerSessionOpenResultSchema` の doc）——ローリング
+   * 再デプロイの窓で、まだこの変更前の runner から応答が返ることがある。
+   * 呼び出し側（`manager.ts`）は、欠けた回を「頼んだ値のまま」へ倒さず
+   * 「実際の値は未確認」と読むこと。
+   */
+  start(command: RunnerStartCommand): Promise<{ cwd?: string }>;
+  /** `RunnerFenceError` を投げうる（世代が古い。呼び出し側は 409 へ変換すること）。 */
+  resume(command: RunnerResumeCommand): Promise<{ cwd?: string }>;
   /**
    * 追加の1文をセッションへ流す。**戻り値は「届いたか」——`answer()` の
    * `delivered` と同じ意味である（#899）。

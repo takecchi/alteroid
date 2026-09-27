@@ -159,10 +159,11 @@ function fakeRunner(
       /* この試験群は hello イベントの配送経路を使わない（`reattachRunner` /
        * `relocateFrom` が直に `#reattach` を起こす）。 */
     },
-    async start() {
+    async start(): Promise<{ cwd?: string }> {
       /* この試験群では使わない。 */
+      return {};
     },
-    async resume(command) {
+    async resume(command): Promise<{ cwd?: string }> {
       resumes.push(command);
       sessions.set(command.managerId, {
         managerId: command.managerId,
@@ -172,6 +173,7 @@ function fakeRunner(
         waiting: [],
         sessionId: command.sessionId,
       });
+      return {};
     },
     async send() {
       /* この試験群では使わない。 */

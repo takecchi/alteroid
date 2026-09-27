@@ -851,6 +851,22 @@ export const managerSummarySchema = z.object({
     .array(z.object({ id: z.string(), name: z.string().optional() }))
     .optional(),
   cwd: z.string(),
+  /**
+   * **`manager_start` が返す `ManagerSummary` にだけ載る**（Issue #1814。
+   * `packages/core/src/manager.ts` の `ManagerSummary.cwdConfirmed`）。`cwd` が
+   * runner の応答から実際に確認できたか——`GET /managers` / `GET /managers/:id`
+   * が返す一覧・詳細はこの欄を持たない値のまま返る（`ManagerPool.list()` /
+   * `.get()` はこの欄を一切書かない）ので、常に省略された形で出る。
+   *
+   * **ここに宣言しないと、値が在っても黙って落ちる**（他の任意欄と同じ断り）。
+   */
+  cwdConfirmed: z.literal(true).optional(),
+  /**
+   * `cwdConfirmed` と対で運ぶ（Issue #1814。`ManagerSummary.requestedCwd`）。
+   * `cwdConfirmed` と同じ理由で、`GET /managers` / `GET /managers/:id` からは
+   * 常に省略された形で出る。
+   */
+  requestedCwd: z.string().optional(),
   request: z.string(),
   startedAt: z.string(),
   updatedAt: z.string(),

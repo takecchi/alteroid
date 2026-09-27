@@ -114,11 +114,12 @@ class LeasedRunner implements RunnerClient {
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     this.emit = onEvent;
   }
-  async start(): Promise<void> {}
-  async resume(command: RunnerResumeCommand): Promise<void> {
+  async start(): Promise<{ cwd?: string }> { return {}; }
+  async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
     if (this.resumeFailure !== undefined) throw this.resumeFailure;
     this.resumes.push(command);
     this.hold(command.managerId);
+    return {};
   }
   async send(): Promise<boolean> {
     if (this.sendFailure !== undefined) throw this.sendFailure;

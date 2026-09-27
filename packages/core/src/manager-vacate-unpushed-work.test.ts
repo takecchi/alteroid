@@ -113,12 +113,14 @@ function fakeRunner(
     async connect() {
       /* この試験群では使わない。 */
     },
-    async start() {
+    async start(): Promise<{ cwd?: string }> {
       /* この試験群では使わない。 */
+      return {};
     },
-    async resume(command) {
+    async resume(command): Promise<{ cwd?: string }> {
       resumes.push(command);
       sessions.set(command.managerId, { managerId: command.managerId });
+      return {};
     },
     async send() {
       /* この試験群では使わない。 */

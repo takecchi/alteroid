@@ -137,12 +137,18 @@ class LocalRunner implements RunnerClient {
     return { managers: this.#host.list().length, ...(await readExecutionResources()) };
   }
 
-  async start(command: RunnerStartCommand): Promise<void> {
-    await this.#host.start(command);
+  /**
+   * `#host.start` が返す実際の `cwd`（Issue #1814）をそのまま返す。**同一
+   * プロセスなので常に確認できる**——`HttpRunner` と違い、版ずれで欄が
+   * 落ちる余地が無い。
+   */
+  async start(command: RunnerStartCommand): Promise<{ cwd: string }> {
+    return this.#host.start(command);
   }
 
-  async resume(command: RunnerResumeCommand): Promise<void> {
-    await this.#host.resume(command);
+  /** 同上（`start` の doc）。 */
+  async resume(command: RunnerResumeCommand): Promise<{ cwd: string }> {
+    return this.#host.resume(command);
   }
 
   /**

@@ -41,6 +41,7 @@ import {
   noteDroppedRunnerManagers,
   runnerManagerStateSchema,
   runnerPlacementResourcesSchema,
+  runnerSessionOpenResultSchema,
   unpushedWorkResultSchema,
 } from '@alteroid/core';
 
@@ -1595,12 +1596,31 @@ class HttpRunner implements RunnerClient {
    * 直すには呼ぶ側（`packages/core`）が「不明」を運べる必要がある。ここに期限だけを
    * 先に足すと、その日まで消える委譲が出る。**だから待つ方を選んでいる。**
    */
-  async start(command: RunnerStartCommand): Promise<void> {
-    await this.#callWithoutDeadline('POST', '/managers', command);
+  /**
+   * **戻り値の `cwd` は省略されうる**（Issue #1814。`runnerSessionOpenResultSchema`
+   * の doc）。ローリング再デプロイの窓では、まだこの変更前の runner が
+   * `{ ok: true }` だけを返す——**その回を「頼んだ値のまま」で埋めない。**
+   * `body.cwd` を `runnerSessionOpenResultSchema.shape.cwd` だけで検める
+   * （`answer()` の `decision` と同じ作法。1つずつ検証し、他欄の形崩れに
+   * 巻き込まれない）。
+   */
+  async start(command: RunnerStartCommand): Promise<{ cwd?: string }> {
+    const response = await this.#callWithoutDeadline('POST', '/managers', command);
+    const body = (await response.json()) as { cwd?: unknown };
+    const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
+    return cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {};
   }
 
-  async resume(command: RunnerResumeCommand): Promise<void> {
-    await this.#call('POST', `/managers/${encodeURIComponent(command.managerId)}/resume`, command);
+  /** 同上（`start` の doc）。 */
+  async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
+    const response = await this.#call(
+      'POST',
+      `/managers/${encodeURIComponent(command.managerId)}/resume`,
+      command,
+    );
+    const body = (await response.json()) as { cwd?: unknown };
+    const cwd = runnerSessionOpenResultSchema.shape.cwd.safeParse(body.cwd);
+    return cwd.success && cwd.data !== undefined ? { cwd: cwd.data } : {};
   }
 
   /**

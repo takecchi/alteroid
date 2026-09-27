@@ -3750,7 +3750,18 @@ export const jobSchema = z.object({
   summary: z.string(),
   /** クローンが出した依頼の全文。 */
   request: z.string().optional(),
-  /** マネージャーの作業ディレクトリ（人間が Claude Code を開く場所と同じ）。 */
+  /**
+   * マネージャーの作業ディレクトリ（人間が Claude Code を開く場所と同じ）。
+   *
+   * **runner が実際に開いた値へ揃える（可能なら）**（Issue #1814）。`start()` /
+   * `#resume()` を呼ぶ前は「頼む値」（明示の `cwd`、省略時は `workspacePath`）が
+   * 入るが、runner の応答が実際に使った値を返せば（`Host#resolveCwd` が倒した
+   * 場合を含む）、その値でここを上書きする——**古い runner（応答に `cwd` を
+   * 持たない）とは応答が返らないだけなので、そのときはここが頼んだ値のまま
+   * 残る。それは「確認できていない」であって「確認して一致した」ではない**
+   * （`ManagerSummary.cwdConfirmed` を持つのは `start()` の応答だけで、この
+   * 欄単体からは確認できたかどうかを読めない）。
+   */
   cwd: z.string().optional(),
   /**
    * どの manager-runner で走っているか（M4）。

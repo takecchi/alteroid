@@ -49,8 +49,8 @@ function fakeRunner(runnerId = 'runner-primary'): Fake {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start() {},
-    async resume() {},
+    async start(): Promise<{ cwd?: string }> { return {}; },
+    async resume(): Promise<{ cwd?: string }> { return {}; },
     async send() {
       return true;
     },

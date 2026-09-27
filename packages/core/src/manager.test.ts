@@ -1265,11 +1265,13 @@ describe('マネージャー', () => {
       async connect(onEvent) {
         wired.emit = onEvent;
       },
-      async start() {
+      async start(): Promise<{ cwd?: string }> {
         /* この検証では使わない */
+        return {};
       },
-      async resume() {
+      async resume(): Promise<{ cwd?: string }> {
         /* この検証では使わない */
+        return {};
       },
       async send() {
         /* この検証では使わない */
@@ -2499,10 +2501,11 @@ function swappableRunner(runnerId = 'runner-primary') {
       // 変わり、「引き取りが見た器」と「SSE が繋がった器」がずれる場合を作れない。
       emit = onEvent;
     },
-    async start() {
+    async start(): Promise<{ cwd?: string }> {
       /* この検証では使わない */
+      return {};
     },
-    async resume(command) {
+    async resume(command): Promise<{ cwd?: string }> {
       state.resumes.push(command);
       state.alive.push({
         managerId: command.managerId,
@@ -2512,6 +2515,7 @@ function swappableRunner(runnerId = 'runner-primary') {
         waiting: [],
         sessionId: command.sessionId,
       });
+      return {};
     },
     /**
      * **本物と同じ 404 を返す**（#563）。`apps/runner/src/app.ts` の
@@ -3466,6 +3470,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
         request: command.request,
         waiting: [],
       });
+      return {};
     };
 
     fake.reconnect();
@@ -7670,10 +7675,11 @@ class FakePoolRunner implements RunnerClient {
       ...(capabilities === undefined ? {} : { capabilities }),
     });
   }
-  async start(command: { managerId: string }): Promise<void> {
+  async start(command: { managerId: string }): Promise<{ cwd?: string }> {
     this.started.push(command.managerId);
+    return {};
   }
-  async resume(): Promise<void> {}
+  async resume(): Promise<{ cwd?: string }> { return {}; }
   async send(): Promise<boolean> {
     return true;
   }
@@ -9285,8 +9291,8 @@ class FakeBacklogMergeRunner implements RunnerClient {
     };
   }
   async connect(): Promise<void> {}
-  async start(): Promise<void> {}
-  async resume(): Promise<void> {}
+  async start(): Promise<{ cwd?: string }> { return {}; }
+  async resume(): Promise<{ cwd?: string }> { return {}; }
   async send(): Promise<boolean> {
     return true;
   }
@@ -10411,6 +10417,7 @@ describe('onUsageObservation（マネージャー経由の観測）', () => {
         request: command.request,
         waiting: [],
       });
+      return {};
     };
 
     let generation = 0;

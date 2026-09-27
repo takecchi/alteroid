@@ -135,12 +135,14 @@ class StickyRunner implements RunnerClient {
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
     this.#onEvent = onEvent;
   }
-  async start(command: { managerId: string }): Promise<void> {
+  async start(command: { managerId: string }): Promise<{ cwd?: string }> {
     this.hold(command.managerId);
+    return {};
   }
-  async resume(command: RunnerResumeCommand): Promise<void> {
+  async resume(command: RunnerResumeCommand): Promise<{ cwd?: string }> {
     this.resumes.push(command);
     this.hold(command.managerId);
+    return {};
   }
   async send(managerId: string, text: string): Promise<boolean> {
     this.sends.push({ managerId, text });

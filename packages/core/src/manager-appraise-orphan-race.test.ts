@@ -44,8 +44,8 @@ function neverAliveRunner(runnerId = 'runner-primary'): RunnerClient {
     workspacePath: '/work/project',
     workspacePathKnown: true,
     async connect() {},
-    async start() {},
-    async resume() {},
+    async start(): Promise<{ cwd?: string }> { return {}; },
+    async resume(): Promise<{ cwd?: string }> { return {}; },
     async send() {
       return true;
     },

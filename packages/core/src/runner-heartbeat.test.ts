@@ -67,8 +67,8 @@ class FakeRunner implements RunnerClient {
 
   // ここから下は名簿が触らない口。**生死判定の材料にしない**ので空でよい。
   async connect(): Promise<void> {}
-  async start(): Promise<void> {}
-  async resume(): Promise<void> {}
+  async start(): Promise<{ cwd?: string }> { return {}; }
+  async resume(): Promise<{ cwd?: string }> { return {}; }
   async send(): Promise<boolean> {
     return true;
   }

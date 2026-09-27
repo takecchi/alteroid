@@ -2878,6 +2878,29 @@ function denialLine(denials: ManagerDenial[], lastReportAt: string | undefined):
  * 届いた瞬間の文言で、世代の行を並べて出していないので、ここでは触っていない
  * （Issue #931 に残した）。
  */
+/**
+ * `manager_start` が返す `ManagerSummary` から、cwd をどう名乗るかの1句を作る
+ * （Issue #1814）。**表示が事実と食い違わないことを優先する。**
+ *
+ * - `cwdConfirmed` が無ければ（古い runner）——実際の値は未確認。頼んだ値
+ *   （`manager.cwd`。倒れていなければこれがそのまま実際の値でもある）を
+ *   「未確認」と明示したうえで出す。**頼んだ値を実際の値として名乗らない。**
+ * - 確認できて、かつ頼んだ値（`requestedCwd`）と違えば——runner がこの器に
+ *   無かったので倒して開いたということ。両方の値を見せる。
+ * - 確認できて、頼んだ値と同じなら——今までどおり `cwd: ...` とだけ言う。
+ */
+function describeStartedCwd(
+  manager: Pick<ManagerSummary, 'cwd' | 'cwdConfirmed' | 'requestedCwd'>,
+): string {
+  if (manager.cwdConfirmed !== true) {
+    return `実際の cwd は未確認（頼んだ値: ${manager.cwd}）`;
+  }
+  if (manager.requestedCwd !== undefined) {
+    return `頼んだ cwd（${manager.requestedCwd}）はこの器に無かったので、${manager.cwd} で開いた`;
+  }
+  return `cwd: ${manager.cwd}`;
+}
+
 function describeManagerFailure(
   failure: ManagerSummary['lastFailure'],
   lastReport: string | undefined,
@@ -9202,14 +9225,14 @@ export function createCloneTools(context: ToolContext) {
           {
             type: 'decision',
             decision:
-              `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}` +
+              `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
               `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
             grounds: '委譲の判断',
           },
           'act-completed',
         );
         return text(
-          `マネージャー ${started.managerId} を起こした（cwd: ${started.cwd}、` +
+          `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
             `runner: ${started.runnerId ?? '未記録'}）。` +
             '報告・質問は後から受信箱に届く。',
         );

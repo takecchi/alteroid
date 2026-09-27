@@ -432,6 +432,8 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
       toolUseStallAt: true,
       toolUseStallPending: true,
       cwd: true,
+      cwdConfirmed: true,
+      requestedCwd: true,
       request: true,
       startedAt: true,
       updatedAt: true,

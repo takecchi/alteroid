@@ -237,10 +237,11 @@ class TranscriptRunner implements RunnerClient {
     return { runnerId: this.runnerId, instanceId: 'boot-1' };
   }
   async connect(): Promise<void> {}
-  async start(command: { managerId: string }): Promise<void> {
+  async start(command: { managerId: string }): Promise<{ cwd?: string }> {
     this.starts.push(command.managerId);
+    return {};
   }
-  async resume(): Promise<void> {}
+  async resume(): Promise<{ cwd?: string }> { return {}; }
   async send(): Promise<boolean> {
     return true;
   }

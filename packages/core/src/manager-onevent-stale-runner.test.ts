@@ -172,10 +172,11 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
       async connect(onEvent) {
         holder.emit = onEvent;
       },
-      async start() {
+      async start(): Promise<{ cwd?: string }> {
         /* この試験群では使わない。 */
+        return {};
       },
-      async resume(command) {
+      async resume(command): Promise<{ cwd?: string }> {
         resumes.push(command);
         sessions.set(command.managerId, {
           managerId: command.managerId,
@@ -185,6 +186,7 @@ describe('#onEvent: 移った後に届く古い runner の出来事', () => {
           waiting: [],
           sessionId: command.sessionId,
         });
+        return {};
       },
       async send() {
         return true;

@@ -61,10 +61,11 @@ function fakeRunner() {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start() {
+    async start(): Promise<{ cwd?: string }> {
       /* この検証では使わない */
+      return {};
     },
-    async resume(command) {
+    async resume(command): Promise<{ cwd?: string }> {
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -73,6 +74,7 @@ function fakeRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
+      return {};
     },
     async send() {
       return true;

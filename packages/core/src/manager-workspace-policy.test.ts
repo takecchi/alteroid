@@ -120,7 +120,7 @@ function fakeRunner(runnerId: string, workspacePath: string) {
     async connect() {
       /* この検証では使わない */
     },
-    async start(command) {
+    async start(command): Promise<{ cwd?: string }> {
       started.push(command);
       alive.push({
         managerId: command.managerId,
@@ -129,9 +129,11 @@ function fakeRunner(runnerId: string, workspacePath: string) {
         request: command.request,
         waiting: [],
       });
+      return {};
     },
-    async resume() {
+    async resume(): Promise<{ cwd?: string }> {
       /* この検証では使わない */
+      return {};
     },
     async send() {
       /* この検証では使わない */

@@ -99,8 +99,8 @@ function neverAliveRunner(runnerId = 'runner-primary'): RunnerClient {
     workspacePath: '/work/project',
     workspacePathKnown: true,
     async connect() {},
-    async start() {},
-    async resume() {},
+    async start(): Promise<{ cwd?: string }> { return {}; },
+    async resume(): Promise<{ cwd?: string }> { return {}; },
     async send() {
       return true;
     },
@@ -160,11 +160,12 @@ function trackingRunner(options?: { runnerId?: string; resumeGate?: Promise<void
     workspacePath: '/work/project',
     workspacePathKnown: true,
     async connect() {},
-    async start() {},
-    async resume(command) {
+    async start(): Promise<{ cwd?: string }> { return {}; },
+    async resume(command): Promise<{ cwd?: string }> {
       resumeCalls.push(command);
       if (options?.resumeGate) await options.resumeGate;
       sessions.add(command.managerId);
+      return {};
     },
     async send() {
       return true;
@@ -425,8 +426,8 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       workspacePath: '/work/project',
       workspacePathKnown: true,
       async connect() {},
-      async start() {},
-      async resume() {},
+      async start(): Promise<{ cwd?: string }> { return {}; },
+      async resume(): Promise<{ cwd?: string }> { return {}; },
       async send() {
         return true;
       },
@@ -552,14 +553,15 @@ describe('abort() / send() の孤児ジョブ分岐（#load() の二重読み込
       workspacePath: '/work/project',
       workspacePathKnown: true,
       async connect() {},
-      async start() {},
-      async resume(command) {
+      async start(): Promise<{ cwd?: string }> { return {}; },
+      async resume(command): Promise<{ cwd?: string }> {
         resumeCalls.push(command);
         // abort() が完全に終わる（`record.stopConfirmedAt` を立て、台帳へ
         // 永続化し、`#retire()` まで済ませる）まで、このセッションが
         // 「立った」ことにしない。
         await abortSettled.promise;
         sessions.add(command.managerId);
+        return {};
       },
       async send() {
         return true;

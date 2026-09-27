@@ -122,10 +122,11 @@ function tokenRunner() {
       // **同期的に名乗らせない**（本物は `void this.#pump(...)` で即 return する）。
       emit = onEvent;
     },
-    async start() {
+    async start(): Promise<{ cwd?: string }> {
       /* この検証では使わない */
+      return {};
     },
-    async resume(command) {
+    async resume(command): Promise<{ cwd?: string }> {
       alive.push({
         managerId: command.managerId,
         status: 'running',
@@ -134,6 +135,7 @@ function tokenRunner() {
         waiting: [],
         sessionId: command.sessionId,
       });
+      return {};
     },
     async send() {
       /* この検証では使わない */

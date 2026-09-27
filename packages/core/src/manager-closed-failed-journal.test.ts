@@ -50,11 +50,13 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     async connect(onEvent) {
       emit = onEvent;
     },
-    async start() {
+    async start(): Promise<{ cwd?: string }> {
       /* この検証では使わない */
+      return {};
     },
-    async resume() {
+    async resume(): Promise<{ cwd?: string }> {
       /* この検証では使わない */
+      return {};
     },
     async send() {
       /* この検証では使わない */
