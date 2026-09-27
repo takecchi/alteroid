@@ -1,6 +1,6 @@
 ---
 name: pr-green
-description: PR が本当に緑かを判定するとき、CI の完了を待つループを書くときに読む。statusCheckRollup がどの sha の結果か返さないこと、draft の skipped を緑と数えない、同じ sha に failure と success が同居しうる、gh pr ready が run を起こさず mergeStateStatus: CLEAN になる形、check-runs の started_at / id / completed_at のどれも世代の順序を決められないこと（run 側から降りる手順と scripts/check-pr-green.mjs）、created_at が同秒で並ぶとき id が tiebreak であること、cancelled が最新世代とは限らないこと、run 全体の conclusion が success にも failure にも化けること、BLOCKED と UNSTABLE の違い、ready 直後の 0 本を「起きていない」と読まないこと、非 success を red / cancelled / out-of-scope（push 等で pull_request 専用 job が設計どおり skip されただけ。exit 2）/ skipped（draft 由来の疑い）の4値に分けること。
+description: PR が本当に緑かを判定するとき、CI の完了を待つループを書くときに読む。statusCheckRollup がどの sha の結果か返さないこと、draft の skipped を緑と数えない、同じ sha に failure と success が同居しうる、gh pr ready が run を起こさず mergeStateStatus: CLEAN になる形、check-runs の started_at / id / completed_at のどれも世代の順序を決められないこと（run 側から降りる手順と scripts/check-pr-green.mjs）、created_at が同秒で並ぶとき id が tiebreak であること、rerun（gh run rerun）は run の created_at を動かさないので run_attempt が2以上のときだけ updated_at で世代を選ぶこと（#1748）、cancelled が最新世代とは限らないこと、run 全体の conclusion が success にも failure にも化けること、BLOCKED と UNSTABLE の違い、ready 直後の 0 本を「起きていない」と読まないこと、非 success を red / cancelled / out-of-scope（push 等で pull_request 専用 job が設計どおり skip されただけ。exit 2）/ skipped（draft 由来の疑い）の4値に分けること。
 ---
 
 # PR が緑かを判定する（`check-runs` と run の世代）
@@ -59,6 +59,24 @@ description: PR が本当に緑かを判定するとき、CI の完了を待つ�
     - **クローンと委譲先が、この誤り（`started_at` で世代を選ぶ）を独立に同時に犯した**（#933）。読み手の不注意ではなく、方法そのものが順序を保証していない
     - **対策: `check-runs` の一覧を世代選びに使わず、run の側から降りる。** `gh api "repos/<repo>/actions/runs?head_sha=<sha>&per_page=100"` で実際の run 一覧を取り、`workflow_runs` の `created_at`（run 自身が作られた実測時刻。job の `started_at` ではない）で **workflow 名ごとに**最新の run を選び（複数 workflow が同じ sha に在っても名前ごとに独立に選べば、走行中の別 workflow を丸ごと落とさない。#933 コメントの実測）、選んだ run の `gh api repos/<repo>/actions/runs/<id>/jobs` を読む。実測（2026-09-15 観測、上記 sha）: この手順は `image` / `base-overlap` / `ci` / `pr-origin` すべて `success` という正しい答えを返した。**`check-runs` の `check_suite.id` もこの標本では run の作成順と一致したが、複数 workflow・`rerun` で3世代目が生える場合は未検証**（#933 のコメント）なので根拠にしない
     - `scripts/check-pr-green.mjs`（`pnpm check:pr-green -- <sha>`）はこの手順をそのまま実装したもの
+    - **⭐ 「未検証」だった rerun で3世代目が生える場合を #1748 で実測した —— `created_at` は rerun で3世代目が生えても壊れなかったが、rerun が絡む run 自身の `created_at` は動かないので、rerun していない別の run に追い越される形で壊れた。** 実測（観測 2026-09-27、sha `031bf92f62e61fc16eee3570a72c7c87ff6b2d7f`）: push 直後に `gh pr ready` を打ったところ、concurrency（`cancel-in-progress: true`）が競り合い、`CI` の run が2本できた —— run `36286928087`（`run_attempt=1`、`created_at=01:54:11Z`、draft と評価された扱いのまま `conclusion=skipped`）と、run `36286927781`（attempt 1 は `created_at=01:54:10Z`——`36286928087` より**1秒早い**——で `cancelled`。人間が `gh run rerun` した attempt 2 は `success`、`updated_at=02:16:15Z`、22分後）。**`gh run rerun` は同じ run id・同じ `created_at` のまま attempt だけを重ねる** ⟹ `created_at` で比べると、後から作られた draft 由来の `36286928087`（`01:54:11Z`）が rerun 後の `36286927781`（`created_at` は動かず `01:54:10Z` のまま）より新しく見え、**skipped のほうを「最新世代」に選んでしまう**（`check-pr-green(031bf92…): NG —— skipped の job が在る`。直す前の `main` で再現した生出力）。
+      - **check-run（job）の `id` を鍵にする案も試したが、採らない。** rerun 後の attempt はジョブごとに新しい check-run id を得て、この #1748 の標本では新しい id が正しく success 側を指した（`108530421811` > `108529330063`）。しかし直上の #933 の実測（sha `1e619f43858160fb5d9a6b1895d236e35d4771cf`）を同じ観点で引き直すと、`base-overlap` という1門だけ check-run id が逆転したままである（skipped 側の check-run id `103687100128` が、success 側の `103687095766` より**大きい**。2026-09-27 に再実測し、いまも同じ値が返る——直上55〜57行目の「`id` も同じ向きに逆転する」は rerun の無い draft→ready のレースでも成立している）。⟹ **check-run id は rerun の有無に関わらず既に破綻することが分かっているキーなので、世代選びの鍵にしない**
+      - **対策: `run_attempt` が2以上（rerun された run）のときだけ、run の `created_at` の代わりに `updated_at` を使う。** rerun しても `created_at` は動かないが、`updated_at` は状態が変わるたびに動く（rerun の完了時刻まで動く）。`run_attempt` が1の run（この repo の大多数）は従来どおり `created_at` を使うので、#933 / #997 / #1126 で確かめた「draft→ready のレース」の答えは1文字も変わらない —— 実測（2026-09-27 に再実測。値は下の表のとおり動いていない）:
+
+        | sha（Issue） | run（世代）           | `run_attempt` | `created_at` | `updated_at` |
+        | ------------ | --------------------- | ------------- | ------------ | ------------ |
+        | #933         | skipped（draft）      | 1             | `06:44:48Z`  | `06:44:54Z`  |
+        | #933         | success（ready）      | 1             | `06:44:54Z`  | `06:53:18Z`  |
+        | #997         | skipped（draft）      | 1             | `04:39:56Z`  | `04:39:57Z`  |
+        | #997         | success（ready）      | 1             | `04:40:39Z`  | `04:48:56Z`  |
+        | #1126        | cancelled             | 1             | `21:26:04Z`  | `21:26:06Z`  |
+        | #1126        | success               | 1             | `21:26:04Z`  | `21:26:28Z`  |
+        | #1748        | skipped（draft 由来） | 1             | `01:54:11Z`  | `01:54:22Z`  |
+        | #1748        | success（rerun 後）   | **2**         | `01:54:10Z`  | `02:16:15Z`  |
+
+        どの行も `updated_at` で並べれば「本物が走った・完了した」ほうが後ろに来る。`run_attempt` で場合分けすることで、rerun の無い6行（#933/#997/#1126）は `created_at` のままなので既存の答えを保ち、rerun が絡む#1748の2行だけ `updated_at` に乗り換えて正しい答えを返す。実装は `scripts/check-pr-green-core.mjs` の `effectiveTimestamp` / `newerRun`。**歯は `scripts/check-pr-green.test.ts` の「Issue #1748 の実例」——直す前の `main`（`created_at` だけで比較する実装）に戻すと、この歯は赤くなる（変異試験で確認済み）。**
+
+      - **⚠️ これでも「確定」ではない。** rerun が2回以上重なる場合（3世代目がさらに rerun される）、`pull_request` と `workflow_dispatch` が混ざる場合はまだ測っていない。
     - **⚠️ `created_at` が同じ秒で並ぶ標本が実在する。そのとき順序を決めているのは `id` の tiebreak である。** 実測（2026-09-17T02:12Z 観測、head `94e35f55…`。⚠️ この sha は既にマージ済みの PR #1126 のものなので、引き直せば同じものが出る）:
 
       ```

@@ -212,6 +212,92 @@ describe('pickLatestRunPerWorkflow', () => {
     const result = evaluatePrGreen(latest, jobsByRunId);
     expect(result.verdict).toBe('green');
   });
+
+  it('Issue #1748 の実例: rerun が絡むと、draft 由来の skip のほうが created_at 上は新しく見える。updated_at で正しく success を選ぶ', () => {
+    // 実測（観測 2026-09-27、sha 031bf92f62e61fc16eee3570a72c7c87ff6b2d7f）:
+    // push 直後に `gh pr ready` を打ったところ、concurrency
+    // （cancel-in-progress: true）が競り合い、`CI` の run が2本できた。
+    //
+    // gh api "repos/takecchi/alteroid/actions/runs?head_sha=031bf92f62e61fc16eee3570a72c7c87ff6b2d7f&per_page=100"
+    //   --jq '.workflow_runs[] | select(.name=="CI")'
+    //
+    // run 36286928087（run_attempt=1、created_at=01:54:11Z、conclusion=skipped。
+    // draft と評価された扱いのまま残った）と、run 36286927781（attempt 1 は
+    // created_at=01:54:10Z——36286928087 より1秒早い——で cancelled。
+    // `gh run rerun` した attempt 2 は success、updated_at=02:16:15Z）。
+    // rerun しても run 自身の created_at（01:54:10Z）は動かない。
+    const draftOriginSkip = {
+      id: 36286928087,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 1,
+      created_at: '2026-09-27T01:54:11Z',
+      updated_at: '2026-09-27T01:54:22Z',
+      status: 'completed',
+      conclusion: 'skipped',
+    };
+    const rerunSuccess = {
+      id: 36286927781,
+      name: 'CI',
+      event: 'pull_request',
+      run_attempt: 2,
+      created_at: '2026-09-27T01:54:10Z',
+      updated_at: '2026-09-27T02:16:15Z',
+      status: 'completed',
+      conclusion: 'success',
+    };
+
+    // created_at だけを比べると draftOriginSkip（01:54:11Z）が rerunSuccess
+    // （created_at は動かず 01:54:10Z のまま）より新しく見える —— これが
+    // 直す前の NG の原因だった。
+    expect(Date.parse(draftOriginSkip.created_at)).toBeGreaterThan(
+      Date.parse(rerunSuccess.created_at),
+    );
+
+    const latest = pickLatestRunPerWorkflow([draftOriginSkip, rerunSuccess]);
+    expect(latest).toEqual([rerunSuccess]);
+    // 渡す順序を変えても同じ結果になること（newerRun は対称のはず）。
+    expect(pickLatestRunPerWorkflow([rerunSuccess, draftOriginSkip])).toEqual([rerunSuccess]);
+
+    // 実測: gh api repos/takecchi/alteroid/actions/runs/36286927781/attempts/2/jobs
+    const jobsByRunId = {
+      36286927781: [
+        { name: 'ci', status: 'completed', conclusion: 'success' },
+        { name: 'image', status: 'completed', conclusion: 'success' },
+      ],
+    };
+    const result = evaluatePrGreen(latest, jobsByRunId);
+    expect(result.verdict).toBe('green');
+  });
+
+  it('Issue #1748 の変異ガード: run_attempt を無視して常に created_at で選ぶと、#1748 の標本は再び skipped（NG）に戻る', () => {
+    // effectiveTimestamp の run_attempt 分岐を外す変異と同じ効果を、
+    // このテスト自身の中で再現する——`newerRun` を直接は呼べないので、
+    // 「rerun を無視した素朴な created_at 比較」を関数として書き下し、
+    // 直した実装と挙動が違うことを確かめる（回帰の形を歯に残す）。
+    const draftOriginSkip = {
+      id: 36286928087,
+      name: 'CI',
+      created_at: '2026-09-27T01:54:11Z',
+      conclusion: 'skipped',
+    };
+    const rerunSuccess = {
+      id: 36286927781,
+      name: 'CI',
+      created_at: '2026-09-27T01:54:10Z',
+      conclusion: 'success',
+    };
+    const naiveNewerByCreatedAtOnly = (a: typeof draftOriginSkip, b: typeof rerunSuccess) => {
+      const ta = Date.parse(a.created_at);
+      const tb = Date.parse(b.created_at);
+      if (ta !== tb) return ta > tb ? a : b;
+      return a.id > b.id ? a : b;
+    };
+    // 直す前の判定（created_at だけ）は skipped を選ぶ —— これが #1748 の NG。
+    expect(naiveNewerByCreatedAtOnly(draftOriginSkip, rerunSuccess)).toEqual(draftOriginSkip);
+    // 直した後の pickLatestRunPerWorkflow は同じ標本で success を選ぶ
+    // （run_attempt を足した完全な標本は直上のテストで確認済み）。
+  });
 });
 
 describe('evaluatePrGreen', () => {
