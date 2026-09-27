@@ -211,7 +211,8 @@ describe('resolveBuildTime', () => {
   });
 
   it('引数を渡さなければ実際に焼かれた CANON_BUILT_AT が使われる（build 後は必ず値を持つ）', () => {
-    // **この pnpm test は build 後に走る前提**（AGENTS.md「build が先」）。
+    // **この pnpm test は build 後に走る前提**（`.claude/skills/dev-setup/SKILL.md` の
+    // 「build が先」の項——この項は #1753 で AGENTS.md「開発手順」から移った）。
     // `generated/canon.ts` は `write-canon.mjs` が毎回焼くので、ビルド時刻は
     // 必ず取れる（`builtAt()` の doc — 空になることは無い）。
     const time = resolveBuildTime();

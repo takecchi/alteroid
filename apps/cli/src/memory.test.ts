@@ -215,7 +215,9 @@ describe('alteroid memory list / show', () => {
             descriptionFreshness: { kind: 'absent' },
             // `GET /memory` はこの2つを**必須**で返す（`createdAt` は #220 から）。
             // **足場が返さないのは、足場が契約に追いついていないということである**
-            // （AGENTS.md「テストの足場・スタブ・モックは、動くのに嘘をつく」）。
+            // （`.claude/agents-md-records/delegation.md` の「テストの足場・スタブ・
+            // モックは、動くのに嘘をつく」——この項は #1758 で AGENTS.md「作業者へ
+            // 切り出す」から移った）。
             // アサーションは1文字も変えていない。
             createdAt: { kind: 'known', at: '2026-08-10T00:00:00.000Z' },
             updatedAt: '2026-08-15T00:00:00.000Z',

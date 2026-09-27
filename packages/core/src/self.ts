@@ -423,8 +423,9 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
       'alteroid の器へ届かないので、上の時刻より後に `main` へ入ったものはまだ届いて' +
       'いない（これより前のものが全部入っている、とは言えない。反映してから焼くまでの' +
       '隙間があるため）。',
-    // **数え方は渡すが、実測の数字は焼かない**（AGENTS.md「数字は腐る。腐っても
-    // 赤くならない」）。夜間反映の実際の間隔・時刻は `gh run list
+    // **数え方は渡すが、実測の数字は焼かない**（`.claude/skills/cloud-deployment/SKILL.md`
+    // の「数字は腐る。腐っても赤くならない」——この項は #1753 で AGENTS.md「リポジトリの
+    // 約束」から移った）。夜間反映の実際の間隔・時刻は `gh run list
     // --workflow=release-prod.yml` で測り直すことをここでは指すだけにする。
     `  差を数えるには \`gh api repos/takecchi/alteroid/compare/${
       facts.revision.commit ?? '<上のリビジョン>'

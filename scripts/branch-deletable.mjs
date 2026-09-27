@@ -97,7 +97,8 @@ function runCapture(cmd, args) {
   } catch (error) {
     // `git grep` は「該当なし」を exit 1 で返す。stdout は空のはず——
     // それとエラー（コマンドが無い・rev が無い等）を区別する
-    // （`AGENTS.md`「静かに失敗する道具」— 件数と終了コードは別のこと）。
+    // （`.claude/skills/tool-quirks/SKILL.md`（この項は #1753 で
+    // `AGENTS.md`「静かに失敗する道具」から移った）— 件数と終了コードは別のこと）。
     const status = error && typeof error === 'object' && 'status' in error ? error.status : null;
     const stdout =
       error && typeof error === 'object' && 'stdout' in error ? String(error.stdout ?? '') : '';

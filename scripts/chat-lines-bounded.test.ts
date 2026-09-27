@@ -46,7 +46,8 @@ import { describe, expect, it } from 'vitest';
  * 追加の実行経路も増えない。**選んだのは「もう在る作法に合わせられるか」
  * のほうを優先したためであり、eslint 側のほうが良いと後で分かれば移してよい。**
  *
- * **`grep` を使わない。** `AGENTS.md`「静かに失敗する道具」の `grep` の
+ * **`grep` を使わない。** `.claude/skills/tool-quirks/SKILL.md`（この項は #1753 で
+ * `AGENTS.md`「静かに失敗する道具」から移った）の `grep` の
  * 取りこぼしを踏まないよう、Node の `fs` で読んだ生の文字列に対して
  * 自前の正規表現を通す（`scripts/agents-md-references.test.ts` と同じ作法）。
  */

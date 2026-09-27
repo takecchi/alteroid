@@ -28,7 +28,8 @@ import {
  *    テストが走る時点で `apps/web/build/client/assets/*.css` は必ず存在する。
  *    手元で `pnpm build` を走らせずに `pnpm test` だけを打つと、下のテストは
  *    「先に `pnpm build` を走らせたか」というメッセージ付きで落ちる
- *    （`AGENTS.md`「開発手順」の `build が先` と同じ前提。黙ってスキップしない —
+ *    （`.claude/skills/dev-setup/SKILL.md` の `build が先` の項と同じ前提
+ *    ——この項は #1753 で `AGENTS.md`「開発手順」から移った。黙ってスキップしない —
  *    スキップすると「検査していない」が「検査して0件だった」と区別できなくなる）。
  */
 describe('check-web-css-comment-classnames: findInvalidCssHits', () => {

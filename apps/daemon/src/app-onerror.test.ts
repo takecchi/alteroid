@@ -31,8 +31,9 @@ import { createApp } from './app.js';
 /**
  * `clone` はこのテストでは一度も呼ばれない（`/access` はクローンを経由しない）。
  * `managers` だけは実物（`createManagerPool`）を使う——手で書いた `ManagerPool` は
- * 本物の実装が増やした分岐に追随しない（AGENTS.md「テストの足場・スタブ・
- * モックは、動くのに嘘をつく」と同じ理由）。
+ * 本物の実装が増やした分岐に追随しない（`.claude/agents-md-records/delegation.md`
+ * の「テストの足場・スタブ・モックは、動くのに嘘をつく」——この項は #1758 で
+ * AGENTS.md「作業者へ切り出す」から移った——と同じ理由）。
  */
 function fakeCloneHost(stores: Stores): CloneHost {
   return {

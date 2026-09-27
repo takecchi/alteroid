@@ -34,7 +34,8 @@ import { describe, expect, it } from 'vitest';
  * 呼んでいるか**を検算する形にしてある（`RegistryEntry` の doc）。
  *
  * **`grep` を使わない。** 理由は `conversation-window-single-source.test.ts`
- * と同じ（`AGENTS.md`「静かに失敗する道具」の4つの取りこぼし）。
+ * と同じ（`.claude/skills/tool-quirks/SKILL.md` の4つの取りこぼし
+ * ——この項は #1753 で `AGENTS.md`「静かに失敗する道具」から移った）。
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));

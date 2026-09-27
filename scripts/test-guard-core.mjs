@@ -375,8 +375,9 @@ export const EXIT_STATIC_SKIP = 4;
  * **マネージャーの追加の枷（依頼者経由）**: `include` の glob 展開に失敗した・
  * 走査の起点がずれた・`vitest.config.ts` を読めなかった等で対象が0件になると、
  * 「無条件の静的 skip が0件だった」と**同じ見た目**になる。前者は「見ていない」、
- * 後者は「見て、無かった」で、意味が違う（`AGENTS.md`「`grep` が静かに取りこぼす
- * 形」の `grep -c` が返す 0 と同じ形）。**混ぜない** — `EXIT_STATIC_SKIP` とも
+ * 後者は「見て、無かった」で、意味が違う（`.claude/skills/tool-quirks/SKILL.md`
+ * の `grep` が静かに取りこぼす形——この項は #1753 で `AGENTS.md`「静かに失敗する
+ * 道具」から移った——の `grep -c` が返す 0 と同じ形）。**混ぜない** — `EXIT_STATIC_SKIP` とも
  * `EXIT_UNKNOWN`（歯Aの集計行不在）とも別の exit code にする。
  */
 export const EXIT_SCAN_EMPTY = 5;

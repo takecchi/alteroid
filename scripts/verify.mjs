@@ -9,7 +9,8 @@
  * しか現れず、**抜けたことは出力に出ない。**
  *
  * **そして順序が要る。** `build` が先でないと、ワークスペース間の型解決が各パッケージの
- * `dist/` に依存しているせいで `typecheck` / `test` が落ちる（`AGENTS.md`「開発手順」）。
+ * `dist/` に依存しているせいで `typecheck` / `test` が落ちる（`.claude/skills/dev-setup/SKILL.md`
+ * の「build が先」の項——この項は #1753 で `AGENTS.md`「開発手順」から移った）。
  *
  * **OpenAPI の一致も一式に含める。** いまこれは CI にしか無く、手元の一式に入って
  * いなかった（`.github/workflows/ci.yml`）。手元で通したつもりが CI で初めて落ちる差が

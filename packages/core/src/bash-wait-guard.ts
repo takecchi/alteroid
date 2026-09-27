@@ -172,7 +172,8 @@ function isBoundedLoop(keyword: 'until' | 'while', cond: string, body: string): 
  * 他の3つの形（`until`/`while` + `sleep`・`tail -f`）は**コマンド自身が
  * 終わらない**。こちらは違う —— `gh run watch` は run が終われば返る。
  * 害は「終わらないこと」ではなく、**背景へ置くと待ちが自分の手から外れる**
- * ことのほうである。実測（2026-09-17、AGENTS.md「CI の完了を待つ形」に逐語）:
+ * ことのほうである。実測（2026-09-17、`.claude/skills/pr-green/SKILL.md` に逐語
+ * ——この項は #1753 で AGENTS.md「CI の完了を待つ形」から移った）:
  * 作業者2人が同じ形で止まった。背景処理を残したまま作業者が畳むと、
  * 起こし直しの上限（`runner.ts` の `SUBAGENT_WAKEUP_LIMIT_PER_AGENT`）に
  * 達して**委譲そのものが停止する** —— しかも依頼側からは「まだ走っている」と

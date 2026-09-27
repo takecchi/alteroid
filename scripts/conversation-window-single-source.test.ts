@@ -21,7 +21,8 @@ import { describe, expect, it } from 'vitest';
  * 場所が `types: ['exchange']` を持つ `journal.list` 呼び出しを新しく手組みしたら
  * 落ちる。
  *
- * **`grep` を使わない。** `AGENTS.md`「静かに失敗する道具」の `grep` の4つの
+ * **`grep` を使わない。** `.claude/skills/tool-quirks/SKILL.md`（この項は #1753 で
+ * `AGENTS.md`「静かに失敗する道具」から移った）の `grep` の4つの
  * 取りこぼし（終了コードが嘘をつく／識別子の一部に一致しない／NUL でバイナリ判定
  * される／改行を跨ぐ）を踏まないよう、Node の `fs` で読んだ生の文字列に対して
  * 自前の正規表現を通す（`scripts/agents-md-references.test.ts` と同じ作法）。
