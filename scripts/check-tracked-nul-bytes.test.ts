@@ -135,7 +135,10 @@ describe('listScannableFiles は未追跡ファイルも対象に入れる（#18
     git('add', '-A');
     git('commit', '-qm', 'init');
     // まだ `git add` していない新規ファイル（NUL バイトを含む）。
-    await writeFileAsync(join(dir, 'new-untracked.txt'), Buffer.from(['a', NUL_CHAR, 'b'].join('')));
+    await writeFileAsync(
+      join(dir, 'new-untracked.txt'),
+      Buffer.from(['a', NUL_CHAR, 'b'].join('')),
+    );
     return dir;
   }
 

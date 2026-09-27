@@ -53,7 +53,6 @@ describe('listGitScannableFiles（Issue #1817）', () => {
 
   it('`.gitignore` に一致する未追跡ファイルは対象に入れない', async () => {
     const dir = await makeRepoWithUntrackedFile();
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
     await mkdir(join(dir, 'ignored-dir'), { recursive: true });
     await writeFile(join(dir, 'ignored-dir', 'scratch.txt'), 'scratch\n');
     await writeFile(join(dir, '.gitignore'), 'ignored-dir/\n');

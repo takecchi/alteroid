@@ -881,10 +881,7 @@ describe('listScannableFiles は未追跡ファイルも対象に入れる（#18
     git('add', '-A');
     git('commit', '-qm', 'init');
     // PR #1808 と同じ形: まだ `git add` していない新規ファイル。
-    await writeFile(
-      path.join(dir, 'new-untracked.ts'),
-      '// see clone.ts:505 for the fence rule\n',
-    );
+    await writeFile(path.join(dir, 'new-untracked.ts'), '// see clone.ts:505 for the fence rule\n');
     return dir;
   }
 
