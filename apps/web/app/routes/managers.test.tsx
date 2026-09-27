@@ -349,6 +349,66 @@ describe('失敗も、状態を置き換えずに状態へ添える', () => {
 });
 
 /**
+ * **Issue #1882（一覧側。詳細と同じ構造で食い違うことを描画して確かめた）。**
+ *
+ * `ManagerFailureNote` の呼び出しが `status` を渡していなかったので、詳細
+ * （`manager-detail.test.tsx`）と同じ形で、終端した委譲（failed / lost /
+ * stopped）でも「セッションは生きているので、原因が解ければ話しかければ続く」
+ * を言っていた。**Issue 本文は一覧を【判定】止まりとしていたが、ここで実際に
+ * 描画して確かめた**——判定どおり、詳細と同じ食い違いが出た。
+ */
+describe('Issue #1882: 一覧でも、終端した委譲では「生きている」を言わない', () => {
+  const FAILURE = { code: 'rate_limit', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' };
+
+  it('status: failed は終端の言葉に置き換わる', async () => {
+    renderManagers([{ ...BASE, status: 'failed', lastFailure: FAILURE }]);
+
+    expect(await screen.findByText(/rate_limit/)).toBeTruthy();
+    expect(screen.queryByText(/話しかければ続く/)).toBeNull();
+    expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+  });
+
+  it('status: lost は終端の言葉に置き換わる', async () => {
+    renderManagers([{ ...BASE, status: 'lost', lastFailure: FAILURE }]);
+
+    expect(await screen.findByText(/rate_limit/)).toBeTruthy();
+    expect(screen.queryByText(/話しかければ続く/)).toBeNull();
+    expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+  });
+
+  it('status: stopped は明示的に停止させた終端の言葉になる', async () => {
+    renderManagers([{ ...BASE, status: 'stopped', lastFailure: FAILURE }]);
+
+    expect(await screen.findByText(/rate_limit/)).toBeTruthy();
+    expect(screen.queryByText(/話しかければ続く/)).toBeNull();
+    expect(
+      screen.getByText(/人間・クローンが明示的に停止させ、確かめたうえで既に終端している/),
+    ).toBeTruthy();
+  });
+
+  it('lastFoldedTurn が在る回は、古い lastFailure を「直近のターン」として出さない', async () => {
+    renderManagers([
+      {
+        ...BASE,
+        status: 'stopped',
+        lastFailure: FAILURE,
+        lastFoldedTurn: { text: '畳まれた本文', at: '2026-08-21T00:00:00.000Z' },
+      },
+    ]);
+
+    expect(await screen.findByText('停止済み')).toBeTruthy();
+    expect(screen.queryByText(/報告ではなく失敗で終わっている/)).toBeNull();
+  });
+
+  it('生きている status（done）は今までどおり「生きている」を言う（既定は変えていない）', async () => {
+    renderManagers([{ ...BASE, status: 'done', lastFailure: FAILURE }]);
+
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    expect(screen.getByText(/話しかければ続く/)).toBeTruthy();
+  });
+});
+
+/**
  * **`live` は status と別の軸である。** `live && <札>` の形は `live === false` を
  * 「札が無い」でしか表さず、読む側は「切断されている」と「この画面が接続状態を
  * 報告していない」を区別できない。だから両側を描く。

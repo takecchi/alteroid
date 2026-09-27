@@ -196,17 +196,41 @@ export function ManagerDenialNote({
  *
  * **SDK の語（`code` / `via`）をそのまま出す。** 言い換えると人間が SDK の型定義や
  * ログで引ける手がかりが消える。`billing_error` と `rate_limit` は次の一手が違う。
+ *
+ * ## Issue #1882: `status` を見ずに「生きている」を言い続けていた
+ *
+ * 呼び出しが `status` を渡していなかったので、詳細（`manager-detail.tsx` の
+ * `FailureNote`）と同じ形で、`failed` / `lost` / `stopped` のように**既に終端
+ * している**回でも「セッションは生きているので、原因が解ければ話しかければ続く」
+ * を言っていた。**揃える先・文言・`lastFoldedTurn` の扱いは詳細の `FailureNote`
+ * の doc（「Issue #1882」「Issue #1882 / #1798」）と同じ**——生成元をこの
+ * ファイルへ複製すると片方だけ直る形になるので、判断の理由はそちらの doc から
+ * 1本だけ辿れるようにし、ここでは短く要点だけを書く。
  */
 export function ManagerFailureNote({
   failure,
+  status,
+  lastFoldedTurn,
 }: {
   failure: ManagerSummary['lastFailure'] | undefined;
+  status: ManagerStatus;
+  lastFoldedTurn: ManagerSummary['lastFoldedTurn'];
 }) {
   if (failure === undefined || failure === null) return null;
+  // Issue #1798 と同じ線（`manager-detail.tsx` の `FailureNote` の doc を見よ）
+  // ——`lastFoldedTurn` が在る回の `lastFailure` は、畳まれる前の無関係な
+  // 古いターンを指す。
+  if (lastFoldedTurn !== undefined) return null;
+  const terminal = status === 'failed' || status === 'lost' || status === 'stopped';
   return (
     <p className="mt-1 text-[11px] text-danger">
-      ⚠ 直近のターンは報告ではなく失敗で終わっている: {failure.code}（{failure.via}）
-      。セッションは生きているので、原因が解ければ話しかければ続く。
+      ⚠ 直近のターンは報告ではなく失敗で終わっている: {failure.code}（{failure.via}）。
+      {!terminal &&
+        'セッションは生きているので、原因が解ければ話しかければ続く。'}
+      {terminal &&
+        (status === 'stopped'
+          ? 'この仕事はもう終わっている。このセッションは、その後人間・クローンが明示的に停止させ、確かめたうえで既に終端している。原因の有無にかかわらず、このセッションはもう続かない。'
+          : 'この仕事はもう終わっている。セッションそのものが、依頼者が望まない終わり方で既に終端している。原因が解けても、このセッションは自動では続かない。')}
     </p>
   );
 }
@@ -654,7 +678,11 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                       失敗も `status` に映らない（上限に当たった回も `done` の
                       まま）。札はそのまま残し、その隣に添える。
                     */}
-                    <ManagerFailureNote failure={manager.lastFailure} />
+                    <ManagerFailureNote
+                      failure={manager.lastFailure}
+                      status={manager.status}
+                      lastFoldedTurn={manager.lastFoldedTurn}
+                    />
                     {/*
                       これも `status` に映らない（`done` のまま）。札は差し替えず
                       隣に添える（`ManagerAwaitingBackgroundNote` の doc）。

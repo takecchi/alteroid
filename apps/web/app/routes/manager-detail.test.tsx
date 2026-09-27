@@ -586,6 +586,108 @@ describe('詳細でも、失敗は状態を置き換えずに状態へ添える'
 });
 
 /**
+ * **Issue #1882: 終端した委譲（failed / lost / stopped）でも「セッションは
+ * 生きている」と言い続けていた、その2つの根。**
+ *
+ * 1. `FailureNote` は `manager.lastFailure` だけを見て `status` を見ない
+ *    ——`stopped` のように既に終端している回でも「この仕事は死んでいない。
+ *    セッションは生きているので……（だから状態は失敗ではなく待機中の
+ *    ままである）」を言っていた。バッジは「停止済み」なのに、同じ画面の
+ *    中で言い切りが事実と矛盾する。
+ * 2. `reportStatusDriftText` は `lastFoldedTurn` の有無にかかわらず、古い
+ *    `lastReportAt` / `lastReportStatus` で `describeReportDrift` を呼ぶ
+ *    ——畳まれたターンの回の `lastReportAt` / `lastReportStatus` は、畳まれる
+ *    **前**の無関係な古いターンの値である（`case 'report'` の `stopped`
+ *    早期 return がこの2欄を更新しない。`packages/core/src/manager.ts`）。
+ *
+ * 使い捨ての入力は Issue の実測入力そのもの（`status: 'stopped'`、古い
+ * `lastFailure`（`rate_limit`）、`lastReportStatus: 'running'`、
+ * `lastFoldedTurn`）。**直す前はこの入力で赤くなる**——`FailureNote` が
+ * 「セッションは生きている」を出し、`reportStatusDriftText` が古い材料で
+ * 「いま走っているターンの中身ではない」を出す。
+ *
+ * 揃える先は core の #1796（PR #1857）の `describeUsageStopped` と #1798
+ * （`packages/core/src/tools.ts` の `foldedTurn !== undefined` 分岐）——
+ * 終端した回では「生きている」を言わず、畳まれたターンの回では畳まれる前の
+ * 古い `lastFailure` / `lastReportAt` / `lastReportStatus` を「直近のターン」
+ * として出さない。文言は Web の既存の語調で別に書く（core の値は import
+ * できない。`eslint.config.js`）。
+ */
+describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生きている」を言わない', () => {
+  it('status: stopped + 古い lastFailure + lastFoldedTurn の回は、古い材料で「生きている」を言わない', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'stopped',
+      lastFailure: { code: 'rate_limit', via: 'assistant_error', at: '2026-08-01T00:00:00.000Z' },
+      lastReportAt: '2026-08-01T00:00:00.000Z',
+      lastReportStatus: 'running',
+      lastFoldedTurn: { text: '畳まれた本文', at: '2026-08-16T03:25:00.000Z' },
+    });
+
+    // バッジは「停止済み」——同じ画面の中で言い切りが矛盾してはいけない。
+    expect(await screen.findByText('停止済み')).toBeTruthy();
+    // 終端した回に「セッションは生きている」「この仕事は死んでいない」を言わない。
+    expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
+    expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
+    // 畳まれたターンの回に、畳まれる前の古い lastReportAt / lastReportStatus で
+    // drift を語らない（status は 'stopped' のまま動いていないので、揃えれば
+    // drift 自体が無い ⟹ この行は出ない）。
+    expect(screen.queryByText(/いま走っているターンの中身ではない/)).toBeNull();
+  });
+
+  it('status: failed + lastFailure（lastFoldedTurn 無し）は、終端の言葉に置き換わる', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'failed',
+      lastFailure: { code: 'rate_limit', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' },
+    });
+
+    expect(await screen.findByText('rate_limit')).toBeTruthy();
+    expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
+    expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
+    expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+  });
+
+  it('status: lost + lastFailure（lastFoldedTurn 無し）も、終端の言葉に置き換わる', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'lost',
+      lastFailure: { code: 'rate_limit', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' },
+    });
+
+    expect(await screen.findByText('rate_limit')).toBeTruthy();
+    expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
+    expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+  });
+
+  it('status: stopped + lastFailure（lastFoldedTurn 無し）は、明示的に停止させた終端の言葉になる', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'stopped',
+      lastFailure: { code: 'rate_limit', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' },
+    });
+
+    expect(await screen.findByText('rate_limit')).toBeTruthy();
+    expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
+    expect(
+      screen.getByText(/人間・クローンが明示的に停止させ、確かめたうえで既に終端している/),
+    ).toBeTruthy();
+  });
+
+  it('生きている status（done）は今までどおり「生きている」を言う（既定は変えていない）', async () => {
+    renderDetail({
+      ...BASE,
+      status: 'done',
+      lastFailure: { code: 'billing_error', via: 'assistant_error', at: '2026-08-20T10:00:00.000Z' },
+    });
+
+    expect(await screen.findByText('待機中')).toBeTruthy();
+    expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
+    expect(screen.getByText(/セッションは生きているので/)).toBeTruthy();
+  });
+});
+
+/**
  * **`lastReport` の描き方は `lastFailure` の有無で分岐する（issue #293）。**
  * 直す前は、失敗回でも `<Markdown>` として無条件に描いていたので、SDK の生の
  * 失敗文言（例: `You've hit your org's monthly spend limit …`）に Markdown の
