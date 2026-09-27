@@ -1940,22 +1940,28 @@ class RunnerSession {
   /**
    * 返事の宛先は `requestId` で指す。推測しない（取り違えは拒否を承認に変える）。
    *
-   * **確定した allow/deny を同期的に返す（#322）。** `decideAnswer` を
-   * `#onPermission` の `.then()`（SDK へ実際に返す `PermissionResult` を組み立てる
-   * 側）と共有しているので、ここが返す値と SDK へ返る値は常に同じ計算から出る
-   * ——2箇所に式を書くと、Issue #322 が候補2（`manager.ts` で `inferDecision` を
-   * 呼び直す）を却下した理由（「runner.ts 側が変わったときに黙ってずれる」）を
-   * 場所を変えて再現する。
+   * **確定した allow/deny/unreadable を同期的に返す（#322。3値目は
+   * issue #1827/#1837）。** `decideAnswer` を `#onPermission` の `.then()`
+   * （SDK へ実際に返す `PermissionResult` を組み立てる側）と共有しているので、
+   * ここが返す値と SDK へ返る値は常に同じ計算から出る——2箇所に式を書くと、
+   * Issue #322 が候補2（`manager.ts` で `inferDecision` を呼び直す）を却下
+   * した理由（「runner.ts 側が変わったときに黙ってずれる」）を場所を変えて
+   * 再現する。
+   *
+   * **`decision` 欄には `unreadable` をそのまま出す**（`decideAnswer` が
+   * SDK 向けに `deny` へ畳んだ値ではなく、畳む前の3値目）。`ManagerPool#send()`
+   * （`manager.ts`）はこれを見て「答え直せ」を伝える——`deny` に畳んで
+   * しまうと、本当に拒否された回と区別できなくなる。
    */
   answer(answer: RunnerAnswerCommand): RunnerAnswerOutcome {
     const pending = this.#pending.find((request) => request.id === answer.requestId);
     if (!pending) return { delivered: false };
-    const decision = decideAnswer(pending.kind, answer.decision, answer.message);
+    const { decision, unreadable } = decideAnswer(pending.kind, answer.decision, answer.message);
     pending.settle({
       message: answer.message,
       ...(answer.decision === undefined ? {} : { decision: answer.decision }),
     });
-    return { delivered: true, decision };
+    return { delivered: true, decision: unreadable ? 'unreadable' : decision };
   }
 
   /**
@@ -4007,7 +4013,7 @@ class RunnerSession {
       // クローンへ即座に返す値（`Pool#send` の `answered.decision`）と、SDK へ
       // 実際に返る `behavior` は常に同じ計算から出る。**この呼び出しは変えない**
       // ——ここが変わると `Session#answer()` との一致（#322）が壊れる。
-      const decision = decideAnswer(kind, answer.decision, answer.message);
+      const { decision, unreadable } = decideAnswer(kind, answer.decision, answer.message);
       // **畳む（`withdrawn`）・中断（`aborted`）の経路では、`question` も
       // deny で返す（Issue #1593）。** `decideAnswer` は「クローンが答えた」
       // ときの計算のままにしておき、ここで別枠として上書きする——`kind` が
@@ -4019,11 +4025,19 @@ class RunnerSession {
       // だけで行い、`message` の文字列は嗅がない**（AGENTS.md の同じ考え方）。
       // `kind === 'permission'` のときは `decision` が既に `'deny'` なので
       // ここは実質何も変えない（`#settleAll` も `onAbort` も明示の
-      // `decision:'deny'` を渡している）。
+      // `decision:'deny'` を渡している——`unreadable` も常に false になる、
+      // 明示の decision が優先されるため）。
       const teardown = answer.withdrawn === true || answer.aborted === true;
+      // **`unreadable`（issue #1827/#1837）: SDK へ返る拒否文にも、読み取れ
+      // なかったので拒否したことを載せる。** teardown 側（畳み・中断）は
+      // クローンの回答そのものではないので対象外——`unreadable` はここでは
+      // 常に false（上のコメントのとおり）だが、念のため teardown も明示で
+      // 外している。
+      const denyMessage =
+        !teardown && unreadable ? unreadableDenyMessage(answer.message) : answer.message;
       const outcome: PermissionResult =
         teardown || decision === 'deny'
-          ? { behavior: 'deny', message: answer.message }
+          ? { behavior: 'deny', message: denyMessage }
           : kind === 'question'
             ? { behavior: 'allow', updatedInput: withAnswers(input, answer.message) }
             : { behavior: 'allow' };
@@ -4222,10 +4236,18 @@ class RunnerSession {
     const result = answered.then((answer) => {
       // **`decideAnswer` を共有する**（#322 と同じ考え方——`#onPermission` と
       // 別々に判定を書くと、runner.ts 側が変わったときに黙ってずれる）。
-      const decision = decideAnswer(kind, answer.decision, answer.message);
+      const { decision, unreadable } = decideAnswer(kind, answer.decision, answer.message);
+      // **`unreadable`（issue #1827/#1837）は `aborted`（フックの持ち時間
+      // 切れ。`onTimeout` が明示の `decision:'deny'` を渡す）とは別枠——
+      // 明示の decision がある回は `unreadable` が常に false なので、ここで
+      // 二重に足しても実害は無いが、意図を明示するために分けて書く。
+      const denyMessage =
+        answer.aborted !== true && unreadable
+          ? unreadableDenyMessage(answer.message)
+          : answer.message;
       const outcome: PermissionResult =
         answer.aborted === true || decision === 'deny'
-          ? { behavior: 'deny', message: answer.message }
+          ? { behavior: 'deny', message: denyMessage }
           : { behavior: 'allow' };
       this.#resolved.set(id, outcome);
       return outcome;
@@ -6225,12 +6247,14 @@ function describeQuestion(question: unknown): string | undefined {
 /**
  * 否定として読み取る語。日本語は語境界が無いので素直に部分一致で見る。
  *
- * **一覧に無い否定は allow に化ける**（`inferDecision` の設計）ので、漏れは
- * 許しすぎる側に倒れる。「拒否」「無理」「お断り」のような普通の言い方が
- * 漏れていた（issue #1827）。部分一致なので、足す語は他の語の一部に
- * なりにくい形にする（`断` 1字だと「判断」に当たるので `断る` / `お断り` にする）。
- * 逆に、否定の語を含む承認（「拒否しなくてよい」など）は deny に倒れるが、
- * それは止める側であって許しすぎる側ではない。
+ * **一覧に無い否定はここでは deny にならない**（下の `inferDecision` の
+ * 3値目 `unreadable` へ落ちるだけで、allow へは化けない——2026-09-28 の
+ * 反転（issue #1827/#1837、次のブロックの doc）で既定が閉じる側になった
+ * ため）。「拒否」「無理」「お断り」のような普通の言い方が漏れていた
+ * （issue #1827）。部分一致なので、足す語は他の語の一部になりにくい形に
+ * する（`断` 1字だと「判断」に当たるので `断る` / `お断り` にする）。逆に、
+ * 否定の語を含む承認（「拒否しなくてよい」など）は deny に倒れるが、それは
+ * 止める側であって許しすぎる側ではない。
  */
 const DENIAL_PHRASES = [
   'やめ',
@@ -6256,46 +6280,157 @@ const DENIAL_PHRASES = [
   '認められない',
 ];
 
-/** 英語側は語境界で見る（`nothing` の `no` を否定と読まないため）。 */
+/**
+ * 英語側は語境界で見る（`nothing` の `no` を否定と読まないため）。
+ *
+ * **issue #1837 で拡張**: `reject` / `refuse` / `decline` は語幹＋任意の
+ * 語尾（`\w*`）にして -ing / -s 等の活用形も拾う（元は `\breject\b` で、
+ * `rejecting` の途中に語境界が無く一致しなかった）。`won't` / `will not` /
+ * `cannot` / `can not` も追加した——`don't` はあったが `won't` が漏れていた。
+ */
 const DENIAL_WORDS =
-  /\b(deny|denied|no|nope|don't|do not|stop|cancel|reject|rejected|refuse|refused|decline|declined)\b/i;
+  /\b(deny|denied|denying|no|nope|don't|do not|won't|will not|cannot|can not|stop|stopping|cancel\w*|reject\w*|refus\w*|declin\w*)\b/i;
 
 /**
- * `decision` を付け忘れた回答の読み取り。
+ * 承認としてはっきり読める語句（`inferDecision` の3値目 `unreadable` を
+ * 避けて `allow` に倒すための、狭い許可リスト）。
  *
- * 迷ったら通さない — ではなく、**否定が読み取れたときだけ拒否**する。ここで
- * 保守的に倒すと、クローンが承認したつもりの仕事が黙って止まる（デグレード）。
- *
- * 日本語を語境界（`\s` や `\b`）で探してはいけない。「それはやめて」の「やめ」の
- * 前に区切りは無く、探せていないことが**承認**として表に出る。
+ * **2026-09-28（issue #1827/#1837、オーナーの判断）で新設。** 反転前は
+ * 「否定が読めなければ allow」だったので承認の語を数える必要が無かったが、
+ * 反転後は「承認が読めて、かつ否定の印（下の `hasNegationMarker`）が
+ * 無いときだけ allow」になった——ここに無い言い方は `allow` にならない
+ * （狭いリストのぶん `unreadable` 側へ寄る。過剰に拒否と読む側であって
+ * 許しすぎる側ではないので、それでよいという判断）。
  */
-export function inferDecision(message: string): 'allow' | 'deny' {
+const APPROVAL_PHRASES = ['どうぞ', '進めてよい', '許可する', '承認する'];
+/** 英語側は語境界で見る。`ok` は大文字小文字を問わず拾う（`/i`）。 */
+const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay)\b/i;
+
+/**
+ * 否定の印。`DENIAL_PHRASES` / `DENIAL_WORDS` より広く見る一覧だが、
+ * **これ単体では `deny` を返さない**——承認の語（`APPROVAL_PHRASES` /
+ * `APPROVAL_WORDS`）と同じ回答に見つかったときにだけ、その回答を `allow`
+ * と読むのを止める（`unreadable` へ落とす）ためだけに使う。
+ *
+ * 例: `won't approve` は `approve`（承認の語）を含むが、`won't` は
+ * `DENIAL_WORDS` に既に在るので `inferDecision` はそこで `deny` を返し、
+ * ここには来ない。ここが実際に効くのは、`DENIAL_PHRASES`/`DENIAL_WORDS`
+ * の狭いリストには無いが承認の語と矛盾する印がある回——例:
+ * `問題ない`（`ない` を含む）——を `allow` にしないためである。
+ *
+ * 英語は `not` / `n't` / `never` / `cannot`、日本語は `ない` / `ません` /
+ * `ず`（依頼で明示された一覧のまま採用）。
+ *
+ * ⚠️ **部分一致なので誤検出がありうる**（例: 日本語の `ず` は「水」
+ * 「はず」のような無関係な語の中にも現れる）。誤検出の向きは常に
+ * 「承認と読まない」側——`allow` を `unreadable` に倒すだけで、
+ * `unreadable` は SDK 側では deny として扱われるので、許しすぎる側には
+ * 化けない（`decideAnswer` の doc）。
+ */
+const NEGATION_MARKERS_EN = /\b(not|n't|never|cannot)\b/i;
+const NEGATION_MARKERS_JA = ['ない', 'ません', 'ず'];
+
+function hasNegationMarker(message: string): boolean {
+  return (
+    NEGATION_MARKERS_EN.test(message) ||
+    NEGATION_MARKERS_JA.some((marker) => message.includes(marker))
+  );
+}
+
+function hasApprovalMarker(message: string): boolean {
+  return (
+    APPROVAL_PHRASES.some((phrase) => message.includes(phrase)) || APPROVAL_WORDS.test(message)
+  );
+}
+
+/**
+ * `decision` を付け忘れた回答の読み取り。3値である——`allow` / `deny` /
+ * `unreadable`。
+ *
+ * **2026-09-28（issue #1827/#1837、オーナーの判断）に既定を反転した。**
+ * 直前までの設計は「迷ったら通さない — ではなく、否定が読み取れたときだけ
+ * 拒否する」で、これは意図した判断だった（このブロックにその逐語が残って
+ * いた）。だが `DENIAL_PHRASES` / `DENIAL_WORDS` の一覧に無い否定
+ * ——「拒否」「無理」のような普通の言い方（#1827）、英語の -ing 形や
+ * `won't` / `cannot`（#1837）——が実際に `allow` へ化ける実害が2件連続で
+ * 見つかり、**語を足すだけでは漏れが終わらない**ことが分かった。オーナーは
+ * ここで既定そのものを閉じる側へ倒す判断をした——ただし「許可の確認では
+ * 常に `decision` 必須」までは広げていない:
+ *
+ * 1. 否定が読み取れた回（`DENIAL_PHRASES` / `DENIAL_WORDS`）は、今までどおり
+ *    `deny`。**否定は承認より先に見る**——`won't approve` は `approve` を
+ *    含むが `won't` がここで先に `deny` を確定させる。
+ * 2. 承認がはっきり読めて（`hasApprovalMarker`）、かつ否定の印
+ *    （`hasNegationMarker`。1. より広い一覧）が無い回は、今までどおり
+ *    `allow`。
+ * 3. **それ以外（新設）は `unreadable`。** 承認とも拒否とも機械的に読み
+ *    取れなかった回——`問題ない` のような、意味としては承認寄りの言い方も、
+ *    否定の印（`ない`）を含むためここに落ちる。過剰に拒否と読む側であって
+ *    許しすぎる側ではないので、それでよい、という判断（依頼の設計要点）。
+ *
+ * 呼び出し側（`decideAnswer`）は `unreadable` を SDK へは `deny` として
+ * 返しつつ、クローンへは「答え直せ」と伝える
+ * （`Session#answer()` / `ManagerPool#send()` の doc を見よ）。
+ *
+ * 日本語を語境界（`\s` や `\b`）で探してはいけない。「それはやめて」の
+ * 「やめ」の前に区切りは無く、探せていないことが**承認**として表に出る
+ * ——この事実は反転の前後で変わっていない。
+ */
+export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' {
   if (DENIAL_PHRASES.some((phrase) => message.includes(phrase))) return 'deny';
-  return DENIAL_WORDS.test(message) ? 'deny' : 'allow';
+  if (DENIAL_WORDS.test(message)) return 'deny';
+  if (hasApprovalMarker(message) && !hasNegationMarker(message)) return 'allow';
+  return 'unreadable';
+}
+
+/**
+ * `unreadable`（decision が無く、承認とも拒否とも読み取れなかった）ときに
+ * SDK へ返す拒否文。**元の文言を1文字も消さない**——読み取れなかったので
+ * 安全側で拒否したことと、答え直し方を前置きとして足すだけである
+ * （`decideAnswer` の doc の3.）。
+ */
+function unreadableDenyMessage(original: string): string {
+  return (
+    '[decision が無く、承認とも拒否とも読み取れなかったので安全側で拒否した] ' +
+    `${original}\n\n許可するときは decision: 'allow' を明示して答え直すこと。`
+  );
 }
 
 /**
  * 確認の最終的な決定を計算する、**唯一の実装**（#322）。
  *
- * `Session#answer()`（クローンへ即座に返す値）と `#onPermission` の
- * `answered.then()`（SDK へ実際に返す `PermissionResult` を組み立てる側）の
- * **両方がこの関数を呼ぶ。** 式を2箇所に書くと、Issue #322 が候補2
- * （`manager.ts` で `inferDecision` を呼び直す）を却下した理由と同じ形の穴に
- * なる——場所を `runner.ts` の中に留めても、実装が2つあれば「runner.ts 側が
- * 変わったときに黙ってずれる」は再現する。
+ * `Session#answer()`（クローンへ即座に返す値）と `#onPermission` /
+ * `#onPermissionDenied` の `answered.then()`（SDK へ実際に返す
+ * `PermissionResult` を組み立てる側）の**全員がこの関数を呼ぶ。** 式を
+ * 複数箇所に書くと、Issue #322 が候補2（`manager.ts` で `inferDecision` を
+ * 呼び直す）を却下した理由と同じ形の穴になる——場所を `runner.ts` の中に
+ * 留めても、実装が2つあれば「runner.ts 側が変わったときに黙ってずれる」は
+ * 再現する。
  *
  * - `AskUserQuestion`（`kind === 'question'`）は **decision を一切見ず常に
  *   allow**（既存の挙動そのまま。質問への回答に allow/deny という概念が無い）
  * - それ以外（`kind === 'permission'`）は明示の `decision` を優先し、
  *   無ければ `inferDecision(message)` に倒す
+ *
+ * **戻り値は `decision`（SDK へ実際に返す2値）と `unreadable`
+ * （`inferDecision` が3値目を返したかどうか）の組。** `unreadable` が
+ * true のときも `decision` は `'deny'` に畳んである——SDK 側は常に2値
+ * （`PermissionResult.behavior` は `'allow' | 'deny'`）だからである
+ * （2026-09-28、issue #1827/#1837）。呼び出し側は `unreadable` を見て、
+ * クローンへ返す文言・`RunnerAnswerOutcome.decision`（`'unreadable'` を
+ * 運べる。`runner-protocol.ts` の doc）を組み立てる。
  */
 export function decideAnswer(
   kind: 'question' | 'permission',
   decision: 'allow' | 'deny' | undefined,
   message: string,
-): 'allow' | 'deny' {
-  if (kind === 'question') return 'allow';
-  return decision ?? inferDecision(message);
+): { decision: 'allow' | 'deny'; unreadable: boolean } {
+  if (kind === 'question') return { decision: 'allow', unreadable: false };
+  if (decision !== undefined) return { decision, unreadable: false };
+  const inferred = inferDecision(message);
+  return inferred === 'unreadable'
+    ? { decision: 'deny', unreadable: true }
+    : { decision: inferred, unreadable: false };
 }
 
 /**

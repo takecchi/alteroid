@@ -5454,13 +5454,35 @@ class Pool implements ManagerPool {
          * `{ ok: true }` だけを返し、確定した値を報告できない——「allow
          * だった」でも「deny だった」でもない3つ目の状態なので、`[unknown]`
          * として区別する（`AGENTS.md`「取れない軸に0の行を作る」）。
+         *
+         * **`'unreadable'`（issue #1827/#1837）は上の `undefined`（=欄が無い
+         * ＝報告できない runner）とは別の値で、そのまま `[unreadable]` として
+         * 残る。** 「読み取れなかったので拒否した」と「そもそも報告されて
+         * いない」を journal の上でも区別できるようにするためで、ここで
+         * `allow`/`deny`/`unknown` のどれかへ畳まない。
          */
         answer:
           answered.decision === undefined
             ? `[unknown] ${message}`
             : `[${answered.decision}] ${message}`,
       });
-      return { outcome: 'answered', detail: `${pending.summary} に回答した。` };
+      return {
+        outcome: 'answered',
+        /*
+         * **`unreadable` のときだけ、答え直しを求める文言を足す（issue
+         * #1827/#1837）。** `answered.decision` が `'deny'`（本当に拒否と
+         * 読めた）と `'unreadable'`（読み取れなかったので安全側で拒否した）
+         * を区別できるのはここだけ——`decideAnswer` が SDK へ返す値では
+         * 両方 `deny` に畳まれるが、クローンに返す `detail` はその手前の
+         * 値（`RunnerAnswerOutcome.decision`）を見て組み立てる。
+         */
+        detail:
+          answered.decision === 'unreadable'
+            ? `${pending.summary} への回答が読み取れず、安全側で拒否した` +
+              `（decision が無く、承認とも拒否とも読めなかった）。` +
+              `許可するなら decision: 'allow' を付けて答え直すこと。`
+            : `${pending.summary} に回答した。`,
+      };
     }
 
     /*

@@ -600,10 +600,21 @@ export type RunnerAnswerCommand = z.infer<typeof runnerAnswerCommandSchema>;
  * の `HttpRunner`）は、欠けた回を allow/deny の既定値へ倒さず「報告されなかった」
  * と読める形（`decision` キーを省いたまま）で運ぶこと——`Pool#send`（`manager.ts`）
  * がその形のまま journal へ書く（`AGENTS.md`「取れない軸に0の行を作る」）。
+ *
+ * **`'unreadable'`（issue #1827/#1837、2026-09-28 追加）**: `decision` を
+ * 付け忘れた回答が、承認とも拒否とも機械的に読み取れなかったとき
+ * （`runner.ts` の `inferDecision` / `decideAnswer` の doc）。SDK へ実際に
+ * 返る `PermissionResult.behavior` は `'deny'` に畳むが、`ManagerPool#send()`
+ * が呼び手（クローン）へ「答え直せ」と伝えるには、`'deny'`（本当に拒否と
+ * 読めた）と区別できる値がここに要る——だから既存の2値を畳まず、3値目
+ * として足した。**この欄はワイヤーを1箇所（`HttpRunner#answer()` の
+ * `.safeParse`）だけ通るので、値を広げてもそこから先（`apps/runner/src/app.ts`
+ * の `POST /managers/:id/answers` ・ `RunnerLocal`/`RunnerHost#answer()`）は
+ * 1行も変えずに素通しできる。**
  */
 export const runnerAnswerResultSchema = z.object({
   ok: z.boolean(),
-  decision: z.enum(['allow', 'deny']).optional(),
+  decision: z.enum(['allow', 'deny', 'unreadable']).optional(),
 });
 
 export type RunnerAnswerResult = z.infer<typeof runnerAnswerResultSchema>;
@@ -622,11 +633,16 @@ export interface RunnerAnswerOutcome {
   /** `false` = その確認は runner 側に無い（既に解けた / 別の宛先）。 */
   delivered: boolean;
   /**
-   * 確定した allow/deny。**`delivered` が true でも欠けうる**
+   * 確定した allow/deny/unreadable。**`delivered` が true でも欠けうる**
    * （`runnerAnswerResultSchema` の doc と同じ理由）。欠けた回を
    * allow/deny の既定値へ倒さないこと。
+   *
+   * **`'unreadable'`（issue #1827/#1837）は「読み取れなかった」の意味で、
+   * 「欠けた（省略・古い runner）」とは別の状態である。** 前者は
+   * `inferDecision` が実際に計算して出した3値目、後者はそもそも欄が無い
+   * ——両方を区別できるように、欠落は今までどおり欄そのものを省く形で表す。
    */
-  decision?: 'allow' | 'deny';
+  decision?: 'allow' | 'deny' | 'unreadable';
 }
 
 // ---------------------------------------------------------------------------
