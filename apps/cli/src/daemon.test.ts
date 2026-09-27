@@ -485,7 +485,9 @@ describe('stop() — verify() の3値目（unknown）を、状態ファイルを
     vi.mocked(readFile).mockResolvedValue(JSON.stringify(INFO));
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockRejectedValue(new Error('network blip（本物は生きているが応答が遅いだけ、を模す）')),
+      vi
+        .fn()
+        .mockRejectedValue(new Error('network blip（本物は生きているが応答が遅いだけ、を模す）')),
     );
 
     expect(await stop()).toBe('unknown');
