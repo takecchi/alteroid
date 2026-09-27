@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -393,6 +394,13 @@ export interface RunnerHostOptions {
    * `RunnerSessionOptions.finishUnpushedWorkFn` の doc を見よ。
    */
   finishUnpushedWorkFn?: (options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>;
+  /**
+   * 明示された `cwd` がディレクトリとして実在するかを確かめる実体をテストから
+   * 差し替える（Issue #1783）。**主にテスト用**（`queryFn` と同じ理由——既定は
+   * 本物の `fs.statSync`。実 I/O を伴うので、ファイルシステムに触れたくない
+   * 歯はここを差し替える）。`Host#resolveCwd` の doc を見よ。
+   */
+  cwdExistsFn?: (cwd: string) => boolean;
 }
 
 export interface RunnerHost {
@@ -547,6 +555,22 @@ function fingerprintFor(
   return fingerprints.find((fingerprint) => fingerprint.name === name)?.sha256;
 }
 
+/**
+ * `path` がディレクトリとして実在するかを確かめる（Issue #1783）。
+ *
+ * **`Host#cwdExistsFn` の既定実装。** `statSync` が投げる理由（無い・親が
+ * 無い・権限が無い・ファイルであってディレクトリでない、等）を1つずつ
+ * 見分けない——`cwd` として `chdir` できないかもしれない、という1点だけが
+ * 呼び出し側にとって意味を持つので、理由を問わず `false` へ倒す。
+ */
+function directoryExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function createRunnerHost(options: RunnerHostOptions): RunnerHost {
   return new Host(options);
 }
@@ -608,6 +632,7 @@ class Host implements RunnerHost {
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
+  readonly #cwdExistsFn: (cwd: string) => boolean;
 
   constructor(options: RunnerHostOptions) {
     this.runnerId = options.runnerId;
@@ -623,6 +648,7 @@ class Host implements RunnerHost {
     this.#spawnClaudeCodeProcessFn = options.spawnClaudeCodeProcessFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
+    this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
     if (this.#enforceLease) {
       const watcher = setInterval(() => this.#checkLeaseExpiry(), LEASE_WATCH_INTERVAL_MS);
       // 見張りでプロセスの終了を引き延ばさない（このリポジトリの既存のタイマーが
@@ -846,11 +872,47 @@ class Host implements RunnerHost {
     return spawnAsUser(this.#childUser as RunnerChildUser, options);
   }
 
+  /**
+   * 渡された `cwd` を、実際にセッションが開く値へ解決する（Issue #1783）。
+   *
+   * **省略（空文字）は今までどおり `workspacePath` へ倒す。** それに加えて、
+   * 明示された `cwd` も、**この runner の器の上にディレクトリとして実在
+   * しなければ**同じ側へ倒す——`start` / `resume` の両方がこの関門を通る
+   * （どちらも `#create` 経由でしかセッションを開かない）。
+   *
+   * **倒す理由。** 移送（別の器が同じ委譲を引き取る、Issue #1376 系）や
+   * 器の作り直しでは、委譲を最後に走らせていた器が実行中に作ったディレクトリ
+   * （例: `/workspace` の下へ clone した作業ツリー）が、移送先の器には無い。
+   * 確かめずに `query()` へそのまま渡すと、SDK は spawn の `chdir` で
+   * `ENOENT` になる——**しかも実測では、原因が「実行ファイルの libc が
+   * 合わない」ように見える**（`.scratch/sdk-cwd-probe-output.txt`
+   * 2026-09-27 の実測: `ReferenceError: Claude Code native binary at
+   * <path> exists but failed to launch. This usually means the binary
+   * does not match this system's libc — …`。同じ binary は存在する `cwd`
+   * では正常に spawn する——実測は PR 本文にも逐語で残す）。原因を辿り
+   * にくい形で、セッションそのものが開けなくなる。
+   *
+   * **安全側へ倒す。** 存在しないディレクトリを渡して開けないままにするより、
+   * `workspacePath`（どの器にも必ずある。`RunnerHostOptions.workspacePath`
+   * の doc）へ倒して確実に開くほうを選ぶ——中身が失われている前提の一言
+   * （`restartNudge` / `workspaceAfterSwapClause`）は既存の移送の経路が
+   * 別途伝える。
+   *
+   * **確かめ方はテストから差し替えられる**（`#cwdExistsFn`。既定は本物の
+   * `fs.statSync`）——`queryFn` / `readCgroupEventCountersFn` と同じ、
+   * 実 I/O を持つ差し替え口の作法。
+   */
+  #resolveCwd(cwd: string): string {
+    if (cwd.length === 0) return this.workspacePath;
+    if (!this.#cwdExistsFn(cwd)) return this.workspacePath;
+    return cwd;
+  }
+
   #create(managerId: string, request: string, cwd: string): RunnerSession {
     const session = new RunnerSession({
       managerId,
       request,
-      cwd: cwd.length > 0 ? cwd : this.workspacePath,
+      cwd: this.#resolveCwd(cwd),
       emit: this.#emit,
       queryFn: this.#queryFn,
       env: this.#env,
