@@ -1656,7 +1656,7 @@ const UNREADABLE_COMMITMENT_IDS_SHOWN = 20;
  */
 const CLOSE_MANY_LIMIT_DEFAULT = 500;
 export const CLOSE_MANY_LIMIT_MAX = 2_000;
-const CLOSE_MANY_JOURNAL_ID_CHARS = 3_600;
+export const CLOSE_MANY_JOURNAL_ID_CHARS = 3_600;
 /**
  * 一括 close の**戻り値**に並べる id の件数の上限（#409 と同じ形）。
  *

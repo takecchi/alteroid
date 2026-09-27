@@ -10,7 +10,12 @@ import {
 import type { InboxEvent } from './schema.js';
 import type { PendingInboxEvent, Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
-import { chunkIdsByChars, createCloneMcpServer, createCloneTools } from './tools.js';
+import {
+  chunkIdsByChars,
+  createCloneMcpServer,
+  createCloneTools,
+  REMOVE_MANY_JOURNAL_ID_CHARS,
+} from './tools.js';
 
 /**
  * `inbox_remove_many`（issue #972。takecchi が「(A) 出所で線を引く」を採用、
@@ -583,13 +588,27 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
    * いた（PR #1711 で直したが、専用の歯は `archive_remove_many` にしか無かった——
    * `archive-remove-many-raced.test.ts` の「応答が言う『日誌に N 件』は、実際に書いた
    * 件数である」と同じ形で、ここに足す）。
+   *
+   * ⚠️ **横断レビュー（13回目）で見つかった穴**: PR #1727 が最初に足したこの歯は、
+   * 期待する塊の数を予算の定数の**写し**（`3_600` を手で書き写したもの）から計算していた。
+   * 本物の `REMOVE_MANY_JOURNAL_ID_CHARS` を（250件が1塊に収まるほど大きい値へ）変えても、
+   * 写しの側は追随しないので歯は緑のまま——実装が1塊しか作らず競合が1回も起きなくても、
+   * 写しから計算した「複数の塊」という期待値と偶然に一致して通ってしまっていた。
+   * ⟹ 対策は2つ、両方要る。**(1)** 写しではなく道具本体と同じ export
+   * （`REMOVE_MANY_JOURNAL_ID_CHARS`）を import して使う。**(2)** それだけでは
+   * 「将来また誰かが写しを書き足す」規制にならないので、実装が実際に複数回 `removeMany` を
+   * 呼んだこと（＝実際に2つ以上の塊に割ったこと）を、道具の実挙動（呼ばれた回数）から
+   * 直接測り、歯の前提として明示的に検査する。
    */
   it('12. 2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
     const stores = createMemoryStores();
     const events = Array.from({ length: 250 }, (_, i) => managerEventWithUuid(i));
     await putAll(stores, events);
     const allIds = events.map((event) => event.id);
-    const chunksExpected = chunkIdsByChars(allIds, 3_600);
+    // `chunkIdsByChars` は道具本体が使っているのと同じ export。同じ引数
+    // （id の並び・道具本体と同じ `REMOVE_MANY_JOURNAL_ID_CHARS`）で呼べば、道具の中で
+    // 実際に切れる境界と一致する——写し（値を手で書き写したもの）は使わない。
+    const chunksExpected = chunkIdsByChars(allIds, REMOVE_MANY_JOURNAL_ID_CHARS);
     expect(chunksExpected.length).toBeGreaterThanOrEqual(2); // 2個目以降を丸ごと競合にするのに要る
 
     // **1つ目の塊は本当に消し、2つ目以降は「呼ぶ直前に他経路が丸ごと先に消していた」を
@@ -611,13 +630,30 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
+    // **この歯が意味を持つための前提を、定数から計算した期待値だけに頼らず、
+    // 道具の実挙動（`removeMany` が実際に呼ばれた回数）からも直接測る。** 道具は
+    // 塊ごとに1回 `removeMany` を呼ぶので、`calls` は実際に道具が作った塊の数と
+    // 一致する。定数を import しただけでは「将来また写しが生まれる」ことは防げ
+    // ないが、この検査は写しの有無に関わらず、実装が実際に複数回呼んだかどうか
+    // だけを見るので、写しが再び紛れ込んでも実装側の挙動が変わらない限り機能する。
+    expect(
+      calls,
+      'removeMany が2回以上呼ばれていない＝道具は実際には複数の塊に割っていない' +
+        '（この前提が崩れると、下のアサーションは競合が1回も起きなくても緑になりうる）',
+    ).toBeGreaterThanOrEqual(2);
+    // 写し由来ではない期待値（`chunksExpected`）と、実挙動そのもの（`calls`）が
+    // 一致することも確かめる——両者がずれるなら、上の import か下の前提の
+    // どちらかが本物の挙動を追えていない。
+    expect(calls).toBe(chunksExpected.length);
+
     const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
     expect(claimed, '省略の断り書きが出ていない（20件を超えて消していない）').not.toBeNull();
     const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
     expect(chunkEntries.length).toBeGreaterThan(0);
-    // **この歯が意味を持つための前提**: 実際に複数の塊に割れているのに、日誌に書いた
-    // のは1つ目の塊だけ（＝ journaledChunks < chunks.length）であること。
-    expect(chunkEntries.length).toBeLessThan(chunksExpected.length);
+    // **この歯が意味を持つための前提**: 実際に複数回 removeMany が呼ばれた
+    // （＝複数の塊に割れた）のに、日誌に書いたのは1つ目の塊だけ
+    // （＝ journaledChunks < calls）であること。
+    expect(chunkEntries.length).toBeLessThan(calls);
     expect(Number(claimed?.[1])).toBe(chunkEntries.length);
   });
 });

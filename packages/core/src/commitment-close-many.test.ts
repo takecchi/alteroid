@@ -6,7 +6,7 @@ import type { Commitment, CommitmentOrigin } from './schema.js';
 import { commitmentOriginSchema } from './schema.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
-import { chunkIdsByChars, createCloneTools } from './tools.js';
+import { CLOSE_MANY_JOURNAL_ID_CHARS, chunkIdsByChars, createCloneTools } from './tools.js';
 
 /**
  * `commitment_close_many`（issue #844）の一括 close を固定する。
@@ -448,6 +448,17 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
  * 言うと、塊が丸ごと競合になった回に、無い日誌の行を名乗っていた（PR #1711 で直したが、
  * 専用の歯は `archive_remove_many` にしか無かった——`archive-remove-many-raced.test.ts`
  * の「応答が言う『日誌に N 件』は、実際に書いた件数である」と同じ形で、ここに足す）。
+ *
+ * ⚠️ **横断レビュー（13回目）で見つかった穴**: PR #1727 が最初に足したこの歯は、
+ * 期待する塊の数を予算の定数の**写し**（`3_600` を手で書き写したもの）から計算していた。
+ * 本物の `CLOSE_MANY_JOURNAL_ID_CHARS` を（250件が1塊に収まるほど大きい値へ）変えても、
+ * 写しの側は追随しないので歯は緑のまま——実装が1塊しか作らず競合が1回も起きなくても、
+ * 写しから計算した「複数の塊」という期待値と偶然に一致して通ってしまっていた。
+ * ⟹ 対策は2つ、両方要る。**(1)** 写しではなく道具本体と同じ export
+ * （`CLOSE_MANY_JOURNAL_ID_CHARS`）を import して使う。**(2)** それだけでは
+ * 「将来また誰かが写しを書き足す」規制にならないので、実装が実際に複数回 `closeMany` を
+ * 呼んだこと（＝実際に2つ以上の塊に割ったこと）を、道具の実挙動（呼ばれた回数）から
+ * 直接測り、歯の前提として明示的に検査する。
  */
 describe('commitment_close_many の応答が言う「日誌に N 件」は、実際に書いた件数である', () => {
   it('2つ目以降の塊が丸ごと競合になっても、応答の N は日誌の行の数と一致する', async () => {
@@ -456,9 +467,9 @@ describe('commitment_close_many の応答が言う「日誌に N 件」は、実
     await openAll(stores, entries);
     const allIds = entries.map((entry) => entry.id);
     // `chunkIdsByChars` は道具本体が使っているのと同じ export。同じ引数
-    // （id の並び・予算）で呼べば、道具の中で実際に切れる境界と一致する。
-    const CLOSE_MANY_JOURNAL_ID_CHARS_COPY = 3_600;
-    const chunksExpected = chunkIdsByChars(allIds, CLOSE_MANY_JOURNAL_ID_CHARS_COPY);
+    // （id の並び・道具本体と同じ `CLOSE_MANY_JOURNAL_ID_CHARS`）で呼べば、道具の中で
+    // 実際に切れる境界と一致する——写し（値を手で書き写したもの）は使わない。
+    const chunksExpected = chunkIdsByChars(allIds, CLOSE_MANY_JOURNAL_ID_CHARS);
     expect(chunksExpected.length).toBeGreaterThanOrEqual(2); // 2個目以降を丸ごと競合にするのに要る
 
     // **1つ目の塊は本当に閉じ、2つ目以降は「呼ぶ直前に他経路が丸ごと先に閉じていた」を
@@ -482,13 +493,30 @@ describe('commitment_close_many の応答が言う「日誌に N 件」は、実
       dryRun: false,
     });
 
+    // **この歯が意味を持つための前提を、定数から計算した期待値だけに頼らず、
+    // 道具の実挙動（`closeMany` が実際に呼ばれた回数）からも直接測る。** 道具は
+    // 塊ごとに1回 `closeMany` を呼ぶので、`calls` は実際に道具が作った塊の数と
+    // 一致する。定数を import しただけでは「将来また写しが生まれる」ことは防げ
+    // ないが、この検査は写しの有無に関わらず、実装が実際に複数回呼んだかどうか
+    // だけを見るので、写しが再び紛れ込んでも実装側の挙動が変わらない限り機能する。
+    expect(
+      calls,
+      'closeMany が2回以上呼ばれていない＝道具は実際には複数の塊に割っていない' +
+        '（この前提が崩れると、下のアサーションは競合が1回も起きなくても緑になりうる）',
+    ).toBeGreaterThanOrEqual(2);
+    // 写し由来ではない期待値（`chunksExpected`）と、実挙動そのもの（`calls`）が
+    // 一致することも確かめる——両者がずれるなら、上の import か下の前提の
+    // どちらかが本物の挙動を追えていない。
+    expect(calls).toBe(chunksExpected.length);
+
     const claimed = /全 id は日誌に (\d+) 件に分けて残してある/.exec(reply);
     expect(claimed, '省略の断り書きが出ていない（20件を超えて閉じていない）').not.toBeNull();
     const chunkEntries = (await decisionTexts(stores)).filter((text) => text.includes('塊目'));
     expect(chunkEntries.length).toBeGreaterThan(0);
-    // **この歯が意味を持つための前提**: 実際に複数の塊に割れているのに、日誌に書いた
-    // のは1つ目の塊だけ（＝ journaledChunks < chunks.length）であること。
-    expect(chunkEntries.length).toBeLessThan(chunksExpected.length);
+    // **この歯が意味を持つための前提**: 実際に複数回 closeMany が呼ばれた
+    // （＝複数の塊に割れた）のに、日誌に書いたのは1つ目の塊だけ
+    // （＝ journaledChunks < calls）であること。
+    expect(chunkEntries.length).toBeLessThan(calls);
     expect(Number(claimed?.[1])).toBe(chunkEntries.length);
   });
 });
