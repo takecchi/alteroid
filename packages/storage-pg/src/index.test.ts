@@ -5225,11 +5225,11 @@ describe('AuthStore', () => {
       const localClient = new PGlite();
       const localDb = drizzle(localClient);
       await migrate(localDb);
+      await localDb.execute(sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`));
       await localDb.execute(
-        sql.raw(`drop index if exists ${AUTH_ACCOUNTS_EMAIL_LOWER_INDEX}`),
-      );
-      await localDb.execute(
-        sql.raw('create unique index if not exists auth_accounts_email_idx on auth_accounts (email)'),
+        sql.raw(
+          'create unique index if not exists auth_accounts_email_idx on auth_accounts (email)',
+        ),
       );
       const localStores = createPgStoresFromDb(localDb);
 

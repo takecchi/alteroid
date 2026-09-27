@@ -229,9 +229,9 @@ export interface AuthStore {
    * #1741）。** `completeLogin` は `account.email` に「候補のメール」（検証済み
    * ならプロバイダのメールをそのまま）を載せて渡す——**衝突の有無はここが
    * 決める。** `account.email` が空でなく、**別の** account が大小文字を
-   * 区別せずに同じメールを既に持っているなら、**空のメールで作る**（検証済み
-   * メールの一意性を壊さない）。`{ created: true }` の `account` には**実際に
-   * 保存した account**（衝突していればメールが空の版）を載せる——呼び手は
+   * 区別せずに同じメールを既に持っているなら、**空のメールで作る**
+   * （検証済みメールの一意性を壊さない）。`{ created: true }` の `account` には
+   * **実際に保存した account**（衝突していればメールが空の版）を載せる——呼び手は
    * これを見て、自分が渡した候補がそのまま通ったかどうかを知る。
    *
    * **なぜ `findAccountByEmail` の外側検査（直す前の形）では不十分だったか**:
@@ -368,8 +368,7 @@ export type OwnerOutcome =
  * ここへ載せる。呼び手は渡した候補を使い回さず、必ずこの `account` を見ること。
  */
 export type CreateAccountWithIdentityOutcome =
-  | { created: true; account: AuthAccount }
-  | { created: false; existing: AuthIdentity };
+  { created: true; account: AuthAccount } | { created: false; existing: AuthIdentity };
 
 // ---------------------------------------------------------------------------
 // 乱数・ハッシュ

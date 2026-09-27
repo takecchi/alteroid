@@ -200,9 +200,7 @@ export class FsAuthStore implements AuthStore {
         const needle = input.account.email?.toLowerCase() ?? null;
         const emailCollides =
           needle !== null &&
-          file.accounts.some(
-            (it) => it.email !== null && it.email.toLowerCase() === needle,
-          );
+          file.accounts.some((it) => it.email !== null && it.email.toLowerCase() === needle);
         const accountInput = emailCollides ? { ...input.account, email: null } : input.account;
         const account = authAccountSchema.parse(accountInput);
         const identity = authIdentitySchema.parse(input.identity);

@@ -317,7 +317,7 @@ describe('createAuthService', () => {
    * ここでは**大小文字だけが違う**メール（`alice@example.test` vs
    * `ALICE@EXAMPLE.TEST`）で同じ検証を行う。
    *
-   * `auth-service.ts` の該当コメント（`grep -Fn -- '衝突するときは連絡先を空にしておく' packages/core/src/auth-service.ts`）
+   * `AuthStore.createAccountWithIdentity` の doc（`grep -Fn -- '検証済みメールの一意性を壊さない' packages/core/src/auth.ts`）
    * は「検証済みメールの一意性を壊さない」ことを明示的な意図として書いている。
    * issue #1688 でこの歯は一度 `findAccountByEmail`（`packages/core/src/testing.ts` /
    * `packages/storage-fs/src/auth.ts` / `packages/storage-pg/src/auth.ts`）が
