@@ -10436,7 +10436,15 @@ class Pool implements ManagerPool {
         if (event.synthesized !== undefined) {
           this.#queueSynthesizedNotice(event.managerId, event.synthesized, event.text);
         } else {
-          this.#emit(event.managerId, 'report', event.text, undefined, undefined, 'full', foldedTurn);
+          this.#emit(
+            event.managerId,
+            'report',
+            event.text,
+            undefined,
+            undefined,
+            'full',
+            foldedTurn,
+          );
         }
         return;
       }
@@ -12825,7 +12833,16 @@ class Pool implements ManagerPool {
     foldedTurn = false,
   ): void {
     this.#flushSynthesizedNotices();
-    this.#deliver(managerId, kind, text, requestId, markup, withheldSuffixDetail, false, foldedTurn);
+    this.#deliver(
+      managerId,
+      kind,
+      text,
+      requestId,
+      markup,
+      withheldSuffixDetail,
+      false,
+      foldedTurn,
+    );
   }
 
   #deliver(

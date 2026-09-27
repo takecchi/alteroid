@@ -10,6 +10,7 @@ import {
 } from './runner-protocol.js';
 import type { InboxEvent, Job, JobStatus } from './schema.js';
 import { createMemoryStores } from './testing.js';
+import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { Stores } from './store.js';
 
 /**
@@ -47,6 +48,8 @@ interface ManualRunner {
       synthesized?: string;
     },
   ): void;
+  rateLimit(managerId: string, facts: RateLimitFacts): void;
+  usageNotice(managerId: string, notice: UsageLimitNotice): void;
 }
 
 function manualRunner(runnerId = 'runner-primary'): ManualRunner {
@@ -108,6 +111,12 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     alive,
     report(managerId, text, status, fields = {}) {
       emit?.({ type: 'report', managerId, text, status, ...fields });
+    },
+    rateLimit(managerId, facts) {
+      emit?.({ type: 'rate_limit', managerId, facts });
+    },
+    usageNotice(managerId, notice) {
+      emit?.({ type: 'usage_notice', managerId, notice });
     },
   };
 }
@@ -187,7 +196,8 @@ describe('manager.ts → 受信箱: event.failure / event.unreported が manager
     );
 
     await vi.waitFor(() => {
-      if (reportsOf(inbox).length <= before) throw new Error('report がまだ合流窓から配られていない');
+      if (reportsOf(inbox).length <= before)
+        throw new Error('report がまだ合流窓から配られていない');
     });
 
     const delivered = reportsOf(inbox).slice(before);
@@ -245,6 +255,104 @@ describe('manager.ts → 受信箱: event.failure / event.unreported が manager
     const delivered = reportsOf(inbox).slice(before);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]?.text).toBe('普通に完遂した報告の本文');
+    expect(delivered[0]?.foldedTurn).toBeUndefined();
+    expect(Object.hasOwn(delivered[0] as object, 'foldedTurn')).toBe(false);
+
+    await pool.stop();
+  });
+});
+
+/**
+ * Issue #1848 の「⚠️ 確かめていないこと」——`synthesized` が複数件合流した回
+ * （`arrived > 1`）で `managerPrompt` の見出し自体（`foldedTurn`）が変わるか
+ * どうかは、起票時に `arrived <= 1` の回しか確かめていなかった。
+ *
+ * `#flushSynthesizedNoticeFor` の実装（`entry.fragments.some((fragment) =>
+ * fragment.label === 'turn_failed')`）は、束の中の**どれか1つ**が
+ * `turn_failed` なら `foldedTurn` を立てる——1件目・2件目という位置ではなく
+ * 族（`label`）を見る。ここではその実装を、完全な重複（`×N` に寄る回）と、
+ * 族が混在する回の両方で固定する。
+ *
+ * **⚠️ 同じ族（`turn_failed`）で本文が違う回は、実は1本へ寄らない。**
+ * `#queueSynthesizedNotice` は「同じ label が既に在れば新しい label 側を
+ * 待たせず、いったん今の束を単独で flush してから新しい窓を開く」
+ * （`manager-synthesized-notices.test.ts` の「本文が1文字でも違えば寄せない」
+ * と同じ分岐）。だから「`arrived > 1` で1本に寄る」を実際に起こせるのは
+ * (a) 完全な重複（`duplicate.count += 1`）か (b) 族が異なる断片どうし
+ * （`existing.fragments.push`）のどちらかであり、「同じ族・違う本文」は
+ * 対象にならない——最初にこの歯を書いたときは逆に読んでいた。
+ */
+describe('合流窓で複数件が1本へ寄る回（arrived > 1）でも foldedTurn は正しく立つ（Issue #1848）', () => {
+  it('turn_failed の完全な重複が3通、同じ窓に届く（×3 として1件へ寄る）と foldedTurn: true のまま', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    const same = '（このターンは応答を返さずに終わった: success/429 / result_is_error）';
+    for (let i = 0; i < 3; i += 1) {
+      fake.report('mgr-folded', same, 'done', {
+        failure: { code: 'success/429', via: 'result_is_error' },
+        synthesized: 'turn_failed',
+      });
+    }
+
+    await vi.waitFor(() => {
+      if (reportsOf(inbox).length <= before)
+        throw new Error('report がまだ合流窓から配られていない');
+    });
+
+    const delivered = reportsOf(inbox).slice(before);
+    // **3通が1件へ寄り、通数（×3）が本文に残る**
+    // （`manager-synthesized-notices.test.ts` の「完全な重複は1つへ寄せ」と同じ軸）。
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.text).toContain('×3');
+    expect(delivered[0]?.foldedTurn).toBe(true);
+
+    await pool.stop();
+  });
+
+  it('turn_failed と rate_limit（別の族）が同じ窓で合流しても foldedTurn: true のまま（束の中の1つが turn_failed なら立つ）', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    fake.rateLimit('mgr-folded', { status: 'rejected', kind: 'five_hour' });
+    fake.report('mgr-folded', '（このターンは応答を返さずに終わった: 混在の回）', 'done', {
+      failure: { code: 'success/429', via: 'result_is_error' },
+      synthesized: 'turn_failed',
+    });
+
+    await vi.waitFor(() => {
+      if (reportsOf(inbox).length <= before)
+        throw new Error('report がまだ合流窓から配られていない');
+    });
+
+    const delivered = reportsOf(inbox).slice(before);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.text).toContain('枠から追い返された');
+    expect(delivered[0]?.text).toContain('混在の回');
+    expect(delivered[0]?.foldedTurn).toBe(true);
+
+    await pool.stop();
+  });
+
+  /**
+   * ⭐ 陽性対照。`turn_failed` が1件も無い束（`rate_limit` + `usage_notice`）が
+   * 合流しても、`foldedTurn` はキーごと付かない——「束が2件以上なら常に立てる」
+   * 実装でもこの1本だけなら見分けが付かない。
+   */
+  it('rate_limit と usage_notice だけが合流し、turn_failed が無ければ foldedTurn はキーごと付かない', async () => {
+    const { pool, inbox, fake } = await runningManualSetup();
+    const before = reportsOf(inbox).length;
+
+    fake.rateLimit('mgr-folded', { status: 'rejected', kind: 'five_hour' });
+    fake.usageNotice('mgr-folded', { kind: 'reached', text: '上限に当たった' });
+
+    await vi.waitFor(() => {
+      if (reportsOf(inbox).length <= before)
+        throw new Error('report がまだ合流窓から配られていない');
+    });
+
+    const delivered = reportsOf(inbox).slice(before);
+    expect(delivered).toHaveLength(1);
     expect(delivered[0]?.foldedTurn).toBeUndefined();
     expect(Object.hasOwn(delivered[0] as object, 'foldedTurn')).toBe(false);
 
