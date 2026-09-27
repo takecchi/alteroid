@@ -278,7 +278,7 @@ describe('置かせない名前', () => {
 
   /**
    * **runner の受け口（`runnerCredentialSchema.name`。`runner-protocol.ts`）と
-   * 同じ128文字の上限をここでも課す**（横断レビュー C の14回目、#1780）。
+   * 同じ128文字の上限をここでも課す**（横断レビュー C の14回目、#1790）。
    *
    * これが無いと、正本には書けるのに runner へは wire schema の上限で必ず
    * 弾かれる行が生まれる——`apply()` 自体は成功を返し、`pushAll` は runner

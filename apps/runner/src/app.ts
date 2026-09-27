@@ -825,7 +825,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
      * ここが叩けてしまうと、マネージャーは自分に配られる鍵を自分で書き換えられる。
      * 門番（`control`）を外さないこと。
      *
-     * **既定の 400 を使わない**（横断レビュー C の14回目、#1780）。`hook` を
+     * **既定の 400 を使わない**（横断レビュー C の14回目、#1790）。`hook` を
      * 渡さないと `@hono/zod-validator` は `c.json(result, 400)`
      * （`result = { success: false, error: <ZodError> }`）を返す——ここは鍵の
      * 値そのものを運ぶ唯一の口なので、既定の形をそのまま使う理由が無い。

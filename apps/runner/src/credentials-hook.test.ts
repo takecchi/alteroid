@@ -10,7 +10,7 @@ import { createRunnerApp, Outbox } from './app.js';
 
 /**
  * `POST /credentials` の検査を、兄弟の経路（`POST /mcp-servers`）と揃える
- * （横断レビュー C の14回目、#1780）。
+ * （横断レビュー C の14回目、#1790）。
  *
  * 揃える前は、この経路だけ `zValidator` に `hook` を渡していなかった——形の
  * 不正で 400 になったとき、`@hono/zod-validator` の既定は `c.json(result, 400)`
@@ -69,7 +69,7 @@ function makeApp(dir: string) {
   return createRunnerApp({ host, outbox: new Outbox(), tokenSha256: TOKEN_SHA256 });
 }
 
-describe('POST /credentials の hook（#1780）', () => {
+describe('POST /credentials の hook（#1790）', () => {
   it('形が不正な本文は、既定の400ではなく sanitize された理由文だけを返す', async () => {
     const dir = makeTempDirSync('alteroid-cred-hook-');
     const app = makeApp(dir);

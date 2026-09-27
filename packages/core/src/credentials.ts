@@ -293,7 +293,7 @@ export function credentialNamesShadowedByProfile(
 export const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 /**
- * 鍵の名前として認める最大の文字数（#1780、横断レビュー C の14回目）。
+ * 鍵の名前として認める最大の文字数（#1790、横断レビュー C の14回目）。
  *
  * **runner の受け口（`runnerCredentialSchema.name`。`runner-protocol.ts`）と
  * ここで共有する。** 分けて書くと、`CredentialService.apply()`（デーモン側の
