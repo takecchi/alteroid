@@ -169,7 +169,15 @@ describe('FsJobStore — jobs.json の不正な1行を読み飛ばす（issue #1
     await captureStderr(async () => {
       removed = await stores.jobs.clear();
     });
-    expect(removed).toEqual({ jobs: 1, approvals: 0 });
+    // 件数は**消えた行すべて**を数える（issue #1892）。#1868 の時点ではここを
+    // `{ jobs: 1, approvals: 0 }`（正しい行だけ）と期待していたが、それは
+    // 「2行消したのに1と返す」非対称をテストで固定していた——pg の
+    // `PgJobStore.clear` は `DELETE … RETURNING` で行の中身が壊れているかに
+    // 関係なく消した行数を返すので、同じ状態で fs と pg の件数が食い違う。
+    // 下の「ファイルに委譲の行が1つも残らない」と合わせて、消した行と
+    // 数えた行が一致することを見る（期待値を反転しただけで、確かめる範囲は
+    // 狭めていない）。
+    expect(removed).toEqual({ jobs: 2, approvals: 0 });
 
     const raw = JSON.parse(await readFile(jobsPath, 'utf8')) as { jobs: unknown[] };
     // **不正な行ごと消える**——ファイルに委譲の行が1つも残らない。
