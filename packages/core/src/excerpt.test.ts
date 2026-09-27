@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   codePointStartBoundary,
+  countCodePoints,
   describePage,
   excerpt,
   excerptLine,
@@ -315,5 +316,20 @@ describe('codePointStartBoundary（末尾を残す境界。issue #1829）', () =
     const text = 'A😀B';
     expect(codePointStartBoundary(text, 0)).toBe(0);
     expect(codePointStartBoundary(text, text.length)).toBe(text.length);
+  });
+});
+
+describe('countCodePoints（#1849）', () => {
+  it('サロゲートペアは1つと数え、tailByCodePoints と同じ単位になる', () => {
+    const text = 'a😀b😀';
+    expect(text.length).toBe(6);
+    expect(countCodePoints(text)).toBe(4);
+    expect(tailByCodePoints(text, countCodePoints(text))).toBe(text);
+    expect(tailByCodePoints(text, countCodePoints(text) - 1)).not.toBe(text);
+  });
+
+  it('空文字は0、孤立したサロゲートは1つと数える', () => {
+    expect(countCodePoints('')).toBe(0);
+    expect(countCodePoints('\ud83d')).toBe(1);
   });
 });

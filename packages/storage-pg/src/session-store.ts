@@ -1,4 +1,4 @@
-import { tailByCodePoints } from '@alteroid/core';
+import { countCodePoints } from '@alteroid/core';
 import type { LostSessionGrave, SessionTranscriptTail } from '@alteroid/core';
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
@@ -127,8 +127,8 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * コード単位では `maxChars + 1` を超えていても、実際のコードポイント数は
    * それ以下のことがあり、契約（返す量は `maxChars` を厳密に上回る）を破って
    * 古い行を静かに落としていた（呼び出し側 `tailOf` は `tailByCodePoints` で
-   * コードポイント数を見て「切り詰めが要ったか」を判定するため）。単位の変換は
-   * `tailByCodePoints`（`packages/core/src/excerpt.ts`。#1829 の唯一の出所）へ
+   * コードポイント数を見て「切り詰めが要ったか」を判定するため）。単位の数え方は
+   * `excerpt.ts` の `countCodePoints`（`tailByCodePoints` と同じ単位。#1829）へ
    * 委ねる——ここで独自に UTF-16 コード単位やコードポイントの数え上げを
    * 作り直さない。
    */
@@ -150,21 +150,22 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     // **新しい方から積んで、足りたら止める。** 生ログは1行1レコードの JSONL なので、
     // ここで組み直したものは器の外に在るファイルと同じ形になる。
     //
-    // **`tailByCodePoints(joined, maxChars + 1)` が `joined` と一致する限り
-    // （＝コードポイント数がまだ `maxChars + 1` 以下）行を足し続け、超えた回で
-    // 打ち切る。** 超えたと分かった時点で既にその行までは足してあるので、
-    // 返す長さ（コードポイント数）は必ず `maxChars` を厳密に上回る——#1718 の
-    // 「`chars > maxChars + 1` で止める」と同じ強さを、単位をコードポイントへ
-    // 揃えたうえで保つ。`tailByCodePoints` は UTF-16 長が `maxChars + 1` 以下の
-    // 間は走査せず即座に一致を返す（`excerpt.ts` の「高速路」）ので、通常の
-    // （行数が少なく収まる）回はコストが増えない。
-    let joined = '';
+    // **`chars > maxChars + 1` で止める（`chars >= maxChars` ではない）。**
+    // `chars` は積んだ行のコードポイント数 + 区切りぶんの累計で、返す長さは
+    // `chars - 1`。ちょうど `maxChars` に達しただけで止めると、返す長さは
+    // `maxChars` を下回る（#1718）。`chars > maxChars + 1` まで待てば、返す長さは
+    // 必ず `maxChars` を上回る。**数える単位はコードポイント**で、`tailOf` の
+    // `tailByCodePoints` と揃える（#1849）。行ごとに数えて足していくので、
+    // 積んだ全体を毎回数え直さない。
+    const lines: string[] = [];
+    let chars = 0;
     for (const row of rows) {
       const line = JSON.stringify(row.entry);
-      joined = joined === '' ? line : `${line}\n${joined}`;
-      if (tailByCodePoints(joined, maxChars + 1) !== joined) break;
+      lines.push(line);
+      chars += countCodePoints(line) + 1;
+      if (chars > maxChars + 1) break;
     }
-    return joined;
+    return lines.reverse().join('\n');
   }
 
   /**

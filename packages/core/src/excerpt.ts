@@ -102,6 +102,18 @@ export function tailByCodePoints(text: string, maxCodePoints: number): string {
 }
 
 /**
+ * `text` のコードポイント数（{@link tailByCodePoints} と同じ単位。Issue #1829 /
+ * #1849）。サロゲートペアは1つと数え、孤立したサロゲートも1つと数える
+ * （文字列の反復がそう数えるため）。行を1本ずつ積みながら上限を見る呼び出し元が、
+ * 積んだ全体を毎回数え直さずに済むように置く。
+ */
+export function countCodePoints(text: string): number {
+  let count = 0;
+  for (const _ of text) count += 1;
+  return count;
+}
+
+/**
  * 先頭 `limit` 文字に抜粋し、省いた分量を明示する。
  *
  * 短ければ何も足さない（毎回の出力に注記が付くと、本当に切れているときの
