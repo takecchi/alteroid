@@ -6160,7 +6160,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       .toMatchObject({ kind: 'observed' });
 
     const observation = (await jobOf(s, managerId))?.lastUnpushedWorkObservation;
-    expect(Object.keys(observation ?? {}).sort()).toEqual(['at', 'cwd', 'kind', 'source', 'worktrees']);
+    expect(Object.keys(observation ?? {}).sort()).toEqual([
+      'at',
+      'cwd',
+      'kind',
+      'source',
+      'worktrees',
+    ]);
 
     await s.pool.stop();
   });
