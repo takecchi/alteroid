@@ -20,6 +20,14 @@ import {
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
+import {
+  CGROUP_EVENTS_UNKNOWN_NOTE,
+  formatCgroupEventsNote,
+} from '@alteroid/core/cgroup-events-format';
+import {
+  formatSystemErrorFacts,
+  formatSystemErrorUnknownNote,
+} from '@alteroid/core/system-error-format';
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -1869,6 +1877,10 @@ const LIST_DENIED_TOOLS = 3;
  */
 type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>['managers'][number];
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
+/** `lastUnpushedWorkObservation` 単体（discriminated union。Issue #1883）。 */
+type ManagerUnpushedWorkObservation = NonNullable<ManagerListItem['lastUnpushedWorkObservation']>;
+/** その観測を取った経路（`kind` のどちらの枝にも乗る。Issue #1883）。 */
+type ManagerUnpushedWorkObservationSource = NonNullable<ManagerUnpushedWorkObservation['source']>;
 
 /**
  * `ManagerDenial.actor` を一行に添える短い印にする。
@@ -2016,6 +2028,332 @@ function failureLine(
 }
 
 /**
+ * 枠(利用上限)で止まっている委譲の1行（Issue #1883。GET /managers が返す
+ * `usageStoppedAt`）。
+ *
+ * **core の `packages/core/src/tools.ts` の `describeUsageStopped` と同じ
+ * 3分岐を複製する。** あの関数は `export` されていない（`manager_list` 専用の
+ * 私用関数）——`apps/cli` は `@alteroid/core` の公開面（`index.ts` が
+ * re-export するものと、`./mask-url` のような軽い口）しか import できない
+ * 前提なので、ここは複製である（`failureLine` が `isManagerOutcomeUnobserved`
+ * の判定を複製しているのと同じ理由・同じ形）。
+ *
+ * **#1882 と同じ穴を作らない。** `failureLine` と同じ2分岐——
+ * `status === 'failed' || status === 'lost'`（core の `isManagerOutcomeUnobserved`
+ * と同じ判定）と `status === 'stopped'`——で「セッションは生きている」を
+ * 言い切らない。**生きている3値（`running`/`waiting_human`/`done`）の文言は
+ * `describeUsageStopped` の第3分岐と同じ意味で書く。**
+ *
+ * **Web の `DiagnosticsCard`（`manager-detail.tsx`）はこの欄を独立した行として
+ * 出さないと決めている**（`ResetTimeSkewNote` 自身が「枠で止まっている間だけ
+ * 意味を持つ」と書くので、という理由）。**CLI はここで core 側の判断を採る**——
+ * Web の詳細画面と違い、CLI の `/managers` には別建ての詳細画面が無く
+ * （`/manager` はセッション生ログで診断カードの代わりにならない）、
+ * `resetTimeSkewMatch` が `undefined`（枠に当たった直後でまだ429の文言と
+ * 突き合わせていない・プール未配線 等）の間はこの行だけが唯一の手がかりに
+ * なる。出さないと「枠に当たっている」という事実そのものが CLI から消える。
+ */
+function usageStoppedLine(
+  usageStoppedAt: ManagerListItem['usageStoppedAt'],
+  status: ManagerListItem['status'],
+): string | null {
+  if (usageStoppedAt === undefined) return null;
+  if (status === 'failed' || status === 'lost') {
+    return (
+      `      ⚠ 枠(利用上限)で止まっている（${usageStoppedAt} から）。` +
+      `ただし status: ${status}——セッションそのものが、依頼者が望まない終わり方で` +
+      '既に終端している。「セッションは生きているので鍵が回れば続く」はここでは' +
+      '成り立たない——起こし直すには /msg で送ると resume を試みるしかなく、届く保証は無い。'
+    );
+  }
+  if (status === 'stopped') {
+    return (
+      `      ⚠ 枠(利用上限)で止まっている（${usageStoppedAt} から）。` +
+      'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
+      '停止させ、確かめたうえで既に終端している。「セッションは生きているので鍵が' +
+      '回ればこの委譲は続く」はここでは成り立たない。'
+    );
+  }
+  return (
+    `      ⚠ 枠(利用上限)で止まっている（${usageStoppedAt} から）。` +
+    'セッションは生きているので、鍵が回ればこの委譲は続く' +
+    '——status はそれまで動かさない（仕様である）。'
+  );
+}
+
+/**
+ * セッションが `failed` として畳まれたときの、Node が構造として持つ失敗の
+ * 分類（Issue #1883。GET /managers が返す `lastSystemError`）。
+ *
+ * **文言は core と同じ正本から引く**（`@alteroid/core/system-error-format` の
+ * `formatSystemErrorFacts` / `formatSystemErrorUnknownNote`）。この2つは
+ * ブラウザへ出す軽い口として作られていて（zod を持たない）、Web の
+ * `SystemErrorNote`（`manager-detail.tsx`）も同じ2つから文言を引く——CLI も
+ * ここに合流させ、3つ目の複製を作らない。**ゲート（`status !== 'failed'` なら
+ * `null`）だけは、この関数側で複製する**——ゲートそのものは軽い口に無い
+ * （`describeManagerSystemError` の doc と同じ理由）。
+ *
+ * **末尾の指し先だけ CLI 向けに変える**（Web が画面のセクション名を指すのと
+ * 同じ作法）——core 向けの `lastFailure`（MCP の欄名）ではなく、CLI の
+ * `failureLine` が出す見出し文言を指す。
+ */
+function systemErrorLine(
+  status: ManagerListItem['status'],
+  lastSystemError: ManagerListItem['lastSystemError'],
+): string | null {
+  if (status !== 'failed') return null;
+  if (lastSystemError === undefined) {
+    const note = formatSystemErrorUnknownNote(
+      '、上の「直近のターンは報告ではなく失敗で終わっています」の行を見ること',
+    );
+    return `      ⚠ セッションは失敗で畳まれた。${note}。`;
+  }
+  return (
+    `      ⚠ セッションは器の資源による落ち方で畳まれた可能性 ` +
+    `（${lastSystemError.at}）: ${formatSystemErrorFacts(lastSystemError)}`
+  );
+}
+
+/**
+ * セッションが `failed` として畳まれたときの cgroup の pids/OOM カウンタの
+ * 差分（Issue #1883。GET /managers が返す `lastCgroupEvents`）。
+ *
+ * **`systemErrorLine` と対で読むが軸は別**（`describeManagerCgroupEvents` の
+ * doc と同じ注意——因果は名乗らない）。文言は同じく軽い口
+ * （`@alteroid/core/cgroup-events-format`）から引く。
+ */
+function cgroupEventsLine(
+  status: ManagerListItem['status'],
+  lastCgroupEvents: ManagerListItem['lastCgroupEvents'],
+): string | null {
+  if (status !== 'failed') return null;
+  if (lastCgroupEvents === undefined) {
+    return `      ⚠ ${CGROUP_EVENTS_UNKNOWN_NOTE}。`;
+  }
+  return `      ${formatCgroupEventsNote(lastCgroupEvents)}（${lastCgroupEvents.at}）。`;
+}
+
+/**
+ * `tokenGeneration` が `undefined` のときに、なぜ分からないかを言う
+ * （Issue #1883。GET /managers が返す `tokenGenerationUnknownReason`）。
+ *
+ * core の `describeTokenGenerationUnknownReason`（`tools.ts`）と同じ3分岐を
+ * 複製する（export されていない私用関数——`usageStoppedLine` の doc と同じ
+ * 理由）。
+ *
+ * **`tokenGeneration` / `activeTokenGeneration`（世代の生の番号）はここでは
+ * 出さないと決めた。** Web の `DiagnosticsCard` が「生の世代番号を並べても
+ * 人間の次の一手は増えない」と決めた理由（`resetTimeSkewMatch` が既に
+ * 人間向けの結論を出している）は CLI にもそのまま当てはまる——CLI と Web で
+ * 揃える。**`tokenGenerationUnknownReason` はこの2つとは別の性質**——生の
+ * 番号ではなく「なぜ分からないか」という説明そのものなので、除く理由が
+ * 当てはまらない。しかも `tokenGeneration` が定義されているときはこの欄
+ * ごと消える（daemon 側の不変条件。`openapi.ts` の doc）ので、ここで
+ * `tokenGeneration` を見る必要が無い。
+ *
+ * **`reattached-across-restart` の対処（core は
+ * `manager_stop → manager_start`）は、CLI の語へ言い換える。** core の助言
+ * 定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語をそのまま複製すると
+ * `pnpm check:stale-token-restart-advice` に引っかかる
+ * （`scripts/check-stale-token-restart-advice-core.mjs` の `BANNED_PHRASES`）
+ * ——生成元の外でその逐語を持ってよいのは `*.test.ts` だけである。Web の
+ * `resetTimeSkewText` も同じ理由で言い換えている（`manager-detail.tsx` の
+ * doc）ので、ここも同じ2つの核（(1) 止める前にリモートを確かめる (2) 失われる
+ * のは会話だけではない）を CLI の言葉（`/stop` ではなく `/msg` — この委譲は
+ * まだ止まっていない）で運ぶ。
+ */
+function tokenGenerationUnknownReasonLine(
+  tokenGenerationUnknownReason: ManagerListItem['tokenGenerationUnknownReason'],
+): string | null {
+  if (tokenGenerationUnknownReason === undefined) return null;
+  if (tokenGenerationUnknownReason === 'pool-not-wired') {
+    return (
+      '      認証トークンの世代: 分からない（このデプロイは認証トークンの世代そのものを' +
+      '配線していない構成。全ての委譲について同じ理由で分からない——この委譲固有の' +
+      '問題ではなく、起こし直しても変わらない）。'
+    );
+  }
+  if (tokenGenerationUnknownReason === 'not-yet-observed') {
+    return (
+      '      認証トークンの世代: 分からない（この委譲のセッションが、いまのデーモンの' +
+      'プロセスではまだ一度も起きていない。開始・明示的な resume・認証トークンの' +
+      '回転のどれかが起きれば次の一覧から埋まる——いま何もしなくてよい）。'
+    );
+  }
+  if (tokenGenerationUnknownReason === 'reattached-across-restart') {
+    return (
+      '      認証トークンの世代: 分からない（デーモンの再起動をまたいで、器に生きた' +
+      'ままのセッションを引き取った。引き取っただけではこのセッションの環境変数に' +
+      '触れていないので、抱えている世代を確かめる材料が無い——一致でも不一致でもない、' +
+      '正直な「分からない」である）。この委譲へ daemon が次に明示的に触れば' +
+      '（送信・回転のどちらでも）自動で埋まるが、429 が続くなど気になるようなら、' +
+      '止める前に、まずリモート（PR・ブランチ・コミット）を確かめること。' +
+      '確かめずに止めると、失われるのは会話だけではない——そのターンで進行中だった' +
+      '作業も一緒に失われうる。確かめたうえで、/msg で送ると resume を試みる。'
+    );
+  }
+  return (
+    `      認証トークンの世代: 分からない理由に、この一覧が知らない値 ` +
+    `"${String(tokenGenerationUnknownReason)}" が入っている（デーモンの版が新しい可能性）。`
+  );
+}
+
+/**
+ * 429の文言の `resets` 時刻を、プールの各鍵の `cooldownUntil` と突き合わせた
+ * 結果（Issue #1883。GET /managers が返す `resetTimeSkewMatch`）。
+ *
+ * **core の `describeResetTimeSkew` との違い**——あちらは `tokenGeneration` /
+ * `activeTokenGeneration`（世代の生の番号）が既に食い違いを名指ししている
+ * ときは二重に鳴らさないよう抑える分岐を持つ。**CLI はその生の番号を出さない
+ * と決めた**（`tokenGenerationUnknownReasonLine` の doc）ので、抑える判定に
+ * 使う材料そのものが無い——Web の `resetTimeSkewText` と同じ理由で、抑えずに
+ * そのまま出す（二重に鳴る先が無いので実害は無い）。
+ *
+ * **未知の値でも落ちない。** 版のずれ（新しいデーモンが第3の値を返す）は
+ * 型では防げない——`describeWaitingKind`（このファイル）と同じ作法で、
+ * 知らない値をそのまま名乗る。
+ *
+ * **`'stale'` の対処は CLI の語へ言い換える**
+ * （`tokenGenerationUnknownReasonLine` の doc と同じ理由・同じ2つの核）。
+ */
+function resetTimeSkewLine(
+  resetTimeSkewMatch: ManagerListItem['resetTimeSkewMatch'],
+  lastUnpushedWorkObservation: ManagerListItem['lastUnpushedWorkObservation'],
+): string | null {
+  if (resetTimeSkewMatch === undefined) return null;
+  if (resetTimeSkewMatch === 'stale') {
+    const unpushedNote =
+      lastUnpushedWorkObservation === undefined
+        ? ''
+        : '下の「未push観測」にも最後の観測が出ている（いまの状態ではない）ので、合わせて見ること。';
+    return (
+      '      ⚠ 認証トークンの世代ずれの疑い（429の文言に書かれていた resets 時刻が、' +
+      '現役ではない鍵の冷却期限と一致した）。このセッションは古い鍵を掴んだまま' +
+      '走っている可能性がある——鍵が通る状態へ戻っても、このセッション自身は' +
+      'ターンの境界に達するまで戻らない。この行が消えないまま 429 が続くようなら、' +
+      '止める前に、まずリモート（PR・ブランチ・コミット）を確かめること。' +
+      unpushedNote +
+      '確かめずに止めると、失われるのは会話だけではない——そのターンで進行中だった' +
+      '作業も一緒に失われうる。確かめたうえで、/msg で送ると resume を試みる。'
+    );
+  }
+  if (resetTimeSkewMatch === 'active') {
+    return (
+      '      認証トークン: 429の文言に書かれていた resets 時刻が、現役の鍵自身の' +
+      '冷却期限と一致した——世代ずれではなく、待てば戻る。'
+    );
+  }
+  return (
+    `      認証トークンの世代ずれの判定: この一覧が知らない値 ` +
+    `"${String(resetTimeSkewMatch)}"（デーモンの版が新しい可能性）。`
+  );
+}
+
+/** `observation.worktrees` を1行にする。core の `formatUnpushedWorkObservationWorktrees`
+ * （`tools.ts`、export されていない）と同じ判断の複製（Issue #1883）。
+ */
+function formatUnpushedWorkObservationWorktrees(
+  worktrees: readonly { relativePath: string; branch: string | null }[],
+): string {
+  return worktrees.length === 0
+    ? '見つかった作業ツリー0本'
+    : worktrees
+        .map(
+          (wt) =>
+            `${wt.relativePath}: branch=${wt.branch === null ? 'null（取れなかった）' : wt.branch}`,
+        )
+        .join(' / ');
+}
+
+/**
+ * `lastUnpushedWorkObservation.source` を人間可読な1句にする。core の
+ * `describeUnpushedWorkObservationSource`（`tools.ts`）と同じ複製——道具の名前
+ * だけ CLI のものに言い換える（`manager_stop` → `/stop`）。
+ */
+function describeUnpushedWorkObservationSource(
+  source: ManagerUnpushedWorkObservationSource | undefined,
+): string {
+  if (source === undefined) {
+    return '経路不明（この欄を書かない版が残した行、または経路を渡さなかった呼び出し）';
+  }
+  if (source === 'stop-refusal') return '/stop（running・非force）の断り';
+  if (source === 'report') return 'ターンが report で終わったとき';
+  if (source === 'tool_use') return 'Bash で git push か新しい枝を作る操作を検出したとき';
+  if (source === 'auto-fold') return 'done を自動で畳む前の安全弁（auto-fold）';
+  if (source === 'vacate') return 'runner を意図して空ける直前（vacate）';
+  if (source === 'closed') return 'runner が closed を出す直前に先取り';
+  if (source === 'shutdown')
+    return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
+  return `この一覧が知らない経路 "${String(source)}"（デーモンの版が新しい可能性）`;
+}
+
+/**
+ * `/stop`（running・非force）の断り、ターンが `report` で終わったとき、
+ * または Bash で `git push` か新しい枝を作る操作を検出したときに取った最後の
+ * 未push観測（Issue #1883。GET /managers が返す `lastUnpushedWorkObservation`）。
+ *
+ * **core の `describeUnpushedWorkObservation`（`tools.ts`）と同じ2つの分岐を
+ * 複製する**（export されていない私用関数）。
+ *
+ * ## 器の入れ替え（redeploy 等）で応答不能な委譲は、別の言い方をする
+ *
+ * `manager.sessionMissingSince !== undefined` の間は、上の一般論ではなく
+ * `manager.shutdownObservationArrivedAfterSwap` の値で言い分ける——core の
+ * doc と同じ判断: 届いた（`true`）なら「器が止まる直前の観測」と言い切り、
+ * 届いていない（`false`・観測が無い・古いセッションのもの・`source` が
+ * `'shutdown'` ではない のどれか）なら、その旨を明示したうえで、いま表示中の
+ * 観測（在れば）を添える。
+ *
+ * **`cwd`（探索の起点の絶対パス）は載せない。** `observedWorktreeBranchSchema`
+ * の doc が引く「出してよい範囲」をそのまま継ぐ——core と同じ線。
+ */
+function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
+  const observation = manager.lastUnpushedWorkObservation;
+
+  if (manager.sessionMissingSince !== undefined) {
+    if (manager.shutdownObservationArrivedAfterSwap === true && observation !== undefined) {
+      if (observation.kind === 'unavailable') {
+        return (
+          `      未push観測: 器が止まる直前（${observation.at}）に取ろうとしたが取れなかった: ` +
+          observation.reason
+        );
+      }
+      return (
+        `      未push観測: 器が止まる直前（${observation.at}）の観測: ` +
+        formatUnpushedWorkObservationWorktrees(observation.worktrees)
+      );
+    }
+    const shown =
+      observation === undefined
+        ? '表示中の観測は無い（一度も取れていない）'
+        : observation.kind === 'unavailable'
+          ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
+          : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}`;
+    return (
+      '      ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
+      '（best-effort の送信のため。未pushが無かったことを意味しない）。' +
+      shown
+    );
+  }
+
+  if (observation === undefined) return null;
+  const provenance =
+    '/stop（running・非force）の断り、ターンが report で終わったとき、' +
+    'または Bash で git push か新しい枝を作る操作を検出したときに取った最後の1回' +
+    '（force指定・この一覧そのもの・器の入れ替え（redeploy・枠落ちでセッションを' +
+    '失う経路）では更新されない。いまの状態ではない）';
+  if (observation.kind === 'unavailable') {
+    return (
+      `      未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
+    );
+  }
+  return (
+    `      未push観測（${provenance}、${observation.at}）: ` +
+    formatUnpushedWorkObservationWorktrees(observation.worktrees)
+  );
+}
+
+/**
  * マネージャーの一覧を、人間が読める形へ（`/managers`）。
  *
  * 表示を関数に出してあるのは、`renderUsage`（`usage.ts`）と同じ理由 —
@@ -2106,10 +2444,17 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     // `ManagerSummary.runnerVanished`）。上の `runnerLostSince`（entry は残って
     // いるが黙っている）とは別の集合で、排他ではない。文言の核は `manager_list`
     // （`packages/core/src/tools.ts` の `describeRunnerVanished`）と揃える。
-    // 時刻は持たない——消えた時刻は名簿に残っていない。
+    // 消えた時刻は持たない——名簿に残っていない。
+    //
+    // **走り始めの時刻（`startedAt`）は core 版に揃えて足す（Issue #1883の
+    // 「軽微な点」）。** core の `describeRunnerVanished` は「この委譲の走り
+    // 始めは ${manager.startedAt}」を含めるが、CLI 版はここを手で写した際に
+    // 落としていた——矛盾ではないが揃っていなかった（同じ関数の中の変更
+    // なので、この PR で一緒に直す）。
     if (manager.runnerVanished === true) {
       lines.push(
-        '      ⚠ 宛先の器が名簿から消えている（消えた時刻は名簿に残っていないので分からない）。' +
+        `      ⚠ 宛先の器が名簿から消えている（この委譲の走り始めは ${manager.startedAt}。` +
+          '消えた時刻は名簿に残っていないので分からない）。' +
           'resume を試したわけではないので「戻れなかった(lost)」ではなく、lost で絞っても出てこない。' +
           '状態は走行中のまま残っている — 確かめる前に起こし直さないこと（同じ仕事が2本になる）',
       );
@@ -2166,6 +2511,21 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     // 先に読んでから「実は報告ではない」と分かる順になる。
     const failed = failureLine(manager.lastFailure, manager.status, manager.lastFoldedTurn);
     if (failed !== null) lines.push(`      ${failed}`);
+    // **枠(利用上限)で止まっている委譲も、同じ「失敗は報告の上」の順で置く
+    // （Issue #1883）。** `lastFailure` の行（すぐ上）とは別の軸なので別行
+    // ——両方が同時に出ることがある（`usageStoppedLine` の doc、core と同じ
+    // 排他にしない決定）。
+    const usageStopped = usageStoppedLine(manager.usageStoppedAt, manager.status);
+    if (usageStopped !== null) lines.push(usageStopped);
+    // **セッションそのものが `failed` として畳まれた落ち方も、同じ順で置く
+    // （Issue #1883）。** `lastFailure` とは別の軸なので別行——両方が同時に
+    // 出ることがある（`systemErrorLine` の doc）。
+    const systemError = systemErrorLine(manager.status, manager.lastSystemError);
+    if (systemError !== null) lines.push(systemError);
+    // **同じ順で置く（Issue #1883）。** `systemErrorLine`（すぐ上）とは別の軸
+    // なので別行——両方が同時に出ることがある。
+    const cgroupEvents = cgroupEventsLine(manager.status, manager.lastCgroupEvents);
+    if (cgroupEvents !== null) lines.push(cgroupEvents);
     // **失敗した回は「報告」と呼ばない。** 本文は runner 側で
     // 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
     // 「直近の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
@@ -2187,6 +2547,25 @@ export function renderManagerList(managers: ManagerListItem[]): string {
       const label = manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
+    // **Issue #1883**: この委譲が抱えている認証トークンの世代が分からない
+    // ときに、なぜ分からないかを添える（`tokenGenerationUnknownReasonLine` の
+    // doc）。
+    const tokenGenerationUnknown = tokenGenerationUnknownReasonLine(
+      manager.tokenGenerationUnknownReason,
+    );
+    if (tokenGenerationUnknown !== null) lines.push(tokenGenerationUnknown);
+    // **Issue #1883**: 429の文言のresets時刻を、プールのcooldownUntilと
+    // 突き合わせた結果を添える（`resetTimeSkewLine` の doc）。
+    const resetTimeSkew = resetTimeSkewLine(
+      manager.resetTimeSkewMatch,
+      manager.lastUnpushedWorkObservation,
+    );
+    if (resetTimeSkew !== null) lines.push(resetTimeSkew);
+    // **Issue #1883**: `/stop`（running・非force）の断りが最後に取った、
+    // 未 push の作業ツリーの観測を添える（`unpushedWorkObservationLine` の
+    // doc）。
+    const unpushedWork = unpushedWorkObservationLine(manager);
+    if (unpushedWork !== null) lines.push(unpushedWork);
   });
   return lines.join('\n');
 }
