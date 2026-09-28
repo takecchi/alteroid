@@ -3626,6 +3626,70 @@ describe('HTTP API', () => {
   });
 
   /**
+   * issue #1982。#1944（PR #1964）の後、行の形が壊れている継続中の依頼は
+   * `list()` からは消える（跡は stderr）が、`get(kind)` は「消された」
+   * （`null`）と「読めない」（throw）を区別する契約のまま投げ続ける
+   * （`ScheduleStore.get` の doc）。かつての `DELETE /schedule/:kind` は
+   * 先に `get(kind)` を呼んでいたので、壊れた依頼を外そうとすると 500 に
+   * なっていた——「外したい」のに、同じ kind で作り直す（`POST /schedule`）
+   * しか手が無い、という口の欠落。
+   *
+   * fs / pg の実物を持ち出さずに再現するため、`stores.schedules` を
+   * 「`get('broken')` は読めない行として投げる／`removeIfPresent('broken')`
+   * は在ったが読めなかった行として消せる」二重store（他の kind は実物へ
+   * 委譲）へ差し替える——`packages/core/src/tools.test.ts` の同名 issue の
+   * 歯と対（`commitments` の「unreadable は窓で切られない」テストが
+   * `stores.commitments.list` を同じ形で差し替えているのと同じ作法）。
+   */
+  it('読めない形で入っていた継続中の依頼も DELETE で外せる（issue #1982）', async () => {
+    const real = stores.schedules;
+    let brokenPresent = true;
+    stores.schedules = {
+      ...real,
+      async get(kind) {
+        if (kind === 'broken' && brokenPresent) {
+          throw new Error(
+            '継続中の依頼 broken が読めない形で入っている（消されたのではない）: 実測用のダミー',
+          );
+        }
+        return real.get(kind);
+      },
+      async removeIfPresent(kind) {
+        if (kind === 'broken') {
+          if (!brokenPresent) return null;
+          brokenPresent = false;
+          return 'unreadable';
+        }
+        return real.removeIfPresent(kind);
+      },
+    };
+
+    const removed = await app.request('/schedule/broken', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(removed.status).toBe(200);
+
+    // 外した後は「消された」——read-then-remove の隙間を挟まないので、
+    // 以後 get('broken') はもう投げない（brokenPresent が false になった）。
+    await expect(stores.schedules.get('broken')).resolves.toBeNull();
+
+    // 日誌には本文（request）の代わりに「読めない形で入っていた」とだけ残る。
+    const decisions = await stores.journal.list({ types: ['decision'] });
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({
+      decision: expect.stringContaining('読めない形で入っていた'),
+    });
+
+    // 本当に無い kind は、これまでどおり 404。
+    const missing = await app.request('/schedule/nope', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  /**
    * 台帳（引き受けたまま終わっていない仕事）。クローンは `commitment_*` を持っている
    * ので、人間の側から読めない・積めない・閉じられないと、頼んだことがどう扱われて
    * いるかを人間が確かめられない（PRD「可観測性」/「インターフェース」の等価性）。

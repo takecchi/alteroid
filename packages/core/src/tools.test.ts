@@ -2094,6 +2094,56 @@ describe('クローンの道具', () => {
     expect(await h.stores.schedules.list()).toEqual([]);
   });
 
+  /**
+   * issue #1982。#1944（PR #1964）の後、行の形が壊れている継続中の依頼は
+   * `list()` からは消える（跡は stderr）が、`get(kind)` は「消された」
+   * （`null`）と「読めない」（throw）を区別する契約のまま投げ続ける
+   * （`ScheduleStore.get` の doc）。かつての `schedule_remove` は先に
+   * `get(kind)` を呼んでいたので、壊れた依頼を外そうとすると例外がそのまま
+   * 上がっていた（`apps/daemon/src/app.test.ts` の同名 issue の歯と対）。
+   *
+   * インメモリ実装は常に検査を通った値しか持たない（`testing.ts` の
+   * `removeIfPresent` の doc）ので、`h.stores.schedules` を「`get('broken')`
+   * は読めない行として投げる／`removeIfPresent('broken')` は在ったが読めな
+   * かった行として消せる」二重store（他の kind は実物へ委譲）へ差し替えて
+   * 再現する。
+   */
+  it('schedule_remove は読めない形で入っていた依頼も外せる（issue #1982）', async () => {
+    const h = harness();
+    const real = h.stores.schedules;
+    let brokenPresent = true;
+    h.stores.schedules = {
+      ...real,
+      async get(kind) {
+        if (kind === 'broken' && brokenPresent) {
+          throw new Error(
+            '継続中の依頼 broken が読めない形で入っている（消されたのではない）: 実測用のダミー',
+          );
+        }
+        return real.get(kind);
+      },
+      async removeIfPresent(kind) {
+        if (kind === 'broken') {
+          if (!brokenPresent) return null;
+          brokenPresent = false;
+          return 'unreadable';
+        }
+        return real.removeIfPresent(kind);
+      },
+    };
+
+    const reply = await h.call('schedule_remove', { kind: 'broken' });
+    expect(reply).toContain('外した');
+
+    // 外した後は「消された」——読んでから書くまでの隙間を挟まないので、
+    // 以後 get('broken') はもう投げない。
+    await expect(h.stores.schedules.get('broken')).resolves.toBeNull();
+
+    // 日誌には本文（request）の代わりに「読めない形で入っていた」とだけ残る。
+    const [entry] = await h.stores.journal.list({ types: ['decision'] });
+    expect(entry).toMatchObject({ decision: expect.stringContaining('読めない形で入っていた') });
+  });
+
   it('memory_append は既存の記述を消さない（人間の手書きを守る）', async () => {
     const h = harness();
     await h.stores.persona.write('values', '# 価値観\n\n人間が手で書いた\n');
