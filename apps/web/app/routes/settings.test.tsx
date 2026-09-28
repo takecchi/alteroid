@@ -280,9 +280,7 @@ describe('runner のプロファイル欄は、聞けた分しか言わない', 
 
   it('失敗したときは理由が出る', async () => {
     renderSettings({
-      runners: [
-        { ...BASE, profileProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' } },
-      ],
+      runners: [{ ...BASE, profileProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' } }],
       daemonRevision: DAEMON_UNKNOWN,
     });
 

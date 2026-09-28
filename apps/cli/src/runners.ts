@@ -105,7 +105,8 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
  * 作る関数は下の `renderCredentialsFingerprint`/`renderProfileFingerprint`
  * に1本ずつしか無く、複製していない）。
  */
-type RunnerProbe = { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
+type RunnerProbe =
+  { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
 
 /**
  * `GET /runners` の応答のうち、この口が読む分。
