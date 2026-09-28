@@ -103,13 +103,14 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     await writeRawTokensFile();
     const stores = createFsStores(root);
 
-    await captureStderr(() =>
-      stores.tokens.writeSettings({ rotateOn: 'overage_exhausted', cooldownMs: 1000 }),
-    );
+    await captureStderr(async () => {
+      await stores.tokens.writeSettings({ rotateOn: 'overage_exhausted', cooldownMs: 1000 });
+    });
 
     const raw = JSON.parse(await readFile(tokensPath, 'utf8')) as { tokens: unknown[] };
     const badRow = raw.tokens.find(
-      (row) => typeof row === 'object' && row !== null && (row as { id?: unknown }).id === 'tok-bad',
+      (row) =>
+        typeof row === 'object' && row !== null && (row as { id?: unknown }).id === 'tok-bad',
     );
     expect(badRow).toEqual(BAD_TOKEN_RAW);
   });
@@ -121,7 +122,9 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
       await writeRawTokensFile();
       const stores = createFsStores(root);
 
-      await captureStderr(() => stores.tokens.replace([{ ...GOOD_TOKEN, label: 'renamed' }]));
+      await captureStderr(async () => {
+        await stores.tokens.replace([{ ...GOOD_TOKEN, label: 'renamed' }]);
+      });
 
       const raw = JSON.parse(await readFile(tokensPath, 'utf8')) as { tokens: unknown[] };
       expect(raw.tokens.map((row) => (row as { id?: unknown }).id)).toEqual(['tok-good']);
