@@ -6,6 +6,7 @@ import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useManagersWindow } from '~/hooks/use-managers-window';
 import { cn } from '~/lib/cn';
 import { formatRelative } from '~/lib/format';
+import { terminalFailureNote } from '~/lib/manager-failure-note';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'; label: string }> =
@@ -202,10 +203,15 @@ export function ManagerDenialNote({
  * 呼び出しが `status` を渡していなかったので、詳細（`manager-detail.tsx` の
  * `FailureNote`）と同じ形で、`failed` / `lost` / `stopped` のように**既に終端
  * している**回でも「セッションは生きているので、原因が解ければ話しかければ続く」
- * を言っていた。**揃える先・文言・`lastFoldedTurn` の扱いは詳細の `FailureNote`
- * の doc（「Issue #1882」「Issue #1882 / #1798」）と同じ**——生成元をこの
- * ファイルへ複製すると片方だけ直る形になるので、判断の理由はそちらの doc から
- * 1本だけ辿れるようにし、ここでは短く要点だけを書く。
+ * を言っていた。**`lastFoldedTurn` の扱いは詳細の `FailureNote` の doc
+ * （「Issue #1882 / #1798」）と同じ。**
+ *
+ * **終端した回の文言は `~/lib/manager-failure-note` の `terminalFailureNote`
+ * から取る。** 詳細と同じ文をこのファイルへ複製して手書きしていたので、
+ * レビュー指摘で生成元を1本化した——**「もう続かない」が `send()` /
+ * `#resume()` の現物より強かったことの根拠と、揃え直した文言はそちらの doc に
+ * ある。** 生きている回（`done` 等）の文言はこの画面だけの語調（一覧の行には
+ * 「下の話しかける」に相当する導線が無い）なので、ここに残す。
  */
 export function ManagerFailureNote({
   failure,
@@ -221,15 +227,11 @@ export function ManagerFailureNote({
   // ——`lastFoldedTurn` が在る回の `lastFailure` は、畳まれる前の無関係な
   // 古いターンを指す。
   if (lastFoldedTurn !== undefined) return null;
-  const terminal = status === 'failed' || status === 'lost' || status === 'stopped';
   return (
     <p className="mt-1 text-[11px] text-danger">
       ⚠ 直近のターンは報告ではなく失敗で終わっている: {failure.code}（{failure.via}）。
-      {!terminal && 'セッションは生きているので、原因が解ければ話しかければ続く。'}
-      {terminal &&
-        (status === 'stopped'
-          ? 'この仕事はもう終わっている。このセッションは、その後人間・クローンが明示的に停止させ、確かめたうえで既に終端している。原因の有無にかかわらず、このセッションはもう続かない。'
-          : 'この仕事はもう終わっている。セッションそのものが、依頼者が望まない終わり方で既に終端している。原因が解けても、このセッションは自動では続かない。')}
+      {terminalFailureNote(status) ??
+        'セッションは生きているので、原因が解ければ話しかければ続く。'}
     </p>
   );
 }

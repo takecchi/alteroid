@@ -19,6 +19,7 @@ import { useAbortManager, useAppraiseManager, useSendManagerMessage } from '~/ho
 import { useManager, useManagerTranscript } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
+import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
 
 import type { AppraisalValue } from '@alteroid/core';
 /**
@@ -655,7 +656,7 @@ function LostNote({ status }: { status: ManagerStatus }) {
  * `stopped` のように**既に終端している**回でも「この仕事は死んでいない。セッションは
  * 生きているので……」を言っていた。同じ画面の状態バッジは終端の札（例:
  * 「停止済み」）を出しているので、1画面の中で言い切りが事実と矛盾する
- * （実測は下の `terminalNote` の doc）。
+ * （実測は下の `terminalFailureNote` の doc）。
  *
  * **揃える先は core の #1796（PR #1857）の `describeUsageStopped`
  * （`packages/core/src/tools.ts`）——同じ2値に分ける。** `failed` / `lost` は
@@ -664,6 +665,13 @@ function LostNote({ status }: { status: ManagerStatus }) {
  * import できない**（apps/web の import 制限。`eslint.config.js`）ので、文言は
  * この画面の既存の語調（「この仕事は」「終わっている」の言い回し）で別に書く——
  * 意味の線（終端の理由の2値）だけを揃え、文字は複製しない。
+ *
+ * **一覧（`managers.tsx` の `ManagerFailureNote`）と同じ文を手書きで複製していた
+ * ので、終端した回の文言は `~/lib/manager-failure-note` の `terminalFailureNote`
+ * へ1本化した（レビュー指摘）。** その doc に、直す前の「もう続かない」という
+ * 言い切りが `send()` / `#resume()` の現物より強かったこと（`stopConfirmedAt` は
+ * `#retire()` が消す in-memory の印でしかなく、`status` そのものは resume を
+ * 止めない）と、揃え直した文言の根拠がある。
  *
  * **`running` / `waiting_human` / `done`（生きている3値）は今までどおり**——
  * 「この仕事は死んでいない。セッションは生きているので……」の文言を1文字も変えて
@@ -706,35 +714,20 @@ function FailureNote({ manager }: { manager: ManagerSummary }) {
 /**
  * {@link FailureNote} の第2段落（生きているか、既に終端しているか）。
  *
- * **`status` の2値に分ける。** core の `describeUsageStopped` と同じ線
- * （`FailureNote` の doc「Issue #1882」を見よ）——`failed` / `lost` は
- * 「依頼者が望まない終わり方」、`stopped` は「人間・クローンが明示的に停止させた」。
- * `running` / `waiting_human` / `done` は生きている側で、文言は直す前と1文字も
+ * **終端した回（`failed` / `lost` / `stopped`）の文言は
+ * `~/lib/manager-failure-note` の `terminalFailureNote` から取る。** 一覧
+ * （`managers.tsx` の `ManagerFailureNote`）と同じ文を2箇所で手書きしていたので、
+ * レビュー指摘で生成元を1本化した——**「もう続かない」が `send()` / `#resume()`
+ * の現物より強かったことの根拠と、揃え直した文言はそちらの doc にある。**
+ *
+ * **`running` / `waiting_human` / `done`（生きている3値）はここでだけ書く。**
+ * 「下の『話しかける』」という導線はこの詳細画面にしかない（一覧の行には
+ * 送信欄が無い）ので、共通化した側には置いていない——文言は直す前と1文字も
  * 変えていない。
  */
 function terminalFailureNote(status: ManagerStatus): ReactNode {
-  if (status === 'failed' || status === 'lost') {
-    return (
-      <>
-        <strong className="font-medium">この仕事はもう終わっている</strong>
-        。セッションそのものが、
-        <strong className="font-medium">依頼者が望まない終わり方で既に終端している</strong>
-        。原因が解けても、このセッションは自動では続かない。
-      </>
-    );
-  }
-  if (status === 'stopped') {
-    return (
-      <>
-        <strong className="font-medium">この仕事はもう終わっている</strong>
-        。このセッションは、その後
-        <strong className="font-medium">
-          人間・クローンが明示的に停止させ、確かめたうえで既に終端している
-        </strong>
-        。原因の有無にかかわらず、このセッションはもう続かない。
-      </>
-    );
-  }
+  const terminal = sharedTerminalFailureNote(status);
+  if (terminal !== null) return terminal;
   return (
     <>
       <strong className="font-medium">この仕事は死んでいない</strong>

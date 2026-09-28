@@ -646,6 +646,13 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
     expect(screen.queryByText('この仕事は死んでいない')).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+    // レビュー指摘（もう続かない、は send()/#resume() の現物より強かった）で
+    // 揃え直した文言。「続く手段は在るが保証は無い」まで——「もう続かない」
+    // という言い切りには戻さない。
+    expect(
+      screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/自動では続かない/)).toBeNull();
   });
 
   it('status: lost + lastFailure（lastFoldedTurn 無し）も、終端の言葉に置き換わる', async () => {
@@ -658,6 +665,10 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(await screen.findByText('rate_limit')).toBeTruthy();
     expect(screen.queryByText(/セッションは生きているので/)).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+    expect(
+      screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/自動では続かない/)).toBeNull();
   });
 
   it('status: stopped + lastFailure（lastFoldedTurn 無し）は、明示的に停止させた終端の言葉になる', async () => {
@@ -672,6 +683,15 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(
       screen.getByText(/人間・クローンが明示的に停止させ、確かめたうえで既に終端している/),
     ).toBeTruthy();
+    // **`send()` は実際に stopped の委譲へ resume を試みうる**（`stopConfirmedAt`
+    // は `#retire()` が消す in-memory の印でしかなく、`status` そのものは
+    // `#resume()` を止めない。`~/lib/manager-failure-note` の doc）。
+    // 「原因の有無にかかわらず、このセッションはもう続かない」という直す前の
+    // 言い切りには戻さない。
+    expect(
+      screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/原因の有無にかかわらず/)).toBeNull();
   });
 
   it('生きている status（done）は今までどおり「生きている」を言う（既定は変えていない）', async () => {
@@ -688,6 +708,16 @@ describe('Issue #1882: 終端した委譲・畳まれたターンの回で「生
     expect(await screen.findByText('待機中')).toBeTruthy();
     expect(screen.getByText('この仕事は死んでいない')).toBeTruthy();
     expect(screen.getByText(/セッションは生きているので/)).toBeTruthy();
+    // **生きている3値の文言は1文字も変えていないことを固定する。** JSX の
+    // 1行ぶん（テキストの断片単位）を丸ごと正規表現の部分一致で見る——
+    // 途中の1文字でも変われば、この部分文字列がどこにも現れなくなり赤くなる
+    // （句読点の全角括弧は正規表現の特殊文字ではないのでエスケープ不要）。
+    expect(
+      screen.getByText(
+        /。セッションは生きているので、原因が解ければ下の「話しかける」から続けられる（だから状態は/,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(/のままである）。/)).toBeTruthy();
   });
 });
 

@@ -366,6 +366,13 @@ describe('Issue #1882: 一覧でも、終端した委譲では「生きている
     expect(await screen.findByText(/rate_limit/)).toBeTruthy();
     expect(screen.queryByText(/話しかければ続く/)).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+    // レビュー指摘（もう続かない、は send()/#resume() の現物より強かった）で
+    // 揃え直した文言。詳細（`manager-detail.test.tsx`）と同じ生成元
+    // （`~/lib/manager-failure-note`）を使うので同じ字面になる。
+    expect(
+      screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/自動では続かない/)).toBeNull();
   });
 
   it('status: lost は終端の言葉に置き換わる', async () => {
@@ -374,6 +381,10 @@ describe('Issue #1882: 一覧でも、終端した委譲では「生きている
     expect(await screen.findByText(/rate_limit/)).toBeTruthy();
     expect(screen.queryByText(/話しかければ続く/)).toBeNull();
     expect(screen.getByText(/依頼者が望まない終わり方で既に終端している/)).toBeTruthy();
+    expect(
+      screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/自動では続かない/)).toBeNull();
   });
 
   it('status: stopped は明示的に停止させた終端の言葉になる', async () => {
@@ -384,6 +395,10 @@ describe('Issue #1882: 一覧でも、終端した委譲では「生きている
     expect(
       screen.getByText(/人間・クローンが明示的に停止させ、確かめたうえで既に終端している/),
     ).toBeTruthy();
+    expect(
+      screen.getByText(/続けたいなら話しかけて resume を試みるしかなく、届く保証は無い/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/原因の有無にかかわらず/)).toBeNull();
   });
 
   it('lastFoldedTurn が在る回は、古い lastFailure を「直近のターン」として出さない', async () => {
@@ -405,6 +420,12 @@ describe('Issue #1882: 一覧でも、終端した委譲では「生きている
 
     expect(await screen.findByText('待機中')).toBeTruthy();
     expect(screen.getByText(/話しかければ続く/)).toBeTruthy();
+    // **生きている3値の文言は1文字も変えていないことを固定する。** 短い断片
+    // ではなく全文を正規表現の部分一致で見る——途中の1文字でも変われば、この
+    // 部分文字列がどこにも現れなくなり赤くなる。
+    expect(
+      screen.getByText(/セッションは生きているので、原因が解ければ話しかければ続く。/),
+    ).toBeTruthy();
   });
 });
 
