@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
+
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { findNulByteHits, listScannableFiles, NUL_CHAR } from './check-tracked-nul-bytes-core.mjs';
@@ -127,7 +129,8 @@ describe('実リポジトリの検査（listScannableFiles が返す対象全フ
 describe('listScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
   async function makeRepoWithUntrackedFile(): Promise<string> {
     const dir = await makeTempDir('check-tracked-nul-bytes-1817-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -144,7 +147,11 @@ describe('listScannableFiles は未追跡ファイルも対象に入れる（#18
 
   it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
     const dir = await makeRepoWithUntrackedFile();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+    const oldForm = execFileSync('git', ['ls-files', '-z'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: gitChildEnv(),
+    })
       .split('\0')
       .filter((p) => p.length > 0);
     expect(oldForm).not.toContain('new-untracked.txt');

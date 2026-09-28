@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   collectMarkedQuotes,
   EXCLUDED_PREFIXES,
@@ -333,7 +334,7 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
   }
 
   function git(dir: string, ...args: string[]) {
-    return execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
   }
 
   it('走査しない拡張子と、この検査自身は外す（未追跡ファイルにも同じ絞り込みが掛かる）', async () => {
@@ -357,7 +358,11 @@ describe('check-sdk-quotes: listScannableFiles（Issue #1817: 未追跡ファイ
     // 新しい違反を、まだ `git add` していない新規ファイルへ仕込む（#1817 の再現）。
     await writeFile(join(dir, 'new-untracked.ts'), '// [sdk-verbatim Foo]\n// > this is wrong\n');
 
-    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+    const oldForm = execFileSync('git', ['ls-files', '-z'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: gitChildEnv(),
+    })
       .split('\0')
       .filter((p) => p.length > 0);
     expect(oldForm).not.toContain('new-untracked.ts');

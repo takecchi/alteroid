@@ -12,6 +12,7 @@ import {
 } from '../packages/core/src/schedule.js';
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   listGitScannableFiles,
   // @ts-expect-error -- 素の .mjs
@@ -83,7 +84,8 @@ export function listClaudeScannableFiles(root: string = ROOT): string[] {
 describe('listClaudeScannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
   async function makeRepoWithUntrackedClaudeFile(): Promise<string> {
     const dir = await makeTempDir('reserved-schedule-kinds-1817-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -101,6 +103,7 @@ describe('listClaudeScannableFiles は未追跡ファイルも対象に入れる
     const oldForm = execFileSync('git', ['ls-files', '-z', '--', '.claude'], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     })
       .split('\0')
       .filter((p) => p.length > 0);

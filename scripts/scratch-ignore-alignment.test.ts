@@ -7,6 +7,8 @@ import { ESLint } from 'eslint';
 import * as prettier from 'prettier';
 import { describe, expect, it } from 'vitest';
 
+import { gitChildEnv } from './git-child-env.js';
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
@@ -82,6 +84,7 @@ describe('共有の置き場は git・prettier・eslint・docker のすべてか
     expect(() =>
       execFileSync('git', ['check-ignore', '-q', '--no-index', probeOf(shared, 'ts')], {
         cwd: ROOT,
+        env: gitChildEnv(),
       }),
     ).not.toThrow();
   });

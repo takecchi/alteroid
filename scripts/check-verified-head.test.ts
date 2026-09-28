@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   compareVerifiedHead,
   formatVerdict,
@@ -36,7 +37,8 @@ describe('pnpm check:verified-head（Issue #1763）', () => {
   /** commit が1つある使い捨ての git リポジトリ。 */
   async function makeRepo(): Promise<string> {
     const dir = await makeTempDir('check-verified-head-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -79,8 +81,8 @@ describe('pnpm check:verified-head（Issue #1763）', () => {
 
     // **verify を通した後に1行直して commit する**（「緑を見てから1行直して push した」の形）。
     await writeFile(join(dir, 'a.txt'), 'one\ntwo\n');
-    execFileSync('git', ['add', '-A'], { cwd: dir });
-    execFileSync('git', ['commit', '-qm', 'after-verify edit'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+    execFileSync('git', ['commit', '-qm', 'after-verify edit'], { cwd: dir, env: gitChildEnv() });
 
     const result = compareVerifiedHead({ repo: dir, rev: 'HEAD', recordPath: recordPath(dir) });
     expect(result.verdict).toBe('mismatch');
@@ -181,6 +183,7 @@ describe('pnpm check:verified-head（Issue #1763）', () => {
     // fingerprint は HEAD の sha を畳むので変わるはずだが、tree の比較はここで動かない。
     execFileSync('git', ['commit', '--allow-empty', '-qm', 'empty commit, same tree'], {
       cwd: dir,
+      env: gitChildEnv(),
     });
 
     const result = compareVerifiedHead({ repo: dir, rev: 'HEAD', recordPath: recordPath(dir) });

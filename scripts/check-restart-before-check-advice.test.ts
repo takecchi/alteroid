@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
+
 // ⚠ **1行に畳んである。** `@ts-expect-error` は次の1行にしか効かないので、
 // 多行 import にすると `from` の行（実際に TS7016 が出る場所）へ届かない。
 // prettier-ignore
@@ -168,7 +170,7 @@ describe('check-restart-before-check-advice: listScannableSources（Issue #1817�
   async function makeRepoWithUntrackedFiles(): Promise<string> {
     const dir = await makeTempDir('check-restart-before-check-advice-1817-');
     const git = (...gitArgs: string[]) =>
-      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8' });
+      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -184,7 +186,11 @@ describe('check-restart-before-check-advice: listScannableSources（Issue #1817�
 
   it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
     const dir = await makeRepoWithUntrackedFiles();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+    const oldForm = execFileSync('git', ['ls-files', '-z'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: gitChildEnv(),
+    })
       .split('\0')
       .filter((p) => p.length > 0);
     expect(oldForm).not.toContain('new-untracked.ts');
@@ -214,7 +220,7 @@ describe('check-restart-before-check-advice: apps/web の .tsx を走査する�
   async function makeRepoWithTsxFile(): Promise<string> {
     const dir = await makeTempDir('check-restart-before-check-advice-1873-');
     const git = (...gitArgs: string[]) =>
-      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8' });
+      execFileSync('git', gitArgs, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');

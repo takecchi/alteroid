@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   listGitScannableFiles,
   // @ts-expect-error -- 素の .mjs
@@ -23,7 +24,8 @@ import {
 describe('listGitScannableFiles（Issue #1817）', () => {
   async function makeRepoWithUntrackedFile(): Promise<string> {
     const dir = await makeTempDir('git-scannable-files-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -37,7 +39,11 @@ describe('listGitScannableFiles（Issue #1817）', () => {
 
   it('🔴→🟢 の対比: 旧い形（`git ls-files -z`、cached のみ）は未追跡ファイルを取りこぼす', async () => {
     const dir = await makeRepoWithUntrackedFile();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+    const oldForm = execFileSync('git', ['ls-files', '-z'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: gitChildEnv(),
+    })
       .split('\0')
       .filter((p) => p.length > 0);
     expect(oldForm).not.toContain('new-untracked.txt');
@@ -74,7 +80,7 @@ describe('listGitScannableFiles（Issue #1817）', () => {
 
   it('対象が1件も無いディレクトリでは空配列を返す（git repo 自体は要る）', async () => {
     const dir = await makeTempDir('git-scannable-files-empty-');
-    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['init', '-q'], { cwd: dir, env: gitChildEnv() });
     const files = listGitScannableFiles({ cwd: dir }) as string[];
     expect(files).toEqual([]);
   });

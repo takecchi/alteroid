@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   listGitScannableFiles,
   // @ts-expect-error -- 素の .mjs
@@ -123,7 +124,8 @@ export function scannableFiles(root: string = ROOT): string[] {
 describe('scannableFiles は未追跡ファイルも対象に入れる（#1817）', () => {
   async function makeRepoWithUntrackedFile(): Promise<string> {
     const dir = await makeTempDir('check-no-grep-vc-1817-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -137,7 +139,11 @@ describe('scannableFiles は未追跡ファイルも対象に入れる（#1817�
 
   it('🔴（直す前の形）: 素の `git ls-files -z` は新規ファイルを見落とす', async () => {
     const dir = await makeRepoWithUntrackedFile();
-    const oldForm = execFileSync('git', ['ls-files', '-z'], { cwd: dir, encoding: 'utf8' })
+    const oldForm = execFileSync('git', ['ls-files', '-z'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: gitChildEnv(),
+    })
       .split('\0')
       .filter((p) => p.length > 0);
     expect(oldForm).not.toContain('new-untracked.sh');

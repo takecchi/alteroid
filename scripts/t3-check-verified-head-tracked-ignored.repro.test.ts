@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   compareVerifiedHead,
   // @ts-expect-error -- 素の .mjs
@@ -51,7 +52,8 @@ import {
 describe('PR #1774 再現: 追跡+ignore のファイルで fingerprint と writeTreeFor の範囲がずれる', () => {
   async function makeRepoWithTrackedIgnoredFile(): Promise<string> {
     const dir = await makeTempDir('t3-check-verified-head-repro-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -72,6 +74,7 @@ describe('PR #1774 再現: 追跡+ignore のファイルで fingerprint と writ
     const out = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     });
     expect(out.split('\n').filter(Boolean)).toContain('tracked-but-ignored.txt');
   });
@@ -96,6 +99,7 @@ describe('PR #1774 再現: 追跡+ignore のファイルで fingerprint と writ
     const lsTree = execFileSync('git', ['ls-tree', '-r', '--name-only', tree], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     });
     const paths = lsTree.split('\n').filter(Boolean);
 
