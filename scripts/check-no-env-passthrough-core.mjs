@@ -45,6 +45,25 @@
  * 関数・別の ALLOWLIST（`ALLOWLIST_MISSING_ENV`）に分けてある。理由は
  * それぞれの doc コメントに書く。
  *
+ * **⚠️ 2026-09-28 追記（Issue #2036）: 正規表現の構造そのものに由来する
+ * 見落としが3つ在った（上の「拾わない形」とは種類が違う——対象の字面は
+ * 現れているのに、正規表現の作りのせいで当たらなかった形）。**
+ *
+ * - `Object.assign(getBase(), process.env)`（`process.env` の前に丸括弧を
+ *   含む式が挟まる）——`[^)]*` が内側の `)` を跨げなかった。
+ *   `findObjectAssignEnvHits` が `findMatchingParenEnd`（括弧の深さを数える。
+ *   `classifyChildProcessCallEnv` と同じ考え方）に置き換えて直す
+ * - `{ ...(process.env), FOO: '1' }`（スプレッドが丸括弧で `process.env` を
+ *   単純に包む）——`\.\.\.\s*process\.env\b` が `(` を跨げなかった。
+ *   `spread-process-env` の正規表現に、`...` と `process.env` の間の
+ *   丸括弧を許すよう広げて直す
+ * - `{ ['env']: process.env }`（計算プロパティ名の文字列キー）——
+ *   `maskCommentsAndStrings` が文字列リテラル `'env'` を空白へ潰すため、
+ *   マスク後のテキストには `env` という字面自体が残らなかった。
+ *   `findComputedEnvKeyHits` がマスク前の生のテキストを走査し、マスク後の
+ *   同じ範囲に `process.env` が残っているか（＝コメント・文字列の中の
+ *   逐語引用ではないか）を確かめてから採用する
+ *
  * ## コメント・文字列の中は拾わない
  *
  * `usage-probe.test.ts` のように、この字面そのものを**説明する**コメントや
@@ -288,24 +307,84 @@ export function maskCommentsAndStrings(source) {
   return out;
 }
 
-/** 検出する3形。`describe` は CLI の出力に使う。 */
+/**
+ * 検出する形のうち、単純な正規表現（括弧の深さを数えずに済むもの）だけを
+ * ここに置く。`describe` は CLI の出力に使う。
+ *
+ * `spread-process-env` は `...` と `process.env` の間に、`...(process.env)`
+ * のような単純な丸括弧の入れ子（`(` の後に空白を挟んでよい）を許す
+ * （Issue #2036）。ただし `...(options.env ?? process.env)` のように、括弧の
+ * 中で `process.env` の前に別の式が挟まる形までは追わない——それは
+ * `Object.assign` と違って「対象を1つの丸括弧で単に包んだだけ」の形に限る
+ * という道具の設計であり、括弧の中身を深さで数える必要がある一般形は
+ * `object-assign-process-env`（下の `findObjectAssignEnvHits`）が持つ。
+ */
 export const PATTERNS = [
   {
     id: 'spread-process-env',
-    re: /\.\.\.\s*process\.env\b/g,
-    describe: '`...process.env`（スプレッドで丸ごと展開）',
+    re: /\.\.\.\s*(?:\(\s*)*process\.env\b/g,
+    describe: '`...process.env`（スプレッドで丸ごと展開。丸括弧で包んだ形も含む）',
   },
   {
     id: 'env-direct-process-env',
     re: /\benv\s*:\s*process\.env(?![\w.])/g,
     describe: '`env: process.env`（丸ごとそのまま渡す）',
   },
-  {
-    id: 'object-assign-process-env',
-    re: /Object\.assign\([^)]*\bprocess\.env(?![\w.])[^)]*\)/g,
-    describe: '`Object.assign(…, process.env)`（丸ごと合成）',
-  },
 ];
+
+/**
+ * `Object.assign(…)` の呼び出しの中に、裸の `process.env` が現れる形を
+ * 検出する（Issue #2036）。単純な `[^)]*` では `Object.assign(getBase(),
+ * process.env)` のように、`process.env` より前に丸括弧を含む式（`getBase()`
+ * の呼び出し）が挟まると、その `)` で正規表現が終端してしまい見逃す。
+ * ここでは `findMatchingParenEnd`（括弧の深さを数える。
+ * `classifyChildProcessCallEnv` と同じ考え方）で `Object.assign(` に対応する
+ * 閉じ括弧を正しく見つけ、その範囲全体を対象に `process.env` を探す。
+ *
+ * `masked`（コメント・文字列を潰したテキスト）を受け取る前提——呼び出し側が
+ * `maskCommentsAndStrings` 済みのテキストを渡す。
+ */
+function findObjectAssignEnvHits(masked) {
+  const hits = [];
+  const callRe = /\bObject\.assign\s*\(/g;
+  let m;
+  while ((m = callRe.exec(masked))) {
+    const openIdx = m.index + m[0].length - 1;
+    const closeIdxAfter = findMatchingParenEnd(masked, openIdx);
+    const argsText = masked.slice(openIdx + 1, closeIdxAfter - 1);
+    if (/\bprocess\.env(?![\w.])/.test(argsText)) {
+      hits.push({ index: m.index });
+    }
+    callRe.lastIndex = openIdx + 1; // 呼び出し本体の中を再走査しない（入れ子の Object.assign は別途 m.index で拾われる）
+  }
+  return hits;
+}
+
+/**
+ * 計算プロパティ名で `env` キーへ `process.env` を渡す形
+ * （`{ ['env']: process.env }` / `{ ["env"]: process.env }`）を検出する
+ * （Issue #2036）。`maskCommentsAndStrings` は文字列リテラルの中身を空白へ
+ * 潰すため、`'env'` という字面そのものがマスク後のテキストから消えてしまい
+ * `\benv\s*:\s*process\.env` では当たらない。そこでこの形だけは**マスク前の
+ * 生のテキスト**を対象に走査し、マッチした範囲の**マスク後**のテキストに
+ * `process.env` がそのまま残っているか（＝コメント・文字列の中の逐語引用
+ * ではなく実際のコードか）を確かめてから採用する（`raw` と `masked` は
+ * `maskCommentsAndStrings` が文字数・改行位置を変えない設計なので、同じ
+ * index がそのまま対応する）。
+ */
+function findComputedEnvKeyHits(rawContent, masked) {
+  const hits = [];
+  const re = /\[\s*(['"])env\1\s*\]\s*:\s*process\.env(?![\w.])/g;
+  let m;
+  while ((m = re.exec(rawContent))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (masked.slice(start, end).includes('process.env')) {
+      hits.push({ index: start });
+    }
+  }
+  return hits;
+}
 
 /**
  * `files`（`{ path, content }` の配列）を走査し、丸渡しの形が見つかった箇所を
@@ -316,11 +395,12 @@ export function findEnvPassthroughHits(files) {
   for (const file of files) {
     const masked = maskCommentsAndStrings(file.content);
     const rawLines = file.content.split('\n');
+    const lineOf = (index) => masked.slice(0, index).split('\n').length;
     for (const pattern of PATTERNS) {
       pattern.re.lastIndex = 0;
       let m;
       while ((m = pattern.re.exec(masked))) {
-        const line = masked.slice(0, m.index).split('\n').length;
+        const line = lineOf(m.index);
         hits.push({
           path: file.path,
           line,
@@ -328,8 +408,28 @@ export function findEnvPassthroughHits(files) {
           describe: pattern.describe,
           snippet: (rawLines[line - 1] ?? '').trim(),
         });
-        if (m[0].length === 0) pattern.re.lastIndex += 1; // 無限ループ対策（この3形では起きない）
+        if (m[0].length === 0) pattern.re.lastIndex += 1; // 無限ループ対策（この2形では起きない）
       }
+    }
+    for (const { index } of findObjectAssignEnvHits(masked)) {
+      const line = lineOf(index);
+      hits.push({
+        path: file.path,
+        line,
+        kind: 'object-assign-process-env',
+        describe: '`Object.assign(…, process.env)`（丸ごと合成。括弧を挟んだ引数の形も含む）',
+        snippet: (rawLines[line - 1] ?? '').trim(),
+      });
+    }
+    for (const { index } of findComputedEnvKeyHits(file.content, masked)) {
+      const line = lineOf(index);
+      hits.push({
+        path: file.path,
+        line,
+        kind: 'computed-env-key-process-env',
+        describe: "`['env']: process.env`（計算プロパティ名で丸ごと渡す）",
+        snippet: (rawLines[line - 1] ?? '').trim(),
+      });
     }
   }
   return hits;
