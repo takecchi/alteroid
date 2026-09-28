@@ -28,6 +28,7 @@ import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
+import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -2044,6 +2045,15 @@ function failureLine(
  * 言い切らない。**生きている3値（`running`/`waiting_human`/`done`）の文言は
  * `describeUsageStopped` の第3分岐と同じ意味で書く。**
  *
+ * **`stopped` 枝にも resume の一文を付ける（PR #1904 で core が揃えた形）。**
+ * core の `describeUsageStopped` は元は `failed`/`lost` 枝にだけ「起こし直すには
+ * manager_send で resume を試みるしかなく、届く保証は無い」を持ち、`stopped` 枝は
+ * それを欠いていた——#1904 がここを揃えた（`grep -Fn -- '起こし直すには
+ * manager_send で resume を試みるしかなく、届く保証は無い' packages/core/src/tools.ts`
+ * が `describeUsageStopped` 内で2箇所ヒットする——`failed`/`lost` 枝と `stopped` 枝の
+ * 両方が同じ resume の一文を持つ）。CLI 版も同じ穴を作らないよう、`stopped` 枝に
+ * `/msg` での resume の一文を足す。
+ *
  * **Web の `DiagnosticsCard`（`manager-detail.tsx`）はこの欄を独立した行として
  * 出さないと決めている**（`ResetTimeSkewNote` 自身が「枠で止まっている間だけ
  * 意味を持つ」と書くので、という理由）。**CLI はここで core 側の判断を採る**——
@@ -2063,7 +2073,8 @@ function usageStoppedLine(
       `      ⚠ 枠(利用上限)で止まっている（${usageStoppedAt} から）。` +
       `ただし status: ${status}——セッションそのものが、依頼者が望まない終わり方で` +
       '既に終端している。「セッションは生きているので鍵が回れば続く」はここでは' +
-      '成り立たない——起こし直すには /msg で送ると resume を試みるしかなく、届く保証は無い。'
+      '成り立たない——起こし直すには /msg で送ると resume を試みるしかなく、届く保証は無い' +
+      '（実際に届いたかどうかは、この一覧の他の行——システムエラー・cgroup 等——を見ること）。'
     );
   }
   if (status === 'stopped') {
@@ -2071,7 +2082,9 @@ function usageStoppedLine(
       `      ⚠ 枠(利用上限)で止まっている（${usageStoppedAt} から）。` +
       'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
       '停止させ、確かめたうえで既に終端している。「セッションは生きているので鍵が' +
-      '回ればこの委譲は続く」はここでは成り立たない。'
+      '回ればこの委譲は続く」はここでは成り立たない' +
+      '——起こし直すには /msg で送ると resume を試みるしかなく、届く保証は無い' +
+      '（実際に届いたかどうかは、この一覧の他の行——システムエラー・cgroup 等——を見ること）。'
     );
   }
   return (
@@ -2306,7 +2319,22 @@ function describeUnpushedWorkObservationSource(
  *
  * **`cwd`（探索の起点の絶対パス）は載せない。** `observedWorktreeBranchSchema`
  * の doc が引く「出してよい範囲」をそのまま継ぐ——core と同じ線。
+ *
+ * **`kind: 'observed'` の3箇所すべてに「探しきれていない」の注記を足す
+ * （Issue #1885 / PR #1896。main へ入って CLI がまた1歩遅れていた）。** 文言は
+ * core・Web と同じ正本（`@alteroid/core/unpushed-work-observation-format` の
+ * `describeUnpushedWorkObservationIncompleteness`）から引く——ここも軽い口
+ * なので複製にならない（`system-error-format` / `cgroup-events-format` と
+ * 同じ形）。4欄がどれも無ければ空文字を返すので、健全な観測では1文字も
+ * 増えない。
  */
+function unpushedWorkObservationIncompleteSuffix(
+  observation: Extract<ManagerUnpushedWorkObservation, { kind: 'observed' }>,
+): string {
+  const note = describeUnpushedWorkObservationIncompleteness(observation);
+  return note === null ? '' : `\n      ${note}`;
+}
+
 function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   const observation = manager.lastUnpushedWorkObservation;
 
@@ -2320,7 +2348,8 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
       }
       return (
         `      未push観測: 器が止まる直前（${observation.at}）の観測: ` +
-        formatUnpushedWorkObservationWorktrees(observation.worktrees)
+        formatUnpushedWorkObservationWorktrees(observation.worktrees) +
+        unpushedWorkObservationIncompleteSuffix(observation)
       );
     }
     const shown =
@@ -2328,7 +2357,8 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
         ? '表示中の観測は無い（一度も取れていない）'
         : observation.kind === 'unavailable'
           ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
-          : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}`;
+          : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}` +
+            unpushedWorkObservationIncompleteSuffix(observation);
     return (
       '      ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
       '（best-effort の送信のため。未pushが無かったことを意味しない）。' +
@@ -2349,7 +2379,8 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   }
   return (
     `      未push観測（${provenance}、${observation.at}）: ` +
-    formatUnpushedWorkObservationWorktrees(observation.worktrees)
+    formatUnpushedWorkObservationWorktrees(observation.worktrees) +
+    unpushedWorkObservationIncompleteSuffix(observation)
   );
 }
 
