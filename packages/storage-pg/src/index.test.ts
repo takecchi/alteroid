@@ -2082,11 +2082,23 @@ describe('PgScheduleStore', () => {
     );
 
     // null を返すと、クローンから見て「消された依頼」と区別が付かなくなり、
-    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
+    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）。
+    // **`get(kind)` はこの区別を今も保つ。**
     await expect(stores.schedules.get('broken')).rejects.toThrow(/読めない形/);
-    // 一覧から黙って落とすと、digest / schedule_list / refresh から消えて
-    // 人間にも原因が見えなくなる
-    await expect(stores.schedules.list()).rejects.toThrow(/読めない形/);
+
+    // **issue #1944 で反転。** 直す前はここも `rejects.toThrow(/読めない形/)`
+    // だった——`list()` が行ごとに `parsePlan()` を呼び、1行でも失敗すると
+    // そのまま投げていたため、`broken` 1行の不正で一覧全体が例外を投げ、
+    // 正しい依頼まで読めなくなっていた（「一覧から黙って落とすと digest /
+    // schedule_list / refresh から消えて人間にも原因が見えなくなる」という
+    // 直す前の懸念自体は正しかったが、それを「1件の不正で一覧全体を止める」
+    // ことで防いでいた）。#1944 は fs 側の #1868 / #1928 の線（1行ずつ検査し、
+    // 合わない行は一覧から外して stderr に跡を出す。DB の行そのものは消さない）
+    // に pg 側もそろえた——`get('broken')` が読めない行を投げたまま区別を
+    // 保っているので（直前の assertion）、`list()` が黙ってではなく跡付きで
+    // 飛ばすことと両立する。ここでは他に正しい依頼が無いので `list()` は
+    // 空配列を返す。
+    expect(await stores.schedules.list()).toEqual([]);
 
     // 「無い」ことだけが null である
     expect(await stores.schedules.get('しらない')).toBeNull();

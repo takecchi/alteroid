@@ -7,17 +7,30 @@ import { stripNulls } from './db.js';
 import { schedulePhases, schedules } from './schema.js';
 
 /**
- * 行が読めなければ落とさずに投げる。
+ * 行が読めなければ、`get()` / `editRequest()` / `claimRun()` は落とさずに投げる。
  *
- * **他のストア（jobs / journal）と作法が違うのは意図的である。** あちらは1行
- * 壊れても一覧が返るべき記録だが、こちらは「いつ何を頼まれたか」そのものなので、
- * 読めない行を黙って飛ばすと**消された依頼と区別が付かなくなる**。
+ * **`list()` だけは別**（issue #1944）——1行ずつ検査し、合わない行は一覧から
+ * 外して stderr に跡を1行出す（`describeSkippedScheduleRow`。何 kind が・
+ * どの欄が不正かだけを出し、`request` 等の本文は載せない）。DB の行そのもの
+ * は消さない（`UPDATE` / `DELETE` をしない）——壊れた行は次の `list()` でも
+ * 同じ跡を出し続ける。直すには `put()` で同じ kind を書き直すか、`remove()`
+ * で消す。
  *
- * 区別が消えると具体的にこう壊れる: 発火した依頼の `get()` が `null` を返し、
- * クローンは「人間が手で仕込んだ kind を起こした」と解釈して本文なしの曖昧な
- * ターンを走らせる（`clone.ts` が読取不能と `null` を分けている意味が無くなる）。
- * `refresh()` と digest / `schedule_list` からも消えるので、人間にも原因が見えない。
- * fs 版（ファイル全体を `parse` する）と同じく、壊れた永続状態は表に出す。
+ * **他のストア（jobs / journal）と作法が違うのは、依然として意図的である。**
+ * あちらは1行壊れても一覧が返るべき記録だが、こちらは「いつ何を頼まれたか」
+ * そのものなので、読めない行を**黙って**飛ばすと消された依頼と区別が付かなく
+ * なる——というのが、fs 側で `jobs` / `approvals` を1行ずつ検査するように
+ * そろえた #1928 の直しを、そのままここへは持ち込まなかった理由だった。
+ *
+ * **#1944 で `list()` を直した後も、この反論とは両立する。** 黙ってはいない
+ * （跡が stderr に残る）し、行そのものも消えない——`get(kind)` は行が
+ * `list()` から外れた後もまだ在るので、同じ理由でまだ投げる。区別が消えると
+ * 具体的にこう壊れる: 発火した依頼の `get()` が `null` を返し、クローンは
+ * 「人間が手で仕込んだ kind を起こした」と解釈して本文なしの曖昧なターンを
+ * 走らせる（`clone.ts` が読取不能と `null` を分けている意味が無くなる）。この
+ * 意味は `list()` を直した後も `get()` に残っている。fs 版（`FsScheduleStore`）
+ * も #1944 で同じ形にそろえた——`list()` は行ごとに検査して壊れた行を跡付きで
+ * 飛ばし、`get()` は壊れた行を kind で引かれたら投げる。
  */
 function parsePlan(kind: string, value: unknown): ScheduledRequest {
   const parsed = scheduledRequestSchema.safeParse(value);
@@ -25,6 +38,29 @@ function parsePlan(kind: string, value: unknown): ScheduledRequest {
   throw new Error(
     `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
   );
+}
+
+/**
+ * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
+ * 出すのは「どの欄が」だけである（fs 側の `summarizeInvalidFields` と同じ
+ * 理由・同じ形。パッケージを跨いだ共通化はしていない）。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
+
+/**
+ * `list()` で飛ばした行を stderr へ1行で要約する。**kind 以外の値は絶対に
+ * 載せない**——`request` には人間の依頼文がそのまま入りうる（issue #1944）。
+ * `kind` は DB の列（`NOT NULL`）から来るので、常に文字列である
+ * （fs 版のように「kind 自体が壊れている」ケースは無い）。
+ */
+function describeSkippedScheduleRow(params: { kind: string; reason: string }): string {
+  return `alteroid: 継続中の依頼の不正な行を読み飛ばしました（kind=${JSON.stringify(params.kind)}、${params.reason}）`;
 }
 
 /**
@@ -40,12 +76,30 @@ export class PgScheduleStore implements ScheduleStore {
     this.#db = db;
   }
 
+  /**
+   * kind の昇順。**不正な行は返さない**（issue #1944）——飛ばした行は stderr
+   * へ跡を残すだけで、`get(kind)` はこれまでどおり投げる（`parsePlan` の doc）。
+   */
   async list(): Promise<ScheduledRequest[]> {
     const rows = await this.#db
       .select({ kind: schedules.kind, plan: schedules.plan })
       .from(schedules)
       .orderBy(asc(schedules.kind));
-    return rows.map((row) => parsePlan(row.kind, row.plan));
+    const result: ScheduledRequest[] = [];
+    for (const row of rows) {
+      const parsed = scheduledRequestSchema.safeParse(row.plan);
+      if (parsed.success) {
+        result.push(parsed.data);
+        continue;
+      }
+      process.stderr.write(
+        `${describeSkippedScheduleRow({
+          kind: row.kind,
+          reason: summarizeInvalidFields(parsed.error.issues),
+        })}\n`,
+      );
+    }
+    return result;
   }
 
   async get(kind: string): Promise<ScheduledRequest | null> {

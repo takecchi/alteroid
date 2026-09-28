@@ -2036,10 +2036,20 @@ describe('FsScheduleStore', () => {
       'utf8',
     );
 
-    // null / 空配列に潰すと、クローンから見て「消された依頼」と区別が付かず、
-    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）
+    // null に潰すと、クローンから見て「消された依頼」と区別が付かず、
+    // 本文なしの曖昧なターンが走る（clone.ts が読取不能を分けている意味が消える）。
+    // **`get(kind)` はこの区別を今も保つ。**
     await expect(stores.schedules.get('broken')).rejects.toThrow();
-    await expect(stores.schedules.list()).rejects.toThrow();
+
+    // **issue #1944 で反転。** 直す前はここも `rejects.toThrow()` だった——
+    // `list()` が `fileSchema.parse` で `schedules` 配列全体を1回に検査して
+    // いたため、`broken` 1行の不正で `list()` 全体が例外を投げ、正しい依頼まで
+    // 読めなくなっていた。#1944 はこれを #1868 / #1928 の線（1行ずつ検査し、
+    // 合わない行は一覧から外して stderr に跡を出す。生の行は消さずに残す）に
+    // そろえた——`get('broken')` が読めない行を投げたまま区別を保っているので
+    // （直前の assertion）、`list()` が黙ってではなく跡付きで飛ばすことと
+    // 両立する。ここでは他に正しい依頼が無いので `list()` は空配列を返す。
+    expect(await stores.schedules.list()).toEqual([]);
   });
 });
 
