@@ -5830,6 +5830,10 @@
                               }
                             ]
                           },
+                          "answerDelivery": {
+                            "type": "string",
+                            "enum": ["pending", "delivered"]
+                          },
                           "conversationId": {
                             "type": "string"
                           },
@@ -6022,6 +6026,10 @@
                               "required": ["kind", "accountId"]
                             }
                           ]
+                        },
+                        "answerDelivery": {
+                          "type": "string",
+                          "enum": ["pending", "delivered"]
                         },
                         "conversationId": {
                           "type": "string"
