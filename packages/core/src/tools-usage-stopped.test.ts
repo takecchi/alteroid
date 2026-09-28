@@ -180,4 +180,27 @@ describe('manager_list: usageStoppedAt の注記は status で言い分ける（
     expect(reply).toContain('⚠ 枠(利用上限)で止まっている');
     expect(reply).not.toContain('セッションは生きているので、鍵が回ればこの委譲は続く');
   });
+
+  /**
+   * Issue #1882 の追記（PR #1889 の作業者が `send()` の実装で確かめた）:
+   * `manager_send` は `status` を見ずに `#load()` で `ManagerRecord` を作り
+   * 直すので、`stopped` でも resume は実際に試みられる——`isManagerOutcomeUnobserved`
+   * の枝は前から「起こし直すには manager_send で resume を試みるしかなく、
+   * 届く保証は無い」と言っていたが、`stopped` の枝はここを持たず「ここでは
+   * 成り立たない」で言い切って終わっていた（下書きの見落とし）。
+   */
+  it('status: stopped でも、起こし直しは resume を試みるしかなく届く保証が無いことを言う', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.managers[0];
+    if (!target) throw new Error('準備に失敗');
+    target.usageStoppedAt = '2026-09-25T01:23:45.000Z';
+    target.status = 'stopped';
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain(
+      '起こし直すには manager_send で resume を試みるしかなく、届く保証は無い',
+    );
+  });
 });

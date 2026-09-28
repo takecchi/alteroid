@@ -2979,11 +2979,25 @@ function describeManagerFailure(
         'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
         '停止させ、確かめたうえで既に終端している（`abort()` が runner の一覧を探って' +
         'セッションが消えたことを確かめた事実。`manager.ts` の `isLive()` の doc）。' +
-        '「セッションが生きていて原因が解ければ進められる」という前提はここでは成り立たない。'
+        '「セッションが生きていて原因が解ければ進められる」という前提はここでは成り立たない' +
+        '——起こし直すには manager_send で resume を試みるしかなく、届く保証は無い' +
+        '（届いた事実の判定は `systemErrorLine` 等の別の行を見ること）。'
       : opening +
         'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
         '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
         RESTART_BEFORE_CHECK_ADVICE;
+  // **⚠️ `stopped` でも「起こし直しは resume を試みるしかなく、届く保証は無い」を
+  // 言う（下書きからの訂正。PR #1889 の作業者が `send()` の実装で確かめた）。**
+  // `send()`（`manager.ts`）は `status` を見ずに `#load()` で `ManagerRecord` を
+  // 作り直し（`attached: false`、`stopConfirmedAt` 無し）、`#resume()` も
+  // `record.stopConfirmedAt`（プロセス内の像にしか無く `Job` へは書かない印）が
+  // 立っていなければ素通りする。⟹ `stopped` はセッションが**確認済みで死んでいる**
+  // が、`manager_send` からの起こし直し自体は塞がれていない——`isLive()` が
+  // 確認したのは「その確認をした瞬間」の生死であって、resume が届くかどうかを
+  // 保証する印ではない。下書きはここを「もう続けられない」と読める文言にして
+  // いたが、それは事実と違う——`isManagerOutcomeUnobserved` 側の枝が最初から
+  // 言っていた「起こし直すには manager_send で resume を試みるしかなく、届く
+  // 保証は無い」を `stopped` にも揃えた。
   if (lastReport === undefined) return base;
   const fromText = limitRecoveryOf(lastReport);
   const recovery =
@@ -3072,6 +3086,21 @@ function failureLine(manager: ManagerSummary): string | null {
  * 見ない。手元の再現で `status: 'stopped'` + `usageStoppedAt` を作ると、
  * 直す前はここが「セッションは生きている」を言ったままだった）。
  *
+ * ## ⚠️ Issue #1882: `stopped` 枝にも「resume を試みるしかなく、届く保証は
+ * 無い」を足す（`describeManagerFailure` と揃える）
+ *
+ * 直上の `isManagerOutcomeUnobserved` の枝は「起こし直すには manager_send で
+ * resume を試みるしかなく、届く保証は無い」まで言うが、この `stopped` の枝は
+ * 「ここでは成り立たない」で言い切って終わっていた——`manager_send`
+ * （`manager.ts` の `send()`）は `status` を見ずに `#load()` で
+ * `ManagerRecord` を作り直し（`stopConfirmedAt` はプロセス内の像にしか無く
+ * `Job` へは書かないので、作り直した像には残らない）、`#resume()` もその印が
+ * 無ければ素通りするので、`stopped` でも resume は実際に試みられる（PR #1889
+ * の作業者が `send()` の実装で確かめた事実）。**「望んだ終端」と「セッションが
+ * 生きているか」を分けたのと同じ理由で、「確認済みで死んでいる」と「起こし
+ * 直しの経路が塞がっているか」も別の軸である**——後者は塞がっていない。
+ * ⟹ `isManagerOutcomeUnobserved` の枝と同じ resume の一文をここにも足した。
+ *
  * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
  * と同じ約束——一覧は文字数の予算 `LIST_BUDGET` に張り付いている）。
  *
@@ -3098,7 +3127,9 @@ function describeUsageStopped(manager: ManagerSummary): string | null {
       'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
       '停止させ、確かめたうえで既に終端している（`abort()` が runner の一覧を探って' +
       'セッションが消えたことを確かめた事実。`manager.ts` の `isLive()` の doc）。' +
-      '「セッションは生きているので鍵が回ればこの委譲は続く」はここでは成り立たない。'
+      '「セッションは生きているので鍵が回ればこの委譲は続く」はここでは成り立たない' +
+      '——起こし直すには manager_send で resume を試みるしかなく、届く保証は無い' +
+      '（届いた事実の判定は `systemErrorLine` 等の別の行を見ること）。'
     );
   }
   return (
