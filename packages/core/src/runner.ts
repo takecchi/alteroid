@@ -6259,6 +6259,8 @@ function describeQuestion(question: unknown): string | undefined {
 const DENIAL_PHRASES = [
   'やめ',
   'だめ',
+  // カタカナの形（issue #1923。「はい、ダメです」が承認の語に負けて allow になっていた）
+  'ダメ',
   '駄目',
   '不可',
   '中止',
@@ -6287,9 +6289,12 @@ const DENIAL_PHRASES = [
  * 語尾（`\w*`）にして -ing / -s 等の活用形も拾う（元は `\breject\b` で、
  * `rejecting` の途中に語境界が無く一致しなかった）。`won't` / `will not` /
  * `cannot` / `can not` も追加した——`don't` はあったが `won't` が漏れていた。
+ *
+ * **issue #1923 で `abort\w*` を追加した**（「Sure — abort」が承認の語に負けて
+ * allow になっていた）。
  */
 const DENIAL_WORDS =
-  /\b(deny|denied|denying|no|nope|don't|do not|won't|will not|cannot|can not|stop|stopping|cancel\w*|reject\w*|refus\w*|declin\w*)\b/i;
+  /\b(deny|denied|denying|no|nope|don't|do not|won't|will not|cannot|can not|stop|stopping|cancel\w*|reject\w*|refus\w*|declin\w*|abort\w*)\b/i;
 
 /**
  * 承認としてはっきり読める語句（`inferDecision` の3値目 `unreadable` を
@@ -6334,14 +6339,22 @@ const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay|yes|sure)\b/i;
  * 英語は `not` / `n't` / `never` / `cannot`、日本語は `ない` / `ません` /
  * `ず`（依頼で明示された一覧のまま採用）。
  *
+ * **issue #1923 で、保留・一時停止の言い方を足した**（英語の `wait` /
+ * `hold off` / `hold on` / `pause`、日本語の `保留` / `見送` / `不要`）。
+ * 「OK、保留で」「Sure, hold off for now」のように承認の語と同居すると、
+ * 否定の印に当たらず allow になっていた。これらは `DENIAL_*` へは足さない
+ * ——「確認は不要です、どうぞ」「Don't wait, go ahead」のように承認の文にも
+ * 現れうるので、deny と言い切らず、allow を止めて `unreadable`（答え直しの
+ * 案内）へ落とすだけにする。
+ *
  * ⚠️ **部分一致なので誤検出がありうる**（例: 日本語の `ず` は「水」
  * 「はず」のような無関係な語の中にも現れる）。誤検出の向きは常に
  * 「承認と読まない」側——`allow` を `unreadable` に倒すだけで、
  * `unreadable` は SDK 側では deny として扱われるので、許しすぎる側には
  * 化けない（`decideAnswer` の doc）。
  */
-const NEGATION_MARKERS_EN = /\b(not|n't|never|cannot)\b/i;
-const NEGATION_MARKERS_JA = ['ない', 'ません', 'ず'];
+const NEGATION_MARKERS_EN = /\b(not|n't|never|cannot|wait|hold off|hold on|pause\w*)\b/i;
+const NEGATION_MARKERS_JA = ['ない', 'ません', 'ず', '保留', '見送', '不要'];
 
 function hasNegationMarker(message: string): boolean {
   return (
@@ -6380,6 +6393,19 @@ function hasApprovalMarker(message: string): boolean {
  */
 function normalizeApostrophes(message: string): string {
   return message.replace(/[‘’ʼ]/g, "'");
+}
+
+/**
+ * 判定のために回答の表記を揃える（issue #1907 / #1923）。
+ *
+ * NFKC で全角の英数字・記号・空白を半角へ揃えてから（#1923。`はい、ＳＴＯＰ`
+ * / `ＮＯ、go ahead` が半角だけの `DENIAL_WORDS` に当たらず、承認の語に
+ * 負けて allow になっていた）、アポストロフィの変種を揃える（#1907）。
+ * `normalizeApostrophes` と同じく判定にだけ使い、元の `message` は
+ * 書き換えない。
+ */
+function normalizeForDecision(message: string): string {
+  return normalizeApostrophes(message.normalize('NFKC'));
 }
 
 /**
@@ -6497,7 +6523,8 @@ function hasNegatedApprovalDenial(message: string): boolean {
 export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' {
   // issue #1907: 曲がった引用符（U+2019 等）の apostrophe を素の `'` へ
   // 揃えてから各一覧に当てる。判定にだけ使い、元の message は書き換えない。
-  const normalized = normalizeApostrophes(message);
+  // issue #1923: 全角の英数字も NFKC で半角へ揃える（`normalizeForDecision`）。
+  const normalized = normalizeForDecision(message);
   if (hasNegatedApprovalPhrase(normalized)) {
     return hasNegatedApprovalDenial(normalized) ? 'deny' : 'unreadable';
   }
