@@ -264,6 +264,58 @@ describe('runner の鍵欄は、聞けた分しか言わない', () => {
 });
 
 /**
+ * #1947: プロファイルの指紋（`profile`/`profileProbe`）。鍵欄
+ * （`credentialsProbe`）と同じ3状態を、同じ理由で潰さない。
+ */
+describe('runner のプロファイル欄は、聞けた分しか言わない', () => {
+  it('聞いていないときは「置いていない」と言わない', async () => {
+    renderSettings({
+      runners: [{ ...BASE, profileProbe: { status: 'unheard' } }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText(/プロファイルは確かめていない/)).toBeTruthy();
+    expect(screen.queryByText('プロファイルは置いていない')).toBeNull();
+  });
+
+  it('失敗したときは理由が出る', async () => {
+    renderSettings({
+      runners: [
+        { ...BASE, profileProbe: { status: 'failed', error: 'ECONNRESET: 途中で切れた' } },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText(/ECONNRESET: 途中で切れた/)).toBeTruthy();
+    expect(screen.queryByText('プロファイルは置いていない')).toBeNull();
+  });
+
+  it('聞いて profile が無ければ「置いていない」と言う', async () => {
+    renderSettings({
+      runners: [{ ...BASE, profileProbe: { status: 'asked' } }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText('プロファイルは置いていない')).toBeTruthy();
+  });
+
+  it('聞けて profile があれば指紋を出す', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          profile: { sha256: 'abc123456789', bytes: 42, updatedAt: '2026-09-01T00:00:00.000Z' },
+          profileProbe: { status: 'asked' },
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText(/abc123456789/)).toBeTruthy();
+  });
+});
+
+/**
  * `pushHealth`（押し込みの直近結果）は `credentialsProbe`/`profileProbe`（指紋・
  * 聞き直し）とは別物。**「一度も試みていない」ときは行そのものを出さない**
  * （AGENTS.md「取れない軸に0の行を作らない」）。3種類は独立の軸なので、1つが
