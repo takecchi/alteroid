@@ -882,3 +882,105 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect(screen.getByText(/tool_use の input/)).toBeTruthy();
   });
 });
+
+/**
+ * **種別チップの選択も URL に載る（issue #2029）。** `q`（検索語）と同じ
+ * `useSearchParams` の仕組みに乗せる——URL に載れば、絞った状態をリンクで
+ * 渡せる・ブックマークできる・再読み込みや「戻る」で戻せる。
+ */
+describe('種別チップの選択が URL に載る（issue #2029）', () => {
+  it('チップを押すと URL の types に種別が載る', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    const { router } = renderJournal({ status: 'live', recent: [] });
+    await screen.findByText('日誌');
+
+    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('types')).toBe('exchange');
+    });
+
+    // もう1つ押すとカンマ区切りで増える。
+    fireEvent.click(screen.getByRole('button', { name: 'decision' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('types')).toBe(
+        'exchange,decision',
+      );
+    });
+
+    // 押し直すと外れる。
+    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('types')).toBe('decision');
+    });
+  });
+
+  it('URL の types から初期状態が復元される（チップが押された状態で開く）', async () => {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, ['/?types=exchange,decision']);
+    await screen.findByText('日誌');
+
+    // チップの押下状態は className（`border-accent`）で表現されている
+    // （journal.tsx のチップは `aria-pressed` を持たない）。
+    expect(screen.getByRole('button', { name: 'exchange' }).className).toContain('border-accent');
+    expect(screen.getByRole('button', { name: 'decision' }).className).toContain('border-accent');
+    expect(screen.getByRole('button', { name: 'escalation' }).className).not.toContain(
+      'border-accent',
+    );
+
+    // `useJournalWindow` はカンマ結合した1つの `type=` としてサーバへ渡す
+    // （`use-journal-window.ts` の `joined`）。
+    await waitFor(() => {
+      const types = stub.calls
+        .filter((url) => url.includes('/journal'))
+        .map((url) => new URL(url).searchParams.get('type'));
+      expect(types).toContain('exchange,decision');
+    });
+  });
+
+  it('URL に知らない種別が書かれていても落ちず、無視する', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, ['/?types=exchange,no-such-type']);
+
+    // 画面ごと落ちない。既知のチップは変わらず出る。
+    expect(await screen.findByText('日誌')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'exchange' })).toBeTruthy();
+    // 知らない種別のボタンは無い（チップは既知の種別ぶんしか無い）。
+    expect(screen.queryByRole('button', { name: 'no-such-type' })).toBeNull();
+  });
+
+  it('チップの切り替えは履歴を汚さない（replace: true。検索語と同じ判断）', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    const { router } = renderJournal({ status: 'live', recent: [] });
+    await screen.findByText('日誌');
+    const initialIndex = router.state.location.key;
+
+    fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('types')).toBe('exchange');
+    });
+
+    // `replace: true` なら履歴のエントリ数は増えない（`location.key` が
+    // 変わっても history stack には積まれない、という直接の検証は
+    // `createMemoryRouter` からは覗けないので、`router.state.historyAction`
+    // が `REPLACE` であることで確かめる）。
+    expect(router.state.historyAction).toBe('REPLACE');
+    expect(router.state.location.key).not.toBe(initialIndex);
+  });
+});
