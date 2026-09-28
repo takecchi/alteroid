@@ -32,3 +32,5 @@ description: PR を squash マージする直前に読む。squash の本文は 
 ## 4. Issue を閉じる行
 
 閉じる Issue があるなら、本文に独立した行で `Alteroid-Issue-Done: <番号>` を残す（無ければ `Alteroid-Issue-Done: none`）。マージの後に workflow が閉じる。**閉じたかは、マージの1〜2分後に Issue を引き直して確かめる**（`closed_by` が `github-actions[bot]`）。
+
+**`Alteroid-Issue-Done` は PR 本文に書く。squash の本文だけに書いても効かない**（`scripts/issue-done-trailer.mjs` は `gh pr view --json body` で PR 本文を読む）。実例: PR #1909 は squash の本文にだけ `Alteroid-Issue-Done: 1882` を書き、PR 本文は `none` のままだったので #1882 は閉じず、手で閉じた。
