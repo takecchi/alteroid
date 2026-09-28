@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { captureStderr } from '@alteroid/core';
@@ -214,5 +214,99 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       found = await stores.practices.list();
     });
     expect(found).toEqual([]);
+  });
+
+  /**
+   * issue #1967 のフォローアップ（マネージャー指摘）。`write()` が新しい版番号を
+   * 「検査を通った版（`practiceVersions`）」だけから数えていると、同じ slug の
+   * 壊れた版の行のうち `version` 欄自体は正の整数として読めるもの（他の欄が
+   * 壊れているだけのもの）と番号が重なる——追記専用の履歴で二重の version が
+   * 生まれる。直す前は1行の不正で `#read()` 自体が丸ごと例外を投げていたので、
+   * この重なりはそもそも起こり得なかった（この PR がその道連れ崩壊を直した
+   * ことで、初めて踏めるようになった穴）。
+   */
+  it('write() は、壊れた版の行の version 番号とも重ねずに番号を振る（issue #1967 のフォローアップ）', async () => {
+    const slug = 'version-collision';
+    const now = '2026-09-01T00:00:00.000Z';
+    await mkdir(join(root, 'jobs'), { recursive: true });
+    await writeFile(
+      practicesPath,
+      `${JSON.stringify(
+        {
+          practices: [
+            {
+              slug,
+              kind: '実装',
+              title: '衝突のやり方',
+              content: '本文1\n',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          practiceVersions: [
+            {
+              slug,
+              version: 1,
+              kind: '実装',
+              title: '版1',
+              content: '本文1\n',
+              at: now,
+            },
+            // version は 2（正の整数として読める）だが、content が欠けている
+            // ——壊れた版の行。slug は正しい行と同じ。
+            {
+              slug,
+              version: 2,
+              kind: '実装',
+              title: '版2（壊れている）',
+              at: now,
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const stores = createFsStores(root);
+    let written: Practice | undefined;
+    await captureStderr(async () => {
+      written = await stores.practices.write({
+        slug,
+        kind: '実装',
+        title: '版3',
+        content: '本文3',
+      });
+    });
+    expect(written).toMatchObject({ slug });
+
+    const raw = JSON.parse(await readFile(practicesPath, 'utf8')) as {
+      practiceVersions: { slug?: unknown; version?: unknown }[];
+    };
+    const versionNumbers = raw.practiceVersions
+      .filter((row) => row.slug === slug)
+      .map((row) => row.version)
+      .sort((a, b) => (a as number) - (b as number));
+    // **3 になっていること**——壊れた version=2 の行と重ならない
+    // （priorVersions.length + 1 のような「検査を通った版の数」だけで数えると、
+    // ここは検査を通った版が1件（version 1）しか無いので 2 になり、既存の
+    // 壊れた version=2 の行と番号が重なる。それがこの歯の赤である）。
+    expect(versionNumbers).toEqual([1, 2, 3]);
+
+    // listVersions() には壊れた version=2 は出ない（読めるものだけを返す契約）。
+    let versions: Awaited<ReturnType<typeof stores.practices.listVersions>> = [];
+    await captureStderr(async () => {
+      versions = await stores.practices.listVersions(slug);
+    });
+    expect(versions.map((v) => v.version)).toEqual([1, 3]);
+
+    // 新しい版（3）は正しく読める。
+    const readV3 = await stores.practices.readVersion(slug, 3);
+    expect(readV3?.content).toBe('本文3\n');
+
+    // 壊れた version=2 は読めない行として throw する（read/readVersion の契約）。
+    await captureStderr(async () => {
+      await expect(stores.practices.readVersion(slug, 2)).rejects.toThrow();
+    });
   });
 });
