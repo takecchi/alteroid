@@ -364,3 +364,68 @@ describe('inferDecision / 曲がった引用符の apostrophe が否定として
     },
   );
 });
+
+/**
+ * issue #1923: 承認の語（はい・どうぞ・OK・Sure など）と、一覧に無い
+ * 「進めるな」の言い方が同じ回答に入ると allow になっていた穴。`inferDecision`
+ * は「承認の語が在り、否定の印が無いときだけ allow」なので、否定の印にも
+ * `DENIAL_*` にも無い言い方（保留・見送り・不要・カタカナのダメ・wait・
+ * hold off・pause・abort）や、全角の英字（`ＳＴＯＰ` / `ＮＯ`）は、承認の語に
+ * 負けて許す側へ倒れる。
+ *
+ * はっきりした否定（ダメ・abort・全角の STOP / NO）は deny、保留・一時停止の
+ * 言い方は unreadable（答え直しの案内）へ落ちることを見る。後者を deny に
+ * しないのは、「確認は不要です、どうぞ」「Don't wait, go ahead」のように
+ * 承認の文にも現れうるからである。
+ */
+describe('inferDecision / 承認の語と一覧に無い否定が同居しても allow にしない（issue #1923）', () => {
+  it.each([
+    'はい、ダメです',
+    'はい、でもダメ',
+    'Sure — abort',
+    'OK, aborting',
+    'はい、ＳＴＯＰ',
+    'ＮＯ、go ahead',
+    'Ｎｏ. go ahead',
+  ])('「%s」は deny', (message) => {
+    expect(inferDecision(message)).toBe('deny');
+  });
+
+  it.each([
+    'どうぞ、いったん保留でお願いします',
+    'はい、今回は不要です',
+    'はい、いったん見送りましょう',
+    'OKですが今は保留でお願いします',
+    'OK、保留で',
+    'OK\n実は保留にしたい',
+    'OK, wait a moment',
+    'Sure, hold off for now',
+    'Sure, wait',
+    'ok, hold off',
+    'Yes, but hold on',
+    'OK, pause for now',
+  ])('「%s」は unreadable（allow へ倒れない）', (message) => {
+    expect(inferDecision(message)).toBe('unreadable');
+  });
+
+  it('decideAnswer（permission・decision なし）でも「はい、保留」は SDK へ deny を返しつつ unreadable: true を運ぶ', () => {
+    expect(decideAnswer('permission', undefined, 'はい、保留')).toEqual({
+      decision: 'deny',
+      unreadable: true,
+    });
+  });
+
+  it.each(['ＯＫ', 'はい', 'どうぞ', 'OK, go ahead', 'Sure'])(
+    '対照: 承認だけの「%s」は allow のまま（全角の ＯＫ も半角と同じに読む）',
+    (message) => {
+      expect(inferDecision(message)).toBe('allow');
+    },
+  );
+
+  it.each(['nothing', 'sunny', 'bookish', 'oklahoma', 'awaiting', 'unpaused'])(
+    '対照: 語の一部に当たるだけの「%s」は allow にも deny にもならない',
+    (message) => {
+      expect(inferDecision(message)).toBe('unreadable');
+    },
+  );
+});
