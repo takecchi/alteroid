@@ -462,3 +462,68 @@ describe('回答済みで未配達の承認の拾い直しは、作られなか�
     },
   );
 });
+
+/**
+ * issue #2002（C の横断レビュー）: `answerApproval` で「配達済み」の印の書き込み
+ * （`putApproval({ answerDelivery: 'delivered' })`）だけが落ちると、承認は `'pending'` の
+ * まま残る。配った合図をクローンが処理し終えて受信箱から消した後にデーモンが起こし
+ * 直されると、起動時の拾い直しが同じ回答をもう一度配っていた。二重配達を畳む
+ * `#handledHumanAnswerIds` はメモリの中の Set なので、起こし直しで空になる。
+ *
+ * 直し: クローンが `human_answer` を処理するときに、行がまだ `'pending'` なら
+ * `'delivered'` を書く。印の書き込みが2回とも落ちたときだけは、二重に届きうる
+ * （少なくとも1回は届く。`#markAnswerDeliveredOnHandle` の doc）。
+ */
+describe('配達済みの印の書き込みだけが落ちても、起こし直しで同じ回答を配り直さない（issue #2002）', () => {
+  it('印の書き込みを1回落とし、処理し終えてから起こし直しても、2つ目のクローンに回答は届かない', async () => {
+    const base = createMemoryStores();
+    let failedOnce = false;
+    const jobs = new Proxy(base.jobs, {
+      get(target, prop, receiver) {
+        if (prop === 'putApproval') {
+          return async (approval: PendingApproval) => {
+            if (!failedOnce && approval.answerDelivery === 'delivered') {
+              failedOnce = true;
+              throw new Error('配達済みの印の書き込みが落ちた（テスト用）');
+            }
+            return target.putApproval(approval);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const stores: Stores = { ...base, jobs };
+    await stores.jobs.putApproval(seedApproval());
+
+    const first = bootClone(stores, 'reply');
+    await first.clone.answerApproval('ap-1', '許可します');
+    await waitFor(
+      () => first.inputs.some((input) => input.includes('回答: 許可します')),
+      '1つ目の処理',
+    );
+    // 処理し終えて受信箱から消えるまで待つ（`#forget`）。
+    const started = Date.now();
+    for (;;) {
+      if ((await stores.inbox.peekPending()).length === 0) break;
+      if (Date.now() - started > 3000) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(failedOnce).toBe(true);
+    expect(await stores.inbox.peekPending()).toEqual([]);
+
+    // 起こし直し（同じストアで2つ目のクローン）。起動時刻より前に回答された行になるよう、
+    // 1ミリ秒以上あける。
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = bootClone(stores, 'reply');
+    await idle();
+    await idle();
+
+    expect(second.inputs.filter((input) => input.includes('回答: 許可します'))).toHaveLength(0);
+    expect((await stores.jobs.getApproval('ap-1'))?.answerDelivery).toBe('delivered');
+
+    void second.clone;
+  });
+});
