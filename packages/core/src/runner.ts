@@ -6363,7 +6363,10 @@ const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay|yes|sure)\b/i;
  * `unreadable` は SDK 側では deny として扱われるので、許しすぎる側には
  * 化けない（`decideAnswer` の doc）。
  */
-const NEGATION_MARKERS_EN = /\b(not|n't|never|cannot|wait|hold off|hold on|pause\w*)\b/i;
+// `n't` は語境界の組の外に置く（issue #1932）。`\b(…|n't|…)\b` の形では、
+// `isn't` の `s` と `n` のあいだに `\b` が立たず、縮約の中で1回も当たらなかった。
+// `n't\b` なら `isn't` / `shouldn't` / `can't` の語尾に当たる。
+const NEGATION_MARKERS_EN = /\b(not|never|cannot|wait|hold off|hold on|pause\w*)\b|n't\b/i;
 const NEGATION_MARKERS_JA = ['ない', 'ません', 'ず', '保留', '見送', '不要'];
 
 /**
