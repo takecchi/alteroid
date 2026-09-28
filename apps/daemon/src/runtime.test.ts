@@ -14,9 +14,12 @@ import { runtimeFilePath, writeRuntimeInfo } from './runtime.js';
  * 該当ミドルウェア）ので、`~/.alteroid/state/credentials.json`
  * （`apps/cli/src/credentials.ts`）と同格か、それ以上に守るべき秘密である。
  *
- * `credentials.ts` の `persist()` は一時ファイルへ `writeFile(..., { mode: 0o600 })`
+ * `credentials.ts` の書き込みは一時ファイルへ `writeFile(..., { mode: 0o600 })`
  * ＋明示の `chmod` で書いてから `rename` で本体へ切り替えている（「一時ファイルの
- * 時点で 0600。rename 後に絞ると、その隙間で他人が読める」）。直す前の
+ * 時点で 0600。rename 後に絞ると、その隙間で他人が読める」）。**issue #1992
+ * 以降は `@alteroid/storage-fs` の `writeFileAtomic` がこの形を実装として
+ * 持ち、`credentials.ts` はそれを呼ぶだけになったが、保証の形は変わっていない**
+ * （`writeFileAtomic` の `mode` オプションが同じ役目を果たす）。直す前の
  * `writeRuntimeInfo`（`runtime.ts`）にはその手当てが無かった——素の
  * `writeFile(path, json, 'utf8')` で、パーミッションはプロセスの umask 任せに
  * なっていた。
@@ -32,7 +35,7 @@ import { runtimeFilePath, writeRuntimeInfo } from './runtime.js';
  * 3. **書き込みの途中に緩いモードの窓を作らない**: 既存ファイルを直接
  *    `writeFile` で上書きしてから `chmod` する形だと、その2手の間は
  *    「新しい token を含む中身」が「古い（緩い）パーミッション」のまま乗る。
- *    `writeRuntimeInfo` は `credentials.ts` の `persist()` と同じく一時ファイル
+ *    `writeRuntimeInfo` は `credentials.ts` の書き込みと同じく一時ファイル
  *    ＋`rename` にしたので、そもそも `${path}.tmp` 以外の場所に緩いパーミッション
  *    の窓ができない（`rename` の完了後には tmp も残らない）。
  */

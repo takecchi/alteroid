@@ -22,9 +22,11 @@ import { FsTokenPoolStore } from './token-pool.js';
 import { FsUsageStore } from './usage.js';
 
 export { FsTranscriptArchive } from './archive.js';
+export { writeFileAtomic } from './atomic.js';
 export { FsAuthStore } from './auth.js';
 export { CLOSED_HISTORY_LIMIT, FsCommitmentStore } from './commitments.js';
 export { FsCredentialVaultStore } from './credentials.js';
+export { LockTimeoutError, withPathLock } from './file-lock.js';
 export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
