@@ -177,9 +177,7 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     // 1回目の「もっと見る」— 頁A（50件、progress）。
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
     });
 
     // SSE → 頁1の再検証が終わり、背景の取り直し R1（頁Aの再取得）が始まる。
@@ -216,7 +214,9 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     await waitFor(() => {
       // 合計 = 頁1(50) + 頁A（R1で49件に更新された内容）(49) + 頁C(50) = 149
       expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE + (MANAGERS_PAGE - 1) + MANAGERS_PAGE} 件）`),
+        screen.getByText(
+          `もっと見る（いま ${MANAGERS_PAGE + (MANAGERS_PAGE - 1) + MANAGERS_PAGE} 件）`,
+        ),
       ).toBeTruthy();
     });
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
@@ -262,9 +262,7 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     // 1回目の「もっと見る」— 頁A（50件、progress）。
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
     });
 
     // SSE → 頁1の再検証が終わり、背景の取り直し R1（頁Aの再取得）が始まる。
@@ -280,9 +278,7 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
       // 合計 = 頁1(50) + 頁A(50) + 頁C(50) = 150
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`)).toBeTruthy();
     });
 
     // ここで R1 の応答を返す——頁Aはもう「最後の頁」ではない
@@ -296,7 +292,9 @@ describe('runOlderRefresh は loadOlder() との競合を持ち込まない（is
     // 50 + 49 + 50——が、判定は `progress` のまま）。
     await waitFor(() => {
       expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE + (MANAGERS_PAGE - 1) + MANAGERS_PAGE} 件）`),
+        screen.getByText(
+          `もっと見る（いま ${MANAGERS_PAGE + (MANAGERS_PAGE - 1) + MANAGERS_PAGE} 件）`,
+        ),
       ).toBeTruthy();
     });
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();

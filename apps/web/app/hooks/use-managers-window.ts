@@ -100,15 +100,46 @@
  * 同じキーへの要求を1本に併合しているからで、ここでも同じ理由で「常に
  * 1本ずつ、順に撃つ」側を採っている）。
  *
- * **`lastOlderCount` / `olderStatus`（進捗・終端の判定）は動かさない。**
- * 動かしているのは常に `loadOlder()` が明示的に読んだときだけで、この
- * 背景の取り直しは「もう表示している頁の中身を新しくする」ことに閉じる
- * ——「もっと見る」を押せるかどうかの判定に、背景の取り直しの結果を
- * 混ぜない（`loadOlder` が同時に走っているときの競合を増やさないため）。
- * ⚠️ **確かめていないこと**: 背景の取り直しで最後の頁の件数が
- * `MANAGERS_PAGE` を割り込んでも、`olderStatus` はそのままなので
- * 「もっと見る」ボタンの有無はズレたままになりうる。実機でどれだけ
- * 起こりうるかは見ていない。
+ * ## `lastOlderCount` / `olderStatus`（進捗・終端の判定）—— #1629 は動かさなかった。#1998 で最後の頁に限り動かす
+ *
+ * **#1629 の時点の判断（経緯として残す）。** `lastOlderCount` を動かすのは
+ * 常に `loadOlder()` が明示的に読んだときだけとし、この背景の取り直しは
+ * 「もう表示している頁の中身を新しくする」ことに閉じていた——「もっと
+ * 見る」を押せるかどうかの判定に、背景の取り直しの結果を混ぜない
+ * （`loadOlder` が同時に走っているときの競合を増やさないため）。
+ *
+ * **その判断が残した穴（issue #1998）。** `olderStatus` の材料は
+ * `lastOlderCount` だけで、`lastOlderCount` を書くのは `loadOlder()` だけ
+ * だったので、背景の取り直しで最後の頁の件数が変わっても「もっと見る」の
+ * 有無は前回の判定のまま残った。特に「最後の頁が `MANAGERS_PAGE` 未満
+ * （end）→ 取り直しで `MANAGERS_PAGE` 件」の向きでは、続きがあるのに
+ * ボタンが消えたままになる（重い向き——逆向き「`progress` のまま留まる」
+ * は、押せば0件が返って1回で `end` に直るので実害が小さい）。
+ *
+ * **#1998 での直し方。** `runOlderRefresh` が**最後の頁**（`pages` 配列の
+ * 末尾）を取り直せたときだけ、その頁の件数で `lastOlderCount` を更新する。
+ * ただし次のどちらかに当たる回は更新しない——#1629 が避けたかった
+ * `loadOlder()` との競合をここで持ち込まないため:
+ *
+ * - **`loadOlder()` が走っている間**（`isLoadingOlderRef` で見る。
+ *   `isLoadingOlder` state を直接使わない理由は、`runOlderRefresh` が
+ *   素の関数で `useCallback` の自己参照を避けて作ってあり、`refreshOlderPages`
+ *   が古いレンダーの `runOlderRefresh` を握ったまま呼び続けうるため——
+ *   ref なら常に最新の値を読む）。
+ * - **取り直しの応答が届くまでに頁が足された**——最後の頁の錨
+ *   （`anchorKey`）が取り直しを始めた時点から変わっていたら、それは
+ *   `loadOlder()` が割り込んで新しい頁を足したということなので、古い
+ *   最後の頁の結果でいまの最後の頁の判定を上書きしない。
+ *
+ * 取り直しが失敗した頁（最後の頁を含む）は今までどおり前回の値のまま
+ * 残る——`lastOlderCount` もそのときは動かさない（`Promise.allSettled` の
+ * 対応する結果が `rejected` なら何もしない）。`olderError`（`blocked`）の
+ * 扱いは変えていない——`loadOlder()` が明示に失敗したときだけ立つ。
+ *
+ * ⚠️ **確かめていないこと**: 実機（本物のデーモン・本物の SSE）での動作は
+ * 確かめていない。根拠はスタブ（`test-support.tsx` の `stubFetch`/`sse`）を
+ * 使ったテスト（`managers-older-status.test.tsx` /
+ * `managers-older-status-inflight.test.tsx`）のみ。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -250,6 +281,14 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
     olderPagesRef.current = olderPages;
   }, [olderPages]);
 
+  // `loadOlder()` が「いま走っているか」を素の関数（`runOlderRefresh`）から
+  // 読むための ref（issue #1998）。理由はこのファイル冒頭の doc
+  // 「`lastOlderCount` / `olderStatus`」を参照。
+  const isLoadingOlderRef = useRef(isLoadingOlder);
+  useEffect(() => {
+    isLoadingOlderRef.current = isLoadingOlder;
+  }, [isLoadingOlder]);
+
   // すでに背景の取り直しが走っている間は重ねて撃たない——代わりに
   // 「走っている間にもう1回来た」ことだけを覚えておき（下の
   // `olderRefreshDirtyRef`）、いま走っている分が終わった時点で消費して
@@ -262,10 +301,19 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
   // （`use-journal-window.ts` の `loadOlderAt` と同じ理由・同じ形）。
   function runOlderRefresh(): void {
     const pages = olderPagesRef.current;
-    if (pages.length === 0) {
+    // `.at(-1)` で読む——`noUncheckedIndexedAccess` のもとでは添字アクセスは
+    // 常に `| undefined` になるので、`pages.length === 0` の分岐と別に、
+    // 「末尾が実在する」ことを型の上でも確かめる。
+    const lastPageAtStart = pages.at(-1);
+    if (lastPageAtStart === undefined) {
       isRefreshingOlderRef.current = false;
       return;
     }
+    // **開始時点の「最後の頁」の錨を覚えておく**（issue #1998）。取り直しの
+    // 応答が届くまでに `loadOlder()` が新しい頁を足すと、いまの「最後の頁」
+    // はこれとは別物になる——そのときは古い最後の頁の結果で判定を
+    // 上書きしない（このファイル冒頭の doc を参照）。
+    const lastAnchorAtStart = anchorKey(lastPageAtStart.after);
     Promise.allSettled(
       pages.map((p) => {
         const query = managersToQuery({ status, limit: MANAGERS_PAGE, after: p.after });
@@ -284,13 +332,31 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
             refreshed.set(anchorKey(result.value.after), result.value.managers);
           }
         }
-        if (refreshed.size === 0) return;
-        setOlderPages((previous) =>
-          previous.map((existing) => {
-            const next = refreshed.get(anchorKey(existing.after));
-            return next === undefined ? existing : { ...existing, managers: next };
-          }),
-        );
+        if (refreshed.size > 0) {
+          setOlderPages((previous) =>
+            previous.map((existing) => {
+              const next = refreshed.get(anchorKey(existing.after));
+              return next === undefined ? existing : { ...existing, managers: next };
+            }),
+          );
+        }
+
+        // **最後の頁を取り直せたら `lastOlderCount` も更新する**
+        // （issue #1998）。`results` は `pages` と同じ並びなので、末尾が
+        // 「最後の頁」の結果である。
+        const lastResult = results.at(-1);
+        const currentLastPage = olderPagesRef.current.at(-1);
+        const currentLastAnchor =
+          currentLastPage === undefined ? undefined : anchorKey(currentLastPage.after);
+        const anchorUnchangedSinceStart = currentLastAnchor === lastAnchorAtStart;
+        if (
+          lastResult !== undefined &&
+          lastResult.status === 'fulfilled' &&
+          anchorUnchangedSinceStart &&
+          !isLoadingOlderRef.current
+        ) {
+          setLastOlderCount(lastResult.value.managers.length);
+        }
       })
       .finally(() => {
         // **積み残しが在れば、消費してもう1回だけ撃ち直す。** `isRefreshing`

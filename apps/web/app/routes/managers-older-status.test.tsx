@@ -164,9 +164,7 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
     });
 
     // 背景の取り直しでは 49 件に変わる（続きが無くなった、という想定）。
@@ -228,11 +226,7 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     // MANAGERS_PAGE 件のまま——**最後の頁**なので、olderStatus はこちらだけで
     // 決まるはずである。
     const pageAInitial = olderPage('a', MANAGERS_PAGE, PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 60_000);
-    const pageARefreshed = olderPage(
-      'a2',
-      5,
-      PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 60_000,
-    );
+    const pageARefreshed = olderPage('a2', 5, PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 60_000);
     const pageBTime = PAGE1_ANCHOR_TIME - MANAGERS_PAGE * 2 * 60_000;
 
     let refreshHappened = false;
@@ -256,17 +250,13 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     // 1回目の「もっと見る」— 頁A。
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
     });
 
     // 2回目の「もっと見る」— 頁B（最後の頁になる）。
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 3} 件）`)).toBeTruthy();
     });
 
     // 背景の取り直し——頁A（最後ではない）は 5 件へ激減、頁B（最後）は
@@ -276,7 +266,9 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
     // 頁Aの中身自体は取り直しで反映される（件数は 50+5+50=105）。
     await waitFor(() => {
-      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE + 5 + MANAGERS_PAGE} 件）`)).toBeTruthy();
+      expect(
+        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE + 5 + MANAGERS_PAGE} 件）`),
+      ).toBeTruthy();
     });
     // **olderStatus は progress のまま**——頁Aの激減（5 < MANAGERS_PAGE）に
     // 釣られて `end` にならないこと。
@@ -306,9 +298,7 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
 
     fireEvent.click(screen.getByRole('button', { name: /もっと見る/ }));
     await waitFor(() => {
-      expect(
-        screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`),
-      ).toBeTruthy();
+      expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
     });
 
     const afterIdCallsBefore = stub.calls.filter((url) => afterIdOf(url) === 'mgr-49').length;
@@ -323,9 +313,7 @@ describe('背景の取り直しが最後の頁の件数を変えたら olderStat
     });
 
     // **失敗した頁は前回の値のまま**——olderStatus・件数どちらも動かない。
-    expect(
-      screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`),
-    ).toBeTruthy();
+    expect(screen.getByText(`もっと見る（いま ${MANAGERS_PAGE * 2} 件）`)).toBeTruthy();
     expect(screen.queryByText(/これより古い委譲は無い/)).toBeNull();
   });
 });
