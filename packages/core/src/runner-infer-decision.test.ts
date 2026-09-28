@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { decideAnswer, inferDecision } from './runner.js';
+import { decideAnswer, hasNegationMarker, inferDecision } from './runner.js';
 
 /**
  * `decision` を付け忘れた回答の読み取り（issue #1827）。
@@ -533,4 +533,46 @@ describe('inferDecision / allow は承認の言い方だけでできた回答に
       unreadable: true,
     });
   });
+});
+
+/**
+ * issue #1932: 否定の印 `NEGATION_MARKERS_EN` の `n't` は、`\b(…|n't|…)\b` の形では
+ * 縮約の中で1回も当たらなかった。`isn't` の `s` と `n` はどちらも語の文字なので、
+ * `n` の手前に `\b` が立たない（`n't` が単独で書かれたときだけ当たる）。
+ *
+ * #1926 の後は、`isn't` を含む文は `isApprovalOnly` の時点で「承認だけ」から
+ * 外れるので、`inferDecision` の戻り値からは印が当たったかが見えない。だから
+ * 印そのもの（`hasNegationMarker`）を直接測る。
+ */
+describe("hasNegationMarker / n't の縮約でも否定の印が当たる（issue #1932）", () => {
+  it.each([
+    "isn't",
+    "Yes, but it isn't safe yet.",
+    "OK, but shouldn't you run the tests first?",
+    "Sure, I wouldn't do that.",
+    "Yes, I haven't decided.",
+    "doesn't",
+    "can't",
+    "aren't",
+    "wasn't",
+    'Isn’t it risky?',
+  ])('「%s」は否定の印に当たる', (message) => {
+    // 曲がった引用符の形は、判定の入口（`normalizeForDecision`）で `'` に揃えた
+    // 後の文で当たればよい。ここでは入口と同じ揃え方を手で当てる。
+    expect(hasNegationMarker(message.replace(/[‘’ʼ]/g, "'"))).toBe(true);
+  });
+
+  it.each(['nothing', 'Yes', 'OK, go ahead', 'antenna', "n'est-ce pas"])(
+    '対照: 「%s」は否定の印に当たらない',
+    (message) => {
+      expect(hasNegationMarker(message)).toBe(false);
+    },
+  );
+
+  it.each(["Yes, but it isn't safe yet.", "OK, but shouldn't you run the tests first?"])(
+    '「%s」は allow にならない（#1932 の症状）',
+    (message) => {
+      expect(inferDecision(message)).not.toBe('allow');
+    },
+  );
 });
