@@ -1952,13 +1952,67 @@ function denialLine(
  * **何をすればよいかまで書く。** 「失敗した」だけだと、この仕事が死んだのか
  * 話しかければ続くのかが読めない。続けられるという事実そのものが、この
  * `status` と `lastFailure` を分けた理由である。
+ *
+ * ## ⚠️ Issue #1882: `status` が既にセッションの死を確定させている回は分けて言う
+ *
+ * `lastFailure` は `packages/core/src/manager.ts` の `case 'report'` が書く欄で、
+ * 次の `report` が届くまで消えない。だから、枠(429)などで畳まれた回の直後に
+ * セッションそのものが `failed` / `lost`（誰も望まない終わり方）や `stopped`
+ * （人間・クローンが明示的に止めた終わり方）へ確定しても、この行は上の
+ * 「セッションは生きているので……」という古い前提を言い続ける——同じ画面の
+ * 状態バッジは終端の札を出しているので、1画面の中で言い切りが事実と矛盾する
+ * （Issue #1882 本文の実測）。
+ *
+ * **`status` を追加の引数として受け取り、`failed` / `lost`（core の
+ * `isManagerOutcomeUnobserved` と同じ判定: `status === 'failed' ||
+ * status === 'lost'`）と `status === 'stopped'` の2分岐で言い分ける**
+ * （core の `describeManagerFailure`（PR #1904）・Web の `terminalFailureNote`
+ * （PR #1889）と同じ2分岐・同じ意味）。**生きている3値（`running` /
+ * `waiting_human` / `done`）の文言は1文字も変えない。**
+ *
+ * **`manager_send` は実際に `stopped` へも resume を試みうる**（core の
+ * `manager.ts` の `send()` は `status` を見ずに `#load()` で `ManagerRecord`
+ * を作り直し、`#resume()` もその印が無ければ素通りする——core PR #1904 が
+ * 現物で確かめた事実）。⟹ **「もう続かない」とまでは言わない**——続ける
+ * 手段（話しかける）は塞がっていないが、届く保証は無いとまで言う。
+ *
+ * **CLI の次の一手の語はこの面のものを使う（`/msg`）。** `runnerLostSince` の
+ * 行（直下）が同じ理由で `manager_send` ではなく `/msg` を名指ししている
+ * ——ここも揃える。
+ *
+ * ## `lastFoldedTurn` が在る回は出さない
+ *
+ * `lastFailure` は `case 'report'` が `status === 'stopped'` の間は一切
+ * 触らない欄（`lastFoldedTurn` だけを書いて早期 return する分岐）——
+ * `lastFoldedTurn` が在る回の `lastFailure` は、畳まれる**前**の無関係な
+ * 古いターンを指す。core の `manager_report`（Issue #1798。`foldedTurn !==
+ * undefined` の回は `describeManagerFailure` を呼ばない）・Web の
+ * `FailureNote`（PR #1889。同じ回に `null` を返す）と同じ線で、ここも
+ * `null` を返す。
  */
-function failureLine(failure: ManagerListItem['lastFailure']): string | null {
+function failureLine(
+  failure: ManagerListItem['lastFailure'],
+  status: ManagerListItem['status'],
+  lastFoldedTurn: ManagerListItem['lastFoldedTurn'],
+): string | null {
   if (failure === undefined || failure === null) return null;
-  return (
-    `⚠ 直近のターンは報告ではなく失敗で終わっています: ${failure.code}（${failure.via}, ${failure.at}）` +
-    '。セッションは生きているので、原因が解ければ話しかければ続きます'
-  );
+  if (lastFoldedTurn !== undefined) return null;
+  const opening = `⚠ 直近のターンは報告ではなく失敗で終わっています: ${failure.code}（${failure.via}, ${failure.at}）`;
+  if (status === 'failed' || status === 'lost') {
+    return (
+      `${opening}。ただし status: ${status}——セッションそのものが、依頼者が望まない終わり方で` +
+      '既に終端している。「セッションが生きていて原因が解ければ話しかければ続く」という前提はここでは' +
+      '成り立たない——続けたいなら /msg で送ると resume を試みるしかなく、届く保証は無い'
+    );
+  }
+  if (status === 'stopped') {
+    return (
+      `${opening}。ただし status: stopped——このセッションは、その後 人間・クローンが明示的に` +
+      '停止させ、確かめたうえで既に終端している。「セッションが生きていて原因が解ければ話しかければ続く」' +
+      'という前提はここでは成り立たない——続けたいなら /msg で送ると resume を試みるしかなく、届く保証は無い'
+    );
+  }
+  return `${opening}。セッションは生きているので、原因が解ければ話しかければ続きます`;
 }
 
 /**
@@ -2110,12 +2164,26 @@ export function renderManagerList(managers: ManagerListItem[]): string {
     }
     // **失敗は報告の**上**に置く。** 下に置くと、包まれたエラー文（`lastReport`）を
     // 先に読んでから「実は報告ではない」と分かる順になる。
-    const failed = failureLine(manager.lastFailure);
+    const failed = failureLine(manager.lastFailure, manager.status, manager.lastFoldedTurn);
     if (failed !== null) lines.push(`      ${failed}`);
     // **失敗した回は「報告」と呼ばない。** 本文は runner 側で
     // 「（このターンは応答を返さずに終わった: …）」と包まれているが、見出しが
     // 「直近の報告」のままだと、人間は包みの内側だけを読んで報告として扱う。
-    if (manager.lastReport) {
+    //
+    // **Issue #1882: `lastFoldedTurn` が在る回は、その材料で組む。**
+    // `manager.lastReport` は `case 'report'`（`packages/core/src/manager.ts`）
+    // の `status === 'stopped'` 早期 return では更新されない——`lastFoldedTurn`
+    // が在る回の `lastReport` は畳まれる**前**の無関係な古いターンのままである。
+    // それを「直近の報告」「直近のターンの中身」と呼ぶと、実際に直近届いた
+    // 本文（`lastFoldedTurn.text`）とは違うものを「直近」と呼ぶことになる
+    // ——core の `manager_report`（Issue #1038）が使う見出し「停止後に届いた、
+    // 畳まれたターンの中身」と同じ意味で、受信時刻つきで出す。
+    if (manager.lastFoldedTurn !== undefined) {
+      lines.push(
+        `      停止後に届いた、畳まれたターンの中身（${manager.lastFoldedTurn.at} 受信）: ` +
+          summarizeText(manager.lastFoldedTurn.text),
+      );
+    } else if (manager.lastReport) {
       const label = manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
