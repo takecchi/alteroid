@@ -235,7 +235,7 @@ describe('computeUnpushedWork — 未 push の定義（@{u} ではなく --not -
     // これは「一度も push されていない枝」と同じ形の失敗をする。
     expect(() => git(work, ['rev-list', '--count', '@{u}..HEAD'])).toThrow();
 
-    const result = await computeUnpushedWork(work, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(work, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees).toHaveLength(1);
     expect(result.worktrees[0]?.unpushedCommitCount).toBe(2);
@@ -248,7 +248,7 @@ describe('computeUnpushedWork — 未 push の定義（@{u} ではなく --not -
     commitFile(root, 'a.txt', 'first\n', 'first');
     commitFile(root, 'b.txt', 'second\n', 'second');
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     // origin が存在しないので、除外されるものが無い＝全コミットが「未 push」。
     expect(result.worktrees[0]?.unpushedCommitCount).toBe(2);
@@ -262,7 +262,7 @@ describe('computeUnpushedWork — 未コミットの変更（git status --porcel
     writeFileSync(join(root, 'a.txt'), 'changed\n'); // 変更1件
     writeFileSync(join(root, 'new.txt'), 'new\n'); // 追跡外1件
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees[0]?.uncommittedChangeCount).toBe(2);
   });
@@ -271,7 +271,7 @@ describe('computeUnpushedWork — 未コミットの変更（git status --porcel
     initRepo(root);
     commitFile(root, 'a.txt', 'first\n', 'first');
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees[0]?.uncommittedChangeCount).toBe(0);
     expect(result.worktrees[0]?.uncommittedChangeCountUnknown).toBeUndefined();
@@ -282,7 +282,7 @@ describe('computeUnpushedWork — 倒れ先（HEAD が無効・detached HEAD）'
   it('コミットが1本も無い枝（HEAD が無効）は「確かめられなかった」と名乗り、0とは混ぜない', async () => {
     initRepo(root); // git init のみ。コミット無し。
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     const tree = result.worktrees[0];
     expect(tree).toBeDefined();
@@ -298,7 +298,7 @@ describe('computeUnpushedWork — 倒れ先（HEAD が無効・detached HEAD）'
     commitFile(root, 'b.txt', 'second\n', 'second');
     git(root, ['checkout', '-q', sha]);
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees[0]?.branch).toBeNull();
     expect(result.worktrees[0]?.unpushedCommitCount).toBe(1);
@@ -323,7 +323,7 @@ describe('computeUnpushedWork — 出す粒度（ファイル名・差分の中�
     // 未コミットの変更も1件残す（git status の経路も踏ませる）。
     writeFileSync(join(root, 'super-secret-filename.txt'), 'TOP SECRET DIFF CONTENT v2\n');
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
     const serialized = JSON.stringify(result);
 
     expect(result.worktrees[0]?.uncommittedChangeCount).toBe(1);
@@ -428,7 +428,7 @@ describe('computeUnpushedWork — remoteOrigin（origin の host/path。Issue #1
     commitFile(root, 'a.txt', 'first\n', 'first');
     git(root, ['remote', 'add', 'origin', 'https://ghp_secretToken@github.com/acme/widgets.git']);
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees[0]?.remoteOrigin).toEqual({
       host: 'github.com',
@@ -441,7 +441,7 @@ describe('computeUnpushedWork — remoteOrigin（origin の host/path。Issue #1
     initRepo(root);
     commitFile(root, 'a.txt', 'first\n', 'first');
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees[0]?.remoteOrigin).toBeUndefined();
   });
@@ -451,7 +451,7 @@ describe('computeUnpushedWork — remoteOrigin（origin の host/path。Issue #1
     commitFile(root, 'a.txt', 'first\n', 'first');
     git(root, ['remote', 'add', 'origin', 'not a url at all']);
 
-    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(root, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees[0]?.remoteOrigin).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain('not a url at all');
@@ -471,7 +471,7 @@ describe('computeUnpushedWork — Issue #1067（他人の作業ツリーで git 
       return realSpawn(options);
     };
 
-    await computeUnpushedWork(root, { spawn: spyingSpawn, env: process.env });
+    await computeUnpushedWork(root, { spawn: spyingSpawn, env: gitChildEnv() });
 
     // 見つかった2ツリー × 3コマンド（branch / unpushed / uncommitted）で
     // 少なくとも6回は起こっているはず——「全部」を検査するので、1本でも
@@ -497,17 +497,25 @@ describe('computeUnpushedWork — タイムアウト', () => {
       spawn('sleep', ['5'], {
         signal: options.signal,
         stdio: ['ignore', 'pipe', 'pipe'],
-        // `sleep` を見つけるのに要るのは `PATH` だけ（#1854）。他の call site
-        // （上の `realSpawn`）は本物の `git` を呼ぶので env をそのまま渡している
-        // が、こちらは abort の配線だけを測る回なので、器の本物の秘密を
-        // 継承しない allowlist に絞る。
+        // `sleep` を見つけるのに要るのは `PATH` だけ（#1854）。
+        // ⚠️ この doc comment は当初「他の call site（上の `realSpawn`）は
+        // 本物の `git` を呼ぶので env をそのまま渡している」と書いていたが、
+        // それは #1854 の穴そのものだった——`computeUnpushedWork` に渡す
+        // `env` は最終的に `runGit` を経由して本物の `git` の子プロセスへ
+        // そのまま届く（`unpushed-work.ts` の doc「この探索自身が Issue #1067
+        // の形を持っていた」と同じ経路）ので、`env: process.env` は器の本物の
+        // 秘密を渡していた。いまは下の `computeUnpushedWork` 呼び出しも含め、
+        // ファイル全体で `gitChildEnv()`（`PATH` と偽 `HOME` だけ）に揃えて
+        // いる。こちらは abort の配線だけを測る回なので、`sleep` を見つける
+        // のに要る `PATH` だけに絞る（`git` を呼ばないので `gitChildEnv()` の
+        // 偽 `HOME` は不要）。
         env: { PATH: process.env.PATH ?? '' },
       });
 
     const startedAt = Date.now();
     const result = await computeUnpushedWork(root, {
       spawn: hangingSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       gitCommandTimeoutMs: 200,
     });
     const elapsedMs = Date.now() - startedAt;
@@ -531,7 +539,7 @@ describe('computeUnpushedWork — 呼び出し元の期限（signal）', () => {
 
     const result = await computeUnpushedWork(root, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       signal: controller.signal,
     });
 
@@ -643,7 +651,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
     });
@@ -664,7 +672,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
     });
@@ -678,7 +686,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       tmpRootDir: tmpRoot,
     });
 
@@ -692,7 +700,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(nestedCwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
     });
@@ -709,7 +717,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
     });
@@ -730,7 +738,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
       maxWorktrees: 3,
@@ -749,7 +757,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: unreadableTmpRoot,
     });
@@ -762,7 +770,7 @@ describe('computeUnpushedWork — 探索の起点に /tmp のスクラッチデ�
   it('managerId を渡さなければ、tmpRootDir が読めなくても scratchRootsUnknown は載らない（この探索自体を行っていない）', async () => {
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       tmpRootDir: join(tmpRoot, 'does-not-exist'),
     });
 
@@ -783,7 +791,7 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
     const missingCwd = join(makeTempDirSync('alteroid-unpushed-work-missing-'), 'does-not-exist');
 
     await expect(
-      computeUnpushedWork(missingCwd, { spawn: realSpawn, env: process.env }),
+      computeUnpushedWork(missingCwd, { spawn: realSpawn, env: gitChildEnv() }),
     ).rejects.toThrow();
   });
 
@@ -810,12 +818,12 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
       if (readableAsRoot) {
         const result = await computeUnpushedWork(lockedCwd, {
           spawn: realSpawn,
-          env: process.env,
+          env: gitChildEnv(),
         });
         expect(result.worktrees).toHaveLength(0);
       } else {
         await expect(
-          computeUnpushedWork(lockedCwd, { spawn: realSpawn, env: process.env }),
+          computeUnpushedWork(lockedCwd, { spawn: realSpawn, env: gitChildEnv() }),
         ).rejects.toThrow();
       }
     } finally {
@@ -837,7 +845,7 @@ describe('computeUnpushedWork — 探索の起点（job.cwd）自体が読めな
       // は root では効かないので `unreadableDirCount` の有無はここでは断定
       // しない**——その決定的な再現と検証は次の describe ブロック
       // （`readdirFn` を差し替える形。Issue #1865）が持つ。
-      const result = await computeUnpushedWork(top, { spawn: realSpawn, env: process.env });
+      const result = await computeUnpushedWork(top, { spawn: realSpawn, env: gitChildEnv() });
       expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
     } finally {
       chmodSync(lockedChild, 0o755);
@@ -877,7 +885,7 @@ describe('computeUnpushedWork — 起点より下（子ディレクトリ）の�
 
     const result = await computeUnpushedWork(top, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       readdirFn,
     });
 
@@ -892,7 +900,7 @@ describe('computeUnpushedWork — 起点より下（子ディレクトリ）の�
     commitFile(join(top, 'visible'), 'a.txt', 'x\n', 'x');
     mkdirSync(join(top, 'plain-child'), { recursive: true });
 
-    const result = await computeUnpushedWork(top, { spawn: realSpawn, env: process.env });
+    const result = await computeUnpushedWork(top, { spawn: realSpawn, env: gitChildEnv() });
 
     expect(result.worktrees.map((wt) => wt.relativePath)).toEqual(['visible']);
     expect(result.unreadableDirCount).toBeUndefined();
@@ -911,7 +919,7 @@ describe('computeUnpushedWork — 起点より下（子ディレクトリ）の�
 
     const result = await computeUnpushedWork(top, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       readdirFn,
     });
 
@@ -954,7 +962,7 @@ describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
       readdirFn,
@@ -976,7 +984,7 @@ describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ�
 
     const result = await computeUnpushedWork(cwd, {
       spawn: realSpawn,
-      env: process.env,
+      env: gitChildEnv(),
       managerId,
       tmpRootDir: tmpRoot,
     });
