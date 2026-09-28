@@ -39,7 +39,9 @@ export interface ChildSrcFailure {
  *   `entryUrl(import.meta.url, '<対象ファイル名>.ts')` で作った絶対パスを
  *   `import` する行を含めること）。
  */
-export async function runChildAgainstSrc(lines: readonly string[]): Promise<ChildSrcFailure | null> {
+export async function runChildAgainstSrc(
+  lines: readonly string[],
+): Promise<ChildSrcFailure | null> {
   const child = lines.join('\n');
   return run(process.execPath, [
     '--experimental-strip-types',
