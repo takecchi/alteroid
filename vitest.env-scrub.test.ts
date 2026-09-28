@@ -141,7 +141,10 @@ describe('vitest.setup.ts はテストの前に秘密を環境から外す（統
   let scratchRoot = '';
 
   beforeAll(() => {
-    scratchRoot = join(REPO_ROOT, `.vitest-env-scrub-itest-${randomUUID()}`);
+    // 根の直下ではなく `.scratch/` の下に作る（#2019。理由は `vitest.tmpdir.test.ts` の
+    // 統合の describe の doc）——ここに書く `probe.test.ts` は env 無しの子プロセスを
+    // 起こすので、根の直下に置くと、同時に走る `check-no-env-passthrough` が拾って落ちる。
+    scratchRoot = join(REPO_ROOT, '.scratch', `vitest-env-scrub-itest-${randomUUID()}`);
     mkdirSync(scratchRoot, { recursive: true });
   });
 

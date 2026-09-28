@@ -116,17 +116,23 @@ describe('beforeAll で作って複数の it が読む形（単体、drain は�
  * その実行が終わった**後**に、外側であるこのプロセスから「もう無い」ことを
  * 確認する。
  *
- * scratch は repo 直下（`REPO_ROOT` 配下）に作る —— `vitest` / `vitest/config`
+ * scratch は repo の中（`REPO_ROOT` 配下）に作る —— `vitest` / `vitest/config`
  * の bare import が node_modules を祖先方向へ解決できるようにするため
  * （`os.tmpdir()` の下だと祖先に node_modules が無く解決に失敗する）。
  * ディレクトリ名は `mkdtemp` を使わず `randomUUID()` で組み立てる（doc 冒頭
  * の注記のとおり）。
+ *
+ * **ただし根の直下ではなく `.scratch/` の下に作る**（#2019）。根の直下の
+ * `.vitest-*` は git に無視されていないので、同時に走る `check-no-env-passthrough`
+ * などの実物の走査（`git ls-files -co --exclude-standard`）が、ここに書いた
+ * 一時の `.test.ts` を拾って落ちた。`.scratch/` は git・prettier・eslint・docker の
+ * すべてから外れている（`scripts/scratch-ignore-alignment.test.ts` の `SHARED`）。
  */
 describe('統合: 本物の vitest.setup.ts 経由で、ファイルの最後に消えることを確かめる', () => {
   let scratchRoot = '';
 
   beforeAll(() => {
-    scratchRoot = join(REPO_ROOT, `.vitest-tmpdir-itest-${randomUUID()}`);
+    scratchRoot = join(REPO_ROOT, '.scratch', `vitest-tmpdir-itest-${randomUUID()}`);
     mkdirSync(scratchRoot, { recursive: true });
   });
 
