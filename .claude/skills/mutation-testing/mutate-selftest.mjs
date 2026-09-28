@@ -1573,8 +1573,14 @@ function scenarioRebuildFailure() {
 
       log('');
       log('-- 6b. この PATH で、実プロセスとして `mutate.mjs restore` を起こす --');
+      // **親の環境を丸ごと広げない。PATH だけを渡す**（#1854 の同じ種類の残り）。
+      // `{ ...process.env, PATH }` の形だと、このセルフテストを走らせた器の環境変数が
+      // すべて子へ届く。子（`mutate.mjs restore`）が読む `process.env` の鍵は
+      // `CLAUDE_SESSION_ID` / `ALTEROID_SESSION_ID`（どちらも `?? null` で既定値つき）
+      // だけで、そこから起こす `git rev-parse` / `git status` と擬似 `pnpm` も PATH の
+      // ほかに要るものが無い——`scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()`
+      // と同じ作法である（このファイルは依存なしで動く約束なので、import せずに書く）。
       const poisonedEnv = {
-        ...process.env,
         PATH: `${fakeBinDirPath}${path.delimiter}${process.env.PATH}`,
       };
       restoreResult = spawnSync(
