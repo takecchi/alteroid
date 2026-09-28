@@ -163,6 +163,100 @@ describe('alteroid credential list', () => {
     expect(read()).not.toContain('別の鍵で走っています');
   });
 
+  /**
+   * **scope: app は他の scope と挙動が違う（issue #1894 の続き）。** `scope:
+   * 'app'` の行は manager に配布されない（issue #1867）ので、「マネージャーも
+   * 器の環境変数の値で走っている」も「外しても配られる値は変わらない」も
+   * 逆になる。上の「食い違っている名前を名指しし…」テストは scope: 'all' の
+   * 行だけを見ており、scope: 'app' はまだ別扱いしていなかった。
+   */
+  it('scope: app の食い違いは、「外しても変わらない」と言わない（issue #1894）', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [
+          {
+            name: 'GH_TOKEN',
+            sha256: 'cccccccccccc',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'app',
+            secret: true,
+            shadowsCloneEnv: true,
+          },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await credentialListCommand();
+
+    const text = read();
+    expect(text).not.toContain('外しても配られる値は変わりません');
+    expect(text).not.toContain('マネージャーもクローンも、器の環境変数の値で');
+  });
+
+  it('scope: app の食い違いは、manager にはいま何も配られていないと言う（issue #1894）', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [
+          {
+            name: 'GH_TOKEN',
+            sha256: 'cccccccccccc',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'app',
+            secret: true,
+            shadowsCloneEnv: true,
+          },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await credentialListCommand();
+
+    const text = read();
+    expect(text).toContain('マネージャーにはこの名前が');
+    expect(text).toContain('何も配られていません');
+    expect(text).toContain('配られ始めます');
+  });
+
+  it('混在: scope: app とそれ以外は別の節に分かれる（issue #1894）', async () => {
+    setReply('GET', '/credentials', {
+      status: 200,
+      body: {
+        credentials: [
+          {
+            name: 'GH_TOKEN',
+            sha256: 'cccccccccccc',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'app',
+            secret: true,
+            shadowsCloneEnv: true,
+          },
+          {
+            name: 'GITHUB_TOKEN',
+            sha256: 'eeeeeeeeeeee',
+            updatedAt: '2026-09-12T00:00:00.000Z',
+            scope: 'all',
+            secret: true,
+            shadowsCloneEnv: true,
+          },
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await credentialListCommand();
+
+    const text = read();
+    // GH_TOKEN（app）は新しい言い分。GITHUB_TOKEN（all）は従来どおり。
+    expect(text).toContain('alteroid credential set GH_TOKEN --file <path>');
+    expect(text).toContain('alteroid credential set GITHUB_TOKEN --file <path>');
+    expect(text).toContain('外しても配られる値は変わりません');
+    expect(text).toContain('何も配られていません');
+  });
+
   it('名前と指紋を並べ、突き合わせ先（runner 側）まで言う', async () => {
     setReply('GET', '/credentials', {
       status: 200,

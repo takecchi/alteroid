@@ -710,6 +710,156 @@ describe('クローンとマネージャーで別の鍵が配られているこ�
 });
 
 /**
+ * **`onCloneEnvShadowed` の第2引数（`appScopedNames`。issue #1894）。**
+ *
+ * 呼び手（daemon の stderr・CLI・Web）が `scope: 'app'` の名前だけ文言を
+ * 変えるには、旗が立った名前のうちどれが `scope: 'app'` かを知る必要がある
+ * ——旗そのもの（`names`）は scope を見ずに立つ（直上の describe）ので、
+ * ここで分けて渡す。
+ *
+ * **測るのは「正しく分けて渡しているか」だけ**——文言（daemon/CLI/Web の
+ * 実際の出力）はそれぞれの呼び手側のテストが持つ。
+ */
+describe('onCloneEnvShadowed の第2引数（appScopedNames。issue #1894）', () => {
+  const VAULT = 'dummy-not-a-real-token-vault';
+  const CLONE_ENV = 'dummy-not-a-real-token-clone-env';
+
+  it('scope: app の食い違いは、names にも appScopedNames にも載る', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([runner]),
+      withheldEnvKeys: [...WITHHELD],
+      env: { GH_TOKEN: CLONE_ENV },
+      onCloneEnvShadowed: (names, appScopedNames) => {
+        calls.push({ names, appScopedNames });
+      },
+    });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT, scope: 'app' }]);
+    await service.syncRunner(runner);
+
+    expect(calls).toEqual([{ names: ['GH_TOKEN'], appScopedNames: ['GH_TOKEN'] }]);
+  });
+
+  it('scope: all（既定）の食い違いは、names には載るが appScopedNames には載らない', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([runner]),
+      withheldEnvKeys: [...WITHHELD],
+      env: { GH_TOKEN: CLONE_ENV },
+      onCloneEnvShadowed: (names, appScopedNames) => {
+        calls.push({ names, appScopedNames });
+      },
+    });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+    await service.syncRunner(runner);
+
+    expect(calls).toEqual([{ names: ['GH_TOKEN'], appScopedNames: [] }]);
+  });
+
+  it('scope: runner の食い違いも、appScopedNames には載らない', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([runner]),
+      withheldEnvKeys: [...WITHHELD],
+      env: { GH_TOKEN: CLONE_ENV },
+      onCloneEnvShadowed: (names, appScopedNames) => {
+        calls.push({ names, appScopedNames });
+      },
+    });
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT, scope: 'runner' }]);
+    await service.syncRunner(runner);
+
+    expect(calls).toEqual([{ names: ['GH_TOKEN'], appScopedNames: [] }]);
+  });
+
+  it('混在: app scoped の名前だけが appScopedNames に載る（他は落ちる）', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([runner]),
+      withheldEnvKeys: [...WITHHELD],
+      env: { GH_TOKEN: CLONE_ENV, GITHUB_TOKEN: CLONE_ENV },
+      onCloneEnvShadowed: (names, appScopedNames) => {
+        calls.push({ names: [...names].sort(), appScopedNames: [...appScopedNames].sort() });
+      },
+    });
+    await service.apply([
+      { name: 'GH_TOKEN', value: VAULT, scope: 'app' },
+      { name: 'GITHUB_TOKEN', value: VAULT, scope: 'all' },
+    ]);
+    await service.syncRunner(runner);
+
+    expect(calls).toEqual([{ names: ['GH_TOKEN', 'GITHUB_TOKEN'], appScopedNames: ['GH_TOKEN'] }]);
+  });
+});
+
+/**
+ * **scope: 'runner' の文言の正しさを実測する（issue #1894 の「確かめていない
+ * こと」2つ目）。** Issue は「マネージャーもクローンも器の env で合っている
+ * *はず*だという判定だけ」と書いていた——ここで実測に変える。
+ *
+ * 主張は2つ: (1) manager は器の env の値で走る（`scope: 'app'` と違って
+ * `held` には残るので、器の env の値が manager へ届く）。(2) 正本の行を
+ * 外しても manager へ配られる値は変わらない（外す前から既に器の env の値が
+ * 勝っているため）。
+ *
+ * **どちらも赤にはならない**（scope: 'runner' の文言はそもそも直していない
+ * ——このテストは「直さなくてよい」という判断の裏付けである）。
+ */
+describe('scope: runner の GH_TOKEN の実測（issue #1894）', () => {
+  const VAULT = 'dummy-not-a-real-token-vault';
+  const CLONE_ENV = 'dummy-not-a-real-token-clone-env';
+
+  it('(1) manager は器の env の値で走る（scope: runner でも GitHub の名前は器の env が勝つ）', () => {
+    const rows: StoredCredential[] = [
+      {
+        name: 'GH_TOKEN',
+        value: VAULT,
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'runner',
+      },
+    ];
+    const resolved = resolveCredentialRows(rows, { GH_TOKEN: CLONE_ENV }, 'manager');
+    expect(resolved).toEqual([
+      { name: 'GH_TOKEN', value: CLONE_ENV, updatedAt: '(クローンの器の環境変数)' },
+    ]);
+  });
+
+  it('(2) 正本の行を外しても、manager へ配られる値は変わらない（scope: runner）', () => {
+    const withRow: StoredCredential[] = [
+      {
+        name: 'GH_TOKEN',
+        value: VAULT,
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'runner',
+      },
+    ];
+    const withoutRow: StoredCredential[] = [];
+
+    const resolvedWithRow = resolveCredentialRows(withRow, { GH_TOKEN: CLONE_ENV }, 'manager');
+    const resolvedWithoutRow = resolveCredentialRows(
+      withoutRow,
+      { GH_TOKEN: CLONE_ENV },
+      'manager',
+    );
+
+    expect(resolvedWithRow).toEqual(resolvedWithoutRow);
+    expect(resolvedWithRow.map((row) => row.value)).toEqual([CLONE_ENV]);
+  });
+});
+
+/**
  * `resolveCredentialRows` そのものを固定する（人間の決定 2026-09-12、
  * 「梯子を1本に統一する」——Issue #865 の恒久策）。
  *

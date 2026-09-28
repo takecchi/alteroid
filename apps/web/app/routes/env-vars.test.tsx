@@ -188,6 +188,58 @@ describe('/env-vars 画面 — 一覧', () => {
     expect(await screen.findByText(/優先して配られている/)).toBeTruthy();
   });
 
+  /**
+   * **scope: app は他の scope と挙動が違う（issue #1894）。** `scope: 'app'`
+   * の行は manager に配布されない（issue #1867）ので、この画面の注記にも
+   * それを言い添える——manager にはいま何も配られていないこと、そして
+   * この行を外すと manager にも配られ始めること。
+   */
+  it('shadowsCloneEnv かつ scope: app の行には、manager 向けの注記が追加で出る（issue #1894）', async () => {
+    stubCrudScreen([
+      {
+        name: 'GH_TOKEN',
+        sha256: 'a'.repeat(12),
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'app',
+        secret: true,
+        shadowsCloneEnv: true,
+      },
+    ]);
+
+    render(
+      <Providers>
+        <EnvVars />
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    expect(await screen.findByText(/manager にはいま何も配られていない/)).toBeTruthy();
+    expect(await screen.findByText(/manager にも配られ始める/)).toBeTruthy();
+  });
+
+  it('shadowsCloneEnv かつ scope: all の行には、manager 向けの注記（app 専用）は出ない', async () => {
+    stubCrudScreen([
+      {
+        name: 'GH_TOKEN',
+        sha256: 'a'.repeat(12),
+        updatedAt: '2026-09-14T00:00:00.000Z',
+        scope: 'all',
+        secret: true,
+        shadowsCloneEnv: true,
+      },
+    ]);
+
+    render(
+      <Providers>
+        <EnvVars />
+      </Providers>,
+    );
+    await waitForListLoaded();
+
+    await screen.findByText(/優先して配られている/);
+    expect(screen.queryByText(/manager にはいま何も配られていない/)).toBeNull();
+  });
+
   it('1件も無ければ、その旨を言う', async () => {
     stubCrudScreen([]);
 

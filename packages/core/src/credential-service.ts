@@ -171,8 +171,27 @@ export interface CredentialServiceOptions {
    * 連続して知らせない**——直前に知らせた名前の集合と変わらなければ黙る
    * （`syncRunner` は runner が名乗り直すたびに叩かれるので、そのたびに
    * 出すと同じ1行で日誌が埋まり、意味のある行が埋もれる）。
+   *
+   * ## 第2引数（`appScopedNames`。issue #1894）
+   *
+   * `names` のうち `scope: 'app'` の行だけを別に渡す。**`names` 自体は
+   * scope を問わず立つ**（旗そのものは scope を見ない——`cloneEnvShadowedNames`
+   * の doc）ので、呼び手（daemon の stderr・CLI・Web）が文言を scope ごとに
+   * 分けるにはここで分けて渡すしかない。
+   *
+   * **`scope: 'app'` は他の scope（`all` / `runner` / 未設定）と挙動が違う**
+   * （`resolveCredentialRows` の `held` の doc、issue #1867）。`scope: 'app'`
+   * の名前は manager（`target: 'manager'`）に**何も配られていない**——
+   * 「マネージャーも器の環境変数の値で走っている」は誤りで、「正本の行を
+   * 外しても配られる値は変わらない」も誤り（外すと `held` から名前が消え、
+   * `fromEnvOnly` が器の env の値を manager へ配り始める）。呼び手は
+   * `appScopedNames` に載った名前について、この2つの言い切りをしないこと。
+   *
+   * 既存の呼び手（`names` だけを見るもの）は直す必要が無い——引数を1つ
+   * 増やしただけで、渡す位置・頻度の抑止（直前と同じ集合なら黙る）は
+   * 変えていない。
    */
-  onCloneEnvShadowed?: (names: readonly string[]) => void;
+  onCloneEnvShadowed?: (names: readonly string[], appScopedNames: readonly string[]) => void;
 }
 
 export interface ApplyCredentialsResult {
@@ -506,7 +525,13 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     const signature = [...shadowed].sort().join(',');
     if (signature === lastShadowSignature) return;
     lastShadowSignature = signature;
-    if (shadowed.length > 0) onCloneEnvShadowed(shadowed);
+    if (shadowed.length === 0) return;
+    // **`scope: 'app'` だけを分けて渡す**（`onCloneEnvShadowed` の doc）。
+    // `authoritative` は scope で絞る前の全行なので、ここで引ける
+    // （`resolveCredentialRows` の `held` と同じ集合を見ている）。
+    const scopeByName = new Map(authoritative.map((row) => [row.name, row.scope ?? 'all']));
+    const appScopedNames = shadowed.filter((name) => scopeByName.get(name) === 'app');
+    onCloneEnvShadowed(shadowed, appScopedNames);
   }
 
   /**

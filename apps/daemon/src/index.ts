@@ -923,6 +923,40 @@ export function describeReopenedTokenNotice(
 }
 
 /**
+ * `credentialService` の `onCloneEnvShadowed` が知らせてきたときの stderr の本文
+ * （issue #1894）。
+ *
+ * **`main()` に埋め込んだままでは測れない**ので、ここへ切り出した（AGENTS.md
+ * 「テストを弱めずに直す」の「テストが書けない構造は、テストが無いのと同じ」）。
+ * `describeReopenedTokenNotice` と同じ形——**この歯コミットでは出力を1文字も
+ * 変えていない**（`main()` に埋め込んであった本文をそのまま関数へ移しただけ）。
+ *
+ * **⚠️ `scope: 'app'` の場合分けはまだ無い**（issue #1894 の「直し」コミットで
+ * 足す）。`scope: 'app'` の名前は他の scope と挙動が違う——マネージャーには
+ * 何も配られていない（issue #1867）ので「マネージャーも器の環境変数の値で
+ * 走っている」も「外しても配られる値は変わらない」も逆になる。ここではまだ
+ * `appScopedNames` を見ない——次のテストがそれを赤で示す。
+ */
+export function describeCloneEnvShadowedNotice(
+  names: readonly string[],
+  appScopedNames: readonly string[],
+): string {
+  // **⚠️ 歯コミット時点ではまだ scope を見ない**（#1894 の直しコミットで
+  // 分ける）。ここは `main()` に埋め込んであった本文を1文字も変えずに
+  // 関数へ切り出しただけ——出力は以前と同じである。
+  void appScopedNames;
+  return (
+    `alteroidd: GitHub の名前で、正本の行よりこのデーモンの器の環境変数の値が` +
+    `優先して配られています（マネージャーもクローンも、器の環境変数の値で` +
+    `走っています。正本のその行は配られていません）: ${names.join(', ')}。` +
+    `正本のその行を外しても配られる値は変わりません（どちらにしても器の` +
+    `環境変数の値が配られます）。揃えるには、正本の値を器の環境変数に` +
+    `合わせて置き直すか（alteroid credential set <名前>）、器の環境変数の` +
+    `側を変えてください（この HTTP の口からは変えられません）\n`
+  );
+}
+
+/**
  * `tokenRotationStream` の網羅性チェック専用。呼ばれること自体が保証で、
  * `event` の型が `never` でなくなった時点（＝ 未対応の値が足された時点）で
  * 呼び出し側が型エラーになる。実行時にここへ来ることは型が守っている限り
@@ -1380,17 +1414,12 @@ export async function main(): Promise<void> {
      *
      * 連続した同じ食い違いは呼ばれない（`createCredentialService` 側で
      * 抑止済み）ので、ここで頻度を気にする必要は無い。
+     *
+     * **本文の組み立ては `describeCloneEnvShadowedNotice` に切り出してある**
+     * （issue #1894）——`scope: 'app'` の名前は挙動が違うので文言も分ける。
      */
-    onCloneEnvShadowed: (names) => {
-      process.stderr.write(
-        `alteroidd: GitHub の名前で、正本の行よりこのデーモンの器の環境変数の値が` +
-          `優先して配られています（マネージャーもクローンも、器の環境変数の値で` +
-          `走っています。正本のその行は配られていません）: ${names.join(', ')}。` +
-          `正本のその行を外しても配られる値は変わりません（どちらにしても器の` +
-          `環境変数の値が配られます）。揃えるには、正本の値を器の環境変数に` +
-          `合わせて置き直すか（alteroid credential set <名前>）、器の環境変数の` +
-          `側を変えてください（この HTTP の口からは変えられません）\n`,
-      );
+    onCloneEnvShadowed: (names, appScopedNames) => {
+      process.stderr.write(describeCloneEnvShadowedNotice(names, appScopedNames));
     },
   });
 

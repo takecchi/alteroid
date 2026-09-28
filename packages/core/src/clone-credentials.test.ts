@@ -136,7 +136,12 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
   let postSeq2 = 0;
 
   function cloneWithVault(input: {
-    vault?: readonly { name: string; value: string; updatedAt: string }[];
+    vault?: readonly {
+      name: string;
+      value: string;
+      updatedAt: string;
+      scope?: 'all' | 'app' | 'runner';
+    }[];
     env?: NodeJS.ProcessEnv;
     credentials?: () => Record<string, string>;
     profileEnv?: Record<string, string>;
@@ -291,6 +296,67 @@ describe('credentialService（正本を同期で覗いて重ねる。#865）', (
     clone.stop();
 
     expect(calls[0]?.options.env?.GH_TOKEN).toBe('declared-in-profile');
+  });
+
+  /**
+   * **scope: 'runner' がクローン側でどう扱われるかを実測する（issue #1894）。**
+   * Issue が「マネージャーもクローンも器の env で合っている*はず*だという
+   * 判定だけ」と書いていた claim を、ここで実測に変える——`resolveCredentialRows`
+   * の describe（`credential-service.test.ts`）は manager 側を実測している。
+   * こちらはクローン自身の `#childEnv()`（`this.#env` を先に重ね、その上へ
+   * `resolveCredentialRows(rows, this.#env, 'clone')` を重ねる）まで通した
+   * 観測点である。
+   *
+   * `scope: 'runner'` は `target: 'clone'` に適用されない
+   * （`scopeAppliesTo`）ので、`resolveCredentialRows` はこの名前について
+   * クローンへ何も返さない。それでもクローンが器の env の値で走るのは、
+   * `#childEnv()` が `this.#env`（器の env）を土台として先に重ねるからで
+   * あって、`resolveCredentialRows` の解決を経由してはいない。
+   */
+  it('scope: runner の行があっても、クローンは器の env の値で走る（正本の重ねが素通りする）', async () => {
+    const { clone, calls } = cloneWithVault({
+      vault: [
+        {
+          name: 'GH_TOKEN',
+          value: 'from-vault',
+          updatedAt: '2026-09-12T00:00:00.000Z',
+          scope: 'runner',
+        },
+      ],
+      env: { GH_TOKEN: 'from-container-env' },
+    });
+    say(clone);
+    await waitFor(() => calls.length > 0, 'セッションが開くこと');
+    clone.stop();
+
+    expect(calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+  });
+
+  it('scope: runner の行を外しても、クローンに届く値は変わらない', async () => {
+    const withRow = cloneWithVault({
+      vault: [
+        {
+          name: 'GH_TOKEN',
+          value: 'from-vault',
+          updatedAt: '2026-09-12T00:00:00.000Z',
+          scope: 'runner',
+        },
+      ],
+      env: { GH_TOKEN: 'from-container-env' },
+    });
+    say(withRow.clone);
+    await waitFor(() => withRow.calls.length > 0, 'セッションが開くこと（行あり）');
+    withRow.clone.stop();
+
+    const withoutRow = cloneWithVault({ env: { GH_TOKEN: 'from-container-env' } });
+    say(withoutRow.clone);
+    await waitFor(() => withoutRow.calls.length > 0, 'セッションが開くこと（行なし）');
+    withoutRow.clone.stop();
+
+    expect(withRow.calls[0]?.options.env?.GH_TOKEN).toBe('from-container-env');
+    expect(withoutRow.calls[0]?.options.env?.GH_TOKEN).toBe(
+      withRow.calls[0]?.options.env?.GH_TOKEN,
+    );
   });
 });
 
