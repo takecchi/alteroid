@@ -205,6 +205,27 @@ describe.each([
       expect(del.status).toBe(404);
     });
 
+    /**
+     * マネージャー指摘（フォローアップの2回目）。`GET /practices/:slug` は
+     * `PUT`/`DELETE` と違い読めない行で投げるままにしたが（`practice_read`
+     * と同じ理由）、素の 500（`onError` 任せ）の代わりに 409 を返すように
+     * 変えた——これは API の応答の形そのものを新しく変えた変更（`openapi.json`
+     * にも載った）なので、専用の歯を持つ。
+     */
+    it('GET /practices/:slug は壊れた行があると 409 を返し、本文（title/content）は応答に載らない', async () => {
+      const get = await app.request(`/practices/${BAD_SLUG}`);
+      const body = (await get.json().catch(() => undefined)) as unknown;
+      expect(get.status, `本文: ${JSON.stringify(body)}`).toBe(409);
+      const joined = JSON.stringify(body);
+      expect(joined).not.toContain(BAD_TITLE);
+      expect(joined).not.toContain(BAD_CONTENT);
+    });
+
+    it('GET /practices/:slug は本当に無い slug なら今までどおり 404（409 との対照）', async () => {
+      const get = await app.request('/practices/never-existed');
+      expect(get.status).toBe(404);
+    });
+
     it('practice_write は壊れた行があっても書き直せる（直す前は read() の throw で例外）', async () => {
       const call = toolCaller(stores);
       const result = await call('practice_write', {
