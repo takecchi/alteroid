@@ -163,7 +163,8 @@ describe('mutate-selftest: 印が残った状態で selftest を起こすと、�
     // `ROOT`/`MARKER_PATH`/`BACKUP_DIR` だけを経由する）。⟹ ここに印を
     // 置いても selftest は起動を拒否しない。
     const harness = makeIsolatedHarnessCopy('mutate-selftest-marker-guidance-harness-erase-');
-    const preplacedMarkerContent = '{"probe":"mutate-selftest-marker-guidance-preexisting-marker"}\n';
+    const preplacedMarkerContent =
+      '{"probe":"mutate-selftest-marker-guidance-preexisting-marker"}\n';
     fs.writeFileSync(harness.markerPath, preplacedMarkerContent);
 
     const tmp = makeTempDirSync('mutate-selftest-marker-guidance-erase-');

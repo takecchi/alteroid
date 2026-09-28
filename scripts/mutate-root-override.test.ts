@@ -357,7 +357,9 @@ describe('mutate.mjs CLI: --root（回帰・上書き・fail-closed・実効 ROO
         to: 'HELLO',
         expect: 1,
         target: null,
-        mustFail: ['root-override-erase-probe はこの歯で judge を呼ばない（apply/restore のみを測る）'],
+        mustFail: [
+          'root-override-erase-probe はこの歯で judge を呼ばない（apply/restore のみを測る）',
+        ],
       }),
     );
 
