@@ -2787,6 +2787,196 @@ describe('chat の /journal', () => {
 
     expect(read()).not.toContain('これより古い日誌があるかもしれない');
   });
+
+  /**
+   * **issue #2016**: `worker_wait` / `turn_usage` / `context_usage` /
+   * `inbox_flow` の4種は `summarize()` の6キー（`text`/`decision`/`question`/
+   * `summary`/`body`/`tool`）のどれも持たないため、要約が空欄のまま出て
+   * いた（`  <at>  [worker_wait] ` の後ろに何も出ない）。Web
+   * （`apps/web/app/hooks/queries.ts` の `summarizeJournalEntry`）と同じ
+   * 文言を `@alteroid/core/journal-diagnostics-format` から借りて埋める。
+   */
+  describe('issue #2016 — worker_wait / turn_usage / context_usage / inbox_flow の要約', () => {
+    it('worker_wait は空欄ではなく、待った内訳を出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-ww',
+            at: '2026-09-01T00:00:00.000Z',
+            type: 'worker_wait',
+            openedAt: '2026-08-31T23:00:00.000Z',
+            tasks: 3,
+            turns: 10,
+            byCause: { input: 1, notification: 2, continuation: 7 },
+            toolless: 4,
+            notifications: 2,
+            submits: 1,
+            settled: true,
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('[worker_wait]');
+      expect(text).toContain('作業者 3 体を待つあいだに 10 ターン');
+      expect(text).toContain('自己継続 7');
+      expect(text).toContain('道具を1つも動かしていない');
+      // 空欄のまま出ていた旧挙動（見出しの直後に改行のみ）へ戻っていないこと。
+      expect(text).not.toMatch(/\[worker_wait\]\s*\n/);
+    });
+
+    it('turn_usage は空欄ではなく、cache read/write を出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-tu',
+            at: '2026-09-01T00:05:00.000Z',
+            type: 'turn_usage',
+            layer: 'clone',
+            site: 'session',
+            managerId: 'clone',
+            models: {
+              'claude-fable-5': {
+                inputTokens: 10,
+                outputTokens: 20,
+                cacheReadInputTokens: 120,
+                cacheCreationInputTokens: 40,
+                webSearchRequests: 0,
+                costUsd: 0.5,
+              },
+            },
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('[turn_usage]');
+      expect(text).toContain('read=120');
+      expect(text).toContain('write=40');
+      expect(text).not.toMatch(/\[turn_usage\]\s*\n/);
+    });
+
+    it('context_usage は空欄ではなく、成否と文脈占有を出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-cu',
+            at: '2026-09-01T00:10:00.000Z',
+            type: 'context_usage',
+            layer: 'manager',
+            site: 'session',
+            managerId: 'mgr-1',
+            turnSucceeded: false,
+            contextUsage: { percentage: 42, totalTokens: 1000 },
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('[context_usage]');
+      expect(text).toContain('ターン失敗');
+      expect(text).toContain('文脈 42%');
+      expect(text).not.toMatch(/\[context_usage\]\s*\n/);
+    });
+
+    it('inbox_flow は空欄ではなく、到着/配達/消し込み/滞留の4軸を出す', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-if',
+            at: '2026-09-01T00:15:00.000Z',
+            type: 'inbox_flow',
+            windowStartedAt: '2026-09-01T00:00:00.000Z',
+            arrived: { total: 5, byType: [] },
+            delivered: { total: 4, byType: [] },
+            settled: { total: 3, byType: [] },
+            pending: { count: 2, oldestAt: '2026-09-01T00:00:00.000Z' },
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('[inbox_flow]');
+      expect(text).toContain('到着5');
+      expect(text).toContain('配達4');
+      expect(text).toContain('消し込み3');
+      expect(text).toContain('滞留2');
+      expect(text).not.toMatch(/\[inbox_flow\]\s*\n/);
+    });
+
+    /**
+     * **陰性**: 4種を直す変更が、既に空欄ではなかった既存の種別の要約を
+     * 変えていないこと。`escalation` は `question` キーの duck typing で
+     * 従来どおり素の質問文が出る——共有の口（`journal-diagnostics-format.ts`
+     * の書式。`確認: …`のような接頭辞を付ける）へ倒していないことを確かめる。
+     */
+    it('（陰性）escalation の要約は従来どおり素の質問文のまま変わらない', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-esc',
+            at: '2026-09-01T00:20:00.000Z',
+            type: 'escalation',
+            approvalId: 'ap-1',
+            question: '進めてよいですか？',
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('進めてよいですか？');
+      expect(text).not.toContain('確認: ');
+      expect(text).not.toContain('回答済: ');
+    });
+
+    /**
+     * **陰性**: `decision` / `tool_use` など、他の既存種別も従来どおり
+     * duck typing のまま（6キーのうち先頭に当たったものをそのまま出す）。
+     */
+    it('（陰性）decision と tool_use の要約は従来どおり', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-dec',
+            at: '2026-09-01T00:25:00.000Z',
+            type: 'decision',
+            decision: 'この案で進める',
+            grounds: '費用が見合う',
+          },
+          {
+            id: 'j-tool',
+            at: '2026-09-01T00:26:00.000Z',
+            type: 'tool_use',
+            actor: 'clone',
+            tool: 'memory_write',
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('この案で進める');
+      expect(text).not.toContain('費用が見合う');
+      expect(text).toContain('memory_write');
+    });
+  });
 });
 
 describe('chat の /reports（一覧）', () => {
