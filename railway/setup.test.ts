@@ -107,6 +107,32 @@ function configInputChildEnv(): NodeJS.ProcessEnv {
 }
 
 /**
+ * `configInputAsync` が実際に使う `spawn` 呼び出しそのもの（#1895）。
+ * `bash -c <script> [...positionalArgs]` の `script` / `positionalArgs` だけを
+ * 外から選べ、`stdio` / `env: configInputChildEnv()` は `configInputAsync` の
+ * 呼び出しと**完全に同じ値へ固定**してある。
+ *
+ * **切り出した理由**: `configInputEnvLeak`（下）はこの関数ができる前、独立した
+ * 自前の `spawn('bash', …, { env: configInputChildEnv() })` を書いていた。その
+ * ため `configInputAsync` 自身の `spawn` から `env: configInputChildEnv()` が
+ * 消える退行を、その歯は捕まえられなかった（#1895。`configInputEnvLeak` 自身は
+ * 消していない — 別に残したまま、この関数を経由する歯を追加した）。
+ * `configInputAsyncSpawnEnvLeak`（下）はここを直接呼ぶことで、
+ * `configInputAsync` が使うのと同じ経路を測る。
+ *
+ * **挙動は変えていない** — `configInputAsync` が渡す引数・オプションは
+ * 切り出す前と1文字も変わらない（`script` に
+ * `'source "$0"; config_input "$1"'`、`positionalArgs` に
+ * `[join(RAILWAY_DIR, 'lib.sh'), file]` を渡すだけ）。
+ */
+function spawnConfigInputChild(script: string, positionalArgs: string[] = []) {
+  return spawn('bash', ['-c', script, ...positionalArgs], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: configInputChildEnv(),
+  });
+}
+
+/**
  * `railway/*.json を Service の設定へ写す` describe が使う軽い経路
  * （`lib.sh` の `config_input` だけを `bash -c` で走らせる。`setup.sh` 本体は
  * 起こさない）。**軽くても、プロセスを起こしている以上 `it` の中では呼ばない**
@@ -117,11 +143,10 @@ function configInputAsync(config: unknown): Promise<ConfigInputResult> {
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify(config));
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      'bash',
-      ['-c', 'source "$0"; config_input "$1"', join(RAILWAY_DIR, 'lib.sh'), file],
-      { stdio: ['ignore', 'pipe', 'pipe'], env: configInputChildEnv() },
-    );
+    const child = spawnConfigInputChild('source "$0"; config_input "$1"', [
+      join(RAILWAY_DIR, 'lib.sh'),
+      file,
+    ]);
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
@@ -176,6 +201,12 @@ type Scenarios = {
   configMissingStartCommand: ConfigInputResult;
   /** `configInputChildEnv()` を渡した子が、偽の機微変数をどう見たか（#1832）。 */
   configInputEnvLeak: string;
+  /**
+   * `configInputAsync` 自身が使う `spawnConfigInputChild` を直接呼んだ子が、
+   * 偽の機微変数をどう見たか（#1895）。`configInputEnvLeak`（上）とは別の
+   * spawn 経路（`configInputAsync` と共有するほう）を測る。
+   */
+  configInputAsyncSpawnEnvLeak: string;
 };
 
 let scenarios: Scenarios;
@@ -549,6 +580,40 @@ async function prepareScenarios(): Promise<Scenarios> {
     }
   });
 
+  // **`configInputAsync` が使うのと同じ spawn 経路を測る（#1895）。**
+  // 上の `configInputEnvLeak` は独立した自前の `spawn` を書いているため、
+  // `configInputAsync` 自身が使う `spawnConfigInputChild` の `env` が消える
+  // 退行を捕まえない（この歯を追加する理由そのもの。詳しい経緯は
+  // `spawnConfigInputChild` 直前のコメント）。親の process.env に偽の機微変数を
+  // 置き、`spawnConfigInputChild` を直接呼んだ子に読ませて確かめる。
+  task('configInputAsyncSpawnEnvLeak', async () => {
+    const key = 'FAKE_SECRET_FOR_TEST_1895';
+    const before = process.env[key];
+    process.env[key] = 'not-a-real-value';
+    try {
+      s.configInputAsyncSpawnEnvLeak = await new Promise<string>((resolve, reject) => {
+        const child = spawnConfigInputChild(`printf '%s' "\${${key}:-}"`);
+        let stdout = '';
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          stdout += chunk;
+        });
+        child.on('error', (err) => {
+          reject(err);
+        });
+        child.on('close', () => {
+          resolve(stdout);
+        });
+      });
+    } finally {
+      if (before === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = before;
+      }
+    }
+  });
+
   return settle(cpus().length);
 }
 
@@ -652,6 +717,14 @@ describe('テスト自身が setup.sh に渡す環境', () => {
   // 経由しない別の spawn なので、上のテストではここの穴を見張れない（#1832）。
   it('config_input を走らせる子にも、親の process.env にある偽の機微変数は届かない', () => {
     expect(scenarios.configInputEnvLeak).toBe('');
+  });
+
+  // **上のテストは `configInputAsync` 自身の spawn を経由しない（#1895）。**
+  // `configInputAsync` が実際に使う `spawnConfigInputChild` を直接呼んだ子で
+  // 同じことを確かめる — `configInputAsync` の `spawn` から
+  // `env: configInputChildEnv()` が消える退行は、この歯でしか捕まえられない。
+  it('configInputAsync が実際に使う spawn 経路にも、親の process.env にある偽の機微変数は届かない', () => {
+    expect(scenarios.configInputAsyncSpawnEnvLeak).toBe('');
   });
 });
 
