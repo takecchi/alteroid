@@ -665,6 +665,122 @@ function blankQuotedValueInterior(quoted: string): string {
 }
 
 /**
+ * `computeOutsideQuoteMask` が返す、走査位置ごとの状態。
+ *
+ * - `outside`: どちらの引用符の中にも居ない（bash の「素の」構文位置）
+ * - `single`: 単一引用符の中
+ * - `double`: 二重引用符の中
+ * - `unknown`: これ以上は確信を持って追えない（末尾がバックスラッシュで
+ *   終わる等）。**一度なったら残り全部が `unknown` のまま**（sticky）。
+ */
+type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'unknown';
+
+/**
+ * `command` の各文字位置について、「その位置の**直前まで**実際に bash の
+ * 引用符規則で追った結果、引用符の外（`outside`）だと確信できるか」を表す
+ * 真偽値の配列を返す（issue #1910 のレビュー指摘・指摘3、PR #1990）。
+ *
+ * ## なぜこれが要るか
+ *
+ * `SUBJECT_BODY_QUOTED_VALUE_RE` はコマンド文字列全体に対して素朴な正規
+ * 表現一致で当たるだけで、**引用符の開き閉じそのものを追っていない**。
+ * そのため、単一引用符（または二重引用符）の**中に書かれた** `--subject "`
+ * （または `-t '`）という**字面**を、本物のフラグ+開き引用符だと誤読
+ * できる。実例（bash の実際の argv 分割を `argv-dump.sh` で検証済み、
+ * `bash-wait-guard-delete-branch-quoted-values.test.ts` に生出力の要約が
+ * ある）:
+ *
+ * ```
+ * gh pr merge 1 x'y --subject "' --delete-branch '"'
+ * ```
+ *
+ * bash の読み: `x` + 単一引用符 `'y --subject "'`（1つの引数に結合）+
+ * **本物の、引用符無しの `--delete-branch`** + 単一引用符 `'"'`。
+ *
+ * 正規表現の読み（このマスクが無い版）: `--subject ` の直後に来た `"`
+ * （単一引用符の中の、ただの文字としての `"`）を開き引用符と誤認し、次の
+ * `"`（末尾の単一引用符 `'"'` の中の `"`）までを二重引用符の値だと思い込み、
+ * その中身（本物の `--delete-branch` を含む）を丸ごと空白へ潰してしまう。
+ *
+ * ⟹ 上の「区間で絞ることをやめても安全な理由」（`gh pr merge` の呼び出し
+ * 区間で絞らなくても、引用符の外側の文字には触れないから安全、という説明）
+ * は**不十分だった**——「引用符の外側」かどうかを正規表現の見た目でしか
+ * 判定しておらず、**本物の引用符の中に書かれた字面が作る「偽の引用符」**
+ * まで「外側」と誤認しうることを見落としていた。
+ *
+ * ## 状態機械の規則（bash の実際の引用符規則をなぞる）
+ *
+ * - `outside`（引用符の外）: `\` は直後の1文字を無条件にエスケープして
+ *   読み飛ばす（2文字消費、状態は `outside` のまま）。`'` で `single` へ、
+ *   `"` で `double` へ遷移する。それ以外はただの文字。
+ * - `single`（単一引用符の中）: bash の単一引用符にはエスケープの仕組みが
+ *   無いので、次の `'` が無条件に閉じ引用符（`outside` へ戻る）。それ以外は
+ *   （`"` も `\` も）すべてただの文字。
+ * - `double`（二重引用符の中）: `\` は直後の1文字を読み飛ばす（2文字消費、
+ *   状態は `double` のまま——bash は `\"`/`\\`/`` \` ``/`\$` 等だけを特別
+ *   扱いするが、この状態機械はより保守的に「バックスラッシュの直後は常に
+ *   エスケープ」として扱う。過剰に読み飛ばす分には「閉じ引用符を早めに
+ *   認識しすぎる」方向にしか倒れず、`outside` と誤認する方向には倒れない
+ *   ——安全側）。それ以外の `"` で `outside` へ戻る。
+ * - **末尾がバックスラッシュで終わる**（エスケープする相手の文字が無い）
+ *   場合は `unknown` へ遷移し、**以降ずっと `unknown` のまま**（sticky）。
+ *   `unknown` の位置は「外側だと確信できない」ので `false` を返す——弾く側
+ *   に倒す。
+ *
+ * ## なぜフラグの開始位置だけ見ればよいか
+ *
+ * `--subject`/`-t`/`--body`/`-b` という字面自体、`=`、空白のどれも引用符・
+ * バックスラッシュを含まない。⟹ フラグの開始位置の状態が `outside` なら、
+ * その直後（フラグ+区切りぶん進んだ、実際の引用符が始まる位置）の状態も
+ * 同じ `outside` のまま——別々に確かめる必要が無い。
+ *
+ * ## 完全な shell 構文解析ではない
+ *
+ * `$(...)`/`` `...` ``（コマンド置換）の中身は、bash では新しい構文解析
+ * 文脈として扱われる（中の引用符はその文脈の中で閉じていればよい）。この
+ * 状態機械はその入れ子を認識せず、コマンド置換の中の引用符も外側と地続き
+ * の1本の状態として追う。**引用符が中で正しく閉じている（バランスが取れ
+ * ている）普通の書き方なら、これでも実質的に同じ結果になる**——このファ
+ * イル全体が「完全な shell 構文解析器ではない」前提（doc 冒頭）の上に
+ * 立っており、意図的に踏み込まない。
+ */
+function computeOutsideQuoteMask(command: string): boolean[] {
+  const mask: boolean[] = new Array(command.length);
+  let state: OutsideQuoteScanState = 'outside';
+  for (let i = 0; i < command.length; i++) {
+    mask[i] = state === 'outside';
+    if (state === 'unknown') continue;
+    const ch = command[i];
+    if (state === 'outside') {
+      if (ch === '\\') {
+        if (i + 1 >= command.length) {
+          state = 'unknown';
+        } else {
+          i += 1;
+        }
+      } else if (ch === "'") {
+        state = 'single';
+      } else if (ch === '"') {
+        state = 'double';
+      }
+    } else if (state === 'single') {
+      if (ch === "'") state = 'outside';
+    } else if (state === 'double') {
+      if (ch === '\\') {
+        if (i + 1 >= command.length) {
+          state = 'unknown';
+        } else {
+          i += 1;
+        }
+      } else if (ch === '"') {
+        state = 'outside';
+      }
+    }
+  }
+  return mask;
+}
+
+/**
  * `--subject`/`-t`/`--body`/`-b` の値として渡された、きれいに閉じている
  * 引用符の中身だけを、コマンド文字列全体から空白へ潰す（issue #1910）。
  *
@@ -687,26 +803,33 @@ function blankQuotedValueInterior(quoted: string): string {
  * `SUBJECT_BODY_QUOTED_VALUE_RE` を当てる形にした。引用符の中身を探す正規表現
  * （`[^"\\]*` / `[^']*`）はもともと `&`/`;`/`|` を特別扱いしていない —— 次の
  * 閉じ引用符が来るまでをそのまま値として読むので、値の中に演算子の字面が
- * 在っても正しく閉じ位置まで読める。**区間で絞ることをやめても安全な理由**:
- * この置換が潰すのは「`--subject`/`-t`/`--body`/`-b` の直後に来た、きれいに
- * 閉じている引用符の中身」だけであり、`gh pr merge` かどうかに関係なく、
- * 引用符の外側の文字（本物のフラグ・別のコマンドの一部）には一切触れない。
- * ⟹ 万一これが `gh pr merge` と無関係な箇所（別のコマンドの `-t`/`-b` 等）に
- * 当たっても、潰すのはその引用符の中身だけなので、`GH_PR_MERGE_DELETE_BRANCH_RE`
- * が実際に見る「`gh pr merge` から次の境界まで」の外側の判定には影響しない
- * ——本物の `--delete-branch`/`-d`（引用符の外に在るもの）を見逃す経路には
- * ならない。
+ * 在っても正しく閉じ位置まで読める。
+ *
+ * ⚠️ **ただし区間で絞らないことの安全性の説明は、当初これだけでは不十分
+ * だった**（PR #1990 のレビュー指摘・指摘3）。「引用符の外側の文字には
+ * 一切触れない」という主張は、正規表現の見た目上の引用符しか見ておらず、
+ * **本物の引用符の中に書かれた字面が作る「偽の `--subject "`/`-t '`」**
+ * まで「外側の本物のフラグ」と誤読しうることを見落としていた（実例・
+ * 直し方は `computeOutsideQuoteMask` の doc）。⟹ 潰す前に、一致した位置が
+ * `computeOutsideQuoteMask` で「引用符の外」だと確信できるかを確かめ、
+ * 確信できないときは（区間の内外を問わず）潰さない。
  *
  * **潰さない（＝弾く側に倒す）場合**: 二重引用符の中にバックスラッシュが
  * 在る（エスケープを含みうるので「読めない」と判断する）・引用符が閉じて
  * いない・そもそも `--subject`/`-t`/`--body`/`-b` の値として引用符が来て
- * いない。これらはこの関数が単に一致しないので、元の文字列がそのまま残り、
- * 中に本物の `--delete-branch`/`-d` の字面が在れば引き続き検出される。
+ * いない・**一致した `--subject`/`-t`/`--body`/`-b` の字面が、実際には
+ * 別の（本物の）引用符の中に在る**（今回加えた条件）。これらはこの関数が
+ * 元の文字列をそのまま残すので、中に本物の `--delete-branch`/`-d` の字面が
+ * 在れば引き続き検出される。
  */
 function stripGhPrMergeQuotedSubjectBodyValues(command: string): string {
+  const outsideQuoteMask = computeOutsideQuoteMask(command);
   return command.replace(
     SUBJECT_BODY_QUOTED_VALUE_RE,
-    (_whole, flagPart: string, value: string) => flagPart + blankQuotedValueInterior(value),
+    (whole: string, flagPart: string, value: string, offset: number) => {
+      if (!outsideQuoteMask[offset]) return whole;
+      return flagPart + blankQuotedValueInterior(value);
+    },
   );
 }
 
