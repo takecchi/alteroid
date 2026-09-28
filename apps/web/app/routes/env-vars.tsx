@@ -158,6 +158,16 @@ function EnvVarRow({
         <p className="mt-2 text-[11px] break-words text-warn">
           ⚠ GitHub の名前で、デーモン（クローン）の器の環境変数の値が優先して配られている
           （正本のこの行はどこにも配られていない）。
+          {entry.scope === 'app' &&
+            // **scope: app は他の scope と挙動が違う（issue #1894）。** この行は
+            // manager に配布されない（issue #1867）ので、上の一文だけでは
+            // 「manager も器の env で走っている」と読めてしまう——実際は
+            // manager にはこの名前が何も配られていない。そして「配られていない」
+            // からといってこの行を外すと、その名前は manager にも配られ始める
+            // （scope で閉じた先へ届く）。
+            ' scope: app（clone だけ）のこの名前は、manager にはいま何も配られて' +
+              'いない。この行を外すと、器の環境変数の値が manager にも配られ始める' +
+              '（scope で閉じた先へ届く）。'}
         </p>
       )}
 
