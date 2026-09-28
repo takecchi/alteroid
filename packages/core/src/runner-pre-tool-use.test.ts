@@ -595,3 +595,60 @@ describe('inputHead — PreToolUse が見た入力を拒否の合図へ運ぶ（
     expect(denials[0]?.inputHead).toBeUndefined();
   });
 });
+
+/**
+ * issue #1960: Bash のガードが「弾く」と決めた後、deny を返す前に呼ぶ `emit`（note の
+ * 送り出し。runner の外から渡される関数）が投げると、以前は `#onPreToolUse` 自体が
+ * 例外で終わり、deny が返らなかった。SDK はフックの例外を CLI へ error として返し、
+ * CLI はそれを「ブロックしない」として通常の許可の流れへ戻す（`hook_callback_failed`
+ * → `blocked: false`。issue #1960 の実測）——つまりガードが素通りになる。
+ *
+ * ここでは、note の送り出しが投げても deny が返ることを固定する。
+ */
+describe('ガードの deny は、判定の周りの例外で消えない（issue #1960）', () => {
+  function setupWithThrowingNoteEmit(): { host: RunnerHost; started: Started[] } {
+    const { fn, started } = fakeRunnerSdk();
+    host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: dir,
+      emit: (event) => {
+        if (event.type === 'note') throw new Error('emit が落ちた（テスト用）');
+      },
+      queryFn: fn,
+      env: {},
+    });
+    return { host, started };
+  }
+
+  it('弾く形の Bash は、note の送り出しが投げても deny を返す', async () => {
+    const s = setupWithThrowingNoteEmit();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'tail -f /tmp/run.log' },
+    });
+
+    expect(result).toMatchObject({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' },
+    });
+  });
+
+  it('対照: 弾かない形の Bash は、note の送り出しが投げる設定でも今までどおり通す', async () => {
+    const s = setupWithThrowingNoteEmit();
+    await s.host.start({ managerId: 'mgr-1', request: '走る', cwd: dir });
+    const started = s.started[0];
+    if (started === undefined) throw new Error('セッションが開いていない');
+
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+    });
+
+    expect(result).toEqual({ continue: true });
+  });
+});
