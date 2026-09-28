@@ -5,6 +5,7 @@ import type { CgroupEventsDeltaLike } from './cgroup-events-format.js';
 import { cgroupEventsDeltaSchema, type CgroupEventsDelta } from './cgroup-events.js';
 import { CRON_EXPRESSION_MAX, isCronExpression } from './cron.js';
 import type { JobStatusLike } from './job-status-running.js';
+import type { JournalDiagnosticsEntryLike } from './journal-diagnostics-format.js';
 import type { SystemErrorFactsLike } from './system-error-format.js';
 import { systemErrorFactsSchema, type SystemErrorFacts } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
@@ -2354,6 +2355,30 @@ export type JournalEntryType = JournalEntry['type'];
  */
 export type _AssertTraceActionMatchesLikeType = AssertTrue<
   JournalEntry extends TraceActionLike ? true : false
+>;
+
+/**
+ * `journal-diagnostics-format.ts` の {@link JournalDiagnosticsEntryLike}
+ * （手書き）が、この zod スキーマから推論した {@link JournalEntry} の4種
+ * （`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow`）を
+ * 構造的に受け付けることの強制（issue #2016）。**`_AssertTraceActionMatchesLikeType`
+ * と同じ形**——軽い口（`journal-diagnostics-format.ts`）は zod を import
+ * できないので、`summarizeJournalDiagnosticsEntry` が実際に読む欄だけを
+ * 手で書き写している。
+ *
+ * **双方向の完全一致ではなく片方向**（この4種 `extends`
+ * `JournalDiagnosticsEntryLike`）。`JournalDiagnosticsEntryLike` は意図して
+ * 「実際に読む欄だけの最小の型」であって4種の完全な写しではないので、
+ * 双方向にすると `id` / `at` などのぶんで必ず落ちる
+ * （`journal-diagnostics-format.ts` 冒頭の doc）。
+ */
+export type _AssertJournalDiagnosticsMatchesLikeType = AssertTrue<
+  Extract<
+    JournalEntry,
+    { type: 'worker_wait' | 'turn_usage' | 'context_usage' | 'inbox_flow' }
+  > extends JournalDiagnosticsEntryLike
+    ? true
+    : false
 >;
 
 export type DailyReport = Extract<JournalEntry, { type: 'daily_report' }>;

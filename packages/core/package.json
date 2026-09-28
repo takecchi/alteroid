@@ -55,6 +55,10 @@
     "./unpushed-work-observation-format": {
       "types": "./dist/unpushed-work-observation-format.d.ts",
       "import": "./dist/unpushed-work-observation-format.js"
+    },
+    "./journal-diagnostics-format": {
+      "types": "./dist/journal-diagnostics-format.d.ts",
+      "import": "./dist/journal-diagnostics-format.js"
     }
   },
   "files": [

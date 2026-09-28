@@ -5,6 +5,7 @@
  * 区切りで衝突しうるし、何のキャッシュなのかが読めない。`{type: ...}` にしておけば
  * `mutate` 側でも同じ形で指せる（`app/hooks/use-journal-live.ts`）。
  */
+import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 import useSWR from 'swr';
 
 import { unwrap, useApi } from '~/lib/api';
@@ -625,23 +626,6 @@ export function useArchiveSessions() {
   return useSWR(KEY.archiveSessions, () => api.api.GET('/archive/sessions').then(unwrap));
 }
 
-/**
- * `contextUsage` から「 文脈 X%（Y トークン）」の断片を作る（先頭に半角
- * スペースを含む。無ければ空文字）。`turn_usage`（欄が optional）と
- * `context_usage`（欄が必須）の両方の `summarizeJournalEntry` から呼ぶ
- * 共通部分——書き方を2箇所で複製しない（#976 で `context_usage` を
- * 足すときに揃えた）。
- */
-function contextUsageNote(
-  context: { percentage?: number; totalTokens?: number } | undefined,
-): string {
-  if (context === undefined || context.percentage === undefined) return '';
-  return (
-    ` 文脈 ${context.percentage}%` +
-    (context.totalTokens === undefined ? '' : `（${context.totalTokens} トークン）`)
-  );
-}
-
 /** 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。 */
 export function summarizeJournalEntry(entry: JournalEntry): string {
   switch (entry.type) {
@@ -695,55 +679,17 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
     case 'external_event':
       return `${entry.source}: ${entry.summary}`;
-    case 'worker_wait': {
-      const cause = entry.byCause;
-      return (
-        `作業者 ${entry.tasks} 体を待つあいだに ${entry.turns} ターン` +
-        `（通知 ${cause.notification} / 自己継続 ${cause.continuation} / 話しかけ ${cause.input}）。` +
-        `うち ${entry.toolless} ターンは道具を1つも動かしていない` +
-        (entry.settled ? '' : '（区間は閉じずに終わった）')
-      );
-    }
-    case 'turn_usage': {
-      // **キャッシュの書き直しを潰さない**（read/write を分けたまま見せる。
-      // 潰すと「キャッシュ書き直しに払っているか」が推測に戻る）。数え直しの
-      // 印は隠さない — 印の行を一覧から見えなくすると誤読を招く。
-      const models = Object.entries(entry.models);
-      const totalCost = models.reduce((sum, [, totals]) => sum + totals.costUsd, 0);
-      const cacheWrite = models.reduce(
-        (sum, [, totals]) => sum + totals.cacheCreationInputTokens,
-        0,
-      );
-      const cacheRead = models.reduce((sum, [, totals]) => sum + totals.cacheReadInputTokens, 0);
-      // **⚠️ Issue #976 以降、これは唯一の経路ではない。** 独立した
-      // `context_usage`（下のケース）が、失敗したターン・増分がゼロだった
-      // ターンも含めて必ず残す——この欄は「成功して増分もあった回」に限り
-      // 従来どおり載る（既存の読み手との互換のため）。
-      const contextNote = contextUsageNote(entry.contextUsage);
-      const compactionNote =
-        entry.compactions === undefined || entry.compactions.length === 0
-          ? ''
-          : ` ⚠ compaction ${entry.compactions.length} 回`;
-      return (
-        `[${entry.layer}/${entry.site}] ${entry.managerId} 1ターン $${totalCost.toFixed(4)}` +
-        `（cache read=${cacheRead} write=${cacheWrite}）` +
-        contextNote +
-        compactionNote +
-        (entry.reset === undefined ? '' : ' ⚠ 数え直しを挟んだ回（models は差分ではない）')
-      );
-    }
-    case 'context_usage': {
-      // **消費（`turn_usage`）とは独立の行（Issue #976）。** 失敗したターン
-      // （`turnSucceeded: false`）こそがこの型の存在理由——#976 より前は
-      // どこにも残らなかった値である。
-      const context = entry.contextUsage;
-      const status = entry.turnSucceeded ? '成功' : '失敗';
-      const note =
-        context.error !== undefined
-          ? `測れなかった（${context.error}）`
-          : contextUsageNote(context).trim() || '（詳細なし）';
-      return `[${entry.layer}/${entry.site}] ${entry.managerId} ターン${status}: ${note}`;
-    }
+    // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow` は
+    // `@alteroid/core/journal-diagnostics-format` へ移した（issue #2016）。**
+    // CLI（`apps/cli/src/chat.ts` の `/journal`）がこの4種の要約を空欄の
+    // まま出していたため、同じ文言を CLI とここで共有する口として切り出した
+    // ——文言・ロジックは1文字も変えていない（移設のみ。
+    // `journal-diagnostics-format.ts` 冒頭の doc）。
+    case 'worker_wait':
+    case 'turn_usage':
+    case 'context_usage':
+    case 'inbox_flow':
+      return summarizeJournalDiagnosticsEntry(entry);
     case 'token_rotation':
       // **`text` をそのまま出す。** ここで組み直すと、同じ事実を読む4つの面
       // （stderr・この画面・クローンの `journal_read`・CLI）で言い方が分かれる。
@@ -775,21 +721,6 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
         `作業者 ${entry.agentId}${agentType} が自分で起こした背景処理を ` +
         `${entry.ownedTaskCount}件 残したまま畳もうとした（セッション全体 ${entry.sessionTaskCount}件）: ` +
         outcome
-      );
-    }
-    case 'inbox_flow': {
-      // **4つの総数を1行に並べる（Issue #783 段0）。** この種別の読み方は
-      // 窓どうしを並べた推移で、1行に潰すときも**4つの軸を混ぜない**こと
-      // ——`arrived`（受理）・`delivered`（待ち行列へ載った）・`settled`
-      // （ストアから消えた）・`pending`（窓の終わりの1点）は別のものを
-      // 数えており、食い違いそのものが読む材料である（`schema.ts` の
-      // `inbox_flow` の doc）。種類別の内訳はここでは落とす —— 一覧の1行に
-      // 収まらないので、詳細は日誌の本文側で読む。
-      const oldest =
-        entry.pending.oldestAt === undefined ? '' : `（最古 ${entry.pending.oldestAt}）`;
-      return (
-        `受信箱 到着${entry.arrived.total} / 配達${entry.delivered.total} / ` +
-        `消し込み${entry.settled.total} / 滞留${entry.pending.count}${oldest}`
       );
     }
   }

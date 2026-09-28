@@ -25,6 +25,11 @@ import {
   formatCgroupEventsNote,
 } from '@alteroid/core/cgroup-events-format';
 import {
+  JOURNAL_DIAGNOSTICS_TYPES,
+  summarizeJournalDiagnosticsEntry,
+  type JournalDiagnosticsEntryLike,
+} from '@alteroid/core/journal-diagnostics-format';
+import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
@@ -3257,7 +3262,31 @@ function summarize(entry: Record<string, unknown>): string {
     const value = entry[key];
     if (typeof value === 'string') return summarizeText(value);
   }
+  // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow` の4種は
+  // 上の6キーのどれも持たず、ここまで来ると要約が空欄のまま出ていた**
+  // （issue #2016）。Web（`apps/web/app/hooks/queries.ts` の
+  // `summarizeJournalEntry`）と同じ文言を、共有の口
+  // （`@alteroid/core/journal-diagnostics-format`）から借りる——2箇所で
+  // 複製しない。残り9種（この6キーで拾えている種別）は1文字も変えない。
+  if (isJournalDiagnosticsEntry(entry)) return summarizeJournalDiagnosticsEntry(entry);
   return '';
+}
+
+/**
+ * `entry.type` が `JOURNAL_DIAGNOSTICS_TYPES`（4種）のどれかであることの
+ * 判別。**欄の形までは検査しない**——`GET /journal` はサーバ側で
+ * `journalEntrySchema` を通った行しか返さないので、`type` が一致すれば
+ * 欄の形も一致する前提を置く（`entry` を `Record<string, unknown>` で
+ * 緩く受けているのはこの関数の呼び出し元と同じ理由——`chat.test.ts` の
+ * `JournalEntryLike` と同じ緩さ）。
+ */
+function isJournalDiagnosticsEntry(
+  entry: Record<string, unknown>,
+): entry is JournalDiagnosticsEntryLike {
+  return (
+    typeof entry.type === 'string' &&
+    (JOURNAL_DIAGNOSTICS_TYPES as readonly string[]).includes(entry.type)
+  );
 }
 
 function summarizeText(value: string): string {

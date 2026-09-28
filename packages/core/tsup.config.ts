@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 14個出す。
+   * 15個出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -117,6 +117,19 @@ export default defineConfig({
    *   した型と構造的に一致することは `schema.ts` の型レベルの検査
    *   （`_AssertUnpushedWorkObservationIncompletenessMatchesLikeType`）が
    *   保証する。
+   * - `journal-diagnostics-format.ts` — 日誌の4種（`worker_wait` /
+   *   `turn_usage` / `context_usage` / `inbox_flow`）を1行の要約へ潰す表示
+   *   （issue #2016。`@alteroid/core/journal-diagnostics-format`）。
+   *   **`trace-action.ts` と同じ形**——CLI（`apps/cli/src/chat.ts` の
+   *   `/journal` の `summarize()`）はこの4種を扱う分岐を持たず要約が
+   *   空欄になっていた。正本は元々 Web UI（`queries.ts` の
+   *   `summarizeJournalEntry`）のこの4種の枝だったものをここへ移し、CLI・
+   *   Web の両方がここから引く。`trace-action.ts` と同じ理由で13種のうち
+   *   実際に要る4種だけを手で書き写した（残り9種を複製すると「複製を
+   *   やめる」目的に反する——ファイル冒頭の doc）。ファイル自身は import を
+   *   1つも持たない——zod スキーマから推論した型と構造的に一致することは
+   *   `schema.ts` の型レベルの検査
+   *   （`_AssertJournalDiagnosticsMatchesLikeType`）が保証する。
    */
   entry: [
     'src/index.ts',
@@ -133,6 +146,7 @@ export default defineConfig({
     'src/cgroup-events-format.ts',
     'src/system-error-format.ts',
     'src/unpushed-work-observation-format.ts',
+    'src/journal-diagnostics-format.ts',
   ],
   format: ['esm'],
   dts: true,
