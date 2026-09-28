@@ -360,13 +360,6 @@ export const ALLOWLIST = [
       '別担当の領域。Issue #1854 の同コメントが「別担当の領域なので触っていないもの」' +
       'として明示している。この PR（#1935）ではこのファイルを書き換えない。',
   },
-  {
-    path: 'packages/core/src/sdk-withdrawn-delivery/real-sdk-close-timing.test.ts',
-    reason:
-      'Issue #1854 の在庫に残る「未着手」（同コメント）——' +
-      'SDK の起こし方（`PATH` が要るか）を確かめてから決めるとされており、' +
-      'この PR（#1935）の範囲では判断材料が無いため直さない。',
-  },
 ];
 
 /**

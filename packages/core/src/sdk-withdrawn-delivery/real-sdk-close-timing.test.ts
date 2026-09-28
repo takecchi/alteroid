@@ -117,7 +117,35 @@ function startQuery(): Harness {
       cwd: dir,
       permissionMode: 'default',
       pathToClaudeCodeExecutable: FAKE_CLI_PATH,
-      env: { ...process.env, FAKE_CLI_LOG: logPath },
+      // **親の env を丸ごとは渡さない（Issue #1854 の在庫）。** 渡すのは
+      // 子（偽 CLI）が実際に要る2つの鍵だけである:
+      //
+      // - `PATH` — SDK 自身が `node_modules/@anthropic-ai/claude-agent-sdk`
+      //   の `sdk.mjs` の中で `child_process.spawn` を直接使っており
+      //   （`import{spawn as nFe}from"child_process"`。`getDefaultExecutable()`
+      //   は絶対パスではなく `"node"` という**コマンド名**を返す）、渡した
+      //   `env` に `PATH` が無いと Node の spawn がそのコマンドを解決できず
+      //   タイムアウトする——実測: `env: { FAKE_CLI_LOG: logPath }`
+      //   （`PATH` を落とした形）で試したところ、(a)(b) 両方が
+      //   `Test timed out in 10000ms` で落ちた（偽 CLI 側の
+      //   `FAKE_CLI_LOG` が一度も作られない＝そもそも起動していない）。
+      // - `FAKE_CLI_LOG` — この歯が意図して足している鍵（偽 CLI の
+      //   ログ出力先）。
+      //
+      // SDK 側の env の組み立て（`sdk.mjs`、バージョン 0.3.283）は
+      // `options.env` を指定しなければ `{...process.env}` を既定にし、
+      // 指定すれば**その中身だけ**（`{...Z}`、`process.env` とは合成しない）
+      // を子へ渡す（逐語:
+      // `let EA=...,Ot=Z?{...Z}:{...process.env};if(!Ot.CLAUDE_CODE_ENTRYPOINT)…`
+      // — `Z` は `query()` の `options.env`）。つまり `PATH` と
+      // `FAKE_CLI_LOG` の2つだけを渡せば、SDK が既定で足す
+      // `CLAUDE_CODE_ENTRYPOINT` 等はこの層で自動的に付与され、それ以外の
+      // 親の環境変数（資格情報を含む）は一切子へ渡らない。
+      //
+      // ⚠️ 確かめていないこと: Windows での挙動（`spawn` のコマンド解決に
+      // `PATHEXT` 等が絡む可能性がある）。この repo の CI は Linux だけ
+      // なので、ここでは踏み込まない。
+      env: { PATH: process.env.PATH ?? '', FAKE_CLI_LOG: logPath },
       canUseTool: () =>
         new Promise<PermissionResult>((resolve) => {
           resolveAsk?.(resolve);
