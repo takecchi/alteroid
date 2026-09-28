@@ -87,6 +87,12 @@ const RUNNER = {
   state: 'connected',
   runnerId: 'runner-a',
   workspacePath: '/work',
+  // 鍵・プロファイルの指紋を聞きに行けたか（#1947）。**省略できない欄なので、
+  // 対象にしない試験でも既定を明示して置く**（`asked` かつ空——`settings.test.tsx`
+  // の `BASE` と同じ理由）。
+  credentials: [],
+  credentialsProbe: { status: 'asked' as const },
+  profileProbe: { status: 'asked' as const },
 };
 
 describe('renderRunners', () => {
@@ -134,6 +140,9 @@ describe('renderRunners', () => {
         {
           label: 'https://runner-silent.internal',
           state: 'unreachable',
+          credentials: [],
+          credentialsProbe: { status: 'unheard' },
+          profileProbe: { status: 'unheard' },
           revision: { status: 'unheard' },
         },
       ],
@@ -207,6 +216,9 @@ describe('renderRunners', () => {
         {
           label: 'https://runner-b.internal',
           state: 'unreachable',
+          credentials: [],
+          credentialsProbe: { status: 'unheard' },
+          profileProbe: { status: 'unheard' },
           revision: { status: 'unheard' },
         },
       ],
@@ -265,6 +277,144 @@ describe('renderRunners', () => {
     });
 
     expect(text).not.toContain('直近の押し込み');
+  });
+
+  /**
+   * #1947: 鍵とプロファイルの指紋・聞けたかの3状態
+   * （`credentials`/`credentialsProbe`/`profile`/`profileProbe`）。
+   *
+   * Web（`apps/web/app/routes/settings.test.tsx`）と同じ3状態を、同じ意味で
+   * 潰さずに言い分ける——**繋がっていないので聞いていない**（`unheard`）／
+   * **聞いたが失敗した**（`failed`）／**聞いて0件だった**（`asked` かつ空）を、
+   * どれも「渡している鍵は無い」に潰すと、確かめられなかったことが確かめた
+   * 結果として端末に届く。
+   */
+  describe('鍵の指紋（credentials/credentialsProbe）', () => {
+    it('unheard のとき「確かめていない」と書き、「無い」とは言わない', () => {
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            credentials: [],
+            credentialsProbe: { status: 'unheard' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('鍵: 確かめていない（繋がっていないので聞いていない）');
+      expect(text).not.toContain('渡している鍵は無い');
+    });
+
+    it('failed のとき理由を書き、「無い」とは言わない', () => {
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            credentials: [],
+            credentialsProbe: { status: 'failed', error: 'ECONNRESET' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('鍵を確かめられなかった: ECONNRESET');
+      expect(text).not.toContain('渡している鍵は無い');
+    });
+
+    it('asked かつ空なら「渡している鍵は無い」と書く', () => {
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            credentials: [],
+            credentialsProbe: { status: 'asked' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('鍵: 渡している鍵は無い');
+    });
+
+    it('asked かつ1件以上あれば、名前と指紋を出す', () => {
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            credentials: [
+              { name: 'GH_TOKEN', sha256: 'deadbeef0001', updatedAt: '2026-09-01T00:00:00.000Z' },
+            ],
+            credentialsProbe: { status: 'asked' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('鍵の指紋: GH_TOKEN=deadbeef0001');
+    });
+  });
+
+  /** #1947: プロファイルの指紋（`profile`/`profileProbe`）。上と同じ3状態。 */
+  describe('プロファイルの指紋（profile/profileProbe）', () => {
+    it('unheard のとき「確かめていない」と書き、「置いていない」とは言わない', () => {
+      const text = renderRunners({
+        runners: [
+          { ...RUNNER, profileProbe: { status: 'unheard' }, revision: { status: 'unheard' } },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('プロファイル: 確かめていない（繋がっていないので聞いていない）');
+      expect(text).not.toContain('プロファイル: 置いていない');
+    });
+
+    it('failed のとき理由を書き、「置いていない」とは言わない', () => {
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            profileProbe: { status: 'failed', error: 'ECONNRESET' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('プロファイルを確かめられなかった: ECONNRESET');
+      expect(text).not.toContain('プロファイル: 置いていない');
+    });
+
+    it('asked かつ profile が無ければ「置いていない」と書く', () => {
+      const text = renderRunners({
+        runners: [
+          { ...RUNNER, profileProbe: { status: 'asked' }, revision: { status: 'unheard' } },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('プロファイル: 置いていない');
+    });
+
+    it('asked かつ profile があれば指紋を出す', () => {
+      const text = renderRunners({
+        runners: [
+          {
+            ...RUNNER,
+            profile: { sha256: 'abc123456789', bytes: 42, updatedAt: '2026-09-01T00:00:00.000Z' },
+            profileProbe: { status: 'asked' },
+            revision: { status: 'unheard' },
+          },
+        ],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('プロファイルの指紋: abc123456789');
+    });
   });
 });
 
