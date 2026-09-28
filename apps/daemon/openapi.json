@@ -2979,6 +2979,22 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "該当する行は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。issue #2011）。PUT /practices/:slug で書き直すか、DELETE /practices/:slug で外せる。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "parameters": [
