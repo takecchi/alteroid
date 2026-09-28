@@ -8,11 +8,65 @@ import { z } from 'zod';
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
+/**
+ * トップレベルの形だけを見る。**`grants` の各要素は `unknown` のまま
+ * 受け取り、行ごとの検査は `#read()` が `permissionGrantSchema.safeParse` で
+ * 1行ずつ行う**（issue #1941。`jobs.ts` の `jobs` / `approvals`・
+ * `credentials.ts` の `credentials` と同じ形——`z.array(permissionGrantSchema)`
+ * にすると、1行の不正が配列全体を道連れにする）。
+ */
 const fileSchema = z.object({
-  grants: z.array(permissionGrantSchema).default([]),
+  grants: z.array(z.unknown()).default([]),
 });
 
-type GrantFile = z.infer<typeof fileSchema>;
+/**
+ * `permission-grants.json` の中身。**検査を通った `grants` と、形が不正で
+ * 読めなかった `invalidGrantsRaw`（生の要素。パース前のまま）を分けて持つ**
+ * （`FsCredentialVaultStore` の `CredentialFile`・issue #1740 と同じ形。
+ * `invalidGrantsRaw` を消さずに持ち回るのがこの直しの核心——`put()` /
+ * `revoke()` / `markUsed()` はいずれも最終的にこれを丸ごとシリアライズし
+ * 直す（`#toDisk`）ので、ここへ入れなかった行は次の書き込みで消える）。
+ */
+interface GrantFile {
+  grants: PermissionGrant[];
+  /** 行の形が不正で読めなかった、生の要素（パース前のまま）。 */
+  invalidGrantsRaw: unknown[];
+}
+
+const EMPTY: GrantFile = { grants: [], invalidGrantsRaw: [] };
+
+/**
+ * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れ
+ * ない。出すのは「どの欄が」だけである（`jobs.ts` の `summarizeInvalidFields`
+ * と同じ理由・同じ形）。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
+
+/** 生の要素から、値を出さずに「id」だけを安全に取り出す（取れなければ `undefined`）。 */
+function extractRowId(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const id = (raw as Record<string, unknown>).id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+/**
+ * 飛ばした許可の行を stderr へ1行で要約する。**id 以外の値は絶対に載せない**
+ * ——`allows` / `denies` / `answer` には人間の回答の原文がそのまま入りうる
+ * （`jobs.ts` の `describeSkippedJobRow` と同じ理由）。
+ */
+function describeSkippedGrantRow(params: { index: number; reason: string; id?: string }): string {
+  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
+  return (
+    `alteroid: 許可の記録の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${idNote}`
+  );
+}
 
 /**
  * 人間が承認した Bash 許可の記録（Issue #863）。1枚の JSON（`FsJobStore` の
@@ -44,7 +98,15 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
     await this.#update((file) => {
       const grants = file.grants.filter((existing) => existing.id !== grant.id);
       grants.push(permissionGrantSchema.parse(grant));
-      return { next: { grants }, result: undefined };
+      // **書き込む id と一致する壊れた行は置き換える**（`FsCredentialVaultStore.put` /
+      // `FsJobStore.putJob` と同じフォローアップ。issue #1740 / #1868）。直した
+      // はずの id の壊れた行が `invalidGrantsRaw` として残り続けると、ファイル
+      // に同じ id が2行並び、以後 `list()` のたびに直したはずの跡が出続ける
+      // ——「直した」という呼び手の意図に対する驚きになる。
+      const invalidGrantsRaw = file.invalidGrantsRaw.filter(
+        (raw) => extractRowId(raw) !== grant.id,
+      );
+      return { next: { grants, invalidGrantsRaw }, result: undefined };
     });
   }
 
@@ -59,7 +121,10 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
       if (found === undefined) return { next: file, result: null };
       const next = permissionGrantSchema.parse({ ...found, revokedAt: found.revokedAt ?? at });
       return {
-        next: { grants: file.grants.map((grant) => (grant.id === id ? next : grant)) },
+        next: {
+          grants: file.grants.map((grant) => (grant.id === id ? next : grant)),
+          invalidGrantsRaw: file.invalidGrantsRaw,
+        },
         result: next,
       };
     });
@@ -81,20 +146,78 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
       }
       const next = permissionGrantSchema.parse({ ...found, lastUsedAt: at });
       return {
-        next: { grants: file.grants.map((grant) => (grant.id === id ? next : grant)) },
+        next: {
+          grants: file.grants.map((grant) => (grant.id === id ? next : grant)),
+          invalidGrantsRaw: file.invalidGrantsRaw,
+        },
         result: true,
       };
     });
   }
 
+  /**
+   * `permission-grants.json` を読む。**行ごとに検査し、不正な1行だけを
+   * 飛ばす**（issue #1941。以前は `fileSchema.parse` で `grants` 配列全体を
+   * 1回に検査していたため、1行でも不正だと `list()` / `get()` / `put()` /
+   * `revoke()` / `markUsed()` が丸ごと例外を投げ、正しい許可の記録も読めなく
+   * なっていた——pg 実装（`PgPermissionGrantStore.list()`）は元から1行ずつ
+   * `safeParse` していた）。
+   *
+   * **飛ばすのは行の形が不正なとき（欄が欠けている・型が違う、など）だけ
+   * である。** ファイルそのものが JSON として読めない・トップレベルの形が
+   * 違う（`grants` が配列でない等）ときは、いまの振る舞い（例外）のまま
+   * にしてある——それは1行の問題ではないため（`jobs.ts` / `credentials.ts`
+   * と同じ設計判断）。
+   *
+   * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedGrantRow`。**値は
+   * allows/denies/answer 等の本文を含めず、id だけ**）、`invalidGrantsRaw`
+   * として生の形のまま保持する——`put()` / `revoke()` / `markUsed()` がこれを
+   * 書き戻すことで、版ずれ・手編集でできた不正な行を黙って消さない。
+   *
+   * **飛ばした行の許可は fail-closed になる。** `grants`（検査を通った行）
+   * にしか現れないので、`get()` は無いのと同じ `null` を返し、`list()` の
+   * 一覧にも載らない——`clone.ts` の `#onPreToolUse` はこの一覧からルールが
+   * 一致する行を探すので、壊れた行の許可は「無い」ものとして扱われ、確認が
+   * もう一度要るだけで済む（誤って `allow` へは倒れない。issue #1941 の
+   * 「確かめていないこと」の2点目）。
+   */
   async #read(): Promise<GrantFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');
-      return fileSchema.parse(JSON.parse(raw));
+      const top = fileSchema.parse(JSON.parse(raw));
+      const grants: PermissionGrant[] = [];
+      const invalidGrantsRaw: unknown[] = [];
+      top.grants.forEach((rawGrant, index) => {
+        const result = permissionGrantSchema.safeParse(rawGrant);
+        if (result.success) {
+          grants.push(result.data);
+          return;
+        }
+        invalidGrantsRaw.push(rawGrant);
+        process.stderr.write(
+          `${describeSkippedGrantRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            id: extractRowId(rawGrant),
+          })}\n`,
+        );
+      });
+      return { grants, invalidGrantsRaw };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { grants: [] };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
     }
+  }
+
+  /**
+   * `GrantFile` をディスク上の形へ直す。**検査を通った `grants` と
+   * `invalidGrantsRaw` を1本の配列へ合流させる**——分けたまま書くと、次の
+   * `#read()` が `fileSchema`（トップレベルの形しか見ない）を通すときに
+   * 未知のキー（`invalidGrantsRaw`）として黙って捨てられ、壊れた行を持ち
+   * 回る意味が消える（`jobs.ts` の `#serialize` と同じ理由）。
+   */
+  #serialize(file: GrantFile): { grants: unknown[] } {
+    return { grants: [...file.grants, ...file.invalidGrantsRaw] };
   }
 
   /**
@@ -108,7 +231,7 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
     return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
+      await writeFileAtomic(this.#path, `${JSON.stringify(this.#serialize(next), null, 2)}\n`);
       return result;
     });
   }
