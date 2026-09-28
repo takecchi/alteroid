@@ -802,6 +802,51 @@ describe('onCloneEnvShadowed の第2引数（appScopedNames。issue #1894）', (
 
     expect(calls).toEqual([{ names: ['GH_TOKEN', 'GITHUB_TOKEN'], appScopedNames: ['GH_TOKEN'] }]);
   });
+
+  /**
+   * **レビュー指摘（PR #1920）の直しそのもの。** `lastShadowSignature` が
+   * 名前の集合だけで作られていると、同じ名前のまま `scope` だけ `all` → `app`
+   * に変わっても「直前と同じ集合」に見えて再通知されない。旗が立つ条件
+   * （`cloneEnvShadowedNames`）は scope を見ないので、`names` の集合は本当に
+   * 変わらない——**しかし `appScopedNames` は変わる**。呼び手（daemon の
+   * stderr・CLI・Web）が文言を分けるのに使う情報が変わったのに、その変化が
+   * 伝わらないと、scope を app に変えた後も「manager も器の env で走って
+   * いる」という**古い（scope: app には誤りの）文言**が日誌に残り続ける。
+   *
+   * **これは既存の「直前と同じ集合なら黙る」テスト（直上）とは別の主張
+   * である。** あちらは「名前の集合が本当に変わらない」ときに黙ることを
+   * 固定しており、書き換えていない。こちらは「名前の集合は変わらないが
+   * scope が変わった」ときに**黙らない**ことを固定する——両立する。
+   */
+  it('名前の集合は同じでも、scope が all → app に変わったら再度知らせる（PR #1920 レビュー指摘）', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const calls: { names: readonly string[]; appScopedNames: readonly string[] }[] = [];
+    const service = createCredentialService({
+      stores,
+      runners: registryOf([runner]),
+      withheldEnvKeys: [...WITHHELD],
+      env: { GH_TOKEN: CLONE_ENV },
+      onCloneEnvShadowed: (names, appScopedNames) => {
+        calls.push({ names, appScopedNames });
+      },
+    });
+
+    // 1回目: scope 省略（＝ all）で食い違い。
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT }]);
+    await service.syncRunner(runner);
+
+    // 同じ名前・同じ値のまま、scope だけ app へ変える。
+    await service.apply([{ name: 'GH_TOKEN', value: VAULT, scope: 'app' }]);
+    await service.syncRunner(runner);
+
+    // 名前の集合（['GH_TOKEN']）は2回とも同じだが、scope が変わったので
+    // appScopedNames の中身が変わり、2回目も知らせが来る。
+    expect(calls).toEqual([
+      { names: ['GH_TOKEN'], appScopedNames: [] },
+      { names: ['GH_TOKEN'], appScopedNames: ['GH_TOKEN'] },
+    ]);
+  });
 });
 
 /**
