@@ -3543,12 +3543,23 @@ export function createApp(deps: AppDeps) {
       deliberateClient,
       async (c) => {
         const kind = c.req.param('kind');
-        const existing = await stores.schedules.get(kind);
-        if (!existing) return c.json({ error: 'not found' as const }, 404);
-        await stores.schedules.remove(kind);
+        // **`get(kind)` を先に呼ばない（issue #1982）。** `get` は「消された」
+        // （`null`）と「読めない」（throw）を区別する契約のまま変えていない
+        // ので、壊れた行を先に `get` で読もうとするとここで例外が上がり、
+        // 本来の目的（外す）まで届かなかった。`removeIfPresent` が
+        // 「無かった／読めた／読めなかった」の3値を1回の往復で返すので、
+        // 読んでから書くまでの隙間も無い（`ScheduleStore.removeIfPresent` の doc）。
+        const removed = await stores.schedules.removeIfPresent(kind);
+        if (removed === null) return c.json({ error: 'not found' as const }, 404);
         await stores.journal.append({
           type: 'decision',
-          decision: `人間が定期の依頼を外した: ${kind}: ${existing.request}`,
+          decision:
+            removed === 'unreadable'
+              ? // **本文を持たない。** 読めなかった行なので `request` を
+                // 取り出せない——取り出せたとしても、壊れた形のまま日誌へ
+                // 書くと読めない値をそのまま持ち回ることになる。
+                `人間が読めない形で入っていた依頼を外した: ${kind}`
+              : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
           grounds: '人間が直接 API から外した',
         });
         await deps.scheduler?.refresh().catch(() => undefined);

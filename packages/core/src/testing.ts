@@ -671,6 +671,17 @@ export function createMemoryStores(): Stores {
     async remove(kind) {
       schedules.delete(kind);
     },
+    async removeIfPresent(kind) {
+      // `ScheduleStore.removeIfPresent` の doc（issue #1982）。この足場は
+      // `scheduledRequestSchema.parse` を通った値しか `Map` に持たない
+      // （`put` を見よ）ので、`'unreadable'` は本物（fs / pg）の壊れた行を
+      // 模すテストが `stores.schedules` を差し替えたときにしか出ない——
+      // ここでは常に「在って読めた」か「無かった」の2値になる。
+      const found = schedules.get(kind);
+      if (found === undefined) return null;
+      schedules.delete(kind);
+      return isolate(found);
+    },
     async editRequest(kind, changes, updatedAt) {
       // fs / pg と同じ形（Issue #1654）——現在値（この in-memory 実装では常に
       // 最新の `Map` の値そのもの）から `pendingRun` / `lastRunAt` /

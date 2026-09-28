@@ -599,6 +599,34 @@ export interface ScheduleStore {
   remove(kind: string): Promise<void>;
 
   /**
+   * kind が在れば消す。**`get(kind)` と違い、読めない行でも投げない**
+   * （issue #1982）。戻り値は「消す前にどんな状態で在ったか」の3値 ——
+   * 無かった（`null`）／読めた（消した値そのものを返す）／在ったが読めな
+   * かった（`'unreadable'`）。
+   *
+   * **なぜ要るか。** `DELETE /schedule/:kind`（`apps/daemon/src/app.ts`）と
+   * `schedule_remove`（`tools.ts`）は、無い kind を 404 にし、消せた kind は
+   * 日誌へ書くために、かつて `get(kind)` → `remove(kind)` の順で呼んでいた。
+   * `get(kind)` は「消された」（`null`）と「読めない」（throw）を区別する
+   * 契約のまま変えない（`get` の doc）ので、壊れた行を外そうとすると `get`
+   * の例外がそのまま上がり、`remove` まで届かなかった——同じ kind で
+   * `put()` して上書きする（＝作り直す）以外に、壊れた依頼を片付ける手が
+   * 無かった。
+   *
+   * **例外の型やメッセージでは見分けない。** `UnreadableCommitmentError`
+   * （本ファイル）と違う形を選んだのは、`get` → `remove` の2操作のままだと
+   * 「読んでから書くまでの隙間」が残るため——`editRequest` / `PermissionGrantStore
+   * .revoke` / `.markUsed` と同じ理由で、読んでから書くをアプリ層に残さず
+   * ストアの排他区間へ1操作として引き取る。呼び出し側は `instanceof` も
+   * メッセージの文字列判定も要らない。
+   *
+   * **`remove(kind)` は置き換えない。** 「在ったか」を要らない既存の呼び手
+   * （`clear()` の内部実装など、無ければ何もしないで十分な箇所）はそのまま
+   * `remove` を使ってよい。
+   */
+  removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null>;
+
+  /**
    * 依頼の「人間・クローンが直す欄」（`request` / `spec`）だけを差し替える
    * （Issue #1654）。**排他区間の中で読み直した現在値から `pendingRun` /
    * `lastRunAt` / `lastScheduledRunAt` / `createdAt` をそのまま引き継ぎ、

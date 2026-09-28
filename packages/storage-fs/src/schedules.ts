@@ -196,9 +196,14 @@ export class FsScheduleStore implements ScheduleStore {
   /**
    * **不正な行も kind 指定で消せる**（issue #1944）。`get(kind)` が読めない行を
    * 投げたままにする一方で、`remove()` まで `schedules`（検査を通った行）
-   * だけを見ると、壊れた kind は「投げるので消せない」まま永久に残ってしまう
-   * ——人間が復旧するための唯一の手（`DELETE /schedule/:kind` → `remove()`）
-   * を塞ぐことになる。`invalidSchedulesRaw` も一緒に filter する。
+   * だけを見ると、壊れた kind は「投げるので消せない」まま永久に残ってしまう。
+   * `invalidSchedulesRaw` も一緒に filter する。
+   *
+   * **人間が復旧するための口は `removeIfPresent()` が持つ**（issue #1982）。
+   * `DELETE /schedule/:kind` / `schedule_remove` はこちらではなく
+   * `removeIfPresent()` を呼ぶ——先に `get(kind)` を挟むと、壊れた行では
+   * `remove()` まで届く前に例外が上がってしまうため（`removeIfPresent`
+   * の doc）。
    */
   async remove(kind: string): Promise<void> {
     await this.#update((file) => ({
@@ -209,6 +214,44 @@ export class FsScheduleStore implements ScheduleStore {
       },
       result: undefined,
     }));
+  }
+
+  /**
+   * `remove()` と同じ排他区間で、消す前にどんな状態で在ったかを返す
+   * （`ScheduleStore.removeIfPresent` の doc。issue #1982）。**`get()` を
+   * 先に呼ばない**——読み（在ったかどうか・読めたかどうかの判定）と書き
+   * （消す）を1回の `#update` に閉じることで、`get` が読めない行で投げる
+   * 契約とぶつからずに「読めない行も外せる」を実現する。
+   */
+  async removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null> {
+    // **`T` を明示する。** 3つの `return` が `result` にそれぞれ違う型
+    // （`ScheduledRequest` / `null` / リテラル `'unreadable'`）を持つと、
+    // `#update<T>` への推論だけでは `'unreadable'` が `string` へ広がって
+    // 型が合わなくなる（推論の間はこの引数へ逆方向の文脈型が付かないため）。
+    return this.#update<ScheduledRequest | 'unreadable' | null>((file) => {
+      const found = file.schedules.find((entry) => entry.kind === kind);
+      if (found !== undefined) {
+        return {
+          next: {
+            ...file,
+            schedules: file.schedules.filter((entry) => entry.kind !== kind),
+            invalidSchedulesRaw: file.invalidSchedulesRaw.filter(
+              (raw) => extractKind(raw) !== kind,
+            ),
+          },
+          result: found,
+        };
+      }
+      const invalidRaw = file.invalidSchedulesRaw.find((raw) => extractKind(raw) === kind);
+      if (invalidRaw === undefined) return { next: file, result: null };
+      return {
+        next: {
+          ...file,
+          invalidSchedulesRaw: file.invalidSchedulesRaw.filter((raw) => extractKind(raw) !== kind),
+        },
+        result: 'unreadable',
+      };
+    });
   }
 
   /**

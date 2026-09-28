@@ -7101,15 +7101,24 @@ export function createCloneTools(context: ToolContext) {
       '継続中の依頼を片付ける。済んだ依頼・もう要らない依頼はここで外す。',
       { kind: z.string().describe('schedule_list に出ている kind') },
       async ({ kind }) => {
-        const existing = await stores.schedules.get(kind);
-        if (!existing) return text(`継続中の依頼 ${kind} は無い。`);
-        await stores.schedules.remove(kind);
+        // **`get(kind)` を先に呼ばない（issue #1982）。** `get` は「消された」
+        // （`null`）と「読めない」（throw）を区別する契約のまま変えていない
+        // ので、壊れた行を先に `get` で読もうとするとここで例外が上がり、
+        // 本来の目的（外す）まで届かなかった——`DELETE /schedule/:kind`
+        // （`apps/daemon/src/app.ts`）と同じ穴・同じ直し方
+        // （`ScheduleStore.removeIfPresent` の doc）。
+        const removed = await stores.schedules.removeIfPresent(kind);
+        if (removed === null) return text(`継続中の依頼 ${kind} は無い。`);
         await appendJournalOrThrow(
           'schedule_remove',
           stores.journal,
           {
             type: 'decision',
-            decision: `定期の依頼を外した: ${kind}: ${existing.request}`,
+            decision:
+              removed === 'unreadable'
+                ? // 読めなかった行なので本文（`request`）は取り出せない
+                  `読めない形で入っていた依頼を外した: ${kind}`
+                : `定期の依頼を外した: ${kind}: ${removed.request}`,
             grounds: 'この依頼はもう要らないという判断',
           },
           'act-completed',

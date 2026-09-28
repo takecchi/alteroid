@@ -141,6 +141,26 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   /**
+   * `ScheduleStore.removeIfPresent` の doc（issue #1982）。pg の `remove()` は
+   * もともと `DELETE … WHERE kind = …` で行の中身を見ないので、読めない行も
+   * 元から消せていた（fs だけが壊れた行の穴を持っていた——`FsScheduleStore
+   * .remove` の doc）。ここで新しく要るのは「消す前に在ったか・読めたか」を
+   * 一度の往復で返すことだけなので、`DELETE … RETURNING` の1文で済む
+   * （`get()` を先に呼んで別のクエリを1本足さない——読んでから書くまでの
+   * 隙間を作らないため）。
+   */
+  async removeIfPresent(kind: string): Promise<ScheduledRequest | 'unreadable' | null> {
+    const rows = await this.#db
+      .delete(schedules)
+      .where(eq(schedules.kind, kind))
+      .returning({ plan: schedules.plan });
+    const row = rows[0];
+    if (row === undefined) return null;
+    const parsed = scheduledRequestSchema.safeParse(row.plan);
+    return parsed.success ? parsed.data : 'unreadable';
+  }
+
+  /**
    * `request` / `spec` だけを差し替える（Issue #1654。`ScheduleStore.editRequest`
    * の doc）。**`claimRun` と同じ形——`for update` で押さえてから読み直した現在値
    * を引き継ぐ**ので、`pendingRun` / `lastRunAt` / `lastScheduledRunAt` は読んでから

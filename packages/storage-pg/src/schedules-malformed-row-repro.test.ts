@@ -1,6 +1,7 @@
 import { captureStderr } from '@alteroid/core';
 import type { ScheduledRequest } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -110,6 +111,36 @@ describe('PgScheduleStore — schedules の不正な1行を読み飛ばす（iss
 
     const fixed = await stores.schedules.get('bad-kind');
     expect(fixed?.request).toBe('直した継続中の依頼');
+  });
+
+  /**
+   * issue #1982。`get(kind)` が読めない行で投げる契約のまま、`DELETE
+   * /schedule/:kind`（`apps/daemon/src/app.ts`）と `schedule_remove`
+   * （`tools.ts`）は先に `get(kind)` を呼んでいたので、壊れた依頼を外そうと
+   * すると例外がそのまま上がっていた——pg の `remove()` はもともと
+   * `DELETE … WHERE kind = …` で行の中身を見ないので消せていたが（直上の
+   * 「行は DELETE されない」テストが示すのは `remove()` を呼んでいない
+   * 経路の話であって `remove()` 自体の能力の話ではない）、`get()` を経由
+   * する口の側だけが穴だった。`removeIfPresent()` は `get()` を経由せず、
+   * `DELETE … RETURNING` の1文で「無かった／読めた／在ったが読めなかった」
+   * を返す。
+   */
+  it('removeIfPresent() は不正な行も消せて「読めなかった」と返す（get() を経由しない）', async () => {
+    await stores.schedules.put(GOOD_SCHEDULE);
+    await insertBadRow();
+
+    const badResult = await stores.schedules.removeIfPresent('bad-kind');
+    expect(badResult).toBe('unreadable');
+    expect(await db.select().from(schedules).where(eq(schedules.kind, 'bad-kind'))).toEqual([]);
+    // 消えたので、以後の get() は例外ではなく null。
+    await expect(stores.schedules.get('bad-kind')).resolves.toBeNull();
+
+    // 読める行は、消した値そのものを返す。
+    const goodResult = await stores.schedules.removeIfPresent('good-kind');
+    expect(goodResult).toEqual(GOOD_SCHEDULE);
+
+    // 本当に無い kind（一度も書いていない）は null（404 の材料）。
+    expect(await stores.schedules.removeIfPresent('never-existed')).toBeNull();
   });
 
   it('clear() は正しい依頼も壊れた依頼も両方消す（壊れているかに関係なく DELETE … RETURNING の件数を返す）', async () => {

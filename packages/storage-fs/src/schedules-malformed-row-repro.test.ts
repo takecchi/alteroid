@@ -214,6 +214,48 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
     expect(lines).toHaveLength(0);
   });
 
+  /**
+   * issue #1982。`get(kind)` が読めない行で投げる契約のまま、`DELETE
+   * /schedule/:kind`（`apps/daemon/src/app.ts`）と `schedule_remove`
+   * （`tools.ts`）は先に `get(kind)` を呼んでいたので、壊れた依頼を外そうと
+   * すると `remove()` まで届かず例外になっていた。`removeIfPresent()` は
+   * `get()` を経由せず、`remove()` と同じ排他区間で「無かった（`null`）／
+   * 読めた（値そのもの）／在ったが読めなかった（`'unreadable'`）」を返す。
+   */
+  it('removeIfPresent() は不正な行も消せて「読めなかった」と返す（get() を経由しない）', async () => {
+    await writeRawSchedulesFile();
+    const stores = createFsStores(root);
+
+    let result: ScheduledRequest | 'unreadable' | null = 'sentinel' as unknown as
+      | ScheduledRequest
+      | 'unreadable'
+      | null;
+    const lines = await captureStderr(async () => {
+      result = await stores.schedules.removeIfPresent('bad-kind');
+    });
+    expect(result).toBe('unreadable');
+    // **`#update` は毎回 `#read()` からやり直す**（`list()` と同じ跡が1行出る
+    // ——`bad-kind` はこの呼び出しの時点ではまだファイルに残っている）。
+    expect(lines).toHaveLength(1);
+
+    const raw = JSON.parse(await readFile(schedulesPath, 'utf8')) as { schedules: unknown[] };
+    expect(findRowByKind(raw.schedules, 'bad-kind')).toBeUndefined();
+
+    // 消えたので、以後の get() はもう跡を出さず、例外でもなく null。
+    const afterLines = await captureStderr(async () => {
+      await expect(stores.schedules.get('bad-kind')).resolves.toBeNull();
+    });
+    expect(afterLines).toHaveLength(0);
+
+    // 読める行は、消した値そのものを返す。
+    const removedGood = await stores.schedules.removeIfPresent('good-kind');
+    expect(removedGood).toEqual(GOOD_SCHEDULE);
+
+    // 本当に無い kind（一度も書いていない）は null（404 の材料）。
+    const missing = await stores.schedules.removeIfPresent('never-existed');
+    expect(missing).toBeNull();
+  });
+
   it('clear() は正しい依頼も壊れた依頼も両方消す——schedules.json に依頼が1つも残らない', async () => {
     await writeRawSchedulesFile();
     const stores = createFsStores(root);
