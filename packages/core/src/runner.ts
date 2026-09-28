@@ -6320,7 +6320,17 @@ const DENIAL_WORDS =
  * 承認語に足すとそれらの歯を反転させてしまう。ここは PR 本文に書いて
  * 依頼者・オーナーの判断に委ねる。
  */
-const APPROVAL_PHRASES = ['どうぞ', '進めてよい', '許可する', '承認する', 'はい', '承認します'];
+const APPROVAL_PHRASES = [
+  'どうぞ',
+  '進めてよい',
+  '許可する',
+  // issue #1926 で足した（`許可する` の丁寧形。allow を承認だけの回答に絞るので、
+  // 丁寧形が一覧に無いと普通の承認が答え直しになる）
+  '許可します',
+  '承認する',
+  'はい',
+  '承認します',
+];
 /** 英語側は語境界で見る。`ok` は大文字小文字を問わず拾う（`/i`）。 */
 const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay|yes|sure)\b/i;
 
@@ -6361,6 +6371,49 @@ function hasNegationMarker(message: string): boolean {
     NEGATION_MARKERS_EN.test(message) ||
     NEGATION_MARKERS_JA.some((marker) => message.includes(marker))
   );
+}
+
+/**
+ * 回答が**承認の言い方だけ**でできているか（issue #1926、クローン teto の判断）。
+ *
+ * 承認の語（`APPROVAL_PHRASES` / `APPROVAL_WORDS`）と、下の付け足し
+ * （`APPROVAL_ONLY_FILLERS_*`。敬語・please 程度）を取り除いた残りが、
+ * 句読点と空白だけなら「承認だけ」と数える。承認の語が1つも無ければ数えない。
+ *
+ * **なぜ形で絞るか** —— 以前の allow は「承認の語が在り、既知の否定の印が
+ * 無い」だったので、承認の語と一覧に無い否定・条件が同居すると allow に
+ * なっていた（#1837 / #1907 / #1923 で語を足して塞いできた）。語を足す形では
+ * 漏れが残り続ける。#1827 / #1837 の線（判定できないときは閉じる側に倒す）の
+ * 延長として、承認以外の語が1つでも残れば `unreadable`（答え直しの案内）に
+ * する。答え直しが増えるのは、この線の代償として受け入れると決めてある。
+ *
+ * 付け足しの一覧を広げると、そのぶん allow の線が緩む。足すときは
+ * `runner-infer-decision.test.ts` の #1926 の一覧（allow になる文の固定）を
+ * 先に動かすこと。
+ */
+const APPROVAL_ONLY_FILLERS_JA = [
+  'よろしくお願いします',
+  'お願いします',
+  'お願い',
+  'ください',
+  'です',
+];
+const APPROVAL_ONLY_FILLERS_EN = /\b(please|thanks|thank you)\b/gi;
+/** 承認の語と付け足しを取り除いた後に残ってよい文字（句読点・記号・空白）。 */
+const APPROVAL_ONLY_REMAINDER = /^[\s、。，．,.!！・…~〜ー—–-]*$/u;
+
+function isApprovalOnly(message: string): boolean {
+  if (!hasApprovalMarker(message)) return false;
+  let rest = message;
+  // 長い語から取り除く（`承認します` を `承認する` より先に等、部分の食い違いを避ける）
+  for (const phrase of [...APPROVAL_PHRASES, ...APPROVAL_ONLY_FILLERS_JA].sort(
+    (a, b) => b.length - a.length,
+  )) {
+    rest = rest.split(phrase).join(' ');
+  }
+  rest = rest.replace(new RegExp(APPROVAL_WORDS.source, 'gi'), ' ');
+  rest = rest.replace(APPROVAL_ONLY_FILLERS_EN, ' ');
+  return APPROVAL_ONLY_REMAINDER.test(rest);
 }
 
 function hasApprovalMarker(message: string): boolean {
@@ -6530,7 +6583,9 @@ export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' 
   }
   if (DENIAL_PHRASES.some((phrase) => normalized.includes(phrase))) return 'deny';
   if (DENIAL_WORDS.test(normalized)) return 'deny';
-  if (hasApprovalMarker(normalized) && !hasNegationMarker(normalized)) return 'allow';
+  // issue #1926: allow は承認の言い方だけでできた回答に限る（`isApprovalOnly`）。
+  // 否定の印の検査（#1923 まで allow の唯一の歯止めだった）も重ねて残す。
+  if (isApprovalOnly(normalized) && !hasNegationMarker(normalized)) return 'allow';
   return 'unreadable';
 }
 
