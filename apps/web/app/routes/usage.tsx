@@ -191,10 +191,7 @@ export default function Usage() {
           */}
           <label className="flex flex-col gap-1 text-xs text-muted">
             layer（誰が）
-            <Select
-              value={layer}
-              onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}
-            >
+            <Select value={layer} onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}>
               <option value="">すべて</option>
               {USAGE_LAYERS.map((value) => (
                 <option key={value} value={value}>
@@ -205,10 +202,7 @@ export default function Usage() {
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
             site（どこで）
-            <Select
-              value={site}
-              onChange={(event) => setFilter(SITE_PARAM, event.target.value)}
-            >
+            <Select value={site} onChange={(event) => setFilter(SITE_PARAM, event.target.value)}>
               <option value="">すべて</option>
               {USAGE_SITES.map((value) => (
                 <option key={value} value={value}>
