@@ -137,6 +137,41 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
   });
 });
 
+/**
+ * #1948: runner の `since`（この状態になった時刻）。
+ *
+ * **「作成」「更新」とは書かない**（#211 の決定）。名簿（Registry）はインメモリ
+ * なので、デーモンを再起動すると作り直される——これを言わないと、`since` を
+ * 「ずっと保持されている記録」と誤読しうる。
+ */
+describe('runner の since（この状態になった時刻）', () => {
+  it('since を出す', async () => {
+    renderSettings({
+      runners: [{ ...BASE, since: '2026-09-01T00:00:00.000Z' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    const line = await screen.findByText(/この状態になった/);
+    // 時分は器の時間帯で変わるので、日付だけ固定して見る（直上のブロックと同じ理由）。
+    expect(line.textContent).toMatch(/09\/01/);
+  });
+
+  it('「作成」「更新」とは書かない', async () => {
+    renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
+
+    await screen.findByText(/この状態になった/);
+    expect(screen.queryByText(/作成/)).toBeNull();
+    expect(screen.queryByText(/更新/)).toBeNull();
+  });
+
+  it('名簿がインメモリで、再起動で作り直されることを添える', async () => {
+    renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
+
+    expect(await screen.findByText(/インメモリ/)).toBeTruthy();
+    expect(screen.getByText(/再起動/)).toBeTruthy();
+  });
+});
+
 const KNOWN_DAEMON: DaemonRevision = {
   status: 'known',
   commit: 'b'.repeat(40),

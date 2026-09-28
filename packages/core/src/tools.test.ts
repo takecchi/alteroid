@@ -10326,6 +10326,85 @@ describe('runner_list（器の一覧）', () => {
       expect(description).toContain('manager_stop');
     });
   });
+
+  /**
+   * #1948: runner の `since`（この状態になった時刻）。CLI（`apps/cli/src/
+   * runners.test.ts`）・Web（`apps/web/app/routes/settings.test.tsx`）と同じ
+   * 3点（出す・「作成」「更新」とは書かない・名簿がインメモリで再起動すると
+   * 作り直されることを添える）を、この一覧でも測る。
+   *
+   * **`AXIS_UNDECIDED` の `runner_list` 除外（このファイルの下のほう）とは
+   * 別の軸である。** あちらは「作成時刻を出すかどうか」（#211。人間が
+   * 「出さない」と決めた）で、こちらは単に「いまの state に変わった時刻」を
+   * 出すだけ——作成時刻の議論には触れない。
+   */
+  describe('since（この状態になった時刻）', () => {
+    it('runner ごとに since を出す', async () => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-09-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [],
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      const reply = await h.call('runner_list', {});
+
+      expect(reply).toContain('この状態になった: 2026-09-01T00:00:00.000Z');
+    });
+
+    /** **「作成」「更新」とは書かない**（#211）。 */
+    it('「作成」「更新」とは書かない', async () => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-09-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [],
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      const reply = await h.call('runner_list', {});
+
+      expect(reply).not.toContain('作成');
+      expect(reply).not.toContain('更新');
+    });
+
+    /**
+     * **名簿（Registry）はインメモリで、デーモンを再起動すると作り直される。**
+     * ここを言わないと、`since` を「ずっと保持されている記録」と誤読しうる。
+     * 一覧の説明文（道具の description）に1度だけ書く——器ごとに繰り返すと
+     * 予算（`RUNNER_LIST_BUDGET`）を圧迫する。
+     */
+    it('道具の説明文が、名簿はインメモリで再起動すると作り直されることを説明する', () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({
+        stores,
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      const description = tools.find((entry) => entry.name === 'runner_list')?.description;
+
+      expect(description).toContain('インメモリ');
+      expect(description).toContain('再起動');
+    });
+  });
 });
 
 /**

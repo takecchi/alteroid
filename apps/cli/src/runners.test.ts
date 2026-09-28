@@ -85,6 +85,9 @@ const KNOWN_DAEMON = {
 const RUNNER = {
   label: 'https://runner-a.internal',
   state: 'connected',
+  // この状態になった時刻（#1948）。**省略できない欄なので、対象にしない試験でも
+  // 既定を明示して置く。**
+  since: '2026-08-22T00:00:00.000Z',
   runnerId: 'runner-a',
   workspacePath: '/work',
   // 鍵・プロファイルの指紋を聞きに行けたか（#1947）。**省略できない欄なので、
@@ -140,6 +143,7 @@ describe('renderRunners', () => {
         {
           label: 'https://runner-silent.internal',
           state: 'unreachable',
+          since: '2026-08-22T00:00:00.000Z',
           credentials: [],
           credentialsProbe: { status: 'unheard' },
           profileProbe: { status: 'unheard' },
@@ -216,6 +220,7 @@ describe('renderRunners', () => {
         {
           label: 'https://runner-b.internal',
           state: 'unreachable',
+          since: '2026-08-22T00:00:00.000Z',
           credentials: [],
           credentialsProbe: { status: 'unheard' },
           profileProbe: { status: 'unheard' },
@@ -428,6 +433,52 @@ describe('renderRunners', () => {
       expect(text).toContain(
         'プロファイル: 置いてある（指紋 abc123456789、2026-09-01T00:00:00.000Z 更新）',
       );
+    });
+  });
+
+  /**
+   * #1948: runner の `since`（この状態になった時刻）。
+   *
+   * **「作成」「更新」とは書かない**（#211 の決定——`packages/core/src/
+   * tools.test.ts` の `AXIS_UNDECIDED` が持つ「runner_list には作成時刻を
+   * 置かない」とは別の軸である。こちらは単に「いまの state に変わった時刻」を
+   * 出すだけで、作成時刻の議論には触れない）。
+   */
+  describe('since（この状態になった時刻）', () => {
+    it('runner ごとに since を出す', () => {
+      const text = renderRunners({
+        runners: [{ ...RUNNER, since: '2026-09-01T00:00:00.000Z', revision: { status: 'unheard' } }],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('この状態になった: 2026-09-01T00:00:00.000Z');
+    });
+
+    /** **「作成」「更新」と書かない**（#211）。 */
+    it('「作成」「更新」とは書かない', () => {
+      const text = renderRunners({
+        runners: [{ ...RUNNER, revision: { status: 'unheard' } }],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).not.toContain('作成');
+      expect(text).not.toContain('更新');
+    });
+
+    /**
+     * **名簿（Registry）はインメモリで、デーモンを再起動すると作り直される。**
+     * ここを言わないと、`since` を「ずっと保持されている記録」と誤読しうる
+     * （実際には daemon プロセスの再起動で全 runner の since が現在時刻へ
+     * 巻き戻る）。
+     */
+    it('名簿がインメモリで、再起動で作り直されることを添える', () => {
+      const text = renderRunners({
+        runners: [{ ...RUNNER, revision: { status: 'unheard' } }],
+        daemonRevision: { status: 'unknown' },
+      });
+
+      expect(text).toContain('インメモリ');
+      expect(text).toContain('再起動');
     });
   });
 });
