@@ -1222,8 +1222,10 @@ function ResetTimeSkewNote({ manager }: { manager: ManagerSummary }) {
 
 /**
  * `manager_stop`（running・非force）の断り、ターンが `report` で終わったとき、
- * または Bash で `git push` か新しい枝を作る操作を検出したときに取った最後の
- * 未push観測（Issue #1266）。**答えるのは「どこ（どの枝）を見ればよいか」
+ * Bash で `git push` か新しい枝を作る操作を検出したとき、または止める操作
+ * そのもの（`manager_stop` の force・`done`/`waiting_human` の非force・
+ * 人間の停止・自動畳み。Issue #1266 残り2）で取った最後の未push観測
+ * （Issue #1266）。**答えるのは「どこ（どの枝）を見ればよいか」
  * までである——「成果が届いたか」は含まない**（`schema.ts` の
  * `lastUnpushedWorkObservationSchema` の doc）。
  *
@@ -1242,9 +1244,10 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   if (observation === undefined) return null;
   const provenance =
     'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'または Bash で git push か新しい枝を作る操作を検出したときに取った最後の1回' +
-    '（force:true・器の入れ替え（redeploy・枠落ちでセッションを失う経路）では更新されない。' +
-    'いまの状態そのものではない）';
+    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
+    '（manager_stop の force・done/waiting_human の非force・人間の停止・自動畳み）で' +
+    '取った最後の1回（器の入れ替え（redeploy・枠落ちでセッションを失う経路）では' +
+    '更新されない。いまの状態そのものではない）';
 
   if (observation.kind === 'unavailable') {
     return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${observation.reason}`;

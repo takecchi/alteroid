@@ -3573,9 +3573,9 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  *
  * ## 残る族（⛔ この欄が更新されない回）
  *
- * 更新するのは、`pool.unpushedWork()` が呼ばれた回（下の1〜3）と、runner が
+ * 更新するのは、`pool.unpushedWork()` が呼ばれた回（下の1〜3・6）と、runner が
  * 自分で先取りして運んだ観測を `manager.ts` が台帳へ写す回（下の4・5）の、
- * 合わせて5つの経路だけである:
+ * 合わせて6つの経路だけである:
  *
  * 1. `manager_stop`（`before.status === 'running' && force !== true`）の断り
  * 2. **委譲のターンが報告で終わったとき**（`manager.ts` の `case 'report'`。
@@ -3618,18 +3618,28 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  *    観測（無ければ `undefined`）がそのまま残るだけである**——0件も
  *    `unavailable` も新しく作らない（`shutdown_unpushed_work` の doc・
  *    `AGENTS.md`「取れない軸に0の行を作る」と同じ注意）。
+ * 6. **`manager.ts` の `abort()` が `runner.stop(managerId)`（＝`Host#
+ *    stop(managerId)`）を呼ぶ直前**（Issue #1266 残り2）。`abort()` は
+ *    `manager_stop`（`force: true` の running、または非 force の
+ *    `done`/`waiting_human`）・人間が Web UI / `DELETE /managers/:id` で
+ *    止めたとき・`#autoFoldOne`（`by: 'auto-fold'`）のすべてで通る唯一の
+ *    経路である。`#confirmStoppedAndReleaseLease`（`runner.stop()` を呼び、
+ *    一覧から消えたことを確かめる関数）を呼ぶ**前**に `pool.unpushedWork()`
+ *    を1回取る——`vacate()`（5行上の5とは別で、こちらは Issue #1266
+ *    候補(2)(B)）が `runner.stop()` の直前に取るのと同じ形。**5と違い、
+ *    ここは runner 側の best-effort な先取りではない**——呼び出し元
+ *    （デーモン）はまだ生きて runner と往復できる状態でこの停止を発行する
+ *    ので、要求と応答の1回の同期呼び出しで足りる（`runner-protocol.ts` の
+ *    `shutdown_unpushed_work` の doc「どの `stop()` から出るか」が、
+ *    `Host#stop(managerId)` はこの形で埋める設計だと既に述べていた）。
  *
- * **それでも更新されない回が残る。** `force: true` で止めたとき（`Host#
- * stop(managerId)` 経由の明示停止。`manager_stop force: true` 等）・
- * `manager_list`・止めた委譲の報告は、5が対象にする「`Host#shutdown()`
- * 経由の `stop()`」ではないので、5も発火しない——`RunnerSession#stop()` は
- * `captureUnpushedWork` オプションが立った呼び出し（`Host#shutdown()`）
- * だけがこの観測を取る（`runner-protocol.ts` の `shutdown_unpushed_work`
- * の doc「どの `stop()` から出るか」）。**`runner プロセスそのものが
- * `#finish()` も `#stopBody()` も実行する前に落ちた回**（コンテナごと
- * OOM-killed・SIGKILL・`FORCED_EXIT_MS` の期限そのものに間に合わなかった
- * 回等）も、`closed` も `shutdown_unpushed_work` も届かないので同様に
- * 拾えない。
+ * **それでも更新されない回が残る。** `manager_list` 自身は、この一覧のために
+ * 自動で往復を足さないという既存の作法（`ManagerPool.unpushedWork()` の
+ * doc）のとおり、どの経路からも呼ばれない。**`runner プロセスそのものが
+ * `#finish()` も `#stopBody()` も `abort()` の呼び出しも経ずに落ちた回**
+ * （コンテナごと OOM-killed・SIGKILL・`FORCED_EXIT_MS` の期限そのものに
+ * 間に合わなかった回等）も、`closed` も `shutdown_unpushed_work` も6の
+ * 同期呼び出しも届かないので同様に拾えない。
  * ⟹ **報告の前に落ちた委譲は、その委譲が一度も `git push` を打たず、新しい
  * 枝も作っておらず、かつ `closed`（4）も `shutdown_unpushed_work`（5、
  * best-effort）も届かなかった場合にだけ拾えない**（最後の報告か、最後に
@@ -3674,8 +3684,8 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
 /**
  * `lastUnpushedWorkObservation` を残した経路（クローンの指摘を受けて追加）。
  *
- * **本文の「残る族」が挙げる5つの発火点は、実は7つの書き込み経路に対応する**
- * ——`pool.unpushedWork()`（`ManagerPool` の公開メソッド）を経由する4つ
+ * **本文の「残る族」が挙げる6つの発火点は、実は8つの書き込み経路に対応する**
+ * ——`pool.unpushedWork()`（`ManagerPool` の公開メソッド）を経由する5つ
  * （呼び出し元が違うだけで同じ実装 `#recordUnpushedWorkObservation` に
  * 収束する）と、runner が先取りして運ぶ直接書き込みの2つに分かれる:
  *
@@ -3686,14 +3696,17 @@ export type ObservedWorktreeBranch = z.infer<typeof observedWorktreeBranchSchema
  * | `'tool_use'` | `manager.ts` `case 'tool_use'` → `#observeUnpushedWorkOnce` | Issue #1376 |
  * | `'auto-fold'` | `manager.ts` `#autoFoldOne`（`done` を自動で畳む前の安全弁） | Issue #1394 段⑥ |
  * | `'vacate'` | `manager.ts` `vacate()`（`runner.stop()` 直前の握手） | Issue #1266 候補(2)。#1453/#1472 |
+ * | `'stop'` | `manager.ts` `abort()`（`#confirmStoppedAndReleaseLease`＝`runner.stop(managerId)` 直前の握手） | Issue #1266 残り2 |
  * | `'closed'` | `manager.ts` `case 'closed'`（runner の `#finish()` が先取り） | Issue #1266 候補(2) |
  * | `'shutdown'` | `manager.ts` `case 'shutdown_unpushed_work'`（runner の `stop()` が先取り） | Issue #1266 候補(C) |
  *
- * **`'auto-fold'` と `'vacate'` は、本文の「残る族」1〜5の番号付けには
- * 出てこない。** どちらも `pool.unpushedWork()` を呼ぶので観測は残るが、
- * 「断り」でも「終端」でもないので5つの発火点の説明には数えていなかった
- * ——`source` を足すために全呼び出し元を洗い直して見つかった、既存の
- * 数え漏れである（本文は直していない。数え上げの持ち主をここへ移した）。
+ * **`'auto-fold'` と `'vacate'` は、本文の「残る族」の番号付けが最初に付いた
+ * ときには出てこなかった。** どちらも `pool.unpushedWork()` を呼ぶので観測は
+ * 残るが、「断り」でも「終端」でもないので最初の5つの発火点の説明には数えて
+ * いなかった——`source` を足すために全呼び出し元を洗い直して見つかった、
+ * 既存の数え漏れである。**`'stop'` は Issue #1266 残り2として最初から本文の
+ * 「残る族」6番目に数えて足した**——`'auto-fold'`/`'vacate'` と違って数え
+ * 漏れではない。
  */
 export const unpushedWorkObservationSourceSchema = z.enum([
   'stop-refusal',
@@ -3701,6 +3714,7 @@ export const unpushedWorkObservationSourceSchema = z.enum([
   'tool_use',
   'auto-fold',
   'vacate',
+  'stop',
   'closed',
   'shutdown',
 ]);

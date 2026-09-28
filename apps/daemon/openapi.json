@@ -12504,6 +12504,7 @@
                                       "tool_use",
                                       "auto-fold",
                                       "vacate",
+                                      "stop",
                                       "closed",
                                       "shutdown"
                                     ]
@@ -12578,6 +12579,7 @@
                                       "tool_use",
                                       "auto-fold",
                                       "vacate",
+                                      "stop",
                                       "closed",
                                       "shutdown"
                                     ]
@@ -13089,6 +13091,7 @@
                                     "tool_use",
                                     "auto-fold",
                                     "vacate",
+                                    "stop",
                                     "closed",
                                     "shutdown"
                                   ]
@@ -13163,6 +13166,7 @@
                                     "tool_use",
                                     "auto-fold",
                                     "vacate",
+                                    "stop",
                                     "closed",
                                     "shutdown"
                                   ]

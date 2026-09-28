@@ -2037,7 +2037,7 @@ export interface ManagerPool {
   transcript(managerId: string): Promise<ManagerTranscript>;
   /**
    * 未 push の実装・未コミットの変更を runner に問い合わせる。**呼び出し元は
-   * 5つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
+   * 6つ**——(a) `manager_stop` の running・非 force 断りが「畳むと何が失われる
    * か」を実物の数字で言うためだけに呼ぶ（Issue #1039）、(b) ターンが
    * `report` で終わったとき、その委譲について1回だけ台帳へ観測を残すため
    * `#observeUnpushedWorkOnce`（`case 'report'`）が呼ぶ（Issue #1266
@@ -2046,13 +2046,16 @@ export interface ManagerPool {
    * 'tool_use'`）が呼ぶ（Issue #1376 の続き。前者は push を検出したときの
    * 続き、後者は枝ができたときを足した分）、(d) `#autoFoldOne`（`done` を
    * 自動で畳む前の安全弁。Issue #1394 段⑥）、(e) `vacate()`（`runner.stop()`
-   * 直前の握手。Issue #1266 候補(2)。#1453/#1472）。**(d)(e) は `source` を
-   * 足すために全呼び出し元を洗い直して見つかった、この doc の数え漏れ
-   * だった**（クローンの指摘を受けて直した）。**`manager_list` からは呼ばない**
-   * ——この一覧のために自動で
+   * 直前の握手。Issue #1266 候補(2)。#1453/#1472）、(f) `abort()`（`#confirmStoppedAndReleaseLease`
+   * ＝`runner.stop(managerId)` 直前の握手。Issue #1266 残り2）。**(d)(e) は
+   * `source` を足すために全呼び出し元を洗い直して見つかった、この doc の
+   * 数え漏れだった**（クローンの指摘を受けて直した）。**`manager_list` から
+   * は呼ばない**——この一覧のために自動で
    * 往復を足さない、という既存の作法（`runners()` の doc）と同じ理由。
-   * **`force: true` の経路からも呼ばない**（もう決めた後なので、往復を払う
-   * 意味が無い）。
+   * **`force: true` の経路は (f) が呼ぶ**（Issue #1266 残り2で埋めた——以前は
+   * ここで「もう決めた後なので往復を払う意味が無い」として呼ばなかったが、
+   * 決めたのは「止めるかどうか」であって「どこを見ればよいか」ではない。
+   * 台帳にその記録を残す価値のほうを取った）。
    *
    * **この呼び出しが失敗しても、呼び出し元が止まってはいけない。** だから
    * このメソッド自体は例外を投げない——runner が答えなかった・この口を
@@ -2060,7 +2063,8 @@ export interface ManagerPool {
    * を返す。呼び出し元(a)はこれを「確かめられなかった」として扱い、0 とは
    * 混ぜない。呼び出し元(b)・(c)は待たない（fire-and-forget）ので、この
    * 不投げの性質はさらに保険——投げても投げなくても、呼び出し元のターン
-   * 処理はブロックしない。
+   * 処理はブロックしない。呼び出し元(f)は `.catch()` を自分で添えて待つ
+   * （`vacate()` と同じ形。abort 本体の判定を巻き添えにしない）。
    *
    * **省略可能（`?`）にしない。** `runnerBacklog()` の doc と同じ理由——
    * 省略可能にすると「この口を持たない」と「観測できなかった」が同じ形に
@@ -2072,7 +2076,7 @@ export interface ManagerPool {
    * `unpushedWorkObservationSourceSchema` の doc を見よ。**この引数は
    * `.optional()` のまま残す**（`ManagerPool` の外部実装・spec 生成用の
    * スタブを壊さないため）——省いた呼び出しは `source` 無しの観測になる
-   * （「不明」のまま。0件や偽の経路名を作らない）。**この関数の内部の5つの
+   * （「不明」のまま。0件や偽の経路名を作らない）。**この関数の内部の6つの
    * 呼び出し元は全員、必ず明示する。**
    */
   unpushedWork(
@@ -6798,9 +6802,10 @@ class Pool implements ManagerPool {
     // job store から作り直してまで書く費用は釣り合わないと判断した——
     // このケースは `manager_stop` が `before.status === 'running'` を確かめた
     // 直後に起きる、`#records` が既に消えている稀な競合であって、Issue が
-    // 挙げた「force / manager_list / 器の入れ替えでは呼ばれない」という
-    // 既知の残る族とは別の、未測定の隙間である（PR 本文の「測っていないこと」
-    // を見よ）。
+    // 挙げた「manager_list / 器の入れ替えでは呼ばれない」（`force` は
+    // Issue #1266 残り2で `abort()` 経由（f）が呼ぶようになったので、この
+    // 列挙からは外した）という既知の残る族とは別の、未測定の隙間である
+    // （PR 本文の「測っていないこと」を見よ）。
     const record = this.#records.get(managerId);
     if (record === undefined) {
       return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
@@ -6856,18 +6861,24 @@ class Pool implements ManagerPool {
    * 経路は best-effort であり、届かない回はこの関数自体が呼ばれない**
    * ——`shutdown_unpushed_work` の doc）。
    *
-   * `unpushedWork()` 自体は4つの呼び出し元を持つ（`schema.ts` の
+   * `unpushedWork()` 自体は6つの呼び出し元を持つ（`schema.ts` の
    * `unpushedWorkObservationSourceSchema` の doc の表——`stop-refusal` /
-   * `report` / `tool_use` / `auto-fold` / `vacate`。前2つは
-   * `#observeUnpushedWorkOnce` 経由）。
+   * `report` / `tool_use` / `auto-fold` / `vacate` / `stop`。うち2つ
+   * （`report`/`tool_use`）は `#observeUnpushedWorkOnce` 経由、`stop` は
+   * `abort()` の `#confirmStoppedAndReleaseLease` 直前——Issue #1266
+   * 残り2）。
    *
-   * **`force: true` で止めたとき・`manager_list` 自身は、どの呼び出し元から
-   * も `unpushedWork()` 自体が呼ばれないので、この関数にも来ない**
-   * （`lastUnpushedWorkObservationSchema` の doc「残る族」と同じ注意——
-   * ただし `case 'closed'`（`runner.ts` の `#finish()` が先取りして運ぶ、
-   * Issue #1266 候補(2)。枠落ち・失敗の経路）は、この関数を経由せず自分で
-   * 同じ変換（{@link unpushedWorkObservationOf}）と同じ上書きガードを直接
-   * 使う。理由は下の「上書きガード」を見よ）。
+   * **`manager_list` 自身は、どの呼び出し元からも `unpushedWork()` 自体が
+   * 呼ばれないので、この関数にも来ない**（`lastUnpushedWorkObservationSchema`
+   * の doc「残る族」と同じ注意——ただし `case 'closed'`（`runner.ts` の
+   * `#finish()` が先取りして運ぶ、Issue #1266 候補(2)。枠落ち・失敗の経路）は、
+   * この関数を経由せず自分で同じ変換（{@link unpushedWorkObservationOf}）と
+   * 同じ上書きガードを直接使う。理由は下の「上書きガード」を見よ）。
+   * **`force: true` で止めたときは、Issue #1266 残り2でここへ来る側に変わった**
+   * ——それより前は `manager_stop force: true` 等（`Host#stop(managerId)`
+   * 経由の明示停止）はここへ来ない側だったが、`abort()` が
+   * `#confirmStoppedAndReleaseLease` の直前に `source: 'stop'` で
+   * `unpushedWork()` を呼ぶようになったので、いまはここへ来る。
    *
    * **`source`（クローンの指摘を受けて追加）。** 呼び出し元が自分の経路を
    * 名乗る——省く経路は無い（このメソッドの2つの呼び出し元は両方とも
@@ -8532,6 +8543,40 @@ class Pool implements ManagerPool {
     // **await の前の宛先を覚えておく（Issue #1716 の「二重の網」）。** await の
     // 後にこの値と食い違っていたら、委譲は別の runner へ移っている。
     const runnerIdBeforeConfirm = record.job.runnerId;
+
+    /*
+     * **未 push の観測を、`runner.stop()` の直前に1回取って記録する**
+     * （Issue #1266 残り2。`vacate()` の候補(2)(B)と同じ形——`runner.stop()`
+     * の直前に握手する、この関数の数行下で呼ぶ `#confirmStoppedAndReleaseLease`
+     * と対）。
+     *
+     * **`abort()` はここが唯一の合流点である。** `manager_stop`（`force:
+     * true` の running・非 force の `done`/`waiting_human`）・人間が Web UI /
+     * `DELETE /managers/:id` で止めたとき・`#autoFoldOne`（`by: 'auto-fold'`）
+     * のすべてがこの関数を通る——`by` で条件分けず全員に同じ観測を取る
+     * （`vacate()` が呼び手を問わないのと同じ判断。`'auto-fold'` は畳む前の
+     * 安全弁で既に `source: 'auto-fold'` を取っているが、その回から数百ms〜
+     * 数秒後に取るこちらのほうが「止める直前」に近く、上書きガードにより
+     * 新しいほうがそのまま勝つ——古い観測を経路が偉いからという理由では
+     * 残さない）。
+     *
+     * **`runner-protocol.ts` の `shutdown_unpushed_work` の doc「どの
+     * `stop()` から出るか」が、この形をあらかじめ指名している**——
+     * `Host#stop(managerId)` 経由（デーモンが明示的に指示する停止）は、
+     * 呼び出し元（ここ）がまだ生きて runner と往復できる状態で停止を出す
+     * ので、runner 側の best-effort な先取り（`shutdown_unpushed_work`）を
+     * 増やすのではなく、要求と応答の同期呼び出しで足りる、という設計判断
+     * である。`runner.ts` / `runner-protocol.ts` の側は1行も変えていない。
+     *
+     * **観測に失敗しても abort 本体の判定は変えない。** `unpushedWork()`
+     * 自体は例外を投げない設計（interface の doc）で `.catch()` を添えて
+     * あるのは `vacate()` と同じ理由——この観測1回の失敗が
+     * `#confirmStoppedAndReleaseLease` の判定を巻き添えにしない。
+     */
+    await this.unpushedWork(managerId, {
+      signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
+      source: 'stop',
+    }).catch(() => undefined);
 
     // **`runner.stop()` が投げても、ここで abort() ごと reject させない。** HTTP
     // 越しの runner では期限切れ（`RunnerUnknownError`）や明確な失敗（接続拒否等）

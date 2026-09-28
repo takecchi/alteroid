@@ -3732,6 +3732,8 @@ function describeUnpushedWorkObservationSource(
       return 'done を自動で畳む前の安全弁（auto-fold）';
     case 'vacate':
       return 'runner を意図して空ける直前（vacate）';
+    case 'stop':
+      return 'manager_stop（force・done/waiting_human の非force）・人間の停止・自動畳みが止める直前';
     case 'closed':
       return 'runner が closed を出す直前に先取り';
     case 'shutdown':
@@ -3770,17 +3772,21 @@ function describeUnpushedWorkObservationSource(
  *
  * ## 「残る族」を行の中に必ず書く
  *
- * この欄を更新するのは3つ——`manager_stop`（running・非 force）の断り
+ * この欄を更新するのは4つ——`manager_stop`（running・非 force）の断り
  * （`tools.ts`、この関数とは別経路）、委譲のターンが `report` で終わった
- * とき、そして Bash で `git push` か新しい枝を作る操作を検出したとき
- * （後の2つはどちらも `manager.ts` の `#observeUnpushedWorkOnce`。前者は
- * `case 'report'` から Issue #1266 の (4)、後者は `case 'tool_use'` から
- * Issue #1376 の続き）。
- * **`force: true` で止めた回・`manager_list` 自身・器の入れ替え（redeploy・
- * 枠落ちでセッションを失う経路）では、どの経路からも一度も更新されない**
- * ——`report` も `git push`／枝作成の `tool_use` も届く前に器を失う経路
- * （redeploy・枠落ち）は、どちらの形でも拾えない（`manager.ts` の
- * `#observeUnpushedWorkOnce` の doc）。**時刻だけを出すと、読み手はそれを
+ * とき、Bash で `git push` か新しい枝を作る操作を検出したとき（この2つは
+ * どちらも `manager.ts` の `#observeUnpushedWorkOnce`。前者は `case
+ * 'report'` から Issue #1266 の (4)、後者は `case 'tool_use'` から Issue
+ * #1376 の続き）、そして **`manager_stop`（`force: true` の running・非
+ * force の `done`/`waiting_human`）・人間が Web UI / `DELETE /managers/:id`
+ * で止めたとき・自動畳みが止める直前**（`manager.ts` の `abort()` が
+ * `runner.stop(managerId)` を呼ぶ直前。Issue #1266 残り2）。
+ * **`manager_list` 自身・器の入れ替え（redeploy・枠落ちでセッションを失う
+ * 経路）では、どの経路からも一度も更新されない**——`report` も `git
+ * push`／枝作成の `tool_use` も届く前に器を失う経路（redeploy・枠落ち）は、
+ * どちらの形でも拾えない（`manager.ts` の `#observeUnpushedWorkOnce` の
+ * doc）。**`force: true` はもうこの「更新されない」側ではない**——Issue
+ * #1266 残り2で `abort()` が埋めた。**時刻だけを出すと、読み手はそれを
  * 「いまの状態」と誤読する**——だから毎回、どの経路が更新するかを行の中に
  * 書く（JSDoc に書いてもクローンには届かない。`resources: true` の説明文と
  * 同じ理由）。**このパラグラフの生の日本語文言はテスト
@@ -3857,9 +3863,10 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
   if (observation === undefined) return null;
   const provenance =
     'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'または Bash で git push か新しい枝を作る操作を検出したときに取った最後の1回' +
-    '（force:true・manager_list 自身・器の入れ替え（redeploy・枠落ちでセッションを失う経路）' +
-    'では更新されない。いまの状態ではない）';
+    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
+    '（manager_stop の force・done/waiting_human の非force・人間の停止・自動畳み）' +
+    'で取った最後の1回（manager_list 自身・器の入れ替え（redeploy・枠落ちで' +
+    'セッションを失う経路）では更新されない。いまの状態ではない）';
   if (observation.kind === 'unavailable') {
     return (
       `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason

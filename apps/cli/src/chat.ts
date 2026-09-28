@@ -2294,6 +2294,8 @@ function describeUnpushedWorkObservationSource(
   if (source === 'tool_use') return 'Bash で git push か新しい枝を作る操作を検出したとき';
   if (source === 'auto-fold') return 'done を自動で畳む前の安全弁（auto-fold）';
   if (source === 'vacate') return 'runner を意図して空ける直前（vacate）';
+  if (source === 'stop')
+    return '/stop（force・done/waiting_human の非force）・人間の停止・自動畳みが止める直前';
   if (source === 'closed') return 'runner が closed を出す直前に先取り';
   if (source === 'shutdown')
     return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
@@ -2302,8 +2304,10 @@ function describeUnpushedWorkObservationSource(
 
 /**
  * `/stop`（running・非force）の断り、ターンが `report` で終わったとき、
- * または Bash で `git push` か新しい枝を作る操作を検出したときに取った最後の
- * 未push観測（Issue #1883。GET /managers が返す `lastUnpushedWorkObservation`）。
+ * Bash で `git push` か新しい枝を作る操作を検出したとき、または止める操作
+ * そのもの（`/stop` の force・`done`/`waiting_human` の非force・人間の停止・
+ * 自動畳み。Issue #1266 残り2）で取った最後の未push観測（Issue #1883。
+ * GET /managers が返す `lastUnpushedWorkObservation`）。
  *
  * **core の `describeUnpushedWorkObservation`（`tools.ts`）と同じ2つの分岐を
  * 複製する**（export されていない私用関数）。
@@ -2369,8 +2373,9 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   if (observation === undefined) return null;
   const provenance =
     '/stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'または Bash で git push か新しい枝を作る操作を検出したときに取った最後の1回' +
-    '（force指定・この一覧そのもの・器の入れ替え（redeploy・枠落ちでセッションを' +
+    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
+    '（/stop の force・done/waiting_human の非force・人間の停止・自動畳み）で' +
+    '取った最後の1回（この一覧そのもの・器の入れ替え（redeploy・枠落ちでセッションを' +
     '失う経路）では更新されない。いまの状態ではない）';
   if (observation.kind === 'unavailable') {
     return (
