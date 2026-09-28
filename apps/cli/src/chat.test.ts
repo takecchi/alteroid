@@ -180,7 +180,7 @@ describe('renderManagerList', () => {
     expect(text).toContain('この委譲が失われたという意味ではない');
   });
 
-  it('宛先の器が名簿から消えているときは、その印と「lost ではない」を添える。時刻は出さない（#1212）', () => {
+  it('宛先の器が名簿から消えているときは、その印と「lost ではない」を添える。消えた時刻は出さない（#1212）', () => {
     const text = renderManagerList([
       manager({ status: 'running', live: true, runnerVanished: true }),
     ]);
@@ -188,6 +188,25 @@ describe('renderManagerList', () => {
     expect(text).toContain('宛先の器が名簿から消えている');
     expect(text).toContain('消えた時刻は名簿に残っていないので分からない');
     expect(text).toContain('lost で絞っても出てこない');
+  });
+
+  /**
+   * **Issue #1883の「軽微な点」**: core の `describeRunnerVanished`
+   * （`packages/core/src/tools.ts`）は「この委譲の走り始めは ${startedAt}」を
+   * 含めるが、CLI 版はここを手で写した際に落としていた——矛盾ではないが
+   * 揃っていなかった。同じ関数の中の変更なので、この PR で揃える。
+   */
+  it('宛先の器が名簿から消えているときは、この委譲の走り始めの時刻を添える（core と揃える）', () => {
+    const text = renderManagerList([
+      manager({
+        status: 'running',
+        live: true,
+        runnerVanished: true,
+        startedAt: '2026-08-16T10:00:00.000Z',
+      }),
+    ]);
+
+    expect(text).toContain('この委譲の走り始めは 2026-08-16T10:00:00.000Z');
   });
 
   it('宛先の器が名簿から消えていなければ、その行は出さない（#1212）', () => {
@@ -683,6 +702,339 @@ describe('renderManagerList', () => {
         // ——どちらの見出しも、畳まれた本文の見出し（下の別の歯）に置き換わる。
         expect(text).toContain('畳まれたターンの中身');
       });
+    });
+  });
+
+  /**
+   * **Issue #1883: GET /managers が返す `usageStoppedAt` を CLI が1つも
+   * 出していなかった。** 揃える先は core の `describeUsageStopped`
+   * （`packages/core/src/tools.ts`）と同じ3分岐——#1882 と同じ穴（終端した
+   * status で「セッションは生きている」と言い切る）を作らない。
+   */
+  describe('Issue #1883: 枠(利用上限)で止まっている（usageStoppedAt）', () => {
+    it('材料が無ければ何も出さない', () => {
+      const text = renderManagerList([manager({ status: 'done' })]);
+      expect(text).not.toContain('枠(利用上限)');
+    });
+
+    it('生きている status（running）は「鍵が回れば続く」と言う', () => {
+      const text = renderManagerList([
+        manager({ status: 'running', usageStoppedAt: '2026-09-20T00:00:00.000Z' }),
+      ]);
+      expect(text).toContain('枠(利用上限)で止まっている（2026-09-20T00:00:00.000Z から）');
+      expect(text).toContain('鍵が回ればこの委譲は続く');
+    });
+
+    it('status: failed では「セッションは生きている」と言い切らない', () => {
+      const text = renderManagerList([
+        manager({ status: 'failed', usageStoppedAt: '2026-09-20T00:00:00.000Z' }),
+      ]);
+      expect(text).toContain('status: failed');
+      expect(text).not.toContain('セッションは生きているので、鍵が回れば');
+      expect(text).toContain('/msg');
+      expect(text).toContain('届く保証は無い');
+    });
+
+    it('status: lost では「セッションは生きている」と言い切らない', () => {
+      const text = renderManagerList([
+        manager({ status: 'lost', usageStoppedAt: '2026-09-20T00:00:00.000Z' }),
+      ]);
+      expect(text).toContain('status: lost');
+      expect(text).not.toContain('セッションは生きているので、鍵が回れば');
+    });
+
+    it('status: stopped では、人間・クローンが明示的に止めたと言う', () => {
+      const text = renderManagerList([
+        manager({ status: 'stopped', usageStoppedAt: '2026-09-20T00:00:00.000Z' }),
+      ]);
+      expect(text).toContain('status: stopped');
+      expect(text).toContain('人間・クローンが明示的に停止させ');
+      expect(text).not.toContain('セッションは生きているので、鍵が回れば');
+    });
+  });
+
+  /**
+   * **Issue #1883: GET /managers が返す `lastSystemError` を CLI が出して
+   * いなかった。** `status !== 'failed'` の間は材料があっても出さない
+   * （core の `describeManagerSystemError` と同じゲート）。
+   */
+  describe('Issue #1883: セッションが failed で畳まれた落ち方（lastSystemError）', () => {
+    const SYSTEM_ERROR = {
+      code: 'EAGAIN',
+      errno: -11,
+      syscall: 'fork',
+      at: '2026-09-21T00:00:00.000Z',
+    };
+
+    it('status !== failed なら材料があっても出さない', () => {
+      const text = renderManagerList([manager({ status: 'done', lastSystemError: SYSTEM_ERROR })]);
+      expect(text).not.toContain('器の資源による落ち方');
+    });
+
+    it('status: failed かつ材料が在れば code/errno/syscall を出す', () => {
+      const text = renderManagerList([
+        manager({ status: 'failed', lastSystemError: SYSTEM_ERROR }),
+      ]);
+      expect(text).toContain('器の資源による落ち方で畳まれた可能性');
+      expect(text).toContain('code=EAGAIN');
+      expect(text).toContain('errno=-11');
+      expect(text).toContain('syscall=fork');
+      expect(text).toContain('2026-09-21T00:00:00.000Z');
+    });
+
+    it('status: failed だが材料が無ければ「判定できなかった」と言う', () => {
+      const text = renderManagerList([manager({ status: 'failed' })]);
+      expect(text).toContain('セッションは失敗で畳まれた');
+      expect(text).toContain('判定できなかった');
+    });
+  });
+
+  /**
+   * **Issue #1883: GET /managers が返す `lastCgroupEvents` を CLI が出して
+   * いなかった。** `status !== 'failed'` の間は出さない（core の
+   * `describeManagerCgroupEvents` と同じゲート）。
+   */
+  describe('Issue #1883: cgroup の pids/OOM カウンタ（lastCgroupEvents）', () => {
+    it('status !== failed なら材料があっても出さない', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 0, at: '2026-09-22T00:00:00.000Z' },
+        }),
+      ]);
+      expect(text).not.toContain('pids 上限');
+    });
+
+    it('status: failed かつ材料が在れば回数を出す', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'failed',
+          lastCgroupEvents: { pidsMaxDelta: 3, oomKillDelta: 1, at: '2026-09-22T00:00:00.000Z' },
+        }),
+      ]);
+      expect(text).toContain('fork が pids 上限により 3 回断られた');
+      expect(text).toContain('OOM kill が 1 回あった');
+      expect(text).toContain('2026-09-22T00:00:00.000Z');
+    });
+
+    it('status: failed だが材料が無ければ「判定できなかった」と言う', () => {
+      const text = renderManagerList([manager({ status: 'failed' })]);
+      expect(text).toContain('OOM kill が起きたかは、この欄では判定できなかった');
+    });
+  });
+
+  /**
+   * **Issue #1883: GET /managers が返す `tokenGenerationUnknownReason` を
+   * CLI が出していなかった。** `tokenGeneration` / `activeTokenGeneration`
+   * （世代の生の番号）は Web の `DiagnosticsCard` と揃えて出さないと決めた
+   * ——`tokenGenerationUnknownReason` はそれとは別の性質（説明そのもの）
+   * なので出す。
+   */
+  describe('Issue #1883: 認証トークンの世代が分からない理由（tokenGenerationUnknownReason）', () => {
+    it('材料が無ければ何も出さない', () => {
+      const text = renderManagerList([manager({ status: 'running' })]);
+      expect(text).not.toContain('認証トークンの世代');
+    });
+
+    it('pool-not-wired: 「このデプロイが配線していない」と言う', () => {
+      const text = renderManagerList([
+        manager({ status: 'running', tokenGenerationUnknownReason: 'pool-not-wired' }),
+      ]);
+      expect(text).toContain('このデプロイは認証トークンの世代そのものを配線していない構成');
+    });
+
+    it('not-yet-observed: 「いま何もしなくてよい」と言う', () => {
+      const text = renderManagerList([
+        manager({ status: 'running', tokenGenerationUnknownReason: 'not-yet-observed' }),
+      ]);
+      expect(text).toContain('いま何もしなくてよい');
+    });
+
+    it('reattached-across-restart: 起こし直す前にリモートを確かめるよう言い、会話以外も失われうると言う', () => {
+      const text = renderManagerList([
+        manager({ status: 'running', tokenGenerationUnknownReason: 'reattached-across-restart' }),
+      ]);
+      expect(text).toContain('デーモンの再起動をまたいで');
+      expect(text).toContain('まずリモート（PR・ブランチ・コミット）を確かめること');
+      expect(text).toContain('失われるのは会話だけではない');
+      // core の助言定数（`STALE_TOKEN_RESTART_ADVICE`）の逐語は
+      // `pnpm check:stale-token-restart-advice` が生成元の外を禁じている
+      // ——CLI は言い換える（`/msg`。`manager_start` は名指ししない）。
+      expect(text).not.toContain('manager_start');
+      expect(text).toContain('/msg');
+    });
+
+    it('生の世代番号（tokenGeneration / activeTokenGeneration）は出さない', () => {
+      const text = renderManagerList([
+        manager({ status: 'running', tokenGeneration: 5, activeTokenGeneration: 7 }),
+      ]);
+      expect(text).not.toContain('認証トークンの世代: 5');
+      expect(text).not.toContain('世代 5');
+      expect(text).not.toContain('世代 7');
+    });
+  });
+
+  /**
+   * **Issue #1883: GET /managers が返す `resetTimeSkewMatch` を CLI が出して
+   * いなかった。** core は `tokenGeneration` の食い違いが既に出ているときは
+   * 二重に鳴らさないが、CLI はその生の番号を出さないと決めた（上）ので
+   * 抑えない（Web の `resetTimeSkewText` と同じ判断）。
+   */
+  describe('Issue #1883: 429の世代ずれ判定（resetTimeSkewMatch）', () => {
+    it('材料が無ければ何も出さない', () => {
+      const text = renderManagerList([manager({ status: 'running' })]);
+      expect(text).not.toContain('世代ずれ');
+    });
+
+    it('active: 「世代ずれではなく、待てば戻る」と言う', () => {
+      const text = renderManagerList([
+        manager({ status: 'running', resetTimeSkewMatch: 'active' }),
+      ]);
+      expect(text).toContain('世代ずれではなく、待てば戻る');
+    });
+
+    it('stale: 起こし直す前にリモートを確かめるよう言い、会話以外も失われうると言う', () => {
+      const text = renderManagerList([manager({ status: 'running', resetTimeSkewMatch: 'stale' })]);
+      expect(text).toContain('世代ずれの疑い');
+      expect(text).toContain('まずリモート（PR・ブランチ・コミット）を確かめること');
+      expect(text).toContain('失われるのは会話だけではない');
+      expect(text).not.toContain('manager_start');
+    });
+
+    it('stale かつ未push観測が在れば、それも合わせて見るよう添える', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'running',
+          resetTimeSkewMatch: 'stale',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-23T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(text).toContain('下の「未push観測」にも最後の観測が出ている');
+    });
+
+    it('未知の値（版のずれ）でも落ちず、そのまま名乗る', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'running',
+          resetTimeSkewMatch: 'future-value' as unknown as ManagerListItem['resetTimeSkewMatch'],
+        }),
+      ]);
+      expect(text).toContain('この一覧が知らない値');
+      expect(text).toContain('future-value');
+    });
+  });
+
+  /**
+   * **Issue #1883: GET /managers が返す `lastUnpushedWorkObservation` を
+   * CLI が出していなかった。** `sessionMissingSince` が在る間は
+   * `shutdownObservationArrivedAfterSwap` で言い分ける（core の
+   * `describeUnpushedWorkObservation` と同じ判断）。
+   */
+  describe('Issue #1883: 未push観測（lastUnpushedWorkObservation）', () => {
+    it('材料が無ければ何も出さない', () => {
+      const text = renderManagerList([manager({ status: 'running' })]);
+      expect(text).not.toContain('未push観測');
+    });
+
+    it('observed: 見つかった作業ツリーと枝名を出す', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [{ relativePath: 'repo', branch: 'fix/123' }],
+          },
+        }),
+      ]);
+      expect(text).toContain('未push観測');
+      expect(text).toContain('repo: branch=fix/123');
+      expect(text).toContain('2026-09-24T00:00:00.000Z');
+      // いまの状態ではないという断りを含む。
+      expect(text).toContain('いまの状態ではない');
+    });
+
+    it('unavailable: 取れなかった理由を出す', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'unavailable',
+            at: '2026-09-24T00:00:00.000Z',
+            reason: 'git が無い',
+          },
+        }),
+      ]);
+      expect(text).toContain('未push観測');
+      expect(text).toContain('取れなかった');
+      expect(text).toContain('git が無い');
+    });
+
+    it('worktrees が0本なら「見つかった作業ツリー0本」と言う', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(text).toContain('見つかった作業ツリー0本');
+    });
+
+    it('branch が null なら「取れなかった」と言う（隠さない）', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [{ relativePath: 'repo', branch: null }],
+          },
+        }),
+      ]);
+      expect(text).toContain('branch=null（取れなかった）');
+    });
+
+    it('sessionMissingSince が在り、器が止まる直前の観測が届いていれば言い切る', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'running',
+          sessionMissingSince: '2026-09-25T00:00:00.000Z',
+          shutdownObservationArrivedAfterSwap: true,
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-25T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [{ relativePath: 'repo', branch: 'fix/1' }],
+          },
+        }),
+      ]);
+      expect(text).toContain('器が止まる直前（2026-09-25T00:00:00.000Z）の観測');
+      expect(text).toContain('repo: branch=fix/1');
+    });
+
+    it('sessionMissingSince が在り、届いていなければ「届いていない」と明示する', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'running',
+          sessionMissingSince: '2026-09-25T00:00:00.000Z',
+          shutdownObservationArrivedAfterSwap: false,
+        }),
+      ]);
+      expect(text).toContain('器が止まる直前の観測は届いていない');
+      expect(text).toContain('未pushが無かったことを意味しない');
+      expect(text).toContain('表示中の観測は無い');
     });
   });
 });
