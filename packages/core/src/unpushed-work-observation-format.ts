@@ -69,7 +69,9 @@ export function describeUnpushedWorkObservationIncompleteness(
     reasons.push(`/tmp スクラッチの起点を確かめられなかった: ${fields.scratchRootsUnknown}`);
   }
   if (fields.unreadableDirCount !== undefined) {
-    reasons.push(`子ディレクトリの読み失敗が${fields.unreadableDirCount}件あった`);
+    reasons.push(
+      `子ディレクトリの読み失敗が${fields.unreadableDirCount}件あった（/tmp スクラッチの起点そのものの読み失敗を含む）`,
+    );
   }
   if (reasons.length === 0) return null;
   return `この観測は探しきっていない（${reasons.join('・')}）——ここに無い作業ツリーが在りうる。`;

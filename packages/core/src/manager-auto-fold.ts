@@ -186,7 +186,7 @@ export function describeAutoFoldUnpushedWorkProbe(probe: AutoFoldUnpushedWorkPro
       result.unreadableDirSample === undefined ? '' : `（例: ${result.unreadableDirSample}）`;
     return (
       `作業ツリーの探索中に子ディレクトリの読み取りに${String(result.unreadableDirCount)}回` +
-      `失敗していた（見つかった分がすべてとは限らない）${sample}`
+      `失敗していた（/tmp スクラッチの起点そのものの読み失敗を含む。見つかった分がすべてとは限らない）${sample}`
     );
   }
   // **「判定できない」——どちらかの件数が `undefined`。**
