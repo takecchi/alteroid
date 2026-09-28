@@ -214,9 +214,15 @@ export class PgPracticeStore implements PracticeStore {
   async clear(): Promise<number> {
     // **版もここでは消す**（`PracticeStore.clear` の doc、#1309）——ワークスペース
     // リセット専用の操作で、人間が明示的に「全部忘れる」と決めたときにしか呼ばれない。
-    const rows = await this.#db.delete(practices).returning({ slug: practices.slug });
-    await this.#db.delete(practiceVersions);
-    return rows.length;
+    //
+    // **1つのトランザクションで束ねる（issue #1955。#1929 と同じ形）。** 束ねないと
+    // 2文目（`practiceVersions`）が落ちたときに1文目（`practices`）の DELETE だけが
+    // 確定してしまい、呼び手は例外を受けて「何も消えていない」と読みうる。
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx.delete(practices).returning({ slug: practices.slug });
+      await tx.delete(practiceVersions);
+      return rows.length;
+    });
   }
 
   async listVersions(slug: string): Promise<PracticeVersionMeta[]> {

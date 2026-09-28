@@ -470,20 +470,26 @@ export class PgUsageStore implements UsageStore {
    * 4テーブルを丸ごと消す（`UsageStore.clear` の doc）。**`usage_ledger` も
    * 消す** — `since` / `layersSince` / `tokensSince` / `turnsSince` の基準が
    * 台帳と一緒に無かったことになる。
+   *
+   * **1つのトランザクションで束ねる（issue #1955。#1929 と同じ形）。** 束ねないと
+   * 途中の文が落ちたときにそれより前の文の DELETE だけが確定してしまい、呼び手は
+   * 例外を受けて「何も消えていない」と読みうる。
    */
   async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
-    const daily = await this.#db.delete(usageDaily).returning({ date: usageDaily.date });
-    const baseline = await this.#db
-      .delete(usageBaseline)
-      .returning({ managerId: usageBaseline.managerId });
-    const ledger = await this.#db.delete(usageLedger).returning({ id: usageLedger.id });
-    const turns = await this.#db.delete(usageTurns).returning({ date: usageTurns.date });
-    return {
-      daily: daily.length,
-      baseline: baseline.length,
-      ledger: ledger.length,
-      turns: turns.length,
-    };
+    return this.#db.transaction(async (tx) => {
+      const daily = await tx.delete(usageDaily).returning({ date: usageDaily.date });
+      const baseline = await tx
+        .delete(usageBaseline)
+        .returning({ managerId: usageBaseline.managerId });
+      const ledger = await tx.delete(usageLedger).returning({ id: usageLedger.id });
+      const turns = await tx.delete(usageTurns).returning({ date: usageTurns.date });
+      return {
+        daily: daily.length,
+        baseline: baseline.length,
+        ledger: ledger.length,
+        turns: turns.length,
+      };
+    });
   }
 
   #toRow(row: typeof usageDaily.$inferSelect): UsageRow {
