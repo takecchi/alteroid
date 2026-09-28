@@ -63,7 +63,10 @@ describe('JobStore.clear() — jobs と approvals を1つのトランザクシ�
       question: '確認してほしい',
     });
 
-    await expect(stores.jobs.clear()).rejects.toThrow();
+    // approvals の DELETE で落ちたことまで見る。ほかの理由で jobs の DELETE の
+    // 前に落ちても jobs は残るので、例外の中身を見ないと緑になってしまう。
+    // drizzle は仕込んだ例外を `Failed query: <SQL>` で包むので、SQL の側で見る。
+    await expect(stores.jobs.clear()).rejects.toThrow(/Failed query: delete from "approvals"/);
 
     // ロールバックされていれば、jobs の行は消えずに残っているはず。
     const remainingJobs = await db.select().from(jobs);
