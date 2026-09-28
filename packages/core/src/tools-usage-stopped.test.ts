@@ -182,12 +182,12 @@ describe('manager_list: usageStoppedAt の注記は status で言い分ける（
   });
 
   /**
-   * Issue #1882 の追記（PR #1889 の作業者が `send()` の実装で確かめた）:
-   * `manager_send` は `status` を見ずに `#load()` で `ManagerRecord` を作り
-   * 直すので、`stopped` でも resume は実際に試みられる——`isManagerOutcomeUnobserved`
-   * の枝は前から「起こし直すには manager_send で resume を試みるしかなく、
-   * 届く保証は無い」と言っていたが、`stopped` の枝はここを持たず「ここでは
-   * 成り立たない」で言い切って終わっていた（下書きの見落とし）。
+   * Issue #1882 の追記: `manager_send`（`manager.ts` の `send()`）は `status`
+   * を見ずに `#load()` で `ManagerRecord` を作り直すので、`stopped` でも
+   * resume は実際に試みられる——`isManagerOutcomeUnobserved` の枝は前から
+   * 「起こし直すには manager_send で resume を試みるしかなく、届く保証は
+   * 無い」と言っていたが、`stopped` の枝はここを持たず「ここでは成り立たない」
+   * で言い切って終わっていた。
    */
   it('status: stopped でも、起こし直しは resume を試みるしかなく届く保証が無いことを言う', async () => {
     const h = harness();

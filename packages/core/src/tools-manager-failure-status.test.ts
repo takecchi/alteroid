@@ -202,10 +202,11 @@ describe('manager_list: lastFailure の注記は status で言い分ける（Iss
   });
 
   /**
-   * Issue #1882 の追記（PR #1889 の作業者が `send()` の実装で確かめた）:
-   * `manager_send` は `status` を見ずに resume を試みるので、`stopped` でも
-   * 「起こし直すには manager_send で resume を試みるしかなく、届く保証は無い」
-   * まで言う——`describeUsageStopped` の `stopped` 枝と揃える。
+   * Issue #1882 の追記: `manager_send`（`manager.ts` の `send()`）は `status`
+   * を見ずに `#load()` / `#resume()` を通るので、`stopped` でも resume は
+   * 実際に試みられる。`stopped` でも「起こし直すには manager_send で resume
+   * を試みるしかなく、届く保証は無い」まで言う——`describeUsageStopped` の
+   * `stopped` 枝と揃える。
    */
   it('status: stopped でも、起こし直しは resume を試みるしかなく届く保証が無いことを言う', async () => {
     const h = harness();
@@ -312,5 +313,48 @@ describe('manager_report: lastFailure の注記は status で言い分ける（I
     const reply = await h.call('manager_report', { managerId: target.managerId });
 
     expect(reply).toContain('確かめる前に manager_start で起こし直さないこと');
+  });
+});
+
+/**
+ * Issue #1882 のレビュー指摘: `manager_list` の `failureLine` は `manager_report`
+ * と違い、`lastFoldedTurn`（停止後に届いた、畳まれたターンの本文。Issue #1038）
+ * が在る回にも `describeManagerFailure` を呼んでいた。`manager.ts` の
+ * `case 'report'` は `record.job.status === 'stopped'` の間 `lastFoldedTurn`
+ * だけを書いて早期 return するので、`lastFoldedTurn` が在る回の `lastFailure`
+ * は必ず畳まれる**前**の、無関係な古いターンを指す——`describeManagerFailure`
+ * の「直近のターンは報告ではなく失敗で終わっている」という言い切りは、より
+ * 新しいターン（畳まれたもの）が既に在る以上、「直近」の部分がそもそも事実と
+ * 違う。`manager_report` は #1798 でこの回を `null` にする（`foldedTurn !==
+ * undefined` のガード）よう直っているが、`manager_list` 側の `failureLine` は
+ * 同じガードを持っていなかった。
+ */
+describe('manager_list: lastFoldedTurn が在る回は failureLine を出さない（Issue #1882 レビュー指摘）', () => {
+  it('lastFoldedTurn が在れば、lastFailure が立っていても⚠を出さない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.managers[0];
+    if (!target) throw new Error('準備に失敗');
+    withLastFailure(target);
+    target.status = 'stopped';
+    target.lastFoldedTurn = { text: '停止後に届いた畳まれた本文', at: '2026-09-28T00:00:00.000Z' };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).not.toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
+  });
+
+  it('lastFoldedTurn が無ければ、従来どおり⚠を出す（陽性対照）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.managers[0];
+    if (!target) throw new Error('準備に失敗');
+    withLastFailure(target);
+    target.status = 'stopped';
+    // lastFoldedTurn はセットしない。
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('⚠ 直近のターンは報告ではなく失敗で終わっている');
   });
 });

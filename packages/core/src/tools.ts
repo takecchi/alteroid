@@ -2986,18 +2986,15 @@ function describeManagerFailure(
         'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
         '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
         RESTART_BEFORE_CHECK_ADVICE;
-  // **⚠️ `stopped` でも「起こし直しは resume を試みるしかなく、届く保証は無い」を
-  // 言う（下書きからの訂正。PR #1889 の作業者が `send()` の実装で確かめた）。**
-  // `send()`（`manager.ts`）は `status` を見ずに `#load()` で `ManagerRecord` を
-  // 作り直し（`attached: false`、`stopConfirmedAt` 無し）、`#resume()` も
-  // `record.stopConfirmedAt`（プロセス内の像にしか無く `Job` へは書かない印）が
-  // 立っていなければ素通りする。⟹ `stopped` はセッションが**確認済みで死んでいる**
-  // が、`manager_send` からの起こし直し自体は塞がれていない——`isLive()` が
-  // 確認したのは「その確認をした瞬間」の生死であって、resume が届くかどうかを
-  // 保証する印ではない。下書きはここを「もう続けられない」と読める文言にして
-  // いたが、それは事実と違う——`isManagerOutcomeUnobserved` 側の枝が最初から
-  // 言っていた「起こし直すには manager_send で resume を試みるしかなく、届く
-  // 保証は無い」を `stopped` にも揃えた。
+  // **`stopped` でも「起こし直しは resume を試みるしかなく、届く保証は無い」を
+  // 言う。** `send()`（`manager.ts`）は `status` を見ずに `#load()` で
+  // `ManagerRecord` を作り直し（`attached: false`、`stopConfirmedAt` 無し）、
+  // `#resume()` も `record.stopConfirmedAt`（プロセス内の像にしか無く `Job`
+  // へは書かない印）が立っていなければ素通りする。⟹ `stopped` はセッションが
+  // **確認済みで死んでいる**が、`manager_send` からの起こし直し自体は塞がれて
+  // いない——`isLive()` が確認したのは「その確認をした瞬間」の生死であって、
+  // resume が届くかどうかを保証する印ではない。`isManagerOutcomeUnobserved`
+  // 側の枝と同じ一文をここにも揃える。
   if (lastReport === undefined) return base;
   const fromText = limitRecoveryOf(lastReport);
   const recovery =
@@ -3021,8 +3018,22 @@ function describeManagerFailure(
  * {@link tokenGenerationMismatched} を当てるのに同じ委譲の世代が要る。
  * **2つの欄だけを渡す形に戻さないこと**——戻すと、呼び出し側が判定を
  * 組み立て直すことになり、`manager_report` 側と割れる。
+ *
+ * **`lastFoldedTurn` が在る回は出さない（Issue #1882 のレビュー指摘）。**
+ * `manager.ts` の `case 'report'` は `record.job.status === 'stopped'` の間
+ * `lastFoldedTurn` だけを書いて早期 return する（`lastFailure` には触れない）
+ * ので、`lastFoldedTurn` が在る回の `lastFailure` は必ず畳まれる**前**の、
+ * 無関係な古いターンを指す——`describeManagerFailure` の「直近のターンは
+ * 報告ではなく失敗で終わっている」は、より新しいターン（畳まれたもの）が
+ * 既に在る以上「直近」がそもそも事実と違う。`manager_report` は同じ穴を
+ * Issue #1798 で `foldedTurn !== undefined ? null : describeManagerFailure(...)`
+ * というガードで塞いでおり（このファイルの `case 'report'` ハンドラ）、
+ * ここも同じガードで揃える——揃えないと `manager_list` と `manager_report`
+ * が同じ委譲について違うことを言う（`manager_list` は誤った⚠を出し、
+ * `manager_report` は出さない）。
  */
 function failureLine(manager: ManagerSummary): string | null {
+  if (manager.lastFoldedTurn !== undefined) return null;
   const note = describeManagerFailure(
     manager.lastFailure,
     manager.lastReport,
@@ -3095,11 +3106,11 @@ function failureLine(manager: ManagerSummary): string | null {
  * （`manager.ts` の `send()`）は `status` を見ずに `#load()` で
  * `ManagerRecord` を作り直し（`stopConfirmedAt` はプロセス内の像にしか無く
  * `Job` へは書かないので、作り直した像には残らない）、`#resume()` もその印が
- * 無ければ素通りするので、`stopped` でも resume は実際に試みられる（PR #1889
- * の作業者が `send()` の実装で確かめた事実）。**「望んだ終端」と「セッションが
- * 生きているか」を分けたのと同じ理由で、「確認済みで死んでいる」と「起こし
- * 直しの経路が塞がっているか」も別の軸である**——後者は塞がっていない。
- * ⟹ `isManagerOutcomeUnobserved` の枝と同じ resume の一文をここにも足した。
+ * 無ければ素通りするので、`stopped` でも resume は実際に試みられる。
+ * **「望んだ終端」と「セッションが生きているか」を分けたのと同じ理由で、
+ * 「確認済みで死んでいる」と「起こし直しの経路が塞がっているか」も別の軸
+ * である**——後者は塞がっていない。⟹ `isManagerOutcomeUnobserved` の枝と
+ * 同じ resume の一文をここにも足した。
  *
  * **健全なマネージャーでは `null` を返し、1文字も増えない**（他の `describe*`
  * と同じ約束——一覧は文字数の予算 `LIST_BUDGET` に張り付いている）。
