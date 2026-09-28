@@ -369,9 +369,11 @@ export class PgJobStore implements JobStore {
    * 明示的に想定している経路である。
    */
   async clear(): Promise<{ jobs: number; approvals: number }> {
-    const removedJobs = await this.#db.delete(jobs).returning({ id: jobs.id });
-    const removedApprovals = await this.#db.delete(approvals).returning({ id: approvals.id });
-    return { jobs: removedJobs.length, approvals: removedApprovals.length };
+    return this.#db.transaction(async (tx) => {
+      const removedJobs = await tx.delete(jobs).returning({ id: jobs.id });
+      const removedApprovals = await tx.delete(approvals).returning({ id: approvals.id });
+      return { jobs: removedJobs.length, approvals: removedApprovals.length };
+    });
   }
 }
 
