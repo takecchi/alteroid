@@ -173,6 +173,61 @@ describe('check-no-env-passthrough: findEnvPassthroughHits', () => {
   });
 });
 
+describe('check-no-env-passthrough: findEnvPassthroughHits（Issue #2036 追加分。括弧を挟んだ形と計算プロパティ）', () => {
+  it('`Object.assign(getBase(), process.env)`（process.env の前に丸括弧を含む式が在る）を検出する', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: 'const env = Object.assign(getBase(), process.env);' },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['object-assign-process-env']);
+  });
+
+  it('⚠️ 対照: `Object.assign({}, other)`（process.env を含まない）は検出しない', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: 'const env = Object.assign({}, other);' },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('`{ ...(process.env), FOO: "1" }`（スプレッドが丸括弧で process.env を包む）を検出する', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "const o = { ...(process.env), FOO: '1' };" },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['spread-process-env']);
+  });
+
+  it('⚠️ 対照: `...(someObj)`（process.env を包まない）は検出しない', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: 'const o = { ...(someObj), FOO: "1" };' },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it("`{ ['env']: process.env }`（計算プロパティ名の文字列キー）を検出する", () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "const o = { ['env']: process.env };" },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['computed-env-key-process-env']);
+  });
+
+  it('⚠️ 対照: `{ [\'env2\']: process.env }`（"env" と一致しないキー）は検出しない', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "const o = { ['env2']: process.env };" },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it("⚠️ 回帰: コメント中の `['env']: process.env` の逐語引用は検出しない", () => {
+    const content = [
+      '/**',
+      " * 実際に読んだ該当行: { ['env']: process.env }",
+      ' */',
+      'const x = 1;',
+    ].join('\n');
+    const hits = findEnvPassthroughHits([{ path: 'x.test.ts', content }]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+});
+
 describe('check-no-env-passthrough: classifyChildProcessCallEnv（Issue #1971）', () => {
   it('env 無しの呼び出し（オプションそのものが無い）は missing-env', () => {
     expect(classifyChildProcessCallEnv('execFileSync', ["'git'", "['status']"])).toBe(
