@@ -426,14 +426,15 @@ export class PgUsageStore implements UsageStore {
       ledger === undefined || ledger.turnsAt === null ? null : toIso(ledger.turnsAt);
 
     return {
-      rows: rows.map((row) => this.#toRow(row)),
+      // **読めない行（layer / site が enum に無い）は外す**（issue #1996。`#toRow` の doc）。
+      rows: rows.flatMap((row) => this.#toRow(row) ?? []),
       since,
       layersSince,
       tokensSince,
       beforeLedger: isBeforeLedger(since, query.from),
       beforeLayers: isBeforeLayers(layersSince, query.from),
       beforeTokens: isBeforeTokens(tokensSince, query.from),
-      turnRows: turnRows.map((row) => this.#toTurnRow(row)),
+      turnRows: turnRows.flatMap((row) => this.#toTurnRow(row) ?? []),
       turnsSince,
       beforeTurns: isBeforeTurns(turnsSince, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
@@ -492,15 +493,27 @@ export class PgUsageStore implements UsageStore {
     });
   }
 
-  #toRow(row: typeof usageDaily.$inferSelect): UsageRow {
+  /**
+   * 1行を読む。**`layer` / `site` が enum に無い行は `undefined` を返し、stderr に
+   * 跡を残す**（issue #1996）。以前はここで `.parse` が投げ、`aggregate()` の `.map()`
+   * ごと（＝集計ごと）読めなくなっていた。fs の側（#1968）と同じく、壊れた行は
+   * 外して、ほかの行は読めるようにする。**黙っては通さない**——跡を残す
+   * （`noteUnreadableUsageRow`）。
+   */
+  #toRow(row: typeof usageDaily.$inferSelect): UsageRow | undefined {
+    // **列は text である。** 型の上では任意の文字列が来うるので、読むときに一度通す。
+    const layer = usageLayerSchema.safeParse(row.layer);
+    const site = usageSiteSchema.safeParse(row.site);
+    if (!layer.success || !site.success) {
+      noteUnreadableUsageRow('usage_daily', row, { layer: !layer.success, site: !site.success });
+      return undefined;
+    }
     return {
       date: row.date,
       managerId: row.managerId,
       model: row.model,
-      // **列は text である。** 型の上では任意の文字列が来うるので、読むときに
-      // 一度通す（想定外の値が入っていれば黙って通さずここで落ちる）。
-      layer: usageLayerSchema.parse(row.layer),
-      site: usageSiteSchema.parse(row.site),
+      layer: layer.data,
+      site: site.data,
       // **空文字は `undefined` へ戻す。** 列が `not null` なのは一意索引を成立
       // させるためだけで（`schema.ts` の `usageDaily.tokenId`）、空文字は
       // トークンではない。ここで戻さないと、外へ出す顔に「id が空文字のトークン」
@@ -520,12 +533,19 @@ export class PgUsageStore implements UsageStore {
     };
   }
 
-  #toTurnRow(row: typeof usageTurns.$inferSelect): UsageTurnRow {
+  /** 1行を読む。読めない行の扱いは `#toRow` と同じ（issue #1996）。 */
+  #toTurnRow(row: typeof usageTurns.$inferSelect): UsageTurnRow | undefined {
+    const layer = usageLayerSchema.safeParse(row.layer);
+    const site = usageSiteSchema.safeParse(row.site);
+    if (!layer.success || !site.success) {
+      noteUnreadableUsageRow('usage_turns', row, { layer: !layer.success, site: !site.success });
+      return undefined;
+    }
     return {
       date: row.date,
       managerId: row.managerId,
-      layer: usageLayerSchema.parse(row.layer),
-      site: usageSiteSchema.parse(row.site),
+      layer: layer.data,
+      site: site.data,
       // **空文字は `undefined` へ戻す。** `usageDaily` の `#toRow` と同じ理由。
       ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
       turns: toNumber(row.turns),
@@ -544,4 +564,21 @@ export class PgUsageStore implements UsageStore {
       lastResetAt: optionalIso(row.lastResetAt),
     };
   }
+}
+
+/**
+ * 集計から外した行の跡（stderr へ1行。issue #1996）。**値は出さない**——どの行か
+ * （表・`managerId`・`date`）と、どの欄が読めなかったかだけを書く。
+ */
+function noteUnreadableUsageRow(
+  table: 'usage_daily' | 'usage_turns',
+  row: { readonly managerId: string; readonly date: string },
+  invalid: { readonly layer: boolean; readonly site: boolean },
+): void {
+  const fields = [invalid.layer ? 'layer' : undefined, invalid.site ? 'site' : undefined]
+    .filter((field): field is string => field !== undefined)
+    .join(',');
+  process.stderr.write(
+    `alteroid: 使用量の集計から読めない行を外しました（${table}、managerId=${JSON.stringify(row.managerId)}、date=${JSON.stringify(row.date)}、不正な欄: ${fields}）\n`,
+  );
 }
