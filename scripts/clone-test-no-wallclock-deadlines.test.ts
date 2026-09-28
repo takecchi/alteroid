@@ -64,9 +64,16 @@ import { describe, expect, it } from 'vitest';
 /**
  * 元 `clone.test.ts`（issue #1744 の分割後）の系譜一式。共有ハーネス1本 +
  * 分割された24本。`packages/core/src/` からの相対パスで列挙する。
+ *
+ * **`clone-handle-order.test.ts` は分割由来ではなく、この列挙を自分の意思で
+ * 広げた1本目である**（#1744 続き）。`createClone` を実際に走らせて
+ * `clone-test-harness.ts` の `waitFor` で待ち合わせる、この系譜と同じ形の
+ * 統合寄りの試験なので、ここへ足す（この節の doc の「広げるなら、広げる側が
+ * 『どのファイルのどの形が禁止か』を自分で決めること」に対する回答）。
  */
 const TARGET_RELATIVE_PATHS: readonly string[] = [
   'clone-test-harness.ts',
+  'clone-handle-order.test.ts',
   'clone-core-loop.test.ts',
   'clone-manager-confirmation-and-shutdown.test.ts',
   'clone-self-status-and-memory-cause.test.ts',

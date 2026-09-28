@@ -2,6 +2,7 @@ import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-a
 import { describe, expect, it } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
+import { waitFor } from './clone-test-harness.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import type { InboxEvent } from './schema.js';
@@ -26,20 +27,13 @@ import { createMemoryStores } from './testing.js';
  *
  * ## 待ち方
  *
- * 壁時計の締め切りで打ち切らない（`AGENTS.md`「CI の完了を待つ形」と同じ
- * 理由）。ここでは `order` 配列に印が積まれるのを待つだけで、積まれなければ
- * vitest 自体のテスト単位タイムアウトに任せる。
+ * 壁時計の締め切りで打ち切らない（Issue #1220）。独自の `waitFor` は持たず、
+ * `clone-test-harness.ts` の `waitFor` を使う —— 打ち切りの根拠が壁時計では
+ * なく「テストが終わったか」（`afterEach` が進める `testEpoch`）である形。
+ * 「起きない」と言い切らない理由（#890）も、そちらの doc にある逐語のとおり。
  */
 
 const AT = '2026-08-12T00:00:00.000Z';
-
-async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-  for (let i = 0; i < 2000; i += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`${label} が起きない`);
-}
 
 /**
  * `order` へ印を積むだけの偽 SDK。**1メッセージ受け取るごとに `assistant` →
