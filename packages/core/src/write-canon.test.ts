@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.test-support.js';
+
 /**
  * `packages/core/scripts/write-canon.mjs` の版の出所判定
  * （`ALTEROID_BUILD_REV` 有り → `'build'` / 無し・git 作業ツリー有り →
@@ -60,7 +62,7 @@ async function runIsolated(options: {
 
   if (options.git) {
     const run = (args: string[]): void => {
-      execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+      execFileSync('git', args, { cwd: root, stdio: 'ignore', env: gitChildEnv() });
     };
     run(['init', '-q']);
     run(['config', 'user.email', 'write-canon-test@example.com']);
@@ -146,7 +148,7 @@ describe('write-canon.mjs の版の出所判定', () => {
     // 作業ツリーに相当する役。
     const outer = await makeTempDir('write-canon-outer-');
     const runOuterGit = (args: string[]): void => {
-      execFileSync('git', args, { cwd: outer, stdio: 'ignore' });
+      execFileSync('git', args, { cwd: outer, stdio: 'ignore', env: gitChildEnv() });
     };
     runOuterGit(['init', '-q']);
     runOuterGit(['config', 'user.email', 'write-canon-outer-test@example.com']);

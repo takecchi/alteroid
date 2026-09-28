@@ -35,6 +35,8 @@ import { makeTempDirSync } from '../../vitest.tmpdir.js';
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
 import { STEPS } from '../../scripts/verify-core.mjs';
 
+import { gitChildEnv } from './git-child-env.js';
+
 /** `scripts/verify-core.mjs` の `STEPS` 各要素の形（doc コメントから）。 */
 type Step = { name: string; cmd: string; args: string[] };
 
@@ -47,7 +49,11 @@ const SCRIPT = join(SCRIPTS_DIR, 'verify-for-sdk-pr.sh');
 const GIT_IDENTITY = ['-c', 'user.email=verify-test@example.com', '-c', 'user.name=Verify Test'];
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', [...GIT_IDENTITY, ...args], { cwd, encoding: 'utf8' });
+  return execFileSync('git', [...GIT_IDENTITY, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: gitChildEnv(),
+  });
 }
 
 type Result = { exitCode: number; stdout: string; stderr: string };

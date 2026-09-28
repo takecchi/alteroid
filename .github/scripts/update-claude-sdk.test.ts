@@ -512,6 +512,13 @@ fi
     try {
       return execFileSync('git', ['--git-dir', originPath, 'rev-parse', ref], {
         encoding: 'utf8',
+        // **`env: gitIsolatedEnv()` が要る。** 他の `git()` 呼び出しと同じで、
+        // これも `env` が無ければ親の `process.env` を丸ごと継承する。
+        // identity は問わない読み出し（`rev-parse`）なので、既存の
+        // `gitIsolatedEnv()`（本物の `HOME` は残しつつ、`GIT_AUTHOR_*` 等の
+        // identity 系だけ落とす）をそのまま使い、ファイル内で env の作り方を
+        // 2通りに増やさない。
+        env: gitIsolatedEnv(),
       }).trim();
     } catch {
       return '';

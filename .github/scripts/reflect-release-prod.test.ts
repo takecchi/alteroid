@@ -28,13 +28,19 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
+
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'reflect-release-prod.sh');
 
 /** この環境にグローバル設定が無いので、commit するたびに明示で渡す。 */
 const GIT_IDENTITY = ['-c', 'user.email=reflect-test@example.com', '-c', 'user.name=Reflect Test'];
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', [...GIT_IDENTITY, ...args], { cwd, encoding: 'utf8' });
+  return execFileSync('git', [...GIT_IDENTITY, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: gitChildEnv(),
+  });
 }
 
 /**
@@ -81,6 +87,7 @@ function remoteRef(originPath: string, ref: string): string {
   try {
     return execFileSync('git', ['--git-dir', originPath, 'rev-parse', ref], {
       encoding: 'utf8',
+      env: gitChildEnv(),
     }).trim();
   } catch {
     return '';
