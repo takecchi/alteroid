@@ -5793,6 +5793,46 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * `unreadableDirCount` には、2本目以降の `/tmp` スクラッチ起点そのものの
+   * 読み失敗も入る（#1891、`findGitDirsAcrossRoots`）。`${result.cwd} の下` だけを
+   * 名乗ると、スクラッチ起点が読めなかった回に job.cwd の下を探し直しに行く。
+   * 作業ツリーが在る形と0本の形の両方で見る（出す文が別の関数にある）。
+   */
+  it.each([
+    [
+      '作業ツリーあり',
+      [
+        {
+          relativePath: 'mgr-1/repo',
+          branch: 'main',
+          unpushedCommitCount: 0,
+          uncommittedChangeCount: 0,
+        },
+      ],
+    ],
+    ['作業ツリー0本', []],
+  ])(
+    'manager_stop の running 断りは、unreadableDirCount がスクラッチ起点の読み失敗も含むと名乗る（%s）',
+    async (_label, worktrees) => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      h.setUnpushedWork('mgr-1', {
+        kind: 'ok',
+        result: {
+          cwd: '/workspace',
+          worktrees,
+          unreadableDirCount: 1,
+          unreadableDirSample: '/tmp/mgr-2: EACCES',
+        },
+      });
+
+      const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+      expect(reply).toContain('/tmp スクラッチの起点そのものの読み失敗を含む');
+    },
+  );
+
+  /**
    * ⭐ Issue #1865 の核 — `worktrees` が0本のときの早期 return
    * （`未 push の実装・未コミットの変更: 作業ツリーが見つからなかった`）が
    * `unreadableDirCount` を握り潰していないこと。

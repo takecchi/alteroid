@@ -58,3 +58,17 @@ describe('describeUnpushedWorkObservationIncompleteness（Issue #1885）', () =>
     expect(describeUnpushedWorkObservationIncompleteness({ stoppedEarly: undefined })).toBeNull();
   });
 });
+
+/**
+ * `unreadableDirCount` には、`job.cwd` の下の子ディレクトリの読み失敗だけで
+ * なく、2本目以降の `/tmp` スクラッチ起点そのものの読み失敗も入る（#1891、
+ * `findGitDirsAcrossRoots`）。文言が「子ディレクトリ」だけを名乗ると、
+ * スクラッチ起点が読めなかった回を読む人が、job.cwd の下を探し直しに行く。
+ */
+describe('describeUnpushedWorkObservationIncompleteness — 読み失敗の件数がスクラッチ起点も含むと名乗る（#1891 の続き）', () => {
+  it('unreadableDirCount があれば、スクラッチ起点そのものの読み失敗も含むと言う', () => {
+    const text = describeUnpushedWorkObservationIncompleteness({ unreadableDirCount: 1 });
+    expect(text).toContain('子ディレクトリの読み失敗が1件あった');
+    expect(text).toContain('/tmp スクラッチの起点そのものの読み失敗を含む');
+  });
+});

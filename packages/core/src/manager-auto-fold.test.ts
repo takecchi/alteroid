@@ -421,3 +421,19 @@ describe('classifyAutoFoldUnpushedWorkProbe（Issue #1394 の留保 — 日誌�
     expect(a).not.toBe(b);
   });
 });
+
+/**
+ * `unreadableDirCount` には、2本目以降の `/tmp` スクラッチ起点そのものの
+ * 読み失敗も入る（#1891、`findGitDirsAcrossRoots`）。畳まなかった理由の文が
+ * 「子ディレクトリ」だけを名乗らないことを見る。
+ */
+describe('describeAutoFoldUnpushedWorkProbe — 読み失敗の件数がスクラッチ起点も含むと名乗る（#1891 の続き）', () => {
+  it('unreadableDirCount の理由は、スクラッチ起点そのものの読み失敗も含むと言う', () => {
+    const text = describeAutoFoldUnpushedWorkProbe({
+      kind: 'ok',
+      result: { worktrees: [], unreadableDirCount: 1, unreadableDirSample: '/tmp/mgr-2: EACCES' },
+    });
+    expect(text).toContain('子ディレクトリ');
+    expect(text).toContain('/tmp スクラッチの起点そのものの読み失敗を含む');
+  });
+});
