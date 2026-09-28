@@ -450,14 +450,18 @@ export async function findManagerScratchRoots(
  * 残りの起点を探索せずに即座に `rootUnreadable` を上へ運ぶ——`job.cwd` が
  * 読めないなら、そこから先に集めた `paths` は「見つかった分だけを正として
  * よい」という前提が既に崩れているので、部分的な結果を混ぜて返さない。
- * **2本目以降（`/tmp` スクラッチ起点）の読み失敗はここでは扱わない**——
- * そちらは `findManagerScratchRoots` の入口（`tmpRootDir` 自体）が既に別の
- * 形（`scratchRootsUnknown`）で「確かめられなかった」を名乗っており
- * （#1765 段2）、ここでまた別の形で名乗ると二重になる。
+ * **2本目以降（`/tmp` スクラッチ起点）が読めるかどうかは、起点そのものが
+ * 「列挙できたか」（`findManagerScratchRoots` の入口・`tmpRootDir` 自体）と
+ * 「列挙で当たった個々のディレクトリが実際に読めるか」の別の問いである
+ * （Issue #1891）。前者は既に `scratchRootsUnknown` が名乗っているが、後者は
+ * 別で、`findGitDirs` が返す `rootUnreadable` をここで捨てずに数えないと
+ * どちらの欄にも出ない——「探しきって0本だった」と区別が付かなくなる。
+ * ⟹ 2本目以降の `rootUnreadable` は例外へは運ばず（1本目とは違い、探索
+ * 自体は続ける）、`unreadableDirCount` へ1件として合算する。
  *
- * **`unreadableDirCount`（Issue #1865）は起点をまたいで合算する。** どの
- * 起点で起きた失敗も同じ意味（「見つかった分が全体かどうか分からない」）を
- * 持つので、起点ごとに分けて持ち回る理由が無い。`unreadableDirSample` は
+ * **`unreadableDirCount`（Issue #1865 / #1891）は起点をまたいで合算する。**
+ * どの起点で起きた失敗も同じ意味（「見つかった分が全体かどうか分からない」）
+ * を持つので、起点ごとに分けて持ち回る理由が無い。`unreadableDirSample` は
  * 最初に見つかった1件だけを残す（複数の起点をまたいで最初の1件、という
  * 意味は `findGitDirs` 単体のときと変わらない）。
  */
@@ -485,6 +489,13 @@ async function findGitDirsAcrossRoots(
     });
     if (index === 0 && result.rootUnreadable !== undefined) {
       return { paths: [], rootUnreadable: result.rootUnreadable };
+    }
+    if (index !== 0 && result.rootUnreadable !== undefined) {
+      // 2本目以降の起点そのもの（`/tmp` スクラッチ起点）が読めない場合。
+      // 1本目とは違い、ここでは探索を打ち切らず・例外へも運ばない——
+      // `unreadableDirCount` に数えて、探索は残りの起点へ続ける（Issue #1891）。
+      unreadableDirCount += 1;
+      unreadableDirSample ??= `${root}: ${result.rootUnreadable}`;
     }
     if (result.unreadableDirCount !== undefined) {
       unreadableDirCount += result.unreadableDirCount;
