@@ -2334,12 +2334,12 @@ export type JournalEntryType = JournalEntry['type'];
 
 /**
  * `trace-action.ts` の {@link TraceActionLike}（手書き）が、この zod
- * スキーマから推論した {@link JournalEntry}（12種の判別可能ユニオン）を
+ * スキーマから推論した {@link JournalEntry}（13種の判別可能ユニオン）を
  * 構造的に受け付けることの強制（issue #1528）。
  *
  * 軽い口（`trace-action.ts`）は zod を import できないので、
  * `describeTraceAction` が実際に読む4種（`decision` / `memory_update` /
- * `tool_use` / `exchange`）の欄だけを手で書き写し、残り8種は型の名前
+ * `tool_use` / `exchange`）の欄だけを手で書き写し、残り9種は型の名前
  * だけで受けている（そちらの doc）。**ここが崩れると、`describeTraceAction`
  * へ実際の `JournalEntry` を渡す呼び出し（`approval-trace.ts` の
  * `renderApprovalTrace`）自体が `typecheck` で落ちるはずだが、その落ち方は

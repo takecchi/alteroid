@@ -406,7 +406,7 @@ const DEDUPE_SEPARATOR = '\u0000';
  * 型で強制する** ——新しい合図の型が足されたら、この関数を含むファイルの
  * `typecheck` が落ちる（`AGENTS.md`「テストを弱めずに直す」の #285 と同じ
  * 作法。実行時の倒れ先は default 節で throw する——この repo の同じ union に
- * 対する既存の倒れ先（`clone.ts` の `#dispatch` の `default`）と同じ形である）。
+ * 対する既存の倒れ先（`clone.ts` の `#handle` の `default`）と同じ形である）。
  *
  * ## 限界（3つ）
  *

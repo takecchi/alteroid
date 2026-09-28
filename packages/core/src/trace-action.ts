@@ -10,7 +10,7 @@
  *
  * `apps/web/app/routes/approvals.tsx` は元々 `describeAction` という名前の
  * 複製を画面側に持っていた（`journal-search.ts` の doc が指す「同じ壁」——
- * `apps/web` が持つ `JournalEntry` は `@alteroid/core` の（zod 由来・12種の
+ * `apps/web` が持つ `JournalEntry` は `@alteroid/core` の（zod 由来・13種の
  * 判別可能ユニオンの）`JournalEntry` ではなく、`@alteroid/api-client`
  * （OpenAPI 生成）の別の型なので、正本をそのまま渡すには画面側でキャストが
  * 要る）。複製は2箇所が別々に腐りうる形で、実際に腐っていた——正本は
@@ -18,10 +18,10 @@
  * 「人間への返答/発言: 」を付けるが、複製にはどちらも無かった（issue
  * #1528 の実測）。
  *
- * ## `TraceActionLike` は12種を丸ごと複製しない
+ * ## `TraceActionLike` は13種を丸ごと複製しない
  *
  * `describeTraceAction` が実際に読むのは `decision` / `memory_update` /
- * `tool_use` / `exchange` の4種の特定の欄だけで、残り8種は `type` の値を
+ * `tool_use` / `exchange` の4種の特定の欄だけで、残り9種は `type` の値を
  * そのまま返すだけである（`default: return entry.type`）。**⟹ 4種だけを
  * 手で書き写し、残りは「この4種以外の型名」という1行で受ける。**
  *
