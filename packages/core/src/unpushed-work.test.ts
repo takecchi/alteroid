@@ -933,10 +933,9 @@ describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ�
 
     const readdirFn: ReaddirFn = async (dir) => {
       if (dir === scratchRoot) {
-        throw Object.assign(
-          new Error('EACCES: permission denied, scandir (テスト用の模擬失敗)'),
-          { code: 'EACCES' },
-        );
+        throw Object.assign(new Error('EACCES: permission denied, scandir (テスト用の模擬失敗)'), {
+          code: 'EACCES',
+        });
       }
       return readdir(dir, { withFileTypes: true });
     };
