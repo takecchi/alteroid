@@ -116,6 +116,21 @@ export class PgAuthStore implements AuthStore {
       .where(eq(authAccounts.id, accountId));
   }
 
+  /**
+   * `granted_at` / `granted_by` / `owner_declared_at` の3列だけを書く。
+   * **条件無しの UPDATE 1文で、他の列には触らない**（issue #1915）。
+   * `putAccount` の upsert は `last_login_at` も無条件に `set` に含むので、
+   * 読んだときの写しで呼ぶと、そのあいだに完了した再ログインの
+   * `last_login_at` を踏みつぶす（`markAccountLoggedIn` が #1870 で塞いだ
+   * のと同じ形）。無い id では0行の更新になる（投げない）。
+   */
+  async revokeAccountAccess(accountId: string): Promise<void> {
+    await this.#db
+      .update(authAccounts)
+      .set({ grantedAt: null, grantedBy: null, ownerDeclaredAt: null })
+      .where(eq(authAccounts.id, accountId));
+  }
+
   async findIdentity(provider: string, subject: string): Promise<AuthIdentity | null> {
     const rows = await this.#db
       .select()

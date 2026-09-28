@@ -314,6 +314,33 @@ export class FsAuthStore implements AuthStore {
     });
   }
 
+  /**
+   * `grantedAt` / `grantedBy` / `ownerDeclaredAt` の3欄だけを null にする。
+   * **1つの排他区間の中で、いまのファイルの行を読んで**書く（issue #1915。
+   * `markAccountLoggedIn` と同じ形）。呼び手が読んだときの写しは使わない
+   * ——使うと、そのあいだに完了した再ログインの `lastLoginAt` を書き戻して
+   * しまう。無い id では何もしない。
+   */
+  async revokeAccountAccess(accountId: string): Promise<void> {
+    await this.#mutate<null>((file): { next: AuthFile | null; result: null } => {
+      const account = file.accounts.find((it) => it.id === accountId);
+      if (account === undefined) return { next: null, result: null };
+      const updated = authAccountSchema.parse({
+        ...account,
+        grantedAt: null,
+        grantedBy: null,
+        ownerDeclaredAt: null,
+      });
+      return {
+        next: {
+          ...file,
+          accounts: file.accounts.map((it) => (it.id === accountId ? updated : it)),
+        },
+        result: null,
+      };
+    });
+  }
+
   async findIdentity(provider: string, subject: string): Promise<AuthIdentity | null> {
     const { identities } = await this.#read();
     return identities.find((it) => it.provider === provider && it.subject === subject) ?? null;

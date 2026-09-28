@@ -51,11 +51,7 @@ function fakeProvider(): OAuthProvider {
  * （直す前は `putAccount` だけが遅れ、直した後は `revokeAccountAccess` だけが
  * 遅れる）。
  */
-function delayedAccountWrites(
-  inner: AuthStore,
-  onRead: () => void,
-  writeGate: Promise<void>,
-) {
+function delayedAccountWrites(inner: AuthStore, onRead: () => void, writeGate: Promise<void>) {
   return {
     ...inner,
     getAccount: async (id: string) => {
@@ -73,8 +69,9 @@ function delayedAccountWrites(
     // 無いメンバーなので、対象の型を直接付けず `as AuthStore` で戻す。
     revokeAccountAccess: async (accountId: string) => {
       await writeGate;
-      return (inner as unknown as { revokeAccountAccess(id: string): Promise<void> })
-        .revokeAccountAccess(accountId);
+      return (
+        inner as unknown as { revokeAccountAccess(id: string): Promise<void> }
+      ).revokeAccountAccess(accountId);
     },
   } as AuthStore;
 }

@@ -1141,6 +1141,20 @@ export function createMemoryStores(): Stores {
       if (account === undefined) return;
       accounts.set(accountId, authAccountSchema.parse({ ...account, lastLoginAt: at }));
     },
+    // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1915）。
+    async revokeAccountAccess(accountId) {
+      const account = accounts.get(accountId);
+      if (account === undefined) return;
+      accounts.set(
+        accountId,
+        authAccountSchema.parse({
+          ...account,
+          grantedAt: null,
+          grantedBy: null,
+          ownerDeclaredAt: null,
+        }),
+      );
+    },
     async findIdentity(provider, subject) {
       return identities.get(identityKey(provider, subject)) ?? null;
     },

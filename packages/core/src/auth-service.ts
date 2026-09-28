@@ -464,9 +464,25 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
        * 行為（`alteroid access owner <id>`）でしか立たない。
        */
       if (account.grantedAt === null) return account;
-      const updated = { ...account, grantedAt: null, grantedBy: null, ownerDeclaredAt: null };
-      await store.putAccount(updated);
-      return updated;
+      /**
+       * **行を丸ごと書き戻さない**（issue #1915）。`account`（`getAccount` で
+       * 読んだときの写し）を `putAccount` に渡すと、読んでから書くまでの
+       * あいだに完了した再ログイン（`markAccountLoggedIn`）の `lastLoginAt`
+       * を、写しに残った古い値で上書きしてしまう（`touchAccountLogin` が
+       * #1870 で塞いだのと同じ形の lost update）。`revokeAccountAccess` で
+       * 3欄だけを落とし、戻り値は書き込み後に読み直して最新の状態を返す
+       * ——`lastLoginAt` を巻き込まないことと、呼び手が見る戻り値が古い
+       * スナップショットのままにならないことの両方を、これで保証する。
+       */
+      await store.revokeAccountAccess(accountId);
+      return (
+        (await store.getAccount(accountId)) ?? {
+          ...account,
+          grantedAt: null,
+          grantedBy: null,
+          ownerDeclaredAt: null,
+        }
+      );
     },
 
     setOwner: (accountId, declared) =>

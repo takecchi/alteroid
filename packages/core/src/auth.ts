@@ -210,6 +210,24 @@ export interface AuthStore {
    * 条件無しの UPDATE 1文で、`last_login_at` だけを書く。
    */
   markAccountLoggedIn(accountId: string, at: string): Promise<void>;
+  /**
+   * この account の許可を取り消す（1操作。issue #1915）。
+   *
+   * **`grantedAt` / `grantedBy` / `ownerDeclaredAt` の3欄だけを null にする。
+   * それ以外の欄（`lastLoginAt` を含む）には触らない。** `AuthService.revoke`
+   * は以前、`getAccount` で読んだ行を丸ごと `putAccount` で書き戻していた
+   * ——読んでから書くまでのあいだに完了した再ログイン
+   * （`markAccountLoggedIn`）の `lastLoginAt` を、読んだときの古い
+   * スナップショットで上書きしていた（`markAccessTokenUsed` が #1782 で
+   * 塞いだのと同じ形の lost update。対象がアクセストークンの `lastUsedAt`
+   * から account の `lastLoginAt` に変わっただけ）。
+   *
+   * その id の行が無いときは何もしない（投げない）。
+   *
+   * ドライバはそれぞれの器で原子性を出す — fs は1つの排他区間、pg は
+   * 条件無しの UPDATE 1文で、3欄だけを書く。
+   */
+  revokeAccountAccess(accountId: string): Promise<void>;
 
   findIdentity(provider: string, subject: string): Promise<AuthIdentity | null>;
   /**
