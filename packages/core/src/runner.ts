@@ -4390,9 +4390,22 @@ class RunnerSession {
    * の doc が言うとおり、クローンの1回だけの許可で alteroid 自身の門（#894）
    * を上書きしないため。`Bash` が弾かれなかった回・`Bash` 以外の全道具が
    * ここへ落ちる。
+   *
+   * ## 判定の周りの例外で deny を消さない（issue #1960）
+   *
+   * このフックが例外で終わると、SDK は CLI へ error を返し、CLI はそれを
+   * 「ブロックしない」として通常の許可の流れへ戻す（`hook_callback_failed` →
+   * `blocked: false`。issue #1960 の実測）。マネージャー・作業者のセッションでは、
+   * それはツールがそのまま走ることを意味する＝**ガードが素通りになる。** そこで:
+   *
+   * - 入力の頭の控え（`#capturePreToolInputHead`）と note の送り出し（`#emit`）は
+   *   観測のための副作用なので、失敗しても判定を止めない（stderr へ1行だけ残す）
+   * - `Bash` の判定（`inspectBashCommand`）そのものが投げたら、閉じる側（deny）へ倒す
    */
   async #onPreToolUse(record: AgentPreToolRecord): Promise<AgentPreToolDecision> {
-    this.#capturePreToolInputHead(record);
+    this.#tryObservation('PreToolUse の入力の頭の控え', () => {
+      this.#capturePreToolInputHead(record);
+    });
 
     if (record.toolName === 'Bash') {
       const toolInput = record.toolInput as
@@ -4403,19 +4416,31 @@ class RunnerSession {
         // ことを判定器へ渡せる経路はここだけである（`bash-wait-guard.ts` の
         // `isBackgroundedGhRunWatch` の doc）。**`=== true` で受ける** ——
         // 欠けていても形が崩れていても `false`（＝前景）になり、通す側へ倒れる。
-        const verdict = inspectBashCommand(command, {
-          backgrounded: toolInput?.run_in_background === true,
-        });
+        let verdict: ReturnType<typeof inspectBashCommand>;
+        try {
+          verdict = inspectBashCommand(command, {
+            backgrounded: toolInput?.run_in_background === true,
+          });
+        } catch (error) {
+          // 判定できなかった呼び出しは通さない（issue #1960。閉じる側へ倒す）。
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            kind: 'deny',
+            reason: `Bash のガードの判定が例外で終わったので、安全側で拒否した（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`,
+          };
+        }
         if (verdict.blocked) {
           const actor =
             record.agentId === undefined
               ? `manager:${this.#id}`
               : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
 
-          this.#emit({
-            type: 'note',
-            managerId: this.#id,
-            text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
+          this.#tryObservation('ガードの note の送り出し', () => {
+            this.#emit({
+              type: 'note',
+              managerId: this.#id,
+              text: `Bash の呼び出しを弾いた（${actor}・形=${verdict.form}）。${verdict.reason}`,
+            });
           });
 
           return { kind: 'deny', reason: verdict.reason };
@@ -4424,6 +4449,20 @@ class RunnerSession {
     }
 
     return this.#consumeOneShotAllow(record);
+  }
+
+  /**
+   * 観測のための副作用（控え・note）を、判定を止めずに走らせる（issue #1960）。
+   * 失敗は stderr へ1行だけ残す——ここで投げ直すと `#onPreToolUse` が例外で終わり、
+   * ガードの deny が CLI へ届かなくなる。
+   */
+  #tryObservation(label: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`alteroid: ${label}が失敗した（判定は続ける）: ${message}\n`);
+    }
   }
 
   /**
