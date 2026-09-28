@@ -6005,6 +6005,39 @@ class Clone implements CloneHost {
   }
 
   /**
+   * `human_answer` を処理するとき、承認の行がまだ `'pending'` なら `'delivered'` を書く
+   * （issue #2002）。
+   *
+   * `answerApproval` は、受信箱へ積んだ後に `'delivered'` を書く。**その書き込みだけが
+   * 落ちると**、行は `'pending'` のまま残る。配った合図をクローンが処理し終えて受信箱
+   * から消した後にデーモンが起こし直されると、起動時の拾い直し
+   * （`#reconcileUndeliveredAnswers`）が同じ回答をもう一度配っていた。二重配達を畳む
+   * `#handledHumanAnswerIds` はメモリの中の Set なので、起こし直しで空になる。
+   *
+   * ⟹ 処理した時点で印を付け直す。**それでも印の書き込みが2回とも落ちたときは、
+   * 起こし直しの後に同じ回答が二重に届きうる。** この経路の約束は「少なくとも1回は
+   * 届く」であって「ちょうど1回」ではない（クローン teto の判断: 回答を失うより、
+   * 二重に届くほうが害が小さい）。
+   *
+   * 書き込みの失敗は握って跡を残す（処理そのものは止めない）。行の写しが古くても、
+   * 書き換えるのは `answerDelivery` だけで、`answeredAt` が同じ行（＝同じ回答）に
+   * 限る——同じ承認への2回目の回答を、古い回答で上書きしない。
+   */
+  async #markAnswerDeliveredOnHandle(
+    approval: PendingApproval | null,
+    event: Extract<InboxEvent, { type: 'human_answer' }>,
+  ): Promise<void> {
+    if (approval === null || approval.answerDelivery !== 'pending') return;
+    if (approval.answeredAt === undefined) return;
+    if (humanAnswerEventId(approval.id, approval.answeredAt) !== event.id) return;
+    try {
+      await this.#stores.jobs.putApproval({ ...approval, answerDelivery: 'delivered' });
+    } catch (error) {
+      noteDroppedRecord('回答の配達印の確定（処理時）', inboxEventShape(event), error);
+    }
+  }
+
+  /**
    * 回答済みで未配達の承認を、`#restoreUnreadPass` の**後**に埋める
    * （issue #1977）。
    *
@@ -8082,6 +8115,7 @@ class Clone implements CloneHost {
         // 残していた（#243）。**残す先は消していない** —— 断り書きの全文は畳んだ側の
         // 1行へ写している（`#foldClosedRedelivery` の doc）。
         const approval = await this.#stores.jobs.getApproval(event.approvalId);
+        await this.#markAnswerDeliveredOnHandle(approval, event);
         const question = approval?.question ?? '(不明な質問)';
         // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
         // そのマネージャーが複数を待っているとき宛先が決まらず、人間が答えたのに
