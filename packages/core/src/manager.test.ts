@@ -12332,6 +12332,49 @@ describe('shutdownObservationArrivedAfterSwap（クローンの指摘を受け�
     await real.stop();
   });
 
+  /**
+   * **Issue #1266 残り2の陰性**——`abort()` が新しく取るようになった
+   * `source: 'stop'` の観測は、`runnerSessionSince` より後であっても
+   * 「届いた」（`shutdownObservationArrivedAfterSwap: true`）へは倒れない。
+   * 判定は `source === 'shutdown'` の厳密一致（`manager.ts` の `summaryOf`）
+   * のままで、`'stop'` を特別扱いする分岐を足していないことを固定する
+   * ——直上の `source: 'report'` の歯と同じ形を `'stop'` でも測る。
+   */
+  it('source が stop（Issue #1266 残り2。force:true 等の明示停止）の観測も、runnerSessionSince より後でも「届いていない」に倒す', async () => {
+    let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
+    const a = new FakePoolRunner('runner-a', { managers: 0 });
+    const stores = createMemoryStores();
+    const real = createRunnerRegistry([a]);
+    const patches = new Map<string, { sessions: readonly string[]; sessionsObservedAt: string }>();
+    const registry = withEntrySessions(real, () => patches);
+    const pool = createManagerPool({
+      stores,
+      post: () => undefined,
+      runners: registry,
+      now: () => clock,
+    });
+
+    const summary = await pool.start({ request: '調べもの' });
+    const managerId = summary.managerId;
+
+    clock += 5_000;
+    a.unpushedWorkResult = { cwd: '/work/project', worktrees: [] };
+    await pool.unpushedWork(managerId, { source: 'stop' });
+
+    clock += 10_000;
+    patches.set('runner-a', { sessions: [], sessionsObservedAt: new Date(clock).toISOString() });
+
+    const listed = await pool.list();
+    const found = listed.find((m) => m.managerId === managerId);
+
+    expect(found?.sessionMissingSince).toBeDefined();
+    expect(found?.shutdownObservationArrivedAfterSwap).toBe(false);
+    expect(found?.lastUnpushedWorkObservation).toMatchObject({ source: 'stop' });
+
+    await pool.stop();
+    await real.stop();
+  });
+
   it('sessionMissingSince が立っていなければ欄ごと消える（判定そのものが要らない）', async () => {
     let clock = new Date('2026-09-27T00:00:00.000Z').getTime();
     const a = new FakePoolRunner('runner-a', { managers: 0 });

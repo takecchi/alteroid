@@ -6960,6 +6960,45 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('器が止まる直前（');
   });
 
+  /**
+   * **Issue #1266 残り2。** `abort()` が新しく取るようになった `source: 'stop'`
+   * は `'shutdown'` とは別の値なので、器の入れ替えで応答不能なときも
+   * 「届いた」側へは倒れない（`shutdownObservationArrivedAfterSwap` は
+   * `source === 'shutdown'` の厳密一致——`manager.test.ts` の陰性の歯と同じ
+   * 判断を、表示側でも固定する）。あわせて `describeUnpushedWorkObservationSource`
+   * が新しい source を知らない版の「この一覧が知らない経路」に落ちないことも見る。
+   */
+  it('manager_list は器の入れ替えで応答不能・stop 由来（Issue #1266 残り2）の観測は shutdown ではないので「届いていない」に倒す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.sessionMissingSince = '2026-09-27T00:00:10.000Z';
+    // **`shutdownObservationArrivedAfterSwap` を立てない**——`source: 'stop'`
+    // では真になりようが無い（`manager.ts` の `summaryOf` は `source ===
+    // 'shutdown'` の厳密一致でしか立てない）。
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-26T12:00:00.000Z',
+      source: 'stop',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [],
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('未push観測');
+    expect(reply).toContain('届いていない');
+    // **新しい source の言葉が出る。** `describeUnpushedWorkObservationSource`
+    // は `never` の網羅チェックを持つ switch なので、`'stop'` の分岐を
+    // 足し忘れていれば、この呼び出し自体が例外を投げてテストが落ちる
+    // （「知らない経路」という言い方に静かに落ちるのは CLI 側の複製だけ——
+    // `chat.test.ts` が別に固定する）。
+    expect(reply).toContain('自動畳みが止める直前');
+    // **「止まる直前の観測」という言い切りは出ない**——shutdown 側の文言と排他。
+    expect(reply).not.toContain('器が止まる直前（');
+  });
+
   it('manager_list は器の入れ替えで応答不能・観測そのものが一度も無ければ「無い」と明示する（沈黙にしない。予算のルールの例外）', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });

@@ -1052,6 +1052,37 @@ describe('renderManagerList', () => {
     });
 
     /**
+     * **Issue #1266 残り2。** `source: 'stop'`（`abort()` が
+     * `Host#stop(managerId)` 直前に取る、force:true 等の明示停止）は
+     * `'shutdown'` とは別の値なので、届いた側（`shutdownObservationArrivedAfterSwap`）
+     * へは倒れない——core 側の同じ陰性の歯（`manager.test.ts`・`tools.test.ts`）
+     * と同じ判断を CLI 版の複製でも固定する。あわせて `describeUnpushedWorkObservationSource`
+     * が新しい source を「この一覧が知らない経路」へ落としていないことも見る
+     * （if 連鎖の複製は core の `never` 網羅チェックと違い、足し忘れても
+     * 例外を投げない——このテストが無いと、足し忘れが静かに通る）。
+     */
+    it('sessionMissingSince が在り、stop 由来（Issue #1266 残り2）は shutdown ではないので「届いていない」に倒す', () => {
+      const text = renderManagerList([
+        manager({
+          status: 'running',
+          sessionMissingSince: '2026-09-25T00:00:00.000Z',
+          shutdownObservationArrivedAfterSwap: false,
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-25T00:00:00.000Z',
+            source: 'stop',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(text).toContain('器が止まる直前の観測は届いていない');
+      expect(text).toContain('自動畳みが止める直前');
+      expect(text).not.toContain('この一覧が知らない経路');
+      expect(text).not.toContain('器が止まる直前（2026-09-25T00:00:00.000Z）の観測');
+    });
+
+    /**
      * **マネージャーの差し戻し（main に入った PR #1896／Issue #1885）:**
      * core の `describeUnpushedWorkObservation` は `kind: 'observed'` の
      * 3箇所すべてに「探しきれていない」の注記
