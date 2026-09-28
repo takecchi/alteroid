@@ -14,7 +14,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { json, Providers, storeTestBaseUrl } from '~/test-support';
+import type { InboxBacklog, InboxEventType } from '~/lib/types';
+import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Inbox from './inbox';
 
@@ -239,5 +240,89 @@ describe('/inbox 画面 — 受信箱の絞り込み一括削除（#972 / #1042�
 
     expect(screen.queryByText(/未読 120 件中 40 件が絞り込みに一致/)).toBeNull();
     expect(screen.queryByRole('button', { name: /実行する/ })).toBeNull();
+  });
+});
+
+/** `GET /inbox` の内訳（`InboxBacklogCard`）の材料。実際に返す欄をすべて埋める。 */
+function backlogFixture(overrides: Partial<InboxBacklog> = {}): InboxBacklog {
+  return {
+    total: 2,
+    byType: [{ type: 'manager_message', count: 2 }],
+    bySource: [],
+    bySourceOverflowKinds: 0,
+    bySourceOverflowCount: 0,
+    bySourceUnknownCount: 0,
+    distinct: 2,
+    distinctAcrossManagers: 2,
+    undelivered: 0,
+    deliveredOnce: 2,
+    redelivered: 0,
+    maxDeliveries: 1,
+    undeliveredByType: [],
+    ageBuckets: [{ label: '1時間未満', count: 2 }],
+    observedAt: '2026-09-28T00:00:00.000Z',
+    humanOriginated: { total: 0, byType: [], undelivered: 0 },
+    ...overrides,
+  };
+}
+
+/** `GET /inbox` だけを埋める（`POST /inbox/remove` はこの群の対象外なので触らない）。 */
+function stubInboxBacklog(backlog: InboxBacklog): void {
+  stubFetch((url, init) => {
+    if (url.endsWith('/inbox') && (init?.method ?? 'GET') === 'GET') return json(backlog);
+    return undefined;
+  });
+}
+
+/**
+ * **知らない `type` でも内訳を落とさない**（issue #2010。#1623 で `managers.tsx` の
+ * `ManagerStatusBadge` に入れた形の横展開）。`byType` / `undeliveredByType` の
+ * `entry.type` は daemon（`GET /inbox`）から届く値で、Web（Vercel）とデーモン
+ * （Railway）は別々にデプロイされるので、デーモンが先に新しい種類の値を返す時間が
+ * 在る。型は `as InboxEventType` で迂回する——実機でも型はコンパイル時の飾りで、
+ * JSON はそのまま届く。
+ */
+describe('知らない受信箱の種類に倒れ先がある（#2010）', () => {
+  it('知らない type が混ざっても落ちず、既知の行は今までどおり、知らない行は生の値を出す', async () => {
+    stubInboxBacklog(
+      backlogFixture({
+        total: 3,
+        byType: [
+          { type: 'manager_message', count: 2 },
+          { type: 'draining' as InboxEventType, count: 1 },
+        ],
+        bySourceUnknownCount: 1,
+        distinct: 3,
+        distinctAcrossManagers: 3,
+        undelivered: 1,
+        undeliveredByType: [{ type: 'draining' as InboxEventType, count: 1 }],
+        ageBuckets: [{ label: '1時間未満', count: 3 }],
+      }),
+    );
+    renderInbox();
+
+    expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
+    expect(screen.getByText('知らない種類（draining）')).toBeTruthy();
+  });
+
+  /** 継承したキー（`constructor`）は `INBOX_TYPE_LABELS[...]` が `undefined` にならないので別に測る。 */
+  it('Object の継承したキーと同じ名前の type でも落ちない', async () => {
+    stubInboxBacklog(
+      backlogFixture({
+        total: 1,
+        byType: [{ type: 'constructor' as InboxEventType, count: 1 }],
+        bySourceUnknownCount: 1,
+      }),
+    );
+    renderInbox();
+
+    expect(await screen.findByText('知らない種類（constructor）')).toBeTruthy();
+  });
+
+  it('既知の type は今までどおりのラベルで出す', async () => {
+    stubInboxBacklog(backlogFixture());
+    renderInbox();
+
+    expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
   });
 });

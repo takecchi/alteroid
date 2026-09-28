@@ -782,3 +782,58 @@ describe('runner を空ける（vacate）', () => {
     expect(screen.queryByText('この器を空ける')).toBeNull();
   });
 });
+
+/**
+ * **知らない `state` でも `/settings` 画面ごと落ちない**（issue #2010。#1623 で
+ * `managers.tsx` の `ManagerStatusBadge` に入れた形の横展開）。Web とデーモンは
+ * 別々にデプロイされるので、デーモンが先に新しい状態値を返す時間が在る。型は
+ * `as RunnerSummary['state']` で迂回する——実機でも型はコンパイル時の飾りで、
+ * JSON はそのまま届く。
+ */
+describe('知らない runner の state に倒れ先がある（#2010）', () => {
+  it('知らない state が混ざっても、他の runner の行は見え、その行は生の値を出す', async () => {
+    renderSettings({
+      runners: [
+        { ...BASE, label: 'http://runner-good:4518', runnerId: 'runner-good' },
+        {
+          ...BASE,
+          label: 'http://runner-bad:4518',
+          runnerId: 'runner-bad',
+          state: 'draining' as RunnerSummary['state'],
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText('runner-good')).toBeTruthy();
+    expect(screen.getByText('runner-bad')).toBeTruthy();
+    expect(screen.getByText('知らない状態（draining）')).toBeTruthy();
+  });
+
+  /** 継承したキー（`constructor`）は `RUNNER_STATES[...]` が `undefined` にならないので別に測る。 */
+  it('Object の継承したキーと同じ名前の state でも落ちない', async () => {
+    renderSettings({
+      runners: [
+        {
+          ...BASE,
+          label: 'http://runner-proto:4518',
+          runnerId: 'runner-proto',
+          state: 'constructor' as RunnerSummary['state'],
+        },
+      ],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText('runner-proto')).toBeTruthy();
+    expect(screen.getByText('知らない状態（constructor）')).toBeTruthy();
+  });
+
+  it('既知の state は今までどおりのラベルと tone で出す', async () => {
+    renderSettings({
+      runners: [{ ...BASE, state: 'unreachable' }],
+      daemonRevision: DAEMON_UNKNOWN,
+    });
+
+    expect(await screen.findByText('繋がらない（挑み直し中）')).toBeTruthy();
+  });
+});
