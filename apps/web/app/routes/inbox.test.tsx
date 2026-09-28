@@ -302,7 +302,9 @@ describe('知らない受信箱の種類に倒れ先がある（#2010）', () =>
     renderInbox();
 
     expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
-    expect(screen.getByText('知らない種類（draining）')).toBeTruthy();
+    // 「種類」（byType）と「いまの器になってから積まれた分」（undeliveredByType）の
+    // 両方の内訳が同じ helper（`inboxTypeLabel`）を通るので、2箇所に出る。
+    expect(screen.getAllByText('知らない種類（draining）')).toHaveLength(2);
   });
 
   /** 継承したキー（`constructor`）は `INBOX_TYPE_LABELS[...]` が `undefined` にならないので別に測る。 */
