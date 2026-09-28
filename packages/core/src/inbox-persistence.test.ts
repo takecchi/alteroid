@@ -1085,6 +1085,90 @@ describe('片付け済みの配り直し（ターンを起こさずに畳む）'
     expect(await stores.inbox.claimPending()).toEqual([]);
   });
 
+  /**
+   * Issue #1744（負債1「ハブの順序」の一部。負債3の候補PRの1つ）。
+   *
+   * **これは characterization test である。正しさは主張しない**
+   * （`clone-notices-order.test.ts` / `runner-stop-finish-order.test.ts` と
+   * 同じ形）。固定するのは「いま実際にどう並んでいるか」だけであり、この
+   * 並びが正しいかどうかはこの歯には判断できない。
+   *
+   * ## 何を固定するか
+   *
+   * `Clone#foldClosedRedelivery`（`clone.ts`）は、片付け済みの配り直しを
+   * ターンを起こさずに畳むとき、`stores.journal.append` を2回——
+   * **本文の追記**（`#journalIncomingBody`。`type: 'external_event'`）→
+   * **「畳んだ」の1行**（`type: 'exchange'`、本文に
+   * 「片付け済みの配り直しなので、ターンを起こさずに畳んだ」を含む）の順で——
+   * 呼ぶ。現物は `grep -Fn -- 'async #foldClosedRedelivery' packages/core/src/clone.ts`
+   * から辿れる（2行はその関数の中に1本ずつ続く）。
+   *
+   * この歯は、その2回の呼び出し順を `stores.journal.append` への薄いラッパで
+   * タイムラインとして記録し、固定する。**production コード（`clone.ts` ほか）
+   * は1行も変えていない。**
+   *
+   * ## なぜ、直上の歯では足りないか
+   *
+   * 直上の歯（「external も畳むが…」）は、この2回のうち**本文**の欠落だけを
+   * 測る。だがその歯が本文の欠落を作っているのは**生きた配達**
+   * （`#handle` の `'external'` 分岐、死ぬ前の1回目）の側であり、
+   * `droppedFirstExternal` の印はそこで既に消費されている——**この
+   * `#foldClosedRedelivery`（畳む側、生き残った後の再配達）は、その歯では
+   * 1文字も測れていない。** ⟹ 2行の**相対順序**そのものは、#1744 の下調べで
+   * 確かめた限りどの歯にも守られていなかった（変異試験の生存を、この歯を
+   * 足す前に確かめてある——PR 本文を参照）。
+   */
+  it('片付け済みの配り直しを畳むとき、本文（journalIncomingBody）→「畳んだ」の1行、の順で journal.append が呼ばれる（characterization。Issue #1744）', async () => {
+    const base = createMemoryStores();
+    const order: string[] = [];
+    const stores: Stores = {
+      ...base,
+      journal: {
+        ...base.journal,
+        append: async (entry) => {
+          if (entry.type === 'external_event') order.push('body');
+          else if (
+            entry.type === 'exchange' &&
+            entry.text.includes('片付け済みの配り直しなので、ターンを起こさずに畳んだ')
+          ) {
+            order.push('folded-line');
+          }
+          return base.journal.append(entry);
+        },
+      },
+    };
+
+    const event: InboxEvent = {
+      type: 'external',
+      id: 'evt-fold-order',
+      at: '2026-08-01T00:00:00.000Z',
+      source: 'github',
+      payload: '畳む順序を確かめるための本文',
+    };
+
+    // 1回目（生きた配達）は死ぬ前に1本、`external_event` の本文だけを書く
+    // （`#handle` の `'external'` 分岐——`#foldClosedRedelivery` はまだ通らない）。
+    // ここで積む 'body' は、下の `order.length = 0` でリセットして測定対象から外す。
+    const dying = bootClone(stores, 'hang');
+    await idle();
+    dying.clone.post(event);
+    await waitFor(() => dying.inputs.length > 0, '合図が処理に入る');
+    await waitForCommitment(stores, event.id);
+    expect(
+      await stores.commitments.close(event.id, '2026-08-02T00:00:00.000Z', '対応済み', 'clone'),
+    ).toBe(true);
+
+    // **ここから先だけを測る。** 生きた配達の1本（'body'）は、この歯が固定
+    // したい「畳む側の2行の順序」とは別の呼び出しなので、リセットして落とす。
+    order.length = 0;
+
+    const reborn = bootClone(stores);
+    await waitForNoUnread(stores);
+    await reborn.clone.stop();
+
+    expect(order).toEqual(['body', 'folded-line']);
+  });
+
   it('未了（クローンがまだ片付けていない）合図の配り直しは、1文字も変えず全文のままターンへ届く（畳まない）', async () => {
     const stores = createMemoryStores();
 
