@@ -287,17 +287,26 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     return rows.map((row) => row.subpath);
   }
 
+  /**
+   * **1つのトランザクションで束ねる（issue #1961。#1929 / #1955 と同じ形）。**
+   * 束ねないと2文目（`sessions`）が落ちたときに1文目（`sessionEntries`）の
+   * DELETE だけが確定してしまい、索引の `sessions` の行だけが残る。
+   * `listSessions` / `listSubkeys` は `sessions` を読むので、中身の無い
+   * セッションが一覧に出続けることになる。
+   */
   async delete(key: SessionKey): Promise<void> {
-    await this.#db.delete(sessionEntries).where(this.#keyFilter(key));
-    await this.#db
-      .delete(sessions)
-      .where(
-        and(
-          eq(sessions.projectKey, key.projectKey),
-          eq(sessions.sessionId, key.sessionId),
-          eq(sessions.subpath, key.subpath ?? ''),
-        ),
-      );
+    await this.#db.transaction(async (tx) => {
+      await tx.delete(sessionEntries).where(this.#keyFilter(key));
+      await tx
+        .delete(sessions)
+        .where(
+          and(
+            eq(sessions.projectKey, key.projectKey),
+            eq(sessions.sessionId, key.sessionId),
+            eq(sessions.subpath, key.subpath ?? ''),
+          ),
+        );
+    });
   }
 
   #keyFilter(key: SessionKey) {
@@ -321,12 +330,16 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
    * `session_entries` と `sessions` の両方を消す（`append` が両方へ書くのと
    * 対）。消した `session_entries` の行数を返す（`sessions` は1セッションに
    * つき高々1行なので、行数の桁が違う——申告として意味があるのは前者）。
+   *
+   * **1つのトランザクションで束ねる（issue #1961。#1929 / #1955 と同じ形）。**
+   * 束ねないと2文目（`sessions`）が落ちたときに1文目（`sessionEntries`）の
+   * DELETE だけが確定してしまい、索引の `sessions` の行だけが残る。
    */
   async clearAll(): Promise<number> {
-    const removedEntries = await this.#db
-      .delete(sessionEntries)
-      .returning({ seq: sessionEntries.seq });
-    await this.#db.delete(sessions);
-    return removedEntries.length;
+    return this.#db.transaction(async (tx) => {
+      const removedEntries = await tx.delete(sessionEntries).returning({ seq: sessionEntries.seq });
+      await tx.delete(sessions);
+      return removedEntries.length;
+    });
   }
 }
