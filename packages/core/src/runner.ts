@@ -6366,7 +6366,15 @@ const APPROVAL_WORDS = /\b(go ahead|approved|approve|ok|okay|yes|sure)\b/i;
 const NEGATION_MARKERS_EN = /\b(not|n't|never|cannot|wait|hold off|hold on|pause\w*)\b/i;
 const NEGATION_MARKERS_JA = ['ない', 'ません', 'ず', '保留', '見送', '不要'];
 
-function hasNegationMarker(message: string): boolean {
+/**
+ * **テストのためだけに export している**（issue #1932。`packages/core/src/index.ts`
+ * からは再エクスポートしていない）。#1926 の後は、否定の印を含む文は
+ * `isApprovalOnly` の時点で「承認だけ」から外れるので、`inferDecision` の
+ * 戻り値からはこの関数が当たったかどうかが見えない。印が実際に当たることを
+ * 直接測る歯（`runner-infer-decision.test.ts` の #1932 の describe）のために
+ * 外へ出した。挙動は変えていない。
+ */
+export function hasNegationMarker(message: string): boolean {
   return (
     NEGATION_MARKERS_EN.test(message) ||
     NEGATION_MARKERS_JA.some((marker) => message.includes(marker))
