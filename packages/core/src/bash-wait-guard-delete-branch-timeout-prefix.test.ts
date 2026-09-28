@@ -130,13 +130,62 @@ describe('gh-pr-merge-delete-branch: 前置きの並び順を問わず弾く', (
 
   it('timeout の後ろに `env` コマンドと env-var 前置きが続く順序でも弾く', () => {
     expect(
-      inspectBashCommand('timeout 20 env FOO=1 GH_PAGER=cat gh pr merge 1 --delete-branch')
-        .blocked,
+      inspectBashCommand('timeout 20 env FOO=1 GH_PAGER=cat gh pr merge 1 --delete-branch').blocked,
     ).toBe(true);
   });
 
   it('前置きの並びを変えても、無関係なコマンドは引き続き通す', () => {
     expect(inspectBashCommand('cd /tmp && env FOO=1 timeout 20 pnpm test').blocked).toBe(false);
     expect(inspectBashCommand('timeout 20 GH_PAGER=cat gh pr view 1').blocked).toBe(false);
+  });
+});
+
+/**
+ * `LEADING_ENV_PREFIX_SRC` を `(?:代入|timeout|env)*` という順不同の繰り
+ * 返しへ直すとき、`env` コマンドの中でも `NAME=値` を読む素朴な形のままだと
+ * 後戻りが入力長に対して指数的に増える（`bash-wait-guard.ts` の
+ * `ENV_COMMAND_PREFIX_SRC` の doc 参照）。ここでは実際のガードが指数時間を
+ * 踏まないことを、長い前置きの繰り返しで測る。
+ *
+ * 別立ての使い捨てスクリプト（`packages/core/scratch-backtracking-check.mjs`。
+ * コミットしない）で、`env` の中でも代入を読む「素朴な形」のまま順不同に
+ * した場合を測ったところ、同じ入力（`env A=1 B=2 ` を N 回）で
+ * repeats=10 → 2.469ms、repeats=15 → 663.963ms（Node v22、
+ * `performance.now()` 実測）と桁で伸びた。実際に直したガード
+ * （`ENV_COMMAND_PREFIX_SRC` が `env` の中で代入を読まない形）はこの節の
+ * 下のテストのとおり repeats を増やしても線形にしか伸びない。
+ */
+describe('gh-pr-merge-delete-branch: 前置きの繰り返しが長くても後戻りで爆発しない', () => {
+  const REPEATED_PREFIX = 'env A=1 B=2 '.repeat(30);
+  // CI の揺れを見込んだ緩い上限。指数的な後戻りが起きていれば
+  // repeats=30 は数百ms〜数秒どころか現実的な時間で終わらない
+  // （上のスクリプトの実測では repeats=15 で既に664msかかっている）。
+  const TIME_BUDGET_MS = 200;
+
+  it('弾かれない入力（gh pr view）でも後戻りが爆発しない', () => {
+    const command = `${REPEATED_PREFIX}gh pr view 1`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('gh pr merge を含まない無関係な入力でも後戻りが爆発しない', () => {
+    const command = `${REPEATED_PREFIX}echo x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('長い前置きの後ろに gh pr merge --delete-branch が来ても弾き、かつ後戻りが爆発しない', () => {
+    const command = `${REPEATED_PREFIX}gh pr merge 1 --delete-branch`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(true);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
   });
 });
