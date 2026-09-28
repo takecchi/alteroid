@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDir, makeTempDirSync } from '../../../vitest.tmpdir.js';
 
@@ -13,6 +13,7 @@ import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
 } from './clone-tool-relay-child.js';
+import { buildCloneToolRelayChildDistForTesting } from './clone-tool-relay-child-build.test-support.js';
 import { CLONE_TOOLS_TRANSPORT_ENV_KEY } from './clone-tools-transport.js';
 import { ALWAYS_REDELIVER, CLONE_MODEL_ENV_KEY, createClone } from './clone.js';
 import { DEFAULT_PERMISSION_MODE } from './permission-mode.js';
@@ -43,6 +44,48 @@ import { createMemoryStores, humanMessage } from './testing.js';
  * これらを守っていることは複数のコメントで説明されているが、その説明はコードから
  * 読み手が離れれば追従しない。ここでは「無い」ことそのものを assertion にする。
  */
+
+/**
+ * Issue #1917: 下の stdio e2e 歯（「子プロセスを実際に spawn する」）が本物の
+ * `packages/core/dist/clone-tool-relay-child.js` を読んでいた。`clone.ts` は
+ * `resolveCloneToolRelayChildEntry(import.meta.url)`（`clone-tools-transport.ts`）
+ * で `../dist/clone-tool-relay-child.js` を解決するので、テスト側から差し込む
+ * 既存の口が無い（`createClone` のオプションは `cloneToolRelaySocketDir` だけを
+ * 持ち、子プロセスの実体そのものは差し替えられない）。
+ *
+ * **製品コードに新しい注入口は足していない。** `clone.ts` は
+ * `resolveCloneToolRelayChildEntry` を `./clone-tools-transport.js` から
+ * 名前 import しているだけなので、この1本の named export だけを vitest の
+ * モジュールモックで差し替える——他の export（`resolveCloneToolsTransport` /
+ * `CLONE_TOOLS_TRANSPORT_ENV_KEY` など）は `importOriginal` で本物のまま
+ * 素通しする。返す値は `clone-tool-relay-integration.test.ts` と同じ
+ * `clone-tool-relay-child-build.test-support.ts` が一時ディレクトリへ build
+ * した成果物——束ね方の回帰（共有チャンクへの括り出し）を捕まえる力は、
+ * 本物の tsup で束ねること自体から来るので、ここでも落ちない。
+ *
+ * `vi.hoisted` が要る理由: `vi.mock` はファイル先頭へ引き上げられる（hoist
+ * される）ので、下の `const relayChildEntryDist = { path: undefined }` を
+ * 素の `const` で書くと、引き上げられた `vi.mock` のファクトリが実行される
+ * 時点でまだ束縛されておらず（TDZ）例外になる——`AGENTS.md`「時刻の扱い」の
+ * `reports.test.tsx` と同じ注意。
+ */
+const relayChildEntryDist = vi.hoisted(() => ({ path: undefined as string | undefined }));
+
+vi.mock('./clone-tools-transport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./clone-tools-transport.js')>();
+  return {
+    ...actual,
+    resolveCloneToolRelayChildEntry: () => {
+      if (relayChildEntryDist.path === undefined) {
+        throw new Error(
+          'clone-tool-relay-child-build.test-support.ts の build がまだ終わっていない' +
+            '（beforeAll の完了前に呼ばれた）',
+        );
+      }
+      return relayChildEntryDist.path;
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // A. クローン本セッション
@@ -116,6 +159,15 @@ function fakeCloneSdk(): { fn: typeof sdkQuery; calls: { options: Options }[] } 
 }
 
 describe('クローン本セッションへ渡す Options', () => {
+  // Issue #1917: このファイルの stdio 関連の歯（下の3本）が
+  // `resolveCloneToolRelayChildEntry` を経由して読む成果物を、ここで1回だけ
+  // 一時ディレクトリへ build しておく（ファイル冒頭の doc）。
+  beforeAll(async () => {
+    relayChildEntryDist.path = await buildCloneToolRelayChildDistForTesting(
+      'agent-session-options-relay-child-dist-',
+    );
+  }, 60_000);
+
   it('既定のモデル帯・道具の配置・許可モードを固定する', async () => {
     const { fn, calls } = fakeCloneSdk();
     const stores = createMemoryStores();
@@ -275,9 +327,12 @@ describe('クローン本セッションへ渡す Options', () => {
     'stdio モードでも clone.ts の配線を通して本物の createCloneMcpServer へ ' +
       'tools/list が CLONE_TOOL_NAMES の全本数（52本）届く（実際に子プロセスを spawn する）',
     async () => {
-      // **⚠️ `packages/core/dist/clone-tool-relay-child.js` のビルド済み成果物に
-      // 依存する**（`clone-tool-relay-integration.test.ts` と同じ前提。
-      // `pnpm --filter @alteroid/core build` を先に走らせること）。
+      // **Issue #1917 でビルド済み成果物の出所を変えた。** 本物の
+      // `packages/core/dist/clone-tool-relay-child.js` ではなく、ファイル
+      // 冒頭の `vi.mock('./clone-tools-transport.js', ...)` が差し込む
+      // テスト専用の一時ビルド（`clone-tool-relay-child-build.test-support.ts`）
+      // を読む。`pnpm build` を先に走らせる必要はない——`beforeAll` が
+      // このテストファイル自身の中で build を済ませている。
       const { fn, calls } = fakeCloneSdk();
       const stores = createMemoryStores();
       const socketDir = makeTempDirSync('clone-tool-relay-wire-e2e-');
