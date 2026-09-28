@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   describeAccountUsage,
   describeUnrecordedManagers,
+  describeWebSearchRequests,
   findUnrecordedManagers,
+  ZERO_USAGE,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
 import { toAccountUsage, type AccountUsageState } from './usage-snapshot.js';
@@ -145,6 +147,35 @@ describe('describeUnrecordedManagers', () => {
     expect(text).toContain('running');
     expect(text).toContain('2026-08-25T13:20:00.000Z');
     expect(text).toContain('1件');
+  });
+});
+
+/**
+ * Web 検索の回数（`webSearchRequests`。Issue #1950）。
+ *
+ * **0 のときは1文字も増やさない**（AGENTS.md 地雷表「取れない軸に 0 の行を作る」）。
+ * 0 より大きい合計にだけ「Web検索 N回」を添える。CLI・Web・`usage_read` の3面は
+ * これを直接呼ぶだけで、文言をそれぞれ持たない（このテストが3面ぶんの文言を
+ * 兼ねる）。
+ */
+describe('describeWebSearchRequests', () => {
+  it('0 のときは空文字を返す（1文字も増やさない）', () => {
+    expect(describeWebSearchRequests({ ...ZERO_USAGE, webSearchRequests: 0 })).toBe('');
+  });
+
+  it('0 より大きいときは回数を出し、費用に含まれていることを添える', () => {
+    const text = describeWebSearchRequests({ ...ZERO_USAGE, webSearchRequests: 3 });
+
+    expect(text).toContain('Web検索');
+    expect(text).toContain('3');
+    // **二重に数えるものではないと明示する。** `costUsd` には既に含まれている。
+    expect(text).toContain('含む');
+  });
+
+  it('大きい回数も桁区切りで出す（他のトークン欄と同じ整形）', () => {
+    const text = describeWebSearchRequests({ ...ZERO_USAGE, webSearchRequests: 12345 });
+
+    expect(text).toContain('12,345');
   });
 });
 

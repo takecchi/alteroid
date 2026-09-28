@@ -35,8 +35,10 @@ function row(
     model: string;
     layer: string;
     site: string;
+    webSearchRequests: number;
   }> = {},
 ) {
+  const { webSearchRequests, ...rest } = over;
   return {
     date: '2026-08-14',
     managerId: 'm1',
@@ -44,8 +46,8 @@ function row(
     layer: 'manager',
     site: 'session',
     updatedAt: '2026-08-14T10:00:00.000Z',
-    ...over,
-    totals: { ...ZERO_USAGE, costUsd },
+    ...rest,
+    totals: { ...ZERO_USAGE, costUsd, webSearchRequests: webSearchRequests ?? 0 },
   };
 }
 
@@ -383,6 +385,48 @@ describe('/usage 画面', () => {
       const tokens = input.className.split(/\s+/);
       expect(tokens).toContain('min-w-0');
     }
+  });
+});
+
+/**
+ * Web 検索の回数（`webSearchRequests`。Issue #1950）。
+ *
+ * **0 のときは1文字も増やさない**（AGENTS.md 地雷表）。文言は core の
+ * `describeWebSearchRequests` が1箇所で持つので、ここで測るのは「合計カードの
+ * 内訳に実際に繋がっているか」だけである。
+ */
+describe('/usage 画面の Web 検索の回数（webSearchRequests）', () => {
+  it('合計が 0 のときは Web検索 の文字列を出さない', async () => {
+    stubUsage({
+      rows: [row(1, { webSearchRequests: 0 })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    await screen.findByText(/合計/);
+    expect(screen.queryByText(/Web検索/)).toBeNull();
+  });
+
+  it('合計が 0 より大きいときは回数を出す', async () => {
+    stubUsage({
+      rows: [row(1, { webSearchRequests: 3 })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    render(
+      <Providers>
+        <Usage />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(/Web検索/)).toBeTruthy();
   });
 });
 

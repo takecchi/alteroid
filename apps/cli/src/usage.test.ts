@@ -59,8 +59,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function row(over: Partial<UsageRow> & { managerId: string; costUsd: number }): UsageRow {
-  const { costUsd, ...rest } = over;
+function row(
+  over: Partial<UsageRow> & { managerId: string; costUsd: number; webSearchRequests?: number },
+): UsageRow {
+  const { costUsd, webSearchRequests, ...rest } = over;
   return {
     date: '2026-08-14',
     model: 'claude-opus-4',
@@ -68,7 +70,7 @@ function row(over: Partial<UsageRow> & { managerId: string; costUsd: number }): 
     site: 'session',
     updatedAt: '2026-08-14T10:00:00.000Z',
     ...rest,
-    totals: { ...ZERO_USAGE, costUsd },
+    totals: { ...ZERO_USAGE, costUsd, webSearchRequests: webSearchRequests ?? 0 },
   };
 }
 
@@ -214,6 +216,32 @@ describe('renderUsage', () => {
 
     expect(text).toContain('層と場所の軸はまだ1件も記録していない');
     expect(text).not.toContain('層と場所の軸の始点: null');
+  });
+});
+
+/**
+ * Web 検索の回数（`webSearchRequests`。Issue #1950）。
+ *
+ * **0 のときは1文字も増やさない**（AGENTS.md 地雷表）。文言は core の
+ * `describeWebSearchRequests` が1箇所で持つ（`usage-format.test.ts` が本体を
+ * 測る）ので、ここで測るのは「合計の内訳行に実際に繋がっているか」だけである。
+ */
+describe('renderUsage の Web 検索の回数（webSearchRequests）', () => {
+  it('合計が 0 のときは Web検索 の行を出さない', () => {
+    const text = renderUsage(
+      aggregate({ rows: [row({ managerId: 'm1', costUsd: 1, webSearchRequests: 0 })] }),
+    );
+
+    expect(text).not.toContain('Web検索');
+  });
+
+  it('合計が 0 より大きいときは回数を出す', () => {
+    const text = renderUsage(
+      aggregate({ rows: [row({ managerId: 'm1', costUsd: 1, webSearchRequests: 3 })] }),
+    );
+
+    expect(text).toContain('Web検索');
+    expect(text).toContain('3');
   });
 });
 

@@ -12615,6 +12615,65 @@ describe('usage_read（人間が見られるものはクローンからも見ら
   });
 });
 
+describe('usage_read の Web 検索の回数（webSearchRequests。Issue #1950）', () => {
+  const modelsWithoutSearch = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 2,
+    },
+  };
+  const modelsWithSearch = {
+    'claude-opus-5': {
+      inputTokens: 10,
+      outputTokens: 100,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 3,
+      costUsd: 2,
+    },
+  };
+
+  it('合計が0のときはWeb検索の行を出さない', async () => {
+    const h = harness();
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models: modelsWithoutSearch },
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).not.toContain('Web検索');
+  });
+
+  it('合計が0より大きいときは回数を出し、費用に含まれていることを添える', async () => {
+    const h = harness();
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: { models: modelsWithSearch },
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('Web検索');
+    expect(reply).toContain('3');
+    expect(reply).toContain('含む');
+  });
+});
+
 /**
  * `usage_read` の回数の軸（「起きた回数」＝ターン数。`tools.ts` の
  * `formatUsageAxisLine` / `usageAxisEntries`）。
