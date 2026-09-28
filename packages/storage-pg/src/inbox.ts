@@ -7,18 +7,34 @@ import { stripNulls, toIso } from './db.js';
 import { inboxEvents } from './schema.js';
 
 /**
- * 行が読めなければ落とさずに投げる（`PgScheduleStore` の `parsePlan` と同じ理由）。
+ * 行を読む。**読めない行は配る側から外し、stderr に跡を残して `undefined` を返す。
+ * 行そのものは消さない**（issue #2024。fs の #1966 と同じ形）。
  *
  * 受信箱の合図は「まだ処理し終えていない」という事実そのものであって、日誌のように
- * 1件壊れても一覧が成立する記録ではない。読めない行を黙って飛ばすと、二度と配られ
- * ない合図が「処理済みで消えた」ものと区別できなくなる。
+ * 1件壊れても一覧が成立する記録ではない。読めない行を**黙って**飛ばすと、二度と配られ
+ * ない合図が「処理済みで消えた」ものと区別できなくなる。——以前はこの理由で投げていた
+ * が、投げると読めない1行が、一覧も起動時の未読の復元（`claimPending`）も丸ごと止め、
+ * ほかの正しい未読まで配られなくなっていた。**黙っては飛ばさない（跡を残す）・消さない
+ * （受信箱に残り、`pending().count` にも数えられる）**の2つで、「処理済みで消えた」とは
+ * 区別できる。
+ *
+ * 跡には id と読めなかった欄の名前だけを書き、値は出さない（zod のメッセージは受け取った
+ * 値を含みうるので載せない）。
  */
-function parseEvent(id: string, value: unknown): InboxEvent {
+function parseEvent(id: string, value: unknown): InboxEvent | undefined {
   const parsed = inboxEventSchema.safeParse(value);
   if (parsed.success) return parsed.data;
-  throw new Error(
-    `受信箱の合図 ${id} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
+  const fields = [
+    ...new Set(
+      parsed.error.issues.map((issue) =>
+        issue.path.length > 0 ? issue.path.map(String).join('.') : '(root)',
+      ),
+    ),
+  ];
+  process.stderr.write(
+    `alteroid: 受信箱の読めない合図を配る側から外しました（id=${JSON.stringify(id)}、不正な欄: ${fields.join(',')}。行は消していない）\n`,
   );
+  return undefined;
 }
 
 /**
@@ -64,11 +80,10 @@ export class PgInboxStore implements InboxStore {
 
     return (
       rows
-        .map((row) => ({
-          event: parseEvent(row.id, row.event),
-          at: row.at,
-          deliveries: row.deliveries,
-        }))
+        .flatMap((row) => {
+          const event = parseEvent(row.id, row.event);
+          return event === undefined ? [] : [{ event, at: row.at, deliveries: row.deliveries }];
+        })
         // 古い順。`at` は timestamptz なので Date 同士で比べる（文字列表現の揺れに
         // 依らない）。
         .sort((a, b) => a.at.getTime() - b.at.getTime())
@@ -107,11 +122,10 @@ export class PgInboxStore implements InboxStore {
   async peekPending(): Promise<PendingInboxEvent[]> {
     const rows = await this.#db.select().from(inboxEvents);
     return rows
-      .map((row) => ({
-        event: parseEvent(row.id, row.event),
-        at: row.at,
-        deliveries: row.deliveries,
-      }))
+      .flatMap((row) => {
+        const event = parseEvent(row.id, row.event);
+        return event === undefined ? [] : [{ event, at: row.at, deliveries: row.deliveries }];
+      })
       .sort((a, b) => a.at.getTime() - b.at.getTime())
       .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }));
   }
