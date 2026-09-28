@@ -2,6 +2,7 @@ import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
   describeUnrecordedManagers,
+  describeWebSearchRequests,
   formatUsd,
   summarizeUsage,
   USAGE_LAYERS,
@@ -331,6 +332,7 @@ function UsageBody({
                 {summary.total.outputTokens.toLocaleString('en-US')} / キャッシュ読み{' '}
                 {summary.total.cacheReadInputTokens.toLocaleString('en-US')} / キャッシュ書き{' '}
                 {summary.total.cacheCreationInputTokens.toLocaleString('en-US')}
+                {describeWebSearchRequests(summary.total)}
               </p>
             </>
           )}

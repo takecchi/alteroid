@@ -4,6 +4,7 @@ import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
   describeUnrecordedManagers,
+  describeWebSearchRequests,
   formatUsd,
   summarizeUsage,
   usageLayerSchema,
@@ -196,7 +197,8 @@ export function renderUsage(view: UsageView): string {
       `  入力 ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
         `出力 ${summary.total.outputTokens.toLocaleString('en-US')} / ` +
         `キャッシュ読み ${summary.total.cacheReadInputTokens.toLocaleString('en-US')} / ` +
-        `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
+        `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}` +
+        describeWebSearchRequests(summary.total),
     );
     // **合計値の隣に必ず出す（Issue #98）。** 台帳に1行も無い委譲は上の合計に
     // 入っていないので、合計を読んだ直後にそれが分かる位置へ置く。

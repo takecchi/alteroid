@@ -68,6 +68,7 @@ export {
   ZERO_USAGE,
   describeAccountUsage,
   describeUnrecordedManagers,
+  describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,
   sumUsageRows,

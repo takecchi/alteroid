@@ -222,6 +222,7 @@ import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
   describeUnrecordedManagers,
+  describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,
   summarizeUsage,
@@ -13700,7 +13701,8 @@ function renderUsage(
       `  入力 ${summary.total.inputTokens.toLocaleString('en-US')} / ` +
         `出力 ${summary.total.outputTokens.toLocaleString('en-US')} / ` +
         `キャッシュ読み ${summary.total.cacheReadInputTokens.toLocaleString('en-US')} / ` +
-        `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}`,
+        `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}` +
+        describeWebSearchRequests(summary.total),
     );
     // **合計値の隣に必ず出す（Issue #98）。**
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
