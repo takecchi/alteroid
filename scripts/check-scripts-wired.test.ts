@@ -259,6 +259,105 @@ describe('check:* がどの門からも呼ばれていない穴を作らない�
 });
 
 /**
+ * **`.github/scripts/verify-for-sdk-pr.sh` が `STEPS` を手で二重に持っている配列
+ * （`GATE_NAMES` / `GATE_COMMANDS`）と、`STEPS` 自身の一致を測る（Issue #1954）。**
+ *
+ * ## なぜ二重に持つ形が在るのか（直さない理由）
+ *
+ * `verify-for-sdk-pr.sh` は GitHub Actions の `run:` から来る素の bash で、
+ * `STEPS`（`scripts/verify-core.mjs`）は Node（`spawnSync` で子プロセスを起こす）
+ * である。同ファイルの冒頭 doc が「`STEPS` をそのまま import しない」と明記して
+ * いる——bash から Node の配列を直接読む口が無く、生成する形（候補 (b)）は
+ * この2つの実行モデルの違いを埋める変換をスクリプト自身に持ち込むことになる。
+ * PR #727 でこの形を選んだ時点から #1952 まで、5回の変更すべてが手で両方を
+ * 揃えてきており、崩す決定はどこにも無い。⟹ **ここでは「揃っているかを歯で
+ * 測る」（候補 (a)）を採る。**
+ *
+ * ## 何が起きていたか
+ *
+ * `.github/scripts/verify-for-sdk-pr.test.ts` は既にこの一致を**実行結果**
+ * （`verify.md` の見出し・偽 pnpm の呼び出しログ）から測っている。だから
+ * この歯が無くても、いずれ赤くはなる。**問題は「どこで」赤くなるかだった**——
+ * PR #1952 では、この不一致は禁止されているフルスイートの中でしか出ず、
+ * `scripts/check-scripts-wired.test.ts`（`STEPS` に `check:*` を足したときに
+ * 真っ先に思い付いて回す、まさにこの歯）だけを回す個別の検証では出なかった。
+ * `.github/scripts/verify-for-sdk-pr.test.ts` は別ディレクトリ・別ファイルで、
+ * `STEPS` を触った人がそこも回すべきだと気付く手がかりが無い。
+ *
+ * ⟹ ここに同じ一致を**ソースの静的な読み**として足す。**測っているものが
+ * 違う**（`verify-for-sdk-pr.test.ts` はスクリプトを実際に走らせた出力、
+ * こちらはソースの配列リテラルの文字列）ので、片方が測り方を変えても
+ * もう片方が残る。
+ *
+ * ## 除外
+ *
+ * **無い。** `STEPS` の全13本が `GATE_NAMES` / `GATE_COMMANDS` にそのまま
+ * （同じ名前・同じ順序・同じ `cmd + args`）写されている——`openapi` 門が
+ * `pnpm` ではなく `git` を呼ぶことも含め、写していない門は無い。今後
+ * わざと外す門ができたら、ここへ理由付きの除外を明記すること（上の
+ * `EXEMPT` と同じ形）。
+ *
+ * ## この歯が測っていないこと
+ *
+ * - **シェルの構文パーサは使わない**（`runsOnPullRequestUpdates` の YAML 読みと
+ *   同じ方針）。`GATE_NAMES` / `GATE_COMMANDS` の要素が「裸の識別子」か
+ *   「単一引用符で囲んだ文字列」で、配列全体が `NAME=(\n ... \n)` の形に
+ *   1行1要素で書かれている前提を置く。**この書き方が変われば
+ *   `readGateArray` は要素を読み違えるか `null` を返す——そのときは期待値
+ *   （`STEPS` から作った配列）と一致しないので赤くなる。黙って緑にはならない。**
+ * - **コマンドの実行結果は見ない**（それは `verify-for-sdk-pr.test.ts` の役目）。
+ *   ここが測るのはソースの文字列同士の一致だけである。
+ */
+function readGateArray(shellText: string, varName: string): string[] | null {
+  const re = new RegExp(String.raw`${varName}=\(([\s\S]*?)\)`);
+  const m = re.exec(shellText);
+  if (!m || m[1] === undefined) return null;
+  return m[1]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const quoted = /^'(.*)'$/.exec(line);
+      return quoted && quoted[1] !== undefined ? quoted[1] : line;
+    });
+}
+
+describe('verify-for-sdk-pr.sh の GATE_NAMES / GATE_COMMANDS が STEPS と一致する（ソースの静的な読み、Issue #1954）', () => {
+  const VERIFY_FOR_SDK_PR_SH = path.join(ROOT, '.github/scripts/verify-for-sdk-pr.sh');
+  const shellText = readFileSync(VERIFY_FOR_SDK_PR_SH, 'utf8');
+  const steps = STEPS as { name: string; cmd: string; args: string[] }[];
+
+  it('前提: STEPS が1本以上ある（空集合で緑にならない）', () => {
+    expect(steps.length).toBeGreaterThan(0);
+  });
+
+  it('前提: GATE_NAMES / GATE_COMMANDS をソースから読めた（配列の書き方が変わっていない）', () => {
+    expect(readGateArray(shellText, 'GATE_NAMES')).not.toBeNull();
+    expect(readGateArray(shellText, 'GATE_COMMANDS')).not.toBeNull();
+  });
+
+  it('GATE_NAMES の名前と順序が STEPS と一致する（STEPS に足した門の反映漏れを捕まえる。実例: PR #1952）', () => {
+    const gateNames = readGateArray(shellText, 'GATE_NAMES');
+    expect(
+      gateNames,
+      '【赤の意味】.github/scripts/verify-for-sdk-pr.sh の GATE_NAMES が ' +
+        'scripts/verify-core.mjs の STEPS と名前・順序で一致しない。STEPS に門を足す/消す/' +
+        '並べ替えるときは GATE_NAMES と GATE_COMMANDS も同じ形へ揃えること。',
+    ).toEqual(steps.map((step) => step.name));
+  });
+
+  it('GATE_COMMANDS の各コマンドが STEPS の cmd + args と一致する（写し間違いを捕まえる）', () => {
+    const gateCommands = readGateArray(shellText, 'GATE_COMMANDS');
+    const expected = steps.map((step) => [step.cmd, ...step.args].join(' '));
+    expect(
+      gateCommands,
+      '【赤の意味】.github/scripts/verify-for-sdk-pr.sh の GATE_COMMANDS が ' +
+        'scripts/verify-core.mjs の STEPS から作った「cmd + args」と一致しない。',
+    ).toEqual(expected);
+  });
+});
+
+/**
  * workflow の**トップレベルの `on:` に、PR の更新で起動する `pull_request:` が
  * 在るか**（Issue #1297）。
  *
