@@ -189,3 +189,65 @@ describe('gh-pr-merge-delete-branch: 前置きの繰り返しが長くても後�
     expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
   });
 });
+
+/**
+ * issue #1933（#1886 の続き・領域D）——`TIMEOUT_COMMAND_PREFIX_SRC`
+ * （`timeout\s+\d+[a-zA-Z]*\s+`）は**小数の継続時間**に当たらない。`\d+`
+ * の直後の `.` は `[a-zA-Z]` にも `\s` にも当たらないため、`timeout 1.5m` の
+ * ような前置きは読み飛ばせず、`gh` が前置きの続きに見えなくなって検出器
+ * 自体が一致しない（＝弾けない）。
+ *
+ * GNU coreutils の `timeout` は継続時間に小数を受け付ける（この器で実測、
+ * 2026-09-28T02:37Z 観測。`timeout (GNU coreutils) 9.7`）:
+ *
+ * ```
+ * $ timeout 0.1 true; echo $?      # 0
+ * $ timeout .5 true; echo $?       # 0（先頭が `.` の形も受ける）
+ * $ timeout 1.5m true; echo $?     # 0
+ * $ timeout 0.5h true; echo $?     # 0
+ * $ timeout .5s true; echo $?      # 0
+ * $ timeout 1. true; echo $?       # 0（末尾が `.` で終わる形も受ける——この
+ *                                    # PR では対応していない。下の
+ *                                    # 「確かめていないこと」参照）
+ * $ timeout . true; echo $?        # 125（`.` 単独は拒否される）
+ * ```
+ *
+ * Issue #1933 が挙げた2例（`timeout 1.5m` / `timeout 0.5h`）に加え、先頭が
+ * `.` の形（`.5s`）も実測で GNU が受けることを確認できたのでここに含める。
+ */
+describe('gh-pr-merge-delete-branch: timeout 前置きの小数の継続時間も弾く（issue #1933）', () => {
+  it('Issue #1933 の実例1: `cd x && timeout 1.5m gh pr merge … --delete-branch` を弾く', () => {
+    const v = inspectBashCommand(
+      'cd x && timeout 1.5m gh pr merge 1 --squash --delete-branch',
+    );
+    expect(v.blocked).toBe(true);
+  });
+
+  it('Issue #1933 の実例2: `timeout 0.5h gh pr merge 1 -d` を弾く', () => {
+    expect(inspectBashCommand('timeout 0.5h gh pr merge 1 -d').blocked).toBe(true);
+  });
+
+  it('単位無しの小数（`timeout 1.5 …`）でも弾く', () => {
+    expect(inspectBashCommand('timeout 1.5 gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it('先頭が `.` の小数（`timeout .5s …`）でも弾く（GNU timeout が受ける形、実測済み）', () => {
+    expect(inspectBashCommand('timeout .5s gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it('`&&` の後ろの env 前置き + 小数 timeout でも弾く', () => {
+    expect(
+      inspectBashCommand('cd /tmp && GH_PAGER=cat timeout 0.5h gh pr merge 1 --delete-branch')
+        .blocked,
+    ).toBe(true);
+  });
+
+  it('弾いたときの形は引き続き gh-pr-merge-delete-branch', () => {
+    const v = inspectBashCommand('timeout 1.5m gh pr merge 1 --squash --delete-branch');
+    expect(v).toMatchObject({ blocked: true, form: 'gh-pr-merge-delete-branch' });
+  });
+
+  it('偽陽性にならないこと——小数 timeout に包まれた無関係なコマンドは引き続き通す', () => {
+    expect(inspectBashCommand('cd /tmp && timeout 1.5m pnpm test').blocked).toBe(false);
+  });
+});
