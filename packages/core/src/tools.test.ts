@@ -12281,6 +12281,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     expect(reply).toContain('Bash 1件 [作業者]');
     expect(reply).toContain('クローンには回ってきていない');
     // 本文の**上**に置く（`failureNote` / `systemErrorNote` と同じ順）。
+    // **先に見出しが在ることを確かめる**（#2008）——無いと `indexOf` が -1 になり、
+    // 順序の比較は `-1 < n` で素通りする。
+    expect(reply).toContain('止められた道具');
     expect(reply.indexOf('止められた道具')).toBeLessThan(reply.indexOf('終わった'));
 
     // **字面の生成元が1箇所であること。** 2つの口が別の語で同じ欄を呼ぶと、
@@ -21131,6 +21134,11 @@ describe('#857: lost / failed の中を「依頼者が何を知らないか」�
 
     const reply = await h.call('manager_list', {});
 
+    // 先に3件とも在ることを確かめる（#2008。先頭の `mgr-done-new` が無いと、下の
+    // 比較は `-1 < n` で素通りする）。
+    for (const id of ['mgr-done-new', 'mgr-fail-delivered', 'mgr-stopped-old']) {
+      expect(reply, `${id} が窓の外へ落ちた`).toContain(id);
+    }
     // `startedAt` 降順そのまま（`failed` が `done` を追い越さない）。
     expect(reply.indexOf('mgr-done-new')).toBeLessThan(reply.indexOf('mgr-fail-delivered'));
     expect(reply.indexOf('mgr-fail-delivered')).toBeLessThan(reply.indexOf('mgr-stopped-old'));

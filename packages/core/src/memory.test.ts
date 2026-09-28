@@ -5987,6 +5987,8 @@ describe('describeMemoryPremiseRanking — 「premise の大きさの順位」�
     const reply2 = describeMemoryPremiseRanking([a, z]);
 
     expect(reply1).toBe(reply2);
+    // 先に `aaa` の行が在ることを確かめる（#2008。無いと `-1 < n` で素通りする）
+    expect(reply1).toContain('aaa:');
     expect(reply1.indexOf('aaa:')).toBeLessThan(reply1.indexOf('zzz:'));
   });
 
