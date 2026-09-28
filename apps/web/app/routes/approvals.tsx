@@ -1,6 +1,7 @@
 import { describeAnsweredVia } from '@alteroid/core/answered-via';
 import { describeTraceAction } from '@alteroid/core/trace-action';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 
 import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
@@ -223,8 +224,21 @@ function ApprovalCard({
         </Badge>
         <span>{formatDateTime(approval.createdAt)}</span>
         <span>({formatRelative(approval.createdAt)})</span>
+        {/*
+          **`jobId` を委譲の詳細へつなぐ（issue #2041）。** `jobId` はマネージャー id
+          である（`packages/core/src/schema.ts` の `pendingApprovalSchema` の doc
+          「どのマネージャーの件か（= manager_id）」。積むのは
+          `packages/core/src/tools.ts` の `jobId: managerId` だけ）。
+          `commitments.tsx` の `OriginBadge`（issue #2028）と同じ作法で、文言は
+          1文字も変えず id の部分だけを `<Link>` にする。
+        */}
         {approval.jobId !== undefined && approval.jobId !== null && (
-          <span className="font-mono">job {approval.jobId}</span>
+          <span className="font-mono">
+            {'job '}
+            <Link to={`/managers/${approval.jobId}`} className="hover:underline">
+              {approval.jobId}
+            </Link>
+          </span>
         )}
       </div>
 

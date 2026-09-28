@@ -17,6 +17,7 @@
  * 5. 個別の「回答する」ボタンは、まとめ送りとは無関係にその場で即送信できる
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PendingApproval } from '~/lib/types';
@@ -125,10 +126,19 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+/**
+ * メタ行の `job <id>` が `<Link>`（react-router）を描画するようになったので
+ * （issue #2041）、router context が要る。`commitments.test.tsx` の
+ * `renderPageWithRouter` と同じ形（`createMemoryRouter` + `RouterProvider`）。
+ * `jobId` を持たないカードでは何も変わらない。
+ */
 function renderPage() {
+  const router = createMemoryRouter([{ path: '/', Component: Approvals }], {
+    initialEntries: ['/'],
+  });
   render(
     <Providers>
-      <Approvals />
+      <RouterProvider router={router} />
     </Providers>,
   );
 }
@@ -744,8 +754,9 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
     stubApprovals([approval({ id: 'a-1', jobId: 'job-abc' })]);
     renderPage();
 
-    const jobText = await screen.findByText('job job-abc');
-    const row = jobText.closest('div');
+    // `job-abc` の部分は `<Link>` になったので（issue #2041）、行はリンクから辿る。
+    const jobLink = await screen.findByRole('link', { name: 'job-abc' });
+    const row = jobLink.closest('div');
     expect(row).not.toBeNull();
     const tokens = row!.className.split(/\s+/);
     expect(tokens).toContain('flex-wrap');
@@ -760,6 +771,31 @@ describe('横並びの積み替え（本4-B）: flex-wrap の付け忘れ', () =
     expect(row).not.toBeNull();
     const tokens = row!.className.split(/\s+/);
     expect(tokens).toContain('flex-wrap');
+  });
+});
+
+/**
+ * **メタ行の `job <id>` を委譲の詳細へつなぐ（issue #2041）。** `jobId` は
+ * マネージャー id（`packages/core/src/schema.ts` の `pendingApprovalSchema`）
+ * なので、`/managers/<id>` へ飛べる。`commitments.tsx`（issue #2028）と同じ
+ * 作法で、文言は変えない——行の文字列は引き続き `job <id>` と読める。
+ */
+describe('メタ行の job id が委譲の詳細へのリンクになる（issue #2041）', () => {
+  it('jobId を持つカードは id が /managers/<id> への Link になり、文言は job <id> のまま', async () => {
+    stubApprovals([approval({ id: 'a-1', jobId: 'mgr-42' })]);
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'mgr-42' });
+    expect(link.getAttribute('href')).toBe('/managers/mgr-42');
+    expect(link.parentElement?.textContent).toBe('job mgr-42');
+  });
+
+  it('jobId を持たないカードにはリンクを出さない', async () => {
+    stubApprovals([approval({ id: 'a-1' })]);
+    renderPage();
+
+    expect(await screen.findByText('本番に出してよいか')).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 });
 
