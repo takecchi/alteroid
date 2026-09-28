@@ -23,16 +23,154 @@ import { z } from 'zod';
 import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
+/**
+ * トップレベルの形だけを見る。**4配列のどれも、各要素はここでは検査しない**
+ * ——`z.array(authAccountSchema)` のように行のスキーマを直接使うと、1行の
+ * 不正が配列全体を道連れにする（直す前の形。issue #1942。`FsJobStore` の
+ * `fileSchema` と同じ理由・同じ形——issue #1868 / #1928）。行ごとの検査は
+ * `#read()` がそれぞれの行スキーマで `safeParse` して1行ずつ行う。
+ *
+ * **ここで投げる例外は今のままでよい**——配列が配列でない・ファイルが
+ * オブジェクトでない、はファイル全体の形の問題であって、1行の問題ではない。
+ */
 const fileSchema = z.object({
-  accounts: z.array(authAccountSchema).default([]),
-  identities: z.array(authIdentitySchema).default([]),
-  accessTokens: z.array(accessTokenRecordSchema).default([]),
-  loginRequests: z.array(loginRequestSchema).default([]),
+  accounts: z.array(z.unknown()).default([]),
+  identities: z.array(z.unknown()).default([]),
+  accessTokens: z.array(z.unknown()).default([]),
+  loginRequests: z.array(z.unknown()).default([]),
 });
 
-type AuthFile = z.infer<typeof fileSchema>;
+/**
+ * `auth.json` の中身。**検査を通った4配列と、それぞれ形が不正で読めなかった
+ * `invalid*Raw`（生の要素。パース前のまま）を分けて持つ**（issue #1942。
+ * `FsJobStore` の `JobFile` / `FsCredentialVaultStore` の `CredentialFile`
+ * と同じ形）。
+ *
+ * `invalid*Raw` を消さずに持ち回るのが、この直しの核心である。書き込み系の
+ * メソッドはいずれも最終的にこれを丸ごとシリアライズし直す（`#serialize`）
+ * ので、ここへ入れなかった行は次の書き込みで消える——検査を通った行だけを
+ * 書けば、版ずれ・手編集でできた不正な行が黙って消えることになる。
+ */
+interface AuthFile {
+  accounts: AuthAccount[];
+  /** 行の形が不正で読めなかった、生の要素（パース前のまま）。 */
+  invalidAccountsRaw: unknown[];
+  identities: AuthIdentity[];
+  invalidIdentitiesRaw: unknown[];
+  accessTokens: AccessTokenRecord[];
+  invalidAccessTokensRaw: unknown[];
+  loginRequests: LoginRequest[];
+  invalidLoginRequestsRaw: unknown[];
+}
 
-const EMPTY: AuthFile = { accounts: [], identities: [], accessTokens: [], loginRequests: [] };
+const EMPTY: AuthFile = {
+  accounts: [],
+  invalidAccountsRaw: [],
+  identities: [],
+  invalidIdentitiesRaw: [],
+  accessTokens: [],
+  invalidAccessTokensRaw: [],
+  loginRequests: [],
+  invalidLoginRequestsRaw: [],
+};
+
+/**
+ * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
+ * 出すのは「どの欄が」だけである（`FsJobStore` の `summarizeInvalidFields` /
+ * `FsCredentialVaultStore` の同名関数と同じ理由・同じ形）。4配列共通。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
+
+/**
+ * 生の要素から、値を出さずに「id」だけを安全に取り出す（取れなければ
+ * `undefined`）。`accounts` / `accessTokens` / `loginRequests` の3配列で使う
+ * ——`identities` だけ `id` を持たず `(provider, subject)` が鍵なので、
+ * こちらは {@link extractIdentityKey} を使う。
+ */
+function extractRowId(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const id = (raw as Record<string, unknown>).id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+/**
+ * 生の要素から、値を出さずに identity の鍵（`provider` / `subject`）だけを
+ * 安全に取り出す（取れない欄は `undefined`）。
+ */
+function extractIdentityKey(raw: unknown): { provider?: string; subject?: string } {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const record = raw as Record<string, unknown>;
+  return {
+    provider: typeof record.provider === 'string' ? record.provider : undefined,
+    subject: typeof record.subject === 'string' ? record.subject : undefined,
+  };
+}
+
+/** 生の要素の identity 鍵が、指定した (provider, subject) と一致するか。 */
+function identityKeyMatches(raw: unknown, provider: string, subject: string): boolean {
+  const key = extractIdentityKey(raw);
+  return key.provider === provider && key.subject === subject;
+}
+
+function describeSkippedAccountRow(params: { index: number; reason: string; id?: string }): string {
+  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
+  return (
+    `alteroid: accounts の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${idNote}`
+  );
+}
+
+/**
+ * 飛ばした identity 行を stderr へ1行で要約する。**id を持たないので、鍵
+ * （`provider` / `subject`）で識別する。** `email` 等の他の値は絶対に載せない。
+ */
+function describeSkippedIdentityRow(params: {
+  index: number;
+  reason: string;
+  provider?: string;
+  subject?: string;
+}): string {
+  const keyNote =
+    params.provider === undefined && params.subject === undefined
+      ? ''
+      : ` provider=${JSON.stringify(params.provider ?? null)} subject=${JSON.stringify(
+          params.subject ?? null,
+        )}`;
+  return (
+    `alteroid: identities の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${keyNote}`
+  );
+}
+
+function describeSkippedAccessTokenRow(params: {
+  index: number;
+  reason: string;
+  id?: string;
+}): string {
+  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
+  return (
+    `alteroid: accessTokens の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${idNote}`
+  );
+}
+
+function describeSkippedLoginRequestRow(params: {
+  index: number;
+  reason: string;
+  id?: string;
+}): string {
+  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
+  return (
+    `alteroid: loginRequests の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${idNote}`
+  );
+}
 
 /**
  * `createdAt` の**実時刻**昇順（issue #1676）。**単独では使わない** ——
@@ -138,10 +276,21 @@ export class FsAuthStore implements AuthStore {
 
   async putAccount(account: AuthAccount): Promise<void> {
     const parsed = authAccountSchema.parse(account);
-    await this.#update((file) => ({
-      ...file,
-      accounts: [...file.accounts.filter((it) => it.id !== parsed.id), parsed],
-    }));
+    await this.#update((file) => {
+      // **書き込む id と一致する壊れた行は置き換える**（`FsJobStore.putJob` /
+      // `FsCredentialVaultStore.put` と同じフォローアップ。issue #1942）。
+      // 直したはずの id の壊れた行が `invalidAccountsRaw` として残り続けると、
+      // ファイルに同じ id が2行並び、以後 `listAccounts()` のたびに直した
+      // はずの跡が出続ける——「直した」という呼び手の意図に対する驚きになる。
+      const invalidAccountsRaw = file.invalidAccountsRaw.filter(
+        (raw) => extractRowId(raw) !== parsed.id,
+      );
+      return {
+        ...file,
+        accounts: [...file.accounts.filter((it) => it.id !== parsed.id), parsed],
+        invalidAccountsRaw,
+      };
+    });
   }
 
   /**
@@ -185,15 +334,24 @@ export class FsAuthStore implements AuthStore {
 
   async putIdentity(identity: AuthIdentity): Promise<void> {
     const parsed = authIdentitySchema.parse(identity);
-    await this.#update((file) => ({
-      ...file,
-      identities: [
-        ...file.identities.filter(
-          (it) => !(it.provider === parsed.provider && it.subject === parsed.subject),
-        ),
-        parsed,
-      ],
-    }));
+    await this.#update((file) => {
+      // **書き込む鍵（provider, subject）と一致する壊れた行は置き換える**
+      // （`putAccount` と同じフォローアップ。issue #1942）。`identities` は
+      // `id` を持たないので、鍵の一致で判定する（`identityKeyMatches`）。
+      const invalidIdentitiesRaw = file.invalidIdentitiesRaw.filter(
+        (raw) => !identityKeyMatches(raw, parsed.provider, parsed.subject),
+      );
+      return {
+        ...file,
+        identities: [
+          ...file.identities.filter(
+            (it) => !(it.provider === parsed.provider && it.subject === parsed.subject),
+          ),
+          parsed,
+        ],
+        invalidIdentitiesRaw,
+      };
+    });
   }
 
   /**
@@ -226,11 +384,31 @@ export class FsAuthStore implements AuthStore {
         const accountInput = emailCollides ? { ...input.account, email: null } : input.account;
         const account = authAccountSchema.parse(accountInput);
         const identity = authIdentitySchema.parse(input.identity);
+        // **fail-closed（issue #1942）。** `existing` が `undefined` なのは
+        // 「本当に初めて見る identity」だけでなく、**同じ (provider, subject)
+        // の行が壊れていて `file.identities`（検査を通った行）に居ないとき
+        // も同じ形になる**——見分けが付かない。後者では、ここで新しい
+        // account を作る。**新しい account は常に未許可（`grantedAt: null`）
+        // で作られる**（呼び手が渡す `input.account` がそもそも未許可の
+        // 状態で組み立てる——`auth-service.ts` 側の約束）ので、壊れた行が
+        // 元は許可済みの account を指していたとしても、その許可は引き継がれ
+        // ない。権限が増える方向へは倒れない。
+        //
+        // **書き込む鍵と一致する壊れた identity 行は置き換える**
+        // （`putIdentity` と同じフォローアップ）。壊れた生の行と新しい行が
+        // 同じ (provider, subject) で並んだまま残ると、次回以降の
+        // `findIdentity` は検査を通った新しい行を返すので実害は無いが、
+        // ファイルに同じ鍵の行が2行残り続けるのは「直した」呼び手の意図に
+        // 対する驚きになる。
+        const invalidIdentitiesRaw = file.invalidIdentitiesRaw.filter(
+          (raw) => !identityKeyMatches(raw, identity.provider, identity.subject),
+        );
         return {
           next: {
             ...file,
             accounts: [...file.accounts.filter((it) => it.id !== account.id), account],
             identities: [...file.identities, identity],
+            invalidIdentitiesRaw,
           },
           result: { created: true, account },
         };
@@ -240,10 +418,18 @@ export class FsAuthStore implements AuthStore {
 
   async putAccessToken(token: AccessTokenRecord): Promise<void> {
     const parsed = accessTokenRecordSchema.parse(token);
-    await this.#update((file) => ({
-      ...file,
-      accessTokens: [...file.accessTokens.filter((it) => it.id !== parsed.id), parsed],
-    }));
+    await this.#update((file) => {
+      // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ
+      // フォローアップ。issue #1942）。
+      const invalidAccessTokensRaw = file.invalidAccessTokensRaw.filter(
+        (raw) => extractRowId(raw) !== parsed.id,
+      );
+      return {
+        ...file,
+        accessTokens: [...file.accessTokens.filter((it) => it.id !== parsed.id), parsed],
+        invalidAccessTokensRaw,
+      };
+    });
   }
 
   /**
@@ -314,15 +500,26 @@ export class FsAuthStore implements AuthStore {
   async putLoginRequest(request: LoginRequest): Promise<void> {
     const parsed = loginRequestSchema.parse(request);
     const horizon = Date.now() - LOGIN_REQUEST_RETENTION_MS;
-    await this.#update((file) => ({
-      ...file,
-      loginRequests: [
-        ...file.loginRequests.filter(
-          (it) => it.id !== parsed.id && Date.parse(it.expiresAt) > horizon,
-        ),
-        parsed,
-      ],
-    }));
+    await this.#update((file) => {
+      // **書き込む id と一致する壊れた行は置き換える**（`putAccount` と同じ
+      // フォローアップ。issue #1942）。**期限切れの掃除（`horizon`）は壊れた
+      // 行までは追わない**——壊れた行は `expiresAt` すら安全に読めているとは
+      // 限らないので（それ自体が不正な理由かもしれない）、ここでは書き込む
+      // id と一致した行だけを掃除の対象にする、より保守的な形にしてある。
+      const invalidLoginRequestsRaw = file.invalidLoginRequestsRaw.filter(
+        (raw) => extractRowId(raw) !== parsed.id,
+      );
+      return {
+        ...file,
+        loginRequests: [
+          ...file.loginRequests.filter(
+            (it) => it.id !== parsed.id && Date.parse(it.expiresAt) > horizon,
+          ),
+          parsed,
+        ],
+        invalidLoginRequestsRaw,
+      };
+    });
   }
 
   async getLoginRequest(id: string): Promise<LoginRequest | null> {
@@ -443,14 +640,141 @@ export class FsAuthStore implements AuthStore {
     });
   }
 
+  /**
+   * `auth.json` を読む。**4配列すべてを行ごとに検査し、不正な1行だけを
+   * 飛ばす**（issue #1942。以前は `fileSchema.parse` で4配列それぞれを1回に
+   * 検査していたため、どれか1行でも不正だとログイン・アクセストークンの
+   * 照会・`access grant` / `revoke` まで、同じ `auth.json` を読む操作が
+   * すべて丸ごと例外を投げていた——`#read()` が4配列を同時に返す1つの関数
+   * だからである。pg 実装（`PgAuthStore`）は `accounts` / `identities` /
+   * `accessTokens` を正規化された列で持つので、そもそも「1行の不正が他の
+   * 行を道連れにする」形をしていない。`loginRequests` だけ JSONB で持つが、
+   * そちらは元から行ごとに `safeParse` している）。
+   *
+   * **飛ばすのは行の形が不正なとき（必須欄が欠けている・型が違う、など）
+   * だけである。** ファイルそのものが JSON として読めない・トップレベルの
+   * 形が違う（各配列が配列でない等）ときは、いまの振る舞い（例外）のまま
+   * にしてある——それは1行の問題ではないため。
+   *
+   * 飛ばした行は stderr へ1行の跡を残し（`describeSkipped*Row`。**値は
+   * `email` 等の本文を含めず、id（または identity の鍵）だけ**）、
+   * `invalid*Raw` として生の形のまま保持する——`put*` 系のメソッドがこれを
+   * 書き戻すことで、版ずれ・手編集でできた不正な行を黙って消さない。
+   */
   async #read(): Promise<AuthFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');
-      return fileSchema.parse(JSON.parse(raw));
+      const top = fileSchema.parse(JSON.parse(raw));
+
+      const accounts: AuthAccount[] = [];
+      const invalidAccountsRaw: unknown[] = [];
+      top.accounts.forEach((rawAccount, index) => {
+        const result = authAccountSchema.safeParse(rawAccount);
+        if (result.success) {
+          accounts.push(result.data);
+          return;
+        }
+        invalidAccountsRaw.push(rawAccount);
+        process.stderr.write(
+          `${describeSkippedAccountRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            id: extractRowId(rawAccount),
+          })}\n`,
+        );
+      });
+
+      const identities: AuthIdentity[] = [];
+      const invalidIdentitiesRaw: unknown[] = [];
+      top.identities.forEach((rawIdentity, index) => {
+        const result = authIdentitySchema.safeParse(rawIdentity);
+        if (result.success) {
+          identities.push(result.data);
+          return;
+        }
+        invalidIdentitiesRaw.push(rawIdentity);
+        const key = extractIdentityKey(rawIdentity);
+        process.stderr.write(
+          `${describeSkippedIdentityRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            provider: key.provider,
+            subject: key.subject,
+          })}\n`,
+        );
+      });
+
+      const accessTokens: AccessTokenRecord[] = [];
+      const invalidAccessTokensRaw: unknown[] = [];
+      top.accessTokens.forEach((rawToken, index) => {
+        const result = accessTokenRecordSchema.safeParse(rawToken);
+        if (result.success) {
+          accessTokens.push(result.data);
+          return;
+        }
+        invalidAccessTokensRaw.push(rawToken);
+        process.stderr.write(
+          `${describeSkippedAccessTokenRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            id: extractRowId(rawToken),
+          })}\n`,
+        );
+      });
+
+      const loginRequests: LoginRequest[] = [];
+      const invalidLoginRequestsRaw: unknown[] = [];
+      top.loginRequests.forEach((rawRequest, index) => {
+        const result = loginRequestSchema.safeParse(rawRequest);
+        if (result.success) {
+          loginRequests.push(result.data);
+          return;
+        }
+        invalidLoginRequestsRaw.push(rawRequest);
+        process.stderr.write(
+          `${describeSkippedLoginRequestRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            id: extractRowId(rawRequest),
+          })}\n`,
+        );
+      });
+
+      return {
+        accounts,
+        invalidAccountsRaw,
+        identities,
+        invalidIdentitiesRaw,
+        accessTokens,
+        invalidAccessTokensRaw,
+        loginRequests,
+        invalidLoginRequestsRaw,
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
     }
+  }
+
+  /**
+   * `AuthFile` をディスク上の形へ直す。**検査を通った4配列と、それぞれの
+   * `invalid*Raw` を1本ずつの配列へ合流させる**——分けたまま書くと、次の
+   * `#read()` が `fileSchema`（トップレベルの形しか見ない）を通すときに
+   * 未知のキー（`invalid*Raw`）として黙って捨てられ、壊れた行を持ち回る
+   * 意味が消える。
+   */
+  #serialize(file: AuthFile): {
+    accounts: unknown[];
+    identities: unknown[];
+    accessTokens: unknown[];
+    loginRequests: unknown[];
+  } {
+    return {
+      accounts: [...file.accounts, ...file.invalidAccountsRaw],
+      identities: [...file.identities, ...file.invalidIdentitiesRaw],
+      accessTokens: [...file.accessTokens, ...file.invalidAccessTokensRaw],
+      loginRequests: [...file.loginRequests, ...file.invalidLoginRequestsRaw],
+    };
   }
 
   /**
@@ -475,7 +799,9 @@ export class FsAuthStore implements AuthStore {
       await mkdir(this.#dir, { recursive: true });
       // 一時ファイルの時点で 0600（`writeFileAtomic` の `mode`）。rename 後に
       // 絞ると、その隙間で他人が読める。
-      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+      await writeFileAtomic(this.#path, `${JSON.stringify(this.#serialize(next), null, 2)}\n`, {
+        mode: 0o600,
+      });
       return result;
     });
   }
