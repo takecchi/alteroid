@@ -127,33 +127,84 @@ const SEARCH_DEBOUNCE_MS = 300;
  */
 const SEARCH_PARAM = 'q';
 
+/**
+ * 種別チップの選択を載せる URL のクエリパラメタ名（issue #2029）。
+ *
+ * **`GET /journal?type=` とは違う名前にしてある。** API 側は種別1つにつき
+ * `type=` を複数回付ける形（`use-journal-window.ts`）だが、URL の見た目は
+ * カンマ区切りで1つのパラメタにまとめたほうが短く読みやすい
+ * （`managers.tsx` の `status` チップも同じ形に揃える。issue #2030）。
+ * 名前を変えているのは「1つの値」と「複数値をカンマ区切りで詰めたもの」で
+ * 意味が違うことを URL の読み手にも伝えるためである。
+ */
+const TYPES_SEARCH_PARAM = 'types';
+
+/**
+ * `TYPES_SEARCH_PARAM` の生の値から、既知の種別だけを順序を保って取り出す。
+ *
+ * **知らない値は無視する（#2010 の線）。** URL 経由の値は人間が手で書き換え
+ * うるので、`JournalEntryType` として型で縛れない。ここで `TYPES`（＝
+ * `JOURNAL_ENTRY_TYPES` から導出した既知の集合）に無い値を弾いておけば、
+ * 後段（チップの選択状態・`useJournalWindow` への `selected`・`GET
+ * /journal?type=`）はいままでどおり `JournalEntryType` だけを扱える。
+ *
+ * **「無視する」を選んだ理由**（#2010 は「生の値をそのまま見せる」も選べる
+ * 形として書いてあるので、ここで選んだ側を残す）。#2010 の `inboxTypeLabel`
+ * は**表示のための倒れ先**（人間が「知らない種類が来た」と気づけるように、
+ * ラベルの代わりに生の値を見せる）だが、ここは**絞り込みの状態そのもの**で
+ * ある。知らない値を `selected` に残すと、型を `JournalEntryType[]` のまま
+ * 保てない（チップの `includes` 判定にも `useJournalWindow` の引数にも
+ * 生の文字列が混ざる）うえ、対応するチップが無いので選択されているのに
+ * どのチップも押されて見えない状態になる。**落ちないことが目的**なので、
+ * 素直に読み捨てる。
+ */
+function parseSelectedTypes(raw: string | null): readonly JournalEntryType[] {
+  if (raw === null || raw === '') return [];
+  const result: JournalEntryType[] = [];
+  for (const part of raw.split(',')) {
+    if (part === '') continue;
+    if (!(TYPES as readonly string[]).includes(part)) continue;
+    const type = part as JournalEntryType;
+    if (!result.includes(type)) result.push(type);
+  }
+  return result;
+}
+
 export default function Journal() {
-  const [selected, setSelected] = useState<readonly JournalEntryType[]>([]);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [headerRef, headerHeight] = useMeasuredHeight();
 
   /*
-   * **検索語の正本は URL である**（issue #250）。
+   * **検索語も種別チップも、正本は URL である**（issue #250 / #2029）。
    *
-   * 画面の state に閉じ込めると、**その検索結果を人へ渡せない**（開き直すと
+   * 画面の state に閉じ込めると、**その絞り込みを人へ渡せない**（開き直すと
    * 消える・戻るで戻れない・リンクで共有できない）。日誌は「あとから否定
    * できる」ための記録なので、**見つけた1行を指して渡せること**そのものに
    * 意味がある。
    *
-   * **打っている途中の値（`draft`）と、実際に撃つ値（URL）を分けてある。**
-   * 入力欄は打鍵ごとに `draft` を更新して即座に反応し、URL は debounce
-   * （`SEARCH_DEBOUNCE_MS`）を通った後だけ書き換える。**`replace: true` に
-   * するのは、打鍵1つごとに履歴が積まれると「戻る」が使えなくなるから**で
-   * ある（検索語を1文字ずつ巻き戻すのは誰も望んでいない）。
+   * **打っている途中の値（`draft`）と、実際に撃つ値（URL）を分けてある
+   * （検索語だけ）。** 入力欄は打鍵ごとに `draft` を更新して即座に反応し、
+   * URL は debounce（`SEARCH_DEBOUNCE_MS`）を通った後だけ書き換える。
+   * **`replace: true` にするのは、打鍵1つごとに履歴が積まれると「戻る」が
+   * 使えなくなるから**である（検索語を1文字ずつ巻き戻すのは誰も望んで
+   * いない）。
    *
-   * **種別チップ（`selected`）は URL に載せていない。** これは #250 の
-   * 終了条件（4口に `q` が入る）の外なので手を付けなかっただけで、
-   * 「載せるべきでない」と判断したのではない。**いま検索語だけが URL に
-   * 在り、チップは在る、という非対称がここに在る。**
+   * **種別チップ（`selected`）は #250 の時点では URL に載せていなかった。**
+   * 終了条件（4口に `q` が入る）の外なので手を付けなかっただけで、「載せる
+   * べきでない」と判断したのではない、という経緯だった（issue #2029）。
+   *
+   * **いまは検索語と同じ `useSearchParams` の仕組みに乗せた。** ただし
+   * **debounce はしない** —— チップの切り替えは打鍵と違って1回のクリックが
+   * そのまま1回の意図した操作であり、連打しても検索語のような「入力の
+   * 途中」は無い。**`replace: true` は検索語と同じ理由で踏襲する** ——
+   * 複数のチップを続けて押す操作は、検索語の連続した打鍵と同じ形で履歴を
+   * 汚す（チップを3つ押しただけで「戻る」を3回要求されるのは誰も望んで
+   * いない）。
    */
   const [searchParams, setSearchParams] = useSearchParams();
   const committed = searchParams.get(SEARCH_PARAM) ?? '';
   const [draft, setDraft] = useState(committed);
+  const selected = parseSelectedTypes(searchParams.get(TYPES_SEARCH_PARAM));
 
   useEffect(() => {
     if (draft === committed) return;
@@ -174,8 +225,29 @@ export default function Journal() {
   }, [draft, committed, setSearchParams]);
 
   function toggle(type: JournalEntryType) {
-    setSelected((previous) =>
-      previous.includes(type) ? previous.filter((t) => t !== type) : [...previous, type],
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        const current = parseSelectedTypes(next.get(TYPES_SEARCH_PARAM));
+        const updated = current.includes(type)
+          ? current.filter((t) => t !== type)
+          : [...current, type];
+        if (updated.length === 0) next.delete(TYPES_SEARCH_PARAM);
+        else next.set(TYPES_SEARCH_PARAM, updated.join(','));
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
+  function clearSelected() {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete(TYPES_SEARCH_PARAM);
+        return next;
+      },
+      { replace: true },
     );
   }
 
@@ -248,7 +320,7 @@ export default function Journal() {
           {selected.length > 0 && (
             <button
               type="button"
-              onClick={() => setSelected([])}
+              onClick={clearSelected}
               className="ml-1 text-[11px] text-muted underline hover:text-fg"
             >
               解除
