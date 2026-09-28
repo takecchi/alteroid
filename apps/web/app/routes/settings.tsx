@@ -258,9 +258,14 @@ function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profile === undefined) {
     return <span className="text-[11px] text-muted">プロファイルは置いていない</span>;
   }
+  // **`sha256` は既に「先頭12桁」であって64桁の生の sha256 ではない**
+  // （`packages/core/src/profile.ts` の `fingerprintOf`）。CLI
+  // （`apps/cli/src/runners.ts` の `renderProfileFingerprint`）と同じ形に
+  // 揃え、`updatedAt` も添えて「いつの内容か」を分かるようにする。
   return (
     <span className="font-mono text-[11px] break-all text-muted">
-      プロファイルの指紋: {runner.profile.sha256}
+      プロファイル: 置いてある（指紋 {runner.profile.sha256}、
+      {formatDateTime(runner.profile.updatedAt)} 更新）
     </span>
   );
 }

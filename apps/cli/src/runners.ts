@@ -259,9 +259,17 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
 /**
  * 鍵の指紋（`credentials`/`credentialsProbe`）を1行へ（#1947）。
  *
- * **3状態を1つも潰さない**（`RunnerProbe` の doc と同じ理由）。Web の
- * `Credentials` コンポーネントと意味を揃えるが、こちらはテキストを返す
- * （JSX ではなく、端末に書く1行そのもの）。
+ * **3状態を1つも潰さない**（`RunnerProbe` の doc と同じ理由）。
+ *
+ * **名前だけを出し、sha256 は出さない。** Web（`apps/web/app/routes/
+ * settings.tsx` の `Credentials`）は名前だけを Badge で出しており、CLI だけ
+ * が `NAME=sha256` を全部の鍵について並べると、(1) 人間向けの2つの画面の
+ * 見せ方が割れる (2) 鍵の本数が増えるほど1行が長くなる。core の
+ * `runner_list`（`packages/core/src/tools.ts`、`fingerprints: true` の
+ * とき）が sha256 まで出すのは別の事情（エージェントの文脈で「人間が置いた
+ * 鍵とマネージャーが握っている鍵が同じか」を照合する必要があるため）で、
+ * こちら（人間が端末で読む一覧）には当てはまらないので、core 側は変えて
+ * いない。
  */
 function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): string {
   if (runner.credentialsProbe.status === 'unheard') {
@@ -273,14 +281,19 @@ function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): s
   if (runner.credentials.length === 0) {
     return '鍵: 渡している鍵は無い';
   }
-  return `鍵の指紋: ${runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', ')}`;
+  return `鍵: ${runner.credentials.map((c) => c.name).join(', ')}`;
 }
 
 /**
  * プロファイルの指紋（`profile`/`profileProbe`）を1行へ（#1947）。上と同じ3状態
- * ・同じ理由。**Web はまだこの欄を出していない**（この PR で足すか、足さずに
- * 理由を PR 本文へ書くかを判断する——`apps/web/app/routes/settings.tsx` の
- * `Credentials` の隣）。
+ * ・同じ理由。Web にもこの PR で同じ形（`Profile` コンポーネント）を足した。
+ *
+ * **`profile.sha256` は既に「先頭12桁」であって64桁の生の sha256 ではない**
+ * （`packages/core/src/profile.ts` の `fingerprintOf`——`createHash('sha256')
+ * .digest('hex').slice(0, 12)`。`runnerProfileFingerprintSchema.sha256` の
+ * doc も「先頭12桁」と明記している）。だからここでさらに切り詰める必要は
+ * 無く、`updatedAt` を添えて「置いてある」ことと「いつの内容か」を1行で
+ * 分かるようにする。
  */
 function renderProfileFingerprint(runner: RunnersView['runners'][number]): string {
   if (runner.profileProbe.status === 'unheard') {
@@ -292,5 +305,5 @@ function renderProfileFingerprint(runner: RunnersView['runners'][number]): strin
   if (runner.profile === undefined) {
     return 'プロファイル: 置いていない';
   }
-  return `プロファイルの指紋: ${runner.profile.sha256}`;
+  return `プロファイル: 置いてある（指紋 ${runner.profile.sha256}、${runner.profile.updatedAt} 更新）`;
 }

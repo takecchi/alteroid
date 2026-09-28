@@ -340,13 +340,19 @@ describe('renderRunners', () => {
       expect(text).toContain('鍵: 渡している鍵は無い');
     });
 
-    it('asked かつ1件以上あれば、名前と指紋を出す', () => {
+    /**
+     * **名前だけを出す。sha256 は出さない**（Web の `Credentials` と同じ
+     * 見せ方に揃える——マネージャーの差し戻しで直した）。複数件でも1行に
+     * 収まることを、2件で確かめる。
+     */
+    it('asked かつ1件以上あれば、名前だけを出す（sha256 は出さない）', () => {
       const text = renderRunners({
         runners: [
           {
             ...RUNNER,
             credentials: [
               { name: 'GH_TOKEN', sha256: 'deadbeef0001', updatedAt: '2026-09-01T00:00:00.000Z' },
+              { name: 'NPM_TOKEN', sha256: 'cafef00d0002', updatedAt: '2026-09-01T00:00:00.000Z' },
             ],
             credentialsProbe: { status: 'asked' },
             revision: { status: 'unheard' },
@@ -355,7 +361,9 @@ describe('renderRunners', () => {
         daemonRevision: { status: 'unknown' },
       });
 
-      expect(text).toContain('鍵の指紋: GH_TOKEN=deadbeef0001');
+      expect(text).toContain('鍵: GH_TOKEN, NPM_TOKEN');
+      expect(text).not.toContain('deadbeef0001');
+      expect(text).not.toContain('cafef00d0002');
     });
   });
 
@@ -400,7 +408,11 @@ describe('renderRunners', () => {
       expect(text).toContain('プロファイル: 置いていない');
     });
 
-    it('asked かつ profile があれば指紋を出す', () => {
+    /**
+     * **指紋（先頭12桁。既に切り詰め済み）に加えて `updatedAt` を出す**
+     * （マネージャーの差し戻しで、いつの内容かも分かる形に直した）。
+     */
+    it('asked かつ profile があれば指紋と更新時刻を出す', () => {
       const text = renderRunners({
         runners: [
           {
@@ -413,7 +425,9 @@ describe('renderRunners', () => {
         daemonRevision: { status: 'unknown' },
       });
 
-      expect(text).toContain('プロファイルの指紋: abc123456789');
+      expect(text).toContain(
+        'プロファイル: 置いてある（指紋 abc123456789、2026-09-01T00:00:00.000Z 更新）',
+      );
     });
   });
 });

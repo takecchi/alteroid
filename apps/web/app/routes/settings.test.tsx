@@ -297,7 +297,11 @@ describe('runner のプロファイル欄は、聞けた分しか言わない', 
     expect(await screen.findByText('プロファイルは置いていない')).toBeTruthy();
   });
 
-  it('聞けて profile があれば指紋を出す', async () => {
+  /**
+   * **指紋（先頭12桁。既に切り詰め済み）に加えて `updatedAt` も出す**
+   * （CLI の `renderProfileFingerprint` と同じ形に揃える）。
+   */
+  it('聞けて profile があれば指紋と更新時刻を出す', async () => {
     renderSettings({
       runners: [
         {
@@ -309,7 +313,10 @@ describe('runner のプロファイル欄は、聞けた分しか言わない', 
       daemonRevision: DAEMON_UNKNOWN,
     });
 
-    expect(await screen.findByText(/abc123456789/)).toBeTruthy();
+    const line = await screen.findByText(/abc123456789/);
+    expect(line.textContent).toContain('プロファイル: 置いてある');
+    // 時分は器の時間帯で変わるので、日付だけ固定して見る（他のブロックと同じ理由）。
+    expect(line.textContent).toMatch(/09\/01/);
   });
 });
 
