@@ -432,4 +432,33 @@ describe('回答済みで未配達の承認の拾い直しは、作られなか�
 
     void clone;
   });
+
+  // **人間のアカウントでない経路の回答では作らない。** operator の資格（認証を切った
+  // 構成・実行環境の持ち主の token）はクローンの器から読めるので、人間の同意の証拠に
+  // ならない（`host.ts` の `AnswerApprovalVia` / `#recordPermissionGrantIfConsented` の
+  // doc）。定型文どおりの回答でも、経路が operator なら拾い直しで作らないことを見る。
+  it.each([
+    ['operator-token', { kind: 'operator', auth: 'operator-token' }],
+    ['disabled', { kind: 'operator', auth: 'disabled' }],
+  ] as const)(
+    '対照: 経路が operator（%s）の回答は、定型文どおりでも拾い直しで許可の記録を作らない',
+    async (_label, via) => {
+      const stores = createMemoryStores();
+      await stores.jobs.putApproval(consentedPendingRow({ answeredVia: via }));
+
+      const { clone } = bootClone(stores, 'hang');
+      const started = Date.now();
+      for (;;) {
+        if ((await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered') break;
+        if (Date.now() - started > 3000) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await idle();
+
+      expect((await stores.jobs.getApproval('ap-1'))?.answerDelivery).toBe('delivered');
+      expect(await stores.permissionGrants.list()).toEqual([]);
+
+      void clone;
+    },
+  );
 });
