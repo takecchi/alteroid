@@ -227,9 +227,7 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
     const stores = createFsStores(root);
 
     let result: ScheduledRequest | 'unreadable' | null = 'sentinel' as unknown as
-      | ScheduledRequest
-      | 'unreadable'
-      | null;
+      ScheduledRequest | 'unreadable' | null;
     const lines = await captureStderr(async () => {
       result = await stores.schedules.removeIfPresent('bad-kind');
     });
