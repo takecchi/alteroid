@@ -233,7 +233,10 @@ describe('制御面の境界', () => {
       );
       req.end();
     `;
-    const { stdout } = await run(process.execPath, ['-e', script, socketPath, TOKEN]);
+    // env 無指定だと親（このテストプロセス）の本物の秘密をそのまま継承する（#1854）。
+    // このスクリプトは `node:http` と `process.argv` だけを使い、`PATH` すら
+    // 要らない（`process.execPath` を絶対パスで直接指すため）——空で足りる。
+    const { stdout } = await run(process.execPath, ['-e', script, socketPath, TOKEN], { env: {} });
 
     expect(stdout).toBe('200');
   });

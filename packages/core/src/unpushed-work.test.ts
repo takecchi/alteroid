@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.test-support.js';
 import { unpushedWorkResultSchema, unpushedWorkTreeSchema } from './runner-protocol.js';
 import {
   computeUnpushedWork,
@@ -37,7 +38,10 @@ function git(dir: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    // 器の本物の秘密を継承しない allowlist に絞る（#1854）。`git` 自身を解決する
+    // `PATH` と、`~/.gitconfig` を踏ませないための偽 `HOME` だけで足りる
+    // （`write-canon.test.ts` と同じ `gitChildEnv()`）。
+    env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' },
   });
 }
 

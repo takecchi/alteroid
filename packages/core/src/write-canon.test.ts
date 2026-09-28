@@ -71,11 +71,12 @@ async function runIsolated(options: {
     run(['commit', '-q', '-m', 'seed']);
   }
 
-  // **`ALTEROID_BUILD_REV` は明示的に消してから積み直す。** 呼び出し元プロセス
+  // **`ALTEROID_BUILD_REV` を積まない状態から積み直す。** 呼び出し元プロセス
   // （vitest 自身）の環境にたまたま乗っていたら、`git` 経路を試すテストが静かに
-  // `build` へ倒れる。
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.ALTEROID_BUILD_REV;
+  // `build` へ倒れてしまう——`gitChildEnv()`（`PATH` + 偽 `HOME` だけ）は
+  // そもそもそれを持っていないので、消す手当てが要らない。器の本物の秘密も
+  // 継承しない（#1854。直上の `git()` 呼び出しと同じ allowlist）。
+  const env: NodeJS.ProcessEnv = { ...gitChildEnv() };
   if (options.env) Object.assign(env, options.env);
 
   execFileSync(process.execPath, [join(scriptDir, 'write-canon.mjs')], {

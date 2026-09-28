@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { clearRecentTracesForTesting, recentDroppedTraces } from './dropped-record.js';
+import { gitChildEnv } from './git-child-env.test-support.js';
 import {
   MANAGER_MODEL,
   WORKER_AGENT_NAME,
@@ -2265,7 +2266,9 @@ describe('デーモン再起動後（M4）', () => {
     const run = promisify(execFile);
     const dir = await makeTempDir('alteroid-manager-unpushed-');
     const git = (args: string[]) =>
-      run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      // 器の本物の秘密を継承しない allowlist に絞る（#1854）。`gitChildEnv()` は
+      // `git` を解決する `PATH` と偽 `HOME` だけを渡す（`write-canon.test.ts` と同じ）。
+      run('git', args, { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } });
     await git(['init', '-q', '-b', 'main']);
     await git(['config', 'user.email', 'test@example.com']);
     await git(['config', 'user.name', 'Test']);
@@ -2309,7 +2312,9 @@ describe('unpushedWork の観測を台帳へ残す（Issue #1228 候補(1)）', 
     const run = promisify(execFile);
     const dir = await makeTempDir('alteroid-manager-unpushed-ledger-');
     const git = (args: string[]) =>
-      run('git', args, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+      // 器の本物の秘密を継承しない allowlist に絞る（#1854）。`gitChildEnv()` は
+      // `git` を解決する `PATH` と偽 `HOME` だけを渡す（`write-canon.test.ts` と同じ）。
+      run('git', args, { cwd: dir, env: { ...gitChildEnv(), GIT_TERMINAL_PROMPT: '0' } });
     await git(['init', '-q', '-b', 'fix/1228-worktree-branch-into-ledger']);
     await git(['config', 'user.email', 'test@example.com']);
     await git(['config', 'user.name', 'Test']);
