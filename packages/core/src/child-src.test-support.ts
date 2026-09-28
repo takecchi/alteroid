@@ -43,13 +43,15 @@ export async function runChildAgainstSrc(
   lines: readonly string[],
 ): Promise<ChildSrcFailure | null> {
   const child = lines.join('\n');
-  return run(process.execPath, [
-    '--experimental-strip-types',
-    `--import=${loader}`,
-    '--input-type=module',
-    '-e',
-    child,
-  ]).then(
+  return run(
+    process.execPath,
+    ['--experimental-strip-types', `--import=${loader}`, '--input-type=module', '-e', child],
+    // 子は絶対パスの `process.execPath` と絶対パスの loader だけを使い、モジュール
+    // 解決に PATH も他の env も要らない（#1971 — 親の process.env を丸ごと
+    // 継がせない。対象コード（schedule.ts 等）が process.env を読む箇所が無いことを
+    // 確認済み）。念のため PATH だけは残す（node 自身が内部で使う可能性への保険）。
+    { env: { PATH: process.env.PATH ?? '' } },
+  ).then(
     () => null,
     (error: unknown) => error as ChildSrcFailure,
   );

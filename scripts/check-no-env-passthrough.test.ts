@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { ALLOWLIST, classifyEnvPassthroughHits, findEnvPassthroughHits, isTargetPath, listTargetFiles, maskCommentsAndStrings } from './check-no-env-passthrough-core.mjs';
+import { ALLOWLIST, ALLOWLIST_MISSING_ENV, classifyChildProcessCallEnv, classifyEnvPassthroughHits, findEnvPassthroughHits, findMissingEnvChildProcessCalls, isTargetPath, listTargetFiles, maskCommentsAndStrings } from './check-no-env-passthrough-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -173,6 +173,136 @@ describe('check-no-env-passthrough: findEnvPassthroughHits', () => {
   });
 });
 
+describe('check-no-env-passthrough: classifyChildProcessCallEnv（Issue #1971）', () => {
+  it('env 無しの呼び出し（オプションそのものが無い）は missing-env', () => {
+    expect(classifyChildProcessCallEnv('execFileSync', ["'git'", "['status']"])).toBe(
+      'missing-env',
+    );
+  });
+
+  it('args 配列だけで options が無い形（2引数）も missing-env', () => {
+    expect(classifyChildProcessCallEnv('spawnSync', ["'git'", "['status']"])).toBe('missing-env');
+  });
+
+  it('command だけ（1引数のみ）も missing-env', () => {
+    expect(classifyChildProcessCallEnv('execSync', ["'ls'"])).toBe('missing-env');
+  });
+
+  it('options オブジェクトに env キーが在れば has-env', () => {
+    expect(
+      classifyChildProcessCallEnv('execFileSync', ["'git'", "['status']", '{ cwd, env: gitChildEnv() }']),
+    ).toBe('has-env');
+  });
+
+  it('options オブジェクトに env の shorthand（`{ env }`）が在っても has-env', () => {
+    expect(classifyChildProcessCallEnv('spawnSync', ["'git'", "['status']", '{ env }'])).toBe(
+      'has-env',
+    );
+  });
+
+  it('⚠️ 回帰: オプションを変数で渡す形は判定できない（undeterminable）', () => {
+    expect(classifyChildProcessCallEnv('execFileSync', ["'git'", 'args', 'opts'])).toBe(
+      'undeterminable',
+    );
+  });
+
+  it('⚠️ 回帰: options オブジェクトが spread だけで env キーが無い形も判定できない', () => {
+    expect(
+      classifyChildProcessCallEnv('spawnSync', ["'git'", "['status']", '{ ...baseOpts, cwd }']),
+    ).toBe('undeterminable');
+  });
+
+  it('options オブジェクトに env キーも spread も無ければ missing-env', () => {
+    expect(classifyChildProcessCallEnv('execFileSync', ["'git'", "['status']", '{ cwd }'])).toBe(
+      'missing-env',
+    );
+  });
+});
+
+describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #1971）', () => {
+  it('env を指定しない execFileSync 呼び出しを検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import { execFileSync } from 'node:child_process';\n" +
+          "execFileSync('git', ['status'], { cwd: '.' });",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('env: gitChildEnv() が在れば検出しない（回帰）', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import { execFileSync } from 'node:child_process';\n" +
+          "execFileSync('git', ['status'], { cwd: '.', env: gitChildEnv() });",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('オプションを変数で渡す形は検出しない（判定できないので赤にも緑にも倒さない）', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import { execFileSync } from 'node:child_process';\n" +
+          'const opts = buildOpts();\n' +
+          "execFileSync('git', ['status'], opts);",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('promisify(execFile) 経由の別名呼び出しも検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import { execFile } from 'node:child_process';\n" +
+          "import { promisify } from 'node:util';\n" +
+          'const run = promisify(execFile);\n' +
+          "run('node', ['-e', 'x']);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('promisify(execFile) 経由でも env を渡していれば検出しない（回帰）', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import { execFile } from 'node:child_process';\n" +
+          "import { promisify } from 'node:util';\n" +
+          'const run = promisify(execFile);\n' +
+          "run('node', ['-e', 'x'], { env: { PATH: process.env.PATH ?? '' } });",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('child_process を import していないファイルは何も検出しない（誤爆しない）', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      { path: 'a.test.ts', content: "exec('not a real call, no import');" },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('⚠️ 回帰: コメント中の解説文（env 無しの呼び出し例）は検出しない', () => {
+    const content = [
+      "import { execFileSync } from 'node:child_process';",
+      '// 例: execFileSync("git", ["status"]) は env を継ぐ',
+      "execFileSync('git', ['status'], { cwd: '.', env: gitChildEnv() });",
+    ].join('\n');
+    const hits = findMissingEnvChildProcessCalls([{ path: 'a.test.ts', content }]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+});
+
 describe('check-no-env-passthrough: classifyEnvPassthroughHits', () => {
   it('ALLOWLIST に載ったパスの当たりは violations に出ない', () => {
     const hits: Hit[] = [
@@ -293,6 +423,49 @@ describe('実リポジトリの検査（main が緑であることの確認、#1
         ? ''
         : `ALLOWLIST に古い許可が${stale.length}件残っている: ${stale.map((e) => e.path).join(', ')}\n` +
             '直してしまって当たりが無くなったなら、ALLOWLIST から消すこと。',
+    ).toEqual([]);
+  });
+
+  it('ALLOWLIST_MISSING_ENV の each entry が listTargetFiles(ROOT) に実在する（消えたパスを残さない、#1971）', () => {
+    const targetPaths = new Set(listTargetFiles(ROOT) as string[]);
+    for (const entry of ALLOWLIST_MISSING_ENV as AllowlistEntry[]) {
+      expect(
+        targetPaths.has(entry.path),
+        `ALLOWLIST_MISSING_ENV の \`${entry.path}\` が走査対象に無い（消えたなら ALLOWLIST_MISSING_ENV からも消すこと）`,
+      ).toBe(true);
+      expect(
+        entry.reason.trim().length > 0,
+        `ALLOWLIST_MISSING_ENV の \`${entry.path}\` の reason が空`,
+      ).toBe(true);
+    }
+  });
+
+  it('対象ファイルに、許可されていない env 無し子プロセス呼び出しが無い。ALLOWLIST_MISSING_ENV に古い許可も残っていない（#1971）', () => {
+    const paths = listTargetFiles(ROOT) as string[];
+    const files = paths.map((path) => ({ path, content: readFileSync(join(ROOT, path), 'utf8') }));
+    const hits = findMissingEnvChildProcessCalls(files) as Hit[];
+    const { violations, stale } = classifyEnvPassthroughHits(hits, ALLOWLIST_MISSING_ENV) as {
+      violations: Hit[];
+      stale: AllowlistEntry[];
+    };
+
+    expect(
+      violations,
+      violations.length === 0
+        ? ''
+        : `${violations.length}件の未許可の env 無し子プロセス呼び出し:\n` +
+            violations
+              .map((h) => `  ${h.path}:${h.line} ${h.describe}\n    ${h.snippet}`)
+              .join('\n') +
+            '\n必要な鍵だけを明示的に組み立てるか、理由付きで ALLOWLIST_MISSING_ENV へ載せること（#1971）。',
+    ).toEqual([]);
+
+    expect(
+      stale,
+      stale.length === 0
+        ? ''
+        : `ALLOWLIST_MISSING_ENV に古い許可が${stale.length}件残っている: ${stale.map((e) => e.path).join(', ')}\n` +
+            '直してしまって当たりが無くなったなら、ALLOWLIST_MISSING_ENV から消すこと。',
     ).toEqual([]);
   });
 

@@ -29,8 +29,10 @@ import process from 'node:process';
 
 import {
   ALLOWLIST,
+  ALLOWLIST_MISSING_ENV,
   classifyEnvPassthroughHits,
   findEnvPassthroughHits,
+  findMissingEnvChildProcessCalls,
   listTargetFiles,
 } from './check-no-env-passthrough-core.mjs';
 
@@ -75,6 +77,12 @@ function main() {
   const hits = findEnvPassthroughHits(files);
   const { violations, stale } = classifyEnvPassthroughHits(hits, ALLOWLIST);
 
+  const missingEnvHits = findMissingEnvChildProcessCalls(files);
+  const { violations: missingEnvViolations, stale: missingEnvStale } = classifyEnvPassthroughHits(
+    missingEnvHits,
+    ALLOWLIST_MISSING_ENV,
+  );
+
   let failed = false;
 
   if (violations.length > 0) {
@@ -110,6 +118,39 @@ function main() {
     );
   }
 
+  if (missingEnvViolations.length > 0) {
+    failed = true;
+    logError(
+      `check-no-env-passthrough: NG — env を指定していない子プロセス呼び出しが` +
+        `${missingEnvViolations.length}件見つかった（親の process.env を丸ごと継ぐ。Issue #1971）:`,
+    );
+    for (const hit of missingEnvViolations) {
+      logError(`  ${hit.path}:${hit.line} ${hit.describe}`);
+      logError(`    ${hit.snippet}`);
+    }
+    logError(
+      '  対策: 必要な鍵だけを明示的に組み立てる（例: scripts/git-child-env.ts の ' +
+        'gitChildEnv()、scripts/mutate-cli-child-env.ts の mutateCliChildEnv()）。' +
+        'わざと丸ごと渡す必要があるなら、理由付きで scripts/check-no-env-passthrough-core.mjs ' +
+        'の ALLOWLIST_MISSING_ENV へ載せること（Issue #1971）。',
+    );
+  }
+
+  if (missingEnvStale.length > 0) {
+    failed = true;
+    logError(
+      `check-no-env-passthrough: NG — ALLOWLIST_MISSING_ENV に古い許可が` +
+        `${missingEnvStale.length}件残っている（直してしまって、もう当たりが無いのに一覧に残っている）:`,
+    );
+    for (const entry of missingEnvStale) {
+      logError(`  ${entry.path}`);
+    }
+    logError(
+      '  対策: scripts/check-no-env-passthrough-core.mjs の ALLOWLIST_MISSING_ENV から、' +
+        '当たりが無くなったエントリを消すこと。',
+    );
+  }
+
   if (failed) {
     process.exitCode = 1;
     return;
@@ -117,8 +158,8 @@ function main() {
 
   // **必ず1行出す**（AGENTS.md「静かに失敗する道具」— 出ていなければ走っていないと読める）。
   log(
-    `check-no-env-passthrough: OK — ${files.length}ファイルとも丸渡しなし` +
-      `（許可済み${ALLOWLIST.length}件は現物と一致）`,
+    `check-no-env-passthrough: OK — ${files.length}ファイルとも丸渡しなし・env 無し呼び出しなし` +
+      `（許可済み${ALLOWLIST.length}件 + ${ALLOWLIST_MISSING_ENV.length}件は現物と一致）`,
   );
 }
 

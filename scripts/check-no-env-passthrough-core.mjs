@@ -34,10 +34,16 @@
  *   だった13件は…個別に目で追って再分類した」と明記しているのと同じ形で、
  *   ここでは静的な正規表現走査の範囲外として扱う
  * - `env` プロパティの shorthand（`{ env }`。`env` という名前の変数を渡す形）
- * - `spawn` 等が `env` オプションを一切指定しない形（それ自体は #1854 の
- *   別の在庫であって、この検査の対象外——このファイルが検出するのは
- *   「丸ごと渡す」という**積極的な**形であり、「何も指定しない」という
- *   **消極的な**形ではない）
+ *
+ * **⚠️ 2026-09-28 追記（Issue #1971）: 「`spawn` 等が `env` オプションを一切
+ * 指定しない形」は、かつてここで「この検査の対象外」と書いていたが、いまは
+ * 対象に入っている。** env を指定しない呼び出しも、親の `process.env` を
+ * 丸ごと継ぐ点で実害は同じである（#1854 の最後のコメントが「確かめていない
+ * こと」として残していた在庫）。この**消極的な**形の検出は
+ * `findMissingEnvChildProcessCalls` / `classifyChildProcessCallEnv`
+ * （このファイルの後半）が持つ——上の3形（**積極的な**丸渡し）とは別の
+ * 関数・別の ALLOWLIST（`ALLOWLIST_MISSING_ENV`）に分けてある。理由は
+ * それぞれの doc コメントに書く。
  *
  * ## コメント・文字列の中は拾わない
  *
@@ -377,6 +383,293 @@ export function classifyEnvPassthroughHits(hits, allowlist) {
   const stale = allowlist.filter((e) => !hitPaths.has(e.path));
   return { violations, stale };
 }
+
+/**
+ * ## Issue #1971 — env を指定しない子プロセス呼び出しも同じ漏れである
+ *
+ * 上の3形（`findEnvPassthroughHits`）が拾うのは「親の env を**積極的に**
+ * 丸ごと渡す形」だけである。だが Node は、`spawn` / `spawnSync` / `execFile` /
+ * `execFileSync` / `exec` / `execSync` / `fork` の呼び出しで `env` オプション
+ * を**指定しない**（オプションそのものを渡さない場合を含む）と、**既定で**
+ * 親の `process.env` を丸ごと子へ渡す。これは書き手が明示していないだけで、
+ * 実害は `...process.env` を書いたときと同じである（#1854 / #1935 が最初から
+ * 「確かめていないこと」として明記していた在庫）。
+ *
+ * ### 何を検査語に選んだか
+ *
+ * `node:child_process` から直接 import された次の7つの関数名の呼び出し、
+ * および `promisify(<いずれか>)` で作られた別名経由の呼び出し
+ * （`const run = promisify(execFile); run(...)`。実在する形——
+ * `packages/core/src/child-src.test-support.ts` 等）:
+ *
+ * `spawn` / `spawnSync` / `execFile` / `execFileSync` / `exec` / `execSync` / `fork`
+ *
+ * ### 呼び出しの形をどう分類するか（`classifyChildProcessCallEnv`）
+ *
+ * 第1引数（command / file / modulePath）を除いた残りの引数から、末尾の
+ * インラインコールバック（`=>` を含む、または `function` で始まる）を
+ * 1つだけ剥がし、残った引数列の**最後**を「options 候補」として見る:
+ *
+ * - **候補が無い**（引数が command だけ、または args 配列だけで options が
+ *   無い）→ `missing-env`（違反）
+ * - **候補がオブジェクトリテラル**（`{` で始まる）→ トップレベルの
+ *   プロパティを見る。`env` キー（`env: …` または shorthand `{ env }`）が
+ *   在れば `has-env`。無く、`...spread` が在れば `undeterminable`
+ *   （spread 先の変数が `env` を持つかどうかは静的に分からない）。
+ *   どちらも無ければ `missing-env`（違反）
+ * - **候補が配列リテラル**（`spawn(cmd, args)` の2引数形で、`args` が
+ *   `[...]` そのもの）→ それは args 配列であって options ではない
+ *   ＝ options が無い → `missing-env`（違反）
+ * - **候補が識別子・式**（変数で組み立てて渡す形。`spawn(cmd, opts)` の
+ *   `opts` が変数）→ **`undeterminable`**（判定できない。#1971 の依頼文の
+ *   「オプションを変数で渡す形は判定できないとして別に数える」に対応する
+ *   3つ目の状態。赤にも緑にも倒さない——`findMissingEnvChildProcessCalls`
+ *   はこの分類を返さず、`missing-env` だけを違反として返す）
+ *
+ * **この分類はヒューリスティックである**（`maskCommentsAndStrings` と同じ
+ * 「正規表現ベースの近似」の限界を継ぐ）。実データでの検証（在庫が0件へ
+ * 収束したこと）は Issue #1971 の PR 本文に生出力で書く。
+ *
+ * ### 拾わない形（意図した限界）
+ *
+ * - **完全な型のコールバック解析はしない**——「末尾が `=>` を含む、または
+ *   `function` で始まる」という表面的なパターンでのみ剥がす。名前付き関数
+ *   （`spawn(cmd, args, onExit)` のように変数で渡すコールバック）は
+ *   `undeterminable` 側へ落ちる（安全側——見落として `missing-env` を
+ *   見逃すより、判定を諦めるほうが良い）
+ * - **`node:child_process` を `import * as` や `require` で読み込む形**は
+ *   対象外（実データを走査した限り、この repo の対象ファイルはすべて
+ *   named import — `import { execFileSync } from 'node:child_process'` —
+ *   のみを使っている。#1971 の PR 本文の数え上げが根拠）
+ */
+const CHILD_PROCESS_CALL_NAMES = [
+  'spawn',
+  'spawnSync',
+  'execFile',
+  'execFileSync',
+  'exec',
+  'execSync',
+  'fork',
+];
+
+/** args 配列を第2引数に取りうる関数（options は3番目以降に来る）。 */
+const ARGS_ARRAY_FAMILY = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'fork']);
+
+/**
+ * `text` を、深さ0（トップレベル）のカンマで分割する。`(` `[` `{` で深さを
+ * 上げ、対応する閉じ括弧で下げる——引数の中にネストした呼び出しやオブジェクト
+ * リテラルがあっても、そこで誤って分割しない。呼び出し側は `maskCommentsAndStrings`
+ * 済みのテキストを渡す前提（文字列・コメントの中の括弧に惑わされないため）。
+ */
+function splitTopLevelByComma(text) {
+  const parts = [];
+  let depth = 0;
+  let cur = '';
+  for (const c of text) {
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    if (c === ',' && depth === 0) {
+      parts.push(cur);
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  if (cur.trim().length > 0 || parts.length > 0) parts.push(cur);
+  return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+/** `text` 中の `openIdx`（`(` の位置）に対応する閉じ `)` の直後の index を返す。 */
+function findMatchingParenEnd(text, openIdx) {
+  let depth = 1;
+  let j = openIdx + 1;
+  while (j < text.length && depth > 0) {
+    if (text[j] === '(') depth++;
+    else if (text[j] === ')') depth--;
+    j++;
+  }
+  return j;
+}
+
+/**
+ * オブジェクトリテラル（外側の `{` `}` を含むテキスト）のトップレベルの
+ * プロパティを見て、`env` キーの有無・spread の有無を判定する。
+ */
+function classifyOptionsObjectLiteral(objText) {
+  const inner = objText.slice(1, -1);
+  const segments = splitTopLevelByComma(inner);
+  let hasEnvKey = false;
+  let hasSpread = false;
+  for (const seg of segments) {
+    if (seg.startsWith('...')) {
+      hasSpread = true;
+      continue;
+    }
+    const m = /^([A-Za-z_$][\w$]*)\s*:/.exec(seg) ?? /^([A-Za-z_$][\w$]*)$/.exec(seg);
+    if (m && m[1] === 'env') hasEnvKey = true;
+  }
+  if (hasEnvKey) return 'has-env';
+  if (hasSpread) return 'undeterminable';
+  return 'missing-env';
+}
+
+/**
+ * `kind`（`CHILD_PROCESS_CALL_NAMES` のいずれか。`promisify` の別名は解決後の
+ * 元の名前を渡す）と、呼び出しの引数列（`args[0]` が command/file/modulePath）
+ * から、`'has-env' | 'missing-env' | 'undeterminable'` のいずれかを返す。
+ * 分類の考え方は上の doc コメントを見よ。
+ */
+export function classifyChildProcessCallEnv(kind, args) {
+  let rest = args.slice(1);
+  if (rest.length > 0) {
+    const last = rest[rest.length - 1];
+    if (/=>/.test(last) || /^(async\s+)?function\b/.test(last)) {
+      rest = rest.slice(0, -1);
+    }
+  }
+
+  if (!ARGS_ARRAY_FAMILY.has(kind)) {
+    // exec / execSync: (command, options?, callback?) —— args 配列を取らない。
+    if (rest.length === 0) return 'missing-env';
+    const candidate = rest[rest.length - 1];
+    if (candidate.startsWith('{')) return classifyOptionsObjectLiteral(candidate);
+    return 'undeterminable';
+  }
+
+  // spawn/spawnSync/execFile/execFileSync/fork: (cmd, args?, options?)
+  if (rest.length === 0) return 'missing-env';
+  if (rest.length === 1) {
+    const candidate = rest[0];
+    if (candidate.startsWith('[')) return 'missing-env'; // args 配列のみ。options は無い
+    if (candidate.startsWith('{')) return classifyOptionsObjectLiteral(candidate);
+    return 'undeterminable'; // args 配列か options か、変数からは判定できない
+  }
+  const candidate = rest[rest.length - 1];
+  if (candidate.startsWith('{')) return classifyOptionsObjectLiteral(candidate);
+  return 'undeterminable';
+}
+
+/**
+ * `rawContent`（マスク前。import 文のモジュール指定子の判定に要る）から、
+ * `node:child_process` / `child_process` の named import で読み込まれた
+ * 関数名の集合を返す。
+ */
+function findImportedChildProcessNames(rawContent) {
+  const importedNames = new Set();
+  const importRe = /^[ \t]*import\s*\{([^}]*)\}\s*from\s*['"](?:node:)?child_process['"]/gm;
+  let m;
+  while ((m = importRe.exec(rawContent))) {
+    for (const part of m[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name && CHILD_PROCESS_CALL_NAMES.includes(name)) importedNames.add(name);
+    }
+  }
+  return importedNames;
+}
+
+/**
+ * `maskedContent`（マスク済み）から `const NAME = promisify(FUNC)` の形を
+ * 探し、`importedNames` に実在する `FUNC` へのエイリアスだけを返す
+ * （`NAME -> FUNC` の Map）。
+ */
+function findPromisifyAliases(maskedContent, importedNames) {
+  const aliasMap = new Map();
+  const promisifyRe =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*promisify\(\s*([A-Za-z_$][\w$]*)\s*\)/g;
+  let m;
+  while ((m = promisifyRe.exec(maskedContent))) {
+    const [, aliasName, funcName] = m;
+    if (importedNames.has(funcName)) aliasMap.set(aliasName, funcName);
+  }
+  return aliasMap;
+}
+
+/**
+ * `files`（`{ path, content }` の配列）を走査し、env オプションを指定して
+ * いない子プロセス呼び出し（`missing-env` に分類されたもの）を返す。
+ * 返り値の形は `findEnvPassthroughHits` と揃えてある（`path` / `line` /
+ * `kind` / `describe` / `snippet`）ので、そのまま `classifyEnvPassthroughHits`
+ * に渡せる。
+ *
+ * `undeterminable`（オプションを変数で渡していて判定できない形）は、ここ
+ * では violations にも stale にも数えない——3つ目の状態として黙って落とす
+ * （上の doc コメントの「拾わない形」と同じ考え方）。
+ */
+export function findMissingEnvChildProcessCalls(files) {
+  const hits = [];
+  for (const file of files) {
+    const masked = maskCommentsAndStrings(file.content);
+    const importedNames = findImportedChildProcessNames(file.content);
+    if (importedNames.size === 0) continue;
+
+    const aliasMap = findPromisifyAliases(masked, importedNames);
+    const callNameToKind = new Map();
+    for (const name of importedNames) callNameToKind.set(name, name);
+    for (const [alias, func] of aliasMap) callNameToKind.set(alias, func);
+
+    const rawLines = file.content.split('\n');
+    for (const [callName, kind] of callNameToKind) {
+      const callRe = new RegExp(`(?<![\\w.$])${callName}\\s*\\(`, 'g');
+      let cm;
+      while ((cm = callRe.exec(masked))) {
+        const openIdx = cm.index + cm[0].length - 1;
+        const closeIdxAfter = findMatchingParenEnd(masked, openIdx);
+        const argsText = masked.slice(openIdx + 1, closeIdxAfter - 1);
+        const args = splitTopLevelByComma(argsText);
+        const classification = classifyChildProcessCallEnv(kind, args);
+        if (classification !== 'missing-env') continue;
+        const line = masked.slice(0, cm.index).split('\n').length;
+        hits.push({
+          path: file.path,
+          line,
+          kind: 'missing-env-child-process',
+          describe:
+            `\`${callName}(...)\`（\`${kind}\` 系。env オプションを指定していない —— ` +
+            '親の process.env を丸ごと継承する）',
+          snippet: (rawLines[line - 1] ?? '').trim(),
+        });
+      }
+    }
+  }
+  return hits;
+}
+
+/**
+ * わざと残す箇所（ファイル単位）。`findMissingEnvChildProcessCalls` が返す
+ * 「env オプションを指定していない」形専用の許可の一覧——上の `ALLOWLIST`
+ * （`...process.env` 等、積極的な丸渡し）とは別の一覧にしてある。理由:
+ * 同じファイルが両方の形を含みうる（例: 一部の呼び出しは `env:
+ * gitChildEnv()` で直しつつ、別の呼び出しはまだ env 無しのままにする、と
+ * いう混在が実際にありうる）ため、1つの一覧に混ぜると「片方の形だけ許可
+ * したい」を表現できない。
+ *
+ * ⛔ ここへ足すときは、実際にそのファイルへ `missing-env` の当たりが在る
+ * ことを `findMissingEnvChildProcessCalls` で確かめてから足すこと。
+ */
+export const ALLOWLIST_MISSING_ENV = [
+  {
+    path: '.claude/skills/mutation-testing/mutate-core.mjs',
+    reason:
+      '未着手（Issue #1971 の段分け）。この呼び出しは変異試験ハーネスが' +
+      '**実リポジトリ**に対して行う `git rev-parse` / `git status --porcelain` /' +
+      '`pnpm --filter <target> build` で、テストのモック環境ではなく本番の' +
+      'ビルド・git 操作である。`gitChildEnv()` / `mutateCliChildEnv()` は' +
+      'いずれも `PATH`（と `gitChildEnv()` のみ偽の `HOME`）しか渡さない設計で、' +
+      '実際の `pnpm build` がレジストリ・キャッシュ・ストアの解決に他の鍵を' +
+      '要らないかどうかは検証していない。誤って絞ると自己検証ハーネスの' +
+      '`build` 系シナリオが壊れる —— 2026-09-28 時点でこの検証は行っていない' +
+      'ため、直さず「未着手」として残す。次に触る人は #1971 のこのコメントから' +
+      '始めること。',
+  },
+  {
+    path: '.claude/skills/mutation-testing/mutate-selftest.mjs',
+    reason:
+      '未着手（Issue #1971 の段分け）。上と同じ理由 —— 自己検証シナリオが' +
+      '実リポジトリに対して `node`（`mutate.mjs` 自身）/ `git add` / ' +
+      '`git restore --staged` / `pnpm build` を実際に起こす。安全に絞れる' +
+      '最小の env 集合が未検証のため、直さず「未着手」として残す。',
+  },
+];
 
 /**
  * 走査対象を判定する。
