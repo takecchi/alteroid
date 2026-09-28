@@ -77,7 +77,10 @@ function fakeSdk(behavior: 'reply' | 'hang' = 'reply'): Fake {
   return { fn, inputs };
 }
 
-function bootClone(stores: Stores, behavior: 'reply' | 'hang' = 'reply'): Fake & { clone: CloneHost } {
+function bootClone(
+  stores: Stores,
+  behavior: 'reply' | 'hang' = 'reply',
+): Fake & { clone: CloneHost } {
   const fake = fakeSdk(behavior);
   const clone = createClone({
     stores,

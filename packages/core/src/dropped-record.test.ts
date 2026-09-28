@@ -1187,7 +1187,7 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
     answerDelivery: {
       emit: 'never',
       why:
-        '回答の配達済み印（issue #1977）。値は `\'pending\' | \'delivered\'` の' +
+        "回答の配達済み印（issue #1977）。値は `'pending' | 'delivered'` の" +
         '2値のみで自由文を運ばないが、この関数は参照しない——`answeredAt`/`answer`' +
         'と同じ理由（回答が付いた後段の欄）。',
     },

@@ -6057,7 +6057,12 @@ class Clone implements CloneHost {
 
     let reconciled = 0;
     for (const approval of undelivered) {
-      const event = buildHumanAnswerEvent(approval, approval.answer, approval.answeredAt, approval.answeredVia);
+      const event = buildHumanAnswerEvent(
+        approval,
+        approval.answer,
+        approval.answeredAt,
+        approval.answeredVia,
+      );
       try {
         if (claimedIds.has(event.id)) {
           // 直前の `#restoreUnreadPass` が既に拾っている——印を確定させる
