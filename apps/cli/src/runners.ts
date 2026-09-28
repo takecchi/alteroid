@@ -119,6 +119,17 @@ interface RunnersView {
   runners: {
     label: string;
     state: string;
+    /**
+     * この状態になった時刻（#1948）。**「作成」「更新」ではない**（#211の決定）
+     * ——単に「いまの `state` に変わった時刻」である。
+     *
+     * **名簿（`Registry`。`packages/core/src/runner-protocol.ts`）はインメモリ
+     * で、永続化するストアを持たない。** デーモンを再起動すると名簿ごと作り
+     * 直され、この値も現在時刻へ巻き戻る——「ずっと保持されている記録」だと
+     * 誤読しないよう、この注記は道具の出力側（`renderRunners` の末尾）にも
+     * 1度だけ添える。
+     */
+    since: string;
     runnerId?: string;
     workspacePath?: string;
     error?: string;
@@ -190,6 +201,10 @@ export function renderRunners(view: RunnersView): string {
       // **state を畳まない。** 5値のまま出す（`unreachable` と `lost` は別物である）。
       `- ${runner.runnerId ?? runner.label} [${runner.state}]`,
     );
+    // **「この状態になった時刻」であって「作成」「更新」ではない**（#1948、
+    // #211 の決定）。名簿がインメモリで再起動すると作り直される注記は、
+    // 器ごとに繰り返さず一覧の末尾に1度だけ出す（下の `tail`）。
+    lines.push(`  この状態になった: ${runner.since}`);
     if (runner.runnerId !== undefined) lines.push(`  宛先: ${runner.label}`);
     if (runner.workspacePath !== undefined) lines.push(`  workspace: ${runner.workspacePath}`);
     // **「どのプロセスか」を版と並べて出す。** クローンの `runner_list` と Web UI の
@@ -230,6 +245,16 @@ export function renderRunners(view: RunnersView): string {
   // 返さない（返すのはクローンの `runner_list` が読む `ManagerPool.runners()` の
   // 側で、経路が違う）。**返っていない値を、それらしく 0 と書かないこと。**
   // 本数が要るなら `alteroid` の別の口（`/managers`）が持つ。
+
+  // **「この状態になった」の注記（#1948）。** 名簿（`Registry`）はインメモリ
+  // で永続化するストアを持たないので、デーモンを再起動すると名簿ごと作り
+  // 直され、全 runner の `since` が現在時刻へ巻き戻る——「ずっと保持されて
+  // いる記録」だと誤読しないよう1度だけ添える（器ごとに繰り返さない）。
+  lines.push(
+    '',
+    '（「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
+      'デーモンを再起動すると作り直される）',
+  );
 
   return lines.join('\n');
 }

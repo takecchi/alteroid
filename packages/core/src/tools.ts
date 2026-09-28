@@ -12028,6 +12028,13 @@ export function createCloneTools(context: ToolContext) {
           'unreachable（まだ開けていない）と lost（開けていたのに黙った）は別物である。' +
           'vacating は「意図して空けている最中」（drain）で、黙ったのではなく空けると決めた側である——' +
           'lost と同じく新しい委譲の置き先からは外れるが、走っていた仕事ごと黙ったわけではない。',
+        // **#1948。** `since` は「作成」「更新」ではない（#211 の決定。
+        // このファイルの `AXIS_UNDECIDED` にある「runner_list には作成時刻を
+        // 置かない」とは別の軸——こちらは単に state が変わった時刻を出すだけ）。
+        '各器の「この状態になった」（since）は、その器がいまの state に変わった時刻である' +
+          '（作成時刻・更新時刻ではない）。名簿（Registry）はインメモリで永続化するストアを' +
+          '持たないので、デーモンを再起動すると名簿ごと作り直され、全 runner の since が' +
+          '現在時刻へ巻き戻る——ずっと保持されている記録ではない。',
         // **マネージャーの状態の字面は manager_list と揃える。** 片方だけが
         // 「セッション切断」を出すと、同じ相手を2つの道具で見たクローンが
         // どちらが本当かを判定できない（#540 と同じ潰れ方）。
@@ -12214,6 +12221,14 @@ export function createCloneTools(context: ToolContext) {
                 ? '（runnerId は未確定。まだ名乗っていない）'
                 : ` runnerId=${runner.runnerId}`),
           );
+          /*
+           * **この状態になった時刻（#1948）。「作成」「更新」ではない**
+           * （#211 の決定——このファイル下方の `AXIS_UNDECIDED` の
+           * `runner_list` 除外は「作成時刻を出すか」という別の軸で、
+           * こちらには触れない）。名簿がインメモリで再起動すると作り直される
+           * 注記は、器ごとに繰り返さず一覧の末尾（`tail`）に1度だけ出す。
+           */
+          lines.push(`  この状態になった: ${runner.since}`);
           if (runner.workspacePath !== undefined)
             lines.push(`  workspace: ${runner.workspacePath}`);
           /*
@@ -12453,6 +12468,15 @@ export function createCloneTools(context: ToolContext) {
         const tail: string[] = [];
         // **Issue #1394 段④⑥⑦。** ここでも同じ理由（早い return と揃える）。
         if (autoFoldedNote !== '') tail.push(autoFoldedNote.trimStart());
+        // **#1948。** 「この状態になった」を器ごとに繰り返さず、一覧の末尾に
+        // 1度だけ添える——名簿（`Registry`。`packages/core/src/
+        // runner-protocol.ts`）はインメモリで永続化するストアを持たないので、
+        // デーモンを再起動すると名簿ごと作り直され、全 runner の `since` が
+        // 現在時刻へ巻き戻る。「ずっと保持されている記録」だと誤読しないための注記。
+        tail.push(
+          '「この状態になった」は名簿の値。名簿（Registry）はインメモリなので、' +
+            'デーモンを再起動すると作り直される。',
+        );
         // **pids を出したなら、その数字が言えないことを必ず添える（#315）。**
         // 計器に「この数字が言えないこと」を貼るのは、この repo が繰り返している
         // 作法である（`.github/workflows/ci.yml` の OpenAPI 検査の doc）。

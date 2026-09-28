@@ -279,7 +279,7 @@ function Runners() {
     <Card>
       <CardHeader
         title="runner"
-        subtitle="マネージャーが実際に走る器。鍵は指紋だけが見える（値は返らない）"
+        subtitle="マネージャーが実際に走る器。鍵は指紋だけが見える（値は返らない）。「この状態になった」は名簿の値——名簿はインメモリなので、デーモンを再起動すると作り直される"
       />
       <ErrorNote error={error} className="m-4" />
       {/*
@@ -317,6 +317,16 @@ function Runners() {
                   {RUNNER_STATES[runner.state].label}
                 </Badge>
               </div>
+              {/*
+                この状態になった時刻（#1948）。**「作成」「更新」ではない**
+                （#211 の決定）——単に「いまの state に変わった時刻」である。
+                名簿がインメモリで再起動すると作り直される注記は、runner
+                ごとに繰り返さず、この一覧のヘッダ（`CardHeader` の subtitle）
+                に1度だけ添えてある。
+              */}
+              <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+                この状態になった: {formatDateTime(runner.since)}
+              </p>
               {runner.runnerId === undefined ? null : (
                 <p className="mt-0.5 font-mono text-[11px] break-all text-muted">{runner.label}</p>
               )}

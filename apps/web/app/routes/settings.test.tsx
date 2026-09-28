@@ -145,13 +145,17 @@ describe('runner の札は、いま応えているプロセスを出す', () => 
  * 「ずっと保持されている記録」と誤読しうる。
  */
 describe('runner の since（この状態になった時刻）', () => {
+  // **`runner` ごとの行は「この状態になった: 」（コロン付き）で名乗る。**
+  // ヘッダの注記（下のテスト）は同じ語を「「この状態になった」は」（コロン無し）
+  // という別の文で使っているので、コロン込みで探して両者を混同しない
+  // （そうしないと `findByText` が2件ヒットして曖昧になる）。
   it('since を出す', async () => {
     renderSettings({
       runners: [{ ...BASE, since: '2026-09-01T00:00:00.000Z' }],
       daemonRevision: DAEMON_UNKNOWN,
     });
 
-    const line = await screen.findByText(/この状態になった/);
+    const line = await screen.findByText(/この状態になった: /);
     // 時分は器の時間帯で変わるので、日付だけ固定して見る（直上のブロックと同じ理由）。
     expect(line.textContent).toMatch(/09\/01/);
   });
@@ -159,16 +163,23 @@ describe('runner の since（この状態になった時刻）', () => {
   it('「作成」「更新」とは書かない', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
-    await screen.findByText(/この状態になった/);
+    await screen.findByText(/この状態になった: /);
     expect(screen.queryByText(/作成/)).toBeNull();
     expect(screen.queryByText(/更新/)).toBeNull();
   });
 
+  /**
+   * **`getByText('再起動')` は使わない。** この画面には無関係な「再起動」が
+   * 他にも在る（`ShutdownDaemon` の「Railway では…再起動として働く」）ので、
+   * 曖昧になる。この一覧のヘッダに添えた注記の文そのもの（一意な言い回し）で
+   * 探す。
+   */
   it('名簿がインメモリで、再起動で作り直されることを添える', async () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
-    expect(await screen.findByText(/インメモリ/)).toBeTruthy();
-    expect(screen.getByText(/再起動/)).toBeTruthy();
+    expect(
+      await screen.findByText(/「この状態になった」は名簿の値.*インメモリ.*再起動すると作り直される/),
+    ).toBeTruthy();
   });
 });
 
