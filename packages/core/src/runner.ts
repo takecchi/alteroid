@@ -6362,10 +6362,10 @@ function hasApprovalMarker(message: string): boolean {
  * `DENIAL_WORDS` の `don't` / `won't`、`NEGATION_MARKERS_EN` の `n't`、
  * `NEGATED_APPROVAL_PHRASES` の `don't hesitate` 等はいずれも U+0027 だけを
  * 逐語で書いている。スマートフォンや macOS の入力・Slack 等の自動整形は
- * 曲がった引用符（U+2019 `'` RIGHT SINGLE QUOTATION MARK）を使うことが
- * 多く、見た目が近い U+2018 `'`（LEFT SINGLE QUOTATION MARK）・U+02BC `'`
+ * 曲がった引用符（U+2019 `’` RIGHT SINGLE QUOTATION MARK）を使うことが
+ * 多く、見た目が近い U+2018 `‘`（LEFT SINGLE QUOTATION MARK）・U+02BC `ʼ`
  * （MODIFIER LETTER APOSTROPHE）も同じ形で紛れうる——素の `'` を要求する
- * 一覧はどれにも当たらず、`Don't go ahead.`（曲がった引用符）が
+ * 一覧はどれにも当たらず、`Don’t go ahead.`（曲がった引用符）が
  * `APPROVAL_WORDS` の `go ahead` にだけ当たって `allow` へ化けていた
  * （#1827/#1837 で「読めなければ allow にしない」へ反転した方針の抜け）。
  *
