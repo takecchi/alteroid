@@ -582,7 +582,12 @@ describe('HTTP API', () => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let seen = '';
-    while (!seen.includes(': hb')) {
+    // **`: hb` と `event: text` の両方が見えるまで読む**（#1988）。偽のクローンは
+    // 返答を `setTimeout(0)` で流し、heartbeat は 5ms ごとに書かれるので、どちらが
+    // 先に届くかは器の混み具合で変わる。`: hb` だけを待つと、返答より先に
+    // heartbeat が届いた回に `event: text` を読む前に抜けて落ちる（main の CI で
+    // 1回起きた）。heartbeat は繰り返し届くので、両方を待っても待ち時間は延びない。
+    while (!(seen.includes(': hb') && seen.includes('event: text'))) {
       const { value, done } = await reader.read();
       if (done) break;
       seen += decoder.decode(value, { stream: true });
