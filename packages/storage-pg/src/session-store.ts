@@ -36,6 +36,13 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     this.#db = db;
   }
 
+  /**
+   * **1つのトランザクションで束ねる（issue #1962。#1929 / #1955 / #1961 と
+   * 同じ形）。** 束ねないと、途中で落ちたときに次のことが起きうる——(1)(2) は
+   * 確定したのに (3)（索引の `sessions`）が無い・古いままになる（`listSessions`
+   * が読めない／並びが狂う）。あるいは (2)（uuid の無い行。冪等ではない）だけが
+   * 確定した後に呼び手が同じ `entries` で呼び直すと、その行が二重に積まれる。
+   */
   async append(key: SessionKey, entries: SessionStoreEntry[]): Promise<void> {
     if (entries.length === 0) return;
     const subpath = key.subpath ?? '';
@@ -45,57 +52,59 @@ export class PgSessionStore implements SessionStore, SessionTranscriptTail {
     const idempotent = entries.filter((entry) => typeof entry.uuid === 'string');
     const plain = entries.filter((entry) => typeof entry.uuid !== 'string');
 
-    if (idempotent.length > 0) {
-      await this.#db
-        .insert(sessionEntries)
-        .values(
-          idempotent.map((entry) => ({
+    await this.#db.transaction(async (tx) => {
+      if (idempotent.length > 0) {
+        await tx
+          .insert(sessionEntries)
+          .values(
+            idempotent.map((entry) => ({
+              projectKey: key.projectKey,
+              sessionId: key.sessionId,
+              subpath,
+              uuid: entry.uuid ?? null,
+              entry: stripNulls(entry),
+            })),
+          )
+          .onConflictDoNothing({
+            target: [
+              sessionEntries.projectKey,
+              sessionEntries.sessionId,
+              sessionEntries.subpath,
+              sessionEntries.uuid,
+            ],
+            // 部分ユニーク索引なので述語まで書く。書かないと索引が選ばれず、
+            // 衝突が検出されないまま同じ行が二重に積まれる。
+            where: sql`${sessionEntries.uuid} is not null`,
+          });
+      }
+
+      if (plain.length > 0) {
+        await tx.insert(sessionEntries).values(
+          plain.map((entry) => ({
             projectKey: key.projectKey,
             sessionId: key.sessionId,
             subpath,
-            uuid: entry.uuid ?? null,
+            uuid: null,
             entry: stripNulls(entry),
           })),
-        )
-        .onConflictDoNothing({
-          target: [
-            sessionEntries.projectKey,
-            sessionEntries.sessionId,
-            sessionEntries.subpath,
-            sessionEntries.uuid,
-          ],
-          // 部分ユニーク索引なので述語まで書く。書かないと索引が選ばれず、
-          // 衝突が検出されないまま同じ行が二重に積まれる。
-          where: sql`${sessionEntries.uuid} is not null`,
-        });
-    }
+        );
+      }
 
-    if (plain.length > 0) {
-      await this.#db.insert(sessionEntries).values(
-        plain.map((entry) => ({
+      // `listSessions` の mtime。索引を持たないと、どのセッションが新しいのか
+      // 分からなくなる（SDK は mtime 降順で並べる前提で読む）。
+      await tx
+        .insert(sessions)
+        .values({
           projectKey: key.projectKey,
           sessionId: key.sessionId,
           subpath,
-          uuid: null,
-          entry: stripNulls(entry),
-        })),
-      );
-    }
-
-    // `listSessions` の mtime。索引を持たないと、どのセッションが新しいのか
-    // 分からなくなる（SDK は mtime 降順で並べる前提で読む）。
-    await this.#db
-      .insert(sessions)
-      .values({
-        projectKey: key.projectKey,
-        sessionId: key.sessionId,
-        subpath,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [sessions.projectKey, sessions.sessionId, sessions.subpath],
-        set: { updatedAt: new Date() },
-      });
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [sessions.projectKey, sessions.sessionId, sessions.subpath],
+          set: { updatedAt: new Date() },
+        });
+    });
   }
 
   async load(key: SessionKey): Promise<SessionStoreEntry[] | null> {
