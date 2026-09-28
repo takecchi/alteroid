@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import {
   classifyTest,
   classifyTestScope,
@@ -46,7 +47,8 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   /** commit が1つある使い捨ての git リポジトリ。 */
   async function makeRepo(): Promise<string> {
     const dir = await makeTempDir('verify-core-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -106,8 +108,8 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
   it('ignore されているものは指紋に入らない（node_modules で毎回走らない）', async () => {
     const dir = await makeRepo();
     await writeFile(join(dir, '.gitignore'), 'ignored/\n');
-    execFileSync('git', ['add', '-A'], { cwd: dir });
-    execFileSync('git', ['commit', '-qm', 'ignore'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+    execFileSync('git', ['commit', '-qm', 'ignore'], { cwd: dir, env: gitChildEnv() });
     save(dir, fingerprint(dir) as string);
 
     await mkdir(join(dir, 'ignored'), { recursive: true });
@@ -247,7 +249,10 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       // 作業ツリーは1バイトも動かさず、commit だけ積み直す。
       // **`HEAD` を指紋から外しても他の歯は全部緑になる**ので、ここで押さえる
       // （`openapi` の検査は `HEAD` との差分を見るので、`HEAD` が動けば結果が変わりうる）。
-      execFileSync('git', ['commit', '-q', '--amend', '-m', 'amended'], { cwd: dir });
+      execFileSync('git', ['commit', '-q', '--amend', '-m', 'amended'], {
+        cwd: dir,
+        env: gitChildEnv(),
+      });
       expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({
         skip: false,
         reason: 'changed',
@@ -261,7 +266,9 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       // 中身は1バイトも変えない。**モードだけ**変える。
       await chmod(join(dir, 'a.txt'), 0o755);
       // git は差分として見せる（前提の確認）。
-      expect(() => execFileSync('git', ['diff', '--quiet', 'HEAD'], { cwd: dir })).toThrow();
+      expect(() =>
+        execFileSync('git', ['diff', '--quiet', 'HEAD'], { cwd: dir, env: gitChildEnv() }),
+      ).toThrow();
       expect(decideSkip({ repo: dir, recordPath: record(dir) })).toMatchObject({ skip: false });
     });
 
@@ -269,8 +276,8 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
       const dir = await makeRepo();
       await writeFile(join(dir, 'b.txt'), 'one\n'); // a.txt と**同じ中身**
       await symlink('a.txt', join(dir, 'link'));
-      execFileSync('git', ['add', '-A'], { cwd: dir });
-      execFileSync('git', ['commit', '-qm', 'link'], { cwd: dir });
+      execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+      execFileSync('git', ['commit', '-qm', 'link'], { cwd: dir, env: gitChildEnv() });
       save(dir, fingerprint(dir) as string);
 
       // 行き先を差し替える。**中身は同じ**なので、symlink を追いかける実装だと気づけない。
@@ -328,7 +335,10 @@ describe('pnpm verify — 通し直しを無料にする判定', () => {
     it('git worktree の作業ツリーでは .git がファイルなので、git に聞いて実体を取る', async () => {
       const dir = await makeRepo();
       const linked = join(dir, '..', `linked-${Date.now()}`);
-      execFileSync('git', ['worktree', 'add', '-q', linked, '-b', 'wt'], { cwd: dir });
+      execFileSync('git', ['worktree', 'add', '-q', linked, '-b', 'wt'], {
+        cwd: dir,
+        env: gitChildEnv(),
+      });
       // `linked` は `mkdtemp` の産物ではない（`git worktree add` が作る）ので
       // helper の管理外——ここだけ自前で片付ける。
       try {
@@ -698,7 +708,8 @@ describe('recordFor（Issue #1191）: 記録の組み立て', () => {
 describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
   async function makeRepo(): Promise<string> {
     const dir = await makeTempDir('write-tree-for-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
@@ -713,6 +724,7 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     }).trim();
 
     const tree = writeTreeFor(dir);
@@ -732,8 +744,8 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
   it('.gitignore されたファイルは拾わない（fingerprint の --exclude-standard と同じ範囲）', async () => {
     const dir = await makeRepo();
     await writeFile(join(dir, '.gitignore'), 'ignored/\n');
-    execFileSync('git', ['add', '-A'], { cwd: dir });
-    execFileSync('git', ['commit', '-qm', 'add gitignore'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+    execFileSync('git', ['commit', '-qm', 'add gitignore'], { cwd: dir, env: gitChildEnv() });
 
     const before = writeTreeFor(dir);
     await mkdir(join(dir, 'ignored'), { recursive: true });
@@ -753,19 +765,26 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     const dir = await makeRepo();
     // 先に追跡する（.gitignore が無い時点で追加）。
     await writeFile(join(dir, 'tracked-but-ignored.txt'), 'original content\n');
-    execFileSync('git', ['add', '-A'], { cwd: dir });
-    execFileSync('git', ['commit', '-qm', 'track before ignoring'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+    execFileSync('git', ['commit', '-qm', 'track before ignoring'], {
+      cwd: dir,
+      env: gitChildEnv(),
+    });
     // 後から .gitignore にそのファイルを足す（force-add 済みファイルにパターンが
     // 後から掛かる、というよくある事故と同じ形）。
     await writeFile(join(dir, '.gitignore'), 'tracked-but-ignored.txt\n');
-    execFileSync('git', ['add', '-A'], { cwd: dir });
-    execFileSync('git', ['commit', '-qm', 'ignore the already-tracked file'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+    execFileSync('git', ['commit', '-qm', 'ignore the already-tracked file'], {
+      cwd: dir,
+      env: gitChildEnv(),
+    });
 
     const tree = writeTreeFor(dir) as string;
     expect(tree).not.toBeNull();
     const paths = execFileSync('git', ['ls-tree', '-r', '--name-only', tree], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     })
       .split('\n')
       .filter(Boolean);
@@ -776,6 +795,7 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     const headTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     }).trim();
     expect(tree).toBe(headTree);
   });
@@ -789,10 +809,15 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
     const staged = execFileSync('git', ['diff', '--cached', '--name-only'], {
       cwd: dir,
       encoding: 'utf8',
+      env: gitChildEnv(),
     });
     expect(staged.trim()).toBe('');
     // 未追跡のままであることも確認する（index へ紛れ込んでいれば `??` は消える）。
-    const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' });
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: gitChildEnv(),
+    });
     expect(status).toContain('?? untracked.txt');
   });
 
@@ -839,7 +864,10 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
 
   it('追跡ファイルに skip-worktree を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
     const dir = await makeRepo();
-    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], { cwd: dir });
+    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], {
+      cwd: dir,
+      env: gitChildEnv(),
+    });
 
     // **食い違いを起こしていない時点でも null 化する**（印の有無だけで判断する
     // 設計そのものを固定する歯。「実際に食い違ったときだけ null にする」という
@@ -850,14 +878,20 @@ describe('writeTreeFor（Issue #1763・#1192 の N7）', () => {
 
   it('追跡ファイルに assume-unchanged を立てただけで、作業ツリーを変えていなくても writeTreeFor は null を返す', async () => {
     const dir = await makeRepo();
-    execFileSync('git', ['update-index', '--assume-unchanged', 'a.txt'], { cwd: dir });
+    execFileSync('git', ['update-index', '--assume-unchanged', 'a.txt'], {
+      cwd: dir,
+      env: gitChildEnv(),
+    });
 
     expect(writeTreeFor(dir)).toBeNull();
   });
 
   it('🔴 帰結の再現: skip-worktree を立てて作業ツリーだけ書き換えても、fingerprint は変化を畳む（writeTreeFor 側が null で守っていなければ「静かな一致」が起きた場面）', async () => {
     const dir = await makeRepo();
-    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], { cwd: dir });
+    execFileSync('git', ['update-index', '--skip-worktree', 'a.txt'], {
+      cwd: dir,
+      env: gitChildEnv(),
+    });
 
     const fpBefore = fingerprint(dir);
     await writeFile(join(dir, 'a.txt'), 'CHANGED after skip-worktree\n');
@@ -1123,7 +1157,8 @@ describe('pnpm verify — 統合の歯（Issue #1191, C5）', () => {
   /** 使い捨ての git リポジトリ（`verify.mjs` / `verify-core.mjs` のコピー込み）。 */
   async function makeE2eRepo(): Promise<string> {
     const dir = await makeTempDir('verify-e2e-repo-');
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitChildEnv() });
     git('init', '-q');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
