@@ -294,16 +294,43 @@ export class FsPracticeStore implements PracticeStore {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
-      // ⭐ **書いた後の本文を版として追記する（#1309）。** 番号は「この slug の
-      // 既存の版の数 + 1」——`remove()` は `practiceVersions` を切り詰めない
-      // ので（下の `remove()`）、消して作り直しても自然に続きから振られる。
-      // **数えるのは検査を通った版だけ**（`invalidPracticeVersionsRaw` は
-      // 数えない）——壊れた版の行は `version` 欄そのものが壊れている
-      // ことがあり、安全に数へ入れられないため。
-      const priorVersions = file.practiceVersions.filter((entry) => entry.slug === input.slug);
+      // ⭐ **書いた後の本文を版として追記する（#1309）。** 番号は「検査を通った
+      // 版の最大値」と「壊れた生の行のうち、この slug と一致し `version` が
+      // 正の整数として読めるものの最大値」の**両方の最大値 + 1**（issue #1967
+      // のフォローアップ、マネージャー指摘）。
+      //
+      // ⚠️ **以前は「検査を通った版の数 + 1」（`priorVersions.length + 1`）
+      // だけで決めていた。** 壊れた版の行（`invalidPracticeVersionsRaw`）を
+      // 一切見ないので、`version` 欄そのものは正の整数として読める（他の欄が
+      // 壊れているだけの）壊れた行と番号が重なることがあった——直す前は
+      // 1行の不正で `#read()` 自体が丸ごと例外を投げていたので、この重なりは
+      // そもそも起こり得なかった。この PR がその道連れ崩壊を直したことで、
+      // 初めて踏めるようになった穴である。**追記専用の履歴（`practiceVersions`
+      // の doc）で version が二重になる形を作らないために、壊れた行の中から
+      // 読み取れる version 番号も衝突の判定に含める。**
+      //
+      // `version` 欄以外が壊れている壊れた行からは `version` を信用して
+      // 読み取ってよい——`extractVersion` は `typeof` で数値であることしか
+      // 見ないので、ここでさらに正の整数であることを確かめる（0 / 負値 /
+      // 小数はそもそも `practiceVersionRecordSchema` の `version` の契約
+      // （`z.number().int().positive()`）に合わない値なので、衝突の判定にも
+      // 使わない）。
+      const priorValidVersions = file.practiceVersions.filter((entry) => entry.slug === input.slug);
+      const priorInvalidVersionNumbers = file.invalidPracticeVersionsRaw
+        .filter((raw) => extractSlug(raw) === input.slug)
+        .map((raw) => extractVersion(raw))
+        .filter(
+          (version): version is number =>
+            version !== undefined && Number.isInteger(version) && version > 0,
+        );
+      const priorMaxVersion = Math.max(
+        0,
+        ...priorValidVersions.map((entry) => entry.version),
+        ...priorInvalidVersionNumbers,
+      );
       const nextVersion = practiceVersionRecordSchema.parse({
         slug: input.slug,
-        version: priorVersions.length + 1,
+        version: priorMaxVersion + 1,
         kind: input.kind,
         title: input.title,
         content,
