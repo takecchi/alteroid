@@ -12060,7 +12060,13 @@ export function createCloneTools(context: ToolContext) {
           'いま走っている版がその主張と同じかを見ること。',
         '版が「不明」（器が自分の版を知らない）と「未確認」（名乗りをまだ聞けていない）は' +
           '別物で、疑う先が違う（前者は器の設定、後者は登録とネットワーク）。' +
-          'state が lost の器の版は黙る前に聞いた古い値である。',
+          'state が lost の器の版は黙る前に聞いた古い値である（#1949）。' +
+          '鍵・プロファイル・MCP の登録の指紋（fingerprints: true）も、聞いていない' +
+          '（繋がっていないので聞いていない）／聞いたが失敗した／聞いて0件・無しだった、' +
+          'を同じ文言に潰さない——「確かめていない」と出たときは鍵が配られていない証拠には' +
+          'ならず、「確かめられなかった」と出たときは配り直しでは直らないことがある' +
+          '（器そのものに訊けなかった）。MCP の登録だけは、もう1つ「この runner は口を' +
+          '持たない（古い版）」という状態も持つ——こちらは runner を上げないと直らない。',
         '「直近の押し込み」は、その器へプロファイル・環境変数・認証トークンを配る' +
           '（`#connectTo`/繋ぎ直しのたびに必ず試みる）処理が、直近どうだったかである。' +
           'state が connected でもこれが1つでも「失敗」なら、その種類はまだ古い値の' +
@@ -12290,26 +12296,53 @@ export function createCloneTools(context: ToolContext) {
           // `ManagerPool.runners()` 側（`options.fingerprints`）が決めるが、ここでも
           // `fingerprints === true` のときしか出さない——どちらか片方が緩んでも
           // 既定で漏れない（多重防御。値そのものは sha256 のままで、素の鍵は運ばない）。
-          if (fingerprints === true && runner.credentials !== undefined) {
-            lines.push(
-              runner.credentials.length === 0
-                ? '  鍵: 無し'
-                : `  鍵の指紋: ${excerptLine(
-                    runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', '),
-                    RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT,
-                  )}`,
-            );
-          }
-          if (fingerprints === true && runner.profile !== undefined) {
-            lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
-          }
-          // **MCP の登録（#325 段3）は名前も出す**（名前は秘密ではない。値は運んでいない —
-          // `runnerMcpServersFingerprintSchema` の doc）。無いことは「置いていない・口を持たない・
-          // 訊けなかった」のどれとも言えないので、行を作らない（区別は直近の押し込みの行が持つ）。
-          if (fingerprints === true && runner.mcpServers !== undefined) {
-            lines.push(
-              `  MCP の登録: ${excerptLine(runner.mcpServers.names.join(', '), RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT)}（指紋 ${runner.mcpServers.sha256}）`,
-            );
+          //
+          // **3状態を1つも潰さない（Issue #1949）。** CLI の `alteroid runners`
+          // （`apps/cli/src/runners.ts` の `renderCredentialsFingerprint`/
+          // `renderProfileFingerprint`）・Web の設定画面（`settings.tsx` の
+          // `Credentials`/`Profile`）と同じ意味——聞いていない（`unheard`）／
+          // 聞いたが失敗した（`failed`）／聞いて0件・無しだった（`asked`）を
+          // 同じ文言に潰さない。**`*Probe` 自体が無い（`ManagerPool.runners()` を
+          // 経由しないテスト用の固定値など）ときは、値の有無だけで言う旧来の
+          // 形へ倒す**——`fingerprints: true` を実際に渡した本番の経路では
+          // `*Probe` は必ず載る（`RunnerOverview.credentialsProbe` の doc）。
+          if (fingerprints === true) {
+            if (runner.credentialsProbe?.status === 'unheard') {
+              lines.push('  鍵: 確かめていない（繋がっていないので聞いていない）');
+            } else if (runner.credentialsProbe?.status === 'failed') {
+              lines.push(`  鍵を確かめられなかった: ${runner.credentialsProbe.error}`);
+            } else if (runner.credentials !== undefined) {
+              lines.push(
+                runner.credentials.length === 0
+                  ? '  鍵: 無し'
+                  : `  鍵の指紋: ${excerptLine(
+                      runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', '),
+                      RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT,
+                    )}`,
+              );
+            }
+            if (runner.profileProbe?.status === 'unheard') {
+              lines.push('  プロファイル: 確かめていない（繋がっていないので聞いていない）');
+            } else if (runner.profileProbe?.status === 'failed') {
+              lines.push(`  プロファイルを確かめられなかった: ${runner.profileProbe.error}`);
+            } else if (runner.profile !== undefined) {
+              lines.push(`  プロファイルの指紋: ${runner.profile.sha256}`);
+            }
+            // **MCP の登録（#325 段3）は名前も出す**（名前は秘密ではない。値は運んでいない —
+            // `runnerMcpServersFingerprintSchema` の doc）。**`unsupported`（口を持たない
+            // 古い runner）は `failed` とは別の文言で言う**——鍵を配り直せば直る故障
+            // （failed）と、runner を上げないと直らない故障（unsupported）を混ぜない。
+            if (runner.mcpServersProbe?.status === 'unheard') {
+              lines.push('  MCP の登録: 確かめていない（繋がっていないので聞いていない）');
+            } else if (runner.mcpServersProbe?.status === 'unsupported') {
+              lines.push('  MCP の登録: 確かめられない（この runner は口を持たない。古い版）');
+            } else if (runner.mcpServersProbe?.status === 'failed') {
+              lines.push(`  MCP の登録を確かめられなかった: ${runner.mcpServersProbe.error}`);
+            } else if (runner.mcpServers !== undefined) {
+              lines.push(
+                `  MCP の登録: ${excerptLine(runner.mcpServers.names.join(', '), RUNNER_CREDENTIAL_FINGERPRINT_EXCERPT)}（指紋 ${runner.mcpServers.sha256}）`,
+              );
+            }
           }
           /*
            * **押し込みの結果（`pushHealth`）は `fingerprints` を見ない。**

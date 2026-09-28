@@ -10,6 +10,7 @@ import {
   noteResumeAfterStopFoldFailed,
   noteUnreadableRecord,
   noteWithheldReportsDiscarded,
+  reasonOf,
   runnerEventShape,
 } from './dropped-record.js';
 import { excerptLine, renderListing } from './excerpt.js';
@@ -1356,6 +1357,44 @@ export interface RunnerPushHealth {
 }
 
 /**
+ * 鍵・プロファイルの指紋を聞きに行けたかどうかの3状態（Issue #1949）。
+ *
+ * **daemon の `GET /runners`（`apps/daemon/src/openapi.ts` の `runnerProbeSchema`）
+ * と同じ意味で揃える。** あちらは常に probe する（daemon 自身が opt-in を持たない）
+ * のに対し、こちらは `fingerprints: true` のときだけ聞きに行く——だから
+ * `RunnerOverview.credentialsProbe` / `.profileProbe` は `fingerprints` を
+ * 渡さなかった回は省く（`credentials`/`profile` と同じ opt-in の線）。
+ *
+ * **`status` から `state` を逆算しない。** `unheard` は「繋がっていないので
+ * 聞いていない」であって、`state !== 'connected'` から導出できると思いがちだが、
+ * それは `#runners.list()` がいまどの器を返すかという実装の都合に依存する
+ * （`RunnerRevisionStatus` の doc が同じ論法を反例2つで潰している）。
+ *
+ * - `asked` — 叩いて返ってきた。**中身が0件・値が無しでもこれである**
+ *   （0件・無しであることが分かった、という意味）
+ * - `unheard` — 叩いていない。繋がっていない相手には聞きに行かない
+ *   （指紋は runner が持つ）
+ * - `failed` — 叩いたが失敗した。理由は `reasonOf` で1行に畳む
+ */
+export type RunnerFingerprintProbe =
+  | { status: 'asked' }
+  | { status: 'unheard' }
+  | { status: 'failed'; error: string };
+
+/**
+ * MCP の登録の指紋を聞きに行けたかどうか（Issue #1949）。
+ *
+ * **`RunnerFingerprintProbe` の3状態に加え、`unsupported` を持つ**——
+ * `client.mcpServers` は `RunnerClient` の**任意メソッド**で（`resources` と
+ * 同じ理由。`RunnerClient.mcpServers` の doc）、口を持たない実装・古い runner
+ * ではメソッド自体が無い。これは「聞いたが失敗した」（`failed`）とは主語が
+ * 違う——`failed` は繋がって呼んだが RPC が落ちたことを言い、`unsupported` は
+ * そもそも呼べる口が無いことを言う。**この区別を潰すと、鍵を配り直せば直る
+ * 故障と、runner を上げないと直らない故障が同じ文言に見える。**
+ */
+export type RunnerMcpServersProbe = RunnerFingerprintProbe | { status: 'unsupported' };
+
+/**
  * 器（runner）1台の様子と、そこに紐づくマネージャー（`runner_list` の材料）。
  *
  * `label` / `state` / `since` / `error?` / `runnerId?` / `workspacePath?` は
@@ -1395,16 +1434,39 @@ export interface RunnerOverview {
    * 見て決めている」と読まないこと。
    */
   managers: RunnerManagerEntry[];
-  /** 配られている鍵の指紋。`fingerprints: true` を渡したときだけ載る（値は sha256）。 */
+  /**
+   * 配られている鍵の指紋。`fingerprints: true` を渡したときだけ載る（値は sha256）。
+   *
+   * **空であることだけを見ないこと**（Issue #1949）。叩けなかったときも欄ごと
+   * 省かれるので、「鍵が配られていない」と読んでよいのは
+   * `credentialsProbe.status === 'asked'` かつ空のときだけである——
+   * `credentialsProbe` を必ず併せて読むこと。
+   */
   credentials?: RunnerCredentialFingerprint[];
-  /** 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。 */
+  /** 鍵の指紋を聞きに行けたか（Issue #1949）。上の空と、聞けなかったことを分ける。 */
+  credentialsProbe?: RunnerFingerprintProbe;
+  /**
+   * 置かれている実行環境プロファイルの指紋。`fingerprints: true` を渡したときだけ載る。
+   *
+   * **無いことだけを見ないこと**（Issue #1949）。叩けなかったときも省かれるので、
+   * 「置いていない」と読んでよいのは `profileProbe.status === 'asked'` かつ
+   * 無しのときだけである。
+   */
   profile?: RunnerProfileFingerprint;
+  /** プロファイルの指紋を聞きに行けたか（Issue #1949）。上の不在と、聞けなかったことを分ける。 */
+  profileProbe?: RunnerFingerprintProbe;
   /**
    * 置かれている MCP の登録の指紋と名前（#325 段3）。`fingerprints: true` を渡した
-   * ときだけ載る。**値は運ばない。** 置いていない・口を持たない・訊けなかった場合は
-   * 無い（3つを区別する材料は `pushHealth.mcpServers` のほうにある）。
+   * ときだけ載る。**値は運ばない。**
+   *
+   * **無いことだけを見ないこと**（Issue #1949。以前は「置いていない・口を持たない・
+   * 訊けなかった」の3つが同じ `undefined` に潰れていた）。区別は `mcpServersProbe`
+   * が持つ——`asked` かつこの欄が無しなら「置いていない」、`unsupported` なら
+   * 「口を持たない（古い runner）」、`unheard`/`failed` なら「訊けなかった」である。
    */
   mcpServers?: RunnerMcpServersFingerprint;
+  /** MCP の登録の指紋を聞きに行けたか（Issue #1949）。上の3行の区別を持つ。 */
+  mcpServersProbe?: RunnerMcpServersProbe;
   /**
    * 実行環境の資源。`resources: true` を渡したときだけ載る（#315。`fingerprints`
    * と同じ opt-in の形——`ManagerPool.runners()` の doc を参照）。
@@ -4509,6 +4571,54 @@ export function synthesizedNoticeArrivalIntervals(
   return { count: arrivedAt.length, maxIntervalMs, minIntervalMs };
 }
 
+/**
+ * 指紋（鍵・プロファイル）を1本、聞きに行けたかごと聞く（Issue #1949）。
+ *
+ * **`.catch(() => undefined)` で握り潰さない。** 「頼まれていない」
+ * （`fingerprints` が偽）「聞けなかった」（`client` が `undefined`＝繋がって
+ * いない）「聞いたが失敗した」の3つを同じ `undefined` へ潰していたのが
+ * 元の穴——ここで `probe` を必ず併せて返すので、呼び出し側（`Pool#runners`）は
+ * 判断を省略できない。
+ */
+async function probeRunnerFingerprint<T>(
+  client: RunnerClient | undefined,
+  fingerprints: boolean | undefined,
+  fetch: (client: RunnerClient) => Promise<T>,
+): Promise<{ value: T | undefined; probe: RunnerFingerprintProbe | undefined }> {
+  if (!fingerprints) return { value: undefined, probe: undefined };
+  if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
+  try {
+    return { value: await fetch(client), probe: { status: 'asked' } };
+  } catch (error) {
+    return { value: undefined, probe: { status: 'failed', error: reasonOf(error) } };
+  }
+}
+
+/**
+ * MCP の登録の指紋を聞きに行けたかごと聞く（Issue #1949）。
+ *
+ * **`probeRunnerFingerprint` と分けたのは、`unsupported` という4つ目の状態を
+ * 持つからである。** `client.mcpServers` は `RunnerClient` の任意メソッドで
+ * （口を持たない実装・古い runner では存在しない）、これは「聞いたが失敗した」
+ * とは主語が違う——呼べる口が無いことと、呼んだが RPC が落ちたことを混ぜない。
+ */
+async function probeRunnerMcpServersFingerprint(
+  client: RunnerClient | undefined,
+  fingerprints: boolean | undefined,
+): Promise<{
+  value: RunnerMcpServersFingerprint | undefined;
+  probe: RunnerMcpServersProbe | undefined;
+}> {
+  if (!fingerprints) return { value: undefined, probe: undefined };
+  if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
+  if (client.mcpServers === undefined) return { value: undefined, probe: { status: 'unsupported' } };
+  try {
+    return { value: await client.mcpServers(), probe: { status: 'asked' } };
+  } catch (error) {
+    return { value: undefined, probe: { status: 'failed', error: reasonOf(error) } };
+  }
+}
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
@@ -6162,15 +6272,18 @@ class Pool implements ManagerPool {
         const client = entry.runnerId === undefined ? undefined : open?.get(entry.runnerId);
         const pushHealth =
           entry.runnerId === undefined ? undefined : this.#pushHealth.get(entry.runnerId);
-        const [credentials, profile, mcpServers] =
-          client === undefined || !options.fingerprints
-            ? [undefined, undefined, undefined]
-            : await Promise.all([
-                client.credentials().catch(() => undefined),
-                client.profile().catch(() => undefined),
-                // 口を持たない実装・古い runner では `undefined`（#325 段3）。
-                client.mcpServers?.().catch(() => undefined),
-              ]);
+        // **3つとも `probe` を必ず併せて返す**（Issue #1949）。「頼まれていない」
+        // 「聞けなかった」「聞いたが失敗した」を同じ `undefined` へ潰していたのが
+        // 元の穴——`probeRunnerFingerprint`/`probeRunnerMcpServersFingerprint` の
+        // doc を見よ。
+        const [credentialsProbed, profileProbed, mcpServersProbed] = await Promise.all([
+          probeRunnerFingerprint(client, options.fingerprints, (c) => c.credentials()),
+          probeRunnerFingerprint(client, options.fingerprints, (c) => c.profile()),
+          probeRunnerMcpServersFingerprint(client, options.fingerprints),
+        ]);
+        const credentials = credentialsProbed.value;
+        const profile = profileProbed.value;
+        const mcpServers = mcpServersProbed.value;
         // **`resources` 自体が `undefined` = 訊けなかった。** `resources` が在って
         // `pids` が無い = 訊けたが読めなかった。この2つを区別するために、失敗も
         // 「呼ばなかった」も同じ `undefined` へ潰す（`RunnerOverview.resources` の
@@ -6216,8 +6329,15 @@ class Pool implements ManagerPool {
           ...(entry.instanceSince === undefined ? {} : { instanceSince: entry.instanceSince }),
           managers: entry.runnerId === undefined ? [] : (byRunner.get(entry.runnerId) ?? []),
           ...(credentials === undefined ? {} : { credentials }),
+          ...(credentialsProbed.probe === undefined
+            ? {}
+            : { credentialsProbe: credentialsProbed.probe }),
           ...(profile === undefined ? {} : { profile }),
+          ...(profileProbed.probe === undefined ? {} : { profileProbe: profileProbed.probe }),
           ...(mcpServers === undefined ? {} : { mcpServers }),
+          ...(mcpServersProbed.probe === undefined
+            ? {}
+            : { mcpServersProbe: mcpServersProbed.probe }),
           ...(resources === undefined ? {} : { resources }),
           revision: entry.revision,
           // **`credentials`/`profile` と違い、`fingerprints` の要否を見ない。**
