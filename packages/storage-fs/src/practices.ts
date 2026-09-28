@@ -36,8 +36,18 @@ const practiceVersionRecordSchema = practiceVersionSchema.omit({ chars: true });
 
 type PracticeVersionRecord = z.infer<typeof practiceVersionRecordSchema>;
 
+/**
+ * トップレベルの形だけを見る。**`practices` / `practiceVersions` のどちらも、
+ * 各要素はここでは検査しない**（issue #1967。`FsJobStore` の `fileSchema` が
+ * #1868 / #1928 でそろえた形、`FsScheduleStore` の `fileSchema` が #1944 で
+ * そろえた形と同じ）——`z.array(practiceRecordSchema)` /
+ * `z.array(practiceVersionRecordSchema)` にすると、1行の不正が配列全体を
+ * 道連れにする。行ごとの検査は `#read()` がそれぞれ
+ * `practiceRecordSchema.safeParse` / `practiceVersionRecordSchema.safeParse` で
+ * 1行ずつ行う。
+ */
 const fileSchema = z.object({
-  practices: z.array(practiceRecordSchema).default([]),
+  practices: z.array(z.unknown()).default([]),
   /**
    * 追記専用の版の履歴（#1309）。**同じファイル・同じ排他区間に置く**——
    * `practices` とは別ファイルにすると、`write()` が本体と版を2回の書き込みに
@@ -45,10 +55,117 @@ const fileSchema = z.object({
    * という食い違いが生まれる（`PracticeStore.write` の doc）。1ファイルなら
    * `#update` の1回の `writeFileAtomic` で両方が同時に反映される。
    */
-  practiceVersions: z.array(practiceVersionRecordSchema).default([]),
+  practiceVersions: z.array(z.unknown()).default([]),
 });
 
-type PracticeFile = z.infer<typeof fileSchema>;
+/**
+ * `practices.json` の中身。**検査を通った `practices` / `practiceVersions` と、
+ * それぞれ形が不正で読めなかった `invalidPracticesRaw` /
+ * `invalidPracticeVersionsRaw`（生の要素。パース前のまま）を分けて持つ**
+ * （issue #1967。`FsJobStore` の `JobFile` と同じ形）。
+ *
+ * `invalid*Raw` を消さずに持ち回るのが、この直しの核心である。`write` /
+ * `remove` / `clear` はいずれも最終的にこれを丸ごとシリアライズし直す
+ * （`serialize`）ので、ここへ入れなかった行は次の書き込みで消える——検査を
+ * 通った行だけを書けば、版ずれ・手編集でできた不正な行が黙って消えることになる。
+ */
+interface PracticeFile {
+  practices: PracticeRecord[];
+  /** やり方の行の形が不正で読めなかった、生の要素（パース前のまま）。issue #1967。 */
+  invalidPracticesRaw: unknown[];
+  practiceVersions: PracticeVersionRecord[];
+  /** 版の行の形が不正で読めなかった、生の要素（パース前のまま）。issue #1967。 */
+  invalidPracticeVersionsRaw: unknown[];
+}
+
+const EMPTY: PracticeFile = {
+  practices: [],
+  invalidPracticesRaw: [],
+  practiceVersions: [],
+  invalidPracticeVersionsRaw: [],
+};
+
+/**
+ * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
+ * 出すのは「どの欄が」だけである（`FsJobStore.summarizeInvalidFields` と同じ
+ * 理由・同じ形。パッケージ内で閉じた共通化に留め、ファイルを跨いだ共通化は
+ * していない——#1928 / #1944 / #1951 と同じ判断）。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
+
+/**
+ * 生の要素から、値を出さずに `slug` だけを安全に取り出す（取れなければ
+ * `undefined`）。**`practices` / `practiceVersions` どちらの行にも使う共通の
+ * 関数**（issue #1967。`FsJobStore.extractRowId` / `FsScheduleStore.extractKind`
+ * と同じ形——鍵の名前だけが `slug` である）。
+ */
+function extractSlug(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const slug = (raw as Record<string, unknown>).slug;
+  return typeof slug === 'string' ? slug : undefined;
+}
+
+/**
+ * 生の要素から、値を出さずに `version` だけを安全に取り出す（取れなければ
+ * `undefined`）。`practiceVersions` の行にだけ使う——`readVersion` が
+ * `invalidPracticeVersionsRaw` の中から slug + version の一致を探すために要る。
+ */
+function extractVersion(raw: unknown): number | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const version = (raw as Record<string, unknown>).version;
+  return typeof version === 'number' ? version : undefined;
+}
+
+/**
+ * 飛ばしたやり方の行を stderr へ1行で要約する。**slug 以外の値は絶対に
+ * 載せない**——`title` / `content` には人間・クローンの自由文がそのまま
+ * 入りうる（`FsJobStore.describeSkippedJobRow` と同じ理由。issue #1967）。
+ */
+function describeSkippedPracticeRow(params: {
+  index: number;
+  reason: string;
+  slug?: string;
+}): string {
+  const slugNote = params.slug === undefined ? '' : ` slug=${JSON.stringify(params.slug)}`;
+  return (
+    `alteroid: practices の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${slugNote}`
+  );
+}
+
+/** 飛ばした版の行を stderr へ1行で要約する（`describeSkippedPracticeRow` と対）。 */
+function describeSkippedPracticeVersionRow(params: {
+  index: number;
+  reason: string;
+  slug?: string;
+}): string {
+  const slugNote = params.slug === undefined ? '' : ` slug=${JSON.stringify(params.slug)}`;
+  return (
+    `alteroid: practiceVersions の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${slugNote}`
+  );
+}
+
+/**
+ * `PracticeFile` をディスク上の形へ直す。**検査を通った `practices` /
+ * `practiceVersions` と、それぞれの `invalidPracticesRaw` /
+ * `invalidPracticeVersionsRaw` を1本の配列へ合流させる**——分けたまま書くと、
+ * 次の `#read()` が `fileSchema`（トップレベルの形しか見ない）を通すときに
+ * 未知のキー（`invalidPracticesRaw` / `invalidPracticeVersionsRaw`）として
+ * 黙って捨てられ、壊れた行を持ち回る意味が消える。
+ */
+function serialize(file: PracticeFile): { practices: unknown[]; practiceVersions: unknown[] } {
+  return {
+    practices: [...file.practices, ...file.invalidPracticesRaw],
+    practiceVersions: [...file.practiceVersions, ...file.invalidPracticeVersionsRaw],
+  };
+}
 
 /** コードポイント数（UTF-16 のコード単位数ではない）。#1340。 */
 function countChars(content: string): number {
@@ -119,15 +236,37 @@ export class FsPracticeStore implements PracticeStore {
     this.#path = join(dir, 'practices.json');
   }
 
+  /**
+   * slug の昇順。**不正な行は返さない**（issue #1967。`FsJobStore.listJobs` /
+   * `FsScheduleStore.list` が #1868 / #1944 でそろえた形と同じ）——飛ばした
+   * 行は `#read()` が stderr へ跡を残し、`invalidPracticesRaw` として書き
+   * 戻しでも生かしたまま持ち回る（消さない）。
+   */
   async list(): Promise<PracticeMeta[]> {
     return [...(await this.#read()).practices]
       .sort((a, b) => a.slug.localeCompare(b.slug))
       .map((entry) => toMeta(entry));
   }
 
+  /**
+   * **`list()` とは違い、読めない行は投げる**（`PracticeStore.read` の doc
+   * 「無ければ null。読めないは throw」。`FsScheduleStore.get` の同じ形・
+   * 同じ理由。issue #1967）。
+   */
   async read(slug: string): Promise<Practice | null> {
-    const found = (await this.#read()).practices.find((entry) => entry.slug === slug);
-    return found === undefined ? null : toPractice(found);
+    const file = await this.#read();
+    const found = file.practices.find((entry) => entry.slug === slug);
+    if (found !== undefined) return toPractice(found);
+    const invalidRaw = file.invalidPracticesRaw.find((raw) => extractSlug(raw) === slug);
+    if (invalidRaw === undefined) return null;
+    const result = practiceRecordSchema.safeParse(invalidRaw);
+    // `invalidPracticesRaw` に入っている時点で必ず失敗するはずだが、型の上
+    // では `result.success` を保証できないので、成功していたら（起こり
+    // 得ない）その値を返す——念のための保険であって、通常はここへ来ない。
+    if (result.success) return toPractice(result.data);
+    throw new Error(
+      `やり方 ${slug} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
+    );
   }
 
   async write(input: {
@@ -148,12 +287,19 @@ export class FsPracticeStore implements PracticeStore {
         title: input.title,
         content,
         // 上書きで作成時刻を捏造しない（`PracticeStore.write` の doc）。
+        // **既存が壊れた行にしか無ければ `existing` は `undefined`**——
+        // 壊れた行から `createdAt` を安全に取り出す手段が無いので、この
+        // slug は新規作成として扱う（＝壊れた行を捨てて上書きする。
+        // `FsScheduleStore.put` が壊れた kind に対して取る扱いと同じ）。
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
       // ⭐ **書いた後の本文を版として追記する（#1309）。** 番号は「この slug の
       // 既存の版の数 + 1」——`remove()` は `practiceVersions` を切り詰めない
       // ので（下の `remove()`）、消して作り直しても自然に続きから振られる。
+      // **数えるのは検査を通った版だけ**（`invalidPracticeVersionsRaw` は
+      // 数えない）——壊れた版の行は `version` 欄そのものが壊れている
+      // ことがあり、安全に数へ入れられないため。
       const priorVersions = file.practiceVersions.filter((entry) => entry.slug === input.slug);
       const nextVersion = practiceVersionRecordSchema.parse({
         slug: input.slug,
@@ -163,10 +309,25 @@ export class FsPracticeStore implements PracticeStore {
         content,
         at: now,
       });
+      // **書き込む slug と一致する壊れた行は置き換える**（`FsJobStore.putJob`
+      // と同じフォローアップ。issue #1740 / #1868 / #1967）。直したはずの
+      // slug の壊れた行が `invalidPracticesRaw` として残り続けると、ファイル
+      // に同じ slug が2行並び、以後 `list()` のたびに直したはずの跡が出続
+      // ける——「直した」という呼び出し側の意図に対する驚きになる。
+      //
+      // **`practiceVersions` 側はここで filter しない。** 版の履歴は追記
+      // 専用（#1309）で、同じ slug の版が何件も共存するのが正常な状態
+      // ——`invalidPracticeVersionsRaw` も同じ理由で slug が一致するというだけ
+      // では消さない（消すと、その slug の壊れた過去の版が書き戻しのたびに
+      // 黙って失われる）。
+      const invalidPracticesRaw = file.invalidPracticesRaw.filter(
+        (raw) => extractSlug(raw) !== input.slug,
+      );
       return {
         next: {
           ...file,
           practices: [...file.practices.filter((entry) => entry.slug !== input.slug), next],
+          invalidPracticesRaw,
           practiceVersions: [...file.practiceVersions, nextVersion],
         },
         result: toPractice(next),
@@ -174,24 +335,64 @@ export class FsPracticeStore implements PracticeStore {
     });
   }
 
+  /**
+   * **不正な行も slug 指定で消せる**（issue #1967。`FsScheduleStore.remove`
+   * が #1944 でそろえた形と同じ理由）。`read()` が読めない行を投げたままに
+   * する一方で、`remove()` まで `practices`（検査を通った行）だけを見ると、
+   * 壊れた slug は「投げるので消せない」まま永久に残ってしまう——人間が
+   * 復旧するための唯一の手を塞ぐことになる。`invalidPracticesRaw` も一緒に
+   * filter する。
+   *
+   * **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices` /
+   * `invalidPracticesRaw` からだけ間引き、`practiceVersions` /
+   * `invalidPracticeVersionsRaw` には触れない。
+   */
   async remove(slug: string): Promise<void> {
-    // **版は消さない**（`PracticeStore.remove` の doc、#1309）——`practices`
-    // からだけ間引き、`practiceVersions` には触れない。
     await this.#update((file) => ({
-      next: { ...file, practices: file.practices.filter((entry) => entry.slug !== slug) },
+      next: {
+        ...file,
+        practices: file.practices.filter((entry) => entry.slug !== slug),
+        invalidPracticesRaw: file.invalidPracticesRaw.filter((raw) => extractSlug(raw) !== slug),
+      },
       result: undefined,
     }));
   }
 
+  /**
+   * **壊れた行（`invalidPracticesRaw` / `invalidPracticeVersionsRaw`）も
+   * 一緒に消す**（`FsJobStore.clear` / `FsScheduleStore.clear` が #1868 /
+   * #1944 でそろえた形と同じ理由。issue #1967）。`clear()` はワークスペース
+   * リセット専用の全消去操作で、pg 実装は表の行を `DELETE` で全部消す
+   * （`PgPracticeStore.clear` の doc）——行の中身が壊れているかどうかは
+   * 関係なく消える。fs だけが壊れた行を生かして残すと、同じ `clear()` の
+   * 意味が実装ごとに変わってしまう。
+   *
+   * **返す件数も、消した壊れた行を数える**（issue #1930 / #1892 と同じ扱い）。
+   * ただし直す前から `practiceVersions` はこの件数に入っていない
+   * （`PracticeStore.clear` の doc は「消した件数」を `practices` の側でだけ
+   * 数える契約——`WorkspaceResetSummary` が「やり方が何件消えたか」を申告
+   * するための数であり、版の履歴は別の軸として数えていない）。ここでは
+   * その既存の数え方は変えず、`practices` 側の壊れた行だけを件数に足す。
+   */
   async clear(): Promise<number> {
-    // **版もここでは消す**（`PracticeStore.clear` の doc、#1309）——ワークスペース
-    // リセット専用の操作で、人間が明示的に「全部忘れる」と決めたときにしか呼ばれない。
     return this.#update((file) => ({
-      next: { practices: [], practiceVersions: [] },
-      result: file.practices.length,
+      next: {
+        practices: [],
+        invalidPracticesRaw: [],
+        practiceVersions: [],
+        invalidPracticeVersionsRaw: [],
+      },
+      result: file.practices.length + file.invalidPracticesRaw.length,
     }));
   }
 
+  /**
+   * ある slug の版の一覧（メタだけ）。版番号の昇順。**不正な版の行は返さない**
+   * （issue #1967。`list()` と同じ「読めるものだけを返し、投げない」線——版の
+   * 一覧は個々の版の存在を保証する契約ではないので、`read()` / `readVersion()`
+   * のような「読めない」throw とは別に扱う）。飛ばした行は `#read()` が
+   * stderr へ跡を残す。
+   */
   async listVersions(slug: string): Promise<PracticeVersionMeta[]> {
     return (await this.#read()).practiceVersions
       .filter((entry) => entry.slug === slug)
@@ -199,21 +400,89 @@ export class FsPracticeStore implements PracticeStore {
       .map((entry) => toVersionMeta(entry));
   }
 
+  /**
+   * 版を1つ、本文まで読む。**`listVersions()` とは違い、読めない行は投げる**
+   * （`PracticeStore.readVersion` の doc「無ければ null——`read()` と同じ線」。
+   * `read()` / `FsScheduleStore.get` と同じ形・同じ理由。issue #1967）。
+   */
   async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {
-    const found = (await this.#read()).practiceVersions.find(
+    const file = await this.#read();
+    const found = file.practiceVersions.find(
       (entry) => entry.slug === slug && entry.version === version,
     );
-    return found === undefined ? null : toVersion(found);
+    if (found !== undefined) return toVersion(found);
+    const invalidRaw = file.invalidPracticeVersionsRaw.find(
+      (raw) => extractSlug(raw) === slug && extractVersion(raw) === version,
+    );
+    if (invalidRaw === undefined) return null;
+    const result = practiceVersionRecordSchema.safeParse(invalidRaw);
+    if (result.success) return toVersion(result.data);
+    throw new Error(
+      `やり方 ${slug} の版 ${version} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
+    );
   }
 
+  /**
+   * `practices.json` を読む。**`practices` と `practiceVersions` の両方を、
+   * 行ごとに検査して不正な1行だけを飛ばす**（issue #1967。以前は
+   * `fileSchema.parse` でそれぞれの配列全体を1回に検査していたため、1行でも
+   * 不正だと `list()` / `listVersions()` が丸ごと例外を投げ、正しい行も
+   * 読めなくなっていた）。
+   *
+   * **飛ばすのは行の形が不正なとき（欄が欠けている・型が違う、など）だけで
+   * ある。** ファイルそのものが JSON として読めない・トップレベルの形が
+   * 違う（`practices` / `practiceVersions` が配列でない等）ときは、いまの
+   * 振る舞い（例外）のままにしてある——それは1行の問題ではないため。
+   *
+   * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedPracticeRow` /
+   * `describeSkippedPracticeVersionRow`。**値は title / content 等の本文を
+   * 含めず、slug だけ**）、`invalidPracticesRaw` / `invalidPracticeVersionsRaw`
+   * として生の形のまま保持する——`write` / `remove` / `clear` がこれを
+   * 書き戻すことで、版ずれ・手編集でできた不正な行を黙って消さない。
+   * **`read` / `readVersion` はこれを見て、読めない行を slug（+ version）
+   * 指定で引かれたら投げる**（`list` / `listVersions` とは別の契約）。
+   */
   async #read(): Promise<PracticeFile> {
     try {
       const raw = await readFile(this.#path, 'utf8');
-      return fileSchema.parse(JSON.parse(raw));
+      const top = fileSchema.parse(JSON.parse(raw));
+      const practices: PracticeRecord[] = [];
+      const invalidPracticesRaw: unknown[] = [];
+      top.practices.forEach((rawEntry, index) => {
+        const result = practiceRecordSchema.safeParse(rawEntry);
+        if (result.success) {
+          practices.push(result.data);
+          return;
+        }
+        invalidPracticesRaw.push(rawEntry);
+        process.stderr.write(
+          `${describeSkippedPracticeRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            slug: extractSlug(rawEntry),
+          })}\n`,
+        );
+      });
+      const practiceVersions: PracticeVersionRecord[] = [];
+      const invalidPracticeVersionsRaw: unknown[] = [];
+      top.practiceVersions.forEach((rawVersion, index) => {
+        const result = practiceVersionRecordSchema.safeParse(rawVersion);
+        if (result.success) {
+          practiceVersions.push(result.data);
+          return;
+        }
+        invalidPracticeVersionsRaw.push(rawVersion);
+        process.stderr.write(
+          `${describeSkippedPracticeVersionRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            slug: extractSlug(rawVersion),
+          })}\n`,
+        );
+      });
+      return { practices, invalidPracticesRaw, practiceVersions, invalidPracticeVersionsRaw };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { practices: [], practiceVersions: [] };
-      }
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
     }
   }
@@ -229,7 +498,7 @@ export class FsPracticeStore implements PracticeStore {
     return withPathLock(this.#path, async () => {
       const { next, result } = mutate(await this.#read());
       await mkdir(this.#dir, { recursive: true });
-      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
+      await writeFileAtomic(this.#path, `${JSON.stringify(serialize(next), null, 2)}\n`);
       return result;
     });
   }

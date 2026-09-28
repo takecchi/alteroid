@@ -124,8 +124,8 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
       found = await stores.practices.read('good-practice');
     });
 
-    expect(found?.slug).toBe('good-practice');
-    expect(found?.content).toBe(GOOD_PRACTICE.content);
+    expect(found).not.toBeNull();
+    expect(found).toMatchObject({ slug: 'good-practice', content: GOOD_PRACTICE.content });
   });
 
   it('listVersions() は不正な版の行を飛ばし、正しい版だけを返す（直す前は例外で赤）', async () => {
