@@ -249,6 +249,13 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * 区別できない）とは違い、`gh pr merge` の直前に来る文字は演算子か行頭しか
  * 認めていないので、`echo "gh pr merge …"` のような形は素通しできる。
  *
+ * ⚠️ **issue #2035 で、「演算子か行頭」の集合へグルーピング（`(` `)`
+ * バッククォート）を足し、さらに bash の予約語（`if`/`then`/…/`time`/
+ * `!`/`{`）を読み飛ばす前置きとして加えた**——`COMMAND_POSITION_
+ * LOOKBEHIND_SRC`・`SHELL_KEYWORD_PREFIX_SRC` の doc 参照。直す前は、
+ * 予約語やグルーピングの直後に来た `gh pr merge --delete-branch` が
+ * どの区切り文字の直後でもないと誤読され、検出をすり抜けていた。
+ *
  * ## ヒアドキュメントだけは別扱いが要る（`stripHeredocs`）
  *
  * 改行はコマンド位置の印として扱っているので、ヒアドキュメントの本文の
@@ -499,9 +506,19 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   明記したとおり「`gh pr merge` の呼び出し」に絞られている。1件ずつ
  *   検討して足す方針（#1192 のオーナー決定）のため、issue #1788 の指摘は
  *   ここへ記録するに留め、この PR では歯を足していない。
- * - **`sudo` / `nice` / `xargs` など `timeout` 以外の前置き。** issue #1886
- *   の「確かめていないこと」に明記されたとおり、この PR は `timeout` だけを
- *   扱う（1件ずつ検討する方針、#1192 のオーナー決定）。
+ * - **`sudo` / `nice` / `xargs` / `command` / `exec` / `nohup` など
+ *   `timeout` 以外の**コマンドとしての**前置き。** issue #1886 の
+ *   「確かめていないこと」に明記されたとおり、この PR は `timeout` だけを
+ *   扱う（1件ずつ検討する方針、#1192 のオーナー決定）。issue #2035 で
+ *   `if`/`while`/`{`/`(` のような**予約語・グルーピング**（コマンドの
+ *   位置を作るが、それ自体はコマンドとして実行されない）は塞いだが、
+ *   `command`/`exec`/`nohup` のように**それ自体が1個のコマンドとして
+ *   実行される**前置きは同じ方針で引き続き対象外のまま残している——
+ *   数える単位の違いは `SHELL_KEYWORD_PREFIX_SRC` の doc「数える単位」
+ *   参照。**`timeout -k` のようなオプション付き `timeout`・値が空白を含む
+ *   引用符形の代入（`X="a b" gh …`）・`-sd` のような短縮オプションの束ね
+ *   書きも、同じ理由で未対応のまま残っている**（それぞれ直上・直下の
+ *   doc に個別の理由が在る）。
  * - ~~`timeout 1.` のような、末尾が `.` で終わる小数の継続時間。~~ issue
  *   #1933 で `\d+(?:\.\d+)?|\.\d+` に直したが、この形（整数の直後に `.` が
  *   在り、その後ろに数字が無い）はどちらの選択肢にも一致しなかった。GNU の
@@ -597,8 +614,109 @@ const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+(?:\d+(?:\.\d*)?|\.\d+)[
 const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:-u\s+\S+\s+)*`;
 
 /**
- * コマンド位置と `gh` のあいだで読み飛ばす前置き全体 —— 単純な代入の繰り返し
- * ・`timeout <数字><単位?>`・`env` コマンドの3つを、**順不同・回数任意**で
+ * bash の予約語・グルーピングが、直後の `gh pr merge` を「コマンドの位置」
+ * から隠してしまう穴を塞ぐ前置き（issue #2035）。
+ *
+ * ## 穴の形
+ *
+ * `GH_PR_MERGE_DELETE_BRANCH_RE` の外側の lookbehind
+ * （`(?<=^|[;&|\n])`）は、「行頭・`;`・`&`・`|`・改行の**直後**」だけを
+ * コマンドの位置と認めていた。しかし bash では、予約語（`if`/`then`/
+ * `elif`/`else`/`while`/`until`/`do`/`coproc`/`time`/`!`）やグルーピング
+ * （`(`・`)`・バッククォート、`$(`/`<(` も `(` の字面で拾える）の**直後**
+ * にもコマンドが来る。この直後は上のどの区切り文字でもないので、
+ * lookbehind が届かず検出をすり抜けていた。実例（依頼者が実測、すべて
+ * 直す前は `blocked: false`）: `if true; then gh pr merge 1
+ * --delete-branch; fi` / `for i in 1; do gh pr merge $i --delete-branch;
+ * done` / `{ gh pr merge 1 --delete-branch; }` / `(gh pr merge 1
+ * --delete-branch)` / `! gh pr merge 1 --delete-branch` /
+ * `while gh pr merge 1 -d; do :; done` / `time gh pr merge 1
+ * --delete-branch` / `` echo `gh pr merge 1 --delete-branch` `` /
+ * `case x in *) gh pr merge 1 --delete-branch;; esac` / `coproc gh pr
+ * merge 1 --delete-branch` / `f() { gh pr merge 1 -d; }` 等（歯は
+ * `bash-wait-guard-delete-branch-issue-2035.test.ts`）。
+ *
+ * **数える単位**: bash の文法で、直後の語をコマンドの位置に置く予約語と
+ * グルーピング（`if then elif else while until do time coproc ! {` と、
+ * `(` `)` バッククォート）。`sudo`/`nice`/`xargs`/`command`/`exec`/
+ * `nohup` のような**コマンドとしての前置き**は別の類（1件ずつ検討する
+ * 方針、#1192 のオーナー決定）なので、この issue では扱わない——下の
+ * 「弾けないと分かっている形」に残す。
+ *
+ * ## 直し方は2箇所——lookbehind とキーワードの前置き、別々に足す
+ *
+ * 1. **グルーピング（`(` `)` バッククォート）は、外側の lookbehind の
+ *    文字集合へ足す。** これらの文字は1文字そのものが区切りなので、
+ *    `;`/`&`/`|`/改行と同じ扱いでよい（`GH_PR_MERGE_DELETE_BRANCH_RE` の
+ *    lookbehind 参照）。
+ * 2. **予約語（`if`/`then`/…/`time`/`!`/`{`）は、ここ
+ *    `LEADING_ENV_PREFIX_SRC` の選択肢へ `SHELL_KEYWORD_PREFIX_SRC` として
+ *    足す。** 予約語は複数文字の「語」であって1文字の区切りではない。
+ *    この lookbehind は「直前の1文字が区切りか」だけを見る形にしてある
+ *    （JS の lookbehind 自体は可変長を許すが、語をここへ入れると、語が
+ *    コマンドの位置に在るかをもう一度 lookbehind の中で問うことになる）。
+ *    だから語は、環境変数の代入・`timeout`・`env` コマンドと同じく、
+ *    **読み飛ばす前置き**として Kleene star の中で消費する。前置きの列は
+ *    lookbehind が認めた位置からしか始まらないので、先頭の予約語は必ず
+ *    コマンドの位置に在る。
+ *
+ * ⚠️ **`!` と `{` は、あえて2つのどちらの直し方にも「lookbehind の文字
+ * 集合」としては足していない。** 足すと、その文字が**何度も現れる入力**で
+ * 2乗の後戻りが生まれる——実測: `'if then do time ! { '.repeat(3000)+'x'`
+ * が、`!`/`{` を lookbehind の文字集合にも足した版では 546ms、この版
+ * （語の側だけで読む）では 5.9ms（直す前・キーワード自体が無い版は
+ * 3.8ms）。理由: lookbehind の文字集合に `!`/`{` を足すと、それらの**直後
+ * のあらゆる位置**が新しい「コマンドの位置」になり、区切り文字が無い
+ * 長い繰り返し入力でも `!`/`{` の出現回数ぶんだけ独立した開始位置が生まれ
+ * る。各開始位置での一致の試行はそれ自体は線形でも、開始位置が入力長に
+ * 比例して増えるので全体は2乗になる。`!`/`{` を**語の直後に空白を要求する
+ * 前置きの選択肢**（`SHELL_KEYWORD_PREFIX_SRC` 内）としてだけ読めば、実際に
+ * 一致を試みる開始位置は「元から区切り文字だった位置」だけのまま増えない
+ * ——後戻りは線形に留まる（歯は
+ * `bash-wait-guard-delete-branch-issue-2035.test.ts` の「後戻りが2乗に
+ * 増えない」節）。
+ *
+ * ⚠️ **予約語の直後の空白は `[ \t]+` に固定し、`\s+` にしない。** `\s` は
+ * 改行も含むので、`\s+` にすると予約語の連鎖が**改行を跨いで**繋がる。
+ * 改行の直後は lookbehind が認める開始位置なので、`'then\n'.repeat(n)` の
+ * ような入力では、各開始位置からの試行が残りの連鎖を全部読むことになり、
+ * `!`/`{` と同じ形の2乗になる（実測 2026-09-28T23:29Z: 予約語の後ろを
+ * `\s+` にした試作では `'then\n'.repeat(10000)+'x'` が 589.9ms・
+ * `'do\n'.repeat(15000)+'x'` が 947.9ms、この版では 3.4ms・1.0ms。なお
+ * 直す前から在る `ENV_ASSIGNMENT_SRC` の `\s+` には同じ形が残っていて、
+ * `'A=1\n'.repeat(10000)+'x'` は直す前も後も 400ms 前後かかる——この PR
+ * では触っていない）。`[ \t]+` なら、予約語の連鎖は区切りの文字で
+ * 必ず切れるので、各開始位置からの試行は次の区切りまでで終わる。改行の
+ * 後ろは lookbehind が別に拾うので、漏れは出ない。
+ *
+ * ## 選択肢の先頭の語は互いに重ならない（#1887 / #1939 の設計を崩さない）
+ *
+ * `SHELL_KEYWORD_PREFIX_SRC` を加えても、`(?:A|T|E)*` が
+ * `(?:K|A|T|E)*` になるだけで、後戻りが指数的に増えない設計
+ * （`ENV_COMMAND_PREFIX_SRC` の doc）は崩れない —— 4つの選択肢は先頭の
+ * 文字列で互いに重ならない: `if=`（環境変数の代入）と `if `（予約語）は
+ * 3文字目（`=` か空白か）で分かれ、`time `（予約語）と `timeout `
+ * （`TIMEOUT_COMMAND_PREFIX_SRC`）は5文字目（空白か `o` か）で分かれる。
+ * ある位置から先の文字列を「予約語」「代入」「`timeout`」「`env`」の
+ * どれと読むかが常に1通りに決まるので、後戻りが要らない。
+ *
+ * ## 誤検知の向きは受け入れる（すり抜けを作らないほうを優先する）
+ *
+ * この直しは「弾く」側を広げる変更なので、新しい誤検知が生まれうる——
+ * 受け入れる。たとえば `echo "(gh pr merge 1 -d)"` は直す前は通っていた
+ * （引用符の中の `(` の直後という、この直しが新しく拾う位置）が、直した
+ * 後は弾く（`echo "; gh pr merge 1 -d"` のような、以前から在る「引用符の
+ * 中の演算子の直後」の誤検知と同じ族）。一方で `echo then gh pr merge 1
+ * --delete-branch` は引き続き**通る**——`then` は `echo` の引数であって
+ * コマンドの位置に無いので、`SHELL_KEYWORD_PREFIX_SRC` はそもそもここへ
+ * 一致を試みる開始位置に無い（`echo` の直後は lookbehind の対象外のまま）。
+ */
+const SHELL_KEYWORD_PREFIX_SRC = String.raw`(?:(?:if|then|elif|else|while|until|do|coproc|time(?:[ \t]+-p)?|[!{])[ \t]+)`;
+
+/**
+ * コマンド位置と `gh` のあいだで読み飛ばす前置き全体 —— bash の予約語
+ * （`SHELL_KEYWORD_PREFIX_SRC`、issue #2035）・単純な代入の繰り返し・
+ * `timeout <数字><単位?>`・`env` コマンドの4つを、**順不同・回数任意**で
  * 読み飛ばす（すべて0回でよい＝前置きが無い既存の形もそのまま一致する）。
  *
  * ⚠️ **issue #1886 の最初の版はここを固定順序（代入 → `timeout` を1回だけ
@@ -613,9 +731,11 @@ const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:-u\s+\S+\s+)*`;
  *
  * 後戻りが入力長に対して指数的に増えないのは、3つの選択肢の先頭の語
  * （`NAME=`・`timeout `・`env `）が互いに重ならないため——`ENV_COMMAND_
- * PREFIX_SRC` の doc に理由を書いた。
+ * PREFIX_SRC` の doc に理由を書いた。issue #2035 で足した予約語の選択肢
+ * （`SHELL_KEYWORD_PREFIX_SRC`）も同じ設計を保ったまま先頭へ加えた——
+ * 理由はそちらの doc に書いた。
  */
-const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC}|${TIMEOUT_COMMAND_PREFIX_SRC}|${ENV_COMMAND_PREFIX_SRC})*`;
+const LEADING_ENV_PREFIX_SRC = String.raw`(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_ASSIGNMENT_SRC}|${TIMEOUT_COMMAND_PREFIX_SRC}|${ENV_COMMAND_PREFIX_SRC})*`;
 
 /**
  * `-d` の手前（lookbehind）—— issue #1991 で直した。
@@ -677,8 +797,23 @@ const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC}|${TIMEOUT_COM
  */
 const SHORT_DELETE_BRANCH_FLAG_SRC = String.raw`(?<=[\s]|(?:^|[\s;&|])['"])-d\b`;
 
+/**
+ * 外側の lookbehind の文字集合（issue #2035 で `(` `)` バッククォートを
+ * 足した）。`\u0060` はバッククォートの unicode エスケープ——`String.raw`
+ * の中に生のバッククォード文字を書くとテンプレートリテラル自体が終端
+ * してしまうため、既存の `DOUBLE_QUOTED_VALUE_SRC` と同じ表記に揃えた。
+ *
+ * `(` `)` を足す理由は `SHELL_KEYWORD_PREFIX_SRC` の doc「穴の形」参照——
+ * `(gh pr merge …)`・`` `gh pr merge …` ``・`case … *) gh pr merge …`
+ * のように、グルーピングの直後は1文字の区切りなので、`;`/`&`/`|`/改行と
+ * 同じ扱いでよい（`$(`/`<(` も `(` の字面で拾える——`$`/`<` 自体は特別
+ * 扱いしない）。`!`/`{` をここへ足さない理由（2乗の後戻り）は同じ doc
+ * 参照。
+ */
+const COMMAND_POSITION_LOOKBEHIND_SRC = String.raw`(?<=^|[;&|\n()\u0060])`;
+
 const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
-  String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|${SHORT_DELETE_BRANCH_FLAG_SRC})`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|${SHORT_DELETE_BRANCH_FLAG_SRC})`,
 );
 
 /**
