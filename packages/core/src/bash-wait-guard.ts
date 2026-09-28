@@ -296,21 +296,46 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * コマンドしか読み飛ばせず（issue #1788 の指摘で追加）、`timeout` は
  * コマンド文字列全体の先頭でしか読み飛ばせなかった（issue #1886 の指摘）。
  *
- * `LEADING_ENV_PREFIX_SRC` が読み飛ばすのは次の3つだけ、かつ**この順序**
- * でしか組み合わせを認めない —— (1) 環境変数の代入の繰り返し (2) 任意で
- * `timeout <数字><単位?>` を1回だけ (3) 任意で `env` コマンド:
+ * `LEADING_ENV_PREFIX_SRC` が読み飛ばすのは次の3つだけである —— (1) 環境
+ * 変数の代入 (2) `timeout <数字><単位?>` (3) `env` コマンド。**この3つは
+ * 順不同・回数任意で組み合わせられる**（`(?:A|T|E)*`）。
  *
- * 1. **単純な代入の繰り返し** —— `[A-Za-z_][A-Za-z0-9_]*=\S*` を空白区切りで
- *    0回以上（**値の中に空白を含む引用符形（`X="a b" gh …`）は読み飛ばせ
- *    ない** —— `\S*` は最初の空白で区切るため、`"a` までしか値として拾え
- *    ない。既存の簡略化と同じ弱さで、この PR で新しく増やした弱さではない）。
- * 2. **`timeout <数字><単位?>`** —— `TIMEOUT_COMMAND_PREFIX_SRC`。**1回だけ**
- *    読み飛ばす（`timeout 5 timeout 10 gh …` のような入れ子・重複は見ない
- *    —— 現実的な書き方ではないと判断した）。
+ * ⚠️ **issue #1886 の最初の版はここを「代入 → `timeout` を1回だけ →
+ * `env`」という固定順序でしか認めなかった**（確認した実例
+ * `GH_PAGER=cat timeout 20 gh pr merge …` だけに絞って直した）。その版は
+ * 「`timeout 20 GH_TOKEN=x gh pr merge …`」「`env FOO=1 timeout 20 gh pr
+ * merge …`」のような別の並びを弾けないまま残し、しかもそのすり抜けを
+ * テストで「未対応」として固定していた —— 固定順序に絞ったこと自体が、
+ * 直したはずの穴の形を変えただけで穴そのものは残していた
+ * （`bash-wait-guard-delete-branch-timeout-prefix.test.ts` の「前置きの
+ * 並び順を問わず弾く」節）。**この版で順不同に直す。**
+ *
+ * 1. **単純な代入の繰り返し** —— `[A-Za-z_][A-Za-z0-9_]*=\S*`（**値の中に
+ *    空白を含む引用符形（`X="a b" gh …`）は読み飛ばせない** —— `\S*` は
+ *    最初の空白で区切るため、`"a` までしか値として拾えない。既存の簡略化
+ *    と同じ弱さで、この PR で新しく増やした弱さではない）。
+ * 2. **`timeout <数字><単位?>`** —— `TIMEOUT_COMMAND_PREFIX_SRC`。**回数の
+ *    制限は無い**（`timeout 5 timeout 10 gh …` のような重複も、他の2つと
+ *    混ざった並びも同じ1つの繰り返しが拾う）。
  * 3. **`env` コマンド** —— `env`（引数無しでそのまま次のコマンドを起動する
- *    形）・`env NAME=値 ...`・`env -u NAME ...` のような単純な形だけを見る。
- *    `env` 自身の全オプション文法（`-i` の組み合わせ・`--split-string` 等）
- *    までは解いていない。
+ *    形）・`env -u NAME ...` のような単純な形だけを見る。**`env` の直後の
+ *    `NAME=値` はここでは読まない** —— 次の段落で理由を書く。`env` 自身の
+ *    全オプション文法（`-i` の組み合わせ・`--split-string` 等）までは
+ *    解いていない。
+ *
+ * ⚠️ **`ENV_COMMAND_PREFIX_SRC` の中で `env` の後ろの `NAME=値` まで読むと、
+ * 後戻りが入力長に対して指数的に増える。** 3つの選択肢を無制限に繰り返す
+ * `(?:A|T|E)*` の形では、ある位置から先の文字列を「代入の繰り返し」と
+ * 「`env` コマンド1個（中に代入をいくつも含む）」のどちらに割り振るかが
+ * 一意に決まらないと、同じ入力に対して指数個の分割が生まれる
+ * （`env A=1 B=2 env A=1 B=2 …` を繰り返すほど、`env` 1個が代入を何個
+ * 抱えるかの数え方が掛け算で増える）。**だから `env` の中では代入を読ま
+ * ず、`env` の後ろの代入は常に外側の (1) の選択肢が読む**——これで3つの
+ * 選択肢の先頭の語（`NAME=`・`timeout `・`env `）が互いに重ならなくなり、
+ * ある位置でどの選択肢が読み進めるかが常に1通りに決まる（後戻りが要らな
+ * い）。後戻りが増えないことは
+ * `bash-wait-guard-delete-branch-timeout-prefix.test.ts` の
+ * 「前置きの繰り返しが長くても後戻りで爆発しない」で測っている。
  *
  * どれも「コマンド位置の直後」でしか読み飛ばさない —— 読み飛ばしの開始
  * 位置そのものは既存の lookbehind（行頭・`;`・`&`・`|`・改行の直後）が決める
@@ -338,13 +363,6 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   「`gh` の手前の環境変数・`timeout`・`env` 前置きも読み飛ばす」の doc の
  *   とおり、値パターンが `\S*` なので空白の手前までしか代入として読めない
  *   （既存の簡略化）。
- * - **`timeout` の後ろに環境変数の代入や `env` コマンドが来る順序**
- *   （`timeout 20 GH_TOKEN=x gh pr merge …`）・**`env` コマンドの後ろに
- *   `timeout` が来る順序**（`env FOO=1 timeout 20 gh pr merge …`）。
- *   `LEADING_ENV_PREFIX_SRC` は「環境変数の代入→`timeout`→`env` コマンド」
- *   の順序だけを認め、それ以外の並びは未対応（issue #1886 で確認した実例
- *   ——`GH_PAGER=cat timeout 20 gh pr merge …`——の順序に絞って直した。他の
- *   並びは1件ずつ検討する方針のため、この PR では歯を足していない）。
  * - **`gh api -X DELETE …/git/refs/heads/<branch>`・`git push origin
  *   --delete <branch>`・`git push origin :<branch>`。** これらは
  *   `gh pr merge --delete-branch` と同じ実害（枝を消し、積んだ PR を
@@ -385,34 +403,55 @@ const ENV_ASSIGNMENT_BODY_SRC = String.raw`[A-Za-z_][A-Za-z0-9_]*=\S*`;
 const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}\s+`;
 
 /**
- * `timeout <数字><単位?>` 前置き——1回だけ読み飛ばす（doc「`timeout N ...`
- * に包まれていても見る」）。**issue #1886 より前は、これと同じパターンが
- * `TIMEOUT_PREFIX_RE` としてコマンド文字列全体の先頭（`stripLeadingTimeout`
- * 経由）でしか使われておらず、`&&` 等の後ろのコマンド位置では読み飛ばせな
- * かった。** `LEADING_ENV_PREFIX_SRC` へ統合したことで、コマンド位置ならど
- * こでも同じ1つのパターンが効く。`timeout` 自身のオプション（`-k` 等）ま
- * では解いていない——直後が数字の継続時間である最も普通の書き方だけを見る。
+ * `timeout <数字><単位?>` 前置き（doc「`timeout N ...` に包まれていても
+ * 見る」）。**issue #1886 より前は、これと同じパターンが `TIMEOUT_PREFIX_RE`
+ * としてコマンド文字列全体の先頭（`stripLeadingTimeout` 経由）でしか使わ
+ * れておらず、`&&` 等の後ろのコマンド位置では読み飛ばせなかった。**
+ * `LEADING_ENV_PREFIX_SRC` へ統合したことで、コマンド位置ならどこでも同じ
+ * 1つのパターンが効く。**このパターン自体は1回ぶんの一致であって、繰り返す
+ * かどうかは呼び出し元の `LEADING_ENV_PREFIX_SRC` 側の `(?:A|T|E)*` が決め
+ * る**（代入・`env` コマンドと順不同・回数任意で組み合わさる）。`timeout`
+ * 自身のオプション（`-k` 等）までは解いていない——直後が数字の継続時間で
+ * ある最も普通の書き方だけを見る。
  */
 const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+\d+[a-zA-Z]*\s+`;
 
 /**
  * `env` コマンド経由の単純な前置き —— `env`（引数無し）・
- * `env NAME=値 ...`・`env -u NAME ...` の形だけを見る。`env` 自身の全
- * オプション文法までは解いていない（doc 参照）。
+ * `env -u NAME ...` の形だけを見る。`env` 自身の全オプション文法までは
+ * 解いていない（doc 参照）。
+ *
+ * ⚠️ **ここで `env NAME=値 ...` の `NAME=値` を読まない（`ENV_ASSIGNMENT_
+ * BODY_SRC` を含めない）のは意図的である。** `LEADING_ENV_PREFIX_SRC` の
+ * `(?:代入|timeout|env)*` は、同じ入力を複数の分割で読めてしまうと後戻り
+ * が指数的に増える（`env A=1 B=2 env A=1 B=2 …` の繰り返しで、代入をどの
+ * `env` に何個ぶら下げるかの数え方が掛け算で増える）。`env` の中で代入を
+ * 読まなければ、`env` の後ろの代入は必ず外側の代入の選択肢が拾うことに
+ * なり、ある位置でどの選択肢が読み進めるかが一意に決まる（後戻りが要らな
+ * い）。詳しくは `LEADING_ENV_PREFIX_SRC` の doc。
  */
-const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:(?:-u\s+\S+|${ENV_ASSIGNMENT_BODY_SRC})\s+)*`;
+const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:-u\s+\S+\s+)*`;
 
 /**
  * コマンド位置と `gh` のあいだで読み飛ばす前置き全体 —— 単純な代入の繰り返し
- * のあと、任意で `timeout <数字><単位?>` を1回、そのあと任意で `env` コマン
- * ドが続いてもよい（すべて0回でよい＝前置きが無い既存の形もそのまま一致
- * する）。**この順序（環境変数の代入 → `timeout` → `env` コマンド）でしか
- * 組み合わせを認めない**——issue #1886 が確かめた実例
- * （`GH_PAGER=cat timeout 20 gh pr merge …`）の順序に絞ってあり、`timeout`
- * の後ろに来る代入や `env` コマンドの後ろに来る `timeout` は未対応（doc
- * 「この検出器が弾けないと分かっている形」）。
+ * ・`timeout <数字><単位?>`・`env` コマンドの3つを、**順不同・回数任意**で
+ * 読み飛ばす（すべて0回でよい＝前置きが無い既存の形もそのまま一致する）。
+ *
+ * ⚠️ **issue #1886 の最初の版はここを固定順序（代入 → `timeout` を1回だけ
+ * → `env`）に絞っていた**——確かめた実例（`GH_PAGER=cat timeout 20 gh pr
+ * merge …`）の順序だけを直し、それ以外の並び（`timeout 20 GH_TOKEN=x gh …`
+ * ・`env FOO=1 timeout 20 gh …`）は「未対応」としてテストで固定していた。
+ * しかしこの3つはどれも `gh pr merge --delete-branch` へ辿り着く前に読み
+ * 飛ばされるべき前置きであって、特定の並びだけを認める理由が無い——固定
+ * 順序は直したはずの穴の形を変えただけで、穴自体は残っていた。**この版で
+ * `(?:A|T|E)*` に直し、3つを任意の順序・任意の回数で組み合わせられるよう
+ * にした。**
+ *
+ * 後戻りが入力長に対して指数的に増えないのは、3つの選択肢の先頭の語
+ * （`NAME=`・`timeout `・`env `）が互いに重ならないため——`ENV_COMMAND_
+ * PREFIX_SRC` の doc に理由を書いた。
  */
-const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC})*(?:${TIMEOUT_COMMAND_PREFIX_SRC})?(?:${ENV_COMMAND_PREFIX_SRC})?`;
+const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC}|${TIMEOUT_COMMAND_PREFIX_SRC}|${ENV_COMMAND_PREFIX_SRC})*`;
 
 const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
   String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d(?=[\s;&|]|$))`,
