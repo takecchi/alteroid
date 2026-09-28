@@ -2,6 +2,8 @@ import { stdout } from 'node:process';
 
 import {
   describeRevisionStatus,
+  type RunnerCredentialFingerprint,
+  type RunnerProfileFingerprint,
   type RunnerPushHealth,
   type RunnerPushOutcome,
   type RunnerRevisionReport,
@@ -89,6 +91,23 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
 }
 
 /**
+ * 指紋（`credentials`/`profile`）を聞きに行けたかの3状態。
+ *
+ * **`asked` / `unheard` / `failed` を1つも潰さない**（`apps/web/app/routes/
+ * settings.tsx` の `Credentials` と同じ意味）——繋がっていないので聞いて
+ * いない（`unheard`）／聞いたが失敗した（`failed`）／聞いて0件だった
+ * （`asked` かつ空）を同じ文言に潰すと、「配られていない」のか「確かめ
+ * られなかった」のかが端末からは区別できなくなる（#1947）。
+ *
+ * **この型の生成元は無い。** 本体（`runnerProbeSchema`）は daemon の
+ * `apps/daemon/src/openapi.ts` にしか定義が無く、CLI は daemon の実装を
+ * import しないので、ここに同じ形を書く（型だけの複製——3状態の文言を
+ * 作る関数は下の `renderCredentialsFingerprint`/`renderProfileFingerprint`
+ * に1本ずつしか無く、複製していない）。
+ */
+type RunnerProbe = { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
+
+/**
  * `GET /runners` の応答のうち、この口が読む分。
  *
  * **`daemonRevision` は2値（`RunnerRevisionReport`）で、runner の版は3値
@@ -109,6 +128,23 @@ interface RunnersView {
      */
     instanceId?: string;
     instanceSince?: string;
+    /**
+     * 配られている鍵の指紋（#1947）。**空であることだけを見ないこと。** 叩けな
+     * かったときもここは空になるので、「鍵が配られていない」と読んでよいのは
+     * `credentialsProbe.status === 'asked'` のときだけである（`credentials`/
+     * `credentialsProbe` は daemon が接続している runner には毎回必ず probe
+     * する——opt-in のクエリは無いので、CLI が読んでも追加の往復は発生しない）。
+     */
+    credentials: RunnerCredentialFingerprint[];
+    /** 指紋を聞きに行けたか。上の空と、聞けなかったことを分ける。 */
+    credentialsProbe: RunnerProbe;
+    /**
+     * 置かれている実行環境プロファイルの指紋（#1947）。**無いことだけを見ない
+     * こと。** 叩けなかったときもここは省略される。
+     */
+    profile?: RunnerProfileFingerprint;
+    /** プロファイルの指紋を聞きに行けたか。上の不在と、聞けなかったことを分ける。 */
+    profileProbe: RunnerProbe;
     revision: RunnerRevisionStatus;
     /**
      * 押し込み（push）の直近結果。**指紋（`credentialsProbe`/`profileProbe`）とは
@@ -171,6 +207,13 @@ export function renderRunners(view: RunnersView): string {
     // 片方でもう片方を推測することになる。
     lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
     if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
+    // **指紋（credentials/profile）は「聞けたか」の3状態を潰さない**（#1947）。
+    // Web の設定画面（`Credentials`）と同じ判断——繋がっていないので聞いて
+    // いない（`unheard`）／聞いたが失敗した（`failed`）／聞いて0件だった
+    // （`asked` かつ空）を同じ文言に潰すと、「配られていない」のか「確かめ
+    // られなかった」のかが端末からは区別できなくなる。
+    lines.push(`  ${renderCredentialsFingerprint(runner)}`);
+    lines.push(`  ${renderProfileFingerprint(runner)}`);
     // **押し込みの結果（`pushHealth`）は新たな往復を払わない**（`credentialsProbe`/
     // `profileProbe` とは別物）ので、その場で聞き直すのではなく記憶をそのまま出す。
     // **3種類とも「まだ一度も試みていない」ことがある。** その種類だけ行を出さない
@@ -210,4 +253,43 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
     outcomeText('MCP の登録', pushHealth.mcpServers),
   ].filter((part): part is string => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(' / ');
+}
+
+/**
+ * 鍵の指紋（`credentials`/`credentialsProbe`）を1行へ（#1947）。
+ *
+ * **3状態を1つも潰さない**（`RunnerProbe` の doc と同じ理由）。Web の
+ * `Credentials` コンポーネントと意味を揃えるが、こちらはテキストを返す
+ * （JSX ではなく、端末に書く1行そのもの）。
+ */
+function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): string {
+  if (runner.credentialsProbe.status === 'unheard') {
+    return '鍵: 確かめていない（繋がっていないので聞いていない）';
+  }
+  if (runner.credentialsProbe.status === 'failed') {
+    return `鍵を確かめられなかった: ${runner.credentialsProbe.error}`;
+  }
+  if (runner.credentials.length === 0) {
+    return '鍵: 渡している鍵は無い';
+  }
+  return `鍵の指紋: ${runner.credentials.map((c) => `${c.name}=${c.sha256}`).join(', ')}`;
+}
+
+/**
+ * プロファイルの指紋（`profile`/`profileProbe`）を1行へ（#1947）。上と同じ3状態
+ * ・同じ理由。**Web はまだこの欄を出していない**（この PR で足すか、足さずに
+ * 理由を PR 本文へ書くかを判断する——`apps/web/app/routes/settings.tsx` の
+ * `Credentials` の隣）。
+ */
+function renderProfileFingerprint(runner: RunnersView['runners'][number]): string {
+  if (runner.profileProbe.status === 'unheard') {
+    return 'プロファイル: 確かめていない（繋がっていないので聞いていない）';
+  }
+  if (runner.profileProbe.status === 'failed') {
+    return `プロファイルを確かめられなかった: ${runner.profileProbe.error}`;
+  }
+  if (runner.profile === undefined) {
+    return 'プロファイル: 置いていない';
+  }
+  return `プロファイルの指紋: ${runner.profile.sha256}`;
 }
