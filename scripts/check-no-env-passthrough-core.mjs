@@ -60,9 +60,27 @@
  * - `{ ['env']: process.env }`（計算プロパティ名の文字列キー）——
  *   `maskCommentsAndStrings` が文字列リテラル `'env'` を空白へ潰すため、
  *   マスク後のテキストには `env` という字面自体が残らなかった。
- *   `findComputedEnvKeyHits` がマスク前の生のテキストを走査し、マスク後の
+ *   `findQuotedEnvKeyHits` がマスク前の生のテキストを走査し、マスク後の
  *   同じ範囲に `process.env` が残っているか（＝コメント・文字列の中の
  *   逐語引用ではないか）を確かめてから採用する
+ *
+ * **⚠️ 2026-09-29 追記（Issue #2042。#2036 の隣に在った同種の穴）:**
+ *
+ * - `{ 'env': process.env }` / `{ "env": process.env }`（**計算キーではない**、
+ *   引用符で囲んだだけの普通のキー）——旧 `findComputedEnvKeyHits` は
+ *   `\[\s*(['"])env\1\s*\]` と `[` `]` を必須にしていたので、計算プロパティ
+ *   （`['env']`）より書かれやすいこの形を見逃していた。`[` `]` を省略可能に
+ *   広げ、関数名も `findQuotedEnvKeyHits` へ改めた（もう「計算キーだけ」の
+ *   関数ではないため）
+ * - `` { [`env`]: process.env } ``（テンプレートリテラルの計算キー）——
+ *   引用符の候補にバッククォートを足して直す
+ * - `{ env: (process.env) }` / `{ env: (process.env as NodeJS.ProcessEnv) }` /
+ *   `{ ['env']: (process.env) }`（値が丸括弧・型アサーションで包まれる）——
+ *   `env-direct-process-env` も `findQuotedEnvKeyHits` も `:` の直後に
+ *   `process.env` の literal しか許しておらず `(` を跨げなかった。両方に
+ *   `(?:\(\s*)*`（`(` を0回以上、空白を挟んでよい）を足して直す。`as` の
+ *   後ろの型名や閉じ括弧は `process\.env(?![\w.])` の否定先読みの外なので、
+ *   マッチ自体は `process.env` で終わってよい（値全体を消費する必要はない）
  *
  * ## コメント・文字列の中は拾わない
  *
@@ -327,8 +345,11 @@ export const PATTERNS = [
   },
   {
     id: 'env-direct-process-env',
-    re: /\benv\s*:\s*process\.env(?![\w.])/g,
-    describe: '`env: process.env`（丸ごとそのまま渡す）',
+    re: /\benv\s*:\s*(?:\(\s*)*process\.env(?![\w.])/g,
+    describe:
+      '`env: process.env`（丸ごとそのまま渡す。`(process.env)` / ' +
+      '`(process.env as NodeJS.ProcessEnv)` のように丸括弧・型アサーションで' +
+      '包んだ形も含む。Issue #2042）',
   },
 ];
 
@@ -361,26 +382,40 @@ function findObjectAssignEnvHits(masked) {
 }
 
 /**
- * 計算プロパティ名で `env` キーへ `process.env` を渡す形
- * （`{ ['env']: process.env }` / `{ ["env"]: process.env }`）を検出する
- * （Issue #2036）。`maskCommentsAndStrings` は文字列リテラルの中身を空白へ
- * 潰すため、`'env'` という字面そのものがマスク後のテキストから消えてしまい
+ * 引用符で囲んだ `env` キーへ `process.env` を渡す形を検出する。**計算
+ * プロパティ名（`['env']` / `["env"]` / `` [`env`] ``）だけでなく、`[` `]`
+ * を伴わない普通の引用符付きキー（`{ 'env': process.env }` /
+ * `{ "env": process.env }`）も含む**（Issue #2036 で計算キーの形を先に
+ * 直した際は `[` `]` を必須にしていたが、計算キーより単純で書かれやすい
+ * この形が #2042 で見つかった隣の穴——同じ機序で1文字も違わない）。
+ *
+ * `maskCommentsAndStrings` は文字列リテラルの中身を空白へ潰すため、`'env'`
+ * という字面そのものがマスク後のテキストから消えてしまい
  * `\benv\s*:\s*process\.env` では当たらない。そこでこの形だけは**マスク前の
  * 生のテキスト**を対象に走査し、マッチした範囲の**マスク後**のテキストに
  * `process.env` がそのまま残っているか（＝コメント・文字列の中の逐語引用
  * ではなく実際のコードか）を確かめてから採用する（`raw` と `masked` は
  * `maskCommentsAndStrings` が文字数・改行位置を変えない設計なので、同じ
  * index がそのまま対応する）。
+ *
+ * 引用符の候補にバッククォートを足してある（`` [`env`]: process.env ``、
+ * Issue #2042）。値の側（`:` の後ろ）にも `(?:\(\s*)*` を足し、
+ * `{ ['env']: (process.env) }` のように丸括弧で包んだ形も拾う
+ * （`env-direct-process-env` に足したのと同じ広げ方）。
+ *
+ * `kind` は、`[` `]` を伴う計算キーなら `'computed-env-key-process-env'`、
+ * 伴わない普通の引用符付きキーなら `'quoted-env-key-process-env'` を返す
+ * （呼び出し側 `findEnvPassthroughHits` が使う）。
  */
-function findComputedEnvKeyHits(rawContent, masked) {
+function findQuotedEnvKeyHits(rawContent, masked) {
   const hits = [];
-  const re = /\[\s*(['"])env\1\s*\]\s*:\s*process\.env(?![\w.])/g;
+  const re = /(\[\s*)?(['"`])env\2(?:\s*\])?\s*:\s*(?:\(\s*)*process\.env(?![\w.])/g;
   let m;
   while ((m = re.exec(rawContent))) {
     const start = m.index;
     const end = start + m[0].length;
     if (masked.slice(start, end).includes('process.env')) {
-      hits.push({ index: start });
+      hits.push({ index: start, computed: Boolean(m[1]) });
     }
   }
   return hits;
@@ -421,13 +456,15 @@ export function findEnvPassthroughHits(files) {
         snippet: (rawLines[line - 1] ?? '').trim(),
       });
     }
-    for (const { index } of findComputedEnvKeyHits(file.content, masked)) {
+    for (const { index, computed } of findQuotedEnvKeyHits(file.content, masked)) {
       const line = lineOf(index);
       hits.push({
         path: file.path,
         line,
-        kind: 'computed-env-key-process-env',
-        describe: "`['env']: process.env`（計算プロパティ名で丸ごと渡す）",
+        kind: computed ? 'computed-env-key-process-env' : 'quoted-env-key-process-env',
+        describe: computed
+          ? "`['env']: process.env`（計算プロパティ名で丸ごと渡す。丸括弧で包んだ値も含む）"
+          : "`'env': process.env`（引用符付きの普通のキーで丸ごと渡す。Issue #2042）",
         snippet: (rawLines[line - 1] ?? '').trim(),
       });
     }
@@ -537,10 +574,41 @@ export function classifyEnvPassthroughHits(hits, allowlist) {
  *   （`spawn(cmd, args, onExit)` のように変数で渡すコールバック）は
  *   `undeterminable` 側へ落ちる（安全側——見落として `missing-env` を
  *   見逃すより、判定を諦めるほうが良い）
- * - **`node:child_process` を `import * as` や `require` で読み込む形**は
- *   対象外（実データを走査した限り、この repo の対象ファイルはすべて
- *   named import — `import { execFileSync } from 'node:child_process'` —
- *   のみを使っている。#1971 の PR 本文の数え上げが根拠）
+ * - **分割代入の既定値・入れ子は追わない**（`const { spawn = fallback } = …` /
+ *   `const { spawn: { bind } } = …` のような形。正規表現が単純な
+ *   `識別子`・`識別子: 識別子` しか認識しないため、これらは黙って無視される
+ *   ——安全側だが見逃しではある。Issue #2045 の「確かめていないこと」）
+ * - **`createRequire` 経由の読み込み**（`const require = createRequire(...)`）
+ *   は対象外。`require(` という字面そのものが無いため、下の `require` 検出
+ *   には掛からない（Issue #2045 の「確かめていないこと」）
+ * - **`execa` / `cross-spawn` など、`node:child_process` 以外の起動ライブラリ**
+ *   は対象外（この検査は `child_process` の関数名だけを見る設計）
+ * - **⚠️ command（第1引数）が文字列リテラルだと、実引数の位置が詰まる
+ *   ことがある**（この PR のテストを書く過程で見つけた既存の性質。#2045 の
+ *   直しとは無関係——`findChildProcessBindings` を足す前から在った）。
+ *   `maskCommentsAndStrings` は文字列リテラルの中身を空白へ潰し、
+ *   `splitTopLevelByComma` はマスク後に trim して空になった要素を捨てる。
+ *   command がただの文字列（`spawn('git', …)`）ならその要素が丸ごと消えて
+ *   引数列が1つ左へ詰まる——多くの場合たまたま辻褄が合う（`rest` の**最後**
+ *   の要素だけを見る設計のため）が、`ARGS_ARRAY_FAMILY` の「候補が `[` で
+ *   始まる配列か」の分岐に限っては、command を識別子・式にした場合と文字列
+ *   リテラルにした場合とで判定が変わりうる。この検査自体の対象（テスト・
+ *   変異試験ハーネス）はどちらの形も実在するため、**両方が緑（誤検出しない）
+ *   であることは実データ検査で確かめているが、command が文字列リテラルの
+ *   ときに限って `missing-env` を見逃す形が理論上ありうる**——静的な近似の
+ *   限界として残す（実際に見逃した実例は無い。#2045 の「確かめていない
+ *   こと」に追加）。
+ *
+ * **⚠️ 2026-09-29 追記（Issue #2045）: 「`node:child_process` を `import * as`
+ * や `require` で読み込む形は対象外」は、かつてここで「この検査の対象外」と
+ * 書いていたが、いまは対象に入っている。** 別名の named import
+ * （`import { spawn as sp }`）・`require` / 動的 `import()` の分割代入
+ * （リネームを含む）・名前空間（`import * as cp` / `import cp from` /
+ * `const cp = require(...)`）のどれで読み込んでも、同じ呼び出しを見つける
+ * ——`findChildProcessBindings`（下）が「局所名 → 元の名前」の Map と
+ * 「名前空間の局所変数名」の集合を両方返し、`ARGS_ARRAY_FAMILY` の分類には
+ * 必ず**元の名前**を使う（別名 `sp` を `ARGS_ARRAY_FAMILY.has('sp')` のように
+ * 局所名で照らすと、別名を経由した呼び出しだけ分類が狂うため）。
  */
 const CHILD_PROCESS_CALL_NAMES = [
   'spawn',
@@ -650,40 +718,114 @@ export function classifyChildProcessCallEnv(kind, args) {
 }
 
 /**
- * `rawContent`（マスク前。import 文のモジュール指定子の判定に要る）から、
- * `node:child_process` / `child_process` の named import で読み込まれた
- * 関数名の集合を返す。
+ * `import { spawn as sp, execFile }` の `{...}` の中身（`clause`）と、
+ * `const { spawn: sp, execFile } = require(...)` の `{...}` の中身を、
+ * どちらも同じ形（`局所名 → 元の名前` の Map）で解決する。
+ *
+ * `renameToken` は `'as'`（import の別名構文）か `':'`（分割代入のリネーム
+ * 構文）のどちらか。`type` 修飾（`type SpawnOptions`）は先頭から取り除く
+ * ——値としての束縛ではなく型だけの import なので、実行時の呼び出しには
+ * 現れない。**分割代入の既定値（`spawn = fallback`）・入れ子
+ * （`spawn: { bind }`）は認識しない**（正規表現が単純な識別子・
+ * `識別子(as|:) 識別子` の形しか見ないため、そのまま素通りする——
+ * 安全側の見逃しとして doc 冒頭に明記してある）。
  */
-function findImportedChildProcessNames(rawContent) {
-  const importedNames = new Set();
-  const importRe = /^[ \t]*import\s*\{([^}]*)\}\s*from\s*['"](?:node:)?child_process['"]/gm;
+function parseNamedBindings(clause, renameToken) {
+  const map = new Map();
+  const renameRe =
+    renameToken === 'as'
+      ? /^([A-Za-z_$][\w$]*)\s*(?:as\s+([A-Za-z_$][\w$]*))?$/
+      : /^([A-Za-z_$][\w$]*)\s*(?::\s*([A-Za-z_$][\w$]*))?$/;
+  for (const rawPart of clause.split(',')) {
+    const part = rawPart.trim().replace(/^type\s+/, '');
+    if (!part) continue;
+    const m = renameRe.exec(part);
+    if (!m) continue;
+    const [, orig, alias] = m;
+    if (!CHILD_PROCESS_CALL_NAMES.includes(orig)) continue;
+    map.set(alias ?? orig, orig);
+  }
+  return map;
+}
+
+const NAMED_IMPORT_RE = /^[ \t]*import\s*\{([^}]*)\}\s*from\s*['"](?:node:)?child_process['"]/gm;
+const NAMESPACE_IMPORT_RE =
+  /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*['"](?:node:)?child_process['"]/gm;
+const DEFAULT_IMPORT_RE =
+  /^[ \t]*import\s+(?!type\b)([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?child_process['"]/gm;
+const REQUIRE_OR_IMPORT_NS_RE =
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:require|(?:await\s+)?import)\(\s*['"](?:node:)?child_process['"]\s*\)/g;
+const REQUIRE_OR_IMPORT_DESTRUCTURE_RE =
+  /\b(?:const|let|var)\s*\{\s*([^}]*)\}\s*=\s*(?:require|(?:await\s+)?import)\(\s*['"](?:node:)?child_process['"]\s*\)/g;
+
+/**
+ * `rawContent`（マスク前。import/require のモジュール指定子の判定に要る）
+ * から、`node:child_process` / `child_process` を読み込んだ束縛を全部
+ * 集める（Issue #2045）。返り値は2つ:
+ *
+ * - `callNameToOriginal`: 直接呼べる名前（`spawn` 等）の**局所名 → 元の
+ *   名前**の Map。次の形をすべて併せて集める——
+ *   - named import（`import { spawn } from …`。別名 `import { spawn as sp }`
+ *     を含む。複数行・`type` 混在も可）
+ *   - `require` / 動的 `import()` の分割代入（`const { spawn } = require(…)` /
+ *     `const { spawn } = await import(…)`。リネーム `{ spawn: sp }` を含む）
+ * - `namespaceLocalNames`: モジュール全体を指す局所変数名の集合
+ *   （`cp.spawn(...)` のようにメンバー経由で呼ぶときの `cp`）。次の形を
+ *   集める——`import * as cp from …` / `import cp from …`（default import）/
+ *   `const cp = require(…)` / `const cp = await import(…)`
+ *
+ * 元の名前（`callNameToOriginal` の値、`namespaceLocalNames` 経由なら
+ * メンバー名そのもの）を `ARGS_ARRAY_FAMILY` の分類に使う——**局所名
+ * （別名）で照らさない**。別名を局所名のまま照らすと、`import { spawn as sp }`
+ * のように `spawn` は args 配列を取る関数なのに `sp` という名前では
+ * `ARGS_ARRAY_FAMILY.has('sp')` が偽になり、分類が狂う。
+ */
+function findChildProcessBindings(rawContent) {
+  const callNameToOriginal = new Map();
+  const namespaceLocalNames = new Set();
   let m;
-  while ((m = importRe.exec(rawContent))) {
-    for (const part of m[1].split(',')) {
-      const name = part
-        .trim()
-        .split(/\s+as\s+/)
-        .pop()
-        ?.trim();
-      if (name && CHILD_PROCESS_CALL_NAMES.includes(name)) importedNames.add(name);
+
+  NAMED_IMPORT_RE.lastIndex = 0;
+  while ((m = NAMED_IMPORT_RE.exec(rawContent))) {
+    for (const [local, orig] of parseNamedBindings(m[1], 'as')) {
+      callNameToOriginal.set(local, orig);
     }
   }
-  return importedNames;
+
+  REQUIRE_OR_IMPORT_DESTRUCTURE_RE.lastIndex = 0;
+  while ((m = REQUIRE_OR_IMPORT_DESTRUCTURE_RE.exec(rawContent))) {
+    for (const [local, orig] of parseNamedBindings(m[1], ':')) {
+      callNameToOriginal.set(local, orig);
+    }
+  }
+
+  NAMESPACE_IMPORT_RE.lastIndex = 0;
+  while ((m = NAMESPACE_IMPORT_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
+
+  DEFAULT_IMPORT_RE.lastIndex = 0;
+  while ((m = DEFAULT_IMPORT_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
+
+  REQUIRE_OR_IMPORT_NS_RE.lastIndex = 0;
+  while ((m = REQUIRE_OR_IMPORT_NS_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
+
+  return { callNameToOriginal, namespaceLocalNames };
 }
 
 /**
  * `maskedContent`（マスク済み）から `const NAME = promisify(FUNC)` の形を
- * 探し、`importedNames` に実在する `FUNC` へのエイリアスだけを返す
- * （`NAME -> FUNC` の Map）。
+ * 探し、`callNameToOriginal` に実在する局所名 `FUNC` の**元の名前**への
+ * エイリアスだけを返す（`NAME -> 元の名前` の Map）。
  */
-function findPromisifyAliases(maskedContent, importedNames) {
+function findPromisifyAliases(maskedContent, callNameToOriginal) {
   const aliasMap = new Map();
   const promisifyRe =
     /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*promisify\(\s*([A-Za-z_$][\w$]*)\s*\)/g;
   let m;
   while ((m = promisifyRe.exec(maskedContent))) {
-    const [, aliasName, funcName] = m;
-    if (importedNames.has(funcName)) aliasMap.set(aliasName, funcName);
+    const [, aliasName, funcLocalName] = m;
+    if (callNameToOriginal.has(funcLocalName)) {
+      aliasMap.set(aliasName, callNameToOriginal.get(funcLocalName));
+    }
   }
   return aliasMap;
 }
@@ -703,17 +845,16 @@ export function findMissingEnvChildProcessCalls(files) {
   const hits = [];
   for (const file of files) {
     const masked = maskCommentsAndStrings(file.content);
-    const importedNames = findImportedChildProcessNames(file.content);
-    if (importedNames.size === 0) continue;
+    const { callNameToOriginal, namespaceLocalNames } = findChildProcessBindings(file.content);
+    if (callNameToOriginal.size === 0 && namespaceLocalNames.size === 0) continue;
 
-    const aliasMap = findPromisifyAliases(masked, importedNames);
-    const callNameToKind = new Map();
-    for (const name of importedNames) callNameToKind.set(name, name);
-    for (const [alias, func] of aliasMap) callNameToKind.set(alias, func);
+    const aliasMap = findPromisifyAliases(masked, callNameToOriginal);
+    const callNameToKind = new Map(callNameToOriginal);
+    for (const [alias, orig] of aliasMap) callNameToKind.set(alias, orig);
 
     const rawLines = file.content.split('\n');
-    for (const [callName, kind] of callNameToKind) {
-      const callRe = new RegExp(`(?<![\\w.$])${callName}\\s*\\(`, 'g');
+
+    const scanCall = (displayName, kind, callRe) => {
       let cm;
       while ((cm = callRe.exec(masked))) {
         const openIdx = cm.index + cm[0].length - 1;
@@ -728,10 +869,23 @@ export function findMissingEnvChildProcessCalls(files) {
           line,
           kind: 'missing-env-child-process',
           describe:
-            `\`${callName}(...)\`（\`${kind}\` 系。env オプションを指定していない —— ` +
+            `\`${displayName}(...)\`（\`${kind}\` 系。env オプションを指定していない —— ` +
             '親の process.env を丸ごと継承する）',
           snippet: (rawLines[line - 1] ?? '').trim(),
         });
+      }
+    };
+
+    // 直接呼び出し（named import / require・動的 import の分割代入。別名を含む）。
+    for (const [callName, kind] of callNameToKind) {
+      scanCall(callName, kind, new RegExp(`(?<![\\w.$])${callName}\\s*\\(`, 'g'));
+    }
+
+    // 名前空間経由のメンバー呼び出し（`cp.spawn(...)`）。プロパティ名そのものが
+    // 元の名前なので、別名解決は要らない——`kind` にそのまま使う。
+    for (const ns of namespaceLocalNames) {
+      for (const kind of CHILD_PROCESS_CALL_NAMES) {
+        scanCall(`${ns}.${kind}`, kind, new RegExp(`(?<![\\w.$])${ns}\\.${kind}\\s*\\(`, 'g'));
       }
     }
   }

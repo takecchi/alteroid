@@ -228,6 +228,71 @@ describe('check-no-env-passthrough: findEnvPassthroughHits（Issue #2036 追加�
   });
 });
 
+describe('check-no-env-passthrough: findEnvPassthroughHits（Issue #2042。#2036 の隣に在った見逃し）', () => {
+  it("`{ 'env': process.env }`（引用符付きの普通のキー。シングルクォート）を検出する", () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "spawn('a', [], { 'env': process.env });" },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['quoted-env-key-process-env']);
+  });
+
+  it('`{ "env": process.env }`（引用符付きの普通のキー。ダブルクォート）を検出する', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: 'spawn(\'a\', [], { "env": process.env });' },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['quoted-env-key-process-env']);
+  });
+
+  it('`{ env: (process.env) }`（丸括弧で包んだ値）を検出する', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "spawn('a', [], { env: (process.env) });" },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['env-direct-process-env']);
+  });
+
+  it('`{ env: (process.env as NodeJS.ProcessEnv) }`（丸括弧 + 型アサーション）を検出する', () => {
+    const hits = findEnvPassthroughHits([
+      {
+        path: 'a.test.ts',
+        content: "spawn('a', [], { env: (process.env as NodeJS.ProcessEnv) });",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['env-direct-process-env']);
+  });
+
+  it('`{ [`env`]: process.env }`（テンプレートリテラルの計算キー）を検出する', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "spawn('a', [], { [`env`]: process.env });" },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['computed-env-key-process-env']);
+  });
+
+  it("`{ ['env']: (process.env) }`（計算キー + 丸括弧で包んだ値）を検出する", () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "spawn('a', [], { ['env']: (process.env) });" },
+    ]) as Hit[];
+    expect(hits.map((h) => h.kind)).toEqual(['computed-env-key-process-env']);
+  });
+
+  it('⚠️ 対照: `{ \'foo\': process.env.X }`（"env" 以外の引用符付きキー。プロパティアクセス）は検出しない', () => {
+    const hits = findEnvPassthroughHits([
+      { path: 'a.test.ts', content: "const o = { 'foo': process.env.X };" },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it("⚠️ 回帰: コメント中の `{ 'env': process.env }` の逐語引用は検出しない", () => {
+    const content = [
+      '/**',
+      " * 実際に読んだ該当行: { 'env': process.env }",
+      ' */',
+      'const x = 1;',
+    ].join('\n');
+    const hits = findEnvPassthroughHits([{ path: 'x.test.ts', content }]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+});
+
 describe('check-no-env-passthrough: classifyChildProcessCallEnv（Issue #1971）', () => {
   it('env 無しの呼び出し（オプションそのものが無い）は missing-env', () => {
     expect(classifyChildProcessCallEnv('execFileSync', ["'git'", "['status']"])).toBe(
@@ -358,6 +423,164 @@ describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #197
       "execFileSync('git', ['status'], { cwd: '.', env: gitChildEnv() });",
     ].join('\n');
     const hits = findMissingEnvChildProcessCalls([{ path: 'a.test.ts', content }]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+});
+
+describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #2045。別名・require・名前空間・動的 import）', () => {
+  it('別名の named import（`import { spawn as sp }` → `sp(...)`）を検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import { spawn as sp } from 'node:child_process';\nsp('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('⚠️ 回帰: 別名の named import でも env を渡していれば検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import { spawn as sp } from 'node:child_process';\n" +
+          "sp('x', [], { env: gitChildEnv() });",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it("`const { spawn } = await import('node:child_process')`（動的 import の分割代入）を検出する", () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "const { spawn } = await import('node:child_process');\nspawn('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('動的 import の分割代入 + リネーム（`{ spawn: sp }`）も検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "const { spawn: sp } = await import('node:child_process');\nsp('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it("`const { spawn } = require('node:child_process')`（require の分割代入）を検出する", () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "const { spawn } = require('node:child_process');\nspawn('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('require の分割代入 + リネーム（`{ spawn: sp }`）も検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "const { spawn: sp } = require('node:child_process');\nsp('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it("`const cp = require('child_process'); cp.spawn(...)`（名前空間 require）を検出する", () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "const cp = require('child_process');\ncp.spawn('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it("`import * as cp from 'node:child_process'; cp.spawn(...)`（名前空間 import）を検出する", () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import * as cp from 'node:child_process';\ncp.spawn('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it("`import cp from 'node:child_process'; cp.spawn(...)`（既定の import）を検出する", () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import cp from 'node:child_process';\ncp.spawn('x');",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('⚠️ 回帰: 名前空間経由でも env を渡していれば検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import * as cp from 'node:child_process';\n" +
+          "cp.spawn('x', [], { env: gitChildEnv() });",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('⚠️ 回帰: 別名 import 経由でも args 配列だけの2引数呼び出しは missing-env として分類される（元の名前で ARGS_ARRAY_FAMILY を照らす）', () => {
+    // `spawn` は ARGS_ARRAY_FAMILY に属する（args 配列を第2引数に取れる）。
+    // 別名 `sp` をそのまま ARGS_ARRAY_FAMILY.has('sp') で照らすと常に false
+    // になり、options 候補の判定そのものが狂う——`spawn(cmd, args)` の2引数形
+    // （args 配列のみ、options 無し）は、家族なら「候補が `[` で始まる配列 →
+    // options 無し（missing-env）」と即断できるが、家族でなければ候補を
+    // `{` かどうかでしか判定できず undeterminable へ落ちてしまう。
+    //
+    // ⚠️ command（第1引数）は**文字列リテラルにしない**こと——
+    // `maskCommentsAndStrings` は文字列リテラルの中身を空白へ潰し、
+    // `splitTopLevelByComma` は潰れて空になった要素（trim 後に長さ0）を捨てる。
+    // 文字列の command だとその要素が丸ごと捨てられて args 列の位置がずれ、
+    // `rest` が短くなって family の分岐に関係なく `missing-env` になり、
+    // この歯が測ろうとしている違いそのものが消えてしまう。ここでは識別子
+    // （`cmdVar`）を使い、位置がずれないようにしてある。
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import { spawn as sp } from 'node:child_process';\nsp(cmdVar, ['-e', 'y']);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('⚠️ 対照: コメントに書かれた別名 import の逐語引用は検出しない', () => {
+    const content = ["// import { spawn as sp } from 'node:child_process';", 'const x = 1;'].join(
+      '\n',
+    );
+    const hits = findMissingEnvChildProcessCalls([{ path: 'a.test.ts', content }]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('⚠️ 対照: `child_process` と無関係な `cp.spawn(...)`（`cp` が別モジュールの名前空間）は検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import * as cp from 'node:some-other-module';\ncp.spawn('x');",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('⚠️ 対照: `child_process` の import が無い、ただのオブジェクトの `cp.spawn(...)` は検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "const cp = { spawn: () => {} };\ncp.spawn('x');",
+      },
+    ]) as Hit[];
     expect(hits).toEqual([]);
   });
 });
