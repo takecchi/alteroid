@@ -429,3 +429,108 @@ describe('inferDecision / 承認の語と一覧に無い否定が同居しても
     },
   );
 });
+
+/**
+ * issue #1926（クローン teto の判断、2026-09-28）: decision の無い回答を allow と
+ * 推定するのは、**回答が承認の言い方だけでできているとき**に限る。承認の語に
+ * 句読点・空白・敬語程度が付いた形までを「承認だけ」と数え、それ以外の文は
+ * 承認の語を含んでいても unreadable（答え直しの案内）にする。
+ *
+ * 理由は #1827 / #1837 の線（判定できないときは閉じる側に倒す。読み違えて
+ * 通すより、聞き直す方が安い）の延長である。#1837 / #1907 / #1923 は、承認の
+ * 語と一覧に無い否定が同居する形を、語を足して塞いできた。語を足す形では
+ * 漏れが残り続けるので、allow の側を形で絞る。
+ *
+ * **下の一覧が、承認の言い方だけで allow になる文の固定である。** 足す・外す
+ * ときは、この一覧を先に動かすこと。
+ */
+describe('inferDecision / allow は承認の言い方だけでできた回答に限る（issue #1926）', () => {
+  it.each([
+    'はい',
+    'はい。',
+    'はい！',
+    'はい、どうぞ',
+    'はい、どうぞ。',
+    'どうぞ',
+    'どうぞ、お願いします',
+    'はい、お願いします',
+    'お願いします、どうぞ',
+    '進めてよい',
+    'OK、進めてよい',
+    '進めてよいです',
+    '許可する',
+    '許可します',
+    '承認する',
+    '承認します',
+    'OK',
+    'ok',
+    'Ok.',
+    'okay',
+    'ＯＫ',
+    'OK です',
+    'OKです',
+    'yes',
+    'Yes.',
+    'Yes!',
+    'yes please',
+    'sure',
+    'Sure.',
+    'go ahead',
+    'Go ahead.',
+    'Go ahead, please.',
+    'Please go ahead.',
+    'OK, go ahead',
+    'Yes, go ahead.',
+    'Sure, go ahead!',
+    'approved',
+    'Approved.',
+    'approve',
+    'OK, thanks',
+    'はい、よろしくお願いします',
+    '  はい  ',
+  ])('承認の言い方だけの「%s」は allow', (message) => {
+    expect(inferDecision(message)).toBe('allow');
+  });
+
+  it.each([
+    // 承認の語に、一覧に無い条件や注文が付いた形——#1923 のように否定が
+    // 隠れていても、語の一覧に無ければ見分けられないので、allow にしない。
+    'OK、ただし main には push しないで',
+    'はい、でも本番には触らないこと',
+    'どうぞ、ただ先に相談して',
+    'Sure, but only on the staging branch',
+    'OK, go ahead but ask me first next time',
+    'Yes, go ahead with the dry run only',
+    'go ahead after lunch',
+    'はい、あとで',
+    'OK 🚫',
+    'OK?',
+    'はい、進めて',
+    'yes and no',
+    'ok ok but hmm',
+    // 承認の語が別の語の中にあるだけの形
+    'yesterday',
+    'okra',
+    'approval pending',
+  ])('承認の語以外を含む「%s」は unreadable（allow へ倒れない）', (message) => {
+    expect(inferDecision(message)).not.toBe('allow');
+  });
+
+  it('decideAnswer: decision を付けた回答は、文がどうであっても decision のまま効く', () => {
+    expect(decideAnswer('permission', 'allow', 'OK、ただし main には push しないで')).toEqual({
+      decision: 'allow',
+      unreadable: false,
+    });
+    expect(decideAnswer('permission', 'deny', 'はい、どうぞ')).toEqual({
+      decision: 'deny',
+      unreadable: false,
+    });
+  });
+
+  it('decideAnswer: decision の無い「OK、ただ先に相談して」は SDK へ deny を返しつつ unreadable: true を運ぶ', () => {
+    expect(decideAnswer('permission', undefined, 'OK、ただ先に相談して')).toEqual({
+      decision: 'deny',
+      unreadable: true,
+    });
+  });
+});
