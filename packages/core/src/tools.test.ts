@@ -9583,6 +9583,40 @@ describe('runner_list（器の一覧）', () => {
     expect(h.runnersCalls).toEqual([{}]);
   });
 
+  /**
+   * **表示そのものを引数で二重に締める（Issue #1949）。** `*Probe` が
+   * `asked`/`unheard`/`failed` のどれであっても、`fingerprints` を渡さなければ
+   * その行自体を出さない——値（`credentials`/`profile`/`mcpServers`）だけでなく
+   * probe 由来の新しい3行も、この外側の門で締まることを確かめる。
+   */
+  it('引数を渡さなければ、probe が asked/unheard/failed のどれでも新しい行を出さない', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          credentialsProbe: { status: 'failed', error: 'Error: credentials RPC failed (test)' },
+          profileProbe: { status: 'unheard' },
+          mcpServersProbe: { status: 'unsupported' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).not.toContain('鍵を確かめられなかった');
+    expect(reply).not.toContain('プロファイル: 確かめていない');
+    expect(reply).not.toContain('MCP の登録: 確かめられない');
+    expect(h.runnersCalls).toEqual([{}]);
+  });
+
   it('fingerprints: true を渡すと指紋が出る（方針は設定で開けられる）', async () => {
     const h = harness();
     h.setRunnersOverview({
@@ -9597,7 +9631,9 @@ describe('runner_list（器の一覧）', () => {
           credentials: [
             { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
           ],
+          credentialsProbe: { status: 'asked' },
           profile: { sha256: 'cafef00dbabe', bytes: 12, updatedAt: '2026-01-01T00:00:00.000Z' },
+          profileProbe: { status: 'asked' },
         },
       ],
       unassigned: [],
@@ -9609,6 +9645,66 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('deadbeef0000');
     expect(reply).toContain('cafef00dbabe');
     expect(h.runnersCalls).toEqual([{ fingerprints: true }]);
+  });
+
+  /**
+   * **3状態を1つも潰さない（Issue #1949）。** 以前は「頼まれていない」
+   * 「聞けなかった」「聞いたが失敗した」がどれも同じ「行が出ない」に潰れて
+   * いた——`credentialsProbe`/`profileProbe` が `unheard`/`failed` のときは、
+   * 潰さずにその意味の行を出す。
+   */
+  it('fingerprints: true でも繋がっていない（unheard）runner は「確かめていない」と出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'unreachable',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+          credentialsProbe: { status: 'unheard' },
+          profileProbe: { status: 'unheard' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    expect(reply).toContain('鍵: 確かめていない（繋がっていないので聞いていない）');
+    expect(reply).toContain('プロファイル: 確かめていない（繋がっていないので聞いていない）');
+  });
+
+  it('fingerprints: true で聞いたが失敗した（failed）runner は理由付きで「確かめられなかった」と出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          credentialsProbe: { status: 'failed', error: 'Error: credentials RPC failed (test)' },
+          profileProbe: { status: 'failed', error: 'Error: profile RPC failed (test)' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    expect(reply).toContain('鍵を確かめられなかった: Error: credentials RPC failed (test)');
+    expect(reply).toContain(
+      'プロファイルを確かめられなかった: Error: profile RPC failed (test)',
+    );
+    // **失敗の行が出た代わりに、値の欄由来の文言は出ない**（潰れていない証拠）。
+    expect(reply).not.toContain('鍵の指紋');
+    expect(reply).not.toContain('プロファイルの指紋');
   });
 
   /**
@@ -9671,6 +9767,7 @@ describe('runner_list（器の一覧）', () => {
             names: ['github', 'remote'],
             updatedAt: '2026-01-01T00:00:00.000Z',
           },
+          mcpServersProbe: { status: 'asked' as const },
           pushHealth: {
             mcpServers: {
               status: 'failed' as const,
@@ -9693,6 +9790,81 @@ describe('runner_list（器の一覧）', () => {
     const plain = await h.call('runner_list', {});
     expect(plain).not.toContain('abc123abc123');
     expect(plain).toContain('MCP の登録 失敗');
+  });
+
+  /**
+   * MCP の登録の指紋の3状態＋`unsupported`（Issue #1949）。**`pushHealth.mcpServers`
+   * （直近の押し込み結果）とは別物**——ここで見るのは指紋を聞きに行く口
+   * （`mcpServersProbe`）の話で、押し込みの成否とは別の呼び出しである。
+   */
+  it('MCP の登録も、繋がっていない（unheard）ときは「確かめていない」と出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'unreachable',
+          since: '2026-01-01T00:00:00.000Z',
+          managers: [],
+          mcpServersProbe: { status: 'unheard' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    expect(reply).toContain('MCP の登録: 確かめていない（繋がっていないので聞いていない）');
+  });
+
+  it('MCP の登録は、口を持たない古い runner（unsupported）だと専用の文言で出る（failed とは別）', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          mcpServersProbe: { status: 'unsupported' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    expect(reply).toContain('MCP の登録: 確かめられない（この runner は口を持たない。古い版）');
+    expect(reply).not.toContain('MCP の登録を確かめられなかった');
+  });
+
+  it('MCP の登録を聞いて失敗した（failed）ときは理由付きで「確かめられなかった」と出る', async () => {
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          label: 'runner-a',
+          revision: { status: 'unheard' },
+          state: 'connected',
+          since: '2026-01-01T00:00:00.000Z',
+          runnerId: 'runner-a',
+          managers: [],
+          mcpServersProbe: { status: 'failed', error: 'Error: mcpServers RPC failed (test)' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { fingerprints: true });
+
+    expect(reply).toContain('MCP の登録を確かめられなかった: Error: mcpServers RPC failed (test)');
+    expect(reply).not.toContain('確かめられない（この runner は口を持たない');
   });
 
   it('pushHealth 自体が無い（一度も繋がっていない）runner では、その行が出ない', async () => {

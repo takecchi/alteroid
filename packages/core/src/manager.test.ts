@@ -52,6 +52,7 @@ import {
   type RunnerEvent,
   type RunnerManagerState,
   type RunnerEntry,
+  type RunnerMcpServersFingerprint,
   type RunnerPlacementResources,
   type RunnerProfileFingerprint,
   type RunnerProfileResult,
@@ -7795,6 +7796,13 @@ class FakePoolRunner implements RunnerClient {
   fakeCredentials: RunnerCredentialFingerprint[] = [];
   fakeProfile: RunnerProfileFingerprint | undefined;
   /**
+   * `credentials()`/`profile()` を「聞いたが失敗した」にする（Issue #1949）。
+   * 設定すると、対応する呼び出しがこのメッセージで reject する
+   * （`fakeCredentials`/`fakeProfile` とは排他——両方設定したら失敗が勝つ）。
+   */
+  credentialsError: string | undefined;
+  profileError: string | undefined;
+  /**
    * `list()` が呼ばれた回数（#579）。**既定の挙動（`[]` を返す）は変えない**——
    * `Pool#list()` 自身は往復を1本も足さない、という設計判断
    * （`RunnerClient.list` の doc / `tools.ts` の `manager_list` の doc）を
@@ -7802,10 +7810,41 @@ class FakePoolRunner implements RunnerClient {
    * しか無い。
    */
   listCalls = 0;
+  /**
+   * MCP の登録の指紋（`mcpServers()`）を聞いた回数（Issue #1949）。
+   *
+   * **メソッドそのものの有無は `supportsMcpServers` が決める。** `RunnerClient.
+   * mcpServers` は任意メソッドで、口を持たない実装・古い runner ではプロパティ
+   * 自体が無い——それを模すため、既定（`supportsMcpServers` を渡さない）では
+   * このインスタンスに `mcpServers` を生やさない。渡したときだけ下のコンス
+   * トラクタで `this.mcpServers` に関数を代入する。
+   */
+  mcpServersCalls = 0;
+  fakeMcpServers: RunnerMcpServersFingerprint | undefined;
+  /** `mcpServers()` を「聞いたが失敗した」にする（`credentialsError` と同じ形）。 */
+  mcpServersError: string | undefined;
+  /**
+   * 任意メソッド（`RunnerClient.mcpServers?()`）。**プロパティとして持たせる**
+   * ことでインスタンスごとに有無を切り替えられるようにしてある——クラスの
+   * メソッドとして書くと全インスタンスが常に持ってしまい、「口を持たない古い
+   * runner」を模せない。
+   */
+  mcpServers?: () => Promise<RunnerMcpServersFingerprint | undefined>;
 
-  constructor(runnerId: string, report?: RunnerPlacementResources) {
+  constructor(
+    runnerId: string,
+    report?: RunnerPlacementResources,
+    options?: { supportsMcpServers?: boolean },
+  ) {
     this.runnerId = runnerId;
     this.report = report;
+    if (options?.supportsMcpServers === true) {
+      this.mcpServers = async () => {
+        this.mcpServersCalls += 1;
+        if (this.mcpServersError !== undefined) throw new Error(this.mcpServersError);
+        return this.fakeMcpServers;
+      };
+    }
   }
 
   async resources(): Promise<RunnerPlacementResources | undefined> {
@@ -7852,6 +7891,7 @@ class FakePoolRunner implements RunnerClient {
   }
   async credentials(): Promise<RunnerCredentialFingerprint[]> {
     this.credentialsCalls += 1;
+    if (this.credentialsError !== undefined) throw new Error(this.credentialsError);
     return this.fakeCredentials;
   }
   async setCredentials(): Promise<RunnerCredentialFingerprint[]> {
@@ -7859,6 +7899,7 @@ class FakePoolRunner implements RunnerClient {
   }
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
     this.profileCalls += 1;
+    if (this.profileError !== undefined) throw new Error(this.profileError);
     return this.fakeProfile;
   }
   async setProfile(): Promise<RunnerProfileResult> {
@@ -8423,12 +8464,13 @@ describe('runner の一覧（ManagerPool.runners）', () => {
     await registry.stop();
   });
 
-  it('fingerprints を渡さなければ credentials()/profile() を呼ばず、指紋を載せない', async () => {
-    const a = new FakePoolRunner('runner-a');
+  it('fingerprints を渡さなければ credentials()/profile()/mcpServers() を呼ばず、指紋も probe も載せない', async () => {
+    const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
     a.fakeCredentials = [
       { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
     ];
     a.fakeProfile = { sha256: 'cafef00dbabe', bytes: 3, updatedAt: '2026-01-01T00:00:00.000Z' };
+    a.fakeMcpServers = { sha256: 'abc123abc123', names: ['github'], updatedAt: '2026-01-01T00:00:00.000Z' };
     const stores = createMemoryStores();
     const registry = createRunnerRegistry([a]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
@@ -8437,14 +8479,22 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     expect(a.credentialsCalls).toBe(0);
     expect(a.profileCalls).toBe(0);
+    expect(a.mcpServersCalls).toBe(0);
     expect(overview.runners[0]?.credentials).toBeUndefined();
     expect(overview.runners[0]?.profile).toBeUndefined();
+    expect(overview.runners[0]?.mcpServers).toBeUndefined();
+    // **頼まれていない回は probe 欄自体を載せない**（Issue #1949。「頼まれて
+    // いない」と「聞けなかった」を同じ値へ潰さないための、もう一段の区別——
+    // 頼まれていない回は欄そのものが無い、聞けなかった回は `unheard` が入る）。
+    expect(overview.runners[0]?.credentialsProbe).toBeUndefined();
+    expect(overview.runners[0]?.profileProbe).toBeUndefined();
+    expect(overview.runners[0]?.mcpServersProbe).toBeUndefined();
 
     await pool.stop();
     await registry.stop();
   });
 
-  it('fingerprints: true を渡すと、開いている器の鍵とプロファイルの指紋を添える', async () => {
+  it('fingerprints: true を渡すと、開いている器の鍵とプロファイルの指紋を添え、probe は asked になる', async () => {
     const a = new FakePoolRunner('runner-a');
     a.fakeCredentials = [
       { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
@@ -8458,9 +8508,178 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     expect(overview.runners[0]?.credentials).toEqual(a.fakeCredentials);
     expect(overview.runners[0]?.profile).toEqual(a.fakeProfile);
+    expect(overview.runners[0]?.credentialsProbe).toEqual({ status: 'asked' });
+    expect(overview.runners[0]?.profileProbe).toEqual({ status: 'asked' });
 
     await pool.stop();
     await registry.stop();
+  });
+
+  /**
+   * **asked かつ0件・無しでも `asked` である**（Issue #1949。`RunnerFingerprintProbe`
+   * の doc）。0件と「聞けなかった」を混同しないことを、実際に0件を返す fake で確かめる。
+   */
+  it('fingerprints: true で鍵0件・プロファイル無しでも probe は asked のまま（0件を「聞けなかった」と混同しない）', async () => {
+    const a = new FakePoolRunner('runner-a');
+    // fakeCredentials は既定で []、fakeProfile は既定で undefined のまま使う。
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners({ fingerprints: true });
+
+    expect(overview.runners[0]?.credentials).toEqual([]);
+    expect(overview.runners[0]?.profile).toBeUndefined();
+    expect(overview.runners[0]?.credentialsProbe).toEqual({ status: 'asked' });
+    expect(overview.runners[0]?.profileProbe).toEqual({ status: 'asked' });
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **繋がっていない相手には聞きに行かない（`unheard`）**（Issue #1949）。
+   * 以前はここも `undefined` に潰れ、「頼まれていない」「聞いて失敗した」と
+   * 区別が付かなかった。
+   */
+  it('fingerprints: true でも繋がっていない runner には聞きに行かず、probe は unheard になる', async () => {
+    const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+    await registry.register({
+      label: 'http://runner:later',
+      open: () => Promise.reject(new Error('fetch failed')),
+    });
+    const stores = createMemoryStores();
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners({ fingerprints: true });
+
+    expect(overview.runners[0]?.credentials).toBeUndefined();
+    expect(overview.runners[0]?.profile).toBeUndefined();
+    expect(overview.runners[0]?.credentialsProbe).toEqual({ status: 'unheard' });
+    expect(overview.runners[0]?.profileProbe).toEqual({ status: 'unheard' });
+    expect(overview.runners[0]?.mcpServersProbe).toEqual({ status: 'unheard' });
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * **聞いたが失敗した（`failed`）**（Issue #1949——この Issue の核）。
+   * 以前は `.catch(() => undefined)` がこれを握り潰し、`unheard`・「頼まれて
+   * いない」と同じ `undefined` になっていた。理由（`error`）が1行で載ることも
+   * 併せて確かめる（`reasonOf` を通す）。
+   */
+  it('fingerprints: true で聞いたが失敗したら、probe は failed になり理由が載る（credentials/profile とも潰さない）', async () => {
+    const a = new FakePoolRunner('runner-a');
+    a.credentialsError = 'credentials RPC failed (test)';
+    a.profileError = 'profile RPC failed (test)';
+    const stores = createMemoryStores();
+    const registry = createRunnerRegistry([a]);
+    const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+    const overview = await pool.runners({ fingerprints: true });
+
+    // **失敗した回は値の欄が省かれる**——`credentials`/`profile` 自体は
+    // 「聞けなかった」場合と同じ形のままで、区別は probe が持つ。
+    expect(overview.runners[0]?.credentials).toBeUndefined();
+    expect(overview.runners[0]?.profile).toBeUndefined();
+    // **`reasonOf`（`collapseErrorCause`）が `name: message` に畳む**——
+    // ここでは `Error` の1行分がそのまま乗る（`error-cause.ts` の doc）。
+    expect(overview.runners[0]?.credentialsProbe).toEqual({
+      status: 'failed',
+      error: 'Error: credentials RPC failed (test)',
+    });
+    expect(overview.runners[0]?.profileProbe).toEqual({
+      status: 'failed',
+      error: 'Error: profile RPC failed (test)',
+    });
+
+    await pool.stop();
+    await registry.stop();
+  });
+
+  /**
+   * MCP の登録の指紋（Issue #1949）。**`credentials`/`profile` の3状態に加え、
+   * 4つ目の `unsupported`（口を持たない古い runner）を持つ**——`RunnerClient.
+   * mcpServers` は任意メソッドで、`FakePoolRunner` は `supportsMcpServers` を
+   * 渡さない既定でこのメソッドを持たない。
+   */
+  describe('runner_list の MCP の登録の指紋（mcpServersProbe、Issue #1949）', () => {
+    it('口を持たない runner（fake が supportsMcpServers を渡していない）は unsupported になる', async () => {
+      const a = new FakePoolRunner('runner-a');
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([a]);
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+      const overview = await pool.runners({ fingerprints: true });
+
+      expect(overview.runners[0]?.mcpServers).toBeUndefined();
+      expect(overview.runners[0]?.mcpServersProbe).toEqual({ status: 'unsupported' });
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('口を持つ runner が聞けたら asked になり、指紋と名前が載る', async () => {
+      const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+      a.fakeMcpServers = {
+        sha256: 'abc123abc123',
+        names: ['github', 'remote'],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([a]);
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+      const overview = await pool.runners({ fingerprints: true });
+
+      expect(a.mcpServersCalls).toBe(1);
+      expect(overview.runners[0]?.mcpServers).toEqual(a.fakeMcpServers);
+      expect(overview.runners[0]?.mcpServersProbe).toEqual({ status: 'asked' });
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('口を持つ runner が聞いて失敗したら failed になる（unsupported とは別の文言）', async () => {
+      const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+      a.mcpServersError = 'mcpServers RPC failed (test)';
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([a]);
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+      const overview = await pool.runners({ fingerprints: true });
+
+      expect(overview.runners[0]?.mcpServers).toBeUndefined();
+      expect(overview.runners[0]?.mcpServersProbe).toEqual({
+        status: 'failed',
+        error: 'Error: mcpServers RPC failed (test)',
+      });
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('fingerprints を渡さなければ、口を持つ runner でも mcpServers() を呼ばず probe も無い', async () => {
+      const a = new FakePoolRunner('runner-a', undefined, { supportsMcpServers: true });
+      a.fakeMcpServers = {
+        sha256: 'abc123abc123',
+        names: ['github'],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([a]);
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+      const overview = await pool.runners();
+
+      expect(a.mcpServersCalls).toBe(0);
+      expect(overview.runners[0]?.mcpServers).toBeUndefined();
+      expect(overview.runners[0]?.mcpServersProbe).toBeUndefined();
+
+      await pool.stop();
+      await registry.stop();
+    });
   });
 
   /**
