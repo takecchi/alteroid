@@ -49,6 +49,17 @@ workspace
 .mutation-testing
 MUTATION-IN-PROGRESS.json
 
+# ネストした vitest を起こす統合テスト（`vitest.tmpdir.test.ts` / `vitest.env-scrub.test.ts`）が
+# 走っているあいだ、リポジトリ直下に現れる使い捨てのスクラッチ（`.vitest-tmpdir-itest-<uuid>` /
+# `.vitest-env-scrub-itest-<uuid>`。bare import の `vitest` / `vitest/config` が祖先方向へ
+# node_modules を解決できるよう、os.tmpdir() ではなく REPO_ROOT 直下に作る——
+# `grep -Fn -- 'os.tmpdir() の下だと祖先に node_modules が無く解決に失敗する' vitest.tmpdir.test.ts`）。
+# 無視していないと、存在する短い間（子の vitest 実行が終わるまで）に
+# `git ls-files -co --exclude-standard`（`scripts/git-scannable-files-core.mjs`）の対象へ入り、
+# 同時に走る「repo 全体を走査する検査」がこの一時ファイルを拾って誤判定する（Issue #2015）。
+# `.mutation-testing` / `MUTATION-IN-PROGRESS.json`（直下）と同じ理由・同じ直し方。
+.vitest-*-itest-*
+
 # misc
 *.log
 .DS_Store
