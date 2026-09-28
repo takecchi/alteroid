@@ -9,29 +9,34 @@ import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
- * トップレベルの形だけを見る。**`jobs` の各要素はここでは検査しない**
- * （issue #1868）——`z.array(jobSchema)` にすると、1行の不正が配列全体を
- * 道連れにする（直す前の形。`#read()` の doc）。行ごとの検査は `#read()` が
- * `jobSchema.safeParse` で1行ずつ行う。
+ * トップレベルの形だけを見る。**`jobs` / `approvals` のどちらも、各要素は
+ * ここでは検査しない**——`z.array(jobSchema)` / `z.array(pendingApprovalSchema)`
+ * にすると、1行の不正が配列全体を道連れにする（直す前の形。`#read()` の doc）。
+ * 行ごとの検査は `#read()` がそれぞれ `jobSchema.safeParse` /
+ * `pendingApprovalSchema.safeParse` で1行ずつ行う。
  *
- * **`approvals` はこれまでどおり配列全体を1回で検査する。** この Issue の
- * 担当範囲は「委譲の行（`jobs`）」だけで、承認待ちキューの挙動は変えない
- * ——承認の行が同じ穴を持つかどうかは別問題として残す。
+ * **経緯（issue #1868 → #1928）。** `jobs` 側は #1868（PR #1884）でこの形に
+ * 直った。そのとき `approvals` は「この Issue の担当範囲は委譲の行（`jobs`）
+ * だけ」として `z.array(pendingApprovalSchema)` のまま残し、コメントに
+ * 「承認の行が同じ穴を持つかどうかは別問題として残す」と書いていた——
+ * 別問題ではあったが、同じ穴ではあった。#1928 で確かめて同じ形にそろえた。
  */
 const fileSchema = z.object({
   jobs: z.array(z.unknown()).default([]),
-  approvals: z.array(pendingApprovalSchema).default([]),
+  approvals: z.array(z.unknown()).default([]),
 });
 
 /**
- * `jobs.json` の中身。**検査を通った `jobs` と、形が不正で読めなかった
- * `invalidJobsRaw`（生の要素。パース前のまま）を分けて持つ。**
+ * `jobs.json` の中身。**検査を通った `jobs` / `approvals` と、それぞれ形が
+ * 不正で読めなかった `invalidJobsRaw` / `invalidApprovalsRaw`（生の要素。
+ * パース前のまま）を分けて持つ。**
  *
- * `invalidJobsRaw` を消さずに持ち回るのが、この直しの核心である
- * （`FsCredentialVaultStore` の `CredentialFile`・issue #1740 と同じ形）。
- * `putJob` / `updateJob` / `clear` はいずれも最終的にこれを丸ごと
- * シリアライズし直す（`#serialize`）ので、ここへ入れなかった行は次の
- * 書き込みで消える——`jobs`（検査を通った行）だけを書けば、版ずれ・手編集で
+ * `invalidJobsRaw` / `invalidApprovalsRaw` を消さずに持ち回るのが、この
+ * 直しの核心である（`FsCredentialVaultStore` の `CredentialFile`・issue
+ * #1740 と同じ形。approvals 側は #1928 で jobs 側 #1868 にそろえた）。
+ * `putJob` / `updateJob` / `putApproval` / `clear` はいずれも最終的にこれを
+ * 丸ごとシリアライズし直す（`#serialize`）ので、ここへ入れなかった行は次の
+ * 書き込みで消える——検査を通った行だけを書けば、版ずれ・手編集で
  * できた不正な行が黙って消えることになる。
  */
 interface JobFile {
@@ -39,25 +44,31 @@ interface JobFile {
   /** 行の形が不正で読めなかった、生の要素（パース前のまま）。 */
   invalidJobsRaw: unknown[];
   approvals: PendingApproval[];
+  /** 承認待ちの行の形が不正で読めなかった、生の要素（パース前のまま）。issue #1928。 */
+  invalidApprovalsRaw: unknown[];
 }
 
-const EMPTY: JobFile = { jobs: [], invalidJobsRaw: [], approvals: [] };
+const EMPTY: JobFile = { jobs: [], invalidJobsRaw: [], approvals: [], invalidApprovalsRaw: [] };
 
 /**
  * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
  * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
  * 出すのは「どの欄が」だけである（`FsCredentialVaultStore` の
- * `summarizeInvalidFields` と同じ理由・同じ形）。
+ * `summarizeInvalidFields` と同じ理由・同じ形）。**`jobs` / `approvals`
+ * どちらの行にも使う共通の関数**（issue #1928 で jobs 専用から共通化した）。
  */
-function summarizeInvalidJobFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
   const fields = [
     ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
   ];
   return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
 }
 
-/** 生の要素から、値を出さずに「id」だけを安全に取り出す（取れなければ `undefined`）。 */
-function extractJobId(raw: unknown): string | undefined {
+/**
+ * 生の要素から、値を出さずに「id」だけを安全に取り出す（取れなければ `undefined`）。
+ * **`jobs` / `approvals` どちらの行にも使う共通の関数**（issue #1928）。
+ */
+function extractRowId(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const id = (raw as Record<string, unknown>).id;
   return typeof id === 'string' ? id : undefined;
@@ -72,6 +83,23 @@ function describeSkippedJobRow(params: { index: number; reason: string; id?: str
   const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
   return (
     `alteroid: jobs の不正な行を読み飛ばしました` +
+    `（${params.index + 1} 行目、${params.reason}）${idNote}`
+  );
+}
+
+/**
+ * 飛ばした approval 行を stderr へ1行で要約する。**id 以外の値は絶対に
+ * 載せない**——`question` / `context` には人間の依頼文がそのまま入りうる
+ * （`describeSkippedJobRow` と同じ理由。issue #1928）。
+ */
+function describeSkippedApprovalRow(params: {
+  index: number;
+  reason: string;
+  id?: string;
+}): string {
+  const idNote = params.id === undefined ? '' : ` id=${JSON.stringify(params.id)}`;
+  return (
+    `alteroid: approvals の不正な行を読み飛ばしました` +
     `（${params.index + 1} 行目、${params.reason}）${idNote}`
   );
 }
@@ -104,7 +132,7 @@ export class FsJobStore implements JobStore {
       // `invalidJobsRaw` として残り続けると、ファイルに同じ id が2行並び、
       // 以後 `listJobs()` のたびに直したはずの跡が出続ける——「直した」という
       // 呼び手の意図に対する驚きになる。
-      const invalidJobsRaw = file.invalidJobsRaw.filter((raw) => extractJobId(raw) !== job.id);
+      const invalidJobsRaw = file.invalidJobsRaw.filter((raw) => extractRowId(raw) !== job.id);
       return { ...file, jobs, invalidJobsRaw };
     });
   }
@@ -159,57 +187,70 @@ export class FsJobStore implements JobStore {
     await this.#update((file) => {
       const approvals = file.approvals.filter((existing) => existing.id !== approval.id);
       approvals.push(pendingApprovalSchema.parse(approval));
-      return { ...file, approvals };
+      // **書き込む id と一致する壊れた行は置き換える**（`putJob` と同じ
+      // フォローアップ。issue #1740 / #1868）。直したはずの id の壊れた行が
+      // `invalidApprovalsRaw` として残り続けると、ファイルに同じ id が2行
+      // 並び、以後 `listApprovals()` のたびに直したはずの跡が出続ける
+      // ——「直した」という呼び手の意図に対する驚きになる（issue #1928）。
+      const invalidApprovalsRaw = file.invalidApprovalsRaw.filter(
+        (raw) => extractRowId(raw) !== approval.id,
+      );
+      return { ...file, approvals, invalidApprovalsRaw };
     });
   }
 
   /**
    * ジョブと承認待ちを両方消す（`JobStore.clear` の doc）。
    *
-   * **壊れた行（`invalidJobsRaw`）も一緒に消す**（issue #1868）。以前はここで
-   * 壊れた行を残していた——`putJob` / `updateJob` が「読めない行を判断材料も
+   * **壊れた行（`invalidJobsRaw` / `invalidApprovalsRaw`）も一緒に消す**
+   * （issue #1868、approvals 側は #1928）。以前はここで壊れた行を残していた
+   * ——`putJob` / `updateJob` / `putApproval` が「読めない行を判断材料も
    * 無いまま黙って消さない」約束を守るのと同じ理由からだったが、`clear()` は
    * それらとは性質が違う。`clear()` はワークスペースのリセット専用の全消去
    * 操作で、pg 実装は表の行を `DELETE` で全部消す（`PgJobStore.clear` の
    * doc）——行の中身が壊れているかどうかは関係なく消える。fs だけが
-   * `invalidJobsRaw` を生かして残すと、同じ `clear()` の意味が実装ごとに
-   * 変わってしまう（fs だけ「リセットしたのに壊れた行が残っている」状態に
-   * なる）。
+   * `invalidJobsRaw` / `invalidApprovalsRaw` を生かして残すと、同じ
+   * `clear()` の意味が実装ごとに変わってしまう（fs だけ「リセットしたのに
+   * 壊れた行が残っている」状態になる）。
    *
-   * **返す件数も、消した壊れた行を数える**（issue #1892）。pg 実装は
-   * `DELETE … RETURNING` の行数をそのまま返すので、壊れた行も件数に入る。
-   * fs だけが検査を通った行だけを数えると、同じ状態で呼んだ `clear()` の
-   * 件数が実装ごとに食い違い、`POST /reset` の応答が実際に消えた件数より
-   * 少なく出る。
+   * **返す件数も、消した壊れた行を数える**（issue #1892、approvals 側は
+   * #1928）。pg 実装は `DELETE … RETURNING` の行数をそのまま返すので、
+   * 壊れた行も件数に入る。fs だけが検査を通った行だけを数えると、同じ状態で
+   * 呼んだ `clear()` の件数が実装ごとに食い違い、`POST /reset` の応答が
+   * 実際に消えた件数より少なく出る。
    */
   async clear(): Promise<{ jobs: number; approvals: number }> {
     let removed = { jobs: 0, approvals: 0 };
     await this.#update((file) => {
       removed = {
         jobs: file.jobs.length + file.invalidJobsRaw.length,
-        approvals: file.approvals.length,
+        approvals: file.approvals.length + file.invalidApprovalsRaw.length,
       };
-      return { jobs: [], invalidJobsRaw: [], approvals: [] };
+      return { jobs: [], invalidJobsRaw: [], approvals: [], invalidApprovalsRaw: [] };
     });
     return removed;
   }
 
   /**
-   * `jobs.json` を読む。**`jobs` は行ごとに検査し、不正な1行だけを飛ばす**
-   * （issue #1868。以前は `fileSchema.parse` で `jobs` 配列全体を1回に検査して
-   * いたため、1行でも不正だと `listJobs()` が丸ごと例外を投げ、正しい行も
-   * 読めなくなっていた——pg 実装は issue #224 の作法で最初からこの形だった）。
+   * `jobs.json` を読む。**`jobs` と `approvals` の両方を、行ごとに検査して
+   * 不正な1行だけを飛ばす**（`jobs` は issue #1868、`approvals` は #1928。
+   * 以前は `fileSchema.parse` でそれぞれの配列全体を1回に検査していたため、
+   * 1行でも不正だと `listJobs()` / `listApprovals()` が丸ごと例外を投げ、
+   * 正しい行も読めなくなっていた——`#read()` は `jobs` と `approvals` を
+   * 同時に返す1つの関数なので、**どちらの配列で例外が起きても両方が道連れに
+   * なる**。pg 実装（`PgJobStore`）は issue #224 の作法で、jobs も approvals も
+   * 最初からこの形だった。
    *
-   * **飛ばすのは行の形が不正なとき（`status` が enum に無い・欄が欠けている・
-   * 型が違う、など）だけである。** ファイルそのものが JSON として読めない・
-   * トップレベルの形が違う（`jobs` が配列でない等）ときは、いまの振る舞い
-   * （例外）のままにしてある——それは1行の問題ではないため（`approvals` も
-   * 同様、こちらは行ごとの検査そのものを導入していない）。
+   * **飛ばすのは行の形が不正なとき（enum に無い値・欄が欠けている・型が
+   * 違う、など）だけである。** ファイルそのものが JSON として読めない・
+   * トップレベルの形が違う（`jobs` / `approvals` が配列でない等）ときは、
+   * いまの振る舞い（例外）のままにしてある——それは1行の問題ではないため。
    *
-   * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedJobRow`。**値は
-   * summary 等の本文を含めず、id だけ**）、`invalidJobsRaw` として生の形のまま
-   * 保持する——`putJob` / `updateJob` / `clear` がこれを書き戻すことで、
-   * 版ずれ・手編集でできた不正な行を黙って消さない。
+   * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedJobRow` /
+   * `describeSkippedApprovalRow`。**値は summary / question / context 等の
+   * 本文を含めず、id だけ**）、`invalidJobsRaw` / `invalidApprovalsRaw` として
+   * 生の形のまま保持する——`putJob` / `updateJob` / `putApproval` / `clear`
+   * がこれを書き戻すことで、版ずれ・手編集でできた不正な行を黙って消さない。
    */
   async #read(): Promise<JobFile> {
     try {
@@ -227,12 +268,29 @@ export class FsJobStore implements JobStore {
         process.stderr.write(
           `${describeSkippedJobRow({
             index,
-            reason: summarizeInvalidJobFields(result.error.issues),
-            id: extractJobId(rawJob),
+            reason: summarizeInvalidFields(result.error.issues),
+            id: extractRowId(rawJob),
           })}\n`,
         );
       });
-      return { jobs, invalidJobsRaw, approvals: top.approvals };
+      const approvals: PendingApproval[] = [];
+      const invalidApprovalsRaw: unknown[] = [];
+      top.approvals.forEach((rawApproval, index) => {
+        const result = pendingApprovalSchema.safeParse(rawApproval);
+        if (result.success) {
+          approvals.push(result.data);
+          return;
+        }
+        invalidApprovalsRaw.push(rawApproval);
+        process.stderr.write(
+          `${describeSkippedApprovalRow({
+            index,
+            reason: summarizeInvalidFields(result.error.issues),
+            id: extractRowId(rawApproval),
+          })}\n`,
+        );
+      });
+      return { jobs, invalidJobsRaw, approvals, invalidApprovalsRaw };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
@@ -240,13 +298,18 @@ export class FsJobStore implements JobStore {
   }
 
   /**
-   * `JobFile` をディスク上の形へ直す。**検査を通った `jobs` と `invalidJobsRaw`
-   * を1本の `jobs` 配列へ合流させる**——分けたまま書くと、次の `#read()` が
-   * `fileSchema`（トップレベルの形しか見ない）を通すときに未知のキー
-   * （`invalidJobsRaw`）として黙って捨てられ、壊れた行を持ち回る意味が消える。
+   * `JobFile` をディスク上の形へ直す。**検査を通った `jobs` / `approvals` と、
+   * それぞれの `invalidJobsRaw` / `invalidApprovalsRaw` を1本の配列へ合流
+   * させる**——分けたまま書くと、次の `#read()` が `fileSchema`（トップ
+   * レベルの形しか見ない）を通すときに未知のキー（`invalidJobsRaw` /
+   * `invalidApprovalsRaw`）として黙って捨てられ、壊れた行を持ち回る意味が
+   * 消える。
    */
-  #serialize(file: JobFile): { jobs: unknown[]; approvals: PendingApproval[] } {
-    return { jobs: [...file.jobs, ...file.invalidJobsRaw], approvals: file.approvals };
+  #serialize(file: JobFile): { jobs: unknown[]; approvals: unknown[] } {
+    return {
+      jobs: [...file.jobs, ...file.invalidJobsRaw],
+      approvals: [...file.approvals, ...file.invalidApprovalsRaw],
+    };
   }
 
   /**
