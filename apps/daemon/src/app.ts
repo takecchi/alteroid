@@ -3218,7 +3218,19 @@ export function createApp(deps: AppDeps) {
             await clone.answerApproval(id, answer, answerApprovalViaOf(c.get('principal')));
             results.push({ id, ok: true });
           } catch (error) {
-            results.push({ id, ok: false, error: String(error) });
+            // 先の判定を通った後に、別の回答・取り下げが先に届いていた（issue #2007）。
+            // 先の判定と同じ語で返す。
+            const settled = approvalSettledKindOf(error);
+            results.push({
+              id,
+              ok: false,
+              error:
+                settled === 'answered'
+                  ? 'already answered'
+                  : settled === 'withdrawn'
+                    ? 'withdrawn'
+                    : String(error),
+            });
           }
         }
         return c.json({ results });
@@ -3269,11 +3281,20 @@ export function createApp(deps: AppDeps) {
         if (approval.withdrawnAt !== undefined) {
           return c.json({ error: 'withdrawn' as const }, 409);
         }
-        await clone.answerApproval(
-          id,
-          c.req.valid('json').answer,
-          answerApprovalViaOf(c.get('principal')),
-        );
+        try {
+          await clone.answerApproval(
+            id,
+            c.req.valid('json').answer,
+            answerApprovalViaOf(c.get('principal')),
+          );
+        } catch (error) {
+          // 先の判定を通った後に、別の回答・取り下げが先に届いていた（issue #2007）。
+          // 先の判定と同じ 409 で返す。
+          const settled = approvalSettledKindOf(error);
+          if (settled === 'answered') return c.json({ error: 'already answered' as const }, 409);
+          if (settled === 'withdrawn') return c.json({ error: 'withdrawn' as const }, 409);
+          throw error;
+        }
         return c.json({ ok: true });
       },
     )
@@ -7190,3 +7211,15 @@ export function createApp(deps: AppDeps) {
 }
 
 export type AppType = ReturnType<typeof createApp>;
+
+/**
+ * `Clone#answerApproval` が、既に終わった承認への回答を断ったときの種類（issue #2007）。
+ * core の `ApprovalAlreadySettledError` を `instanceof` ではなく `name` と `settled` で
+ * 見分ける——`CloneHost` の向こうの実装を差し替えるテストの偽物でも、同じ形で投げれば
+ * 同じ扱いになるようにするため。
+ */
+function approvalSettledKindOf(error: unknown): 'answered' | 'withdrawn' | undefined {
+  if (!(error instanceof Error) || error.name !== 'ApprovalAlreadySettledError') return undefined;
+  const settled = (error as Error & { settled?: unknown }).settled;
+  return settled === 'answered' || settled === 'withdrawn' ? settled : undefined;
+}

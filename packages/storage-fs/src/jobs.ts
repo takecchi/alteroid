@@ -200,6 +200,51 @@ export class FsJobStore implements JobStore {
   }
 
   /**
+   * 現在の値を排他区間（`withPathLock`）の中で読み直し、`mutate` で書き換えて
+   * 書く（issue #2007。`JobStore.updateApproval` の doc）。**`updateJob`
+   * （上）と同じ独立させ方**——`#update`（戻り値を持たない）は `putApproval` /
+   * `clear` も使っているので、そちらを触ると変更の範囲が承認待ちキューの
+   * 実装全体へ広がってしまう。
+   *
+   * **`found` は検査を通った `approvals` からしか探さない。** id が壊れた行
+   * （`invalidApprovalsRaw`）にしか無ければ「無い」と同じ扱いになる
+   * （`updateJob` の同じ注意）。
+   *
+   * **`mutate` が `null` を返したら何も書かない**（`JobStore.updateApproval`
+   * の「`updateJob` には無い拡張」）。壊れた行（`invalidApprovalsRaw`）の
+   * 持ち回りは、書く回だけ関係する——書かない回はファイルへ一切触れない
+   * ので、`putApproval` が守る「書き込む id と一致する壊れた行は置き換える」
+   * （issue #1928）の対象にもならない。
+   */
+  async updateApproval(
+    id: string,
+    mutate: (current: PendingApproval) => PendingApproval | null,
+  ): Promise<PendingApproval | null> {
+    return withPathLock(this.#path, async () => {
+      const file = await this.#read();
+      const found = file.approvals.find((entry) => entry.id === id);
+      if (found === undefined) return null;
+      // 同期のまま最後まで書き換える（`updateJob` と同じ注意——`mutate` に
+      // await を挟ませない）。
+      const result = mutate(found);
+      if (result === null) return null;
+      const next = pendingApprovalSchema.parse(result);
+      const approvals = file.approvals.map((entry) => (entry.id === id ? next : entry));
+      // 書き込む id と一致する壊れた行は置き換える（`putApproval` と同じ
+      // フォローアップ。issue #1740 / #1868 / #1928）。
+      const invalidApprovalsRaw = file.invalidApprovalsRaw.filter(
+        (raw) => extractRowId(raw) !== id,
+      );
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(
+        this.#path,
+        `${JSON.stringify(this.#serialize({ ...file, approvals, invalidApprovalsRaw }), null, 2)}\n`,
+      );
+      return next;
+    });
+  }
+
+  /**
    * ジョブと承認待ちを両方消す（`JobStore.clear` の doc）。
    *
    * **壊れた行（`invalidJobsRaw` / `invalidApprovalsRaw`）も一緒に消す**

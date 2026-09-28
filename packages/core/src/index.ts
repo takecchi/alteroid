@@ -1098,6 +1098,7 @@ export {
   type CloneOptions,
   type RedeliveryGate,
   type TokenPoolReopenedPayload,
+  ApprovalAlreadySettledError,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 /**

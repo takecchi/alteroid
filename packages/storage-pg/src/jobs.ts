@@ -360,6 +360,46 @@ export class PgJobStore implements JobStore {
   }
 
   /**
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く（issue #2007。
+   * `JobStore.updateApproval` の doc）。`updateJob`（上）と同じ形——1つの
+   * トランザクションの中で `select … for update` で行を押さえてから書く。
+   *
+   * **読めない行（`pendingApprovalSchema` に合わない）は「無い」と同じに扱う**
+   * （`getApproval` / `listApprovals` が `safeParse` で外すのと揃える）。
+   * **`mutate` が `null` を返したら何も書かない**（`updateJob` には無い拡張）。
+   */
+  async updateApproval(
+    id: string,
+    mutate: (current: PendingApproval) => PendingApproval | null,
+  ): Promise<PendingApproval | null> {
+    return this.#db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ approval: approvals.approval })
+        .from(approvals)
+        .where(eq(approvals.id, id))
+        .limit(1)
+        .for('update');
+      const row = rows[0];
+      if (row === undefined) return null;
+      const parsed = pendingApprovalSchema.safeParse(row.approval);
+      if (!parsed.success) return null;
+
+      const result = mutate(parsed.data);
+      if (result === null) return null;
+      const next = stripNulls(pendingApprovalSchema.parse(result));
+      const answeredAt = next.answeredAt === undefined ? null : new Date(next.answeredAt);
+      const withdrawnAt = next.withdrawnAt === undefined ? null : new Date(next.withdrawnAt);
+
+      await tx
+        .update(approvals)
+        .set({ answeredAt, withdrawnAt, approval: next })
+        .where(eq(approvals.id, id));
+
+      return next;
+    });
+  }
+
+  /**
    * ジョブと承認待ちを両方消す（`JobStore.clear` の doc）。
    *
    * **`#cache`（段1/段2の覚え、上の doc）は直接触らない。** 次の `listJobs()`

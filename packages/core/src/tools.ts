@@ -6648,7 +6648,32 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         const withdrawnAt = new Date().toISOString();
-        await stores.jobs.putApproval({ ...existing, withdrawnAt, withdrawnReason: reason });
+        // **読み直す1操作で書き、その間に回答・取り下げが入っていれば書かない（issue #2007）。**
+        // 上の判定は早道として残す。以前はここで上の写しを `putApproval` で丸ごと書き
+        // 戻していたので、読んでから書くまでの間に人間の回答が入ると、その回答を消して
+        // 取り下げを立てていた。
+        let settledNow: PendingApproval | undefined;
+        const written = await stores.jobs.updateApproval(id, (current) => {
+          if (current.answeredAt !== undefined || current.withdrawnAt !== undefined) {
+            settledNow = current;
+            return null;
+          }
+          return { ...current, withdrawnAt, withdrawnReason: reason };
+        });
+        if (written === null) {
+          if (settledNow?.answeredAt !== undefined) {
+            return text(
+              `${id} は既に ${settledNow.answeredAt} に回答済みなので取り下げられない` +
+                `（回答: ${settledNow.answer ?? '（本文なし）'}）。`,
+            );
+          }
+          if (settledNow?.withdrawnAt !== undefined) {
+            return text(
+              `${id} は既に ${settledNow.withdrawnAt} に取り下げ済み（理由: ${settledNow.withdrawnReason ?? ''}）。`,
+            );
+          }
+          return text(`承認待ち ${id} は無い（id が違う）。`);
+        }
         // **自分で閉じたことは日誌に残す**（`commitment_close` と同じ理由 —
         // `reason` の説明そのものが「人間はこれを読んで後から否定する」と
         // 言っている以上、材料は台帳だけでなく日誌にも要る）。同じ

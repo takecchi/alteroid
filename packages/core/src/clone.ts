@@ -1535,6 +1535,22 @@ export function createClone(options: CloneOptions): CloneHost {
  * 同じ `approvalId` でも回答のたびに違う id が出る——「1回目の回答の合図を
  * 2回目の回答で上書きしてしまう」事故を防ぐ。
  */
+/**
+ * 既に終わった（回答済み・取り下げ済みの）承認への回答を断った（issue #2007。
+ * `Clone#answerApproval` が投げる）。`apps/daemon` はこれを 409 に写す。
+ */
+export class ApprovalAlreadySettledError extends Error {
+  constructor(
+    readonly approvalId: string,
+    readonly settled: 'answered' | 'withdrawn',
+  ) {
+    super(
+      `承認待ち ${approvalId} は既に${settled === 'answered' ? '回答済み' : '取り下げ済み'}なので、回答しなかった`,
+    );
+    this.name = 'ApprovalAlreadySettledError';
+  }
+}
+
 export function humanAnswerEventId(approvalId: string, answeredAt: string): string {
   return `human-answer-${approvalId}-${answeredAt}`;
 }
@@ -2828,13 +2844,36 @@ class Clone implements CloneHost {
     // 受信箱への永続化（下）までの間にプロセスが落ちると、この行は「回答済みだが
     // 未配達」のまま残る——それが `#reconcileUndeliveredAnswers` が起動時に
     // 拾い直す対象そのものである。
-    await this.#stores.jobs.putApproval({
-      ...approval,
-      answeredAt,
-      answer,
-      answerDelivery: 'pending',
-      ...(via === undefined ? {} : { answeredVia: via }),
+    //
+    // **読み直す1操作で書き、既に終わった承認には書かない（issue #2007）。** 以前は
+    // 上の `getApproval` で読んだ写しを `putApproval` で丸ごと書き戻していたので、
+    // 回答済み・取り下げ済みかを見ないまま回答を立て、配達・再開まで進んでいた
+    // ——取り下げたはずの承認に回答が立つ、同じ承認への2つの回答が両方通る（仕事が
+    // 2回再開しうる）。`updateApproval` の排他区間の中で現在の行を見て、`answeredAt`
+    // か `withdrawnAt` が既に立っていれば書かずに断る（`ApprovalAlreadySettledError`）。
+    // 断ったら、日誌・許可の記録・配達のどれにも進まない。
+    let settled: 'answered' | 'withdrawn' | undefined;
+    const written = await this.#stores.jobs.updateApproval(approvalId, (current) => {
+      if (current.withdrawnAt !== undefined) {
+        settled = 'withdrawn';
+        return null;
+      }
+      if (current.answeredAt !== undefined) {
+        settled = 'answered';
+        return null;
+      }
+      return {
+        ...current,
+        answeredAt,
+        answer,
+        answerDelivery: 'pending',
+        ...(via === undefined ? {} : { answeredVia: via }),
+      };
     });
+    if (written === null) {
+      if (settled !== undefined) throw new ApprovalAlreadySettledError(approvalId, settled);
+      throw new Error(`承認待ち ${approvalId} は存在しない`);
+    }
 
     // 日誌だけを追っても回答済みだと分かるようにする（追記専用なので新しい行）
     await this.#journal({

@@ -36,6 +36,7 @@ import {
   jobSchema,
   journalEntrySchema,
   memorySlugSchema,
+  pendingApprovalSchema,
   permissionGrantSchema,
   practiceSchema,
   practiceVersionSchema,
@@ -645,6 +646,19 @@ export function createMemoryStores(): Stores {
     },
     async putApproval(approval) {
       approvals.set(approval.id, isolate(approval));
+    },
+    // `updateJob`（すぐ上）と同じ理由・同じ形（issue #2007）——プロセス内の
+    // `Map` は同期アクセスなので、判定と書き込みのあいだに `await` を挟まなければ
+    // 排他は要らない。`mutate` が `null` を返したら何も書かない
+    // （`JobStore.updateApproval` の doc「`updateJob` には無い拡張」）。
+    async updateApproval(id, mutate) {
+      const found = approvals.get(id);
+      if (found === undefined) return null;
+      const next = mutate(isolate(found));
+      if (next === null) return null;
+      const parsed = pendingApprovalSchema.parse(next);
+      approvals.set(id, isolate(parsed));
+      return isolate(parsed);
     },
     async clear() {
       const removed = { jobs: jobs.size, approvals: approvals.size };

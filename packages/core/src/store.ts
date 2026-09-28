@@ -506,6 +506,46 @@ export interface JobStore {
   putApproval(approval: PendingApproval): Promise<void>;
 
   /**
+   * 現在の値を排他区間の中で読み直し、`mutate` で書き換えて書く
+   * （Issue #2007。`updateJob`（すぐ上、#1674）と同じ形）。
+   *
+   * **なぜ要るか。** 承認への回答（`Clone#answerApproval`）と取り下げ
+   * （`approval_withdraw`）は、どちらも `getApproval()` で読んでから
+   * `putApproval()` で丸ごと書き戻す「読んでから書く」形だった——判定と
+   * 書き込みの間に排他が無いので、ほぼ同時の2つの回答が両方とも
+   * 「まだ回答済みではない」と読み、同じ承認に紐づく仕事が2回再開しうる
+   * （回答どうしの競合）。クローンの取り下げと人間の回答が重なると、
+   * 取り下げたはずの承認に回答が立ち、配達と再開まで進みうる（取り下げと
+   * 回答の競合）。`updateJob` が `ManagerPool.appraise()` の孤児ジョブ分岐で
+   * 実際に踏み消された書き込みを塞いだのと同じ形の穴が、承認待ちの側にも
+   * 対になって存在していた。
+   *
+   * **`mutate` は同期の関数である。** 区間の中で `await` を挟むと排他の
+   * 意味が崩れる——`updateJob` の同じ注意がそのまま当てはまる（fs は
+   * `withPathLock`、pg は `select … for update` で押さえた1つの
+   * トランザクションの中でだけ意味を持つ）。
+   *
+   * **無ければ何もせず `null`。`mutate` は呼ばれない**——`updateJob` と同じ。
+   *
+   * **`mutate` が書かないと決めたときも `null` を返す（`updateJob` には無い
+   * 拡張）。** `mutate` は `current` を見て「もう終端に達している」
+   * （`answeredAt` か `withdrawnAt` が既に立っている）と判定したら `null` を
+   * 返せる——このとき `updateApproval` は何も書かず、呼び出し側へも `null`
+   * を返す。呼び出し側（`answerApproval` / `approval_withdraw`）は、`mutate`
+   * が呼ばれたかどうか（＝行が実在したかどうか）を自分の外側のクロージャで
+   * 覚えておくことで、「行が無い」（`mutate` 未呼び出し）と「行はあるが
+   * `mutate` が断った」（`mutate` 呼び出し済み）を区別できる——`updateApproval`
+   * 自身はこの2つを同じ `null` として返す（`mutate` を呼んだかどうかの記録は
+   * 呼び出し側の責務であって、この口の契約には含めない）。
+   *
+   * 返すのは書き込んだ後の値（`mutate` が断ったときは `null`）。
+   */
+  updateApproval(
+    id: string,
+    mutate: (current: PendingApproval) => PendingApproval | null,
+  ): Promise<PendingApproval | null>;
+
+  /**
    * ジョブと承認待ちを両方とも消す（ワークスペースのリセット専用。
    * #workspace-reset）。**この2つは1枚のストアなので、一緒に1操作で消す。**
    */

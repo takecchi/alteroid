@@ -1384,6 +1384,42 @@ describe('HTTP API', () => {
   });
 
   /**
+   * issue #2007: 先の判定（回答済み・取り下げ済みなら 409）を通った後に、別の回答や
+   * 取り下げが先に届いていた場合、`Clone#answerApproval` は `ApprovalAlreadySettledError`
+   * を投げて断る。2つの回答の口は、それを先の判定と同じ語の 409 相当に写す。
+   */
+  it('answerApproval が既に終わった承認として断ったら、単発の口は 409、一括の口はその件を失敗で返す', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-race',
+      createdAt: new Date().toISOString(),
+      question: '同時に答えられた承認',
+    });
+    const original = fake.clone.answerApproval;
+    fake.clone.answerApproval = async (id) => {
+      const error = new Error(`承認待ち ${id} は既に取り下げ済みなので、回答しなかった`);
+      error.name = 'ApprovalAlreadySettledError';
+      Object.assign(error, { approvalId: id, settled: 'withdrawn' });
+      throw error;
+    };
+    try {
+      const single = await app.request('/approvals/ap-race/answer', json({ answer: 'よい' }));
+      expect(single.status).toBe(409);
+      expect(await single.json()).toEqual({ error: 'withdrawn' });
+
+      const batch = await app.request(
+        '/approvals/answer',
+        json({ answers: [{ id: 'ap-race', answer: 'よい' }] }),
+      );
+      expect(batch.status).toBe(200);
+      expect(await batch.json()).toEqual({
+        results: [{ id: 'ap-race', ok: false, error: 'withdrawn' }],
+      });
+    } finally {
+      fake.clone.answerApproval = original;
+    }
+  });
+
+  /**
    * 答えとその後の行動の対（issue #847 の案B）。クローンの `approval_trace` と
    * 同じ `traceApproval` を通ることは、同じ日誌から同じ行が返ることで測る
    * （状態の分け方そのものの歯は `packages/core/src/approval-trace.test.ts`）。
