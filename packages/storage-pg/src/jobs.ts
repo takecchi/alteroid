@@ -13,6 +13,33 @@ import { stripNulls } from './db.js';
 import { approvals, jobs } from './schema.js';
 
 /**
+ * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
+ * 出すのは「どの欄が」だけである（`PgScheduleStore` の `summarizeInvalidFields`
+ * と同じ理由・同じ形。パッケージ内でも共通化はしていない——ファイルごとに
+ * 独立させておくのが repo の既存の作法である）。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
+
+/**
+ * `updateJob()` が読めなかった行を stderr へ1行で要約する（issue #2051）。
+ * **id 以外の値は絶対に載せない**——job の欄には人間の依頼文・マネージャーの
+ * 報告がそのまま入りうる（`describeSkippedJobRow`（fs 側）・
+ * `noteDroppedRecord` の doc、#52 と同じ理由）。
+ */
+function describeUnreadableJobRow(params: { id: string; reason: string }): string {
+  return (
+    `alteroid: updateJob() で job 行を読み出せませんでした` +
+    `（id=${JSON.stringify(params.id)}、${params.reason}）`
+  );
+}
+
+/**
  * `#cache` の1行ぶん。**版（{@link jobRowVersion}）が変わっていなければ
  * jsonb を引き直さずにこれを使い回す**（Issue #900）。
  *
@@ -284,6 +311,17 @@ export class PgJobStore implements JobStore {
    * 通すと行の `xmin` が必ず進む（PostgreSQL の性質。上の `jobRowVersion` の
    * doc）ので、次の `listJobs()` の段1がこの行を「版が変わった」と検出して
    * 自然に引き直す——手で消さなくても覚えは腐らない。
+   *
+   * **読めない行（`jobSchema` に合わない。版ずれ・手編集）は「無い」と同じ
+   * `null` を返す。`mutate` は呼ばない。行にも触れない**（issue #2051）。
+   * 以前は `jobSchema.parse` を使っていたため、この形の行に対して `mutate` を
+   * 1回も呼ばずに `ZodError` を投げていた——同じ `PgJobStore` の `listJobs()`
+   * （`jobSchema.safeParse` で飛ばす）とも、fs 実装の `FsJobStore.updateJob`
+   * （検査を通った行からしか探さないので「無い」と同じ扱いになる）とも食い違って
+   * いた。行を書き換えないのは、版ずれの行（新しい版が既に書いた `status` 等）を
+   * 古い版の `mutate` が誤って上書きしないためでもある——`current` を作れない
+   * 以上、`mutate` に渡す値そのものが無い。跡は `describeUnreadableJobRow` で
+   * stderr へ1行だけ残す（id とどの欄が不正かのみ。本文は出さない）。
    */
   async updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null> {
     return this.#db.transaction(async (tx) => {
@@ -297,7 +335,14 @@ export class PgJobStore implements JobStore {
       // 消されていた。**`mutate` は呼ばない**——書く先が無い書き換えを作らせない。
       if (row === undefined) return null;
 
-      const current = jobSchema.parse(row.job);
+      const parsed = jobSchema.safeParse(row.job);
+      if (!parsed.success) {
+        process.stderr.write(
+          `${describeUnreadableJobRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
+        );
+        return null;
+      }
+      const current = parsed.data;
       // 依頼文や報告に NUL が混ざりうる（`putJob` と同じ理由）。
       const next = stripNulls(jobSchema.parse(mutate(current)));
 

@@ -497,6 +497,11 @@ export interface JobStore {
    * **無ければ何もせず `null`。`mutate` は呼ばれない**——存在しない行に対して
    * 書き換えの結果を作らせても、書く先が無い。
    *
+   * **読めない行（版ずれ・手編集でスキーマに合わなくなった行）も、無いのと
+   * 同じく `null` を返す。`mutate` は呼ばれず、行にも触れない**（issue #2051）。
+   * 版ずれの行を古い版が誤って上書きしないためでもある——`current` を作れない
+   * 以上、`mutate` に渡す値そのものが無い。
+   *
    * 返すのは書き込んだ後の値。
    */
   updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null>;
