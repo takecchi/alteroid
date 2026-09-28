@@ -188,3 +188,51 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
     expect(inspectBashCommand('gh pr merge 1 "--delete-branch"').blocked).toBe(true);
   });
 });
+
+/**
+ * ⚠️ PR #1990 のレビュー指摘（マネージャー mgr-81affbde、必須の差し戻し）——
+ * **二重引用符は bash がその場で展開する。** `$(...)`（コマンド置換）と
+ * バッククォート（`` ` ``、レガシーのコマンド置換）は、値の中に書いても
+ * 「ただの文字列」ではなく、シェルが実際にコマンドとして実行してから
+ * その出力へ置き換える。`--subject "$(gh pr merge 2 --delete-branch)"` /
+ * `--body "` + "`" + `gh pr merge 2 -d` + "`" + `"` のような形では、
+ * **内側の `gh pr merge --delete-branch` / `-d` が本当に実行される** ——
+ * バックスラッシュのエスケープと同じ「読めない」の族に、`$` とバッククォート
+ * も入れる必要がある。
+ *
+ * 潰す条件（`DOUBLE_QUOTED_VALUE_SRC` = `"[^"\\]*"`）は `\` だけを除外して
+ * おり、`$` とバッククォートは除外していなかった。⟹ 値の中に
+ * `$(gh pr merge 2 --delete-branch)` や `` `gh pr merge 2 -d` `` のような
+ * **本物の実行コード**が書かれていても「きれいに閉じた引用符」と誤認して
+ * 中身ごと空白へ潰し、実際に実行されるはずの `--delete-branch`/`-d` を
+ * 検出器の目から消してしまっていた。
+ */
+describe('gh-pr-merge-delete-branch: 二重引用符の値の中のコマンド置換は「読めない」として潰さない（PR #1990 レビュー指摘）', () => {
+  it('`$(...)` コマンド置換の中の実際の `gh pr merge --delete-branch`（--subject 経由）は弾く', () => {
+    expect(
+      inspectBashCommand('gh pr merge 1 --subject "$(gh pr merge 2 --delete-branch)"').blocked,
+    ).toBe(true);
+  });
+
+  it('バッククォートのコマンド置換の中の実際の `gh pr merge -d`（--body 経由）は弾く', () => {
+    expect(inspectBashCommand('gh pr merge 1 --body "`gh pr merge 2 -d`"').blocked).toBe(true);
+  });
+
+  it('`$(...)` コマンド置換の中の実際の `gh pr merge -d`（--subject 経由）は弾く', () => {
+    expect(inspectBashCommand('gh pr merge 1 --subject "$(gh pr merge 2 -d)"').blocked).toBe(true);
+  });
+
+  it('バッククォートのコマンド置換の中の実際の `gh pr merge --delete-branch`（--body 経由）は弾く', () => {
+    expect(
+      inspectBashCommand('gh pr merge 1 --body "`gh pr merge 2 --delete-branch`"').blocked,
+    ).toBe(true);
+  });
+
+  it('偽陽性にならないこと —— `$` を含むが実行コードではない、ただの地の文の値は通す（潰せないので安全側に残るのは許容する）', () => {
+    // `$` を含む時点で「読めない」側に倒すので、この値は潰されず、
+    // 中に `--delete-branch` の字面等が無ければそのまま通る。
+    expect(inspectBashCommand('gh pr merge 1 --subject "price is $5, not a flag"').blocked).toBe(
+      false,
+    );
+  });
+});
