@@ -1235,9 +1235,7 @@ describe('状態チップの選択が URL に載る（issue #2030）', () => {
     // もう1つ押すとカンマ区切りで増える。
     fireEvent.click(screen.getByRole('button', { name: 'セッションへ戻れず' }));
     await waitFor(() => {
-      expect(new URLSearchParams(router.state.location.search).get('status')).toBe(
-        'running,lost',
-      );
+      expect(new URLSearchParams(router.state.location.search).get('status')).toBe('running,lost');
     });
 
     // 押し直すと外れる。

@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 
 import { Page } from '~/components/page';
 import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
@@ -571,12 +570,81 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
  */
 const STATUSES = Object.keys(STATUS) as [ManagerStatus, ...ManagerStatus[]];
 
+/**
+ * 状態チップの選択を載せる URL のクエリパラメタ名（issue #2030）。
+ *
+ * **`journal.tsx` の `TYPES_SEARCH_PARAM`（#2029）と同じ形に揃える**——
+ * 同じ判断を2つの画面で割らない。`GET /managers?status=` とは違う名前に
+ * してあるのも同じ理由（URL 側はカンマ区切りで1つのパラメタにまとめる
+ * 語彙、API 側は問い合わせのクエリの語彙で、意図的に分けてある）。
+ */
+const STATUS_SEARCH_PARAM = 'status';
+
+/**
+ * `STATUS_SEARCH_PARAM` の生の値から、既知の状態だけを順序を保って取り出す。
+ *
+ * **知らない値は無視する（#2010 の線。`journal.tsx` の
+ * `parseSelectedTypes` と同じ判断・同じ理由）。** URL 経由の値は人間が手で
+ * 書き換えうるので `ManagerStatus` として型で縛れない。ここで `STATUSES`
+ * に無い値を弾いておけば、後段（チップの選択状態・`useManagersWindow` への
+ * `status`・`GET /managers?status=`）はいままでどおり `ManagerStatus` だけを
+ * 扱える。知らない値を残すと、対応するチップが無いまま「選択されている
+ * のにどのチップも押されて見えない」状態になる——**落ちないことが目的**
+ * なので、素直に読み捨てる。
+ */
+function parseSelectedStatuses(raw: string | null): readonly ManagerStatus[] {
+  if (raw === null || raw === '') return [];
+  const result: ManagerStatus[] = [];
+  for (const part of raw.split(',')) {
+    if (part === '') continue;
+    if (!(STATUSES as readonly string[]).includes(part)) continue;
+    const status = part as ManagerStatus;
+    if (!result.includes(status)) result.push(status);
+  }
+  return result;
+}
+
 export default function Managers() {
-  const [selected, setSelected] = useState<readonly ManagerStatus[]>([]);
+  /**
+   * **状態チップの選択も、`journal.tsx` の種別チップ（#2029）と同じ形で
+   * URL を正本にする（issue #2030）。** 画面の state に閉じ込めると、
+   * 絞った一覧をリンクで渡せない・ブックマークできない・再読み込みや
+   * 「戻る」で戻せない——`journal.tsx` の doc（#250 / #2029）と同じ理由。
+   *
+   * **debounce はしない。** チップのクリックは1回が完結した操作で、検索語
+   * の入力のような「打っている途中」が無い（`journal.tsx` と同じ判断）。
+   *
+   * **`replace: true` にする。** `journal.tsx` の `q` / `types` と同じ
+   * 理由——チップを連続でクリックするたびに履歴が積まれると、「戻る」が
+   * 使い物にならなくなる。
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selected = parseSelectedStatuses(searchParams.get(STATUS_SEARCH_PARAM));
 
   function toggle(status: ManagerStatus) {
-    setSelected((previous) =>
-      previous.includes(status) ? previous.filter((s) => s !== status) : [...previous, status],
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        const current = parseSelectedStatuses(next.get(STATUS_SEARCH_PARAM));
+        const updated = current.includes(status)
+          ? current.filter((s) => s !== status)
+          : [...current, status];
+        if (updated.length === 0) next.delete(STATUS_SEARCH_PARAM);
+        else next.set(STATUS_SEARCH_PARAM, updated.join(','));
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
+  function clearSelected() {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete(STATUS_SEARCH_PARAM);
+        return next;
+      },
+      { replace: true },
     );
   }
 
@@ -605,7 +673,7 @@ export default function Managers() {
         {selected.length > 0 && (
           <button
             type="button"
-            onClick={() => setSelected([])}
+            onClick={clearSelected}
             className="ml-1 text-[11px] text-muted underline hover:text-fg"
           >
             解除
