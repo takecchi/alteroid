@@ -323,7 +323,7 @@ actor から層を推定して誤った実例（PR #155・PR #1167）は `.claud
   - **歯が在る**（`scripts/agents-md-references.test.ts`）。 何を測り、何を測らないかは `.claude/agents-md-records/repo-conventions.md` に在る
 - `docs/` は正典。**AI が単独で書き換えない。** 要件を変える必要が出たら手を止めて人間に確認する（例外は無い — かつて `docs/roadmap.md` の進捗チェックボックスだけが例外だったが、その文書は廃止した）
 - 生成物（`apps/daemon/openapi.json` / `pnpm-lock.yaml`）を触る PR を並行して抱えるときの順序は `.claude/skills/dev-setup/SKILL.md` に在る
-- **デプロイの引き金はマージではない。** Railway が見るのは `release/prod` で、そこへ `main` が写されるのは**1日1回、夜だけ**である（`.github/workflows/release-prod.yml` の `cron: '17 19 * * *'` ＝ UTC 19:17 ＝ **JST 翌 4:17**）。 **だからマージしても、その瞬間に走行中のマネージャーと作業者が畳まれることはない。** 器が入れ替わると何が畳まれるか・その時刻は `.claude/skills/cloud-deployment/SKILL.md` に在る
+- **デプロイの引き金はマージではない。** Railway が見るのは `release/prod` で、そこへ `main` が写されるのは**1日1回、夜だけ**である（`.github/workflows/release-prod.yml` の `cron: '17 19 * * *'`、遅れて **UTC 21〜23時**）。 **だからマージしても、その瞬間に走行中のマネージャーと作業者が畳まれることはない。** 器が入れ替わると何が畳まれるか・その時刻は `.claude/skills/cloud-deployment/SKILL.md` に在る
 - **PR の差分は `gh pr diff <N>` で読む。`git diff --stat origin/main <枝>` は main の状態に依存する**（実例は `.claude/skills/tool-quirks/SKILL.md` に在る）
 
 ## 自分が走っている器
