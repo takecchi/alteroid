@@ -179,6 +179,7 @@ import type {
   JobStatus,
   JournalEntry,
   JournalEntryInput,
+  LastUnpushedWorkObservation,
   MemoryDocKind,
   MemoryDocumentMeta,
   MemoryProtectionStatus,
@@ -232,6 +233,7 @@ import {
   type UsageTotals,
 } from './usage.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
+import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -3708,6 +3710,21 @@ function describeUnpushedWorkObservationSource(
  * いちばん重要な瞬間に何も言わないと、「0件」と「沈黙」が読み手からは
  * 区別できなくなる（この関数を追加した理由そのものと同じ穴）。
  */
+/**
+ * `observation.kind === 'observed'` のとき、「確かめきれなかった」ことの
+ * 4欄（Issue #1885）を1文にして、既存の行の末尾へ足す形（改行して2字下げ）
+ * にする。**4欄がどれも無ければ空文字**——今日までの行に1バイトも足さない
+ * （`describeUnpushedWorkObservationIncompleteness` が `null` を返す側）。
+ * `describeUnpushedWorkObservation` の3つの分岐（届いた・届いていない・
+ * 通常）が同じものを呼ぶ——判定をここ以外に複製しない。
+ */
+function unpushedWorkObservationIncompleteSuffix(
+  observation: Extract<LastUnpushedWorkObservation, { kind: 'observed' }>,
+): string {
+  const note = describeUnpushedWorkObservationIncompleteness(observation);
+  return note === null ? '' : `\n  ${note}`;
+}
+
 function describeUnpushedWorkObservation(manager: ManagerSummary): string | null {
   const observation = manager.lastUnpushedWorkObservation;
 
@@ -3721,7 +3738,8 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
       }
       return (
         `  未push観測: 器が止まる直前（${observation.at}）の観測: ` +
-        formatUnpushedWorkObservationWorktrees(observation.worktrees)
+        formatUnpushedWorkObservationWorktrees(observation.worktrees) +
+        unpushedWorkObservationIncompleteSuffix(observation)
       );
     }
     const shown =
@@ -3729,7 +3747,8 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
         ? '表示中の観測は無い（一度も取れていない）'
         : observation.kind === 'unavailable'
           ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
-          : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}`;
+          : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}` +
+            unpushedWorkObservationIncompleteSuffix(observation);
     return (
       '  ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
       '（best-effort の送信のため。未pushが無かったことを意味しない）。' +
@@ -3750,7 +3769,8 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
   }
   return (
     `  未push観測（${provenance}、${observation.at}）: ` +
-    formatUnpushedWorkObservationWorktrees(observation.worktrees)
+    formatUnpushedWorkObservationWorktrees(observation.worktrees) +
+    unpushedWorkObservationIncompleteSuffix(observation)
   );
 }
 

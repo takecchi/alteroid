@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   /**
-   * 13個出す。
+   * 14個出す。
    *
    * - `index.ts` — デーモン・runner・CLI が読む本体（Node の組み込みと
    *   Claude Agent SDK を含む）
@@ -107,6 +107,16 @@ export default defineConfig({
    *   意図して違う（欄名 `lastFailure` を直接指すか、画面上の該当セクション
    *   を指すか）ので、共通部分だけを `formatSystemErrorUnknownNote(pointer)`
    *   としてまとめ、指し先は呼び出し元の引数にした（ファイル冒頭の doc）。
+   * - `unpushed-work-observation-format.ts` — 台帳へ残す未 push の観測が
+   *   「確かめきれなかった」ことを持つとき、それを1文へ整形する表示
+   *   （Issue #1885。`@alteroid/core/unpushed-work-observation-format`）。
+   *   **`cgroup-events-format.ts` と同じ形**——クローンの `manager_list`
+   *   （`tools.ts` の `describeUnpushedWorkObservation`）・`runnerSwapNudge`
+   *   系（`manager.ts`）・Web UI（`manager-detail.tsx`）の3箇所が同じ判定を
+   *   読む。ファイル自身は import を1つも持たない——zod スキーマから推論
+   *   した型と構造的に一致することは `schema.ts` の型レベルの検査
+   *   （`_AssertUnpushedWorkObservationIncompletenessMatchesLikeType`）が
+   *   保証する。
    */
   entry: [
     'src/index.ts',
@@ -122,6 +132,7 @@ export default defineConfig({
     'src/job-status-running.ts',
     'src/cgroup-events-format.ts',
     'src/system-error-format.ts',
+    'src/unpushed-work-observation-format.ts',
   ],
   format: ['esm'],
   dts: true,

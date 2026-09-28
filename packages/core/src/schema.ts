@@ -8,6 +8,7 @@ import type { JobStatusLike } from './job-status-running.js';
 import type { SystemErrorFactsLike } from './system-error-format.js';
 import { systemErrorFactsSchema, type SystemErrorFacts } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
+import type { UnpushedWorkObservationIncompletenessLike } from './unpushed-work-observation-format.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
 // `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
@@ -3717,6 +3718,24 @@ export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
     cwd: z.string(),
     /** 見つかった作業ツリーぶんの枝名。0本のこともある。 */
     worktrees: z.array(observedWorktreeBranchSchema),
+    /**
+     * `unpushedWorkResultSchema.truncatedAtCount` の写し（Issue #1885）。
+     * **省略できるが、黙って切ったことにはしない**——あちらの doc と同じ
+     * 注意。この欄が載っているとき、`worktrees` は探索を打ち切った先に
+     * 在ったかもしれない作業ツリーを含んでいない可能性がある。
+     */
+    truncatedAtCount: z.number().int().positive().optional(),
+    /** `unpushedWorkResultSchema.stoppedEarly` の写し（Issue #1885）。 */
+    stoppedEarly: z.literal(true).optional(),
+    /** `unpushedWorkResultSchema.scratchRootsUnknown` の写し（Issue #1885）。 */
+    scratchRootsUnknown: z.string().optional(),
+    /**
+     * `unpushedWorkResultSchema.unreadableDirCount` の写し（Issue #1885）。
+     * **`unreadableDirSample` は写さない**——`<パス>: <エラーメッセージ>` の
+     * 形で絶対パスを含みうるため、`unpushedWorkTreeSchema` の doc が引く
+     * 「出してよい範囲（有無・件数・枝名まで）」の外になる。
+     */
+    unreadableDirCount: z.number().int().positive().optional(),
   }),
   z.object({
     kind: z.literal('unavailable'),
@@ -3730,6 +3749,34 @@ export const lastUnpushedWorkObservationSchema = z.discriminatedUnion('kind', [
 ]);
 
 export type LastUnpushedWorkObservation = z.infer<typeof lastUnpushedWorkObservationSchema>;
+
+/**
+ * `unpushed-work-observation-format.ts` の
+ * {@link UnpushedWorkObservationIncompletenessLike}（手書き）が、この zod
+ * スキーマの `kind: 'observed'` 変種と構造的に一致することの強制
+ * （`_AssertTraceActionMatchesLikeType` と同じ形——**片方向**）。
+ *
+ * **双方向ではなく片方向**（`Extract<..., 'observed'> extends
+ * UnpushedWorkObservationIncompletenessLike`）。`UnpushedWorkObservationIncompletenessLike`
+ * は意図して「`describeUnpushedWorkObservationIncompleteness` が読む4欄
+ * だけの最小の型」であって `kind: 'observed'` 変種の完全な写しではない
+ * （`at` / `cwd` / `worktrees` / `source` を持たない）ので、双方向にすると
+ * 必ず落ちる。
+ *
+ * **ここが崩れると、両者は静かにずれうる**——`lastUnpushedWorkObservationSchema`
+ * の `kind: 'observed'` へ確かめきれなかったことの欄を足しても
+ * `UnpushedWorkObservationIncompletenessLike` を書き換え忘れれば、
+ * `describeUnpushedWorkObservationIncompleteness` はその欄を1つも読めない
+ * まま `pnpm typecheck` が落ちて初めて気づく。
+ */
+export type _AssertUnpushedWorkObservationIncompletenessMatchesLikeType = AssertTrue<
+  Extract<
+    LastUnpushedWorkObservation,
+    { kind: 'observed' }
+  > extends UnpushedWorkObservationIncompletenessLike
+    ? true
+    : false
+>;
 
 export const jobSchema = z.object({
   id: z.string(),

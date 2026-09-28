@@ -95,6 +95,7 @@ import type {
 import type { Stores } from './store.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
+import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
 import { matchNoticeResetAgainstPool, type NoticeResetMatch } from './token-reset-match.js';
 import {
   describeUsageNotice,
@@ -882,6 +883,14 @@ export type ManagerUnpushedWork =
  * 省けば `undefined`——「不明」のまま台帳へ残る（`unpushedWorkObservationOf`
  * 自身は推測で埋めない）。値の意味は `schema.ts` の
  * `unpushedWorkObservationSourceSchema` の doc を見よ。
+ *
+ * **「確かめきれなかった」ことの4欄も写す（Issue #1885）。**
+ * `truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
+ * `unreadableDirCount` は `outcome.result` にあればそのまま台帳へ写す
+ * （無ければ省く——`source` と同じ「省略できるが黙って埋めない」作法）。
+ * **`unreadableDirSample` だけは写さない**——`<パス>: <エラーメッセージ>`
+ * の形で絶対パスを含みうるため、`cwd` を出さないのと同じ理由でここでも
+ * 落とす（`schema.ts` の `lastUnpushedWorkObservationSchema` の doc）。
  */
 function unpushedWorkObservationOf(
   outcome: ManagerUnpushedWork,
@@ -904,6 +913,20 @@ function unpushedWorkObservationOf(
           branch: worktree.branch,
           ...(worktree.remoteOrigin === undefined ? {} : { remoteOrigin: worktree.remoteOrigin }),
         })),
+        // **確かめきれなかったことの写し（Issue #1885）。** `unreadableDirSample`
+        // は絶対パスを含みうるので写さない（上の doc）。
+        ...(outcome.result.truncatedAtCount === undefined
+          ? {}
+          : { truncatedAtCount: outcome.result.truncatedAtCount }),
+        ...(outcome.result.stoppedEarly === undefined
+          ? {}
+          : { stoppedEarly: outcome.result.stoppedEarly }),
+        ...(outcome.result.scratchRootsUnknown === undefined
+          ? {}
+          : { scratchRootsUnknown: outcome.result.scratchRootsUnknown }),
+        ...(outcome.result.unreadableDirCount === undefined
+          ? {}
+          : { unreadableDirCount: outcome.result.unreadableDirCount }),
       }
     : {
         kind: 'unavailable',
@@ -13665,6 +13688,14 @@ type WorkspaceAfterSwap =
       cloneHints?: readonly WorkspaceCloneHint[];
       /** `cloneHints` が載るときだけ載る、観測した時刻（ISO8601）。 */
       observedAt?: string;
+      /**
+       * `cloneHints` が載るときだけ載る、「この観測は探しきっていない」旨
+       * （Issue #1885）。観測（`kind: 'observed'`）が確かめきれなかったこと
+       * の4欄のどれかを持つときだけ、`describeUnpushedWorkObservationIncompleteness`
+       * が返した1文がここへ入る——4欄がどれも無ければ `undefined`（今日と
+       * 1バイトも違わない）。
+       */
+      incompleteNote?: string;
     }
   | { kind: 'unrecorded' };
 
@@ -13673,10 +13704,18 @@ type WorkspaceAfterSwap =
  * 作る。観測が無い・`unavailable`・作業ツリー0本のいずれかなら `undefined`
  * を返し、呼び出し元は今日どおりの文言（`unverified` の cloneHints 無し）へ
  * 倒す——**観測が無いことを新しい主張の材料にしない。**
+ *
+ * **`incompleteNote`（Issue #1885）** は観測が「確かめきれなかった」ことの
+ * 4欄のどれかを持つときだけ載る一文——`describeUnpushedWorkObservationIncompleteness`
+ * （唯一の生成元）を素通しするだけで、ここに新しい判定は書かない。
  */
-function workspaceCloneHintsFrom(
-  observation: LastUnpushedWorkObservation | undefined,
-): { readonly at: string; readonly hints: readonly WorkspaceCloneHint[] } | undefined {
+function workspaceCloneHintsFrom(observation: LastUnpushedWorkObservation | undefined):
+  | {
+      readonly at: string;
+      readonly hints: readonly WorkspaceCloneHint[];
+      readonly incompleteNote?: string;
+    }
+  | undefined {
   if (observation === undefined || observation.kind !== 'observed') return undefined;
   if (observation.worktrees.length === 0) return undefined;
   const hints: WorkspaceCloneHint[] = observation.worktrees.map((worktree) => {
@@ -13695,7 +13734,12 @@ function workspaceCloneHintsFrom(
         : 'origin remote の URL を確認できなかった（未設定、または解釈できない形式）';
     return { kind: 'unresolved', relativePath: worktree.relativePath, reason };
   });
-  return { at: observation.at, hints };
+  const incompleteNote = describeUnpushedWorkObservationIncompleteness(observation);
+  return {
+    at: observation.at,
+    hints,
+    ...(incompleteNote === null ? {} : { incompleteNote }),
+  };
 }
 
 /** {@link WorkspaceCloneHint} の一覧を、作業ツリーごとに1行へ描く。 */
@@ -13738,7 +13782,13 @@ function workspaceAfterSwap(
       const found = workspaceCloneHintsFrom(observation);
       return found === undefined
         ? { kind: 'unverified', path: locator.path }
-        : { kind: 'unverified', path: locator.path, cloneHints: found.hints, observedAt: found.at };
+        : {
+            kind: 'unverified',
+            path: locator.path,
+            cloneHints: found.hints,
+            observedAt: found.at,
+            ...(found.incompleteNote === undefined ? {} : { incompleteNote: found.incompleteNote }),
+          };
     }
     case 'runner-volume':
       return { kind: 'unverified', path: locator.path };
@@ -13767,6 +13817,7 @@ function workspaceAfterSwapClause(after: WorkspaceAfterSwap): string {
       return (
         `作業ディレクトリ（${after.path}）が残っているとは限らない。` +
         `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        (after.incompleteNote === undefined ? '' : `${after.incompleteNote} `) +
         '見つかった作業ツリーごとに次のとおり進めよ:\n' +
         formatWorkspaceCloneHintLines(after.cloneHints)
       );
@@ -13807,6 +13858,7 @@ function cloneWorkspaceAfterSwapLine(after: WorkspaceAfterSwap): string {
       }
       return (
         `${after.observedAt} 時点の観測に基づく——これより後に作った枝は含まれない。` +
+        (after.incompleteNote === undefined ? '' : `${after.incompleteNote} `) +
         'コミット前の変更は失われている前提で、見つかった作業ツリーごとに' +
         '次のとおり組み立て直させること:\n' +
         formatWorkspaceCloneHintLines(after.cloneHints)

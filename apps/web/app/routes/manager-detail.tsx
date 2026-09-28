@@ -61,6 +61,14 @@ import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
+/**
+ * **`unpushed-work-observation-format.ts` も同じ形の軽い口**（Issue #1885）。
+ * 台帳の観測が「確かめきれなかった」ことを持つとき、クローンの
+ * `manager_list`（`packages/core/src/tools.ts` の
+ * `describeUnpushedWorkObservation`）が読んでいるのと同じ1文を、この画面
+ * にも同じ生成元から届ける。
+ */
+import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/unpushed-work-observation-format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 import type { Route } from './+types/manager-detail';
@@ -1151,12 +1159,21 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
     return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${observation.reason}`;
   }
   if (observation.kind === 'observed') {
+    // **Issue #1885** — 確かめきれなかったことの4欄が載っているとき、
+    // クローンの `manager_list`（`describeUnpushedWorkObservation`）と
+    // 同じ1文をここにも出す。判定はそちらと同じ生成元
+    // （`describeUnpushedWorkObservationIncompleteness`）を素通しするだけ。
+    const incompleteNote = describeUnpushedWorkObservationIncompleteness(observation);
     if (observation.worktrees.length === 0) {
-      return `未push観測（${provenance}、${formatDateTime(observation.at)}）: 見つかった作業ツリー0本`;
+      return (
+        `未push観測（${provenance}、${formatDateTime(observation.at)}）: 見つかった作業ツリー0本` +
+        (incompleteNote === null ? '' : ` ${incompleteNote}`)
+      );
     }
     return (
       <>
         未push観測（{provenance}、{formatDateTime(observation.at)}）:
+        {incompleteNote !== null && <div className="mt-1 text-warn">{incompleteNote}</div>}
         <ul className="mt-1 list-disc pl-4">
           {observation.worktrees.map((wt, index) => (
             // key に index を混ぜる——相対パスだけでは、同名の worktree が

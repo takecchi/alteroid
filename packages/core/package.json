@@ -51,6 +51,10 @@
     "./system-error-format": {
       "types": "./dist/system-error-format.d.ts",
       "import": "./dist/system-error-format.js"
+    },
+    "./unpushed-work-observation-format": {
+      "types": "./dist/unpushed-work-observation-format.d.ts",
+      "import": "./dist/unpushed-work-observation-format.js"
     }
   },
   "files": [

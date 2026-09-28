@@ -12537,6 +12537,23 @@
                                       },
                                       "required": ["relativePath", "branch"]
                                     }
+                                  },
+                                  "truncatedAtCount": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "stoppedEarly": {
+                                    "type": "boolean",
+                                    "const": true
+                                  },
+                                  "scratchRootsUnknown": {
+                                    "type": "string"
+                                  },
+                                  "unreadableDirCount": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": ["kind", "at", "cwd", "worktrees"]
@@ -13105,6 +13122,23 @@
                                     },
                                     "required": ["relativePath", "branch"]
                                   }
+                                },
+                                "truncatedAtCount": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "stoppedEarly": {
+                                  "type": "boolean",
+                                  "const": true
+                                },
+                                "scratchRootsUnknown": {
+                                  "type": "string"
+                                },
+                                "unreadableDirCount": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": ["kind", "at", "cwd", "worktrees"]
