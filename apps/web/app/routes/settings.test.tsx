@@ -178,7 +178,9 @@ describe('runner の since（この状態になった時刻）', () => {
     renderSettings({ runners: [BASE], daemonRevision: DAEMON_UNKNOWN });
 
     expect(
-      await screen.findByText(/「この状態になった」は名簿の値.*インメモリ.*再起動すると作り直される/),
+      await screen.findByText(
+        /「この状態になった」は名簿の値.*インメモリ.*再起動すると作り直される/,
+      ),
     ).toBeTruthy();
   });
 });

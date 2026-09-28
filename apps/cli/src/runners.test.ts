@@ -447,7 +447,9 @@ describe('renderRunners', () => {
   describe('since（この状態になった時刻）', () => {
     it('runner ごとに since を出す', () => {
       const text = renderRunners({
-        runners: [{ ...RUNNER, since: '2026-09-01T00:00:00.000Z', revision: { status: 'unheard' } }],
+        runners: [
+          { ...RUNNER, since: '2026-09-01T00:00:00.000Z', revision: { status: 'unheard' } },
+        ],
         daemonRevision: { status: 'unknown' },
       });
 
