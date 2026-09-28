@@ -19,6 +19,7 @@ import {
   type TranscriptArchive,
 } from '@alteroid/core';
 
+import { writeFileAtomic } from './atomic.js';
 import { withPathLock } from './file-lock.js';
 
 /**
@@ -227,8 +228,26 @@ export class FsTranscriptArchive implements TranscriptArchive {
    */
   async list(): Promise<ArchiveEntry[]> {
     const ids = await this.#listIds();
-    const entries = await Promise.all(ids.map((id) => this.#readEntry(id)));
-    return entries.sort(compareArchiveEntriesNewestFirst);
+    // **1本の壊れた削除の印で、無関係な全行を落とさない**（issue #1969）。
+    // 印が JSON として読めない行だけを一覧から外し、stderr に跡を残す。
+    // 壊れた `.meta.json` は `#readMeta` の側で `fallbackMeta` に倒れるので、
+    // その行は一覧に残る。
+    const entries = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          return await this.#readEntry(id);
+        } catch (error) {
+          if (error instanceof UnreadableArchiveSidecarError) {
+            process.stderr.write(`${describeUnreadableSidecar(error)}（一覧から外した）\n`);
+            return undefined;
+          }
+          throw error;
+        }
+      }),
+    );
+    return entries
+      .filter((entry): entry is ArchiveEntry => entry !== undefined)
+      .sort(compareArchiveEntriesNewestFirst);
   }
 
   /**
@@ -476,13 +495,25 @@ export class FsTranscriptArchive implements TranscriptArchive {
     return join(this.#dir, `${id}.removed`);
   }
 
+  /**
+   * 削除の印を読む。**JSON として読めない印は `UnreadableArchiveSidecarError` を
+   * 投げる**（issue #1969）。`list()` はそれを捕まえてその1本だけを外す。
+   * `read(id)` / `remove(id)` は今までどおりその id について投げる——印が在る
+   * （＝消されたかもしれない）行の本体を、読めないまま「在る」と返さないため。
+   * 例外のメッセージに中身を載せない（`SyntaxError` の文言は壊れた中身を含む）。
+   */
   async #readMarker(id: string): Promise<{ removedAt: string; bytes: number } | null> {
+    let raw: string;
     try {
-      const raw = await readFile(this.#markerPath(id), 'utf8');
-      return JSON.parse(raw) as { removedAt: string; bytes: number };
+      raw = await readFile(this.#markerPath(id), 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
+    }
+    try {
+      return JSON.parse(raw) as { removedAt: string; bytes: number };
+    } catch {
+      throw new UnreadableArchiveSidecarError(id, '.removed');
     }
   }
 
@@ -490,8 +521,14 @@ export class FsTranscriptArchive implements TranscriptArchive {
     return join(this.#dir, `${id}.meta.json`);
   }
 
+  /**
+   * **一時ファイル＋rename で書く**（issue #1969）。素の `writeFile` だと、書いて
+   * いる途中で落ちたときに半端な JSON が残り、`#readMeta` が読めない sidecar を
+   * 作る。`#listIds` は `.jsonl` だけを拾うので、一時ファイル（`….meta.json.tmp.…`）
+   * が行として数えられることは無い。
+   */
   async #writeMeta(id: string, meta: ArchiveMeta): Promise<void> {
-    await writeFile(this.#metaPath(id), JSON.stringify(meta), 'utf8');
+    await writeFileAtomic(this.#metaPath(id), JSON.stringify(meta));
   }
 
   /**
@@ -500,14 +537,44 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * のまま返り、`classifyArchiveContinuity` が `'unknown'` へ落とす（#698）。
    */
   async #readMeta(id: string): Promise<ArchiveMeta | null> {
+    let raw: string;
     try {
-      const raw = await readFile(this.#metaPath(id), 'utf8');
-      return JSON.parse(raw) as ArchiveMeta;
+      raw = await readFile(this.#metaPath(id), 'utf8');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
+    try {
+      return JSON.parse(raw) as ArchiveMeta;
+    } catch {
+      // **JSON として読めない sidecar は「無い」と同じに扱う**（issue #1969）。呼び手は
+      // `fallbackMeta(id)`（id から sessionId と時刻を取る）へ倒すので、その行は
+      // 一覧に残る。跡には中身を出さない。
+      process.stderr.write(
+        `${describeUnreadableSidecar(new UnreadableArchiveSidecarError(id, '.meta.json'))}（id から sessionId と時刻を取った）\n`,
+      );
+      return null;
+    }
   }
+}
+
+/**
+ * sidecar（`.meta.json` / `.removed`）が JSON として読めなかった（issue #1969）。
+ * **メッセージに中身を載せない**——`JSON.parse` の `SyntaxError` の文言は、壊れた
+ * 中身の一部をそのまま含む。
+ */
+class UnreadableArchiveSidecarError extends Error {
+  constructor(
+    readonly id: string,
+    readonly sidecar: '.meta.json' | '.removed',
+  ) {
+    super(`アーカイブの ${sidecar} が JSON として読めない（id=${JSON.stringify(id)}）`);
+    this.name = 'UnreadableArchiveSidecarError';
+  }
+}
+
+function describeUnreadableSidecar(error: UnreadableArchiveSidecarError): string {
+  return `alteroid: ${error.message}`;
 }
 
 /** `.meta.json` サイドカーの中身（#698。`bodyChars`/`bodyMd5`/`continuity` は optional）。 */
