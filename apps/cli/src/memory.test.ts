@@ -200,6 +200,8 @@ describe('alteroid memory list / show', () => {
     const text = read();
     expect(text).toContain('記憶はまだ空です');
     expect(text).toContain('alteroid memory edit');
+    // 読む先が無いので、本文を読む一手は出さない（1件以上の枝だけが出す）。
+    expect(text).not.toContain('alteroid memory show');
   });
 
   it('一覧は slug と題を出す', async () => {
@@ -228,7 +230,11 @@ describe('alteroid memory list / show', () => {
 
     await memoryListCommand();
 
-    expect(read()).toContain('values  — 価値観');
+    const text = read();
+    expect(text).toContain('values  — 価値観');
+    // 一覧から本文へつなぐ一手（`conversations list` の「中身を読むには」と同じ形）。
+    // 一覧の行より後、最後の行として出る。
+    expect(text.trimEnd().split('\n').at(-1)).toBe('本文を読むには: alteroid memory show <slug>');
   });
 
   it('区分と要旨・鮮度の印を出す', async () => {

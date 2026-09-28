@@ -116,6 +116,10 @@ export async function memoryListCommand(): Promise<void> {
         ` (作成: ${formatCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt})${desc}\n`,
     );
   }
+  // **一覧から次の一手へつなぐ。** 0 件の枝が「置くには」を出すのと同じ理由で、
+  // 1 件以上のときは本文を読むコマンドを出す（`conversations.ts` の
+  // `renderConversationsList` の「中身を読むには」と同じ位置・同じ形）。
+  stdout.write('本文を読むには: alteroid memory show <slug>\n');
 }
 
 /**

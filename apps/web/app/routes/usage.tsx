@@ -8,7 +8,7 @@ import {
   USAGE_LAYERS,
   USAGE_SITES,
 } from '@alteroid/core/usage';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 
 import { Page } from '~/components/page';
 import {
@@ -461,11 +461,30 @@ function UsageBody({
               .reverse()
               .map((entry) => ({ label: entry.date, costUsd: entry.totals.costUsd }))}
           />
+          {/*
+            **マネージャーの行だけを委譲の詳細へつなぐ（issue #2046）。** この軸の
+            `managerId` は「誰の分か」の一般名で、クローンの分は `CLONE_ACTOR_ID`
+            になる（`packages/core/src/usage.ts` の `usageRowSchema` の doc）。
+            その行は委譲ではないので `/managers/<id>` へは飛ばさない。
+
+            **`mgr-` の接頭辞で見分ける。** マネージャーの id は `mgr-` に続けて
+            発行され、`CLONE_ACTOR_ID` とは衝突しない（`usage.ts` の
+            `CLONE_ACTOR_ID` の doc）。`CLONE_ACTOR_ID` そのものはブラウザの口
+            （`@alteroid/core/usage` ＝ `usage-format.ts`）から出ていないので比べない。
+            見分けられない id は倒れ先として文字のまま出す（リンクが無いだけで、
+            文言は1文字も変わらない）。
+          */}
           <AxisCard
             title="マネージャー別"
             entries={[...summary.byManager]
               .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
-              .map((entry) => ({ label: entry.managerId, costUsd: entry.totals.costUsd }))}
+              .map((entry) => ({
+                label: entry.managerId,
+                costUsd: entry.totals.costUsd,
+                ...(entry.managerId.startsWith('mgr-')
+                  ? { href: `/managers/${entry.managerId}` }
+                  : {}),
+              }))}
           />
           <AxisCard
             title="モデル別"
@@ -518,7 +537,8 @@ function AxisCard({
   entries,
 }: {
   title: string;
-  entries: { label: string; costUsd: number }[];
+  /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
+  entries: { label: string; costUsd: number; href?: string }[];
 }) {
   const shown = entries.slice(0, AXIS_LIMIT);
 
@@ -538,7 +558,13 @@ function AxisCard({
                 className="min-w-0 truncate font-mono text-[11px] text-muted"
                 title={entry.label}
               >
-                {entry.label}
+                {entry.href === undefined ? (
+                  entry.label
+                ) : (
+                  <Link to={entry.href} className="hover:underline">
+                    {entry.label}
+                  </Link>
+                )}
               </span>
               <span className="shrink-0">{formatUsd(entry.costUsd)}</span>
             </li>

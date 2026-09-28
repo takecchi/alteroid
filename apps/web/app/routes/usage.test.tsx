@@ -30,7 +30,8 @@ afterEach(() => {
 
 /**
  * **Router で包む（issue #2050）。** `Usage` は絞り込みの正本を URL に置く
- * （`useSearchParams`）ので、Router 無しでは描けなくなった。形は
+ * （`useSearchParams`）ので、Router 無しでは描けなくなった。「マネージャー別」軸の
+ * id も `<Link>` を描く（issue #2046）ので、どちらの理由でも Router が要る。形は
  * `journal.tsx` の `renderJournal` / `managers.tsx` と同じ `createMemoryRouter`
  * + `RouterProvider`。
  *
@@ -291,6 +292,34 @@ describe('/usage 画面', () => {
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
     expect(within(managers).getByTitle(longManagerId)).toBeTruthy();
+  });
+
+  /**
+   * **マネージャー別の id を委譲の詳細へつなぐ（issue #2046）。** マネージャーの
+   * 行（`mgr-…`）だけがリンクになり、クローンの分（`CLONE_ACTOR_ID` ＝ `clone`）は
+   * 委譲ではないのでリンクにしない。`title`（全文の出口）は両方とも残る。
+   */
+  it('マネージャー別の mgr- の行は /managers/<id> への Link になり、clone の行はならない', async () => {
+    stubUsage({
+      rows: [
+        row(2, { managerId: 'mgr-42' }),
+        row(1, { managerId: 'clone', layer: 'clone', site: 'distill' }),
+      ],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: 'マネージャー別' });
+    const managers = axisCard('マネージャー別');
+    const link = within(managers).getByRole('link', { name: 'mgr-42' });
+    expect(link.getAttribute('href')).toBe('/managers/mgr-42');
+    expect(within(managers).getByTitle('mgr-42')).toBeTruthy();
+
+    expect(within(managers).getByTitle('clone').textContent).toBe('clone');
+    expect(within(managers).queryByRole('link', { name: 'clone' })).toBeNull();
+    expect(within(managers).getAllByRole('link')).toHaveLength(1);
   });
 
   it('層と場所で絞り込める（4つの口に同じ絞り込みがある）', async () => {

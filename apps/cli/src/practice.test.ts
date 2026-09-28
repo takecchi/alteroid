@@ -338,6 +338,8 @@ describe('alteroid practice list / show', () => {
     const text = read();
     expect(text).toContain('これは正常な状態');
     expect(text).toContain('alteroid practice edit');
+    // 読む先が無いので、本文を読む一手は出さない（1件以上の枝だけが出す）。
+    expect(text).not.toContain('alteroid practice show');
   });
 
   it('一覧は種類・slug・題・作成・更新・文字数を出す', async () => {
@@ -364,6 +366,8 @@ describe('alteroid practice list / show', () => {
     expect(text).toContain('[レビュー] review  — レビューの進め方');
     expect(text).toContain('作成: 2026-09-20T00:00:00.000Z / 更新: 2026-09-21T00:00:00.000Z');
     expect(text).toContain('30 文字');
+    // 一覧から本文へつなぐ一手（`memory list` と同じ形）。最後の行として出る。
+    expect(text.trimEnd().split('\n').at(-1)).toBe('本文を読むには: alteroid practice show <slug>');
   });
 
   /**
