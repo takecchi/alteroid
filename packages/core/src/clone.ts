@@ -6110,6 +6110,11 @@ class Clone implements CloneHost {
         approval.answeredAt,
         approval.answeredVia,
       );
+      // **作られなかった許可の記録も作り直す**（issue #1999。`#reconcilePermissionGrant`
+      // の doc）。配達より先に置く——落ちた窓は `answerApproval` の許可の記録
+      // より前にありうるので、配達だけ埋めると同意が黙って消える。失敗しても配達は
+      // 止めない（関数の中で握る）。
+      await this.#reconcilePermissionGrant(approval);
       try {
         if (claimedIds.has(event.id)) {
           // 直前の `#restoreUnreadPass` が既に拾っている——印を確定させる
@@ -6141,6 +6146,45 @@ class Clone implements CloneHost {
           '起動時、承認の行が answerDelivery=pending のまま残っていた' +
           '（issue #1977。プロセスが answerApproval の途中で落ちた痕跡）。',
       });
+    }
+  }
+
+  /**
+   * 拾い直す承認について、作られなかった許可の記録を作り直す（issue #1999）。
+   *
+   * `answerApproval` は、承認の行を `'pending'` で書いた後に日誌、許可の記録
+   * （`#recordPermissionGrantIfConsented`）、配達の順で書く。許可の記録を終える前に
+   * 落ちると、人間が定型文で同意した許可は作られない。配達だけを拾い直すと、承認は
+   * 解決済みになり、誰も再試行しない——同意が黙って消える（向きは閉じる側）。
+   *
+   * **呼び直すのは、許可の記録の前提を満たす承認だけ**（`permissionRequest` がある・
+   * 回答が定型文・経路がアカウント）。前提を満たさない承認で呼び直すと、
+   * 「記録しなかった」の日誌が二重に出る。**その `approvalId` の許可の記録が既に
+   * 在れば何もしない**——落ちたのが記録の後だった場合に二重にしない。
+   *
+   * 失敗は握って跡を残す（配達の拾い直しは止めない）。
+   */
+  async #reconcilePermissionGrant(
+    approval: PendingApproval & { answeredAt: string; answer: string },
+  ): Promise<void> {
+    if (approval.permissionRequest === undefined) return;
+    if (approval.answer.trim() !== PERMISSION_GRANT_CONSENT_PHRASE) return;
+    if (approval.answeredVia?.kind !== 'account') return;
+    try {
+      const grants = await this.#stores.permissionGrants.list();
+      if (grants.some((grant) => grant.approvalId === approval.id)) return;
+      await this.#recordPermissionGrantIfConsented(
+        approval,
+        approval.answer,
+        approval.answeredAt,
+        approval.answeredVia,
+      );
+    } catch (error) {
+      noteDroppedRecord(
+        '回答済み未配達の承認の許可の記録の拾い直し',
+        `approvalId=${approval.id}`,
+        error,
+      );
     }
   }
 
