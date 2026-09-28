@@ -13,6 +13,7 @@ import type {
   JournalEntryType,
   ManagerPool,
   ManagerSummary,
+  Practice,
   ProfileService,
   RunnerClient,
   RunnerRegistry,
@@ -32,6 +33,7 @@ import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   JournalAnchorNotFoundError,
   TokenPoolInputError,
+  UnreadablePracticeError,
   approvalUpdatedAt,
   chatStreamEventSchema,
   collectConversations,
@@ -2483,6 +2485,13 @@ export function createApp(deps: AppDeps) {
             description: '該当するやり方が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する行は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。' +
+              'issue #2011）。' +
+              'PUT /practices/:slug で書き直すか、DELETE /practices/:slug で外せる。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       async (c) => {
@@ -2497,7 +2506,25 @@ export function createApp(deps: AppDeps) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
-        const practice = await stores.practices.read(slug);
+        // **issue #2011。** `read()` は読めない行で `UnreadablePracticeError` を
+        // 投げる（`PracticeStore.read` の doc）。ここは書き直し・削除の口では
+        // ないので、`PUT`/`DELETE` のように捕まえて先へ進む理由が無い——
+        // それでも素の 500（`onError` 任せ）より、何が起きたかが分かる応答に
+        // したほうが読み手に親切なので、409 として返す（マネージャー判断。
+        // `PUT`/`DELETE` はこれまでどおり投げっぱなしにはしない——4つの口は
+        // 下の実装を見よ）。
+        let practice: Practice | null;
+        try {
+          practice = await stores.practices.read(slug);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          return c.json(
+            {
+              error: `やり方 ${slug} は読めない形で入っている（消されたのではない）。本文はここでは取れない。`,
+            },
+            409,
+          );
+        }
         if (!practice) return c.json({ error: 'not found' as const }, 404);
         return c.json({ practice });
       },
@@ -2531,13 +2558,34 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
         const { kind, title, content } = c.req.valid('json');
-        const before = await stores.practices.read(slug);
+        // **issue #2011。** `before` は「作ったか書き直したか」の分岐にしか
+        // 使わない（`write()` 自体は `before` の値に依存しない）。以前は
+        // `read()` が壊れた行をそのまま返していたので、壊れた slug への PUT
+        // も無事に書き直せていた——`read()` が `UnreadablePracticeError` を
+        // 投げるようになったことで（この PR）、捕まえずに投げっぱなしにすると
+        // PUT がここで落ち、`write()` まで届かなくなる（＝壊れた行を書き直す
+        // 唯一の回復手段が塞がる）。`UnreadablePracticeError` だけを捕まえて
+        // 「在ったが読めない」として先へ進み、それ以外の例外は投げっぱなしに
+        // する。
+        let before: Practice | null;
+        let beforeWasUnreadable = false;
+        try {
+          before = await stores.practices.read(slug);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          before = null;
+          beforeWasUnreadable = true;
+        }
         const practice = await stores.practices.write({ slug, kind, title, content });
         await stores.journal.append({
           type: 'decision',
-          decision: `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
-          grounds:
-            before === null
+          decision: beforeWasUnreadable
+            ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
+            : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
+          grounds: beforeWasUnreadable
+            ? '人間が直接 API から、読めない形で入っていたやり方を書き直した（全文置換。' +
+              '前の本文は読めなかったため分からない）'
+            : before === null
               ? '人間が直接 API から新しいやり方を器に置いた'
               : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
                 'GET /practices/:slug/versions の版の履歴に残る——#1309）',
@@ -2578,14 +2626,44 @@ export function createApp(deps: AppDeps) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return c.json({ error: 'やり方のスラッグが不正' as const }, 400);
         }
-        const existing = await stores.practices.read(slug);
-        if (existing === null) return c.json({ error: 'not found' as const }, 404);
+        // **issue #2011。** `existing` は「無いか（404）／読めたか」の分岐に
+        // 使う。以前は `read()` が壊れた行をそのまま返していたので、壊れた
+        // slug への DELETE も無事に消せていた——`read()` が
+        // `UnreadablePracticeError` を投げるようになったことで（この PR）、
+        // 捕まえずに投げっぱなしにすると DELETE がここで落ち、`remove()` まで
+        // 届かなくなる（＝壊れた行を消す唯一の HTTP 経由の手段が塞がる。
+        // store 自体の `remove()` は slug 指定の直接 `DELETE` なので、壊れて
+        // いても消せることに変わりは無い）。`UnreadablePracticeError` だけを
+        // 捕まえて「在ったが読めない」として先へ進み、本当に無い場合だけ
+        // 404 のままにする。
+        let existing: Practice | null;
+        let wasUnreadable = false;
+        try {
+          existing = await stores.practices.read(slug);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          existing = null;
+          wasUnreadable = true;
+        }
+        if (existing === null && !wasUnreadable) {
+          return c.json({ error: 'not found' as const }, 404);
+        }
         await stores.practices.remove(slug);
-        await stores.journal.append({
-          type: 'decision',
-          decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
-          grounds: '人間が直接 API からやり方を消した',
-        });
+        if (existing !== null) {
+          await stores.journal.append({
+            type: 'decision',
+            decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
+            grounds: '人間が直接 API からやり方を消した',
+          });
+        } else {
+          // ここに来るのは `wasUnreadable === true` のときだけ（直上のガードで
+          // 「無かった」場合は既に 404 で抜けている）。
+          await stores.journal.append({
+            type: 'decision',
+            decision: `読めない形で入っていたやり方 ${slug} を消した`,
+            grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
+          });
+        }
         return c.json({ ok: true, slug });
       },
     )

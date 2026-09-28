@@ -1,7 +1,12 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { ensureTrailingNewline, practiceSchema, practiceVersionSchema } from '@alteroid/core';
+import {
+  ensureTrailingNewline,
+  practiceSchema,
+  practiceVersionSchema,
+  UnreadablePracticeError,
+} from '@alteroid/core';
 import type {
   Practice,
   PracticeMeta,
@@ -251,7 +256,11 @@ export class FsPracticeStore implements PracticeStore {
   /**
    * **`list()` とは違い、読めない行は投げる**（`PracticeStore.read` の doc
    * 「無ければ null。読めないは throw」。`FsScheduleStore.get` の同じ形・
-   * 同じ理由。issue #1967）。
+   * 同じ理由。issue #1967）。**投げる型は `UnreadablePracticeError`
+   * （`@alteroid/core`、issue #2011）**——`PUT`/`DELETE /practices/:slug`
+   * （`apps/daemon/src/app.ts`）と `practice_write`/`practice_remove`
+   * （`packages/core/src/tools.ts`）が `instanceof` で見分け、「在ったが
+   * 読めない」として書き直し・削除まで進むため。
    */
   async read(slug: string): Promise<Practice | null> {
     const file = await this.#read();
@@ -264,8 +273,9 @@ export class FsPracticeStore implements PracticeStore {
     // では `result.success` を保証できないので、成功していたら（起こり
     // 得ない）その値を返す——念のための保険であって、通常はここへ来ない。
     if (result.success) return toPractice(result.data);
-    throw new Error(
+    throw new UnreadablePracticeError(
       `やり方 ${slug} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
+      { slug },
     );
   }
 
@@ -431,6 +441,8 @@ export class FsPracticeStore implements PracticeStore {
    * 版を1つ、本文まで読む。**`listVersions()` とは違い、読めない行は投げる**
    * （`PracticeStore.readVersion` の doc「無ければ null——`read()` と同じ線」。
    * `read()` / `FsScheduleStore.get` と同じ形・同じ理由。issue #1967）。
+   * **投げる型は `read()` と同じ `UnreadablePracticeError`**（`version` も持つ。
+   * issue #2011）。
    */
   async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {
     const file = await this.#read();
@@ -444,8 +456,9 @@ export class FsPracticeStore implements PracticeStore {
     if (invalidRaw === undefined) return null;
     const result = practiceVersionRecordSchema.safeParse(invalidRaw);
     if (result.success) return toVersion(result.data);
-    throw new Error(
+    throw new UnreadablePracticeError(
       `やり方 ${slug} の版 ${version} が読めない形で入っている（消されたのではない）: ${result.error.message}`,
+      { slug, version },
     );
   }
 

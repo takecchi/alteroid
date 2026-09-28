@@ -2043,6 +2043,35 @@ export interface SessionTranscriptTail {
 }
 
 /**
+ * `PracticeStore.read(slug)` / `PracticeStore.readVersion(slug, version)` が、
+ * その行を `practiceSchema` / `practiceVersionSchema` として読めなかったときに
+ * 投げる専用のエラー型（issue #2011）。`UnreadableCommitmentError`（本ファイル）
+ * と同じ形——「無い」（`null`）と「読めない」（throw）の区別を、呼び出し側が
+ * `instanceof` で見分けられるようにする。メッセージの文字列（`/読めない形/` 等）
+ * で判定すると、言い回しを直しただけで判定が静かに外れる。
+ *
+ * **`slug` と、版を読んでいたときは `version` も持つ**——`PUT`/`DELETE
+ * /practices/:slug`（`apps/daemon/src/app.ts`）と `practice_write` /
+ * `practice_remove`（`packages/core/src/tools.ts`）が、`read()` を「無いか
+ * どうか」の判定にしか使っていないのに、壊れた行では `read()` 自体が投げて
+ * `write()` / `remove()` まで届かなくなる穴があった（fs 側は issue #1975 の時点
+ * から、pg 側は issue #2011 のこの直しの時点から）。この4つの口は
+ * `UnreadablePracticeError` を捕まえたら「在ったが読めない」として扱い、
+ * 書き直し・削除まで進む——`slug` はその分岐にも日誌の文言にも使う。
+ */
+export class UnreadablePracticeError extends Error {
+  readonly slug: string;
+  readonly version: number | undefined;
+
+  constructor(message: string, params: { slug: string; version?: number }) {
+    super(message);
+    this.name = 'UnreadablePracticeError';
+    this.slug = params.slug;
+    this.version = params.version;
+  }
+}
+
+/**
  * 仕事の**やり方** = クローンが読む素材（#1055 段3）。
  *
  * ## ⛔ 器が実行を強制しない（ここが壊れると北極星が壊れる）
@@ -2069,7 +2098,11 @@ export interface PracticeStore {
    * ⚠️ 照合順序の厳密な一致までは保証しない（`PersonaStore.list` の doc と同じ）。
    */
   list(): Promise<PracticeMeta[]>;
-  /** 無ければ `null`（「読めない」は throw。`CommitmentStore.get` と同じ線）。 */
+  /**
+   * 無ければ `null`（「読めない」は throw。`CommitmentStore.get` と同じ線）。
+   * 投げるのは `UnreadablePracticeError`（本ファイル、issue #2011）——
+   * `instanceof` で見分けられる。
+   */
   read(slug: string): Promise<Practice | null>;
   /**
    * 全文置換。存在しなければ作る。
@@ -2124,7 +2157,8 @@ export interface PracticeStore {
 
   /**
    * 版を1つ、本文まで読む（#1309）。無ければ `null`
-   * （`read()` と同じ線——「無い」は throw ではない）。
+   * （`read()` と同じ線——「無い」は throw ではない）。読めない行は
+   * `UnreadablePracticeError`（`version` も持つ）を投げる（issue #2011）。
    *
    * `remove()` された slug の版も読める——版は「いまのやり方」の存在に依存しない。
    */

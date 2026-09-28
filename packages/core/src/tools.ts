@@ -184,6 +184,7 @@ import type {
   MemoryDocumentMeta,
   MemoryProtectionStatus,
   PendingApproval,
+  Practice,
   ScheduleSpec,
   ScheduledRequest,
   UnpushedWorkObservationSource,
@@ -197,7 +198,11 @@ import {
   describeCloneRuntime,
 } from './self.js';
 import type { CloneRuntimeFacts } from './self.js';
-import { EXCHANGE_WITH_VALUES, UnreadableCommitmentError } from './store.js';
+import {
+  EXCHANGE_WITH_VALUES,
+  UnreadableCommitmentError,
+  UnreadablePracticeError,
+} from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
@@ -9161,16 +9166,38 @@ export function createCloneTools(context: ToolContext) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        const before = await stores.practices.read(slug);
+        // **issue #2011。** `before` は「作ったか書き直したか」の分岐と、
+        // 差分表示（`describeTokenDiff`）にしか使わない（`write()` 自体は
+        // `before` の値に依存しない）。以前は `read()` が壊れた行をそのまま
+        // 返していたので、壊れた slug への `practice_write` も無事に書き
+        // 直せていた——`read()` が `UnreadablePracticeError` を投げるように
+        // なったことで（この PR）、捕まえずに投げっぱなしにするとここで
+        // 落ち、`write()` まで届かなくなる（＝壊れた行を書き直す唯一の
+        // 回復手段が塞がる。`PUT /practices/:slug` と同じ理由・同じ形）。
+        // `UnreadablePracticeError` だけを捕まえて「在ったが読めない」として
+        // 先へ進み、それ以外の例外は投げっぱなしにする。
+        let before: Practice | null;
+        let beforeWasUnreadable = false;
+        try {
+          before = await stores.practices.read(slug);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          before = null;
+          beforeWasUnreadable = true;
+        }
         const written = await stores.practices.write({ slug, kind, title, content });
         await appendJournalOrThrow(
           'practice_write',
           stores.journal,
           {
             type: 'decision',
-            decision: `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
-            grounds:
-              before === null
+            decision: beforeWasUnreadable
+              ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
+              : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
+            grounds: beforeWasUnreadable
+              ? '読めない形で入っていたやり方を書き直した（全文置換。前の本文は読めなかった' +
+                'ため分からない。版の履歴には今回の内容だけが新しい版として積まれる——#1309）'
+              : before === null
                 ? '新しいやり方を器に置いた'
                 : 'やり方を書き直した（全文置換。いまの本文の読み口は最新の1本だが、' +
                   '前の本文は版の履歴（practice_history）に残る——#1309）',
@@ -9178,7 +9205,13 @@ export function createCloneTools(context: ToolContext) {
           'act-completed',
         );
         return text(
-          `やり方 ${slug} を${before === null ? '新しく作った' : '書き直した'}` +
+          `やり方 ${slug} を${
+            beforeWasUnreadable
+              ? '（読めない形で入っていたやり方を）書き直した'
+              : before === null
+                ? '新しく作った'
+                : '書き直した'
+          }` +
             `（${String(written.chars)} 文字。前の版は practice_history slug=${slug} で読める）。` +
             'practice_list で一覧に出る。' +
             ((note) => (note === null ? '' : `\n${note}`))(
@@ -9202,25 +9235,59 @@ export function createCloneTools(context: ToolContext) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        const before = await stores.practices.read(slug);
+        // **issue #2011。** `before` は「無かったか（何もしない）／読めたか」の
+        // 分岐に使う。以前は `read()` が壊れた行をそのまま返していたので、
+        // 壊れた slug への `practice_remove` も無事に消せていた——`read()` が
+        // `UnreadablePracticeError` を投げるようになったことで（この PR）、
+        // 捕まえずに投げっぱなしにするとここで落ち、`remove()` まで届かなく
+        // なる（＝壊れた行を消す唯一の回復手段が塞がる。`DELETE
+        // /practices/:slug` と同じ理由・同じ形）。`UnreadablePracticeError`
+        // だけを捕まえて「在ったが読めない」として先へ進み、それ以外の例外は
+        // 投げっぱなしにする。
+        let before: Practice | null;
+        let wasUnreadable = false;
+        try {
+          before = await stores.practices.read(slug);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          before = null;
+          wasUnreadable = true;
+        }
         await stores.practices.remove(slug);
         // **無かったときは日誌を書かない。** 何も起きていないのに「消した」という
         // 判断の跡を残すと、日誌が実際の変化と食い違う（`PracticeStore.remove`
         // の doc「冪等」——冪等であることと、無かった呼び出しを記録することは別）。
-        if (before === null) {
+        // **「読めなかった」は「無かった」ではない**——行そのものは在ったので、
+        // ここでは書き進める。
+        if (before === null && !wasUnreadable) {
           return text(`やり方 ${slug} はもともと無かった（何もしていない）。`);
         }
+        if (before !== null) {
+          await appendJournalOrThrow(
+            'practice_remove',
+            stores.journal,
+            {
+              type: 'decision',
+              decision: `やり方 ${slug}（${before.kind}）を消した: ${before.title}`,
+              grounds: '不要になったと判断した',
+            },
+            'act-completed',
+          );
+          return text(`やり方 ${slug} を消した。`);
+        }
+        // ここに来るのは `wasUnreadable === true` のときだけ（直上のガードで
+        // 「無かった」場合は既に抜けている）。
         await appendJournalOrThrow(
           'practice_remove',
           stores.journal,
           {
             type: 'decision',
-            decision: `やり方 ${slug}（${before.kind}）を消した: ${before.title}`,
-            grounds: '不要になったと判断した',
+            decision: `読めない形で入っていたやり方 ${slug} を消した`,
+            grounds: '読めない形で入っていたやり方を外した',
           },
           'act-completed',
         );
-        return text(`やり方 ${slug} を消した。`);
+        return text(`読めない形で入っていたやり方 ${slug} を消した。`);
       },
     ),
 

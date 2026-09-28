@@ -5,6 +5,7 @@ import {
   practiceSlugSchema,
   practiceVersionMetaSchema,
   practiceVersionSchema,
+  UnreadablePracticeError,
 } from '@alteroid/core';
 import type {
   Practice,
@@ -147,7 +148,11 @@ export class PgPracticeStore implements PracticeStore {
   /**
    * **`list()` とは違い、読めない行は投げる**（`PracticeStore.read` の doc
    * 「無ければ null。読めないは throw」。`FsPracticeStore.read` と同じ形・
-   * 同じ理由。issue #2011）。
+   * 同じ理由。issue #2011）。**投げる型は `UnreadablePracticeError`
+   * （`@alteroid/core`）**——`PUT`/`DELETE /practices/:slug`
+   * （`apps/daemon/src/app.ts`）と `practice_write`/`practice_remove`
+   * （`packages/core/src/tools.ts`）が `instanceof` で見分け、「在ったが
+   * 読めない」として書き直し・削除まで進むため。
    */
   async read(slug: string): Promise<Practice | null> {
     const rows = await this.#db
@@ -175,8 +180,9 @@ export class PgPracticeStore implements PracticeStore {
       chars: row.chars,
     });
     if (!parsed.success) {
-      throw new Error(
+      throw new UnreadablePracticeError(
         `やり方 ${slug} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
+        { slug },
       );
     }
     return parsed.data;
@@ -348,7 +354,8 @@ export class PgPracticeStore implements PracticeStore {
   /**
    * 版を1つ、本文まで読む。**`listVersions()` とは違い、読めない行は投げる**
    * （`PracticeStore.readVersion` の doc「無ければ null。読めないは throw」と
-   * 同じ線。issue #2011）。
+   * 同じ線。issue #2011）。**投げる型は `read()` と同じ `UnreadablePracticeError`**
+   * （`version` も持つ）。
    */
   async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {
     const rows = await this.#db
@@ -378,8 +385,9 @@ export class PgPracticeStore implements PracticeStore {
       chars: row.chars,
     });
     if (!parsed.success) {
-      throw new Error(
+      throw new UnreadablePracticeError(
         `やり方 ${slug} の版 ${version} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
+        { slug, version },
       );
     }
     return parsed.data;
