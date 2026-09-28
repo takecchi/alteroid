@@ -8470,7 +8470,11 @@ describe('runner の一覧（ManagerPool.runners）', () => {
       { name: 'GITHUB_TOKEN', sha256: 'deadbeef0000', updatedAt: '2026-01-01T00:00:00.000Z' },
     ];
     a.fakeProfile = { sha256: 'cafef00dbabe', bytes: 3, updatedAt: '2026-01-01T00:00:00.000Z' };
-    a.fakeMcpServers = { sha256: 'abc123abc123', names: ['github'], updatedAt: '2026-01-01T00:00:00.000Z' };
+    a.fakeMcpServers = {
+      sha256: 'abc123abc123',
+      names: ['github'],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
     const stores = createMemoryStores();
     const registry = createRunnerRegistry([a]);
     const pool = createManagerPool({ stores, post: () => undefined, runners: registry });

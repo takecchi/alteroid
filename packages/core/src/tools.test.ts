@@ -9699,9 +9699,7 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { fingerprints: true });
 
     expect(reply).toContain('鍵を確かめられなかった: Error: credentials RPC failed (test)');
-    expect(reply).toContain(
-      'プロファイルを確かめられなかった: Error: profile RPC failed (test)',
-    );
+    expect(reply).toContain('プロファイルを確かめられなかった: Error: profile RPC failed (test)');
     // **失敗の行が出た代わりに、値の欄由来の文言は出ない**（潰れていない証拠）。
     expect(reply).not.toContain('鍵の指紋');
     expect(reply).not.toContain('プロファイルの指紋');

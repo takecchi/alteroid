@@ -1377,9 +1377,7 @@ export interface RunnerPushHealth {
  * - `failed` — 叩いたが失敗した。理由は `reasonOf` で1行に畳む
  */
 export type RunnerFingerprintProbe =
-  | { status: 'asked' }
-  | { status: 'unheard' }
-  | { status: 'failed'; error: string };
+  { status: 'asked' } | { status: 'unheard' } | { status: 'failed'; error: string };
 
 /**
  * MCP の登録の指紋を聞きに行けたかどうか（Issue #1949）。
@@ -4611,7 +4609,8 @@ async function probeRunnerMcpServersFingerprint(
 }> {
   if (!fingerprints) return { value: undefined, probe: undefined };
   if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
-  if (client.mcpServers === undefined) return { value: undefined, probe: { status: 'unsupported' } };
+  if (client.mcpServers === undefined)
+    return { value: undefined, probe: { status: 'unsupported' } };
   try {
     return { value: await client.mcpServers(), probe: { status: 'asked' } };
   } catch (error) {
