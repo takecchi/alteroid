@@ -70,10 +70,16 @@ import { describe, expect, it } from 'vitest';
  * `clone-test-harness.ts` の `waitFor` で待ち合わせる、この系譜と同じ形の
  * 統合寄りの試験なので、ここへ足す（この節の doc の「広げるなら、広げる側が
  * 『どのファイルのどの形が禁止か』を自分で決めること」に対する回答）。
+ *
+ * **`clone-pump-redelivery-hitb-order.test.ts` も同じ理由で2本目として足す**
+ * （#1744 続き。`#noteRedeliveryPredicateHitB` の位置の characterization）。
+ * `createClone` を実際に走らせ、`clone-test-harness.ts` の `waitFor` で
+ * 待ち合わせる同じ形である。
  */
 const TARGET_RELATIVE_PATHS: readonly string[] = [
   'clone-test-harness.ts',
   'clone-handle-order.test.ts',
+  'clone-pump-redelivery-hitb-order.test.ts',
   'clone-core-loop.test.ts',
   'clone-manager-confirmation-and-shutdown.test.ts',
   'clone-self-status-and-memory-cause.test.ts',
