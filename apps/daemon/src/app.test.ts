@@ -3962,6 +3962,51 @@ describe('HTTP API', () => {
     expect(single.manager.lastUnpushedWorkObservation).toBeDefined();
   });
 
+  /**
+   * #1885: 台帳の未 push の観測（`kind: 'observed'`）は、「打ち切った／読めなかった」
+   * の4欄（`truncatedAtCount` / `stoppedEarly` / `scratchRootsUnknown` /
+   * `unreadableDirCount`）を持つ。`managerSummarySchema` は `jobSchema.shape` の
+   * この欄を借りているが、借りる形が変わると zod が4欄を黙って落とし、画面と
+   * CLI では「探しきった観測」に見える。応答から読んで、4欄が届くことを見る
+   * （`unreadableDirSample` は台帳へ写さない約束なので、ここにも無い）。
+   */
+  it('未 push の観測の「打ち切った／読めなかった」の4欄（#1885）が GET /managers と GET /managers/:id の応答まで届く', async () => {
+    const observation = {
+      kind: 'observed' as const,
+      at: '2026-01-01T00:05:00.000Z',
+      cwd: '/work',
+      worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+      truncatedAtCount: 50,
+      stoppedEarly: true as const,
+      scratchRootsUnknown: '確かめられなかった（/tmp を読めなかった: EACCES）',
+      unreadableDirCount: 2,
+    };
+    fake.managerList.push({
+      managerId: 'mgr-incomplete-observation',
+      status: 'done',
+      live: false,
+      cwd: '/work',
+      request: '調べて',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      waiting: [],
+      lastUnpushedWorkObservation: observation,
+    });
+
+    const listed = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; lastUnpushedWorkObservation?: unknown }[];
+    };
+    expect(
+      listed.managers.find((m) => m.managerId === 'mgr-incomplete-observation')
+        ?.lastUnpushedWorkObservation,
+    ).toEqual(observation);
+
+    const single = (await (await app.request('/managers/mgr-incomplete-observation')).json()) as {
+      manager: { lastUnpushedWorkObservation?: unknown };
+    };
+    expect(single.manager.lastUnpushedWorkObservation).toEqual(observation);
+  });
+
   it('台帳に無い id は 404（評定は「書けた」と嘘をつかない）', async () => {
     expect(
       (await app.request('/commitments/nope/appraise', json({ appraisal: 'good' }))).status,
