@@ -392,9 +392,7 @@ describe('inspectBashCommand — gh pr merge --delete-branch: まだテストが
   });
 
   it.fails('timeout -k（timeout 自身のオプション文法までは解いていない）', () => {
-    expect(inspectBashCommand('timeout -k 5 30 gh pr merge 1 --delete-branch').blocked).toBe(
-      true,
-    );
+    expect(inspectBashCommand('timeout -k 5 30 gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
   it.fails('値が空白を含む引用符形の代入（X="a b"。\\S* が最初の空白までしか読めない）', () => {

@@ -66,16 +66,15 @@ describe('gh-pr-merge-delete-branch: 予約語・グルーピングの前置き�
   });
 
   it('引用符の中の env 前置き付き gh pr merge --delete-branch は通す（既存の対照と同種）', () => {
-    expect(
-      inspectBashCommand('echo "GH_TOKEN=x gh pr merge 1 --delete-branch"').blocked,
-    ).toBe(false);
+    expect(inspectBashCommand('echo "GH_TOKEN=x gh pr merge 1 --delete-branch"').blocked).toBe(
+      false,
+    );
   });
 
   it('--subject の値の中に { gh pr merge -d } という字面が在っても通す', () => {
     expect(
-      inspectBashCommand(
-        'gh pr merge 1 --subject "fix(guard): { gh pr merge -d }" --squash',
-      ).blocked,
+      inspectBashCommand('gh pr merge 1 --subject "fix(guard): { gh pr merge -d }" --squash')
+        .blocked,
     ).toBe(false);
   });
 
