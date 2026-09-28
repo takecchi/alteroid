@@ -185,12 +185,20 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
    * 失敗する」ことで緑になる。issue #1991 が直ったら、この assertion が
    * 実際に通るようになり `it.fails` 自体が失敗する（＝直ったことに気づく
    * トリップワイヤーになる）——そうなったら `it.fails` を `it` に戻す。
+   *
+   * ⟹ **issue #1991 で直った（同じマネージャー mgr-81affbde からの依頼）。**
+   * `GH_PR_MERGE_DELETE_BRANCH_RE` の `-d` の lookbehind を、空白1文字だけ
+   * でなく「コマンド位置に在る引用符（`"`/`'`）」も認めるように広げた
+   * （`bash-wait-guard.ts` の `SHORT_DELETE_BRANCH_FLAG_SRC` の doc 参照）。
+   * 上の `it.fails` は実際に「期待どおり失敗しなかった」ことでトリップワイヤー
+   * が発火した（`Error: Expect test to fail`）ので、ここで `it` に戻す
+   * ——期待値（`blocked: true`）は変えていない。
    */
-  it.fails('[既知・範囲外・issue #1991] 二重引用符で囲まれた素の `-d`（`"-d"`）も弾きたい', () => {
+  it('[issue #1991 で直った] 二重引用符で囲まれた素の `-d`（`"-d"`）も弾く', () => {
     expect(inspectBashCommand('gh pr merge 1 "-d"').blocked).toBe(true);
   });
 
-  it.fails("[既知・範囲外・issue #1991] 単一引用符で囲まれた素の `-d`（`'-d'`）も弾きたい", () => {
+  it("[issue #1991 で直った] 単一引用符で囲まれた素の `-d`（`'-d'`）も弾く", () => {
     expect(inspectBashCommand("gh pr merge 1 '-d'").blocked).toBe(true);
   });
 

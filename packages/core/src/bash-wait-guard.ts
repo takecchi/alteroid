@@ -451,9 +451,10 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * 別の穴である。** #1991 は `-d` の**手前**（lookbehind、直前が引用符だと
  * 空白と認められない）の話で、ここで直したのは `-d` の**後ろ**
  * （lookahead/`\b`、直後がバッククォート等だと終端と認められない）の話。
- * 手前の穴（#1991）はこの PR でも直していない——`"-d"`/`'-d'` は
+ * 手前の穴（#1991）はこの PR（PR #1990）でも直していない——`"-d"`/`'-d'` は
  * このコマンド置換の修正とは無関係にすり抜けたままである（下のテストで
- * 対照している）。
+ * 対照している）。**その後、issue #1991 自体は別の依頼で直った**
+ * （`SHORT_DELETE_BRANCH_FLAG_SRC` の doc 参照）。
  *
  * ## ⚠️ この検出器が弾けないと分かっている形
  *
@@ -462,7 +463,7 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   条件だけで素通しされる。これは他の文字列だけを読む判定器と同じ限界
  *   であり、この PR でも直していない（歯は
  *   `bash-wait-guard.test.ts` の末尾に明記する）。
- * - **⚠️ `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、`--subject` /
+ * - ~~**⚠️ `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、`--subject` /
  *   `--body` の値ではなく素で引用符に囲まれた短縮フラグ `-d`。** issue #1910
  *   の作業中に見つけた、**この PR とは無関係な既存の穴**（この PR が作った
  *   ものでも、この PR で直すものでもない）。`-d` の検出
@@ -471,7 +472,13 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   リテラルの `-d`（本物のフラグ）である。長い形の `--delete-branch\b` は
  *   この lookbehind を持たないため同じ形でも引き続き弾く（対照は
  *   `bash-wait-guard-delete-branch-quoted-values.test.ts`）。issue #1991 で
- *   報告した（AGENTS.md「範囲外でも気づいたことは上げる」）。
+ *   報告した（AGENTS.md「範囲外でも気づいたことは上げる」）。~~ **issue #1991
+ *   で直した**（`SHORT_DELETE_BRANCH_FLAG_SRC` の doc 参照——`-d` の手前の
+ *   lookbehind に「コマンド位置に在る引用符」を加えた）。**取り消し線のまま
+ *   残すのは、直す前にどう限界を認識していたかを次に読む人が辿れるように
+ *   するためである**（#1933/#1939 の同じ扱いと同根）。**残る限界**（引用符と
+ *   テキストが直接連結した形 `"-"d` 等、`--body-file` の値が偶然 `-d` で
+ *   始まる引用符文字列）は `SHORT_DELETE_BRANCH_FLAG_SRC` の doc に書いた。
  * - **`--delete-branch=false` のような明示的な無効化。** `\b` は文字種の
  *   境界でしか見ないので、`--delete-branch` の直後が `=false` でも弾く
  *   （確かめていない・稀な形と判断して対応していない）。
@@ -610,8 +617,68 @@ const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:-u\s+\S+\s+)*`;
  */
 const LEADING_ENV_PREFIX_SRC = String.raw`(?:${ENV_ASSIGNMENT_SRC}|${TIMEOUT_COMMAND_PREFIX_SRC}|${ENV_COMMAND_PREFIX_SRC})*`;
 
+/**
+ * `-d` の手前（lookbehind）—— issue #1991 で直した。
+ *
+ * ## 直す前の穴
+ *
+ * 以前は `(?<=[\s])-d\b`——直前が**空白1文字だけ**であることしか認めて
+ * いなかった。`gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、
+ * 引用符で囲んだ短縮フラグは直前が引用符（`"` / `'`）であって空白では
+ * ないため、この lookbehind に当たらずすり抜けていた。**bash は引用符を
+ * 外してから引数を渡すので、`gh` に実際に届く引数はリテラルの `-d`
+ * （本物のフラグ）である**——PR #1990 の「後ろ」（lookahead/`\b`）の直し
+ * とは無関係に残っていた、別の（手前の）穴（PR #1990 本文・issue #1991、
+ * `bash-wait-guard-delete-branch-quoted-values.test.ts` の `it.fails` 2本
+ * で固定されていた）。
+ *
+ * ## 直し方
+ *
+ * 直前が次のどちらかであれば認める:
+ *
+ * 1. **空白1文字**（従来どおり）。
+ * 2. **引用符（`"` / `'`）で、かつその引用符自体が「コマンド位置」
+ *    （行頭・`;`/`&`/`|`/改行の直後、または空白の直後）に在る**
+ *    ——`(?:^|[\s;&|])['"]`。**引用符そのものが在ればよい、ではない**
+ *    ——たとえば `foo"-d"` は bash の実際の argv 分割では1つの引数
+ *    `foo-d`（`-d` 単体ではない）になるので、引用符の直前も
+ *    `^`/空白/演算子であることを要求して除外する。
+ *
+ * 後ろ側（trailing）はこれまでの `\b` のままでよい —— `"` も `'` も
+ * 単語構成文字ではないので、`"-d"` の閉じ引用符の手前で `\b` は自然に
+ * 成立する（`d` → `"` の遷移は単語→非単語の境界）。
+ *
+ * ⚠️ **`-dfoo` / `--depth` を誤って弾かないこと** —— `\b` は `-d` の直後が
+ * 単語構成文字（`f`/`e` 等）だと成立しないので、これらは従来どおり弾かれ
+ * ない（`bash-wait-guard.test.ts` の「-d を含む別の語（-dev 等）と誤認
+ * しない」、`bash-wait-guard-delete-branch-issue-1991.test.ts` の対照群）。
+ *
+ * ⚠️ **`--subject`/`-t`/`--body`/`-b` の値の中の `-d`（空白混じり含む）を
+ * 誤って弾かないこと** —— この正規表現が評価される時点で、値の引用符の
+ * 中身は `stripGhPrMergeQuotedSubjectBodyValues` が既に空白へ潰した後
+ * である（`hasGhPrMergeDeleteBranch` の処理順）。潰された区間には `-d`
+ * という文字自体が残らないので、この lookbehind の拡張がそこへ新しく
+ * 誤爆することはない（`bash-wait-guard-delete-branch-issue-1991.test.ts`
+ * の「--subject の値の中の空白混じりの -d」で確認）。
+ *
+ * ⚠️ **意図して直していない・確かめていない形**（すり抜けを作らない方向の
+ * 保守的な選択）:
+ *
+ * - **引用符とテキストが直接連結した形**（`"-"d`・`-"d"`・`\-d` など）。
+ *   bash はこれらも1つの引数 `-d` に結合しうるが、この直しは「引用符が
+ *   `-d` を丸ごと囲む、素直な形」だけを見ている。連結形は直前が引用符・
+ *   空白のどちらでもない位置に在りうるため、この lookbehind には当たらず
+ *   引き続きすり抜ける（安全側——検出漏れは残るが誤検知は増えない）。
+ * - **`--body-file`/他のフラグの値が偶然 `-d` で始まる引用符文字列**
+ *   （例: `--body-file "-d-notes.txt"`）。これは同じ弱さが**引用符無し**
+ *   の形（`--body-file -d-notes.txt`）にも従来から在る——空白の直後という
+ *   条件だけでは、値なのかフラグなのかを区別できない。この PR で新しく
+ *   増やした弱さではない。
+ */
+const SHORT_DELETE_BRANCH_FLAG_SRC = String.raw`(?<=[\s]|(?:^|[\s;&|])['"])-d\b`;
+
 const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
-  String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d\b)`,
+  String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|${SHORT_DELETE_BRANCH_FLAG_SRC})`,
 );
 
 /**
@@ -668,12 +735,14 @@ function blankQuotedValueInterior(quoted: string): string {
  * `computeOutsideQuoteMask` が返す、走査位置ごとの状態。
  *
  * - `outside`: どちらの引用符の中にも居ない（bash の「素の」構文位置）
- * - `single`: 単一引用符の中
+ * - `single`: 単一引用符（`'…'`）の中
  * - `double`: 二重引用符の中
+ * - `ansiC`: **ANSI-C クオート（`$'…'`）の中**（issue #1991 の作業中に
+ *   発見、下の doc「`$'…'`（ANSI-C クオート）も状態機械で追う」参照）
  * - `unknown`: これ以上は確信を持って追えない（末尾がバックスラッシュで
  *   終わる等）。**一度なったら残り全部が `unknown` のまま**（sticky）。
  */
-type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'unknown';
+type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'ansiC' | 'unknown';
 
 /**
  * `command` の各文字位置について、「その位置の**直前まで**実際に bash の
@@ -727,6 +796,70 @@ type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'unknown';
  *   `unknown` の位置は「外側だと確信できない」ので `false` を返す——弾く側
  *   に倒す。
  *
+ * ## `$'…'`（ANSI-C クオート）も状態機械で追う（issue #1991 の作業中に発見）
+ *
+ * 直す前の版は `$'…'` を専用に扱っておらず、開きの `'` を普通の単一引用符
+ * と同じ規則（エスケープ無し）で読んでいた。**これが誤りだった**——bash の
+ * ANSI-C クオートの中では `\'` がエスケープとして効き、閉じ引用符を1つ
+ * 読み飛ばして文字列を開いたままにする（普通の `'…'` には無い規則）。
+ *
+ * 誤りが実際にすり抜けを作ることを確認した（`argv-dump.sh` で bash の実際
+ * の argv 分割を検証、2026-09-28、`bash-wait-guard-delete-branch-issue-1991.test.ts`
+ * に生出力の要約がある）:
+ *
+ * ```
+ * gh pr merge 1 $'z\' --subject "y' --delete-branch '"'
+ * ```
+ *
+ * bash の読み（実測）: `$'z\' --subject "y'`（ANSI-C クオート1つ。`\'` で
+ * エスケープされた `'` を含みながら、最後の素の `'` まで1つの引数
+ * `z' --subject "y` として結合）+ **本物の、引用符無しの `--delete-branch`**
+ * + 単一引用符 `'"'`。
+ *
+ * 直す前の状態機械の読み: `$` を特別扱いせず、直後の `'` を普通の単一引用符
+ * の開始として `single` へ遷移させる。`single` 状態は `\` を特別扱いしない
+ * ので、`\'` の `\` はただの文字として読み飛ばし、次の `'` を（本当はまだ
+ * 閉じていないのに）閉じ引用符と誤認して `outside` へ早期に戻ってしまう。
+ * この誤った `outside` の期間の中に、たまたま字面として書かれた
+ * `--subject "` が「本物のフラグ」だと誤読され（指摘3と同じ形の誤読）、
+ * その後ろの空白混じりの `y' --delete-branch ` が「`--subject` の二重
+ * 引用符の値」として素直に閉じ位置（誤って `single` に入り直した後の
+ * `"`）まで見つかってしまい、**本物の `--delete-branch` ごと空白へ潰されて
+ * 検出から消える**。実測: 直す前は `inspectBashCommand` がこの文字列に対し
+ * `{ blocked: false }` を返していた（`bash-wait-guard-delete-branch-issue-1991.test.ts`
+ * の該当テストが直す前は赤だった）。
+ *
+ * ⟹ **`$'`（2文字のトークン）を専用の状態 `ansiC` として追う。** `outside`
+ * 状態で `$` の直後が `'` なら（2文字消費して）`ansiC` へ遷移する。`ansiC`
+ * の中では `double` と同じ規則で `\` が直後の1文字を読み飛ばし（2文字消費、
+ * 状態は `ansiC` のまま）、エスケープされていない `'` だけが `outside` へ
+ * 戻す（`"` は `ansiC` の中では特別扱いしない——ただの文字）。これで上の
+ * 実例は、`\'` を正しくエスケープとして読み飛ばし、本当の閉じ引用符
+ * （`y` の直後の `'`）まで `ansiC` のまま追えるようになり、`--subject`
+ * の開始位置は（`ansiC` の中なので）`outside` ではないと正しく判定される
+ * ——`stripGhPrMergeQuotedSubjectBodyValues` が潰さず、本物の
+ * `--delete-branch` がそのまま残って引き続き検出される。
+ *
+ * ⚠️ **`$` それ自体は特別扱いしない**（直後が `'` のときだけ `$'` という
+ * 2文字のトークンとして見る）。`$(...)`/`${...}`/`$var` のような他の `$`
+ * の使い方は、この状態機械にとって以前と同じ「ただの文字」のままである
+ * （下の「完全な shell 構文解析ではない」の限界と同根——`$'…'` の中では
+ * bash 自身もコマンド置換や変数展開を行わないので、この状態機械が
+ * それらを追わなくても矛盾は起きない）。
+ *
+ * ⚠️ **確かめていない・意図して直していない形**:
+ *
+ * - **`ansiC` の中で `\` が文字列の末尾に来る場合** は `unknown` へ遷移する
+ *   （`double` と同じ fail-safe。個別のテストは追加していない——`double`
+ *   状態の同じ経路で既に「読めないときは弾く側」の設計が確認されている
+ *   ため、同じコードパスを再利用しているここでも成り立つと判断した）。
+ * - **`$'…'` の中に書かれた `\$`/`` \` `` 等、実際には bash が特別な1文字へ
+ *   変換するエスケープシーケンス**（`\n`/`\t`/`\xNN` 等）の**中身**まで
+ *   忠実に解釈する必要は無い——この状態機械が要るのは「文字列がどこで
+ *   閉じるか」だけであり、`\` の直後の1文字を無条件に読み飛ばす規則は
+ *   どのエスケープシーケンスに対しても閉じ位置を正しく保つ（`double` の
+ *   doc と同じ理由）。
+ *
  * ## なぜフラグの開始位置だけ見ればよいか
  *
  * `--subject`/`-t`/`--body`/`-b` という字面自体、`=`、空白のどれも引用符・
@@ -758,6 +891,13 @@ function computeOutsideQuoteMask(command: string): boolean[] {
         } else {
           i += 1;
         }
+      } else if (ch === '$' && command[i + 1] === "'") {
+        // `$'…'`（ANSI-C クオート）—— 2文字のトークンとしてまとめて消費し、
+        // 専用の `ansiC` 状態へ遷移する（issue #1991 の作業中に発見。doc
+        // 「`$'…'`（ANSI-C クオート）も状態機械で追う」参照）。普通の `'`
+        // （`single`）とは違い、この中では `\` がエスケープとして効く。
+        state = 'ansiC';
+        i += 1;
       } else if (ch === "'") {
         state = 'single';
       } else if (ch === '"') {
@@ -773,6 +913,18 @@ function computeOutsideQuoteMask(command: string): boolean[] {
           i += 1;
         }
       } else if (ch === '"') {
+        state = 'outside';
+      }
+    } else if (state === 'ansiC') {
+      // `double` と同じ規則——`\` は直後の1文字を無条件に読み飛ばす（2文字
+      // 消費、状態は `ansiC` のまま）。`"` は特別扱いしない（ただの文字）。
+      if (ch === '\\') {
+        if (i + 1 >= command.length) {
+          state = 'unknown';
+        } else {
+          i += 1;
+        }
+      } else if (ch === "'") {
         state = 'outside';
       }
     }
