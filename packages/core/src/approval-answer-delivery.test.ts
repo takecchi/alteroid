@@ -333,3 +333,103 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     await clone.stop();
   });
 });
+
+/**
+ * issue #1999（#1977 の残り）: `answerApproval` の途中（承認の行を `'pending'` で書いた後、
+ * 許可の記録を終える前）で落ちると、人間が定型文で同意した許可の記録は作られない。
+ * #1977 の拾い直しは合図の配達だけを拾い直していたので、次の起動でも作られなかった。
+ *
+ * ここでは、拾い直しのときに許可の記録の前提（定型文の回答・経路がアカウント・
+ * `permissionRequest` がある）を満たし、かつその `approvalId` の許可の記録がまだ無い
+ * 承認についてだけ、許可を記録し直すことを見る。在れば二重にしない。前提を満たさない
+ * 承認では記録しない。
+ */
+describe('回答済みで未配達の承認の拾い直しは、作られなかった許可の記録も作り直す（issue #1999）', () => {
+  const PERMISSION_REQUEST = {
+    rule: 'Bash(pnpm test:*)',
+    allows: ['pnpm test'],
+    denies: ['rm -rf /'],
+  };
+
+  function consentedPendingRow(overrides: Partial<PendingApproval> = {}): PendingApproval {
+    return seedApproval({
+      permissionRequest: PERMISSION_REQUEST,
+      answeredAt: '2026-09-01T00:05:00.000Z',
+      answer: '許可します',
+      answeredVia: { kind: 'account', accountId: 'acct-1' },
+      answerDelivery: 'pending',
+      ...overrides,
+    } as Partial<PendingApproval>);
+  }
+
+  it('定型文でアカウントから同意した承認の許可の記録が無ければ、起動時に作る', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(consentedPendingRow());
+
+    const { clone } = bootClone(stores, 'hang');
+    await waitFor(() => true, '起動');
+    const started = Date.now();
+    for (;;) {
+      if ((await stores.permissionGrants.list()).length > 0) break;
+      if (Date.now() - started > 3000) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const grants = await stores.permissionGrants.list();
+    expect(grants.map((grant) => ({ approvalId: grant.approvalId, rule: grant.rule }))).toEqual([
+      { approvalId: 'ap-1', rule: 'Bash(pnpm test:*)' },
+    ]);
+
+    void clone;
+  });
+
+  it('同じ approvalId の許可の記録が既に在れば、二重に作らない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(consentedPendingRow());
+    await stores.permissionGrants.put({
+      id: 'grant-existing',
+      rule: PERMISSION_REQUEST.rule,
+      allows: PERMISSION_REQUEST.allows,
+      denies: PERMISSION_REQUEST.denies,
+      approvalId: 'ap-1',
+      answer: '許可します',
+      grantedAt: '2026-09-01T00:05:00.000Z',
+      route: { principalKind: 'account', accountId: 'acct-1' },
+    });
+
+    const { clone } = bootClone(stores, 'hang');
+    await waitFor(() => true, '起動');
+    // 拾い直しが済むまで待つ（行が delivered になる）。
+    const started = Date.now();
+    for (;;) {
+      if ((await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered') break;
+      if (Date.now() - started > 3000) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await idle();
+
+    expect((await stores.permissionGrants.list()).map((grant) => grant.id)).toEqual([
+      'grant-existing',
+    ]);
+
+    void clone;
+  });
+
+  it('対照: 定型文でない回答の承認は、拾い直しても許可の記録を作らない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(consentedPendingRow({ answer: 'はい' }));
+
+    const { clone } = bootClone(stores, 'hang');
+    const started = Date.now();
+    for (;;) {
+      if ((await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered') break;
+      if (Date.now() - started > 3000) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await idle();
+
+    expect(await stores.permissionGrants.list()).toEqual([]);
+
+    void clone;
+  });
+});
