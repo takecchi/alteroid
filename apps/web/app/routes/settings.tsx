@@ -138,6 +138,28 @@ const RUNNER_STATES = {
 } as const;
 
 /**
+ * **知らない `state` にも倒れ先を持つ**（issue #2010。#1623 で `managers.tsx` の
+ * `ManagerStatusBadge` に入れた形の横展開）。Web（Vercel）とデーモン（Railway）は
+ * 別々にデプロイされるので、デーモンが先に新しい状態値を返す時間が在る。型は
+ * `RunnerSummary['state']` でも、JSON はそのまま届く。倒れ先が無いと
+ * `RUNNER_STATES[state]` が `undefined` になり、`.tone` の参照で render 中に
+ * throw して `/settings` 画面ごと落ちていた。
+ *
+ * **生の値をそのまま見せる。** 「不明」とだけ書くと、何が来たのかを人間が
+ * 追えない。**`Object.hasOwn` で引く** —— `RUNNER_STATES['constructor']` の
+ * ような継承したキーは `undefined` にならず、別の形で壊れるためである
+ * （`managers.tsx` の `ManagerStatusBadge` の doc と同じ理由）。
+ */
+function runnerStateView(state: RunnerSummary['state']): {
+  tone: 'neutral' | 'ok' | 'warn' | 'danger';
+  label: string;
+} {
+  return Object.hasOwn(RUNNER_STATES, state)
+    ? RUNNER_STATES[state as keyof typeof RUNNER_STATES]
+    : { tone: 'neutral', label: `知らない状態（${String(state)}）` };
+}
+
+/**
  * 渡している鍵の指紋。
  *
  * **「無い」と言ってよいのは、聞けたときだけである。**
@@ -313,8 +335,8 @@ function Runners() {
               <div className="flex flex-wrap items-center gap-2">
                 {/* 繋がるまで runner_id は分からない。宛先（label）が名簿の鍵である */}
                 <p className="font-mono text-sm break-all">{runner.runnerId ?? runner.label}</p>
-                <Badge tone={RUNNER_STATES[runner.state].tone}>
-                  {RUNNER_STATES[runner.state].label}
+                <Badge tone={runnerStateView(runner.state).tone}>
+                  {runnerStateView(runner.state).label}
                 </Badge>
               </div>
               {/*

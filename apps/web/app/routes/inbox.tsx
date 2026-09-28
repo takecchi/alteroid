@@ -114,6 +114,26 @@ const INBOX_TYPE_LABELS: Record<InboxEventType, string> = {
 
 const INBOX_TYPE_ORDER = Object.keys(INBOX_TYPE_LABELS) as InboxEventType[];
 
+/**
+ * **知らない `type` にも倒れ先を持つ**（issue #2010。#1623 で `managers.tsx` の
+ * `ManagerStatusBadge` に入れた形の横展開）。`byType` / `undeliveredByType` の
+ * `entry.type` は daemon（`GET /inbox`）から届く値で、Web（Vercel）とデーモン
+ * （Railway）は別々にデプロイされるので、デーモンが先に新しい種類の値を返す時間が
+ * 在る。型は `InboxEventType` でも、JSON はそのまま届く。倒れ先が無いと
+ * `INBOX_TYPE_LABELS[type]` が `undefined` になり、件数だけが宙に浮いた行に
+ * なっていた（throw はしないが、何の滞留かが画面から読めない）。
+ *
+ * **生の値をそのまま見せる。** 「不明」とだけ書くと、何が来たのかを人間が
+ * 追えない。**`Object.hasOwn` で引く** —— `INBOX_TYPE_LABELS['constructor']` の
+ * ような継承したキーは `undefined` にならず、別の形で壊れるためである
+ * （`managers.tsx` の `ManagerStatusBadge` の doc と同じ理由）。
+ */
+function inboxTypeLabel(type: InboxEventType): string {
+  return Object.hasOwn(INBOX_TYPE_LABELS, type)
+    ? INBOX_TYPE_LABELS[type]
+    : `知らない種類（${String(type)}）`;
+}
+
 /** カンマ区切りの入力を、空文字を除いた配列にする（CLI の `splitList` と同じ形）。 */
 function splitList(value: string): string[] {
   return value
@@ -164,7 +184,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
             ⚠ 人間起点（human_message / human_answer）の滞留が {backlog.humanOriginated.total}{' '}
             件ある （
             {backlog.humanOriginated.byType
-              .map((entry) => `${INBOX_TYPE_LABELS[entry.type]} ${entry.count}`)
+              .map((entry) => `${inboxTypeLabel(entry.type)} ${entry.count}`)
               .join(' / ')}
             ）。
           </p>
@@ -184,7 +204,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       <BreakdownSection
         title="種類"
         rows={backlog.byType.map((entry) => ({
-          label: INBOX_TYPE_LABELS[entry.type],
+          label: inboxTypeLabel(entry.type),
           count: entry.count,
         }))}
       />
@@ -215,7 +235,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       <BreakdownSection
         title="いまの器になってから積まれた分（0回）の内訳（種類別）"
         rows={backlog.undeliveredByType.map((entry) => ({
-          label: INBOX_TYPE_LABELS[entry.type],
+          label: inboxTypeLabel(entry.type),
           count: entry.count,
         }))}
       />
@@ -366,7 +386,7 @@ function InboxRemoveCard() {
                   checked={selectedTypes.has(type)}
                   onChange={() => toggleType(type)}
                 />
-                <span>{INBOX_TYPE_LABELS[type]}</span>
+                <span>{inboxTypeLabel(type)}</span>
                 <span className="font-mono text-muted">{type}</span>
               </label>
             ))}
