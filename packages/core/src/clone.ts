@@ -1963,6 +1963,17 @@ class Clone implements CloneHost {
    * 実運用の規模で問題になる想定はない。
    */
   readonly #handledHumanAnswerIds = new Set<string>();
+
+  /**
+   * このインスタンスが作られた時刻（ISO 8601。issue #1977）。
+   *
+   * `#reconcileUndeliveredAnswers` は、これより**前**に回答された行だけを拾い直す。
+   * これより後に回答された行は、このプロセスの `answerApproval` が配達の途中にある行
+   * （`'pending'` を書いてから `'delivered'` を書くまでの間）である。拾い直しがそれを
+   * 拾うと、同じ合図を2回 `post` し、読んだ時点の写しで行を書き戻すので、その間の
+   * 2回目の回答を古い回答で上書きしうる。
+   */
+  readonly #bootedAt = new Date().toISOString();
   /**
    * 一度でも枠で保持した合図の id。**まとめ読み（`#mergedHumanBatch`）から外すため**
    * だけに持つ。
@@ -6051,7 +6062,9 @@ class Clone implements CloneHost {
         approval.answeredAt !== undefined &&
         approval.answer !== undefined &&
         approval.answerDelivery === 'pending' &&
-        approval.withdrawnAt === undefined,
+        approval.withdrawnAt === undefined &&
+        // 起動より前に回答された行だけ（`#bootedAt` の doc）。
+        approval.answeredAt < this.#bootedAt,
     );
     if (undelivered.length === 0) return;
 
