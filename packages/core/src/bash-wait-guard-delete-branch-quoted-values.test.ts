@@ -154,34 +154,44 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
   });
 
   /**
-   * ⚠️ 既知の別の穴（この Issue の範囲外。作業中に発見、Issue 化した）——
-   * `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、**`--subject` /
-   * `--body` の値ではなく、素で引用符に囲まれた短縮フラグ `-d`** は、この
-   * PR の変更を入れる前から弾けていない。
+   * ⚠️ 既知の別の穴（この Issue の範囲外。作業中に発見、issue #1991 で
+   * 報告済み）—— `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、
+   * **`--subject`/`--body` の値ではなく、素で引用符に囲まれた短縮フラグ
+   * `-d`** は、この PR の変更を入れる前から弾けていない。
    *
-   * `GH_PR_MERGE_DELETE_BRANCH_RE` の `-d` の検出は
-   * `(?<=[\s])-d(?=[\s;&|]|$)` —— 直前が**空白**であることを要求する。だが
+   * `GH_PR_MERGE_DELETE_BRANCH_RE` の `-d` の検出は `(?<=[\s])-d\b`
+   * （PR #1990 のレビューで `\b` に直した——直後がバッククォート等でも
+   * 弾けるようにするため。`bash-wait-guard.ts` の「二重引用符の値の中の
+   * コマンド置換は『読めない』として潰さない」参照）—— だが**手前
+   * （lookbehind）**は直前が**空白**であることを要求したまま変えていない。
    * `"-d"` は直前が引用符 `"` であって空白ではないので、この lookbehind に
    * 当たらない。**シェルは引用符を剥がすので、`gh` に実際に渡る引数は
    * リテラルの `-d`（本物のフラグ）である** —— つまりこれは実害のある
-   * false negative（すり抜け）だが、値の引用符を潰す・潰さないとは無関係に
-   * 最初から存在していた別の穴である（`--delete-branch`（長い形）は
-   * lookbehind を持たないため、同じ形でも引き続き弾く——下のテストで対照
-   * している）。
+   * false negative（すり抜け）だが、値の引用符を潰す・潰さないや `-d` の
+   * 後ろ側の直し（PR #1990）とは無関係に最初から存在していた別の穴である
+   * （`--delete-branch`（長い形）は lookbehind を持たないため、同じ形でも
+   * 引き続き弾く——下のテストで対照している）。
    *
    * この Issue（#1910）は**誤検知（false positive）**の直し方を扱っており、
    * この節が扱う**すり抜け（false negative）**とは症状が逆で、この PR の
-   * 変更が作ったものでもない（このテストファイルの、テスト専用コミットの
-   * 時点——`bash-wait-guard.ts` をまだ1行も直していない状態——で既に
-   * `blocked:false` だったことを確認済み）。この PR では直さず、issue #1991
-   * を切って報告した（AGENTS.md「範囲外でも気づいたことは上げる」）。
+   * 変更が作ったものでもない。この PR では直さず、issue #1991 を切って
+   * 報告した（AGENTS.md「範囲外でも気づいたことは上げる」）。
+   *
+   * ⚠️ **PR #1990 のレビュー指摘（マネージャー mgr-81affbde）—— `blocked:
+   * false` を期待値にすると、すり抜けを「正しい動作」として固定してしまう
+   * （#1887 の本文が同じ形を「穴の形を変えただけ」と戻した経緯と同根）。**
+   * ⟹ 望む挙動（`blocked: true`）を期待値に書いたうえで `it.fails(...)` に
+   * する。いまは実装が追いついていないのでこの `it.fails` は「期待どおり
+   * 失敗する」ことで緑になる。issue #1991 が直ったら、この assertion が
+   * 実際に通るようになり `it.fails` 自体が失敗する（＝直ったことに気づく
+   * トリップワイヤーになる）——そうなったら `it.fails` を `it` に戻す。
    */
-  it('[既知・範囲外] 二重引用符で囲まれた素の `-d`（`"-d"`）は現状すり抜ける', () => {
-    expect(inspectBashCommand('gh pr merge 1 "-d"').blocked).toBe(false);
+  it.fails('[既知・範囲外・issue #1991] 二重引用符で囲まれた素の `-d`（`"-d"`）も弾きたい', () => {
+    expect(inspectBashCommand('gh pr merge 1 "-d"').blocked).toBe(true);
   });
 
-  it("[既知・範囲外] 単一引用符で囲まれた素の `-d`（`'-d'`）は現状すり抜ける", () => {
-    expect(inspectBashCommand("gh pr merge 1 '-d'").blocked).toBe(false);
+  it.fails("[既知・範囲外・issue #1991] 単一引用符で囲まれた素の `-d`（`'-d'`）も弾きたい", () => {
+    expect(inspectBashCommand("gh pr merge 1 '-d'").blocked).toBe(true);
   });
 
   it('対照: 引用符で囲まれた長いフラグ `--delete-branch` は lookbehind が無いので引き続き弾く', () => {
