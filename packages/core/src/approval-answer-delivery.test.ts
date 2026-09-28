@@ -265,4 +265,39 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
 
     void clone;
   });
+
+  it('同じ id の human_answer を2回 post しても、ターンの入力は1回分しか出ない（#handle の最後の砦）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(seedApproval());
+    // 'reply' —— 1本目のターンが終わって初めて、待ち行列の2件目が
+    // `#handle` へ渡る。ここが畳まれることを確かめたいので、待たせて
+    // 止めてしまう 'hang' は使わない。
+    const { clone, inputs } = bootClone(stores, 'reply');
+
+    // `answerApproval` を経由せず、`#handle` の重複排除そのものを直接
+    // 確かめる——`post()` を2回呼ぶだけで、同じ id の合図が待ち行列へ
+    // 2回積まれることは `#foldIntoPendingCollapse` の doc で確認済み
+    // （`human_answer` は畳み込みの鍵を持たない型なので常に 'pass'）。
+    const event: InboxEvent = {
+      type: 'human_answer',
+      id: 'human-answer-ap-1-2026-09-01T00:05:00.000Z',
+      at: '2026-09-01T00:05:00.000Z',
+      approvalId: 'ap-1',
+      answer: '許可します',
+    };
+    clone.post(event);
+    clone.post({ ...event });
+
+    await waitFor(() => inputs.length > 0, '1本目のターンが起きる');
+    // 2件目が待ち行列に残っていれば、'reply' なので放っておけば処理される
+    // ——畳まれていれば `#runTurn` を一度も呼ばないので、ここで待っても
+    // `inputs` は増えない。
+    await idle();
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain('質問: 本番のマイグレーションを走らせてよいか');
+    expect(inputs[0]).toContain('回答: 許可します');
+
+    await clone.stop();
+  });
 });
