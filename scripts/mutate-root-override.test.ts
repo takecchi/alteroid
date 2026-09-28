@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   BACKUP_DIR,
@@ -67,12 +68,15 @@ function runCli(args: string[]) {
 /** git 管理下の使い捨てツリーを作る（apply/restore が gitHead() 等を呼ぶため）。 */
 function makeTmpGitRepo(): string {
   const dir = makeTempDirSync('mutate-root-override-');
-  execFileSync('git', ['init', '-q'], { cwd: dir });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-  execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
+  execFileSync('git', ['init', '-q'], { cwd: dir, env: gitChildEnv() });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], {
+    cwd: dir,
+    env: gitChildEnv(),
+  });
+  execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir, env: gitChildEnv() });
   fs.writeFileSync(path.join(dir, 'target.txt'), 'hello world\n');
-  execFileSync('git', ['add', 'target.txt'], { cwd: dir });
-  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+  execFileSync('git', ['add', 'target.txt'], { cwd: dir, env: gitChildEnv() });
+  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir, env: gitChildEnv() });
   return dir;
 }
 

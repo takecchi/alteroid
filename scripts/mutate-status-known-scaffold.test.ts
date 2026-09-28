@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
+import { gitChildEnv } from './git-child-env.js';
 import { mutateCliChildEnv } from './mutate-cli-child-env.js';
 import {
   DEFAULT_ROOT,
@@ -70,14 +71,17 @@ function runCli(args: string[]) {
 /** git 管理下の使い捨てツリーを作る（`gitHead()` 等が呼ばれるため）。 */
 function makeTmpGitRepo(): string {
   const dir = makeTempDirSync('mutate-status-known-scaffold-');
-  execFileSync('git', ['init', '-q'], { cwd: dir });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-  execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
+  execFileSync('git', ['init', '-q'], { cwd: dir, env: gitChildEnv() });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], {
+    cwd: dir,
+    env: gitChildEnv(),
+  });
+  execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir, env: gitChildEnv() });
   fs.mkdirSync(path.join(dir, 'packages/core/src'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'apps/cli/src'), { recursive: true });
   fs.writeFileSync(path.join(dir, DELIVERY_BARREL_REL), 'export const already = 1;\n');
-  execFileSync('git', ['add', '-A'], { cwd: dir });
-  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+  execFileSync('git', ['add', '-A'], { cwd: dir, env: gitChildEnv() });
+  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir, env: gitChildEnv() });
   return dir;
 }
 
