@@ -27,6 +27,12 @@ export interface UsageQuery {
    */
   layer?: UsageLayer;
   site?: UsageSite;
+  /**
+   * どの認証トークンで（issue #2059）。画面の token 欄はここに積んでいたのに、
+   * この型に欄が無く、下の `useUsage` も取り出していなかったので、`GET /usage`
+   * へ届いていなかった（欄に入れても絞り込まれなかった）。
+   */
+  tokenId?: string;
 }
 
 /**
@@ -352,7 +358,7 @@ export function useSchedule() {
  */
 export function useUsage(query: UsageQuery = {}) {
   const api = useApi();
-  return useSWR(KEY.usage(query), ({ from, to, managerId, layer, site }) =>
+  return useSWR(KEY.usage(query), ({ from, to, managerId, layer, site, tokenId }) =>
     api.api
       .GET('/usage', {
         params: {
@@ -362,6 +368,7 @@ export function useUsage(query: UsageQuery = {}) {
             ...(managerId === undefined ? {} : { managerId }),
             ...(layer === undefined ? {} : { layer }),
             ...(site === undefined ? {} : { site }),
+            ...(tokenId === undefined ? {} : { tokenId }),
           },
         },
       })
