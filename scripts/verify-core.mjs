@@ -555,6 +555,17 @@ export const STEPS = [
       'RESTART_BEFORE_CHECK_ADVICE_CODE_SPAN 1箇所である' +
       '（scripts/check-restart-before-check-advice-core.mjs の doc、#1287）',
   },
+  {
+    name: 'no-env-passthrough',
+    cmd: 'pnpm',
+    args: ['check:no-env-passthrough'],
+    hint:
+      'テストのコードか変異試験ハーネスが、子プロセスへ親の process.env を丸ごと渡す形' +
+      '（...process.env / env: process.env / Object.assign(…, process.env)）を書いている。' +
+      '必要な鍵だけを明示的に組み立てる（gitChildEnv() / mutateCliChildEnv() 等）か、' +
+      'わざとの場合は理由付きで scripts/check-no-env-passthrough-core.mjs の ALLOWLIST へ' +
+      '載せること（scripts/check-no-env-passthrough-core.mjs の doc、Issue #1935 / #1854）',
+  },
   { name: 'typecheck', cmd: 'pnpm', args: ['typecheck'] },
   { name: 'lint', cmd: 'pnpm', args: ['lint'] },
   { name: 'format:check', cmd: 'pnpm', args: ['format:check'], hint: '`pnpm format` で直る' },

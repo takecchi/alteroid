@@ -13,6 +13,7 @@
     "check:agents-md-size": "node ./scripts/check-agents-md-size.mjs",
     "check:keyword-closed-issues": "node ./scripts/check-keyword-closed-issues.mjs",
     "check:no-attribution-trailers": "node ./scripts/check-no-attribution-trailers.mjs",
+    "check:no-env-passthrough": "node ./scripts/check-no-env-passthrough.mjs",
     "check:pr-green": "node ./scripts/check-pr-green.mjs",
     "check:required-status-checks": "node ./scripts/check-required-status-checks.mjs",
     "check:restart-before-check-advice": "node ./scripts/check-restart-before-check-advice.mjs",

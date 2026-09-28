@@ -265,6 +265,17 @@ jobs:
       # だけである**（`scripts/check-restart-before-check-advice.test.ts` は純
       # 関数を合成入力で測るだけで、実物の repo には当たらない）。
       - run: pnpm check:restart-before-check-advice
+
+      # **#1854 系の直し（子プロセスへ親の env を丸ごと渡さない）が、直す前の形へ
+      # 戻っていないことを見る歯（Issue #1935）。** 直しそのものは PR #1903 /
+      # #1905 / #1916 / #1918 / #1925 で正しく入ったが、`mutate-selftest.mjs` の
+      # `poisonedEnv` や `scripts/verify-core.test.ts` の `env: gitChildEnv()` を
+      # 直す前の形（`{ ...process.env, … }` / `env: process.env`）へ変異で戻しても、
+      # 既存のどの歯も鳴らなかった（#1935 本文の実測1・実測2）。この検査はその形が
+      # テストのコードと変異試験ハーネス自身へ書き戻されたことを静的に見る
+      # （上の2本と同じ理由・同じ配線の形——`scripts/verify-core.mjs` の STEPS
+      # だけでは PR の CI で一度も走らない）。
+      - run: pnpm check:no-env-passthrough
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
