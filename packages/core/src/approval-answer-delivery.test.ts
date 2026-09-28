@@ -489,6 +489,24 @@ describe('配達済みの印の書き込みだけが落ちても、起こし直�
             return target.putApproval(approval);
           };
         }
+        // 「配達済み」の印は、#2007 のコメントの直しで `updateApproval`（読み直す1操作）
+        // から書くようになった。落とす場所をそちらにも広げる——落とすのは、今までと同じく
+        // 「pending の行を delivered にする1回目の書き込み」だけである。
+        if (prop === 'updateApproval') {
+          return async (id: string, mutate: (current: PendingApproval) => PendingApproval | null) =>
+            target.updateApproval(id, (current) => {
+              const next = mutate(current);
+              if (
+                !failedOnce &&
+                current.answerDelivery === 'pending' &&
+                next?.answerDelivery === 'delivered'
+              ) {
+                failedOnce = true;
+                throw new Error('配達済みの印の書き込みが落ちた（テスト用）');
+              }
+              return next;
+            });
+        }
         const value = Reflect.get(target, prop, receiver) as unknown;
         return typeof value === 'function'
           ? (value as (...args: unknown[]) => unknown).bind(target)

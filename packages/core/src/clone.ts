@@ -2921,13 +2921,7 @@ class Clone implements CloneHost {
     // もう一度回せる。
     if (delivery === 'delivered') {
       try {
-        await this.#stores.jobs.putApproval({
-          ...approval,
-          answeredAt,
-          answer,
-          answerDelivery: 'delivered',
-          ...(via === undefined ? {} : { answeredVia: via }),
-        });
+        await this.#markAnswerDelivered(approvalId, answeredAt);
       } catch (error) {
         noteDroppedRecord('回答の配達印の確定', inboxEventShape(event), error);
       }
@@ -6044,6 +6038,27 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 承認の行に「配達済み」の印を付ける（issue #1977 / #2002 / #2007）。
+   *
+   * **読み直す1操作（`updateApproval`）で、`answerDelivery` だけを書き換える。** 以前は
+   * 呼び手が読んだ写しに `answerDelivery: 'delivered'` を足して、行を丸ごと書き戻して
+   * いた（`answerApproval` / `#markAnswerDeliveredOnHandle` / `#reconcileUndeliveredAnswers`
+   * の4か所）。読んでから書くまでの間に同じ行へ別の書き込み（取り下げ・2回目の回答など）
+   * が入ると、古い写しでそれを消していた（C の3回目の横断レビューが #2007 に付けた指摘）。
+   *
+   * **書くのは、現在の行がまだ `'pending'` で、`answeredAt` が同じ回答のときだけ。**
+   * それ以外（既に `'delivered'`・別の回答に置き換わっている）は何もしない。
+   * 例外はそのまま投げる（呼び手がそれぞれの跡を残す）。
+   */
+  async #markAnswerDelivered(approvalId: string, answeredAt: string): Promise<void> {
+    await this.#stores.jobs.updateApproval(approvalId, (current) =>
+      current.answerDelivery === 'pending' && current.answeredAt === answeredAt
+        ? { ...current, answerDelivery: 'delivered' }
+        : null,
+    );
+  }
+
+  /**
    * `human_answer` を処理するとき、承認の行がまだ `'pending'` なら `'delivered'` を書く
    * （issue #2002）。
    *
@@ -6058,9 +6073,9 @@ class Clone implements CloneHost {
    * 届く」であって「ちょうど1回」ではない（クローン teto の判断: 回答を失うより、
    * 二重に届くほうが害が小さい）。
    *
-   * 書き込みの失敗は握って跡を残す（処理そのものは止めない）。行の写しが古くても、
-   * 書き換えるのは `answerDelivery` だけで、`answeredAt` が同じ行（＝同じ回答）に
-   * 限る——同じ承認への2回目の回答を、古い回答で上書きしない。
+   * 書き込みの失敗は握って跡を残す（処理そのものは止めない）。書き込みは
+   * `#markAnswerDelivered` に任せる——読み直す1操作で、`answerDelivery` だけを
+   * 書き換える（読んだ写しで行を丸ごと書き戻さない。issue #2007 のコメント）。
    */
   async #markAnswerDeliveredOnHandle(
     approval: PendingApproval | null,
@@ -6070,7 +6085,7 @@ class Clone implements CloneHost {
     if (approval.answeredAt === undefined) return;
     if (humanAnswerEventId(approval.id, approval.answeredAt) !== event.id) return;
     try {
-      await this.#stores.jobs.putApproval({ ...approval, answerDelivery: 'delivered' });
+      await this.#markAnswerDelivered(approval.id, approval.answeredAt);
     } catch (error) {
       noteDroppedRecord('回答の配達印の確定（処理時）', inboxEventShape(event), error);
     }
@@ -6191,12 +6206,12 @@ class Clone implements CloneHost {
         if (claimedIds.has(event.id)) {
           // 直前の `#restoreUnreadPass` が既に拾っている——印を確定させる
           // だけで、もう一度 put も post もしない。
-          await this.#stores.jobs.putApproval({ ...approval, answerDelivery: 'delivered' });
+          await this.#markAnswerDelivered(approval.id, approval.answeredAt);
         } else {
           // まだ受信箱に一度も乗っていない——`answerApproval` の (c)(d)(e) と
           // 同じ並びで埋める。
           await this.#stores.inbox.put(event, event.at);
-          await this.#stores.jobs.putApproval({ ...approval, answerDelivery: 'delivered' });
+          await this.#markAnswerDelivered(approval.id, approval.answeredAt);
           this.post(event);
         }
         reconciled += 1;
