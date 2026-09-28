@@ -560,7 +560,11 @@ function findImportedChildProcessNames(rawContent) {
   let m;
   while ((m = importRe.exec(rawContent))) {
     for (const part of m[1].split(',')) {
-      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      const name = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim();
       if (name && CHILD_PROCESS_CALL_NAMES.includes(name)) importedNames.add(name);
     }
   }

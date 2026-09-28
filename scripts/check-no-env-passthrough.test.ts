@@ -190,7 +190,11 @@ describe('check-no-env-passthrough: classifyChildProcessCallEnv（Issue #1971）
 
   it('options オブジェクトに env キーが在れば has-env', () => {
     expect(
-      classifyChildProcessCallEnv('execFileSync', ["'git'", "['status']", '{ cwd, env: gitChildEnv() }']),
+      classifyChildProcessCallEnv('execFileSync', [
+        "'git'",
+        "['status']",
+        '{ cwd, env: gitChildEnv() }',
+      ]),
     ).toBe('has-env');
   });
 
