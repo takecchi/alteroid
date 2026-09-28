@@ -6357,6 +6357,32 @@ function hasApprovalMarker(message: string): boolean {
 }
 
 /**
+ * アポストロフィの変種を素の `'`（U+0027）へ揃える（issue #1907）。
+ *
+ * `DENIAL_WORDS` の `don't` / `won't`、`NEGATION_MARKERS_EN` の `n't`、
+ * `NEGATED_APPROVAL_PHRASES` の `don't hesitate` 等はいずれも U+0027 だけを
+ * 逐語で書いている。スマートフォンや macOS の入力・Slack 等の自動整形は
+ * 曲がった引用符（U+2019 `'` RIGHT SINGLE QUOTATION MARK）を使うことが
+ * 多く、見た目が近い U+2018 `'`（LEFT SINGLE QUOTATION MARK）・U+02BC `'`
+ * （MODIFIER LETTER APOSTROPHE）も同じ形で紛れうる——素の `'` を要求する
+ * 一覧はどれにも当たらず、`Don't go ahead.`（曲がった引用符）が
+ * `APPROVAL_WORDS` の `go ahead` にだけ当たって `allow` へ化けていた
+ * （#1827/#1837 で「読めなければ allow にしない」へ反転した方針の抜け）。
+ *
+ * **`inferDecision` の入口1箇所でだけ呼ぶ。** 元の文言そのものは書き換え
+ * ない——`unreadableDenyMessage` やクローンへの表示・台帳への保存は、
+ * 呼び出し元が持つ元の `message` をそのまま使う（この関数は判定用の
+ * ローカルな複製を作るだけ）。`hasNegatedApprovalPhrase` /
+ * `hasNegatedApprovalDenial` / `hasApprovalMarker` / `hasNegationMarker` は
+ * いずれも `inferDecision` の中でしか呼ばれていない（`packages/core/src/
+ * runner.ts` を `grep -Fn` した実測は PR 本文にある）ので、入口1箇所の
+ * 正規化で全ての一覧に効く。
+ */
+function normalizeApostrophes(message: string): string {
+  return message.replace(/[‘’ʼ]/g, "'");
+}
+
+/**
  * 否定の語を含む、はっきりした承認の言い方（issue #1877）。
  *
  * `no problem` / `no objection(s)` / `don't hesitate` / `don't mind` は
@@ -6469,12 +6495,15 @@ function hasNegatedApprovalDenial(message: string): boolean {
  * ——この事実は反転の前後で変わっていない。
  */
 export function inferDecision(message: string): 'allow' | 'deny' | 'unreadable' {
-  if (hasNegatedApprovalPhrase(message)) {
-    return hasNegatedApprovalDenial(message) ? 'deny' : 'unreadable';
+  // issue #1907: 曲がった引用符（U+2019 等）の apostrophe を素の `'` へ
+  // 揃えてから各一覧に当てる。判定にだけ使い、元の message は書き換えない。
+  const normalized = normalizeApostrophes(message);
+  if (hasNegatedApprovalPhrase(normalized)) {
+    return hasNegatedApprovalDenial(normalized) ? 'deny' : 'unreadable';
   }
-  if (DENIAL_PHRASES.some((phrase) => message.includes(phrase))) return 'deny';
-  if (DENIAL_WORDS.test(message)) return 'deny';
-  if (hasApprovalMarker(message) && !hasNegationMarker(message)) return 'allow';
+  if (DENIAL_PHRASES.some((phrase) => normalized.includes(phrase))) return 'deny';
+  if (DENIAL_WORDS.test(normalized)) return 'deny';
+  if (hasApprovalMarker(normalized) && !hasNegationMarker(normalized)) return 'allow';
   return 'unreadable';
 }
 
