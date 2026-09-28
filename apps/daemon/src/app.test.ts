@@ -1835,6 +1835,45 @@ describe('HTTP API', () => {
     expect(response.status).toBe(409);
   });
 
+  it(
+    '日誌への追記が落ちても、本文の削除は効いていて応答は成功する（Issue #2037）。' +
+      'stderr に跡が1行出て、その行に id 以外の本文は載らない',
+    async () => {
+      const id = (await stores.archive.archive('sess-journal-drop', 'SECRET-BODY\n')).id;
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request(`/archive/${id}`, { method: 'DELETE' });
+      });
+
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ ok: true, id });
+
+      // 本文の削除は効いている（同じストアを見ている元の app 経由で確認）。
+      const read = await app.request(`/archive/${id}`);
+      expect(read.status).toBe(410);
+
+      const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).not.toContain('SECRET-BODY');
+    },
+  );
+
   /**
    * `POST /inbox/remove`（issue #972）。`commitment_close_many`（#844）を
    * 参照モデルにした、人間の入口からの絞り込み一括削除。⚠️ クローン自身の
@@ -2675,6 +2714,73 @@ describe('HTTP API', () => {
       expect(entry?.decision).toContain('日誌に残るはず');
       expect(entry?.decision).toContain(idA);
       expect(entry?.grounds).toBe('人間が直接 API から操作した');
+    });
+
+    /**
+     * Issue #2037: 塊ごとに「消す → 日誌へ書く」を交互に回す形で、**1塊目の
+     * 日誌への追記だけが落ちても、2塊目以降は消すのを続ける**こと、応答の件数が
+     * 全件と合うことを撃つ。
+     *
+     * 2塊に割れるように、id 自体が長くなる長い sessionId を使う
+     * （`chunkIdsByChars` の予算 `ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS`＝3,600
+     * 文字。2,000文字超の sessionId なら id が2つで budget を超え、1id ずつ2塊に割れる）。
+     */
+    it('1塊目の日誌への追記が落ちても2塊目以降は消え続け、応答の件数は全件と合う（Issue #2037）', async () => {
+      const bigSessionId = `sess-chunk-${'x'.repeat(2000)}`;
+      await stores.archive.archive(bigSessionId, 'A');
+      await stores.archive.archive(bigSessionId, 'AB');
+      const idNewest = (await stores.archive.archive(bigSessionId, 'ABC')).id; // 最新行、保護される
+
+      let callCount = 0;
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: async (entry) => {
+            callCount += 1;
+            // 1回目（1塊目）だけ落ちる。2回目以降（2塊目以降）は普通に書ける。
+            if (callCount === 1) throw new Error('journal store unavailable (test)');
+            return stores.journal.append(entry);
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request(
+          '/archive/remove',
+          json({ minStoredBytes: 0, reason: 'SECRET-REASON-INSTRUCTION', dryRun: false }),
+        );
+      });
+
+      expect(response?.status).toBe(200);
+      const body = (await response?.json()) as {
+        targeted: number;
+        removedIds: string[];
+        removedBytes: number;
+      };
+      // 2件（2塊、1id ずつ）とも消えている——1塊目の日誌が落ちても件数は全件と合う。
+      expect(body.targeted).toBe(2);
+      expect(body.removedIds).toHaveLength(2);
+
+      // 実際に本文が消えていることを、同じストアを見ている元の app 経由で確認する。
+      for (const id of body.removedIds) {
+        const read = await app.request(`/archive/${id}`);
+        expect(read.status).toBe(410);
+      }
+      // 最新行は守られたまま。
+      const readNewest = await app.request(`/archive/${idNewest}`);
+      expect(readNewest.status).toBe(200);
+
+      const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).not.toContain('SECRET-REASON-INSTRUCTION');
     });
 
     /**
@@ -9186,6 +9292,51 @@ describe('スキーマ検証で落ちた 400 に鍵・プロファイルの値�
       const stillRevoked = await stores.permissionGrants.get('grant-1');
       expect(stillRevoked?.revokedAt).toBe(revoked?.revokedAt);
     });
+
+    it(
+      '日誌への追記が落ちても、取り消しは効いていて応答は成功する（Issue #2037）。' +
+        'stderr に跡が1行出て、その行に rule 文字列（decision の本文）は載らない',
+      async () => {
+        await stores.permissionGrants.put({
+          id: 'grant-1',
+          rule: 'Bash(gh pr view)',
+          allows: ['gh pr view'],
+          denies: ['gh pr view; rm -rf /'],
+          approvalId: 'ap-1',
+          answer: '許可します',
+          grantedAt: '2026-01-01T00:00:00.000Z',
+          route: { principalKind: 'account', accountId: 'acc-x' },
+        });
+        const failingJournal: Stores = {
+          ...stores,
+          journal: {
+            ...stores.journal,
+            append: () => {
+              throw new Error('journal store unavailable (test)');
+            },
+          },
+        };
+        const withFailingJournal = createApp({
+          clone: fake.clone,
+          stores: failingJournal,
+          token: 'test-token',
+          shutdown: () => undefined,
+        });
+
+        let response: Response | undefined;
+        const lines = await captureStderr(async () => {
+          response = await withFailingJournal.request('/permission-grants/grant-1/revoke', post);
+        });
+
+        expect(response?.status).toBe(200);
+        const revoked = await stores.permissionGrants.get('grant-1');
+        expect(revoked?.revokedAt).toBeDefined();
+
+        const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+        expect(dropped).toHaveLength(1);
+        expect(dropped[0]).not.toContain('Bash(gh pr view)');
+      },
+    );
 
     it('存在しない id は 404', async () => {
       const response = await app.request('/permission-grants/no-such-id/revoke', post);

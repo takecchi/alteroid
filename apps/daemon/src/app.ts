@@ -10,6 +10,7 @@ import type {
   Exchange,
   JobStatus,
   JournalEntry,
+  JournalEntryInput,
   JournalEntryType,
   ManagerPool,
   ManagerSummary,
@@ -1235,6 +1236,40 @@ function describeActor(principal: Principal): string {
   return principal.kind === 'operator'
     ? '実行環境の持ち主による操作'
     : `許可されたアカウント（${principal.account.id}）による操作`;
+}
+
+/**
+ * 状態を変える操作の後に日誌へ書き、落ちたら跡だけ残して握る（Issue #2037）。
+ *
+ * **なぜ握るか。** ここへ来る時点で、対応する状態変更（許可の取り消し・
+ * アーカイブ本文の削除など）は既に成功して効いている。日誌への追記だけが
+ * 失敗したとして `.onError` へ抜け 500 を返すと、呼び出し側は「操作そのものが
+ * 失敗した」と誤読する——実際には操作は効いていて、欠けるのは「誰が・いつ
+ * 行ったか」の監査の行だけである。跡は `noteDroppedRecord` で stderr へ残す。
+ *
+ * **`detail` に本文（`decision` の理由文・rule 文字列など）を入れないこと**
+ * （`dropped-record.ts` の `noteDroppedRecord` の doc「本文は出さない」と
+ * 同じ理由）。id や件数など、本文を含まない見分けだけにする。
+ *
+ * **pg のトランザクションで束ねる案は採らない。** fs ストアでは状態変更と
+ * 日誌への追記を1操作にできず、束ねても常にどちらか片側だけが効く形が
+ * 残る（Issue #2037 の「直し方の案」）。
+ *
+ * まずは領域 B の3経路（`/permission-grants/:id/revoke` ・ `DELETE /archive/:id` ・
+ * `POST /archive/remove` の一括 tombstone）だけに使う。他の口（`#journal` を
+ * 書く21経路）へ広げるかは別の判断。
+ */
+async function appendJournalOrDrop(
+  stores: Stores,
+  entry: JournalEntryInput,
+  what: string,
+  detail: string,
+): Promise<void> {
+  try {
+    await stores.journal.append(entry);
+  } catch (error) {
+    noteDroppedRecord(what, detail, error);
+  }
 }
 
 /**
@@ -3441,11 +3476,18 @@ export function createApp(deps: AppDeps) {
         if (grant === null) return c.json({ error: 'not found' as const }, 404);
         // 誰が取り消したかは必ず残す（`/access/*` の grant/revoke と同じ理由——
         // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `許可を取り消した: ${grant.rule}`,
-          grounds: `${describeActor(c.get('principal'))}（POST /permission-grants/${id}/revoke）`,
-        });
+        // **ただし取り消し自体はもう効いている**（Issue #2037）。日誌への
+        // 追記だけが落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `許可を取り消した: ${grant.rule}`,
+            grounds: `${describeActor(c.get('principal'))}（POST /permission-grants/${id}/revoke）`,
+          },
+          '許可の取り消しの日誌',
+          `id=${id}`,
+        );
         return c.json({ ok: true });
       },
     )
@@ -5817,17 +5859,24 @@ export function createApp(deps: AppDeps) {
             ? `（⚠️ override — 走行中のマネージャー ${guard.managerId} の退避だったが、` +
               `理由「${guard.reason}」により消した）`
             : '';
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            `退避済み生ログの本文を消した: ${id}（${result.bytes} バイト。` +
-            `${result.kind === 'already' ? '前から消されていた' : 'いま消した'}）` +
-            overrideNote,
-          grounds:
-            guard.kind === 'allowed-with-override'
-              ? `人間が API から直接操作した（override理由: ${guard.reason}）`
-              : '人間が API から直接操作した',
-        });
+        // **本文の削除はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision:
+              `退避済み生ログの本文を消した: ${id}（${result.bytes} バイト。` +
+              `${result.kind === 'already' ? '前から消されていた' : 'いま消した'}）` +
+              overrideNote,
+            grounds:
+              guard.kind === 'allowed-with-override'
+                ? `人間が API から直接操作した（override理由: ${guard.reason}）`
+                : '人間が API から直接操作した',
+          },
+          'アーカイブ本文削除の日誌',
+          `id=${id}`,
+        );
         return c.json(
           archiveRemoveResponseSchema.parse({
             ok: true,
@@ -6137,15 +6186,24 @@ export function createApp(deps: AppDeps) {
             ...(before === undefined ? [] : [`before=${before}`]),
             ...(minStoredBytes === undefined ? [] : [`minStoredBytes=${minStoredBytes}`]),
           ].join(' / ');
-          await stores.journal.append({
-            type: 'decision',
-            decision:
-              '人間がアーカイブ済み生ログの本文を絞り込みで一括して tombstone した' +
-              `（${index + 1}/${chunks.length} 塊目、この塊は ${removedThisChunk.length} 件）: ${reason}\n` +
-              `絞り込み: ${filterText}\n` +
-              `消した id: ${removedThisChunk.join(' ')}`,
-            grounds: '人間が直接 API から操作した',
-          });
+          // **この塊の本文はもう消えている**（Issue #2037）。この塊の日誌が
+          // 落ちても、残りの塊は消すのを続ける——途中で 500 を返して抜けると、
+          // 残りの塊が消されないまま応答も返らず、この呼びが何件消したかが
+          // 分からなくなる。跡は `appendJournalOrDrop` が stderr へ残す。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision:
+                '人間がアーカイブ済み生ログの本文を絞り込みで一括して tombstone した' +
+                `（${index + 1}/${chunks.length} 塊目、この塊は ${removedThisChunk.length} 件）: ${reason}\n` +
+                `絞り込み: ${filterText}\n` +
+                `消した id: ${removedThisChunk.join(' ')}`,
+              grounds: '人間が直接 API から操作した',
+            },
+            'アーカイブ一括 tombstone の日誌',
+            `chunk=${index + 1}/${chunks.length} count=${removedThisChunk.length}`,
+          );
         }
 
         return c.json(
