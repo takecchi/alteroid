@@ -6406,6 +6406,13 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
    * 'stopped'` の早期 return）では `unpushedWork` を呼ばない——止めた委譲へ
    * 向けて runner との往復を新たに起こす意味が無いという設計判断
    * （`#observeUnpushedWorkOnReport` の呼び出し箇所のコメントを見よ）。
+   *
+   * **⚠️ `abort()` 自身は `unpushedWork()` を呼ぶ（Issue #1266 残り2。
+   * `source: 'stop'`）。** これは測りたい R4 の話とは別の経路（`report` 到達
+   * 時の安全弁ではなく、止める直前の握手）なので、`calls` は `abort()` の
+   * 直後に一度リセットし、**そこから先**（＝止めた後に届いた report）で
+   * 増えていないことだけを見る。`lastUnpushedWorkObservation` も同じ理由で
+   * 「無い」ではなく「`abort()` が残した値のまま変わっていない」ことを見る。
    */
   it('止めた後に届いた report では unpushedWork を呼ばない（R4）', async () => {
     // **`止めたマネージャーの後続イベント（R4）` describe の `stopped()` と
@@ -6453,6 +6460,18 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
     const aborted = await s.pool.abort(job.id, 'テストで止めた');
     expect(aborted.outcome).toBe('stopped');
 
+    // **`abort()` 自身が `runner.stop()` の直前に取った観測（Issue #1266
+    // 残り2。`source: 'stop'`）はここで既に残っている。** これは測りたい
+    // 対象（R4：止めた後に届いた report）とは別の経路なので、`calls` を
+    // ここでリセットし、観測の値も控えておく——この先で両方とも動かない
+    // ことを見る。
+    expect(calls).toEqual(['mgr-stopped-no-unpushed-probe']);
+    calls.length = 0;
+    const observationAfterAbort = (await stores.jobs.listJobs()).find(
+      (j) => j.id === job.id,
+    )?.lastUnpushedWorkObservation;
+    expect(observationAfterAbort).toMatchObject({ kind: 'observed', source: 'stop' });
+
     fake.report(job.id, '止めた後に届いた報告');
 
     // 日誌には残る（R4 の既存の保証）——これが処理された合図として待つ。
@@ -6466,9 +6485,12 @@ describe('ターンが report で終わったとき unpushedWork を1回取る�
       )
       .toBe(true);
 
+    // **ここから先（止めた後に届いた report）では、何も増えない・変わらない。**
     expect(calls).toEqual([]);
     const stored = await stores.jobs.listJobs();
-    expect(stored.find((j) => j.id === job.id)?.lastUnpushedWorkObservation).toBeUndefined();
+    expect(stored.find((j) => j.id === job.id)?.lastUnpushedWorkObservation).toEqual(
+      observationAfterAbort,
+    );
 
     await s.pool.stop();
   });
