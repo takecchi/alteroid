@@ -1,10 +1,6 @@
-import { execFile } from 'node:child_process';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-
 import { describe, expect, it } from 'vitest';
 
+import { runChildAgainstSrc, siblingSrcPath } from './child-src.test-support.js';
 import {
   DAILY_REPORT_KIND,
   SELF_INITIATIVE_KIND,
@@ -21,8 +17,6 @@ import {
   RESERVED_SCHEDULE_KINDS,
   memoryTidyEntry,
 } from './schedule.js';
-
-const run = promisify(execFile);
 import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
@@ -1605,16 +1599,16 @@ describe('取りこぼした日報', () => {
  * その形で書いて、`Unhandled Rejection` として報告された。**握り潰さないことが設計
  * なのだから、それを同じプロセスで観測しようとするのが誤りである。**
  *
- * `dist` を読む理由と、`src` だけ直して build しないと古い `dist` に緑が出る話は
- * `uncaught-net.test.ts` の同型のテストに在る。
+ * 子プロセスに読ませるのは **いまの `src/schedule.ts`** であって、本物の
+ * チェックアウトの `dist` ではない（#1908。仕組みと理由は
+ * `child-src.test-support.ts` の doc）。
  */
 describe('刻みの中で投げたとき（#438）', () => {
   it('跡を残してから投げ直す（握り潰さない）', async () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const entry = join(here, '..', 'dist', 'index.js');
+    const entry = siblingSrcPath(import.meta.url, 'schedule.ts');
     // **必ず期限が来ている仕込みを渡す。** 既定の仕込み（日報・発意）だと最初の
     // 発火まで実時間で待つことになり、テストが時間切れになる（実際に一度なった）。
-    const child = [
+    const failure = await runChildAgainstSrc([
       `import { createScheduler } from ${JSON.stringify(entry)};`,
       `const clock = new Date('2026-08-12T22:00:00');`,
       `const scheduler = createScheduler({`,
@@ -1628,12 +1622,7 @@ describe('刻みの中で投げたとき（#438）', () => {
       `  now: () => clock,`,
       `});`,
       `scheduler.start();`,
-    ].join('\n');
-
-    const failure = await run(process.execPath, ['--input-type=module', '-e', child]).then(
-      () => null,
-      (error: unknown) => error as { code?: number; stderr?: string },
-    );
+    ]);
 
     expect(failure).not.toBeNull();
     expect(failure?.code).toBe(1);

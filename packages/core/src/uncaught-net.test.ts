@@ -1,15 +1,9 @@
-import { execFile } from 'node:child_process';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-
 import { describe, expect, it } from 'vitest';
 
+import { runChildAgainstSrc, siblingSrcPath } from './child-src.test-support.js';
 import { noteUncaught } from './dropped-record.js';
 import { captureStderr } from './testing.js';
 import { installUncaughtNet } from './uncaught-net.js';
-
-const run = promisify(execFile);
 
 /**
  * ここで固定するのは2つで、**2つ目のほうが重い。**
@@ -101,29 +95,20 @@ describe('未捕捉の例外の網（#438）', () => {
   /**
    * **子プロセスで本物の未捕捉例外を起こす。**
    *
-   * `dist` を読むのは、素の node に `.ts` を食わせられないからである（Node の
-   * 型剥がしは `./x.js` の指定を `./x.ts` へ読み替えない）。**この repo は
-   * build → typecheck → test の順が前提**（`scripts/verify-core.mjs` の `STEPS`、
-   * `.claude/skills/dev-setup/SKILL.md` の「build が先」の項——この項は #1753 で
-   * `AGENTS.md`「開発手順」から移った）なので、テストの時点で `dist` は在る。
-   *
-   * **⚠️ ここが見ているのは `dist` である。** `src` だけを直して build せずに
-   * このテストだけ回すと、**古い `dist` に対して緑が出る。** 一式（`pnpm verify`）
-   * を通すこと。
+   * 子プロセスに読ませるのは **いまの `src/uncaught-net.ts`** であって、
+   * 本物のチェックアウトの `dist` ではない（#1908。仕組みは
+   * `child-src.test-support.ts` の doc）。**古い `dist` に対して緑が出る
+   * 心配も、並行する `pnpm build` の tsup clean が `dist/*.js` を消す窓との
+   * 競合（#204 / #234）も、どちらも成り立たない** —— `dist` を1バイトも
+   * 読んでいないため。
    */
   it('網を張っても、未捕捉の例外では今日どおりプロセスが死ぬ（既定のスタックごと）', async () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const entry = join(here, '..', 'dist', 'index.js');
-    const child = [
+    const entry = siblingSrcPath(import.meta.url, 'uncaught-net.ts');
+    const failure = await runChildAgainstSrc([
       `import { installUncaughtNet } from ${JSON.stringify(entry)};`,
       `installUncaughtNet('alteroidd');`,
       `setImmediate(() => { throw new Error('boom-from-child'); });`,
-    ].join('\n');
-
-    const failure = await run(process.execPath, ['--input-type=module', '-e', child]).then(
-      () => null,
-      (error: unknown) => error as { code?: number; stderr?: string },
-    );
+    ]);
 
     // (a) 死ぬ。**`null` ではなく数の 0 以外**であること（signal で殺された形と混ぜない）。
     expect(failure).not.toBeNull();
