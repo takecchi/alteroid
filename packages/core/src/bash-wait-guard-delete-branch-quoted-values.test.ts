@@ -171,10 +171,10 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
    *
    * この Issue（#1910）は**誤検知（false positive）**の直し方を扱っており、
    * この節が扱う**すり抜け（false negative）**とは症状が逆で、この PR の
-   * 変更が作ったものでもない（テスト専用コミットの時点で既に赤い——
-   * `git stash` 等をせず、変更前の `main` へ直接このテストを当てて確認
-   * 済み）。この PR では直さず、Issue を切って報告する
-   * （AGENTS.md「範囲外でも気づいたことは上げる」）。
+   * 変更が作ったものでもない（このテストファイルの、テスト専用コミットの
+   * 時点——`bash-wait-guard.ts` をまだ1行も直していない状態——で既に
+   * `blocked:false` だったことを確認済み）。この PR では直さず、issue #1991
+   * を切って報告した（AGENTS.md「範囲外でも気づいたことは上げる」）。
    */
   it('[既知・範囲外] 二重引用符で囲まれた素の `-d`（`"-d"`）は現状すり抜ける', () => {
     expect(inspectBashCommand('gh pr merge 1 "-d"').blocked).toBe(false);

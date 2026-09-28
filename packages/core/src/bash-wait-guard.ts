@@ -421,8 +421,8 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   `"-d"` は直前が引用符でありシェルが引用符を剥がした後の実引数は
  *   リテラルの `-d`（本物のフラグ）である。長い形の `--delete-branch\b` は
  *   この lookbehind を持たないため同じ形でも引き続き弾く（対照は
- *   `bash-wait-guard-delete-branch-quoted-values.test.ts`）。issue 化して
- *   報告する（AGENTS.md「範囲外でも気づいたことは上げる」）。
+ *   `bash-wait-guard-delete-branch-quoted-values.test.ts`）。issue #1991 で
+ *   報告した（AGENTS.md「範囲外でも気づいたことは上げる」）。
  * - **`--delete-branch=false` のような明示的な無効化。** `\b` は文字種の
  *   境界でしか見ないので、`--delete-branch` の直後が `=false` でも弾く
  *   （確かめていない・稀な形と判断して対応していない）。
