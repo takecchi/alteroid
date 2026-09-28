@@ -269,6 +269,35 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     void clone;
   });
 
+  /**
+   * 起動より後に回答された行は、このプロセスの `answerApproval` が配達の途中にある行である
+   * （`'pending'` を書いてから `'delivered'` を書くまでの間）。拾い直しがそれを拾うと、
+   * 同じ合図を2回 `post` し（`#handle` の最後の砦が1回に抑えるが、形としては塞がない）、
+   * 読んだ時点の写しで行を書き戻すので、その間に同じ承認へ2回目の回答があれば
+   * 新しい回答を古い回答で上書きしうる。⟹ 拾い直すのは、このプロセスが起動する前に
+   * 回答された行だけにする。ここでは「起動より後」を未来の時刻で表す。
+   */
+  it('起動より後に回答された行（このプロセスの answerApproval の途中にある行）は、拾い直されない', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(
+      seedApproval({
+        answeredAt: '2999-01-01T00:00:00.000Z',
+        answer: '許可します',
+        answerDelivery: 'pending',
+      }),
+    );
+
+    const { clone, inputs } = bootClone(stores, 'hang');
+    await idle();
+
+    expect(inputs).toHaveLength(0);
+    const approval = await stores.jobs.getApproval('ap-1');
+    expect(approval?.answerDelivery).toBe('pending');
+    expect(await stores.inbox.peekPending()).toEqual([]);
+
+    void clone;
+  });
+
   it('同じ id の human_answer を2回 post しても、ターンの入力は1回分しか出ない（#handle の最後の砦）', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putApproval(seedApproval());
