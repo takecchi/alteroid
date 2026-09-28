@@ -2889,13 +2889,31 @@ describe('PgInboxStore', () => {
     });
   });
 
+  // **経緯（issue #2024 で期待値を反転した）。** もとはここで `claimPending()` が
+  // `読めない形` で投げることを期待していた。名前の「fs 版と同じく」は当時の fs 版の
+  // 振る舞いを指していたが、fs 版は #1966（PR #1972）で「読めない行は配る側から外して
+  // 跡を残し、行は消さない」形へ変わった。投げると、読めない1行が起動時の未読の復元を
+  // 丸ごと止め、ほかの正しい未読まで配られなくなる。
+  //
+  // **守りたいこと（「消された」に潰さない）は変えていない。** 投げる代わりに、
+  // (1) stderr に id の跡を残し（黙って飛ばさない）、(2) 行を表から消さない
+  // （`pending().count` にも数えられる）ことを見る。
   it('読めない行を「消された」に潰さない（fs 版と同じく失敗を表へ出す）', async () => {
     await db.execute(
       sql`insert into inbox_events (id, event, at, deliveries)
           values ('broken', '{"id":"broken"}'::jsonb, now(), 0)`,
     );
 
-    await expect(stores.inbox.claimPending()).rejects.toThrow(/読めない形/);
+    let claimed: string[] = [];
+    const stderr = (
+      await captureStderr(async () => {
+        claimed = (await stores.inbox.claimPending()).map((entry) => entry.event.id);
+      })
+    ).join('');
+
+    expect(claimed).toEqual([]);
+    expect(stderr).toContain('broken');
+    expect((await stores.inbox.pending()).count).toBe(1);
   });
 
   describe('pending（#358。読むだけで配達回数を進めない）', () => {
