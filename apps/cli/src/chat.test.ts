@@ -561,6 +561,129 @@ describe('renderManagerList', () => {
       expect(text).not.toContain('⚠');
       expect(text).toContain('直近の報告: スキーマまで書いた');
     });
+
+    /**
+     * **Issue #1882: `lastFailure` は次の report が届くまで消えない欄なので、
+     * 枠(429)等で失敗した直後にセッションそのものが `failed` / `lost` /
+     * `stopped` として終端しても、この行だけ古い前提（「セッションは生きて
+     * いる」）を言い続けていた。**
+     *
+     * 揃える先は core の `describeManagerFailure`（PR #1904）・Web の
+     * `terminalFailureNote`（PR #1889）と同じ2分岐——
+     * `status === 'failed' || status === 'lost'`（core の
+     * `isManagerOutcomeUnobserved` と同じ判定）と `status === 'stopped'`。
+     * **生きている3値（`running` / `waiting_human` / `done`）の文言は
+     * 1文字も変えない**——直す前からある「話しかければ続きます」の全文を
+     * そのまま固定する（下の陽性対照）。
+     *
+     * **CLI の次の一手の語はこの面のもの**（`runnerLostSince` の行と同じ
+     * 語調）——core の `manager_send` / Web の「話しかける」ではなく `/msg`
+     * を名指しする。
+     */
+    describe('Issue #1882: 終端した status では「セッションは生きている」と言わない', () => {
+      const ALIVE_CLAIM = '。セッションは生きているので、原因が解ければ話しかければ続きます';
+
+      it('status: running（陽性対照）は文言を1文字も変えない', () => {
+        const text = renderManagerList([manager({ status: 'running', lastFailure: FAILURE })]);
+        expect(text).toContain(ALIVE_CLAIM);
+      });
+
+      it('status: waiting_human（陽性対照）も文言を1文字も変えない', () => {
+        const text = renderManagerList([
+          manager({ status: 'waiting_human', lastFailure: FAILURE }),
+        ]);
+        expect(text).toContain(ALIVE_CLAIM);
+      });
+
+      it('status: failed では「生きている」と言い切らない', () => {
+        const text = renderManagerList([manager({ status: 'failed', lastFailure: FAILURE })]);
+
+        // 失敗の事実そのもの（code / via / at）は引き続き出す。
+        expect(text).toContain('billing_error');
+        expect(text).toContain('assistant_error');
+        expect(text).toContain('2026-08-20T10:00:00.000Z');
+        expect(text).not.toContain(ALIVE_CLAIM);
+        expect(text).not.toContain('セッションは生きているので');
+        expect(text).toContain('status: failed');
+        // 続ける手段はあるが、届く保証は無いことを言う（core / Web と同じ線）。
+        expect(text).toContain('/msg');
+        expect(text).toContain('届く保証は無い');
+      });
+
+      it('status: lost では「生きている」と言い切らない', () => {
+        const text = renderManagerList([manager({ status: 'lost', lastFailure: FAILURE })]);
+
+        expect(text).not.toContain(ALIVE_CLAIM);
+        expect(text).not.toContain('セッションは生きているので');
+        expect(text).toContain('status: lost');
+        expect(text).toContain('/msg');
+        expect(text).toContain('届く保証は無い');
+      });
+
+      it('status: stopped では「生きている」と言い切らず、人間・クローンが明示的に止めたと言う', () => {
+        const text = renderManagerList([manager({ status: 'stopped', lastFailure: FAILURE })]);
+
+        expect(text).not.toContain(ALIVE_CLAIM);
+        expect(text).not.toContain('セッションは生きているので');
+        expect(text).toContain('status: stopped');
+        expect(text).toContain('人間・クローンが明示的に停止させ');
+        // stopped でも send() は resume を試みうる（core PR #1904 が現物で
+        // 確かめた事実）——「もう続かない」と言い切らない。
+        expect(text).toContain('/msg');
+        expect(text).toContain('届く保証は無い');
+      });
+    });
+
+    /**
+     * **Issue #1882 の追記: `lastFoldedTurn` が在る回、`lastFailure` は
+     * `manager.ts` の `case 'report'` が `status === 'stopped'` の間は一切
+     * 触らない欄なので、畳まれる**前**の無関係な古いターンを指す。**
+     *
+     * 揃える先は core の `manager_report`（Issue #1798。`foldedTurn !==
+     * undefined` の回は `describeManagerFailure` を呼ばない）・Web の
+     * `FailureNote`（PR #1889。同じ回に `null` を返す）と同じ線——古い
+     * `lastFailure` の注記は出さない。
+     *
+     * **`直近のターンの中身` 見出しも同じ穴だった。** `manager.lastReport` は
+     * `case 'report'` の `stopped` 早期 return では更新されないので、
+     * `lastFoldedTurn` が在る回の `lastReport` は畳まれる前の無関係な古い
+     * ターンのままである——それを「直近のターンの中身」と呼ぶと、実際に
+     * 直近に届いた本文（`lastFoldedTurn.text`）とは違うものを「直近」と
+     * 呼ぶことになる。core の `manager_report` が使う見出し（「停止後に
+     * 届いた、畳まれたターンの中身」）と同じ意味で、`lastFoldedTurn.text` を
+     * その受信時刻つきで出す。
+     */
+    describe('Issue #1882: lastFoldedTurn が在る回は、畳まれる前の古い材料を使わない', () => {
+      it('古い lastFailure の注記を出さない（status: stopped）', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'stopped',
+            lastFailure: FAILURE,
+            lastFoldedTurn: { text: '畳まれた本文', at: '2026-09-01T00:00:00.000Z' },
+          }),
+        ]);
+
+        expect(text).not.toContain('報告ではなく失敗で終わっています');
+        expect(text).not.toContain('セッションは生きているので');
+      });
+
+      it('古い lastReport ではなく、畳まれたターンの中身をその受信時刻つきで出す', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'stopped',
+            lastReport: '畳まれる前の無関係な古い本文',
+            lastFoldedTurn: { text: '停止後に届いた新しい本文', at: '2026-09-01T00:00:00.000Z' },
+          }),
+        ]);
+
+        expect(text).toContain('停止後に届いた新しい本文');
+        expect(text).toContain('2026-09-01T00:00:00.000Z');
+        expect(text).not.toContain('畳まれる前の無関係な古い本文');
+        // 古い `lastReport` を「直近の報告」「直近のターンの中身」と呼ばない
+        // ——どちらの見出しも、畳まれた本文の見出し（下の別の歯）に置き換わる。
+        expect(text).toContain('畳まれたターンの中身');
+      });
+    });
   });
 });
 
