@@ -1947,6 +1947,32 @@ class Clone implements CloneHost {
    */
   readonly #droppedWhileRestoring = new Set<string>();
   /**
+   * **未読の配り直し（`#restoreUnreadPass`）が終わるまでに、生で投函した合図の id**
+   * （issue #1984）。`#restoreUnreadPass` が配り直す直前に読み、ここに在る id は
+   * 飛ばす。
+   *
+   * ## なぜ要るか
+   *
+   * `#pump()` は `#restoreUnread()` を待たずに始める。起動直後に `post(event)` された
+   * 合図は、その場で生きている待ち行列へ入り、同時に `#remember` が同じ受信箱へ
+   * `put` する（これも待たない）。`claimPending()` がその `put` の後の受信箱を読むと、
+   * 同じ合図を「前の器が残した未読」としてもう一度配る——同じ発言に2回応える。
+   *
+   * ## `#restoringUnread` が立つ前から控える
+   *
+   * `createClone` の直後、配り直しが始まる前に `post` されることもある。そのときの
+   * 書き込みも `claimPending()` に拾われうるので、インスタンスができた時点から
+   * 控える（`#restorePassFinished` が偽のあいだ）。
+   *
+   * ## 無限に育たない
+   *
+   * 控えるのは配り直しが終わるまでの窓だけで、`#restoreUnread` の `finally` で
+   * まるごと捨て、以後は控えない。
+   */
+  readonly #postedBeforeRestored = new Set<string>();
+  /** `#restoreUnread` が一度走り終えたか（`#postedBeforeRestored` の窓を閉じる印）。 */
+  #restorePassFinished = false;
+  /**
    * `#handle` が処理し終えた `human_answer` 合図の id（issue #1977）。
    *
    * **同じ回答を1回として扱うための、クローン側の最後の砦。** `human_answer`
@@ -2594,6 +2620,11 @@ class Clone implements CloneHost {
       // 経路はこの下で必ず `#inbox.push` するので、拾い直しが尽きても合図は
       // メモリの待ち行列に残る——通常経路の跡（`noteInboxEventKeptInMemoryOnly`）
       // が正しいのはここだけである。
+      //
+      // **配り直しが終わるまでは、生で投函した id を控える**（issue #1984。
+      // `#postedBeforeRestored` の doc）。`#remember` の書き込みを
+      // `claimPending()` が拾っても、配り直しの側で飛ばせるようにする。
+      if (!this.#restorePassFinished) this.#postedBeforeRestored.add(event.id);
       this.#remember(event, { canQueue: true });
       // 受理した瞬間に日誌へ載せて合図を出す。**器へ書くのと同じ場所である**
       // （`#remember` の隣）。
@@ -5967,6 +5998,9 @@ class Clone implements CloneHost {
     } finally {
       this.#restoringUnread = false;
       this.#droppedWhileRestoring.clear();
+      // 生で投函した id の控えの窓も、ここで閉じる（issue #1984）。
+      this.#restorePassFinished = true;
+      this.#postedBeforeRestored.clear();
     }
   }
 
@@ -6309,6 +6343,14 @@ class Clone implements CloneHost {
         });
         return claimedIds;
       }
+
+      // **この起動で既に生で投函した合図は、配り直さない**（issue #1984。
+      // `#postedBeforeRestored` の doc）。`claimPending()` が `post` の受信箱への
+      // 書き込みの後に返ると、同じ合図がここに乗る——それは前の器が残した未読では
+      // なく、生きている待ち行列に既に居る合図である。**未読の控え（`#delivery` の
+      // unread）にも触らない**——そちらは生の配達の側が持っていて、処理し終えた
+      // ときに `#forget` が受信箱から消す。
+      if (this.#postedBeforeRestored.has(record.event.id)) continue;
 
       // **live/stale の判定は `decided` に計算済みのものを使う**（上の
       // ループの外での一括判定）。以前は「配り直した」を全件で無条件に
