@@ -645,7 +645,10 @@ export function createMemoryStores(): Stores {
       return found === undefined ? null : isolate(found);
     },
     async putApproval(approval) {
-      approvals.set(approval.id, isolate(approval));
+      // 本物（fs / pg）と同じく `pendingApprovalSchema` を通す（issue #2012。
+      // `putJob`（#1715）・`updateApproval`（#2007。すぐ下）は先に直っていたが、
+      // `putApproval` だけ食い違って残った）。
+      approvals.set(approval.id, isolate(pendingApprovalSchema.parse(approval)));
     },
     // `updateJob`（すぐ上）と同じ理由・同じ形（issue #2007）——プロセス内の
     // `Map` は同期アクセスなので、判定と書き込みのあいだに `await` を挟まなければ
