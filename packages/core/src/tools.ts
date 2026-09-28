@@ -2892,6 +2892,36 @@ function denialLine(denials: ManagerDenial[], lastReportAt: string | undefined):
  * `case 'usage_notice'` も `withRecoveryNote` を呼ぶが、あちらは合図が
  * 届いた瞬間の文言で、世代の行を並べて出していないので、ここでは触っていない
  * （Issue #931 に残した）。
+ *
+ * ## ⚠️ Issue #1882: `status` が既にセッションの死を確定させている回は分けて言う
+ *
+ * `lastFailure` は `manager.ts` の `case 'report'` が書く欄で、次の `report` が
+ * 届くまで消えない（`delete record.job.lastFailure` は次の成功した report の
+ * 分岐でしか通らない）。だから、枠(429)などで畳まれた回の直後にセッション
+ * そのものが `failed` / `lost`（{@link isManagerOutcomeUnobserved}）や
+ * `stopped`（`manager.ts` の `abort()` が `isLive()` で確かめたうえで終端させる）
+ * へ確定しても、`lastFailure` は古い前提のまま残る。**このとき「セッションは
+ * 生きているので、原因が解ければ manager_send で続きから進む」と言い切ると、
+ * 同じ応答に並ぶ `systemErrorLine`（「セッションは失敗で畳まれた」）と正面から
+ * 矛盾する**——`describeUsageStopped` が Issue #1796 で直したのと同じ形の穴が、
+ * この欄にも独立に在った（本文は #1796 と共有していない。`usageStoppedAt` と
+ * `lastFailure` は別の欄なので、片方を直してももう片方には届かない）。
+ *
+ * **`status` を追加の引数として受け取り、`isManagerOutcomeUnobserved` と
+ * `status === 'stopped'` の2分岐で言い分ける**（`describeUsageStopped` と
+ * 同じ2分岐・同じ判定関数）。**生きている側（`running` / `waiting_human` /
+ * `done`）の文言は1文字も変えない**——変えてよいのは終端した2つの枝だけである。
+ *
+ * **終端した2つの枝では {@link RESTART_BEFORE_CHECK_ADVICE} を付けない。**
+ * この助言の趣旨は「確かめずに `manager_start` で起こし直すと同じ仕事が2本
+ * 走る」ことへの注意で、二重起動の危険は「本当に死んでいるか確認できていない」
+ * ときにしか成り立たない。終端した2枝は `isLive()` が確認済みで死んでいる
+ * 側（`stopped` も `lost` と同じ列——`manager.ts` の `isLive()` の doc）なので、
+ * この助言はここでは当てはまらない——`describeUsageStopped` の終端2枝も
+ * この助言を付けていない（同じ判断）。**`withRecoveryNote`（回復の見込み）は
+ * 終端した枝でも外さない**——あちらは「この失敗コードの性質上、待てば枠は
+ * 戻るか」という、セッションの生死とは軸が違う情報で、次に `manager_start` で
+ * 新しく起こすタイミングを計るのにも使える。
  */
 /**
  * `manager_start` が返す `ManagerSummary` から、cwd をどう名乗るかの1句を作る
@@ -2919,16 +2949,41 @@ function describeStartedCwd(
 function describeManagerFailure(
   failure: ManagerSummary['lastFailure'],
   lastReport: string | undefined,
+  status: ManagerSummary['status'],
   staleToken = false,
 ): string | null {
   if (failure === undefined) return null;
-  const base =
+  const opening =
     `⚠ 直近のターンは報告ではなく失敗で終わっている: ${failure.code}（${failure.via}, ${failure.at}）。` +
     'この行の下に出る本文は runner が包んだエラー文（「このターンは応答を返さずに終わった: …」）で' +
-    'あって報告ではない——**完遂して畳んだと読まないこと。** ' +
-    'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
-    '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
-    RESTART_BEFORE_CHECK_ADVICE;
+    'あって報告ではない——**完遂して畳んだと読まないこと。** ';
+  // **Issue #1882: `status` が既にセッションの死を確定させている回は分けて
+  // 言う——`describeUsageStopped`（Issue #1796）と同じ2分岐、同じ判定関数
+  // （このファイル冒頭の doc「## ⚠️ Issue #1882」）。**
+  // **終端した枝のクォート内の言い換えは、生きている側の文言（下）の部分
+  // 文字列にしない。** `describeUsageStopped` も同じ形（生きている側「セッション
+  // は生きているので、鍵が回ればこの委譲は続く」に対し、終端側のクォートは
+  // 「セッションは生きているので鍵が回れば続く」——読点を落とし文末も変えて
+  // ある）。理由はここで作る側の事情——このクォートを生きている側の文言の
+  // 部分文字列にすると、`.not.toContain(ALIVE_CLAIM)` の陰性対照がクォートの
+  // 中身にも当たってしまい、直したはずの断定がテストの上では消えたことにすら
+  // 気づけない（実際にこの PR の歯を書く過程で一度それを踏んだ）。
+  const base = isManagerOutcomeUnobserved(status)
+    ? opening +
+      `ただし status: ${status}——セッションそのものが、依頼者が望まない終わり方で` +
+      '既に終端している。「セッションが生きていて原因が解ければ進められる」という前提は' +
+      'ここでは成り立たない——起こし直すには manager_send で resume を試みるしかなく、' +
+      '届く保証は無い（届いた事実の判定は `systemErrorLine` 等の別の行を見ること）。'
+    : status === 'stopped'
+      ? opening +
+        'ただし status: stopped——このセッションは、その後 人間・クローンが明示的に' +
+        '停止させ、確かめたうえで既に終端している（`abort()` が runner の一覧を探って' +
+        'セッションが消えたことを確かめた事実。`manager.ts` の `isLive()` の doc）。' +
+        '「セッションが生きていて原因が解ければ進められる」という前提はここでは成り立たない。'
+      : opening +
+        'セッションは生きているので、原因が解ければ manager_send で続きから進む' +
+        '（status が done のままなのはそのためで、この委譲が死んだという意味ではない）。' +
+        RESTART_BEFORE_CHECK_ADVICE;
   if (lastReport === undefined) return base;
   const fromText = limitRecoveryOf(lastReport);
   const recovery =
@@ -2957,6 +3012,7 @@ function failureLine(manager: ManagerSummary): string | null {
   const note = describeManagerFailure(
     manager.lastFailure,
     manager.lastReport,
+    manager.status,
     tokenGenerationMismatched(manager),
   );
   return note === null ? null : `  ${note}`;
@@ -10680,6 +10736,7 @@ export function createCloneTools(context: ToolContext) {
             : describeManagerFailure(
                 found.lastFailure,
                 found.lastReport,
+                found.status,
                 tokenGenerationMismatched(found),
               );
         // **manager_list 専用の3軸のうち2つ（Issue #1847）。** `manager_list`
