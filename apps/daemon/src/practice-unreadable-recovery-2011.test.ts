@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { CloneHost, Stores } from '@alteroid/core';
-import { createCloneTools, createMemoryStores } from '@alteroid/core';
+import { createCloneTools } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { PGlite } from '@electric-sql/pglite';
 import { createPgStoresFromDb, migrate, tables, type Db } from '@alteroid/storage-pg';
@@ -144,92 +144,95 @@ function toolCaller(stores: Stores) {
 describe.each([
   ['fs', fsStoresWithBadRow],
   ['pg', pgStoresWithBadRow],
-] as const)('practices の壊れた行を4つの口で書き直す・外す（%s 実装。issue #2011）', (_label, makeStores) => {
-  let stores: Stores;
-  let app: ReturnType<typeof createApp>;
+] as const)(
+  'practices の壊れた行を4つの口で書き直す・外す（%s 実装。issue #2011）',
+  (_label, makeStores) => {
+    let stores: Stores;
+    let app: ReturnType<typeof createApp>;
 
-  beforeEach(async () => {
-    stores = await makeStores();
-    app = createApp({
-      clone: stubCloneHost(),
-      stores,
-      token: 'test-token',
-      shutdown: () => undefined,
+    beforeEach(async () => {
+      stores = await makeStores();
+      app = createApp({
+        clone: stubCloneHost(),
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
     });
-  });
 
-  it('PUT /practices/:slug は壊れた行があっても書き直せる（直す前は read() の throw で 500）', async () => {
-    const put = await app.request(`/practices/${BAD_SLUG}`, {
-      ...json({ kind: '調査', title: '直した題', content: '直した本文' }),
-      method: 'PUT',
+    it('PUT /practices/:slug は壊れた行があっても書き直せる（直す前は read() の throw で 500）', async () => {
+      const put = await app.request(`/practices/${BAD_SLUG}`, {
+        ...json({ kind: '調査', title: '直した題', content: '直した本文' }),
+        method: 'PUT',
+      });
+      const body = (await put.json().catch(() => undefined)) as unknown;
+      expect(put.status, `本文: ${JSON.stringify(body)}`).toBe(200);
+
+      const read = await app.request(`/practices/${BAD_SLUG}`);
+      expect(read.status).toBe(200);
+      const readBody = (await read.json()) as { practice: { title: string } };
+      expect(readBody.practice.title).toBe('直した題');
+
+      const entries = await stores.journal.list({ types: ['decision'] });
+      expect(entries[0]).toMatchObject({
+        decision: expect.stringContaining('読めない形で入っていた') as unknown as string,
+      });
+      // 壊れていた行の本文・題は日誌に出ない。
+      const joined = entries.map((entry) => JSON.stringify(entry)).join('');
+      expect(joined).not.toContain(BAD_TITLE);
+      expect(joined).not.toContain(BAD_CONTENT);
     });
-    const body = (await put.json().catch(() => undefined)) as unknown;
-    expect(put.status, `本文: ${JSON.stringify(body)}`).toBe(200);
 
-    const read = await app.request(`/practices/${BAD_SLUG}`);
-    expect(read.status).toBe(200);
-    const readBody = (await read.json()) as { practice: { title: string } };
-    expect(readBody.practice.title).toBe('直した題');
+    it('DELETE /practices/:slug は壊れた行があっても消せる（直す前は read() の throw で 500）', async () => {
+      const del = await app.request(`/practices/${BAD_SLUG}`, { method: 'DELETE' });
+      const body = (await del.json().catch(() => undefined)) as unknown;
+      expect(del.status, `本文: ${JSON.stringify(body)}`).toBe(200);
 
-    const entries = await stores.journal.list({ types: ['decision'] });
-    expect(entries[0]).toMatchObject({
-      decision: expect.stringContaining('読めない形で入っていた') as unknown as string,
+      const read = await app.request(`/practices/${BAD_SLUG}`);
+      expect(read.status).toBe(404);
+
+      const entries = await stores.journal.list({ types: ['decision'] });
+      expect(entries[0]).toMatchObject({
+        decision: expect.stringContaining('読めない形で入っていた') as unknown as string,
+      });
+      const joined = entries.map((entry) => JSON.stringify(entry)).join('');
+      expect(joined).not.toContain(BAD_TITLE);
+      expect(joined).not.toContain(BAD_CONTENT);
     });
-    // 壊れていた行の本文・題は日誌に出ない。
-    const joined = entries.map((entry) => JSON.stringify(entry)).join('');
-    expect(joined).not.toContain(BAD_TITLE);
-    expect(joined).not.toContain(BAD_CONTENT);
-  });
 
-  it('DELETE /practices/:slug は壊れた行があっても消せる（直す前は read() の throw で 500）', async () => {
-    const del = await app.request(`/practices/${BAD_SLUG}`, { method: 'DELETE' });
-    const body = (await del.json().catch(() => undefined)) as unknown;
-    expect(del.status, `本文: ${JSON.stringify(body)}`).toBe(200);
-
-    const read = await app.request(`/practices/${BAD_SLUG}`);
-    expect(read.status).toBe(404);
-
-    const entries = await stores.journal.list({ types: ['decision'] });
-    expect(entries[0]).toMatchObject({
-      decision: expect.stringContaining('読めない形で入っていた') as unknown as string,
+    it('DELETE /practices/:slug は本当に無い slug なら今までどおり 404', async () => {
+      const del = await app.request('/practices/never-existed', { method: 'DELETE' });
+      expect(del.status).toBe(404);
     });
-    const joined = entries.map((entry) => JSON.stringify(entry)).join('');
-    expect(joined).not.toContain(BAD_TITLE);
-    expect(joined).not.toContain(BAD_CONTENT);
-  });
 
-  it('DELETE /practices/:slug は本当に無い slug なら今までどおり 404', async () => {
-    const del = await app.request('/practices/never-existed', { method: 'DELETE' });
-    expect(del.status).toBe(404);
-  });
+    it('practice_write は壊れた行があっても書き直せる（直す前は read() の throw で例外）', async () => {
+      const call = toolCaller(stores);
+      const result = await call('practice_write', {
+        slug: BAD_SLUG,
+        kind: '調査',
+        title: '直した題',
+        content: '直した本文',
+      });
+      expect(result).toContain('読めない形で入っていたやり方を');
+      expect(result).toContain('書き直した');
 
-  it('practice_write は壊れた行があっても書き直せる（直す前は read() の throw で例外）', async () => {
-    const call = toolCaller(stores);
-    const result = await call('practice_write', {
-      slug: BAD_SLUG,
-      kind: '調査',
-      title: '直した題',
-      content: '直した本文',
+      const read = await stores.practices.read(BAD_SLUG);
+      expect(read?.title).toBe('直した題');
     });
-    expect(result).toContain('読めない形で入っていたやり方を');
-    expect(result).toContain('書き直した');
 
-    const read = await stores.practices.read(BAD_SLUG);
-    expect(read?.title).toBe('直した題');
-  });
+    it('practice_remove は壊れた行があっても消せる（直す前は read() の throw で例外）', async () => {
+      const call = toolCaller(stores);
+      const result = await call('practice_remove', { slug: BAD_SLUG });
+      expect(result).toContain('読めない形で入っていたやり方');
+      expect(result).toContain('消した');
 
-  it('practice_remove は壊れた行があっても消せる（直す前は read() の throw で例外）', async () => {
-    const call = toolCaller(stores);
-    const result = await call('practice_remove', { slug: BAD_SLUG });
-    expect(result).toContain('読めない形で入っていたやり方');
-    expect(result).toContain('消した');
+      expect(await stores.practices.read(BAD_SLUG)).toBeNull();
+    });
 
-    expect(await stores.practices.read(BAD_SLUG)).toBeNull();
-  });
-
-  it('practice_remove は本当に無い slug なら今までどおり「無かった」', async () => {
-    const call = toolCaller(stores);
-    const result = await call('practice_remove', { slug: 'never-existed' });
-    expect(result).toContain('もともと無かった');
-  });
-});
+    it('practice_remove は本当に無い slug なら今までどおり「無かった」', async () => {
+      const call = toolCaller(stores);
+      const result = await call('practice_remove', { slug: 'never-existed' });
+      expect(result).toContain('もともと無かった');
+    });
+  },
+);
