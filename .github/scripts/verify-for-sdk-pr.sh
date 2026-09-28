@@ -61,6 +61,7 @@ GATE_NAMES=(
   sdk-quotes
   stale-token-restart-advice
   restart-before-check-advice
+  no-env-passthrough
   typecheck
   lint
   'format:check'
@@ -75,6 +76,7 @@ GATE_COMMANDS=(
   'pnpm check:sdk-quotes'
   'pnpm check:stale-token-restart-advice'
   'pnpm check:restart-before-check-advice'
+  'pnpm check:no-env-passthrough'
   'pnpm typecheck'
   'pnpm lint'
   'pnpm format:check'
