@@ -1,4 +1,11 @@
-import { ensureTrailingNewline, practiceSchema, practiceSlugSchema } from '@alteroid/core';
+import {
+  ensureTrailingNewline,
+  practiceMetaSchema,
+  practiceSchema,
+  practiceSlugSchema,
+  practiceVersionMetaSchema,
+  practiceVersionSchema,
+} from '@alteroid/core';
 import type {
   Practice,
   PracticeMeta,
@@ -11,6 +18,44 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
 import { practices, practiceVersions } from './schema.js';
+
+/**
+ * 不正な行を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れない。
+ * 出すのは「どの欄が」だけである（`PgScheduleStore` の `summarizeInvalidFields`
+ * と同じ理由・同じ形。issue #1944 / #2011。パッケージを跨いだ共通化はしていない）。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
+
+/**
+ * `list()` で飛ばした行を stderr へ1行で要約する。**slug 以外の値は絶対に
+ * 載せない**——`title` / `content` には人間・クローンの自由文がそのまま
+ * 入りうる（`FsPracticeStore.describeSkippedPracticeRow` /
+ * `PgScheduleStore.describeSkippedScheduleRow` と同じ理由。issue #2011）。
+ */
+function describeSkippedPracticeRow(params: { slug: string; reason: string }): string {
+  return `alteroid: practices の不正な行を読み飛ばしました（slug=${JSON.stringify(params.slug)}、${params.reason}）`;
+}
+
+/**
+ * `listVersions()` で飛ばした版の行を stderr へ1行で要約する
+ * （`describeSkippedPracticeRow` と対。slug + version 以外の値は載せない）。
+ */
+function describeSkippedPracticeVersionRow(params: {
+  slug: string;
+  version: number;
+  reason: string;
+}): string {
+  return (
+    `alteroid: practiceVersions の不正な行を読み飛ばしました` +
+    `（slug=${JSON.stringify(params.slug)}、version=${params.version}、${params.reason}）`
+  );
+}
 
 /**
  * `chars`（本文の文字数、コードポイント数）を導出する SQL 式（#1340）。
@@ -56,6 +101,11 @@ export class PgPracticeStore implements PracticeStore {
     return parsed.data;
   }
 
+  /**
+   * slug の昇順。**不正な行は返さない**（issue #2011。`PgScheduleStore.list`
+   * が #1944 でそろえた形と同じ）——飛ばした行は stderr へ跡を残すだけで、
+   * `read(slug)` はこれまでどおり投げる。DB の行そのものには触れない。
+   */
   async list(): Promise<PracticeMeta[]> {
     const rows = await this.#db
       .select({
@@ -70,16 +120,35 @@ export class PgPracticeStore implements PracticeStore {
       })
       .from(practices)
       .orderBy(asc(practices.slug));
-    return rows.map((row) => ({
-      slug: row.slug,
-      kind: row.kind,
-      title: row.title,
-      createdAt: toIso(row.createdAt),
-      updatedAt: toIso(row.updatedAt),
-      chars: row.chars,
-    }));
+    const result: PracticeMeta[] = [];
+    for (const row of rows) {
+      const parsed = practiceMetaSchema.safeParse({
+        slug: row.slug,
+        kind: row.kind,
+        title: row.title,
+        createdAt: toIso(row.createdAt),
+        updatedAt: toIso(row.updatedAt),
+        chars: row.chars,
+      });
+      if (parsed.success) {
+        result.push(parsed.data);
+        continue;
+      }
+      process.stderr.write(
+        `${describeSkippedPracticeRow({
+          slug: row.slug,
+          reason: summarizeInvalidFields(parsed.error.issues),
+        })}\n`,
+      );
+    }
+    return result;
   }
 
+  /**
+   * **`list()` とは違い、読めない行は投げる**（`PracticeStore.read` の doc
+   * 「無ければ null。読めないは throw」。`FsPracticeStore.read` と同じ形・
+   * 同じ理由。issue #2011）。
+   */
   async read(slug: string): Promise<Practice | null> {
     const rows = await this.#db
       .select({
@@ -96,7 +165,7 @@ export class PgPracticeStore implements PracticeStore {
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;
-    return {
+    const parsed = practiceSchema.safeParse({
       slug: row.slug,
       kind: row.kind,
       title: row.title,
@@ -104,7 +173,13 @@ export class PgPracticeStore implements PracticeStore {
       createdAt: toIso(row.createdAt),
       updatedAt: toIso(row.updatedAt),
       chars: row.chars,
-    };
+    });
+    if (!parsed.success) {
+      throw new Error(
+        `やり方 ${slug} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
+      );
+    }
+    return parsed.data;
   }
 
   async write(input: {
@@ -225,7 +300,14 @@ export class PgPracticeStore implements PracticeStore {
     });
   }
 
+  /**
+   * ある slug の版の一覧（メタだけ）。版番号の昇順。**不正な版の行は返さない**
+   * （issue #2011。`list()` と同じ「読めるものだけを返し、投げない」線——版の
+   * 一覧は個々の版の存在を保証する契約ではないので、`readVersion()` のような
+   * 「読めない」throw とは別に扱う。`FsPracticeStore.listVersions` と同じ形）。
+   */
   async listVersions(slug: string): Promise<PracticeVersionMeta[]> {
+    const parsedSlug = this.#slug(slug);
     const rows = await this.#db
       .select({
         slug: practiceVersions.slug,
@@ -236,18 +318,38 @@ export class PgPracticeStore implements PracticeStore {
         chars: versionCharsExpr,
       })
       .from(practiceVersions)
-      .where(eq(practiceVersions.slug, this.#slug(slug)))
+      .where(eq(practiceVersions.slug, parsedSlug))
       .orderBy(asc(practiceVersions.version));
-    return rows.map((row) => ({
-      slug: row.slug,
-      version: row.version,
-      kind: row.kind,
-      title: row.title,
-      at: toIso(row.at),
-      chars: row.chars,
-    }));
+    const result: PracticeVersionMeta[] = [];
+    for (const row of rows) {
+      const parsed = practiceVersionMetaSchema.safeParse({
+        slug: row.slug,
+        version: row.version,
+        kind: row.kind,
+        title: row.title,
+        at: toIso(row.at),
+        chars: row.chars,
+      });
+      if (parsed.success) {
+        result.push(parsed.data);
+        continue;
+      }
+      process.stderr.write(
+        `${describeSkippedPracticeVersionRow({
+          slug: row.slug,
+          version: row.version,
+          reason: summarizeInvalidFields(parsed.error.issues),
+        })}\n`,
+      );
+    }
+    return result;
   }
 
+  /**
+   * 版を1つ、本文まで読む。**`listVersions()` とは違い、読めない行は投げる**
+   * （`PracticeStore.readVersion` の doc「無ければ null。読めないは throw」と
+   * 同じ線。issue #2011）。
+   */
   async readVersion(slug: string, version: number): Promise<PracticeVersion | null> {
     const rows = await this.#db
       .select({
@@ -266,7 +368,7 @@ export class PgPracticeStore implements PracticeStore {
       .limit(1);
     const row = rows[0];
     if (row === undefined) return null;
-    return {
+    const parsed = practiceVersionSchema.safeParse({
       slug: row.slug,
       version: row.version,
       kind: row.kind,
@@ -274,6 +376,12 @@ export class PgPracticeStore implements PracticeStore {
       content: row.content,
       at: toIso(row.at),
       chars: row.chars,
-    };
+    });
+    if (!parsed.success) {
+      throw new Error(
+        `やり方 ${slug} の版 ${version} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
+      );
+    }
+    return parsed.data;
   }
 }
