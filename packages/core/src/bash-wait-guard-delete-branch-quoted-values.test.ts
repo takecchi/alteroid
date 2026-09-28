@@ -246,3 +246,68 @@ describe('gh-pr-merge-delete-branch: 二重引用符の値の中のコマンド�
     );
   });
 });
+
+/**
+ * ⚠️ PR #1990 のレビュー指摘・指摘3（マネージャー mgr-81affbde、必須の
+ * 差し戻し）—— `SUBJECT_BODY_QUOTED_VALUE_RE` はコマンド文字列全体に対して
+ * 引用符の開き閉じを追わずに当たるので、**単一引用符（または二重引用符）の
+ * 中に書かれた `--subject "`（または `-t '`）という字面**を、本物のフラグ
+ * だと誤読できる。
+ *
+ * 実例（bash の実際の argv 分割を `argv-dump.sh` で検証済み、2026-09-28）:
+ *
+ * ```
+ * gh pr merge 1 x'y --subject "' --delete-branch '"'
+ * ```
+ *
+ * bash の読み（実測）: `ARG[5]=<xy --subject ">`（`x` + 単一引用符 `'y
+ * --subject "'` が1つの引数に結合）・`ARG[6]=<--delete-branch>`（**本物の
+ * 引用符無しフラグ**）・`ARG[7]=<">`（単一引用符 `'"'` の中身）。
+ *
+ * 正規表現の読み（潰す前）: `--subject ` の直後に来た `"` を開き引用符と
+ * 誤認し、次の `"`（`'"'` の中の `"`）までを二重引用符の値だと思い込んで
+ * `' --delete-branch '` を丸ごと空白へ潰す —— **本物の `--delete-branch` が
+ * 検出器の目から消える。**
+ *
+ * 同じ形は `-t` と引用符の種類を入れ替えても作れる（`argv-dump.sh` で
+ * 同様に確認済み）:
+ *
+ * ```
+ * gh pr merge 1 x"y -t '" --delete-branch "'"
+ * ```
+ *
+ * ## 直し方
+ *
+ * 置換のコールバックに渡ってくる一致位置（`offset`）について、**文字列の
+ * 先頭からその位置まで実際に引用符を追った状態**（`computeOutsideQuoteMask`
+ * ——単一引用符の中はエスケープ無し、二重引用符の中はバックスラッシュが
+ * 直後の1文字を飛ばす、という bash の実際の規則で状態遷移する簡単な状態
+ * 機械）を求め、**その位置が「引用符の外」だと確信できるときだけ潰す**。
+ * 状態が読めない（末尾がバックスラッシュで終わる等）ときは、それ以降
+ * ずっと「外ではない」として扱う（弾く側に倒す）。
+ *
+ * `--subject`/`-t`/`--body`/`-b` の字面自体には引用符・バックスラッシュを
+ * 含まないので、フラグの開始位置で状態を見れば、直後に続く引用符の開始
+ * 位置の状態とも一致する——別々に確かめる必要は無い。
+ */
+describe('gh-pr-merge-delete-branch: 単一引用符/二重引用符の中の字面の `--subject "`/`-t \'` を本物のフラグと誤読しない（PR #1990 レビュー指摘・指摘3）', () => {
+  it('単一引用符の中の字面 `--subject "` に化かされず、本物の `--delete-branch` を弾く', () => {
+    expect(inspectBashCommand(`gh pr merge 1 x'y --subject "' --delete-branch '"'`).blocked).toBe(
+      true,
+    );
+  });
+
+  it("二重引用符の中の字面 `-t '` に化かされず、本物の `--delete-branch` を弾く（引用符の種類を入れ替えた形）", () => {
+    expect(inspectBashCommand(`gh pr merge 1 x"y -t '" --delete-branch "'"`).blocked).toBe(true);
+  });
+
+  it('偽陽性にならないこと —— 本物の `--subject` の値の中に単一引用符が在っても通す', () => {
+    expect(inspectBashCommand(`gh pr merge 1 --subject "it's fine, no flag here"`).blocked).toBe(
+      false,
+    );
+  });
+
+  it('偽陽性にならないこと —— 本物の `-t` の値の中に二重引用符の断片が在っても通す', () => {
+    expect(inspectBashCommand(`gh pr merge 1 -t 'say "hi" not a flag'`).blocked).toBe(false);
+  });
+});
