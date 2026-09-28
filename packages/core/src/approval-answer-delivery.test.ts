@@ -589,3 +589,65 @@ describe('既に終わった承認への回答は断る（issue #2007）', () =>
     expect(inputs).toHaveLength(1);
   });
 });
+
+/**
+ * issue #2007（C の3回目の横断レビューのコメント）: 「配達済み」の印を付ける書き込みは、
+ * 読んだ写しに `answerDelivery: 'delivered'` を足して、行を丸ごと書き戻していた
+ * （`#markAnswerDeliveredOnHandle` / `#reconcileUndeliveredAnswers` / `answerApproval`）。
+ * 読んでから書くまでの間に同じ行へ別の書き込みが入ると、古い写しでそれを消していた。
+ *
+ * ここでは、`#handle` が承認を読んだ直後に、同じ行へ別の書き込み（取り下げの印）が
+ * 入る場面を作り、印を付けた後もその書き込みが残ることを見る。
+ */
+describe('配達済みの印は、読んだ写しで行を丸ごと書き戻さない（issue #2007 のコメント）', () => {
+  it('#handle が行を読んだ直後に入った別の書き込みを、配達済みの印で消さない', async () => {
+    const base = createMemoryStores();
+    await base.jobs.putApproval(
+      seedApproval({
+        answeredAt: '2999-01-01T00:05:00.000Z',
+        answer: '許可します',
+        answerDelivery: 'pending',
+      }),
+    );
+    let interleaved = false;
+    const jobs = new Proxy(base.jobs, {
+      get(target, prop, receiver) {
+        if (prop === 'getApproval') {
+          return async (id: string) => {
+            const snapshot = await target.getApproval(id);
+            // 最初に読まれた直後に、同じ行へ別の書き込みを入れる（読んだ写しは古くなる）。
+            if (!interleaved && snapshot !== null) {
+              interleaved = true;
+              await target.putApproval({
+                ...snapshot,
+                withdrawnAt: '2999-01-01T00:06:00.000Z',
+                withdrawnReason: '同時に入った別の書き込み（テスト用）',
+              });
+            }
+            return snapshot;
+          };
+        }
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const stores: Stores = { ...base, jobs };
+    const { clone, inputs } = bootClone(stores, 'hang');
+
+    clone.post({
+      type: 'human_answer',
+      id: expectedHumanAnswerEventId('ap-1', '2999-01-01T00:05:00.000Z'),
+      at: '2999-01-01T00:05:00.000Z',
+      approvalId: 'ap-1',
+      answer: '許可します',
+    } as unknown as InboxEvent);
+    await waitFor(() => inputs.length > 0, '回答の処理');
+    await idle();
+
+    const approval = await base.jobs.getApproval('ap-1');
+    expect(interleaved).toBe(true);
+    expect(approval?.withdrawnAt).toBe('2999-01-01T00:06:00.000Z');
+  });
+});
