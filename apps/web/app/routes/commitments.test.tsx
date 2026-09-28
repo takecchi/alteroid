@@ -12,6 +12,7 @@
  *    ことを作らない
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CommitmentOrigin } from '@alteroid/core';
@@ -94,6 +95,23 @@ function renderPage() {
   );
 }
 
+/**
+ * `OriginBadge` の `origin: 'manager'` の行が `<Link>`（react-router）を
+ * 描画するようになったので（issue #2028）、その経路だけは router context が
+ * 要る。`managers.test.tsx` / `dashboard.test.tsx` と同じ形
+ * （`createMemoryRouter` + `RouterProvider`）に揃える。
+ */
+function renderPageWithRouter() {
+  const router = createMemoryRouter([{ path: '/', Component: Commitments }], {
+    initialEntries: ['/'],
+  });
+  render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+}
+
 describe('/commitments 画面', () => {
   /**
    * 器は優先度も締切も持たない（`commitmentSchema`）。だから「どこから来たか」と
@@ -108,6 +126,40 @@ describe('/commitments 画面', () => {
     expect(screen.getByText(/conv-1/)).toBeTruthy();
     // 受け取ってから3日。絶対時刻だけだと、読むたびに引き算をさせることになる。
     expect(screen.getByText('(3日前)')).toBeTruthy();
+  });
+
+  /**
+   * **バッジの id を委譲の詳細へつなぐ（issue #2028）。** `origin: 'manager'`
+   * の行は `source` にマネージャー id を持つ（`packages/core/src/clone.ts` の
+   * `commitmentFor`）。`managers.tsx` / `dashboard.tsx` が同じ id を
+   * `Link to={`/managers/${managerId}`}` で詳細へつないでいるのに、この画面
+   * だけ文字で出すだけだった——導線を揃える。文言は1文字も変えない
+   * （`getByText` が同じ形で通ることで確かめる）。
+   */
+  it('origin: manager の行はバッジの id が /managers/<id> への Link になる', async () => {
+    stubCommitments([commitment({ origin: 'manager', source: 'mgr-42' })]);
+    renderPageWithRouter();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    // 文言そのものは変えていない —— 引き続き「マネージャー / mgr-42」が読める。
+    expect(screen.getByText(/マネージャー/)).toBeTruthy();
+    const link = screen.getByRole('link', { name: /mgr-42/ });
+    expect(link.getAttribute('href')).toBe('/managers/mgr-42');
+  });
+
+  /**
+   * `origin: 'human'` の行は今までどおり——id をリンクにしない。`source`
+   * （`schema.ts` の doc: 意味が複数ありうる）を `/managers/<id>` として
+   * 解釈できる保証が無いので、Issue #2028 は `origin: 'manager'` にだけ
+   * 広げると決めている。
+   */
+  it('origin: human の行はバッジの id をリンクにしない', async () => {
+    stubCommitments([commitment({ origin: 'human', source: 'conv-1' })]);
+    renderPage();
+
+    expect(await screen.findByText('ドキュメントの誤りを直す')).toBeTruthy();
+    expect(screen.getByText(/conv-1/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /conv-1/ })).toBeNull();
   });
 
   /**
