@@ -1184,6 +1184,13 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
         'この関数は参照しない——`answeredAt`/`answer` と同じ理由（回答は前段の' +
         '見分けより後の欄）。',
     },
+    answerDelivery: {
+      emit: 'never',
+      why:
+        '回答の配達済み印（issue #1977）。値は `\'pending\' | \'delivered\'` の' +
+        '2値のみで自由文を運ばないが、この関数は参照しない——`answeredAt`/`answer`' +
+        'と同じ理由（回答が付いた後段の欄）。',
+    },
   } satisfies Record<keyof PendingApproval, FieldPlan>;
 
   const SECRET = 'ghp_555555555555555555555555555555555555';
@@ -1203,6 +1210,7 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
     withdrawnReason: SECRET,
     permissionRequest: { rule: SECRET, allows: [SECRET], denies: [SECRET] },
     answeredVia: { kind: 'account', accountId: SECRET },
+    answerDelivery: 'delivered',
   };
 
   it('名簿のキー集合は pendingApprovalSchema の実装側の欄と両方向に一致する（zod から機械的に引く）', () => {

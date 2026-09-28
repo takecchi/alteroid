@@ -101,6 +101,7 @@ import {
   noteBackgroundFailure,
   noteDroppedInboxEvent,
   noteDroppedRecord,
+  noteDuplicateHumanAnswer,
   noteInboxEventKeptInMemoryOnly,
   noteCloneSessionIdNotRecorded,
   noteInboxEventLost,
@@ -1518,6 +1519,57 @@ export function createClone(options: CloneOptions): CloneHost {
   return new Clone(options);
 }
 
+/**
+ * `human_answer` 合図の id を、承認の行そのものから決まる形にする（issue #1977）。
+ *
+ * **ランダムな id（`randomUUID()`）だった頃は、`answerApproval` が2回目の
+ * `#stores.jobs.putApproval`（配達済みの印）より前に落ちると、受信箱に積んだ
+ * 合図と「回答済みで未配達」の行を、後から同じ回答だと突き合わせる手段が
+ * 無かった。** ここを `approvalId` と `answeredAt` から決まる形にすることで、
+ * `#reconcileUndeliveredAnswers`（`Clone` 本体）が同じ入力から同じ id を
+ * 再現でき、`InboxStore#put` の「同じ id なら上書きする」性質にそのまま乗せて
+ * 二重配達を避けられる。
+ *
+ * **同じ承認への2回目の回答は別の id になる。** `answeredAt` は
+ * `answerApproval` が呼ばれるたびに `new Date().toISOString()` で新しく取るので、
+ * 同じ `approvalId` でも回答のたびに違う id が出る——「1回目の回答の合図を
+ * 2回目の回答で上書きしてしまう」事故を防ぐ。
+ */
+export function humanAnswerEventId(approvalId: string, answeredAt: string): string {
+  return `human-answer-${approvalId}-${answeredAt}`;
+}
+
+/**
+ * `answerApproval` と `#reconcileUndeliveredAnswers` が、同じ承認から同じ形の
+ * `human_answer` 合図を組み立てるための共有部品（issue #1977）。
+ *
+ * **`conversationId` / `answeredVia` の扱いを含め、直す前の `answerApproval` が
+ * `this.post(...)` へ渡していた引数と1文字も変えていない。** 変わったのは
+ * `id` を `randomUUID()` ではなく {@link humanAnswerEventId} で決めることだけ
+ * である。
+ *
+ * `answer` / `answeredAt` を呼び出し側からの引数として受け取るのは、
+ * `#reconcileUndeliveredAnswers` が読む承認の行の欄名（`PendingApproval.answer`
+ * / `PendingApproval.answeredAt`）と、`answerApproval` がまだ書いていない
+ * その場の値の、どちらからでも同じ形で呼べるようにするためである。
+ */
+function buildHumanAnswerEvent(
+  approval: Pick<PendingApproval, 'id' | 'conversationId'>,
+  answer: string,
+  answeredAt: string,
+  via: AnswerApprovalVia | undefined,
+): Extract<InboxEvent, { type: 'human_answer' }> {
+  return {
+    type: 'human_answer',
+    id: humanAnswerEventId(approval.id, answeredAt),
+    at: answeredAt,
+    approvalId: approval.id,
+    answer,
+    ...(approval.conversationId === undefined ? {} : { conversationId: approval.conversationId }),
+    ...(via === undefined ? {} : { answeredVia: via }),
+  };
+}
+
 class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #queryFn: typeof query;
@@ -1894,6 +1946,23 @@ class Clone implements CloneHost {
    * `dropQueuedInboxEvents` の待ち行列側の処理だけで足りる。
    */
   readonly #droppedWhileRestoring = new Set<string>();
+  /**
+   * `#handle` が処理し終えた `human_answer` 合図の id（issue #1977）。
+   *
+   * **同じ回答を1回として扱うための、クローン側の最後の砦。** `human_answer`
+   * の id は決まった形（`humanAnswerEventId`）なので、`answerApproval` の
+   * ライブ配達（`this.post(event)`）と `#reconcileUndeliveredAnswers` の
+   * 拾い直し配達が、理屈のうえでは同じ id を2回 `#handle` へ運びうる——
+   * 受信箱の器（`stores.inbox`）は `put` が id で上書きするので1行のままだが、
+   * **待ち行列（`#delivery.inbox`）は id で重複排除しない**ので、2回
+   * `#inbox.push` されれば2回 `#handle` が呼ばれる。ここで畳めば、そのどちら
+   * が来ても実際にターンを起こすのは1回だけになる。
+   *
+   * **プロセスの生涯ぶん持ち、上限を設けない。** 育つのは人間が実際に答えた
+   * 承認の数だけで、無限に増える種類の合図（`external` 等）とは性質が違う——
+   * 実運用の規模で問題になる想定はない。
+   */
+  readonly #handledHumanAnswerIds = new Set<string>();
   /**
    * 一度でも枠で保持した合図の id。**まとめ読み（`#mergedHumanBatch`）から外すため**
    * だけに持つ。
@@ -2712,10 +2781,16 @@ class Clone implements CloneHost {
     // **`answeredVia`（Issue #1479）は `via` が渡されたときだけ足す。** 渡さずに
     // 呼んだ経路（内部呼び出し・`via` を持たない古いテスト）では、この欄そのものを
     // 書かない——`conversationId` と同じ「省略可能な欄は spread で足す」慣例に揃える。
+    //
+    // **`answerDelivery: 'pending'` を先に書く（issue #1977）。** ここから
+    // 受信箱への永続化（下）までの間にプロセスが落ちると、この行は「回答済みだが
+    // 未配達」のまま残る——それが `#reconcileUndeliveredAnswers` が起動時に
+    // 拾い直す対象そのものである。
     await this.#stores.jobs.putApproval({
       ...approval,
       answeredAt,
       answer,
+      answerDelivery: 'pending',
       ...(via === undefined ? {} : { answeredVia: via }),
     });
 
@@ -2740,15 +2815,44 @@ class Clone implements CloneHost {
     // **`answeredVia` も運ぶ（#1479）。** クローンは人間の代理であり、`operator`
     // 経由の回答が人間本人とは限らないことを、隠さず自分の判断材料にできる
     // ようにするため（`case 'human_answer'` がこれをターンの入力の文面へ足す）。
-    this.post({
-      type: 'human_answer',
-      id: randomUUID(),
-      at: answeredAt,
-      approvalId,
-      answer,
-      ...(approval.conversationId === undefined ? {} : { conversationId: approval.conversationId }),
-      ...(via === undefined ? {} : { answeredVia: via }),
-    });
+    const event = buildHumanAnswerEvent(approval, answer, answeredAt, via);
+
+    // **合図そのものを、`post()`（ライブ配達）より先に受信箱へ直接永続化する
+    // （issue #1977）。** ここが成功していれば、この直後に `post()` が
+    // `#remember` 経由でもう一度同じ id を `inbox.put` しても、`InboxStore#put`
+    // は「同じ id なら上書きする」ので行は1件のままである（`InboxStore.put` の
+    // doc）。**失敗しても投げない**—— ライブ配達（`post()`）を止める理由には
+    // ならない。ここは「この後すぐプロセスが落ちても、次の起動で拾い直せる
+    // ようにする」ための保険であって、失敗しても跡を残すだけで進む
+    // （`#reconcileUndeliveredAnswers` が次の起動でまた試す）。
+    let delivery: 'pending' | 'delivered' = 'pending';
+    try {
+      await this.#stores.inbox.put(event, event.at);
+      delivery = 'delivered';
+    } catch (error) {
+      noteDroppedRecord('回答の配達印の先出し', inboxEventShape(event), error);
+    }
+
+    // **先出しが成功した回だけ、承認の行に配達済みの印を立てる。** 失敗した
+    // ままここを実行すると、受信箱に無いのに「配達済み」と嘘をつく行ができ、
+    // `#reconcileUndeliveredAnswers` がその行を二度と拾い直さなくなる
+    // ——`answerDelivery: 'pending'` のままにしておけば、次の起動時の拾い直しに
+    // もう一度回せる。
+    if (delivery === 'delivered') {
+      try {
+        await this.#stores.jobs.putApproval({
+          ...approval,
+          answeredAt,
+          answer,
+          answerDelivery: 'delivered',
+          ...(via === undefined ? {} : { answeredVia: via }),
+        });
+      } catch (error) {
+        noteDroppedRecord('回答の配達印の確定', inboxEventShape(event), error);
+      }
+    }
+
+    this.post(event);
   }
 
   /**
@@ -5827,7 +5931,28 @@ class Clone implements CloneHost {
     // 書く形へは戻さない）。
     this.#restoringUnread = true;
     try {
-      await this.#restoreUnreadPass();
+      // **`#restoreUnreadPass()` の前には、待ち時間を1つも足さない**（issue
+      // #1977 の作り直し。最初の実装は逆順——`#reconcileUndeliveredAnswers`
+      // を先に `await` していた——で、`claimPending()` が動く時機を1往復
+      // 遅らせてしまい、`post()` の永続化（`#remember`。これも await されない）
+      // との間に元からあった競合を広く踏み抜いた（実測: `packages/core` で
+      // 28 ファイル・122 テストが赤くなった。詳細は PR の doc を見よ）。
+      // **`claimPending()` の呼び出し位置は、この直しの前と1文字も変えない**
+      // ——`#restoreUnreadPass()` を真っ先に、何も `await` せずに呼ぶ。
+      const claimedIds = await this.#restoreUnreadPass();
+
+      // **回答済みで未配達の承認の拾い直しは、その後に置く。** `#restoreUnreadPass`
+      // が `claimPending()` で拾った id の集合（`claimedIds`）を使って、
+      // 直前の配り直しで既に拾われたものと、まだ受信箱に一度も乗っていない
+      // ものを区別する（`#reconcileUndeliveredAnswers` の doc）。
+      // **失敗しても投げない。** ここが落ちても `#restoreUnreadPass()` は
+      // 既に完走しているので、通常の配り直しは影響を受けない——次の起動で
+      // また拾い直せる。
+      try {
+        await this.#reconcileUndeliveredAnswers(claimedIds);
+      } catch (error) {
+        noteDroppedRecord('回答済み未配達の承認の拾い直し（全体）', '', error);
+      }
     } finally {
       this.#restoringUnread = false;
       this.#droppedWhileRestoring.clear();
@@ -5835,18 +5960,164 @@ class Clone implements CloneHost {
   }
 
   /**
+   * 回答済みで未配達の承認を、`#restoreUnreadPass` の**後**に埋める
+   * （issue #1977）。
+   *
+   * ## なぜ要るか —— `answerApproval` が落ちる窓
+   *
+   * `answerApproval`（本体の doc を見よ）は (a) 承認の行を `answerDelivery:
+   * 'pending'` で回答済みにし、(c) `human_answer` 合図を受信箱へ直接
+   * `inbox.put` し、(d) 成功したら `answerDelivery: 'delivered'` に進める、
+   * という順で書く。(a) の後・(c) の前にプロセスが落ちると、承認の行は
+   * `answeredAt` を持つのに受信箱には何も無く、`answerDelivery` が
+   * `'pending'` のまま残る——これが「回答済みで未配達」の痕跡そのもので、
+   * `listApprovals({ pendingOnly: true })` はこの行を素通りする（回答済みは
+   * `pendingOnly` の対象から外れる）ので、他のどの経路からも拾い直されない
+   * （issue #1977 本文）。
+   *
+   * ## ⚠️ なぜ `#restoreUnreadPass` の前ではなく後ろなのか
+   *
+   * 最初の実装は `#restoreUnreadPass()` の**前**に、ここを `await` して
+   * いた。**そのために `#restoreUnreadPass()` が実際に走る時機が1往復
+   * 遅れ**、`post()`（`#remember`。ストアへの書き込みは await されない）との
+   * 間に元からあった潜在的な競合を広く踏み抜いた——`createClone(...)` の
+   * 直後に `clone.post(event)` するテストの型が多数あり、直す前は
+   * `#restoreUnreadPass()` の `claimPending()` が確実にその書き込みより先に
+   * 走っていた（＝空の器を読んで即終了）。1往復の遅れが「先に走る」保証を
+   * 崩し、`claimPending()` がたった今 `post()` されたばかりの合図を
+   * 「前の器が残した未読」として拾い、同じ合図を2回配達へ乗せる事故が
+   * 実測で出た（`packages/core` で28ファイル・122テストが赤くなった）。
+   * **⟹ `#restoreUnreadPass()` より前には、いかなる `await` も足さない。**
+   * ここを呼ぶのは、`#restoreUnreadPass()` が完走した**後**である
+   * （`#restoreUnread` を見よ）。
+   *
+   * ## `claimedIds` の意味
+   *
+   * `#restoreUnreadPass` が `claimPending()` で拾った合図の id の集合
+   * （呼び出し元 `#restoreUnread` が渡す）。**`claimPending()` が返した時点の
+   * 集合であって、実際に配達（`#inbox.push`）まで進んだものだけではない**
+   * ——stale 判定で消された・門で畳まれた・処理の途中で中断された、という
+   * 行も含む。それで構わない理由: `human_answer` は `restoredInboxEventVerdict`
+   * で常に `'live'`（stale にならない）なので消されることが無く、畳まれた・
+   * 中断された行も受信箱にそのまま残るので、次の起動でまた同じ形で拾われる
+   * ——`claimedIds` に載っている＝「この合図はもう受信箱の器の中に実在し、
+   * 通常の配り直しの管轄に入った」ことの証明として十分である。
+   *
+   * ## 古い行は対象にならない
+   *
+   * この欄（`answerDelivery`）を持たない行（この直しより前に回答された行、
+   * `via` を渡さない古いテストの経路も含む）は `undefined` のままで、下の
+   * 絞り込み（`=== 'pending'`）に一致しない——**拾い直しの対象を「この直しの
+   * 後に、実際にこの窓で落ちた可能性がある行」だけに絞る。** 遡って過去の
+   * 行まで配り直すと、とっくに人間の目から消えた古い回答が今さら届く。
+   *
+   * ## 受信箱に既に同じ id が在る場合（`claimedIds` に載っている場合）
+   *
+   * `(c)` は済んでいたが `(d)` の前に落ちた回（合図は受信箱に在るのに
+   * `answerDelivery` がまだ `'pending'`）は、直前の `#restoreUnreadPass()` が
+   * 既に拾って配っている（あるいは器にそのまま残して次回へ回している）ので、
+   * ここでは `answerDelivery: 'delivered'` を付けるだけにする——`inbox.put` も
+   * `post()` もしない。
+   *
+   * ## 受信箱にまだ無い場合（`claimedIds` に載っていない場合）
+   *
+   * `(a)` の直後に落ちた回。`answerApproval` の (c)(d)(e) と同じ並び——
+   * `inbox.put` → `answerDelivery: 'delivered'` → `this.post(event)`——で
+   * 埋める。**この経路だけが `post()` を呼ぶ。** `claimedIds` に載っている
+   * 行は直前の `#restoreUnreadPass()` が既に配達の管轄に入れているので、
+   * そちらへは重ねて `post()` しない（二重配達を避ける）。
+   *
+   * ## クローンの側の最後の砦
+   *
+   * `#handle` の `case 'human_answer'` も、決まった形の id を同じプロセスの
+   * 中で二度処理しない（依頼者の指示。同 case の doc）。ここでの区別
+   * （`claimedIds` の有無）は「もう一度 `post()` するか」を決めるだけの
+   * ものだが、万一それでも同じ id が2回 `#handle` へ来たとしても、そちらが
+   * 最後の砦として畳む。
+   */
+  async #reconcileUndeliveredAnswers(claimedIds: ReadonlySet<string>): Promise<void> {
+    let approvals: PendingApproval[];
+    try {
+      approvals = await this.#stores.jobs.listApprovals({ pendingOnly: false });
+    } catch (error) {
+      // 読めなければ拾い直せないが、承認の行そのものは無事なので、次の起動で
+      // また試せる。
+      noteDroppedRecord('回答済み未配達の承認の読み直し', '', error);
+      return;
+    }
+
+    const undelivered = approvals.filter(
+      (approval): approval is PendingApproval & { answeredAt: string; answer: string } =>
+        approval.answeredAt !== undefined &&
+        approval.answer !== undefined &&
+        approval.answerDelivery === 'pending' &&
+        approval.withdrawnAt === undefined,
+    );
+    if (undelivered.length === 0) return;
+
+    let reconciled = 0;
+    for (const approval of undelivered) {
+      const event = buildHumanAnswerEvent(approval, approval.answer, approval.answeredAt, approval.answeredVia);
+      try {
+        if (claimedIds.has(event.id)) {
+          // 直前の `#restoreUnreadPass` が既に拾っている——印を確定させる
+          // だけで、もう一度 put も post もしない。
+          await this.#stores.jobs.putApproval({ ...approval, answerDelivery: 'delivered' });
+        } else {
+          // まだ受信箱に一度も乗っていない——`answerApproval` の (c)(d)(e) と
+          // 同じ並びで埋める。
+          await this.#stores.inbox.put(event, event.at);
+          await this.#stores.jobs.putApproval({ ...approval, answerDelivery: 'delivered' });
+          this.post(event);
+        }
+        reconciled += 1;
+      } catch (error) {
+        // この1件だけ次の起動へ持ち越す——他の行の拾い直しは止めない。
+        noteDroppedRecord('回答済み未配達の承認の拾い直し', inboxEventShape(event), error);
+      }
+    }
+
+    if (reconciled > 0) {
+      // **新しい `type: 'exchange'` の書き込み箇所は増やさない**
+      // （`exchange-kind-coverage.test.ts` の網羅の件数を動かさないため）。
+      // `#recordPermissionGrantIfConsented` と同じ `type: 'decision'` を使う
+      // ——「何を・なぜ」を残す目的はこちらでも同じである。
+      await this.#journal({
+        type: 'decision',
+        decision: `回答済みで未配達の承認を拾い直した（${reconciled} 件）`,
+        grounds:
+          '起動時、承認の行が answerDelivery=pending のまま残っていた' +
+          '（issue #1977。プロセスが answerApproval の途中で落ちた痕跡）。',
+      });
+    }
+  }
+
+  /**
    * `#restoreUnread` の本体。**分けた理由は `#restoreUnread` の側に書いてある**
    * （印を必ず降ろすため）。呼ぶのは `#restoreUnread` だけである。
+   *
+   * **戻り値（issue #1977 で追加）**: `claimPending()` が返した合図の id の
+   * 集合。**返り値を追加しただけで、配り方は1文字も変えていない**——早期
+   * `return` の各箇所も、それぞれの時点で確定している集合をそのまま返す
+   * だけである。`#restoreUnread` がこれを
+   * `#reconcileUndeliveredAnswers(claimedIds)` へ渡す（同メソッドの doc
+   * 「`claimedIds` の意味」）。
    */
-  async #restoreUnreadPass(): Promise<void> {
+  async #restoreUnreadPass(): Promise<ReadonlySet<string>> {
     let pending: PendingInboxEvent[];
     try {
       pending = await this.#stores.inbox.claimPending();
     } catch (error) {
       // 読めなければ配り直せないが、消してもいないので次の起動で拾い直せる。
       noteDroppedRecord('未読の読み直し', '', error);
-      return;
+      return new Set();
     }
+
+    // **`claimPending()` が返した直後に確定させる**（issue #1977）。この後の
+    // 処理（live/stale の判定・門・中断）がどう転んでも、この集合そのものは
+    // 動かさない——`claimedIds` が指すのは「拾った」であって「配り切った」
+    // ではない（`#reconcileUndeliveredAnswers` の doc）。
+    const claimedIds: ReadonlySet<string> = new Set(pending.map((record) => record.event.id));
 
     // **一緒に拾い直した件数を覚える**（`#restoredCohort` の doc）。断り書きが
     // 「回数が何を測っているか」を名乗るために要る。**ここでしか数えられない** —
@@ -6018,7 +6289,7 @@ class Clone implements CloneHost {
         await this.#journalRestoreUnreadPassEnd(decided, restoreUnreadPassIndex, {
           interrupted: true,
         });
-        return;
+        return claimedIds;
       }
 
       // **live/stale の判定は `decided` に計算済みのものを使う**（上の
@@ -6078,7 +6349,7 @@ class Clone implements CloneHost {
           restoreUnreadPassIndex + (verdict === 'stale' ? 1 : 0),
           { interrupted: true },
         );
-        return;
+        return claimedIds;
       }
 
       // **台帳が既に片付いていると言っているかを見る（閉じた主体は問わない
@@ -6256,6 +6527,7 @@ class Clone implements CloneHost {
     // `decided` の全件を処理し終えている——`processed` に `decided.length`
     // を渡す。
     await this.#journalRestoreUnreadPassEnd(decided, decided.length, { interrupted: false });
+    return claimedIds;
   }
 
   /**
@@ -7690,6 +7962,16 @@ class Clone implements CloneHost {
       }
 
       case 'human_answer': {
+        // **同じ回答を1回として扱う**（issue #1977。`#handledHumanAnswerIds` の
+        // doc）。決まった形の id を同じプロセスの中で既に処理していたら、
+        // 2回目はターンを起こさない——中身の無い跡だけ stderr に残す
+        // （`inboxEventShape` は本文を出さない）。
+        if (this.#handledHumanAnswerIds.has(event.id)) {
+          noteDuplicateHumanAnswer(event);
+          return;
+        }
+        this.#handledHumanAnswerIds.add(event.id);
+
         // **片付け済みの配り直しはここへ来ない**（`#pump` が畳む。
         // `#foldClosedRedelivery`）。かつてはここで承認待ちを読み直さずに断り書き
         // だけを配り、その全文を `turnInputEntry`（`human_answer_closed`）で日誌へ

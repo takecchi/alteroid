@@ -4311,6 +4311,33 @@ export const pendingApprovalSchema = z.object({
    */
   answeredVia: answeredViaSchema.optional(),
   /**
+   * 回答（`answeredAt` / `answer`）が受信箱まで配達されたか（issue #1977）。
+   *
+   * ## なぜ要るか
+   *
+   * `Clone#answerApproval` は (1) この行を回答済みにする→(2) 日誌・許可の
+   * 記録→(3) `human_answer` 合図を受信箱へ書く、の順に別々の書き込みを行う。
+   * (1) の後・(3) の前にプロセスが落ちると、この行は `answeredAt` を持つのに
+   * 受信箱には何も無い——`listApprovals({ pendingOnly: true })` は回答済みの
+   * 行を素通りするので、どの経路からも拾い直されず、**人間が答えたのに
+   * クローンは一度も受け取らない**（issue #1977 本文）。
+   *
+   * - `'pending'`: 承認の行は回答済みだが、`human_answer` 合図をまだ受信箱へ
+   *   書けていない（書く前・書いている最中）。
+   * - `'delivered'`: 合図を受信箱へ書き終えた。
+   *
+   * **起動時に `Clone#reconcileUndeliveredAnswers` が、`'pending'` のまま
+   * 残っている行を拾い直す**（`withdrawnAt` が付いている行は対象にしない）。
+   *
+   * **古い行はこの欄を持たない。** この直しより前に回答された行（fs の
+   * `jobs/jobs.json`・pg の `approvals.approval` は blob なのでマイグレーション
+   * 無しでそのまま読める）は `undefined` のままで、`answeredVia` と同じく
+   * 「わからない」を偽の値へ化けさせない——`undefined` は拾い直しの対象に
+   * **しない**（`=== 'pending'` の絞り込みに一致しないため）。遡って
+   * 配り直すと、とっくに人間の目から消えた古い回答が今さら届く。
+   */
+  answerDelivery: z.enum(['pending', 'delivered']).optional(),
+  /**
    * どの会話で上がった確認か（#768）。
    *
    * `ask_human` を叩いた時点の「いまのターンの会話 id」から埋める。

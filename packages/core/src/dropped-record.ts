@@ -541,6 +541,24 @@ export function noteDroppedInboxEvent(event: InboxEvent): void {
 }
 
 /**
+ * 同じ `human_answer` 合図の id を、同じプロセスの中で2回目は処理しなかった
+ * ことを stderr へ1行残す（issue #1977）。
+ *
+ * **`noteDroppedRecord` は使わない。** あちらの文言は固定で「〜を記録
+ * できませんでした」——**記録の書き込みに失敗した**ことの跡である。ここは
+ * 逆に**畳んだこと自体が正常な結果**（同じ回答を1回として扱えた）なので、
+ * 「失敗した」と読める文言を被せない。
+ *
+ * **本文は出さない**（`inboxEventShape` の doc と同じ理由——`human_answer` の
+ * `answer` は人間が書いた自由文で、跡に要るのは長さと `approvalId` だけ）。
+ */
+export function noteDuplicateHumanAnswer(event: InboxEvent): void {
+  note(
+    `同じ human_answer の id を2回目は処理しなかった（二重配達を畳んだ。issue #1977）: ${inboxEventShape(event)}`,
+  );
+}
+
+/**
  * runner から届いた合図から、本文を含まない見分けだけを取り出す（#438 案D）。
  *
  * **ここだけ `journalEntryShape` / `inboxEventShape` と作りが違う。** あの2つは
