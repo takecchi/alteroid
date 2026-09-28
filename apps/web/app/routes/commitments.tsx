@@ -1,6 +1,7 @@
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Tabs } from 'radix-ui';
+import { Link } from 'react-router';
 
 import { Markdown } from '~/components/markdown';
 import { Page } from '~/components/page';
@@ -250,11 +251,36 @@ function originLabel(origin: CommitmentOrigin): string {
   return origin;
 }
 
+/**
+ * **`origin: 'manager'` の `source` だけ `/managers/<id>` への `<Link>` にする
+ * （issue #2028）。** `source` はそのとき必ずマネージャー id
+ * （`packages/core/src/clone.ts` の `commitmentFor` の
+ * `source: event.managerId,`）なので、宛先を組み立てられる。`managers.tsx` /
+ * `dashboard.tsx` が同じ id を `Link to={`/managers/${managerId}`}` で
+ * 詳細へつないでいるのに揃える。
+ *
+ * **`origin: 'human'` には広げない。** そちらの `source` は意味が複数
+ * ありうる（`schema.ts` の doc）ので、`/managers/<id>` へ飛べる保証が無い。
+ *
+ * **文言は1文字も変えない。** 出す文字列は変わらず、`/ <source>` の部分が
+ * リンクになるだけである。
+ */
 function OriginBadge({ commitment }: { commitment: Commitment }) {
+  const hasSource = commitment.source !== undefined && commitment.source !== null;
   return (
     <Badge tone={commitment.origin === 'human' ? 'accent' : 'neutral'}>
       {originLabel(commitment.origin)}
-      {commitment.source !== undefined && commitment.source !== null && ` / ${commitment.source}`}
+      {hasSource &&
+        (commitment.origin === 'manager' ? (
+          <>
+            {' / '}
+            <Link to={`/managers/${commitment.source}`} className="hover:underline">
+              {commitment.source}
+            </Link>
+          </>
+        ) : (
+          ` / ${commitment.source}`
+        ))}
     </Badge>
   );
 }
