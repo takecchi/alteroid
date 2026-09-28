@@ -506,11 +506,19 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   const env = options.env ?? process.env;
 
   /**
-   * 直前に知らせた食い違いの名前（ソート済み・カンマ結合）。**同じ集合を
-   * 連続して知らせないための記憶**（`onCloneEnvShadowed` の doc）。`undefined`
-   * は「まだ一度も測っていない」で、空集合とは区別する——区別しないと、
-   * 「一度も食い違ったことが無い」状態と「測ったら食い違いが無かった」状態が
-   * 同じ値になり、最初の食い違いが「変わっていない」と誤認されて出なくなる。
+   * 直前に知らせた食い違いの署名（名前とscopeから作る。ソート済み・カンマ
+   * 結合）。**同じ集合を連続して知らせないための記憶**（`onCloneEnvShadowed`
+   * の doc）。`undefined` は「まだ一度も測っていない」で、空集合とは区別する
+   * ——区別しないと、「一度も食い違ったことが無い」状態と「測ったら食い違いが
+   * 無かった」状態が同じ値になり、最初の食い違いが「変わっていない」と
+   * 誤認されて出なくなる。
+   *
+   * **⚠️ 名前だけでは足りない（PR #1920 のレビュー指摘）。** 旗そのもの
+   * （`cloneEnvShadowedNames`）は scope を見ないので、同じ名前のまま
+   * `scope` だけ `all` → `app` に変わっても名前の集合は変わらない。それでも
+   * `appScopedNames`（呼び手が文言を分けるための情報。`onCloneEnvShadowed`
+   * の doc）は変わるので、署名にも scope（app かどうか）を含めないと、
+   * scope が変わった後も古い（誤りの）文言が知らされたまま更新されない。
    */
   let lastShadowSignature: string | undefined;
 
@@ -522,15 +530,20 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   function reportCloneEnvShadow(authoritative: readonly StoredCredential[]): void {
     if (onCloneEnvShadowed === undefined) return;
     const shadowed = cloneEnvShadowedNames(authoritative, env);
-    const signature = [...shadowed].sort().join(',');
-    if (signature === lastShadowSignature) return;
-    lastShadowSignature = signature;
-    if (shadowed.length === 0) return;
     // **`scope: 'app'` だけを分けて渡す**（`onCloneEnvShadowed` の doc）。
     // `authoritative` は scope で絞る前の全行なので、ここで引ける
     // （`resolveCredentialRows` の `held` と同じ集合を見ている）。
     const scopeByName = new Map(authoritative.map((row) => [row.name, row.scope ?? 'all']));
     const appScopedNames = shadowed.filter((name) => scopeByName.get(name) === 'app');
+    // **署名は名前＋app scope かどうかで作る。** 名前だけだと、上の doc の
+    // とおり scope の変化を見落とす。
+    const signature = [...shadowed]
+      .sort()
+      .map((name) => `${name}:${scopeByName.get(name) === 'app' ? 'app' : 'other'}`)
+      .join(',');
+    if (signature === lastShadowSignature) return;
+    lastShadowSignature = signature;
+    if (shadowed.length === 0) return;
     onCloneEnvShadowed(shadowed, appScopedNames);
   }
 
