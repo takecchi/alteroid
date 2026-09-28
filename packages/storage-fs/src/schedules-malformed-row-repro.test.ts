@@ -114,7 +114,9 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
     expect(good).toEqual(GOOD_SCHEDULE);
 
     await expect(
-      captureStderr(() => stores.schedules.get('bad-kind')),
+      captureStderr(async () => {
+        await stores.schedules.get('bad-kind');
+      }),
     ).rejects.toThrow();
 
     // 本当に消された kind（一度も書いていない）は、投げずに null。
@@ -183,7 +185,12 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
     const lines = await captureStderr(async () => {
       fixed = await stores.schedules.get('bad-kind');
     });
-    expect(fixed?.request).toBe('直した継続中の依頼');
+    // **`as` は挙動を変えない、型だけの回避。** `fixed` は async クロージャの中でしか
+    // 再代入していないので、tsc がここでの読みを（narrow ではなく）`never` へ潰す
+    // （`let x: T | null = null` を async closure 内で再代入し、閉じたあとに
+    // プロパティへアクセスするだけで再現する tsc 自体の挙動——captureStderr 固有では
+    // ない。実測: `tsc --noEmit --strict` に最小再現を通して確認した）。
+    expect((fixed as ScheduledRequest | null)?.request).toBe('直した継続中の依頼');
     expect(lines).toHaveLength(0);
   });
 
