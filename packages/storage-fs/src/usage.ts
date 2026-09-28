@@ -59,7 +59,7 @@ const storedBaselineSchema = usageBaselineSchema.extend({
  */
 const storedTurnRowSchema = usageTurnRowSchema;
 
-const fileSchema = z.object({
+const typedFileSchema = z.object({
   // 日 × actor × モデル × 層 × 場所の複合キーで持つ（rowKey）。配列を毎回全走査
   // せず、増分を足し込む先を鍵で直接引ける。
   //
@@ -108,7 +108,71 @@ const fileSchema = z.object({
   turnsAt: z.string().datetime({ offset: true }).nullable().default(null),
 });
 
-type UsageFile = z.infer<typeof fileSchema>;
+type UsageFile = z.infer<typeof typedFileSchema>;
+
+/**
+ * トップレベルの形だけを見る schema（issue #1968）。**`rows` / `baselines` / `turns` の
+ * 各エントリは `#readAll()` が1件ずつ `safeParse` で検査する。** 以前は
+ * `typedFileSchema`（`z.record(…, <行の schema>)`）を1回に当てていたので、1エントリの
+ * 不正で record ごと＝ファイルごと parse が落ち、使用量台帳の読み書きが丸ごと例外に
+ * なっていた（jobs の #1868 / permission-grants の #1941 / inbox の #1966 と同じ形の穴）。
+ */
+const fileSchema = typedFileSchema.extend({
+  rows: z.record(z.string(), z.unknown()).default({}),
+  baselines: z.record(z.string(), z.unknown()).default({}),
+  turns: z.record(z.string(), z.unknown()).default({}),
+});
+
+/** 形が不正で読めなかったエントリ（鍵 → 生の値）。書き戻しで残す（issue #1968）。 */
+interface InvalidUsageEntries {
+  rows: Record<string, unknown>;
+  baselines: Record<string, unknown>;
+  turns: Record<string, unknown>;
+}
+
+const NO_INVALID: InvalidUsageEntries = { rows: {}, baselines: {}, turns: {} };
+
+/** 1つの record を1エントリずつ検査し、通ったものと通らなかったもの（生の値）に分ける。 */
+function splitRecord<T>(
+  label: 'rows' | 'baselines' | 'turns',
+  raw: Record<string, unknown>,
+  schema: z.ZodType<T>,
+): { valid: Record<string, T>; invalid: Record<string, unknown> } {
+  const valid: Record<string, T> = {};
+  const invalid: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const result = schema.safeParse(value);
+    if (result.success) {
+      valid[key] = result.data;
+      continue;
+    }
+    invalid[key] = value;
+    // **鍵と欄の名前だけで、値は出さない**（`jobs.ts` の `describeSkippedJobRow` と同じ作法）。
+    const fields = [
+      ...new Set(
+        result.error.issues.map((issue) =>
+          issue.path.length > 0 ? issue.path.map(String).join('.') : '(root)',
+        ),
+      ),
+    ];
+    process.stderr.write(
+      `alteroid: 使用量台帳の不正なエントリを読み飛ばしました（${label}、鍵=${JSON.stringify(key)}、不正な欄: ${fields.join(',') || '(不明)'}）\n`,
+    );
+  }
+  return { valid, invalid };
+}
+
+/** 書き戻す直前に、壊れたエントリを戻す。**同じ鍵に新しい値を書いたときは、そちらで置き換える。** */
+function withInvalid<T>(
+  next: Record<string, T>,
+  invalid: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(invalid)) {
+    if (!(key in next)) merged[key] = value;
+  }
+  return { ...merged, ...next };
+}
 
 const EMPTY: UsageFile = {
   rows: {},
@@ -491,27 +555,57 @@ export class FsUsageStore implements UsageStore {
    * （`usage_ledger` も含めて4テーブルを消す）と同じ意味を fs 側でも揃える。
    */
   async clear(): Promise<{ daily: number; baseline: number; ledger: number; turns: number }> {
-    return this.#mutate((file) => ({
-      next: EMPTY,
-      result: {
-        daily: Object.keys(file.rows).length,
-        baseline: Object.keys(file.baselines).length,
-        // 台帳（`usage_ledger` に当たる`startedAt` 等4欄）は高々1組。何か
-        // 一度でも記録されていれば1、まっさらなら0。
-        ledger: file.startedAt === null ? 0 : 1,
-        turns: Object.keys(file.turns).length,
-      },
-    }));
+    // **壊れたエントリも消し、件数に数える**（issue #1968。pg の DELETE … RETURNING と
+    // 同じ。#1892 の jobs と同じ線）。
+    return this.#mutate(
+      (file, invalid) => ({
+        next: EMPTY,
+        result: {
+          daily: Object.keys(file.rows).length + Object.keys(invalid.rows).length,
+          baseline: Object.keys(file.baselines).length + Object.keys(invalid.baselines).length,
+          // 台帳（`usage_ledger` に当たる`startedAt` 等4欄）は高々1組。何か
+          // 一度でも記録されていれば1、まっさらなら0。
+          ledger: file.startedAt === null ? 0 : 1,
+          turns: Object.keys(file.turns).length + Object.keys(invalid.turns).length,
+        },
+      }),
+      { dropInvalid: true },
+    );
   }
 
   async #read(): Promise<UsageFile> {
+    return (await this.#readAll()).file;
+  }
+
+  /**
+   * `usage.json` を読む。**エントリは1件ずつ検査し、不正な1件だけを飛ばす**
+   * （issue #1968）。飛ばしたものは stderr へ1行の跡を残し、`invalid` として生の形の
+   * まま返す——`#mutate` の書き戻しで消さない。ファイルそのものが JSON として
+   * 読めない・トップレベルの形が違う（`startedAt` 等が壊れている）ときは、今までどおり
+   * 例外にする（1エントリの問題ではないため。`jobs.ts` と同じ線）。
+   */
+  async #readAll(): Promise<{ file: UsageFile; invalid: InvalidUsageEntries }> {
+    let top: z.infer<typeof fileSchema>;
     try {
       const raw = await readFile(this.#path, 'utf8');
-      return normalizeKeys(fileSchema.parse(JSON.parse(raw)));
+      top = fileSchema.parse(JSON.parse(raw));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        return { file: EMPTY, invalid: NO_INVALID };
       throw error;
     }
+    const rows = splitRecord('rows', top.rows, storedRowSchema);
+    const baselines = splitRecord('baselines', top.baselines, storedBaselineSchema);
+    const turns = splitRecord('turns', top.turns, storedTurnRowSchema);
+    return {
+      file: normalizeKeys({
+        ...top,
+        rows: rows.valid,
+        baselines: baselines.valid,
+        turns: turns.valid,
+      }),
+      invalid: { rows: rows.invalid, baselines: baselines.invalid, turns: turns.invalid },
+    };
   }
 
   /**
@@ -523,11 +617,23 @@ export class FsUsageStore implements UsageStore {
    * `record` のような「読んだ結果に基づいて書くかどうか・何を書くかを決める操作」
    * を、この区間の外へ出さないこと（`schedules.ts` の `#update` と同じ作法）。
    */
-  async #mutate<T>(mutate: (file: UsageFile) => { next: UsageFile; result: T }): Promise<T> {
+  async #mutate<T>(
+    mutate: (file: UsageFile, invalid: InvalidUsageEntries) => { next: UsageFile; result: T },
+    options: { dropInvalid?: boolean } = {},
+  ): Promise<T> {
     return withPathLock(this.#path, async () => {
-      const { next, result } = mutate(await this.#read());
+      const { file, invalid } = await this.#readAll();
+      const { next, result } = mutate(file, invalid);
+      // 壊れたエントリ（生の形のまま）を戻して書く（issue #1968）。`clear()` だけが捨てる。
+      const kept = options.dropInvalid === true ? NO_INVALID : invalid;
+      const onDisk = {
+        ...next,
+        rows: withInvalid(next.rows, kept.rows),
+        baselines: withInvalid(next.baselines, kept.baselines),
+        turns: withInvalid(next.turns, kept.turns),
+      };
       await mkdir(this.#dir, { recursive: true });
-      await writeFileAtomic(this.#path, `${JSON.stringify(next, null, 2)}\n`);
+      await writeFileAtomic(this.#path, `${JSON.stringify(onDisk, null, 2)}\n`);
       return result;
     });
   }
