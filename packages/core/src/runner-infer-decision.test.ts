@@ -576,3 +576,28 @@ describe("hasNegationMarker / n't の縮約でも否定の印が当たる（issu
     },
   );
 });
+
+/**
+ * issue #1907 の残り: 全角のアポストロフィ（U+FF07 `＇`）で書かれた `don＇t` /
+ * `won＇t` も否定として読む。#1907 の `normalizeApostrophes` は U+2018 / U+2019 /
+ * U+02BC だけを揃えるが、判定の入口（`normalizeForDecision`）は先に NFKC を
+ * かける（#1923）ので、U+FF07 は NFKC で素の `'` になる。#1907 の PR 本文が
+ * 「揃えていない」と書いていた変種を、ここで固定する。
+ */
+describe('inferDecision / 全角のアポストロフィ（U+FF07）の否定も読む（issue #1907 の残り）', () => {
+  it.each(['Don＇t go ahead.', 'I won＇t approve this.', 'Please don＇t proceed.'])(
+    '「%s」は deny',
+    (message) => {
+      expect(inferDecision(message)).toBe('deny');
+    },
+  );
+
+  it("「Don＇t worry, go ahead.」は unreadable（素の ' と同じ着地）", () => {
+    expect(inferDecision('Don＇t worry, go ahead.')).toBe('unreadable');
+  });
+
+  it('「Yes, but it isn＇t safe yet.」の縮約も否定の印に当たる（#1932 と同じ着地）', () => {
+    expect(hasNegationMarker('Yes, but it isn＇t safe yet.'.normalize('NFKC'))).toBe(true);
+    expect(inferDecision('Yes, but it isn＇t safe yet.')).not.toBe('allow');
+  });
+});
