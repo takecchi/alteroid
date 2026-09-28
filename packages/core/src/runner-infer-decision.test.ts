@@ -277,3 +277,90 @@ describe('inferDecision / "don\'t worry" と "no worries" は unreadable（issue
     },
   );
 });
+
+/**
+ * issue #1907: 曲がった引用符（U+2019 RIGHT SINGLE QUOTATION MARK '’'）で
+ * 書かれた `don't` / `won't` が否定として読まれず、`Don’t go ahead.` が
+ * allow に化ける穴。
+ *
+ * `DENIAL_WORDS`（`don't` / `won't`）・`NEGATION_MARKERS_EN`（`n't`）・
+ * `NEGATED_APPROVAL_PHRASES`（`don't hesitate` 等6語）はいずれも素の
+ * アポストロフィ（U+0027 `'`）だけを見ている。スマートフォンや macOS の
+ * 入力・Slack 等の自動整形は曲がった引用符（U+2019 `’`、および見た目が
+ * 近い U+2018 `‘` / U+02BC `ʼ`）を使うことが多く、その形で届いた否定は
+ * どの一覧にも当たらない——`Don’t go ahead.` は `go ahead`
+ * （`APPROVAL_WORDS`）に当たる一方、否定側のどの一覧にも当たらないので
+ * `allow` になる（#1827/#1837 で「読めなければ allow にしない」へ反転した
+ * 方針の抜け）。
+ *
+ * 直し方は `inferDecision` の入口でアポストロフィの変種を素の `'` へ
+ * 揃えてから各一覧に当てること——`NEGATED_APPROVAL_PHRASES` の照合にも
+ * 同じ正規化が及ぶようにする（`hasNegatedApprovalPhrase` /
+ * `hasNegatedApprovalDenial` は `inferDecision` 内でしか呼ばれないので、
+ * 入口1箇所の正規化で足りる。呼び出し元は他に無い——`packages/core/src/*.ts`
+ * を `grep -Fn` した実測は PR 本文にある）。
+ */
+describe('inferDecision / 曲がった引用符の apostrophe が否定として読まれない（issue #1907）', () => {
+  it('「Don’t go ahead.」（U+2019）は deny（曲がった引用符の否定を見落として allow に化けない）', () => {
+    expect(inferDecision('Don’t go ahead.')).toBe('deny');
+  });
+
+  it('「I won’t approve this, don’t proceed.」（U+2019 を2箇所）も deny', () => {
+    expect(inferDecision('I won’t approve this, don’t proceed.')).toBe('deny');
+  });
+
+  it('decideAnswer（permission・decision なし）でも同じ穴を通らない', () => {
+    expect(decideAnswer('permission', undefined, 'Don’t go ahead.')).toEqual({
+      decision: 'deny',
+      unreadable: false,
+    });
+  });
+
+  it.each(['Don’t worry, go ahead.', 'Don’t mind, go ahead.', 'Don’t hesitate, go ahead.'])(
+    '「%s」（U+2019）は unreadable（#1877/#1890 の NEGATED_APPROVAL_PHRASES と同じ着地。素の \' と揃う）',
+    (message) => {
+      expect(inferDecision(message)).toBe('unreadable');
+    },
+  );
+
+  it.each([
+    ['U+2018 LEFT SINGLE QUOTATION MARK', 'Don‘t go ahead.'],
+    ['U+02BC MODIFIER LETTER APOSTROPHE', 'Donʼt go ahead.'],
+  ])('%s の変種「%s」も deny（U+2019 以外の見た目が近い変種も同じ経路を通る）', (_label, message) => {
+    expect(inferDecision(message)).toBe('deny');
+  });
+
+  it.each([
+    ['U+2018 LEFT SINGLE QUOTATION MARK', 'Don‘t worry, go ahead.'],
+    ['U+02BC MODIFIER LETTER APOSTROPHE', 'Donʼt worry, go ahead.'],
+  ])('%s の変種「%s」も unreadable', (_label, message) => {
+    expect(inferDecision(message)).toBe('unreadable');
+  });
+
+  it.each([
+    "Don't go ahead.",
+    "I won't do this.",
+    "won't approve",
+    'Rejected.',
+    'それは拒否する。',
+  ])(
+    '対照: 素の \' の既存の例「%s」は今回の変更で変わらず deny のまま',
+    (message) => {
+      expect(inferDecision(message)).toBe('deny');
+    },
+  );
+
+  it.each(["don't hesitate", "don't mind", "don't worry", 'no worries', 'no problem'])(
+    '対照: 素の \' の既存の例「%s」は今回の変更で変わらず unreadable のまま',
+    (message) => {
+      expect(inferDecision(message)).toBe('unreadable');
+    },
+  );
+
+  it.each(['はい、どうぞ', 'OK、進めてよい', '許可する', 'go ahead', 'approved'])(
+    '対照: 曲がった引用符と無関係な既存の承認の例「%s」は allow のまま',
+    (message) => {
+      expect(inferDecision(message)).toBe('allow');
+    },
+  );
+});
