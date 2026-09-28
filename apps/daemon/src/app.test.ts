@@ -7272,7 +7272,10 @@ describe('会話・出来事・マネージャーへの手出し', () => {
     }
 
     expect(seen).toContain(': hb');
-    // 最初のフレームは open のまま（heartbeat が先に割り込んでいない）
+    // 最初のフレームは open のまま（heartbeat が先に割り込んでいない）。
+    // **先に open が在ることを確定させる**（#2003）——無いと `indexOf` が -1 になり、
+    // 下の順序の比較は `-1 < n` で素通りする。
+    expect(seen).toContain('event: open');
     expect(seen.indexOf('event: open')).toBeLessThan(seen.indexOf(': hb'));
 
     await reader.cancel();
