@@ -317,7 +317,7 @@ describe('inferDecision / 曲がった引用符の apostrophe が否定として
   });
 
   it.each(['Don’t worry, go ahead.', 'Don’t mind, go ahead.', 'Don’t hesitate, go ahead.'])(
-    '「%s」（U+2019）は unreadable（#1877/#1890 の NEGATED_APPROVAL_PHRASES と同じ着地。素の \' と揃う）',
+    "「%s」（U+2019）は unreadable（#1877/#1890 の NEGATED_APPROVAL_PHRASES と同じ着地。素の ' と揃う）",
     (message) => {
       expect(inferDecision(message)).toBe('unreadable');
     },
@@ -326,9 +326,12 @@ describe('inferDecision / 曲がった引用符の apostrophe が否定として
   it.each([
     ['U+2018 LEFT SINGLE QUOTATION MARK', 'Don‘t go ahead.'],
     ['U+02BC MODIFIER LETTER APOSTROPHE', 'Donʼt go ahead.'],
-  ])('%s の変種「%s」も deny（U+2019 以外の見た目が近い変種も同じ経路を通る）', (_label, message) => {
-    expect(inferDecision(message)).toBe('deny');
-  });
+  ])(
+    '%s の変種「%s」も deny（U+2019 以外の見た目が近い変種も同じ経路を通る）',
+    (_label, message) => {
+      expect(inferDecision(message)).toBe('deny');
+    },
+  );
 
   it.each([
     ['U+2018 LEFT SINGLE QUOTATION MARK', 'Don‘t worry, go ahead.'],
@@ -343,15 +346,12 @@ describe('inferDecision / 曲がった引用符の apostrophe が否定として
     "won't approve",
     'Rejected.',
     'それは拒否する。',
-  ])(
-    '対照: 素の \' の既存の例「%s」は今回の変更で変わらず deny のまま',
-    (message) => {
-      expect(inferDecision(message)).toBe('deny');
-    },
-  );
+  ])("対照: 素の ' の既存の例「%s」は今回の変更で変わらず deny のまま", (message) => {
+    expect(inferDecision(message)).toBe('deny');
+  });
 
   it.each(["don't hesitate", "don't mind", "don't worry", 'no worries', 'no problem'])(
-    '対照: 素の \' の既存の例「%s」は今回の変更で変わらず unreadable のまま',
+    "対照: 素の ' の既存の例「%s」は今回の変更で変わらず unreadable のまま",
     (message) => {
       expect(inferDecision(message)).toBe('unreadable');
     },
