@@ -217,9 +217,7 @@ describe('gh-pr-merge-delete-branch: 前置きの繰り返しが長くても後�
  */
 describe('gh-pr-merge-delete-branch: timeout 前置きの小数の継続時間も弾く（issue #1933）', () => {
   it('Issue #1933 の実例1: `cd x && timeout 1.5m gh pr merge … --delete-branch` を弾く', () => {
-    const v = inspectBashCommand(
-      'cd x && timeout 1.5m gh pr merge 1 --squash --delete-branch',
-    );
+    const v = inspectBashCommand('cd x && timeout 1.5m gh pr merge 1 --squash --delete-branch');
     expect(v.blocked).toBe(true);
   });
 

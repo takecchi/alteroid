@@ -373,6 +373,11 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * - **`sudo` / `nice` / `xargs` など `timeout` 以外の前置き。** issue #1886
  *   の「確かめていないこと」に明記されたとおり、この PR は `timeout` だけを
  *   扱う（1件ずつ検討する方針、#1192 のオーナー決定）。
+ * - **`timeout 1.` のような、末尾が `.` で終わる小数の継続時間。** issue
+ *   #1933 で `\d+(?:\.\d+)?|\.\d+` に直したが、この形（整数の直後に `.` が
+ *   在り、その後ろに数字が無い）はどちらの選択肢にも一致しない。GNU の
+ *   `timeout` は受ける（実測: `timeout 1. true` は exit 0）が、稀な書き方と
+ *   判断してこの版では対応していない。
  */
 const HEREDOC_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s;&|]|$)/g;
 
@@ -413,8 +418,23 @@ const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}\s+`;
  * る**（代入・`env` コマンドと順不同・回数任意で組み合わさる）。`timeout`
  * 自身のオプション（`-k` 等）までは解いていない——直後が数字の継続時間で
  * ある最も普通の書き方だけを見る。
+ *
+ * ⚠️ **issue #1933（#1886 の続き）——継続時間は小数（浮動小数点）も認める。**
+ * 以前は `\d+[a-zA-Z]*` で整数の継続時間しか読み飛ばせず、`timeout 1.5m` /
+ * `timeout 0.5h` のような小数の継続時間の前置きは読み飛ばせなかった（`1` の
+ * 直後の `.` が `[a-zA-Z]` にも `\s` にも当たらないため、`gh` の手前がこの
+ * パターンの一致で終わらず検出器自体が一致しない＝弾けない）。GNU
+ * coreutils の `timeout` は継続時間に小数を受け付ける（この器で実測、
+ * `timeout 9.7`。`timeout 1.5m true` / `timeout 0.5h true` / `timeout .5s
+ * true` はいずれも exit 0）。⟹ 継続時間を `\d+(?:\.\d+)?|\.\d+`（整数・
+ * 「整数.小数」・先頭が `.` の小数のいずれも認め、`.` 単独は認めない）に
+ * 直した。**`1.`（末尾が `.` で終わる形）は GNU が受けるが、この版では
+ * 対応していない**（`bash-wait-guard-delete-branch-timeout-prefix.test.ts`
+ * の issue #1933 の節に実測を書いた）。二者択一の先頭の文字（数字 / `.`）が
+ * 重ならないので、直上の「後戻りが指数的に増えない設計」（3つの前置きの
+ * 選択肢の先頭の語が互いに重ならない）は崩していない。
  */
-const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+\d+[a-zA-Z]*\s+`;
+const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+(?:\d+(?:\.\d+)?|\.\d+)[a-zA-Z]*\s+`;
 
 /**
  * `env` コマンド経由の単純な前置き —— `env`（引数無し）・
