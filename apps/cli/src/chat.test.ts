@@ -751,6 +751,20 @@ describe('renderManagerList', () => {
       expect(text).toContain('人間・クローンが明示的に停止させ');
       expect(text).not.toContain('セッションは生きているので、鍵が回れば');
     });
+
+    /**
+     * **PR #1904（core）が `describeUsageStopped` の `stopped` 枝にも resume の
+     * 一文を足した——CLI 版はここが `failed`/`lost` 枝にしか無く、揃っていな
+     * かった（マネージャーの差し戻し）。** `failed`/`lost` 枝と同じ語
+     * （`/msg` で resume を試みるしかなく、届く保証は無い）を `stopped` にも足す。
+     */
+    it('status: stopped でも、/msg で resume を試みるしかなく届く保証は無いと言う（core #1904 と揃える）', () => {
+      const text = renderManagerList([
+        manager({ status: 'stopped', usageStoppedAt: '2026-09-20T00:00:00.000Z' }),
+      ]);
+      expect(text).toContain('/msg');
+      expect(text).toContain('届く保証は無い');
+    });
   });
 
   /**
@@ -1035,6 +1049,120 @@ describe('renderManagerList', () => {
       expect(text).toContain('器が止まる直前の観測は届いていない');
       expect(text).toContain('未pushが無かったことを意味しない');
       expect(text).toContain('表示中の観測は無い');
+    });
+
+    /**
+     * **マネージャーの差し戻し（main に入った PR #1896／Issue #1885）:**
+     * core の `describeUnpushedWorkObservation` は `kind: 'observed'` の
+     * 3箇所すべてに「探しきれていない」の注記
+     * （`describeUnpushedWorkObservationIncompleteness`）を足すようになった。
+     * CLI 版はこの3箇所を複製しているので、同じ注記が要る。
+     */
+    describe('「探しきれていない」の注記（4欄。PR #1896 で core が足した）', () => {
+      it('4欄がどれも無ければ何も足さない（通常分岐）', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'done',
+            lastUnpushedWorkObservation: {
+              kind: 'observed',
+              at: '2026-09-26T00:00:00.000Z',
+              cwd: '/workspace',
+              worktrees: [{ relativePath: 'repo', branch: 'fix/1' }],
+            },
+          }),
+        ]);
+        expect(text).not.toContain('探しきっていない');
+      });
+
+      it('truncatedAtCount が在れば「探しきっていない」と件数上限の理由を言う（通常分岐）', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'done',
+            lastUnpushedWorkObservation: {
+              kind: 'observed',
+              at: '2026-09-26T00:00:00.000Z',
+              cwd: '/workspace',
+              worktrees: [{ relativePath: 'repo', branch: 'fix/1' }],
+              truncatedAtCount: 50,
+            },
+          }),
+        ]);
+        expect(text).toContain('この観測は探しきっていない');
+        expect(text).toContain('件数の上限（50）で打ち切った');
+        expect(text).toContain('ここに無い作業ツリーが在りうる');
+      });
+
+      it('stoppedEarly / scratchRootsUnknown / unreadableDirCount も理由として言う（複数同時）', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'done',
+            lastUnpushedWorkObservation: {
+              kind: 'observed',
+              at: '2026-09-26T00:00:00.000Z',
+              cwd: '/workspace',
+              worktrees: [],
+              stoppedEarly: true,
+              scratchRootsUnknown: '読めなかった',
+              unreadableDirCount: 2,
+            },
+          }),
+        ]);
+        expect(text).toContain('期限切れで一部を調べる前に打ち切った');
+        expect(text).toContain('/tmp スクラッチの起点を確かめられなかった: 読めなかった');
+        expect(text).toContain('子ディレクトリの読み失敗が2件あった');
+      });
+
+      it('sessionMissingSince + 届いた分岐でも注記を足す', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'running',
+            sessionMissingSince: '2026-09-27T00:00:00.000Z',
+            shutdownObservationArrivedAfterSwap: true,
+            lastUnpushedWorkObservation: {
+              kind: 'observed',
+              at: '2026-09-27T00:00:00.000Z',
+              cwd: '/workspace',
+              worktrees: [],
+              truncatedAtCount: 10,
+            },
+          }),
+        ]);
+        expect(text).toContain('この観測は探しきっていない');
+        expect(text).toContain('件数の上限（10）で打ち切った');
+      });
+
+      it('sessionMissingSince + 届いていない分岐（表示中の観測）でも注記を足す', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'running',
+            sessionMissingSince: '2026-09-27T00:00:00.000Z',
+            shutdownObservationArrivedAfterSwap: false,
+            lastUnpushedWorkObservation: {
+              kind: 'observed',
+              at: '2026-09-27T00:00:00.000Z',
+              cwd: '/workspace',
+              worktrees: [],
+              truncatedAtCount: 10,
+            },
+          }),
+        ]);
+        expect(text).toContain('この観測は探しきっていない');
+        expect(text).toContain('件数の上限（10）で打ち切った');
+      });
+
+      it('unavailable には付かない（4欄は observed 側にしか無い）', () => {
+        const text = renderManagerList([
+          manager({
+            status: 'done',
+            lastUnpushedWorkObservation: {
+              kind: 'unavailable',
+              at: '2026-09-26T00:00:00.000Z',
+              reason: 'git が無い',
+            },
+          }),
+        ]);
+        expect(text).not.toContain('探しきっていない');
+      });
     });
   });
 });
