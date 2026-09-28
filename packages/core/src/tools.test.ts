@@ -5260,6 +5260,45 @@ describe('クローンの道具', () => {
       expect(after?.withdrawnAt).toBeUndefined();
     });
 
+    /**
+     * issue #2026（#2007 の歯の欠け）: 取り下げが行を読んでから書くまでの間に回答が入る
+     * 場面。先の判定（`getApproval` の後）は古い写しを見るので通り抜ける——排他の中の
+     * 判定（`updateApproval` の `mutate`）だけが、この回答を見て取り下げを断れる。
+     * 以前はこの判定を外しても、どの歯も赤にならなかった（C の4回目の横断レビュー）。
+     */
+    it('取り下げが読んでから書くまでの間に回答が入ったら、取り下げは断られ、回答が残る', async () => {
+      const h = harness();
+      await h.stores.jobs.putApproval({
+        id: 'ap-race',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        question: '同時に答えられる質問',
+      });
+      const original = h.stores.jobs.getApproval.bind(h.stores.jobs);
+      let interleaved = false;
+      h.stores.jobs.getApproval = async (id) => {
+        const snapshot = await original(id);
+        // 取り下げが先の判定のために読んだ直後に、人間の回答を入れる（読んだ写しは古くなる）。
+        if (!interleaved && snapshot !== null && id === 'ap-race') {
+          interleaved = true;
+          await h.stores.jobs.putApproval({
+            ...snapshot,
+            answeredAt: '2026-01-01T01:00:00.000Z',
+            answer: '同時に届いた回答',
+          });
+        }
+        return snapshot;
+      };
+
+      const reply = await h.call('approval_withdraw', { id: 'ap-race', reason: '理由' });
+
+      expect(interleaved).toBe(true);
+      expect(reply).toContain('回答済み');
+      expect(reply).not.toContain('取り下げた。');
+      const after = await original('ap-race');
+      expect(after?.answer).toBe('同時に届いた回答');
+      expect(after?.withdrawnAt).toBeUndefined();
+    });
+
     it('既に取り下げ済みの件を二重に取り下げようとしても断る（新しい行を積まない）', async () => {
       const h = harness();
       await h.call('ask_human', { question: '質問' });

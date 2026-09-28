@@ -1420,6 +1420,45 @@ describe('HTTP API', () => {
   });
 
   /**
+   * issue #2026（#2007 の歯の欠け）: 上の歯は `settled: 'withdrawn'` しか作っておらず、
+   * `'answered'` の枝（409 `already answered`）を外しても緑だった（C の4回目の横断
+   * レビュー）。その枝が消えると、単発の口は例外を投げ直して 500 になる。
+   */
+  it('answerApproval が回答済みの承認として断ったら、単発の口は 409 already answered、一括の口はその件を already answered で返す', async () => {
+    await stores.jobs.putApproval({
+      id: 'ap-race-answered',
+      createdAt: new Date().toISOString(),
+      question: '同時に2回答えられた承認',
+    });
+    const original = fake.clone.answerApproval;
+    fake.clone.answerApproval = async (id) => {
+      const error = new Error(`承認待ち ${id} は既に回答済みなので、回答しなかった`);
+      error.name = 'ApprovalAlreadySettledError';
+      Object.assign(error, { approvalId: id, settled: 'answered' });
+      throw error;
+    };
+    try {
+      const single = await app.request(
+        '/approvals/ap-race-answered/answer',
+        json({ answer: 'よい' }),
+      );
+      expect(single.status).toBe(409);
+      expect(await single.json()).toEqual({ error: 'already answered' });
+
+      const batch = await app.request(
+        '/approvals/answer',
+        json({ answers: [{ id: 'ap-race-answered', answer: 'よい' }] }),
+      );
+      expect(batch.status).toBe(200);
+      expect(await batch.json()).toEqual({
+        results: [{ id: 'ap-race-answered', ok: false, error: 'already answered' }],
+      });
+    } finally {
+      fake.clone.answerApproval = original;
+    }
+  });
+
+  /**
    * 答えとその後の行動の対（issue #847 の案B）。クローンの `approval_trace` と
    * 同じ `traceApproval` を通ることは、同じ日誌から同じ行が返ることで測る
    * （状態の分け方そのものの歯は `packages/core/src/approval-trace.test.ts`）。
