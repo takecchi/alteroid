@@ -248,4 +248,18 @@ describe('gh-pr-merge-delete-branch: timeout 前置きの小数の継続時間�
   it('偽陽性にならないこと——小数 timeout に包まれた無関係なコマンドは引き続き通す', () => {
     expect(inspectBashCommand('cd /tmp && timeout 1.5m pnpm test').blocked).toBe(false);
   });
+
+  /**
+   * PR #1939 のレビュー指摘——上の doc コメントで「対応していない」とした
+   * 「末尾が `.` で終わる小数」（`timeout 1.` 等）も、GNU が受ける以上は
+   * #1933 と同じ穴（小数の継続時間）の残りである。継続時間を
+   * `(?:\d+(?:\.\d*)?|\.\d+)` に直せば、`1.` は「整数の直後に `.` と0個
+   * 以上の小数部」として先頭が数字の側の選択肢に収まり、`.5` は先頭が `.`
+   * の側のままで、2つの選択肢は先頭の文字（数字 / `.`）で排他のまま保たれる
+   * （`.` 単独はどちらにも一致しない——`\.\d+` は `.` の後ろに最低1桁を
+   * 要求する）。
+   */
+  it('末尾が `.` で終わる小数（`timeout 1. …`）でも弾く（PR #1939 レビュー指摘）', () => {
+    expect(inspectBashCommand('timeout 1. gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
 });
