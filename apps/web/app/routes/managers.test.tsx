@@ -1194,6 +1194,119 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
   });
 });
 
+/**
+ * **状態チップの選択も URL に載る（issue #2030）。** `journal.tsx` の種別
+ * チップ（issue #2029）と同じ `useSearchParams` の仕組みに乗せる——絞った
+ * 一覧をリンクで渡せる・ブックマークできる・再読み込みや「戻る」で戻せる
+ * ようにする。**同じ判断を2つの画面で割らない**ので、`journal.test.tsx`
+ * の「種別チップの選択が URL に載る（issue #2029）」と対になる形にしてある。
+ */
+describe('状態チップの選択が URL に載る（issue #2030）', () => {
+  /** `journal.test.tsx` の `renderJournal` と同じ形（router を返す）。 */
+  function renderWithRouter(
+    respond: (url: string) => object | undefined,
+    initialEntries: string[] = ['/'],
+  ) {
+    const stub = stubFetch((url) => {
+      if (!url.includes('/managers')) return undefined;
+      const body = respond(url);
+      return body === undefined ? json({ managers: [] }) : json(body);
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Managers }], {
+      initialEntries,
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+    return { stub, router };
+  }
+
+  it('チップを押すと URL の status に状態が載る', async () => {
+    const { router } = renderWithRouter(() => ({ managers: [] }));
+    await screen.findByRole('button', { name: '実行中' });
+
+    fireEvent.click(screen.getByRole('button', { name: '実行中' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('status')).toBe('running');
+    });
+
+    // もう1つ押すとカンマ区切りで増える。
+    fireEvent.click(screen.getByRole('button', { name: 'セッションへ戻れず' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('status')).toBe(
+        'running,lost',
+      );
+    });
+
+    // 押し直すと外れる。
+    fireEvent.click(screen.getByRole('button', { name: '実行中' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('status')).toBe('lost');
+    });
+  });
+
+  it('URL の status から初期状態が復元される（チップが押された状態で開く）', async () => {
+    const { stub } = renderWithRouter(() => ({ managers: [] }), ['/?status=running,lost']);
+    await screen.findByRole('button', { name: '実行中' });
+
+    expect(screen.getByRole('button', { name: '実行中' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(
+      screen.getByRole('button', { name: 'セッションへ戻れず' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(screen.getByRole('button', { name: '人間待ち' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+
+    // 実際にサーバへ渡る `status=` にも同じ絞りが載る（`GET /managers?status=`
+    // への渡し方は変えていない——`STATUSES` の doc）。
+    await waitFor(() => {
+      expect(stub.calls.some((url) => url.includes('status=running%2Clost'))).toBe(true);
+    });
+  });
+
+  it('URL に知らない状態が書かれていても落ちない（無視する。#2010 の線）', async () => {
+    renderWithRouter(() => ({ managers: [] }), ['/?status=running,no-such-status']);
+
+    // 画面ごと落ちない。既知のチップは変わらず出る。
+    await screen.findByRole('button', { name: '実行中' });
+    expect(screen.getByRole('button', { name: '実行中' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    // 知らない状態のチップは無い（チップは既知の状態ぶんしか無い）。
+    expect(screen.queryByRole('button', { name: 'no-such-status' })).toBeNull();
+  });
+
+  it('絞りの解除は URL からも status を消す', async () => {
+    const { router } = renderWithRouter(() => ({ managers: [] }), ['/?status=running']);
+    await screen.findByRole('button', { name: '実行中' });
+
+    fireEvent.click(screen.getByRole('button', { name: '解除' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).has('status')).toBe(false);
+    });
+  });
+
+  /**
+   * **`replace: true` にする。** `journal.tsx` の `q` / `types` と同じ
+   * 理由——チップを連続でクリックするたびに履歴が積まれると、「戻る」が
+   * 使い物にならなくなる。同じ判断を2つの画面で割らない。
+   */
+  it('チップの切り替えは履歴を汚さない（replace: true。journal.tsx の判断に揃える）', async () => {
+    const { router } = renderWithRouter(() => ({ managers: [] }));
+    await screen.findByRole('button', { name: '実行中' });
+
+    fireEvent.click(screen.getByRole('button', { name: '実行中' }));
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('status')).toBe('running');
+    });
+    expect(router.state.historyAction).toBe('REPLACE');
+  });
+});
+
 describe('ManagerRunnerVanishedNote（Issue #1212 running 側。段1）', () => {
   it('印が立っていれば、消えていることと「lost ではない」を出す。時刻は出さない', () => {
     render(<ManagerRunnerVanishedNote runnerVanished={true} />);
