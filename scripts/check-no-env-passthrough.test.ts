@@ -5,14 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import {
-  ALLOWLIST,
-  classifyEnvPassthroughHits,
-  findEnvPassthroughHits,
-  isTargetPath,
-  listTargetFiles,
-  maskCommentsAndStrings,
-} from './check-no-env-passthrough-core.mjs';
+import { ALLOWLIST, classifyEnvPassthroughHits, findEnvPassthroughHits, isTargetPath, listTargetFiles, maskCommentsAndStrings } from './check-no-env-passthrough-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -288,7 +281,9 @@ describe('実リポジトリの検査（main が緑であることの確認、#1
       violations.length === 0
         ? ''
         : `${violations.length}件の未許可の env 丸渡し:\n` +
-            violations.map((h) => `  ${h.path}:${h.line} ${h.describe}\n    ${h.snippet}`).join('\n') +
+            violations
+              .map((h) => `  ${h.path}:${h.line} ${h.describe}\n    ${h.snippet}`)
+              .join('\n') +
             '\n必要な鍵だけを明示的に組み立てるか、理由付きで ALLOWLIST へ載せること（#1935）。',
     ).toEqual([]);
 
