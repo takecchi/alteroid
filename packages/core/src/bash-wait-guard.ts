@@ -343,6 +343,69 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  * 条件そのものは変わらず、素通しは維持される（`echo "GH_TOKEN=x gh pr merge
  * 1 --delete-branch"` は直前の文字が `"` なので引き続き通る）。
  *
+ * ## `--subject` / `-t` / `--body` / `-b` の値の引用符の中は読み飛ばす（issue #1910）
+ *
+ * PR の件名・本文にガード自身の名前（`--delete-branch` という字面）を書くと、
+ * `gh pr merge 1887 --subject "fix: … --delete-branch ガードが…" --body-file f`
+ * のように、**フラグとしては付いていない**のに上の「コマンド位置の直後を
+ * 素通しできない」だけの理由で弾かれていた（実測は issue #1910 本文。
+ * PR の件名は `.claude/skills/pr-merge/SKILL.md` の約束でタイトルから作るので、
+ * ガードそのものを直す PR ほど踏みやすい）。
+ *
+ * **これはガードを緩める変更なので、すり抜けを1つも作らないことを最優先
+ * にする。** だから潰す範囲は最小に絞ってある —— 潰すのは `gh pr merge` の
+ * `--subject` / `-t` / `--body` / `-b`（`--subject=…` / `--body=…` の形も）の
+ * **値として渡された、引用符で閉じている区間の中身だけ**である。
+ *
+ * - **単一引用符（`'…'`）はそのまま安全に閉じ位置が分かる。** bash の単一
+ *   引用符にはエスケープの仕組みが無い（`\` も含めて中の文字はすべて
+ *   リテラル）ので、次に現れる `'` が機械的に閉じ引用符である
+ *   （`SINGLE_QUOTED_VALUE_SRC` = `'[^']*'`）。
+ * - **二重引用符（`"…"`）は、中にバックスラッシュが1つでもあれば潰さない。**
+ *   bash の二重引用符は `\"` を「値の中のエスケープされた `"`」として読むが、
+ *   この検出器は shell の構文解析器ではないので、エスケープを正しく辿れる
+ *   保証が無い。**「読めない」と判断したら潰さない側（弾く側）へ倒す**
+ *   （`DOUBLE_QUOTED_VALUE_SRC` = `"[^"\\]*"` —— `\` を含む時点で不一致に
+ *   なり、その区間は素の文字列のまま残って、中に本物の `--delete-branch`
+ *   の字面が在れば引き続き検出される）。同じ理由で、**閉じていない引用符**
+ *   （終端が無い）も一致しないので潰さない。
+ * - **潰す範囲は `gh pr merge` の呼び出し区間で絞っていない —— コマンド文字列
+ *   全体から `--subject`/`-t`/`--body`/`-b` の直後の引用符を探す。** 最初は
+ *   検出本体（`GH_PR_MERGE_DELETE_BRANCH_RE`）と同じ「`;`/`&&`/`||`/`|`/改行の
+ *   手前までの呼び出し区間」を先に切り出してから中を探す形にしていたが、
+ *   issue #1910 の**実例そのもの**（件名の値の中に `&&` を含む）でそれが
+ *   壊れた —— 区間の切り出し自体が「引用符を追跡しない」設計なので、値の
+ *   中の `&&` を本物の区切りと誤読して区間をそこで打ち切ってしまい、値の
+ *   本当の閉じ引用符（`&&` より後ろ）へ届かなかった。詳しい経緯は
+ *   `SUBJECT_BODY_QUOTED_VALUE_RE` の doc に書いた。**区間で絞らなくても
+ *   安全な理由**: この置換は `--subject`/`-t`/`--body`/`-b` の直後に来た、
+ *   きれいに閉じている引用符の中身しか潰さない。`gh pr merge` と無関係な
+ *   箇所に当たっても、潰すのは引用符の中身だけで、`GH_PR_MERGE_DELETE_
+ *   BRANCH_RE` が実際に見る「`gh pr merge` から次の境界まで」の外側の判定
+ *   には触れない——本物の `--delete-branch`/`-d`（引用符の外に在るもの）を
+ *   見逃す経路にはならない。
+ * - **フラグの直前は行頭・空白のどちらかであることを要求する**
+ *   （`SUBJECT_BODY_LONG_FLAG_SRC` / `SUBJECT_BODY_SHORT_FLAG_SRC` の
+ *   lookbehind）。`--subject-t "…"` のような、たまたま `-t` という部分
+ *   文字列を含む無関係な語を `-t` フラグと誤認しないため。
+ * - **引用符そのものは残し、中身だけを空白へ潰す。** 潰した後も
+ *   `--subject " "` のような形は残るので、`GH_PR_MERGE_DELETE_BRANCH_RE` が
+ *   `--subject` という語自体を誤検知することはない（そもそもそこは見ていな
+ *   い）。
+ *
+ * ⚠️ **意図して直していない・確かめていない形**（すり抜けを作らない方向の
+ * 保守的な選択であり、下の「弾けないと分かっている形」の一部と重なる）:
+ *
+ * - **`'a'\''b --delete-branch'` のような、単一引用符を跨いで連結した値。**
+ *   bash はこれを1つの引数として結合するが、この検出器は最初の `'…'` の
+ *   区間しか潰さない。残りの区間（`\''b --delete-branch'`）はそのまま残り、
+ *   本物の `--delete-branch` の字面が引き続き検出される —— **誤検知が残る
+ *   側（安全側）へ倒れる**（確認済み、テストには含めていない・稀な形と
+ *   判断）。
+ * - **値のクオートを跨がず直後に別の語が連結する形**
+ *   （`--subject 'x'--delete-branch` のように空白を挟まない結合）。同様に
+ *   最初の `'x'` だけが潰され、連結した残りは検出対象のまま残る（安全側）。
+ *
  * ## ⚠️ この検出器が弾けないと分かっている形
  *
  * - **`bash -c '…'` の中。** 構文（コマンド位置）しか見ていないので、
@@ -350,6 +413,16 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   条件だけで素通しされる。これは他の文字列だけを読む判定器と同じ限界
  *   であり、この PR でも直していない（歯は
  *   `bash-wait-guard.test.ts` の末尾に明記する）。
+ * - **⚠️ `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、`--subject` /
+ *   `--body` の値ではなく素で引用符に囲まれた短縮フラグ `-d`。** issue #1910
+ *   の作業中に見つけた、**この PR とは無関係な既存の穴**（この PR が作った
+ *   ものでも、この PR で直すものでもない）。`-d` の検出
+ *   （`(?<=[\s])-d(?=[\s;&|]|$)`）は直前が空白であることを要求するが、
+ *   `"-d"` は直前が引用符でありシェルが引用符を剥がした後の実引数は
+ *   リテラルの `-d`（本物のフラグ）である。長い形の `--delete-branch\b` は
+ *   この lookbehind を持たないため同じ形でも引き続き弾く（対照は
+ *   `bash-wait-guard-delete-branch-quoted-values.test.ts`）。issue 化して
+ *   報告する（AGENTS.md「範囲外でも気づいたことは上げる」）。
  * - **`--delete-branch=false` のような明示的な無効化。** `\b` は文字種の
  *   境界でしか見ないので、`--delete-branch` の直後が `=false` でも弾く
  *   （確かめていない・稀な形と判断して対応していない）。
@@ -492,8 +565,96 @@ const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
   String.raw`(?<=^|[;&|\n])[ \t]*${LEADING_ENV_PREFIX_SRC}gh\s+pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|(?<=[\s])-d(?=[\s;&|]|$))`,
 );
 
+/**
+ * 二重引用符の値 —— 中に `"` も `\` も含まない区間だけを一致とする。
+ * `\` を含む時点で不一致になるのは意図的（doc「二重引用符は、中に
+ * バックスラッシュが1つでもあれば潰さない」）。
+ */
+const DOUBLE_QUOTED_VALUE_SRC = String.raw`"[^"\\]*"`;
+
+/** 単一引用符の値 —— bash にエスケープの仕組みが無いので、次の `'` が必ず閉じ引用符。 */
+const SINGLE_QUOTED_VALUE_SRC = String.raw`'[^']*'`;
+
+const QUOTED_VALUE_SRC = String.raw`(?:${DOUBLE_QUOTED_VALUE_SRC}|${SINGLE_QUOTED_VALUE_SRC})`;
+
+/** `--subject` / `--body`（`=` または空白区切り）。直前は行頭か空白のみ認める。 */
+const SUBJECT_BODY_LONG_FLAG_SRC = String.raw`(?<=^|[\s])(?:--subject|--body)(?:=|\s+)`;
+
+/** `-t` / `-b`（空白区切りのみ——短縮形に `=` の形は扱わない）。直前は行頭か空白のみ認める。 */
+const SUBJECT_BODY_SHORT_FLAG_SRC = String.raw`(?<=^|[\s])(?:-t|-b)\s+`;
+
+const SUBJECT_BODY_FLAG_SRC = String.raw`(?:${SUBJECT_BODY_LONG_FLAG_SRC}|${SUBJECT_BODY_SHORT_FLAG_SRC})`;
+
+/**
+ * `--subject`/`-t`/`--body`/`-b` の値として渡された、きれいに閉じている
+ * 引用符を見つける（フラグ部分と値部分を別の capture group で持つ ——
+ * 置換のときにフラグ部分はそのまま残し、値の中身だけを潰すため）。
+ *
+ * ⚠️ **`gh pr merge` の呼び出し区間で範囲を絞っていない**（issue #1910の
+ * 実装時に一度絞ったが、実例そのもので壊れたため外した——次の doc
+ * 「なぜ `gh pr merge` の呼び出し区間で絞らないか」参照）。
+ */
+const SUBJECT_BODY_QUOTED_VALUE_RE = new RegExp(
+  String.raw`(${SUBJECT_BODY_FLAG_SRC})(${QUOTED_VALUE_SRC})`,
+  'g',
+);
+
+/** 引用符で囲まれた値の中身だけを空白へ潰す。引用符自体（先頭・末尾の1文字）は残す。 */
+function blankQuotedValueInterior(quoted: string): string {
+  const interior = quoted.slice(1, -1).replace(/[^\n]/g, ' ');
+  return quoted[0] + interior + quoted[quoted.length - 1];
+}
+
+/**
+ * `--subject`/`-t`/`--body`/`-b` の値として渡された、きれいに閉じている
+ * 引用符の中身だけを、コマンド文字列全体から空白へ潰す（issue #1910）。
+ *
+ * ## なぜ `gh pr merge` の呼び出し区間で絞らないか
+ *
+ * 最初の実装は「`gh pr merge` の呼び出し区間（`GH_PR_MERGE_DELETE_BRANCH_RE`
+ * と同じ、`;`/`&&`/`||`/`|`/改行の手前までの区間）を先に切り出し、その中だけで
+ * 値の引用符を探す」形だった。だが issue #1910 の**実例そのもの**
+ * （`--subject "fix: … --delete-branch ガードが && 後の timeout 前置きを
+ * 弾かない (#1887)" --body-file f`）が、値の中に `&&` を含んでいた。呼び出し
+ * 区間の切り出しはこのモジュール全体と同じ「引用符を追跡しない」設計
+ * （`gh-pr-merge-delete-branch` の doc「弾けないと分かっている形」の
+ * `bash -c '…'` の項と同根）なので、値の中の `&&` を本物のコマンド区切りと
+ * 誤読して区間をそこで打ち切ってしまい、値の本当の閉じ引用符（`&&` より
+ * 後ろ）へ届く前に区間が終わっていた。**結果、実例そのものが直らなかった**
+ * （実装中に自分のテストで踏んだ——`bash-wait-guard-delete-branch-quoted-values.test.ts`
+ * の「Issue #1910 の実例」が、区間切り出し版では赤のままだった）。
+ *
+ * ⟹ 区間切り出しをやめ、**コマンド文字列全体**に対して直接
+ * `SUBJECT_BODY_QUOTED_VALUE_RE` を当てる形にした。引用符の中身を探す正規表現
+ * （`[^"\\]*` / `[^']*`）はもともと `&`/`;`/`|` を特別扱いしていない —— 次の
+ * 閉じ引用符が来るまでをそのまま値として読むので、値の中に演算子の字面が
+ * 在っても正しく閉じ位置まで読める。**区間で絞ることをやめても安全な理由**:
+ * この置換が潰すのは「`--subject`/`-t`/`--body`/`-b` の直後に来た、きれいに
+ * 閉じている引用符の中身」だけであり、`gh pr merge` かどうかに関係なく、
+ * 引用符の外側の文字（本物のフラグ・別のコマンドの一部）には一切触れない。
+ * ⟹ 万一これが `gh pr merge` と無関係な箇所（別のコマンドの `-t`/`-b` 等）に
+ * 当たっても、潰すのはその引用符の中身だけなので、`GH_PR_MERGE_DELETE_BRANCH_RE`
+ * が実際に見る「`gh pr merge` から次の境界まで」の外側の判定には影響しない
+ * ——本物の `--delete-branch`/`-d`（引用符の外に在るもの）を見逃す経路には
+ * ならない。
+ *
+ * **潰さない（＝弾く側に倒す）場合**: 二重引用符の中にバックスラッシュが
+ * 在る（エスケープを含みうるので「読めない」と判断する）・引用符が閉じて
+ * いない・そもそも `--subject`/`-t`/`--body`/`-b` の値として引用符が来て
+ * いない。これらはこの関数が単に一致しないので、元の文字列がそのまま残り、
+ * 中に本物の `--delete-branch`/`-d` の字面が在れば引き続き検出される。
+ */
+function stripGhPrMergeQuotedSubjectBodyValues(command: string): string {
+  return command.replace(
+    SUBJECT_BODY_QUOTED_VALUE_RE,
+    (_whole, flagPart: string, value: string) => flagPart + blankQuotedValueInterior(value),
+  );
+}
+
 function hasGhPrMergeDeleteBranch(command: string): boolean {
-  return GH_PR_MERGE_DELETE_BRANCH_RE.test(stripHeredocs(command));
+  const withoutHeredocs = stripHeredocs(command);
+  const withoutQuotedSubjectBodyValues = stripGhPrMergeQuotedSubjectBodyValues(withoutHeredocs);
+  return GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues);
 }
 
 /**

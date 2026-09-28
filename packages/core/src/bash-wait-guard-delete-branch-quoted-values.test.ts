@@ -38,15 +38,15 @@ describe('gh-pr-merge-delete-branch: 件名・本文の値の引用符の中の�
   });
 
   it('-t（--subject の短縮形）の単一引用符の値の中の -d は通す', () => {
-    expect(
-      inspectBashCommand("gh pr merge 1 -t 'note: -d flag guard behavior'").blocked,
-    ).toBe(false);
+    expect(inspectBashCommand("gh pr merge 1 -t 'note: -d flag guard behavior'").blocked).toBe(
+      false,
+    );
   });
 
   it('-b（--body の短縮形）の単一引用符の値の中の --delete-branch は通す', () => {
-    expect(
-      inspectBashCommand("gh pr merge 1 -b 'mentions --delete-branch in prose'").blocked,
-    ).toBe(false);
+    expect(inspectBashCommand("gh pr merge 1 -b 'mentions --delete-branch in prose'").blocked).toBe(
+      false,
+    );
   });
 
   it('--subject=値 の形（= 区切り、二重引用符）の中の --delete-branch は通す', () => {
@@ -100,9 +100,7 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
   });
 
   it('`--subject` の値の後ろに続く実際の `--delete-branch` は引き続き弾く', () => {
-    expect(
-      inspectBashCommand('gh pr merge 1 --subject "x" --delete-branch').blocked,
-    ).toBe(true);
+    expect(inspectBashCommand('gh pr merge 1 --subject "x" --delete-branch').blocked).toBe(true);
   });
 
   it('`--subject` の値の後ろに続く実際の `-d` は引き続き弾く', () => {
@@ -119,9 +117,9 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
     // ので、バックスラッシュを含む区間は「安全に閉じ引用符の位置が分かる」
     // とは言えない。読めないと判断したら潰さず、弾く側へ倒す
     // （依頼の指定どおり）。
-    expect(
-      inspectBashCommand('gh pr merge 1 --subject "a \\" --delete-branch"').blocked,
-    ).toBe(true);
+    expect(inspectBashCommand('gh pr merge 1 --subject "a \\" --delete-branch"').blocked).toBe(
+      true,
+    );
   });
 
   it('閉じていない引用符を含む値は「読めない」として弾く（潰さない）', () => {
@@ -144,8 +142,9 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
 
   it('`--body-file`（`--body` ではない）は値の潰しの対象にならず、直後の実際の `--delete-branch` は弾く', () => {
     expect(
-      inspectBashCommand('gh pr merge 1887 --squash --subject "no mention" --body-file f --delete-branch')
-        .blocked,
+      inspectBashCommand(
+        'gh pr merge 1887 --squash --subject "no mention" --body-file f --delete-branch',
+      ).blocked,
     ).toBe(true);
   });
 
@@ -181,7 +180,7 @@ describe('gh-pr-merge-delete-branch: 値の引用符だけを潰しても、実�
     expect(inspectBashCommand('gh pr merge 1 "-d"').blocked).toBe(false);
   });
 
-  it('[既知・範囲外] 単一引用符で囲まれた素の `-d`（`\'-d\'`）は現状すり抜ける', () => {
+  it("[既知・範囲外] 単一引用符で囲まれた素の `-d`（`'-d'`）は現状すり抜ける", () => {
     expect(inspectBashCommand("gh pr merge 1 '-d'").blocked).toBe(false);
   });
 
