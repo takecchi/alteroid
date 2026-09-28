@@ -26,6 +26,7 @@ import {
   markerExists,
   md5,
   measureScaffoldControl,
+  PNPM_HARNESS_CHILD_ENV,
   readMarkerVerified,
   readRepoFile,
   restoreMutation,
@@ -33,6 +34,39 @@ import {
   section,
   writeRepoFile,
 } from './mutate-core.mjs';
+
+/**
+ * このセルフテストが実プロセスとして起こす `node mutate.mjs <サブコマンド>` /
+ * `git add` / `git restore --staged` へ渡す最小の env（Issue #1971 段2）。
+ *
+ * `scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()` と同じ考え方だが、
+ * このファイルは「依存なし・ビルド不要」の約束（SKILL.md）を持つので `.ts` を
+ * import できない——同じ考え方を最小の形でここに直接組み立てる（下の
+ * `poisonedEnv`（6b）が既に同じ理由をコメントで持っている。ここはそれを
+ * 他の呼び出しへも広げただけである）。
+ *
+ * - **`node mutate.mjs <サブコマンド>` 呼び出し（`status` / `baseline` /
+ *   `restore`）**: 子（`mutate-core.mjs` / `mutate-selftest.mjs`）が読む
+ *   `process.env` の鍵は `CLAUDE_SESSION_ID` / `ALTEROID_SESSION_ID`
+ *   （`?? null` で既定値つき）だけで、他には無い
+ *   （`grep -Fn -- 'process.env' .claude/skills/mutation-testing/*.mjs`）。
+ *   子がさらに起こす `git`（読み取り専用。上の `GIT_READONLY_CHILD_ENV` と
+ *   同じ理由）・`pnpm build`（`spec.target: null` のシナリオでは経由しない）
+ *   はどちらも `PATH` のほかに要るものが無い。
+ * - **`git add -- <file>` / `git restore --staged -- <file>`**: FIXTURE_REL
+ *   （selftest 用の固定ファイル）への staging 操作で、commit を伴わない——identity
+ *   （`user.name`/`user.email`）も `.gitconfig` も要らない。実測（2026-09-28、
+ *   ROOT で `env -i PATH=<PATH> git add -- README.md` →
+ *   `env -i PATH=<PATH> git restore --staged -- README.md` を実行。
+ *   両方とも exit 0・出力0バイトで、実行後の `git status --porcelain` も
+ *   実行前と一致した）。
+ *
+ * **`pnpm --filter <target> build`（`delivery` / `rebuild-failure` シナリオ）
+ * だけは別**——実リポジトリに対する本物の build なので、`mutate-core.mjs` の
+ * `PNPM_HARNESS_CHILD_ENV`（`PATH` + `CI: 'true'`。同じ Issue #1971 段2で
+ * 実測した理由をそちらの doc に書いてある）を再利用する。
+ */
+const MUTATE_SELFTEST_CHILD_ENV = { PATH: process.env.PATH ?? '' };
 
 export const SELFTEST_SCENARIOS = [
   'backup-corruption',
@@ -451,6 +485,7 @@ function removeDeliveryBarrelScaffoldIfSafe(originalBarrelContent, spec) {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
+    env: PNPM_HARNESS_CHILD_ENV,
   });
   if (finalBuild.status !== 0) {
     log('--- 足場を外した後の build 生ログ ここから ---');
@@ -968,7 +1003,7 @@ function scenarioInterrupted() {
     statusResult = execFileSync(
       'node',
       [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
-      { cwd: ROOT, encoding: 'utf8' },
+      { cwd: ROOT, encoding: 'utf8', env: MUTATE_SELFTEST_CHILD_ENV },
     ).toString();
     statusExitCode = 0;
   } catch (err) {
@@ -985,7 +1020,7 @@ function scenarioInterrupted() {
     execFileSync(
       'node',
       [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'baseline'],
-      { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' },
+      { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', env: MUTATE_SELFTEST_CHILD_ENV },
     );
   } catch (err) {
     baselineBlocked = true;
@@ -1076,7 +1111,7 @@ function scenarioInterruptedWrongOrder() {
   const statusResult = execFileSync(
     'node',
     [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
-    { cwd: ROOT, encoding: 'utf8' },
+    { cwd: ROOT, encoding: 'utf8', env: MUTATE_SELFTEST_CHILD_ENV },
   ).toString();
   log(statusResult);
 
@@ -1573,15 +1608,12 @@ function scenarioRebuildFailure() {
 
       log('');
       log('-- 6b. この PATH で、実プロセスとして `mutate.mjs restore` を起こす --');
-      // **親の環境を丸ごと広げない。PATH だけを渡す**（#1854 の同じ種類の残り）。
-      // `{ ...process.env, PATH }` の形だと、このセルフテストを走らせた器の環境変数が
-      // すべて子へ届く。子（`mutate.mjs restore`）が読む `process.env` の鍵は
-      // `CLAUDE_SESSION_ID` / `ALTEROID_SESSION_ID`（どちらも `?? null` で既定値つき）
-      // だけで、そこから起こす `git rev-parse` / `git status` と擬似 `pnpm` も PATH の
-      // ほかに要るものが無い——`scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()`
-      // と同じ作法である（このファイルは依存なしで動く約束なので、import せずに書く）。
+      // **親の環境を丸ごと広げない。`MUTATE_SELFTEST_CHILD_ENV` の PATH の先頭へ
+      // 擬似 pnpm のディレクトリを足すだけ**（#1854 の同じ種類の残り。理由は
+      // `MUTATE_SELFTEST_CHILD_ENV` の doc を見よ）。
       const poisonedEnv = {
-        PATH: `${fakeBinDirPath}${path.delimiter}${process.env.PATH}`,
+        ...MUTATE_SELFTEST_CHILD_ENV,
+        PATH: `${fakeBinDirPath}${path.delimiter}${MUTATE_SELFTEST_CHILD_ENV.PATH}`,
       };
       restoreResult = spawnSync(
         'node',
@@ -1604,7 +1636,7 @@ function scenarioRebuildFailure() {
         statusOut = execFileSync(
           'node',
           [path.join(ROOT, '.claude/skills/mutation-testing/mutate.mjs'), 'status'],
-          { cwd: ROOT, encoding: 'utf8' },
+          { cwd: ROOT, encoding: 'utf8', env: MUTATE_SELFTEST_CHILD_ENV },
         ).toString();
         statusExit = 0;
       } catch (err) {
@@ -2034,7 +2066,7 @@ function scenarioRestoreStatusComparison() {
   log(
     '-- 9c. 対比: 変異が当たっている最中に、外から対象ファイルを git add する（意図的な注入） --',
   );
-  execFileSync('git', ['add', '--', FIXTURE_REL], { cwd: ROOT });
+  execFileSync('git', ['add', '--', FIXTURE_REL], { cwd: ROOT, env: MUTATE_SELFTEST_CHILD_ENV });
   const statusAfterForeignAdd = gitStatusPorcelainFor(FIXTURE_REL);
   log(`git add 直後の git status: ${JSON.stringify(statusAfterForeignAdd)}`);
 
@@ -2068,7 +2100,10 @@ function scenarioRestoreStatusComparison() {
   // 片付ける: 外から加えた git add を取り消し、正しい状態で restore を
   // やり直す（rebuildAndVerify は target: null なので即 ok。べき等性の確認
   // でもある）。
-  execFileSync('git', ['restore', '--staged', '--', FIXTURE_REL], { cwd: ROOT });
+  execFileSync('git', ['restore', '--staged', '--', FIXTURE_REL], {
+    cwd: ROOT,
+    env: MUTATE_SELFTEST_CHILD_ENV,
+  });
   const statusAfterUnstage = gitStatusPorcelainFor(FIXTURE_REL);
   log('');
   log(`-- 9d. git add を取り消した。git status: ${JSON.stringify(statusAfterUnstage)} --`);

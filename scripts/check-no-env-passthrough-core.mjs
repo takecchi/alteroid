@@ -649,31 +649,14 @@ export function findMissingEnvChildProcessCalls(files) {
  *
  * ⛔ ここへ足すときは、実際にそのファイルへ `missing-env` の当たりが在る
  * ことを `findMissingEnvChildProcessCalls` で確かめてから足すこと。
+ *
+ * **2026-09-28（Issue #1971 段2）: `.claude/skills/mutation-testing/mutate-core.mjs` /
+ * `mutate-selftest.mjs` の12件は、段1（PR #1973）で「未着手」として載せた
+ * ものをここで直したので、この一覧からは外れている。** 直した内容・実測は
+ * 両ファイルの `GIT_READONLY_CHILD_ENV` / `PNPM_HARNESS_CHILD_ENV` /
+ * `MUTATE_SELFTEST_CHILD_ENV` の doc コメントと、この Issue の段2 PR 本文を見よ。
  */
-export const ALLOWLIST_MISSING_ENV = [
-  {
-    path: '.claude/skills/mutation-testing/mutate-core.mjs',
-    reason:
-      '未着手（Issue #1971 の段分け）。この呼び出しは変異試験ハーネスが' +
-      '**実リポジトリ**に対して行う `git rev-parse` / `git status --porcelain` /' +
-      '`pnpm --filter <target> build` で、テストのモック環境ではなく本番の' +
-      'ビルド・git 操作である。`gitChildEnv()` / `mutateCliChildEnv()` は' +
-      'いずれも `PATH`（と `gitChildEnv()` のみ偽の `HOME`）しか渡さない設計で、' +
-      '実際の `pnpm build` がレジストリ・キャッシュ・ストアの解決に他の鍵を' +
-      '要らないかどうかは検証していない。誤って絞ると自己検証ハーネスの' +
-      '`build` 系シナリオが壊れる —— 2026-09-28 時点でこの検証は行っていない' +
-      'ため、直さず「未着手」として残す。次に触る人は #1971 のこのコメントから' +
-      '始めること。',
-  },
-  {
-    path: '.claude/skills/mutation-testing/mutate-selftest.mjs',
-    reason:
-      '未着手（Issue #1971 の段分け）。上と同じ理由 —— 自己検証シナリオが' +
-      '実リポジトリに対して `node`（`mutate.mjs` 自身）/ `git add` / ' +
-      '`git restore --staged` / `pnpm build` を実際に起こす。安全に絞れる' +
-      '最小の env 集合が未検証のため、直さず「未着手」として残す。',
-  },
-];
+export const ALLOWLIST_MISSING_ENV = [];
 
 /**
  * 走査対象を判定する。

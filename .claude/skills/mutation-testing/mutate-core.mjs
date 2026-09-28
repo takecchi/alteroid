@@ -143,14 +143,40 @@ export function writeRepoFile(relFile, content) {
   fs.writeFileSync(absPath(relFile), content);
 }
 
+/**
+ * `gitHead()` / `gitStatusPorcelainFor()` が ROOT（実リポジトリ）へ起こす
+ * 読み取り専用の `git` 呼び出しへ渡す最小の env（Issue #1971 段2）。
+ *
+ * `scripts/git-child-env.ts` の `gitChildEnv()` と同じ考え方だが、このファイルは
+ * 「依存なし・ビルド不要」の約束（SKILL.md）を持つ `.mjs` なので `.ts` を
+ * import できない——同じ考え方を最小の形でここに直接組み立てる。
+ *
+ * **`gitChildEnv()` と違って偽の `HOME` を足さない。** `gitChildEnv()` が
+ * 偽の `HOME` を渡すのは、使い捨ての一時リポジトリで commit まで行う呼び出し
+ * （本物の `~/.gitconfig` や credential helper を断つ必要がある）向けである。
+ * ここの2箇所（`git rev-parse HEAD` / `git status --porcelain -- <file>`）は
+ * ROOT（実リポジトリ）に対する読み取り専用の問い合わせで、identity も
+ * `.gitconfig` も必要としない——実測（2026-09-28、ROOT で
+ * `env -i PATH=<PATH> git rev-parse HEAD` と
+ * `env -i PATH=<PATH> git status --porcelain -- README.md` を実行。
+ * どちらも通常時と同じ標準出力・終了コード0、stderr は0バイト）。
+ * ⟹ 渡すのは `PATH`（`git` 自身の解決）だけでよい。
+ */
+const GIT_READONLY_CHILD_ENV = { PATH: process.env.PATH ?? '' };
+
 export function gitHead() {
-  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  return execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: GIT_READONLY_CHILD_ENV,
+  }).trim();
 }
 
 export function gitStatusPorcelainFor(relFile) {
   return execFileSync('git', ['status', '--porcelain', '--', relFile], {
     cwd: ROOT,
     encoding: 'utf8',
+    env: GIT_READONLY_CHILD_ENV,
   });
 }
 
@@ -1193,6 +1219,44 @@ export function applyMutation(spec) {
   return { headBefore, md5Pre, backupPath, marker };
 }
 
+/**
+ * このハーネスが ROOT（実リポジトリ）に対して起こす `pnpm` 呼び出し
+ * （`pnpm --filter <target> build` / `pnpm test …`）へ渡す最小の env
+ * （Issue #1971 段2）。`scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()`
+ * と同じ考え方だが、このファイルは「依存なし・ビルド不要」の約束（SKILL.md）を
+ * 持つ `.mjs` なので `.ts` を import できない——最小の形でここに直接組み立てる。
+ *
+ * **なぜ `PATH` だけでは足りず `CI: 'true'` が要るか**: この repo の pnpm
+ * （v11.27.1）は既定で `verify-deps-before-run` を持ち、node_modules の状態が
+ * 期待とずれていると判断すると purge の確認を求める。`spawnSync` は既定で
+ * 子の stdin を pipe にする（TTY を与えない）ため、確認が得られず
+ * `[ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY]`（pnpm 自身が「CI を true に
+ * するか confirmModulesPurge を false にせよ」と案内する）で exit 1 になる。
+ * 実測（2026-09-28、ROOT で `env -i PATH=<PATH> pnpm --filter @alteroid/core
+ * build` と `env -i PATH=<PATH> pnpm test scripts/check-no-env-passthrough.test.ts
+ * --maxWorkers=2` の両方でこの exit 1 を再現し、`CI=true` を足すとどちらも
+ * 通常どおり成功することを確認した）。
+ *
+ * **なぜ `HOME` は要らないか**: 同じ実測で `HOME` を足さない状態
+ * （`PATH` + `CI` のみ）のまま `pnpm --filter @alteroid/core build` を
+ * 実行し、ビルド成功（`dist/index.js` 等の生成、exit 0）を確認した——pnpm の
+ * store はこの器で既に解決済みで、`HOME` を渡さなくても見つかる。
+ * `os.homedir()`（`node:os`）は `HOME` が無くても OS のパスワードデータベース
+ * へフォールバックするため（同じ実測、`env -i PATH=<PATH> node -e
+ * "console.log(require('os').homedir())"` が通常の `$HOME` と同じ値を返した）、
+ * `HOME` に依存するコード（`packages/storage-fs/src/paths.ts` /
+ * `apps/cli/src/paths.ts` の `homedir()`）を経由するテストも壊れない——
+ * `pnpm test packages/core/src` / `packages/storage-fs/src` / `apps/runner/src`
+ * （計348ファイル・7160テスト）を `PATH` + `CI=true` だけの env で実行し、
+ * 全件通過を確認した（生ログは PR 本文）。
+ *
+ * `CI=true` を足してもテストの結果は変わらない——`process.env.CI` を読んで
+ * 分岐する対象コードが無いことを確認済み（`command grep -rn
+ * 'process\.env\.CI\b'` が当たるのは、この語自体を検査するテストの合成入力
+ * 文字列1箇所だけで、実際に分岐する箇所は無い）。
+ */
+export const PNPM_HARNESS_CHILD_ENV = { PATH: process.env.PATH ?? '', CI: 'true' };
+
 /** 手順8〜9: 対象パッケージを build し、成果物を検査する。
  * spec.target が null なら「build 境界を跨がない」と明示して build/artifact を
  * 両方スキップする（この判断は spec を書く側の責任。理由をログへ残す）。
@@ -1211,6 +1275,7 @@ export function buildAndCheckArtifact(spec) {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
+    env: PNPM_HARNESS_CHILD_ENV,
   });
   log(`[8] build (--filter ${spec.target}): exit=${result.status}`);
   log('--- build 生ログ ここから ---');
@@ -1723,6 +1788,7 @@ export function runTests(extraArgs = [], maxWorkers = DEFAULT_MAX_WORKERS) {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
+    env: PNPM_HARNESS_CHILD_ENV,
   });
   const combined = (result.stdout ?? '') + (result.stderr ?? '');
   const { filesLine, testsLine } = parseAggregateLines(combined);
@@ -2388,6 +2454,7 @@ function rebuildAndVerify(marker) {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 200 * 1024 * 1024,
+    env: PNPM_HARNESS_CHILD_ENV,
   });
   log(`[後始末] build exit=${result.status}`);
   if (result.status !== 0) {
