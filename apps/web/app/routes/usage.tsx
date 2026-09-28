@@ -8,7 +8,7 @@ import {
   USAGE_LAYERS,
   USAGE_SITES,
 } from '@alteroid/core/usage';
-import { useState } from 'react';
+import { useSearchParams } from 'react-router';
 
 import { Page } from '~/components/page';
 import {
@@ -46,18 +46,81 @@ import type {
 /** 軸ごとの表示上限。**打ち切ったら必ずそう書く**（黙って切り捨てない）。 */
 const AXIS_LIMIT = 20;
 
+/**
+ * 絞り込みを載せる URL のクエリパラメタ名（issue #2050）。
+ *
+ * **`UsageQuery` の欄名（`from` / `to` / `managerId` / `layer` / `site` /
+ * `tokenId`）をそのまま使う。** `journal.tsx` の `types`（#2029）や
+ * `managers.tsx` の `status`（#2030）のようにカンマ区切りへまとめる理由が
+ * ここには無い——どれも「1つの値」で、複数値を1つのパラメタへ詰める必要が
+ * 無いので、API のクエリ名と揃えたほうが読み手には素直である。
+ */
+const FROM_PARAM = 'from';
+const TO_PARAM = 'to';
+const MANAGER_ID_PARAM = 'managerId';
+const LAYER_PARAM = 'layer';
+const SITE_PARAM = 'site';
+const TOKEN_ID_PARAM = 'tokenId';
+
+/**
+ * `LAYER_PARAM` / `SITE_PARAM` の生の値から、既知のものだけを取り出す。
+ *
+ * **知らない値は捨てて「すべて」として扱う（#2010 の線。`journal.tsx` の
+ * `parseSelectedTypes` / `managers.tsx` の `parseSelectedStatuses` と同じ
+ * 判断）。** URL 経由の値は人間が手で書き換えうるので `UsageLayer` /
+ * `UsageSite` として型で縛れない。ここで弾いておかないと、不正な値が
+ * そのまま `GET /usage` のクエリへ渡ってしまう。
+ */
+function parseUsageLayer(raw: string | null): UsageLayer | '' {
+  if (raw === null) return '';
+  return (USAGE_LAYERS as readonly string[]).includes(raw) ? (raw as UsageLayer) : '';
+}
+
+function parseUsageSite(raw: string | null): UsageSite | '' {
+  if (raw === null) return '';
+  return (USAGE_SITES as readonly string[]).includes(raw) ? (raw as UsageSite) : '';
+}
+
 export default function Usage() {
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [managerId, setManagerId] = useState('');
-  const [layer, setLayer] = useState<UsageLayer | ''>('');
-  const [site, setSite] = useState<UsageSite | ''>('');
+  /*
+   * **絞り込みの正本は URL である（issue #2050）。** `journal.tsx`（#2029）・
+   * `managers.tsx`（#2030）と同じ理由——画面の state に閉じ込めると、
+   * 絞り込んだ状態を人へ渡せない（開き直すと消える・戻るで戻れない・
+   * リンクで共有できない）。
+   *
+   * **debounce はしない。** 元の実装（`useState`）にも無かった——入力欄を
+   * 変えるたびに `query` が変わり、そのまま `useUsage` へ渡っていた。
+   * URL へ載せ替えても同じ頻度で書き換えるだけで、表示や問い合わせの
+   * タイミングは変えない。
+   *
+   * **`replace: true` にする。** 検索語・チップの絞り込みと同じ判断——
+   * 打鍵・選択のたびに履歴が積まれると「戻る」が使い物にならなくなる。
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const from = searchParams.get(FROM_PARAM) ?? '';
+  const to = searchParams.get(TO_PARAM) ?? '';
+  const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
+  const layer = parseUsageLayer(searchParams.get(LAYER_PARAM));
+  const site = parseUsageSite(searchParams.get(SITE_PARAM));
   // **トークンは `Select` にしない。** 選択肢の集合が閉じていない（プールの中身は
   // 器ごとに違う）ので、`USAGE_LAYERS` のような一覧を core から持ってこられない。
   // ここで `GET /tokens` を引いて選択肢にすることもできるが、それは**この画面が
   // プールの状態に依存する**という別の結び付きを作る（プールが読めないと絞り込みも
   // 消える）。id は `alteroid token list` と `/tokens` から取れるので素の入力にする。
-  const [tokenId, setTokenId] = useState('');
+  const tokenId = searchParams.get(TOKEN_ID_PARAM) ?? '';
+
+  /** 1つの絞り込みを変える。空文字なら URL からそのパラメタを消す。 */
+  function setFilter(param: string, value: string) {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        if (value === '') next.delete(param);
+        else next.set(param, value);
+        return next;
+      },
+      { replace: true },
+    );
+  }
 
   const query: UsageQuery = {
     ...(from === '' ? {} : { from }),
@@ -102,7 +165,7 @@ export default function Usage() {
               type="date"
               className="min-w-0"
               value={from}
-              onChange={(event) => setFrom(event.target.value)}
+              onChange={(event) => setFilter(FROM_PARAM, event.target.value)}
             />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
@@ -111,7 +174,7 @@ export default function Usage() {
               type="date"
               className="min-w-0"
               value={to}
-              onChange={(event) => setTo(event.target.value)}
+              onChange={(event) => setFilter(TO_PARAM, event.target.value)}
             />
           </label>
           <label className="flex flex-col gap-1 text-xs text-muted">
@@ -119,7 +182,7 @@ export default function Usage() {
             <Input
               placeholder="manager id"
               value={managerId}
-              onChange={(event) => setManagerId(event.target.value)}
+              onChange={(event) => setFilter(MANAGER_ID_PARAM, event.target.value)}
             />
           </label>
           {/*
@@ -130,7 +193,7 @@ export default function Usage() {
             layer（誰が）
             <Select
               value={layer}
-              onChange={(event) => setLayer(event.target.value as UsageLayer | '')}
+              onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}
             >
               <option value="">すべて</option>
               {USAGE_LAYERS.map((value) => (
@@ -144,7 +207,7 @@ export default function Usage() {
             site（どこで）
             <Select
               value={site}
-              onChange={(event) => setSite(event.target.value as UsageSite | '')}
+              onChange={(event) => setFilter(SITE_PARAM, event.target.value)}
             >
               <option value="">すべて</option>
               {USAGE_SITES.map((value) => (
@@ -159,7 +222,7 @@ export default function Usage() {
             <Input
               placeholder="token id"
               value={tokenId}
-              onChange={(event) => setTokenId(event.target.value)}
+              onChange={(event) => setFilter(TOKEN_ID_PARAM, event.target.value)}
             />
           </label>
         </div>
