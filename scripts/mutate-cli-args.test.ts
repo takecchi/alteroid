@@ -26,7 +26,11 @@ import {
   CLI_COMMAND_ARGS,
   classifyCliArgs,
   cliUsageText,
+  // @ts-expect-error -- 素の .mjs（型宣言を持たない変異試験ハーネス）を読む
 } from '../.claude/skills/mutation-testing/mutate-core.mjs';
+
+/** `CLI_COMMAND_ARGS` の1件の形（`.mjs` は型を持たないので、ここで読む分だけ書く）。 */
+type CommandArgs = { bool: string[]; value: string[] };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,7 +98,7 @@ describe('classifyCliArgs（#2106）', () => {
 
   it('使い方の本文は CLI_COMMAND_ARGS の全サブコマンドと全引数を名指しする', () => {
     const text = cliUsageText();
-    for (const [name, spec] of Object.entries(CLI_COMMAND_ARGS)) {
+    for (const [name, spec] of Object.entries(CLI_COMMAND_ARGS as Record<string, CommandArgs>)) {
       expect(text).toContain(`  ${name}`);
       for (const flag of [...spec.bool, ...spec.value]) expect(text).toContain(flag);
     }
