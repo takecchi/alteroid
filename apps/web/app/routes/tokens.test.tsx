@@ -765,13 +765,83 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
 });
 
 /**
- * issue #2095。回す契機・冷却の設定（`GET /tokens` の `settings`）が壊れて
- * 読めないとき、デーモンは `settings` を省いて `settingsUnreadable.reason` を
- * 返す。**この画面は落ちずに理由を出す最小の追従だけを持つ**——きちんとした
- * 表示は別 Issue（領域 E）の範囲であって、ここでは作り込まない。
+ * **状態を持つ** `/tokens` の stub（設定が読めない状態からの直し方を検証するため）。
+ *
+ * `stubPolicyScreen` と同じ形——`PUT /tokens/policy` を受けたら、以降の
+ * `GET /tokens` がその値を `settings` として返すようにする（成功したら
+ * `settingsUnreadable` の代わりに読める設定へ切り替わることを見るため）。
+ * 保存に**失敗**させたいときは `failNextUpdate` で 500 を挟む——読めない現在値の
+ * まま据え置かれることを見る。
  */
-describe('/tokens 画面 — 回転の設定が読めない（issue #2095）', () => {
-  it('settings の代わりに settingsUnreadable が来ても落ちず、理由を出す。一覧は道連れにならない', async () => {
+function stubUnreadableScreen(
+  options: { reason: string; tokens?: unknown[] } = { reason: '理由' },
+) {
+  const { reason, tokens = [] } = options;
+  let readable: { rotateOn: string; cooldownMs: number; updatedAt: string } | undefined;
+  const puts: { rotateOn?: string; cooldownMs?: number }[] = [];
+  let failNext: { status: number; error: string } | undefined;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : null;
+    const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+    const method = request?.method ?? init?.method ?? 'GET';
+
+    if (url.includes('/journal')) return json({ entries: [] });
+
+    if (url.includes('/tokens/policy')) {
+      if (method !== 'PUT') return Promise.reject(new TypeError(`unexpected method: ${method}`));
+      const body = (request !== null ? await request.json() : JSON.parse(String(init?.body))) as {
+        rotateOn?: string;
+        cooldownMs?: number;
+      };
+      puts.push(body);
+      if (failNext !== undefined) {
+        const { status, error } = failNext;
+        return json({ error }, status);
+      }
+      // **両方揃ったときだけ通る**（issue #2053 / PR #2075。読めない現在値は
+      // 片方だけの patch では埋められない）——テストの stub でも同じ形にする。
+      if (body.rotateOn === undefined || body.cooldownMs === undefined) {
+        return json(
+          { error: '設定の入力の形が不正: 読めない現在値は両方揃った patch でしか埋められない' },
+          500,
+        );
+      }
+      readable = {
+        rotateOn: body.rotateOn,
+        cooldownMs: body.cooldownMs,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+      return json(readable);
+    }
+
+    if (url.includes('/tokens')) {
+      return readable === undefined
+        ? json({ tokens, settingsUnreadable: { reason } })
+        : json({ tokens, settings: readable });
+    }
+
+    return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+  }) as typeof fetch;
+
+  return {
+    puts,
+    /** 次の `PUT /tokens/policy` をサーバの失敗として断らせる。 */
+    failNextUpdate(status: number, error: string) {
+      failNext = { status, error };
+    },
+  };
+}
+
+/**
+ * issue #2096（#2095 の表示側）。回す契機・冷却の設定（`GET /tokens` の
+ * `settings`）が壊れて読めないとき、デーモンは `settings` を省いて
+ * `settingsUnreadable.reason` を返す。**この画面は理由を出したうえで、両方
+ * 選ばせて直す導線を持つ**（片方だけの保存は `PUT /tokens/policy` 側が
+ * 500 で断るので、画面側も両方揃うまで保存を押せなくする）。
+ */
+describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', () => {
+  it('reason と「消えたのではない」旨が出て、一覧は道連れにならない。既定値は出ない', async () => {
     const REASON = 'rotateOn が enum の外（テスト用）';
     stubScreen({
       tokens: [
@@ -789,8 +859,106 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2095）', (
 
     // 一覧（読めている分）は出ている——道連れになっていない。
     expect(screen.getByText('ready-token')).toBeTruthy();
-    // 理由が出る。既定値（`free_exhausted` 等）へすり替わっていない。
-    expect(await screen.findByText(new RegExp(`回転の設定は読めない.*${REASON}`))).toBeTruthy();
-    expect(screen.queryByLabelText('回す契機を変える')).toBeNull();
+    // 理由が出て、「消えたのではなく、読めない形で入っている」ことが伝わる。
+    expect(
+      await screen.findByText(new RegExp(`回転の設定は読めない（消えたのではなく.*${REASON}`)),
+    ).toBeTruthy();
+    // 既定値（`free_exhausted` 等）へすり替わっていない——未選択から始まる。
+    expect(screen.getByLabelText('回す契機を選ぶ')).toHaveProperty('value', '');
+    expect(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）')).toHaveProperty('value', '');
+    // 選ぶまで保存は押せない。
+    expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
+  });
+
+  it('settingsUnreadable も reason も無いとき、理由不明のまま落ちない', async () => {
+    // `stubScreen` は `settings` を既定値で埋めてしまう（省略できない）ので、
+    // ここだけ生の `stubFetch` で「両方とも無い」応答を作る——実際にはこの
+    // 形は起こらないはずだが、`data.settingsUnreadable?.reason` の `??` の
+    // 倒れ先が実行時にも落ちないことを確かめる。
+    stubFetch((url) => {
+      if (url.includes('/tokens')) return json({ tokens: [] });
+      if (url.includes('/journal')) return json({ entries: [] });
+      return undefined;
+    });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    expect(await screen.findByText(/回転の設定は読めない.*理由不明/)).toBeTruthy();
+  });
+
+  it('片方しか選んでいないと保存が押せない。両方選んで初めて押せる', async () => {
+    stubUnreadableScreen({ reason: '理由' });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
+      target: { value: 'off' },
+    });
+    expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', true);
+
+    fireEvent.change(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）'), {
+      target: { value: '3600000' },
+    });
+    expect(screen.getByRole('button', { name: '保存' })).toHaveProperty('disabled', false);
+  });
+
+  it('両方選んで保存すると PUT /tokens/policy に両方の欄が送られ、成功後は一覧が取り直されて通常の設定カードに戻る', async () => {
+    const { puts } = stubUnreadableScreen({ reason: '理由' });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
+      target: { value: 'overage_exhausted' },
+    });
+    fireEvent.change(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）'), {
+      target: { value: '3600000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    // 通常の SettingsCard（読み取り表示 + 「回す契機を変える」欄）に戻る。
+    expect(await screen.findByLabelText('回す契機を変える')).toBeTruthy();
+    expect(screen.queryByLabelText('回す契機を選ぶ')).toBeNull();
+    expect(puts).toEqual([{ rotateOn: 'overage_exhausted', cooldownMs: 3_600_000 }]);
+  });
+
+  it('保存に失敗したら ErrorNote で理由を出し、下書きは残る', async () => {
+    const { failNextUpdate } = stubUnreadableScreen({ reason: '理由' });
+    failNextUpdate(500, '読めない現在値は両方揃った patch でしか埋められない');
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
+      target: { value: 'off' },
+    });
+    fireEvent.change(screen.getByLabelText('冷却の既定を選ぶ（ミリ秒）'), {
+      target: { value: '3600000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(
+      await screen.findByText(/読めない現在値は両方揃った patch でしか埋められない/),
+    ).toBeTruthy();
+    // 通常の設定カードには切り替わっていない（読めないまま）。
+    expect(screen.getByLabelText('回す契機を選ぶ')).toHaveProperty('value', 'off');
   });
 });

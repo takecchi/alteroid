@@ -168,20 +168,13 @@ function PoolAndSettings() {
         <>
           <PoolCard tokens={data.tokens} />
           {data.settings === undefined ? (
-            // **最小の追従（issue #2095）。** 回す契機・冷却の設定が壊れていて
-            // 読めないとき、デーモンは `settings` を省いて
-            // `settingsUnreadable.reason` を返す——既定値では埋めない。
-            // きちんとした表示は別 Issue（領域 E）の範囲なので、ここでは
-            // 落ちずに理由を出すだけにとどめる。
-            <Card>
-              <CardHeader
-                title="回転の設定"
-                subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
-              />
-              <div className="px-4 py-3 text-sm text-muted">
-                回転の設定は読めない: {data.settingsUnreadable?.reason ?? '理由不明'}
-              </div>
-            </Card>
+            // **issue #2096（#2095 の表示側）。** 回す契機・冷却の設定が壊れて
+            // いて読めないとき、デーモンは `settings` を省いて
+            // `settingsUnreadable.reason` を返す——既定値では埋めない
+            // （`off` にしてあった回転を既定として見せることになる）。
+            // ここでは理由をそのまま出し、両方を選ばせて直す導線
+            // （`UnreadableSettingsCard`）を出す。
+            <UnreadableSettingsCard reason={data.settingsUnreadable?.reason ?? '理由不明'} />
           ) : (
             <SettingsCard settings={data.settings} />
           )}
@@ -667,6 +660,126 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
             onClick={() => void save()}
           >
             {dirty ? '保存' : '変更なし'}
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * 回す契機・冷却の設定が壊れていて読めないときの直し方（issue #2096。#2095 の
+ * 表示側）。
+ *
+ * **`reason` はそのまま出す。** 「消えたのではなく、読めない形で入っている」と
+ * 伝える —— 空欄と壊れた値を混同すると、人間は「設定したことが無い」と誤読する。
+ *
+ * **既定値では埋めない。** 読めない現在値の代わりに `free_exhausted` 等の既定を
+ * 選ばせておくと、実際は `off` にしてあった回転を人間が気づかないまま既定へ
+ * 戻すことになる（`AGENTS.md` の地雷「取れない軸に 0 の行を作る」と同じ形）。
+ * だから2つの入力欄はどちらも**未選択から始める**——選ぶまで保存は押せない。
+ *
+ * **両方揃うまで保存できない。** `PUT /tokens/policy` は、現在値が読めないときは
+ * `rotateOn` と `cooldownMs` の両方を送ったときだけ上書きが通る（片方だけだと
+ * 読めない現在値を埋められず 500 になる。issue #2053 / PR #2075、
+ * `packages/core/src/token-pool-service.ts` の `setSettings` の doc）。
+ *
+ * **保存に成功したら、この下書きを持ち続けない。** `useSetTokenPolicy` が
+ * `GET /tokens` を取り直す（`mutations.ts`）ので、応答が読める形へ戻れば
+ * `PoolAndSettings` は自動でこのカードではなく通常の {@link SettingsCard} を
+ * 出す——このコンポーネントの寿命はそこで終わる。
+ *
+ * **`ROTATE_ON_OPTIONS` / `describeRotateOn` は {@link SettingsCard} と共有する
+ * （書き写さない）。** 選択肢の一覧が増減したとき、ここだけ追随し損ねる形を
+ * 作らないため。
+ */
+function UnreadableSettingsCard({ reason }: { reason: string }) {
+  const setPolicy = useSetTokenPolicy();
+
+  /** 未選択は `undefined`（`SettingsCard` の下書きと違い、埋める元の現在値が無い）。 */
+  const [rotateOnDraft, setRotateOnDraft] = useState<TokenRotationSettings['rotateOn'] | undefined>(
+    undefined,
+  );
+  /** 未入力は空文字。**既定値を入れない**——空のまま保存を押せないだけにする。 */
+  const [cooldownMsText, setCooldownMsText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  const canSubmit = rotateOnDraft !== undefined && cooldownMsText.trim().length > 0;
+
+  async function save() {
+    if (!canSubmit) return;
+    setBusy(true);
+    setFailure(undefined);
+    try {
+      // **`Number(cooldownMsText)` を先回りして弾かない**（`SettingsCard.save`
+      // と同じ判断。Issue #1123 受け入れ基準3）。サーバの 400 をそのまま見せる。
+      await setPolicy({ rotateOn: rotateOnDraft, cooldownMs: Number(cooldownMsText) });
+      // 成功後は `GET /tokens` が読める形を返すはずなので、下書きは特に戻さない
+      // ——このコンポーネント自体が `SettingsCard` に置き換わって消える。
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="回転の設定"
+        subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
+      />
+      <div className="px-4 py-3 text-sm text-muted">
+        回転の設定は読めない（消えたのではなく、読めない形で入っている）: {reason}
+      </div>
+      <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
+        <p className="text-xs text-muted">
+          直すには、回す契機と冷却の既定の両方を選び直して保存する（片方だけでは保存できない ——
+          読めない現在値は、両方揃った入力でしか上書きできない）。
+        </p>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">回す契機を選ぶ</span>
+          <Select
+            value={rotateOnDraft ?? ''}
+            onChange={(event) =>
+              setRotateOnDraft(
+                event.target.value === ''
+                  ? undefined
+                  : (event.target.value as TokenRotationSettings['rotateOn']),
+              )
+            }
+          >
+            <option value="" disabled>
+              選択してください
+            </option>
+            {ROTATE_ON_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {describeRotateOn(option)}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">冷却の既定を選ぶ（ミリ秒）</span>
+          <Input
+            type="number"
+            value={cooldownMsText}
+            onChange={(event) => setCooldownMsText(event.target.value)}
+          />
+        </label>
+
+        <ErrorNote error={failure} />
+
+        <div>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy}
+            disabled={!canSubmit}
+            onClick={() => void save()}
+          >
+            保存
           </Button>
         </div>
       </div>
