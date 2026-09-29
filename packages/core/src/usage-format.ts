@@ -379,6 +379,43 @@ export function usageDate(at: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * 使用量の日付（`YYYY-MM-DD`）の**形**。`usageDateSchema`（`usage.ts`）の正規表現の正本
+ * （Issue #2156）。
+ *
+ * **zod を持ち込まない形でここに置く。** このファイルはブラウザ向けの軽い口
+ * （`@alteroid/core/usage`）から出ている。画面（`apps/web`）は `@alteroid/core`（バレル）を
+ * 値として import できないので、正規表現と {@link isRealUsageDate} をここから読めば、
+ * 画面が書き写しを持たずに済む（寄せる作業は領域 E が持つ。#2156 の申し送り）。
+ */
+export const USAGE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 使用量の日付として受け取ってよいか（Issue #2156）。**形（{@link USAGE_DATE_PATTERN}）に
+ * 合い、かつ暦の上に実在する日**のときだけ真。`2026-02-30` / `2026-13-01` / `2026-00-00` は偽。
+ *
+ * ## なぜ実在まで見るか
+ *
+ * 集計（fs / pg の `aggregate`）は日付を文字列として大小で比べるだけなので、実在しない日を
+ * 渡しても例外にならない。黙って「その日までの範囲」として扱われる（`2026-02-30` は
+ * `2026-02-28` と `2026-03-01` のあいだの文字列として比べられる）。画面は `type="date"` の
+ * 入力欄が実在しない日を空欄に落とすので、素通しすると「入力欄は空なのに絞り込みが効いている」
+ * になる（#2133）。⟹ 画面とデーモンの両方で、同じ関数で弾く。
+ *
+ * **zod も `Date` の時間帯も持ち込まない。** 年・月・日を数として読み、月の日数（閏年を含む
+ * グレゴリオ暦）と突き合わせる。`new Date(…)` の解釈（時間帯・年の範囲）に判定を預けない。
+ */
+export function isRealUsageDate(value: string): boolean {
+  if (!USAGE_DATE_PATTERN.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
+  return day <= daysInMonth;
+}
+
 // ---------------------------------------------------------------------------
 // アカウント全体の残り（claude.ai 側の値）
 // ---------------------------------------------------------------------------

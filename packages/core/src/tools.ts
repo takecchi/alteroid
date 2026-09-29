@@ -238,6 +238,7 @@ import {
   describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,
+  isRealUsageDate,
   summarizeUsage,
   usageLayerSchema,
   usageSiteSchema,
@@ -6818,6 +6819,21 @@ export function createCloneTools(context: ToolContext) {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const tokenIdError = describeStringLengthViolation('tokenId', tokenId, { min: 1 });
         if (tokenIdError !== null) return text(tokenIdError);
+        // **issue #2156。** `from` / `to` は、以前は形すら確かめずに店へ渡していた。店は日付を
+        // 文字列の大小で比べるだけなので、`2026-02-30` や `yesterday` を渡しても例外にならず、
+        // 黙って「その文字列までの範囲」として絞った。`GET /usage`（`usageDateSchema`）と同じ
+        // 判定（`isRealUsageDate`）で断る。
+        for (const [name, value] of [
+          ['from', from],
+          ['to', to],
+        ] as const) {
+          if (value !== undefined && !isRealUsageDate(value)) {
+            return text(
+              `\`${name}\` は、暦の上に実在する日付（YYYY-MM-DD）で書く（受け取った値: ${JSON.stringify(value)}）。` +
+                '形の合わない値や、2026-02-30 のような実在しない日では絞り込めない。',
+            );
+          }
+        }
         const aggregate = await stores.usage.aggregate({
           ...(from === undefined ? {} : { from }),
           ...(to === undefined ? {} : { to }),

@@ -2,11 +2,13 @@ import { z } from 'zod';
 
 // 再輸出（下）とは別に、この中でも使うので取り込む。
 import {
+  USAGE_DATE_PATTERN,
   USAGE_ESTIMATE_NOTICE,
   USAGE_LAYERS,
   USAGE_SITES,
   USAGE_UNREADABLE_FIELDS,
   ZERO_USAGE,
+  isRealUsageDate,
 } from './usage-format.js';
 import type { UsageUnreadableCounts, UsageUnreadableField } from './usage-format.js';
 // `readSessionUsage` の締め切りに使う。**`usage-probe.ts` はこのファイルを
@@ -71,8 +73,10 @@ import { settleWithin } from './usage-probe.js';
  */
 export {
   ACCOUNT_USAGE_TITLE,
+  USAGE_DATE_PATTERN,
   USAGE_ESTIMATE_NOTICE,
   USAGE_UNREADABLE_FIELDS,
+  isRealUsageDate,
   ZERO_USAGE,
   addUnreadableCounts,
   describeAccountUsage,
@@ -92,8 +96,22 @@ export {
 
 const isoDateTime = z.string().datetime({ offset: true });
 
-/** 日付。ローカル時刻の `YYYY-MM-DD`（日報と同じ区切りに合わせる）。 */
-export const usageDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD で書く');
+/**
+ * 日付。ローカル時刻の `YYYY-MM-DD`（日報と同じ区切りに合わせる）。
+ *
+ * **形に加えて、暦の上に実在する日だけを通す**（Issue #2156。以前は形だけを見ていて、
+ * `2026-02-30` も通った）。判定は `usage-format.ts` の `isRealUsageDate`（zod を持ち込まない
+ * 関数。ブラウザ向けの軽い口からも出ている）に預ける。`GET /usage` の `from` / `to` は、
+ * これで実在しない日を 400 で断る。
+ *
+ * **台帳の行（`usageRowSchema` / `usageTurnRowSchema`）も同じ schema を通る。** 行の日付は
+ * `usageDate(at)` が時計から作るので、実在しない日は入らない（書く側は `clone.ts` と
+ * `manager.ts` の2箇所だけ。`usageDate` の doc）。
+ */
+export const usageDateSchema = z
+  .string()
+  .regex(USAGE_DATE_PATTERN, 'YYYY-MM-DD で書く')
+  .refine(isRealUsageDate, '実在する日付（YYYY-MM-DD）で書く');
 
 /**
  * 欄ごとの「読めなかった区切りの数」（Issue #2086）。**全欄 `optional`。**

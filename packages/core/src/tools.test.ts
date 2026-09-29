@@ -12602,6 +12602,35 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('usage_read'));
   });
 
+  // Issue #2156。以前は from / to を形すら確かめずに店へ渡し、黙ってその文字列で絞っていた。
+  // `GET /usage` と同じ判定（`isRealUsageDate`）で断る。
+  for (const [name, value] of [
+    ['from', '2026-02-30'],
+    ['to', '2026-13-01'],
+    ['from', 'yesterday'],
+    ['to', '2026-8-1'],
+  ] as const) {
+    it(`${name}=${value} は、実在する日付で書くよう断り、集計しない`, async () => {
+      const h = harness();
+      let aggregated = false;
+      const aggregate = h.stores.usage.aggregate.bind(h.stores.usage);
+      h.stores.usage.aggregate = async (query) => {
+        aggregated = true;
+        return aggregate(query);
+      };
+      const reply = await h.call('usage_read', { [name]: value });
+      expect(reply).toContain(`\`${name}\` は、暦の上に実在する日付（YYYY-MM-DD）で書く`);
+      expect(reply).toContain(JSON.stringify(value));
+      expect(aggregated).toBe(false);
+    });
+  }
+
+  it('実在する日（閏年の 2/29）は断らずに集計する', async () => {
+    const h = harness();
+    const reply = await h.call('usage_read', { from: '2024-02-29', to: '2026-08-31' });
+    expect(reply).not.toContain('実在する日付（YYYY-MM-DD）で書く');
+  });
+
   it('合計とモデル別を返し、但し書きを必ず添える', async () => {
     const h = harness();
     await spent(h);

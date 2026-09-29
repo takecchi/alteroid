@@ -6,10 +6,53 @@ import {
   describeUnrecordedManagers,
   describeWebSearchRequests,
   findUnrecordedManagers,
+  isRealUsageDate,
+  USAGE_DATE_PATTERN,
   ZERO_USAGE,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
+import { usageDateSchema } from './usage.js';
 import { toAccountUsage, type AccountUsageState } from './usage-snapshot.js';
+
+/**
+ * 使用量の日付の判定（Issue #2156）。zod を持ち込まない `isRealUsageDate` と、zod の
+ * `usageDateSchema` が同じ判定を返すことも測る（schema は判定をこの関数へ預けている）。
+ */
+describe('isRealUsageDate / usageDateSchema — 暦の上に実在する日だけを通す（Issue #2156）', () => {
+  const cases: ReadonlyArray<[string, boolean]> = [
+    ['2026-08-01', true],
+    ['2026-02-28', true],
+    ['2024-02-29', true], // 4 で割り切れる閏年
+    ['2000-02-29', true], // 400 で割り切れる閏年
+    ['1900-02-29', false], // 100 で割り切れて 400 で割り切れない平年
+    ['2025-02-29', false],
+    ['2026-02-30', false],
+    ['2026-04-31', false],
+    ['2026-12-31', true],
+    ['2026-13-01', false],
+    ['2026-00-00', false],
+    ['2026-01-00', false],
+    ['0001-01-01', true],
+    ['9999-12-31', true],
+    ['', false],
+    ['not-a-date', false],
+    ['2026-8-1', false],
+    ['2026/08/01', false],
+    ['2026-08-01T00:00:00.000Z', false],
+    [' 2026-08-01', false],
+    ['2026-08-01\n', false],
+    ['20260801', false],
+  ];
+  it.each(cases)('%s → %s', (value, expected) => {
+    expect(isRealUsageDate(value)).toBe(expected);
+    expect(usageDateSchema.safeParse(value).success).toBe(expected);
+  });
+
+  it('形の正規表現は、実在は見ない（実在の検査は isRealUsageDate が持つ）', () => {
+    expect(USAGE_DATE_PATTERN.test('2026-02-30')).toBe(true);
+    expect(USAGE_DATE_PATTERN.test('2026-8-1')).toBe(false);
+  });
+});
 
 const AT = '2026-08-14T10:00:00.000Z';
 
