@@ -23,6 +23,7 @@ import {
 } from '~/hooks/queries';
 import { useJournalFeed } from '~/hooks/journal-feed';
 import { formatDateTime, formatRelative } from '~/lib/format';
+import { journalEntryLinks } from '~/lib/journal-links';
 
 import { ManagerStatusBadge } from './managers';
 // **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
@@ -343,6 +344,22 @@ export default function Dashboard() {
                   <span className="min-w-0 flex-1 truncate text-muted">
                     {summarizeJournalEntry(entry)}
                   </span>
+                  {/*
+                    **行が指している実体の詳細へつなぐ（issue #2071）。** `/journal` の
+                    開いた行（#2064）と同じ `journalEntryLinks` を使う。この行は開閉
+                    しない1行なので、短い名前だけを右端に置き、全文は `title` に入れる。
+                  */}
+                  {journalEntryLinks(entry).map((link) => (
+                    <Link
+                      key={link.to}
+                      to={link.to}
+                      title={link.label}
+                      aria-label={link.label}
+                      className="shrink-0 text-[11px] text-accent hover:underline"
+                    >
+                      {link.short} →
+                    </Link>
+                  ))}
                 </li>
               ))}
             </ul>

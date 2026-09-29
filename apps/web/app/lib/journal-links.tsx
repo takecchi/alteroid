@@ -6,6 +6,12 @@ import type { JournalEntry } from '~/lib/types';
 export interface JournalLink {
   to: string;
   label: string;
+  /**
+   * 1行に収めるための短い名前（issue #2071）。ダッシュボードの「いま届いている
+   * 出来事」は開閉しない1行なので、id を含む `label` を置くと要旨を押し出す。
+   * そちらは `short` を出し、`label` を `title` に入れる。
+   */
+  short: string;
 }
 
 /**
@@ -34,10 +40,18 @@ export function journalEntryLinks(entry: JournalEntry): JournalLink[] {
   const links: JournalLink[] = [];
   const managerId = (entry as { managerId?: unknown }).managerId;
   if (typeof managerId === 'string' && managerId.startsWith('mgr-')) {
-    links.push({ to: `/managers/${managerId}`, label: `委譲 ${managerId} の詳細` });
+    links.push({
+      to: `/managers/${managerId}`,
+      label: `委譲 ${managerId} の詳細`,
+      short: '委譲',
+    });
   }
   if (entry.type === 'memory_update') {
-    links.push({ to: `/memory/${entry.slug}`, label: `記憶 ${entry.slug}（いまの版）` });
+    links.push({
+      to: `/memory/${entry.slug}`,
+      label: `記憶 ${entry.slug}（いまの版）`,
+      short: '記憶',
+    });
   }
   return links;
 }

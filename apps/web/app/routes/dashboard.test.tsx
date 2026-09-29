@@ -380,6 +380,47 @@ describe('日誌は AuthedShell の購読から受け取る', () => {
     expect(await screen.findByText(summarizeJournalEntry(RECENT))).toBeTruthy();
   });
 
+  /**
+   * **行が指している実体の詳細へつなぐ（issue #2071）。** マネージャー発の
+   * `escalation` は委譲へ、`memory_update` は記憶へ。つなぐ先の無い `decision`
+   * （`RECENT`）の行にはリンクを出さない。どれをつなぐかの規則そのものは
+   * `lib/journal-links.test.tsx` が持つ。
+   */
+  it('recent の行から委譲の詳細・記憶へ飛べる（つなぐ先の無い行には出さない）', async () => {
+    const escalation: JournalEntry = {
+      type: 'escalation',
+      id: 'recent-escalation',
+      at: '2026-08-14T09:01:00.000Z',
+      question: '進めてよいか',
+      approvalId: 'a-1',
+      managerId: 'mgr-42',
+    };
+    const memory: JournalEntry = {
+      type: 'memory_update',
+      id: 'recent-memory',
+      at: '2026-08-14T09:02:00.000Z',
+      slug: 'values',
+      summary: '価値観を足した',
+      cause: 'human',
+    };
+    renderDashboard(USAGE, {
+      status: 'live',
+      recent: [memory, escalation, RECENT],
+      receivedCount: 3,
+    });
+
+    const decisionRow = (await screen.findByText(summarizeJournalEntry(RECENT))).closest('li');
+    expect(decisionRow).not.toBeNull();
+    expect(decisionRow!.querySelector('a')).toBeNull();
+
+    const toManager = screen.getByRole('link', { name: '委譲 mgr-42 の詳細' });
+    expect(toManager.getAttribute('href')).toBe('/managers/mgr-42');
+    expect(toManager.textContent).toBe('委譲 →');
+    const toMemory = screen.getByRole('link', { name: '記憶 values（いまの版）' });
+    expect(toMemory.getAttribute('href')).toBe('/memory/values');
+    expect(toMemory.textContent).toBe('記憶 →');
+  });
+
   it('自分では SSE を張らない（購読は AuthedShell の1本だけ）', async () => {
     const stub = renderDashboard(USAGE, {
       status: 'live',
