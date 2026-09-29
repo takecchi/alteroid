@@ -2075,6 +2075,13 @@ const SCRIPT_RUN_RE = new RegExp(
 );
 
 /**
+ * 文字列を組み立てて走らせうる形（#2130 の線の 4）。コマンド置換（`$(` / バッククォート）と
+ * `eval`。本文を消した後の写しにこれが在れば、本文を消さない。置換の中身は静的には読めない
+ * ので、在るだけで倒す（誤検知の向き）。
+ */
+const STRING_EXEC_RE = /\$\(|`|(?:^|[\s;&|()])eval\b/;
+
+/**
  * 待つ形の判定（`gh-run-watch-background` / `tail-f` / `until-sleep` / `while-sleep`）に
  * かける写しを作る（#2130）。**本文を実行しないと分かっているヒアドキュメントの本文だけ**を、
  * 改行を残して空白へ潰す。
@@ -2094,13 +2101,18 @@ const SCRIPT_RUN_RE = new RegExp(
  * 1. 読み手が `cat` / `tee`（`DATA_HEREDOC_READER_RE`）
  * 2. 開始の行（`<<DELIM` を含む行）に `|` が無い（`cat <<EOF | bash` は本文を実行する）
  * 3. 本文を消した後の写しに、書いたファイルを走らせうる形（`SCRIPT_RUN_RE`）が無い
+ * 4. 本文を消した後の写しに、コマンド置換（`$(` / バッククォート）と `eval` が無い
+ *    （`STRING_EXEC_RE`）。`bash -c "$(cat run.sh)"` / `eval "$(cat run.sh)"` のように、
+ *    書いたファイルの中身を文字列にして走らせる形は、3 の語の形では拾えない。置換の中身は
+ *    静的には読めないので、置換が在るだけで本文を消さない側に倒す
  *
  * `bash <<EOF` / `ssh host <<EOF` / `docker exec -i c sh <<EOF` / `python - <<EOF` のような、
  * 読み手が `cat` / `tee` でないものは、本文をそのまま見る。
  *
  * ⚠️ **残る限界**: 別の呼び出しで書いたファイルを後で走らせる形は、もともと見えない
- * （スクリプトファイル経由は対象外）。`bash -c "$(cat run.sh)"` のように、書いた
- * ファイルをコマンド置換で走らせる形は 3 で拾えない。
+ * （スクリプトファイル経由は対象外）。**ガードは文字列しか見ないので、ファイルの中身や
+ * 置換の結果を読んで判定することはできない**（それには実行が要る）。塞げるのは「同じ呼び出しの
+ * 中で書いた本文を、消してよいか」の判定までで、4 がその線である。
  */
 export function stripDataHeredocsForWaitForms(command: string): string {
   const spans = findHeredocs(command).filter((span) => {
@@ -2119,7 +2131,7 @@ export function stripDataHeredocsForWaitForms(command: string): string {
     cursor = span.bodyEnd;
   }
   out += command.slice(cursor);
-  if (SCRIPT_RUN_RE.test(out)) return command;
+  if (SCRIPT_RUN_RE.test(out) || STRING_EXEC_RE.test(out)) return command;
   return out;
 }
 

@@ -107,6 +107,33 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
       `cat > f <<'EOF'\nx\nEOF\n${W} 1 &`,
       'gh-run-watch-background',
     ],
+    // 線の 4（`STRING_EXEC_RE`）。書いた本文を、文字列にして走らせる形。最初の版は
+    // この4形をすり抜けていた（mgr-712ad619 のレビュー、2026-09-29T07:2xZ）。
+    [
+      '書いたスクリプトを bash -c "$(cat …)" で走らせる',
+      'cat > run.sh <<\'EOF\'\nwhile true; do sleep 1; done\nEOF\nbash -c "$(cat run.sh)"',
+      'while-sleep',
+    ],
+    [
+      '書いたスクリプトを eval "$(cat …)" で走らせる',
+      'cat > run.sh <<\'EOF\'\ntail -f x\nEOF\neval "$(cat run.sh)"',
+      'tail-f',
+    ],
+    [
+      '書いたスクリプトをバッククォートの置換で走らせる',
+      'cat > run.sh <<\'EOF\'\nuntil false; do sleep 1; done\nEOF\nbash -c "`cat run.sh`"',
+      'until-sleep',
+    ],
+    [
+      '書いたスクリプトの背景の run watch を sh -c "$(cat …)" で走らせる',
+      `cat > run.sh <<'EOF'\n${W} 1 &\nEOF\nsh -c "$(cat run.sh)"`,
+      'gh-run-watch-background',
+    ],
+    [
+      '書いたスクリプトを入力のリダイレクトでシェルに食わせる',
+      "cat > run.sh <<'EOF'\nwhile true; do sleep 1; done\nEOF\nbash < run.sh",
+      'while-sleep',
+    ],
   ];
   for (const [label, command, form] of blocked) {
     it(`${label}: 弾く`, () => {
