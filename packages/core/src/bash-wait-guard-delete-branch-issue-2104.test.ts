@@ -246,3 +246,43 @@ describe('gh-pr-merge-delete-branch: issue #2104 の新しい正規表現が長�
     expect(inspectBashCommand("/bin/sh -c 'gh pr merge 1 -d'").blocked).toBe(true);
   });
 });
+
+/**
+ * レビュー（mgr-712ad619、2026-09-29T04:5xZ）で見つけた、同じ穴の残り3形。
+ * どれも Issue の数える単位（文字列が別のシェルに渡され、実行される形）に入る。
+ */
+describe('gh-pr-merge-delete-branch: レビューで足した入口の残り（issue #2104）', () => {
+  const blocked: ReadonlyArray<[string, string]> = [
+    ['引用符の無い ssh の遠くのコマンド', 'ssh host gh pr merge 1 -d'],
+    [
+      'オプション付きの ssh（値を取る -i / -p を読み飛ばす）',
+      'ssh -i key -p 22 host gh pr merge 1 -d',
+    ],
+    ['シェルへのパイプの中身がヒアドキュメント', 'cat <<EOF | bash\ngh pr merge 1 -d\nEOF'],
+    ['fish -c', "fish -c 'gh pr merge 1 -d'"],
+    ['/bin/ash -c', "/bin/ash -c 'gh pr merge 1 -d'"],
+  ];
+  for (const [label, command] of blocked) {
+    it(`${label}: 弾く`, () => {
+      const verdict = inspectBashCommand(command);
+      expect(verdict.blocked).toBe(true);
+      if (!verdict.blocked) throw new Error('unreachable');
+      expect(verdict.form).toBe('gh-pr-merge-delete-branch');
+    });
+  }
+
+  const passing: ReadonlyArray<[string, string]> = [
+    ['ssh の遠くのコマンドが echo の引数', 'ssh host echo gh pr merge 1 -d'],
+    ['ssh の遠くのコマンドに -d が無い', 'ssh host gh pr merge 1 --squash'],
+    ['パイプの無いヒアドキュメント（既存の通す形）', "cat > f <<'EOF'\ngh pr merge 1 -d\nEOF"],
+    [
+      'シェルへのパイプだが、ヒアドキュメントの本文が echo の引数',
+      'cat <<EOF | bash\necho gh pr merge 1 -d\nEOF',
+    ],
+  ];
+  for (const [label, command] of passing) {
+    it(`${label}: 通す`, () => {
+      expect(inspectBashCommand(command).blocked).toBe(false);
+    });
+  }
+});

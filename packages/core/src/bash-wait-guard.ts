@@ -1542,7 +1542,7 @@ const MAX_NESTED_SHELL_DEPTH = 3;
  * （AGENTS.md「範囲外でも気づいたことは上げる」）。次に同じ形の入力を見た
  * 人が立ち止まれるよう、ここにポインタを残す——`GH_WORD_SRC` の doc 参照。
  */
-const SHELL_NAME_SRC = String.raw`(?:\S{0,64}\/)?(?:bash|dash|ksh|sh|zsh)\b`;
+const SHELL_NAME_SRC = String.raw`(?:\S{0,64}\/)?(?:bash|dash|ksh|mksh|ash|yash|sh|zsh|fish|csh|tcsh)\b`;
 
 /**
  * 二重引用符の値（issue #2104 の抽出専用——素朴なエスケープ外しを許す）。
@@ -1688,6 +1688,49 @@ function extractEvalPayloads(command: string): string[] {
   return payloads;
 }
 
+/**
+ * `ssh` のうち値を取るオプション（OpenSSH の `ssh(1)`）。引用符の無い
+ * `ssh host gh pr merge 1 -d` の形で、オプションと host を読み飛ばして残りの語を
+ * 遠くで走るコマンドとして取り出すのに使う（mgr-712ad619 のレビューで足した）。
+ */
+const SSH_VALUE_OPTIONS = new Set([
+  '-B',
+  '-b',
+  '-c',
+  '-D',
+  '-E',
+  '-e',
+  '-F',
+  '-I',
+  '-i',
+  '-J',
+  '-L',
+  '-l',
+  '-m',
+  '-O',
+  '-o',
+  '-p',
+  '-Q',
+  '-R',
+  '-S',
+  '-W',
+  '-w',
+]);
+
+/** `ssh` の引数から、オプションと host を除いた残り（遠くで走るコマンド）を返す。 */
+function sshRemoteCommand(args: string): string {
+  const tokens = args
+    .trim()
+    .split(/[ \t]+/)
+    .filter((token) => token.length > 0);
+  let i = 0;
+  while (i < tokens.length && (tokens[i] ?? '').startsWith('-')) {
+    if (SSH_VALUE_OPTIONS.has(tokens[i] ?? '')) i += 1;
+    i += 1;
+  }
+  return unquoteJoin(tokens.slice(i + 1).join(' ')).trim();
+}
+
 function extractSshPayloads(command: string): string[] {
   const payloads: string[] = [];
   SSH_RE.lastIndex = 0;
@@ -1695,12 +1738,20 @@ function extractSshPayloads(command: string): string[] {
   while ((m = SSH_RE.exec(command)) !== null) {
     const joined = extractQuotedSpansJoined(m[1] ?? '').trim();
     if (joined.length > 0) payloads.push(joined);
+    // 引用符の無い形（`ssh host gh pr merge 1 -d`）も、残りの語を1つのコマンドとして見る。
+    const remote = sshRemoteCommand(m[1] ?? '');
+    if (remote.length > 0) payloads.push(remote);
   }
   return payloads;
 }
 
+/** `HEREDOC_RE` と同じ形で、本文を3番目の捕獲にとる（シェルへのパイプの中身を見るため）。 */
+const HEREDOC_BODY_RE =
+  /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2(?=[\s;&|]|$)/g;
+
 function extractPipeToShellPayloads(command: string): string[] {
   const payloads: string[] = [];
+  let sawPipeToShell = false;
   PIPE_TO_SHELL_TARGET_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PIPE_TO_SHELL_TARGET_RE.exec(command)) !== null) {
@@ -1708,6 +1759,19 @@ function extractPipeToShellPayloads(command: string): string[] {
     const segment = command.slice(segmentStart, m.index);
     const joined = extractQuotedSpansJoined(segment).trim();
     if (joined.length > 0) payloads.push(joined);
+    sawPipeToShell = true;
+  }
+  // `cat <<EOF | bash` の形（パイプの手前が引用符ではなくヒアドキュメント）。シェルへ
+  // パイプしている呼び出しでは、ヒアドキュメントの本文もすべて中身として見る
+  // （mgr-712ad619 のレビューで足した）。どのヒアドキュメントがどのパイプに流れるかは
+  // 解かない——同じ呼び出しに `cat > f <<EOF` が別に在れば、その本文も見る（誤検知の向き）。
+  if (sawPipeToShell) {
+    HEREDOC_BODY_RE.lastIndex = 0;
+    let h: RegExpExecArray | null;
+    while ((h = HEREDOC_BODY_RE.exec(command)) !== null) {
+      const body = (h[3] ?? '').trim();
+      if (body.length > 0) payloads.push(body);
+    }
   }
   return payloads;
 }
