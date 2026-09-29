@@ -2444,6 +2444,22 @@ export function inspectBashCommand(
   // 見ているので、ここでは影響されない）。
   if (isTimeoutWrapped(trimmed)) return { blocked: false };
 
+  // **待つ形の判定は、元の文字列と、行の継続（`\` + 改行）を取り除いた写しの両方にかける**（#2189。
+  // #2179 のマージのガードと同じ理由）。`tail -f` と背景の run watch の判定は改行を区切りとして
+  // 読むので、`tail \` + 改行 + `-f x` / `gh run watch 1 \` + 改行 + `&` を見落としていた。
+  // どちらかが弾けば弾く（弾く側にしか倒れない）。行の継続が無ければ、写しは作らない。
+  const direct = inspectWaitForms(trimmed, invocation);
+  if (direct.blocked) return direct;
+  const joined = joinLineContinuations(trimmed);
+  return joined === trimmed ? direct : inspectWaitForms(joined, invocation);
+}
+
+/**
+ * 待つ形（背景の `gh run watch`・`tail -f`・待つループ）の判定（#2189 で `inspectBashCommand` から
+ * 切り出した。中身は1文字も変えていない）。`trimmed` は空白を落とした1つのコマンド文字列。
+ * `timeout` で包まれた形の早期 return は、呼び出し側が先に済ませている。
+ */
+function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuardVerdict {
   // 待つ形の判定は、本文を実行しないヒアドキュメントの本文を消した写しにかける（#2130）。
   const waitView = stripDataHeredocsForWaitForms(trimmed);
 
