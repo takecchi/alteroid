@@ -146,6 +146,17 @@ const VALUE_TAKING_FLAGS = new Set([
   '--reporter',
   '--testNamePattern',
   '-t',
+  // `--shard`（分割の口。値は `N/M` の形）を追加（#2063 の続き）。当初は
+  // 意図して外してあり、`--shard 1/3`（空白区切り）は値（`1/3`）が素の
+  // 位置引数として範囲判定に持ち込まれ、`EXIT_SCOPE_VIOLATION`（範囲内に
+  // 一致なし）で断られる形を歯として固定していた（実測は
+  // `scripts/test-guard-core.test.ts` の「実測: --shard 1/3（空白区切り）」
+  // に残っている——固定していた当時の生の文言も含めて消していない）。
+  // **足した理由**: `--shard=1/3`（`=` 形）は既に素通しされるのに、
+  // `--shard 1/3`（空白区切り）だけテストが1本も走らないまま断られるのは
+  // 利用者から見て非対称で、`--reporter` や `--maxWorkers` が両形とも
+  // 通ることと揃っていなかった。ここへ足すことで両形が同じように素通しされる。
+  '--shard',
 ]);
 
 /** 値必須フラグの値として飲んでよいか。`-` で始まるものはフラグ自身とみなし、
@@ -322,7 +333,7 @@ export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = 
   return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope });
 }
 
-// ── 引数の正規化（続き）: 既定の reporter（人間の TTY でも CI でもないときだけ dot） ──
+// ── 引数の正規化（続き）: 既定の reporter（この器の Bash（`CLAUDECODE`）のときだけ dot） ──
 
 /**
  * `--reporter` を利用者が明示しているか。**`--reporter=x`（`=` 形）と
@@ -342,20 +353,33 @@ export function hasReporterFlag(argv) {
  * 既定の reporter を `dot` へ倒す（作業者がテストを回すと大きな出力が
  * 保存ファイルへ回され、それを読もうとして拒否で止まる問題への対策）。
  *
- * **3条件がすべて揃ったときだけ** `--reporter=dot` を末尾へ1個足す:
+ * **経緯（最初の版は狙った相手に効かなかった）**: 最初の版は「`stdout` が
+ * TTY でない・`CI` が未設定」の2条件だった。ところが**この器（Claude Code
+ * の Bash ツール）は、非TTY のまま `CI=true` を既定で環境に持つ**（実測:
+ * この器の Bash セッションで `process.env.CI` が `"true"`、観測
+ * 2026-09-29）。**⟹ 狙った相手（作業者がこの Bash ツール経由で打つ
+ * `pnpm test`）にちょうど効かない条件になっていた**——TTY 判定は満たすが、
+ * CI 判定で毎回弾かれ、既定の reporter は変わらないままだった。
+ *
+ * **条件を、狙っている主体（Claude Code の Bash ツール）そのものを見る形へ
+ * 変えた。** `CLAUDECODE` は Claude Code の CLI / SDK が自分の子プロセスへ
+ * 注ぐ環境変数で（実測: この器の Bash セッションで `process.env.CLAUDECODE`
+ * が `"1"`）、**人間が端末で直接打つときにも、GitHub Actions の runner
+ * にも無い**（`GITHUB_ACTIONS` は素の GitHub Actions runner が持つ変数で、
+ * この器では未設定——観測 2026-09-29）。**⟹ どちらも今までどおり vitest
+ * 既定の reporter のままになる**ので、TTY・CI の判定はもう要らない。
+ *
+ * **条件は2つだけ**（TTY・CI の判定は外した）:
  *
  * 1. 利用者が `--reporter` を1つも渡していない（`hasReporterFlag`）
- * 2. `stdout` が TTY でない（人間が端末で直接見ているときは vitest 既定の
- *    reporter のままにする——人間には現在の見た目を変えない）
- * 3. `CI` が未設定（GitHub Actions は `CI=true` を必ず注ぐので、CI 実行は
- *    この歯の影響を受けない。ローカルで `CI=` を立てて確かめる場合も同様）
+ * 2. `CLAUDECODE` が設定されている（空文字列でない）
  *
  * **`.claude/skills/mutation-testing/mutate-core.mjs` は `--reporter=default` を
  * 明示して `pnpm test` を呼ぶ**ので `hasReporterFlag` が真になり、この歯は
  * 素通りする——変異試験ハーネスの出力形は変わらない。
  *
- * 純粋関数——`isTTY` / `CI` は呼び出し側（`test.mjs`）が
- * `process.stdout.isTTY` / `process.env.CI` から渡す。ここでは環境を読まない
+ * 純粋関数——`CLAUDECODE` は呼び出し側（`test.mjs`）が
+ * `process.env.CLAUDECODE` から渡す。ここでは環境を読まない
  * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」と同じ理由で、
  * env を引数化してある）。
  *
@@ -365,10 +389,9 @@ export function hasReporterFlag(argv) {
  * `VALUE_TAKING_FLAGS` に載っており、この歯が足す `--reporter=dot` も同じ
  * `=` 形なので、どちらも位置引数としては読まれない）。
  */
-export function resolveReporterArgs(argv, { isTTY, CI } = {}) {
+export function resolveReporterArgs(argv, { CLAUDECODE } = {}) {
   if (hasReporterFlag(argv)) return argv;
-  if (isTTY) return argv;
-  if (CI) return argv;
+  if (!CLAUDECODE) return argv;
   return [...argv, '--reporter=dot'];
 }
 

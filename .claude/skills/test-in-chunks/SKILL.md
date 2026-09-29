@@ -1,6 +1,6 @@
 ---
 name: test-in-chunks
-description: 作業者（AI）が `pnpm test` を回すときに読む。Bash の既定タイムアウト（作業者は約300秒）で背景へ落ちる・大きな出力が保存ファイルへ回されて読もうとして拒否で止まる、の2つを避けるための「小さく分けて、小さい出力で回す」手順。パッケージ・shard ごとの推奨コマンド、既定 reporter が `dot` へ倒れる条件（`scripts/test-guard-core.mjs` の `resolveReporterArgs`）、この器で `CI=true` が既定で入っていて自動では効かないこと、実測の分割表（観測時刻つき）を持つ。
+description: 作業者（AI）が `pnpm test` を回すときに読む。Bash の既定タイムアウト（作業者は約300秒）で背景へ落ちる・大きな出力が保存ファイルへ回されて読もうとして拒否で止まる、の2つを避けるための「小さく分けて、小さい出力で回す」手順。パッケージ・shard ごとの推奨コマンド、既定 reporter が `dot` へ倒れる条件（`scripts/test-guard-core.mjs` の `resolveReporterArgs`。`CLAUDECODE` の有無を見る——Claude Code の Bash ツール経由の実行では自動で効く）、`--shard` が空白区切り・`=` 形のどちらでも素通しされること、`packages/storage-pg` の重いファイル（`index.test.ts`）の実測、実測の分割表（観測時刻つき）を持つ。
 ---
 
 # `pnpm test` を小さく分けて、小さい出力で回す
@@ -25,28 +25,52 @@ reporter を `dot` にする**（通ったテスト1本ごとの行を出さず�
 **(c) パッケージ・shard 単位で分けて回す**（1回のコマンドが長時間・大出力に
 ならないようにする）。
 
-## (b) 既定 reporter が `dot` へ倒れる条件——ただしこの器では自動では効かない
+## (b) 既定 reporter が `dot` へ倒れる条件——この器では自動で効く
 
 `scripts/test.mjs` は `scripts/test-guard-core.mjs` の `resolveReporterArgs` /
-`hasReporterFlag` を使い、**3条件がすべて揃ったときだけ** `--reporter=dot` を
-既定にする——(1) 利用者が `--reporter` を1つも渡していない (2) `stdout` が
-TTY でない (3) `CI` が未設定。
+`hasReporterFlag` を使い、**2条件がすべて揃ったときだけ** `--reporter=dot` を
+既定にする——(1) 利用者が `--reporter` を1つも渡していない (2) `CLAUDECODE`
+が設定されている（空文字列でない）。
 
-**⚠️ この器（Claude Code の Bash ツール）は `CI=true` を既定で環境に持つ**
-（実測: `node -e "console.log(process.env.CI)"` で `true` が返る、観測
-2026-09-29）。**⟹ 条件(3)が最初から満たされないので、作業者がこの Bash ツール
-経由で `pnpm test` を打つ限り、上の歯は自動では効かない。** 効かせたいときは
-明示的に `--reporter=dot` を渡すか、`env -u CI` で `CI` を外して打つこと
-（後者は実測で確認済み——下の「実測した生コマンドと結果」を見よ）。
+**経緯（最初の版は狙った相手に効かなかった）**: 最初の版は「`stdout` が
+TTY でない・`CI` が未設定」の2条件だった。ところが**この器（Claude Code の
+Bash ツール）は非TTY のまま `CI=true` を既定で環境に持つ**（実測: `node -e
+"console.log(process.env.CI)"` で `true` が返る、観測 2026-09-29）ため、
+狙った相手（作業者がこの Bash ツール経由で打つ `pnpm test`）にちょうど
+効かない条件になっていた——TTY 判定は満たすが、CI 判定で毎回弾かれていた。
+
+**条件を、狙っている主体（Claude Code の Bash ツール）そのものを見る形へ
+変えた。** `CLAUDECODE` は Claude Code の CLI / SDK が自分の子プロセスへ注ぐ
+環境変数で（実測: `node -e "console.log(process.env.CLAUDECODE)"` で `1` が
+返る、観測 2026-09-29）、**人間が端末で直接打つときにも、GitHub Actions の
+runner にも無い**（`GITHUB_ACTIONS` は未設定——同日観測）。⟹ どちらも
+今までどおり vitest 既定の reporter のままになる。
+
+**実測: 何も指定せずに打つだけで dot になる**（`env -u CI` も要らない）:
+
+```
+$ pnpm test scripts/test-guard-core.test.ts -- --maxWorkers=2
+$ node ./scripts/test.mjs scripts/test-guard-core.test.ts -- --maxWorkers=2
+
+ RUN  v5.0.1 /home/worker/trees/mgr-8bda6d38-w3
+
+············································································································
+
+ Test Files  1 passed (1)
+      Tests  108 passed (108)
+```
+
+（観測 2026-09-29T01:18:37Z、exit 0。`--reporter` を1文字も渡していないのに
+点が出ている——既定が dot へ倒れている証拠）
 
 **変異試験ハーネスは影響を受けない。** `.claude/skills/mutation-testing/
 mutate-core.mjs` は `pnpm test` を呼ぶときに `--reporter=default` を明示する
 ので、`hasReporterFlag` が真になりこの歯を素通りする（値は変わらない）。
 
-**⟹ この器で実際に使う形は、下の推奨コマンドのとおり `--reporter=dot` を
-明示すること。** 既定が自動で効く器（`CI` が無い環境）では省略してもよいが、
-省略した場合の挙動を確かめずに信じないこと——`CI` の値は自分で
-`node -e "console.log(process.env.CI)"` などで確かめられる。
+**⟹ この器では下の推奨コマンドの `--reporter=dot` は省略してもよい**——
+既定で入る。それでも明示してあるのは、他の器（`CLAUDECODE` が無い環境）へ
+このコマンド列をそのまま持ち出したときに既定の reporter（大きい出力）へ
+戻ってしまわないようにするためである。
 
 ## (a) Bash ツールの timeout と、出力を絞る形
 
@@ -111,10 +135,13 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 
 # packages/storage-pg（37ファイル、@electric-sql/pglite で実サーバ不要）は3分割。
-# ⚠️ shard によって重さが大きく違う（下の実測）。shard=3/3 だけ余裕を持たせる。
+# ⚠️ shard によって重さが大きく違う（下の実測）。shard=3/3 だけ余裕を持たせる
+# ——その重さの実体は index.test.ts（5588行・262テスト）1本にほぼ集中している
+# （下の「実測: 重い1本を特定した」）。単独で当たりを付けたいときは最後の1行。
 cd packages/storage-pg && timeout -k 5 200 pnpm test -- --shard=1/3 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
 cd packages/storage-pg && timeout -k 5 120 pnpm test -- --shard=2/3 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
 cd packages/storage-pg && timeout -k 5 590 pnpm test -- --shard=3/3 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.test.ts --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
 ```
 
 **`pnpm test` 全体を1本では回さない。** 上のパッケージ・shard の並びを
@@ -132,25 +159,37 @@ cd packages/storage-pg && timeout -k 5 590 pnpm test -- --shard=3/3 --maxWorkers
 `scripts/test-guard-core.test.ts` の「`resolveScopedArgs は --shard=1/3 /
 --reporter=dot（`=` 形）を位置引数と取り違えず素通しする`」で固定してある。
 
-**⚠️ ただし空白区切りの値渡し（`--shard 1/3`）は別。** `--shard` は
-`VALUE_TAKING_FLAGS`（`--maxWorkers` / `--minWorkers` / `--reporter` /
-`--testNamePattern` / `-t` だけを持つ一覧）に入っていないため、値
-（`1/3`）が素の位置引数として範囲判定に持ち込まれる。実測（`resolveScopedArgs`
-経由、`--scope=pkg-a/src` に対して `--shard 1/3` を渡した場合）:
+**空白区切りの値渡し（`--shard 1/3`）も、いまは `=` 形と同じく素通しされる**
+（#2063 の続きで `--shard` を `VALUE_TAKING_FLAGS` へ足した）。当初は
+`VALUE_TAKING_FLAGS` に `--shard` が入っておらず、値（`1/3`）が素の位置引数
+として範囲判定に持ち込まれ、`EXIT_SCOPE_VIOLATION`（「範囲内に一致なし」）
+で断られる形を実測して固定していたが、`--reporter` / `--maxWorkers` など
+他の値必須フラグと同じ扱いへ揃えた。実測（api-client、観測
+2026-09-29T01:18:47Z、exit 0）:
 
 ```
-test-guard: 範囲内に一致なし — 「1/3」に部分一致するテストファイルが範囲
-（pkg-a/src）の中に1本も無い。
-綴りを確認すること。範囲の外まで見たいなら root の `pnpm test <パスの一部>`
-を使うこと。
+$ cd packages/api-client && pnpm test -- --shard 1/2 --maxWorkers=2 --reporter=dot
+$ node ../../scripts/test.mjs --root=../.. --scope=packages/api-client/src -- --shard 1/2 --maxWorkers=2 --reporter=dot
+
+ RUN  v5.0.1 /home/worker/trees/mgr-8bda6d38-w3
+
+····
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
 ```
 
-**⟹ `--shard` は必ず `=` 形（`--shard=1/3`）で渡すこと。** 空白区切りだと
-`EXIT_SCOPE_VIOLATION`（exit 8）でテストが1本も走らないまま断られる。
-この生の文言は `scripts/test-guard-core.test.ts` の「`実測: --shard 1/3
-（空白区切り）を --scope と併用すると断られる`」に固定してある——**直すかどうか
-は依頼者判断で、ここではまだ直していない**（`--shard` を
-`VALUE_TAKING_FLAGS` へ足せば直る可能性が高いが、それ自体は未検証）。
+（api-client は全2ファイル・全10テストなので、`--shard 1/2` で1ファイル・
+4テストへ絞られたことが確認できる）
+
+この反転は `scripts/test-guard-core.test.ts` の「`--shard 1/3（空白区切り）は
+--scope と併用しても素通しされる`」に固定してある——**元の「断られる」形を
+測っていた歯は消していない**（テストの期待値を反転し、元のコメントへ経緯を
+追記した。`AGENTS.md`「テストを弱めずに直す」の反転の条件に従っている）。
+保証が弱くなっていない理由: 素通しの対象は文字列としてちょうど `--shard` に
+一致し、かつ直後の要素が `-` で始まらない（＝値らしい）ときだけで、
+`EXIT_SCOPE_VIOLATION`（範囲外・範囲内不一致）の判定そのものは1文字も
+変えていない。
 
 ## 実測した生コマンドと結果（観測 2026-09-29、この器・この枝で計測）
 
@@ -162,26 +201,27 @@ test-guard: 範囲内に一致なし — 「1/3」に部分一致するテスト
 `pnpm build` 実測: 開始 `2026-09-29T00:07:14Z` / 終了 `2026-09-29T00:08:01Z`
 （約47秒、exit 0）。
 
-| 対象                    | 実行コマンド（`--maxWorkers=2 --reporter=dot` 共通） | 観測開始(UTC) | 観測終了(UTC) | Test Files行                      | Duration行  | exit | 240秒以内か（判定）          |
-| ----------------------- | ---------------------------------------------------- | ------------- | ------------- | --------------------------------- | ----------- | ---- | ---------------------------- |
-| packages/api-client     | `pnpm test`                                          | 00:10:37      | 00:10:44      | 2 passed (2)                      | 4.12s       | 0    | ○                            |
-| apps/cli                | `pnpm test`                                          | 00:10:17      | 00:10:32      | 22 passed (22)                    | 12.23s      | 0    | ○                            |
-| packages/storage-fs     | `pnpm test`                                          | 00:10:48      | 00:11:13      | 34 passed (34)                    | 22.24s      | 0    | ○                            |
-| apps/runner             | `pnpm test`                                          | 00:12:05      | 00:12:22      | 20 passed (20)                    | 14.53s      | 0    | ○                            |
-| apps/daemon             | `pnpm test`                                          | 00:11:18      | 00:12:00      | 31 passed (31)                    | 39.07s      | 0    | ○                            |
-| apps/web                | `pnpm test`                                          | 00:12:26      | 00:13:48      | 66 passed (66)                    | 78.97s      | 0    | ○                            |
-| root scripts/           | `pnpm test scripts/`                                 | 00:57:49      | 00:58:24      | 63 passed (63)                    | 32.66s      | 0    | ○                            |
-| packages/core 1/8       | `pnpm test -- --shard=1/8`                           | 00:52:14      | 00:52:44      | 39 passed (39)                    | 27.42s      | 0    | ○                            |
-| packages/core 2/8       | `pnpm test -- --shard=2/8`                           | 00:54:09      | 00:54:35      | 39 passed (39)                    | 23.82s      | 0    | ○                            |
-| packages/core 3/8       | `pnpm test -- --shard=3/8`                           | 00:54:39      | 00:55:04      | 39 passed（10 expected fail込み） | 21.90s      | 0    | ○                            |
-| packages/core 4/8       | `pnpm test -- --shard=4/8`                           | 00:55:08      | 00:55:58      | 39 passed (39)                    | 47.64s      | 0    | ○                            |
-| packages/core 5/8       | `pnpm test -- --shard=5/8`                           | 00:56:02      | 00:56:31      | 39 passed (39)                    | 26.28s      | 0    | ○                            |
-| packages/core 6/8       | `pnpm test -- --shard=6/8`                           | 00:56:37      | 00:57:16      | 38 passed (38)                    | 36.16s      | 0    | ○                            |
-| packages/core 7/8       | `pnpm test -- --shard=7/8`                           | 00:57:20      | 00:57:44      | 38 passed (38)                    | 21.99s      | 0    | ○                            |
-| packages/core 8/8       | `pnpm test -- --shard=8/8`                           | 00:52:50      | 00:54:02      | 38 passed (38)                    | 69.93s      | 0    | ○（最大でも70秒未満）        |
-| packages/storage-pg 1/3 | `pnpm test -- --shard=1/3`                           | 00:14:32      | 00:17:05      | 13 passed (13)                    | 150.02s     | 0    | ○                            |
-| packages/storage-pg 2/3 | `pnpm test -- --shard=2/3`                           | 00:17:10      | 00:18:08      | 12 passed (12)                    | 55.51s      | 0    | ○                            |
-| packages/storage-pg 3/3 | `pnpm test -- --shard=3/3`（`-k 5`・585秒枠）        | 00:42:27      | 00:51:50      | 12 passed (12)                    | **560.06s** | 0    | **×（240秒を大きく超える）** |
+| 対象                                   | 実行コマンド（`--maxWorkers=2 --reporter=dot` 共通） | 観測開始(UTC) | 観測終了(UTC) | Test Files行                      | Duration行  | exit | 240秒以内か（判定）             |
+| -------------------------------------- | ---------------------------------------------------- | ------------- | ------------- | --------------------------------- | ----------- | ---- | ------------------------------- |
+| packages/api-client                    | `pnpm test`                                          | 00:10:37      | 00:10:44      | 2 passed (2)                      | 4.12s       | 0    | ○                               |
+| apps/cli                               | `pnpm test`                                          | 00:10:17      | 00:10:32      | 22 passed (22)                    | 12.23s      | 0    | ○                               |
+| packages/storage-fs                    | `pnpm test`                                          | 00:10:48      | 00:11:13      | 34 passed (34)                    | 22.24s      | 0    | ○                               |
+| apps/runner                            | `pnpm test`                                          | 00:12:05      | 00:12:22      | 20 passed (20)                    | 14.53s      | 0    | ○                               |
+| apps/daemon                            | `pnpm test`                                          | 00:11:18      | 00:12:00      | 31 passed (31)                    | 39.07s      | 0    | ○                               |
+| apps/web                               | `pnpm test`                                          | 00:12:26      | 00:13:48      | 66 passed (66)                    | 78.97s      | 0    | ○                               |
+| root scripts/                          | `pnpm test scripts/`                                 | 00:57:49      | 00:58:24      | 63 passed (63)                    | 32.66s      | 0    | ○                               |
+| packages/core 1/8                      | `pnpm test -- --shard=1/8`                           | 00:52:14      | 00:52:44      | 39 passed (39)                    | 27.42s      | 0    | ○                               |
+| packages/core 2/8                      | `pnpm test -- --shard=2/8`                           | 00:54:09      | 00:54:35      | 39 passed (39)                    | 23.82s      | 0    | ○                               |
+| packages/core 3/8                      | `pnpm test -- --shard=3/8`                           | 00:54:39      | 00:55:04      | 39 passed（10 expected fail込み） | 21.90s      | 0    | ○                               |
+| packages/core 4/8                      | `pnpm test -- --shard=4/8`                           | 00:55:08      | 00:55:58      | 39 passed (39)                    | 47.64s      | 0    | ○                               |
+| packages/core 5/8                      | `pnpm test -- --shard=5/8`                           | 00:56:02      | 00:56:31      | 39 passed (39)                    | 26.28s      | 0    | ○                               |
+| packages/core 6/8                      | `pnpm test -- --shard=6/8`                           | 00:56:37      | 00:57:16      | 38 passed (38)                    | 36.16s      | 0    | ○                               |
+| packages/core 7/8                      | `pnpm test -- --shard=7/8`                           | 00:57:20      | 00:57:44      | 38 passed (38)                    | 21.99s      | 0    | ○                               |
+| packages/core 8/8                      | `pnpm test -- --shard=8/8`                           | 00:52:50      | 00:54:02      | 38 passed (38)                    | 69.93s      | 0    | ○（最大でも70秒未満）           |
+| packages/storage-pg 1/3                | `pnpm test -- --shard=1/3`                           | 00:14:32      | 00:17:05      | 13 passed (13)                    | 150.02s     | 0    | ○                               |
+| packages/storage-pg 2/3                | `pnpm test -- --shard=2/3`                           | 00:17:10      | 00:18:08      | 12 passed (12)                    | 55.51s      | 0    | ○                               |
+| packages/storage-pg 3/3                | `pnpm test -- --shard=3/3`（`-k 5`・585秒枠）        | 00:42:27      | 00:51:50      | 12 passed (12)                    | **560.06s** | 0    | **×（240秒を大きく超える）**    |
+| packages/storage-pg index.test.ts 単体 | `pnpm test -- index.test.ts`（`-k 5`・595秒枠）      | 01:31:05      | 01:40:32      | 1 passed (1) / 262 tests          | **564.75s** | 0    | **×（shard=3/3 の重さの実体）** |
 
 ### 実測: storage-pg の3分割が均等でない
 
@@ -204,10 +244,43 @@ vitest の `--shard` はソートしたファイル一覧を等分割するだ�
 ところまではやっていない。**確認できているのは「580秒級の枠と `-k` を
 足せば実際に完走する」ところまでである。**
 
-**⟹ 依頼者への申し送り**: `packages/storage-pg` を「1本が240秒を超えない
-分割」にしたいなら、3分割ではなく4〜5分割に増やすか、shard=3/3 相当の重い
-ファイル群だけを別枠で回す必要がある。**どのファイルが重いのかは、この
-実測では特定していない**（ファイル単位の実行時間はここでは測っていない）。
+### 実測: 重い1本を特定した——`index.test.ts`（5588行）
+
+**まず軽い方法を試したが、狙いどおりには効かなかった。** `pnpm exec vitest
+list --shard=3/3 --filesOnly packages/storage-pg/src` は shard を無視して
+**37ファイル全部**（storage-pg の全テストファイル）を返した——`list`
+サブコマンドは `--shard` を受け付ける（`--help` にオプションとして出る）が、
+実際の絞り込みには反映されない（実測、観測 2026-09-29T01:19:15Z・
+2026-09-29T01:30:47Z の2回、`--filesOnly` の有無どちらでも同じ）。**⟹ `list`
+で shard の中身を確認する方法はこの版の vitest（5.0.1）では使えない。**
+
+**代わりに行数で当たりを付けて実測した。** `wc -l packages/storage-pg/src/
+*.test.ts` で最大は `index.test.ts`（5588行、2位の `usage.test.ts` の
+1431行を大きく引き離す）。これを単独で回すと:
+
+```
+$ cd packages/storage-pg && pnpm test -- index.test.ts --maxWorkers=2 --reporter=dot
+ Test Files  1 passed (1)
+      Tests  262 passed (262)
+   Duration  564.75s (tests 99%, transform 1%)
+```
+
+（観測 2026-09-29T01:31:05Z〜01:40:32Z、exit 0）
+
+**shard=3/3 全体（12ファイル・286テスト・560.06s）と比べると、
+`index.test.ts` 単体（262テスト・564.75s）でほぼ同じ時間・ほぼ同じテスト数
+になる**——⟹ shard=3/3 の重さは実質的に `index.test.ts` 1本に集中している
+（残り11ファイルの合計は24テストで、他の shard の1ファイルあたりの軽さと
+矛盾しない）。**これ以上の個別ファイル測定はしていない**（重い1〜2本が
+特定できれば止めてよい、という依頼の条件を満たしたため）。
+
+**⟹ 依頼者への申し送り（更新）**: `packages/storage-pg` を「1本が240秒を
+超えない分割」にしたいなら、`index.test.ts` を単独の枠（590秒級の
+timeout）で回し、残り36ファイルを別に（例: 2分割程度で）回す形が良さそうで
+ある。**ただし `--exclude` フラグ（vitest にはある）と `--scope` の組み合わせ
+は試していない**——`index.test.ts` を除いた残りをどう指定するのが安全かは
+未検証。**ファイルを割る改修（`index.test.ts` 自体を分ける等）はしていない**
+（依頼者の判断待ち）。下の推奨コマンドには、単独実行の1行だけを足した。
 
 ## 検証（この skill を書いた回に通したもの）
 
