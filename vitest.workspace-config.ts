@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { defineConfig, type ViteUserConfig } from 'vitest/config';
+
 import rootConfig from './vitest.config.js';
 
 /**
@@ -57,11 +59,17 @@ import rootConfig from './vitest.config.js';
  * `mergeConfig` は配列を**連結**するため、root の8パターン＋この1パターンに
  * なってしまい、絞り込みにならない。
  */
-export function workspaceVitestConfig(importMetaUrl: string) {
+export function workspaceVitestConfig(importMetaUrl: string): ViteUserConfig {
   const repoRoot = fileURLToPath(new URL('.', import.meta.url));
   const packageDir = path.dirname(fileURLToPath(importMetaUrl));
 
-  return {
+  // `defineConfig(...)` で包む——TS6 は `declaration: true` の下で、この
+  // 関数の戻り値の型を構造的に推論しようとすると vitest/vite の内部（非
+  // export）の型（`BaseOptions` 等）まで辿ってしまい `TS2883` / `TS4058` で
+  // 落ちる。`defineConfig` 自身が持つ名前付きの戻り値の型
+  // （`ViteUserConfig`。vitest/vite が公開している）を経由させることで、
+  // 構造的な推論をさせない。
+  return defineConfig({
     ...rootConfig,
     root: repoRoot,
     test: {
@@ -69,5 +77,5 @@ export function workspaceVitestConfig(importMetaUrl: string) {
       dir: packageDir,
       include: ['**/*.test.{ts,tsx}'],
     },
-  };
+  });
 }

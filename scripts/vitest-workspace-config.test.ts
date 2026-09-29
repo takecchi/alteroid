@@ -73,13 +73,20 @@ describe('vitest.workspace-config.ts の配線（#2157）', () => {
       )
         .then(() => {
           const vitestBin = path.join(ROOT, 'node_modules/.bin/vitest');
+          // 親の env を丸ごとは渡さない（`scripts/check-no-env-passthrough-core.mjs`）。
+          // 子（vitest 本体とその中の esbuild/rollup 等）が実際に必要とするのは
+          // `PATH`（`node` 自身と、vitest が使うツールを見つけるため）だけである
+          // （`scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()` と同じ形）。
+          // ダミーの `GH_TOKEN` を明示で足す——本物の値は一度も登場しない。
           return spawnSync(vitestBin, ['run', probeRelPath, '--reporter=dot'], {
             cwd: targetPackageDir,
-            // 親（このテストを走らせている vitest worker）の env は、
-            // root の setupFiles が既に scrubSecretEnv を通した後なので
-            // 本物の秘密は無い。ここへダミーの GH_TOKEN だけを足して子へ渡す
-            // ——本物の値は一度も登場しない。
-            env: { ...process.env, GH_TOKEN: 'dummy-not-a-real-token' },
+            env: {
+              PATH: process.env.PATH ?? '',
+              GH_TOKEN: 'dummy-not-a-real-token',
+              // 出力に ANSI の色付けを混ぜない——下の集計行の正規表現一致を
+              // 素の文字列だけで判定できるようにする。
+              NO_COLOR: '1',
+            },
             encoding: 'utf8',
           });
         })
