@@ -53,7 +53,7 @@ export default function Dropped() {
 function DroppedErrorNote({ error }: { error: unknown }) {
   if (error instanceof ApiError && error.status === 404) {
     return (
-      <div className="px-4 pt-3 text-sm text-danger">
+      <div className="px-4 pt-3 text-sm text-destructive">
         このデーモンには GET /dropped が無い（版が古い可能性がある。デーモンを更新してください）。
         跡が0件だった、という意味ではない。
       </div>
@@ -66,9 +66,9 @@ function DroppedBody({ state }: { state: DroppedState }) {
   return (
     <div className="flex flex-col gap-3 px-4 py-3 text-sm">
       {/* **常に出す**（0件でも）。runner の跡はここには構造的に出ない。 */}
-      <p className="text-muted">{describeDroppedTraceOriginNote(state.origin)}</p>
-      <p className="text-xs text-muted">帳面が数え始めた時刻: {state.since}</p>
-      <p className="text-xs text-muted">
+      <p className="text-muted-foreground">{describeDroppedTraceOriginNote(state.origin)}</p>
+      <p className="text-xs text-muted-foreground">帳面が数え始めた時刻: {state.since}</p>
+      <p className="text-xs text-muted-foreground">
         件数: {state.total}（{describeDroppedTraceRetentionNote(state.limit)}）
       </p>
       {state.total === 0 ? (

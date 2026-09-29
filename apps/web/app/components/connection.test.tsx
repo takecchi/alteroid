@@ -123,7 +123,15 @@ describe('横並びの積み替え（本4）', () => {
     renderCard({ storage: '/data', pid: 4242 });
 
     const input = await screen.findByLabelText('接続先');
-    const wrapper = input.parentElement;
+    // `Select`（shadcn の `NativeSelect`）は `<select>` を自前の箱
+    // （`data-slot="native-select-wrapper"`、矢印の置き場）で包む。測りたいのは
+    // その外側——画面が置いた `min-w-0 flex-1` の div——なので、部品の箱を1枚だけ
+    // 飛ばす。**箱が在ることも確かめる**（無ければ部品の作りが変わったということで、
+    // 飛ばす先を読み直す必要がある）。
+    const selectBox = input.closest('[data-slot="native-select-wrapper"]');
+    expect(selectBox).not.toBeNull();
+    expect(selectBox!.contains(input)).toBe(true);
+    const wrapper = selectBox!.parentElement;
     expect(wrapper).not.toBeNull();
     const tokens = wrapper!.className.split(/\s+/);
     expect(tokens).toContain('min-w-0');

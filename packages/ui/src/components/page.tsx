@@ -1,6 +1,6 @@
 import type { ReactNode, Ref } from 'react';
 
-import { cn } from '../lib/cn';
+import { cn } from '@/lib/utils';
 
 /**
  * 画面の枠（見出しの帯＋スクロールする本文）。
@@ -56,7 +56,9 @@ export function Page({
             で切ると、header に収まっているように見えたまま読めない部分ができる。
           */}
           {description !== undefined && (
-            <p className="mt-0.5 max-h-16 overflow-y-auto text-xs text-muted">{description}</p>
+            <p className="mt-0.5 max-h-16 overflow-y-auto text-xs text-muted-foreground">
+              {description}
+            </p>
           )}
         </div>
         {action !== undefined && <div className="shrink-0">{action}</div>}

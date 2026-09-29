@@ -6,7 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./shadcn": "./src/components/shadcn/index.ts",
+    "./shadcn": "./src/components/ui/index.ts",
     "./styles.css": "./src/styles.css"
   },
   "sideEffects": [
@@ -14,7 +14,10 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node ../../scripts/test.mjs --root=../.. --scope=packages/ui/src"
+    "test": "node ../../scripts/test.mjs --root=../.. --scope=packages/ui/src",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "shadcn:add": "node ./scripts/shadcn-add.mjs"
   },
   "dependencies": {
     "class-variance-authority": "catalog:",
@@ -32,13 +35,18 @@
     "tw-animate-css": "catalog:"
   },
   "devDependencies": {
+    "@storybook/addon-docs": "catalog:",
+    "@storybook/react-vite": "catalog:",
+    "@tailwindcss/vite": "catalog:",
     "@testing-library/dom": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "jsdom": "catalog:",
+    "storybook": "catalog:",
     "tailwindcss": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vite": "catalog:"
   }
 }

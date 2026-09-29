@@ -137,32 +137,32 @@ function AccountRow({ account }: { account: AccessAccount }) {
       </div>
 
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted">id</dt>
+        <dt className="text-muted-foreground">id</dt>
         <dd className="font-mono break-all">{account.id}</dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">作成</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">作成</dt>
         <dd>{formatDateTime(account.createdAt)}</dd>
 
         {via.length > 0 && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">ログイン手段</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">ログイン手段</dt>
             <dd className="break-all">{via}</dd>
           </>
         )}
 
-        <dt className="mt-2 text-muted sm:mt-0">最終ログイン</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">最終ログイン</dt>
         <dd>
           {account.lastLoginAt === null ? '（まだ無い）' : formatDateTime(account.lastLoginAt)}
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">許可した日時</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">許可した日時</dt>
         <dd>
           {account.grantedAt === null
             ? '（未許可）'
             : `${formatDateTime(account.grantedAt)}（${describeGrantedBy(account.grantedBy)}）`}
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">実行環境の持ち主として宣言</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">実行環境の持ち主として宣言</dt>
         <dd>
           {account.ownerDeclaredAt === null
             ? '（未宣言）'
@@ -299,7 +299,7 @@ function OwnerDeclarationControl({ account }: { account: AccessAccount }) {
       </div>
       <ErrorNote error={failure} />
       {isNotOperator(failure) && (
-        <p className="text-[11px] break-words text-muted">
+        <p className="text-[11px] break-words text-muted-foreground">
           デーモンが動いている環境（実行環境の持ち主）で、次を実行してください:
           <br />
           <code className="font-mono">

@@ -1,0 +1,8 @@
+/*
+ * 見本帳の CSS。テーマ（`src/styles.css`）に、見本（`*.stories.tsx`）だけが使う class を足す。
+ *
+ * `src/styles.css` は見本を**走査から外している**（`@source not`。画面の生成物の CSS に
+ * 見本だけの class を載せないため）ので、見本帳ではここで拾わせ直す。
+ */
+@import '../src/styles.css';
+@source '../src/**/*.stories.tsx';

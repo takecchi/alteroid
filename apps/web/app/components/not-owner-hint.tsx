@@ -23,7 +23,7 @@ export function NotOwnerHint({ failure, subject }: { failure: unknown; subject: 
   if (!(failure instanceof ApiError && failure.status === 403)) return null;
   if (failure.message !== NOT_OWNER_ERROR) return null;
   return (
-    <p className="text-[11px] break-words text-muted">
+    <p className="text-[11px] break-words text-muted-foreground">
       {subject}に触れるのは、持ち主として宣言されたアカウントだけ。アクセスの画面から
       自分のアカウントを持ち主として宣言してください（端末からなら次を実行）:
       <br />

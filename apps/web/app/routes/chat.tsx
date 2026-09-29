@@ -347,7 +347,7 @@ function ConversationList({
   return (
     <aside
       className={cn(
-        'flex flex-col bg-surface',
+        'flex flex-col bg-card',
         // ドロワーの中では枠と幅は Drawer 側が持っている。
         onNavigate === undefined ? 'w-64 shrink-0 border-r border-border' : 'min-h-0 flex-1',
       )}
@@ -375,13 +375,13 @@ function ConversationList({
                   to={`/chat/${conversation.conversationId}`}
                   onClick={onNavigate}
                   className={cn(
-                    'block border-b border-border px-3 py-2 hover:bg-surface-2',
-                    conversation.conversationId === activeId && 'bg-surface-2',
+                    'block border-b border-border px-3 py-2 hover:bg-muted',
+                    conversation.conversationId === activeId && 'bg-muted',
                   )}
                 >
                   {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                   <p className="truncate text-xs">{conversation.preview}</p>
-                  <p className="mt-0.5 text-[11px] text-muted">
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
                     {formatRelative(conversation.updatedAt)} · {conversation.messages} 往復
                   </p>
                 </Link>
@@ -397,7 +397,7 @@ function ConversationList({
         黙って切らずに出す（掘れば降りられる、が要件）。
       */}
       {data !== undefined && (
-        <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
+        <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
           人間との往復 {data.scanned} 件を走査
         </p>
       )}
@@ -408,7 +408,7 @@ function ConversationList({
         出ているもの」になって情報でなくなる）。
       */}
       {data?.reachedStart === false && (
-        <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
+        <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
           {`人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
         </p>
       )}
@@ -420,7 +420,7 @@ function ConversationList({
         `reachedStart` とは別の条件なので、両方出ることも片方だけのこともある。
       */}
       {data !== undefined && data.hiddenByLimit > 0 && (
-        <p className="border-t border-border px-3 py-2 text-[11px] text-muted">
+        <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
           {`…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`}
         </p>
       )}
@@ -1826,14 +1826,14 @@ export function ChatPane({
             type="button"
             onClick={onOpenList}
             aria-label="会話一覧を開く"
-            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <PanelLeft className="size-5" aria-hidden />
           </button>
         )}
         <div className="min-w-0 flex-1">
           <h1 className="text-base font-semibold">クローンと話す</h1>
-          <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
+          <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
             {shownId ?? '新しい会話'}
           </p>
         </div>
@@ -1885,7 +1885,7 @@ export function ChatPane({
         （`visibleInterruptNotice` の doc）。
       */}
       {visibleInterruptNotice !== undefined && (
-        <p className="shrink-0 border-b border-border py-2 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] text-[11px] text-muted md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
+        <p className="shrink-0 border-b border-border py-2 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] text-[11px] text-muted-foreground md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
           {visibleInterruptNotice}
         </p>
       )}
@@ -1907,7 +1907,7 @@ export function ChatPane({
           もの」になって情報でなくなる。
         */}
         {history.data?.reachedStart === false && (
-          <p className="mb-3 text-[11px] text-muted">
+          <p className="mb-3 text-[11px] text-muted-foreground">
             {`人間との往復を ${history.data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
           </p>
         )}
@@ -2019,9 +2019,9 @@ export function ChatPane({
                             // 人間・システムの行は素のテキストのままなので、これまでどおり
                             // 改行をそのまま見せる。
                             line.role !== 'clone' && 'whitespace-pre-wrap',
-                            line.role === 'human' && 'bg-accent text-accent-fg',
-                            line.role === 'clone' && 'bg-surface',
-                            line.role === 'system' && 'bg-transparent text-muted italic',
+                            line.role === 'human' && 'bg-primary text-primary-foreground',
+                            line.role === 'clone' && 'bg-card',
+                            line.role === 'system' && 'bg-transparent text-muted-foreground italic',
                           )}
                         >
                           {isEditing ? (
@@ -2040,7 +2040,7 @@ export function ChatPane({
                                 autoFocus
                                 rows={2}
                                 value={editDraft}
-                                className="text-fg"
+                                className="text-foreground"
                                 aria-label="発言を編集する下書き"
                                 onChange={(event) => setEditDraft(event.target.value)}
                                 onKeyDown={(event) => {
@@ -2082,7 +2082,7 @@ export function ChatPane({
                             </div>
                           ) : line.role === 'clone' ? (
                             displayedText === '' ? (
-                              <span className="text-muted">…</span>
+                              <span className="text-muted-foreground">…</span>
                             ) : (
                               /*
                                * **クローンの行だけを Markdown にする。** 人間が打った本文
@@ -2123,7 +2123,7 @@ export function ChatPane({
                       journalId !== undefined &&
                       !isEditing ? (
                         <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1 text-[11px] text-muted">
+                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                             <button
                               type="button"
                               aria-label="前の版へ"
@@ -2165,7 +2165,7 @@ export function ChatPane({
                           {viewingOldVersion &&
                             viewing !== undefined &&
                             viewing.hiddenFollowUps.length > 0 && (
-                              <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted">
+                              <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted-foreground">
                                 {viewing.hiddenFollowUps.map((entry, index) => (
                                   <p key={index}>
                                     <span className="mr-1 font-semibold">
@@ -2294,7 +2294,7 @@ export function ChatPane({
           既に見えている。ここに残すのは**他に書いてある場所が無い事実**だけ。
         */}
         {sending && (
-          <p className="mt-1.5 text-[11px] text-muted">
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
             画面を閉じてもクローンは考え続ける。順番待ちのあいだに続けて送った分は、まとめて1つの応答になる
           </p>
         )}

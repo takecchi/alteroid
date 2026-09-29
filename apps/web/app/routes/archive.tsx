@@ -91,11 +91,11 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono break-all">{session.sessionId}</span>
         <Badge>行数 {session.rows}</Badge>
-        <span className="text-muted">
+        <span className="text-muted-foreground">
           使用量合計 {session.storedBytes}バイト（最大1行 {session.maxStoredBytes}バイト）
         </span>
       </div>
-      <div className="mt-1 text-muted">
+      <div className="mt-1 text-muted-foreground">
         {formatDateTime(session.firstAt)} 〜 {formatDateTime(session.lastAt)}
       </div>
     </li>
@@ -173,12 +173,12 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
         {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
       </div>
-      <div className="mt-1 text-muted">
+      <div className="mt-1 text-muted-foreground">
         session {entry.sessionId} ・ {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
       </div>
 
       {removed ? (
-        <div className="mt-1 text-muted">
+        <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
           {entry.removedBytes !== undefined && `（${entry.removedBytes}バイト）`}
         </div>

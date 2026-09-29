@@ -262,7 +262,7 @@ export default function Usage() {
           当たっていることまでである。
         */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             from
             <Input
               type="date"
@@ -271,7 +271,7 @@ export default function Usage() {
               onChange={(event) => setFilter(FROM_PARAM, event.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             to
             <Input
               type="date"
@@ -280,7 +280,7 @@ export default function Usage() {
               onChange={(event) => setFilter(TO_PARAM, event.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             manager
             <Input
               placeholder="manager id"
@@ -292,7 +292,7 @@ export default function Usage() {
             **選択肢は core の一覧から作る**（`USAGE_LAYERS` / `USAGE_SITES`）。
             画面に値を書き写すと、値が増えたときにここだけ古くなる。
           */}
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             layer（誰が）
             <Select value={layer} onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}>
               <option value="">すべて</option>
@@ -303,7 +303,7 @@ export default function Usage() {
               ))}
             </Select>
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             site（どこで）
             <Select value={site} onChange={(event) => setFilter(SITE_PARAM, event.target.value)}>
               <option value="">すべて</option>
@@ -314,7 +314,7 @@ export default function Usage() {
               ))}
             </Select>
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             token（どの認証トークンで）
             <Input
               placeholder="token id"
@@ -410,7 +410,7 @@ function AccountCard({ account }: { account: AccountUsageState | undefined }) {
         {describeAccountUsage(account, { emphasis: false }).map((line, index) => (
           <li
             key={`${index}-${line}`}
-            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted"
+            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground"
           >
             {line}
           </li>
@@ -446,7 +446,7 @@ function UnrecordedManagersCard({
         {describeUnrecordedManagers(unrecordedManagers).map((line, index) => (
           <li
             key={`${index}-${line}`}
-            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted"
+            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground"
           >
             {line}
           </li>
@@ -493,7 +493,7 @@ function UsageBody({
           ) : (
             <>
               <p className="text-2xl font-semibold">{formatUsd(summary.total.costUsd)}</p>
-              <p className="mt-1 text-xs text-muted">
+              <p className="mt-1 text-xs text-muted-foreground">
                 入力 {summary.total.inputTokens.toLocaleString('en-US')} / 出力{' '}
                 {summary.total.outputTokens.toLocaleString('en-US')} / キャッシュ読み{' '}
                 {summary.total.cacheReadInputTokens.toLocaleString('en-US')} / キャッシュ書き{' '}
@@ -657,7 +657,7 @@ function UsageBody({
       )}
 
       {/* **省略・要約しない。数字を出すところには必ず添える。** */}
-      <p className="text-xs text-muted">{notice}</p>
+      <p className="text-xs text-muted-foreground">{notice}</p>
     </div>
   );
 }
@@ -685,7 +685,7 @@ function AxisCard({
               className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
             >
               <span
-                className="min-w-0 truncate font-mono text-[11px] text-muted"
+                className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
                 title={entry.label}
               >
                 {entry.href === undefined ? (

@@ -63,7 +63,7 @@ export function JournalEntryLinks({ entry }: { entry: JournalEntry }) {
   return (
     <div className="mt-2 flex flex-wrap gap-3 text-xs">
       {links.map((link) => (
-        <Link key={link.to} to={link.to} className="text-accent hover:underline">
+        <Link key={link.to} to={link.to} className="text-primary hover:underline">
           {link.label} →
         </Link>
       ))}

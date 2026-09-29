@@ -900,10 +900,10 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     const targetRow = document.getElementById('token-t-b');
     const otherRow = document.getElementById('token-t-a');
     expect(targetRow).not.toBeNull();
-    // **強調は className（`border-accent`）で表現する**——`journal.tsx` の
+    // **強調は className（`border-primary`）で表現する**——`journal.tsx` の
     // 選択チップのテストと同じ測り方（issue #2109）。
-    expect(targetRow?.className).toContain('border-accent');
-    expect(otherRow?.className).not.toContain('border-accent');
+    expect(targetRow?.className).toContain('border-primary');
+    expect(otherRow?.className).not.toContain('border-primary');
     // 「プールに無い」の注記は出ない——id は実在する。
     expect(screen.queryByText(/はいまのプールに無い/)).toBeNull();
   });
@@ -945,7 +945,7 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     // 残っている行はそのまま出る——道連れになっていない。
     expect(screen.getByText('row-a')).toBeTruthy();
     // 実在しない id なので、どの行も強調されない。
-    expect(document.getElementById('token-t-a')?.className).not.toContain('border-accent');
+    expect(document.getElementById('token-t-a')?.className).not.toContain('border-primary');
   });
 
   it('tokenId を付けずに開くと、これまでどおり何も強調されず注記も出ない', async () => {
@@ -957,6 +957,6 @@ describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () =
     await waitForPoolLoaded();
 
     expect(screen.queryByText(/はいまのプールに無い/)).toBeNull();
-    expect(document.getElementById('token-t-a')?.className).not.toContain('border-accent');
+    expect(document.getElementById('token-t-a')?.className).not.toContain('border-primary');
   });
 });

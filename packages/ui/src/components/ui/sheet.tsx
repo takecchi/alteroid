@@ -1,18 +1,8 @@
-/**
- * `shadcn add sheet`（Radix Dialog）。生成したものをほぼそのまま置いてある。
- *
- * **上流から変えたのは覆いの濃さ1箇所だけ**（`bg-black/10` → `bg-black/50`。印を
- * 付けてある）。この画面は `color-scheme: dark` 固定で、10% の覆いだと下の文字が
- * ほぼそのまま読めてしまい「何か開いた」に見えない。既存の `drawer.tsx` が
- * 50% だったので、そちらへ合わせている。
- *
- * `shadcn add sheet --overwrite` で焼き直すと、この1箇所は消える。
- */
 import * as React from 'react';
+import { cn } from '@/lib/utils';
 import { Dialog as SheetPrimitive } from 'radix-ui';
 
-import { cn } from '../../lib/cn';
-import { Button } from './button';
+import { Button } from '@/components/ui/button';
 import { XIcon } from 'lucide-react';
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -39,8 +29,7 @@ function SheetOverlay({
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
       className={cn(
-        // `bg-black/50` ←上流は `bg-black/10`（この1箇所だけ変えてある。上の説明）
-        'fixed inset-0 z-50 bg-black/50 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0',
+        'fixed inset-0 z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0',
         className,
       )}
       {...props}

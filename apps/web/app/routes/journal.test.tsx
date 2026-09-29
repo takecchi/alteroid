@@ -970,12 +970,12 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     renderJournal({ status: 'live', recent: [] }, ['/?types=exchange,decision']);
     await screen.findByText('日誌');
 
-    // チップの押下状態は className（`border-accent`）で表現されている
+    // チップの押下状態は className（`border-primary`）で表現されている
     // （journal.tsx のチップは `aria-pressed` を持たない）。
-    expect(screen.getByRole('button', { name: 'exchange' }).className).toContain('border-accent');
-    expect(screen.getByRole('button', { name: 'decision' }).className).toContain('border-accent');
+    expect(screen.getByRole('button', { name: 'exchange' }).className).toContain('border-primary');
+    expect(screen.getByRole('button', { name: 'decision' }).className).toContain('border-primary');
     expect(screen.getByRole('button', { name: 'escalation' }).className).not.toContain(
-      'border-accent',
+      'border-primary',
     );
 
     // `useJournalWindow` はカンマ結合した1つの `type=` としてサーバへ渡す

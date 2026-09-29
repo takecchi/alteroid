@@ -27,7 +27,7 @@
  */
 import type { ReactNode } from 'react';
 
-import { Sheet, SheetContent, SheetTitle } from './shadcn/sheet';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
 export function Drawer({
   open,
@@ -68,7 +68,7 @@ export function Drawer({
          * 継いだ大きさ」に戻すためのもの（中の部品はどれも自分で大きさを持っている
          * ので今は差が出ないが、持たない子を足した日に静かにずれる）。
          */
-        className="data-[side=left]:w-[17rem] max-w-[85%] gap-0 border-r border-border bg-surface text-base shadow-xl pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]"
+        className="data-[side=left]:w-[17rem] max-w-[85%] gap-0 border-r border-border bg-card text-base shadow-xl pt-[var(--safe-top)] pb-[var(--safe-bottom)] pl-[var(--safe-left)]"
       >
         {/*
           読み上げ用の名前。**`aria-label` ではなく `Title` で与える** — Radix は

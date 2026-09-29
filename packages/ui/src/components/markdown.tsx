@@ -141,9 +141,9 @@ const HEADINGS = {
   h1: 'mt-3 mb-1.5 text-[13px] font-semibold first:mt-0',
   h2: 'mt-3 mb-1.5 text-[13px] font-semibold first:mt-0',
   h3: 'mt-2.5 mb-1 text-xs font-semibold first:mt-0',
-  h4: 'mt-2 mb-1 text-xs font-semibold text-muted first:mt-0',
-  h5: 'mt-2 mb-1 text-[11px] font-semibold text-muted first:mt-0',
-  h6: 'mt-2 mb-1 text-[11px] font-semibold text-muted uppercase first:mt-0',
+  h4: 'mt-2 mb-1 text-xs font-semibold text-muted-foreground first:mt-0',
+  h5: 'mt-2 mb-1 text-[11px] font-semibold text-muted-foreground first:mt-0',
+  h6: 'mt-2 mb-1 text-[11px] font-semibold text-muted-foreground uppercase first:mt-0',
 } as const;
 
 type HeadingTag = keyof typeof HEADINGS;
@@ -259,16 +259,16 @@ const components: Components = {
       data-footnote-backref={dataFootnoteBackref}
       target={href?.startsWith('#') ? undefined : '_blank'}
       rel={href?.startsWith('#') ? undefined : 'noreferrer noopener'}
-      className="break-words text-accent hover:underline"
+      className="break-words text-primary hover:underline"
     >
       {children}
     </a>
   ),
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
-  del: ({ children }) => <del className="text-muted line-through">{children}</del>,
+  del: ({ children }) => <del className="text-muted-foreground line-through">{children}</del>,
   blockquote: ({ children }) => (
-    <blockquote className="mt-2 border-l-2 border-border pl-3 text-muted italic first:mt-0">
+    <blockquote className="mt-2 border-l-2 border-border pl-3 text-muted-foreground italic first:mt-0">
       {children}
     </blockquote>
   ),
@@ -296,7 +296,7 @@ const components: Components = {
   // 上書きする（Tailwind の utilities 層は base 層より後なので、指定すれば
   // 必ず勝つ）。
   pre: ({ children }) => (
-    <pre className="mt-2 min-w-0 overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[0.85em] whitespace-pre first:mt-0">
+    <pre className="mt-2 min-w-0 overflow-x-auto rounded-md border border-border bg-muted p-3 font-mono text-[0.85em] whitespace-pre first:mt-0">
       {children}
     </pre>
   ),
@@ -308,7 +308,7 @@ const components: Components = {
     }
     // 行内コード・長い URL などは領域内に収める（折り返す）。
     return (
-      <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.85em] break-words">
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] break-words">
         {children}
       </code>
     );
@@ -318,9 +318,9 @@ const components: Components = {
 /**
  * `<Markdown>{text}</Markdown>` の形で使う。
  *
- * **既存の色トークンだけを使う**（`text-fg` は基底の文字色に既に乗っている
- * ので明示していない。`text-muted` / `border-border` / `bg-surface-2` /
- * `text-accent` は `styles.css` に実在するものだけを使っている）。
+ * **既存の色トークンだけを使う**（`text-foreground` は基底の文字色に既に乗っている
+ * ので明示していない。`text-muted-foreground` / `border-border` / `bg-muted` /
+ * `text-primary` は `styles.css` に実在するものだけを使っている）。
  */
 export function Markdown({ children }: { children: string }) {
   return (

@@ -358,13 +358,13 @@ describe('日報', () => {
     // 返る前の空の一覧で判定してしまいうる）。
     await screen.findByText('2026-08-20 09:30');
 
-    // **クラス名は token で見ること。** `includes('bg-surface-2')` は全リンクが
-    // 持つ `hover:bg-surface-2` にも当たるので、部分一致だと「選択の見た目」を
+    // **クラス名は token で見ること。** `includes('bg-muted')` は全リンクが
+    // 持つ `hover:bg-muted` にも当たるので、部分一致だと「選択の見た目」を
     // 数えているつもりで全リンクを数えることになる（この判定が空回りしても
-    // `text-accent` の側で1件に絞れてしまうため、緑のまま気づけない）。
+    // `text-primary` の側で1件に絞れてしまうため、緑のまま気づけない）。
     const selected = screen.getAllByRole('link').filter((link) => {
       const tokens = link.className.split(/\s+/);
-      return tokens.includes('bg-surface-2') && tokens.includes('text-accent');
+      return tokens.includes('bg-muted') && tokens.includes('text-primary');
     });
 
     // 前は `report.date === selected` で選んでいたので、同じ日の2件が両方

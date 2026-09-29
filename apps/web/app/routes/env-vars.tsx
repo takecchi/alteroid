@@ -142,14 +142,14 @@ function EnvVarRow({
       </div>
 
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
-        <dt className="text-muted">値</dt>
+        <dt className="text-muted-foreground">値</dt>
         <dd className="font-mono break-all">
           {entry.secret
             ? `（シークレット。値は表示されない。指紋 sha256=${entry.sha256}）`
             : (entry.value ?? '（サーバがまだ値を返していない版）')}
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">更新</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">更新</dt>
         <dd>{formatDateTime(entry.updatedAt)}</dd>
       </dl>
 
@@ -221,7 +221,7 @@ function AddEnvVarForm() {
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">名前（英大文字・数字・_ のみ）</span>
+          <span className="text-xs text-muted-foreground">名前（英大文字・数字・_ のみ）</span>
           <Input
             value={name}
             onChange={(event) => setName(event.target.value.toUpperCase())}
@@ -229,11 +229,11 @@ function AddEnvVarForm() {
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">値</span>
+          <span className="text-xs text-muted-foreground">値</span>
           <Input value={value} onChange={(event) => setValue(event.target.value)} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">撒く先</span>
+          <span className="text-xs text-muted-foreground">撒く先</span>
           <Select value={scope} onChange={(event) => setScope(event.target.value as EnvVarScope)}>
             {SCOPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -242,7 +242,7 @@ function AddEnvVarForm() {
             ))}
           </Select>
         </label>
-        <label className="flex items-center gap-2 text-xs text-muted">
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input
             type="checkbox"
             checked={secret}

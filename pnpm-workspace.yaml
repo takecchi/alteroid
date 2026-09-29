@@ -173,6 +173,14 @@ catalog:
   # 同じ理由で枯れた版に留めている先例に揃える。（2026-09-26 に Renovate の3日待ちを
   # 通った 0.52 系へ上げた。上の「0.50.3 を採る」は導入時の記録）
   virtua: ^0.52.0
+  # 部品の見本帳（`packages/ui` の Storybook。根で `pnpm storybook`）。**画面の成果物には
+  # 入らない**——`packages/ui` の devDependencies だけに置く。3つは版を揃えること
+  # （`@storybook/react-vite` の peerDependencies が `storybook` の同じ版を要求する）。
+  # 10.6.1 は 2026-09-29 公開で、`minimumReleaseAge`（24時間）に掛かるので 10.6.0 に解決される。
+  # アドオンは `@storybook/addon-docs`（部品ごとの説明ページ）だけにしてある。
+  storybook: ^10.6.0
+  '@storybook/react-vite': ^10.6.0
+  '@storybook/addon-docs': ^10.6.0
 
 # **Claude 本体（SDK）だけは、公開直後でも取りに行く。**
 #

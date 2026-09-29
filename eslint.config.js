@@ -98,6 +98,8 @@ export default tseslint.config(
       // apps/web の生成物。`build/` は react-router の出力、`.react-router/` は typegen。
       '**/build/',
       '**/.react-router/',
+      // packages/ui の見本帳（`storybook build`）の出力。
+      '**/storybook-static/',
       // 正典を焼き込んだ写し（packages/core/scripts/write-canon.mjs が作る）
       'packages/core/src/generated/',
       // 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore /
