@@ -8,6 +8,7 @@ import {
   isTerminalJobStatus,
   tallyAppraisalDecisions,
   type AppraisalReconciliationStats,
+  type AppraisalWorkKindTally,
 } from './appraisal-stats.js';
 import { JOURNAL_SCAN_PAGE_SIZE } from './journal-scan.js';
 import { createSyntheticJournalStore } from './journal-scan.test-support.js';
@@ -930,5 +931,88 @@ describe('computeAppraisalJournalStats の byWorkKind — 仕事の種類ごと�
     expect(text).toContain('- 未分類: 評定行 1 件');
     expect(text).toContain('（評定行が無い）');
     expect(text).toContain('未分類は種類の1つではない');
+  });
+});
+
+/**
+ * describeAppraisalStats の第2引数（budget）— #2223。
+ *
+ * **`appraisal_stats` 道具（MCP）だけがこれを渡す。** CLI
+ * （`apps/cli/src/appraisal-stats.ts`）・HTTP（`GET /appraisal-stats`）は
+ * budget を渡さずに呼ぶので、この関数自体が budget 無しでも #2223 より前と
+ * 1文字も変わらないことをここで固定する——**この歯が無いと「無制限のときに
+ * 1文字も変わらない」という約束を静かに破っても誰も気づかない。**
+ */
+describe('describeAppraisalStats の budget（種類ごとの内訳だけに掛ける。#2223）', () => {
+  /** 予算を確実に超えるだけの、長い名前の種類を大量に積んだ内訳を作る。 */
+  function manyWorkKindTallies(count: number): AppraisalWorkKindTally[] {
+    return Array.from({ length: count }, (_, i) => ({
+      workKind: `種類${String(i).padStart(4, '0')}${'あ'.repeat(90)}`,
+      good: 1,
+      bad: 0,
+      unclear: 0,
+      other: 0,
+      total: 1,
+    }));
+  }
+
+  it('budget を渡さないと、種類を大量に積んでも1行も切らない（CLI/HTTP の既定と同じ形）', () => {
+    const tallies = manyWorkKindTallies(300);
+    const text = describeAppraisalStats({
+      journal: {
+        commitments: { good: 300, bad: 0, unclear: 0, other: 0, total: 300 },
+        jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+        byWorkKind: { commitments: tallies, jobs: [] },
+      },
+      jobCoverage: computeJobAppraisalCoverage([]),
+      reconciliation: emptyReconciliation(),
+    });
+    for (const tally of tallies) {
+      expect(text).toContain(tally.workKind as string);
+    }
+    expect(text).not.toContain('は省略');
+  });
+
+  it('budget.workKind を渡すと、件数の多い順（渡された並びのまま）に予算まで積み、切ったら省略の断りと続きの取り方が無いことを出す', () => {
+    const tallies = manyWorkKindTallies(300);
+    const text = describeAppraisalStats(
+      {
+        journal: {
+          commitments: { good: 300, bad: 0, unclear: 0, other: 0, total: 300 },
+          jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+          byWorkKind: { commitments: tallies, jobs: [] },
+        },
+        jobCoverage: computeJobAppraisalCoverage([]),
+        reconciliation: emptyReconciliation(),
+      },
+      { workKind: 2_000 },
+    );
+    expect(text).toContain('は省略');
+    expect(text).toContain('続きを取る口はまだ無い');
+    // 先頭は積まれているが、末尾は積みきれず落ちている。
+    expect(text).toContain(tallies[0]!.workKind as string);
+    expect(text).not.toContain(tallies[tallies.length - 1]!.workKind as string);
+    // 種類ごとの内訳の節だけが切れて、それ以外の節（総数など）は無事に残る。
+    expect(text).toContain('評定行 300 件');
+  });
+
+  it('種類が少ない（予算に楽に収まる）ときは budget の有無で出力が1文字も変わらない', () => {
+    const input = {
+      journal: {
+        commitments: { good: 1, bad: 0, unclear: 0, other: 0, total: 1 },
+        jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+        byWorkKind: {
+          commitments: [
+            { workKind: '実装', good: 1, bad: 0, unclear: 0, other: 0, total: 1 },
+          ] as AppraisalWorkKindTally[],
+          jobs: [],
+        },
+      },
+      jobCoverage: computeJobAppraisalCoverage([]),
+      reconciliation: emptyReconciliation(),
+    };
+    const withoutBudget = describeAppraisalStats(input);
+    const withBudget = describeAppraisalStats(input, { workKind: 8_000 });
+    expect(withBudget).toBe(withoutBudget);
   });
 });

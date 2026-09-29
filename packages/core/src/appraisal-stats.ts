@@ -60,6 +60,7 @@
  *    （腐る）。追随させるかどうかは、足す側の責任である。
  */
 
+import { fillListingBudget } from './excerpt.js';
 import { scanJournalPages } from './journal-scan.js';
 import {
   appraisalSchema,
@@ -536,11 +537,39 @@ function appraisalTallyLabel(value: AppraisalValue): string {
   return { good: 'うまくいった', bad: 'うまくいかなかった', unclear: '判定できない' }[value];
 }
 
-function renderWorkKindTallies(tallies: readonly AppraisalWorkKindTally[]): string[] {
+/**
+ * 仕事の種類ごとの内訳を1行ずつ組む。
+ *
+ * **`workKindBudget` は #2223 で足した。省略すると無制限**（呼び手が渡さない
+ * 限り、この関数自体の挙動は #2223 より前と1文字も変わらない——CLI（stdout）・
+ * HTTP（`GET /appraisal-stats`）は今も渡さないので締まらない）。渡された場合だけ
+ * `excerpt.ts` の {@link fillListingBudget} で件数の多い順（呼び手が既に並べ
+ * 済み）に予算いっぱいまで積み、切ったら省略した種類数と続きの取り方を
+ * 断り書きに残す——ループそのものは手で書かず、`fillListingBudget` に寄せる
+ * （`.claude/skills/listing-and-detail/SKILL.md` が禁じる「一覧ごとに手で
+ * 書く」形を避けるため）。
+ *
+ * この内訳には、いまのところ `offset`/`cursor` のような続きを取る口が無い
+ * （`appraisal_stats` は呼び直しても同じ全体を返すだけ）——`practice_list` の
+ * 断り書きと同じ理由で、無いことをそのまま言う。
+ */
+function renderWorkKindTallies(
+  tallies: readonly AppraisalWorkKindTally[],
+  workKindBudget?: number,
+): string[] {
   if (tallies.length === 0) return ['（評定行が無い）'];
-  return tallies.map(
+  const items = tallies.map(
     (tally) => `- ${tally.workKind ?? UNCLASSIFIED_WORK_KIND_LABEL}: ${renderTally(tally)}`,
   );
+  if (workKindBudget === undefined) return items;
+  const { lines, rest, shown, total } = fillListingBudget(items, workKindBudget, false);
+  if (rest > 0) {
+    lines.push(
+      `…ほか ${String(rest)} 種類は省略（全 ${String(total)} 種類のうち件数の多い順に ${String(shown)} 種類だけ出した）。` +
+        'この内訳に続きを取る口はまだ無い——appraisal_stats を呼び直しても同じ全体を返すだけである。',
+    );
+  }
+  return lines;
 }
 
 function renderTally(tally: AppraisalDecisionTally): string {
@@ -585,6 +614,22 @@ export function renderReconciliation(rec: AppraisalReconciliation): string[] {
 }
 
 /**
+ * `describeAppraisalStats` の呼び手が渡せる予算（省略可）。
+ *
+ * **道具（MCP）の側だけが渡す。** CLI（`apps/cli/src/appraisal-stats.ts`）・
+ * HTTP（`GET /appraisal-stats`）は今まで通りこれを渡さない——渡さなければ
+ * この関数の出力は #2223 より前と1文字も変わらない。
+ */
+export interface AppraisalStatsBudget {
+  /**
+   * 仕事の種類ごとの内訳（`renderWorkKindTallies`）1節あたりの文字数の上限。
+   * 「引き受けた仕事」と「委譲」は別の軸なので、それぞれに同じ値で独立に掛かる
+   * （合算した予算ではない）。
+   */
+  workKind: number;
+}
+
+/**
  * `appraisal_stats` 道具（MCP）が返す文面を組む。
  *
  * **予算（`excerpt.ts` の `renderListing`）は使っていない。** この出力は
@@ -593,12 +638,25 @@ export function renderReconciliation(rec: AppraisalReconciliation): string[] {
  * 増えても出力の行数は変わらない——`.claude/skills/listing-and-detail/SKILL.md`
  * が対象にしている「件数に比例して伸びる一覧」の形に当たらない、という
  * 判断で外してある。
+ *
+ * ⚠️ **例外は仕事の種類（`workKind`）ごとの内訳である（#2223）。** `workKind` は
+ * 評定のたびに書く自由文字列（`workKindSchema` は `z.string().min(1).max(128)`）
+ * なので、種類の数は運用が続く限り増えうる——「固定個数」の前提がここだけ崩れる
+ * （この関数に `renderWorkKindTallies` を足した #1454 の翌日、`workKind` を
+ * 導入した #1321 が前提を壊し、この注釈は追随していなかった）。**この関数自体は
+ * `budget` を渡されない限り無制限のまま**（CLI・HTTP は渡さないので今まで通り
+ * 締まらない）。第2引数 `budget.workKind` を渡した呼び手（`tools.ts` の
+ * `appraisal_stats`）だけが、種類ごとの内訳を件数の多い順に予算まで切り、
+ * 切ったら省略した種類数と続きの取り方を出す（`renderWorkKindTallies` の doc）。
  */
-export function describeAppraisalStats(input: {
-  journal: AppraisalJournalStats;
-  jobCoverage: JobAppraisalCoverage;
-  reconciliation: AppraisalReconciliationStats;
-}): string {
+export function describeAppraisalStats(
+  input: {
+    journal: AppraisalJournalStats;
+    jobCoverage: JobAppraisalCoverage;
+    reconciliation: AppraisalReconciliationStats;
+  },
+  budget?: AppraisalStatsBudget,
+): string {
   const { journal, jobCoverage, reconciliation } = input;
 
   const lines: string[] = [];
@@ -622,10 +680,10 @@ export function describeAppraisalStats(input: {
   );
   lines.push('');
   lines.push('### 引き受けた仕事（COMMITMENT_APPRAISAL_DECISION_PREFIX）');
-  lines.push(...renderWorkKindTallies(journal.byWorkKind.commitments));
+  lines.push(...renderWorkKindTallies(journal.byWorkKind.commitments, budget?.workKind));
   lines.push('');
   lines.push('### 委譲（JOB_APPRAISAL_DECISION_PREFIX）');
-  lines.push(...renderWorkKindTallies(journal.byWorkKind.jobs));
+  lines.push(...renderWorkKindTallies(journal.byWorkKind.jobs, budget?.workKind));
   lines.push('');
   lines.push(
     `⚠️ ${UNCLASSIFIED_WORK_KIND_LABEL}は種類の1つではない（#1308 より前の評定行・種類を述べていない評定行）。` +
