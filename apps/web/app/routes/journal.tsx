@@ -362,6 +362,32 @@ export default function Journal() {
   );
 }
 
+/**
+ * 0件のときの文言を組み立てる。
+ *
+ * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
+ * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
+ * 種別チップ（`selected`）で絞ったときは選んだ種別を名指しし、検索語
+ * （`q`）と両方かかっているときは両方を言う。**どちらも掛かっていない
+ * ときの文言（`selected.length === 0 && q === ''`）と、検索語だけで絞った
+ * ときの文言（`selected.length === 0 && q !== ''`）は変えない** —
+ * 後者には既に「この条件の中では」という注記とテストが在る
+ * （`journal.test.tsx`「当たらなかったら、その語では無いと言う」）。
+ */
+function journalEmptyMessage(selected: readonly JournalEntryType[], q: string): string {
+  const typeLabel = selected.length > 0 ? `type=${selected.join(',')}` : undefined;
+  if (typeLabel === undefined && q === '') {
+    return 'この条件では何も記録されていない。';
+  }
+  if (typeLabel === undefined) {
+    return `「${q}」に当たる記録は無い（この条件の中では）。`;
+  }
+  if (q === '') {
+    return `${typeLabel} に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+  }
+  return `${typeLabel} に絞った上で、「${q}」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+}
+
 function JournalBody({
   selected,
   q,
@@ -428,11 +454,7 @@ function JournalBody({
         {isLoadingInitial ? (
           <Spinner />
         ) : entries.length === 0 ? (
-          <Empty>
-            {q === ''
-              ? 'この条件では何も記録されていない。'
-              : `「${q}」に当たる記録は無い（この条件の中では）。`}
-          </Empty>
+          <Empty>{journalEmptyMessage(selected, q)}</Empty>
         ) : (
           <Virtualizer
             ref={virtualizerRef}

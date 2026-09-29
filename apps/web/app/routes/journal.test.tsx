@@ -782,6 +782,49 @@ describe('日誌画面の検索欄（issue #250）', () => {
   });
 
   /**
+   * **種別チップで絞った0件を、絞っていないときの0件と同じ文言で出さない**
+   * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
+   * `selected` が1つ以上のとき、選んだ種別を名指しする文言が出て、
+   * 「この条件では何も記録されていない。」は出ない。
+   */
+  it('種別チップで絞ったら、その種別では無いと言う（記録が無いとは言わない）', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, ['/?types=exchange']);
+    await waitForLoaded();
+
+    expect(
+      screen.getByText('type=exchange に当たる記録は無い（絞り込みを外せば見えるかもしれない）。'),
+    ).toBeTruthy();
+    expect(screen.queryByText('この条件では何も記録されていない。')).toBeNull();
+  });
+
+  /**
+   * **種別チップと検索語の両方がかかっているときは、両方を言う**（#2203）。
+   */
+  it('種別チップと検索語の両方で絞ったら、両方を名指しする', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    renderJournal({ status: 'live', recent: [] }, [
+      `/?types=exchange&q=${encodeURIComponent('当たらない語')}`,
+    ]);
+    await waitForLoaded();
+
+    expect(
+      screen.getByText(
+        'type=exchange に絞った上で、「当たらない語」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('この条件では何も記録されていない。')).toBeNull();
+  });
+
+  /**
    * **検索中は、当たらない新着（SSE の `recent`）が割り込まない。**
    *
    * ⚠️ **その保証そのものはここでは測れない** —— jsdom は日誌の行を1行も

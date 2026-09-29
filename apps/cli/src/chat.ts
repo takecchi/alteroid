@@ -951,7 +951,7 @@ export async function runSlashCommand(
       // いま画面に出ていない行を起点にできてしまい、番号と錨が食い違う。
       for (const key of Object.keys(listed.managerAnchors)) delete listed.managerAnchors[key];
       for (const entry of managers) listed.managerAnchors[entry.managerId] = entry.startedAt;
-      stdout.write(`${renderManagerList(managers)}\n`);
+      stdout.write(`${renderManagerList(managers, parsed.query.status)}\n`);
       // **切ったなら黙らない**（`renderManagersWindowNote` の doc）。
       const note = renderManagersWindowNote(managers.length, parsed.query);
       if (note !== null) stdout.write(note);
@@ -2475,9 +2475,21 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
  *
  * 表示を関数に出してあるのは、`renderUsage`（`usage.ts`）と同じ理由 —
  * 何を出しているかを端末なしで確かめられるようにするためである。
+ *
+ * **`status` は絞りの有無だけを渡す（#2203）。** `renderManagerList` は
+ * 一覧しか受け取っておらず、`status=` で絞った0件と絞っていない0件が
+ * 同じ「（マネージャーは1本も居ません）」になっていた——絞りを外せば
+ * 見えるはずの一覧まで「1本も居ない」と読める（嘘の観測）。手本は CLI
+ * `/journal` の `type=` 0件（#2073 / PR #2089）。**絞っていない0件の
+ * 文言は変えない** — 呼び出し元が `status` を渡さなければ、この関数は
+ * 1文字も変わらない。
  */
-export function renderManagerList(managers: ManagerListItem[]): string {
-  if (managers.length === 0) return '（マネージャーは1本も居ません）';
+export function renderManagerList(managers: ManagerListItem[], status?: string): string {
+  if (managers.length === 0) {
+    return status === undefined
+      ? '（マネージャーは1本も居ません）'
+      : `status=${status} に当たるマネージャーは居ません（絞り込みを外せば見えるかもしれません）`;
+  }
 
   const lines: string[] = [];
   managers.forEach((manager, index) => {
