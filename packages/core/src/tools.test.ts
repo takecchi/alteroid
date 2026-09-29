@@ -1698,9 +1698,11 @@ describe('クローンの道具', () => {
    */
   it('読めなかった（評価で断った）ときも、差し替えようとした行と打ち消しの行が残る（値そのものは書かない）', async () => {
     const h = harness();
+    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
     // 器が「読めない」と答える状況。置けなかったのはシステムの結果であって、
-    // クローンの判断ではない——それでも「試みたこと」自体は日誌に残す
-    // （issue #2145。日誌を先に書く設計の帰結）。
+    // クローンの判断ではない（日誌の decision を汚さない）。
+    // ——日誌を先に書く形へ動いたので、いまは「試みたこと」自体は日誌に残す
+    // （issue #2145。値〈スクリプト本文〉は依然として書かない）。
     const tools = createCloneTools({
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -19639,14 +19641,18 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     for (const entry of all) byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
 
     // **「1件在る」ではなく「ちょうどこの種類がこれだけ」を測る。**
-    // issue #2145: profile_write・manager_start は日誌を先に書く形へ動いた
+    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
+    // 旧: expect(all.length).toBe(8);
+    // ——issue #2145: profile_write・manager_start は日誌を先に書く形へ動いた
     // ので、それぞれ「しようとしている」（1行目）＋「更新した/起こした」
     // （2行目）の2件を書く——decision の内訳が profile_write=2・
     // manager_start=2・journal_write=1 の計5件へ増え、全体も8→10件になった。
     expect(all.length).toBe(10);
     expect(byType.get('memory_update')).toBe(3); // delete(remove) + move_in + move_out
     expect(byType.get('escalation')).toBe(1); // ask_human
-    expect(byType.get('decision')).toBe(5); // profile_write(2) / manager_start(2) / journal_write(1)
+    // 旧: expect(byType.get('decision')).toBe(3); // profile_write / manager_start / journal_write
+    // 新: profile_write(2) / manager_start(2) / journal_write(1)（計5）
+    expect(byType.get('decision')).toBe(5);
     expect(byType.get('daily_report')).toBe(1); // daily_report_write
 
     // memory_section_move は move_in / move_out がちょうど1件ずつ出ること
@@ -19923,9 +19929,11 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     });
 
     if (result === undefined) throw new Error('呼び出しが完了していない');
-    // (e) 日誌を先に書く1行目で落ちるので、apply() は呼ばれていない——
+    // （以下は 2026-09-29 以前の形。issue #2145 で反転）
+    // (e) 副作用（保存・配布）は完了しているので act-completed。
+    // ——日誌を先に書く1行目で落ちるので、いまは apply() が呼ばれていない。
     // 副作用（保存・配布）は1つも起きていない。outcome は act-not-performed
-    // （issue #2145 で反転。上のコメント参照）。
+    // （issue #2145。上の doc コメント参照）。
     expect(result.isError).toBe(true);
     expect(result.text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
     // 保存も配布もされていないこと（反転で新たに固定した保証）。
