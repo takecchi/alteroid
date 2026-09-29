@@ -134,8 +134,28 @@ export default function Shell() {
 function AuthedShell() {
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
   const live = useJournalLive();
-  const { data: approvals } = useApprovals(true);
+  const { data: approvals, error: approvalsError } = useApprovals(true);
   const pending = approvals?.approvals.length ?? 0;
+  /**
+   * 「読めていない」を「0件」と区別する（issue #2105）。`GET /approvals` が
+   * 失敗しても、`useApprovals` を呼んでいるのがこの1箇所だけなのでナビの
+   * バッジも一緒に沈黙していた——0件（バッジ無し）と見分けが付かない。
+   *
+   * **エラーを最優先する。** SWR は再取得が失敗しても直前の `data` を残す
+   * ので、一度取れた後に再取得が失敗すると `approvals` は古い値のまま・
+   * `approvalsError` だけが立つ。ここで古い `pending` を出し続けると
+   * 「読めていない」ことが画面から消える——`HealthFooter`（同じファイル）と
+   * `dashboard.tsx` の承認待ちカードが、どちらも `error !== undefined` を
+   * `data` より先に見て古い値を捨てているのと同じ判断をここでも採る。
+   *
+   * **読み込み中（まだ一度も取れていない。`error` も `data` も無い）は
+   * 従来どおりバッジ無し。** ここは「取れなかった」ではなく「まだ結果が
+   * 無い」で、開いた直後の一瞬だけの状態である（`LiveIndicator` の
+   * `connecting` のような専用の見た目は用意しない——数百 ms で `pending` か
+   * 「読めていない」のどちらかへ必ず変わるので、その一瞬のためだけの見た目を
+   * 足すと変化が多すぎて逆に読みにくくなる）。
+   */
+  const approvalsUnavailable = approvalsError !== undefined;
 
   /*
    * 狭い画面では脇の面を畳む。**畳まないと本文が読めない** — 会話の画面は
@@ -147,7 +167,12 @@ function AuthedShell() {
   const closeNav = () => setNavOpen(false);
 
   const nav = (
-    <Nav status={live.status} pending={pending} onNavigate={isMobile ? closeNav : undefined} />
+    <Nav
+      status={live.status}
+      pending={pending}
+      approvalsUnavailable={approvalsUnavailable}
+      onNavigate={isMobile ? closeNav : undefined}
+    />
   );
 
   return (
@@ -166,6 +191,7 @@ function AuthedShell() {
             <MobileTopBar
               status={live.status}
               pending={pending}
+              approvalsUnavailable={approvalsUnavailable}
               onOpenNav={() => setNavOpen(true)}
             />
             <Drawer open={navOpen} onClose={closeNav} label="メニュー">
@@ -193,10 +219,13 @@ function AuthedShell() {
 function Nav({
   status,
   pending,
+  approvalsUnavailable,
   onNavigate,
 }: {
   status: LiveStatus;
   pending: number;
+  /** `GET /approvals` が読めていないか（issue #2105）。0件と見分けが付く印を出す。 */
+  approvalsUnavailable: boolean;
   /**
    * 行き先を押したとき。ドロワーの中では閉じる。
    *
@@ -257,7 +286,22 @@ function Nav({
             >
               <Icon className="size-4 shrink-0" aria-hidden />
               <span className="flex-1 truncate">{label}</span>
-              {to === '/approvals' && pending > 0 && <Badge tone="warn">{pending}</Badge>}
+              {to === '/approvals' &&
+                (approvalsUnavailable ? (
+                  // 0件（バッジ無し）と見分けが付く印（issue #2105）。`warn` では
+                  // 「少数の承認待ちがある」と紛れるので `danger` を使う
+                  // （`LiveIndicator` の `offline` / `HealthFooter` の
+                  // 「デーモンに繋がらない」と同じ、取れないことを言うときの色）。
+                  <Badge
+                    tone="danger"
+                    aria-label="承認待ちを読めていない"
+                    title="承認待ちを読めていない"
+                  >
+                    ?
+                  </Badge>
+                ) : (
+                  pending > 0 && <Badge tone="warn">{pending}</Badge>
+                ))}
             </NavLink>
           </li>
         ))}
@@ -278,10 +322,13 @@ function Nav({
 function MobileTopBar({
   status,
   pending,
+  approvalsUnavailable,
   onOpenNav,
 }: {
   status: LiveStatus;
   pending: number;
+  /** `GET /approvals` が読めていないか（issue #2105）。0件と見分けが付く印を出す。 */
+  approvalsUnavailable: boolean;
   onOpenNav: () => void;
 }) {
   return (
@@ -301,13 +348,22 @@ function MobileTopBar({
           <LiveIndicator status={status} />
         </div>
 
-        {pending > 0 && (
+        {(pending > 0 || approvalsUnavailable) && (
+          // **リンクのままにする**（issue #2105）。開けば `/approvals` の
+          // `ErrorNote` で読めなかった理由まで読める——ここでは「読めていない」
+          // ことだけを言う。
           <NavLink
             to="/approvals"
             className="flex min-h-11 shrink-0 items-center px-2"
-            aria-label={`承認待ち ${pending} 件`}
+            aria-label={approvalsUnavailable ? '承認待ちを読めていない' : `承認待ち ${pending} 件`}
           >
-            <Badge tone="warn">承認待ち {pending}</Badge>
+            {approvalsUnavailable ? (
+              <Badge tone="danger" title="承認待ちを読めていない">
+                承認待ち ?
+              </Badge>
+            ) : (
+              <Badge tone="warn">承認待ち {pending}</Badge>
+            )}
           </NavLink>
         )}
       </div>

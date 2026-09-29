@@ -6,7 +6,12 @@
  * 素の要素で済ませたほうが読みやすい規模なので）。
  */
 import { AlertTriangle, Loader2 } from 'lucide-react';
-import type { ButtonHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react';
+import type {
+  ButtonHTMLAttributes,
+  HTMLAttributes,
+  ReactNode,
+  TextareaHTMLAttributes,
+} from 'react';
 
 import { cn } from '~/lib/cn';
 
@@ -112,7 +117,8 @@ export function Badge({
   tone = 'neutral',
   className,
   children,
-}: {
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & {
   tone?: keyof typeof BADGE_TONES;
   className?: string;
   children: ReactNode;
@@ -131,6 +137,11 @@ export function Badge({
         BADGE_TONES[tone],
         className,
       )}
+      // `aria-label` / `title` を通す口（issue #2105）——「読めていない」など
+      // 中身の短い記号だけでは伝わらない事情を、呼び出し側が乗せられるように
+      // する。`Button` の `...props` と同じ形（素の HTML 属性はここで名前を
+      // 決め打ちしない）。
+      {...props}
     >
       {children}
     </span>

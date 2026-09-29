@@ -63,11 +63,20 @@ function renderShell() {
   );
 }
 
-/** `pendingApprovals` 件の承認待ちがある状態で `AuthedShell` まで通す。 */
-function stubAuthedShell(pendingApprovals: unknown[] = []) {
+/**
+ * `pendingApprovals` 件の承認待ちがある状態で `AuthedShell` まで通す。
+ *
+ * `approvalsFail: true` を渡すと `GET /approvals` が 500 を返す（issue
+ * #2105 の「読めていない」の試験用）——`pendingApprovals` は無視される。
+ */
+function stubAuthedShell(pendingApprovals: unknown[] = [], approvalsFail = false) {
   return stubFetch((url, init) => {
     if (url.endsWith('/health')) return json(HEALTH);
-    if (url.includes('/approvals')) return json({ approvals: pendingApprovals });
+    if (url.includes('/approvals')) {
+      return approvalsFail
+        ? json({ error: 'internal' }, 500)
+        : json({ approvals: pendingApprovals });
+    }
     // `useJournalLive` の購読先。**置かないと「繋がらない」→再接続を繰り返す。**
     if (url.endsWith('/journal/stream')) return sse([], { keepOpen: true, signal: init?.signal });
     return undefined;
@@ -178,6 +187,59 @@ describe('承認待ちの見え方', () => {
 
     // ドロワーを開かなくても、上端の帯（`MobileTopBar`）に件数が出ている。
     expect(await screen.findByRole('link', { name: '承認待ち 1 件' })).toBeTruthy();
+  });
+
+  it('0件のときは、狭い画面の上端に何も出ない（バッジ無し）', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell([]);
+
+    renderShell();
+
+    await screen.findByText('ダッシュボードの中身');
+    expect(screen.queryByRole('link', { name: /承認待ち/ })).toBeNull();
+  });
+});
+
+/**
+ * `GET /approvals` が読めなかったとき（issue #2105）。
+ *
+ * **0件（バッジ無し）と見分けが付くこと**が測りたい保証——読めなかったのに
+ * 「いま承認待ちは無い」と読めてしまうのが症状だったので、単に何かが出る
+ * だけでは足りず、0件のときには出ないものと違う見た目（`aria-label` /
+ * `title` に「読めていない」の文言）で出ることまで確かめる。
+ */
+describe('/approvals が読めないとき（issue #2105）', () => {
+  it('狭い画面の上端（MobileTopBar）に「読めていない」印が出る。リンク先は /approvals のまま', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell([], true);
+
+    renderShell();
+
+    const link = await screen.findByRole('link', { name: '承認待ちを読めていない' });
+    expect(link.getAttribute('href')).toBe('/approvals');
+    // 0件のバッジ（`Badge tone="warn"`）ではなく、専用の印が出ている。
+    expect(screen.queryByRole('link', { name: /承認待ち \d+ 件/ })).toBeNull();
+  });
+
+  it('広い画面のナビにも「読めていない」印が出る（0件のバッジは出ない）', async () => {
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+    stubAuthedShell([], true);
+
+    renderShell();
+
+    expect(await screen.findByTitle('承認待ちを読めていない')).toBeTruthy();
+    expect(screen.getByLabelText('承認待ちを読めていない')).toBeTruthy();
+  });
+
+  it('広い画面で0件のときは、ナビに何も出ない（「読めていない」印と混ざらないことの対照）', async () => {
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+    stubAuthedShell([]);
+
+    renderShell();
+
+    await screen.findByText('ダッシュボードの中身');
+    expect(screen.queryByTitle('承認待ちを読めていない')).toBeNull();
+    expect(screen.queryByLabelText('承認待ちを読めていない')).toBeNull();
   });
 });
 
