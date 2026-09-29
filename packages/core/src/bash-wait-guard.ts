@@ -287,10 +287,38 @@ function isNonExecutingArgsSimpleCommand(command: string, span: SimpleCommandSpa
 }
 
 /**
+ * `command[i]` が「本物のパイプ」（`|` 単体、または `|&`）の先頭か（issue #2195、
+ * mgr-712ad619 の追加レビュー・2026-09-30）。**`||`（論理 OR）は含まない**——`||` は
+ * 左側の標準出力を右側へ渡さない（左右は独立に実行されるだけ）ので、ここでの
+ * 「パイプの左側」には数えない。`boundaryTokenLengthAt` は `|`/`||` を区別せず
+ * どちらも境界として扱うが（`TAIL_FOLLOW_RE` の除外先読みが元々そうしているため。
+ * その doc 参照）、こちらは別の目的（本物のパイプかどうか）なので別に判定する。
+ */
+function isRealPipeBoundary(command: string, i: number): boolean {
+  return command[i] === '|' && command[i + 1] !== '|';
+}
+
+/**
  * 引用符の中身を、**許可リストに当たる単純コマンドの中でだけ**空白へ潰した写しを返す
  * （issue #2195）。それ以外の単純コマンドは生のまま残す——引数を実行しうる形は
  * `isNonExecutingArgsSimpleCommand` の doc のとおり列挙しきれないので、許可リストに
  * 当たらない限りすべて「実行するかもしれない」として生の字面を見る（弾く側に倒す）。
+ *
+ * ⚠️ **許可リストに当たる単純コマンドでも、本物のパイプ（`isRealPipeBoundary`）の
+ * 左側に在るときは消さない**（issue #2195 の追加レビュー・2026-09-30）。
+ * `echo "tail -f x" | bash` / `printf '%s\n' "tail -f x" | sh` /
+ * `echo "tail -f x" | xargs -I{} sh -c {}` のように、許可リストのコマンドの出力を
+ * 次のコマンドへ実行させる形が見逃されていた——「引数を実行しない」ことは確認できても、
+ * 「出力を実行する側へ渡さない」ことまでは確認できないため。⟹ 出力の行き先まで
+ * 静的には読めないので、パイプの左側に在る許可リストのコマンドは弾く側へ倒す。
+ *
+ * `git commit -m "tail -f x.log"`（パイプが無い、単独の形）は今までどおり通す——
+ * 対照は `bash-wait-guard-issue-2195.test.ts`。`echo "tail -f x" > r.sh; bash r.sh`
+ * （ファイルへ書いてから別の呼び出しで実行する形）も今までどおり通す——`>` は
+ * パイプではないので `isRealPipeBoundary` に当たらず、ここでは消したままにする
+ * （`stripDataHeredocsForWaitForms` の「別の呼び出しで書いたファイルを後で走らせる形は
+ * もともと見えない」と同じ限界。書いた直後の同じ呼び出しの中で実行される形だけを
+ * 塞ぐのがこのガードの守備範囲である）。
  *
  * 文字数を変えないので、この後にかける `hasTailFollowPattern` の走査の複雑さは変わらない。
  */
@@ -301,7 +329,8 @@ function blankQuotedInteriorForNonExecutingCommands(command: string): string {
   let cursor = 0;
   for (const span of spans) {
     out += command.slice(cursor, span.start);
-    if (isNonExecutingArgsSimpleCommand(command, span)) {
+    const feedsIntoPipe = isRealPipeBoundary(command, span.end);
+    if (!feedsIntoPipe && isNonExecutingArgsSimpleCommand(command, span)) {
       for (let i = span.start; i < span.end; i += 1) {
         const ch = command[i] as string;
         out += mask[i] || ch === '\n' ? ch : ' ';
@@ -342,6 +371,12 @@ function blankQuotedInteriorForNonExecutingCommands(command: string): string {
  * `$(...)` とバッククォート（コマンド置換）は、許可リストに当たる単純コマンドでも
  * 同じ単純コマンドに在れば消さない（`isNonExecutingArgsSimpleCommand` の doc）ので、
  * `echo $(tail -f x)` / バッククォート形も生の字面のまま弾く。
+ *
+ * 許可リストに当たる単純コマンドでも、**本物のパイプ（`|`/`|&`。`||` は含まない）の
+ * 左側**に在るなら消さない（`isRealPipeBoundary`/`blankQuotedInteriorForNonExecutingCommands`
+ * の doc）——`echo "tail -f x" | bash` / `printf '%s\n' "tail -f x" | sh` /
+ * `echo "tail -f x" | xargs -I{} sh -c {}` のように、出力を次のコマンドが実行しうる
+ * ため。パイプが無い単独の形（`git commit -m "tail -f x.log"`）は今までどおり通す。
  *
  * ## 対照（弾くことを固定する——以前の版とは逆）
  *

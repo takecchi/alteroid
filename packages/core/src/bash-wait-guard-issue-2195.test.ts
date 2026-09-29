@@ -7,7 +7,7 @@ import { expectNotSuperlinear } from './time-growth.test-support.js';
  * issue #2195 —— `tail -f` / `tail --follow` の検出が、引用符の**中**に書かれた
  * 字面まで拾って誤検知していた（`git commit -m "use tail -f x.log"` 等）。
  *
- * ## 経緯（2段）
+ * ## 経緯（3段）
  *
  * 1段目（最初の直し方）は「引用符の中身を全部消し、既知の実行形
  * （`bash -c`/`sh -c`/`eval`/`ssh`/シェルへのパイプ・ヒアドキュメント）だけ
@@ -19,11 +19,19 @@ import { expectNotSuperlinear } from './time-growth.test-support.js';
  * `x="tail -f y"; eval $x` のように、列挙していない実行形がすべて誤って
  * 通ってしまっていた（列挙は「弾く形」を漏れなく挙げるには向かない）。
  *
- * 2段目（この歯が検証する版）は向きを逆にした——**「引数を実行しないと
- * 確認できた」短い許可リスト**（`echo`/`printf`/`grep`/`rg`/`git commit`/
- * `gh issue`・`gh pr` の一部サブコマンド）だけ引用符の中身を消し、それ以外は
- * すべて生の字面のまま見る（既定で弾く側）。直し方は `bash-wait-guard.ts` の
- * `hasUnboundedTailFollow` / `isNonExecutingArgsSimpleCommand` の doc 参照。
+ * 2段目は向きを逆にした——**「引数を実行しないと確認できた」短い許可リスト**
+ * （`echo`/`printf`/`grep`/`rg`/`git commit`/`gh issue`・`gh pr` の一部サブコマンド）
+ * だけ引用符の中身を消し、それ以外はすべて生の字面のまま見る（既定で弾く側）。
+ *
+ * 3段目（この歯が検証する版）——2段目のレビュー（mgr-712ad619、2026-09-30）で、
+ * 許可リストのコマンドの**出力をパイプで次のコマンドへ渡す形**が見逃されていた
+ * ——`echo "tail -f x" | bash` / `printf '%s\n' "tail -f x" | sh` /
+ * `echo "tail -f x" | xargs -I{} sh -c {}`。⟹ 許可リストに当たる単純コマンドでも、
+ * 本物のパイプ（`|`/`|&`。論理 OR の `||` は含まない）の**左側**に在るなら
+ * 消さない（`isRealPipeBoundary`/`blankQuotedInteriorForNonExecutingCommands` の doc）。
+ *
+ * 直し方は `bash-wait-guard.ts` の `hasUnboundedTailFollow` /
+ * `isNonExecutingArgsSimpleCommand` / `isRealPipeBoundary` の doc 参照。
  *
  * ついでに、`TAIL_FOLLOW_RE` 自体が区切りの無い1行の繰り返しで2乗になる
  * ことが見つかった（`(TAIL + ' ').repeat(8000)` で208ms、4倍ごとに約4倍。
@@ -168,6 +176,53 @@ describe('tail-f: issue #2195 —— 許可リストの語の境界（範囲外�
     expect(inspectBashCommand(command).blocked).toBe(false);
   });
 });
+
+describe(
+  'tail-f: issue #2195 —— 許可リストのコマンドでも、本物のパイプの左側なら消さない' +
+    '（レビューで見つかった3形）',
+  () => {
+    const pipedForms: ReadonlyArray<[string, string]> = [
+      ['1: echo … | bash', 'echo "' + TAIL + ' -f x" | bash'],
+      ['2: printf … | sh', "printf '%s\\n' \"" + TAIL + ' -f x" | sh'],
+      ['3: echo … | xargs -I{} sh -c {}', 'echo "' + TAIL + ' -f x" | xargs -I{} sh -c {}'],
+    ];
+
+    for (const [label, command] of pipedForms) {
+      it(`${label}: 弾く（form: tail-f）`, () => {
+        const verdict = inspectBashCommand(command);
+        expect(verdict.blocked).toBe(true);
+        if (!verdict.blocked) throw new Error('unreachable');
+        expect(verdict.form).toBe('tail-f');
+      });
+    }
+
+    it('3形すべてで pipedForms の件数が3件であること（表と実装のずれを検知する）', () => {
+      expect(pipedForms.length).toBe(3);
+    });
+
+    it(
+      '対照: パイプが無い単独の形（git commit -m "' + TAIL + ' -f x.log"）は今までどおり通す',
+      () => {
+        const command = 'git commit -m "use ' + TAIL + ' -f x.log"';
+        expect(inspectBashCommand(command).blocked).toBe(false);
+      },
+    );
+
+    it(
+      '意図して残す形: echo "' +
+        TAIL +
+        ' -f x" > r.sh; bash r.sh（ファイルへ書いてから別の呼び出しで実行する形）は通す' +
+        '——`>` はパイプではないので isRealPipeBoundary に当たらず、書いた直後の同じ' +
+        '呼び出しの中で実行される形だけを塞ぐこのガードの守備範囲の外である' +
+        '（`stripDataHeredocsForWaitForms` の「別の呼び出しで書いたファイルを後で走らせる' +
+        '形はもともと見えない」と同じ限界）',
+      () => {
+        const command = 'echo "' + TAIL + ' -f x" > r.sh; bash r.sh';
+        expect(inspectBashCommand(command).blocked).toBe(false);
+      },
+    );
+  },
+);
 
 /**
  * `hasTailFollowPattern`（手書きの線形走査）が `TAIL_FOLLOW_RE`（正規表現。託宣として
