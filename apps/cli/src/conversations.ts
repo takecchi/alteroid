@@ -1,6 +1,7 @@
 import { stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
+import { formatElapsed } from './format.js';
 import { resolveTarget } from './target.js';
 
 /**
@@ -61,6 +62,7 @@ export interface ConversationsListOptions {
 
 export async function conversationsListCommand(
   options: ConversationsListOptions = {},
+  now: number = Date.now(),
 ): Promise<void> {
   const client = await connect();
   if (client === null) return;
@@ -81,7 +83,9 @@ export async function conversationsListCommand(
   // `renderConversationsList` は改行で終わらずに返す（末尾に改行が無いことは
   // `.claude/skills/mutation-testing/mutate-selftest.mjs` が固定している）。
   // 端末の次のプロンプトや後続の書き込みが最終行へ食い込まないよう、ここで足す（#326）。
-  stdout.write(`${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit)}\n`);
+  stdout.write(
+    `${renderConversationsList(conversations, scanned, reachedStart, hiddenByLimit, now)}\n`,
+  );
 }
 
 /**
@@ -105,6 +109,7 @@ export function renderConversationsList(
   scanned: number,
   reachedStart: boolean,
   hiddenByLimit: number,
+  now: number = Date.now(),
 ): string {
   const lines: string[] = [];
   if (conversations.length === 0) {
@@ -114,9 +119,12 @@ export function renderConversationsList(
       // **作成（`startedAt`）を足す。** 値は `GET /conversations` が元から
       // 返していて（`ConversationSummary` にも在る）、ここが出していな
       // かっただけである（#214）。
+      // **経過（issue #2141 段1）を、作成・更新それぞれの横に添える。** ISO は
+      // そのまま残す。
       lines.push(
         `  [${index + 1}] ${conversation.conversationId}` +
-          `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
+          `  作成: ${conversation.startedAt}（${formatElapsed(conversation.startedAt, now)}前）` +
+          `  更新: ${conversation.updatedAt}（${formatElapsed(conversation.updatedAt, now)}前）` +
           `  (${conversation.messages}件)`,
       );
       lines.push(`      ${conversation.preview}`);

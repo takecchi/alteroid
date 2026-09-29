@@ -11,6 +11,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
+import { formatElapsed } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -39,7 +40,10 @@ export async function runnersCommand(): Promise<void> {
     stdout.write('runner の一覧を読めませんでした\n');
     return;
   }
-  stdout.write(`${renderRunners(await response.json())}\n`);
+  // **`now` はここで1回だけ取る**（issue #2141 段1）。`renderRunners` はテストで
+  // 差し込めるよう引数で受ける。
+  const now = Date.now();
+  stdout.write(`${renderRunners(await response.json(), now)}\n`);
 }
 
 /**
@@ -179,7 +183,7 @@ interface RunnersView {
  * ことになり、突き合わせ忘れがそのまま見逃しになるからである（2つの Service は
  * 別々にデプロイされるので、ずれている窓が実際に在る）。
  */
-export function renderRunners(view: RunnersView): string {
+export function renderRunners(view: RunnersView, now: number = Date.now()): string {
   const lines = [`デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`, ''];
 
   if (view.runners.length === 0) {
@@ -204,7 +208,8 @@ export function renderRunners(view: RunnersView): string {
     // **「この状態になった時刻」であって「作成」「更新」ではない**（#1948、
     // #211 の決定）。名簿がインメモリで再起動すると作り直される注記は、
     // 器ごとに繰り返さず一覧の末尾に1度だけ出す（下の `tail`）。
-    lines.push(`  この状態になった: ${runner.since}`);
+    // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す。
+    lines.push(`  この状態になった: ${runner.since}（${formatElapsed(runner.since, now)}前）`);
     if (runner.runnerId !== undefined) lines.push(`  宛先: ${runner.label}`);
     if (runner.workspacePath !== undefined) lines.push(`  workspace: ${runner.workspacePath}`);
     // **「どのプロセスか」を版と並べて出す。** クローンの `runner_list` と Web UI の

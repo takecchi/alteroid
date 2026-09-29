@@ -187,6 +187,37 @@ describe('alteroid conversations list', () => {
     expect(text).toContain('更新: 2026-08-16T10:05:00.000Z');
   });
 
+  /**
+   * issue #2141 段1: ISO の横に経過を添える——「作成」「更新」の両方。
+   * ISO はそのまま残る（消えていない）ことも合わせて確かめる。
+   */
+  it('作成・更新それぞれの横に経過を添える。ISO は消えない', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        conversations: [
+          {
+            conversationId: 'conv-1',
+            startedAt: '2026-08-16T10:00:00.000Z',
+            updatedAt: '2026-08-17T10:00:00.000Z',
+            messages: 3,
+            preview: '設計の相談',
+          },
+        ],
+        scanned: 512,
+        reachedStart: true,
+        hiddenByLimit: 0,
+      },
+    });
+
+    await conversationsListCommand({}, new Date('2026-08-18T10:00:00.000Z').getTime());
+
+    const text = read();
+    expect(text).toContain('作成: 2026-08-16T10:00:00.000Z（2日前）');
+    expect(text).toContain('更新: 2026-08-17T10:00:00.000Z（1日前）');
+  });
+
   it('--limit / --scan をクエリへそのまま渡す', async () => {
     captureStdout();
     replies.push({
