@@ -2309,7 +2309,15 @@ const MAX_NESTED_SHELL_DEPTH = 3;
  * （AGENTS.md「範囲外でも気づいたことは上げる」）。次に同じ形の入力を見た
  * 人が立ち止まれるよう、ここにポインタを残す——`GH_WORD_SRC` の doc 参照。
  */
-const SHELL_NAME_SRC = String.raw`(?:\S{0,64}\/)?(?:bash|dash|ksh|mksh|ash|yash|sh|zsh|fish|csh|tcsh)\b`;
+/**
+ * シェルの名前を変数で書いた形（`$SHELL` / `${SHELL}` / `"$SHELL"` / `$BASH` …）。
+ * `$SHELL` はたいてい `/bin/bash` を、`$BASH` は bash 自身のパスを指す。
+ * #2204 で待つ形の `SCRIPT_RUN_RE` にだけ足し、#2238 で `SHELL_NAME_SRC` に含めた
+ * （`$SHELL -c "gh pr merge … --delete-branch"` の中身を取り出さずに通していた）。
+ */
+const SHELL_VAR_SRC = String.raw`"?\$(?:(?:SHELL|BASH)\b|\{(?:SHELL|BASH)\})"?`;
+
+const SHELL_NAME_SRC = String.raw`(?:(?:\S{0,64}\/)?(?:bash|dash|ksh|mksh|ash|yash|sh|zsh|fish|csh|tcsh)\b|${SHELL_VAR_SRC})`;
 
 /**
  * 二重引用符の値（issue #2104 の抽出専用——素朴なエスケープ外しを許す）。
@@ -2666,11 +2674,10 @@ const DATA_HEREDOC_READER_RE = new RegExp(
  * **シェルの名前を変数で書いた形（`$SHELL run.sh` / `"$SHELL" run.sh` / `${SHELL} run.sh`）も見る**
  * （#2204。C の横断レビューで見つかった）。`$BASH`（bash 自身のパス）も同じ。`$SHELL` はたいてい `/bin/bash` を指すので、`bash run.sh`
  * と同じく本文が後で実行される。#2204 までは名前の列挙（`SHELL_NAME_SRC`）にしか当てず、無限ループを
- * 書いた本文を「データだけ」と読んで弾かなかった。
+ * 書いた本文を「データだけ」と読んで弾かなかった。変数の形は `SHELL_NAME_SRC` に含めてある（#2238）。
  */
-const SHELL_VAR_SRC = String.raw`"?\$(?:(?:SHELL|BASH)\b|\{(?:SHELL|BASH)\})"?`;
 const SCRIPT_RUN_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:(?:${SHELL_NAME_SRC}|${SHELL_VAR_SRC})[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
 );
 
 /**
