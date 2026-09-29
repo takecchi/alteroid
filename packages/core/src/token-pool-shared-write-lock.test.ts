@@ -337,4 +337,81 @@ describe('token-pool-service と token-rotator の共有書き込み鍵（Issue 
 
     await observePromise;
   });
+
+  it('(e) probe の間に PUT /tokens で同じ行の value / label を変えても、回し手はそれを古い値へ戻さない', async () => {
+    const stores = createMemoryStores();
+    await stores.tokens.replace([
+      { id: 'tok-a', label: 'a', value: 'value-a', order: 0 },
+      { id: 'tok-b', label: 'old-label', value: 'old-value', order: 1 },
+    ]);
+    await stores.tokens.writeActive({
+      tokenId: 'tok-a',
+      generation: 1,
+      rotatedAt: '2026-08-25T00:00:00.000Z',
+    });
+
+    const writeLock = createTokenPoolWriteLock();
+    // tok-b を候補として probe し、「使えない」と判定させる——`finishSweep`
+    // の保存（`unusablePatches` を id で当てる区間）を実際に通す。
+    const probe: TokenProbePort = {
+      async probe() {
+        await sleep(30);
+        return { verdict: 'unusable', reason: 'probe が拒否した' };
+      },
+    };
+    const rotator = createTokenRotator({
+      stores,
+      probe,
+      spread: {
+        async spread() {
+          return [{ target: 'runner-primary', ok: true }];
+        },
+      },
+      writeLock,
+      now: () => new Date('2026-08-25T03:00:00.000Z'),
+    });
+    const poolService = createTokenPoolService({
+      stores,
+      writeLock,
+      now: () => new Date('2026-08-25T03:00:01.000Z'),
+    });
+
+    const observePromise = rotator.observe({
+      facts: { kind: 'five_hour', status: 'rejected', resetsAt: 1_800_000_000_000 },
+      statusNow: 'rejected',
+      observedBy: { tokenId: 'tok-a', generation: 1 },
+    });
+
+    // **`coolDown` が終わり、`sweepCandidates` が tok-b を probe し始めるまで
+    // 少し待ってから**、人間が同じ行（tok-b）の鍵そのもの（`value`）と
+    // `label` を差し替える——回し手が probe の判定を持ち帰るより先に、
+    // 「読んだ後の行」を人間が書き換える形を作る。
+    await sleep(10);
+    await poolService.replace([
+      { id: 'tok-a', label: 'a', value: 'value-a' },
+      { id: 'tok-b', label: 'new-label (rotated by human)', value: 'new-value (rotated by human)' },
+    ]);
+
+    const observeResult = await observePromise;
+    const finalTokens = await stores.tokens.list();
+    const b = finalTokens.find((token) => token.id === 'tok-b');
+
+    process.stderr.write(
+      `[tooth e] observeResult.kind=${observeResult.kind} ` +
+        `b.value=${b?.value ?? '(undefined)'} b.label=${b?.label ?? '(undefined)'} ` +
+        `b.lastRejectedAt=${b?.lastRejectedAt ?? '(undefined)'}\n`,
+    );
+
+    // **差し替えた鍵・ラベルは残る。冷却も付く。** 回し手が変えてよいのは
+    // 冷却関連の欄だけで、`value` / `label` を古い値へ戻してはいけない。
+    expect({
+      value: b?.value,
+      label: b?.label,
+      cooling: b?.lastRejectedAt !== undefined,
+    }).toEqual({
+      value: 'new-value (rotated by human)',
+      label: 'new-label (rotated by human)',
+      cooling: true,
+    });
+  });
 });

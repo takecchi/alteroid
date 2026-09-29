@@ -7,6 +7,7 @@ import {
   type ActiveAgentToken,
   type AgentToken,
   type CooldownSource,
+  type TokenFailureObservation,
   type TokenRotationSettings,
 } from './token-pool.js';
 import {
@@ -800,11 +801,25 @@ interface CandidateSweep {
   /** `unusable` と判定して飛ばした候補の label（試した順）。 */
   unusableLabels: string[];
   /**
-   * `unusableLabels` と対の id（Issue #2200）。**保存するとき、変えた行を
-   * id で当てるための鍵**——ラベルは表示用の文言にしか使わない（同じラベルの
-   * 行が複数在ることを排除できないので、書き戻しの照合には使わない）。
+   * `unusableLabels` と対になる、**id と「どう変えたか」の組**（Issue #2200）。
+   *
+   * **行の値そのもの（`AgentToken`）ではなく、当てる観測（`markTokenUnusable`
+   * へ渡す `TokenFailureObservation`）を持つ**——保存するとき、この観測を
+   * 「probe を始める前に読んだ、この配列内の古い行」にではなく、**保存の
+   * 直前に読み直した最新の行**へ適用する（`coolDown` と同じ形）。
+   *
+   * **⚠️ 直す前はここに行そのもの（id 付きの `AgentToken`）を持たせていて、
+   * 保存するとき読み直した最新の行をこの古い行で丸ごと置き換えていた。**
+   * probe をまたぐ関数（`sweepCandidates`）が作る値なので、その間に人間が
+   * 同じ行の `value`（鍵そのもの）・`label`・`disabled`・`order` を変えていると、
+   * それらが古い値へ黙って巻き戻っていた——**差し替えた鍵が古い鍵へ戻る**
+   * という、`AGENTS.md` の地雷表そのものの形（レビューで指摘）。観測だけを
+   * 持たせて最新の行へ適用する形にすることで、回し手が変える欄
+   * （`cooldownUntil` / `cooldownSource` / `lastRejectedAt` /
+   * `lastRejectedReason` / `updatedAt`。`markTokenUnusable` の doc）だけを
+   * 書き換え、それ以外の欄は読み直した最新の値のまま残す。
    */
-  unusableIds: string[];
+  unusablePatches: { id: string; observation: TokenFailureObservation }[];
   /** 冷却の印を積んだ集合。**保存するのは呼ぶ側である。** */
   tokens: AgentToken[];
   /** 候補を使い切ったときの見立て（`selectNextToken` の `none`）。 */
@@ -1311,7 +1326,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     let sweptTokens = [...startTokens];
     const unusableLabels: string[] = [];
-    const unusableIds: string[] = [];
+    const unusablePatches: { id: string; observation: TokenFailureObservation }[] = [];
     let chosen: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
     /**
      * **判定できなかった候補のうち、いちばん先に出会ったもの。**
@@ -1371,25 +1386,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
       // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
       // 最初の候補として選ばれ、probe を毎回焼く。
+      //
+      // **この場（ローカルの `sweptTokens`）へ積むのは、次の候補選び
+      // （`selectNextToken`。冷却中の行を除く）のためだけである。** 保存する
+      // ときに使う値は `observation` のほうで、`finishSweep` が保存の直前に
+      // 読み直した最新の行へこれを当てる——ここで作った `AgentToken` を
+      // そのまま保存に使うと、probe を始めてからここまでの間に人間が
+      // 変えた同じ行の `value` / `label` / `disabled` / `order` を、古い値へ
+      // 巻き戻すことになる（Issue #2200 のレビューで指摘）。
       const at = now().toISOString();
+      const observation: TokenFailureObservation = {
+        at,
+        message: verdict.reason,
+        // **probe の `retryAt` は `/usage` の枠のリセット時刻である**
+        // （`judgeTokenCandidate` が窓の `resetsAt` から作る）⟹ 出所は
+        // `quota_reset` である（#683）。**`default` ではない** —— これは
+        // claude.ai が言っている値で、こちらが足した推測ではない。
+        ...(verdict.retryAt === undefined
+          ? {}
+          : { resets: { at: verdict.retryAt, source: 'quota_reset' as const } }),
+        fallbackCooldownMs: settings.cooldownMs,
+      };
       sweptTokens = sweptTokens.map((token) =>
-        token.id === selection.token.id
-          ? markTokenUnusable(token, {
-              at,
-              message: verdict.reason,
-              // **probe の `retryAt` は `/usage` の枠のリセット時刻である**
-              // （`judgeTokenCandidate` が窓の `resetsAt` から作る）⟹ 出所は
-              // `quota_reset` である（#683）。**`default` ではない** —— これは
-              // claude.ai が言っている値で、こちらが足した推測ではない。
-              ...(verdict.retryAt === undefined
-                ? {}
-                : { resets: { at: verdict.retryAt, source: 'quota_reset' as const } }),
-              fallbackCooldownMs: settings.cooldownMs,
-            })
-          : token,
+        token.id === selection.token.id ? markTokenUnusable(token, observation) : token,
       );
       unusableLabels.push(selection.token.label);
-      unusableIds.push(selection.token.id);
+      unusablePatches.push({ id: selection.token.id, observation });
     }
 
     // **`usable` が見つからなければ、判定できなかった候補へ倒す。**
@@ -1406,7 +1428,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       ...(chosen === undefined ? {} : { chosen }),
       fellBackToUndecided,
       unusableLabels,
-      unusableIds,
+      unusablePatches,
       tokens: sweptTokens,
       ...(ranOut === undefined ? {} : { ranOut }),
       stoppedByBudget,
@@ -1499,19 +1521,36 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     // **いまは {@link TokenRotatorOptions.writeLock} の中で最新の一覧を読み
     // 直し、この周で「使えない」と判定した候補の行だけを id で当てる。**
     // 読み直した一覧に無い id（人間が消した行）は当てない——作り直さない。
+    //
+    // **⚠️ 「行を id で当てる」の意味を、レビューで直すまで取り違えていた。**
+    // 直す前は `sweep.tokens`（probe を始める前に読んだ、この周のローカルな
+    // 集合）から該当 id の**行そのもの**を取り出し、読み直した最新の行を
+    // それで丸ごと置き換えていた。⟹ probe をしているあいだに人間が同じ行の
+    // `value`（鍵そのもの）・`label`・`disabled`・`order` を変えていると、
+    // それらが古い値へ黙って巻き戻る——**差し替えた鍵が古い鍵へ戻る**という、
+    // `AGENTS.md` の地雷表「回した鍵が黙って巻き戻る」そのものの形だった。
+    // **正しくは、行ではなく「その行に何を観測したか」（`unusablePatches` の
+    // `observation`）だけを持ち回り、保存の直前に読み直した最新の行へ
+    // `markTokenUnusable` を適用する**（`coolDown` と同じ形）——回し手が
+    // 変える欄（`cooldownUntil` / `cooldownSource` / `lastRejectedAt` /
+    // `lastRejectedReason` / `updatedAt`。`markTokenUnusable` の doc）だけが
+    // 変わり、それ以外の欄は読み直した最新の値のまま残る。
     // **以降はここで得た `pool`（保存していなければ `sweep.tokens` そのもの）
     // を正本として使う。**
     const pool =
-      sweep.unusableIds.length === 0
+      sweep.unusablePatches.length === 0
         ? sweep.tokens
         : await writeLock.run(async () => {
             const latest = await stores.tokens.list();
-            const patchedById = new Map(
-              sweep.tokens
-                .filter((token) => sweep.unusableIds.includes(token.id))
-                .map((token) => [token.id, token] as const),
+            const observationById = new Map(
+              sweep.unusablePatches.map((patch) => [patch.id, patch.observation] as const),
             );
-            return stores.tokens.replace(latest.map((token) => patchedById.get(token.id) ?? token));
+            return stores.tokens.replace(
+              latest.map((token) => {
+                const observation = observationById.get(token.id);
+                return observation === undefined ? token : markTokenUnusable(token, observation);
+              }),
+            );
           });
 
     /**
