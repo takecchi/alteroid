@@ -1,0 +1,100 @@
+import { describe, expect, it } from 'vitest';
+
+import { inspectBashCommand } from './bash-wait-guard.js';
+
+/**
+ * Issue #2179 —— bash が1つのコマンドとして実行する形を、ガードが区切り方の読み違いで
+ * 見落としていた。直す前（main 6c30e1d）は、下の「弾く」のうち、`timeout 60 \` の1形と
+ * ヒアドキュメントの罠の1形を除いて、すべて `blocked: false` だった（写しに直接当てた実測、
+ * 2026-09-29T12:0xZ）。
+ *
+ * `run watch` の字面は組み立てる（このファイルをヒアドキュメントで書くと、本番の版のガードに
+ * 誤検知で弾かれるため。#2130）。
+ */
+const W = ['gh', 'run', 'watch'].join(' ');
+
+describe('行の継続（\\ + 改行）で折り返した gh pr merge --delete-branch を弾く（#2179 A）', () => {
+  const blocked: ReadonlyArray<[string, string]> = [
+    ['フラグだけを次の行へ', 'gh pr merge 1 \\\n  --delete-branch'],
+    ['-d を次の行へ', 'gh pr merge 1 --squash \\\n  -d'],
+    ['merge を次の行へ', 'gh pr \\\n  merge 1 -d'],
+    ['pr を次の行へ', 'gh \\\n  pr merge 1 -d'],
+    ['前置きの後ろで折り返す', 'timeout 60 \\\n  gh pr merge 1 -d'],
+    ['&& の後ろで2回折り返す', 'cd x && gh pr merge 1 \\\n  --squash \\\n  --delete-branch'],
+    ['CRLF の継続', 'gh pr merge 1 \\\r\n  --delete-branch'],
+    // 行の継続を取り除いた写しだけにかけると、単一引用符のヒアドキュメントの本文の `\` + 改行で
+    // 1つ目の終端が消え、2つ目の終端まで本文として読んで、間の本物のコマンドを消してしまう。
+    // 元の文字列にもかけるので弾く。
+    [
+      'ヒアドキュメントの本文の \\ + 改行（写しだけでは消える形）',
+      "cat > f <<'EOF'\na \\\nEOF\ngh pr merge 1 -d\ncat > g <<'EOF'\nb\nEOF",
+    ],
+  ];
+  for (const [label, command] of blocked) {
+    it(`${label}: 弾く`, () => {
+      const verdict = inspectBashCommand(command);
+      expect(verdict.blocked).toBe(true);
+      if (!verdict.blocked) throw new Error('unreachable');
+      expect(verdict.form).toBe('gh-pr-merge-delete-branch');
+    });
+  }
+
+  const passing: ReadonlyArray<[string, string]> = [
+    ['-d の無い折り返し', 'gh pr merge 1 \\\n  --squash'],
+    ['折り返しの後ろが件名', "gh pr merge 1 --squash \\\n  --subject 'x'"],
+    ['継続ではない改行の後ろの echo', 'gh pr merge 1 --squash\necho --delete-branch'],
+    ['ヒアドキュメントの本文の \\ + 改行（書くだけ）', "cat > f <<'EOF'\na \\\nEOF\necho ok"],
+  ];
+  for (const [label, command] of passing) {
+    it(`${label}: 通す`, () => {
+      expect(inspectBashCommand(command).blocked).toBe(false);
+    });
+  }
+});
+
+describe('{ …; } & と coproc で背景へ置いた run watch を弾く（#2179 B）', () => {
+  const blocked: ReadonlyArray<[string, string]> = [
+    ['{ …; } &', `{ ${W} 1; } &`],
+    ['グループの途中の run watch', `{ echo a; ${W} 1; } &`],
+    ['入れ子のグループの外側だけが背景', `{ { ${W} 1; }; } &`],
+    ['coproc', `coproc ${W} 1`],
+    ['名前付きの coproc', `coproc W { ${W} 1; }`],
+  ];
+  for (const [label, command] of blocked) {
+    it(`${label}: 弾く`, () => {
+      const verdict = inspectBashCommand(command);
+      expect(verdict.blocked).toBe(true);
+      if (!verdict.blocked) throw new Error('unreachable');
+      expect(verdict.form).toBe('gh-run-watch-background');
+    });
+  }
+
+  const passing: ReadonlyArray<[string, string]> = [
+    ['前景のグループ', `{ ${W} 1; }`],
+    ['グループの後ろが &&', `{ ${W} 1; } && echo done`],
+    ['グループの後ろのリダイレクトとパイプ', `{ ${W} 1; } 2>&1 | tee log`],
+    ['${x} の展開の後ろ', `echo \${x}; ${W} 1`],
+    ['前景の timeout 付き', `timeout 600 ${W} 1 --exit-status`],
+  ];
+  for (const [label, command] of passing) {
+    it(`${label}: 通す`, () => {
+      expect(inspectBashCommand(command).blocked).toBe(false);
+    });
+  }
+});
+
+describe('#2179 の判定が、長い入力で後戻りで爆発しない', () => {
+  const TIME_BUDGET_MS = 200;
+  const cases: ReadonlyArray<[string, string]> = [
+    ['深い入れ子のグループ', `{ ${'{ '.repeat(5000)}${W} 1; ${'}; '.repeat(5000)}} &`],
+    ['行の継続の繰り返し', `${'gh pr merge 1 \\\n'.repeat(4000)}x`],
+    ['開いたままの { の繰り返し', `${'{ '.repeat(8000)}${W} 1`],
+  ];
+  for (const [label, command] of cases) {
+    it(`${label}が予算内に終わる`, () => {
+      const start = performance.now();
+      inspectBashCommand(command);
+      expect(performance.now() - start).toBeLessThan(TIME_BUDGET_MS);
+    });
+  }
+});

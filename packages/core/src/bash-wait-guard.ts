@@ -224,7 +224,85 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
   if (operator !== null && operator[0] === '&') return true;
   // `setsid`（`-w` / `--wait` が無い形）も背景へ置く形である（#2129）。
   const segment = trimmed.slice(commandPositionStartBefore(trimmed, match.index), match.index);
-  return isBackgroundingSetsid(segment);
+  if (isBackgroundingSetsid(segment)) return true;
+  // `coproc` は子を非同期で起こす（#2179）。`setsid` と同じく、背景へ置く形である。
+  if (COPROC_RE.test(segment)) return true;
+  // `{ …; } &` の中（#2179）。`;` が `&` より先に来るので、上の最初の制御演算子の判定では
+  // 背景と読めない。`( … ) &` は `)` の直後の `&` が最初の制御演算子なので、上で弾ける。
+  return isInsideBackgroundedBraceGroup(trimmed, match.index);
+}
+
+/** `coproc [名前] <コマンド>` の `coproc`（#2179）。語の途中の `coproc` は拾わない。 */
+const COPROC_RE = /(?:^|\s)coproc\s/;
+
+/** 波括弧のグループを開く `{`・閉じる `}` として読める位置か（#2179）。 */
+function isBraceOpenAt(command: string, i: number): boolean {
+  if (command[i] !== '{') return false;
+  const prev = command[i - 1];
+  const next = command[i + 1];
+  // `${var}` / `a{b,c}` のような展開は、`{` の直前が語の文字なので外れる。
+  const prevOk = prev === undefined || /[\s;&|(]/.test(prev);
+  const nextOk = next === undefined || /\s/.test(next);
+  return prevOk && nextOk;
+}
+
+function isBraceCloseAt(command: string, i: number): boolean {
+  if (command[i] !== '}') return false;
+  const prev = command[i - 1];
+  // 閉じの `}` は、`;` か改行（と空白）の後ろに来る。`${x}` の `}` は直前が語の文字なので外れる。
+  return prev === undefined || /[\s;&|]/.test(prev);
+}
+
+/**
+ * `index`（`gh run watch` の位置）を囲む `{ … }` のグループが、閉じの `}` の直後で背景の `&`
+ * へ送られているか（#2179）。
+ *
+ * 手前へ走査して、まだ閉じていない `{` を探す。見つかれば、後ろへ走査して、それを閉じる `}` を
+ * 探し、その後ろで最初に来る制御演算子が背景の `&` かを見る（`FIRST_CONTROL_OPERATOR_RE`。
+ * `2>&1` と `&&` は背景と読まない）。**引用符は追わない**（このモジュールの他の判定と同じ）。
+ * 引用符の中の `{` / `}` を読み違えても、弾く側か、いまと同じ（背景と読まない）側に倒れる。
+ * 走査は線形である。
+ */
+function isInsideBackgroundedBraceGroup(command: string, index: number): boolean {
+  // 内側のグループから外側へ順に見る（`{ { … }; } &` のように、外側のグループだけが背景へ
+  // 送られる形があるため）。手前の走査は `left` から、後ろの走査は `right` から続けるので、
+  // 入れ子が深くても走査は全体で線形である。
+  let left = index - 1;
+  let right = index;
+  for (;;) {
+    let depth = 0;
+    let open = -1;
+    for (let i = left; i >= 0; i -= 1) {
+      if (isBraceCloseAt(command, i)) {
+        depth += 1;
+      } else if (isBraceOpenAt(command, i)) {
+        if (depth === 0) {
+          open = i;
+          break;
+        }
+        depth -= 1;
+      }
+    }
+    if (open < 0) return false;
+    depth = 0;
+    let close = -1;
+    for (let i = right; i < command.length; i += 1) {
+      if (isBraceOpenAt(command, i)) {
+        depth += 1;
+      } else if (isBraceCloseAt(command, i)) {
+        if (depth === 0) {
+          close = i;
+          break;
+        }
+        depth -= 1;
+      }
+    }
+    if (close < 0) return false;
+    const operator = FIRST_CONTROL_OPERATOR_RE.exec(command.slice(close + 1));
+    if (operator !== null && operator[0] === '&') return true;
+    left = open - 1;
+    right = close + 1;
+  }
 }
 
 /**
@@ -2036,6 +2114,21 @@ function looksLikeGhPrMergeDeleteBranch(payload: string): boolean {
   return rest.includes('--delete-branch') || /(?:^|[\s'"])-[A-Za-z]*d/.test(rest);
 }
 
+/**
+ * 行の継続（`\` + 改行。`\r\n` も）を取り除いた写しを返す（#2179）。無ければ同じ文字列を返す。
+ *
+ * **引用符もヒアドキュメントも見ずに、全部取り除く。** bash が取り除かない場所（単一引用符の
+ * 中・引用符付きのヒアドキュメントの本文）でも取り除くので、写しは実際の実行とずれうる。
+ * だから呼び出し側（`inspectBashCommand`）は、元の文字列と写しの**両方**に判定をかけ、
+ * どちらかが弾けば弾く（弾く側にしか倒れない）。`\\` + 改行（エスケープした `\` の後ろの
+ * 改行）まで取り除く読み違えも、同じ理由で弾く側に倒れるだけである。
+ */
+function joinLineContinuations(command: string): string {
+  return command.includes('\\\n') || command.includes('\\\r\n')
+    ? command.replace(/\\\r?\n/g, '')
+    : command;
+}
+
 function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
   const withoutHeredocs = stripHeredocs(command);
   const withoutQuotedSubjectBodyValues = stripGhPrMergeQuotedSubjectBodyValues(withoutHeredocs);
@@ -2160,7 +2253,18 @@ export function inspectBashCommand(
   // 123 --delete-branch` は待ちを有界にするだけで、PR を巻き添えで
   // 閉じる危険は1文字も消えない —— ここで先に見ないと、下の
   // `isTimeoutWrapped` がこの形を「有界だから安全」と誤読して素通しする。
-  if (hasGhPrMergeDeleteBranch(trimmed)) {
+  //
+  // **行の継続（`\` + 改行）を取り除いた写しにも、同じ判定をかける**（#2179）。bash は引用符の
+  // 外の `\` + 改行を取り除いて1行として実行するが、この判定は改行を区切りとして読むので、
+  // `gh pr merge 1 \` + 改行 + `--delete-branch` を見落としていた。**元の文字列と写しの両方に
+  // かけ、どちらかが弾けば弾く。** 写しだけにかけると、単一引用符のヒアドキュメントの本文の
+  // `\` + 改行（bash はそこでは取り除かない）で終端の行が消え、後ろの別のヒアドキュメントの
+  // 終端まで本文として読んで、その間の本物のコマンドを消す形が作れる。両方にかければ、弾く
+  // 側にしか倒れない。
+  if (
+    hasGhPrMergeDeleteBranch(trimmed) ||
+    hasGhPrMergeDeleteBranch(joinLineContinuations(trimmed))
+  ) {
     return {
       blocked: true,
       form: 'gh-pr-merge-delete-branch',
