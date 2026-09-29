@@ -61,12 +61,21 @@ function renderChat(initial: string) {
   };
 }
 
+/**
+ * `/approvals` はこの試験の対象ではない——だが issue #2210 以降、`chat.tsx` が
+ * `conversationApprovals.error` を見て `ErrorNote` を出すようになったので、
+ * 未ハンドルのまま（＝`Failed to fetch` で失敗）にすると無関係な `alert` が
+ * 増える。ここでは素直に0件で成功させる。
+ */
 function conversationRoutes(url: string) {
   if (url.includes(`/conversations/${CONVERSATION_A}`)) {
     return json({ conversationId: CONVERSATION_A, messages: [] });
   }
   if (url.includes(`/conversations/${CONVERSATION_B}`)) {
     return json({ conversationId: CONVERSATION_B, messages: [] });
+  }
+  if (url.includes('/approvals')) {
+    return json({ approvals: [] });
   }
   if (url.includes('/conversations')) {
     return json({ conversations: [], scanned: 0 });

@@ -52,10 +52,19 @@ function renderChat(initial: string) {
   };
 }
 
-/** `/approvals` はこの試験の対象ではない。未ハンドルのまま（`chat.interrupt.test.tsx` と同じ）。 */
+/**
+ * `/approvals` はこの試験の対象ではない——だが issue #2210 以降、`chat.tsx` が
+ * `conversationApprovals.error` を見て `ErrorNote` を出すようになったので、
+ * 未ハンドルのまま（＝`Failed to fetch` で失敗）にすると、この試験が見ている
+ * 「会話を終える」の `ErrorNote` と二重に `role="alert"` が立つ。ここでは
+ * 素直に0件で成功させ、その干渉を避ける。
+ */
 function conversationRoutes(url: string) {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
+  }
+  if (url.includes('/approvals')) {
+    return json({ approvals: [] });
   }
   if (url.includes('/conversations')) {
     return json({ conversations: [], scanned: 0 });
@@ -101,6 +110,42 @@ describe('「会話を終える」ボタン', () => {
     expect(screen.getByRole('alert').textContent).toContain('許可が無い');
     // 遷移していない——URL は会話の画面のまま。
     expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_ID}`);
+  });
+
+  /**
+   * issue #2210（PR #2174 の歯の欠け）。
+   *
+   * `handleEndConversation` は `finally` で `setEndingConversation(false)` を
+   * 呼ぶので、失敗しても押せる状態へ戻る実装には既になっている——だが
+   * それを測る歯が無かった。`finally` を外して成功の経路だけで解除する変異
+   * （失敗すると固まったままになる、直す前と同じ形の欠陥）を当てると、この
+   * 歯だけが赤くなる。
+   */
+  it('(d) 失敗した後、ボタンは disabled でなくなり、もう一度押せる', async () => {
+    const stub = stubFetch((url) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/end')) return json({ error: '許可が無い' }, 403);
+      return undefined;
+    });
+
+    renderChat(`/chat/${CONVERSATION_ID}`);
+    fireEvent.click(await findEndButton());
+
+    // 失敗が返り、ErrorNote が出る（ベースライン、(a) と同じ）。
+    expect(await screen.findByRole('alert')).toBeTruthy();
+
+    // 押せる状態へ戻っている——`disabled` が外れている。
+    await waitFor(() => {
+      expect((endButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // もう一度押せる——二度目のクリックが実際に `/end` を叩く。
+    fireEvent.click(endButton());
+    await waitFor(() => {
+      const calls = stub.entries.filter((entry) => entry.url.endsWith('/end'));
+      expect(calls).toHaveLength(2);
+    });
   });
 
   it('(b) 押している間はもう一度押せない（disabled）', async () => {

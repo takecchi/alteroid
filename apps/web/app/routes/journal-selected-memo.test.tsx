@@ -15,7 +15,7 @@
  * `applyNewerPage(...).freshCount === 0` で `setEntries` まで届かず、GET も
  * 画面の文言も変わらない（issue #2055 の「なぜ今は壊れて見えないか」）。
  * **効いているかどうかを実際に測れるのは参照の同一性そのものだけ**なので、
- * `~/hooks/use-journal-window` を丸ごとスタブに差し替え、`JournalBody` が
+ * `@alteroid/swr` の `useJournalWindow` だけをスタブに差し替え、`JournalBody` が
  * 呼ぶたびに渡ってくる `selected` の引数を捕まえて比べる。
  *
  * **`useMemo` を外す変異への赤黒**: repo のハーネス（`.claude/skills/
@@ -26,8 +26,8 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { JournalWindow } from '~/hooks/use-journal-window';
-import type { JournalEntryType } from '~/lib/types';
+import type { JournalWindow } from '@alteroid/swr';
+import type { JournalEntryType } from '@alteroid/logic';
 import { Providers, storeTestBaseUrl } from '~/test-support';
 
 const { useJournalWindowMock, capturedSelected } = vi.hoisted(() => {
@@ -38,13 +38,14 @@ const { useJournalWindowMock, capturedSelected } = vi.hoisted(() => {
 });
 
 /**
- * **`~/hooks/use-journal-window` を丸ごと置き換える。** 実装の中身
+ * **`@alteroid/swr` の `useJournalWindow` だけを置き換える。** 実装の中身
  * （SSE の重ね合わせ・ページ送り・GET）は `journal.tsx` の再描画とは
  * 無関係なので、ここでは呼ばれた引数だけを記録する最小のスタブにする
  * （`apps/web` の「自前のスタブを書かない」は jsdom に無い口の話——
  * これはモジュール境界のテストダブルで別の話）。
  */
-vi.mock('~/hooks/use-journal-window', () => ({
+vi.mock('@alteroid/swr', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@alteroid/swr')>()),
   useJournalWindow: useJournalWindowMock,
 }));
 

@@ -1,17 +1,16 @@
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
+import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
 import {
   useDeclareOwner,
   useGrantAccess,
   useRevokeAccess,
   useRevokeOwnerDeclaration,
-} from '~/hooks/mutations';
-import { useAccess } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { formatDateTime } from '~/lib/format';
-import type { AccessAccount } from '~/lib/types';
+  useAccess,
+  ApiError,
+} from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { AccessAccount } from '@alteroid/logic';
 
 /**
  * `/access` — ログインしたアカウントと許可の一覧（`GET /access` / CLI の
@@ -28,7 +27,7 @@ import type { AccessAccount } from '~/lib/types';
  * 同じ「ボタンは隠さない」方針——押せない理由を消さず、失敗したときに
  * **端末で打つコマンド（`alteroid access owner <id>`）をアカウント id 入りで
  * 案内する。** サーバの規則（誰が宣言できるか）はここへ写さない
- * （`grep -Fn -- 'サーバの規則（誰が直せるか）をここへ写さないこと' apps/web/app/hooks/mutations.ts`）
+ * （`grep -Fn -- 'サーバの規則（誰が直せるか）をここへ写さないこと' packages/swr/src/hooks/mutations.ts`）
  * ——先回りしてボタンを隠したり無効化したりせず、返ってきた失敗をそのまま
  * 見せるだけにする。
  *

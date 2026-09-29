@@ -31,7 +31,7 @@ import { createApp } from './app.js';
  *
  * - `PUT`/`DELETE /practices/:slug`（HTTP。CLI と Web UI が実際に叩く口——
  *   `apps/cli/src/practice.ts` の `write`/`remove`、
- *   `apps/web/app/hooks/mutations.ts` の `usePracticeWrite`/`usePracticeRemove`
+ *   `packages/swr/src/hooks/mutations.ts` の `usePracticeWrite`/`usePracticeRemove`
  *   はどちらもこの2つの HTTP 経路に収束する）は、壊れた行に対しても
  *   例外を投げずに書き直し・削除まで進む。
  * - `practice_write`/`practice_remove`（MCP。クローンの道具）も同様。

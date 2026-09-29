@@ -5,7 +5,7 @@ import type { JournalEntryType } from './schema.js';
  *
  * この口は4口すべてが通る（issue #250）が、`apps/web` が持っている日誌の型は
  * `@alteroid/core` の `JournalEntry` ではなく **OpenAPI から生成した
- * `@alteroid/api-client` の型**である（`apps/web/app/lib/types.ts`）。同じ形の
+ * `@alteroid/api-client` の型**である（`packages/logic/src/types.ts`）。同じ形の
  * 別の型なので、`JournalEntry` で受けると **web だけがキャストを書くことに
  * なる** —— キャストは「本当に同じ形か」を誰も検算しないまま黙らせる。
  *

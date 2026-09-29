@@ -1,8 +1,6 @@
-import { Page } from '~/components/page';
-import { Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useDropped } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import type { DroppedState } from '~/lib/types';
+import { Page, Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import { useDropped, ApiError } from '@alteroid/swr';
+import type { DroppedState } from '@alteroid/logic';
 
 /**
  * `/dropped` — 握り潰しの跡（記録・読み出しの失敗の跡。本文は1文字も含まない）を

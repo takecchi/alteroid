@@ -1,12 +1,19 @@
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useRemoveArchive } from '~/hooks/mutations';
-import { useArchive, useArchiveSessions } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { formatDateTime } from '~/lib/format';
-import type { ArchiveEntry, ArchiveSessionSummary } from '~/lib/types';
+import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Spinner,
+} from '@alteroid/ui';
+import { useRemoveArchive, useArchive, useArchiveSessions, ApiError } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
 
 /**
  * `/archive` — セッション生ログの退避（可観測性の最下段）。CLI の `/archive`

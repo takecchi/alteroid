@@ -8,7 +8,7 @@ import {
 } from 'react-router';
 import type { ReactNode } from 'react';
 
-import { ApiProvider } from '~/lib/api';
+import { ApiProvider } from '@alteroid/swr';
 
 import './app.css';
 
@@ -27,7 +27,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         {/*
-          `viewport-fit=cover` は `env(safe-area-inset-*)`（app.css の `--safe-*`）と
+          `viewport-fit=cover` は `env(safe-area-inset-*)`（`@alteroid/ui` の `styles.css` の `--safe-*`）と
           対である。これが無いと inset は常に 0 のままで、切り欠きを避ける指定が
           まるごと効かない。
         */}

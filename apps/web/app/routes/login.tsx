@@ -3,11 +3,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
-import { Badge, Button, Card, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useAuth } from '~/hooks/use-auth';
-import { useApiContext } from '~/lib/api';
-import { readPendingLogin, storePendingLogin } from '~/lib/auth';
-import { claimUntilReady, openAuthorization, startLogin, type ClaimOutcome } from '~/lib/login';
+import { Badge, Button, Card, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import {
+  useAuth,
+  useApiContext,
+  claimUntilReady,
+  openAuthorization,
+  startLogin,
+  type ClaimOutcome,
+} from '@alteroid/swr';
+import { readPendingLogin, storePendingLogin } from '@alteroid/logic';
 
 export default function Login() {
   const auth = useAuth();

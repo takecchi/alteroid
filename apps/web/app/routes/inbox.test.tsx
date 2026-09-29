@@ -14,7 +14,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { InboxBacklog, InboxEventType } from '~/lib/types';
+import type { InboxBacklog, InboxEventType } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Inbox from './inbox';

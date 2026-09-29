@@ -12,7 +12,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Practice, PracticeVersionSummary } from '~/lib/types';
+import type { Practice, PracticeVersionSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 import type { Route as FetchRoute } from '~/test-support';
 

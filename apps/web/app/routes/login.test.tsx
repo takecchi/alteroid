@@ -7,15 +7,15 @@
  *
  * `Ungranted` は既定 export（`Login`）の内部でしか使わないコンポーネントなので、
  * `useAuth` が `ungranted` を返すところまで状態を作ってから `Login` を描く
- * （`apps/web/app/hooks/use-auth.test.tsx` と同じ作り方 — 鍵を保存してから
+ * （`packages/swr/src/hooks/use-auth.test.tsx` と同じ作り方 — 鍵を保存してから
  * `/health` は enabled、`/auth/me` は 403 を返す）。
  */
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { storeCredential } from '~/lib/auth';
-import type { Credential } from '~/lib/auth';
+import { storeCredential } from '@alteroid/logic';
+import type { Credential } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Login from './login';

@@ -13,10 +13,9 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { JournalFeedProvider } from '~/hooks/journal-feed';
-import { summarizeJournalEntry } from '~/hooks/queries';
-import type { JournalLive } from '~/hooks/use-journal-live';
-import type { JournalEntry } from '~/lib/types';
+import { JournalFeedProvider, summarizeJournalEntry } from '@alteroid/swr';
+import type { JournalLive } from '@alteroid/swr';
+import type { JournalEntry } from '@alteroid/logic';
 import {
   json,
   Providers,
@@ -406,7 +405,7 @@ describe('「稼働中のマネージャー」は知らない status を静か�
  * 「一覧」は、カード自身の絞り込み（`isRunningJobStatus` が真にする状態）と
  * 同じ母集合で `/managers` へ飛ぶ（issue #2090）。**素の `/managers` へ戻すと、
  * 終わった・止まった委譲まで混ざった一覧が開く**——直す前の症状そのものを
- * 歯にする。値の組み立ては `~/lib/managers-links` の `managersHref`（そちらの
+ * 歯にする。値の組み立ては `packages/logic/src/managers-links.ts` の `managersHref`（そちらの
  * 単体テストが href の形そのものを見る）に任せ、ここでは「呼ばれているか・
  * `status` が空でないか」だけを見る。
  */

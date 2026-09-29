@@ -1,17 +1,16 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page } from '~/components/page';
-import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useMemoryDocuments } from '~/hooks/queries';
+import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { useMemoryDocuments } from '@alteroid/swr';
 import {
   describeMemoryDescriptionDrift,
   formatBytes,
   formatCreatedAtRelative,
   formatMemoryStaleness,
   formatRelative,
-} from '~/lib/format';
-import type { MemorySummary } from '~/lib/types';
+} from '@alteroid/logic';
+import type { MemorySummary } from '@alteroid/logic';
 
 /** サーバ側と同じ規則（`memorySlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;

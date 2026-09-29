@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
 import {
+  Page,
   Badge,
   Button,
   Card,
@@ -11,11 +11,10 @@ import {
   Input,
   Select,
   Spinner,
-} from '~/components/ui';
-import { useCredentials } from '~/hooks/queries';
-import { useRemoveEnvVar, useSetEnvVar } from '~/hooks/mutations';
-import { formatDateTime } from '~/lib/format';
-import type { EnvVarScope, EnvVarView } from '~/lib/types';
+} from '@alteroid/ui';
+import { useCredentials, useRemoveEnvVar, useSetEnvVar } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { EnvVarScope, EnvVarView } from '@alteroid/logic';
 
 /**
  * `/env-vars` — alteroid 自身の運用設定・マネージャーへ降ろす環境変数（旧

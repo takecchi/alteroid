@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import type { ManagerStatus } from '~/lib/types';
+import type { ManagerStatus } from '@alteroid/logic';
 
 /**
  * `FailureNote`（`manager-detail.tsx`）と `ManagerFailureNote`（`managers.tsx`）が

@@ -13,8 +13,8 @@ import {
 } from '@alteroid/core/usage';
 import { Link, useSearchParams } from 'react-router';
 
-import { Page } from '~/components/page';
 import {
+  Page,
   Badge,
   Card,
   CardHeader,
@@ -24,9 +24,14 @@ import {
   Select,
   Spinner,
   TruncationNote,
-} from '~/components/ui';
-import { useUsage, type UsageQuery } from '~/hooks/queries';
-import { tokensHref } from '~/lib/tokens-links';
+} from '@alteroid/ui';
+import { useUsage, type UsageQuery } from '@alteroid/swr';
+import {
+  tokensHref,
+  USAGE_FROM_PARAM,
+  USAGE_MANAGER_ID_PARAM,
+  USAGE_TO_PARAM,
+} from '@alteroid/logic';
 import type {
   AccountUsageState,
   UnrecordedManager,
@@ -34,8 +39,7 @@ import type {
   UsageRow,
   UsageSite,
   UsageTurnRow,
-} from '~/lib/types';
-import { USAGE_FROM_PARAM, USAGE_MANAGER_ID_PARAM, USAGE_TO_PARAM } from '~/lib/usage-links';
+} from '@alteroid/logic';
 
 /**
  * `/usage` — alteroid が使った分（トークンと費用）。
@@ -60,7 +64,7 @@ const AXIS_LIMIT = 20;
  * ここには無い——どれも「1つの値」で、複数値を1つのパラメタへ詰める必要が
  * 無いので、API のクエリ名と揃えたほうが読み手には素直である。
  *
- * **`from` / `to` / `managerId` は `~/lib/usage-links` の正本を使う（issue
+ * **`from` / `to` / `managerId` は `packages/logic/src/usage-links.ts` の正本を使う（issue
  * #2077 / #2078）。** 委譲の詳細（`manager-detail.tsx`）とダッシュボード
  * （`dashboard.tsx`）が `/usage` へのリンクを組み立てるとき、同じ欄名を
  * 書き写さずに済ませるため——書き写すと、片方だけ変わる経路が生まれる。
@@ -633,7 +637,7 @@ function UsageBody({
             **飛び先はその id の行そのもの（issue #2109。#2100 の段2）。**
             `tokens.tsx` の `TokenRow` に飛び先（DOM の id・スクロール・
             控えめな強調）が入ったので、`/tokens` 止まりだった飛び先を行へ
-            向け直した。href の組み立てと URL の欄名は `~/lib/tokens-links`
+            向け直した。href の組み立てと URL の欄名は `packages/logic/src/tokens-links.ts`
             に1本化してある（`usage-links.ts` / `managers-links.ts` と同じ
             慣習——欄名を呼び出し側とここの両方で書き写さない）。プールから
             外れた id（使用量には残っているが、いまの `GET /tokens` に居ない）

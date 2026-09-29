@@ -1,12 +1,10 @@
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '~/components/ui';
-import { ProfileRejectedError, useSetProfile } from '~/hooks/mutations';
-import { useProfile } from '~/hooks/queries';
-import { formatDateTime } from '~/lib/format';
-import type { ProfileState, ProfileUpdateResult } from '~/lib/types';
+import { Page, Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '@alteroid/ui';
+import { ProfileRejectedError, useSetProfile, useProfile } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { ProfileState, ProfileUpdateResult } from '@alteroid/logic';
 
 /**
  * `/profile` — 実行環境プロファイル（`.zprofile` 相当）を読む・差し替える画面

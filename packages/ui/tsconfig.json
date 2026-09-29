@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "vitest.config.ts"],
+  "compilerOptions": {
+    // apps/web と同じ世界（Vite が束ねるブラウザ向けのソース）で書かれているので、
+    // base（Node 前提・NodeNext・ES2023 のみ）を apps/web/tsconfig.json と同じ形に上書きする。
+    // このパッケージは build を持たず、ソースのまま apps/web の Vite に読ませる。
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "declaration": false,
+    // shadcn の CLI（`components.json` の aliases）が解決に使う。**コードは `@/` を使わず相対で書く**
+    // ——apps/web の Vite と共通の vitest は `@/` を知らないので、`shadcn add` が吐いた
+    // `@/lib/cn` などは相対へ直すこと（書き忘れは build とテストが解決できずに落とす）。
+    "paths": { "@/*": ["./src/*"] }
+  }
+}

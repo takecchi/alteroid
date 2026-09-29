@@ -22,7 +22,7 @@ import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
-import type { ManagerStatus, ManagerSummary } from '~/lib/types';
+import type { ManagerStatus, ManagerSummary } from '@alteroid/logic';
 import {
   DEFAULT_VIEWPORT_WIDTH,
   json,
@@ -36,7 +36,7 @@ import type { Route } from './+types/manager-detail';
 import ManagerDetail, { clientLoader } from './manager-detail';
 
 /**
- * `askedAt` の絶対時刻表示（`~/lib/format` の `formatDateTime`）を確かめる
+ * `askedAt` の絶対時刻表示（`packages/logic/src/format.ts` の `formatDateTime`）を確かめる
  * 歯があるので、この画面と同じ理由で TZ を固定する。**理由（`vi.hoisted` で
  * なければ静かに効かない事情、CI が UTC で手元が JST であること）は
  * `apps/web/app/routes/reports.test.tsx` の冒頭に逐語で在るので、ここには
@@ -1366,7 +1366,7 @@ describe('詳細でも、セッション不在と器の沈黙は状態を置き�
   });
 
   /**
-   * **時刻はこの画面の作法（`~/lib/format` の `formatRelative`）。** CLI と
+   * **時刻はこの画面の作法（`packages/logic/src/format.ts` の `formatRelative`）。** CLI と
    * `manager_list` は ISO をそのまま出しており、**書式が違うのは意図である。**
    */
   it('時刻は相対表示で、ISO をそのまま出さない', async () => {

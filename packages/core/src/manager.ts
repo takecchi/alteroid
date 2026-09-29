@@ -10779,7 +10779,7 @@ class Pool implements ManagerPool {
         // の `summary`（`` `${toolName} の実行許可: ${brief(input)}` ``）と同じ
         // 生成元・同じ性質で、AI が文章として書いたものではない。
         //
-        // **⟹ 実測すると化ける。** `apps/web/app/components/markdown.tsx` と
+        // **⟹ 実測すると化ける。** `packages/ui/src/components/markdown.tsx` と
         // 同じ設定（react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks
         // 4.0.0、rehype-raw 無し）で `brief({"command":"echo \`date\` && rm -rf /"})`
         // を通すと、` \`date\` ` が本物の `<code>` になった。`brief({"path":"src/_init_/x.ts"})`
@@ -11114,7 +11114,7 @@ class Pool implements ManagerPool {
         // `` `journal_read` `` を持つ）。そこへ Markdown ではない字面をそのまま
         // 補間していたので、**いま既に化けている**:
         //
-        // **どう化けるかは実機のレンダラで測った**（`apps/web/app/components/markdown.tsx`
+        // **どう化けるかは実機のレンダラで測った**（`packages/ui/src/components/markdown.tsx`
         // と同じ `react-markdown` ＋ `remark-gfm` ＋ `remark-breaks` の設定。観測
         // 2026-08-27。詳細は `markdown-span.ts` の doc）:
         //
@@ -11497,7 +11497,7 @@ class Pool implements ManagerPool {
         // 面ごとに別の判断を書いている）であり、`manager.ts` はそれを決める場所
         // ではない。**方針が決まれば覆る種類の見送りである。**
         //
-        // **実測（観測 2026-08-28、`apps/web/app/components/markdown.tsx` と
+        // **実測（観測 2026-08-28、`packages/ui/src/components/markdown.tsx` と
         // 同じ react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks 4.0.0、
         // rehype-raw 無し、版は `apps/web/node_modules` から引いた）**:
         // `packages/core/src/*.test.ts` に実在する SDK 由来の実例

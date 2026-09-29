@@ -335,7 +335,7 @@ describe('/usage 画面', () => {
    * （「（トークンの帰属が無い分）」＝ `tokenId: null`）はリンクにしない。
    *
    * **飛び先はその id の行そのもの（issue #2109。#2100 の段2）。** `/tokens`
-   * 止まりだった飛び先を、`~/lib/tokens-links` の `tokensHref` で組み立てた
+   * 止まりだった飛び先を、`packages/logic/src/tokens-links.ts` の `tokensHref` で組み立てた
    * `/tokens?tokenId=<id>` へ向け直した——`tokens.tsx` 側がこのクエリを読んで
    * 行へスクロール・強調する（`tokens.test.tsx` が持つ）。
    */

@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Tabs } from 'radix-ui';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Badge,
   Button,
   Card,
@@ -16,17 +16,17 @@ import {
   TAB_TRIGGER_ACTIVE_CLASS,
   TAB_TRIGGER_CLASS,
   Textarea,
-} from '~/components/ui';
+  cn,
+} from '@alteroid/ui';
 import {
   useCreateSchedule,
   usePostEvent,
   useRemoveSchedule,
   useRunSchedule,
-} from '~/hooks/mutations';
-import { useSchedule } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
-import type { ScheduleEntry, ScheduleSpec } from '~/lib/types';
+  useSchedule,
+} from '@alteroid/swr';
+import { formatDateTime, formatRelative } from '@alteroid/logic';
+import type { ScheduleEntry, ScheduleSpec } from '@alteroid/logic';
 
 /**
  * 仕事の起点のうち、時間（②）と外部イベント（③）を人間から起こす画面。

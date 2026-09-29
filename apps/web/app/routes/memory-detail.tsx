@@ -2,20 +2,19 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Tabs } from 'radix-ui';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Button,
   ErrorNote,
   Spinner,
   TAB_TRIGGER_ACTIVE_CLASS,
   TAB_TRIGGER_CLASS,
   Textarea,
-} from '~/components/ui';
-import { useDeleteMemory, useSaveMemory } from '~/hooks/mutations';
-import { useMemoryDocument } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatCreatedAt, formatDateTime } from '~/lib/format';
+  cn,
+} from '@alteroid/ui';
+import { useDeleteMemory, useSaveMemory, useMemoryDocument } from '@alteroid/swr';
+import { formatCreatedAt, formatDateTime } from '@alteroid/logic';
 
 import type { Route } from './+types/memory-detail';
 
