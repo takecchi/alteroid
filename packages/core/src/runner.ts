@@ -30,12 +30,14 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
+  AgentPreToolRewrite,
   AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
+import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
@@ -4448,7 +4450,53 @@ class RunnerSession {
       }
     }
 
-    return this.#consumeOneShotAllow(record);
+    const decision = this.#consumeOneShotAllow(record);
+    const rewrite = this.#planBashToolTimeoutRewrite(record);
+    if (rewrite === undefined || decision.kind === 'deny') return decision;
+    return { ...decision, rewrite };
+  }
+
+  /**
+   * `Bash` のツールの `timeout` 引数が、コマンドの中の `timeout <継続時間>` より
+   * 短ければ、引き上げた入力を返す（issue #2088。判定は `bash-tool-timeout.ts`）。
+   *
+   * **弾かない。** 入力の `timeout` の欄だけを引き上げ、他の欄は1文字も変えない。
+   * 引き上げたことは日誌の note（`形=bash-tool-timeout-raised`）と、打った側への
+   * 一文（`rewrite.note`）の両方に残す——書き換えを観測から消さないため。
+   *
+   * 判定が投げても呼び出しは止めない（書き換えは安全弁ではなく便宜なので、
+   * 倒れる先は「書き換えない」）。stderr へ1行だけ残す。
+   */
+  #planBashToolTimeoutRewrite(record: AgentPreToolRecord): AgentPreToolRewrite | undefined {
+    if (record.toolName !== 'Bash') return undefined;
+    const toolInput = record.toolInput;
+    if (toolInput === null || typeof toolInput !== 'object' || Array.isArray(toolInput)) {
+      return undefined;
+    }
+    const input = toolInput as Record<string, unknown>;
+    let raise: ReturnType<typeof planBashToolTimeoutRaise>;
+    try {
+      raise = planBashToolTimeoutRaise(input);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${message}\n`);
+      return undefined;
+    }
+    if (raise === undefined) return undefined;
+
+    const actor =
+      record.agentId === undefined
+        ? `manager:${this.#id}`
+        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const from = raise.fromMs === undefined ? '未指定' : `${raise.fromMs}ms`;
+    this.#tryObservation('timeout 引数の引き上げの note の送り出し', () => {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `Bash の呼び出しの timeout 引数を引き上げた（${actor}・形=bash-tool-timeout-raised・${from}→${raise.toMs}ms）。`,
+      });
+    });
+    return { input: { ...input, timeout: raise.toMs }, note: describeBashToolTimeoutRaise(raise) };
   }
 
   /**

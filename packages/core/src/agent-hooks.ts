@@ -296,9 +296,39 @@ export interface AgentPreToolRecord {
  * **`ask` は持たない。** いまの実装のどちらも `ask` を一度も返していない
  * ——語彙を先回りして作らない（`agent-events.ts` の `AgentPermissionDenial`
  * と同じ流儀）。要るようになったら、そのときの実装を確かめてから足す。
+ *
+ * **`continue` と `allow` は、任意で `rewrite`（入力の書き換え）を持てる**
+ * （issue #2088）。`runner.ts` の `#onPreToolUse` が、`Bash` のツールの
+ * `timeout` 引数をコマンドの中の寿命に合わせて引き上げるとき
+ * （`bash-tool-timeout.ts`）に使う。**書き換えは判断ではない** ——
+ * `continue` に付ければ確認の流れはそのまま（許可も拒否もしない）で、
+ * 入力だけが変わる。`deny` には付けない（止める呼び出しの入力を変えても意味が無い）。
  */
 export type AgentPreToolDecision =
-  { kind: 'continue' } | { kind: 'allow'; reason: string } | { kind: 'deny'; reason: string };
+  | { kind: 'continue'; rewrite?: AgentPreToolRewrite }
+  | { kind: 'allow'; reason: string; rewrite?: AgentPreToolRewrite }
+  | { kind: 'deny'; reason: string };
+
+/**
+ * `PreToolUse` での入力の書き換え（issue #2088）。
+ *
+ * - `input`: 書き換えた後の入力**全体**（差分ではない）。元の入力の欄を
+ *   落とさないこと —— provider は、これで元の入力をまるごと置き換える
+ * - `note`: 書き換えたことを打った側（エージェント）へ伝える一文。書き換えが
+ *   観測から消えないように、provider はこれをエージェントの文脈へ載せる
+ *
+ * **provider の側の約束**: Claude では `hookSpecificOutput.updatedInput` と
+ * `additionalContext` へ写す（`claude-provider.ts` の `wrapPreToolHook`）。
+ * `permissionDecision` を付けずに `updatedInput` だけを返しても適用されることは、
+ * 本物の本体で確かめてある（`real-cli-pre-tool-use-rewrite.test.ts`）。
+ * 書き換えを持たない provider を足すときは、書き換えられないことを申告し、
+ * 黙って捨てないこと（AGENTS.md の地雷表「能力を持たない provider で
+ * 『それらしい確認ダイアログ』を出す」と同じ理由）。
+ */
+export interface AgentPreToolRewrite {
+  readonly input: Record<string, unknown>;
+  readonly note: string;
+}
 
 /**
  * 判断を返す `PreToolUse` フックの中立の関数型。**`AgentObservationHook` とは
