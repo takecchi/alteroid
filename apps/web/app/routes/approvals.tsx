@@ -512,7 +512,12 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   // ③ まだ返答が無い。会話は取れたが、クローンの発言が0件（人間の発言しか
   // 無い場合も含む——「クローンが黙ったまま」という事実そのものを出す）。
   if (!hasCloneReply) {
-    return <p className="text-[11px] text-muted italic">この会話にはまだクローンの発言が無い</p>;
+    return (
+      <div>
+        <p className="text-[11px] text-muted italic">この会話にはまだクローンの発言が無い</p>
+        <OpenInChat conversationId={conversationId} />
+      </div>
+    );
   }
 
   // ④ 在る。
@@ -535,6 +540,25 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
           </li>
         ))}
       </ul>
+      <OpenInChat conversationId={conversationId} />
     </div>
+  );
+}
+
+/**
+ * **この会話をチャットの画面で開く（issue #2069）。** パネルに出すのは会話を
+ * 読むためだけの写しで、続きを書くにはチャットへ移る必要がある。その会話は
+ * `/chat/:conversationId`（`routes.ts`）で開けるので、会話を読めた2状態
+ * （③ ④）にだけ出す。②（読み込み中・失敗）には出さない——読めなかった会話を
+ * 開けるかのように見せないため。①（会話が無い）には開く先が無い。
+ */
+function OpenInChat({ conversationId }: { conversationId: string }) {
+  return (
+    <Link
+      to={`/chat/${conversationId}`}
+      className="mt-2 inline-block text-[11px] text-accent hover:underline"
+    >
+      この会話をチャットで開く →
+    </Link>
   );
 }

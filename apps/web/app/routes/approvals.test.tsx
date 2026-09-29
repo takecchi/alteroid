@@ -856,6 +856,10 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(await screen.findByText('この会話にはまだクローンの発言が無い')).toBeTruthy();
     // ④ の見出しは出ない。
     expect(screen.queryByText('この確認が上がった会話')).toBeNull();
+    // 会話は読めたので、チャットで開く導線は出す（issue #2069）。
+    expect(
+      screen.getByRole('link', { name: /この会話をチャットで開く/ }).getAttribute('href'),
+    ).toBe('/chat/conv-x');
   });
 
   /**
@@ -892,5 +896,35 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(screen.queryByText(/への返答/)).toBeNull();
     // 「まだクローンの発言が無い」（③）とは出ない。
     expect(screen.queryByText('この会話にはまだクローンの発言が無い')).toBeNull();
+    // チャットで開く導線（issue #2069）。
+    expect(
+      screen.getByRole('link', { name: /この会話をチャットで開く/ }).getAttribute('href'),
+    ).toBe('/chat/conv-x');
+  });
+
+  /**
+   * **読めなかった会話には「チャットで開く」を出さない（issue #2069）。**
+   * 読み込み中・失敗のどちらでも出さない。①（会話が無い）にも出さない。
+   */
+  it('チャットで開く導線は ① と ②（読み込み中・失敗）には出ない', async () => {
+    stubApprovals(
+      [
+        approval({ id: 'a-1', question: '会話なし' }),
+        approval({ id: 'a-2', question: '読み込み中', conversationId: 'conv-wait' }),
+        approval({ id: 'a-3', question: '失敗', conversationId: 'conv-gone' }),
+      ],
+      {
+        conversation: (id) =>
+          id === 'conv-wait'
+            ? new Promise<Response>(() => {})
+            : json({ error: `会話 ${id} は存在しない` }, 404),
+      },
+    );
+    renderPage();
+
+    expect(await screen.findByText(/この確認は会話に紐づいていない/)).toBeTruthy();
+    expect(await screen.findByText('この確認が上がった会話を読み込み中')).toBeTruthy();
+    expect(await screen.findByText(/会話 conv-gone は存在しない/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /この会話をチャットで開く/ })).toBeNull();
   });
 });
