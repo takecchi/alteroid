@@ -354,7 +354,7 @@ function blankQuotedInteriorForNonExecutingCommands(command: string): string {
  * 直す前は `TAIL_FOLLOW_RE` を `command` へそのままかけていたため、引用符の
  * **中**に書かれた `tail -f` の字面（実行されない）も拾っていた——
  * `git commit -m "use tail -f x.log"` / `gh issue comment 1 --body "run tail -f x.log"` /
- * `grep -n "tail -f x.log" a.md` / `echo 'tail -f x.log'` がいずれも誤って弾かれていた。
+ * grep の検索語に書いた `"tail -f x.log"` / `echo 'tail -f x.log'` がいずれも誤って弾かれていた。
  *
  * ⟹ `blankQuotedInteriorForNonExecutingCommands` で、許可リストに当たる単純コマンドの
  * 引用符の中身だけを空白へ潰した写しへ `hasTailFollowPattern` をかける。
