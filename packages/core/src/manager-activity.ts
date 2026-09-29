@@ -145,8 +145,7 @@ function hasDaemonAnsweredStallTrigger(
   pending: NonNullable<ManagerActivityInput['toolUseStallPending']>,
 ): boolean {
   return pending.some(
-    (item) =>
-      item.name === undefined || item.name.trim() === '' || isDaemonAnsweredTool(item.name),
+    (item) => item.name === undefined || item.name.trim() === '' || isDaemonAnsweredTool(item.name),
   );
 }
 
