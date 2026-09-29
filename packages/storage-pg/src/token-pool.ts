@@ -25,9 +25,10 @@ type AgentTokenRow = typeof agentTokens.$inferSelect;
 
 /**
  * 不正な値を要約する。**`issue.message` は使わない**——zod の既定メッセージが
- * enum 等では実際の値（`received`）を含む（`rotateOn` に版ずれ・手編集の
- * 値が入っていた場合、それがそのまま漏れる）。出すのは「どの欄が」だけで
- * ある（fs 側 `packages/storage-fs/src/token-pool.ts` の
+ * 将来 `received`（実際の値）を含む形に変わっても、ここを通す限り値は漏れ
+ * ない（実測 2026-09-29: この repo の zod 版では enum の既定メッセージは
+ * 値そのものを含まない形だったが、それに依存しない）。出すのは「どの欄が」
+ * だけである（fs 側 `packages/storage-fs/src/token-pool.ts` の
  * `summarizeInvalidFields` / `PgScheduleStore` の同名関数と同じ理由・同じ
  * 形。パッケージを跨いだ共通化はしていない。issue #2053）。
  */
