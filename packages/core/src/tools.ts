@@ -10980,6 +10980,22 @@ export function createCloneTools(context: ToolContext) {
               ...(describeAppraisal(manager) === null
                 ? []
                 : [`  ${excerptLine(describeAppraisal(manager) ?? '', 120)}`]),
+              // **Issue #2183: ここには足さないと決めた。** `manager_report`
+              // には `describeWithheldReports` を足した（すぐ下の説明文が
+              // 案内する先）が、この一覧の行には足していない——理由は2つ。
+              // (1) この一覧は既に「背景処理待ち×N」で `tasks`（在り高）を
+              // 名乗っており、`withheldReports`（本数）まで並べると読み手は
+              // 2つの数を1本の行で見比べることになる——`ManagerAwaitingBackground`
+              // の doc が名指しで禁じているのは「1つに畳む」ことで、**別行でも
+              // 隣に置けば同じ混同が起きる**。(2) この一覧は文字数の予算
+              // （`LIST_BUDGET`）に張り付いていて、行を1本増やすと出せる件数が
+              // 減る（すぐ上の他の条件付き行と同じ制約）——`awaitingBackground`
+              // は多くの委譲で立たない軸なので費用は小さいが、詳細を持たない
+              // 数だけを並べても読み手の次の一手は変わらない（「配っていない
+              // 報告が N 本ある」と分かっても、この一覧からできることは
+              // 変わらず、結局 manager_report / journal_read へ掘りに行く）。
+              // ⟹ この一覧はいまのまま「案内する側」に留め、実際の本数と
+              // 内容は掘った先（`manager_report`）に置く。
             ],
           });
         });

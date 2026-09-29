@@ -20679,6 +20679,155 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
   });
 
   /**
+   * **Issue #2182: `manager_list` / `manager_report` に評定が出ていなかった。**
+   * `commitment_list` は `describeAppraisal(entry)` を1行足しているのに、
+   * 同じファイルの `manager_list` / `manager_report` には0件だった
+   * （grep で確かめた。`describeAppraisal` の doc「未評定なら `null`——
+   * 1文字も増やさない」という規則を、評定が在る回にも無い回にも確かめる）。
+   */
+  describe('manager_list / manager_report の評定（Issue #2182）', () => {
+    it('manager_list は評定が在る行に describeAppraisal の1行を足す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      target.appraisal = 'good';
+      target.appraisedBy = 'clone';
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('評定: うまくいった（good・clone）');
+    });
+
+    it('manager_list は未評定の行に評定の行を足さない（1文字も増えない）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      // target.appraisal はセットしない（未評定のまま）。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply, '未評定の行に「未評定」等の刷り込みも足さない').not.toContain('評定');
+    });
+
+    it('manager_report は評定が在る回に同じ1行を足す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      target.lastReport = '報告本文';
+      target.appraisal = 'bad';
+      target.appraisedBy = 'human';
+      target.appraisalReason = '手戻りが多かった';
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).toContain('評定: うまくいかなかった（bad・human）: 手戻りが多かった');
+    });
+
+    it('manager_report は未評定の回に評定の行を足さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      target.lastReport = '報告本文';
+      // target.appraisal はセットしない。
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).not.toContain('評定');
+    });
+
+    it('manager_report は報告がまだ無い回でも、評定が在れば出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      // target.lastReport はセットしない（「報告はまだ無い」の枝へ落ちる）。
+      target.appraisal = 'unclear';
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).toContain('評定: 判定できない（unclear）');
+    });
+  });
+
+  /**
+   * **Issue #2183: `manager_report` に「配っていない報告の本数」が無いのに、
+   * `manager_list` は manager_report を見るよう案内していた。**
+   * `awaitingBackground` のとき、Web は `withheldReports` を出すが、
+   * `manager_report` はいちども `withheldReports` を出していなかった
+   * （grep で確かめた）。`tasks`（背景タスクの在り高）とは別の軸なので
+   * 1つに畳まない（`ManagerAwaitingBackground.tasks` の doc）。
+   */
+  describe('manager_report の配っていない報告の本数（Issue #2183）', () => {
+    it('manager_report は awaitingBackground のときだけ本数を出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      target.lastReport = '報告本文';
+      target.awaitingBackground = {
+        // **わざと違う値にする。** tasks と取り違えていないかを見分けるため。
+        tasks: 5,
+        withheldReports: 2,
+        breakdown: 'local_agent×5',
+        since: '2026-09-05T00:00:00.000Z',
+      };
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).toContain('配っていない報告 2 本');
+      expect(reply, 'tasks（5）ではなく withheldReports（2）を出す').not.toContain(
+        '配っていない報告 5 本',
+      );
+      expect(reply).toContain('中身は日誌の decision に在る');
+    });
+
+    it('manager_report は awaitingBackground が無ければ本数の行を足さない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      target.lastReport = '報告本文';
+      // target.awaitingBackground はセットしない。
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).not.toContain('配っていない報告');
+    });
+
+    it('manager_report は報告がまだ無い回でも、awaitingBackground が在れば本数を出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      // target.lastReport はセットしない（「報告はまだ無い」の枝へ落ちる）。
+      target.awaitingBackground = {
+        tasks: 1,
+        withheldReports: 3,
+        breakdown: 'local_agent×1',
+        since: '2026-09-05T00:00:00.000Z',
+      };
+
+      const reply = await h.call('manager_report', { managerId: target.managerId });
+
+      expect(reply).toContain('配っていない報告 3 本');
+    });
+
+    it('manager_list はこの本数を出さない（tasks と並べて畳まない設計）', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0]!;
+      target.awaitingBackground = {
+        tasks: 5,
+        withheldReports: 2,
+        breakdown: 'local_agent×5',
+        since: '2026-09-05T00:00:00.000Z',
+      };
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('背景処理待ち×5');
+      expect(reply, 'manager_list は withheldReports を出さない設計のまま').not.toContain(
+        '配っていない報告',
+      );
+    });
+  });
+
+  /**
    * **C-4。`usage_read` の説明文がアカウント全体の残り枠に触れていない。**
    *
    * 実装（軸を渡さないモード）は `renderAccountUsage(...)` を**先頭に**置いてから
