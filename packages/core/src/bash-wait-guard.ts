@@ -488,11 +488,18 @@ function isBackgroundingSetsid(segment: string): boolean {
  *
  * ## ⚠️ この検出器が弾けないと分かっている形
  *
- * - **`bash -c '…'` の中。** 構文（コマンド位置）しか見ていないので、
+ * - ~~**`bash -c '…'` の中。** 構文（コマンド位置）しか見ていないので、
  *   単一引用符の中の `gh pr merge --delete-branch` は「引用符の中」という
  *   条件だけで素通しされる。これは他の文字列だけを読む判定器と同じ限界
  *   であり、この PR でも直していない（歯は
- *   `bash-wait-guard.test.ts` の末尾に明記する）。
+ *   `bash-wait-guard.test.ts` の末尾に明記する）。~~ **issue #2104（PR #2114）で
+ *   直った。** 文字列が別のシェルに渡されて実行される形（シェルの `-c`・`eval`・
+ *   `ssh`・シェルへのパイプ・シェルへのヒアドキュメント）は、中身を取り出して同じ
+ *   判定にもう一度かける（`hasGhPrMergeDeleteBranch` の doc。歯は
+ *   `bash-wait-guard-delete-branch-issue-2104.test.ts`）。`bash-wait-guard.test.ts`
+ *   の `bash -c` の歯も `it.fails` から `it` へ戻してある。**残る限界**（ファイルの
+ *   中身・コマンド置換の結果は読めない、など）は同じ doc に在る。取り消し線のまま
+ *   残すのは、他の直った項と同じ理由である。
  * - ~~**⚠️ `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、`--subject` /
  *   `--body` の値ではなく素で引用符に囲まれた短縮フラグ `-d`。** issue #1910
  *   の作業中に見つけた、**この PR とは無関係な既存の穴**（この PR が作った
