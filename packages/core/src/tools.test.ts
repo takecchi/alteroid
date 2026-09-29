@@ -12449,6 +12449,138 @@ describe('manager_transcript（生ログへ降りる）', () => {
 });
 
 /**
+ * `manager_transcript` の絞り（since/until/type/contains。issue #2188）。
+ *
+ * **絞りの計算そのもの**（窓の両端・時刻の無い行・読めない行・type の複数・
+ * contains・組み合わせ）は `transcript-filter.test.ts` が測る。ここで測るのは
+ * **道具の応答の形**——数え上げの行が出ること・続きの案内に絞りが載ること・
+ * 絞りを1つも渡さないと出力が今と1文字も変わらないこと。
+ */
+describe('manager_transcript（生ログを絞る。#2188）', () => {
+  const assistantLine = (extra: string) =>
+    `{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z"${extra}}`;
+
+  it('4つの絞り（since/until/type/contains）を1つも渡さないと、出力は絞り機能を足す前と1文字も変わらない', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const body = [assistantLine(',"stop_reason":"tool_use"'), '{"type":"user"}'].join('\n');
+    h.setTranscript('mgr-1', body);
+
+    const reply = await h.call('manager_transcript', { managerId: 'mgr-1' });
+
+    expect(reply).toBe(`マネージャー mgr-1 の生ログ（全 ${body.length} 文字）\n\n${body}`);
+    expect(reply).not.toContain('絞り込み');
+  });
+
+  it('since/until の窓で絞ると「全X行のうちY行が当たった」が先頭に出る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const body = [
+      '{"type":"a","timestamp":"2026-01-01T09:00:00.000Z"}',
+      '{"type":"b","timestamp":"2026-01-01T10:00:00.000Z"}',
+      '{"type":"c","timestamp":"2026-01-01T11:00:00.000Z"}',
+    ].join('\n');
+    h.setTranscript('mgr-1', body);
+
+    const reply = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      since: '2026-01-01T10:00:00.000Z',
+      until: '2026-01-01T11:00:00.000Z',
+    });
+
+    expect(reply).toContain('絞り込み: 全 3 行のうち 1 行が当たった。');
+    expect(reply).toContain('{"type":"b"');
+    expect(reply).not.toContain('"type":"a"');
+    expect(reply).not.toContain('"type":"c"');
+  });
+
+  it('窓を渡すと、0件でも「時刻の無い行・読めない行は窓の判定ができないので除いた」を出す', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', '{"type":"a"}');
+
+    const reply = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      since: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(reply).toContain('絞り込み: 全 1 行のうち 0 行が当たった。');
+    expect(reply).toContain('時刻の無い行 1 行');
+    expect(reply).toContain('読めない行 0 行');
+    expect(reply).toContain('窓の判定ができないので除いた');
+  });
+
+  it('type で複数種別（カンマ区切り）を絞れる', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const body = ['{"type":"assistant"}', '{"type":"result"}', '{"type":"user"}'].join('\n');
+    h.setTranscript('mgr-1', body);
+
+    const reply = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      type: 'assistant,result',
+    });
+
+    expect(reply).toContain('絞り込み: 全 3 行のうち 2 行が当たった。');
+    expect(reply).toContain('"type":"assistant"');
+    expect(reply).toContain('"type":"result"');
+    expect(reply).not.toContain('"type":"user"');
+  });
+
+  it('contains で部分文字列を絞れる（例: "stop_reason":"tool_use"）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const body = [
+      assistantLine(',"stop_reason":"tool_use"'),
+      assistantLine(',"stop_reason":"end_turn"'),
+    ].join('\n');
+    h.setTranscript('mgr-1', body);
+
+    const reply = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      contains: '"stop_reason":"tool_use"',
+    });
+
+    expect(reply).toContain('絞り込み: 全 2 行のうち 1 行が当たった。');
+    expect(reply).toContain('tool_use');
+    expect(reply).not.toContain('end_turn');
+  });
+
+  it('切れたときの続きの案内（offset=…）に、渡した絞りの引数がそのまま付く', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    const matching = Array.from({ length: 500 }, (_, i) => assistantLine(`,"i":${i}`)).join('\n');
+    const body = [matching, '{"type":"other"}'].join('\n');
+    h.setTranscript('mgr-1', body);
+
+    const reply = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      type: 'assistant',
+      contains: 'i',
+    });
+
+    expect(reply).toContain('ここで切れている');
+    expect(reply).toMatch(
+      /manager_transcript managerId=mgr-1 offset=\d+ type=assistant contains=i/,
+    );
+  });
+
+  it('since/until が ISO 8601 として読めないときは、生ログを読みに行かずその場で断る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscript('mgr-1', '{"type":"a"}');
+
+    const reply = await h.call('manager_transcript', {
+      managerId: 'mgr-1',
+      since: 'not-a-date',
+    });
+
+    expect(reply).toContain('日時として読めない');
+    expect(reply).not.toContain('絞り込み');
+  });
+});
+
+/**
  * `archive_remove` — アーカイブ済みセッション生ログの本文を1件消す（#698）。
  *
  * **雛形は `memory_delete`。** 同じ作法（存在しない id を黙って成功にしない・

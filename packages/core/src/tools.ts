@@ -20,6 +20,7 @@ import {
 import { isCronExpression } from './cron.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
+import { filterTranscriptLines } from './transcript-filter.js';
 import {
   describeUnreadableJournalTimeBoundary,
   isReadableJournalTimeBoundary,
@@ -11998,6 +11999,15 @@ export function createCloneTools(context: ToolContext) {
         '走行中なら runner のディスクから、畳まれていれば退避済みアーカイブから、',
         'それも無ければ預かったセッションの生ログから返る（3段のどこかにあれば返る）。',
         '長ければ続きの取り方が末尾に出るので、最後まで読み切ること。',
+        '大きな生ログを何百ページもめくらずに探せるよう、絞りを4つ渡せる',
+        '（どれも省略できる。1つも渡さなければ出力は絞らないときと1文字も',
+        '変わらない）——since/until（ISO 8601。各行の timestamp 欄がこの窓に',
+        '入る行だけ残す。since は含む・until は含まない）、type（行の type 欄。',
+        'カンマ区切りで複数指定できる）、contains（行の生の文字列の部分一致。',
+        '例 contains=\'"stop_reason":"tool_use"\'。JSON として読めない行にも',
+        '掛かる）。絞ったときは先頭に「全X行のうちY行が当たった」を出し、',
+        '時刻の窓を渡したときは timestamp の無い行・JSON として読めない行を',
+        '（窓の判定ができないので）除いた数も出す——黙って捨てない。',
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
@@ -12009,11 +12019,48 @@ export function createCloneTools(context: ToolContext) {
           .describe(
             `何文字目から読むか（${formatIntRangeJa({ min: 0 })}）。前回の応答が示した続きの位置を渡す`,
           ),
+        // **issue #2188。** 絞りは4つとも省略できる——全部省略したときの
+        // 出力が1文字も変わらないことは `tools.test.ts` の
+        // 「manager_transcript（生ログを絞る。#2188）」が保証する。
+        since: z
+          .string()
+          .optional()
+          .describe(
+            '絞り: ISO 8601。各行の timestamp 欄がこの時刻以降（含む）の行だけ残す' +
+              '（例 2026-08-15T09:00:00Z）。until と組み合わせて窓を作る',
+          ),
+        until: z
+          .string()
+          .optional()
+          .describe('絞り: ISO 8601。timestamp 欄がこの時刻より前（含まない）の行だけ残す'),
+        type: z
+          .string()
+          .optional()
+          .describe(
+            '絞り: 行の type 欄で絞る。カンマ区切りで複数指定できる（例 assistant,result）',
+          ),
+        contains: z
+          .string()
+          .optional()
+          .describe(
+            '絞り: 行の生の文字列にこの部分文字列を含む行だけ残す' +
+              '（例 "stop_reason":"tool_use"）。JSON として読めない行にも掛かる',
+          ),
       },
-      async ({ managerId, offset = 0 }) => {
+      async ({ managerId, offset = 0, since, until, type, contains }) => {
         // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
+        // **issue #2188。** since/until が ISO 8601 として読めるかは、絞りの
+        // 計算そのもの（`filterTranscriptLines`）ではなくここで見る——
+        // `journal_read`/`conversation_read` と同じ分担（`journal-time.ts`
+        // の doc）。読めない値を渡したときは生ログを読みに行く前に断る。
+        if (since !== undefined && !isReadableJournalTimeBoundary(since)) {
+          return text(describeUnreadableJournalTimeBoundary('since', since) + '生ログは絞れない。');
+        }
+        if (until !== undefined && !isReadableJournalTimeBoundary(until)) {
+          return text(describeUnreadableJournalTimeBoundary('until', until) + '生ログは絞れない。');
+        }
         if (!context.managers) return NO_POOL;
         const result = await context.managers.transcript(managerId);
         if (result.kind === 'missing') {
@@ -12047,7 +12094,55 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const { body, archiveId } = result;
+        const { body: rawBody, archiveId } = result;
+
+        // **issue #2188。** 4つとも渡さなければ `hasFilter` は false になり、
+        // 下の分岐は一切通らない——`body` は `rawBody` のまま、`filterNote` は
+        // 空文字列のままなので、この関数の出力は絞り機能を足す前と1文字も
+        // 変わらない（歯: 「絞りを何も渡さないと出力は1文字も変わらない」）。
+        const hasFilter =
+          since !== undefined ||
+          until !== undefined ||
+          type !== undefined ||
+          contains !== undefined;
+        let body = rawBody;
+        let filterNote = '';
+        if (hasFilter) {
+          const types =
+            type === undefined
+              ? undefined
+              : type
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter((t) => t.length > 0);
+          const filtered = filterTranscriptLines(rawBody, { since, until, types, contains });
+          body = filtered.body;
+          const { totalLines, matchedLines, noTimestampLines, unparsableLines } = filtered.counts;
+          // **「全X行のうちY行が当たった」は0件でも出す**——絞った結果が
+          // 空のとき、黙って空の本文を返すと「絞りが効いていない」のか
+          // 「本当に0件だった」のか読み手には区別できない。
+          const noteLines = [`絞り込み: 全 ${totalLines} 行のうち ${matchedLines} 行が当たった。`];
+          if (since !== undefined || until !== undefined) {
+            // **窓を渡したときは、除いた行数を必ず出す（0件でも）。** 黙って
+            // 捨てると「窓の判定ができない行があった」という事実そのものが
+            // 出力から消える（`AGENTS.md` の「取れない軸に0の行を作る」の逆
+            // ——ここは値を作るのではなく、取れなかった理由を出す側である）。
+            noteLines.push(
+              `（時刻の無い行 ${noTimestampLines} 行・読めない行 ${unparsableLines} 行は` +
+                '窓の判定ができないので除いた）',
+            );
+          } else if (unparsableLines > 0) {
+            // 窓を渡さず type だけのとき——JSON として読めない行は type も
+            // 読めないので除かれる。0件のときまでは出さない（`memory_read`
+            // 方式。`listing-and-detail` の「切れていないときに注記を出さない
+            // 側へ倒せる」と同じ判断）。
+            noteLines.push(
+              `（JSON として読めない行 ${unparsableLines} 行は type の判定ができないので除いた）`,
+            );
+          }
+          filterNote = noteLines.join('\n') + '\n\n';
+        }
+
         const part1 = page(body, offset, TRANSCRIPT_PAGE);
         // **この本文がどの archive id から読めたかを添える**（#698）——
         // クローンが読んだ直後に `archive_remove archiveId=<id>` で消せるように
@@ -12058,10 +12153,23 @@ export function createCloneTools(context: ToolContext) {
             ? ''
             : `（archive id: ${archiveId}。archive_remove archiveId=${archiveId} で消せる）`;
         const head = `マネージャー ${managerId} の生ログ（${describePage(part1)}）${archiveNote}`;
-        const tail = part1.more
-          ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}）`
+        // **issue #2188。** 続きの取り方（`offset=`）に、今回渡した絞りの
+        // 引数をそのまま付ける——付けないと、続きを読んだ瞬間に絞りが外れて
+        // 「窓の外の行」まで読めてしまい、絞りが効いていない体験になる。
+        // `hasFilter` が false のときは何も付かない（既存の文言と1文字も
+        // 変わらない）。
+        const resumeFilterArgs = hasFilter
+          ? [
+              since !== undefined ? ` since=${since}` : '',
+              until !== undefined ? ` until=${until}` : '',
+              type !== undefined ? ` type=${type}` : '',
+              contains !== undefined ? ` contains=${contains}` : '',
+            ].join('')
           : '';
-        return text(`${head}\n\n${part1.body}${tail}`);
+        const tail = part1.more
+          ? `\n\n…（ここで切れている。続きは manager_transcript managerId=${managerId} offset=${part1.to}${resumeFilterArgs}）`
+          : '';
+        return text(`${filterNote}${head}\n\n${part1.body}${tail}`);
       },
     ),
 
