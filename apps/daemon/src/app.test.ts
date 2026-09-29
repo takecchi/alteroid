@@ -7194,7 +7194,9 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.inProgress.lastReport.withoutReport).toBe(1);
     expect(body.throughput.commitmentsClosed).toBe(3);
     expect(body.throughput.commitmentsOpened).toBe(0);
-    expect(body.throughput.delegationsEnded.count).toBe(1);
+    // 終端（done / failed / lost / stopped）で updatedAt が窓の中: job-done-recent と job-lost。
+    // job-done-old は窓の外なので数えない
+    expect(body.throughput.delegationsEnded.count).toBe(2);
     // 4 / (3 / 168) = 224。流入は窓の中に無いので not_converging ではない
     expect(body.forecast.state).toBe('estimated');
     expect(body.forecast.hoursToDrain).toBeCloseTo(224, 6);
