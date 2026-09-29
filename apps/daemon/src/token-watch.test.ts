@@ -6,9 +6,29 @@ import type {
   TokenRotator,
   TokenVerdictOrigin,
 } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { startTokenRotationWatch } from './token-watch.js';
+
+/**
+ * 実時間を待たない（issue #2146）。
+ *
+ * ここより下のテストは、実時間の `setTimeout` で 30〜40ms 待ち、その間に
+ * `tickMs: 5` の実時間の見張りが「十分な回数走った」ことを前提にして
+ * `expect(...)` していた（`token-trial-watch.test.ts` と同じ族）。器が
+ * 混んでイベントループが遅れると、待ちの間に見張りが走りきらず、早すぎる
+ * `expect` が落ちうる。`vi.useFakeTimers()` を敷き、`settle()` を
+ * `vi.advanceTimersByTimeAsync(ms)` に置き換える —— 見張りの内部の
+ * `setTimeout` も同じ偽の時計に乗るので、指定した ms ぶんの目盛りが
+ * 「実際に走ったこと」を保って進む（器の速さに依存しない）。
+ */
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /**
  * 認証トークンの見張り（`token-watch.ts`）。
@@ -62,9 +82,9 @@ function fake(): Fake {
   };
 }
 
-/** マイクロタスクを回し切る（`run` は同期では終わらない）。 */
+/** 偽の時計を5ms進める（`run` は同期では終わらない。マイクロタスクも一緒に流れる）。 */
 async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await vi.advanceTimersByTimeAsync(5);
 }
 
 const OK: AccountUsageState = {
@@ -172,7 +192,7 @@ describe('見張り: 契機を回し手へ渡す', () => {
       minGapMs: 0,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await vi.advanceTimersByTimeAsync(40);
     watch.stop();
 
     expect(f.calls.length).toBeGreaterThanOrEqual(2);
@@ -190,7 +210,7 @@ describe('見張り: 契機を回し手へ渡す', () => {
 
     watch.stop();
     watch.poke('pool_changed');
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.advanceTimersByTimeAsync(30);
 
     expect(f.calls).toEqual([]);
   });
@@ -216,7 +236,7 @@ describe('見張り: 契機を回し手へ渡す', () => {
       minGapMs: 0,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await vi.advanceTimersByTimeAsync(40);
     watch.stop();
 
     expect(calls.length).toBeGreaterThanOrEqual(2);
