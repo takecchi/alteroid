@@ -1000,7 +1000,8 @@ export async function runSlashCommand(
       if (entries.length > 0) {
         stdout.write(
           '  /reply <番号|requestId> <本文> で質問に答える、' +
-            '/allow /deny <番号|requestId> [理由] で実行許可に答えられます\n',
+            '/allow /deny [番号|requestId] [理由] で実行許可に答えられます' +
+            '（1本だけなら番号無しでも打てます）\n',
         );
       }
       return 'ok';

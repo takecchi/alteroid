@@ -4517,6 +4517,25 @@ describe('chat の /waiting', () => {
       json: { text: '了解しました', requestId: 'req-legacy' },
     });
   });
+
+  /**
+   * issue #2197。`/waiting` が待ちを1件以上出したときに続けて出すヒント
+   * （`/reply` `/allow` `/deny` の使い方）が、`/help` と同じ「番号無しでも
+   * 打てる」形を書いていなかった——`HELP` の該当行と同じコミット・同じ症状
+   * （読んだ人が引数無しの近道に気づけない）が、この文言にも別に存在した。
+   */
+  it('待ちが1件以上あるヒントに、/allow /deny が [番号|requestId]（省略可）と、1本だけなら番号無しの案内を持つ', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ waiting: [waitingItem()] })],
+    });
+
+    await runSlashCommand('/waiting', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('/allow /deny [番号|requestId] [理由]');
+    expect(text).toContain('1本だけなら番号無しでも打てます');
+  });
 });
 
 /**
