@@ -10,6 +10,7 @@ import {
   describeDenialFollowUp,
   describeManagerState,
   describeSessionMissingKind,
+  JOURNAL_ENTRY_TYPES,
   jobStatusSchema,
   renderApprovalTrace,
   usageLayerSchema,
@@ -264,7 +265,9 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /reports [件数]       日報の一覧
 /memory              記憶の一覧
 /memory <slug>       記憶の中身（書き換えは alteroid memory edit <slug>）
-/journal [件数] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
+/journal [件数] [type=<種別1,種別2>] [q=<語>]  日誌（新しい順）。q= はそれ以降の行末までを1つの語として扱う
+                     type= は ${JOURNAL_ENTRY_TYPES.slice(0, 7).join(' / ')} /
+                     ${JOURNAL_ENTRY_TYPES.slice(7).join(' / ')} のカンマ区切り
 /conversations [limit=<N>] [scan=<N>]  会話の一覧（新しい順、番号付き）
 /conversation <番号|id> [scan=<N>] [includeSuperseded=true]  その会話の中身（古い順。
                      番号は /conversations の並び。includeSuperseded=true でチャットの
@@ -306,7 +309,10 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /done <番号|id> [理由]  片付けたことを記録する（番号は /commitments の並び）
 /rate <番号|id> <good|bad|unclear> [--kind=<種類>] [理由]  うまくいったかの評定を付ける・覆す
                      （片付いた行にも未了の行にも付く。何度でも上書きできる）
-/usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>]  利用状況（いくら使ったか）
+/usage [from=YYYY-MM-DD] [to=YYYY-MM-DD] [manager=<id>] [layer=<種>] [site=<場所>] [token=<id>]  利用状況（いくら使ったか）
+                     layer= は ${usageLayerSchema.options.join(' / ')}、site= は
+                     ${usageSiteSchema.options.join(' / ')} のどれか。token= は
+                     alteroid token list の id（値の集合は閉じていないため検査しない）
 /schedule            時間起点のジョブ・継続中の依頼と次の発火
 /schedule <kind> <HH:MM|30m|cron 0 10 * * 1> <依頼>  継続する依頼を仕込む
 /unschedule <kind>   継続中の依頼を外す
@@ -600,13 +606,27 @@ export async function runSlashCommand(
       // 語で探す口に空白が入らないのは実用にならない — `/usage` /
       // `/conversations` の `key=value` の慣習は保ったまま、値の側だけ
       // 行末まで伸ばす。
-      const { limit: limitToken, q } = parseJournalSearchTokens(rest);
+      //
+      // **知らない `type=` は 400 を待たずにその場で断る**（`/managers` の
+      // `status=` / `/usage` の `layer=`・`site=` と同じ慣習）。デーモンへ
+      // 問い合わせる前に `parseJournalSearchTokens` が検査するので、
+      // `parsed.ok` を先に見る。
+      const parsed = parseJournalSearchTokens(rest);
+      if (!parsed.ok) {
+        stdout.write(`${parsed.message}\n`);
+        return 'ok';
+      }
+      const { limit: limitToken, q, type } = parsed;
       const limit = limitToken ?? '20';
       const response = await client.journal.$get({
-        query: { limit, ...(q === undefined ? {} : { q }) },
+        query: {
+          limit,
+          ...(type === undefined ? {} : { type }),
+          ...(q === undefined ? {} : { q }),
+        },
       });
       if (!response.ok) {
-        stdout.write('日誌を読めませんでした（件数 / q= の値を確かめてください）\n');
+        stdout.write('日誌を読めませんでした（件数 / type= / q= の値を確かめてください）\n');
         return 'ok';
       }
       const { entries } = await response.json();
@@ -615,11 +635,20 @@ export async function runSlashCommand(
         // （`journal_read` の同じ場面と同じ扱い）。黙ると「日誌にその語は
         // 無い」と読めるが、実際には tool_use の input に書かれているかも
         // しれない（AGENTS.md「静かに失敗する道具」）。
-        if (q === undefined) {
+        //
+        // **`type=` で絞った上での0件を「日誌はまだ空」と言わない。** 絞り込み
+        // が効いた結果の0件を全体の空と混ぜると、絞りを外せば見えるはずの
+        // 日誌まで「無い」と読める（嘘の観測）。
+        if (q === undefined && type === undefined) {
           stdout.write('（日誌はまだ空）\n');
-        } else {
+        } else if (q === undefined) {
           stdout.write(
-            `「${q}」に当たる日誌はありません。` +
+            `type=${type} に当たる日誌はありません` + '（絞り込みを外せば見えるかもしれません）\n',
+          );
+        } else {
+          const prefix = type === undefined ? '' : `type=${type} に絞った上で、`;
+          stdout.write(
+            `${prefix}「${q}」に当たる日誌はありません。` +
               'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
               'そこにだけ書かれている語はここでは当たりません\n',
           );
@@ -2723,6 +2752,13 @@ interface UsageFilters {
   managerId?: string;
   layer?: UsageLayer;
   site?: UsageSite;
+  /**
+   * どの認証トークンで（issue #2079）。**値の集合は閉じていない**（プールの
+   * 中身は器ごとに違う）ので、`layer`/`site` と違って検査しない——`usage.ts`
+   * の `UsageOptions.token` の doc と同じ理由。存在しない id を弾かず、
+   * そのままデーモンへ渡す。
+   */
+  tokenId?: string;
 }
 
 type ParsedUsageFilters = { ok: true; filters: UsageFilters } | { ok: false; message: string };
@@ -2745,44 +2781,87 @@ function parseKeyValueTokens(tokens: string[]): Record<string, string> {
   return raw;
 }
 
+/** `/journal [件数] [type=<種別1,種別2>] [q=<語>]` を解いた結果（issue #2073）。 */
+export type ParsedJournalSearchTokens =
+  { ok: true; limit?: string; type?: string; q?: string } | { ok: false; message: string };
+
 /**
- * `/journal [件数] [q=<語>]` を解く。
+ * `/journal [件数] [type=<種別1,種別2>] [q=<語>]` を解く。
  *
  * **`q=` は、そのトークンから行末までを1つの語として扱う。** 呼び出し元は
  * 行を空白で割った後のトークン列を渡してくる（`line.split(/\s+/)`）ので、
  * `parseKeyValueTokens` をそのまま使うと **空白を含む語で探せない** ——
  * 「語で探す」口としては使いものにならない。`/usage` / `/conversations` の
- * `key=value` の慣習は保ったまま、値の側だけ行末まで伸ばす。
+ * `key=value` の慣習は保ったまま、値の側だけ行末まで伸ばす。だから
+ * `type=` も `q=` と同じ「行末まで読む」領域には置かず、`q=` より前
+ * （`before`）だけを見る——`type=` の値そのものにカンマ以外の区切りは
+ * 無いので、行末まで伸ばす理由が無い。
  *
  * **件数は従来どおり先頭の位置引数である**（`/journal 50`）。既存の呼びを
- * 1文字も変えないため、`q=` で始まらない最初のトークンを件数として読む。
+ * 1文字も変えないため、`type=` にも `q=` にも当たらない最初のトークンを
+ * 件数として読む——`type=` を素通しで「最初の非空トークン」と読むと、
+ * `/journal type=decision 50` のような並びで `type=decision` を件数として
+ * 誤読する。
  *
- * **`q=`（値が空）は `q` を渡さない**のと同じに倒す。HTTP 側は空文字列を
+ * **`q=`・`type=`（値が空）は渡さない**のと同じに倒す。HTTP 側は空文字列を
  * 「絞らない」に倒すので結果は同じだが、渡さないほうが意図が読みやすい。
+ *
+ * **知らない種別は 400 を待たずにその場で断る**（`/managers` の `status=`・
+ * `/usage` の `layer=`/`site=` と同じ慣習）。種別の集合は core の
+ * `JOURNAL_ENTRY_TYPES` だけが持つので、書き写さずそこから使える値の一覧を
+ * 組む。
  */
-export function parseJournalSearchTokens(tokens: string[]): {
-  limit?: string;
-  q?: string;
-} {
+export function parseJournalSearchTokens(tokens: string[]): ParsedJournalSearchTokens {
   const qIndex = tokens.findIndex((token) => token.startsWith('q='));
   const before = qIndex === -1 ? tokens : tokens.slice(0, qIndex);
-  const limit = before.find((token) => token.length > 0);
+
+  const typeToken = before.find((token) => token.startsWith('type='));
+  const type = typeToken?.slice('type='.length);
+
+  const limit = before.find((token) => token.length > 0 && !token.startsWith('type='));
+
+  if (type !== undefined && type.length > 0) {
+    const unknown = type
+      .split(',')
+      .filter((value) => value.length > 0)
+      .filter((value) => !(JOURNAL_ENTRY_TYPES as readonly string[]).includes(value));
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        message:
+          `type= に知らない値が入っています: ${unknown.join(', ')}` +
+          `（使えるのは ${JOURNAL_ENTRY_TYPES.join(' / ')}）`,
+      };
+    }
+  }
+
   if (qIndex === -1) {
-    return limit === undefined ? {} : { limit };
+    return {
+      ok: true,
+      ...(limit === undefined ? {} : { limit }),
+      ...(type === undefined || type.length === 0 ? {} : { type }),
+    };
   }
   const q = tokens.slice(qIndex).join(' ').slice('q='.length);
   return {
+    ok: true,
     ...(limit === undefined ? {} : { limit }),
+    ...(type === undefined || type.length === 0 ? {} : { type }),
     ...(q.length === 0 ? {} : { q }),
   };
 }
 
 /**
- * `/usage from=… to=… manager=… layer=… site=…` を解く。
+ * `/usage from=… to=… manager=… layer=… site=… token=…` を解く。
  *
  * **層と場所の値の集合は core の schema だけが持つ**（`narrowUsageAxis`）。chat 側に
  * 書き写すと、値が増えたときにここだけ古くなる。読めない値は 400 を待たずにその場で
  * 「どれを指定すればよいか」を返す。
+ *
+ * **`token=` は検査しない（issue #2079）。** 値の集合が閉じていない（認証
+ * トークンのプールは器ごとに違う）ので、CLI が許された値の一覧を持てない
+ * ——`usage.ts` の `UsageOptions.token` / `alteroid usage --token` と同じ
+ * 受け渡し。
  */
 function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
   const raw = parseKeyValueTokens(tokens);
@@ -2798,6 +2877,7 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
       ...(raw.manager === undefined ? {} : { managerId: raw.manager }),
       ...(layer.value === undefined ? {} : { layer: layer.value }),
       ...(site.value === undefined ? {} : { site: site.value }),
+      ...(raw.token === undefined ? {} : { tokenId: raw.token }),
     },
   };
 }

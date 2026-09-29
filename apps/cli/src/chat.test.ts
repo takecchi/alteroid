@@ -1,4 +1,12 @@
-import { appraisalSchema, jobStatusSchema, type Commitment } from '@alteroid/core';
+import {
+  appraisalSchema,
+  JOURNAL_ENTRY_TYPES,
+  jobStatusSchema,
+  USAGE_ESTIMATE_NOTICE,
+  usageLayerSchema,
+  usageSiteSchema,
+  type Commitment,
+} from '@alteroid/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -1486,6 +1494,12 @@ function stubClient(
     memoryDocuments?: MemoryDocLike[];
     /** `GET /journal` が返す一覧。既定は空。 */
     journalEntries?: JournalEntryLike[];
+    /**
+     * `GET /usage` の応答。既定は「台帳はまだ空」（`since: null`）の最小形
+     * ——ここで測りたいのはクエリの絞り込みと HELP なので、`renderUsage` が
+     * 早期リターンする形の応答にしてある（issue #2079）。
+     */
+    usageAggregate?: unknown;
     /** `GET /reports` が返す一覧。既定は空。 */
     reports?: { date: string; at: string; body: string; unavailable?: string }[];
     /** `GET /managers` が返す一覧。既定は空（`/managers` `/waiting` `/reply` 等が使う）。 */
@@ -1689,6 +1703,22 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /journal', args });
         return Promise.resolve(reply(200, { entries: options.journalEntries ?? [] }));
+      },
+    },
+    usage: {
+      $get: (args: unknown) => {
+        calls.push({ route: 'GET /usage', args });
+        return Promise.resolve(
+          reply(
+            200,
+            options.usageAggregate ?? {
+              since: null,
+              notice: USAGE_ESTIMATE_NOTICE,
+              account: { state: 'unknown' },
+              unrecordedManagers: [],
+            },
+          ),
+        );
       },
     },
     reports: {
@@ -2755,6 +2785,127 @@ describe('chat の /journal', () => {
   });
 
   /**
+   * **issue #2073: `type=` を `GET /journal` の `type` へそのまま渡す。**
+   * Web の `useJournalWindow`（`type: joined`）と同じ受け渡し。
+   */
+  describe('type=（issue #2073）', () => {
+    it('type= をそのまま GET /journal のクエリへ渡す', async () => {
+      captureStdout();
+      const { calls, client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal type=decision', client, emptyListed());
+
+      expect(calls).toEqual([
+        { route: 'GET /journal', args: { query: { limit: '20', type: 'decision' } } },
+      ]);
+    });
+
+    it('カンマ区切りの複数種別をそのまま渡す', async () => {
+      captureStdout();
+      const { calls, client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal type=decision,tool_use', client, emptyListed());
+
+      expect(calls).toEqual([
+        { route: 'GET /journal', args: { query: { limit: '20', type: 'decision,tool_use' } } },
+      ]);
+    });
+
+    /**
+     * **知らない種別は 400 を待たずにその場で断り、使える値を並べる**
+     * （`/managers` の `status=` と同じ慣習）。デーモンへ問い合わせない
+     * ことまで確かめる——投げてから断ると、CLI 側の検査が死んでいても
+     * デーモンの断りの文言で緑になりうる。
+     */
+    it('知らない type= はデーモンへ投げず、使える値を並べて断る', async () => {
+      const read = captureStdout();
+      const { calls, client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal type=nonsense', client, emptyListed());
+
+      expect(calls).toEqual([]);
+      const text = read();
+      expect(text).toContain('nonsense');
+      // 使える値は core の JOURNAL_ENTRY_TYPES から起こしている（書き写しではない）。
+      for (const type of JOURNAL_ENTRY_TYPES) expect(text).toContain(type);
+    });
+
+    /**
+     * **件数（先頭の位置引数）は1文字も変えない。** `type=` が前後どちらに
+     * 来ても、件数・種別・語（q=）はそれぞれ正しく解ける
+     * （`parseJournalSearchTokens` の doc）。
+     */
+    it('件数・type=・q= を併用しても、それぞれ正しく解ける', async () => {
+      captureStdout();
+      const { calls, client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal 50 type=decision q=a b', client, emptyListed());
+
+      expect(calls).toEqual([
+        {
+          route: 'GET /journal',
+          args: { query: { limit: '50', type: 'decision', q: 'a b' } },
+        },
+      ]);
+    });
+
+    it('type= が先頭に来ても件数を誤読しない', async () => {
+      captureStdout();
+      const { calls, client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal type=decision 50', client, emptyListed());
+
+      expect(calls).toEqual([
+        { route: 'GET /journal', args: { query: { limit: '50', type: 'decision' } } },
+      ]);
+    });
+
+    /**
+     * **type= で絞った結果の0件を「日誌はまだ空」と言わない。** 絞り込みが
+     * 効いた0件と全体の空を混ぜると、絞りを外せば見えるはずの日誌まで
+     * 「無い」と読める（嘘の観測）。
+     */
+    it('type= だけで絞って0件なら、絞り込みのせいだと言う（「日誌はまだ空」ではない）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal type=decision', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('type=decision');
+      expect(text).toContain('絞り込みを外せば');
+      expect(text).not.toContain('日誌はまだ空');
+    });
+
+    it('type= と q= を併用して0件なら、両方の絞り込みを言う', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({ journalEntries: [] });
+
+      await runSlashCommand('/journal type=decision q=ナス', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('type=decision に絞った上で');
+      expect(text).toContain('「ナス」に当たる日誌はありません');
+    });
+
+    /**
+     * **使える種別は core の `JOURNAL_ENTRY_TYPES` から起こす**——HELP に
+     * 字面で書き写すと、種別が増えたときにここだけ古くなる（`/managers` の
+     * `status=` と同じ慣習）。全要素が載っていることで測る（数を書かない）。
+     */
+    it('/help に type= と、使える種別の全値が載っている', async () => {
+      const read = captureStdout();
+      const { client } = stubClient();
+
+      await runSlashCommand('/help', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain('/journal [件数] [type=');
+      for (const type of JOURNAL_ENTRY_TYPES) expect(text).toContain(type);
+    });
+  });
+
+  /**
    * **上限に当たったことは一切言っていなかった**（Issue #426 の G3、棚卸しの
    * 逐語）。0件のときの断りはあっても、`limit` 件ちょうど返ったとき——
    * つまりこれより古い日誌が隠れているかもしれないとき——には何も言わない
@@ -2976,6 +3127,70 @@ describe('chat の /journal', () => {
       expect(text).not.toContain('費用が見合う');
       expect(text).toContain('memory_write');
     });
+  });
+});
+
+/**
+ * `chat` の `/usage`。issue #2079: `token=` が読めない・HELP に `layer=` /
+ * `site=` / `token=` が載っていない、の2点を直した（`layer=` / `site=`
+ * 自体は既に `parseUsageFilters` が読めていたが、この経路を測る歯が1本も
+ * 無かった）。
+ */
+describe('chat の /usage（issue #2079）', () => {
+  it('token= を GET /usage の tokenId へそのまま渡す（alteroid usage --token と同じ受け渡し）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/usage token=tok-1', client, emptyListed());
+
+    expect(calls).toEqual([{ route: 'GET /usage', args: { query: { tokenId: 'tok-1' } } }]);
+  });
+
+  it('from= / to= / manager= / layer= / site= / token= を併用してもそのまま渡す', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(
+      '/usage from=2026-08-01 to=2026-08-14 manager=mgr-1 layer=clone site=session token=tok-1',
+      client,
+      emptyListed(),
+    );
+
+    expect(calls).toEqual([
+      {
+        route: 'GET /usage',
+        args: {
+          query: {
+            from: '2026-08-01',
+            to: '2026-08-14',
+            managerId: 'mgr-1',
+            layer: 'clone',
+            site: 'session',
+            tokenId: 'tok-1',
+          },
+        },
+      },
+    ]);
+  });
+
+  /**
+   * **使える layer= / site= は core の schema から起こす**——HELP に字面で
+   * 書き写すと、値が増えたときにここだけ古くなる（`/managers` の `status=`
+   * と同じ慣習）。`token=` は値の集合が閉じていないので列挙は載らない
+   * （`parseUsageFilters` の doc）。
+   */
+  it('/help に layer= / site= / token= と、使える layer / site の全値が載っている', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('[layer=');
+    expect(text).toContain('[site=');
+    expect(text).toContain('[token=');
+    for (const layer of usageLayerSchema.options) expect(text).toContain(layer);
+    for (const site of usageSiteSchema.options) expect(text).toContain(site);
   });
 });
 
