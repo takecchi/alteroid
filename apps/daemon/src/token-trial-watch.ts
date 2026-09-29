@@ -6,6 +6,7 @@ import {
   describeTrialFailureFold,
   doubledTrialIntervalMs,
   selectTokenForTrial,
+  type ActiveAgentToken,
   type AgentToken,
   type Stores,
   type TokenCandidateVerdict,
@@ -139,6 +140,12 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
   const intervalOverride = new Map<string, number>();
   /** 試しが通った直後、偽陽性の窓のあいだだけ持つ（値は通った時刻）。 */
   const pendingConfirmation = new Map<string, number>();
+  /**
+   * `tick()` の直前の回で現役の指名が読めなかったか（issue #2125）。定期処理
+   * なので、読めない状態が続くあいだ毎回 stderr へ書くと埋もれる——**変わり目に
+   * だけ**書くための状態。
+   */
+  let activeUnreadable = false;
 
   const intervalMsFor = (tokenId: string): number =>
     intervalOverride.get(tokenId) ?? TOKEN_TRIAL_INTERVAL_MS;
@@ -191,7 +198,20 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
 
     // **現役かどうかは、いま読み直して決める。** 選んだ時点から結果が届く
     // までのあいだ（本物の1ターンぶん）に、既に回っている可能性がある。
-    const active = await options.stores.tokens.readActive();
+    // **読めない（`UnreadableActiveTokenError`。issue #2125）ときは「現役では
+    // ない」側の経路へ進む** —— 試しが通った事実（そのトークンは使える）は、
+    // 指名が読めなくても正しいので記録してよい。`tick()` 側の「読めないときは
+    // その回の試しをしない」とは扱いが違う——あちらは**新しく何を試すか**の
+    // 判断で、読めない指名を推測すると壊れた指名のまま別のトークンを試しうる。
+    // ここは**既に試し終えたトークンの記録**なので、指名が読めなくても
+    // 安全に「現役ではない」へ倒せる。
+    let active: ActiveAgentToken | null;
+    try {
+      active = await options.stores.tokens.readActive();
+    } catch (error) {
+      if (!(error instanceof UnreadableActiveTokenError)) throw error;
+      active = null;
+    }
     if (active !== null && active.tokenId === token.id) {
       const outcome = await options.reconsider({
         reason: 'turn_succeeded',
@@ -234,10 +254,36 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     const at = now();
     confirmPendingSuccesses(at);
     if (inFlight) return;
-    const [tokens, active] = await Promise.all([
-      options.stores.tokens.list(),
-      options.stores.tokens.readActive(),
-    ]);
+    const tokens = await options.stores.tokens.list();
+    // **`readActive()` を `list()` と同じ `Promise.all` に入れない**
+    // （issue #2125）。指名が読めない（`UnreadableActiveTokenError`）ときは、
+    // `null` を渡して「指名が無い」と偽装せず、**この回の試しをしない**まま
+    // 明示的に return する——`null` で偽装すると、壊れた指名のまま別の
+    // トークンを試しうる。読めるようになるまでの間、`selectTokenForTrial` を
+    // 呼ぶ理由が無い（`active === null` のときに `undefined` を返す設計と
+    // 同じ「試さない」結論に、読めないときも揃える）。それ以外のエラーは
+    // 握り潰さずそのまま投げる（いまと同じ振る舞い）。
+    let active: ActiveAgentToken | null;
+    try {
+      active = await options.stores.tokens.readActive();
+    } catch (error) {
+      if (!(error instanceof UnreadableActiveTokenError)) throw error;
+      // **毎回ではなく、読めないに変わったときだけ1行。** 定期処理なので、
+      // 読めない状態が続くあいだ毎回書くと埋もれる。値は出さず、欄名だけの
+      // `error.message` を出す。
+      if (!activeUnreadable) {
+        activeUnreadable = true;
+        process.stderr.write(
+          `alteroidd: 現役の指名が読めない（${error.message}）。読めるようになるまで` +
+            'トークンの試しを止める。\n',
+        );
+      }
+      return;
+    }
+    if (activeUnreadable) {
+      activeUnreadable = false;
+      process.stderr.write('alteroidd: 現役の指名が読めるようになった。トークンの試しを再開する。\n');
+    }
     const target = selectTokenForTrial({
       tokens,
       active,

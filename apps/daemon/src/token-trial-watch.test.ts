@@ -1,6 +1,7 @@
 import {
   TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS,
   TOKEN_TRIAL_INTERVAL_MS,
+  UnreadableActiveTokenError,
   createMemoryStores,
   createTokenRotator,
   usageTransitionOf,
@@ -11,7 +12,7 @@ import {
   type TokenRotator,
   type TokenTrialPort,
 } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isRejectionForTrialBackoff, startTokenTrialWatch } from './token-trial-watch.js';
 
@@ -274,6 +275,148 @@ describe('token-trial-watch: 通ったら', () => {
     const row = tokens.find((t) => t.id === 'a');
     expect(row?.cooldownUntil).toBeUndefined();
     expect(outcomes).toHaveLength(1);
+  });
+
+  /**
+   * issue #2125。試しが通った直後に「現役かどうか、いま読み直して決める」
+   * （`handleSuccess` の doc）読み直しが `UnreadableActiveTokenError`
+   * （issue #2053）を投げても、`tick()` の catch へ落とさず、「現役ではない」
+   * 側の経路（`recordTrialVerdict` で usable を記録して
+   * `reconsider({ reason: 'trial_succeeded' })`）へ進む —— 試しが通った事実
+   * （そのトークンは使える）は、指名が読めなくても正しいので記録してよい。
+   */
+  it('読み直しが UnreadableActiveTokenError を投げても、trial_succeeded 側で usable を記録する', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+
+    const reconsiderCalls: unknown[] = [];
+    const outcomes: TokenRotationOutcome[] = [];
+    const reconsider: TokenRotator['reconsider'] = (input) => {
+      reconsiderCalls.push(input);
+      return Promise.resolve(ROTATED);
+    };
+    // 試しの途中で、現役の読み直しが壊れる筋書き（`readActive` が投げるように
+    // 差し替える）。「値をすり替える」ではなく「読めなくなる」を作る点が、
+    // すぐ上の「現役以外の候補が通ったら」の歯（身元をすり替える）との違い。
+    const port: TokenTrialPort = {
+      trial: async () => {
+        stores.tokens.readActive = () => {
+          throw new UnreadableActiveTokenError('generation が数値でない（テスト用）');
+        };
+        return { verdict: 'usable' };
+      },
+    };
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: port,
+      reconsider,
+      onOutcome: async (outcome) => {
+        outcomes.push(outcome);
+      },
+      tickMs: 5,
+      now: () => AT,
+    });
+    await settle();
+    watch.stop();
+
+    // **`turn_succeeded`（現役自身が通った側）ではなく `trial_succeeded`
+    // （現役ではない側）へ進んでいる。**
+    expect(reconsiderCalls).toEqual([{ reason: 'trial_succeeded' }]);
+    const tokens = await stores.tokens.list();
+    const row = tokens.find((t) => t.id === 'a');
+    expect(row?.cooldownUntil).toBeUndefined();
+    expect(outcomes).toHaveLength(1);
+  });
+});
+
+describe('token-trial-watch: 現役の指名が読めない（issue #2125）', () => {
+  /** spy に積まれた呼び出しの1番目の引数を文字列化して並べる。 */
+  function stderrLines(stderr: ReturnType<typeof vi.spyOn>): string[] {
+    return stderr.mock.calls.map((call: unknown[]) => String(call[0]));
+  }
+
+  let stderr: ReturnType<typeof vi.spyOn>;
+  let unhandled: unknown[];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+
+  beforeEach(() => {
+    stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    unhandled = [];
+    process.on('unhandledRejection', onUnhandled);
+  });
+
+  afterEach(() => {
+    stderr.mockRestore();
+    process.off('unhandledRejection', onUnhandled);
+  });
+
+  it('読めない間は試しを呼ばず、tick() は reject しない。stderr の跡は変わり目にだけ出る', async () => {
+    const stores = createMemoryStores();
+    // 現役自身が cooldown 中で、他に ready な候補が無ければ通常は現役自身を
+    // 試す形（すぐ上の「試す条件と対象」と同じ筋書き）。それでも `readActive`
+    // が読めなければ、この回の試しは起きないはずである。
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    const REASON = 'generation が数値でない（テスト用）';
+    stores.tokens.readActive = () => {
+      throw new UnreadableActiveTokenError(REASON);
+    };
+    const trial = fakeTrial({ verdict: 'usable' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: trial.port,
+      reconsider: () => Promise.resolve(ROTATED),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 5,
+      now: () => AT,
+    });
+    // 複数回の目盛りを回す（2回どころではなく、確実に何度も呼ばれるだけ待つ）。
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    watch.stop();
+
+    expect(trial.calls).toEqual([]);
+    expect(unhandled).toEqual([]);
+    const readableLines = stderrLines(stderr).filter((line) => line.includes('現役の指名が読めない'));
+    expect(readableLines).toHaveLength(1);
+    expect(readableLines[0]).toContain(REASON);
+  });
+
+  it('読めるように戻ると試しが再開し、戻った跡も1回だけ出る', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    let unreadable = true;
+    stores.tokens.readActive = async () => {
+      if (unreadable) throw new UnreadableActiveTokenError('generation が数値でない（テスト用）');
+      return { tokenId: 'a', generation: 1, rotatedAt: '' };
+    };
+    const trial = fakeTrial({ verdict: 'undecidable', reason: 'まだ判定できない' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: trial.port,
+      reconsider: () => Promise.resolve(ROTATED),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 5,
+      now: () => AT,
+    });
+    // 読めないあいだは呼ばれない。
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(trial.calls).toEqual([]);
+
+    // 読めるようになる。
+    unreadable = false;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    watch.stop();
+
+    expect(trial.calls).toEqual(['a']);
+    expect(unhandled).toEqual([]);
+    const lines = stderrLines(stderr);
+    expect(lines.filter((line) => line.includes('現役の指名が読めない'))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes('読めるようになった'))).toHaveLength(1);
   });
 });
 
