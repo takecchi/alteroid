@@ -230,10 +230,10 @@ export interface AgentDelegationStarted {
   taskType?: string;
   /**
    * SDK の `task_started.spawn_depth`（Issue #2113 の調査ついで。上の
-   * `taskType` の doc に引いた `[sdk-verbatim SDKTaskStartedMessage.spawn_depth]`
-   * を見よ）。**いまはどの読み手も使っていない**——`taskType` を確かめる
-   * ついでに、取れるものを捨てずに運んでおく（`agent-events.ts` 全体の
-   * 「読めたものは運ぶ」作法）。**取れなければ省く**（代用値は作らない）。
+   * `taskType` の doc に引いた `spawn_depth` の逐語を見よ）。**いまはどの
+   * 読み手も使っていない**——`taskType` を確かめるついでに、取れるものを
+   * 捨てずに運んでおく（`agent-events.ts` 全体の「読めたものは運ぶ」作法）。
+   * **取れなければ省く**（代用値は作らない）。
    */
   spawnDepth?: number;
 }
