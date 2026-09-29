@@ -11,7 +11,7 @@ import {
   type TokenSpreadPort,
   type TokenSpreadResult,
 } from './token-rotator.js';
-import type { Stores } from './store.js';
+import { UnreadableActiveTokenError, type Stores } from './store.js';
 import type { UsageLimitNotice } from './usage-limits.js';
 import type { TokenCredential } from './token-pool.js';
 
@@ -117,6 +117,29 @@ async function seedTwo(h: Harness): Promise<void> {
     generation: 1,
     rotatedAt: '2026-08-25T00:00:00.000Z',
   });
+}
+
+/**
+ * `stores.tokens.readActive()` を、`UnreadableActiveTokenError` を投げる形に
+ * 壊す（issue #2128）。**版ずれ・手編集で行が読めなくなった本物の壊れ方**を
+ * 模す——実装が現役を上書き（`writeActive`）するまで投げ続け、上書きされた後は
+ * 素通しに戻る（本物も「壊れた行に上書きされた新しい行が入る」ことで直る）。
+ *
+ * `reason` は日誌に出る文言（欄名だけ、値は含めない）。
+ */
+function breakActiveToken(h: Harness, reason = 'active.generation が数値ではない'): void {
+  const store = h.stores.tokens;
+  const realReadActive = store.readActive.bind(store);
+  const realWriteActive = store.writeActive.bind(store);
+  let broken = true;
+  store.readActive = async () => {
+    if (broken) throw new UnreadableActiveTokenError(reason);
+    return await realReadActive();
+  };
+  store.writeActive = async (active) => {
+    broken = false;
+    return await realWriteActive(active);
+  };
 }
 
 describe('受け入れ基準7: プールが空の既定の構成を1文字も変えない', () => {
@@ -1655,6 +1678,157 @@ describe('restore（起動時の引き取り）', () => {
     expect(tokens.find((t) => t.id === 'tok-a')).not.toHaveProperty('cooldownUntil');
     // 次は tok-c（tok-a へ戻らない。order 順で tok-b の後ろ…ではなく ready の先頭）。
     expect(await h.stores.tokens.readActive()).toMatchObject({ generation: 3 });
+  });
+
+  /**
+   * **issue #2128。マネージャーの判定「(a)+(c)」——読めない指名は指名なしと
+   * 同じ経路で扱う。** `restore()` は `null`（一度も回していない）のときも
+   * 何も撒かない——揃えるとは、ここでも撒かないことである。**上書きして回転を
+   * 戻すのは `reconsider`（デーモンは起動時に `restore()` の直後に
+   * `reason: 'startup'` で1回呼ぶ）の役目**——下の
+   * 「issue #2128: 現役の指名が読めない」に固定してある。
+   */
+  it('#2128: 現役の指名が読めなくても reject しない。指名なしと同じく何も撒かない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakActiveToken(h, '現役の指名の generation 欄が壊れている');
+
+    const outcome = await h.rotator.restore();
+
+    expect(outcome.kind).toBe('unreadable');
+    if (outcome.kind !== 'unreadable') return;
+    expect(outcome.reason).toBe('現役の指名の generation 欄が壊れている');
+    expect(h.spreadCalls).toEqual([]);
+    // **`writeActive` を呼んでいない**（`readActive` はまだ壊れたまま——
+    // `breakActiveToken` は `writeActive` が呼ばれて初めて直る）。
+    await expect(h.stores.tokens.readActive()).rejects.toThrow(UnreadableActiveTokenError);
+  });
+});
+
+/**
+ * **issue #2128。マネージャーの判定「(a)+(c)」** —— 現役の指名が読めない
+ * （`UnreadableActiveTokenError`）とき、`observe` / `reconsider` は指名なし
+ * （`active === null`）と同じ経路で判定する。**ただし上書きするときだけ世代を
+ * `Date.now()`（ミリ秒）から作る** —— 前の世代が読めない以上
+ * `(active?.generation ?? 0) + 1` は使えない（`1` が過去の世代と重なりうる）。
+ *
+ * `restore()` は `null` のときも何も撒かない（`describe('restore（起動時の
+ * 引き取り）')` の doc）ので、読めないときも撒かない——上書きして回転を戻すのは
+ * ここで測る `observe` / `reconsider` の役目である（デーモンは起動時に
+ * `restore()` の直後に `reconsider({ reason: 'startup' })` を1回呼ぶ）。
+ */
+describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenError）', () => {
+  it('(a) observe: 読めなくても reject せず、指名なしと同じ経路で候補へ撒く', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakActiveToken(h);
+
+    const outcome = await h.rotator.observe({ notice: reached });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-a');
+    expect(h.spreadCalls).toEqual([
+      { id: 'tok-a', generation: outcome.generation, kind: 'stored', value: 'value-a' },
+    ]);
+  });
+
+  it('(a) reconsider: 読めなくても reject せず、指名なしと同じ経路で候補へ撒く', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakActiveToken(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'startup' });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.toTokenId).toBe('tok-a');
+    expect(outcome.signal).toBe('stranded');
+  });
+
+  it('(b) 上書きした世代は Date.now() 由来で、過去の小さな世代（1〜5）とは重ならない', async () => {
+    const h = harness(); // nowMs は AT（2026年）を epoch ミリ秒にした値。
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakActiveToken(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'startup' });
+
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+    expect(outcome.generation).toBe(Date.parse(AT));
+    expect([1, 2, 3, 4, 5]).not.toContain(outcome.generation);
+  });
+
+  it('(c) 上書きした後は readActive() が読め、次の撒き直しは +1 で増える（2周目）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([
+      { id: 'tok-a', label: 'first', value: 'value-a', order: 0 },
+      { id: 'tok-b', label: 'second', value: 'value-b', order: 1 },
+    ]);
+    breakActiveToken(h);
+
+    // 1周目: 読めない指名を、時刻由来の世代で上書きする。
+    const first = await h.rotator.reconsider({ reason: 'startup' });
+    expect(first.kind).toBe('rotated');
+    if (first.kind !== 'rotated') return;
+    const firstGeneration = first.generation;
+    expect(firstGeneration).toBe(Date.parse(AT));
+
+    // 上書きの後は正本が読める（もう `UnreadableActiveTokenError` を投げない）。
+    await expect(h.stores.tokens.readActive()).resolves.toMatchObject({
+      tokenId: first.toTokenId,
+      generation: firstGeneration,
+    });
+
+    // 2周目: 枠に当たって回す。今度は「読める指名」からの世代なので `+1` である。
+    const second = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: first.toTokenId, generation: firstGeneration },
+    });
+
+    expect(second.kind).toBe('rotated');
+    if (second.kind !== 'rotated') return;
+    expect(second.generation).toBe(firstGeneration + 1);
+  });
+
+  it('(d) 古い世代を名乗る観測は、上書きの後は stale に落ちる', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakActiveToken(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'startup' });
+    expect(outcome.kind).toBe('rotated');
+    if (outcome.kind !== 'rotated') return;
+
+    // 過去の（時刻由来の世代よりずっと小さい）世代を名乗る、遅れて届いた観測。
+    const stale = await h.rotator.observe({
+      notice: reached,
+      observedBy: { tokenId: outcome.toTokenId, generation: 3 },
+    });
+
+    expect(stale.kind).toBe('ignored');
+    if (stale.kind !== 'ignored') return;
+    expect(stale.freshness).toBe('stale');
+    // **撒いたのは上書きの1回だけ。** stale な観測では撒き直さない。
+    expect(h.spreadCalls).toHaveLength(1);
+  });
+
+  it('(e) 日誌に上書きの行が1行在り、読めない指名の値を含まない', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakActiveToken(h, '現役の指名の generation 欄が壊れている');
+
+    const outcome = await h.rotator.reconsider({ reason: 'startup' });
+    expect(outcome.kind).toBe('rotated');
+
+    const entry = tokenRotationEntry(outcome);
+    expect(entry).not.toBeNull();
+    expect(entry?.text).toContain('現役の指名が読めなかったので');
+    expect(entry?.text).toContain(`世代 ${String(Date.parse(AT))}`);
+    // 理由はエラーの message（欄名だけ）。
+    expect(entry?.text).toContain('現役の指名の generation 欄が壊れている');
+    // **読めない指名の値そのものは含まない。**
+    expect(entry?.text).not.toContain('value-a');
   });
 });
 

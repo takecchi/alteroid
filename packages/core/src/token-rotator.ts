@@ -24,7 +24,7 @@ import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { JournalEntryInput } from './schema.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { TokenCandidateVerdict } from './token-candidate.js';
-import type { Stores } from './store.js';
+import { UnreadableActiveTokenError, type Stores, type TokenPoolStore } from './store.js';
 
 /**
  * 回し手（Issue #393 PR3）。**デーモンの中の1本。**
@@ -503,7 +503,27 @@ export type TokenRestoreOutcome =
       why: string;
     }
   | { kind: 'dangling'; tokenId: string; why: string }
-  | { kind: 'withheld'; tokenId: string; label: string; why: string };
+  | { kind: 'withheld'; tokenId: string; label: string; why: string }
+  | {
+      /**
+       * **現役の指名が壊れていて読めなかった**（issue #2128。
+       * `TokenPoolStore.readActive` の doc、`UnreadableActiveTokenError`）。
+       *
+       * **`none`（一度も回していない）とは別の顔にしてある。** 同じ顔にすると、
+       * 「まだ何もしていない」（既定の構成で毎起動に出る、ノイズなので日誌に
+       * 出さない）と「壊れていて撒けなかった」（本当の問題、日誌に出すべき）が
+       * 区別できなくなる——`describeTokenRestore` は `none` だけを黙らせる。
+       *
+       * **引き取りは選び直さない、が持ち場を変えない。** ここでも `null`
+       * （指名なし）と同じ経路——**何も撒かない**。上書きするのは
+       * {@link TokenRotator.reconsider}（デーモンは起動時に `restore()` の直後に
+       * `reason: 'startup'` で1回呼ぶ）の役目である。
+       */
+      kind: 'unreadable';
+      /** `UnreadableActiveTokenError` の message。**欄名だけで、値は含まない。** */
+      reason: string;
+      why: string;
+    };
 
 export interface TokenRotator {
   /**
@@ -828,6 +848,34 @@ function describeCooldownFacts(facts: RateLimitFacts | undefined): string {
     parts.push(`冷却の期限は課金枠の overageResetsAt から: ${new Date(deadline.at).toISOString()}`);
   }
   return `${head}。${parts.join(' / ')}`;
+}
+
+/**
+ * `stores.tokens.readActive()` の結果を、**読めなかった事実を黙って落とさずに**
+ * 運ぶ形（issue #2128）。
+ *
+ * `UnreadableActiveTokenError` を投げられると、3つの入口（`restore` / `observe` /
+ * `reconsider`）がどれも最初の `Promise.all` で落ち、`writeActive` へ1本も届かない
+ * ——読めない指名を上書きして直す口が無くなる。**`null`（指名なし）へ黙って畳むと
+ * ここが直せない** —— 世代を上書きするときだけ `Date.now()` から作る必要があり
+ * （過去の世代 `(active?.generation ?? 0) + 1` は前の世代が読めない以上使えない）、
+ * その判断に「読めない」と「指名なし」を型で区別できないといけない。
+ *
+ * `UnreadableActiveTokenError` 以外はここで飲み込まない——**それ以外のエラーは
+ * 呼び出し元へそのまま投げる**（記憶ストアの接続断などを「指名なし」に見せない）。
+ */
+type ActiveTokenRead =
+  { readable: true; active: ActiveAgentToken | null } | { readable: false; reason: string };
+
+async function readActiveOrUnreadable(store: TokenPoolStore): Promise<ActiveTokenRead> {
+  try {
+    return { readable: true, active: await store.readActive() };
+  } catch (error) {
+    if (error instanceof UnreadableActiveTokenError) {
+      return { readable: false, reason: error.message };
+    }
+    throw error;
+  }
 }
 
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
@@ -1292,6 +1340,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   async function finishSweep(input: {
     sweep: CandidateSweep;
     active: ActiveAgentToken | null;
+    /**
+     * **現役の指名が読めなかったときの理由**（issue #2128。
+     * `UnreadableActiveTokenError` の message。値は含まない）。
+     *
+     * 呼び出し元は読めなかった回も `active` に `null` を渡す——`null`（指名
+     * なし）と同じ経路で判定させるためである。**ここが在るときだけ**
+     * `nominate` が世代を `now()` から作り（前の世代が読めない以上
+     * `(active?.generation ?? 0) + 1` は使えない）、日誌に上書きの事実を残す。
+     */
+    activeUnreadableReason?: string;
     /** 降りるトークン。**まだ一度も指名していなければ無い。** */
     outgoingId?: string;
     signal: TokenRotationSignal;
@@ -1300,7 +1358,16 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     /** 「なぜ回すと決めたか」の1行。**`rotated` / `parked` の頭に付く。** */
     whyHead: string;
   }): Promise<TokenRotationOutcome> {
-    const { sweep, active, outgoingId, signal, freshness, reason, whyHead } = input;
+    const {
+      sweep,
+      active,
+      activeUnreadableReason,
+      outgoingId,
+      signal,
+      freshness,
+      reason,
+      whyHead,
+    } = input;
     /**
      * いま指名されている行（`parked` の改善判定に使う）。
      *
@@ -1356,6 +1423,15 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         : `。試した候補「${sweep.unusableLabels.join('」「')}」はどれも使えなかった`;
 
     /**
+     * **上書きした回だけ、日誌へ足す1文**（issue #2128）。読めない指名の中身
+     * （値）は含めない——`activeUnreadableReason` は欄名だけの message である。
+     */
+    const unreadableTail = (generation: number): string =>
+      activeUnreadableReason === undefined
+        ? ''
+        : `\n**現役の指名が読めなかったので、世代 ${String(generation)} で撒き直した**（${activeUnreadableReason}）`;
+
+    /**
      * 指名を書いて撒く。**正本を先に書く。** 撒いてから保存する順にすると、
      * 保存が落ちたときに「誰も成功と言っていない版を1層だけが使う」が残る
      * （`profile-service.ts` が同じ失敗をして直した形）。
@@ -1363,7 +1439,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     const nominate = async (
       token: AgentToken,
     ): Promise<{ generation: number; spread: TokenSpreadResult[] }> => {
-      const generation = (active?.generation ?? 0) + 1;
+      // **読めない指名を上書きするときだけ、世代を時刻から作る**
+      // （issue #2128、マネージャーの判定）。前の世代が読めない以上
+      // `(active?.generation ?? 0) + 1` は使えない——`1` が過去の世代と重なり
+      // うる。過去の世代は `+1` ずつ増えた小さな整数なので、ミリ秒の時刻とは
+      // 重ならず、その後は `+1` で増えていく。**読める指名・指名なしの回の
+      // 世代の決め方は変えない。**
+      const generation =
+        activeUnreadableReason === undefined ? (active?.generation ?? 0) + 1 : now().getTime();
       const nextActive: ActiveAgentToken = {
         tokenId: token.id,
         generation,
@@ -1410,7 +1493,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               ? ''
               : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens });
           if (verdict.verdict === 'usable') {
-            return `${head}候補「${token.label}」は観測できた${tail}`;
+            return `${head}候補「${token.label}」は観測できた${tail}${unreadableTail(placed.generation)}`;
           }
           const stopped = sweep.stoppedByBudget
             ? `（候補を試す持ち時間（${String(CANDIDATE_SWEEP_BUDGET_MS)}ms）を使い切ったところで倒した）`
@@ -1419,10 +1502,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             return (
               `${head}**\`usable\` と確かめられた候補は見つからなかった**ので、` +
               `判定できなかった候補「${token.label}」へ倒した${stopped}` +
-              `——撒いて本番で確かめる（${verdict.reason}）${tail}`
+              `——撒いて本番で確かめる（${verdict.reason}）${tail}${unreadableTail(placed.generation)}`
             );
           }
-          return `${head}候補「${token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）${tail}`;
+          return `${head}候補「${token.label}」は判定できなかったので撒いて本番で確かめる（${verdict.reason}）${tail}${unreadableTail(placed.generation)}`;
         })(),
       };
     }
@@ -1478,7 +1561,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             `（${new Date(earliest.cooldownUntil).toISOString()} まで通らない）` +
             (endedStaleRun === null
               ? ''
-              : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens })),
+              : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens })) +
+            unreadableTail(placed.generation),
         };
       }
     }
@@ -1550,10 +1634,23 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     // 「古い方を後から撒く」が起きる。
     restore: () =>
       serial(async () => {
-        const [tokens, active] = await Promise.all([
+        const [tokens, activeRead] = await Promise.all([
           stores.tokens.list(),
-          stores.tokens.readActive(),
+          readActiveOrUnreadable(stores.tokens),
         ]);
+
+        if (!activeRead.readable) {
+          // **読めない ⟹ 指名なしと同じ経路（撒かない）。** 引き取りは選び直さ
+          // ない役割で、`null` のときも `writeActive` を呼ばない——ここも
+          // 揃える。世代を上書きして戻すのは `reconsider`（デーモンは起動時に
+          // `restore()` の直後に `reason: 'startup'` で1回呼ぶ）の役目である。
+          return {
+            kind: 'unreadable' as const,
+            reason: activeRead.reason,
+            why: `現役の指名が読めなかった（${activeRead.reason}）。指名なしと同じ扱いで、何も撒かない`,
+          };
+        }
+        const active = activeRead.active;
 
         if (active === null) {
           // **一度も回していない ⟹ 何も撒かない。** 器の環境変数へのフォール
@@ -1616,11 +1713,17 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     observe: (observation: TokenRotatorObservation) =>
       serial(async () => {
-        const [tokens, settings, active] = await Promise.all([
+        const [tokens, settings, activeRead] = await Promise.all([
           stores.tokens.list(),
           stores.tokens.readSettings(),
-          stores.tokens.readActive(),
+          readActiveOrUnreadable(stores.tokens),
         ]);
+        // **読めなかった回は、指名なし（`null`）と同じ経路で判定する**
+        // （issue #2128）——黙って畳むのではなく、`activeUnreadableReason` に
+        // 理由を持ち続けて、上書きが起きたときだけ世代の作り方と日誌を変える
+        // （下の `finishSweep` 呼び出し）。
+        const active = activeRead.readable ? activeRead.active : null;
+        const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
 
         const freshness = observationFreshness(active, observation.observedBy ?? {});
         // **`freshness` を判定へ渡す。** 遷移が取れなかった回の `rejected` を
@@ -1740,6 +1843,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         return finishSweep({
           sweep,
           active,
+          ...(activeUnreadableReason === undefined ? {} : { activeUnreadableReason }),
           ...(outgoingId === undefined ? {} : { outgoingId }),
           signal: decision.signal,
           freshness,
@@ -1784,11 +1888,15 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       serial(async () => {
         const { reason, current } = input;
         const currentVerdict = current?.verdict;
-        const [tokens, settings, active] = await Promise.all([
+        const [tokens, settings, activeRead] = await Promise.all([
           stores.tokens.list(),
           stores.tokens.readSettings(),
-          stores.tokens.readActive(),
+          readActiveOrUnreadable(stores.tokens),
         ]);
+        // **読めなかった回は、指名なし（`null`）と同じ経路で判定する**
+        // （issue #2128。`observe` と同じ理由——`activeUnreadableReason` の doc）。
+        const active = activeRead.readable ? activeRead.active : null;
+        const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
 
         // **プールが空なら何もしない**（受け入れ基準7。既定の構成を1文字も変えない）。
         // **`exhausted` にしない** —— あちらは「全層が止まる」の顔で、ここは
@@ -1861,6 +1969,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           return finishSweep({
             sweep,
             active: null,
+            ...(activeUnreadableReason === undefined ? {} : { activeUnreadableReason }),
             signal: 'stranded' as const,
             reason,
             whyHead: 'まだ一度も指名していない',
