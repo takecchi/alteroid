@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * #2129（待つ形のすり抜け）と #2130（ファイルに書くだけのヒアドキュメントの誤検知）。
@@ -146,21 +147,24 @@ describe('ファイルに書くだけのヒアドキュメントの本文では�
 });
 
 describe('#2129 / #2130 の新しい判定が、長い入力で後戻りで爆発しない', () => {
-  const TIME_BUDGET_MS = 200;
-  const cases: ReadonlyArray<[string, string]> = [
-    ['setsid のオプションの繰り返し', `setsid ${'-f '.repeat(8000)}${W} 1 --x`],
-    ['書くだけのヒアドキュメントの繰り返し', `${"cat > f <<'E'\nx\nE\n".repeat(4000)}x`],
-    ['終端の無い cat のヒアドキュメントの繰り返し', `${'cat > f <<E\n'.repeat(8000)}x`],
+  // issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
+  // 替えた。`n * factor`（既定 factor=4）を、直す前にテストしていた
+  // 繰り返し回数（8000 / 4000 / 8000 / 2000+8000）に揃えてある。
+  const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
+    ['setsid のオプションの繰り返し', (n) => `setsid ${'-f '.repeat(n)}${W} 1 --x`, 2000],
+    ['書くだけのヒアドキュメントの繰り返し', (n) => `${"cat > f <<'E'\nx\nE\n".repeat(n)}x`, 1000],
+    ['終端の無い cat のヒアドキュメントの繰り返し', (n) => `${'cat > f <<E\n'.repeat(n)}x`, 2000],
     [
       'スクリプトを走らせる形の候補の繰り返し',
-      `${"cat > f <<'E'\nx\nE\n".repeat(2000)}${'./'.repeat(8000)}`,
+      // 直す前は「ヒアドキュメント2000回 + ./ 8000回」（比 1:4）。ヒアドキュメント側を
+      // n とし、./ 側は常にその4倍にして、同じ比を保ったまま n を伸び縮みさせる。
+      (n) => `${"cat > f <<'E'\nx\nE\n".repeat(n)}${'./'.repeat(n * 4)}`,
+      500,
     ],
   ];
-  for (const [label, command] of cases) {
+  for (const [label, makeInput, n] of cases) {
     it(`${label}が予算内に終わる`, () => {
-      const start = performance.now();
-      inspectBashCommand(command);
-      expect(performance.now() - start).toBeLessThan(TIME_BUDGET_MS);
+      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
     });
   }
 });

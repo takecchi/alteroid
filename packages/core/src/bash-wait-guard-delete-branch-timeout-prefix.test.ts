@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * issue #1886（#1788 の続き）——`GH_PR_MERGE_DELETE_BRANCH_RE` が
@@ -156,37 +157,26 @@ describe('gh-pr-merge-delete-branch: 前置きの並び順を問わず弾く', (
  * 下のテストのとおり repeats を増やしても線形にしか伸びない。
  */
 describe('gh-pr-merge-delete-branch: 前置きの繰り返しが長くても後戻りで爆発しない', () => {
-  const REPEATED_PREFIX = 'env A=1 B=2 '.repeat(30);
-  // CI の揺れを見込んだ緩い上限。指数的な後戻りが起きていれば
-  // repeats=30 は数百ms〜数秒どころか現実的な時間で終わらない
-  // （上のスクリプトの実測では repeats=15 で既に664msかかっている）。
-  const TIME_BUDGET_MS = 200;
-
+  // issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
+  // 替えた。直す前にテストしていた repeats は 30 と小さいので（上のスクリプト
+  // の実測では repeats=15 で既に664msかかる指数的な後戻り）、`factor: 2` に
+  // して `n * factor`（=30）を同じ大きさに揃えてある。
   it('弾かれない入力（gh pr view）でも後戻りが爆発しない', () => {
-    const command = `${REPEATED_PREFIX}gh pr view 1`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'env A=1 B=2 '.repeat(n)}gh pr view 1`;
+    expect(inspectBashCommand(makeInput(30)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 15, factor: 2 });
   });
 
   it('gh pr merge を含まない無関係な入力でも後戻りが爆発しない', () => {
-    const command = `${REPEATED_PREFIX}echo x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'env A=1 B=2 '.repeat(n)}echo x`;
+    expect(inspectBashCommand(makeInput(30)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 15, factor: 2 });
   });
 
   it('長い前置きの後ろに gh pr merge --delete-branch が来ても弾き、かつ後戻りが爆発しない', () => {
-    const command = `${REPEATED_PREFIX}gh pr merge 1 --delete-branch`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(true);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'env A=1 B=2 '.repeat(n)}gh pr merge 1 --delete-branch`;
+    expect(inspectBashCommand(makeInput(30)).blocked).toBe(true);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 15, factor: 2 });
   });
 });
 
