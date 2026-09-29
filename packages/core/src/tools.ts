@@ -9391,7 +9391,23 @@ export function createCloneTools(context: ToolContext) {
             ].join('\n'),
           );
         }
-        const found = await stores.practices.read(slug);
+        // **issue #2177（マネージャー判断で範囲内。同じ症状の単位）。**
+        // `read()` も読めない行で `UnreadablePracticeError` を投げる
+        // （`PracticeStore.read` の doc）。この口に書き直し・削除の手段は
+        // 無いので、捕まえて先へ進む理由は無い——それでも `isError` と生の
+        // Zod issue より、理由の分かる文のほうが読み手に親切なので、
+        // `version` 指定の枝や `GET /practices/:slug` と同じ判断で理由の
+        // 分かる文に変える。それ以外の例外は投げ直す。
+        let found: Awaited<ReturnType<typeof stores.practices.read>>;
+        try {
+          found = await stores.practices.read(slug);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          return text(
+            `やり方 ${slug} は読めない形で入っている（消されたのではない）。` +
+              '本文はここでは取れない。書き直すなら practice_write、外すなら practice_remove。',
+          );
+        }
         // **無いは throw ではなく null。呼び手には文で返す**
         // （`PracticeStore.read` の doc「無ければ null（読めないは throw）」と
         // 同じ線。存在しない slug を打ち間違いとして即座に判別できるように、

@@ -34,6 +34,16 @@ import { createApp } from './app.js';
  * - 本当に無い版は、これまでどおり 404 /「無い」のままである（対照）。
  * - `UnreadablePracticeError` 以外の例外は、この2口とも投げ直す（範囲外の
  *   種類の例外を握り潰さないことの確認）。
+ *
+ * **マネージャー判断による追加分（issue #2177 の同じ症状の単位）。**
+ * `practice_read`（`version` 省略。現在の本文を読む分岐）の
+ * `stores.practices.read(slug)` 呼び出しも `UnreadablePracticeError` を
+ * 捕まえていなかった——兄弟の `practice_write`/`practice_remove` は同じ
+ * `read(slug)` を捕まえて「在ったが読めない」として進むのに、`practice_read`
+ * の素の読み取りだけ未対応だった。下の2本目の `describe.each` は、**現在の
+ * 本文**（`practices`。版の履歴ではない）に壊れた行を直接書き、同じ形
+ * （`isError` にならない理由の分かる文・無い slug との対照・他の例外は
+ * 投げ直す）を確かめる。
  */
 
 function stubCloneHost(): CloneHost {
@@ -236,6 +246,108 @@ describe.each([
       const { isError, text } = await call('practice_read', { slug: BAD_SLUG });
       expect(isError).toBe(false);
       expect(text).toContain('正常な版（version 1）');
+    });
+  },
+);
+
+const BAD_CURRENT_SLUG = 'bad-practice-current';
+const BAD_CURRENT_TITLE = '壊れた現在の本文の題（跡に出てはいけない）';
+const BAD_CURRENT_CONTENT = '壊れた現在の本文（跡に出てはいけない）';
+
+/**
+ * `kind` を空文字列にした壊れた**現在の**行を fs の practices.json へ直接書く
+ * （`practice-unreadable-recovery-2011.test.ts` の `fsStoresWithBadRow` と
+ * 同じ手口。版の履歴ではなく `practices` 配列そのものを壊す）。
+ */
+async function fsStoresWithBadCurrentRow(): Promise<Stores> {
+  const root = await makeTempDir('alteroid-test-');
+  const stores = createFsStores(root);
+  await stores.practices.write({
+    slug: 'good-practice-current',
+    kind: '実装',
+    title: '正常なやり方',
+    content: '正常な本文',
+  });
+  const practicesPath = join(root, 'jobs', 'practices.json');
+  const raw = JSON.parse(await readFile(practicesPath, 'utf8')) as { practices: unknown[] };
+  raw.practices.push({
+    slug: BAD_CURRENT_SLUG,
+    kind: '',
+    title: BAD_CURRENT_TITLE,
+    content: BAD_CURRENT_CONTENT,
+    createdAt: '2026-09-02T00:00:00.000Z',
+    updatedAt: '2026-09-02T00:00:00.000Z',
+  });
+  await writeFile(practicesPath, JSON.stringify(raw, null, 2), 'utf8');
+  return stores;
+}
+
+/** 上と同じ状況を pg の `practices` 表へ直接 insert して作る。 */
+async function pgStoresWithBadCurrentRow(): Promise<Stores> {
+  const client = new PGlite();
+  const db: Db = drizzle(client);
+  await migrate(db);
+  const stores = createPgStoresFromDb(db);
+  await stores.practices.write({
+    slug: 'good-practice-current',
+    kind: '実装',
+    title: '正常なやり方',
+    content: '正常な本文',
+  });
+  await db.insert(tables.practices).values({
+    slug: BAD_CURRENT_SLUG,
+    kind: '',
+    title: BAD_CURRENT_TITLE,
+    content: BAD_CURRENT_CONTENT,
+    createdAt: new Date('2026-09-02T00:00:00.000Z'),
+    updatedAt: new Date('2026-09-02T00:00:00.000Z'),
+  });
+  return stores;
+}
+
+describe.each([
+  ['fs', fsStoresWithBadCurrentRow],
+  ['pg', pgStoresWithBadCurrentRow],
+] as const)(
+  '現在の本文が読めない行を practice_read（version 省略）が名乗る（%s 実装。issue #2177）',
+  (_label, makeStores) => {
+    let stores: Stores;
+
+    beforeEach(async () => {
+      stores = await makeStores();
+    });
+
+    it('practice_read（version 省略）は現在の本文が壊れていても isError にならず、理由の分かる文を返す（直す前は isError と生の Zod issue）', async () => {
+      const call = toolCaller(stores);
+      const { isError, text } = await call('practice_read', { slug: BAD_CURRENT_SLUG });
+      expect(isError, `本文: ${text}`).toBe(false);
+      expect(text).toContain(BAD_CURRENT_SLUG);
+      expect(text).toContain('読めない形で入っている');
+      expect(text).toContain('practice_write');
+      expect(text).toContain('practice_remove');
+      expect(text).not.toContain(BAD_CURRENT_TITLE);
+      expect(text).not.toContain(BAD_CURRENT_CONTENT);
+    });
+
+    it('practice_read（version 省略）は本当に無い slug なら今までどおり「無い」（isError との対照）', async () => {
+      const call = toolCaller(stores);
+      const { isError, text } = await call('practice_read', { slug: 'never-existed-current' });
+      expect(isError).toBe(false);
+      expect(text).toContain('無い');
+    });
+
+    it('practice_read（version 省略）は UnreadablePracticeError 以外の例外を投げ直す', async () => {
+      const originalRead = stores.practices.read.bind(stores.practices);
+      stores.practices.read = async (slug) => {
+        if (slug === BAD_CURRENT_SLUG) {
+          throw new Error('実測用のダミー（器そのものの障害を模す）');
+        }
+        return originalRead(slug);
+      };
+      const call = toolCaller(stores);
+      const { isError, text } = await call('practice_read', { slug: BAD_CURRENT_SLUG });
+      expect(isError).toBe(true);
+      expect(text).toContain('実測用のダミー');
     });
   },
 );
