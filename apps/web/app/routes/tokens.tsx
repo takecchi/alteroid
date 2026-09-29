@@ -103,7 +103,9 @@ function AddTokenForm() {
       <CardHeader title="追加" subtitle="alteroid token add / PUT /tokens と同じもの" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">ラベル（人間が読む名前。秘密ではない）</span>
+          <span className="text-xs text-muted-foreground">
+            ラベル（人間が読む名前。秘密ではない）
+          </span>
           <Input value={label} onChange={(event) => setLabel(event.target.value)} />
         </label>
         <label className="flex flex-col gap-1">
@@ -1053,7 +1055,9 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
           <span className="text-xs text-muted-foreground">契機: {entry.signal}</span>
         )}
         {entry.freshness !== undefined && (
-          <span className="text-xs text-muted-foreground">{describeFreshness(entry.freshness)}</span>
+          <span className="text-xs text-muted-foreground">
+            {describeFreshness(entry.freshness)}
+          </span>
         )}
         {/*
           **`signal` とは別の欄である**（`schema.ts` の `reason` の doc）。

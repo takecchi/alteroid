@@ -281,7 +281,9 @@ function Nav({
                   'mb-0.5 flex items-center gap-2 rounded-md px-2 text-sm transition-colors',
                   // 指で押す先は 44px 以上（WCAG 2.5.5 / Apple HIG の下限）。
                   onNavigate === undefined ? 'py-1.5' : 'min-h-11',
-                  isActive ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  isActive
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                 )
               }
             >

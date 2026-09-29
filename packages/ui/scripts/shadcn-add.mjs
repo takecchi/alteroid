@@ -24,8 +24,11 @@
  * 何を公開するかは足す人が決める）。
  */
 import { spawnSync } from 'node:child_process';
+// グローバルに頼らない（`scripts/verify.mjs` と同じ作法。ESLint の既定の環境に Node の大域が無い）。
+import console from 'node:console';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const packageDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));

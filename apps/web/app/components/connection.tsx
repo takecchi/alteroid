@@ -197,8 +197,8 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
               ALTEROID_ALLOWED_ORIGINS=https://www.example.com
             </pre>
             <p className="mt-1.5">
-              許可は<strong className="text-foreground">列挙したオリジンだけ</strong>で、ワイルドカードは
-              受け付けない。資格情報は Cookie ではなくヘッダ（
+              許可は<strong className="text-foreground">列挙したオリジンだけ</strong>
+              で、ワイルドカードは 受け付けない。資格情報は Cookie ではなくヘッダ（
               <code className="font-mono">Authorization: Bearer</code>）で運ぶ設計なので、
               別の登録可能ドメイン（例: <code className="font-mono">*.vercel.app</code>）に画面を
               置いても成立する。

@@ -282,7 +282,9 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
             この2つの日が食い違う（前日ぶんが翌日に書かれる）ので、裸の時刻を
             置くと見出しと矛盾しているように見える。
           */}
-          <p className="mb-2 text-[11px] text-muted-foreground">書かれたのは {formatDateTime(report.at)}</p>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            書かれたのは {formatDateTime(report.at)}
+          </p>
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (

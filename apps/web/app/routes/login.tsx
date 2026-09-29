@@ -65,7 +65,9 @@ function Shell({ children }: { children: React.ReactNode }) {
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <p className="font-mono text-lg font-semibold tracking-tight">alteroid</p>
-          <p className="mt-1 text-xs text-muted-foreground">クローンの様子を見て、指示を出し、記憶を直す</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            クローンの様子を見て、指示を出し、記憶を直す
+          </p>
         </div>
         <Card className="p-5">{children}</Card>
         <div className="mt-4">

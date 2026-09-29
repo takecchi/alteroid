@@ -168,11 +168,12 @@ packages/logic/src/           @alteroid/logic — React も SWR も知らない�
   types.ts                    生成 spec から導出した型（手書きしない）
   format.ts / journal-window.ts / *-links.ts  表示の整形・日誌の窓・画面へ渡す URL
 
-packages/ui/src/              @alteroid/ui — API を知らない見た目の部品
-  styles.css                  テーマ（色・土台）。@alteroid/ui/styles.css
-  components/ui.tsx           Button / Badge / Card などの共通部品
+packages/ui/src/              @alteroid/ui — API を知らない見た目の部品（見本帳は根で `pnpm storybook`）
+  styles.css                  テーマ。shadcn の既定（neutral）の色そのまま。@alteroid/ui/styles.css
+  components/common.tsx       画面が使う Button / Badge / Card など（shadcn の部品を画面の呼び方で包んだもの）
   components/page.tsx / drawer.tsx / markdown.tsx
-  components/shadcn/          shadcn の素の部品（@alteroid/ui/shadcn。components.json はこのパッケージに在る）
+  components/ui/              shadcn の素の部品（@alteroid/ui/shadcn。足すのは `pnpm --filter @alteroid/ui shadcn:add <名前>`）
+  **/*.stories.tsx            見本（Storybook）
 ```
 
 **通るまで取得も購読も始めない。** `shell.tsx` は門と中身を別の部品に分けてある。同じ部品に

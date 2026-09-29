@@ -261,7 +261,9 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               ) : history === undefined ? (
                 <Spinner />
               ) : historyVersions.length === 0 ? (
-                <p className="text-xs text-muted-foreground">まだ版が無い（一度も書かれていない）。</p>
+                <p className="text-xs text-muted-foreground">
+                  まだ版が無い（一度も書かれていない）。
+                </p>
               ) : (
                 <ul className="flex flex-col gap-1">
                   {[...historyVersions].reverse().map((v) => (

@@ -1067,8 +1067,10 @@ function FoldedTurnNote({ lastFoldedTurn }: { lastFoldedTurn: ManagerSummary['la
   return (
     <div className="border-t border-border px-4 py-3 text-xs">
       <p className="text-muted-foreground">
-        <strong className="font-medium text-destructive">manager_stop で畳まれたターンの本文</strong>（
-        {formatDateTime(lastFoldedTurn.at)} 受信。<code className="font-mono">lastReport</code>
+        <strong className="font-medium text-destructive">
+          manager_stop で畳まれたターンの本文
+        </strong>
+        （{formatDateTime(lastFoldedTurn.at)} 受信。<code className="font-mono">lastReport</code>
         （完遂した報告）ではない）:
       </p>
       <pre className="mt-1 overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
@@ -1313,7 +1315,9 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
 function UnpushedWorkObservationNote({ manager }: { manager: ManagerSummary }) {
   const note = unpushedWorkText(manager);
   if (note === null) return null;
-  return <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{note}</div>;
+  return (
+    <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{note}</div>
+  );
 }
 
 /**

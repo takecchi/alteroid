@@ -219,7 +219,9 @@ function ProfileEditor({ current }: { current: ProfileState }) {
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDraft(null)}>
                   編集を閉じる
                 </Button>
-                {unchanged && <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>}
+                {unchanged && (
+                  <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>
+                )}
               </div>
             )}
           </>
@@ -270,7 +272,9 @@ function ProfileEditor({ current }: { current: ProfileState }) {
           </pre>
         )}
         {failure instanceof ProfileRejectedError && (
-          <p className="text-[11px] text-muted-foreground">前のプロファイルがそのまま残っている。</p>
+          <p className="text-[11px] text-muted-foreground">
+            前のプロファイルがそのまま残っている。
+          </p>
         )}
         <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
 
@@ -307,7 +311,9 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
                 {(outcome.names ?? []).length > 0 && `（${(outcome.names ?? []).join(' ')}）`}
               </span>
             ) : (
-              <span className="text-destructive">反映できなかった — {outcome.error ?? '理由不明'}</span>
+              <span className="text-destructive">
+                反映できなかった — {outcome.error ?? '理由不明'}
+              </span>
             )}
             {(outcome.output ?? '').trim().length > 0 && (
               <pre className="mt-1 overflow-auto font-mono text-[11px] break-all whitespace-pre-wrap text-muted-foreground">

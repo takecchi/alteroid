@@ -84,7 +84,9 @@ export default function Memory() {
                       </span>
                       {document.title}
                     </p>
-                    <p className="truncate font-mono text-[11px] text-muted-foreground">{document.slug}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">
+                      {document.slug}
+                    </p>
                     {document.description !== undefined && (
                       // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
                       <p className="truncate text-[11px] text-muted-foreground">

@@ -28,47 +28,47 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Buttons: Story = {
-  render: () => {
-    const [loading, setLoading] = useState(false);
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary">primary</Button>
-          <Button>default</Button>
-          <Button variant="ghost">ghost</Button>
-          <Button variant="danger">danger</Button>
-          <Button disabled>disabled</Button>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="primary">
-            sm primary
-          </Button>
-          <Button size="sm">sm default</Button>
-          <Button size="sm" variant="ghost">
-            sm ghost
-          </Button>
-          <Button size="sm" variant="danger">
-            sm danger
-          </Button>
-        </div>
-        <Button
-          variant="primary"
-          loading={loading}
-          onClick={() => {
-            setLoading(true);
-            setTimeout(() => setLoading(false), 1500);
-          }}
-        >
-          押すと1.5秒 loading
-        </Button>
-        <p className="text-xs text-muted-foreground">
-          狭い画面（768px 未満）では押しやすさのため高さ 44px になる。
-        </p>
+function ButtonsShowcase() {
+  const [loading, setLoading] = useState(false);
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary">primary</Button>
+        <Button>default</Button>
+        <Button variant="ghost">ghost</Button>
+        <Button variant="danger">danger</Button>
+        <Button disabled>disabled</Button>
       </div>
-    );
-  },
-};
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="primary">
+          sm primary
+        </Button>
+        <Button size="sm">sm default</Button>
+        <Button size="sm" variant="ghost">
+          sm ghost
+        </Button>
+        <Button size="sm" variant="danger">
+          sm danger
+        </Button>
+      </div>
+      <Button
+        variant="primary"
+        loading={loading}
+        onClick={() => {
+          setLoading(true);
+          setTimeout(() => setLoading(false), 1500);
+        }}
+      >
+        押すと1.5秒 loading
+      </Button>
+      <p className="text-xs text-muted-foreground">
+        狭い画面（768px 未満）では押しやすさのため高さ 44px になる。
+      </p>
+    </div>
+  );
+}
+
+export const Buttons: Story = { render: () => <ButtonsShowcase /> };
 
 export const Badges: Story = {
   render: () => (

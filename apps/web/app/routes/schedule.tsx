@@ -156,7 +156,9 @@ export default function Schedule() {
                   書かれた既定で値そのものが存在しない」）。
                 */}
                 {entry.request === undefined ? (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">既定（外せない）</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    既定（外せない）
+                  </span>
                 ) : (
                   <>
                     <Button size="sm" onClick={() => setEditing(entry.kind)}>

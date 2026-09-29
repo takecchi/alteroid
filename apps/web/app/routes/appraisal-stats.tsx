@@ -297,7 +297,9 @@ function ReconciliationCard({
       <div className="flex flex-col gap-4 px-4 py-3 text-sm">
         <ReconciliationAxis title="引き受けた仕事" reconciliation={reconciliation.commitments} />
         <ReconciliationAxis title="委譲" reconciliation={reconciliation.jobs} />
-        <p className="text-xs text-muted-foreground">⚠️ 上の2つも別の軸である。混ぜて比べないこと。</p>
+        <p className="text-xs text-muted-foreground">
+          ⚠️ 上の2つも別の軸である。混ぜて比べないこと。
+        </p>
       </div>
     </Card>
   );

@@ -75,10 +75,14 @@ export default function Practices() {
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm">
-                      <span className="mr-1.5 text-[10px] text-muted-foreground">[{practice.kind}]</span>
+                      <span className="mr-1.5 text-[10px] text-muted-foreground">
+                        [{practice.kind}]
+                      </span>
                       {practice.title}
                     </p>
-                    <p className="truncate font-mono text-[11px] text-muted-foreground">{practice.slug}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">
+                      {practice.slug}
+                    </p>
                   </div>
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     {/* `chars` は本文の文字数（コードポイント数。`practiceMetaSchema` の

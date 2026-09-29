@@ -1125,7 +1125,9 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
             disabled={busy !== null}
             className={cn(
               'rounded border px-1.5 py-0.5',
-              current === value ? 'border-foreground text-foreground' : 'border-border text-muted-foreground hover:text-foreground',
+              current === value
+                ? 'border-foreground text-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground',
             )}
             onClick={() => void submit(value)}
           >

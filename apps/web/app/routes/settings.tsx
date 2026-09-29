@@ -359,7 +359,9 @@ function Runners() {
                 この状態になった: {formatDateTime(runner.since)}
               </p>
               {runner.runnerId === undefined ? null : (
-                <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">{runner.label}</p>
+                <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
+                  {runner.label}
+                </p>
               )}
               <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 {runner.workspacePath}
@@ -771,7 +773,8 @@ function ResetWorkspace() {
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             {RESET_CONFIRM_SUMMARY}
             を全部消します。認証トークンのプール・マネージャーへ降ろす環境変数・この
-            ログインアカウントは消しません。<strong className="text-foreground">取り消せません。</strong>
+            ログインアカウントは消しません。
+            <strong className="text-foreground">取り消せません。</strong>
           </p>
 
           {cleared === null ? (

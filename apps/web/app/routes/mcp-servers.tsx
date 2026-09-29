@@ -276,7 +276,9 @@ function McpServersEditor({ current }: { current: McpServersState }) {
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDraft(null)}>
                   編集を閉じる
                 </Button>
-                {unchanged && <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>}
+                {unchanged && (
+                  <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>
+                )}
               </div>
             )}
           </>

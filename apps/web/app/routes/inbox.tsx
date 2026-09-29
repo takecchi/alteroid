@@ -162,7 +162,9 @@ function InboxBacklogCard() {
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <ErrorNote error={error} />
-        {isLoading && data === undefined && <p className="text-xs text-muted-foreground">読み込み中…</p>}
+        {isLoading && data === undefined && (
+          <p className="text-xs text-muted-foreground">読み込み中…</p>
+        )}
         {data !== undefined && <InboxBacklogView backlog={data} />}
       </div>
     </Card>
@@ -426,7 +428,9 @@ function InboxRemoveCard() {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">1回で消す上限（任意。省略時はサーバの既定）</span>
+          <span className="text-xs text-muted-foreground">
+            1回で消す上限（任意。省略時はサーバの既定）
+          </span>
           <Input
             value={limitText}
             onChange={(event) => {
@@ -501,7 +505,9 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
           1件も消していません（試算）。この内容でよければ「実行する」を押してください。
         </p>
       ) : (
-        <p className="mt-2 text-muted-foreground">実行しました。消した id は日誌にも残っています。</p>
+        <p className="mt-2 text-muted-foreground">
+          実行しました。消した id は日誌にも残っています。
+        </p>
       )}
       {result.removedIds.length === 0 ? (
         <p className="mt-2 text-muted-foreground">対象になる id は無い。</p>

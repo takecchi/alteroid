@@ -527,7 +527,9 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   if (!hasCloneReply) {
     return (
       <div>
-        <p className="text-[11px] text-muted-foreground italic">この会話にはまだクローンの発言が無い</p>
+        <p className="text-[11px] text-muted-foreground italic">
+          この会話にはまだクローンの発言が無い
+        </p>
         <OpenInChat conversationId={conversationId} />
       </div>
     );
