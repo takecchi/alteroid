@@ -3754,8 +3754,12 @@ describe('HTTP API', () => {
       .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
       .reverse();
     expect(decisions).toHaveLength(2);
-    expect(decisions[0]).toBe('人間が定期の依頼を設定しようとしている: issue-round: open issue を見て実装を進める');
-    expect(decisions[1]).toBe('人間が定期の依頼を仕込んだ: issue-round: open issue を見て実装を進める');
+    expect(decisions[0]).toBe(
+      '人間が定期の依頼を設定しようとしている: issue-round: open issue を見て実装を進める',
+    );
+    expect(decisions[1]).toBe(
+      '人間が定期の依頼を仕込んだ: issue-round: open issue を見て実装を進める',
+    );
   });
 
   /**
@@ -8642,7 +8646,9 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     const withVault = withCredentials();
     const r1 = await put(withVault, [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE }]);
     expect(r1.status).toBe(400);
-    const r2 = await put(withVault, [{ name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' }]);
+    const r2 = await put(withVault, [
+      { name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' },
+    ]);
     expect(r2.status).toBe(400);
     // 置かせない名前なので、正本には1件も置かれていない。
     expect(await stores.credentials.list()).toEqual([]);
