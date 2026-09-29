@@ -5,7 +5,9 @@ import {
   describeUnrecordedManagers,
   describeWebSearchRequests,
   formatUsd,
+  isRealUsageDate,
   summarizeUsage,
+  USAGE_DATE_PATTERN,
   USAGE_LAYERS,
   USAGE_SITES,
 } from '@alteroid/core/usage';
@@ -91,71 +93,6 @@ function parseUsageSite(raw: string | null): UsageSite | '' {
 }
 
 /**
- * `usageDateSchema`（`packages/core/src/usage.ts`）の正規表現をここへ複製して
- * いる（issue #2133）。**値の import ではなく、形の書き写しである** ——
- * `usageDateSchema` は `packages/core/src/usage.ts`（サーバ専用の重い
- * `usage.ts`）にしか無く、ブラウザ向けの軽い口（`@alteroid/core/usage` ＝
- * `usage-format.ts`。このファイル冒頭の import 群が使っているもの）には
- * 出ていない。`apps/web` は `@alteroid/core`（バレル）を値として import
- * できない（eslint。`tokens.tsx` の `tokenAvailabilityAt` の doc と同じ理由・
- * 同じ事故——#294 / #306）ので、正規表現をここへ複製する。
- *
- * **一致は `usage.date-schema-parity.test.ts` が測る**
- * （`usageDateSchema.safeParse` と `USAGE_DATE_PATTERN.test` を同じ入力の
- * 集合へ通して突き合わせる）——ここが古くなっても気づけるようにするため。
- *
- * **これは形だけの検査で、カレンダー上の実在は見ない**（`2026-02-30` も
- * 通る）。実在の検査は別に {@link isRealCalendarDate} が持つ——理由は
- * そちらの doc を見よ。デーモン側の `usageQuery`（同じ `usageDateSchema`）も
- * 正規表現だけで検査していて実在の検査は無いので、**この正規表現単体は
- * デーモンと揃っている。** 揃っていないのは `parseUsageDate` が
- * `isRealCalendarDate` を追加で通す判断のほうである。
- */
-export const USAGE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-/**
- * `YYYY-MM-DD` の形（`USAGE_DATE_PATTERN` を通った値）が、実在するカレンダー
- * 上の日かどうかを見る（issue #2133）。
- *
- * **ここはデーモンの検査と意図的に揃えていない。** デーモンの
- * `usageDateSchema` は正規表現だけで、`2026-02-30` のような形は合うが実在
- * しない日も通す——集計（`packages/storage-pg/src/usage.ts` の `aggregate`）
- * は `usage_daily.date` を `text` 列の文字列比較で引くだけなので、実在しない
- * 日付を渡しても例外にはならない（string としての大小比較は成り立つ）。
- *
- * **しかし画面はそれをそのまま通せない。** `type="date"` の `<input>` は、
- * 実在しない日を `value` に渡すと**値のサニタイズでブラウザ側が空文字へ
- * 落とす**（HTML の日付入力の仕様——jsdom も同じ動きをする。実際に
- * `usage.test.tsx` でこの動きを踏んだ）。もし `2026-02-30` を絞り込みへ
- * 通すと、入力欄は空に見えるのに `GET /usage` には `from=2026-02-30` が
- * 載る——**まさに、この issue が塞ごうとしている「入力欄は空なのに絞り込みが
- * 効いている」食い違いそのものが、実在しない日でも起きる。** その食い違いを
- * 作らないことのほうを優先し、実在しない日も「読めない」側へ倒す。
- *
- * **これは持ち主（マネージャー）への報告事項**——デーモンと画面の判定基準が
- * この1点で揃っていない。揃えるならデーモン側に実在検査を足すか、画面側の
- * 入力を `type="date"` からテキストへ落とすかの選択になるが、どちらも
- * この issue の直し方の見立てを超える変更なので、ここでは行わない。
- */
-function isRealCalendarDate(value: string): boolean {
-  // `USAGE_DATE_PATTERN` を通った後の呼び出しを前提にしているので、
-  // 3つの数字グループは必ず取れる（`match` が `null` になる分岐は無い）。
-  // `noUncheckedIndexedAccess` は取れることまでは保証しないので、万が一
-  // 取れなかったときは `NaN` へ倒し、下の比較がそのまま偽になるようにする。
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (match === null) return false;
-  const year = Number(match[1] ?? NaN);
-  const month = Number(match[2] ?? NaN);
-  const day = Number(match[3] ?? NaN);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-  return (
-    parsed.getUTCFullYear() === year &&
-    parsed.getUTCMonth() === month - 1 &&
-    parsed.getUTCDate() === day
-  );
-}
-
-/**
  * `FROM_PARAM` / `TO_PARAM` の生の値から、`YYYY-MM-DD` として読める値だけを
  * 取り出す（issue #2133）。**読めない値は捨てて「絞り込み無し」として扱う**
  * （`parseUsageLayer` / `parseUsageSite` と同じ判断——知らない値をそのまま
@@ -163,18 +100,42 @@ function isRealCalendarDate(value: string): boolean {
  * 「読めない」とは扱わない** ——「絞り込みが無い」と等価であって、人間が
  * 書き損じた値ではない。
  *
- * **形（`USAGE_DATE_PATTERN`）とカレンダー上の実在（`isRealCalendarDate`）の
- * 両方を見る。** 後者を見る理由は `isRealCalendarDate` の doc（デーモンとは
- * 意図的に揃えていない）。
+ * **形（`USAGE_DATE_PATTERN`）とカレンダー上の実在（`isRealUsageDate`）の
+ * 両方を、`@alteroid/core/usage`（ブラウザ向けの軽い口）から読んで見る。**
+ *
+ * かつては、`usageDateSchema`（`packages/core/src/usage.ts`。サーバ専用の
+ * 重い `usage.ts`）がこの2つを持っていなかったため、正規表現と実在検査を
+ * ここへ書き写していた（issue #2133）。書き写しの一致は
+ * `usage.date-schema-parity.test.ts` が測っていた。実在検査は当時デーモン側に
+ * 無かったので、画面だけが `2026-02-30` のような実在しない日を「読めない」側へ
+ * 倒しており、**デーモンとは意図的に揃えていなかった**（`type="date"` の
+ * `<input>` が実在しない日を空文字へ落とす仕様と、素通しした場合の
+ * 「入力欄は空なのに絞り込みが効いている」食い違いを避けるため）。
+ *
+ * **issue #2156 で `usageDateSchema` 自身が `isRealUsageDate` で実在検査を
+ * 持つようになり（デーモンの `GET /usage` も実在しない日を 400 で弾く）、
+ * その判定がブラウザ向けの軽い口（`@alteroid/core/usage` =
+ * `usage-format.ts`）から `USAGE_DATE_PATTERN` / `isRealUsageDate` として
+ * 直接読めるようになった。issue #2166 で、画面はこの2つを import する形に
+ * 寄せ、書き写し（旧 `isRealCalendarDate`）を削った。** いまは画面とデーモンの
+ * 判定が同じ関数から出ており、揃っている。
  *
  * 戻り値だけでは「捨てたかどうか」は見分けられない（空文字は「そもそも
  * 無い」と「捨てた」の両方で起こる）。捨てたことを画面に出す判定は、
  * 呼び出し側で `raw` と戻り値を突き合わせて行う。
+ *
+ * **export しているのはテストのためだけである（issue #2166。「テストを
+ * 弱めずに直す」の「テスト可能にするための構造変更」）。** 出力・挙動は
+ * 1文字も変えていない——`export` を足しただけで、呼び出し側
+ * （`Usage` 内の `parseUsageDate(rawFrom)` / `parseUsageDate(rawTo)`）は
+ * そのままである。`usage.date-schema-parity.test.ts` が、この関数が
+ * `USAGE_DATE_PATTERN` / `isRealUsageDate`（core）へそのまま委譲している
+ * ことを直接測る（画面が私家版の判定へ後戻りしていないかを見る歯）。
  */
-function parseUsageDate(raw: string | null): string {
+export function parseUsageDate(raw: string | null): string {
   if (raw === null || raw === '') return '';
   if (!USAGE_DATE_PATTERN.test(raw)) return '';
-  return isRealCalendarDate(raw) ? raw : '';
+  return isRealUsageDate(raw) ? raw : '';
 }
 
 export default function Usage() {

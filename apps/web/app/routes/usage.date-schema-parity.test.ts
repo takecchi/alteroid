@@ -1,46 +1,47 @@
 /**
- * `usage.tsx` の `USAGE_DATE_PATTERN` は `usageDateSchema`
- * （`packages/core/src/usage.ts`）の正規表現を複製したものである（issue
- * #2133。`USAGE_DATE_PATTERN` の doc に理由がある——`usageDateSchema` は
- * ブラウザ向けの軽い口（`@alteroid/core/usage`）には出ておらず、`apps/web`
- * は `@alteroid/core`（バレル）を値として import できない）。
+ * 元は、`usage.tsx` が持っていた書き写し（`USAGE_DATE_PATTERN` / 旧
+ * `isRealCalendarDate`）と `usageDateSchema`（`packages/core/src/usage.ts`）が
+ * 同じ入力の集合に同じ判定を返すことを測る歯だった（issue #2133 / #2156。
+ * 書き写した理由は当時 `usageDateSchema` がブラウザ向けの軽い口
+ * `@alteroid/core/usage` から出ておらず、`apps/web` は `@alteroid/core`
+ * （バレル）を値として import できなかったため）。
  *
- * **複製は書き写した瞬間から古くなりうる。** ここで測るのは、複製した
- * 正規表現とデーモン側の正本が同じ入力の集合に同じ判定を返すことである。
+ * **issue #2166 で、書き写しそのものを削った。** `usage.tsx` はいま
+ * `@alteroid/core/usage` の `USAGE_DATE_PATTERN` / `isRealUsageDate` を
+ * そのまま import して使っており、画面側に別の実装は存在しない。
+ * ⟹ 「複製と正本が一致するか」はもう測る対象が無い（比べる相手の複製が
+ * 無い）。
  *
- * **issue #2156 で、突き合わせの相手を `usageDateSchema` から core の
- * `USAGE_DATE_PATTERN` に替えた**（領域 D の mgr-712ad619）。#2156 で
- * `usageDateSchema` は、形（`USAGE_DATE_PATTERN`）に加えて暦の上の実在
- * （`isRealUsageDate`）も見るようになった。形の正本は `USAGE_DATE_PATTERN` として
- * `packages/core/src/usage-format.ts`（軽い口）から別に出ている。この歯が測って
- * いたのは「書き写した正規表現の一致」なので、相手を形の正本に替えれば、目的は
- * そのまま保てる。以前の相手（`usageDateSchema`）のままだと、`2026-02-30` などの
- * 実在しない日で、形だけを見る画面の正規表現と一致しなくなる。
+ * **ここで測る対象を、「画面の `parseUsageDate` が core の判定へそのまま
+ * 委譲しているか」に変えた。** `parseUsageDate` は `usage.tsx` の中で
+ * `USAGE_DATE_PATTERN.test(raw)` と `isRealUsageDate(raw)` を呼ぶだけの
+ * 薄い関数で、テストのためだけに `export` した（`usage.tsx` の
+ * `parseUsageDate` の doc に理由がある）。この歯は、`parseUsageDate` の
+ * 戻り値が「`core` の2関数から素朴に導ける期待値」と一致することを、
+ * 元のケース集合（読める形・形は合うが実在しない日・読めない形）全部で
+ * 確かめる。**画面が core の判定から外れて私家版の実在検査へ後戻りしたら、
+ * ここが赤くなる**（例: `isRealUsageDate` を通さず常に真を返す変異）。
  *
- * **画面の実在の検査（`isRealCalendarDate`）と core の `isRealUsageDate` の一致は、
- * ここでは測っていない**（画面の関数は export されていない）。画面が
- * `@alteroid/core/usage` の `USAGE_DATE_PATTERN` / `isRealUsageDate` を読む形へ寄せれば、
- * 書き写しそのものが要らなくなる（寄せる作業は領域 E が持つ。#2156 の申し送り）。
- *
- * **`@alteroid/core`（バレル）からの値 import は、テストファイルでは
- * 許容されている**（`eslint.config.js` の `no-restricted-imports` の
- * `ignores`。`journal.test.tsx` の `JOURNAL_ENTRY_TYPES` と同じ形）。
+ * `usage.test.tsx` の「形は合うが実在しない日（2026-02-30）」のテストは
+ * 画面の描画（入力欄・注記・`GET /usage` への問い合わせ）まで見る黒箱の
+ * 歯で、ここは `parseUsageDate` 単体を直接見る白箱の歯——役割は重複しない。
  */
-import { USAGE_DATE_PATTERN as CORE_USAGE_DATE_PATTERN } from '@alteroid/core';
+import { isRealUsageDate, USAGE_DATE_PATTERN } from '@alteroid/core/usage';
 import { describe, expect, it } from 'vitest';
 
-import { USAGE_DATE_PATTERN } from './usage';
+import { parseUsageDate } from './usage';
 
 const CASES = [
-  // 読める形。
+  // 読める形かつ実在する日。
   '2026-08-01',
   '0001-01-01',
   '9999-12-31',
-  // 形は合うが実在しない日（issue #2133 の確かめる対象。両者とも「形だけ」
-  // 見て通すことを期待する——`USAGE_DATE_PATTERN` の doc 参照）。
+  '2024-02-29', // 閏年
+  // 形は合うが実在しない日。
   '2026-02-30',
   '2026-13-01',
   '2026-00-00',
+  '2023-02-29', // 閏年ではない
   // 読めない形。
   '',
   'not-a-date',
@@ -55,8 +56,14 @@ const CASES = [
   '20260801',
 ] as const;
 
-describe('USAGE_DATE_PATTERN と core の USAGE_DATE_PATTERN（形の正本）の一致（issue #2133 / #2156）', () => {
-  it.each(CASES)('%s の判定が一致する', (value) => {
-    expect(USAGE_DATE_PATTERN.test(value)).toBe(CORE_USAGE_DATE_PATTERN.test(value));
+describe('画面の parseUsageDate が core の USAGE_DATE_PATTERN / isRealUsageDate へそのまま委譲している（issue #2133 / #2156 / #2166）', () => {
+  it.each(CASES)('%s の判定が core から素朴に導ける期待値と一致する', (value) => {
+    const expected = USAGE_DATE_PATTERN.test(value) && isRealUsageDate(value) ? value : '';
+    expect(parseUsageDate(value)).toBe(expected);
+  });
+
+  it('raw が null または空文字なら core を呼ぶまでもなく空文字を返す', () => {
+    expect(parseUsageDate(null)).toBe('');
+    expect(parseUsageDate('')).toBe('');
   });
 });
