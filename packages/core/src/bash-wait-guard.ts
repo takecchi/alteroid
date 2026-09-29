@@ -38,8 +38,13 @@
  * 次のどれかが在れば、`until`/`while` + `sleep` の形であっても通す:
  *
  * - 全体が `timeout N ...` に包まれている（先頭コマンドが `timeout`）
- * - `for` ループ（そもそも `until` / `while` に一致しないので、この検出器は
- *   何もしない —— 個別の除外条件を書く必要がない）
+ * - ~~`for` ループ（そもそも `until` / `while` に一致しないので、この検出器は
+ *   何もしない —— 個別の除外条件を書く必要がない）~~ **リストを回す `for`
+ *   （`for i in …`）と、条件の有る C 形式の `for`（`for ((i=0;i<5;i++))`）だけ。**
+ *   **条件の無い C 形式の `for`（`for ((;;))`）は、`while true` と同じ無限ループなので
+ *   弾く**（形 `for-sleep`。teto の判断、#2179 の「残す」。`findUnboundedCFors` の doc）。
+ *   もとの「for は有界」は、リストを回す for を前提にした判断で、条件の無い C 形式には
+ *   当てはまらなかった。取り消し線のまま残すのは、前提が外れていた経緯を辿れるようにするため
  * - `while read ...`（入力で尽きる。ループの条件節に `read` が在る）
  * - カウンタの比較が在る（`-lt` / `-le` / `-gt` / `-ge`、または算術文脈
  *   `(( ... ))`）
@@ -90,6 +95,7 @@
 export type WaitGuardForm =
   | 'until-sleep'
   | 'while-sleep'
+  | 'for-sleep'
   | 'tail-f'
   | 'gh-run-watch-background'
   | 'gh-pr-merge-delete-branch';
@@ -151,8 +157,159 @@ function hasUnboundedTailFollow(command: string): boolean {
  * 無いと `/tmp/done` のようなパス名の一部が `\bdone\b` に一致し、本体を
  * 早期に打ち切って誤爆する（doc 冒頭「`do` / `done` は『コマンドの位置に
  * 在るとき』だけ終端と見なす」）。
+ *
+ * **一致の規則の正本**（#2181 からは、本体はこれを当てない）。本体は `findUntilWhileLoops`
+ * で同じ一致を返す。この正規表現は、遅延の読みが2段あり、終端の `done` が無いと開始ごとに
+ * 末尾まで読み直して3乗に近く遅くなる（`'while x; do '.repeat(400)+'x'` で 344.3ms、4000回で
+ * 120秒を超えた。2026-09-29T12:1xZ）。託宣として `bash-wait-guard-loop-scan.test.ts` が
+ * 突き合わせる。**規則を変えるときは、ここと `findUntilWhileLoops` の両方を変えること。**
  */
-const LOOP_RE = /\b(until|while)\b([\s\S]*?)(?<=^|[\s;&|])do\b([\s\S]*?)(?<=^|[\s;&|])done\b/g;
+export const LOOP_RE =
+  /\b(until|while)\b([\s\S]*?)(?<=^|[\s;&|])do\b([\s\S]*?)(?<=^|[\s;&|])done\b/g;
+
+/** `findUntilWhileLoops` / `findUnboundedCFors` が返す、ループ1つ分。 */
+export interface LoopMatch {
+  readonly keyword: 'until' | 'while' | 'for';
+  /** `until` / `while` は条件の節。`for` は `(( … ))` の2つ目（条件）の節。 */
+  readonly cond: string;
+  readonly body: string;
+  /** 一致の始まり（`until` / `while` / `for` の位置）。 */
+  readonly index: number;
+}
+
+const LOOP_BOUNDARY_RE = /[\s;&|]/;
+const WORD_CHAR_RE = /\w/;
+
+/** `command` の `i` に、コマンドの位置の語 `word` が在るか（直前が行頭か区切り、直後が語の文字でない）。 */
+function isTokenAt(command: string, i: number, word: string): boolean {
+  if (!command.startsWith(word, i)) return false;
+  const prev = command[i - 1];
+  if (prev !== undefined && !LOOP_BOUNDARY_RE.test(prev)) return false;
+  const next = command[i + word.length];
+  return next === undefined || !WORD_CHAR_RE.test(next);
+}
+
+/** 昇順の `positions` から、`from` 以上の最初の値を返す（無ければ `undefined`）。 */
+function firstAtOrAfter(positions: readonly number[], from: number): number | undefined {
+  let lo = 0;
+  let hi = positions.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((positions[mid] ?? Infinity) < from) lo = mid + 1;
+    else hi = mid;
+  }
+  return positions[lo];
+}
+
+/** `do` / `done` / 閉じの `}`（直前が空白か `;`）の語の位置を、1回の走査で集める。 */
+function indexLoopTokens(command: string): { dos: number[]; dones: number[]; braces: number[] } {
+  const dos: number[] = [];
+  const dones: number[] = [];
+  const braces: number[] = [];
+  for (let i = command.indexOf('do'); i !== -1; i = command.indexOf('do', i + 1)) {
+    if (isTokenAt(command, i, 'done')) dones.push(i);
+    else if (isTokenAt(command, i, 'do')) dos.push(i);
+  }
+  for (let i = command.indexOf('}'); i !== -1; i = command.indexOf('}', i + 1)) {
+    const prev = command[i - 1];
+    if (prev !== undefined && /[\s;]/.test(prev)) braces.push(i);
+  }
+  return { dos, dones, braces };
+}
+
+const LOOP_KEYWORD_RE = /\b(until|while)\b/g;
+
+/**
+ * `until` / `while` のループを、**`LOOP_RE` を `g` で当てたのと同じ一致**として返す（#2181）。
+ *
+ * `LOOP_RE` の一致の規則を読み解くと、次のとおりである。
+ * - 開始（`until` / `while`）の後ろで**最初の `do` の語**までが条件、その後ろで**最初の
+ *   `done` の語**までが本体（遅延の読みは、いちばん短い分け方から試すため）
+ * - 最初の `do` の後ろに `done` が無ければ、それより後ろのどの `do` の後ろにも無いので、その
+ *   開始は一致しない。**後ろのどの開始も一致しない**（開始より後ろの `do` は、前の開始から見ても
+ *   後ろに在る）ので、そこで探すのをやめてよい
+ * - 一致したら、その `done` の直後から次の開始を探す（入れ子の本体の中の開始は読み飛ばす）
+ *
+ * `do` / `done` の語の位置を1回の走査で集め、開始ごとに二分探索で引く。
+ */
+export function findUntilWhileLoops(command: string): LoopMatch[] {
+  const { dos, dones } = indexLoopTokens(command);
+  const loops: LoopMatch[] = [];
+  LOOP_KEYWORD_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = LOOP_KEYWORD_RE.exec(command)) !== null) {
+    const keyword = m[1] as 'until' | 'while';
+    const condStart = m.index + keyword.length;
+    const doAt = firstAtOrAfter(dos, condStart);
+    if (doAt === undefined) break;
+    const doneAt = firstAtOrAfter(dones, doAt + 2);
+    if (doneAt === undefined) break;
+    loops.push({
+      keyword,
+      cond: command.slice(condStart, doAt),
+      body: command.slice(doAt + 2, doneAt),
+      index: m.index,
+    });
+    LOOP_KEYWORD_RE.lastIndex = doneAt + 4;
+  }
+  return loops;
+}
+
+/**
+ * 条件の無い C 形式の `for`（`for ((init; cond; step))`）の見出し（teto の判断、#2179 の「残す」）。
+ * 3つの節を捕獲する。見出しの後ろの空白と `;` を読み飛ばした位置を、本体の始まりの候補にする。
+ */
+const C_FOR_HEADER_RE = /\bfor[ \t]*\(\(([^;()]*);([^;()]*);([^()]*)\)\)[\s;]*/g;
+
+/** C 形式の for の条件の節が「無い」か（空、または 0 でない整数の定数だけ）。 */
+function isEndlessCForCondition(cond: string): boolean {
+  const trimmed = cond.trim();
+  return trimmed === '' || /^[1-9]\d*$/.test(trimmed);
+}
+
+/**
+ * **条件の無い** C 形式の `for` を返す（teto の判断、#2179 の「残す」。2026-09-29）。
+ *
+ * ## なぜ for を見るか
+ *
+ * このモジュールの判定基準は、長く「`for` ループは `until` / `while` に一致しないので何もしない
+ * （有界）」と書いていた。これはリストを回す `for`（`for i in …`）と、条件の有る C 形式の `for`
+ * を前提にした判断である。**条件の無い C 形式の `for`（`for ((;;))`）は、`while true` と同じ無限
+ * ループで、前提が外れていた。**
+ *
+ * ## 線引き（領域 D のマネージャーの判断）
+ *
+ * - 弾く候補: 条件の節が空、または 0 でない整数の定数だけ（`for ((;;))` / `for (( ; ; ))` /
+ *   `for ((i=0;;i++))` / `for ((;1;))`）。本体は `do … done` と `{ …; }` の両方の形を見る
+ * - 通す: 条件の有る C 形式（`for ((i=0;i<5;i++))` / `for ((;0;))`）・リストを回す `for`。これは
+ *   呼び出し側の `sleep` / `break` / カウンタ比較の判定より前に、ここで候補から外す
+ *
+ * 本体の終端（`done` / `}`）は、`findUntilWhileLoops` と同じ索引から二分探索で引く（見出しの
+ * 数だけ試しても線形に近い）。
+ */
+export function findUnboundedCFors(command: string): LoopMatch[] {
+  if (!command.includes('for')) return [];
+  const { dos, dones, braces } = indexLoopTokens(command);
+  const loops: LoopMatch[] = [];
+  C_FOR_HEADER_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = C_FOR_HEADER_RE.exec(command)) !== null) {
+    const cond = m[2] ?? '';
+    if (!isEndlessCForCondition(cond)) continue;
+    const bodyStartCandidate = m.index + m[0].length;
+    let body: string | undefined;
+    if (firstAtOrAfter(dos, bodyStartCandidate) === bodyStartCandidate) {
+      const doneAt = firstAtOrAfter(dones, bodyStartCandidate + 2);
+      if (doneAt !== undefined) body = command.slice(bodyStartCandidate + 2, doneAt);
+    } else if (command[bodyStartCandidate] === '{') {
+      const closeAt = firstAtOrAfter(braces, bodyStartCandidate + 1);
+      if (closeAt !== undefined) body = command.slice(bodyStartCandidate + 1, closeAt);
+    }
+    if (body === undefined) continue;
+    loops.push({ keyword: 'for', cond, body, index: m.index });
+  }
+  return loops;
+}
 
 /** カウンタ比較（`-lt` 系 / `(( ... ))`）が条件節・本体のどちらかに在るか。 */
 const COUNTER_COMPARISON_RE = /-lt\b|-le\b|-gt\b|-ge\b|\(\(/;
@@ -2317,12 +2474,9 @@ export function inspectBashCommand(
     };
   }
 
-  LOOP_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = LOOP_RE.exec(waitView)) !== null) {
-    const keyword = match[1] as 'until' | 'while';
-    const cond = match[2] ?? '';
-    const body = match[3] ?? '';
+  // `until` / `while` の一致は `LOOP_RE` と同じ（`findUntilWhileLoops` の doc。#2181）。
+  for (const { keyword: loopKeyword, cond, body } of findUntilWhileLoops(waitView)) {
+    const keyword = loopKeyword as 'until' | 'while';
 
     // sleep を伴わないループ（busy-wait 等）は、この検出器が弾く対象の形
     // ではない（下の doc 冒頭「していないこと」）。
@@ -2335,6 +2489,23 @@ export function inspectBashCommand(
       reason: buildReason(
         `\`${keyword} <条件>; do ... sleep ...; done\` は、条件が反転するまで` +
           '待ち続ける形で、相手（sentinel を書くはずの側）が先に死ねば二度と反転しない',
+      ),
+    };
+  }
+
+  // 条件の無い C 形式の for（teto の判断、#2179 の「残す」）。本体の判定は while と同じ
+  // （`sleep` が在り、`break` もカウンタ比較も無ければ弾く）。条件の節は
+  // `findUnboundedCFors` が先に絞っているので、ここでは見ない（`isBoundedLoop` は `((` を
+  // カウンタ比較の印に数えるので、`for ((;;))` の見出しに当てると有界と誤読する）。
+  for (const { body } of findUnboundedCFors(waitView)) {
+    if (!/\bsleep\b/.test(body)) continue;
+    if (/\bbreak\b/.test(body) || COUNTER_COMPARISON_RE.test(body)) continue;
+    return {
+      blocked: true,
+      form: 'for-sleep',
+      reason: buildReason(
+        '条件の無い C 形式の `for ((;;)); do ... sleep ...; done` は、`while true` と同じで、' +
+          '自分からは終わらない',
       ),
     };
   }
