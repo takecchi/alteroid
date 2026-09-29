@@ -3062,7 +3062,7 @@ describe('chat の /journal', () => {
    * `inbox_flow` の4種は `summarize()` の6キー（`text`/`decision`/`question`/
    * `summary`/`body`/`tool`）のどれも持たないため、要約が空欄のまま出て
    * いた（`  <at>  [worker_wait] ` の後ろに何も出ない）。Web
-   * （`apps/web/app/hooks/queries.ts` の `summarizeJournalEntry`）と同じ
+   * （`packages/swr/src/hooks/queries.ts` の `summarizeJournalEntry`）と同じ
    * 文言を `@alteroid/core/journal-diagnostics-format` から借りて埋める。
    */
   describe('issue #2016 — worker_wait / turn_usage / context_usage / inbox_flow の要約', () => {

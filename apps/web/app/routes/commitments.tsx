@@ -3,9 +3,9 @@ import { Fragment, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Badge,
   Button,
   Card,
@@ -15,24 +15,23 @@ import {
   Input,
   Spinner,
   Textarea,
-} from '~/components/ui';
+  cn,
+} from '@alteroid/ui';
 import {
   useAppraiseCommitment,
   useCloseCommitment,
   useEditCommitment,
   usePushCommitment,
-} from '~/hooks/mutations';
-import { useCommitments } from '~/hooks/queries';
-import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
+  useCommitments,
+} from '@alteroid/swr';
+import { APPRAISAL_LABELS, formatDateTime, formatRelative } from '@alteroid/logic';
 import type {
   AppraisalValue,
   CommitmentClosedBy,
   CommitmentOrigin,
   TextMarkup,
 } from '@alteroid/core';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
-import type { Commitment, UnreadableCommitment } from '~/lib/types';
+import type { Commitment, UnreadableCommitment } from '@alteroid/logic';
 
 /**
  * 引き受けたまま終わっていない仕事の台帳（`packages/core/src/schema.ts` の
@@ -137,7 +136,7 @@ function isClosed(commitment: Commitment): boolean {
 /**
  * 読めない行が在ることを、一覧の上で断る（issue #296）。
  *
- * **新しい共有部品を増やさない。** `ErrorNote`（`~/components/ui`）と同じ
+ * **新しい共有部品を増やさない。** `ErrorNote`（`packages/ui/src/components/ui.tsx`）と同じ
  * 配色の作法を warn 色で使い回す — `apps/web/app/routes/journal.tsx` の
  * `BlockedNote`（「終端でも空でもない、本物の限界だと分かる形にする」）と
  * 同じ考え方で、この画面にもローカルに1つだけ置く。
@@ -147,7 +146,7 @@ function isClosed(commitment: Commitment): boolean {
  * そこへ混ぜると「特に何も無い」に見えてしまう。
  *
  * **0件なら描かない。** 常に出る断りは、出ていることが情報にならない
- * （`~/components/ui` の `TruncationNote` と同じ判定）。
+ * （`packages/ui/src/components/ui.tsx` の `TruncationNote` と同じ判定）。
  *
  * **id が取れない行は件数だけに数える**（`commitment_list` ツール・digest と
  * 同じ扱い。`packages/core/src/tools.ts` / `digest.ts`）。
@@ -915,7 +914,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
    * 「編集できない」としか見えず、理由は1文字も出ない。
    *
    * 乗せた線は、この repo が同じ論点で既に持っているもの
-   * （`apps/web/app/hooks/mutations.ts` の `useRemoveSchedule`）:
+   * （`packages/swr/src/hooks/mutations.ts` の `useRemoveSchedule`）:
    * 「画面側でボタンを隠して表現しないこと — 隠すと「なぜ押せないか」が
    * 消える。押せて、断られた理由がその場に出るほうが読める。」
    *
@@ -1053,7 +1052,7 @@ function assertAppraisalHandled(value: never): void {
  * この関数の `switch` がその値を返さないので `assertAppraisalHandled` の
  * 引数が `never` にならず、**`pnpm typecheck` がここで落ちる。**
  *
- * 字面そのものの出所は `~/lib/appraisal-labels`（issue #2164。core の
+ * 字面そのものの出所は `packages/logic/src/appraisal-labels.ts`（issue #2164。core の
  * `APPRAISAL_LABELS` と一致させる場所を1か所に集約した）。
  */
 function appraisalLabel(value: AppraisalValue): string {

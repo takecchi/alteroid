@@ -7,18 +7,27 @@ import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useRef, useState } from 'react';
 
 import { ConnectionCard } from '~/components/connection';
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useRunners } from '~/hooks/queries';
-import { formatDateTime } from '~/lib/format';
-import { useAuth } from '~/hooks/use-auth';
 import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Spinner,
+} from '@alteroid/ui';
+import {
+  useRunners,
+  useAuth,
   useResetWorkspace,
   useShutdownDaemon,
   useVacateRunner,
   type WorkspaceResetSummary,
-} from '~/hooks/mutations';
-import type { RunnerPushOutcome, RunnerSummary } from '~/lib/types';
+} from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 export default function Settings() {
   return (

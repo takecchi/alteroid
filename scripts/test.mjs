@@ -306,7 +306,14 @@ function runVitest(args, { deadlineSeconds } = {}) {
       reject(err);
     });
     child.on('close', (code, signal) => {
-      clearDeadlineTimers();
+      // **打ち切った回は、`SIGKILL` のタイマーを取り消さない。** 直接の子（vitest）は
+      // `SIGTERM` で先に閉じることが多いが、グループの中に `SIGTERM` を無視する
+      // 孫が残っていれば、猶予の後の `SIGKILL` でしか止まらない。ここで取り消すと、
+      // その孫が生き残る（`scripts/test-mjs-deadline.test.ts` の「(e)」が実測した）。
+      // タイマーはグループが既に空なら `ESRCH` を黙って捨てるだけで、ラッパの
+      // 終了を最大 `DEADLINE_KILL_GRACE_MS` 遅らせる。
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      if (!deadlineHit && killTimer !== undefined) clearTimeout(killTimer);
       stopForwardingSignals();
       resolve({ code, signal, combined, deadlineHit });
     });

@@ -2,8 +2,8 @@ import { AlertTriangle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
-import { Page } from '~/components/page';
 import {
+  Page,
   Badge,
   Button,
   Card,
@@ -13,25 +13,25 @@ import {
   Input,
   Select,
   Spinner,
-} from '~/components/ui';
+  cn,
+} from '@alteroid/ui';
 import {
   useAddToken,
   useRemoveToken,
   useSetTokenDisabled,
   useSetTokenPolicy,
-} from '~/hooks/mutations';
-import { useJournal, useTokens } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
-import { TOKEN_ID_PARAM } from '~/lib/tokens-links';
+  useJournal,
+  useTokens,
+  ApiError,
+} from '@alteroid/swr';
+import { formatDateTime, formatRelative, TOKEN_ID_PARAM } from '@alteroid/logic';
 import type {
   AgentTokenView,
   TokenAvailability,
   TokenRecovery,
   TokenRotationEntry,
   TokenRotationSettings,
-} from '~/lib/types';
+} from '@alteroid/logic';
 
 /**
  * `/tokens` — 認証トークンのプール一覧・回転の設定・回転の履歴（エラー状況）。
@@ -139,7 +139,7 @@ function AddTokenForm() {
 function PoolAndSettings() {
   const { data, error, isLoading } = useTokens();
   // 使用量の画面（`usage.tsx`「認証トークン別」）から飛んできたときの、
-  // 行き先の id（issue #2109。`~/lib/tokens-links` の `tokensHref`）。
+  // 行き先の id（issue #2109。`packages/logic/src/tokens-links.ts` の `tokensHref`）。
   const [searchParams] = useSearchParams();
   const targetTokenId = searchParams.get(TOKEN_ID_PARAM) ?? undefined;
 
@@ -199,7 +199,7 @@ function PoolAndSettings() {
  * `apps/web/**` は `@alteroid/core` からの**値**の import を eslint で禁止して
  * いる（`import type` は可）——過去に core の1関数だけを import したつもりが、
  * `sideEffects` 未宣言のためバンドラがパッケージ全体を tree-shake できず
- * 1.2MB のチャンクを作った事故がある（`apps/web/app/lib/format.ts` の
+ * 1.2MB のチャンクを作った事故がある（`packages/logic/src/format.ts` の
  * `assertNeverCreatedAt` の doc）。だから実体の関数は呼ばず、4行のロジックを
  * ここに複製する。**判定順（`disabled` > `invalidated` > `cooling` > `ready`）
  * を崩さないこと。**
@@ -207,7 +207,7 @@ function PoolAndSettings() {
 function tokenAvailabilityAt(
   token: Pick<AgentTokenView, 'disabledAt' | 'invalidatedAt' | 'cooldownUntil'>,
   // **既定引数として `Date.now()` を持つ**（呼び出し側の render 本体で直接
-  // 呼ばない）。`~/lib/format.ts` の `formatRelative(iso, now = Date.now())`
+  // 呼ばない）。`packages/logic/src/format.ts` の `formatRelative(iso, now = Date.now())`
   // と同じ形——コンポーネント本体で直接 `Date.now()` を呼ぶと
   // `react-hooks/purity`（不純な関数呼び出し）に落ちる。
   at: number = Date.now(),
@@ -422,7 +422,7 @@ function TokenRow({
   // のデータが届いてから初めて `TokenRow` を描画するので、この effect が
   // 走る時点で行は既に DOM に在る——react-router の `<ScrollRestoration>`
   // が hash に対して行う `getElementById` → `scrollIntoView` が非同期データと
-  // 競合する問題（`~/lib/tokens-links` の doc）を、ここでは踏まない。
+  // 競合する問題（`packages/logic/src/tokens-links.ts` の doc）を、ここでは踏まない。
   useEffect(() => {
     if (highlighted) {
       rowRef.current?.scrollIntoView({ block: 'center' });
@@ -457,7 +457,7 @@ function TokenRow({
     <li
       ref={rowRef}
       // **安定した目印（issue #2109）。** hash ナビゲーションの入力としては
-      // 使わない（`~/lib/tokens-links` の doc）が、行を指す DOM の id 自体は
+      // 使わない（`packages/logic/src/tokens-links.ts` の doc）が、行を指す DOM の id 自体は
       // 残す——テストや将来の直接リンクから見つけやすくするため。
       id={`token-${token.id}`}
       className={cn(

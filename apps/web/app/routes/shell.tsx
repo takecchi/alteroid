@@ -27,14 +27,15 @@ import { useState } from 'react';
 import { Navigate, NavLink, Outlet } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
-import { Drawer } from '~/components/drawer';
-import { Badge, ErrorNote, Spinner } from '~/components/ui';
-import { JournalFeedProvider } from '~/hooks/journal-feed';
-import { useApprovals, useHealth } from '~/hooks/queries';
-import { useAuth } from '~/hooks/use-auth';
-import { useIsMobile } from '~/hooks/use-is-mobile';
-import { useJournalLive, type LiveStatus } from '~/hooks/use-journal-live';
-import { cn } from '~/lib/cn';
+import { Drawer, Badge, ErrorNote, Spinner, useIsMobile, cn } from '@alteroid/ui';
+import {
+  JournalFeedProvider,
+  useApprovals,
+  useHealth,
+  useAuth,
+  useJournalLive,
+  type LiveStatus,
+} from '@alteroid/swr';
 
 const NAV = [
   { to: '/', label: 'ダッシュボード', icon: LayoutDashboard, end: true },

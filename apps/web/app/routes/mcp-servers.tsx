@@ -4,18 +4,15 @@ import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '~/components/ui';
-import { useSetMcpServers } from '~/hooks/mutations';
-import { useMcpServers } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { formatDateTime } from '~/lib/format';
+import { Page, Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '@alteroid/ui';
+import { useSetMcpServers, useMcpServers, ApiError } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
 import type {
   McpServerEntry,
   McpServers,
   McpServersState,
   McpServersUpdateResult,
-} from '~/lib/types';
+} from '@alteroid/logic';
 
 /**
  * `/mcp-servers` — 人間の MCP 連携の登録（`.mcp.json` 相当）を読む・差し替える画面

@@ -81,6 +81,8 @@ describe('scripts/test.mjs --deadline-seconds（統合: 偽の vitest を子と�
       [
         "const fs = require('node:fs');",
         'const file = process.argv[2];',
+        '// FAKE_HEARTBEAT_IGNORE_TERM が在れば SIGTERM を無視する（SIGKILL でしか止まらない孫）。',
+        "if (process.env.FAKE_HEARTBEAT_IGNORE_TERM) process.on('SIGTERM', () => {});",
         'setInterval(() => {',
         "  fs.appendFileSync(file, 'x\\n');",
         '}, 50);',
@@ -200,6 +202,55 @@ describe('scripts/test.mjs --deadline-seconds（統合: 偽の vitest を子と�
         ).toBe(true);
       } finally {
         // 後始末: 孫が生き残っていたら（変異の下での実測を含め）確実に消す。
+        if (heartbeatPid !== undefined && isPidAlive(heartbeatPid)) {
+          try {
+            process.kill(heartbeatPid, 'SIGKILL');
+          } catch {
+            // 既に居ない。何もしない。
+          }
+        }
+      }
+    },
+  );
+
+  it(
+    '(e): SIGTERM を無視する孫も、猶予（DEADLINE_KILL_GRACE_MS）の後の SIGKILL で止まる——' +
+      '直接の子（偽の vitest）が SIGTERM で先に閉じても、SIGKILL を取り消さない',
+    async () => {
+      const { binDir } = await makeFakeVitestBin();
+      const heartbeatFile = join(binDir, '..', 'heartbeat.log');
+      const pidFile = join(binDir, '..', 'heartbeat.pid');
+
+      const result = spawnSync('node', [TEST_MJS_PATH, '--deadline-seconds=1'], {
+        cwd: ROOT_DIR,
+        env: {
+          PATH: binDir + ':' + (process.env.PATH ?? ''),
+          FAKE_VITEST_HEARTBEAT_FILE: heartbeatFile,
+          FAKE_VITEST_PIDFILE: pidFile,
+          FAKE_HEARTBEAT_IGNORE_TERM: '1',
+        },
+        stdio: 'pipe',
+        encoding: 'utf8',
+        // 締め切り(1s) + 猶予(3s) + 余裕。
+        timeout: 15000,
+      });
+
+      let heartbeatPid: number | undefined;
+      try {
+        heartbeatPid = Number(await readFile(pidFile, 'utf8'));
+        expect(Number.isInteger(heartbeatPid)).toBe(true);
+        expect(result.status, result.stdout + '\n---stderr---\n' + result.stderr).toBe(
+          EXIT_DEADLINE,
+        );
+        // 偽の vitest（直接の子）は SIGTERM で即座に死ぬので、`close` は猶予より前に来る。
+        // そこで SIGKILL のタイマーを取り消すと、SIGTERM を無視した孫が生き残る。
+        const died = await waitUntilPidDead(heartbeatPid, 1000);
+        expect(
+          died,
+          `SIGTERM を無視する孫（pid=${heartbeatPid}）が、猶予の後も生きている——` +
+            '直接の子が閉じた時点で SIGKILL を取り消している疑いがある',
+        ).toBe(true);
+      } finally {
         if (heartbeatPid !== undefined && isPidAlive(heartbeatPid)) {
           try {
             process.kill(heartbeatPid, 'SIGKILL');

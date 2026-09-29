@@ -9,7 +9,7 @@ import { resolveTarget } from './target.js';
  *
  * **`GET /conversations` と `GET /conversations/{id}` は既にあったが、CLI から
  * 到達できなかった。** Web（`apps/web/app/routes/chat.tsx` の一覧・
- * `apps/web/app/hooks/queries.ts` の `useConversation`）は使っているのに、
+ * `packages/swr/src/hooks/queries.ts` の `useConversation`）は使っているのに、
  * `apps/cli/src` に `conversations` という文字列が0件だった。`docs/PRD.md`
  * 「インターフェース」は3面（CLI・HTTP API・Web UI）で同じことができると書いており、
  * 片方でしかできないことを作らない（north_star 禁止1）。

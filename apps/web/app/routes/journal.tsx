@@ -3,16 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
-import { Page } from '~/components/page';
-import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useJournalWindow } from '~/hooks/use-journal-window';
-import { useMeasuredHeight } from '~/hooks/use-measured-height';
-import { summarizeJournalEntry } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
+import { Page, Badge, Card, Empty, ErrorNote, Spinner, useMeasuredHeight, cn } from '@alteroid/ui';
+import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
+import { formatDateTime, formatRelative, shiftForPrepend } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
-import { shiftForPrepend } from '~/lib/journal-window';
-import type { JournalEntry, JournalEntryType } from '~/lib/types';
+import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
 
 /**
  * 種別ごとの見た目の強さ。**`Record<JournalEntryType, ...>` で縛ってあるので、
@@ -93,7 +88,7 @@ const EDGE_THRESHOLD_ITEMS = 20;
 
 /**
  * 「上端に居る」と判定するしきい値（px）。`shiftForPrepend`（
- * `~/lib/journal-window.ts`）へ渡す `atTop` を作るのに使う。
+ * `packages/logic/src/journal-window.ts`）へ渡す `atTop` を作るのに使う。
  *
  * ⚠️ **この数字も実機で調整すべきもので、テストが通っても正しさの根拠には
  * ならない。** 0 ちょうどだと「あと数 px」で上端から離れただけの状態を
@@ -460,7 +455,7 @@ function JournalBody({
             ref={virtualizerRef}
             scrollRef={scrollAreaRef}
             startMargin={startMargin}
-            // **決定そのものは `shiftForPrepend` が持つ**（`~/lib/journal-window.ts`）。
+            // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
             // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
             // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
             // 2026-08-23）。
@@ -518,7 +513,7 @@ function JournalBody({
  * `pageOutcome` が `'blocked'` を返したとき（同一 `at` の詰まりで自動では
  * 進めない）に出す。**`Empty` や「これより古い記録は無い」と同じ顔にしない**
  * — 終端でも空でもない、本物の限界だと分かる形にする
- * （`~/lib/journal-window.ts` の `pageOutcome` の doc）。見た目は既存の
+ * （`packages/logic/src/journal-window.ts` の `pageOutcome` の doc）。見た目は既存の
  * `ErrorNote`（`components/ui.tsx`）と同じ配色の作法を warn 色で使い回す。
  */
 function BlockedNote({ children, className }: { children: React.ReactNode; className?: string }) {

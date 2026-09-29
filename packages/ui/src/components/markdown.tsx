@@ -1,0 +1,333 @@
+/**
+ * AI の応答・日報・マネージャーの報告を Markdown として描く共有部品。
+ *
+ * 人間の依頼: 「AIの返答ってMarkdown返却多いからWebUIも表示をMarkdownにした
+ * ほうがこっちとしては見やすい」（alteroid の Web UI について）。
+ *
+ * **`dangerouslySetInnerHTML` は使わない。** react-markdown は
+ * remark（Markdown → mdast）→ remark-rehype（mdast → hast）→
+ * hast-util-to-jsx-runtime（hast → React 要素）で完結し、HTML 文字列を
+ * 経由しない。だからサニタイズを足し忘れるという失敗の形そのものが無い。
+ *
+ * **`rehype-raw` は入れない。** 本文中に書かれた `<script>` や
+ * `onerror` 付きタグは、react-markdown の既定では**要素として解釈されず、
+ * そのままテキストとして表示される**（`react-markdown/lib/index.js` の
+ * `transform`: `raw` ノードを `skipHtml` でなければ `{type: 'text', ...}` に
+ * 差し替える）。`rehype-raw` はその `raw` ノードを実際の hast 要素へ
+ * 解釈し直す道具で、足した瞬間にこの性質が消え、本文がそのまま実行可能な
+ * HTML になる注入経路が生まれる。**足したくなったら、まず
+ * `markdown.test.tsx` の「生 HTML が要素にならない」テストを見ること** —
+ * あのテストは今回の変更のために存在し、`rehype-raw` を足すと最初に落ちる。
+ *
+ * `remark-breaks` を入れる理由: 素の Markdown は単独の改行を畳む（半角の
+ * 行末スペース2つや空行との改行しか区別しない）。この画面はこれまで
+ * `whitespace-pre-wrap` で改行をそのまま見せていたので、`remark-breaks` が
+ * 無いと「今まで見えていた行区切りが消える」という劣化になる。
+ *
+ * GFM（表・取り消し線・タスクリスト・フッターノート・オートリンク）は
+ * `remarkGfmParseOnly`（下）で足す。**`remark-gfm` パッケージそのものは
+ * ここでは使わない** — 理由は下のコメントに書いた。
+ *
+ * **一覧の1行（`truncate` / `line-clamp`）は Markdown 化の対象ではない。**
+ * そこに出ているのは畳んだ索引であって本文の面ではなく、押せば全文の面へ
+ * 降りられる。`line-clamp` の内側へブロック要素（`<Markdown>` のルートは
+ * `div`）を入れると畳み方そのものが効かなくなるうえ、`components/page.tsx`
+ * が「`line-clamp` で切ると、収まっているように見えたまま読めない部分ができる」
+ * として避ける理由を既に書いている。**対象は、詳細で全文を出す面だけである。**
+ */
+import { gfm } from 'micromark-extension-gfm';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
+import type { ComponentProps, ReactNode } from 'react';
+import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
+
+/**
+ * unified の `Processor.data()` が実際に返す形の一部だけを、ここで使う分だけ
+ * 切り出した最小限の型。**`unified` パッケージを型のためだけに依存へ足さない
+ * ための割り切り**（`apps/web` はまだ `unified` を直接の依存に持っていない
+ * ——react-markdown 経由の間接依存でしかなく、`apps/web/node_modules` に
+ * 解決できない）。
+ *
+ * **`this` パラメータの型は `unknown` にする（`UnifiedProcessorDataOnly` を
+ * 直接使わない）。** react-markdown の `remarkPlugins` は unified の
+ * `Plugin<...>`（`this: Processor` を要求）を期待する。`this` パラメータの
+ * 型チェックは反変（呼び出し側の型が自分の宣言した型へ代入できるか）なので、
+ * `this: UnifiedProcessorDataOnly` だと「本物の `Processor.data()` が返す
+ * `Data`（`unified` 側でこの画面から見える範囲では空に見える——
+ * `mdast-util-from-markdown` の型による宣言マージをこのファイルは読み込んで
+ * いない）が `UnifiedProcessorDataOnly` に代入できるか」を TS が構造的に
+ * 検査し、共通のプロパティが無いとして落ちる（実測: `tsc --noEmit` で
+ * `The types returned by 'data()' are incompatible` ）。`this: unknown` なら
+ * 「`Processor` は `unknown` に代入できるか」という自明に真の問いになり、
+ * ここで初めて `UnifiedProcessorDataOnly` へ関数内で明示キャストする。
+ */
+interface UnifiedProcessorDataOnly {
+  data(): {
+    micromarkExtensions?: unknown[];
+    fromMarkdownExtensions?: unknown[];
+  };
+}
+
+/**
+ * `remark-gfm`（`node_modules/remark-gfm/lib/index.js` 逐語）は
+ * `mdast-util-gfm` から `gfmFromMarkdown`（解析）と `gfmToMarkdown`
+ * （mdast → Markdown 文字列への書き戻し）の**両方を無条件に呼ぶ**——
+ * `data.toMarkdownExtensions.push(gfmToMarkdown(settings))` が実行される。
+ *
+ * この画面（`<Markdown>`）は react-markdown で「Markdown 文字列 → mdast →
+ * hast → React 要素」の一方向にしか使わない。`unified().stringify()` は
+ * 一度も呼ばれない（react-markdown 自身が呼ばない）ので、`gfmToMarkdown()`
+ * が組み立てる「書き戻し」側の実装（`mdast-util-to-markdown` 本体・
+ * `markdown-table` を含む）は**実行はされるが結果を誰も読まない**——
+ * 呼び出し自体は生きたコードなので bundler の tree-shaking では削れず、
+ * 実測でクライアント JS に ~13KB 乗っていた
+ * （`mdast-util-to-markdown` 11,435B + `markdown-table` 1,570B、
+ * 2026-09-27 観測。手段は tmp の source-map 集計スクリプト、`.claude/skills/`
+ * には無い一時的なもの）。
+ *
+ * **だから `remark-gfm` パッケージ自体を使わず、`gfmFromMarkdown`（解析側）
+ * だけを呼ぶ。** 呼んでいる関数は `remark-gfm` が内部で呼んでいるのと
+ * **同じ** `mdast-util-gfm` の `gfmFromMarkdown()` そのもの——解析結果
+ * （mdast）は1文字も変わらない。独自のパーサ実装は無い。
+ *
+ * オプションは常に空（`remarkGfm` を呼んでいた既存呼び出しも無指定だった）。
+ * `mdast-util-gfm` の `gfmFromMarkdown()` はオプションを取らない
+ * （`remark-gfm` 自身もオプション無しで呼ぶ）ので、ここでも渡さない。
+ */
+function remarkGfmParseOnly(this: unknown) {
+  const data = (this as UnifiedProcessorDataOnly).data();
+  const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = []);
+  const fromMarkdownExtensions = data.fromMarkdownExtensions ?? (data.fromMarkdownExtensions = []);
+  micromarkExtensions.push(gfm());
+  fromMarkdownExtensions.push(gfmFromMarkdown());
+}
+
+/**
+ * コードが行内（inline）か、フェンスされたコードブロックかを見分ける。
+ *
+ * react-markdown v9 以降、`code` コンポーネントに `inline` は渡されない
+ * （hast にその情報が無いため）。**言語付き**のフェンス（```ts` など）は
+ * `language-xxx` という className が付くので判別できるが、**言語無しの
+ * フェンス**（`docs/architecture.md` の罫線図がまさにこれ）には className が
+ * 付かない。CommonMark の仕様上、行内コードスパンの中には改行を書けない
+ * （行末は空白に畳まれる）ので、**中身に改行が1つでもあればコードブロック**
+ * として扱う。1行だけの言語無しフェンスはこの判定をすり抜けるが、実害は
+ * 「行内コード用の小さな見た目になる」だけで、内容自体は変わらない
+ * （逐語性は保たれる）。
+ */
+function isBlockCode(className: string | undefined, text: string): boolean {
+  return /language-/.test(className ?? '') || text.includes('\n');
+}
+
+function textOf(node: ReactNode): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  return '';
+}
+
+/*
+ * **どの見出しも `CardHeader` の h2（`text-sm font-semibold`）より小さくする。**
+ * この Markdown は常にどこかの Card の中身として使われ、Card の見出しは
+ * 既に h2 を使っている。本文中に同じ大きさ・同じタグの見出しが出ると、
+ * 画面としては「見出しが2段同じ強さで並ぶ」ように見えて読み違えやすい。
+ *
+ * **タグ自体（h1〜h6）は変えていない。** 文書構造（スクリーンリーダーの
+ * 見出しアウトライン）としては本文の h1 は h1 のまま出る — Card の h2 の
+ * 直後に h1 が来る非構造化な順序にはなるが、これは AI・人間が自由に書いた
+ * 本文の見出しレベルを画面側で付け替えないための割り切りである。
+ */
+const HEADINGS = {
+  h1: 'mt-3 mb-1.5 text-[13px] font-semibold first:mt-0',
+  h2: 'mt-3 mb-1.5 text-[13px] font-semibold first:mt-0',
+  h3: 'mt-2.5 mb-1 text-xs font-semibold first:mt-0',
+  h4: 'mt-2 mb-1 text-xs font-semibold text-muted first:mt-0',
+  h5: 'mt-2 mb-1 text-[11px] font-semibold text-muted first:mt-0',
+  h6: 'mt-2 mb-1 text-[11px] font-semibold text-muted uppercase first:mt-0',
+} as const;
+
+type HeadingTag = keyof typeof HEADINGS;
+
+/**
+ * `id` は常に通す。GFM の脚注節は見出し（既定 `h2`）に
+ * `id="footnote-label"` を付け、本文の参照・戻るリンクの
+ * `aria-describedby="footnote-label"` がそれを指す
+ * （`mdast-util-to-hast` の `lib/footer.js` の `footnoteLabelTagName` /
+ * `footnoteLabelProperties`）。`id` を落とすと、その参照先が無くなる。
+ *
+ * **`className` は丸ごとは渡さない** — 見出しの見た目はこの部品が決めるもので
+ * あって Markdown 側の任意のクラスに揺らがせない。**ただし `sr-only` だけは
+ * 例外で通す** — `mdast-util-to-hast` の同じ `lib/footer.js` が脚注節の
+ * 見出しに既定で `className: ['sr-only']` を付けており（画面には出さず
+ * スクリーンリーダーだけに読ませる意図）、これを無視すると本来隠すはずの
+ * 見出しが通常の見出し（`HEADINGS[tag]` の見た目）として画面に出てしまう。
+ * 受け取った `className` に `sr-only` というトークンが含まれるときだけ、
+ * この部品の見た目のクラスの代わりに `sr-only` 単体を付ける——他のクラスは
+ * 通さない。`sr-only` は Tailwind の組み込みユーティリティで、この repo でも
+ * 既に `shadcn/sheet.tsx` / `drawer.tsx` で使っている。
+ */
+function heading(tag: HeadingTag) {
+  return function Heading({
+    id,
+    className,
+    children,
+  }: {
+    id?: string;
+    className?: string;
+    children?: ReactNode;
+  }) {
+    const Tag = tag;
+    const isScreenReaderOnly = (className ?? '').split(/\s+/).includes('sr-only');
+    return (
+      <Tag id={id} className={isScreenReaderOnly ? 'sr-only' : HEADINGS[tag]}>
+        {children}
+      </Tag>
+    );
+  };
+}
+
+const components: Components = {
+  p: ({ children }) => <p className="mt-2 leading-relaxed first:mt-0">{children}</p>,
+  h1: heading('h1'),
+  h2: heading('h2'),
+  h3: heading('h3'),
+  h4: heading('h4'),
+  h5: heading('h5'),
+  h6: heading('h6'),
+  ul: ({ children }) => <ul className="mt-2 list-disc space-y-0.5 pl-5 first:mt-0">{children}</ul>,
+  ol: ({ children }) => (
+    <ol className="mt-2 list-decimal space-y-0.5 pl-5 first:mt-0">{children}</ol>
+  ),
+  // GFM の脚注の定義（`<li id="user-content-fn-N">`）。**`id` だけを通す** —
+  // 本文の参照リンク（`components.a`、下）の `href` はここの `id` を指す。
+  // 落とすと参照を押しても飛ぶ先が無い「死んだリンク」になる
+  // （`mdast-util-to-hast` の `lib/footer.js` の `footer()`）。
+  li: ({ id, children }: ComponentProps<'li'>) => (
+    <li id={id} className="leading-relaxed">
+      {children}
+    </li>
+  ),
+  a: ({
+    href,
+    children,
+    id,
+    'aria-describedby': ariaDescribedBy,
+    'aria-label': ariaLabel,
+    'data-footnote-ref': dataFootnoteRef,
+    'data-footnote-backref': dataFootnoteBackref,
+  }: ComponentProps<'a'> &
+    ExtraProps & {
+      // `data-*` は @types/react の型に汎用の index signature が無いため、
+      // 明示的に広げないと destructure できない（`id` / `aria-describedby` /
+      // `aria-label` は標準の HTML/ARIA 属性としてすでに `ComponentProps<'a'>`
+      // に在るので、ここでは広げていない）。
+      'data-footnote-ref'?: boolean;
+      'data-footnote-backref'?: string;
+    }) => (
+    // 外部リンク扱いで開く。本文は AI・人間が書いた自由文であって、この
+    // アプリ内の経路を指す相対リンクを前提にしていない。
+    // **任意の hast 属性を丸ごと素通ししない。** react-markdown は hast の
+    // `node`（`ExtraProps`）を毎回この形へ渡すので、そのまま `<a>` へ広げる
+    // と DOM が知らない `node` prop を渡すことになる（React の警告）ほか、
+    // Markdown 本文が持ちうる任意の `className` / `style` でこの部品の見た目
+    // ・安全性（下の外部リンク扱い・`rel`）を上書きされる経路にもなる。
+    // **だから許可した名前だけを明示して渡す** — `id` と、GFM が脚注の
+    // `<a>` に付ける4つ（`data-footnote-ref` / `aria-describedby`＝本文の
+    // 参照、`data-footnote-backref` / `aria-label`＝脚注からの戻るリンク）
+    // だけをこの形で足す。`clobberPrefix`（既定 `user-content-`）は
+    // `remarkRehypeOptions` を渡していないので `mdast-util-to-hast` の既定
+    // のまま外していない。
+    //
+    // **`#` で始まる href（同じ文書内を指すリンク）には `target` / `rel` を
+    // 付けない。** GFM の脚注の参照（`#user-content-fn-N`）・戻るリンク
+    // （`#user-content-fnref-N`）はどちらもこの形。`target="_blank"` を
+    // 付けたままだと、押すたびに SPA を新しいタブで読み直すことになり、
+    // その新しいタブでは本文がまだ非同期に描かれる前で飛ぶ先の要素が無い
+    // ——「id を通しただけ」では直らない、同じ「脚注のリンクが死ぬ」穴の
+    // 別の形（2026-09-26 レビュー指摘）。**判定は `href` の先頭が `#` かだけ
+    // で行い、URL を解釈して「同じ origin か」を見る形にはしない**
+    // （below の `defaultUrlTransform` 由来の危険な URL 無効化——`href` は
+    // 既にそこを通った後の値なので、ここで URL 解釈を増やすと安全性の判断
+    // 経路が2つに増える）。外部リンクの扱い（`_blank` / `noreferrer
+    // noopener`）はそれ以外のすべての href で変えていない。
+    <a
+      href={href}
+      id={id}
+      aria-describedby={ariaDescribedBy}
+      aria-label={ariaLabel}
+      data-footnote-ref={dataFootnoteRef}
+      data-footnote-backref={dataFootnoteBackref}
+      target={href?.startsWith('#') ? undefined : '_blank'}
+      rel={href?.startsWith('#') ? undefined : 'noreferrer noopener'}
+      className="break-words text-accent hover:underline"
+    >
+      {children}
+    </a>
+  ),
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  del: ({ children }) => <del className="text-muted line-through">{children}</del>,
+  blockquote: ({ children }) => (
+    <blockquote className="mt-2 border-l-2 border-border pl-3 text-muted italic first:mt-0">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-3 border-border" />,
+  img: ({ src, alt }) => (
+    <img src={src ?? ''} alt={alt ?? ''} className="my-2 max-w-full rounded border border-border" />
+  ),
+  // GFM の表。**横スクロールさせる div で包む** — 表は折り返せないので、
+  // 包まないと幅の広い表がカードごと画面外まで広げる。
+  table: ({ children }) => (
+    <div className="mt-2 min-w-0 overflow-x-auto first:mt-0">
+      <table className="w-full border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="border-b border-border">{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => <tr className="border-b border-border last:border-b-0">{children}</tr>,
+  th: ({ children }) => (
+    <th className="px-2 py-1 text-left font-semibold whitespace-nowrap">{children}</th>
+  ),
+  td: ({ children }) => <td className="px-2 py-1 align-top">{children}</td>,
+  // コードブロック（`pre`）。**折り返さず横スクロール** — `docs/architecture.md`
+  // の罫線図のような、折り返すと崩れる図をそのまま保つ。`overflow-x-auto` で
+  // 包み、`whitespace-pre` で `styles.css` の既定（生ログ向けの `pre-wrap`）を
+  // 上書きする（Tailwind の utilities 層は base 層より後なので、指定すれば
+  // 必ず勝つ）。
+  pre: ({ children }) => (
+    <pre className="mt-2 min-w-0 overflow-x-auto rounded-md border border-border bg-surface-2 p-3 font-mono text-[0.85em] whitespace-pre first:mt-0">
+      {children}
+    </pre>
+  ),
+  code: ({ className, children }) => {
+    const text = textOf(children);
+    if (isBlockCode(className, text)) {
+      // `pre` 側が横スクロール・背景・枠を持つので、ここは素のまま。
+      return <code className="font-mono text-[0.85em]">{children}</code>;
+    }
+    // 行内コード・長い URL などは領域内に収める（折り返す）。
+    return (
+      <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.85em] break-words">
+        {children}
+      </code>
+    );
+  },
+};
+
+/**
+ * `<Markdown>{text}</Markdown>` の形で使う。
+ *
+ * **既存の色トークンだけを使う**（`text-fg` は基底の文字色に既に乗っている
+ * ので明示していない。`text-muted` / `border-border` / `bg-surface-2` /
+ * `text-accent` は `styles.css` に実在するものだけを使っている）。
+ */
+export function Markdown({ children }: { children: string }) {
+  return (
+    <div className="min-w-0 text-sm break-words">
+      <ReactMarkdown remarkPlugins={[remarkGfmParseOnly, remarkBreaks]} components={components}>
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
+}

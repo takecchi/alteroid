@@ -2,9 +2,9 @@ import { isRunningJobStatus, JOB_STATUS_LIKE_VALUES } from '@alteroid/core/job-s
 import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
 import { Link } from 'react-router';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Badge,
   Card,
   CardHeader,
@@ -12,7 +12,7 @@ import {
   ErrorNote,
   Spinner,
   TruncationNote,
-} from '~/components/ui';
+} from '@alteroid/ui';
 import {
   summarizeJournalEntry,
   useApprovals,
@@ -20,12 +20,10 @@ import {
   useReports,
   useSchedule,
   useUsage,
-} from '~/hooks/queries';
-import { useJournalFeed } from '~/hooks/journal-feed';
-import { formatDateTime, formatRelative } from '~/lib/format';
+  useJournalFeed,
+} from '@alteroid/swr';
+import { formatDateTime, formatRelative, managersHref, usageHref } from '@alteroid/logic';
 import { journalEntryLinks } from '~/lib/journal-links';
-import { managersHref } from '~/lib/managers-links';
-import { usageHref } from '~/lib/usage-links';
 
 import { ManagerStatusBadge } from './managers';
 // **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）

@@ -32,7 +32,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { JournalEntry } from '~/lib/types';
+import type { JournalEntry } from '@alteroid/logic';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Tokens from './tokens';

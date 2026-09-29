@@ -140,22 +140,39 @@ alteroid access grant <アカウント id>
 
 ## 作り
 
+画面は4つに分けてある。**依存は上から下への一方向だけ**（`logic` と `ui` は互いを知らず、
+`swr` は `ui` を知らない）。
+
 ```
-app/
-  root.tsx            html の外枠と ApiProvider
-  routes.ts           経路の割り当て（CLI のスラッシュコマンドと対応させる）
-  routes/shell.tsx    通っていれば中身を出す門 ＋ 左のナビと日誌 SSE の購読1本
-  routes/login.tsx    ログイン / 「まだ許可が無い」
-  routes/*.tsx        画面
-  hooks/queries.ts    取得（SWR。キーはオブジェクト）
-  hooks/mutations.ts  書き込み
-  hooks/use-auth.ts   open / anonymous / ungranted / ready の判定
-  hooks/use-journal-live.ts  日誌 SSE →  SWR キャッシュの無効化
-  lib/api.tsx         @alteroid/api-client の生成と、資格情報を足す唯一の場所
-  lib/auth.ts         トークンと引き換え券の置き場（接続先ごと）
-  lib/login.ts        ログインの段取り（開始と引き取り。UI を持たないので試験できる）
-  lib/config.ts       接続先の決め方（1つに潰す resolveApiBaseUrl と、潰さず並べる listEndpoints）
-  lib/types.ts        生成 spec から導出した型（手書きしない）
+apps/web/app/                 画面（経路・画面ごとの部品）。下の3つを呼ぶだけ
+  root.tsx                    html の外枠と ApiProvider
+  app.css                     CSS の入口（テーマは @alteroid/ui から取り込む）
+  routes.ts                   経路の割り当て（CLI のスラッシュコマンドと対応させる）
+  routes/shell.tsx            通っていれば中身を出す門 ＋ 左のナビと日誌 SSE の購読1本
+  routes/login.tsx            ログイン / 「まだ許可が無い」
+  routes/*.tsx                画面
+  test-support.tsx            jsdom に無い口を埋める足場（通信の足場は @alteroid/swr から再エクスポート）
+
+packages/swr/src/             @alteroid/swr — API を叩く層
+  api.tsx                     @alteroid/api-client の生成と、資格情報を足す唯一の場所（ApiProvider）
+  login.ts                    ログインの段取り（開始と引き取り。UI を持たないので試験できる）
+  hooks/queries.ts            取得（SWR。キーはオブジェクト）
+  hooks/mutations.ts          書き込み
+  hooks/use-auth.ts           open / anonymous / ungranted / ready の判定
+  hooks/use-journal-live.ts   日誌 SSE →  SWR キャッシュの無効化
+  test-support.tsx            fetch の差し替え・SSE の偽応答・Providers（@alteroid/swr/test-support）
+
+packages/logic/src/           @alteroid/logic — React も SWR も知らない純ロジック
+  auth.ts                     トークンと引き換え券の置き場（接続先ごと）
+  config.ts                   接続先の決め方（1つに潰す resolveApiBaseUrl と、潰さず並べる listEndpoints）
+  types.ts                    生成 spec から導出した型（手書きしない）
+  format.ts / journal-window.ts / *-links.ts  表示の整形・日誌の窓・画面へ渡す URL
+
+packages/ui/src/              @alteroid/ui — API を知らない見た目の部品
+  styles.css                  テーマ（色・土台）。@alteroid/ui/styles.css
+  components/ui.tsx           Button / Badge / Card などの共通部品
+  components/page.tsx / drawer.tsx / markdown.tsx
+  components/shadcn/          shadcn の素の部品（@alteroid/ui/shadcn。components.json はこのパッケージに在る）
 ```
 
 **通るまで取得も購読も始めない。** `shell.tsx` は門と中身を別の部品に分けてある。同じ部品に

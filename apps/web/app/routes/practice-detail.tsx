@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Tabs } from 'radix-ui';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Button,
   ErrorNote,
   Input,
@@ -12,11 +12,16 @@ import {
   TAB_TRIGGER_ACTIVE_CLASS,
   TAB_TRIGGER_CLASS,
   Textarea,
-} from '~/components/ui';
-import { useDeletePractice, useSavePractice } from '~/hooks/mutations';
-import { usePractice, usePracticeVersion, usePracticeVersions } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatDateTime } from '~/lib/format';
+  cn,
+} from '@alteroid/ui';
+import {
+  useDeletePractice,
+  useSavePractice,
+  usePractice,
+  usePracticeVersion,
+  usePracticeVersions,
+} from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
 
 import type { Route } from './+types/practice-detail';
 

@@ -1,0 +1,24 @@
+{
+  "name": "@alteroid/logic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Web UI の純ロジック（表示の整形・接続先と資格情報の置き場・日誌の窓・画面の型）。React も SWR も知らない。",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node ../../scripts/test.mjs --root=../.. --scope=packages/logic/src"
+  },
+  "dependencies": {
+    "@alteroid/api-client": "workspace:*",
+    "@alteroid/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

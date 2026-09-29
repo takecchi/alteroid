@@ -19,18 +19,18 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MemoryDocument } from '~/lib/types';
+import type { MemoryDocument } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import type { Route } from './+types/memory-detail';
 import MemoryDetail, { clientLoader } from './memory-detail';
 
 /**
- * 「作成時刻」テストは絶対時刻の文字列を期待値に持つ。`app/lib/format.ts` の
+ * 「作成時刻」テストは絶対時刻の文字列を期待値に持つ。`packages/logic/src/format.ts` の
  * `Intl.DateTimeFormat` は `timeZone` を指定していないので、器の `TZ` に
  * 依存する——手元は `TZ=Asia/Tokyo` だが CI の runner は UTC で、同じ ISO
  * 文字列が両者で違う時刻に見える。`vi.hoisted` でなければ静かに効かない
- * 理由は `reports.test.tsx` の冒頭に逐語で在る（`~/lib/format` はモジュール
+ * 理由は `reports.test.tsx` の冒頭に逐語で在る（`packages/logic/src/format.ts` はモジュール
  * 読み込み時に `Intl.DateTimeFormat` を作るので、import 評価より前に固定
  * しないと効かない）。**期待値を器へ寄せて直さない。表示側も固定しない**
  * （人間は JST で読む）——ここでは時間帯そのものを固定し、どちらの器でも

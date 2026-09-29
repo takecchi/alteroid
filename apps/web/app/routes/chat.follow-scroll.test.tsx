@@ -160,11 +160,17 @@ function setScrollMetrics(
   });
 }
 
-/** 会話一覧と履歴。**この試験の対象ではない**ので、どちらも空で返す。 */
+/**
+ * 会話一覧と履歴。**この試験の対象ではない**ので、どちらも空で返す。
+ * `/approvals` も同じ扱い——issue #2210 以降 `conversationApprovals.error` が
+ * `ErrorNote` を出すので、未ハンドルのまま（`Failed to fetch`）にせず0件で
+ * 成功させる。
+ */
 function background(url: string): Response | undefined {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
   }
+  if (url.includes('/approvals')) return json({ approvals: [] });
   if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
   return undefined;
 }
@@ -330,6 +336,8 @@ describe('会話の切り替え（#247 の 1 の追加分）', () => {
         messages: [{ id: 'b1', at: '2026-08-20T00:00:00Z', role: 'inbound', text: '会話Bの発言' }],
       });
     }
+    // issue #2210 以降の `conversationApprovals.error` 対応（上の `background` と同じ理由）。
+    if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
     return undefined;
   }

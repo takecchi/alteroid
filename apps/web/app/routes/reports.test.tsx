@@ -15,7 +15,7 @@ import Reports from './reports';
 /*
   **時間帯を固定するのはテストの側だけである。表示は固定しない。**
 
-  この画面の時刻は `app/lib/format.ts` の `Intl.DateTimeFormat` で出る。あれは
+  この画面の時刻は `packages/logic/src/format.ts` の `Intl.DateTimeFormat` で出る。あれは
   ロケールだけを固定し、**時間帯は閲覧者の端末に任せている** — 人間は JST で
   読むので、それが正しい振る舞いである。表示を UTC 固定にするような直し方は
   「テストを通すために人間の読みやすさを削る」側なので採らない。
@@ -31,7 +31,7 @@ import Reports from './reports';
   落ちない形にはならない。だからここで時間帯そのものを固定し、**JST の器でも
   UTC の器でも同じ1つの期待値で通る**ようにしてある。
 
-  **`vi.hoisted` でなければならない。** `~/lib/format` はモジュールの読み込み時に
+  **`vi.hoisted` でなければならない。** `packages/logic/src/format.ts` はモジュールの読み込み時に
   `Intl.DateTimeFormat` を作る。`process.env.TZ` の変更が効くのは**変更より後に
   作られた instance だけ**なので（実測で両方向を確認した）、固定は import の
   評価より前に走らなければならない。`vi.hoisted` はまさにそこへ持ち上げられる。

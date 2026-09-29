@@ -1,6 +1,6 @@
 ---
 name: apps-web
-description: apps/web（Web UI）を触るときに読む。jsdom に無い口を埋める共有の足場 test-support.tsx と、自前スタブを書いてはいけない理由、components.json の "style" を消すと次の shadcn add から静かに別物が来ること。基底の grid-cols-* を持たない grid を検出する歯を作らないと決めた理由。
+description: apps/web（Web UI）と、そこから切り出した packages/ui・packages/logic・packages/swr を触るときに読む。4つの分け方と依存の向き（ESLint が止める）、テストの足場が2枚に分かれていること、components.json が packages/ui へ移ったこと。jsdom に無い口を埋める共有の足場 test-support.tsx と、自前スタブを書いてはいけない理由、components.json の "style" を消すと次の shadcn add から静かに別物が来ること。基底の grid-cols-* を持たない grid を検出する歯を作らないと決めた理由。
 ---
 
 # apps/web を触るときに知っておくこと
@@ -31,3 +31,21 @@ description: apps/web（Web UI）を触るときに読む。jsdom に無い口�
 - 「無ければ鳴る」歯にするなら、まず repo 全体を一度走査して現状の分布を数え、**鳴る対象の数と除外の数の比**を先に見ること（**上の理由1がまた成り立つなら、歯として作る前に立ち止まる**）
 
 **出どころ**: #295（この案の出どころ）／#283 · #265 · #266（「基底の `grid-cols-*` が無い」が欠陥ではないと確認された過去の走査）。
+
+## 画面は4つに分けてある（見た目・純ロジック・通信の層を切り出した）
+
+| 置き場           | 名前              | 持つもの                                                                                                                  | import してはいけないもの（ESLint が止める）                         |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `apps/web/app`   | `@alteroid/web`   | 経路と画面ごとの部品。下の3つを呼ぶだけ                                                                                   | —                                                                    |
+| `packages/ui`    | `@alteroid/ui`    | 見た目の部品（`components/ui.tsx` など）・shadcn の素の部品（`@alteroid/ui/shadcn`）・テーマ（`@alteroid/ui/styles.css`） | `swr` / `@alteroid/swr` / `@alteroid/logic` / `@alteroid/api-client` |
+| `packages/logic` | `@alteroid/logic` | 純ロジック（整形・接続先と資格情報の置き場・日誌の窓・URL の組み立て・生成 spec から導いた画面の型）                      | `react` / `react-dom` / `swr` / `@alteroid/ui` / `@alteroid/swr`     |
+| `packages/swr`   | `@alteroid/swr`   | `ApiProvider`・SWR の hooks・ログインの段取り                                                                             | `@alteroid/ui`                                                       |
+
+- **3つのパッケージは build を持たない。** `exports` がソース（`./src/index.ts`）を指し、apps/web の Vite がそのまま束ねる。型検査は各パッケージの `tsc --noEmit` と、apps/web の `typecheck`（import 先まで辿る）の両方で掛かる
+- **依存の向きと `@alteroid/core` の値の import 禁止は `eslint.config.js` の `WEB_UI_LAYERS` / `CORE_VALUE_IMPORT_BAN` が持つ。** 同じ規則名を後の設定で書くと前の選択肢が丸ごと置き換わる（flat config は規則ごとに後勝ち）ので、層の設定には core の禁止を載せ直してある。層を足すときも `layerImportRules` を通して足すこと
+- **`components.json`（`"style": "radix-nova"`）は `packages/ui/components.json` に在る。`shadcn add` は `packages/ui` で打つ。** 吐かれた `@/lib/cn` などの import は相対へ直すこと — `packages/ui/tsconfig.json` の `paths`（`@/*`）は CLI が解決に使うためだけに在り、apps/web の Vite と共通の vitest は `@/` を知らない（直し忘れは build とテストが解決できずに落とす）。足した部品は `packages/ui/src/components/shadcn/index.ts` へ1行足す
+- **Tailwind に `packages/ui` の class を拾わせているのは `packages/ui/src/styles.css` の `@source './'` である。** apps/web の Vite の自動検出は apps/web の下しか見ない。**消しても型検査もテストも緑のまま**、部品の中でしか使わない class だけが生成物の CSS から消える（切り出したときは、生成物の CSS が切り出す前とバイト単位で同じであることを確かめた）
+- **テストの足場は2枚に分けてある。** jsdom に無い口と金額の網は `apps/web/app/test-support.tsx`、`fetch` の差し替え・SSE の偽応答・`Providers` は `packages/swr/src/test-support.tsx`（`@alteroid/swr/test-support`）。画面のテストは今までどおり `~/test-support` だけを見ればよい（前者が後者を再エクスポートしている）。**`packages/swr` のテストは前者を読まない**ので、そちらで jsdom に無い口が要ったら、足場を移すかどうかをその時に決める
+- **画面のテストで hook を差し替えるなら、`@alteroid/swr` を部分的に差し替える**（`vi.mock('@alteroid/swr', async (importOriginal) => ({ ...(await importOriginal()), useX: mock }))`）。丸ごと差し替えると、その画面が使う他の hook まで消える（`apps/web/app/routes/journal-selected-memo.test.tsx` が実例）
+- **パッケージだけテストを回すなら `pnpm --filter @alteroid/ui test`（`logic` / `swr` も同じ形）。** 根の `vitest.config.ts` の `include` に `packages/*/src/**/*.test.tsx` を足してあるので、根の `pnpm test` からも拾われる
+- **Web UI 全体を走査する歯は4つの根を見る。** `scripts/web-api-base-url-no-external-input.test.ts`（接続先を外から受け取らない）と `scripts/chat-lines-bounded.test.ts`（`Line[]` を保つ `useState` は1箇所）は、どちらも `apps/web/app` に加えて3つのパッケージの `src` を走査する。**パッケージを足したら、この2本の根にも足すこと** — 足さないと、足したパッケージの中だけ歯が黙る

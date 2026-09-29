@@ -16,8 +16,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { MANAGERS_PAGE } from '~/hooks/use-managers-window';
-import type { ManagerSummary } from '~/lib/types';
+import { MANAGERS_PAGE } from '@alteroid/swr';
+import type { ManagerSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Managers, {
@@ -565,7 +565,7 @@ describe('セッションが無いことは、`live` も状態も置き換えず
   });
 
   /**
-   * **時刻はこの画面の作法（`~/lib/format` の `formatRelative`）で出す。**
+   * **時刻はこの画面の作法（`packages/logic/src/format.ts` の `formatRelative`）で出す。**
    * CLI と `manager_list` は ISO をそのまま出しており、**書式が違うのは意図で
    * ある。** ISO が素で出ていたら、この画面だけ作法が割れている。
    */
@@ -905,7 +905,7 @@ describe('status の絞り込みと「もっと見る」（issue #670）', () =>
    * 応答がこの変更で1バイトも変わらないことを支えているのはこの1本である。**
    */
   it('dashboard 相当の引数なしの呼びは、クエリ文字列を付けない', async () => {
-    const { useManagers } = await import('~/hooks/queries');
+    const { useManagers } = await import('@alteroid/swr');
     const stub = stubFetch((url) =>
       url.includes('/managers') ? json({ managers: [] }) : undefined,
     );

@@ -23,13 +23,13 @@
  *
  * 1. 重ね合わせ（`recent` の先頭差し込み・`id` での重複除去）・種別
  *    フィルタの掛け直し・カーソル送りの規則は、DOM にも virtua にも
- *    触れない純粋な関数として `apps/web/app/lib/journal-window.ts` に
+ *    触れない純粋な関数として `packages/logic/src/journal-window.ts` に
  *    切り出してあり、そちらの歯（`journal-window.test.ts`）が同じ保証を
  *    測っている（むしろ非同期の DOM 待ちが要らないぶん決定的で、こちらの
  *    ほうが強い）
  * 2. `summarizeJournalEntry` 自身の文言（`daily_report` の印つき・
  *    `worker_wait`・`turn_usage`）は、関数を直接呼ぶ単体テストとして
- *    `apps/web/app/hooks/queries.test.ts` へ移設した
+ *    `packages/swr/src/hooks/queries.test.ts` へ移設した
  *
  * **反転後にこの6本が測っているのは「virtua が jsdom で描かないこと」の
  * canary であって、マージ規則そのものの正しさではない。** それでも消さずに
@@ -45,10 +45,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { JournalFeedProvider } from '~/hooks/journal-feed';
-import type { JournalLive } from '~/hooks/use-journal-live';
-import { summarizeJournalEntry } from '~/hooks/queries';
-import type { JournalEntry } from '~/lib/types';
+import { JournalFeedProvider, summarizeJournalEntry } from '@alteroid/swr';
+import type { JournalLive } from '@alteroid/swr';
+import type { JournalEntry } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Journal from './journal';
@@ -216,7 +215,7 @@ describe('日誌の1行は、日報が書けなかった日を日報と呼ばな
     // jsdom で描かなくなったため（ファイル冒頭のコメント）、以前ここで
     // `toBeTruthy()` を確認していた2つの文言は、いまは**画面には出ない**。
     // 「印を付けて理由まで言う」という `summarizeJournalEntry` 自身の規則は
-    // `apps/web/app/hooks/queries.test.ts` へ直接呼び出しの単体テストとして
+    // `packages/swr/src/hooks/queries.test.ts` へ直接呼び出しの単体テストとして
     // 移設した（DOM を経由しないぶん、こちらのほうが決定的で強い）。
     expect(screen.queryByText(`⚠ 2026-08-20 の日報は作れなかった: ${REASON}`)).toBeNull();
     expect(screen.queryByText('2026-08-19 の日報')).toBeNull();
@@ -334,7 +333,7 @@ describe('worker_wait — 種別フィルタと1行の文言', () => {
   // ⚠️ **2026-08-23 追記: 期待値を反転した。** `virtua` がこの画面の行を
   // jsdom で描かなくなったため（ファイル冒頭のコメント）、「1行の文言」は
   // もう画面では確認できない。**文言そのものの保証は
-  // `apps/web/app/hooks/queries.test.ts` へ移設した**（関数を直接呼ぶ単体
+  // `packages/swr/src/hooks/queries.test.ts` へ移設した**（関数を直接呼ぶ単体
   // テスト）。ここに残すのは「絞り込みボタンでも選べる」＝チップが実際に
   // `type=worker_wait` をサーバへ投げることの回帰確認である。
   it('絞り込みボタンで type=worker_wait が実際にサーバへ届く（1行の文言は queries.test.ts 側）', async () => {
@@ -372,7 +371,7 @@ describe('worker_wait — 種別フィルタと1行の文言', () => {
 describe('turn_usage — 種別フィルタと1行の文言', () => {
   // ⚠️ **2026-08-23 追記: 期待値を反転した。** 理由は `worker_wait` の
   // テストと同じ（ファイル冒頭のコメント）。文言そのものの保証は
-  // `apps/web/app/hooks/queries.test.ts` へ移設した。
+  // `packages/swr/src/hooks/queries.test.ts` へ移設した。
   it('絞り込みボタンで type=turn_usage が実際にサーバへ届く（1行の文言は queries.test.ts 側）', async () => {
     const stub = stubFetch((url) => {
       if (!url.includes('/journal')) return undefined;
@@ -470,7 +469,7 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
         // 1回目（初期読み込み）・2回目（クリック直後、limit=100 で撃ち直す）は
         // 同じ100件をそのまま返す＝全件が既知（freshCount===0）かつ
         // pageLength(100)===limit(100) → retryLarger
-        // （`~/lib/journal-window.ts` の `pageOutcome` の doc）。
+        // （`packages/logic/src/journal-window.ts` の `pageOutcome` の doc）。
         return json({ entries: PAGE, scanned: PAGE.length });
       }
       // 3回目以降は無条件に終端にする（limit が上がったかどうかに関わらず、
@@ -831,7 +830,7 @@ describe('日誌画面の検索欄（issue #250）', () => {
    * 描かないので、「割り込んだ行が画面に出ていないこと」は絞りが効いていても
    * いなくても等しく成り立つ（＝この画面越しの確認は何も区別しない）。
    * **だから絞りの規則は純粋な関数へ切り出してあり、そちらの歯が測る**
-   * （`apps/web/app/lib/journal-window.ts` の `filterRecent` と
+   * （`packages/logic/src/journal-window.ts` の `filterRecent` と
    * `journal-window.test.ts`）。ここに残すのは、**その関数へ実際に検索語が
    * 渡る配線が生きていること**の確認だけである（URL の語が画面の描画を
    * 一巡しても保たれる）。

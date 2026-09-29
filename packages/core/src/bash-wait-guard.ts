@@ -141,12 +141,253 @@ function isTimeoutWrapped(trimmed: string): boolean {
  *
  * **`-F`（`--follow=name --retry`）も見る**（#2129）。以前は小文字の `f` しか見ず、
  * `tail -F x` / `tail -qF x` / `tail -Fn 5 x` がすり抜けていた。
+ *
+ * **一致の規則の正本**（issue #2195 のレビュー以降は、本体はこれを当てない）。本体は
+ * `hasTailFollowPattern` が同じ一致を返す（`LOOP_RE`/`findUntilWhileLoops` と同じ関係）。
+ * この正規表現は、区切りの無い1行の繰り返しで2乗になる（`(TAIL + ' ').repeat(8000)` で
+ * 208ms、増分が4倍ごとに約4倍——2乗の伸び。2026-09-30 実測）。託宣として
+ * `bash-wait-guard-issue-2195.test.ts` が突き合わせる。**規則を変えるときは、ここと
+ * `hasTailFollowPattern` の両方を変えること。**
  */
-const TAIL_FOLLOW_RE =
+export const TAIL_FOLLOW_RE =
   /\btail\b(?:(?!;|&&|\|\||\||\n).)*?(?:\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b)/;
 
+/** `TAIL_FOLLOW_RE` の除外先読みと同じ字面の集合。**単体の `&` は境界に数えない**——
+ * 元の先読み `(?!;|&&|\|\||\||\n)` が2文字の `&&` だけを見て単体の `&` を見ていないのに
+ * 合わせている。`||` は単体の `|` を含むので、単体の `|` を見るだけで両方拾える。
+ * 戻り値は境界トークンの長さ（`&&` なら2、それ以外の境界なら1、境界でなければ0）。
+ */
+function boundaryTokenLengthAt(command: string, i: number): 0 | 1 | 2 {
+  const ch = command[i];
+  if (ch === ';' || ch === '\n' || ch === '|') return 1;
+  if (ch === '&' && command[i + 1] === '&') return 2;
+  return 0;
+}
+
+const TAIL_WORD_ONLY_RE = /\btail\b/;
+const FOLLOW_FLAG_ONLY_RE = /\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b/;
+/** `FOLLOW_FLAG_ONLY_RE` の先頭固定版（区間の境界の改行を橋渡しするときに使う。下の doc）。 */
+const FOLLOW_FLAG_ANCHORED_RE = /^\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|^\s--follow\b/;
+
+/**
+ * `[start, end)` の区間（同じ単純コマンドの中）に `tail` のフラグ一致が在るか。
+ *
+ * 区間の中の**最も左の** `tail` の語の直後から、フラグが**どこかに1つでも**在るかだけを
+ * 見れば十分——後ろの `tail` から見て満たせる条件（フラグがその tail より後ろに在る）は、
+ * より左の tail から見ても常に満たせる（左の tail の方が「後ろ」の範囲が広い）。逆に
+ * フラグが最も左の tail の後ろに1つも無ければ、それより右のどの tail の後ろにも無い。
+ * ⟹ 区間ごとに定数回（`tail` 探索1回・フラグ探索1回）で判定できる。
+ *
+ * ⚠️ **改行だけは区間の境界を1文字だけ跨ぐ**（乱数突き合わせで発見、issue #2195）。
+ * `TAIL_FOLLOW_RE` のフラグ側 `\s-…` の `\s` は改行にも一致するクラスなので、
+ * `tail\n-f` のように **改行そのものがフラグの先頭 `\s` として使われる**形が、
+ * 元の正規表現では一致する（`(?:(?!;|&&|\|\||\||\n).)*?` が改行を「消費」する
+ * 必要はなく、レイジーな0回の時点で `\s-…` 側の先読みが改行を直接飲み込むため）。
+ * `;`/`&&`/`||`/`|` はどれも空白類ではないので、この橋渡しは改行だけに起きる。
+ */
+function regionHasTailFollow(command: string, start: number, end: number): boolean {
+  const region = command.slice(start, end);
+  const tailMatch = TAIL_WORD_ONLY_RE.exec(region);
+  if (!tailMatch) return false;
+  const afterTail = region.slice(tailMatch.index + tailMatch[0].length);
+  if (FOLLOW_FLAG_ONLY_RE.test(afterTail)) return true;
+  return command[end] === '\n' && FOLLOW_FLAG_ANCHORED_RE.test(command.slice(end));
+}
+
+/**
+ * `TAIL_FOLLOW_RE` と同じ判定を、後戻り無しで行う（issue #2195 のレビューで見つかった
+ * 2乗の後戻り。`LOOP_RE`/`findUntilWhileLoops`（#2181）と同じ形——開始ごとに末尾まで
+ * 読み直す代わりに、`;`/`&&`/`||`/`|`/改行（引用符は見ない——元の正規表現も見ていない）で
+ * 区切った区間ごとに `regionHasTailFollow` を1回だけ呼ぶ。区間の合計長は `command` の
+ * 長さを超えないので、全体で線形。
+ */
+export function hasTailFollowPattern(command: string): boolean {
+  let start = 0;
+  while (start <= command.length) {
+    let end = start;
+    while (end < command.length && boundaryTokenLengthAt(command, end) === 0) end += 1;
+    if (regionHasTailFollow(command, start, end)) return true;
+    if (end >= command.length) return false;
+    start = end + boundaryTokenLengthAt(command, end);
+  }
+  return false;
+}
+
+/** `hasUnboundedTailFollow` が扱う、**引用符の外**の `;`/`&&`/`||`/`|`/改行で切った
+ * 単純コマンドの区間（issue #2195 の再設計）。 */
+interface SimpleCommandSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** `command` を、**引用符の外**の `;`/`&&`/`||`/`|`/改行で単純コマンドへ切る
+ * （`mask` は `computeOutsideQuoteMask(command)` の結果）。境界トークン自体は
+ * どちらの区間にも含まれない（次のスパンの `start` はトークンの直後）。 */
+function splitOutsideQuoteSimpleCommands(
+  command: string,
+  mask: readonly boolean[],
+): SimpleCommandSpan[] {
+  const spans: SimpleCommandSpan[] = [];
+  let start = 0;
+  let i = 0;
+  while (i < command.length) {
+    const tokenLength = mask[i] ? boundaryTokenLengthAt(command, i) : 0;
+    if (tokenLength > 0) {
+      spans.push({ start, end: i });
+      i += tokenLength;
+      start = i;
+    } else {
+      i += 1;
+    }
+  }
+  spans.push({ start, end: command.length });
+  return spans;
+}
+
+/**
+ * 単純コマンドの**先頭の語**が「引数を実行しないと分かっている」形か
+ * （issue #2195、mgr-712ad619 のレビュー・2026-09-30。以前の版は「文字列を実行する
+ * 5つの入口」を列挙して弾く側に倒していたが、`watch "tail -f x"` / `su -c "tail -f x"` /
+ * `script -qc "tail -f x"` / `docker exec c sh -c "tail -f x"` / `bash <<<"tail -f x"`
+ * （ヒアストリング） / `env -S "tail -f x"` / `"tail" -f x`（コマンド名自体を引用符で
+ * 囲む） / `x="tail -f y"; $x` / `x="tail -f y"; eval $x` のように、列挙していない
+ * 実行形がすり抜けた——列挙は「弾く形」を漏れなく挙げるには向かない（新しい実行形が
+ * 見つかるたびに追記が要る、終わりの無い作業）。
+ *
+ * ⟹ 向きを逆にする。**「実行しないと確認できた」側だけを短い許可リストに載せ、それ以外は
+ * すべて生の字面のまま見る**（＝弾く側に倒す。列挙されていない実行形は、そもそも
+ * 引用符の中身を消さないので、誤って通ることが無い）。
+ *
+ * 許可リストに載るのは次だけ——広げるなら理由を書くこと。
+ * - `echo` / `printf` / `grep` / `rg`（出力・検索。引数を実行しない）
+ * - `git commit`（コミットメッセージを実行しない）
+ * - `gh issue` / `gh pr` の `comment` / `create` / `edit` / `view` / `close` / `review`
+ *   （本文・タイトルを実行しない）
+ *
+ * 当てない条件（弾く側へ倒す）:
+ * - 先頭の語が引用符で囲まれている（コマンド名そのものが引用符の中）——
+ *   `"echo" "tail -f x"` のような偽装を防ぐ
+ * - `VAR=…` の代入で始まる——代入の右辺が後で実行されるかはこの語だけでは分からない
+ * - 同じ単純コマンドにコマンド置換（`$(`/バッククォート）かプロセス置換の出力側（`>(`）が
+ *   在る——置換の中身は実際に実行される。`echo "…" > >(sh)` は出力をシェルへ渡す
+ *
+ * 語の終わりは空白か行末で見る（`\b` だと `echo-x` / `grep.sh` のような別のコマンドまで当たる）。
+ */
+const NON_EXECUTING_ARGS_COMMAND_RE =
+  /^(?:echo|printf|grep|rg|git[ \t]+commit|gh[ \t]+(?:issue|pr)[ \t]+(?:comment|create|edit|view|close|review))(?=[ \t]|$)/;
+
+function isNonExecutingArgsSimpleCommand(command: string, span: SimpleCommandSpan): boolean {
+  let i = span.start;
+  while (i < span.end && (command[i] === ' ' || command[i] === '\t')) i += 1;
+  if (i >= span.end) return false;
+  const ch = command[i] as string;
+  if (ch === "'" || ch === '"' || (ch === '$' && command[i + 1] === "'")) return false;
+  const rest = command.slice(i, span.end);
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) return false;
+  if (rest.includes('$(') || rest.includes('`') || rest.includes('>(')) return false;
+  return NON_EXECUTING_ARGS_COMMAND_RE.test(rest);
+}
+
+/**
+ * `command[i]` が「本物のパイプ」（`|` 単体、または `|&`）の先頭か（issue #2195、
+ * mgr-712ad619 の追加レビュー・2026-09-30）。**`||`（論理 OR）は含まない**——`||` は
+ * 左側の標準出力を右側へ渡さない（左右は独立に実行されるだけ）ので、ここでの
+ * 「パイプの左側」には数えない。`boundaryTokenLengthAt` は `|`/`||` を区別せず
+ * どちらも境界として扱うが（`TAIL_FOLLOW_RE` の除外先読みが元々そうしているため。
+ * その doc 参照）、こちらは別の目的（本物のパイプかどうか）なので別に判定する。
+ */
+function isRealPipeBoundary(command: string, i: number): boolean {
+  return command[i] === '|' && command[i + 1] !== '|';
+}
+
+/**
+ * 引用符の中身を、**許可リストに当たる単純コマンドの中でだけ**空白へ潰した写しを返す
+ * （issue #2195）。それ以外の単純コマンドは生のまま残す——引数を実行しうる形は
+ * `isNonExecutingArgsSimpleCommand` の doc のとおり列挙しきれないので、許可リストに
+ * 当たらない限りすべて「実行するかもしれない」として生の字面を見る（弾く側に倒す）。
+ *
+ * ⚠️ **許可リストに当たる単純コマンドでも、本物のパイプ（`isRealPipeBoundary`）の
+ * 左側に在るときは消さない**（issue #2195 の追加レビュー・2026-09-30）。
+ * `echo "tail -f x" | bash` / `printf '%s\n' "tail -f x" | sh` /
+ * `echo "tail -f x" | xargs -I{} sh -c {}` のように、許可リストのコマンドの出力を
+ * 次のコマンドへ実行させる形が見逃されていた——「引数を実行しない」ことは確認できても、
+ * 「出力を実行する側へ渡さない」ことまでは確認できないため。⟹ 出力の行き先まで
+ * 静的には読めないので、パイプの左側に在る許可リストのコマンドは弾く側へ倒す。
+ *
+ * `git commit -m "tail -f x.log"`（パイプが無い、単独の形）は今までどおり通す——
+ * 対照は `bash-wait-guard-issue-2195.test.ts`。`echo "tail -f x" > r.sh; bash r.sh`
+ * （ファイルへ書いてから別の呼び出しで実行する形）も今までどおり通す——`>` は
+ * パイプではないので `isRealPipeBoundary` に当たらず、ここでは消したままにする
+ * （`stripDataHeredocsForWaitForms` の「別の呼び出しで書いたファイルを後で走らせる形は
+ * もともと見えない」と同じ限界。書いた直後の同じ呼び出しの中で実行される形だけを
+ * 塞ぐのがこのガードの守備範囲である）。
+ *
+ * 文字数を変えないので、この後にかける `hasTailFollowPattern` の走査の複雑さは変わらない。
+ */
+function blankQuotedInteriorForNonExecutingCommands(command: string): string {
+  const mask = computeOutsideQuoteMask(command);
+  const spans = splitOutsideQuoteSimpleCommands(command, mask);
+  let out = '';
+  let cursor = 0;
+  for (const span of spans) {
+    out += command.slice(cursor, span.start);
+    const feedsIntoPipe = isRealPipeBoundary(command, span.end);
+    if (!feedsIntoPipe && isNonExecutingArgsSimpleCommand(command, span)) {
+      for (let i = span.start; i < span.end; i += 1) {
+        const ch = command[i] as string;
+        out += mask[i] || ch === '\n' ? ch : ' ';
+      }
+    } else {
+      out += command.slice(span.start, span.end);
+    }
+    cursor = span.end;
+  }
+  out += command.slice(cursor);
+  return out;
+}
+
+/**
+ * `tail -f` / `tail --follow` を検出する（issue #2195）。
+ *
+ * ## 直した誤検知（Issue 本文）
+ *
+ * 直す前は `TAIL_FOLLOW_RE` を `command` へそのままかけていたため、引用符の
+ * **中**に書かれた `tail -f` の字面（実行されない）も拾っていた——
+ * `git commit -m "use tail -f x.log"` / `gh issue comment 1 --body "run tail -f x.log"` /
+ * grep の検索語に書いた `"tail -f x.log"` / `echo 'tail -f x.log'` がいずれも誤って弾かれていた。
+ *
+ * ⟹ `blankQuotedInteriorForNonExecutingCommands` で、許可リストに当たる単純コマンドの
+ * 引用符の中身だけを空白へ潰した写しへ `hasTailFollowPattern` をかける。
+ *
+ * ## それでも弾く形（許可リストに当たらないものすべて。列挙ではなく既定で弾く側）
+ *
+ * `bash -c "…"` / `sh -c '…'` / `eval "…"` / `ssh host "…"` / `su -c "…"` /
+ * `script -qc "…"` / `docker exec c sh -c "…"` / ヒアストリング（`bash <<<"…"`） /
+ * `env -S "…"` / コマンド名自体を引用符で囲む形（`"tail" -f x`）は、どれも先頭の語が
+ * 許可リストに無いので、引用符の中身は消さない——生の字面のまま `hasTailFollowPattern`
+ * にかかる。`x="tail -f y"; echo $x` のような代入も、代入の単純コマンド自体が
+ * 許可リストに当たらないので、代入の右辺（引用符の中）は生のまま残り、弾く
+ * （`x="tail -f y"; $x` / `x="tail -f y"; eval $x` も同じ理由で弾く——これは意図した
+ * 挙動である。「代入した変数を後で実行するかもしれない」ことまでは静的に読めないため）。
+ *
+ * `$(...)` とバッククォート（コマンド置換）は、許可リストに当たる単純コマンドでも
+ * 同じ単純コマンドに在れば消さない（`isNonExecutingArgsSimpleCommand` の doc）ので、
+ * `echo $(tail -f x)` / バッククォート形も生の字面のまま弾く。
+ *
+ * 許可リストに当たる単純コマンドでも、**本物のパイプ（`|`/`|&`。`||` は含まない）の
+ * 左側**に在るなら消さない（`isRealPipeBoundary`/`blankQuotedInteriorForNonExecutingCommands`
+ * の doc）——`echo "tail -f x" | bash` / `printf '%s\n' "tail -f x" | sh` /
+ * `echo "tail -f x" | xargs -I{} sh -c {}` のように、出力を次のコマンドが実行しうる
+ * ため。パイプが無い単独の形（`git commit -m "tail -f x.log"`）は今までどおり通す。
+ *
+ * ## 対照（弾くことを固定する——以前の版とは逆）
+ *
+ * `bash -c 'echo "tail -f x"'` は**弾く**——外側の `bash -c` の単純コマンドが許可
+ * リストに当たらないので、内側の `echo "tail -f x"` を含む引用符の中身ごと生のまま
+ * `hasTailFollowPattern` にかかり、`tail -f x` の字面がそのまま一致する。
+ */
 function hasUnboundedTailFollow(command: string): boolean {
-  return TAIL_FOLLOW_RE.test(command);
+  return hasTailFollowPattern(blankQuotedInteriorForNonExecutingCommands(command));
 }
 
 /**
