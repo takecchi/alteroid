@@ -60,6 +60,7 @@ function row(
     model: string;
     layer: string;
     site: string;
+    tokenId: string;
     webSearchRequests: number;
   }> = {},
 ) {
@@ -320,6 +321,34 @@ describe('/usage 画面', () => {
     expect(within(managers).getByTitle('clone').textContent).toBe('clone');
     expect(within(managers).queryByRole('link', { name: 'clone' })).toBeNull();
     expect(within(managers).getAllByRole('link')).toHaveLength(1);
+  });
+
+  /**
+   * **認証トークン別の帰属のある行だけ `/tokens` へつなぐ（issue #2100 段1）。**
+   * `tokenId` を持つ行だけがリンクになり、帰属の無い分
+   * （「（トークンの帰属が無い分）」＝ `tokenId: null`）はリンクにしない。
+   * `/tokens` にはまだ行への飛び先が無いので、id ごとの URL ではなく
+   * `/tokens` 止まりである（段2 は別 Issue）。
+   */
+  it('認証トークン別の tokenId のある行は /tokens への Link になり、帰属の無い行はならない', async () => {
+    stubUsage({
+      rows: [row(2, { tokenId: 'tok-42' }), row(1, {})],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: '認証トークン別' });
+    const tokens = axisCard('認証トークン別');
+    const link = within(tokens).getByRole('link', { name: 'tok-42' });
+    expect(link.getAttribute('href')).toBe('/tokens');
+    expect(within(tokens).getByTitle('tok-42')).toBeTruthy();
+
+    const noAttribution = '（トークンの帰属が無い分）';
+    expect(within(tokens).getByTitle(noAttribution).textContent).toBe(noAttribution);
+    expect(within(tokens).queryByRole('link', { name: noAttribution })).toBeNull();
+    expect(within(tokens).getAllByRole('link')).toHaveLength(1);
   });
 
   it('層と場所で絞り込める（4つの口に同じ絞り込みがある）', async () => {

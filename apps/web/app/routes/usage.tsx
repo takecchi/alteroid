@@ -520,6 +520,17 @@ function UsageBody({
             **`tokenId` が null の要素を落とさない。** 落とすとこの軸だけ合計に
             足し合わなくなり、しかも他の軸は「出てこない値を 0 で補わない」約束
             なので、読み手には足りないことに気づく手がかりが無い。
+
+            **帰属のある行だけ `/tokens` へ飛ばす（issue #2100 段1）。** `null`
+            の行（「（トークンの帰属が無い分）」）には飛び先の id が無いので
+            リンクにしない。
+
+            **飛び先は `/tokens` 止まり — 個々の行へは飛ばない。** `/tokens`
+            にはまだトークン1本の詳細画面も行への飛び先（DOM の id・URL の
+            パラメータ）も無い（`tokens.tsx` の `TokenRow` に id 属性が無い）。
+            そこへ id ごとの飛び先を足すのは段2（別 Issue。領域 A が
+            `GET /tokens` の応答の追従でいま `tokens.tsx` を触っているため、
+            この PR では触らない）。
           */}
           <AxisCard
             title="認証トークン別"
@@ -528,6 +539,7 @@ function UsageBody({
               .map((entry) => ({
                 label: entry.tokenId ?? '（トークンの帰属が無い分）',
                 costUsd: entry.totals.costUsd,
+                ...(entry.tokenId !== null ? { href: '/tokens' } : {}),
               }))}
           />
         </div>
