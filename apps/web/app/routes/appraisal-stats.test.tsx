@@ -241,7 +241,7 @@ describe('/appraisal-stats 画面 — 人間とクローンの食い違い', () 
     await renderPage();
 
     expect(
-      screen.getByText(/クローン「良かった」→人間「悪かった」: 2 件（食い違い）/),
+      screen.getByText(/クローン「うまくいった」→人間「うまくいかなかった」: 2 件（食い違い）/),
     ).toBeTruthy();
     expect(screen.getByText(/合計: 2 対（一致 0 \/ 食い違い 2）/)).toBeTruthy();
     // 0件でも「測っていない」とは違う、という注記自体は常に出る。
@@ -268,7 +268,7 @@ describe('/appraisal-stats 画面 — 人間とクローンの食い違い', () 
 
     await renderPage();
 
-    expect(screen.getByText(/クローン「excellent」→人間「良かった」/)).toBeTruthy();
+    expect(screen.getByText(/クローン「excellent」→人間「うまくいった」/)).toBeTruthy();
   });
 });
 

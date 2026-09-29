@@ -1188,7 +1188,7 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
     expect(dl).not.toBeNull();
     const scope = within(dl!);
 
-    for (const label of ['状態', '作業ディレクトリ', '開始', '更新']) {
+    for (const label of ['状態', '作業ディレクトリ', '作成', '更新']) {
       const dt = scope.getByText(label);
       const tokens = dt.className.split(/\s+/);
       expect(tokens).toContain('mt-3');

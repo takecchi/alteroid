@@ -2,6 +2,7 @@ import { Page } from '~/components/page';
 import { Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
 import { useAppraisalStats } from '~/hooks/queries';
 import { ApiError } from '~/lib/api';
+import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
 import type {
   AppraisalDecisionTally,
   AppraisalReconciliation,
@@ -47,7 +48,7 @@ export default function AppraisalStatsPage() {
   return (
     <Page
       title="評定の内訳"
-      description="良かった／悪かった／判定できない／未評定の内訳。読み取り専用。台帳（未了の仕事）と委譲（マネージャー）を跨いで集計する"
+      description="うまくいった／うまくいかなかった／判定できない／未評定の内訳。読み取り専用。台帳（未了の仕事）と委譲（マネージャー）を跨いで集計する"
     >
       <div className="flex flex-col gap-4">
         <Card>
@@ -95,11 +96,18 @@ function AppraisalStatsErrorNote({ error }: { error: unknown }) {
   return <ErrorNote error={error} className="m-4" />;
 }
 
-/** 評定の3値 + `other` の日本語ラベル（`good`→`bad`→`unclear`→`other` の順で並べる）。 */
+/**
+ * 評定の3値 + `other` の日本語ラベル（`good`→`bad`→`unclear`→`other` の順で並べる）。
+ *
+ * 3値ぶんの字面は `~/lib/appraisal-labels`（issue #2164。以前はここだけ
+ * 「良かった／悪かった」という別の字面を独自に持っていた——core の
+ * `APPRAISAL_LABELS` および `manager-detail.tsx` / `commitments.tsx` と
+ * 一致させる場所を1か所に集約した）。
+ */
 const TALLY_ROWS: readonly { key: 'good' | 'bad' | 'unclear' | 'other'; label: string }[] = [
-  { key: 'good', label: '良かった' },
-  { key: 'bad', label: '悪かった' },
-  { key: 'unclear', label: '判定できない' },
+  { key: 'good', label: APPRAISAL_LABELS.good },
+  { key: 'bad', label: APPRAISAL_LABELS.bad },
+  { key: 'unclear', label: APPRAISAL_LABELS.unclear },
   { key: 'other', label: 'その他（3値以外）' },
 ];
 
@@ -256,15 +264,17 @@ function JobCoverageCard({ jobCoverage }: { jobCoverage: AppraisalStats['jobCove
   );
 }
 
-/** `AppraisalValue | 'other'` の日本語ラベル（未知の値はそのまま返す）。 */
+/**
+ * `AppraisalValue | 'other'` の日本語ラベル（未知の値はそのまま返す）。
+ *
+ * 3値ぶんの字面は `~/lib/appraisal-labels`（`TALLY_ROWS` と同じ出所）。
+ */
 function reconciliationValueLabel(value: AppraisalReconciliationTransition['cloneValue']): string {
   switch (value) {
     case 'good':
-      return '良かった';
     case 'bad':
-      return '悪かった';
     case 'unclear':
-      return '判定できない';
+      return APPRAISAL_LABELS[value];
     case 'other':
       return 'その他（3値以外）';
     default: {

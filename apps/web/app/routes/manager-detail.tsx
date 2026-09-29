@@ -17,6 +17,7 @@ import {
 } from '~/components/ui';
 import { useAbortManager, useAppraiseManager, useSendManagerMessage } from '~/hooks/mutations';
 import { useManager, useManagerTranscript } from '~/hooks/queries';
+import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
@@ -256,7 +257,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               </dd>
               <dt className="mt-3 text-muted first:mt-0 sm:mt-0">作業ディレクトリ</dt>
               <dd className="font-mono text-xs break-all">{manager.cwd}</dd>
-              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">開始</dt>
+              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">作成</dt>
               <dd>
                 {formatDateTime(manager.startedAt)}（{formatRelative(manager.startedAt)}）
               </dd>
@@ -531,14 +532,16 @@ function assertAppraisalHandled(value: never): void {
   console.warn(`manager-detail.tsx: APPRAISAL_CHOICES が決めていない評定: ${String(value)}`);
 }
 
+/**
+ * 字面そのものの出所は `~/lib/appraisal-labels`（issue #2164。core の
+ * `APPRAISAL_LABELS` と一致させる場所を1か所に集約した）。
+ */
 function appraisalLabel(value: AppraisalValue): string {
   switch (value) {
     case 'good':
-      return 'うまくいった';
     case 'bad':
-      return 'うまくいかなかった';
     case 'unclear':
-      return '判定できない';
+      return APPRAISAL_LABELS[value];
     default:
       assertAppraisalHandled(value);
       return String(value);

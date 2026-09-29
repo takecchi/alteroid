@@ -23,6 +23,7 @@ import {
   usePushCommitment,
 } from '~/hooks/mutations';
 import { useCommitments } from '~/hooks/queries';
+import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
 import type {
   AppraisalValue,
   CommitmentClosedBy,
@@ -1051,15 +1052,16 @@ function assertAppraisalHandled(value: never): void {
  * `appraisalSchema` に値を足すと `AppraisalValue` が広がり、
  * この関数の `switch` がその値を返さないので `assertAppraisalHandled` の
  * 引数が `never` にならず、**`pnpm typecheck` がここで落ちる。**
+ *
+ * 字面そのものの出所は `~/lib/appraisal-labels`（issue #2164。core の
+ * `APPRAISAL_LABELS` と一致させる場所を1か所に集約した）。
  */
 function appraisalLabel(value: AppraisalValue): string {
   switch (value) {
     case 'good':
-      return 'うまくいった';
     case 'bad':
-      return 'うまくいかなかった';
     case 'unclear':
-      return '判定できない';
+      return APPRAISAL_LABELS[value];
     default:
       assertAppraisalHandled(value);
       return String(value);
