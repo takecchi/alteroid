@@ -433,8 +433,9 @@ function isNumericZero(totals: UsageTotals): boolean {
 
 /** `unreadable` を外した写しを返す。 */
 function withoutUnreadable(totals: UsageTotals): UsageTotals {
-  const { unreadable: _unreadable, ...rest } = totals;
-  return rest;
+  const copy: UsageTotals = { ...totals };
+  delete copy.unreadable;
+  return copy;
 }
 
 /**

@@ -265,11 +265,13 @@ describe('PgUsageStore と unreadable（読めなかった区切りの数。Issu
       at: '2026-08-14T10:00:00.000Z',
       snapshot: snapshot({ opus: totals({ costUsd: 1, unreadable: { inputTokens: 1 } }) }),
     });
+    // 2回目は累積を増やす（新しい区切り）。累積が同じ読みは再送と区別できないので、
+    // `foldUsageSnapshot` が `unreadable` を数えない（`usage.ts` の doc。レビューで足した規則）。
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
-      snapshot: snapshot({ opus: totals({ costUsd: 1, unreadable: { webSearchRequests: 1 } }) }),
+      snapshot: snapshot({ opus: totals({ costUsd: 2, unreadable: { webSearchRequests: 1 } }) }),
     });
 
     const { rows } = await store.aggregate({});
