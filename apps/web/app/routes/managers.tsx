@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import { Page } from '~/components/page';
@@ -619,7 +620,16 @@ export default function Managers() {
    * 使い物にならなくなる。
    */
   const [searchParams, setSearchParams] = useSearchParams();
-  const selected = parseSelectedStatuses(searchParams.get(STATUS_SEARCH_PARAM));
+  /**
+   * **`useMemo` で包む（issue #2055。`journal.tsx` の `selected` と同じ
+   * 判断・同じ理由）。** 生の文字列（`rawStatus`）が変わらない限り同じ
+   * 参照を返す——描画のたびに `parseSelectedStatuses` を呼ぶだけだと、
+   * この画面のどこかの再描画（例: 検索欄のような打っている途中の state を
+   * 足したとき）だけで `selected` の参照が新しくなり、それに依存する
+   * effect・memo が毎回走り直す。
+   */
+  const rawStatus = searchParams.get(STATUS_SEARCH_PARAM);
+  const selected = useMemo(() => parseSelectedStatuses(rawStatus), [rawStatus]);
 
   function toggle(status: ManagerStatus) {
     setSearchParams(

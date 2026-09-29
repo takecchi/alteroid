@@ -1,5 +1,5 @@
 import { AlertTriangle, Search } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
@@ -205,7 +205,19 @@ export default function Journal() {
   const [searchParams, setSearchParams] = useSearchParams();
   const committed = searchParams.get(SEARCH_PARAM) ?? '';
   const [draft, setDraft] = useState(committed);
-  const selected = parseSelectedTypes(searchParams.get(TYPES_SEARCH_PARAM));
+  /**
+   * **`useMemo` で包み、生の文字列（`rawTypes`）が変わらない限り同じ参照を
+   * 返す（issue #2055）。** `parseSelectedTypes` を描画のたびに呼ぶだけだと、
+   * `selected` の参照が毎描画で新しくなる——`draft`（検索欄の打鍵ごと）の
+   * 更新だけで `Journal` が再描画されても、`JournalBody` へ渡す `selected`
+   * の中身は変わっていないのに新しい配列になってしまう。`JournalBody` は
+   * `key` が変わらない限り同じインスタンスのまま新しい `selected` を prop
+   * として受け取るので、それがそのまま `useJournalWindow` の
+   * `useEffect(..., [recent, selected, q])`（`use-journal-window.ts`）に
+   * 渡り、チップを押していないのに毎回 effect が走り直していた。
+   */
+  const rawTypes = searchParams.get(TYPES_SEARCH_PARAM);
+  const selected = useMemo(() => parseSelectedTypes(rawTypes), [rawTypes]);
 
   useEffect(() => {
     if (draft === committed) return;

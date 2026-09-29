@@ -281,8 +281,13 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     // SSE が生きて届いている証拠なので、`since` の取りこぼし確認が
     // 直前に `blocked` を出していても、ここで下ろす。
     setNewerBlocked(false);
-    // `selected` は呼び出し側の state 配列そのもの（toggle のたびに新しい
-    // 参照になる）なので依存に入れてよい。`joined` と二重には持たない。
+    // `selected` は依存に入れてよい（`joined` と二重には持たない）。
+    // **前提（issue #2055 で書き直し）**: `selected` は呼び出し側
+    // （`journal.tsx`）が URL の生の文字列を `useMemo` で包んで作る配列で、
+    // その生の文字列が変わらない限り同じ参照を返す。以前は毎描画で
+    // `parseSelectedTypes(...)` を呼び直すだけだったため、チップを押して
+    // いなくても（例: 検索欄の打鍵で `Journal` が再描画されるたびに）
+    // `selected` の参照が変わり、この effect が無関係に走り直していた。
   }, [recent, selected, q]);
 
   function refreshNewerAt(limit: number): void {
