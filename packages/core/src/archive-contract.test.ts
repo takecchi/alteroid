@@ -12,7 +12,7 @@ import { createMemoryStores, seedFingerprintlessArchiveRow } from './testing.js'
  *
  * - インメモリ — このファイル
  * - fs — `packages/storage-fs/src/index.test.ts`
- * - pg — `packages/storage-pg/src/index.test.ts`
+ * - pg — `packages/storage-pg/src/index.commitments-inbox-archive.test.ts`
  */
 describe('TranscriptArchive の契約（インメモリ実装）', () => {
   it('remove() は行を消さない／read()は3つの顔／巻き添え無し／存在しないidは黙って成功しない／空の本文はremovedにならない／二重removeは冪等', async () => {

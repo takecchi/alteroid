@@ -3449,7 +3449,7 @@ export function renderMemoryListing(
  * **実装は3つ在るので、歯も3つに置いてある**（1つを測って3つとも測った
  * ことにしない）: `tools.test.ts`（`testing.ts` のインメモリ実装。道具の
  * 応答まで通す）・`packages/storage-fs/src/index.test.ts`・
- * `packages/storage-pg/src/index.test.ts`。**fs と pg は書き込みのたびに
+ * `packages/storage-pg/src/index.persona.test.ts`。**fs と pg は書き込みのたびに
  * 本文を `ensureTrailingNewline` に通すので二重に守られており、`append`
  * 側の連結だけを壊しても落ちない**（#354 の変異試験で実測した）。
  * **単一点なのは `testing.ts` のインメモリ実装だけである。**

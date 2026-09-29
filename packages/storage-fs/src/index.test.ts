@@ -114,7 +114,7 @@ describe('FsPersonaStore', () => {
    * `PersonaStore.write` の契約（`packages/core/src/store.ts`）を fs 側で測る。
    *
    * **同じ形の歯が3つ在る**（#370。1つで測って3つとも測ったことにしない）:
-   * fs（ここ）/ pg（`packages/storage-pg/src/index.test.ts`）/ インメモリ
+   * fs（ここ）/ pg（`packages/storage-pg/src/index.persona.test.ts`）/ インメモリ
    * （`packages/core/src/persona-contract.test.ts`）。
    */
   it('write した本文は、末尾の改行が正規化されて読み戻る', async () => {
@@ -1358,7 +1358,7 @@ describe('FsJournalStore', () => {
   /**
    * `JournalStore` の `with` 絞りの契約（issue #418）を、**fs 実装**に対して
    * 測る。同じ形の歯が3つ在る——インメモリ（`packages/core/src/journal-with-contract.test.ts`）
-   * / fs（このテスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで
+   * / fs（このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
    * 測って3つとも測ったことにしない（#370 と同じ作法）。
    */
   describe('with 契約（issue #418）', () => {
@@ -1409,7 +1409,7 @@ describe('FsJournalStore', () => {
    * `JournalStore` の `order` / `after` 契約（issue #432 の2本目）を、**fs
    * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
    * （`packages/core/src/journal-order-with-contract.test.ts`）/ fs（この
-   * テスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで測って
+   * テスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで測って
    * 3つとも測ったことにしない（#418 / with 契約と同じ作法）。
    *
    * **fs だけが持つ危険（5-3）— 昇順の早期打ち切り（`sinceDay` / `untilDay`
@@ -1557,7 +1557,7 @@ describe('FsJournalStore', () => {
    * `JournalQuery` の退化した値（`types: []` / `limit: 0`）の契約
    * （issue #425）を、**fs 実装**に対して測る。同じ形の歯が3つ在る——
    * インメモリ（`packages/core/src/journal-query-edge-contract.test.ts`）/
-   * fs（このテスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで
+   * fs（このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
    * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約と同じ作法）。
    *
    * **fs だけが持っていた壊れ方**: `list()` は `found.push(entry)` の直後に
@@ -1575,7 +1575,7 @@ describe('FsJournalStore', () => {
    * `JournalStore.oldestAt()`（日誌の地平。issue #1510）の契約を、**fs
    * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
    * （`packages/core/src/journal-horizon-contract.test.ts`）/ fs
-   * （このテスト）/ pg（`packages/storage-pg/src/index.test.ts`）。1つで
+   * （このテスト）/ pg（`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで
    * 測って3つとも測ったことにしない（`with` 契約 / `order` 契約 /
    * `query edge` 契約と同じ作法）。
    *
@@ -1595,7 +1595,7 @@ describe('FsJournalStore', () => {
    * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
    * （`packages/core/src/journal-search-contract.test.ts`）/ fs
    * （`packages/storage-fs/src/index.test.ts`）/ pg
-   * （`packages/storage-pg/src/index.test.ts`）。1つで測って3つとも測ったことに
+   * （`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。1つで測って3つとも測ったことに
    * しない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
    *
    * **fs 実装は素の `includes` なので、契約4（`%` / `_` はワイルドカード
@@ -4400,7 +4400,7 @@ describe('AuthStore', () => {
   /**
    * **`setAccountOwner` の不変条件（issue #1198）: 宣言（`declaredAt !== null`）は
    * 「許可済みの行にしか立たない」。** fs / pg / in-memory の3実装すべてで測る
-   * （このファイルは fs、`packages/storage-pg/src/index.test.ts` が pg、
+   * （このファイルは fs、`packages/storage-pg/src/index.auth.test.ts` が pg、
    * `packages/core/src/auth-service.test.ts` は in-memory を経由する）。
    */
   describe('setAccountOwner（実行環境の持ち主としての宣言）', () => {

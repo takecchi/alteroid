@@ -100,7 +100,7 @@ export interface PersonaStore {
    *
    * **いまは3実装とも上の `ensureTrailingNewline` を通していて、この契約には
    * 3実装それぞれに歯が当たっている**（fs: `packages/storage-fs/src/index.test.ts`
-   * / pg: `packages/storage-pg/src/index.test.ts` / インメモリ:
+   * / pg: `packages/storage-pg/src/index.persona.test.ts` / インメモリ:
    * `packages/core/src/persona-contract.test.ts`）。**4つ目を足すときは、
    * その歯も4つ目にする。** 1つで測って3つとも測ったことにしないのが、
    * この Issue の主題そのものである。

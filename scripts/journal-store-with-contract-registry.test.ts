@@ -162,7 +162,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
   },
   'packages/storage-pg/src/journal.ts': {
     status: 'contract-tested',
-    testFile: 'packages/storage-pg/src/index.test.ts',
+    testFile: 'packages/storage-pg/src/index.journal-jobs-schedule.test.ts',
     contracts: REQUIRED_CONTRACTS,
   },
   'apps/daemon/src/journal-bus.ts': {

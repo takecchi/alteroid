@@ -39,7 +39,7 @@ import type { CommitmentStore } from './store.js';
  *
  * ⟹ **プロセスを跨いでも「DB の制約と同じ強さで」原子なのは、いまも
  * `storage-pg` だけ**である（DB 側の保証は `packages/storage-pg/src/
- * index.test.ts` の索引の歯が別に測る）。fs は「advisory ロックを見る書き手
+ * index.commitments-inbox-archive.test.ts` の索引の歯が別に測る）。fs は「advisory ロックを見る書き手
  * 同士のあいだでは跨げる」まで——**この契約の7性質そのものは、いまも同一
  * プロセスの同期区間でしか測っていない**（プロセスを跨いだ振る舞いを測る
  * 歯は `packages/storage-fs/src/file-lock.test.ts` 側に別で置いてある）。

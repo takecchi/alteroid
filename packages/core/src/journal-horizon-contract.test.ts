@@ -12,7 +12,7 @@ import { createMemoryStores } from './testing.js';
  *
  * - インメモリ — このファイル
  * - fs — `packages/storage-fs/src/index.test.ts`
- * - pg — `packages/storage-pg/src/index.test.ts`
+ * - pg — `packages/storage-pg/src/index.journal-jobs-schedule.test.ts`
  *
  * どの実装がこの契約を測る責任を持つかは
  * `scripts/journal-store-with-contract-registry.test.ts` が一覧として持ち、

@@ -522,7 +522,7 @@ describe('createAuthService', () => {
    * `AuthStore.createAccountWithIdentity` を直接、**別々の** identity・
    * **同じ**候補メールで並行に呼ぶ。fs / pg 側の同名の歯
    * （`packages/storage-fs/src/index.test.ts` /
-   * `packages/storage-pg/src/index.test.ts`）と同じ入力・同じ期待値。
+   * `packages/storage-pg/src/index.auth.test.ts`）と同じ入力・同じ期待値。
    *
    * **変異**: `testing.ts` の `createAccountWithIdentity` にある
    * `emailCollides` の判定を外すと、この歯は赤に戻る（両方の account に

@@ -64,8 +64,8 @@ function emptyJournalWindow(): { rows: number; storedBytes: number; textBytes: n
  *
  * PGlite（インプロセスの実 PostgreSQL）を使う——`pg_column_size` /
  * `octet_length` / `FILTER (WHERE …)` / `statement_timeout` は素の Postgres
- * の機能なので、偽物の DB では確かめたことにならない（`index.test.ts` 冒頭の
- * doc と同じ理由）。
+ * の機能なので、偽物の DB では確かめたことにならない（`index.test.ts` から
+ * 分割した各ファイル——`index.persona.test.ts` 等——冒頭の doc と同じ理由）。
  *
  * ⚠️ **例外が1つある——`statement_timeout` は PGlite では実際には打ち切らない
  * ことを確認済みである**（2026-09-22 実測。`SHOW statement_timeout` は正しい

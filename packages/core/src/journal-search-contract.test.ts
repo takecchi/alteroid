@@ -12,7 +12,7 @@ import { createMemoryStores } from './testing.js';
  *
  * - インメモリ — このファイル
  * - fs — `packages/storage-fs/src/index.test.ts`
- * - pg — `packages/storage-pg/src/index.test.ts`
+ * - pg — `packages/storage-pg/src/index.journal-jobs-schedule.test.ts`
  *
  * **契約4（`%` / `_` はワイルドカードではない）だけは、この実装では自明に
  * 通る** —— 素の `includes` にワイルドカードは無い。落ちうるのは `ILIKE` を

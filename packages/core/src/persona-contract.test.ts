@@ -11,7 +11,7 @@ import { createMemoryStores } from './testing.js';
  * そのものである）:
  *
  * - fs — `packages/storage-fs/src/index.test.ts`
- * - pg — `packages/storage-pg/src/index.test.ts`
+ * - pg — `packages/storage-pg/src/index.persona.test.ts`
  * - インメモリ — このファイル
  *
  * **なぜ3つに分けて書いてあり、1本の共有スイートにしていないか。** 共有スイート
