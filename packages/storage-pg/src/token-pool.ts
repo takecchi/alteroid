@@ -1,7 +1,10 @@
 import {
+  activeAgentTokenSchema,
   cooldownSourceSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationPolicySchema,
+  UnreadableActiveTokenError,
+  UnreadableTokenSettingsError,
   type ActiveAgentToken,
   type AgentToken,
   type TokenPoolStore,
@@ -19,6 +22,21 @@ const SETTINGS_ID = 'default';
 const ACTIVE_ID = 'default';
 
 type AgentTokenRow = typeof agentTokens.$inferSelect;
+
+/**
+ * 不正な値を要約する。**`issue.message` は使わない**——zod の既定メッセージが
+ * enum 等では実際の値（`received`）を含む（`rotateOn` に版ずれ・手編集の
+ * 値が入っていた場合、それがそのまま漏れる）。出すのは「どの欄が」だけで
+ * ある（fs 側 `packages/storage-fs/src/token-pool.ts` の
+ * `summarizeInvalidFields` / `PgScheduleStore` の同名関数と同じ理由・同じ
+ * 形。パッケージを跨いだ共通化はしていない。issue #2053）。
+ */
+function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] }[]): string {
+  const fields = [
+    ...new Set(issues.map((issue) => (issue.path.length > 0 ? String(issue.path[0]) : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
+}
 
 function toRow(token: AgentToken) {
   return {
@@ -114,6 +132,14 @@ export class PgTokenPoolStore implements TokenPoolStore {
     return this.list();
   }
 
+  /**
+   * **「無い」（既定値）と「読めない」（throw）を区別する**（issue #2053）。
+   * `rotateOn` が版ずれ・手編集で enum の外になっている等、行はあるが
+   * `tokenRotationPolicySchema` を通らないときは `UnreadableTokenSettingsError`
+   * を投げる——既定値へすり替えると、`off` にしてあった回転を実装が黙って
+   * 戻すことになる（`TokenPoolStore.readSettings` の doc）。`writeSettings()`
+   * はこの状態でも上書きできる（読まずに書くため——下の doc）。
+   */
   async readSettings(): Promise<TokenRotationSettings> {
     const rows = await this.#db
       .select()
@@ -122,13 +148,30 @@ export class PgTokenPoolStore implements TokenPoolStore {
       .limit(1);
     const row = rows[0];
     if (row === undefined) return DEFAULT_TOKEN_ROTATION_SETTINGS;
+    const rotateOn = tokenRotationPolicySchema.safeParse(row.rotateOn);
+    if (!rotateOn.success) {
+      // **この列だけを検査しているので、不正な欄は常に `rotateOn` である。**
+      // `summarizeInvalidFields` を通さないのは、`row.rotateOn` 単体の
+      // safeParse では issue の `path` が空（ルート）になり、欄名が
+      // `summarizeInvalidFields` の `(root)` に潰れてしまうため。
+      throw new UnreadableTokenSettingsError(
+        '認証トークンの回転設定（settings）が読めない形で入っている（消されたのではない）: 不正な欄: rotateOn',
+      );
+    }
     return {
-      rotateOn: tokenRotationPolicySchema.parse(row.rotateOn),
+      rotateOn: rotateOn.data,
       cooldownMs: row.cooldownMs,
       ...(row.updatedAt === null ? {} : { updatedAt: row.updatedAt.toISOString() }),
     };
   }
 
+  /**
+   * **「無い」（`null`）と「読めない」（throw）を区別する**（issue #2053）。
+   * 列は `NOT NULL` だが、`tokenId`（空文字）・`generation`（負の数）は列の
+   * 型では防げない——`activeAgentTokenSchema` を通らないときは
+   * `UnreadableActiveTokenError` を投げる（`TokenPoolStore.readActive` の
+   * doc）。`writeActive()` はこの状態でも上書きできる（読まずに書くため）。
+   */
   async readActive(): Promise<ActiveAgentToken | null> {
     const rows = await this.#db
       .select()
@@ -138,11 +181,18 @@ export class PgTokenPoolStore implements TokenPoolStore {
     const row = rows[0];
     // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
     if (row === undefined) return null;
-    return {
+    const parsed = activeAgentTokenSchema.safeParse({
       tokenId: row.tokenId,
       generation: row.generation,
       rotatedAt: row.rotatedAt.toISOString(),
-    };
+    });
+    if (!parsed.success) {
+      throw new UnreadableActiveTokenError(
+        `現役の認証トークンの指名（active）が読めない形で入っている（消されたのではない）: ` +
+          summarizeInvalidFields(parsed.error.issues),
+      );
+    }
+    return parsed.data;
   }
 
   async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {

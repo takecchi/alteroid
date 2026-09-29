@@ -12,7 +12,7 @@ import {
   type TokenRotationPolicy,
   type TokenRotationSettings,
 } from './token-pool.js';
-import type { Stores } from './store.js';
+import { UnreadableTokenSettingsError, type Stores } from './store.js';
 
 /**
  * 認証トークンのプールを**置いて読む**までの1本道（Issue #393「PR1 プールの器」）。
@@ -42,7 +42,15 @@ export interface TokenPoolService {
     tokens: AgentTokenView[];
     settings: TokenRotationSettings;
   }>;
-  /** 回す契機・冷却の既定を部分更新する。 */
+  /**
+   * 回す契機・冷却の既定を部分更新する。
+   *
+   * **現在値が壊れていて読めない（`UnreadableTokenSettingsError`）ときも、
+   * `patch` が `rotateOn` と `cooldownMs` の両方を持っていれば書ける**
+   * （issue #2053）——読めない現在値を読まずに、新しい値だけで書き直す。
+   * **片方しか無ければ埋める元が無いので、そのまま投げる**（呼び出し側
+   * ——`PUT /tokens/policy`——へエラーが届く）。
+   */
   setSettings(patch: {
     rotateOn?: TokenRotationPolicy;
     cooldownMs?: number;
@@ -245,12 +253,29 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
 
     setSettings: (patch: { rotateOn?: TokenRotationPolicy; cooldownMs?: number }) =>
       serial(async () => {
-        const current = await stores.tokens.readSettings();
-        const next: TokenRotationSettings = {
-          rotateOn: patch.rotateOn ?? current.rotateOn,
-          cooldownMs: patch.cooldownMs ?? current.cooldownMs,
-          updatedAt: now().toISOString(),
-        };
+        const updatedAt = now().toISOString();
+        let next: TokenRotationSettings;
+        try {
+          const current = await stores.tokens.readSettings();
+          next = {
+            rotateOn: patch.rotateOn ?? current.rotateOn,
+            cooldownMs: patch.cooldownMs ?? current.cooldownMs,
+            updatedAt,
+          };
+        } catch (error) {
+          // **読めない現在値は、両方が揃った patch でしか埋められない**
+          // （issue #2053）。`rotateOn` か `cooldownMs` の片方だけの patch では
+          // 埋める元（現在値）が読めないので、投げたまま呼び出し側へ返す——
+          // 呼び出し側（`PUT /tokens/policy`）は 500 として理由を返す。
+          if (
+            !(error instanceof UnreadableTokenSettingsError) ||
+            patch.rotateOn === undefined ||
+            patch.cooldownMs === undefined
+          ) {
+            throw error;
+          }
+          next = { rotateOn: patch.rotateOn, cooldownMs: patch.cooldownMs, updatedAt };
+        }
         const written = await stores.tokens.writeSettings(next);
         // **設定も契機である。** `off` → `free_exhausted` へ戻した瞬間に、
         // 止まったまま溜まっていた状態を見直せなければ、人間は**設定を戻した後

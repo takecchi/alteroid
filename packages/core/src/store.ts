@@ -1713,11 +1713,34 @@ export interface CredentialVaultStore {
  * `Stores` の一員として持つのは、環境を作り直しても残るという性質が同じだからである。
  */
 export interface TokenPoolStore {
-  /** プールの全行（**値を含む**。正本を返す口はここだけである）。`order` 昇順。 */
+  /**
+   * プールの全行（**値を含む**。正本を返す口はここだけである）。`order` 昇順。
+   *
+   * **`settings` / `active` が壊れていても道連れにしない**（issue #2053）。
+   * `tokens` はそちらとは独立に読める——`list()` が投げてよいのは `tokens`
+   * 自体の形が壊れているとき（配列でない等）だけである。
+   */
   list(): Promise<AgentToken[]>;
-  /** 全文置換。**入力に無い行は消える。** */
+  /**
+   * 全文置換。**入力に無い行は消える。**
+   *
+   * `settings` / `active` が壊れていても道連れにしない（`list()` の doc と
+   * 同じ理由。issue #2053）——この操作が全文置換するのは `tokens` だけで、
+   * `settings` / `active` の値には触れない。
+   */
   replace(tokens: readonly AgentToken[]): Promise<AgentToken[]>;
-  /** 回す契機と冷却の既定。置かれていなければ core の既定（`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。 */
+  /**
+   * 回す契機と冷却の既定。置かれていなければ core の既定
+   * （`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。
+   *
+   * **置かれている値が壊れていて読めないときは、既定へすり替えずに
+   * `UnreadableTokenSettingsError`（本ファイル）を投げる**（issue #2053）。
+   * 版ずれ・手編集で `rotateOn` が enum の外になっている、等——「無い」と
+   * 「読めない」は別の状態であり、既定へ潰すと `off` にしてあった回転を
+   * 実装が黙って戻すことになる。**`writeSettings()` はこの状態でも上書き
+   * できる**（読まずに書けるので、壊れた既存値がある間も書き直しの口は
+   * 塞がらない）。
+   */
   readSettings(): Promise<TokenRotationSettings>;
   writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings>;
   /**
@@ -1728,10 +1751,52 @@ export interface TokenPoolStore {
    * 既定の構成と、プールの1本目を撒いた後は別の状態である——前者では runner にも
    * クローンにも何も降ろしていない。埋めると、撒いていないものを撒いたことに
    * なる（受け入れ基準7: 既定の構成の挙動を1文字も変えない）。
+   *
+   * **置かれている値が壊れていて読めないときは `null`（無い）へすり替えずに
+   * `UnreadableActiveTokenError`（本ファイル）を投げる**（issue #2053。
+   * `readSettings()` と同じ理由・同じ形）。`writeActive()` はこの状態でも
+   * 上書きできる。
    */
   readActive(): Promise<ActiveAgentToken | null>;
   /** 現役を指名し直す。**世代を増やすのは呼ぶ側**（この口は受けた値を書くだけ）。 */
   writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken>;
+}
+
+/**
+ * `TokenPoolStore.readSettings()` が、置かれている回転設定を
+ * `tokenRotationSettingsSchema` として読めなかったときに投げる専用のエラー型
+ * （issue #2053）。`UnreadableCommitmentError` / `UnreadablePracticeError`
+ * （本ファイル）と同じ形——「無い」（既定値）と「読めない」（throw）の区別を、
+ * 呼び出し側が `instanceof` で見分けられるようにする。メッセージの文字列で
+ * 判定すると、言い回しを直しただけで判定が静かに外れる。
+ *
+ * **メッセージは「どの欄が」だけを含み、値そのもの（`rotateOn` の実際の値
+ * など）は含めない。** 消えたのではなく壊れているだけだと伝えるためのもの
+ * なので、文言にもそれを書く（3実装＝fs / pg で共通）。
+ *
+ * `TokenPoolService.setSettings`（`token-pool-service.ts`）は、この型を
+ * 捕まえたとき、`patch` が `rotateOn` と `cooldownMs` の両方を持っていれば、
+ * 読めない現在値を読まずに新しい値だけで書き直す。片方しか無ければ埋める元が
+ * 無いので、そのまま呼び出し側へ投げ返す。
+ */
+export class UnreadableTokenSettingsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnreadableTokenSettingsError';
+  }
+}
+
+/**
+ * `TokenPoolStore.readActive()` が、置かれている現役の指名を
+ * `activeAgentTokenSchema` として読めなかったときに投げる専用のエラー型
+ * （issue #2053）。`UnreadableTokenSettingsError`（本ファイル）と同じ形・
+ * 同じ理由。
+ */
+export class UnreadableActiveTokenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnreadableActiveTokenError';
+  }
 }
 
 /**

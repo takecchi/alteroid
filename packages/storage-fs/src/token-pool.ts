@@ -6,6 +6,8 @@ import {
   agentTokenSchema,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   tokenRotationSettingsSchema,
+  UnreadableActiveTokenError,
+  UnreadableTokenSettingsError,
   type ActiveAgentToken,
   type AgentToken,
   type TokenPoolStore,
@@ -41,18 +43,21 @@ const agentTokenRowSchema = agentTokenSchema.extend({
 });
 
 /**
- * トップレベルの形だけを見る。**`tokens` の各要素はここでは検査しない**
- * ——`z.array(agentTokenRowSchema)` にすると、1行の不正が配列全体を道連れに
- * する（直す前の形。issue #1942。`FsJobStore` / `FsAuthStore` の
- * `fileSchema` と同じ理由・同じ形——issue #1868 / #1928）。行ごとの検査は
- * `#read()` が `agentTokenRowSchema.safeParse` で1行ずつ行う。
+ * トップレベルの形だけを見る。**`tokens` / `settings` / `active` はどれも
+ * ここでは検査しない**——`settings: tokenRotationSettingsSchema.optional()`
+ * のように厳密な形にすると、1つが壊れているだけで `fileSchema.parse` が
+ * ファイル全体を道連れにし、`tokens` まで読めなくなる（直す前の形。issue
+ * #2053。`tokens` を配列のまま道連れにしていた issue #1942 と同じ穴の
+ * 続き）。3つとも `#read()` が個別に `safeParse` する——`tokens` は行ごと
+ * （既存。issue #1942）、`settings` / `active` は1個の値として（この直し）。
  *
  * **ここで投げる例外は今のままでよい**——`tokens` が配列でない・ファイルが
- * オブジェクトでない、はファイル全体の形の問題であって、1行の問題ではない。
+ * オブジェクトでない、はファイル全体の形の問題であって、1行・1項目の問題
+ * ではない。
  */
 const fileSchema = z.object({
   tokens: z.array(z.unknown()).default([]),
-  settings: tokenRotationSettingsSchema.optional(),
+  settings: z.unknown().optional(),
   /**
    * いま撒いてある現役（Issue #393 PR3）。**まだ指名していなければ無い。**
    *
@@ -60,28 +65,37 @@ const fileSchema = z.object({
    * 「人間かクローンが設定を変えた時刻」という意味を背負っているからである
    * （`ActiveAgentToken` の doc）。
    */
-  active: activeAgentTokenSchema.optional(),
+  active: z.unknown().optional(),
 });
 
 type AgentTokenRow = z.infer<typeof agentTokenRowSchema>;
 
 /**
- * `tokens.json` の中身。**検査を通った `tokens` と、形が不正で読めなかった
- * `invalidTokensRaw`（生の要素。パース前のまま）を分けて持つ**（issue
- * #1942。`FsJobStore` の `JobFile` / `FsAuthStore` の `AuthFile` と同じ形）。
+ * `tokens.json` の中身。**検査を通った値と、形が不正で読めなかった生の値
+ * （パース前のまま）を、`tokens` / `settings` / `active` それぞれで分けて
+ * 持つ**（issue #1942 の `invalidTokensRaw` を issue #2053 で `settings` /
+ * `active` にも広げた形。`FsJobStore` の `JobFile` / `FsAuthStore` の
+ * `AuthFile` と同じ考え方）。
  *
- * `invalidTokensRaw` を消さずに持ち回るのが、この直しの核心である。
- * `writeSettings` / `writeActive` はいずれも最終的にこれを丸ごとシリアライズ
- * し直す（`#update`）ので、ここへ入れなかった行は次の書き込みで消える——
- * `tokens`（検査を通った行）だけを書けば、版ずれ・手編集でできた不正な行が
- * 黙って消えることになる。**`replace()` だけは例外**——直下の doc を見よ。
+ * `invalidTokensRaw` / `invalidSettingsRaw` / `invalidActiveRaw` を消さずに
+ * 持ち回るのが、この直しの核心である。`writeSettings` / `writeActive` は
+ * いずれも最終的にこれを丸ごとシリアライズし直す（`#update`）ので、ここへ
+ * 入れなかった値は次の書き込みで消える——検査を通った値だけを書けば、版
+ * ずれ・手編集でできた不正な値が黙って消えることになる。**`replace()` は
+ * `tokens` に限って例外**——直下の doc を見よ（`settings` / `active` の
+ * 壊れた生の値は `replace()` でも保持される。`replace()` が全文置換すると
+ * 約束しているのは `tokens` だけである）。
  */
 interface TokenPoolFile {
   tokens: AgentTokenRow[];
   /** 行の形が不正で読めなかった、生の要素（パース前のまま）。 */
   invalidTokensRaw: unknown[];
   settings?: TokenRotationSettings;
+  /** `settings` が壊れていて読めなかったときの、生の値（パース前のまま）。 */
+  invalidSettingsRaw?: unknown;
   active?: ActiveAgentToken;
+  /** `active` が壊れていて読めなかったときの、生の値（パース前のまま）。 */
+  invalidActiveRaw?: unknown;
 }
 
 const EMPTY: TokenPoolFile = { tokens: [], invalidTokensRaw: [] };
@@ -116,6 +130,25 @@ function describeSkippedTokenRow(params: { index: number; reason: string; id?: s
   return (
     `alteroid: tokens の不正な行を読み飛ばしました` +
     `（${params.index + 1} 行目、${params.reason}）${idNote}`
+  );
+}
+
+/**
+ * `settings` / `active` が壊れていて読めないことを stderr へ1行で要約する。
+ * **値は絶対に載せない**（`describeSkippedTokenRow` と同じ理由。issue
+ * #2053）——`summarizeInvalidFields` が返すのは欄の名前だけである。
+ *
+ * **「消えたのではない」ことが分かる文言にする。** `readSettings()` /
+ * `readActive()` が投げる例外（`UnreadableTokenSettingsError` /
+ * `UnreadableActiveTokenError`）にも同じ理由で同じ言い回しを使う。
+ */
+function describeUnreadableTokenPoolField(params: {
+  field: 'settings' | 'active';
+  reason: string;
+}): string {
+  return (
+    `alteroid: ${params.field} が読めない形で入っています（${params.reason}）。` +
+    `消えたわけではありません——書き直せば直ります。`
   );
 }
 
@@ -164,49 +197,88 @@ export class FsTokenPoolStore implements TokenPoolStore {
     return this.list();
   }
 
+  /**
+   * **「無い」（既定値）と「読めない」（throw）を区別する**（`TokenPoolStore.
+   * readSettings` の doc、issue #2053）。`settings` が壊れていて読めなかった
+   * ときは `UnreadableTokenSettingsError` を投げる——既定値へすり替えると、
+   * `off` にしてあった回転を実装が黙って戻すことになる。
+   */
   async readSettings(): Promise<TokenRotationSettings> {
     const file = await this.#read();
-    return file.settings ?? DEFAULT_TOKEN_ROTATION_SETTINGS;
+    if (file.settings !== undefined) return file.settings;
+    if (file.invalidSettingsRaw === undefined) return DEFAULT_TOKEN_ROTATION_SETTINGS;
+    const reason = summarizeInvalidFields(
+      tokenRotationSettingsSchema.safeParse(file.invalidSettingsRaw).error?.issues ?? [],
+    );
+    throw new UnreadableTokenSettingsError(
+      `認証トークンの回転設定（settings）が読めない形で入っている（消されたのではない）: ${reason}`,
+    );
   }
 
+  /**
+   * 壊れた既存値があっても上書きできる（`TokenPoolStore.readSettings` の
+   * doc、issue #2053）——保持していた生の値（`invalidSettingsRaw`）を新しい
+   * 値で置き換える。
+   */
   async writeSettings(settings: TokenRotationSettings): Promise<TokenRotationSettings> {
     const parsed = tokenRotationSettingsSchema.parse(settings);
-    await this.#update((file) => ({ ...file, settings: parsed }));
+    await this.#update((file) => ({ ...file, settings: parsed, invalidSettingsRaw: undefined }));
     return parsed;
   }
 
+  /**
+   * **「無い」（`null`）と「読めない」（throw）を区別する**（issue #2053）。
+   * `active` が壊れていて読めなかったときは `UnreadableActiveTokenError` を
+   * 投げる——`null` へすり替えると、実際は指名済みなのに「まだ指名していない」
+   * と嘘をつくことになる（`TokenPoolStore.readActive` の doc）。
+   */
   async readActive(): Promise<ActiveAgentToken | null> {
     const file = await this.#read();
     // **無いものを「1本目が現役」で埋めない**（`TokenPoolStore.readActive` の doc）。
-    return file.active ?? null;
+    if (file.active !== undefined) return file.active;
+    if (file.invalidActiveRaw === undefined) return null;
+    const reason = summarizeInvalidFields(
+      activeAgentTokenSchema.safeParse(file.invalidActiveRaw).error?.issues ?? [],
+    );
+    throw new UnreadableActiveTokenError(
+      `現役の認証トークンの指名（active）が読めない形で入っている（消されたのではない）: ${reason}`,
+    );
   }
 
+  /**
+   * 壊れた既存値があっても上書きできる（issue #2053）——保持していた生の値
+   * （`invalidActiveRaw`）を新しい値で置き換える。
+   */
   async writeActive(active: ActiveAgentToken): Promise<ActiveAgentToken> {
     const parsed = activeAgentTokenSchema.parse(active);
-    await this.#update((file) => ({ ...file, active: parsed }));
+    await this.#update((file) => ({ ...file, active: parsed, invalidActiveRaw: undefined }));
     return parsed;
   }
 
   /**
    * `tokens.json` を読む。**`tokens` は行ごとに検査し、不正な1行だけを飛ばす**
-   * （issue #1942。以前は `fileSchema.parse` で配列全体を1回に検査していた
-   * ため、1行でも不正だと `list()` / `replace()` / `readSettings()` /
-   * `writeSettings()` / `readActive()` / `writeActive()` が丸ごと例外を投げ、
-   * 正しい行も読めなくなっていた——`#read()` が `tokens` / `settings` /
-   * `active` を同時に返す1つの関数だからである。pg 実装
-   * （`PgTokenPoolStore`）は正規化された列を持つので、そもそも「1行の不正が
-   * 他の行を道連れにする」形をしていない）。
+   * （issue #1942）。**`settings` / `active` も、`tokens` とは互いに独立に
+   * 検査する**（issue #2053）——以前は `fileSchema.parse` がトップレベルの
+   * `settings` / `active` まで一度に検査していたため、どちらか1つが不正な
+   * だけで `list()` / `replace()` / `readSettings()` / `writeSettings()` /
+   * `readActive()` / `writeActive()` が丸ごと例外を投げ、正しい `tokens` の
+   * 行まで読めなくなっていた——`#read()` が `tokens` / `settings` / `active`
+   * を同時に返す1つの関数だからである。pg 実装（`PgTokenPoolStore`）は
+   * `tokens` が正規化された列を持つので、そもそも「1つの不正が他を道連れに
+   * する」形をしていない（`settings` / `active` はそれぞれ独立の1行表）。
    *
-   * **飛ばすのは行の形が不正なとき（欄が欠けている・型が違う、など）だけ
-   * である。** ファイルそのものが JSON として読めない・トップレベルの形が
-   * 違う（`tokens` が配列でない等）ときは、いまの振る舞い（例外）のままに
-   * してある——それは1行の問題ではないため。
+   * **飛ばす・保持するのは値の形が不正なとき（欄が欠けている・型が違う、
+   * など）だけである。** ファイルそのものが JSON として読めない・トップ
+   * レベルの形が違う（`tokens` が配列でない等）ときは、いまの振る舞い
+   * （例外）のままにしてある——それは1つの値の問題ではないため。
    *
-   * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedTokenRow`。**値は
-   * `value`（トークン本体）を含めず、id だけ**）、`invalidTokensRaw` として
-   * 生の形のまま保持する——`writeSettings` / `writeActive` がこれを書き戻す
-   * ことで、版ずれ・手編集でできた不正な行を黙って消さない（`replace()` は
-   * 例外——直上の doc）。
+   * 飛ばした・読めなかった値は stderr へ1行の跡を残し（`tokens` の行は
+   * `describeSkippedTokenRow`。`settings` / `active` は
+   * `describeUnreadableTokenPoolField`。**どちらも値そのものは含めず、
+   * どこが不正かだけ**）、`invalidTokensRaw` / `invalidSettingsRaw` /
+   * `invalidActiveRaw` として生の形のまま保持する——`writeSettings` /
+   * `writeActive` がこれを書き戻すことで、版ずれ・手編集でできた不正な値を
+   * 黙って消さない（`tokens` に限り `replace()` が例外——直上の doc）。
    */
   async #read(): Promise<TokenPoolFile> {
     try {
@@ -229,7 +301,49 @@ export class FsTokenPoolStore implements TokenPoolStore {
           })}\n`,
         );
       });
-      return { tokens, invalidTokensRaw, settings: top.settings, active: top.active };
+
+      let settings: TokenRotationSettings | undefined;
+      let invalidSettingsRaw: unknown;
+      if (top.settings !== undefined) {
+        const result = tokenRotationSettingsSchema.safeParse(top.settings);
+        if (result.success) {
+          settings = result.data;
+        } else {
+          invalidSettingsRaw = top.settings;
+          process.stderr.write(
+            `${describeUnreadableTokenPoolField({
+              field: 'settings',
+              reason: summarizeInvalidFields(result.error.issues),
+            })}\n`,
+          );
+        }
+      }
+
+      let active: ActiveAgentToken | undefined;
+      let invalidActiveRaw: unknown;
+      if (top.active !== undefined) {
+        const result = activeAgentTokenSchema.safeParse(top.active);
+        if (result.success) {
+          active = result.data;
+        } else {
+          invalidActiveRaw = top.active;
+          process.stderr.write(
+            `${describeUnreadableTokenPoolField({
+              field: 'active',
+              reason: summarizeInvalidFields(result.error.issues),
+            })}\n`,
+          );
+        }
+      }
+
+      return {
+        tokens,
+        invalidTokensRaw,
+        ...(settings === undefined ? {} : { settings }),
+        ...(invalidSettingsRaw === undefined ? {} : { invalidSettingsRaw }),
+        ...(active === undefined ? {} : { active }),
+        ...(invalidActiveRaw === undefined ? {} : { invalidActiveRaw }),
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY;
       throw error;
@@ -244,7 +358,11 @@ export class FsTokenPoolStore implements TokenPoolStore {
    * 合流させてから書く**（issue #1942）——分けたまま書くと、次の `#read()`
    * が `fileSchema`（トップレベルの形しか見ない）を通すときに未知のキー
    * （`invalidTokensRaw`）として黙って捨てられ、壊れた行を持ち回る意味が
-   * 消える。
+   * 消える。**`settings` / `active` も同じ理由で、検査を通った値が無ければ
+   * 保持していた生の値を書く**（issue #2053）——`writeSettings` /
+   * `writeActive` は呼ばれた側だけ `invalid*Raw` を `undefined` にクリアする
+   * ので（新しい値で置き換わる）、触っていない側の壊れた生の値はここで
+   * 保持され続ける。
    */
   async #update(mutate: (file: TokenPoolFile) => TokenPoolFile): Promise<void> {
     await withPathLock(this.#path, async () => {
@@ -252,8 +370,8 @@ export class FsTokenPoolStore implements TokenPoolStore {
       await mkdir(this.#dir, { recursive: true });
       const serialized = {
         tokens: [...next.tokens, ...next.invalidTokensRaw],
-        settings: next.settings,
-        active: next.active,
+        settings: next.settings ?? next.invalidSettingsRaw,
+        active: next.active ?? next.invalidActiveRaw,
       };
       // 一時ファイルの時点で 0600（`writeFileAtomic` の `mode`）。rename 後に
       // 絞ると、その隙間で他人が読める。
