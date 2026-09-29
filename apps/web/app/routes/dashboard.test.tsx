@@ -392,6 +392,36 @@ describe('「稼働中のマネージャー」は知らない status を静か�
 });
 
 /**
+ * 「一覧」は、カード自身の絞り込み（`isRunningJobStatus` が真にする状態）と
+ * 同じ母集合で `/managers` へ飛ぶ（issue #2090）。**素の `/managers` へ戻すと、
+ * 終わった・止まった委譲まで混ざった一覧が開く**——直す前の症状そのものを
+ * 歯にする。値の組み立ては `~/lib/managers-links` の `managersHref`（そちらの
+ * 単体テストが href の形そのものを見る）に任せ、ここでは「呼ばれているか・
+ * `status` が空でないか」だけを見る。
+ */
+describe('「稼働中のマネージャー」の「一覧」は稼働中で絞り込む（issue #2090）', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  it('「一覧」の href が status=running を持つ', async () => {
+    const managers = [
+      {
+        managerId: 'mgr-1',
+        status: 'running',
+        live: true,
+        cwd: '/workspace',
+        request: '依頼 1',
+        startedAt: '2026-08-14T09:00:00.000Z',
+        updatedAt: '2026-08-14T09:00:00.000Z',
+      },
+    ];
+    renderDashboard(USAGE, EMPTY_FEED, [], { managers });
+
+    const list = await screen.findByRole('link', { name: '一覧' });
+    expect(list.getAttribute('href')).toBe('/managers?status=running');
+  });
+});
+
+/**
  * 「次の自動実行」カードは、この画面の他5枚（最新の日報／承認待ち／稼働中の
  * マネージャー／今日の利用／いま届いている出来事）と違って `action` を持たず、
  * かつ `entry.description` を `truncate` で切っている唯一のカードだった

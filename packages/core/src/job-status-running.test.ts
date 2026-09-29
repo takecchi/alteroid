@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { isRunningJobStatus, type JobStatusLike } from './job-status-running.js';
+import {
+  isRunningJobStatus,
+  JOB_STATUS_LIKE_VALUES,
+  type JobStatusLike,
+} from './job-status-running.js';
 import { jobStatusSchema } from './schema.js';
 
 describe('isRunningJobStatus（9回目の横断レビュー指摘の唯一の正本）', () => {
@@ -51,5 +55,18 @@ describe('isRunningJobStatus（9回目の横断レビュー指摘の唯一の正
   it('知らない値は安全側（実行中として数える）へ倒れる', () => {
     const unknownStatus = 'not-yet-invented-status' as unknown as JobStatusLike;
     expect(isRunningJobStatus(unknownStatus)).toBe(true);
+  });
+
+  /**
+   * **`JOB_STATUS_LIKE_VALUES`（ブラウザ向けの軽い口の列挙）が
+   * `jobStatusSchema.options`（zod 側の列挙）と同じ集合であることの回帰
+   * （issue #2090）。** 手で複製した2つの列挙が静かにずれると、
+   * `JOB_STATUS_LIKE_VALUES.filter(isRunningJobStatus)` で組み立てる
+   * ダッシュボードの `/managers?status=` リンクが、実際の「実行中」の
+   * 母集合より狭く（または広く）なる——順序は問わず、集合として一致すれば
+   * よい。
+   */
+  it('JOB_STATUS_LIKE_VALUES は jobStatusSchema.options と同じ集合を持つ', () => {
+    expect(new Set(JOB_STATUS_LIKE_VALUES)).toEqual(new Set(jobStatusSchema.options));
   });
 });

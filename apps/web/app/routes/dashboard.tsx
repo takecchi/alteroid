@@ -1,4 +1,4 @@
-import { isRunningJobStatus } from '@alteroid/core/job-status-running';
+import { isRunningJobStatus, JOB_STATUS_LIKE_VALUES } from '@alteroid/core/job-status-running';
 import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
 import { Link } from 'react-router';
 
@@ -24,6 +24,7 @@ import {
 import { useJournalFeed } from '~/hooks/journal-feed';
 import { formatDateTime, formatRelative } from '~/lib/format';
 import { journalEntryLinks } from '~/lib/journal-links';
+import { managersHref } from '~/lib/managers-links';
 import { usageHref } from '~/lib/usage-links';
 
 import { ManagerStatusBadge } from './managers';
@@ -41,6 +42,17 @@ import { isUnavailable, UnavailableNote } from './reports';
 const APPROVAL_LIMIT = 5;
 const MANAGER_LIMIT = 5;
 const LIVE_LIMIT = 30;
+
+/**
+ * 「稼働中のマネージャー」カードの「一覧」が飛ぶ先の絞り込み（issue #2090）。
+ *
+ * カード自身の絞り込み（下の `running` の doc）と**同じ母集合**から作る——
+ * `running` を文字列で書き写すと、`isRunningJobStatus` が真にする状態が増えた
+ * 日にリンクだけ古びる。`JOB_STATUS_LIKE_VALUES` と `isRunningJobStatus` はどちらも
+ * `@alteroid/core/job-status-running`（zod を import しない軽い口）から取るので、
+ * ブラウザバンドルへ core 全体が入らない。
+ */
+const RUNNING_STATUSES = JOB_STATUS_LIKE_VALUES.filter(isRunningJobStatus);
 
 /**
  * 普段の接点。
@@ -201,7 +213,10 @@ export default function Dashboard() {
             <CardHeader
               title="稼働中のマネージャー"
               action={
-                <Link to="/managers" className="text-xs text-accent hover:underline">
+                <Link
+                  to={managersHref({ status: RUNNING_STATUSES })}
+                  className="text-xs text-accent hover:underline"
+                >
                   一覧
                 </Link>
               }

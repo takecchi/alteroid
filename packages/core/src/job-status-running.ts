@@ -46,6 +46,38 @@
 export type JobStatusLike = 'running' | 'waiting_human' | 'done' | 'failed' | 'lost' | 'stopped';
 
 /**
+ * {@link JobStatusLike} の全選択肢を、**値としても**列挙する（issue #2090）。
+ *
+ * ダッシュボード（`apps/web/app/routes/dashboard.tsx`）の「稼働中のマネージャー」
+ * カードの「一覧」リンクは、カード自身の絞り込み（{@link isRunningJobStatus}）と
+ * **同じ母集合**で `/managers?status=` を組み立てる必要がある——`running` を
+ * 文字列で書き写すと、{@link isRunningJobStatus} が真にする状態が増えた日に
+ * リンクだけ古びる（#2090 の本文）。**呼び出し側はここから
+ * `JOB_STATUS_LIKE_VALUES.filter(isRunningJobStatus)` の形で「実行中」の集合を
+ * 作る**——`job-status-running.test.ts` が同じ形で使っている
+ * `jobStatusSchema.options.filter(isRunningJobStatus)` と等価だが、こちらは
+ * zod を import しないこの軽い口（ブラウザ向け）だけで完結する。
+ *
+ * **`satisfies Record<JobStatusLike, true>` で網羅を縛ってある**
+ * （`schema.ts` の `journalEntryTypeNames` / `apps/web/app/routes/tokens.tsx` の
+ * `ROTATE_ON_OPTIONS` と同じ形）。{@link JobStatusLike} に選択肢が増えて
+ * ここへ足し忘れると、この定義そのものが `typecheck` を落とす——
+ * `_AssertJobStatusMatchesRunningLikeType`（`schema.ts`）が {@link JobStatusLike}
+ * を `jobStatusSchema` と揃える歯とは別に、こちらは {@link JobStatusLike} と
+ * この値の一覧を揃える歯である。
+ */
+const JOB_STATUS_LIKE_NAMES = {
+  running: true,
+  waiting_human: true,
+  done: true,
+  failed: true,
+  lost: true,
+  stopped: true,
+} satisfies Record<JobStatusLike, true>;
+
+export const JOB_STATUS_LIKE_VALUES = Object.keys(JOB_STATUS_LIKE_NAMES) as JobStatusLike[];
+
+/**
  * その値が「実行中」として件数に入るか。
  *
  * **型の網羅性で塞いだうえで、実行時の倒れ先も持つ**（AGENTS.md「型で塞いだ
