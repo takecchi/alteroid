@@ -899,8 +899,7 @@ async function readActiveOrUnreadable(store: TokenPoolStore): Promise<ActiveToke
  * 呼び出し元へそのまま投げる**（記憶ストアの接続断などを「設定が既定」に見せない）。
  */
 type SettingsRead =
-  | { readable: true; settings: TokenRotationSettings }
-  | { readable: false; reason: string };
+  { readable: true; settings: TokenRotationSettings } | { readable: false; reason: string };
 
 async function readSettingsOrUnreadable(store: TokenPoolStore): Promise<SettingsRead> {
   try {
