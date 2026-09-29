@@ -29,10 +29,10 @@ export const Default: Story = {
   args: {
     formatValue: usd,
     items: [
-      { label: 'claude-opus-5-5', value: 2.64 },
-      { label: 'claude-fable-5-1', value: 1.02 },
-      { label: 'claude-sonnet-5-5', value: 0.52 },
-      { label: 'claude-haiku-4-5-20251001', value: 0.03 },
+      { label: 'opus', value: 2.64 },
+      { label: 'fable', value: 1.02 },
+      { label: 'sonnet', value: 0.52 },
+      { label: 'haiku', value: 0.03 },
     ],
   },
 };

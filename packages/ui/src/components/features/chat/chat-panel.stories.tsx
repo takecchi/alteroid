@@ -19,14 +19,15 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-interface Line {
+/** 見本の固定の1行。 */
+interface SampleLine {
   key: string;
   role: 'human' | 'clone' | 'system';
   text: string;
   transient?: boolean;
 }
 
-const INITIAL: Line[] = [
+const FIXED: readonly SampleLine[] = [
   { key: '1', role: 'human', text: '来週の登壇資料、構成案だけ先に作っておいて。' },
   {
     key: '2',
@@ -40,30 +41,42 @@ const INITIAL: Line[] = [
   },
 ];
 
+/**
+ * **見本が持つのは「最後の1往復」だけである**（行の配列を state に積まない）。
+ *
+ * やりとりの行を state に積み増す形は、画面では `chat.tsx` の1箇所だけに許してある
+ * （`scripts/chat-lines-bounded.test.ts`。刈る規則 `retainedBy` を迂回できる2つ目の
+ * 入れ物を作らないため）。見本でも同じ形を作らない——送るたびに最後の1往復を
+ * 置き換えるので、何度送っても増えない。
+ */
 function Panel() {
-  const [lines, setLines] = useState<Line[]>(INITIAL);
+  const [exchange, setExchange] = useState<{ text: string; reply: string | null } | null>(null);
   const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
+  const sending = exchange !== null && exchange.reply === null;
 
   const send = () => {
     const text = draft.trim();
     if (text === '') return;
     setDraft('');
-    setSending(true);
-    const key = String(Date.now());
-    setLines((all) => [
-      ...all,
-      { key, role: 'human', text },
-      { key: `${key}-t`, role: 'system', text: '考えている…', transient: true },
-    ]);
+    setExchange({ text, reply: null });
     setTimeout(() => {
-      setLines((all) => [
-        ...all.filter((line) => line.transient !== true),
-        { key: `${key}-r`, role: 'clone', text: `受け取った。「${text}」を記憶に照らして考える。` },
-      ]);
-      setSending(false);
+      setExchange((current) =>
+        current?.text === text
+          ? { text, reply: `受け取った。「${text}」を記憶に照らして考える。` }
+          : current,
+      );
     }, 1400);
   };
+
+  const lines: SampleLine[] = [...FIXED];
+  if (exchange !== null) {
+    lines.push({ key: 'sent', role: 'human', text: exchange.text });
+    lines.push(
+      exchange.reply === null
+        ? { key: 'thinking', role: 'system', text: '考えている…', transient: true }
+        : { key: 'reply', role: 'clone', text: exchange.reply },
+    );
+  }
 
   return (
     <div className="flex h-dvh">
@@ -100,7 +113,7 @@ function Panel() {
           onChange={setDraft}
           onSend={send}
           sending={sending}
-          onStopReceiving={() => setSending(false)}
+          onStopReceiving={() => setExchange(null)}
         />
       </div>
     </div>
