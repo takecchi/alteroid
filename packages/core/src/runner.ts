@@ -40,6 +40,7 @@ import type {
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
+import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
@@ -4031,7 +4032,13 @@ class RunnerSession {
     const resolved = this.#resolved.get(id);
     if (resolved !== undefined) return resolved;
 
-    const kind = toolName === 'AskUserQuestion' ? 'question' : 'permission';
+    // **分け方の出所はここ1行——`isDaemonAnsweredTool`（`daemon-answered-tool.ts`）
+    // へ切り出した（Issue #2173）。挙動は変えていない**（`isDaemonAnsweredTool`
+    // は `name === 'AskUserQuestion'` と同じ真偽値を返すだけの関数）——
+    // `manager-activity.ts` の `classifyManagerActivity` が同じ分け方を
+    // 「デーモンの `waiting` が空なのが矛盾かどうか」の判定に使うため、
+    // 判定のコピーを2つ作らないようにここへ寄せた。
+    const kind = isDaemonAnsweredTool(toolName) ? 'question' : 'permission';
     const summary =
       kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
     // **ここで1度だけ取る（#334）。** `state()` も `ask` イベントもこの値を

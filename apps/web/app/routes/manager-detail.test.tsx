@@ -1696,8 +1696,40 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
     });
   });
 
-  describe('toolUseStallAt / toolUseStallPending（Issue #572）', () => {
-    it('未応答の道具があり、返事待ちが空なら注記を出す', async () => {
+  describe('toolUseStallAt / toolUseStallPending（Issue #572 / #2173）', () => {
+    /**
+     * （以下は 2026-09-29 以前の形。issue #2173 で反転）直す前はここが
+     * `Bash`（応答をデーモンではなく SDK 自身が待つ、ふつうの道具）でも
+     * 注記が出ることを固定していたが、それは #2173 が見つけた誤検知
+     * そのものだった——既定の `permissionMode: 'auto'` では `Bash` の確認は
+     * `canUseTool` を一度も通らないので、`waiting` が空なのは矛盾ではなく
+     * 実行中なだけである。**この注記の対象は、応答をデーモンだけが返す
+     * 道具（`AskUserQuestion`）に絞った**——`classifyManagerActivity`
+     * （`@alteroid/core/manager-activity`）が `'stalled-tool-use'` を返す
+     * ときだけ描く。
+     */
+    it('未応答の道具（AskUserQuestion）があり、返事待ちが空なら注記を出す', async () => {
+      renderDetail({
+        ...BASE,
+        status: 'running',
+        toolUseStallAt: '2026-08-16T03:40:00.000Z',
+        toolUseStallPending: [{ id: 'tu-1', name: 'AskUserQuestion' }],
+        waiting: [],
+      });
+
+      expect(
+        await screen.findByText(/道具の応答待ちのまま、誰もその応答を待っていない/),
+      ).toBeTruthy();
+      expect(screen.getByText(/未応答の道具: AskUserQuestion\(tu-1\)/)).toBeTruthy();
+    });
+
+    /**
+     * Issue #2173 の直し——未応答の道具が `Bash` のような**ふつうの道具**
+     * だけなら、`waiting` が空でも矛盾ではない（実行中なだけ）。誤って
+     * 「誰も待っていない」の注記を出さないことを確かめる（直す前はここが
+     * 赤くなった）。
+     */
+    it('未応答の道具が Bash（ふつうの道具）だけなら、返事待ちが空でも注記を出さない（Issue #2173）', async () => {
       renderDetail({
         ...BASE,
         status: 'running',
@@ -1706,10 +1738,9 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
         waiting: [],
       });
 
-      expect(
-        await screen.findByText(/道具の応答待ちのまま、誰もその応答を待っていない/),
-      ).toBeTruthy();
-      expect(screen.getByText(/未応答の道具: Bash\(tu-1\)/)).toBeTruthy();
+      // 読み込みが終わったことを、他の欄で確かめてから「無い」を見に行く。
+      expect(await screen.findByText('PR を出して')).toBeTruthy();
+      expect(screen.queryByText(/道具の応答待ちのまま、誰もその応答を待っていない/)).toBeNull();
     });
 
     it('デーモン側の返事待ちが在れば、正常な待ちなので出さない（矛盾ではない）', async () => {
@@ -1865,7 +1896,11 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       },
       resetTimeSkewMatch: 'stale',
       toolUseStallAt: '2026-08-16T03:40:00.000Z',
-      toolUseStallPending: [{ id: 'tu-1', name: 'Bash' }],
+      // **Issue #2173 で `Bash` → `AskUserQuestion` に変えた。** この歯の狙いは
+      // 「注記が描かれたときに `**` の写し残しが無いか」であって道具の識別では
+      // ないので、注記が実際に描かれる（`classifyManagerActivity` が
+      // `'stalled-tool-use'` を返す）道具名に変えて狙いを保った。
+      toolUseStallPending: [{ id: 'tu-1', name: 'AskUserQuestion' }],
       waiting: [],
       lastUnpushedWorkObservation: {
         kind: 'observed',

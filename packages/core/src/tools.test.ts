@@ -8395,6 +8395,13 @@ describe('クローンの道具', () => {
     /**
      * **切ったことは必ず言う**（`MANAGER_WAITING_LIST_LIMIT` と同じ作法）。
      * 黙って落とすと「3件しか止まっていない」に見える。
+     *
+     * **この歯の狙い（件数の切り方）は ⚠ かどうかとは無関係。** `Bash` は
+     * Issue #2173 で `'tool-running'`（実行中。⚠ ではない）に分類されるように
+     * なったが、「ほか N 件、全 N 件」という切り方の文言は `describeToolUseStall`
+     * の中で ⚠ 行と実行中行の両方が共有している（`countNote`）ので、この歯は
+     * 道具の名前も期待値も変えずに緑のまま通る——狙いが ⚠ の有無ではなく件数の
+     * 切り方だったことが、このテストが無改造で生き残ったことそのものから分かる。
      */
     it('未応答の道具が上限を超えたら、切ったことと全件数を言う', async () => {
       const h = harness();
@@ -8428,6 +8435,70 @@ describe('クローンの道具', () => {
 
       expect(reply).toContain('時刻の閾値は置いていない');
       expect(reply).toContain('timestamp を読んで判断すること');
+    });
+  });
+
+  describe('manager_list は「道具を実行中なだけ（矛盾ではない）」を出す（Issue #2173）', () => {
+    /**
+     * ⚠️⚠️ 本命の直し。**直す前はここが ⚠ を出していた**（#572 の3条件だけで
+     * 判定していたため）。`Bash` は応答をデーモンではなく SDK 自身が待つ、
+     * ふつうの道具（`isDaemonAnsweredTool('Bash') === false`）——既定の
+     * `permissionMode: 'auto'` ではその確認は `canUseTool` を一度も通らない
+     * ので、`waiting` が空なのは矛盾ではなく実行中なだけである。
+     */
+    it('未応答の道具がふつうの道具（Bash）だけなら、⚠ を出さず「実行中」の行を出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
+      target.toolUseStallPending = [{ id: 'toolu_bash', name: 'Bash' }];
+      // waiting は空のまま（＝実行中のふつうの道具には元々 waiting が立たない）。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).not.toContain('⚠ 道具の応答待ちのまま');
+      expect(reply).toContain('道具を実行中');
+      expect(reply).toContain('未応答の道具: Bash(toolu_bash)');
+    });
+
+    /**
+     * 未応答の道具に確認系（`AskUserQuestion`）が1件でも混ざっていれば、
+     * ふつうの道具（`Bash`）が同居していても #572 の症状のほうを優先する
+     * ——`Bash` の存在で `AskUserQuestion` の矛盾を覆い隠さない
+     * （`classifyManagerActivity` の doc「1件でも満たせば `stalled-tool-use`
+     * 側に倒す」）。
+     */
+    it('AskUserQuestion と Bash が混ざっていれば、⚠ のほうを出す', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallAt = '2026-08-28T09:10:00.000Z';
+      target.toolUseStallPending = [
+        { id: 'toolu_bash', name: 'Bash' },
+        { id: 'toolu_ask', name: 'AskUserQuestion' },
+      ];
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('⚠ 道具の応答待ちのまま');
+      expect(reply).not.toContain('道具を実行中');
+    });
+
+    it('「実行中」の行も時刻の閾値を置かない', async () => {
+      const h = harness();
+      await h.call('manager_start', { request: 'A' });
+      const target = h.running[0];
+      if (!target) throw new Error('準備に失敗');
+      target.toolUseStallPending = [{ id: 'toolu_bash', name: 'Bash' }];
+      // toolUseStallAt はセットしない（行に timestamp が無かった形）。
+
+      const reply = await h.call('manager_list', {});
+
+      expect(reply).toContain('道具を実行中');
+      expect(reply).toContain('いつからかは分からない');
+      expect(reply).toContain('時刻の閾値は置いていない');
     });
   });
 

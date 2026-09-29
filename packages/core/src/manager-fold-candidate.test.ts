@@ -101,7 +101,7 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
   // ------------------------------------------------------------------
   // 条件4: classifyManagerActivity が 'active' であること
   // ------------------------------------------------------------------
-  it.each(['unknown', 'stalled-turn-end', 'stalled-tool-use'] as const)(
+  it.each(['unknown', 'stalled-turn-end', 'stalled-tool-use', 'tool-running'] as const)(
     '状態の判定が %s なら候補にしない（条件4。unknown を「手が空いている」へ倒さない）',
     (activityKind) => {
       const input = baseInput({ activityKind });

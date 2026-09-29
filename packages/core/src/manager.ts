@@ -3594,6 +3594,21 @@ function collectToolResultIds(content: unknown, sink: Set<string>): void {
  * のはデーモンのはずだからである。閾値を置くと、それより短い窓の症状が
  * 出力から消える（#572 の実例は 91 分だったが、それは症状の下限ではない）。
  *
+ * **⚠️ ただし直上の前提（「道具を回しているなら、その応答を待っているのは
+ * デーモンのはず」）は、ふつうの道具には成り立たなかった（Issue #2173）。**
+ * 前提が成り立つのは、SDK がその道具の確認を `canUseTool`
+ * （`runner.ts` の `#onPermission`）へ実際に降ろす場合だけである。既定の
+ * `permissionMode: 'auto'` では `Bash`・前景の `Agent`・`WebFetch` などの
+ * **ふつうの道具**は `canUseTool` を一度も通らない——デーモンはそもそも
+ * その道具の応答を待つ立場に無いので、`record.waiting` が空でも矛盾には
+ * ならない（ただ実行中なだけ）。**この関数自身は直していない**——ここが
+ * 返すのは「SDK が応答を待っているらしい」という生の事実だけで、それは
+ * 道具の種類によらず正しい。**直したのは読む側**——`waiting` が空という
+ * 事実を「矛盾（止まっている）」と読むか「正常（実行中）」と読むかの分岐を、
+ * 未応答の道具の名前（`isDaemonAnsweredTool`。`daemon-answered-tool.ts`）で
+ * 分けるようにした（`manager-activity.ts` の `classifyManagerActivity` が
+ * `'stalled-tool-use'` と `'tool-running'` の2状態に分けて返す）。
+ *
  * 規則（1〜4 は `probeTurnEnd` と**同じ窓・同じ選び方**）:
  * 1. 末尾から `TURN_END_PROBE_CHARS` 文字だけを切り出す。切り出したら先頭の
  *    1行を捨てる（途中で切れた行の可能性があるため）。

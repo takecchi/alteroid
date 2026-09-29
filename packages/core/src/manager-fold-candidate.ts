@@ -105,8 +105,12 @@ export interface ManagerFoldCandidateInput {
   /**
    * 条件4の材料。`classifyManagerActivity`（`manager-activity.ts`）の結果。
    * `'active'` 以外（`'unknown'` ・ `'stalled-turn-end'` ・
-   * `'stalled-tool-use'`）は候補にしない——`'unknown'`（判定できない）を
-   * 「手が空いている」へ倒さない。
+   * `'stalled-tool-use'` ・ `'tool-running'`（Issue #2173 で追加））は候補に
+   * しない——`'unknown'`（判定できない）を「手が空いている」へ倒さない。
+   * **`'tool-running'` も同じ側**——条件1（`status === 'done'`）と両立する
+   * ことは構造的に無い（`toolUseStallPending` を書く `probeTurnEnds` は
+   * `status === 'running'` のときしか動かない）ので実害は無いが、`!==
+   * 'active'` という判定式は5値のどれであっても正しく弾く。
    */
   readonly activityKind: ManagerActivityKind;
   /**

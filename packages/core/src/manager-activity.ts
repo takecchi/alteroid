@@ -1,3 +1,4 @@
+import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { describeValidity, statusValidity } from './inbox-validity.js';
 import type { JobStatus } from './schema.js';
 
@@ -38,8 +39,19 @@ import type { JobStatus } from './schema.js';
  *   次の一手: `manager_report` / `manager_transcript` を見る。起こし直さない。
  * - `'stalled-tool-use'` — **止まっている（道具待ち型）。** 生ログ末尾が
  *   `stop_reason: 'tool_use'` で、対応する `tool_result` が生ログに無く、
- *   かつデーモン側の `waiting` も空（Issue #572 の形）。次の一手:
- *   `manager_transcript` で末尾を読み、`manager_stop` するかどうかを判断する。
+ *   かつデーモン側の `waiting` も空で、**かつ未応答の道具の中に応答を
+ *   デーモンだけが返せるもの（`isDaemonAnsweredTool`。`AskUserQuestion` や
+ *   `permissionMode` が `auto` 以外のときの通常の許可確認）が1件以上ある**
+ *   （Issue #572 の形）。次の一手: `manager_transcript` で末尾を読み、
+ *   `manager_stop` するかどうかを判断する。
+ * - `'tool-running'` — **止まっていない（道具を実行中）。** 上と同じ3条件
+ *   （末尾が `tool_use`・`tool_result` が無い・`waiting` が空）が揃っていて
+ *   も、未応答の道具が**すべて** `isDaemonAnsweredTool` を満たさない
+ *   （＝`Bash`・前景の `Agent` など、既定の `permissionMode: 'auto'` では
+ *   `canUseTool` を一度も通らないふつうの道具だけ）なら、応答を待っている
+ *   のは SDK 自身であって、デーモンの `waiting` が空なのは矛盾ではない
+ *   （Issue #2173——`stalled-tool-use` がここも一律に拾っていたのが誤報の
+ *   原因だった）。次の一手: 何もしない（急かさない）。
  * - `'active'` — **進んでいる／正常な待ち。** 上のどちらでもなく、観測は在る
  *   （ターンは正常に終わって報告済み、または道具の応答待ちだが誰かが
  *   `waiting` で待っている）。次の一手: 何もしない。
@@ -48,7 +60,8 @@ import type { JobStatus } from './schema.js';
  *   record が無い、など）。**`'active'` へ倒さない**——依頼者が待つか諦める
  *   かを決める分かれ目である。次の一手: 判定材料が揃うまで待つ（急かさない）。
  */
-export type ManagerActivityKind = 'stalled-turn-end' | 'stalled-tool-use' | 'active' | 'unknown';
+export type ManagerActivityKind =
+  'stalled-turn-end' | 'stalled-tool-use' | 'tool-running' | 'active' | 'unknown';
 
 /**
  * `classifyManagerActivity` への入力。
@@ -107,8 +120,27 @@ function isTurnEndStalled(
 }
 
 /**
- * マネージャー1本の「止まっている／進んでいる／判定できない」を判定する
- * 純関数。このファイル冒頭の doc を参照。
+ * `toolUseStallPending` の中に、応答をデーモン（＝クローン）だけが返せる道具
+ * （{@link isDaemonAnsweredTool}）が1件でもあるか（Issue #2173）。
+ *
+ * **name の無い pending は「満たす」側に数える。** `PendingToolUse.name` は
+ * SDK が書かない・文字列でない形で欄ごと落ちることがある（`manager.ts` の
+ * `PendingToolUse` の doc）——「判定できない」を「症状ではない」へ倒さない
+ * のが `describeTurnEnd` / `describeToolUseStall` の一貫した原則で、ここも
+ * 同じ向きに倒す。**名前が取れなかった道具を、安全側（=ふつうの道具だと
+ * 決め打つ側）へ黙って倒さない**——正体不明のまま `'tool-running'`（何もし
+ * なくてよい、という結論）へ落とすと、本当に #572 の症状だったときに
+ * 見逃しが生まれる。
+ */
+function hasDaemonAnsweredStallTrigger(
+  pending: NonNullable<ManagerActivityInput['toolUseStallPending']>,
+): boolean {
+  return pending.some((item) => item.name === undefined || isDaemonAnsweredTool(item.name));
+}
+
+/**
+ * マネージャー1本の「止まっている／道具を実行中／進んでいる／判定できない」を
+ * 判定する純関数。このファイル冒頭の doc を参照。
  *
  * **切らない・殺さない・止めない。** ここが何を返しても呼び出し元の `status`
  * は動かない——`describeTurnEnd` / `describeToolUseStall` / `flushWithheldReports`
@@ -118,6 +150,22 @@ function isTurnEndStalled(
  * いるので同時には立たない**（`manager.ts` の `probeTurnEnd` / `probeToolUseStall`
  * の doc）。ここではその前提を強制しない——万一両方が入力に立っていたら、
  * ターン終わり型を優先する（`manager.ts` 側の計算順序と同じ順）。
+ *
+ * **`stalled-tool-use` と `tool-running` の分かれ目（Issue #2173）。** 道具
+ * 待ち型の3条件（末尾が `tool_use`・対応する `tool_result` が無い・
+ * `waiting` が空）が揃っても、それだけでは矛盾と言えない——道具を回して
+ * いるなら、その応答を待っているのはデーモンのはずだ、という前提
+ * （`manager.ts` の `probeToolUseStall` の doc）は、**確認が
+ * `canUseTool`（`runner.ts` の `#onPermission`）を通る道具にしか成り立た
+ * ない。** 既定の `permissionMode: 'auto'` では `Bash`・前景の `Agent`・
+ * `WebFetch` などの**ふつうの道具**は `canUseTool` を一度も通らないので、
+ * これらが `toolUseStallPending` に載っていても `waiting` は構造的に空の
+ * まま——矛盾ではなく、ただ実行中なだけである。**だから 未応答の道具の中に
+ * `isDaemonAnsweredTool` を満たすものが1件でもあるときだけ `stalled-tool-use`
+ * とし、無ければ `tool-running` にする**（`hasDaemonAnsweredStallTrigger`）。
+ * 1件でも満たせば `stalled-tool-use` 側に倒す——`AskUserQuestion` と `Bash`
+ * が混ざっている（並行して両方を投げている）ときに、`AskUserQuestion` 側の
+ * 矛盾を `Bash` の存在で覆い隠さないため。
  */
 export function classifyManagerActivity(input: ManagerActivityInput): ManagerActivityKind {
   const hasTurnEndObservation = input.turnEndReason !== undefined;
@@ -131,7 +179,7 @@ export function classifyManagerActivity(input: ManagerActivityInput): ManagerAct
   }
 
   if (hasToolUseStallObservation && input.waitingCount === 0) {
-    return 'stalled-tool-use';
+    return hasDaemonAnsweredStallTrigger(pending) ? 'stalled-tool-use' : 'tool-running';
   }
 
   return 'active';
@@ -141,12 +189,12 @@ export function classifyManagerActivity(input: ManagerActivityInput): ManagerAct
  * `flushWithheldReports()`（`manager.ts`）が配る短い1行。**畳んだ本文の全文
  * ではなく、状態と次の一手だけを言う**——全文は日誌に在る（`journal_read`）。
  *
- * **4状態すべてで必ず非空文字を返す。** かつては `'active'` を空文字（何も
+ * **5状態すべてで必ず非空文字を返す。** かつては `'active'` を空文字（何も
  * 足さない）にしていたが、それだと flush の文面から「判定の行そのものが
  * 無い」ときに2つの意味が生まれてしまう——(a) `'active'` だった（進んで
  * いるので言うことが無い）／(b) 判定の結線が壊れて1行も足されなかった。
  * **この2つが字面で区別できないのは「静かに失敗する形」そのものである**
- * （依頼者の守る線）。だから `'active'` も他の3状態と同じく必ず字を出す
+ * （依頼者の守る線）。だから `'active'` も他の状態と同じく必ず字を出す
  * ——`tools.ts` の `describeTurnEnd` / `describeToolUseStall`（一覧。`null`
  * で黙る）とは事情が違う。あちらは**全マネージャーを毎回並べる**ので健全な
  * 行を出すと一覧がそのぶん膨らむが、flush の文面は**既に異常（30分、本報告
@@ -154,6 +202,11 @@ export function classifyManagerActivity(input: ManagerActivityInput): ManagerAct
  * 費用は無視できる。
  *
  * - `'stalled-turn-end'` / `'stalled-tool-use'` ⟹ **⚠** を出す
+ * - `'tool-running'` ⟹ **⚠ は付けない**（Issue #2173——道具を実行中なだけで
+ *   止まっている兆候ではない）。「実行中」「急かさなくてよい」と読める字を
+ *   出す——`'active'` と同じく警告ではないが、`toolUseStallPending` が非空
+ *   である（＝道具は走っている）ことは`'active'`より具体的に言えるので、
+ *   字面は分ける
  * - `'active'` ⟹ **⚠ は付けない**（警告ではない）が、「進んでいる／
  *   止まっている兆候は無い」と読める字を出す
  * - `'unknown'` ⟹ **「判定できない」と分かる文字**を出す。**`'active'`
@@ -172,6 +225,12 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
       return (
         ' ⚠ この委譲は道具の応答待ちのまま、誰もその応答を待っていない' +
         '（#572 の形）。manager_list で `toolUseStallPending` を確かめること。'
+      );
+    case 'tool-running':
+      return (
+        ' 道具（Bash など、pending の name を最大数件）を実行中。' +
+        '止まっている兆候ではない（Issue #2173）。manager_list で ' +
+        '`toolUseStallPending` の name を確かめること。急かさなくてよい。'
       );
     case 'unknown':
       return (

@@ -39,14 +39,15 @@ function pending(id = 'toolu_1'): ManagerActivityInput['toolUseStallPending'] {
 const ALL_MANAGER_ACTIVITY_KINDS = {
   'stalled-turn-end': true,
   'stalled-tool-use': true,
+  'tool-running': true,
   active: true,
   unknown: true,
 } satisfies Record<NonNullable<ManagerActivityKind>, true>;
 
-describe('classifyManagerActivity — 4状態の網羅（依頼者の守る線: 「無い」の種類を潰さない）', () => {
-  it('4状態すべてがこの一覧に載っている（Object.keys で数え上げる歯）', () => {
+describe('classifyManagerActivity — 5状態の網羅（依頼者の守る線: 「無い」の種類を潰さない）', () => {
+  it('5状態すべてがこの一覧に載っている（Object.keys で数え上げる歯）', () => {
     expect(Object.keys(ALL_MANAGER_ACTIVITY_KINDS).sort()).toEqual(
-      ['active', 'stalled-tool-use', 'stalled-turn-end', 'unknown'].sort(),
+      ['active', 'stalled-tool-use', 'stalled-turn-end', 'tool-running', 'unknown'].sort(),
     );
   });
 
@@ -144,6 +145,67 @@ describe('classifyManagerActivity — 4状態の網羅（依頼者の守る線: 
     });
   });
 
+  describe('道具を実行中（tool-running。Issue #2173）', () => {
+    /**
+     * ⚠️⚠️ #2173 の本命の歯。**未応答の道具が `Bash`（応答をデーモンでは
+     * なく SDK 自身が待つ、ふつうの道具）だけなら、`waiting` が空でも
+     * 矛盾ではない。** 直す前はここも `'stalled-tool-use'` に落ちていた
+     * （道具の名前を見ていなかったため）。
+     */
+    it('Bash が pending で waiting が空 ⟹ tool-running（stalled-tool-use ではない）', () => {
+      expect(
+        classifyManagerActivity({
+          toolUseStallPending: [{ id: 'toolu_bash', name: 'Bash' }],
+          waitingCount: 0,
+        }),
+      ).toBe('tool-running');
+    });
+
+    it('Agent が pending で waiting が空 ⟹ tool-running（作業者が走っている最中でも矛盾ではない）', () => {
+      expect(
+        classifyManagerActivity({
+          toolUseStallPending: [{ id: 'toolu_agent', name: 'Agent' }],
+          waitingCount: 0,
+        }),
+      ).toBe('tool-running');
+    });
+
+    it('AskUserQuestion と Bash が混ざっていれば stalled-tool-use（Bash の存在で覆い隠さない）', () => {
+      expect(
+        classifyManagerActivity({
+          toolUseStallPending: [
+            { id: 'toolu_bash', name: 'Bash' },
+            { id: 'toolu_ask', name: 'AskUserQuestion' },
+          ],
+          waitingCount: 0,
+        }),
+      ).toBe('stalled-tool-use');
+    });
+
+    /**
+     * **name の無い pending は「判定できない」を「症状ではない」へ倒さない**
+     * ——`isDaemonAnsweredTool` を満たすかどうか自体が分からないので、
+     * 安全側（stalled-tool-use。見逃さない側）へ倒す。
+     */
+    it('name の無い pending なら stalled-tool-use（判定できないものを tool-running へ倒さない）', () => {
+      expect(
+        classifyManagerActivity({
+          toolUseStallPending: [{ id: 'toolu_noname' }],
+          waitingCount: 0,
+        }),
+      ).toBe('stalled-tool-use');
+    });
+
+    it('waiting が非空なら tool-running にもならず active（正常な待ち）', () => {
+      expect(
+        classifyManagerActivity({
+          toolUseStallPending: [{ id: 'toolu_bash', name: 'Bash' }],
+          waitingCount: 1,
+        }),
+      ).toBe('active');
+    });
+  });
+
   describe('進んでいる／正常な待ち（active）', () => {
     it('turnEndedAt <= lastReportAt（ターンが終わった後に報告が届いている）⟹ 進んでいる', () => {
       expect(
@@ -186,6 +248,15 @@ describe('describeManagerActivityForFlush — flush が配る短い1行', () => 
     const line = describeManagerActivityForFlush('active');
     expect(line).toContain('進んでいる');
     expect(line).not.toContain('⚠');
+  });
+
+  it('tool-running は「実行中」と読める字を出す。⚠ は付けない（Issue #2173）', () => {
+    const line = describeManagerActivityForFlush('tool-running');
+    expect(line).toContain('実行中');
+    expect(line).not.toContain('⚠');
+    // **active とは字面で区別できる**——「進んでいるだけ」ではなく道具を
+    // 実行中だと具体的に言えることは active より情報がある。
+    expect(line).not.toBe(describeManagerActivityForFlush('active'));
   });
 
   it('unknown は「判定できない」と分かる文字を出す。⚠ は付けない（症状の断定ではないため字面で区別する）', () => {

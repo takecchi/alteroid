@@ -3498,9 +3498,15 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
 
 /**
  * 一覧に添える、「**道具の応答待ちのまま、誰も待っていない**」という矛盾への
- * 助言（Issue #572）。**判定はここで行う** — `ManagerSummary.toolUseStallPending`
- * の doc が「3条件目との突き合わせは読む側が行う」と書いている、その読む側が
- * この関数である（`describeTurnEnd` と同じ層の分け方）。
+ * 助言（Issue #572）、および「道具を実行中なだけ」という正常形の注記
+ * （Issue #2173）。**判定はここで行わない** — `ManagerSummary.toolUseStallPending`
+ * の doc が「3条件目との突き合わせは読む側が行う」と書いている、その読む側は
+ * `classifyManagerActivity`（`manager-activity.ts`）であり、この関数は
+ * **その結果から、どちらの文面を出すかを選ぶだけ**である（`describeTurnEnd`
+ * と同じ層の分け方）。**判定のコピーを2つ作らない**（`manager-activity.ts`
+ * 冒頭の doc）——3条件目（`waiting` が空か）も、Issue #2173 で足した4条件目
+ * （未応答の道具に `isDaemonAnsweredTool` を満たすものが在るか）も、ここでは
+ * 判定し直さない。
  *
  * **切らない・殺さない・止めない。** ここが何を返しても `status` は動かず、
  * どの委譲も abort しない、貸し出し期限も縮まない——伝えるだけである。
@@ -3511,7 +3517,7 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
  * 3. **デーモンの `waiting` が空**（＝誰もその応答を待っていない）
  *
  * 1・2 は `probeToolUseStall` が生ログから計算して `toolUseStallPending` へ
- * 載せる。**3 をここで見る。**
+ * 載せる。**3 は `classifyManagerActivity` が見る。**
  *
  * **⚠️ `waiting` が非空なら1文字も出さない。** それは「確認は届いていて、
  * クローンがまだ答えていないだけ」という**正常な状態**であり、一覧には既に
@@ -3519,28 +3525,34 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
  * 済むものが異常に見える。**#572 の症状は「受信箱に一度も現れない」ことの
  * ほうである。**
  *
+ * **Issue #2173 — 3条件だけでは矛盾と言えなかった。** 道具を回しているなら
+ * その応答を待っているのはデーモンのはず、という前提（`probeToolUseStall`
+ * の doc）は、確認が実際に `canUseTool`（`runner.ts` の `#onPermission`）を
+ * 通る道具にしか成り立たない。既定の `permissionMode: 'auto'` では
+ * `Bash`・前景の `Agent` などの**ふつうの道具**はここを一度も通らないので、
+ * これらが `toolUseStallPending` に載っていても `waiting` は構造的に空の
+ * まま——矛盾ではなく、ただ実行中なだけである。**だから
+ * `classifyManagerActivity` の結果で分岐する**——`'stalled-tool-use'`
+ * （未応答の道具の中に `isDaemonAnsweredTool` を満たすものが1件以上、
+ * つまり本物の #572 の形）なら ⚠ を出し、`'tool-running'`（全部ふつうの
+ * 道具）なら ⚠ を付けない「実行中」の注記に替える。**旧来の4分岐の文言
+ * （#601）のうち、末尾の「それ以外（Agent など）なら…区別できない」という
+ * 一文はここで役目を終える**——あの一文が言っていた「区別できない」形は、
+ * いまは `classifyManagerActivity` が計算で分けるので、⚠ 側にはもう出ない。
+ *
  * **⚠️ 時刻の閾値を1つも置かない。** 「何分経ったか」はここでは判定しない。
- * 道具を回しているなら、その応答を待っているのはデーモンのはずである——
- * **デーモンが待っていないのに SDK が待っているのは、時刻に関係なく矛盾で
- * ある。** 閾値を置くと、それより短い窓の症状が出力から消える（#572 の実例は
+ * 閾値を置くと、それより短い窓の症状が出力から消える（#572 の実例は
  * 91 分だったが、それは症状の下限ではない）。**経過は読み手（人間）が
  * `toolUseStallAt` を読んで判断する。**
  *
- * **⚠️ 助言は「確かめること」で終えず、分岐して1つの手に着地させる**（#572 の
- * 条件4）。この旗が立つ形は4つあり、**次の一手はそれぞれ別である**——
- * (1) 旗が凍っているだけ（読み捨てる） (2) 委譲が枠の壁で死んだ残骸
+ * **⚠️ ⚠ 側の助言は「確かめること」で終えず、分岐して1つの手に着地させる**
+ * （#572 の条件4）。この旗が立つ形は3つあり、**次の一手はそれぞれ別である**
+ * ——(1) 旗が凍っているだけ（読み捨てる） (2) 委譲が枠の壁で死んだ残骸
  * （`manager_stop` して引き継ぐ） (3) #572 の症状そのもの（**確認の本文を
- * 生ログから写してから** `manager_stop` して引き継ぐ） (4) 未応答の道具が
- * `Agent` で、作業者が走っている最中（止めずに待つ）。「生ログの末尾を
+ * 生ログから写してから** `manager_stop` して引き継ぐ）。「生ログの末尾を
  * 確かめること」までしか言わないと、確かめた後の分岐が読み手の記憶の中にしか
- * 無い状態になる——**実際に踏んだクローンは4手のうち3手を記憶から補っていた。**
- *
- * **⚠️ (4) を落とさないこと。** 3条件は `Agent` の正常な長時間実行でも揃い
- * うる、と #572 が記録している（`Agent` の `tool_use` は `canUseTool` を
- * 通らないので `waiting` が空になる、という筋。**この repo では実測して
- * いない——#572 側でも演繹として置かれている**）。**分岐を (3) で終わらせる
- * と、この形だけが次の一手を持たないまま読み手の手元に残る**ので、確度が
- * 足りないほうへ倒さず、「止めずに待つ」という無害な手を1つ置いてある。
+ * 無い状態になる——**実際に踏んだクローンは3手のうち一部を記憶から補って
+ * いた（#601）。**
  *
  * **順番は費用の順である。** (1) は一覧に既に出ている状態表示を見るだけで
  * 済み、往復が要らない。⚠️ **旗は `running` のときにしか書き換わらない**
@@ -3561,10 +3573,11 @@ function describeToolUseStall(manager: ManagerSummary): string | null {
   const pending = manager.toolUseStallPending;
   if (pending === undefined || pending.length === 0) return null;
   // **判定そのものは `classifyManagerActivity` へ切り出してある**
-  // （`manager-activity.ts`）。3条件目（`waiting` が空か）もそちらで見ている
-  // ——ここでの分岐はもう判定をやり直さない。字面はここでは1バイトも
-  // 変えていない。
-  if (classifyManagerActivity(managerActivityInputOf(manager)) !== 'stalled-tool-use') {
+  // （`manager-activity.ts`）。3条件目（`waiting` が空か）も、Issue #2173 で
+  // 足した4条件目（未応答の道具の名前）もそちらで見ている——ここでの分岐は
+  // もう判定をやり直さない。
+  const activity = classifyManagerActivity(managerActivityInputOf(manager));
+  if (activity !== 'stalled-tool-use' && activity !== 'tool-running') {
     return null;
   }
 
@@ -3572,19 +3585,36 @@ function describeToolUseStall(manager: ManagerSummary): string | null {
   const rest = pending.length - shown.length;
   const names = shown.map((item) => `${item.name ?? '（name 不明）'}(${item.id})`).join(' / ');
   // **`toolUseStallAt` が無い形をここで潰さない。** 行に `timestamp` が
-  // 無かっただけで、矛盾そのものは成立している（`describeTurnEnd` の (A) と
-  // 同じ原則——「分からない」を「症状ではない」へ倒さない）。
+  // 無かっただけで、矛盾（または実行中）そのものは成立している
+  // （`describeTurnEnd` の (A) と同じ原則——「分からない」を「症状ではない」
+  // へ倒さない）。
   const whenNote =
     manager.toolUseStallAt === undefined
       ? 'その行に timestamp が無かったので、いつからかは分からない'
       : `その行の timestamp は ${manager.toolUseStallAt}`;
+  const countNote =
+    `未応答の道具: ${names}` +
+    (rest > 0 ? `（ほか ${rest} 件、全 ${pending.length} 件）` : '') +
+    `。${whenNote}。`;
+
+  if (activity === 'tool-running') {
+    return (
+      '  道具を実行中（矛盾ではない。Issue #2173）。' +
+      '生ログの末尾の assistant 行が stop_reason: tool_use で、対応する tool_result が生ログに無く、' +
+      'デーモン側の返事待ち（waiting）も空だが、未応答の道具はどれも応答をデーモンだけが返す種類' +
+      '（AskUserQuestion 等）ではない — 既定の permissionMode: auto ではこれらの道具の確認は' +
+      'デーモンへ届かない（SDK 自身が応答を待つ）ので、waiting が空なのは矛盾ではない。' +
+      countNote +
+      '**時刻の閾値は置いていない** — 何分経ったかはこの行では判定していない。' +
+      'この行そのものは何も止めていない — 委譲は動き続けてよい。急かさず、次の一覧まで待つこと。'
+    );
+  }
 
   return (
     '  ⚠ 道具の応答待ちのまま、誰もその応答を待っていない（矛盾）。' +
     `生ログの末尾の assistant 行が stop_reason: tool_use で、対応する tool_result が生ログに無く、` +
-    `かつデーモン側の返事待ち（waiting）が空である。未応答の道具: ${names}` +
-    (rest > 0 ? `（ほか ${rest} 件、全 ${pending.length} 件）` : '') +
-    `。${whenNote}。` +
+    `かつデーモン側の返事待ち（waiting）が空である。` +
+    countNote +
     '**時刻の閾値は置いていない** — 何分経ったかはこの行では判定していないので、' +
     'timestamp を読んで判断すること。' +
     'この行そのものは何も止めていない — デーモンが計算して添えただけで、委譲は動き続けてよい。' +
@@ -3598,13 +3628,9 @@ function describeToolUseStall(manager: ManagerSummary): string | null {
     '(3) その末尾に isApiErrorMessage: true の行（この repo ではなく CLI が生ログへ書く欄。' +
     '枠の壁などで API が返した文言を合成した行）が在れば、この委譲は既に死んでいる — ' +
     'manager_stop して引き継ぐこと。' +
-    '(4) それが無いなら、未応答の道具の名前で分かれる。' +
-    '確認系（AskUserQuestion / 許可確認）なら #572 の症状で、' +
-    '確認はクローンの受信箱に一度も現れていない — ' +
+    '(4) それが無いなら #572 の症状そのもの — 確認はクローンの受信箱に一度も現れていない。' +
     '確認の本文を生ログから写して Issue へ置いてから manager_stop して引き継ぐこと' +
     '（写さずに止めると、質問は誰にも読まれないまま消える）。' +
-    'それ以外（Agent など）なら、作業者が走っている最中の正常な形でも同じ3条件が揃うので、' +
-    'この行だけでは症状と区別できない — 止めずに、timestamp を見て次の一覧まで待つこと。' +
     RESTART_BEFORE_CHECK_ADVICE
   );
 }
