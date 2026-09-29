@@ -36,6 +36,14 @@
  * - 継続時間は GNU `timeout` の形（`300` / `1.5m` / `2h` / `1d`。単位を省けば秒）。
  *   `timeout` のオプション（`-k <値>` / `-s <値>` / `--…`）は読み飛ばす
  * - **`timeout 0` は「寿命なし」**（GNU の意味）なので、上限（600000ms）まで引き上げる
+ * - **`pnpm test` の `--deadline-seconds=<n>` / `--deadline-seconds <n>` も寿命として数える**
+ *   （#2225）。`scripts/test.mjs` の締め切り（PR #2142）で、スキル
+ *   （`.claude/skills/test-in-chunks/SKILL.md`）は外側の `timeout` の代わりにこれを勧めている。
+ *   **#2225 までは読まず、スキルのとおりに打つと引き上げが効かなかった**（既定の 120 秒で背景へ
+ *   回された）。値は秒の整数。打ち切った後、`test.mjs` は最大 `DEADLINE_KILL_GRACE_MS`（3秒）
+ *   待って SIGKILL を送るので、その分（`TEST_DEADLINE_KILL_GRACE_MS`）も足す。`0` は
+ *   `test.mjs` が vitest を起こす前に断る（exit 9）ので数えない。`timeout` と同じく、
+ *   どのコマンドの引数かは見ない（多めに数えても、引き上げる向きにしか働かない）
  * - 合計に余裕（`BASH_TOOL_TIMEOUT_MARGIN_MS`）を足す。コマンドの中の `timeout` が
  *   先に切れて、その出力（終了コード 124 など）がツールの結果として返るようにするため
  * - 上限は `BASH_TOOL_MAX_TIMEOUT_MS`（ツールの `timeout` 引数の上限。SDK の
@@ -75,6 +83,17 @@ export const BASH_TOOL_TIMEOUT_MARGIN_MS = 10_000;
 const COMMAND_TIMEOUT_RE =
   /(?<=^|[\s;&|()`'"])timeout(?:[ \t]+(?:-[ks][ \t]+\S+|--\S+|-[A-Za-jl-rt-z]))*[ \t]+(\d+(?:\.\d*)?|\.\d+)([smhd]?)(?=[\s;&|()`'"]|$)/g;
 
+/**
+ * `scripts/test.mjs` の `--deadline-seconds=<n>` / `--deadline-seconds <n>`（#2225）。
+ * 手前と後ろの境界は `COMMAND_TIMEOUT_RE` と同じ。値は `test.mjs` の
+ * `extractDeadlineSeconds` が受け付ける形（整数）だけを読む。
+ */
+const TEST_DEADLINE_RE =
+  /(?<=^|[\s;&|()`'"])--deadline-seconds(?:=|[ \t]+)(\d+)(?=[\s;&|()`'"]|$)/g;
+
+/** `scripts/test.mjs` の `DEADLINE_KILL_GRACE_MS`（打ち切ってから SIGKILL までの猶予）と同じ値。 */
+export const TEST_DEADLINE_KILL_GRACE_MS = 3000;
+
 const UNIT_MS: Readonly<Record<string, number>> = {
   '': 1000,
   s: 1000,
@@ -92,8 +111,8 @@ export interface BashToolTimeoutRaise {
 }
 
 /**
- * コマンドの中の `timeout` の合計（ミリ秒）を返す。1つも無ければ `null`、
- * `timeout 0`（寿命なし）を含めば `Infinity`。
+ * コマンドの中の `timeout` と `--deadline-seconds`（#2225）の合計（ミリ秒）を返す。
+ * 1つも無ければ `null`、`timeout 0`（寿命なし）を含めば `Infinity`。
  */
 export function commandTimeoutTotalMs(command: string): number | null {
   let total = 0;
@@ -106,6 +125,13 @@ export function commandTimeoutTotalMs(command: string): number | null {
     const unit = UNIT_MS[match[2] ?? ''] ?? 1000;
     if (value === 0) return Infinity;
     total += value * unit;
+  }
+  TEST_DEADLINE_RE.lastIndex = 0;
+  while ((match = TEST_DEADLINE_RE.exec(command)) !== null) {
+    const seconds = Number(match[1]);
+    if (seconds === 0) continue;
+    found = true;
+    total += seconds * 1000 + TEST_DEADLINE_KILL_GRACE_MS;
   }
   return found ? total : null;
 }
@@ -157,10 +183,10 @@ export function describeBashToolTimeoutRaise(raise: BashToolTimeoutRaise): strin
   const basis =
     raise.commandTimeoutTotalMs === undefined
       ? 'コマンドの中に `timeout 0`（寿命なし）が在るので上限まで'
-      : `コマンドの中の \`timeout\` の合計 ${raise.commandTimeoutTotalMs}ms に余裕 ${BASH_TOOL_TIMEOUT_MARGIN_MS}ms を足した値（上限 ${BASH_TOOL_MAX_TIMEOUT_MS}ms）`;
+      : `コマンドの中の \`timeout\` / \`--deadline-seconds\` の合計 ${raise.commandTimeoutTotalMs}ms に余裕 ${BASH_TOOL_TIMEOUT_MARGIN_MS}ms を足した値（上限 ${BASH_TOOL_MAX_TIMEOUT_MS}ms）`;
   return (
     `この Bash の呼び出しの \`timeout\` 引数を ${from} から ${raise.toMs}ms に引き上げた（${basis}）。` +
-    'コマンドの中の `timeout` は子プロセスの寿命であって、Bash ツールが待つ時間ではない。' +
+    'コマンドの中の `timeout` / `--deadline-seconds` は子プロセスの寿命であって、Bash ツールが待つ時間ではない。' +
     'ツールの `timeout` 引数が足りないと、ツールの側が先に待つのをやめる（背景へ回されることがある）。' +
     '次からは、長いコマンドにはツールの `timeout` 引数にも同じだけの値（600000 以下）を入れること。'
   );
