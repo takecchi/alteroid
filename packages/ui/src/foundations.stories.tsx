@@ -10,21 +10,19 @@ import { cn } from '@/lib/utils';
  * **Twin Plate** —— alteroid のデザインの基礎。
  *
  * クローンは人間の写しで、画面はその写しが働く様子を見守る計器盤である。
- * 未来感は発光の量ではなく**形と規律**で出す:
+ * 未来感は発光の量ではなく**規律**で出す:
  *
- * 1. **面取り**（`styles.css` の `corner-shape`）—— 面（枠・浮く面）は、左上と右下の
- *    角だけを斜めに落とす。機械で削り出した板の形
- * 2. **光の縁**（`lumen-edge`）—— 光ってよいのは「いまここ」を示す1本の線と焦点の輪だけ
- * 3. **心拍**（`LiveIndicator`）—— 画面の中で自分から動くのは受信の印だけ
+ * 1. **光の縁**（`lumen-edge`）—— 光ってよいのは「いまここ」を示す1本の線と焦点の輪だけ
+ * 2. **心拍**（`LiveIndicator`）—— 画面の中で自分から動くのは受信の印だけ
+ *
+ * 面取り（`corner-shape: bevel`）は試して外した（`styles.css` の注記）。角は角丸のまま。
  *
  * 値の正本は `styles.css`。ここはそれを並べて見るための場所で、値を持たない。
  * 上の帯の Theme で明るい側・暗い側を切り替えて見比べる。
  */
 const meta = {
-  title: 'Foundations/A Twin Plate',
+  title: 'Foundations',
   parameters: { layout: 'fullscreen' },
-  // この頁は1つ目の案を説明する。上の帯の Design に関係なく、この案で描く。
-  globals: { design: 'plate' },
 } satisfies Meta;
 
 export default meta;
@@ -78,12 +76,7 @@ function Colors() {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {SWATCHES.map((swatch) => (
           <div key={swatch.name} className="space-y-2">
-            <div
-              className={cn(
-                'h-16 rounded-md ring-1 ring-foreground/10 [corner-shape:bevel_square]',
-                swatch.className,
-              )}
-            />
+            <div className={cn('h-16 rounded-md ring-1 ring-foreground/10', swatch.className)} />
             <div>
               <div className="text-sm font-medium">
                 {swatch.name}{' '}
@@ -129,10 +122,7 @@ function Motif({ name, note, children }: { name: string; note: string; children:
 
 function Motifs() {
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
-      <Motif name="面取り" note="左上と右下だけを落とす。残りの角は角のまま">
-        <div className="size-20 rounded-xl bg-accent ring-1 ring-primary/40 [corner-shape:bevel_square]" />
-      </Motif>
+    <div className="grid gap-4 sm:grid-cols-2">
       <Motif name="光の縁" note="光るのは「いまここ」の1本だけ">
         <div className="w-40 space-y-1 text-sm">
           <div className="rounded-sm px-2.5 py-1.5 text-muted-foreground">日誌</div>
@@ -156,8 +146,8 @@ function Motifs() {
 function Shapes() {
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      <Motif name="面" note="枠・浮く面・警告。面取りするのは面だけ">
-        <div className="h-16 w-28 rounded-xl bg-card ring-1 ring-foreground/15 [corner-shape:bevel_square]" />
+      <Motif name="面" note="枠・浮く面・警告。縁と明るさの段で重なりを言う">
+        <div className="h-16 w-28 rounded-xl bg-card ring-1 ring-foreground/15" />
       </Motif>
       <Motif name="押せるもの" note="ボタン・札は見慣れた角丸のまま。塗りか縁を必ず持つ">
         <div className="flex items-center gap-2">
@@ -239,8 +229,8 @@ function Overview() {
           <BrandMark />
           <h1 className="font-display text-2xl tracking-[0.04em]">Twin Plate</h1>
           <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-            人間の写しが働く様子を見守る計器盤。未来感は光の量ではなく、形と規律で出す。
-            面は対角の2つの角だけを落とし、押せるものは見慣れた形のまま、光ってよいのは現在地と焦点だけ、
+            人間の写しが働く様子を見守る計器盤。未来感は光の量ではなく、規律で出す。
+            押せるものは見慣れた形のまま、光ってよいのは現在地と焦点だけ、
             自分から動くのは受信の印だけにする。
           </p>
         </header>
@@ -286,7 +276,7 @@ export const Type: Story = {
 export const Ground: Story = {
   render: () => (
     <div className="flex h-[600px] items-center justify-center bg-background">
-      <div className="h-40 w-72 rounded-xl bg-card ring-1 ring-foreground/10 [corner-shape:bevel_square]" />
+      <div className="h-40 w-72 rounded-xl bg-card ring-1 ring-foreground/10" />
     </div>
   ),
 };

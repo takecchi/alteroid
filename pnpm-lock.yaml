@@ -12,12 +12,6 @@ catalogs:
     '@electric-sql/pglite':
       specifier: ^0.5.4
       version: 0.5.8
-    '@fontsource-variable/m-plus-1':
-      specifier: ^5.3.0
-      version: 5.3.0
-    '@fontsource-variable/m-plus-1-code':
-      specifier: ^5.3.0
-      version: 5.3.0
     '@fontsource/ibm-plex-mono':
       specifier: ^5.3.0
       version: 5.3.0
@@ -600,12 +594,6 @@ importers:
 
   packages/ui:
     dependencies:
-      '@fontsource-variable/m-plus-1':
-        specifier: 'catalog:'
-        version: 5.3.0
-      '@fontsource-variable/m-plus-1-code':
-        specifier: 'catalog:'
-        version: 5.3.0
       '@fontsource/ibm-plex-mono':
         specifier: 'catalog:'
         version: 5.3.0
@@ -1367,12 +1355,6 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
-
-  '@fontsource-variable/m-plus-1-code@5.3.0':
-    resolution: {integrity: sha512-1mK4KAFWqQigzMTuAbRE8UBypigEcTbZ5X0fJs0rNwD50yfXgu1o8qNTSx5kg2JW/kpy5mN62acz9RUOYVdRQQ==}
-
-  '@fontsource-variable/m-plus-1@5.3.0':
-    resolution: {integrity: sha512-wdwb24i6/ilXMurTMZpY6qlF4Hjqzfgmn/W+jeLeH3VeR6ycEIiBdULghYV+7hhHCg3izebGTANUC3q0ichRsQ==}
 
   '@fontsource/ibm-plex-mono@5.3.0':
     resolution: {integrity: sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==}
@@ -6864,10 +6846,6 @@ snapshots:
       react-dom: 19.3.0(react@19.3.0)
 
   '@floating-ui/utils@0.2.12': {}
-
-  '@fontsource-variable/m-plus-1-code@5.3.0': {}
-
-  '@fontsource-variable/m-plus-1@5.3.0': {}
 
   '@fontsource/ibm-plex-mono@5.3.0': {}
 

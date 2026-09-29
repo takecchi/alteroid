@@ -20,8 +20,6 @@
     "shadcn:add": "node ./scripts/shadcn-add.mjs"
   },
   "dependencies": {
-    "@fontsource-variable/m-plus-1": "catalog:",
-    "@fontsource-variable/m-plus-1-code": "catalog:",
     "@fontsource/ibm-plex-mono": "catalog:",
     "@fontsource/ibm-plex-sans-jp": "catalog:",
     "@fontsource/michroma": "catalog:",

@@ -101,7 +101,7 @@ export function ChatMessage({
             'min-w-0 max-w-[46rem] text-sm leading-relaxed break-words',
             role !== 'clone' && 'whitespace-pre-wrap',
             /*
-             * **吹き出しにするのは人間の発言だけ。** 主色で塗った面取りの板にして、
+             * **吹き出しにするのは人間の発言だけ。** 主色で塗った吹き出しにして、
              * 「自分の発言」が一目で分かるようにする。
              *
              * **クローンの応答は吹き出しにしない**——地の上にそのまま本文として置く。
@@ -109,8 +109,7 @@ export function ChatMessage({
              * 読む幅が枠の内側へ削られ、縦に長い箱が積み重なって読みにくくなる
              * （人間の言葉で「AIのメッセージはバブルになってなくて良い」）。
              */
-            role === 'human' &&
-              'rounded-lg bg-primary px-3 py-2 text-primary-foreground [corner-shape:bevel_square]',
+            role === 'human' && 'rounded-lg bg-primary px-3 py-2 text-primary-foreground',
             role === 'clone' && 'w-full py-1',
             /*
              * 事情の行は板にしない（発言ではないので）。左の細い線で「差し込み」で

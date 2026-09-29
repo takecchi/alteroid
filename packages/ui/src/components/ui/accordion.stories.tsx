@@ -31,7 +31,7 @@ export const Default: Story = {
       </AccordionItem>
       <AccordionItem value="unverified">
         <AccordionTrigger>確かめていないこと</AccordionTrigger>
-        <AccordionContent>Safari での面取りの見え方（corner-shape を持たない）。</AccordionContent>
+        <AccordionContent>Safari での見え方。</AccordionContent>
       </AccordionItem>
     </Accordion>
   ),

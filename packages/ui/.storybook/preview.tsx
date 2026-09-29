@@ -31,10 +31,6 @@ const preview: Preview = {
       // `globals` は `Record<string, any>` なので、文字列であることを確かめてから使う。
       const theme = typeof context.globals.theme === 'string' ? context.globals.theme : 'dark';
       document.documentElement.classList.toggle('dark', theme === 'dark');
-      // デザインの案（`styles.css` の `[data-design]`）。既定は1つ目の案（Twin Plate）。
-      const design = typeof context.globals.design === 'string' ? context.globals.design : 'plate';
-      if (design === 'clear') document.documentElement.dataset.design = 'clear';
-      else delete document.documentElement.dataset.design;
       return (
         <TooltipProvider>
           <Story />
@@ -55,22 +51,9 @@ const preview: Preview = {
         dynamicTitle: true,
       },
     },
-    design: {
-      description: 'デザインの案',
-      toolbar: {
-        title: 'Design',
-        icon: 'paintbrush',
-        items: [
-          { value: 'plate', title: 'A: Twin Plate' },
-          { value: 'clear', title: 'B: Clear Signal' },
-        ],
-        dynamicTitle: true,
-      },
-    },
   },
   initialGlobals: {
     theme: 'dark',
-    design: 'plate',
   },
 };
 
