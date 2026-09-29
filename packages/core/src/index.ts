@@ -1220,6 +1220,8 @@ export { installUncaughtNet } from './uncaught-net.js';
  * 正本 — 何を残し何を消すかはここにしか書かない（`workspace-reset.ts` の doc）。
  */
 export {
+  describeResetTargets,
+  RESET_CONFIRM_GROUPS,
   resetWorkspaceState,
   type ResetWorkspaceStateOptions,
   type WorkspaceResetSummary,
