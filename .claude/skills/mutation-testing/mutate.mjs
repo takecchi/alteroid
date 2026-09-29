@@ -75,6 +75,8 @@ import {
   assertNoUnhandledErrorsLine,
   buildAndCheckArtifact,
   checkJudgementVocabulary,
+  classifyCliArgs,
+  cliUsageText,
   describeRunScope,
   formatDeclaredTargetReport,
   formatScaffoldSubtractionReport,
@@ -565,6 +567,23 @@ function applyRootArgAndAnnounce(rest) {
 
 function main() {
   const [, , cmd, ...rest] = process.argv;
+  // **何かを読む・走らせる前に引数を判定する（#2106）。** `--help` と、サブコマンドが
+  // 読まない引数は、ROOT の解釈より前に止める——`baseline --help` が全体テストを
+  // 起こしていた穴は、各 `cmd*` が知らない引数を黙って無視していたことにある。
+  const judged = classifyCliArgs(cmd, rest);
+  if (judged.kind === 'help') {
+    log(cliUsageText());
+    process.exit(0);
+  }
+  if (judged.kind === 'unknown-args') {
+    log(
+      `エラー: ${cmd} が読まない引数: ${judged.unknown.map((a) => JSON.stringify(a)).join(' ')}` +
+        '。何も走らせずに終わる。',
+    );
+    log('');
+    log(cliUsageText());
+    process.exit(1);
+  }
   try {
     applyRootArgAndAnnounce(rest);
     switch (cmd) {

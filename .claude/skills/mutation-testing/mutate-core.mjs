@@ -1378,6 +1378,85 @@ export function readMaxWorkers(args) {
 }
 
 /**
+ * サブコマンドごとに受け付ける引数の一覧（#2106）。**CLI の引数の数え上げの本籍は
+ * ここ**で、`mutate.mjs` の各 `cmd*` が実際に読む引数と一致させる（`readMaxWorkers` /
+ * `readJsonArg` / `assertNoBlockingMarker` / `cmdRestore` / `cmdSelftest`）。
+ *
+ * - `bool`: 値を取らない印
+ * - `value`: 次の要素を値として取る。`--max-workers` だけは `=` の形も受ける
+ *   （{@link readMaxWorkers} がその両方を読むため）。他は `indexOf` の完全一致で
+ *   しか読まれないので、`--spec=x` の形は知らない引数として扱う
+ *
+ * 共通で `--root <path>`（{@link readRootArg}）を受ける。
+ */
+export const CLI_COMMAND_ARGS = {
+  status: { bool: [], value: [] },
+  baseline: { bool: ['--allow-existing-marker'], value: ['--max-workers'] },
+  apply: { bool: [], value: ['--spec'] },
+  restore: { bool: ['--restore-from-marker'], value: [] },
+  run: { bool: ['--allow-existing-marker'], value: ['--plan', '--max-workers'] },
+  selftest: { bool: [], value: ['--scenario'] },
+};
+
+const CLI_COMMON_VALUE_ARGS = ['--root'];
+const CLI_EQ_VALUE_ARGS = ['--max-workers'];
+const CLI_HELP_ARGS = ['--help', '-h'];
+
+/**
+ * 引数を、サブコマンドへ渡す**前に**判定する（#2106）。
+ *
+ * **なぜ要るか。** 各 `cmd*` は自分の読む引数だけを `indexOf` で拾い、残りを黙って
+ * 無視していた。そのため `baseline --help` は使い方を出さずに `pnpm test` の全体を
+ * 起こし、`run --plan p.json --help` は baseline と全変異を回した。作業者が使い方を
+ * 確かめるつもりで長い処理を起こし、止めるためにプロセスを kill する形を踏んでいた。
+ * **「何も走らせない」を、呼ばれる側がたまたま引数を見ないことに頼らず、入口の
+ * 判定で保証する。**
+ *
+ * 返り値（副作用なし。`process.exit` は呼ばない——呼び出し側の仕事）:
+ * - `{ kind: 'help' }` — `--help` / `-h` がどこかに在る、またはサブコマンドが `help`。
+ *   何も走らせずに使い方を出して exit 0 にする
+ * - `{ kind: 'unknown-args', unknown }` — サブコマンドが読まない引数が在る。何も
+ *   走らせずに名指しして exit 1 にする
+ * - `{ kind: 'pass' }` — 従来の処理へ。サブコマンドが無い・知らないサブコマンドは
+ *   従来どおり `mutate.mjs` の `default` 節が扱う。値の欠けた `--spec` などの誤りも、
+ *   従来の読み手の文言のまま落とす
+ */
+export function classifyCliArgs(cmd, rest) {
+  const all = cmd === undefined ? rest : [cmd, ...rest];
+  if (cmd === 'help' || all.some((a) => CLI_HELP_ARGS.includes(a))) return { kind: 'help' };
+  const spec = Object.hasOwn(CLI_COMMAND_ARGS, cmd) ? CLI_COMMAND_ARGS[cmd] : undefined;
+  if (spec === undefined) return { kind: 'pass' };
+  const valueArgs = [...spec.value, ...CLI_COMMON_VALUE_ARGS];
+  const unknown = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (spec.bool.includes(a)) continue;
+    if (valueArgs.includes(a)) {
+      i++; // 次の要素は値（欠けていれば、従来の読み手が文言付きで落とす）
+      continue;
+    }
+    if (CLI_EQ_VALUE_ARGS.some((f) => spec.value.includes(f) && a.startsWith(`${f}=`))) continue;
+    unknown.push(a);
+  }
+  return unknown.length === 0 ? { kind: 'pass' } : { kind: 'unknown-args', unknown };
+}
+
+/** 使い方の本文（#2106）。{@link CLI_COMMAND_ARGS} から組み立てる——手で書き写さない。 */
+export function cliUsageText() {
+  const lines = ['使い方: node mutate.mjs <status|baseline|apply|restore|run|selftest> [...]', ''];
+  for (const [name, spec] of Object.entries(CLI_COMMAND_ARGS)) {
+    const parts = [...spec.value.map((v) => `[${v} <値>]`), ...spec.bool.map((b) => `[${b}]`)];
+    lines.push(`  ${name}${parts.length > 0 ? ` ${parts.join(' ')}` : ''}`);
+  }
+  lines.push('');
+  lines.push(
+    '共通: [--root <path>]。--help / -h はどこに置いても、何も走らせずにこの一覧だけを出す。',
+  );
+  lines.push('サブコマンドが読まない引数を渡すと、何も走らせずに名指しして exit 1 で終わる。');
+  return lines.join('\n');
+}
+
+/**
  * ANSI エスケープシーケンス（色付け）を取り除く。
  *
  * **なぜ剥がすか。** vitest は `Test Files` / `Tests` の集計行を色付きで出すことが
