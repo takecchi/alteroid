@@ -285,6 +285,71 @@ describe('履歴タブ（#1309）', () => {
   });
 });
 
+/**
+ * **「履歴」タブが、版を読めなかったときも `Spinner` のまま回り続けないこと
+ * （issue #2139）。**
+ *
+ * 直す前は `usePracticeVersions` / `usePracticeVersion` のどちらも `error`
+ * を受けておらず、失敗しても `history === undefined` / `historyDetail ===
+ * undefined` のままなので `Spinner` が回り続け、「読めていない」のか
+ * 「読んでいる途中」なのか見分けが付かなかった。
+ */
+describe('履歴タブが読めないとき（issue #2139）', () => {
+  const versions: PracticeVersionSummary[] = [
+    {
+      slug: PRACTICE.slug,
+      version: 1,
+      kind: '日報',
+      title: '旧題',
+      at: '2026-08-01T00:00:00.000Z',
+      chars: 3,
+    },
+  ];
+  const contents = { 1: '# 旧本文' };
+
+  /** 版の一覧（`/versions`）だけを失敗させる。本体・版1本は正常。 */
+  function historyRouteVersionsFail(doc: Practice): FetchRoute {
+    return (url) => {
+      if (/\/practices\/[^/]+\/versions\/\d+/.exec(url)) return undefined;
+      if (url.includes(`/practices/${doc.slug}/versions`)) return json({ error: 'internal' }, 500);
+      if (url.includes(`/practices/${doc.slug}`)) return json({ practice: doc });
+      return undefined;
+    };
+  }
+
+  /** 版1本（`/versions/:version`）だけを失敗させる。一覧・本体は正常。 */
+  function historyRouteVersionDetailFail(
+    doc: Practice,
+    versions: PracticeVersionSummary[],
+  ): FetchRoute {
+    return (url) => {
+      if (/\/practices\/[^/]+\/versions\/\d+/.exec(url)) return json({ error: 'internal' }, 500);
+      if (url.includes(`/practices/${doc.slug}/versions`)) return json({ versions });
+      if (url.includes(`/practices/${doc.slug}`)) return json({ practice: doc });
+      return undefined;
+    };
+  }
+
+  it('版の一覧が読めないと ErrorNote を出す（Spinner のまま回らない）', async () => {
+    renderDetail(PRACTICE.slug, historyRouteVersionsFail(PRACTICE));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText('読み込み中')).toBeNull();
+    expect(screen.queryByText('まだ版が無い（一度も書かれていない）。')).toBeNull();
+  });
+
+  it('選んだ版の本文が読めないと ErrorNote を出す（Spinner のまま回らない）', async () => {
+    renderDetail(PRACTICE.slug, historyRouteVersionDetailFail(PRACTICE, versions));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '履歴' }));
+    fireEvent.click(await screen.findByText('旧題'));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText(contents[1])).toBeNull();
+  });
+});
+
 describe('生 HTML の扱い', () => {
   it('本文中の生 HTML は要素にならず、テキストとしてそのまま出る', async () => {
     const withRawHtml: Practice = {

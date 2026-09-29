@@ -49,11 +49,12 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   const navigate = useNavigate();
 
   const [historyVersion, setHistoryVersion] = useState<number | undefined>(undefined);
-  const { data: history } = usePracticeVersions(slug);
-  const { data: historyDetail, isLoading: historyDetailLoading } = usePracticeVersion(
-    slug,
-    historyVersion,
-  );
+  const { data: history, error: historyError } = usePracticeVersions(slug);
+  const {
+    data: historyDetail,
+    error: historyDetailError,
+    isLoading: historyDetailLoading,
+  } = usePracticeVersion(slug, historyVersion);
   // **⚠️ すべてのタブが常にマウントされている（radix-ui の Tabs.Content は
   // `hidden` 属性で隠すだけで、非活性でも DOM から外れない——Presence の
   // 内部実装が children を関数として渡すことで自身の forceMount を立てる）。**
@@ -245,7 +246,14 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               <p className="mb-2 text-xs text-muted">
                 write のたびに版が1つ増える。remove しても版は消えない（#1309）。
               </p>
-              {history === undefined ? (
+              {historyError !== undefined ? (
+                // **「読めていない」を「読み込み中」と区別する（issue #2139）。**
+                // `error` を受けていなかったので、取れなかったときも
+                // `Spinner` が回り続けていた——`usePractice(slug)`（このカード
+                // の本体、`error`/`isLoading` の直上）と同じ判断をここでも
+                // 採る。
+                <ErrorNote error={historyError} />
+              ) : history === undefined ? (
                 <Spinner />
               ) : historyVersions.length === 0 ? (
                 <p className="text-xs text-muted">まだ版が無い（一度も書かれていない）。</p>
@@ -278,6 +286,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 <p className="text-xs text-muted">
                   左の一覧から版を選ぶと、本文をここに読み取り専用で出す。
                 </p>
+              ) : historyDetailError !== undefined ? (
+                // 版1本のほうも同じ判断（issue #2139）。`historyVersion` を
+                // 選んだ後に取れなかった場合、`Spinner` のまま回り続けない。
+                <ErrorNote error={historyDetailError} />
               ) : historyDetailLoading || historyDetail === undefined ? (
                 <Spinner />
               ) : (

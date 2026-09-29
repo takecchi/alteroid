@@ -171,7 +171,13 @@ export default function Dashboard() {
               title="承認待ち"
               subtitle="人間が答えるまで、この仕事だけが止まる"
               action={
-                pending.length > 0 ? (
+                // **読めていないときは出さない（issue #2138 の2）。** 本文
+                // （すぐ下の `approvals.error !== undefined ? …` と同じ判定
+                // ではなく `pending.length > 0` だけを見ていたので、取り直しに
+                // 失敗して `data` が古いまま残ると「読めていない」（本文）と
+                // 「答える（古い件数由来）」（見出し）が同じカードに同時に
+                // 出ていた。本文と同じ判定を先頭に足して揃える。
+                approvals.error === undefined && pending.length > 0 ? (
                   <Link to="/approvals" className="text-xs text-accent hover:underline">
                     答える
                   </Link>
@@ -295,7 +301,17 @@ export default function Dashboard() {
                 </Link>
               }
             />
-            {schedule.data === undefined ? (
+            {schedule.error !== undefined ? (
+              // **エラーを最優先する（issue #2138 の1）。** ここは `data` しか
+              // 見ていなかったので、一度取れた後に取り直しが失敗しても
+              // （SWR は直前の `data` を残す）古い予定を今の値として出し続けて
+              // いた——「承認待ち」カードの本文（`approvals.error !== undefined`
+              // を `data` より先に見る）と同じ判断をここでも採る。
+              <ErrorNote error={schedule.error} className="m-4" />
+            ) : schedule.data === undefined ? (
+              // 読み込み中（まだ一度も取れていない）。既存の見た目のまま
+              // （「予定が無い」の空表示と紛れるが、数百 ms で `data` か
+              // `error` のどちらかへ必ず変わるので専用の見た目は足さない）。
               <Empty>—</Empty>
             ) : (
               <ul>

@@ -398,10 +398,19 @@ export function stubFetch(initial: Route): FetchStub {
  *
  * SWR のキャッシュはテストごとに作り直す（持ち越すと、前のテストの応答が
  * 次のテストで「もう読み込み済み」として出てしまう）。
+ *
+ * **`focusThrottleInterval: 0`**（issue #2138 の2 の試験で足した）——既定値
+ * （5000ms）のままだと、マウント直後に `window.dispatchEvent(new
+ * Event('focus'))` で `revalidateOnFocus` を起こそうとしても、SWR 内部の
+ * スロットル（`nextFocusRevalidatedAt = マウント時刻 + focusThrottleInterval`）
+ * に阻まれて再取得が起きない。**一度取れた後に取り直しが失敗する**（`data`
+ * が残ったまま `error` が立つ）状態を試験で作るには、この既定を0にして
+ * フォーカスのたびに再取得できるようにする必要がある——`dedupingInterval: 0`
+ * と同じ理由（試験で何かを待つ理由を無くす）。
  */
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, focusThrottleInterval: 0 }}>
       <ApiProvider>{children}</ApiProvider>
     </SWRConfig>
   );

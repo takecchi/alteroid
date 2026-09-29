@@ -95,14 +95,25 @@ function renderDashboard(
   lists: { approvals?: unknown[]; managers?: unknown[] } = {},
   // 「次の自動実行」カードの材料。既定は空なので既存のテストは変わらない。
   scheduleEntries: Array<{ kind: string; description: string; nextAt: string }> = [],
+  // **`/approvals` / `/schedule` を読めなかったことにする（issue #2138）。**
+  // 既定はどちらも真っ当に取れるので、既存のテストは1つも振る舞いが変わらない。
+  failures: { approvals?: boolean; schedule?: boolean } = {},
 ): FetchStub {
   // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
   // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
   const stub = stubFetch((url) => {
     if (url.includes('/reports')) return json({ reports });
-    if (url.includes('/approvals')) return json({ approvals: lists.approvals ?? [] });
+    if (url.includes('/approvals')) {
+      return failures.approvals === true
+        ? json({ error: 'internal' }, 500)
+        : json({ approvals: lists.approvals ?? [] });
+    }
     if (url.includes('/managers')) return json({ managers: lists.managers ?? [] });
-    if (url.includes('/schedule')) return json({ entries: scheduleEntries });
+    if (url.includes('/schedule')) {
+      return failures.schedule === true
+        ? json({ error: 'internal' }, 500)
+        : json({ entries: scheduleEntries });
+    }
     if (url.includes('/usage')) {
       return json({
         ...usageBody,
@@ -458,6 +469,85 @@ describe('「次の自動実行」カードの出口', () => {
     ]);
 
     expect(await screen.findByTitle(LONG_DESCRIPTION)).toBeTruthy();
+  });
+});
+
+/**
+ * **「次の自動実行」カードが `/schedule` を読めないとき（issue #2138 の1）。**
+ *
+ * 直す前は `schedule.data` しか見ていなかったので、取れなかったときも
+ * `data === undefined` の空表示（`—`）のままで、「予定が無い」と「読めて
+ * いない」が見分けられなかった。ここで測るのは、失敗したら `ErrorNote`
+ * （`role="alert"`）が出て、その代わりの空表示（`—`）にも予定の一覧にも
+ * ならないこと——`error !== undefined` の分岐を外す変異（元のバグと同じ
+ * 形）を当てると、`—` の空表示に戻って `alert` が見つからず赤くなる。
+ */
+describe('「次の自動実行」カードが読めないとき（issue #2138 の1）', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  it('取り直しに失敗すると ErrorNote を出す（空表示 `—` のままにしない）', async () => {
+    renderDashboard(
+      USAGE,
+      EMPTY_FEED,
+      [],
+      {},
+      [{ kind: 'daily_report', description: '古い予定', nextAt: '2026-08-15T05:00:00.000Z' }],
+      { schedule: true },
+    );
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    // 一覧（古い予定）にはならない。既存の空表示（`—`）にも戻らない。
+    expect(screen.queryByText('古い予定')).toBeNull();
+    expect(screen.queryByText('—')).toBeNull();
+  });
+});
+
+/**
+ * **「承認待ち」カード見出しの「答える」リンクが、読めていないときに出ない
+ * こと（issue #2138 の2）。**
+ *
+ * 直す前は `pending.length > 0` だけを見ていたので、一度取れた後に取り直しが
+ * 失敗しても（SWR は直前の `data` を残す）「答える」だけが古い件数のまま
+ * 出続け、本文の `ErrorNote`（「読めていない」）と同じカードに同時に出て
+ * いた。**単発の失敗スタブでは `data` が一度も定まらず `pending` が常に0件
+ * になるので、`pending.length > 0` だけを見ていた旧コードでもリンクは出ず、
+ * この分岐の欠落を見分けられない** —— だから、いったん成功させて
+ * `pending` を非0にしたあと `/approvals` だけを失敗に切り替え、`window`
+ * の `focus` イベント（SWR 既定の `revalidateOnFocus` が拾う）で再取得を
+ * 起こし、`data` が古いまま残る状態を作る。
+ */
+describe('「承認待ち」カードが読めないとき、「答える」を出さない（issue #2138 の2）', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+  const approval = (n: number) => ({
+    id: `approval-${n}`,
+    createdAt: '2026-08-14T09:00:00.000Z',
+    question: `質問 ${n}`,
+  });
+
+  it('一度取れた後に /approvals が失敗すると、古い件数のまま「答える」を出し続けない', async () => {
+    const stub = renderDashboard(USAGE, EMPTY_FEED, [], { approvals: [approval(0)] });
+
+    // まず正常系——「答える」が出ていることを確かめてから話を壊す。
+    await screen.findByRole('link', { name: '答える' });
+
+    // `/approvals` だけを失敗に切り替える（他の経路は元のまま存続させる）。
+    stub.setRoute((url) => {
+      if (url.includes('/approvals')) return json({ error: 'internal' }, 500);
+      if (url.includes('/reports')) return json({ reports: [] });
+      if (url.includes('/managers')) return json({ managers: [] });
+      if (url.includes('/schedule')) return json({ entries: [] });
+      if (url.includes('/usage')) {
+        return json({ ...USAGE, notice: USAGE_ESTIMATE_NOTICE, turnRows: [], breakdown: null });
+      }
+      return undefined;
+    });
+    // SWR 既定の `revalidateOnFocus` を使って再取得を起こす（`dedupingInterval: 0`
+    // なので即座に飛ぶ——`test-support.tsx` の `Providers` の設定）。
+    window.dispatchEvent(new Event('focus'));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    // 古い `pending`（質問0）が残っていても「答える」は出ない。
+    expect(screen.queryByRole('link', { name: '答える' })).toBeNull();
   });
 });
 
