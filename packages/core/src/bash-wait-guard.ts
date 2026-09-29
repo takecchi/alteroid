@@ -1444,13 +1444,15 @@ function stripGhPrMergeQuotedSubjectBodyValues(command: string): string {
  * 取り出して再帰する」ことだけである。⟹ 4層ネスト（`bash -c "bash -c
  * \"bash -c \\\"bash -c \\\\\\\"gh pr merge 1 -d\\\\\\\"\\\"\""` のような
  * 形）は、3層目までは中身を取り出して辿れるが、4層目の中身は取り出せない
- * ——**通す側へ倒す**（doc「深さの上限を超えたら」、歯は issue #2104 の
- * テストファイル「4層ネストは上限を超えて通る」）。この倒し方を選んだ
- * 理由: 上限は「無限再帰・入力に対する後戻りの制御」のための境界であって、
- * 「この形は危険だと分かっている」という判断ではない——他の多くの「1件ずつ
- * 検討する」既知の穴（doc「弾けないと分かっている形」）と同じ位置づけで、
- * 通す側に倒しても新しい実害は増えない（4層もネストする実例は、依頼者が
- * 観測した12形にも無い）。
+ * ——**4層目は、構文を見ずに字面だけで判定して弾く側へ倒す**
+ * （`looksLikeGhPrMergeDeleteBranch`）。
+ *
+ * ⚠️ **最初の版は、上限を超えたら通す側へ倒していた**（作業者の判断。「上限は
+ * 再帰の制御のための境界であって、4層は安全という判断ではない」）。レビュー
+ * （mgr-712ad619）で、弾く側へ倒すよう直した。上限を超える入れ子は、それ自体が
+ * 入れ子を重ねて判定を逃れる形になりうる。この Issue は、すり抜けを作らないことを
+ * 最優先にしている。誤検知（4層の入れ子の中に、実行されない `gh … merge -d` の
+ * 字面が在る形）は受け入れる。
  *
  * ## 5つの入口（数える単位、Issue 本文）
  *
@@ -1731,11 +1733,31 @@ function extractNestedShellPayloads(command: string): string[] {
   ];
 }
 
+/**
+ * 深さの上限に達した中身を、構文を見ずに字面だけで判定する（mgr-712ad619 のレビューで足した）。
+ * `gh` と `merge` と、`--delete-branch` か `-` で始まり `d` を含む短いフラグの字面が
+ * この順に在れば真。**弾く側へ倒すための粗い判定**で、誤検知は受け入れる。
+ * 正規表現の後戻りを持ち込まないよう、`indexOf` で順に探す（線形）。
+ */
+function looksLikeGhPrMergeDeleteBranch(payload: string): boolean {
+  const gh = payload.indexOf('gh');
+  if (gh < 0) return false;
+  const merge = payload.indexOf('merge', gh + 2);
+  if (merge < 0) return false;
+  const rest = payload.slice(merge + 5);
+  return rest.includes('--delete-branch') || /(?:^|[\s'"])-[A-Za-z]*d/.test(rest);
+}
+
 function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
   const withoutHeredocs = stripHeredocs(command);
   const withoutQuotedSubjectBodyValues = stripGhPrMergeQuotedSubjectBodyValues(withoutHeredocs);
   if (GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues)) return true;
-  if (depth >= MAX_NESTED_SHELL_DEPTH) return false;
+  if (depth >= MAX_NESTED_SHELL_DEPTH) {
+    // 上限に達したら、さらに取り出して再帰はしない。代わりに、取り出せる中身に
+    // `gh` … `merge` … `--delete-branch` / `-…d` の字面が在れば弾く側へ倒す
+    // （`looksLikeGhPrMergeDeleteBranch`。すり抜けを作らないほうを優先する）。
+    return extractNestedShellPayloads(command).some(looksLikeGhPrMergeDeleteBranch);
+  }
   for (const payload of extractNestedShellPayloads(command)) {
     if (payload.length > 0 && hasGhPrMergeDeleteBranch(payload, depth + 1)) return true;
   }

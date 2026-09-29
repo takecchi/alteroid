@@ -118,16 +118,28 @@ describe('gh-pr-merge-delete-branch: 入れ子と深さの上限（issue #2104�
     expect(inspectBashCommand(command).blocked).toBe(true);
   });
 
-  // ⚠️ 深さの上限を超えた入れ子（4層）は、意図して**通す側へ倒した**
-  // （`hasGhPrMergeDeleteBranch` の doc「深さの上限を超えたら」参照）。
-  // 上限は「入力に対する後戻り・再帰の制御」のための境界であって、
-  // 「4層ネストは安全」という判断ではない——観測した12形にも4層以上の
-  // ネストは無く、他の多くの「1件ずつ検討する」既知の穴と同じ位置づけ
-  // として、この PR では対応していない。
-  it('4層ネスト（深さの上限を超える）は、既知の限界として通る', () => {
-    let command = 'gh pr merge 1 -d';
+  // 深さの上限を超えた入れ子（4層以上）は、構文を見ずに字面だけで判定して
+  // 弾く側へ倒す（`looksLikeGhPrMergeDeleteBranch`）。最初の版は「既知の限界として
+  // 通る」を `toBe(false)` で固定していたが、レビュー（mgr-712ad619）で弾く側へ直した。
+  // すり抜けを作らないことを優先し、誤検知の向きは受け入れる。
+  for (const layers of [4, 6]) {
+    it(`${layers}層ネスト（深さの上限を超える）も弾く`, () => {
+      let command = 'gh pr merge 1 -d';
+      for (let i = 0; i < layers; i++) command = wrapBashCDouble(command);
+      expect(inspectBashCommand(command).blocked).toBe(true);
+    });
+  }
+
+  it('4層ネストでも、中身に -d が無ければ通す', () => {
+    let command = 'gh pr merge 1 --squash';
     for (let i = 0; i < 4; i++) command = wrapBashCDouble(command);
     expect(inspectBashCommand(command).blocked).toBe(false);
+  });
+
+  it('⚠️ 受け入れる誤検知: 4層ネストの中の echo の引数の字面でも弾く（上限では構文を見ない）', () => {
+    let command = 'echo gh pr merge 1 -d';
+    for (let i = 0; i < 4; i++) command = wrapBashCDouble(command);
+    expect(inspectBashCommand(command).blocked).toBe(true);
   });
 });
 
