@@ -6,3 +6,14 @@
  */
 @import '../src/styles.css';
 @source '../src/**/*.stories.tsx';
+
+/*
+ * docs の頁の中の見本1つぶんの地。**docs の頁そのもの（`theme.ts`）は暗い側に
+ * 固定だが、見本の地は上の帯の Theme に合わせる**——明るい側の見本を暗い頁の上で
+ * 見るときに、見本の地だけは明るくなるように。`.docs-story` は Storybook が見本の
+ * 描画枠に付ける class である。
+ */
+.docs-story {
+  background: var(--background) !important;
+  color: var(--foreground);
+}

@@ -2,6 +2,8 @@ import type { Preview } from '@storybook/react-vite';
 
 import { TooltipProvider } from '../src/components/ui/tooltip';
 
+import { alteroidDark } from './theme';
+
 import './preview.css';
 
 /**
@@ -21,6 +23,8 @@ const preview: Preview = {
       },
     },
     backgrounds: { disable: true },
+    // docs の頁の色（`theme.ts`）。見本1つぶんの地は `preview.css` が Theme の切り替えに合わせる。
+    docs: { theme: alteroidDark },
   },
   decorators: [
     (Story, context) => {
