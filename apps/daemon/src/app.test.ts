@@ -3747,8 +3747,15 @@ describe('HTTP API', () => {
       { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
     ]);
     expect(schedule.refreshCount()).toBe(before + 1);
-    // 人間が仕込んだことも日誌に残る（後から辿れること）
-    expect(await stores.journal.list({ types: ['decision'] })).toHaveLength(1);
+    // 人間が仕込んだことも日誌に残る（後から辿れること）。issue #2123 で
+    // 「日誌を先に書く」形へ変えたので、先に書いた行（区別を含まない）と、
+    // 後で分かった「仕込んだ／直した」の区別を足す2行目の、2行になる。
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .reverse();
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toBe('人間が定期の依頼を設定しようとしている: issue-round: open issue を見て実装を進める');
+    expect(decisions[1]).toBe('人間が定期の依頼を仕込んだ: issue-round: open issue を見て実装を進める');
   });
 
   /**
@@ -4893,9 +4900,17 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
  * stderr の跡の中身・本文が載らないことまで詳しく見ている。ここでは軽く——
  * 残りの口それぞれについて「日誌への追記が落ちても 500 にならない」ことと
  * 「stderr に跡が最低1行出る」ことだけを、1つの表駆動テストでまとめて撃つ。
+ *
+ * **⚠️ 2026-09-29（issue #2123）: `POST /schedule` ・ `PUT /mcp-servers` は
+ * この表から外していない——期待を反転した。** この2口は能力を広げる口だと
+ * teto が判断し、`/access/:accountId/grant` と同じ「日誌を先に書き、書けな
+ * ければ状態を変えずに 500」へ動いた（#2067 時点ではまだこの表と同じ
+ * 「状態変更はもう効いている」型だったので、この歯は当時のその形を固定して
+ * いた）。以下の2口は `widened: true` を付け、逆に「500 になり、状態が
+ * 変わっていない」ことを固定する。
  */
 describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 500 にならない（Issue #2037）', () => {
-  it('各口とも、日誌への追記が落ちても応答は 500 にならず、stderr に跡が出る', async () => {
+  it('各口とも、日誌への追記が落ちても応答は 500 にならず、stderr に跡が出る。能力を広げる2口（issue #2123）は逆に 500 で状態も変わらない', async () => {
     await stores.persona.write('table-memory', '# 元の内容\n');
     await stores.practices.write({ slug: 'table-practice', kind: 'k', title: 't', content: 'c' });
     await stores.schedules.put({
@@ -4936,7 +4951,12 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       shutdown: () => undefined,
     });
 
-    const cases: { name: string; request: () => Response | Promise<Response> }[] = [
+    const cases: {
+      name: string;
+      request: () => Response | Promise<Response>;
+      /** issue #2123: 能力を広げる口は逆に 500・状態は変わらない。 */
+      widened?: true;
+    }[] = [
       {
         name: 'DELETE /memory/:slug',
         request: () => withFailingJournal.request('/memory/table-memory', { method: 'DELETE' }),
@@ -4951,6 +4971,7 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       },
       {
         name: 'POST /schedule',
+        widened: true,
         request: () =>
           withFailingJournal.request(
             '/schedule',
@@ -4991,6 +5012,7 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
       },
       {
         name: 'PUT /mcp-servers',
+        widened: true,
         request: () =>
           withFailingJournal.request('/mcp-servers', {
             ...json({ mcpServers: { github: { command: 'gh-mcp' } } }),
@@ -5008,14 +5030,24 @@ describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 50
     ];
 
     const lines = await captureStderr(async () => {
-      for (const { name, request } of cases) {
+      for (const { name, request, widened } of cases) {
         const response = await request();
-        expect(response.status, name).not.toBe(500);
+        if (widened === true) {
+          expect(response.status, name).toBe(500);
+        } else {
+          expect(response.status, name).not.toBe(500);
+        }
       }
     });
 
+    // 能力を広げる2口（issue #2123）は、日誌が先に落ちたので状態も変わって
+    // いない——新しい kind は作られず、MCP サーバの登録も置かれていない。
+    expect(await stores.schedules.get('table-new-kind')).toBeNull();
+    expect(await stores.mcpServers.read()).toBeNull();
+
+    const narrowCaseCount = cases.filter((c) => c.widened !== true).length;
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
-    expect(dropped).toHaveLength(cases.length);
+    expect(dropped).toHaveLength(narrowCaseCount);
   });
 });
 
@@ -8351,7 +8383,15 @@ describe('実行環境プロファイル', () => {
     expect(serialized).not.toContain('DUMMY_PROFILE_SECRET_MARKER');
   });
 
-  it('読めなかった（保存していない）ときは日誌にも残らない', async () => {
+  /**
+   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** 差し替え（保存・配布を
+   * 含む `deps.profile.apply`）を「日誌を先に書く」形へ動かした以上、評価で
+   * 断られた回も「差し替えようとしている」の1行と、打ち消しの1行が残る
+   * （記録が多すぎる側の穴で、記録の無い差し替えより安全側と判断した。teto の
+   * 判断）。元は「1文字も置いていないので日誌にも残らない」ことを固定して
+   * いたが、それは差し替えが日誌の後にあった旧い形の帰結だった。
+   */
+  it('読めなかった（保存していない）ときも、差し替えようとした行と打ち消しの行が残り、400 のまま', async () => {
     const withProfile = createApp({
       clone: fake.clone,
       stores,
@@ -8366,11 +8406,15 @@ describe('実行環境プロファイル', () => {
       body: JSON.stringify({ script: 'if [ ; then' }),
     });
     expect(response.status).toBe(400);
+    // 保存していない——前のもの（無い）が残る。
+    expect(await stores.profile.read()).toBeNull();
 
-    const journal = await stores.journal.list({ types: ['decision'] });
-    expect(
-      journal.some((e) => e.type === 'decision' && e.decision.includes('実行環境プロファイル')),
-    ).toBe(false);
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .filter((decision) => decision.includes('実行環境プロファイル'));
+    expect(decisions).toHaveLength(2);
+    expect(decisions.some((d) => d.includes('差し替えようとしている'))).toBe(true);
+    expect(decisions.some((d) => d.includes('差し替えられなかった'))).toBe(true);
   });
 });
 
@@ -8584,26 +8628,48 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(serialized).not.toContain(DUMMY_VALUE);
   });
 
-  it('置かせない名前・伏せる鍵は 400 で、1文字も置いていないので日誌にも残らない', async () => {
+  /**
+   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` を
+   * 「日誌を先に書く」形へ動かした以上、`deps.credentials.apply`（検証と
+   * 実際の保存が同じ1呼びの中にある）が検証で断った回も「差し替えようと
+   * している」の1行と、打ち消しの1行が残る（記録が多すぎる側の穴で、記録の
+   * 無い差し替えより安全側と判断した。teto の判断）。元は「1文字も置いて
+   * いないので日誌にも残らない」ことを固定していたが、それは差し替えが
+   * 日誌の後にあった旧い形の帰結だった。**値（鍵そのもの）は今までどおり
+   * 1文字も書かない**——ここで固定するのは名前だけである。
+   */
+  it('置かせない名前・伏せる鍵は 400 のまま。差し替えようとした行と打ち消しの行は残るが、値は1文字も書かない', async () => {
     const withVault = withCredentials();
-    await put(withVault, [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE }]);
-    await put(withVault, [{ name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' }]);
+    const r1 = await put(withVault, [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: DUMMY_VALUE }]);
+    expect(r1.status).toBe(400);
+    const r2 = await put(withVault, [{ name: 'ALTEROID_DATABASE_URL', value: 'postgres://stolen' }]);
+    expect(r2.status).toBe(400);
+    // 置かせない名前なので、正本には1件も置かれていない。
+    expect(await stores.credentials.list()).toEqual([]);
 
-    const journal = await stores.journal.list({ types: ['decision'] });
-    expect(
-      journal.some((e) => e.type === 'decision' && e.decision.includes('環境変数（鍵）')),
-    ).toBe(false);
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .filter((decision) => decision.includes('環境変数（鍵）'));
+    expect(decisions).toHaveLength(4);
+    expect(decisions.filter((d) => d.includes('差し替えようとしている'))).toHaveLength(2);
+    expect(decisions.filter((d) => d.includes('差し替えられなかった'))).toHaveLength(2);
+    const serialized = JSON.stringify(decisions);
+    expect(serialized).not.toContain(DUMMY_VALUE);
+    expect(serialized).not.toContain('postgres://stolen');
   });
 
   /**
-   * **⚠️ `PUT /credentials` は Issue #2037 の `appendJournalOrDrop` の対象外
-   * （マネージャー判断。`app.ts` の `appendJournalOrDrop` の doc「当てていない
-   * 口」）。** 鍵の差し替えは日誌より前に runner へ配られ、効いている——
-   * それでも日誌の行が「誰が鍵を差し替えたか」の唯一の記録である以上、
-   * ここだけは書けなかったら今までどおり 500 のままにする（跡は stderr にも
-   * 残る）。この歯はその「変えていないこと」を固定する。
+   * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` は
+   * 能力を広げる口だと teto が判断し、`/access/:accountId/grant` と同じ
+   * 「日誌を先に書き、書けなければ状態を変えずに 500」へ動いた。元は
+   * 「差し替え（`deps.credentials.apply`）が先・日誌が後」だったので、日誌
+   * への追記だけが落ちても差し替えは効いたままだった——この歯はその「差し
+   * 替えは効いたまま」を固定していた（`app.ts` の `appendJournalOrDrop` の
+   * doc「当てていない口」、Issue #2037 の対象外という当時のマネージャー
+   * 判断）。いまは日誌が先なので、日誌が書けなければ差し替えそのものが
+   * 起きない——`deps.credentials.apply` は一度も呼ばれず、鍵は置かれない。
    */
-  it('日誌への追記が落ちたら、鍵は既に置かれていても 500 のまま（Issue #2037 の対象外）', async () => {
+  it('日誌への先書きが落ちると 500 で、鍵は置かれない（issue #2123）', async () => {
     const runner = fakeRunner('runner-1');
     const failingJournal: Stores = {
       ...stores,
@@ -8631,10 +8697,11 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       expect(response.status).toBe(500);
     });
 
-    // 鍵そのものは既に置かれている（応答は 500 でも操作は効いている）。
-    expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
-    // **`appendJournalOrDrop` を通らないので、`noteDroppedRecord` の跡は出ない**
-    // （握っていない証拠——出ていたら 500 と矛盾する形で握っていることになる）。
+    // 日誌が先に落ちたので、差し替え（`apply`）そのものが起きていない。
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual([]);
+    expect(runner.held.has('NPM_TOKEN')).toBe(false);
+    // **`appendJournalOrDrop` は通らない**（打ち消しの行を書く前段——先書き
+    // ——で落ちたので、そこにも進んでいない）。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
   });

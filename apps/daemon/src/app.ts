@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   AccountUsageState,
+  ApplyCredentialsResult,
+  ApplyMcpServersResult,
   ArchiveEntry,
   ChatStreamEvent,
   CloneHost,
@@ -1268,31 +1270,33 @@ function describeActor(principal: Principal): string {
  * **どの口に当てているか（2026-09-29 時点）。** `/permission-grants/:id/revoke` ・
  * `DELETE /archive/:id` ・ `POST /archive/remove` の一括 tombstone（最初の3経路。
  * Issue #2037 本体）に加え、`/memory/:slug`（PUT・DELETE）・`/practices/:slug`
- * （PUT・DELETE の両分岐）・`/schedule`（POST）・`/schedule/:kind`（DELETE）・
+ * （PUT・DELETE の両分岐）・`/schedule/:kind`（DELETE）・
  * `/commitments`（POST）・`/commitments/:id/close`・`/commitments/:id/appraise`・
- * `/commitments/:id`（PATCH）・`/mcp-servers`（PUT）・`/inbox/remove`（POST、
+ * `/commitments/:id`（PATCH）・`/inbox/remove`（POST、
  * 塊ごと）・`/reset`（POST）・`/access/:accountId/revoke`・
- * `/access/:accountId/owner/revoke`（issue #2043。狭める2つはここまでと同じ
+ * `/access/:accountId/owner/revoke`（issue #2043。狭める側はここまでと同じ
  * 「状態変更はもう効いている」型）。
  *
- * **`/access/:accountId/grant` と `/access/:accountId/owner`（権限を広げる
- * 2つ）はこの関数を状態変更の後には当てない（issue #2043）。** 広げる側で
- * 状態変更の後に日誌が落ちると、記録の無い許可が生まれる——`grant` の注記が
- * 言う「上限を外した 2026-09-09 以降、ここが唯一の歯止めである」がそのまま
- * 効く場所である。だから**日誌を先に書き、書けなければ状態を変えずに 500**
- * にする（`stores.journal.append` を直に呼び、投げたら `base.onError` へ
- * 抜けるに任せる）。状態変更の後に「付与できなかった」を打ち消す側の追記
- * だけ、この関数を使う——打ち消しが落ちても、実際の許可はどのみち変わって
- * いない（記録が多すぎる側の穴で、記録の無い許可より安全側と判断した）。
- *
- * **当てていない口とその理由。**
- * - `PUT /credentials` ・ `PUT /profile`——鍵を扱う `requireOwner` の口。
- *   差し替えは日誌より前に runner へ配られていて効いている。日誌の行は、
- *   誰が鍵を差し替えたかの唯一の記録である。ここで握って成功を返すと、
- *   記録が欠けたことは stderr にしか出ない。500 は、人間にやり直し
- *   （冪等で、記録が残る）を促す唯一の合図になる。本当に閉じる形は
- *   「日誌を先に書く」で、#2043 の (a) と同じ設計判断に当たる。だから
- *   ここは握らずに残す（マネージャー判断、#2037）。
+ * **能力を広げる口は、状態変更の後にこの関数を当てない（issue #2043・
+ * #2123）。** 広げる側で状態変更の後に日誌が落ちると、記録の無い変更が
+ * 生まれる——`grant` の注記が言う「上限を外した 2026-09-09 以降、ここが
+ * 唯一の歯止めである」がそのまま効く場所である。だから**日誌を先に書き、
+ * 書けなければ状態を変えずに 500** にする（`stores.journal.append` を直に
+ * 呼び、投げたら `base.onError` へ抜けるに任せる）。状態変更が投げたら、
+ * 打ち消しの行（「〜できなかった: …」の形）をこの関数で足してから同じ
+ * エラー応答を返す——打ち消しが落ちても、実際の変更はどのみち変わって
+ * いない（記録が多すぎる側の穴で、記録の無い変更より安全側と判断した）。
+ * **状態変更の後でないと分からない情報**（`editRequest` の戻り値・runner
+ * への配布結果・差し替えた鍵の指紋など）**は、先に書く行に含めず、
+ * 後で分かる分を2行目としてこの関数で（best-effort に）足す。**
+ * 対象: `/access/:accountId/grant`・`/access/:accountId/owner`（issue #2043）・
+ * `POST /schedule`・`PUT /mcp-servers`・`PUT /credentials`・`PUT /profile`
+ * （issue #2123。teto の判断——#2067 がこの4口を「状態変更はもう効いている」
+ * 型のまま `appendJournalOrDrop` を当てていたが、能力を広げる口はそちら
+ * ではなく閉じる側に倒す）。**`PUT /credentials`・`PUT /profile` は検証と
+ * 実際の状態変更が同じ1呼び（`apply`）の中にあり分けられないので、検証で
+ * 断られた回も同じ「打ち消し」の扱いにする**（同じ理由——記録が多すぎる側
+ * を選ぶ）。
  */
 async function appendJournalOrDrop(
   stores: Stores,
@@ -3706,6 +3710,17 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'reserved kind' as const }, 409);
         }
         const now = new Date().toISOString();
+        // **能力を広げる口（issue #2123。teto の判断、#2043 (a) と同じ設計）。**
+        // 日誌を先に書く。書けなければ仕込まずに 500（下の `base.onError` へ
+        // 抜けるに任せる）。「仕込んだ」か「直した」かは `editRequest` の戻り値
+        // でしか分からないので、先に書く行はそれを含まない形にし、後で分かる
+        // 分は2行目として `appendJournalOrDrop`（best-effort）で足す。
+        await stores.journal.append({
+          type: 'decision',
+          decision: `人間が定期の依頼を設定しようとしている: ${kind}: ${request}`,
+          grounds: '人間が直接 API から仕込んだ',
+        });
+
         // **編集は `editRequest`、新規作成だけ `put`（Issue #1654）。**
         // かつてはここで `get()` した `existing` から `lastRunAt` /
         // `lastScheduledRunAt` / `pendingRun` を写して `put()` していたが、
@@ -3715,12 +3730,29 @@ export function createApp(deps: AppDeps) {
         // `packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`）。
         // `editRequest` は現在値をストアの排他区間の中で読み直して引き継ぐので、
         // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
-        const edited = await stores.schedules.editRequest(kind, { request, spec }, now);
-        if (edited === null) {
-          await stores.schedules.put({ kind, spec, request, createdAt: now, updatedAt: now });
+        let edited: Awaited<ReturnType<Stores['schedules']['editRequest']>>;
+        try {
+          edited = await stores.schedules.editRequest(kind, { request, spec }, now);
+          if (edited === null) {
+            await stores.schedules.put({ kind, spec, request, createdAt: now, updatedAt: now });
+          }
+        } catch (error) {
+          // 日誌には「設定しようとしている」が残っているので、打ち消す
+          // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `人間が定期の依頼を設定できなかった: ${kind}: ${request}`,
+              grounds: '人間が直接 API から仕込もうとしたが、状態の変更が失敗した',
+            },
+            '定期の依頼の打ち消しの日誌',
+            `kind=${kind}`,
+          );
+          throw error;
         }
-        // **仕込み自体はもう効いている**（Issue #2037）。日誌への追記だけが
-        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        // 仕込み・直しはもう効いている。後で分かった区別を2行目として足す
+        // （落ちても 500 にしない——`appendJournalOrDrop` の doc）。
         await appendJournalOrDrop(
           stores,
           {
@@ -5175,6 +5207,17 @@ export function createApp(deps: AppDeps) {
      * スクリプトなので、構文を間違えれば読めない。それを保存すると、以後の
      * 再接続のたびに配布が失敗し、器を作り直した瞬間に環境が黙って痩せる。
      * 先に評価して、通らなければ 400 で理由を返す（前のものが残る）。
+     *
+     * **能力を広げる口（issue #2123。teto の判断）。** 実行環境のスクリプトを
+     * 変える口なので、`/access/:accountId/grant` と同じ扱い——**日誌を先に
+     * 書き、書けなければ差し替えずに 500**。以前は差し替え（`deps.profile.apply`。
+     * 評価・正本への保存・クローンと runner への配布を含む）の**後**に日誌へ
+     * 書いていて、追記だけが落ちても 500 を返す一方で差し替えは効いたまま残って
+     * いた（閉じる側に倒れていなかった）。`apply` が読めなかった（評価で断った。
+     * `!result.stored`）・投げた、どちらも打ち消しの行を `appendJournalOrDrop`
+     * で足してから今と同じエラー応答にする。sha256・配布結果は差し替えた後で
+     * ないと分からないので、先に書く行はそれを含まない形にし、後で分かる分は
+     * 2行目として `appendJournalOrDrop`（best-effort）で足す。
      */
     .put(
       '/profile',
@@ -5227,11 +5270,54 @@ export function createApp(deps: AppDeps) {
         if (deps.profile === undefined) {
           return c.json({ error: 'プロファイルの器が無い' as const, detail: '' }, 400);
         }
-        const result = await deps.profile.apply(c.req.valid('json').script);
+        const script = c.req.valid('json').script;
+
+        // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
+        // sha256・bytes は差し替えた後でないと分からないので、ここでは書かない
+        // （後で分かる分は2行目として下で足す）。
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: '実行環境プロファイルを差し替えようとしている',
+          grounds: `${describeActor(c.get('principal'))}（PUT /profile）。値は書かない（鍵が入りうる）。`,
+        });
+
+        let result: Awaited<ReturnType<ProfileService['apply']>>;
+        try {
+          result = await deps.profile.apply(script);
+        } catch (error) {
+          // 日誌には「差し替えようとしている」が残っているので、打ち消す
+          // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: '実行環境プロファイルを差し替えられなかった',
+              grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${String(error)}`,
+            },
+            '実行環境プロファイルの打ち消しの日誌',
+            'PUT /profile',
+          );
+          throw error;
+        }
 
         if (!result.stored) {
-          // **読めなかったのはシステムの結果であって判断ではない**（`profile_write`
-          // の同じ doc と同じ理由）。保存も配布もしていないので、日誌に残す事実も無い。
+          /**
+           * **読めなかったのはシステムの結果であって判断ではない**（`profile_write`
+           * の同じ doc と同じ理由）。保存も配布もしていない——構造的に
+           * `deps.profile.apply` が評価で断ったときはここへ来て、`stores.profile.write`
+           * には一度も進んでいない。**それでも打ち消しの行を足す**（記録が多すぎる
+           * 側の穴で、記録の無い差し替えより安全側と判断した。teto の判断）。
+           */
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: '実行環境プロファイルを差し替えられなかった（読めなかった）',
+              grounds: `${describeActor(c.get('principal'))}（PUT /profile、評価で断られた）`,
+            },
+            '実行環境プロファイルの打ち消しの日誌',
+            'PUT /profile',
+          );
           return c.json(
             {
               error: 'プロファイルが読めなかったので保存していない' as const,
@@ -5250,29 +5336,31 @@ export function createApp(deps: AppDeps) {
          * ここは人間がこの口から直に叩く経路なので、`profile_write` の
          * `summary`（クローンが書く一行要約）に代わるものが無い——その代わりに
          * 「誰が・どの口から」を `describeActor` で補う。
+         *
+         * **差し替え自体はもう効いている**（正本への保存・クローンと runner への
+         * 反映とも済んでいる）。後で分かった sha256・配布結果を2行目として足す
+         * （落ちても 500 にしない。`appendJournalOrDrop` の doc）。
          */
         const delivered = result.runners
           .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
           .join(', ');
-        // **ここは `appendJournalOrDrop` を使わない（Issue #2037 の対象外。
-        // マネージャー判断）。** 鍵を扱う `requireOwner` の口で、差し替えは
-        // 日誌より前に runner へ配られ、効いている。日誌の行は、誰が鍵を
-        // 差し替えたかの唯一の記録である。ここで握って成功を返すと、記録が
-        // 欠けたことは stderr にしか出ない。500 は、人間にやり直し（冪等で、
-        // 記録が残る）を促す唯一の合図になる。本当に閉じる形は「日誌を先に
-        // 書く」で、#2043 の (a) と同じ設計判断に当たる。だから握らずに残す。
-        await deps.stores.journal.append({
-          type: 'decision',
-          decision:
-            result.sha256 === undefined
-              ? '実行環境プロファイルを外した'
-              : `実行環境プロファイルを更新した（sha256 ${result.sha256}・${String(result.bytes)} bytes）`,
-          grounds:
-            `${describeActor(c.get('principal'))}（PUT /profile）。` +
-            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
-            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
-            '（マネージャー・作業者には次に開くセッションから効く）。',
-        });
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision:
+              result.sha256 === undefined
+                ? '実行環境プロファイルを外した'
+                : `実行環境プロファイルを更新した（sha256 ${result.sha256}・${String(result.bytes)} bytes）`,
+            grounds:
+              `${describeActor(c.get('principal'))}（PUT /profile）。` +
+              '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
+              `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+              '（マネージャー・作業者には次に開くセッションから効く）。',
+          },
+          '実行環境プロファイルの日誌',
+          'PUT /profile',
+        );
 
         return c.json(
           profileUpdateResponseSchema.parse({
@@ -5364,6 +5452,17 @@ export function createApp(deps: AppDeps) {
      * **日誌には名前だけを書く**（値には鍵が入りうる）。人間が明示的に置いた
      * 操作でも、何がいつ変わったかを可観測性の外に置かない（`POST /reset` と同じ）。
      *
+     * **能力を広げる口（issue #2123。teto の判断）。** クローンの道具（MCP
+     * サーバの登録）を増やす口なので、`/access/:accountId/grant` と同じ扱い
+     * ——**日誌を先に書き、書けなければ差し替えずに 500**。差し替え（保存・
+     * runner への配布）が投げたら、打ち消しの行を `appendJournalOrDrop` で
+     * 足してから同じエラー応答。**空の `mcpServers`（登録を全部外す、狭める
+     * 使い方）も同じ扱いにする**——口ごとに1つの扱いとして閉じる側に倒す
+     * （teto の判断。#2067 が当てていた `appendJournalOrDrop`〈落ちても 200〉は
+     * ここではもう使わない）。runner への配布結果は差し替えた後でないと
+     * 分からないので、先に書く行はそれを含まない形にし、後で分かる分は2行目
+     * として `appendJournalOrDrop`（best-effort）で足す。
+     *
      * 門の選び方は `GET /mcp-servers` の doc。
      */
     .put(
@@ -5407,35 +5506,70 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const previous = await deps.stores.mcpServers.read();
         const servers = c.req.valid('json').mcpServers;
+        const names = mcpServerNames(servers);
+        const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
+
+        // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
+        // runner への配布結果は差し替えた後でないと分からないので、ここでは
+        // 含めない（後で分かる分は2行目として下で足す）。
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision:
+            names.length === 0
+              ? 'MCP サーバの登録を外そうとしている'
+              : `MCP サーバの登録を差し替えようとしている（${names.join(', ')}）`,
+          grounds:
+            `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
+            `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
+            '値は書かない（鍵が入りうる）。',
+        });
+
         // **1本道を通す**（渡されていない構成＝テストや配布先を持たない器では、
         // 保存だけして配らない。配らなかったことは `runners: []` で見える）。
-        const applied =
-          deps.mcpServers === undefined
-            ? await (async () => {
-                const stored = await deps.stores.mcpServers.write(servers);
-                const storedNames = mcpServerNames(stored.mcpServers);
-                return {
-                  updatedAt: stored.updatedAt,
-                  names: storedNames,
-                  ...(storedNames.length === 0
-                    ? {}
-                    : { sha256: mcpServersFingerprintOf(stored.mcpServers) }),
-                  runners: [],
-                };
-              })()
-            : await deps.mcpServers.apply(servers);
-        const names = applied.names;
-        const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
-        // 配布の結果も日誌へ（名前と成否だけ。値は書かない）。
+        let applied: ApplyMcpServersResult;
+        try {
+          applied =
+            deps.mcpServers === undefined
+              ? await (async () => {
+                  const stored = await deps.stores.mcpServers.write(servers);
+                  const storedNames = mcpServerNames(stored.mcpServers);
+                  return {
+                    updatedAt: stored.updatedAt,
+                    names: storedNames,
+                    ...(storedNames.length === 0
+                      ? {}
+                      : { sha256: mcpServersFingerprintOf(stored.mcpServers) }),
+                    runners: [],
+                  };
+                })()
+              : await deps.mcpServers.apply(servers);
+        } catch (error) {
+          // 日誌には「差し替えようとしている」が残っているので、打ち消す
+          // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision:
+                names.length === 0
+                  ? 'MCP サーバの登録を外せなかった'
+                  : `MCP サーバの登録を差し替えられなかった（${names.join(', ')}）`,
+              grounds: `${describeActor(c.get('principal'))}（PUT /mcp-servers、状態の変更が失敗）`,
+            },
+            'MCP サーバ登録の打ち消しの日誌',
+            `count=${String(names.length)}`,
+          );
+          throw error;
+        }
+        // 配布の結果も日誌へ（名前と成否だけ。値は書かない）。差し替え自体は
+        // もう効いている——後で分かった配布結果は2行目として足す（落ちても
+        // 500 にしない。`appendJournalOrDrop` の doc）。
         const delivered = applied.runners
           .map(
             (r) =>
               `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
           )
           .join(', ');
-        // **差し替え自体はもう効いている**（保存・runner への配布とも済んでいる。
-        // Issue #2037）。日誌への追記だけが落ちても 500 を返さない——
-        // `appendJournalOrDrop` の doc。
         await appendJournalOrDrop(
           deps.stores,
           {
@@ -5541,6 +5675,20 @@ export function createApp(deps: AppDeps) {
      * 変えていない。** あちらの緩さは以前から在るもので、締めるかどうかは方針の
      * 判断（人間の決定）である。ここで勝手に揃えると、いま通っている運用が黙って
      * 止まる。
+     *
+     * **能力を広げる口（issue #2123。teto の判断）。** マネージャーに鍵を降ろす
+     * 口なので、`/access/:accountId/grant` と同じ扱い——**日誌を先に書き、
+     * 書けなければ差し替えずに 500**。以前は差し替え（`deps.credentials.apply`。
+     * 正本への保存と runner への配布を含む）の**後**に日誌へ書いていて、追記
+     * だけが落ちても 500 を返す一方で差し替えは効いたまま残っていた（閉じる側に
+     * 倒れていなかった）。差し替えが投げたら、打ち消しの行を `appendJournalOrDrop`
+     * で足してから同じエラー応答（`{ error: String(error) }` の 400）を返す——
+     * `deps.credentials.apply` は名前の形・伏せる鍵などの検証もこの1呼びの中で
+     * 行うので、検証で断られた回もここに含まれる（「記録が多すぎる側」の穴で、
+     * 記録の無い差し替えより安全側と判断した。teto の判断）。指紋・runner への
+     * 配布結果は差し替えた後でないと分からないので、先に書く行はそれを含まない
+     * 形にし、後で分かる分は2行目として `appendJournalOrDrop`（best-effort）で
+     * 足す。
      */
     .put(
       '/credentials',
@@ -5591,19 +5739,52 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: '鍵の正本の器が無い' as const }, 503);
         }
         const entries = c.req.valid('json').credentials;
-        let result;
+        const setNames = entries.filter((e) => e.value.length > 0).map((e) => e.name);
+        const removedNames = entries.filter((e) => e.value.length === 0).map((e) => e.name);
+        const wanted = [
+          setNames.length === 0 ? null : `置く: ${setNames.join(', ')}`,
+          removedNames.length === 0 ? null : `外す: ${removedNames.join(', ')}`,
+        ]
+          .filter((part) => part !== null)
+          .join('。');
+
+        // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
+        // 指紋は差し替えた後でないと分からないので、ここでは名前だけを書く
+        // （後で分かる分は2行目として下で足す）。
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: `環境変数（鍵）を差し替えようとしている（${wanted}）`,
+          grounds: `${describeActor(c.get('principal'))}（PUT /credentials）。値は書かない（鍵そのものである）。`,
+        });
+
+        let result: ApplyCredentialsResult;
         try {
           result = await deps.credentials.apply(entries);
         } catch (error) {
           /**
-           * **置かせない名前（伏せる鍵・プールが正本を持つ名前）はここへ来る。**
+           * **置かせない名前（伏せる鍵・プールが正本を持つ名前）もここへ来る**
+           * （`credential-service.ts` の `assertEntries`。検証と実際の保存が
+           * 同じ1呼び〈`apply`〉の中にあり、ここからは分けられない）。
            *
            * 理由を返す——「置けなかった」だけでは、人間は名前を疑うのか権限を
            * 疑うのか分からない。**`String(error)` に値は入らない**（サービス側の
-           * 例外文は名前しか載せていない。`credential-service.ts` の
-           * `assertEntries`）。**1文字も置いていないので、日誌に残す事実も無い**
-           * （`PUT /profile` の読めなかった経路と同じ判断）。
+           * 例外文は名前しか載せていない）。日誌には「差し替えようとしている」が
+           * 残っているので、打ち消す（grant の「アクセス許可付与の打ち消しの
+           * 日誌」と同じ形。**検証で断られた回も同じ扱いにする**——記録が多すぎる
+           * 側の穴で、記録の無い差し替えより安全側と判断した。teto の判断）。
            */
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `環境変数（鍵）を差し替えられなかった（${wanted}）`,
+              grounds:
+                `${describeActor(c.get('principal'))}（PUT /credentials、状態の変更が失敗）: ` +
+                String(error),
+            },
+            '環境変数（鍵）の打ち消しの日誌',
+            `names=${entries.map((e) => e.name).join(',')}`,
+          );
           return c.json({ error: String(error) }, 400);
         }
 
@@ -5614,9 +5795,11 @@ export function createApp(deps: AppDeps) {
          * ⚠️ **`result.fingerprints` を丸ごと流さないこと。** `secret === false`
          * の行は `value`（平文）を伴って返ってくる（`credential-service.ts` の
          * `fingerprintOfRow`）——ここでは `name` / `sha256` だけを個別に読む。
+         *
+         * **差し替え自体はもう効いている**（正本への保存・runner への配布とも
+         * 済んでいる）。後で分かった指紋・配布結果を2行目として足す（落ちても
+         * 500 にしない。`appendJournalOrDrop` の doc）。
          */
-        const setNames = entries.filter((e) => e.value.length > 0).map((e) => e.name);
-        const removedNames = entries.filter((e) => e.value.length === 0).map((e) => e.name);
         const sha256ByName = new Map(result.fingerprints.map((f) => [f.name, f.sha256]));
         const changed = [
           setNames.length === 0
@@ -5629,22 +5812,20 @@ export function createApp(deps: AppDeps) {
         const delivered = result.runners
           .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
           .join(', ');
-        // **ここは `appendJournalOrDrop` を使わない（Issue #2037 の対象外。
-        // マネージャー判断）。** 鍵を扱う `requireOwner` の口で、差し替えは
-        // 日誌より前に runner へ配られ、効いている。日誌の行は、誰が鍵を
-        // 差し替えたかの唯一の記録である。ここで握って成功を返すと、記録が
-        // 欠けたことは stderr にしか出ない。500 は、人間にやり直し（冪等で、
-        // 記録が残る）を促す唯一の合図になる。本当に閉じる形は「日誌を先に
-        // 書く」で、#2043 の (a) と同じ設計判断に当たる。だから握らずに残す。
-        await deps.stores.journal.append({
-          type: 'decision',
-          decision: `環境変数（鍵）を差し替えた（${changed}）`,
-          grounds:
-            `${describeActor(c.get('principal'))}（PUT /credentials）。` +
-            '値は書かない（鍵そのものである）。' +
-            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
-            '。',
-        });
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: `環境変数（鍵）を差し替えた（${changed}）`,
+            grounds:
+              `${describeActor(c.get('principal'))}（PUT /credentials）。` +
+              '値は書かない（鍵そのものである）。' +
+              `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+              '。',
+          },
+          '環境変数（鍵）の日誌',
+          `names=${entries.map((e) => e.name).join(',')}`,
+        );
 
         return c.json(
           // **サービスの返す形をそのまま流さない。** 宣言（`credentials`）と
