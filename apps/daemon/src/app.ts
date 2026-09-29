@@ -2849,6 +2849,12 @@ export function createApp(deps: AppDeps) {
             description: '該当する版が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する版は在るが、型に合わない形で入っていて読めない（消されたのとは区別する。' +
+              'issue #2177）。この版を書き直す口は無い——本文はここでは取れない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       async (c) => {
@@ -2864,7 +2870,26 @@ export function createApp(deps: AppDeps) {
         if (!Number.isInteger(version) || version <= 0) {
           return c.json({ error: '版番号が不正' as const }, 400);
         }
-        const found = await stores.practices.readVersion(slug, version);
+        // **issue #2177。** `GET /practices/:slug` と同じ門——`readVersion` も
+        // 読めない行で `UnreadablePracticeError` を投げる（`PracticeStore
+        // .readVersion` の doc）。ここも書き直し・削除の口ではないので、
+        // `PUT`/`DELETE` のように捕まえて先へ進む理由は無い——素の 500
+        // （`onError` 任せ）より何が起きたかが分かる応答にする（兄弟の口
+        // `GET /practices/:slug` と同じ判断・同じ形）。
+        let found: Awaited<ReturnType<typeof stores.practices.readVersion>>;
+        try {
+          found = await stores.practices.readVersion(slug, version);
+        } catch (error) {
+          if (!(error instanceof UnreadablePracticeError)) throw error;
+          return c.json(
+            {
+              error:
+                `やり方 ${slug} の版 ${String(version)} は読めない形で入っている` +
+                '（消されたのではない）。本文はここでは取れない。',
+            },
+            409,
+          );
+        }
         if (!found) return c.json({ error: 'not found' as const }, 404);
         return c.json({ version: found });
       },

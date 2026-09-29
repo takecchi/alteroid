@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr } from '@alteroid/core';
+import { UnreadableScheduleError, captureStderr } from '@alteroid/core';
 import type { ScheduledRequest } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -118,6 +118,9 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
         await stores.schedules.get('bad-kind');
       }),
     ).rejects.toThrow();
+    // **issue #2177。** `instanceof` で見分けられる専用の型を投げる
+    // （`schedule_list` の tools.ts の catch が使う契約）。文言は変えていない。
+    await expect(stores.schedules.get('bad-kind')).rejects.toBeInstanceOf(UnreadableScheduleError);
 
     // 本当に消された kind（一度も書いていない）は、投げずに null。
     let missing: ScheduledRequest | null = 'sentinel' as unknown as ScheduledRequest | null;
