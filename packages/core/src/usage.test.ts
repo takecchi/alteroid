@@ -754,6 +754,29 @@ describe('読めなかった欄を数える（Issue #2086。「0」と「取れ�
       });
     });
 
+    // mgr-712ad619 のレビューで足した。この台帳は「同じ累積を2回送っても増分は 0」
+    // （再送に耐える）を約束している。2周目に、1周目が作った基準（`nextBaseline`）を
+    // 挟んで、同じスナップショットをもう一度畳む。
+    it('同じ累積をもう一度畳む（再送）と、unreadable だけの行を積まない', () => {
+      const snapshot = {
+        models: { opus: { ...ZERO_USAGE, costUsd: 1, unreadable: { webSearchRequests: 1 } } },
+      };
+      const first = foldUsageSnapshot(null, snapshot, AT);
+      expect(first.delta.opus?.unreadable).toEqual({ webSearchRequests: 1 });
+
+      const resent = foldUsageSnapshot(nextBaseline(first), snapshot, LATER);
+      expect(resent.delta).toEqual({});
+    });
+
+    it('数値6欄が全部0で基準の在るモデルが、読めないまま再送されても行を積まない', () => {
+      const snapshot = { models: { opus: { ...ZERO_USAGE, unreadable: { costUsd: 1 } } } };
+      const first = foldUsageSnapshot(null, snapshot, AT);
+      expect(first.delta.opus?.unreadable).toEqual({ costUsd: 1 });
+
+      const resent = foldUsageSnapshot(nextBaseline(first), snapshot, LATER);
+      expect(resent.delta).toEqual({});
+    });
+
     it('foldOneshotUsage も同じ理由で unreadable-only の行を落とさない', () => {
       const fold = foldOneshotUsage({
         models: { opus: { ...ZERO_USAGE, unreadable: { costUsd: 1 } } },

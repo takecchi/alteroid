@@ -416,15 +416,25 @@ function hasUnreadable(totals: UsageTotals): boolean {
  * 同じ形で消える（AGENTS.md 地雷表）。
  */
 function isZero(totals: UsageTotals): boolean {
+  return isNumericZero(totals) && !hasUnreadable(totals);
+}
+
+/** 数値の6欄が全部ゼロか（`unreadable` は見ない。`foldUsageSnapshot` の再送の判定に使う）。 */
+function isNumericZero(totals: UsageTotals): boolean {
   return (
     totals.inputTokens === 0 &&
     totals.outputTokens === 0 &&
     totals.cacheReadInputTokens === 0 &&
     totals.cacheCreationInputTokens === 0 &&
     totals.webSearchRequests === 0 &&
-    totals.costUsd === 0 &&
-    !hasUnreadable(totals)
+    totals.costUsd === 0
   );
+}
+
+/** `unreadable` を外した写しを返す。 */
+function withoutUnreadable(totals: UsageTotals): UsageTotals {
+  const { unreadable: _unreadable, ...rest } = totals;
+  return rest;
 }
 
 /**
@@ -474,7 +484,19 @@ export function foldUsageSnapshot(
 
   const delta: Record<string, UsageTotals> = {};
   for (const [model, totals] of Object.entries(next)) {
-    const increment = reset ? totals : subtract(totals, prev[model] ?? ZERO_USAGE);
+    const raw = reset ? totals : subtract(totals, prev[model] ?? ZERO_USAGE);
+    // **再送と区別できない読みでは、`unreadable` を数えない**（Issue #2086。
+    // mgr-712ad619 のレビューで足した）。この台帳は「累積の値なので、同じものを
+    // 2回送っても増分は 0 になる（再送に耐える）」を約束している（`runner.ts` の
+    // `#flushUsage` の doc。畳む直前の読みが `result` 経由の記録と重なるのは普通の
+    // 枝である）。`unreadable` は差分を取らずに毎回の読みをそのまま渡すので、同じ
+    // 累積をもう一度送ると `unreadable` だけが増分に残り、トークンが 0 で「読め
+    // なかった」だけの行がもう1本積まれる。⟹ そのモデルの基準がすでに在り、数値の
+    // 6欄の増分が全部 0 の読みでは、`unreadable` を落とす。初めて見たモデル・数値が
+    // 増えた読みでは数える。**数の意味は「読めなかった区切りの数の下限」になる**
+    // ——0 か否か（取れなかったことが在るか）の信号は失わない。
+    const increment =
+      !reset && prev[model] !== undefined && isNumericZero(raw) ? withoutUnreadable(raw) : raw;
     // 増えていないモデルの行を作らない（台帳が 0 の行で埋まる）。
     if (!isZero(increment)) delta[model] = increment;
   }
