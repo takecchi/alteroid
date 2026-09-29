@@ -497,6 +497,13 @@ export { verifyTranscriptArchiveContract } from './archive-contract.js';
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
+/**
+ * `PermissionGrantStore` の契約（Issue #863。doc は `store.ts`）。3実装
+ * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
+ * 揃っていることを測る — 1つで測って3つとも測ったことにしない
+ * （`verifyMcpServerStoreContract` と同じ作法）。
+ */
+export { verifyPermissionGrantStoreContract } from './permission-grant-contract.js';
 export { verifyPracticeStoreContract } from './practice-contract.js';
 export { verifyStoreIsolationContract } from './store-isolation-contract.js';
 /**
