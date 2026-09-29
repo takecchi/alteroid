@@ -13,6 +13,7 @@ import {
   type TokenRotationSettings,
 } from './token-pool.js';
 import { UnreadableTokenSettingsError, type Stores } from './store.js';
+import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 
 /**
  * 認証トークンのプールを**置いて読む**までの1本道（Issue #393「PR1 プールの器」）。
@@ -27,6 +28,18 @@ import { UnreadableTokenSettingsError, type Stores } from './store.js';
  * 「途中で混ざった版」を残してしまう。人間が `PUT /tokens` で並べ替えている
  * 最中にクローンが `token_add` を呼ぶことは自律ターンがある以上普通に起こりうる
  * ので、この列は理論上の心配ではない。
+ *
+ * **⚠️ ただし、この `serial()` が直列化するのは「このサービスへの呼び出し
+ * どうし」だけである。回し手（`token-rotator.ts`）は別インスタンスの別の
+ * `serial()` を持つので、この列だけでは足りない**（Issue #2200）。
+ * `replace()` / `noteUnusable()` / `noteUsable()` はどれも `stores.tokens
+ * .replace()`（CAS の無い全文置換。`store.ts` の doc）で書くので、この列の
+ * 外側で回し手が同時に書けば、後に書いたほうが前の変更を黙って消す——実測は
+ * 「人間の `PUT /tokens` が3本目を足した直後、回し手の `observe()` が古い
+ * 2本の一覧で書き戻し、3本目が消えた」。**それを防ぐのが
+ * {@link TokenPoolServiceOptions.writeLock}**（`token-pool-write-lock.ts`。
+ * `createTokenRotator` と共有する、書く区間だけを守る鍵）——下の `writeOne` /
+ * `replace` の実装を見よ。
  *
  * **この PR で回す道具は無い。** ここにあるのは `list` / `replace` /
  * `setSettings` の3つだけで、検知や切替（PR3）はここには無い。
@@ -150,12 +163,28 @@ export interface TokenPoolServiceOptions {
    * 「保存できなかった」と返すのは、いちばん誤解を招く倒れ方である。
    */
   onChanged?: (change: 'pool' | 'settings') => void;
+  /**
+   * **`TokenPoolStore` への書き込みを `TokenRotator` と共有する鍵**
+   * （Issue #2200。`token-pool-write-lock.ts`）。
+   *
+   * **省略すると自分専用の鍵を作る**（テストや、この鍵をまだ配線していない
+   * 呼び手との互換のため）。本番（`apps/daemon/src/index.ts`）は
+   * `createTokenPoolWriteLock()` を1つ作って `createTokenRotator` とここへ
+   * 同じインスタンスを渡す——別々のインスタンスを渡すと Issue #2200 の状態
+   * （別々の直列の列が互いを待たない）に戻る。
+   *
+   * **握るのは「最新の一覧を読み直す → 変えた行を id で当てる → 書き戻す」
+   * の短い区間だけ**（`token-pool-write-lock.ts` の doc）。`writeOne` /
+   * `replace` の内側がそのまま出している。
+   */
+  writeLock?: TokenPoolWriteLock;
 }
 
 export function createTokenPoolService(options: TokenPoolServiceOptions): TokenPoolService {
   const { stores } = options;
   const now = options.now ?? (() => new Date());
   const newId = options.newId ?? (() => randomUUID());
+  const writeLock = options.writeLock ?? createTokenPoolWriteLock();
 
   /**
    * 変わったことを知らせる。**保存の成否を巻き添えにしない。**
@@ -231,13 +260,26 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
   }
 
   /**
-   * 1行だけ差し替えて全文で書き戻す。**直列化された列の中からだけ呼ぶ。**
+   * 1行だけ差し替えて全文で書き戻す。**呼ぶのは直列化された列（`serial()`）
+   * の中からだけ**——同じサービスの中の呼び出しどうしが混ざらないのは、
+   * いまもここが守る。
    *
    * **器（fs / pg）に「1行だけ更新する」口を足さないためにこの形にしてある。**
    * 足せば read-modify-write の原子性を fs と pg の両方へもう1つ実装することに
    * なり、既にある `replace`（pg は1トランザクションの delete → insert、fs は
-   * 一時ファイルを rename する1回の書き込み）と二重になる。ここは `serial()` の
-   * 中なので、読んでから書くまでに別の書き込みが割り込まない。
+   * 一時ファイルを rename する1回の書き込み）と二重になる。
+   *
+   * **⚠️ ここはかつて「`serial()` の中なので、読んでから書くまでに別の
+   * 書き込みが割り込まない」と書いていたが、それは誤りだった**
+   * （Issue #2200）。`token-rotator.ts` は**別インスタンスの別の `serial()`**
+   * を持つので、この列はあちらの書き込みを待たない——実測で、人間の
+   * `PUT /tokens` の直後に回し手の `observe()` が古い一覧で書き戻し、足した
+   * 3本目を黙って消した。
+   *
+   * **いまはここで最新の一覧を読み直す。** `existing` を呼び出し側から受け
+   * 取らないのはそのためである——受け取ると、呼び出し側が読んだ時点で
+   * 古くなりうる。読み直しから書き戻しまでを {@link TokenPoolServiceOptions.writeLock}
+   * （回し手と共有する鍵）の中に収め、回し手の書き込みと排他にする。
    *
    * **返り値は3つの状態を区別する。**
    *
@@ -248,14 +290,17 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
    * - 正常 → 器が返した行から作った外向きの顔
    */
   async function writeOne(
-    existing: readonly AgentToken[],
     id: string,
     mutate: (token: AgentToken) => AgentToken,
   ): Promise<AgentTokenView | undefined> {
-    if (!existing.some((token) => token.id === id)) return undefined;
-    const stored = await stores.tokens.replace(
-      existing.map((token) => (token.id === id ? mutate(token) : token)),
-    );
+    const stored = await writeLock.run(async () => {
+      const existing = await stores.tokens.list();
+      if (!existing.some((token) => token.id === id)) return undefined;
+      return stores.tokens.replace(
+        existing.map((token) => (token.id === id ? mutate(token) : token)),
+      );
+    });
+    if (stored === undefined) return undefined;
     const written = stored.find((token) => token.id === id);
     if (written === undefined) {
       // **id だけを含める。** 値も文言もここへ載せない（この例外は上の層で
@@ -273,11 +318,18 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
 
     replace: (inputs: readonly AgentTokenInput[]) =>
       serial(async () => {
-        const existing = await stores.tokens.list();
-        // **検証に落ちたら保存しない。** `normalizeTokenPool` が投げた例外は
-        // そのまま呼び出し側（HTTP 層）へ伝わり、そこで 400 として理由を返す。
-        const normalized = normalizeTokenPool(inputs, existing, { now, newId });
-        const stored = await stores.tokens.replace(normalized);
+        // **読み直し（`value` を省略した行の既存値を埋める元）から書き戻し
+        // までを {@link writeLock} の中に収める**（Issue #2200）。ここは
+        // 人間が渡した全体が正本なので全文置換のままでよいが、回し手の
+        // `coolDown` / `finishSweep` と同じ鍵を通さないと、読んでから書く
+        // 間に回し手の冷却が割り込んで黙って消える。
+        const stored = await writeLock.run(async () => {
+          const existing = await stores.tokens.list();
+          // **検証に落ちたら保存しない。** `normalizeTokenPool` が投げた例外は
+          // そのまま呼び出し側（HTTP 層）へ伝わり、そこで 400 として理由を返す。
+          const normalized = normalizeTokenPool(inputs, existing, { now, newId });
+          return stores.tokens.replace(normalized);
+        });
         const settingsResult = await readSettingsOrUnreadable();
         // **保存できた後に知らせる**（`announceChange` の doc）。
         announceChange('pool');
@@ -286,11 +338,10 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
 
     noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>
       serial(async () => {
-        const [existing, settings] = await Promise.all([
-          stores.tokens.list(),
-          stores.tokens.readSettings(),
-        ]);
-        return writeOne(existing, input.id, (token) =>
+        // **一覧はもう先読みしない。** `writeOne` が {@link writeLock} の中で
+        // 読み直す（あちらの doc）——ここで読むと、その時点で古くなりうる。
+        const settings = await stores.tokens.readSettings();
+        return writeOne(input.id, (token) =>
           markTokenUnusable(token, {
             at: now().toISOString(),
             message: input.message,
@@ -301,10 +352,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
       }),
 
     noteUsable: (id: string) =>
-      serial(async () => {
-        const existing = await stores.tokens.list();
-        return writeOne(existing, id, (token) => markTokenUsable(token, now().toISOString()));
-      }),
+      serial(async () => writeOne(id, (token) => markTokenUsable(token, now().toISOString()))),
 
     setSettings: (patch: { rotateOn?: TokenRotationPolicy; cooldownMs?: number }) =>
       serial(async () => {

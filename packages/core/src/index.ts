@@ -899,6 +899,11 @@ export {
   type TokenRotationSignal,
   type TokenSelection,
 } from './token-rotation.js';
+/**
+ * `TokenPoolService` と `TokenRotator` が共有する、トークンの表への書き込み
+ * の鍵（Issue #2200）。`apps/daemon/src/index.ts` が1つ作って両方へ渡す。
+ */
+export { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 export {
   createTokenPoolService,
   type TokenPoolService,
