@@ -3747,9 +3747,10 @@ describe('HTTP API', () => {
       { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
     ]);
     expect(schedule.refreshCount()).toBe(before + 1);
-    // 人間が仕込んだことも日誌に残る（後から辿れること）。issue #2123 で
-    // 「日誌を先に書く」形へ変えたので、先に書いた行（区別を含まない）と、
-    // 後で分かった「仕込んだ／直した」の区別を足す2行目の、2行になる。
+    // 人間が仕込んだことも日誌に残る（後から辿れること）
+    // （issue #2123 で「日誌を先に書く」形へ変えたので、先に書いた行（区別を
+    // 含まない）と、後で分かった「仕込んだ／直した」の区別を足す2行目の、
+    // 2行になる。）
     const decisions = (await stores.journal.list({ types: ['decision'] }))
       .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
       .reverse();
@@ -8501,6 +8502,51 @@ describe('実行環境プロファイル', () => {
     expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている');
     expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった');
   });
+
+  /**
+   * **issue #2123。** `PUT /credentials` の同じ歯（`日誌への先書きが落ちると
+   * 500 で、鍵は置かれない`）と同じ形。日誌への先書きが落ちると 500 で、
+   * 差し替わらない——正本の profile が書かれていない・runner へ配られて
+   * いない・`deps.profile.apply` が呼ばれていない。
+   */
+  it('日誌への先書きが落ちると 500 で、差し替わらない（正本が書かれていない・runner へ配られていない）', async () => {
+    const runner = fakeRunner('runner-primary');
+    const failingJournal: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => {
+          throw new Error('journal store unavailable (test)');
+        },
+      },
+    };
+    const withProfile = createApp({
+      clone: fake.clone,
+      stores: failingJournal,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf([runner]),
+      profile: profileService(failingJournal, { runners: [runner] }),
+    });
+
+    const lines = await captureStderr(async () => {
+      const response = await withProfile.request('/profile', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script: 'export OK=1' }),
+      });
+      expect(response.status).toBe(500);
+    });
+
+    // 日誌が先に落ちたので、`deps.profile.apply` そのものが呼ばれていない
+    // ——正本には書かれておらず、runner へも配られていない。
+    expect(await stores.profile.read()).toBeNull();
+    expect(runner.received).toEqual([]);
+    // **`appendJournalOrDrop` は通らない**（打ち消しの行を書く前段——先書き
+    // ——で落ちたので、そこにも進んでいない）。
+    const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+    expect(dropped).toHaveLength(0);
+  });
 });
 
 /**
@@ -8746,13 +8792,21 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
   });
 
   /**
+   * （以下は 2026-09-29 以前の形。issue #2123 で反転）
+   *
+   * **⚠️ `PUT /credentials` は Issue #2037 の `appendJournalOrDrop` の対象外
+   * （マネージャー判断。`app.ts` の `appendJournalOrDrop` の doc「当てていない
+   * 口」）。** 鍵の差し替えは日誌より前に runner へ配られ、効いている——
+   * それでも日誌の行が「誰が鍵を差し替えたか」の唯一の記録である以上、
+   * ここだけは書けなかったら今までどおり 500 のままにする（跡は stderr にも
+   * 残る）。この歯はその「変えていないこと」を固定する。
+   *
    * **⚠️ 2026-09-29（issue #2123）: 期待を反転した。** `PUT /credentials` は
    * 能力を広げる口だと teto が判断し、`/access/:accountId/grant` と同じ
    * 「日誌を先に書き、書けなければ状態を変えずに 500」へ動いた。元は
    * 「差し替え（`deps.credentials.apply`）が先・日誌が後」だったので、日誌
    * への追記だけが落ちても差し替えは効いたままだった——この歯はその「差し
-   * 替えは効いたまま」を固定していた（`app.ts` の `appendJournalOrDrop` の
-   * doc「当てていない口」、Issue #2037 の対象外という当時のマネージャー
+   * 替えは効いたまま」を固定していた（直上の段落、当時のマネージャー
    * 判断）。いまは日誌が先なので、日誌が書けなければ差し替えそのものが
    * 起きない——`deps.credentials.apply` は一度も呼ばれず、鍵は置かれない。
    */
@@ -8784,11 +8838,17 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
       expect(response.status).toBe(500);
     });
 
-    // 日誌が先に落ちたので、差し替え（`apply`）そのものが起きていない。
+    // （以下は 2026-09-29 以前の形。issue #2123 で反転）
+    // 鍵そのものは既に置かれている（応答は 500 でも操作は効いている）。
+    // ↑ いまは逆——日誌が先に落ちたので、差し替え（`apply`）そのものが
+    // 起きていない（鍵は置かれない）。
     expect((await stores.credentials.list()).map((row) => row.name)).toEqual([]);
     expect(runner.held.has('NPM_TOKEN')).toBe(false);
-    // **`appendJournalOrDrop` は通らない**（打ち消しの行を書く前段——先書き
-    // ——で落ちたので、そこにも進んでいない）。
+    // （以下は 2026-09-29 以前の形。issue #2123 で反転）
+    // **`appendJournalOrDrop` を通らないので、`noteDroppedRecord` の跡は出ない**
+    // （握っていない証拠——出ていたら 500 と矛盾する形で握っていることになる）。
+    // ↑ 結論（跡が出ない）は変わらないが、理由は変わった——打ち消しの行を
+    // 書く前段（先書き）で落ちたので、そこにも進んでいない。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
   });
