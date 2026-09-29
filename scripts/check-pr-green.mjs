@@ -112,6 +112,20 @@
  * その行だけを見て緑だと誤読する（exit code は 1 だが、テキストを読む経路
  * には乗らない）。詳しくは `check-pr-green-core.mjs` の
  * `subordinateEvaluateClause` の doc を見よ。
+ *
+ * ## 追記: ジョブが1本も走っていない run を、世代選びの前に外す（Issue #2209）
+ *
+ * `check-pr-green-core.mjs` の `pickLatestRunPerWorkflow` は、同じ鍵
+ * （name+event）にジョブが走って完了した run が1本以上あるとき、ジョブが
+ * 1本も走っていない run（jobs 全件が `skipped`）を rerun の食い違い判定
+ * より前に外す（`excludeNoJobsRanRuns` の doc）。この判定には、世代を選ぶ
+ * **前から**鍵に同居する全 run（選ばれなかった draft 由来の run も含む）
+ * の jobs が要る。⟹ `judgeSha` は jobs の問い合わせを、世代選び
+ * （`pickLatestRunPerWorkflow`）より**前**に、`completed` な `scopedRuns`
+ * 全件へ広げた（旧実装は世代選びの後、選ばれた最新1本ぶんしか jobs を
+ * 問い合わせていなかった）。ネットワーク呼び出しの回数は増えうるが
+ * （同じ鍵に複数の completed run が同居する場合）、`gh api` を読むだけの
+ * この道具の性質は変えていない。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -263,16 +277,17 @@ export function judgeSha({ sha, repo, events }) {
 
   const runs = Array.isArray(runsData.workflow_runs) ? runsData.workflow_runs : [];
   const scopedRuns = filterRunsByEvent(runs, events);
-  const latestRuns = pickLatestRunPerWorkflow(scopedRuns);
 
+  // Issue #2209: `pickLatestRunPerWorkflow` は、同じ鍵（name+event）の中で
+  // 「ジョブが1本も走っていない run」を外すかどうかを、rerun の食い違い判定
+  // より前に決める（`excludeNoJobsRanRuns` の doc）。それには**世代選びの前
+  // から**、鍵に同居する全 run の jobs が要る——選ばれなかった run（draft
+  // 由来の skip 等）の jobs も見ないと「1本も走っていない」かどうかが
+  // 分からない。⟹ jobs の問い合わせを、世代を選んだ後の latestRuns だけで
+  // なく、**completed な scopedRuns 全件**に対して先に行う（旧実装は
+  // 選んだ最新1本ぶんしか問い合わせていなかった）。
   const jobsByRunId = {};
-  for (const run of latestRuns) {
-    // 15回目の横断レビュー: rerun が絡み結論が食い違う鍵は
-    // `pickLatestRunPerWorkflow` が `id: null` の目印（`rerunConflict`）へ
-    // 畳んでいる——「どの run の jobs を見るべきか」をこの道具はもう決めない
-    // という宣言なので、`actions/runs/null/jobs` を叩きに行かない
-    // （`check-pr-green-core.mjs` の `makeRerunConflictMarker` の doc を見よ）。
-    if (run.rerunConflict !== undefined) continue;
+  for (const run of scopedRuns) {
     if (run.status !== 'completed') continue; // まだ終わっていない run の jobs は問い合わせるだけ無駄
     const { data: jobsData, error: jobsError } = ghApiJson(
       `repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`,
@@ -280,7 +295,7 @@ export function judgeSha({ sha, repo, events }) {
     if (jobsData === null) {
       return {
         result: null,
-        latestRuns,
+        latestRuns: [],
         jobsByRunId,
         missingRequiredGates: null,
         error: `run ${run.id} の jobs を読めない\n  gh の出力: ${jobsError}`,
@@ -288,6 +303,14 @@ export function judgeSha({ sha, repo, events }) {
     }
     jobsByRunId[run.id] = Array.isArray(jobsData.jobs) ? jobsData.jobs : [];
   }
+
+  // 世代選び（`excludeNoJobsRanRuns` → `hasRerunConflict` /
+  // `hasUnresolvedRerunGroup` → 時刻比較）は、jobs を知ったあとに行う。
+  // `rerunConflict` の目印（`id: null`）を持つ要素・未完了の要素は、
+  // 上のループで jobs を問い合わせていない（`makeRerunConflictMarker` の
+  // doc・`run.status !== 'completed'` の分岐）ので、`actions/runs/null/jobs`
+  // を叩きに行くことはない。
+  const latestRuns = pickLatestRunPerWorkflow(scopedRuns, jobsByRunId);
 
   const result = evaluatePrGreen(latestRuns, jobsByRunId);
 

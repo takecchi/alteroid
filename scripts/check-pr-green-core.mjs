@@ -194,6 +194,34 @@
  * 鍵に `success` が1つでもあれば `skipped` は比較に混ぜない）が、**それが
  * 開く側へ倒れないと確かめられていない**ので、ここでは採らない —— 採る
  * かどうかは次にこの doc を読む者（人間）が決める。
+ *
+ * ⭐ **Issue #2209 で採った。** teto（オーナーの代理）が世代の決め方を
+ * 領域 E（mgr-113df19c）に委ね、E が線を引いた——「同じ鍵に `success` が
+ * 1つでもあれば `skipped` を比較に混ぜない」ではなく、**もう少し狭く**
+ * 「同じ鍵に、ジョブが1本でも実際に走って完了した run が在るときだけ、
+ * ジョブが1本も走っていない run（jobs 全件が `skipped`）を比較から外す」
+ * を採用した（`pickLatestRunPerWorkflow` の外側、`hasRerunConflict` /
+ * `hasUnresolvedRerunGroup` より前の段——下の doc と実装を見よ）。
+ *
+ * **なぜ開く側へ倒れないと言えるか**——
+ * - run は head の sha ごとに作られる。同じ sha・同じ workflow・同じ
+ *   event の run は、同じ中身のコードを見ている。
+ * - ジョブが1本も走っていない run は、そのコードについて何も判定して
+ *   いない（`ci.yml` の draft の skip）。外しても、判定した run の結論は
+ *   1つも消えない——消えるのは「何も測っていない run」だけである。
+ * - ジョブが走った run 同士の食い違い（rerun の success と、別の genuinely
+ *   新しい run の failure 等）はそのまま残るので、そちらは今までどおり
+ *   `undecidable-rerun-conflict` になる——この変更は「ジョブが1本も走って
+ *   いない run」だけを対象にした狭い線であり、判定できない場合を
+ *   `green` へ倒す変更ではない。
+ * - 判定は run の `conclusion`（run 全体の結論）ではなく、その run の
+ *   jobs 全件で見る——run の結論だけだと、一部のジョブが走った run を
+ *   「1本も走っていない」と取り違える余地が残るため（このファイル冒頭の
+ *   「静かに失敗する道具」#2 と同じ理由）。
+ * - jobs が取れなかった run（問い合わせが失敗した・呼び出し元が渡さな
+ *   かった）は「走っていない」とは見なさず、外さない——「取れない」を
+ *   「無い」と読むと開く側へ倒れる（`AGENTS.md`「取れない軸に0の行を
+ *   作らない」と同じ形）。
  */
 function effectiveTimestamp(run) {
   const attempt = run.run_attempt ?? 1;
@@ -272,6 +300,106 @@ function newerRun(a, b) {
  */
 export function isFullCommitSha(sha) {
   return typeof sha === 'string' && /^[0-9a-f]{40}$/i.test(sha);
+}
+
+/**
+ * 与えられた run の jobs が「1本も走っていない」（全ジョブが `skipped`）かを見る。
+ *
+ * `jobsByRunId` にその run の id が無い（jobs を取れなかった・呼び出し元が
+ * 渡さなかった）ときは **false**——「取れない」を「1本も走っていない」と
+ * 読むと開く側へ倒れる（`excludeNoJobsRanRuns` の doc の「なぜ開く側へ
+ * 倒れないか」）。jobs が0件（配列が空）のときも false 扱いにする——
+ * それは「1本も走っていない」ではなく「観測できていない」で、
+ * `evaluatePrGreen` 側の `unmeasurable`（`reason: 'no-jobs'`）が別に見る話
+ * である。ここで false にしておかないと、jobs 0件の run を「走っていない
+ * ので比較から外してよい」と早合点し、`unmeasurable` に落ちるべき標本を
+ * 静かに消してしまう。
+ *
+ * @param {{id:number}} run
+ * @param {Record<number, {conclusion:string|null}[]>} jobsByRunId
+ * @returns {boolean}
+ */
+function hasNoJobsRan(run, jobsByRunId) {
+  const jobs = jobsByRunId[run.id];
+  if (jobs === undefined || jobs.length === 0) return false;
+  return jobs.every((job) => job.conclusion === 'skipped');
+}
+
+/**
+ * 同じ `name + event` の鍵にまとまった run の集合から、**ジョブが1本も
+ * 走っていない run**（jobs 全件が `skipped`）を、**その鍵にジョブが走って
+ * 完了した run が1本以上あるときだけ**外す（Issue #2209）。
+ *
+ * ## 経緯（なぜこれが要るか）
+ *
+ * PR #2175（sha `1e28808e5b6f2d1d0b2c39d6122ab0ab2cd61dbb`）で、`image` の
+ * job が Docker Hub の 502 で落ちたので `gh run rerun --failed` を1回
+ * 打った。走り直しは success で終わったが、`pnpm check:pr-green` は
+ * `undecidable-rerun-conflict` を返した——run 36563936180（run_attempt=1、
+ * draft のとき、`image`/`ci` とも `skipped`。`ci.yml` は draft の
+ * `pull_request` では回さない）と、run 36564163120（run_attempt=2、
+ * ready 後を rerun したもの。`image`/`ci` とも `success`）が同じ
+ * `name=CI` + `event=pull_request` の鍵に同居し、`hasRerunConflict`
+ * （下）が「rerun が絡み、結論（`conclusion`）が `skipped` と `success` で
+ * 食い違う」と判定したためである。緑なのに、手で run を読まないと
+ * マージできなかった（Issue #2209 本文）。
+ *
+ * ## 線（teto が世代の決め方を領域 E に委ね、E が決めた。#2209）
+ *
+ * 同じ鍵の run 同士を比べる前に、**ジョブが1本も走っていない run** を
+ * 除く。ただし、その鍵に**ジョブが走って完了した run が1本以上あるとき
+ * だけ**——鍵の全部がジョブの走っていない run なら、除いても比較材料が
+ * 何も残らないので、今までどおりの扱い（時刻で選ぶ・その結果が
+ * `skipped`/`unmeasurable` 等になる）に触らない。
+ *
+ * ## なぜ開く側へ倒れないか
+ *
+ * - run は head の sha ごとに作られる。同じ sha・同じ workflow・同じ
+ *   event の run は、同じ中身のコードを見ている。
+ * - ジョブが1本も走っていない run は、そのコードについて何も判定して
+ *   いない（`ci.yml` の draft の skip）。外しても、判定した run の結論は
+ *   1つも消えない。
+ * - ジョブが走った run 同士の食い違い（rerun の success ともとの
+ *   failure など）は外した後も残るので、そちらは今までどおり
+ *   `undecidable-rerun-conflict`（`hasRerunConflict`）や `pending`
+ *   （`hasUnresolvedRerunGroup`）になる——この変更は「1本も走っていない
+ *   run」だけを対象にした狭い線であり、判定できない場合を無条件に
+ *   `green` へ倒す変更ではない。
+ * - `event` の違う run（`schedule` の drift 運転で `ci` だけ skip する
+ *   もの。#1225）は、もともと別の鍵（`name + event`）なので、この変更の
+ *   影響を受けない。
+ * - **判定は run の `conclusion`（run 全体の結論）ではなく、その run の
+ *   jobs 全件で見る**（`hasNoJobsRan`）。run の結論だけで「走っていない」
+ *   を判定すると、一部のジョブだけが走った run を「1本も走っていない」
+ *   と取り違える余地が残る（このファイル冒頭の「静かに失敗する道具」#2
+ *   ——ジョブ0本の run の `conclusion` はコードについて何も言っていない、
+ *   と同じ理由）。
+ * - **jobs が取れなかった run は外さない**（`hasNoJobsRan` が false を
+ *   返す）——「取れない」を「1本も走っていない」と読むと、本当は
+ *   ジョブが走っていたかもしれない run を黙って比較から消すことになり、
+ *   開く側へ倒れる（`AGENTS.md`「取れない軸に0の行を作らない」と同じ
+ *   形）。
+ *
+ * ## いつ呼ぶか
+ *
+ * `pickLatestRunPerWorkflow` が、`hasRerunConflict` / `hasUnresolvedRerunGroup`
+ * より**前**に、鍵ごとの run 集合へ適用する。除いた後の集合を使って
+ * 従来の判定（rerun の食い違い→保留→時刻で選ぶ）へ進む。
+ *
+ * @param {{id:number, status?:string}[]} sameKeyRuns
+ * @param {Record<number, {conclusion:string|null}[]>} jobsByRunId
+ * @returns {{id:number, status?:string}[]}
+ */
+function excludeNoJobsRanRuns(sameKeyRuns, jobsByRunId) {
+  const hasRanCompletedRun = sameKeyRuns.some(
+    (run) =>
+      run.status === 'completed' &&
+      jobsByRunId[run.id] !== undefined &&
+      jobsByRunId[run.id].length > 0 &&
+      !hasNoJobsRan(run, jobsByRunId),
+  );
+  if (!hasRanCompletedRun) return sameKeyRuns;
+  return sameKeyRuns.filter((run) => !hasNoJobsRan(run, jobsByRunId));
 }
 
 /**
@@ -391,7 +519,14 @@ function makeRerunConflictMarker(sameKeyRuns) {
   };
 }
 
-export function pickLatestRunPerWorkflow(runs) {
+/**
+ * @param {object[]} runs `gh api actions/runs` の `workflow_runs`（のサブセット）
+ * @param {Record<number, {conclusion:string|null}[]>} [jobsByRunId] run の id →
+ *   その run の jobs。**省略時（既定 `{}`）は何も除かない**——既存の呼び出し元
+ *   （テスト含む）の挙動を1ミリも変えないため。`excludeNoJobsRanRuns` の doc
+ *   を見よ（Issue #2209）。
+ */
+export function pickLatestRunPerWorkflow(runs, jobsByRunId = {}) {
   const byKey = new Map();
   for (const run of runs) {
     const key = `${run.name}\u0000${run.event ?? ''}`;
@@ -400,7 +535,11 @@ export function pickLatestRunPerWorkflow(runs) {
     else list.push(run);
   }
   const picked = [];
-  for (const sameKeyRuns of byKey.values()) {
+  for (const sameKeyRunsRaw of byKey.values()) {
+    // Issue #2209: rerun の食い違い・保留・時刻比較のどれよりも前に、
+    // ジョブが1本も走っていない run を（その鍵に走って完了した run が
+    // 1本以上あるときだけ）外す。`excludeNoJobsRanRuns` の doc を見よ。
+    const sameKeyRuns = excludeNoJobsRanRuns(sameKeyRunsRaw, jobsByRunId);
     if (hasRerunConflict(sameKeyRuns)) {
       picked.push(makeRerunConflictMarker(sameKeyRuns));
       continue;
