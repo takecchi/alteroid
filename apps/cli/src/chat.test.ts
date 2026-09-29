@@ -1449,10 +1449,21 @@ function stubClient(
   options: {
     commitments?: Commitment[];
     closeStatus?: number;
+    /** `POST /commitments/:id/close` の失敗時の本体。既定は `{}`（issue #2172）。 */
+    closeBody?: unknown;
     /** `PATCH /commitments/:id` の応答。既定は 200（直せた）。 */
     editStatus?: number;
     /** `POST /commitments/:id/appraise` / `POST /managers/:id/appraise` の応答。既定 200。 */
     appraiseStatus?: number;
+    /**
+     * 上の appraise 2口の失敗時の本体（issue #2172）。既定は `{}`。
+     * 1テストではどちらか片方しか叩かないので共有してよい。
+     */
+    appraiseBody?: unknown;
+    /** `POST /commitments` の応答コード。既定は 200（issue #2172）。 */
+    commitOpenStatus?: number;
+    /** `POST /commitments` の応答本体。既定は `{}`。 */
+    commitOpenBody?: unknown;
     editBody?: unknown;
     /** `DELETE /managers/:id` の応答。既定は「止めた」。 */
     abortStatus?: number;
@@ -1572,7 +1583,10 @@ function stubClient(
         appraise: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /managers/:id/appraise', args });
-            return Promise.resolve(reply(options.appraiseStatus ?? 200, {}));
+            const status = options.appraiseStatus ?? 200;
+            return Promise.resolve(
+              reply(status, status === 200 ? {} : (options.appraiseBody ?? {})),
+            );
           },
         },
         messages: {
@@ -1606,19 +1620,24 @@ function stubClient(
       },
       $post: (args: unknown) => {
         calls.push({ route: 'POST /commitments', args });
-        return Promise.resolve(reply(200, {}));
+        const status = options.commitOpenStatus ?? 200;
+        return Promise.resolve(reply(status, status === 200 ? {} : (options.commitOpenBody ?? {})));
       },
       ':id': {
         close: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /commitments/:id/close', args });
-            return Promise.resolve(reply(options.closeStatus ?? 200, {}));
+            const status = options.closeStatus ?? 200;
+            return Promise.resolve(reply(status, status === 200 ? {} : (options.closeBody ?? {})));
           },
         },
         appraise: {
           $post: (args: unknown) => {
             calls.push({ route: 'POST /commitments/:id/appraise', args });
-            return Promise.resolve(reply(options.appraiseStatus ?? 200, {}));
+            const status = options.appraiseStatus ?? 200;
+            return Promise.resolve(
+              reply(status, status === 200 ? {} : (options.appraiseBody ?? {})),
+            );
           },
         },
         $patch: (args: unknown) => {
@@ -2020,6 +2039,55 @@ describe('chat の台帳コマンド', () => {
   });
 
   /**
+   * issue #2172。404 のときだけ従来の文言（「台帳に積めませんでした」）を保ち、
+   * それ以外（400・5xx 等）はサーバの `{ error }` の文をそのまま出す
+   * （`errorDetail`。`/commit-edit` と同じ形）。
+   */
+  it('/commit は 404 のときだけ従来の文言を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ commitOpenStatus: 404, commitOpenBody: {} });
+
+    await runSlashCommand('/commit 週明けに設計を見直す', client, emptyListed(), 'conv-7');
+
+    expect(read()).toContain('台帳に積めませんでした');
+  });
+
+  it('/commit は 404 以外はサーバの理由（{ error }）をそのまま出す', async () => {
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      commitOpenStatus: 500,
+      commitOpenBody: { error: '台帳への書き込みが失敗した（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand(
+      '/commit 週明けに設計を見直す',
+      serverErrorClient,
+      emptyListed(),
+      'conv-7',
+    );
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      commitOpenStatus: 400,
+      commitOpenBody: { error: 'body の形が不正（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand(
+      '/commit 週明けに設計を見直す',
+      badRequestClient,
+      emptyListed(),
+      'conv-7',
+    );
+    const badRequestText = badRequest();
+
+    expect(serverErrorText).toContain('台帳への書き込みが失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('body の形が不正（issue #2172 のテスト用）');
+    // **旧文言（一律の断り）へ戻していないこと。**
+    expect(serverErrorText).not.toContain('台帳に積めませんでした');
+    expect(badRequestText).not.toContain('台帳に積めませんでした');
+  });
+
+  /**
    * 番号で引けないと、人間が UUID を写す作業をすることになる（`/answer` と同じ理由）。
    * 理由が空のまま閉じると「閉じた」という事実だけが残り、人間が後から否定できない。
    */
@@ -2137,6 +2205,41 @@ describe('chat の台帳コマンド', () => {
     expect(missingText).toContain('台帳にありません');
     expect(conflictText).not.toContain('台帳にありません');
     expect(missingText).not.toContain('既に片付いています');
+  });
+
+  /**
+   * issue #2172。404/409 以外（400・5xx 等）は状態コードだけを見せず、
+   * サーバの `{ error }` の文をそのまま出す（`errorDetail`。`/commit-edit` と同じ形）。
+   */
+  it('/done は 404/409 以外はサーバの理由（{ error }）をそのまま出す', async () => {
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      closeStatus: 500,
+      closeBody: { error: '台帳の書き込みが失敗した（issue #2172 のテスト用）' },
+    });
+    const listedServerError = emptyListed();
+    await runSlashCommand('/commitments', serverErrorClient, listedServerError);
+    await runSlashCommand('/done 1', serverErrorClient, listedServerError);
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      closeStatus: 400,
+      closeBody: { error: '理由が長すぎる（issue #2172 のテスト用）' },
+    });
+    const listedBadRequest = emptyListed();
+    await runSlashCommand('/commitments', badRequestClient, listedBadRequest);
+    await runSlashCommand('/done 1', badRequestClient, listedBadRequest);
+    const badRequestText = badRequest();
+
+    expect(serverErrorText).toContain('台帳の書き込みが失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('理由が長すぎる（issue #2172 のテスト用）');
+    // **状態コードだけの表示（旧文言）へ戻していないこと。**
+    expect(serverErrorText).not.toContain('記録できませんでした');
+    expect(badRequestText).not.toContain('記録できませんでした');
   });
 
   /**
@@ -3366,6 +3469,34 @@ describe('chat の /stop', () => {
     expect(text).not.toContain('stopped');
   });
 
+  /**
+   * issue #2172。404 以外（400・5xx 等）は「見つかりませんでした」に潰さず、
+   * サーバの `{ error }` の文をそのまま出す（`errorDetail`。`/commit-edit` と同じ形）。
+   */
+  it('404 以外はサーバの理由（{ error }）をそのまま出し、「見つかりません」とは言わない', async () => {
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      abortStatus: 500,
+      abortBody: { error: '委譲の停止が失敗した（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/stop mgr-1', serverErrorClient, emptyListed());
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      abortStatus: 400,
+      abortBody: { error: '理由が長すぎる（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/stop mgr-1', badRequestClient, emptyListed());
+    const badRequestText = badRequest();
+
+    expect(serverErrorText).toContain('委譲の停止が失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('理由が長すぎる（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('見つかりませんでした');
+    expect(badRequestText).not.toContain('見つかりませんでした');
+  });
+
   it('/help に載っている（隠れた口を作らない）', async () => {
     const read = captureStdout();
     const { client } = stubClient();
@@ -4432,6 +4563,44 @@ describe('chat の /msg（追加指示）', () => {
     expect(calls).toEqual([]);
     expect(read()).toContain('使い方: /msg');
   });
+
+  /**
+   * issue #2172。404 のときだけ「見つかりませんでした」を出し、それ以外
+   * （400・5xx 等）はサーバの `{ error }` の文をそのまま出す（`errorDetail`）。
+   */
+  it('404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
+    const notFound = captureStdout();
+    const { client: notFoundClient } = stubClient({
+      messagesStatus: 404,
+      messagesBody: { error: 'そんな id は無い' },
+    });
+    await runSlashCommand('/msg mgr-none 明日までに終わらせて', notFoundClient, emptyListed());
+    const notFoundText = notFound();
+    vi.restoreAllMocks();
+
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      messagesStatus: 500,
+      messagesBody: { error: '追加指示の配送が失敗した（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/msg mgr-1 明日までに終わらせて', serverErrorClient, emptyListed());
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      messagesStatus: 400,
+      messagesBody: { error: '本文が長すぎる（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/msg mgr-1 明日までに終わらせて', badRequestClient, emptyListed());
+    const badRequestText = badRequest();
+
+    expect(notFoundText).toContain('見つかりませんでした');
+    expect(serverErrorText).toContain('追加指示の配送が失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('本文が長すぎる（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('見つかりませんでした');
+    expect(badRequestText).not.toContain('見つかりませんでした');
+  });
 });
 
 /**
@@ -4510,6 +4679,49 @@ describe('chat の /reply（質問への回答）', () => {
 
     expect(calls.filter((call) => call.route === 'POST /managers/:id/messages')).toEqual([]);
     expect(read()).toContain('待っているマネージャーは居ません');
+  });
+
+  /**
+   * issue #2172。404 のときだけ「見つかりませんでした」を出し、それ以外
+   * （400・5xx 等）はサーバの `{ error }` の文をそのまま出す（`errorDetail`）。
+   */
+  it('404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
+    const listed: Listed = {
+      ...emptyListed(),
+      waiting: [{ managerId: 'mgr-a', requestId: 'req-1' }],
+    };
+
+    const notFound = captureStdout();
+    const { client: notFoundClient } = stubClient({
+      messagesStatus: 404,
+      messagesBody: { error: 'そんな id は無い' },
+    });
+    await runSlashCommand('/reply 1 了解です', notFoundClient, listed);
+    const notFoundText = notFound();
+    vi.restoreAllMocks();
+
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      messagesStatus: 500,
+      messagesBody: { error: '回答の配送が失敗した（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/reply 1 了解です', serverErrorClient, listed);
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      messagesStatus: 400,
+      messagesBody: { error: '本文が長すぎる（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/reply 1 了解です', badRequestClient, listed);
+    const badRequestText = badRequest();
+
+    expect(notFoundText).toContain('見つかりませんでした');
+    expect(serverErrorText).toContain('回答の配送が失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('本文が長すぎる（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('見つかりませんでした');
+    expect(badRequestText).not.toContain('見つかりませんでした');
   });
 });
 
@@ -4602,6 +4814,83 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     const text = read();
     expect(text).toContain('mgr-a');
     expect(text).toContain('mgr-b');
+  });
+
+  /**
+   * issue #2172。引数ありの分岐（`/allow <番号|requestId>`）。404 のときだけ
+   * 「見つかりませんでした」を出し、それ以外はサーバの `{ error }` の文を
+   * そのまま出す（`errorDetail`）。
+   */
+  it('引数ありは、404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
+    const listed: Listed = {
+      ...emptyListed(),
+      waiting: [{ managerId: 'mgr-a', requestId: 'req-1' }],
+    };
+
+    const notFound = captureStdout();
+    const { client: notFoundClient } = stubClient({
+      messagesStatus: 404,
+      messagesBody: { error: 'そんな id は無い' },
+    });
+    await runSlashCommand('/allow 1', notFoundClient, listed);
+    const notFoundText = notFound();
+    vi.restoreAllMocks();
+
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      messagesStatus: 500,
+      messagesBody: { error: '許可の配送が失敗した（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/allow 1', serverErrorClient, listed);
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      messagesStatus: 400,
+      messagesBody: { error: '理由が長すぎる（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/deny 1 だめです', badRequestClient, listed);
+    const badRequestText = badRequest();
+
+    expect(notFoundText).toContain('見つかりませんでした');
+    expect(serverErrorText).toContain('許可の配送が失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('理由が長すぎる（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('見つかりませんでした');
+    expect(badRequestText).not.toContain('見つかりませんでした');
+  });
+
+  /**
+   * issue #2172。引数なしの分岐（`/allow` 単独、返事待ちが1本だけのとき）。
+   * こちらは別の if ブロックなので、上のテストとは独立に確かめる必要がある。
+   */
+  it('引数なしは、404 なら見つからないと言い、それ以外はサーバの理由をそのまま出す', async () => {
+    const managers = [
+      manager({ managerId: 'mgr-solo', waiting: [waitingItem({ requestId: 'req-solo' })] }),
+    ];
+
+    const notFound = captureStdout();
+    const { client: notFoundClient } = stubClient({
+      managers,
+      messagesStatus: 404,
+      messagesBody: { error: 'そんな id は無い' },
+    });
+    await runSlashCommand('/allow', notFoundClient, emptyListed());
+    const notFoundText = notFound();
+    vi.restoreAllMocks();
+
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      managers,
+      messagesStatus: 500,
+      messagesBody: { error: '許可の配送が失敗した（issue #2172 のテスト用）' },
+    });
+    await runSlashCommand('/allow', serverErrorClient, emptyListed());
+    const serverErrorText = serverError();
+
+    expect(notFoundText).toContain('見つかりませんでした');
+    expect(serverErrorText).toContain('許可の配送が失敗した（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('見つかりませんでした');
   });
 
   it('/help に /msg /reply /allow /deny /waiting が載っている（隠れた口を作らない）', async () => {
@@ -5030,5 +5319,101 @@ describe('chat の /rate と /rate-manager（評定）', () => {
 
     expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
     expect(read()).toContain('--kind=');
+  });
+
+  /**
+   * issue #2172。404 のときだけ従来の文言（「その id は台帳にありません」）を保ち、
+   * それ以外（400・5xx 等）はサーバの `{ error }` の文をそのまま出す
+   * （`errorDetail`。`/commit-edit` と同じ形）。
+   */
+  it('/rate は 404 のときだけ従来の文言を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      appraiseStatus: 404,
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 good', client, listed);
+
+    expect(read()).toContain('その id は台帳にありません');
+  });
+
+  it('/rate は 404 以外はサーバの理由（{ error }）をそのまま出す', async () => {
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      appraiseStatus: 500,
+      appraiseBody: { error: '評定の記録が失敗した（issue #2172 のテスト用）' },
+    });
+    const listedServerError = emptyListed();
+    await runSlashCommand('/commitments', serverErrorClient, listedServerError);
+    await runSlashCommand('/rate 1 good', serverErrorClient, listedServerError);
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      commitments: [commitment({ id: 'cmt-1' })],
+      appraiseStatus: 400,
+      appraiseBody: { error: '評定の値が不正（issue #2172 のテスト用）' },
+    });
+    const listedBadRequest = emptyListed();
+    await runSlashCommand('/commitments', badRequestClient, listedBadRequest);
+    await runSlashCommand('/rate 1 good', badRequestClient, listedBadRequest);
+    const badRequestText = badRequest();
+
+    expect(serverErrorText).toContain('評定の記録が失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('評定の値が不正（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('記録できませんでした');
+    expect(badRequestText).not.toContain('記録できませんでした');
+  });
+
+  /**
+   * issue #2172。`/rate` と同じ形（404 は従来の文言、それ以外はサーバの理由）。
+   */
+  it('/rate-manager は 404 のときだけ従来の文言を出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' })],
+      appraiseStatus: 404,
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/managers', client, listed);
+    await runSlashCommand('/rate-manager 1 good', client, listed);
+
+    expect(read()).toContain('そのマネージャーは台帳にいません');
+  });
+
+  it('/rate-manager は 404 以外はサーバの理由（{ error }）をそのまま出す', async () => {
+    const serverError = captureStdout();
+    const { client: serverErrorClient } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' })],
+      appraiseStatus: 500,
+      appraiseBody: { error: '評定の記録が失敗した（issue #2172 のテスト用）' },
+    });
+    const listedServerError = emptyListed();
+    await runSlashCommand('/managers', serverErrorClient, listedServerError);
+    await runSlashCommand('/rate-manager 1 good', serverErrorClient, listedServerError);
+    const serverErrorText = serverError();
+    vi.restoreAllMocks();
+
+    const badRequest = captureStdout();
+    const { client: badRequestClient } = stubClient({
+      managers: [manager({ managerId: 'mgr-a' })],
+      appraiseStatus: 400,
+      appraiseBody: { error: '評定の値が不正（issue #2172 のテスト用）' },
+    });
+    const listedBadRequest = emptyListed();
+    await runSlashCommand('/managers', badRequestClient, listedBadRequest);
+    await runSlashCommand('/rate-manager 1 good', badRequestClient, listedBadRequest);
+    const badRequestText = badRequest();
+
+    expect(serverErrorText).toContain('評定の記録が失敗した（issue #2172 のテスト用）');
+    expect(badRequestText).toContain('評定の値が不正（issue #2172 のテスト用）');
+    expect(serverErrorText).not.toContain('記録できませんでした');
+    expect(badRequestText).not.toContain('記録できませんでした');
   });
 });

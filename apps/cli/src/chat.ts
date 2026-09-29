@@ -1103,9 +1103,7 @@ export async function runSlashCommand(
       }
       stdout.write(
         `${
-          response.status === 404
-            ? 'そのマネージャーは台帳にいません'
-            : await errorDetail(response)
+          response.status === 404 ? 'そのマネージャーは台帳にいません' : await errorDetail(response)
         }\n`,
       );
       return 'ok';
@@ -1807,11 +1805,7 @@ export async function runSlashCommand(
         return 'ok';
       }
       stdout.write(
-        `${
-          response.status === 404
-            ? 'その id は台帳にありません'
-            : await errorDetail(response)
-        }\n`,
+        `${response.status === 404 ? 'その id は台帳にありません' : await errorDetail(response)}\n`,
       );
       return 'ok';
     }
