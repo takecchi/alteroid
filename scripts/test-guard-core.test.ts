@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 import {
+  EXIT_BAD_DEADLINE,
   EXIT_OBSERVATION_DUE,
   EXIT_OBSERVATION_UNDECLARED,
   EXIT_SCAN_EMPTY,
@@ -16,9 +17,11 @@ import {
   ROOT,
   collectMatchingTestFiles,
   dropBareDashDash,
+  extractDeadlineSeconds,
   extractScope,
   findObservationDebts,
   findUnconditionalSkips,
+  formatDeadlineMessage,
   formatObservationGuardMessage,
   formatSkipGuardMessage,
   hasReporterFlag,
@@ -499,6 +502,114 @@ describe('hasReporterFlag / resolveReporterArgs（既定の reporter を dot へ
 
   it('CLAUDECODE が設定されており、引数が空でも `--reporter=dot` だけを足す', () => {
     expect(resolveReporterArgs([], { CLAUDECODE: '1' })).toEqual(['--reporter=dot']);
+  });
+});
+
+/**
+ * `extractDeadlineSeconds`（外側の `timeout` に頼らない締め切り。`scripts/test.mjs`
+ * 冒頭の doc「`--deadline-seconds=<n>`」）。
+ *
+ * 純粋関数——vitest へ渡す前に argv から取り除くだけで、プロセスは1つも起こさない。
+ * 実際に子プロセスを起こして SIGTERM/SIGKILL を確かめる統合テストは
+ * `scripts/test-mjs-deadline.test.ts` に別に置いてある（重いので分ける）。
+ */
+describe('extractDeadlineSeconds（`--deadline-seconds` を argv から取り出す。純粋関数）', () => {
+  it('未指定なら deadlineSeconds は undefined、rest は argv そのまま', () => {
+    const argv = ['a.test.ts', '--maxWorkers=2'];
+    expect(extractDeadlineSeconds(argv)).toEqual({
+      ok: true,
+      deadlineSeconds: undefined,
+      rest: argv,
+    });
+  });
+
+  it('`=` 形（--deadline-seconds=300）を受け付け、vitest へは渡さない（rest から消える）', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=300', 'a.test.ts']);
+    expect(result).toEqual({ ok: true, deadlineSeconds: 300, rest: ['a.test.ts'] });
+  });
+
+  it('空白区切り（--deadline-seconds 300）も受け付け、値ごと rest から消える', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds', '300', 'a.test.ts']);
+    expect(result).toEqual({ ok: true, deadlineSeconds: 300, rest: ['a.test.ts'] });
+  });
+
+  it('前後の他の引数の順序を変えない（`=` 形）', () => {
+    const result = extractDeadlineSeconds(['--maxWorkers=2', '--deadline-seconds=5', 'a.test.ts']);
+    expect(result).toEqual({
+      ok: true,
+      deadlineSeconds: 5,
+      rest: ['--maxWorkers=2', 'a.test.ts'],
+    });
+  });
+
+  it('複数回指定されたら最後の値が勝つ（`extractScope` と同じ規約）', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=5', '--deadline-seconds=10']);
+    expect(result).toEqual({ ok: true, deadlineSeconds: 10, rest: [] });
+  });
+
+  it('0 は拒否する（1以上でなければならない）', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=0']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('負の値は拒否する', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=-5']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('小数は拒否する', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=1.5']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('非数（数字でない文字列）は拒否する', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=abc']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('`=` の右側が空文字列でも拒否する', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('空白区切りで値が無い（末尾がフラグそのもの）ときも拒否する', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('空白区切りの次の要素が別のフラグ（`-` で始まる）なら、値が無いとして拒否する', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds', '--maxWorkers=2']);
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_BAD_DEADLINE);
+  });
+
+  it('不正な値のエラーメッセージは `test-guard:` で始まり、値を含む', () => {
+    const result = extractDeadlineSeconds(['--deadline-seconds=-5']);
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/^test-guard:/);
+    expect(result.message).toContain('-5');
+  });
+});
+
+describe('formatDeadlineMessage（打ち切ったときに stdout へ必ず出す1行）', () => {
+  it('`test-guard:` で始まり、締め切りの秒数と skill への案内を含む', () => {
+    const message = formatDeadlineMessage(5);
+    expect(message).toMatch(/^test-guard:/);
+    expect(message).toContain('--deadline-seconds=5');
+    expect(message).toContain('5 秒');
+    expect(message).toContain('.claude/skills/test-in-chunks/SKILL.md');
+  });
+
+  it('「通ったのでも落ちたのでもない」ことを明示する（歯Aの `EXIT_UNKNOWN` と混同されないため）', () => {
+    expect(formatDeadlineMessage(300)).toContain(
+      '通ったのでも落ちたのでもない',
+    );
   });
 });
 

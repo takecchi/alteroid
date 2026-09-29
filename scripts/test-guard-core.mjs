@@ -395,6 +395,118 @@ export function resolveReporterArgs(argv, { CLAUDECODE } = {}) {
   return [...argv, '--reporter=dot'];
 }
 
+// ── 引数の正規化（続き）: 締め切り（`--deadline-seconds`） ──────────────
+
+/** `--deadline-seconds=<n>` / `--deadline-seconds <n>` の口。vitest へは渡さない。 */
+const DEADLINE_FLAG = '--deadline-seconds';
+
+/** 「不正な締め切り」の exit code。歯A〜歯C・`EXIT_SCOPE_VIOLATION`（1〜8）の
+ * どれとも混ざらない新規の値。vitest を起こす**前**に判定する（`EXIT_SCOPE_VIOLATION`
+ * と同じ理由——不正な値を vitest 側や後段の判定に持ち込まない）。 */
+export const EXIT_BAD_DEADLINE = 9;
+
+/** 締め切りに達して打ち切ったときの exit code。歯A〜歯C・`EXIT_SCOPE_VIOLATION`・
+ * `EXIT_BAD_DEADLINE`（1〜9）のどれとも混ざらない新規の値。**打ち切った回は
+ * vitest が非0で終わった回と同じ扱いにする**——歯A/歯B/歯Cの判定は一切走らせない
+ * （SIGTERM/SIGKILL で殺した後の vitest の出力は、集計行が「出ていない」のか
+ * 「途中で切れて壊れている」のかが区別できない。判定できない材料に判定を
+ * 掛けない、という歯A/歯B/歯Cと同じ作法をここでも採る）。 */
+export const EXIT_DEADLINE = 10;
+
+/**
+ * argv から `--deadline-seconds=<n>`（`=` 形）・`--deadline-seconds <n>`
+ * （空白区切り）を取り出す。純粋関数——vitest へは渡さない（`rest` から必ず
+ * 落とす）。
+ *
+ * **なぜ足すか（実測、マネージャーが2026-09-29T07:0xZ にこの器で確認した）**:
+ * GNU coreutils 9.7 の `timeout` は、時間切れのときに**パイプの読み手にも
+ * SIGTERM を送る**。
+ *
+ * ```
+ * $ timeout 3 sleep 10 | cat; echo "EXIT:${PIPESTATUS[*]}"
+ * Terminated
+ * EXIT:124 143
+ * ```
+ *
+ * ⟹ 作業者がよく打つ `timeout 590 pnpm test … 2>&1 | grep -E 'Test Files|…'`
+ * は、打ち切られると `grep` ごと殺され、それまでの出力も「打ち切られた」ことも
+ * 1行も残らない。外側の `timeout` に頼らず、この `test.mjs` 自身が締め切りを
+ * 持ち、打ち切ったことを（パイプの読み手を巻き込む前に）自分の stdout へ
+ * 1行書き切ってから終わるようにする——詳細な使い方は `test.mjs` 冒頭の doc。
+ *
+ * **値は1以上の整数でなければならない**（小数・負・0・非数はすべて
+ * `EXIT_BAD_DEADLINE` で拒否——vitest を起こす前に判定する）。**複数回
+ * 指定されたら最後の値が勝つ**（`extractScope` と同じ「最後が勝つ」規約）。
+ *
+ * 戻り値は2形——`{ ok: true, deadlineSeconds: number | undefined, rest: string[] }`
+ * （`deadlineSeconds` は未指定なら `undefined`。`rest` は `--deadline-seconds`
+ * 自体とその値を取り除いた残り）、または
+ * `{ ok: false, exitCode: EXIT_BAD_DEADLINE, message: string }`。
+ *
+ * **`--scope` の位置引数判定より前に呼ぶこと。** `--deadline-seconds` を
+ * `VALUE_TAKING_FLAGS`（`resolveScopedArgs` が読む一覧）へ足す代わりに、ここで
+ * 先に argv から完全に取り除く設計にした——`--scope` 解決の関心事（利用者の
+ * 位置引数と範囲の絞り込み）に、締め切りという無関係な軸を混ぜないため。
+ */
+export function extractDeadlineSeconds(argv) {
+  const eqPrefix = DEADLINE_FLAG + '=';
+  let raw; // 最後に見つかった生の値（文字列）。複数指定されたら最後が勝つ。
+  const rest = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg.startsWith(eqPrefix)) {
+      raw = arg.slice(eqPrefix.length);
+      continue;
+    }
+    if (arg === DEADLINE_FLAG) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        return {
+          ok: false,
+          exitCode: EXIT_BAD_DEADLINE,
+          message: [
+            'test-guard: --deadline-seconds に値が無い。',
+            '1以上の整数（秒）を指定すること（例: --deadline-seconds=300）。',
+          ].join('\n'),
+        };
+      }
+      raw = next;
+      i += 1; // 値を消費した（空白区切りの値をフラグや位置引数と読み違えない）
+      continue;
+    }
+    rest.push(arg);
+  }
+
+  if (raw === undefined) {
+    return { ok: true, deadlineSeconds: undefined, rest: argv };
+  }
+
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+    return {
+      ok: false,
+      exitCode: EXIT_BAD_DEADLINE,
+      message: [
+        `test-guard: --deadline-seconds の値が不正: ${JSON.stringify(raw)}`,
+        '1以上の整数（秒）を指定すること（小数・負・0・非数は受け付けない）。',
+      ].join('\n'),
+    };
+  }
+
+  return { ok: true, deadlineSeconds: Number(raw), rest };
+}
+
+/** 打ち切ったときに stdout へ必ず出す1行。集計行が出ていないことと、
+ * 「通ったのでも落ちたのでもない」ことを明示する——歯A（`EXIT_UNKNOWN`）と
+ * 混同されないため。純粋関数——`test.mjs` から呼ぶ。 */
+export function formatDeadlineMessage(deadlineSeconds) {
+  return (
+    `test-guard: --deadline-seconds=${deadlineSeconds} で打ち切った` +
+    `（vitest が ${deadlineSeconds} 秒で終わらなかった）。` +
+    '集計行は出ていない——通ったのでも落ちたのでもない。分けて回す: ' +
+    '.claude/skills/test-in-chunks/SKILL.md'
+  );
+}
+
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────
 
 /**

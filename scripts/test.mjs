@@ -70,7 +70,7 @@
  * 分ける）。詳細と実測（`INIT_CWD` ではなく `process.cwd()` を基準にする理由
  * も含む）は `matchScopedPositionals` / `resolveScopedArgs` の doc に在る。
  *
- * ## exit code（8値。混ぜない）
+ * ## exit code（10値。混ぜない）
  *
  * | 出所                                | 意味                                             |
  * | ----------------------------------- | ------------------------------------------------ |
@@ -82,12 +82,16 @@
  * | `EXIT_OBSERVATION_UNDECLARED`（6）  | 歯C: 観測用テストの終了条件／見直し期限が無い、または書式が壊れている |
  * | `EXIT_OBSERVATION_DUE`（7）         | 歯C: 観測用テストの見直し期限を過ぎた              |
  * | `EXIT_SCOPE_VIOLATION`（8）         | `--scope` の範囲外を指す位置引数、または範囲の中に部分一致するテストが無い位置引数を検出（#1691） |
+ * | `EXIT_BAD_DEADLINE`（9）            | `--deadline-seconds` の値が不正（1以上の整数でない） |
+ * | `EXIT_DEADLINE`（10）               | `--deadline-seconds` の締め切りに達し、vitest を打ち切った |
  *
- * `EXIT_SCOPE_VIOLATION` は vitest を起こす**前**に判定する（範囲外・一致無しの
- * パスを vitest へ渡してもエラーにはならず「一致なし」で静かに空振りするだけ
- * なので、vitest 側の判定に委ねられない）。歯A/歯B/歯Cは vitest が exit 0 を返した
- * 後にしか判定しない。**vitest が非0で落ちたら、ラッパの検査は一切走らせず、
- * その exit code をそのまま返す**（「自分の検査は通った」で上書きしない）。
+ * `EXIT_SCOPE_VIOLATION` / `EXIT_BAD_DEADLINE` は vitest を起こす**前**に判定する
+ * （範囲外・一致無しのパスや、不正な締め切りの値を vitest へ渡してもエラーには
+ * ならず静かに空振りするだけなので、vitest 側の判定に委ねられない）。歯A/歯B/歯Cは
+ * vitest が exit 0 を返した後にしか判定しない。**vitest が非0で落ちたら、ラッパの
+ * 検査は一切走らせず、その exit code をそのまま返す**（「自分の検査は通った」で
+ * 上書きしない）。**締め切りに達して打ち切った回（`EXIT_DEADLINE`）も同じ扱い**——
+ * 歯A/歯B/歯Cの判定は一切走らせない（下の「締め切り」節）。
  * **ラッパ自身が例外で落ちたときも exit 0 にはならない**（末尾の
  * `main().catch(...)` が exit code 1 で拾う。緑を名乗る経路を1本も作らない）。
  *
@@ -124,14 +128,92 @@
  * `--reporter=dot` を混ぜないため（この歯が足す形も `--reporter` も、どちらも
  * 位置引数としては読まれない `VALUE_TAKING_FLAGS` 対応の形なので、実害は無いが、
  * 順序を固定して依存の向きを明示する）。
+ *
+ * ## `--deadline-seconds=<n>`（外側の `timeout` に頼らない締め切り）
+ *
+ * **なぜ足すか（実測、マネージャーが2026-09-29T07:0xZ にこの器で確認した）**。
+ * GNU coreutils 9.7 の `timeout` は、時間切れのときに**パイプの読み手にも
+ * SIGTERM を送る**:
+ *
+ * ```
+ * $ timeout 3 sleep 10 | (trap 'echo "reader got TERM" >> .scratch/reader.log' TERM; cat; echo "reader EOF ok" >> .scratch/reader.log; echo visible); echo "EXIT:${PIPESTATUS[*]}"
+ * Terminated
+ * visible
+ * EXIT:124 0
+ * （.scratch/reader.log: reader got TERM / reader EOF ok）
+ * $ timeout 3 sleep 10 | cat; echo "EXIT:${PIPESTATUS[*]}"
+ * Terminated
+ * EXIT:124 143
+ * $ timeout --foreground 3 sleep 10 | (cat; echo "reader-alive-after-eof"); echo "EXIT:${PIPESTATUS[0]}"
+ * reader-alive-after-eof
+ * EXIT:124
+ * ```
+ *
+ * ⟹ 作業者がよく打つ `timeout 590 pnpm test … 2>&1 | grep -E 'Test Files|…'` は、
+ * 打ち切られると `grep` ごと殺され、それまでの出力も「打ち切られた」ことも
+ * 1行も残らない（無出力のまま `EXIT:124` だけが返る）。`--foreground` を足せば
+ * パイプの読み手は生き残るが、それは呼び出し側が毎回 `timeout` の引数を選び
+ * 直すことに賭ける形であって、`test.mjs` の側では直せない。
+ *
+ * **だから `test.mjs` 自身が締め切りを持ち、打ち切ったことを（パイプの読み手を
+ * 巻き込む前に）自分の stdout へ1行書き切ってから終わる。**
+ *
+ * ### 使い方
+ *
+ * ```
+ * pnpm test -- --deadline-seconds=300 --maxWorkers=2 --reporter=dot
+ * ```
+ *
+ * 値は1以上の整数（秒）。`--deadline-seconds=<n>`（`=` 形）・
+ * `--deadline-seconds <n>`（空白区切り）のどちらでも受け付ける
+ * （`test-guard-core.mjs` の `extractDeadlineSeconds`）。**vitest へは渡さない**
+ * ——vitest 自身はこの引数を知らない。値が不正（0・負・小数・非数）なら
+ * vitest を起こす**前**に `EXIT_BAD_DEADLINE`（9）で断る。
+ *
+ * ### 打ち切りの形
+ *
+ * 締め切りがあるときだけ、vitest を**自分のプロセスグループのリーダー**として
+ * 起こす（`detached: true`）。締め切りに達したら、まず子の**プロセスグループ
+ * 全体**へ `SIGTERM`（`process.kill(-child.pid, 'SIGTERM')`）を送り、
+ * `DEADLINE_KILL_GRACE_MS` だけ待ってもまだ生きていれば `SIGKILL` を送る。
+ * **子1つだけ（`child.pid`）に送らない**——vitest がさらに fork した worker
+ * まで含めて止めるには、グループ全体へ送る必要がある。
+ *
+ * **締め切りが無いときの挙動は1文字も変えない。** `detached` にはしない
+ * （人間が Ctrl-C を打ったときの効き方が変わってしまう——`detached: true` で
+ * 起こすと子は自分だけの新しいプロセスグループに移り、端末が送る Ctrl-C の
+ * `SIGINT` は元のプロセスグループにしか届かず、子が置き去りになる）。
+ * **締め切りがあるときだけ**、ラッパ自身が受けた `SIGINT` / `SIGTERM` を
+ * 子のプロセスグループへ転送する（`detached` にしたことで生まれた「Ctrl-C が
+ * 子に届かない」穴を、締め切りがある回に限って埋め合わせる）。
+ *
+ * 打ち切ったら、**歯A/歯B/歯Cの判定は一切走らせない**（vitest が0以外で
+ * 終わった回と同じ扱い——集計行が「出ていない」のか「途中で切れて壊れている」
+ * のかを判定できないため）。stdout に必ず1行出す
+ * （`test-guard-core.mjs` の `formatDeadlineMessage`）:
+ *
+ * ```
+ * test-guard: --deadline-seconds=5 で打ち切った（vitest が 5 秒で終わらなかった）。
+ * 集計行は出ていない——通ったのでも落ちたのでもない。分けて回す: .claude/skills/test-in-chunks/SKILL.md
+ * ```
+ *
+ * exit code は `EXIT_DEADLINE`（10）。
+ *
+ * `--scope` の位置引数判定より前に締め切りを取り除く（`main()` の順序）——
+ * `--deadline-seconds 300`（空白区切り）の値 `300` が、範囲判定の側で
+ * 利用者の位置引数と取り違えられないようにするため。
  */
 
 import { spawn } from 'node:child_process';
 import process from 'node:process';
+import { clearTimeout, setTimeout } from 'node:timers';
 
 import {
+  EXIT_DEADLINE,
   ROOT,
   dropBareDashDash,
+  extractDeadlineSeconds,
+  formatDeadlineMessage,
   judgeExecution,
   resolveReporterArgs,
   resolveScopedArgs,
@@ -139,15 +221,75 @@ import {
   runStaticSkipGuard,
 } from './test-guard-core.mjs';
 
-/** vitest を起こし、標準出力・標準エラーを素通ししながら溜める。 */
-function runVitest(args) {
+/** SIGTERM を送ってから、まだプロセスグループが生きていれば SIGKILL するまでの
+ * 猶予（ms）。締め切りがあるとき（`deadlineSeconds` が指定されたとき）だけ使う。 */
+const DEADLINE_KILL_GRACE_MS = 3000;
+
+/** vitest を起こし、標準出力・標準エラーを素通ししながら溜める。
+ *
+ * `deadlineSeconds` を渡したときだけ、締め切りの機構を有効にする
+ * （`test.mjs` 冒頭の doc「`--deadline-seconds=<n>`」を見よ）——
+ * `detached: true` で起こし、締め切りに達したら子のプロセスグループ全体へ
+ * `SIGTERM` を送り、`DEADLINE_KILL_GRACE_MS` 待って生きていれば `SIGKILL`。
+ * ラッパ自身が受けた `SIGINT`/`SIGTERM` も同じグループへ転送する。
+ *
+ * `deadlineSeconds` が `undefined`（＝ `--deadline-seconds` 未指定）のときは、
+ * 締め切り導入前と1文字も違わない——`detached` を付けず、シグナルの転送も
+ * 一切しない（人間の Ctrl-C の効き方を変えないため）。
+ */
+function runVitest(args, { deadlineSeconds } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn('vitest', ['run', ...args], {
+    const hasDeadline = deadlineSeconds !== undefined;
+    const spawnOptions = {
       cwd: process.cwd(),
       stdio: ['inherit', 'pipe', 'pipe'],
-    });
+    };
+    if (hasDeadline) {
+      spawnOptions.detached = true;
+    }
+
+    const child = spawn('vitest', ['run', ...args], spawnOptions);
 
     let combined = '';
+    let deadlineHit = false;
+    let deadlineTimer;
+    let killTimer;
+    let forwardSignal;
+
+    const clearDeadlineTimers = () => {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+    };
+
+    const stopForwardingSignals = () => {
+      if (forwardSignal === undefined) return;
+      process.removeListener('SIGINT', forwardSignal);
+      process.removeListener('SIGTERM', forwardSignal);
+    };
+
+    /** グループ全体へ送る。子（またはそのグループ）が既に居なければ無視する
+     * （`ESRCH`）——打ち切りの最中に子が自然終了する競合は珍しくない。 */
+    const killGroup = (signal) => {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        // 既に居ない。何もしない。
+      }
+    };
+
+    if (hasDeadline) {
+      deadlineTimer = setTimeout(() => {
+        deadlineHit = true;
+        killGroup('SIGTERM');
+        killTimer = setTimeout(() => {
+          killGroup('SIGKILL');
+        }, DEADLINE_KILL_GRACE_MS);
+      }, deadlineSeconds * 1000);
+
+      forwardSignal = (signal) => killGroup(signal);
+      process.on('SIGINT', forwardSignal);
+      process.on('SIGTERM', forwardSignal);
+    }
 
     child.stdout.on('data', (chunk) => {
       process.stdout.write(chunk);
@@ -158,15 +300,32 @@ function runVitest(args) {
       combined += chunk.toString('utf8');
     });
 
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      clearDeadlineTimers();
+      stopForwardingSignals();
+      reject(err);
+    });
     child.on('close', (code, signal) => {
-      resolve({ code, signal, combined });
+      clearDeadlineTimers();
+      stopForwardingSignals();
+      resolve({ code, signal, combined, deadlineHit });
     });
   });
 }
 
 async function main() {
-  const args = dropBareDashDash(process.argv.slice(2));
+  const rawArgs = dropBareDashDash(process.argv.slice(2));
+
+  // `--deadline-seconds` は `--scope` の位置引数判定より前に取り除く——
+  // 空白区切りの値（例: `--deadline-seconds 300` の `300`）が範囲判定の側で
+  // 利用者の位置引数と取り違えられないようにするため（冒頭の doc）。
+  const deadline = extractDeadlineSeconds(rawArgs);
+  if (!deadline.ok) {
+    process.stderr.write(`\n${deadline.message}\n`);
+    process.exitCode = deadline.exitCode;
+    return;
+  }
+  const args = deadline.rest;
 
   // #1691: `--scope` の範囲外・範囲内に部分一致するテストが無い位置引数は、
   // vitest へ渡す前に断る（渡すと「一致なし」で静かに空振りするだけで、
@@ -181,7 +340,17 @@ async function main() {
   const reportedArgs = resolveReporterArgs(scoped.args, {
     CLAUDECODE: process.env.CLAUDECODE,
   });
-  const { code, combined } = await runVitest(reportedArgs);
+  const { code, combined, deadlineHit } = await runVitest(reportedArgs, {
+    deadlineSeconds: deadline.deadlineSeconds,
+  });
+
+  if (deadlineHit) {
+    // 打ち切った回は、vitest が非0で終わった回と同じ扱い——歯A/歯B/歯Cの
+    // 判定は一切走らせない（直下の `code !== 0` の分岐と同じ理由）。
+    process.stdout.write(`\n${formatDeadlineMessage(deadline.deadlineSeconds)}\n`);
+    process.exitCode = EXIT_DEADLINE;
+    return;
+  }
 
   if (code !== 0) {
     // vitest 自身が落ちた（signal で殺された場合 code は null になる。その場合も
