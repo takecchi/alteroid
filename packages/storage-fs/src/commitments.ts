@@ -2,6 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  commitmentClosedBySchema,
   commitmentSchema,
   findOpenManagerDuplicate,
   UnreadableCommitmentError,
@@ -43,9 +44,34 @@ import { withPathLock } from './file-lock.js';
  * 版で書かれたもの）は `default(0)` で読める** — 「無いなら0件削除」であって、
  * それより前に切り詰められた分を遡って数え直すことはできない。
  */
+/**
+ * 読めない行に付けた「閉じた」印（issue #2148）。
+ *
+ * **`close()` は読めない行の中身（生の値）を書き換えない。** `commitmentSchema`
+ * に合わない値をどう直せば「閉じた形」になるかは決めようがない
+ * （本体がそもそも読めていないので、`closedAt` をどこへどう足せばよいか判定
+ * できない）。だから生の値（`commitments` 配列側。`toDiskShape` が書く
+ * `unreadable[].value`）には一切触れず、`id` をキーにした別欄へ
+ * 「いつ・なぜ・誰が閉じたか」を記録する——**読めない行の中身をそれらしい
+ * 値で埋めない**（`list()` が返す `unreadable` の形は `UnreadableCommitment`
+ * のままで、`closedAt` 等を持たない。閉じたかどうかは `list()` の
+ * `includeClosed` による絞り込みのほうへ出す。下の `list()` の doc）。
+ *
+ * **古いファイル（この欄がまだ無い版）は `default([])` で読める** —
+ * 「無いなら閉じた読めない行は無い」であって、それより前に閉じた読めない
+ * 行を遡って復元することはできない。
+ */
+const closedUnreadableRowSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  reason: z.string(),
+  by: commitmentClosedBySchema,
+});
+
 const rawFileSchema = z.object({
   commitments: z.array(z.unknown()).default([]),
   trimmedClosedCount: z.number().int().nonnegative().default(0),
+  closedUnreadable: z.array(closedUnreadableRowSchema).default([]),
 });
 
 /**
@@ -65,8 +91,20 @@ const rawFileSchema = z.object({
  * 持つ。取れない（本体が `id` / `at` という欄を持たない、あるいは持っていても
  * 文字列でない・日時として読めない）ことがあるのは、行が壊れているという
  * 前提そのものが「その他の欄も信用できない」を含意するためである。
+ *
+ * **`closed` は `close()` が付けた印（issue #2148。`closedUnreadableRowSchema`
+ * の doc）。** `id` が取れた行にしか付かない——`close(id, …)` は id で行を探す
+ * ので、`id` が取れない行はそもそも close の対象として見つけられない
+ * （見つけられないことは既存の `get(id)` と同じ制約であり、この修正で新しく
+ * 増えた制約ではない）。
  */
-type UnreadableRow = { value: unknown; id?: string; at?: string; reason: string };
+type UnreadableRow = {
+  value: unknown;
+  id?: string;
+  at?: string;
+  reason: string;
+  closed?: { at: string; reason: string; by: CommitmentClosedBy };
+};
 
 /**
  * この器がメモリ上で持つ形。**ディスク上の形（`commitments: unknown[]` の
@@ -166,14 +204,26 @@ function splitFileRows(rows: unknown[]): Omit<CommitmentFile, 'trimmedClosedCoun
  *
  * **`trimmedClosedCount` も書き戻す（issue #416）。** 累計件数なので、ここを
  * 落とすと次回の起動で0へ戻り、それまでの削除が無かったことになる。
+ *
+ * **`closedUnreadable` は `unreadable[].closed` が付いた行から作り直す
+ * （issue #2148）。** `id` が取れている行だけが対象になる——`closed` は
+ * `close(id, …)` が id で見つけた行にしか付かないので、`id` を持たない
+ * `closed` 付きの行はそもそも存在しない（型では防げないので、ここで
+ * `row.id !== undefined` を再確認してから積む）。
  */
 function toDiskShape(file: CommitmentFile): {
   commitments: unknown[];
   trimmedClosedCount: number;
+  closedUnreadable: { id: string; at: string; reason: string; by: CommitmentClosedBy }[];
 } {
   return {
     commitments: [...file.entries, ...file.unreadable.map((row) => row.value)],
     trimmedClosedCount: file.trimmedClosedCount,
+    closedUnreadable: file.unreadable.flatMap((row) =>
+      row.closed !== undefined && row.id !== undefined
+        ? [{ id: row.id, at: row.closed.at, reason: row.closed.reason, by: row.closed.by }]
+        : [],
+    ),
   };
 }
 
@@ -214,18 +264,25 @@ export class FsCommitmentStore implements CommitmentStore {
   }
 
   /**
-   * **読めない行は `includeClosed` に関わらず常に返す。** `closedAt` が
-   * 読めない以上、片付いたとみなす根拠が無いので、未了扱いで安全側へ倒す
-   * （issue #296）。
+   * **読めない行のうち、まだ閉じていないものは `includeClosed` に関わらず
+   * 常に返す。** `closedAt` が読めない以上、片付いたとみなす根拠が無いので、
+   * 未了扱いで安全側へ倒す（issue #296）。
    *
-   * **pg 版との差を明記する（「言えないこと」）。** pg 版は列（`closed_at`）
-   * だけは jsonb と独立に読めるので、`includeClosed` が偽なら未了の行しか
-   * そもそも読まず、壊れた「閉じ済み」行は `unreadable` にも出ない。fs 版は
-   * 「閉じているかどうか」の判定自体が読めなかった行の中身（`closedAt`）に
-   * 依存するため、**この行が本当に未了なのか、閉じたのに壊れているだけ
-   * なのかを fs 版は判定できない。** 判定できない以上、`includeClosed` が
-   * 偽でも隠さずに出す — 隠すと「片付いた」と黙って決めつけることになり、
-   * 忘れさせないというこの器の目的に反する。
+   * **⭐ ただし `close()`（issue #2148）で明示的に閉じた読めない行は別である。**
+   * その行だけは「閉じた」という事実を型の外（`unreadableCommitmentSchema`
+   * には無い別欄、`UnreadableRow.closed`）に持っているので、pg 版が
+   * `closed_at` 列で判定するのと同じ形で `includeClosed` に従わせられる——
+   * `includeClosed` が偽なら隠し、真なら `unreadable` へ出す。**閉じたと
+   * 分かっている行まで安全側（常に出す）へ倒す理由は無い**（分からない
+   * ときにだけ安全側へ倒すのが上の段落の理由だった）。
+   *
+   * **pg 版との差はここまでで消える（「言えないこと」の更新）。** かつては
+   * 「fs 版は閉じているかどうかを読めなかった行の中身からしか判定できない」
+   * という差があったが、`close()` が読めない行にも印を付けられるようになった
+   * ことで、印が付いた行については pg 版と同じ絞り込みができる。**差が残る
+   * のは「印を付けていない（＝ `close()` を一度も呼ばれていない）読めない
+   * 行」だけ**——そちらは pg 版でも `commitment` 列そのものが壊れている以上
+   * `closed_at` が動く経路が無く、常に未了として出る点は変わらない。
    */
   async list(options?: { includeClosed?: boolean }): Promise<CommitmentList> {
     const file = await this.#read();
@@ -238,20 +295,37 @@ export class FsCommitmentStore implements CommitmentStore {
     // 外へ渡すと、構造的には型に無い `value`（＝行の本体。`body` を含みうる）へ
     // 呼び出し側が実行時にアクセスできてしまう。`dropped-record.ts` の
     // 「本文を出さない」制約はログだけでなく、この型の境界でも保つ。
-    const unreadable = file.unreadable.map(toPublicUnreadable);
+    //
+    // **`toPublicUnreadable` は `closed` を持ち出さない。** 閉じたかどうかは
+    // `includeClosed` の絞り込み（下）でだけ表現し、`UnreadableCommitment`
+    // の形そのものは増やさない——読めない行の中身をそれらしい値で埋めない、
+    // という制約は「閉じたか」の1ビットにも及ぶ（pg 版も `unreadable` へ
+    // `closedAt` を出さないので、ここで出すと逆に fs 側だけ情報が増える）。
+    const unreadableUnclosed = file.unreadable
+      .filter((row) => row.closed === undefined)
+      .map(toPublicUnreadable);
     // **`trimmedClosed` は毎回 `file.trimmedClosedCount` をそのまま出す
     // （issue #416）。** `includeClosed` の真偽に関わらず同じ値 — 削除は
     // 過去に一度でも起きていれば増えている事実であって、いま何を見せるか
     // という絞り込みとは別の軸だからである（`unreadable` と同じ扱い）。
     if (options?.includeClosed !== true) {
-      return { entries: open, unreadable, trimmedClosed: file.trimmedClosedCount };
+      return {
+        entries: open,
+        unreadable: unreadableUnclosed,
+        trimmedClosed: file.trimmedClosedCount,
+      };
     }
     const closed = file.entries
       .filter((entry) => entry.closedAt !== undefined)
       .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
+    // 閉じた読めない行も含めて出す（新しい順・古い順を判定する材料が無いので、
+    // 未了扱いの読めない行の後ろへそのまま連結する）。
+    const unreadableClosed = file.unreadable
+      .filter((row) => row.closed !== undefined)
+      .map(toPublicUnreadable);
     return {
       entries: [...open, ...closed],
-      unreadable,
+      unreadable: [...unreadableUnclosed, ...unreadableClosed],
       trimmedClosed: file.trimmedClosedCount,
     };
   }
@@ -349,52 +423,82 @@ export class FsCommitmentStore implements CommitmentStore {
    * 二重に届いた片付けが両方 `true` を返し、呼び出し側が「いま自分が閉じた」と
    * 誤って二重に報告する。
    *
-   * **読めない行の id を渡された場合は `false` を返す**（`file.entries` の中に
-   * 見つからないので、下の「無い / 既に閉じている」の分岐にそのまま乗る）。
-   * 読めない行は `Commitment` として復元できないので、その場で「片付いた」を
-   * 記録する先が無い ——`get(id)` が throw するのと同じ理由で、閉じるにも
-   * 読めることが前提になる。
+   * **⭐ 読めない行の id を渡されたときも `true` を返せる（issue #2148。旧来の
+   * 挙動から変わった点）。** 読めない行の中身（`commitmentSchema` に合わない
+   * 生の値）は書き換えられないので、pg 版のように `closedAt` を jsonb の中へ
+   * 進めることはできない——だが「その id を閉じたという事実」自体は、生の値に
+   * 触れない別欄（`UnreadableRow.closed`。`closedUnreadableRowSchema` の doc）
+   * へ記録できる。`entries` に見つからず、`unreadable` に見つかったときは、
+   * その行がまだ閉じていなければ `closed` を立てて `true`、**既に `closed` が
+   * 付いていれば「いま自分が閉じたのではない」ので `false`**——`entries` 側の
+   * 「無い / 既に閉じている」判定と同じ形を保つ。
    *
-   * **⚠️ この `false` は pg 版の `close()` とは違う結末である
-   * （issue #296。「言えないこと」として書く）。** pg 版は `closed_at` が
-   * jsonb（`commitment`）とは独立した列なので、行が読めない形でも `closed_at`
-   * だけを進められ、`close()` は `true` を返す（`packages/storage-pg/src/
-   * commitments.ts` の `close` の doc）。**fs 版には `closed_at` に当たる
-   * 独立した列が無く、「閉じているかどうか」を読めなかった行の中身
-   * （`closedAt`）以外から判定する手立てが無い。** だからここで揃えることは
-   * できない —— north_star 禁止1（器の違いで能力差を作らない）に触れて
-   * 見えるが、fs 版にその列が無い以上、pg 版と同じ検査を書きようがない
-   * （揃えたふりをするほうが、無いものをあるかのように見せることになる）。
+   * **⚠️ この行の中身（`body` 等）は依然として読めないままである。** ここで
+   * 変わるのは「閉じたと言えるかどうか」だけで、`get(id)` は相変わらず
+   * `UnreadableCommitmentError` を投げる（閉じたかどうかに関わらず、中身が
+   * 読めないという事実は変わっていない）——`list()` の `includeClosed` に
+   * よる絞り込みだけが、この `closed` 印を見て変わる（`list()` の doc）。
    *
-   * **この差を実際に踏む経路は `POST /commitments/:id/close`
-   * （`apps/daemon/src/app.ts`）だけである。** あちらは `close()` を先に呼び、
-   * 失敗したときだけ理由を求めて `get(id)` を呼ぶ作りになっている
-   * ——fs 版はここで `false` を返した直後、その `get(id)` が
-   * throw する（読めない行に一致するため）。**この throw はそのルートの
-   * ハンドラを抜けて未捕捉のまま伝播する**（`apps/daemon/src/app.ts` はこの
-   * ルートを try/catch で囲っていない）ので、宣言してある 404 / 409 では
-   * なく 500 として応答が返る。MCP の `commitment_close`
-   * （`packages/core/src/tools.ts`）は `close()` の前に必ず `get(id)` を
-   * 呼ぶので、pg / fs のどちらでも同じ結末（throw）になり、この非対称を
-   * 踏まない。
+   * **`at` を渡された id が本当に見つからないときは、これまでどおり `false`**
+   * （`entries` にも `unreadable` にも無い）。
+   *
+   * **pg 版とここで揃った（「言えないこと」の更新。issue #296 時点の doc を
+   * 差し替える）。** pg 版は `closed_at` が jsonb（`commitment`）とは独立した
+   * 列なので、行が読めない形でも `closed_at` だけを進められ、`close()` は
+   * `true` を返す（`packages/storage-pg/src/commitments.ts` の `close` の
+   * doc）。fs 版には pg のその列に当たるものが無いが、**同じ効果（「閉じたと
+   * 言えること」）を別の置き場所（`closedUnreadable`）で実現した**ことで、
+   * north_star 禁止1（器の違いで能力差を作らない）に触れる差は消えている。
+   *
+   * **この直しで `POST /commitments/:id/close`（`apps/daemon/src/app.ts`）の
+   * 500 は消える。** あちらは `close()` を先に呼び、失敗したときだけ理由を
+   * 求めて `get(id)` を呼ぶ作りなので、読めない行の `close()` がここで
+   * `true` を返せるようになった以上、その `get(id)` の呼び出し自体に届かない
+   * ——旧 doc が説明していた「fs 版はここで `false` を返した直後、その
+   * `get(id)` が throw する」という経路は、まだ閉じていない読めない行では
+   * 起きなくなった。**既に閉じている読めない行への2度目の `close()`** は
+   * 相変わらず `false` を返すので、その場合の `get(id)` フォールバックは
+   * 依然として throw しうる——`apps/daemon/src/app.ts` 側がその
+   * `UnreadableCommitmentError` を捕まえて 409 にする（issue #2148。同ファイル
+   * の `POST /commitments/:id/close` の doc）。MCP の `commitment_close`
+   * （`packages/core/src/tools.ts`）も同じ形に直した——`close()` の前に
+   * 必ず `get(id)` を呼んでいたのを、`UnreadableCommitmentError` を
+   * `instanceof` で捕まえてから `close()` へ進む形にした。
    */
   async close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean> {
     return this.#update((file) => {
       const found = file.entries.find((entry) => entry.id === id);
-      // 無い / 既に閉じている。どちらも「いま自分が閉じた」ではない
-      if (found === undefined || found.closedAt !== undefined) {
-        return { next: file, result: false };
+      if (found !== undefined) {
+        // 既に閉じている。「いま自分が閉じた」ではない
+        if (found.closedAt !== undefined) return { next: file, result: false };
+        return {
+          next: trimClosed({
+            entries: file.entries.map((entry) =>
+              entry.id === id
+                ? { ...entry, closedAt: at, closedReason: reason, closedBy: by }
+                : entry,
+            ),
+            unreadable: file.unreadable,
+            trimmedClosedCount: file.trimmedClosedCount,
+          }),
+          result: true,
+        };
       }
+      // **読めない行を id で探す（issue #2148）。** 見つからなければ本当に
+      // 無い id である——`entries` にも `unreadable` にも無い以上、これまで
+      // どおり `false`。
+      const broken = file.unreadable.find((row) => row.id === id);
+      if (broken === undefined) return { next: file, result: false };
+      // 読めない行も、既に閉じていれば「いま自分が閉じた」ではない
+      if (broken.closed !== undefined) return { next: file, result: false };
       return {
-        next: trimClosed({
-          entries: file.entries.map((entry) =>
-            entry.id === id
-              ? { ...entry, closedAt: at, closedReason: reason, closedBy: by }
-              : entry,
+        next: {
+          entries: file.entries,
+          unreadable: file.unreadable.map((row) =>
+            row === broken ? { ...row, closed: { at, reason, by } } : row,
           ),
-          unreadable: file.unreadable,
           trimmedClosedCount: file.trimmedClosedCount,
-        }),
+        },
         result: true,
       };
     });
@@ -553,8 +657,20 @@ export class FsCommitmentStore implements CommitmentStore {
     try {
       const raw = await readFile(this.#path, 'utf8');
       const parsed = rawFileSchema.parse(JSON.parse(raw));
+      const { entries, unreadable } = splitFileRows(parsed.commitments);
+      // **`closedUnreadable`（issue #2148）を id で引き当てて `unreadable`
+      // 側の行へ合流させる。** `close()` が読めない行に付けた印は、生の値
+      // （`commitments` 配列）には書かれていないので、読み込むたびにここで
+      // 合成し直す必要がある（`closedUnreadableRowSchema` の doc）。
+      const closedById = new Map(parsed.closedUnreadable.map((row) => [row.id, row]));
       return {
-        ...splitFileRows(parsed.commitments),
+        entries,
+        unreadable: unreadable.map((row) => {
+          if (row.id === undefined) return row;
+          const closedRow = closedById.get(row.id);
+          if (closedRow === undefined) return row;
+          return { ...row, closed: { at: closedRow.at, reason: closedRow.reason, by: closedRow.by } };
+        }),
         trimmedClosedCount: parsed.trimmedClosedCount,
       };
     } catch (error) {

@@ -784,6 +784,45 @@ export class UnreadableCommitmentError extends Error {
 }
 
 /**
+ * `UnreadableCommitmentError` を、呼び出し側が人間・クローンへ返す1文へ
+ * 変換する共通の文面（issue #2148）。
+ *
+ * **なぜ1箇所に置くか。** 台帳を読んでから操作する5口
+ * （`PATCH /commitments/:id`・`POST /commitments/:id/appraise`・道具
+ * `commitment_edit` / `commitment_appraise`。`commitment_close` は別の扱い
+ * ——下の「なぜ `commitment_close` を含めないか」を見よ）が、先に呼ぶ
+ * `get(id)` から同じ `UnreadableCommitmentError` を受け取る。HTTP の5口は
+ * `apps/daemon/src/app.ts`、道具は `packages/core/src/tools.ts` と別ファイル
+ * に分かれているので、同じ状況の説明文をそれぞれ手で書くと、`commitmentPosition`
+ * （このファイル冒頭の doc）と同じ理由で片方だけ直して食い違う。
+ *
+ * **`error.message` をそのまま使う。** fs / pg 両方の `UnreadableCommitmentError`
+ * は既に「${id} が読めない形で入っている（片付いたのではない）: ${reason}」
+ * という、id と理由を含む1文を持っている（`storage-fs/src/commitments.ts` /
+ * `storage-pg/src/commitments.ts` の `get` の doc）——ここへさらに id を
+ * 埋め込み直すと二重に名乗ることになるので、その1文の末尾へ「できること・
+ * できないこと」を1文足すだけにする。
+ *
+ * **「閉じることはできる」は常に言ってよい。** `POST /commitments/:id/close`
+ * と道具 `commitment_close` は、この関数を呼ぶ口とは別に読めない行を閉じ
+ * られる（issue #2148 の決定 (1)）——だからここで説明する口がどれであっても、
+ * 「別の口（close）からなら閉じられる」という事実は変わらない。
+ *
+ * **本文の書き直し・評定は、この関数を呼ぶどの口からもできない**（issue #2148
+ * の決定 (2)。本文が本当に読める形へ戻るという保証が無い書き直しは、この
+ * issue の範囲では入れない判断——`docs/` 相当の決定は Issue 本文とマネージャー
+ * のコメントを見よ）。
+ */
+export function describeUnreadableCommitment(error: UnreadableCommitmentError): string {
+  return (
+    `${error.message}。close で閉じることはできる` +
+    '（POST /commitments/:id/close・commitment_close）。' +
+    '本文の書き直し（PATCH /commitments/:id・commitment_edit）や' +
+    '評定（POST /commitments/:id/appraise・commitment_appraise）はできない。'
+  );
+}
+
+/**
  * `CommitmentStore.list` の返り値（issue #296）。
  *
  * **`Commitment[]` のままにしなかったのは、呼び出し側が握り潰せない形にする

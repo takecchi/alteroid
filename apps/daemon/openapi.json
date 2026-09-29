@@ -11820,7 +11820,7 @@
         "operationId": "postCommitmentsByIdClose",
         "tags": ["commitments"],
         "summary": "引き受けた仕事を片付いたことにする",
-        "description": "クローンの `commitment_close` と同じものを人間の手から。**契約は「行は消さない」** — 消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された累計件数は `GET /commitments` の `trimmedClosed` で見える。",
+        "description": "クローンの `commitment_close` と同じものを人間の手から。**契約は「行は消さない」** — 消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された累計件数は `GET /commitments` の `trimmedClosed` で見える。**台帳の行が読めない形で入っていても閉じられる**（issue #2148。中身は読めないままなので、閉じた後も本文の書き直し・評定はできない）。",
         "responses": {
           "200": {
             "description": "閉じた。以後は `includeClosed=true` でだけ見える。",
@@ -11872,7 +11872,7 @@
             }
           },
           "409": {
-            "description": "既に片付いている（いつ・どう片付けたかを本文に入れて返す）。",
+            "description": "既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入っている行は、いつ・どう片付けたかが分からないことがある）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11959,6 +11959,22 @@
           },
           "404": {
             "description": "その id は台帳に無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "台帳に在るが読めない形で入っている（消されたのではない）。close で閉じることはできるが、評定は付けられない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -12085,7 +12101,7 @@
             }
           },
           "409": {
-            "description": "既に片付いている（いつ・どう片付いたかを本文に入れて返す）。",
+            "description": "既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが読めない形で入っている（close で閉じることはできるが、書き直せない）。",
             "content": {
               "application/json": {
                 "schema": {

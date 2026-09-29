@@ -209,6 +209,7 @@ import {
   UnreadableCommitmentError,
   UnreadablePracticeError,
   UnreadableTokenSettingsError,
+  describeUnreadableCommitment,
 } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
@@ -7831,9 +7832,25 @@ export function createCloneTools(context: ToolContext) {
               '評定を仕事の種類ごとに束ねる鍵になる（#1308）。',
           );
         }
-        const existing = await stores.commitments.get(id);
-        if (existing === null) return text(await describeCommitmentNotOnLedger(stores, id));
-        if (existing.closedAt !== undefined) {
+        // **読めない行でも閉じられるようにする（issue #2148 の決定 (1)）。**
+        // `get` が `UnreadableCommitmentError` を投げても、ここでは投げ直さず
+        // 「読めない」と分かったことにして先へ進む——`entries` の判定
+        // （`existing.closedAt` を見る）が使えない代わりに、下の `close()` の
+        // 戻り値だけで「閉じられたか」を判定する（読めない行の「既に閉じている」は
+        // `close()` 自身が知っている。`storage-fs` / `storage-pg` の `close` の doc）。
+        let existing: Commitment | null;
+        let unreadable = false;
+        try {
+          existing = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          existing = null;
+          unreadable = true;
+        }
+        if (existing === null && !unreadable) {
+          return text(await describeCommitmentNotOnLedger(stores, id));
+        }
+        if (existing !== null && existing.closedAt !== undefined) {
           return text(
             `${id} は既に ${existing.closedAt} に片付けてある（${existing.closedReason ?? ''}）。`,
           );
@@ -7845,7 +7862,18 @@ export function createCloneTools(context: ToolContext) {
         // 実際には閉じていないのに下の日誌へ「片付けた」と書くことになる——
         // これから足す記録そのものが嘘をつく。
         if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'clone'))) {
-          const after = await stores.commitments.get(id);
+          // **読めない行が「既に閉じている」ときも `get` は投げる**（`close()` は
+          // 中身を読めるようにしたわけではない。閉じたかどうかだけが増えた欄
+          // であり、`get()` の契約はここでは変えない。issue #2148）。
+          let after: Commitment | null;
+          try {
+            after = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return text(
+              `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）。`,
+            );
+          }
           return text(
             `${id} は既に ${after?.closedAt ?? '不明な時刻'} に片付けてある（${after?.closedReason ?? '理由の記録なし'}）。`,
           );
@@ -7866,11 +7894,25 @@ export function createCloneTools(context: ToolContext) {
           stores.journal,
           {
             type: 'decision',
-            decision: `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
+            decision: unreadable
+              ? `読めない形で入っていた仕事を自分で片付けた（${id}）: ${reason}`
+              : `引き受けた仕事を自分で片付けた（${id}）: ${reason}`,
             grounds: 'クローン自身が commitment_close で閉じた（人間はこれを読んで後から否定する）',
           },
           'act-completed',
         );
+        // **読めない行には評定を付けない（issue #2148 の決定 (2)）。** 中身
+        // （`body` 等）が読めないままである以上、評定を書き込む先の意味が
+        // 保証できない——`appraisal` / `workKind` が渡されていても、ここでは
+        // 無視して「付けられなかった」とだけ名乗る（**読めない欄をそれらしい
+        // 値で埋めない**）。
+        if (unreadable) {
+          return text(
+            `${id}（読めない形で入っていた仕事）を片付けた。` +
+              '**中身が読めないため、評定は付けられなかった**' +
+              '（appraisal を渡していても記録していない）。本文の書き直しもできない。',
+          );
+        }
         if (appraisal === undefined || workKind === undefined) {
           return text(
             `${id} を片付けた。**評定はまだ付いていない** —— どうだったかは commitment_appraise で付けられる。`,
@@ -7923,7 +7965,19 @@ export function createCloneTools(context: ToolContext) {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const workKindError = describeWorkKindViolation(workKind);
         if (workKindError !== null) return text(workKindError);
-        const existing = await stores.commitments.get(id);
+        // **読めない行は「名乗る」だけにとどめる（issue #2148 の決定 (2)(3)）。**
+        // 本文の書き直しと違い評定は本来「未了の行にも付けられる」緩い口だが、
+        // この issue では読めない行への評定書き込みまでは通さない——中身が
+        // 読めない以上、評定を付けた対象の実体が保証できない。`instanceof` で
+        // `UnreadableCommitmentError` だけを捕まえ、それ以外（器そのものの
+        // 障害）は投げ直す。
+        let existing;
+        try {
+          existing = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          throw new Error(describeUnreadableCommitment(error));
+        }
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
         return text(`${id} の${await writeAppraisal(stores, id, appraisal, reason, workKind)}`);
@@ -8015,7 +8069,18 @@ export function createCloneTools(context: ToolContext) {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const bodyError = describeStringLengthViolation('body', body, { min: 1 });
         if (bodyError !== null) return text(bodyError);
-        const existing = await stores.commitments.get(id);
+        // **読めない行は本文の書き直しを通さず「名乗る」だけにとどめる**
+        // （issue #2148 の決定 (2)(3)）。読める本文が無い以上、書き直した後に
+        // 読める行へ戻るという保証も無い——`instanceof` で
+        // `UnreadableCommitmentError` だけを捕まえ、それ以外（器そのものの
+        // 障害）は投げ直す。
+        let existing;
+        try {
+          existing = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          throw new Error(describeUnreadableCommitment(error));
+        }
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // **`origin` の判定はここでする**（`CommitmentStore.editBody` の doc —
         // 競合しない方針判断はストアではなく呼び出し側が持つ）。人間側の口

@@ -38,6 +38,7 @@ import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   JournalAnchorNotFoundError,
   TokenPoolInputError,
+  UnreadableCommitmentError,
   UnreadablePracticeError,
   approvalUpdatedAt,
   chatStreamEventSchema,
@@ -54,6 +55,7 @@ import {
   computeAppraisalReconciliation,
   computeJobAppraisalCoverage,
   describeAppraisal,
+  describeUnreadableCommitment,
   formatAppraisalDecision,
   compareApprovalPagingKey,
   compareCommitmentPosition,
@@ -4184,6 +4186,17 @@ export function createApp(deps: AppDeps) {
      * 後から来たほうの理由で上書きされる（＝人間が読む「何をもって終わりとしたか」が
      * 静かに入れ替わる）。**判定は台帳の1操作（`close`）に任せ**、読むのは 404 と 409 を
      * 書き分けるためだけにする。
+     *
+     * **⭐ 読めない約束も閉じられる（issue #2148）。** `close()` は先頭で
+     * `get()` を呼ばないので、読めない行に対しても直接 `close()` を試す——
+     * fs / pg のどちらも読めない行を閉じられるようになった（`CommitmentStore
+     * .close` の doc、`storage-fs/src/commitments.ts` / `storage-pg/src/
+     * commitments.ts` の `close` の doc）ので、この口はコードを変えずに
+     * その恩恵を受ける。**変わるのは、`close()` が `false` を返した後の
+     * フォールバック（下）だけ**——読めない行が「既に閉じている」ときは、
+     * その後の `get(id)` が `UnreadableCommitmentError` を投げるので、
+     * そこを捕まえて 409 にする（以前はここが未捕捉のまま伝播し 500 に
+     * なっていた）。
      */
     .post(
       '/commitments/:id/close',
@@ -4195,7 +4208,9 @@ export function createApp(deps: AppDeps) {
           '消すと「何を片付けたか」が日報の材料から落ちる。`reason` は必須で、' +
           '人間はこれを読んで後から否定する。**⚠️ fs 実装は保持上限を超えた古い片付き行を' +
           '物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された' +
-          '累計件数は `GET /commitments` の `trimmedClosed` で見える。',
+          '累計件数は `GET /commitments` の `trimmedClosed` で見える。**台帳の行が読めない' +
+          '形で入っていても閉じられる**（issue #2148。中身は読めないままなので、閉じた後も' +
+          '本文の書き直し・評定はできない）。',
         responses: {
           200: {
             description: '閉じた。以後は `includeClosed=true` でだけ見える。',
@@ -4210,7 +4225,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '既に片付いている（いつ・どう片付けたかを本文に入れて返す）。',
+            description:
+              '既に片付いている（いつ・どう片付けたかを本文に入れて返す。読めない形で入って' +
+              'いる行は、いつ・どう片付けたかが分からないことがある）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -4223,7 +4240,21 @@ export function createApp(deps: AppDeps) {
         const { reason } = c.req.valid('json');
         if (!(await stores.commitments.close(id, new Date().toISOString(), reason, 'human'))) {
           // 閉じられなかった理由は台帳に聞く（無いのか、既に閉じているのか）。
-          const existing = await stores.commitments.get(id);
+          // **読めない行が既に閉じられているときは `get` が投げる**（issue
+          // #2148。`close()` が中身を読めるようにしたわけではない——閉じた
+          // かどうかだけが増えた欄なので、`get()` の契約はここでは変えない）。
+          let existing;
+          try {
+            existing = await stores.commitments.get(id);
+          } catch (error) {
+            if (!(error instanceof UnreadableCommitmentError)) throw error;
+            return c.json(
+              {
+                error: `${id} は既に片付けてある（読めない形で入っているため、いつ・どう片付けたかは分からない）`,
+              },
+              409,
+            );
+          }
           if (existing === null) return c.json({ error: 'not found' as const }, 404);
           return c.json(
             {
@@ -4261,6 +4292,11 @@ export function createApp(deps: AppDeps) {
      * 持たないので、前の値がここで日誌へ落ちないと、**評価する側を較正する
      * 材料が消える**（`docs/PRD.md`「要件: 自己改善」の「評価する側も誤りうる
      * 前提で作る」）。
+     *
+     * **⚠️ 読めない行には評定を付けない（issue #2148 の決定 (2)(3)）。** 先に
+     * 読む `get()` が `UnreadableCommitmentError` を投げたら、素の 500
+     * ではなく 409 で「読めない・close なら閉じられる」と名乗って止める
+     * （`describeUnreadableCommitment` の doc）。
      */
     .post(
       '/commitments/:id/appraise',
@@ -4285,6 +4321,12 @@ export function createApp(deps: AppDeps) {
             description: 'その id は台帳に無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '台帳に在るが読めない形で入っている（消されたのではない）。close で閉じることは' +
+              'できるが、評定は付けられない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(commitmentAppraiseBody, (where) => ({
@@ -4295,7 +4337,13 @@ export function createApp(deps: AppDeps) {
         const { appraisal, reason, workKind } = c.req.valid('json');
         // **前の評定は書き換える前に読む。** 後から読むと自分が書いた値しか
         // 取れず、覆した事実が日誌から消える。
-        const before = await stores.commitments.get(id);
+        let before;
+        try {
+          before = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          return c.json({ error: describeUnreadableCommitment(error) }, 409);
+        }
         if (before === null) return c.json({ error: 'not found' as const }, 404);
         const previous = describeAppraisal(before);
         if (
@@ -4374,6 +4422,12 @@ export function createApp(deps: AppDeps) {
      * 日誌は追記専用なので、編集の前後の本文を両方書いておけば、台帳の行が
      * 上書きされても過去の自分をそこから読み戻せる。**`commitment_edit` も
      * 同じ義務を負う**（`CommitmentStore.editBody` の doc）。
+     *
+     * **⚠️ 読めない行は書き直せない（issue #2148 の決定 (2)(3)）。** 先に読む
+     * `get()` が `UnreadableCommitmentError` を投げたら、素の 500 ではなく
+     * 409 で「読めない・close なら閉じられる」と名乗って止める——本文が
+     * 読める形へ戻る保証の無い書き直しは、この issue の範囲では入れない
+     * （`describeUnreadableCommitment` の doc）。
      */
     .patch(
       '/commitments/:id',
@@ -4404,7 +4458,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '既に片付いている（いつ・どう片付いたかを本文に入れて返す）。',
+            description:
+              '既に片付いている（いつ・どう片付いたかを本文に入れて返す）。または、台帳に在るが' +
+              '読めない形で入っている（close で閉じることはできるが、書き直せない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -4416,7 +4472,13 @@ export function createApp(deps: AppDeps) {
         const id = c.req.param('id');
         const { body } = c.req.valid('json');
 
-        const existing = await stores.commitments.get(id);
+        let existing;
+        try {
+          existing = await stores.commitments.get(id);
+        } catch (error) {
+          if (!(error instanceof UnreadableCommitmentError)) throw error;
+          return c.json({ error: describeUnreadableCommitment(error) }, 409);
+        }
         if (existing === null) return c.json({ error: 'not found' as const }, 404);
         if (existing.origin !== 'human') {
           // **断る理由だけでなく、代わりの出口も同じ文字列へ入れる**（issue #580
