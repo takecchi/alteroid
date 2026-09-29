@@ -9842,8 +9842,11 @@ class Clone implements CloneHost {
       // のは「正規の口を通った許可が記録に残る」ことなので、その保証を満たせなかった
       // こと自体を跡に残す（`noteDroppedRecord`。本文は出さない——grant の id だけ）。
       // **この窓を塞がない。** 例外と人間の取り消しがちょうど同時に起きた回だけ、
-      // 取り消し済みの許可が1回通りうる——監査の層として受け入れた窓であり、
-      // 「通った」こと自体は上の `#allowedByGrantToolUses` / 日誌に残る。
+      // 取り消し済みの許可が1回通りうる——監査の層として受け入れた窓である。
+      // 道具の呼び出しそのものは `#journalToolUse` で日誌に残る。ただし、どの
+      // 許可（grant）で通ったかは残らない——`#allowedByGrantToolUses` はメモリ
+      // だけの控えで、`#onPostToolUse` が決着した時点で `delete` する。その許可が
+      // 使われた記録（`lastUsedAt`）が今回落ちたことは、この跡でしか分からない。
       const usable = await this.#stores.permissionGrants.markUsed(grant.id, now).catch((error) => {
         noteDroppedRecord('許可を使った時刻（lastUsedAt）', `grant=${grant.id}`, error);
         return true;
