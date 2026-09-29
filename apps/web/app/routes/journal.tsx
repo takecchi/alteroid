@@ -3,7 +3,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
-import { Page, Badge, Card, Empty, ErrorNote, Spinner, useMeasuredHeight, cn } from '@alteroid/ui';
+import {
+  Page,
+  Badge,
+  Card,
+  Empty,
+  ErrorNote,
+  FilterChips,
+  Spinner,
+  useMeasuredHeight,
+  cn,
+} from '@alteroid/ui';
 import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
 import { formatDateTime, formatRelative, shiftForPrepend } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
@@ -232,27 +242,12 @@ export default function Journal() {
     };
   }, [draft, committed, setSearchParams]);
 
-  function toggle(type: JournalEntryType) {
+  function setSelected(updated: JournalEntryType[]) {
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
-        const current = parseSelectedTypes(next.get(TYPES_SEARCH_PARAM));
-        const updated = current.includes(type)
-          ? current.filter((t) => t !== type)
-          : [...current, type];
         if (updated.length === 0) next.delete(TYPES_SEARCH_PARAM);
         else next.set(TYPES_SEARCH_PARAM, updated.join(','));
-        return next;
-      },
-      { replace: true },
-    );
-  }
-
-  function clearSelected() {
-    setSearchParams(
-      (previous) => {
-        const next = new URLSearchParams(previous);
-        next.delete(TYPES_SEARCH_PARAM);
         return next;
       },
       { replace: true },
@@ -309,32 +304,13 @@ export default function Journal() {
             は探す対象に入っていない（そこにだけ書かれている語は当たらない）。
           </p>
         )}
-        <div className="mb-4 flex flex-wrap items-center gap-1.5">
-          {TYPES.map((type) => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => toggle(type)}
-              className={cn(
-                'rounded border px-2 py-1 text-[11px] transition-colors',
-                selected.includes(type)
-                  ? 'border-primary bg-primary/15 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {type}
-            </button>
-          ))}
-          {selected.length > 0 && (
-            <button
-              type="button"
-              onClick={clearSelected}
-              className="ml-1 text-[11px] text-muted-foreground underline hover:text-foreground"
-            >
-              解除
-            </button>
-          )}
-        </div>
+        <FilterChips
+          className="mb-4"
+          label="種別で絞り込む"
+          options={TYPES.map((type) => ({ value: type }))}
+          selected={selected}
+          onChange={setSelected}
+        />
       </div>
 
       {/*

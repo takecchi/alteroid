@@ -17,6 +17,7 @@ import {
   ErrorNote,
   Input,
   Spinner,
+  StatusBadge,
 } from '@alteroid/ui';
 import {
   useRunners,
@@ -159,13 +160,8 @@ const RUNNER_STATES = {
  * ような継承したキーは `undefined` にならず、別の形で壊れるためである
  * （`managers.tsx` の `ManagerStatusBadge` の doc と同じ理由）。
  */
-function runnerStateView(state: RunnerSummary['state']): {
-  tone: 'neutral' | 'ok' | 'warn' | 'danger';
-  label: string;
-} {
-  return Object.hasOwn(RUNNER_STATES, state)
-    ? RUNNER_STATES[state as keyof typeof RUNNER_STATES]
-    : { tone: 'neutral', label: `知らない状態（${String(state)}）` };
+function RunnerStateBadge({ state }: { state: RunnerSummary['state'] }) {
+  return <StatusBadge status={state} map={RUNNER_STATES} />;
 }
 
 /**
@@ -344,9 +340,7 @@ function Runners() {
               <div className="flex flex-wrap items-center gap-2">
                 {/* 繋がるまで runner_id は分からない。宛先（label）が名簿の鍵である */}
                 <p className="font-mono text-sm break-all">{runner.runnerId ?? runner.label}</p>
-                <Badge tone={runnerStateView(runner.state).tone}>
-                  {runnerStateView(runner.state).label}
-                </Badge>
+                <RunnerStateBadge state={runner.state} />
               </div>
               {/*
                 この状態になった時刻（#1948）。**「作成」「更新」ではない**
