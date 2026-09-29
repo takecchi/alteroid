@@ -1676,10 +1676,31 @@ describe('クローンの道具', () => {
     expect(body).toContain('export A=1');
   });
 
-  it('置けなかったら判断として記録せず、理由をその場で返す', async () => {
+  /**
+   * ⚠️ **2026-09-29 以前の形（issue #2145 で反転）。** 以前は「1文字も置いて
+   * いないので、日誌に残す事実も無い」——`profile_write` は評価→保存→配布の
+   * 順で、失敗（読めなかった）は保存の前に決まるので `appendJournalOrThrow`
+   * 自体を呼んでいなかった。
+   *
+   * **変更した事実**: 日誌を先に書く形へ動いたので、評価に断られた回でも
+   * 「差し替えようとしている」の1行目は既に書かれている。そこへ `PUT /profile`
+   * （#2134）と同じ判断で、打ち消しの1行（「差し替えられなかった（読めな
+   * かった）」）も足すことにした——期待は「日誌にも残らない」から「2行残る」
+   * へ反転する。
+   * **なぜ必要か**: `deps.profile.apply`（ここでは `context.profile.apply`）は
+   * 評価と実際の保存が同じ1呼びの中にあり、ここからは検証専用の分岐を安全に
+   * 切り出せない。日誌を先に書く以上、評価で断られた回も「打ち消し」の扱いに
+   * するしかない。
+   * **なぜ保証が弱くならないか**: 値（スクリプト本文）は依然として1文字も
+   * 日誌に書かれない（下のアサーションで確認）。増えたのは「試みたこと自体の
+   * 記録」で、記録が多すぎる側への変化——記録の無い差し替えより安全側という
+   * teto の判断をそのまま延長した（#2134 の `PUT /profile` と同じ理由）。
+   */
+  it('読めなかった（評価で断った）ときも、差し替えようとした行と打ち消しの行が残る（値そのものは書かない）', async () => {
     const h = harness();
     // 器が「読めない」と答える状況。置けなかったのはシステムの結果であって、
-    // クローンの判断ではない（日誌の decision を汚さない）。
+    // クローンの判断ではない——それでも「試みたこと」自体は日誌に残す
+    // （issue #2145。日誌を先に書く設計の帰結）。
     const tools = createCloneTools({
       memoryCause: () => 'clone',
       conversationId: () => undefined,
@@ -1706,13 +1727,29 @@ describe('クローンの道具', () => {
       }),
     });
     const write = tools.find((entry) => entry.name === 'profile_write');
-    const result = await write?.handler({ script: 'if [ ; then', summary: 'x' } as never, {});
+    const result = await write?.handler(
+      { script: 'if [ ; then', summary: '構文が壊れたスクリプト' } as never,
+      {},
+    );
     const body = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
 
     expect(body).toContain('置けなかった');
     expect(body).toContain('構文が壊れている');
     expect(await h.stores.profile.read()).toBeNull();
-    expect(await h.stores.journal.list({ types: ['decision'] })).toHaveLength(0);
+
+    // `list` の既定は新しい順（`desc`）なので `order: 'asc'` で古い順に取る。
+    const decisions = (await h.stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap(
+      (entry) => (entry.type === 'decision' ? [entry.decision] : []),
+    );
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toBe(
+      '実行環境プロファイルを差し替えようとしている: 構文が壊れたスクリプト',
+    );
+    expect(decisions[1]).toBe(
+      '実行環境プロファイルを差し替えられなかった（読めなかった）: 構文が壊れたスクリプト',
+    );
+    // 値そのもの（スクリプト本文）は1文字も日誌に書かれない。
+    expect(JSON.stringify(decisions)).not.toContain('if [ ; then');
   });
 
   it('日誌に残すのは何を変えたかであって、値ではない', async () => {
@@ -9213,6 +9250,315 @@ describe('クローンの道具', () => {
     const result = await found?.handler({ request: 'x' } as never, {});
 
     expect(JSON.stringify(result)).toContain('委譲できない');
+  });
+});
+
+/**
+ * Issue #2145: 能力を広げる3つの道具（`schedule_create`・`profile_write`・
+ * `manager_start`）を、issue #2123/#2134（HTTP の能力を広げる4口）と同じ
+ * 設計へ動かした——**日誌を先に書き、書けなければ状態を変えずに道具の
+ * エラーで返す。状態変更そのものが投げたら、打ち消しの行を足してから同じ
+ * 形でエラーにする。**
+ *
+ * 道具ごとに3本を固定する:
+ * (a) 日誌の先書きが落ちると道具はエラーで、状態が変わっていない。
+ * (b) 状態の変更が投げたときは、先の行と打ち消しの行の両方が日誌に残る。
+ * (c) 正常系で、行数と文言が合っている。
+ */
+describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く', () => {
+  /** 上の describe の `callExpectingError` と同じもの（複製）。既存側は1文字も変えない。 */
+  async function callExpectingError(
+    tools: ReturnType<typeof createCloneTools>,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean; text: string }> {
+    const found = tools.find((entry) => entry.name === name);
+    if (!found) throw new Error(`ツール ${name} が無い`);
+    try {
+      const result = await found.handler(args as never, {});
+      const text = (result.content ?? [])
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('');
+      return { isError: result.isError === true, text };
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      return { isError: true, text };
+    }
+  }
+
+  /**
+   * journal の `decision` エントリだけを、古い順の文字列配列で取り出す。
+   * **`JournalStore.list` の既定は新しい順（`desc`）なので、`order: 'asc'`
+   * を明示しないと1行目・2行目の順が逆になる**（`testing.ts` の
+   * `journal.list` の doc）。
+   */
+  async function decisionsOf(stores: Stores): Promise<string[]> {
+    return (await stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap((entry) =>
+      entry.type === 'decision' ? [entry.decision] : [],
+    );
+  }
+
+  describe('schedule_create', () => {
+    it('(a) 日誌の先書きが落ちると道具はエラーで、依頼は仕込まれない', async () => {
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-2145-schedule-a');
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'schedule_create', {
+        kind: 'watch-2145a',
+        request: '依頼A',
+        everyMinutes: 30,
+      });
+
+      expect(isError).toBe(true);
+      expect(await stores.schedules.get('watch-2145a')).toBeNull();
+      expect(await stores.schedules.list()).toEqual([]);
+    });
+
+    it('(b) 状態変更（editRequest/put）が投げたときは、先の行と打ち消しの行の両方が日誌に残る', async () => {
+      const stores = createMemoryStores();
+      const throwingStores: Stores = {
+        ...stores,
+        schedules: {
+          ...stores.schedules,
+          editRequest: () => {
+            throw new Error('schedules store unavailable (test)');
+          },
+        },
+      };
+      const tools = createCloneTools({
+        stores: throwingStores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'schedule_create', {
+        kind: 'watch-2145b',
+        request: '依頼B',
+        everyMinutes: 30,
+      });
+
+      expect(isError).toBe(true);
+      expect(await stores.schedules.get('watch-2145b')).toBeNull();
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('定期の依頼を設定しようとしている: watch-2145b: 依頼B');
+      expect(decisions[1]).toBe('定期の依頼を設定できなかった: watch-2145b: 依頼B');
+    });
+
+    it('(c) 正常系: 行数と文言が合っている（新規作成）', async () => {
+      const stores = createMemoryStores();
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'schedule_create', {
+        kind: 'watch-2145c',
+        request: '依頼C',
+        everyMinutes: 30,
+      });
+
+      expect(isError).toBe(false);
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('定期の依頼を設定しようとしている: watch-2145c: 依頼C');
+      expect(decisions[1]).toBe('定期の依頼を仕込んだ: watch-2145c（30 分ごと）: 依頼C');
+    });
+  });
+
+  describe('profile_write', () => {
+    function fakeRunners(setProfileCalls: { count: number }) {
+      return {
+        async list() {
+          return [
+            {
+              runnerId: 'runner-2145',
+              async setProfile() {
+                setProfileCalls.count += 1;
+                return { ok: true as const };
+              },
+            },
+          ];
+        },
+        async get() {
+          return null;
+        },
+        async select() {
+          throw new Error('この検証では使わない');
+        },
+      } as never;
+    }
+
+    it('(a) 日誌の先書きが落ちると道具はエラーで、正本は書かれず配られてもいない', async () => {
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-2145-profile-a');
+      const setProfileCalls = { count: 0 };
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        profile: createProfileService({ stores, runners: fakeRunners(setProfileCalls) }),
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'profile_write', {
+        script: 'export A=1',
+        summary: '(a) の検証',
+      });
+
+      expect(isError).toBe(true);
+      expect(await stores.profile.read()).toBeNull();
+      expect(setProfileCalls.count).toBe(0);
+    });
+
+    it('(b) 状態変更（正本への保存）が投げたときは、先の行と打ち消しの行の両方が日誌に残る', async () => {
+      const stores = createMemoryStores();
+      const throwingStores: Stores = {
+        ...stores,
+        profile: {
+          ...stores.profile,
+          write: () => {
+            throw new Error('profile store unavailable (test)');
+          },
+        },
+      };
+      const tools = createCloneTools({
+        stores: throwingStores,
+        emit: () => {},
+        profile: createProfileService({ stores: throwingStores }),
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'profile_write', {
+        script: 'export A=1',
+        summary: '(b) の検証',
+      });
+
+      expect(isError).toBe(true);
+      expect(await stores.profile.read()).toBeNull();
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている: (b) の検証');
+      expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった: (b) の検証');
+    });
+
+    it('(c) 正常系: 行数と文言が合っている', async () => {
+      const stores = createMemoryStores();
+      const setProfileCalls = { count: 0 };
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        profile: createProfileService({ stores, runners: fakeRunners(setProfileCalls) }),
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'profile_write', {
+        script: 'export A=1',
+        summary: '(c) の検証',
+      });
+
+      expect(isError).toBe(false);
+      expect(setProfileCalls.count).toBe(1);
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている: (c) の検証');
+      expect(decisions[1]).toBe('実行環境プロファイルを更新した: (c) の検証');
+    });
+  });
+
+  describe('manager_start', () => {
+    it('(a) 日誌の先書きが落ちると道具はエラーで、managers.start は呼ばれない', async () => {
+      const stores = failingJournalAppend(createMemoryStores(), 'boom-2145-manager-a');
+      let startCalls = 0;
+      const managers = {
+        async start() {
+          startCalls += 1;
+          throw new Error('この検証では呼ばれないはず');
+        },
+      } as unknown as ManagerPool;
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        managers,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'manager_start', { request: '調査A' });
+
+      expect(isError).toBe(true);
+      expect(startCalls).toBe(0);
+    });
+
+    it('(b) 状態変更（managers.start）が投げたときは、先の行と打ち消しの行の両方が日誌に残る', async () => {
+      const stores = createMemoryStores();
+      const managers = {
+        async start() {
+          throw new Error('managers.start unavailable (test)');
+        },
+      } as unknown as ManagerPool;
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        managers,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'manager_start', { request: '調査B' });
+
+      expect(isError).toBe(true);
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('マネージャーを起こそうとしている: 調査B');
+      expect(decisions[1]).toBe('マネージャーを起こせなかった: 調査B');
+    });
+
+    it('(c) 正常系: 行数と文言が合っている', async () => {
+      const stores = createMemoryStores();
+      const managers = {
+        async start(input: { request: string; cwd?: string; runnerId?: string }) {
+          return {
+            managerId: 'mgr-2145-c',
+            status: 'running',
+            live: true,
+            cwd: input.cwd ?? '/work-2145',
+            request: input.request,
+            startedAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            waiting: [],
+          };
+        },
+      } as unknown as ManagerPool;
+      const tools = createCloneTools({
+        stores,
+        emit: () => {},
+        managers,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'manager_start', { request: '調査C' });
+
+      expect(isError).toBe(false);
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('マネージャーを起こそうとしている: 調査C');
+      // `cwdConfirmed` を持たないフィクスチャなので `describeStartedCwd` は
+      // 「実際の cwd は未確認」の形で返す（`describeStartedCwd` の doc）。
+      expect(decisions[1]).toBe(
+        'マネージャー mgr-2145-c を起こした（実際の cwd は未確認（頼んだ値: /work-2145））: 調査C',
+      );
+    });
   });
 });
 
@@ -19293,10 +19639,14 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     for (const entry of all) byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
 
     // **「1件在る」ではなく「ちょうどこの種類がこれだけ」を測る。**
-    expect(all.length).toBe(8);
+    // issue #2145: profile_write・manager_start は日誌を先に書く形へ動いた
+    // ので、それぞれ「しようとしている」（1行目）＋「更新した/起こした」
+    // （2行目）の2件を書く——decision の内訳が profile_write=2・
+    // manager_start=2・journal_write=1 の計5件へ増え、全体も8→10件になった。
+    expect(all.length).toBe(10);
     expect(byType.get('memory_update')).toBe(3); // delete(remove) + move_in + move_out
     expect(byType.get('escalation')).toBe(1); // ask_human
-    expect(byType.get('decision')).toBe(3); // profile_write / manager_start / journal_write
+    expect(byType.get('decision')).toBe(5); // profile_write(2) / manager_start(2) / journal_write(1)
     expect(byType.get('daily_report')).toBe(1); // daily_report_write
 
     // memory_section_move は move_in / move_out がちょうど1件ずつ出ること
@@ -19517,6 +19867,22 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
    * 🔴 必須の歯3: **秘密が漏れないこと。** `profile_write` が日誌の書き込みに
    * 失敗しても、応答本文にも stderr 側（`recentDroppedTraces()` の行）にも
    * プロファイル本文が現れないこと。印は明らかに人工の文字列にする。
+   *
+   * ⚠️ **2026-09-29 以前は outcome が act-completed だった（issue #2145 で
+   * 反転）。** 以前は評価・保存・配布（`context.profile.apply`）の**後**に
+   * 日誌へ書いていたので、`failingJournalAppend`（毎回落ちる）でもその1回
+   * だけの追記が落ちる時点で保存・配布は既に済んでいた——副作用は完了
+   * しているので act-completed。
+   *
+   * **変更した事実**: 日誌を先に書く形へ動いたので、いまは `apply()` の前に
+   * 呼ぶ1行目でこの偽ストアが落ちる。`apply()` はそもそも呼ばれず、保存も
+   * 配布も起きていない——outcome は act-not-performed に反転する。
+   * **なぜ必要か**: issue #2145（#2123/#2134 と同じ設計）。能力を広げる道具は
+   * 状態変更の前に日誌を先に書くことで、記録の無い変更が生まれる窓を塞ぐ。
+   * **なぜ保証が弱くならないか**: この歯が測りたい「秘密が漏れない」は
+   * outcome に関係なく変わらず成り立つ（下のアサーションで確認）。加えて、
+   * 副作用そのものが起きていないことをこの反転で新たに固定した——記録の
+   * 無い変更どころか変更自体が無いので、以前より強い保証になっている。
    */
   it('🔴 秘密: profile_write の journal.append が失敗しても、応答にも stderr 側にもプロファイル本文が出ない', async () => {
     const CANARY = 'FAKE-SECRET-CANARY-Q7mZbN3';
@@ -19557,9 +19923,13 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     });
 
     if (result === undefined) throw new Error('呼び出しが完了していない');
-    // (e) 副作用（保存・配布）は完了しているので act-completed。
+    // (e) 日誌を先に書く1行目で落ちるので、apply() は呼ばれていない——
+    // 副作用（保存・配布）は1つも起きていない。outcome は act-not-performed
+    // （issue #2145 で反転。上のコメント参照）。
     expect(result.isError).toBe(true);
-    expect(result.text.split('\n')[0]).toBe('⚠⚠ 完了済み・未記録・やり直し禁止');
+    expect(result.text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
+    // 保存も配布もされていないこと（反転で新たに固定した保証）。
+    expect(await stores.profile.read()).toBeNull();
     // ⭐ profile_write は decision 型（journalEntryShape に住所が無い）なので、
     // 道具名がいちばん住所の足りない箇所。ここに出ることを確かめたうえで、
     // 秘密（CANARY）は出ないことも合わせて測る。
@@ -20774,8 +21144,13 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
+      // schedule_create は能力を広げる道具なので、日誌を先に書く形へ動いた
+      // （#2123/#2134 と同じ設計）。`failingJournalAppend` は毎回の
+      // `journal.append` を落とすので、いまはその1行目（状態変更の前）で
+      // 落ちる——状態はまだ変わっていないので act-not-performed になる。
       tool: 'schedule_create',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-10');
         const tools = createCloneTools({
@@ -20964,8 +21339,14 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
+      // profile_write は能力を広げる道具なので、日誌を先に書く形へ動いた
+      // （#2123/#2134 と同じ設計）。以前は評価・保存・配布（`context.profile.
+      // apply`）の後に日誌へ書いていたので、その1回だけの追記が落ちれば
+      // 副作用は完了していた。いまは `apply` の前に先書きがあるので、常に
+      // 落ちるこの偽ストアではその1行目で止まり、保存も配布もされない。
       tool: 'profile_write',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-15');
         // 既存の秘密の歯（`describe('journal.append が失敗したとき…')` の
@@ -21003,8 +21384,15 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
+      // ⚠️ 2026-09-29 以前は ACT_COMPLETED だった（issue #2145 で反転）。
+      // manager_start は能力を広げる道具（新しい担い手を起こす、いちばん
+      // 強い広げ方）なので、日誌を先に書く形へ動いた（#2123/#2134 と同じ
+      // 設計）。以前は `managers.start()` の後に日誌へ書いていたので、その
+      // 1回だけの追記が落ちれば起動は完了していた。いまは `start()` の前に
+      // 先書きがあるので、常に落ちるこの偽ストアではその1行目で止まり、
+      // `managers.start` はそもそも呼ばれない。
       tool: 'manager_start',
-      firstLine: ACT_COMPLETED,
+      firstLine: ACT_NOT_PERFORMED,
       async run() {
         const stores = failingJournalAppend(createMemoryStores(), 'boom-case-16');
         // `start()` だけを持つ最小のスタブ（他の口はこの道具からは呼ばれない）。
