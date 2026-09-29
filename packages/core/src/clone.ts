@@ -1645,7 +1645,7 @@ class Clone implements CloneHost {
 
   // --- `self_status` の材料（SDK が実際に報告してきた値） ---------------------
   //
-  // **本セッション（`#read`/`#dispatch` を通す方）だけが更新する。** 蒸留の
+  // **本セッション（`#read`/`#apply` を通す方）だけが更新する。** 蒸留の
   // サイドクエリ（`#distillFromTranscript`）は別の SDK セッションで、その init は
   // ここへは反映しない（`CloneRuntimeFacts.sessionId` のコメントと同じ理由）。
   #sdkModel: string | null = null;
@@ -3566,8 +3566,9 @@ class Clone implements CloneHost {
       } finally {
         this.#notices.clearTurn();
         // **枠のせいで処理できなかったかは、ここで初めて分かることがある。**
-        // `#handle` の中（`#dispatch` の `result` / `rate_limit_event` /
-        // `system` 通知）で今回の合図が枠に当たったと判明したなら、この時点で
+        // `#handle` の中（`#apply` の `turn_ended` / `rate_limit` /
+        // `usage_notice`。SDK の `result` / `rate_limit_event` / `system` 通知を
+        // `foldClaudeMessage` が写したもの）で今回の合図が枠に当たったと判明したなら、この時点で
         // `#usageBlocked` が非 null になっている。その場合は `#settleInboxEvent`
         // に `defer: true` を渡し、`#forget` ではなく `#deferred` へ積む側を選ぶ。
         //

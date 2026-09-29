@@ -357,49 +357,57 @@ describe('inspectBashCommand — gh pr merge --delete-branch: 弾いてはいけ
  * ときのトリップワイヤーにする（`toBe(false)` を仕様として固定しない
  * ため——上の `bash -c` の反転と同じ理由）。
  *
- * この PR が実際に直したのは bash の**予約語・グルーピング**（コマンドの
- * 位置を作るが、それ自体はコマンドとして実行されない）の直後だけである。
- * ここに並ぶのは、それとは別の族の前置き——**それ自体が1個のコマンド
- * として実行される**前置き（`sudo`/`nice`/`xargs`/`command`/`exec`/
- * `nohup`）・`timeout` 自身のオプション文法（`-k`）・値が空白を含む
- * 引用符形の代入（`X="a b"`）・短縮オプションの束ね書き（`-sd`）——
+ * この PR（#2057/#2035）が実際に直したのは bash の**予約語・グルーピング**
+ * （コマンドの位置を作るが、それ自体はコマンドとして実行されない）の直後
+ * だけである。ここに並ぶのは、それとは別の族の前置き——**それ自体が1個の
+ * コマンドとして実行される**前置き（`sudo`/`nice`/`xargs`/`command`/
+ * `exec`/`nohup`）・`timeout` 自身のオプション文法（`-k`）・値が空白を
+ * 含む引用符形の代入（`X="a b"`）・短縮オプションの束ね書き（`-sd`）——
  * どれも 1件ずつ検討する方針（#1192 のオーナー決定）で、この PR の範囲外
- * のまま残している。
+ * のまま残していた。
+ *
+ * ⚠️ **issue #2068 の作業（マネージャー mgr-712ad619 からの依頼）で、この
+ * 9本すべてを `it` へ戻した。** `bash-wait-guard.ts` の A/B/C/F族の直しで
+ * 9形とも `blocked: true` になったため——`it.fails` のまま直っていたら
+ * ここが赤くなってトリップワイヤーとして働くはずだった（実際に直った
+ * 結果、これらは緑のまま `it` として保証を持つテストになった）。`bash -c
+ * '…'` の `it.fails` は issue #2068 の範囲外（構文解析そのものの限界）
+ * なので、そのまま残す。
  */
-describe('inspectBashCommand — gh pr merge --delete-branch: まだテストが無かった既知の穴（issue #2035 で歯を足した。範囲外のまま）', () => {
-  it.fails('sudo 前置き（コマンドとしての前置き、1件ずつ検討する方針で範囲外）', () => {
+describe('inspectBashCommand — gh pr merge --delete-branch: issue #2035 で歯を足した既知の穴（issue #2068 で直り、it へ戻した）', () => {
+  it('sudo 前置き（コマンドとしての前置き、issue #2068 A族で直した）', () => {
     expect(inspectBashCommand('sudo gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('nice 前置き（同上）', () => {
+  it('nice 前置き（同上、issue #2068 A族で直した）', () => {
     expect(inspectBashCommand('nice gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('xargs 前置き（同上）', () => {
+  it('xargs 前置き（同上、issue #2068 A族で直した）', () => {
     expect(inspectBashCommand('xargs gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('command 前置き（この PR で範囲外にした族。同じ「コマンドとしての前置き」）', () => {
+  it('command 前置き（この PR で範囲外にした族。同じ「コマンドとしての前置き」。issue #2068 A族で直した）', () => {
     expect(inspectBashCommand('command gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('exec 前置き（同上）', () => {
+  it('exec 前置き（同上、issue #2068 A族で直した）', () => {
     expect(inspectBashCommand('exec gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('nohup 前置き（同上）', () => {
+  it('nohup 前置き（同上、issue #2068 A族で直した）', () => {
     expect(inspectBashCommand('nohup gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('timeout -k（timeout 自身のオプション文法までは解いていない）', () => {
+  it('timeout -k（timeout 自身のオプション文法までは解いていない。issue #2068 B族で -k/--signal 等を読むようにした）', () => {
     expect(inspectBashCommand('timeout -k 5 30 gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('値が空白を含む引用符形の代入（X="a b"。\\S* が最初の空白までしか読めない）', () => {
+  it('値が空白を含む引用符形の代入（X="a b"。\\S* が最初の空白までしか読めない。issue #2068 C族で引用符区間を読むようにした）', () => {
     expect(inspectBashCommand('X="a b" gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 
-  it.fails('-sd のような短縮オプションの束ね書き', () => {
+  it('-sd のような短縮オプションの束ね書き（issue #2068 F族で -[smr]*d を読むようにした）', () => {
     expect(inspectBashCommand('gh pr merge 1 -sd').blocked).toBe(true);
   });
 });

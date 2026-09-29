@@ -652,3 +652,112 @@ describe('ガードの deny は、判定の周りの例外で消えない（issu
     expect(result).toEqual({ continue: true });
   });
 });
+
+/**
+ * issue #2088 — ツールの `timeout` 引数が、コマンドの中の `timeout` より短い
+ * 呼び出しは、弾かずに `updatedInput` で引き上げる（判定は `bash-tool-timeout.ts`）。
+ *
+ * ここで測るのは配線である —— `tool_input` の `timeout` / `run_in_background`
+ * が判定へ渡っていること、SDK へ返す形（`permissionDecision` を付けない
+ * `updatedInput` と `additionalContext`）、日誌の note。`permissionDecision` を
+ * 付けなくても本体が `updatedInput` を適用することは、
+ * `real-cli-pre-tool-use-rewrite.test.ts` が本物の本体で測る。
+ */
+describe('Bash のツールの timeout 引数を引き上げる（#2088）', () => {
+  function timeoutNotes(events: readonly RunnerEvent[]): NoteEvent[] {
+    return noteEvents(events).filter((note) => note.text.includes('形=bash-tool-timeout-raised'));
+  }
+
+  it('引数が未指定で、コマンドの中の timeout が既定を超えるなら、入力の timeout だけを引き上げる', async () => {
+    const { started, events } = await startSession();
+    const toolInput = { command: 'timeout 300 pnpm test', description: 'テストを回す' };
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: toolInput,
+    });
+    expect(result).toMatchObject({
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: {
+          command: 'timeout 300 pnpm test',
+          description: 'テストを回す',
+          timeout: 310_000,
+        },
+      },
+    });
+    // 判断ではない —— permissionDecision は付けない（確認の流れはそのまま）。
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output).not.toHaveProperty('permissionDecision');
+    expect(String(output?.additionalContext)).toContain('310000ms');
+    // 元の入力オブジェクトは書き換えない。
+    expect(toolInput).toEqual({ command: 'timeout 300 pnpm test', description: 'テストを回す' });
+
+    const notes = timeoutNotes(events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toContain('manager:mgr-1');
+    expect(notes[0]?.text).toContain('未指定→310000ms');
+  });
+
+  it('作業者の呼び出しは note の actor に worker: を名乗る', async () => {
+    const { started, events } = await startSession();
+    await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 300 pnpm test', timeout: 120_000 },
+      agent_id: 'agent-1',
+      agent_type: 'worker',
+    });
+    const notes = timeoutNotes(events);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toContain('worker:');
+    expect(notes[0]?.text).toContain('120000ms→310000ms');
+  });
+
+  it('引数が既に十分なら何もしない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 300 pnpm test', timeout: 600_000 },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(timeoutNotes(events)).toHaveLength(0);
+  });
+
+  it('run_in_background の呼び出しには触らない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 300 pnpm test', run_in_background: true },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(timeoutNotes(events)).toHaveLength(0);
+  });
+
+  it('ガードが弾く呼び出しは弾くだけで、書き換えない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'timeout 300 gh pr merge 1 --delete-branch' },
+    });
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output?.permissionDecision).toBe('deny');
+    expect(output).not.toHaveProperty('updatedInput');
+    expect(timeoutNotes(events)).toHaveLength(0);
+  });
+
+  it('Bash 以外には触らない', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Read',
+      tool_input: { file_path: '/x', command: 'timeout 300 x' },
+    });
+    expect(result).toEqual({ continue: true });
+    expect(timeoutNotes(events)).toHaveLength(0);
+  });
+});

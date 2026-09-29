@@ -15,7 +15,7 @@ import type { RunnerEvent } from './runner-protocol.js';
  * 回ったかを1区間1行で数える（runner.ts の doc に経緯がある。「残り5体を
  * 待ちます」だけのターンを40回以上回した事故が発端）。
  *
- * ここで固定するのは `RunnerSession` の `#dispatch` が実際に読んでいることと、
+ * ここで固定するのは `RunnerSession` の `#apply` が実際に読んでいることと、
  * 契機（`byCause`）が排他で `turns` と一致すること、道具を1つも動かさなかった
  * ターン（`toolless`）の判定がマネージャー自身の道具だけを見ること、区間が
  * 閉じずにセッションが畳まれたら `settled: false` が上がることの4つである。

@@ -21,6 +21,7 @@ import {
   findUnconditionalSkips,
   formatObservationGuardMessage,
   formatSkipGuardMessage,
+  hasReporterFlag,
   isObservationFile,
   judgeExecution,
   judgeObservationScan,
@@ -30,6 +31,7 @@ import {
   parsePassedCount,
   readIncludeGlobs,
   readObservationDeclaration,
+  resolveReporterArgs,
   resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
@@ -349,6 +351,154 @@ describe('resolveScopedArgs（I/O込みの合成。#1691 レビュー差し戻�
     const argv = ['apps/cli/src/interrupt.test.ts', '--maxWorkers=4'];
     const result = await resolveScopedArgs(argv, { cwd: '/repo/apps/cli', repoRoot: '/repo' });
     expect(result).toEqual({ ok: true, args: argv });
+  });
+});
+
+/**
+ * 分割の口（`--shard`）と reporter（`--reporter`）を `--scope` 付きのパッケージの
+ * `test` script（例: `packages/storage-pg` の
+ * `node ../../scripts/test.mjs --root=../.. --scope=packages/storage-pg/src`）へ
+ * 渡したときに、`resolveScopedArgs` が位置引数と取り違えず素通しすることを固定する。
+ *
+ * **`=` 形（`--shard=1/3`）は無条件に安全**——`isFlagLike` が `-` で始まる引数を
+ * フラグとみなすので、`VALUE_TAKING_FLAGS` に載っていなくても位置引数側には
+ * 回らない（`findPositionalIndices` の doc）。
+ *
+ * **空白区切りの値渡し（`--shard 1/3`）も、いまは同じく素通しされる**
+ * （#2063 の続きで `--shard` を `VALUE_TAKING_FLAGS` へ足した）。当初は
+ * `VALUE_TAKING_FLAGS` に `--shard` が入っておらず、値（`1/3`）がフラグの
+ * 一部だと認識されずに素の位置引数として範囲判定へ持ち込まれ、断られる形を
+ * 実測して固定していた——その経緯・反転の理由は下の別の describe が持つ。
+ */
+describe('resolveScopedArgs は --shard=1/3 / --reporter=dot（`=` 形）を位置引数と取り違えず素通しする', () => {
+  it('位置引数が無いとき: --shard=1/3 --reporter=dot はそのまま残り、範囲が末尾へ足される（ディスクを読まない経路）', async () => {
+    const result = await resolveScopedArgs(
+      ['--scope=packages/storage-pg/src', '--shard=1/3', '--reporter=dot'],
+      { cwd: '/repo/packages/storage-pg', repoRoot: '/repo' },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--shard=1/3', '--reporter=dot', 'packages/storage-pg/src'],
+    });
+  });
+
+  it('利用者の位置引数（部分一致のファイル名）と併用しても、--shard=1/3 --reporter=dot は素通しされる', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(
+      ['--scope=pkg-a/src', '--shard=1/3', '--reporter=dot', 'widget'],
+      { cwd, repoRoot: root },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--shard=1/3', '--reporter=dot', 'pkg-a/src/bar-widget.test.ts'],
+    });
+  });
+});
+
+/**
+ * **当初は「測っただけで、直していない」だった（依頼者の指示どおり）。**
+ * `--shard 1/3`（空白区切り）を `--scope` 付きの引数へ混ぜると何が起きるかの
+ * 実測から始まった。
+ *
+ * 当時: `--shard` が `VALUE_TAKING_FLAGS`（`resolveReporterArgs` の隣にある
+ * 一覧）に載っていなかったので、`1/3` は「次の要素を値として飲む」対象に
+ * ならず、素の位置引数として範囲判定に持ち込まれていた。範囲の中に `1/3` へ
+ * 部分一致するテストファイルは（当然）無いので、`EXIT_SCOPE_VIOLATION` で
+ * 「範囲内に一致なし」を返して断っていた——利用者が `--shard 1/3`（空白区切
+ * り）を打つと、テストが1本も走らないまま `pnpm test` が exit 8 で終わる形
+ * だった。
+ *
+ * **反転（#2063 の続き。依頼者の判断で直すことになった）**: `--shard` を
+ * `VALUE_TAKING_FLAGS` へ足した。`--shard=1/3`（`=` 形）は既に素通しされて
+ * いたので、これで両形が対称になる——`--reporter` / `--maxWorkers` など他の
+ * 値必須フラグと同じ扱いに揃った。**保証が弱くなっていない理由**: 素通しの
+ * 対象は文字列としてちょうど `--shard` に一致し、かつ直後の要素が `-` で
+ * 始まらない（＝値らしい）ときだけ——`findPositionalIndices` の
+ * `isFlagLike` 判定は変えていないので、`--shard` 単体（値が省略された形）や
+ * `--shardx` のような紛らわしい別名は今までどおり位置引数側として扱われる
+ * （安全側に倒れる）。範囲外・範囲内不一致の判定そのもの
+ * （`EXIT_SCOPE_VIOLATION`）は1文字も変えていない——変えたのは
+ * 「`--shard` の値を位置引数として読むかどうか」の1点だけである。
+ */
+describe('--shard 1/3（空白区切り）は --scope と併用しても素通しされる（#2063 の続き。当初「断られる」だった歯を反転）', () => {
+  it('`--shard` を `VALUE_TAKING_FLAGS` へ足した後: 位置引数が無いので範囲そのものがフィルタになり、`--shard 1/3` はそのまま残る（ディスクを読まない経路）', async () => {
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', '--shard', '1/3'], {
+      cwd: '/repo/pkg-a',
+      repoRoot: '/repo',
+    });
+    expect(result).toEqual({ ok: true, args: ['--shard', '1/3', 'pkg-a/src'] });
+  });
+
+  it('利用者の位置引数（部分一致のファイル名）と併用しても、`--shard 1/3`（空白区切り）は素通しされる', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', '--shard', '1/3', 'widget'], {
+      cwd,
+      repoRoot: root,
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: ['--shard', '1/3', 'pkg-a/src/bar-widget.test.ts'],
+    });
+  });
+});
+
+/**
+ * `hasReporterFlag` / `resolveReporterArgs`（既定の reporter を `dot` へ倒す）。
+ *
+ * **経緯（条件の直し）**: 最初の版は「`stdout` が TTY でない・`CI` 未設定」
+ * の2条件だったが、Claude Code の Bash ツールは非TTY のまま `CI=true` を
+ * 既定で環境に持つため、狙った相手（作業者がこの Bash ツール経由で打つ
+ * `pnpm test`）にちょうど効かない条件になっていた（実測・詳細は
+ * `resolveReporterArgs` の doc）。**条件を `CLAUDECODE`（Claude Code が
+ * 子プロセスへ注ぐ環境変数）が設定されていることへ変えた**——人間の端末にも
+ * GitHub Actions にも無い。
+ */
+describe('hasReporterFlag / resolveReporterArgs（既定の reporter を dot へ倒す。CLAUDECODE の有無を見る）', () => {
+  it('hasReporterFlag: `--reporter=x`（`=` 形）を検出する', () => {
+    expect(hasReporterFlag(['--maxWorkers=4', '--reporter=verbose'])).toBe(true);
+  });
+
+  it('hasReporterFlag: `--reporter x`（空白区切り）も検出する', () => {
+    expect(hasReporterFlag(['--reporter', 'verbose'])).toBe(true);
+  });
+
+  it('hasReporterFlag: `--reporter` が無ければ false', () => {
+    expect(hasReporterFlag(['--maxWorkers=4', 'a.test.ts'])).toBe(false);
+  });
+
+  it('CLAUDECODE が未設定なら、`--reporter` が無くても dot を足さない（人間の端末・GitHub Actions と同じ状態）', () => {
+    const argv = ['a.test.ts'];
+    expect(resolveReporterArgs(argv, { CLAUDECODE: undefined })).toEqual(argv);
+  });
+
+  it('CLAUDECODE が空文字列でも、未設定と同じ扱いにする（dot を足さない）', () => {
+    const argv = ['a.test.ts'];
+    expect(resolveReporterArgs(argv, { CLAUDECODE: '' })).toEqual(argv);
+  });
+
+  it('CLAUDECODE が設定されていても、利用者が `--reporter=verbose` を明示していれば変えない', () => {
+    const argv = ['a.test.ts', '--reporter=verbose'];
+    expect(resolveReporterArgs(argv, { CLAUDECODE: '1' })).toEqual(argv);
+  });
+
+  it('CLAUDECODE が設定されていても、利用者が `--reporter verbose`（空白区切り）を明示していれば変えない', () => {
+    const argv = ['a.test.ts', '--reporter', 'verbose'];
+    expect(resolveReporterArgs(argv, { CLAUDECODE: '1' })).toEqual(argv);
+  });
+
+  it('CLAUDECODE が設定されており、`--reporter` も明示していない（Claude Code の Bash ツール経由の実行そのもの）⟹ `--reporter=dot` を末尾へ足す', () => {
+    const argv = ['a.test.ts', '--maxWorkers=2'];
+    expect(resolveReporterArgs(argv, { CLAUDECODE: '1' })).toEqual([
+      'a.test.ts',
+      '--maxWorkers=2',
+      '--reporter=dot',
+    ]);
+  });
+
+  it('CLAUDECODE が設定されており、引数が空でも `--reporter=dot` だけを足す', () => {
+    expect(resolveReporterArgs([], { CLAUDECODE: '1' })).toEqual(['--reporter=dot']);
   });
 });
 

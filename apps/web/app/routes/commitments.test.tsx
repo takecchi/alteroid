@@ -454,6 +454,41 @@ describe('返答済み・未クローズ / 未着手（issue #1003）', () => {
 });
 
 /**
+ * 「進行中（委譲あり）」の id を `/managers/<id>` へのリンクにする（issue #2097）。
+ *
+ * `OriginBadge`（issue #2028）は `source` を `Link` にしたが、`InProgressBadge`
+ * は本文に出てこないので #2028 の対象から漏れていた——同じ形で揃える。
+ */
+describe('進行中（委譲あり）の id が /managers/<id> への Link になる（issue #2097）', () => {
+  it('activeManagerIds が2件のとき、2つとも /managers/<id> への Link になり、文言は変わらない', async () => {
+    stubCommitments([
+      commitment({
+        origin: 'human',
+        source: 'conv-1',
+        activeManagerIds: ['mgr-1', 'mgr-2'],
+      }),
+    ]);
+    renderPageWithRouter();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    // 文言そのものは変えていない —— 引き続き「進行中（委譲あり: mgr-1, mgr-2）」が読める。
+    // id はリンク（`<a>`）に分かれて DOM 上は別ノードになるので、バッジ（`<span>`）の
+    // `textContent`（子孫を含む）で組み立て後の文言全体を確かめる
+    // （`getByText` の既定は直下のテキストノードしか見ないため、ここでは使えない）。
+    const badge = screen.getByText(
+      (_, node) =>
+        node?.tagName === 'SPAN' && node.textContent === '進行中（委譲あり: mgr-1, mgr-2）',
+    );
+    expect(badge).toBeTruthy();
+
+    const link1 = screen.getByRole('link', { name: 'mgr-1' });
+    const link2 = screen.getByRole('link', { name: 'mgr-2' });
+    expect(link1.getAttribute('href')).toBe('/managers/mgr-1');
+    expect(link2.getAttribute('href')).toBe('/managers/mgr-2');
+  });
+});
+
+/**
  * 折り返しの付け忘れ（本2）。
  *
  * `body` / `closedReason` は自由文（`z.string()`、長さ・空白の制約なし）で、

@@ -282,7 +282,19 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
     const decision = await hook(toAgentPreToolRecord(input));
     switch (decision.kind) {
       case 'continue':
-        return { continue: true };
+        // 書き換え（issue #2088）は `permissionDecision` を付けずに返す——
+        // 確認の流れはそのまま（許可も拒否もしない）で、入力だけを変える。
+        // 付けなくても `updatedInput` が適用されることは、本物の本体で確かめてある
+        // （`real-cli-pre-tool-use-rewrite.test.ts`）。
+        if (decision.rewrite === undefined) return { continue: true };
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            updatedInput: decision.rewrite.input,
+            additionalContext: decision.rewrite.note,
+          },
+        };
       case 'allow':
         return {
           continue: true,
@@ -290,6 +302,9 @@ function wrapPreToolHook(hook: AgentPreToolHook): HookCallback {
             hookEventName: 'PreToolUse',
             permissionDecision: 'allow',
             permissionDecisionReason: decision.reason,
+            ...(decision.rewrite !== undefined
+              ? { updatedInput: decision.rewrite.input, additionalContext: decision.rewrite.note }
+              : {}),
           },
         };
       case 'deny':

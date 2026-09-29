@@ -7,6 +7,7 @@ import { useManagersWindow } from '~/hooks/use-managers-window';
 import { cn } from '~/lib/cn';
 import { formatRelative } from '~/lib/format';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
+import { STATUS_SEARCH_PARAM } from '~/lib/managers-links';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
 
 const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'; label: string }> =
@@ -570,16 +571,6 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
  * （`journal.tsx` の `TYPES` の doc に同じ逐語が在る）。
  */
 const STATUSES = Object.keys(STATUS) as [ManagerStatus, ...ManagerStatus[]];
-
-/**
- * 状態チップの選択を載せる URL のクエリパラメタ名（issue #2030）。
- *
- * **`journal.tsx` の `TYPES_SEARCH_PARAM`（#2029）と同じ形に揃える**——
- * 同じ判断を2つの画面で割らない。`GET /managers?status=` とは違う名前に
- * してあるのも同じ理由（URL 側はカンマ区切りで1つのパラメタにまとめる
- * 語彙、API 側は問い合わせのクエリの語彙で、意図的に分けてある）。
- */
-const STATUS_SEARCH_PARAM = 'status';
 
 /**
  * `STATUS_SEARCH_PARAM` の生の値から、既知の状態だけを順序を保って取り出す。

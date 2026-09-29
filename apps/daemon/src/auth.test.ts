@@ -1,5 +1,6 @@
 import type { AuthAccount, CloneHost, ManagerPool, OAuthProvider, Stores } from '@alteroid/core';
 import {
+  captureStderr,
   createAuthProviderRegistry,
   createAuthService,
   createCredentialService,
@@ -159,6 +160,47 @@ function buildApp(
       service: createAuthService({
         store: stores.auth,
         providers: createAuthProviderRegistry(resolved.providers),
+      }),
+    },
+  });
+}
+
+/**
+ * **同じ `stores`（の一部だけ差し替えた写し）を握る、もう1つの `app`。**
+ *
+ * issue #2043 の歯——「日誌への追記だけが落ちる」「状態変更そのものが
+ * 落ちる」を再現するには、`journal.append` や `stores.auth` の1メソッドだけを
+ * 例外を投げるものに差し替えたいが、**アカウントの状態（`grantedAt` 等）は
+ * 素の `app` と共有できないと、直前に `grant` した結果を後続の呼び出しから
+ * 見られない。** `apps/daemon/src/app.test.ts` の `withFailingJournal`
+ * （Issue #2037・#2054）と同じ形——`{ ...stores, journal: {...} }` は
+ * `auth` などの参照をそのまま引き継ぐので、片方のアプリで変えた状態がもう
+ * 片方からも見える。
+ *
+ * **module 変数 `stores` は書き換えない。** 呼び出し側は返った `overridden`
+ * をテストの中でだけ使い、`stores.auth.getAccount` 等でアカウントの実際の
+ * 状態を確かめる——`stores` 自体は素の `app` が握っているものと同じ実体を
+ * 指すので、どちらの `app` を経由して読んでも同じ値が返る。
+ */
+function buildAppOverridingStores(override: Partial<Stores>) {
+  const overridden: Stores = { ...stores, ...override };
+  return createApp({
+    clone: stubClone(),
+    stores: overridden,
+    token: 'test-token',
+    shutdown: () => undefined,
+    journalEvents: { subscribe: () => () => undefined },
+    auth: {
+      plan: {
+        enabled: true,
+        providers: [FAKE_PROVIDER],
+        publicBaseUrl: 'http://127.0.0.1:4517',
+        tokenTtlDays: 30,
+        description: 'テスト',
+      },
+      service: createAuthService({
+        store: overridden.auth,
+        providers: createAuthProviderRegistry([FAKE_PROVIDER]),
       }),
     },
   });
@@ -714,6 +756,274 @@ describe('認証が有効なとき', () => {
       expect(grounds).toContain(first.account.id);
       expect(grounds).not.toContain('実行環境の持ち主');
     });
+  });
+
+  /**
+   * **日誌への追記が落ちたときの `/access/*` の4口（issue #2043）。**
+   *
+   * マネージャー判定（2026-09-29T00:20:12Z のコメント）どおり——
+   * 狭める2つ（revoke・owner/revoke）は `appendJournalOrDrop`（#2054）で
+   * 握って 200。広げる2つ（grant・owner）は**日誌を先に書き**、書けなければ
+   * 状態を変えずに 500。状態変更そのものが落ちた・対象が1と3の間で消えた
+   * 回は、打ち消しの行を追記してから同じ応答を返す。
+   */
+  describe('日誌への追記が落ちたとき（issue #2043）', () => {
+    // **既定の `order` は `desc`（新しい順）**（`packages/core/src/testing.ts` の
+    // `list`）。ここでは呼んだ順（古い順）で比較したいので反転する。
+    async function decisions() {
+      const entries = await stores.journal.list({ types: ['decision'] });
+      return entries
+        .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+        .reverse();
+    }
+
+    it('grant: 日誌への先書きが落ちると 500 で、許可は付与されない（grantedAt が null のまま）', async () => {
+      const claimed = await loginThrough(app);
+      const withFailingJournal = buildAppOverridingStores({
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      });
+
+      const response = await withFailingJournal.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(response.status).toBe(500);
+
+      const after = await stores.auth.getAccount(claimed.account.id);
+      expect(after?.grantedAt).toBeNull();
+      expect(after?.grantedBy).toBeNull();
+      // 状態を変える前に落ちたので、打ち消しの行すら生まれない
+      // （`authService.grant` に一度も進んでいない）。
+      expect(await decisions()).toHaveLength(0);
+    });
+
+    it('owner: 日誌への先書きが落ちると 500 で、宣言はされない（ownerDeclaredAt が null のまま）', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      const withFailingJournal = buildAppOverridingStores({
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      });
+
+      const response = await withFailingJournal.request(`/access/${claimed.account.id}/owner`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(response.status).toBe(500);
+
+      const after = await stores.auth.getAccount(claimed.account.id);
+      expect(after?.ownerDeclaredAt).toBeNull();
+      // grant のときの1行だけが残り、owner 側は（先書きが落ちたので）1行も
+      // 増えていない。
+      expect(await decisions()).toHaveLength(1);
+    });
+
+    it('revoke: 日誌への追記が落ちても取り消しは効いていて 200、stderr に跡が出る', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      const withFailingJournal = buildAppOverridingStores({
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request(`/access/${claimed.account.id}/revoke`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        });
+      });
+
+      expect(response?.status).toBe(200);
+      const after = await stores.auth.getAccount(claimed.account.id);
+      expect(after?.grantedAt).toBeNull();
+      expect(lines.some((line) => line.includes('を記録できませんでした'))).toBe(true);
+    });
+
+    it('owner/revoke: 日誌への追記が落ちても取り消しは効いていて 200、stderr に跡が出る', async () => {
+      const claimed = await loginThrough(app);
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      await app.request(`/access/${claimed.account.id}/owner`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+
+      const withFailingJournal = buildAppOverridingStores({
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request(`/access/${claimed.account.id}/owner/revoke`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        });
+      });
+
+      expect(response?.status).toBe(200);
+      const after = await stores.auth.getAccount(claimed.account.id);
+      expect(after?.ownerDeclaredAt).toBeNull();
+      expect(lines.some((line) => line.includes('を記録できませんでした'))).toBe(true);
+    });
+
+    it(
+      'grant: 状態変更（grantAccess）が投げたときは、付与の行と打ち消しの行の両方が' +
+        '日誌に残り、500 になる',
+      async () => {
+        const claimed = await loginThrough(app);
+        const withThrowingGrant = buildAppOverridingStores({
+          auth: {
+            ...stores.auth,
+            grantAccess: () => {
+              throw new Error('grantAccess unavailable (test)');
+            },
+          },
+        });
+
+        const response = await withThrowingGrant.request(`/access/${claimed.account.id}/grant`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        });
+        expect(response.status).toBe(500);
+
+        const after = await stores.auth.getAccount(claimed.account.id);
+        expect(after?.grantedAt).toBeNull();
+
+        const lines = await decisions();
+        expect(lines.some((line) => line.startsWith('アクセス許可を付与:'))).toBe(true);
+        expect(lines.some((line) => line.startsWith('アクセス許可を付与できなかった:'))).toBe(true);
+      },
+    );
+
+    it(
+      'owner: 状態変更（setAccountOwner）が投げたときは、宣言の行と打ち消しの行の両方が' +
+        '日誌に残り、500 になる',
+      async () => {
+        const claimed = await loginThrough(app);
+        await app.request(`/access/${claimed.account.id}/grant`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        });
+
+        const withThrowingOwner = buildAppOverridingStores({
+          auth: {
+            ...stores.auth,
+            setAccountOwner: () => {
+              throw new Error('setAccountOwner unavailable (test)');
+            },
+          },
+        });
+
+        const response = await withThrowingOwner.request(`/access/${claimed.account.id}/owner`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        });
+        expect(response.status).toBe(500);
+
+        const after = await stores.auth.getAccount(claimed.account.id);
+        expect(after?.ownerDeclaredAt).toBeNull();
+
+        const lines = await decisions();
+        expect(lines.some((line) => line.startsWith('実行環境の持ち主として宣言:'))).toBe(true);
+        expect(
+          lines.some((line) => line.startsWith('実行環境の持ち主として宣言できなかった:')),
+        ).toBe(true);
+      },
+    );
+
+    it('正常系はどの4口も日誌に1行だけ増え、文言はいまと変わらない', async () => {
+      const claimed = await loginThrough(app);
+
+      await app.request(`/access/${claimed.account.id}/grant`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(await decisions()).toEqual([expect.stringContaining('アクセス許可を付与:')]);
+
+      await app.request(`/access/${claimed.account.id}/owner`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(await decisions()).toEqual([
+        expect.stringContaining('アクセス許可を付与:'),
+        expect.stringContaining('実行環境の持ち主として宣言:'),
+      ]);
+
+      await app.request(`/access/${claimed.account.id}/owner/revoke`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(await decisions()).toEqual([
+        expect.stringContaining('アクセス許可を付与:'),
+        expect.stringContaining('実行環境の持ち主として宣言:'),
+        expect.stringContaining('実行環境の持ち主としての宣言を取り消し:'),
+      ]);
+
+      await app.request(`/access/${claimed.account.id}/revoke`, {
+        ...post,
+        headers: { ...post.headers, ...OPERATOR },
+      });
+      expect(await decisions()).toEqual([
+        expect.stringContaining('アクセス許可を付与:'),
+        expect.stringContaining('実行環境の持ち主として宣言:'),
+        expect.stringContaining('実行環境の持ち主としての宣言を取り消し:'),
+        expect.stringContaining('アクセス許可を取り消し:'),
+      ]);
+    });
+
+    it(
+      'describeAccount の出力は grant の前後で変わらない' +
+        '（日誌の文言を前状態から書いても、後状態と食い違わない。#2043）',
+      async () => {
+        const claimed = await loginThrough(app);
+        const before = await stores.auth.getAccount(claimed.account.id);
+        if (before === null) throw new Error('unreachable: ログイン直後のアカウント');
+
+        await app.request(`/access/${claimed.account.id}/grant`, {
+          ...post,
+          headers: { ...post.headers, ...OPERATOR },
+        });
+        const after = await stores.auth.getAccount(claimed.account.id);
+        if (after === null) throw new Error('unreachable: grant 直後のアカウント');
+
+        // grant が変えるのは grantedAt / grantedBy だけ——`describeAccount`
+        // （`app.ts`）が読む email / displayName / id はどちらも変わらない。
+        expect(before.email).toBe(after.email);
+        expect(before.displayName).toBe(after.displayName);
+        expect(before.id).toBe(after.id);
+        expect(before.grantedAt).toBeNull();
+        expect(after.grantedAt).not.toBeNull();
+      },
+    );
   });
 
   it('許可の付与はブラウザの単純リクエストでは通らない（content-type の門番）', async () => {

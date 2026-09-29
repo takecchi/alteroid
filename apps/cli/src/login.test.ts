@@ -22,6 +22,9 @@ vi.mock('./target.js', () => ({
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
   ),
   describeAuthFailure: () => null,
+  // #2093 — whoami の「runner の中の手元のデーモン」の1行の歯のために
+  // 差し替え口にする。既定は false（従来どおり、この行は出ない）。
+  isRunnerContainer: vi.fn(() => false),
 }));
 
 vi.mock('./credentials.js', () => ({
@@ -299,5 +302,43 @@ describe('alteroid whoami', () => {
 
     expect(read()).toBe('https://remote.example.com にログインしていません（alteroid login）\n');
     expect(sent).toHaveLength(0);
+  });
+
+  // #2093 — runner の器の中で手元のデーモンに繋いでいるときだけ、
+  // 「本番ではない」旨の1行が足される。
+  it('runner の器の中で手元のデーモンに繋いでいれば、本番ではない旨を1行足す', async () => {
+    vi.mocked(target.isRunnerContainer).mockReturnValueOnce(true);
+    replies.push({ status: 200, body: { kind: 'operator' } });
+    const read = captureStdout();
+
+    await whoamiCommand();
+
+    const text = read();
+    expect(text).toContain('この接続は runner の器の中の手元のデーモンです（本番ではありません）');
+  });
+
+  it('runner の外（既定の isRunnerContainer が false）では、その1行を足さない', async () => {
+    replies.push({ status: 200, body: { kind: 'operator' } });
+    const read = captureStdout();
+
+    await whoamiCommand();
+
+    expect(read()).not.toContain('runner の器の中');
+  });
+
+  it('remote（ALTEROID_URL）に繋いでいるときは、isRunnerContainer が true でもその1行を足さない', async () => {
+    vi.mocked(target.isRunnerContainer).mockReturnValueOnce(true);
+    vi.mocked(target.resolveTarget).mockResolvedValueOnce({
+      baseUrl: 'https://remote.example.com',
+      headers: { authorization: 'Bearer t' },
+      remote: true,
+      note: null,
+    });
+    replies.push({ status: 200, body: { kind: 'operator' } });
+    const read = captureStdout();
+
+    await whoamiCommand();
+
+    expect(read()).not.toContain('runner の器の中');
   });
 });

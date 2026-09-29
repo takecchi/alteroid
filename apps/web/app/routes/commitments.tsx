@@ -1,5 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
 
@@ -725,12 +725,37 @@ function AnsweredStateBadge({ commitment }: { commitment: Commitment }) {
  * 最重要事項として禁じている「返事をしたら閉じる」と同じ形の自動化を、
  * この状態でも作らない。「いつ消えるか」を変えるのは常に人間の
  * `commitment_close` / `PATCH /commitments/:id/close` だけである。
+ *
+ * **id は `OriginBadge` と同じ形で `/managers/<id>` へのリンクにする**
+ * （issue #2097。#2028 / PR #2032 が `OriginBadge` 側だけ直し、こちらは本文に
+ * 出てこないため取り残されていた）。**文言・色・バッジの形は変えない**——
+ * `ids.join(', ')` していた区切りをそのまま保ち、id 1件ずつをリンクに
+ * するだけである。
+ *
+ * **key は id でよい。** `activeManagerIds` は `managerId`（= `Job.id`）の
+ * 配列で、由来の `activeManagersByConversation`（`apps/daemon/src/app.ts`）は
+ * `stores.jobs.listJobs()` から組み立てる——ジョブは `id` をキーに持つ
+ * ストア（`packages/core/src/testing.ts` の偽物実装は `Map<string, Job>`）
+ * から読むので、同じ会話 id の配列内に同じ id が2度現れることはない。
  */
 function InProgressBadge({ commitment }: { commitment: Commitment }) {
   if (commitment.origin !== 'human') return null;
   const ids = commitment.activeManagerIds;
   if (ids === undefined || ids.length === 0) return null;
-  return <Badge tone="ok">進行中（委譲あり: {ids.join(', ')}）</Badge>;
+  return (
+    <Badge tone="ok">
+      進行中（委譲あり:{' '}
+      {ids.map((id, index) => (
+        <Fragment key={id}>
+          {index > 0 && ', '}
+          <Link to={`/managers/${id}`} className="hover:underline">
+            {id}
+          </Link>
+        </Fragment>
+      ))}
+      ）
+    </Badge>
+  );
 }
 
 const EDITOR_TAB_TRIGGER_CLASS =

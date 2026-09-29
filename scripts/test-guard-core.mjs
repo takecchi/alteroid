@@ -146,6 +146,17 @@ const VALUE_TAKING_FLAGS = new Set([
   '--reporter',
   '--testNamePattern',
   '-t',
+  // `--shard`（分割の口。値は `N/M` の形）を追加（#2063 の続き）。当初は
+  // 意図して外してあり、`--shard 1/3`（空白区切り）は値（`1/3`）が素の
+  // 位置引数として範囲判定に持ち込まれ、`EXIT_SCOPE_VIOLATION`（範囲内に
+  // 一致なし）で断られる形を歯として固定していた（実測は
+  // `scripts/test-guard-core.test.ts` の「実測: --shard 1/3（空白区切り）」
+  // に残っている——固定していた当時の生の文言も含めて消していない）。
+  // **足した理由**: `--shard=1/3`（`=` 形）は既に素通しされるのに、
+  // `--shard 1/3`（空白区切り）だけテストが1本も走らないまま断られるのは
+  // 利用者から見て非対称で、`--reporter` や `--maxWorkers` が両形とも
+  // 通ることと揃っていなかった。ここへ足すことで両形が同じように素通しされる。
+  '--shard',
 ]);
 
 /** 値必須フラグの値として飲んでよいか。`-` で始まるものはフラグ自身とみなし、
@@ -320,6 +331,68 @@ export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = 
 
   const filesInScope = await listScopeTestFiles(repoRoot, scope);
   return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope });
+}
+
+// ── 引数の正規化（続き）: 既定の reporter（この器の Bash（`CLAUDECODE`）のときだけ dot） ──
+
+/**
+ * `--reporter` を利用者が明示しているか。**`--reporter=x`（`=` 形）と
+ * `--reporter x`（空白区切りの値渡し）の両方を見る**——後者は `VALUE_TAKING_FLAGS`
+ * が既に「次の要素を値として飲む」と知っている形と同じ引数なので、ここでも
+ * 同じ2形を数える。値そのもの（`x` / `dot` / `verbose` 等）が何であるかは見ない
+ * ——「利用者が指定したかどうか」だけが要る。
+ */
+export function hasReporterFlag(argv) {
+  for (const arg of argv) {
+    if (arg === '--reporter' || arg.startsWith('--reporter=')) return true;
+  }
+  return false;
+}
+
+/**
+ * 既定の reporter を `dot` へ倒す（作業者がテストを回すと大きな出力が
+ * 保存ファイルへ回され、それを読もうとして拒否で止まる問題への対策）。
+ *
+ * **経緯（最初の版は狙った相手に効かなかった）**: 最初の版は「`stdout` が
+ * TTY でない・`CI` が未設定」の2条件だった。ところが**この器（Claude Code
+ * の Bash ツール）は、非TTY のまま `CI=true` を既定で環境に持つ**（実測:
+ * この器の Bash セッションで `process.env.CI` が `"true"`、観測
+ * 2026-09-29）。**⟹ 狙った相手（作業者がこの Bash ツール経由で打つ
+ * `pnpm test`）にちょうど効かない条件になっていた**——TTY 判定は満たすが、
+ * CI 判定で毎回弾かれ、既定の reporter は変わらないままだった。
+ *
+ * **条件を、狙っている主体（Claude Code の Bash ツール）そのものを見る形へ
+ * 変えた。** `CLAUDECODE` は Claude Code の CLI / SDK が自分の子プロセスへ
+ * 注ぐ環境変数で（実測: この器の Bash セッションで `process.env.CLAUDECODE`
+ * が `"1"`）、**人間が端末で直接打つときにも、GitHub Actions の runner
+ * にも無い**（`GITHUB_ACTIONS` は素の GitHub Actions runner が持つ変数で、
+ * この器では未設定——観測 2026-09-29）。**⟹ どちらも今までどおり vitest
+ * 既定の reporter のままになる**ので、TTY・CI の判定はもう要らない。
+ *
+ * **条件は2つだけ**（TTY・CI の判定は外した）:
+ *
+ * 1. 利用者が `--reporter` を1つも渡していない（`hasReporterFlag`）
+ * 2. `CLAUDECODE` が設定されている（空文字列でない）
+ *
+ * **`.claude/skills/mutation-testing/mutate-core.mjs` は `--reporter=default` を
+ * 明示して `pnpm test` を呼ぶ**ので `hasReporterFlag` が真になり、この歯は
+ * 素通りする——変異試験ハーネスの出力形は変わらない。
+ *
+ * 純粋関数——`CLAUDECODE` は呼び出し側（`test.mjs`）が
+ * `process.env.CLAUDECODE` から渡す。ここでは環境を読まない
+ * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」と同じ理由で、
+ * env を引数化してある）。
+ *
+ * **足すのは末尾へ1個だけ**——既存の引数（`--scope` 解決後のものも含む）は
+ * 1文字も変えない。呼び出す順序は「`resolveScopedArgs` の後」を想定している
+ * （`--scope` 解決の位置引数判定には影響しない——`--reporter` は既に
+ * `VALUE_TAKING_FLAGS` に載っており、この歯が足す `--reporter=dot` も同じ
+ * `=` 形なので、どちらも位置引数としては読まれない）。
+ */
+export function resolveReporterArgs(argv, { CLAUDECODE } = {}) {
+  if (hasReporterFlag(argv)) return argv;
+  if (!CLAUDECODE) return argv;
+  return [...argv, '--reporter=dot'];
 }
 
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────

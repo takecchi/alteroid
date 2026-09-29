@@ -1,6 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { describeAuthFailure, forbiddenKindOf } from './target.js';
+/**
+ * `resolveTarget` / `isRunnerContainer` の歯(#2093)のために、`daemon.js` と
+ * `credentials.js` を差し替える。**`daemon.js` の3関数だけ** —— `index.test.ts`
+ * と同じ形（`start` / `stop` は呼ばれない経路なのでここでは省くが、`vi.fn()` に
+ * しておけば未使用でも型は壊れない）。
+ */
+vi.mock('./daemon.js', () => ({
+  status: vi.fn(),
+  ensureRunning: vi.fn(),
+  baseUrl: (info: { port: number }) => `http://127.0.0.1:${info.port}`,
+}));
+
+vi.mock('./credentials.js', () => ({
+  readCredential: vi.fn(() => Promise.resolve(null)),
+}));
+
+const { describeAuthFailure, forbiddenKindOf, resolveTarget, isRunnerContainer, RUNNER_ID_ENV } =
+  await import('./target.js');
+const daemon = await import('./daemon.js');
+const credentials = await import('./credentials.js');
 
 /**
  * `forbiddenKindOf` — 403 の本文から、どちらの理由で拒否されたかを判別する。
@@ -68,5 +87,115 @@ describe('describeAuthFailure（403・kind による案内の分岐）', () => {
     expect(message).toContain('alteroid access list');
     expect(message).toContain('alteroid access owner <アカウント id>');
     expect(message).not.toContain('access grant <アカウント id>');
+  });
+});
+
+describe('isRunnerContainer', () => {
+  it('ALTEROID_RUNNER_ID が非空なら true', () => {
+    expect(isRunnerContainer({ [RUNNER_ID_ENV]: 'runner-primary' })).toBe(true);
+  });
+
+  it('ALTEROID_RUNNER_ID が無ければ false', () => {
+    expect(isRunnerContainer({})).toBe(false);
+  });
+
+  it('ALTEROID_RUNNER_ID が空文字・空白だけなら false（#2093 の穴と同じ形にしない）', () => {
+    expect(isRunnerContainer({ [RUNNER_ID_ENV]: '' })).toBe(false);
+    expect(isRunnerContainer({ [RUNNER_ID_ENV]: '   ' })).toBe(false);
+  });
+});
+
+/**
+ * `resolveTarget` — #2093。runner の器の中では、手元のデーモンを暗黙には
+ * 起こさない。`env` を明示的に渡すことでテストする（`resolveTarget` 自身の
+ * doc に書いたとおり、省略時は `process.env` を読むだけで挙動は変わらない）。
+ */
+describe('resolveTarget（#2093。runner の器の中での暗黙起動を止める）', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const runnerEnv = { [RUNNER_ID_ENV]: 'runner-primary' };
+  const hostEnv = {};
+
+  it('runner の中 × デーモン absent → ensureRunning を呼ばず、ALTEROID_URL を含む案内で例外', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({ presence: 'absent', info: null });
+
+    await expect(resolveTarget(runnerEnv)).rejects.toThrow(/ALTEROID_URL/);
+
+    expect(daemon.ensureRunning).not.toHaveBeenCalled();
+  });
+
+  it('runner の中 × デーモン unknown → 同様に起こさず例外（absent と同じ扱い）', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({ presence: 'unknown', info: null });
+
+    await expect(resolveTarget(runnerEnv)).rejects.toThrow(/ALTEROID_URL/);
+
+    expect(daemon.ensureRunning).not.toHaveBeenCalled();
+  });
+
+  it('runner の中 × デーモン present → 起こさずにそのまま繋ぐ', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({
+      presence: 'present',
+      info: { pid: 123, port: 4517, startedAt: '2026-09-29T00:00:00.000Z', token: 'tok-1' },
+    });
+
+    const target = await resolveTarget(runnerEnv);
+
+    expect(target).toEqual({
+      baseUrl: 'http://127.0.0.1:4517',
+      headers: { authorization: 'Bearer tok-1' },
+      remote: false,
+      note: null,
+    });
+    expect(daemon.ensureRunning).not.toHaveBeenCalled();
+  });
+
+  it('runner の外（ALTEROID_RUNNER_ID が無い）× absent → 従来どおり ensureRunning を呼ぶ', async () => {
+    vi.mocked(daemon.ensureRunning).mockResolvedValue({
+      pid: 456,
+      port: 4518,
+      startedAt: '2026-09-29T00:00:00.000Z',
+      token: 'tok-2',
+    });
+
+    const target = await resolveTarget(hostEnv);
+
+    expect(target).toEqual({
+      baseUrl: 'http://127.0.0.1:4518',
+      headers: { authorization: 'Bearer tok-2' },
+      remote: false,
+      note: null,
+    });
+    expect(daemon.ensureRunning).toHaveBeenCalledTimes(1);
+    // `status` は `ensureRunning` の内側（本物の daemon.ts）の仕事であって、
+    // `resolveTarget` 自身が呼んではいけない——ここは丸ごとモックなので、
+    // 直接呼ばれていないことだけを確かめる。
+    expect(daemon.status).not.toHaveBeenCalled();
+  });
+
+  it('runner の外（ALTEROID_RUNNER_ID が空文字）でも同様に ensureRunning を呼ぶ', async () => {
+    vi.mocked(daemon.ensureRunning).mockResolvedValue({
+      pid: 789,
+      port: 4519,
+      startedAt: '2026-09-29T00:00:00.000Z',
+      token: 'tok-3',
+    });
+
+    await resolveTarget({ [RUNNER_ID_ENV]: '' });
+
+    expect(daemon.ensureRunning).toHaveBeenCalledTimes(1);
+  });
+
+  it('ALTEROID_URL があれば、runner の中でも従来どおり remote（daemon には一切触らない）', async () => {
+    vi.mocked(credentials.readCredential).mockResolvedValue(null);
+
+    const target = await resolveTarget({ ...runnerEnv, ALTEROID_URL: 'https://prod.example.com' });
+
+    expect(target.remote).toBe(true);
+    expect(target.baseUrl).toBe('https://prod.example.com');
+    expect(target.note).toContain('ログインしていません');
+    expect(daemon.ensureRunning).not.toHaveBeenCalled();
+    expect(daemon.status).not.toHaveBeenCalled();
   });
 });

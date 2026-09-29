@@ -9,6 +9,7 @@ import {
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
+  verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
 } from '@alteroid/core';
@@ -1021,6 +1022,10 @@ describe('PgPermissionGrantStore（issue #863）', () => {
 
     expect(await stores.permissionGrants.list()).toEqual([GRANT]);
     expect(await stores.permissionGrants.get('grant-1')).toEqual(GRANT);
+  });
+
+  it('器の契約（Issue #863。3実装で同じことを測る）', async () => {
+    await verifyPermissionGrantStoreContract(stores.permissionGrants);
   });
 
   it('無い id の get は null', async () => {

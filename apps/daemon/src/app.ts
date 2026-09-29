@@ -8,12 +8,14 @@ import type {
   CredentialService,
   McpServerService,
   Exchange,
+  GrantResult,
   JobStatus,
   JournalEntry,
   JournalEntryInput,
   JournalEntryType,
   ManagerPool,
   ManagerSummary,
+  OwnerOutcome,
   Practice,
   ProfileService,
   RunnerClient,
@@ -1269,12 +1271,21 @@ function describeActor(principal: Principal): string {
  * （PUT・DELETE の両分岐）・`/schedule`（POST）・`/schedule/:kind`（DELETE）・
  * `/commitments`（POST）・`/commitments/:id/close`・`/commitments/:id/appraise`・
  * `/commitments/:id`（PATCH）・`/mcp-servers`（PUT）・`/inbox/remove`（POST、
- * 塊ごと）・`/reset`（POST）。
+ * 塊ごと）・`/reset`（POST）・`/access/:accountId/revoke`・
+ * `/access/:accountId/owner/revoke`（issue #2043。狭める2つはここまでと同じ
+ * 「状態変更はもう効いている」型）。
+ *
+ * **`/access/:accountId/grant` と `/access/:accountId/owner`（権限を広げる
+ * 2つ）はこの関数を状態変更の後には当てない（issue #2043）。** 広げる側で
+ * 状態変更の後に日誌が落ちると、記録の無い許可が生まれる——`grant` の注記が
+ * 言う「上限を外した 2026-09-09 以降、ここが唯一の歯止めである」がそのまま
+ * 効く場所である。だから**日誌を先に書き、書けなければ状態を変えずに 500**
+ * にする（`stores.journal.append` を直に呼び、投げたら `base.onError` へ
+ * 抜けるに任せる）。状態変更の後に「付与できなかった」を打ち消す側の追記
+ * だけ、この関数を使う——打ち消しが落ちても、実際の許可はどのみち変わって
+ * いない（記録が多すぎる側の穴で、記録の無い許可より安全側と判断した）。
  *
  * **当てていない口とその理由。**
- * - `/access/*` の4本（grant・revoke・owner・owner/revoke）——issue #2043 で
- *   扱う（`grantedBy` の正本更新と日誌の関係が、ここの単純な「状態変更は
- *   もう効いている」型と違う可能性があり、別 issue で検討する）。
  * - `PUT /credentials` ・ `PUT /profile`——鍵を扱う `requireOwner` の口。
  *   差し替えは日誌より前に runner へ配られていて効いている。日誌の行は、
  *   誰が鍵を差し替えたかの唯一の記録である。ここで握って成功を返すと、
@@ -7144,20 +7155,63 @@ export function createApp(deps: AppDeps) {
       }),
       deliberateClient,
       async (c) => {
-        const result = await authService.grant(
-          c.req.param('accountId'),
-          actorOf(c.get('principal')),
-        );
-        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
+        const accountId = c.req.param('accountId');
+        // **対象を先に引く（門前払い）。** 無ければ 404、日誌は書かない——
+        // いまと同じ応答。ここは早期の検査でしかない——実際に許可される保証は
+        // 下の `authService.grant` の結果でしか取れない（#2043）。
+        const before = await stores.auth.getAccount(accountId);
+        if (before === null) return c.json({ error: 'not found' as const }, 404);
+
         // 誰を通したかは必ず残す。事後に追えることが「最終承認」の実体である
         // （PRD「可観測性」）。**上限を外した 2026-09-09 以降、ここが唯一の歯止め
         // である** — 許可を持つ側も grant を叩けるので、許可は人間の手を経ずに
         // 伝播しうる。`describeActor` を省いて `operator` 固定にしないこと。
+        //
+        // **日誌を先に書く（#2043。順序を変えた理由）。** 状態変更の後に書いて
+        // いた形だと、変更が効いた直後に追記だけが落ちると、許可が伝播したのに
+        // 記録が1件も残らない——`appendJournalOrDrop` で握って 200 を返す狭める
+        // 側の直し方をここへ持ち込むと、この口では「記録の無い許可」を作って
+        // しまう。だから先に書き、**書けなければ状態を変えずに 500**（下の
+        // `base.onError` へ抜ける）。
         await stores.journal.append({
           type: 'decision',
-          decision: `アクセス許可を付与: ${describeAccount(result.account)}`,
+          decision: `アクセス許可を付与: ${describeAccount(before)}`,
           grounds: `${describeActor(c.get('principal'))}（alteroid access grant）`,
         });
+
+        let result: GrantResult;
+        try {
+          result = await authService.grant(accountId, actorOf(c.get('principal')));
+        } catch (error) {
+          // 日誌には「付与した」が残っているので、打ち消す（stderr にしか
+          // 残らなくても構わない——ここは記録が多すぎる側の穴で、
+          // 「記録の無い許可」よりは安全側と判断した。#2043）。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `アクセス許可を付与できなかった: ${describeAccount(before)}`,
+              grounds: `${describeActor(c.get('principal'))}（alteroid access grant、状態の変更が失敗）`,
+            },
+            'アクセス許可付与の打ち消しの日誌',
+            `accountId=${accountId}`,
+          );
+          throw error;
+        }
+        if (result.status === 'not_found') {
+          // 1（対象を引く）と 3（状態を変える）の間に消えた。同じ理由で打ち消す。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `アクセス許可を付与できなかった: ${describeAccount(before)}`,
+              grounds: `${describeActor(c.get('principal'))}（alteroid access grant、対象が消えていた）`,
+            },
+            'アクセス許可付与の打ち消しの日誌',
+            `accountId=${accountId}`,
+          );
+          return c.json({ error: 'not found' as const }, 404);
+        }
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
         );
@@ -7207,11 +7261,18 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const account = await authService.revoke(c.req.param('accountId'));
         if (account === null) return c.json({ error: 'not found' as const }, 404);
-        await stores.journal.append({
-          type: 'decision',
-          decision: `アクセス許可を取り消し: ${describeAccount(account)}`,
-          grounds: `${describeActor(c.get('principal'))}（alteroid access revoke）`,
-        });
+        // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない
+        // ——`appendJournalOrDrop` の doc（#2043。狭める側は #2037 と同じ扱い）。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `アクセス許可を取り消し: ${describeAccount(account)}`,
+            grounds: `${describeActor(c.get('principal'))}（alteroid access revoke）`,
+          },
+          'アクセス許可取り消しの日誌',
+          `accountId=${account.id}`,
+        );
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, account) }),
         );
@@ -7266,20 +7327,66 @@ export function createApp(deps: AppDeps) {
       requireOperator,
       deliberateClient,
       async (c) => {
-        const result = await authService.setOwner(c.req.param('accountId'), true);
-        if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
-        if (result.status === 'not_granted') {
+        const accountId = c.req.param('accountId');
+        // **対象を先に引く（門前払い）。** 無ければ 404、未許可なら 409——
+        // どちらも日誌を書かない、いまと同じ応答。ここも早期の検査でしかない
+        // （`isAccountGranted` の判定と `authService.setOwner` の実際の判定の
+        // 間で許可が落ちることがある——その窓は下の `not_granted` 分岐が拾う。
+        // #2043）。
+        const before = await stores.auth.getAccount(accountId);
+        if (before === null) return c.json({ error: 'not found' as const }, 404);
+        if (!isAccountGranted(before)) {
           return c.json(
             { error: 'このアカウントはまだ許可されていない（先に access grant が要る）' as const },
             409,
           );
         }
+
         // 誰を宣言したかは必ず残す（`/access/grant` と同じ理由。PRD「可観測性」）。
+        // **日誌を先に書く（#2043。順序を変えた理由は `/access/grant` と同じ——
+        // 記録の無い宣言を作らない）。書けなければ状態を変えずに 500。**
         await stores.journal.append({
           type: 'decision',
-          decision: `実行環境の持ち主として宣言: ${describeAccount(result.account)}`,
+          decision: `実行環境の持ち主として宣言: ${describeAccount(before)}`,
           grounds: `${describeActor(c.get('principal'))}（alteroid access owner）`,
         });
+
+        let result: OwnerOutcome;
+        try {
+          result = await authService.setOwner(accountId, true);
+        } catch (error) {
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `実行環境の持ち主として宣言できなかった: ${describeAccount(before)}`,
+              grounds: `${describeActor(c.get('principal'))}（alteroid access owner、状態の変更が失敗）`,
+            },
+            '持ち主宣言の打ち消しの日誌',
+            `accountId=${accountId}`,
+          );
+          throw error;
+        }
+        if (result.status === 'not_found' || result.status === 'not_granted') {
+          // 1（対象を引く）と 3（状態を変える）の間に消えた・許可が落ちた。
+          const detail =
+            result.status === 'not_found' ? '対象が消えていた' : '許可が取り消されていた';
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `実行環境の持ち主として宣言できなかった: ${describeAccount(before)}`,
+              grounds: `${describeActor(c.get('principal'))}（alteroid access owner、${detail}）`,
+            },
+            '持ち主宣言の打ち消しの日誌',
+            `accountId=${accountId}`,
+          );
+          if (result.status === 'not_found') return c.json({ error: 'not found' as const }, 404);
+          return c.json(
+            { error: 'このアカウントはまだ許可されていない（先に access grant が要る）' as const },
+            409,
+          );
+        }
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
         );
@@ -7328,11 +7435,18 @@ export function createApp(deps: AppDeps) {
         // `not_granted` は取り消し（declared=false）では起こらない
         // （`AuthStore.setAccountOwner` の doc——取り消しは行が在れば常に通る）。
         if (result.status === 'not_granted') return c.json({ error: 'not found' as const }, 404);
-        await stores.journal.append({
-          type: 'decision',
-          decision: `実行環境の持ち主としての宣言を取り消し: ${describeAccount(result.account)}`,
-          grounds: `${describeActor(c.get('principal'))}（alteroid access owner --revoke）`,
-        });
+        // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない
+        // ——`appendJournalOrDrop` の doc（#2043。狭める側は #2037 と同じ扱い）。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `実行環境の持ち主としての宣言を取り消し: ${describeAccount(result.account)}`,
+            grounds: `${describeActor(c.get('principal'))}（alteroid access owner --revoke）`,
+          },
+          '持ち主宣言取り消しの日誌',
+          `accountId=${result.account.id}`,
+        );
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, result.account) }),
         );

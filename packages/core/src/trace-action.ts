@@ -46,7 +46,7 @@
  *
  * `schema.ts` の `_AssertTraceActionMatchesLikeType`（ここは zod を知らない
  * ので、ここでは検査できない——`answered-via.ts` と同じ理由）が、実際の
- * `JournalEntry`（12種）がこの `TraceActionLike` へ構造的に渡せることを
+ * `JournalEntry`（13種）がこの `TraceActionLike` へ構造的に渡せることを
  * `typecheck` で強制する。**`AnsweredViaLike` の検査と違い、双方向の
  * 完全一致ではなく片方向**（`JournalEntry extends TraceActionLike`）——
  * `TraceActionLike` は意図して「必要な欄だけの最小の型」であって

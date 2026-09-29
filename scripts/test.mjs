@@ -90,6 +90,40 @@
  * その exit code をそのまま返す**（「自分の検査は通った」で上書きしない）。
  * **ラッパ自身が例外で落ちたときも exit 0 にはならない**（末尾の
  * `main().catch(...)` が exit code 1 で拾う。緑を名乗る経路を1本も作らない）。
+ *
+ * ## 既定の reporter（`CLAUDECODE`——Claude Code の Bash ツール経由——のときだけ dot）
+ *
+ * **なぜ足すか。** 作業者（AI）がテストを回すと、vitest 既定の reporter
+ * （`default`）の出力が大きくなり、道具が「大きな出力は保存ファイルへ回す」形へ
+ * 落とすことがある。作業者がその保存ファイルを読もうとして拒否で止まる、という
+ * 事故が実際に複数回起きた（AGENTS.md には書かない——道具の癖であってこの
+ * スクリプトの正本はここ）。**`--reporter=dot` は `Test Files` / `Tests` の
+ * 集計行と、落ちたテストの詳細（どのテストがなぜ落ちたか）はそのまま出しつつ、
+ * 通ったテスト1本ごとの行を出さない**ので、出力が小さくなる。
+ *
+ * **⚠️ 最初の版（TTY でない・CI 未設定の2条件）は狙った相手に効かなかった。**
+ * この器（Claude Code の Bash ツール）は非TTY のまま `CI=true` を既定で
+ * 環境に持つ（実測、観測 2026-09-29）ため、作業者がこの Bash ツール経由で
+ * 打つ `pnpm test` こそが CI 判定で毎回弾かれていた。**条件は
+ * `CLAUDECODE`（Claude Code が子プロセスへ注ぐ環境変数）が設定されている
+ * ことへ変えた**——人間が端末で直接打つときにも、GitHub Actions の
+ * runner にも無い（詳細・実測は `test-guard-core.mjs` の
+ * `resolveReporterArgs` の doc）。
+ *
+ * **足す条件は2つとも揃ったときだけ**（`test-guard-core.mjs` の
+ * `resolveReporterArgs`）——利用者が `--reporter` を明示していない・
+ * `CLAUDECODE` が設定されている。**人間が端末で直接打つときと GitHub
+ * Actions は、いままでどおり vitest 既定の reporter のまま**——見た目を
+ * 変えるのは「Claude Code の Bash ツール経由の実行」だけに絞ってある。
+ *
+ * **変異試験ハーネスは影響を受けない。** `.claude/skills/mutation-testing/
+ * mutate-core.mjs` は `pnpm test` を呼ぶときに `--reporter=default` を明示するので
+ * `hasReporterFlag` が真になり、この歯は素通りする。
+ *
+ * 判定は `resolveScopedArgs` の**後**に掛ける——`--scope` の位置引数判定に
+ * `--reporter=dot` を混ぜないため（この歯が足す形も `--reporter` も、どちらも
+ * 位置引数としては読まれない `VALUE_TAKING_FLAGS` 対応の形なので、実害は無いが、
+ * 順序を固定して依存の向きを明示する）。
  */
 
 import { spawn } from 'node:child_process';
@@ -99,6 +133,7 @@ import {
   ROOT,
   dropBareDashDash,
   judgeExecution,
+  resolveReporterArgs,
   resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
@@ -143,7 +178,10 @@ async function main() {
     return;
   }
 
-  const { code, combined } = await runVitest(scoped.args);
+  const reportedArgs = resolveReporterArgs(scoped.args, {
+    CLAUDECODE: process.env.CLAUDECODE,
+  });
+  const { code, combined } = await runVitest(reportedArgs);
 
   if (code !== 0) {
     // vitest 自身が落ちた（signal で殺された場合 code は null になる。その場合も

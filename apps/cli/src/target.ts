@@ -14,9 +14,20 @@ import * as daemon from './daemon.js';
  *
  * ここを1箇所にまとめてあるのは、経路ごとに「どっちの鍵を出すか」を書くと必ず
  * 食い違うからである。
+ *
+ * **例外が1つある——runner の器の中では「居なければ起こす」をしない。**
+ * 詳細と理由は {@link resolveTarget} と {@link isRunnerContainer} の doc に
+ * まとめてある（#2093。ここに複製しない）。
  */
 
 export const REMOTE_URL_ENV = 'ALTEROID_URL';
+
+/**
+ * runner の器の中かどうかを示す印。`apps/runner/src/index.ts` の
+ * `runnerIdOf` が読む変数と同じもの——子（マネージャー・作業者）の
+ * セッションにも env として届く。
+ */
+export const RUNNER_ID_ENV = 'ALTEROID_RUNNER_ID';
 
 export interface Target {
   baseUrl: string;
@@ -32,9 +43,51 @@ function remoteUrl(env: NodeJS.ProcessEnv = process.env): string | null {
   return value.length > 0 ? value : null;
 }
 
+/**
+ * いま runner の器の中（委譲されたマネージャー・作業者のセッション）で
+ * 動いているかどうか。
+ *
+ * **#2093 —— なぜここで区別するか。** runner の器の中で `alteroid` の CLI を
+ * 打つと、手元に居ないデーモンを暗黙に起こしてしまい、次の3つが起きる:
+ * 1. **誤認** —— 起きるのは器の中だけの、runner 1台・履歴0件の空のデーモン
+ *    だが、デーモンの版はイメージに焼き込まれた版を名乗るので本番と区別が
+ *    つかない。打った側は本番の姿を見たと誤解しうる
+ * 2. **資源** —— 起きたデーモンは detached で unref され、器に残り続ける
+ *    (pids・メモリ。#1334 と同じ場所を食う)
+ * 3. **鍵** —— `~/.alteroid/credentials.json` が runner の子の HOME に
+ *    新しく作られる
+ *
+ * **印を `ALTEROID_RUNNER_ID` にした理由** —— `apps/runner/src/index.ts` の
+ * `runnerIdOf` が読む変数と同じもので、runner が子プロセス(マネージャー・
+ * 作業者のセッション)を起こすときの env に乗って届く。値そのものは見ない
+ * (どの runner かは関係ない)。在って空でなければ「runner の中」とだけ判定する。
+ *
+ * **依存 —— 子へ渡す env が将来絞られると、この印が届かなくなって黙って
+ * 効かなくなる。** 現状 `ALTEROID_RUNNER_ID` は `packages/core/src/runner.ts`
+ * の `WITHHELD_ENV_KEYS` に載っていないので子へ渡るが、載せる変更が
+ * 独立に入れば、ここは全部「runner の外」に見えてしまい、暗黙の起動が
+ * 再発する —— 気づく歯が無い。触るなら、ここのコメントと歯
+ * (`target.test.ts` の runner 判定のテスト)を一緒に見ること。
+ */
+export function isRunnerContainer(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env[RUNNER_ID_ENV] ?? '').trim().length > 0;
+}
+
+/**
+ * runner の器の中で、暗黙の起動を断るときの文言。
+ *
+ * env の値(`ALTEROID_RUNNER_ID` の中身など)は載せない —— 変数の名前だけ言う。
+ */
+export const RUNNER_NO_AUTOSTART_MESSAGE =
+  'この器は runner(委譲先)なので、手元のデーモンを暗黙には起こしません。\n' +
+  '本番を見るなら ALTEROID_URL を指定して alteroid login してください。\n' +
+  'どうしてもこの器にデーモンを立てるなら、明示の alteroid daemon start を使ってください。';
+
 /** 起こさずに接続先だけ決める（`daemon status` のように生死を見る用途）。 */
-export async function resolveTargetWithoutStarting(): Promise<Target | null> {
-  const remote = remoteUrl();
+export async function resolveTargetWithoutStarting(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Target | null> {
+  const remote = remoteUrl(env);
   if (remote !== null) return remoteTarget(remote);
 
   const { info } = await daemon.status();
@@ -42,10 +95,35 @@ export async function resolveTargetWithoutStarting(): Promise<Target | null> {
   return localTarget(daemon.baseUrl(info), info.token);
 }
 
-/** 接続先を決める。手元のデーモンなら居なければ起こす。 */
-export async function resolveTarget(): Promise<Target> {
-  const remote = remoteUrl();
+/**
+ * 接続先を決める。手元のデーモンなら、既定では居なければ起こす。
+ *
+ * **例外 —— runner の器の中({@link isRunnerContainer})では起こさない
+ * (#2093)。** `ALTEROID_URL` が無く、かつ runner の器の中なら:
+ * - 手元のデーモンが既に居れば(`daemon.status()` が `present`)、そのまま
+ *   繋ぐ —— 読むだけの操作まで塞ぐ理由が無い
+ * - 居なければ(`presence` が `absent` / `unknown`)、起こさずに
+ *   {@link RUNNER_NO_AUTOSTART_MESSAGE} を投げる
+ *
+ * **明示の `alteroid daemon start`(`index.ts` の `daemonStartCommand`)は
+ * ここを通らない。** `daemon.start()` / `daemon.startWithRecovery()` を直接
+ * 呼ぶ別経路であり、この関数が塞ぐのは「暗黙の」起動だけ —— 起こす能力
+ * そのものは runner の中でも残す。
+ *
+ * **`env` を渡せるのはテストのため。** 省略時は `process.env` —— 挙動は
+ * これまでと1文字も変わらない。
+ */
+export async function resolveTarget(env: NodeJS.ProcessEnv = process.env): Promise<Target> {
+  const remote = remoteUrl(env);
   if (remote !== null) return remoteTarget(remote);
+
+  if (isRunnerContainer(env)) {
+    const current = await daemon.status();
+    if (current.presence === 'present' && current.info) {
+      return localTarget(daemon.baseUrl(current.info), current.info.token);
+    }
+    throw new Error(RUNNER_NO_AUTOSTART_MESSAGE);
+  }
 
   const info = await daemon.ensureRunning();
   return localTarget(daemon.baseUrl(info), info.token);

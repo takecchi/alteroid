@@ -30,12 +30,14 @@ import type {
   AgentPreCompactRecord,
   AgentPreToolDecision,
   AgentPreToolRecord,
+  AgentPreToolRewrite,
   AgentStopRecord,
   AgentSubagentStopRecord,
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
+import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
@@ -3215,6 +3217,10 @@ class RunnerSession {
             // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
             // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
             // 1つ増える** —— その影響は測っていないので、この変更には含めない。
+            // **（追記 #2056）この前提はもう無い。** `#dispatch` は #602 で
+            // `async #apply(event)` に置き換わり、`#read` も `await this.#apply(event)`
+            // で呼んでいる。それでもここは `void` のまま残してある —— `await` へ
+            // 揃えるかは、`stop()` との競合（下の #1597）を含めて別の変更で測ること。
             //
             // **`#stopped` なら、ここで `#finish` を呼ばない（#1597）。** 待たずに
             // 発火する `void this.#finish('lost', …)` は、resume 直後（まだ一度も
@@ -3726,7 +3732,7 @@ class RunnerSession {
   /**
    * **畳む直前に累積をもう一度読む。** 台帳の穴はここでしか塞げない。
    *
-   * 台帳へ入るのは `result.modelUsage` だけなので（`#dispatch`）、**`result` を
+   * 台帳へ入るのは `result.modelUsage` だけなので（`#apply` の `turn_ended`）、**`result` を
    * 1度も出さずに終わったセッションの消費はどこにも載らない。** しかも載らない
    * だけではなく一覧にも現れないので、「いくら取りこぼしたか」すら分からない。
    * 実測では、30分走って PR をマージまで運んだ委譲が器の入れ替えで畳まれ、台帳に
@@ -3768,7 +3774,7 @@ class RunnerSession {
   /**
    * **`result` を受け取らないまま畳むとき、既に喋られていた本文を報告として出す（#323）。**
    *
-   * 報告は `#dispatch` の `message.type === 'result'` の枝でしか作られない。
+   * 報告は `#apply` の `turn_ended`（SDK の `result` を写したもの）の枝でしか作られない。
    * assistant のメッセージは（`stop_reason` が `end_turn` でも）`RunnerTurnTally`
    * の `#said` に積まれるだけで、畳むのは `result` の到来だけである。**だから `result` が
    * 来ないまま終わる回は、マネージャーが書き終えた本文が丸ごと消えていた** —
@@ -4448,7 +4454,55 @@ class RunnerSession {
       }
     }
 
-    return this.#consumeOneShotAllow(record);
+    const decision = this.#consumeOneShotAllow(record);
+    const rewrite = this.#planBashToolTimeoutRewrite(record);
+    if (rewrite === undefined || decision.kind === 'deny') return decision;
+    return { ...decision, rewrite };
+  }
+
+  /**
+   * `Bash` のツールの `timeout` 引数が、コマンドの中の `timeout <継続時間>` より
+   * 短ければ、引き上げた入力を返す（issue #2088。判定は `bash-tool-timeout.ts`）。
+   *
+   * **弾かない。** 入力の `timeout` の欄だけを引き上げ、他の欄は1文字も変えない。
+   * 引き上げたことは日誌の note（`形=bash-tool-timeout-raised`）と、打った側への
+   * 一文（`rewrite.note`）の両方に残す——書き換えを観測から消さないため。
+   *
+   * 判定が投げても呼び出しは止めない（書き換えは安全弁ではなく便宜なので、
+   * 倒れる先は「書き換えない」）。stderr へ1行だけ残す。
+   */
+  #planBashToolTimeoutRewrite(record: AgentPreToolRecord): AgentPreToolRewrite | undefined {
+    if (record.toolName !== 'Bash') return undefined;
+    const toolInput = record.toolInput;
+    if (toolInput === null || typeof toolInput !== 'object' || Array.isArray(toolInput)) {
+      return undefined;
+    }
+    const input = toolInput as Record<string, unknown>;
+    let raise: ReturnType<typeof planBashToolTimeoutRaise>;
+    try {
+      raise = planBashToolTimeoutRaise(input);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${message}\n`,
+      );
+      return undefined;
+    }
+    if (raise === undefined) return undefined;
+
+    const actor =
+      record.agentId === undefined
+        ? `manager:${this.#id}`
+        : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
+    const from = raise.fromMs === undefined ? '未指定' : `${raise.fromMs}ms`;
+    this.#tryObservation('timeout 引数の引き上げの note の送り出し', () => {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `Bash の呼び出しの timeout 引数を引き上げた（${actor}・形=bash-tool-timeout-raised・${from}→${raise.toMs}ms）。`,
+      });
+    });
+    return { input: { ...input, timeout: raise.toMs }, note: describeBashToolTimeoutRaise(raise) };
   }
 
   /**
