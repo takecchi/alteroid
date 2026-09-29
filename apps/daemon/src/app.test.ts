@@ -3763,6 +3763,45 @@ describe('HTTP API', () => {
   });
 
   /**
+   * **issue #2123。** 状態変更（`stores.schedules.editRequest`）そのものが
+   * 投げたときは、先に書いた行と打ち消しの行の両方が日誌に残り、応答は
+   * 500 になる（grant の「状態変更（grantAccess）が投げたときは、付与の行と
+   * 打ち消しの行の両方が日誌に残り、500になる」と同じ形）。
+   */
+  it('状態変更（editRequest）が投げたときは、設定しようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
+    const throwingStores: Stores = {
+      ...stores,
+      schedules: {
+        ...stores.schedules,
+        editRequest: () => {
+          throw new Error('schedules store unavailable (test)');
+        },
+      },
+    };
+    const withThrowingSchedules = createApp({
+      clone: fake.clone,
+      stores: throwingStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      scheduler: schedule.scheduler,
+    });
+
+    const response = await withThrowingSchedules.request(
+      '/schedule',
+      json({ kind: 'issue-round', request: '新しい依頼', spec: { type: 'daily', at: '09:00' } }),
+    );
+    expect(response.status).toBe(500);
+    expect(await stores.schedules.get('issue-round')).toBeNull();
+
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .reverse();
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toBe('人間が定期の依頼を設定しようとしている: issue-round: 新しい依頼');
+    expect(decisions[1]).toBe('人間が定期の依頼を設定できなかった: issue-round: 新しい依頼');
+  });
+
+  /**
    * Issue #1654（バグ探しで見つかった lost update）。`packages/core/src/tools
    * .test.ts` の同名 Issue の歯（`schedule_create` 側）と対になる、
    * `POST /schedule`（人間の API）側の再現。
@@ -8420,6 +8459,48 @@ describe('実行環境プロファイル', () => {
     expect(decisions.some((d) => d.includes('差し替えようとしている'))).toBe(true);
     expect(decisions.some((d) => d.includes('差し替えられなかった'))).toBe(true);
   });
+
+  /**
+   * **issue #2123。** 評価は通ったが、状態変更（正本への保存。
+   * `stores.profile.write`）そのものが投げたときは、差し替えようとした行と
+   * 打ち消しの行の両方が日誌に残り、応答は 500 になる（grant の「状態変更
+   * （grantAccess）が投げたときは、付与の行と打ち消しの行の両方が日誌に
+   * 残り、500になる」と同じ形）。
+   */
+  it('状態変更（正本への保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
+    const throwingStores: Stores = {
+      ...stores,
+      profile: {
+        ...stores.profile,
+        write: () => {
+          throw new Error('profile store unavailable (test)');
+        },
+      },
+    };
+    const withThrowingProfile = createApp({
+      clone: fake.clone,
+      stores: throwingStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: profileService(throwingStores),
+    });
+
+    const response = await withThrowingProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export OK=1' }),
+    });
+    expect(response.status).toBe(500);
+    expect(await stores.profile.read()).toBeNull();
+
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .filter((decision) => decision.includes('実行環境プロファイル'))
+      .reverse();
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている');
+    expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった');
+  });
 });
 
 /**
@@ -8710,6 +8791,50 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     // ——で落ちたので、そこにも進んでいない）。
     const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
     expect(dropped).toHaveLength(0);
+  });
+
+  /**
+   * **issue #2123。** 日誌は書けたが、状態変更（正本への保存。
+   * `stores.credentials.put`）そのものが投げたとき——`deps.credentials.apply`
+   * は検証と実際の保存が同じ1呼びの中にあるので、ここからは「検証で断った」
+   * のと同じ形（400）に見える。**差し替えようとした行と打ち消しの行の両方が
+   * 日誌に残ることは grant と同じ**（`{ error: String(error) }` の 400、
+   * 「今と同じエラー応答」）。
+   */
+  it('状態変更（正本への保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残る', async () => {
+    const throwingStores: Stores = {
+      ...stores,
+      credentials: {
+        ...stores.credentials,
+        put: () => {
+          throw new Error('credentials store unavailable (test)');
+        },
+      },
+    };
+    const withThrowingCredentials = createApp({
+      clone: fake.clone,
+      stores: throwingStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      credentials: createCredentialService({
+        stores: throwingStores,
+        withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+      }),
+    });
+
+    const response = await put(withThrowingCredentials, [
+      { name: 'NPM_TOKEN', value: DUMMY_VALUE },
+    ]);
+    expect(response.status).toBe(400);
+    expect(await stores.credentials.list()).toEqual([]);
+
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .reverse();
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toContain('環境変数（鍵）を差し替えようとしている');
+    expect(decisions[1]).toContain('環境変数（鍵）を差し替えられなかった');
+    expect(JSON.stringify(decisions)).not.toContain(DUMMY_VALUE);
   });
 });
 
@@ -11165,6 +11290,44 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     expect(response.status).toBe(200);
     expect(((await response.json()) as { names: string[] }).names).toEqual([]);
     expect(await stores.mcpServers.read()).toBeNull();
+  });
+
+  /**
+   * **issue #2123。** 状態変更（保存。`stores.mcpServers.write`）そのものが
+   * 投げたときは、先に書いた行と打ち消しの行の両方が日誌に残り、応答は
+   * 500 になる（grant の「状態変更（grantAccess）が投げたときは、付与の行と
+   * 打ち消しの行の両方が日誌に残り、500になる」と同じ形）。
+   */
+  it('状態変更（保存）が投げたときは、差し替えようとした行と打ち消しの行の両方が日誌に残り、500 になる', async () => {
+    const throwingStores: Stores = {
+      ...stores,
+      mcpServers: {
+        ...stores.mcpServers,
+        write: () => {
+          throw new Error('mcpServers store unavailable (test)');
+        },
+      },
+    };
+    const withThrowingMcpServers = createApp({
+      clone: fake.clone,
+      stores: throwingStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const response = await withThrowingMcpServers.request('/mcp-servers', {
+      ...json({ mcpServers: { github: { command: 'gh-mcp' } } }),
+      method: 'PUT',
+    });
+    expect(response.status).toBe(500);
+    expect(await stores.mcpServers.read()).toBeNull();
+
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .reverse();
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toContain('MCP サーバの登録を差し替えようとしている（github）');
+    expect(decisions[1]).toContain('MCP サーバの登録を差し替えられなかった（github）');
   });
 
   /**
