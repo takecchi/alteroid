@@ -74,6 +74,56 @@ export interface WorkspaceResetSummary {
   sessionLog?: number;
 }
 
+/**
+ * 確認の文の並び。**CLI の対話確認（`apps/cli/src/reset.ts` の
+ * `buildConfirmMessage`）と `POST /reset` の OpenAPI description
+ * （`apps/daemon/src/app.ts`）の両方が、ここから組み立てる**（issue #2224 で
+ * 1か所に寄せた——元は `apps/cli/src/reset.ts` の `CONFIRM_GROUPS` として
+ * issue #2196／#2199 で作られたもので、内容・順序は1文字も変えていない）。
+ *
+ * 1つの日本語ラベルが複数の `WorkspaceResetSummary` キーをまとめて指すことが
+ * ある（例: 「利用状況の台帳」が `usageDaily` / `usageBaseline` / `usageLedger` /
+ * `usageTurns` / `sessionLog` をまとめて指す。「継続中の依頼」が `schedules` /
+ * `schedulePhases` をまとめて指す）。
+ *
+ * **`workspace-reset.test.ts` の網羅の歯が、この一覧の keys が
+ * `WorkspaceResetSummary` の全キーを重複や漏れ無く覆っていることを測る。**
+ * 新しいストアを足したのに、ここへ足し忘れるとその歯が落ちる——issue #2196
+ * で `practices` を足した後、確認の文にだけ足し忘れたのがまさにこの抜けである
+ * （issue #2224 は同じ抜けの3か所目、`POST /reset` の description で見つかった。
+ * `apps/cli/src/reset.ts` と `apps/web/app/routes/settings.tsx` の2か所は
+ * #2199 で直っている）。
+ *
+ * **`apps/cli/src/reset.test.ts` の既存の歯が、CLI の確認の文（見出しの並び・
+ * 語そのもの）を1文字も変えていないことを固定する。**
+ */
+export const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
+  { label: '記憶', keys: ['memory'] },
+  { label: '日誌', keys: ['journal'] },
+  { label: 'ジョブ', keys: ['jobs'] },
+  { label: '承認待ち', keys: ['approvals'] },
+  { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
+  { label: '受信箱', keys: ['inbox'] },
+  { label: '引き受けた仕事', keys: ['commitments'] },
+  { label: '仕事のやり方', keys: ['practices'] },
+  { label: 'アーカイブ', keys: ['archive'] },
+  { label: 'セッション', keys: ['sessions'] },
+  { label: '実行環境プロファイル', keys: ['profile'] },
+  {
+    label: '利用状況の台帳',
+    keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
+  },
+];
+
+/**
+ * `RESET_CONFIRM_GROUPS` のラベルを「・」区切りで並べた文字列。
+ * `POST /reset` の OpenAPI description（`apps/daemon/src/app.ts`）が使う——
+ * CLI の確認の文（`buildConfirmMessage`）と同じ並び・同じ語になる。
+ */
+export function describeResetTargets(): string {
+  return RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
+}
+
 export interface ResetWorkspaceStateOptions {
   /**
    * pg 構成でだけ渡す。`PgSessionStore#clearAll()` を渡し値として使う想定

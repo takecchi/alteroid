@@ -7,7 +7,7 @@
  * には効かない**。そのとき `historyLines` は `useConversation(shownId)`
  * （SWR）から来ており、`use-journal-live.ts` は `exchange(with: 'human')` が
  * 届くたびに `conversation` バケットを無効化して再取得させる
- * （`apps/web/app/hooks/use-journal-live.ts` の `invalidate` 関数、
+ * （`packages/swr/src/hooks/use-journal-live.ts` の `invalidate` 関数、
  * `case 'exchange'` の分岐）。
  *
  * 一方、送った自分の発言・受け取った返信は `lines`（ローカル state）にも
@@ -40,7 +40,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useJournalLive } from '~/hooks/use-journal-live';
+import { useJournalLive } from '@alteroid/swr';
 import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
 
 import Chat from './chat';
@@ -195,6 +195,11 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
             },
       );
     }
+    // issue #2210 以降: `chat.tsx` が `conversationApprovals.error` を見て
+    // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+    // fetch`）にすると無関係な `alert` が増える。この試験の対象ではないので、
+    // 素直に0件で成功させる。
+    if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
     return undefined;
   };

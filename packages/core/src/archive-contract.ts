@@ -1,4 +1,5 @@
 import { selectArchiveRemovalTargets } from './archive-prune.js';
+import { InvalidArchiveSessionIdError } from './archive-session-id.js';
 import type { TranscriptArchive } from './store.js';
 
 /**
@@ -247,6 +248,31 @@ export async function verifyTranscriptArchiveContract(
   // 2前提. 存在しない id の read() も missing。
   const readMissing = await archive.read(missingId);
   if (readMissing.kind !== 'missing') fail('read(存在しないid)', readMissing);
+
+  // issue #2233. NUL を含む sessionId は、3実装とも同じ例外（型と文言）で断り、
+  // 何も積まない。以前は pg だけが PostgreSQL の例外で落ち、fs / インメモリは
+  // そのまま積んでいた（同じ入力で3実装の結果が割れていた）。
+  {
+    const countBefore = (await archive.list()).length;
+    let thrown: unknown;
+    try {
+      await archive.archive('archive-contract-session-\u0000-nul', 'BODY-NUL\n');
+    } catch (error) {
+      thrown = error;
+    }
+    if (!(thrown instanceof InvalidArchiveSessionIdError)) {
+      fail('NULを含むsessionIdはInvalidArchiveSessionIdErrorで断る', {
+        thrown: thrown === undefined ? '(投げなかった)' : String(thrown),
+      });
+    }
+    if (thrown.message !== new InvalidArchiveSessionIdError().message) {
+      fail('NULを含むsessionIdの例外の文言が3実装で同じ', thrown.message);
+    }
+    const countAfter = (await archive.list()).length;
+    if (countAfter !== countBefore) {
+      fail('NULを含むsessionIdでは何も積まない', { countBefore, countAfter });
+    }
+  }
 
   // 積んで読める（2つ。巻き添えの検査に使う）。
   const idA = (await archive.archive('archive-contract-session-a', 'BODY-A\n')).id;

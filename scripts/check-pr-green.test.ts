@@ -562,6 +562,272 @@ describe('pickLatestRunPerWorkflow', () => {
     expect(result.verdict).toBe('pending');
     expect(result.verdict).not.toBe('green');
   });
+
+  describe('Issue #2209: ジョブが1本も走っていない run を、rerun の食い違い判定より前に外す', () => {
+    // teto が世代の決め方を領域 E に委ね、E が線を引いた（#2209）——同じ鍵
+    // （name+event）に「ジョブが走って完了した run」が1本以上あるときだけ、
+    // 「ジョブが1本も走っていない run」（jobs 全件が skipped）を比較から
+    // 外す。判定は run.conclusion ではなく jobs 全件で見る。
+
+    it('(a) Issue #2175 の実データ: draft 由来のジョブ0本 run を外すと green になる（実測 2026-09-29、sha 1e28808e5b6f2d1d0b2c39d6122ab0ab2cd61dbb）', () => {
+      // 実測: gh api "repos/takecchi/alteroid/actions/runs?head_sha=1e28808e5b6f2d1d0b2c39d6122ab0ab2cd61dbb"
+      // run 36563936180（run_attempt=1。draft のとき、image/ci とも skipped。
+      // ci.yml は draft の pull_request では回さない）と、run 36564163120
+      // （run_attempt=2。gh run rerun --failed 後、image/ci とも success）が
+      // 同じ head sha・同じ name=CI・同じ event=pull_request に同居した。
+      // 直す前はここで hasRerunConflict が「rerun が絡み結論が skipped と
+      // success で食い違う」と判定し、undecidable-rerun-conflict になって
+      // いた（#2209 本文）。
+      const draftSkipped = {
+        id: 36563936180,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T05:57:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      };
+      const rerunSuccess = {
+        id: 36564163120,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 2,
+        created_at: '2026-09-29T05:40:00Z',
+        run_started_at: '2026-09-29T06:10:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      };
+      // 実測: gh api repos/takecchi/alteroid/actions/runs/<id>/jobs
+      const jobsByRunId = {
+        36563936180: [
+          { name: 'image', status: 'completed', conclusion: 'skipped' },
+          { name: 'ci', status: 'completed', conclusion: 'skipped' },
+        ],
+        36564163120: [
+          { name: 'image', status: 'completed', conclusion: 'success' },
+          { name: 'ci', status: 'completed', conclusion: 'success' },
+        ],
+      };
+
+      const latest = pickLatestRunPerWorkflow([draftSkipped, rerunSuccess], jobsByRunId);
+      // ジョブが1本も走っていない draftSkipped が外れ、rerunSuccess の1本
+      // だけが残る——hasRerunConflict は2本未満で発火しない。
+      expect(latest).toEqual([rerunSuccess]);
+
+      const result = evaluatePrGreen(latest, jobsByRunId);
+      expect(result.verdict).toBe('green');
+    });
+
+    it('(b) draft 由来の skip を外しても、走った run が failure なら red のまま', () => {
+      const draftSkipped = {
+        id: 1,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:00:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      };
+      const readyFailure = {
+        id: 2,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:10:00Z',
+        status: 'completed',
+        conclusion: 'failure',
+      };
+      const jobsByRunId = {
+        1: [
+          { name: 'image', status: 'completed', conclusion: 'skipped' },
+          { name: 'ci', status: 'completed', conclusion: 'skipped' },
+        ],
+        2: [
+          { name: 'image', status: 'completed', conclusion: 'success' },
+          { name: 'ci', status: 'completed', conclusion: 'failure' },
+        ],
+      };
+      const latest = pickLatestRunPerWorkflow([draftSkipped, readyFailure], jobsByRunId);
+      expect(latest).toEqual([readyFailure]);
+      const result = evaluatePrGreen(latest, jobsByRunId);
+      expect(result.verdict).toBe('red');
+    });
+
+    it('(c) draft 由来の skip を外しても、走った run 同士が食い違えば undecidable-rerun-conflict のまま', () => {
+      // draftSkipped（ジョブ0本）に加え、genuineFailure（rerun されていない
+      // attempt1 の failure）と rerunSuccess（rerun された attempt2 の
+      // success）が同居する——除外の対象は draftSkipped だけで、走った run
+      // 同士の食い違いはそのまま残る。
+      const draftSkipped = {
+        id: 1,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:00:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      };
+      const genuineFailure = {
+        id: 2,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:05:00Z',
+        status: 'completed',
+        conclusion: 'failure',
+      };
+      const rerunSuccess = {
+        id: 3,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 2,
+        created_at: '2026-09-29T00:02:00Z',
+        run_started_at: '2026-09-29T00:20:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      };
+      const jobsByRunId = {
+        1: [{ name: 'ci', status: 'completed', conclusion: 'skipped' }],
+        2: [{ name: 'ci', status: 'completed', conclusion: 'failure' }],
+        3: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+      };
+      const latest = pickLatestRunPerWorkflow(
+        [draftSkipped, genuineFailure, rerunSuccess],
+        jobsByRunId,
+      );
+      expect(latest).toHaveLength(1);
+      expect(latest[0].id).toBeNull();
+      expect(latest[0].rerunConflict).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: genuineFailure.id, conclusion: 'failure' }),
+          expect.objectContaining({ id: rerunSuccess.id, conclusion: 'success' }),
+        ]),
+      );
+      // draftSkipped（ジョブが1本も走っていない）は外れているので
+      // rerunConflict には現れない。
+      expect(latest[0].rerunConflict.some((x: { id: number }) => x.id === draftSkipped.id)).toBe(
+        false,
+      );
+
+      const result = evaluatePrGreen(latest, jobsByRunId);
+      expect(result.verdict).toBe('undecidable-rerun-conflict');
+    });
+
+    it('(d) 鍵の全部がジョブの走っていない run なら、今までどおり時刻で選ぶ（除外は起きない）', () => {
+      const olderAllSkipped = {
+        id: 1,
+        name: 'CI',
+        event: 'schedule',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:00:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      };
+      const newerAllSkipped = {
+        id: 2,
+        name: 'CI',
+        event: 'schedule',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:10:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      };
+      const jobsByRunId = {
+        1: [{ name: 'ci', status: 'completed', conclusion: 'skipped' }],
+        2: [{ name: 'ci', status: 'completed', conclusion: 'skipped' }],
+      };
+      // 除外の有無で結果が変わらないことも確かめる——鍵に「ジョブが走って
+      // 完了した run」が1本も無いので、jobsByRunId を渡しても渡さなくても
+      // 同じ（今までどおり newerRun の時刻比較で newerAllSkipped を選ぶ）。
+      const withJobs = pickLatestRunPerWorkflow([olderAllSkipped, newerAllSkipped], jobsByRunId);
+      const withoutJobs = pickLatestRunPerWorkflow([olderAllSkipped, newerAllSkipped]);
+      expect(withJobs).toEqual([newerAllSkipped]);
+      expect(withoutJobs).toEqual([newerAllSkipped]);
+    });
+
+    it('(e) jobs が取れなかった（jobsByRunId に無い）run は外さない —— 開く側へ倒れない', () => {
+      const unknownJobsRun = {
+        id: 1,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:00:00Z',
+        status: 'completed',
+        conclusion: 'skipped',
+      };
+      const rerunSuccess = {
+        id: 2,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 2,
+        created_at: '2026-09-29T00:05:00Z',
+        run_started_at: '2026-09-29T00:20:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      };
+      // unknownJobsRun（id:1）の jobs はこの jobsByRunId に無い——「取れ
+      // なかった」を模している。
+      const jobsByRunId = {
+        2: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+      };
+      const latest = pickLatestRunPerWorkflow([unknownJobsRun, rerunSuccess], jobsByRunId);
+      // jobs 不明の run を「全部 skipped」と決めつけて外すと、rerun が絡み
+      // conclusion が食い違う（skipped vs success）ケースが green に化ける
+      // ——開く側の穴になる。外さないので、食い違いのままになる。
+      expect(latest).toHaveLength(1);
+      expect(latest[0].id).toBeNull();
+      expect(latest[0].rerunConflict).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: unknownJobsRun.id, conclusion: 'skipped' }),
+          expect.objectContaining({ id: rerunSuccess.id, conclusion: 'success' }),
+        ]),
+      );
+    });
+
+    it('(f) jobs の一部だけが skipped の run（一部は走った）は外さない', () => {
+      const partiallySkipped = {
+        id: 1,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 1,
+        created_at: '2026-09-29T00:00:00Z',
+        status: 'completed',
+        conclusion: 'failure',
+      };
+      const rerunSuccess = {
+        id: 2,
+        name: 'CI',
+        event: 'pull_request',
+        run_attempt: 2,
+        created_at: '2026-09-29T00:05:00Z',
+        run_started_at: '2026-09-29T00:20:00Z',
+        status: 'completed',
+        conclusion: 'success',
+      };
+      const jobsByRunId = {
+        1: [
+          { name: 'image', status: 'completed', conclusion: 'skipped' },
+          { name: 'ci', status: 'completed', conclusion: 'failure' },
+        ],
+        2: [
+          { name: 'image', status: 'completed', conclusion: 'success' },
+          { name: 'ci', status: 'completed', conclusion: 'success' },
+        ],
+      };
+      const latest = pickLatestRunPerWorkflow([partiallySkipped, rerunSuccess], jobsByRunId);
+      // partiallySkipped は「ジョブが1本も走っていない」わけではない（ci
+      // は failure で実際に走った）ので外れない——rerun が絡み結論が
+      // 食い違うままなので undecidable-rerun-conflict になる。
+      expect(latest).toHaveLength(1);
+      expect(latest[0].id).toBeNull();
+      expect(latest[0].rerunConflict).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: partiallySkipped.id, conclusion: 'failure' }),
+          expect.objectContaining({ id: rerunSuccess.id, conclusion: 'success' }),
+        ]),
+      );
+    });
+  });
 });
 
 describe('evaluatePrGreen', () => {

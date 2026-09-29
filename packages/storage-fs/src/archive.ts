@@ -4,8 +4,10 @@ import { join, resolve, sep } from 'node:path';
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
   archiveIdBranch,
+  assertArchivableSessionId,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
+  createUnreadableRowOnce,
   fingerprintArchiveBody,
   matchArchiveIdStamp,
   tailByCodePoints,
@@ -17,6 +19,7 @@ import {
   type ArchiveSessionSummary,
   type ArchiveWrite,
   type TranscriptArchive,
+  type UnreadableRowOnce,
 } from '@alteroid/core';
 
 import { writeFileAtomic } from './atomic.js';
@@ -61,6 +64,16 @@ function archiveIdCandidate(base: string, attempt: number): string {
  */
 export class FsTranscriptArchive implements TranscriptArchive {
   readonly #dir: string;
+  /**
+   * **壊れた sidecar の知らせを、1本につき1回に絞る**（issue #2231。許可の記録の
+   * #2191 と同じ形）。`list()` / `sessions()` は呼ぶたびに全行の sidecar を読み直す
+   * ので、絞らないと、同じ壊れた1本が直るまで呼び出しの回数だけ同じ行が stderr に
+   * 積もり、他の合図を埋める。鍵は `<sidecar の種類>:<id>`。読めた（無いも含む）
+   * ときは鍵から外すので、直した後にまた壊れたら1回知らせ直す。
+   * `read(id)` / `remove(id)` がその id について投げるのは、今までどおりである
+   * （名指しで触った操作の結果を黙らせない）。
+   */
+  readonly #unreadableOnce: UnreadableRowOnce = createUnreadableRowOnce();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -113,6 +126,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * ので、呼ぶ前には何も `await` しない。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
+    // 積めない sessionId は、ロックを取る前に3実装と同じ例外で断る（issue #2233）。
+    assertArchivableSessionId(sessionId);
     return withPathLock(this.#sessionLockPath(sessionId), async () => {
       await mkdir(this.#dir, { recursive: true });
       // **`at` はロックを取った後で決める（#1732）。** 上の doc「⚠️」参照。
@@ -238,7 +253,10 @@ export class FsTranscriptArchive implements TranscriptArchive {
           return await this.#readEntry(id);
         } catch (error) {
           if (error instanceof UnreadableArchiveSidecarError) {
-            process.stderr.write(`${describeUnreadableSidecar(error)}（一覧から外した）\n`);
+            // 1本につき1回（`#unreadableOnce` の doc。issue #2231）。
+            if (this.#unreadableOnce.sawUnreadable(`${error.sidecar}:${error.id}`)) {
+              process.stderr.write(`${describeUnreadableSidecar(error)}（一覧から外した）\n`);
+            }
             return undefined;
           }
           throw error;
@@ -507,11 +525,16 @@ export class FsTranscriptArchive implements TranscriptArchive {
     try {
       raw = await readFile(this.#markerPath(id), 'utf8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.#unreadableOnce.sawReadable(`.removed:${id}`);
+        return null;
+      }
       throw error;
     }
     try {
-      return JSON.parse(raw) as { removedAt: string; bytes: number };
+      const marker = JSON.parse(raw) as { removedAt: string; bytes: number };
+      this.#unreadableOnce.sawReadable(`.removed:${id}`);
+      return marker;
     } catch {
       throw new UnreadableArchiveSidecarError(id, '.removed');
     }
@@ -541,18 +564,27 @@ export class FsTranscriptArchive implements TranscriptArchive {
     try {
       raw = await readFile(this.#metaPath(id), 'utf8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.#unreadableOnce.sawReadable(`.meta.json:${id}`);
+        return null;
+      }
       throw error;
     }
     try {
-      return JSON.parse(raw) as ArchiveMeta;
+      const meta = JSON.parse(raw) as ArchiveMeta;
+      this.#unreadableOnce.sawReadable(`.meta.json:${id}`);
+      return meta;
     } catch {
       // **JSON として読めない sidecar は「無い」と同じに扱う**（issue #1969）。呼び手は
       // `fallbackMeta(id)`（id から sessionId と時刻を取る）へ倒すので、その行は
-      // 一覧に残る。跡には中身を出さない。
-      process.stderr.write(
-        `${describeUnreadableSidecar(new UnreadableArchiveSidecarError(id, '.meta.json'))}（id から sessionId と時刻を取った）\n`,
-      );
+      // 一覧に残る。跡には中身を出さない。**跡は1本につき1回**（`#unreadableOnce`
+      // の doc。issue #2231）——ここは `list()` からも `read(id)` からも通るが、
+      // どちらでも行は fallback で返るので、名指しの操作が失敗を隠すことにはならない。
+      if (this.#unreadableOnce.sawUnreadable(`.meta.json:${id}`)) {
+        process.stderr.write(
+          `${describeUnreadableSidecar(new UnreadableArchiveSidecarError(id, '.meta.json'))}（id から sessionId と時刻を取った）\n`,
+        );
+      }
       return null;
     }
   }

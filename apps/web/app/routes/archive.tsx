@@ -1,12 +1,19 @@
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { useRemoveArchive } from '~/hooks/mutations';
-import { useArchive, useArchiveSessions } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { formatDateTime } from '~/lib/format';
-import type { ArchiveEntry, ArchiveSessionSummary } from '~/lib/types';
+import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  Input,
+  Spinner,
+} from '@alteroid/ui';
+import { useRemoveArchive, useArchive, useArchiveSessions, ApiError } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
 
 /**
  * `/archive` — セッション生ログの退避（可観測性の最下段）。CLI の `/archive`
@@ -84,11 +91,11 @@ function SessionRow({ session }: { session: ArchiveSessionSummary }) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-mono break-all">{session.sessionId}</span>
         <Badge>行数 {session.rows}</Badge>
-        <span className="text-muted">
+        <span className="text-muted-foreground">
           使用量合計 {session.storedBytes}バイト（最大1行 {session.maxStoredBytes}バイト）
         </span>
       </div>
-      <div className="mt-1 text-muted">
+      <div className="mt-1 text-muted-foreground">
         {formatDateTime(session.firstAt)} 〜 {formatDateTime(session.lastAt)}
       </div>
     </li>
@@ -166,12 +173,12 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         {removed && <Badge tone="warn">本文は削除済み</Badge>}
         {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
       </div>
-      <div className="mt-1 text-muted">
+      <div className="mt-1 text-muted-foreground">
         session {entry.sessionId} ・ {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
       </div>
 
       {removed ? (
-        <div className="mt-1 text-muted">
+        <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
           {entry.removedBytes !== undefined && `（${entry.removedBytes}バイト）`}
         </div>

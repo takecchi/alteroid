@@ -3,6 +3,7 @@ import {
   describeAccountUsage,
   describeUnreadableUsage,
   describeUnrecordedManagers,
+  describeUsageDateOrder,
   describeWebSearchRequests,
   formatUsd,
   isRealUsageDate,
@@ -13,8 +14,8 @@ import {
 } from '@alteroid/core/usage';
 import { Link, useSearchParams } from 'react-router';
 
-import { Page } from '~/components/page';
 import {
+  Page,
   Badge,
   Card,
   CardHeader,
@@ -24,9 +25,14 @@ import {
   Select,
   Spinner,
   TruncationNote,
-} from '~/components/ui';
-import { useUsage, type UsageQuery } from '~/hooks/queries';
-import { tokensHref } from '~/lib/tokens-links';
+} from '@alteroid/ui';
+import { useUsage, type UsageQuery } from '@alteroid/swr';
+import {
+  tokensHref,
+  USAGE_FROM_PARAM,
+  USAGE_MANAGER_ID_PARAM,
+  USAGE_TO_PARAM,
+} from '@alteroid/logic';
 import type {
   AccountUsageState,
   UnrecordedManager,
@@ -34,8 +40,7 @@ import type {
   UsageRow,
   UsageSite,
   UsageTurnRow,
-} from '~/lib/types';
-import { USAGE_FROM_PARAM, USAGE_MANAGER_ID_PARAM, USAGE_TO_PARAM } from '~/lib/usage-links';
+} from '@alteroid/logic';
 
 /**
  * `/usage` — alteroid が使った分（トークンと費用）。
@@ -60,7 +65,7 @@ const AXIS_LIMIT = 20;
  * ここには無い——どれも「1つの値」で、複数値を1つのパラメタへ詰める必要が
  * 無いので、API のクエリ名と揃えたほうが読み手には素直である。
  *
- * **`from` / `to` / `managerId` は `~/lib/usage-links` の正本を使う（issue
+ * **`from` / `to` / `managerId` は `packages/logic/src/usage-links.ts` の正本を使う（issue
  * #2077 / #2078）。** 委譲の詳細（`manager-detail.tsx`）とダッシュボード
  * （`dashboard.tsx`）が `/usage` へのリンクを組み立てるとき、同じ欄名を
  * 書き写さずに済ませるため——書き写すと、片方だけ変わる経路が生まれる。
@@ -223,12 +228,20 @@ export default function Usage() {
    * **`UsageBody` 側の「その範囲には記録が無い。」はそのまま残す。** 0件で
    * あること自体は事実として正しく、`beforeLedger` 等の既存の注記と同じ
    * 並びに置けば読み違いは防げる——ここは削るのではなく、隣に理由を足す形
-   * を選ぶ。`from` / `to` がどちらも読める（`invalidFrom` / `invalidTo` が
-   * 発生していない）ときだけ比較する。`YYYY-MM-DD` は辞書式比較がそのまま
-   * 日付の前後に一致するので、文字列比較で足りる。
+   * を選ぶ。
+   *
+   * **文言と判定は core の {@link describeUsageDateOrder} が持つ（issue
+   * #2211）。** CLI（`alteroid usage` / chat の `/usage`）・クローンの
+   * `usage_read` と同じ関数——`from` / `to` がどちらも空文字（絞り込み無し・
+   * `invalidFrom` / `invalidTo` で読めなかった場合を含む）なら `undefined` を
+   * 渡す。判定そのもの（`YYYY-MM-DD` の辞書式比較）は core 側の doc を見ること。
    */
-  if (from !== '' && to !== '' && to < from) {
-    dateNotices.push(`to（${to}）が from（${from}）より前なので、この範囲には1日も入らない`);
+  const dateOrderNotice = describeUsageDateOrder(
+    from === '' ? undefined : from,
+    to === '' ? undefined : to,
+  );
+  if (dateOrderNotice !== null) {
+    dateNotices.push(dateOrderNotice);
   }
 
   return (
@@ -258,7 +271,7 @@ export default function Usage() {
           当たっていることまでである。
         */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             from
             <Input
               type="date"
@@ -267,7 +280,7 @@ export default function Usage() {
               onChange={(event) => setFilter(FROM_PARAM, event.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             to
             <Input
               type="date"
@@ -276,7 +289,7 @@ export default function Usage() {
               onChange={(event) => setFilter(TO_PARAM, event.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             manager
             <Input
               placeholder="manager id"
@@ -288,7 +301,7 @@ export default function Usage() {
             **選択肢は core の一覧から作る**（`USAGE_LAYERS` / `USAGE_SITES`）。
             画面に値を書き写すと、値が増えたときにここだけ古くなる。
           */}
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             layer（誰が）
             <Select value={layer} onChange={(event) => setFilter(LAYER_PARAM, event.target.value)}>
               <option value="">すべて</option>
@@ -299,7 +312,7 @@ export default function Usage() {
               ))}
             </Select>
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             site（どこで）
             <Select value={site} onChange={(event) => setFilter(SITE_PARAM, event.target.value)}>
               <option value="">すべて</option>
@@ -310,7 +323,7 @@ export default function Usage() {
               ))}
             </Select>
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             token（どの認証トークンで）
             <Input
               placeholder="token id"
@@ -406,7 +419,7 @@ function AccountCard({ account }: { account: AccountUsageState | undefined }) {
         {describeAccountUsage(account, { emphasis: false }).map((line, index) => (
           <li
             key={`${index}-${line}`}
-            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted"
+            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground"
           >
             {line}
           </li>
@@ -442,7 +455,7 @@ function UnrecordedManagersCard({
         {describeUnrecordedManagers(unrecordedManagers).map((line, index) => (
           <li
             key={`${index}-${line}`}
-            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted"
+            className="font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground"
           >
             {line}
           </li>
@@ -489,7 +502,7 @@ function UsageBody({
           ) : (
             <>
               <p className="text-2xl font-semibold">{formatUsd(summary.total.costUsd)}</p>
-              <p className="mt-1 text-xs text-muted">
+              <p className="mt-1 text-xs text-muted-foreground">
                 入力 {summary.total.inputTokens.toLocaleString('en-US')} / 出力{' '}
                 {summary.total.outputTokens.toLocaleString('en-US')} / キャッシュ読み{' '}
                 {summary.total.cacheReadInputTokens.toLocaleString('en-US')} / キャッシュ書き{' '}
@@ -633,7 +646,7 @@ function UsageBody({
             **飛び先はその id の行そのもの（issue #2109。#2100 の段2）。**
             `tokens.tsx` の `TokenRow` に飛び先（DOM の id・スクロール・
             控えめな強調）が入ったので、`/tokens` 止まりだった飛び先を行へ
-            向け直した。href の組み立てと URL の欄名は `~/lib/tokens-links`
+            向け直した。href の組み立てと URL の欄名は `packages/logic/src/tokens-links.ts`
             に1本化してある（`usage-links.ts` / `managers-links.ts` と同じ
             慣習——欄名を呼び出し側とここの両方で書き写さない）。プールから
             外れた id（使用量には残っているが、いまの `GET /tokens` に居ない）
@@ -653,7 +666,7 @@ function UsageBody({
       )}
 
       {/* **省略・要約しない。数字を出すところには必ず添える。** */}
-      <p className="text-xs text-muted">{notice}</p>
+      <p className="text-xs text-muted-foreground">{notice}</p>
     </div>
   );
 }
@@ -681,7 +694,7 @@ function AxisCard({
               className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
             >
               <span
-                className="min-w-0 truncate font-mono text-[11px] text-muted"
+                className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
                 title={entry.label}
               >
                 {entry.href === undefined ? (

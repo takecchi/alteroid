@@ -82,6 +82,7 @@ export {
   describeAccountUsage,
   describeUnreadableUsage,
   describeUnrecordedManagers,
+  describeUsageDateOrder,
   describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,

@@ -16,7 +16,7 @@ export default defineConfig({
      * 開発中は同一オリジンに見せる。
      *
      * こうしておくと**開発のためだけにデーモンへ CORS を開ける必要がなくなる**。
-     * 既定の接続先が同一オリジンの `/api`（`app/lib/config.ts`）なので、ここを
+     * 既定の接続先が同一オリジンの `/api`（`packages/logic/src/config.ts`）なので、ここを
      * 通せば素の `alteroid daemon start` に対してそのまま開発できる。
      */
     proxy: {

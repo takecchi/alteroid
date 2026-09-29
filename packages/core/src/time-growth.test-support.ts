@@ -19,9 +19,18 @@ import { expect } from 'vitest';
  * だが、`n * factor` を「壊れた実装がこれまでどおり数百 ms かかる大きさ」に
  * 選んである前提のもとで、`hardCapMs` はいまの10倍の余裕（既定 2000ms）を
  * 持たせてあるので、器の揺れだけでは踏まない設計にしてある。
+ *
+ * **揺れへの手当て（#2194 の後に B の #2214 の CI で比 10.55 が出たため）**。t(n) が 1〜2ms しか
+ * 無いと、分母が器の混み具合でぶれて、線形でも比が跳ねた（t(1000)=1.74ms, t(4000)=18.39ms。
+ * 手元では同じ形が n を倍にするごとにきっちり倍になる線形である）。そこで次の3つを入れた。
+ * - **最小値を取る**（中央値ではなく）。器が混むと時間は足されるだけで、引かれはしない。
+ * - **小さいほうと大きいほうを交互に測る**。混み具合の波が片方にだけ乗るのを避ける。
+ * - **t(n) が `minSmallMs`（既定 5ms）に届くまで n を倍にする**（`maxScale` 倍まで）。
+ *   2乗・3乗の実装は n を上げるほど比が理論値へ近づくので、捕まえる力は落ちない。
+ *   大きいほうが `hardCapMs` を超えたら、その時点で測るのをやめて落とす。
  */
 export interface ExpectNotSuperlinearOptions {
-  /** 小さいほうの入力の大きさ。 */
+  /** 小さいほうの入力の大きさ（出発点。t(n) が `minSmallMs` に届くまで倍にする）。 */
   n: number;
   /** 大きいほうの入力の大きさは `n * factor`。既定 4。 */
   factor?: number;
@@ -35,48 +44,41 @@ export interface ExpectNotSuperlinearOptions {
   hardCapMs?: number;
   /** 比を取るときの分母の下限（ms）。`t(n)` が 0 に近いときの比の暴れを抑える。既定 1。 */
   floorMs?: number;
-  /** 中央値を取るための試行回数。既定 3。 */
+  /** 最小値を取るための試行回数（小さいほうと大きいほうを交互に測る）。既定 5。 */
   repeats?: number;
+  /** t(n) がこれに届くまで n を倍にする（ms）。既定 5。0 なら倍にしない。 */
+  minSmallMs?: number;
+  /**
+   * n を倍にする上限（出発点の何倍まで）。既定は factor が 4 以上なら 16、それ未満なら 1（倍にしない）。
+   * factor を小さくしてある歯は指数の後戻りを見る歯で、壊れた実装では n を倍にした1回が
+   * 終わらない。正しい実装の t(n) は floorMs よりずっと小さく、比が跳ねる帯に入らない。
+   */
+  maxScale?: number;
 }
 
 /** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う。 */
 export interface GrowthMeasurement {
-  /** `t(n)` の中央値（ms）。 */
+  /** 実際に測った小さいほうの入力の大きさ（倍にした後）。 */
+  n: number;
+  /** `t(n)` の最小値（ms）。 */
   tSmallMs: number;
-  /** `t(n*factor)` の中央値（ms）。 */
+  /** `t(n*factor)` の最小値（ms）。 */
   tLargeMs: number;
   /** `tLargeMs / max(tSmallMs, floorMs)`。 */
   ratio: number;
 }
 
-function median(samples: readonly number[]): number {
-  const sorted = [...samples].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const lower = sorted[mid - 1];
-  const upper = sorted[mid];
-  if (upper === undefined) throw new Error('median: 空の配列');
-  return sorted.length % 2 === 0 && lower !== undefined ? (lower + upper) / 2 : upper;
-}
-
-function measureMedianMs<TInput>(
-  run: (input: TInput) => unknown,
-  input: TInput,
-  repeats: number,
-): number {
-  const samples: number[] = [];
-  for (let i = 0; i < repeats; i += 1) {
-    const start = performance.now();
-    run(input);
-    samples.push(performance.now() - start);
-  }
-  return median(samples);
+function timeOnceMs<TInput>(run: (input: TInput) => unknown, input: TInput): number {
+  const start = performance.now();
+  run(input);
+  return performance.now() - start;
 }
 
 /**
  * `run(makeInput(n))` と `run(makeInput(n * factor))` を測り、伸びの比が
  * `maxRatio` 未満（かつ `t(n*factor)` が `hardCapMs` 未満）であることを
  * `expect` する。呼び出し側は、いまの固定入力の大きさ（繰り返しの回数）が
- * `n * factor` と同じになるよう `n` を選ぶこと。
+ * `n * factor` と同じになるよう `n` を選ぶこと（t(n) が小さければ、ここで倍にする）。
  *
  * 落ちたときの assertion メッセージに `t(n)` / `t(n*factor)` / 比を載せる
  * ——読んだ人が「揺れで落ちたのか、本物の後退か」を、この文だけで見分け
@@ -87,26 +89,53 @@ export function expectNotSuperlinear<TInput>(
   makeInput: (n: number) => TInput,
   options: ExpectNotSuperlinearOptions,
 ): GrowthMeasurement {
-  const { n, factor = 4, maxRatio = 10, hardCapMs = 2000, floorMs = 1, repeats = 3 } = options;
+  const {
+    factor = 4,
+    maxRatio = 10,
+    hardCapMs = 2000,
+    floorMs = 1,
+    repeats = 5,
+    minSmallMs = 5,
+    maxScale = factor >= 4 ? 16 : 1,
+  } = options;
 
-  // JIT の温め——最初の1回は捨てる（`n` の入力で1回。大きいほうの入力は
-  // 測定そのものに任せる。ここで測りたいのは「温まった後」の伸び方である）。
-  run(makeInput(n));
-
-  const small = makeInput(n);
+  // JIT の温め——最初の1回は捨てる（ここで測りたいのは「温まった後」の伸び方である）。
+  let n = options.n;
+  let small = makeInput(n);
+  let tFirst = timeOnceMs(run, small);
+  tFirst = Math.min(tFirst, timeOnceMs(run, small));
+  // t(n) が小さすぎると、分母が器の混み具合でぶれる。届くまで n を倍にする。
+  while (tFirst < minSmallMs && n * 2 <= options.n * maxScale) {
+    n *= 2;
+    small = makeInput(n);
+    tFirst = timeOnceMs(run, small);
+  }
   const large = makeInput(n * factor);
-  const tSmallMs = measureMedianMs(run, small, repeats);
-  const tLargeMs = measureMedianMs(run, large, repeats);
+
+  let tSmallMs = Infinity;
+  let tLargeMs = Infinity;
+  for (let i = 0; i < repeats; i += 1) {
+    tSmallMs = Math.min(tSmallMs, timeOnceMs(run, small));
+    const tLarge = timeOnceMs(run, large);
+    tLargeMs = Math.min(tLargeMs, tLarge);
+    // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
+    // 限らないので、超えた1回の値で落とす）。
+    if (tLarge >= hardCapMs) {
+      tLargeMs = tLarge;
+      break;
+    }
+  }
   const ratio = tLargeMs / Math.max(tSmallMs, floorMs);
 
   const detail =
     `t(${n})=${tSmallMs.toFixed(2)}ms, t(${n * factor})=${tLargeMs.toFixed(2)}ms, ` +
-    `ratio=${ratio.toFixed(2)}（n=${n}, factor=${factor}, maxRatio=${maxRatio}, hardCapMs=${hardCapMs}, repeats=${repeats}）`;
+    `ratio=${ratio.toFixed(2)}（n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}, ` +
+    `hardCapMs=${hardCapMs}, repeats=${repeats}, 最小値）`;
 
   expect(tLargeMs, `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${detail}`).toBeLessThan(
     hardCapMs,
   );
   expect(ratio, `伸びの比が大きすぎる —— 2乗以上の後戻りの疑い。${detail}`).toBeLessThan(maxRatio);
 
-  return { tSmallMs, tLargeMs, ratio };
+  return { n, tSmallMs, tLargeMs, ratio };
 }

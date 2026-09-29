@@ -1,12 +1,10 @@
 import { describePermissionRuleBreadth } from '@alteroid/core/permission-rule';
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useRevokePermissionGrant } from '~/hooks/mutations';
-import { usePermissionGrants } from '~/hooks/queries';
-import { formatDateTime } from '~/lib/format';
-import type { PermissionGrant } from '~/lib/types';
+import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import { useRevokePermissionGrant, usePermissionGrants } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { PermissionGrant } from '@alteroid/logic';
 
 /**
  * `/permissions` — 人間が承認した Bash 許可の一覧と取り消し（`GET
@@ -128,15 +126,15 @@ function PermissionRow({ grant }: { grant: PermissionGrant }) {
       </div>
 
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted">id</dt>
+        <dt className="text-muted-foreground">id</dt>
         <dd className="font-mono break-all">{grant.id}</dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">承認</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">承認</dt>
         <dd className="break-all">
           {formatDateTime(grant.grantedAt)}（{grant.route.accountId}・&quot;{grant.answer}&quot;）
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">最終使用</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">最終使用</dt>
         <dd>
           {grant.lastUsedAt === undefined
             ? '（まだ使われていません）'
@@ -145,7 +143,7 @@ function PermissionRow({ grant }: { grant: PermissionGrant }) {
 
         {revokedAt !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">取り消し</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">取り消し</dt>
             <dd>{formatDateTime(revokedAt)}</dd>
           </>
         )}

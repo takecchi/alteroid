@@ -44,6 +44,7 @@ import {
   RunnerMcpServersUnsupportedError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
+  RESET_CONFIRM_GROUPS,
   recentDroppedTraces,
   summarizeInboxBacklog,
   UnreadableTokenSettingsError,
@@ -4937,6 +4938,51 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
 });
 
 /**
+ * ⭐ **issue #2224。`POST /reset` の OpenAPI description が「仕事のやり方」を
+ * 含まなくなっていた**（#2199 は CLI・Web の確認の文だけ直し、ここは3か所目
+ * として見つかった）。いまは description を `describeResetTargets()`
+ * （`@alteroid/core`。出所は `RESET_CONFIRM_GROUPS`）から組み立てる——`POST
+ * /schedule` の `RESERVED_SCHEDULE_KINDS` と同じ族の歯（#701 / #756）。
+ *
+ * ## この歯が測っていないこと
+ *
+ * - **`RESET_CONFIRM_GROUPS` の keys が `WorkspaceResetSummary` の全キーを
+ *   覆っているかは測っていない**（そちらは
+ *   `packages/core/src/workspace-reset.test.ts` が持つ）。ここが測るのは
+ *   「description が `RESET_CONFIRM_GROUPS` の全ラベルを字面として持つか」
+ *   だけである
+ * - `apps/daemon/openapi.json`（焼かれた生成物）そのものは見ていない。
+ *   生成物が最新であることは門の
+ *   `git diff --exit-code HEAD -- apps/daemon/openapi.json` が守る
+ */
+describe('POST /reset の description（issue #2224）', () => {
+  it('description が RESET_CONFIRM_GROUPS の全ラベルを字面として持つ', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<string, { post?: { description?: string } }>;
+    };
+    const description = spec.paths['/reset']?.post?.description ?? '';
+    expect(description, 'POST /reset の description が取れない').not.toBe('');
+
+    const missing = RESET_CONFIRM_GROUPS.map((group) => group.label).filter(
+      (label) => !description.includes(label),
+    );
+    expect(
+      missing,
+      `【赤の意味】RESET_CONFIRM_GROUPS に在るラベルが、POST /reset の OpenAPI ` +
+        `description に現れていない: ${missing.join(' / ')}\n` +
+        'ラベルを足したが、HTTP の面の description がその値を含んでいない。' +
+        '説明文を出所（describeResetTargets）から導出しているか確かめること' +
+        '（この description は openapi.json へ焼かれる）。',
+    ).toEqual([]);
+
+    // 残す3ストア（トークン・環境変数・ログイン）に触れないことと、取り消せ
+    // ないことは、CONFIRM_GROUPS の一覧の外にある固定文言なので別に見る。
+    expect(description).toContain('認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の');
+    expect(description).toContain('取り消せない');
+  });
+});
+
+/**
  * **`appendJournalOrDrop` を当てた残りの口を、安く1本の表で撃つ（Issue #2037）。**
  *
  * 3本の代表的な歯（`PUT /memory/:slug`・`POST /commitments/:id/close`・
@@ -7791,7 +7837,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
    * `/journal/stream` は `/chat` と違って**そもそも長時間無音が普通**である
    * （承認待ちが出るまで何も起きない）。だから無音死がいちばん出るのはこの経路で、
    * `apps/web` がこの口で自前の再接続を持っているのもそれが理由だった
-   * （`apps/web/app/hooks/use-journal-live.ts` の冒頭コメント）。
+   * （`packages/swr/src/hooks/use-journal-live.ts` の冒頭コメント）。
    */
   it('日誌が無音でも heartbeat のコメント行が流れる（承認待ちを待つ長時間接続）', async () => {
     const beating = createApp({
@@ -8961,6 +9007,132 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(decisions[0]).toContain('環境変数（鍵）を差し替えようとしている');
     expect(decisions[1]).toContain('環境変数（鍵）を差し替えられなかった');
     expect(JSON.stringify(decisions)).not.toContain(DUMMY_VALUE);
+  });
+});
+
+/**
+ * `POST /runners/credentials`（登録されている全 runner へ鍵を配る口）に
+ * 日誌の先書きを足す（issue #2198）。`PUT /credentials` と同じ形——
+ * **日誌を先に書き、書けなければ1本も配らずに 500。**
+ */
+describe('runner への鍵配布を日誌へ残す（POST /runners/credentials。issue #2198）', () => {
+  const DUMMY_VALUE = 'CRED-RUNNERS-DUMMY';
+
+  function withRunners(runners: ReturnType<typeof fakeRunner>[] = []) {
+    return createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf(runners),
+    });
+  }
+
+  async function distribute(target: ReturnType<typeof withRunners>, credentials: unknown) {
+    return target.request('/runners/credentials', json({ credentials }));
+  }
+
+  it('正常系: 日誌に2行残り、runner の id・鍵の名前と指紋が載る', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withRunners([runner]);
+
+    const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+    expect(response.status).toBe(200);
+
+    const ours = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry] : []))
+      .reverse()
+      .filter((entry) => entry.decision.includes('環境変数（鍵）'));
+    expect(ours).toHaveLength(2);
+
+    const fp = fingerprintOf(DUMMY_VALUE);
+    expect(ours[0]?.decision).toContain('配ろうとしている');
+    expect(ours[0]?.decision).toContain(`NPM_TOKEN=${fp}`);
+    expect(ours[1]?.decision).toContain('配った');
+    expect(ours[1]?.decision).toContain(`NPM_TOKEN=${fp}`);
+    expect(ours[1]?.grounds).toContain('runner-1=ok');
+
+    expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
+  });
+
+  it('日誌にも stderr にも応答にも鍵の値が1文字も載らない', async () => {
+    const runner = fakeRunner('runner-1');
+    const withVault = withRunners([runner]);
+
+    const lines = await captureStderr(async () => {
+      const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toContain(DUMMY_VALUE);
+    });
+    expect(lines.join('\n')).not.toContain(DUMMY_VALUE);
+
+    const journalText = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
+    expect(journalText).not.toContain(DUMMY_VALUE);
+  });
+
+  it('日誌への先書きが落ちると 500 になり、runner へ1本も配られない', async () => {
+    const runner = fakeRunner('runner-1');
+    const failingJournal: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => {
+          throw new Error('journal store unavailable (test)');
+        },
+      },
+    };
+    const withVault = createApp({
+      clone: fake.clone,
+      stores: failingJournal,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: registryOf([runner]),
+    });
+
+    const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+    expect(response.status).toBe(500);
+    // 日誌が先に落ちたので、配布（`registry.list()`・`runner.setCredentials`）
+    // そのものが起きていない。
+    expect(runner.receivedCredentials).toEqual([]);
+    expect(runner.held.has('NPM_TOKEN')).toBe(false);
+  });
+
+  /**
+   * **`registry.list()` 自体が投げた場合**（個々の runner への配布は
+   * ハンドラの内側の `try/catch` で既に捕まえており、そちらは 200 のまま
+   * `ok: false` を返す——ここで見るのは配布の一段外側で投げたときの形）。
+   */
+  it('配布が投げたとき、先の行と打ち消しの行の両方が残る', async () => {
+    const throwingRegistry = {
+      async list() {
+        throw new Error('registry unavailable (test)');
+      },
+      async get() {
+        throw new Error('この検証では使わない');
+      },
+      async select() {
+        throw new Error('この検証では使わない');
+      },
+    } as never;
+    const withVault = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: throwingRegistry,
+    });
+
+    const response = await distribute(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+    expect(response.status).toBe(500);
+
+    const ours = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .reverse()
+      .filter((decision) => decision.includes('環境変数（鍵）'));
+    expect(ours).toHaveLength(2);
+    expect(ours[0]).toContain('配ろうとしている');
+    expect(ours[1]).toContain('配れなかった');
+    expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
   });
 });
 

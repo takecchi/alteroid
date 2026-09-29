@@ -4,6 +4,7 @@ import {
   addUnreadableCounts,
   describeAccountUsage,
   describeUnrecordedManagers,
+  describeUsageDateOrder,
   describeWebSearchRequests,
   findUnrecordedManagers,
   isRealUsageDate,
@@ -51,6 +52,35 @@ describe('isRealUsageDate / usageDateSchema — 暦の上に実在する日だ�
   it('形の正規表現は、実在は見ない（実在の検査は isRealUsageDate が持つ）', () => {
     expect(USAGE_DATE_PATTERN.test('2026-02-30')).toBe(true);
     expect(USAGE_DATE_PATTERN.test('2026-8-1')).toBe(false);
+  });
+});
+
+/**
+ * `to` が `from` より前の絞り込みを見分ける注記（issue #2155 / #2211）。
+ * **CLI（`apps/cli/src/usage.ts` の `describeUsageDateOrder` 再輸出）・Web
+ * （`usage.tsx`）・クローンの `usage_read` の3つの入口が同じ関数を呼ぶので、
+ * ここが唯一の持ち主である。** 文言・境界（`==` では出ない）・片方だけ欠けた
+ * ときの扱いを測る。
+ */
+describe('describeUsageDateOrder（issue #2155 / #2211）', () => {
+  it('to が from より前なら注記の文字列を返す', () => {
+    expect(describeUsageDateOrder('2026-09-10', '2026-09-01')).toBe(
+      'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない',
+    );
+  });
+
+  it('to と from が同じ日なら null（境界は「より前」だけ）', () => {
+    expect(describeUsageDateOrder('2026-09-01', '2026-09-01')).toBeNull();
+  });
+
+  it('to が from より後なら null', () => {
+    expect(describeUsageDateOrder('2026-09-01', '2026-09-10')).toBeNull();
+  });
+
+  it('from / to のどちらかが無ければ null（比較しようがない）', () => {
+    expect(describeUsageDateOrder(undefined, '2026-09-01')).toBeNull();
+    expect(describeUsageDateOrder('2026-09-01', undefined)).toBeNull();
+    expect(describeUsageDateOrder(undefined, undefined)).toBeNull();
   });
 });
 

@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { PracticeSummary } from '~/lib/types';
+import type { PracticeSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Practices from './practices';

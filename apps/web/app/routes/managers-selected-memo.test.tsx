@@ -17,7 +17,7 @@
  * 実際の再描画（issue #2055 が挙げる「検索欄に1文字打つ」と同じ形）を
  * 先取りして測っている、という位置づけである。**
  *
- * `~/hooks/use-managers-window` を丸ごとスタブに差し替え、`ManagersBody` が
+ * `@alteroid/swr` の `useManagersWindow` だけをスタブに差し替え、`ManagersBody` が
  * 呼ぶたびに渡ってくる `selected` の引数を捕まえて比べる（黒箱で測れない
  * 理由は `journal-selected-memo.test.tsx` と同じ）。
  */
@@ -25,8 +25,8 @@ import { act, render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ManagersWindow } from '~/hooks/use-managers-window';
-import type { ManagerStatus } from '~/lib/types';
+import type { ManagersWindow } from '@alteroid/swr';
+import type { ManagerStatus } from '@alteroid/logic';
 import { Providers, storeTestBaseUrl } from '~/test-support';
 
 const { useManagersWindowMock, capturedSelected } = vi.hoisted(() => {
@@ -36,7 +36,8 @@ const { useManagersWindowMock, capturedSelected } = vi.hoisted(() => {
   };
 });
 
-vi.mock('~/hooks/use-managers-window', () => ({
+vi.mock('@alteroid/swr', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@alteroid/swr')>()),
   useManagersWindow: useManagersWindowMock,
 }));
 

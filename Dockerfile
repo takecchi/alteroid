@@ -25,6 +25,10 @@ COPY packages/api-client/package.json packages/api-client/
 # 公式の画面。**この器では配信しない**（静的成果物なので置き場は人間が選ぶ）が、
 # 同じくワークスペースの一員なので、置かないと `--frozen-lockfile` が落ちる
 COPY apps/web/package.json apps/web/
+# 画面から切り出した3つ（見た目・純ロジック・通信の層）。apps/web と同じ理由で置く
+COPY packages/ui/package.json packages/ui/
+COPY packages/logic/package.json packages/logic/
+COPY packages/swr/package.json packages/swr/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/
@@ -213,6 +217,10 @@ COPY packages/api-client/package.json packages/api-client/
 # 公式の画面。**この器では配信しない**（静的成果物なので置き場は人間が選ぶ）が、
 # 同じくワークスペースの一員なので、置かないと `--frozen-lockfile` が落ちる
 COPY apps/web/package.json apps/web/
+# 画面から切り出した3つ（見た目・純ロジック・通信の層）。apps/web と同じ理由で置く
+COPY packages/ui/package.json packages/ui/
+COPY packages/logic/package.json packages/logic/
+COPY packages/swr/package.json packages/swr/
 COPY apps/daemon/package.json apps/daemon/
 COPY apps/runner/package.json apps/runner/
 COPY apps/cli/package.json apps/cli/

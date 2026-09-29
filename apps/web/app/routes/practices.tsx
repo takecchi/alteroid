@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page } from '~/components/page';
-import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { usePractices } from '~/hooks/queries';
-import { formatRelative } from '~/lib/format';
+import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { usePractices } from '@alteroid/swr';
+import { formatRelative } from '@alteroid/logic';
 
 /** サーバ側と同じ規則（`practiceSlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -53,7 +52,7 @@ export default function Practices() {
           </Button>
         </div>
         {slug !== '' && !valid && (
-          <p className="mt-1.5 text-xs text-danger">
+          <p className="mt-1.5 text-xs text-destructive">
             使えるのは英小文字・数字・`.` `_` `-` で、先頭は英数字。128 文字まで。
           </p>
         )}
@@ -72,16 +71,20 @@ export default function Practices() {
               <li key={practice.slug} className="border-b border-border last:border-b-0">
                 <Link
                   to={`/practices/${practice.slug}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2"
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-muted"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm">
-                      <span className="mr-1.5 text-[10px] text-muted">[{practice.kind}]</span>
+                      <span className="mr-1.5 text-[10px] text-muted-foreground">
+                        [{practice.kind}]
+                      </span>
                       {practice.title}
                     </p>
-                    <p className="truncate font-mono text-[11px] text-muted">{practice.slug}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">
+                      {practice.slug}
+                    </p>
                   </div>
-                  <span className="shrink-0 text-[11px] text-muted">
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
                     {/* `chars` は本文の文字数（コードポイント数。`practiceMetaSchema` の
                         doc）。`formatBytes` を当てると「B / KB」と名乗ってしまっていた
                         （#1340）。CLI とクローンの道具と同じく「文字」と刷る。 */}

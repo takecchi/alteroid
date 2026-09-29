@@ -40,8 +40,12 @@ import type { JobStatus } from './schema.js';
  * - `'stalled-tool-use'` — **止まっている（道具待ち型）。** 生ログ末尾が
  *   `stop_reason: 'tool_use'` で、対応する `tool_result` が生ログに無く、
  *   かつデーモン側の `waiting` も空で、**かつ未応答の道具の中に応答を
- *   デーモンだけが返せるもの（`isDaemonAnsweredTool`。`AskUserQuestion` や
- *   `permissionMode` が `auto` 以外のときの通常の許可確認）が1件以上ある**
+ *   デーモンだけが返せるもの（`isDaemonAnsweredTool`。いまは `AskUserQuestion`
+ *   だけ）か、名前が取れなかったもの（欄が無い・空文字列）が1件以上ある**
+ *   （Issue #2205 で doc を実装に合わせた。以前は「`AskUserQuestion` や
+ *   `permissionMode` が `auto` 以外のときの通常の許可確認」と書いていたが、
+ *   述語は `name === 'AskUserQuestion'` だけを見る。`auto` 以外で通常の
+ *   許可確認が保留中なら `waiting` に積まれているので、この分岐まで来ない）
  *   （Issue #572 の形）。次の一手: `manager_transcript` で末尾を読み、
  *   `manager_stop` するかどうかを判断する。
  * - `'tool-running'` — **止まっていない（道具を実行中）。** 上と同じ3条件
@@ -131,11 +135,18 @@ function isTurnEndStalled(
  * 決め打つ側）へ黙って倒さない**——正体不明のまま `'tool-running'`（何もし
  * なくてよい、という結論）へ落とすと、本当に #572 の症状だったときに
  * 見逃しが生まれる。
+ *
+ * **空文字列（空白だけのものを含む）の name も「取れなかった」に数える**
+ * （Issue #2205）。欄は在っても中身が無いので、`undefined` と同じく道具の
+ * 正体は分からない——`item.name === undefined` だけを見ていた頃は、`''` が
+ * `isDaemonAnsweredTool('')`（偽）を経て `'tool-running'` へ黙って倒れていた。
  */
 function hasDaemonAnsweredStallTrigger(
   pending: NonNullable<ManagerActivityInput['toolUseStallPending']>,
 ): boolean {
-  return pending.some((item) => item.name === undefined || isDaemonAnsweredTool(item.name));
+  return pending.some(
+    (item) => item.name === undefined || item.name.trim() === '' || isDaemonAnsweredTool(item.name),
+  );
 }
 
 /**

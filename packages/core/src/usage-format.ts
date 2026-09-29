@@ -416,6 +416,39 @@ export function isRealUsageDate(value: string): boolean {
   return day <= daysInMonth;
 }
 
+/**
+ * `to` が `from` より前だと、絞り込みは常に空を返す（issue #2155 / #2211）。
+ *
+ * デーモンの `usageQuery`（`apps/daemon/src/app.ts`）も、クローンの道具
+ * `usage_read`（`tools.ts` の `stores.usage.aggregate`）も、`from` / `to` の
+ * 前後を検査せず `date >= from AND date <= to` で絞るだけなので、`to < from`
+ * のときは例外にならず単に0件になる ——0件を返す側（`renderUsage` /
+ * `usage.tsx` の `UsageBody`）はその0件を「その範囲には記録が無い。」としか
+ * 出さないので、「期間の指定が逆」と「その期間に本当に記録が無い」が区別
+ * できない。
+ *
+ * **CLI（`alteroid usage` / chat の `/usage`）・Web（`usage.tsx`）・クローンの
+ * `usage_read` の3つの入口すべてがこれを呼ぶ（issue #2211）。** どれか1つに
+ * しか無いと「その入口でしかできないこと」を作ってしまう（north_star の
+ * 禁止と同じ形）。
+ *
+ * `from` / `to` は、呼び出し側で {@link isRealUsageDate}（または同じ判定の
+ * `usageDateSchema`）を既に通した後の値であることを前提にする —
+ * `YYYY-MM-DD` の辞書式比較がそのまま日付の前後に一致する。
+ *
+ * **zod を持ち込まない形でここに置く。** このファイルはブラウザ向けの軽い口
+ * （`@alteroid/core/usage`）から出ている（{@link USAGE_DATE_PATTERN} の doc
+ * と同じ理由）。
+ */
+export function describeUsageDateOrder(
+  from: string | undefined,
+  to: string | undefined,
+): string | null {
+  if (from === undefined || to === undefined) return null;
+  if (to >= from) return null;
+  return `to（${to}）が from（${from}）より前なので、この範囲には1日も入らない`;
+}
+
 // ---------------------------------------------------------------------------
 // アカウント全体の残り（claude.ai 側の値）
 // ---------------------------------------------------------------------------

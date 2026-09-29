@@ -10,7 +10,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { storeCredential, type Credential } from '~/lib/auth';
+import { storeCredential, type Credential } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Shell from './shell';

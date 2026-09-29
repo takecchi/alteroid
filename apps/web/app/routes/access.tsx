@@ -1,17 +1,16 @@
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
+import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
 import {
   useDeclareOwner,
   useGrantAccess,
   useRevokeAccess,
   useRevokeOwnerDeclaration,
-} from '~/hooks/mutations';
-import { useAccess } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { formatDateTime } from '~/lib/format';
-import type { AccessAccount } from '~/lib/types';
+  useAccess,
+  ApiError,
+} from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { AccessAccount } from '@alteroid/logic';
 
 /**
  * `/access` — ログインしたアカウントと許可の一覧（`GET /access` / CLI の
@@ -28,7 +27,7 @@ import type { AccessAccount } from '~/lib/types';
  * 同じ「ボタンは隠さない」方針——押せない理由を消さず、失敗したときに
  * **端末で打つコマンド（`alteroid access owner <id>`）をアカウント id 入りで
  * 案内する。** サーバの規則（誰が宣言できるか）はここへ写さない
- * （`grep -Fn -- 'サーバの規則（誰が直せるか）をここへ写さないこと' apps/web/app/hooks/mutations.ts`）
+ * （`grep -Fn -- 'サーバの規則（誰が直せるか）をここへ写さないこと' packages/swr/src/hooks/mutations.ts`）
  * ——先回りしてボタンを隠したり無効化したりせず、返ってきた失敗をそのまま
  * 見せるだけにする。
  *
@@ -138,32 +137,32 @@ function AccountRow({ account }: { account: AccessAccount }) {
       </div>
 
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted">id</dt>
+        <dt className="text-muted-foreground">id</dt>
         <dd className="font-mono break-all">{account.id}</dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">作成</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">作成</dt>
         <dd>{formatDateTime(account.createdAt)}</dd>
 
         {via.length > 0 && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">ログイン手段</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">ログイン手段</dt>
             <dd className="break-all">{via}</dd>
           </>
         )}
 
-        <dt className="mt-2 text-muted sm:mt-0">最終ログイン</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">最終ログイン</dt>
         <dd>
           {account.lastLoginAt === null ? '（まだ無い）' : formatDateTime(account.lastLoginAt)}
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">許可した日時</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">許可した日時</dt>
         <dd>
           {account.grantedAt === null
             ? '（未許可）'
             : `${formatDateTime(account.grantedAt)}（${describeGrantedBy(account.grantedBy)}）`}
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">実行環境の持ち主として宣言</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">実行環境の持ち主として宣言</dt>
         <dd>
           {account.ownerDeclaredAt === null
             ? '（未宣言）'
@@ -300,7 +299,7 @@ function OwnerDeclarationControl({ account }: { account: AccessAccount }) {
       </div>
       <ErrorNote error={failure} />
       {isNotOperator(failure) && (
-        <p className="text-[11px] break-words text-muted">
+        <p className="text-[11px] break-words text-muted-foreground">
           デーモンが動いている環境（実行環境の持ち主）で、次を実行してください:
           <br />
           <code className="font-mono">

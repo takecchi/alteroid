@@ -148,7 +148,7 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
  * バンドラが tree-shake できずに丸ごと混入する問題は Web 側の話で CLI には
  * 無いが、CLI はサーバから来た JSON（`MemorySummary`）を見ているだけで
  * `@alteroid/core` の型そのものを持ち込んでいないので、ここでも同じ理由
- * （二重管理より用途ごとの独立を取る、`apps/web/app/lib/format.ts` の
+ * （二重管理より用途ごとの独立を取る、`packages/logic/src/format.ts` の
  * `formatRelative` と同じ判断）で私物として持つ。
  *
  * **`Math.max(seconds, 0)` は core 側とは違う理由で残す。** core の

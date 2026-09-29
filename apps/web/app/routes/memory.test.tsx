@@ -18,7 +18,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { MemoryDocument } from '~/lib/types';
+import type { MemoryDocument } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Memory from './memory';

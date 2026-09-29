@@ -196,6 +196,22 @@ describe('classifyManagerActivity — 5状態の網羅（依頼者の守る線: 
       ).toBe('stalled-tool-use');
     });
 
+    /**
+     * **空文字列・空白だけの name も「取れなかった」に数える**（Issue #2205）。
+     * 欄が在るだけで正体は分からないので、上の name 無しと同じ向きに倒す。
+     */
+    it.each(['', '   '])(
+      'name が空（%j）の pending なら stalled-tool-use（tool-running へ倒さない）',
+      (name) => {
+        expect(
+          classifyManagerActivity({
+            toolUseStallPending: [{ id: 'toolu_empty', name }],
+            waitingCount: 0,
+          }),
+        ).toBe('stalled-tool-use');
+      },
+    );
+
     it('waiting が非空なら tool-running にもならず active（正常な待ち）', () => {
       expect(
         classifyManagerActivity({

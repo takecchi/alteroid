@@ -6,7 +6,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 /**
- * **接続先（`apps/web/app/lib/config.ts` が決める、デーモンの所在）を、人間が
+ * **接続先（`packages/logic/src/config.ts` が決める、デーモンの所在）を、人間が
  * その場で入力欄へ打った値以外から受け取っていないことを固定する歯。**
  *
  * ## なぜこの歯が要るか（オーナーが引いた線）
@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
  * 接続先を、リンク・クエリ文字列・ハッシュのような「外から渡せる経路」から
  * 受け取ってはならない。**受け取っていいのは、人間がその場で入力欄へ打った値
  * だけ**である。理由は、攻撃者の URL を仕込んだリンクを踏ませれば、次に
- * ログインしたときの資格情報（`apps/web/app/lib/api.tsx` が付ける
+ * ログインしたときの資格情報（`packages/swr/src/api.tsx` が付ける
  * `Authorization: Bearer`）が攻撃者のサーバへ渡る経路になるからである。
  *
  * **もしこの禁止を犯している経路を見つけても、この歯では直さない。** それは
@@ -52,7 +52,7 @@ import { describe, expect, it } from 'vitest';
  * ではなく「歯を弱める」（緩い正規表現にする・除外リストへ足す）方向へ
  * 誘導され、弱められた歯は本当に配線が変わったときに鳴らない。**
  *
- * このファイルが対象にする `apps/web/app/lib/config.ts` /
+ * このファイルが対象にする `packages/logic/src/config.ts` /
  * `apps/web/app/components/connection.tsx` も同じ形の散文をすでに大量に
  * 持っている（例: `connection.tsx` は `resolveApiBaseUrl` `hasStoredApiBaseUrl`
  * という語をコメントの中で3回引用しているが、そこはコードではない）。
@@ -90,7 +90,20 @@ import { describe, expect, it } from 'vitest';
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const WEB_APP_DIR = path.join(ROOT, 'apps/web/app');
+/**
+ * 走査の根。画面（`apps/web/app`）と、画面から切り出した3つのパッケージの `src`。
+ *
+ * **切り出したパッケージを外さないこと。** 接続先を決める `config.ts` は
+ * `packages/logic` へ、鍵を付ける `api.tsx` は `packages/swr` へ移った——
+ * `apps/web/app` だけを見ていると、この歯のいちばん守りたい2ファイルが
+ * 走査から黙って消え、(A) の一覧を直せば緑に戻ってしまう。
+ */
+const WEB_UI_SOURCE_DIRS = [
+  'apps/web/app',
+  'packages/ui/src',
+  'packages/logic/src',
+  'packages/swr/src',
+].map((dir) => path.join(ROOT, dir));
 const JOURNAL_PATH = path.join(ROOT, 'apps/web/app/routes/journal.tsx');
 
 /** 変異試験・生成物を対象から外す（`workspace-test-scripts.test.ts` と同じ形）。 */
@@ -114,7 +127,7 @@ function parseSource(sourceText: string, fileName: string): ts.SourceFile {
 // --- (A) 接続先に触るファイルの抽出 -----------------------------------------
 
 /**
- * 接続先に触っているとみなす識別子。`apps/web/app/lib/config.ts` が公開する
+ * 接続先に触っているとみなす識別子。`packages/logic/src/config.ts` が公開する
  * 関数の名前そのもの。
  *
  * **接続先が「1つの値」から「一覧＋選択」になったとき（複数の既定 API と
@@ -199,13 +212,15 @@ function collectAppFiles(dir: string, out: string[]): void {
 }
 
 const allAppFiles: string[] = [];
-collectAppFiles(WEB_APP_DIR, allAppFiles);
+for (const dir of WEB_UI_SOURCE_DIRS) collectAppFiles(dir, allAppFiles);
 
 /**
- * `apps/web/app/**\/*.{ts,tsx}` のうちテストファイルを除いたものの中で、
+ * `WEB_UI_SOURCE_DIRS` の下の `*.{ts,tsx}` のうちテストファイルを除いたものの中で、
  * 実際に接続先へ触れているファイル。
  *
- * **`apps/web/app/test-support.tsx` を含む判断について。** このファイルは
+ * **`packages/swr/src/test-support.tsx` を含む判断について。**（画面の足場から
+ * `fetch` の差し替えと接続先の保存を切り出した先。以前は `apps/web/app/test-support.tsx`
+ * がこの行を持っていて、同じ理由で一覧に入っていた） このファイルは
  * `*.test.tsx` という*ファイル名の拡張子*には一致しない（テストから import
  * される足場であって、それ自体はテストの集計に乗らない）ので、上の
  * `isTestFile` の除外規則には掛からない。実際 `localStorage.setItem(
@@ -234,9 +249,9 @@ const filesTouchingApiBaseUrlConfig = allAppFiles
  */
 const EXPECTED_FILES = [
   'apps/web/app/components/connection.tsx',
-  'apps/web/app/lib/api.tsx',
-  'apps/web/app/lib/config.ts',
-  'apps/web/app/test-support.tsx',
+  'packages/swr/src/api.tsx',
+  'packages/logic/src/config.ts',
+  'packages/swr/src/test-support.tsx',
 ];
 
 // --- (B) 外から来る読み取り経路の禁止 ----------------------------------------
@@ -468,8 +483,8 @@ describe('(A) 接続先に触るファイルの集合が、決め打ちの一覧
     ).toEqual({ extracted: expected, missing: [], extra: [] });
   });
 
-  it('apps/web/app/lib/config.ts は必ず対象集合に入る', () => {
-    expect(filesTouchingApiBaseUrlConfig).toContain('apps/web/app/lib/config.ts');
+  it('packages/logic/src/config.ts は必ず対象集合に入る', () => {
+    expect(filesTouchingApiBaseUrlConfig).toContain('packages/logic/src/config.ts');
   });
 
   it('合成 fixture: 実際に識別子・リテラルを参照していれば true', () => {

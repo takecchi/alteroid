@@ -1,0 +1,258 @@
+@import 'tailwindcss';
+/*
+ * shadcn の部品が前提にしているもの。**どちらも色を1つも持たない**
+ * （`--color-*` は両方とも 0 件。中身は custom variant / @property / @utility だけ）。
+ *
+ * - `shadcn/tailwind.css`: `data-open:` / `data-closed:` などの custom variant
+ * - `tw-animate-css`: `animate-in` / `slide-in-from-left-*`（出入りの動き）
+ */
+@import 'shadcn/tailwind.css';
+@import 'tw-animate-css';
+/*
+ * 書体。**自前で配る**（`@fontsource/*`。実行時に外のフォント配信へ取りに行かない）。
+ * 使う太さだけを読む——IBM Plex Sans JP は太さ1つで Unicode の区間ごとに 100 余りの
+ * 断片へ割れていて、画面が実際に使う字の断片しか落ちてこない（`unicode-range`）。
+ *
+ * - IBM Plex Sans JP: 本文と見出し（日本語が主なので、日本語を持つ書体を主にする）
+ * - Michroma: ロゴと大きな数字だけ（`font-display`）。幅広の字面が「計器の表示」に見える
+ * - IBM Plex Mono: 識別子・生ログ（`font-mono`）。Plex Sans JP と骨格が揃う
+ */
+@import '@fontsource/ibm-plex-sans-jp/400.css';
+@import '@fontsource/ibm-plex-sans-jp/500.css';
+@import '@fontsource/ibm-plex-sans-jp/600.css';
+@import '@fontsource/michroma/400.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+/*
+ * **このパッケージ自身の class を、Tailwind を回す側（apps/web・Storybook）のビルドにも拾わせる。**
+ *
+ * apps/web の Vite の自動検出は apps/web の下しか見ない。`packages/ui` は兄弟の
+ * ディレクトリなので、この1行が無いと部品の中でしか使っていない class
+ * （`h-9` / `data-open:` など）が生成物の CSS に1つも出ない。パスはこのファイルからの
+ * 相対で、`packages/ui/src` を指す。
+ */
+@source './';
+/*
+ * **見本（`*.stories.tsx`）は拾わない。** 見本だけが使う class を画面の生成物の CSS へ
+ * 載せないため。見本帳（Storybook）は `.storybook/preview.css` で拾わせ直している。
+ */
+@source not './**/*.stories.tsx';
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * **色の名前は shadcn の既定のまま、値だけを alteroid のものにしてある。**
+ * `shadcn add` が吐く部品は、この名前（`bg-muted` / `text-muted-foreground` /
+ * `bg-accent` / `bg-primary` …）を**書き換えずに**そのまま使える。部品に手を入れずに
+ * 見た目を変えられるのは、名前と値をここで分けてあるからである。
+ *
+ * 値の考え方（暗い側が既定。`apps/web/app/root.tsx` の `<html class="dark">`）:
+ * - 地（`background` / `card`）は無彩色ではなく青紫へ少し振ってある（色相 272）。
+ *   長時間開けたままにする画面なので、真っ黒より目が疲れにくく、面の段差が色で読める
+ * - 主色（`primary`）は淡いラベンダー（「Lumen」）。**主な操作・選択中・焦点にだけ使う**。
+ *   飾りに撒くと、どこを押せばよいかが色から読めなくなる
+ * - 状態の色は色相を離してある: `ok` はミント（175）、`warn` は琥珀（75）、
+ *   `destructive` は珊瑚（20）。主色（285）とどれも紛れない
+ *
+ * shadcn に無いものだけを足してある:
+ * - `warn` / `ok` —— 状態の色（注意・成功）
+ * - `--safe-*` —— 切り欠き・ホームインジケータの取り分
+ * - `font-display` —— ロゴと大きな数字の書体（上の書体の節）
+ */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --font-sans:
+    'IBM Plex Sans JP', ui-sans-serif, system-ui, -apple-system, 'Hiragino Sans', sans-serif;
+  --font-display: 'Michroma', 'IBM Plex Sans JP', ui-sans-serif, sans-serif;
+  --font-mono:
+    'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+:root {
+  /* 角丸は shadcn の既定（0.625rem）より少し小さく締める（計器の精密な印象に寄せる）。 */
+  --radius: 0.5rem;
+  --background: oklch(0.975 0.006 280);
+  --foreground: oklch(0.22 0.03 275);
+  --card: oklch(0.995 0.003 280);
+  --card-foreground: oklch(0.22 0.03 275);
+  --popover: oklch(0.995 0.003 280);
+  --popover-foreground: oklch(0.22 0.03 275);
+  --primary: oklch(0.49 0.2 285);
+  --primary-foreground: oklch(0.985 0.01 285);
+  --secondary: oklch(0.935 0.014 280);
+  --secondary-foreground: oklch(0.28 0.04 278);
+  --muted: oklch(0.945 0.01 280);
+  --muted-foreground: oklch(0.5 0.028 275);
+  --accent: oklch(0.93 0.03 285);
+  --accent-foreground: oklch(0.3 0.08 285);
+  --destructive: oklch(0.56 0.2 22);
+  --border: oklch(0.88 0.016 278);
+  --input: oklch(0.86 0.018 278);
+  --ring: oklch(0.55 0.2 285);
+  /*
+   * グラフの系列の色（順に使う。**回さない**——5つ目以降は「その他」へ畳む）。
+   * **状態の色（ok / warn / destructive）とは色相を離してある**——グラフの系列が
+   * 「注意」や「失敗」に見えないように。chart-5 は「その他」用の無彩色で、系列の色では
+   * ない。値は色覚の型ごとの見分け（CVD ΔE）と面との対比を検査器で測って決めた
+   * （明るい側: 隣どうしの最悪 ΔE 14.8 / 暗い側: 11.9。すべて 3:1 以上）。
+   */
+  --chart-1: oklch(0.5 0.2 290);
+  --chart-2: oklch(0.62 0.16 125);
+  --chart-3: oklch(0.47 0.2 345);
+  --chart-4: oklch(0.62 0.12 230);
+  --chart-5: oklch(0.6 0.02 276);
+  /* 明るい面の上で読める濃さ */
+  --warn: oklch(0.6 0.14 65);
+  --ok: oklch(0.56 0.12 175);
+
+  /*
+   * 切り欠き・ホームインジケータの取り分。**対応していない環境では 0 になる**ので、
+   * 広い画面の見た目は変わらない。
+   *
+   * `env()` が実際に 0 以外を返すのは `viewport-fit=cover`（`apps/web/app/root.tsx` の
+   * viewport meta）と対になっているときだけである。**片方だけ消さないこと** — 消しても
+   * 手元の広い画面では何も起きず、電話で初めて文字がホームインジケータに
+   * かぶって気づくことになる。
+   */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+.dark {
+  --background: oklch(0.165 0.022 272);
+  --foreground: oklch(0.94 0.012 280);
+  --card: oklch(0.2 0.026 272);
+  --card-foreground: oklch(0.94 0.012 280);
+  --popover: oklch(0.225 0.03 272);
+  --popover-foreground: oklch(0.94 0.012 280);
+  --primary: oklch(0.8 0.12 285);
+  --primary-foreground: oklch(0.2 0.05 280);
+  --secondary: oklch(0.26 0.03 272);
+  --secondary-foreground: oklch(0.92 0.014 280);
+  --muted: oklch(0.25 0.028 272);
+  --muted-foreground: oklch(0.7 0.03 276);
+  --accent: oklch(0.29 0.05 280);
+  --accent-foreground: oklch(0.95 0.02 285);
+  --destructive: oklch(0.71 0.17 20);
+  --border: oklch(0.8 0.05 280 / 13%);
+  --input: oklch(0.8 0.05 280 / 18%);
+  --ring: oklch(0.8 0.12 285);
+  --chart-1: oklch(0.6 0.17 290);
+  --chart-2: oklch(0.65 0.15 120);
+  --chart-3: oklch(0.54 0.2 345);
+  --chart-4: oklch(0.665 0.115 218);
+  --chart-5: oklch(0.62 0.02 276);
+  /* 暗い面の上で読める明るさ */
+  --warn: oklch(0.84 0.14 75);
+  --ok: oklch(0.83 0.12 175);
+}
+
+/*
+ * **光の縁（モチーフ2）。** いま選ばれているもの（脇の面の現在地・選択中の行）の
+ * 左端に、主色の細い線を1本だけ光らせる。**光ってよいのはこれと焦点の輪だけ**——
+ * 光るものが画面に1つなら、それがそのまま「いまここ」の印になる。
+ *
+ * 置く側は `position` を持たなくてよい（ここで `relative` にする）。
+ */
+@utility lumen-edge {
+  position: relative;
+  &::before {
+    content: '';
+    position: absolute;
+    inset-block: 0.375rem;
+    left: 0;
+    width: 2px;
+    border-radius: 9999px;
+    background: var(--color-primary);
+    box-shadow: 0 0 8px var(--color-primary);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground;
+    -webkit-font-smoothing: antialiased;
+    /* 日本語の行は詰まって見えやすい。本文の既定を少しだけ開ける。 */
+    line-height: 1.6;
+  }
+
+  /*
+   * **面取り（`corner-shape: bevel`）は置かない。** 面の左上と右下を斜めに落とす形を試したが、
+   * 人間の判断で外した（2026-09-30。押せるものに掛けた版は「押せそうに見えない」、面だけに
+   * 残した版も「いらない」）。角は shadcn の角丸のまま、署名は「光の縁」と「心拍」に任せる。
+   */
+
+  /* 数字は桁を揃える（件数・金額・時刻が縦に並ぶ画面が多い）。 */
+  table,
+  time,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 35%, transparent);
+  }
+
+  button,
+  [role='button'] {
+    cursor: pointer;
+  }
+
+  /* 生ログや日誌はどれも長い。既定で折り返す。 */
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /*
+   * 焦点の輪。shadcn の部品は自前の `focus-visible:ring-*` を持つが、素の要素
+   * （画面が直に置いた `<a>` / `<summary>` など）にも同じ色の輪を出す。
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+}

@@ -72,6 +72,21 @@ function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingIt
 }
 
 describe('renderManagerList', () => {
+  /**
+   * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
+   * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
+   * `status` を渡していないときの0件文言は変わらない。
+   */
+  it('絞りが無い0件は「（マネージャーは1本も居ません）」のまま（#2203）', () => {
+    expect(renderManagerList([])).toBe('（マネージャーは1本も居ません）');
+  });
+
+  it('status= を渡した0件は、絞りを名指しする文言になる（#2203）', () => {
+    expect(renderManagerList([], 'done')).toBe(
+      'status=done に当たるマネージャーは居ません（絞り込みを外せば見えるかもしれません）',
+    );
+  });
+
   it('拒否の行に「止められた後に報告が届いたか」を添える（#1455）', () => {
     const text = renderManagerList([
       manager({
@@ -3047,7 +3062,7 @@ describe('chat の /journal', () => {
    * `inbox_flow` の4種は `summarize()` の6キー（`text`/`decision`/`question`/
    * `summary`/`body`/`tool`）のどれも持たないため、要約が空欄のまま出て
    * いた（`  <at>  [worker_wait] ` の後ろに何も出ない）。Web
-   * （`apps/web/app/hooks/queries.ts` の `summarizeJournalEntry`）と同じ
+   * （`packages/swr/src/hooks/queries.ts` の `summarizeJournalEntry`）と同じ
    * 文言を `@alteroid/core/journal-diagnostics-format` から借りて埋める。
    */
   describe('issue #2016 — worker_wait / turn_usage / context_usage / inbox_flow の要約', () => {
@@ -4195,6 +4210,23 @@ describe('chat の /managers の絞り込みと窓（#670）', () => {
         args: { query: { status: 'running,waiting_human', limit: '20' } },
       },
     ]);
+  });
+
+  /**
+   * **`status=` で絞った0件を、絞っていないときの0件と同じ文言で出さない**
+   * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
+   */
+  it('status= で絞った0件は、絞りを名指しする文言になる（#2203）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ managers: [] });
+
+    await runSlashCommand('/managers status=done', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain(
+      'status=done に当たるマネージャーは居ません（絞り込みを外せば見えるかもしれません）',
+    );
+    expect(text).not.toContain('（マネージャーは1本も居ません）');
   });
 
   /**

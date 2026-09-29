@@ -3,9 +3,9 @@ import { Fragment, useState } from 'react';
 import { Tabs } from 'radix-ui';
 import { Link } from 'react-router';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Badge,
   Button,
   Card,
@@ -15,24 +15,23 @@ import {
   Input,
   Spinner,
   Textarea,
-} from '~/components/ui';
+  cn,
+} from '@alteroid/ui';
 import {
   useAppraiseCommitment,
   useCloseCommitment,
   useEditCommitment,
   usePushCommitment,
-} from '~/hooks/mutations';
-import { useCommitments } from '~/hooks/queries';
-import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
+  useCommitments,
+} from '@alteroid/swr';
+import { APPRAISAL_LABELS, formatDateTime, formatRelative } from '@alteroid/logic';
 import type {
   AppraisalValue,
   CommitmentClosedBy,
   CommitmentOrigin,
   TextMarkup,
 } from '@alteroid/core';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
-import type { Commitment, UnreadableCommitment } from '~/lib/types';
+import type { Commitment, UnreadableCommitment } from '@alteroid/logic';
 
 /**
  * 引き受けたまま終わっていない仕事の台帳（`packages/core/src/schema.ts` の
@@ -137,7 +136,7 @@ function isClosed(commitment: Commitment): boolean {
 /**
  * 読めない行が在ることを、一覧の上で断る（issue #296）。
  *
- * **新しい共有部品を増やさない。** `ErrorNote`（`~/components/ui`）と同じ
+ * **新しい共有部品を増やさない。** `ErrorNote`（`packages/ui/src/components/ui.tsx`）と同じ
  * 配色の作法を warn 色で使い回す — `apps/web/app/routes/journal.tsx` の
  * `BlockedNote`（「終端でも空でもない、本物の限界だと分かる形にする」）と
  * 同じ考え方で、この画面にもローカルに1つだけ置く。
@@ -147,7 +146,7 @@ function isClosed(commitment: Commitment): boolean {
  * そこへ混ぜると「特に何も無い」に見えてしまう。
  *
  * **0件なら描かない。** 常に出る断りは、出ていることが情報にならない
- * （`~/components/ui` の `TruncationNote` と同じ判定）。
+ * （`packages/ui/src/components/ui.tsx` の `TruncationNote` と同じ判定）。
  *
  * **id が取れない行は件数だけに数える**（`commitment_list` ツール・digest と
  * 同じ扱い。`packages/core/src/tools.ts` / `digest.ts`）。
@@ -620,7 +619,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
       return (
         <div className="min-w-0">
           {prefix !== null && (
-            <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>
+            <span className="mr-1 font-mono text-[11px] text-muted-foreground">{prefix}</span>
           )}
           <ManagerRestBody rest={rest} bodyMarkup={commitment.bodyMarkup} />
         </div>
@@ -760,8 +759,8 @@ function InProgressBadge({ commitment }: { commitment: Commitment }) {
 }
 
 const EDITOR_TAB_TRIGGER_CLASS =
-  'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted transition-colors hover:text-fg';
-const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
+  'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground';
+const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 
 /**
  * 台帳の本文を人間が直接編集する（未了の行なら `origin` を問わず開ける。
@@ -915,7 +914,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
    * 「編集できない」としか見えず、理由は1文字も出ない。
    *
    * 乗せた線は、この repo が同じ論点で既に持っているもの
-   * （`apps/web/app/hooks/mutations.ts` の `useRemoveSchedule`）:
+   * （`packages/swr/src/hooks/mutations.ts` の `useRemoveSchedule`）:
    * 「画面側でボタンを隠して表現しないこと — 隠すと「なぜ押せないか」が
    * 消える。押せて、断られた理由がその場に出るほうが読める。」
    *
@@ -944,7 +943,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">
-      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <OriginBadge commitment={commitment} />
         <EditedBadge commitment={commitment} />
         <AnsweredStateBadge commitment={commitment} />
@@ -954,7 +953,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <span>({formatRelative(commitment.at)})</span>
         <button
           type="button"
-          className="ml-auto text-[11px] text-muted underline hover:text-fg"
+          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground"
           onClick={() => setEditing((current) => !current)}
         >
           {editing ? '編集をやめる' : '本文を編集'}
@@ -1053,7 +1052,7 @@ function assertAppraisalHandled(value: never): void {
  * この関数の `switch` がその値を返さないので `assertAppraisalHandled` の
  * 引数が `never` にならず、**`pnpm typecheck` がここで落ちる。**
  *
- * 字面そのものの出所は `~/lib/appraisal-labels`（issue #2164。core の
+ * 字面そのものの出所は `packages/logic/src/appraisal-labels.ts`（issue #2164。core の
  * `APPRAISAL_LABELS` と一致させる場所を1か所に集約した）。
  */
 function appraisalLabel(value: AppraisalValue): string {
@@ -1118,7 +1117,7 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
   return (
     <div className="mt-2">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span className="text-muted">評定:</span>
+        <span className="text-muted-foreground">評定:</span>
         {APPRAISAL_CHOICES.map((value) => (
           <button
             key={value}
@@ -1126,7 +1125,9 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
             disabled={busy !== null}
             className={cn(
               'rounded border px-1.5 py-0.5',
-              current === value ? 'border-fg text-fg' : 'border-border text-muted hover:text-fg',
+              current === value
+                ? 'border-foreground text-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground',
             )}
             onClick={() => void submit(value)}
           >
@@ -1134,9 +1135,9 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
           </button>
         ))}
         {current === undefined ? (
-          <span className="text-muted">（まだ評定していない）</span>
+          <span className="text-muted-foreground">（まだ評定していない）</span>
         ) : (
-          <span className="text-muted">
+          <span className="text-muted-foreground">
             {commitment.appraisedBy === undefined ? '' : `${commitment.appraisedBy} が付けた`}
             {commitment.workKind === undefined ? '' : `［種類: ${commitment.workKind}］`}
             {commitment.appraisalReason === undefined ? '' : `: ${commitment.appraisalReason}`}
@@ -1164,7 +1165,7 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
 
 function ClosedRow({ commitment }: { commitment: Commitment }) {
   return (
-    <li className="border-b border-border px-4 py-3 text-muted last:border-b-0">
+    <li className="border-b border-border px-4 py-3 text-muted-foreground last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px]">
         <Badge tone="ok">片付いた</Badge>
         <OriginBadge commitment={commitment} />

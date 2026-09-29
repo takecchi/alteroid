@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 
-import type { JournalEntry } from '~/lib/types';
+import type { JournalEntry } from '@alteroid/logic';
 
 /** 日誌の1行から辿れる、別の画面の詳細（issue #2064）。 */
 export interface JournalLink {
@@ -63,7 +63,7 @@ export function JournalEntryLinks({ entry }: { entry: JournalEntry }) {
   return (
     <div className="mt-2 flex flex-wrap gap-3 text-xs">
       {links.map((link) => (
-        <Link key={link.to} to={link.to} className="text-accent hover:underline">
+        <Link key={link.to} to={link.to} className="text-primary hover:underline">
           {link.label} →
         </Link>
       ))}

@@ -237,7 +237,7 @@ program
  * 会話（chat の履歴）。**読めるだけの面を作らない、が今回はその逆を直す。**
  *
  * `POST /chat` の SSE は流すだけで、後から読み直す口が無かった。Web
- * （`apps/web/app/routes/chat.tsx` / `apps/web/app/hooks/queries.ts`）は
+ * （`apps/web/app/routes/chat.tsx` / `packages/swr/src/hooks/queries.ts`）は
  * `GET /conversations` と `GET /conversations/{id}` の両方を使っているのに、
  * CLI からは0件だった。docs/PRD.md「インターフェース」は3面で同じことができると
  * 書いており、これはその等価性が崩れていたバグである（north_star 禁止1）。

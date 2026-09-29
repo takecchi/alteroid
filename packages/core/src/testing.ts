@@ -4,6 +4,7 @@ import {
   tallyArchiveContinuity,
   type ArchiveContinuity,
 } from './archive-continuity.js';
+import { assertArchivableSessionId } from './archive-session-id.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
 import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
@@ -927,6 +928,8 @@ export function createMemoryStores(): Stores {
      * `archive-contract.ts` の並行の検査（#1732）が赤くなる。
      */
     async archive(sessionId, transcript): Promise<ArchiveWrite> {
+      // 積めない sessionId は、3実装とも同じ例外で断る（issue #2233）。
+      assertArchivableSessionId(sessionId);
       const id = `${sessionId}-${nextId()}`;
       const previous = findPreviousArchiveForSession(sessionId);
       const fingerprint = fingerprintArchiveBody(transcript);

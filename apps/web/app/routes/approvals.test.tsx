@@ -20,7 +20,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { PendingApproval } from '~/lib/types';
+import type { PendingApproval } from '@alteroid/logic';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Approvals from './approvals';
@@ -426,7 +426,7 @@ describe('折り返しの付け忘れ（本2）', () => {
     expect(wrapper).not.toBeNull();
     const tokens = wrapper!.className.split(/\s+/);
     expect(tokens).toContain('break-words');
-    // **改行が潰れる不具合の修正**（Markdown 化とは別件）。`app.css` の
+    // **改行が潰れる不具合の修正**（Markdown 化とは別件）。`@alteroid/ui` の `styles.css` の
     // `white-space` 指定は `pre` に対する1件だけで `p` を狙う規則が無いため、
     // ここは CSS 既定の `white-space: normal` で描かれていた — 人間が改行を
     // 入れて答えても1行に潰れていた。
@@ -660,7 +660,7 @@ describe('取り下げ済みの表示（issue #963）', () => {
  * クローン（AI）が書いた文字列だけを Markdown で描く（`approvals.tsx`）。
  *
  * **Markdown の中身の正しさはここの仕事ではない** — それは
- * `apps/web/app/components/markdown.test.tsx` が持つ。ここが押さえるのは
+ * `packages/ui/src/components/markdown.test.tsx` が持つ。ここが押さえるのは
  * 「その欄が Markdown の描画経路を通るか／通らないか」だけである。だから
  * `## 見出し` を混ぜて `findByRole('heading', …)` で拾う形にしている
  * （`dashboard.test.tsx` / `reports.test.tsx` / `memory-detail.test.tsx` と

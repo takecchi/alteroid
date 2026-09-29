@@ -9,7 +9,7 @@
  * いた**（人間が `/approvals` を開かない限り「その後どうなったか」が分から
  * ない）。
  *
- * データ取得側（`useConversationApprovals`。`apps/web/app/hooks/queries.ts`）
+ * データ取得側（`useConversationApprovals`。`packages/swr/src/hooks/queries.ts`）
  * は #969 の時点で既に `pending: 'false'` で引いており、取り下げ済みの行も
  * 手元に来ている——直すのは描画側（`historyLines`）だけである。
  *
@@ -27,7 +27,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useJournalLive } from '~/hooks/use-journal-live';
+import { useJournalLive } from '@alteroid/swr';
 import { json, Providers, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
 
 import Chat from './chat';

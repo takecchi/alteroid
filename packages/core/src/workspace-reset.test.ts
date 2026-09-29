@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createMemoryStores } from './testing.js';
-import { resetWorkspaceState } from './workspace-reset.js';
+import { RESET_CONFIRM_GROUPS, resetWorkspaceState } from './workspace-reset.js';
 
 /**
  * `resetWorkspaceState` の中身は「何を残すか」がすべてなので、歯もそこへ
@@ -143,6 +143,36 @@ describe('resetWorkspaceState', () => {
       clearSessionLog: async () => 42,
     });
     expect(withOption.sessionLog).toBe(42);
+  });
+
+  /**
+   * ⭐ **issue #2224。`RESET_CONFIRM_GROUPS`（CLI の確認の文・`POST /reset` の
+   * OpenAPI description、両方の出所）が `WorkspaceResetSummary` の全キーを
+   * 重複や漏れ無く覆っていることを測る。**
+   *
+   * `apps/cli/src/reset.test.ts` の同種の歯（`SUMMARY_LABELS` 相手）と対で、
+   * こちらは**実物の `resetWorkspaceState` が返す鍵の集合**（=手で書き写した
+   * 型ではなく実装そのもの）と比べる——`reset-summary-shape.test.ts`
+   * （`apps/daemon/src/reset-summary-shape.test.ts`）と同じ測り方。
+   *
+   * **この歯が捕まえる穴**: `RESET_CONFIRM_GROUPS` から group を1つ（例:
+   * 「仕事のやり方」`practices`）消すと、その分のキーが確認の文からも
+   * `POST /reset` の description からも黙って消える——issue #2196 で一度
+   * 実際に起きた抜けと同じ形（そのときは CLI にだけ在った一覧が古いままで、
+   * `POST /reset` の description は #2224 で3か所目として見つかった）。
+   */
+  it('⭐ RESET_CONFIRM_GROUPS の keys が WorkspaceResetSummary の全キーを重複や漏れ無く覆っている', async () => {
+    const summary = await resetWorkspaceState(createMemoryStores());
+    // `sessionLog` は pg 構成でだけ付く（`WorkspaceResetSummary.sessionLog` の
+    // doc）。インメモリの器では出ないので、`reset-summary-shape.test.ts` と
+    // 同じく突き合わせる側に足す。
+    const expectedKeys = [...Object.keys(summary), 'sessionLog'].sort();
+    const coveredKeys = RESET_CONFIRM_GROUPS.flatMap((group) => group.keys).sort();
+    expect(
+      coveredKeys,
+      '【赤の意味】RESET_CONFIRM_GROUPS の keys が WorkspaceResetSummary の全キーと' +
+        '一致しない（漏れ・重複のどちらか）。新しいストアを足したなら group を足すこと。',
+    ).toEqual(expectedKeys);
   });
 
   it('何も無い状態で呼んでも全部0を返す（空の状態から作るテストで踏める形にしておく）', async () => {

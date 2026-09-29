@@ -53,13 +53,23 @@ import { describe, expect, it } from 'vitest';
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const WEB_APP_ROOT = path.join(ROOT, 'apps/web/app');
+/**
+ * 走査の根。画面（`apps/web/app`）と、画面から切り出した3つのパッケージの `src`。
+ * **「`Line[]` を保つ `useState` が1箇所しか無い」は Web UI 全体の主張である**——
+ * `apps/web/app` だけを見ると、切り出したパッケージに置いた2箇所目を数え漏らす。
+ */
+const WEB_UI_SOURCE_ROOTS = [
+  'apps/web/app',
+  'packages/ui/src',
+  'packages/logic/src',
+  'packages/swr/src',
+].map((dir) => path.join(ROOT, dir));
 const CHAT_TSX = 'apps/web/app/routes/chat.tsx';
 
 /** 変異試験・生成物・依存を対象から外す。 */
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 
-/** `apps/web/app` 配下の `.ts`/`.tsx` を、リポジトリ根からの相対パス（`/` 区切り）で集める。 */
+/** 走査の根の配下の `.ts`/`.tsx` を、リポジトリ根からの相対パス（`/` 区切り）で集める。 */
 function collectWebAppFiles(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (EXCLUDE_DIRS.has(entry.name)) continue;
@@ -118,7 +128,7 @@ export function findSetLinesUsingRetainedBy(source: string): string[] {
 }
 
 const allWebAppFiles: string[] = [];
-collectWebAppFiles(WEB_APP_ROOT, allWebAppFiles);
+for (const root of WEB_UI_SOURCE_ROOTS) collectWebAppFiles(root, allWebAppFiles);
 
 describe('/chat の lines state は増え続けない（issue #446 再発防止）', () => {
   it('前提: apps/web/app 配下から少なくとも1つのソースファイルを見つけている', () => {

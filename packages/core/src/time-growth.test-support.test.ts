@@ -99,9 +99,40 @@ describe('expectNotSuperlinear', () => {
       throw new Error('unreachable: 落ちるはず');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      expect(message).toMatch(/t\(2000\)=/);
-      expect(message).toMatch(/t\(8000\)=/);
+      // n は t(n) が minSmallMs に届くまで倍にされうるので、数は決め打ちしない。
+      expect(message).toMatch(/t\(\d+\)=/);
+      expect(message).toMatch(/出発点 2000/);
       expect(message).toMatch(/ratio=/);
     }
+  });
+
+  it('t(n) が小さすぎると n を倍にする（分母が器の揺れに埋もれないように）', () => {
+    // 出発点の n=1000 の線形の仕事は 1ms にも届かない。minSmallMs（既定 5ms）へ向けて倍にされる。
+    const result = expectNotSuperlinear(linearWork, identity, { n: 1000, maxScale: 1024 });
+    expect(result.n).toBeGreaterThan(1000);
+    expect(result.n).toBeLessThanOrEqual(1000 * 1024);
+  });
+
+  it('factor が 4 未満（指数を見る歯）なら、既定では n を倍にしない', () => {
+    const result = expectNotSuperlinear(linearWork, identity, { n: 1000, factor: 2 });
+    expect(result.n).toBe(1000);
+  });
+
+  it('大きいほうの測定の何回かに混みの波が乗っても、最小値を取るので線形は落ちない（#2214 の揺れ）', () => {
+    // 小さいほうと大きいほうを交互に測る。大きいほうの最初の3回にだけ 30ms の待ちを足す
+    // （器が混んだ波が大きいほうにだけ乗った状態を模す）。中央値なら比が跳ねるが、最小値は動かない。
+    let largeCalls = 0;
+    const result = expectNotSuperlinear(
+      (n: number) => {
+        if (n >= 20_000_000) {
+          largeCalls += 1;
+          if (largeCalls <= 3) busyWaitMs(30);
+        }
+        return linearWork(n);
+      },
+      identity,
+      { n: 5_000_000, minSmallMs: 0 },
+    );
+    expect(result.ratio).toBeLessThan(8);
   });
 });

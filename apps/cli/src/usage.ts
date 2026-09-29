@@ -5,6 +5,7 @@ import {
   describeAccountUsage,
   describeUnreadableUsage,
   describeUnrecordedManagers,
+  describeUsageDateOrder,
   describeWebSearchRequests,
   formatUsd,
   summarizeUsage,
@@ -114,29 +115,14 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
 /**
  * `to` が `from` より前だと、絞り込みは常に空を返す（issue #2155）。
  *
- * デーモンの `usageQuery`（`apps/daemon/src/app.ts`）は `from` / `to` の
- * 前後を検査せず `date >= from AND date <= to` で絞るだけなので、
- * `to < from` のときは例外にならず単に0件になる ——
- * `renderUsage` はその0件を「その範囲には記録が無い。」としか出さないので、
- * 「期間の指定が逆」と「その期間に本当に記録が無い」が区別できない
- * （Web の `usage.tsx` `dateNotices` と同じ穴）。
- *
- * **`alteroid usage`（本体）と chat の `/usage` の両方から呼ぶ。** どちらも
- * `renderUsage` を共有しているのに、この注記だけ片方にしか無いと「片方の
- * 入口でしかできないこと」を作ってしまう。
- *
- * `from` / `to` はどちらも `GET /usage` の応答が返ってきた後の値なので、
- * デーモンの `usageDateSchema`（正規表現のみ）は既に通っている——`YYYY-MM-DD`
- * の辞書式比較がそのまま日付の前後に一致する。
+ * **持ち主は core の {@link describeUsageDateOrder}（`usage-format.ts`）へ移した
+ * （issue #2211）。** CLI（`alteroid usage` 本体・chat の `/usage`）・Web
+ * （`usage.tsx`）・クローンの `usage_read` の3つの入口が同じ関数を呼ぶ——
+ * どれか1つにしか無いと「その入口でしかできないこと」を作ってしまう。ここで
+ * 再輸出しているのは、既存の読み手（`chat.ts` / `usage.test.ts` の
+ * `from './usage.js'`）を変えずに済ませるためである。
  */
-export function describeUsageDateOrder(
-  from: string | undefined,
-  to: string | undefined,
-): string | null {
-  if (from === undefined || to === undefined) return null;
-  if (to >= from) return null;
-  return `to（${to}）が from（${from}）より前なので、この範囲には1日も入らない`;
-}
+export { describeUsageDateOrder };
 
 /**
  * 台帳の集計を、人間が読める形へ。CLI 本体（`alteroid usage`）と chat の

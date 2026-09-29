@@ -26,6 +26,7 @@ import {
   createRunnerRegistry,
   createScheduler,
   createTokenPoolService,
+  createTokenPoolWriteLock,
   createTokenRotator,
   noteDroppedRecord,
   tokenRestoreEntry,
@@ -1441,6 +1442,15 @@ export async function main(): Promise<void> {
   });
 
   /**
+   * `tokenPoolService` と `tokenRotator` が共有する、トークンの表への書き込み
+   * の鍵（Issue #2200）。**1つだけ作って両方へ渡す**——別々のインスタンスを
+   * 渡すと、それぞれの内側の `serial()` が互いを待たない状態（Issue #2200 の
+   * 実測: 人間の `PUT /tokens` の直後に回し手の `observe()` が古い一覧で
+   * 書き戻し、足した3本目が消えた）に戻る。
+   */
+  const tokenPoolWriteLock = createTokenPoolWriteLock();
+
+  /**
    * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここで
    * 作るのは器の読み書きの口だけで、検知・切替は回し手が持つ（`createTokenRotator`）。
    *
@@ -1450,6 +1460,7 @@ export async function main(): Promise<void> {
    */
   const tokenPoolService = createTokenPoolService({
     stores,
+    writeLock: tokenPoolWriteLock,
     /**
      * **人間が鍵を足した / 外した / 戻した / 並べ替えた瞬間を契機にする**
      * （人間の決定 2026-09-07）。
@@ -1636,6 +1647,7 @@ export async function main(): Promise<void> {
    */
   const tokenRotator = createTokenRotator({
     stores,
+    writeLock: tokenPoolWriteLock,
     probe: {
       // **本番の仕事で試さない**（Issue #393 の設計の骨）。推論が走らない probe。
       probe: (token) =>

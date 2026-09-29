@@ -9,6 +9,10 @@ export default defineConfig({
       // 解いている**が、ここ（リポジトリ共通の vitest）はそれを読まないので同じ対応を置く。
       // 他のワークスペースは `~/` を使わないので、共通に置いても衝突しない。
       '~': fileURLToPath(new URL('./apps/web/app', import.meta.url)),
+      // `packages/ui` の中の shadcn の部品が使う別名（`packages/ui/components.json` の
+      // aliases。`shadcn add` が吐く形のまま）。**`packages/ui` の外は `@/` を使わない**
+      // （`eslint.config.js` が止める）ので、共通に置いても衝突しない。
+      '@': fileURLToPath(new URL('./packages/ui/src', import.meta.url)),
     },
   },
   test: {
@@ -36,6 +40,9 @@ export default defineConfig({
       // 衝突しない（`packages/*/src/**/*.test.ts` 等はここには当たらない）。
       '*.test.ts',
       'packages/*/src/**/*.test.ts',
+      // Web UI の部品と通信の層（`packages/ui` / `packages/swr`）は描いて試すものを
+      // `.tsx` で持つ（apps/web の `app/` と同じく、各ファイルの先頭で jsdom を指定する）。
+      'packages/*/src/**/*.test.tsx',
       'apps/*/src/**/*.test.ts',
       // apps/web は react-router の作法で `app/` に置く（`src/` ではない）。
       // 画面を描いて試すものだけ `.tsx`（各ファイルの先頭で jsdom を指定する）。

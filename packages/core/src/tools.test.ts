@@ -13357,6 +13357,68 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     // 台帳自体は始まっているので、その始点は分かる。
     expect(reply).toContain('台帳の始点: 2026-08-14');
   });
+
+  /**
+   * issue #2211: `to` が `from` より前だと絞り込みは常に0件になる（issue
+   * #2155）が、以前は CLI（`alteroid usage` / chat の `/usage`）と Web
+   * （`usage.tsx`）だけが「絞り込みが逆」と注記し、`usage_read` は黙って
+   * 「その範囲には記録が無い」（＝「使っていない」と読める）を返していた。
+   * 同じ `describeUsageDateOrder`（core）を通して、同じ文言を応答の先頭に
+   * 添える。
+   */
+  it('to が from より前なら、注記を応答の先頭に添える（CLI・Web と同じ文言）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { from: '2026-09-10', to: '2026-09-01' });
+
+    expect(
+      reply.startsWith(
+        'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
+      ),
+    ).toBe(true);
+    // 注記の後ろに続く0件の行を「使っていない」と読めないよう、理由が先に来る。
+    expect(reply).toContain('その範囲には記録が無い');
+  });
+
+  it('to と from が同じ日、または順が正しいなら注記を出さない', async () => {
+    const h = harness();
+    await spent(h);
+
+    const same = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-01' });
+    const ordered = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(same).not.toContain('より前なので');
+    expect(ordered).not.toContain('より前なので');
+  });
+
+  it('from / to のどちらかしか渡さないときは注記を出さない（比較しようがない）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const onlyTo = await h.call('usage_read', { to: '2026-09-01' });
+    const onlyFrom = await h.call('usage_read', { from: '2026-09-30' });
+
+    expect(onlyTo).not.toContain('より前なので');
+    expect(onlyFrom).not.toContain('より前なので');
+  });
+
+  it('軸モードでも、同じ注記を応答の先頭に添える（まとめ表示と同じ入口を共有する）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', {
+      from: '2026-09-10',
+      to: '2026-09-01',
+      axis: 'model',
+    });
+
+    expect(
+      reply.startsWith(
+        'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('usage_read の Web 検索の回数（webSearchRequests。Issue #1950）', () => {
@@ -14869,7 +14931,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
 /**
  * `inbox_flow.retained`（Issue #1264、案1a）。一覧の1行（`head`）は太らせない
- * ——`apps/web/app/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
+ * ——`packages/swr/src/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
  * （見出しは既存の4つの総数のまま）。クローンは `journal_read id=<id>`
  * の全文モードで読む——そちらの本文（`body`）に載ることを固定する。
  */
@@ -17898,6 +17960,56 @@ describe('appraisal_stats — 評定の内訳を数える道具（#1278）', () 
     const result = await stats?.handler({} as never, {});
     const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
     expect(reply).toContain('評定行 201 件');
+  });
+
+  /**
+   * #2223 — 仕事の種類（`workKind`）ごとの内訳は自由文字列の種類数だけ行が増える
+   * ので、`describeAppraisalStats` の「固定個数だから予算は要らない」という
+   * 前提が崩れていた。この道具（MCP）の側だけに予算（`APPRAISAL_STATS_WORK_KIND_BUDGET`）
+   * を掛けたので、種類を大量に積んでも応答が溢れず、切ったら省略の断りが出る
+   * ことをここで固定する。
+   */
+  it('種類が大量にあっても応答は溢れず、切ったら省略の断りが出る（#2223）', async () => {
+    const stores = createMemoryStores();
+    const kindCount = 300;
+    // 予算を確実に超えるよう、種類名を長く・全部ユニークにする（最初の1件だけで
+    // 予算を超える形にはしない——`fillListingBudget` の「1件だけで予算を超える
+    // ときは切って出す」側を混ぜて測らないため）。
+    for (let i = 0; i < kindCount; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
+        grounds: '',
+        appraisal: {
+          target: 'commitment',
+          id: `c${i}`,
+          value: 'good',
+          by: 'clone',
+          workKind: `種類${String(i).padStart(4, '0')}${'あ'.repeat(90)}`,
+        },
+      });
+    }
+    const tools = createCloneTools({
+      stores,
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const stats = tools.find((entry) => entry.name === 'appraisal_stats');
+    const result = await stats?.handler({} as never, {});
+    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
+    // 母集団自体は全件数えている（総数は切れていない——切れるのは内訳の行のほう）。
+    expect(reply).toContain(`評定行 ${String(kindCount)} 件`);
+    // 応答全体は溢れず、予算（8,000）+ 他の節の分でおさまる。
+    expect(reply.length).toBeLessThan(12_000);
+    // 切ったので省略の断りと、続きを取る口が無いという事実が出る。
+    expect(reply).toContain('は省略');
+    expect(reply).toContain('続きを取る口はまだ無い');
+    // 先頭側（件数の多い順。全部同数なのでここでは先着順）は出ているが、
+    // 末尾は積みきれず落ちている。
+    expect(reply).toContain('種類0000');
+    expect(reply).not.toContain(`種類${String(kindCount - 1).padStart(4, '0')}`);
   });
 });
 

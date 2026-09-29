@@ -22,9 +22,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useJournalLive } from '~/hooks/use-journal-live';
-import { MANAGERS_PAGE } from '~/hooks/use-managers-window';
-import type { ManagerSummary } from '~/lib/types';
+import { useJournalLive, MANAGERS_PAGE } from '@alteroid/swr';
+import type { ManagerSummary } from '@alteroid/logic';
 import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
 
 import Managers from './managers';

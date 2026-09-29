@@ -108,6 +108,11 @@ describe('新しい会話', () => {
           ],
         });
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -154,6 +159,11 @@ describe('新しい会話', () => {
   it('受信が終わると入力へ戻る（送信中のままにしない）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -181,6 +191,11 @@ describe('新しい会話', () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       // サーバは何も返さない。一覧に出るなら、それは手元で入れた分である。
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -219,6 +234,11 @@ describe('受信をやめる', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -260,6 +280,11 @@ describe('受信をやめる', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -294,6 +319,11 @@ describe('考えている…の合図', () => {
         // 「待ち時間が長い」場面そのもの。ここで出るなら、出どころは画面しかない。
         return sse([], { keepOpen: true, signal: init?.signal });
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -317,6 +347,11 @@ describe('考えている…の合図', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -353,6 +388,11 @@ describe('考えている…の合図', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -386,6 +426,11 @@ describe('順番待ちの合図（queued）', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -408,6 +453,11 @@ describe('順番待ちの合図（queued）', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -450,6 +500,11 @@ describe('枠が閉じている合図（usage_limited）', () => {
           { signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -527,6 +582,11 @@ describe('会話の切り替え', () => {
           messages: [{ id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '別の会話' }],
         });
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -558,6 +618,11 @@ describe('会話の切り替え', () => {
           messages: [{ id: 'm1', at: '2026-08-13T00:00:00Z', role: 'inbound', text: '別の会話' }],
         });
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -677,6 +742,11 @@ describe('前の会話の行の扱い（#437）', () => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({ conversationId: CONVERSATION_ID, messages: [] });
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -792,6 +862,11 @@ describe('会話を跨いだ手元の行の生死（配線。issue #446）', () 
       if (url.includes('/conversations/conv-c')) {
         return json({ conversationId: 'conv-c', messages: [] });
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -854,6 +929,11 @@ describe('遡り切れていないことを言う', () => {
     return stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) return json(detail);
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -915,6 +995,8 @@ describe('会話一覧の断り書き（#418 の裏返し）', () => {
       if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
         return json({ conversationId: CONVERSATION_ID, messages: [] });
       }
+      // issue #2210 以降の `conversationApprovals.error` 対応（上の doc と同じ理由）。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json(list);
       return undefined;
     });
@@ -1016,6 +1098,11 @@ describe('吹き出しの折り返し（本2）', () => {
   it('人間の吹き出しに break-words が付いている', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -1047,6 +1134,11 @@ describe('送信ボタンの狭幅対応（本6）', () => {
   it('「送る」のラベルは hidden md:inline を持つ span に包まれている（クラス名の存在のみ。実際に隠れることはここでは確認できない）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -1063,6 +1155,11 @@ describe('送信ボタンの狭幅対応（本6）', () => {
   it('「送る」ボタンは aria-label="送る" を明示している（getByRole の名前一致だけでは確かめられない — 属性を直接見る）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -1081,6 +1178,11 @@ describe('送信ボタンの狭幅対応（本6）', () => {
           { keepOpen: true, signal: init?.signal },
         );
       }
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });
@@ -1118,6 +1220,11 @@ describe('ChatPane の横向き safe-area inset（本4）', () => {
   it('ヘッダ・本文・入力欄の帯が pl / pr の safe-area クラスを持つ（クラス名の存在のみ）', async () => {
     stubFetch((url, init) => {
       if (url.endsWith('/chat')) return sse(STREAM, { signal: init?.signal });
+      // **issue #2210 以降**: `chat.tsx` が `conversationApprovals.error` を見て
+      // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+      // fetch`）にすると既存の `alert` 判定と衝突しうる。この試験の対象では
+      // ないので、素直に0件で成功させる。
+      if (url.includes('/approvals')) return json({ approvals: [] });
       if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
       return undefined;
     });

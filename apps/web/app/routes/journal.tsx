@@ -3,16 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
-import { Page } from '~/components/page';
-import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useJournalWindow } from '~/hooks/use-journal-window';
-import { useMeasuredHeight } from '~/hooks/use-measured-height';
-import { summarizeJournalEntry } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
+import { Page, Badge, Card, Empty, ErrorNote, Spinner, useMeasuredHeight, cn } from '@alteroid/ui';
+import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
+import { formatDateTime, formatRelative, shiftForPrepend } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
-import { shiftForPrepend } from '~/lib/journal-window';
-import type { JournalEntry, JournalEntryType } from '~/lib/types';
+import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
 
 /**
  * 種別ごとの見た目の強さ。**`Record<JournalEntryType, ...>` で縛ってあるので、
@@ -93,7 +88,7 @@ const EDGE_THRESHOLD_ITEMS = 20;
 
 /**
  * 「上端に居る」と判定するしきい値（px）。`shiftForPrepend`（
- * `~/lib/journal-window.ts`）へ渡す `atTop` を作るのに使う。
+ * `packages/logic/src/journal-window.ts`）へ渡す `atTop` を作るのに使う。
  *
  * ⚠️ **この数字も実機で調整すべきもので、テストが通っても正しさの根拠には
  * ならない。** 0 ちょうどだと「あと数 px」で上端から離れただけの状態を
@@ -288,7 +283,7 @@ export default function Journal() {
         <div className="mb-3 flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
             <Search
-              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted"
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
               aria-hidden
             />
             <input
@@ -297,7 +292,7 @@ export default function Journal() {
               onChange={(event) => setDraft(event.target.value)}
               placeholder="本文を語で探す（大文字小文字を区別しない部分一致）"
               aria-label="日誌を語で探す"
-              className="w-full rounded border border-border bg-bg py-1.5 pr-2 pl-8 text-sm text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+              className="w-full rounded border border-border bg-background py-1.5 pr-2 pl-8 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
             />
           </div>
         </div>
@@ -309,7 +304,7 @@ export default function Journal() {
           ときの目印にならない（`memory_read` の注記と同じ倒し方）。
         */}
         {committed !== '' && (
-          <p className="mb-3 text-[11px] text-muted">
+          <p className="mb-3 text-[11px] text-muted-foreground">
             tool_use の input・worker_wait・turn_usage
             は探す対象に入っていない（そこにだけ書かれている語は当たらない）。
           </p>
@@ -323,8 +318,8 @@ export default function Journal() {
               className={cn(
                 'rounded border px-2 py-1 text-[11px] transition-colors',
                 selected.includes(type)
-                  ? 'border-accent bg-accent/15 text-accent'
-                  : 'border-border text-muted hover:text-fg',
+                  ? 'border-primary bg-primary/15 text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground',
               )}
             >
               {type}
@@ -334,7 +329,7 @@ export default function Journal() {
             <button
               type="button"
               onClick={clearSelected}
-              className="ml-1 text-[11px] text-muted underline hover:text-fg"
+              className="ml-1 text-[11px] text-muted-foreground underline hover:text-foreground"
             >
               解除
             </button>
@@ -360,6 +355,32 @@ export default function Journal() {
       />
     </Page>
   );
+}
+
+/**
+ * 0件のときの文言を組み立てる。
+ *
+ * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
+ * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
+ * 種別チップ（`selected`）で絞ったときは選んだ種別を名指しし、検索語
+ * （`q`）と両方かかっているときは両方を言う。**どちらも掛かっていない
+ * ときの文言（`selected.length === 0 && q === ''`）と、検索語だけで絞った
+ * ときの文言（`selected.length === 0 && q !== ''`）は変えない** —
+ * 後者には既に「この条件の中では」という注記とテストが在る
+ * （`journal.test.tsx`「当たらなかったら、その語では無いと言う」）。
+ */
+function journalEmptyMessage(selected: readonly JournalEntryType[], q: string): string {
+  const typeLabel = selected.length > 0 ? `type=${selected.join(',')}` : undefined;
+  if (typeLabel === undefined && q === '') {
+    return 'この条件では何も記録されていない。';
+  }
+  if (typeLabel === undefined) {
+    return `「${q}」に当たる記録は無い（この条件の中では）。`;
+  }
+  if (q === '') {
+    return `${typeLabel} に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
+  }
+  return `${typeLabel} に絞った上で、「${q}」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
 }
 
 function JournalBody({
@@ -428,17 +449,13 @@ function JournalBody({
         {isLoadingInitial ? (
           <Spinner />
         ) : entries.length === 0 ? (
-          <Empty>
-            {q === ''
-              ? 'この条件では何も記録されていない。'
-              : `「${q}」に当たる記録は無い（この条件の中では）。`}
-          </Empty>
+          <Empty>{journalEmptyMessage(selected, q)}</Empty>
         ) : (
           <Virtualizer
             ref={virtualizerRef}
             scrollRef={scrollAreaRef}
             startMargin={startMargin}
-            // **決定そのものは `shiftForPrepend` が持つ**（`~/lib/journal-window.ts`）。
+            // **決定そのものは `shiftForPrepend` が持つ**（`packages/logic/src/journal-window.ts`）。
             // ここでインラインの `&&`/`!` 式を書かない — 書くと、測れるはず
             // の決定まで JSX の中に埋もれて測れなくなる（人間の指示、
             // 2026-08-23）。
@@ -459,13 +476,13 @@ function JournalBody({
               type="button"
               onClick={loadOlder}
               disabled={isLoadingOlder}
-              className="w-full rounded-md border border-border py-2 text-sm text-muted hover:text-fg disabled:opacity-60"
+              className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
             >
               {isLoadingOlder ? '読み込み中…' : `もっと遡る（いま ${entries.length} 件）`}
             </button>
           )}
           {olderStatus === 'end' && (
-            <p className="py-2 text-center text-xs text-muted">
+            <p className="py-2 text-center text-xs text-muted-foreground">
               これより古い記録は無い（全 {entries.length} 件）。
             </p>
           )}
@@ -478,7 +495,7 @@ function JournalBody({
             の中の、より詳しい断り）。
           */}
           {olderStatus === 'end' && horizonNote !== undefined && (
-            <p className="py-2 text-center text-xs text-muted">{horizonNote}</p>
+            <p className="py-2 text-center text-xs text-muted-foreground">{horizonNote}</p>
           )}
           {olderStatus === 'blocked' && (
             <BlockedNote>
@@ -496,7 +513,7 @@ function JournalBody({
  * `pageOutcome` が `'blocked'` を返したとき（同一 `at` の詰まりで自動では
  * 進めない）に出す。**`Empty` や「これより古い記録は無い」と同じ顔にしない**
  * — 終端でも空でもない、本物の限界だと分かる形にする
- * （`~/lib/journal-window.ts` の `pageOutcome` の doc）。見た目は既存の
+ * （`packages/logic/src/journal-window.ts` の `pageOutcome` の doc）。見た目は既存の
  * `ErrorNote`（`components/ui.tsx`）と同じ配色の作法を warn 色で使い回す。
  */
 function BlockedNote({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -524,15 +541,17 @@ function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean })
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-start gap-3 text-left"
       >
-        <span className="w-24 shrink-0 font-mono text-[11px] text-muted">
+        <span className="w-24 shrink-0 font-mono text-[11px] text-muted-foreground">
           {formatDateTime(entry.at)}
         </span>
         <Badge tone={TONE[entry.type]}>{entry.type}</Badge>
         {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-        <span className="min-w-0 flex-1 truncate text-sm text-muted">
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {summarizeJournalEntry(entry)}
         </span>
-        <span className="shrink-0 text-[11px] text-muted">{formatRelative(entry.at)}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {formatRelative(entry.at)}
+        </span>
       </button>
 
       {open && (
@@ -544,7 +563,7 @@ function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean })
           */}
           <JournalEntryLinks entry={entry} />
           {/* 掘れば生の中身まで降りられること（PRD 可観測性）。要約で止めない。 */}
-          <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-bg p-2 text-xs text-muted">
+          <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-background p-2 text-xs text-muted-foreground">
             {JSON.stringify(entry, null, 2)}
           </pre>
         </>
