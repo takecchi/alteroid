@@ -9,11 +9,41 @@ const dateTime = new Intl.DateTimeFormat('ja-JP', {
   minute: '2-digit',
 });
 
+/** `dateTime` に年を足しただけの書式（#2140）。今年でない時刻にだけ使う。 */
+const dateTimeWithYear = new Intl.DateTimeFormat('ja-JP', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+/**
+ * 「今年か」を判定するためだけの書式（#2140）。`dateTime` / `dateTimeWithYear`
+ * と同じく、既定のタイムゾーン（閲覧者の端末）を構築時に捕まえる——
+ * `Date.getFullYear()` は使わない。理由はこのファイルの他の Intl インスタンスと
+ * 同じで、`process.env.TZ` を実行時に変えても効くかどうかが実装依存になる。
+ * 年の数字だけを文字列で比較するので、ロケールの年の書式（"2026年" 等）を
+ * 読み解く必要が無い。
+ */
+const yearOnly = new Intl.DateTimeFormat('ja-JP', { year: 'numeric' });
+
 const timeOnly = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' });
 
-export function formatDateTime(iso: string): string {
+/**
+ * 日時を絶対時刻で出す。**今年ではない時刻にだけ年を足す**（#2140）——
+ * ちょうど1年違う時刻が同じ文字列になっていた（`09/29 16:00` が2025年も
+ * 2026年も同じ）。今年かどうかは**閲覧者の端末の時刻**で決める（`now`、
+ * 既定は `Date.now()`）。今年の時刻は、直すまでの見た目と1文字も変わらない。
+ *
+ * `now` を引数にできるのはテストで固定するためで、呼び出し側は増やさなくてよい
+ * （既定値がある限り、既存の呼び出しは1つも変えなくてよい）。
+ */
+export function formatDateTime(iso: string, now: number = Date.now()): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : dateTime.format(date);
+  if (Number.isNaN(date.getTime())) return iso;
+  const isThisYear = yearOnly.format(date) === yearOnly.format(new Date(now));
+  return isThisYear ? dateTime.format(date) : dateTimeWithYear.format(date);
 }
 
 export function formatTime(iso: string): string {
