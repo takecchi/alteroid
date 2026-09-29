@@ -4,7 +4,7 @@ import { stdout } from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { clearCredential, readCredential, writeCredential } from './credentials.js';
-import { resolveTarget, type Target } from './target.js';
+import { isRunnerContainer, resolveTarget, type Target } from './target.js';
 
 /**
  * `alteroid login` — ブラウザでログインして、この端末用のアクセストークンを貰う。
@@ -219,6 +219,14 @@ export async function whoamiCommand(): Promise<void> {
       };
 
   stdout.write(`接続先: ${target.baseUrl}\n`);
+  // #2093 — runner の器の中で手元のデーモンに繋いでいるときは、本番と
+  // 誤認されないように1行添える(`resolveTarget` は runner の中では既に
+  // 居るデーモンにしか繋がない——起こしはしない。ここはその接続先が
+  // 本番ではないことを言うだけで、判定そのものは `isRunnerContainer` に
+  // 1本化してある)。remote なら(`ALTEROID_URL` を指定しているので)言わない。
+  if (!target.remote && isRunnerContainer()) {
+    stdout.write('この接続は runner の器の中の手元のデーモンです（本番ではありません）\n');
+  }
   if (me.kind === 'operator') {
     stdout.write('資格: 実行環境の持ち主（state/daemon.json を読めること）\n');
     return;
