@@ -1,0 +1,246 @@
+import { describe, expect, it } from 'vitest';
+
+import { inspectBashCommand } from './bash-wait-guard.js';
+
+/**
+ * issue #2068 —— `gh pr merge --delete-branch`/`-d` の検出が、次の3か所
+ * ですり抜けていた: (A) コマンドの位置と `gh` のあいだの**前置きのコマンド**
+ * （`sudo`/`nice`/`nohup`/`command`/`exec`/`xargs`/`setsid`/`stdbuf` 等、
+ * オプション付きを含む） (B) 既存の前置き（`env`/`timeout`）自身のオプション
+ * （`env -i`/`env --`/`env -S`、`timeout -k`/`timeout --signal=`） (C) 代入
+ * の値が空白を含む引用符形（`X="a b"`） (D) `gh` という語そのものの書き方
+ * （パス付き・`\gh`・引用符で囲んだだけ） (E) `gh` と `pr` のあいだの
+ * リポジトリ選択フラグ（`-R`/`--repo`） (F) `-d` の短縮オプションの束ね書き
+ * （`-sd` 等）・ANSI-C/`$"…"` クオート。
+ *
+ * 依頼者が main 795d829 の写しで実測した結果（`inspectBashCommand(cmd)
+ * .blocked`）は、Issue 本文に挙げた31形のうち28形が `false`（すり抜け）
+ * だった。直し方は `bash-wait-guard.ts` の `LEADING_COMMAND_PREFIX_SRC`・
+ * `FLOCK_PREFIX_SRC`（A族）・`ENV_COMMAND_OPTION_SRC`・
+ * `TIMEOUT_COMMAND_OPTION_SRC`（B族）・`ENV_ASSIGNMENT_VALUE_SRC`（C族）・
+ * `GH_WORD_SRC`（D族）・`GH_REPO_FLAG_SRC`（E族）・
+ * `SHORT_DELETE_BRANCH_FLAG_SRC`（F族）の doc 参照。
+ */
+describe('gh-pr-merge-delete-branch: issue #2068 の28形すべてを弾く', () => {
+  const knownGaps: ReadonlyArray<[string, string]> = [
+    // A族——前置きのコマンド（オプション付きを含む）
+    ['A: sudo（オプション無し、--delete-branch）', 'sudo gh pr merge 1 --delete-branch'],
+    ['A: sudo -u bot（分離した値）', 'sudo -u bot gh pr merge 1 -d'],
+    ['A: nice -n 10（分離した値）', 'nice -n 10 gh pr merge 1 -d'],
+    ['A: nohup', 'nohup gh pr merge 1 -d'],
+    ['A: command', 'command gh pr merge 1 -d'],
+    ['A: exec', 'exec gh pr merge 1 -d'],
+    ['A: xargs（オプション無し）', 'xargs gh pr merge -d'],
+    ['A: xargs -I{}（くっついた値）', 'xargs -I{} gh pr merge {} -d'],
+    ['A: setsid', 'setsid gh pr merge 1 -d'],
+    ['A: stdbuf -oL（くっついた値）', 'stdbuf -oL gh pr merge 1 -d'],
+
+    // B族——env / timeout 自身のオプション
+    ['B: env -i', 'env -i gh pr merge 1 -d'],
+    ['B: env --', 'env -- gh pr merge 1 -d'],
+    ['B: env -S "x"', 'env -S "x" gh pr merge 1 -d'],
+    ['B: timeout -k 5 30', 'timeout -k 5 30 gh pr merge 1 -d'],
+    ['B: timeout --signal=KILL 30', 'timeout --signal=KILL 30 gh pr merge 1 -d'],
+
+    // C族——代入の値が空白を含む引用符形
+    ['C: X="a b"（二重引用符）', 'X="a b" gh pr merge 1 -d'],
+    ['C: X=\'a b\'（単一引用符）', "X='a b' gh pr merge 1 -d"],
+
+    // F族——短縮オプションの束ね書き・ANSI-C/$"…"クオート
+    ['F: -sd', 'gh pr merge 1 -sd'],
+    ['F: -ds', 'gh pr merge 1 -ds'],
+    ['F: -msd', 'gh pr merge 1 -msd'],
+    ['F: -sdt x（d の後ろに値を取る t が続く）', 'gh pr merge 1 -sdt x'],
+    ['F: $\'-d\'（ANSI-C クオート）', "gh pr merge 1 $'-d'"],
+    ['F: $"-d"', 'gh pr merge 1 $"-d"'],
+
+    // E族——gh と pr のあいだのリポジトリ選択フラグ
+    ['E: gh -R o/r pr merge', 'gh -R o/r pr merge 1 -d'],
+    ['E: gh --repo o/r pr merge', 'gh --repo o/r pr merge 1 -d'],
+
+    // D族——gh という語そのものの書き方
+    ['D: パス付き（/usr/local/bin/gh）', '/usr/local/bin/gh pr merge 1 -d'],
+    ['D: バックスラッシュ（\\gh）', '\\gh pr merge 1 -d'],
+    ['D: 引用符で囲んだだけ（"gh"）', '"gh" pr merge 1 -d'],
+  ];
+
+  // Issue 本文の31形のうち、既に true だった3形（回帰確認として残す。
+  // 28形の対象ではない——`gh  pr merge`/`gh pr  merge` は複数空白、
+  // `GH_REPO=o/r gh …` は素の環境変数代入で、どちらも直す前から `\s+`/
+  // `ENV_ASSIGNMENT_SRC` がすでに読めていた）。
+  const alreadyTrueBeforeThisIssue: ReadonlyArray<[string, string]> = [
+    ['複数空白（gh と pr のあいだ）', 'gh  pr merge 1 -d'],
+    ['複数空白（pr と merge のあいだ）', 'gh pr  merge 1 -d'],
+    ['GH_REPO=o/r（素の環境変数代入、既存の ENV_ASSIGNMENT_SRC）', 'GH_REPO=o/r gh pr merge 1 -d'],
+  ];
+
+  for (const [label, command] of [...knownGaps, ...alreadyTrueBeforeThisIssue]) {
+    it(`${label}: 弾く`, () => {
+      const verdict = inspectBashCommand(command);
+      expect(verdict.blocked).toBe(true);
+      if (!verdict.blocked) throw new Error('unreachable');
+      expect(verdict.form).toBe('gh-pr-merge-delete-branch');
+    });
+  }
+
+  it('28形すべてで knownGaps の件数が28件であること（表と実装のずれを検知する）', () => {
+    expect(knownGaps.length).toBe(28);
+  });
+});
+
+/**
+ * 偽陽性にならないこと —— A〜F族の直しを足しても、既存の「通す形」が
+ * 巻き込まれて弾かれるようになっていないか。Issue 本文・#1764/#1910/#1991
+ * の受け入れ基準（引用符の中・別コマンドの引数・値を取るフラグの値）を
+ * そのまま対照にする。
+ */
+describe('gh-pr-merge-delete-branch: issue #2068 の直しを足しても偽陽性にならない', () => {
+  it('引用符の中の sudo gh pr merge -d は通す（echo の引数）', () => {
+    expect(inspectBashCommand('echo "sudo gh pr merge 1 -d"').blocked).toBe(false);
+  });
+
+  it('gh pr merge 1 -bd は通す（-b は値を取るので d は --body の値）', () => {
+    expect(inspectBashCommand('gh pr merge 1 -bd').blocked).toBe(false);
+  });
+
+  it('gh pr merge 1 --squash は通す（--delete-branch も -d も無い）', () => {
+    expect(inspectBashCommand('gh pr merge 1 --squash').blocked).toBe(false);
+  });
+
+  it('sudo gh pr merge 1 --squash は通す（sudo は読み飛ばすが --squash に -d は無い）', () => {
+    expect(inspectBashCommand('sudo gh pr merge 1 --squash').blocked).toBe(false);
+  });
+
+  it('grep -- \'-sd\' f は通す（gh pr merge の呼び出しがそもそも無い）', () => {
+    expect(inspectBashCommand("grep -- '-sd' f").blocked).toBe(false);
+  });
+
+  it('gh pr create --body の引用符の中の sudo gh pr merge -d は通す（--body の値として潰される）', () => {
+    expect(
+      inspectBashCommand('gh pr create --body "sudo gh pr merge 1 -d"').blocked,
+    ).toBe(false);
+  });
+
+  it('/usr/local/bin/gh pr view 1 は通す（パス付き gh でも merge ではなく view）', () => {
+    expect(inspectBashCommand('/usr/local/bin/gh pr view 1').blocked).toBe(false);
+  });
+
+  it('-d を含む別の語（-dev 等）と誤認しない（回帰確認、F族の直しで壊していないこと）', () => {
+    expect(inspectBashCommand('gh pr merge 123 -dev').blocked).toBe(false);
+  });
+});
+
+/**
+ * bonus —— Issue の必須28形には無いが、A〜F族の依頼文がそのまま挙げていた
+ * 追加の書き方（`--repo=`・`./gh`・単一引用符の `'gh'`）。28形の表には
+ * 含めていない（数え上げの対象は上の describe だけ）。
+ */
+describe('gh-pr-merge-delete-branch: issue #2068 の追加確認（28形の表には含めない bonus）', () => {
+  it('E bonus: --repo=o/r（= 区切り）', () => {
+    expect(inspectBashCommand('gh --repo=o/r pr merge 1 -d').blocked).toBe(true);
+  });
+
+  it('D bonus: ./gh（相対パス）', () => {
+    expect(inspectBashCommand('./gh pr merge 1 -d').blocked).toBe(true);
+  });
+
+  it("D bonus: 'gh'（単一引用符）", () => {
+    expect(inspectBashCommand("'gh' pr merge 1 -d").blocked).toBe(true);
+  });
+
+  it('A bonus: flock <file>（オプション無し）', () => {
+    expect(inspectBashCommand('flock /tmp/l gh pr merge 1 -d').blocked).toBe(true);
+  });
+
+  // ⚠️ 弾けない形（`FLOCK_PREFIX_SRC` の doc）。`flock` 自身のオプション
+  // 文法までは解いていないので、`-n` のようなオプションが付くと `flock`
+  // の直後に来るべき「素の位置引数（ロックファイル）」が見つからず、
+  // この前置き全体が読み飛ばせなくなる——`gh` が前置きコマンドの名前と
+  // 誤認されないぶん安全側（すり抜けではなく検出漏れ）。
+  it('A bonus: 弾けない形——flock -n <file>（オプション付き）', () => {
+    expect(inspectBashCommand('flock -n /tmp/l gh pr merge 1 -d').blocked).toBe(false);
+  });
+});
+
+/**
+ * 時間の歯 —— 既存の `bash-wait-guard-delete-branch-issue-2035.test.ts` /
+ * `bash-wait-guard-delete-branch-timeout-prefix.test.ts` と同じ形。
+ *
+ * A族の最初の版（`LEADING_COMMAND_PREFIX_OPTION_SRC` の doc参照）は
+ * `stdbuf -oL `.repeat(n) で n=30 のとき28755ms（約29秒）というカタスト
+ * ロフィックな後戻りを起こした。ここではその直し（1文字フラグ+空白+値、
+ * ダッシュ+くっついた値の2択に分けた版）が実際に線形で終わることを、
+ * 依頼された繰り返し（`sudo -u a `/`env -i `/`X="a b" `）に加え、
+ * `stdbuf -oL `/`xargs -I{} `（バグを踏んだ形そのもの）でも測る。
+ */
+describe('gh-pr-merge-delete-branch: issue #2068 前置きの繰り返しが長くても後戻りで爆発しない', () => {
+  // CI の揺れを見込んだ緩い上限。既存の issue #2035 の時間の歯と同じ値
+  // （2乗・指数の後戻りが起きていれば現実的な時間では終わらない——
+  // 依頼者の実測では A族の最初の版が n=30 で28755ms、直した版は数ms）。
+  const TIME_BUDGET_MS = 200;
+
+  it('sudo -u a の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
+    const command = `${'sudo -u a '.repeat(5000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('env -i の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
+    const command = `${'env -i '.repeat(8000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('X="a b" の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
+    const command = `${'X="a b" '.repeat(5000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  // `LEADING_COMMAND_PREFIX_OPTION_SRC` の doc に書いた、実際に
+  // カタストロフィックな後戻りを踏んだ形そのもの（くっついた値）。
+  it('stdbuf -oL の繰り返し（くっついた値、gh pr merge を含まない）が線形に終わる', () => {
+    const command = `${'stdbuf -oL '.repeat(4000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('xargs -I{} の繰り返し（くっついた値、gh pr merge を含まない）が線形に終わる', () => {
+    const command = `${'xargs -I{} '.repeat(4000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('timeout -k 5 30 の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
+    const command = `${'timeout -k 5 30 '.repeat(4000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('前置きの繰り返しの末尾に gh pr merge -d が来ても弾き、かつ後戻りが爆発しない', () => {
+    const command = `${'sudo -u a '.repeat(5000)}gh pr merge 1 -d`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(true);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+});
