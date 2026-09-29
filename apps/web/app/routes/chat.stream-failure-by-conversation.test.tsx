@@ -71,13 +71,22 @@ function renderChat(initial: string) {
   };
 }
 
-/** `/approvals` はこの試験の対象ではない。未ハンドルのまま（`chat.interrupt.test.tsx` と同じ）。 */
+/**
+ * `/approvals` はこの試験の対象ではない——だが issue #2210 以降、`chat.tsx` が
+ * `conversationApprovals.error` を見て `ErrorNote` を出すようになったので、
+ * 未ハンドルのまま（＝`Failed to fetch` で失敗）にすると、この試験が見ている
+ * 「B に出ない」（`role="alert"` が無いこと）の判定に、無関係な `ErrorNote`
+ * が紛れ込む。ここでは素直に0件で成功させ、その干渉を避ける。
+ */
 function conversationRoutes(url: string) {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
   }
   if (url.includes(`/conversations/${OTHER_CONVERSATION_ID}`)) {
     return json({ conversationId: OTHER_CONVERSATION_ID, messages: [] });
+  }
+  if (url.includes('/approvals')) {
+    return json({ approvals: [] });
   }
   if (url.includes('/conversations')) {
     return json({ conversations: [], scanned: 0 });

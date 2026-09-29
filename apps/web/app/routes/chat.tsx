@@ -1898,251 +1898,278 @@ export function ChatPane({
           </p>
         )}
         {/*
-          **読み込み中の表示は、見せるものが何も無いときだけ。** この画面で始めた
-          会話でも履歴を読むようになったので（上の `useConversation` のコメント）、
-          `open` の直後に履歴の取得が始まる。手元に流れてきた分があるのに
-          スピナーへ差し替えると、受信中の本文が一度消えてから戻ることになる。
+          **`history.error` を最優先する（issue #2210）。** `GET
+          /conversations/:id` が失敗すると `history.data` は無いままなので、
+          直さないと下の判定（Spinner→Empty）が「行が0件」の枝へ落ち、新しい
+          会話の案内文（「目的や価値観を伝えると…」）と紛れる——失敗と「本当に
+          空」が見分けられない。`dashboard.tsx`/`practice-detail.tsx`
+          （issue #2138/#2139、PR #2143）と同じ判断をここでも採る。
         */}
-        {history.isLoading && shownId !== undefined && ownedBy(lines, shownId).length === 0 ? (
-          <Spinner label="履歴を読み込み中" />
-        ) : all.length === 0 ? (
-          <Card>
-            <Empty>目的や価値観を伝えると、クローンはそれを記憶に蒸留して次の判断に使う。</Empty>
-          </Card>
+        {history.error !== undefined ? (
+          <ErrorNote error={history.error} className="m-3" />
         ) : (
-          <ul aria-label="やりとり" className="flex flex-col gap-3">
-            {all.map((line) => {
-              /*
-               * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
-               * 発言だけに出す（チャットのメッセージ編集、#1010。制約C）。**
-               * `journalId` は `historyLines` にしか付かない（`Line` の doc）
-               * ので、送信直後の楽観行（`pendingOwnLines` が刈る前）には
-               * 出ない——本物の id が無いものを編集の対象にできない、という
-               * 制約をここで自然に満たす。クローンの発言（`role: 'clone'`）は
-               * `role === 'human'` の条件で最初から外れる（サーバ側の 400 と
-               * 同じ制約を、画面側は「そもそも入口を出さない」形で守る）。
-               */
-              const isEditable = line.role === 'human' && line.journalId !== undefined;
-              const isEditing = editingKey === line.key;
-              // `journalId` をこの後何度も参照するので、一度だけ絞り込んでおく
-              // （`versions` / `versionIndex` の「無ければ触らない」の根拠は
-              // すべてこの1つの束縛に依る）。
-              const journalId = line.journalId;
-              const versions = journalId === undefined ? undefined : editVersions.get(journalId);
-              const versionIndex =
-                versions === undefined || journalId === undefined
-                  ? undefined
-                  : (viewingVersionIndex[journalId] ?? versions.length - 1);
-              const viewing =
-                versions !== undefined && versionIndex !== undefined
-                  ? versions[versionIndex]
-                  : undefined;
-              // 版を切り替えていれば、その版の本文を出す。切り替えていない
-              // （＝最新を見ている）ときは `viewing.text` も `line.text` と
-              // 同じ値になる（`buildEditVersions` の doc）——常にこちらを
-              // 使っても、版を持たない発言の見え方は1文字も変わらない。
-              const displayedText = viewing?.text ?? line.text;
-              const viewingOldVersion =
-                versions !== undefined && versionIndex !== undefined
-                  ? versionIndex < versions.length - 1
-                  : false;
+          <>
+            {conversationApprovals.error !== undefined && (
+              // **この会話の承認待ち（`ask_human`）が読めていない（issue
+              // #2210）。** `conversationApprovals.data` が無いままだと
+              // `historyLines` の `approvalItems` が空になるので、会話の
+              // 本文は読めていても確認の質問・回答・取り下げだけが黙って
+              // 0件に見える——専用の `ErrorNote` で区別する。本文は読めて
+              // いるので、下の Spinner/Empty/ul とは排他にしない。
+              <ErrorNote error={conversationApprovals.error} className="mb-3" />
+            )}
+            {/*
+              **読み込み中の表示は、見せるものが何も無いときだけ。** この画面で始めた
+              会話でも履歴を読むようになったので（上の `useConversation` のコメント）、
+              `open` の直後に履歴の取得が始まる。手元に流れてきた分があるのに
+              スピナーへ差し替えると、受信中の本文が一度消えてから戻ることになる。
+            */}
+            {history.isLoading && shownId !== undefined && ownedBy(lines, shownId).length === 0 ? (
+              <Spinner label="履歴を読み込み中" />
+            ) : all.length === 0 ? (
+              <Card>
+                <Empty>
+                  目的や価値観を伝えると、クローンはそれを記憶に蒸留して次の判断に使う。
+                </Empty>
+              </Card>
+            ) : (
+              <ul aria-label="やりとり" className="flex flex-col gap-3">
+                {all.map((line) => {
+                  /*
+                   * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
+                   * 発言だけに出す（チャットのメッセージ編集、#1010。制約C）。**
+                   * `journalId` は `historyLines` にしか付かない（`Line` の doc）
+                   * ので、送信直後の楽観行（`pendingOwnLines` が刈る前）には
+                   * 出ない——本物の id が無いものを編集の対象にできない、という
+                   * 制約をここで自然に満たす。クローンの発言（`role: 'clone'`）は
+                   * `role === 'human'` の条件で最初から外れる（サーバ側の 400 と
+                   * 同じ制約を、画面側は「そもそも入口を出さない」形で守る）。
+                   */
+                  const isEditable = line.role === 'human' && line.journalId !== undefined;
+                  const isEditing = editingKey === line.key;
+                  // `journalId` をこの後何度も参照するので、一度だけ絞り込んでおく
+                  // （`versions` / `versionIndex` の「無ければ触らない」の根拠は
+                  // すべてこの1つの束縛に依る）。
+                  const journalId = line.journalId;
+                  const versions =
+                    journalId === undefined ? undefined : editVersions.get(journalId);
+                  const versionIndex =
+                    versions === undefined || journalId === undefined
+                      ? undefined
+                      : (viewingVersionIndex[journalId] ?? versions.length - 1);
+                  const viewing =
+                    versions !== undefined && versionIndex !== undefined
+                      ? versions[versionIndex]
+                      : undefined;
+                  // 版を切り替えていれば、その版の本文を出す。切り替えていない
+                  // （＝最新を見ている）ときは `viewing.text` も `line.text` と
+                  // 同じ値になる（`buildEditVersions` の doc）——常にこちらを
+                  // 使っても、版を持たない発言の見え方は1文字も変わらない。
+                  const displayedText = viewing?.text ?? line.text;
+                  const viewingOldVersion =
+                    versions !== undefined && versionIndex !== undefined
+                      ? versionIndex < versions.length - 1
+                      : false;
 
-              return (
-                <li
-                  key={line.key}
-                  className={cn(
-                    'group flex flex-col gap-1',
-                    line.role === 'human' ? 'items-end' : 'items-start',
-                  )}
-                >
-                  <div className="flex min-w-0 max-w-full items-start gap-1">
-                    {isEditable && !isEditing && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label="発言を編集"
-                        className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
-                        onClick={() => {
-                          setEditingKey(line.key);
-                          setEditDraft(line.text);
-                        }}
-                      >
-                        <Pencil className="size-3.5" aria-hidden />
-                      </Button>
-                    )}
-                    <div
+                  return (
+                    <li
+                      key={line.key}
                       className={cn(
-                        // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
-                        // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
-                        // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
-                        // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
-                        'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed break-words',
-                        // クローンの本文だけ Markdown で描く（下のコメント参照）。
-                        // 人間・システムの行は素のテキストのままなので、これまでどおり
-                        // 改行をそのまま見せる。
-                        line.role !== 'clone' && 'whitespace-pre-wrap',
-                        line.role === 'human' && 'bg-accent text-accent-fg',
-                        line.role === 'clone' && 'bg-surface',
-                        line.role === 'system' && 'bg-transparent text-muted italic',
+                        'group flex flex-col gap-1',
+                        line.role === 'human' ? 'items-end' : 'items-start',
                       )}
                     >
-                      {isEditing ? (
-                        /*
-                         * **クリックで textarea になり、送信で確定する**
-                         * （チャットのメッセージ編集、#1010）。キー操作は
-                         * 既存の送信欄（下の主入力欄）と揃える —
-                         * `⌘/Ctrl + Enter` で確定、IME 変換中の Enter では
-                         * 確定しない（`chat.ime-enter.test.tsx` と同じ門）。
-                         * `Escape` で取消——編集前の内容は保存していないが、
-                         * `line.text`（サーバ確定済みの本文）は変えていない
-                         * ので、いつでも同じ下書きから開き直せる。
-                         */
-                        <div className="flex min-w-64 flex-col gap-2">
-                          <Textarea
-                            autoFocus
-                            rows={2}
-                            value={editDraft}
-                            className="text-fg"
-                            aria-label="発言を編集する下書き"
-                            onChange={(event) => setEditDraft(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (
-                                event.key === 'Enter' &&
-                                (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
-                              ) {
-                                return;
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault();
-                                setEditingKey(undefined);
-                                return;
-                              }
-                              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                                event.preventDefault();
-                                void confirmEdit(line);
-                              }
+                      <div className="flex min-w-0 max-w-full items-start gap-1">
+                        {isEditable && !isEditing && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-label="発言を編集"
+                            className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+                            onClick={() => {
+                              setEditingKey(line.key);
+                              setEditDraft(line.text);
                             }}
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="primary"
-                              disabled={editDraft.trim() === ''}
-                              onClick={() => void confirmEdit(line)}
-                            >
-                              確定
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => setEditingKey(undefined)}
-                            >
-                              キャンセル
-                            </Button>
-                          </div>
+                          >
+                            <Pencil className="size-3.5" aria-hidden />
+                          </Button>
+                        )}
+                        <div
+                          className={cn(
+                            // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
+                            // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
+                            // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
+                            // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
+                            'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed break-words',
+                            // クローンの本文だけ Markdown で描く（下のコメント参照）。
+                            // 人間・システムの行は素のテキストのままなので、これまでどおり
+                            // 改行をそのまま見せる。
+                            line.role !== 'clone' && 'whitespace-pre-wrap',
+                            line.role === 'human' && 'bg-accent text-accent-fg',
+                            line.role === 'clone' && 'bg-surface',
+                            line.role === 'system' && 'bg-transparent text-muted italic',
+                          )}
+                        >
+                          {isEditing ? (
+                            /*
+                             * **クリックで textarea になり、送信で確定する**
+                             * （チャットのメッセージ編集、#1010）。キー操作は
+                             * 既存の送信欄（下の主入力欄）と揃える —
+                             * `⌘/Ctrl + Enter` で確定、IME 変換中の Enter では
+                             * 確定しない（`chat.ime-enter.test.tsx` と同じ門）。
+                             * `Escape` で取消——編集前の内容は保存していないが、
+                             * `line.text`（サーバ確定済みの本文）は変えていない
+                             * ので、いつでも同じ下書きから開き直せる。
+                             */
+                            <div className="flex min-w-64 flex-col gap-2">
+                              <Textarea
+                                autoFocus
+                                rows={2}
+                                value={editDraft}
+                                className="text-fg"
+                                aria-label="発言を編集する下書き"
+                                onChange={(event) => setEditDraft(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (
+                                    event.key === 'Enter' &&
+                                    (event.nativeEvent.isComposing ||
+                                      event.nativeEvent.keyCode === 229)
+                                  ) {
+                                    return;
+                                  }
+                                  if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    setEditingKey(undefined);
+                                    return;
+                                  }
+                                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                                    event.preventDefault();
+                                    void confirmEdit(line);
+                                  }
+                                }}
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="primary"
+                                  disabled={editDraft.trim() === ''}
+                                  onClick={() => void confirmEdit(line)}
+                                >
+                                  確定
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingKey(undefined)}
+                                >
+                                  キャンセル
+                                </Button>
+                              </div>
+                            </div>
+                          ) : line.role === 'clone' ? (
+                            displayedText === '' ? (
+                              <span className="text-muted">…</span>
+                            ) : (
+                              /*
+                               * **クローンの行だけを Markdown にする。** 人間が打った本文
+                               * （`role === 'human'`）は素のテキストのままにする —
+                               * 自分が書いた文字が勝手に化けないため。
+                               *
+                               * **受信中かどうかを見分ける信号は無い。** `Line` には
+                               * `role` / `text` / `transient` しか無く、`transient` は
+                               * 「考えている…」のような進行中の合図（`role: 'system'`）
+                               * にしか立たない。クローンの返信行（`role: 'clone'`）は
+                               * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
+                               * 受信中か」を示す専用のフィールドを持たない。信号を
+                               * 新設するには `packages/` や API 側の変更が要るが、
+                               * それは今回の対象外（画面側だけで完結させる）。
+                               *
+                               * だから毎チャンク、届いた分だけの文字列を Markdown として
+                               * パースし直すことになる。**まだ閉じていない ``` や `**`
+                               * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
+                               * 変わって見える揺れが起きうる**（受信が終われば安定する）。
+                               */
+                              <Markdown>{displayedText}</Markdown>
+                            )
+                          ) : (
+                            displayedText
+                          )}
                         </div>
-                      ) : line.role === 'clone' ? (
-                        displayedText === '' ? (
-                          <span className="text-muted">…</span>
-                        ) : (
-                          /*
-                           * **クローンの行だけを Markdown にする。** 人間が打った本文
-                           * （`role === 'human'`）は素のテキストのままにする —
-                           * 自分が書いた文字が勝手に化けないため。
-                           *
-                           * **受信中かどうかを見分ける信号は無い。** `Line` には
-                           * `role` / `text` / `transient` しか無く、`transient` は
-                           * 「考えている…」のような進行中の合図（`role: 'system'`）
-                           * にしか立たない。クローンの返信行（`role: 'clone'`）は
-                           * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
-                           * 受信中か」を示す専用のフィールドを持たない。信号を
-                           * 新設するには `packages/` や API 側の変更が要るが、
-                           * それは今回の対象外（画面側だけで完結させる）。
-                           *
-                           * だから毎チャンク、届いた分だけの文字列を Markdown として
-                           * パースし直すことになる。**まだ閉じていない ``` や `**`
-                           * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
-                           * 変わって見える揺れが起きうる**（受信が終われば安定する）。
-                           */
-                          <Markdown>{displayedText}</Markdown>
-                        )
-                      ) : (
-                        displayedText
-                      )}
-                    </div>
-                  </div>
+                      </div>
 
-                  {/*
+                      {/*
                     **ChatGPT 風の版切り替え（`< 2/2 >`）。** `versions` は編集で
                     置き換えられた発言にしか付かない（`editVersions` の doc）ので、
                     普通の発言では何も描かれず見た目は1文字も変わらない。
                     編集中はいったん隠す——確定前の下書きと古い版の閲覧を同時に
                     出すと、どちらを直しているのか読みにくくなるため。
                   */}
-                  {versions !== undefined &&
-                  versionIndex !== undefined &&
-                  journalId !== undefined &&
-                  !isEditing ? (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-1 text-[11px] text-muted">
-                        <button
-                          type="button"
-                          aria-label="前の版へ"
-                          disabled={versionIndex <= 0}
-                          className="disabled:opacity-40"
-                          onClick={() =>
-                            setViewingVersionIndex((current) => ({
-                              ...current,
-                              [journalId]: versionIndex - 1,
-                            }))
-                          }
-                        >
-                          ‹
-                        </button>
-                        <span>
-                          {versionIndex + 1}/{versions.length}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label="次の版へ"
-                          disabled={versionIndex >= versions.length - 1}
-                          className="disabled:opacity-40"
-                          onClick={() =>
-                            setViewingVersionIndex((current) => ({
-                              ...current,
-                              [journalId]: versionIndex + 1,
-                            }))
-                          }
-                        >
-                          ›
-                        </button>
-                      </div>
-                      {/*
+                      {versions !== undefined &&
+                      versionIndex !== undefined &&
+                      journalId !== undefined &&
+                      !isEditing ? (
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1 text-[11px] text-muted">
+                            <button
+                              type="button"
+                              aria-label="前の版へ"
+                              disabled={versionIndex <= 0}
+                              className="disabled:opacity-40"
+                              onClick={() =>
+                                setViewingVersionIndex((current) => ({
+                                  ...current,
+                                  [journalId]: versionIndex - 1,
+                                }))
+                              }
+                            >
+                              ‹
+                            </button>
+                            <span>
+                              {versionIndex + 1}/{versions.length}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label="次の版へ"
+                              disabled={versionIndex >= versions.length - 1}
+                              className="disabled:opacity-40"
+                              onClick={() =>
+                                setViewingVersionIndex((current) => ({
+                                  ...current,
+                                  [journalId]: versionIndex + 1,
+                                }))
+                              }
+                            >
+                              ›
+                            </button>
+                          </div>
+                          {/*
                         **前の版へ戻ると、畳まれた発言が読める。** 古い版を見て
                         いるあいだだけ、その版のすぐ後に隠れていた往復
                         （`hiddenFollowUps`）も出す——ここが「前の版へ戻って
                         読める」の本体である。
                       */}
-                      {viewingOldVersion &&
-                        viewing !== undefined &&
-                        viewing.hiddenFollowUps.length > 0 && (
-                          <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted">
-                            {viewing.hiddenFollowUps.map((entry, index) => (
-                              <p key={index}>
-                                <span className="mr-1 font-semibold">
-                                  {entry.role === 'human' ? '人間' : 'クローン'}
-                                </span>
-                                {entry.text}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+                          {viewingOldVersion &&
+                            viewing !== undefined &&
+                            viewing.hiddenFollowUps.length > 0 && (
+                              <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted">
+                                {viewing.hiddenFollowUps.map((entry, index) => (
+                                  <p key={index}>
+                                    <span className="mr-1 font-semibold">
+                                      {entry.role === 'human' ? '人間' : 'クローン'}
+                                    </span>
+                                    {entry.text}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
         )}
         <div ref={bottomRef} />
       </div>
