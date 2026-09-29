@@ -167,7 +167,24 @@ function PoolAndSettings() {
       ) : data === undefined ? null : (
         <>
           <PoolCard tokens={data.tokens} />
-          <SettingsCard settings={data.settings} />
+          {data.settings === undefined ? (
+            // **最小の追従（issue #2095）。** 回す契機・冷却の設定が壊れていて
+            // 読めないとき、デーモンは `settings` を省いて
+            // `settingsUnreadable.reason` を返す——既定値では埋めない。
+            // きちんとした表示は別 Issue（領域 E）の範囲なので、ここでは
+            // 落ちずに理由を出すだけにとどめる。
+            <Card>
+              <CardHeader
+                title="回転の設定"
+                subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
+              />
+              <div className="px-4 py-3 text-sm text-muted">
+                回転の設定は読めない: {data.settingsUnreadable?.reason ?? '理由不明'}
+              </div>
+            </Card>
+          ) : (
+            <SettingsCard settings={data.settings} />
+          )}
         </>
       )}
     </>

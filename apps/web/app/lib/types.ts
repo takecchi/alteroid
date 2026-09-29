@@ -154,7 +154,20 @@ export type UnrecordedManager = UsageAggregate['unrecordedManagers'][number];
  */
 export type TokensState = Ok<paths['/tokens']['get']>;
 export type AgentTokenView = TokensState['tokens'][number];
-export type TokenRotationSettings = TokensState['settings'];
+/**
+ * **`settings` / `settingsUnreadable` はどちらか一方だけが在る**（issue
+ * #2095）。回す契機・冷却の設定が壊れていて読めないとき、デーモンは
+ * `settings` を省いて `settingsUnreadable.reason` を返す——既定値では埋めない
+ * （`apps/daemon/src/openapi.ts` の `tokensResponseSchema` の doc）。
+ *
+ * `TokenRotationSettings` 自体は「読めたときの形」を指す（`NonNullable`）。
+ * 「読めないかもしれない」ことは呼び出し側が `TokensState['settings']` を
+ * 直接見て分岐する——`PoolAndSettings`（`routes/tokens.tsx`）がその形。
+ * **きちんとした表示はこの PR の範囲外**（Web 側の別 Issue の領域。ここでは
+ * 落ちずに理由を出す最小限にとどめる）。
+ */
+export type TokenRotationSettings = NonNullable<TokensState['settings']>;
+export type TokensSettingsUnreadable = NonNullable<TokensState['settingsUnreadable']>;
 /** `disabled` > `invalidated` > `cooling` > `ready` の4値。3値に潰さないこと。 */
 export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready';
 /**

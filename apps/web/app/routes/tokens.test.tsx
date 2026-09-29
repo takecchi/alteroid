@@ -41,20 +41,31 @@ const DEFAULT_SETTINGS = { rotateOn: 'free_exhausted', cooldownMs: 18_000_000 };
 function stubScreen(options: {
   tokens?: unknown[];
   settings?: unknown;
+  /**
+   * issue #2095。渡すと応答から `settings` を省き、代わりにこれを積む——
+   * `GET /tokens` が回す契機・冷却の設定を読めなかったときと同じ形
+   * （`settings` を省いて `settingsUnreadable: { reason }` を返す。既定値では
+   * 埋めない）。
+   */
+  settingsUnreadable?: { reason: string };
   tokensStatus?: number;
   journalEntries?: unknown[];
 }) {
   const {
     tokens = [],
     settings = DEFAULT_SETTINGS,
+    settingsUnreadable,
     tokensStatus = 200,
     journalEntries = [],
   } = options;
   return stubFetch((url) => {
     if (url.includes('/tokens')) {
-      return tokensStatus === 200
+      if (tokensStatus !== 200) {
+        return json({ error: '実行環境の持ち主だけが操作できる' }, tokensStatus);
+      }
+      return settingsUnreadable === undefined
         ? json({ tokens, settings })
-        : json({ error: '実行環境の持ち主だけが操作できる' }, tokensStatus);
+        : json({ tokens, settingsUnreadable });
     }
     if (url.includes('/journal')) return json({ entries: journalEntries });
     return undefined;
@@ -750,5 +761,36 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
     ).toBeTruthy();
     // 断られた値は画面に残る（黙って元に戻さない——人間が直して再送できる）。
     expect(screen.getByLabelText('冷却の既定を変える（ミリ秒）')).toHaveProperty('value', '-1');
+  });
+});
+
+/**
+ * issue #2095。回す契機・冷却の設定（`GET /tokens` の `settings`）が壊れて
+ * 読めないとき、デーモンは `settings` を省いて `settingsUnreadable.reason` を
+ * 返す。**この画面は落ちずに理由を出す最小の追従だけを持つ**——きちんとした
+ * 表示は別 Issue（領域 E）の範囲であって、ここでは作り込まない。
+ */
+describe('/tokens 画面 — 回転の設定が読めない（issue #2095）', () => {
+  it('settings の代わりに settingsUnreadable が来ても落ちず、理由を出す。一覧は道連れにならない', async () => {
+    const REASON = 'rotateOn が enum の外（テスト用）';
+    stubScreen({
+      tokens: [
+        { id: 't-a', label: 'ready-token', order: 0, sha256: 'a'.repeat(12), source: 'stored' },
+      ],
+      settingsUnreadable: { reason: REASON },
+    });
+
+    render(
+      <Providers>
+        <Tokens />
+      </Providers>,
+    );
+    await waitForPoolLoaded();
+
+    // 一覧（読めている分）は出ている——道連れになっていない。
+    expect(screen.getByText('ready-token')).toBeTruthy();
+    // 理由が出る。既定値（`free_exhausted` 等）へすり替わっていない。
+    expect(await screen.findByText(new RegExp(`回転の設定は読めない.*${REASON}`))).toBeTruthy();
+    expect(screen.queryByLabelText('回す契機を変える')).toBeNull();
   });
 });
