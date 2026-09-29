@@ -77,6 +77,8 @@ export async function practiceListCommand(): Promise<void> {
         ` (作成: ${p.createdAt} / 更新: ${p.updatedAt} / ${String(p.chars)} 文字)\n`,
     );
   }
+  // **一覧から次の一手へつなぐ。** `memory list` と同じ（`memoryListCommand` の doc）。
+  stdout.write('本文を読むには: alteroid practice show <slug>\n');
 }
 
 export async function practiceShowCommand(

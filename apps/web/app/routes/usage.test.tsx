@@ -8,11 +8,28 @@
  */
 import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, render, screen, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, renderedMoneyTexts, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Usage from './usage';
+
+/**
+ * 「マネージャー別」軸の id が `<Link>`（react-router）を描画するようになったので
+ * （issue #2046）、router context が要る。`commitments.test.tsx` /
+ * `approvals.test.tsx` と同じ形（`createMemoryRouter` + `RouterProvider`）。
+ */
+function renderUsage() {
+  const router = createMemoryRouter([{ path: '/', Component: Usage }], {
+    initialEntries: ['/'],
+  });
+  render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+}
 
 let originalFetch: typeof fetch;
 
@@ -116,11 +133,7 @@ describe('/usage 画面', () => {
   it('台帳がまだ空（since が null）なら、金額を1つも出さず「まだ記録が無い」と言う', async () => {
     stubUsage({ rows: [], since: null, beforeLedger: false });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/台帳にはまだ1件も記録が無い/)).toBeTruthy();
     // ⛔ ここは `queryByText('$0.00')` だった（#935。理由は `renderedMoneyTexts` の doc）。
@@ -134,11 +147,7 @@ describe('/usage 画面', () => {
       beforeLedger: true,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/その範囲には記録が無い/)).toBeTruthy();
     expect(await screen.findByText(/照会した範囲は台帳の始点より前にかかっている/)).toBeTruthy();
@@ -153,11 +162,7 @@ describe('/usage 画面', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(USAGE_ESTIMATE_NOTICE)).toBeTruthy();
   });
@@ -169,11 +174,7 @@ describe('/usage 画面', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     // 合計・日別・マネージャー別・モデル別のすべてに同じ金額がそのまま出る
     // （行が1件しかないので全軸で一致する）。
@@ -200,11 +201,7 @@ describe('/usage 画面', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     // **合計の $3.00 を「画面に1つだけある」で特定しない。** 軸のカードにも同じ
     // 金額が出る（この土台は行が2件しかないので、1件に畳まれた軸のカードは
@@ -231,11 +228,7 @@ describe('/usage 画面', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     await screen.findByRole('heading', { name: '層別（誰が）' });
     const layers = axisCard('層別（誰が）');
@@ -262,11 +255,7 @@ describe('/usage 画面', () => {
       beforeLayers: true,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/既定値であって観測ではない/)).toBeTruthy();
     // 層の始点を台帳の始点と混ぜない（2つの始点が別物であることを画面が言う）。
@@ -290,15 +279,39 @@ describe('/usage 画面', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     await screen.findByRole('heading', { name: 'マネージャー別' });
     const managers = axisCard('マネージャー別');
     expect(within(managers).getByTitle(longManagerId)).toBeTruthy();
+  });
+
+  /**
+   * **マネージャー別の id を委譲の詳細へつなぐ（issue #2046）。** マネージャーの
+   * 行（`mgr-…`）だけがリンクになり、クローンの分（`CLONE_ACTOR_ID` ＝ `clone`）は
+   * 委譲ではないのでリンクにしない。`title`（全文の出口）は両方とも残る。
+   */
+  it('マネージャー別の mgr- の行は /managers/<id> への Link になり、clone の行はならない', async () => {
+    stubUsage({
+      rows: [
+        row(2, { managerId: 'mgr-42' }),
+        row(1, { managerId: 'clone', layer: 'clone', site: 'distill' }),
+      ],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: 'マネージャー別' });
+    const managers = axisCard('マネージャー別');
+    const link = within(managers).getByRole('link', { name: 'mgr-42' });
+    expect(link.getAttribute('href')).toBe('/managers/mgr-42');
+    expect(within(managers).getByTitle('mgr-42')).toBeTruthy();
+
+    expect(within(managers).getByTitle('clone').textContent).toBe('clone');
+    expect(within(managers).queryByRole('link', { name: 'clone' })).toBeNull();
+    expect(within(managers).getAllByRole('link')).toHaveLength(1);
   });
 
   it('層と場所で絞り込める（4つの口に同じ絞り込みがある）', async () => {
@@ -319,11 +332,7 @@ describe('/usage 画面', () => {
       });
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     await screen.findByText(/その範囲には記録が無い/);
     const layerSelect = screen.getByLabelText(/layer/);
@@ -352,11 +361,7 @@ describe('/usage 画面', () => {
   it('絞り込みの容器は sm 未満でも grid-cols-1 を持つ（暗黙トラックを auto にしない）', async () => {
     stubUsage({ rows: [], since: null, beforeLedger: false });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     const fromInput = await screen.findByLabelText(/from/);
     // grid の直接の子ではなく label なので、容器は label の親。
@@ -370,11 +375,7 @@ describe('/usage 画面', () => {
   it('type="date" の from/to 入力は min-w-0 を持つ（内在幅の大きい要素だけの追加の押さえ）', async () => {
     stubUsage({ rows: [], since: null, beforeLedger: false });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     // **ラベルは前後を固定して当てる。** `/to/` は部分一致なので、`token` という
     // ラベルが増えた瞬間に2件へ当たって落ちた。**緩めるのではなく、どのラベルか
@@ -403,11 +404,7 @@ describe('/usage 画面の Web 検索の回数（webSearchRequests）', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     await screen.findByText(/合計/);
     expect(screen.queryByText(/Web検索/)).toBeNull();
@@ -420,11 +417,7 @@ describe('/usage 画面の Web 検索の回数（webSearchRequests）', () => {
       beforeLedger: false,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/Web検索/)).toBeTruthy();
   });
@@ -447,11 +440,7 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
       ],
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/台帳に1行も無い委譲/)).toBeTruthy();
     expect(await screen.findByText(/mgr-unrecorded/)).toBeTruthy();
@@ -470,11 +459,7 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
       unrecordedManagers: [],
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     const heading = await screen.findByText(/台帳に1行も無い委譲/);
     expect(heading).toBeTruthy();
@@ -491,11 +476,7 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
       ],
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/台帳にはまだ1件も記録が無い/)).toBeTruthy();
     expect(await screen.findByText(/mgr-unrecorded/)).toBeTruthy();
@@ -515,11 +496,7 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
       ],
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     const totalHeading = await screen.findByRole('heading', { name: '合計' });
     const totalCard = totalHeading.closest('div.rounded-lg');
@@ -543,11 +520,7 @@ describe('/usage 画面のアカウント全体の残り', () => {
   it('台帳がまだ空でも出る（台帳が空なことと、枠が分からないことは別）', async () => {
     stubUsage({ rows: [], since: null, beforeLedger: false, account: { state: 'unknown' } });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByRole('heading', { name: /アカウント全体の残り/ })).toBeTruthy();
     expect(screen.getByText(/まだ取りに行っていない/)).toBeTruthy();
@@ -585,11 +558,7 @@ describe('/usage 画面のアカウント全体の残り', () => {
       },
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/Claude Max/)).toBeTruthy();
     expect(screen.getByText(/42% 使用/)).toBeTruthy();
@@ -608,11 +577,7 @@ describe('/usage 画面のアカウント全体の残り', () => {
       },
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/取れなかった/)).toBeTruthy();
     expect(screen.queryByText(/0% 使用/)).toBeNull();
@@ -627,11 +592,7 @@ describe('/usage 画面のアカウント全体の残り', () => {
       account: null,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     expect(await screen.findByText(/返さないデーモンに繋がっている/)).toBeTruthy();
     // 台帳側は変わらず描けている（表示1枚のために画面全体を落とさない）。
@@ -663,11 +624,7 @@ describe('/usage 画面のアカウント全体の残り', () => {
       account: null,
     });
 
-    render(
-      <Providers>
-        <Usage />
-      </Providers>,
-    );
+    renderUsage();
 
     const line = await screen.findByText(/返さないデーモンに繋がっている/);
     const tokens = line.className.split(/\s+/);

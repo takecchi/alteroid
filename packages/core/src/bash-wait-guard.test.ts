@@ -323,8 +323,84 @@ describe('inspectBashCommand — gh pr merge --delete-branch: 弾いてはいけ
   // （既存のテストの末尾の作法。`gh-run-watch-background` は逆に「弾く」歯
   // だけを持つので、この穴は `bash-wait-guard.ts` 冒頭の doc の弱さの節と
   // 同じ位置づけである）。
-  it('⚠️ 弾けない形: bash -c の引用符の中は構文しか見ないので通ってしまう', () => {
-    expect(inspectBashCommand("bash -c 'gh pr merge 1 --delete-branch'").blocked).toBe(false);
+  //
+  // ⚠️ issue #2035 の作業（マネージャー mgr-712ad619 からの依頼）で
+  // `it.fails` へ反転した。**この PR は `bash -c '…'` の中身を直していない**
+  // ——直したのは bash の予約語・グルーピングの直後（`SHELL_KEYWORD_
+  // PREFIX_SRC` 参照）であって、単一引用符の中を構文解析することとは別の
+  // 穴である。それでも AGENTS.md「テストを弱めずに直す」の言う「現行の
+  // 欠陥を仕様として固定しているテストは反転させてよい」に当たると判断
+  // した——`toBe(false)` のままだと「この文字列は通ってよい」が仕様として
+  // 固定され、将来 `bash -c` の中身まで見る変更が入っても、このテストは
+  // 何も知らせずに緑のまま通り続ける。`it.fails` にして期待値を望む挙動
+  // （`blocked: true`）へ反転すれば、直った瞬間にこの `it.fails` 自体が
+  // 失敗し（トリップワイヤー）、次に読む者が気づいて `it` へ戻せる。
+  // 3点セット（PR 本文にも転記): (1) 変更した事実 —— 期待値を
+  // `toBe(false)` から `it.fails(...) => toBe(true)` へ反転した（実装は
+  // 1文字も変えていない）。(2) なぜ必要か —— 現状 `blocked: false` を
+  // 「正しい仕様」として固定していたので、既知の欠陥をそのまま仕様化
+  // していた。(3) なぜ保証が弱くならないか —— `it.fails` は「望む挙動
+  // （`true`）が今は通らないこと」を検査しており、実装が変わらない限り
+  // 緑のまま、直った瞬間に赤くなって知らせる——保証の対象（この文字列は
+  // いつか弾かれるべきだと分かっている）は変わらず、消えるのは「この
+  // 欠陥を仕様として固定する」側だけである。
+  it.fails('⚠️ 弾けない形: bash -c の引用符の中は構文しか見ないので通ってしまう', () => {
+    expect(inspectBashCommand("bash -c 'gh pr merge 1 --delete-branch'").blocked).toBe(true);
+  });
+});
+
+/**
+ * issue #2035 の作業（マネージャー mgr-712ad619 からの依頼）で足した歯
+ * ——`bash-wait-guard.ts` の「弾けないと分かっている形」に doc としては
+ * 既に載っているが、これまでテストが無かった既知の穴。それぞれ
+ * `it.fails` で「望む挙動（`blocked: true`）」を期待値に書き、直った
+ * ときのトリップワイヤーにする（`toBe(false)` を仕様として固定しない
+ * ため——上の `bash -c` の反転と同じ理由）。
+ *
+ * この PR が実際に直したのは bash の**予約語・グルーピング**（コマンドの
+ * 位置を作るが、それ自体はコマンドとして実行されない）の直後だけである。
+ * ここに並ぶのは、それとは別の族の前置き——**それ自体が1個のコマンド
+ * として実行される**前置き（`sudo`/`nice`/`xargs`/`command`/`exec`/
+ * `nohup`）・`timeout` 自身のオプション文法（`-k`）・値が空白を含む
+ * 引用符形の代入（`X="a b"`）・短縮オプションの束ね書き（`-sd`）——
+ * どれも 1件ずつ検討する方針（#1192 のオーナー決定）で、この PR の範囲外
+ * のまま残している。
+ */
+describe('inspectBashCommand — gh pr merge --delete-branch: まだテストが無かった既知の穴（issue #2035 で歯を足した。範囲外のまま）', () => {
+  it.fails('sudo 前置き（コマンドとしての前置き、1件ずつ検討する方針で範囲外）', () => {
+    expect(inspectBashCommand('sudo gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('nice 前置き（同上）', () => {
+    expect(inspectBashCommand('nice gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('xargs 前置き（同上）', () => {
+    expect(inspectBashCommand('xargs gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('command 前置き（この PR で範囲外にした族。同じ「コマンドとしての前置き」）', () => {
+    expect(inspectBashCommand('command gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('exec 前置き（同上）', () => {
+    expect(inspectBashCommand('exec gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('nohup 前置き（同上）', () => {
+    expect(inspectBashCommand('nohup gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('timeout -k（timeout 自身のオプション文法までは解いていない）', () => {
+    expect(inspectBashCommand('timeout -k 5 30 gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('値が空白を含む引用符形の代入（X="a b"。\\S* が最初の空白までしか読めない）', () => {
+    expect(inspectBashCommand('X="a b" gh pr merge 1 --delete-branch').blocked).toBe(true);
+  });
+
+  it.fails('-sd のような短縮オプションの束ね書き', () => {
+    expect(inspectBashCommand('gh pr merge 1 -sd').blocked).toBe(true);
   });
 });
 
