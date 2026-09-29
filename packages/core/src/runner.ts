@@ -4454,9 +4454,13 @@ class RunnerSession {
       }
     }
 
+    // `#consumeOneShotAllow` は `deny` を返さない（戻り値の型で塞いである）。だから書き換えを
+    // `deny` に付けることは型の上で起きない（#2119。以前は `|| decision.kind === 'deny'` の
+    // 守りを書いていたが、実行されない分岐で、変異で外しても歯が赤にならなかった）。
+    // 将来 `deny` を返すように変われば、`tsc` がここで落ちる。
     const decision = this.#consumeOneShotAllow(record);
     const rewrite = this.#planBashToolTimeoutRewrite(record);
-    if (rewrite === undefined || decision.kind === 'deny') return decision;
+    if (rewrite === undefined) return decision;
     return { ...decision, rewrite };
   }
 
@@ -4564,7 +4568,9 @@ class RunnerSession {
    * 側に含める**（issue #1768。以前は `<` で比べていたため、この1点だけ
    * 「まだ有効」に倒れていた——許しすぎる側の穴だった）。
    */
-  #consumeOneShotAllow(record: AgentPreToolRecord): AgentPreToolDecision {
+  #consumeOneShotAllow(
+    record: AgentPreToolRecord,
+  ): Exclude<AgentPreToolDecision, { kind: 'deny' }> {
     const toolName = record.toolName;
     if (toolName === undefined) return { kind: 'continue' };
     const matchInput = matchInputOf(record.toolInput);

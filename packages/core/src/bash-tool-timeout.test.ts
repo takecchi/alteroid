@@ -26,6 +26,16 @@ describe('commandTimeoutTotalMs — コマンドの中の timeout の合計', ()
     ['値を取らない短いフラグ付き', 'timeout -v 300 pnpm test', 300_000],
     ['サブシェルの中', '(timeout 120 a)', 120_000],
     ['timeout が無い', 'pnpm test', null],
+    // #2119: 数字の後ろが空白でない形・引用符の中の形も読む
+    ['文字列の終わり', 'timeout 590', 590_000],
+    ['bash -c の二重引用符の中', 'bash -c "timeout 590 sleep 600"', 590_000],
+    ['bash -c の単一引用符の中', "bash -c 'timeout 590 sleep 600'", 590_000],
+    ['数字の直後に ;', 'timeout 590;pnpm test', 590_000],
+    ['数字の直後に改行', 'timeout 590\npnpm test', 590_000],
+    ['数字の直後に &&', 'timeout 590&&echo x', 590_000],
+    ['数字の直後に |', 'timeout 590|cat', 590_000],
+    ['数字の直後に閉じ括弧', '(timeout 590)', 590_000],
+    ['数字の直後に閉じ引用符', "sh -c 'timeout 590'", 590_000],
     ['語の途中の timeout は拾わない', 'mytimeout 300 x', null],
     ['継続時間に語がくっついた形は拾わない', 'timeout 300pnpm', null],
   ];
@@ -133,8 +143,13 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
     expect(planBashToolTimeoutRaise({ command: 'echo "a timeout 300 x"' })?.toMs).toBe(310_000);
   });
 
-  it('引用符の直後の timeout は数えない', () => {
-    expect(planBashToolTimeoutRaise({ command: 'echo "timeout 300 x"' })).toBeUndefined();
+  // #2119 で反転した。最初の版は「引用符の直後の timeout は数えない」を `toBeUndefined()` で
+  // 固定していたが、それは `bash -c "timeout 590 …"` の中の `timeout` を読めない穴そのものだった
+  // （読めないと引き上げが黙って効かず、#2088 の事故がそのまま起きる）。手前の条件に引用符を
+  // 足したので、引用符の直後の `timeout` も数える。引き上げる向きにしか働かない（待てる時間が
+  // 延びるだけ）ので、`echo "timeout 300 x"` のような字面も数える誤りは受け入れる。
+  it('引用符の直後の timeout も数える（#2119 で反転）', () => {
+    expect(planBashToolTimeoutRaise({ command: 'echo "timeout 300 x"' })?.toMs).toBe(310_000);
   });
 });
 
