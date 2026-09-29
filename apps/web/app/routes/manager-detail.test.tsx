@@ -211,6 +211,26 @@ describe('依頼の全文は header ではなく本文に置く', () => {
 });
 
 /**
+ * **委譲の詳細から、その委譲の使用量へ飛べる（issue #2077）。**
+ *
+ * 逆向き（`/usage` の「マネージャー別」→ `/managers/<id>`）は #2046 / PR #2047 で
+ * 在るが、この向きが無かった——人間は `/usage` を開いて id を手で写す
+ * しかなかった。ここで保証するのは href だけ（詳細画面で使用量を集計し
+ * 直さないのは方針であって、この歯の対象ではない）。
+ */
+describe('詳細から、その委譲の使用量へ飛べる（issue #2077）', () => {
+  it('「状態」カードに /usage?managerId=<id> へのリンクがある', async () => {
+    renderDetail({ ...BASE, managerId: 'mgr-77' });
+
+    const link = await screen.findByRole('link', { name: '使用量を見る' });
+    // **`managerId=mgr-1`（`BASE` の既定値）ではなく `mgr-77` であること** —
+    // renderDetail に渡した `manager.managerId` をそのまま使っているかを見る
+    // （固定文字列を書く変異はここで落ちる）。
+    expect(link.getAttribute('href')).toBe('/usage?managerId=mgr-77');
+  });
+});
+
+/**
  * **一覧で `lost` を見た人間が、次に開くのがこの画面である。**
  *
  * 起こし直すかどうかを決めるのはここなのに、詳細だけが札しか出していなかった

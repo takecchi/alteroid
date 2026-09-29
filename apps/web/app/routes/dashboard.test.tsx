@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 /**
- * ダッシュボードについて2つ。
+ * ダッシュボードについて3つ。
  *
  * 1. 「今日の利用」カードが、`/usage` 画面・CLI と同じ嘘をつかない規約を守っていること
  *    （`apps/cli/src/usage.ts` の docstring と同じ規約）
  * 2. 日誌を `AuthedShell` の購読から context 越しに受け取り、**自分では SSE を張らない**こと
+ * 3. 「今日の利用」カードの「詳しく見る」が、カードの数字と同じ今日で `/usage` へ飛ぶこと
+ *    （issue #2078）
  */
-import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE } from '@alteroid/core/usage';
+import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JournalFeedProvider } from '~/hooks/journal-feed';
 import { summarizeJournalEntry } from '~/hooks/queries';
@@ -25,6 +27,24 @@ import {
 } from '~/test-support';
 
 import Dashboard from './dashboard';
+
+/*
+  **`usageDate(new Date())` はローカル時刻を読むので、「今日」を固定するには
+  TZ も固定する必要がある。** 理由（`vi.hoisted` でなければ静かに効かない
+  事情、CI が UTC で手元が JST であること）は
+  `apps/web/app/routes/reports.test.tsx` の冒頭に逐語で在るので、ここには
+  写さない——同じ形をそのまま使う。
+*/
+const tzBeforeThisFile = vi.hoisted(() => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Asia/Tokyo';
+  return before;
+});
+
+afterAll(() => {
+  if (tzBeforeThisFile === undefined) delete process.env.TZ;
+  else process.env.TZ = tzBeforeThisFile;
+});
 
 const RECENT: JournalEntry = {
   type: 'decision',
@@ -146,6 +166,46 @@ describe('ダッシュボードの「今日の利用」', () => {
     // 常に空集合を返すようになったら、ここだけが赤くなる —— 陰性対照の側は緑のままで、
     // 「空で緑」と「正しく緑」は区別が付かない。
     expect(renderedMoneyTexts()).toEqual(new Set(['$0.0200']));
+  });
+});
+
+/**
+ * **「詳しく見る」が、カードの数字と同じ今日で `/usage` へ飛ぶ（issue #2078）。**
+ *
+ * 直す前は素の `/usage` へ飛んでいた——`/usage` は期間が無ければ絞らないので、
+ * 今日の合計を見て押すと今日ではない期間が開く（issue 本文）。ここで固定するのは
+ * 「今日」そのもの（`vi.setSystemTime`）と TZ（ファイル冒頭の `vi.hoisted`）——
+ * どちらもカードが `usageDate(new Date())` で「今日」を作るときに読む値である。
+ */
+describe('「今日の利用」カードの「詳しく見る」は今日の期間へ飛ぶ（issue #2078）', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+
+  it('カードの today と同じ from/to を持つ /usage を開く', () => {
+    // 2026-08-14T05:00:00.000Z は TZ=Asia/Tokyo で 08/14 14:00（日を跨がない）。
+    const fixedNow = new Date('2026-08-14T05:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedNow);
+    try {
+      renderDashboard(USAGE);
+
+      // **「詳しく見る」は「次の自動実行」カードとも文言が同じ**（#347 のテスト
+      // が同じ理由でやっているのと同じ手当て）。href で `/usage` 宛てのものを選ぶ。
+      const links = screen.getAllByRole('link', { name: '詳しく見る' });
+      const usageLink = links.find((link) =>
+        (link.getAttribute('href') ?? '').startsWith('/usage'),
+      );
+      expect(usageLink).toBeTruthy();
+
+      // `usageDate` はカードが使っているのと同じ関数——書き写した期待値では
+      // なく、同じ入力（固定した `fixedNow`）に対する同じ関数の戻り値と比べる。
+      const today = usageDate(fixedNow);
+      expect(usageLink!.getAttribute('href')).toBe(`/usage?from=${today}&to=${today}`);
+      // 具体の日付でも固定して落ちることを確かめておく（TZ・system time の
+      // 固定が本当に効いているかの対照）。
+      expect(today).toBe('2026-08-14');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -31,6 +31,7 @@ import type {
   UsageSite,
   UsageTurnRow,
 } from '~/lib/types';
+import { USAGE_FROM_PARAM, USAGE_MANAGER_ID_PARAM, USAGE_TO_PARAM } from '~/lib/usage-links';
 
 /**
  * `/usage` — alteroid が使った分（トークンと費用）。
@@ -54,10 +55,16 @@ const AXIS_LIMIT = 20;
  * `managers.tsx` の `status`（#2030）のようにカンマ区切りへまとめる理由が
  * ここには無い——どれも「1つの値」で、複数値を1つのパラメタへ詰める必要が
  * 無いので、API のクエリ名と揃えたほうが読み手には素直である。
+ *
+ * **`from` / `to` / `managerId` は `~/lib/usage-links` の正本を使う（issue
+ * #2077 / #2078）。** 委譲の詳細（`manager-detail.tsx`）とダッシュボード
+ * （`dashboard.tsx`）が `/usage` へのリンクを組み立てるとき、同じ欄名を
+ * 書き写さずに済ませるため——書き写すと、片方だけ変わる経路が生まれる。
+ * `layer` / `site` / `tokenId` はまだ書き写す先が無いので、ここに残す。
  */
-const FROM_PARAM = 'from';
-const TO_PARAM = 'to';
-const MANAGER_ID_PARAM = 'managerId';
+const FROM_PARAM = USAGE_FROM_PARAM;
+const TO_PARAM = USAGE_TO_PARAM;
+const MANAGER_ID_PARAM = USAGE_MANAGER_ID_PARAM;
 const LAYER_PARAM = 'layer';
 const SITE_PARAM = 'site';
 const TOKEN_ID_PARAM = 'tokenId';

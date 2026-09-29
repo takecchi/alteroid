@@ -20,6 +20,7 @@ import { useManager, useManagerTranscript } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
+import { usageHref } from '~/lib/usage-links';
 
 import type { AppraisalValue } from '@alteroid/core';
 /**
@@ -194,7 +195,22 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
           <RequestCard request={manager.request} />
 
           <Card>
-            <CardHeader title="状態" />
+            <CardHeader
+              title="状態"
+              action={
+                // **同じ母集合（この委譲の managerId）で使用量へ飛ぶだけ（issue
+                // #2077）。ここで使用量を集計し直さない** — 数字の意味は
+                // `/usage` が持つ（`usage.tsx` の doc）。逆向きのリンク
+                // （`/usage` の「マネージャー別」→ `/managers/<id>`）は #2046 /
+                // PR #2047 で在る。
+                <Link
+                  to={usageHref({ managerId: id })}
+                  className="text-xs text-accent hover:underline"
+                >
+                  使用量を見る
+                </Link>
+              }
+            />
             {/*
               **375px でもラベル列（8rem=128px）に取り分を持っていかれないよう、
               `sm:`（640px）未満は1列に積む。** `sm:` を選んだ理由: `reports.tsx`

@@ -24,6 +24,7 @@ import {
 import { useJournalFeed } from '~/hooks/journal-feed';
 import { formatDateTime, formatRelative } from '~/lib/format';
 import { journalEntryLinks } from '~/lib/journal-links';
+import { usageHref } from '~/lib/usage-links';
 
 import { ManagerStatusBadge } from './managers';
 // **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
@@ -238,7 +239,13 @@ export default function Dashboard() {
               title="今日の利用"
               subtitle="推定値。請求明細ではない"
               action={
-                <Link to="/usage" className="text-xs text-accent hover:underline">
+                // **カードの数字（`usage`）と同じ母集合（今日1日）で飛ぶ（issue
+                // #2078）。** `today` はこのカードが集計に使っているのと同じ
+                // 変数——別に作り直すと、カードとリンク先の「今日」がずれうる。
+                <Link
+                  to={usageHref({ from: today, to: today })}
+                  className="text-xs text-accent hover:underline"
+                >
                   詳しく見る
                 </Link>
               }
