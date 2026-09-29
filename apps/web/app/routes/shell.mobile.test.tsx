@@ -241,6 +241,24 @@ describe('/approvals が読めないとき（issue #2105）', () => {
     expect(screen.queryByTitle('承認待ちを読めていない')).toBeNull();
     expect(screen.queryByLabelText('承認待ちを読めていない')).toBeNull();
   });
+
+  it('広い画面で承認待ちが2件のときは、ナビに2のバッジが出て、「読めていない」印は出ない', async () => {
+    setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
+    stubAuthedShell([
+      { id: 'a1', question: '本番に出してよいか' },
+      { id: 'a2', question: 'ロールバックしてよいか' },
+    ]);
+
+    renderShell();
+
+    // `Nav` は `MobileTopBar` と違い `aria-label` を件数バッジに乗せていない
+    // ので、リンクの見える中身（`承認待ち` ラベル＋バッジの数字）で確かめる。
+    const link = await screen.findByRole('link', { name: /承認待ち/ });
+    expect(link.textContent).toContain('2');
+    // 0件のバッジ（対照、直前のテスト）や「読めていない」印と混ざらないこと。
+    expect(screen.queryByTitle('承認待ちを読めていない')).toBeNull();
+    expect(screen.queryByLabelText('承認待ちを読めていない')).toBeNull();
+  });
 });
 
 /**
