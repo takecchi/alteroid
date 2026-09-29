@@ -819,6 +819,30 @@ const SHELL_KEYWORD_PREFIX_SRC = String.raw`(?:(?:if|then|elif|else|while|until|
 const LEADING_COMMAND_PREFIX_NAME_SRC = String.raw`(?:sudo|doas|nice|ionice|nohup|command|builtin|exec|xargs|setsid|stdbuf|chronic|unbuffer|caffeinate)`;
 
 /**
+ * `gh` という語そのものの書き方（issue #2068 D族）。
+ *
+ * - **パス付き**（`/usr/local/bin/gh`・`./gh`）—— `(?:\S*\/)?gh` の
+ *   任意グループが拾う。`\S*` は空白を跨がないので、パスの区切り `/` の
+ *   直前までを1トークンとして読む。パスが無い（`gh` 単体）場合も同じ
+ *   選択肢が0文字のパスとして一致する——素の `gh` の既存の挙動は変わらない。
+ * - **バックスラッシュ**（`\gh`。エイリアス・シェル関数を迂回する書き方）
+ *   —— `\\gh`。
+ * - **引用符で囲んだだけ**（`"gh"`・`'gh'`）—— リテラル。
+ *
+ * どの形も直後に `\s+pr\s+merge` が続くことを要求するのは変わらないので、
+ * `ghost`/`ghcli` のような別の語を誤って `gh` と読むことはない
+ * （`gh` の直後が単語構成文字だと `\s+` の手前で一致しない）。
+ *
+ * ⚠️ **確かめていないこと**: この4形すべてで bash が実際に `gh` を実行
+ * するかどうか自体は確認済み（パス付き・`\gh`・引用符はいずれも通常の
+ * argv 分割で素の `gh` になる、bash の一般的な挙動）。**確かめていない
+ * のは、この検出器の外側**——たとえば `PATH` にそのパスの `gh` が実在
+ * するか等、実行時の話は判定に影響しない（この検出器は文字列だけを見る
+ * 純関数）。
+ */
+const GH_WORD_SRC = String.raw`(?:\\gh|"gh"|'gh'|(?:\S*\/)?gh)`;
+
+/**
  * 1個ぶんのオプションを、**2つの重ならない形**として読む——
  * (1) 単一文字のフラグ+空白+別トークンの値（`-u bot`/`-n 10`。1文字の
  * あとに**必ず空白**が来ることを要求する） (2) ダッシュ+空白を含まない
@@ -845,8 +869,28 @@ const LEADING_COMMAND_PREFIX_NAME_SRC = String.raw`(?:sudo|doas|nice|ionice|nohu
  * 前置き名の一致も失敗し（`bot` はどちらの語彙にも無い）、**その場で
  * 行き止まりになる**——`stdbuf -oL` の場合と違い、置き去りにした語が
  * 次の繰り返し単位の一部として再合流できないので、分岐は増えない。
+ *
+ * ⚠️ **レビューで、上の「分岐は増えない」は成り立たないと分かった**（mgr-712ad619、
+ * 2026-09-29T01:1xZ 実測）。値の位置に `-` で始まる語が来ると、(1) の値として
+ * 飲み込む読みと、(2) で `-u` だけを読んで次の語を次のオプションとして読む読みが、
+ * **同じ続きへ再合流する**。`'sudo ' + '-a '.repeat(n) + 'x'` は n=24 で 0.5ms、
+ * n=28 で 3.5ms（4 増えるごとに約7倍＝フィボナッチの伸び）で、n=40 で1秒を
+ * 超える。値に前置きの名前が来る形（`sudo -u sudo -u sudo …`）も同じ形で再合流する。
+ *
+ * ⟹ (1) の値を `LEADING_COMMAND_PREFIX_VALUE_SRC` に絞った。値は `-` で
+ * 始まらず、次の前置き・予約語・代入・`env`・`gh` の語の始まりでもない。
+ * これで、1文字のオプションの後ろの語を値として読むか読まないかが、常に
+ * 1通りに決まる。**値から外す語は、値として読まなかったときの続きが必ず
+ * `gh` まで届く語に限る。** `timeout`（後ろに継続時間を要する）と
+ * `flock`（後ろにファイルを要する）は外さない。外すと `sudo -u timeout gh
+ * pr merge 1 -d` の `timeout` を値として読めなくなり、すり抜ける。この2語は、
+ * 値として読んだ場合と前置きとして読んだ場合とで次に来るべき語が食い違う
+ * （値として読めば次はオプションか前置き、前置きとして読めば継続時間か
+ * ファイル）ので、どちらか片方は次の語で必ず行き止まりになり、再合流しない。
  */
-const LEADING_COMMAND_PREFIX_OPTION_SRC = String.raw`(?:-[A-Za-z][ \t]+\S+[ \t]+|-\S+[ \t]+)`;
+const LEADING_COMMAND_PREFIX_VALUE_SRC = String.raw`(?!-)(?!(?:(?:if|then|elif|else|while|until|do|coproc|time)[ \t]|[!{][ \t]|[A-Za-z_][A-Za-z0-9_]*=|env\b|${LEADING_COMMAND_PREFIX_NAME_SRC}\b|${GH_WORD_SRC}\s))\S+`;
+
+const LEADING_COMMAND_PREFIX_OPTION_SRC = String.raw`(?:-[A-Za-z][ \t]+${LEADING_COMMAND_PREFIX_VALUE_SRC}[ \t]+|-\S+[ \t]+)`;
 
 const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_SRC}\b[ \t]+(?:${LEADING_COMMAND_PREFIX_OPTION_SRC})*)`;
 
@@ -867,6 +911,15 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  * ⚠️ **28形の対照テストには含めていない**（Issue の必須の31形に `flock` は
  * 無い）。A族の列挙に明記して依頼されたので足したが、実際に `gh` が
  * 絡む形での確認は無い——`.scratch` の検証スクリプトで手元確認したのみ。
+ *
+ * ⚠️ **`'sudo ' + '-u flock '.repeat(n) + 'x'` は2乗で伸びる**（n=200 で
+ * 0.7ms・n=2000 で 54.9ms。mgr-712ad619 の実測 2026-09-29T01:1xZ）。
+ * `flock` は `LEADING_COMMAND_PREFIX_VALUE_SRC` の値から外していない
+ * （外すと `sudo -u flock gh …` がすり抜ける。そちらの doc）ので、`flock`
+ * の語ごとに「値として読む」「前置きとして読む」の2つを試す。後者は次の
+ * 1語で行き止まりになるので指数にはならないが、各開始位置で残りを読む分
+ * だけ2乗になる。すり抜けは作らず、18KB で 200ms の予算にも収まるので、
+ * この版では直していない。
  */
 const FLOCK_PREFIX_SRC = String.raw`(?:flock\b[ \t]+\S+[ \t]+)`;
 
@@ -974,10 +1027,16 @@ const LEADING_ENV_PREFIX_SRC = String.raw`(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_A
  *
  * 直し方: `-d` の前を `-[smr]*d`（値を取らない `s`/`m`/`r` の並びの後ろに
  * `d` が来る形。0個でもよいので素の `-d` もそのまま含む）に広げ、直後を
- * `(?=[smrbtFA]|[^A-Za-z]|$)` （もう1文字続く短いフラグ・非英字・文字列末尾
+ * `(?=[smrbtFAR]|[^A-Za-z]|$)` （もう1文字続く短いフラグ・非英字・文字列末尾
  * のどれか）で締める。この直後条件が、`-dev` のような無関係な語（直後が
- * 英字だが `smrbtFA` のどれでもない `e`）を引き続き弾かないための境界
+ * 英字だが `smrbtFAR` のどれでもない `e`）を引き続き弾かないための境界
  * ——既存の「-d を含む別の語（-dev 等）と誤認しない」歯をそのまま保つ。
+ *
+ * ⚠️ **`R` は、最初の版では直後の集合に入っていなかった**（レビューで
+ * mgr-712ad619 が指摘）。`-R`（`--repo`）は `gh pr merge` が親から継ぐ短い
+ * フラグで、値を取る。だから `-dR o/r` は `-d -R o/r` と読まれ、最初の版では
+ * すり抜けていた（`gh pr merge 1 -dR o/r` / `-sdR o/r` がどちらも
+ * `blocked:false`。2026-09-29T01:1xZ 実測）。
  *
  * - `-sd`/`-ds`/`-msd`（`[smr]*` の並びの前後どちらに `d` が来ても、値を
  *   取らない文字だけで構成されていれば拾う）
@@ -999,7 +1058,7 @@ const LEADING_ENV_PREFIX_SRC = String.raw`(?:${SHELL_KEYWORD_PREFIX_SRC}|${ENV_A
  * すり抜けを作らないほうを優先する方針なので、解釈が違っていても
  * 「弾く」側に倒れるだけで安全側である。
  */
-const SHORT_DELETE_BRANCH_FLAG_SRC = String.raw`(?<=[\s]|(?:^|[\s;&|])(?:\$['"]|['"]))-[smr]*d(?=[smrbtFA]|[^A-Za-z]|$)`;
+const SHORT_DELETE_BRANCH_FLAG_SRC = String.raw`(?<=[\s]|(?:^|[\s;&|])(?:\$['"]|['"]))-[smr]*d(?=[smrbtFAR]|[^A-Za-z]|$)`;
 
 /**
  * 外側の lookbehind の文字集合（issue #2035 で `(` `)` バッククォートを
@@ -1015,30 +1074,6 @@ const SHORT_DELETE_BRANCH_FLAG_SRC = String.raw`(?<=[\s]|(?:^|[\s;&|])(?:\$['"]|
  * 参照。
  */
 const COMMAND_POSITION_LOOKBEHIND_SRC = String.raw`(?<=^|[;&|\n()\u0060])`;
-
-/**
- * `gh` という語そのものの書き方（issue #2068 D族）。
- *
- * - **パス付き**（`/usr/local/bin/gh`・`./gh`）—— `(?:\S*\/)?gh` の
- *   任意グループが拾う。`\S*` は空白を跨がないので、パスの区切り `/` の
- *   直前までを1トークンとして読む。パスが無い（`gh` 単体）場合も同じ
- *   選択肢が0文字のパスとして一致する——素の `gh` の既存の挙動は変わらない。
- * - **バックスラッシュ**（`\gh`。エイリアス・シェル関数を迂回する書き方）
- *   —— `\\gh`。
- * - **引用符で囲んだだけ**（`"gh"`・`'gh'`）—— リテラル。
- *
- * どの形も直後に `\s+pr\s+merge` が続くことを要求するのは変わらないので、
- * `ghost`/`ghcli` のような別の語を誤って `gh` と読むことはない
- * （`gh` の直後が単語構成文字だと `\s+` の手前で一致しない）。
- *
- * ⚠️ **確かめていないこと**: この4形すべてで bash が実際に `gh` を実行
- * するかどうか自体は確認済み（パス付き・`\gh`・引用符はいずれも通常の
- * argv 分割で素の `gh` になる、bash の一般的な挙動）。**確かめていない
- * のは、この検出器の外側**——たとえば `PATH` にそのパスの `gh` が実在
- * するか等、実行時の話は判定に影響しない（この検出器は文字列だけを見る
- * 純関数）。
- */
-const GH_WORD_SRC = String.raw`(?:\\gh|"gh"|'gh'|(?:\S*\/)?gh)`;
 
 /**
  * `gh` と `pr` のあいだに来る、リポジトリ選択のフラグ（issue #2068 E族）。

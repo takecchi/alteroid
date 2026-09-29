@@ -44,14 +44,14 @@ describe('gh-pr-merge-delete-branch: issue #2068 の28形すべてを弾く', ()
 
     // C族——代入の値が空白を含む引用符形
     ['C: X="a b"（二重引用符）', 'X="a b" gh pr merge 1 -d'],
-    ['C: X=\'a b\'（単一引用符）', "X='a b' gh pr merge 1 -d"],
+    ["C: X='a b'（単一引用符）", "X='a b' gh pr merge 1 -d"],
 
     // F族——短縮オプションの束ね書き・ANSI-C/$"…"クオート
     ['F: -sd', 'gh pr merge 1 -sd'],
     ['F: -ds', 'gh pr merge 1 -ds'],
     ['F: -msd', 'gh pr merge 1 -msd'],
     ['F: -sdt x（d の後ろに値を取る t が続く）', 'gh pr merge 1 -sdt x'],
-    ['F: $\'-d\'（ANSI-C クオート）', "gh pr merge 1 $'-d'"],
+    ["F: $'-d'（ANSI-C クオート）", "gh pr merge 1 $'-d'"],
     ['F: $"-d"', 'gh pr merge 1 $"-d"'],
 
     // E族——gh と pr のあいだのリポジトリ選択フラグ
@@ -111,14 +111,12 @@ describe('gh-pr-merge-delete-branch: issue #2068 の直しを足しても偽陽�
     expect(inspectBashCommand('sudo gh pr merge 1 --squash').blocked).toBe(false);
   });
 
-  it('grep -- \'-sd\' f は通す（gh pr merge の呼び出しがそもそも無い）', () => {
+  it("grep -- '-sd' f は通す（gh pr merge の呼び出しがそもそも無い）", () => {
     expect(inspectBashCommand("grep -- '-sd' f").blocked).toBe(false);
   });
 
   it('gh pr create --body の引用符の中の sudo gh pr merge -d は通す（--body の値として潰される）', () => {
-    expect(
-      inspectBashCommand('gh pr create --body "sudo gh pr merge 1 -d"').blocked,
-    ).toBe(false);
+    expect(inspectBashCommand('gh pr create --body "sudo gh pr merge 1 -d"').blocked).toBe(false);
   });
 
   it('/usr/local/bin/gh pr view 1 は通す（パス付き gh でも merge ではなく view）', () => {
@@ -157,8 +155,35 @@ describe('gh-pr-merge-delete-branch: issue #2068 の追加確認（28形の表�
   // の直後に来るべき「素の位置引数（ロックファイル）」が見つからず、
   // この前置き全体が読み飛ばせなくなる——`gh` が前置きコマンドの名前と
   // 誤認されないぶん安全側（すり抜けではなく検出漏れ）。
-  it('A bonus: 弾けない形——flock -n <file>（オプション付き）', () => {
-    expect(inspectBashCommand('flock -n /tmp/l gh pr merge 1 -d').blocked).toBe(false);
+  //
+  // ⚠️ レビュー（mgr-712ad619）で `it.fails` に直した。最初の版は
+  // `toBe(false)` で「通る」を仕様として固定していた。これは既知の穴であって
+  // 望む挙動ではないので、望む挙動（`true`）を期待値に書き、直った瞬間に
+  // 赤くなって知らせる形にした（`bash-wait-guard.test.ts` の `bash -c` の
+  // 反転と同じ理由）。
+  it.fails('A bonus: 弾けない形——flock -n <file>（オプション付き）', () => {
+    expect(inspectBashCommand('flock -n /tmp/l gh pr merge 1 -d').blocked).toBe(true);
+  });
+
+  // 以下はレビュー（mgr-712ad619、2026-09-29T01:1xZ）で見つけて直した形。
+  it('F: -dR o/r（d の後ろに、値を取る -R が続く＝ -d -R o/r）', () => {
+    expect(inspectBashCommand('gh pr merge 1 -dR o/r').blocked).toBe(true);
+  });
+
+  it('F: -sdR o/r', () => {
+    expect(inspectBashCommand('gh pr merge 1 -sdR o/r').blocked).toBe(true);
+  });
+
+  it('A: オプションの値が timeout という語でも読む（sudo -u timeout gh …）', () => {
+    expect(inspectBashCommand('sudo -u timeout gh pr merge 1 -d').blocked).toBe(true);
+  });
+
+  it('A: オプションの値が前置きの名前でも弾く（sudo -u sudo gh …）', () => {
+    expect(inspectBashCommand('sudo -u sudo gh pr merge 1 -d').blocked).toBe(true);
+  });
+
+  it('A: オプションの値が gh という語なら、gh として読んで弾く（sudo -u gh pr merge …）', () => {
+    expect(inspectBashCommand('sudo -u gh pr merge 1 -d').blocked).toBe(true);
   });
 });
 
@@ -228,6 +253,40 @@ describe('gh-pr-merge-delete-branch: issue #2068 前置きの繰り返しが長�
 
   it('timeout -k 5 30 の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
     const command = `${'timeout -k 5 30 '.repeat(4000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  // レビュー（mgr-712ad619）で見つけた指数的な後戻り。オプションの値の位置に
+  // `-` で始まる語や前置きの名前が来ると、値として飲み込む読みと飲み込まない
+  // 読みが同じ続きへ再合流していた（直す前は n=28 で 3.5ms、4 増えるごとに
+  // 約7倍。n=2000 は現実的な時間では終わらない）。
+  it('値の位置に - で始まる語が続く繰り返し（sudo -a -a …）が線形に終わる', () => {
+    const command = `sudo ${'-a '.repeat(2000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  // 上の n=2000 は、指数の版では終わらない（テストが失敗ではなく止まる）。
+  // 指数の版でも1秒前後で終わって「予算を超えた」と赤になる大きさを別に置く
+  // （4 増えるごとに約7倍なので、n=28 の 3.5ms から n=40 は 1 秒を超える）。
+  it('値の位置に - で始まる語が続く短い繰り返し（n=40）も予算内に終わる', () => {
+    const command = `sudo ${'-a '.repeat(40)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('値の位置に前置きの名前が続く繰り返し（sudo -u sudo -u …）が線形に終わる', () => {
+    const command = `${'sudo -u '.repeat(2000)}x`;
     const start = performance.now();
     const verdict = inspectBashCommand(command);
     const elapsedMs = performance.now() - start;
