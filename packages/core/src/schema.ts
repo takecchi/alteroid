@@ -1373,6 +1373,10 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
      * 通らないのに、通る候補が在る」**という状態そのものである
      * （`TokenRotator.reconsider`）。⟹ **`stranded` の行は、セッションが1本も
      * 走っていないあいだにも出る。**
+     *
+     * **`settings_unreadable`（issue #2147）も観測から出ない。** 回転の設定
+     * （`TokenRotationSettings`）そのものが読めなかった回で、`observe` /
+     * `reconsider` のどちらからも出うる（`stranded` は `reconsider` 専用）。
      */
     signal: z
       .enum([
@@ -1384,6 +1388,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         'warning',
         'none',
         'stranded',
+        'settings_unreadable',
       ])
       .optional(),
     /**

@@ -11,7 +11,7 @@ import {
   type TokenSpreadPort,
   type TokenSpreadResult,
 } from './token-rotator.js';
-import { UnreadableActiveTokenError, type Stores } from './store.js';
+import { UnreadableActiveTokenError, UnreadableTokenSettingsError, type Stores } from './store.js';
 import type { UsageLimitNotice } from './usage-limits.js';
 import type { TokenCredential } from './token-pool.js';
 
@@ -1829,6 +1829,213 @@ describe('issue #2128: 現役の指名が読めない（UnreadableActiveTokenErr
     expect(entry?.text).toContain('現役の指名の generation 欄が壊れている');
     // **読めない指名の値そのものは含まない。**
     expect(entry?.text).not.toContain('value-a');
+  });
+});
+
+/**
+ * `stores.tokens.readSettings()` を、`UnreadableTokenSettingsError` を投げる形に
+ * 壊す（issue #2147。#2128 の対の穴——`readActiveOrUnreadable` と同じ形の壊し方を
+ * `readSettings` へ当てる）。**版ずれ・手編集で `rotateOn` が enum の外になった、
+ * 本物の壊れ方**を模す。`writeSettings` を挟んで直す口は塞がない
+ * （`store.ts` の `readSettings()` の doc）。
+ */
+function breakTokenSettings(h: Harness, reason = 'rotateOn が enum の外'): void {
+  const store = h.stores.tokens;
+  const realReadSettings = store.readSettings.bind(store);
+  const realWriteSettings = store.writeSettings.bind(store);
+  let broken = true;
+  store.readSettings = async () => {
+    if (broken) throw new UnreadableTokenSettingsError(reason);
+    return await realReadSettings();
+  };
+  store.writeSettings = async (settings) => {
+    broken = false;
+    return await realWriteSettings(settings);
+  };
+}
+
+/**
+ * **issue #2147（issue #2128 の対の穴）** —— 回転の設定（`settings`）が読めない
+ * （`UnreadableTokenSettingsError`）とき、`observe` / `reconsider` の
+ * `Promise.all` が丸ごと reject して、その回の観測（読めていたトークンの一覧と
+ * 指名を含む）が捨てられていた。**設定に依存しない効果は進め、設定に依存する
+ * 判定（回すかどうか）はしない。既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）へ
+ * すり替えない。**
+ *
+ * `settings` が `observe` / `reconsider` の中でどこに要るかは冒頭の表のとおり
+ * ——**回すかどうか**（`decideTokenRotation` / `rotateOn === 'off'` の3箇所）と
+ * **冷却の既定**（`cooldownMs`。権威ある `resets` が無い回だけ要る）の2種類しか
+ * 無い。前者は「その回は回さない」で片付き、後者は「`resets`（`retryAt`）が
+ * 在れば設定なしで書ける」で片付く——`observe` 側は「回す」と決めた後にしか
+ * 冷却を書かないので、設定が読めない限り出番が無い（= 実質「回すかどうか」の
+ * 1本だけで閉じる）。`reconsider` 側だけ、現役への probe 結果を「回すかどうか」
+ * より先に記録する経路（下の (c)）を持つ。
+ */
+describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsError）', () => {
+  it('(a) observe: 読めなくても reject しない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    breakTokenSettings(h);
+
+    await expect(h.rotator.observe({ notice: reached })).resolves.toBeDefined();
+  });
+
+  it('(a) reconsider: 読めなくても reject しない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    breakTokenSettings(h);
+
+    await expect(h.rotator.reconsider({ reason: 'tick' })).resolves.toBeDefined();
+  });
+
+  it('(b) observe: 回すかどうかを判定できないので、この回は回さない（撒かない・現役も動かさない）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    breakTokenSettings(h);
+
+    const outcome = await h.rotator.observe({ notice: reached });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    // **現役の指名は1文字も動かない**（既定なら `reached` で回るはずの観測）。
+    await expect(h.stores.tokens.readActive()).resolves.toEqual({
+      tokenId: 'tok-a',
+      generation: 1,
+      rotatedAt: '2026-08-25T00:00:00.000Z',
+    });
+  });
+
+  it('(b) reconsider: まだ一度も指名していない状態からも、この回は選ばない（撒かない）', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakTokenSettings(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'startup' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    await expect(h.stores.tokens.readActive()).resolves.toBeNull();
+  });
+
+  it('(b) reconsider: 記録の上で現役が通らなくても（dangling）、次の候補へは回さない', async () => {
+    // **`availability === 'ready'` の早期リターンを避ける**——tok-a を現役に
+    // 指名したまま、プールには tok-b しか置かない（`dangling`）。これで
+    // 「回すかどうか」の判定（下の `settingsRead.readable` の門）まで進む。
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-b', label: 'second', value: 'value-b', order: 0 }]);
+    await h.stores.tokens.writeActive({ tokenId: 'tok-a', generation: 1, rotatedAt: AT });
+    breakTokenSettings(h);
+
+    const outcome = await h.rotator.reconsider({ reason: 'tick' });
+
+    expect(outcome.kind).toBe('ignored');
+    expect(h.spreadCalls).toEqual([]);
+    await expect(h.stores.tokens.readActive()).resolves.toMatchObject({ tokenId: 'tok-a' });
+  });
+
+  it('(c) reconsider: probe の観測が resetsAt（retryAt）を運んでいれば、設定が読めなくても冷却を書く', async () => {
+    const h = harness();
+    await seedTwo(h); // tok-a が現役、どちらも ready
+    breakTokenSettings(h);
+    const retryAt = Date.parse(AT) + 6 * 60 * 60 * 1000;
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '枠が尽きた', retryAt },
+        origin: { source: 'account_probe' },
+      },
+    });
+
+    // **回すかどうかの判定はしない**（settings が読めないので）が、
+    // **権威ある resetsAt を運んだ冷却の記録は書く**（issue #2147 の直し方）。
+    expect(outcome.kind).toBe('ignored');
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.cooldownUntil).toBe(retryAt);
+    expect(row?.lastRejectedReason).toBe('枠が尽きた');
+    expect(await isCooling(h, 'tok-a')).toBe(true);
+  });
+
+  it('(c) reconsider: resetsAt（retryAt）を運んでいなければ、設定が読めない回は冷却を書かない', async () => {
+    const h = harness();
+    await seedTwo(h); // tok-a が現役、どちらも ready
+    breakTokenSettings(h);
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '枠が尽きた' },
+        origin: { source: 'account_probe' },
+      },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    // **権威ある期限が無く、冷却の既定（`cooldownMs`）も読めないので、書かない。**
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-a');
+    expect(row?.cooldownUntil).toBeUndefined();
+    expect(row?.lastRejectedAt).toBeUndefined();
+    expect(row?.lastRejectedReason).toBeUndefined();
+    expect(await isCooling(h, 'tok-a')).toBe(false);
+  });
+
+  it('(d) 読めなかったことが why / 日誌に残り、既定値の文言（free_exhausted 等）を名乗らない', async () => {
+    const h = harness();
+    await seedTwo(h);
+    breakTokenSettings(h, 'rotateOn が enum の外');
+
+    const outcome = await h.rotator.observe({ notice: reached });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    // **`signal` は `none` を借りない**（`describeTokenRotation` が
+    // `signal === 'none'` を日誌に出さないので、設定が壊れている事実が消える）。
+    expect(outcome.signal).toBe('settings_unreadable');
+    // 欄名だけの理由が乗る。**値（実際の `rotateOn` の中身）は出さない。**
+    expect(outcome.why).toContain('rotateOn が enum の外');
+    expect(outcome.why).not.toContain('free_exhausted');
+
+    const entry = tokenRotationEntry(outcome);
+    expect(entry).not.toBeNull();
+    expect(entry?.text).toContain('rotateOn が enum の外');
+    expect(entry?.text).not.toContain('free_exhausted');
+  });
+
+  it('(d) reconsider 側でも、読めなかったことが why / 日誌に残る', async () => {
+    const h = harness();
+    await h.stores.tokens.replace([{ id: 'tok-a', label: 'first', value: 'value-a', order: 0 }]);
+    breakTokenSettings(h, 'cooldownMs が負の数');
+
+    const outcome = await h.rotator.reconsider({ reason: 'startup' });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    expect(outcome.signal).toBe('settings_unreadable');
+    expect(outcome.why).toContain('cooldownMs が負の数');
+
+    const entry = tokenRotationEntry(outcome);
+    expect(entry).not.toBeNull();
+    expect(entry?.text).toContain('cooldownMs が負の数');
+    expect(entry?.text).not.toContain('free_exhausted');
+  });
+
+  it('(e) UnreadableTokenSettingsError 以外はそのまま投げる（observe）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    h.stores.tokens.readSettings = async () => {
+      throw new Error('記憶ストアの接続断');
+    };
+
+    await expect(h.rotator.observe({ notice: reached })).rejects.toThrow('記憶ストアの接続断');
+  });
+
+  it('(e) UnreadableTokenSettingsError 以外はそのまま投げる（reconsider）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    h.stores.tokens.readSettings = async () => {
+      throw new Error('記憶ストアの接続断');
+    };
+
+    await expect(h.rotator.reconsider({ reason: 'tick' })).rejects.toThrow('記憶ストアの接続断');
   });
 });
 

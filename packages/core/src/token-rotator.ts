@@ -24,7 +24,12 @@ import { parseNoticeResetAt } from './usage-reset-text.js';
 import type { JournalEntryInput } from './schema.js';
 import type { RateLimitFacts, UsageLimitNotice } from './usage-limits.js';
 import type { TokenCandidateVerdict } from './token-candidate.js';
-import { UnreadableActiveTokenError, type Stores, type TokenPoolStore } from './store.js';
+import {
+  UnreadableActiveTokenError,
+  UnreadableTokenSettingsError,
+  type Stores,
+  type TokenPoolStore,
+} from './store.js';
 
 /**
  * 回し手（Issue #393 PR3）。**デーモンの中の1本。**
@@ -878,6 +883,36 @@ async function readActiveOrUnreadable(store: TokenPoolStore): Promise<ActiveToke
   }
 }
 
+/**
+ * `stores.tokens.readSettings()` の結果を、**読めなかった事実を黙って落とさずに**
+ * 運ぶ形（issue #2147。{@link readActiveOrUnreadable} と同じ形——issue #2128 の
+ * 対の穴）。
+ *
+ * `UnreadableTokenSettingsError` を投げられると、`observe` / `reconsider` の
+ * 最初の `Promise.all` が落ち、その回の観測（読めていたトークンの一覧と指名を
+ * 含む）が丸ごと捨てられる。**既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）へ
+ * 黙って畳まない**——`rotateOn: 'off'` にしてあった回転を実装が黙って戻す
+ * ことになる（`store.ts` の `readSettings()` の doc、issue #2053）。⟹ 読めな
+ * かった事実そのものを運び、呼び出し側に「設定が要る判定はしない」を選ばせる。
+ *
+ * `UnreadableTokenSettingsError` 以外はここで飲み込まない——**それ以外のエラーは
+ * 呼び出し元へそのまま投げる**（記憶ストアの接続断などを「設定が既定」に見せない）。
+ */
+type SettingsRead =
+  | { readable: true; settings: TokenRotationSettings }
+  | { readable: false; reason: string };
+
+async function readSettingsOrUnreadable(store: TokenPoolStore): Promise<SettingsRead> {
+  try {
+    return { readable: true, settings: await store.readSettings() };
+  } catch (error) {
+    if (error instanceof UnreadableTokenSettingsError) {
+      return { readable: false, reason: error.message };
+    }
+    throw error;
+  }
+}
+
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const { stores, probe, spread } = options;
   const now = options.now ?? (() => new Date());
@@ -1713,9 +1748,9 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     observe: (observation: TokenRotatorObservation) =>
       serial(async () => {
-        const [tokens, settings, activeRead] = await Promise.all([
+        const [tokens, settingsRead, activeRead] = await Promise.all([
           stores.tokens.list(),
-          stores.tokens.readSettings(),
+          readSettingsOrUnreadable(stores.tokens),
           readActiveOrUnreadable(stores.tokens),
         ]);
         // **読めなかった回は、指名なし（`null`）と同じ経路で判定する**
@@ -1726,6 +1761,30 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         const activeUnreadableReason = activeRead.readable ? undefined : activeRead.reason;
 
         const freshness = observationFreshness(active, observation.observedBy ?? {});
+
+        // **回転の設定（issue #2147。issue #2128 の対の穴）——読めなかったら
+        // 「回すかどうか」を判定しない。既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）
+        // へすり替えると、`rotateOn: 'off'` にしてあった回転を黙って戻すことに
+        // なる（`store.ts` の `readSettings()` の doc）。⟹ この回は回さない
+        // ——`decideTokenRotation` そのものを呼ばない（`rotateOn` が要るので
+        // 呼べない）。観測（`tokens` / `active`）はここまで読めているので、
+        // その事実（`freshness`）だけを乗せて返す。読めなかったことは値を
+        // 出さず欄名だけ `why` に残す（`settingsRead.reason` は
+        // `UnreadableTokenSettingsError` の message で、欄名だけを含む——
+        // `store.ts` の doc）。**`signal` は `none` を借りない**
+        // （`describeTokenRotation` が `signal === 'none'` を日誌に出さない
+        // ので、設定が壊れている事実が消える——`token-rotation.ts` の
+        // `TokenRotationSignal` の doc）。
+        if (!settingsRead.readable) {
+          return {
+            kind: 'ignored' as const,
+            signal: 'settings_unreadable' as const,
+            freshness,
+            why: `回転の設定が読めなかった（${settingsRead.reason}）。回すかどうかを判定できないので、この回は回さない`,
+          };
+        }
+        const settings = settingsRead.settings;
+
         // **`freshness` を判定へ渡す。** 遷移が取れなかった回の `rejected` を
         // 状態で拾うのに要る（#668。あちらの doc に「毎ターン回す」を塞ぐ機構が
         // 遷移から世代へ移った理由がある）。
@@ -1888,9 +1947,9 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       serial(async () => {
         const { reason, current } = input;
         const currentVerdict = current?.verdict;
-        const [tokens, settings, activeRead] = await Promise.all([
+        const [tokens, settingsRead, activeRead] = await Promise.all([
           stores.tokens.list(),
-          stores.tokens.readSettings(),
+          readSettingsOrUnreadable(stores.tokens),
           readActiveOrUnreadable(stores.tokens),
         ]);
         // **読めなかった回は、指名なし（`null`）と同じ経路で判定する**
@@ -1957,7 +2016,21 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
            * `dangling`（指名の先の行が消えている）と同じで、撒く値がそもそも
            * 無い。`stranded` の印をそのまま使う。
            */
-          if (settings.rotateOn === 'off') {
+          // **回転の設定が読めなかったら、ここでも「回すかどうか」を判定しない**
+          // （issue #2147）。`sweepCandidates` は設定そのものを要るので、
+          // 既定値へすり替えずに読めなかった事実を `why` へそのまま残す。
+          // **`signal` は `stranded` を借りない**——あちらは「記録の上で現役が
+          // 通らない」という別の事実の印である（`token-rotation.ts` の
+          // `TokenRotationSignal` の doc）。
+          if (!settingsRead.readable) {
+            return {
+              kind: 'ignored' as const,
+              signal: 'settings_unreadable' as const,
+              reason,
+              why: `まだ一度も指名していない。回転の設定が読めなかった（${settingsRead.reason}）ので、この回は回さない`,
+            };
+          }
+          if (settingsRead.settings.rotateOn === 'off') {
             return {
               kind: 'ignored' as const,
               signal: 'stranded' as const,
@@ -1965,7 +2038,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               why: 'まだ一度も指名していない。回す契機の設定が off なので回さない（記録だけする）',
             };
           }
-          const sweep = await sweepCandidates(tokens, [], settings);
+          const sweep = await sweepCandidates(tokens, [], settingsRead.settings);
           return finishSweep({
             sweep,
             active: null,
@@ -2116,24 +2189,35 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         let pool = tokens;
         let blockedByProbe = false;
         if (currentVerdict?.verdict === 'unusable' && currentRow !== undefined) {
-          const at = now().toISOString();
-          pool = await stores.tokens.replace(
-            tokens.map((token) =>
-              token.id === currentRow.id
-                ? markTokenUnusable(token, {
-                    at,
-                    message: currentVerdict.reason,
-                    // 出所は `quota_reset`（`/usage` の枠のリセット時刻。#683 —
-                    // 上の `sweepCandidates` の同じ箇所と同じ理由）。
-                    ...(currentVerdict.retryAt === undefined
-                      ? {}
-                      : { resets: { at: currentVerdict.retryAt, source: 'quota_reset' as const } }),
-                    fallbackCooldownMs: settings.cooldownMs,
-                  })
-                : token,
-            ),
-          );
-          blockedByProbe = true;
+          // 出所は `quota_reset`（`/usage` の枠のリセット時刻。#683 — 上の
+          // `sweepCandidates` の同じ箇所と同じ理由）。**権威ある値なので、
+          // 回転の設定（`cooldownMs`）が読めなくてもこれだけで冷却が書ける**
+          // （issue #2147。`fallbackCooldownMs` は `resets` が在れば読まれない
+          // ——`token-pool.ts` の `nextCooldownUntil`）。
+          const resets =
+            currentVerdict.retryAt === undefined
+              ? undefined
+              : { at: currentVerdict.retryAt, source: 'quota_reset' as const };
+          // **設定が読めず、かつ権威ある `resets` も無ければ書かない。** 書くには
+          // `cooldownMs`（設定）が要る——既定値へすり替えない（issue #2147）。
+          if (resets !== undefined || settingsRead.readable) {
+            const at = now().toISOString();
+            pool = await stores.tokens.replace(
+              tokens.map((token) =>
+                token.id === currentRow.id
+                  ? markTokenUnusable(token, {
+                      at,
+                      message: currentVerdict.reason,
+                      ...(resets === undefined ? {} : { resets }),
+                      ...(settingsRead.readable
+                        ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
+                        : {}),
+                    })
+                  : token,
+              ),
+            );
+            blockedByProbe = true;
+          }
         }
 
         const row = pool.find((token) => token.id === currentId);
@@ -2207,8 +2291,23 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               ? `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${currentVerdict?.verdict === 'unusable' ? currentVerdict.reason : ''}）`
               : `記録の上でいまの現役「${row?.label ?? currentId}」は通らない（${availability}）`;
 
+        // **回転の設定が読めなかったら、ここでも「回すかどうか」を判定しない**
+        // （issue #2147）。`stranded`（上の probe の書き込み）はもう済んでいる
+        // ——ここで止めるのは「次の候補へ移るかどうか」の判定だけである。
+        // **`signal` は `stranded` を借りない**——「設定が読めない」と「記録の
+        // 上で現役が通らない」は別の事実である（`stranded` の文言そのものは
+        // `why` に残す）。
+        if (!settingsRead.readable) {
+          return {
+            kind: 'ignored' as const,
+            signal: 'settings_unreadable' as const,
+            reason,
+            why: `${stranded}。回転の設定が読めなかった（${settingsRead.reason}）ので、この回は回さない`,
+          };
+        }
+
         // **人間が自動を切っている。記録はするが回さない**（`observe` と同じ扱い）。
-        if (settings.rotateOn === 'off') {
+        if (settingsRead.settings.rotateOn === 'off') {
           return {
             kind: 'ignored' as const,
             signal: 'stranded' as const,
@@ -2217,7 +2316,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           };
         }
 
-        const sweep = await sweepCandidates(pool, [currentId], settings);
+        const sweep = await sweepCandidates(pool, [currentId], settingsRead.settings);
         return finishSweep({
           sweep,
           active,

@@ -46,6 +46,7 @@ import {
  * - `warning`: 近いだけ
  * - `none`: 回す材料が何も無い
  * - `stranded`: **観測ではなく記録から決めた**（下）
+ * - `settings_unreadable`: **回転の設定そのものが読めなかった**（下。issue #2147）
  *
  * ## `stranded` は他の6値と出所が違う
  *
@@ -58,6 +59,18 @@ import {
  * **回った回の日誌に「回す材料が無い」と書く**ことになる。逆に `reached` を
  * 借りると、**当たっていない文言が当たったことになる。** どちらも出力が嘘に
  * なるので、出所の違う契機には別の値を与える。
+ *
+ * ## `settings_unreadable` も別の値にした理由（issue #2147）
+ *
+ * `TokenPoolStore.readSettings()` が `UnreadableTokenSettingsError` を投げた回
+ * （`observe` からも `reconsider` からも起こりうる——`stranded` と違って発生源を
+ * 1つに絞れない）。**`none` を借りると、`describeTokenRotation` の
+ * 「`signal === 'none'` は日誌に出さない」判定に飲まれて消える** ——設定が壊れて
+ * いるという運用上重要な事実が、ちょうど「回す材料が無いだけの静かな回」と
+ * 同じ顔になって見えなくなる。**`stranded` を借りても同じ問題は起きない
+ * （借りれば日誌には出る）が、`stranded` は「記録の上で現役が通らない」という
+ * 別の事実の印であり、意味を混ぜると次にそこを読む人が発生源を誤読する**
+ * （`schema.ts` の `token_rotation.signal` の doc に同じ注記がある）。
  */
 export type TokenRotationSignal =
   | 'reached'
@@ -67,7 +80,8 @@ export type TokenRotationSignal =
   | 'org_policy'
   | 'warning'
   | 'none'
-  | 'stranded';
+  | 'stranded'
+  | 'settings_unreadable';
 
 /** 判定の結果。**`rotate` だけでなく、なぜそう決めたかを必ず持って返る。** */
 export interface TokenRotationDecision {

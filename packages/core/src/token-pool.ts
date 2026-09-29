@@ -655,8 +655,16 @@ export interface TokenFailureObservation {
    * **これは推測である。** だから {@link nextCooldownUntil} は、この値から作った期限を
    * **記録されている未来の期限より後ろへは置かない**（本番でそれが起きた実測は
    * あちらの doc）。
+   *
+   * **省略できるのは `resets` を運んでいる回だけである**（issue #2147）。
+   * `resets`（権威ある値）が在れば {@link nextCooldownUntil} はこの欄を
+   * 一度も読まずに返る——回転の設定（`TokenRotationSettings.cooldownMs`）が
+   * 読めなかった呼び出し側は、権威ある `resets` が在るときに限って省略してよい。
+   * **`resets` も無いのにここを省略しないこと** —— 候補（`recorded` /
+   * `noticeResetsAt` / この欄）が1つも残らず、{@link nextCooldownUntil} の
+   * `candidates.reduce` が空配列で例外を投げる。
    */
-  fallbackCooldownMs: number;
+  fallbackCooldownMs?: number;
 }
 
 /**
@@ -758,7 +766,12 @@ function nextCooldownUntil(
     ...(observation.noticeResetsAt === undefined
       ? []
       : [{ until: observation.noticeResetsAt, source: 'notice_text' as const }]),
-    { until: at + observation.fallbackCooldownMs, source: 'default' as const },
+    // **省略できる**（issue #2147）——回転の設定が読めなかった呼び出し側が、
+    // `resets` を運んでいる回に限って省く。省いたときにここへ来ることはない
+    // （`resets` が在れば関数の先頭で return 済み）が、念のため候補に足さない。
+    ...(observation.fallbackCooldownMs === undefined
+      ? []
+      : [{ until: at + observation.fallbackCooldownMs, source: 'default' as const }]),
   ];
   // **いちばん早いものを採る。** 同値なら先に並んでいるほう（`reduce` の初期値を
   // 先頭にして、**厳密に小さいときだけ**入れ替える）。
