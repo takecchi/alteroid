@@ -738,6 +738,60 @@ describe('HTTP API', () => {
     expect(await stores.persona.protectionStatus('values')).toEqual({ kind: 'human' });
   });
 
+  it(
+    '日誌への追記が落ちても、書き換えは効いていて応答は成功する（Issue #2037）。' +
+      'stderr に跡が1行出て、その行に本文は載らない。' +
+      '**`markHumanTouched` も呼ばれない**（裏付けの日誌行が無いので、保護状態は' +
+      '"human" にならない——`PersonaStore.markHumanTouched` の doc）',
+    async () => {
+      await stores.persona.write('journal-drop-memory', '# 元の内容\n');
+      expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
+        kind: 'clone-only',
+      });
+
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request('/memory/journal-drop-memory', {
+          ...json({ content: '# SECRET-NEW-CONTENT\n' }),
+          method: 'PUT',
+        });
+      });
+
+      expect(response?.status).toBe(200);
+
+      // 書き換え自体は効いている(同じストアを見ている元の app 経由で確認)。
+      const read = await app.request('/memory/journal-drop-memory');
+      const body = (await read.json()) as { document: { content: string } };
+      expect(body.document.content).toContain('SECRET-NEW-CONTENT');
+
+      // markHumanTouched は呼ばれていない——保護状態は "human" になっていない
+      // （`write()` はハッシュも一緒に更新するので "clone-only" のまま）。
+      expect(await stores.persona.protectionStatus('journal-drop-memory')).toEqual({
+        kind: 'clone-only',
+      });
+
+      const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).not.toContain('SECRET-NEW-CONTENT');
+    },
+  );
+
   it('存在しない記憶は 404', async () => {
     expect((await app.request('/memory/nope')).status).toBe(404);
   });
@@ -4436,6 +4490,51 @@ describe('HTTP API', () => {
     expect((await stores.commitments.get(other.id))?.closedAt).toBeUndefined();
   });
 
+  it(
+    '日誌への追記が落ちても、片付けは効いていて応答は成功する（Issue #2037）。' +
+      'stderr に跡が1行出て、その行に理由の本文は載らない',
+    async () => {
+      const opened = await app.request('/commitments', json({ body: '日誌が落ちても片付く件' }));
+      const { id } = (await opened.json()) as { id: string };
+
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request(
+          `/commitments/${id}/close`,
+          json({ reason: 'SECRET-CLOSE-REASON' }),
+        );
+      });
+
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toEqual({ ok: true });
+
+      // 片付け自体は効いている（同じストアを見ている元の app 経由で確認）。
+      expect(await stores.commitments.get(id)).toMatchObject({
+        closedReason: 'SECRET-CLOSE-REASON',
+      });
+
+      const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).not.toContain('SECRET-CLOSE-REASON');
+    },
+  );
+
   /**
    * `PATCH /commitments/:id`（本 PR）。編集できるのは `origin: 'human'` かつ
    * 未了の行の `body` だけ——`commitmentSchema.editedAt` の doc、
@@ -4727,6 +4826,195 @@ describe('HTTP API', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(shutdowns).toBe(1);
+  });
+});
+
+/**
+ * `POST /reset`（Issue #2037）。取り消せない操作なので、`cleared`（消した件数の
+ * 内訳）を応答から失わないことが特に重要——リセット自体はもう空にしてしまった
+ * 後なので、やり直しても件数は変わらない（0 のまま）。
+ */
+describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () => {
+  it(
+    '日誌への追記が落ちても、リセット自体は効いていて cleared の内訳ごと応答が返る。' +
+      'stderr に跡が1行出る',
+    async () => {
+      await stores.persona.write('values', '# 消えるはずの記憶\n');
+      await stores.commitments.open({
+        id: 'cm-reset-1',
+        at: new Date().toISOString(),
+        origin: 'human',
+        body: '消えるはずの仕事',
+      });
+
+      const failingJournal: Stores = {
+        ...stores,
+        journal: {
+          ...stores.journal,
+          append: () => {
+            throw new Error('journal store unavailable (test)');
+          },
+        },
+      };
+      const withFailingJournal = createApp({
+        clone: fake.clone,
+        stores: failingJournal,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+
+      let response: Response | undefined;
+      const lines = await captureStderr(async () => {
+        response = await withFailingJournal.request('/reset', json({ confirm: true }));
+      });
+
+      expect(response?.status).toBe(200);
+      const body = (await response?.json()) as { cleared: Record<string, number> };
+      // リセット自体は効いている——消した件数の内訳が応答から失われていない。
+      expect(body.cleared.memory).toBe(1);
+      expect(body.cleared.commitments).toBe(1);
+
+      // 実際に消えていることを、同じストアを見ている元の app 経由で確認する。
+      expect(await stores.persona.list()).toEqual([]);
+      expect((await stores.commitments.list()).entries).toEqual([]);
+
+      const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+      expect(dropped).toHaveLength(1);
+    },
+  );
+});
+
+/**
+ * **`appendJournalOrDrop` を当てた残りの口を、安く1本の表で撃つ（Issue #2037）。**
+ *
+ * 3本の代表的な歯（`PUT /memory/:slug`・`POST /commitments/:id/close`・
+ * `POST /reset`、それぞれ上のテストで別撃ち）は状態変更が効いていること・
+ * stderr の跡の中身・本文が載らないことまで詳しく見ている。ここでは軽く——
+ * 残りの口それぞれについて「日誌への追記が落ちても 500 にならない」ことと
+ * 「stderr に跡が最低1行出る」ことだけを、1つの表駆動テストでまとめて撃つ。
+ */
+describe('appendJournalOrDrop を当てた残りの口: 追記が落ちても 500 にならない（Issue #2037）', () => {
+  it('各口とも、日誌への追記が落ちても応答は 500 にならず、stderr に跡が出る', async () => {
+    await stores.persona.write('table-memory', '# 元の内容\n');
+    await stores.practices.write({ slug: 'table-practice', kind: 'k', title: 't', content: 'c' });
+    await stores.schedules.put({
+      kind: 'table-kind',
+      spec: { type: 'daily', at: '09:00' },
+      request: '既存の依頼',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    });
+    const openedForAppraise = await app.request('/commitments', json({ body: '評定対象' }));
+    const { id: appraiseId } = (await openedForAppraise.json()) as { id: string };
+    const openedForPatch = await app.request('/commitments', json({ body: '編集対象' }));
+    const { id: patchId } = (await openedForPatch.json()) as { id: string };
+    await stores.inbox.put(
+      {
+        type: 'human_message',
+        id: 'table-inbox-1',
+        at: '2026-08-10T00:00:00.000Z',
+        text: '表駆動の対象',
+        conversationId: 'conv-table',
+      },
+      '2026-08-10T00:00:00.000Z',
+    );
+
+    const failingJournal: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => {
+          throw new Error('journal store unavailable (test)');
+        },
+      },
+    };
+    const withFailingJournal = createApp({
+      clone: fake.clone,
+      stores: failingJournal,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+
+    const cases: { name: string; request: () => Response | Promise<Response> }[] = [
+      {
+        name: 'DELETE /memory/:slug',
+        request: () => withFailingJournal.request('/memory/table-memory', { method: 'DELETE' }),
+      },
+      {
+        name: 'PUT /practices/:slug',
+        request: () =>
+          withFailingJournal.request('/practices/table-practice', {
+            ...json({ kind: 'k', title: 't2', content: 'c2' }),
+            method: 'PUT',
+          }),
+      },
+      {
+        name: 'POST /schedule',
+        request: () =>
+          withFailingJournal.request(
+            '/schedule',
+            json({
+              kind: 'table-new-kind',
+              request: '新しい依頼',
+              spec: { type: 'daily', at: '10:00' },
+            }),
+          ),
+      },
+      {
+        name: 'DELETE /schedule/:kind',
+        request: () =>
+          withFailingJournal.request('/schedule/table-kind', {
+            method: 'DELETE',
+            headers: { 'content-type': 'application/json' },
+          }),
+      },
+      {
+        name: 'POST /commitments',
+        request: () => withFailingJournal.request('/commitments', json({ body: '積む対象' })),
+      },
+      {
+        name: 'POST /commitments/:id/appraise',
+        request: () =>
+          withFailingJournal.request(
+            `/commitments/${appraiseId}/appraise`,
+            json({ appraisal: 'good' }),
+          ),
+      },
+      {
+        name: 'PATCH /commitments/:id',
+        request: () =>
+          withFailingJournal.request(`/commitments/${patchId}`, {
+            ...json({ body: '直した本文' }),
+            method: 'PATCH',
+          }),
+      },
+      {
+        name: 'PUT /mcp-servers',
+        request: () =>
+          withFailingJournal.request('/mcp-servers', {
+            ...json({ mcpServers: { github: { command: 'gh-mcp' } } }),
+            method: 'PUT',
+          }),
+      },
+      {
+        name: 'POST /inbox/remove',
+        request: () =>
+          withFailingJournal.request(
+            '/inbox/remove',
+            json({ types: ['human_message'], reason: '表駆動で撃つ', dryRun: false }),
+          ),
+      },
+    ];
+
+    const lines = await captureStderr(async () => {
+      for (const { name, request } of cases) {
+        const response = await request();
+        expect(response.status, name).not.toBe(500);
+      }
+    });
+
+    const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+    expect(dropped).toHaveLength(cases.length);
   });
 });
 
@@ -8304,6 +8592,50 @@ describe('マネージャーへ降ろす環境変数（/credentials）', () => {
     expect(
       journal.some((e) => e.type === 'decision' && e.decision.includes('環境変数（鍵）')),
     ).toBe(false);
+  });
+
+  /**
+   * **⚠️ `PUT /credentials` は Issue #2037 の `appendJournalOrDrop` の対象外
+   * （マネージャー判断。`app.ts` の `appendJournalOrDrop` の doc「当てていない
+   * 口」）。** 鍵の差し替えは日誌より前に runner へ配られ、効いている——
+   * それでも日誌の行が「誰が鍵を差し替えたか」の唯一の記録である以上、
+   * ここだけは書けなかったら今までどおり 500 のままにする（跡は stderr にも
+   * 残る）。この歯はその「変えていないこと」を固定する。
+   */
+  it('日誌への追記が落ちたら、鍵は既に置かれていても 500 のまま（Issue #2037 の対象外）', async () => {
+    const runner = fakeRunner('runner-1');
+    const failingJournal: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => {
+          throw new Error('journal store unavailable (test)');
+        },
+      },
+    };
+    const withVault = createApp({
+      clone: fake.clone,
+      stores: failingJournal,
+      token: 'test-token',
+      shutdown: () => undefined,
+      credentials: createCredentialService({
+        stores: failingJournal,
+        runners: registryOf([runner]),
+        withheldEnvKeys: ['ALTEROID_DATABASE_URL'],
+      }),
+    });
+
+    const lines = await captureStderr(async () => {
+      const response = await put(withVault, [{ name: 'NPM_TOKEN', value: DUMMY_VALUE }]);
+      expect(response.status).toBe(500);
+    });
+
+    // 鍵そのものは既に置かれている（応答は 500 でも操作は効いている）。
+    expect((await stores.credentials.list()).map((row) => row.name)).toEqual(['NPM_TOKEN']);
+    // **`appendJournalOrDrop` を通らないので、`noteDroppedRecord` の跡は出ない**
+    // （握っていない証拠——出ていたら 500 と矛盾する形で握っていることになる）。
+    const dropped = lines.filter((line) => line.includes('を記録できませんでした'));
+    expect(dropped).toHaveLength(0);
   });
 });
 

@@ -1255,20 +1255,45 @@ function describeActor(principal: Principal): string {
  * 日誌への追記を1操作にできず、束ねても常にどちらか片側だけが効く形が
  * 残る（Issue #2037 の「直し方の案」）。
  *
- * まずは領域 B の3経路（`/permission-grants/:id/revoke` ・ `DELETE /archive/:id` ・
- * `POST /archive/remove` の一括 tombstone）だけに使う。他の口（`#journal` を
- * 書く21経路）へ広げるかは別の判断。
+ * **戻り値は「実際に書けた行」（書けなければ `undefined`）。** ほとんどの
+ * 呼び出し元は戻り値を見ない（書けたかどうかに関わらず、以後の処理は無い）。
+ * 例外は `PUT /memory/:slug`——書けた行の `at` を `markHumanTouched` へ渡す
+ * 必要があり、そこだけ `undefined` を見て後続処理を分岐する
+ * （`PersonaStore.markHumanTouched` の doc「新しい真実ではない。実体は
+ * 日誌にある」——日誌に行が無いのに派生値だけ立てると、その doc が
+ * 保証する対応が崩れる）。
+ *
+ * **どの口に当てているか（2026-09-29 時点）。** `/permission-grants/:id/revoke` ・
+ * `DELETE /archive/:id` ・ `POST /archive/remove` の一括 tombstone（最初の3経路。
+ * Issue #2037 本体）に加え、`/memory/:slug`（PUT・DELETE）・`/practices/:slug`
+ * （PUT・DELETE の両分岐）・`/schedule`（POST）・`/schedule/:kind`（DELETE）・
+ * `/commitments`（POST）・`/commitments/:id/close`・`/commitments/:id/appraise`・
+ * `/commitments/:id`（PATCH）・`/mcp-servers`（PUT）・`/inbox/remove`（POST、
+ * 塊ごと）・`/reset`（POST）。
+ *
+ * **当てていない口とその理由。**
+ * - `/access/*` の4本（grant・revoke・owner・owner/revoke）——issue #2043 で
+ *   扱う（`grantedBy` の正本更新と日誌の関係が、ここの単純な「状態変更は
+ *   もう効いている」型と違う可能性があり、別 issue で検討する）。
+ * - `PUT /credentials` ・ `PUT /profile`——鍵を扱う `requireOwner` の口。
+ *   差し替えは日誌より前に runner へ配られていて効いている。日誌の行は、
+ *   誰が鍵を差し替えたかの唯一の記録である。ここで握って成功を返すと、
+ *   記録が欠けたことは stderr にしか出ない。500 は、人間にやり直し
+ *   （冪等で、記録が残る）を促す唯一の合図になる。本当に閉じる形は
+ *   「日誌を先に書く」で、#2043 の (a) と同じ設計判断に当たる。だから
+ *   ここは握らずに残す（マネージャー判断、#2037）。
  */
 async function appendJournalOrDrop(
   stores: Stores,
   entry: JournalEntryInput,
   what: string,
   detail: string,
-): Promise<void> {
+): Promise<JournalEntry | undefined> {
   try {
-    await stores.journal.append(entry);
+    return await stores.journal.append(entry);
   } catch (error) {
     noteDroppedRecord(what, detail, error);
+    return undefined;
   }
 }
 
@@ -2389,22 +2414,35 @@ export function createApp(deps: AppDeps) {
         }
         const before = await stores.persona.read(slug);
         const doc = await stores.persona.write(slug, c.req.valid('json').content);
-        const entry = await stores.journal.append({
-          type: 'memory_update',
-          slug,
-          cause: 'human',
-          action: 'write',
-          // クローンの道具（tools.ts の memory_write）と同じ機械可読な面。
-          // 片方だけ足すと「人間の書き込みだけ数えられない」が生まれる。
-          bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
-          bytesAfter: Buffer.byteLength(doc.content, 'utf8'),
-          summary: 'HTTP API 経由で人間が記憶を書き換えた',
-        });
+        // **書き換え自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        const entry = await appendJournalOrDrop(
+          stores,
+          {
+            type: 'memory_update',
+            slug,
+            cause: 'human',
+            action: 'write',
+            // クローンの道具（tools.ts の memory_write）と同じ機械可読な面。
+            // 片方だけ足すと「人間の書き込みだけ数えられない」が生まれる。
+            bytesBefore: before === null ? 0 : Buffer.byteLength(before.content, 'utf8'),
+            bytesAfter: Buffer.byteLength(doc.content, 'utf8'),
+            summary: 'HTTP API 経由で人間が記憶を書き換えた',
+          },
+          '記憶書き換えの日誌',
+          `slug=${slug}`,
+        );
         // **保護状態の派生値を追いつかせる。** 新しい真実を作るのではなく、
         // いま journal.append が書いた cause:'human' の記録そのものを読み出し
         // やすい形にキャッシュしている（一度立てたら降ろさない。`store.ts` の
         // `PersonaStore.markHumanTouched` の doc）。
-        await stores.persona.markHumanTouched(slug, entry.at);
+        // **日誌への追記が落ちたとき（`entry === undefined`）は呼ばない。**
+        // `markHumanTouched` の doc「新しい真実ではない。実体は日誌にある」——
+        // 裏付けとなる `cause:'human'` の行が無いのに派生値だけ立てると、その
+        // doc が保証する対応が崩れる（Issue #2037）。
+        if (entry !== undefined) {
+          await stores.persona.markHumanTouched(slug, entry.at);
+        }
         return c.json({ document: doc });
       },
     )
@@ -2455,15 +2493,22 @@ export function createApp(deps: AppDeps) {
         // backfill の doc）——delete は「人間の意思で消した」であって、
         // 将来ここに書かれる新しい内容を無条件に保護する理由にはならない。
         await stores.persona.remove(slug);
-        await stores.journal.append({
-          type: 'memory_update',
-          slug,
-          cause: 'human',
-          action: 'remove',
-          bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
-          bytesAfter: 0,
-          summary: 'HTTP API 経由で人間が記憶を削除した',
-        });
+        // **削除自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'memory_update',
+            slug,
+            cause: 'human',
+            action: 'remove',
+            bytesBefore: Buffer.byteLength(existing.content, 'utf8'),
+            bytesAfter: 0,
+            summary: 'HTTP API 経由で人間が記憶を削除した',
+          },
+          '記憶削除の日誌',
+          `slug=${slug}`,
+        );
         return c.json({ ok: true, slug });
       },
     )
@@ -2612,19 +2657,26 @@ export function createApp(deps: AppDeps) {
           beforeWasUnreadable = true;
         }
         const practice = await stores.practices.write({ slug, kind, title, content });
-        await stores.journal.append({
-          type: 'decision',
-          decision: beforeWasUnreadable
-            ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
-            : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
-          grounds: beforeWasUnreadable
-            ? '人間が直接 API から、読めない形で入っていたやり方を書き直した（全文置換。' +
-              '前の本文は読めなかったため分からない）'
-            : before === null
-              ? '人間が直接 API から新しいやり方を器に置いた'
-              : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
-                'GET /practices/:slug/versions の版の履歴に残る——#1309）',
-        });
+        // **書き換え自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: beforeWasUnreadable
+              ? `読めない形で入っていたやり方 ${slug}（${kind}）を書き直した: ${title}`
+              : `やり方 ${slug}（${kind}）を${before === null ? '作った' : '書き直した'}: ${title}`,
+            grounds: beforeWasUnreadable
+              ? '人間が直接 API から、読めない形で入っていたやり方を書き直した（全文置換。' +
+                '前の本文は読めなかったため分からない）'
+              : before === null
+                ? '人間が直接 API から新しいやり方を器に置いた'
+                : '人間が直接 API からやり方を書き直した（全文置換。前の本文は' +
+                  'GET /practices/:slug/versions の版の履歴に残る——#1309）',
+          },
+          'やり方書き換えの日誌',
+          `slug=${slug}`,
+        );
         return c.json({ practice });
       },
     )
@@ -2684,20 +2736,32 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'not found' as const }, 404);
         }
         await stores.practices.remove(slug);
+        // **削除自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
         if (existing !== null) {
-          await stores.journal.append({
-            type: 'decision',
-            decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
-            grounds: '人間が直接 API からやり方を消した',
-          });
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `やり方 ${slug}（${existing.kind}）を消した: ${existing.title}`,
+              grounds: '人間が直接 API からやり方を消した',
+            },
+            'やり方削除の日誌',
+            `slug=${slug}`,
+          );
         } else {
           // ここに来るのは `wasUnreadable === true` のときだけ（直上のガードで
           // 「無かった」場合は既に 404 で抜けている）。
-          await stores.journal.append({
-            type: 'decision',
-            decision: `読めない形で入っていたやり方 ${slug} を消した`,
-            grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
-          });
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision: `読めない形で入っていたやり方 ${slug} を消した`,
+              grounds: '人間が直接 API から、読めない形で入っていたやり方を消した',
+            },
+            'やり方削除の日誌',
+            `slug=${slug}`,
+          );
         }
         return c.json({ ok: true, slug });
       },
@@ -3644,11 +3708,18 @@ export function createApp(deps: AppDeps) {
         if (edited === null) {
           await stores.schedules.put({ kind, spec, request, createdAt: now, updatedAt: now });
         }
-        await stores.journal.append({
-          type: 'decision',
-          decision: `人間が定期の依頼を${edited !== null ? '直した' : '仕込んだ'}: ${kind}: ${request}`,
-          grounds: '人間が直接 API から仕込んだ',
-        });
+        // **仕込み自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `人間が定期の依頼を${edited !== null ? '直した' : '仕込んだ'}: ${kind}: ${request}`,
+            grounds: '人間が直接 API から仕込んだ',
+          },
+          '定期の依頼の日誌',
+          `kind=${kind}`,
+        );
         // 次の刻みを待たずに効かせる（人間が仕込んだのに1分間存在しないのは嘘になる）
         await deps.scheduler?.refresh().catch(() => undefined);
         return c.json(okResponseSchema.parse({ ok: true }));
@@ -3692,17 +3763,24 @@ export function createApp(deps: AppDeps) {
         // 読んでから書くまでの隙間も無い（`ScheduleStore.removeIfPresent` の doc）。
         const removed = await stores.schedules.removeIfPresent(kind);
         if (removed === null) return c.json({ error: 'not found' as const }, 404);
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            removed === 'unreadable'
-              ? // **本文を持たない。** 読めなかった行なので `request` を
-                // 取り出せない——取り出せたとしても、壊れた形のまま日誌へ
-                // 書くと読めない値をそのまま持ち回ることになる。
-                `人間が読めない形で入っていた依頼を外した: ${kind}`
-              : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
-          grounds: '人間が直接 API から外した',
-        });
+        // **外すこと自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision:
+              removed === 'unreadable'
+                ? // **本文を持たない。** 読めなかった行なので `request` を
+                  // 取り出せない——取り出せたとしても、壊れた形のまま日誌へ
+                  // 書くと読めない値をそのまま持ち回ることになる。
+                  `人間が読めない形で入っていた依頼を外した: ${kind}`
+                : `人間が定期の依頼を外した: ${kind}: ${removed.request}`,
+            grounds: '人間が直接 API から外した',
+          },
+          '定期の依頼を外した日誌',
+          `kind=${kind}`,
+        );
         await deps.scheduler?.refresh().catch(() => undefined);
         return c.json(okResponseSchema.parse({ ok: true }));
       },
@@ -4039,11 +4117,18 @@ export function createApp(deps: AppDeps) {
         await stores.commitments.open(entry);
         // 人間が chat の外から積んだものは、日誌に残さなければどこにも跡が無い
         // （chat 経由の依頼には `exchange` が残るが、この口には対応する発言が無い）。
-        await stores.journal.append({
-          type: 'decision',
-          decision: `人間が引き受けた仕事を台帳へ積んだ（${entry.id}）: ${body}`,
-          grounds: '人間が直接 API から積んだ',
-        });
+        // **積むこと自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `人間が引き受けた仕事を台帳へ積んだ（${entry.id}）: ${body}`,
+            grounds: '人間が直接 API から積んだ',
+          },
+          '引き受けた仕事を積んだ日誌',
+          `id=${entry.id}`,
+        );
         return c.json(commitmentOpenedResponseSchema.parse({ ok: true, id: entry.id }));
       },
     )
@@ -4106,11 +4191,18 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
-        await stores.journal.append({
-          type: 'decision',
-          decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
-          grounds: '人間が直接 API から閉じた',
-        });
+        // **片付けること自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: `人間が引き受けた仕事を片付けた（${id}）: ${reason}`,
+            grounds: '人間が直接 API から閉じた',
+          },
+          '引き受けた仕事を片付けた日誌',
+          `id=${id}`,
+        );
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
@@ -4177,26 +4269,33 @@ export function createApp(deps: AppDeps) {
         }
         // 日誌には書いた結果の種類を載せる（渡されなければ前の種類が残る。#1308）。
         const effectiveWorkKind = workKind ?? before.workKind;
-        await stores.journal.append({
-          type: 'decision',
-          decision: formatAppraisalDecision({
-            prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-            id,
-            value: appraisal,
-            reason,
-            previous,
-          }),
-          grounds: COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
-          appraisal: {
-            target: 'commitment',
-            id,
-            value: appraisal,
-            by: 'human',
-            previous: before.appraisal,
-            previousBy: before.appraisedBy,
-            ...(effectiveWorkKind === undefined ? {} : { workKind: effectiveWorkKind }),
+        // **評定を付けること自体はもう効いている**（Issue #2037）。日誌への
+        // 追記だけが落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: formatAppraisalDecision({
+              prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
+              id,
+              value: appraisal,
+              reason,
+              previous,
+            }),
+            grounds: COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
+            appraisal: {
+              target: 'commitment',
+              id,
+              value: appraisal,
+              by: 'human',
+              previous: before.appraisal,
+              previousBy: before.appraisedBy,
+              ...(effectiveWorkKind === undefined ? {} : { workKind: effectiveWorkKind }),
+            },
           },
-        });
+          '引き受けた仕事の評定の日誌',
+          `id=${id}`,
+        );
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
@@ -4316,13 +4415,20 @@ export function createApp(deps: AppDeps) {
             409,
           );
         }
-        await stores.journal.append({
-          type: 'decision',
-          decision:
-            `人間が引き受けた仕事の本文を直した（${id}）: ` +
-            `編集前「${before}」→ 編集後「${body}」`,
-          grounds: '人間が直接 API から編集した',
-        });
+        // **編集自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision:
+              `人間が引き受けた仕事の本文を直した（${id}）: ` +
+              `編集前「${before}」→ 編集後「${body}」`,
+            grounds: '人間が直接 API から編集した',
+          },
+          '引き受けた仕事の本文編集の日誌',
+          `id=${id}`,
+        );
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
@@ -5137,6 +5243,13 @@ export function createApp(deps: AppDeps) {
         const delivered = result.runners
           .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
           .join(', ');
+        // **ここは `appendJournalOrDrop` を使わない（Issue #2037 の対象外。
+        // マネージャー判断）。** 鍵を扱う `requireOwner` の口で、差し替えは
+        // 日誌より前に runner へ配られ、効いている。日誌の行は、誰が鍵を
+        // 差し替えたかの唯一の記録である。ここで握って成功を返すと、記録が
+        // 欠けたことは stderr にしか出ない。500 は、人間にやり直し（冪等で、
+        // 記録が残る）を促す唯一の合図になる。本当に閉じる形は「日誌を先に
+        // 書く」で、#2043 の (a) と同じ設計判断に当たる。だから握らずに残す。
         await deps.stores.journal.append({
           type: 'decision',
           decision:
@@ -5309,19 +5422,27 @@ export function createApp(deps: AppDeps) {
               `${r.runnerId}=${r.ok ? 'ok' : r.unsupported === true ? '口なし（古い runner）' : '失敗'}`,
           )
           .join(', ');
-        await deps.stores.journal.append({
-          type: 'decision',
-          decision:
-            names.length === 0
-              ? 'MCP サーバの登録を外した'
-              : `MCP サーバの登録を差し替えた（${names.join(', ')}）`,
-          grounds:
-            `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
-            `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
-            '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
-            `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
-            '（マネージャーには次に開くセッションから効く）。',
-        });
+        // **差し替え自体はもう効いている**（保存・runner への配布とも済んでいる。
+        // Issue #2037）。日誌への追記だけが落ちても 500 を返さない——
+        // `appendJournalOrDrop` の doc。
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision:
+              names.length === 0
+                ? 'MCP サーバの登録を外した'
+                : `MCP サーバの登録を差し替えた（${names.join(', ')}）`,
+            grounds:
+              `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
+              `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
+              '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
+              `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+              '（マネージャーには次に開くセッションから効く）。',
+          },
+          'MCP サーバ登録の日誌',
+          `count=${String(names.length)}`,
+        );
         return c.json(
           mcpServersUpdateResponseSchema.parse({
             names,
@@ -5497,6 +5618,13 @@ export function createApp(deps: AppDeps) {
         const delivered = result.runners
           .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
           .join(', ');
+        // **ここは `appendJournalOrDrop` を使わない（Issue #2037 の対象外。
+        // マネージャー判断）。** 鍵を扱う `requireOwner` の口で、差し替えは
+        // 日誌より前に runner へ配られ、効いている。日誌の行は、誰が鍵を
+        // 差し替えたかの唯一の記録である。ここで握って成功を返すと、記録が
+        // 欠けたことは stderr にしか出ない。500 は、人間にやり直し（冪等で、
+        // 記録が残る）を促す唯一の合図になる。本当に閉じる形は「日誌を先に
+        // 書く」で、#2043 の (a) と同じ設計判断に当たる。だから握らずに残す。
         await deps.stores.journal.append({
           type: 'decision',
           decision: `環境変数（鍵）を差し替えた（${changed}）`,
@@ -6375,15 +6503,23 @@ export function createApp(deps: AppDeps) {
             ...(sources === undefined ? [] : [`sources=[${sources.join(', ')}]（完全一致）`]),
             ...(before === undefined ? [] : [`before=${before}`]),
           ].join(' / ');
-          await stores.journal.append({
-            type: 'decision',
-            decision:
-              `人間が受信箱の未読を絞り込みで一括して畳んだ（消した）` +
-              `（${index + 1}/${chunks.length} 塊目、この塊は ${removed.length} 件）: ${reason}\n` +
-              `絞り込み: ${filterText}\n` +
-              `消した id: ${removed.join(' ')}`,
-            grounds: '人間が直接 API から操作した',
-          });
+          // **この塊を消すことはもう効いている**（配達も止めた。Issue #2037）。
+          // 日誌への追記だけが落ちても 500 を返さない——`appendJournalOrDrop`
+          // の doc。他の塊の処理も止めない（この塊が消えた事実は変わらない）。
+          await appendJournalOrDrop(
+            stores,
+            {
+              type: 'decision',
+              decision:
+                `人間が受信箱の未読を絞り込みで一括して畳んだ（消した）` +
+                `（${index + 1}/${chunks.length} 塊目、この塊は ${removed.length} 件）: ${reason}\n` +
+                `絞り込み: ${filterText}\n` +
+                `消した id: ${removed.join(' ')}`,
+              grounds: '人間が直接 API から操作した',
+            },
+            '受信箱一括削除の日誌',
+            `chunk=${index + 1}/${chunks.length} removed=${removed.length}`,
+          );
         }
 
         return c.json(
@@ -7316,11 +7452,21 @@ export function createApp(deps: AppDeps) {
         const cleared = await resetWorkspaceState(stores, {
           ...(deps.clearSessionLog === undefined ? {} : { clearSessionLog: deps.clearSessionLog }),
         });
-        await stores.journal.append({
-          type: 'decision',
-          decision: 'ワークスペースをリセットした（トークン情報以外を全部消した）',
-          grounds: `${describeActor(c.get('principal'))}（POST /reset。confirm 済み）`,
-        });
+        // **リセット自体はもう効いている**（Issue #2037）。日誌への追記だけが
+        // 落ちても 500 を返さない——`appendJournalOrDrop` の doc。**ここは
+        // 特に重要**: `cleared`（消した件数の内訳）は取り消せない操作の唯一の
+        // 申告であり、やり直しても意味が無い（もう空である）。ここを 500 に
+        // すると、実際には消えている件数が応答から失われる。
+        await appendJournalOrDrop(
+          stores,
+          {
+            type: 'decision',
+            decision: 'ワークスペースをリセットした（トークン情報以外を全部消した）',
+            grounds: `${describeActor(c.get('principal'))}（POST /reset。confirm 済み）`,
+          },
+          'ワークスペースリセットの日誌',
+          `cleared=${JSON.stringify(cleared)}`,
+        );
         return c.json(resetResponseSchema.parse({ cleared }));
       },
     );
