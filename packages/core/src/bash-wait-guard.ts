@@ -387,7 +387,55 @@ function blankQuotedInteriorForNonExecutingCommands(command: string): string {
  * `hasTailFollowPattern` にかかり、`tail -f x` の字面がそのまま一致する。
  */
 function hasUnboundedTailFollow(command: string): boolean {
-  return hasTailFollowPattern(blankQuotedInteriorForNonExecutingCommands(command));
+  const view = blankQuotedInteriorForNonExecutingCommands(command);
+  // **引用符とバックスラッシュを外した写しにもかける**（#2206）。bash は引用を外してから argv に
+  // するので、`tail "-f" x` / `tail '-f' x` / `tail -"f" x` / `tail \-f x` / `tail $'-f' x` は
+  // どれも `tail -f x` と同じく追従する。フラグの判定は「生の空白の直後の生の `-`」を見るので、
+  // 元の写しだけでは見落としていた。どちらかが当たれば弾く（弾く側にしか倒れない）。
+  return hasTailFollowPattern(view) || hasTailFollowPattern(stripQuoteCharacters(view));
+}
+
+/**
+ * 引用符（`"` / `'`）・ANSI-C 引用の `$`（`$'…'` / `$"…"` の `$`）・バックスラッシュを取り除く
+ * （#2206）。bash の引用除去の近似で、中身の展開はしない。1回の走査で線形。
+ *
+ * **引用符の中の空白と区切り（`;` `&` `|`）は `_` へ替える。** 引用符で包んだ1つの語は、
+ * 引用を外しても1つの語のままである（`tail -n 5 "my -f file"` の `-f` をフラグと読まない）。
+ * 単一引用符の中はバックスラッシュも字面、それ以外のバックスラッシュは次の1文字をエスケープする。
+ * `$'…'` の中のエスケープは追わない（単一引用符と同じに読む）。読み違えても、語が1つに
+ * まとまる向き（フラグと読まない側）か、元の写しと同じ判定になる。
+ */
+function stripQuoteCharacters(command: string): string {
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] as string;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else out += /[\s;&|]/.test(ch) ? '_' : ch;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = command[i + 1];
+      if (next !== undefined) {
+        out += quote !== null && /[\s;&|]/.test(next) ? '_' : next;
+        i += 1;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else out += /[\s;&|]/.test(ch) ? '_' : ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '$' && (command[i + 1] === "'" || command[i + 1] === '"')) continue;
+    out += ch;
+  }
+  return out;
 }
 
 /**
