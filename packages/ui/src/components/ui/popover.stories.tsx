@@ -11,7 +11,7 @@ import {
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/Popover',
+  title: 'UI/Popover',
   component: Popover,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

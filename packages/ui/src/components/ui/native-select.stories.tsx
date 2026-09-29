@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { NativeSelect, NativeSelectOption, NativeSelectOptGroup } from './native-select';
 
 const meta = {
-  title: 'shadcn/NativeSelect',
+  title: 'UI/NativeSelect',
   component: NativeSelect,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

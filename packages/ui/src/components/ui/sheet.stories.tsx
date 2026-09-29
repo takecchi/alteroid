@@ -13,7 +13,7 @@ import {
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/Sheet',
+  title: 'UI/Sheet',
   component: Sheet,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

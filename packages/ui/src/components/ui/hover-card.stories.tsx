@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from './hover-card';
 
 const meta = {
-  title: 'shadcn/HoverCard',
+  title: 'UI/HoverCard',
   component: HoverCard,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

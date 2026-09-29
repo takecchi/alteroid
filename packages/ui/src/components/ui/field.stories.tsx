@@ -13,7 +13,7 @@ import { Input } from './input';
 import { Switch } from './switch';
 
 const meta = {
-  title: 'shadcn/Field',
+  title: 'UI/Field',
   component: Field,
   parameters: { layout: 'padded' },
   tags: ['autodocs'],

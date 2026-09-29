@@ -11,7 +11,7 @@ import {
 } from './table';
 
 const meta = {
-  title: 'shadcn/Table',
+  title: 'UI/Table',
   component: Table,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

@@ -12,7 +12,7 @@ import {
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/DropdownMenu',
+  title: 'UI/DropdownMenu',
   component: DropdownMenu,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

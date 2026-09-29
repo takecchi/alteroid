@@ -4,7 +4,7 @@ import { Button } from './button';
 import { ButtonGroup, ButtonGroupSeparator } from './button-group';
 
 const meta = {
-  title: 'shadcn/ButtonGroup',
+  title: 'UI/ButtonGroup',
   component: ButtonGroup,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

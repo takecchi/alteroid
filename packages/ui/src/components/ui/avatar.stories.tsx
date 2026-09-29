@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Avatar, AvatarFallback, AvatarBadge, AvatarGroup, AvatarGroupCount } from './avatar';
 
 const meta = {
-  title: 'shadcn/Avatar',
+  title: 'UI/Avatar',
   component: Avatar,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

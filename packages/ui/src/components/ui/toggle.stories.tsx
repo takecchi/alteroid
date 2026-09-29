@@ -4,7 +4,7 @@ import { BoldIcon } from 'lucide-react';
 import { Toggle } from './toggle';
 
 const meta = {
-  title: 'shadcn/Toggle',
+  title: 'UI/Toggle',
   component: Toggle,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

@@ -14,7 +14,7 @@ import {
 } from './item';
 
 const meta = {
-  title: 'shadcn/Item',
+  title: 'UI/Item',
   component: Item,
   parameters: { layout: 'padded' },
   tags: ['autodocs'],

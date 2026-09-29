@@ -12,7 +12,7 @@ import {
 } from './select';
 
 const meta = {
-  title: 'shadcn/Select',
+  title: 'UI/Select',
   component: Select,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

@@ -4,7 +4,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from './tooltip';
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/Tooltip',
+  title: 'UI/Tooltip',
   component: Tooltip,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

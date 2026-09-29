@@ -4,7 +4,7 @@ import { Label } from './label';
 import { RadioGroup, RadioGroupItem } from './radio-group';
 
 const meta = {
-  title: 'shadcn/RadioGroup',
+  title: 'UI/RadioGroup',
   component: RadioGroup,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

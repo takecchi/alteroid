@@ -4,7 +4,7 @@ import { AlignLeftIcon, AlignCenterIcon, AlignRightIcon } from 'lucide-react';
 import { ToggleGroup, ToggleGroupItem } from './toggle-group';
 
 const meta = {
-  title: 'shadcn/ToggleGroup',
+  title: 'UI/ToggleGroup',
   component: ToggleGroup,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

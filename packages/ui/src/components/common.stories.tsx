@@ -21,7 +21,7 @@ import {
  * （`common.tsx` の冒頭）。
  */
 const meta = {
-  title: 'App/Common',
+  title: 'UI/Common',
   parameters: { layout: 'padded' },
 } satisfies Meta;
 

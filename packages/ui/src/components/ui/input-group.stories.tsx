@@ -4,7 +4,7 @@ import { Search } from 'lucide-react';
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from './input-group';
 
 const meta = {
-  title: 'shadcn/InputGroup',
+  title: 'UI/InputGroup',
   component: InputGroup,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

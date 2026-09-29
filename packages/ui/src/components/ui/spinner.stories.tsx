@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Spinner } from './spinner';
 
 const meta = {
-  title: 'shadcn/Spinner',
+  title: 'UI/Spinner',
   component: Spinner,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

@@ -5,7 +5,7 @@ import { Alert, AlertTitle, AlertDescription, AlertAction } from './alert';
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/Alert',
+  title: 'UI/Alert',
   component: Alert,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

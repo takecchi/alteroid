@@ -10,9 +10,9 @@
  * テーマの CSS は `@alteroid/ui/styles.css`。
  *
  * 置き場の分け方:
- * - `components/layout/` —— 画面の骨組み（脇の面・上端の帯・印・全画面の状態）
- * - `components/data/` —— 値の見せ方（量・名前と値・生の文字列・状態の点・空）
- * - `components/features/` —— 振る舞いを持つまとまり（確認の窓・⌘K の窓）
+ * - `components/ui/` —— shadcn が生成した部品（手を入れない。`@alteroid/ui/shadcn`）。見本帳では `UI/*`
+ * - `components/layout/` —— 画面の骨組み（脇の面・上端の帯・印・全画面の状態）。見本帳では `Layout/*`
+ * - `components/features/` —— 画面が組み立てに使うまとまり（量・名前と値・生ログ・確認の窓・⌘K の窓・チャット）。見本帳では `Features/*`
  * - `components/*.tsx` —— 以前からの画面の部品（`common` / `page` / `drawer` / `markdown`）
  */
 export * from './components/common';
@@ -20,7 +20,6 @@ export * from './components/page';
 export * from './components/drawer';
 export * from './components/markdown';
 export * from './components/layout';
-export * from './components/data';
 export * from './components/features';
 export * from './hooks/use-is-mobile';
 export * from './hooks/use-measured-height';

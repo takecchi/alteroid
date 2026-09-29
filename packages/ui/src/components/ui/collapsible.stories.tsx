@@ -5,7 +5,7 @@ import { Button } from './button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './collapsible';
 
 const meta = {
-  title: 'shadcn/Collapsible',
+  title: 'UI/Collapsible',
   component: Collapsible,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

@@ -4,7 +4,7 @@ import { ScrollArea } from './scroll-area';
 import { Separator } from './separator';
 
 const meta = {
-  title: 'shadcn/ScrollArea',
+  title: 'UI/ScrollArea',
   component: ScrollArea,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

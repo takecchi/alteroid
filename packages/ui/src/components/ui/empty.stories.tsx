@@ -12,7 +12,7 @@ import {
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/Empty',
+  title: 'UI/Empty',
   component: Empty,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

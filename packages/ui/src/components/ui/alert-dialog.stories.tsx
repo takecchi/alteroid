@@ -14,7 +14,7 @@ import {
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/AlertDialog',
+  title: 'UI/AlertDialog',
   component: AlertDialog,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

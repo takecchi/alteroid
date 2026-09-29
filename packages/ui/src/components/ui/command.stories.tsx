@@ -13,7 +13,7 @@ import {
 } from './command';
 
 const meta = {
-  title: 'shadcn/Command',
+  title: 'UI/Command',
   component: Command,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

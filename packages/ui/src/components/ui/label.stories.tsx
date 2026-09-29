@@ -4,7 +4,7 @@ import { Label } from './label';
 import { Input } from './input';
 
 const meta = {
-  title: 'shadcn/Label',
+  title: 'UI/Label',
   component: Label,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

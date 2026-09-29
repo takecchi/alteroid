@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Input } from './input';
 
 const meta = {
-  title: 'shadcn/Input',
+  title: 'UI/Input',
   component: Input,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

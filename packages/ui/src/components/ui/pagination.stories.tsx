@@ -11,7 +11,7 @@ import {
 } from './pagination';
 
 const meta = {
-  title: 'shadcn/Pagination',
+  title: 'UI/Pagination',
   component: Pagination,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

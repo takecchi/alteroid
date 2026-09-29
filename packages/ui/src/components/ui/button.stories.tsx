@@ -4,7 +4,7 @@ import { Mail } from 'lucide-react';
 import { Button } from './button';
 
 const meta = {
-  title: 'shadcn/Button',
+  title: 'UI/Button',
   component: Button,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],

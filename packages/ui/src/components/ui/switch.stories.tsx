@@ -4,7 +4,7 @@ import { Switch } from './switch';
 import { Label } from './label';
 
 const meta = {
-  title: 'shadcn/Switch',
+  title: 'UI/Switch',
   component: Switch,
   parameters: { layout: 'centered' },
   tags: ['autodocs'],
