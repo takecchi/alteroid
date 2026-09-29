@@ -213,4 +213,25 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     });
     expect(lines).toHaveLength(0);
   });
+
+  /**
+   * issue #2191。`#read()` は `list()` / `get()` / `put()` / `revoke()` /
+   * `markUsed()` のどれを呼んでも通るので、直っていない壊れた行が1つあると
+   * `clone.ts` の `#onPreToolUse`（Bash を呼ぶたびに `list()` を引き直す）が
+   * 同じ警告を積み上げ続けていた。**同じストアインスタンスの生存中は、同じ
+   * 行につき1回だけ知らせる**——鍵は行の id（`unreadableRowKey`）。
+   */
+  it('list() を3回呼んでも、知らせは1回だけ出る（issue #2191）', async () => {
+    await writeRawGrantsFile();
+    const stores = createFsStores(root);
+
+    const lines = await captureStderr(async () => {
+      await stores.permissionGrants.list();
+      await stores.permissionGrants.list();
+      await stores.permissionGrants.list();
+    });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('grant-bad');
+  });
 });

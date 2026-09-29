@@ -1171,6 +1171,18 @@ export {
 } from './dropped-record.js';
 
 /**
+ * 壊れた行を「ストアのインスタンスごとに1行につき1回だけ」stderr へ知らせる
+ * ための追跡器（issue #2191）。`packages/storage-fs` / `packages/storage-pg`
+ * の `PermissionGrantStore` 実装が共有する（置き場所の理由は
+ * `unreadable-row-once.ts` の doc）。
+ */
+export {
+  createUnreadableRowOnce,
+  unreadableRowKey,
+  type UnreadableRowOnce,
+} from './unreadable-row-once.js';
+
+/**
  * `Error.prototype.cause` の連鎖を1行へ畳む（Issue #1229）。stderr の跡
  * （`reasonOf`）にもクローンへ返す本文（`tools.ts` の
  * `formatJournalNotRecordedMessage`）にも安全に使える——理由は

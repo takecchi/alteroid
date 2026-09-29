@@ -1,5 +1,5 @@
-import { permissionGrantSchema } from '@alteroid/core';
-import type { PermissionGrant, PermissionGrantStore } from '@alteroid/core';
+import { createUnreadableRowOnce, permissionGrantSchema, unreadableRowKey } from '@alteroid/core';
+import type { PermissionGrant, PermissionGrantStore, UnreadableRowOnce } from '@alteroid/core';
 import { asc, eq } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -20,10 +20,16 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
 }
 
 /**
- * `revoke()` / `markUsed()` が読めなかった行を stderr へ1行で要約する
- * （issue #2158）。**id 以外の値は絶対に載せない**——`record` の欄には人間の
- * 依頼文・承認の回答の原文がそのまま入りうる（`jobs.ts` の
- * `describeUnreadableJobRow` の doc、#52 と同じ理由）。
+ * 読めなかった行を stderr へ1行で要約する（issue #2158。`list()` / `get()`
+ * からも呼ぶようになったのは issue #2191）。**id 以外の値は絶対に載せない**
+ * ——`record` の欄には人間の依頼文・承認の回答の原文がそのまま入りうる
+ * （`jobs.ts` の `describeUnreadableJobRow` の doc、#52 と同じ理由）。
+ *
+ * **呼び出し元によって「1回だけ」の扱いが違う。** `list()` / `get()` は
+ * `#unreadableOnce`（`UnreadableRowOnce`）を通してから呼ぶので、同じ行には
+ * インスタンスの生存中1回しか出ない。`revoke()` / `markUsed()` は素通しで
+ * 毎回呼ぶ——名指しで触った操作の結果は、たとえ直前の `list()` で同じ行を
+ * 知らせていても、その場で確実に知らせる（issue #2191 の要件）。
  */
 function describeUnreadableGrantRow(params: { id: string; reason: string }): string {
   return (
@@ -44,19 +50,40 @@ function describeUnreadableGrantRow(params: { id: string; reason: string }): str
 export class PgPermissionGrantStore implements PermissionGrantStore {
   readonly #db: Db;
 
+  /**
+   * `list()` / `get()` が読めなかった行を、インスタンスの生存中「1回だけ」
+   * 知らせるための追跡器（issue #2191）。**`revoke()` / `markUsed()` の
+   * `describeUnreadableGrantRow` の呼び出しはこれを経由しない**——あちらは
+   * 名指しで触った操作の結果を毎回知らせる、という別の約束のままにしてある
+   * （このファイル冒頭の各メソッドの doc）。
+   */
+  readonly #unreadableOnce: UnreadableRowOnce = createUnreadableRowOnce();
+
   constructor(db: Db) {
     this.#db = db;
   }
 
   async list(): Promise<PermissionGrant[]> {
     const rows = await this.#db
-      .select({ record: permissionGrants.record })
+      .select({ id: permissionGrants.id, record: permissionGrants.record })
       .from(permissionGrants)
       .orderBy(asc(permissionGrants.grantedAt));
-    return rows
-      .map((row) => permissionGrantSchema.safeParse(row.record))
-      .filter((parsed) => parsed.success)
-      .map((parsed) => parsed.data);
+    const result: PermissionGrant[] = [];
+    for (const row of rows) {
+      const parsed = permissionGrantSchema.safeParse(row.record);
+      const key = unreadableRowKey(row.id, row.record);
+      if (parsed.success) {
+        this.#unreadableOnce.sawReadable(key);
+        result.push(parsed.data);
+        continue;
+      }
+      if (this.#unreadableOnce.sawUnreadable(key)) {
+        process.stderr.write(
+          `${describeUnreadableGrantRow({ id: row.id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
+        );
+      }
+    }
+    return result;
   }
 
   async get(id: string): Promise<PermissionGrant | null> {
@@ -68,7 +95,17 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
     const row = rows[0];
     if (row === undefined) return null;
     const parsed = permissionGrantSchema.safeParse(row.record);
-    return parsed.success ? parsed.data : null;
+    const key = unreadableRowKey(id, row.record);
+    if (parsed.success) {
+      this.#unreadableOnce.sawReadable(key);
+      return parsed.data;
+    }
+    if (this.#unreadableOnce.sawUnreadable(key)) {
+      process.stderr.write(
+        `${describeUnreadableGrantRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
+      );
+    }
+    return null;
   }
 
   async put(grant: PermissionGrant): Promise<void> {

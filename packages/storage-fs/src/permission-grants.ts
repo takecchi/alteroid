@@ -1,8 +1,8 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { permissionGrantSchema } from '@alteroid/core';
-import type { PermissionGrant, PermissionGrantStore } from '@alteroid/core';
+import { createUnreadableRowOnce, permissionGrantSchema, unreadableRowKey } from '@alteroid/core';
+import type { PermissionGrant, PermissionGrantStore, UnreadableRowOnce } from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -76,6 +76,18 @@ function describeSkippedGrantRow(params: { index: number; reason: string; id?: s
 export class FsPermissionGrantStore implements PermissionGrantStore {
   readonly #dir: string;
   readonly #path: string;
+
+  /**
+   * `#read()` が読めなかった行を、インスタンスの生存中「1回だけ」知らせる
+   * ための追跡器（issue #2191）。以前は `#read()` を呼ぶたびに（＝
+   * `list()` / `get()` / `put()` / `revoke()` / `markUsed()` のどれを呼んでも）
+   * 同じ壊れた行へ毎回1行 stderr へ出していた——`clone.ts` の
+   * `#onPreToolUse` が Bash を呼ぶたびに `list()` を引き直すため、直っていない
+   * 行1つで同じ警告が積み上がり続けていた。pg 実装（`PgPermissionGrantStore`）
+   * と同じ道具（`createUnreadableRowOnce` / `unreadableRowKey`。
+   * `@alteroid/core`）で揃える。
+   */
+  readonly #unreadableOnce: UnreadableRowOnce = createUnreadableRowOnce();
 
   constructor(dir: string) {
     this.#dir = dir;
@@ -169,10 +181,15 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
    * にしてある——それは1行の問題ではないため（`jobs.ts` / `credentials.ts`
    * と同じ設計判断）。
    *
-   * 飛ばした行は stderr へ1行の跡を残し（`describeSkippedGrantRow`。**値は
+   * 飛ばした行は stderr へ跡を残し（`describeSkippedGrantRow`。**値は
    * allows/denies/answer 等の本文を含めず、id だけ**）、`invalidGrantsRaw`
    * として生の形のまま保持する——`put()` / `revoke()` / `markUsed()` がこれを
    * 書き戻すことで、版ずれ・手編集でできた不正な行を黙って消さない。
+   *
+   * **同じ行には、このインスタンスの生存中1回しか知らせない**（issue
+   * #2191。`#unreadableOnce`）。鍵は行の id（取れなければ内容の指紋）——
+   * `put()` で直った後にまた壊れれば、もう一度知らせる。読めた行は毎回
+   * `sawReadable()` で「まだ知らせていない」側へ戻す。
    *
    * **飛ばした行の許可は fail-closed になる。** `grants`（検査を通った行）
    * にしか現れないので、`get()` は無いのと同じ `null` を返し、`list()` の
@@ -189,18 +206,26 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
       const invalidGrantsRaw: unknown[] = [];
       top.grants.forEach((rawGrant, index) => {
         const result = permissionGrantSchema.safeParse(rawGrant);
+        const id = extractRowId(rawGrant);
+        // **鍵は id（取れなければ中身の指紋）——配列の位置（index）は使わない**
+        // （他の行が増減すると同じ壊れた行でも位置がずれるため。
+        // `unreadableRowKey` の doc）。
+        const key = unreadableRowKey(id, rawGrant);
         if (result.success) {
           grants.push(result.data);
+          this.#unreadableOnce.sawReadable(key);
           return;
         }
         invalidGrantsRaw.push(rawGrant);
-        process.stderr.write(
-          `${describeSkippedGrantRow({
-            index,
-            reason: summarizeInvalidFields(result.error.issues),
-            id: extractRowId(rawGrant),
-          })}\n`,
-        );
+        if (this.#unreadableOnce.sawUnreadable(key)) {
+          process.stderr.write(
+            `${describeSkippedGrantRow({
+              index,
+              reason: summarizeInvalidFields(result.error.issues),
+              id,
+            })}\n`,
+          );
+        }
       });
       return { grants, invalidGrantsRaw };
     } catch (error) {
