@@ -1296,10 +1296,11 @@ function describeActor(principal: Principal): string {
  * `POST /schedule`・`PUT /mcp-servers`・`PUT /credentials`・`PUT /profile`
  * （issue #2123。teto の判断——#2067 がこの4口を「状態変更はもう効いている」
  * 型のまま `appendJournalOrDrop` を当てていたが、能力を広げる口はそちら
- * ではなく閉じる側に倒す）。**`PUT /credentials`・`PUT /profile` は検証と
- * 実際の状態変更が同じ1呼び（`apply`）の中にあり分けられないので、検証で
- * 断られた回も同じ「打ち消し」の扱いにする**（同じ理由——記録が多すぎる側
- * を選ぶ）。
+ * ではなく閉じる側に倒す）・`POST /runners/credentials`（issue #2198。登録
+ * されている全 runner へ鍵を配る口で、以前は日誌を1行も書いていなかった）。
+ * **`PUT /credentials`・`PUT /profile` は検証と実際の状態変更が同じ1呼び
+ * （`apply`）の中にあり分けられないので、検証で断られた回も同じ「打ち消し」
+ * の扱いにする**（同じ理由——記録が多すぎる側を選ぶ）。
  */
 async function appendJournalOrDrop(
   stores: Stores,
@@ -5072,6 +5073,21 @@ export function createApp(deps: AppDeps) {
      *
      * 鍵はここに保管しない。受け取って runner へ降ろすだけである（デーモンの器に
      * 記憶の鍵と GitHub の書き込み権を並べない）。
+     *
+     * **能力を広げる口（issue #2198）。** 登録されている全 runner へ鍵を配る
+     * 口なので、`PUT /credentials` と同じ扱い——**日誌を先に書き、書けなければ
+     * 1本も配らずに 500**。以前は日誌を1行も書いていなかった。配布（`registry.list()`
+     * を含む）が投げたら、打ち消しの行を `appendJournalOrDrop` で足してから同じ
+     * エラー応答（ここは元から捕まえていないので `base.onError` 任せの 500）を
+     * 返す。**ここは `PUT /credentials` と違い、指紋を配る前の入力の値から直接
+     * 計算できる**（正本への保存を待つ必要が無い）ので、先に書く行にも含める。
+     * runner ごとの配布結果（成否）は配った後でないと分からないので、2行目として
+     * `appendJournalOrDrop`（best-effort）で足す。**値（鍵そのもの）はどちらの
+     * 行にも書かない。**
+     *
+     * **⚠️ この口の資格（`authenticate` だけ）はこの PR では変えていない。**
+     * `PUT /credentials` の doc と同じ注記——締めるかどうかは方針の判断（人間の
+     * 決定）であって、ここで勝手に揃えると今通っている運用が黙って止まる。
      */
     .post(
       '/runners/credentials',
@@ -5121,21 +5137,85 @@ export function createApp(deps: AppDeps) {
         if (registry === undefined) {
           return c.json({ error: 'runner が登録されていない' as const }, 503);
         }
-        const runners = await registry.list();
         const { credentials } = c.req.valid('json');
-        const results = await Promise.all(
-          runners.map(async (runner) => {
-            try {
-              return {
-                runnerId: runner.runnerId,
-                ok: true as const,
-                credentials: await runner.setCredentials(credentials),
-              };
-            } catch (error) {
-              return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
-            }
-          }),
+        // **指紋は配る前に入力の値から直接計算できる**（`PUT /credentials` と
+        // 違い、正本への保存を待つ必要が無い）。値そのものはここにも以後にも
+        // 一切書かない。
+        const wanted = credentials
+          .map((entry) => `${entry.name}=${fingerprintOf(entry.value)}`)
+          .join(', ');
+
+        // **日誌を先に書く（issue #2198）。書けなければ1本も配らずに 500。**
+        await deps.stores.journal.append({
+          type: 'decision',
+          decision: `runner へ環境変数（鍵）を配ろうとしている（${wanted}）`,
+          grounds:
+            `${describeActor(c.get('principal'))}（POST /runners/credentials）。` +
+            '値は書かない（鍵そのものである）。',
+        });
+
+        const distribute = async () => {
+          const runners = await registry.list();
+          return Promise.all(
+            runners.map(async (runner) => {
+              try {
+                return {
+                  runnerId: runner.runnerId,
+                  ok: true as const,
+                  credentials: await runner.setCredentials(credentials),
+                };
+              } catch (error) {
+                return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
+              }
+            }),
+          );
+        };
+
+        let results: Awaited<ReturnType<typeof distribute>>;
+        try {
+          results = await distribute();
+        } catch (error) {
+          /**
+           * **`registry.list()` 自体が投げた場合**（個々の runner への配布は
+           * 上の `try/catch` で既に捕まえており、ここまで抜けてこない）。
+           * 打ち消しの行を足してから投げ直す——ここは元から捕まえていない
+           * ので、`base.onError` が返す応答（500）は変えない。
+           */
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `runner へ環境変数（鍵）を配れなかった（${wanted}）`,
+              grounds:
+                `${describeActor(c.get('principal'))}（POST /runners/credentials、配布が失敗）: ` +
+                String(error),
+            },
+            '環境変数（鍵）配布の打ち消しの日誌',
+            `names=${credentials.map((entry) => entry.name).join(',')}`,
+          );
+          throw error;
+        }
+
+        // **配布の結果（runner ごとの成否）は配った後でないと分からないので、
+        // 2行目として `appendJournalOrDrop`（best-effort）で足す。値は書かない。**
+        const delivered = results
+          .map((result) => `${result.runnerId}=${result.ok ? 'ok' : '失敗'}`)
+          .join(', ');
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: `runner へ環境変数（鍵）を配った（${wanted}）`,
+            grounds:
+              `${describeActor(c.get('principal'))}（POST /runners/credentials）。` +
+              '値は書かない（鍵そのものである）。' +
+              `配布先: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+              '。',
+          },
+          '環境変数（鍵）配布の日誌',
+          `names=${credentials.map((entry) => entry.name).join(',')}`,
         );
+
         return c.json(runnersCredentialsResponseSchema.parse({ results }));
       },
     )
