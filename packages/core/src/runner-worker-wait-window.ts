@@ -129,8 +129,17 @@ export class RunnerWorkerWaitWindow {
    * `task_started`（{@link taskStarted}）で追加、`task_notification`
    * （{@link notified}）で削除する。**`skip_transcript: true` の
    * `task_started`（SDK の JSDoc 曰く ambient = activity ではない task）も
-   * 間引かずに数える** — 何を除外してよいかの判断を誰も持っていないので、
-   * 数える側では絞らない。
+   * 間引かずに数える** — このクラス自身はその軸（ambient かどうか）では
+   * 絞らない。
+   *
+   * **⚠️ ただし Issue #2113 以降、別の軸（`task_type` が作業者かどうか）では
+   * 呼び出し側が絞っている。** `RunnerSession#onTaskStarted` は作業者
+   * （`local_agent`）以外のタスク（`local_bash` 等）では {@link taskStarted}
+   * 自体を呼ばない（`isWorkerTaskType` の doc）——このクラスへ「その
+   * `task_started` が来た」という事実そのものが届かない。**このクラスの中に
+   * `task_type` を見る分岐は無く、これからも増やさない**（判断は呼び出し側に
+   * 集約する、という設計はそのまま）——ここで「数える側では絞らない」と
+   * 言えるのは ambient の軸だけで、「一切絞っていない」という意味ではない。
    */
   #openTasks = new Set<string>();
 
@@ -198,11 +207,18 @@ export class RunnerWorkerWaitWindow {
    * `task_notification`。開いている委譲から1件外し、1→0 の遷移（全部片付いた）
    * なら閉じ待ちにする。
    *
-   * **対応の無い通知（本来起きない想定だが防御的に見る）で誤って閉じ待ちを
-   * 立てない。** `taskId` が `#openTasks` に無かった（または `undefined`）
-   * ときは、1→0 の遷移が起きていないのでここでは何もしない——`notifications`
-   * を数える・#901/#1554 の付け替えを行う判断は、これまでどおり呼び出し側
-   * （`RunnerSession#onTaskNotification`）が持つ。
+   * **対応の無い通知で誤って閉じ待ちを立てない。** `taskId` が `#openTasks`
+   * に無かった（または `undefined`）ときは、1→0 の遷移が起きていないので
+   * ここでは何もしない——`notifications` を数える・#901/#1554 の付け替えを
+   * 行う判断は、これまでどおり呼び出し側（`RunnerSession#onTaskNotification`）
+   * が持つ。
+   *
+   * **⚠️ Issue #2113 以降、これは「本来起きない想定」ではなく日常的な経路に
+   * なった。** 作業者ではないタスク（`local_bash` 等）は
+   * `RunnerSession#onTaskStarted` が {@link taskStarted} を呼ばない
+   * （`isWorkerTaskType` の doc）ので、その `task_notification` は必ず
+   * ここで「対応の無い通知」として届く——`#openTasks` を1バイトも変えない
+   * まま無害に終わる、という下の分岐がその都度使われる。
    */
   notified(taskId: string | undefined): void {
     const had = taskId !== undefined && this.#openTasks.delete(taskId);

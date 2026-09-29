@@ -203,6 +203,39 @@ export interface AgentDelegationStarted {
   type: 'delegation_started';
   /** provider が名乗った委譲の id。**無ければ省く**（代用値は層が作る）。 */
   taskId?: string;
+  /**
+   * SDK の `task_started.task_type`（Issue #2113）。
+   *
+   * **SDK は `task_started` を作業者（Task ツールの subagent、`local_agent`）
+   * 以外のタスクでも出す。** `task_type` 欄自体に JSDoc は無い（`sdk.d.ts` を
+   * 直接引いて確かめた——版 0.3.283）が、隣接欄の JSDoc が値の実例を逐語で
+   * 名乗っている:
+   *
+   * [sdk-verbatim SDKTaskStartedMessage.is_backgrounded]
+   * > Whether the task was registered in the background (true) or in the foreground with the spawning tool call blocking on it (false). A resumed subagent is always registered in the background. A later move to the background arrives as task_updated patch.is_backgrounded. Set for local_agent and local_bash tasks.
+   *
+   * [sdk-verbatim SDKTaskStartedMessage.spawn_depth]
+   * > Nesting depth of a spawned subagent (local_agent) task: 1 for a top-level spawn, N+1 when spawned from inside a depth-N agent. Not set on other tasks.
+   *
+   * [sdk-verbatim SDKTaskStartedMessage.workflow_name]
+   * > meta.name from the workflow script (e.g. 'spec'). Only set when task_type is 'local_workflow'.
+   *
+   * ⟹ 既知の値として `local_agent` / `local_bash` / `local_workflow` の3つが
+   * 確認できる（他にも在りうる——欄自体が絞られた enum ではなく string なので、
+   * 網羅を主張しない）。**`status` と同じく絞らず string のまま運ぶ**——SDK が
+   * この先で値を増やしても、知らない値は読み手（`runner.ts`）の判定で自然に
+   * 「作業者ではない」側へ倒れる（握り潰しはしない）。**取れなければ省く**
+   * （代用値は作らない——`taskId` と同じ作法）。
+   */
+  taskType?: string;
+  /**
+   * SDK の `task_started.spawn_depth`（Issue #2113 の調査ついで。上の
+   * `taskType` の doc に引いた `[sdk-verbatim SDKTaskStartedMessage.spawn_depth]`
+   * を見よ）。**いまはどの読み手も使っていない**——`taskType` を確かめる
+   * ついでに、取れるものを捨てずに運んでおく（`agent-events.ts` 全体の
+   * 「読めたものは運ぶ」作法）。**取れなければ省く**（代用値は作らない）。
+   */
+  spawnDepth?: number;
 }
 
 /** 委譲から完了の通知が来た。 */

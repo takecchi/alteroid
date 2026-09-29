@@ -35,8 +35,9 @@ interface FakeSession {
   /**
    * `system/task_started` を流す（#1373）。`runner-wakeup.test.ts` の同名の
    * ヘルパーと同じ形（`task_id` を持つ `system` メッセージ）を踏襲する。
+   * `extra` は Issue #2113 で足した——`task_type` を混ぜ込むためだけに使う。
    */
-  taskStarted(taskId: string): Promise<void>;
+  taskStarted(taskId: string, extra?: Record<string, unknown>): Promise<void>;
   /**
    * `system/task_notification` を流す（#1373 続き）。`status` の既定は
    * `'completed'`（陽性対照側の既定に寄せる——`'failed'` を試すテストは
@@ -87,7 +88,7 @@ function fakeSdk() {
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
-      async taskStarted(taskId) {
+      async taskStarted(taskId, extra = {}) {
         push({
           type: 'system',
           subtype: 'task_started',
@@ -95,6 +96,7 @@ function fakeSdk() {
           description: '作業者への委譲',
           uuid: `uuid-task-started-${taskId}`,
           session_id: 'sess-mgr',
+          ...extra,
         } as unknown as SDKMessage);
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
@@ -726,6 +728,85 @@ describe('失敗で終わったターンの本文に、そのターンで開い�
     await session.finish('', { isError: true });
     const texts = await reportTexts(s.inbox, 2);
     expect(texts[1]).toBe(BASELINE_FAILURE_TEXT);
+
+    await s.pool.stop();
+  });
+});
+
+/**
+ * **Issue #2113: `openedWorkers`（状況証拠の「N 体開いていた」）は作業者
+ * （`local_agent`）のタスクだけを数える。** SDK は `task_started` を作業者
+ * 以外のタスク（`local_bash` 等）でも出すので、直す前はここが水増しされて
+ * いた（実測: 「作業者が35体開いていた」と報告した回に、実際にマネージャーが
+ * 開いた作業者は1体だった）。
+ *
+ * 3本の歯で固定する:
+ * 1. `task_type: 'local_bash'` の `task_started` は数えない（状況証拠の行が
+ *    付かない）
+ * 2. `task_type: 'local_agent'` の `task_started` は数える（従来どおり）
+ * 3. `task_type` を名乗らない `task_started`（旧い SDK・provider が名乗らない
+ *    場合）は、これまでどおり作業者として数える（取りこぼすより多く数える
+ *    側へ倒す、という既存の向きを保つ）
+ */
+describe('openedWorkers は作業者（local_agent）のタスクだけを数える（Issue #2113）', () => {
+  const BASELINE_FAILURE_TEXT =
+    '（このターンは応答を返さずに終わった: success / result_is_error）\n（報告なし）';
+
+  it('task_type: local_bash の task_started では「N 体開いていた」が付かない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('bash-task-1', { task_type: 'local_bash' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    expect(texts[0]).toBe(BASELINE_FAILURE_TEXT);
+    expect(texts[0]).not.toContain('体開いていた');
+
+    await s.pool.stop();
+  });
+
+  it('task_type: local_agent の task_started は従来どおり数える', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('agent-task-1', { task_type: 'local_agent' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    expect(texts[0]).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者が 1 体開いていた。どちらが当たったかは SDK からは分からない）`,
+    );
+
+    await s.pool.stop();
+  });
+
+  it('task_type を名乗らない task_started は、これまでどおり作業者として数える', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('untyped-task-1'); // extra 無し ⟹ task_type 無し
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    expect(texts[0]).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者が 1 体開いていた。どちらが当たったかは SDK からは分からない）`,
+    );
 
     await s.pool.stop();
   });

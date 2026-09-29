@@ -1359,7 +1359,23 @@ function foldSystemMessage(message: SDKMessage & { type: 'system' }): AgentEvent
   if (subtype === 'task_started' || subtype === 'task_notification') {
     const taskId = (message as { task_id?: unknown }).task_id;
     if (subtype === 'task_started') {
-      return [{ type: 'delegation_started', ...(typeof taskId === 'string' ? { taskId } : {}) }];
+      // **Issue #2113: `task_type`（と `spawn_depth`）を読めたときだけ運ぶ。**
+      // SDK は `task_started` を作業者（`local_agent`）以外のタスク
+      // （`local_bash` 等）でも出す——`agent-events.ts` の
+      // `AgentDelegationStarted.taskType` の doc（SDK 逐語つき）を見よ。
+      // **ここで読むだけで、作業者かどうかの判定はしない**（判定は
+      // `runner.ts` 側が持つ——この層は SDK の綴りを読むだけ、という
+      // `foldClaudeMessage` 冒頭の doc の役割分担のまま）。
+      const taskType = (message as { task_type?: unknown }).task_type;
+      const spawnDepth = (message as { spawn_depth?: unknown }).spawn_depth;
+      return [
+        {
+          type: 'delegation_started',
+          ...(typeof taskId === 'string' ? { taskId } : {}),
+          ...(typeof taskType === 'string' ? { taskType } : {}),
+          ...(typeof spawnDepth === 'number' ? { spawnDepth } : {}),
+        },
+      ];
     }
     // **#1373 続き: `status` / `summary` を捨てずに運ぶ。** 直す前はここで
     // `taskId` だけ残し、`status`（`'completed' | 'failed' | 'stopped'`）と

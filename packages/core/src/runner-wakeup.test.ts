@@ -605,3 +605,82 @@ describe('worker_wait — 委譲1区間ぶんの契機の集計', () => {
     expect(event.sources).toBeUndefined();
   });
 });
+
+/**
+ * **Issue #2113: `worker_wait` の区間は作業者（`local_agent`）のタスクだけで
+ * 開く。** SDK は `task_started` を作業者以外のタスク（`local_bash` 等）でも
+ * 出すので、直す前はそれだけで区間が開いていた（委譲していないターンなのに
+ * 「作業者を待っている」区間が記録される事故）。
+ *
+ * 3本の歯で固定する:
+ * 1. `task_type: 'local_bash'` の `task_started` だけでは区間が開かない
+ * 2. `task_type: 'local_agent'` の `task_started` は従来どおり区間を開く
+ * 3. 作業者ではないタスクの `task_notification` が来ても、区間は壊れない
+ *    （対応の無い通知として無視される——`RunnerWorkerWaitWindow.notified` の
+ *    doc。既存の「ghost-task」の歯と同じ経路をここでも通す）
+ */
+describe('worker_wait は作業者（local_agent）のタスクだけで開く（Issue #2113）', () => {
+  it('task_type: local_bash の task_started だけでは区間が開かない', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('bash-task-1', { task_type: 'local_bash' });
+    await session.finish('委譲していないのに Bash のタスクが開いた回');
+    // **対応する task_notification まで送り、窓が「開いていたなら閉じる」
+    // 契機を必ず作る。** ここを素通りさせないと、この歯は「窓が開いたまま
+    // 一度も close() を通っていないだけ」でも緑になってしまい、区間が
+    // 開いていないことの証拠にならない（`taskStarted` が呼ばれていれば、
+    // この通知が 1→0 の遷移を作り、次の `finish` で必ず `worker_wait` が
+    // 1件 emit される——`isWorkerTaskType` を「常に true」に変異させると、
+    // ここで初めて赤くなる）。
+    await session.taskNotification('bash-task-1', { task_type: 'local_bash' });
+    await session.finish('通知のように見えるものを挟んだ回');
+
+    expect(workerWaitEvents(s.events)).toHaveLength(0);
+  });
+
+  it('task_type: local_agent の task_started は従来どおり区間を開く', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('agent-task-1', { task_type: 'local_agent' });
+    await session.finish('turn1');
+    await session.taskNotification('agent-task-1');
+    await session.finish('完了通知を契機に回った回');
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.tasks).toBe(1);
+    expect(event.settled).toBe(true);
+  });
+
+  it('作業者ではないタスク（local_bash）の task_notification が来ても、開いている区間は壊れない', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('agent-task-2', { task_type: 'local_agent' });
+    // Bash のタスクの通知（対応する task_started はこの窓に無い——local_bash
+    // なので #onTaskStarted がそもそも taskStarted() を呼んでいない）。
+    await session.taskNotification('bash-task-2', { task_type: 'local_bash' });
+    await session.finish('Bash の通知を挟んでも回った回');
+    await session.taskNotification('agent-task-2'); // 本物の完了通知（1→0）
+    await session.finish('完了通知を契機に回った回');
+
+    const events = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.tasks).toBe(1); // agent-task-2 の1件だけ
+    expect(event.settled).toBe(true);
+  });
+});

@@ -159,6 +159,15 @@ export class RunnerTurnTally {
    * が provider の名乗った id、無ければ `randomUUID()` の代用値をそのまま
    * 足す）。
    *
+   * **Issue #2113: ここに足すのは作業者（`local_agent`）のタスクだけである。**
+   * `RunnerSession#onTaskStarted` が `isWorkerTaskType`（`runner.ts`）で
+   * 判定し、作業者ではないタスク（`local_bash` 等）は `addOpenedWorker` 自体を
+   * 呼ばない。**ただし `task_type` を名乗らない provider（旧い SDK 等）から
+   * 来た `task_started` は、区別が付かないので作業者として数える**——取りこぼす
+   * より多く数える、という向きを保った結果、名乗らない非作業者のタスクが
+   * 稀に混じりうる。「N 体開いていた」はその意味でも状況証拠であって確定の
+   * 人数ではない。
+   *
    * `failedReportText`（`runner.ts`）はこの値（{@link RunnerTurnTally.takeAtResult}
    * が返す `.size`）が1以上のときだけ「このターンでは作業者が N 体開いていた」
    * という1行を本文に添える。**これは判定ではない** —— SDK の `result` は

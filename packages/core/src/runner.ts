@@ -1300,6 +1300,28 @@ function isOwnerRecordableTaskType(type: unknown): boolean {
 }
 
 /**
+ * `task_started`（`AgentDelegationStarted.taskType`）が作業者（Task ツールの
+ * subagent、`local_agent`）かどうか（Issue #2113）。
+ *
+ * **`OWNER_RECORDABLE_TASK_TYPES` とは別の名簿・別の id 空間である。** あちらは
+ * `background_tasks_changed` / `BashOutput` 等が名乗る**背景処理**の種類
+ * （`'shell'` 等）を見ており、こちらは `task_started` が名乗る**委譲**の種類
+ * （`'local_agent'` / `'local_bash'` 等）を見る——`#onTaskNotification` の doc
+ * が言う「この2つの id 空間は別物」と同じ線引きがここにもある。混ぜて1つの
+ * 名簿にしないこと。
+ *
+ * **`taskType` が無ければ作業者として数える。** 旧い SDK・`task_type` を
+ * 名乗らない provider から来た場合がこれに当たる——取りこぼすより多く数える、
+ * という `#onTaskStarted` の `taskId` 代用（`randomUUID()`）と同じ向きを保つ。
+ * **既知の非作業者の値（`local_bash` 等）だけを除く**——SDK がこの先で
+ * 新しい値を増やしても、知らない値は「作業者ではない」側ではなく安全側
+ * （＝取りこぼさない側）の「作業者として数える」へ倒れる。
+ */
+function isWorkerTaskType(taskType: string | undefined): boolean {
+  return taskType === undefined || taskType === 'local_agent';
+}
+
+/**
  * `BackgroundTaskSummary.status` のうち「**もう終わっている**」を表す語。
  *
  * **語彙の出所は SDK の型である。** `BackgroundTaskSummary.status` そのものは
@@ -3364,12 +3386,26 @@ class RunnerSession {
   /**
    * `task_started`。`#openTasks` が 0→1 になった瞬間に区間を開く（Issue #1190
    * 案X で `RunnerWorkerWaitWindow`（`runner-worker-wait-window.ts`）へ切り出した）。
+   *
+   * **Issue #2113: 作業者（`local_agent`）のタスクだけを数える。** SDK は
+   * `task_started` を作業者以外のタスク（`local_bash` 等）でも出す
+   * （`isWorkerTaskType` の doc）。直す前はここで `task_type` を見ずに一律
+   * 「作業者が開いた」として数えていたため、マネージャー自身が委譲していない
+   * ターンでも `openedWorkers` が増え、`worker_wait` の区間まで開いていた
+   * （実測: 枠の失敗で「作業者が35体開いていた」と報告した回に、実際に
+   * マネージャーが開いた作業者は1体だった）。
    */
   #onTaskStarted(event: AgentDelegationStarted): void {
     // provider が id を名乗らなければ、取りこぼすより偽の id で数える方を選ぶ
     // （他の道具の `brief`/`randomUUID` 系の判断と同じ）。**代用値をここで作るのは、
     // 何で埋めるかが層の判断だからである**（`agent-events.ts` の doc）。
     const taskId = event.taskId ?? randomUUID();
+    // **作業者ではないタスク（`local_bash` 等）は、ここで両方とも数えない**
+    // ——`#turnTally`（このターンの状況証拠）にも `#workerWaitWindow`
+    // （委譲を待つ区間）にも足さない。対応する `task_notification` が後で
+    // 来ても、`#openTasks` に入っていないので `RunnerWorkerWaitWindow.notified`
+    // は「対応の無い通知」として無害に無視する（あちらの doc を見よ）。
+    if (!isWorkerTaskType(event.taskType)) return;
     // **#1373: `RunnerWorkerWaitWindow` の `#openTasks` の開閉とは無関係に、
     // このターンで開いた作業者を別勘定で数える。** `RunnerTurnTally` の
     // `#openedWorkersThisTurn` の doc を参照。

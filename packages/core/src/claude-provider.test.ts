@@ -241,6 +241,62 @@ describe('foldClaudeMessage — system', () => {
     });
   });
 
+  /**
+   * Issue #2113: SDK は `task_started` を作業者（`local_agent`）以外のタスク
+   * （`local_bash` 等）でも出す。この写しは `task_type`（と `spawn_depth`）を
+   * 読めたときだけ運ぶ——判定（作業者かどうか）はしない、というこの層の
+   * 役割分担のまま（判定は `runner.ts` の `isWorkerTaskType` が持つ）。
+   */
+  it('task_started の task_type / spawn_depth を taskType / spawnDepth として運ぶ。無ければ省く', () => {
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-1',
+          task_type: 'local_bash',
+        }),
+      ),
+    ).toEqual({ type: 'delegation_started', taskId: 't-1', taskType: 'local_bash' });
+
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-2',
+          task_type: 'local_agent',
+          spawn_depth: 1,
+        }),
+      ),
+    ).toEqual({
+      type: 'delegation_started',
+      taskId: 't-2',
+      taskType: 'local_agent',
+      spawnDepth: 1,
+    });
+
+    // `task_type` が文字列でない・`spawn_depth` が数値でなければ、キーごと省く
+    // （代用値は作らない——`taskId` と同じ作法）。
+    expect(
+      only(
+        sdk({
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 't-3',
+          task_type: 42,
+          spawn_depth: '1',
+        }),
+      ),
+    ).toEqual({ type: 'delegation_started', taskId: 't-3' });
+
+    // 無ければ省く。
+    expect(only(sdk({ type: 'system', subtype: 'task_started', task_id: 't-4' }))).toEqual({
+      type: 'delegation_started',
+      taskId: 't-4',
+    });
+  });
+
   it('task_notification の status / summary を捨てずに運ぶ（Issue #1373 続き）', () => {
     expect(
       only(
