@@ -557,7 +557,16 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *     は字面としての `gh`（パス付き・`\gh`・引用符）だけを見ており、
  *     シェル変数や関数定義の中身までは追わない。
  */
-const HEREDOC_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s;&|]|$)/g;
+/**
+ * ヒアドキュメントの一致の規則の**正本**（issue #2115 からは、本体はこれを当てない）。
+ *
+ * 本体は `findHeredocs` で同じ一致を線形に近い形で探す（この正規表現は、終端の無い入力で
+ * 2乗になる）。この正規表現は、`findHeredocs` がこれと1文字も違わない一致を返すことを
+ * 突き合わせる託宣として残す（`bash-wait-guard-heredoc-scan.test.ts`）。**規則を変えるときは、
+ * ここと `findHeredocs` の両方を変えること** —— 片方だけ変えると、その歯が赤になる。
+ */
+export const HEREDOC_RE =
+  /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[\s;&|]|$)/g;
 
 /**
  * ヒアドキュメントの本体（開始トークン〜終端トークンまで全体）を、改行を
@@ -569,8 +578,138 @@ const HEREDOC_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?
  * `<<~`（インデント除去）等は個別に見ていない（`<<-` の `-` 自体は
  * トークンとして読むので、その形自体は拾える）。
  */
-function stripHeredocs(command: string): string {
-  return command.replace(HEREDOC_RE, (matched) => matched.replace(/[^\n]/g, ' '));
+export function stripHeredocs(command: string): string {
+  const spans = findHeredocs(command);
+  if (spans.length === 0) return command;
+  let out = '';
+  let cursor = 0;
+  for (const span of spans) {
+    out += command.slice(cursor, span.start);
+    out += command.slice(span.start, span.end).replace(/[^\n]/g, ' ');
+    cursor = span.end;
+  }
+  return out + command.slice(cursor);
+}
+
+/** ヒアドキュメント1つ分の位置（`findHeredocs`。どれも `command` の中の添字）。 */
+export interface HeredocSpan {
+  /** `<<` の位置（`HEREDOC_RE` の一致全体の始まり）。 */
+  readonly start: number;
+  /** 終端の語の直後（一致全体の終わり）。 */
+  readonly end: number;
+  /** 本文の始まり（開始の行の改行の直後）。 */
+  readonly bodyStart: number;
+  /** 本文の終わり（終端の行の直前の改行の位置）。 */
+  readonly bodyEnd: number;
+}
+
+/** `HEREDOC_RE` の前半（`<<` から開始の行の改行まで）。 */
+const HEREDOC_OPENER_RE = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n/g;
+
+const HEREDOC_WORD_START_RE = /[A-Za-z_]/;
+const HEREDOC_WORD_CHAR_RE = /\w/;
+const HEREDOC_TERMINATOR_FOLLOW_RE = /[\s;&|]/;
+
+interface HeredocTerminator {
+  /** 終端の行の直前の改行の位置。 */
+  readonly newline: number;
+  /** 終端の語の直後。 */
+  readonly end: number;
+}
+
+/** 昇順の `list` から、`newline >= from` の最初の要素を二分探索で返す。 */
+function firstTerminatorAtOrAfter(
+  list: readonly HeredocTerminator[],
+  from: number,
+): HeredocTerminator | undefined {
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((list[mid]?.newline ?? Infinity) < from) lo = mid + 1;
+    else hi = mid;
+  }
+  return list[lo];
+}
+
+/**
+ * コマンドの中のヒアドキュメントを、**`HEREDOC_RE` を `g` で当てたのと同じ一致**として
+ * 返す（issue #2115）。
+ *
+ * ## なぜ正規表現で探さないか
+ *
+ * `HEREDOC_RE` の本文の部分（`[\s\S]*?\n[ \t]*\2`）は、終端が無いと開始の位置ごとに
+ * 末尾まで読む。そのため、終端の無いヒアドキュメントが並ぶ入力で2乗になる
+ * （`'cat <<E\n'.repeat(8000)+'x'` が 145.6ms。#2104 の `SHELL_HEREDOC_RE` と
+ * `HEREDOC_BODY_RE` が同じ形でもう2回走らせ、`'bash <<E\n'` の8000回は 420.7ms だった）。
+ *
+ * ## どう探すか
+ *
+ * 終端になりうる行（行頭の空白の後に語が在り、その直後が空白・`;`・`&`・`|`・
+ * 末尾のどれか）を、1回の走査で語ごとに索引する。開始（`HEREDOC_OPENER_RE`）
+ * ごとに、その語の索引を二分探索して、本文の始まり以降で最初の終端を引く。
+ *
+ * ## `HEREDOC_RE` と1文字も変えない一致の規則
+ *
+ * 等価性は `bash-wait-guard-heredoc-scan.test.ts` が、元の正規表現を託宣として突き合わせる。
+ *
+ * - **終端の行は、本文の始まりの行より後ろに在る**（`[^\n]*\n[\s\S]*?\n` は、
+ *   開始の行の改行の後に、もう1つ改行を要る。だから `cat <<E\nE` の空の本文は
+ *   一致しない。元の癖をそのまま写した）
+ * - **引用符の無い区切り語は、長いほうから順に短く読み直す**（`([A-Za-z_][\w]*)` は
+ *   貪欲だが、失敗すると後戻りして短い語で試す。`<<EOFX` は、`EOFX` の終端が
+ *   無ければ `EOF` の終端で閉じうる）。引用符付き（`<<'EOF'`）は、語の直後に
+ *   引用符が要るので、語は1通りに決まる
+ * - **見つからなければ、次の位置から開始を探し直す**（`g` の置換が失敗した位置の
+ *   次へ進むのと同じ）。見つかれば、一致の終わりの後から探す
+ */
+export function findHeredocs(command: string): HeredocSpan[] {
+  if (!command.includes('<<')) return [];
+
+  const terminators = new Map<string, HeredocTerminator[]>();
+  for (
+    let newline = command.indexOf('\n');
+    newline !== -1;
+    newline = command.indexOf('\n', newline + 1)
+  ) {
+    let i = newline + 1;
+    while (command[i] === ' ' || command[i] === '\t') i += 1;
+    const first = command[i];
+    if (first === undefined || !HEREDOC_WORD_START_RE.test(first)) continue;
+    let j = i + 1;
+    while (j < command.length && HEREDOC_WORD_CHAR_RE.test(command[j] ?? '')) j += 1;
+    const next = command[j];
+    if (next !== undefined && !HEREDOC_TERMINATOR_FOLLOW_RE.test(next)) continue;
+    const word = command.slice(i, j);
+    const list = terminators.get(word);
+    const entry = { newline, end: j };
+    if (list === undefined) terminators.set(word, [entry]);
+    else list.push(entry);
+  }
+
+  const spans: HeredocSpan[] = [];
+  HEREDOC_OPENER_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = HEREDOC_OPENER_RE.exec(command)) !== null) {
+    const quote = m[1] ?? '';
+    const word = m[2] ?? '';
+    const bodyStart = m.index + m[0].length;
+    // 引用符付きは語が1通り。引用符無しは、長い語から順に短く読み直す。
+    const lengths = quote === '' ? word.length : 1;
+    let found: HeredocTerminator | undefined;
+    for (let k = 0; k < lengths && found === undefined; k += 1) {
+      const delimiter = quote === '' ? word.slice(0, word.length - k) : word;
+      const list = terminators.get(delimiter);
+      if (list !== undefined) found = firstTerminatorAtOrAfter(list, bodyStart);
+    }
+    if (found === undefined) {
+      HEREDOC_OPENER_RE.lastIndex = m.index + 1;
+      continue;
+    }
+    spans.push({ start: m.index, end: found.end, bodyStart, bodyEnd: found.newline });
+    HEREDOC_OPENER_RE.lastIndex = found.end;
+  }
+  return spans;
 }
 
 /**
@@ -866,7 +1005,7 @@ const LEADING_COMMAND_PREFIX_NAME_SRC = String.raw`(?:sudo|doas|nice|ionice|nohu
  * ここを触る人は、`\S*` を `\S{0,64}` に絞る同じ直し方が使えることを
  * `SHELL_NAME_SRC` の doc で確認できる。
  */
-const GH_WORD_SRC = String.raw`(?:\\gh|"gh"|'gh'|(?:\S*\/)?gh)`;
+const GH_WORD_SRC = String.raw`(?:\\gh|"gh"|'gh'|(?:[^\s;&|()<>\u0060"']*\/)?gh)`;
 
 /**
  * 1個ぶんのオプションを、**2つの重ならない形**として読む——
@@ -1661,10 +1800,32 @@ const PIPE_TO_SHELL_TARGET_RE = new RegExp(
  * 「ダッシュで始まる1トークン」だけを繰り返し読む（シェル自身のオプション
  * 文法までは解いていない、既知の限界）。
  */
-const SHELL_HEREDOC_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}(?:[ \t]+-\S+)*[ \t]*<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2(?=[\s;&|]|$)`,
-  'g',
+const SHELL_HEREDOC_PREFIX_RE = new RegExp(
+  String.raw`^[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}(?:[ \t]+-\S+)*[ \t]*$`,
 );
+
+/**
+ * `<<` の手前の、コマンドの位置からの区間の始まり（`;` `&` `|` 改行 `(` `)` バッククォートの直後）。
+ * `SHELL_HEREDOC_PREFIX_RE` をこの区間にだけ当てる（issue #2115。以前は本文ごと1本の
+ * 正規表現で探していて、終端の無い入力で2乗になった）。
+ */
+function commandPositionStartBefore(command: string, index: number): number {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const ch = command[i];
+    if (
+      ch === ';' ||
+      ch === '&' ||
+      ch === '|' ||
+      ch === '\n' ||
+      ch === '(' ||
+      ch === ')' ||
+      ch === '\u0060'
+    ) {
+      return i + 1;
+    }
+  }
+  return 0;
+}
 
 function extractShellDashCPayloads(command: string): string[] {
   const payloads: string[] = [];
@@ -1745,10 +1906,6 @@ function extractSshPayloads(command: string): string[] {
   return payloads;
 }
 
-/** `HEREDOC_RE` と同じ形で、本文を3番目の捕獲にとる（シェルへのパイプの中身を見るため）。 */
-const HEREDOC_BODY_RE =
-  /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2(?=[\s;&|]|$)/g;
-
 function extractPipeToShellPayloads(command: string): string[] {
   const payloads: string[] = [];
   let sawPipeToShell = false;
@@ -1766,10 +1923,8 @@ function extractPipeToShellPayloads(command: string): string[] {
   // （mgr-712ad619 のレビューで足した）。どのヒアドキュメントがどのパイプに流れるかは
   // 解かない——同じ呼び出しに `cat > f <<EOF` が別に在れば、その本文も見る（誤検知の向き）。
   if (sawPipeToShell) {
-    HEREDOC_BODY_RE.lastIndex = 0;
-    let h: RegExpExecArray | null;
-    while ((h = HEREDOC_BODY_RE.exec(command)) !== null) {
-      const body = (h[3] ?? '').trim();
+    for (const span of findHeredocs(command)) {
+      const body = command.slice(span.bodyStart, span.bodyEnd).trim();
       if (body.length > 0) payloads.push(body);
     }
   }
@@ -1778,10 +1933,11 @@ function extractPipeToShellPayloads(command: string): string[] {
 
 function extractShellHeredocPayloads(command: string): string[] {
   const payloads: string[] = [];
-  SHELL_HEREDOC_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = SHELL_HEREDOC_RE.exec(command)) !== null) {
-    payloads.push((m[3] ?? '').trim());
+  for (const span of findHeredocs(command)) {
+    const prefix = command.slice(commandPositionStartBefore(command, span.start), span.start);
+    if (SHELL_HEREDOC_PREFIX_RE.test(prefix)) {
+      payloads.push(command.slice(span.bodyStart, span.bodyEnd).trim());
+    }
   }
   return payloads;
 }
