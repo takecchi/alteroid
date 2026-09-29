@@ -246,6 +246,37 @@ describe('作成時刻', () => {
    * known と unknown を同じ `it()` に混ぜない——アサーションは最初の1つで
    * 止まるので、片方が通るともう片方も通ったように見える。
    */
+
+  /**
+   * #2140 面: `formatDateTime` は「今年でなければ年を足す」——`作成 08/01
+   * 09:00` は「今年」の間だけ成り立つ期待値である。壁時計を固定しないと、
+   * 暦が year(createdAt) を跨いだ瞬間にこの `it` が自然に赤くなる
+   * （このファイルは元々 TZ だけ固定していて、年は固定していなかった）。
+   *
+   * **`toFake: ['Date']` に絞る。** 既定の `vi.useFakeTimers()` は
+   * `setTimeout` 等も止めるため、`findByRole` / `findByText` が使う RTL の
+   * ポーリング（`waitFor` 内部の real timer）を巻き込んでハングしうる
+   * （`manager-detail.test.tsx` がこの画面全体で fake timers を避けた理由と
+   * 同じ懸念）。`Date` だけを止めれば、`await findByRole(...)` は実時間の
+   * まま動く——実測でハングしないことを確認済み（このファイルの3本とも
+   * real timers のときと同じ時間で完走する）。
+   *
+   * `NOW` は `createdAt`（2026-08-01 / 2026-08-22）と同じ2026年の内側に
+   * 置く。**このテストが検証したいのは「今年は年を出さない」であって、
+   * 特定の壁時計時刻ではない**——`NOW` を壁時計に委ねず固定することで、
+   * 実行される暦年が何であっても（2027年でも）この it は動じない。
+   */
+  const NOW_2026 = Date.parse('2026-08-25T00:00:00Z');
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW_2026);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('作成時刻が known なら、その時刻が画面に出る', async () => {
     renderDetail(
       'notes',
