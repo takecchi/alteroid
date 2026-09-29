@@ -4,6 +4,7 @@ import { join, resolve, sep } from 'node:path';
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
   archiveIdBranch,
+  assertArchivableSessionId,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
   createUnreadableRowOnce,
@@ -125,6 +126,8 @@ export class FsTranscriptArchive implements TranscriptArchive {
    * ので、呼ぶ前には何も `await` しない。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
+    // 積めない sessionId は、ロックを取る前に3実装と同じ例外で断る（issue #2233）。
+    assertArchivableSessionId(sessionId);
     return withPathLock(this.#sessionLockPath(sessionId), async () => {
       await mkdir(this.#dir, { recursive: true });
       // **`at` はロックを取った後で決める（#1732）。** 上の doc「⚠️」参照。

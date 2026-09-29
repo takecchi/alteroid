@@ -1,5 +1,6 @@
 import {
   archiveIdBranch,
+  assertArchivableSessionId,
   classifyArchiveContinuity,
   compareArchiveEntriesNewestFirst,
   fingerprintArchiveBody,
@@ -151,6 +152,11 @@ export class PgTranscriptArchive implements TranscriptArchive {
    * だけ**で、同着が無ければ従来どおり1行である。
    */
   async archive(sessionId: string, transcript: string): Promise<ArchiveWrite> {
+    // **積めない sessionId は、DB に触る前に3実装と同じ例外で断る（issue #2233）。**
+    // 以前はここを素通りし、`pg_advisory_xact_lock(…, hashtext(sessionId))` の時点で
+    // PostgreSQL の例外（NUL は `text` に入らない）で落ちていた。本文の NUL を除く
+    // `stripNulls` とは扱いが違う——本文は中身で、sessionId は行を指す鍵である。
+    assertArchivableSessionId(sessionId);
     const body = stripNulls(transcript);
     // 指紋は生の本文で取る（上の doc。#1709）。保存する `body` は NUL を除いた値。
     const fingerprint = fingerprintArchiveBody(transcript);

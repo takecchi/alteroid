@@ -494,6 +494,8 @@ export {
  * 3つとも測ったことにしない（`verifyJournalStoreSearchContract` と同じ作法）。
  */
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
+/** アーカイブの sessionId の入口の検査（issue #2233。3実装とも同じ例外で断る）。 */
+export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
