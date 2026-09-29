@@ -1313,7 +1313,12 @@ export function createMemoryStores(): Stores {
       return permissionGrantRows.get(id) ?? null;
     },
     async put(grant) {
-      permissionGrantRows.set(grant.id, grant);
+      // 本物（fs / pg）と同じく `permissionGrantSchema` を通す（issue #2052）。
+      // 以前は素通しだったので、fs / pg なら弾かれる不正な grant（必須欄の
+      // 欠落など）もここでは例外無しで保存できていた——同じストアの
+      // `revoke` / `markUsed` は既に `permissionGrantSchema.parse` を通して
+      // いるので、`put` だけが食い違って残っていた。
+      permissionGrantRows.set(grant.id, permissionGrantSchema.parse(grant));
     },
     // fs / pg と同じ形（lost update・#1654 と同型）——現在値（この in-memory
     // 実装では常に最新の `Map` の値そのもの）から判断する。プロセス内の
