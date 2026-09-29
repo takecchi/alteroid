@@ -101,11 +101,17 @@ function captureChatBodies(): string[] {
   return bodies;
 }
 
-/** 会話一覧と履歴。**この試験の対象ではない**ので、どちらも空で返す。 */
+/**
+ * 会話一覧と履歴。**この試験の対象ではない**ので、どちらも空で返す。
+ * `/approvals` も同じ扱い——issue #2210 以降 `conversationApprovals.error` が
+ * `ErrorNote` を出すので、未ハンドルのまま（`Failed to fetch`）にせず0件で
+ * 成功させる。
+ */
 function background(url: string): Response | undefined {
   if (url.includes(`/conversations/${CONVERSATION_ID}`)) {
     return json({ conversationId: CONVERSATION_ID, messages: [] });
   }
+  if (url.includes('/approvals')) return json({ approvals: [] });
   if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
   return undefined;
 }

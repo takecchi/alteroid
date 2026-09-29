@@ -195,6 +195,11 @@ async function setUpExistingConversationWithLiveInvalidation(): Promise<{
             },
       );
     }
+    // issue #2210 以降: `chat.tsx` が `conversationApprovals.error` を見て
+    // `ErrorNote` を出すようになったので、未ハンドルのまま（`Failed to
+    // fetch`）にすると無関係な `alert` が増える。この試験の対象ではないので、
+    // 素直に0件で成功させる。
+    if (url.includes('/approvals')) return json({ approvals: [] });
     if (url.includes('/conversations')) return json({ conversations: [], scanned: 0 });
     return undefined;
   };
