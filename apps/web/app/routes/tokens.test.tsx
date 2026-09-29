@@ -9,7 +9,8 @@
  * `PUT /tokens` を全置換で呼ぶ」の各点。文言の細部より、この規律が壊れていないかを見る。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createMemoryRouter, RouterProvider } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatDateTime } from '~/lib/format';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -74,6 +75,26 @@ function stubScreen(options: {
 
 async function waitForPoolLoaded(): Promise<void> {
   await screen.findByRole('heading', { name: 'プール一覧' });
+}
+
+/**
+ * **Router で包む（issue #2109）。** `Tokens`（`PoolAndSettings`）は使用量の
+ * 画面から飛んできた行き先の id を `useSearchParams` で読むので、Router
+ * 無しでは描けなくなった。形は `usage.test.tsx` の `renderUsage` と同じ
+ * `createMemoryRouter` + `RouterProvider`。
+ *
+ * **`router` を返すのは、飛び先の id を URL 経由で渡すテストのためである**
+ * （`initialEntries` に `/tokens?tokenId=<id>` を渡す）。
+ */
+function renderTokens(initialEntries: string[] = ['/']) {
+  const router = createMemoryRouter([{ path: '/', Component: Tokens }], {
+    initialEntries,
+  });
+  return render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
 }
 
 interface StubTokenRow {
@@ -187,11 +208,7 @@ describe('/tokens 画面 — プールの4状態', () => {
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
 
@@ -224,11 +241,7 @@ describe('/tokens 画面 — 値を絶対に出さない', () => {
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
 
@@ -245,11 +258,7 @@ describe('/tokens 画面 — 不明と、そもそも無いを混ぜない', () 
       tokens: [{ id: 't-clean', label: 'clean-token', order: 0, sha256: 'e'.repeat(12) }],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
     expect(screen.getByText('断られた記録が無い')).toBeTruthy();
@@ -290,11 +299,7 @@ describe('/tokens 画面 — recovery（回復の見込み）を潰さない', (
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
 
@@ -342,11 +347,7 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
 
@@ -372,11 +373,7 @@ describe('/tokens 画面 — 知らない値が届いても落ちない', () => 
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
 
@@ -405,11 +402,7 @@ describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', 
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitForPoolLoaded();
 
@@ -448,11 +441,7 @@ describe('/tokens 画面 — 冷却は原文と絶対時刻の両方を出す', 
         ],
       });
 
-      const view = render(
-        <Providers>
-          <Tokens />
-        </Providers>,
-      );
+      const view = renderTokens();
 
       await waitForPoolLoaded();
       expect(screen.getByText(one.text), one.source).toBeTruthy();
@@ -465,11 +454,7 @@ describe('/tokens 画面 — 空のプール', () => {
   it('プールが0件のとき、まだ1件も無いと言う（0件と未取得を混同しない）', async () => {
     stubScreen({ tokens: [] });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     expect(await screen.findByText(/登録された認証トークンがまだ1件も無い/)).toBeTruthy();
   });
@@ -479,11 +464,7 @@ describe('/tokens 画面 — 403', () => {
   it('alteroid を使う許可が無ければ、専用の文言を出す（汎用のエラー表示に投げない）', async () => {
     stubScreen({ tokensStatus: 403 });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     expect(await screen.findByText(/使う許可があるアカウントだけが見られる/)).toBeTruthy();
     expect(screen.getByText('alteroid token list')).toBeTruthy();
@@ -506,11 +487,7 @@ describe('/tokens 画面 — 回転の履歴（エラー状況）', () => {
       ],
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     expect(await screen.findByText('候補が無いので全層が止まった')).toBeTruthy();
     expect(screen.getByText('候補が無い（全層が止まる）')).toBeTruthy();
@@ -519,11 +496,7 @@ describe('/tokens 画面 — 回転の履歴（エラー状況）', () => {
   it('回転の記録が0件なら、その旨を言う', async () => {
     stubScreen({ tokens: [], journalEntries: [] });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     expect(await screen.findByText('回転の記録がまだ1件も無い。')).toBeTruthy();
   });
@@ -535,11 +508,7 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
       { id: 't-existing', label: 'existing-token', order: 0, sha256: 'a'.repeat(12) },
     ]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）'), {
@@ -568,11 +537,7 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
       { id: 't-b', label: 'token-b', order: 1, sha256: 'b'.repeat(12) },
     ]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
     expect(await screen.findByText('token-a')).toBeTruthy();
 
@@ -589,11 +554,7 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
       { id: 't-a', label: 'token-a', order: 0, sha256: 'a'.repeat(12) },
     ]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.click(screen.getByRole('button', { name: '無効化する' }));
@@ -613,11 +574,7 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
       },
     ]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.click(screen.getByRole('button', { name: '戻す' }));
@@ -681,11 +638,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
   it('回す契機を変えて保存すると、その値だけで PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
     const { puts } = stubPolicyScreen();
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('回す契機を変える'), { target: { value: 'off' } });
@@ -698,11 +651,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
   it('冷却の既定（ミリ秒）を変えて保存すると PUT /tokens/policy が呼ばれ、表示に反映される', async () => {
     const { puts } = stubPolicyScreen();
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('冷却の既定を変える（ミリ秒）'), {
@@ -720,11 +669,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
   it('保存前は「変更なし」で無効、値を変えると「保存」で押せるようになる', async () => {
     stubPolicyScreen();
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     expect(screen.getByRole('button', { name: '変更なし' })).toHaveProperty('disabled', true);
@@ -744,11 +689,7 @@ describe('/tokens 画面 — 回転の設定を書き込む（Issue #1123）', (
     const { failNextUpdate } = stubPolicyScreen();
     failNextUpdate(400, '設定の入力の形が不正: cooldownMs は正の整数である必要がある');
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('冷却の既定を変える（ミリ秒）'), {
@@ -850,11 +791,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
       settingsUnreadable: { reason: REASON },
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     // 一覧（読めている分）は出ている——道連れになっていない。
@@ -881,11 +818,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
       return undefined;
     });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     expect(await screen.findByText(/回転の設定は読めない.*理由不明/)).toBeTruthy();
@@ -894,11 +827,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
   it('片方しか選んでいないと保存が押せない。両方選んで初めて押せる', async () => {
     stubUnreadableScreen({ reason: '理由' });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
@@ -915,11 +844,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
   it('両方選んで保存すると PUT /tokens/policy に両方の欄が送られ、成功後は一覧が取り直されて通常の設定カードに戻る', async () => {
     const { puts } = stubUnreadableScreen({ reason: '理由' });
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
@@ -940,11 +865,7 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     const { failNextUpdate } = stubUnreadableScreen({ reason: '理由' });
     failNextUpdate(500, '読めない現在値は両方揃った patch でしか埋められない');
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
     await waitForPoolLoaded();
 
     fireEvent.change(screen.getByLabelText('回す契機を選ぶ'), {
@@ -960,5 +881,82 @@ describe('/tokens 画面 — 回転の設定が読めない（issue #2096）', (
     ).toBeTruthy();
     // 通常の設定カードには切り替わっていない（読めないまま）。
     expect(screen.getByLabelText('回す契機を選ぶ')).toHaveProperty('value', 'off');
+  });
+});
+
+describe('/tokens 画面 — 使用量からの行き先（issue #2109）', () => {
+  it('?tokenId=<id> で飛んでくると、その行が id を持ち、控えめに強調される', async () => {
+    stubScreen({
+      tokens: [
+        { id: 't-a', label: 'row-a', order: 0, sha256: 'a'.repeat(12), source: 'stored' },
+        { id: 't-b', label: 'row-b', order: 1, sha256: 'b'.repeat(12), source: 'stored' },
+      ],
+    });
+
+    renderTokens(['/?tokenId=t-b']);
+    await waitForPoolLoaded();
+    await screen.findByText('row-b');
+
+    const targetRow = document.getElementById('token-t-b');
+    const otherRow = document.getElementById('token-t-a');
+    expect(targetRow).not.toBeNull();
+    // **強調は className（`border-accent`）で表現する**——`journal.tsx` の
+    // 選択チップのテストと同じ測り方（issue #2109）。
+    expect(targetRow?.className).toContain('border-accent');
+    expect(otherRow?.className).not.toContain('border-accent');
+    // 「プールに無い」の注記は出ない——id は実在する。
+    expect(screen.queryByText(/はいまのプールに無い/)).toBeNull();
+  });
+
+  it('?tokenId=<id> で飛んでくると、その行へ scrollIntoView する', async () => {
+    stubScreen({
+      tokens: [
+        { id: 't-a', label: 'row-a', order: 0, sha256: 'a'.repeat(12), source: 'stored' },
+        { id: 't-b', label: 'row-b', order: 1, sha256: 'b'.repeat(12), source: 'stored' },
+      ],
+    });
+
+    // **`test-support.tsx` の `Element.prototype.scrollIntoView` は既に
+    // no-op で埋めてある**（jsdom に無い口を埋める共有の足場）。ここではその
+    // 上に spy を重ねて、正しい行の要素で呼ばれたことまで測る。
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+
+    renderTokens(['/?tokenId=t-b']);
+    await waitForPoolLoaded();
+    await screen.findByText('row-b');
+
+    const targetRow = document.getElementById('token-t-b');
+    expect(scrollIntoView.mock.instances).toContain(targetRow);
+
+    scrollIntoView.mockRestore();
+  });
+
+  it('プールに無い id で飛んでくると、頭に着地しつつ「いまのプールに無い」旨を出す', async () => {
+    stubScreen({
+      tokens: [{ id: 't-a', label: 'row-a', order: 0, sha256: 'a'.repeat(12), source: 'stored' }],
+    });
+
+    renderTokens(['/?tokenId=t-removed']);
+    await waitForPoolLoaded();
+
+    // 事実だけを言う——なぜ無いかは断定しない（「外したか、別の器のもの」）。
+    expect(await screen.findByText(/はいまのプールに無い（外したか、別の器のもの）/)).toBeTruthy();
+    expect(screen.getByText('t-removed')).toBeTruthy();
+    // 残っている行はそのまま出る——道連れになっていない。
+    expect(screen.getByText('row-a')).toBeTruthy();
+    // 実在しない id なので、どの行も強調されない。
+    expect(document.getElementById('token-t-a')?.className).not.toContain('border-accent');
+  });
+
+  it('tokenId を付けずに開くと、これまでどおり何も強調されず注記も出ない', async () => {
+    stubScreen({
+      tokens: [{ id: 't-a', label: 'row-a', order: 0, sha256: 'a'.repeat(12), source: 'stored' }],
+    });
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    expect(screen.queryByText(/はいまのプールに無い/)).toBeNull();
+    expect(document.getElementById('token-t-a')?.className).not.toContain('border-accent');
   });
 });

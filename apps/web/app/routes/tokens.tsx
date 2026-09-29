@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 
 import { Page } from '~/components/page';
 import {
@@ -20,7 +22,9 @@ import {
 } from '~/hooks/mutations';
 import { useJournal, useTokens } from '~/hooks/queries';
 import { ApiError } from '~/lib/api';
+import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
+import { TOKEN_ID_PARAM } from '~/lib/tokens-links';
 import type {
   AgentTokenView,
   TokenAvailability,
@@ -134,6 +138,10 @@ function AddTokenForm() {
 
 function PoolAndSettings() {
   const { data, error, isLoading } = useTokens();
+  // 使用量の画面（`usage.tsx`「認証トークン別」）から飛んできたときの、
+  // 行き先の id（issue #2109。`~/lib/tokens-links` の `tokensHref`）。
+  const [searchParams] = useSearchParams();
+  const targetTokenId = searchParams.get(TOKEN_ID_PARAM) ?? undefined;
 
   // **403 は「alteroid を使う許可が無い」であって、ただの失敗ではない。**
   //
@@ -166,7 +174,7 @@ function PoolAndSettings() {
         </Card>
       ) : data === undefined ? null : (
         <>
-          <PoolCard tokens={data.tokens} />
+          <PoolCard tokens={data.tokens} targetTokenId={targetTokenId} />
           {data.settings === undefined ? (
             // **issue #2096（#2095 の表示側）。** 回す契機・冷却の設定が壊れて
             // いて読めないとき、デーモンは `settings` を省いて
@@ -335,8 +343,23 @@ function formatEpochMsRelative(ms: number): string {
   return formatRelative(new Date(ms).toISOString());
 }
 
-function PoolCard({ tokens }: { tokens: readonly AgentTokenView[] }) {
+function PoolCard({
+  tokens,
+  targetTokenId,
+}: {
+  tokens: readonly AgentTokenView[];
+  /**
+   * 使用量の画面から飛んできたときの、行き先の id（issue #2109）。
+   * `undefined` なら「飛んできていない」——通常の一覧表示と何も変わらない。
+   */
+  targetTokenId?: string;
+}) {
   const sorted = [...tokens].sort((a, b) => a.order - b.order);
+  // **プールから外れた id で飛んできたときの倒れ先。** 使用量には残っている
+  // が、いまの `GET /tokens` には居ない id（外した・別の器のプールを見ている、
+  // など——どちらとも断定しない）で飛んできたとき、黙って画面の頭に着地する
+  // と「リンクが壊れている」のか「その行が本当に無い」のか区別が付かない。
+  const targetMissing = targetTokenId !== undefined && !sorted.some((t) => t.id === targetTokenId);
 
   return (
     <Card>
@@ -345,6 +368,21 @@ function PoolCard({ tokens }: { tokens: readonly AgentTokenView[] }) {
         subtitle="alteroid token list / GET /tokens と同じもの。値は出ない"
         action={<Badge>{sorted.length}</Badge>}
       />
+      {targetMissing && (
+        // **`commitments.tsx` の `UnreadableNote` と同じ形にする**（issue
+        // #2109）——「無い」でも「壊れている」でもない、どちらとも言えない
+        // 状態を断る役割が同じである。
+        <div
+          role="status"
+          className="m-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+        >
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">
+            <code className="font-mono break-all">{targetTokenId}</code>{' '}
+            はいまのプールに無い（外したか、別の器のもの）。
+          </span>
+        </div>
+      )}
       {sorted.length === 0 ? (
         // **プールが空の構成は正常でありうる**（`.claude/skills/token-pool/SKILL.md`
         // 「何は変わらないか」）。「まだ取れていない」との混同を避けるため、
@@ -355,7 +393,7 @@ function PoolCard({ tokens }: { tokens: readonly AgentTokenView[] }) {
       ) : (
         <ul>
           {sorted.map((token) => (
-            <TokenRow key={token.id} token={token} />
+            <TokenRow key={token.id} token={token} highlighted={token.id === targetTokenId} />
           ))}
         </ul>
       )}
@@ -363,7 +401,14 @@ function PoolCard({ tokens }: { tokens: readonly AgentTokenView[] }) {
   );
 }
 
-function TokenRow({ token }: { token: AgentTokenView }) {
+function TokenRow({
+  token,
+  highlighted = false,
+}: {
+  token: AgentTokenView;
+  /** 使用量の画面から、この行を指して飛んできたか（issue #2109）。 */
+  highlighted?: boolean;
+}) {
   const availability = tokenAvailabilityAt(token);
   const state = describeAvailability(availability);
   const rejected = token.lastRejectedAt !== undefined || token.lastRejectedReason !== undefined;
@@ -371,6 +416,18 @@ function TokenRow({ token }: { token: AgentTokenView }) {
   const removeToken = useRemoveToken();
   const [busy, setBusy] = useState<'disable' | 'enable' | 'remove' | null>(null);
   const [failure, setFailure] = useState<unknown>(undefined);
+  const rowRef = useRef<HTMLLIElement>(null);
+
+  // **スクロールは mount 時の1回で足りる。** `PoolCard`（親）は `useTokens`
+  // のデータが届いてから初めて `TokenRow` を描画するので、この effect が
+  // 走る時点で行は既に DOM に在る——react-router の `<ScrollRestoration>`
+  // が hash に対して行う `getElementById` → `scrollIntoView` が非同期データと
+  // 競合する問題（`~/lib/tokens-links` の doc）を、ここでは踏まない。
+  useEffect(() => {
+    if (highlighted) {
+      rowRef.current?.scrollIntoView({ block: 'center' });
+    }
+  }, [highlighted]);
 
   async function toggleDisabled(next: boolean) {
     setBusy(next ? 'disable' : 'enable');
@@ -397,7 +454,21 @@ function TokenRow({ token }: { token: AgentTokenView }) {
   }
 
   return (
-    <li className="border-b border-border px-4 py-3 last:border-b-0">
+    <li
+      ref={rowRef}
+      // **安定した目印（issue #2109）。** hash ナビゲーションの入力としては
+      // 使わない（`~/lib/tokens-links` の doc）が、行を指す DOM の id 自体は
+      // 残す——テストや将来の直接リンクから見つけやすくするため。
+      id={`token-${token.id}`}
+      className={cn(
+        'border-b border-border px-4 py-3 last:border-b-0',
+        // **控えめな強調。** 選択チップ（`journal.tsx` / `managers.tsx`）と
+        // 同じ `border-accent` + `bg-accent/15` の語彙を使うが、背景は薄めた
+        // `/5` にする——行全体が長時間目に入り続けるので、チップより濃いと
+        // 読みにくい。
+        highlighted && 'border-accent bg-accent/5',
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium break-all">{token.label}</span>
         <Badge tone={state.tone}>{state.label}</Badge>
