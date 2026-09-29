@@ -9,7 +9,7 @@
  * 組み立てをここへ1本化し、`usage.tsx` もここを参照する形にする。
  */
 
-/** 絞り込みを載せる URL のクエリパラメタ名。値は `usage.tsx` の正本と揃えてある。 */
+/** 絞り込みを載せる URL のクエリパラメタ名の正本。`usage.tsx` はここを読む（書き写さない）。 */
 export const USAGE_FROM_PARAM = 'from';
 export const USAGE_TO_PARAM = 'to';
 export const USAGE_MANAGER_ID_PARAM = 'managerId';
