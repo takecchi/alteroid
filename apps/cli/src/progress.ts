@@ -91,7 +91,10 @@ export function renderProgress(view: ProgressView): string {
       `最新 ${at(inProgress.lastReport.newestAt, now)} / 報告無し ${String(inProgress.lastReport.withoutReport)} 件`,
   );
 
-  lines.push('', `窓の中の消化（直近 ${String(window.hours)} 時間: ${window.from} 〜 ${window.to}）`);
+  lines.push(
+    '',
+    `窓の中の消化（直近 ${String(window.hours)} 時間: ${window.from} 〜 ${window.to}）`,
+  );
   lines.push(
     `  台帳: 受けた ${String(throughput.commitmentsOpened)} 件 / 閉じた ${String(throughput.commitmentsClosed)} 件`,
   );

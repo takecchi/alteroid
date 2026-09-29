@@ -68,6 +68,7 @@ import {
   tokenPolicyCommand,
   tokenRemoveCommand,
 } from './token.js';
+import { progressCommand } from './progress.js';
 import { usageCommand } from './usage.js';
 
 /**
@@ -357,6 +358,18 @@ program
   .description('評定（good/bad/unclear/未評定）の内訳を見る')
   .action(async () => {
     await appraisalStatsCommand();
+  });
+
+/**
+ * 作業の進捗（積み上がり・実施中・窓の中の消化・見込み）。経路は `GET /progress` の
+ * 1本だけ（`apps/cli/src/progress.ts`。#2241）。
+ */
+program
+  .command('progress')
+  .description('作業の進捗（積み上がり・実施中・窓の中の消化・見込み）を見る')
+  .option('--window-hours <n>', '消化と見込みを数える窓の長さ（時間。既定は daemon が決める）')
+  .action(async (options: { windowHours?: string }) => {
+    await progressCommand(options);
   });
 
 /**
