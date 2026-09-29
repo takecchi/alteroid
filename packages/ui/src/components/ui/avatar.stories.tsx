@@ -40,7 +40,7 @@ export const WithBadge: Story = {
   render: () => (
     <Avatar>
       <AvatarFallback>鈴木</AvatarFallback>
-      <AvatarBadge className="size-2.5 bg-green-500" />
+      <AvatarBadge className="size-2.5 bg-ok" />
     </Avatar>
   ),
 };
