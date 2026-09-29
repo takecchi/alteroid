@@ -81,7 +81,7 @@ describe('scripts/test.mjs --deadline-seconds（統合: 偽の vitest を子と�
       [
         "const fs = require('node:fs');",
         'const file = process.argv[2];',
-        "setInterval(() => {",
+        'setInterval(() => {',
         "  fs.appendFileSync(file, 'x\\n');",
         '}, 50);',
         '',
@@ -172,9 +172,7 @@ describe('scripts/test.mjs --deadline-seconds（統合: 偽の vitest を子と�
         expect(Number.isInteger(heartbeatPid), `pidファイルの中身: ${JSON.stringify(pidRaw)}`).toBe(
           true,
         );
-        const heartbeatLines = (await readFile(heartbeatFile, 'utf8'))
-          .split('\n')
-          .filter(Boolean);
+        const heartbeatLines = (await readFile(heartbeatFile, 'utf8')).split('\n').filter(Boolean);
         expect(
           heartbeatLines.length,
           '孫プロセスが心拍を1行も書いていない——起動していなかった疑いがある',

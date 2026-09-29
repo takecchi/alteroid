@@ -607,9 +607,7 @@ describe('formatDeadlineMessage（打ち切ったときに stdout へ必ず出�
   });
 
   it('「通ったのでも落ちたのでもない」ことを明示する（歯Aの `EXIT_UNKNOWN` と混同されないため）', () => {
-    expect(formatDeadlineMessage(300)).toContain(
-      '通ったのでも落ちたのでもない',
-    );
+    expect(formatDeadlineMessage(300)).toContain('通ったのでも落ちたのでもない');
   });
 });
 
