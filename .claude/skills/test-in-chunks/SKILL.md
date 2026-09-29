@@ -25,6 +25,44 @@ reporter を `dot` にする**（通ったテスト1本ごとの行を出さず�
 **(c) パッケージ・shard 単位で分けて回す**（1回のコマンドが長時間・大出力に
 ならないようにする）。
 
+## パッケージのディレクトリで vitest を直接叩いても root の設定が効く（#2157）
+
+**この節の推奨コマンド（`pnpm test` / `pnpm --filter <pkg> test` / `cd <pkg> &&
+pnpm test`）は、どれも `scripts/test.mjs` を経由する。** それとは別に、
+`cd <pkg> && pnpm exec vitest run <file>` や `pnpm --filter <pkg> exec vitest
+run <file>` のように **vitest を直接叩く**打ち方もある——変異試験の赤緑を
+素早く測りたいときなど、この打ち方をした作業者が実際にいた。
+
+**2026-09-29（#2157）より前は、この直接叩きだけ root の `vitest.config.ts`
+（`setupFiles`・`clearMocks: false`・`~` の別名）が一切効かなかった**——
+`apps/*` / `packages/*` のどこにも `vitest.config.*` が無く、vitest は
+そのパッケージのディレクトリを `root` として動いていたため。実測（直した
+PR より前、observed 2026-09-29）:
+
+```
+$ cd apps/daemon && pnpm exec vitest run src/token-watch.test.ts --reporter=dot
+ RUN  v5.0.1 /home/worker/trees/mgr-8bda6d38/apps/daemon
+ Test Files  1 passed (1)
+      Tests  15 passed (15)
+```
+
+（`RUN` 行が `apps/daemon` になっている——root ではない。`setupFiles` の
+`scrubSecretEnv` が掛からないので、本物の秘密を環境から消さないまま走って
+いた。`apps/web` だけは代わりに `apps/web/vite.config.ts`（React Router
+プラグイン入り）を拾ってしまい、逆に `Error: React Router Vite plugin can't
+detect preamble` で落ちていた。）
+
+**直した後は、各ワークスペースに置いた `vitest.config.ts`（中身は
+`vitest.workspace-config.ts` の `workspaceVitestConfig(import.meta.url)` を
+呼ぶだけ）が拾われる。** `root` を repo の根に固定し、`test.dir` をそのパッケージの
+ディレクトリへ絞ることで、直接叩いても `RUN` 行が repo の根になり、
+`setupFiles` / `clearMocks: false` / `~` の別名が効き、走査対象はそのパッケージ
+だけに絞られる。**`pnpm test` / `pnpm --filter <pkg> test`（`--root=../..` を
+vitest へ渡す）の挙動は変わらない**——`--root` が設定ファイルの探索基点にも
+なるため、そちらは今までどおり root の `vitest.config.ts` を見つける（新しく
+足したワークスペース側の `vitest.config.ts` は素通りされる）。配線の歯は
+`scripts/vitest-workspace-config.test.ts`。
+
 ## (b) 既定 reporter が `dot` へ倒れる条件——この器では自動で効く
 
 `scripts/test.mjs` は `scripts/test-guard-core.mjs` の `resolveReporterArgs` /

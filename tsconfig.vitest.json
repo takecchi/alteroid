@@ -2,6 +2,7 @@
   "extends": "./tsconfig.base.json",
   "include": [
     "vitest.config.ts",
+    "vitest.workspace-config.ts",
     "vitest.setup.ts",
     "vitest.tmpdir.ts",
     "vitest.tmpdir.test.ts",
