@@ -19,6 +19,7 @@ import {
   practiceSchema,
   practiceVersionMetaSchema,
   practiceVersionSchema,
+  PROGRESS_FORECAST_METHOD,
   runnerCredentialFingerprintSchema,
   runnerCredentialSchema,
   runnerLivenessSchema,
@@ -1890,6 +1891,102 @@ export const appraisalStatsResponseSchema = z.object({
     commitments: appraisalReconciliationSchema,
     jobs: appraisalReconciliationSchema,
   }),
+});
+
+// ---------------------------------------------------------------------------
+// 作業の進捗（/progress）——#2241 の 2。core の `summarizeProgress`（#2242）の出力に、
+// daemon が `observedAt` と `github` を足したもの。
+// ---------------------------------------------------------------------------
+
+const progressCount = z.number().int().min(0);
+const progressIso = z.string();
+
+const progressForecastBasisSchema = z.object({
+  open: progressCount,
+  closedInWindow: progressCount,
+  openedInWindow: progressCount,
+  windowHours: z.number(),
+  method: z.literal(PROGRESS_FORECAST_METHOD),
+  /** 0 でなければ、読めなかった台帳の行が未了かもしれない。画面は但し書きを出す。 */
+  unreadable: progressCount,
+  minClosedInWindow: progressCount,
+});
+
+/**
+ * `GET /progress` の応答（Issue #2241）。
+ *
+ * **台帳（`Commitment`）と委譲（`Job`）の行を数え直した集計だけを持つ。** 行の本文は
+ * 載せない（一覧は `/commitments` と `/managers`）。**率（%）は出さない**（分母が
+ * 定まらない）。中身の定義（窓の境界・「取れない」を 0 にしない扱い・見込みの判定順）は
+ * `packages/core/src/progress.ts` の冒頭 doc が持つ。
+ *
+ * - `observedAt`: 集計した時刻（daemon の `now`）。`window.to` と同じ瞬間。
+ * - `github`: **デーモンは GitHub を見に行かない**（`packages/core/src/schema.ts` の
+ *   「デーモンは PR もブランチも見に行かない」）ので、open Issue / PR / CI の数は
+ *   載せられない。0 と区別できるよう、取れていないことを `state` で言う。
+ * - `backlog.completeness`: 0 でなければ `backlog` と `throughput` の数は欠けうる。
+ * - `inProgress.lastReport.oldestAt` / `newestAt`: 報告が1件も無いとき `null`（0 の
+ *   代わりの値は作らない）。報告の無い走行は `withoutReport` に数える。
+ */
+export const progressResponseSchema = z.object({
+  observedAt: progressIso,
+  window: z.object({ hours: z.number(), from: progressIso, to: progressIso }),
+  backlog: z.object({
+    total: progressCount,
+    byOrigin: z.object({
+      human: progressCount,
+      manager: progressCount,
+      external: progressCount,
+      self: progressCount,
+    }),
+    age: z.object({
+      oldestAt: progressIso.nullable(),
+      medianHours: z.number().nullable(),
+      buckets: z.object({
+        under1h: progressCount,
+        under24h: progressCount,
+        under7d: progressCount,
+        over7d: progressCount,
+      }),
+    }),
+    byState: z.object({
+      untouched: progressCount,
+      responded: progressCount,
+      delegated: progressCount,
+      notApplicable: progressCount,
+    }),
+    completeness: z.object({ unreadable: progressCount, trimmedClosed: progressCount }),
+  }),
+  inProgress: z.object({
+    running: progressCount,
+    awaitingHuman: progressCount,
+    lost: progressCount,
+    lastReport: z.object({
+      oldestAt: progressIso.nullable(),
+      newestAt: progressIso.nullable(),
+      withoutReport: progressCount,
+    }),
+  }),
+  throughput: z.object({
+    commitmentsOpened: progressCount,
+    commitmentsClosed: progressCount,
+    delegationsEnded: z.object({ count: progressCount, basis: z.literal('updatedAt') }),
+  }),
+  forecast: z.discriminatedUnion('state', [
+    z.object({
+      state: z.literal('estimated'),
+      hoursToDrain: z.number().min(0),
+      basis: progressForecastBasisSchema,
+      notice: z.string(),
+    }),
+    z.object({ state: z.literal('not_converging'), basis: progressForecastBasisSchema }),
+    z.object({
+      state: z.literal('unavailable'),
+      reason: z.enum(['closed_too_few', 'ledger_younger_than_window', 'history_incomplete']),
+      basis: progressForecastBasisSchema,
+    }),
+  ]),
+  github: z.object({ state: z.literal('not_observed'), reason: z.string() }),
 });
 
 // ---------------------------------------------------------------------------
