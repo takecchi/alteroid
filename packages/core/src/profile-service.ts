@@ -81,6 +81,22 @@ export interface ProfileService {
   ): () => void;
 }
 
+/**
+ * `apply()` の反映（`prepared.commit()`）が落ち、正本への書き戻し
+ * （`stores.profile.revert(previous)`）まで落ちたときに投げる（issue #2163）。
+ *
+ * **文言では見分けないこと。** 呼び出し側（`PUT /profile` の `app.ts`・
+ * `profile_write` の `tools.ts`）はこれを `instanceof` で捕まえ、日誌の決定の
+ * 行を状態どおり（正本は新しい版のまま・クローンは前の版）に書き換える。
+ * `message` / `cause` は、この型を導入する前の `Error` と1文字も変えていない。
+ */
+export class ProfileRollbackFailedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ProfileRollbackFailedError';
+  }
+}
+
 export interface ProfileServiceOptions {
   stores: Stores;
   /** クローン側の器。保存の前に「読めるか」を確かめる唯一の場所でもある。 */
@@ -218,7 +234,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
             // 残るので、人間が手で直せるように両方の理由を出す。
             // `cause` は直近で捕まえたもの（書き戻しの失敗）。反映の失敗は本文に
             // 残してあるので、どちらも失われない。
-            throw new Error(
+            throw new ProfileRollbackFailedError(
               'プロファイルをクローンへ反映できず、正本を書き戻すこともできなかった' +
                 `（正本だけ新版のまま残っている）: 反映=${String(error)} / 書き戻し=${String(rollbackError)}`,
               { cause: rollbackError },

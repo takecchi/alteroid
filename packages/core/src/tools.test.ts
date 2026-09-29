@@ -9452,6 +9452,69 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       expect(decisions[1]).toBe('実行環境プロファイルを差し替えられなかった: (b) の検証');
     });
 
+    /**
+     * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
+     * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい
+     * 版のまま残る（クローンは前の版）——(b) と違い、この状態で「差し替え
+     * られなかった」と書くと事実と逆になる。決定の行は状態どおり（正本は
+     * 新しい版のまま・クローンは前の版）にし、`: ${summary}` を付ける。
+     * **文言（例外の message）ではなく `ProfileRollbackFailedError` という型で
+     * 見分ける**（issue の「例外の文言で見分けない」という指定どおり）。
+     */
+    it('(d) 反映も書き戻しも落ちたときは、決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
+      const stores = createMemoryStores();
+      const throwingStores: Stores = {
+        ...stores,
+        profile: {
+          ...stores.profile,
+          revert: () => {
+            throw new Error('記憶ストアも落ちている（test）');
+          },
+        },
+      };
+      const applier: Parameters<typeof createProfileService>[0]['applier'] = {
+        vessel: {} as never,
+        fingerprint: () => undefined,
+        env: () => ({}),
+        async apply(script: string) {
+          const prepared = await this.prepare(script);
+          if (prepared.ok) await prepared.commit();
+          return prepared;
+        },
+        async prepare() {
+          return {
+            ok: true,
+            names: [],
+            commit: async () => {
+              throw new Error('器へ移せなかった（test）');
+            },
+            discard: async () => undefined,
+          };
+        },
+      };
+      const tools = createCloneTools({
+        stores: throwingStores,
+        emit: () => {},
+        profile: createProfileService({ stores: throwingStores, applier }),
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'profile_write', {
+        script: 'export A=1',
+        summary: '(d) の検証',
+      });
+
+      expect(isError).toBe(true);
+      const decisions = await decisionsOf(stores);
+      expect(decisions).toHaveLength(2);
+      expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている: (d) の検証');
+      expect(decisions[1]).toBe(
+        '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）: (d) の検証',
+      );
+      expect(decisions[1]).not.toContain('差し替えられなかった');
+    });
+
     it('(c) 正常系: 行数と文言が合っている', async () => {
       const stores = createMemoryStores();
       const setProfileCalls = { count: 0 };

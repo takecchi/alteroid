@@ -8504,6 +8504,72 @@ describe('実行環境プロファイル', () => {
   });
 
   /**
+   * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
+   * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい版の
+   * まま残る（クローンは前の版）——直前のテストと違い、**この状態で
+   * 「差し替えられなかった」と書くと事実と逆になる。** 決定の行は状態どおり
+   * （正本は新しい版のまま・クローンは前の版）にする。**文言（例外の message）
+   * ではなく `ProfileRollbackFailedError` という型で見分ける**（issue の
+   * 「例外の文言で見分けない」という指定どおり）。
+   */
+  it('反映も書き戻しも落ちたときは、日誌の決定の行が状態どおりになり、「差し替えられなかった」は出ない', async () => {
+    const throwingStores: Stores = {
+      ...stores,
+      profile: {
+        ...stores.profile,
+        revert: () => {
+          throw new Error('記憶ストアも落ちている（test）');
+        },
+      },
+    };
+    const applier: Parameters<typeof createProfileService>[0]['applier'] = {
+      vessel: {} as never,
+      fingerprint: () => undefined,
+      env: () => ({}),
+      async apply(script: string) {
+        const prepared = await this.prepare(script);
+        if (prepared.ok) await prepared.commit();
+        return prepared;
+      },
+      async prepare() {
+        return {
+          ok: true,
+          names: [],
+          commit: async () => {
+            throw new Error('器へ移せなかった（test）');
+          },
+          discard: async () => undefined,
+        };
+      },
+    };
+    const withThrowingProfile = createApp({
+      clone: fake.clone,
+      stores: throwingStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      profile: createProfileService({ stores: throwingStores, applier }),
+    });
+
+    const response = await withThrowingProfile.request('/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ script: 'export OK=1' }),
+    });
+    expect(response.status).toBe(500);
+
+    const decisions = (await stores.journal.list({ types: ['decision'] }))
+      .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
+      .filter((decision) => decision.includes('実行環境プロファイル'))
+      .reverse();
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている');
+    expect(decisions[1]).toBe(
+      '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）',
+    );
+    expect(decisions[1]).not.toContain('差し替えられなかった');
+  });
+
+  /**
    * **issue #2123。** `PUT /credentials` の同じ歯（`日誌への先書きが落ちると
    * 500 で、鍵は置かれない`）と同じ形。日誌への先書きが落ちると 500 で、
    * 差し替わらない——正本の profile が書かれていない・runner へ配られて

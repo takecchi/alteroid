@@ -147,7 +147,7 @@ import {
   scanMemorySections,
 } from './memory.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
-import type { ProfileService } from './profile-service.js';
+import { ProfileRollbackFailedError, type ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
   describeReservedScheduleKindEnvKeys,
@@ -9114,7 +9114,13 @@ export function createCloneTools(context: ToolContext) {
           // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
           await appendJournalOrDrop('profile_write', stores.journal, {
             type: 'decision',
-            decision: `実行環境プロファイルを差し替えられなかった: ${summary}`,
+            // issue #2163: 反映も書き戻しも落ちたときは「差し替えられなかった」
+            // ではなく状態どおりの行にする（正本は新版のまま・クローンは前の
+            // 版）。**文言では見分けない**——`ProfileRollbackFailedError` で見る。
+            decision:
+              error instanceof ProfileRollbackFailedError
+                ? `実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）: ${summary}`
+                : `実行環境プロファイルを差し替えられなかった: ${summary}`,
             grounds: `差し替えようとしたが、状態の変更が失敗した: ${String(error)}`,
           });
           throw error;

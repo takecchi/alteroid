@@ -11,7 +11,7 @@ import {
   fingerprintOf,
   type ProfileApplier,
 } from './profile.js';
-import { createProfileService } from './profile-service.js';
+import { createProfileService, ProfileRollbackFailedError } from './profile-service.js';
 import type { RunnerClient, RunnerProfileFingerprint } from './runner-protocol.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -340,6 +340,11 @@ describe('同時に更新されたとき', () => {
     // ⑥ 何が起きたかが理由として出ている（人間が手で直せるように）
     expect(String(failure)).toContain('正本も元へ戻した');
 
+    // ⑦ **書き戻しが成功した場合は `ProfileRollbackFailedError` ではない**
+    // （issue #2163。この型は「書き戻しまで落ちた」ことだけを示す——書き戻し
+    // 自体が効いた今回のケースまで広げると、呼び出し側が状態を誤って読む）。
+    expect(failure).not.toBeInstanceOf(ProfileRollbackFailedError);
+
     // ⑤ 列は止まっていない
     breakCommit = false;
     const next = await service.apply('export WHICH=NEXT');
@@ -372,7 +377,17 @@ describe('同時に更新されたとき', () => {
     };
     const service = createProfileService({ stores, applier });
 
-    await expect(service.apply('export WHICH=NEW')).rejects.toThrow(/正本だけ新版のまま残っている/);
+    // **issue #2163: 型の付いた例外で見分けられること。** 呼び出し側
+    // （`PUT /profile` の `app.ts`・`profile_write` の `tools.ts`）はこの型を
+    // `instanceof` で捕まえ、日誌の決定の行を状態どおりに書き換える。
+    // **`message` は1文字も変えていない**——文言そのものは反映と書き戻しの
+    // 両方が落ちたことを既に言っているので、変える理由が無い。
+    const failure = await service.apply('export WHICH=NEW').then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(ProfileRollbackFailedError);
+    expect(String(failure)).toMatch(/正本だけ新版のまま残っている/);
   });
 
   it('読めない本文で列が止まらない（次の更新は通る）', async () => {

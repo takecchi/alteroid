@@ -37,6 +37,7 @@ import {
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   JournalAnchorNotFoundError,
+  ProfileRollbackFailedError,
   TokenPoolInputError,
   UnreadablePracticeError,
   approvalUpdatedAt,
@@ -5291,7 +5292,13 @@ export function createApp(deps: AppDeps) {
             deps.stores,
             {
               type: 'decision',
-              decision: '実行環境プロファイルを差し替えられなかった',
+              // issue #2163: 反映も書き戻しも落ちたときは「差し替えられなかった」
+              // ではなく状態どおりの行にする（正本は新版のまま・クローンは前の
+              // 版）。**文言では見分けない**——`ProfileRollbackFailedError` で見る。
+              decision:
+                error instanceof ProfileRollbackFailedError
+                  ? '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）'
+                  : '実行環境プロファイルを差し替えられなかった',
               grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${String(error)}`,
             },
             '実行環境プロファイルの打ち消しの日誌',

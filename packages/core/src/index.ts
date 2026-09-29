@@ -845,6 +845,7 @@ export {
 } from './mcp-server-service.js';
 export {
   createProfileService,
+  ProfileRollbackFailedError,
   type ApplyProfileResult,
   type ProfileService,
   type ProfileServiceOptions,
