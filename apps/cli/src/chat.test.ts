@@ -4906,6 +4906,26 @@ describe('chat の /allow /deny（実行許可への回答）', () => {
     expect(text).toContain('/deny');
     expect(text).toContain('/waiting');
   });
+
+  /**
+   * issue #2197。`/help` は `/allow` `/deny` を `<番号|requestId>`（必須）の
+   * 形でしか書いていなかったが、実装は引数無しの形（返事待ちが1本だけなら
+   * 送る）を正式に受け付ける。ヘルプの行がそれを言っていないと、近道に
+   * 気づけない。
+   */
+  it('/help の /allow /deny が [番号|requestId]（省略可）の形と、番号無しの説明を持つ', async () => {
+    const read = captureStdout();
+    const { client } = stubClient();
+
+    await runSlashCommand('/help', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('/allow [番号|requestId]');
+    expect(text).toContain('/deny  [番号|requestId]');
+    expect(text).toContain('番号・requestId を省くと');
+    expect(text).toContain('返事待ちのマネージャーが1本だけ');
+    expect(text).toContain('2本以上なら送らずに候補を出す');
+  });
 });
 
 /**

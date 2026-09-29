@@ -19,7 +19,8 @@ vi.mock('./target.js', async (importOriginal) => ({
     Promise.resolve({ baseUrl: 'http://127.0.0.1:4517', headers: {}, note: null, remote: false }),
 }));
 
-const { resetCommand } = await import('./reset.js');
+const { resetCommand, buildConfirmMessage, RESET_CONFIRM_GROUPS_FOR_TEST, SUMMARY_LABELS } =
+  await import('./reset.js');
 
 interface Reply {
   status: number;
@@ -160,5 +161,32 @@ describe('alteroid reset --yes', () => {
     expect(message).not.toContain('docker compose exec');
     expect(message).not.toContain('access grant');
     expect(message).not.toContain('access owner');
+  });
+});
+
+/**
+ * issue #2196。確認の文（対話で `yes` を打つ前に出る文）が「何を消すか」を
+ * 消した後の報告と食い違わずに言うことを固定する。
+ *
+ * `confirm()` 自体は `readline` を使う対話なので、直接叩かず
+ * `buildConfirmMessage()`（出す文字列そのもの）を読む。
+ */
+describe('確認の文（buildConfirmMessage） — issue #2196', () => {
+  it('「仕事のやり方」が確認の文に出る（消える前に知らされる）', () => {
+    expect(buildConfirmMessage()).toContain('仕事のやり方');
+  });
+
+  it('消した後の報告の見出し（SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
+    const covered = new Set(
+      RESET_CONFIRM_GROUPS_FOR_TEST.flatMap((group: { keys: string[] }) => group.keys),
+    );
+    const labelKeys = SUMMARY_LABELS.map(([key]: [string, string]) => key);
+
+    for (const key of labelKeys) {
+      expect(covered.has(key), `${key} が確認の group に見当たらない`).toBe(true);
+    }
+    // 同じキーを2つの group で覆っていないか（重複があると、片方だけ直して
+    // 安心してしまう可能性がある）も見る。
+    expect(covered.size).toBe(labelKeys.length);
   });
 });
