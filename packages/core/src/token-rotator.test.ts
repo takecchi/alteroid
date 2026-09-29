@@ -3718,6 +3718,22 @@ describe('recordTrialVerdict（Issue #1501: ダメ元の試しの結果を記録
     expect(h.replaceCalls()).toBe(writes);
   });
 
+  it('回転の設定が読めなくても、retryAt の在る unusable はその期限で書く（issue #2147）', async () => {
+    const h = harness();
+    await seedTwo(h);
+    breakTokenSettings(h);
+    const retryAt = Date.parse('2026-09-30T00:00:00.000Z');
+    expect(
+      await h.rotator.recordTrialVerdict({
+        tokenId: 'tok-b',
+        verdict: { verdict: 'unusable', reason: 'rejected', retryAt },
+      }),
+    ).toBe('written');
+    const row = (await h.stores.tokens.list()).find((token) => token.id === 'tok-b');
+    expect(row?.cooldownUntil).toBe(retryAt);
+    expect(row?.cooldownSource).toBe('quota_reset');
+  });
+
   it('retryAt の無い unusable と undecidable は何も書かない。行が無ければ missing', async () => {
     const h = harness();
     await seedTwo(h);

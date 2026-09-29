@@ -1925,12 +1925,19 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         } else if (verdict.verdict === 'unusable' && verdict.retryAt !== undefined) {
           // **書く必要が無ければ書かない**（同じ期限なら `updatedAt` も動かさない）。
           if (row.cooldownUntil === verdict.retryAt) return 'unchanged' as const;
-          const settings = await stores.tokens.readSettings();
+          // **設定が読めなくても書く（issue #2147）。** この分岐は `resets`
+          // （`retryAt`）を必ず運ぶので、冷却の期限は設定に依存しない——
+          // `fallbackCooldownMs` は `resets` が在る回には読まれない
+          // （`TokenFailureObservation.fallbackCooldownMs` の doc）。読めない
+          // ときは既定値で埋めずに省く。それ以外のエラーは投げ直す。
+          const settingsRead = await readSettingsOrUnreadable(stores.tokens);
           next = markTokenUnusable(row, {
             at,
             message: verdict.reason,
             resets: { at: verdict.retryAt, source: 'quota_reset' },
-            fallbackCooldownMs: settings.cooldownMs,
+            ...(settingsRead.readable
+              ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
+              : {}),
           });
         } else {
           return 'unchanged' as const;
