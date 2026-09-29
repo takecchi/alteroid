@@ -147,7 +147,8 @@ describe('gh-pr-merge-delete-branch: 予約語・グルーピングの繰り返�
   });
 
   it('予約語の繰り返しの末尾に gh pr merge --delete-branch が来ても弾き、かつ後戻りが爆発しない', () => {
-    const makeInput = (n: number) => `${'if then do time ! { '.repeat(n)}gh pr merge 1 --delete-branch`;
+    const makeInput = (n: number) =>
+      `${'if then do time ! { '.repeat(n)}gh pr merge 1 --delete-branch`;
     expect(inspectBashCommand(makeInput(750 * 4)).blocked).toBe(true);
     expectNotSuperlinear(inspectBashCommand, makeInput, { n: 750 });
   });

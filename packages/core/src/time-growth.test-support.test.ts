@@ -66,9 +66,9 @@ describe('expectNotSuperlinear', () => {
       // n が大きいときだけ、比の判定より先に hardCapMs 自体を超える待ちを作る。
       if (n > 100) busyWaitMs(50);
     };
-    expect(() =>
-      expectNotSuperlinear(hang, identity, { n: 50, factor: 4, hardCapMs: 20 }),
-    ).toThrow(/hardCapMs を超えた/);
+    expect(() => expectNotSuperlinear(hang, identity, { n: 50, factor: 4, hardCapMs: 20 })).toThrow(
+      /hardCapMs を超えた/,
+    );
   });
 
   it('壁時計が一様に遅くなっても（線形の関数へ n 比例の追加busy-waitを足しても）比は保たれる', () => {

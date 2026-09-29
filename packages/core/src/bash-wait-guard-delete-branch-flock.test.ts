@@ -64,19 +64,10 @@ describe('gh-pr-merge-delete-branch: flock のオプションの繰り返しが�
   const cases: ReadonlyArray<[string, (n: number) => string, number, number?]> = [
     ['値を取らないフラグの繰り返し', (n) => `flock ${'-n '.repeat(n)}x`, 2000],
     ['= 付きの長いオプションの繰り返し', (n) => `flock ${'--timeout=5 '.repeat(n)}x`, 2000],
-    [
-      '値の位置に - で始まる語が続く繰り返し（短い）',
-      (n) => `flock ${'-w '.repeat(n)}x`,
-      20,
-      2,
-    ],
+    ['値の位置に - で始まる語が続く繰り返し（短い）', (n) => `flock ${'-w '.repeat(n)}x`, 20, 2],
     ['値の位置に - で始まる語が続く繰り返し（長い）', (n) => `flock ${'-w '.repeat(n)}x`, 2000],
     ['-c の繰り返し', (n) => `${'flock f -c '.repeat(n)}x`, 2000],
-    [
-      'sudo -u flock の繰り返し（直す前は2乗）',
-      (n) => `sudo ${'-u flock '.repeat(n)}x`,
-      2000,
-    ],
+    ['sudo -u flock の繰り返し（直す前は2乗）', (n) => `sudo ${'-u flock '.repeat(n)}x`, 2000],
   ];
   for (const [label, makeInput, n, factor] of cases) {
     it(`${label}が予算内に終わる`, () => {

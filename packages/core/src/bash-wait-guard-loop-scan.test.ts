@@ -160,7 +160,11 @@ describe('条件の無い C 形式の for を弾く（teto の判断、#2179 の
  */
 describe('待つループの判定が、閉じていない繰り返しで後戻りで爆発しない（#2181）', () => {
   const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
-    ['閉じていない while の繰り返し（400回。直す前は 344.3ms）', (n) => `${'while x; do '.repeat(n)}x`, 100],
+    [
+      '閉じていない while の繰り返し（400回。直す前は 344.3ms）',
+      (n) => `${'while x; do '.repeat(n)}x`,
+      100,
+    ],
     ['閉じていない while の繰り返し（4000回）', (n) => `${'while x; do '.repeat(n)}x`, 1000],
     ['閉じていない until の繰り返し', (n) => `${'until x; do '.repeat(n)}x`, 1000],
     ['閉じていない C 形式の for の繰り返し', (n) => `${'for ((;;)); do '.repeat(n)}x`, 1000],
