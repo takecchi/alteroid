@@ -281,6 +281,27 @@ export type {
   JobAppraisalCoverage,
   JobAppraisalCoverageRow,
 } from './appraisal-stats.js';
+/** 作業の進捗の集計（Issue #2241 の 1）。台帳と委譲の行を数え直す純関数。 */
+export {
+  MIN_CLOSED_IN_WINDOW,
+  PROGRESS_FORECAST_METHOD,
+  PROGRESS_FORECAST_NOTICE,
+  summarizeProgress,
+} from './progress.js';
+export type {
+  ProgressAgeBuckets,
+  ProgressBacklog,
+  ProgressCommitmentRow,
+  ProgressCommitments,
+  ProgressForecast,
+  ProgressForecastBasis,
+  ProgressInProgress,
+  ProgressSummary,
+  ProgressThroughput,
+  ProgressUnavailableReason,
+  ProgressWindow,
+  SummarizeProgressInput,
+} from './progress.js';
 /**
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
