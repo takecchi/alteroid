@@ -163,6 +163,10 @@ catalog:
   '@fontsource/ibm-plex-sans-jp': ^5.3.0
   '@fontsource/michroma': ^5.3.0
   '@fontsource/ibm-plex-mono': ^5.3.0
+  # 2つ目の案（Clear Signal、`data-design="clear"`）の書体。本文・数字・等幅を同じ骨格の
+  # 一族（M PLUS 1 / M PLUS 1 Code）で揃える。可変フォントなので太さごとに読まない。
+  '@fontsource-variable/m-plus-1': ^5.3.0
+  '@fontsource-variable/m-plus-1-code': ^5.3.0
   # グラフ（shadcn の chart）の実体。`shadcn add chart` が連れてくる。**版は shadcn が
   # 固定した値のまま**（chart.tsx は recharts 3 の型に合わせて書かれている）。
   recharts: 3.8.0

@@ -23,6 +23,9 @@
 @import '@fontsource/michroma/400.css';
 @import '@fontsource/ibm-plex-mono/400.css';
 @import '@fontsource/ibm-plex-mono/500.css';
+/* 2つ目の案（Clear Signal）の書体。可変フォント（太さを1枚で持つ）。 */
+@import '@fontsource-variable/m-plus-1';
+@import '@fontsource-variable/m-plus-1-code';
 
 /*
  * **このパッケージ自身の class を、Tailwind を回す側（apps/web・Storybook）のビルドにも拾わせる。**
@@ -90,14 +93,18 @@
   --color-chart-5: var(--chart-5);
   --color-warn: var(--warn);
   --color-ok: var(--ok);
-  --font-sans:
-    'IBM Plex Sans JP', ui-sans-serif, system-ui, -apple-system, 'Hiragino Sans', sans-serif;
-  --font-display: 'Michroma', 'IBM Plex Sans JP', ui-sans-serif, sans-serif;
-  --font-mono:
-    'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* 書体は案ごとに差し替えるので、値は下の `:root` / `[data-design]` が持つ。 */
+  --font-sans: var(--app-font-sans);
+  --font-display: var(--app-font-display);
+  --font-mono: var(--app-font-mono);
 }
 
 :root {
+  --app-font-sans:
+    'IBM Plex Sans JP', ui-sans-serif, system-ui, -apple-system, 'Hiragino Sans', sans-serif;
+  --app-font-display: 'Michroma', 'IBM Plex Sans JP', ui-sans-serif, sans-serif;
+  --app-font-mono:
+    'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
   /* 面取り（下の `corner-shape`）の一辺がこの大きさになるので、shadcn の既定より少し小さい。 */
   --radius: 0.5rem;
   --background: oklch(0.975 0.006 280);
@@ -199,6 +206,125 @@
   }
 }
 
+/*
+ * ============================================================================
+ * **2つ目の案: Clear Signal**（`<html data-design="clear">`）
+ *
+ * 優先の順は「分かりやすさ → 見た目」。1つ目の案（Twin Plate。上の値）と同じ名前の
+ * 色・書体・角を差し替えるだけで、部品は1つも書き換えない。見本帳では上の帯の
+ * Design で切り替えて見比べる。**どちらかに決めたら、もう片方の値はここから消す。**
+ *
+ * - 地は中くらいの暗さの灰（黒に寄せない）。補足の文字も 7:1 まで明るくして、
+ *   長時間読んでも疲れにくくする（本文 14.9:1・補足 7.0〜7.8:1）
+ * - 主色は空色。**「青は押せる」という慣れた約束をそのまま使う**——新しい色の意味を
+ *   覚えさせない
+ * - 状態の色は緑・琥珀・赤の慣れた意味のまま
+ * - 形は1つ（角丸 12px）。面取りはしない。重なりは明るさと縁で言う
+ * - 書体は M PLUS 1 の一族だけ（本文・数字・等幅）。文字の大きさは全体に 6% 大きい
+ * - 未来感は1か所だけ: 面の上端に、ガラスの縁のような 1px の明るい線
+ * ============================================================================
+ */
+:root[data-design='clear'] {
+  --app-font-sans:
+    'M PLUS 1 Variable', ui-sans-serif, system-ui, -apple-system, 'Hiragino Sans', sans-serif;
+  --app-font-display: var(--app-font-sans);
+  --app-font-mono: 'M PLUS 1 Code Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius: 0.75rem;
+  --background: oklch(0.985 0.002 255);
+  --foreground: oklch(0.22 0.01 255);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.01 255);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.01 255);
+  --primary: oklch(0.55 0.17 250);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.004 255);
+  --secondary-foreground: oklch(0.25 0.01 255);
+  --muted: oklch(0.955 0.004 255);
+  --muted-foreground: oklch(0.5 0.015 255);
+  --accent: oklch(0.94 0.03 245);
+  --accent-foreground: oklch(0.3 0.08 250);
+  --destructive: oklch(0.56 0.2 25);
+  --border: oklch(0.9 0.005 255);
+  --input: oklch(0.87 0.006 255);
+  --ring: oklch(0.6 0.17 250);
+  --chart-1: oklch(0.55 0.17 250);
+  --chart-2: oklch(0.62 0.16 125);
+  --chart-3: oklch(0.48 0.2 345);
+  --chart-4: oklch(0.55 0.19 295);
+  --chart-5: oklch(0.6 0.01 255);
+  --warn: oklch(0.62 0.14 70);
+  --ok: oklch(0.56 0.13 155);
+}
+
+:root[data-design='clear'].dark {
+  --background: oklch(0.235 0.01 255);
+  --foreground: oklch(0.96 0.004 255);
+  --card: oklch(0.27 0.011 255);
+  --card-foreground: oklch(0.96 0.004 255);
+  --popover: oklch(0.3 0.012 255);
+  --popover-foreground: oklch(0.96 0.004 255);
+  --primary: oklch(0.78 0.13 235);
+  --primary-foreground: oklch(0.2 0.03 250);
+  --secondary: oklch(0.32 0.012 255);
+  --secondary-foreground: oklch(0.95 0.004 255);
+  --muted: oklch(0.31 0.012 255);
+  --muted-foreground: oklch(0.76 0.012 255);
+  --accent: oklch(0.34 0.04 240);
+  --accent-foreground: oklch(0.97 0.01 240);
+  --destructive: oklch(0.72 0.17 25);
+  --border: oklch(0.9 0.01 255 / 12%);
+  --input: oklch(0.9 0.01 255 / 18%);
+  --ring: oklch(0.78 0.13 235);
+  /* 検査器で測った値（面 oklch(0.27) の上で、隣どうしの最悪 ΔE 11.1・すべて 3:1 以上）。 */
+  --chart-1: oklch(0.62 0.14 245);
+  --chart-2: oklch(0.65 0.15 125);
+  --chart-3: oklch(0.58 0.19 345);
+  --chart-4: oklch(0.6 0.16 295);
+  --chart-5: oklch(0.62 0.01 255);
+  --warn: oklch(0.83 0.14 80);
+  --ok: oklch(0.8 0.14 155);
+}
+
+@layer base {
+  :root[data-design='clear'] {
+    font-size: 106.25%;
+  }
+
+  /* ガラスの縁（この案の唯一の飾り）。背景色は部品の `bg-*` が持つので、画像の側で重ねる。 */
+  :root[data-design='clear']
+    :where(
+      [data-slot='card'],
+      [data-slot='popover-content'],
+      [data-slot='dialog-content'],
+      [data-slot='alert-dialog-content']
+    ) {
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--foreground) 8%, transparent),
+      transparent 1px
+    );
+  }
+}
+
+/*
+ * 現在地の線は光らせない（塗りと線で足りる。光るものを作らない）。
+ * **`@layer` の外に置く** —— `lumen-edge` は utilities の層に在り、base の層に書くと
+ * 層の順で負けて黙って効かない。
+ */
+/*
+ * 部品が `[corner-shape:bevel_square]` を直に書いた所（チャットの人間の吹き出しなど）も、
+ * この案では面取りしない。**これも `@layer` の外**（直書きは utilities の層なので）。
+ */
+:root[data-design='clear'] [class*='corner-shape'] {
+  corner-shape: round;
+}
+
+:root[data-design='clear'] .lumen-edge::before {
+  box-shadow: none;
+  width: 3px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -235,16 +361,17 @@
    *   （2026-09 時点で効くのは Chromium 系。Safari / Firefox は角丸のまま）
    * - `@layer base` に置くので、呼ぶ側が `corner-shape` を書けばそちらが勝つ
    */
-  :where(
-    [data-slot='card'],
-    [data-slot='alert'],
-    [data-slot='dialog-content'],
-    [data-slot='alert-dialog-content'],
-    [data-slot='popover-content'],
-    [data-slot='hover-card-content'],
-    [data-slot='dropdown-menu-content'],
-    [data-slot='select-content']
-  ) {
+  :root:not([data-design='clear'])
+    :where(
+      [data-slot='card'],
+      [data-slot='alert'],
+      [data-slot='dialog-content'],
+      [data-slot='alert-dialog-content'],
+      [data-slot='popover-content'],
+      [data-slot='hover-card-content'],
+      [data-slot='dropdown-menu-content'],
+      [data-slot='select-content']
+    ) {
     corner-shape: bevel square;
   }
 

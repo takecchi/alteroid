@@ -21,8 +21,10 @@ import { cn } from '@/lib/utils';
  * 上の帯の Theme で明るい側・暗い側を切り替えて見比べる。
  */
 const meta = {
-  title: 'Foundations',
+  title: 'Foundations/A Twin Plate',
   parameters: { layout: 'fullscreen' },
+  // この頁は1つ目の案を説明する。上の帯の Design に関係なく、この案で描く。
+  globals: { design: 'plate' },
 } satisfies Meta;
 
 export default meta;
