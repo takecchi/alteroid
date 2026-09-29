@@ -286,7 +286,10 @@ describe.each([
         method: 'PATCH',
       });
       expect(patch.status).toBe(404);
-      const appraise = await app.request('/commitments/never-existed/appraise', json({ appraisal: 'good' }));
+      const appraise = await app.request(
+        '/commitments/never-existed/appraise',
+        json({ appraisal: 'good' }),
+      );
       expect(appraise.status).toBe(404);
     });
   });

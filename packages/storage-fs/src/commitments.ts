@@ -669,7 +669,10 @@ export class FsCommitmentStore implements CommitmentStore {
           if (row.id === undefined) return row;
           const closedRow = closedById.get(row.id);
           if (closedRow === undefined) return row;
-          return { ...row, closed: { at: closedRow.at, reason: closedRow.reason, by: closedRow.by } };
+          return {
+            ...row,
+            closed: { at: closedRow.at, reason: closedRow.reason, by: closedRow.by },
+          };
         }),
         trimmedClosedCount: parsed.trimmedClosedCount,
       };

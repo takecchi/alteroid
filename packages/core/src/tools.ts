@@ -7976,7 +7976,7 @@ export function createCloneTools(context: ToolContext) {
           existing = await stores.commitments.get(id);
         } catch (error) {
           if (!(error instanceof UnreadableCommitmentError)) throw error;
-          throw new Error(describeUnreadableCommitment(error));
+          throw new Error(describeUnreadableCommitment(error), { cause: error });
         }
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
@@ -8079,7 +8079,7 @@ export function createCloneTools(context: ToolContext) {
           existing = await stores.commitments.get(id);
         } catch (error) {
           if (!(error instanceof UnreadableCommitmentError)) throw error;
-          throw new Error(describeUnreadableCommitment(error));
+          throw new Error(describeUnreadableCommitment(error), { cause: error });
         }
         if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
         // **`origin` の判定はここでする**（`CommitmentStore.editBody` の doc —
