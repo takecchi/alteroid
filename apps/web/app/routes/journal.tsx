@@ -242,12 +242,27 @@ export default function Journal() {
     };
   }, [draft, committed, setSearchParams]);
 
-  function setSelected(updated: JournalEntryType[]) {
+  function toggle(type: JournalEntryType) {
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
+        const current = parseSelectedTypes(next.get(TYPES_SEARCH_PARAM));
+        const updated = current.includes(type)
+          ? current.filter((t) => t !== type)
+          : [...current, type];
         if (updated.length === 0) next.delete(TYPES_SEARCH_PARAM);
         else next.set(TYPES_SEARCH_PARAM, updated.join(','));
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
+  function clearSelected() {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete(TYPES_SEARCH_PARAM);
         return next;
       },
       { replace: true },
@@ -309,7 +324,8 @@ export default function Journal() {
           label="種別で絞り込む"
           options={TYPES.map((type) => ({ value: type }))}
           selected={selected}
-          onChange={setSelected}
+          onToggle={toggle}
+          onClear={clearSelected}
         />
       </div>
 

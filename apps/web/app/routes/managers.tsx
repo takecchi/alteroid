@@ -616,12 +616,27 @@ export default function Managers() {
   const rawStatus = searchParams.get(STATUS_SEARCH_PARAM);
   const selected = useMemo(() => parseSelectedStatuses(rawStatus), [rawStatus]);
 
-  function setSelected(updated: ManagerStatus[]) {
+  function toggle(status: ManagerStatus) {
     setSearchParams(
       (previous) => {
         const next = new URLSearchParams(previous);
+        const current = parseSelectedStatuses(next.get(STATUS_SEARCH_PARAM));
+        const updated = current.includes(status)
+          ? current.filter((s) => s !== status)
+          : [...current, status];
         if (updated.length === 0) next.delete(STATUS_SEARCH_PARAM);
         else next.set(STATUS_SEARCH_PARAM, updated.join(','));
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
+  function clearSelected() {
+    setSearchParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete(STATUS_SEARCH_PARAM);
         return next;
       },
       { replace: true },
@@ -638,7 +653,8 @@ export default function Managers() {
         label="状態で絞り込む"
         options={STATUSES.map((status) => ({ value: status, label: STATUS[status].label }))}
         selected={selected}
-        onChange={setSelected}
+        onToggle={toggle}
+        onClear={clearSelected}
       />
 
       {/*
