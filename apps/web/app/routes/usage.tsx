@@ -3,6 +3,7 @@ import {
   describeAccountUsage,
   describeUnreadableUsage,
   describeUnrecordedManagers,
+  describeUsageDateOrder,
   describeWebSearchRequests,
   formatUsd,
   isRealUsageDate,
@@ -223,12 +224,20 @@ export default function Usage() {
    * **`UsageBody` 側の「その範囲には記録が無い。」はそのまま残す。** 0件で
    * あること自体は事実として正しく、`beforeLedger` 等の既存の注記と同じ
    * 並びに置けば読み違いは防げる——ここは削るのではなく、隣に理由を足す形
-   * を選ぶ。`from` / `to` がどちらも読める（`invalidFrom` / `invalidTo` が
-   * 発生していない）ときだけ比較する。`YYYY-MM-DD` は辞書式比較がそのまま
-   * 日付の前後に一致するので、文字列比較で足りる。
+   * を選ぶ。
+   *
+   * **文言と判定は core の {@link describeUsageDateOrder} が持つ（issue
+   * #2211）。** CLI（`alteroid usage` / chat の `/usage`）・クローンの
+   * `usage_read` と同じ関数——`from` / `to` がどちらも空文字（絞り込み無し・
+   * `invalidFrom` / `invalidTo` で読めなかった場合を含む）なら `undefined` を
+   * 渡す。判定そのもの（`YYYY-MM-DD` の辞書式比較）は core 側の doc を見ること。
    */
-  if (from !== '' && to !== '' && to < from) {
-    dateNotices.push(`to（${to}）が from（${from}）より前なので、この範囲には1日も入らない`);
+  const dateOrderNotice = describeUsageDateOrder(
+    from === '' ? undefined : from,
+    to === '' ? undefined : to,
+  );
+  if (dateOrderNotice !== null) {
+    dateNotices.push(dateOrderNotice);
   }
 
   return (

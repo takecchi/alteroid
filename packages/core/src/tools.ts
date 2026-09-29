@@ -238,6 +238,7 @@ import {
   describeAccountUsage,
   describeUnreadableUsage,
   describeUnrecordedManagers,
+  describeUsageDateOrder,
   describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,
@@ -6963,19 +6964,30 @@ export function createCloneTools(context: ToolContext) {
           ...(site === undefined ? {} : { site }),
           ...(tokenId === undefined ? {} : { tokenId }),
         });
+        // **issue #2211。** `to` が `from` より前だと絞り込みは常に0件になり、
+        // `renderUsage` はその0件を「その範囲には記録が無い。」としか書かないので
+        // 「期間の指定が逆」と「その期間に本当に記録が無い」が区別できない
+        // （CLI の `usageCommand` / Web の `usage.tsx` と同じ穴だった）。CLI・Web と
+        // 同じ注記を、応答の先頭へ添える——文言は core の `describeUsageDateOrder`
+        // が1箇所で持つ（3つの入口が同じ関数を呼ぶ）。
+        const dateOrderNotice = describeUsageDateOrder(from, to);
+        const withNotice = (body: string): string =>
+          dateOrderNotice === null ? body : `${dateOrderNotice}\n${body}`;
         // **軸モードでは「続きの1軸」だけを返す。** アカウント全体の残りもまとめ表示も
         // 付けない — 続きを辿るほど同じ全体が積み増しで返ってくるのを避けるためである。
         if (axis !== undefined) {
-          return text(renderUsage(aggregate, { axis, cursor }));
+          return text(withNotice(renderUsage(aggregate, { axis, cursor })));
         }
         const unrecordedManagers = await unrecordedManagersLines(context, stores, aggregate.since);
         return text(
-          [
-            renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
-            '',
-            '## alteroid が使った分（台帳）',
-            renderUsage(aggregate, { unrecordedManagers }),
-          ].join('\n'),
+          withNotice(
+            [
+              renderAccountUsage(context.accountUsage?.() ?? { state: 'unknown' }),
+              '',
+              '## alteroid が使った分（台帳）',
+              renderUsage(aggregate, { unrecordedManagers }),
+            ].join('\n'),
+          ),
         );
       },
     ),

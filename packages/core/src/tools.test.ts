@@ -13357,6 +13357,68 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     // 台帳自体は始まっているので、その始点は分かる。
     expect(reply).toContain('台帳の始点: 2026-08-14');
   });
+
+  /**
+   * issue #2211: `to` が `from` より前だと絞り込みは常に0件になる（issue
+   * #2155）が、以前は CLI（`alteroid usage` / chat の `/usage`）と Web
+   * （`usage.tsx`）だけが「絞り込みが逆」と注記し、`usage_read` は黙って
+   * 「その範囲には記録が無い」（＝「使っていない」と読める）を返していた。
+   * 同じ `describeUsageDateOrder`（core）を通して、同じ文言を応答の先頭に
+   * 添える。
+   */
+  it('to が from より前なら、注記を応答の先頭に添える（CLI・Web と同じ文言）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', { from: '2026-09-10', to: '2026-09-01' });
+
+    expect(
+      reply.startsWith(
+        'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
+      ),
+    ).toBe(true);
+    // 注記の後ろに続く0件の行を「使っていない」と読めないよう、理由が先に来る。
+    expect(reply).toContain('その範囲には記録が無い');
+  });
+
+  it('to と from が同じ日、または順が正しいなら注記を出さない', async () => {
+    const h = harness();
+    await spent(h);
+
+    const same = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-01' });
+    const ordered = await h.call('usage_read', { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(same).not.toContain('より前なので');
+    expect(ordered).not.toContain('より前なので');
+  });
+
+  it('from / to のどちらかしか渡さないときは注記を出さない（比較しようがない）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const onlyTo = await h.call('usage_read', { to: '2026-09-01' });
+    const onlyFrom = await h.call('usage_read', { from: '2026-09-30' });
+
+    expect(onlyTo).not.toContain('より前なので');
+    expect(onlyFrom).not.toContain('より前なので');
+  });
+
+  it('軸モードでも、同じ注記を応答の先頭に添える（まとめ表示と同じ入口を共有する）', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', {
+      from: '2026-09-10',
+      to: '2026-09-01',
+      axis: 'model',
+    });
+
+    expect(
+      reply.startsWith(
+        'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('usage_read の Web 検索の回数（webSearchRequests。Issue #1950）', () => {
