@@ -594,6 +594,9 @@ export interface PermissionGrantStore {
    * そのまま書き戻り、人間が取り消した許可が生き返っていた。** `#1041` の
    * `CommitmentStore.open()` / `#1667` の `ScheduleStore.editRequest` と同じ
    * 理由・同じ形（アプリ層の「読んでから書く」をストア側の排他区間へ引き取る）。
+   *
+   * **読めない行（版ずれ・手編集）は無いと同じ。書き換えない**（fs / pg で
+   * 揃える。issue #2158）。
    */
   revoke(id: string, at: string): Promise<PermissionGrant | null>;
 
@@ -621,6 +624,9 @@ export interface PermissionGrantStore {
    * 取り消しが完了すると、写しの上では生きている許可で道具が1回通っていた。
    * 判断をこの戻り値に寄せることで、「取り消した」が人間に返った後に、その許可で
    * 通ることは無くなる（判断と記録が同じ区間に入る）。無い id も `false`。
+   *
+   * **読めない行（版ずれ・手編集）は無いと同じ。書き換えない**（fs / pg で
+   * 揃える。issue #2158）。
    */
   markUsed(id: string, at: string): Promise<boolean>;
 }
