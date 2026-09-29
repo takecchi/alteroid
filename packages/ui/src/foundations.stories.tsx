@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
  * クローンは人間の写しで、画面はその写しが働く様子を見守る計器盤である。
  * 未来感は発光の量ではなく**形と規律**で出す:
  *
- * 1. **面取り**（`styles.css` の `corner-shape`）—— 面と押せるものは、左上と右下の
+ * 1. **面取り**（`styles.css` の `corner-shape`）—— 面（枠・浮く面）は、左上と右下の
  *    角だけを斜めに落とす。機械で削り出した板の形
  * 2. **光の縁**（`lumen-edge`）—— 光ってよいのは「いまここ」を示す1本の線と焦点の輪だけ
  * 3. **心拍**（`LiveIndicator`）—— 画面の中で自分から動くのは受信の印だけ
@@ -154,10 +154,10 @@ function Motifs() {
 function Shapes() {
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      <Motif name="面" note="枠・浮く面・警告。面取りの一辺がいちばん大きい">
+      <Motif name="面" note="枠・浮く面・警告。面取りするのは面だけ">
         <div className="h-16 w-28 rounded-xl bg-card ring-1 ring-foreground/15 [corner-shape:bevel_square]" />
       </Motif>
-      <Motif name="押せるもの" note="ボタン・札。面より小さく面取りする">
+      <Motif name="押せるもの" note="ボタン・札は見慣れた角丸のまま。塗りか縁を必ず持つ">
         <div className="flex items-center gap-2">
           <Button variant="primary" size="sm">
             承認する
@@ -165,7 +165,7 @@ function Shapes() {
           <Badge tone="warn">承認待ち 3</Badge>
         </div>
       </Motif>
-      <Motif name="書く先" note="入力欄は面取りしない。押す先と書く先を形で分ける">
+      <Motif name="書く先" note="入力欄は縁だけ。塗りの無い枠が「書ける」の合図">
         <Input placeholder="日誌を絞り込む" className="w-40" />
       </Motif>
     </div>
@@ -238,7 +238,7 @@ function Overview() {
           <h1 className="font-display text-2xl tracking-[0.04em]">Twin Plate</h1>
           <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
             人間の写しが働く様子を見守る計器盤。未来感は光の量ではなく、形と規律で出す。
-            面と押せるものは対角の2つの角だけを落とし、光ってよいのは現在地と焦点だけ、
+            面は対角の2つの角だけを落とし、押せるものは見慣れた形のまま、光ってよいのは現在地と焦点だけ、
             自分から動くのは受信の印だけにする。
           </p>
         </header>

@@ -78,7 +78,12 @@ export function ChatMessage({
 
   return (
     <li className={cn('group flex flex-col gap-1', role === 'human' ? 'items-end' : 'items-start')}>
-      <div className="flex min-w-0 max-w-full items-start gap-1">
+      <div
+        className={cn(
+          'flex min-w-0 max-w-full items-start gap-1',
+          role === 'clone' && 'w-full max-w-[46rem]',
+        )}
+      >
         {onEdit !== undefined && !editing && (
           <Button
             size="sm"
@@ -96,14 +101,17 @@ export function ChatMessage({
             'min-w-0 max-w-[46rem] text-sm leading-relaxed break-words',
             role !== 'clone' && 'whitespace-pre-wrap',
             /*
-             * 人間とクローンの発言は面取りした板（Foundations のモチーフ1）。
-             * 人間の側だけ主色で塗る——画面の中で「自分の発言」が一目で分かる
-             * のが最優先で、クローンの長い応答を主色で塗ると読めなくなる。
+             * **吹き出しにするのは人間の発言だけ。** 主色で塗った面取りの板にして、
+             * 「自分の発言」が一目で分かるようにする。
+             *
+             * **クローンの応答は吹き出しにしない**——地の上にそのまま本文として置く。
+             * 応答は見出し・表・コードを含む長い Markdown になりがちで、枠に入れると
+             * 読む幅が枠の内側へ削られ、縦に長い箱が積み重なって読みにくくなる
+             * （人間の言葉で「AIのメッセージはバブルになってなくて良い」）。
              */
             role === 'human' &&
               'rounded-lg bg-primary px-3 py-2 text-primary-foreground [corner-shape:bevel_square]',
-            role === 'clone' &&
-              'rounded-lg bg-card px-3 py-2 ring-1 ring-foreground/10 [corner-shape:bevel_square]',
+            role === 'clone' && 'w-full py-1',
             /*
              * 事情の行は板にしない（発言ではないので）。左の細い線で「差し込み」で
              * あることを示す。斜体にしないのは、和文の斜体は字形を歪めるだけで

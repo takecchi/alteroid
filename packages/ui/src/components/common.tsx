@@ -79,12 +79,19 @@ export function CardHeader({
   );
 }
 
-/** 画面の呼び方 → shadcn の `variant`。 */
+/**
+ * 画面の呼び方 → shadcn の `variant` と、押せることを形で言うための上書き。
+ *
+ * **塗りか縁のどちらかを必ず持たせる**（`ghost` を除く）。shadcn の `secondary` は地と
+ * ほぼ同じ明るさの面だけで縁が無く、暗い地の上では「押せる」ことが形から読めなかった
+ * （人間の言葉で「ぱっと見押せそうなかんじがしない」）。だから `default` は縁のある
+ * `outline` へ、`danger` には縁を足してある。
+ */
 const BUTTON_VARIANTS = {
-  primary: 'default',
-  default: 'secondary',
-  ghost: 'ghost',
-  danger: 'destructive',
+  primary: { shadcn: 'default', className: 'shadow-sm shadow-primary/20' },
+  default: { shadcn: 'outline', className: 'dark:border-foreground/20' },
+  ghost: { shadcn: 'ghost', className: '' },
+  danger: { shadcn: 'destructive', className: 'border-destructive/40' },
 } as const;
 
 const BUTTON_SIZES = {
@@ -119,9 +126,14 @@ export function Button({
     <ShadcnButton
       // 明示しないと form の中で submit になる。押した覚えのない送信を作らない。
       type="button"
-      variant={BUTTON_VARIANTS[variant]}
+      variant={BUTTON_VARIANTS[variant].shadcn}
       size={BUTTON_SIZES[size].shadcn}
-      className={cn('disabled:cursor-not-allowed', BUTTON_SIZES[size].className, className)}
+      className={cn(
+        'disabled:cursor-not-allowed',
+        BUTTON_VARIANTS[variant].className,
+        BUTTON_SIZES[size].className,
+        className,
+      )}
       disabled={disabled === true || loading}
       {...props}
     >
@@ -169,10 +181,6 @@ export function Badge({
         // （`CREDENTIAL_NAME` 正規表現に長さの上限が無い）をそのまま中身にしており、
         // 折り返さない指定は可変の長文が来たときにはみ出しを直すどころか作る側へ振れる。
         'h-auto shrink-0 overflow-visible break-words whitespace-normal',
-        // **角は小さく持つ**（shadcn の既定は `rounded-4xl` の丸い札）。札にも面取り
-        // （`styles.css` の `corner-shape`）が掛かるので、丸いままだと斜めの一辺が札の
-        // 高さいっぱいになり、平行四辺形になって端の文字を削る。
-        'rounded-[5px]',
         BADGE_TONES[tone].className,
         className,
       )}

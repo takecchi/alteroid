@@ -213,16 +213,19 @@
   }
 
   /*
-   * **面取り（alteroid の見た目の署名）。** 面（枠・浮く面・警告）と押せるもの（ボタン・
-   * 札）の**左上と右下の角だけを斜めに落とす**——機械で削り出した板の形にする。
-   * 残りの2つの角は角のまま（`square`）。
+   * **面取り（alteroid の見た目の署名）。** 面（枠・浮く面・警告）の**左上と右下の角だけを
+   * 斜めに落とす**——機械で削り出した板の形にする。残りの2つの角は角のまま（`square`）。
+   *
+   * **押せるもの（ボタン・札・キー）には当てない。** 当てていた版では「ぱっと見押せそうな
+   * 感じがしない」と言われた（見慣れた角丸の形そのものが「押せる」の合図になっている）。
+   * 札は shadcn の丸い札（`rounded-4xl`）と重なると平行四辺形になり、端の文字を削った。
+   * 署名は面に任せ、操作の形は見慣れたままにする。
    *
    * - **部品（`components/ui/`）には手を入れずに、shadcn が付ける `data-slot` で当てる。**
    *   部品に書くと次の `shadcn:add --overwrite` で黙って消える
    * - 斜めの一辺の大きさは各部品の `rounded-*`（= `--radius` から導いた値）そのまま
    * - **`corner-shape` を知らないブラウザでは、ただの角丸に戻るだけ**で崩れない
    *   （2026-09 時点で効くのは Chromium 系。Safari / Firefox は角丸のまま）
-   * - 入力欄には当てない。押す先と書く先が同じ形だと、どちらか分からなくなる
    * - `@layer base` に置くので、呼ぶ側が `corner-shape` を書けばそちらが勝つ
    */
   :where(
@@ -233,10 +236,7 @@
     [data-slot='popover-content'],
     [data-slot='hover-card-content'],
     [data-slot='dropdown-menu-content'],
-    [data-slot='select-content'],
-    [data-slot='button'],
-    [data-slot='badge'],
-    [data-slot='kbd']
+    [data-slot='select-content']
   ) {
     corner-shape: bevel square;
   }
