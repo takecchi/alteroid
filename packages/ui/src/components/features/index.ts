@@ -9,6 +9,7 @@ export * from './empty-state';
 export * from './filter-chips';
 export * from './journal';
 export * from './key-value-list';
+export * from './markdown-editor';
 export * from './stat';
 export * from './status-badge';
 export * from './status-dot';
