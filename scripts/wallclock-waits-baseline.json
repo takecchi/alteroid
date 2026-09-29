@@ -10,9 +10,6 @@
   "apps/runner/src/events-stale-subscriber-handoff.test.ts": 1,
   "apps/runner/src/events-write-deadline.test.ts": 1,
   "apps/runner/src/stopping-session-send-resume.test.ts": 1,
-  "apps/web/app/hooks/mutations.test.tsx": 1,
-  "apps/web/app/hooks/use-auth.test.tsx": 1,
-  "apps/web/app/hooks/use-journal-live.test.tsx": 2,
   "apps/web/app/routes/access.test.tsx": 1,
   "apps/web/app/routes/chat.ime-enter.test.tsx": 1,
   "apps/web/app/routes/chat.test.tsx": 1,
@@ -70,5 +67,8 @@
   "packages/storage-pg/src/index.commitments-inbox-archive.test.ts": 2,
   "packages/storage-pg/src/index.persona.test.ts": 13,
   "packages/storage-pg/src/index.sessions-tokens-credentials.test.ts": 1,
+  "packages/swr/src/hooks/mutations.test.tsx": 1,
+  "packages/swr/src/hooks/use-auth.test.tsx": 1,
+  "packages/swr/src/hooks/use-journal-live.test.tsx": 2,
   "scripts/test-mjs-deadline.test.ts": 1
 }
