@@ -920,9 +920,7 @@ describe('認証が有効なとき', () => {
 
         const lines = await decisions();
         expect(lines.some((line) => line.startsWith('アクセス許可を付与:'))).toBe(true);
-        expect(lines.some((line) => line.startsWith('アクセス許可を付与できなかった:'))).toBe(
-          true,
-        );
+        expect(lines.some((line) => line.startsWith('アクセス許可を付与できなかった:'))).toBe(true);
       },
     );
 
