@@ -4479,7 +4479,9 @@ class RunnerSession {
       raise = planBashToolTimeoutRaise(input);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${message}\n`);
+      process.stderr.write(
+        `alteroid: Bash の timeout 引数の判定が失敗した（書き換えない）: ${message}\n`,
+      );
       return undefined;
     }
     if (raise === undefined) return undefined;

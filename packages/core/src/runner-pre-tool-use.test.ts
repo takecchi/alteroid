@@ -680,7 +680,11 @@ describe('Bash のツールの timeout 引数を引き上げる（#2088）', () 
       continue: true,
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
-        updatedInput: { command: 'timeout 300 pnpm test', description: 'テストを回す', timeout: 310_000 },
+        updatedInput: {
+          command: 'timeout 300 pnpm test',
+          description: 'テストを回す',
+          timeout: 310_000,
+        },
       },
     });
     // 判断ではない —— permissionDecision は付けない（確認の流れはそのまま）。

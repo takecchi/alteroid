@@ -57,7 +57,9 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
   });
 
   it('引数が足りなければ、渡された値から引き上げる', () => {
-    expect(planBashToolTimeoutRaise({ command: 'timeout 300 pnpm test', timeout: 120_000 })).toEqual({
+    expect(
+      planBashToolTimeoutRaise({ command: 'timeout 300 pnpm test', timeout: 120_000 }),
+    ).toEqual({
       fromMs: 120_000,
       toMs: 310_000,
       commandTimeoutTotalMs: 300_000,
@@ -68,9 +70,9 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
     expect(planBashToolTimeoutRaise({ command: 'timeout 900 pnpm test' })?.toMs).toBe(
       BASH_TOOL_MAX_TIMEOUT_MS,
     );
-    expect(
-      planBashToolTimeoutRaise({ command: 'timeout 595 pnpm test' })?.toMs,
-    ).toBe(BASH_TOOL_MAX_TIMEOUT_MS);
+    expect(planBashToolTimeoutRaise({ command: 'timeout 595 pnpm test' })?.toMs).toBe(
+      BASH_TOOL_MAX_TIMEOUT_MS,
+    );
   });
 
   it('timeout 0（寿命なし）は上限まで引き上げ、合計は「無し」と名乗る', () => {
@@ -82,15 +84,21 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
   });
 
   it('引数が既に十分なら何もしない（下げる向きには書き換えない）', () => {
-    expect(planBashToolTimeoutRaise({ command: 'timeout 300 pnpm test', timeout: 600_000 })).toBeUndefined();
-    expect(planBashToolTimeoutRaise({ command: 'timeout 300 pnpm test', timeout: 310_000 })).toBeUndefined();
+    expect(
+      planBashToolTimeoutRaise({ command: 'timeout 300 pnpm test', timeout: 600_000 }),
+    ).toBeUndefined();
+    expect(
+      planBashToolTimeoutRaise({ command: 'timeout 300 pnpm test', timeout: 310_000 }),
+    ).toBeUndefined();
   });
 
   it('コマンドの中の timeout が既定に収まるなら何もしない', () => {
     // 60秒 + 余裕10秒 = 70秒 < 既定120秒
     expect(planBashToolTimeoutRaise({ command: 'timeout 60 pnpm test' })).toBeUndefined();
     expect(
-      planBashToolTimeoutRaise({ command: `timeout ${(BASH_TOOL_DEFAULT_TIMEOUT_MS - BASH_TOOL_TIMEOUT_MARGIN_MS) / 1000} x` }),
+      planBashToolTimeoutRaise({
+        command: `timeout ${(BASH_TOOL_DEFAULT_TIMEOUT_MS - BASH_TOOL_TIMEOUT_MARGIN_MS) / 1000} x`,
+      }),
     ).toBeUndefined();
   });
 
@@ -109,9 +117,13 @@ describe('planBashToolTimeoutRaise — ツールの timeout 引数を引き上�
   });
 
   it('timeout 引数が数でない・0以下なら、既定とみなして比べる', () => {
-    expect(planBashToolTimeoutRaise({ command: 'timeout 300 x', timeout: '600000' })?.fromMs).toBeUndefined();
+    expect(
+      planBashToolTimeoutRaise({ command: 'timeout 300 x', timeout: '600000' })?.fromMs,
+    ).toBeUndefined();
     expect(planBashToolTimeoutRaise({ command: 'timeout 300 x', timeout: 0 })?.toMs).toBe(310_000);
-    expect(planBashToolTimeoutRaise({ command: 'timeout 300 x', timeout: Number.NaN })?.toMs).toBe(310_000);
+    expect(planBashToolTimeoutRaise({ command: 'timeout 300 x', timeout: Number.NaN })?.toMs).toBe(
+      310_000,
+    );
   });
 
   // 構文（引用符）は解かない。空白の後ろなら引用符の中の字面も数えるが、

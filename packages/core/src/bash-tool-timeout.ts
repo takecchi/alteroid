@@ -71,7 +71,13 @@ export const BASH_TOOL_TIMEOUT_MARGIN_MS = 10_000;
 const COMMAND_TIMEOUT_RE =
   /(?<=^|[\s;&|()`])timeout(?:[ \t]+(?:-[ks][ \t]+\S+|--\S+|-[A-Za-jl-rt-z]))*[ \t]+(\d+(?:\.\d*)?|\.\d+)([smhd]?)(?=[ \t])/g;
 
-const UNIT_MS: Readonly<Record<string, number>> = { '': 1000, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+const UNIT_MS: Readonly<Record<string, number>> = {
+  '': 1000,
+  s: 1000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+};
 
 /** 引き上げの計画。`fromMs` はツールの `timeout` 引数（渡されていなければ `undefined`）。 */
 export interface BashToolTimeoutRaise {
@@ -116,14 +122,18 @@ export function planBashToolTimeoutRaise(toolInput: {
   if (total === null) return undefined;
 
   const fromMs =
-    typeof toolInput.timeout === 'number' && Number.isFinite(toolInput.timeout) && toolInput.timeout > 0
+    typeof toolInput.timeout === 'number' &&
+    Number.isFinite(toolInput.timeout) &&
+    toolInput.timeout > 0
       ? toolInput.timeout
       : undefined;
   const currentMs = fromMs ?? BASH_TOOL_DEFAULT_TIMEOUT_MS;
 
   const wantedMs = Math.min(
     BASH_TOOL_MAX_TIMEOUT_MS,
-    Number.isFinite(total) ? Math.ceil(total + BASH_TOOL_TIMEOUT_MARGIN_MS) : BASH_TOOL_MAX_TIMEOUT_MS,
+    Number.isFinite(total)
+      ? Math.ceil(total + BASH_TOOL_TIMEOUT_MARGIN_MS)
+      : BASH_TOOL_MAX_TIMEOUT_MS,
   );
   if (wantedMs <= currentMs) return undefined;
 
