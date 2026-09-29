@@ -488,7 +488,11 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   始まる引用符文字列）は `SHORT_DELETE_BRANCH_FLAG_SRC` の doc に書いた。
  * - **`--delete-branch=false` のような明示的な無効化。** `\b` は文字種の
  *   境界でしか見ないので、`--delete-branch` の直後が `=false` でも弾く
- *   （確かめていない・稀な形と判断して対応していない）。
+ *   （確かめていない・稀な形と判断して対応していない）。**安全側の誤検知として、
+ *   直さないと決めた**（#2127。`not planned`）。この repo は `delete_branch_on_merge=true`
+ *   なので書く用途が薄い。一方、緩めるには pflag の「後ろの指定が勝つ」規則と短い形の
+ *   `-d=false` の読み方を本物で確かめる必要があり、読み違えればすり抜けを作る。見直す
+ *   条件も #2127 に在る。
  * - ~~**`-sd` のような短縮オプションの束ね書き。** `-d` は前後が空白/演算子/
  *   端であることを要求するので、他の短縮フラグと連結した形（`gh` の
  *   フラグパーサが許すかどうかも含め未確認）は弾けない。~~ **issue #2068
