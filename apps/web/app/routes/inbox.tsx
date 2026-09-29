@@ -162,7 +162,9 @@ function InboxBacklogCard() {
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <ErrorNote error={error} />
-        {isLoading && data === undefined && <p className="text-xs text-muted">読み込み中…</p>}
+        {isLoading && data === undefined && (
+          <p className="text-xs text-muted-foreground">読み込み中…</p>
+        )}
         {data !== undefined && <InboxBacklogView backlog={data} />}
       </div>
     </Card>
@@ -171,7 +173,7 @@ function InboxBacklogCard() {
 
 function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
   if (backlog.total === 0) {
-    return <p className="text-xs text-muted">クローンの受信箱に未処理の合図は無い。</p>;
+    return <p className="text-xs text-muted-foreground">クローンの受信箱に未処理の合図は無い。</p>;
   }
 
   return (
@@ -217,7 +219,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
         同一本文（id/at を除いた中身）を畳むと {backlog.distinct} 件
         {backlog.distinctAcrossManagers !== backlog.distinct &&
           ` ／ 同じ本文がマネージャーを跨いで ${backlog.distinctAcrossManagers} 件`}
-        <span className="block text-muted">
+        <span className="block text-muted-foreground">
           ⚠ 本文が同じでも別々に起きた出来事である。この数は上下どちらへもぶれる。
         </span>
       </p>
@@ -225,7 +227,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       <p className="text-xs">
         器の入れ替え回数: 0回＝いまの器になってから積まれた {backlog.undelivered} / 1回{' '}
         {backlog.deliveredOnce} / 2回以上 {backlog.redelivered}（最大 {backlog.maxDeliveries}）
-        <span className="block text-muted">
+        <span className="block text-muted-foreground">
           ⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える
         </span>
       </p>
@@ -258,7 +260,7 @@ function BreakdownSection({
 }) {
   return (
     <div>
-      <p className="text-xs text-muted">{title}</p>
+      <p className="text-xs text-muted-foreground">{title}</p>
       {rows.length === 0 ? (
         <p className="text-xs">{empty}</p>
       ) : (
@@ -375,7 +377,7 @@ function InboxRemoveCard() {
       />
       <div className="flex flex-col gap-4 px-4 py-3 text-sm">
         <div>
-          <p className="mb-1 text-xs text-muted">種類（最低1つ）</p>
+          <p className="mb-1 text-xs text-muted-foreground">種類（最低1つ）</p>
           <div className="flex flex-col gap-1">
             {INBOX_TYPE_ORDER.map((type) => (
               <label key={type} className="flex items-center gap-2 text-xs">
@@ -385,7 +387,7 @@ function InboxRemoveCard() {
                   onChange={() => toggleType(type)}
                 />
                 <span>{inboxTypeLabel(type)}</span>
-                <span className="font-mono text-muted">{type}</span>
+                <span className="font-mono text-muted-foreground">{type}</span>
               </label>
             ))}
           </div>
@@ -393,7 +395,7 @@ function InboxRemoveCard() {
         </div>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">
+          <span className="text-xs text-muted-foreground">
             送信元（完全一致・カンマ区切り。例 external:foo, manager:mgr-1。任意）
           </span>
           <Input
@@ -407,7 +409,7 @@ function InboxRemoveCard() {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">
+          <span className="text-xs text-muted-foreground">
             この時刻より古い行だけを対象にする（ISO8601。任意）
           </span>
           <Input
@@ -421,12 +423,14 @@ function InboxRemoveCard() {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">理由（日誌に残る・必須）</span>
+          <span className="text-xs text-muted-foreground">理由（日誌に残る・必須）</span>
           <Input value={reason} onChange={(event) => setReason(event.target.value)} />
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">1回で消す上限（任意。省略時はサーバの既定）</span>
+          <span className="text-xs text-muted-foreground">
+            1回で消す上限（任意。省略時はサーバの既定）
+          </span>
           <Input
             value={limitText}
             onChange={(event) => {
@@ -435,7 +439,7 @@ function InboxRemoveCard() {
             }}
             placeholder="例 500"
           />
-          {!limitValid && <span className="text-xs text-danger">1以上の整数を入れること</span>}
+          {!limitValid && <span className="text-xs text-destructive">1以上の整数を入れること</span>}
         </label>
 
         <ErrorNote error={failure} />
@@ -488,7 +492,7 @@ function AllSelectedWarning({ show }: { show: boolean }) {
 
 function ResultView({ result }: { result: InboxRemoveManyResult }) {
   return (
-    <div className="rounded-md border border-border bg-surface-2 p-3 text-xs">
+    <div className="rounded-md border border-border bg-muted p-3 text-xs">
       <div className="flex items-center gap-2">
         <Badge tone={result.dryRun ? 'warn' : 'ok'}>{result.dryRun ? '試算' : '実行済み'}</Badge>
       </div>
@@ -497,14 +501,16 @@ function ResultView({ result }: { result: InboxRemoveManyResult }) {
         件、上限で持ち越し {result.remaining} 件）
       </p>
       {result.dryRun ? (
-        <p className="mt-2 text-muted">
+        <p className="mt-2 text-muted-foreground">
           1件も消していません（試算）。この内容でよければ「実行する」を押してください。
         </p>
       ) : (
-        <p className="mt-2 text-muted">実行しました。消した id は日誌にも残っています。</p>
+        <p className="mt-2 text-muted-foreground">
+          実行しました。消した id は日誌にも残っています。
+        </p>
       )}
       {result.removedIds.length === 0 ? (
-        <p className="mt-2 text-muted">対象になる id は無い。</p>
+        <p className="mt-2 text-muted-foreground">対象になる id は無い。</p>
       ) : (
         <>
           <p className="mt-2">

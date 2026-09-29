@@ -122,7 +122,7 @@ export default function Dashboard() {
             title="最新の日報"
             subtitle={latestReport === undefined ? undefined : latestReport.date}
             action={
-              <Link to="/reports" className="text-xs text-accent hover:underline">
+              <Link to="/reports" className="text-xs text-primary hover:underline">
                 すべて見る
               </Link>
             }
@@ -176,7 +176,7 @@ export default function Dashboard() {
                 // 「答える（古い件数由来）」（見出し）が同じカードに同時に
                 // 出ていた。本文と同じ判定を先頭に足して揃える。
                 approvals.error === undefined && pending.length > 0 ? (
-                  <Link to="/approvals" className="text-xs text-accent hover:underline">
+                  <Link to="/approvals" className="text-xs text-primary hover:underline">
                     答える
                   </Link>
                 ) : undefined
@@ -194,14 +194,14 @@ export default function Dashboard() {
                       key={approval.id}
                       className="border-b border-border px-4 py-2 last:border-b-0"
                     >
-                      <Link to="/approvals" className="block text-sm hover:text-accent">
+                      <Link to="/approvals" className="block text-sm hover:text-primary">
                         {/*
                           一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の
                           doc）。`line-clamp-2` の内側へブロック要素を入れると、その
                           畳み方そのものが効かなくなる。
                         */}
                         <span className="line-clamp-2">{approval.question}</span>
-                        <span className="mt-0.5 block text-[11px] text-muted">
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
                           {formatRelative(approval.createdAt)}
                         </span>
                       </Link>
@@ -219,7 +219,7 @@ export default function Dashboard() {
               action={
                 <Link
                   to={managersHref({ status: RUNNING_STATUSES })}
-                  className="text-xs text-accent hover:underline"
+                  className="text-xs text-primary hover:underline"
                 >
                   一覧
                 </Link>
@@ -239,7 +239,7 @@ export default function Dashboard() {
                     >
                       <Link
                         to={`/managers/${manager.managerId}`}
-                        className="flex items-center gap-2 text-sm hover:text-accent"
+                        className="flex items-center gap-2 text-sm hover:text-primary"
                       >
                         <ManagerStatusBadge status={manager.status} />
                         {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
@@ -263,7 +263,7 @@ export default function Dashboard() {
                 // 変数——別に作り直すと、カードとリンク先の「今日」がずれうる。
                 <Link
                   to={usageHref({ from: today, to: today })}
-                  className="text-xs text-accent hover:underline"
+                  className="text-xs text-primary hover:underline"
                 >
                   詳しく見る
                 </Link>
@@ -285,7 +285,7 @@ export default function Dashboard() {
                   {formatUsd(summarizeUsage(usage.data.rows, usage.data.turnRows).total.costUsd)}
                 </p>
                 {/* 省略・要約しない。数字を出すところには必ず添える。 */}
-                <p className="mt-1 text-[11px] text-muted">{usage.data.notice}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{usage.data.notice}</p>
               </div>
             )}
           </Card>
@@ -294,7 +294,7 @@ export default function Dashboard() {
             <CardHeader
               title="次の自動実行"
               action={
-                <Link to="/schedule" className="text-xs text-accent hover:underline">
+                <Link to="/schedule" className="text-xs text-primary hover:underline">
                   詳しく見る
                 </Link>
               }
@@ -318,7 +318,10 @@ export default function Dashboard() {
                     key={entry.kind}
                     className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
                   >
-                    <span className="min-w-0 truncate text-muted" title={entry.description}>
+                    <span
+                      className="min-w-0 truncate text-muted-foreground"
+                      title={entry.description}
+                    >
                       {entry.description}
                     </span>
                     <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
@@ -339,7 +342,7 @@ export default function Dashboard() {
           title="いま届いている出来事"
           subtitle="接続してから流れてきた日誌"
           action={
-            <Link to="/journal" className="text-xs text-accent hover:underline">
+            <Link to="/journal" className="text-xs text-primary hover:underline">
               日誌を掘る
             </Link>
           }
@@ -372,12 +375,12 @@ export default function Dashboard() {
                   key={entry.id}
                   className="flex gap-3 border-b border-border px-4 py-2 text-sm last:border-b-0"
                 >
-                  <span className="shrink-0 font-mono text-[11px] text-muted">
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                     {formatDateTime(entry.at)}
                   </span>
                   <Badge>{entry.type}</Badge>
                   {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                  <span className="min-w-0 flex-1 truncate text-muted">
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
                     {summarizeJournalEntry(entry)}
                   </span>
                   {/*
@@ -391,7 +394,7 @@ export default function Dashboard() {
                       to={link.to}
                       title={link.label}
                       aria-label={link.label}
-                      className="shrink-0 text-[11px] text-accent hover:underline"
+                      className="shrink-0 text-[11px] text-primary hover:underline"
                     >
                       {link.short} →
                     </Link>

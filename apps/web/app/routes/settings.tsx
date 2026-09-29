@@ -71,7 +71,7 @@ function Account() {
       />
       <div className="px-4 py-3 text-sm">
         {auth.status === 'open' ? (
-          <p className="text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             このデーモンは認証を要求していない（
             <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code> が未設定か{' '}
             <code className="font-mono">ALTEROID_AUTH=off</code>）。守りは待ち受け先（既定は
@@ -85,11 +85,11 @@ function Account() {
               （ここは6remなのでなお余裕がある）。
             */}
             <dl className="grid grid-cols-1 gap-y-1 sm:grid-cols-[6rem_1fr]">
-              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">アカウント</dt>
+              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">アカウント</dt>
               <dd className="font-mono text-xs break-all">{auth.account?.id ?? '—'}</dd>
               {auth.account?.email !== null && auth.account?.email !== undefined && (
                 <>
-                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">メール</dt>
+                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">メール</dt>
                   <dd className="text-xs break-all">{auth.account.email}</dd>
                 </>
               )}
@@ -98,13 +98,13 @@ function Account() {
               <Button size="sm" onClick={handleLogout}>
                 ログアウト
               </Button>
-              <span className="text-[11px] text-muted">
+              <span className="text-[11px] text-muted-foreground">
                 サーバ側のアクセストークンも失効させる。アカウントごと締め出すなら{' '}
                 <code className="font-mono">alteroid access revoke</code>
               </span>
             </div>
             {logoutError !== null && (
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-danger">
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-destructive">
                 <span className="break-words">サーバ側を失効させられなかった: {logoutError}</span>
                 <button
                   type="button"
@@ -112,7 +112,7 @@ function Account() {
                     setLogoutError(null);
                     auth.discardCredential();
                   }}
-                  className="shrink-0 underline hover:text-fg"
+                  className="shrink-0 underline hover:text-foreground"
                 >
                   この画面から鍵だけを捨てる
                 </button>
@@ -185,20 +185,20 @@ function runnerStateView(state: RunnerSummary['state']): {
 function Credentials({ runner }: { runner: RunnerSummary }) {
   if (runner.credentialsProbe.status === 'unheard') {
     return (
-      <span className="text-[11px] text-muted">
+      <span className="text-[11px] text-muted-foreground">
         鍵は確かめていない（繋がっていないので聞いていない）
       </span>
     );
   }
   if (runner.credentialsProbe.status === 'failed') {
     return (
-      <span className="text-[11px] break-words text-danger">
+      <span className="text-[11px] break-words text-destructive">
         鍵を確かめられなかった: {runner.credentialsProbe.error}
       </span>
     );
   }
   if (runner.credentials.length === 0) {
-    return <span className="text-[11px] text-muted">渡している鍵は無い</span>;
+    return <span className="text-[11px] text-muted-foreground">渡している鍵は無い</span>;
   }
   return (
     <>
@@ -253,7 +253,7 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
             {formatDateTime(outcome.at)}）
           </Badge>
           {outcome.status === 'failed' && outcome.error !== undefined ? (
-            <span className="text-[11px] break-words text-danger">{outcome.error}</span>
+            <span className="text-[11px] break-words text-destructive">{outcome.error}</span>
           ) : null}
         </div>
       ))}
@@ -274,27 +274,27 @@ function PushHealth({ runner }: { runner: RunnerSummary }) {
 function Profile({ runner }: { runner: RunnerSummary }) {
   if (runner.profileProbe.status === 'unheard') {
     return (
-      <span className="text-[11px] text-muted">
+      <span className="text-[11px] text-muted-foreground">
         プロファイルは確かめていない（繋がっていないので聞いていない）
       </span>
     );
   }
   if (runner.profileProbe.status === 'failed') {
     return (
-      <span className="text-[11px] break-words text-danger">
+      <span className="text-[11px] break-words text-destructive">
         プロファイルを確かめられなかった: {runner.profileProbe.error}
       </span>
     );
   }
   if (runner.profile === undefined) {
-    return <span className="text-[11px] text-muted">プロファイルは置いていない</span>;
+    return <span className="text-[11px] text-muted-foreground">プロファイルは置いていない</span>;
   }
   // **`sha256` は既に「先頭12桁」であって64桁の生の sha256 ではない**
   // （`packages/core/src/profile.ts` の `fingerprintOf`）。CLI
   // （`apps/cli/src/runners.ts` の `renderProfileFingerprint`）と同じ形に
   // 揃え、`updatedAt` も添えて「いつの内容か」を分かるようにする。
   return (
-    <span className="font-mono text-[11px] break-all text-muted">
+    <span className="font-mono text-[11px] break-all text-muted-foreground">
       プロファイル: 置いてある（指紋 {runner.profile.sha256}、
       {formatDateTime(runner.profile.updatedAt)} 更新）
     </span>
@@ -328,7 +328,7 @@ function Runners() {
             <p className="font-mono text-sm">デーモン</p>
             <Badge tone="accent">この画面が見ているプロセス</Badge>
           </div>
-          <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+          <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
             版: {describeRevisionStatus(daemonRevision)}
           </p>
         </div>
@@ -355,13 +355,15 @@ function Runners() {
                 ごとに繰り返さず、この一覧のヘッダ（`CardHeader` の subtitle）
                 に1度だけ添えてある。
               */}
-              <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+              <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 この状態になった: {formatDateTime(runner.since)}
               </p>
               {runner.runnerId === undefined ? null : (
-                <p className="mt-0.5 font-mono text-[11px] break-all text-muted">{runner.label}</p>
+                <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
+                  {runner.label}
+                </p>
               )}
-              <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+              <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 {runner.workspacePath}
               </p>
               {/*
@@ -373,7 +375,7 @@ function Runners() {
                 「入れ替わっていない」と「判定できない」が同じに見える（クローンは
                 `runner_list` で同じものを見ている。片方だけが見える形を作らない）。
               */}
-              <p className="mt-0.5 font-mono text-[11px] break-words text-muted">
+              <p className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground">
                 {runner.instanceId === undefined
                   ? 'プロセス: 名乗っていない（入れ替わりを判定できない）'
                   : `プロセス: ${runner.instanceId}${
@@ -393,11 +395,11 @@ function Runners() {
                 そして `known` は「最後に聞けた名乗り」であって「いま走っている版」
                 ではないので、state から離すと落ちた器の古い値が現役の版として読まれる。
               */}
-              <p className="mt-0.5 font-mono text-[11px] break-all text-muted">
+              <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
                 版: {describeRevisionStatus(runner.revision)}
               </p>
               {runner.error === undefined ? null : (
-                <p className="mt-1 text-[11px] break-words text-danger">{runner.error}</p>
+                <p className="mt-1 text-[11px] break-words text-destructive">{runner.error}</p>
               )}
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <Credentials runner={runner} />
@@ -435,7 +437,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
 
   if (done) {
     return (
-      <p className="mt-2 text-[11px] break-words text-muted">
+      <p className="mt-2 text-[11px] break-words text-muted-foreground">
         空けると立てた。まだ空き終わってはいない——載っている委譲は他の器へ移る。進み具合はこの一覧の状態で見える。
       </p>
     );
@@ -444,7 +446,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       {confirming ? (
         <>
-          <p className="text-[11px] text-muted">
+          <p className="text-[11px] text-muted-foreground">
             載っている委譲を止めて他の器へ移す。本当に空けるか。
           </p>
           <Button
@@ -542,7 +544,7 @@ function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
         if (value === undefined) return null;
         return (
           <Fragment key={key}>
-            <dt className="text-muted">{label}</dt>
+            <dt className="text-muted-foreground">{label}</dt>
             <dd className="font-mono tabular-nums">{value}</dd>
           </Fragment>
         );
@@ -613,13 +615,13 @@ function ShutdownDaemon() {
         subtitle="起動し直せば元に戻る。記憶・日誌・台帳は消さない"
       />
       <div className="px-4 py-3 text-sm">
-        <p className="text-xs leading-relaxed text-muted">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           <code className="font-mono">alteroid daemon stop</code> と同じ操作。止めても、
-          <strong className="text-fg">記憶も台帳も消さない</strong>
+          <strong className="text-foreground">記憶も台帳も消さない</strong>
           （日誌も含めて1行も消えない）。起動し直せば元に戻る——
           <code className="font-mono">POST /reset</code>（記憶そのものを消す操作）とは違う。 Railway
           では、止めると再起動の方針により
-          <strong className="text-fg">再起動として働く</strong>
+          <strong className="text-foreground">再起動として働く</strong>
           （止まったままにはならない）。止めた瞬間、この画面自身の接続も切れる。
         </p>
         <div className="mt-3">
@@ -631,22 +633,22 @@ function ShutdownDaemon() {
 
       <dialog
         ref={dialogRef}
-        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-surface p-0 text-fg backdrop:bg-black/50"
+        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
       >
         <div className="p-4">
           <h2 className="text-sm font-semibold">本当に止めますか？</h2>
-          <p className="mt-2 text-xs leading-relaxed text-muted">
-            デーモンを止めます。<strong className="text-fg">記憶も台帳も消えません</strong>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            デーモンを止めます。<strong className="text-foreground">記憶も台帳も消えません</strong>
             （日誌も含めて1行も消えません）。起動し直せば元の状態に戻ります。Railway では
             止めると再起動の方針により
-            <strong className="text-fg">再起動として働きます</strong>
+            <strong className="text-foreground">再起動として働きます</strong>
             （止まったままにはなりません）。止めた直後、この画面の接続も切れます。
           </p>
 
           {!done ? (
             <>
-              <label className="mt-3 block text-xs text-muted">
-                続けるなら <code className="rounded bg-surface-2 px-1 font-mono">stop</code> と入力
+              <label className="mt-3 block text-xs text-muted-foreground">
+                続けるなら <code className="rounded bg-muted px-1 font-mono">stop</code> と入力
                 <Input
                   autoFocus
                   className="mt-1"
@@ -749,9 +751,9 @@ function ResetWorkspace() {
         subtitle="トークン情報以外を全部消す。取り消せない"
       />
       <div className="px-4 py-3 text-sm">
-        <p className="text-xs leading-relaxed text-muted">
+        <p className="text-xs leading-relaxed text-muted-foreground">
           {RESET_CONFIRM_SUMMARY}を全部消す。
-          <strong className="text-fg">
+          <strong className="text-foreground">
             認証トークンのプール・マネージャーへ 降ろす環境変数・このログインアカウントは消さない。
           </strong>
         </p>
@@ -764,20 +766,21 @@ function ResetWorkspace() {
 
       <dialog
         ref={dialogRef}
-        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-surface p-0 text-fg backdrop:bg-black/50"
+        className="w-[min(28rem,calc(100vw-2rem))] rounded-md border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
       >
         <div className="p-4">
           <h2 className="text-sm font-semibold">本当に削除しますか？</h2>
-          <p className="mt-2 text-xs leading-relaxed text-muted">
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
             {RESET_CONFIRM_SUMMARY}
             を全部消します。認証トークンのプール・マネージャーへ降ろす環境変数・この
-            ログインアカウントは消しません。<strong className="text-fg">取り消せません。</strong>
+            ログインアカウントは消しません。
+            <strong className="text-foreground">取り消せません。</strong>
           </p>
 
           {cleared === null ? (
             <>
-              <label className="mt-3 block text-xs text-muted">
-                続けるなら <code className="rounded bg-surface-2 px-1 font-mono">reset</code> と入力
+              <label className="mt-3 block text-xs text-muted-foreground">
+                続けるなら <code className="rounded bg-muted px-1 font-mono">reset</code> と入力
                 <Input
                   autoFocus
                   className="mt-1"

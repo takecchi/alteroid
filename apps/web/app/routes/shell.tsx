@@ -108,7 +108,7 @@ export default function Shell() {
           <h1 className="mb-3 text-sm font-semibold">デーモンに繋がらない</h1>
           <ErrorNote error={auth.error} className="mb-4" />
           <ConnectionCard />
-          <p className="mt-3 text-xs text-muted">
+          <p className="mt-3 text-xs text-muted-foreground">
             接続先を直すとこの画面は自動で進む。デーモンが起きていないだけなら
             <code className="mx-1 font-mono">alteroid daemon start</code>。
           </p>
@@ -238,7 +238,7 @@ function Nav({
   return (
     <nav
       className={cn(
-        'flex flex-col bg-surface',
+        'flex flex-col bg-card',
         /*
          * ドロワーの中では枠と幅は Drawer 側が持っている（`pl-[var(--safe-left)]` も
          * 含めて — `drawer.tsx` の `SheetContent` に既にある）。**ここで同じものを
@@ -281,7 +281,9 @@ function Nav({
                   'mb-0.5 flex items-center gap-2 rounded-md px-2 text-sm transition-colors',
                   // 指で押す先は 44px 以上（WCAG 2.5.5 / Apple HIG の下限）。
                   onNavigate === undefined ? 'py-1.5' : 'min-h-11',
-                  isActive ? 'bg-surface-2 text-fg' : 'text-muted hover:bg-surface-2 hover:text-fg',
+                  isActive
+                    ? 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                 )
               }
             >
@@ -333,13 +335,13 @@ function MobileTopBar({
   onOpenNav: () => void;
 }) {
   return (
-    <header className="shrink-0 border-b border-border bg-surface pt-[var(--safe-top)] pl-[var(--safe-left)] pr-[var(--safe-right)]">
+    <header className="shrink-0 border-b border-border bg-card pt-[var(--safe-top)] pl-[var(--safe-left)] pr-[var(--safe-right)]">
       <div className="flex items-center gap-1 px-2 py-1.5">
         <button
           type="button"
           onClick={onOpenNav}
           aria-label="メニューを開く"
-          className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+          className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <Menu className="size-5" aria-hidden />
         </button>
@@ -386,13 +388,13 @@ function LiveIndicator({ status }: { status: LiveStatus }) {
   }[status] as { tone: 'ok' | 'warn' | 'danger'; text: string; pulse: boolean };
 
   return (
-    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">
+    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
       <span
         className={cn(
           'size-1.5 rounded-full',
           view.tone === 'ok' && 'bg-ok',
           view.tone === 'warn' && 'bg-warn',
-          view.tone === 'danger' && 'bg-danger',
+          view.tone === 'danger' && 'bg-destructive',
           view.pulse && 'animate-pulse',
         )}
         aria-hidden
@@ -417,9 +419,9 @@ function HealthFooter() {
   };
 
   return (
-    <div className="border-t border-border px-4 py-3 text-[11px] text-muted">
+    <div className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
       {error !== undefined ? (
-        <span className="text-danger">デーモンに繋がらない</span>
+        <span className="text-destructive">デーモンに繋がらない</span>
       ) : data === undefined ? (
         <span>確認中…</span>
       ) : (
@@ -441,14 +443,14 @@ function HealthFooter() {
             <button
               type="button"
               onClick={handleLogout}
-              className="shrink-0 underline hover:text-fg"
+              className="shrink-0 underline hover:text-foreground"
               title="サーバ側のアクセストークンも失効させる（アカウントごと締め出すなら alteroid access revoke）"
             >
               ログアウト
             </button>
           </div>
           {logoutError !== null && (
-            <div className="mt-1.5 break-words text-danger">
+            <div className="mt-1.5 break-words text-destructive">
               サーバ側を失効させられなかった: {logoutError}
               <button
                 type="button"
@@ -456,7 +458,7 @@ function HealthFooter() {
                   setLogoutError(null);
                   auth.discardCredential();
                 }}
-                className="ml-1 shrink-0 underline hover:text-fg"
+                className="ml-1 shrink-0 underline hover:text-foreground"
               >
                 この画面から鍵だけを捨てる
               </button>

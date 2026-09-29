@@ -28,6 +28,21 @@ const CORE_VALUE_IMPORT_BAN = {
 };
 
 /**
+ * `@/`（`packages/ui/src` の別名）を `packages/ui` の外で使わせない1件。
+ *
+ * `@/` は shadcn の部品が互いを import するための別名で（`packages/ui/components.json`）、
+ * apps/web の型検査と共通の vitest にも同じ対応を置いてある（import 先まで辿るため）。
+ * **その結果、画面から `@/components/ui/button` のように書いても通ってしまう**——
+ * `@alteroid/ui` の公開の口（`exports`）を素通りして中身へ手を入れる経路になる。
+ */
+const UI_ALIAS_BAN = {
+  group: ['@/*'],
+  message:
+    '@/ は packages/ui の中だけの別名である。画面・ほかのパッケージからは @alteroid/ui（見た目の部品）か ' +
+    '@alteroid/ui/shadcn（shadcn の素の部品）から import すること。',
+};
+
+/**
  * 画面から切り出した3つのパッケージの**依存の向き**。
  *
  * - `packages/logic`（純ロジック）は React も SWR も、ほかの2つも知らない
@@ -43,6 +58,7 @@ const WEB_UI_LAYERS = [
     dir: 'packages/logic',
     forbidden: ['react', 'react-dom', 'swr', '@alteroid/ui', '@alteroid/swr'],
     why: '@alteroid/logic は React・SWR・ほかの Web UI パッケージを知らない層である（描画せずに試せることが分けた理由）。',
+    banUiAlias: true,
   },
   {
     dir: 'packages/ui',
@@ -53,6 +69,7 @@ const WEB_UI_LAYERS = [
     dir: 'packages/swr',
     forbidden: ['@alteroid/ui'],
     why: '@alteroid/swr は見た目を知らない通信の層である。',
+    banUiAlias: true,
   },
 ];
 
@@ -65,14 +82,16 @@ const WEB_UI_LAYERS = [
  * `WEB_UI_FILES` の禁止を黙って消す。テストは `@alteroid/core` の値を使ってよい
  * （バンドルに入らない。下の doc）ので、層の禁止だけを載せる。
  */
-function layerImportRules({ dir, forbidden, why }) {
+function layerImportRules({ dir, forbidden, why, banUiAlias = false }) {
   const layerPaths = forbidden.map((name) => ({ name, message: why }));
   const layerPatterns = [
     {
       group: forbidden.filter((name) => name.startsWith('@alteroid/')).map((name) => `${name}/*`),
       message: why,
     },
-  ].filter((pattern) => pattern.group.length > 0);
+  ]
+    .filter((pattern) => pattern.group.length > 0)
+    .concat(banUiAlias ? [UI_ALIAS_BAN] : []);
   const rule = (paths) => ({
     '@typescript-eslint/no-restricted-imports': ['error', { paths, patterns: layerPatterns }],
   });
@@ -98,6 +117,8 @@ export default tseslint.config(
       // apps/web の生成物。`build/` は react-router の出力、`.react-router/` は typegen。
       '**/build/',
       '**/.react-router/',
+      // packages/ui の見本帳（`storybook build`）の出力。
+      '**/storybook-static/',
       // 正典を焼き込んだ写し（packages/core/scripts/write-canon.mjs が作る）
       'packages/core/src/generated/',
       // 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore /
@@ -169,6 +190,7 @@ export default tseslint.config(
         'error',
         {
           paths: [CORE_VALUE_IMPORT_BAN],
+          patterns: [UI_ALIAS_BAN],
         },
       ],
     },

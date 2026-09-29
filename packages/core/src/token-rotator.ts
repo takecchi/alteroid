@@ -7,6 +7,7 @@ import {
   type ActiveAgentToken,
   type AgentToken,
   type CooldownSource,
+  type TokenFailureObservation,
   type TokenRotationSettings,
 } from './token-pool.js';
 import {
@@ -30,6 +31,7 @@ import {
   type Stores,
   type TokenPoolStore,
 } from './store.js';
+import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 
 /**
  * 回し手（Issue #393 PR3）。**デーモンの中の1本。**
@@ -51,6 +53,17 @@ import {
  * 返した実測があり（`usage-limits.ts` の doc）、**並列に回すとプールを一気に食う。**
  * 世代の照合（{@link observationFreshness}）と合わせて二重に塞いである——照合だけだと
  * 「読んでから書くまで」の隙間に2本目が入る。
+ *
+ * **⚠️ ただし、この列（`serial()`）が直列化するのはこの回し手への呼び出し
+ * どうしだけである。** `token-pool-service.ts` は別インスタンスの別の
+ * `serial()` を持つので、あちらの `PUT /tokens` はこの列を待たない
+ * （Issue #2200）——`stores.tokens.replace()` は CAS の無い全文置換なので、
+ * 重なると後に書いたほうが前の変更を黙って消す。**それを防ぐのが
+ * {@link TokenRotatorOptions.writeLock}**（`token-pool-write-lock.ts`。
+ * `token-pool-service.ts` と共有する鍵）——`coolDown` / `finishSweep` /
+ * `recordTrialVerdict` / `reconsider` の書き戻しだけをこの鍵の中に収め、
+ * probe・spread の間は握らない（人間の `PUT /tokens` を候補を試す・撒く
+ * 時間ぶん待たせないため）。
  */
 
 /** 撒いた先1つぶんの結果。**「撒いた」と「効いた」は別である。** */
@@ -486,6 +499,23 @@ export interface TokenRotatorOptions {
   spread: TokenSpreadPort;
   /** 現在時刻。テストで固定するため。 */
   now?: () => Date;
+  /**
+   * **`TokenPoolStore` への書き込みを `TokenPoolService` と共有する鍵**
+   * （Issue #2200。`token-pool-write-lock.ts`）。
+   *
+   * `coolDown` / `finishSweep` / `recordTrialVerdict` / `reconsider` の
+   * probe 判定の書き戻しは、どれも「最新の一覧を読み直す → 自分が変えた行
+   * だけを id で当てる → 書き戻す」をこの鍵の中で行う——`token-pool-service.ts`
+   * の `writeOne` / `replace` と同じ区間だけを守る。
+   *
+   * **握らないのは probe と spread のあいだ。** 候補を試す・撒く時間ぶん
+   * 人間の `PUT /tokens` を待たせないためである（このファイル冒頭の doc）。
+   *
+   * **省略すると自分専用の鍵を作る**（テストや、まだ配線していない呼び手との
+   * 互換のため）。本番は `apps/daemon/src/index.ts` が1つ作って
+   * `createTokenPoolService` とここへ同じインスタンスを渡す。
+   */
+  writeLock?: TokenPoolWriteLock;
 }
 
 /**
@@ -770,6 +800,26 @@ interface CandidateSweep {
   fellBackToUndecided: boolean;
   /** `unusable` と判定して飛ばした候補の label（試した順）。 */
   unusableLabels: string[];
+  /**
+   * `unusableLabels` と対になる、**id と「どう変えたか」の組**（Issue #2200）。
+   *
+   * **行の値そのもの（`AgentToken`）ではなく、当てる観測（`markTokenUnusable`
+   * へ渡す `TokenFailureObservation`）を持つ**——保存するとき、この観測を
+   * 「probe を始める前に読んだ、この配列内の古い行」にではなく、**保存の
+   * 直前に読み直した最新の行**へ適用する（`coolDown` と同じ形）。
+   *
+   * **⚠️ 直す前はここに行そのもの（id 付きの `AgentToken`）を持たせていて、
+   * 保存するとき読み直した最新の行をこの古い行で丸ごと置き換えていた。**
+   * probe をまたぐ関数（`sweepCandidates`）が作る値なので、その間に人間が
+   * 同じ行の `value`（鍵そのもの）・`label`・`disabled`・`order` を変えていると、
+   * それらが古い値へ黙って巻き戻っていた——**差し替えた鍵が古い鍵へ戻る**
+   * という、`AGENTS.md` の地雷表そのものの形（レビューで指摘）。観測だけを
+   * 持たせて最新の行へ適用する形にすることで、回し手が変える欄
+   * （`cooldownUntil` / `cooldownSource` / `lastRejectedAt` /
+   * `lastRejectedReason` / `updatedAt`。`markTokenUnusable` の doc）だけを
+   * 書き換え、それ以外の欄は読み直した最新の値のまま残す。
+   */
+  unusablePatches: { id: string; observation: TokenFailureObservation }[];
   /** 冷却の印を積んだ集合。**保存するのは呼ぶ側である。** */
   tokens: AgentToken[];
   /** 候補を使い切ったときの見立て（`selectNextToken` の `none`）。 */
@@ -915,6 +965,7 @@ async function readSettingsOrUnreadable(store: TokenPoolStore): Promise<Settings
 export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
   const { stores, probe, spread } = options;
   const now = options.now ?? (() => new Date());
+  const writeLock = options.writeLock ?? createTokenPoolWriteLock();
 
   /**
    * いまの現役に対して、`stale` で捨てた観測が続けて何件になったか。
@@ -1182,9 +1233,18 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
    *
    * **開いたのに居座る形だけが穴である。** それは記憶を消す側で塞いだ
    * （{@link rememberRejection} の「忘れる道を塞がないこと」）。
+   *
+   * **⚠️ 呼び出し元から一覧を受け取らない**（Issue #2200 で変えた。以前は
+   * `tokens: readonly AgentToken[]` を受けて、その版をそのまま書き戻して
+   * いた）。**ここで最新の一覧を読み直し、`outgoingId` の行だけを id で
+   * 当てて書き戻す**——読み直しから書き戻しまでを
+   * {@link TokenRotatorOptions.writeLock} の中に収め、`token-pool-service.ts`
+   * の書き込みと排他にする。呼び出し元が周の先頭で読んだ一覧をそのまま書き
+   * 戻すと、`PUT /tokens` がこの直前に完了していても丸ごと踏み消す（実測。
+   * このファイル冒頭の doc）。**降りる行が読み直しの時点で無ければ（人間が
+   * 消した）、書かずにそのまま返す**——無い行を作り直さない。
    */
   async function coolDown(
-    tokens: readonly AgentToken[],
     outgoingId: string,
     settings: TokenRotationSettings,
     observation: TokenRotatorObservation,
@@ -1213,26 +1273,28 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             at: Date.parse(at),
             withinMs: settings.cooldownMs,
           });
-    return stores.tokens.replace(
-      tokens.map((token) =>
-        token.id === outgoingId
-          ? markTokenUnusable(token, {
-              at,
-              // **文言をそのまま残す。** 無いときは印を文言の代わりにしない
-              // ——観測できたものだけを書く（`TokenFailureObservation.message`）。
-              //
-              // **文言が無いときは、観測できた事実のほうを書く**（人間の決定
-              // 2026-09-07）。ここは `describeCooldownFacts` が組み立てる。
-              message: observation.notice?.text ?? describeCooldownFacts(observation.facts),
-              ...(resets === undefined ? {} : { resets }),
-              // **`lastRejectedReason` は1文字も触らない**（#682 の地雷。受け入れ
-              // 基準8）—— 読むだけで、文言そのものは上の `message` がそのまま持つ。
-              ...(noticeResetsAt === undefined ? {} : { noticeResetsAt }),
-              fallbackCooldownMs: settings.cooldownMs,
-            })
-          : token,
-      ),
-    );
+    const mutate = (token: AgentToken): AgentToken =>
+      markTokenUnusable(token, {
+        at,
+        // **文言をそのまま残す。** 無いときは印を文言の代わりにしない
+        // ——観測できたものだけを書く（`TokenFailureObservation.message`）。
+        //
+        // **文言が無いときは、観測できた事実のほうを書く**（人間の決定
+        // 2026-09-07）。ここは `describeCooldownFacts` が組み立てる。
+        message: observation.notice?.text ?? describeCooldownFacts(observation.facts),
+        ...(resets === undefined ? {} : { resets }),
+        // **`lastRejectedReason` は1文字も触らない**（#682 の地雷。受け入れ
+        // 基準8）—— 読むだけで、文言そのものは上の `message` がそのまま持つ。
+        ...(noticeResetsAt === undefined ? {} : { noticeResetsAt }),
+        fallbackCooldownMs: settings.cooldownMs,
+      });
+    return writeLock.run(async () => {
+      const latest = await stores.tokens.list();
+      if (!latest.some((token) => token.id === outgoingId)) return latest;
+      return stores.tokens.replace(
+        latest.map((token) => (token.id === outgoingId ? mutate(token) : token)),
+      );
+    });
   }
 
   /**
@@ -1264,6 +1326,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     let sweptTokens = [...startTokens];
     const unusableLabels: string[] = [];
+    const unusablePatches: { id: string; observation: TokenFailureObservation }[] = [];
     let chosen: { token: AgentToken; verdict: TokenCandidateVerdict } | undefined;
     /**
      * **判定できなかった候補のうち、いちばん先に出会ったもの。**
@@ -1323,24 +1386,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
       // **飛ばした候補も冷却へ入れる。** 入れないと次の観測で同じものが
       // 最初の候補として選ばれ、probe を毎回焼く。
+      //
+      // **この場（ローカルの `sweptTokens`）へ積むのは、次の候補選び
+      // （`selectNextToken`。冷却中の行を除く）のためだけである。** 保存する
+      // ときに使う値は `observation` のほうで、`finishSweep` が保存の直前に
+      // 読み直した最新の行へこれを当てる——ここで作った `AgentToken` を
+      // そのまま保存に使うと、probe を始めてからここまでの間に人間が
+      // 変えた同じ行の `value` / `label` / `disabled` / `order` を、古い値へ
+      // 巻き戻すことになる（Issue #2200 のレビューで指摘）。
       const at = now().toISOString();
+      const observation: TokenFailureObservation = {
+        at,
+        message: verdict.reason,
+        // **probe の `retryAt` は `/usage` の枠のリセット時刻である**
+        // （`judgeTokenCandidate` が窓の `resetsAt` から作る）⟹ 出所は
+        // `quota_reset` である（#683）。**`default` ではない** —— これは
+        // claude.ai が言っている値で、こちらが足した推測ではない。
+        ...(verdict.retryAt === undefined
+          ? {}
+          : { resets: { at: verdict.retryAt, source: 'quota_reset' as const } }),
+        fallbackCooldownMs: settings.cooldownMs,
+      };
       sweptTokens = sweptTokens.map((token) =>
-        token.id === selection.token.id
-          ? markTokenUnusable(token, {
-              at,
-              message: verdict.reason,
-              // **probe の `retryAt` は `/usage` の枠のリセット時刻である**
-              // （`judgeTokenCandidate` が窓の `resetsAt` から作る）⟹ 出所は
-              // `quota_reset` である（#683）。**`default` ではない** —— これは
-              // claude.ai が言っている値で、こちらが足した推測ではない。
-              ...(verdict.retryAt === undefined
-                ? {}
-                : { resets: { at: verdict.retryAt, source: 'quota_reset' as const } }),
-              fallbackCooldownMs: settings.cooldownMs,
-            })
-          : token,
+        token.id === selection.token.id ? markTokenUnusable(token, observation) : token,
       );
       unusableLabels.push(selection.token.label);
+      unusablePatches.push({ id: selection.token.id, observation });
     }
 
     // **`usable` が見つからなければ、判定できなかった候補へ倒す。**
@@ -1357,6 +1428,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       ...(chosen === undefined ? {} : { chosen }),
       fellBackToUndecided,
       unusableLabels,
+      unusablePatches,
       tokens: sweptTokens,
       ...(ranOut === undefined ? {} : { ranOut }),
       stoppedByBudget,
@@ -1402,15 +1474,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       reason,
       whyHead,
     } = input;
-    /**
-     * いま指名されている行（`parked` の改善判定に使う）。
-     *
-     * **`sweep.tokens` から引く。** 冷却の印を積んだ後の集合なので、この周で
-     * 冷やした分も反映されている —— 元の配列から引くと、**いま冷やしたばかりの
-     * 現役を「冷却中ではない」と読む。**
-     */
-    const activeRow =
-      active === null ? undefined : sweep.tokens.find((token) => token.id === active.tokenId);
     const common = {
       signal,
       ...(freshness === undefined ? {} : { freshness }),
@@ -1449,7 +1512,57 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
     // **回す前に保存する。** ここで落ちたら回さない —— `writeActive` が落ちた
     // ときと同じ倒れ方である（`it('撒く前に正本を書く（保存が落ちたら撒かない）')`
     // が固定している形）。
-    if (sweep.unusableLabels.length > 0) await stores.tokens.replace(sweep.tokens);
+    //
+    // **⚠️ `sweep.tokens` をそのまま書き戻さない**（Issue #2200 で変えた）。
+    // `sweepCandidates` は probe をまたぐ関数（`CANDIDATE_SWEEP_BUDGET_MS` まで
+    // 掛かりうる）なので、`sweep.tokens` は probe を始める前に読んだ一覧が
+    // 元になっている——その間に完了した `PUT /tokens`（`token-pool-service.ts`）
+    // をここで丸ごと踏み消していた（実測。このファイル冒頭の doc）。
+    // **いまは {@link TokenRotatorOptions.writeLock} の中で最新の一覧を読み
+    // 直し、この周で「使えない」と判定した候補の行だけを id で当てる。**
+    // 読み直した一覧に無い id（人間が消した行）は当てない——作り直さない。
+    //
+    // **⚠️ 「行を id で当てる」の意味を、レビューで直すまで取り違えていた。**
+    // 直す前は `sweep.tokens`（probe を始める前に読んだ、この周のローカルな
+    // 集合）から該当 id の**行そのもの**を取り出し、読み直した最新の行を
+    // それで丸ごと置き換えていた。⟹ probe をしているあいだに人間が同じ行の
+    // `value`（鍵そのもの）・`label`・`disabled`・`order` を変えていると、
+    // それらが古い値へ黙って巻き戻る——**差し替えた鍵が古い鍵へ戻る**という、
+    // `AGENTS.md` の地雷表「回した鍵が黙って巻き戻る」そのものの形だった。
+    // **正しくは、行ではなく「その行に何を観測したか」（`unusablePatches` の
+    // `observation`）だけを持ち回り、保存の直前に読み直した最新の行へ
+    // `markTokenUnusable` を適用する**（`coolDown` と同じ形）——回し手が
+    // 変える欄（`cooldownUntil` / `cooldownSource` / `lastRejectedAt` /
+    // `lastRejectedReason` / `updatedAt`。`markTokenUnusable` の doc）だけが
+    // 変わり、それ以外の欄は読み直した最新の値のまま残る。
+    // **以降はここで得た `pool`（保存していなければ `sweep.tokens` そのもの）
+    // を正本として使う。**
+    const pool =
+      sweep.unusablePatches.length === 0
+        ? sweep.tokens
+        : await writeLock.run(async () => {
+            const latest = await stores.tokens.list();
+            const observationById = new Map(
+              sweep.unusablePatches.map((patch) => [patch.id, patch.observation] as const),
+            );
+            return stores.tokens.replace(
+              latest.map((token) => {
+                const observation = observationById.get(token.id);
+                return observation === undefined ? token : markTokenUnusable(token, observation);
+              }),
+            );
+          });
+
+    /**
+     * いま指名されている行（`parked` の改善判定に使う）。
+     *
+     * **`pool` から引く**（Issue #2200 で `sweep.tokens` から変えた——冷却の
+     * 印を積んだうえ、保存できていれば最新の一覧を反映した後の集合。元の
+     * 配列から引くと、**いま冷やしたばかりの現役を「冷却中ではない」と
+     * 読む。**
+     */
+    const activeRow =
+      active === null ? undefined : pool.find((token) => token.id === active.tokenId);
 
     const skipped =
       sweep.unusableLabels.length === 0
@@ -1523,9 +1636,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         why: (() => {
           const head = `${whyHead}。`;
           const tail =
-            endedStaleRun === null
-              ? ''
-              : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens });
+            endedStaleRun === null ? '' : describeStaleRunEnd({ ...endedStaleRun, tokens: pool });
           if (verdict.verdict === 'usable') {
             return `${head}候補「${token.label}」は観測できた${tail}${unreadableTail(placed.generation)}`;
           }
@@ -1569,7 +1680,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
       earliest.tokenId !== active?.tokenId &&
       parkImprovesOn(earliest.cooldownUntil, activeRow)
     ) {
-      const row = sweep.tokens.find((token) => token.id === earliest.tokenId);
+      const row = pool.find((token) => token.id === earliest.tokenId);
       if (row !== undefined) {
         const placed = await nominate(row);
         // **`rotated` と同じ理由でリセットする**（上の doc を参照）。`parked` も
@@ -1595,7 +1706,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
             `（${new Date(earliest.cooldownUntil).toISOString()} まで通らない）` +
             (endedStaleRun === null
               ? ''
-              : describeStaleRunEnd({ ...endedStaleRun, tokens: sweep.tokens })) +
+              : describeStaleRunEnd({ ...endedStaleRun, tokens: pool })) +
             unreadableTail(placed.generation),
         };
       }
@@ -1889,9 +2000,7 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // その場合は冷却へ入れる相手も居ないので、選ぶだけになる。
         const outgoingId = active?.tokenId;
         const afterCoolDown =
-          outgoingId === undefined
-            ? tokens
-            : await coolDown(tokens, outgoingId, settings, observation);
+          outgoingId === undefined ? tokens : await coolDown(outgoingId, settings, observation);
 
         const sweep = await sweepCandidates(
           afterCoolDown,
@@ -1911,17 +2020,24 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
     recordTrialVerdict: (input: { tokenId: string; verdict: TokenCandidateVerdict }) =>
       serial(async () => {
+        // **この最初の読みは「書くべきか」の早期判定にしか使わない**
+        // （`missing` / `unchanged` を早く返すため）。実際に書く行は、下の
+        // {@link writeLock} の中でもう一度読み直したものへ当てる（Issue
+        // #2200）——ここで読んだ版がその後の `await`（設定の読み直し）の
+        // あいだに古くなっていても、実害は「本当は不要だった書き込みを
+        // 1回よけいにする」だけである（下の write はいつも読み直した最新の
+        // 一覧に対して行うので、他の書き込みを踏み消しはしない）。
         const tokens = await stores.tokens.list();
         const row = tokens.find((token) => token.id === input.tokenId);
         if (row === undefined) return 'missing' as const;
         const at = now().toISOString();
-        let next: AgentToken;
         const { verdict } = input;
+        let mutate: (token: AgentToken) => AgentToken;
         if (verdict.verdict === 'usable') {
           if (row.cooldownUntil === undefined && row.lastRejectedAt === undefined) {
             return 'unchanged' as const;
           }
-          next = markTokenUsable(row, at);
+          mutate = (token) => markTokenUsable(token, at);
         } else if (verdict.verdict === 'unusable' && verdict.retryAt !== undefined) {
           // **書く必要が無ければ書かない**（同じ期限なら `updatedAt` も動かさない）。
           if (row.cooldownUntil === verdict.retryAt) return 'unchanged' as const;
@@ -1931,19 +2047,34 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           // （`TokenFailureObservation.fallbackCooldownMs` の doc）。読めない
           // ときは既定値で埋めずに省く。それ以外のエラーは投げ直す。
           const settingsRead = await readSettingsOrUnreadable(stores.tokens);
-          next = markTokenUnusable(row, {
-            at,
-            message: verdict.reason,
-            resets: { at: verdict.retryAt, source: 'quota_reset' },
-            ...(settingsRead.readable
-              ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
-              : {}),
-          });
+          const retryAt = verdict.retryAt;
+          const reason = verdict.reason;
+          mutate = (token) =>
+            markTokenUnusable(token, {
+              at,
+              message: reason,
+              resets: { at: retryAt, source: 'quota_reset' },
+              ...(settingsRead.readable
+                ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
+                : {}),
+            });
         } else {
           return 'unchanged' as const;
         }
-        await stores.tokens.replace(tokens.map((token) => (token.id === row.id ? next : token)));
-        return 'written' as const;
+        // **最新の一覧を読み直し、`input.tokenId` の行だけを id で当てて書く**
+        // （Issue #2200。`writeOne`——`token-pool-service.ts`——と同じ形）。
+        // 読み直した一覧に行が無ければ（人間が消した）、書かずに `unchanged`
+        // として返す——`missing`（呼び出し時点に無かった）とは意味が違うが、
+        // 呼び出し元にとっては「書けなかった」という同じ結果である。
+        const wrote = await writeLock.run(async () => {
+          const latest = await stores.tokens.list();
+          if (!latest.some((token) => token.id === input.tokenId)) return false;
+          await stores.tokens.replace(
+            latest.map((token) => (token.id === input.tokenId ? mutate(token) : token)),
+          );
+          return true;
+        });
+        return wrote ? ('written' as const) : ('unchanged' as const);
       }),
 
     reconsider: (input: {
@@ -2127,11 +2258,22 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               ? 'ターンが実際に成功した'
               : 'probe で通ることを観測した';
           if (hasRejection && availability !== 'disabled' && availability !== 'invalidated') {
-            await stores.tokens.replace(
-              tokens.map((token) =>
-                token.id === currentRow.id ? markTokenUsable(token, now().toISOString()) : token,
-              ),
-            );
+            // **最新の一覧を読み直し、`currentRow.id` の行だけを id で当てて
+            // 書く**（Issue #2200）。`tokens`（この呼び出しの周の先頭で読んだ
+            // 版）をそのまま書き戻すと、その後に完了した `PUT /tokens` を
+            // 踏み消しうる。読み直した一覧に行が無ければ（人間が消した）、
+            // 書かない——作り直さない。
+            const recoveredAt = now().toISOString();
+            const currentRowId = currentRow.id;
+            await writeLock.run(async () => {
+              const latest = await stores.tokens.list();
+              if (!latest.some((token) => token.id === currentRowId)) return;
+              await stores.tokens.replace(
+                latest.map((token) =>
+                  token.id === currentRowId ? markTokenUsable(token, recoveredAt) : token,
+                ),
+              );
+            });
             return {
               kind: 'ignored' as const,
               signal: 'none' as const,
@@ -2208,20 +2350,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
           // `cooldownMs`（設定）が要る——既定値へすり替えない（issue #2147）。
           if (resets !== undefined || settingsRead.readable) {
             const at = now().toISOString();
-            pool = await stores.tokens.replace(
-              tokens.map((token) =>
-                token.id === currentRow.id
-                  ? markTokenUnusable(token, {
-                      at,
-                      message: currentVerdict.reason,
-                      ...(resets === undefined ? {} : { resets }),
-                      ...(settingsRead.readable
-                        ? { fallbackCooldownMs: settingsRead.settings.cooldownMs }
-                        : {}),
-                    })
-                  : token,
-              ),
-            );
+            const currentRowId = currentRow.id;
+            const reason = currentVerdict.reason;
+            const fallbackCooldownMs = settingsRead.readable
+              ? settingsRead.settings.cooldownMs
+              : undefined;
+            // **最新の一覧を読み直し、`currentRowId` の行だけを id で当てて
+            // 書く**（Issue #2200）。`tokens`（周の先頭で読んだ版）をそのまま
+            // 書き戻すと、その後に完了した `PUT /tokens` を踏み消しうる。
+            // 読み直した一覧に行が無ければ（人間が消した）、書かずにそのまま
+            // 返す——作り直さない。
+            pool = await writeLock.run(async () => {
+              const latest = await stores.tokens.list();
+              if (!latest.some((token) => token.id === currentRowId)) return latest;
+              return stores.tokens.replace(
+                latest.map((token) =>
+                  token.id === currentRowId
+                    ? markTokenUnusable(token, {
+                        at,
+                        message: reason,
+                        ...(resets === undefined ? {} : { resets }),
+                        ...(fallbackCooldownMs === undefined ? {} : { fallbackCooldownMs }),
+                      })
+                    : token,
+                ),
+              );
+            });
             blockedByProbe = true;
           }
         }

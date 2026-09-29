@@ -96,6 +96,7 @@ import {
   REMOVE_MANY_LIMIT_DEFAULT,
   REMOVE_MANY_LIMIT_MAX,
   reportRunnerRevision,
+  describeResetTargets,
   resetWorkspaceState,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
@@ -7897,9 +7898,12 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['system'],
         summary: 'トークン情報以外のワークスペースを全部消す',
+        // **`describeResetTargets()`（`@alteroid/core`）から組み立てる——
+        // CLI の確認の文（`apps/cli/src/reset.ts` の `buildConfirmMessage`）と
+        // 同じ `RESET_CONFIRM_GROUPS` が出所（issue #2224）。手で書き写すと
+        // ここだけ古くなる（#2196 で「仕事のやり方」を足し忘れたのが実例）。
         description:
-          '記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・' +
-          'アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を全部消す。' +
+          `${describeResetTargets()}を全部消す。` +
           '**認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の' +
           'ログインアカウントは消さない。** 取り消せない。',
         responses: {

@@ -65,7 +65,9 @@ function Shell({ children }: { children: React.ReactNode }) {
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <p className="font-mono text-lg font-semibold tracking-tight">alteroid</p>
-          <p className="mt-1 text-xs text-muted">クローンの様子を見て、指示を出し、記憶を直す</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            クローンの様子を見て、指示を出し、記憶を直す
+          </p>
         </div>
         <Card className="p-5">{children}</Card>
         <div className="mt-4">
@@ -168,15 +170,15 @@ function SignIn() {
   return (
     <Shell>
       <h1 className="text-sm font-semibold">ログイン</h1>
-      <p className="mt-1 text-xs text-muted">
+      <p className="mt-1 text-xs text-muted-foreground">
         接続先: <span className="font-mono">{baseUrl}</span>
       </p>
 
       <ErrorNote error={failure} className="mt-3" />
 
       {auth.providers.length === 0 ? (
-        <div className="mt-4 rounded-md border border-border bg-bg p-3 text-xs leading-relaxed text-muted">
-          <p className="mb-1.5 font-medium text-fg">ログイン手段が設定されていない</p>
+        <div className="mt-4 rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="mb-1.5 font-medium text-foreground">ログイン手段が設定されていない</p>
           <p>
             このデーモンは認証を要求しているが、ログインできるプロバイダが1つも登録されていない。
             デーモン側に <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code> と{' '}
@@ -201,7 +203,7 @@ function SignIn() {
       )}
 
       {busy && (
-        <p className="mt-3 flex items-center gap-2 text-xs text-muted">
+        <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <Badge tone="accent">待機中</Badge>
           別ウィンドウで認証を終えると、この画面が自動で進む
         </p>
@@ -212,16 +214,16 @@ function SignIn() {
           href={manualUrl}
           target="_blank"
           rel="noreferrer"
-          className="mt-3 flex items-center gap-1.5 text-xs text-accent hover:underline"
+          className="mt-3 flex items-center gap-1.5 text-xs text-primary hover:underline"
         >
           <ExternalLink className="size-3.5" aria-hidden />
           ポップアップが塞がれた。ここを開いて認証する
         </a>
       )}
 
-      <p className="mt-4 border-t border-border pt-3 text-[11px] leading-relaxed text-muted">
+      <p className="mt-4 border-t border-border pt-3 text-[11px] leading-relaxed text-muted-foreground">
         ログインしただけでは使えない。
-        <strong className="text-fg">使う許可は人間が CLI から与える</strong>（
+        <strong className="text-foreground">使う許可は人間が CLI から与える</strong>（
         <code className="font-mono">alteroid access grant &lt;id&gt;</code>）。 端末から使うだけなら{' '}
         <code className="font-mono">alteroid login</code> でも同じ。
       </p>
@@ -262,7 +264,7 @@ function Ungranted() {
           変わっていないのは「使えるようにするのは人間の明示的な操作である」の
           ほうで、下のコマンドがその操作そのものである。
         */}
-      <p className="mt-2 text-xs leading-relaxed text-muted">
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
         ログインは通っている。使えるようにするのは人間の明示的な操作なので、下のコマンドを実行してもらう必要がある。
       </p>
 
@@ -274,17 +276,17 @@ function Ungranted() {
           別の役目である（混同しないこと）。
         */}
       <dl className="mt-3 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[5rem_1fr]">
-        <dt className="mt-3 text-muted first:mt-0 sm:mt-0">アカウント</dt>
+        <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">アカウント</dt>
         <dd className="font-mono break-all">{auth.account?.id ?? '—'}</dd>
         {auth.account?.email !== null && auth.account?.email !== undefined && (
           <>
-            <dt className="mt-3 text-muted first:mt-0 sm:mt-0">メール</dt>
+            <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">メール</dt>
             <dd className="break-all">{auth.account.email}</dd>
           </>
         )}
       </dl>
 
-      <p className="mt-3 text-xs text-muted">デーモンと同じ環境で次を実行する:</p>
+      <p className="mt-3 text-xs text-muted-foreground">デーモンと同じ環境で次を実行する:</p>
       <Input readOnly value={command} className="mt-1.5 font-mono text-xs" />
 
       <div className="mt-4 flex items-center gap-2">
@@ -294,7 +296,7 @@ function Ungranted() {
         <Button onClick={switchAccount}>別のアカウントでログイン</Button>
       </div>
       {logoutError !== null && (
-        <div role="alert" className="mt-3 break-words text-xs text-danger">
+        <div role="alert" className="mt-3 break-words text-xs text-destructive">
           サーバ側を失効させられなかった: {logoutError}
           <button
             type="button"
@@ -302,7 +304,7 @@ function Ungranted() {
               setLogoutError(null);
               auth.discardCredential();
             }}
-            className="ml-1 underline hover:text-fg"
+            className="ml-1 underline hover:text-foreground"
           >
             この画面から鍵だけを捨てる
           </button>

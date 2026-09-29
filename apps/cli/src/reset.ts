@@ -1,6 +1,8 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
+import { RESET_CONFIRM_GROUPS } from '@alteroid/core';
+
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -48,35 +50,25 @@ export async function resetCommand(options: { yes?: boolean } = {}): Promise<voi
 }
 
 /**
- * 確認の文の並び。**消した後の報告の見出し（`SUMMARY_LABELS`）から組み立てる**
- * ——1つの日本語ラベルが複数の `ResetSummary` キーをまとめて指すことがある
+ * 確認の文の並び。**`@alteroid/core` の `RESET_CONFIRM_GROUPS`
+ * （`packages/core/src/workspace-reset.ts`）が正本——issue #2224 で、
+ * ここ（CLI）にだけ在った一覧を `POST /reset` の OpenAPI description と
+ * 共有できる形へ core 側へ寄せた。並び・語は1文字も変えていない。**
+ *
+ * 1つの日本語ラベルが複数の `ResetSummary` キーをまとめて指すことがある
  * （例: 「利用状況の台帳」が `usageDaily` / `usageBaseline` / `usageLedger` /
  * `usageTurns` / `sessionLog` をまとめて指す。「継続中の依頼」が `schedules` /
  * `schedulePhases` をまとめて指す）。
  *
  * **`confirm-coverage.test.ts` 相当の歯（`reset.test.ts` 内）が、
  * `SUMMARY_LABELS` の全キーがどこかの group に載っていることを測る。** 新しい
- * キーを `ResetSummary` / `SUMMARY_LABELS` へ足したのに、ここへ足し忘れると
- * その歯が落ちる——issue #2196 で `practices` を消した後の報告にだけ足して
- * 確認の文に足し忘れたのが、まさにこの抜けである。
+ * キーを `ResetSummary` / `SUMMARY_LABELS` へ足したのに、core 側の一覧へ
+ * 足し忘れるとその歯が落ちる——issue #2196 で `practices` を消した後の報告に
+ * だけ足して確認の文に足し忘れたのが、まさにこの抜けである（core 側の
+ * `workspace-reset.test.ts` にも、`WorkspaceResetSummary` の全キーを覆っている
+ * ことを測る同種の歯を置いてある）。
  */
-const CONFIRM_GROUPS: { label: string; keys: (keyof ResetSummary)[] }[] = [
-  { label: '記憶', keys: ['memory'] },
-  { label: '日誌', keys: ['journal'] },
-  { label: 'ジョブ', keys: ['jobs'] },
-  { label: '承認待ち', keys: ['approvals'] },
-  { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
-  { label: '受信箱', keys: ['inbox'] },
-  { label: '引き受けた仕事', keys: ['commitments'] },
-  { label: '仕事のやり方', keys: ['practices'] },
-  { label: 'アーカイブ', keys: ['archive'] },
-  { label: 'セッション', keys: ['sessions'] },
-  { label: '実行環境プロファイル', keys: ['profile'] },
-  {
-    label: '利用状況の台帳',
-    keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
-  },
-];
+const CONFIRM_GROUPS = RESET_CONFIRM_GROUPS;
 
 /** テスト（`reset.test.ts`）が group と `SUMMARY_LABELS` の対応を検算するために読む。 */
 export const RESET_CONFIRM_GROUPS_FOR_TEST = CONFIRM_GROUPS;

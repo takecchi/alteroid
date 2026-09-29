@@ -85,7 +85,7 @@ export default function AppraisalStatsPage() {
 function AppraisalStatsErrorNote({ error }: { error: unknown }) {
   if (error instanceof ApiError && error.status === 404) {
     return (
-      <div className="px-4 pt-3 text-sm text-danger">
+      <div className="px-4 pt-3 text-sm text-destructive">
         このデーモンには GET /appraisal-stats が無い（版が古い可能性がある。デーモンを
         更新してください）。評定行が0件だった、という意味ではない。
       </div>
@@ -118,11 +118,11 @@ function TallyCard({ journal }: { journal: AppraisalStats['journal'] }) {
   return (
     <div className="flex flex-col gap-3 px-4 py-3 text-sm">
       <div>
-        <p className="text-xs text-muted">引き受けた仕事（台帳）</p>
+        <p className="text-xs text-muted-foreground">引き受けた仕事（台帳）</p>
         <p>{renderTallyLine(journal.commitments)}</p>
       </div>
       <div>
-        <p className="text-xs text-muted">委譲（マネージャー）</p>
+        <p className="text-xs text-muted-foreground">委譲（マネージャー）</p>
         <p>{renderTallyLine(journal.jobs)}</p>
       </div>
       <p className="text-xs text-warn">
@@ -157,7 +157,7 @@ function WorkKindCard({ journal }: { journal: AppraisalStats['journal'] }) {
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <WorkKindList title="引き受けた仕事" tallies={journal.byWorkKind.commitments} />
         <WorkKindList title="委譲" tallies={journal.byWorkKind.jobs} />
-        <p className="text-xs text-muted">
+        <p className="text-xs text-muted-foreground">
           ⚠️ {UNCLASSIFIED_WORK_KIND_LABEL_NOTE}は種類の1つではない（#1308 より前の評定行・
           種類を述べていない評定行）。どれかの種類へ寄せて読まないこと。
         </p>
@@ -175,7 +175,7 @@ function WorkKindList({
 }) {
   return (
     <div>
-      <p className="mb-1 text-xs text-muted">{title}</p>
+      <p className="mb-1 text-xs text-muted-foreground">{title}</p>
       {tallies.length === 0 ? (
         <Empty>（評定行が無い）</Empty>
       ) : (
@@ -242,7 +242,7 @@ function JobCoverageCard({ jobCoverage }: { jobCoverage: AppraisalStats['jobCove
           {jobCoverage.byStatus.map((row) => (
             <li key={row.status} className="flex flex-wrap items-center justify-between gap-2">
               <span>{jobStatusLabel(row.status)}</span>
-              <span className="text-xs text-muted">
+              <span className="text-xs text-muted-foreground">
                 終端 {row.total} 件（評定あり {row.appraised} / 評定なし {row.unappraised}）
               </span>
             </li>
@@ -252,7 +252,7 @@ function JobCoverageCard({ jobCoverage }: { jobCoverage: AppraisalStats['jobCove
           合計: 終端した委譲 {jobCoverage.terminalTotal} 件中、評定なしが{' '}
           {jobCoverage.terminalUnappraised} 件（評定あり {jobCoverage.terminalAppraised} 件）。
         </p>
-        <p className="text-xs text-muted">
+        <p className="text-xs text-muted-foreground">
           （参考・この集計の対象外: running/waiting_human で終端していない委譲が{' '}
           {jobCoverage.nonTerminalTotal} 件。まだ続きうるので「評定が無い」を欠落として
           数えていない）
@@ -297,7 +297,9 @@ function ReconciliationCard({
       <div className="flex flex-col gap-4 px-4 py-3 text-sm">
         <ReconciliationAxis title="引き受けた仕事" reconciliation={reconciliation.commitments} />
         <ReconciliationAxis title="委譲" reconciliation={reconciliation.jobs} />
-        <p className="text-xs text-muted">⚠️ 上の2つも別の軸である。混ぜて比べないこと。</p>
+        <p className="text-xs text-muted-foreground">
+          ⚠️ 上の2つも別の軸である。混ぜて比べないこと。
+        </p>
       </div>
     </Card>
   );
@@ -312,7 +314,7 @@ function ReconciliationAxis({
 }) {
   return (
     <div>
-      <p className="mb-1 text-xs text-muted">{title}</p>
+      <p className="mb-1 text-xs text-muted-foreground">{title}</p>
       {reconciliation.totalPairs === 0 ? (
         <Empty>（クローンが付けた評定を人間が付け直した対は無い）</Empty>
       ) : (
@@ -337,7 +339,7 @@ function ReconciliationAxis({
         ではない——AGENTS.md「取れない軸に 0 の行を作る」の裏返し。ここは逆に、
         0件という実測値を「測っていない」と読ませないために毎回出す）。
       */}
-      <p className="mt-1 text-xs text-muted">
+      <p className="mt-1 text-xs text-muted-foreground">
         ⚠️ 判定できない（id または「誰が付けたか」が復元できなかった）評定行:{' '}
         {reconciliation.undetermined} 件（0件は「無かった」であって「測っていない」ではない）。
       </p>

@@ -4,6 +4,8 @@ node_modules
 # apps/web の生成物（react-router の出力と typegen）
 **/build
 **/.react-router
+# packages/ui の見本帳（`storybook build`）の出力
+**/storybook-static
 .git
 .github
 .idea

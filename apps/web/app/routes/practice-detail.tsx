@@ -122,10 +122,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
     <Page
       title={
         <span className="flex items-center gap-2">
-          <Link to="/practices" className="text-muted hover:text-fg">
+          <Link to="/practices" className="text-muted-foreground hover:text-foreground">
             やり方
           </Link>
-          <span className="text-muted">/</span>
+          <span className="text-muted-foreground">/</span>
           <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }
@@ -199,7 +199,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
             しても消えない（`memory-detail.tsx` と同じ作法）。
           */}
           <Tabs.Content value="preview" className="min-h-0 flex-1 overflow-y-auto">
-            <p className="mb-2 text-xs text-muted">
+            <p className="mb-2 text-xs text-muted-foreground">
               <span className="mr-1.5 text-[10px]">[{kind || '（種類未設定）'}]</span>
               {title}
             </p>
@@ -207,11 +207,11 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
           </Tabs.Content>
 
           <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col gap-3">
-            <p className="shrink-0 text-xs text-muted">
+            <p className="shrink-0 text-xs text-muted-foreground">
               ここで書き換えたものは日誌に残る（人間が API/画面から操作したと分かる形で）。
               種類（kind）は自由文字列——一覧の固定リストから選ぶのではない。
             </p>
-            <label className="shrink-0 text-xs text-muted">
+            <label className="shrink-0 text-xs text-muted-foreground">
               種類（kind）
               <Input
                 className="mt-1"
@@ -220,7 +220,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 onChange={(event) => setDraftKind(event.target.value)}
               />
             </label>
-            <label className="shrink-0 text-xs text-muted">
+            <label className="shrink-0 text-xs text-muted-foreground">
               題（title）
               <Input
                 className="mt-1"
@@ -229,7 +229,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 onChange={(event) => setDraftTitle(event.target.value)}
               />
             </label>
-            <label className="flex min-h-0 flex-1 flex-col text-xs text-muted">
+            <label className="flex min-h-0 flex-1 flex-col text-xs text-muted-foreground">
               本文（content）
               <Textarea
                 className="mt-1 min-h-[50vh] flex-1 font-mono text-xs leading-relaxed"
@@ -248,7 +248,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
 
           <Tabs.Content value="history" className="flex min-h-0 flex-1 gap-4 overflow-y-auto">
             <div className="w-64 shrink-0 overflow-y-auto border-r border-border pr-3">
-              <p className="mb-2 text-xs text-muted">
+              <p className="mb-2 text-xs text-muted-foreground">
                 write のたびに版が1つ増える。remove しても版は消えない（#1309）。
               </p>
               {historyError !== undefined ? (
@@ -261,7 +261,9 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               ) : history === undefined ? (
                 <Spinner />
               ) : historyVersions.length === 0 ? (
-                <p className="text-xs text-muted">まだ版が無い（一度も書かれていない）。</p>
+                <p className="text-xs text-muted-foreground">
+                  まだ版が無い（一度も書かれていない）。
+                </p>
               ) : (
                 <ul className="flex flex-col gap-1">
                   {[...historyVersions].reverse().map((v) => (
@@ -269,15 +271,15 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                       <button
                         type="button"
                         className={cn(
-                          'w-full rounded px-2 py-1 text-left text-xs hover:bg-surface-2',
-                          historyVersion === v.version && 'bg-surface-2 font-medium',
+                          'w-full rounded px-2 py-1 text-left text-xs hover:bg-muted',
+                          historyVersion === v.version && 'bg-muted font-medium',
                         )}
                         onClick={() => setHistoryVersion(v.version)}
                       >
                         <span className="mr-1.5 font-mono">版{v.version}</span>
-                        <span className="mr-1.5 text-[10px] text-muted">[{v.kind}]</span>
+                        <span className="mr-1.5 text-[10px] text-muted-foreground">[{v.kind}]</span>
                         <span>{v.title}</span>
-                        <span className="block text-[10px] text-muted">
+                        <span className="block text-[10px] text-muted-foreground">
                           {formatDateTime(v.at)} · {v.chars} 文字
                         </span>
                       </button>
@@ -288,7 +290,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
             </div>
             <div className="min-w-0 flex-1 overflow-y-auto">
               {historyVersion === undefined ? (
-                <p className="text-xs text-muted">
+                <p className="text-xs text-muted-foreground">
                   左の一覧から版を選ぶと、本文をここに読み取り専用で出す。
                 </p>
               ) : historyDetailError !== undefined ? (
@@ -299,7 +301,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 <Spinner />
               ) : (
                 <>
-                  <p className="mb-2 text-xs text-muted">
+                  <p className="mb-2 text-xs text-muted-foreground">
                     版{historyDetail.version.version}（{historyDetail.version.kind}）
                     {historyDetail.version.title} · {formatDateTime(historyDetail.version.at)}
                   </p>

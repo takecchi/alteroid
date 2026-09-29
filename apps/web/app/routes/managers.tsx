@@ -226,7 +226,7 @@ export function ManagerFailureNote({
   // 古いターンを指す。
   if (lastFoldedTurn !== undefined) return null;
   return (
-    <p className="mt-1 text-[11px] text-danger">
+    <p className="mt-1 text-[11px] text-destructive">
       ⚠ 直近のターンは報告ではなく失敗で終わっている: {failure.code}（{failure.via}）。
       {terminalFailureNote(status) ??
         'セッションは生きているので、原因が解ければ話しかければ続く。'}
@@ -328,7 +328,7 @@ export function ManagerFailureNote({
  */
 export function ManagerRunnerLostNote({
   runnerLostSince,
-  className = 'mt-1 text-[11px] text-danger',
+  className = 'mt-1 text-[11px] text-destructive',
 }: {
   runnerLostSince: string | undefined;
   className?: string;
@@ -359,7 +359,7 @@ export function ManagerRunnerLostNote({
  */
 export function ManagerRunnerVanishedNote({
   runnerVanished,
-  className = 'mt-1 text-[11px] text-danger',
+  className = 'mt-1 text-[11px] text-destructive',
 }: {
   runnerVanished: boolean | undefined;
   className?: string;
@@ -396,7 +396,7 @@ export function ManagerRunnerVanishedNote({
  * `ManagerSummary.sessionMissingSince` / `sendFailureDetail` の doc）。読み手が (1) と
  * 決めつけると**完遂済みの仕事を委譲し直す**ので、この幅を潰さない。
  *
- * **`text-danger` ではなく `text-warn` にしてある。** `lost`（戻れなかったことを
+ * **`text-destructive` ではなく `text-warn` にしてある。** `lost`（戻れなかったことを
  * 確かめた事実）と `lastFailure`（SDK が応答ではないと言った事実）は danger だが、
  * ここは「失われたとは言えない」ことのほうが主張なので、色で言い切らない。
  *
@@ -468,7 +468,7 @@ export function ManagerRunnerVanishedNote({
  */
 export function ManagerAwaitingBackgroundNote({
   awaitingBackground,
-  className = 'mt-1 text-[11px] text-muted',
+  className = 'mt-1 text-[11px] text-muted-foreground',
 }: {
   awaitingBackground: ManagerSummary['awaitingBackground'];
   className?: string;
@@ -661,8 +661,8 @@ export default function Managers() {
             className={cn(
               'rounded border px-2 py-1 text-[11px] transition-colors',
               selected.includes(status)
-                ? 'border-accent bg-accent/15 text-accent'
-                : 'border-border text-muted hover:text-fg',
+                ? 'border-primary bg-primary/15 text-primary'
+                : 'border-border text-muted-foreground hover:text-foreground',
             )}
           >
             {STATUS[status].label}
@@ -672,7 +672,7 @@ export default function Managers() {
           <button
             type="button"
             onClick={clearSelected}
-            className="ml-1 text-[11px] text-muted underline hover:text-fg"
+            className="ml-1 text-[11px] text-muted-foreground underline hover:text-foreground"
           >
             解除
           </button>
@@ -716,7 +716,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
               <li key={manager.managerId} className="border-b border-border last:border-b-0">
                 <Link
                   to={`/managers/${manager.managerId}`}
-                  className="flex items-start gap-3 px-4 py-3 hover:bg-surface-2"
+                  className="flex items-start gap-3 px-4 py-3 hover:bg-muted"
                 >
                   <div className="mt-0.5 shrink-0">
                     <ManagerStatusBadge status={manager.status} />
@@ -724,7 +724,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                   <div className="min-w-0 flex-1">
                     {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                     <p className="truncate text-sm">{manager.request}</p>
-                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted">
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                       {manager.cwd}
                     </p>
                     {manager.waiting.length > 0 && (
@@ -784,12 +784,12 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                       同じ状態を見て人間とクローンが違う判断をすることになる。
                     */}
                     {manager.status === 'lost' && (
-                      <p className="mt-1 text-[11px] text-danger">
+                      <p className="mt-1 text-[11px] text-destructive">
                         前のセッションへ戻れなかっただけで、成果が残っているかは見ていない。起こし直す前にリモート（PR・ブランチ）を確かめること。
                       </p>
                     )}
                   </div>
-                  <div className="shrink-0 text-right text-[11px] text-muted">
+                  <div className="shrink-0 text-right text-[11px] text-muted-foreground">
                     <p>{formatRelative(manager.updatedAt)}</p>
                     {/*
                       `live` はデーモンが今この瞬間その runner と繋がっているか。
@@ -806,7 +806,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                     {manager.live ? (
                       <p className="text-ok">接続あり</p>
                     ) : (
-                      <p className="text-danger">セッション切断</p>
+                      <p className="text-destructive">セッション切断</p>
                     )}
                   </div>
                 </Link>
@@ -829,13 +829,13 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
               type="button"
               onClick={loadOlder}
               disabled={isLoadingOlder}
-              className="w-full rounded-md border border-border py-2 text-sm text-muted hover:text-fg disabled:opacity-60"
+              className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
             >
               {isLoadingOlder ? '読み込み中…' : `もっと見る（いま ${managers.length} 件）`}
             </button>
           )}
           {olderStatus === 'end' && (
-            <p className="py-2 text-center text-xs text-muted">
+            <p className="py-2 text-center text-xs text-muted-foreground">
               これより古い委譲は無い（全 {managers.length} 件）。
             </p>
           )}
@@ -849,7 +849,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
           {olderStatus === 'blocked' && (
             <div>
               <ErrorNote error={olderError} className="mb-2" />
-              <p className="mb-2 text-xs text-muted">
+              <p className="mb-2 text-xs text-muted-foreground">
                 これより古い委譲へ自動では進めない（いま {managers.length}{' '}
                 件。全部読み終えたのではない）。読んでいる間にその委譲の状態が動いて、絞りの外へ出た場合に起きる。もう一度押すか、絞りを変えて先頭から読み直すこと。
               </p>
@@ -857,7 +857,7 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                 type="button"
                 onClick={loadOlder}
                 disabled={isLoadingOlder}
-                className="w-full rounded-md border border-border py-2 text-sm text-muted hover:text-fg disabled:opacity-60"
+                className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
               >
                 {isLoadingOlder ? '読み込み中…' : 'もう一度試す'}
               </button>

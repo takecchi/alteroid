@@ -44,6 +44,7 @@ import {
   RunnerMcpServersUnsupportedError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
+  RESET_CONFIRM_GROUPS,
   recentDroppedTraces,
   summarizeInboxBacklog,
   UnreadableTokenSettingsError,
@@ -4934,6 +4935,51 @@ describe('POST /reset の日誌追記が落ちたとき（Issue #2037）', () =>
       expect(dropped).toHaveLength(1);
     },
   );
+});
+
+/**
+ * ⭐ **issue #2224。`POST /reset` の OpenAPI description が「仕事のやり方」を
+ * 含まなくなっていた**（#2199 は CLI・Web の確認の文だけ直し、ここは3か所目
+ * として見つかった）。いまは description を `describeResetTargets()`
+ * （`@alteroid/core`。出所は `RESET_CONFIRM_GROUPS`）から組み立てる——`POST
+ * /schedule` の `RESERVED_SCHEDULE_KINDS` と同じ族の歯（#701 / #756）。
+ *
+ * ## この歯が測っていないこと
+ *
+ * - **`RESET_CONFIRM_GROUPS` の keys が `WorkspaceResetSummary` の全キーを
+ *   覆っているかは測っていない**（そちらは
+ *   `packages/core/src/workspace-reset.test.ts` が持つ）。ここが測るのは
+ *   「description が `RESET_CONFIRM_GROUPS` の全ラベルを字面として持つか」
+ *   だけである
+ * - `apps/daemon/openapi.json`（焼かれた生成物）そのものは見ていない。
+ *   生成物が最新であることは門の
+ *   `git diff --exit-code HEAD -- apps/daemon/openapi.json` が守る
+ */
+describe('POST /reset の description（issue #2224）', () => {
+  it('description が RESET_CONFIRM_GROUPS の全ラベルを字面として持つ', async () => {
+    const spec = (await (await app.request('/openapi.json')).json()) as {
+      paths: Record<string, { post?: { description?: string } }>;
+    };
+    const description = spec.paths['/reset']?.post?.description ?? '';
+    expect(description, 'POST /reset の description が取れない').not.toBe('');
+
+    const missing = RESET_CONFIRM_GROUPS.map((group) => group.label).filter(
+      (label) => !description.includes(label),
+    );
+    expect(
+      missing,
+      `【赤の意味】RESET_CONFIRM_GROUPS に在るラベルが、POST /reset の OpenAPI ` +
+        `description に現れていない: ${missing.join(' / ')}\n` +
+        'ラベルを足したが、HTTP の面の description がその値を含んでいない。' +
+        '説明文を出所（describeResetTargets）から導出しているか確かめること' +
+        '（この description は openapi.json へ焼かれる）。',
+    ).toEqual([]);
+
+    // 残す3ストア（トークン・環境変数・ログイン）に触れないことと、取り消せ
+    // ないことは、CONFIRM_GROUPS の一覧の外にある固定文言なので別に見る。
+    expect(description).toContain('認証トークンのプール・マネージャーへ降ろす環境変数・Web UI の');
+    expect(description).toContain('取り消せない');
+  });
 });
 
 /**

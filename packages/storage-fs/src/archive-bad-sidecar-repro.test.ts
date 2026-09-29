@@ -1,4 +1,4 @@
-import { readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { captureStderr } from '@alteroid/core';
@@ -108,5 +108,96 @@ describe('FsTranscriptArchive.list — 1本の壊れた sidecar で全体を落�
 
     expect(entries.map((entry) => entry.id).sort()).toEqual([first.id, second.id].sort());
     expect(stderr).toBe('');
+  });
+});
+
+/**
+ * issue #2231（許可の記録の #2191 と同じ形）。`list()` / `sessions()` は呼ぶたびに
+ * 全行の sidecar を読み直すので、壊れた1本の跡を毎回出すと、直るまで呼び出しの
+ * 回数だけ同じ行が積もる。**1本につき1回**に絞り、直した後にまた壊れたら
+ * 知らせ直すことを固定する。
+ */
+describe('FsTranscriptArchive — 壊れた sidecar の跡は1本につき1回（issue #2231）', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await makeTempDir('alteroid-test-');
+  });
+
+  async function sidecarOf(id: string, suffix: string): Promise<string> {
+    for (const entry of await readdir(root, { withFileTypes: true, recursive: true })) {
+      if (entry.isFile() && entry.name.endsWith(suffix) && entry.name.includes(id)) {
+        return join(entry.parentPath, entry.name);
+      }
+    }
+    throw new Error(`${suffix} が見つからない`);
+  }
+
+  async function stderrOfListing(stores: ReturnType<typeof createFsStores>): Promise<string[]> {
+    return captureStderr(async () => {
+      await stores.archive.list();
+    });
+  }
+
+  it('壊れた .meta.json は、list() を3回呼んでも跡は1回だけ', async () => {
+    const stores = createFsStores(root);
+    const first = await stores.archive.archive('session-a', 'transcript one');
+    await writeFile(await sidecarOf(first.id, '.meta.json'), '{not json');
+
+    const lines = [
+      ...(await stderrOfListing(stores)),
+      ...(await stderrOfListing(stores)),
+      ...(await stderrOfListing(stores)),
+    ];
+
+    expect(lines.filter((line) => line.includes('.meta.json'))).toHaveLength(1);
+  });
+
+  it('壊れた .removed は、list() を3回呼んでも跡は1回だけ', async () => {
+    const stores = createFsStores(root);
+    const first = await stores.archive.archive('session-a', 'transcript one');
+    await captureStderr(async () => {
+      await stores.archive.remove(first.id);
+    });
+    await writeFile(await sidecarOf(first.id, '.removed'), '{"removedAt": ');
+
+    const lines = [
+      ...(await stderrOfListing(stores)),
+      ...(await stderrOfListing(stores)),
+      ...(await stderrOfListing(stores)),
+    ];
+
+    expect(lines.filter((line) => line.includes('.removed'))).toHaveLength(1);
+  });
+
+  it('直してからまた壊すと、もう一度だけ知らせる', async () => {
+    const stores = createFsStores(root);
+    const first = await stores.archive.archive('session-a', 'transcript one');
+    const meta = await sidecarOf(first.id, '.meta.json');
+    const good = await readFile(meta, 'utf8');
+
+    await writeFile(meta, '{not json');
+    const broken1 = await stderrOfListing(stores);
+    await writeFile(meta, good);
+    const repaired = await stderrOfListing(stores);
+    await writeFile(meta, '{still not json');
+    const broken2 = await stderrOfListing(stores);
+
+    expect(broken1.filter((line) => line.includes('.meta.json'))).toHaveLength(1);
+    expect(repaired).toEqual([]);
+    expect(broken2.filter((line) => line.includes('.meta.json'))).toHaveLength(1);
+  });
+
+  it('壊れた .removed の id を read() で名指しすれば、何度でも投げる（黙らせない）', async () => {
+    const stores = createFsStores(root);
+    const first = await stores.archive.archive('session-a', 'transcript one');
+    await captureStderr(async () => {
+      await stores.archive.remove(first.id);
+    });
+    await writeFile(await sidecarOf(first.id, '.removed'), '{"removedAt": ');
+    await stderrOfListing(stores);
+
+    await expect(stores.archive.read(first.id)).rejects.toThrow(/\.removed/);
+    await expect(stores.archive.read(first.id)).rejects.toThrow(/\.removed/);
   });
 });

@@ -7,7 +7,7 @@ export default function NotFound() {
     <Page title="404" description="そんな画面は無い">
       <Card>
         <Empty>
-          <Link to="/" className="text-accent hover:underline">
+          <Link to="/" className="text-primary hover:underline">
             ダッシュボードへ戻る
           </Link>
         </Empty>

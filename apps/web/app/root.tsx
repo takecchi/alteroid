@@ -23,7 +23,11 @@ export function meta() {
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
-    <html lang="ja">
+    /*
+      既定は暗い側（`@alteroid/ui` の `styles.css` の `.dark`）。クローンは常駐して動き続ける
+      もので、画面は長時間開けたままになる。
+    */
+    <html lang="ja" className="dark">
       <head>
         <meta charSet="utf-8" />
         {/*
@@ -64,12 +68,12 @@ export function ErrorBoundary({ error }: { error: unknown }) {
 
   return (
     <main className="mx-auto max-w-2xl p-8">
-      <h1 className="text-lg font-semibold text-danger">{title}</h1>
+      <h1 className="text-lg font-semibold text-destructive">{title}</h1>
       {/*
         スタックまで出すのは、これが作者ひとりの道具だからである。隠すと
         「動かない」以上のことが分からなくなり、掘る先が無くなる。
       */}
-      <pre className="mt-4 overflow-auto rounded-md border border-border bg-surface p-3 text-xs text-muted">
+      <pre className="mt-4 overflow-auto rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
         {String(detail)}
       </pre>
     </main>

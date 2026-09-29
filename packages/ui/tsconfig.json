@@ -1,12 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src", "vitest.config.ts"],
+  "include": ["src", ".storybook/**/*.ts", ".storybook/**/*.tsx", "vitest.config.ts"],
   "compilerOptions": {
     // apps/web と同じ世界（Vite が束ねるブラウザ向けのソース）で書かれているので、
     // base（Node 前提・NodeNext・ES2023 のみ）を apps/web/tsconfig.json と同じ形に上書きする。
     // このパッケージは build を持たず、ソースのまま apps/web の Vite に読ませる。
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",

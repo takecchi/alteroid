@@ -125,10 +125,10 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
     <Page
       title={
         <span className="flex items-center gap-2">
-          <Link to="/managers" className="text-muted hover:text-fg">
+          <Link to="/managers" className="text-muted-foreground hover:text-foreground">
             マネージャー
           </Link>
-          <span className="text-muted">/</span>
+          <span className="text-muted-foreground">/</span>
           <span className="font-mono text-sm">{id}</span>
         </span>
       }
@@ -209,7 +209,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                 // PR #2047 で在る。
                 <Link
                   to={usageHref({ managerId: id })}
-                  className="text-xs text-accent hover:underline"
+                  className="text-xs text-primary hover:underline"
                 >
                   使用量を見る
                 </Link>
@@ -231,7 +231,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               で打ち消し、2列表示の見た目は変えていない）。
             */}
             <dl className="grid grid-cols-1 gap-y-1.5 px-4 py-3 text-sm sm:grid-cols-[8rem_1fr]">
-              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">状態</dt>
+              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">状態</dt>
               <dd className="flex items-center gap-2">
                 <ManagerStatusBadge status={manager.status} />
                 {manager.live ? (
@@ -258,25 +258,25 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
                   <Badge tone="danger">⚠ 直近のターンは失敗で終わった</Badge>
                 )}
               </dd>
-              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">作業ディレクトリ</dt>
+              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">作業ディレクトリ</dt>
               <dd className="font-mono text-xs break-all">{manager.cwd}</dd>
-              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">作成</dt>
+              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">作成</dt>
               <dd>
                 {formatDateTime(manager.startedAt)}（{formatRelative(manager.startedAt)}）
               </dd>
-              <dt className="mt-3 text-muted first:mt-0 sm:mt-0">更新</dt>
+              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">更新</dt>
               <dd>
                 {formatDateTime(manager.updatedAt)}（{formatRelative(manager.updatedAt)}）
               </dd>
               {manager.runnerId !== undefined && manager.runnerId !== null && (
                 <>
-                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">runner</dt>
+                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">runner</dt>
                   <dd className="font-mono text-xs break-all">{manager.runnerId}</dd>
                 </>
               )}
               {manager.sessionId !== undefined && manager.sessionId !== null && (
                 <>
-                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">セッション</dt>
+                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">セッション</dt>
                   <dd className="font-mono text-xs break-all">{manager.sessionId}</dd>
                 </>
               )}
@@ -290,7 +290,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               */}
               {manager.lease !== undefined && manager.lease !== null && (
                 <>
-                  <dt className="mt-3 text-muted first:mt-0 sm:mt-0">貸し出し</dt>
+                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">貸し出し</dt>
                   <dd className="font-mono text-xs break-all">
                     {manager.lease.instanceId ?? 'プロセスは未名乗り'} / 世代 {manager.lease.fence}
                     （生存確認 {formatDateTime(manager.lease.seenAt)}）
@@ -314,11 +314,11 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             */}
             <ManagerRunnerLostNote
               runnerLostSince={manager.runnerLostSince}
-              className="border-t border-border px-4 py-3 text-xs text-danger"
+              className="border-t border-border px-4 py-3 text-xs text-destructive"
             />
             <ManagerRunnerVanishedNote
               runnerVanished={manager.runnerVanished}
-              className="border-t border-border px-4 py-3 text-xs text-danger"
+              className="border-t border-border px-4 py-3 text-xs text-destructive"
             />
             {/*
               **`DisconnectedNote` と排他ではない。** あちらは `live: false`
@@ -342,7 +342,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
             */}
             <ManagerAwaitingBackgroundNote
               awaitingBackground={manager.awaitingBackground}
-              className="border-t border-border px-4 py-3 text-xs text-muted"
+              className="border-t border-border px-4 py-3 text-xs text-muted-foreground"
             />
             <LostNote status={manager.status} />
             <FailureNote manager={manager} />
@@ -483,8 +483,8 @@ function AppraisalCard({ manager }: { manager: ManagerSummary }) {
               className={cn(
                 'rounded border px-1.5 py-0.5',
                 manager.appraisal === value
-                  ? 'border-fg text-fg'
-                  : 'border-border text-muted hover:text-fg',
+                  ? 'border-foreground text-foreground'
+                  : 'border-border text-muted-foreground hover:text-foreground',
               )}
               onClick={() => void submit(value)}
             >
@@ -492,9 +492,9 @@ function AppraisalCard({ manager }: { manager: ManagerSummary }) {
             </button>
           ))}
           {manager.appraisal === undefined ? (
-            <span className="text-muted">（まだ評定していない）</span>
+            <span className="text-muted-foreground">（まだ評定していない）</span>
           ) : (
-            <span className="text-muted">
+            <span className="text-muted-foreground">
               {manager.appraisedBy === undefined ? '' : `${manager.appraisedBy} が付けた`}
               {manager.workKind === undefined ? '' : `［種類: ${manager.workKind}］`}
               {manager.appraisalReason === undefined ? '' : `: ${manager.appraisalReason}`}
@@ -594,7 +594,7 @@ function RequestCard({ request }: { request: string }) {
 function DisconnectedNote({ live }: { live: boolean }) {
   if (live) return null;
   return (
-    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+    <p className="border-t border-border px-4 py-3 text-xs text-destructive">
       このデーモンは、このマネージャーの runner と
       <strong className="font-medium">繋がっていない</strong>
       。ここに出ているのは台帳に残っている最後の姿で、繋ぎ直るまで動かない。ただし
@@ -638,7 +638,7 @@ function DisconnectedNote({ live }: { live: boolean }) {
 function LostNote({ status }: { status: ManagerStatus }) {
   if (status !== 'lost') return null;
   return (
-    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+    <p className="border-t border-border px-4 py-3 text-xs text-destructive">
       前のセッションへ戻れなかった。
       <strong className="font-medium">戻れたかどうかしか見ていない</strong>
       ので、この仕事が終わっていたかどうかは分からない。落ちる直前に PR を出して CI
@@ -719,7 +719,7 @@ function FailureNote({ manager }: { manager: ManagerSummary }) {
   // Issue #1798 と同じ線（上の doc の「Issue #1882 / #1798」を見よ）。
   if (lastFoldedTurn !== undefined) return null;
   return (
-    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+    <p className="border-t border-border px-4 py-3 text-xs text-destructive">
       直近のターンは
       <strong className="font-medium">報告ではなく失敗で終わっている</strong>—{' '}
       <code className="font-mono">{failure.code}</code>（印の出どころ:{' '}
@@ -836,7 +836,7 @@ function LastReportBody({
     return <Markdown>{lastReport}</Markdown>;
   }
   return (
-    <pre className="overflow-x-auto rounded border border-border bg-bg p-2 text-[11px] break-words whitespace-pre-wrap text-muted">
+    <pre className="overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
       {lastReport}
     </pre>
   );
@@ -902,11 +902,11 @@ function DenialsCard({
           </li>
         ))}
       </ul>
-      <p className="border-t border-border px-4 py-3 text-xs text-muted">
+      <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
         止められた事実は数えているが、
         <strong className="font-medium">それでこの仕事が止まったかどうかは見ていない</strong>
         （デーモンに動きを見る手が無い）。全件は
-        <Link to="/journal" className="text-accent hover:underline">
+        <Link to="/journal" className="text-primary hover:underline">
           日誌
         </Link>
         に残っている。 この件数はデーモンのプロセス内にしかないので、
@@ -1044,7 +1044,7 @@ function ToolUseStallNote({ manager }: { manager: ManagerSummary }) {
 function UnreportedNote({ lastUnreported }: { lastUnreported: ManagerSummary['lastUnreported'] }) {
   if (lastUnreported === undefined) return null;
   return (
-    <p className="border-t border-border px-4 py-3 text-xs text-danger">
+    <p className="border-t border-border px-4 py-3 text-xs text-destructive">
       直近のターンは、<strong className="font-medium">result を受け取らないまま畳まれた</strong>（
       {formatDateTime(lastUnreported.at)}）。理由: {lastUnreported.reason}
     </p>
@@ -1066,12 +1066,14 @@ function FoldedTurnNote({ lastFoldedTurn }: { lastFoldedTurn: ManagerSummary['la
   if (lastFoldedTurn === undefined) return null;
   return (
     <div className="border-t border-border px-4 py-3 text-xs">
-      <p className="text-muted">
-        <strong className="font-medium text-danger">manager_stop で畳まれたターンの本文</strong>（
-        {formatDateTime(lastFoldedTurn.at)} 受信。<code className="font-mono">lastReport</code>
+      <p className="text-muted-foreground">
+        <strong className="font-medium text-destructive">
+          manager_stop で畳まれたターンの本文
+        </strong>
+        （{formatDateTime(lastFoldedTurn.at)} 受信。<code className="font-mono">lastReport</code>
         （完遂した報告）ではない）:
       </p>
-      <pre className="mt-1 overflow-x-auto rounded border border-border bg-bg p-2 text-[11px] break-words whitespace-pre-wrap text-muted">
+      <pre className="mt-1 overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
         {lastFoldedTurn.text}
       </pre>
     </div>
@@ -1105,7 +1107,7 @@ function cgroupEventsText(manager: ManagerSummary): string | null {
 function CgroupEventsNote({ manager }: { manager: ManagerSummary }) {
   const note = cgroupEventsText(manager);
   if (note === null) return null;
-  return <p className="border-t border-border px-4 py-3 text-xs text-muted">{note}</p>;
+  return <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{note}</p>;
 }
 
 /**
@@ -1142,7 +1144,7 @@ function systemErrorText(manager: ManagerSummary): string | null {
 function SystemErrorNote({ manager }: { manager: ManagerSummary }) {
   const note = systemErrorText(manager);
   if (note === null) return null;
-  return <p className="border-t border-border px-4 py-3 text-xs text-danger">⚠ {note}</p>;
+  return <p className="border-t border-border px-4 py-3 text-xs text-destructive">⚠ {note}</p>;
 }
 
 /**
@@ -1313,7 +1315,9 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
 function UnpushedWorkObservationNote({ manager }: { manager: ManagerSummary }) {
   const note = unpushedWorkText(manager);
   if (note === null) return null;
-  return <div className="border-t border-border px-4 py-3 text-xs text-muted">{note}</div>;
+  return (
+    <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{note}</div>
+  );
 }
 
 /**
@@ -1396,7 +1400,7 @@ function DiagnosticsCard({ manager }: { manager: ManagerSummary }) {
 function AskedAtNote({ askedAt }: { askedAt: string | undefined }) {
   if (askedAt === undefined) return null;
   return (
-    <p className="mt-1 text-xs text-muted">
+    <p className="mt-1 text-xs text-muted-foreground">
       {formatDateTime(askedAt)}（{formatRelative(askedAt)}）から
     </p>
   );
@@ -1519,7 +1523,7 @@ function QuestionWaitingRow({
           >
             送信
           </Button>
-          <span className="text-[11px] text-muted">⌘/Ctrl + Enter</span>
+          <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
         </div>
       </div>
       <ErrorNote error={failure} className="mt-2" />
@@ -1646,7 +1650,7 @@ function SendMessage({
       <CardHeader title="話しかける" subtitle="走行中のマネージャーに追加の指示を割り込ませる" />
       <div className="px-4 py-3">
         {noWayBack ? (
-          <p id={REASON_ID} className="mb-2 text-xs text-danger">
+          <p id={REASON_ID} className="mb-2 text-xs text-destructive">
             <strong className="font-medium">送れない</strong>—
             この仕事は戻る先（session_id）を持っておらず、送っても runner
             へは何も飛ばない。続きが要るなら
@@ -1654,7 +1658,7 @@ function SendMessage({
           </p>
         ) : (
           !live && (
-            <p className="mb-2 text-xs text-danger">
+            <p className="mb-2 text-xs text-destructive">
               この相手とは繋ぎ直せていないが、
               <strong className="font-medium">送信は止めていない</strong>—
               送ると引き取り（resume）を試み、戻れればそのまま届く。
@@ -1691,7 +1695,7 @@ function SendMessage({
             送る
           </Button>
         </div>
-        {outcome !== undefined && <p className="mt-2 text-xs text-muted">{outcome}</p>}
+        {outcome !== undefined && <p className="mt-2 text-xs text-muted-foreground">{outcome}</p>}
         <ErrorNote error={failure} className="mt-2" />
       </div>
     </Card>
@@ -1726,7 +1730,7 @@ function Transcript({ id }: { id: string }) {
           {isLoading ? (
             <Spinner />
           ) : (
-            <pre className="max-h-[32rem] overflow-auto rounded border border-border bg-bg p-2 text-[11px] text-muted">
+            <pre className="max-h-[32rem] overflow-auto rounded border border-border bg-background p-2 text-[11px] text-muted-foreground">
               {data === undefined || data === '' ? '(空)' : data}
             </pre>
           )}

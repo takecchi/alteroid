@@ -283,7 +283,7 @@ export default function Journal() {
         <div className="mb-3 flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
             <Search
-              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted"
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
               aria-hidden
             />
             <input
@@ -292,7 +292,7 @@ export default function Journal() {
               onChange={(event) => setDraft(event.target.value)}
               placeholder="本文を語で探す（大文字小文字を区別しない部分一致）"
               aria-label="日誌を語で探す"
-              className="w-full rounded border border-border bg-bg py-1.5 pr-2 pl-8 text-sm text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+              className="w-full rounded border border-border bg-background py-1.5 pr-2 pl-8 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
             />
           </div>
         </div>
@@ -304,7 +304,7 @@ export default function Journal() {
           ときの目印にならない（`memory_read` の注記と同じ倒し方）。
         */}
         {committed !== '' && (
-          <p className="mb-3 text-[11px] text-muted">
+          <p className="mb-3 text-[11px] text-muted-foreground">
             tool_use の input・worker_wait・turn_usage
             は探す対象に入っていない（そこにだけ書かれている語は当たらない）。
           </p>
@@ -318,8 +318,8 @@ export default function Journal() {
               className={cn(
                 'rounded border px-2 py-1 text-[11px] transition-colors',
                 selected.includes(type)
-                  ? 'border-accent bg-accent/15 text-accent'
-                  : 'border-border text-muted hover:text-fg',
+                  ? 'border-primary bg-primary/15 text-primary'
+                  : 'border-border text-muted-foreground hover:text-foreground',
               )}
             >
               {type}
@@ -329,7 +329,7 @@ export default function Journal() {
             <button
               type="button"
               onClick={clearSelected}
-              className="ml-1 text-[11px] text-muted underline hover:text-fg"
+              className="ml-1 text-[11px] text-muted-foreground underline hover:text-foreground"
             >
               解除
             </button>
@@ -476,13 +476,13 @@ function JournalBody({
               type="button"
               onClick={loadOlder}
               disabled={isLoadingOlder}
-              className="w-full rounded-md border border-border py-2 text-sm text-muted hover:text-fg disabled:opacity-60"
+              className="w-full rounded-md border border-border py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
             >
               {isLoadingOlder ? '読み込み中…' : `もっと遡る（いま ${entries.length} 件）`}
             </button>
           )}
           {olderStatus === 'end' && (
-            <p className="py-2 text-center text-xs text-muted">
+            <p className="py-2 text-center text-xs text-muted-foreground">
               これより古い記録は無い（全 {entries.length} 件）。
             </p>
           )}
@@ -495,7 +495,7 @@ function JournalBody({
             の中の、より詳しい断り）。
           */}
           {olderStatus === 'end' && horizonNote !== undefined && (
-            <p className="py-2 text-center text-xs text-muted">{horizonNote}</p>
+            <p className="py-2 text-center text-xs text-muted-foreground">{horizonNote}</p>
           )}
           {olderStatus === 'blocked' && (
             <BlockedNote>
@@ -541,15 +541,17 @@ function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean })
         onClick={() => setOpen((value) => !value)}
         className="flex w-full items-start gap-3 text-left"
       >
-        <span className="w-24 shrink-0 font-mono text-[11px] text-muted">
+        <span className="w-24 shrink-0 font-mono text-[11px] text-muted-foreground">
           {formatDateTime(entry.at)}
         </span>
         <Badge tone={TONE[entry.type]}>{entry.type}</Badge>
         {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-        <span className="min-w-0 flex-1 truncate text-sm text-muted">
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {summarizeJournalEntry(entry)}
         </span>
-        <span className="shrink-0 text-[11px] text-muted">{formatRelative(entry.at)}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {formatRelative(entry.at)}
+        </span>
       </button>
 
       {open && (
@@ -561,7 +563,7 @@ function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean })
           */}
           <JournalEntryLinks entry={entry} />
           {/* 掘れば生の中身まで降りられること（PRD 可観測性）。要約で止めない。 */}
-          <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-bg p-2 text-xs text-muted">
+          <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-background p-2 text-xs text-muted-foreground">
             {JSON.stringify(entry, null, 2)}
           </pre>
         </>

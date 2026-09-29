@@ -103,11 +103,13 @@ function AddTokenForm() {
       <CardHeader title="追加" subtitle="alteroid token add / PUT /tokens と同じもの" />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">ラベル（人間が読む名前。秘密ではない）</span>
+          <span className="text-xs text-muted-foreground">
+            ラベル（人間が読む名前。秘密ではない）
+          </span>
           <Input value={label} onChange={(event) => setLabel(event.target.value)} />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">値（claude setup-token の出力）</span>
+          <span className="text-xs text-muted-foreground">値（claude setup-token の出力）</span>
           <Input
             type="password"
             value={value}
@@ -156,7 +158,7 @@ function PoolAndSettings() {
     return (
       <Card>
         <CardHeader title="プール一覧・回転の設定" />
-        <div className="px-4 py-3 text-sm text-muted">
+        <div className="px-4 py-3 text-sm text-muted-foreground">
           この一覧は alteroid を使う許可があるアカウントだけが見られる（
           <code className="font-mono">alteroid token list</code>{' '}
           と同じ資格）。いま繋いでいるアカウントには、この許可が無い。
@@ -463,30 +465,30 @@ function TokenRow({
       className={cn(
         'border-b border-border px-4 py-3 last:border-b-0',
         // **控えめな強調。** 選択チップ（`journal.tsx` / `managers.tsx`）と
-        // 同じ `border-accent` + `bg-accent/15` の語彙を使うが、背景は薄めた
+        // 同じ `border-primary` + `bg-primary/15` の語彙を使うが、背景は薄めた
         // `/5` にする——行全体が長時間目に入り続けるので、チップより濃いと
         // 読みにくい。
-        highlighted && 'border-accent bg-accent/5',
+        highlighted && 'border-primary bg-primary/5',
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium break-all">{token.label}</span>
         <Badge tone={state.tone}>{state.label}</Badge>
-        <span className="text-xs text-muted">order {token.order}</span>
+        <span className="text-xs text-muted-foreground">order {token.order}</span>
       </div>
 
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted">指紋</dt>
+        <dt className="text-muted-foreground">指紋</dt>
         <dd className="font-mono break-all">{describeFingerprint(token)}</dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">作成</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">作成</dt>
         <dd>
           {token.createdAt === undefined
             ? '不明（先行バージョンで作られた行のため記録が無い。「いま作られた」とは埋めない）'
             : formatDateTime(token.createdAt)}
         </dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">最終更新</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">最終更新</dt>
         <dd>
           {token.updatedAt === undefined
             ? '不明（この行が実際に変わったことは無い）'
@@ -495,16 +497,16 @@ function TokenRow({
 
         {token.disabledAt !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">無効化</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">無効化</dt>
             <dd>{formatDateTime(token.disabledAt)}（人間が明示的に外した。戻らない）</dd>
           </>
         )}
 
         {token.invalidatedAt !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">失効</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">失効</dt>
             <dd>{formatDateTime(token.invalidatedAt)}</dd>
-            <dt className="mt-2 text-muted sm:mt-0">失効の理由（原文）</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">失効の理由（原文）</dt>
             <dd className="font-mono text-[11px] break-words whitespace-pre-wrap">
               {token.invalidatedReason ?? '（理由の記録が無い）'}
             </dd>
@@ -520,7 +522,7 @@ function TokenRow({
               この食い違いに気づけない。絶対時刻を主に、相対は括弧で添えるだけ
               にする。
             */}
-            <dt className="mt-2 text-muted sm:mt-0">冷却の期限</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">冷却の期限</dt>
             <dd>
               {formatEpochMs(token.cooldownUntil)}（{formatEpochMsRelative(token.cooldownUntil)}）
             </dd>
@@ -536,12 +538,12 @@ function TokenRow({
               対応していない」の両方を意味する**（`AGENTS.md` の地雷
               「取れない軸に 0 の行を作る」の裏返し）。
             */}
-            <dt className="mt-2 text-muted sm:mt-0">期限の出所</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">期限の出所</dt>
             <dd>{describeCooldownSource(token.cooldownSource)}</dd>
           </>
         )}
 
-        <dt className="mt-2 text-muted sm:mt-0">断られた記録</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">断られた記録</dt>
         <dd>
           {!rejected ? (
             '断られた記録が無い'
@@ -557,7 +559,7 @@ function TokenRow({
                 </span>
               )}
               {token.recovery !== undefined && (
-                <span className="text-muted">{describeRecovery(token.recovery)}</span>
+                <span className="text-muted-foreground">{describeRecovery(token.recovery)}</span>
               )}
             </div>
           )}
@@ -671,17 +673,17 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
         subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
       />
       <dl className="grid grid-cols-1 gap-y-1 px-4 py-3 text-sm sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted">回す契機</dt>
+        <dt className="text-muted-foreground">回す契機</dt>
         <dd>{describeRotateOn(settings.rotateOn)}</dd>
 
-        <dt className="mt-2 text-muted sm:mt-0">冷却の既定</dt>
+        <dt className="mt-2 text-muted-foreground sm:mt-0">冷却の既定</dt>
         <dd>
           {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
             maximumFractionDigits: 2,
           })}
           時間（{settings.cooldownMs.toLocaleString('en-US')} ミリ秒）。
           <br />
-          <span className="text-xs text-muted">
+          <span className="text-xs text-muted-foreground">
             `resetsAt` が取れなかったときだけ使うフォールバック。権威ある期限は行ごとの
             「冷却の期限」のほう。
           </span>
@@ -689,7 +691,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 
         {settings.updatedAt !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">最終変更</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">最終変更</dt>
             <dd>{formatDateTime(settings.updatedAt)}</dd>
           </>
         )}
@@ -697,7 +699,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
 
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">回す契機を変える</span>
+          <span className="text-xs text-muted-foreground">回す契機を変える</span>
           <Select
             value={rotateOn}
             onChange={(event) =>
@@ -712,7 +714,7 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
           </Select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">冷却の既定を変える（ミリ秒）</span>
+          <span className="text-xs text-muted-foreground">冷却の既定を変える（ミリ秒）</span>
           <Input
             type="number"
             value={cooldownMsText}
@@ -801,16 +803,16 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
         title="回転の設定"
         subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
       />
-      <div className="px-4 py-3 text-sm text-muted">
+      <div className="px-4 py-3 text-sm text-muted-foreground">
         回転の設定は読めない（消えたのではなく、読めない形で入っている）: {reason}
       </div>
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
-        <p className="text-xs text-muted">
+        <p className="text-xs text-muted-foreground">
           直すには、回す契機と冷却の既定の両方を選び直して保存する（片方だけでは保存できない ——
           読めない現在値は、両方揃った入力でしか上書きできない）。
         </p>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">回す契機を選ぶ</span>
+          <span className="text-xs text-muted-foreground">回す契機を選ぶ</span>
           <Select
             value={rotateOnDraft ?? ''}
             onChange={(event) =>
@@ -832,7 +834,7 @@ function UnreadableSettingsCard({ reason }: { reason: string }) {
           </Select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted">冷却の既定を選ぶ（ミリ秒）</span>
+          <span className="text-xs text-muted-foreground">冷却の既定を選ぶ（ミリ秒）</span>
           <Input
             type="number"
             value={cooldownMsText}
@@ -1030,7 +1032,7 @@ function RotationHistory() {
         切り捨てない。
       */}
       {entries.length === JOURNAL_LIMIT && (
-        <p className="border-t border-border px-4 py-2 text-[11px] text-muted">
+        <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
           直近 {JOURNAL_LIMIT} 件のみ表示している。これより古い記録は日誌の画面（種別:
           token_rotation で絞り込み）で確認する。
         </p>
@@ -1048,12 +1050,14 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
     <li className="border-b border-border px-4 py-3 last:border-b-0">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={event.tone}>{event.label}</Badge>
-        <span className="text-xs text-muted">{formatDateTime(entry.at)}</span>
+        <span className="text-xs text-muted-foreground">{formatDateTime(entry.at)}</span>
         {entry.signal !== undefined && (
-          <span className="text-xs text-muted">契機: {entry.signal}</span>
+          <span className="text-xs text-muted-foreground">契機: {entry.signal}</span>
         )}
         {entry.freshness !== undefined && (
-          <span className="text-xs text-muted">{describeFreshness(entry.freshness)}</span>
+          <span className="text-xs text-muted-foreground">
+            {describeFreshness(entry.freshness)}
+          </span>
         )}
         {/*
           **`signal` とは別の欄である**（`schema.ts` の `reason` の doc）。
@@ -1066,7 +1070,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
           実際に増えている。{@link describeUnknown} の doc）。
         */}
         {entry.reason !== undefined && (
-          <span className="text-xs text-muted">見直しの契機: {entry.reason}</span>
+          <span className="text-xs text-muted-foreground">見直しの契機: {entry.reason}</span>
         )}
         {/*
           **`recovered` の行にだけ付く**（#681 (1)）。無い回は「観測していない」
@@ -1074,7 +1078,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
           `recoveredSource` の doc。#683 の `cooldownSource` と同じ規律）。
         */}
         {entry.recoveredSource !== undefined && (
-          <span className="text-xs text-muted">
+          <span className="text-xs text-muted-foreground">
             {describeRecoveredSource(entry.recoveredSource)}
           </span>
         )}
@@ -1086,25 +1090,25 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[8rem_1fr]">
         {entry.label !== undefined && (
           <>
-            <dt className="text-muted">ラベル</dt>
+            <dt className="text-muted-foreground">ラベル</dt>
             <dd>{entry.label}</dd>
           </>
         )}
         {entry.tokenId !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">移った先/撒いた先 id</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">移った先/撒いた先 id</dt>
             <dd className="font-mono break-all">{entry.tokenId}</dd>
           </>
         )}
         {entry.fromTokenId !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">降りた側 id</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">降りた側 id</dt>
             <dd className="font-mono break-all">{entry.fromTokenId}</dd>
           </>
         )}
         {entry.generation !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">世代</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">世代</dt>
             <dd>{entry.generation}</dd>
           </>
         )}
@@ -1116,7 +1120,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
               `parked` はまさにその候補を撒いた回だからである）。⟹ 見出しは
               どちらでも読める言い方にしてある。
             */}
-            <dt className="mt-2 text-muted sm:mt-0">最速の復帰見込み</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">最速の復帰見込み</dt>
             <dd>{formatDateTime(entry.earliestAt)}</dd>
           </>
         )}
@@ -1125,7 +1129,7 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
       {entry.noticeText !== undefined && (
         // **当たった文言は言い換えずそのまま。** `text` の中にも出るが、整形が
         // 変わっても原文はこちらに残る（受け入れ基準8）。
-        <p className="mt-2 font-mono text-[11px] break-words whitespace-pre-wrap text-muted">
+        <p className="mt-2 font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
           {entry.noticeText}
         </p>
       )}

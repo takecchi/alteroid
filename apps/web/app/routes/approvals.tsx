@@ -130,8 +130,8 @@ export default function Approvals() {
       <ErrorNote error={error} className="mb-4" />
 
       {unansweredIds.size > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-border bg-surface px-3 py-2">
-          <span className="text-sm text-muted">
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-3 py-2">
+          <span className="text-sm text-muted-foreground">
             {pendingDrafts.length === 0
               ? 'まとめて送る答えはまだ書かれていない（各カードに書くとここに数が出る）'
               : `${pendingDrafts.length} 件に答えを書いた（送るとまとめて1回で届く）`}
@@ -231,7 +231,7 @@ function ApprovalCard({
         自分で不要と判断した終端で、混同すると「答えたのに何も起きて
         いない」ように見える。
       */}
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <Badge tone={withdrawn ? 'accent' : answered ? 'neutral' : 'warn'}>
           {withdrawn ? '取り下げ済' : answered ? '回答済' : '未回答'}
         </Badge>
@@ -280,7 +280,7 @@ function ApprovalCard({
           （`markdown.tsx` の `table` / `pre` が横スクロールを持つ）。`text-xs` は
           落とす — `Markdown` のルートが `text-sm` を持つので、外から掛けても効かない。
         */
-        <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded border border-border bg-bg p-2 text-muted">
+        <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded border border-border bg-background p-2 text-muted-foreground">
           <Markdown>{approval.context}</Markdown>
         </div>
       )}
@@ -293,8 +293,8 @@ function ApprovalCard({
           `answer`（人間の発言）と同じ枠に置くので素のテキストのままにする
           （Markdown にするかどうかで枠の意味を変えない）。
         */
-        <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words whitespace-pre-wrap">
-          <span className="mr-2 text-[11px] text-muted">取り下げた理由</span>
+        <p className="mt-3 rounded border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
+          <span className="mr-2 text-[11px] text-muted-foreground">取り下げた理由</span>
           {approval.withdrawnReason ?? '（理由の記録なし）'}
         </p>
       ) : answered ? (
@@ -317,8 +317,8 @@ function ApprovalCard({
           `context` には効いていたのに `answer` だけ無いという見落としである）。
         */
         <>
-          <p className="mt-3 rounded border border-border bg-bg p-2 text-sm break-words whitespace-pre-wrap">
-            <span className="mr-2 text-[11px] text-muted">回答</span>
+          <p className="mt-3 rounded border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
+            <span className="mr-2 text-[11px] text-muted-foreground">回答</span>
             {approval.answer}
           </p>
           {/*
@@ -334,7 +334,7 @@ function ApprovalCard({
             issue #1528 でこちらも正本を1つに揃えた）。
           */}
           {approval.answeredVia && (
-            <p className="mt-1 text-[11px] text-muted">
+            <p className="mt-1 text-[11px] text-muted-foreground">
               回答経路: {describeAnsweredVia(approval.answeredVia)}
             </p>
           )}
@@ -375,7 +375,7 @@ function ApprovalCard({
             <Button size="sm" disabled={busy} onClick={() => void submit('いいえ、やらないで')}>
               却下
             </Button>
-            <span className="text-[11px] text-muted">⌘/Ctrl + Enter</span>
+            <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
           </div>
         </div>
       )}
@@ -398,7 +398,7 @@ function ApprovalCard({
       */}
       <div className="mt-3 border-t border-border pt-3">
         {approval.conversationId === undefined || approval.conversationId === null ? (
-          <p className="text-[11px] text-muted italic">
+          <p className="text-[11px] text-muted-foreground italic">
             この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
           </p>
         ) : (
@@ -435,7 +435,7 @@ function TracePanel({ approvalId }: { approvalId: string }) {
   if (data === undefined) return null;
   if (data.state !== 'paired') {
     return (
-      <p className="mt-2 text-[11px] text-muted italic">
+      <p className="mt-2 text-[11px] text-muted-foreground italic">
         {TRACE_MISSING[data.state] ?? `対が無い（${data.state}）`}
         {data.truncated ? `（答えの後 ${data.scanned} 行までしか見ていない）` : ''}
       </p>
@@ -443,16 +443,16 @@ function TracePanel({ approvalId }: { approvalId: string }) {
   }
   return (
     <div className="mt-2">
-      <p className="mb-1 text-[11px] font-semibold text-muted">
+      <p className="mb-1 text-[11px] font-semibold text-muted-foreground">
         答えの後の行動（この承認の印を持つもの。古い順）
       </p>
       <ul className="flex flex-col gap-1">
         {data.actions.map((entry) => (
           <li
             key={entry.id}
-            className="rounded border border-border bg-surface-2 p-2 text-xs break-words whitespace-pre-wrap"
+            className="rounded border border-border bg-muted p-2 text-xs break-words whitespace-pre-wrap"
           >
-            <span className="mr-1 text-[10px] text-muted">
+            <span className="mr-1 text-[10px] text-muted-foreground">
               {formatDateTime(entry.at)} {entry.type}
             </span>
             {describeTraceAction(entry)}
@@ -460,12 +460,12 @@ function TracePanel({ approvalId }: { approvalId: string }) {
         ))}
       </ul>
       {data.actionsOmitted > 0 && (
-        <p className="mt-1 text-[11px] text-muted">
+        <p className="mt-1 text-[11px] text-muted-foreground">
           ほか {data.actionsOmitted} 件は数えただけで持っていない
         </p>
       )}
       {data.unstampedInTurn > 0 && (
-        <p className="mt-1 text-[11px] text-muted">
+        <p className="mt-1 text-[11px] text-muted-foreground">
           同じターンの区間に、印を持たないクローンの行動が {data.unstampedInTurn}{' '}
           件在る（区間の終わりは推定）
         </p>
@@ -527,7 +527,9 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   if (!hasCloneReply) {
     return (
       <div>
-        <p className="text-[11px] text-muted italic">この会話にはまだクローンの発言が無い</p>
+        <p className="text-[11px] text-muted-foreground italic">
+          この会話にはまだクローンの発言が無い
+        </p>
         <OpenInChat conversationId={conversationId} />
       </div>
     );
@@ -536,17 +538,17 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
   // ④ 在る。
   return (
     <div>
-      <p className="mb-2 text-[11px] font-semibold text-muted">この確認が上がった会話</p>
+      <p className="mb-2 text-[11px] font-semibold text-muted-foreground">この確認が上がった会話</p>
       <ul className="flex flex-col gap-2">
         {messages.map((message) => (
           <li
             key={message.id}
             className={cn(
               'rounded border border-border p-2 text-xs break-words whitespace-pre-wrap',
-              message.role === 'inbound' ? 'bg-bg' : 'bg-surface-2',
+              message.role === 'inbound' ? 'bg-background' : 'bg-muted',
             )}
           >
-            <span className="mr-1 text-[10px] text-muted">
+            <span className="mr-1 text-[10px] text-muted-foreground">
               {message.role === 'inbound' ? '人間' : 'クローン'}
             </span>
             {message.text}
@@ -569,7 +571,7 @@ function OpenInChat({ conversationId }: { conversationId: string }) {
   return (
     <Link
       to={`/chat/${conversationId}`}
-      className="mt-2 inline-block text-[11px] text-accent hover:underline"
+      className="mt-2 inline-block text-[11px] text-primary hover:underline"
     >
       この会話をチャットで開く →
     </Link>

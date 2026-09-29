@@ -50,20 +50,20 @@ export function isUnavailable(
 export function UnavailableNote({ reason }: { reason: string }) {
   return (
     <div className="min-w-0">
-      <p className="text-sm text-danger">
+      <p className="text-sm text-destructive">
         ⚠ <strong className="font-medium">この日の日報は作れなかった</strong>
         。以下はクローンが書いたまとめではなく、書けなかった理由である。
       </p>
-      <pre className="mt-2 overflow-x-auto rounded border border-border bg-bg p-2 text-[11px] break-words whitespace-pre-wrap text-muted">
+      <pre className="mt-2 overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
         {reason}
       </pre>
-      <p className="mt-2 text-xs text-muted">
+      <p className="mt-2 text-xs text-muted-foreground">
         この日の記録は
-        <Link to="/journal" className="text-accent hover:underline">
+        <Link to="/journal" className="text-primary hover:underline">
           日誌
         </Link>
         に残っている。書けていないだけなので、原因が解ければ
-        <Link to="/schedule" className="text-accent hover:underline">
+        <Link to="/schedule" className="text-primary hover:underline">
           スケジュール
         </Link>
         から作り直せる。
@@ -181,7 +181,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                     <Link
                       to={`/reports/${report.date}/${encodeURIComponent(report.id)}`}
                       className={cn(
-                        'block px-4 py-2 text-sm hover:bg-surface-2',
+                        'block px-4 py-2 text-sm hover:bg-muted',
                         /*
                           **罫線は日付の変わり目にだけ引く。** 同じ日のものが1つの塊に
                           見えるので、時刻だけが違う行が並んでいることが形から分かる
@@ -193,7 +193,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                           保証は `apps/daemon/src/reports.ts` が持つ（日付の新しい順）。
                         */
                         reports[index + 1]?.date !== report.date && 'border-b border-border',
-                        report.id === selectedId && 'bg-surface-2 text-accent',
+                        report.id === selectedId && 'bg-muted text-primary',
                       )}
                     >
                       {reportLabel(report)}
@@ -203,7 +203,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                         （本文がエラー文だった穴と同じ形が、一覧の側に残る）。
                       */}
                       {isUnavailable(report) && (
-                        <span className="ml-1 text-danger" title="この日の日報は作れなかった">
+                        <span className="ml-1 text-destructive" title="この日の日報は作れなかった">
                           ⚠
                         </span>
                       )}
@@ -219,7 +219,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
                 （`tokens.tsx` の `RotationHistory` と同じ形。Issue #426 の G3）。
               */}
               {isReportsWindowFull(reports.length) && (
-                <p className="border-t border-border px-4 py-2 text-[11px] text-muted">
+                <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
                   直近 {REPORTS_LIMIT} 件のみ表示している。これより古い日報があるかもしれない。
                 </p>
               )}
@@ -282,7 +282,9 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
             この2つの日が食い違う（前日ぶんが翌日に書かれる）ので、裸の時刻を
             置くと見出しと矛盾しているように見える。
           */}
-          <p className="mb-2 text-[11px] text-muted">書かれたのは {formatDateTime(report.at)}</p>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            書かれたのは {formatDateTime(report.at)}
+          </p>
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (

@@ -67,7 +67,7 @@ function ProfileView({ profile }: { profile: ProfileState }) {
   return (
     <div className="flex flex-col gap-3 text-sm">
       <dl className="grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
-        <dt className="text-muted">状態</dt>
+        <dt className="text-muted-foreground">状態</dt>
         <dd>
           {empty ? (
             <Badge>置かれていない</Badge>
@@ -77,9 +77,9 @@ function ProfileView({ profile }: { profile: ProfileState }) {
         </dd>
         {!empty && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">指紋</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">指紋</dt>
             <dd className="font-mono break-all">sha256={profile.sha256 ?? '?'}</dd>
-            <dt className="mt-2 text-muted sm:mt-0">更新</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">更新</dt>
             <dd>{profile.updatedAt === undefined ? '?' : formatDateTime(profile.updatedAt)}</dd>
           </>
         )}
@@ -98,7 +98,7 @@ function ProfileView({ profile }: { profile: ProfileState }) {
           {shown && (
             <pre
               aria-label="プロファイルの本文"
-              className="max-h-96 overflow-auto rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap"
+              className="max-h-96 overflow-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap"
             >
               {profile.script}
             </pre>
@@ -106,7 +106,7 @@ function ProfileView({ profile }: { profile: ProfileState }) {
         </div>
       )}
 
-      <p className="text-[11px] break-words text-muted">
+      <p className="text-[11px] break-words text-muted-foreground">
         各 runner へ届いているか（alteroid profile status の後半）は「設定」の runner 欄に出る。
       </p>
     </div>
@@ -171,7 +171,7 @@ function ProfileEditor({ current }: { current: ProfileState }) {
         subtitle="alteroid profile edit / set / clear / PUT /profile と同じもの。丸ごと置き換える"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
-        <p className="text-xs leading-relaxed break-words text-muted">
+        <p className="text-xs leading-relaxed break-words text-muted-foreground">
           保存すると、本文は置く前にデーモンのプロセスでその場で評価される（記憶ストアの鍵を持つ
           プロセスでの任意コマンド実行と同じ強さ）。読めなければ保存も配布もせず、理由を返す
           （前のものが残る）。秘密は「環境変数」の画面へ置くこと——ここに書いた名前は、そちらの
@@ -192,7 +192,7 @@ function ProfileEditor({ current }: { current: ProfileState }) {
         ) : (
           <>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted">本文（シェルスクリプト）</span>
+              <span className="text-xs text-muted-foreground">本文（シェルスクリプト）</span>
               <Textarea
                 aria-label="プロファイルの新しい本文"
                 className="min-h-64 font-mono text-xs"
@@ -219,7 +219,9 @@ function ProfileEditor({ current }: { current: ProfileState }) {
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDraft(null)}>
                   編集を閉じる
                 </Button>
-                {unchanged && <span className="text-[11px] text-muted">変更はまだ無い。</span>}
+                {unchanged && (
+                  <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>
+                )}
               </div>
             )}
           </>
@@ -264,13 +266,15 @@ function ProfileEditor({ current }: { current: ProfileState }) {
         {failure instanceof ProfileRejectedError && failure.detail.length > 0 && (
           <pre
             aria-label="評価の失敗の詳細"
-            className="max-h-64 overflow-auto rounded-md border border-danger/40 bg-danger/5 px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap text-danger"
+            className="max-h-64 overflow-auto rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap text-destructive"
           >
             {failure.detail}
           </pre>
         )}
         {failure instanceof ProfileRejectedError && (
-          <p className="text-[11px] text-muted">前のプロファイルがそのまま残っている。</p>
+          <p className="text-[11px] text-muted-foreground">
+            前のプロファイルがそのまま残っている。
+          </p>
         )}
         <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
 
@@ -307,10 +311,12 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
                 {(outcome.names ?? []).length > 0 && `（${(outcome.names ?? []).join(' ')}）`}
               </span>
             ) : (
-              <span className="text-danger">反映できなかった — {outcome.error ?? '理由不明'}</span>
+              <span className="text-destructive">
+                反映できなかった — {outcome.error ?? '理由不明'}
+              </span>
             )}
             {(outcome.output ?? '').trim().length > 0 && (
-              <pre className="mt-1 overflow-auto font-mono text-[11px] break-all whitespace-pre-wrap text-muted">
+              <pre className="mt-1 overflow-auto font-mono text-[11px] break-all whitespace-pre-wrap text-muted-foreground">
                 {outcome.output}
               </pre>
             )}
@@ -318,7 +324,7 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
         ))}
       </ul>
       {!cleared && (
-        <p className="text-[11px] text-muted">
+        <p className="text-[11px] text-muted-foreground">
           これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う
           ——それ以外は次の仕事から。
         </p>

@@ -14,7 +14,12 @@
     "rootDirs": [".", "./.react-router/types"],
     "baseUrl": ".",
     "paths": {
-      "~/*": ["./app/*"]
+      "~/*": ["./app/*"],
+      // `@alteroid/ui` の中の shadcn の部品は `@/lib/utils` の形で互いを import する
+      // （`shadcn add` が吐く形のまま。`packages/ui/components.json` の aliases）。
+      // この画面の型検査は import 先の `packages/ui` のソースまで辿るので、同じ対応を
+      // ここにも置く。**画面のコードからは `@/` を使わない**（`eslint.config.js` が止める）。
+      "@/*": ["../../packages/ui/src/*"]
     }
   }
 }

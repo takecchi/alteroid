@@ -93,10 +93,10 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
         // リンクが複数行の slug の縦中央に浮く見た目になる（stackingの利点が
         // 無いのに見た目だけ悪くなる）。
         <span className="flex items-center gap-2">
-          <Link to="/memory" className="text-muted hover:text-fg">
+          <Link to="/memory" className="text-muted-foreground hover:text-foreground">
             記憶
           </Link>
-          <span className="text-muted">/</span>
+          <span className="text-muted-foreground">/</span>
           <span className="min-w-0 font-mono text-sm break-all">{slug}</span>
         </span>
       }
@@ -169,7 +169,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
           </Tabs.Content>
 
           <Tabs.Content value="edit" className="flex min-h-0 flex-1 flex-col">
-            <p className="mb-2 shrink-0 text-xs text-muted">
+            <p className="mb-2 shrink-0 text-xs text-muted-foreground">
               ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。
             </p>
             <Textarea

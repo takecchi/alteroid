@@ -9,6 +9,10 @@ export default defineConfig({
       // 解いている**が、ここ（リポジトリ共通の vitest）はそれを読まないので同じ対応を置く。
       // 他のワークスペースは `~/` を使わないので、共通に置いても衝突しない。
       '~': fileURLToPath(new URL('./apps/web/app', import.meta.url)),
+      // `packages/ui` の中の shadcn の部品が使う別名（`packages/ui/components.json` の
+      // aliases。`shadcn add` が吐く形のまま）。**`packages/ui` の外は `@/` を使わない**
+      // （`eslint.config.js` が止める）ので、共通に置いても衝突しない。
+      '@': fileURLToPath(new URL('./packages/ui/src', import.meta.url)),
     },
   },
   test: {

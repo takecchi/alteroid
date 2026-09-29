@@ -136,10 +136,13 @@ function stubUsage(body: {
  * **画面全体から探さない。** 絞り込みの `<option>` にも `clone` / `session` という
  * 同じ文字列があるので、範囲を絞らないと「カードが消えても option が拾われて通る」
  * テストになる。
+ *
+ * カードは `Card`（shadcn の `Card`）が付ける `data-slot="card"` で指す。角丸の class
+ * （以前は `div.rounded-lg`）で指すと、見た目の段を変えただけでカードを見失う。
  */
 function axisCard(title: string): HTMLElement {
   const heading = screen.getByRole('heading', { name: title });
-  const card = heading.closest('div.rounded-lg');
+  const card = heading.closest('[data-slot="card"]');
   if (card === null) throw new Error(`${title} のカードが見つからない`);
   return card as HTMLElement;
 }
@@ -895,7 +898,7 @@ describe('/usage 画面の台帳に1行も無い委譲', () => {
     renderUsage();
 
     const totalHeading = await screen.findByRole('heading', { name: '合計' });
-    const totalCard = totalHeading.closest('div.rounded-lg');
+    const totalCard = totalHeading.closest('[data-slot="card"]');
     if (totalCard === null) throw new Error('合計カードが見つからない');
     const nextCard = totalCard.nextElementSibling;
     expect(nextCard?.textContent).toContain('台帳に1行も無い委譲');

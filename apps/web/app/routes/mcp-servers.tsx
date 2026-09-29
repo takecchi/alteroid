@@ -73,7 +73,7 @@ function McpServersView({ state }: { state: McpServersState }) {
   return (
     <div className="flex flex-col gap-3 text-sm">
       <dl className="grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
-        <dt className="text-muted">状態</dt>
+        <dt className="text-muted-foreground">状態</dt>
         <dd>
           {empty ? (
             <Badge>置かれていない</Badge>
@@ -83,7 +83,7 @@ function McpServersView({ state }: { state: McpServersState }) {
         </dd>
         {state.updatedAt !== undefined && (
           <>
-            <dt className="mt-2 text-muted sm:mt-0">更新</dt>
+            <dt className="mt-2 text-muted-foreground sm:mt-0">更新</dt>
             <dd>{formatDateTime(state.updatedAt)}</dd>
           </>
         )}
@@ -111,7 +111,7 @@ function McpServersView({ state }: { state: McpServersState }) {
           {shown && (
             <pre
               aria-label="登録の本文（値を含む）"
-              className="max-h-96 overflow-auto rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap"
+              className="max-h-96 overflow-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap"
             >
               {toJson(state.mcpServers)}
             </pre>
@@ -119,7 +119,7 @@ function McpServersView({ state }: { state: McpServersState }) {
         </div>
       )}
 
-      <p className="text-[11px] break-words text-muted">
+      <p className="text-[11px] break-words text-muted-foreground">
         各 runner へ届いているかは「設定」の runner 欄（直近の押し込み）に出る。
       </p>
     </div>
@@ -148,12 +148,12 @@ function EntrySummary({ name, entry }: { name: string; entry: McpServerEntry | u
         <span className="font-mono font-medium break-all">{name}</span>
         <Badge>{transport}</Badge>
       </div>
-      <span className="font-mono break-all text-muted">{where}</span>
+      <span className="font-mono break-all text-muted-foreground">{where}</span>
       {args.length > 0 && (
-        <span className="text-muted">{`args: ${String(args.length)} 個（値は伏せた）`}</span>
+        <span className="text-muted-foreground">{`args: ${String(args.length)} 個（値は伏せた）`}</span>
       )}
       {keys.names.length > 0 && (
-        <span className="font-mono break-all text-muted">{`${keys.label}: ${keys.names.join(', ')}`}</span>
+        <span className="font-mono break-all text-muted-foreground">{`${keys.label}: ${keys.names.join(', ')}`}</span>
       )}
     </li>
   );
@@ -229,7 +229,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         subtitle="alteroid mcp edit / set / clear / PUT /mcp-servers と同じもの。丸ごと置き換える"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
-        <p className="text-xs leading-relaxed break-words text-muted">
+        <p className="text-xs leading-relaxed break-words text-muted-foreground">
           .mcp.json をそのまま貼れる形（{'{ "mcpServers": { … } }'}）。保存する前にデーモンが
           形を検査し、通らなければ保存も配布もしない（前のものが残る）。stdio の登録は、次の
           セッションでクローンやマネージャーが起こすコマンドになる。
@@ -249,7 +249,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
         ) : (
           <>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted">登録（.mcp.json）</span>
+              <span className="text-xs text-muted-foreground">登録（.mcp.json）</span>
               <Textarea
                 aria-label="MCP サーバの新しい登録"
                 className="min-h-64 font-mono text-xs"
@@ -264,7 +264,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
               />
             </label>
             {parseError !== null && (
-              <p role="alert" className="text-[11px] break-words text-danger">
+              <p role="alert" className="text-[11px] break-words text-destructive">
                 {parseError}
               </p>
             )}
@@ -276,7 +276,9 @@ function McpServersEditor({ current }: { current: McpServersState }) {
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDraft(null)}>
                   編集を閉じる
                 </Button>
-                {unchanged && <span className="text-[11px] text-muted">変更はまだ無い。</span>}
+                {unchanged && (
+                  <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>
+                )}
               </div>
             )}
           </>
@@ -324,7 +326,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
 
         <ErrorNote error={failure} />
         {failure instanceof ApiError && failure.status === 400 && (
-          <p className="text-[11px] text-muted">前の登録がそのまま残っている。</p>
+          <p className="text-[11px] text-muted-foreground">前の登録がそのまま残っている。</p>
         )}
         <NotOwnerHint failure={failure} subject="MCP 連携の登録" />
 
@@ -358,7 +360,7 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
       {removed.length > 0 && <p className="break-words">外した: {removed.join(', ')}</p>}
       <ul className="flex flex-col gap-1" aria-label="runner ごとの配布結果">
         {update.runners.length === 0 && (
-          <li className="text-muted">
+          <li className="text-muted-foreground">
             いま配った runner は無い（繋がった runner へは、名乗り直したときに降ろす）。
           </li>
         )}
@@ -366,14 +368,14 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
           <li key={runner.runnerId} className="break-words">
             <span className="font-mono break-all">{runner.runnerId}</span>:{' '}
             {!runner.ok ? (
-              <span className="text-danger">
+              <span className="text-destructive">
                 {runner.unsupported === true ? '受け取る口が無い（古い runner）' : '届かなかった'} —{' '}
                 {runner.error ?? '理由不明'}
               </span>
             ) : runner.mcpServers === undefined ? (
               <span className="text-ok">{cleared ? '外した' : '届いた（指紋は返らなかった）'}</span>
             ) : update.sha256 !== undefined && runner.mcpServers.sha256 !== update.sha256 ? (
-              <span className="text-danger">
+              <span className="text-destructive">
                 届いたが指紋が違う（runner {runner.mcpServers.sha256} / 保存 {update.sha256}）
               </span>
             ) : (
@@ -382,7 +384,7 @@ function UpdateReport({ before, update }: { before: string[]; update: McpServers
           </li>
         ))}
       </ul>
-      <p className="text-[11px] text-muted">いつから効くか: {update.appliesFrom}</p>
+      <p className="text-[11px] text-muted-foreground">いつから効くか: {update.appliesFrom}</p>
     </div>
   );
 }

@@ -619,7 +619,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
       return (
         <div className="min-w-0">
           {prefix !== null && (
-            <span className="mr-1 font-mono text-[11px] text-muted">{prefix}</span>
+            <span className="mr-1 font-mono text-[11px] text-muted-foreground">{prefix}</span>
           )}
           <ManagerRestBody rest={rest} bodyMarkup={commitment.bodyMarkup} />
         </div>
@@ -759,8 +759,8 @@ function InProgressBadge({ commitment }: { commitment: Commitment }) {
 }
 
 const EDITOR_TAB_TRIGGER_CLASS =
-  'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted transition-colors hover:text-fg';
-const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-accent text-fg';
+  'border-b-2 border-transparent px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground';
+const EDITOR_TAB_TRIGGER_ACTIVE_CLASS = 'border-primary text-foreground';
 
 /**
  * 台帳の本文を人間が直接編集する（未了の行なら `origin` を問わず開ける。
@@ -943,7 +943,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
 
   return (
     <li className="border-b border-border px-4 py-3 last:border-b-0">
-      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <OriginBadge commitment={commitment} />
         <EditedBadge commitment={commitment} />
         <AnsweredStateBadge commitment={commitment} />
@@ -953,7 +953,7 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         <span>({formatRelative(commitment.at)})</span>
         <button
           type="button"
-          className="ml-auto text-[11px] text-muted underline hover:text-fg"
+          className="ml-auto text-[11px] text-muted-foreground underline hover:text-foreground"
           onClick={() => setEditing((current) => !current)}
         >
           {editing ? '編集をやめる' : '本文を編集'}
@@ -1117,7 +1117,7 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
   return (
     <div className="mt-2">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span className="text-muted">評定:</span>
+        <span className="text-muted-foreground">評定:</span>
         {APPRAISAL_CHOICES.map((value) => (
           <button
             key={value}
@@ -1125,7 +1125,9 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
             disabled={busy !== null}
             className={cn(
               'rounded border px-1.5 py-0.5',
-              current === value ? 'border-fg text-fg' : 'border-border text-muted hover:text-fg',
+              current === value
+                ? 'border-foreground text-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground',
             )}
             onClick={() => void submit(value)}
           >
@@ -1133,9 +1135,9 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
           </button>
         ))}
         {current === undefined ? (
-          <span className="text-muted">（まだ評定していない）</span>
+          <span className="text-muted-foreground">（まだ評定していない）</span>
         ) : (
-          <span className="text-muted">
+          <span className="text-muted-foreground">
             {commitment.appraisedBy === undefined ? '' : `${commitment.appraisedBy} が付けた`}
             {commitment.workKind === undefined ? '' : `［種類: ${commitment.workKind}］`}
             {commitment.appraisalReason === undefined ? '' : `: ${commitment.appraisalReason}`}
@@ -1163,7 +1165,7 @@ function AppraisalControl({ commitment }: { commitment: Commitment }) {
 
 function ClosedRow({ commitment }: { commitment: Commitment }) {
   return (
-    <li className="border-b border-border px-4 py-3 text-muted last:border-b-0">
+    <li className="border-b border-border px-4 py-3 text-muted-foreground last:border-b-0">
       <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px]">
         <Badge tone="ok">片付いた</Badge>
         <OriginBadge commitment={commitment} />

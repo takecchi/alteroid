@@ -87,7 +87,7 @@ export default function Schedule() {
               >
                 <div className="min-w-0 flex-1">
                   <p className="text-sm">{entry.description}</p>
-                  <p className="mt-0.5 font-mono text-[11px] break-words text-muted">
+                  <p className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground">
                     {entry.kind}
                   </p>
                   {/*
@@ -113,10 +113,10 @@ export default function Schedule() {
                   */}
                   {entry.request !== undefined && (
                     <>
-                      <p className="mt-1 line-clamp-3 text-xs break-words text-muted">
+                      <p className="mt-1 line-clamp-3 text-xs break-words text-muted-foreground">
                         {entry.request}
                       </p>
-                      <p className="mt-0.5 text-[11px] text-muted">
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
                         前回:{' '}
                         {entry.lastRunAt === undefined
                           ? 'まだ一度も動いていない'
@@ -126,7 +126,7 @@ export default function Schedule() {
                     </>
                   )}
                 </div>
-                <div className="shrink-0 text-right text-[11px] text-muted">
+                <div className="shrink-0 text-right text-[11px] text-muted-foreground">
                   <p>{formatDateTime(entry.nextAt)}</p>
                   <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
                 </div>
@@ -156,7 +156,9 @@ export default function Schedule() {
                   書かれた既定で値そのものが存在しない」）。
                 */}
                 {entry.request === undefined ? (
-                  <span className="shrink-0 text-[11px] text-muted">既定（外せない）</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    既定（外せない）
+                  </span>
                 ) : (
                   <>
                     <Button size="sm" onClick={() => setEditing(entry.kind)}>
@@ -366,10 +368,10 @@ function RequestEditor({
       */}
       <Tabs.Content
         value="preview"
-        className="max-h-64 min-h-24 overflow-y-auto rounded-md border border-border bg-bg px-3 py-2"
+        className="max-h-64 min-h-24 overflow-y-auto rounded-md border border-border bg-background px-3 py-2"
       >
         {value.trim() === '' ? (
-          <p className="text-xs text-muted">（本文が空）</p>
+          <p className="text-xs text-muted-foreground">（本文が空）</p>
         ) : (
           <Markdown>{value}</Markdown>
         )}
@@ -442,9 +444,9 @@ function ScheduleEditForm({
     <div
       role="group"
       aria-label={`${entry.kind} を編集`}
-      className="mt-2 w-full rounded-md border border-border bg-surface-2 p-3"
+      className="mt-2 w-full rounded-md border border-border bg-muted p-3"
     >
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <span>kind（変更不可。別の名前にしたいなら外して新しく仕込む）:</span>
         <span className="font-mono break-words">{entry.kind}</span>
       </div>
@@ -550,7 +552,7 @@ function ScheduleForm() {
             仕込む
           </Button>
           {done !== undefined && (
-            <span className="font-mono text-[11px] text-muted">仕込んだ: {done}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">仕込んだ: {done}</span>
           )}
         </div>
         <ErrorNote error={failure} />
@@ -615,7 +617,7 @@ function EventForm() {
             送る
           </Button>
           {sent !== undefined && (
-            <span className="font-mono text-[11px] text-muted">受け付けた: {sent}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">受け付けた: {sent}</span>
           )}
         </div>
         <ErrorNote error={failure} />

@@ -4,6 +4,7 @@ build/
 packages/core/src/generated/
 .react-router/
 coverage/
+storybook-static/
 pnpm-lock.yaml
 
 # docs/ は正典。整形ツールにも触らせない（AGENTS.md「リポジトリの約束」）

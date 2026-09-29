@@ -9,10 +9,10 @@
  * `Button` と衝突するので、ここからは出さず `@alteroid/ui/shadcn` から出す。
  * テーマの CSS は `@alteroid/ui/styles.css`。
  */
-export * from './components/ui';
+export * from './components/common';
 export * from './components/page';
 export * from './components/drawer';
 export * from './components/markdown';
 export * from './hooks/use-is-mobile';
 export * from './hooks/use-measured-height';
-export { cn } from './lib/cn';
+export { cn } from './lib/utils';

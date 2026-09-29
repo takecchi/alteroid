@@ -387,7 +387,55 @@ function blankQuotedInteriorForNonExecutingCommands(command: string): string {
  * `hasTailFollowPattern` にかかり、`tail -f x` の字面がそのまま一致する。
  */
 function hasUnboundedTailFollow(command: string): boolean {
-  return hasTailFollowPattern(blankQuotedInteriorForNonExecutingCommands(command));
+  const view = blankQuotedInteriorForNonExecutingCommands(command);
+  // **引用符とバックスラッシュを外した写しにもかける**（#2206）。bash は引用を外してから argv に
+  // するので、`tail "-f" x` / `tail '-f' x` / `tail -"f" x` / `tail \-f x` / `tail $'-f' x` は
+  // どれも `tail -f x` と同じく追従する。フラグの判定は「生の空白の直後の生の `-`」を見るので、
+  // 元の写しだけでは見落としていた。どちらかが当たれば弾く（弾く側にしか倒れない）。
+  return hasTailFollowPattern(view) || hasTailFollowPattern(stripQuoteCharacters(view));
+}
+
+/**
+ * 引用符（`"` / `'`）・ANSI-C 引用の `$`（`$'…'` / `$"…"` の `$`）・バックスラッシュを取り除く
+ * （#2206）。bash の引用除去の近似で、中身の展開はしない。1回の走査で線形。
+ *
+ * **引用符の中の空白と区切り（`;` `&` `|`）は `_` へ替える。** 引用符で包んだ1つの語は、
+ * 引用を外しても1つの語のままである（`tail -n 5 "my -f file"` の `-f` をフラグと読まない）。
+ * 単一引用符の中はバックスラッシュも字面、それ以外のバックスラッシュは次の1文字をエスケープする。
+ * `$'…'` の中のエスケープは追わない（単一引用符と同じに読む）。読み違えても、語が1つに
+ * まとまる向き（フラグと読まない側）か、元の写しと同じ判定になる。
+ */
+function stripQuoteCharacters(command: string): string {
+  let out = '';
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] as string;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else out += /[\s;&|]/.test(ch) ? '_' : ch;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = command[i + 1];
+      if (next !== undefined) {
+        out += quote !== null && /[\s;&|]/.test(next) ? '_' : next;
+        i += 1;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = null;
+      else out += /[\s;&|]/.test(ch) ? '_' : ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '$' && (command[i + 1] === "'" || command[i + 1] === '"')) continue;
+    out += ch;
+  }
+  return out;
 }
 
 /**
@@ -502,10 +550,18 @@ export function findUntilWhileLoops(command: string): LoopMatch[] {
  */
 const C_FOR_HEADER_RE = /\bfor[ \t]*\(\(([^;()]*);([^;()]*);([^()]*)\)\)[\s;]*/g;
 
-/** C 形式の for の条件の節が「無い」か（空、または 0 でない整数の定数だけ）。 */
+/**
+ * C 形式の for の条件の節が「無い」か（空、または 0 でない整数の定数だけ）。
+ *
+ * **符号と先頭の 0 も許す**（#2204）。bash の算術では `-1` / `+5` / `007`（8進の 7）も非零で真なので、
+ * 無限ループになる。#2204 までは `/^[1-9]\d*$/` で、符号の付いた形と先頭が 0 の形を通していた
+ * （doc の「0 でない整数の定数」とずれていた）。`0` / `00` / `-0` は偽なので通す。
+ * `08` のように8進として不正な定数は bash がその場でエラーにして終わるが、ここでは非零として弾く
+ * （弾く側に倒れるだけで、壊れたループを止めるので害は無い）。
+ */
 function isEndlessCForCondition(cond: string): boolean {
   const trimmed = cond.trim();
-  return trimmed === '' || /^[1-9]\d*$/.test(trimmed);
+  return trimmed === '' || (/^[+-]?\d+$/.test(trimmed) && /[1-9]/.test(trimmed));
 }
 
 /**
@@ -2606,9 +2662,15 @@ const DATA_HEREDOC_READER_RE = new RegExp(
  * これが在れば、本文を消さない（`cat > run.sh <<'EOF' … EOF` の後の `bash run.sh` で、
  * 本文が後で実行されるため）。シェルに語を渡す形（`bash run.sh`。`-` で始まるオプションは
  * 除く）・`source`・`. `・パスで起こす形（`./run.sh` / `/tmp/run.sh`）を見る。
+ *
+ * **シェルの名前を変数で書いた形（`$SHELL run.sh` / `"$SHELL" run.sh` / `${SHELL} run.sh`）も見る**
+ * （#2204。C の横断レビューで見つかった）。`$BASH`（bash 自身のパス）も同じ。`$SHELL` はたいてい `/bin/bash` を指すので、`bash run.sh`
+ * と同じく本文が後で実行される。#2204 までは名前の列挙（`SHELL_NAME_SRC`）にしか当てず、無限ループを
+ * 書いた本文を「データだけ」と読んで弾かなかった。
  */
+const SHELL_VAR_SRC = String.raw`"?\$(?:(?:SHELL|BASH)\b|\{(?:SHELL|BASH)\})"?`;
 const SCRIPT_RUN_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:(?:${SHELL_NAME_SRC}|${SHELL_VAR_SRC})[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
 );
 
 /**

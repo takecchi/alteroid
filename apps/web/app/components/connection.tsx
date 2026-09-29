@@ -141,7 +141,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
 
         {/* 3つの出どころを区別する（PR 1 の歯3）。値だけでは「既定に戻った」のか
             「消し損ねた」のかが分からない。 */}
-        <p className="text-xs text-muted">{ORIGIN_LABEL[origin]}</p>
+        <p className="text-xs text-muted-foreground">{ORIGIN_LABEL[origin]}</p>
 
         {selected !== undefined && selected.origin === 'stored' && (
           <SelectedActions
@@ -169,9 +169,9 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
             （ここも6remなのでなお余裕がある）。
           */
           <dl className="grid grid-cols-1 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
-            <dt className="mt-3 text-muted first:mt-0 sm:mt-0">記憶</dt>
+            <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">記憶</dt>
             <dd className="font-mono text-xs break-all">{health.data.storage}</dd>
-            <dt className="mt-3 text-muted first:mt-0 sm:mt-0">pid</dt>
+            <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">pid</dt>
             {/* pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。
                 有界の小さい整数（Linux の pid_max は既定で7桁までしか無い）なので、
                 このセクションの幅で折り返しが要る長さにはならない。break-all は
@@ -185,26 +185,26 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
           設定を触るのは大抵それで詰まったときなので、別の文書へ飛ばさない。
         */}
         {!compact && (
-          <div className="rounded-md border border-border bg-bg p-3 text-xs leading-relaxed text-muted">
-            <p className="mb-1.5 font-medium text-fg">別のオリジンのデーモンに繋ぐとき</p>
+          <div className="rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-muted-foreground">
+            <p className="mb-1.5 font-medium text-foreground">別のオリジンのデーモンに繋ぐとき</p>
             <p className="mb-1.5">
               既定の <code className="font-mono">{SAME_ORIGIN_BASE_URL}</code>{' '}
               は同一オリジン向け（開発サーバの proxy と、画面の手前に置いたリバースプロキシが
               これで当たる）。<code className="font-mono">https://api.example.com</code>{' '}
               のように別オリジンを指す場合は、デーモン側でそのオリジンを明示的に許可する必要がある。
             </p>
-            <pre className="rounded border border-border bg-surface p-2">
+            <pre className="rounded border border-border bg-card p-2">
               ALTEROID_ALLOWED_ORIGINS=https://www.example.com
             </pre>
             <p className="mt-1.5">
-              許可は<strong className="text-fg">列挙したオリジンだけ</strong>で、ワイルドカードは
-              受け付けない。資格情報は Cookie ではなくヘッダ（
+              許可は<strong className="text-foreground">列挙したオリジンだけ</strong>
+              で、ワイルドカードは 受け付けない。資格情報は Cookie ではなくヘッダ（
               <code className="font-mono">Authorization: Bearer</code>）で運ぶ設計なので、
               別の登録可能ドメイン（例: <code className="font-mono">*.vercel.app</code>）に画面を
               置いても成立する。
             </p>
             <p className="mt-1.5">
-              <strong className="text-fg">CORS はブラウザにしか効かない。</strong>
+              <strong className="text-foreground">CORS はブラウザにしか効かない。</strong>
               <code className="font-mono">curl</code>{' '}
               は素通りするので、外から届く場所に置くならデーモン側のログイン（
               <code className="font-mono">ALTEROID_GOOGLE_CLIENT_ID</code>）を有効にするか、
@@ -214,10 +214,10 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
         )}
 
         {!compact && (
-          <p className="text-[11px] leading-relaxed text-muted">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
             一覧の「既定」はビルド時の <code className="font-mono">VITE_ALTEROID_API_URL</code>{' '}
             が決める。カンマ区切りで複数書け、<code className="font-mono">本番=https://…</code>{' '}
-            の形で名前を付けられる。<strong className="text-fg">先頭が既定</strong>である。
+            の形で名前を付けられる。<strong className="text-foreground">先頭が既定</strong>である。
           </p>
         )}
       </div>
@@ -260,7 +260,7 @@ function SelectedActions({
         <Button size="sm" onClick={onRemove}>
           一覧から削除
         </Button>
-        <span className="text-[11px] text-muted">
+        <span className="text-[11px] text-muted-foreground">
           削除してもデーモン側には何も起きない（このブラウザの一覧から消えるだけ）
         </span>
       </div>
@@ -327,7 +327,7 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
 
   return (
     <div className="flex flex-col gap-1.5 border-t border-border pt-3">
-      <p className="text-xs font-medium text-fg">接続先を追加</p>
+      <p className="text-xs font-medium text-foreground">接続先を追加</p>
       {/*
         **狭い画面では積む。** 3つ（名前・URL・ボタン）を1行に詰めると、375px では
         どれも読めない幅になる。`sm:` 以上で横に並べ、URL の欄だけが伸びる。
@@ -360,7 +360,7 @@ function AddEndpoint({ onAdd }: { onAdd(entry: { url: string; label?: string }):
           追加して接続
         </Button>
       </div>
-      {problem !== undefined && <p className="text-xs text-danger">{problem}</p>}
+      {problem !== undefined && <p className="text-xs text-destructive">{problem}</p>}
     </div>
   );
 }

@@ -50,7 +50,7 @@ export default function Memory() {
           </Button>
         </div>
         {slug !== '' && !valid && (
-          <p className="mt-1.5 text-xs text-danger">
+          <p className="mt-1.5 text-xs text-destructive">
             使えるのは英小文字・数字・`.` `_` `-` で、先頭は英数字。128 文字まで。
           </p>
         )}
@@ -71,29 +71,31 @@ export default function Memory() {
               <li key={document.slug} className="border-b border-border last:border-b-0">
                 <Link
                   to={`/memory/${document.slug}`}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-surface-2"
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-muted"
                 >
                   <div className="min-w-0 flex-1">
                     {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                     <p className="truncate text-sm">
                       <span
-                        className="mr-1.5 text-[10px] text-muted"
+                        className="mr-1.5 text-[10px] text-muted-foreground"
                         title={kindHint(document.kind)}
                       >
                         [{document.kind}]
                       </span>
                       {document.title}
                     </p>
-                    <p className="truncate font-mono text-[11px] text-muted">{document.slug}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">
+                      {document.slug}
+                    </p>
                     {document.description !== undefined && (
                       // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）
-                      <p className="truncate text-[11px] text-muted">
+                      <p className="truncate text-[11px] text-muted-foreground">
                         {freshnessMark(document.descriptionFreshness)}
                         {document.description}
                       </p>
                     )}
                   </div>
-                  <span className="shrink-0 text-[11px] text-muted">
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
                     {formatBytes(document.bytes)} · 作成{' '}
                     {formatCreatedAtRelative(document.createdAt)} · 更新{' '}
                     {formatRelative(document.updatedAt)}
