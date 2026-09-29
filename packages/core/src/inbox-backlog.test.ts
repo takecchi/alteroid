@@ -234,7 +234,8 @@ describe('inboxBacklogDedupeKey', () => {
    * 足す」#285 の作法）。型では防げない未知の `type` が実行時に来ても、
    * 黙って別の型として畳んだり本文を握り潰したりせず、必ず投げる
    * （この repo の同じ union に対する既存の倒れ先——`clone.ts` の
-   * `#dispatch` の `default` ——と同じ形）。
+   * `#handle` の `default` ——と同じ形。`inbox-backlog.ts` の同じ文は #2023 で
+   * 直した）。
    */
   it('未知の type は（型では防げない実行時の値として）例外を投げる', () => {
     const unknown = { type: 'not_a_real_type', id: 'x', at: '2026-09-11T00:00:00.000Z' };

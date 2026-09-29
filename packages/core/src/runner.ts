@@ -3215,6 +3215,10 @@ class RunnerSession {
             // 呼び出し元（`#read` の `for await`）も `await` せずに呼んでいる。
             // 揃えるには両方を非同期へ変えることになり、**メッセージ処理に直列化点が
             // 1つ増える** —— その影響は測っていないので、この変更には含めない。
+            // **（追記 #2056）この前提はもう無い。** `#dispatch` は #602 で
+            // `async #apply(event)` に置き換わり、`#read` も `await this.#apply(event)`
+            // で呼んでいる。それでもここは `void` のまま残してある —— `await` へ
+            // 揃えるかは、`stop()` との競合（下の #1597）を含めて別の変更で測ること。
             //
             // **`#stopped` なら、ここで `#finish` を呼ばない（#1597）。** 待たずに
             // 発火する `void this.#finish('lost', …)` は、resume 直後（まだ一度も
@@ -3726,7 +3730,7 @@ class RunnerSession {
   /**
    * **畳む直前に累積をもう一度読む。** 台帳の穴はここでしか塞げない。
    *
-   * 台帳へ入るのは `result.modelUsage` だけなので（`#dispatch`）、**`result` を
+   * 台帳へ入るのは `result.modelUsage` だけなので（`#apply` の `turn_ended`）、**`result` を
    * 1度も出さずに終わったセッションの消費はどこにも載らない。** しかも載らない
    * だけではなく一覧にも現れないので、「いくら取りこぼしたか」すら分からない。
    * 実測では、30分走って PR をマージまで運んだ委譲が器の入れ替えで畳まれ、台帳に
@@ -3768,7 +3772,7 @@ class RunnerSession {
   /**
    * **`result` を受け取らないまま畳むとき、既に喋られていた本文を報告として出す（#323）。**
    *
-   * 報告は `#dispatch` の `message.type === 'result'` の枝でしか作られない。
+   * 報告は `#apply` の `turn_ended`（SDK の `result` を写したもの）の枝でしか作られない。
    * assistant のメッセージは（`stop_reason` が `end_turn` でも）`RunnerTurnTally`
    * の `#said` に積まれるだけで、畳むのは `result` の到来だけである。**だから `result` が
    * 来ないまま終わる回は、マネージャーが書き終えた本文が丸ごと消えていた** —

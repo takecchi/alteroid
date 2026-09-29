@@ -485,8 +485,8 @@ describe('クローン — 枠（利用上限）が閉じたら保持して次�
   });
 
   it('（追加確認）system/notification の上限文言でも枠が閉じたと判定する', async () => {
-    // 検知3経路の最後の1つ。必須の6本には無いが、`#dispatch` の `case 'system'`
-    // に足した分岐を素通りさせないためにここで直接確かめる。
+    // 検知3経路の最後の1つ。必須の6本には無いが、`#apply` の `case 'usage_notice'`
+    // （SDK の system 通知を `foldClaudeMessage` が写したもの）に足した分岐を素通りさせないためにここで直接確かめる。
     const s = setup(undefined, createMemoryStores(), {
       resultSubtype: 'error_during_execution',
       resultText: '（結果なし。system 通知だけが上限の理由を運ぶ）',

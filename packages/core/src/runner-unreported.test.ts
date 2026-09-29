@@ -20,7 +20,7 @@ interface FakeSession {
    * テスト側でも掴めるようにする。
    */
   say(text: string): Promise<string>;
-  /** 通常経路: `result` を伴って1ターンを畳む（`#dispatch` の `result` の枝）。 */
+  /** 通常経路: `result` を伴って1ターンを畳む（`#apply` の `turn_ended` の枝）。 */
   finish(text: string): Promise<void>;
   /**
    * ストリームが `result` を伴わずに自然終了する（SDK 側が黙って閉じる）。

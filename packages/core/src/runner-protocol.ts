@@ -866,7 +866,7 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      * 見分ける手が構造的に無かった——これが #206 の指す非対称そのものである。
      *
      * **runner が自分で新しい値を毎回振るのではなく、`runner.ts` の
-     * `#dispatch` が `result` メッセージそのものから取る `message.uuid`
+     * `#apply` が `turn_ended` の `event.id` として受け取る `message.uuid`
      * （SDK が result ごとに払う id）をそのまま渡す。** `ask` の
      * `requestId`/`toolUseID` と同じ作法——`manager.ts` の `ManagerPool#emit`
      * が `randomUUID()` を毎回振ってしまうために `event.id` を鍵にした冪等化が
@@ -881,12 +881,12 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
      *   作り直さない。再接続してきた側が `Last-Event-ID` を名乗ると
      *   `Outbox.sentSince()` が `#sent` から**同一のオブジェクト**を読み返して
      *   配り直す（`/events` ハンドラの該当箇所、#275 / #518）。`reportId` は
-     *   `#dispatch` の時点でこのオブジェクトへ焼き込み済みなので、この経路の
+     *   `#apply` の時点でこのオブジェクトへ焼き込み済みなので、この経路の
      *   再送では値は変わらない。
      * - **確かめていないこと**: `#recoverFromFailedResume`（`runner.ts`）が
      *   古いセッション世代を畳んで新しい `query()` を開いたとき、畳まれた側の
      *   `for await`（`#read`）が世代チェックを持たずに古い `result` を
-     *   `#dispatch` へ通してしまう経路が理論上ある（`#read` の doc）。この
+     *   `#apply` へ通してしまう経路が理論上ある（`#read` の doc）。この
      *   経路で「同じ報告」が二重に emit されるとしたら、それは2つの別々の
      *   `SDKMessage` オブジェクト（別の `query()` 呼び出しが作ったもの）なので
      *   `message.uuid` が同じ値になる保証は無く、**むしろ別の値になる可能性が
