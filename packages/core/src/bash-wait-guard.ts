@@ -268,11 +268,13 @@ function splitOutsideQuoteSimpleCommands(
  * - 先頭の語が引用符で囲まれている（コマンド名そのものが引用符の中）——
  *   `"echo" "tail -f x"` のような偽装を防ぐ
  * - `VAR=…` の代入で始まる——代入の右辺が後で実行されるかはこの語だけでは分からない
- * - 同じ単純コマンドにコマンド置換（`$(`/バッククォート）が在る——置換の中身は
- *   実際に実行される
+ * - 同じ単純コマンドにコマンド置換（`$(`/バッククォート）かプロセス置換の出力側（`>(`）が
+ *   在る——置換の中身は実際に実行される。`echo "…" > >(sh)` は出力をシェルへ渡す
+ *
+ * 語の終わりは空白か行末で見る（`\b` だと `echo-x` / `grep.sh` のような別のコマンドまで当たる）。
  */
 const NON_EXECUTING_ARGS_COMMAND_RE =
-  /^(?:echo|printf|grep|rg)\b|^git[ \t]+commit\b|^gh[ \t]+(?:issue|pr)[ \t]+(?:comment|create|edit|view|close|review)\b/;
+  /^(?:echo|printf|grep|rg|git[ \t]+commit|gh[ \t]+(?:issue|pr)[ \t]+(?:comment|create|edit|view|close|review))(?=[ \t]|$)/;
 
 function isNonExecutingArgsSimpleCommand(command: string, span: SimpleCommandSpan): boolean {
   let i = span.start;
@@ -282,7 +284,7 @@ function isNonExecutingArgsSimpleCommand(command: string, span: SimpleCommandSpa
   if (ch === "'" || ch === '"' || (ch === '$' && command[i + 1] === "'")) return false;
   const rest = command.slice(i, span.end);
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) return false;
-  if (rest.includes('$(') || rest.includes('`')) return false;
+  if (rest.includes('$(') || rest.includes('`') || rest.includes('>(')) return false;
   return NON_EXECUTING_ARGS_COMMAND_RE.test(rest);
 }
 

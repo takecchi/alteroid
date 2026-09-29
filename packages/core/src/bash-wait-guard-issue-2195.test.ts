@@ -175,6 +175,19 @@ describe('tail-f: issue #2195 —— 許可リストの語の境界（範囲外�
     const command = 'gh pr comment 1 --body "run ' + TAIL + ' -f x.log"';
     expect(inspectBashCommand(command).blocked).toBe(false);
   });
+
+  // 語の終わりを `\b` で見ると、`echo-x` / `grep.sh` のような別のコマンドまで許可リストに当たる。
+  for (const name of ['echo-x', 'grep.sh', 'rg2']) {
+    it(`${name}（許可リストの語で始まる別のコマンド）の引用符の中は弾く`, () => {
+      const command = `${name} "${TAIL} -f x"`;
+      expect(inspectBashCommand(command).blocked).toBe(true);
+    });
+  }
+
+  it('プロセス置換の出力側（echo … > >(sh)）は、出力をシェルへ渡すので弾く', () => {
+    const command = 'echo "' + TAIL + ' -f x" > >(sh)';
+    expect(inspectBashCommand(command).blocked).toBe(true);
+  });
 });
 
 describe(
