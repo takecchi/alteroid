@@ -28,6 +28,7 @@
     "typecheck": "pnpm -r typecheck && tsc --noEmit -p tsconfig.railway.json && tsc --noEmit -p tsconfig.docker.json && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.github-scripts.json && tsc --noEmit -p tsconfig.tsup.json && tsc --noEmit -p tsconfig.vitest.json",
     "lint": "eslint .",
     "test": "node ./scripts/test.mjs",
+    "test:shard-files": "node ./scripts/test-shard-files.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify": "node ./scripts/verify.mjs"
