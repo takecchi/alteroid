@@ -2330,13 +2330,29 @@ function describeStringArrayElementLengthViolation(
  * `appendJournalOrThrow` を経由する呼び出しが複数あり、その大半は
  * 副作用 → 日誌の順で、日誌が落ちた時点で副作用は
  * 既に済んでいる（`act-completed`）。だが `journal_write` /
- * `daily_report_write` の2箇所は「日誌へ記録すること」そのものが道具の
- * 行為であり、他に副作用が無い——ここで「完了した・やり直すな」と書くと
- * 嘘になるうえ、**やり直すべきときにやり直すなと言う**ことになる
- * （`act-not-performed`）。`memory_section_move` の move_in の1箇所は
- * さらに別の形で、移し先への追記だけが済み、出どころは1文字も動いていない
- * ——重複しているが失われてはいない、という半完了である
+ * `daily_report_write` / `conversation_post` の3箇所は「日誌へ記録すること」
+ * そのものが道具の行為であり、他に副作用が無い——ここで「完了した・
+ * やり直すな」と書くと嘘になるうえ、**やり直すべきときにやり直すなと言う**
+ * ことになる（`act-not-performed`）。`memory_section_move` の move_in の
+ * 1箇所はさらに別の形で、移し先への追記だけが済み、出どころは1文字も
+ * 動いていない——重複しているが失われてはいない、という半完了である
  * （`act-partially-completed`）。
+ *
+ * ⚠️ **2026-09-29（issue #2145）: 直前の「3箇所」は、この Issue に着手する
+ * 前は「2箇所」（`journal_write` / `daily_report_write`）と誤って書かれて
+ * いた。** `conversation_post` が数えから漏れていた——数え直しは
+ * `grep -nE "^\s*'act-(completed|not-performed|partially-completed)',?$"
+ * packages/core/src/tools.ts` を打ち、`act-not-performed` の行それぞれの
+ * 直前の呼び出し元（`appendJournalOrThrow('<道具名>', …)`）を辿って行った。
+ *
+ * **この Issue でさらに増える。** 能力を広げる3つの道具
+ * （`schedule_create`・`profile_write`・`manager_start`）は、状態変更の
+ * **前**に日誌を先に書く形へ動いた（issue #2145、#2123/#2134 と同じ設計）。
+ * その1行目が書けなければ、状態はまだ何も変わっていない——`journal_write`
+ * 等とは理由が違う（「記録そのものが道具の全行為」ではなく「まだ副作用が
+ * 起きていない」）が、outcome としては同じ `act-not-performed` に当たる
+ * （`formatJournalNotRecordedMessage` の act-not-performed の本文はこの
+ * 2つの理由を両方カバーする形へ合わせて直した）。
  *
  * ⚠️ **呼び出しが何箇所かを、ここに書かないこと**（#923 と同じ規則）。散文に
  * 書いた本数は呼び出しが1つ増えるたびに腐り、しかも腐ったことは読む側からは
@@ -2345,7 +2361,7 @@ function describeStringArrayElementLengthViolation(
  * であって、散文ではない。** 内訳が要るなら `act-completed` /
  * `act-not-performed` / `act-partially-completed` を直接数えること。
  *
- * **上に残っている「2箇所」「1箇所」は数え上げではなく列挙である**——
+ * **上に残っている「3箇所」「1箇所」は数え上げではなく列挙である**——
  * どの道具のどの経路かを名前で挙げているので、ずれれば名前のほうが合わなく
  * なって気づける。腐るのは「名前を伴わない本数」のほうである。
  */
@@ -2417,7 +2433,16 @@ function formatJournalNotRecordedMessage(
     case 'act-not-performed':
       return [
         '⚠⚠ 未記録・行為は起きていない・やり直してよい',
-        `${tool} は日誌への記録そのものが行為であり、その記録に失敗した。副作用は1つも起きていない。`,
+        // **2026-09-29（issue #2145）: 「日誌への記録そのものが行為」以外の
+        // 理由も同じ outcome を使うようになった。** 能力を広げる3つの道具
+        // （`schedule_create`・`profile_write`・`manager_start`）は状態変更の
+        // 前に日誌を先に書くので、その1行目が落ちた時点では「記録が全行為」
+        // ではなく「まだ状態を変えていない」が真の理由になる——どちらの理由でも
+        // 結論（副作用ゼロ・やり直してよい）は同じなので、本文はその共通部分
+        // だけを言う形へ揃えた（`JournalFailureOutcome` の doc）。
+        `${tool} は、この記録に失敗した時点で副作用を1つも起こしていない` +
+          '（日誌へ記録すること自体が道具の行為であるか、状態を変える前に日誌を' +
+          '先に書く道具であるかのどちらかに当たる）。',
         `記録できなかったエントリ: ${shape}`,
         `理由: ${reason}`,
         'やり直してよい（同じ内容でもう一度呼べる。重複は起きない）。',
@@ -2707,6 +2732,42 @@ async function appendJournalOrThrow(
   } catch (error) {
     noteDroppedRecord('日誌', journalEntryShape(entry), error);
     throw new JournalNotRecordedError(tool, entry, outcome, error);
+  }
+}
+
+/**
+ * `stores.journal.append` を、失敗しても投げずに跡だけ残して続ける形で呼ぶ
+ * （`apps/daemon/src/app.ts` の `appendJournalOrDrop` と同じ役目。issue #2145）。
+ *
+ * **能力を広げる3つの道具（`schedule_create`・`profile_write`・
+ * `manager_start`）が「日誌を先に書く」形へ動いたことで要る形が2つ増えた**
+ * ——(1) 状態変更が投げたときに残す打ち消しの行（「〜できなかった: …」）
+ * (2) 状態変更の後でないと分からない情報（`editRequest` の戻り値・
+ * sha256/bytes・`managers.start` の戻り値など）を足す2行目。**どちらも
+ * `appendJournalOrThrow` は使わない**——1行目（`act-not-performed`）が
+ * 書けなければ道具はすでにその場でエラーを返している。その後に走るこの
+ * 2つの追記まで投げてしまうと、(1) は「打ち消せなかった」で道具の応答が
+ * 変わってしまい（実際の状態変更はどのみち終わっている／どのみち起きて
+ * いないので、道具の結果はもう決まっている）、(2) は「後で分かった詳細を
+ * 足せなかっただけ」で道具の成功を丸ごとエラーへ変えてしまう——どちらも
+ * `appendJournalOrDrop`（`app.ts` の doc）と同じ理由で許容できない
+ * （記録が多すぎる側の穴で、記録の無い変更より安全側と判断した）。
+ *
+ * **道具名を渡す。** `decision` 型の `journalEntryShape` は住所を持たない
+ * （`formatJournalNotRecordedMessage` の doc と同じ理由）ので、道具名が
+ * 無いと stderr の跡だけからは「どの道具の2行目・打ち消しが落ちたか」が
+ * 分からない。
+ */
+async function appendJournalOrDrop(
+  tool: CloneToolName,
+  journal: JournalStore,
+  entry: JournalEntryInput,
+): Promise<JournalEntry | undefined> {
+  try {
+    return await journal.append(entry);
+  } catch (error) {
+    noteDroppedRecord(`日誌（${tool}）`, journalEntryShape(entry), error);
+    return undefined;
   }
 }
 
@@ -7096,6 +7157,26 @@ export function createCloneTools(context: ToolContext) {
         if (!parsedSpec.success) return text(`周期を読めなかった: ${parsedSpec.error.message}`);
 
         const now = new Date().toISOString();
+
+        /**
+         * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
+         * 設計）。** 日誌を先に書く。書けなければ仕込まずに道具のエラーで
+         * 返す（下の `appendJournalOrThrow` が投げるので、この関数はここで
+         * 終わる）。「仕込んだ」か「直した」かは `editRequest` の戻り値でしか
+         * 分からないので、先に書く行はそれを含まない形にし、後で分かる分は
+         * 2行目として `appendJournalOrDrop`（best-effort）で足す。
+         */
+        await appendJournalOrThrow(
+          'schedule_create',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `定期の依頼を設定しようとしている: ${parsedKind.data}: ${request}`,
+            grounds: '継続する依頼を時間起点として持つ判断',
+          },
+          'act-not-performed',
+        );
+
         // **編集は `editRequest`、新規作成だけ `put`（Issue #1654）。**
         // かつてはここで `get()` した `existing` から `lastRunAt` /
         // `lastScheduledRunAt` / `pendingRun` を写して `put()` していたが、
@@ -7105,11 +7186,23 @@ export function createCloneTools(context: ToolContext) {
         // `packages/storage-fs/src/schedule-edit-keeps-claim.test.ts`）。
         // `editRequest` は現在値をストアの排他区間の中で読み直して引き継ぐので、
         // この隙間が無い。無ければ `null` — その場合だけ新規に作る。
-        const edited = await stores.schedules.editRequest(
-          parsedKind.data,
-          { request, spec: parsedSpec.data },
-          now,
-        );
+        let edited: ScheduledRequest | null;
+        try {
+          edited = await stores.schedules.editRequest(
+            parsedKind.data,
+            { request, spec: parsedSpec.data },
+            now,
+          );
+        } catch (error) {
+          // 日誌には「設定しようとしている」が残っているので、打ち消す
+          // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
+          await appendJournalOrDrop('schedule_create', stores.journal, {
+            type: 'decision',
+            decision: `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
+            grounds: '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
+          });
+          throw error;
+        }
         let plan: ScheduledRequest;
         if (edited !== null) {
           plan = edited;
@@ -7121,20 +7214,26 @@ export function createCloneTools(context: ToolContext) {
             createdAt: now,
             updatedAt: now,
           };
-          await stores.schedules.put(plan);
+          try {
+            await stores.schedules.put(plan);
+          } catch (error) {
+            await appendJournalOrDrop('schedule_create', stores.journal, {
+              type: 'decision',
+              decision: `定期の依頼を設定できなかった: ${parsedKind.data}: ${request}`,
+              grounds: '継続する依頼を時間起点として持とうとしたが、状態の変更が失敗した',
+            });
+            throw error;
+          }
         }
-        await appendJournalOrThrow(
-          'schedule_create',
-          stores.journal,
-          {
-            type: 'decision',
-            decision:
-              `${edited !== null ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
-              `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
-            grounds: '継続する依頼を時間起点として持つ判断',
-          },
-          'act-completed',
-        );
+        // 仕込み・直しはもう効いている。後で分かった区別を2行目として足す
+        // （落ちても道具の結果は変えない——`appendJournalOrDrop` の doc）。
+        await appendJournalOrDrop('schedule_create', stores.journal, {
+          type: 'decision',
+          decision:
+            `${edited !== null ? '定期の依頼を直した' : '定期の依頼を仕込んだ'}: ` +
+            `${plan.kind}（${describeScheduleSpec(plan.spec)}）: ${request}`,
+          grounds: '継続する依頼を時間起点として持つ判断',
+        });
         return text(
           `${plan.kind} を ${describeScheduleSpec(plan.spec)} で仕込んだ。時刻が来たら依頼の本文とともに届く。`,
         );
@@ -8985,30 +9084,68 @@ export function createCloneTools(context: ToolContext) {
               '次の会話で置くこと。',
           );
         }
+
+        /**
+         * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
+         * 設計）。** 日誌を先に書く。書けなければ差し替えずに道具のエラーで
+         * 返す。sha256・配布結果は差し替えた後でないと分からないので、ここ
+         * では書かない（後で分かる分は2行目として下で足す）。
+         */
+        await appendJournalOrThrow(
+          'profile_write',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `実行環境プロファイルを差し替えようとしている: ${summary}`,
+            grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+          },
+          'act-not-performed',
+        );
+
         // **人間の口（`PUT /profile`）とまったく同じ1本道を通る。** 評価・保存・
         // 配布が1つの区間として直列に行われるので、人間の更新と重なっても層ごとに
         // 違う本文が残らない。
-        const result = await context.profile.apply(script);
+        let result: Awaited<ReturnType<ProfileService['apply']>>;
+        try {
+          result = await context.profile.apply(script);
+        } catch (error) {
+          // 日誌には「差し替えようとしている」が残っているので、打ち消す
+          // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
+          await appendJournalOrDrop('profile_write', stores.journal, {
+            type: 'decision',
+            decision: `実行環境プロファイルを差し替えられなかった: ${summary}`,
+            grounds: `差し替えようとしたが、状態の変更が失敗した: ${String(error)}`,
+          });
+          throw error;
+        }
 
         // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
         // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。
         if (!result.stored) {
+          /**
+           * **読めなかったのはシステムの結果であって判断ではない**（直前の
+           * コメントと同じ理由）。保存も配布もしていない——それでも打ち消しの
+           * 行を足す（issue #2145。`PUT /profile` の同じ経路〈#2134〉と揃える。
+           * 記録が多すぎる側の穴で、記録の無い差し替えより安全側と判断した）。
+           */
+          await appendJournalOrDrop('profile_write', stores.journal, {
+            type: 'decision',
+            decision: `実行環境プロファイルを差し替えられなかった（読めなかった）: ${summary}`,
+            grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
+          });
           return text(
             `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${result.clone.error ?? '理由不明'}` +
               `${result.clone.output === undefined || result.clone.output.length === 0 ? '' : `\n${result.clone.output}`}`,
           );
         }
 
-        await appendJournalOrThrow(
-          'profile_write',
-          stores.journal,
-          {
-            type: 'decision',
-            decision: `実行環境プロファイルを更新した: ${summary}`,
-            grounds: '人間から実行環境そのものを渡された（値は記録しない）',
-          },
-          'act-completed',
-        );
+        // 差し替え自体はもう効いている。後で分かった sha256・配布結果を2行目
+        // として足す（落ちても道具の結果は変えない——`appendJournalOrDrop` の doc）。
+        await appendJournalOrDrop('profile_write', stores.journal, {
+          type: 'decision',
+          decision: `実行環境プロファイルを更新した: ${summary}`,
+          grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+        });
 
         const failed = result.runners.filter((runner) => !runner.ok);
         const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
@@ -9637,24 +9774,58 @@ export function createCloneTools(context: ToolContext) {
         // 欄を新しく作らないという Issue の設計要件を、ここでも守る。内部
         // ターン（マネージャー発の確認・蒸留・timer）では undefined になる。
         const conversationId = getConversationId();
-        const started = await context.managers.start({
-          request,
-          ...(cwd === undefined ? {} : { cwd }),
-          ...(runnerId === undefined ? {} : { runnerId }),
-          ...(conversationId === undefined ? {} : { conversationId }),
-        });
+
+        /**
+         * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
+         * 設計）。** 新しい担い手を起こす、いちばん強い広げ方——日誌を先に
+         * 書き、書けなければ起こさずに道具のエラーで返す。`started.managerId`・
+         * 実際に使われた cwd（`describeStartedCwd`）は起こした後でないと
+         * 分からないので、先に書く行はそれを含まない形にし、後で分かる分は
+         * 2行目として `appendJournalOrDrop`（best-effort）で足す。
+         */
         await appendJournalOrThrow(
           'manager_start',
           stores.journal,
           {
             type: 'decision',
-            decision:
-              `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
-              `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
+            decision: `マネージャーを起こそうとしている${
+              runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
+            }: ${request}`,
             grounds: '委譲の判断',
           },
-          'act-completed',
+          'act-not-performed',
         );
+
+        let started: ManagerSummary;
+        try {
+          started = await context.managers.start({
+            request,
+            ...(cwd === undefined ? {} : { cwd }),
+            ...(runnerId === undefined ? {} : { runnerId }),
+            ...(conversationId === undefined ? {} : { conversationId }),
+          });
+        } catch (error) {
+          // 日誌には「起こそうとしている」が残っているので、打ち消す
+          // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
+          await appendJournalOrDrop('manager_start', stores.journal, {
+            type: 'decision',
+            decision: `マネージャーを起こせなかった${
+              runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
+            }: ${request}`,
+            grounds: `委譲しようとしたが、状態の変更が失敗した: ${String(error)}`,
+          });
+          throw error;
+        }
+
+        // 起動自体はもう効いている。後で分かった managerId・cwd を2行目として
+        // 足す（落ちても道具の結果は変えない——`appendJournalOrDrop` の doc）。
+        await appendJournalOrDrop('manager_start', stores.journal, {
+          type: 'decision',
+          decision:
+            `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
+            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
+          grounds: '委譲の判断',
+        });
         return text(
           `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
             `runner: ${started.runnerId ?? '未記録'}）。` +
