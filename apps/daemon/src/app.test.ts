@@ -47,6 +47,7 @@ import {
   RESET_CONFIRM_GROUPS,
   recentDroppedTraces,
   summarizeInboxBacklog,
+  summarizeProgress,
   UnreadableTokenSettingsError,
 } from '@alteroid/core';
 import ts from 'typescript';
@@ -64,6 +65,7 @@ import {
   practiceReadResponseSchema,
   practiceVersionListResponseSchema,
   practiceVersionReadResponseSchema,
+  progressResponseSchema,
   scheduleStatusSchema,
 } from './openapi.js';
 import { startUsagePolling } from './usage-poller.js';
@@ -7016,6 +7018,313 @@ describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
     expect(body.jobCoverage.nonTerminalTotal).toBe(1);
     expect(body.jobCoverage.terminalTotal).toBe(2);
     expect(body.jobCoverage.terminalUnappraised).toBe(1);
+  });
+});
+
+/**
+ * `GET /progress`（#2241 の 2）。中身の数え方（窓の境界・見込みの判定順など）は
+ * `packages/core/src/progress.test.ts` が固定している。ここで見るのは、ハンドラが
+ * 正しい材料（台帳・委譲・導出値・「取れない」の情報）を core へ渡し、応答へ
+ * `observedAt` と `github` を足し、不正な窓を 400 にすることだけである。
+ */
+describe('GET /progress（#2241 の HTTP 面）', () => {
+  const HOUR = 3_600_000;
+  const ago = (hours: number) => new Date(Date.now() - hours * HOUR).toISOString();
+
+  type ProgressBody = {
+    observedAt: string;
+    window: { hours: number; from: string; to: string };
+    backlog: {
+      total: number;
+      byOrigin: Record<string, number>;
+      age: { oldestAt: string | null; medianHours: number | null };
+      byState: { untouched: number; responded: number; delegated: number; notApplicable: number };
+      completeness: { unreadable: number; trimmedClosed: number };
+    };
+    inProgress: {
+      running: number;
+      awaitingHuman: number;
+      lost: number;
+      lastReport: { oldestAt: string | null; newestAt: string | null; withoutReport: number };
+    };
+    throughput: {
+      commitmentsOpened: number;
+      commitmentsClosed: number;
+      delegationsEnded: { count: number; basis: string };
+    };
+    forecast: {
+      state: string;
+      reason?: string;
+      hoursToDrain?: number;
+      basis: { open: number; unreadable: number };
+    };
+    github: { state: string; reason: string };
+  };
+
+  const read = async (query = ''): Promise<ProgressBody> => {
+    const response = await app.request(`/progress${query}`);
+    expect(response.status).toBe(200);
+    return (await response.json()) as ProgressBody;
+  };
+
+  it('空のストアでも 200 で、取れないものは 0 ではなく null / unavailable で返る', async () => {
+    const body = await read();
+
+    expect(body.window.hours).toBe(168);
+    expect(Number.isNaN(Date.parse(body.observedAt))).toBe(false);
+    expect(body.observedAt).toBe(body.window.to);
+    expect(body.backlog.total).toBe(0);
+    // 未了が0件の「最古」「中央値」は 0 ではなく null（AGENTS.md「取れない軸に 0 の行を作る」）
+    expect(body.backlog.age.oldestAt).toBeNull();
+    expect(body.backlog.age.medianHours).toBeNull();
+    expect(body.inProgress.lastReport).toEqual({
+      oldestAt: null,
+      newestAt: null,
+      withoutReport: 0,
+    });
+    expect(body.forecast.state).toBe('unavailable');
+    expect(body.forecast.reason).toBe('ledger_younger_than_window');
+    expect(body.throughput.delegationsEnded).toEqual({ count: 0, basis: 'updatedAt' });
+  });
+
+  it('github は常に not_observed で、理由が付く（0 件とは言わない）', async () => {
+    const body = await read();
+    expect(body.github.state).toBe('not_observed');
+    expect(body.github.reason.length).toBeGreaterThan(0);
+    expect(Object.keys(body.github).sort()).toEqual(['reason', 'state']);
+  });
+
+  it('台帳と委譲の数が core の summarizeProgress と一致する（入力は /commitments と同じ導出値つきの行）', async () => {
+    // 未了4件（窓より前に積んだ）+ 窓の中で閉じた3件
+    await stores.commitments.open({
+      id: 'o-responded',
+      at: ago(250),
+      origin: 'human',
+      source: 'conv-1',
+      body: 'a',
+    });
+    await stores.commitments.open({
+      id: 'o-delegated',
+      at: ago(240),
+      origin: 'human',
+      source: 'conv-2',
+      body: 'b',
+    });
+    await stores.commitments.open({ id: 'o-external', at: ago(230), origin: 'external', body: 'c' });
+    await stores.commitments.open({ id: 'o-plain', at: ago(220), origin: 'human', body: 'd' });
+    for (const [i, closedAgo] of [10, 20, 30].entries()) {
+      await stores.commitments.open({
+        id: `closed-${i}`,
+        at: ago(300),
+        origin: 'manager',
+        body: 'done',
+      });
+      await stores.commitments.close(`closed-${i}`, ago(closedAgo), '終わった', 'human');
+    }
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '返答',
+      conversationId: 'conv-1',
+    });
+    await stores.jobs.putJob({
+      id: 'job-delegated',
+      createdAt: ago(100),
+      updatedAt: ago(100),
+      status: 'running',
+      conversationId: 'conv-2',
+      summary: 'x',
+      lastReportAt: ago(2),
+    });
+    await stores.jobs.putJob({
+      id: 'job-silent',
+      createdAt: ago(90),
+      updatedAt: ago(90),
+      status: 'running',
+      summary: 'x',
+    });
+    await stores.jobs.putJob({
+      id: 'job-waiting',
+      createdAt: ago(80),
+      updatedAt: ago(80),
+      status: 'waiting_human',
+      summary: 'x',
+    });
+    await stores.jobs.putJob({
+      id: 'job-lost',
+      createdAt: ago(70),
+      updatedAt: ago(70),
+      status: 'lost',
+      summary: 'x',
+    });
+    await stores.jobs.putJob({
+      id: 'job-done-recent',
+      createdAt: ago(60),
+      updatedAt: ago(5),
+      status: 'done',
+      summary: 'x',
+    });
+    await stores.jobs.putJob({
+      id: 'job-done-old',
+      createdAt: ago(500),
+      updatedAt: ago(400),
+      status: 'done',
+      summary: 'x',
+    });
+
+    const body = await read();
+
+    expect(body.backlog.total).toBe(4);
+    expect(body.backlog.byOrigin).toEqual({ human: 3, manager: 0, external: 1, self: 0 });
+    expect(body.backlog.byState).toEqual({
+      untouched: 2,
+      responded: 1,
+      delegated: 1,
+      notApplicable: 1,
+    });
+    expect(body.inProgress.running).toBe(2);
+    expect(body.inProgress.awaitingHuman).toBe(1);
+    expect(body.inProgress.lost).toBe(1);
+    expect(body.inProgress.lastReport.withoutReport).toBe(1);
+    expect(body.throughput.commitmentsClosed).toBe(3);
+    expect(body.throughput.commitmentsOpened).toBe(0);
+    expect(body.throughput.delegationsEnded.count).toBe(1);
+    // 4 / (3 / 168) = 224。流入は窓の中に無いので not_converging ではない
+    expect(body.forecast.state).toBe('estimated');
+    expect(body.forecast.hoursToDrain).toBeCloseTo(224, 6);
+
+    // core を、別の口（/commitments）が返した導出値つきの行で直接呼んだ結果と一致する
+    const ledger = (await (await app.request('/commitments?includeClosed=true')).json()) as {
+      entries: never[];
+      unreadable: never[];
+      trimmedClosed: number;
+    };
+    const expected = summarizeProgress({
+      commitments: ledger,
+      jobs: await stores.jobs.listJobs(),
+      now: new Date(body.observedAt),
+      windowHours: 168,
+    });
+    const { observedAt: _observedAt, github: _github, ...fromApi } = body;
+    expect(fromApi).toEqual(JSON.parse(JSON.stringify(expected)));
+  });
+
+  it('返答が日誌に載ると byState が untouched から responded へ動く（respondedAt が core へ渡っている）', async () => {
+    await stores.commitments.open({
+      id: 'cmt-1',
+      at: ago(1),
+      origin: 'human',
+      source: 'conv-r',
+      body: '直して',
+    });
+    expect((await read()).backlog.byState).toMatchObject({ untouched: 1, responded: 0 });
+
+    await stores.journal.append({
+      type: 'exchange',
+      with: 'human',
+      role: 'outbound',
+      text: '直しました',
+      conversationId: 'conv-r',
+    });
+    expect((await read()).backlog.byState).toMatchObject({ untouched: 0, responded: 1 });
+  });
+
+  it('走行中の委譲が在れば delegated が増え、終わっていれば増えない（activeManagerIds が core へ渡っている）', async () => {
+    await stores.commitments.open({
+      id: 'cmt-1',
+      at: ago(10),
+      origin: 'human',
+      source: 'conv-d',
+      body: '調べて',
+    });
+    await stores.jobs.putJob({
+      id: 'job-finished',
+      createdAt: ago(5),
+      updatedAt: ago(4),
+      status: 'done',
+      conversationId: 'conv-d',
+      summary: 'x',
+    });
+    expect((await read()).backlog.byState.delegated).toBe(0);
+
+    await stores.jobs.putJob({
+      id: 'job-live',
+      createdAt: ago(3),
+      updatedAt: ago(3),
+      status: 'running',
+      conversationId: 'conv-d',
+      summary: 'x',
+    });
+    expect((await read()).backlog.byState.delegated).toBe(1);
+  });
+
+  it('unreadable / trimmedClosed はストアが返したまま completeness と basis に載る（0 に丸めない）', async () => {
+    const real = stores.commitments;
+    stores.commitments = {
+      ...real,
+      async list(options) {
+        const { entries } = await real.list(options);
+        return {
+          entries,
+          unreadable: [
+            { id: 'broken-1', at: ago(1), reason: '壊れている1' },
+            { id: 'broken-2', at: ago(2), reason: '壊れている2' },
+          ],
+          trimmedClosed: 7,
+        };
+      },
+    };
+    const body = await read();
+    expect(body.backlog.completeness).toEqual({ unreadable: 2, trimmedClosed: 7 });
+    expect(body.forecast.basis.unreadable).toBe(2);
+  });
+
+  it('windowHours を渡せば窓が変わる。渡さなければ 168', async () => {
+    expect((await read('?windowHours=24')).window.hours).toBe(24);
+    expect((await read('?windowHours=1.5')).window.hours).toBe(1.5);
+    expect((await read()).window.hours).toBe(168);
+  });
+
+  it.each([
+    ['空文字', '?windowHours='],
+    ['非数', '?windowHours=abc'],
+    ['負', '?windowHours=-1'],
+    ['0', '?windowHours=0'],
+    ['非有限', '?windowHours=Infinity'],
+    ['空白だけ', '?windowHours=%20'],
+  ])('windowHours が不正（%s）なら 400 で、送られた値をエラーに混ぜない', async (_name, query) => {
+    const response = await app.request(`/progress${query}`);
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('windowHours');
+    expect(body.error).not.toContain('abc');
+    expect(body.error).not.toContain('Infinity');
+  });
+
+  it('読むだけで、日誌を1行も書かない', async () => {
+    const before = (await stores.journal.list({})).length;
+    await read();
+    expect((await stores.journal.list({})).length).toBe(before);
+  });
+
+  it('応答は宣言した OpenAPI 応答スキーマを通っている（余剰も欠けも無い）', async () => {
+    await stores.commitments.open({ id: 'cmt-1', at: ago(300), origin: 'human', body: 'x' });
+    const body = await read();
+    // `.parse()` は宣言していない欄を黙って落とす。ハンドラが `.parse()` を通していなければ、
+    // core が返す欄がスキーマから抜けても気づけない——パース後と生の応答が一致することで、
+    // 宣言が core の出力の全欄を覆っていることを測る。
+    expect(progressResponseSchema.parse(body)).toEqual(body);
+    // 最上位の鍵の集合を固定する（欄落ち・余剰の検出）
+    expect(Object.keys(body).sort()).toEqual([
+      'backlog',
+      'forecast',
+      'github',
+      'inProgress',
+      'observedAt',
+      'throughput',
+      'window',
+    ]);
   });
 });
 
