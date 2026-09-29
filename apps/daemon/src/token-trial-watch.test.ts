@@ -209,6 +209,39 @@ describe('token-trial-watch: 試す条件と対象', () => {
     await settle();
     watch.stop();
   });
+
+  /**
+   * issue #2146（実時間の待ちを偽の時計へ置き換えた側で見つけた歯の穴）。
+   *
+   * **経緯**: 実時間の `setTimeout` 待ちを使っていたころ、この見張りには
+   * 「`stop()` の後は目盛りが止まる」ことを直接測る歯が無かった。それでも
+   * 変異試験（`stop()` の中身を空にする変異）は「読めない間は試しを呼ばず
+   * …」の歯を巻き込んで赤くなっていた——real timer では `stop()` が効かない
+   * watch が次のテストの実行中も裏で鳴り続け、その回の `stderr` スパイへ
+   * 紛れ込んでいたためである（**意図して測っていたのではなく、実時間だけが
+   * 持っていた偶然の副作用**）。`vi.useFakeTimers()` に変えると、テストご
+   * とに時計そのものが作り直されるため、この副作用は無くなる——つまり
+   * **偶然当たっていた歯が、置き換えで静かに外れる**ところだった。ここに
+   * 直接の歯を1本足すことで、外れた分を仕組みとして測り直す。
+   */
+  it('stop したら以降は目盛りが動かない', async () => {
+    const stores = createMemoryStores();
+    await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+    await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+    const trial = fakeTrial({ verdict: 'usable' });
+    const watch = startTokenTrialWatch({
+      stores,
+      recordTrialVerdict: realRecordTrialVerdict(stores),
+      trial: trial.port,
+      reconsider: () => Promise.resolve(RECOVERED),
+      onOutcome: () => Promise.resolve(),
+      tickMs: 5,
+      now: () => AT,
+    });
+    watch.stop();
+    await vi.advanceTimersByTimeAsync(30);
+    expect(trial.calls).toEqual([]);
+  });
 });
 
 describe('token-trial-watch: 通ったら', () => {
