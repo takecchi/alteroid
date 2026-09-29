@@ -2124,6 +2124,48 @@ describe('クローン', () => {
       await s.clone.stop();
     });
 
+    /**
+     * **承認 d0f15fb7（`docs/architecture.md`「承認への回答と許可の記録 ——
+     * 境界ではなく監査の層」）。** `markUsed` が例外を投げても、監査の層という
+     * 決定のもとでは閉じる側（deny）へ倒さず、写しの読みのとおり通す。ただし
+     * 「記録に残る」という監査の層の保証を満たせなかったこと自体は
+     * `noteDroppedRecord` で stderr へ跡を残す——本文（rule の文字列やコマンド）
+     * は載せない。
+     */
+    it('markUsed() が例外を投げても通す。ただし stderr へ跡を残し、rule は載せない', async () => {
+      const base = createMemoryStores();
+      await base.permissionGrants.put(GRANT);
+      const stores: Stores = {
+        ...base,
+        permissionGrants: {
+          ...base.permissionGrants,
+          async markUsed(): Promise<boolean> {
+            throw new Error('SCRATCH でも確認した意図的な store 障害');
+          },
+        },
+      };
+      const s = setup(undefined, stores);
+      const hook = await hookOf(s);
+
+      let result!: { hookSpecificOutput?: { permissionDecision?: string } };
+      const lines = await captureStderr(async () => {
+        result = (await hook(
+          { tool_name: 'Bash', tool_input: { command: 'gh release edit' } } as never,
+          undefined,
+          {} as never,
+        )) as { hookSpecificOutput?: { permissionDecision?: string } };
+      });
+
+      expect(result.hookSpecificOutput?.permissionDecision).toBe('allow');
+      const traced = lines.filter((line) => line.includes('を記録できませんでした'));
+      expect(traced).toHaveLength(1);
+      expect(traced[0]).toContain('grant=grant-1');
+      expect(traced[0]).not.toContain(GRANT.rule);
+      expect(traced[0]).not.toContain('gh release edit');
+
+      await s.clone.stop();
+    });
+
     it('Bash 以外の道具には何もしない', async () => {
       const s = setup();
       await s.stores.permissionGrants.put(GRANT);
