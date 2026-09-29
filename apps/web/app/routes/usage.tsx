@@ -90,6 +90,93 @@ function parseUsageSite(raw: string | null): UsageSite | '' {
   return (USAGE_SITES as readonly string[]).includes(raw) ? (raw as UsageSite) : '';
 }
 
+/**
+ * `usageDateSchema`（`packages/core/src/usage.ts`）の正規表現をここへ複製して
+ * いる（issue #2133）。**値の import ではなく、形の書き写しである** ——
+ * `usageDateSchema` は `packages/core/src/usage.ts`（サーバ専用の重い
+ * `usage.ts`）にしか無く、ブラウザ向けの軽い口（`@alteroid/core/usage` ＝
+ * `usage-format.ts`。このファイル冒頭の import 群が使っているもの）には
+ * 出ていない。`apps/web` は `@alteroid/core`（バレル）を値として import
+ * できない（eslint。`tokens.tsx` の `tokenAvailabilityAt` の doc と同じ理由・
+ * 同じ事故——#294 / #306）ので、正規表現をここへ複製する。
+ *
+ * **一致は `usage.date-schema-parity.test.ts` が測る**
+ * （`usageDateSchema.safeParse` と `USAGE_DATE_PATTERN.test` を同じ入力の
+ * 集合へ通して突き合わせる）——ここが古くなっても気づけるようにするため。
+ *
+ * **これは形だけの検査で、カレンダー上の実在は見ない**（`2026-02-30` も
+ * 通る）。実在の検査は別に {@link isRealCalendarDate} が持つ——理由は
+ * そちらの doc を見よ。デーモン側の `usageQuery`（同じ `usageDateSchema`）も
+ * 正規表現だけで検査していて実在の検査は無いので、**この正規表現単体は
+ * デーモンと揃っている。** 揃っていないのは `parseUsageDate` が
+ * `isRealCalendarDate` を追加で通す判断のほうである。
+ */
+export const USAGE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * `YYYY-MM-DD` の形（`USAGE_DATE_PATTERN` を通った値）が、実在するカレンダー
+ * 上の日かどうかを見る（issue #2133）。
+ *
+ * **ここはデーモンの検査と意図的に揃えていない。** デーモンの
+ * `usageDateSchema` は正規表現だけで、`2026-02-30` のような形は合うが実在
+ * しない日も通す——集計（`packages/storage-pg/src/usage.ts` の `aggregate`）
+ * は `usage_daily.date` を `text` 列の文字列比較で引くだけなので、実在しない
+ * 日付を渡しても例外にはならない（string としての大小比較は成り立つ）。
+ *
+ * **しかし画面はそれをそのまま通せない。** `type="date"` の `<input>` は、
+ * 実在しない日を `value` に渡すと**値のサニタイズでブラウザ側が空文字へ
+ * 落とす**（HTML の日付入力の仕様——jsdom も同じ動きをする。実際に
+ * `usage.test.tsx` でこの動きを踏んだ）。もし `2026-02-30` を絞り込みへ
+ * 通すと、入力欄は空に見えるのに `GET /usage` には `from=2026-02-30` が
+ * 載る——**まさに、この issue が塞ごうとしている「入力欄は空なのに絞り込みが
+ * 効いている」食い違いそのものが、実在しない日でも起きる。** その食い違いを
+ * 作らないことのほうを優先し、実在しない日も「読めない」側へ倒す。
+ *
+ * **これは持ち主（マネージャー）への報告事項**——デーモンと画面の判定基準が
+ * この1点で揃っていない。揃えるならデーモン側に実在検査を足すか、画面側の
+ * 入力を `type="date"` からテキストへ落とすかの選択になるが、どちらも
+ * この issue の直し方の見立てを超える変更なので、ここでは行わない。
+ */
+function isRealCalendarDate(value: string): boolean {
+  // `USAGE_DATE_PATTERN` を通った後の呼び出しを前提にしているので、
+  // 3つの数字グループは必ず取れる（`match` が `null` になる分岐は無い）。
+  // `noUncheckedIndexedAccess` は取れることまでは保証しないので、万が一
+  // 取れなかったときは `NaN` へ倒し、下の比較がそのまま偽になるようにする。
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return false;
+  const year = Number(match[1] ?? NaN);
+  const month = Number(match[2] ?? NaN);
+  const day = Number(match[3] ?? NaN);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+/**
+ * `FROM_PARAM` / `TO_PARAM` の生の値から、`YYYY-MM-DD` として読める値だけを
+ * 取り出す（issue #2133）。**読めない値は捨てて「絞り込み無し」として扱う**
+ * （`parseUsageLayer` / `parseUsageSite` と同じ判断——知らない値をそのまま
+ * `GET /usage` へ渡さない）。**空文字（`?from=` で明示的に空にした場合）は
+ * 「読めない」とは扱わない** ——「絞り込みが無い」と等価であって、人間が
+ * 書き損じた値ではない。
+ *
+ * **形（`USAGE_DATE_PATTERN`）とカレンダー上の実在（`isRealCalendarDate`）の
+ * 両方を見る。** 後者を見る理由は `isRealCalendarDate` の doc（デーモンとは
+ * 意図的に揃えていない）。
+ *
+ * 戻り値だけでは「捨てたかどうか」は見分けられない（空文字は「そもそも
+ * 無い」と「捨てた」の両方で起こる）。捨てたことを画面に出す判定は、
+ * 呼び出し側で `raw` と戻り値を突き合わせて行う。
+ */
+function parseUsageDate(raw: string | null): string {
+  if (raw === null || raw === '') return '';
+  if (!USAGE_DATE_PATTERN.test(raw)) return '';
+  return isRealCalendarDate(raw) ? raw : '';
+}
+
 export default function Usage() {
   /*
    * **絞り込みの正本は URL である（issue #2050）。** `journal.tsx`（#2029）・
@@ -106,8 +193,17 @@ export default function Usage() {
    * 打鍵・選択のたびに履歴が積まれると「戻る」が使い物にならなくなる。
    */
   const [searchParams, setSearchParams] = useSearchParams();
-  const from = searchParams.get(FROM_PARAM) ?? '';
-  const to = searchParams.get(TO_PARAM) ?? '';
+  const rawFrom = searchParams.get(FROM_PARAM);
+  const rawTo = searchParams.get(TO_PARAM);
+  const from = parseUsageDate(rawFrom);
+  const to = parseUsageDate(rawTo);
+  /**
+   * **読めなかった生の値だけを持つ（捨てて終わりにしない。issue #2133）。**
+   * `rawFrom` / `rawTo` が非空なのに `from` / `to` が空文字に落ちたときだけ
+   * 「読めなかった」——空文字そのもの（絞り込み無し）とは区別する。
+   */
+  const invalidFrom = rawFrom !== null && rawFrom !== '' && from === '' ? rawFrom : null;
+  const invalidTo = rawTo !== null && rawTo !== '' && to === '' ? rawTo : null;
   const managerId = searchParams.get(MANAGER_ID_PARAM) ?? '';
   const layer = parseUsageLayer(searchParams.get(LAYER_PARAM));
   const site = parseUsageSite(searchParams.get(SITE_PARAM));
@@ -140,6 +236,21 @@ export default function Usage() {
     ...(tokenId === '' ? {} : { tokenId }),
   };
   const { data, error, isLoading } = useUsage(query);
+
+  /**
+   * **黙って捨てない（issue #2133）。** `layer` / `site` は捨てて終わりだが
+   * （`journal.tsx` / `managers.tsx` と同じ線・#2010）、`from` / `to` は人間が
+   * URL を手で書き換える・古いブックマークを開く・別画面の組み立てが誤った
+   * リンクを踏む、のどれでも起こりうるので、読めなかった生の値をそのまま
+   * 画面に出す（人間が書いた URL の値であって秘密ではない）。
+   */
+  const dateNotices: string[] = [];
+  if (invalidFrom !== null) {
+    dateNotices.push(`URL の from=${invalidFrom} は日付として読めないので、絞り込みに使っていない`);
+  }
+  if (invalidTo !== null) {
+    dateNotices.push(`URL の to=${invalidTo} は日付として読めないので、絞り込みに使っていない`);
+  }
 
   return (
     <Page
@@ -230,6 +341,12 @@ export default function Usage() {
           </label>
         </div>
       </Card>
+
+      {dateNotices.map((line) => (
+        <p key={line} className="mb-4 text-xs text-warn">
+          {line}
+        </p>
+      ))}
 
       <ErrorNote error={error} className="mb-4" />
 

@@ -466,6 +466,8 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
     expect((screen.getByLabelText(/layer/) as HTMLSelectElement).value).toBe('clone');
     expect((screen.getByLabelText(/site/) as HTMLSelectElement).value).toBe('distill');
     expect((screen.getByLabelText(/^token/) as HTMLInputElement).value).toBe('tok-1');
+    // 読める日付なので、読めなかった旨の注記は出ない（issue #2133）。
+    expect(screen.queryByText(/読めないので、絞り込みに使っていない/)).toBeNull();
 
     // `GET /usage` への問い合わせにも同じ値が載る。
     await waitFor(() => {
@@ -541,6 +543,148 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
       const params = new URL(call as string).searchParams;
       expect(params.has('layer')).toBe(false);
       expect(params.has('site')).toBe(false);
+    });
+  });
+
+  /**
+   * `from` / `to` は `layer` / `site` と違って**知らない値の集合が閉じて
+   * いない**（人間が手で書き換えた URL・古いブックマーク・他の画面の組み
+   * 立てミス、のどれでも壊れうる）ので、`layer` / `site` と同じ「知らない
+   * 値は捨てて『すべて』にする」だけでは、読み手は絞り込みが効いていない
+   * ことに気づけない（issue #2133）。**捨てたことを画面に1行出す。**
+   */
+  it('URL の from が YYYY-MM-DD として読めないとき、GET /usage に渡さず、読めないと画面に出す', async () => {
+    const stub = stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage(['/?from=not-a-date']);
+
+    // 画面ごと落ちない。
+    await screen.findByText(/その範囲には記録が無い/);
+
+    // 捨てたことが分かる（値そのものも出る——人間が書いた URL の値であって
+    // 秘密ではない）。
+    expect(
+      await screen.findByText(
+        /URL の from=not-a-date は日付として読めないので、絞り込みに使っていない/,
+      ),
+    ).toBeTruthy();
+
+    // 読めない値は入力欄にも出さない（絞り込みが効いているように見えるのに
+    // 入力欄が空、という食い違いを作らない側——両方とも空にする）。
+    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('');
+
+    // 読めない値のまま `GET /usage` へ渡さない。
+    await waitFor(() => {
+      const call = stub.calls.find((url) => url.includes('/usage'));
+      expect(call).toBeDefined();
+      const params = new URL(call as string).searchParams;
+      expect(params.has('from')).toBe(false);
+    });
+  });
+
+  it('URL の to が YYYY-MM-DD として読めないときも同じ（from とは別に判定する）', async () => {
+    const stub = stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage(['/?from=2026-08-01&to=2026-02-30-ish']);
+
+    await screen.findByText(/その範囲には記録が無い/);
+
+    expect(
+      await screen.findByText(
+        /URL の to=2026-02-30-ish は日付として読めないので、絞り込みに使っていない/,
+      ),
+    ).toBeTruthy();
+    // from は読めているので、こちらは注記が出ない。
+    expect(screen.queryByText(/URL の from=.*は日付として読めない/)).toBeNull();
+    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('2026-08-01');
+    expect((screen.getByLabelText(/^to$/) as HTMLInputElement).value).toBe('');
+
+    await waitFor(() => {
+      const call = stub.calls.find((url) => url.includes('/usage'));
+      expect(call).toBeDefined();
+      const params = new URL(call as string).searchParams;
+      expect(params.get('from')).toBe('2026-08-01');
+      expect(params.has('to')).toBe(false);
+    });
+  });
+
+  /**
+   * `2026-02-30` は**形は `YYYY-MM-DD` に合うが、実在しない日**である。
+   * デーモン側の `usageDateSchema`（`packages/core/src/usage.ts`）も正規表現
+   * だけで検査していて実在の検査をしていない（`usage.tsx` の
+   * `USAGE_DATE_PATTERN` の doc）ので、画面もここでは弾かず「読めた」側として
+   * 渡す——弾くと、デーモンが通す値を画面だけが弾く逆向きの非対称ができる。
+   */
+  /**
+   * `2026-02-30` は**形は `YYYY-MM-DD` に合うが、実在しない日**である。
+   * デーモン側の `usageQuery`（`usageDateSchema`。`packages/core/src/usage.ts`）
+   * は正規表現だけで検査していて実在の検査をしていないので、デーモン単体は
+   * これを弾かない——だが画面はここを**あえて**デーモンと揃えず、読めない
+   * 扱いにする。理由は `usage.tsx` の `isRealCalendarDate` の doc:
+   * `type="date"` の `<input>` は実在しない日を渡すと値のサニタイズで
+   * 空文字に落ちる（HTML の仕様。jsdom も同じ）ので、そのまま絞り込みへ
+   * 通すと「入力欄は空なのに絞り込みが効いている」という、この issue が
+   * 塞ごうとしている食い違いが実在しない日でも起きてしまう。
+   */
+  it('形は合うが実在しない日（2026-02-30）も読めない扱いにする（type="date" の空欄化との食い違いを避けるため、デーモンとは揃えていない）', async () => {
+    const stub = stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage(['/?from=2026-02-30']);
+
+    await screen.findByText(/その範囲には記録が無い/);
+    expect(
+      await screen.findByText(
+        /URL の from=2026-02-30 は日付として読めないので、絞り込みに使っていない/,
+      ),
+    ).toBeTruthy();
+    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('');
+
+    await waitFor(() => {
+      const call = stub.calls.find((url) => url.includes('/usage'));
+      expect(call).toBeDefined();
+      const params = new URL(call as string).searchParams;
+      expect(params.has('from')).toBe(false);
+    });
+  });
+
+  it('入力欄で from を選び直すと、URL の読めない値は置き換わり、注記も消える', async () => {
+    const stub = stubUsage({
+      rows: [],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    const { router } = renderUsage(['/?from=not-a-date']);
+
+    await screen.findByText(/その範囲には記録が無い/);
+    expect(await screen.findByText(/読めないので、絞り込みに使っていない/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/^from$/), { target: { value: '2026-08-05' } });
+
+    await waitFor(() => {
+      expect(new URLSearchParams(router.state.location.search).get('from')).toBe('2026-08-05');
+    });
+    // 注記が消える。
+    expect(screen.queryByText(/読めないので、絞り込みに使っていない/)).toBeNull();
+    expect((screen.getByLabelText(/^from$/) as HTMLInputElement).value).toBe('2026-08-05');
+
+    await waitFor(() => {
+      const call = stub.calls.findLast((url) => url.includes('/usage'));
+      expect(call).toBeDefined();
+      const params = new URL(call as string).searchParams;
+      expect(params.get('from')).toBe('2026-08-05');
     });
   });
 
