@@ -41,7 +41,7 @@ import {
 import type { ScheduleStatus } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
-import { UnreadableCommitmentError } from './store.js';
+import { UnreadableCommitmentError, UnreadableTokenSettingsError } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import {
@@ -17722,6 +17722,49 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     expect(reply).toContain('回す契機:');
     expect(reply).toContain('冷却 ');
+  });
+
+  /**
+   * issue #2095。回す契機・冷却の設定（`stores.tokens.readSettings()`）が
+   * `UnreadableTokenSettingsError`（issue #2053）で壊れていても、
+   * `token_list` は一覧まで道連れにしない——一覧を返した上で、設定が読めない
+   * ことと直し方を1行で言う。
+   *
+   * **`Promise.all` に3つとも入れていた直す前の形では、ここが reject して
+   * 道具全体が「壊れた」としか見えなくなっていた**（`tools.ts` の
+   * `readSettings()` を切り出した doc）。
+   */
+  it('回す契機・冷却の設定が読めなくても一覧は返り、理由と直し方が1行出る（issue #2095）', async () => {
+    const h = harness();
+    await put(h);
+    const REASON = 'rotateOn が enum の外（テスト用）';
+    h.stores.tokens.readSettings = () => {
+      throw new UnreadableTokenSettingsError(REASON);
+    };
+
+    const reply = await h.call('token_list', {});
+
+    // 一覧そのものは道連れになっていない。
+    expect(reply).toContain('- tok-a ');
+    expect(reply).toContain('予備1');
+    // 既定値へすり替わっていない——「回す契機:」の行が既定の文言に変わり、
+    // 理由と直し方を言う。
+    expect(reply).not.toContain('回す契機:');
+    expect(reply).toContain('回転の設定は読めない');
+    expect(reply).toContain(REASON);
+    expect(reply).toContain('回す契機と冷却の両方を指定して');
+  });
+
+  it('readSettings が UnreadableTokenSettingsError 以外を投げたら握り潰さずに上へ通す', async () => {
+    const h = harness();
+    await put(h);
+    h.stores.tokens.readSettings = () => {
+      throw new Error('DB 接続断（テスト用。設定の形とは無関係の障害）');
+    };
+
+    await expect(h.call('token_list', {})).rejects.toThrow(
+      'DB 接続断（テスト用。設定の形とは無関係の障害）',
+    );
   });
 });
 

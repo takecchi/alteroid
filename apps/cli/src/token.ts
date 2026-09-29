@@ -56,7 +56,15 @@ interface TokenRotationSettings {
 
 interface TokensView {
   tokens: AgentTokenView[];
-  settings: TokenRotationSettings;
+  /**
+   * **`settings` / `settingsUnreadable` はどちらか一方だけが在る**（issue
+   * #2095）。回す契機・冷却の設定が壊れていて読めないとき、デーモンは
+   * `settings` を省いて `settingsUnreadable.reason` を返す——既定値では
+   * 埋めない。この CLI は見た目を作り込まず、落ちずに理由を出すだけに
+   * とどめる（きちんとした表示は Web 側の別 Issue の領域）。
+   */
+  settings?: TokenRotationSettings;
+  settingsUnreadable?: { reason: string };
 }
 
 interface AgentTokenInput {
@@ -71,9 +79,18 @@ export async function tokenListCommand(): Promise<void> {
   const target = await resolveTarget();
   const view = (await request(target, '/tokens')) as TokensView;
 
-  stdout.write(
-    `回す契機: ${view.settings.rotateOn}（resetsAt が取れないときの冷却の既定 ${String(view.settings.cooldownMs)}ms）\n`,
-  );
+  // **`settings` が無いのを既定値で埋めない**（issue #2095）。読めないときは
+  // 理由だけを出す——きちんとした表示は Web 側の別 Issue の領域なので、
+  // ここでは落ちずに理由を出すところまでにとどめる。
+  if (view.settings === undefined) {
+    stdout.write(
+      `回転の設定は読めない: ${view.settingsUnreadable?.reason ?? '理由不明'}\n`,
+    );
+  } else {
+    stdout.write(
+      `回す契機: ${view.settings.rotateOn}（resetsAt が取れないときの冷却の既定 ${String(view.settings.cooldownMs)}ms）\n`,
+    );
+  }
 
   if (view.tokens.length === 0) {
     stdout.write('トークンは登録されていません。\n');
@@ -244,6 +261,15 @@ export async function tokenPolicyCommand(
 
   if (value === undefined && options.cooldownMs === undefined) {
     const current = (await request(target, '/tokens')) as TokensView;
+    // **既定値で埋めない**（issue #2095）。読めないときは理由を出す——直すには
+    // `alteroid token policy <値> --cooldown-ms <値>` で両方を指定し直す
+    // （読めない現在値を読まずに書ける。`TokenPoolService.setSettings` の doc）。
+    if (current.settings === undefined) {
+      stdout.write(
+        `回転の設定は読めない: ${current.settingsUnreadable?.reason ?? '理由不明'}\n`,
+      );
+      return;
+    }
     printSettings(current.settings);
     return;
   }

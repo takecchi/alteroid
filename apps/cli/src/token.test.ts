@@ -234,6 +234,35 @@ describe('alteroid token list', () => {
     // 取れなかったものを「不明」で埋めない。
     expect(read()).not.toContain('置いた');
   });
+
+  /**
+   * issue #2095。回す契機・冷却の設定が読めないとき（`settings` を省いて
+   * `settingsUnreadable.reason` を返す）、CLI は落ちずに理由を出す。
+   * **既定値（`free_exhausted` 等）で埋めない**——一覧そのものは道連れに
+   * ならず、読める分だけ出る。
+   */
+  it('設定が読めない応答（settingsUnreadable）でも落ちず、理由を出す（一覧は道連れにならない）', async () => {
+    const REASON = 'rotateOn が enum の外（テスト用）';
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settingsUnreadable: { reason: REASON },
+      },
+    });
+
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text).toContain('回転の設定は読めない');
+    expect(text).toContain(REASON);
+    // 既定値へすり替わっていない。
+    expect(text).not.toContain('回す契機:');
+    // 一覧（読めている分）は出ている。
+    expect(text).toContain('first');
+  });
 });
 
 describe('alteroid token add', () => {
@@ -418,6 +447,27 @@ describe('alteroid token policy', () => {
     await expect(tokenPolicyCommand(undefined, { cooldownMs: 'abc' })).rejects.toThrow(
       '--cooldown-ms',
     );
+  });
+
+  /**
+   * issue #2095。引数無し（見るだけ）のとき、GET /tokens が
+   * `settingsUnreadable` を返したら既定値で埋めずに理由を出す。
+   */
+  it('引数無しで、設定が読めない応答なら落ちずに理由を出す', async () => {
+    const REASON = 'cooldownMs が数値でない（テスト用）';
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: { tokens: [], settingsUnreadable: { reason: REASON } },
+    });
+    const read = captureStdout();
+
+    await tokenPolicyCommand(undefined, {});
+
+    const text = read();
+    expect(text).toContain('回転の設定は読めない');
+    expect(text).toContain(REASON);
+    expect(text).not.toContain('回す契機:');
+    expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
 });
 
