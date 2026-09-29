@@ -1,8 +1,10 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { collectRepoFiles } from './repo-scan-files.js';
 
 /**
  * **新しい `JournalStore` 実装が契約から漏れたら落ちる歯（issue #418 の
@@ -41,18 +43,6 @@ import { describe, expect, it } from 'vitest';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
-
-function collectFiles(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (EXCLUDE_DIRS.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectFiles(full, out);
-    } else if (entry.isFile()) {
-      out.push(path.relative(ROOT, full).split(path.sep).join('/'));
-    }
-  }
-}
 
 /**
  * `JournalStore` を実装している疑いのある箇所を検出する2つの形。
@@ -174,8 +164,7 @@ const KNOWN_IMPLEMENTATIONS: Record<string, RegistryEntry> = {
   },
 };
 
-const allFiles: string[] = [];
-collectFiles(ROOT, allFiles);
+const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
 const detected = findJournalStoreImplementations(allFiles);
 
 describe('JournalStore 実装の一覧が with 契約の登録から漏れていない（issue #418 再発防止）', () => {

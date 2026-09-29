@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 // テストから直接読める。include を書き写すと二重管理でずれるので、ここから読む。
 import rootVitestConfig from '../vitest.config.ts';
 
+import { collectRepoFiles } from './repo-scan-files.js';
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** 変異試験でだけ拾いたくないので、探索から外すもの。 */
@@ -62,19 +64,6 @@ function expandWorkspaceDirs(globs: string[]): string[] {
   return dirs.sort();
 }
 
-/** repo 全体をファイル単位で読み、リポジトリ根からの相対パス（`/` 区切り）で返す。 */
-function collectFiles(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (EXCLUDE_DIRS.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectFiles(full, out);
-    } else if (entry.isFile()) {
-      out.push(path.relative(ROOT, full).split(path.sep).join('/'));
-    }
-  }
-}
-
 /**
  * `node ../../scripts/test.mjs --root=<...> --scope=<path>` の形の script から
  * 絞り込み先のパスを取り出す。
@@ -101,8 +90,7 @@ const workspaceDirs = expandWorkspaceDirs(readWorkspaceGlobs());
 
 const includeGlobs = (rootVitestConfig as { test: { include: string[] } }).test.include;
 
-const allFiles: string[] = [];
-collectFiles(ROOT, allFiles);
+const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
 
 /** root の vitest.config.ts の include に実際に拾われるファイルだけ。 */
 const testFiles = allFiles.filter((f) => includeGlobs.some((g) => path.matchesGlob(f, g)));

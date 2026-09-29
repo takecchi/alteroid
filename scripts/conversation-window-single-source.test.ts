@@ -1,8 +1,10 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+
+import { collectRepoFiles } from './repo-scan-files.js';
 
 /**
  * **会話の走査窓を組み立てる場所が1つに保たれているかを測る歯（issue #418 の
@@ -50,19 +52,6 @@ const ALLOWED_FILES = new Set([
   'packages/core/src/journal-with-contract.ts',
 ]);
 
-/** repo 全体をファイル単位で読み、リポジトリ根からの相対パス（`/` 区切り）で返す。 */
-function collectFiles(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (EXCLUDE_DIRS.has(entry.name)) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectFiles(full, out);
-    } else if (entry.isFile()) {
-      out.push(path.relative(ROOT, full).split(path.sep).join('/'));
-    }
-  }
-}
-
 /**
  * `<何か>.list({ ... types: ['exchange'] または ["exchange"] ... })` の形を
  * 探す。前後 240 文字ずつを許容するのは、実際の呼び出しがオブジェクトリテラルの
@@ -99,8 +88,7 @@ export function findHandBuiltConversationWindows(files: readonly string[]): Hand
   return hits;
 }
 
-const allFiles: string[] = [];
-collectFiles(ROOT, allFiles);
+const allFiles = collectRepoFiles(ROOT, EXCLUDE_DIRS);
 
 describe('会話の走査窓は conversation.ts の readConversationWindow 1か所でだけ組み立てる（issue #418 再発防止）', () => {
   it('前提: 少なくとも1つのソースファイルを見つけている', () => {
