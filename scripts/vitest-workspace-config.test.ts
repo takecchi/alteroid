@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,6 +8,12 @@ import { describe, expect, it } from 'vitest';
 
 import rootConfig from '../vitest.config.js';
 import { workspaceVitestConfig } from '../vitest.workspace-config.js';
+
+// @ts-expect-error -- 素の .mjs（型宣言を持たない）を読む。
+// `check-no-env-passthrough-core.mjs` 等と同じ集合を使い、この歯自身の
+// probe ファイルが「これから commit されようとしているツリー」に
+// 含まれないことを、そちらと同じ仕組みで確かめる。
+import { listGitScannableFiles } from './git-scannable-files-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -49,55 +56,94 @@ describe('vitest.workspace-config.ts の配線（#2157）', () => {
   it(
     '歯B（統合）: packages/api-client のディレクトリで vitest を直接叩いても setupFiles' +
       '（scrubSecretEnv によるダミー GH_TOKEN の除去）が効く',
-    () => {
+    async () => {
       const targetPackageDir = path.join(ROOT, 'packages/api-client');
-      // 対象パッケージの本来のテスト一式には含めない（実装の保証ではなく
-      // 配線の歯なので）。この it() の実行中だけ実在し、`finally` で必ず消す
-      // ——`vitest.tmpdir.ts` の `makeTempDir` は `os.tmpdir()` の下に作るため
+
+      // **置き場所は `.gitignore` 済みで、かつそのパッケージの走査範囲に入る
+      // 場所にする**（#2019 / PR #2020 と同じ理由——`.gitignore` に入らない
+      // 未追跡の `.test.ts` は、`pnpm test` を並べて回すと `listGitScannableFiles`
+      // 〔`git ls-files -co --exclude-standard`〕で repo を走査する歯
+      // （`check-no-env-passthrough` の実物の走査・`workspace-test-scripts` 等）が
+      // これを拾いうる）。`packages/api-client/src/generated/` は `.gitignore`
+      // で無視済み（OpenAPI 型の生成物置き場。`pnpm build` が作る）で、
+      // `**/*.test.{ts,tsx}` の対象にも入る——ここへ置く。
+      //
+      // `vitest.tmpdir.ts` の `makeTempDir` は `os.tmpdir()` の下に作るため
       // 使えない（vitest の `test.dir`＝そのパッケージのディレクトリの外に
       // 出ると、そのパッケージの `vitest.config.ts` の include に一致せず
       // 拾われない）。
-      const probeRelPath = 'src/__vitest-workspace-config-probe.generated.test.ts';
+      const generatedDir = path.join(targetPackageDir, 'src/generated');
+      const probeRelPath = 'src/generated/vitest-workspace-config-probe.test.ts';
       const probeAbsPath = path.join(targetPackageDir, probeRelPath);
+      const probeRepoRelPath = path.relative(ROOT, probeAbsPath).split(path.sep).join('/');
 
-      return writeFile(
-        probeAbsPath,
-        [
-          "import { expect, it } from 'vitest';",
-          '',
-          "it('GH_TOKEN はテストの前に消えている（scrubSecretEnv、#2157 の歯）', () => {",
-          '  expect(process.env.GH_TOKEN).toBeUndefined();',
-          '});',
-          '',
-        ].join('\n'),
-      )
-        .then(() => {
-          const vitestBin = path.join(ROOT, 'node_modules/.bin/vitest');
-          // 親の env を丸ごとは渡さない（`scripts/check-no-env-passthrough-core.mjs`）。
-          // 子（vitest 本体とその中の esbuild/rollup 等）が実際に必要とするのは
-          // `PATH`（`node` 自身と、vitest が使うツールを見つけるため）だけである
-          // （`scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()` と同じ形）。
-          // ダミーの `GH_TOKEN` を明示で足す——本物の値は一度も登場しない。
-          return spawnSync(vitestBin, ['run', probeRelPath, '--reporter=dot'], {
-            cwd: targetPackageDir,
-            env: {
-              PATH: process.env.PATH ?? '',
-              GH_TOKEN: 'dummy-not-a-real-token',
-              // 出力に ANSI の色付けを混ぜない——下の集計行の正規表現一致を
-              // 素の文字列だけで判定できるようにする。
-              NO_COLOR: '1',
-            },
-            encoding: 'utf8',
-          });
-        })
-        .finally(() => rm(probeAbsPath, { force: true }))
-        .then((result) => {
-          expect(
-            result.status,
-            `子の vitest が非0で終わった。\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-          ).toBe(0);
-          expect(result.stdout).toMatch(/Tests\s+1 passed \(1\)/);
+      // `pnpm build` が毎回作るので通常は既に存在するが、まだ build していない
+      // 環境でも動くように、無ければ作る。**後始末は「作った側が消す」**——
+      // 元から在ったディレクトリは残す（`openapi.d.ts` 等、本物の生成物が
+      // 入っている）。
+      const generatedDirExistedBefore = existsSync(generatedDir);
+
+      try {
+        await mkdir(generatedDir, { recursive: true });
+        await writeFile(
+          probeAbsPath,
+          [
+            "import { expect, it } from 'vitest';",
+            '',
+            "it('GH_TOKEN はテストの前に消えている（scrubSecretEnv、#2157 の歯）', () => {",
+            '  expect(process.env.GH_TOKEN).toBeUndefined();',
+            '});',
+            '',
+          ].join('\n'),
+        );
+
+        // (a) `.gitignore` 済みなので、これから commit されようとしている
+        // ツリーには出ない——`check-no-env-passthrough` 等が実際に使う集合
+        // （`git ls-files -co --exclude-standard`）そのもので確かめる。
+        const scannable: string[] = listGitScannableFiles({ cwd: ROOT });
+        expect(
+          scannable,
+          `probe（${probeRepoRelPath}）が git ls-files -co --exclude-standard に出た` +
+            '——.gitignore が効いていない。',
+        ).not.toContain(probeRepoRelPath);
+
+        const vitestBin = path.join(ROOT, 'node_modules/.bin/vitest');
+        // 親の env を丸ごとは渡さない（`scripts/check-no-env-passthrough-core.mjs`）。
+        // 子（vitest 本体とその中の esbuild/rollup 等）が実際に必要とするのは
+        // `PATH`（`node` 自身と、vitest が使うツールを見つけるため）だけである
+        // （`scripts/mutate-cli-child-env.ts` の `mutateCliChildEnv()` と同じ形）。
+        // ダミーの `GH_TOKEN` を明示で足す——本物の値は一度も登場しない。
+        const result = spawnSync(vitestBin, ['run', probeRelPath, '--reporter=dot'], {
+          cwd: targetPackageDir,
+          env: {
+            PATH: process.env.PATH ?? '',
+            GH_TOKEN: 'dummy-not-a-real-token',
+            // 出力に ANSI の色付けを混ぜない——下の集計行の正規表現一致を
+            // 素の文字列だけで判定できるようにする。
+            NO_COLOR: '1',
+          },
+          encoding: 'utf8',
         });
+
+        expect(
+          result.status,
+          `子の vitest が非0で終わった。\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+        ).toBe(0);
+
+        // (b) probe が実際に走ったこと（0件で緑を名乗っていないこと）を、
+        // 集計行の passed 件数を読んで確かめる——「走らなかったのに exit 0」
+        // という別穴（歯A の doc、`scripts/test.mjs` の歯A と同じ形）を、
+        // この統合の歯自身が踏んでいないことの確認でもある。
+        const testsLine = result.stdout.match(/Tests\s+(\d+) passed \((\d+)\)/);
+        expect(testsLine, `集計行（Tests）が読めない。stdout:\n${result.stdout}`).not.toBeNull();
+        const passedCount = Number(testsLine![1]);
+        expect(passedCount, 'probe が0件のまま exit 0 になっている').toBeGreaterThan(0);
+      } finally {
+        await rm(probeAbsPath, { force: true });
+        if (!generatedDirExistedBefore) {
+          await rm(generatedDir, { recursive: true, force: true });
+        }
+      }
     },
   );
 });
