@@ -2,7 +2,7 @@ import { USAGE_ESTIMATE_NOTICE, ZERO_USAGE, type UsageRow } from '@alteroid/core
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdout } from './test-support.js';
-import { renderUsage, usageCommand, type UsageView } from './usage.js';
+import { describeUsageDateOrder, renderUsage, usageCommand, type UsageView } from './usage.js';
 
 /**
  * #361: `renderUsage`（文字列を返す純粋関数）だけでなく、実際に端末へ書く
@@ -509,5 +509,69 @@ describe('usageCommand', () => {
     await usageCommand({});
 
     expect(read()).toBe('利用状況を読めませんでした（クエリの形を確かめてください）\n');
+  });
+
+  /**
+   * issue #2155: `to` が `from` より前だと絞り込みは常に0件になり、
+   * `renderUsage` は「その範囲には記録が無い。」としか書かないので「期間の
+   * 指定が逆」と区別が付かない。`describeUsageDateOrder` の注記を
+   * `renderUsage` の出力より前に書く（Web の `dateNotices` と同じ並び）。
+   */
+  it('to が from より前なら、renderUsage の出力の前に注記を書く', async () => {
+    const view = aggregate({ rows: [] });
+    replies.push({ status: 200, body: view });
+    const read = captureStdout();
+
+    await usageCommand({ from: '2026-09-10', to: '2026-09-01' });
+
+    expect(read()).toBe(
+      'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n' +
+        `${renderUsage(view)}\n`,
+    );
+  });
+
+  it('to と from が同じ日なら注記を書かない', async () => {
+    replies.push({ status: 200, body: aggregate({ rows: [] }) });
+    const read = captureStdout();
+
+    await usageCommand({ from: '2026-09-01', to: '2026-09-01' });
+
+    expect(read()).not.toContain('より前なので');
+  });
+
+  it('to が from より後なら注記を書かない', async () => {
+    replies.push({ status: 200, body: aggregate({ rows: [] }) });
+    const read = captureStdout();
+
+    await usageCommand({ from: '2026-09-01', to: '2026-09-10' });
+
+    expect(read()).not.toContain('より前なので');
+  });
+});
+
+/**
+ * issue #2155 の純粋関数部分。**`alteroid usage`（本体）と chat の
+ * `/usage` の両方から同じ関数を呼ぶ**（`usage.ts` / `chat.ts` のコメント
+ * 参照）ので、ここでは文言と境界（`==` では出ない）だけを測る。
+ */
+describe('describeUsageDateOrder', () => {
+  it('to が from より前なら注記の文字列を返す', () => {
+    expect(describeUsageDateOrder('2026-09-10', '2026-09-01')).toBe(
+      'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない',
+    );
+  });
+
+  it('to と from が同じ日なら null（境界は「より前」だけ）', () => {
+    expect(describeUsageDateOrder('2026-09-01', '2026-09-01')).toBeNull();
+  });
+
+  it('to が from より後なら null', () => {
+    expect(describeUsageDateOrder('2026-09-01', '2026-09-10')).toBeNull();
+  });
+
+  it('from / to のどちらかが無ければ null（比較しようがない）', () => {
+    expect(describeUsageDateOrder(undefined, '2026-09-01')).toBeNull();
+    expect(describeUsageDateOrder('2026-09-01', undefined)).toBeNull();
+    expect(describeUsageDateOrder(undefined, undefined)).toBeNull();
   });
 });

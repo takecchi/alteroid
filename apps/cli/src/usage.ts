@@ -104,7 +104,38 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
     return;
   }
   const aggregate = await response.json();
+  const dateOrderNotice = describeUsageDateOrder(options.from, options.to);
+  if (dateOrderNotice !== null) {
+    stdout.write(`${dateOrderNotice}\n`);
+  }
   stdout.write(`${renderUsage(aggregate)}\n`);
+}
+
+/**
+ * `to` が `from` より前だと、絞り込みは常に空を返す（issue #2155）。
+ *
+ * デーモンの `usageQuery`（`apps/daemon/src/app.ts`）は `from` / `to` の
+ * 前後を検査せず `date >= from AND date <= to` で絞るだけなので、
+ * `to < from` のときは例外にならず単に0件になる ——
+ * `renderUsage` はその0件を「その範囲には記録が無い。」としか出さないので、
+ * 「期間の指定が逆」と「その期間に本当に記録が無い」が区別できない
+ * （Web の `usage.tsx` `dateNotices` と同じ穴）。
+ *
+ * **`alteroid usage`（本体）と chat の `/usage` の両方から呼ぶ。** どちらも
+ * `renderUsage` を共有しているのに、この注記だけ片方にしか無いと「片方の
+ * 入口でしかできないこと」を作ってしまう。
+ *
+ * `from` / `to` はどちらも `GET /usage` の応答が返ってきた後の値なので、
+ * デーモンの `usageDateSchema`（正規表現のみ）は既に通っている——`YYYY-MM-DD`
+ * の辞書式比較がそのまま日付の前後に一致する。
+ */
+export function describeUsageDateOrder(
+  from: string | undefined,
+  to: string | undefined,
+): string | null {
+  if (from === undefined || to === undefined) return null;
+  if (to >= from) return null;
+  return `to（${to}）が from（${from}）より前なので、この範囲には1日も入らない`;
 }
 
 /**

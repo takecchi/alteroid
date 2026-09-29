@@ -251,6 +251,24 @@ export default function Usage() {
   if (invalidTo !== null) {
     dateNotices.push(`URL の to=${invalidTo} は日付として読めないので、絞り込みに使っていない`);
   }
+  /**
+   * **`to` が `from` より前だと、絞り込みは常に空を返す（issue #2155）。**
+   * デーモンの `usageQuery`（`apps/daemon/src/app.ts`）は `from` / `to` の
+   * 前後を検査せず、`date >= from AND date <= to` で絞るだけなので、
+   * `to < from` のときは例外にならず単に0件になる——「期間の指定が逆」と
+   * 「その期間に本当に記録が無い」が、画面の側で何も足さなければ同じ
+   * 「その範囲には記録が無い。」という文言で出て区別が付かない。
+   *
+   * **`UsageBody` 側の「その範囲には記録が無い。」はそのまま残す。** 0件で
+   * あること自体は事実として正しく、`beforeLedger` 等の既存の注記と同じ
+   * 並びに置けば読み違いは防げる——ここは削るのではなく、隣に理由を足す形
+   * を選ぶ。`from` / `to` がどちらも読める（`invalidFrom` / `invalidTo` が
+   * 発生していない）ときだけ比較する。`YYYY-MM-DD` は辞書式比較がそのまま
+   * 日付の前後に一致するので、文字列比較で足りる。
+   */
+  if (from !== '' && to !== '' && to < from) {
+    dateNotices.push(`to（${to}）が from（${from}）より前なので、この範囲には1日も入らない`);
+  }
 
   return (
     <Page

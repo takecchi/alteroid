@@ -709,6 +709,48 @@ describe('/usage 画面の絞り込みが URL に載る（issue #2050）', () =>
 });
 
 /**
+ * `to` が `from` より前（issue #2155）。
+ *
+ * デーモンの `usageQuery` は前後を検査せず単に0件になるので、画面が何も
+ * 足さなければ「期間の指定が逆」と「その期間に本当に記録が無い」が同じ
+ * 「その範囲には記録が無い。」に潰れる。`dateNotices` と同じ置き場・同じ
+ * 見た目で1行足す——「記録が無い」自体は削らない（0件は事実として正しい）。
+ */
+describe('/usage 画面: to が from より前（issue #2155）', () => {
+  it('to が from より前なら、絞り込みが逆だと注記する（「記録が無い」は残す）', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?from=2026-09-10&to=2026-09-01']);
+
+    expect(
+      await screen.findByText(
+        'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない',
+      ),
+    ).toBeTruthy();
+    // 削らない側の判断: 0件であること自体は事実として正しいので残す。
+    expect(await screen.findByText(/その範囲には記録が無い/)).toBeTruthy();
+  });
+
+  it('to と from が同じ日なら注記を出さない', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?from=2026-09-10&to=2026-09-10']);
+
+    await screen.findByText(/その範囲には記録が無い/);
+    expect(screen.queryByText(/より前なので、この範囲には1日も入らない/)).toBeNull();
+  });
+
+  it('to が from より後なら注記を出さない', async () => {
+    stubUsage({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+
+    renderUsage(['/?from=2026-09-01&to=2026-09-10']);
+
+    await screen.findByText(/その範囲には記録が無い/);
+    expect(screen.queryByText(/より前なので、この範囲には1日も入らない/)).toBeNull();
+  });
+});
+
+/**
  * Web 検索の回数（`webSearchRequests`。Issue #1950）。
  *
  * **0 のときは1文字も増やさない**（AGENTS.md 地雷表）。文言は core の

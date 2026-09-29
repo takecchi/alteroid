@@ -3192,6 +3192,65 @@ describe('chat の /usage（issue #2079）', () => {
     for (const layer of usageLayerSchema.options) expect(text).toContain(layer);
     for (const site of usageSiteSchema.options) expect(text).toContain(site);
   });
+
+  /**
+   * issue #2155: `to` が `from` より前だと、`GET /usage` は0件を返し
+   * `renderUsage` は「その範囲には記録が無い。」としか書かない —— chat の
+   * `/usage` と `alteroid usage`（`usage.ts`）の両方が同じ穴を持っていたので、
+   * 同じ `describeUsageDateOrder` を通して同じ注記を足す（`usage.test.ts`
+   * `describeUsageDateOrder` が文言そのものを測る）。
+   */
+  it('to が from より前なら、renderUsage の出力の前に注記を書く', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      usageAggregate: {
+        rows: [],
+        turnRows: [],
+        since: '2026-08-01T00:00:00.000Z',
+        layersSince: '2026-08-01T00:00:00.000Z',
+        tokensSince: '2026-08-01T00:00:00.000Z',
+        beforeLedger: false,
+        beforeLayers: false,
+        beforeTokens: false,
+        notice: USAGE_ESTIMATE_NOTICE,
+        account: { state: 'unknown' },
+        unrecordedManagers: [],
+      },
+    });
+
+    await runSlashCommand('/usage from=2026-09-10 to=2026-09-01', client, emptyListed());
+
+    const text = read();
+    expect(
+      text.startsWith(
+        'to（2026-09-01）が from（2026-09-10）より前なので、この範囲には1日も入らない\n',
+      ),
+    ).toBe(true);
+    expect(text).toContain('その範囲には記録が無い。');
+  });
+
+  it('to と from が同じ日なら注記を書かない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      usageAggregate: {
+        rows: [],
+        turnRows: [],
+        since: '2026-08-01T00:00:00.000Z',
+        layersSince: '2026-08-01T00:00:00.000Z',
+        tokensSince: '2026-08-01T00:00:00.000Z',
+        beforeLedger: false,
+        beforeLayers: false,
+        beforeTokens: false,
+        notice: USAGE_ESTIMATE_NOTICE,
+        account: { state: 'unknown' },
+        unrecordedManagers: [],
+      },
+    });
+
+    await runSlashCommand('/usage from=2026-09-01 to=2026-09-01', client, emptyListed());
+
+    expect(read()).not.toContain('より前なので');
+  });
 });
 
 describe('chat の /reports（一覧）', () => {

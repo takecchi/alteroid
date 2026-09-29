@@ -41,7 +41,7 @@ import { createClient, type DaemonClient } from './client.js';
 import { formatElapsed } from './format.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
-import { narrowUsageAxis, renderUsage } from './usage.js';
+import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
 
 /**
  * `alteroid chat` — クローンとの会話。
@@ -1789,6 +1789,13 @@ export async function runSlashCommand(
         return 'ok';
       }
       const aggregate = await response.json();
+      // issue #2155: `to` が `from` より前だと常に0件になり、「その範囲には
+      // 記録が無い。」だけでは「期間の指定が逆」と区別できない
+      // （`usage.ts` の `alteroid usage` と同じ穴・同じ注記）。
+      const dateOrderNotice = describeUsageDateOrder(parsed.filters.from, parsed.filters.to);
+      if (dateOrderNotice !== null) {
+        stdout.write(`${dateOrderNotice}\n`);
+      }
       stdout.write(`${renderUsage(aggregate)}\n`);
       return 'ok';
     }
