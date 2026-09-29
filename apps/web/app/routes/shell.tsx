@@ -48,8 +48,10 @@ import {
 
 /**
  * `end` は `AppSidebarItem` に無い（`@alteroid/ui` はルーターを知らない）ので、`NAV`
- * が自前で持ち、`renderLink` の中で `NavLink` へ渡す。**落とすと `/` が前方一致で
- * どの画面でも選択中になる。**
+ * が自前で持ち、`renderLink` の中で `NavLink` へ渡す。元の `NAV` が持つ値を落とさないため
+ * である（将来 `end` が要る行き先が足されたときに、黙って効かなくならない）。
+ * なお react-router の `NavLink` は `to="/"` を特別に扱うので、いまの `/` は `end` が
+ * 無くても `/chat` などで選択中にならない（`shell.nav-current.test.tsx` の冒頭に実測）。
  */
 const NAV = [
   { to: '/', label: 'ダッシュボード', icon: LayoutDashboard, end: true },
