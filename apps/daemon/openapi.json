@@ -17241,6 +17241,466 @@
         }
       }
     },
+    "/progress": {
+      "get": {
+        "operationId": "getProgress",
+        "tags": ["progress"],
+        "summary": "作業の進捗（積み上がり・実施中・片付いた速度・見込み）",
+        "description": "台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 168）は速度と見込みを数える窓の長さ（時間、有限の正数）。**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず `null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。`github` は常に `not_observed`——デーモンは GitHub を見に行かない。中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。",
+        "responses": {
+          "200": {
+            "description": "進捗の集計。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "observedAt": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "hours": {
+                          "type": "number"
+                        },
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["hours", "from", "to"]
+                    },
+                    "backlog": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "byOrigin": {
+                          "type": "object",
+                          "properties": {
+                            "human": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "manager": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "external": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "self": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["human", "manager", "external", "self"]
+                        },
+                        "age": {
+                          "type": "object",
+                          "properties": {
+                            "oldestAt": {
+                              "type": ["string", "null"]
+                            },
+                            "medianHours": {
+                              "type": ["number", "null"]
+                            },
+                            "buckets": {
+                              "type": "object",
+                              "properties": {
+                                "under1h": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "under24h": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "under7d": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "over7d": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["under1h", "under24h", "under7d", "over7d"]
+                            }
+                          },
+                          "required": ["oldestAt", "medianHours", "buckets"]
+                        },
+                        "byState": {
+                          "type": "object",
+                          "properties": {
+                            "untouched": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "responded": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "delegated": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "notApplicable": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["untouched", "responded", "delegated", "notApplicable"]
+                        },
+                        "completeness": {
+                          "type": "object",
+                          "properties": {
+                            "unreadable": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "trimmedClosed": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["unreadable", "trimmedClosed"]
+                        }
+                      },
+                      "required": ["total", "byOrigin", "age", "byState", "completeness"]
+                    },
+                    "inProgress": {
+                      "type": "object",
+                      "properties": {
+                        "running": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "awaitingHuman": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "lost": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "lastReport": {
+                          "type": "object",
+                          "properties": {
+                            "oldestAt": {
+                              "type": ["string", "null"]
+                            },
+                            "newestAt": {
+                              "type": ["string", "null"]
+                            },
+                            "withoutReport": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["oldestAt", "newestAt", "withoutReport"]
+                        }
+                      },
+                      "required": ["running", "awaitingHuman", "lost", "lastReport"]
+                    },
+                    "throughput": {
+                      "type": "object",
+                      "properties": {
+                        "commitmentsOpened": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "commitmentsClosed": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "delegationsEnded": {
+                          "type": "object",
+                          "properties": {
+                            "count": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "basis": {
+                              "type": "string",
+                              "const": "updatedAt"
+                            }
+                          },
+                          "required": ["count", "basis"]
+                        }
+                      },
+                      "required": ["commitmentsOpened", "commitmentsClosed", "delegationsEnded"]
+                    },
+                    "forecast": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "estimated"
+                            },
+                            "hoursToDrain": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "basis": {
+                              "type": "object",
+                              "properties": {
+                                "open": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "openedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "windowHours": {
+                                  "type": "number"
+                                },
+                                "method": {
+                                  "type": "string",
+                                  "const": "open / (closedInWindow / windowHours)"
+                                },
+                                "unreadable": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "minClosedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "open",
+                                "closedInWindow",
+                                "openedInWindow",
+                                "windowHours",
+                                "method",
+                                "unreadable",
+                                "minClosedInWindow"
+                              ]
+                            },
+                            "notice": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["state", "hoursToDrain", "basis", "notice"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "not_converging"
+                            },
+                            "basis": {
+                              "type": "object",
+                              "properties": {
+                                "open": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "openedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "windowHours": {
+                                  "type": "number"
+                                },
+                                "method": {
+                                  "type": "string",
+                                  "const": "open / (closedInWindow / windowHours)"
+                                },
+                                "unreadable": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "minClosedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "open",
+                                "closedInWindow",
+                                "openedInWindow",
+                                "windowHours",
+                                "method",
+                                "unreadable",
+                                "minClosedInWindow"
+                              ]
+                            }
+                          },
+                          "required": ["state", "basis"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "unavailable"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "closed_too_few",
+                                "ledger_younger_than_window",
+                                "history_incomplete"
+                              ]
+                            },
+                            "basis": {
+                              "type": "object",
+                              "properties": {
+                                "open": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "closedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "openedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "windowHours": {
+                                  "type": "number"
+                                },
+                                "method": {
+                                  "type": "string",
+                                  "const": "open / (closedInWindow / windowHours)"
+                                },
+                                "unreadable": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "minClosedInWindow": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "open",
+                                "closedInWindow",
+                                "openedInWindow",
+                                "windowHours",
+                                "method",
+                                "unreadable",
+                                "minClosedInWindow"
+                              ]
+                            }
+                          },
+                          "required": ["state", "reason", "basis"]
+                        }
+                      ]
+                    },
+                    "github": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "not_observed"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["state", "reason"]
+                    }
+                  },
+                  "required": [
+                    "observedAt",
+                    "window",
+                    "backlog",
+                    "inProgress",
+                    "throughput",
+                    "forecast",
+                    "github"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`windowHours` が有限の正数でない（空文字・非数・0以下・非有限）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "windowHours",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/auth/providers": {
       "get": {
         "operationId": "getAuthProviders",
