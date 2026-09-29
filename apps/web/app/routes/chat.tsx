@@ -588,6 +588,23 @@ export function ChatPane({
     { conversationId: string; error: unknown } | undefined
   >(undefined);
   /**
+   * `POST /chat/:conversationId/end`（「会話を終える」）を呼んでいる最中かどうか
+   * （Issue #2171）。ボタンの二重打鍵を防ぐためだけの、この画面だけの状態
+   * ——`interrupting` と同じ理由・同じ形。
+   */
+  const [endingConversation, setEndingConversation] = useState(false);
+  /**
+   * `handleEndConversation` の失敗（ネットワーク断・403 等）。`interruptFailure`
+   * と同じ理由・同じ形で押した時点の会話 id を持つ（Issue #2171）——`ChatPane` は
+   * 会話を切り替えても作り直されない（このファイル冒頭の doc）ので、応答が
+   * 返るより先に別の会話へ切り替えられうる。出すかどうかは描画する側
+   * （下の `visibleEndFailure`）が、その描画の時点の `shownId` と突き合わせて
+   * から決める——`interruptFailure`/`interruptNotice` と同じ形。
+   */
+  const [endFailure, setEndFailure] = useState<
+    { conversationId: string; error: unknown } | undefined
+  >(undefined);
+  /**
    * いま編集中の行の `key`（チャットのメッセージ編集、#1010）。無ければ
    * `undefined`。**`Line.key`（サーバ確定済みの発言では日誌エントリ id と
    * 同じ）で持つ** —— `journalId` だけで持たない理由は、`journalId` を持たない
@@ -1713,6 +1730,45 @@ export function ChatPane({
   );
 
   /**
+   * 「会話を終える」ボタンの押下（Issue #2171）。
+   *
+   * 直す前は `void endConversation(shownId).then(() => navigate('/chat'));`
+   * だけで、失敗（ネットワーク断・403 等）が起きても画面には何も出ず
+   * （コンソールに unhandled rejection が残るだけ）、押している間の
+   * `loading`/`disabled` も無かったので二度押しで2回撃てた。同じ画面の
+   * 「ターンを止める」（`handleInterrupt`、上）・`manager-detail.tsx` の
+   * 「停止する」と同じ形（押している間は `loading`/`disabled`、失敗は
+   * state へ入れて `ErrorNote`、成功したら今どおり `/chat` へ）に直す。
+   *
+   * **`navigate('/chat')` は成功したら常に行う（今までどおり）。** issue
+   * #2171 が直すのは失敗の可視化と二度押しで、遷移そのものの挙動は変えない
+   * ——`handleInterrupt` が押した会話を覚えて遷移を出し分けているのは、
+   * あちらは「出すか出さないか」を描画時の `shownId` で判断できる文言
+   * 表示だからで、ここは遷移という一度きりの行為なので同じ形は当てはまらない。
+   *
+   * **失敗（`endFailure`）だけは `interruptFailure` と同じ形で会話 id を
+   * 持たせる。** `ChatPane` は会話を切り替えても作り直されないので、応答が
+   * 返るより先に別の会話へ切り替えられうる——出すかどうかは描画する側
+   * （`visibleEndFailure`）が、その描画の時点の `shownId` と突き合わせて
+   * から決める。
+   */
+  const handleEndConversation = useCallback(
+    async (pressedConversationId: string) => {
+      setEndingConversation(true);
+      setEndFailure(undefined);
+      try {
+        await endConversation(pressedConversationId);
+        navigate('/chat');
+      } catch (caught) {
+        setEndFailure({ conversationId: pressedConversationId, error: caught });
+      } finally {
+        setEndingConversation(false);
+      }
+    },
+    [endConversation, navigate],
+  );
+
+  /**
    * `interruptNotice`/`interruptFailure` を**いま出してよいか**の判断（#1570）。
    *
    * ここだけが判断する場所である——`handleInterrupt` 側はもう判断しない
@@ -1726,6 +1782,14 @@ export function ChatPane({
   const visibleInterruptFailure =
     interruptFailure !== undefined && interruptFailure.conversationId === shownId
       ? interruptFailure.error
+      : undefined;
+  /**
+   * `endFailure` を**いま出してよいか**の判断。`visibleInterruptFailure` と
+   * 同じ形——判断するのはここだけで、`handleEndConversation` 側はもう判断しない。
+   */
+  const visibleEndFailure =
+    endFailure !== undefined && endFailure.conversationId === shownId
+      ? endFailure.error
       : undefined;
   /**
    * `failures`（送信経路: `send`/`followUp`）から**いま見せている会話ぶんだけ**
@@ -1789,9 +1853,8 @@ export function ChatPane({
             </Button>
             <Button
               size="sm"
-              onClick={() => {
-                void endConversation(shownId).then(() => navigate('/chat'));
-              }}
+              onClick={() => void handleEndConversation(shownId)}
+              loading={endingConversation}
               title="クローンがここまでの学びを記憶へ蒸留する"
             >
               会話を終える
@@ -2087,13 +2150,17 @@ export function ChatPane({
       <div className="shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
         {/*
           `visibleFailure`（送信経路: `send`/`followUp`、会話が一致するときだけ、
-          #1576）と `visibleInterruptFailure`（interrupt 由来、同じく会話が
-          一致するときだけ、#1570）を同じ枠へ合流させる。両方立つことは無い
-          想定だが、立っても `visibleFailure` を優先する——どちらが先でも
-          「何かの失敗が出ている」という事実自体は変わらないので、優先順位
-          そのものに強い意味は無い。
+          #1576）・`visibleInterruptFailure`（interrupt 由来、同じく会話が
+          一致するときだけ、#1570）・`visibleEndFailure`（「会話を終える」由来、
+          同じく会話が一致するときだけ、#2171）を同じ枠へ合流させる。3つとも
+          同時に立つことは無い想定だが、立っても先勝ちの優先順位そのものに
+          強い意味は無い——どれが出ても「何かの失敗が出ている」という事実
+          自体は変わらない。
         */}
-        <ErrorNote error={visibleFailure ?? visibleInterruptFailure} className="mb-2" />
+        <ErrorNote
+          error={visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure}
+          className="mb-2"
+        />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
             {/*
