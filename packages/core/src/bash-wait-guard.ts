@@ -132,9 +132,12 @@ function isTimeoutWrapped(trimmed: string): boolean {
  * 境界なので、`tail -5 foo.log; other -f bar` のような無関係な `-f` を
  * 拾わないため。フラグは `-f` を含む短縮オプション（`-f` 単体・結合形）と
  * `--follow`（`--follow=name` も含む）の両方を見る。
+ *
+ * **`-F`（`--follow=name --retry`）も見る**（#2129）。以前は小文字の `f` しか見ず、
+ * `tail -F x` / `tail -qF x` / `tail -Fn 5 x` がすり抜けていた。
  */
 const TAIL_FOLLOW_RE =
-  /\btail\b(?:(?!;|&&|\|\||\||\n).)*?(?:\s-[a-zA-Z]*f[a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b)/;
+  /\btail\b(?:(?!;|&&|\|\||\||\n).)*?(?:\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b)/;
 
 function hasUnboundedTailFollow(command: string): boolean {
   return TAIL_FOLLOW_RE.test(command);
@@ -218,7 +221,27 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
   if (backgrounded) return true;
   const rest = trimmed.slice(match.index + match[0].length);
   const operator = FIRST_CONTROL_OPERATOR_RE.exec(rest);
-  return operator !== null && operator[0] === '&';
+  if (operator !== null && operator[0] === '&') return true;
+  // `setsid`（`-w` / `--wait` が無い形）も背景へ置く形である（#2129）。
+  const segment = trimmed.slice(commandPositionStartBefore(trimmed, match.index), match.index);
+  return isBackgroundingSetsid(segment);
+}
+
+/**
+ * `setsid [オプション…]` が、子の終わりを待たずに返る形か（#2129）。
+ *
+ * util-linux の `setsid(1)` は、呼び出し元がプロセスグループの先頭なら子を fork して、
+ * `-w` / `--wait` が無ければ待たずに返る（`setsid(1)` を読んでの判定。器で実際に
+ * fork するかは確かめていない）。**弾く側へ倒すため、fork しない場合を区別しない。**
+ * `-w` / `--wait`（短い形の束ね `-fw` を含む）が在れば、待つ形として通す。
+ */
+const SETSID_RE = /(?:^|\s)setsid((?:[ \t]+-\S+)*)[ \t]/;
+const SETSID_WAIT_OPTION_RE = /(?:^|\s)(?:--wait|-[A-Za-z]*w[A-Za-z]*)(?=\s|$)/;
+
+function isBackgroundingSetsid(segment: string): boolean {
+  const m = SETSID_RE.exec(segment);
+  if (m === null) return false;
+  return !SETSID_WAIT_OPTION_RE.test(m[1] ?? '');
 }
 
 /**
@@ -2034,6 +2057,73 @@ export interface BashInvocation {
 }
 
 /**
+ * 本文を実行しないと分かっている読み手（`cat` / `tee`）のヒアドキュメント（#2130）。
+ * `<<` の手前の、コマンドの位置からの区間に当てる。
+ */
+const DATA_HEREDOC_READER_RE = new RegExp(
+  String.raw`^[ \t]*${LEADING_ENV_PREFIX_SRC}(?:cat|tee)\b`,
+);
+
+/**
+ * 同じ呼び出しの中で、書いたファイルを走らせうる形（#2130）。本文を消した後の写しに
+ * これが在れば、本文を消さない（`cat > run.sh <<'EOF' … EOF` の後の `bash run.sh` で、
+ * 本文が後で実行されるため）。シェルに語を渡す形（`bash run.sh`。`-` で始まるオプションは
+ * 除く）・`source`・`. `・パスで起こす形（`./run.sh` / `/tmp/run.sh`）を見る。
+ */
+const SCRIPT_RUN_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
+);
+
+/**
+ * 待つ形の判定（`gh-run-watch-background` / `tail-f` / `until-sleep` / `while-sleep`）に
+ * かける写しを作る（#2130）。**本文を実行しないと分かっているヒアドキュメントの本文だけ**を、
+ * 改行を残して空白へ潰す。
+ *
+ * ## なぜ
+ *
+ * ファイルに書くだけの `cat > f <<'EOF' … EOF` の本文に、背景へ置いた run watch・
+ * `tail -f`・`while … sleep` の字面が在るだけで、待つ形のガードが弾いていた。
+ * 2026-09-29T06:3xZ と 07:1xZ に、領域 D のマネージャーが本番の版で実際に踏んだ
+ * （この変更の手順を渡すヒアドキュメントでも踏んだ）。`gh-pr-merge-delete-branch` は
+ * `stripHeredocs` で本文を消してから見るので、この誤検知を持たない。
+ *
+ * ## すり抜けを作らないための線
+ *
+ * これはガードを緩める変更なので、消すのは次の3つを全部満たすヒアドキュメントの本文だけにする。
+ * どれか1つでも満たさなければ、いまのまま本文も見る（弾く側に倒す）。
+ * 1. 読み手が `cat` / `tee`（`DATA_HEREDOC_READER_RE`）
+ * 2. 開始の行（`<<DELIM` を含む行）に `|` が無い（`cat <<EOF | bash` は本文を実行する）
+ * 3. 本文を消した後の写しに、書いたファイルを走らせうる形（`SCRIPT_RUN_RE`）が無い
+ *
+ * `bash <<EOF` / `ssh host <<EOF` / `docker exec -i c sh <<EOF` / `python - <<EOF` のような、
+ * 読み手が `cat` / `tee` でないものは、本文をそのまま見る。
+ *
+ * ⚠️ **残る限界**: 別の呼び出しで書いたファイルを後で走らせる形は、もともと見えない
+ * （スクリプトファイル経由は対象外）。`bash -c "$(cat run.sh)"` のように、書いた
+ * ファイルをコマンド置換で走らせる形は 3 で拾えない。
+ */
+export function stripDataHeredocsForWaitForms(command: string): string {
+  const spans = findHeredocs(command).filter((span) => {
+    const lineEnd = command.indexOf('\n', span.start);
+    const openerRest = command.slice(span.start, lineEnd < 0 ? command.length : lineEnd);
+    if (openerRest.includes('|')) return false;
+    const prefix = command.slice(commandPositionStartBefore(command, span.start), span.start);
+    return DATA_HEREDOC_READER_RE.test(prefix);
+  });
+  if (spans.length === 0) return command;
+  let out = '';
+  let cursor = 0;
+  for (const span of spans) {
+    out += command.slice(cursor, span.bodyStart);
+    out += command.slice(span.bodyStart, span.bodyEnd).replace(/[^\n]/g, ' ');
+    cursor = span.bodyEnd;
+  }
+  out += command.slice(cursor);
+  if (SCRIPT_RUN_RE.test(out)) return command;
+  return out;
+}
+
+/**
  * `Bash` の `command` 文字列を検査する。
  *
  * **純関数。** I/O もプロセスの状態も見ない —— 文字列だけを見て判定する。
@@ -2074,7 +2164,10 @@ export function inspectBashCommand(
   // 見ているので、ここでは影響されない）。
   if (isTimeoutWrapped(trimmed)) return { blocked: false };
 
-  if (isBackgroundedGhRunWatch(trimmed, invocation.backgrounded === true)) {
+  // 待つ形の判定は、本文を実行しないヒアドキュメントの本文を消した写しにかける（#2130）。
+  const waitView = stripDataHeredocsForWaitForms(trimmed);
+
+  if (isBackgroundedGhRunWatch(waitView, invocation.backgrounded === true)) {
     return {
       blocked: true,
       form: 'gh-run-watch-background',
@@ -2093,7 +2186,7 @@ export function inspectBashCommand(
     };
   }
 
-  if (hasUnboundedTailFollow(trimmed)) {
+  if (hasUnboundedTailFollow(waitView)) {
     return {
       blocked: true,
       form: 'tail-f',
@@ -2103,7 +2196,7 @@ export function inspectBashCommand(
 
   LOOP_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = LOOP_RE.exec(trimmed)) !== null) {
+  while ((match = LOOP_RE.exec(waitView)) !== null) {
     const keyword = match[1] as 'until' | 'while';
     const cond = match[2] ?? '';
     const body = match[3] ?? '';
