@@ -902,6 +902,7 @@ export {
   createTokenPoolService,
   type TokenPoolService,
   type TokenPoolServiceOptions,
+  type TokenPoolView,
 } from './token-pool-service.js';
 /**
  * 回し手（Issue #393 PR3）。**デーモンの中の1本。** 撒く先（runner / クローン）は

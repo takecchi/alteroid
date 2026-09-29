@@ -46,6 +46,7 @@ import {
   RESERVED_SCHEDULE_KINDS,
   recentDroppedTraces,
   summarizeInboxBacklog,
+  UnreadableTokenSettingsError,
 } from '@alteroid/core';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8951,6 +8952,95 @@ describe('認証トークンのプール', () => {
     expect(body.rotateOn).toBe('overage_exhausted');
     // 省略した項目（cooldownMs）は既定のまま。
     expect(body.cooldownMs).toBe(5 * 60 * 60 * 1000);
+  });
+
+  /**
+   * issue #2095。回す契機・冷却の設定（`TokenPoolStore.readSettings()`）が
+   * `UnreadableTokenSettingsError`（issue #2053, `store.ts`）で壊れていても、
+   * `GET /tokens` は 500 にならず、読めているプールの一覧はそのまま返る。
+   *
+   * **直す前は、ここが 500 になっていた。** `TokenPoolService` の
+   * `currentView()` が `Promise.all([tokens, settings])` で結んでいたので、
+   * 設定が読めないと一覧ごと reject していた（`token-pool-service.ts`）。
+   *
+   * **既定値へすり替わっていないことも見る。** `settings` を返さず
+   * `settingsUnreadable.reason` を返す——`free_exhausted` 等の既定で埋めると
+   * `off` にしてあった回転を実装が黙って戻すことになる。
+   */
+  it('GET /tokens: 設定が読めなくても 500 にならず、一覧は返り settingsUnreadable が付く（issue #2095）', async () => {
+    const service = createTokenPoolService({ stores, newId: () => 'tok-unreadable-a' });
+    await service.replace([{ label: 'work', value: 'tok-secret-value' }]);
+    const REASON = 'rotateOn が enum の外（テスト用）';
+    const brokenStores: Stores = {
+      ...stores,
+      tokens: {
+        ...stores.tokens,
+        async readSettings() {
+          throw new UnreadableTokenSettingsError(REASON);
+        },
+      },
+    };
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores: brokenStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: brokenStores }),
+    });
+
+    const response = await withTokens.request('/tokens');
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      tokens: { label: string }[];
+      settings?: { rotateOn: string };
+      settingsUnreadable?: { reason: string };
+    };
+    expect(body.tokens).toHaveLength(1);
+    expect(body.tokens[0]?.label).toBe('work');
+    expect(body.settings).toBeUndefined();
+    expect(body.settingsUnreadable).toEqual({ reason: REASON });
+  });
+
+  /**
+   * issue #2095。`PUT /tokens` も同じ形——置換そのものは `settings` に
+   * 触れないので、設定が読めないことを理由に保存まで止めない。
+   */
+  it('PUT /tokens: 設定が読めなくても保存でき、応答は settingsUnreadable の形（issue #2095）', async () => {
+    const REASON = 'cooldownMs が数値でない（テスト用）';
+    const brokenStores: Stores = {
+      ...stores,
+      tokens: {
+        ...stores.tokens,
+        async readSettings() {
+          throw new UnreadableTokenSettingsError(REASON);
+        },
+      },
+    };
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores: brokenStores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: brokenStores }),
+    });
+
+    const response = await withTokens.request('/tokens', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tokens: [{ label: 'new', value: 'tok-new-value' }] }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      tokens: { label: string }[];
+      settings?: { rotateOn: string };
+      settingsUnreadable?: { reason: string };
+    };
+    expect(body.tokens).toHaveLength(1);
+    expect(body.tokens[0]?.label).toBe('new');
+    expect(body.settings).toBeUndefined();
+    expect(body.settingsUnreadable).toEqual({ reason: REASON });
   });
 
   /**

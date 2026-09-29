@@ -1704,10 +1704,31 @@ export const credentialsUpdateResponseSchema = z.object({
  * *外向き*に書かれた型で（`value` を持たない指紋の形）、`runnerCredentialFingerprintSchema`
  * と同じ理由でここに書き直さない。`tokenRotationSettingsSchema` も同様——
  * 秘密を持たない設定行そのものなので、そのまま外へ出してよい。
+ *
+ * **`settings` は任意、`settingsUnreadable` はその代わり**（issue #2095）。
+ * 回す契機・冷却の設定（`TokenPoolStore.readSettings()`）が壊れていて読めない
+ * とき（`UnreadableTokenSettingsError`、issue #2053）、以前はプール一覧ごと
+ * 500 になっていた——`TokenPoolService.list()` / `replace()` が
+ * `Promise.all([tokens, settings])` で結んでいたため。
+ *
+ * **いまは `settings` を省いて `settingsUnreadable: { reason }` を返し、
+ * `tokens` は読めている分をそのまま返す。** `reason` は
+ * `UnreadableTokenSettingsError` の文言（どの欄が壊れているかだけで、値は
+ * 含まない）。**既定値（`free_exhausted` 等）で埋めない**——「無い」（既定値
+ * で答えてよい状態）と「読めない」（既定へすり替えると `off` にしてあった
+ * 回転を黙って戻す）は別の状態である（`store.ts` の `readSettings()` の doc）。
+ * **`settings` と `settingsUnreadable` はどちらか一方だけが在る。** 設定が
+ * 読める回（大半）の応答は1文字も変えていない——`settings` は今までどおり
+ * 必ず在り、`settingsUnreadable` は現れない。
+ *
+ * 直し方の導線はすでにある——`PUT /tokens/policy`（issue #2053）へ
+ * `rotateOn` と `cooldownMs` の両方を指定すれば、読めない現在値を読まずに
+ * 書き直せる（`TokenPoolService.setSettings` の doc）。
  */
 export const tokensResponseSchema = z.object({
   tokens: z.array(agentTokenViewSchema),
-  settings: tokenRotationSettingsSchema,
+  settings: tokenRotationSettingsSchema.optional(),
+  settingsUnreadable: z.object({ reason: z.string() }).optional(),
 });
 
 /**

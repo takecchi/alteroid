@@ -202,6 +202,7 @@ import {
   EXCHANGE_WITH_VALUES,
   UnreadableCommitmentError,
   UnreadablePracticeError,
+  UnreadableTokenSettingsError,
 } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
@@ -8803,11 +8804,28 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ cursor }) => {
-        const [allTokens, settings, active] = await Promise.all([
+        // **`readSettings()` を他の2つと同じ `Promise.all` に入れない**
+        // （issue #2095）。入れると、設定が `UnreadableTokenSettingsError`
+        // （issue #2053、`store.ts`）で壊れているだけで一覧・現役の指名まで
+        // 道連れになる——ここは道具の呼び出しなので、道連れにすると「道具が
+        // 壊れた」としか見えず、`token_list` そのものが使えなくなる。**それ
+        // 以外のエラーは飲み込まずそのまま投げる**（`UnreadableCommitmentError`
+        // と同じ作法、上の doc）。
+        const [allTokens, active] = await Promise.all([
           stores.tokens.list(),
-          stores.tokens.readSettings(),
           stores.tokens.readActive(),
         ]);
+        let settingsLine: string;
+        try {
+          const settings = await stores.tokens.readSettings();
+          settingsLine = `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`;
+        } catch (error) {
+          if (!(error instanceof UnreadableTokenSettingsError)) throw error;
+          settingsLine =
+            `回転の設定は読めない（${error.message}）。直すには回す契機と冷却の両方を指定して` +
+            '設定し直す（`alteroid token policy <free_exhausted|overage_exhausted|off>' +
+            ' --cooldown-ms <値>` / `PUT /tokens/policy`）。';
+        }
         // **`TokenPoolStore.list()` の「`order` 昇順。」に依拠する**（逐語:
         // `grep -Fn -- '`order` 昇順。' packages/core/src/store.ts`）。
         const resolved = resolveTokenCursor(allTokens, cursor);
@@ -8832,7 +8850,7 @@ export function createCloneTools(context: ToolContext) {
         const views = tokens.map((token) => toAgentTokenView(token));
         const now = Date.now();
         const head = [
-          `回す契機: ${settings.rotateOn} / 冷却 ${String(settings.cooldownMs)}ms`,
+          settingsLine,
           active === null
             ? // **`null` を「1本目が現役」と書かない。** 器の環境変数だけで走って
               // いる既定の構成と、1本目を撒いた後は別の状態である

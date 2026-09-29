@@ -31,17 +31,46 @@ import { UnreadableTokenSettingsError, type Stores } from './store.js';
  * **この PR で回す道具は無い。** ここにあるのは `list` / `replace` /
  * `setSettings` の3つだけで、検知や切替（PR3）はここには無い。
  */
+
+/**
+ * `list()` / `replace()` が返す形（issue #2095）。**`settings` /
+ * `settingsUnreadable` はどちらか一方だけが在る。**
+ *
+ * `stores.tokens.readSettings()` が `UnreadableTokenSettingsError`
+ * （`store.ts`）を投げたときは `settings` を省き、`settingsUnreadable.reason`
+ * （エラーの `message`。どの欄が壊れているかだけで値は含まない）を代わりに
+ * 置く。**既定値（`DEFAULT_TOKEN_ROTATION_SETTINGS`）で埋めない** ——
+ * `readSettings()` の doc が言う「無い」と「読めない」の区別を、ここで
+ * 潰すと `off` にしてあった回転を実装が黙って戻すことになる
+ * （`AGENTS.md` の地雷「取れない軸に 0 の行を作る」と同じ形）。
+ * それ以外のエラー（器そのものの異常）はここで飲み込まず、呼び出し側へ
+ * そのまま投げる。
+ *
+ * **判別できる形にしてある。** `settings` と `settingsUnreadable` は
+ * 両方の枝に存在する（片方は常に `undefined`）ので、読む側は
+ * `result.settings === undefined` で分岐でき、strict null checks が
+ * 「読める前提」の直接アクセスを型検査で落とす。
+ */
+export type TokenPoolView =
+  | { tokens: AgentTokenView[]; settings: TokenRotationSettings; settingsUnreadable?: undefined }
+  | {
+      tokens: AgentTokenView[];
+      settings?: undefined;
+      settingsUnreadable: { reason: string };
+    };
+
 export interface TokenPoolService {
-  /** 現在のプール（外向きの顔）と設定。 */
-  list(): Promise<{ tokens: AgentTokenView[]; settings: TokenRotationSettings }>;
+  /** 現在のプール（外向きの顔）と設定。設定が読めないときは {@link TokenPoolView} を見よ。 */
+  list(): Promise<TokenPoolView>;
   /**
    * 全文置換。`normalizeTokenPool` が投げたら、そのまま呼び出し側へ投げ返す
    * （保存はしていない——検証に落ちたものを記憶ストアへ書かない）。
+   *
+   * **`tokens` の保存は設定が読めるかどうかに関係なく行う**（issue #2095）
+   * ——置換そのものは `settings` に触れないので、設定が壊れていることを
+   * 理由にプールの置換まで止めない。
    */
-  replace(inputs: readonly AgentTokenInput[]): Promise<{
-    tokens: AgentTokenView[];
-    settings: TokenRotationSettings;
-  }>;
+  replace(inputs: readonly AgentTokenInput[]): Promise<TokenPoolView>;
   /**
    * 回す契機・冷却の既定を部分更新する。
    *
@@ -164,15 +193,38 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
     return next;
   }
 
-  async function currentView(): Promise<{
-    tokens: AgentTokenView[];
-    settings: TokenRotationSettings;
-  }> {
-    const [tokens, settings] = await Promise.all([
+  /**
+   * `stores.tokens.readSettings()` を読み、`UnreadableTokenSettingsError`
+   * だけを3値目として畳む（issue #2095。`tools.ts` の `token_list` や
+   * `store.ts` の他の `Unreadable*Error` と同じ「投げっぱなしにしない」
+   * 作法）。**それ以外のエラーは飲み込まずそのまま投げる** —— 器そのものの
+   * 異常（DB 接続断など）まで「設定が壊れている」に化けさせない。
+   */
+  async function readSettingsOrUnreadable(): Promise<
+    { ok: true; settings: TokenRotationSettings } | { ok: false; reason: string }
+  > {
+    try {
+      const settings = await stores.tokens.readSettings();
+      return { ok: true, settings };
+    } catch (error) {
+      if (!(error instanceof UnreadableTokenSettingsError)) throw error;
+      return { ok: false, reason: error.message };
+    }
+  }
+
+  /** {@link readSettingsOrUnreadable} の結果を {@link TokenPoolView} の形へ組む。 */
+  function viewOf(tokens: AgentTokenView[], settingsResult: Awaited<ReturnType<typeof readSettingsOrUnreadable>>): TokenPoolView {
+    return settingsResult.ok
+      ? { tokens, settings: settingsResult.settings }
+      : { tokens, settingsUnreadable: { reason: settingsResult.reason } };
+  }
+
+  async function currentView(): Promise<TokenPoolView> {
+    const [tokens, settingsResult] = await Promise.all([
       stores.tokens.list(),
-      stores.tokens.readSettings(),
+      readSettingsOrUnreadable(),
     ]);
-    return { tokens: tokens.map(toAgentTokenView), settings };
+    return viewOf(tokens.map(toAgentTokenView), settingsResult);
   }
 
   /**
@@ -223,10 +275,10 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         // そのまま呼び出し側（HTTP 層）へ伝わり、そこで 400 として理由を返す。
         const normalized = normalizeTokenPool(inputs, existing, { now, newId });
         const stored = await stores.tokens.replace(normalized);
-        const settings = await stores.tokens.readSettings();
+        const settingsResult = await readSettingsOrUnreadable();
         // **保存できた後に知らせる**（`announceChange` の doc）。
         announceChange('pool');
-        return { tokens: stored.map(toAgentTokenView), settings };
+        return viewOf(stored.map(toAgentTokenView), settingsResult);
       }),
 
     noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>

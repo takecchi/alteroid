@@ -5681,10 +5681,14 @@ export function createApp(deps: AppDeps) {
         summary: '認証トークンのプールと設定を読む',
         description:
           'プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す' +
-          '（受け入れ基準7: プールが空の既定構成の挙動を変えない）。',
+          '（受け入れ基準7: プールが空の既定構成の挙動を変えない）。' +
+          '回す契機・冷却の設定が壊れていて読めないときも 200 を返す——' +
+          '`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。',
         responses: {
           200: {
-            description: 'プール（値は出さない）と設定。',
+            description:
+              'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
+              '`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。',
             content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
           },
           403: {
@@ -5701,8 +5705,7 @@ export function createApp(deps: AppDeps) {
             tokensResponseSchema.parse({ tokens: [], settings: DEFAULT_TOKEN_ROTATION_SETTINGS }),
           );
         }
-        const { tokens, settings } = await deps.tokens.list();
-        return c.json(tokensResponseSchema.parse({ tokens, settings }));
+        return c.json(tokensResponseSchema.parse(await deps.tokens.list()));
       },
     )
 
@@ -5727,7 +5730,10 @@ export function createApp(deps: AppDeps) {
           '指す・id 重複）は 400 で理由を返し、保存しない。',
         responses: {
           200: {
-            description: '置き換え後のプール（値は出さない）と設定。',
+            description:
+              '置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の' +
+              '代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。' +
+              'issue #2095）。',
             content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
           },
           400: {
@@ -5770,8 +5776,8 @@ export function createApp(deps: AppDeps) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
         }
         try {
-          const { tokens, settings } = await deps.tokens.replace(c.req.valid('json').tokens);
-          return c.json(tokensResponseSchema.parse({ tokens, settings }));
+          const view = await deps.tokens.replace(c.req.valid('json').tokens);
+          return c.json(tokensResponseSchema.parse(view));
         } catch (error) {
           // **返してよい例外だけを返す。型で分ける。**
           //
