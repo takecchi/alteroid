@@ -145,8 +145,72 @@ function isTimeoutWrapped(trimmed: string): boolean {
 const TAIL_FOLLOW_RE =
   /\btail\b(?:(?!;|&&|\|\||\||\n).)*?(?:\s-[a-zA-Z]*[fF][a-zA-Z]*(?=[\s;&|]|$)|\s--follow\b)/;
 
-function hasUnboundedTailFollow(command: string): boolean {
-  return TAIL_FOLLOW_RE.test(command);
+/**
+ * `TAIL_FOLLOW_RE` 自体は引用符を見ない素朴な正規表現なので、`command` へ直接
+ * かける前に、`computeOutsideQuoteMask`（#1910/#1990 由来）で「引用符の中」だと
+ * 分かる位置の文字だけを空白へ潰した写しを返す（issue #2195）。改行は残す
+ * （`TAIL_FOLLOW_RE` 自身が改行を単純コマンドの境界として見るため）。
+ *
+ * 文字数を変えないので、この後にかける `TAIL_FOLLOW_RE` の走査の複雑さは
+ * 変わらない——`command` と同じ長さの文字列を返すだけの1回の線形走査
+ * （`computeOutsideQuoteMask` も同じく1回の線形走査）。
+ */
+function blankQuotedInterior(command: string): string {
+  const mask = computeOutsideQuoteMask(command);
+  let out = '';
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i] as string;
+    out += mask[i] || ch === '\n' ? ch : ' ';
+  }
+  return out;
+}
+
+/**
+ * `tail -f` / `tail --follow` を、**引用符の外**に在るものだけ検出する（issue #2195）。
+ *
+ * ## 直した誤検知（Issue 本文）
+ *
+ * 直す前は `TAIL_FOLLOW_RE` を `command` へそのままかけていたため、引用符の
+ * **中**に書かれた `tail -f` の字面（実行されない）も拾っていた——
+ * `git commit -m "use tail -f x.log"` / `gh issue comment 1 --body "run tail -f x.log"` /
+ * `grep -n "tail -f x.log" a.md` / `echo 'tail -f x.log'` /
+ * `x="tail -f y"; echo $x` がいずれも誤って弾かれていた。
+ *
+ * ⟹ `blankQuotedInterior` で引用符の中身を空白へ潰した写しへ `TAIL_FOLLOW_RE`
+ * をかける。
+ *
+ * ## それでも弾く形（issue #2104 と同じ5つの入口）
+ *
+ * **文字列を実行する形**（`bash -c "…"` / `sh -c '…'` / `eval "…"` /
+ * `ssh host "…"`。`extractNestedShellPayloads`、#2104）は、`tail -f` の字面が
+ * 引用符の中に書かれていても、その引用符の中身が実際にシェルへ渡されて
+ * 実行される。⟹ 取り出した中身にも `hasUnboundedTailFollow` 自身をかけ直す
+ * （再帰。`hasGhPrMergeDeleteBranch` と同じ設計・同じ深さの上限
+ * `MAX_NESTED_SHELL_DEPTH`）。上限に達したら、さらに取り出して再帰はせず、
+ * 取り出せた中身に**引用符を見ない生の** `TAIL_FOLLOW_RE` をそのままかける
+ * （取り出し方が分からない深さなので、弾く側へ倒す）。
+ *
+ * `$(...)` とバッククォート（コマンド置換）は専用の取り出しをしていない——
+ * `computeOutsideQuoteMask` はそもそも `$(`/バッククォートを引用符として
+ * 追わないので、その中に書かれた `tail -f` は `blankQuotedInterior` でも
+ * 潰されず「外側」のまま残り、トップレベルの一致でそのまま拾われる
+ * （`echo $(tail -f x)` / バッククォート形はここで検出する）。
+ *
+ * ## 対照（弾かないことを固定する）
+ *
+ * `bash -c 'echo "tail -f x"'` は弾かない——取り出した中身 `echo "tail -f x"`
+ * を自分自身へ再帰させたとき、`tail` が `echo` の引数（コマンドの位置ではない）
+ * なので、`extractNestedShellPayloads` がそこから何も取り出さず、トップレベルの
+ * 一致も引用符の中なので潰れる（`hasGhPrMergeDeleteBranch` の同じ対照と同根）。
+ */
+function hasUnboundedTailFollow(command: string, depth = 0): boolean {
+  if (TAIL_FOLLOW_RE.test(blankQuotedInterior(command))) return true;
+  if (depth >= MAX_NESTED_SHELL_DEPTH) {
+    return extractNestedShellPayloads(command).some((payload) => TAIL_FOLLOW_RE.test(payload));
+  }
+  return extractNestedShellPayloads(command).some(
+    (payload) => payload.length > 0 && hasUnboundedTailFollow(payload, depth + 1),
+  );
 }
 
 /**
