@@ -163,6 +163,14 @@ catalog:
   '@fontsource/ibm-plex-sans-jp': ^5.3.0
   '@fontsource/michroma': ^5.3.0
   '@fontsource/ibm-plex-mono': ^5.3.0
+  # グラフ（shadcn の chart）の実体。`shadcn add chart` が連れてくる。**版は shadcn が
+  # 固定した値のまま**（chart.tsx は recharts 3 の型に合わせて書かれている）。
+  recharts: 3.8.0
+  # トースト（shadcn の sonner）の実体と、sonner.tsx が明暗を読むための next-themes。
+  # next-themes の Provider は置いていない——画面は `<html class="dark">` で明暗を
+  # 決めるので、`Toaster`（`components/common.tsx`）が `theme` を明示して渡す。
+  sonner: ^2.0.8
+  next-themes: ^0.4.6
   # `@import 'shadcn/tailwind.css'` の実体（`data-open` / `data-closed` などの
   # custom variant。sheet の class がこれを前提にしている）。**dependencies に置く**
   # のは、これが CSS の import 元だからである。同じものが `shadcn add` の CLI でもあり、
