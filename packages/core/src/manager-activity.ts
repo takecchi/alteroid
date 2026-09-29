@@ -228,9 +228,8 @@ export function describeManagerActivityForFlush(kind: ManagerActivityKind): stri
       );
     case 'tool-running':
       return (
-        ' 道具（Bash など、pending の name を最大数件）を実行中。' +
-        '止まっている兆候ではない（Issue #2173）。manager_list で ' +
-        '`toolUseStallPending` の name を確かめること。急かさなくてよい。'
+        ' 道具を実行中。止まっている兆候ではない（Issue #2173）。' +
+        'manager_list で `toolUseStallPending` の name を確かめること。急かさなくてよい。'
       );
     case 'unknown':
       return (
