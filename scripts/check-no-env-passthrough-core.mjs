@@ -604,7 +604,8 @@ export function classifyEnvPassthroughHits(hits, allowlist) {
  * 書いていたが、いまは対象に入っている。** 別名の named import
  * （`import { spawn as sp }`）・`require` / 動的 `import()` の分割代入
  * （リネームを含む）・名前空間（`import * as cp` / `import cp from` /
- * `const cp = require(...)`）のどれで読み込んでも、同じ呼び出しを見つける
+ * `const cp = require(...)`）、既定の import との併記（`import cp, { spawn }` /
+ * `import cp, * as ns`）のどれで読み込んでも、同じ呼び出しを見つける
  * ——`findChildProcessBindings`（下）が「局所名 → 元の名前」の Map と
  * 「名前空間の局所変数名」の集合を両方返し、`ARGS_ARRAY_FAMILY` の分類には
  * 必ず**元の名前**を使う（別名 `sp` を `ARGS_ARRAY_FAMILY.has('sp')` のように
@@ -748,11 +749,19 @@ function parseNamedBindings(clause, renameToken) {
   return map;
 }
 
-const NAMED_IMPORT_RE = /^[ \t]*import\s*\{([^}]*)\}\s*from\s*['"](?:node:)?child_process['"]/gm;
-const NAMESPACE_IMPORT_RE =
-  /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*['"](?:node:)?child_process['"]/gm;
-const DEFAULT_IMPORT_RE =
-  /^[ \t]*import\s+(?!type\b)([A-Za-z_$][\w$]*)\s+from\s*['"](?:node:)?child_process['"]/gm;
+/**
+ * `import <節> from '(node:)child_process'` の <節> を丸ごと取る。節は既定の
+ * import（`cp`）・名前空間（`* as cp`）・named（`{ spawn as sp }`）のどれか、
+ * または既定の import と他の2つの併記（`cp, { spawn }` / `cp, * as ns`）で
+ * ある。**併記は、3つを別々の正規表現で見ていた版ではどれにも当たらなかった**
+ * （`import\s*\{` も `import\s+cp\s+from` も成り立たない）ので、節を1つ取って
+ * から中を読む形にした。`import type …` は型だけの import なので読まない。
+ */
+const IMPORT_CLAUSE_RE =
+  /^[ \t]*import\s*(?!type\b)([^'"`;]*?)\s*from\s*['"](?:node:)?child_process['"]/gm;
+const IMPORT_DEFAULT_PART_RE = /^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/;
+const IMPORT_NAMESPACE_PART_RE = /\*\s*as\s+([A-Za-z_$][\w$]*)/;
+const IMPORT_NAMED_PART_RE = /\{([^}]*)\}/;
 const REQUIRE_OR_IMPORT_NS_RE =
   /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:require|(?:await\s+)?import)\(\s*['"](?:node:)?child_process['"]\s*\)/g;
 const REQUIRE_OR_IMPORT_DESTRUCTURE_RE =
@@ -780,15 +789,31 @@ const REQUIRE_OR_IMPORT_DESTRUCTURE_RE =
  * のように `spawn` は args 配列を取る関数なのに `sp` という名前では
  * `ARGS_ARRAY_FAMILY.has('sp')` が偽になり、分類が狂う。
  */
+/**
+ * JS の識別子を正規表現へ埋め込めるようにする。識別子に入りうる記号は `$`
+ * だけで、`$` は正規表現では行末を意味するので逃がす（`$cp.spawn(...)`）。
+ */
+function escapeIdentifier(name) {
+  return name.replace(/\$/g, '\\$');
+}
+
 function findChildProcessBindings(rawContent) {
   const callNameToOriginal = new Map();
   const namespaceLocalNames = new Set();
   let m;
 
-  NAMED_IMPORT_RE.lastIndex = 0;
-  while ((m = NAMED_IMPORT_RE.exec(rawContent))) {
-    for (const [local, orig] of parseNamedBindings(m[1], 'as')) {
-      callNameToOriginal.set(local, orig);
+  IMPORT_CLAUSE_RE.lastIndex = 0;
+  while ((m = IMPORT_CLAUSE_RE.exec(rawContent))) {
+    const clause = m[1];
+    const defaultPart = IMPORT_DEFAULT_PART_RE.exec(clause);
+    if (defaultPart) namespaceLocalNames.add(defaultPart[1]);
+    const namespacePart = IMPORT_NAMESPACE_PART_RE.exec(clause);
+    if (namespacePart) namespaceLocalNames.add(namespacePart[1]);
+    const namedPart = IMPORT_NAMED_PART_RE.exec(clause);
+    if (namedPart) {
+      for (const [local, orig] of parseNamedBindings(namedPart[1], 'as')) {
+        callNameToOriginal.set(local, orig);
+      }
     }
   }
 
@@ -798,12 +823,6 @@ function findChildProcessBindings(rawContent) {
       callNameToOriginal.set(local, orig);
     }
   }
-
-  NAMESPACE_IMPORT_RE.lastIndex = 0;
-  while ((m = NAMESPACE_IMPORT_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
-
-  DEFAULT_IMPORT_RE.lastIndex = 0;
-  while ((m = DEFAULT_IMPORT_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
 
   REQUIRE_OR_IMPORT_NS_RE.lastIndex = 0;
   while ((m = REQUIRE_OR_IMPORT_NS_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
@@ -878,14 +897,18 @@ export function findMissingEnvChildProcessCalls(files) {
 
     // 直接呼び出し（named import / require・動的 import の分割代入。別名を含む）。
     for (const [callName, kind] of callNameToKind) {
-      scanCall(callName, kind, new RegExp(`(?<![\\w.$])${callName}\\s*\\(`, 'g'));
+      scanCall(callName, kind, new RegExp(`(?<![\\w.$])${escapeIdentifier(callName)}\\s*\\(`, 'g'));
     }
 
     // 名前空間経由のメンバー呼び出し（`cp.spawn(...)`）。プロパティ名そのものが
     // 元の名前なので、別名解決は要らない——`kind` にそのまま使う。
     for (const ns of namespaceLocalNames) {
       for (const kind of CHILD_PROCESS_CALL_NAMES) {
-        scanCall(`${ns}.${kind}`, kind, new RegExp(`(?<![\\w.$])${ns}\\.${kind}\\s*\\(`, 'g'));
+        scanCall(
+          `${ns}.${kind}`,
+          kind,
+          new RegExp(`(?<![\\w.$])${escapeIdentifier(ns)}\\.${kind}\\s*\\(`, 'g'),
+        );
       }
     }
   }

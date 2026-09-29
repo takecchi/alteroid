@@ -583,6 +583,58 @@ describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #204
     ]) as Hit[];
     expect(hits).toEqual([]);
   });
+
+  // 既定の import と named / 名前空間の併記。3つを別々の正規表現で見ていた版では
+  // どれにも当たらなかった（`import\s*\{` も `import\s+cp\s+from` も成り立たない）。
+  it('既定の import と named の併記（`import cp, { spawn }`）の `spawn(...)` を検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import cp, { spawn } from 'node:child_process';\nspawn(cmd);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('既定の import と named の併記の、既定の側の `cp.spawn(...)` を検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import cp, { execFile } from 'node:child_process';\ncp.spawn(cmd);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('既定の import と名前空間の併記（`import cp, * as ns`）の `ns.spawn(...)` を検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import cp, * as ns from 'node:child_process';\nns.spawn(cmd);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('名前空間の名前に `$` を含む（`$cp.spawn(...)`）呼び出しを検出する', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import * as $cp from 'node:child_process';\n$cp.spawn(cmd);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('⚠️ 対照: `import type` だけの行は束縛を作らないので、同名の `spawn(...)` を検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import type { SpawnOptions } from 'node:child_process';\nspawn(cmd);",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
 });
 
 describe('check-no-env-passthrough: classifyEnvPassthroughHits', () => {
