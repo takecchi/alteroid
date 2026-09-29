@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
 // 再輸出（下）とは別に、この中でも使うので取り込む。
-import { USAGE_ESTIMATE_NOTICE, USAGE_LAYERS, USAGE_SITES, ZERO_USAGE } from './usage-format.js';
+import {
+  USAGE_ESTIMATE_NOTICE,
+  USAGE_LAYERS,
+  USAGE_SITES,
+  USAGE_UNREADABLE_FIELDS,
+  ZERO_USAGE,
+} from './usage-format.js';
+import type { UsageUnreadableCounts, UsageUnreadableField } from './usage-format.js';
 // `readSessionUsage` の締め切りに使う。**`usage-probe.ts` はこのファイルを
 // import していない**（SDK の型だけを型 import している）ので、循環しない。
 import { settleWithin } from './usage-probe.js';
@@ -65,8 +72,11 @@ import { settleWithin } from './usage-probe.js';
 export {
   ACCOUNT_USAGE_TITLE,
   USAGE_ESTIMATE_NOTICE,
+  USAGE_UNREADABLE_FIELDS,
   ZERO_USAGE,
+  addUnreadableCounts,
   describeAccountUsage,
+  describeUnreadableUsage,
   describeUnrecordedManagers,
   describeWebSearchRequests,
   findUnrecordedManagers,
@@ -76,12 +86,33 @@ export {
   usageDate,
   type UnrecordedManager,
   type UnrecordedManagerCandidate,
+  type UsageUnreadableCounts,
+  type UsageUnreadableField,
 } from './usage-format.js';
 
 const isoDateTime = z.string().datetime({ offset: true });
 
 /** 日付。ローカル時刻の `YYYY-MM-DD`（日報と同じ区切りに合わせる）。 */
 export const usageDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD で書く');
+
+/**
+ * 欄ごとの「読めなかった区切りの数」（Issue #2086）。**全欄 `optional`。**
+ *
+ * **欄が無いのは「その欄を数えていない」であって 0 ではない。** 0 は「数えた
+ * 結果すべて読めた」という観測だが、欄が無いのは「観測そのものをしていない」
+ * （古い runner の写し・この schema をまだ知らない版など）——両者を同じ値
+ * （0）で表すと、地雷表「取れない軸に0の行を作る」と同じ壊れ方になる。
+ */
+export const usageUnreadableCountsSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    cacheReadInputTokens: z.number().int().nonnegative(),
+    cacheCreationInputTokens: z.number().int().nonnegative(),
+    webSearchRequests: z.number().int().nonnegative(),
+    costUsd: z.number().int().nonnegative(),
+  })
+  .partial() satisfies z.ZodType<UsageUnreadableCounts>;
 
 /**
  * 1つの区切りぶんの消費量。トークンは整数、費用は USD。
@@ -96,6 +127,21 @@ export const usageTotalsSchema = z.object({
   cacheCreationInputTokens: z.number().int().nonnegative(),
   webSearchRequests: z.number().int().nonnegative(),
   costUsd: z.number().nonnegative(),
+  /**
+   * 欄の名前 → その欄が読めなかった区切りの数（Issue #2086）。
+   *
+   * **必ず optional。** runner とデーモンの版が一時的にずれても、この欄を
+   * まだ知らない側の schema がここで落ちない（`safeParse` は未知の欄を
+   * strip するだけで済む——`runner-protocol.ts` の「旧いデーモンでも壊れ
+   * ない」と同じ形）。欄が無いのは「読めなかった区切りが無い」ではなく
+   * 「この記録は数えていない」——古い台帳の行・旧い runner の写しがこちら
+   * に当たる。
+   *
+   * **0 は読めた値であって、`unreadable` には数えない。** `toModelTotals`
+   * が値を読めなかったときだけ、その欄をここへ1として記録する
+   * （`tokenCount` / `usdAmount` の doc）。
+   */
+  unreadable: usageUnreadableCountsSchema.optional(),
 });
 
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
@@ -344,10 +390,37 @@ function subtract(after: UsageTotals, before: UsageTotals): UsageTotals {
     ),
     webSearchRequests: Math.max(0, after.webSearchRequests - before.webSearchRequests),
     costUsd: Math.max(0, after.costUsd - before.costUsd),
+    // **読めなかった数は「累積の差分」ではない。** SDK の値そのものは累積でも、
+    // 「この読み取りで読めたか」は毎回独立の観測である——2回連続で読めなかった
+    // とき、差分（after - before）を取ると1回目の1しか残らず、2回目の読めな
+    // かった事実が消える。だから前回の読み（`before.unreadable`）は見ず、
+    // **今回の読み（`after.unreadable`）をそのまま delta へ渡す。**
+    ...(after.unreadable === undefined ? {} : { unreadable: after.unreadable }),
   };
 }
 
+/** `totals.unreadable` に1つでも正の数があるか。 */
+function hasUnreadable(totals: UsageTotals): boolean {
+  const counts = totals.unreadable;
+  if (counts === undefined) return false;
+  return USAGE_UNREADABLE_FIELDS.some((field) => (counts[field] ?? 0) > 0);
+}
+
+/**
+ * **数値の6欄も `unreadable` も全部ゼロ・空か。**
+ *
+ * `unreadable` を見ないと、「トークンは全部0だが web 検索の欄だけ読めなかった」
+ * という行が、この述語の上では「ゼロ」として扱われ、`foldUsageSnapshot` の
+ * 「動いていないモデルの行は作らない」に巻き込まれて delta から消える——
+ * 読めなかった観測そのものが、まさにここで「取れない軸に0の行を作る」と
+ * 同じ形で消える（AGENTS.md 地雷表）。
+ */
 function isZero(totals: UsageTotals): boolean {
+  return isNumericZero(totals) && !hasUnreadable(totals);
+}
+
+/** 数値の6欄が全部ゼロか（`unreadable` は見ない。`foldUsageSnapshot` の再送の判定に使う）。 */
+function isNumericZero(totals: UsageTotals): boolean {
   return (
     totals.inputTokens === 0 &&
     totals.outputTokens === 0 &&
@@ -356,6 +429,13 @@ function isZero(totals: UsageTotals): boolean {
     totals.webSearchRequests === 0 &&
     totals.costUsd === 0
   );
+}
+
+/** `unreadable` を外した写しを返す。 */
+function withoutUnreadable(totals: UsageTotals): UsageTotals {
+  const copy: UsageTotals = { ...totals };
+  delete copy.unreadable;
+  return copy;
 }
 
 /**
@@ -405,7 +485,19 @@ export function foldUsageSnapshot(
 
   const delta: Record<string, UsageTotals> = {};
   for (const [model, totals] of Object.entries(next)) {
-    const increment = reset ? totals : subtract(totals, prev[model] ?? ZERO_USAGE);
+    const raw = reset ? totals : subtract(totals, prev[model] ?? ZERO_USAGE);
+    // **再送と区別できない読みでは、`unreadable` を数えない**（Issue #2086。
+    // mgr-712ad619 のレビューで足した）。この台帳は「累積の値なので、同じものを
+    // 2回送っても増分は 0 になる（再送に耐える）」を約束している（`runner.ts` の
+    // `#flushUsage` の doc。畳む直前の読みが `result` 経由の記録と重なるのは普通の
+    // 枝である）。`unreadable` は差分を取らずに毎回の読みをそのまま渡すので、同じ
+    // 累積をもう一度送ると `unreadable` だけが増分に残り、トークンが 0 で「読め
+    // なかった」だけの行がもう1本積まれる。⟹ そのモデルの基準がすでに在り、数値の
+    // 6欄の増分が全部 0 の読みでは、`unreadable` を落とす。初めて見たモデル・数値が
+    // 増えた読みでは数える。**数の意味は「読めなかった区切りの数の下限」になる**
+    // ——0 か否か（取れなかったことが在るか）の信号は失わない。
+    const increment =
+      !reset && prev[model] !== undefined && isNumericZero(raw) ? withoutUnreadable(raw) : raw;
     // 増えていないモデルの行を作らない（台帳が 0 の行で埋まる）。
     if (!isZero(increment)) delta[model] = increment;
   }
@@ -464,14 +556,34 @@ export function foldOneshotUsage(snapshot: UsageSnapshot): UsageFold {
 // SDK の result から消費を読む
 // ---------------------------------------------------------------------------
 
-/** トークン数として読む。読めないものは 0。 */
-function tokenCount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+/**
+ * 値が「読めた」と言える形か（有限の非負の数）。**`tokenCount` / `usdAmount` の
+ * 数値そのものと、`toModelTotals` が数える `unreadable` の両方がここを通る**
+ * ——片方だけ直すと「読めなかった」の判定が2箇所でずれる（`isSuccessResult` を
+ * 1本にしてあるのと同じ理由）。
+ *
+ * **`>= 0` である（`> 0` ではない）。** 0 は正当に読めた値であって、「読めな
+ * かった」ではない。数でない・有限でない・負の値だけを「読めない」とする。
+ */
+function isReadableNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-/** 金額として読む。読めないものは 0。 */
+/**
+ * トークン数として読む。読めないものは 0。
+ *
+ * **出力する数値は変えていない。** 旧実装は `value > 0` を条件にしていたが、
+ * `value === 0` はどちらの分岐でも `0` を返すので、正当な0の数値としての
+ * 出力は同じである——変わったのは「0 を読めたと数えるか」という別の問い
+ * （{@link isReadableNumber}）に答えられるようになったことだけ。
+ */
+function tokenCount(value: unknown): number {
+  return isReadableNumber(value) ? Math.floor(value) : 0;
+}
+
+/** 金額として読む。読めないものは 0。数値の出力が変わっていない理由は {@link tokenCount} と同じ。 */
 function usdAmount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  return isReadableNumber(value) ? value : 0;
 }
 
 /**
@@ -614,6 +726,20 @@ export async function readSessionUsage(
  * ある。**書き写すと、片方だけ `costUSD` の綴りを直してもう片方が黙って 0 を積む**
  * という形で壊れる。
  */
+/**
+ * `toModelTotals` の1モデルぶんの生の欄。**キーは {@link UsageTotals} の欄名、
+ * 値は SDK 側の生の値の在り処**——`costUsd` だけ `costUSD`（SDK 側の綴り）を
+ * 読む非対称がある（`toModelTotals` 本体の doc）。
+ */
+const USAGE_UNREADABLE_SOURCE_KEYS: Readonly<Record<UsageUnreadableField, string>> = {
+  inputTokens: 'inputTokens',
+  outputTokens: 'outputTokens',
+  cacheReadInputTokens: 'cacheReadInputTokens',
+  cacheCreationInputTokens: 'cacheCreationInputTokens',
+  webSearchRequests: 'webSearchRequests',
+  costUsd: 'costUSD',
+};
+
 function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
 
@@ -621,6 +747,16 @@ function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
   for (const [model, value] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof value !== 'object' || value === null) continue;
     const usage = value as Record<string, unknown>;
+
+    // **読めなかった欄だけを1として数える（Issue #2086）。** 0 は読めた値
+    // なので数えない——`isReadableNumber` が判定を1本にしている（`tokenCount` /
+    // `usdAmount` と同じ述語）。ここは1回の変換（＝1区切り）の観測なので、
+    // 読めなければ必ず 1（既存の値を上書きしない・積み増さない）。
+    const unreadable: UsageUnreadableCounts = {};
+    for (const field of USAGE_UNREADABLE_FIELDS) {
+      if (!isReadableNumber(usage[USAGE_UNREADABLE_SOURCE_KEYS[field]])) unreadable[field] = 1;
+    }
+
     models[model] = {
       inputTokens: tokenCount(usage.inputTokens),
       outputTokens: tokenCount(usage.outputTokens),
@@ -629,6 +765,7 @@ function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
       webSearchRequests: tokenCount(usage.webSearchRequests),
       // SDK 側の綴りは `costUSD`（他のフィールドと違って大文字）。
       costUsd: usdAmount(usage.costUSD),
+      ...(Object.keys(unreadable).length > 0 ? { unreadable } : {}),
     };
   }
   return models;

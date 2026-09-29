@@ -38,6 +38,7 @@ import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/un
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
+import { formatElapsed } from './format.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { narrowUsageAxis, renderUsage } from './usage.js';
@@ -3317,24 +3318,6 @@ export function renderCommitments(
   });
 
   return { text: lines.join('\n'), ids };
-}
-
-/**
- * 受け取ってからの経過（＝齢）。
- *
- * **台帳は優先度も締切も持たない**（`schema.ts` の `commitmentSchema`）ので、
- * 人間が急ぎ方を決める材料はこれだけである。ISO の時刻だけを出すと、読むたびに
- * 引き算をさせることになる。
- *
- * 未来の時刻（時計のずれ）は 0 に丸める。ここで負の齢を出しても人間には直せない。
- */
-function formatElapsed(iso: string, now: number): string {
-  const at = new Date(iso).getTime();
-  if (Number.isNaN(at)) return '不明';
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 3600) return `${Math.round(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}時間`;
-  return `${Math.round(seconds / 86_400)}日`;
 }
 
 function summarize(entry: Record<string, unknown>): string {

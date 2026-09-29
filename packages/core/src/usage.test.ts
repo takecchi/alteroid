@@ -4,11 +4,13 @@ import {
   CLONE_ACTOR_ID,
   CLONE_DISTILL_ACTOR_ID,
   CLONE_SUB_ACTOR_PREFIX,
+  describeUnreadableUsage,
   isCloneActor,
   foldOneshotUsage,
   foldUsageSnapshot,
   isSuccessResult,
   modelUsageOf,
+  sessionModelUsageOf,
   formatUsd,
   summarizeUsage,
   sumUsageRows,
@@ -620,12 +622,224 @@ describe('SDK の result から消費を読む', () => {
     const models = modelUsageOf({
       modelUsage: { opus: { contextWindow: 200000, maxOutputTokens: 64000, costUSD: 0.1 } },
     });
-    expect(models?.opus).toEqual({ ...ZERO_USAGE, costUsd: 0.1 });
+    // **Issue #2086 で期待値を変えた。** この素材はトークン5欄を1つも持たない
+    // ——直す前はそれを「0トークン」として記録し、「本当に0だった」と見分けが
+    // 付かなかった（地雷表「取れない軸に0の行を作る」）。直した後は、読めな
+    // かった欄を `unreadable` に1として数える。この一致はテストの本題（仕様の
+    // 2欄を写さないこと）とは無関係な副作用だが、`toEqual` が全欄を見るので
+    // ここにも表れる。
+    expect(models?.opus).toEqual({
+      ...ZERO_USAGE,
+      costUsd: 0.1,
+      unreadable: {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadInputTokens: 1,
+        cacheCreationInputTokens: 1,
+        webSearchRequests: 1,
+      },
+    });
   });
 
   it('modelUsage が無ければ undefined（0 の行を作らない）', () => {
     expect(modelUsageOf({})).toBeUndefined();
     expect(modelUsageOf({ modelUsage: null })).toBeUndefined();
+  });
+});
+
+describe('読めなかった欄を数える（Issue #2086。「0」と「取れなかった」を区別する）', () => {
+  it('正当な0は読めた値であって unreadable には数えない', () => {
+    const models = modelUsageOf({
+      modelUsage: {
+        opus: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          webSearchRequests: 0,
+          costUSD: 0,
+        },
+      },
+    });
+    expect(models?.opus).toEqual({ ...ZERO_USAGE });
+    expect(models?.opus).not.toHaveProperty('unreadable');
+  });
+
+  it('数でない・有限でない・負の値は 0 を書きつつ unreadable に1と数える', () => {
+    const models = modelUsageOf({
+      modelUsage: {
+        opus: {
+          inputTokens: 'たくさん', // 数でない
+          outputTokens: Number.NaN, // 有限でない
+          cacheReadInputTokens: -1, // 負
+          cacheCreationInputTokens: 0, // 正当な0（読めた）
+          webSearchRequests: undefined, // 欠けている
+          costUSD: Number.POSITIVE_INFINITY, // 有限でない
+        },
+      },
+    });
+    expect(models?.opus).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      webSearchRequests: 0,
+      costUsd: 0,
+      unreadable: {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadInputTokens: 1,
+        webSearchRequests: 1,
+        costUsd: 1,
+      },
+    });
+    // 正当な0（cacheCreationInputTokens）は unreadable に現れない。
+    expect(models?.opus?.unreadable).not.toHaveProperty('cacheCreationInputTokens');
+  });
+
+  it('入口2つ（result.modelUsage と session.model_usage）のどちらも同じ toModelTotals を通る', () => {
+    // 入口1: `modelUsageOf`（result.modelUsage）。
+    const fromResult = modelUsageOf({ modelUsage: { opus: { webSearchRequests: 'nope' } } });
+    expect(fromResult?.opus?.unreadable?.webSearchRequests).toBe(1);
+
+    // 入口2: `sessionModelUsageOf`（control channel の session.model_usage）。
+    const fromSession = sessionModelUsageOf({
+      session: { model_usage: { opus: { webSearchRequests: 'nope' } } },
+    });
+    expect(fromSession?.opus?.unreadable?.webSearchRequests).toBe(1);
+  });
+
+  it('数値の出力そのものは変わらない（読めない値は引き続き0を書く）', () => {
+    const models = modelUsageOf({ modelUsage: { opus: { inputTokens: -5, outputTokens: 10 } } });
+    expect(models?.opus?.inputTokens).toBe(0);
+    expect(models?.opus?.outputTokens).toBe(10);
+  });
+
+  describe('畳み込み（foldUsageSnapshot / foldOneshotUsage）が unreadable を取りこぼさない', () => {
+    it('数値6欄が全部0でも unreadable が在れば「動いていないモデルの行」として消えない', () => {
+      // 直す前は isZero が unreadable を見ておらず、この回の delta が
+      // `{}` になって記録そのものが消えていた。
+      const fold = foldUsageSnapshot(
+        null,
+        { models: { opus: { ...ZERO_USAGE, unreadable: { webSearchRequests: 1 } } } },
+        AT,
+      );
+      expect(fold.delta).toEqual({
+        opus: { ...ZERO_USAGE, unreadable: { webSearchRequests: 1 } },
+      });
+    });
+
+    it('毎ターン同じ欄が読めないとき、差分ではなく毎回の読みをそのまま delta に渡す（取りこぼさない）', () => {
+      // unreadable は SDK の累積値ではなく「この読みが読めたか」という毎回独立の
+      // 観測である。after - before で差を取ると2回目以降が0に潰れて消える
+      // ——ここでは「毎回そのまま渡す」ことで、2ターンとも1として残ることを見る。
+      const first = foldUsageSnapshot(
+        null,
+        { models: { opus: { ...ZERO_USAGE, costUsd: 1, unreadable: { webSearchRequests: 1 } } } },
+        AT,
+      );
+      expect(first.delta.opus?.unreadable).toEqual({ webSearchRequests: 1 });
+
+      const second = foldUsageSnapshot(
+        nextBaseline(first),
+        { models: { opus: { ...ZERO_USAGE, costUsd: 2, unreadable: { webSearchRequests: 1 } } } },
+        LATER,
+      );
+      // costUsd は累積の差分（2-1=1）。unreadable は今回の読みそのもの（1）
+      // であって、差分(1-1=0)にはならない。
+      expect(second.delta.opus).toEqual({
+        ...ZERO_USAGE,
+        costUsd: 1,
+        unreadable: { webSearchRequests: 1 },
+      });
+    });
+
+    // mgr-712ad619 のレビューで足した。この台帳は「同じ累積を2回送っても増分は 0」
+    // （再送に耐える）を約束している。2周目に、1周目が作った基準（`nextBaseline`）を
+    // 挟んで、同じスナップショットをもう一度畳む。
+    it('同じ累積をもう一度畳む（再送）と、unreadable だけの行を積まない', () => {
+      const snapshot = {
+        models: { opus: { ...ZERO_USAGE, costUsd: 1, unreadable: { webSearchRequests: 1 } } },
+      };
+      const first = foldUsageSnapshot(null, snapshot, AT);
+      expect(first.delta.opus?.unreadable).toEqual({ webSearchRequests: 1 });
+
+      const resent = foldUsageSnapshot(nextBaseline(first), snapshot, LATER);
+      expect(resent.delta).toEqual({});
+    });
+
+    it('数値6欄が全部0で基準の在るモデルが、読めないまま再送されても行を積まない', () => {
+      const snapshot = { models: { opus: { ...ZERO_USAGE, unreadable: { costUsd: 1 } } } };
+      const first = foldUsageSnapshot(null, snapshot, AT);
+      expect(first.delta.opus?.unreadable).toEqual({ costUsd: 1 });
+
+      const resent = foldUsageSnapshot(nextBaseline(first), snapshot, LATER);
+      expect(resent.delta).toEqual({});
+    });
+
+    it('foldOneshotUsage も同じ理由で unreadable-only の行を落とさない', () => {
+      const fold = foldOneshotUsage({
+        models: { opus: { ...ZERO_USAGE, unreadable: { costUsd: 1 } } },
+      });
+      expect(fold.delta).toEqual({ opus: { ...ZERO_USAGE, unreadable: { costUsd: 1 } } });
+    });
+  });
+});
+
+describe('行の合計に unreadable を足し込む（Issue #2086）', () => {
+  it('片方の行にしか unreadable が無くても、合計にはそのまま現れる', () => {
+    const rows: UsageRow[] = [
+      {
+        date: '2026-08-13',
+        managerId: 'm1',
+        model: 'opus',
+        layer: 'manager',
+        site: 'session',
+        totals: totals({ costUsd: 1, unreadable: { webSearchRequests: 2 } }),
+        updatedAt: AT,
+      },
+      {
+        date: '2026-08-14',
+        managerId: 'm2',
+        model: 'sonnet',
+        layer: 'manager',
+        site: 'session',
+        totals: totals({ costUsd: 1 }),
+        updatedAt: AT,
+      },
+    ];
+    expect(sumUsageRows(rows)).toEqual(
+      totals({ costUsd: 2, unreadable: { webSearchRequests: 2 } }),
+    );
+  });
+
+  it('unreadable を持つ行が1つも無ければ、合計にも欄そのものが無い', () => {
+    const rows: UsageRow[] = [
+      {
+        date: '2026-08-13',
+        managerId: 'm1',
+        model: 'opus',
+        layer: 'manager',
+        site: 'session',
+        totals: totals({ costUsd: 1 }),
+        updatedAt: AT,
+      },
+    ];
+    expect(sumUsageRows(rows)).not.toHaveProperty('unreadable');
+  });
+});
+
+describe('取れなかった区切りの1行（describeUnreadableUsage。Issue #2086）', () => {
+  it('unreadable が無ければ空配列（既存の出力を1文字も変えない）', () => {
+    expect(describeUnreadableUsage(totals({ costUsd: 1 }))).toEqual([]);
+  });
+
+  it('在れば、欄ごとの回数を値を作らず理由として1行にする', () => {
+    const lines = describeUnreadableUsage(totals({ unreadable: { inputTokens: 3, costUsd: 1 } }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('入力 3回');
+    expect(lines[0]).toContain('費用 1回');
+    expect(lines[0]).not.toContain('出力');
   });
 });
 

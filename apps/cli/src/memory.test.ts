@@ -313,10 +313,16 @@ describe('alteroid memory list / show', () => {
       },
     });
 
-    await memoryListCommand();
+    // **`now` を固定する**（issue #2141 段1で「作成」の横に経過を添えるように
+    // なった——器の実行時刻に依存させないため、ここで明示的に渡す）。
+    await memoryListCommand(new Date('2026-08-11T00:00:00.000Z').getTime());
 
     const text = read();
-    expect(text).toContain('作成: 2026-08-10T00:00:00.000Z / 更新: 2026-08-15T00:00:00.000Z');
+    expect(text).toContain(
+      '作成: 2026-08-10T00:00:00.000Z（1日前） / 更新: 2026-08-15T00:00:00.000Z',
+    );
+    // **`unknown` の倒れ先は「不明」のまま**——経過を添えない（読めないのに
+    // `0分前` のような値を作らない）。
     expect(text).toContain('作成: 不明 / 更新: 2026-08-12T00:00:00.000Z');
   });
 });

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   USAGE_ESTIMATE_NOTICE,
+  addUnreadableCounts,
   foldOneshotUsage,
   foldUsageSnapshot,
   usageAggregateSchema,
@@ -282,6 +283,7 @@ function compareTokenId(a: string | undefined, b: string | undefined): number {
 }
 
 function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
+  const unreadable = addUnreadableCounts(a.unreadable, b.unreadable);
   return {
     inputTokens: a.inputTokens + b.inputTokens,
     outputTokens: a.outputTokens + b.outputTokens,
@@ -289,6 +291,7 @@ function addTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
     cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
     webSearchRequests: a.webSearchRequests + b.webSearchRequests,
     costUsd: a.costUsd + b.costUsd,
+    ...(unreadable === undefined ? {} : { unreadable }),
   };
 }
 

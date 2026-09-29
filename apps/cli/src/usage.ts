@@ -3,6 +3,7 @@ import { stdout } from 'node:process';
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnreadableUsage,
   describeUnrecordedManagers,
   describeWebSearchRequests,
   formatUsd,
@@ -200,6 +201,9 @@ export function renderUsage(view: UsageView): string {
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}` +
         describeWebSearchRequests(summary.total),
     );
+    // **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
+    // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
+    lines.push(...describeUnreadableUsage(summary.total));
     // **合計値の隣に必ず出す（Issue #98）。** 台帳に1行も無い委譲は上の合計に
     // 入っていないので、合計を読んだ直後にそれが分かる位置へ置く。
     lines.push(...describeUnrecordedManagers(unrecordedManagers));

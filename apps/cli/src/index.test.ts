@@ -249,6 +249,24 @@ describe('alteroid daemon status', () => {
     expect(text).not.toContain('/home/test/.alteroid');
   });
 
+  /**
+   * issue #2141 段1: ISO の横に経過を添える。ISO はそのまま残る
+   * （消えていない）ことも合わせて確かめる。
+   */
+  it('起動の横に経過を添える。ISO は消えない', async () => {
+    vi.mocked(daemon.status).mockResolvedValue({
+      presence: 'present',
+      info: { pid: 99, port: 4517, startedAt: '2026-08-24T00:00:00.000Z', token: 't' },
+    });
+    vi.mocked(daemon.storageOf).mockResolvedValue('postgres://example');
+    const read = captureStdout();
+
+    await daemonStatusCommand(new Date('2026-08-25T00:00:00.000Z').getTime());
+
+    const text = read();
+    expect(text).toContain('起動: 2026-08-24T00:00:00.000Z（1日前）');
+  });
+
   it('停止中（presence: absent）なら「停止中」と言い、記憶の場所はローカルの alteroidRoot() に落ちる', async () => {
     vi.mocked(daemon.status).mockResolvedValue({ presence: 'absent', info: null });
     const read = captureStdout();

@@ -111,6 +111,38 @@ describe('alteroid access list', () => {
   });
 
   /**
+   * issue #2141 段1: ISO の横に経過を添える。**ISO はそのまま残す**——
+   * 消えていないことも合わせて確かめる（1つの行で両方測る）。
+   */
+  it('作成の横に経過（（N分前）の形）を添える。ISO は消えない', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        accounts: [
+          {
+            id: 'acc-1',
+            displayName: 'たけっち',
+            email: 'takecchi@example.com',
+            createdAt: '2026-08-01T00:00:00.000Z',
+            lastLoginAt: null,
+            grantedAt: null,
+            grantedBy: null,
+            granted: true,
+            ownerDeclaredAt: null,
+            identities: [],
+          },
+        ],
+      },
+    });
+
+    await accessListCommand(new Date('2026-08-02T00:00:00.000Z').getTime());
+
+    const text = read();
+    expect(text).toContain('作成: 2026-08-01T00:00:00.000Z（1日前）');
+  });
+
+  /**
    * **誰が許可したか（#1398 c7-3）。** 3分岐（`'operator'`・アカウントの id・
    * `null`）を1回で確かめる。文言は Web UI の `describeGrantedBy()` と同じ。
    */

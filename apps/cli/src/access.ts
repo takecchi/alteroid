@@ -1,5 +1,6 @@
 import { stdout } from 'node:process';
 
+import { formatElapsed } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -64,7 +65,7 @@ function describeGrantedBy(grantedBy: string | null): string {
   return grantedBy;
 }
 
-export async function accessListCommand(): Promise<void> {
+export async function accessListCommand(now: number = Date.now()): Promise<void> {
   const target = await resolveTarget();
   const { accounts } = (await request(target, '/access')) as { accounts: AccountView[] };
 
@@ -85,7 +86,9 @@ export async function accessListCommand(): Promise<void> {
     // **作成（`createdAt`）を足す。** `AccountView` は元から持っていて（型に
     // 在る）、ここが出していなかっただけである（#214）。`createdAt` は必須
     // なので null チェックは要らない。
-    stdout.write(`  作成: ${account.createdAt}\n`);
+    // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す——曖昧さが
+    // 無く、コピーしてほかの道具へ渡せる。
+    stdout.write(`  作成: ${account.createdAt}（${formatElapsed(account.createdAt, now)}前）\n`);
     const via = account.identities
       .map(
         (identity) =>

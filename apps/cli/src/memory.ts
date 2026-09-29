@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
+import { formatElapsed } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
@@ -89,7 +90,23 @@ export function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
   return createdAt.kind === 'known' ? createdAt.at : '不明';
 }
 
-export async function memoryListCommand(): Promise<void> {
+/**
+ * `formatCreatedAt` の横に経過を添える（issue #2141 段1、`alteroid memory
+ * list` だけ）。
+ *
+ * **`unknown` の倒れ先はそのまま。** 「不明」に経過を添えると、読めないのに
+ * 何かが分かったかのような値（例えば `0分前`）を作ることになる——`formatElapsed`
+ * が読めない ISO を「不明」に倒すのと同じ理由で、ここでも `known` のときだけ
+ * 添える。
+ */
+function formatCreatedAtWithElapsed(createdAt: MemorySummary['createdAt'], now: number): string {
+  if (createdAt.kind === 'known') {
+    return `${createdAt.at}（${formatElapsed(createdAt.at, now)}前）`;
+  }
+  return formatCreatedAt(createdAt);
+}
+
+export async function memoryListCommand(now: number = Date.now()): Promise<void> {
   const conn = await connect();
   if (conn === null) return;
   const { client } = conn;
@@ -113,7 +130,7 @@ export async function memoryListCommand(): Promise<void> {
     // 括弧の中の形は `memory_list` に揃えてある。
     stdout.write(
       `  [${doc.kind}] ${doc.slug}  — ${doc.title}` +
-        ` (作成: ${formatCreatedAt(doc.createdAt)} / 更新: ${doc.updatedAt})${desc}\n`,
+        ` (作成: ${formatCreatedAtWithElapsed(doc.createdAt, now)} / 更新: ${doc.updatedAt})${desc}\n`,
     );
   }
   // **一覧から次の一手へつなぐ。** 0 件の枝が「置くには」を出すのと同じ理由で、

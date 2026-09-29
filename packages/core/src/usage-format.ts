@@ -22,6 +22,63 @@ export const USAGE_LAYERS = ['clone', 'manager'] as const;
 export const USAGE_SITES = ['session', 'distill'] as const;
 
 /**
+ * {@link UsageTotals} の欄のうち「読めなかった区切りの数」を持ちうるもの
+ * （Issue #2086）。**`USAGE_LAYERS` / `USAGE_SITES` と同じ理由でここに置く**
+ * ——ブラウザ（`apps/web`）が読めるのはこのファイルだけなので、`usage.ts` の
+ * zod schema はここから作り、画面側はここだけを読めばよい。
+ */
+export const USAGE_UNREADABLE_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'cacheReadInputTokens',
+  'cacheCreationInputTokens',
+  'webSearchRequests',
+  'costUsd',
+] as const;
+
+export type UsageUnreadableField = (typeof USAGE_UNREADABLE_FIELDS)[number];
+
+/**
+ * 欄ごとの「読めなかった区切りの数」。**欄が無いのは「その欄を数えていない」で
+ * あって 0 ではない**（`usage.ts` の `usageTotalsSchema.unreadable` の doc）。
+ */
+export type UsageUnreadableCounts = Partial<Record<UsageUnreadableField, number>>;
+
+/** 表示用の日本語ラベル（`describeUnreadableUsage` と、既存の合計行の並びに揃える）。 */
+const USAGE_UNREADABLE_FIELD_LABELS: ReadonlyArray<readonly [UsageUnreadableField, string]> = [
+  ['inputTokens', '入力'],
+  ['outputTokens', '出力'],
+  ['cacheReadInputTokens', 'キャッシュ読み'],
+  ['cacheCreationInputTokens', 'キャッシュ書き'],
+  ['webSearchRequests', 'Web検索'],
+  ['costUsd', '費用'],
+];
+
+/**
+ * 2つの「読めなかった数」を欄ごとに足す。**片方（または両方）が `undefined` でも
+ * 0 として扱う**——欄が無いのは「まだ数えていない」であって 0 ではないという
+ * 区別は、`UsageTotals.unreadable` という欄そのものの有無が持つ（`usage.ts` の
+ * doc）。ここで足し合わせた**結果**が全欄 0 なら `undefined` を返す——「読めな
+ * かった区切りが無い」を、値を作らずに表す。
+ *
+ * **fs（`storage-fs` の `addTotals`）と Web を含む口（`sumUsageRows`）の両方が
+ * ここを直接呼ぶ。** 別々に書くと、どちらかが「欄が無ければ 0」を書き忘れて
+ * `NaN` を積む事故になる。
+ */
+export function addUnreadableCounts(
+  a: UsageUnreadableCounts | undefined,
+  b: UsageUnreadableCounts | undefined,
+): UsageUnreadableCounts | undefined {
+  if (a === undefined && b === undefined) return undefined;
+  const merged: UsageUnreadableCounts = {};
+  for (const field of USAGE_UNREADABLE_FIELDS) {
+    const sum = (a?.[field] ?? 0) + (b?.[field] ?? 0);
+    if (sum > 0) merged[field] = sum;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
  * 台帳の数字を読める形にするための算術と整形。
  *
  * **実行時の依存を1つも持たない**（型は `usage.ts` から `import type` で取るので
@@ -59,14 +116,19 @@ export const ZERO_USAGE: UsageTotals = {
 /** 行の合計（モデル横断・日横断）。表示側の算術をここへ寄せる。 */
 export function sumUsageRows(rows: readonly UsageRow[]): UsageTotals {
   return rows.reduce<UsageTotals>(
-    (sum, row) => ({
-      inputTokens: sum.inputTokens + row.totals.inputTokens,
-      outputTokens: sum.outputTokens + row.totals.outputTokens,
-      cacheReadInputTokens: sum.cacheReadInputTokens + row.totals.cacheReadInputTokens,
-      cacheCreationInputTokens: sum.cacheCreationInputTokens + row.totals.cacheCreationInputTokens,
-      webSearchRequests: sum.webSearchRequests + row.totals.webSearchRequests,
-      costUsd: sum.costUsd + row.totals.costUsd,
-    }),
+    (sum, row) => {
+      const unreadable = addUnreadableCounts(sum.unreadable, row.totals.unreadable);
+      return {
+        inputTokens: sum.inputTokens + row.totals.inputTokens,
+        outputTokens: sum.outputTokens + row.totals.outputTokens,
+        cacheReadInputTokens: sum.cacheReadInputTokens + row.totals.cacheReadInputTokens,
+        cacheCreationInputTokens:
+          sum.cacheCreationInputTokens + row.totals.cacheCreationInputTokens,
+        webSearchRequests: sum.webSearchRequests + row.totals.webSearchRequests,
+        costUsd: sum.costUsd + row.totals.costUsd,
+        ...(unreadable === undefined ? {} : { unreadable }),
+      };
+    },
     { ...ZERO_USAGE },
   );
 }
@@ -249,6 +311,30 @@ export function summarizeUsage(
 export function describeWebSearchRequests(totals: UsageTotals): string {
   if (totals.webSearchRequests === 0) return '';
   return ` / Web検索 ${totals.webSearchRequests.toLocaleString('en-US')}回（費用は合計に含む）`;
+}
+
+/**
+ * SDK から値が取れなかった区切りが在ることを、値を作らず理由として1行にする
+ * （Issue #2086）。「0」と「取れなかった」を同じ顔で見せない
+ * （AGENTS.md 地雷表「取れない軸に0の行を作る」の「代わりに」の列）。
+ *
+ * **取れなかった区切りが1つも無ければ空配列。** 既存の出力を1文字も変えない
+ * ——`totals.unreadable` が無い（欄そのものを数えていない）ときも、数えた
+ * 結果が全欄 0 のときも、同じくここで空配列になる。
+ *
+ * **3面（CLI・Web・`usage_read`）が同じ文言をここから直接呼ぶ**
+ * （`describeWebSearchRequests` と同じ設計）。
+ */
+export function describeUnreadableUsage(totals: UsageTotals): string[] {
+  const counts = totals.unreadable;
+  if (counts === undefined) return [];
+  const parts = USAGE_UNREADABLE_FIELD_LABELS.filter(([field]) => (counts[field] ?? 0) > 0).map(
+    ([field, label]) => `${label} ${(counts[field] ?? 0).toLocaleString('en-US')}回`,
+  );
+  if (parts.length === 0) return [];
+  return [
+    `⚠ 一部の区切りで SDK から値が取れなかった（0 ではなく取れなかった。取れなかった数: ${parts.join(' / ')}）。`,
+  ];
 }
 
 /**

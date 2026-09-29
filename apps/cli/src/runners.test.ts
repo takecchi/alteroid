@@ -456,6 +456,24 @@ describe('renderRunners', () => {
       expect(text).toContain('この状態になった: 2026-09-01T00:00:00.000Z');
     });
 
+    /**
+     * issue #2141 段1: ISO の横に経過を添える。ISO はそのまま残る
+     * （消えていない）ことも合わせて確かめる。
+     */
+    it('この状態になった の横に経過を添える。ISO は消えない', () => {
+      const text = renderRunners(
+        {
+          runners: [
+            { ...RUNNER, since: '2026-09-01T00:00:00.000Z', revision: { status: 'unheard' } },
+          ],
+          daemonRevision: { status: 'unknown' },
+        },
+        new Date('2026-09-04T00:00:00.000Z').getTime(),
+      );
+
+      expect(text).toContain('この状態になった: 2026-09-01T00:00:00.000Z（3日前）');
+    });
+
     /** **「作成」「更新」と書かない**（#211）。 */
     it('「作成」「更新」とは書かない', () => {
       const text = renderRunners({

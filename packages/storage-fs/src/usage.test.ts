@@ -170,6 +170,51 @@ describe('FsUsageStore.record', () => {
   });
 });
 
+/**
+ * 「0」と「取れなかった」を区別する軸（Issue #2086）。fs 版の日次の足し込みで
+ * `unreadable` が失われない・積み増されることを見る。差分の算術そのものは
+ * `packages/core/src/usage.test.ts` で確かめ済みなので、ここでは fs 固有の
+ * 足し込み（`addTotals`）と読み出しだけを問う。
+ */
+describe('FsUsageStore と unreadable（読めなかった区切りの数。Issue #2086）', () => {
+  it('毎ターン同じ欄が読めない回が続くと、日次の行で足し込まれる', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({
+        opus: totals({ costUsd: 1, unreadable: { webSearchRequests: 1 } }),
+      }),
+    });
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T11:00:00.000Z',
+      snapshot: snapshot({
+        opus: totals({ costUsd: 2, unreadable: { webSearchRequests: 1 } }),
+      }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    // costUsd は累積の差分（2-1=1）を足し込んだ1+1=2。unreadable は毎回の
+    // 読み（1）をそのまま2回足し込んだ2。
+    expect(rows[0]?.totals).toEqual(totals({ costUsd: 2, unreadable: { webSearchRequests: 2 } }));
+  });
+
+  it('unreadable が無い回だけなら、読み出した行に欄そのものが無い（既存の出力を変えない）', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows[0]?.totals).not.toHaveProperty('unreadable');
+  });
+});
+
 describe('FsUsageStore.aggregate', () => {
   it('1件も無ければ since は null', async () => {
     const aggregate = await store.aggregate({});
