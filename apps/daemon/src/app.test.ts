@@ -7110,7 +7110,12 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       source: 'conv-2',
       body: 'b',
     });
-    await stores.commitments.open({ id: 'o-external', at: ago(230), origin: 'external', body: 'c' });
+    await stores.commitments.open({
+      id: 'o-external',
+      at: ago(230),
+      origin: 'external',
+      body: 'c',
+    });
     await stores.commitments.open({ id: 'o-plain', at: ago(220), origin: 'human', body: 'd' });
     for (const [i, closedAgo] of [10, 20, 30].entries()) {
       await stores.commitments.open({
@@ -7206,8 +7211,12 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       now: new Date(body.observedAt),
       windowHours: 168,
     });
-    const { observedAt: _observedAt, github: _github, ...fromApi } = body;
-    expect(fromApi).toEqual(JSON.parse(JSON.stringify(expected)));
+    // core の出力に無い2欄（daemon が足す `observedAt` / `github`）だけを外して突き合わせる
+    expect({ ...body, observedAt: undefined, github: undefined }).toEqual({
+      ...JSON.parse(JSON.stringify(expected)),
+      observedAt: undefined,
+      github: undefined,
+    });
   });
 
   it('返答が日誌に載ると byState が untouched から responded へ動く（respondedAt が core へ渡っている）', async () => {
