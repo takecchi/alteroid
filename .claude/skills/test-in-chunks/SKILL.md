@@ -221,6 +221,27 @@ cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=2/
 順に（または手が空いている別の依頼と並行して）回せば、全スイートを
 1回のコマンドに詰め込まずに済む。
 
+## shard に何が入るかを、走らせずに見る（`pnpm test:shard-files`）
+
+**`vitest list --shard=<i>/<n> --filesOnly` は使わない。** vitest 5.0.1 は `list` で
+`--shard` を黙って無視し、範囲の全ファイルを返す（`--help` には載っているので、効いた
+ように見える）。実測（2026-09-29T06:5xZ、`packages/storage-pg/src`）: `--shard=1/3` も
+`--shard=3/3` も 43 件。
+
+代わりに root で `pnpm test:shard-files <scope> <i>/<n>` を打つ（PR #2136）。テストを
+1本も走らせずに、その shard に入るテストファイルを1行1ファイルで出す。仕組みは
+vitest 自身の `--shard` に「どのテストにも当たらない `-t`」を付けて JSON で読む形で、
+割り当ての規則を書き写していない（`scripts/test-shard-files-core.mjs` の冒頭の doc）。
+
+```
+$ pnpm -s test:shard-files packages/storage-pg/src 3/3
+…（14行のファイル名）
+test-shard-files: packages/storage-pg/src --shard=3/3 → 14 ファイル
+```
+
+ファイルの import は走るので、重い範囲でも数秒〜十数秒かかる（`packages/storage-pg/src` の
+3本で 26 秒。実測 2026-09-29T06:57Z）。
+
 ## `--scope` と分割の口（`--shard` / `--reporter`）の関係——素通しされることの歯
 
 各ワークスペースの `test` script（`node ../../scripts/test.mjs --root=../..
