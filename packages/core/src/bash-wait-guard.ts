@@ -546,10 +546,12 @@ function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boole
  *   済ませて差し戻された経緯を読めるようにするためである。**
  * - **issue #2068 で新しく生まれた・残った限界**（`GH_WORD_SRC`/
  *   `GH_REPO_FLAG_SRC`/`FLOCK_PREFIX_SRC` の doc にも個別に書いてある）:
- *   - `flock -n /tmp/l gh pr merge …` のような、**オプション付きの
+ *   - ~~`flock -n /tmp/l gh pr merge …` のような、**オプション付きの
  *     `flock`。** `flock` 自身のオプション文法は解いていない
  *     （`FLOCK_PREFIX_SRC` の doc）——`flock <file>`（オプション無し）の
- *     形だけを読む。
+ *     形だけを読む。~~ **その後、`flock` のオプションと `-c` / `--command` の形を
+ *     読むようにして直った**（`FLOCK_PREFIX_SRC` / `FLOCK_DASH_C_RE` の doc。
+ *     歯は `bash-wait-guard-delete-branch-flock.test.ts`）。
  *   - `-R`/`--repo` の**短縮の詰め込み形**（`-Ro/r`、空白も `=` も無く
  *     直後に値が続く書き方）。`GH_REPO_FLAG_SRC` は `-R o/r`/`--repo o/r`/
  *     `--repo=o/r` の3形だけを見ており、`-Ro/r` は読めない。
@@ -1073,6 +1075,22 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  * オプション付きの形はこの版では読み飛ばせない（doc「弾けないと分かって
  * いる形」に書く）。
  *
+ * ⚠️ **その後、`flock` 自身のオプションを読むようにした**（mgr-712ad619、2026-09-29T06:2xZ）。
+ * `flock -n /tmp/l gh pr merge 1 -d` など、オプション付きの7形がすり抜けていた。
+ * `FLOCK_OPTION_SRC` が、値を取るもの（`-w` / `-E` と長い形の `--wait` /
+ * `--timeout` / `--conflict-exit-code`）と、値を取らないもの（`-n` / `-x` / `--nonblock` …）
+ * を分けて読む。**値を取らない側は、値を取る名前を否定の先読みで除く**（`-w` を値なしで
+ * 読む選択肢も、`--timeout=5` を両方の選択肢が読む形も作らない）。だから値を取る名前は
+ * 必ず値を1つ取り、1つの語をどの選択肢で読むかは常に1通りに決まる。PR #2080 の指数の
+ * 後戻り（オプションの2つの読み方の再合流）は起きない。**値そのものは `-` で始まって
+ * もよい**（`flock -w -n …` のような誤った書き方も読み飛ばし、すり抜けの向きに倒さない。
+ * 値に `(?!-)` を付けても後戻りは変わらないことを変異で確かめた）。
+ *
+ * **ファイルの位置引数は `-` で始まらない語に絞った。** これで `'sudo ' + '-u flock '.repeat(n)`
+ * の2乗が消えた（下の ⚠️）。
+ * `flock <file> -c <文字列>` の形は、文字列を `sh -c` に渡すので、#2104 の入口として
+ * 読む（`FLOCK_DASH_C_RE`）。
+ *
  * ⚠️ **28形の対照テストには含めていない**（Issue の必須の31形に `flock` は
  * 無い）。A族の列挙に明記して依頼されたので足したが、実際に `gh` が
  * 絡む形での確認は無い——`.scratch` の検証スクリプトで手元確認したのみ。
@@ -1084,9 +1102,14 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  * の語ごとに「値として読む」「前置きとして読む」の2つを試す。後者は次の
  * 1語で行き止まりになるので指数にはならないが、各開始位置で残りを読む分
  * だけ2乗になる。すり抜けは作らず、18KB で 200ms の予算にも収まるので、
- * この版では直していない。
+ * この版では直していない。**⟹ その後、ファイルの位置引数を `-` で始まらない語に絞った
+ * ことで線形になった**（`-u` をファイルとして読む分かれ道が無くなった。n=8000 で
+ * 3445.4ms → 5.2ms。mgr-712ad619 の実測 2026-09-29T06:2xZ。歯は
+ * `bash-wait-guard-delete-branch-flock.test.ts`）。
  */
-const FLOCK_PREFIX_SRC = String.raw`(?:flock\b[ \t]+\S+[ \t]+)`;
+const FLOCK_OPTION_SRC = String.raw`(?:-[wE][ \t]+\S+|--(?:wait|timeout|conflict-exit-code)(?:=\S+|[ \t]+\S+)|(?!-[wE](?:[ \t]|$))(?!--(?:wait|timeout|conflict-exit-code)(?:[ \t=]|$))(?!-c(?:[ \t]|$))(?!--command(?:[ \t=]|$))-\S+)`;
+
+const FLOCK_PREFIX_SRC = String.raw`(?:flock\b(?:[ \t]+${FLOCK_OPTION_SRC})*[ \t]+(?!-)\S+[ \t]+)`;
 
 /**
  * コマンド位置と `gh` のあいだで読み飛ばす前置き全体 —— bash の予約語
@@ -1827,14 +1850,25 @@ function commandPositionStartBefore(command: string, index: number): number {
   return 0;
 }
 
+/**
+ * `flock [オプション] <file> -c <文字列>` / `--command <文字列>`。`flock` は文字列を
+ * `sh -c` に渡すので、シェルの `-c` と同じ入口として中身を取り出す（`FLOCK_PREFIX_SRC` の doc）。
+ */
+const FLOCK_DASH_C_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}flock\b(?:[ \t]+${FLOCK_OPTION_SRC})*[ \t]+(?!-)\S+[ \t]+(?:-c|--command)(?:=|[ \t]+)${SHELL_DASH_C_ARG_SRC}`,
+  'g',
+);
+
 function extractShellDashCPayloads(command: string): string[] {
   const payloads: string[] = [];
-  SHELL_DASH_C_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = SHELL_DASH_C_RE.exec(command)) !== null) {
-    if (m[1] !== undefined) payloads.push(unescapeBackslashes(m[1]).trim());
-    else if (m[2] !== undefined) payloads.push(m[2].trim());
-    else if (m[3] !== undefined) payloads.push(m[3].trim());
+  for (const re of [SHELL_DASH_C_RE, FLOCK_DASH_C_RE]) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(command)) !== null) {
+      if (m[1] !== undefined) payloads.push(unescapeBackslashes(m[1]).trim());
+      else if (m[2] !== undefined) payloads.push(m[2].trim());
+      else if (m[3] !== undefined) payloads.push(m[3].trim());
+    }
   }
   return payloads;
 }

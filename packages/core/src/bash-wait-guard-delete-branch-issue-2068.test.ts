@@ -161,7 +161,11 @@ describe('gh-pr-merge-delete-branch: issue #2068 の追加確認（28形の表�
   // 望む挙動ではないので、望む挙動（`true`）を期待値に書き、直った瞬間に
   // 赤くなって知らせる形にした（`bash-wait-guard.test.ts` の `bash -c` の
   // 反転と同じ理由）。
-  it.fails('A bonus: 弾けない形——flock -n <file>（オプション付き）', () => {
+  //
+  // その後、`flock` 自身のオプションを読むようにして直った（mgr-712ad619、
+  // 2026-09-29T06:2xZ。`FLOCK_PREFIX_SRC` の doc）ので、`it.fails` から `it` へ戻した。
+  // 期待値（`true`）は変えていない。他の形の歯は `bash-wait-guard-delete-branch-flock.test.ts`。
+  it('A bonus: flock -n <file>（オプション付き。直った）', () => {
     expect(inspectBashCommand('flock -n /tmp/l gh pr merge 1 -d').blocked).toBe(true);
   });
 
