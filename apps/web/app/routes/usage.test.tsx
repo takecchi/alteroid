@@ -62,9 +62,10 @@ function row(
     site: string;
     tokenId: string;
     webSearchRequests: number;
+    unreadable: Record<string, number>;
   }> = {},
 ) {
-  const { webSearchRequests, ...rest } = over;
+  const { webSearchRequests, unreadable, ...rest } = over;
   return {
     date: '2026-08-14',
     managerId: 'm1',
@@ -73,7 +74,12 @@ function row(
     site: 'session',
     updatedAt: '2026-08-14T10:00:00.000Z',
     ...rest,
-    totals: { ...ZERO_USAGE, costUsd, webSearchRequests: webSearchRequests ?? 0 },
+    totals: {
+      ...ZERO_USAGE,
+      costUsd,
+      webSearchRequests: webSearchRequests ?? 0,
+      ...(unreadable === undefined ? {} : { unreadable }),
+    },
   };
 }
 
@@ -589,6 +595,40 @@ describe('/usage 画面の Web 検索の回数（webSearchRequests）', () => {
     renderUsage();
 
     expect(await screen.findByText(/Web検索/)).toBeTruthy();
+  });
+});
+
+/**
+ * 取れなかった区切りの1行（`describeUnreadableUsage`。Issue #2086）。
+ *
+ * 文言そのものの試験は core（`describeUnreadableUsage`）が持つ。ここで見るのは
+ * 「画面に実際に繋がっているか」と「無ければ1文字も増やさないこと」だけである
+ * （`describeWebSearchRequests` と同じ形の歯）。
+ */
+describe('/usage 画面の取れなかった区切り（unreadable）', () => {
+  it('unreadable が無ければ、それらしい行を出さない', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByText(/合計/);
+    expect(screen.queryByText(/取れなかった/)).toBeNull();
+  });
+
+  it('unreadable が在れば、値を作らず理由の行を出す', async () => {
+    stubUsage({
+      rows: [row(1, { unreadable: { webSearchRequests: 2 } })],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    expect(await screen.findByText(/取れなかった/)).toBeTruthy();
   });
 });
 

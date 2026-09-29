@@ -53,6 +53,44 @@ function optionalIso(value: Date | null): string | undefined {
 }
 
 /**
+ * `usage_daily` の6本の `unreadable_*` 列から `UsageTotals.unreadable` を作る
+ * （Issue #2086）。**全欄0なら `unreadable` の欄そのものを省く**——読み出し
+ * 側がここで「取れなかった区切りが1つも無い」を「欄が無い」として表す
+ * （`usage.ts` の `usageTotalsSchema.unreadable` の doc「欄が無いのは数えて
+ * いない」と同じ形。ここでは「数えた結果が0件だった」も同じ見た目になる —
+ * この列自体は常に整数なので、両者を列の値では区別しない）。
+ */
+function unreadableCountsOf(row: {
+  readonly unreadableInputTokens: number;
+  readonly unreadableOutputTokens: number;
+  readonly unreadableCacheReadInputTokens: number;
+  readonly unreadableCacheCreationInputTokens: number;
+  readonly unreadableWebSearchRequests: number;
+  readonly unreadableCostUsd: number;
+}): { unreadable?: UsageTotals['unreadable'] } {
+  const unreadable: NonNullable<UsageTotals['unreadable']> = {};
+  if (toNumber(row.unreadableInputTokens) > 0) {
+    unreadable.inputTokens = toNumber(row.unreadableInputTokens);
+  }
+  if (toNumber(row.unreadableOutputTokens) > 0) {
+    unreadable.outputTokens = toNumber(row.unreadableOutputTokens);
+  }
+  if (toNumber(row.unreadableCacheReadInputTokens) > 0) {
+    unreadable.cacheReadInputTokens = toNumber(row.unreadableCacheReadInputTokens);
+  }
+  if (toNumber(row.unreadableCacheCreationInputTokens) > 0) {
+    unreadable.cacheCreationInputTokens = toNumber(row.unreadableCacheCreationInputTokens);
+  }
+  if (toNumber(row.unreadableWebSearchRequests) > 0) {
+    unreadable.webSearchRequests = toNumber(row.unreadableWebSearchRequests);
+  }
+  if (toNumber(row.unreadableCostUsd) > 0) {
+    unreadable.costUsd = toNumber(row.unreadableCostUsd);
+  }
+  return Object.keys(unreadable).length > 0 ? { unreadable } : {};
+}
+
+/**
  * 照会範囲の一部でも台帳の始点より前にかかっていたか。
  *
  * 台帳が一度も record していなければ（`since === null`）、始まっている期間が
@@ -267,6 +305,13 @@ export class PgUsageStore implements UsageStore {
       // delta から落としているので、ここでも 0 の行は作らない。
       for (const [model, totals] of Object.entries(fold.delta)) {
         const updatedAt = new Date(input.at);
+        // **欄が無ければ0**（Issue #2086）。`totals.unreadable` は `toModelTotals`
+        // が「読めなかった欄がある回」にしか付けない optional な欄なので、無い
+        // ときはその回は「1つも読めなかった欄が無かった」——0 を書いて構わない
+        // （台帳の列は常に整数で持ち、「観測していない」との区別は読み出し側
+        // ＝ `#toRow` が「全欄0なら unreadable の欄自体を出さない」という形で
+        // 持つ。この列自体には optional は無い）。
+        const unreadable = totals.unreadable ?? {};
         const values = stripNulls({
           date: input.date,
           managerId: input.managerId,
@@ -285,6 +330,12 @@ export class PgUsageStore implements UsageStore {
           cacheCreationInputTokens: totals.cacheCreationInputTokens,
           webSearchRequests: totals.webSearchRequests,
           costUsd: totals.costUsd,
+          unreadableInputTokens: unreadable.inputTokens ?? 0,
+          unreadableOutputTokens: unreadable.outputTokens ?? 0,
+          unreadableCacheReadInputTokens: unreadable.cacheReadInputTokens ?? 0,
+          unreadableCacheCreationInputTokens: unreadable.cacheCreationInputTokens ?? 0,
+          unreadableWebSearchRequests: unreadable.webSearchRequests ?? 0,
+          unreadableCostUsd: unreadable.costUsd ?? 0,
         });
 
         await tx
@@ -315,6 +366,12 @@ export class PgUsageStore implements UsageStore {
               cacheCreationInputTokens: sql`${usageDaily.cacheCreationInputTokens} + excluded.cache_creation_input_tokens`,
               webSearchRequests: sql`${usageDaily.webSearchRequests} + excluded.web_search_requests`,
               costUsd: sql`${usageDaily.costUsd} + excluded.cost_usd`,
+              unreadableInputTokens: sql`${usageDaily.unreadableInputTokens} + excluded.unreadable_input_tokens`,
+              unreadableOutputTokens: sql`${usageDaily.unreadableOutputTokens} + excluded.unreadable_output_tokens`,
+              unreadableCacheReadInputTokens: sql`${usageDaily.unreadableCacheReadInputTokens} + excluded.unreadable_cache_read_input_tokens`,
+              unreadableCacheCreationInputTokens: sql`${usageDaily.unreadableCacheCreationInputTokens} + excluded.unreadable_cache_creation_input_tokens`,
+              unreadableWebSearchRequests: sql`${usageDaily.unreadableWebSearchRequests} + excluded.unreadable_web_search_requests`,
+              unreadableCostUsd: sql`${usageDaily.unreadableCostUsd} + excluded.unreadable_cost_usd`,
               updatedAt,
             },
           });
@@ -528,6 +585,7 @@ export class PgUsageStore implements UsageStore {
         cacheCreationInputTokens: toNumber(row.cacheCreationInputTokens),
         webSearchRequests: toNumber(row.webSearchRequests),
         costUsd: row.costUsd,
+        ...unreadableCountsOf(row),
       },
       updatedAt: toIso(row.updatedAt),
     };

@@ -195,6 +195,69 @@ describe('PgUsageStore.record', () => {
   });
 });
 
+/**
+ * 「0」と「取れなかった」を区別する軸（Issue #2086）。`usage_daily` の
+ * `unreadable_*` 列（欄ごとの整数）へ足し込み、読み出しで組み戻すことを見る。
+ * 差分の算術そのものは `packages/core/src/usage.test.ts` で確かめ済みなので、
+ * ここでは pg 固有の upsert（加算）と `#toRow` の組み戻しだけを問う。
+ */
+describe('PgUsageStore と unreadable（読めなかった区切りの数。Issue #2086）', () => {
+  it('毎ターン同じ欄が読めない回が続くと、usage_daily の列へ足し込まれる（加算であって上書きではない）', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({
+        opus: totals({ costUsd: 1, unreadable: { webSearchRequests: 1, costUsd: 1 } }),
+      }),
+    });
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T11:00:00.000Z',
+      snapshot: snapshot({
+        opus: totals({ costUsd: 2, unreadable: { webSearchRequests: 1, costUsd: 1 } }),
+      }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals).toEqual(
+      totals({ costUsd: 2, unreadable: { webSearchRequests: 2, costUsd: 2 } }),
+    );
+  });
+
+  it('unreadable が無い回だけなら、読み出した行に欄そのものが無い（既存の出力を変えない）', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1 }) }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows[0]?.totals).not.toHaveProperty('unreadable');
+  });
+
+  it('欄ごとに独立して足し込む（1欄だけ読めない回と、別の1欄だけ読めない回が混ざっても互いを侵さない）', async () => {
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1, unreadable: { inputTokens: 1 } }) }),
+    });
+    await record({
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T11:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 1, unreadable: { webSearchRequests: 1 } }) }),
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows[0]?.totals.unreadable).toEqual({ inputTokens: 1, webSearchRequests: 1 });
+  });
+});
+
 describe('PgUsageStore.aggregate', () => {
   it('1件も無ければ since は null', async () => {
     const aggregate = await store.aggregate({});

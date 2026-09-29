@@ -697,6 +697,22 @@ export const STATEMENTS = [
      revoked_at timestamptz,
      record jsonb not null
    )`,
+
+  // --- 「読めなかった区切りの数」の軸を足す（Issue #2086） -------------------
+  //
+  // **既定 0。既存行にとって真である。** この列より前の行は「読めなかった」を
+  // 数える機構そのものが無かった——欄が無いことと0であることを区別する必要は
+  // 台帳の列そのものには無い（区別は読み出し側が「全欄0なら unreadable の
+  // 欄自体を出力から省く」という形で持つ。`usage.ts` の `#toRow` の doc）。
+  // 単純な列追加5本+1本なので、このファイル冒頭の「既存行の意味を変える変更を
+  // 黙って混ぜない」に当たらない——0 は「読めなかった区切りが無い」という
+  // 意味のまま古い行にも新しい行にも成り立つ。
+  `alter table usage_daily add column if not exists unreadable_input_tokens bigint not null default 0`,
+  `alter table usage_daily add column if not exists unreadable_output_tokens bigint not null default 0`,
+  `alter table usage_daily add column if not exists unreadable_cache_read_input_tokens bigint not null default 0`,
+  `alter table usage_daily add column if not exists unreadable_cache_creation_input_tokens bigint not null default 0`,
+  `alter table usage_daily add column if not exists unreadable_web_search_requests bigint not null default 0`,
+  `alter table usage_daily add column if not exists unreadable_cost_usd bigint not null default 0`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

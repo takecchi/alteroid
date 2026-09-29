@@ -586,6 +586,36 @@ export const usageDaily = pgTable(
      * `usage_ledger.tokens_at` が別に要る（そちらの doc）。
      */
     tokenId: text('token_id').notNull().default(''),
+    /**
+     * 欄ごとの「読めなかった区切りの数」（Issue #2086）。**既定 0。**
+     *
+     * **既定は「古い行にとって真」である**（`layer` / `site` と同じ形）。
+     * この列より前の行は「読めなかった」を数える機構そのものが無かったので、
+     * 0 は「数えたら0件だった」ではなく「まだ数えていなかった」だが、
+     * 出力側は両者を区別しない（`usage.ts` の `#toRow` の doc）——`unreadable`
+     * を**欄そのものが無い形**で返すのが読み手からの区別であって、この列の
+     * 値そのものは常に整数として持つ。
+     */
+    unreadableInputTokens: bigint('unreadable_input_tokens', { mode: 'number' })
+      .notNull()
+      .default(0),
+    unreadableOutputTokens: bigint('unreadable_output_tokens', { mode: 'number' })
+      .notNull()
+      .default(0),
+    unreadableCacheReadInputTokens: bigint('unreadable_cache_read_input_tokens', {
+      mode: 'number',
+    })
+      .notNull()
+      .default(0),
+    unreadableCacheCreationInputTokens: bigint('unreadable_cache_creation_input_tokens', {
+      mode: 'number',
+    })
+      .notNull()
+      .default(0),
+    unreadableWebSearchRequests: bigint('unreadable_web_search_requests', { mode: 'number' })
+      .notNull()
+      .default(0),
+    unreadableCostUsd: bigint('unreadable_cost_usd', { mode: 'number' }).notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [

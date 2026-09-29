@@ -1,6 +1,7 @@
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnreadableUsage,
   describeUnrecordedManagers,
   describeWebSearchRequests,
   formatUsd,
@@ -431,6 +432,13 @@ function UsageBody({
               でも既定値でもなく、取れていない）。
             </p>
           )}
+          {/* **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
+              空配列なので、既存の画面は1文字も変わらない。 */}
+          {describeUnreadableUsage(summary.total).map((line) => (
+            <p key={line} className="mt-3 text-xs text-warn">
+              {line}
+            </p>
+          ))}
         </div>
       </Card>
 

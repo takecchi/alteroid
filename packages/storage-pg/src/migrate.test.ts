@@ -1,3 +1,4 @@
+import { ZERO_USAGE } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -13,6 +14,7 @@ import {
   STATEMENTS,
 } from './migrate.js';
 import { archive, authAccounts, commitments } from './schema.js';
+import { PgUsageStore } from './usage.js';
 
 /**
  * **`migrate` の配列そのものを構造で見る歯。**
@@ -118,6 +120,61 @@ describe('migrate（archive の指紋・連続性列。#698）', () => {
     expect(rows).toEqual([
       { bodyChars: 5, bodyMd5: 'deadbeefdeadbeefdeadbeefdeadbeef', continuity: 'continues' },
     ]);
+  });
+});
+
+/**
+ * `usage_daily` の `unreadable_*` 6列の追加（Issue #2086）は2回通しても壊れない。
+ *
+ * **`archive の指紋・連続性列` と同じ形の歯。** 1周目（`beforeEach` の
+ * `migrate(db)`）の後に実際に列へ値の入った行を `PgUsageStore.record` で
+ * 積んでから2周目を当てる——空の DB に対して2回通すだけでは、列が既に
+ * 埋まった状態での `add column if not exists` が本当に no-op かを見落とす。
+ */
+describe('migrate（usage_daily の unreadable 列。#2086）', () => {
+  let client: PGlite;
+  let db: Db;
+
+  beforeEach(async () => {
+    client = new PGlite();
+    db = drizzle(client);
+    await migrate(db);
+  });
+
+  afterEach(async () => {
+    await client.close();
+  });
+
+  it('unreadable_* に値が入った行が2周目のあとも生き残り、以後の record でも足し込みが続く', async () => {
+    const store = new PgUsageStore(db);
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-09-29',
+      at: '2026-09-29T10:00:00.000Z',
+      accumulation: 'cumulative',
+      snapshot: { models: { opus: { ...ZERO_USAGE, costUsd: 1, unreadable: { inputTokens: 1 } } } },
+    });
+
+    // 2周目——unreadable 列に値が入った行が実在する状態で当てる。
+    await migrate(db);
+
+    // 2周目のあとも、加算の upsert が引き続き効くこと（列が壊れて0スタートに
+    // 戻っていないこと）を確かめる。
+    await store.record({
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-09-29',
+      at: '2026-09-29T11:00:00.000Z',
+      accumulation: 'cumulative',
+      snapshot: { models: { opus: { ...ZERO_USAGE, costUsd: 2, unreadable: { inputTokens: 1 } } } },
+    });
+
+    const { rows } = await store.aggregate({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.totals).toEqual({ ...ZERO_USAGE, costUsd: 2, unreadable: { inputTokens: 2 } });
   });
 });
 

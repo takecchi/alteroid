@@ -97,6 +97,7 @@ import {
   type TokenRotationSettings,
 } from './token-pool.js';
 import {
+  addUnreadableCounts,
   foldOneshotUsage,
   foldUsageSnapshot,
   USAGE_ESTIMATE_NOTICE,
@@ -1515,6 +1516,10 @@ export function createMemoryStores(): Stores {
       for (const [model, delta] of Object.entries(fold.delta)) {
         const key = usageRowKey(date, managerId, model, layer, site, tokenId);
         const before = usageRows.get(key)?.totals ?? ZERO_USAGE;
+        // **`unreadable` も足し込む**（Issue #2086。ドライバ2つの `addTotals` と
+        // 同じ理由・同じ形——ここだけ別の算術だと「テストの器では通るのに本物
+        // では取りこぼす」というずれ方をする）。
+        const unreadable = addUnreadableCounts(before.unreadable, delta.unreadable);
         usageRows.set(key, {
           date,
           managerId,
@@ -1530,6 +1535,7 @@ export function createMemoryStores(): Stores {
               before.cacheCreationInputTokens + delta.cacheCreationInputTokens,
             webSearchRequests: before.webSearchRequests + delta.webSearchRequests,
             costUsd: before.costUsd + delta.costUsd,
+            ...(unreadable === undefined ? {} : { unreadable }),
           },
           updatedAt: at,
         });

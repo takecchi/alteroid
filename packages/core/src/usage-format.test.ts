@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addUnreadableCounts,
   describeAccountUsage,
   describeUnrecordedManagers,
   describeWebSearchRequests,
@@ -456,5 +457,28 @@ describe('describeAccountUsage のプラン / 組織 行（plan / organization �
       describeAccountUsage({ state: 'ok', usage }).join('\n'),
     );
     expect(new Set(rendered).size).toBe(2);
+  });
+});
+
+describe('addUnreadableCounts（欄ごとの「読めなかった数」を足す。Issue #2086）', () => {
+  it('両方 undefined なら undefined（値を作らない）', () => {
+    expect(addUnreadableCounts(undefined, undefined)).toBeUndefined();
+  });
+
+  it('片方が undefined でも、もう片方をそのまま返す（0 として足すのではなく）', () => {
+    expect(addUnreadableCounts(undefined, { inputTokens: 2 })).toEqual({ inputTokens: 2 });
+    expect(addUnreadableCounts({ inputTokens: 2 }, undefined)).toEqual({ inputTokens: 2 });
+  });
+
+  it('欄ごとに足す。片方にしか無い欄はその値のまま残る', () => {
+    expect(
+      addUnreadableCounts({ inputTokens: 2, costUsd: 1 }, { inputTokens: 3, webSearchRequests: 5 }),
+    ).toEqual({ inputTokens: 5, costUsd: 1, webSearchRequests: 5 });
+  });
+
+  it('足した結果が全欄0になるなら undefined を返す（0の欄を作らない）', () => {
+    // 実際には正の数どうしの足し算なので0にはならないが、境界として
+    // 「空オブジェクトどうし」は undefined になることを確かめる。
+    expect(addUnreadableCounts({}, {})).toBeUndefined();
   });
 });

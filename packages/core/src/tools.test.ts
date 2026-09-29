@@ -12714,6 +12714,73 @@ describe('usage_read の Web 検索の回数（webSearchRequests。Issue #1950�
 });
 
 /**
+ * `usage_read` の「取れなかった区切り」（`describeUnreadableUsage`。Issue #2086）。
+ *
+ * 文言そのものは core（`describeUnreadableUsage`。`usage.test.ts` が本体を
+ * 測る）が1箇所で持つ。ここで見るのは `renderUsage` の合計の内訳行に実際に
+ * 繋がっているかと、無ければ1文字も増やさないことだけである。
+ */
+describe('usage_read の取れなかった区切り（unreadable。Issue #2086）', () => {
+  it('unreadable が無ければ、それらしい行を出さない', async () => {
+    const h = harness();
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: {
+        models: {
+          'claude-opus-5': {
+            inputTokens: 10,
+            outputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUsd: 2,
+          },
+        },
+      },
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).not.toContain('取れなかった');
+  });
+
+  it('unreadable が在れば、値を作らず理由の行を出す', async () => {
+    const h = harness();
+    await h.stores.usage.record({
+      layer: 'manager',
+      site: 'session',
+      accumulation: 'cumulative',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:00:00.000Z',
+      snapshot: {
+        models: {
+          'claude-opus-5': {
+            inputTokens: 10,
+            outputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUsd: 2,
+            unreadable: { webSearchRequests: 4 },
+          },
+        },
+      },
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('取れなかった');
+    expect(reply).toContain('Web検索 4回');
+  });
+});
+
+/**
  * `usage_read` の回数の軸（「起きた回数」＝ターン数。`tools.ts` の
  * `formatUsageAxisLine` / `usageAxisEntries`）。
  */

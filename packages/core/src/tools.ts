@@ -227,6 +227,7 @@ import type { AccountUsageState } from './usage-snapshot.js';
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnreadableUsage,
   describeUnrecordedManagers,
   describeWebSearchRequests,
   findUnrecordedManagers,
@@ -13815,6 +13816,9 @@ function renderUsage(
         `キャッシュ書き ${summary.total.cacheCreationInputTokens.toLocaleString('en-US')}` +
         describeWebSearchRequests(summary.total),
     );
+    // **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
+    // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
+    lines.push(...describeUnreadableUsage(summary.total));
     // **合計値の隣に必ず出す（Issue #98）。**
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
 
