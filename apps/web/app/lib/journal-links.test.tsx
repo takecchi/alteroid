@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { JournalEntry } from '~/lib/types';
+import type { JournalEntry } from '@alteroid/logic';
 
 import { JournalEntryLinks, journalEntryLinks } from './journal-links';
 

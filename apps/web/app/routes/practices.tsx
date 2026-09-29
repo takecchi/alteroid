@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Page } from '~/components/page';
-import { Button, Card, Empty, ErrorNote, Input, Spinner } from '~/components/ui';
-import { usePractices } from '~/hooks/queries';
-import { formatRelative } from '~/lib/format';
+import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { usePractices } from '@alteroid/swr';
+import { formatRelative } from '@alteroid/logic';
 
 /** サーバ側と同じ規則（`practiceSlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;

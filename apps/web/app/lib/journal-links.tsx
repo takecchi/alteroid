@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 
-import type { JournalEntry } from '~/lib/types';
+import type { JournalEntry } from '@alteroid/logic';
 
 /** 日誌の1行から辿れる、別の画面の詳細（issue #2064）。 */
 export interface JournalLink {

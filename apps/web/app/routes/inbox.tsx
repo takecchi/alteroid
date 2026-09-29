@@ -1,10 +1,8 @@
 import { useMemo, useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, ErrorNote, Input } from '~/components/ui';
-import { useInboxBacklog } from '~/hooks/queries';
-import { useInboxRemoveMany } from '~/hooks/mutations';
-import type { InboxBacklog, InboxEventType, InboxRemoveManyResult } from '~/lib/types';
+import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input } from '@alteroid/ui';
+import { useInboxBacklog, useInboxRemoveMany } from '@alteroid/swr';
+import type { InboxBacklog, InboxEventType, InboxRemoveManyResult } from '@alteroid/logic';
 
 /**
  * `/inbox` — 受信箱（`inbox_events`。まだ処理し終えていない合図の器）の未読を、

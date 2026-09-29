@@ -22,8 +22,7 @@
  */
 import { useState } from 'react';
 
-import { useHealth } from '~/hooks/queries';
-import { useApiContext } from '~/lib/api';
+import { useHealth, useApiContext } from '@alteroid/swr';
 import {
   hasStoredApiBaseUrl,
   looksLikeUrl,
@@ -31,9 +30,9 @@ import {
   SAME_ORIGIN_BASE_URL,
   type Endpoint,
   type EndpointOrigin,
-} from '~/lib/config';
+} from '@alteroid/logic';
 
-import { Badge, Button, Card, CardHeader, ErrorNote, Input, Select } from './ui';
+import { Badge, Button, Card, CardHeader, ErrorNote, Input, Select } from '@alteroid/ui';
 
 /**
  * 3段のどれから来たかを、人間が読む言葉にする。

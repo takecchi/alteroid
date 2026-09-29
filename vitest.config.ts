@@ -36,6 +36,9 @@ export default defineConfig({
       // 衝突しない（`packages/*/src/**/*.test.ts` 等はここには当たらない）。
       '*.test.ts',
       'packages/*/src/**/*.test.ts',
+      // Web UI の部品と通信の層（`packages/ui` / `packages/swr`）は描いて試すものを
+      // `.tsx` で持つ（apps/web の `app/` と同じく、各ファイルの先頭で jsdom を指定する）。
+      'packages/*/src/**/*.test.tsx',
       'apps/*/src/**/*.test.ts',
       // apps/web は react-router の作法で `app/` に置く（`src/` ではない）。
       // 画面を描いて試すものだけ `.tsx`（各ファイルの先頭で jsdom を指定する）。

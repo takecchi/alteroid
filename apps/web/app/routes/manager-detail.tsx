@@ -2,9 +2,9 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
 import {
+  Markdown,
+  Page,
   Badge,
   Button,
   Card,
@@ -14,14 +14,17 @@ import {
   Input,
   Spinner,
   Textarea,
-} from '~/components/ui';
-import { useAbortManager, useAppraiseManager, useSendManagerMessage } from '~/hooks/mutations';
-import { useManager, useManagerTranscript } from '~/hooks/queries';
-import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
+  cn,
+} from '@alteroid/ui';
+import {
+  useAbortManager,
+  useAppraiseManager,
+  useSendManagerMessage,
+  useManager,
+  useManagerTranscript,
+} from '@alteroid/swr';
+import { APPRAISAL_LABELS, formatDateTime, formatRelative, usageHref } from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
-import { usageHref } from '~/lib/usage-links';
 
 import type { AppraisalValue } from '@alteroid/core';
 /**
@@ -72,7 +75,7 @@ import {
  * にも同じ生成元から届ける。
  */
 import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/unpushed-work-observation-format';
-import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
+import type { ManagerDenial, ManagerStatus, ManagerSummary } from '@alteroid/logic';
 
 import type { Route } from './+types/manager-detail';
 /**
@@ -533,7 +536,7 @@ function assertAppraisalHandled(value: never): void {
 }
 
 /**
- * 字面そのものの出所は `~/lib/appraisal-labels`（issue #2164。core の
+ * 字面そのものの出所は `packages/logic/src/appraisal-labels.ts`（issue #2164。core の
  * `APPRAISAL_LABELS` と一致させる場所を1か所に集約した）。
  */
 function appraisalLabel(value: AppraisalValue): string {

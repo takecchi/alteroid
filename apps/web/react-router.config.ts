@@ -8,7 +8,7 @@ import type { Config } from '@react-router/dev/config';
  * ホスティング）。SSR にすると「画面を動かすための実行系」がもう一つ増え、置ける
  * 場所がその実行系を持てるところに縮む。静的成果物なら、どの配置でも同じものを置ける。
  *
- * この判断は接続先の決め方（`app/lib/config.ts`）と対になっている。ビルド時に
+ * この判断は接続先の決め方（`packages/logic/src/config.ts`）と対になっている。ビルド時に
  * 接続先を焼き込まないので、同じ成果物のまま別のデーモンへ向けられる。
  */
 export default {

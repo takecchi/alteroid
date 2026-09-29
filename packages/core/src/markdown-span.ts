@@ -14,7 +14,7 @@
  *
  * ## 何が化けるかは、実機のレンダラで測った（推定ではない）
  *
- * 測ったのは `apps/web/app/components/markdown.tsx` と**同じ設定**である
+ * 測ったのは `packages/ui/src/components/markdown.tsx` と**同じ設定**である
  * （`react-markdown` 10.1.0 ＋ `remark-gfm` 4.0.1 ＋ `remark-breaks` 4.0.0、`rehype-raw`
  * 無し）。観測 2026-08-27。
  *

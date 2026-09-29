@@ -17,14 +17,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CommitmentOrigin } from '@alteroid/core';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
-import type { Commitment } from '~/lib/types';
+import type { Commitment } from '@alteroid/logic';
 
 import Commitments from './commitments';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * `Commitment`（`~/lib/types`。生成 spec から導出した型）は `respondedAt`
+ * `Commitment`（`packages/logic/src/types.ts`。生成 spec から導出した型）は `respondedAt`
  * （issue #1003）を含む——`GET /commitments` の応答がそのまま持つ欄なので、
  * ここで手を加える必要は無い（以前はここでローカルに1欄だけ広げていたが、
  * `commitments.tsx` と同じ理由でその形をやめた）。
@@ -563,7 +563,7 @@ describe('折り返しの付け忘れ（本2）', () => {
  * （`commitments.tsx` の `CommitmentBody`）。
  *
  * **Markdown の中身の正しさはここの仕事ではない** — それは
- * `apps/web/app/components/markdown.test.tsx` が持つ。ここが押さえるのは
+ * `packages/ui/src/components/markdown.test.tsx` が持つ。ここが押さえるのは
  * 「その欄が Markdown の描画経路を通るか／通らないか」だけである。だから
  * `## 見出し` を混ぜて `findByRole('heading')` / `queryByRole('heading')` で
  * 拾う形にしている（`approvals.test.tsx` の「クローンが書いた文だけを
@@ -934,7 +934,7 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
  * 出るのは `origin: 'human'` かつ未了の行だけ（それ以外は 403 で断られるだけの
  * 死んだボタンになるため）」と書いてあり、`self` / `manager` / `external` に
  * 入口が**出ない**ことを固定する歯が在った。**隠すと「なぜ押せないか」が画面から
- * 消える**ので、`useRemoveSchedule`（`apps/web/app/hooks/mutations.ts`）が持つ線
+ * 消える**ので、`useRemoveSchedule`（`packages/swr/src/hooks/mutations.ts`）が持つ線
  * ——「画面側でボタンを隠して表現しないこと」——へ寄せた。**断りの文面を出すのは
  * サーバである。**
  *

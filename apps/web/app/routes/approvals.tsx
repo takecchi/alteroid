@@ -3,14 +3,27 @@ import { describeTraceAction } from '@alteroid/core/trace-action';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
-import { Badge, Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
-import { useAnswerApproval, useAnswerApprovals } from '~/hooks/mutations';
-import { useApprovalTrace, useApprovals, useConversation } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatRelative } from '~/lib/format';
-import type { PendingApproval } from '~/lib/types';
+import {
+  Markdown,
+  Page,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  ErrorNote,
+  Spinner,
+  Textarea,
+  cn,
+} from '@alteroid/ui';
+import {
+  useAnswerApproval,
+  useAnswerApprovals,
+  useApprovalTrace,
+  useApprovals,
+  useConversation,
+} from '@alteroid/swr';
+import { formatDateTime, formatRelative } from '@alteroid/logic';
+import type { PendingApproval } from '@alteroid/logic';
 
 function isAnswered(approval: PendingApproval): boolean {
   return approval.answeredAt !== undefined && approval.answeredAt !== null;
@@ -249,7 +262,7 @@ function ApprovalCard({
 
         **`whitespace-pre-wrap` は外してよい。** `Markdown` は `remark-breaks` を
         積んでいて単独の改行を `<br>` にするので、行区切りはこれまでどおり保たれる
-        （`apps/web/app/components/markdown.tsx` の doc に理由が逐語で在る）。
+        （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
       */}
       <Markdown>{approval.question}</Markdown>
 
@@ -258,8 +271,8 @@ function ApprovalCard({
           `context` もクローンが書いた文字列なので Markdown で描く。
 
           **スクロールの箱（`max-h-48 overflow-y-auto`）は残す。** 外すと長い背景が
-          回答欄を画面外へ押し出す。`apps/web/app/components/page.tsx`
-          （`grep -Fn -- 'スクロールへ閉じ込める' apps/web/app/components/page.tsx`）と
+          回答欄を画面外へ押し出す。`packages/ui/src/components/page.tsx`
+          （`grep -Fn -- 'スクロールへ閉じ込める' packages/ui/src/components/page.tsx`）と
           `apps/web/app/routes/manager-detail.tsx` の `RequestCard` が同じ流儀 —
           **文字は1つも捨てず、スクロールへ閉じ込める。**
 
@@ -298,7 +311,7 @@ function ApprovalCard({
           「answer は Markdown の描画経路を通らない」がこの判断を押さえている）。
 
           **`whitespace-pre-wrap` は Markdown 化とは別の、不具合の修正である。**
-          `apps/web/app/app.css` の `white-space` 指定は `pre` に対する1件だけで
+          `packages/ui/src/styles.css` の `white-space` 指定は `pre` に対する1件だけで
           `p` を狙う規則が無いため、ここは CSS 既定の `white-space: normal` で
           描かれていた — 人間が改行を入れて答えても1行に潰れていた（`question` /
           `context` には効いていたのに `answer` だけ無いという見落としである）。

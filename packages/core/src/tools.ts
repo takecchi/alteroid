@@ -13902,7 +13902,7 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           : count.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
       // **`retained` は見出しに出さない。** 見出しは「4つの総数」のまま
       // 据え置く（直上のコメント）——一覧の1行を太らせない判断は
-      // `apps/web/app/hooks/queries.ts` の `case 'inbox_flow'` と同じ
+      // `packages/swr/src/hooks/queries.ts` の `case 'inbox_flow'` と同じ
       // （Issue #1264）。詳細は本文（`journal_read id=<id>` の全文モード）
       // に回す——クローンはそちらで読める。
       const retainedLine =

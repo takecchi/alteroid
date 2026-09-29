@@ -94,7 +94,7 @@ catalog:
   # 足し忘れた瞬間に注入経路になる。react-markdown はその経路自体が無い。
   # GFM（表・取り消し線・タスクリスト・フッターノート・オートリンク。AI も
   # 日報も表を返すことがある）は `mdast-util-gfm` の `gfmFromMarkdown`（解析）
-  # だけを直接呼ぶ形にしてある（`apps/web/app/components/markdown.tsx` の
+  # だけを直接呼ぶ形にしてある（`packages/ui/src/components/markdown.tsx` の
   # `remarkGfmParseOnly`）。**`remark-gfm` パッケージそのものはもう使わない**
   # —— `remark-gfm`（`node_modules/remark-gfm/lib/index.js` 逐語）は解析
   # （`gfmFromMarkdown`）と Markdown への書き戻し（`gfmToMarkdown`）の
@@ -128,8 +128,8 @@ catalog:
   # **`rehype-raw` は入れない。** 生の HTML を hast へ解釈し直す道具で、これを
   # 足した瞬間に本文中の `<script>` や `onerror` 付きタグがそのまま要素として
   # 解釈される注入経路が生まれる。足したくなったら
-  # `apps/web/app/components/markdown.tsx` の同じ注記と、
-  # `apps/web/app/components/markdown.test.tsx` の「生 HTML が要素にならない」
+  # `packages/ui/src/components/markdown.tsx` の同じ注記と、
+  # `packages/ui/src/components/markdown.test.tsx` の「生 HTML が要素にならない」
   # テストを先に見ること。
   'react-markdown': ^10.1.0
   'mdast-util-gfm': ^3.1.0

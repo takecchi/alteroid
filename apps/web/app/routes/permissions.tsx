@@ -1,12 +1,10 @@
 import { describePermissionRuleBreadth } from '@alteroid/core/permission-rule';
 import { useState } from 'react';
 
-import { Page } from '~/components/page';
-import { Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useRevokePermissionGrant } from '~/hooks/mutations';
-import { usePermissionGrants } from '~/hooks/queries';
-import { formatDateTime } from '~/lib/format';
-import type { PermissionGrant } from '~/lib/types';
+import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import { useRevokePermissionGrant, usePermissionGrants } from '@alteroid/swr';
+import { formatDateTime } from '@alteroid/logic';
+import type { PermissionGrant } from '@alteroid/logic';
 
 /**
  * `/permissions` — 人間が承認した Bash 許可の一覧と取り消し（`GET

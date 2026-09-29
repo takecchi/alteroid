@@ -10,7 +10,7 @@
  * `summary` / `body` / `tool` の6キーの duck typing で、この4種はどの
  * キーも持たないため要約が空欄になっていた（issue #2016。空欄は
  * `  <at>  [worker_wait] ` の後ろに何も出ない形で見える）。同じ4種を
- * Web（`apps/web/app/hooks/queries.ts` の `summarizeJournalEntry`）と
+ * Web（`packages/swr/src/hooks/queries.ts` の `summarizeJournalEntry`）と
  * クローンの `journal_read`（`tools.ts` の `renderJournalEntry`——こちらは
  * head/body に分けたもっと詳しい表示で、この口とは別の正本のまま残す）は
  * 既に整形して出していた。
@@ -45,7 +45,7 @@
  * ## Web の表示は1文字も変えていない
  *
  * `contextUsageNote` を含め、移設だけで文言・ロジックは1文字も変えていない
- * （`apps/web/app/hooks/queries.test.ts` がそのまま緑であることで確認する）。
+ * （`packages/swr/src/hooks/queries.test.ts` がそのまま緑であることで確認する）。
  */
 
 /** この口が扱う4種の名前。CLI 側の判別にもここから配る（2箇所で書き並べない）。 */

@@ -10,7 +10,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { ManagerStatus } from '~/lib/types';
+import type { ManagerStatus } from '@alteroid/logic';
 
 import { terminalFailureNote } from './manager-failure-note';
 

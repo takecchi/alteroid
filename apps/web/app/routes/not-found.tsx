@@ -1,7 +1,6 @@
 import { Link } from 'react-router';
 
-import { Page } from '~/components/page';
-import { Card, Empty } from '~/components/ui';
+import { Page, Card, Empty } from '@alteroid/ui';
 
 export default function NotFound() {
   return (

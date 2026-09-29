@@ -12,7 +12,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { formatDateTime } from '~/lib/format';
+import { formatDateTime } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Tokens from './tokens';

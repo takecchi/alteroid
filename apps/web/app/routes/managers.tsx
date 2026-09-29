@@ -1,14 +1,11 @@
 import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
-import { Page } from '~/components/page';
-import { Badge, Card, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useManagersWindow } from '~/hooks/use-managers-window';
-import { cn } from '~/lib/cn';
-import { formatRelative } from '~/lib/format';
+import { Page, Badge, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { useManagersWindow } from '@alteroid/swr';
+import { formatRelative, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
-import { STATUS_SEARCH_PARAM } from '~/lib/managers-links';
-import type { ManagerDenial, ManagerStatus, ManagerSummary } from '~/lib/types';
+import type { ManagerDenial, ManagerStatus, ManagerSummary } from '@alteroid/logic';
 
 const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'; label: string }> =
   {

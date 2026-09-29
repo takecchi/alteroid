@@ -2,16 +2,30 @@ import { OctagonPause, PanelLeft, Pencil, Plus, Send, Square } from 'lucide-reac
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
-import { Drawer } from '~/components/drawer';
-import { Markdown } from '~/components/markdown';
-import { Button, Card, Empty, ErrorNote, Spinner, Textarea } from '~/components/ui';
-import { useEndConversation, useInterruptClone, useRecordOwnMessage } from '~/hooks/mutations';
-import { useConversation, useConversationApprovals, useConversations } from '~/hooks/queries';
-import { useIsMobile } from '~/hooks/use-is-mobile';
-import { postChat, useApi } from '~/lib/api';
-import { cn } from '~/lib/cn';
-import { formatRelative } from '~/lib/format';
-import type { ConversationMessage } from '~/lib/types';
+import {
+  Drawer,
+  Markdown,
+  Button,
+  Card,
+  Empty,
+  ErrorNote,
+  Spinner,
+  Textarea,
+  useIsMobile,
+  cn,
+} from '@alteroid/ui';
+import {
+  useEndConversation,
+  useInterruptClone,
+  useRecordOwnMessage,
+  useConversation,
+  useConversationApprovals,
+  useConversations,
+  postChat,
+  useApi,
+} from '@alteroid/swr';
+import { formatRelative } from '@alteroid/logic';
+import type { ConversationMessage } from '@alteroid/logic';
 
 import type { Route } from './+types/chat';
 

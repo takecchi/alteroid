@@ -1,8 +1,6 @@
-import { Page } from '~/components/page';
-import { Card, CardHeader, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useAppraisalStats } from '~/hooks/queries';
-import { ApiError } from '~/lib/api';
-import { APPRAISAL_LABELS } from '~/lib/appraisal-labels';
+import { Page, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import { useAppraisalStats, ApiError } from '@alteroid/swr';
+import { APPRAISAL_LABELS } from '@alteroid/logic';
 import type {
   AppraisalDecisionTally,
   AppraisalReconciliation,
@@ -10,7 +8,7 @@ import type {
   AppraisalStats,
   AppraisalWorkKindTally,
   JobAppraisalCoverageRow,
-} from '~/lib/types';
+} from '@alteroid/logic';
 
 /**
  * `/appraisal-stats` — 評定（`good`/`bad`/`unclear`/未評定）の内訳を読む
@@ -99,7 +97,7 @@ function AppraisalStatsErrorNote({ error }: { error: unknown }) {
 /**
  * 評定の3値 + `other` の日本語ラベル（`good`→`bad`→`unclear`→`other` の順で並べる）。
  *
- * 3値ぶんの字面は `~/lib/appraisal-labels`（issue #2164。以前はここだけ
+ * 3値ぶんの字面は `packages/logic/src/appraisal-labels.ts`（issue #2164。以前はここだけ
  * 「良かった／悪かった」という別の字面を独自に持っていた——core の
  * `APPRAISAL_LABELS` および `manager-detail.tsx` / `commitments.tsx` と
  * 一致させる場所を1か所に集約した）。
@@ -267,7 +265,7 @@ function JobCoverageCard({ jobCoverage }: { jobCoverage: AppraisalStats['jobCove
 /**
  * `AppraisalValue | 'other'` の日本語ラベル（未知の値はそのまま返す）。
  *
- * 3値ぶんの字面は `~/lib/appraisal-labels`（`TALLY_ROWS` と同じ出所）。
+ * 3値ぶんの字面は `packages/logic/src/appraisal-labels.ts`（`TALLY_ROWS` と同じ出所）。
  */
 function reconciliationValueLabel(value: AppraisalReconciliationTransition['cloneValue']): string {
   switch (value) {

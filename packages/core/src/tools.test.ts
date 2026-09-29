@@ -14869,7 +14869,7 @@ describe('journal_read — turn_usage の文脈の内訳（#804）', () => {
 
 /**
  * `inbox_flow.retained`（Issue #1264、案1a）。一覧の1行（`head`）は太らせない
- * ——`apps/web/app/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
+ * ——`packages/swr/src/hooks/queries.ts` の `case 'inbox_flow'` と同じ判断
  * （見出しは既存の4つの総数のまま）。クローンは `journal_read id=<id>`
  * の全文モードで読む——そちらの本文（`body`）に載ることを固定する。
  */

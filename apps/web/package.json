@@ -13,25 +13,17 @@
     "test": "node ../../scripts/test.mjs --root=../.. --scope=apps/web/app"
   },
   "dependencies": {
-    "@alteroid/api-client": "workspace:*",
     "@alteroid/core": "workspace:*",
+    "@alteroid/logic": "workspace:*",
+    "@alteroid/swr": "workspace:*",
+    "@alteroid/ui": "workspace:*",
     "@react-router/node": "catalog:",
-    "class-variance-authority": "catalog:",
-    "clsx": "catalog:",
     "isbot": "catalog:",
     "lucide-react": "catalog:",
-    "mdast-util-gfm": "catalog:",
-    "micromark-extension-gfm": "catalog:",
     "radix-ui": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "react-markdown": "catalog:",
     "react-router": "catalog:",
-    "remark-breaks": "catalog:",
-    "shadcn": "catalog:",
-    "swr": "catalog:",
-    "tailwind-merge": "catalog:",
-    "tw-animate-css": "catalog:",
     "virtua": "catalog:"
   },
   "devDependencies": {

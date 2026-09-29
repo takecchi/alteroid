@@ -1693,7 +1693,7 @@ export function createApp(deps: AppDeps) {
         // `content-type` は `deliberateClient` が、`authorization` は門番が要求する。
         // 後者を落とすと、別オリジンの画面はログイン済みでも何も呼べない。
         allowHeaders: ['content-type', 'authorization'],
-        // Cookie は運ばせない。資格情報はヘッダで運ぶ（apps/web/app/lib/config.ts）。
+        // Cookie は運ばせない。資格情報はヘッダで運ぶ（packages/logic/src/config.ts）。
         credentials: false,
         maxAge: 600,
       }),

@@ -1,4 +1,4 @@
-import { ApiError } from '~/lib/api';
+import { ApiError } from '@alteroid/swr';
 
 /**
  * デーモンの `requireOwner` が返す本文（逐語は

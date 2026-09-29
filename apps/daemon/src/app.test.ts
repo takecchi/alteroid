@@ -7791,7 +7791,7 @@ describe('会話・出来事・マネージャーへの手出し', () => {
    * `/journal/stream` は `/chat` と違って**そもそも長時間無音が普通**である
    * （承認待ちが出るまで何も起きない）。だから無音死がいちばん出るのはこの経路で、
    * `apps/web` がこの口で自前の再接続を持っているのもそれが理由だった
-   * （`apps/web/app/hooks/use-journal-live.ts` の冒頭コメント）。
+   * （`packages/swr/src/hooks/use-journal-live.ts` の冒頭コメント）。
    */
   it('日誌が無音でも heartbeat のコメント行が流れる（承認待ちを待つ長時間接続）', async () => {
     const beating = createApp({

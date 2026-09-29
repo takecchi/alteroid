@@ -33,8 +33,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { storeCredential, type Credential } from '~/lib/auth';
-import type { DaemonRevision, RunnerSummary } from '~/lib/types';
+import { storeCredential, type Credential } from '@alteroid/logic';
+import type { DaemonRevision, RunnerSummary } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
 import Settings, { RESET_CONFIRM_GROUPS_FOR_TEST, RESET_SUMMARY_LABELS } from './settings';

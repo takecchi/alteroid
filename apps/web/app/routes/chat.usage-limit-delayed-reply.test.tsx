@@ -22,7 +22,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useJournalLive } from '~/hooks/use-journal-live';
+import { useJournalLive } from '@alteroid/swr';
 import { json, Providers, sse, stubFetch, storeTestBaseUrl, type Route } from '~/test-support';
 
 import Chat from './chat';

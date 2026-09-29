@@ -1,13 +1,10 @@
 import { Link } from 'react-router';
 
-import { Markdown } from '~/components/markdown';
-import { Page } from '~/components/page';
-import { Card, Empty, ErrorNote, Spinner } from '~/components/ui';
-import { useReport, useReports } from '~/hooks/queries';
-import { cn } from '~/lib/cn';
-import { formatDateTime, formatTime } from '~/lib/format';
+import { Markdown, Page, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { useReport, useReports } from '@alteroid/swr';
+import { formatDateTime, formatTime } from '@alteroid/logic';
 
-import type { DailyReport } from '~/lib/types';
+import type { DailyReport } from '@alteroid/logic';
 
 import type { Route } from './+types/reports';
 
