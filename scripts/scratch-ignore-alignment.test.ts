@@ -46,6 +46,8 @@ const SHARED: readonly Shared[] = [
   { name: '.mutation-testing', dir: true },
   { name: 'node_modules', dir: true },
   { name: 'dist', dir: true },
+  // packages/ui の見本帳（`storybook build`）の出力
+  { name: 'storybook-static', dir: true },
   { name: '.idea', dir: true },
   { name: '.vscode', dir: true },
   { name: 'MUTATION-IN-PROGRESS.json', dir: false },
