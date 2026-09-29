@@ -41,7 +41,11 @@ import {
 import type { ScheduleStatus } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
 import type { Stores } from './store.js';
-import { UnreadableCommitmentError, UnreadableTokenSettingsError } from './store.js';
+import {
+  UnreadableActiveTokenError,
+  UnreadableCommitmentError,
+  UnreadableTokenSettingsError,
+} from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import {
@@ -17764,6 +17768,48 @@ describe('token_list（読むだけ。値は返らない）', () => {
 
     await expect(h.call('token_list', {})).rejects.toThrow(
       'DB 接続断（テスト用。設定の形とは無関係の障害）',
+    );
+  });
+
+  /**
+   * issue #2125（#2095 の対の穴）。現役の指名（`stores.tokens.readActive()`）が
+   * `UnreadableActiveTokenError`（issue #2053）で壊れていても、`token_list` は
+   * 一覧まで道連れにしない——一覧を返した上で、指名が読めないことを1行で言う。
+   * **現役の印（`← 現役`）は付けない**（読めないものを推測で埋めない）。
+   *
+   * **`readActive()` を素の `Promise.all` に入れていた直す前の形では、ここが
+   * reject して道具全体が「壊れた」としか見えなくなっていた。**
+   */
+  it('現役の指名が読めなくても一覧は返り、理由が1行出て現役の印は付かない（issue #2125）', async () => {
+    const h = harness();
+    await put(h);
+    const REASON = 'generation が数値でない（テスト用）';
+    h.stores.tokens.readActive = () => {
+      throw new UnreadableActiveTokenError(REASON);
+    };
+
+    const reply = await h.call('token_list', {});
+
+    // 一覧そのものは道連れになっていない。
+    expect(reply).toContain('- tok-a ');
+    expect(reply).toContain('予備1');
+    // 既定値（「まだ一度も無い」）へすり替わっていない——理由を言う。
+    expect(reply).not.toContain('現役の指名: **まだ一度も無い**');
+    expect(reply).toContain('現役の指名は読めない');
+    expect(reply).toContain(REASON);
+    // 読めないものを推測で埋めない——どの行にも現役の印を付けない。
+    expect(reply).not.toContain('← 現役');
+  });
+
+  it('readActive が UnreadableActiveTokenError 以外を投げたら握り潰さずに上へ通す', async () => {
+    const h = harness();
+    await put(h);
+    h.stores.tokens.readActive = () => {
+      throw new Error('DB 接続断（テスト用。指名の形とは無関係の障害）');
+    };
+
+    await expect(h.call('token_list', {})).rejects.toThrow(
+      'DB 接続断（テスト用。指名の形とは無関係の障害）',
     );
   });
 });

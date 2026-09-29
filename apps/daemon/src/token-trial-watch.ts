@@ -1,6 +1,7 @@
 import {
   TOKEN_TRIAL_FALSE_POSITIVE_WINDOW_MS,
   TOKEN_TRIAL_INTERVAL_MS,
+  UnreadableActiveTokenError,
   credentialOf,
   describeTrialFailureFold,
   doubledTrialIntervalMs,

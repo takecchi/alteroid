@@ -73,7 +73,12 @@ import { renderApprovalTrace, traceApproval } from './approval-trace.js';
 import { validatePermissionRequest } from './permission-rule.js';
 import { encodeRunnerCursor, resolveRunnerCursor } from './runner-cursor.js';
 import { encodeTokenCursor, resolveTokenCursor } from './token-cursor.js';
-import { toAgentTokenView, tokenAvailabilityAt, type CooldownSource } from './token-pool.js';
+import {
+  toAgentTokenView,
+  tokenAvailabilityAt,
+  type ActiveAgentToken,
+  type CooldownSource,
+} from './token-pool.js';
 import { encodeUsageCursor, findUsageCursorTies, resolveUsageCursor } from './usage-cursor.js';
 import {
   describePage,
@@ -200,6 +205,7 @@ import {
 import type { CloneRuntimeFacts } from './self.js';
 import {
   EXCHANGE_WITH_VALUES,
+  UnreadableActiveTokenError,
   UnreadableCommitmentError,
   UnreadablePracticeError,
   UnreadableTokenSettingsError,
@@ -8804,17 +8810,15 @@ export function createCloneTools(context: ToolContext) {
           ),
       },
       async ({ cursor }) => {
-        // **`readSettings()` を他の2つと同じ `Promise.all` に入れない**
-        // （issue #2095）。入れると、設定が `UnreadableTokenSettingsError`
-        // （issue #2053、`store.ts`）で壊れているだけで一覧・現役の指名まで
-        // 道連れになる——ここは道具の呼び出しなので、道連れにすると「道具が
-        // 壊れた」としか見えず、`token_list` そのものが使えなくなる。**それ
-        // 以外のエラーは飲み込まずそのまま投げる**（`UnreadableCommitmentError`
-        // と同じ作法、上の doc）。
-        const [allTokens, active] = await Promise.all([
-          stores.tokens.list(),
-          stores.tokens.readActive(),
-        ]);
+        // **`readSettings()` と `readActive()` を素の `Promise.all` に入れない**
+        // （issue #2095 / #2125）。入れると、設定または現役の指名のどちらかが
+        // `UnreadableTokenSettingsError` / `UnreadableActiveTokenError`
+        // （issue #2053、`store.ts`）で壊れているだけで一覧まで道連れになる——
+        // ここは道具の呼び出しなので、道連れにすると「道具が壊れた」としか
+        // 見えず、`token_list` そのものが使えなくなる。**それ以外のエラーは
+        // 飲み込まずそのまま投げる**（`UnreadableCommitmentError` と同じ作法、
+        // 上の doc）。
+        const allTokens = await stores.tokens.list();
         let settingsLine: string;
         try {
           const settings = await stores.tokens.readSettings();
@@ -8825,6 +8829,28 @@ export function createCloneTools(context: ToolContext) {
             `回転の設定は読めない（${error.message}）。直すには回す契機と冷却の両方を指定して` +
             '設定し直す（`alteroid token policy <free_exhausted|overage_exhausted|off>' +
             ' --cooldown-ms <値>` / `PUT /tokens/policy`）。';
+        }
+        // **読めないときは `undefined` を持たせる**（`ActiveAgentToken | null`
+        // の外側の第3の状態。`null` で偽装しない——`null` は「まだ一度も
+        // 指名していない」という別の意味を持つ値なので、読めないことをそこへ
+        // 潰すと「指名は無い」という嘘になる）。行の印（`← 現役`）は
+        // `active?.tokenId === view.id` の比較で付けているので、`undefined`
+        // のままなら自然にどの行にも付かない——**推測で埋める分岐を足さない**。
+        let active: ActiveAgentToken | null | undefined;
+        let activeLine: string;
+        try {
+          active = await stores.tokens.readActive();
+          activeLine =
+            active === null
+              ? // **`null` を「1本目が現役」と書かない。** 器の環境変数だけで走って
+                // いる既定の構成と、1本目を撒いた後は別の状態である
+                // （`store.ts` の `readActive` の doc）。
+                '現役の指名: **まだ一度も無い**（器の環境変数のまま走っている）'
+              : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`;
+        } catch (error) {
+          if (!(error instanceof UnreadableActiveTokenError)) throw error;
+          active = undefined;
+          activeLine = `現役の指名は読めない（${error.message}）。`;
         }
         // **`TokenPoolStore.list()` の「`order` 昇順。」に依拠する**（逐語:
         // `grep -Fn -- '`order` 昇順。' packages/core/src/store.ts`）。
@@ -8849,15 +8875,7 @@ export function createCloneTools(context: ToolContext) {
         // `token-pool.ts` の `AgentTokenView` の doc 1つだけにしておく）。
         const views = tokens.map((token) => toAgentTokenView(token));
         const now = Date.now();
-        const head = [
-          settingsLine,
-          active === null
-            ? // **`null` を「1本目が現役」と書かない。** 器の環境変数だけで走って
-              // いる既定の構成と、1本目を撒いた後は別の状態である
-              // （`store.ts` の `readActive` の doc）。
-              '現役の指名: **まだ一度も無い**（器の環境変数のまま走っている）'
-            : `現役の指名: ${active.tokenId}（世代 ${String(active.generation)}、${active.rotatedAt}）`,
-        ];
+        const head = [settingsLine, activeLine];
         if (views.length === 0) {
           return text(
             [
