@@ -599,8 +599,21 @@ function stripHeredocs(command: string): string {
 const ENV_ASSIGNMENT_VALUE_SRC = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'])*`;
 const ENV_ASSIGNMENT_BODY_SRC = String.raw`[A-Za-z_][A-Za-z0-9_]*=${ENV_ASSIGNMENT_VALUE_SRC}`;
 
-/** `ENV_ASSIGNMENT_BODY_SRC` に末尾の空白を1個以上足した、繰り返し単位。 */
-const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}\s+`;
+/**
+ * `ENV_ASSIGNMENT_BODY_SRC` に末尾の空白を1個以上足した、繰り返し単位。
+ *
+ * ⚠️ **末尾の空白は `[ \t]+` にしてある（以前は `\s+`）。** `\s` は改行を含む
+ * ので、`\s+` だと代入の鎖が改行を跨いで繋がり、改行の直後の開始位置ごとに
+ * 残りの鎖を全部読み直す2乗の後戻りになっていた。`'A=1\n'.repeat(10000)+'x'`
+ * （40KB）は、#2080 の直前の版で 478〜485ms、#2080 の後で 715〜788ms
+ * （mgr-712ad619 の実測 2026-09-29T02:1xZ）。#2035 で予約語の後ろを `[ \t]+`
+ * にしたのと同じ直し方である。**改行の直後は `COMMAND_POSITION_LOOKBEHIND_SRC`
+ * が別の開始位置として拾うので、`A=1\ngh pr merge 1 -d` のような形は引き続き
+ * 弾く**（2行目の `gh` がそのままコマンドの位置に在る）。`timeout` と `env` の
+ * 前置き（`TIMEOUT_COMMAND_PREFIX_SRC` / `ENV_COMMAND_PREFIX_SRC`）の末尾も、
+ * 同じ理由で `[ \t]+` にした。
+ */
+const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}[ \t]+`;
 
 /**
  * `timeout <数字><単位?>` 前置き（doc「`timeout N ...` に包まれていても
@@ -652,7 +665,7 @@ const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}\s+`;
  * 単に読み飛ばせないだけで、誤って弾く方向にはならない）。
  */
 const TIMEOUT_COMMAND_OPTION_SRC = String.raw`(?:-k[ \t]+\S+[ \t]+|--kill-after=\S+[ \t]+|-s[ \t]+\S+[ \t]+|--signal=\S+[ \t]+|--preserve-status[ \t]+)`;
-const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+(?:${TIMEOUT_COMMAND_OPTION_SRC})*(?:\d+(?:\.\d*)?|\.\d+)[a-zA-Z]*\s+`;
+const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout[ \t]+(?:${TIMEOUT_COMMAND_OPTION_SRC})*(?:\d+(?:\.\d*)?|\.\d+)[a-zA-Z]*[ \t]+`;
 
 /**
  * `env` コマンド経由の単純な前置き —— `env`（引数無し）・
@@ -677,7 +690,7 @@ const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout\s+(?:${TIMEOUT_COMMAND_OPT
  * 繰り返しの中で1個ぶんの境界が常に一意に決まるようにするため。
  */
 const ENV_COMMAND_OPTION_SRC = String.raw`(?:-u[ \t]+\S+[ \t]+|--unset=\S+[ \t]+|-S[ \t]+\S+[ \t]+|-i[ \t]+|--[ \t]+)`;
-const ENV_COMMAND_PREFIX_SRC = String.raw`env\b\s+(?:${ENV_COMMAND_OPTION_SRC})*`;
+const ENV_COMMAND_PREFIX_SRC = String.raw`env\b[ \t]+(?:${ENV_COMMAND_OPTION_SRC})*`;
 
 /**
  * bash の予約語・グルーピングが、直後の `gh pr merge` を「コマンドの位置」

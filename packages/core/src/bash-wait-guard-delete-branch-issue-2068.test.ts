@@ -303,3 +303,45 @@ describe('gh-pr-merge-delete-branch: issue #2068 前置きの繰り返しが長�
     expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
   });
 });
+
+/**
+ * 前置き（代入・`timeout`・`env`）の末尾の空白を `[ \t]+` に絞った直しの歯
+ * （`ENV_ASSIGNMENT_SRC` の doc）。`\s+` の版では改行を跨いで鎖が繋がり、
+ * `'A=1\n'.repeat(10000)+'x'`（40KB）が 715〜788ms かかった（直した版は 5.4ms。
+ * mgr-712ad619 の実測 2026-09-29T02:1xZ）。
+ */
+describe('gh-pr-merge-delete-branch: 前置きの鎖は改行を跨がない（2乗の後戻りを作らない）', () => {
+  const TIME_BUDGET_MS = 200;
+
+  it('改行で区切った代入の繰り返し（gh pr merge を含まない）が予算内に終わる', () => {
+    const command = `${'A=1\n'.repeat(10000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  it('改行で区切った timeout 5 の繰り返しが予算内に終わる', () => {
+    const command = `${'timeout 5\n'.repeat(8000)}x`;
+    const start = performance.now();
+    const verdict = inspectBashCommand(command);
+    const elapsedMs = performance.now() - start;
+    expect(verdict.blocked).toBe(false);
+    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+  });
+
+  // 改行の直後はコマンドの位置なので、鎖が改行で切れても次の行の gh は弾く。
+  const acrossNewline: ReadonlyArray<[string, string]> = [
+    ['代入の次の行', 'A=1\ngh pr merge 1 -d'],
+    ['代入と timeout の次の行', 'A=1 B=2\ntimeout 5\ngh pr merge 1 -d'],
+    ['env の次の行', 'env\ngh pr merge 1 -d'],
+    ['タブ区切りの代入', 'A=1\tgh pr merge 1 -d'],
+    ['then の次の行の代入付き', 'if true; then\n  GH_TOKEN=x gh pr merge 1 -d\nfi'],
+  ];
+  for (const [label, command] of acrossNewline) {
+    it(`${label}: 弾く`, () => {
+      expect(inspectBashCommand(command).blocked).toBe(true);
+    });
+  }
+});
