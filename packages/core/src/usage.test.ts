@@ -812,9 +812,7 @@ describe('取れなかった区切りの1行（describeUnreadableUsage。Issue #
   });
 
   it('在れば、欄ごとの回数を値を作らず理由として1行にする', () => {
-    const lines = describeUnreadableUsage(
-      totals({ unreadable: { inputTokens: 3, costUsd: 1 } }),
-    );
+    const lines = describeUnreadableUsage(totals({ unreadable: { inputTokens: 3, costUsd: 1 } }));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('入力 3回');
     expect(lines[0]).toContain('費用 1回');

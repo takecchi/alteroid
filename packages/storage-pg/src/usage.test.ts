@@ -203,27 +203,46 @@ describe('PgUsageStore.record', () => {
  */
 describe('PgUsageStore と unreadable（読めなかった区切りの数。Issue #2086）', () => {
   it('毎ターン同じ欄が読めない回が続くと、usage_daily の列へ足し込まれる（加算であって上書きではない）', async () => {
+    // **6欄すべてを動かす。** 1つでも欠くと、その欄だけ足し込み（`+ excluded.…`）
+    // が壊れても（2回目以降が上書きへ落ちても）この歯は気づけない——最初の
+    // record の INSERT がその欄の値を書いてしまうので、2回目以降の壊れた
+    // upsert を経ないと違いが出ない欄がある（実際に inputTokens だけを動かした
+    // 最初の版では、costUsd 列の加算が壊れる変異を見逃していた）。
+    const unreadable = {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadInputTokens: 1,
+      cacheCreationInputTokens: 1,
+      webSearchRequests: 1,
+      costUsd: 1,
+    };
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T10:00:00.000Z',
-      snapshot: snapshot({
-        opus: totals({ costUsd: 1, unreadable: { webSearchRequests: 1, costUsd: 1 } }),
-      }),
+      snapshot: snapshot({ opus: totals({ costUsd: 1, unreadable }) }),
     });
     await record({
       managerId: 'mgr-1',
       date: '2026-08-14',
       at: '2026-08-14T11:00:00.000Z',
-      snapshot: snapshot({
-        opus: totals({ costUsd: 2, unreadable: { webSearchRequests: 1, costUsd: 1 } }),
-      }),
+      snapshot: snapshot({ opus: totals({ costUsd: 2, unreadable }) }),
     });
 
     const { rows } = await store.aggregate({});
     expect(rows).toHaveLength(1);
     expect(rows[0]?.totals).toEqual(
-      totals({ costUsd: 2, unreadable: { webSearchRequests: 2, costUsd: 2 } }),
+      totals({
+        costUsd: 2,
+        unreadable: {
+          inputTokens: 2,
+          outputTokens: 2,
+          cacheReadInputTokens: 2,
+          cacheCreationInputTokens: 2,
+          webSearchRequests: 2,
+          costUsd: 2,
+        },
+      }),
     );
   });
 

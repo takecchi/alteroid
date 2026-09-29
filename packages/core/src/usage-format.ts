@@ -115,18 +115,22 @@ export const ZERO_USAGE: UsageTotals = {
 
 /** 行の合計（モデル横断・日横断）。表示側の算術をここへ寄せる。 */
 export function sumUsageRows(rows: readonly UsageRow[]): UsageTotals {
-  return rows.reduce<UsageTotals>((sum, row) => {
-    const unreadable = addUnreadableCounts(sum.unreadable, row.totals.unreadable);
-    return {
-      inputTokens: sum.inputTokens + row.totals.inputTokens,
-      outputTokens: sum.outputTokens + row.totals.outputTokens,
-      cacheReadInputTokens: sum.cacheReadInputTokens + row.totals.cacheReadInputTokens,
-      cacheCreationInputTokens: sum.cacheCreationInputTokens + row.totals.cacheCreationInputTokens,
-      webSearchRequests: sum.webSearchRequests + row.totals.webSearchRequests,
-      costUsd: sum.costUsd + row.totals.costUsd,
-      ...(unreadable === undefined ? {} : { unreadable }),
-    };
-  }, { ...ZERO_USAGE });
+  return rows.reduce<UsageTotals>(
+    (sum, row) => {
+      const unreadable = addUnreadableCounts(sum.unreadable, row.totals.unreadable);
+      return {
+        inputTokens: sum.inputTokens + row.totals.inputTokens,
+        outputTokens: sum.outputTokens + row.totals.outputTokens,
+        cacheReadInputTokens: sum.cacheReadInputTokens + row.totals.cacheReadInputTokens,
+        cacheCreationInputTokens:
+          sum.cacheCreationInputTokens + row.totals.cacheCreationInputTokens,
+        webSearchRequests: sum.webSearchRequests + row.totals.webSearchRequests,
+        costUsd: sum.costUsd + row.totals.costUsd,
+        ...(unreadable === undefined ? {} : { unreadable }),
+      };
+    },
+    { ...ZERO_USAGE },
+  );
 }
 
 // **`V` を `string` へ既定させつつ呼び出し側の戻り値型で推論させる。** `byLayer` /

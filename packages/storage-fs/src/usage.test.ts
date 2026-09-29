@@ -199,9 +199,7 @@ describe('FsUsageStore と unreadable（読めなかった区切りの数。Issu
     expect(rows).toHaveLength(1);
     // costUsd は累積の差分（2-1=1）を足し込んだ1+1=2。unreadable は毎回の
     // 読み（1）をそのまま2回足し込んだ2。
-    expect(rows[0]?.totals).toEqual(
-      totals({ costUsd: 2, unreadable: { webSearchRequests: 2 } }),
-    );
+    expect(rows[0]?.totals).toEqual(totals({ costUsd: 2, unreadable: { webSearchRequests: 2 } }));
   });
 
   it('unreadable が無い回だけなら、読み出した行に欄そのものが無い（既存の出力を変えない）', async () => {
