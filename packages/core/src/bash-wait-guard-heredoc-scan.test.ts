@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { findHeredocs, HEREDOC_RE, inspectBashCommand, stripHeredocs } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * issue #2115 —— ヒアドキュメントを探すのを、正規表現（`HEREDOC_RE`）から
@@ -110,30 +111,32 @@ describe('findHeredocs / stripHeredocs —— 元の HEREDOC_RE と同じ一致�
 });
 
 /**
- * 時間の歯 —— 直す前は、終端の無いヒアドキュメントが並ぶと2乗になった
- * （`'cat <<E\n'.repeat(8000)+'x'` が 145.6ms、`'bash <<E\n'` は 420.7ms。
- * mgr-712ad619 の実測 2026-09-29T04:4xZ）。区切りの多い長い1行（`GH_WORD_SRC` の
- * `\S*` が区切りを跨いで読んでいた）も同じ族の2乗だった（`'a;'.repeat(16000)` で 327.9ms）。
+ * 時間の歯（issue #2187 で壁時計の絶対値から伸びの比へ替えた） —— 直す前は、
+ * 終端の無いヒアドキュメントが並ぶと2乗になった（`'cat <<E\n'.repeat(8000)+'x'`
+ * が 145.6ms、`'bash <<E\n'` は 420.7ms。mgr-712ad619 の実測
+ * 2026-09-29T04:4xZ）。区切りの多い長い1行（`GH_WORD_SRC` の `\S*` が区切りを
+ * 跨いで読んでいた）も同じ族の2乗だった（`'a;'.repeat(16000)` で 327.9ms）。
+ *
+ * `n * factor`（既定 factor=4）を、直す前にテストしていた繰り返し回数
+ * （20000 / 40000）に揃えてある。
  */
 describe('終端の無いヒアドキュメントと、区切りの多い長い1行で2乗にならない（issue #2115）', () => {
-  const TIME_BUDGET_MS = 200;
-  const cases: ReadonlyArray<[string, string, boolean]> = [
-    ['終端の無い cat <<E の繰り返し', `${'cat <<E\n'.repeat(20000)}x`, false],
-    ['終端の無い bash <<E の繰り返し', `${'bash <<E\n'.repeat(20000)}x`, false],
-    ['区切りの多い長い1行（gh pr merge を含まない）', `${'a;'.repeat(40000)}x`, false],
+  const cases: ReadonlyArray<[string, (n: number) => string, boolean, number]> = [
+    ['終端の無い cat <<E の繰り返し', (n) => `${'cat <<E\n'.repeat(n)}x`, false, 5000],
+    ['終端の無い bash <<E の繰り返し', (n) => `${'bash <<E\n'.repeat(n)}x`, false, 5000],
+    ['区切りの多い長い1行（gh pr merge を含まない）', (n) => `${'a;'.repeat(n)}x`, false, 10000],
     [
       '区切りの多い長い1行の末尾に gh pr merge --delete-branch',
-      `${'a;'.repeat(40000)}gh pr merge 1 --delete-branch`,
+      (n) => `${'a;'.repeat(n)}gh pr merge 1 --delete-branch`,
       true,
+      10000,
     ],
   ];
-  for (const [label, command, blocked] of cases) {
+  for (const [label, makeInput, blocked, n] of cases) {
     it(`${label}が予算内に終わる`, () => {
-      const start = performance.now();
-      const verdict = inspectBashCommand(command);
-      const elapsedMs = performance.now() - start;
-      expect(verdict.blocked).toBe(blocked);
-      expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+      // n * factor（既定4）の大きさで、直す前と同じ入力に対する blocked を確かめる。
+      expect(inspectBashCommand(makeInput(n * 4)).blocked).toBe(blocked);
+      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
     });
   }
 });

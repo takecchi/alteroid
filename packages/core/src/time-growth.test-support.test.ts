@@ -1,0 +1,107 @@
+import { describe, expect, it } from 'vitest';
+
+import { expectNotSuperlinear } from './time-growth.test-support.js';
+
+/**
+ * `expectNotSuperlinear`（issue #2187）自身の歯。
+ *
+ * **測るのは「線形の関数は通り、2乗の関数は比で落ちる」ことそのもの。**
+ * `n` に対して `n²` 回だけ小さな仕事を回す小さな関数を対照に置き、伸びの比
+ * （既定 factor=4 なら2乗は約16倍）が既定の `maxRatio`（10）を超えて落ちる
+ * ことを確かめる——**対照が落ちなければ、この助け自体が「弱い歯」である。**
+ *
+ * 定数（`n` の大きさ）は、手元の器で実測しながら選んである
+ * （`t(n)` が測定ノイズや `floorMs` の底に埋もれない大きさにすること。
+ * 2026-09-29 実測: 線形は n=5,000,000 で t(n)≈3.5ms・比≈4、2乗は n=2000 で
+ * t(n)≈2.7ms・比≈15〜16——どちらも安定して同じ側に落ちる）。
+ */
+
+/** 単純な線形の仕事（O(n)）。 */
+function linearWork(n: number): number {
+  let sum = 0;
+  for (let i = 0; i < n; i += 1) sum += i ^ (i << 1);
+  return sum;
+}
+
+/** `n` に対して `n²` 回だけ小さな仕事を回す（O(n²)）。 */
+function quadraticWork(n: number): number {
+  let sum = 0;
+  for (let i = 0; i < n; i += 1) {
+    for (let j = 0; j < n; j += 1) sum += i ^ j;
+  }
+  return sum;
+}
+
+const identity = (n: number): number => n;
+
+/** 忙しい待ち（意図的なビジーループ）。CI が混んだときの「一様な底上げ」を模す。 */
+function busyWaitMs(ms: number): void {
+  if (ms <= 0) return;
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    // 忙しい待ち。何もしない。
+  }
+}
+
+describe('expectNotSuperlinear', () => {
+  it('線形の関数は通り、伸びの比は約 factor に収まる', () => {
+    const result = expectNotSuperlinear(linearWork, identity, { n: 5_000_000, factor: 4 });
+    // 理論値は4だが、実測の揺れを見込んで緩い範囲で確かめる
+    // （下の「2乗は約16倍」と混同しないよう、maxRatio の既定10より十分低い
+    // ところに閾値を置く）。
+    expect(result.ratio).toBeGreaterThan(1);
+    expect(result.ratio).toBeLessThan(8);
+  });
+
+  it('2乗の関数（n に対して n² 回回す小さな関数）は比で落ちる', () => {
+    // maxRatio は既定の10のまま——2乗の理論比は16なので、hardCapMs ではなく
+    // 「伸びの比が大きすぎる」の側で落ちることも合わせて確かめる。
+    expect(() => expectNotSuperlinear(quadraticWork, identity, { n: 2000, factor: 4 })).toThrow(
+      /伸びの比が大きすぎる/,
+    );
+  });
+
+  it('固まり・指数的な後戻り（hardCapMs 超過）は、比とは別の文言で落ちる', () => {
+    const hang = (n: number): void => {
+      // n が大きいときだけ、比の判定より先に hardCapMs 自体を超える待ちを作る。
+      if (n > 100) busyWaitMs(50);
+    };
+    expect(() => expectNotSuperlinear(hang, identity, { n: 50, factor: 4, hardCapMs: 20 })).toThrow(
+      /hardCapMs を超えた/,
+    );
+  });
+
+  it('壁時計が一様に遅くなっても（線形の関数へ n 比例の追加busy-waitを足しても）比は保たれる', () => {
+    // 本物の CI 混雑は手元では再現できないので、代わりに「1単位あたりの
+    // コストが一様に底上げされた」状態を、線形の関数へ n に比例する
+    // busy-wait を追加で足す形で模す——器が混んで全体が遅くなっても、
+    // 追加した分もやはり n に比例するので、比そのものは動かないはずである。
+    const withoutDelay = expectNotSuperlinear(linearWork, identity, { n: 5_000_000, factor: 4 });
+    const withDelay = expectNotSuperlinear(
+      (n: number) => {
+        busyWaitMs(n * 0.0000015);
+        return linearWork(n);
+      },
+      identity,
+      { n: 5_000_000, factor: 4 },
+    );
+
+    // どちらも「2乗の疑い」の閾値（maxRatio 既定10）には遠く届かない。
+    expect(withoutDelay.ratio).toBeLessThan(10);
+    expect(withDelay.ratio).toBeLessThan(10);
+    // busy-wait を足しても、比が大きく動かない（一様な底上げでは比が保たれる）。
+    expect(Math.abs(withDelay.ratio - withoutDelay.ratio)).toBeLessThan(6);
+  });
+
+  it('落ちたときの文に t(n) / t(n*factor) / 比が載る', () => {
+    try {
+      expectNotSuperlinear(quadraticWork, identity, { n: 2000, factor: 4 });
+      throw new Error('unreachable: 落ちるはず');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toMatch(/t\(2000\)=/);
+      expect(message).toMatch(/t\(8000\)=/);
+      expect(message).toMatch(/ratio=/);
+    }
+  });
+});

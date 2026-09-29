@@ -641,9 +641,46 @@ export interface PermissionGrantStore {
  * 人間もここを読んで直せること（CLI / HTTP API）が要件である — 人間の制御手段は
  * 記憶・日誌・境界の3つだが、自分が出した継続の依頼が見えないのは可観測性の穴になる。
  */
+/**
+ * `ScheduleStore.get(kind)` が、その行を `scheduledRequestSchema` として
+ * 読めなかったときに投げる専用のエラー型（issue #2177）。`UnreadablePracticeError`
+ * （本ファイル）と同じ形——「無い」（`null`）と「読めない」（throw）の区別を、
+ * 呼び出し側が `instanceof` で見分けられるようにする。メッセージの文字列
+ * （`/読めない形/` 等）で判定すると、言い回しを直しただけで判定が静かに外れる。
+ *
+ * **メッセージの文言はこの型を導入する前と変えていない**——fs
+ * （`FsScheduleStore.get`）・pg（`PgScheduleStore` の `parsePlan`）どちらも、
+ * issue #1944 の時点で確立した文言をそのまま `super()` へ渡すだけである。
+ * `kind` を専用のフィールドとして持つのは、`schedule_list`（`tools.ts`）が
+ * 「継続中の依頼 X は読めない形で入っている」の X を、メッセージの文字列
+ * 解析ではなく構造化フィールドから取れるようにするためである。
+ */
+export class UnreadableScheduleError extends Error {
+  readonly kind: string;
+
+  constructor(message: string, params: { kind: string }) {
+    super(message);
+    this.name = 'UnreadableScheduleError';
+    this.kind = params.kind;
+  }
+}
+
 export interface ScheduleStore {
   /** kind の昇順。 */
   list(): Promise<ScheduledRequest[]>;
+  /**
+   * 無ければ `null`（「読めない」は throw。`PracticeStore.read` /
+   * `CommitmentStore.get` と同じ線）。投げるのは `UnreadableScheduleError`
+   * （本ファイル、issue #2177）——`instanceof` で見分けられる。メッセージの
+   * 文字列（`/読めない形/` 等）で判定しないこと。fs / pg どちらの実装も、この
+   * 型を導入する前から使っていたメッセージの文言はそのまま引き継いでいる
+   * （変えたのは型だけ）。
+   *
+   * **インメモリ実装（`testing.ts`）は投げない。** `put()` の時点で
+   * `scheduledRequestSchema.parse` を通すため、壊れた行をそもそも持てない
+   * ——テストで再現するときは `stores.schedules.get` を丸ごと差し替える
+   * （`tools.test.ts` の issue #1982 の歯、`schedule_remove` のテストを参照）。
+   */
   get(kind: string): Promise<ScheduledRequest | null>;
   /** 同じ kind があれば置き換える（`createdAt` は呼び出し側が引き継ぐ）。 */
   put(entry: ScheduledRequest): Promise<void>;

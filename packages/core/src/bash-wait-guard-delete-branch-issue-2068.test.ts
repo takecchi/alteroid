@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * issue #2068 —— `gh pr merge --delete-branch`/`-d` の検出が、次の3か所
@@ -201,67 +202,48 @@ describe('gh-pr-merge-delete-branch: issue #2068 の追加確認（28形の表�
  * ダッシュ+くっついた値の2択に分けた版）が実際に線形で終わることを、
  * 依頼された繰り返し（`sudo -u a `/`env -i `/`X="a b" `）に加え、
  * `stdbuf -oL `/`xargs -I{} `（バグを踏んだ形そのもの）でも測る。
+ *
+ * issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
+ * 替えた。`n * factor` を、直す前にテストしていた繰り返し回数へ揃えてある
+ * （依頼者の実測では A族の最初の版が n=30 で28755ms、直した版は数ms）。
  */
 describe('gh-pr-merge-delete-branch: issue #2068 前置きの繰り返しが長くても後戻りで爆発しない', () => {
-  // CI の揺れを見込んだ緩い上限。既存の issue #2035 の時間の歯と同じ値
-  // （2乗・指数の後戻りが起きていれば現実的な時間では終わらない——
-  // 依頼者の実測では A族の最初の版が n=30 で28755ms、直した版は数ms）。
-  const TIME_BUDGET_MS = 200;
-
   it('sudo -u a の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'sudo -u a '.repeat(5000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'sudo -u a '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 
   it('env -i の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'env -i '.repeat(8000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'env -i '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(2000 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 2000 });
   });
 
   it('X="a b" の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'X="a b" '.repeat(5000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'X="a b" '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 
   // `LEADING_COMMAND_PREFIX_OPTION_SRC` の doc に書いた、実際に
   // カタストロフィックな後戻りを踏んだ形そのもの（くっついた値）。
   it('stdbuf -oL の繰り返し（くっついた値、gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'stdbuf -oL '.repeat(4000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'stdbuf -oL '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1000 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1000 });
   });
 
   it('xargs -I{} の繰り返し（くっついた値、gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'xargs -I{} '.repeat(4000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'xargs -I{} '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1000 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1000 });
   });
 
   it('timeout -k 5 30 の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'timeout -k 5 30 '.repeat(4000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'timeout -k 5 30 '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1000 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1000 });
   });
 
   // レビュー（mgr-712ad619）で見つけた指数的な後戻り。オプションの値の位置に
@@ -269,42 +251,31 @@ describe('gh-pr-merge-delete-branch: issue #2068 前置きの繰り返しが長�
   // 読みが同じ続きへ再合流していた（直す前は n=28 で 3.5ms、4 増えるごとに
   // 約7倍。n=2000 は現実的な時間では終わらない）。
   it('値の位置に - で始まる語が続く繰り返し（sudo -a -a …）が線形に終わる', () => {
-    const command = `sudo ${'-a '.repeat(2000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `sudo ${'-a '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(500 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
 
   // 上の n=2000 は、指数の版では終わらない（テストが失敗ではなく止まる）。
-  // 指数の版でも1秒前後で終わって「予算を超えた」と赤になる大きさを別に置く
-  // （4 増えるごとに約7倍なので、n=28 の 3.5ms から n=40 は 1 秒を超える）。
+  // 指数の版でも1秒前後で終わって赤になる大きさを別に置く（4 増えるごとに
+  // 約7倍なので、n=28 の 3.5ms から n=40 は 1 秒を超える）。ここは
+  // `factor: 2` にして、`2n`（=40）を直す前にテストしていた大きさへ揃える。
   it('値の位置に - で始まる語が続く短い繰り返し（n=40）も予算内に終わる', () => {
-    const command = `sudo ${'-a '.repeat(40)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `sudo ${'-a '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(40)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 20, factor: 2 });
   });
 
   it('値の位置に前置きの名前が続く繰り返し（sudo -u sudo -u …）が線形に終わる', () => {
-    const command = `${'sudo -u '.repeat(2000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'sudo -u '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(500 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
 
   it('前置きの繰り返しの末尾に gh pr merge -d が来ても弾き、かつ後戻りが爆発しない', () => {
-    const command = `${'sudo -u a '.repeat(5000)}gh pr merge 1 -d`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(true);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'sudo -u a '.repeat(n)}gh pr merge 1 -d`;
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(true);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 });
 
@@ -313,26 +284,21 @@ describe('gh-pr-merge-delete-branch: issue #2068 前置きの繰り返しが長�
  * （`ENV_ASSIGNMENT_SRC` の doc）。`\s+` の版では改行を跨いで鎖が繋がり、
  * `'A=1\n'.repeat(10000)+'x'`（40KB）が 715〜788ms かかった（直した版は 5.4ms。
  * mgr-712ad619 の実測 2026-09-29T02:1xZ）。
+ *
+ * issue #2187 —— 壁時計の絶対値から伸びの比へ替えた。`n * factor` を
+ * 直す前にテストしていた繰り返し回数（10000 / 8000）に揃えてある。
  */
 describe('gh-pr-merge-delete-branch: 前置きの鎖は改行を跨がない（2乗の後戻りを作らない）', () => {
-  const TIME_BUDGET_MS = 200;
-
   it('改行で区切った代入の繰り返し（gh pr merge を含まない）が予算内に終わる', () => {
-    const command = `${'A=1\n'.repeat(10000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'A=1\n'.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(2500 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 2500 });
   });
 
   it('改行で区切った timeout 5 の繰り返しが予算内に終わる', () => {
-    const command = `${'timeout 5\n'.repeat(8000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'timeout 5\n'.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(2000 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 2000 });
   });
 
   // 改行の直後はコマンドの位置なので、鎖が改行で切れても次の行の gh は弾く。

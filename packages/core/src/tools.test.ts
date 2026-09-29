@@ -44,6 +44,7 @@ import type { Stores } from './store.js';
 import {
   UnreadableActiveTokenError,
   UnreadableCommitmentError,
+  UnreadableScheduleError,
   UnreadableTokenSettingsError,
 } from './store.js';
 import { captureStderr, createMemoryStores, failingJournalAppend } from './testing.js';
@@ -2185,6 +2186,63 @@ describe('クローンの道具', () => {
     // 日誌には本文（request）の代わりに「読めない形で入っていた」とだけ残る。
     const [entry] = await h.stores.journal.list({ types: ['decision'] });
     expect(entry).toMatchObject({ decision: expect.stringContaining('読めない形で入っていた') });
+  });
+
+  /**
+   * issue #2177。`schedule_list kind=<kind>`（全文モード）は `stores.schedules
+   * .get(kind)` が読めない行で投げる `UnreadableScheduleError`（`ScheduleStore
+   * .get` の doc）を捕まえておらず、`isError` と生の Zod issue を返していた
+   * ——兄弟の口 `schedule_remove`（直上のテスト、issue #1982）とは違い、
+   * `get()` を全文モードの読み口として直接使うのはここだけである。
+   *
+   * インメモリ実装は壊れた行を持てない（`testing.ts` の `get` の doc）ので、
+   * 直上のテストと同じ形で `h.stores.schedules.get` を実物の
+   * `UnreadableScheduleError` を投げる形へ差し替えて再現する。
+   */
+  it('schedule_list kind=<kind> は読めない形で入っていた依頼を isError にならず名乗る（issue #2177）', async () => {
+    const h = harness();
+    const real = h.stores.schedules;
+    h.stores.schedules = {
+      ...real,
+      async get(kind) {
+        if (kind === 'broken') {
+          throw new UnreadableScheduleError(
+            '継続中の依頼 broken が読めない形で入っている（消されたのではない）: 実測用のダミー',
+            { kind },
+          );
+        }
+        return real.get(kind);
+      },
+    };
+
+    const reply = await h.call('schedule_list', { kind: 'broken' });
+    expect(reply).toContain('継続中の依頼 broken は読めない形で入っている（消されたのではない）');
+    expect(reply).toContain('schedule_remove kind=broken');
+
+    // 本当に無い kind は、これまでどおり「無い」。
+    expect(await h.call('schedule_list', { kind: 'しらない' })).toContain('無い');
+  });
+
+  /**
+   * issue #2177（e）。`UnreadableScheduleError` 以外は投げ直す——握り潰さない
+   * ことの確認。`callExpectingError` 相当の直接ハンドラ呼び出しは他ファイル
+   * （`practice-version-unreadable-2177.test.ts`）に譲り、ここでは `h.call`
+   * が投げを飲み込まず伝播することだけを見る。
+   */
+  it('schedule_list kind=<kind> は UnreadableScheduleError 以外の例外を投げ直す（issue #2177）', async () => {
+    const h = harness();
+    const real = h.stores.schedules;
+    h.stores.schedules = {
+      ...real,
+      async get(kind) {
+        if (kind === 'broken-other') throw new Error('実測用のダミー（器そのものの障害を模す）');
+        return real.get(kind);
+      },
+    };
+
+    await expect(h.call('schedule_list', { kind: 'broken-other' })).rejects.toThrow(
+      '実測用のダミー',
+    );
   });
 
   it('memory_append は既存の記述を消さない（人間の手書きを守る）', async () => {

@@ -1,4 +1,8 @@
-import { schedulePhaseSchema, scheduledRequestSchema } from '@alteroid/core';
+import {
+  UnreadableScheduleError,
+  schedulePhaseSchema,
+  scheduledRequestSchema,
+} from '@alteroid/core';
 import type { SchedulePhase, ScheduleSpec, ScheduleStore, ScheduledRequest } from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
@@ -35,8 +39,12 @@ import { schedulePhases, schedules } from './schema.js';
 function parsePlan(kind: string, value: unknown): ScheduledRequest {
   const parsed = scheduledRequestSchema.safeParse(value);
   if (parsed.success) return parsed.data;
-  throw new Error(
+  // issue #2177。文言はこの型を足す前と1文字も変えていない——`instanceof` で
+  // 見分けられるようにするだけである（`UnreadableScheduleError` の doc、
+  // `packages/core/src/store.ts`）。
+  throw new UnreadableScheduleError(
     `継続中の依頼 ${kind} が読めない形で入っている（消されたのではない）: ${parsed.error.message}`,
+    { kind },
   );
 }
 

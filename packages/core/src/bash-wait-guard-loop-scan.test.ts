@@ -6,6 +6,7 @@ import {
   inspectBashCommand,
   LOOP_RE,
 } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * #2181 —— `until` / `while` の判定を、正規表現（`LOOP_RE`）から `findUntilWhileLoops`
@@ -152,21 +153,30 @@ describe('条件の無い C 形式の for を弾く（teto の判断、#2179 の
  * 時間の歯。直す前は、閉じていない `while x; do` の繰り返しで3乗に近く遅くなった（200回で
  * 44.6ms、400回で 344.3ms、4000回で 120 秒を超えた。mgr-712ad619 の実測 2026-09-29T12:1xZ）。
  * 直した後は4000回で 7.4ms。
+ *
+ * issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
+ * 替えた。`n * factor`（既定 factor=4）を、直す前にテストしていた繰り返し
+ * 回数（400 / 4000）に揃えてある。
  */
 describe('待つループの判定が、閉じていない繰り返しで後戻りで爆発しない（#2181）', () => {
-  const TIME_BUDGET_MS = 200;
-  const cases: ReadonlyArray<[string, string]> = [
-    ['閉じていない while の繰り返し（400回。直す前は 344.3ms）', `${'while x; do '.repeat(400)}x`],
-    ['閉じていない while の繰り返し（4000回）', `${'while x; do '.repeat(4000)}x`],
-    ['閉じていない until の繰り返し', `${'until x; do '.repeat(4000)}x`],
-    ['閉じていない C 形式の for の繰り返し', `${'for ((;;)); do '.repeat(4000)}x`],
-    ['閉じていない C 形式の for（{ の本体）の繰り返し', `${'for ((;;)) { '.repeat(4000)}x`],
+  const cases: ReadonlyArray<[string, (n: number) => string, number]> = [
+    [
+      '閉じていない while の繰り返し（400回。直す前は 344.3ms）',
+      (n) => `${'while x; do '.repeat(n)}x`,
+      100,
+    ],
+    ['閉じていない while の繰り返し（4000回）', (n) => `${'while x; do '.repeat(n)}x`, 1000],
+    ['閉じていない until の繰り返し', (n) => `${'until x; do '.repeat(n)}x`, 1000],
+    ['閉じていない C 形式の for の繰り返し', (n) => `${'for ((;;)); do '.repeat(n)}x`, 1000],
+    [
+      '閉じていない C 形式の for（{ の本体）の繰り返し',
+      (n) => `${'for ((;;)) { '.repeat(n)}x`,
+      1000,
+    ],
   ];
-  for (const [label, command] of cases) {
+  for (const [label, makeInput, n] of cases) {
     it(`${label}が予算内に終わる`, () => {
-      const start = performance.now();
-      inspectBashCommand(command);
-      expect(performance.now() - start).toBeLessThan(TIME_BUDGET_MS);
+      expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
     });
   }
 });

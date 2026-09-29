@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * issue #2035 —— `GH_PR_MERGE_DELETE_BRANCH_RE` の外側の lookbehind
@@ -118,48 +119,37 @@ describe('gh-pr-merge-delete-branch: CRLF（直す前から弾けている歯、
  * `!`/`{` を lookbehind の文字集合へ足さなかった判断（`SHELL_KEYWORD_
  * PREFIX_SRC` の doc）と、予約語の直後の空白を `\s+` ではなく `[ \t]+` に
  * 絞った判断（同 doc）の両方が、実際に2乗の後戻りを生まないことを測る。
+ *
+ * issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
+ * 替えた。`n * factor`（既定 factor=4）を、直す前にテストしていた繰り返し
+ * 回数（3000 / 10000 / 8000）に揃えてある（依頼者の実測では `!`/`{` を
+ * lookbehind に足した誤った版は 546ms、正しい版は 5.9ms）。
  */
 describe('gh-pr-merge-delete-branch: 予約語・グルーピングの繰り返しが長くても後戻りで爆発しない（issue #2035）', () => {
-  // CI の揺れを見込んだ緩い上限。既存の timeout-prefix テストと同じ値
-  // （2乗の後戻りが起きていれば現実的な時間では終わらない——依頼者の実測
-  // では `!`/`{` を lookbehind に足した誤った版は 546ms、正しい版は 5.9ms）。
-  const TIME_BUDGET_MS = 200;
-
   it('予約語の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'if then do time ! { '.repeat(3000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'if then do time ! { '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(750 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 750 });
   });
 
   // `[ \t]+` の判断を測る歯。予約語の後ろを `\s+` にした試作では 589.9ms、
   // この版では 3.4ms（2026-09-28T23:29Z 実測）。
   it('改行で区切った予約語の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'then\n'.repeat(10000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'then\n'.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(2500 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 2500 });
   });
 
   it('( の繰り返し（gh pr merge を含まない）が線形に終わる', () => {
-    const command = `${'( then '.repeat(8000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'( then '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(2000 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 2000 });
   });
 
   it('予約語の繰り返しの末尾に gh pr merge --delete-branch が来ても弾き、かつ後戻りが爆発しない', () => {
-    const command = `${'if then do time ! { '.repeat(3000)}gh pr merge 1 --delete-branch`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(true);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) =>
+      `${'if then do time ! { '.repeat(n)}gh pr merge 1 --delete-branch`;
+    expect(inspectBashCommand(makeInput(750 * 4)).blocked).toBe(true);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 750 });
   });
 });

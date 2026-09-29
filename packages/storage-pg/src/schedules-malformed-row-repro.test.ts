@@ -1,4 +1,4 @@
-import { captureStderr } from '@alteroid/core';
+import { UnreadableScheduleError, captureStderr } from '@alteroid/core';
 import type { ScheduledRequest } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
@@ -93,6 +93,9 @@ describe('PgScheduleStore — schedules の不正な1行を読み飛ばす（iss
 
     expect(await stores.schedules.get('good-kind')).toEqual(GOOD_SCHEDULE);
     await expect(stores.schedules.get('bad-kind')).rejects.toThrow();
+    // **issue #2177。** `instanceof` で見分けられる専用の型を投げる
+    // （`schedule_list` の tools.ts の catch が使う契約）。文言は変えていない。
+    await expect(stores.schedules.get('bad-kind')).rejects.toBeInstanceOf(UnreadableScheduleError);
     // 本当に消された kind（一度も書いていない）は、投げずに null。
     expect(await stores.schedules.get('never-existed')).toBeNull();
   });

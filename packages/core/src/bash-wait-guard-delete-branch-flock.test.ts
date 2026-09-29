@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * `flock` の前置きのオプションと、`flock <file> -c <文字列>` の形（mgr-712ad619、
@@ -59,22 +60,19 @@ describe('gh-pr-merge-delete-branch: flock のオプションと -c の形を弾
  * `-` で始まらない語に絞ったので、`-u` をファイルとして読む分かれ道が無くなり、線形になった。
  */
 describe('gh-pr-merge-delete-branch: flock のオプションの繰り返しが長くても後戻りで爆発しない', () => {
-  const TIME_BUDGET_MS = 200;
-  const cases: ReadonlyArray<[string, string]> = [
-    ['値を取らないフラグの繰り返し', `flock ${'-n '.repeat(8000)}x`],
-    ['= 付きの長いオプションの繰り返し', `flock ${'--timeout=5 '.repeat(8000)}x`],
-    ['値の位置に - で始まる語が続く繰り返し（短い）', `flock ${'-w '.repeat(40)}x`],
-    ['値の位置に - で始まる語が続く繰り返し（長い）', `flock ${'-w '.repeat(8000)}x`],
-    ['-c の繰り返し', `${'flock f -c '.repeat(8000)}x`],
-    ['sudo -u flock の繰り返し（直す前は2乗）', `sudo ${'-u flock '.repeat(8000)}x`],
+  // n * factor を、直す前にテストしていた繰り返し回数（8000。短い形だけ40）に揃えてある。
+  const cases: ReadonlyArray<[string, (n: number) => string, number, number?]> = [
+    ['値を取らないフラグの繰り返し', (n) => `flock ${'-n '.repeat(n)}x`, 2000],
+    ['= 付きの長いオプションの繰り返し', (n) => `flock ${'--timeout=5 '.repeat(n)}x`, 2000],
+    ['値の位置に - で始まる語が続く繰り返し（短い）', (n) => `flock ${'-w '.repeat(n)}x`, 20, 2],
+    ['値の位置に - で始まる語が続く繰り返し（長い）', (n) => `flock ${'-w '.repeat(n)}x`, 2000],
+    ['-c の繰り返し', (n) => `${'flock f -c '.repeat(n)}x`, 2000],
+    ['sudo -u flock の繰り返し（直す前は2乗）', (n) => `sudo ${'-u flock '.repeat(n)}x`, 2000],
   ];
-  for (const [label, command] of cases) {
+  for (const [label, makeInput, n, factor] of cases) {
     it(`${label}が予算内に終わる`, () => {
-      const start = performance.now();
-      const verdict = inspectBashCommand(command);
-      const elapsedMs = performance.now() - start;
-      expect(verdict.blocked).toBe(false);
-      expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+      expect(inspectBashCommand(makeInput(n * (factor ?? 4))).blocked).toBe(false);
+      expectNotSuperlinear(inspectBashCommand, makeInput, { n, factor });
     });
   }
 });

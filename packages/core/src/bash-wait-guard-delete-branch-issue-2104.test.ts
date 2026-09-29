@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { inspectBashCommand } from './bash-wait-guard.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * issue #2104 —— `gh pr merge --delete-branch`/`-d` の検出が、**文字列として
@@ -159,86 +160,67 @@ describe('gh-pr-merge-delete-branch: 入れ子と深さの上限（issue #2104�
  * 単純な繰り返し」の形で、新しい構文だけを測る。
  */
 describe('gh-pr-merge-delete-branch: issue #2104 の新しい正規表現が長い繰り返しで後戻りしない', () => {
-  const TIME_BUDGET_MS = 200;
+  // issue #2187 —— 壁時計の絶対値（`TIME_BUDGET_MS = 200`）から伸びの比へ
+  // 替えた。`n * factor` を、直す前にテストしていた繰り返し回数に揃えてある。
 
   it('シェルの -c（終端していない単一引用符の繰り返し、gh を含まない）が線形に終わる', () => {
-    const command = `${"bash -c '".repeat(5000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${"bash -c '".repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 
   it('eval の繰り返し（gh を含まない）が線形に終わる', () => {
-    const command = `${'eval x '.repeat(5000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'eval x '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 
   it('ssh の繰り返し（gh を含まない、; で区切る現実的な形）が線形に終わる', () => {
-    const command = `${'ssh host x; '.repeat(3000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'ssh host x; '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(750 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 750 });
   });
 
   it('シェルへのパイプの繰り返し（引用符無し、gh を含まない）が線形に終わる', () => {
-    const command = `${'a | bash '.repeat(2000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${'a | bash '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(500 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
 
   it('シェルへのパイプの繰り返し（各区間に引用符あり、gh を含まない）が線形に終わる', () => {
-    const command = `${"'x' | bash ".repeat(2000)}x`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${"'x' | bash ".repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(500 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 500 });
   });
 
   it('シェルへのヒアドキュメントの本体が大きくても（gh を含まない）線形に終わる', () => {
-    const body = 'x\n'.repeat(5000);
-    const command = `bash <<'EOF'\n${body}EOF`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => {
+      const body = 'x\n'.repeat(n);
+      return `bash <<'EOF'\n${body}EOF`;
+    };
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 
   it('シェルの -c が多数繰り返され、最後の1個だけ本物の payload を持つ場合も線形に終わる', () => {
-    const command = `${"bash -c 'echo hi';".repeat(4000)}bash -c 'gh pr merge 1 -d'`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
-    expect(verdict.blocked).toBe(true);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    const makeInput = (n: number) => `${"bash -c 'echo hi';".repeat(n)}bash -c 'gh pr merge 1 -d'`;
+    expect(inspectBashCommand(makeInput(1000 * 4)).blocked).toBe(true);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1000 });
   });
 
   // `SHELL_NAME_SRC`/`SSH_RE` のパス接頭辞を `\S{0,64}` に絞った直し
   // （`SHELL_NAME_SRC` の doc）自体の実測——非現実的に長い1本のパス
   // （スラッシュ区切りが1万個）でも後戻りが線形のままであること。
   it('非現実的に長いパス接頭辞（bash の前）でも線形に終わる（実際には認識されず通る——既知の限界）', () => {
-    const longPath = 'a/'.repeat(5000) + 'bash';
-    const command = `${longPath} -c 'gh pr merge 1 -d'`;
-    const start = performance.now();
-    const verdict = inspectBashCommand(command);
-    const elapsedMs = performance.now() - start;
+    const makeInput = (n: number) => {
+      const longPath = 'a/'.repeat(n) + 'bash';
+      return `${longPath} -c 'gh pr merge 1 -d'`;
+    };
     // 64文字を超えるパス接頭辞は認識されない（doc「弾けないと分かっている
     // 形」に準じる、稀な形と判断）——ここで測りたいのは blocked の真偽では
     // なく、後戻りが暴走しないことそのもの。
-    expect(verdict.blocked).toBe(false);
-    expect(elapsedMs).toBeLessThan(TIME_BUDGET_MS);
+    expect(inspectBashCommand(makeInput(1250 * 4)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 1250 });
   });
 
   it('現実的な長さのパス接頭辞（/usr/local/bin/bash 等）は引き続き認識して弾く', () => {
