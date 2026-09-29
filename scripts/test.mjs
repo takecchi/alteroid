@@ -90,6 +90,32 @@
  * その exit code をそのまま返す**（「自分の検査は通った」で上書きしない）。
  * **ラッパ自身が例外で落ちたときも exit 0 にはならない**（末尾の
  * `main().catch(...)` が exit code 1 で拾う。緑を名乗る経路を1本も作らない）。
+ *
+ * ## 既定の reporter（人間の TTY でも CI でもないときだけ dot）
+ *
+ * **なぜ足すか。** 作業者（AI）がテストを回すと、vitest 既定の reporter
+ * （`default`）の出力が大きくなり、道具が「大きな出力は保存ファイルへ回す」形へ
+ * 落とすことがある。作業者がその保存ファイルを読もうとして拒否で止まる、という
+ * 事故が実際に複数回起きた（AGENTS.md には書かない——道具の癖であってこの
+ * スクリプトの正本はここ）。**`--reporter=dot` は `Test Files` / `Tests` の
+ * 集計行と、落ちたテストの詳細（どのテストがなぜ落ちたか）はそのまま出しつつ、
+ * 通ったテスト1本ごとの行を出さない**ので、出力が小さくなる。
+ *
+ * **足す条件は3つとも揃ったときだけ**（`test-guard-core.mjs` の
+ * `resolveReporterArgs`）——利用者が `--reporter` を明示していない・`stdout` が
+ * TTY でない・`CI` が未設定。**人間が端末で直接見ているとき（TTY）と CI
+ * （GitHub Actions は `CI=true` を必ず注ぐ）は、いままでどおり vitest 既定の
+ * reporter のまま**——見た目を変えるのは「TTY でも CI でもない実行」（作業者が
+ * Bash 経由で打つ形）だけに絞ってある。
+ *
+ * **変異試験ハーネスは影響を受けない。** `.claude/skills/mutation-testing/
+ * mutate-core.mjs` は `pnpm test` を呼ぶときに `--reporter=default` を明示するので
+ * `hasReporterFlag` が真になり、この歯は素通りする。
+ *
+ * 判定は `resolveScopedArgs` の**後**に掛ける——`--scope` の位置引数判定に
+ * `--reporter=dot` を混ぜないため（この歯が足す形も `--reporter` も、どちらも
+ * 位置引数としては読まれない `VALUE_TAKING_FLAGS` 対応の形なので、実害は無いが、
+ * 順序を固定して依存の向きを明示する）。
  */
 
 import { spawn } from 'node:child_process';
@@ -99,6 +125,7 @@ import {
   ROOT,
   dropBareDashDash,
   judgeExecution,
+  resolveReporterArgs,
   resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
@@ -143,7 +170,11 @@ async function main() {
     return;
   }
 
-  const { code, combined } = await runVitest(scoped.args);
+  const reportedArgs = resolveReporterArgs(scoped.args, {
+    isTTY: process.stdout.isTTY,
+    CI: process.env.CI,
+  });
+  const { code, combined } = await runVitest(reportedArgs);
 
   if (code !== 0) {
     // vitest 自身が落ちた（signal で殺された場合 code は null になる。その場合も

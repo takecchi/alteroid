@@ -322,6 +322,56 @@ export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = 
   return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope });
 }
 
+// ── 引数の正規化（続き）: 既定の reporter（人間の TTY でも CI でもないときだけ dot） ──
+
+/**
+ * `--reporter` を利用者が明示しているか。**`--reporter=x`（`=` 形）と
+ * `--reporter x`（空白区切りの値渡し）の両方を見る**——後者は `VALUE_TAKING_FLAGS`
+ * が既に「次の要素を値として飲む」と知っている形と同じ引数なので、ここでも
+ * 同じ2形を数える。値そのもの（`x` / `dot` / `verbose` 等）が何であるかは見ない
+ * ——「利用者が指定したかどうか」だけが要る。
+ */
+export function hasReporterFlag(argv) {
+  for (const arg of argv) {
+    if (arg === '--reporter' || arg.startsWith('--reporter=')) return true;
+  }
+  return false;
+}
+
+/**
+ * 既定の reporter を `dot` へ倒す（作業者がテストを回すと大きな出力が
+ * 保存ファイルへ回され、それを読もうとして拒否で止まる問題への対策）。
+ *
+ * **3条件がすべて揃ったときだけ** `--reporter=dot` を末尾へ1個足す:
+ *
+ * 1. 利用者が `--reporter` を1つも渡していない（`hasReporterFlag`）
+ * 2. `stdout` が TTY でない（人間が端末で直接見ているときは vitest 既定の
+ *    reporter のままにする——人間には現在の見た目を変えない）
+ * 3. `CI` が未設定（GitHub Actions は `CI=true` を必ず注ぐので、CI 実行は
+ *    この歯の影響を受けない。ローカルで `CI=` を立てて確かめる場合も同様）
+ *
+ * **`.claude/skills/mutation-testing/mutate-core.mjs` は `--reporter=default` を
+ * 明示して `pnpm test` を呼ぶ**ので `hasReporterFlag` が真になり、この歯は
+ * 素通りする——変異試験ハーネスの出力形は変わらない。
+ *
+ * 純粋関数——`isTTY` / `CI` は呼び出し側（`test.mjs`）が
+ * `process.stdout.isTTY` / `process.env.CI` から渡す。ここでは環境を読まない
+ * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」と同じ理由で、
+ * env を引数化してある）。
+ *
+ * **足すのは末尾へ1個だけ**——既存の引数（`--scope` 解決後のものも含む）は
+ * 1文字も変えない。呼び出す順序は「`resolveScopedArgs` の後」を想定している
+ * （`--scope` 解決の位置引数判定には影響しない——`--reporter` は既に
+ * `VALUE_TAKING_FLAGS` に載っており、この歯が足す `--reporter=dot` も同じ
+ * `=` 形なので、どちらも位置引数としては読まれない）。
+ */
+export function resolveReporterArgs(argv, { isTTY, CI } = {}) {
+  if (hasReporterFlag(argv)) return argv;
+  if (isTTY) return argv;
+  if (CI) return argv;
+  return [...argv, '--reporter=dot'];
+}
+
 // ── 歯A: 実行の側（vitest の集計行を読む） ──────────────────────────
 
 /**

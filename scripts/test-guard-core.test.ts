@@ -21,6 +21,7 @@ import {
   findUnconditionalSkips,
   formatObservationGuardMessage,
   formatSkipGuardMessage,
+  hasReporterFlag,
   isObservationFile,
   judgeExecution,
   judgeObservationScan,
@@ -30,6 +31,7 @@ import {
   parsePassedCount,
   readIncludeGlobs,
   readObservationDeclaration,
+  resolveReporterArgs,
   resolveScopedArgs,
   runObservationGuard,
   runStaticSkipGuard,
@@ -349,6 +351,131 @@ describe('resolveScopedArgs（I/O込みの合成。#1691 レビュー差し戻�
     const argv = ['apps/cli/src/interrupt.test.ts', '--maxWorkers=4'];
     const result = await resolveScopedArgs(argv, { cwd: '/repo/apps/cli', repoRoot: '/repo' });
     expect(result).toEqual({ ok: true, args: argv });
+  });
+});
+
+/**
+ * 分割の口（`--shard`）と reporter（`--reporter`）を `--scope` 付きのパッケージの
+ * `test` script（例: `packages/storage-pg` の
+ * `node ../../scripts/test.mjs --root=../.. --scope=packages/storage-pg/src`）へ
+ * 渡したときに、`resolveScopedArgs` が位置引数と取り違えず素通しすることを固定する。
+ *
+ * **`=` 形（`--shard=1/3`）は無条件に安全**——`isFlagLike` が `-` で始まる引数を
+ * フラグとみなすので、`VALUE_TAKING_FLAGS` に載っていなくても位置引数側には
+ * 回らない（`findPositionalIndices` の doc）。
+ *
+ * **空白区切りの値渡し（`--shard 1/3`）は別**——`VALUE_TAKING_FLAGS` に `--shard`
+ * が入っていないため、値（`1/3`）がフラグの一部だと認識されず、素の位置引数
+ * として範囲判定に持ち込まれる。実際に何が起きるかは下の別の describe で
+ * 実測して記録する（直すかどうかは依頼者が判断するので、ここでは直さない）。
+ */
+describe('resolveScopedArgs は --shard=1/3 / --reporter=dot（`=` 形）を位置引数と取り違えず素通しする', () => {
+  it('位置引数が無いとき: --shard=1/3 --reporter=dot はそのまま残り、範囲が末尾へ足される（ディスクを読まない経路）', async () => {
+    const result = await resolveScopedArgs(
+      ['--scope=packages/storage-pg/src', '--shard=1/3', '--reporter=dot'],
+      { cwd: '/repo/packages/storage-pg', repoRoot: '/repo' },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--shard=1/3', '--reporter=dot', 'packages/storage-pg/src'],
+    });
+  });
+
+  it('利用者の位置引数（部分一致のファイル名）と併用しても、--shard=1/3 --reporter=dot は素通しされる', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(
+      ['--scope=pkg-a/src', '--shard=1/3', '--reporter=dot', 'widget'],
+      { cwd, repoRoot: root },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--shard=1/3', '--reporter=dot', 'pkg-a/src/bar-widget.test.ts'],
+    });
+  });
+});
+
+/**
+ * **測っただけで、直していない**（依頼者の指示どおり）。`--shard 1/3`
+ * （空白区切り）を `--scope` 付きの引数へ混ぜると何が起きるかの実測。
+ *
+ * `--shard` は `VALUE_TAKING_FLAGS`（`resolveReporterArgs` の隣にある一覧）に
+ * 載っていないので、`1/3` は「次の要素を値として飲む」対象にならず、素の
+ * 位置引数として範囲判定に持ち込まれる。範囲の中に `1/3` へ部分一致する
+ * テストファイルは（当然）無いので、`EXIT_SCOPE_VIOLATION` で「範囲内に
+ * 一致なし」を返して断る——利用者が `--shard 1/3`（空白区切り）を打つと、
+ * テストが1本も走らないまま `pnpm test` が exit 8 で終わる。
+ */
+describe('実測: --shard 1/3（空白区切り）を --scope と併用すると断られる（直すかどうかは依頼者判断）', () => {
+  it('生の文言: 「範囲内に一致なし」で EXIT_SCOPE_VIOLATION を返す', async () => {
+    const root = makeScopeFixtureRoot();
+    const cwd = join(root, 'pkg-a');
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', '--shard', '1/3'], {
+      cwd,
+      repoRoot: root,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+      expect(result.message).toMatch(/範囲内に一致なし/);
+      // 記録: 実際に断られた対象は `--shard` の値である `1/3` そのもの。
+      expect(result.message).toContain('「1/3」');
+    }
+  });
+});
+
+describe('hasReporterFlag / resolveReporterArgs（既定の reporter を dot へ倒す。利用者の TTY・CI を見ない・見る）', () => {
+  it('hasReporterFlag: `--reporter=x`（`=` 形）を検出する', () => {
+    expect(hasReporterFlag(['--maxWorkers=4', '--reporter=verbose'])).toBe(true);
+  });
+
+  it('hasReporterFlag: `--reporter x`（空白区切り）も検出する', () => {
+    expect(hasReporterFlag(['--reporter', 'verbose'])).toBe(true);
+  });
+
+  it('hasReporterFlag: `--reporter` が無ければ false', () => {
+    expect(hasReporterFlag(['--maxWorkers=4', 'a.test.ts'])).toBe(false);
+  });
+
+  it('人間の TTY（isTTY=true）では、CI 未設定でも dot を足さない', () => {
+    const argv = ['a.test.ts'];
+    expect(resolveReporterArgs(argv, { isTTY: true, CI: undefined })).toEqual(argv);
+  });
+
+  it('CI（`CI=true`）では、TTY でなくても dot を足さない', () => {
+    const argv = ['a.test.ts'];
+    expect(resolveReporterArgs(argv, { isTTY: false, CI: 'true' })).toEqual(argv);
+  });
+
+  it('利用者が `--reporter=verbose` を明示していれば、TTY でも CI でもなくても変えない', () => {
+    const argv = ['a.test.ts', '--reporter=verbose'];
+    expect(resolveReporterArgs(argv, { isTTY: false, CI: undefined })).toEqual(argv);
+  });
+
+  it('利用者が `--reporter verbose`（空白区切り）を明示していれば、TTY でも CI でもなくても変えない', () => {
+    const argv = ['a.test.ts', '--reporter', 'verbose'];
+    expect(resolveReporterArgs(argv, { isTTY: false, CI: undefined })).toEqual(argv);
+  });
+
+  it('TTY でも CI でもなく、`--reporter` も明示していない（作業者が Bash 経由で打つ形）⟹ `--reporter=dot` を末尾へ足す', () => {
+    const argv = ['a.test.ts', '--maxWorkers=2'];
+    expect(resolveReporterArgs(argv, { isTTY: false, CI: undefined })).toEqual([
+      'a.test.ts',
+      '--maxWorkers=2',
+      '--reporter=dot',
+    ]);
+  });
+
+  it('TTY でも CI でもなく、引数が空でも `--reporter=dot` だけを足す', () => {
+    expect(resolveReporterArgs([], { isTTY: false, CI: undefined })).toEqual(['--reporter=dot']);
+  });
+
+  it('CI が空文字列（未設定と同じ意味で使われることがある）でも、TTY でなければ dot を足す', () => {
+    const argv = ['a.test.ts'];
+    expect(resolveReporterArgs(argv, { isTTY: false, CI: '' })).toEqual([
+      'a.test.ts',
+      '--reporter=dot',
+    ]);
   });
 });
 
