@@ -244,6 +244,10 @@ cd packages/storage-pg && pnpm test -- '--exclude=**/index.*.test.ts' --shard=2/
 # 必ず `--deadline-seconds` の値（秒）× 1000 より大きくすること**——storage-pg
 # の行は `--deadline-seconds=590` なので、ツールの timeout 引数は 600000
 # （590秒の締め切り＋内部の kill 猶予＋余裕）のままでよい。
+# ⚠️ **ツールの timeout 引数は手で入れること。** Bash の timeout 引数を自動で
+# 引き上げる仕組み（#2094）は、コマンドの中の `timeout <n>` は読むが
+# `--deadline-seconds` は読まない（#2225。実測 2026-09-29T17:5xZ）。入れ忘れると、
+# ツールの既定（約120秒）で背景へ回される。#2225 が直ったら、この注記を消す。
 ```
 
 **打ち切ったときの見え方（実測、`--deadline-seconds=5` で短く取った例）**:
