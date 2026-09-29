@@ -327,10 +327,13 @@ describe('/usage 画面', () => {
    * **認証トークン別の帰属のある行だけ `/tokens` へつなぐ（issue #2100 段1）。**
    * `tokenId` を持つ行だけがリンクになり、帰属の無い分
    * （「（トークンの帰属が無い分）」＝ `tokenId: null`）はリンクにしない。
-   * `/tokens` にはまだ行への飛び先が無いので、id ごとの URL ではなく
-   * `/tokens` 止まりである（段2 は別 Issue）。
+   *
+   * **飛び先はその id の行そのもの（issue #2109。#2100 の段2）。** `/tokens`
+   * 止まりだった飛び先を、`~/lib/tokens-links` の `tokensHref` で組み立てた
+   * `/tokens?tokenId=<id>` へ向け直した——`tokens.tsx` 側がこのクエリを読んで
+   * 行へスクロール・強調する（`tokens.test.tsx` が持つ）。
    */
-  it('認証トークン別の tokenId のある行は /tokens への Link になり、帰属の無い行はならない', async () => {
+  it('認証トークン別の tokenId のある行は /tokens?tokenId=<id> への Link になり、帰属の無い行はならない', async () => {
     stubUsage({
       rows: [row(2, { tokenId: 'tok-42' }), row(1, {})],
       since: '2026-08-01T00:00:00.000Z',
@@ -342,7 +345,7 @@ describe('/usage 画面', () => {
     await screen.findByRole('heading', { name: '認証トークン別' });
     const tokens = axisCard('認証トークン別');
     const link = within(tokens).getByRole('link', { name: 'tok-42' });
-    expect(link.getAttribute('href')).toBe('/tokens');
+    expect(link.getAttribute('href')).toBe('/tokens?tokenId=tok-42');
     expect(within(tokens).getByTitle('tok-42')).toBeTruthy();
 
     const noAttribution = '（トークンの帰属が無い分）';

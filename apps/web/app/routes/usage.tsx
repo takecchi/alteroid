@@ -23,6 +23,7 @@ import {
   TruncationNote,
 } from '~/components/ui';
 import { useUsage, type UsageQuery } from '~/hooks/queries';
+import { tokensHref } from '~/lib/tokens-links';
 import type {
   AccountUsageState,
   UnrecordedManager,
@@ -525,12 +526,14 @@ function UsageBody({
             の行（「（トークンの帰属が無い分）」）には飛び先の id が無いので
             リンクにしない。
 
-            **飛び先は `/tokens` 止まり — 個々の行へは飛ばない。** `/tokens`
-            にはまだトークン1本の詳細画面も行への飛び先（DOM の id・URL の
-            パラメータ）も無い（`tokens.tsx` の `TokenRow` に id 属性が無い）。
-            そこへ id ごとの飛び先を足すのは段2（別 Issue。領域 A が
-            `GET /tokens` の応答の追従でいま `tokens.tsx` を触っているため、
-            この PR では触らない）。
+            **飛び先はその id の行そのもの（issue #2109。#2100 の段2）。**
+            `tokens.tsx` の `TokenRow` に飛び先（DOM の id・スクロール・
+            控えめな強調）が入ったので、`/tokens` 止まりだった飛び先を行へ
+            向け直した。href の組み立てと URL の欄名は `~/lib/tokens-links`
+            に1本化してある（`usage-links.ts` / `managers-links.ts` と同じ
+            慣習——欄名を呼び出し側とここの両方で書き写さない）。プールから
+            外れた id（使用量には残っているが、いまの `GET /tokens` に居ない）
+            で飛んだときの倒れ先は `tokens.tsx` 側が持つ。
           */}
           <AxisCard
             title="認証トークン別"
@@ -539,7 +542,7 @@ function UsageBody({
               .map((entry) => ({
                 label: entry.tokenId ?? '（トークンの帰属が無い分）',
                 costUsd: entry.totals.costUsd,
-                ...(entry.tokenId !== null ? { href: '/tokens' } : {}),
+                ...(entry.tokenId !== null ? { href: tokensHref({ tokenId: entry.tokenId }) } : {}),
               }))}
           />
         </div>

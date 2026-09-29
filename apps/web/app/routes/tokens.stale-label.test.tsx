@@ -29,12 +29,29 @@
  * 外向きの面（`openapi.json`）が動くうえ、`freshness` に既に在る情報である。
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { JournalEntry } from '~/lib/types';
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
 
 import Tokens from './tokens';
+
+/**
+ * **Router で包む（issue #2109）。** `tokens.test.tsx` の `renderTokens` と
+ * 同じ理由——`Tokens` が `useSearchParams` を呼ぶようになったので Router
+ * 無しでは描けない。
+ */
+function renderTokens() {
+  const router = createMemoryRouter([{ path: '/', Component: Tokens }], {
+    initialEntries: ['/'],
+  });
+  return render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+}
 
 function entry(over: Partial<Extract<JournalEntry, { type: 'token_rotation' }>> = {}) {
   return {
@@ -76,11 +93,7 @@ describe('not_rotated の badge は、捨てた理由を言い分ける', () => 
     // **ここが本番で人間を誤らせた行そのものである。**
     stub([entry({ signal: 'reached', freshness: 'stale' })]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     // **badge の文言で待つ。** 本文（`text`）にも「もう回した後の通知」が
     // 出るので、そちらでは badge を測れない（2件当たる）。
@@ -96,11 +109,7 @@ describe('not_rotated の badge は、捨てた理由を言い分ける', () => 
     // ことで、こちらの文言が消えていないことを固定する。**
     stub([entry({ signal: 'org_policy', freshness: 'current' })]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitFor(() => {
       expect(screen.getByText(/契機に当たらなかった/)).toBeTruthy();
@@ -113,11 +122,7 @@ describe('not_rotated の badge は、捨てた理由を言い分ける', () => 
     // 読まない** —— 読むと、観測を持たない行に「もう回した後」と書くことになる。
     stub([entry({ signal: 'none' })]);
 
-    render(
-      <Providers>
-        <Tokens />
-      </Providers>,
-    );
+    renderTokens();
 
     await waitFor(() => {
       expect(screen.getByText(/契機に当たらなかった/)).toBeTruthy();
