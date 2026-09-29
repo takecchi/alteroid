@@ -474,8 +474,8 @@ describe('summarizeProgress — forecast', () => {
       const f = summarize([row('c', OLD, { closedAt: '2026-08-02T00:00:00.000Z' })], [], {
         unreadable: 2,
       }).forecast;
-      expect(f.state).toBe('estimated');
-      expect(f.basis.unreadable).toBe(2);
+      expect(f).toMatchObject({ state: 'estimated', hoursToDrain: 0 });
+      expect(f.basis).toMatchObject({ open: 0, unreadable: 2 });
     });
 
     it('行が1つも無い台帳は「0」ではなく unavailable（ledger_younger_than_window）', () => {
