@@ -20,8 +20,12 @@
     "shadcn:add": "node ./scripts/shadcn-add.mjs"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "catalog:",
+    "@fontsource/ibm-plex-sans-jp": "catalog:",
+    "@fontsource/michroma": "catalog:",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
+    "cmdk": "catalog:",
     "lucide-react": "catalog:",
     "mdast-util-gfm": "catalog:",
     "micromark-extension-gfm": "catalog:",

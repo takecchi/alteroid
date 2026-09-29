@@ -169,6 +169,10 @@ export function Badge({
         // （`CREDENTIAL_NAME` 正規表現に長さの上限が無い）をそのまま中身にしており、
         // 折り返さない指定は可変の長文が来たときにはみ出しを直すどころか作る側へ振れる。
         'h-auto shrink-0 overflow-visible break-words whitespace-normal',
+        // **角は小さく持つ**（shadcn の既定は `rounded-4xl` の丸い札）。札にも面取り
+        // （`styles.css` の `corner-shape`）が掛かるので、丸いままだと斜めの一辺が札の
+        // 高さいっぱいになり、平行四辺形になって端の文字を削る。
+        'rounded-[5px]',
         BADGE_TONES[tone].className,
         className,
       )}
