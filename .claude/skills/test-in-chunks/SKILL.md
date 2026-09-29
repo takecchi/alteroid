@@ -134,14 +134,20 @@ for i in 1 2 3 4 5 6 7 8; do
   cd packages/core && timeout -k 5 120 pnpm test -- --shard=$i/8 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT($i/8):${PIPESTATUS[0]}"
 done
 
-# packages/storage-pg（37ファイル、@electric-sql/pglite で実サーバ不要）は3分割。
-# ⚠️ shard によって重さが大きく違う（下の実測）。shard=3/3 だけ余裕を持たせる
-# ——その重さの実体は index.test.ts（5588行・262テスト）1本にほぼ集中している
-# （下の「実測: 重い1本を特定した」）。単独で当たりを付けたいときは最後の1行。
-cd packages/storage-pg && timeout -k 5 200 pnpm test -- --shard=1/3 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && timeout -k 5 120 pnpm test -- --shard=2/3 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && timeout -k 5 590 pnpm test -- --shard=3/3 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
-cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.test.ts --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+# packages/storage-pg（43ファイル、@electric-sql/pglite で実サーバ不要）。
+# **shard ではなく「重い5本を1本ずつ」＋「残り38本を2組」で回す**（PR #2102 で
+# 旧 index.test.ts を index.*.test.ts の5本へ割った後の形。旧3分割は、割った後も
+# 1/3 が 335秒になり 300秒の枠に収まらなかった——下の「実測: 割った後」）。
+# --exclude は `=` で繋ぐ形で渡す（空白区切りだと値が位置引数として扱われ、
+# `resolveScopedArgs` が「範囲内に一致なし」の exit 8 で断る。実測 2026-09-29T04:2xZ）。
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.persona --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.journal-jobs-schedule --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.commitments-inbox-archive --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.sessions-tokens-credentials --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- index.auth --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- '--exclude=**/index.*.test.ts' --shard=1/2 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+cd packages/storage-pg && timeout -k 5 590 pnpm test -- '--exclude=**/index.*.test.ts' --shard=2/2 --maxWorkers=2 --reporter=dot 2>&1 | grep -E 'Test Files|Tests |Duration|FAIL'; echo "EXIT:${PIPESTATUS[0]}"
+# ⚠️ 7行とも Bash ツールでは1行ずつ別の呼びにし、ツールの timeout 引数に 600000 を入れる（並べると1呼びで10分を超える）。
 ```
 
 **`pnpm test` 全体を1本では回さない。** 上のパッケージ・shard の並びを
@@ -281,6 +287,26 @@ timeout）で回し、残り36ファイルを別に（例: 2分割程度で）�
 は試していない**——`index.test.ts` を除いた残りをどう指定するのが安全かは
 未検証。**ファイルを割る改修（`index.test.ts` 自体を分ける等）はしていない**
 （依頼者の判断待ち）。下の推奨コマンドには、単独実行の1行だけを足した。
+
+### 実測: 割った後（PR #2102。観測 2026-09-29）
+
+`index.test.ts` を最上位 `describe` の単位で `index.*.test.ts` の5本へ割った（テストの本文は
+1文字も変えていない。突き合わせの方法は PR #2102 の本文）。**上の「申し送り」はこれで片付いた。**
+上の旧3分割の表と節は、割る前の記録として残してある。
+
+| 対象（測った列）                                    | Test Files | Tests | Duration | 観測（UTC）                                                                     |
+| --------------------------------------------------- | ---------- | ----- | -------- | ------------------------------------------------------------------------------- |
+| `index.persona`                                     | 1          | 42    | 101.90s  | 作業者の実測（04:0x 頃）                                                        |
+| `index.journal-jobs-schedule`                       | 1          | 64    | 213.97s  | 04:17:06Z〜04:20:43Z（#2087 の契約テスト1本を足した後。足す前は 63本・162.57s） |
+| `index.commitments-inbox-archive`                   | 1          | 57    | 128.71s  | 作業者の実測                                                                    |
+| `index.sessions-tokens-credentials`                 | 1          | 60    | 139.25s  | 作業者の実測                                                                    |
+| `index.auth`                                        | 1          | 40    | 95.54s   | 作業者の実測                                                                    |
+| 残り38本 `--exclude=**/index.*.test.ts --shard=1/2` | 19         | 114   | 167.43s  | 04:11:40Z〜04:14:30Z                                                            |
+| 残り38本 `--exclude=**/index.*.test.ts --shard=2/2` | 19         | 55    | 140.69s  | 04:14:35Z〜04:16:59Z                                                            |
+| （参考）割った後の旧3分割 `--shard=1/3`             | 15         | 264   | 335.45s  | 作業者の実測（300秒を超える）                                                   |
+
+判定（測った値ではない）: 1本あたり最長が約 214秒で、器が混むと 240秒に近づく。`index.journal-jobs-schedule`
+がこれ以上重くなったら、次はこのファイルを割る。
 
 ## 検証（この skill を書いた回に通したもの）
 
