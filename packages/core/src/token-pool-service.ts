@@ -213,7 +213,10 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
   }
 
   /** {@link readSettingsOrUnreadable} の結果を {@link TokenPoolView} の形へ組む。 */
-  function viewOf(tokens: AgentTokenView[], settingsResult: Awaited<ReturnType<typeof readSettingsOrUnreadable>>): TokenPoolView {
+  function viewOf(
+    tokens: AgentTokenView[],
+    settingsResult: Awaited<ReturnType<typeof readSettingsOrUnreadable>>,
+  ): TokenPoolView {
     return settingsResult.ok
       ? { tokens, settings: settingsResult.settings }
       : { tokens, settingsUnreadable: { reason: settingsResult.reason } };

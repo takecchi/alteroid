@@ -83,9 +83,7 @@ export async function tokenListCommand(): Promise<void> {
   // 理由だけを出す——きちんとした表示は Web 側の別 Issue の領域なので、
   // ここでは落ちずに理由を出すところまでにとどめる。
   if (view.settings === undefined) {
-    stdout.write(
-      `回転の設定は読めない: ${view.settingsUnreadable?.reason ?? '理由不明'}\n`,
-    );
+    stdout.write(`回転の設定は読めない: ${view.settingsUnreadable?.reason ?? '理由不明'}\n`);
   } else {
     stdout.write(
       `回す契機: ${view.settings.rotateOn}（resetsAt が取れないときの冷却の既定 ${String(view.settings.cooldownMs)}ms）\n`,
@@ -265,9 +263,7 @@ export async function tokenPolicyCommand(
     // `alteroid token policy <値> --cooldown-ms <値>` で両方を指定し直す
     // （読めない現在値を読まずに書ける。`TokenPoolService.setSettings` の doc）。
     if (current.settings === undefined) {
-      stdout.write(
-        `回転の設定は読めない: ${current.settingsUnreadable?.reason ?? '理由不明'}\n`,
-      );
+      stdout.write(`回転の設定は読めない: ${current.settingsUnreadable?.reason ?? '理由不明'}\n`);
       return;
     }
     printSettings(current.settings);

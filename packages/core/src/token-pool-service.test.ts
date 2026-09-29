@@ -108,7 +108,8 @@ describe('既定（プールが空のとき）', () => {
     // **設定は読める前提を型で確かめる**（issue #2095。`settings` は
     // `TokenRotationSettings | undefined` なので、直接アクセスの前に
     // 絞り込みが要る——絞り込めなければここで落ちる）。
-    if (settings === undefined) throw new Error('settings が読めなかった（このテストでは読めるはず）');
+    if (settings === undefined)
+      throw new Error('settings が読めなかった（このテストでは読めるはず）');
     expect(settings.rotateOn).toBe('free_exhausted');
   });
 });

@@ -71,9 +71,7 @@ describe('TokenPoolService.list() / replace() — 設定が読めないとき（
     // **保存そのものは効いている。** 設定が読めないことが、プールの置換
     // （`tokens` だけを触る操作）まで巻き込んでいない——`readSettings` を
     // 差し替えていない `memory.tokens` 側で読み直して確かめる。
-    await expect(memory.tokens.list()).resolves.toEqual([
-      expect.objectContaining({ label: 'a' }),
-    ]);
+    await expect(memory.tokens.list()).resolves.toEqual([expect.objectContaining({ label: 'a' })]);
   });
 
   it('list(): UnreadableTokenSettingsError 以外は飲み込まず、そのまま投げる', async () => {
