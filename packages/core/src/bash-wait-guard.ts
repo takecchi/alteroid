@@ -852,6 +852,19 @@ const LEADING_COMMAND_PREFIX_NAME_SRC = String.raw`(?:sudo|doas|nice|ionice|nohu
  * のは、この検出器の外側**——たとえば `PATH` にそのパスの `gh` が実在
  * するか等、実行時の話は判定に影響しない（この検出器は文字列だけを見る
  * 純関数）。
+ *
+ * ⚠️ **issue #2104 の作業中に発見（この PR では直していない、既存の穴）**:
+ * `(?:\S*\/)?gh` の `\S*` が無制限なので、`;` が大量に並ぶ入力
+ * （`'a;'.repeat(n) + 'gh pr merge 1 --delete-branch'`）で `GH_PR_MERGE_
+ * DELETE_BRANCH_RE` の直接一致そのものが O(n^2) になる（実測 mgr-712ad619
+ * 2026-09-29: main 2c8876f3 の写しで n=8000 が74ms・n=16000 が328ms——
+ * 4倍/4倍の伸び）。この PR（issue #2104）の新しい `SHELL_NAME_SRC` は同じ
+ * 構造の穴を避けるため `\S{0,64}` に絞ったが（doc 参照）、**この
+ * `GH_WORD_SRC` 自身は直していない**——問い1で「別の穴」（すり抜けでは
+ * なく後戻りの性能）、問い2で「既存の挙動、この PR は触っていない」に
+ * 当たると判断した（AGENTS.md「範囲外でも気づいたことは上げる」）。次に
+ * ここを触る人は、`\S*` を `\S{0,64}` に絞る同じ直し方が使えることを
+ * `SHELL_NAME_SRC` の doc で確認できる。
  */
 const GH_WORD_SRC = String.raw`(?:\\gh|"gh"|'gh'|(?:\S*\/)?gh)`;
 
@@ -1412,10 +1425,321 @@ function stripGhPrMergeQuotedSubjectBodyValues(command: string): string {
   );
 }
 
-function hasGhPrMergeDeleteBranch(command: string): boolean {
+/**
+ * issue #2104 —— `gh pr merge --delete-branch` が、**文字列として別のシェルへ
+ * 渡され、コマンドとして実行される形**をすり抜けていた。`bash -c '…'` は
+ * #1764 から「弾けないと分かっている形」として doc と `bash-wait-guard.test.ts`
+ * の `it.fails` に在ったが、同じ穴が `eval`・`ssh <host> <cmd>`・シェルへの
+ * パイプ（`… | bash`）・シェルへのヒアドキュメント（`bash <<EOF`）にも在った
+ * （観測は issue #2104 本文、mgr-712ad619 実測 2026-09-29）。
+ *
+ * ## 直し方 —— 外側の判定は崩さず、入口を見つけたら中身を取り出してもう一度
+ *
+ * `hasGhPrMergeDeleteBranch` 自身に「5つの入口のどれかを見つけたら中身を
+ * 取り出し、`hasGhPrMergeDeleteBranch` 自身にもう一度かける」再帰を足す。
+ * **外側の直接一致（`GH_PR_MERGE_DELETE_BRANCH_RE`）は毎回の深さで必ず先に
+ * 試す**——既存の歯（`it.fails` を除く）が1つも変わらないのはこのため。
+ * 深さの上限は `MAX_NESTED_SHELL_DEPTH`（3）。上限に達した深さでも、その
+ * 深さの中身そのものへの直接一致は行う——止めるのは「**さらに**中身を
+ * 取り出して再帰する」ことだけである。⟹ 4層ネスト（`bash -c "bash -c
+ * \"bash -c \\\"bash -c \\\\\\\"gh pr merge 1 -d\\\\\\\"\\\"\""` のような
+ * 形）は、3層目までは中身を取り出して辿れるが、4層目の中身は取り出せない
+ * ——**通す側へ倒す**（doc「深さの上限を超えたら」、歯は issue #2104 の
+ * テストファイル「4層ネストは上限を超えて通る」）。この倒し方を選んだ
+ * 理由: 上限は「無限再帰・入力に対する後戻りの制御」のための境界であって、
+ * 「この形は危険だと分かっている」という判断ではない——他の多くの「1件ずつ
+ * 検討する」既知の穴（doc「弾けないと分かっている形」）と同じ位置づけで、
+ * 通す側に倒しても新しい実害は増えない（4層もネストする実例は、依頼者が
+ * 観測した12形にも無い）。
+ *
+ * ## 5つの入口（数える単位、Issue 本文）
+ *
+ * 1. **シェルの `-c`**（`SHELL_DASH_C_RE`）—— `bash`/`sh`/`zsh`/`dash`/`ksh`。
+ *    パス付き（`/bin/sh`）・束ね（`-lc`/`-ec`）・前置き付き（`timeout 60
+ *    bash -c`/`xargs -I{} sh -c`、`LEADING_ENV_PREFIX_SRC` を再利用）を読む。
+ *    直後の引数を二重引用符・単一引用符・引用符無し（次の1語）の3択で読む
+ *    ——二重引用符は `\` によるエスケープを素朴に外す（Issue 本文「外せない
+ *    ときは中身をそのまま使う＝弾く側に倒す」——閉じていない二重引用符は
+ *    そもそも `NESTED_SHELL_DOUBLE_QUOTED_INNER_SRC` に一致しなくなるので、
+ *    その位置では引用符無し（`\S+`、次の1語）の選択肢へ落ちる）。
+ * 2. **`eval <引数…>`**（`EVAL_RE`）—— 次の境界（`;`/`&&`/`||`/`|`/改行）
+ *    までを1つの文字列として捉え、単一・二重引用符を素朴に外してつなぐ
+ *    （`unquoteJoin`）。
+ * 3. **`ssh <host> <cmd>`**（`SSH_RE`）—— `ssh` のオプション文法は解かず、
+ *    次の境界までの区間から**引用符の中身すべて**を拾って空白でつなぐ
+ *    （Issue 本文「ssh の後ろの引用符の中身すべて」）。
+ * 4. **シェルへのパイプ**（`extractPipeToShellPayloads`）—— `| bash`/`| sh`
+ *    等の手前の「単純コマンド区間」（直近の `;`/`&`/`|`/改行の次から、この
+ *    パイプまで）から**引用符の中身すべて**を拾って空白でつなぐ。
+ * 5. **シェルへのヒアドキュメント**（`SHELL_HEREDOC_RE`）—— `stripHeredocs`
+ *    は本文を空白へ潰す（既存、外側の直接一致の誤検知を防ぐため）が、
+ *    こちらは**潰さずに本文を中身として見る**——ヒアドキュメントの対象が
+ *    シェル（`bash`/`sh`/…）のときだけを対象にする（`cat > f <<EOF` は
+ *    対象がシェルではないので、この入口には引っかからない——既存の
+ *    「ヒアドキュメントの本文の中に在る gh pr merge --delete-branch は
+ *    通す」歯がそのまま緑であり続ける根拠）。
+ *
+ * ## 誤検知は「同じ判定関数へそのまま渡す」ことで自然に抑える
+ *
+ * 取り出した中身を検出専用の別ロジックにかけるのではなく、**この関数自身
+ * （`hasGhPrMergeDeleteBranch`）へそのまま渡す**——これにより、取り出した
+ * 中身の中でも「コマンドの位置に在るもの」だけが数えられる。
+ * `bash -c 'echo "gh pr merge 1 -d"'` は、取り出した中身
+ * `echo "gh pr merge 1 -d"` を同じ関数へ渡したとき、`gh` が `echo` の
+ * 引数（コマンドの位置ではない）なので弾かれない——対照の歯として固定する。
+ *
+ * ## 後戻りの設計（PR #2080 レビューの教訓を踏まえる）
+ *
+ * `LEADING_COMMAND_PREFIX_OPTION_SRC`（issue #2068）で、オプションの値の
+ * 読み方の2択が同じ続きへ再合流し、フィボナッチ的に伸びた実例がある
+ * （`'sudo ' + '-a '.repeat(n)` が n=40 で約1秒、doc 参照）。この PR の
+ * 新しい正規表現はどれも `LEADING_ENV_PREFIX_SRC`（既に線形と確認済み）を
+ * 前提に組み立てており、新しく足した部分（`SHELL_DASH_C_ARG_SRC` の3択・
+ * `NESTED_SHELL_DOUBLE_QUOTED_INNER_SRC` の2択・ヒアドキュメントの
+ * `(?:[ \t]+-\S+)*`）は、いずれも**選択肢の先頭文字が重ならない**か
+ * **1回ごとに自己完結して次の反復へ再合流しない**形にしてある。長い
+ * 繰り返し入力での実測は
+ * `bash-wait-guard-delete-branch-issue-2104.test.ts` の時間の歯に書いた。
+ */
+const MAX_NESTED_SHELL_DEPTH = 3;
+
+/**
+ * `bash`/`sh`/`zsh`/`dash`/`ksh`。パス付き（`/bin/sh`）も読む——`GH_WORD_SRC`
+ * と同じ考え方だが、**パス部分の量指定子は無制限の `\S*` にしていない**
+ * （`GH_WORD_SRC` はそうしている）。
+ *
+ * ⚠️ **`\S*\/`（無制限）は、区切り文字の多い入力で2乗の後戻りを起こす**
+ * （mgr-712ad619 実測 2026-09-29）。`(?:\S*\/)?` は「パス無し」の場合、
+ * `\S*` がまず次の空白まで貪欲に伸び、末尾の `/` を見つけられずに1文字ずつ
+ * 後戻りする——`/` が1つも無い入力ではゼロまで後戻りする。これ自体は
+ * その1回の試行では線形だが、`COMMAND_POSITION_LOOKBEHIND_SRC` が
+ * 「`;` の直後」を毎回コマンド位置として認めるので、`;` が大量に並ぶ入力
+ * （`'a;'.repeat(n)` の後ろに本物の呼び出し）では、コマンド位置の候補が
+ * 入力長に比例して増え、各候補での後戻り幅（次の空白までの距離）も
+ * ほぼ入力長に比例するため、全体が O(n^2) になる（実測: `'a;'.repeat(n) +
+ * 'bash -c "bash -c \'gh pr merge 1 -d\'"'` が n=4000 で27ms・n=8000 で
+ * 95ms・n=16000 で推定350ms超——4倍ごとに約4倍、2乗の伸び）。
+ *
+ * ⟹ パス部分の量指定子を `\S{0,64}`（最大64文字）に絞った——現実の
+ * シェルバイナリのパスがこれを超えることは無いと判断した実務上の妥協
+ * （既存の `GH_WORD_SRC` の設計とは異なる、この PR だけの直し方）。後戻りの
+ * 幅が定数（64）に抑えられるので、コマンド位置の候補数に比例して増えても
+ * 全体は線形のまま——実測は
+ * `bash-wait-guard-delete-branch-issue-2104.test.ts` の時間の歯。
+ *
+ * ⚠️ **同じ構造（`(?:\S*\/)?` を伴う）が既存の `GH_WORD_SRC` にも在り、
+ * `GH_PR_MERGE_DELETE_BRANCH_RE` の直接一致（`hasGhPrMergeDeleteBranch` が
+ * 毎回の深さで先に試す）自体も同じ2乗の後戻りを持つことを、この PR の
+ * 作業中に発見した**（実測: `'a;'.repeat(n) + 'gh pr merge 1
+ * --delete-branch'` を main 2c8876f3 の写しに通すと、n=8000 で74ms・
+ * n=16000 で328ms——同じ4倍/4倍の伸び）。**これはこの PR が作った穴では
+ * ない**（`GH_WORD_SRC` はこの PR で1文字も変えていない、issue #2068 由来）
+ * ——問い1（同じ穴か）で見ると、症状は「別の穴」（すり抜けではなく後戻りの
+ * 性能）であり、問い2（誰が作ったか）では「既存の挙動、この PR は触って
+ * いない」に当たる。⟹ **この PR では直さず、Issue へ落とす**
+ * （AGENTS.md「範囲外でも気づいたことは上げる」）。次に同じ形の入力を見た
+ * 人が立ち止まれるよう、ここにポインタを残す——`GH_WORD_SRC` の doc 参照。
+ */
+const SHELL_NAME_SRC = String.raw`(?:\S{0,64}\/)?(?:bash|dash|ksh|sh|zsh)\b`;
+
+/**
+ * 二重引用符の値（issue #2104 の抽出専用——素朴なエスケープ外しを許す）。
+ *
+ * `DOUBLE_QUOTED_VALUE_SRC`（`--subject`/`--body` 用、「読めないときは
+ * 弾く側」で `\`/`$`/バッククォートを含む時点で不一致にする）とは設計が
+ * 違う。こちらは Issue 本文の指定どおり「素朴に外してよい」——`\` に
+ * よるエスケープを読みながら閉じ引用符まで進む（2つの選択肢
+ * `[^"\\]`/`\\.` の先頭文字が重ならないので後戻りは線形）。閉じていない
+ * 二重引用符はこのパターンに一致しなくなり、`SHELL_DASH_C_ARG_SRC` では
+ * 引用符無し（次の1語）の選択肢へ落ちる——「外せないときは中身をそのまま
+ * 使う＝弾く側に倒す」を、より単純な形（次の1語だけを見る）で実現している。
+ */
+const NESTED_SHELL_DOUBLE_QUOTED_INNER_SRC = String.raw`(?:[^"\\]|\\.)*`;
+
+/** バックスラッシュ1つによる素朴なエスケープを外す（`\X` → `X`）。 */
+function unescapeBackslashes(value: string): string {
+  return value.replace(/\\(.)/g, '$1');
+}
+
+/**
+ * `-c`/`-lc`/`-ec` 直後の引数——二重引用符・単一引用符・引用符無し（次の
+ * 1語）の3択（Issue 本文「引用符が無ければ次の語」）。3つの選択肢の開始
+ * 文字（`"`/`'`/それ以外）が重ならないので、後戻りは要らない。
+ */
+const SHELL_DASH_C_ARG_SRC = String.raw`(?:"(${NESTED_SHELL_DOUBLE_QUOTED_INNER_SRC})"|'([^']*)'|(\S+))`;
+
+/**
+ * `-c`/`-lc`/`-ec` —— 束ねたフラグは「`c` で終わる」ことだけを見る
+ * （`-[A-Za-z]*c\b`）。`-config` のように `c` 以外で終わるフラグは
+ * 一致しない（`\b` が `c` の直後に単語構成文字が続くことを許さない）。
+ */
+const SHELL_DASH_C_FLAG_SRC = String.raw`-[A-Za-z]*c\b`;
+
+const SHELL_DASH_C_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_ARG_SRC}`,
+  'g',
+);
+
+/**
+ * `eval <引数…>` —— 次の境界（`;`/`&&`/`||`/`|`/改行）までを読む。中身の
+ * 引用符外しは `unquoteJoin` が別途行う。
+ */
+const EVAL_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}eval\b[ \t]+((?:(?!;|&&|\|\||\||\n)[\s\S])*)`,
+  'g',
+);
+
+const UNQUOTE_JOIN_RE = /"((?:[^"\\]|\\.)*)"|'([^']*)'/g;
+
+/** `eval` の引数の引用符を外してその場でつなぐ。引用符でない部分はそのまま残す。 */
+function unquoteJoin(value: string): string {
+  return value.replace(
+    UNQUOTE_JOIN_RE,
+    (_whole: string, dq: string | undefined, sq: string | undefined) =>
+      dq !== undefined ? unescapeBackslashes(dq) : (sq ?? ''),
+  );
+}
+
+/**
+ * `ssh [オプション…] <host> <コマンド…>` —— オプションの文法までは解かず、
+ * 次の境界（`;`/`&&`/`||`/`|`/改行）までの区間全体を捉える。中身の抽出
+ * （引用符の中身すべてを拾う）は `extractSshPayloads` が行う。
+ *
+ * パス付き（`/usr/bin/ssh`）のパス部分は `SHELL_NAME_SRC` と同じ理由で
+ * `\S{0,64}` に絞ってある（無制限の `\S*\/` が2乗の後戻りを生む、doc 参照）。
+ */
+const SSH_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:\S{0,64}\/)?ssh\b((?:(?!;|&&|\|\||\||\n)[\s\S])*)`,
+  'g',
+);
+
+const QUOTED_SPAN_RE = /"((?:[^"\\]|\\.)*)"|'([^']*)'/g;
+
+/** ある区間の中の引用符の中身すべてを空白でつなぐ（`ssh`・シェルへのパイプ共通）。 */
+function extractQuotedSpansJoined(segment: string): string {
+  const spans: string[] = [];
+  QUOTED_SPAN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = QUOTED_SPAN_RE.exec(segment)) !== null) {
+    if (m[1] !== undefined) spans.push(unescapeBackslashes(m[1]));
+    else if (m[2] !== undefined) spans.push(m[2]);
+  }
+  return spans.join(' ');
+}
+
+/**
+ * シェルへのパイプの手前の「単純コマンド区間」の開始位置——直近の区切り
+ * 文字（`;`/`&`/`|`/改行）の次、無ければ文字列の先頭。この区切り文字の
+ * 集合は `COMMAND_POSITION_LOOKBEHIND_SRC` の一部（`(`/`)`/バッククォートを
+ * 除く）と同じ考え方——パイプ自身もこの集合に含まれるので、連続する
+ * `a | b | bash` のような形でも、直前のパイプまでの短い区間しか遡らない
+ * （後戻りが入力長に比例して増えない理由、doc「後戻りの設計」参照）。
+ */
+const PIPE_SEGMENT_BOUNDARY_CHARS = new Set([';', '&', '|', '\n']);
+
+function findPrecedingSegmentStart(command: string, beforeIndex: number): number {
+  for (let i = beforeIndex - 1; i >= 0; i--) {
+    const ch = command[i];
+    if (ch !== undefined && PIPE_SEGMENT_BOUNDARY_CHARS.has(ch)) return i + 1;
+  }
+  return 0;
+}
+
+/** `… | bash` / `… | sh`（`-c` が無い形）——パイプの手前の引用符の中身を拾う。 */
+const PIPE_TO_SHELL_TARGET_RE = new RegExp(
+  String.raw`\|[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}`,
+  'g',
+);
+
+/**
+ * `bash <<'EOF' … EOF` / `sh <<EOF … EOF` —— 本体を消さずに中身として見る
+ * （`stripHeredocs` と対になる、issue #2104 専用の抽出）。シェル名と `<<`
+ * のあいだの単純なダッシュ付きフラグ（`-x` 等）は読み飛ばす——`flock`/
+ * `LEADING_COMMAND_PREFIX_SRC` と違い、ここは値を取るかどうかを区別せず
+ * 「ダッシュで始まる1トークン」だけを繰り返し読む（シェル自身のオプション
+ * 文法までは解いていない、既知の限界）。
+ */
+const SHELL_HEREDOC_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}(?:[ \t]+-\S+)*[ \t]*<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\1[^\n]*\n([\s\S]*?)\n[ \t]*\2(?=[\s;&|]|$)`,
+  'g',
+);
+
+function extractShellDashCPayloads(command: string): string[] {
+  const payloads: string[] = [];
+  SHELL_DASH_C_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SHELL_DASH_C_RE.exec(command)) !== null) {
+    if (m[1] !== undefined) payloads.push(unescapeBackslashes(m[1]).trim());
+    else if (m[2] !== undefined) payloads.push(m[2].trim());
+    else if (m[3] !== undefined) payloads.push(m[3].trim());
+  }
+  return payloads;
+}
+
+function extractEvalPayloads(command: string): string[] {
+  const payloads: string[] = [];
+  EVAL_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = EVAL_RE.exec(command)) !== null) {
+    payloads.push(unquoteJoin(m[1] ?? '').trim());
+  }
+  return payloads;
+}
+
+function extractSshPayloads(command: string): string[] {
+  const payloads: string[] = [];
+  SSH_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SSH_RE.exec(command)) !== null) {
+    const joined = extractQuotedSpansJoined(m[1] ?? '').trim();
+    if (joined.length > 0) payloads.push(joined);
+  }
+  return payloads;
+}
+
+function extractPipeToShellPayloads(command: string): string[] {
+  const payloads: string[] = [];
+  PIPE_TO_SHELL_TARGET_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = PIPE_TO_SHELL_TARGET_RE.exec(command)) !== null) {
+    const segmentStart = findPrecedingSegmentStart(command, m.index);
+    const segment = command.slice(segmentStart, m.index);
+    const joined = extractQuotedSpansJoined(segment).trim();
+    if (joined.length > 0) payloads.push(joined);
+  }
+  return payloads;
+}
+
+function extractShellHeredocPayloads(command: string): string[] {
+  const payloads: string[] = [];
+  SHELL_HEREDOC_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SHELL_HEREDOC_RE.exec(command)) !== null) {
+    payloads.push((m[3] ?? '').trim());
+  }
+  return payloads;
+}
+
+/** 5つの入口すべてから、中身の候補をかき集める（順序に意味は無い）。 */
+function extractNestedShellPayloads(command: string): string[] {
+  return [
+    ...extractShellDashCPayloads(command),
+    ...extractEvalPayloads(command),
+    ...extractSshPayloads(command),
+    ...extractPipeToShellPayloads(command),
+    ...extractShellHeredocPayloads(command),
+  ];
+}
+
+function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
   const withoutHeredocs = stripHeredocs(command);
   const withoutQuotedSubjectBodyValues = stripGhPrMergeQuotedSubjectBodyValues(withoutHeredocs);
-  return GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues);
+  if (GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues)) return true;
+  if (depth >= MAX_NESTED_SHELL_DEPTH) return false;
+  for (const payload of extractNestedShellPayloads(command)) {
+    if (payload.length > 0 && hasGhPrMergeDeleteBranch(payload, depth + 1)) return true;
+  }
+  return false;
 }
 
 /**

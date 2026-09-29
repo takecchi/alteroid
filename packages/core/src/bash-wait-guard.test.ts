@@ -316,35 +316,30 @@ describe('inspectBashCommand — gh pr merge --delete-branch: 弾いてはいけ
     expect(inspectBashCommand('gh pr merge 123 -dev').blocked).toBe(false);
   });
 
-  // ⚠️ 弾けない形（doc「この検出器が弾けないと分かっている形」）。構文
-  // （コマンド位置）しか見ていないので、`bash -c` の引用符の中に本物の
-  // `gh pr merge --delete-branch` が在っても、この検出器はここでは検出
-  // できない。直していない既知の穴として歯に明記する
-  // （既存のテストの末尾の作法。`gh-run-watch-background` は逆に「弾く」歯
-  // だけを持つので、この穴は `bash-wait-guard.ts` 冒頭の doc の弱さの節と
-  // 同じ位置づけである）。
+  // ⚠️ 弾けない形だった（doc「この検出器が弾けないと分かっている形」）。
+  // 構文（コマンド位置）しか見ていなかったので、`bash -c` の引用符の中に
+  // 本物の `gh pr merge --delete-branch` が在っても、この検出器はここでは
+  // 検出できなかった。
   //
   // ⚠️ issue #2035 の作業（マネージャー mgr-712ad619 からの依頼）で
-  // `it.fails` へ反転した。**この PR は `bash -c '…'` の中身を直していない**
+  // `it.fails` へ反転した。**その PR は `bash -c '…'` の中身を直していない**
   // ——直したのは bash の予約語・グルーピングの直後（`SHELL_KEYWORD_
   // PREFIX_SRC` 参照）であって、単一引用符の中を構文解析することとは別の
-  // 穴である。それでも AGENTS.md「テストを弱めずに直す」の言う「現行の
+  // 穴だった。それでも AGENTS.md「テストを弱めずに直す」の言う「現行の
   // 欠陥を仕様として固定しているテストは反転させてよい」に当たると判断
   // した——`toBe(false)` のままだと「この文字列は通ってよい」が仕様として
   // 固定され、将来 `bash -c` の中身まで見る変更が入っても、このテストは
   // 何も知らせずに緑のまま通り続ける。`it.fails` にして期待値を望む挙動
   // （`blocked: true`）へ反転すれば、直った瞬間にこの `it.fails` 自体が
   // 失敗し（トリップワイヤー）、次に読む者が気づいて `it` へ戻せる。
-  // 3点セット（PR 本文にも転記): (1) 変更した事実 —— 期待値を
-  // `toBe(false)` から `it.fails(...) => toBe(true)` へ反転した（実装は
-  // 1文字も変えていない）。(2) なぜ必要か —— 現状 `blocked: false` を
-  // 「正しい仕様」として固定していたので、既知の欠陥をそのまま仕様化
-  // していた。(3) なぜ保証が弱くならないか —— `it.fails` は「望む挙動
-  // （`true`）が今は通らないこと」を検査しており、実装が変わらない限り
-  // 緑のまま、直った瞬間に赤くなって知らせる——保証の対象（この文字列は
-  // いつか弾かれるべきだと分かっている）は変わらず、消えるのは「この
-  // 欠陥を仕様として固定する」側だけである。
-  it.fails('⚠️ 弾けない形: bash -c の引用符の中は構文しか見ないので通ってしまう', () => {
+  //
+  // ⚠️ **issue #2104 の作業（マネージャー mgr-712ad619 からの依頼）で直り、
+  // `it` へ戻した。** 直し方は「入口（シェルの `-c` 等）を見つけたら中身を
+  // 取り出し、`hasGhPrMergeDeleteBranch` 自身にもう一度かける」再帰
+  // （`bash-wait-guard.ts` の `hasGhPrMergeDeleteBranch` の doc、歯は
+  // `bash-wait-guard-delete-branch-issue-2104.test.ts`）。トリップワイヤーが
+  // 意図どおり働いた——このテストが赤くなって、直った事実を知らせた。
+  it('bash -c の引用符の中の gh pr merge --delete-branch を弾く（issue #2104 で直った）', () => {
     expect(inspectBashCommand("bash -c 'gh pr merge 1 --delete-branch'").blocked).toBe(true);
   });
 });
@@ -372,7 +367,14 @@ describe('inspectBashCommand — gh pr merge --delete-branch: 弾いてはいけ
  * ここが赤くなってトリップワイヤーとして働くはずだった（実際に直った
  * 結果、これらは緑のまま `it` として保証を持つテストになった）。`bash -c
  * '…'` の `it.fails` は issue #2068 の範囲外（構文解析そのものの限界）
- * なので、そのまま残す。
+ * だったので、その時点ではそのまま残した。
+ *
+ * ⚠️ **その `bash -c '…'` の穴自体は、issue #2104（マネージャー
+ * mgr-712ad619 からの依頼）で直った——`it` へ戻し、上の describe の末尾に
+ * 移した（「弾いてはいけないもの」の describe の最後の歯）。この
+ * describe（issue #2035 で足した既知の穴）は9本のままで変わらない
+ * ——`bash -c` の穴は元々別の describe（構文解析そのものの限界）に
+ * 属していたため、ここへは足さない。
  */
 describe('inspectBashCommand — gh pr merge --delete-branch: issue #2035 で歯を足した既知の穴（issue #2068 で直り、it へ戻した）', () => {
   it('sudo 前置き（コマンドとしての前置き、issue #2068 A族で直した）', () => {
