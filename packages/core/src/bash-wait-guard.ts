@@ -599,7 +599,46 @@ function isBoundedLoop(keyword: 'until' | 'while', cond: string, body: string): 
  *   （「全体が `timeout N ...` に包まれていれば有界と読む」）を新しい形の
  *   ためだけに崩さない。⟹ **意図して開けてある逃げ道である。**
  */
-const GH_RUN_WATCH_RE = /\bgh\b(?:(?!;|&&|\|\||\||\n).)*?\brun\s+watch\b/;
+export const GH_RUN_WATCH_RE = /\bgh\b(?:(?!;|&&|\|\||\||\n).)*?\brun\s+watch\b/;
+
+const GH_WORD_SRC_FOR_RUN_WATCH = String.raw`\bgh\b`;
+const RUN_WATCH_SRC = String.raw`\brun\s+watch\b`;
+/** `GH_RUN_WATCH_RE` の `(?:(?!…).)*?` が越えられない位置（`.` が改行類を跨がないことも含む）。 */
+const RUN_WATCH_SEGMENT_END_SRC = /[;|\n\r\u2028\u2029]|&&/.source;
+
+/**
+ * `GH_RUN_WATCH_RE.exec` と同じ最初の一致（位置と末尾）を、線形の走査で探す（#2189）。
+ *
+ * 正規表現のままだと、区切りの無い1行に `gh` が n 個並ぶと、`gh` ごとに区切りまで読み直して
+ * 2乗になる（`gh pr merge 1 ` の繰り返し 4000 回で約 130ms）。行の継続を取り除いた写しにも
+ * 判定をかけるようになって、`\` + 改行で折り返した形もこの1行になる。同じ区切りの中の `gh` は
+ * どれも同じ区切りまでしか読めないので、**区切りの中で最初の `gh` だけ**を試せば足りる。
+ * `run watch` の検索は前へしか進まないので、見つけた一致を使い回す。
+ */
+export function findGhRunWatch(command: string): { index: number; end: number } | null {
+  const gh = new RegExp(GH_WORD_SRC_FOR_RUN_WATCH, 'g');
+  const runWatch = new RegExp(RUN_WATCH_SRC, 'g');
+  const segmentEnd = new RegExp(RUN_WATCH_SEGMENT_END_SRC, 'g');
+  let nextRunWatch: RegExpExecArray | null | undefined;
+  let m: RegExpExecArray | null;
+  while ((m = gh.exec(command)) !== null) {
+    const from = m.index + m[0].length;
+    segmentEnd.lastIndex = from;
+    const end = segmentEnd.exec(command);
+    const limit = end === null ? command.length : end.index;
+    if (nextRunWatch === undefined || (nextRunWatch !== null && nextRunWatch.index < from)) {
+      runWatch.lastIndex = from;
+      nextRunWatch = runWatch.exec(command);
+    }
+    if (nextRunWatch === null) return null;
+    if (nextRunWatch.index < limit) {
+      return { index: m.index, end: nextRunWatch.index + nextRunWatch[0].length };
+    }
+    // 同じ区切りの中の後ろの `gh` も、同じ区切りまでしか読めない。区切りの先へ飛ぶ。
+    gh.lastIndex = Math.max(gh.lastIndex, limit);
+  }
+  return null;
+}
 
 /**
  * 直後に最初に現れる制御演算子が「背景化の `&`」かを見る。
@@ -611,11 +650,11 @@ const GH_RUN_WATCH_RE = /\bgh\b(?:(?!;|&&|\|\||\||\n).)*?\brun\s+watch\b/;
 const FIRST_CONTROL_OPERATOR_RE = /[;\n]|(?<![>&])&(?!&)/;
 
 function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boolean {
-  const match = GH_RUN_WATCH_RE.exec(trimmed);
+  const match = findGhRunWatch(trimmed);
   if (match === null) return false;
   // ツール側の背景指定は、コマンド文字列のどこに在っても背景である。
   if (backgrounded) return true;
-  const rest = trimmed.slice(match.index + match[0].length);
+  const rest = trimmed.slice(match.end);
   const operator = FIRST_CONTROL_OPERATOR_RE.exec(rest);
   if (operator !== null && operator[0] === '&') return true;
   // `setsid`（`-w` / `--wait` が無い形）も背景へ置く形である（#2129）。
@@ -2683,6 +2722,22 @@ export function inspectBashCommand(
   // 見ているので、ここでは影響されない）。
   if (isTimeoutWrapped(trimmed)) return { blocked: false };
 
+  // **待つ形の判定は、元の文字列と、行の継続（`\` + 改行）を取り除いた写しの両方にかける**（#2189。
+  // #2179 のマージのガードと同じ理由）。`tail -f` と背景の run watch の判定は改行を区切りとして
+  // 読むので、`tail \` + 改行 + `-f x` / `gh run watch 1 \` + 改行 + `&` を見落としていた。
+  // どちらかが弾けば弾く（弾く側にしか倒れない）。行の継続が無ければ、写しは作らない。
+  const direct = inspectWaitForms(trimmed, invocation);
+  if (direct.blocked) return direct;
+  const joined = joinLineContinuations(trimmed);
+  return joined === trimmed ? direct : inspectWaitForms(joined, invocation);
+}
+
+/**
+ * 待つ形（背景の `gh run watch`・`tail -f`・待つループ）の判定（#2189 で `inspectBashCommand` から
+ * 切り出した。中身は1文字も変えていない）。`trimmed` は空白を落とした1つのコマンド文字列。
+ * `timeout` で包まれた形の早期 return は、呼び出し側が先に済ませている。
+ */
+function inspectWaitForms(trimmed: string, invocation: BashInvocation): WaitGuardVerdict {
   // 待つ形の判定は、本文を実行しないヒアドキュメントの本文を消した写しにかける（#2130）。
   const waitView = stripDataHeredocsForWaitForms(trimmed);
 

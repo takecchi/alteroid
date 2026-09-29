@@ -286,8 +286,10 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /waiting             マネージャーの返事待ち一覧（番号付き）
 /msg <番号|id> <本文>  マネージャーへ追加指示を送る（質問への回答としては扱われない）
 /reply <番号|requestId> <本文>  マネージャーの質問に自分の言葉で答える（番号は /waiting の並び）
-/allow <番号|requestId> [理由]  マネージャーの実行許可の確認に許可で答える
-/deny  <番号|requestId> [理由]  マネージャーの実行許可の確認に拒否で答える
+/allow [番号|requestId] [理由]  マネージャーの実行許可の確認に許可で答える
+/deny  [番号|requestId] [理由]  マネージャーの実行許可の確認に拒否で答える
+                     番号・requestId を省くと、返事待ちのマネージャーが1本だけ
+                     なら送る（2本以上なら送らずに候補を出す）
 /archive             セッションの生ログ一覧（大きさ・時刻つき）
 /archive <id>        生ログの中身
 /archive sessions    sessionId ごとの行数・使用量の集計（#698）
@@ -998,7 +1000,8 @@ export async function runSlashCommand(
       if (entries.length > 0) {
         stdout.write(
           '  /reply <番号|requestId> <本文> で質問に答える、' +
-            '/allow /deny <番号|requestId> [理由] で実行許可に答えられます\n',
+            '/allow /deny [番号|requestId] [理由] で実行許可に答えられます' +
+            '（1本だけなら番号無しでも打てます）\n',
         );
       }
       return 'ok';

@@ -48,18 +48,57 @@ export async function resetCommand(options: { yes?: boolean } = {}): Promise<voi
 }
 
 /**
+ * 確認の文の並び。**消した後の報告の見出し（`SUMMARY_LABELS`）から組み立てる**
+ * ——1つの日本語ラベルが複数の `ResetSummary` キーをまとめて指すことがある
+ * （例: 「利用状況の台帳」が `usageDaily` / `usageBaseline` / `usageLedger` /
+ * `usageTurns` / `sessionLog` をまとめて指す。「継続中の依頼」が `schedules` /
+ * `schedulePhases` をまとめて指す）。
+ *
+ * **`confirm-coverage.test.ts` 相当の歯（`reset.test.ts` 内）が、
+ * `SUMMARY_LABELS` の全キーがどこかの group に載っていることを測る。** 新しい
+ * キーを `ResetSummary` / `SUMMARY_LABELS` へ足したのに、ここへ足し忘れると
+ * その歯が落ちる——issue #2196 で `practices` を消した後の報告にだけ足して
+ * 確認の文に足し忘れたのが、まさにこの抜けである。
+ */
+const CONFIRM_GROUPS: { label: string; keys: (keyof ResetSummary)[] }[] = [
+  { label: '記憶', keys: ['memory'] },
+  { label: '日誌', keys: ['journal'] },
+  { label: 'ジョブ', keys: ['jobs'] },
+  { label: '承認待ち', keys: ['approvals'] },
+  { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
+  { label: '受信箱', keys: ['inbox'] },
+  { label: '引き受けた仕事', keys: ['commitments'] },
+  { label: '仕事のやり方', keys: ['practices'] },
+  { label: 'アーカイブ', keys: ['archive'] },
+  { label: 'セッション', keys: ['sessions'] },
+  { label: '実行環境プロファイル', keys: ['profile'] },
+  {
+    label: '利用状況の台帳',
+    keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
+  },
+];
+
+/** テスト（`reset.test.ts`）が group と `SUMMARY_LABELS` の対応を検算するために読む。 */
+export const RESET_CONFIRM_GROUPS_FOR_TEST = CONFIRM_GROUPS;
+
+/** `confirm()` が出す確認の文そのもの。テストから直接読めるよう分けてある（対話は `readline` を使うため）。 */
+export function buildConfirmMessage(): string {
+  const list = CONFIRM_GROUPS.map((group) => group.label).join('・');
+  return (
+    '本当に削除しますか？\n' +
+    `${list}を全部消します。\n` +
+    '認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログイン' +
+    'アカウントは消しません。\n' +
+    '取り消せません。\n'
+  );
+}
+
+/**
  * **`y` / `Y` ではなく `yes` の全文を要求する。** 1文字の誤打（他の質問への
  * 反射的な `y`）で取り返しのつかない操作が通らないようにするため。
  */
 async function confirm(): Promise<boolean> {
-  stdout.write(
-    '本当に削除しますか？\n' +
-      '記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けた仕事・' +
-      'アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を全部消します。\n' +
-      '認証トークンのプール・マネージャーへ降ろす環境変数・Web UI のログイン' +
-      'アカウントは消しません。\n' +
-      '取り消せません。\n',
-  );
+  stdout.write(buildConfirmMessage());
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     const answer = await rl.question('続けるなら yes と入力してください: ');
@@ -69,7 +108,7 @@ async function confirm(): Promise<boolean> {
   }
 }
 
-const SUMMARY_LABELS: [keyof ResetSummary, string][] = [
+export const SUMMARY_LABELS: [keyof ResetSummary, string][] = [
   ['memory', '記憶'],
   ['journal', '日誌'],
   ['jobs', 'ジョブ'],

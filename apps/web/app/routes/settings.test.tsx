@@ -37,7 +37,7 @@ import { storeCredential, type Credential } from '~/lib/auth';
 import type { DaemonRevision, RunnerSummary } from '~/lib/types';
 import { json, Providers, stubFetch, storeTestBaseUrl, TEST_BASE_URL } from '~/test-support';
 
-import Settings from './settings';
+import Settings, { RESET_CONFIRM_GROUPS_FOR_TEST, RESET_SUMMARY_LABELS } from './settings';
 
 const BASE: RunnerSummary = {
   label: 'http://runner:4518',
@@ -724,6 +724,63 @@ describe('デーモンを止める（ShutdownDaemon）', () => {
     fireEvent.change(screen.getByPlaceholderText('stop'), { target: { value: 'reset' } });
     const confirmButton = screen.getByRole('button', { name: '止める' }) as HTMLButtonElement;
     expect(confirmButton.disabled).toBe(true);
+  });
+});
+
+/**
+ * ワークスペースのリセット（`ResetWorkspace`。issue #2196）。
+ *
+ * **消す前の確認の文が、消した後の報告の見出し（`RESET_SUMMARY_LABELS`）と
+ * 食い違わないことを固定する。** 実装は `practices`（仕事のやり方）を消して
+ * いるのに、確認の文には元々載っていなかった——やり方を育てていた人間が
+ * 「これは残る」と思ったまま `reset` と打ちうる、という欠落だった。
+ */
+describe('ワークスペースのリセット（ResetWorkspace） — issue #2196', () => {
+  function renderWithReset() {
+    stubFetch((url) => {
+      if (url.includes('/runners')) return json({ runners: [], daemonRevision: DAEMON_UNKNOWN });
+      if (url.includes('/auth/providers')) return json({ providers: [] });
+      if (url.includes('/me')) return json({ status: 'open' });
+      if (url.includes('/health')) return json({ ok: true });
+      return json({});
+    });
+    const router = createMemoryRouter([{ path: '/', Component: Settings }], {
+      initialEntries: ['/'],
+    });
+    render(
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>,
+    );
+  }
+
+  it('カード本体の文に「仕事のやり方」が出る（ダイアログを開く前）', async () => {
+    renderWithReset();
+
+    // ダイアログ（未オープン）とカード本体、両方の <p> がこの文言を持つので
+    // 単数の `findByText` だと「複数一致」になる。「1件以上出るか」を見る。
+    const matches = await screen.findAllByText(/仕事のやり方/);
+    expect(matches.length).toBeGreaterThan(0);
+  });
+
+  it('ダイアログを開いた確認の文にも「仕事のやり方」が出る', async () => {
+    renderWithReset();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'リセットする' }));
+    await screen.findByPlaceholderText('reset');
+
+    const matches = await screen.findAllByText(/仕事のやり方/);
+    expect(matches.length).toBeGreaterThan(0);
+  });
+
+  it('消した後の報告の見出し（RESET_SUMMARY_LABELS）が、全キーどこかの確認の group に載っている', () => {
+    const covered = new Set(RESET_CONFIRM_GROUPS_FOR_TEST.flatMap((group) => group.keys));
+    const labelKeys = RESET_SUMMARY_LABELS.map(([key]) => key);
+
+    for (const key of labelKeys) {
+      expect(covered.has(key), `${key} が確認の group に見当たらない`).toBe(true);
+    }
+    expect(covered.size).toBe(labelKeys.length);
   });
 });
 

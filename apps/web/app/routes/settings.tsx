@@ -467,7 +467,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
 }
 
 /** ラベルは表示用の日本語、キーは `WorkspaceResetSummary` の実欄。 */
-const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
+export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['memory', '記憶'],
   ['journal', '日誌'],
   ['jobs', 'ジョブ'],
@@ -486,6 +486,43 @@ const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
   ['usageTurns', '利用状況（回数）'],
   ['sessionLog', 'SDK セッション生ログ'],
 ];
+
+/**
+ * 確認の文の並び。**消した後の報告の見出し（`RESET_SUMMARY_LABELS`）から
+ * 組み立てる**——1つの日本語ラベルが複数の `WorkspaceResetSummary` キーを
+ * まとめて指すことがある（例: 「利用状況の台帳」が usageDaily・usageBaseline・
+ * usageLedger・usageTurns・sessionLog をまとめて指す。「継続中の依頼」が
+ * schedules・schedulePhases をまとめて指す）。
+ *
+ * **`settings.test.tsx` の歯が、`RESET_SUMMARY_LABELS` の全キーがどこかの
+ * group に載っていることを測る。** 新しいキーを `WorkspaceResetSummary` /
+ * `RESET_SUMMARY_LABELS` へ足したのに、ここへ足し忘れると歯が落ちる
+ * （issue #2196 で `practices` を消した後の報告にだけ足して確認の文に
+ * 足し忘れたのが、まさにこの抜けである）。
+ */
+const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
+  { label: '記憶', keys: ['memory'] },
+  { label: '日誌', keys: ['journal'] },
+  { label: 'ジョブ', keys: ['jobs'] },
+  { label: '承認待ち', keys: ['approvals'] },
+  { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
+  { label: '受信箱', keys: ['inbox'] },
+  { label: '引き受けたまま終わっていない仕事', keys: ['commitments'] },
+  { label: '仕事のやり方', keys: ['practices'] },
+  { label: 'アーカイブ', keys: ['archive'] },
+  { label: 'セッション', keys: ['sessions'] },
+  { label: '実行環境プロファイル', keys: ['profile'] },
+  {
+    label: '利用状況の台帳',
+    keys: ['usageDaily', 'usageBaseline', 'usageLedger', 'usageTurns', 'sessionLog'],
+  },
+];
+
+/** テスト（`settings.test.tsx`）が group と `RESET_SUMMARY_LABELS` の対応を検算するために読む。 */
+export const RESET_CONFIRM_GROUPS_FOR_TEST = RESET_CONFIRM_GROUPS;
+
+/** 確認の文（カード本体・ダイアログの両方）で共有する、消す対象の一覧の文言。 */
+const RESET_CONFIRM_SUMMARY = RESET_CONFIRM_GROUPS.map((group) => group.label).join('・');
 
 function ResetSummaryView({ cleared }: { cleared: WorkspaceResetSummary }) {
   return (
@@ -704,8 +741,7 @@ function ResetWorkspace() {
       />
       <div className="px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed text-muted">
-          記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けたまま終わって
-          いない仕事・アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を 全部消す。
+          {RESET_CONFIRM_SUMMARY}を全部消す。
           <strong className="text-fg">
             認証トークンのプール・マネージャーへ 降ろす環境変数・このログインアカウントは消さない。
           </strong>
@@ -724,9 +760,8 @@ function ResetWorkspace() {
         <div className="p-4">
           <h2 className="text-sm font-semibold">本当に削除しますか？</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted">
-            記憶・日誌・ジョブ・承認待ち・継続中の依頼・受信箱・引き受けたまま終わって
-            いない仕事・アーカイブ・セッション・実行環境プロファイル・利用状況の台帳を
-            全部消します。認証トークンのプール・マネージャーへ降ろす環境変数・この
+            {RESET_CONFIRM_SUMMARY}
+            を全部消します。認証トークンのプール・マネージャーへ降ろす環境変数・この
             ログインアカウントは消しません。<strong className="text-fg">取り消せません。</strong>
           </p>
 
