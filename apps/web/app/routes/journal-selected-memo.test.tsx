@@ -18,8 +18,9 @@
  * `~/hooks/use-journal-window` を丸ごとスタブに差し替え、`JournalBody` が
  * 呼ぶたびに渡ってくる `selected` の引数を捕まえて比べる。
  *
- * **`useMemo` を外す変異への赤黒（実測は PR 報告に貼ってある）**:
- * `git apply` で `useMemo` を外す変異を当てて確かめた。
+ * **`useMemo` を外す変異への赤黒**: repo のハーネス（`.claude/skills/
+ * mutation-testing/mutate.mjs` の `apply`/`restore`）で `useMemo` を外す
+ * 変異を当てて確かめた（実測は PR #2081 の本文に貼ってある）。
  */
 import { fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
