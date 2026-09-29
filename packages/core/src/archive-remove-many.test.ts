@@ -142,6 +142,33 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     expect(texts.some((t) => t.includes('AAABBB'))).toBe(false);
   });
 
+  /**
+   * ⚠️ ここだけは文言そのものを見る（上の doc 「文言ではなく実状態で測る」の
+   * 例外）——測りたいのが実状態ではなく、「消したバイト数」の文言が単位を
+   * 誤読させないことそのものだからである（Issue #2074）。
+   *
+   * `removedBytes`（`bytes` の合計）は本文の素の UTF-8 バイト数であって、
+   * `minStoredBytes` で絞るときの `storedBytes`（置き場の実使用量。pg は
+   * TOAST 圧縮後）とは単位が違い、置き場で解放した量でもない——pg では
+   * 圧縮が効くほど、この数字は「解放した量」を桁で大きく見せる。文言に
+   * その注意が無いと、日誌やクローンの返答を読んだ側は「置き場をこれだけ
+   * 解放した」と誤読する。
+   */
+  it('消したバイト数の文言は、置き場で解放した量ではないと明記する（#2074）', async () => {
+    const stores = createMemoryStores();
+    await seedRemovableSession(stores, 'sess-bytes-label');
+    const call = remover(stores);
+
+    const reply = await call({
+      sessionIds: ['sess-bytes-label'],
+      summary: 'バイト数の文言を確かめる',
+      dryRun: false,
+    });
+
+    expect(reply).toContain('置き場で解放した量ではなく');
+    expect(reply).toContain('storedBytes');
+  });
+
   it('走行中のマネージャーが使っている行は飛ばして数える（overrideReason 無し）', async () => {
     const stores = createMemoryStores();
     const { oldId, newId } = await seedRemovableSession(stores, 'sess-running');

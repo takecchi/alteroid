@@ -12088,7 +12088,8 @@ export function createCloneTools(context: ToolContext) {
             `絞り込み: ${filterText}`,
             skippedLine,
             remainingLine,
-            `消したバイト数（直前の合計）: ${removedBytes.toLocaleString('ja-JP')}`,
+            `消した本文の素のバイト数（UTF-8。直前の合計。置き場で解放した量ではなく、` +
+              `minStoredBytes/storedBytes とは単位が違う）: ${removedBytes.toLocaleString('ja-JP')}`,
             `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
               hiddenRemoved > 0
                 ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`

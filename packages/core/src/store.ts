@@ -1291,6 +1291,15 @@ export interface PendingInboxEvent {
  *   は「本文を落とした」であって「行が消えた」ではない。
  * - **`missing`** — id 自体が存在しない（一度も積まれていない、あるいは
  *   器の外で失われた）。
+ *
+ * 🔴 **`removed` の `bytes` は本文の素の UTF-8 バイト数**（`Buffer.byteLength(body,
+ * 'utf8')` 相当）——3実装（`packages/core/src/archive-contract.ts` の
+ * `verifyTranscriptArchiveContract()`）がこの値で一致することを固定している。
+ * **`ArchiveEntry.storedBytes`（その置き場が実際に使っている量。pg は TOAST
+ * 圧縮後、fs はファイル実バイト数、インメモリは文字列長）とは単位が違う——
+ * 置き場で解放した量ではない。** pg では本文の圧縮が効くほど、この `bytes` は
+ * `storedBytes` より大きく見える（Issue #2074 の実測: 高圧縮な1MBの本文で
+ * 約87倍。`storedBytes` は11,452・`bytes` は1,000,000）。
  */
 export type ArchiveRead =
   | { readonly kind: 'body'; readonly body: string }
@@ -1311,6 +1320,12 @@ export type ArchiveRead =
  * - **`missing`** — id 自体が存在しない。**これだけが失敗である**
  *   （`removed` / `already` はどちらも「その id はいま本文を持たない」という
  *   同じ状態への到達を表す、成功側の2つの経路）。
+ *
+ * 🔴 **`removed` / `already` の `bytes` は本文の素の UTF-8 バイト数**
+ * （`ArchiveRead` の `removed` の `bytes` と同じ契約）。**`ArchiveEntry.storedBytes`
+ * とは単位が違い、置き場で解放した量でもない**——`archive_remove_many`
+ * （`minStoredBytes` で絞る）が返す合計を読むときは、この違いを踏まえること
+ * （Issue #2074）。
  */
 export type ArchiveRemoval =
   | { readonly kind: 'removed'; readonly bytes: number }
@@ -1333,7 +1348,9 @@ export type ArchiveRemoval =
  *
  * `removedAt` / `removedBytes` は `remove()`（tombstone）が起きた行にだけ
  * 載る——`ArchiveRemoval` / `ArchiveRead` の `removed` と同じ情報を、一覧の
- * 面でも見えるようにしたもの。
+ * 面でも見えるようにしたもの。**`removedBytes` の単位も `ArchiveRemoval` の
+ * `removed` と同じ（本文の素の UTF-8 バイト数）——上の `storedBytes` とは
+ * 単位が違い、置き場で解放した量でもない（Issue #2074）。**
  *
  * `continuity`（#698）は `archive()` が積んだ瞬間に判定した、同じ `sessionId`
  * の直前の退避との連続性（`ArchiveContinuity` の doc）。**この機能より前に

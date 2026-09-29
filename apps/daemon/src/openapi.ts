@@ -1891,7 +1891,14 @@ export const archiveEntrySchema = z.object({
   storedBytes: z.number().int(),
   /** tombstone 済み（`DELETE /archive/:id`）の行にだけ載る。 */
   removedAt: z.string().optional(),
-  removedBytes: z.number().int().optional(),
+  removedBytes: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      '消したときの本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で' +
+        '解放した量ではない——pg は TOAST 圧縮の分だけ `storedBytes` より大きく見えうる（#2074）。',
+    ),
   /**
    * 直前の退避との連続性（#698。`@alteroid/core` の `ArchiveContinuity` の
    * doc）。**この機能より前に積まれた行には無いので optional。**
@@ -1944,7 +1951,13 @@ export const archiveSessionsResponseSchema = z.object({
 export const archiveRemoveResponseSchema = z.object({
   ok: z.literal(true),
   id: z.string(),
-  bytes: z.number().int(),
+  bytes: z
+    .number()
+    .int()
+    .describe(
+      '消した本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で解放した' +
+        '量ではない（#2074）。',
+    ),
   alreadyRemoved: z.boolean(),
   /**
    * 走行中のマネージャーの退避を override で消したときだけ載る（#698）。
@@ -1964,7 +1977,13 @@ export const archiveRemoveResponseSchema = z.object({
 export const archiveRemovedResponseSchema = z.object({
   error: z.literal('removed'),
   removedAt: z.string(),
-  bytes: z.number().int(),
+  bytes: z
+    .number()
+    .int()
+    .describe(
+      '消したときの本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で' +
+        '解放した量ではない（#2074）。',
+    ),
   archiveId: z.string().optional(),
 });
 
@@ -2041,7 +2060,13 @@ export const archiveRemoveManyResponseSchema = z.object({
   matched: z.number().int(),
   targeted: z.number().int(),
   removedIds: z.array(z.string()),
-  removedBytes: z.number().int(),
+  removedBytes: z
+    .number()
+    .int()
+    .describe(
+      '消した本文の素の UTF-8 バイト数の合計。`storedBytes`/`minStoredBytes` とは単位が' +
+        '違い、置き場で解放した量ではない（#2074）。',
+    ),
   remaining: z.number().int(),
   skipped: z.object({
     newest: z.number().int(),

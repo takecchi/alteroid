@@ -13441,7 +13441,8 @@
                     "bytes": {
                       "type": "integer",
                       "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
+                      "maximum": 9007199254740991,
+                      "description": "消したときの本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で解放した量ではない（#2074）。"
                     },
                     "archiveId": {
                       "type": "string"
@@ -15431,6 +15432,7 @@
                             "type": "string"
                           },
                           "removedBytes": {
+                            "description": "消したときの本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で解放した量ではない——pg は TOAST 圧縮の分だけ `storedBytes` より大きく見えうる（#2074）。",
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
@@ -15596,7 +15598,8 @@
                     "bytes": {
                       "type": "integer",
                       "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
+                      "maximum": 9007199254740991,
+                      "description": "消したときの本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で解放した量ではない（#2074）。"
                     },
                     "archiveId": {
                       "type": "string"
@@ -15642,7 +15645,8 @@
                     "bytes": {
                       "type": "integer",
                       "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
+                      "maximum": 9007199254740991,
+                      "description": "消した本文の素の UTF-8 バイト数。`storedBytes` とは単位が違い、置き場で解放した量ではない（#2074）。"
                     },
                     "alreadyRemoved": {
                       "type": "boolean"
@@ -15778,7 +15782,8 @@
                     "removedBytes": {
                       "type": "integer",
                       "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
+                      "maximum": 9007199254740991,
+                      "description": "消した本文の素の UTF-8 バイト数の合計。`storedBytes`/`minStoredBytes` とは単位が違い、置き場で解放した量ではない（#2074）。"
                     },
                     "remaining": {
                       "type": "integer",
