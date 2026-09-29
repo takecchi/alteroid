@@ -380,7 +380,9 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
 
     expect(trial.calls).toEqual([]);
     expect(unhandled).toEqual([]);
-    const readableLines = stderrLines(stderr).filter((line) => line.includes('現役の指名が読めない'));
+    const readableLines = stderrLines(stderr).filter((line) =>
+      line.includes('現役の指名が読めない'),
+    );
     expect(readableLines).toHaveLength(1);
     expect(readableLines[0]).toContain(REASON);
   });

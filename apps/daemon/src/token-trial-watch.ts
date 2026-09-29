@@ -282,7 +282,9 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     }
     if (activeUnreadable) {
       activeUnreadable = false;
-      process.stderr.write('alteroidd: 現役の指名が読めるようになった。トークンの試しを再開する。\n');
+      process.stderr.write(
+        'alteroidd: 現役の指名が読めるようになった。トークンの試しを再開する。\n',
+      );
     }
     const target = selectTokenForTrial({
       tokens,
