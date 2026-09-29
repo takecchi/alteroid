@@ -10,6 +10,7 @@ import { useMeasuredHeight } from '~/hooks/use-measured-height';
 import { summarizeJournalEntry } from '~/hooks/queries';
 import { cn } from '~/lib/cn';
 import { formatDateTime, formatRelative } from '~/lib/format';
+import { JournalEntryLinks } from '~/lib/journal-links';
 import { shiftForPrepend } from '~/lib/journal-window';
 import type { JournalEntry, JournalEntryType } from '~/lib/types';
 
@@ -523,10 +524,18 @@ function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean })
       </button>
 
       {open && (
-        // 掘れば生の中身まで降りられること（PRD 可観測性）。要約で止めない。
-        <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-bg p-2 text-xs text-muted">
-          {JSON.stringify(entry, null, 2)}
-        </pre>
+        <>
+          {/*
+            **行が指している実体の詳細へつなぐ（issue #2064）。** 行全体が開閉の
+            `<button>` なので、リンクは要旨の中ではなく開いた後の領域に置く
+            （どれをつなぐかは `journalEntryLinks` の doc）。
+          */}
+          <JournalEntryLinks entry={entry} />
+          {/* 掘れば生の中身まで降りられること（PRD 可観測性）。要約で止めない。 */}
+          <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-bg p-2 text-xs text-muted">
+            {JSON.stringify(entry, null, 2)}
+          </pre>
+        </>
       )}
     </div>
   );
