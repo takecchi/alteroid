@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { migrate } from './migrate.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 import { PgUsageStore } from './usage.js';
 
 /**
@@ -62,9 +63,8 @@ function record(input: {
 }
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  // 空の migrate 済みの自分専用の DB（migrate はワーカーごとに1回、複製をテストごとに）
+  ({ client, db } = await createMigratedPglite());
   store = new PgUsageStore(db);
 });
 
