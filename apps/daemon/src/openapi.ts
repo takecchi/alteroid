@@ -1853,6 +1853,22 @@ export const tokensResponseSchema = z.object({
 });
 
 /**
+ * `PUT /tokens` の応答（issue #2396）。保存後のプール（{@link tokensResponseSchema}）と同じ形。
+ *
+ * **保存した後の表示の読み直しに失敗したとき**は、200 のまま `viewUnavailable` だけを返し、
+ * `tokens` などのプールの欄は載せない（空の `tokens` は「プールが空」と読めてしまうので、
+ * 欄ごと無い）。`viewUnavailable` が在るときは、保存は済んでいる——プールの今の姿は
+ * `GET /tokens` で読み直す。`reason` は固定の文で、失敗の本文は含まない。
+ *
+ * **任意にするのはこの応答だけである。`GET /tokens` の {@link tokensResponseSchema} は
+ * `tokens` が必須のまま。**
+ */
+export const tokensReplaceResponseSchema = tokensResponseSchema.extend({
+  tokens: z.array(agentTokenViewSchema).optional(),
+  viewUnavailable: z.object({ reason: z.string() }).optional(),
+});
+
+/**
  * `POST /tokens/unreadable/remove` の body（issue #2354）。**読めない行を id で指して消す。**
  * `id` は `GET /tokens` の `rowsUnreadable.rows[].id`。id が取れない行は指せない。
  */
@@ -1863,9 +1879,16 @@ export const tokensUnreadableRemoveRequestSchema = z.object({
 /**
  * `POST /tokens/unreadable/remove` の応答。消した後のプール（{@link tokensResponseSchema}）に、
  * 消した id を足す。**id と件数だけで、行の中身（トークンの値）は含まない。**
+ *
+ * **消した後の表示の読み直しに失敗したとき**（issue #2390）は、200 のまま `removedIds` と
+ * `viewUnavailable` だけを返し、`tokens` などのプールの欄は載せない（空の `tokens` は
+ * 「プールが空」と読めてしまうので、欄ごと無い）。`viewUnavailable` が在るときは、
+ * プールの今の姿は `GET /tokens` で読み直す。`reason` は固定の文で、失敗の本文は含まない。
  */
 export const tokensUnreadableRemoveResponseSchema = tokensResponseSchema.extend({
+  tokens: z.array(agentTokenViewSchema).optional(),
   removedIds: z.array(z.string()),
+  viewUnavailable: z.object({ reason: z.string() }).optional(),
 });
 
 /**

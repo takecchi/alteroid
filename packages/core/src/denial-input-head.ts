@@ -278,6 +278,50 @@ function redactKnownSecretPatterns(text: string): string {
 }
 
 /**
+ * 文字列に含まれる秘密を伏せる。**{@link buildDenialInputHead} の伏せ字そのもの**
+ * （環境変数の値 → 既知のトークン・URL の資格・代入・SHA・英数字混在の塊、の順）を、
+ * 切ったり1行にしたりせずに公開する口（issue #2415）。例外の文
+ * （`reasonOf` / `collapseErrorCause` / `RunnerHttpError`）を stderr・応答・日誌へ
+ * 出す前に通すのがこの関数である。
+ *
+ * **線形であること。** 中身は上の各正規表現だけで、それぞれが入力の長さに比例して
+ * 終わる（歯は `denial-input-head.test.ts`）。この関数へ足す規則も、2乗にしないこと。
+ *
+ * @param env 値を伏せる対象の環境変数（`undefined` なら環境変数の網は掛けない）
+ */
+export function redactSecretsInText(text: string, env: NodeJS.ProcessEnv | undefined): string {
+  return redactKnownSecretPatterns(redactSecretEnvValues(text, env));
+}
+
+/**
+ * `params:` 以降。drizzle-orm の `DrizzleQueryError` は
+ * `Failed query: <sql>\nparams: <束縛パラメータ>` という message を持ち、
+ * 束縛パラメータには行の値そのものが並ぶ（`dropped-record.ts` の `reasonOf` の doc の
+ * 実測）。どの伏せ字にも掛からない形（英字だけの短い値など）でも出ないよう、
+ * `params:` から文末までを落とす。
+ *
+ * 線形: リテラル `params:` に合った位置から文末まで1回読むだけで、最初に合った
+ * 位置で文末まで取るので、合う位置が多くても走り出しは高々1回。
+ */
+const QUERY_PARAMS_TAIL = /\bparams:[\s\S]*$/i;
+
+/**
+ * 例外の文（`error.message` など）を、stderr・応答・日誌へ出せる形にする
+ * （issue #2415）。{@link redactSecretsInText} に加えて、`params:` 以降を落とす。
+ * 落としたことが分かるよう `params: [REDACTED]` を残す。
+ *
+ * **`buildDenialInputHead` は `params:` を落とさない**（道具の入力に `params:` が
+ * 現れることは普通にあり、その先頭を残す契約を変えないため）。だから別の関数にして
+ * ある。
+ *
+ * **`params:` の落としを先に行う。** 落とす部分に後続の規則を走らせないので、
+ * 無駄な走査をしないうえ、落とす部分を伏せ字の取りこぼしに頼らない。
+ */
+export function redactErrorText(text: string, env: NodeJS.ProcessEnv | undefined): string {
+  return redactSecretsInText(text.replace(QUERY_PARAMS_TAIL, `params: ${REDACTED}`), env);
+}
+
+/**
  * `toolInput` を1行の文字列にする。**`command` 欄が文字列ならそれを、
  * そうでなければ `JSON.stringify`。** `Bash` 以外の道具（`Edit` の
  * `old_string`/`new_string` 等）はこちらへ落ちる。
@@ -417,7 +461,7 @@ export function buildDenialInputHead(
 ): string | undefined {
   const raw = rawLineOf(toolInput);
   if (raw === undefined) return undefined;
-  const redacted = redactKnownSecretPatterns(redactSecretEnvValues(raw, env));
+  const redacted = redactSecretsInText(raw, env);
   return redacted.length > DENIAL_INPUT_HEAD_LIMIT
     ? `${redacted.slice(0, codePointBoundary(redacted, DENIAL_INPUT_HEAD_LIMIT))}${TRUNCATION_MARK}`
     : redacted;

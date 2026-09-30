@@ -312,6 +312,10 @@ export type TokenRotationOutcome =
        * ことになるうえ、この抑止は「このプロセスが既に起こしたか」であって
        * 鍵の状態ではない。
        *
+       * **probe で通らないと観測したのに設定が読めず冷却を書けなかった回は立たない**
+       * （issue #2391。`settings_unreadable` を返す）。その回は上の組にも記録しない
+       * ので、後で通る回が来れば、そこで1回だけ立つ。
+       *
        * **⚠️ デーモンが入れ替われば、同じ冷却でもう一度立ちうる。** それは正しい
        * ——器が入れ替わった後は、止まっていた層はどのみち起こし直す必要がある。
        */
@@ -1885,7 +1889,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // （`describeTokenRotation` が `signal === 'none'` を日誌に出さない
         // ので、設定が壊れている事実が消える——`token-rotation.ts` の
         // `TokenRotationSignal` の doc）。
+        //
+        // **ただし枠が拒否した事実は覚える**（#2403。#680 の約束——回さない回でも
+        // 覚える——が、設定が読めないあいだだけ崩れていた）。`rememberRejection` は
+        // 設定を読まないので、ここで呼べる。**`stale` は除く**——下の呼び出しが
+        // `stale` の後に在るのと同じ理由（前の世代の鍵の期限を今の鍵として覚える）。
+        // `staleRun` の数え上げはここでは変えない。
         if (!settingsRead.readable) {
+          if (freshness !== 'stale') rememberRejection(active, observation);
           return {
             kind: 'ignored' as const,
             signal: 'settings_unreadable' as const,
@@ -2409,8 +2420,32 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
 
         if (availability === 'ready') {
           /**
+           * **probe で通らないと観測したのに冷却を書けなかった回は `none` にしない**
+           * （issue #2147 の続き）。設定が読めないので冷却の既定（`cooldownMs`）へ
+           * すり替えて書くことはしない（記録は1文字も動かさない）が、`none` で返すと
+           * 「probe で通らない」も「設定が読めない」も出力から消える。
+           * **`signal` は下の設定が読めない門と同じ `settings_unreadable`**
+           * （`stranded` は借りない）。
+           *
+           * **この門は下の `reopened`（冷却明け）の判定より前に置く**（issue #2391）。
+           * 後ろに置くと、冷却が明けて未通知の回で「明けた」と起こす合図を出して
+           * 返り、probe で通らないと観測した事実も設定が読めない事実も消える。
+           * **この回は `announcedReopen` に記録しない** —— 後で本当に通る回が来たとき、
+           * そこで1回だけ `reopened` が出る。
+           */
+          if (probeUnusableUnrecorded !== undefined && !settingsRead.readable) {
+            return {
+              kind: 'ignored' as const,
+              signal: 'settings_unreadable' as const,
+              reason,
+              why: `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${probeUnusableUnrecorded}）。回転の設定が読めなかったので冷却を書けず、この回は回さない（${settingsRead.reason}）`,
+            };
+          }
+          /**
            * **冷却が明けた回だけ、通る状態に戻ったことを1回だけ出す**（#833。
            * {@link TokenRotationOutcome} の `reopened` の doc に理由の全文が在る）。
+           * 上の門（probe で通らないと観測したのに設定が読めない回）を抜けた回だけが
+           * ここへ来る —— その回は記録しないので、通る回が来たときに出る。
            *
            * ここへ来るのは「記録の上で現役が通る」＝**回す契機が無い**ときだが、
            * **止まっていた層を起こす契機は在りうる** —— 直前まで冷却中だった鍵が
@@ -2435,22 +2470,6 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               reason,
               reopened: { tokenId: row.id, label: row.label, cooldownUntil: elapsedAt },
               why: `現役「${row.label}」の冷却が明けた（${elapsedAt}）。**時計で明けたのであって、通ることを観測したわけではない**`,
-            };
-          }
-          /**
-           * **probe で通らないと観測したのに冷却を書けなかった回は `none` にしない**
-           * （issue #2147 の続き）。設定が読めないので冷却の既定（`cooldownMs`）へ
-           * すり替えて書くことはしない（記録は1文字も動かさない）が、`none` で返すと
-           * 「probe で通らない」も「設定が読めない」も出力から消える。
-           * **`signal` は下の設定が読めない門と同じ `settings_unreadable`**
-           * （`stranded` は借りない）。
-           */
-          if (probeUnusableUnrecorded !== undefined && !settingsRead.readable) {
-            return {
-              kind: 'ignored' as const,
-              signal: 'settings_unreadable' as const,
-              reason,
-              why: `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${probeUnusableUnrecorded}）。回転の設定が読めなかったので冷却を書けず、この回は回さない（${settingsRead.reason}）`,
             };
           }
           return {

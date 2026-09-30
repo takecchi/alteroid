@@ -119,7 +119,8 @@ describe('token-pool-service と token-rotator の共有書き込み鍵（Issue 
 
     // 生の状態そのものが実測——ここに出す値を判定の代わりにしない。
     process.stderr.write(
-      `[tooth a] replaceResult.tokens.length=${String(replaceResult.tokens.length)} ` +
+      `[tooth a] replaceResult.kind=${replaceResult.kind} ` +
+        `replaceResult.tokens.length=${String(replaceResult.kind === 'replaced' ? replaceResult.view.tokens.length : -1)} ` +
         `observeResult.kind=${observeResult.kind} ` +
         `hasThird=${String(hasThird)} aCooling=${String(aCooling)} bUnusable=${String(bUnusable)} ` +
         `finalTokens=${JSON.stringify(

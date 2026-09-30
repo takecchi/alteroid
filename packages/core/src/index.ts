@@ -818,6 +818,7 @@ export {
  * 置いて配るまでの1本道（`credential-service.ts`）。**正本はデーモンが持つ。**
  */
 export {
+  CredentialEntryRejectedError,
   createCredentialService,
   resolveCredentialRows,
   type ApplyCredentialsResult,
@@ -951,6 +952,7 @@ export {
 export { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 export {
   createTokenPoolService,
+  type ReplaceResult,
   type TokenPoolService,
   type TokenPoolServiceOptions,
   type TokenPoolView,
@@ -1246,6 +1248,13 @@ export {
  * `error-cause.ts` の doc を見よ。
  */
 export { collapseErrorCause } from './error-cause.js';
+
+/**
+ * 文字列に含まれる秘密の伏せ字（issue #2415）。`redactSecretsInText` は
+ * `buildDenialInputHead` の伏せ字そのもの、`redactErrorText` はそれに `params:`
+ * 以降を落とす規則を足した、例外の文用。`denial-input-head.ts` の doc を見よ。
+ */
+export { redactErrorText, redactSecretsInText } from './denial-input-head.js';
 
 /**
  * `dropped-record.ts` のテスト専用フック（本番の配線には出てこない）。

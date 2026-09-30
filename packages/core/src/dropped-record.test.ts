@@ -18,6 +18,7 @@ import {
   noteUncaught,
   noteUnreadableRecord,
   RECENT_TRACE_LIMIT,
+  reasonOf,
   recentDroppedTraces,
   runnerEventShape,
   type DroppedTraceOrigin,
@@ -2559,5 +2560,53 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
         expect(shape, `${type}: contextUsage の欄名（${field}）`).not.toContain(field);
       }
     }
+  });
+});
+
+/**
+ * issue #2415: `reasonOf` を通る例外の文は、値を伏せてから出る。値はすべて偽である。
+ * 診断に要る部分（SQL 文・エラーの種類・URL の host）は残る。
+ */
+describe('reasonOf / 例外の文の伏せ字（issue #2415）', () => {
+  const FAKE = 'FAKE_SECRET_VALUE_2415B';
+
+  it('drizzle の形（Failed query + params）: 値は出ず、SQL 文は残る', () => {
+    const out = reasonOf(
+      new Error(`Failed query: insert into "agent_tokens" ("value") values ($1)\nparams: ${FAKE}`),
+    );
+    expect(out).not.toContain(FAKE);
+    expect(out).toContain('Failed query: insert into "agent_tokens" ("value") values ($1)');
+  });
+
+  it('drizzle の形（改行の無い版）: 値は出ず、params の印が残る', () => {
+    const out = reasonOf(new Error(`Failed query: select 1 params: ${FAKE}`));
+    expect(out).not.toContain(FAKE);
+    expect(out).toContain('params: [REDACTED]');
+  });
+
+  it('URL の資格: 値は出ず、エラーの種類と host は残る', () => {
+    const out = reasonOf(new TypeError(`fetch failed postgres://u:${FAKE}@db.internal:5432/x`));
+    expect(out).not.toContain(FAKE);
+    expect(out).toContain('TypeError: fetch failed');
+    expect(out).toContain('db.internal:5432');
+  });
+
+  it('Bearer: 値は出ない', () => {
+    expect(reasonOf(new Error(`Bearer ${FAKE}`))).not.toContain(FAKE);
+  });
+
+  it('cause の中に値があっても出ない', () => {
+    const cause = new Error(`Authorization: Bearer ${FAKE}`);
+    const out = reasonOf(new Error('upstream failed', { cause }));
+    expect(out).not.toContain(FAKE);
+    expect(out).toContain('upstream failed');
+  });
+
+  it('noteDroppedRecord の stderr にも値が出ない', async () => {
+    const lines = await captureStderr(() => {
+      noteDroppedRecord('日誌', 'type=x', new Error(`Failed query: select 1 params: ${FAKE}`));
+    });
+    expect(lines.join('')).not.toContain(FAKE);
+    expect(lines.join('')).toContain('Failed query: select 1');
   });
 });

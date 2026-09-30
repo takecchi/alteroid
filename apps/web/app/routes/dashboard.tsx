@@ -41,6 +41,7 @@ import { isUnavailable, UnavailableNote } from './reports';
 const APPROVAL_LIMIT = 5;
 const APPROVALS_MALFORMED_MESSAGE = '承認待ちを読めていない（応答の形が想定と違う）';
 const MANAGER_LIMIT = 5;
+const MANAGERS_MALFORMED_MESSAGE = '稼働中のマネージャーを読めていない（応答の形が想定と違う）';
 const LIVE_LIMIT = 30;
 
 /**
@@ -113,7 +114,13 @@ export default function Dashboard() {
   // 新しい値が `jobStatusSchema` に足されても件数から漏らさないための唯一の
   // 判定を `@alteroid/core/job-status-running` から取る（そちらの doc に
   // 経緯——直書きが実際にこの穴を持っていたこと——がある）。
-  const running = (managers.data?.managers ?? []).filter((m) => isRunningJobStatus(m.status));
+  // **稼働中カードも、形の違う応答（`managers` が配列でない・`null`・鍵なし）を `?? []` で
+  // 0件にしない**（issue #2389。上の承認待ちと同じ判断）。`null` は読み込み中（`undefined`）と
+  // 別で、0件と描けば「いま走っているものはない。」と嘘になり、配列でないオブジェクトは
+  // `.filter` で画面ごと落ちる。
+  const managersList = Array.isArray(managers.data?.managers) ? managers.data.managers : undefined;
+  const managersMalformed = managers.data !== undefined && managersList === undefined;
+  const running = (managersList ?? []).filter((m) => isRunningJobStatus(m.status));
 
   return (
     <Page title="ダッシュボード" description="いま何が動いていて、何が人間を待っているか">
@@ -270,6 +277,8 @@ export default function Dashboard() {
             ) : managers.data === undefined ? (
               // 読み込み中は「走っているものはない」と描かない（issue #2325）。
               <Spinner />
+            ) : managersMalformed ? (
+              <ErrorNote error={new Error(MANAGERS_MALFORMED_MESSAGE)} className="m-4" />
             ) : running.length === 0 ? (
               <>
                 {/* 読めない委譲を、「走っているものはない」で隠さない（issue #2345）。 */}

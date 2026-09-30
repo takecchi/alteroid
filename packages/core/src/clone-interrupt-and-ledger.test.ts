@@ -243,6 +243,8 @@ describe('台帳で片付け済みの報告には印が付く（#391）', () => 
       ),
     );
 
+    // 先に `本文の前半` が在ることを確かめる（無いと `-1 < n` で素通りする）。
+    expect(delivered).toContain('本文の前半');
     expect(delivered.indexOf('本文の前半')).toBeLessThan(
       delivered.indexOf('この報告は台帳で既に片付けている'),
     );
