@@ -731,13 +731,15 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
 
     s.clone.post(tokenPoolReopenedNotice('evt-reopen-1', 4));
     await waitFor(
-      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-1'),
+      async () =>
+        (await s.stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-reopen-1'),
       '1件目（folded=4）が受信箱に積まれる',
     );
 
     s.clone.post(tokenPoolReopenedNotice('evt-reopen-2', 7));
     await waitFor(
-      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-2'),
+      async () =>
+        (await s.stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-reopen-2'),
       '2件目（folded=7）が受信箱に積まれる',
     );
 
@@ -745,7 +747,7 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
     // #1298 の直しの影響を受けない——同じトークン・同じ `how` でも `folded`
     // が違えば `payload.text` が別物になり、`inboxCollapseKey` が別の鍵を
     // 返す ⟹ 2件とも受信箱に残る。
-    const pending = await s.stores.inbox.peekPending();
+    const pending = (await s.stores.inbox.peekPending()).entries;
     const reopenRows = pending.filter(
       (p) => p.event.id === 'evt-reopen-1' || p.event.id === 'evt-reopen-2',
     );
@@ -762,7 +764,8 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
     const identity = '5:tok-aまた通るようになった';
     s.clone.post(tokenPoolReopenedNotice('evt-reopen-1', 4, { identity }));
     await waitFor(
-      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-1'),
+      async () =>
+        (await s.stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-reopen-1'),
       '1件目（folded=4）が受信箱に積まれる（代表）',
     );
 
@@ -779,7 +782,7 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
 
     // **受信箱には1行しか残らない**（#1298 が直る前は2行残っていた——上の
     // 「陽性対照（直す前）」と対になる）。
-    const pending = await s.stores.inbox.peekPending();
+    const pending = (await s.stores.inbox.peekPending()).entries;
     const reopenRows = pending.filter(
       (p) => p.event.id === 'evt-reopen-1' || p.event.id === 'evt-reopen-2',
     );
@@ -819,7 +822,8 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
       tokenPoolReopenedNotice('evt-reopen-a', 0, { tokenId: 'tok-a', identity: 'id-a' }),
     );
     await waitFor(
-      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-a'),
+      async () =>
+        (await s.stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-reopen-a'),
       'トークン A の復帰通知が受信箱に積まれる',
     );
 
@@ -827,12 +831,13 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
       tokenPoolReopenedNotice('evt-reopen-b', 0, { tokenId: 'tok-b', identity: 'id-b' }),
     );
     await waitFor(
-      async () => (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-b'),
+      async () =>
+        (await s.stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-reopen-b'),
       'トークン B の復帰通知が受信箱に積まれる',
     );
 
     // **違うトークンの「戻った」は別の出来事——畳んではいけない。**
-    const pending = await s.stores.inbox.peekPending();
+    const pending = (await s.stores.inbox.peekPending()).entries;
     const reopenRows = pending.filter(
       (p) => p.event.id === 'evt-reopen-a' || p.event.id === 'evt-reopen-b',
     );
@@ -854,7 +859,9 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
     );
     await waitFor(
       async () =>
-        (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-rotated'),
+        (await s.stores.inbox.peekPending()).entries.some(
+          (p) => p.event.id === 'evt-reopen-rotated',
+        ),
       '「回した」の通知が受信箱に積まれる',
     );
 
@@ -866,13 +873,15 @@ describe('クローン — token-pool の復帰通知: 畳んだ件数だけが�
     );
     await waitFor(
       async () =>
-        (await s.stores.inbox.peekPending()).some((p) => p.event.id === 'evt-reopen-recovered'),
+        (await s.stores.inbox.peekPending()).entries.some(
+          (p) => p.event.id === 'evt-reopen-recovered',
+        ),
       '「また通るようになった」の通知が受信箱に積まれる',
     );
 
     // **`how` は根拠の強さが違う（`ReopenedHow` の doc）——同じトークンでも
     // 潰してはいけない。**
-    const pending = await s.stores.inbox.peekPending();
+    const pending = (await s.stores.inbox.peekPending()).entries;
     const reopenRows = pending.filter(
       (p) => p.event.id === 'evt-reopen-rotated' || p.event.id === 'evt-reopen-recovered',
     );

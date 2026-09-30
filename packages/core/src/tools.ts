@@ -221,9 +221,10 @@ import {
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
+  describeUnreadableInboxEvents,
   describeUnreadableCommitment,
 } from './store.js';
-import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
+import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
   STALE_TOKEN_RESTART_ADVICE,
@@ -236,6 +237,7 @@ import {
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
   describeInboxBacklogQueuedInMemory,
+  describeNoReadableInboxEvents,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
   removeInboxEventsAndStopDelivery,
@@ -1177,11 +1179,18 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * （`clone.ts` の `#toolContext()`）は必ず渡す。
  */
 function describeInboxBacklog(
-  rows: readonly PendingInboxEvent[],
+  peek: InboxPeek,
   now: number,
   queuedInMemory: number | undefined,
 ): string {
+  const rows = peek.entries;
   const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory);
+  // issue #2344: 読めない行が在るとき、「未処理の合図は無い」とは言わない。
+  // **「無い」は、読めた行も読めない行も0件のときにしか言わない。**
+  const noReadable = describeNoReadableInboxEvents(peek.unreadable);
+  if (rows.length === 0 && noReadable !== null) {
+    return queuedLine === null ? noReadable : `${noReadable}\n${queuedLine}`;
+  }
   if (rows.length === 0) {
     if (queuedLine === null) return 'クローンの受信箱に未処理の合図は無い。';
     // **器の行は0だが、メモリの配達待ち行列には残っている**——issue #1133 が
@@ -1189,7 +1198,7 @@ function describeInboxBacklog(
     // 「両方空」を騙る文言は出さない。
     return `器の行に未処理の合図は無い（メモリの配達待ち行列は別の軸——下）。\n${queuedLine}`;
   }
-  const breakdown = summarizeInboxBacklog(rows, now);
+  const breakdown = summarizeInboxBacklog(rows, now, peek.unreadable);
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
   // #917 (B): 人間起点の行を、大きい数字（次の行）より先に出す。0件なら
@@ -8950,7 +8959,11 @@ export function createCloneTools(context: ToolContext) {
         // **絞りはツール層で当てる**（`matchesInboxRemoveManyFilter` の doc——
         // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
         // filter は順序を変えず、matched もそのまま古い順になる。
-        const allPending = await stores.inbox.peekPending();
+        const peek = await stores.inbox.peekPending();
+        const allPending = peek.entries;
+        // issue #2344: 読めない行は絞り込みの材料（種類・送信元）が取れないので対象にできない。
+        // **だから「未読が1件も無い」とは言わない**——消していないだけで、受信箱に在る。
+        const unreadableNote = describeUnreadableInboxEvents(peek.unreadable);
         const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
 
         const filterText = [
@@ -8964,7 +8977,9 @@ export function createCloneTools(context: ToolContext) {
 
         if (matched.length === 0) {
           let why: string;
-          if (allPending.length === 0) {
+          if (allPending.length === 0 && unreadableNote !== null) {
+            why = `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
+          } else if (allPending.length === 0) {
             why =
               '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
           } else {

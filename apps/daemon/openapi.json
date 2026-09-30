@@ -16652,7 +16652,7 @@
         "description": "クローンの道具 `manager_list` の中にしか出ていなかった内訳（`summarizeInboxBacklog` の結果）を、人間の入口（HTTP）から読む（issue #783 段0）。`claimPending()` ではなく `peekPending()` を使うので、呼んでも `deliveries`（器の入れ替え回数）は1つも進まない。集計は`@alteroid/core` の同じ関数を通すので、クローンの道具と違う数を返すことは無い。",
         "responses": {
           "200": {
-            "description": "受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く（値を作らない。`InboxStore.pending` と同じ作法）。",
+            "description": "受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く（値を作らない。`InboxStore.pending` と同じ作法）。読めない行が1件でも在るときだけ`unreadable`（id・受信時刻・不正な欄名。本文は載せない）が載る。`total` は読めた行の数で、読めない行は入っていない。**`total: 0` で `unreadable` が無いときだけ「未処理の合図は無い」。**",
             "content": {
               "application/json": {
                 "schema": {
@@ -16836,6 +16836,24 @@
                         }
                       },
                       "required": ["total", "byType", "undelivered"]
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
+                      }
                     }
                   },
                   "required": [

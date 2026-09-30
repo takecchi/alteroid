@@ -1278,7 +1278,7 @@ describe('redeliveryGate（Issue #783 続き）: `#restoreUnread` の門', () =>
     // **受信箱の行がまだ残っている。** `peekPending` は配達回数を進めない安全な
     // 覗き見（`claimPending` と違い、数え直しても状態を動かさない——後述の
     // describe「InboxStore.pending」と同じ道具）。
-    const remaining = await stores.inbox.peekPending();
+    const remaining = (await stores.inbox.peekPending()).entries;
     expect(remaining.some((r) => r.event.id === event.id)).toBe(true);
 
     // **台帳の行も残っている。** `#commit` が開いたまま、閉じてもいない
@@ -1660,7 +1660,7 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
 async function waitForAbsentFromPending(stores: Stores, id: string): Promise<void> {
   const started = Date.now();
   for (;;) {
-    const remaining = await stores.inbox.peekPending();
+    const remaining = (await stores.inbox.peekPending()).entries;
     if (!remaining.some((r) => r.event.id === id)) return;
     if (Date.now() - started > 3000) throw new Error(`${id} が受信箱から消えない`);
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1768,7 +1768,7 @@ describe('拾い直した token-pool の合図の消し込み（Issue #783 段1�
     expect(foldedText).toContain(`source.chars=${DAEMON_RUNNER_REGISTRY_SOURCE.length}`);
     expect(foldedText).toContain(`source.chars=${'webhook-from-somewhere-outside'.length}`);
 
-    const remaining = await stores.inbox.peekPending();
+    const remaining = (await stores.inbox.peekPending()).entries;
     const remainingIds = remaining.map((r) => r.event.id);
     expect(remainingIds).not.toContain(tokenPool.id);
     expect(remainingIds).toContain(runnerRegistry.id);
@@ -1880,7 +1880,7 @@ describe('manager_message.statusAtDelivery は #restoreUnread を通っても積
     const { inputs } = bootClone(stores, 'hang');
     await waitFor(() => inputs.length > 0, '#restoreUnread が拾い直した合図が処理に入る');
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     const restored = pending.find((row) => row.event.id === event.id);
     const restoredClaim =
       restored?.event.type === 'manager_message' ? restored.event.statusAtDelivery : undefined;
@@ -1951,7 +1951,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
 
     await waitForCommitment(stores, 'evt-429-1');
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-429-1');
 
@@ -1977,12 +1977,12 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     clone.post(tokenPoolNotice('evt-tp-3'));
 
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).some((r) => r.event.id === 'evt-tp-1'),
+      async () => (await stores.inbox.peekPending()).entries.some((r) => r.event.id === 'evt-tp-1'),
       '代表（1件目）が受信箱に残る',
     );
     await idle();
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-tp-1');
   });
@@ -2004,11 +2004,11 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     clone.post(webhookNotice('evt-wh-3'));
 
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).length === 3,
+      async () => (await stores.inbox.peekPending()).entries.length === 3,
       '3件とも受信箱に残る',
     );
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending.map((r) => r.event.id).sort()).toEqual(['evt-wh-1', 'evt-wh-2', 'evt-wh-3']);
   });
 
@@ -2039,7 +2039,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     });
 
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).length === 2,
+      async () => (await stores.inbox.peekPending()).entries.length === 2,
       '2件とも受信箱に残る',
     );
   });
@@ -2069,7 +2069,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     });
 
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).length === 2,
+      async () => (await stores.inbox.peekPending()).entries.length === 2,
       '2件とも受信箱に残る',
     );
   });
@@ -2083,7 +2083,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     clone.post(report('本文B', 'evt-text-b'));
 
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).length === 2,
+      async () => (await stores.inbox.peekPending()).entries.length === 2,
       '2件とも受信箱に残る',
     );
   });
@@ -2124,7 +2124,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     // ことを実測済み）。**#391 は受信箱への書き込み自体は減らさない**ので、
     // 受信箱が1件のままであることを併せて見れば、束ねる側（#391）ではなく
     // 畳む側（#954）が効いたことを区別できる。
-    expect(await stores.inbox.peekPending()).toHaveLength(1);
+    expect((await stores.inbox.peekPending()).entries).toHaveLength(1);
   });
 
   it('⭐ 鍵が落ちること: 代表が片付いて受信箱から消えたあと、同じ本文がもう1件届けば新しく1件積まれる（畳み込みが「二度と受け取らない」になっていないことの歯）', async () => {
@@ -2148,11 +2148,12 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     // それを検出する。
     clone.post(report(body, 'evt-drop-2'));
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).some((r) => r.event.id === 'evt-drop-2'),
+      async () =>
+        (await stores.inbox.peekPending()).entries.some((r) => r.event.id === 'evt-drop-2'),
       '2件目が新しく受信箱に積まれる',
     );
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-drop-2');
 
@@ -2170,7 +2171,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     await idle();
     dying.clone.post(report(body, 'evt-cross-1'));
     await waitForCondition(
-      async () => (await stores.inbox.peekPending()).length === 1,
+      async () => (await stores.inbox.peekPending()).entries.length === 1,
       '1件目が受信箱に残る',
     );
 
@@ -2187,7 +2188,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     reborn.clone.post(report(body, 'evt-cross-2'));
     await idle();
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-cross-1');
   });
@@ -2205,7 +2206,7 @@ describe('受信箱の畳み込み（Issue #954 続き。inboxCollapseKey / #fol
     clone.post(report(body, 'evt-stopped-2'));
 
     await idle();
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe('evt-stopped-1');
   });

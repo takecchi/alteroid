@@ -59,6 +59,7 @@ import {
 import type {
   CredentialVaultStore,
   EnvProfile,
+  InboxPeek,
   InboxStore,
   JobStore,
   McpServerStore,
@@ -1826,10 +1827,14 @@ function createMemoryInboxStore(): InboxStore {
       );
       return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
     },
-    async peekPending(): Promise<PendingInboxEvent[]> {
+    async peekPending(): Promise<InboxPeek> {
       // **`claimPending` と違い、`unread` を1文字も書き換えない**
       // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
-      return [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      // メモリ実装は `put()` がスキーマを通すので、壊れた行を持てない（`unreadable` は常に空）。
+      return {
+        entries: [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)),
+        unreadable: [],
+      };
     },
     async removeMany(ids: readonly string[]): Promise<string[]> {
       const removedIds: string[] = [];

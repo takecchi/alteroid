@@ -8,7 +8,7 @@ import {
   inboxRemoveManyTypesSchema,
 } from './inbox-backlog.js';
 import type { InboxEvent } from './schema.js';
-import type { PendingInboxEvent, Stores } from './store.js';
+import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import {
   chunkIdsByChars,
@@ -371,7 +371,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
-    const rest = await stores.inbox.peekPending();
+    const rest = (await stores.inbox.peekPending()).entries;
     expect(rest.map((r) => r.event.id)).toEqual(['e-timer']);
   });
 
@@ -388,7 +388,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
-    const rest = (await stores.inbox.peekPending()) as PendingInboxEvent[];
+    const rest = (await stores.inbox.peekPending()).entries;
     expect(rest.map((r) => r.event.id)).toEqual(['evt-1']);
   });
 
@@ -408,7 +408,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
-    const rest = await stores.inbox.peekPending();
+    const rest = (await stores.inbox.peekPending()).entries;
     expect(rest.map((r) => r.event.id)).toEqual(['evt-1']);
   });
 
@@ -457,7 +457,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
         !removes,
       );
 
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(removes ? ['evt-1'] : ['evt-0', 'evt-1']);
     });
   });
@@ -474,7 +474,7 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
       dryRun: false,
     });
 
-    const rest = await stores.inbox.peekPending();
+    const rest = (await stores.inbox.peekPending()).entries;
     expect(rest.map((r) => r.event.id)).toEqual(['evt-2', 'evt-3', 'evt-4']);
     expect(soleLineWith(reply, '1回の上限')).toContain('残り 3 件');
   });
@@ -566,14 +566,14 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     expect(texts).toHaveLength(1);
 
     for (const id of [...chunks[0]!, ...chunks[1]!]) {
-      const remaining = await stores.inbox.peekPending();
+      const remaining = (await stores.inbox.peekPending()).entries;
       expect(
         remaining.some((r) => r.event.id === id),
         id,
       ).toBe(false);
     }
     for (const id of chunks[2]!) {
-      const remaining = await stores.inbox.peekPending();
+      const remaining = (await stores.inbox.peekPending()).entries;
       expect(
         remaining.some((r) => r.event.id === id),
         id,

@@ -1,8 +1,14 @@
+import { AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { Page, Badge, Button, Card, CardHeader, ErrorNote, Input } from '@alteroid/ui';
 import { useInboxBacklog, useInboxRemoveMany } from '@alteroid/swr';
-import type { InboxBacklog, InboxEventType, InboxRemoveManyResult } from '@alteroid/logic';
+import type {
+  InboxBacklog,
+  InboxEventType,
+  InboxRemoveManyResult,
+  UnreadableInboxEvent,
+} from '@alteroid/logic';
 
 /**
  * `/inbox` — 受信箱（`inbox_events`。まだ処理し終えていない合図の器）の未読を、
@@ -171,13 +177,55 @@ function InboxBacklogCard() {
   );
 }
 
+/**
+ * 読めない合図が在ることを、内訳の上で断る（issue #2344。承認待ちの `UnreadableApprovalNote`
+ * と同じ形）。**0件なら描かない**（0 の行を作らない）。
+ *
+ * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
+ * **「処理済みで消えたのではない」を落とさない**——落とすと、行が消えたのと区別が付かない。
+ */
+const UNREADABLE_INBOX_IDS_SHOWN = 20;
+
+function UnreadableInboxNote({ unreadable }: { unreadable: UnreadableInboxEvent[] }) {
+  if (unreadable.length === 0) return null;
+  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
+  const ids = idsAll.slice(0, UNREADABLE_INBOX_IDS_SHOWN);
+  const idsRest = idsAll.length - ids.length;
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない合図が {unreadable.length} 件ある
+        {ids.length > 0 &&
+          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+        。<strong>壊れた行であって、処理済みで消えたのではない。</strong>
+        下の内訳には載っていない。配られてもいない。
+      </span>
+    </div>
+  );
+}
+
 function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
+  const unreadable = backlog.unreadable ?? [];
   if (backlog.total === 0) {
+    // **「無い」は、読めた行も読めない行も0件のときにしか言わない**（issue #2344）。
+    if (unreadable.length > 0) {
+      return (
+        <div className="flex flex-col gap-3">
+          <UnreadableInboxNote unreadable={unreadable} />
+          <p className="text-xs text-muted-foreground">読めた未処理の合図は無い。</p>
+        </div>
+      );
+    }
     return <p className="text-xs text-muted-foreground">クローンの受信箱に未処理の合図は無い。</p>;
   }
 
   return (
     <div className="flex flex-col gap-3">
+      <UnreadableInboxNote unreadable={unreadable} />
       {backlog.humanOriginated.total > 0 && (
         <div className="flex flex-col gap-1 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
           <p>
