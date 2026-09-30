@@ -5,12 +5,12 @@ import { captureStderr, createCloneTools } from '@alteroid/core';
 import type { CloneHost, InboxEvent, ManagerPool, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
 /**
  * issue #2344。`InboxStore.peekPending()` は、読めない（`inboxEventSchema` に合わない）行を
@@ -139,6 +139,12 @@ function tool(stores: Stores, name: string): (args: Record<string, unknown>) => 
       .join('');
   };
 }
+
+// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
+// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2360、#2337 と同じ形）。
+beforeAll(async () => {
+  await migratedTemplate();
+}, 30_000);
 
 describe.each([
   ['fs', seedFs],
