@@ -202,10 +202,16 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
    * なので、飛ぶ先の要素がまだ無く、同じ画面の中の移動にならない。
    * `#` で始まる（同じ文書内を指す）リンクには `target` / `rel` を
    * 付けないことも、ここで固定する。
+   *
+   * （#2452 で追記）`<Markdown>` は既定で描画ごとの接頭辞（`useId()` 由来）を
+   * id の前に付けるようになった。このテストは id の**形**（`user-content-` +
+   * `fn-N` / `fnref-N`、`footnote-label`）を逐語で固定しているので、
+   * `idPrefix=""`（接頭辞なし）で描いて、下の assert は1行も変えずに残している。
+   * 既定（接頭辞あり）の側は、下の「1画面に2つ描いても…」で見る。
    */
   it('本文中の参照と末尾の脚注が、id で相互に辿れる（死んだリンクにならない）', async () => {
     const md = ['Here is a note[^1].', '', '[^1]: The note text.'].join('\n');
-    const { container } = render(<Markdown>{md}</Markdown>);
+    const { container } = render(<Markdown idPrefix="">{md}</Markdown>);
 
     // 本文中の参照（上付きの「1」へのリンク）。
     const ref = container.querySelector('sup a');
@@ -273,10 +279,12 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
    *
    * 直し方は `className` を丸ごと通すのではなく、受け取った `className` に
    * `sr-only` が含まれるときだけ `sr-only` を付ける（他のクラスは通さない）。
+   *
+   * （#2452 で追記）id を逐語で見るので、上のテストと同じく `idPrefix=""` で描く。
    */
   it('脚注の節の見出し（footnote-label）は sr-only で、見た目のクラスを持たない', async () => {
     const md = ['Here is a note[^1].', '', '[^1]: The note text.'].join('\n');
-    render(<Markdown>{md}</Markdown>);
+    render(<Markdown idPrefix="">{md}</Markdown>);
 
     const label = screen.getByText('Footnotes');
     expect(label.id).toBe('footnote-label');
@@ -285,6 +293,75 @@ describe('GFM: 脚注（本文の参照と末尾の脚注の節）', () => {
     // sr-only だけを持ち、この部品が決める見た目のクラス（HEADINGS.h2）を
     // 持たないこと——両方持っていると「className を丸ごと通した」ことになる。
     expect(label.className).toBe('sr-only');
+  });
+
+  /**
+   * #2452。1画面に `<Markdown>` が2つ（チャットの2通の応答・台帳の2行）あり、
+   * どちらにも同じ脚注 `[^1]` があると、固定の id（`user-content-fn-1` など）が
+   * 重複し、2つ目の参照を押すとブラウザは文書で最初の要素＝1つ目の脚注へ飛ぶ。
+   * 戻るリンクと `aria-describedby` も1つ目を指す。既定の `<Markdown>`
+   * （`idPrefix` を渡さない）で2つ描き、(1) 文書の中で id が重複しないこと、
+   * (2) 各参照・戻るリンク・`aria-describedby` が、**文書全体から引いても**
+   * 自分の側の要素に着くことを見る。文書全体（`document`）から引くのは、
+   * ブラウザの `#` の解決がそうだからである（自分の `container` の中だけで
+   * 引くと、重複していても通ってしまう）。
+   */
+  it('1画面に2つ描いても脚注の id が重複せず、各参照が自分の脚注を指す', async () => {
+    const first = ['一通目[^1]。', '', '[^1]: 一通目の注。'].join('\n');
+    const second = ['二通目[^1]。', '', '[^1]: 二通目の注。'].join('\n');
+    const { container } = render(
+      <>
+        <section data-testid="first">
+          <Markdown>{first}</Markdown>
+        </section>
+        <section data-testid="second">
+          <Markdown>{second}</Markdown>
+        </section>
+      </>,
+    );
+    const a = screen.getByTestId('first');
+    const b = screen.getByTestId('second');
+
+    // (1) id の重複が無いこと。脚注が2つずつ描かれていることを先に確かめる
+    // （描かれていなければ「重複が無い」は空振りで通る）。
+    const ids = Array.from(container.querySelectorAll('[id]')).map((e) => e.id);
+    expect(a.querySelectorAll('sup a[data-footnote-ref]')).toHaveLength(1);
+    expect(b.querySelectorAll('sup a[data-footnote-ref]')).toHaveLength(1);
+    expect(a.querySelectorAll('li[id]')).toHaveLength(1);
+    expect(b.querySelectorAll('li[id]')).toHaveLength(1);
+    expect(ids.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    for (const [own, note] of [
+      [a, '一通目の注。'],
+      [b, '二通目の注。'],
+    ] as const) {
+      // (2) 参照 → 自分の脚注（文書全体で引いても自分の側に着く）。
+      const ref = own.querySelector('sup a[data-footnote-ref]')!;
+      const href = ref.getAttribute('href')!;
+      expect(href.startsWith('#')).toBe(true);
+      const target = document.getElementById(href.slice(1));
+      expect(target).not.toBeNull();
+      expect(target?.tagName).toBe('LI');
+      expect(own.contains(target)).toBe(true);
+      expect(target?.textContent).toContain(note);
+
+      // 戻るリンク → 自分の参照。
+      const backref = target!.querySelector('a[data-footnote-backref]')!;
+      expect(backref).not.toBeNull();
+      const back = document.getElementById(backref.getAttribute('href')!.slice(1));
+      expect(back).toBe(ref);
+
+      // aria-describedby → 自分の脚注の節の見出し。
+      const label = document.getElementById(ref.getAttribute('aria-describedby')!);
+      expect(label).not.toBeNull();
+      expect(label?.textContent).toBe('Footnotes');
+      expect(own.contains(label)).toBe(true);
+
+      // 接頭辞は CSS セレクタでエスケープせずに引ける形であること
+      // （`useId()` の `:` や `«»` を落としていること）。
+      expect(own.querySelector(href)).toBe(target);
+    }
   });
 });
 

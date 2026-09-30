@@ -8964,10 +8964,40 @@ class Clone implements CloneHost {
     // 「もう書いた」と判断して、**本物の日報が永久に書かれない**。
     if (outcome.status === 'failed' && outcome.heldForUsage) return;
 
-    const written: JournalEntry[] = await this.#stores.journal
-      .list({ types: ['daily_report'], limit: DAILY_REPORT_LOOKUP })
-      .catch(() => []);
-    const existing = written.filter(isDailyReport).filter((entry) => entry.date === date);
+    // **読めなかった回を「日報が無い」と扱わない**（#2447）。前は `.catch(() => [])`
+    // で `existing = []` に倒しており、本物の日報がある日にもう1本書き、失敗の回には
+    // 「作れなかった」の印を重ねて書いた。
+    //
+    // **ただし枠での保持のように、書かずに引き下がる形にはしない。** 引き下がる根拠は
+    // 「合図が捨てられず、配り直されて、もう一度ここへ来る」ことだったが、既存確認の
+    // 失敗にはその配り直しが無い。後追い（`missingDailyReportDates`）は起動時に1回
+    // しか走らず、しかも同じ日誌を読む。引き下がれば、動いているあいだその日の
+    // 日報は書かれず、**本物の日報が永久に書かれない**側へ倒れる（上の枠の話と同じ穴）。
+    // しかもターンはもう走り終わっていて、本文は手の中にある。
+    // ⟹ **書く。ただし重複の可能性を日誌に残す。** 失敗の回の印は、1日1件を
+    // 確かめられないので積まない（印が無くても後追いは本物を拾う）。
+    let existing: JournalEntry[] = [];
+    try {
+      const written: JournalEntry[] = await this.#stores.journal.list({
+        types: ['daily_report'],
+        limit: DAILY_REPORT_LOOKUP,
+      });
+      existing = written.filter(isDailyReport).filter((entry) => entry.date === date);
+    } catch (error) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}日報の既存確認（${date}）で日誌を読めなかった` +
+          `（理由: ${reasonOf(error)}）。` +
+          (outcome.status === 'failed'
+            ? 'この日の日報が既にあるか確かめられなかったので、「作れなかった」の印は書かなかった。'
+            : 'この日の日報が既にあるか確かめられないまま書いた。同じ日に日報が2本ある' +
+              'ならこの回の重複（消さずに日誌から辿ること）。'),
+      });
+      if (outcome.status === 'failed') return;
+    }
     // **印の付いた行は「日報がある」と数えない**（`schema.ts` の `unavailable` の
     // doc）。数えると、後から本物を書き直す道が閉じる。
     if (existing.some(isWrittenDailyReport)) return;

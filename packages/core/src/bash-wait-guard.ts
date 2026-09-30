@@ -2216,19 +2216,62 @@ type OutsideQuoteScanState = 'outside' | 'single' | 'double' | 'ansiC' | 'unknow
  * 立っており、意図的に踏み込まない。
  */
 function computeOutsideQuoteMask(command: string): boolean[] {
+  return computeQuoteScan(command).outside;
+}
+
+/**
+ * `computeOutsideQuoteMask` の本体。引用符の外かを表す `outside` に加え、**シェルのコメント**
+ * （`#` から行末の改行の手前まで）の位置を `comment` で返す（#2424）。
+ *
+ * ## コメント（`comment` 状態。#2424）
+ *
+ * `outside` のとき、**語頭**の `#`（先頭、または直前が空白・改行・`;` `&` `|` `(` `)`）が来たら、
+ * 次の改行の手前までがコメント。bash はコメントの中を実行せず、引用符も開かない——だから
+ * コメントの中の `-t '` を開き引用符と読むと、次の行の本物の `gh pr merge --delete-branch` まで
+ * 値として潰れて素通しになっていた。コメントの位置は `outside` が false（「外」ではない）で、
+ * 引用符も追わない（`\` も特別扱いしない。bash のコメントは `\` + 改行で続かない）。終わりの
+ * 改行は `outside` へ戻った位置（true）なので、区切りとして数えられる。
+ *
+ * 語頭でない `#`（`foo#bar` / `$#` / `${#x}` / `a=#x` / `'a'#b` / `\ #`（エスケープした空白の直後））と、
+ * 引用符の中の `#` はコメントではない。
+ *
+ * **呼び出し元ごとの読み方**（`outside` をそのまま使うもの・`comment` を別に見るもの）:
+ * - `isSingleSimpleCommand` / `splitOutsideQuoteSimpleCommands`: コメントの中の `;` `|` `&` は区切りでは
+ *   ない（bash も実行しない）。`outside` のまま読んでよい（正しい向き）。
+ * - `blankQuotedInteriorForNonExecutingCommands`: 許可リストの単純コマンドの末尾コメントは空白に潰れる。
+ *   実行されない字面なので正しい向き。許可リスト外の単純コマンドは生のまま（従来どおり）。
+ * - `stripGhPrMergeQuotedSubjectBodyValues`: コメントの中の `-t '` は潰さない。これが #2424 の直し。
+ * - `flattenSeparatorsInsideQuotes`: **`comment` を別に見る**。`outside` のままだとコメントの中の
+ *   区切りを空白にし、`gh pr merge 1 # ; -d` のように実行されない `-d` まで呼び出し区間へ届いて
+ *   偽陽性が増える。コメントの中の区切りは触らず、従来どおりにする。
+ */
+function computeQuoteScan(command: string): { outside: boolean[]; comment: boolean[] } {
   const mask: boolean[] = new Array(command.length);
-  let state: OutsideQuoteScanState = 'outside';
+  const comment: boolean[] = new Array(command.length);
+  let state: OutsideQuoteScanState | 'comment' = 'outside';
+  // 直前の `\` のエスケープが消費した最後の位置（その直後の `#` は語頭ではない）。
+  let escapedEnd = -2;
   for (let i = 0; i < command.length; i++) {
-    mask[i] = state === 'outside';
-    if (state === 'unknown') continue;
     const ch = command[i];
+    if (state === 'comment' && ch === '\n') state = 'outside';
+    mask[i] = state === 'outside';
+    comment[i] = state === 'comment';
+    if (state === 'unknown' || state === 'comment') continue;
     if (state === 'outside') {
       if (ch === '\\') {
         if (i + 1 >= command.length) {
           state = 'unknown';
         } else {
           i += 1;
+          escapedEnd = i;
         }
+      } else if (
+        ch === '#' &&
+        (i === 0 || (i - 1 !== escapedEnd && ' \t\n;&|()'.includes(command[i - 1] as string)))
+      ) {
+        state = 'comment';
+        mask[i] = false;
+        comment[i] = true;
       } else if (ch === '$' && command[i + 1] === "'") {
         // `$'…'`（ANSI-C クオート）—— 2文字のトークンとしてまとめて消費し、
         // 専用の `ansiC` 状態へ遷移する（issue #1991 の作業中に発見。doc
@@ -2267,7 +2310,7 @@ function computeOutsideQuoteMask(command: string): boolean[] {
       }
     }
   }
-  return mask;
+  return { outside: mask, comment };
 }
 
 /**
@@ -2784,11 +2827,12 @@ function joinLineContinuations(command: string): string {
  */
 function flattenSeparatorsInsideQuotes(command: string): string {
   if (!/[\n;|&]/.test(command)) return command;
-  const outside = computeOutsideQuoteMask(command);
+  // コメントの中の区切りは触らない（#2424。`computeQuoteScan` の doc）。
+  const { outside, comment } = computeQuoteScan(command);
   let out = '';
   for (let i = 0; i < command.length; i++) {
     const ch = command[i] as string;
-    out += '\n;|&'.includes(ch) && !outside[i] ? ' ' : ch;
+    out += '\n;|&'.includes(ch) && !outside[i] && !comment[i] ? ' ' : ch;
   }
   return out;
 }

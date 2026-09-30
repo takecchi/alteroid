@@ -1,4 +1,4 @@
-import { readCredential } from './credentials.js';
+import { CredentialsUnreadableError, readCredential } from './credentials.js';
 import * as daemon from './daemon.js';
 
 /**
@@ -139,7 +139,17 @@ function localTarget(baseUrl: string, token: string): Target {
 }
 
 async function remoteTarget(baseUrl: string): Promise<Target> {
-  const credential = await readCredential(baseUrl);
+  let credential: Awaited<ReturnType<typeof readCredential>>;
+  try {
+    credential = await readCredential(baseUrl);
+  } catch (error) {
+    // 在るのに読めない（権限・壊れ）は「ログインしていない」ではない（#2447）。
+    // 文は資格の値を含まない（パスと code まで）。
+    if (error instanceof CredentialsUnreadableError) {
+      return { baseUrl, headers: {}, remote: true, note: error.message };
+    }
+    throw error;
+  }
   if (credential === null) {
     return {
       baseUrl,

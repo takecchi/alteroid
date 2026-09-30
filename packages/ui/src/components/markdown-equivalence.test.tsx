@@ -62,6 +62,49 @@ function current(text: string, components: Parameters<typeof toReact>[1]): strin
   return renderToStaticMarkup(createElement('div', null, toReact(text, components) as ReactNode));
 }
 
+/**
+ * #2452 で `<Markdown>` は脚注の id に描画ごとの接頭辞を付けるようになった
+ * （`toReact` の第3引数 `idPrefix`）。上の `current` は接頭辞なし（既定の空文字列）
+ * で比べ続け、**接頭辞ありの側は下の2つで旧実装と合わせて比べる。**
+ *
+ * - `user-content-fn-N` / `user-content-fnref-N`（id と href）は、旧実装にも
+ *   同じ口がある — `mdast-util-to-hast` の `clobberPrefix` を
+ *   `接頭辞 + 'user-content-'` にして描く（react-markdown の
+ *   `remarkRehypeOptions`）。
+ * - `footnote-label`（節の見出しの id と、参照の `aria-describedby`）は、
+ *   `mdast-util-to-hast` が `clobberPrefix` に関係なく固定で付ける（`lib/footer.js` の
+ *   `id: 'footnote-label'`、`lib/handlers/footnote-reference.js` の
+ *   `ariaDescribedBy: ['footnote-label']`）ので、旧実装には口が無い。
+ *   だから旧実装の出力の**属性値としての** `footnote-label`（`id="…"` と
+ *   `aria-describedby="…"`）だけを、同じ接頭辞付きに置き換えてから比べる。
+ *   本文の文字としての `footnote-label`（コーパスの「id 付きっぽい見出し」）は
+ *   置き換えない。
+ */
+const PREFIX = 'mdtest-';
+
+function legacyPrefixed(text: string, components: Components): string {
+  return renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(ReactMarkdown, {
+        remarkPlugins: [remarkGfmParseOnly, remarkBreaks],
+        remarkRehypeOptions: { clobberPrefix: PREFIX + 'user-content-' },
+        components,
+        children: text,
+      }),
+    ),
+  )
+    .replaceAll('id="footnote-label"', `id="${PREFIX}footnote-label"`)
+    .replaceAll('aria-describedby="footnote-label"', `aria-describedby="${PREFIX}footnote-label"`);
+}
+
+function currentPrefixed(text: string, components: Parameters<typeof toReact>[1]): string {
+  return renderToStaticMarkup(
+    createElement('div', null, toReact(text, components, PREFIX) as ReactNode),
+  );
+}
+
 const FOOTNOTES = `本文[^a] と、もう一度[^a]、別の脚注[^b]。
 
 [^a]: 最初の脚注。
@@ -335,6 +378,33 @@ describe('<Markdown> の描画は react-markdown の旧実装と完全一致す�
     expect(out).toContain('style="text-align:center"');
     expect(out).toContain('data-footnotes="true"');
     expect(out).toContain('aria-describedby="footnote-label"');
+  });
+
+  it.each(ALL)('%s（部品あり・脚注の id に接頭辞）', (_name, text) => {
+    expect(currentPrefixed(text, markdownComponents)).toBe(
+      legacyPrefixed(text, markdownComponents as Components),
+    );
+  });
+
+  it.each(ALL)('%s（部品なし・脚注の id に接頭辞）', (_name, text) => {
+    expect(currentPrefixed(text, {})).toBe(legacyPrefixed(text, {}));
+  });
+
+  it('接頭辞ありの比較が空振りしていない（脚注の id・href・aria-describedby が接頭辞付き）', () => {
+    const md = 'x[^1]\n\n[^1]: y';
+    const now = currentPrefixed(md, {});
+    const before = legacyPrefixed(md, {});
+    expect(now).toContain(`href="#${PREFIX}user-content-fn-1"`);
+    expect(now).toContain(`id="${PREFIX}user-content-fnref-1"`);
+    expect(now).toContain(`id="${PREFIX}user-content-fn-1"`);
+    expect(now).toContain(`href="#${PREFIX}user-content-fnref-1"`);
+    expect(now).toContain(`id="${PREFIX}footnote-label"`);
+    expect(now).toContain(`aria-describedby="${PREFIX}footnote-label"`);
+    // 旧実装の側も、置き換えの後に接頭辞の無い脚注の id を残していないこと。
+    expect(before).toContain(`id="${PREFIX}footnote-label"`);
+    expect(before).not.toContain('"footnote-label"');
+    expect(before).not.toContain('"user-content-');
+    expect(before).not.toContain('"#user-content-');
   });
 
   it('キーなどの警告を出さず、旧実装が出す警告の集合とも一致する', () => {
