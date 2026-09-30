@@ -32,9 +32,23 @@ function at(iso: string | null, now: number): string {
 }
 
 /**
+ * `describeProgress` が受ける形。`ProgressView`（デーモンが返す型。変えない）と違い、
+ * `completeness.unreadableJobs` だけが任意——後から足した欄（issue #2345）なので、
+ * 古いデーモンの応答には無い（CLI は応答を型で検査せず、そのまま渡す。issue #2382）。
+ * `ProgressView` はこの型にそのまま代入できる。
+ */
+export type ProgressViewInput = Omit<ProgressView, 'backlog'> & {
+  backlog: Omit<ProgressView['backlog'], 'completeness'> & {
+    completeness: Omit<ProgressView['backlog']['completeness'], 'unreadableJobs'> & {
+      unreadableJobs?: number;
+    };
+  };
+};
+
+/**
  * 進捗の集計を、人間が読める形へ。**率（%）は出さない。**
  */
-export function describeProgress(view: ProgressView): string {
+export function describeProgress(view: ProgressViewInput): string {
   const { window, backlog, inProgress, throughput, forecast, github, observedAt } = view;
   const now = new Date(observedAt).getTime();
   const lines: string[] = [];
@@ -116,7 +130,9 @@ export function describeProgress(view: ProgressView): string {
     );
   }
   // 委譲の行の欠け（issue #2345）。0 件なら行を作らない（上の行と同じ作法）。
-  if (unreadableJobs !== 0) {
+  // 欄が無い（古いデーモンの応答。issue #2382）ときも何も言わない——「undefined 件」と書かず、
+  // 0 件とも言わない（Web の `progress.tsx` と同じ）。
+  if (unreadableJobs !== undefined && unreadableJobs !== 0) {
     lines.push(
       '',
       `※ 読めない委譲の行が ${String(unreadableJobs)} 件ある。実施中・窓で終えた委譲・進行中（委譲あり）の数は、` +

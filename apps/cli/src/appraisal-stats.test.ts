@@ -175,6 +175,27 @@ describe('appraisalStatsCommand', () => {
     expect(readWithout()).not.toContain('読めない委譲');
   });
 
+  it('欄 unreadableJobs の無い古いデーモンの応答でも、「undefined」を書かず、読めない委譲について何も言わない（#2382）', async () => {
+    replies.push({
+      status: 200,
+      body: statsBody({
+        jobCoverage: {
+          byStatus: [{ status: 'done', total: 5, appraised: 3, unappraised: 2 }],
+          terminalTotal: 5,
+          terminalAppraised: 3,
+          terminalUnappraised: 2,
+          nonTerminalTotal: 1,
+        },
+      }),
+    });
+    const read = captureStdout();
+    await appraisalStatsCommand();
+    const text = read();
+    expect(text).toContain('done: 終端 5 件（評定あり 3 / 評定なし 2）');
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('読めない委譲');
+  });
+
   it('404 は「読めませんでした」を書いて正常終了する（読み取り専用の作法）', async () => {
     replies.push({ status: 404, body: {} });
     const read = captureStdout();
