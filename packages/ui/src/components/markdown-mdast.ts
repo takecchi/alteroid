@@ -18,8 +18,9 @@
  * 最初から React の名前（`aria-label` など）で持つ。
  *
  * 移していないもの（この入力では起きない）: `data.hName` / `hProperties` /
- * `hChildren`、`passThrough`、`unknownHandler`、`clobberPrefix` などの
- * オプション（既定値で固定）、`position`、`yaml` / `toml` ノード、
+ * `hChildren`、`passThrough`、`unknownHandler` などのオプション（既定値で
+ * 固定。`clobberPrefix` も既定の `user-content-` のままで、その前に描画ごとの
+ * `idPrefix` を足すだけ — `mdastToReact` の注釈）、`position`、`yaml` / `toml` ノード、
  * `revert.js`（定義の無い参照を元の書き方へ戻す処理。micromark は定義の無い
  * 参照を参照ノードにしないので届かない — 数万件のランダム入力の差分試験と
  * 等価性コーパスのどれでも一度も呼ばれなかった）。
@@ -185,7 +186,16 @@ function listLoose(node: Parent): boolean {
   return loose;
 }
 
-function convert(tree: Root): Out[] {
+function convert(tree: Root, idPrefix: string): Out[] {
+  // 脚注の id の接頭辞。`mdast-util-to-hast` の `clobberPrefix`（既定
+  // `user-content-`）の前に、描画ごとの `idPrefix` を足す。**脚注の節の見出し
+  // （`footnote-label`）にも同じ `idPrefix` を付ける** — `mdast-util-to-hast` はこの id を
+  // `clobberPrefix` に関係なく固定で付けるが、固定のままだと1画面に
+  // `<Markdown>` が2つあるとき（チャットの各応答・台帳の各行）id が重複し、
+  // 2つ目の `aria-describedby` が1つ目の見出しを指す（#2452）。`idPrefix` が
+  // 空なら旧実装（react-markdown の既定）と1文字も違わない。
+  const clobberPrefix = idPrefix + 'user-content-';
+  const footnoteLabelId = idPrefix + 'footnote-label';
   const definitions = new Map<string, MNode & { type: 'definition' }>();
   const footnotes = new Map<string, MNode & { type: 'footnoteDefinition' }>();
   const footnoteOrder: string[] = [];
@@ -362,10 +372,10 @@ function convert(tree: Root): Out[] {
           el(
             'a',
             {
-              href: '#user-content-fn-' + safeId,
-              id: 'user-content-fnref-' + safeId + (reuse > 1 ? '-' + reuse : ''),
+              href: '#' + clobberPrefix + 'fn-' + safeId,
+              id: clobberPrefix + 'fnref-' + safeId + (reuse > 1 ? '-' + reuse : ''),
               'data-footnote-ref': true,
-              'aria-describedby': 'footnote-label',
+              'aria-describedby': footnoteLabelId,
             },
             [String(counter)],
           ),
@@ -395,7 +405,7 @@ function convert(tree: Root): Out[] {
         el(
           'a',
           {
-            href: '#user-content-fnref-' + safeId + (re > 1 ? '-' + re : ''),
+            href: '#' + clobberPrefix + 'fnref-' + safeId + (re > 1 ? '-' + re : ''),
             'data-footnote-backref': '',
             'aria-label': 'Back to reference ' + (referenceIndex + 1) + (re > 1 ? '-' + re : ''),
             className: 'data-footnote-backref',
@@ -413,13 +423,13 @@ function convert(tree: Root): Out[] {
     } else {
       content.push(...back);
     }
-    items.push(el('li', { id: 'user-content-fn-' + safeId }, wrap(content, true)));
+    items.push(el('li', { id: clobberPrefix + 'fn-' + safeId }, wrap(content, true)));
   }
   if (items.length > 0) {
     out.push(
       '\n',
       el('section', { 'data-footnotes': true, className: 'footnotes' }, [
-        el('h2', { className: 'sr-only', id: 'footnote-label' }, ['Footnotes']),
+        el('h2', { className: 'sr-only', id: footnoteLabelId }, ['Footnotes']),
         '\n',
         el('ol', {}, wrap(items, true)),
         '\n',
@@ -459,9 +469,13 @@ function toChildren(nodes: Out[], components: Components): ReactNode[] {
   });
 }
 
-/** Markdown の構文木を React 要素にする。`components` はタグ名ごとの差し替え。 */
-export function mdastToReact(tree: Root, components: Components): ReactNode {
+/**
+ * Markdown の構文木を React 要素にする。`components` はタグ名ごとの差し替え。
+ * `idPrefix` は脚注の id（参照・定義・節の見出し）と、それを指す `href` /
+ * `aria-describedby` の先頭に付ける（`convert` の冒頭）。
+ */
+export function mdastToReact(tree: Root, components: Components, idPrefix = ''): ReactNode {
   const props: Record<string, unknown> = {};
-  withChildren(props, toChildren(convert(tree), components));
+  withChildren(props, toChildren(convert(tree, idPrefix), components));
   return create(Fragment, props);
 }

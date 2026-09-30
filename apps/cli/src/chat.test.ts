@@ -20,6 +20,7 @@ import {
   renderReportLine,
   renderWaitingList,
   runSlashCommand,
+  splitWorkKindFlag,
   type Listed,
 } from './chat.js';
 import type { Target } from './target.js';
@@ -5688,6 +5689,50 @@ describe('chat の /rate と /rate-manager（評定）', () => {
       reason: '手戻り',
       workKind: 'レビュー',
     });
+  });
+
+  it('splitWorkKindFlag は --kind を空白で区切った形も種類として読む（#2486）', () => {
+    expect(splitWorkKindFlag(['--kind', '実装', 'テストが通った'])).toEqual({
+      workKind: '実装',
+      rest: ['テストが通った'],
+    });
+    expect(splitWorkKindFlag(['理由', '--kind'])).toEqual({ workKind: '', rest: ['理由'] });
+    expect(splitWorkKindFlag(['--kind=実装', '理由'])).toEqual({
+      workKind: '実装',
+      rest: ['理由'],
+    });
+    expect(splitWorkKindFlag(['--kind=実装', '--kind', 'レビュー'])).toEqual({
+      workKind: 'レビュー',
+      rest: [],
+    });
+  });
+
+  it('/rate は --kind 実装 の形でも種類を送り、理由へ混ぜない（#2486）', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 good --kind 実装 テストが通った', client, listed);
+
+    const call = calls.find((c) => c.route === 'POST /commitments/:id/appraise');
+    expect((call?.args as { json: Record<string, unknown> }).json).toEqual({
+      appraisal: 'good',
+      reason: 'テストが通った',
+      workKind: '実装',
+    });
+  });
+
+  it('/rate は値の無い末尾の --kind を送らずに断る（#2486）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ commitments: [commitment({ id: 'cmt-1' })] });
+    const listed = emptyListed();
+
+    await runSlashCommand('/commitments', client, listed);
+    await runSlashCommand('/rate 1 good --kind', client, listed);
+
+    expect(calls.some((c) => c.route === 'POST /commitments/:id/appraise')).toBe(false);
+    expect(read()).toContain('--kind=');
   });
 
   it('/rate は --kind= が空なら送らずに断る', async () => {

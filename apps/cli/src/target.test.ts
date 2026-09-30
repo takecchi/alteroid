@@ -12,7 +12,10 @@ vi.mock('./daemon.js', () => ({
   baseUrl: (info: { port: number }) => `http://127.0.0.1:${info.port}`,
 }));
 
-vi.mock('./credentials.js', () => ({
+vi.mock('./credentials.js', async (importActual) => ({
+  // `target.ts` は `instanceof CredentialsUnreadableError` で読めなかった回を分ける（#2447）。
+  CredentialsUnreadableError: (await importActual<typeof import('./credentials.js')>())
+    .CredentialsUnreadableError,
   readCredential: vi.fn(() => Promise.resolve(null)),
 }));
 

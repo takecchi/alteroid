@@ -192,6 +192,24 @@ function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): n
 }
 
 /**
+ * 2次キー（`id` / `provider` / `subject`）の比較。**UTF-16 のコード単位の順**
+ * （issue #2458）。
+ *
+ * **`localeCompare` を使わないこと。** 照合順（ロケール）で比べるので、大文字と
+ * 小文字、`-` と `_` の前後が C の順と逆になる（`'Bxx'` と `'axx'` は
+ * `localeCompare` では `axx` が先、C では `Bxx` が先）。pg の側は `COLLATE "C"` を
+ * 明示して並べる（`packages/storage-pg/src/auth.ts` の `listAccounts` など）ので、
+ * ここもバイト順に寄せて3実装を揃える。
+ *
+ * ⚠️ コード単位の順が C（UTF-8 のバイト順＝コードポイント順）と食い違うのは、
+ * サロゲートペア（U+10000 以上）と U+E000〜U+FFFF を比べたときだけである。
+ * `id` は base64url の `randomToken` で、ASCII の外は出ない。
+ */
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
  * `listAccounts` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
  *
  * **2次キーが要る理由**: `putAccount` は「既存行を消して末尾へ足す」形
@@ -199,10 +217,11 @@ function compareCreatedAt(a: { createdAt: string }, b: { createdAt: string }): n
  * 更新すると、`compareCreatedAt` だけ（`Array.prototype.sort` は安定）では
  * 更新されたほうが後ろへ回る——「作成順」ではなく「最後に触られた順」に
  * なってしまう。`id` は一意なので、これで並びが完全に決まる（pg の
- * `orderBy(asc(createdAt), asc(id))` と同じ形）。
+ * `orderBy(asc(createdAt), asc(id COLLATE "C"))` と同じ順。`id` はコード単位で
+ * 比べる——`compareCodeUnits` の doc、issue #2458）。
  */
 function compareAccountOrder(a: AuthAccount, b: AuthAccount): number {
-  return compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+  return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 }
 
 /**
@@ -216,8 +235,8 @@ function compareAccountOrder(a: AuthAccount, b: AuthAccount): number {
 function compareIdentityOrder(a: AuthIdentity, b: AuthIdentity): number {
   return (
     compareCreatedAt(a, b) ||
-    a.provider.localeCompare(b.provider) ||
-    a.subject.localeCompare(b.subject)
+    compareCodeUnits(a.provider, b.provider) ||
+    compareCodeUnits(a.subject, b.subject)
   );
 }
 
@@ -229,7 +248,7 @@ function compareIdentityOrder(a: AuthIdentity, b: AuthIdentity): number {
  * 足す」形である（`lastUsedAt` の書き戻し＝`touch()` だけで動く）。
  */
 function compareAccessTokenOrder(a: AccessTokenRecord, b: AccessTokenRecord): number {
-  return compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+  return compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 }
 
 /** 期限切れのログイン要求をいつまでも抱えない（往復用の一時的な行なので）。 */
