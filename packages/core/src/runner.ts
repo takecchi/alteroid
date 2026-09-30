@@ -1971,6 +1971,11 @@ class RunnerSession {
    * `byCause` の切り分けも壊れる。`input` と `continuation` の両方が同じ完了を
    * 指すことになる）。
    *
+   * **例外が1つある（#1554）:** 打ち切り済みの作業者が残した背景処理が終わり、
+   * かつマネージャーが止まっている（`done`）ときだけ、
+   * `#wakeForFinishedBackgroundTaskOutputs` が呼ぶ。打ち切った作業者は自分では
+   * 再開せず、SDK も起こさないためである。
+   *
    * **ただしこれは型にもテストにも書かれておらず、たまたま設計がそうなっている
    * だけの前提である。** 固定しているのは `runner-wakeup.test.ts` の
    * 「`task_notification` を受けても `byCause.input` は増えない」の1本のみ。
@@ -3398,6 +3403,13 @@ class RunnerSession {
           // `SynthesizedNoticeLabel` と同じ語彙を使う）。
           ...(failure === undefined ? {} : { synthesized: 'turn_failed' }),
         });
+        // **#1554: このターンの間に積まれたが、道具呼び出しが無いまま畳まれて
+        // 配達されなかった分を拾う。** `report` を出した後に呼ぶ（`push()` が
+        // 状態を `running` へ戻すので、先に呼ぶと上の `report.status` /
+        // `awaitingBackground` が嘘になる）。`wantsTokenRecycle` の
+        // `wakeInput()` とは独立——`push()` は入力を積んでから起こすので、
+        // 畳み直しの境界条件は積まれた入力を見て待つ側へ倒れる。
+        this.#wakeForFinishedBackgroundTaskOutputs();
         return;
       }
 
@@ -3483,7 +3495,9 @@ class RunnerSession {
    * なら、「打ち切った作業者が残した背景処理が終わった」という配達待ちを
    * 積む（`#annotateCutOffWorkers` が次のマネージャー自身の道具呼び出しで
    * 配達する）。**`output_file` が読めなければ `null` を渡す**（作り物の
-   * パスを主張しない——配達側が「取れなかった」と書く）。
+   * パスを主張しない——配達側が「取れなかった」と書く）。**積んだ直後に、
+   * マネージャーが止まっていれば起こす**（`#wakeForFinishedBackgroundTaskOutputs`。
+   * 走っていれば次の道具呼び出しか、ターンの `result` がそれを拾う）。
    */
   #onTaskNotification(event: AgentDelegationNotified): void {
     const taskId = event.taskId;
@@ -3529,8 +3543,37 @@ class RunnerSession {
           command: this.#stopState.backgroundTaskCommand(taskId),
           outputFile: typeof event.outputFile === 'string' ? event.outputFile : null,
         });
+        this.#wakeForFinishedBackgroundTaskOutputs();
       }
     }
+  }
+
+  /**
+   * 積まれた「打ち切った作業者の背景処理の完了」（#1554）を、マネージャーが
+   * 止まっているときだけ `push()` で届けて起こす。
+   *
+   * 打ち切った作業者は自分では再開しないので、マネージャーがターンを閉じて
+   * 待っていると次の道具呼び出しが来ず、配達待ちが積まれたまま誰も起こさない。
+   * **`stopped` は何もしない（配達待ちも消さない）。`running` も何もしない**
+   * ——次の道具呼び出し（`#annotateCutOffWorkers`）か `#read` の `result` の枝が
+   * 拾う。**`waiting_human` も起こさない（`done` のときだけ）**: `push()` は
+   * 状態を `running` へ戻すので、確認待ちが残ったまま「確認待ちではない」と
+   * 名乗ることになり、`answer()` の宛先（`#pending`）との対応が崩れる。確認待ちが
+   * 解けて走り出せば `running` の経路が拾う。
+   */
+  #wakeForFinishedBackgroundTaskOutputs(): void {
+    if (this.#sdkSession.stopped || this.#sdkSession.status !== 'done') return;
+    const body = this.#drainFinishedBackgroundTaskOutputs();
+    if (body === null) return;
+    this.#emit({
+      type: 'note',
+      managerId: this.#id,
+      text: '打ち切った作業者の背景処理の完了で、止まっていたマネージャーを起こした（#1554）',
+    });
+    this.push(
+      'alteroid が自動で送った知らせである（#1554）。作業者は打ち切られていて、' +
+        `自分では再開しない。\n\n${body}`,
+    );
   }
 
   /**
@@ -4900,7 +4943,10 @@ class RunnerSession {
 
   /**
    * 打ち切った作業者が残した背景処理そのものの完了（Issue #1554）を、
-   * マネージャーへ全件配達する。1件も無ければ `null`。
+   * マネージャーへ全件配達する。1件も無ければ `null`。**配達経路は2つ**
+   * ——マネージャーが走っているときは次の道具呼び出し（`#annotateCutOffWorkers`）、
+   * 止まっているときは `#wakeForFinishedBackgroundTaskOutputs` の `push()`。
+   * どちらも取り出し＝消費なので、二重には届かない。
    *
    * `#drainPendingCutOffNotifications` と同じ形——note は配達時点で1本ずつ
    * 出し（日誌に残す）、マネージャーへ渡す文面は連結して返す。
