@@ -46,21 +46,62 @@ function credentialsPath(): string {
 }
 
 /**
- * 読むだけの口が使う、寛容な読み方。JSON として読めない・トップレベルが
- * オブジェクトでない・ファイルが無い、のどれでも黙って空へ倒す。
+ * 資格ファイルが在るのに読めなかった（issue #2447）。**「ログインしていない」
+ * ではない。** 呼び手はこれを「ログインしていません」と言い換えてはいけない
+ * ——人が `alteroid login` をやり直すと、壊れたファイルは退避され、ほかの
+ * 接続先のログイン情報も空から始まってしまう。
+ *
+ * `message` は人が次に何をすればよいかまで含む。**含めてよいのはファイルの
+ * 場所（パス）と `error.code` まで**——資格情報の値（トークン）も、
+ * `JSON.parse` の例外のメッセージ（入力の断片を載せることがある）も載せない。
+ */
+export class CredentialsUnreadableError extends Error {
+  readonly reason: 'io' | 'corrupt';
+
+  constructor(reason: 'io' | 'corrupt', message: string) {
+    super(message);
+    this.name = 'CredentialsUnreadableError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * 読むだけの口が使う読み方。書く口（{@link readAllStrict}）と同じ3つに分ける。
+ *
+ * - ファイルが無い（`ENOENT`）だけが「無い」——空を返す（ログインしていない）。
+ * - 読めたが JSON でない・トップレベルがオブジェクトでない——壊れている。
+ * - それ以外の読み取りエラー（権限 `EACCES` など）——読めなかった。
+ *
+ * 後ろの2つは {@link CredentialsUnreadableError} を投げる。
  *
  * **退避はしない。** 退避（壊れたファイルを動かして跡を残す）は書く口
  * （`#withCredentials`）だけの仕事——読むだけの `readCredential` がファイルを
  * 動かすと、読んだだけのつもりの呼び出しがディスクへ副作用を持つことになる。
  */
-async function readAllLenient(): Promise<CredentialFile> {
+async function readAllForRead(): Promise<CredentialFile> {
+  const path = credentialsPath();
+  let current: Awaited<ReturnType<typeof readAllStrict>>;
   try {
-    const raw = await readFile(credentialsPath(), 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null ? (parsed as CredentialFile) : {};
-  } catch {
-    return {};
+    current = await readAllStrict();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new CredentialsUnreadableError(
+      'io',
+      `資格情報のファイル（${path}）を読めませんでした（${typeof code === 'string' ? code : '原因不明'}）。` +
+        'ログインしていないのではありません。ファイルの権限と所有者を確かめて、' +
+        '読めるようにしてからもう一度実行してください。',
+    );
   }
+  if (!current.ok) {
+    throw new CredentialsUnreadableError(
+      'corrupt',
+      `資格情報のファイル（${path}）が壊れていて、JSON として読めません。` +
+        'ログインしていないのではありません。ファイルの中身を確かめてください。' +
+        '直さずに alteroid login をやり直すと、このファイルは退避され、' +
+        'ほかの接続先のログイン情報も空から始まります。',
+    );
+  }
+  return current.value;
 }
 
 /** 末尾のスラッシュ違いで別の接続先として溜まらないようにする。 */
@@ -68,8 +109,12 @@ export function credentialKey(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
+/**
+ * 無ければ `null`（`ENOENT` だけ）。在るのに読めなければ
+ * {@link CredentialsUnreadableError} を投げる。
+ */
 export async function readCredential(baseUrl: string): Promise<StoredCredential | null> {
-  const all = await readAllLenient();
+  const all = await readAllForRead();
   return all[credentialKey(baseUrl)] ?? null;
 }
 
