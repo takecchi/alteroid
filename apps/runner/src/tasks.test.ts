@@ -5,6 +5,8 @@ import { stat } from 'node:fs/promises';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { runnerExecutionResourcesSchema } from '@alteroid/core';
+
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { TaskBreakdownReader } from './tasks.js';
@@ -1331,5 +1333,190 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
       expect(result?.reclaim?.signalled).toBe(1);
       expect(calls).toEqual([{ pid: 777, signal: 'SIGTERM' }]);
     });
+  });
+});
+
+/**
+ * 撃たれなかった木の内訳（#2352）。**数えるだけで、撃つ・撃たないの判定は1本も変えない。**
+ *
+ * 偽の /proc に、理由の違う木を並べる。同じ配置を `observe`（判定材料 `sessions` だけ）と
+ * `reclaim`（`reap`）の両方で走らせ、(1) observe は kill を1度も呼ばず、(2) 撃つ側の
+ * fire/hold の結果（撃った pid）は observe が「fire と判定した本数」と同じで、
+ * (3) 理由別の内訳が両者で一致する、ことを固定する。
+ */
+describe('撃たれなかった木の内訳（#2352。判定は変えない）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+
+  function fakeKillFn(): {
+    fn: (pid: number, signal: NodeJS.Signals) => void;
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+  } {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
+  }
+
+  /**
+   * 配置（孤児ルート = ppid 1、sid の意味は下）:
+   *   300 sid=555 live            → 孤児ルート。hold（sidLive）
+   *   301 sid=4242 どちらにも無い → 孤児ルート。hold（sidUnrecognised）
+   *   302 sid 読めない(-1)        → 孤児ルート。hold（sidUnknown）
+   *   303 sid=777 終端済み        → 孤児ルート。fire
+   *   304 sid=778 終端済みだが 778 が実在 → 孤児ルート。hold（sidLeaderPresent）
+   * 孤児ルートに入らない（親が孤児ルートの部分木に居ない）:
+   *   501 ppid=999(走査に無い) sid=555 live   → 親は居ない。wouldFire ではなく sidLive
+   *   400 ppid=501(走査に居る) sid=777        → 親が生きている。もし入っていれば fire
+   *   778 ppid=999 sid=778                    → 親は居ない。sidLeaderPresent
+   */
+  function placeLayout(): void {
+    placeProcess(root, 300, 'a', 'S', 1, 0, 1, 555);
+    placeProcess(root, 301, 'a', 'S', 1, 0, 1, 4242);
+    placeProcess(root, 302, 'a', 'S', 1, 0, 1, -1);
+    placeProcess(root, 303, 'a', 'S', 1, 0, 1, 777);
+    placeProcess(root, 304, 'a', 'S', 1, 0, 1, 778);
+    placeProcess(root, 501, 'a', 'S', 1, 0, 999, 555);
+    placeProcess(root, 400, 'a', 'S', 1, 0, 501, 777);
+    placeProcess(root, 778, 'a', 'S', 1, 0, 999, 778);
+    placeUptime(root, 1000);
+  }
+
+  const view = {
+    liveSessionPidsOf: () => new Set([555]),
+    knownTerminatedSessionPidsOf: () => new Set([777, 778]),
+    anyTrackedDelegationsOf: () => true,
+  };
+
+  const expectedHeld = { sidUnknown: 1, sidLive: 1, sidLeaderPresent: 1, sidUnrecognised: 1 };
+  const expectedOutside = {
+    total: 3,
+    parentInScan: 1,
+    bySid: { wouldFire: 1, sidUnknown: 0, sidLive: 1, sidLeaderPresent: 1, sidUnrecognised: 0 },
+  };
+
+  it('観測の出力は core の runner-protocol の schema を通り、notFired が落ちずに残る', async () => {
+    placeLayout();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID, sessions: view },
+    }).read();
+    const schema = runnerExecutionResourcesSchema.shape.tasks.unwrap().shape.reclaim.unwrap();
+    const parsed = schema.parse(result?.reclaim);
+    expect(parsed.notFired).toEqual(result?.reclaim?.notFired);
+  });
+
+  it('observe + sessions: 理由別に数え、kill は1度も呼ばない', async () => {
+    placeLayout();
+    const { fn: killFn, calls } = fakeKillFn();
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: view },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.mode).toBe('observe');
+    expect(result?.reclaim?.candidates).toBe(5);
+    expect(result?.reclaim?.signalled).toBe(0);
+    expect(calls).toEqual([]);
+    expect(result?.reclaim?.notFired).toEqual({
+      outsideRoots: expectedOutside,
+      held: expectedHeld,
+      observeOnly: 1, // 303 は fire と判定されたが observe なので撃たない
+    });
+  });
+
+  it('reclaim + reap: 同じ配置で撃つのは fire 判定の1本だけ。内訳は observe と一致し、observeOnly は出ない', async () => {
+    placeLayout();
+    const { fn: killFn, calls } = fakeKillFn();
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, reap: view },
+    });
+    const result = await reader.read();
+
+    expect(result?.reclaim?.mode).toBe('reclaim');
+    expect(result?.reclaim?.candidates).toBe(5);
+    expect(result?.reclaim?.signalled).toBe(1);
+    expect(calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
+    expect(result?.reclaim?.notFired?.held).toEqual(expectedHeld);
+    expect(result?.reclaim?.notFired?.outsideRoots).toEqual(expectedOutside);
+    expect(Object.prototype.hasOwnProperty.call(result?.reclaim?.notFired, 'observeOnly')).toBe(
+      false,
+    );
+  });
+
+  it('sessions を渡す前後で、reap 側の発砲（pid と signal）が変わらない', async () => {
+    placeLayout();
+    const without = fakeKillFn();
+    await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: without.fn,
+      reclaim: { childUid: OWN_UID, reap: view },
+    }).read();
+    const withSessions = fakeKillFn();
+    await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: withSessions.fn,
+      // reap があれば sessions は無視される（別の材料を渡しても撃つ判定は動かない）
+      reclaim: {
+        childUid: OWN_UID,
+        reap: view,
+        sessions: {
+          liveSessionPidsOf: () => new Set(),
+          knownTerminatedSessionPidsOf: () => new Set([555, 4242, 999]),
+          anyTrackedDelegationsOf: () => false,
+        },
+      },
+    }).read();
+    expect(withSessions.calls).toEqual(without.calls);
+    expect(withSessions.calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
+  });
+
+  it('委譲が0本(anyTracked=false)なら全部 fire 判定: observe は held が全部0で observeOnly が候補数', async () => {
+    placeLayout();
+    const { fn: killFn, calls } = fakeKillFn();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: { ...view, anyTrackedDelegationsOf: () => false } },
+    }).read();
+    expect(calls).toEqual([]);
+    expect(result?.reclaim?.notFired?.held).toEqual({
+      sidUnknown: 0,
+      sidLive: 0,
+      sidLeaderPresent: 0,
+      sidUnrecognised: 0,
+    });
+    expect(result?.reclaim?.notFired?.observeOnly).toBe(5);
+    expect(result?.reclaim?.notFired?.outsideRoots.bySid?.wouldFire).toBe(3);
+  });
+
+  it('判定材料が無い observe は、理由別を欄ごと出さない（0の行を作らない）。孤児ルート外の本数は走査だけで出る', async () => {
+    placeLayout();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID },
+    }).read();
+    const notFired = result?.reclaim?.notFired;
+    expect(notFired?.outsideRoots).toEqual({ total: 3, parentInScan: 1 });
+    expect(Object.prototype.hasOwnProperty.call(notFired, 'held')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(notFired, 'observeOnly')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(notFired?.outsideRoots, 'bySid')).toBe(false);
+  });
+
+  it('D / Z の孤児ルート外プロセスと、降ろす UID 以外は outsideRoots に数えない', async () => {
+    placeProcess(root, 600, 'a', 'Z', 1, 0, 999, 1);
+    placeProcess(root, 601, 'a', 'D', 1, 0, 999, 1);
+    placeUptime(root, 1000);
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID },
+    }).read();
+    expect(result?.reclaim?.notFired?.outsideRoots).toEqual({ total: 0, parentInScan: 0 });
+    const other = await new TaskBreakdownReader({
+      procRoot: root,
+      reclaim: { childUid: OWN_UID + 1 },
+    }).read();
+    expect(other?.reclaim?.notFired?.outsideRoots.total).toBe(0);
   });
 });

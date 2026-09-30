@@ -240,6 +240,8 @@ export interface ReclaimObservation {
    * `runner-resources.ts` の `pidsOf` と同じ形にしてある）。
    */
   pidsAtScan?: { current: number; max: number };
+  /** 撃たれなかった木の内訳（#2352。{@link ReclaimNotFired}）。 */
+  notFired: ReclaimNotFired;
 }
 
 /** 回収の観測を有効にする設定。**渡さなければ観測そのものが動かない**（＝切ってある）。 */
@@ -258,6 +260,59 @@ export interface ReclaimScanOptions {
    * （既存の「段0 は撃たない」歯がそのまま固定する）。
    */
   reap?: ReclaimReapOptions;
+  /**
+   * **撃たれなかった理由を数えるための判定材料（観測専用。撃つ力を持たない）。**
+   * `reap` とは別名の別の欄で、**これを渡しても `process.kill` へ届く経路は増えない**
+   * ——発砲の経路は `reap` の有無だけで開閉する（`observeReclaim`）。
+   *
+   * 既定の `observe` では `reap` が渡らないので、「sid が生きた委譲のものだったから
+   * hold」と「sid が終わった既知の委譲のものだった」を区別する材料がそもそも無い
+   * （#2352）。ここに同じ3つの関数を渡すと、`reapDecisionFor` と同じ判定で理由を数えられる。
+   * **省略すれば理由別の内訳は出さない**（{@link ReclaimNotFired} の doc。0の行を作らない）。
+   * `reap` が渡っているときは `reap` が使われるので、この欄は無視される。
+   */
+  sessions?: ReclaimSessionView;
+}
+
+/** 判定材料だけ（{@link ReclaimReapOptions} から発砲の猶予を除いたもの）。 */
+export type ReclaimSessionView = Pick<
+  ReclaimReapOptions,
+  'liveSessionPidsOf' | 'knownTerminatedSessionPidsOf' | 'anyTrackedDelegationsOf'
+>;
+
+/** 撃たなかった（hold）理由。`reapDecisionFor` の分岐2・3・4の守り・5に1対1で対応する。 */
+export interface ReclaimHeldCounts {
+  /** sid が読めない（分岐2）。 */
+  sidUnknown: number;
+  /** sid が「いま生きている委譲」のもの（分岐3）。 */
+  sidLive: number;
+  /** sid は終端済みの委譲のものだが、同じ pid が今回の走査に実在する（分岐4の pid 使い回しの守り）。 */
+  sidLeaderPresent: number;
+  /** sid がどちらの集合にも無い（分岐5）。 */
+  sidUnrecognised: number;
+}
+
+/**
+ * 「撃たれなかった木」の内訳（#2352）。**数えるだけで、判定も発砲も変えない。**
+ *
+ * - `outsideRoots`: 降ろす UID が所有し、除外 state でもないのに、孤児ルート
+ *   （`ppid == 1`）の部分木に入っていないプロセス。**そもそも撃つ判定に掛からない。**
+ *   `total` は走査だけで取れる。`parentInScan` はそのうち `ppid` が今回の走査に居るもの
+ *   （親が生きている）。`bySid` は `sessions` / `reap` があるときだけ出る——
+ *   「もし孤児ルートに入っていたら撃たれるか」を同じ判定で分けたもの
+ *   （`wouldFire` が多ければ、撃てる残骸がルートに入っていないという意味になる）。
+ * - `held`: 孤児の候補のうち撃たれなかったものを理由別に。判定材料が無いと出ない。
+ * - `observeOnly`: 判定は fire だが `observe`（`reap` 無し）なので撃たなかった本数。
+ *   `reap` があるとき（撃つ構え）と判定材料が無いときは欄ごと出ない。
+ */
+export interface ReclaimNotFired {
+  outsideRoots: {
+    total: number;
+    parentInScan: number;
+    bySid?: ReclaimHeldCounts & { wouldFire: number };
+  };
+  held?: ReclaimHeldCounts;
+  observeOnly?: number;
 }
 
 /**
@@ -705,11 +760,15 @@ async function observeReclaim(
   // **撃ってよいかの判定材料は、reap が渡っているときだけ1回ずつ取る。**
   // 呼ぶたびに現在値を返す関数なので、同じ回のあいだは1つの値で揃える
   // （BFS の途中で値が動くと、同じ回の中で判定がぶれる）。
-  const liveSessionPids = reclaim.reap?.liveSessionPidsOf() ?? new Set<number>();
-  const knownTerminatedSessionPids =
-    reclaim.reap?.knownTerminatedSessionPidsOf() ?? new Set<number>();
+  //
+  // **#2352: 理由を数えるために、`reap` が無くても `sessions`（観測専用の判定材料）が
+  // あれば同じ判定を回す。** 判定の結果で撃つのは `reclaim.reap !== undefined` の
+  // ときだけ（下の発砲対象の積み込み）——`sessions` は `killFn` へ届く経路を持たない。
+  const view: ReclaimSessionView | undefined = reclaim.reap ?? reclaim.sessions;
+  const liveSessionPids = view?.liveSessionPidsOf() ?? new Set<number>();
+  const knownTerminatedSessionPids = view?.knownTerminatedSessionPidsOf() ?? new Set<number>();
   // **省略時は `true`（安全側）——doc は {@link ReclaimReapOptions.anyTrackedDelegationsOf}。**
-  const anyTrackedDelegations = reclaim.reap?.anyTrackedDelegationsOf?.() ?? true;
+  const anyTrackedDelegations = view?.anyTrackedDelegationsOf?.() ?? true;
   // **pid 使い回しの守り（分岐4だけに効く。レビュー指摘・#1334）。** `scanned` は
   // UID を問わず今回の走査に写った全 pid——`sid` と同じ値の pid がここに実在する
   // なら、そのプロセスがいま session leader そのものである（`setsid` すると
@@ -733,6 +792,9 @@ async function observeReclaim(
   // **撃ってよいと判定した候補だけを積む**（{@link reapDecisionFor}）。
   // `reclaim.reap` が無ければ、この判定自体を呼ばないので常に空のまま。
   const fireCandidates: Array<{ pid: number; starttime: number; numThreads: number }> = [];
+  // #2352: 撃たれなかった候補の理由別と、observe だから撃たなかった本数。
+  const held = emptyHeldCounts();
+  let observeOnly = 0;
 
   // **木ごとに辿る。** `visited` は全体で共有し、二重計上だけを防ぐ
   // （通常の `/proc` ツリーではルートをまたいだ重複は起きないが、壊れた `/proc`
@@ -759,21 +821,38 @@ async function observeReclaim(
         // `setsid` で自分から抜けた子孫は、親（孤児ルート）とは別のセッション ID を
         // 持ちうる——親が「終端した委譲の残骸」でも、その子孫だけが生きた委譲の
         // セッションへ属していれば、その子孫は撃たない。
-        if (
-          reclaim.reap !== undefined &&
-          reapDecisionFor(
-            entry.sid,
-            liveSessionPids,
-            knownTerminatedSessionPids,
-            anyTrackedDelegations,
-            scannedPids,
-          ) === 'fire'
-        ) {
-          fireCandidates.push({
-            pid: entry.pid,
-            starttime: entry.starttime,
-            numThreads: entry.numThreads,
-          });
+        if (view !== undefined) {
+          // **fire/hold を決めるのは従来どおり `reapDecisionFor`。** 理由（下の else）
+          // は、hold と決まった後に同じ材料から引き直すだけで、判定には効かない。
+          if (
+            reapDecisionFor(
+              entry.sid,
+              liveSessionPids,
+              knownTerminatedSessionPids,
+              anyTrackedDelegations,
+              scannedPids,
+            ) === 'fire'
+          ) {
+            // 撃つのは `reap` があるときだけ。無ければ数えるだけ（#2352）。
+            if (reclaim.reap !== undefined) {
+              fireCandidates.push({
+                pid: entry.pid,
+                starttime: entry.starttime,
+                numThreads: entry.numThreads,
+              });
+            } else {
+              observeOnly += 1;
+            }
+          } else {
+            const reason = reapVerdictFor(
+              entry.sid,
+              liveSessionPids,
+              knownTerminatedSessionPids,
+              anyTrackedDelegations,
+              scannedPids,
+            );
+            if (reason !== 'fire') held[reason] += 1;
+          }
         }
       }
 
@@ -784,6 +863,30 @@ async function observeReclaim(
 
     if (treeCandidates > largestTreeCandidates) largestTreeCandidates = treeCandidates;
     if (treeCandidates === 1) singletonTrees += 1;
+  }
+
+  // **孤児ルートの部分木に入らなかった木（#2352）。** 撃つ判定には一切掛からない
+  // ——数えるだけで、上の `candidates` / `fireCandidates` には触れない。材料は
+  // 走査済みの ppid・sid・ownerUid・state だけ（新しい /proc の読み方は足していない）。
+  const outsideRoots = { total: 0, parentInScan: 0 };
+  const outsideBySid = { ...emptyHeldCounts(), wouldFire: 0 };
+  for (const entry of scanned) {
+    if (visited.has(entry.pid)) continue;
+    if (entry.pid === INIT_PID) continue;
+    if (entry.ownerUid !== reclaim.childUid || RECLAIM_EXCLUDED_STATES.has(entry.state)) continue;
+    outsideRoots.total += 1;
+    if (scannedPids.has(entry.ppid)) outsideRoots.parentInScan += 1;
+    if (view !== undefined) {
+      const verdict = reapVerdictFor(
+        entry.sid,
+        liveSessionPids,
+        knownTerminatedSessionPids,
+        anyTrackedDelegations,
+        scannedPids,
+      );
+      if (verdict === 'fire') outsideBySid.wouldFire += 1;
+      else outsideBySid[verdict] += 1;
+    }
   }
 
   // **発砲（SIGTERM → 猶予 → SIGKILL）は reap が渡っているときだけ行う。**
@@ -816,6 +919,13 @@ async function observeReclaim(
     killed: fired.killed,
     freedThreads: fired.freedThreads,
     lastRunAt: nowMs,
+    notFired: {
+      outsideRoots: view === undefined ? outsideRoots : { ...outsideRoots, bySid: outsideBySid },
+      // 判定材料が無ければ理由別は「取れない」——欄ごと省く（0を作らない）。
+      ...(view === undefined ? {} : { held }),
+      // observe（撃つ構えが無い）で判定材料があるときだけ。
+      ...(view !== undefined && reclaim.reap === undefined ? { observeOnly } : {}),
+    },
   };
 
   if (oldestStarttime !== undefined && uptimeSeconds !== undefined) {
@@ -885,11 +995,39 @@ function reapDecisionFor(
   anyTrackedDelegations: boolean,
   scannedPids: ReadonlySet<number>,
 ): 'fire' | 'hold' {
+  return reapVerdictFor(
+    sid,
+    liveSessionPids,
+    knownTerminatedSessionPids,
+    anyTrackedDelegations,
+    scannedPids,
+  ) === 'fire'
+    ? 'fire'
+    : 'hold';
+}
+
+/**
+ * {@link reapDecisionFor} の判定を、hold の理由つきで返す（#2352）。**分岐の並びと
+ * 条件は元の `reapDecisionFor` そのまま**——`reapDecisionFor` はこれを畳んだもの
+ * （`'fire'` 以外はすべて `'hold'`）なので、fire/hold の結果は変わりようがない。
+ */
+function reapVerdictFor(
+  sid: number | undefined,
+  liveSessionPids: ReadonlySet<number>,
+  knownTerminatedSessionPids: ReadonlySet<number>,
+  anyTrackedDelegations: boolean,
+  scannedPids: ReadonlySet<number>,
+): 'fire' | keyof ReclaimHeldCounts {
   if (!anyTrackedDelegations) return 'fire';
-  if (sid === undefined) return 'hold';
-  if (liveSessionPids.has(sid)) return 'hold';
-  if (knownTerminatedSessionPids.has(sid)) return scannedPids.has(sid) ? 'hold' : 'fire';
-  return 'hold';
+  if (sid === undefined) return 'sidUnknown';
+  if (liveSessionPids.has(sid)) return 'sidLive';
+  if (knownTerminatedSessionPids.has(sid))
+    return scannedPids.has(sid) ? 'sidLeaderPresent' : 'fire';
+  return 'sidUnrecognised';
+}
+
+function emptyHeldCounts(): ReclaimHeldCounts {
+  return { sidUnknown: 0, sidLive: 0, sidLeaderPresent: 0, sidUnrecognised: 0 };
 }
 
 /**

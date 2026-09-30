@@ -20,7 +20,12 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
-import { TaskBreakdownReader, type ReclaimReapOptions, type ReclaimScanOptions } from './tasks.js';
+import {
+  TaskBreakdownReader,
+  type ReclaimReapOptions,
+  type ReclaimScanOptions,
+  type ReclaimSessionView,
+} from './tasks.js';
 
 export {
   createRunnerApp,
@@ -241,6 +246,29 @@ export function reclaimScanOf(
   return { childUid: childUser.uid, ...(raw === 'reclaim' && reap !== undefined ? { reap } : {}) };
 }
 
+/**
+ * 撃たない構え（`reap` の無い `ReclaimScanOptions`）に、撃たれなかった理由を数えるための
+ * 判定材料 `sessions` を足す（#2352）。**`reap` は足さない**ので、`process.kill` へ届く経路は
+ * 増えない。すでに `reap` がある（撃つ構え）ならそのまま返す。`undefined`（観測しない）も
+ * そのまま返す。`graceMs` は判定材料ではないので渡さない。
+ */
+export function withObserveOnlySessions(
+  scan: ReclaimScanOptions | undefined,
+  view: ReclaimSessionView,
+): ReclaimScanOptions | undefined {
+  if (scan === undefined || scan.reap !== undefined) return scan;
+  return {
+    ...scan,
+    sessions: {
+      liveSessionPidsOf: view.liveSessionPidsOf,
+      knownTerminatedSessionPidsOf: view.knownTerminatedSessionPidsOf,
+      ...(view.anyTrackedDelegationsOf === undefined
+        ? {}
+        : { anyTrackedDelegationsOf: view.anyTrackedDelegationsOf }),
+    },
+  };
+}
+
 export async function main(): Promise<void> {
   const runnerId = runnerIdOf();
   const workspacePath = process.env.ALTEROID_WORKSPACE || process.cwd();
@@ -372,7 +400,7 @@ export async function main(): Promise<void> {
 
   // **知らない値なら、ここで落とす**（`reclaimScanOf` の doc）。起動してから
   // 黙って既定で走るより、起きないほうが人間には見える。
-  const reclaimScan = reclaimScanOf(process.env, childUser, reap);
+  const reclaimScan = withObserveOnlySessions(reclaimScanOf(process.env, childUser, reap), reap);
 
   /**
    * タスクの内訳を測るリーダー（#315 / #1334）。**孤児の観測・回収を構えるためだけに、

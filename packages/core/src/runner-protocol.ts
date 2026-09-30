@@ -535,6 +535,41 @@ export const runnerExecutionResourcesSchema = z.object({
           pidsAtScan: z
             .object({ current: z.number().nonnegative(), max: z.number().positive() })
             .optional(),
+          /**
+           * 撃たれなかった木の内訳（#2352。`apps/runner/src/tasks.ts` の
+           * `ReclaimNotFired` の doc）。**数えるだけで、撃つ判定には効かない。**
+           *
+           * `held` / `outsideRoots.bySid` は判定材料が渡っていない runner では出ない
+           * ——**「取れない」を 0 に潰さない**。`observeOnly` は撃つ構え（`reclaim`）の
+           * ときと、判定材料が無いときは出ない。**`.optional()` なのは、この欄より前の
+           * runner が持たない窓のためである。**
+           */
+          notFired: z
+            .object({
+              outsideRoots: z.object({
+                total: z.number().int().nonnegative(),
+                parentInScan: z.number().int().nonnegative(),
+                bySid: z
+                  .object({
+                    wouldFire: z.number().int().nonnegative(),
+                    sidUnknown: z.number().int().nonnegative(),
+                    sidLive: z.number().int().nonnegative(),
+                    sidLeaderPresent: z.number().int().nonnegative(),
+                    sidUnrecognised: z.number().int().nonnegative(),
+                  })
+                  .optional(),
+              }),
+              held: z
+                .object({
+                  sidUnknown: z.number().int().nonnegative(),
+                  sidLive: z.number().int().nonnegative(),
+                  sidLeaderPresent: z.number().int().nonnegative(),
+                  sidUnrecognised: z.number().int().nonnegative(),
+                })
+                .optional(),
+              observeOnly: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
         })
         .optional(),
     })

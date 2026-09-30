@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { RECLAIM_ENV_KEY, reclaimScanOf, tokenSha256Of } from './index.js';
+import { RECLAIM_ENV_KEY, reclaimScanOf, tokenSha256Of, withObserveOnlySessions } from './index.js';
 
 /**
  * **合鍵は「同じ値を両方に置くだけ」で済む。** そのうえで、走っている runner に
@@ -221,5 +221,26 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
   /** 降ろす UID が分からない器では、器の常設物と区別できないので観測しない。 */
   it('降ろす UID が無い器では観測しない（取れない軸に数を作らない）', () => {
     expect(reclaimScanOf({}, undefined)).toBeUndefined();
+  });
+});
+
+/** 撃たれなかった理由を数える判定材料（#2352）は、撃つ力を持たない別の欄として足す。 */
+describe('withObserveOnlySessions（観測専用の判定材料を足す）', () => {
+  const view = {
+    liveSessionPidsOf: () => new Set<number>(),
+    knownTerminatedSessionPidsOf: () => new Set<number>(),
+  };
+
+  it('reap の無い構えには sessions だけを足し、reap は足さない', () => {
+    const out = withObserveOnlySessions({ childUid: 1001 }, view);
+    expect(out?.sessions).toBeDefined();
+    expect(out?.reap).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(out, 'reap')).toBe(false);
+  });
+
+  it('reap のある構え（撃つ）と、観測しない構え（undefined）はそのまま返す', () => {
+    const scan = { childUid: 1001, reap: view };
+    expect(withObserveOnlySessions(scan, view)).toBe(scan);
+    expect(withObserveOnlySessions(undefined, view)).toBeUndefined();
   });
 });
