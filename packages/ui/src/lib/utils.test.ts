@@ -70,7 +70,43 @@ function candidateTokens(text: string): string[] {
   return out;
 }
 
-/** `hover:data-[a:b]:!p-4!` → `p-4`。修飾子と重要度の印を外した、class 本体だけを返す。 */
+/**
+ * 本体が `-` で終わるか。末尾に切り出しで付いてきた句読点（`to--;` の `;`、`[to--]` の `]`、
+ * `f(to--)` の `)`）は外して見る。閉じ括弧は、対応する開きが本体に無いときだけ付いてきたものとみなす
+ * （`to-[a-]` `to-(--x)` の閉じ括弧は任意値の一部）。
+ */
+function endsWithDash(base: string): boolean {
+  let end = base.length;
+  const open = { ')': 0, ']': 0 };
+  for (const ch of base) {
+    if (ch === '(') open[')'] += 1;
+    else if (ch === '[') open[']'] += 1;
+  }
+  const closed = { ')': 0, ']': 0 };
+  for (const ch of base) {
+    if (ch === ')' || ch === ']') closed[ch] += 1;
+  }
+  while (end > 0) {
+    const ch = base[end - 1];
+    if (ch === '.' || ch === ',' || ch === ':' || ch === ';') end -= 1;
+    else if ((ch === ')' || ch === ']') && closed[ch] > open[ch]) {
+      closed[ch] -= 1;
+      end -= 1;
+    } else break;
+  }
+  return base[end - 1] === '-';
+}
+
+/**
+ * `hover:data-[a:b]:!p-4!` → `p-4`。修飾子と重要度の印を外した、class 本体だけを返す。
+ *
+ * **class として成り立たない形は空文字を返す**（候補から外す）。Tailwind v4 は、本体が `-` で終わる
+ * 候補を、どの utility でも class と認めない（`to-` `p-4-` `to--`。v4.3.3 の `compile().build()` で確認）。
+ * 走査は文脈を見ないので、`to--;` のようなデクリメントが、tailwind-merge の既定の設定では
+ * `to-*` のグループに当たってしまう（#2350）。tailwind-merge は色などを「どんな文字列でも」
+ * 受けるので、グループの判定の側では弾けない。
+ * 取りこぼしは増えない: 本物の class は `-` で終わらない（任意値は `]` `)` で終わる）。
+ */
 function baseClass(token: string): string {
   let depth = 0;
   let start = 0;
@@ -83,6 +119,7 @@ function baseClass(token: string): string {
   let base = token.slice(start);
   if (base.startsWith('!')) base = base.slice(1);
   if (base.endsWith('!')) base = base.slice(0, -1);
+  if (endsWithDash(base)) return '';
   return base;
 }
 
@@ -161,6 +198,33 @@ describe('cn の tailwind-merge 設定（slim）', () => {
     expect(fullGroupOf('not-a-tailwind-class')).toBeUndefined();
   });
 
+  describe('走査: コードを class と誤検出しない（#2350）', () => {
+    const groupsOf = (code: string): (string | undefined)[] =>
+      candidateTokens(code)
+        .map(baseClass)
+        .filter(Boolean)
+        .map(fullGroupOf)
+        .filter((group) => group !== undefined);
+
+    it('`to--;` `from--` `via--` のようなデクリメントは、どのグループにも当たらない', () => {
+      expect(groupsOf('to--;')).toEqual([]);
+      expect(groupsOf('while (to--) { from--; via-- }')).toEqual([]);
+      expect(groupsOf('const x = [to--, from--, via--];')).toEqual([]);
+    });
+
+    it('対照: 本物の class は今までどおり拾う', () => {
+      const groups = groupsOf(
+        '<div className="to-red-500 from-blue-500 via-green-500 -mt-2 p-4!" />',
+      );
+      expect(groups).toEqual(
+        expect.arrayContaining(['gradient-to', 'gradient-from', 'gradient-via', 'mt', 'p']),
+      );
+      expect(groupsOf("cn('to-[#fff]', `from-(--x)`)")).toEqual(
+        expect.arrayContaining(['gradient-to', 'gradient-from']),
+      );
+    });
+  });
+
   it('使われている class のグループが slim に在る', () => {
     const missing = [...groupTokens]
       .filter(([group]) => !slimGroupIds.has(group))
@@ -173,7 +237,8 @@ describe('cn の tailwind-merge 設定（slim）', () => {
         '足すもの: 下のグループの定義を tailwind-merge の getDefaultConfig() の classGroups',
         '（node_modules/tailwind-merge/dist/bundle-mjs.mjs）から同じ並びの位置へ写し、必要なら',
         'conflictingClassGroups の該当の行も写す。使う scale* / theme が utils.ts に無ければ足す。',
-        '**足す前に、例の class が本当に class か確かめる** — 走査は文脈を見ないので `to--;` のようなコードも拾う（#2350）。誤検出なのに足すと、使わないグループが bundle に戻る。',
+        '**足す前に、例の class が本当に class か確かめる** — 走査は文脈を見ないので `to--;` のようなコードも拾う（#2350）。',
+        '確かめ方: 例の token を grep -rn で探し、class の文字列の中か（コードの式でないか）を見る。誤検出なのに足すと、使わないグループが bundle に戻る。',
         '(グループ: 例の class)',
       ].join('\n'),
     ).toEqual([]);
