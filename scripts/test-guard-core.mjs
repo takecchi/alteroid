@@ -139,6 +139,13 @@ export function extractScope(argv) {
  * `TEST_ARGS_THAT_DO_NOT_NARROW`（許可リストの目的が違う——あちらは「絞り込ま
  * ないと分かっているもの」）を流用しない。`-t` は名前で絞り込むが、値は
  * パスへの部分一致の対象ではないので範囲判定に持ち込まない。
+ *
+ * **これは「vitest を読み込まずに済ませる」ための最小の既知集合であって、
+ * 網羅ではない。** ここに無いフラグ（`--testTimeout` / `--retry` / `--bail` /
+ * `--project` / `--exclude` …）の直後にトークンが続いたときは、`resolveScopedArgs`
+ * が vitest 自身の CLI 定義（`loadVitestFlagInfo`）を読んで判定する。読めない・
+ * 定義に無いなら断る。**ここへ足していく形にしないこと**（次の vitest の版で
+ * 同じ漏れが出る）。
  */
 const VALUE_TAKING_FLAGS = new Set([
   '--maxWorkers',
@@ -166,24 +173,92 @@ function isFlagLike(arg) {
   return arg === undefined || arg.startsWith('-');
 }
 
-/** `rest`（`--scope=` を除いた argv）のうち、フラグでも値必須フラグの値でも
- * ない要素（＝利用者が絞り込みのために打った位置引数）の添字を集める。
- * 純粋関数。 */
-function findPositionalIndices(rest) {
+/**
+ * vitest 自身が知っているフラグの一覧（`loadVitestFlagInfo` の戻り値）。
+ * - `valueTaking`: 値を別トークンで取る（rawName に `<…>` か `[…]` を持つ）フラグ。
+ * - `booleans`: 値を取らない（rawName に値の記号が無い）フラグ。
+ * どちらも `-t` / `--testNamePattern` のように別名ごとに入る。
+ *
+ * **なぜ手で足していく一覧だけにしないか**: `VALUE_TAKING_FLAGS` に 1つずつ足す形は、
+ * 次の vitest の版で同じ漏れが出る（`--shard` を足した #2063 の後にも
+ * `--testTimeout` / `--retry` / `--bail` / `--project` / `--exclude` が残っていた）。
+ * 一覧の持ち主は vitest 自身の CLI 定義なので、`vitest/node` の `createCLI` から
+ * 実行時に読む。
+ */
+export async function loadVitestFlagInfo() {
+  try {
+    const { createCLI } = await import('vitest/node');
+    const cli = createCLI();
+    const valueTaking = new Set();
+    const booleans = new Set();
+    for (const command of [cli.globalCommand, ...cli.commands]) {
+      for (const option of command.options) {
+        const takesValue = /[<[]/.test(option.rawName);
+        for (const name of option.names) {
+          const flag = name.length === 1 ? `-${name}` : `--${name}`;
+          (takesValue ? valueTaking : booleans).add(flag);
+        }
+      }
+    }
+    // 同じフラグがコマンドごとに別の形で宣言されていたら、値を取る側を優先する
+    // （値を取るのに位置引数と読むと範囲判定を狂わせる。逆は安全側で断られる）。
+    for (const flag of valueTaking) booleans.delete(flag);
+    if (valueTaking.size === 0) return null; // 読めたのに空 ⟹ 形が変わった。信用しない
+    return { valueTaking, booleans };
+  } catch {
+    return null; // 読めない ⟹ 「判定できない」。呼び出し側は断る側へ倒す
+  }
+}
+
+/** `rest`（`--scope=` を除いた argv）を分類する。純粋関数。
+ *
+ * - `positionalIdx`: フラグでも値必須フラグの値でもない要素（＝利用者が絞り込みの
+ *   ために打った位置引数）の添字。
+ * - `ambiguous`: **値を取るかどうか分からないフラグ**（`VALUE_TAKING_FLAGS` にも
+ *   `flagInfo` にも載っていない）の直後に `-` で始まらないトークンが続いた箇所。
+ *   そのトークンを位置引数と読めば範囲の絞り込みに化け（`--bail 1` の `1` が
+ *   `1` を含むパスへ差し替わる）、値と読めば本当の位置引数を落とす——どちらに
+ *   倒しても黙って間違うので、**黙って範囲に持ち込まず、呼び出し側が断る**。
+ *   `flagInfo` を渡せば、vitest が値を取ると知っているフラグは値として飲み、
+ *   値を取らないと知っているフラグ（`--coverage` 等）の直後は位置引数として読む。 */
+function classifyArgs(rest, flagInfo) {
   const positionalIdx = [];
+  const ambiguous = [];
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     if (isFlagLike(arg)) {
       const eqIdx = arg.indexOf('=');
-      const head = eqIdx === -1 ? arg : arg.slice(0, eqIdx);
-      if (eqIdx === -1 && VALUE_TAKING_FLAGS.has(head) && !isFlagLike(rest[i + 1])) {
+      if (eqIdx !== -1 || isFlagLike(rest[i + 1])) continue;
+      if (VALUE_TAKING_FLAGS.has(arg) || flagInfo?.valueTaking.has(arg)) {
         i += 1; // 空白区切りの値をフィルタと読み違えない
+      } else if (flagInfo?.booleans.has(arg)) {
+        // 値を取らないと分かっている。次の要素は次の周回で位置引数として読む。
+      } else {
+        ambiguous.push({ flag: arg, next: rest[i + 1] });
+        i += 1;
       }
       continue;
     }
     positionalIdx.push(i);
   }
-  return positionalIdx;
+  return { positionalIdx, ambiguous };
+}
+
+/** 値を取るか分からないフラグがあったときの断り。 */
+function ambiguousFlagRefusal(ambiguous, flagInfo) {
+  const listed = ambiguous.map((a) => `${a.flag} ${a.next}`).join(' / ');
+  return {
+    ok: false,
+    exitCode: EXIT_SCOPE_VIOLATION,
+    message: [
+      `test-guard: 判定できない — 値を取るか分からないフラグの直後にトークンが続いている: ${listed}`,
+      flagInfo
+        ? 'vitest の CLI 定義にこのフラグが無い（綴りの誤りか、この版に無いフラグ）。'
+        : 'vitest の CLI 定義を読めなかったので、既知の少数のフラグ以外は値を取るか分からない。',
+      '直後のトークンを絞り込みのパスと読めば範囲が黙って狂い、値と読めば本当のパスを落とす。',
+      '`=` 形（例: --testTimeout=5000）で渡すこと。',
+    ].join('\n'),
+  };
 }
 
 /** 歯B/歯Cの exit code（1〜7）とは別の値にする。範囲の外を指す位置引数、または
@@ -217,8 +292,9 @@ export const EXIT_SCOPE_VIOLATION = 8;
  * ディスクを読まない純粋関数——`filesInScope` を合成した配列で試せる
  * （`AGENTS.md`「テストが書けない構造は、テストが無いのと同じ」）。
  */
-export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope }) {
-  const positionalIdx = findPositionalIndices(rest);
+export function matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope, flagInfo }) {
+  const { positionalIdx, ambiguous } = classifyArgs(rest, flagInfo);
+  if (ambiguous.length > 0) return ambiguousFlagRefusal(ambiguous, flagInfo);
   if (positionalIdx.length === 0) {
     // 利用者の位置引数が無い ⟹ 範囲そのものが唯一のフィルタになる
     // （旧来の既定と同じ、パッケージ全体を走らせる）。
@@ -324,13 +400,20 @@ export async function resolveScopedArgs(argv, { cwd = process.cwd(), repoRoot = 
     return { ok: true, args: rest };
   }
 
-  const positionalIdx = findPositionalIndices(rest);
+  // 値を取るか分からないフラグ（`VALUE_TAKING_FLAGS` に無い）があるときだけ、vitest の
+  // CLI 定義を読む（読み込みは既知のフラグだけの通常の打ち方では起きない）。
+  let flagInfo;
+  if (classifyArgs(rest).ambiguous.length > 0) {
+    flagInfo = await loadVitestFlagInfo();
+  }
+  const { positionalIdx, ambiguous } = classifyArgs(rest, flagInfo);
+  if (ambiguous.length > 0) return ambiguousFlagRefusal(ambiguous, flagInfo);
   if (positionalIdx.length === 0) {
     return { ok: true, args: [...rest, scope] };
   }
 
   const filesInScope = await listScopeTestFiles(repoRoot, scope);
-  return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope });
+  return matchScopedPositionals(rest, scope, { cwd, repoRoot, filesInScope, flagInfo });
 }
 
 // ── 引数の正規化（続き）: 既定の reporter（この器の Bash（`CLAUDECODE`）のときだけ dot） ──
