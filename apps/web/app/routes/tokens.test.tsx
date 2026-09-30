@@ -129,7 +129,13 @@ interface StubTokenRow {
  * `undefined` になり、method も本文も落ちる（`schedule.test.tsx` の同じ断り書きと
  * 同じ理由）。ここでは `globalThis.fetch` を自分で差し替える。
  */
-function stubCrudScreen(initial: StubTokenRow[]) {
+function stubCrudScreen(
+  initial: StubTokenRow[],
+  options: {
+    /** issue #2396。`PUT /tokens` が、保存はしたが読み直しに失敗した応答（200 + `viewUnavailable`）を返す。 */
+    putViewUnavailable?: boolean;
+  } = {},
+) {
   let rows = initial;
   const puts: {
     id?: string;
@@ -176,6 +182,10 @@ function stubCrudScreen(initial: StubTokenRow[]) {
               : {}),
         };
       });
+      if (options.putViewUnavailable === true) {
+        // 保存（rows の更新）は済んでいる。応答にはプールの欄（`tokens` など）が無い。
+        return json({ viewUnavailable: { reason: '保存した。保存後のプールを読み直せなかった' } });
+      }
       return json({ tokens: rows, settings: DEFAULT_SETTINGS });
     }
     return json({ tokens: rows, settings: DEFAULT_SETTINGS });
@@ -647,6 +657,30 @@ describe('/tokens 画面 — 追加・削除・無効化/有効化（2026-09-14�
       ],
     ]);
     // 送った値はどこにも出ない（送信後に state から消える）。
+    expect(document.body.textContent).not.toContain('sk-ant-oat01-new-secret');
+  });
+
+  it('保存した後の読み直しに失敗した応答（viewUnavailable, 200）でも、失敗とは言わず、再取得で保存後の姿になる。フォームは空に戻る（#2396）', async () => {
+    const { puts } = stubCrudScreen(
+      [{ id: 't-existing', label: 'existing-token', order: 0, sha256: 'a'.repeat(12) }],
+      { putViewUnavailable: true },
+    );
+
+    renderTokens();
+    await waitForPoolLoaded();
+
+    const labelInput = screen.getByLabelText('ラベル（人間が読む名前。秘密ではない）');
+    const valueInput = screen.getByLabelText('値（claude setup-token の出力）');
+    fireEvent.change(labelInput, { target: { value: 'new-token' } });
+    fireEvent.change(valueInput, { target: { value: 'sk-ant-oat01-new-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: '追加' }));
+
+    // 応答に一覧は無いが、再取得で保存後の姿（新しい行）が出る。
+    expect(await screen.findByText('new-token')).toBeTruthy();
+    expect(puts).toHaveLength(1);
+    expect((labelInput as HTMLInputElement).value).toBe('');
+    expect((valueInput as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText(/保存できなかった|失敗/)).toBeNull();
     expect(document.body.textContent).not.toContain('sk-ant-oat01-new-secret');
   });
 
