@@ -30,6 +30,7 @@ import {
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
   unreadableCommitmentSchema,
+  unreadableInboxEventSchema,
   unreadableScheduleSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
@@ -2287,6 +2288,15 @@ export const inboxBacklogResponseSchema = z.object({
     oldestAt: z.string().optional(),
     undelivered: z.number().int(),
   }),
+  /**
+   * 読めなかった受信箱の行（issue #2344）。**「無い」でも「処理済み」でもない第3の状態。**
+   *
+   * `InboxStore.peekPending` が返す `InboxPeek.unreadable` をそのまま外へ出す。**`total` には
+   * 入らない**（`total` は読めた行の数）。**1件でも在るときだけ載る**（0件なら鍵が無い。
+   * 空配列を作ると「読めない行は無い」と読めてしまう）。本文は載せない（id・受信時刻・
+   * 不正な欄名だけ）。
+   */
+  unreadable: z.array(unreadableInboxEventSchema).optional(),
 });
 
 /**

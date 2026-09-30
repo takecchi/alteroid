@@ -42,7 +42,7 @@ describe('InboxStore — 同着の2次キー（再配達された行は末尾へ
     await stores.inbox.put(evB, at);
     await stores.inbox.put(evA, at); // 再配達（同じ id・同じ at）
 
-    const order = (await stores.inbox.peekPending()).map((entry) => entry.event.id);
+    const order = (await stores.inbox.peekPending()).entries.map((entry) => entry.event.id);
     expect(order).toEqual(['evt-b', 'evt-a']);
   });
 

@@ -6860,7 +6860,7 @@ export function createApp(deps: AppDeps) {
         // **絞りはここで当てる**（`matchesInboxRemoveManyFilter` の doc——
         // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
         // filter は順序を変えず、matched もそのまま古い順になる。
-        const allPending = await stores.inbox.peekPending();
+        const allPending = (await stores.inbox.peekPending()).entries;
         const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
 
         const effectiveLimit = limit ?? REMOVE_MANY_LIMIT_DEFAULT;
@@ -7010,14 +7010,20 @@ export function createApp(deps: AppDeps) {
           200: {
             description:
               '受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く' +
-              '（値を作らない。`InboxStore.pending` と同じ作法）。',
+              '（値を作らない。`InboxStore.pending` と同じ作法）。読めない行が1件でも在るときだけ' +
+              '`unreadable`（id・受信時刻・不正な欄名。本文は載せない）が載る。`total` は読めた行の数で、' +
+              '読めない行は入っていない。**`total: 0` で `unreadable` が無いときだけ「未処理の合図は無い」。**',
             content: { 'application/json': { schema: resolver(inboxBacklogResponseSchema) } },
           },
         },
       }),
       async (c) => {
-        const rows = await stores.inbox.peekPending();
-        return c.json(inboxBacklogResponseSchema.parse(summarizeInboxBacklog(rows, Date.now())));
+        const peek = await stores.inbox.peekPending();
+        return c.json(
+          inboxBacklogResponseSchema.parse(
+            summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
+          ),
+        );
       },
     )
 

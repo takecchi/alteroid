@@ -929,7 +929,7 @@ describe('引き受けたまま終わっていない仕事', () => {
     // 消えている**（上の doc）。`toBeGreaterThanOrEqual(0)` という常に真の
     // 式ではなく、実測どおりの `toHaveLength(0)` に固定する——ここが `1`
     // であるべきという主張はしない（それは別の歯の役目。上の doc）。
-    expect(await s.stores.inbox.peekPending()).toHaveLength(0);
+    expect((await s.stores.inbox.peekPending()).entries).toHaveLength(0);
 
     const open = (await s.stores.commitments.list()).entries;
     expect(open).toHaveLength(1);
@@ -1308,7 +1308,8 @@ describe('引き受けたまま終わっていない仕事', () => {
 
     // **消えるところまで待つ**（消し込みは `#restoreUnread` の中で起きる）。
     await waitFor(
-      async () => (await stores.inbox.peekPending()).every((row) => row.event.id !== 'e-tp-unread'),
+      async () =>
+        (await stores.inbox.peekPending()).entries.every((row) => row.event.id !== 'e-tp-unread'),
       '拾い直された token-pool の合図が受信箱から消える',
     );
     // **モデルへは1文字も渡っていない**（かつてはここが「渡る」側だった）。

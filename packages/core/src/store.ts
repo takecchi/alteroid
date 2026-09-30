@@ -30,6 +30,7 @@ import type {
   ScheduleSpec,
   UnreadableApproval,
   UnreadableCommitment,
+  UnreadableInboxEvent,
   UnreadableSchedule,
 } from './schema.js';
 import type {
@@ -1470,7 +1471,7 @@ export interface InboxStore {
    * は安い `pending()` を使い、この口は `manager_list`（明示的に内訳を
    * 求めたときだけ呼ばれる）からのみ呼ぶ。
    */
-  peekPending(): Promise<PendingInboxEvent[]>;
+  peekPending(): Promise<InboxPeek>;
 
   /**
    * 絞り込みで選んだ複数件を、まとめて消す（issue #972）。
@@ -1512,6 +1513,57 @@ export interface InboxStore {
    * 消した件数を返す。
    */
   clear(): Promise<number>;
+}
+
+/**
+ * `InboxStore.peekPending` の返り値（issue #2344。`ApprovalList` と同じ形）。
+ *
+ * **`PendingInboxEvent[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない形に
+ * するため。** 読めない行を空（無い）へ潰すと、人間の発言が壊れていても受信箱が空に見える。
+ * `entries.length + unreadable.length` は `pending().count` に一致する（fs も pg も、
+ * `pending()` は壊れた行も数える）。
+ *
+ * **配る側（`claimPending`）は変えていない。** 読めない行は配らない（配れない）。
+ * 見せるのはこちらの口だけである。
+ */
+export interface InboxPeek {
+  /** 読めた行。古い順。 */
+  entries: PendingInboxEvent[];
+  /**
+   * 読めなかった行。**「無い」でも「処理済み」でもない第3の状態。** 全体は落とさない。
+   * 行そのものは消さない。本文は載せない（`unreadableInboxEventSchema` の doc）。
+   */
+  unreadable: UnreadableInboxEvent[];
+}
+
+/**
+ * 読めない合図が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
+ * 「読めない合図は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
+ *
+ * `manager_list`・CLI が同じ文面を使う。id が取れた行は上限つきで並べ、取れない行は
+ * 件数だけで言う。本文は載せない。
+ */
+export function describeUnreadableInboxEvents(
+  unreadable: readonly UnreadableInboxEvent[],
+  options: { idLimit?: number } = {},
+): string | null {
+  if (unreadable.length === 0) return null;
+  const idLimit = options.idLimit ?? 10;
+  const ids = unreadable.flatMap((row) => (row.id === undefined ? [] : [row.id]));
+  const shown = ids.slice(0, idLimit);
+  const idNote =
+    ids.length === 0
+      ? '（id も取れない）'
+      : `（id: ${shown.join(', ')}` +
+        (ids.length > shown.length ? ` ほか ${ids.length - shown.length} 件` : '') +
+        (ids.length < unreadable.length
+          ? `。id が取れない行が ${unreadable.length - ids.length} 件`
+          : '') +
+        '）';
+  return (
+    `読めない合図が ${unreadable.length} 件ある${idNote}。` +
+    '壊れた行であって、処理済みで消えたのではない。この内訳には載っていない。配られてもいない。'
+  );
 }
 
 /** 未読として残っていた合図1件。 */

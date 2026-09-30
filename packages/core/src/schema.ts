@@ -809,6 +809,27 @@ export type InboxEvent = z.infer<typeof inboxEventSchema>;
 export type InboxEventType = InboxEvent['type'];
 
 /**
+ * 受信箱の1行が `inboxEventSchema` として読めなかったときに、その行の代わりに
+ * 内訳（`peekPending`）へ載せるもの（issue #2344。`unreadableApprovalSchema` と同じ形）。
+ *
+ * **「無い」でも「処理済み」でもない第3の状態。** 読めない行を黙って飛ばすと、人間の発言や
+ * 承認の回答が壊れていても、受信箱が空に見える（`GET /inbox` は `total: 0`、CLI は
+ * 「未処理の合図は無い」）。
+ *
+ * **⚠️ 本文（`event` の中身）を載せないこと。** 人間の発言がそのまま入りうる。
+ * `reason` は「どの欄が不正か」だけにする。
+ */
+export const unreadableInboxEventSchema = z.object({
+  /** 行から取れた合図の id。取れないこともある。 */
+  id: z.string().optional(),
+  /** 行から取れた受信時刻（ISO 8601）。取れないこともある。 */
+  at: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadableInboxEvent = z.infer<typeof unreadableInboxEventSchema>;
+
+/**
  * `journalEntrySchema` の `inbox_flow`（Issue #783 段0）が種類別の内訳
  * （`arrived` / `delivered` / `settled`）に使う形。
  *

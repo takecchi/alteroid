@@ -328,3 +328,61 @@ describe('知らない受信箱の種類に倒れ先がある（#2010）', () =>
     expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
   });
 });
+
+/**
+ * **読めない合図が在るとき、「未処理の合図は無い」と言わない**（issue #2344）。
+ * `GET /inbox` の `unreadable` は1件でも在るときだけ載る。承認待ちの
+ * `UnreadableApprovalNote`（#2298）と同じ形の断りを、内訳の上に出す。
+ */
+describe('読めない受信箱の行を「未処理の合図は無い」と言わない（#2344）', () => {
+  const EMPTY = {
+    total: 0,
+    byType: [],
+    ageBuckets: [],
+    deliveredOnce: 0,
+    distinct: 0,
+    distinctAcrossManagers: 0,
+  };
+
+  it('読めた行が0件で読めない行が在れば、断りを出し、「未処理の合図は無い」とは言わない', async () => {
+    stubInboxBacklog(
+      backlogFixture({
+        ...EMPTY,
+        unreadable: [
+          { id: 'evt-bad', at: '2026-09-27T00:00:00.000Z', reason: '不正な欄: event.type' },
+        ],
+      }),
+    );
+    renderInbox();
+
+    expect(await screen.findByText(/読めない合図が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/id: evt-bad/)).toBeTruthy();
+    expect(screen.getByText('壊れた行であって、処理済みで消えたのではない。')).toBeTruthy();
+    expect(screen.queryByText('クローンの受信箱に未処理の合図は無い。')).toBeNull();
+    expect(screen.getByText('読めた未処理の合図は無い。')).toBeTruthy();
+  });
+
+  it('読めた行が在り、読めない行も在れば、内訳の上に断りが出る', async () => {
+    stubInboxBacklog(backlogFixture({ unreadable: [{ reason: '不正な行' }] }));
+    renderInbox();
+
+    expect(await screen.findByText(/読めない合図が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/計 2 件/)).toBeTruthy();
+  });
+
+  it('対照: 本当に0件なら「無い」と言い、断りは出ない', async () => {
+    stubInboxBacklog(backlogFixture(EMPTY));
+    renderInbox();
+
+    expect(await screen.findByText('クローンの受信箱に未処理の合図は無い。')).toBeTruthy();
+    expect(screen.queryByText(/読めない合図/)).toBeNull();
+  });
+
+  it('対照: unreadable が無ければ断りは出ない', async () => {
+    stubInboxBacklog(backlogFixture());
+    renderInbox();
+
+    expect(await screen.findByText('マネージャーの報告')).toBeTruthy();
+    expect(screen.queryByText(/読めない合図/)).toBeNull();
+  });
+});

@@ -189,7 +189,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const { clone } = bootClone(stores);
     await waitFor(
-      async () => (await stores.inbox.peekPending()).length === 0,
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
       '全件が受信箱から消える',
     );
 
@@ -215,7 +215,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const { clone } = bootClone(stores);
     await waitFor(
-      async () => (await stores.inbox.peekPending()).length === 0,
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
       '全件（65,536件）が受信箱から消える',
       60_000,
     );
@@ -257,7 +257,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
 
     const { clone } = bootClone(stores);
     await waitFor(
-      async () => (await stores.inbox.peekPending()).length === 0,
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
       '全件が受信箱から消える',
     );
 
@@ -282,7 +282,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await stores.inbox.put(event, event.at);
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '消える');
+    await waitFor(async () => (await stores.inbox.peekPending()).entries.length === 0, '消える');
 
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const folded = exchanges.find(
@@ -320,7 +320,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
       // ——それを待ってから、拾い直しの間隔（`FORGET_RETRY_MS` × (1+2) ≒
       // 600ms）ぶんさらに待って諦めきるのを待つ。
       await waitFor(async () => {
-        const exchanges = await stores.inbox.peekPending();
+        const exchanges = (await stores.inbox.peekPending()).entries;
         return exchanges.length === 1; // まだ消えていないことを繰り返し確認
       }, '（消えていないことの確認のための一呼吸）');
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -346,7 +346,10 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     }
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が消える');
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
+      '全件が消える',
+    );
 
     const externalEvents = await stores.journal.list({ types: ['external_event'] });
     for (let i = 0; i < N; i += 1) {
@@ -405,7 +408,10 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await stores.inbox.put(second, second.at);
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '両方消える');
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
+      '両方消える',
+    );
 
     // **settled（inbox_flow）**: stale の消し込みはターンを起こさないので、
     // 別のターンを1本起こしてから inbox_flow の書き込みを待つ。
@@ -522,7 +528,7 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await waitFor(() => stopPromise !== undefined, 'stop() が割り込みで起こされる');
     await stopPromise;
 
-    const remaining = await base.inbox.peekPending();
+    const remaining = (await base.inbox.peekPending()).entries;
     const remainingIds = new Set(remaining.map((r) => r.event.id));
     const removedIds = ids.filter((id) => !remainingIds.has(id));
 
@@ -577,7 +583,10 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     }
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が消える');
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
+      '全件が消える',
+    );
 
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const gaugeLines = exchanges.filter(
@@ -614,7 +623,10 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     }
 
     const { clone } = bootClone(stores);
-    await waitFor(async () => (await stores.inbox.peekPending()).length === 0, '全件が消える');
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
+      '全件が消える',
+    );
 
     const exchanges = await stores.journal.list({ types: ['exchange'] });
     const gaugeLines = exchanges.filter(
@@ -704,7 +716,7 @@ describe('計器: #restoreUnreadPass の始まりと終わりに1行だけ書く
     // 「『処理した』の定義を1つに統一する」）ので、行が名乗る残りは
     // ストアの実際の残りと1件もずれない。この回は stale の消し込みの直後に
     // 止めている（後段の早期 return を通る）ので、ずれるならここで出る。
-    const actualRemaining = (await base.inbox.peekPending()).length;
+    const actualRemaining = (await base.inbox.peekPending()).entries.length;
     expect(actualRemaining).toBe(reportedRemaining);
   }, 30_000);
 });

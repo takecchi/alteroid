@@ -32,6 +32,12 @@ export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number
 export type UnreadableApproval = NonNullable<Ok<paths['/approvals']['get']>['unreadable']>[number];
 
 /**
+ * 受信箱の行が読めなかったもの（issue #2344）。「無い」でも「処理済み」でもない第3の状態
+ * ——`GET /inbox` の `unreadable`（1件でも在るときだけ載る）から導く。
+ */
+export type UnreadableInboxEvent = NonNullable<Ok<paths['/inbox']['get']>['unreadable']>[number];
+
+/**
  * 引き受けたまま終わっていない仕事の台帳の1行（`GET /commitments`）。
  *
  * **`respondedAt`（issue #1003）を含む。** サーバ（`apps/daemon/src/openapi.ts`

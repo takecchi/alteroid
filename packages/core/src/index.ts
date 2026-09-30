@@ -664,6 +664,7 @@ export {
   inboxBacklogSourceFor,
   summarizeInboxBacklog,
   describeInboxBacklogBreakdown,
+  describeNoReadableInboxEvents,
   // #783 段0 の最後の欠落（HTTP `GET /inbox` / CLI `alteroid inbox show`）が
   // クローンの道具（`manager_list`）と同じ文言を出すための2つ。**再定義せず
   // ここから import する**——`inboxBacklogDedupeKey` の doc「なぜ1箇所に

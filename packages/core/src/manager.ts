@@ -10803,7 +10803,9 @@ class Pool implements ManagerPool {
         //
         // **⟹ 実測すると化ける。** `packages/ui/src/components/markdown.tsx` と
         // 同じ設定（react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks
-        // 4.0.0、rehype-raw 無し）で `brief({"command":"echo \`date\` && rm -rf /"})`
+        // 4.0.0、rehype-raw 無し。これは観測当時の構成で、今の `<Markdown>` は
+        // 同じ DOM を出すことを `markdown-equivalence.test.tsx` で固定している）で
+        // `brief({"command":"echo \`date\` && rm -rf /"})`
         // を通すと、` \`date\` ` が本物の `<code>` になった。`brief({"path":"src/_init_/x.ts"})`
         // では `_init_` の `_..._` が `<em>` になった（観測 2026-08-28）。この回は
         // `kind` が `'question'` のままなので `markup` は立たず、`permission` 側で
@@ -11138,7 +11140,9 @@ class Pool implements ManagerPool {
         //
         // **どう化けるかは実機のレンダラで測った**（`packages/ui/src/components/markdown.tsx`
         // と同じ `react-markdown` ＋ `remark-gfm` ＋ `remark-breaks` の設定。観測
-        // 2026-08-27。詳細は `markdown-span.ts` の doc）:
+        // 2026-08-27。これは観測当時の構成で、今の `<Markdown>` は同じ DOM を出す
+        // ことを `markdown-equivalence.test.tsx` で固定している。詳細は
+        // `markdown-span.ts` の doc）:
         //
         // - 入力の欄は、いまは本文ではなく**形**（`denialInputShape`）である。
         //   **それでも包む必要は消えていない** —— 形には道具のスキーマ由来の欄名が
@@ -11521,7 +11525,9 @@ class Pool implements ManagerPool {
         //
         // **実測（観測 2026-08-28、`packages/ui/src/components/markdown.tsx` と
         // 同じ react-markdown 10.1.0 + remark-gfm 4.0.1 + remark-breaks 4.0.0、
-        // rehype-raw 無し、版は `apps/web/node_modules` から引いた）**:
+        // rehype-raw 無し、版は `apps/web/node_modules` から引いた。これは観測
+        // 当時の構成で、今の `<Markdown>` は同じ DOM を出すことを
+        // `markdown-equivalence.test.tsx` で固定している）**:
         // `packages/core/src/*.test.ts` に実在する SDK 由来の実例
         // （`"You've hit your individual spend limit for this account."` /
         // `"You're now using extra usage until your limit resets."` /
