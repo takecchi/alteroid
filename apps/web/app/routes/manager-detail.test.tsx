@@ -10,7 +10,7 @@
  * この画面が「実行中」としか言わないと、同じ仕事を見て人間とクローンで見えている
  * ものが食い違う（北極星 禁止1 を逆向きに踏む）。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1181,6 +1181,8 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
    * `<h2>状態</h2>` と、この `dl` の `<dt>状態</dt>`）。`findByText('状態')`
    * は複数一致で例外になるので、まず衝突しないラベル（`作業ディレクトリ`）で
    * `dl` を掴み、そこから先は `within(dl)` で範囲を絞る。
+   * （追記: 書き換え後は `within` を使わず、`dl.querySelectorAll('dt')` で全部の `dt` を
+   * 辿るので、「状態」の `dt` も含めて先頭・先頭以外を測れる。）
    */
   it('狭い画面では1列、sm: 以上で固定幅ラベル列になる', async () => {
     renderDetail(BASE);
