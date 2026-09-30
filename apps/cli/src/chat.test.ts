@@ -1511,6 +1511,8 @@ function stubClient(
     ) => { id: string; ok: boolean; error?: string }[];
     /** `GET /approvals` が返す一覧。既定は空。 */
     approvals?: ApprovalLike[];
+    /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
+    approvalsUnreadable?: { id?: string; reason: string }[];
     /** `GET /approvals/:id/trace` の応答コードと本体（issue #847）。既定は 404。 */
     approvalTraceStatus?: number;
     approvalTraceBody?: unknown;
@@ -1696,7 +1698,14 @@ function stubClient(
     approvals: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /approvals', args });
-        return Promise.resolve(reply(200, { approvals: options.approvals ?? [] }));
+        return Promise.resolve(
+          reply(200, {
+            approvals: options.approvals ?? [],
+            ...(options.approvalsUnreadable === undefined
+              ? {}
+              : { unreadable: options.approvalsUnreadable }),
+          }),
+        );
       },
       answer: {
         $post: (args: { json: AnswersRequest }) => {
@@ -2521,6 +2530,46 @@ describe('chat の /approvals（一覧）', () => {
     // 能力を削っていないこと——2行目・3行目は出力のどこかに残っている。
     expect(text).toContain('2行目の補足です');
     expect(text).toContain('3行目の補足です');
+  });
+
+  it('読めない承認待ちが在るとき、件数と id を出す。読めた行は今までどおり番号つきで出る（#2298）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      approvals: [{ id: 'appr-1', createdAt: '2026-08-16T10:00:00.000Z', question: '読める質問' }],
+      approvalsUnreadable: [
+        { id: 'appr-bad', reason: '不正な欄: createdAt' },
+        { reason: '不正な行' },
+      ],
+    });
+    const listed = emptyListed();
+
+    await runSlashCommand('/approvals', client, listed);
+
+    const text = read();
+    expect(text).toContain('  [1] 読める質問');
+    expect(text).toContain('読めない承認待ちが 2 件あります（id: appr-bad）');
+    expect(text).toContain('壊れた行であって、回答済み・取り下げ済みではありません');
+    // 読めない行には番号を振らない（`/answer` できない）。
+    expect(listed.approvals).toEqual(['appr-1']);
+  });
+
+  it('読めた承認待ちが0件でも、読めない行が在れば「ありません」とだけ言わない。0件のときは何も出さない（#2298）', async () => {
+    const read = captureStdout();
+    const only = stubClient({
+      approvalsUnreadable: [{ id: 'appr-bad', reason: '不正な欄: createdAt' }],
+    });
+    await runSlashCommand('/approvals', only.client, emptyListed());
+    const text = read();
+    expect(text).toContain('（読めた承認待ちはありません）');
+    expect(text).not.toContain('（承認待ちはありません）');
+    expect(text).toContain('appr-bad');
+
+    const none = stubClient({});
+    await runSlashCommand('/approvals', none.client, emptyListed());
+    // `read()` は累積なので、1本目の分を除く。
+    const textNone = read().slice(text.length);
+    expect(textNone).toContain('（承認待ちはありません）');
+    expect(textNone).not.toContain('読めない');
   });
 
   it('作成と更新を出す（未回答なら更新は作成に一致、回答済みなら answeredAt）', async () => {

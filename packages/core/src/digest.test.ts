@@ -927,6 +927,47 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
     expect(getApprovalCalls).toBeLessThanOrEqual(MAX_ITEMS);
     expect(getApprovalCalls).toBeGreaterThan(0);
   });
+
+  describe('読めない承認待ちの行（#2298）: 件数からもこの節からも消さない', () => {
+    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
+    function withUnreadable(unreadable: { id?: string; reason: string }[]) {
+      const stores = createMemoryStores();
+      const original = stores.jobs.listApprovals.bind(stores.jobs);
+      stores.jobs.listApprovals = async (options) => ({
+        ...(await original(options)),
+        unreadable,
+      });
+      return stores;
+    }
+
+    it('読めない行が在るとき、件数の行と節の両方で言う。読めた回答待ちは今までどおり出る', async () => {
+      const stores = withUnreadable([{ id: 'ap-bad-1', reason: '不正な欄: createdAt' }]);
+      await stores.jobs.putApproval({
+        id: 'ap-ok',
+        createdAt: new Date().toISOString(),
+        question: '読める質問',
+      });
+      const digest = await buildActivityDigest(stores, { since: since() });
+      expect(digest).toContain('- いま人間の回答を待っているもの: 1 件');
+      expect(digest).toContain('- 読めない承認待ち（壊れた行。上の件数には入っていない）: 1 件');
+      expect(digest).toContain('ap-ok');
+      expect(digest).toContain('読めない承認待ちが 1 件ある（id: ap-bad-1）');
+    });
+
+    it('読めた回答待ちが0件でも、読めない行の節は出る', async () => {
+      const stores = withUnreadable([{ reason: '不正な行' }]);
+      const digest = await buildActivityDigest(stores, { since: since() });
+      expect(digest).toContain('## 人間の回答待ち');
+      expect(digest).toContain('読めない承認待ちが 1 件ある（id も取れない）');
+    });
+
+    it('0件のときは行も節も作らない', async () => {
+      const stores = withUnreadable([]);
+      const digest = await buildActivityDigest(stores, { since: since() });
+      expect(digest).not.toContain('読めない承認待ち');
+      expect(digest).not.toContain('## 人間の回答待ち');
+    });
+  });
 });
 
 /**

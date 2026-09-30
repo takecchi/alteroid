@@ -5360,6 +5360,49 @@ describe('クローンの道具', () => {
     });
   });
 
+  describe('読めない承認の行が在る一覧（#2298）: 一覧から消さず、件数と id で言う', () => {
+    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
+    function listWithUnreadable(unreadable: { id?: string; reason: string }[]) {
+      const h = harness();
+      const original = h.stores.jobs.listApprovals.bind(h.stores.jobs);
+      h.stores.jobs.listApprovals = async (options) => ({
+        ...(await original(options)),
+        unreadable,
+      });
+      return h;
+    }
+
+    it('読めた行は今までどおり並べ、末尾に「読めない承認待ちが N 件ある」を id つきで出す', async () => {
+      const h = listWithUnreadable([
+        { id: 'ap-bad-1', reason: '不正な欄: createdAt' },
+        { reason: '不正な欄: (root)' },
+      ]);
+      await h.call('ask_human', { question: '本番に出してよいか' });
+      const reply = await h.call('approvals_list', {});
+      expect(reply).toContain('本番に出してよいか');
+      expect(reply).toContain('読めない承認待ちが 2 件ある');
+      expect(reply).toContain('ap-bad-1');
+      expect(reply).toContain('id が取れない行が 1 件');
+      expect(reply).toContain('回答済み・取り下げ済みではない');
+    });
+
+    it('読めた行が0件でも「回答待ちは無い」とだけ言わない', async () => {
+      const h = listWithUnreadable([{ id: 'ap-bad-1', reason: '不正な欄: createdAt' }]);
+      const reply = await h.call('approvals_list', {});
+      expect(reply).toContain('読めない承認待ちが 1 件ある');
+      expect(reply).toContain('ap-bad-1');
+      expect(reply).not.toContain('（人間の回答待ちは無い）');
+    });
+
+    it('0件のときは何も出さない（0 の行を作らない）', async () => {
+      const h = listWithUnreadable([]);
+      await h.call('ask_human', { question: '本番に出してよいか' });
+      expect(await h.call('approvals_list', {})).not.toContain('読めない');
+      const empty = listWithUnreadable([]);
+      expect(await empty.call('approvals_list', {})).toBe('（人間の回答待ちは無い）');
+    });
+  });
+
   describe('approval_withdraw（issue #963）', () => {
     it('未回答の承認待ちを理由付きで取り下げ、一覧から消え、id で理由ごと読み戻せる', async () => {
       const h = harness();

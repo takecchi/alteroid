@@ -72,6 +72,8 @@ function stubApprovals(
     conversation?: (id: string) => Response | Promise<Response>;
     /** `GET /approvals/:id/trace` の応答（issue #847 の案B）。渡さなければ繋がらない。 */
     trace?: (id: string) => Response | Promise<Response>;
+    /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
+    unreadable?: { id?: string; reason: string }[];
   } = {},
 ): ApprovalsStub {
   const calls: string[] = [];
@@ -82,7 +84,12 @@ function stubApprovals(
     calls.push(url);
     const path = new URL(url).pathname;
 
-    if (path === '/approvals') return json({ approvals });
+    if (path === '/approvals') {
+      return json({
+        approvals,
+        ...(options.unreadable === undefined ? {} : { unreadable: options.unreadable }),
+      });
+    }
 
     if (path === '/approvals/answer') {
       const body =
@@ -926,5 +933,42 @@ describe('承認カードに、確認が上がった会話を出す（issue #782
     expect(await screen.findByText('この確認が上がった会話を読み込み中')).toBeTruthy();
     expect(await screen.findByText(/会話 conv-gone は存在しない/)).toBeTruthy();
     expect(screen.queryByRole('link', { name: /この会話をチャットで開く/ })).toBeNull();
+  });
+});
+
+/**
+ * 読めない承認待ちの行（#2298）。一覧が読めない行を黙って飛ばすと、人間には
+ * 「答えを待っているものはない」と見える。件数と id を、読めた行の上で断る。
+ */
+describe('/approvals 画面: 読めない承認待ちの断り', () => {
+  it('読めない行が在るとき、件数・id・「回答済みでも取り下げ済みでもない」を出す。読めた行はそのまま出る', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '読める質問' })], {
+      unreadable: [{ id: 'ap-bad', reason: '不正な欄: createdAt' }, { reason: '不正な行' }],
+    });
+    renderPage();
+
+    expect(await screen.findByText('読める質問')).toBeTruthy();
+    const note = screen.getByRole('status');
+    expect(note.textContent).toContain('読めない承認待ちが 2 件ある');
+    expect(note.textContent).toContain('id: ap-bad');
+    expect(note.textContent).toContain('壊れた行であって、回答済みでも取り下げ済みでもない');
+  });
+
+  it('読めた行が0件でも「答えを待っているものはない。クローンは進んでいる」と言い切らない', async () => {
+    stubApprovals([], { unreadable: [{ id: 'ap-bad', reason: '不正な欄: createdAt' }] });
+    renderPage();
+
+    expect(await screen.findByText(/読めない承認待ちが 1 件ある/)).toBeTruthy();
+    expect(screen.queryByText(/クローンは進んでいる/)).toBeNull();
+    expect(screen.getByText(/読めた範囲では、答えを待っているものはない/)).toBeTruthy();
+  });
+
+  it('0件のとき（鍵が無い）は何も出さない', async () => {
+    stubApprovals([approval({ id: 'a-1', question: '読める質問' })]);
+    renderPage();
+
+    expect(await screen.findByText('読める質問')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText(/読めない/)).toBeNull();
   });
 });
