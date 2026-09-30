@@ -82,7 +82,7 @@ describe('describeInterruptOutcome', () => {
 });
 
 describe('interruptCommand', () => {
-  it('ログインしていなければ note をそのまま書き、interrupt を叩かない（reset 等とは別の門だが、inboxRemoveCommand と同じ2段構え）', async () => {
+  it('ログインしていなければ note を載せて reject し（終了コード非 0）、stdout には書かず、interrupt を叩かない（#2456）', async () => {
     vi.mocked(target.resolveTarget).mockResolvedValueOnce({
       baseUrl: 'https://runner.example.com',
       headers: {},
@@ -91,10 +91,12 @@ describe('interruptCommand', () => {
     });
     const read = captureStdout();
 
-    await interruptCommand();
+    await expect(interruptCommand()).rejects.toThrow(
+      'https://runner.example.com にログインしていません（alteroid login）',
+    );
 
     expect(sent).toHaveLength(0);
-    expect(read()).toBe('https://runner.example.com にログインしていません（alteroid login）\n');
+    expect(read()).toBe('');
   });
 
   it('200 + interrupted なら止めた旨を書く', async () => {

@@ -28,6 +28,7 @@ import type {
 } from '@alteroid/logic';
 
 import { isKeyOfType, KEY } from './queries';
+import { writeThenRefresh } from './write-then-refresh';
 
 /**
  * 自分のチャット送信を会話一覧へ即時反映する（唯一の楽観更新。理由は冒頭コメント）。
@@ -259,8 +260,9 @@ export function usePushCommitment() {
   return useCallback(
     async (body: string) => {
       // 応答の中身は使わない（積んだ1件は下の取り直しで一覧ごと届く）。
-      expectOk(await api.api.POST('/commitments', { body: { body } }));
-      await refresh();
+      await writeThenRefresh(async () => {
+        expectOk(await api.api.POST('/commitments', { body: { body } }));
+      }, refresh);
     },
     [api, refresh],
   );
@@ -278,13 +280,14 @@ export function useCloseCommitment() {
   const refresh = useRefreshCommitments();
   return useCallback(
     async (id: string, reason: string) => {
-      expectOk(
-        await api.api.POST('/commitments/{id}/close', {
-          params: { path: { id } },
-          body: { reason },
-        }),
-      );
-      await refresh();
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.POST('/commitments/{id}/close', {
+            params: { path: { id } },
+            body: { reason },
+          }),
+        );
+      }, refresh);
     },
     [api, refresh],
   );
@@ -312,17 +315,18 @@ export function useAppraiseCommitment() {
       // 仕事の種類（#1308）。人間の口では任意で、渡さなければ前の種類が残る。
       workKind?: string,
     ) => {
-      expectOk(
-        await api.api.POST('/commitments/{id}/appraise', {
-          params: { path: { id } },
-          body: {
-            appraisal,
-            ...(reason === undefined ? {} : { reason }),
-            ...(workKind === undefined ? {} : { workKind }),
-          },
-        }),
-      );
-      await refresh();
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.POST('/commitments/{id}/appraise', {
+            params: { path: { id } },
+            body: {
+              appraisal,
+              ...(reason === undefined ? {} : { reason }),
+              ...(workKind === undefined ? {} : { workKind }),
+            },
+          }),
+        );
+      }, refresh);
     },
     [api, refresh],
   );
@@ -348,13 +352,14 @@ export function useEditCommitment() {
   const refresh = useRefreshCommitments();
   return useCallback(
     async (id: string, body: string) => {
-      expectOk(
-        await api.api.PATCH('/commitments/{id}', {
-          params: { path: { id } },
-          body: { body },
-        }),
-      );
-      await refresh();
+      await writeThenRefresh(async () => {
+        expectOk(
+          await api.api.PATCH('/commitments/{id}', {
+            params: { path: { id } },
+            body: { body },
+          }),
+        );
+      }, refresh);
     },
     [api, refresh],
   );
