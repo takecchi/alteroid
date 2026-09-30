@@ -54,7 +54,7 @@ import {
 } from './dropped-record.js';
 import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
-import { excerptLine } from './excerpt.js';
+import { codePointBoundary, excerptLine } from './excerpt.js';
 import { mcpServerNames, mcpServersFingerprintOf, parseMcpServers } from './mcp-servers.js';
 import type { McpServers } from './mcp-servers.js';
 import { placedModelTier, resolveModelTier } from './model-tier.js';
@@ -3661,6 +3661,17 @@ class RunnerSession {
     // （`ids.join(', ')`）。道具の入力には環境変数の値やトークンが入りうるので、
     // 記憶が上限に達した回にだけコマンド本文が日誌へ出る経路が開いていた。
     // **同じ文字列は同じ鍵になる**ので、畳み方（＝重複排除の効き方）は変わらない。
+    //
+    // **`brief` の切り口が補助面の文字の手前へ寄るようになった（issue #2449）の
+    // に合わせて、この鍵の材料も寄せたままにする。** 素の slice を残す分岐は
+    // 作らない。理由は3つ。(1) 鍵の値が変わるのは、120コード単位目を補助面の
+    // 文字がまたぐ入力だけで、同じ runner の中ではどの呼び出しも同じ関数を通る
+    // ので、同じ入力は同じ鍵のまま（`#denied` はプロセスの記憶で、持ち越さない）
+    // (2) 区別の力は実質変わらない——`digestOf` の `update()` は孤立サロゲートを
+    // U+FFFD として UTF-8 にするので、素の slice でも「どの絵文字だったか」は
+    // 鍵に残っていなかった（`p\ud83d` / `p\ud83e` / `p�` は同じ digest に
+    // なる。2026-10-01 の手元の実測） (3) この代用鍵は `tool_use_id` が無いときだけ
+    // 作られ、それは上の断りのとおりいま踏まれない。
     const toolUseId = denial.toolUseId ?? `${tool}:${digestOf(brief(input, 120))}`;
     // **`PreToolUse` が拒否より前に控えた入力の先頭を、有れば引いて消す**
     // （issue #1105。`#preToolInputHeads` / `#capturePreToolInputHead`）。
@@ -6974,10 +6985,24 @@ function oneShotAllowKey(actor: string, tool: string, digest: string): string {
   return `${actor}\u0000${tool}\u0000${digest}`;
 }
 
+/**
+ * 値を `limit` コード単位（UTF-16）までに縮めた1行の要約。文字列はそのまま、
+ * それ以外は `JSON.stringify` で文字列にしてから切る。
+ *
+ * **切り口は補助面の文字（絵文字の多く）の途中に置かない（issue #2449）。**
+ * `limit` コード単位目を2コード単位の文字がまたぐときは、`codePointBoundary`
+ * で1つ手前へ寄せる——素の `slice` のままだと高サロゲートだけが残り、許可確認の
+ * 要約（`#onPermission`）がクローンの受信箱・`manager_list` へ UTF-8 で届いた
+ * ところで U+FFFD に化ける（#1606 と同じ症状）。長さの数え方と、割らないときの
+ * 切り口は変えていない。
+ *
+ * `#noteDenial` の代用鍵（`digestOf(brief(input, 120))`）もこの関数を通る。
+ * そちらの切り口も同じく寄せる判断をした理由は、その呼び出し箇所の注釈に在る。
+ */
 export function brief(value: unknown, limit = 200): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   if (text === undefined) return '';
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  return text.length > limit ? `${text.slice(0, codePointBoundary(text, limit))}…` : text;
 }
 
 /**
