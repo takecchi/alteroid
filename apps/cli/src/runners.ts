@@ -76,10 +76,9 @@ export async function runnersCommand(): Promise<void> {
  */
 export async function runnersVacateCommand(runnerId: string): Promise<void> {
   const target = await resolveTarget();
-  if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
-    return;
-  }
+  // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
+  // 何もせず 0 で返すと「空けた」と誤読される。読み取り系（`runnersCommand`）は今のまま。
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.runners.vacate.$post({ json: { runnerId } });
   if (!response.ok) {

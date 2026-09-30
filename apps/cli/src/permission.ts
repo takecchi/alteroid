@@ -98,10 +98,9 @@ export async function permissionListCommand(options: PermissionListOptions = {})
 
 export async function permissionRevokeCommand(id: string): Promise<void> {
   const target = await resolveTarget();
-  if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
-    return;
-  }
+  // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
+  // 何もせず 0 で返すと「取り消した」と誤読される。読み取り系（一覧）は今のまま。
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const response = await client['permission-grants'][':id'].revoke.$post({ param: { id } });
   // **失敗を握り潰さない。** 取り消しは安全側への操作なので「取り消せたか」を

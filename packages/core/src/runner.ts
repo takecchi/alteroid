@@ -4364,10 +4364,16 @@ class RunnerSession {
       `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
     const askedAt = new Date().toISOString();
 
-    let settle!: (answer: { message: string; decision?: 'allow' | 'deny'; aborted?: true }) => void;
+    // **`withdrawn` を型から落とさない（issue #2448）。** `#settleAll` は
+    // `#pending` のすべてに `withdrawn: true` を渡す。以前はここの型が
+    // `withdrawn` を持たず、`request.settle` も `settled` へ載せなかったので、
+    // 畳みで解けた確認が取り下げ（#1586）として日誌に残らず、下の deny の
+    // note が「クローンが許可を出さなかった」とクローンの判断として書いていた。
+    let settle!: PendingRequest['settle'];
     const answered = new Promise<{
       message: string;
       decision?: 'allow' | 'deny';
+      withdrawn?: true;
       aborted?: true;
     }>((resolve) => {
       settle = resolve;
@@ -4378,15 +4384,15 @@ class RunnerSession {
       // 別々に判定を書くと、runner.ts 側が変わったときに黙ってずれる）。
       const { decision, unreadable } = decideAnswer(kind, answer.decision, answer.message);
       // **`unreadable`（issue #1827/#1837）は `aborted`（フックの持ち時間
-      // 切れ。`onTimeout` が明示の `decision:'deny'` を渡す）とは別枠——
+      // 切れ。`onTimeout` が明示の `decision:'deny'` を渡す）・`withdrawn`
+      // （畳み。`#settleAll` が明示の `decision:'deny'` を渡す）とは別枠——
       // 明示の decision がある回は `unreadable` が常に false なので、ここで
       // 二重に足しても実害は無いが、意図を明示するために分けて書く。
+      const teardown = answer.aborted === true || answer.withdrawn === true;
       const denyMessage =
-        answer.aborted !== true && unreadable
-          ? unreadableDenyMessage(answer.message)
-          : answer.message;
+        !teardown && unreadable ? unreadableDenyMessage(answer.message) : answer.message;
       const outcome: PermissionResult =
-        answer.aborted === true || decision === 'deny'
+        teardown || decision === 'deny'
           ? { behavior: 'deny', message: denyMessage }
           : { behavior: 'allow' };
       this.#resolved.set(id, outcome);
@@ -4411,7 +4417,15 @@ class RunnerSession {
         if (this.#sdkSession.status === 'waiting_human' && this.#pending.length === 0) {
           this.#sdkSession.setStatus('running');
         }
-        this.#emit({ type: 'settled', managerId: this.#id, requestId: id });
+        // **`#onPermission` の `settle` と同じ形で `withdrawn` を載せる（issue
+        // #2448）。** `manager.ts` の `case 'settled'` が取り下げ（#1586）の行を
+        // 日誌へ書くのは、これが在るときだけである。
+        this.#emit({
+          type: 'settled',
+          managerId: this.#id,
+          requestId: id,
+          ...(value.withdrawn === true ? { withdrawn: { reason: value.message } } : {}),
+        });
         settle(value);
       },
     };
@@ -4442,6 +4456,7 @@ class RunnerSession {
 
     this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
 
+    const answer = await answered;
     const outcome = await result;
 
     if (timedOut) {
@@ -4453,6 +4468,16 @@ class RunnerSession {
           `終わった。安全側で retry は返さない。答えが遅れて届いても、この確認は既に解決済みなので` +
           `反映しない（issue #1105 P1）。`,
       });
+      return { kind: 'no-retry' };
+    }
+
+    // **畳みで解けた確認は、クローンの判断として書かない（issue #2448）。**
+    // クローンは答えていない。取り下げの事実は上の `settled.withdrawn` が
+    // 運び、`manager.ts` の `case 'settled'` が日誌へ1行残す（#1586）ので、
+    // ここで note を重ねない——`#onPermission` も畳みの回に note を出さない。
+    // 下の deny の分岐より前に置くのは、`#settleAll` が明示の
+    // `decision:'deny'` を渡すので、ここを抜けると「出さなかった」に落ちるため。
+    if (answer.withdrawn === true) {
       return { kind: 'no-retry' };
     }
 

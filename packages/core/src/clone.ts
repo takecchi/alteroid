@@ -3555,7 +3555,7 @@ class Clone implements CloneHost {
         await this.#supersededNoticeFor(batch).catch((error: unknown) => {
           noteDroppedRecord('後続の報告の組み立て', inboxEventShape(event), error);
           return event.type === 'manager_message'
-            ? describeSuperseded({ kind: 'uncountable', detail: String(error) }, event.managerId)
+            ? describeSuperseded({ kind: 'uncountable', detail: reasonOf(error) }, event.managerId)
             : '';
         }),
       );
@@ -5877,7 +5877,7 @@ class Clone implements CloneHost {
           ? { detail: `${event.managerId} が一覧に居ない` }
           : { status: found.status };
     } catch (error) {
-      now = { detail: String(error) };
+      now = { detail: reasonOf(error) };
     }
 
     return describeValidity(inboxEventValidity(event, now), event.managerId);
@@ -8055,7 +8055,7 @@ class Clone implements CloneHost {
           try {
             tidyTargets = describeMemoryTidyTargets(await this.#stores.persona.documents());
           } catch (error) {
-            tidyTargets = `棚卸しの的: 測れなかった（理由: ${String(error)}）。memory_list から自分で探すこと。`;
+            tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
           }
         }
         // **段2: 横断の蒸留（#1055）。同じ定期の棚卸しに相乗りする**
@@ -8072,7 +8072,7 @@ class Clone implements CloneHost {
               jobs: await this.#stores.jobs.listJobs(),
             });
           } catch (error) {
-            appraisalTargets = `評定の的: 測れなかった（理由: ${String(error)}）。commitment_list / manager_list から自分で探すこと。`;
+            appraisalTargets = `評定の的: 測れなかった（理由: ${reasonOf(error)}）。commitment_list / manager_list から自分で探すこと。`;
           }
         }
         // **段4: やり方の候補の材料（#1055）。同じ定期の棚卸しに相乗りする**
@@ -8131,7 +8131,7 @@ class Clone implements CloneHost {
                 }),
               };
             } catch (error) {
-              reconciliation = { measured: false, reason: String(error) };
+              reconciliation = { measured: false, reason: reasonOf(error) };
             }
             practiceCandidates = describePracticeCandidates({
               commitments,
@@ -8140,7 +8140,7 @@ class Clone implements CloneHost {
               reconciliation,
             });
           } catch (error) {
-            practiceCandidates = `やり方の候補の材料: 測れなかった（理由: ${String(error)}）。commitment_list / manager_list / practice_list から自分で見ること。`;
+            practiceCandidates = `やり方の候補の材料: 測れなかった（理由: ${reasonOf(error)}）。commitment_list / manager_list / practice_list から自分で見ること。`;
           }
         }
         const distillPrompt = buildDistillPrompt(
@@ -8784,7 +8784,7 @@ class Clone implements CloneHost {
         axes.awaitingBackground,
       );
     } catch (error) {
-      return `（直近の状況をまとめられなかった: ${String(error)}）`;
+      return `（直近の状況をまとめられなかった: ${reasonOf(error)}）`;
     }
   }
 
@@ -8874,7 +8874,7 @@ class Clone implements CloneHost {
     try {
       documents = await this.#stores.persona.documents();
     } catch (error) {
-      return `記憶の床: 測れなかった（理由: ${String(error)}）。`;
+      return `記憶の床: 測れなかった（理由: ${reasonOf(error)}）。`;
     }
 
     const afterChars = measureMemoryFloor(documents).totalChars;

@@ -280,6 +280,10 @@ describe('gh-pr-merge-delete-branch: timeout 前置きのオプション・継�
     ['オプションの併用', `timeout --foreground -k5 -s KILL --verbose 60 ${tail}`],
     ['/usr/bin/timeout', `/usr/bin/timeout 60 ${tail}`],
     ['パス付き + オプション', `/usr/bin/timeout -k5 60 ${tail}`],
+    // パスは `/`・`./`・`../`・`~/` で始まる形を読む（#2479。任意の文字から始めると線形の定数が膨らむ）
+    ['./timeout', `./timeout 60 ${tail}`],
+    ['../bin/timeout', `../bin/timeout 60 ${tail}`],
+    ['~/bin/timeout', `~/bin/timeout 60 ${tail}`],
     ['継続時間 1e1', `timeout 1e1 ${tail}`],
     ['継続時間 0x10', `timeout 0x10 ${tail}`],
     ['継続時間 inf', `timeout inf ${tail}`],
