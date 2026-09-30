@@ -4,14 +4,13 @@ import { join } from 'node:path';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createCloneTools } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import { PGlite } from '@electric-sql/pglite';
-import { createPgStoresFromDb, migrate, tables, type Db } from '@alteroid/storage-pg';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #2148。
@@ -86,9 +85,7 @@ async function fsStoresWithBadRow(): Promise<Stores> {
 
 /** `origin` が既知の値でない壊れた行を pg の `commitments` 表へ直接 insert する。 */
 async function pgStoresWithBadRow(): Promise<Stores> {
-  const client = new PGlite();
-  const db: Db = drizzle(client);
-  await migrate(db);
+  const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);
   await stores.commitments.open({
     id: 'good-commitment',
