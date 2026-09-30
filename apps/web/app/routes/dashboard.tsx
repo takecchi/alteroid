@@ -38,6 +38,7 @@ import { isUnavailable, UnavailableNote } from './reports';
  * 但し書き側と食い違った瞬間に嘘の件数が出るためである。
  */
 const APPROVAL_LIMIT = 5;
+const APPROVALS_MALFORMED_MESSAGE = '承認待ちを読めていない（応答の形が想定と違う）';
 const MANAGER_LIMIT = 5;
 const LIVE_LIMIT = 30;
 
@@ -99,7 +100,14 @@ export default function Dashboard() {
   const todayTurnRows = usage.data?.turnRows.filter((row) => row.date === today) ?? [];
 
   const latestReport = reports.data?.reports[0];
-  const pending = approvals.data?.approvals ?? [];
+  // **形の違う応答（`approvals` が配列でない）を `?? []` で0件にしない**（issue #2308。外枠
+  // `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は版がずれうるので、読めていないのに
+  // 「なし。」と描くと嘘になる。`null` も読み込み中（`undefined`）とは別で「読めていない」へ倒す。
+  const approvalsList = Array.isArray(approvals.data?.approvals)
+    ? approvals.data.approvals
+    : undefined;
+  const approvalsMalformed = approvals.data !== undefined && approvalsList === undefined;
+  const pending = approvalsList ?? [];
   // **`m.status === 'running'` を直書きしない。** 将来「実行中」を意味する
   // 新しい値が `jobStatusSchema` に足されても件数から漏らさないための唯一の
   // 判定を `@alteroid/core/job-status-running` から取る（そちらの doc に
@@ -200,7 +208,7 @@ export default function Dashboard() {
                 // 失敗して `data` が古いまま残ると「読めていない」（本文）と
                 // 「答える（古い件数由来）」（見出し）が同じカードに同時に
                 // 出ていた。本文と同じ判定を先頭に足して揃える。
-                approvals.error === undefined && pending.length > 0 ? (
+                approvals.error === undefined && !approvalsMalformed && pending.length > 0 ? (
                   <Link to="/approvals" className="text-xs text-primary hover:underline">
                     答える
                   </Link>
@@ -209,6 +217,8 @@ export default function Dashboard() {
             />
             {approvals.error !== undefined ? (
               <ErrorNote error={approvals.error} className="m-4" />
+            ) : approvalsMalformed ? (
+              <ErrorNote error={new Error(APPROVALS_MALFORMED_MESSAGE)} className="m-4" />
             ) : pending.length === 0 ? (
               <Empty>なし。</Empty>
             ) : (
