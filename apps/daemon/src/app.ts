@@ -101,6 +101,7 @@ import {
   describeUnreadableManagerRow,
   resetWorkspaceState,
   resolveBuildRevision,
+  RunnerHttpError,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -1344,6 +1345,32 @@ async function appendJournalOrDrop(
     noteDroppedRecord(what, detail, error);
     return undefined;
   }
+}
+
+/**
+ * 鍵を runner へ配る呼び出し（`POST /runners/credentials`）の失敗を、**値の出ない
+ * 短い文**にする（issue #2407）。応答と日誌へ載せるのはこれだけである。
+ *
+ * **`message` は使わない。`reasonOf`（1行目を出す）も使わない。** 鍵を運ぶ呼び出し
+ * なので、例外の文面に送った値が載る形（`RunnerHttpError` は runner や間の中継の
+ * 応答本文をそのまま `message` に入れる。RPC / 検証系の例外が入力を添える形も同じ）
+ * があれば、1行目の断片でも鍵が出る。出すのは次の2つだけ:
+ *
+ * - `error.name`（クラス名）。識別子の形（英数字と `_`・`.`）でなければ `Error` に
+ *   落とす——名前を後から書き換えられる例外でも、任意の文字列は通さない
+ * - `RunnerHttpError` の `status`（数値。本文ではない）
+ *
+ * `PUT /tokens` の `kindOfError`（#2396）と同じ考えで、こちらは HTTP の状態を足して
+ * 「runner が拒んだ（4xx）か、落ちていた（5xx）か」を人が追えるようにしてある。
+ */
+function credentialDeliveryFailureOf(error: unknown): string {
+  const name =
+    error instanceof Error && /^[A-Za-z0-9_.]{1,64}$/u.test(error.name) ? error.name : 'Error';
+  const status =
+    error instanceof RunnerHttpError && Number.isInteger(error.status)
+      ? `、HTTP ${String(error.status)}`
+      : '';
+  return `${name}${status}`;
 }
 
 /**
@@ -5282,7 +5309,14 @@ export function createApp(deps: AppDeps) {
                   credentials: await runner.setCredentials(credentials),
                 };
               } catch (error) {
-                return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
+                // **素の `String(error)` を載せない**（issue #2407。`probe` の doc と同じ）。
+                const kind = credentialDeliveryFailureOf(error);
+                return {
+                  runnerId: runner.runnerId,
+                  ok: false as const,
+                  kind,
+                  error: `鍵の配布に失敗した（${kind}）`,
+                };
               }
             }),
           );
@@ -5305,7 +5339,8 @@ export function createApp(deps: AppDeps) {
               decision: `runner へ環境変数（鍵）を配れなかった（${wanted}）`,
               grounds:
                 `${describeActor(c.get('principal'))}（POST /runners/credentials、配布が失敗）: ` +
-                String(error),
+                `runner の一覧を取れなかった（${credentialDeliveryFailureOf(error)}）。` +
+                '値は書かない（鍵そのものである）。',
             },
             '環境変数（鍵）配布の打ち消しの日誌',
             `names=${credentials.map((entry) => entry.name).join(',')}`,
@@ -5316,7 +5351,7 @@ export function createApp(deps: AppDeps) {
         // **配布の結果（runner ごとの成否）は配った後でないと分からないので、
         // 2行目として `appendJournalOrDrop`（best-effort）で足す。値は書かない。**
         const delivered = results
-          .map((result) => `${result.runnerId}=${result.ok ? 'ok' : '失敗'}`)
+          .map((result) => `${result.runnerId}=${result.ok ? 'ok' : `失敗（${result.kind}）`}`)
           .join(', ');
         await appendJournalOrDrop(
           deps.stores,
