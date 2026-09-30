@@ -98,7 +98,14 @@ export function ChatMessage({
         <div
           data-role={role}
           className={cn(
+            // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
+            // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
+            // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
+            // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
             'min-w-0 max-w-[46rem] text-sm leading-relaxed break-words',
+            // クローンの本文だけ Markdown で描く（下のコメント参照）。
+            // 人間・システムの行は素のテキストのままなので、これまでどおり
+            // 改行をそのまま見せる。
             role !== 'clone' && 'whitespace-pre-wrap',
             /*
              * **吹き出しにするのは人間の発言だけ。** 主色で塗った吹き出しにして、
@@ -126,6 +133,25 @@ export function ChatMessage({
             text === '' ? (
               <span className="text-muted-foreground">…</span>
             ) : (
+              /*
+               * **クローンの行だけを Markdown にする。** 人間が打った本文
+               * （`role === 'human'`）は素のテキストのままにする —
+               * 自分が書いた文字が勝手に化けないため。
+               *
+               * **受信中かどうかを見分ける信号は無い。** `Line` には
+               * `role` / `text` / `transient` しか無く、`transient` は
+               * 「考えている…」のような進行中の合図（`role: 'system'`）
+               * にしか立たない。クローンの返信行（`role: 'clone'`）は
+               * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
+               * 受信中か」を示す専用のフィールドを持たない。信号を
+               * 新設するには `packages/` や API 側の変更が要るが、
+               * それは今回の対象外（画面側だけで完結させる）。
+               *
+               * だから毎チャンク、届いた分だけの文字列を Markdown として
+               * パースし直すことになる。**まだ閉じていない ``` や `**`
+               * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
+               * 変わって見える揺れが起きうる**（受信が終われば安定する）。
+               */
               <Markdown>{text}</Markdown>
             )
           ) : transient ? (
@@ -142,6 +168,13 @@ export function ChatMessage({
         </div>
       </div>
 
+      {/*
+        **ChatGPT 風の版切り替え（`< 2/2 >`）。** `versions` は編集で
+        置き換えられた発言にしか付かない（`editVersions` の doc）ので、
+        普通の発言では何も描かれず見た目は1文字も変わらない。
+        編集中はいったん隠す——確定前の下書きと古い版の閲覧を同時に
+        出すと、どちらを直しているのか読みにくくなるため。
+      */}
       {versions !== undefined && !editing && (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -167,6 +200,12 @@ export function ChatMessage({
               ›
             </button>
           </div>
+          {/*
+            **前の版へ戻ると、畳まれた発言が読める。** 古い版を見て
+            いるあいだだけ、その版のすぐ後に隠れていた往復
+            （`hiddenFollowUps`）も出す——ここが「前の版へ戻って
+            読める」の本体である。
+          */}
           {viewingOld && versions.hidden !== undefined && versions.hidden.length > 0 && (
             <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted-foreground">
               {versions.hidden.map((entry, index) => (

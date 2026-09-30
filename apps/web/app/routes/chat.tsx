@@ -1,4 +1,3 @@
-import { Pencil } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -6,15 +5,16 @@ import { Link, useNavigate } from 'react-router';
 import {
   ChatComposer,
   ChatHeader,
+  ChatMessage,
+  ChatMessageEditor,
+  ChatMessageList,
   ConversationList as UiConversationList,
   Drawer,
-  Markdown,
   Button,
   Card,
   Empty,
   ErrorNote,
   Spinner,
-  Textarea,
   useIsMobile,
   cn,
 } from '@alteroid/ui';
@@ -1886,7 +1886,7 @@ export function ChatPane({
                 </Empty>
               </Card>
             ) : (
-              <ul aria-label="やりとり" className="flex flex-col gap-3">
+              <ChatMessageList>
                 {all.map((line) => {
                   /*
                    * **編集の入口（鉛筆）は、本物の日誌エントリ id を持つ人間の
@@ -1919,208 +1919,55 @@ export function ChatPane({
                   // 同じ値になる（`buildEditVersions` の doc）——常にこちらを
                   // 使っても、版を持たない発言の見え方は1文字も変わらない。
                   const displayedText = viewing?.text ?? line.text;
-                  const viewingOldVersion =
-                    versions !== undefined && versionIndex !== undefined
-                      ? versionIndex < versions.length - 1
-                      : false;
 
                   return (
-                    <li
+                    <ChatMessage
                       key={line.key}
-                      className={cn(
-                        'group flex flex-col gap-1',
-                        line.role === 'human' ? 'items-end' : 'items-start',
-                      )}
-                    >
-                      <div className="flex min-w-0 max-w-full items-start gap-1">
-                        {isEditable && !isEditing && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            aria-label="発言を編集"
-                            className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
-                            onClick={() => {
+                      role={line.role}
+                      text={displayedText}
+                      transient={line.transient}
+                      onEdit={
+                        isEditable
+                          ? () => {
                               setEditingKey(line.key);
                               setEditDraft(line.text);
-                            }}
-                          >
-                            <Pencil className="size-3.5" aria-hidden />
-                          </Button>
-                        )}
-                        <div
-                          className={cn(
-                            // `break-words`: クローンの行は `Markdown`（components/markdown.tsx）
-                            // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
-                            // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
-                            // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
-                            'min-w-0 max-w-[46rem] rounded-lg px-3 py-2 text-sm leading-relaxed break-words',
-                            // クローンの本文だけ Markdown で描く（下のコメント参照）。
-                            // 人間・システムの行は素のテキストのままなので、これまでどおり
-                            // 改行をそのまま見せる。
-                            line.role !== 'clone' && 'whitespace-pre-wrap',
-                            line.role === 'human' && 'bg-primary text-primary-foreground',
-                            line.role === 'clone' && 'bg-card',
-                            line.role === 'system' && 'bg-transparent text-muted-foreground italic',
-                          )}
-                        >
-                          {isEditing ? (
-                            /*
-                             * **クリックで textarea になり、送信で確定する**
-                             * （チャットのメッセージ編集、#1010）。キー操作は
-                             * 既存の送信欄（下の `ChatComposer`）と揃える —
-                             * `⌘/Ctrl + Enter` で確定、IME 変換中の Enter では
-                             * 確定しない（`chat.ime-enter.test.tsx` と同じ門）。
-                             * `Escape` で取消——編集前の内容は保存していないが、
-                             * `line.text`（サーバ確定済みの本文）は変えていない
-                             * ので、いつでも同じ下書きから開き直せる。
-                             */
-                            <div className="flex min-w-64 flex-col gap-2">
-                              <Textarea
-                                autoFocus
-                                rows={2}
-                                value={editDraft}
-                                className="text-foreground"
-                                aria-label="発言を編集する下書き"
-                                onChange={(event) => setEditDraft(event.target.value)}
-                                onKeyDown={(event) => {
-                                  if (
-                                    event.key === 'Enter' &&
-                                    (event.nativeEvent.isComposing ||
-                                      event.nativeEvent.keyCode === 229)
-                                  ) {
-                                    return;
-                                  }
-                                  if (event.key === 'Escape') {
-                                    event.preventDefault();
-                                    setEditingKey(undefined);
-                                    return;
-                                  }
-                                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                                    event.preventDefault();
-                                    void confirmEdit(line);
-                                  }
-                                }}
-                              />
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="primary"
-                                  disabled={editDraft.trim() === ''}
-                                  onClick={() => void confirmEdit(line)}
-                                >
-                                  確定
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setEditingKey(undefined)}
-                                >
-                                  キャンセル
-                                </Button>
-                              </div>
-                            </div>
-                          ) : line.role === 'clone' ? (
-                            displayedText === '' ? (
-                              <span className="text-muted-foreground">…</span>
-                            ) : (
-                              /*
-                               * **クローンの行だけを Markdown にする。** 人間が打った本文
-                               * （`role === 'human'`）は素のテキストのままにする —
-                               * 自分が書いた文字が勝手に化けないため。
-                               *
-                               * **受信中かどうかを見分ける信号は無い。** `Line` には
-                               * `role` / `text` / `transient` しか無く、`transient` は
-                               * 「考えている…」のような進行中の合図（`role: 'system'`）
-                               * にしか立たない。クローンの返信行（`role: 'clone'`）は
-                               * チャンクが届くたびに `text` を継ぎ足すだけで、「まだ
-                               * 受信中か」を示す専用のフィールドを持たない。信号を
-                               * 新設するには `packages/` や API 側の変更が要るが、
-                               * それは今回の対象外（画面側だけで完結させる）。
-                               *
-                               * だから毎チャンク、届いた分だけの文字列を Markdown として
-                               * パースし直すことになる。**まだ閉じていない ``` や `**`
-                               * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
-                               * 変わって見える揺れが起きうる**（受信が終われば安定する）。
-                               */
-                              <Markdown>{displayedText}</Markdown>
-                            )
-                          ) : (
-                            displayedText
-                          )}
-                        </div>
-                      </div>
-
-                      {/*
-                    **ChatGPT 風の版切り替え（`< 2/2 >`）。** `versions` は編集で
-                    置き換えられた発言にしか付かない（`editVersions` の doc）ので、
-                    普通の発言では何も描かれず見た目は1文字も変わらない。
-                    編集中はいったん隠す——確定前の下書きと古い版の閲覧を同時に
-                    出すと、どちらを直しているのか読みにくくなるため。
-                  */}
-                      {versions !== undefined &&
-                      versionIndex !== undefined &&
-                      journalId !== undefined &&
-                      !isEditing ? (
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                            <button
-                              type="button"
-                              aria-label="前の版へ"
-                              disabled={versionIndex <= 0}
-                              className="disabled:opacity-40"
-                              onClick={() =>
+                            }
+                          : undefined
+                      }
+                      versions={
+                        versions !== undefined &&
+                        versionIndex !== undefined &&
+                        journalId !== undefined
+                          ? {
+                              index: versionIndex,
+                              total: versions.length,
+                              onPrevious: () =>
                                 setViewingVersionIndex((current) => ({
                                   ...current,
                                   [journalId]: versionIndex - 1,
-                                }))
-                              }
-                            >
-                              ‹
-                            </button>
-                            <span>
-                              {versionIndex + 1}/{versions.length}
-                            </span>
-                            <button
-                              type="button"
-                              aria-label="次の版へ"
-                              disabled={versionIndex >= versions.length - 1}
-                              className="disabled:opacity-40"
-                              onClick={() =>
+                                })),
+                              onNext: () =>
                                 setViewingVersionIndex((current) => ({
                                   ...current,
                                   [journalId]: versionIndex + 1,
-                                }))
-                              }
-                            >
-                              ›
-                            </button>
-                          </div>
-                          {/*
-                        **前の版へ戻ると、畳まれた発言が読める。** 古い版を見て
-                        いるあいだだけ、その版のすぐ後に隠れていた往復
-                        （`hiddenFollowUps`）も出す——ここが「前の版へ戻って
-                        読める」の本体である。
-                      */}
-                          {viewingOldVersion &&
-                            viewing !== undefined &&
-                            viewing.hiddenFollowUps.length > 0 && (
-                              <div className="flex max-w-[46rem] flex-col gap-1 rounded-lg border border-dashed border-border px-3 py-2 text-xs whitespace-pre-wrap text-muted-foreground">
-                                {viewing.hiddenFollowUps.map((entry, index) => (
-                                  <p key={index}>
-                                    <span className="mr-1 font-semibold">
-                                      {entry.role === 'human' ? '人間' : 'クローン'}
-                                    </span>
-                                    {entry.text}
-                                  </p>
-                                ))}
-                              </div>
-                            )}
-                        </div>
-                      ) : null}
-                    </li>
+                                })),
+                              hidden: viewing?.hiddenFollowUps,
+                            }
+                          : undefined
+                      }
+                    >
+                      {isEditing ? (
+                        <ChatMessageEditor
+                          value={editDraft}
+                          onChange={setEditDraft}
+                          onConfirm={() => void confirmEdit(line)}
+                          onCancel={() => setEditingKey(undefined)}
+                        />
+                      ) : undefined}
+                    </ChatMessage>
                   );
                 })}
-              </ul>
+              </ChatMessageList>
             )}
           </>
         )}
