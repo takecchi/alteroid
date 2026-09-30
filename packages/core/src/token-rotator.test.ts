@@ -1978,6 +1978,38 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
     expect(await isCooling(h, 'tok-a')).toBe(false);
   });
 
+  it('(c) reconsider: 冷却を書けなかった回も、signal は settings_unreadable で、probe の観測と読めない理由の両方が why に残る', async () => {
+    const h = harness();
+    await seedTwo(h); // tok-a が現役、記録の上ではどちらも ready
+    breakTokenSettings(h, 'cooldownMs が負の数');
+    const before = JSON.stringify(await h.stores.tokens.list());
+    const writes = h.replaceCalls();
+
+    const outcome = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '枠が尽きた' },
+        origin: { source: 'account_probe' },
+      },
+    });
+
+    expect(outcome.kind).toBe('ignored');
+    if (outcome.kind !== 'ignored') return;
+    // **`none` にしない** —— probe で通らないと観測した事実も、設定が読めない事実も
+    // 出力から消えるため（`describeTokenRotation` は `none` を日誌に出さない）。
+    expect(outcome.signal).toBe('settings_unreadable');
+    expect(outcome.why).toContain('probe で通らないことを観測した');
+    expect(outcome.why).toContain('枠が尽きた');
+    expect(outcome.why).toContain('回転の設定が読めなかった');
+    expect(outcome.why).toContain('cooldownMs が負の数');
+    // **冷却は書かない**（既定値へすり替えない。issue #2147）。記録は1バイトも動かない。
+    expect(JSON.stringify(await h.stores.tokens.list())).toBe(before);
+    expect(h.replaceCalls()).toBe(writes);
+    const entry = tokenRotationEntry(outcome);
+    expect(entry).not.toBeNull();
+    expect(entry?.text).toContain('枠が尽きた');
+  });
+
   it('(d) 読めなかったことが why / 日誌に残り、既定値の文言（free_exhausted 等）を名乗らない', async () => {
     const h = harness();
     await seedTwo(h);

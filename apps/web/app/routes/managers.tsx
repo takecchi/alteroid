@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
-import { Page, Badge, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
+import { Page, Card, Empty, ErrorNote, FilterChips, Spinner, StatusBadge } from '@alteroid/ui';
 import { useManagersWindow } from '@alteroid/swr';
 import { formatRelative, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
@@ -47,10 +47,7 @@ const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'
  * 継承したキーは `undefined` にならず、別の形で壊れるためである。
  */
 export function ManagerStatusBadge({ status }: { status: ManagerStatus }) {
-  const view = Object.hasOwn(STATUS, status)
-    ? STATUS[status]
-    : { tone: 'neutral' as const, label: `知らない状態（${String(status)}）` };
-  return <Badge tone={view.tone}>{view.label}</Badge>;
+  return <StatusBadge status={status} map={STATUS} />;
 }
 
 /**
@@ -651,33 +648,14 @@ export default function Managers() {
       title="マネージャー"
       description="クローンが起こした仕事。人間が Claude Code に頼んだのと同じ位置にいる"
     >
-      <div className="mb-4 flex flex-wrap items-center gap-1.5">
-        {STATUSES.map((status) => (
-          <button
-            key={status}
-            type="button"
-            onClick={() => toggle(status)}
-            aria-pressed={selected.includes(status)}
-            className={cn(
-              'rounded border px-2 py-1 text-[11px] transition-colors',
-              selected.includes(status)
-                ? 'border-primary bg-primary/15 text-primary'
-                : 'border-border text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {STATUS[status].label}
-          </button>
-        ))}
-        {selected.length > 0 && (
-          <button
-            type="button"
-            onClick={clearSelected}
-            className="ml-1 text-[11px] text-muted-foreground underline hover:text-foreground"
-          >
-            解除
-          </button>
-        )}
-      </div>
+      <FilterChips
+        className="mb-4"
+        label="状態で絞り込む"
+        options={STATUSES.map((status) => ({ value: status, label: STATUS[status].label }))}
+        selected={selected}
+        onToggle={toggle}
+        onClear={clearSelected}
+      />
 
       {/*
         **`key={selected.join(',')}` で丸ごと作り直す。** 絞りが変われば

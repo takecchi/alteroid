@@ -2336,6 +2336,10 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
          */
         let pool = tokens;
         let blockedByProbe = false;
+        // **probe で通らないと観測したのに、冷却を書けなかった**（設定が読めず、
+        // 権威ある `resets` も無い）ときの、その観測の文言。`availability === 'ready'`
+        // の早期リターンで観測が出力から消えないよう持ち回す。
+        let probeUnusableUnrecorded: string | undefined;
         if (currentVerdict?.verdict === 'unusable' && currentRow !== undefined) {
           // 出所は `quota_reset`（`/usage` の枠のリセット時刻。#683 — 上の
           // `sweepCandidates` の同じ箇所と同じ理由）。**権威ある値なので、
@@ -2377,6 +2381,8 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               );
             });
             blockedByProbe = true;
+          } else {
+            probeUnusableUnrecorded = currentVerdict.reason;
           }
         }
 
@@ -2429,6 +2435,22 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
               reason,
               reopened: { tokenId: row.id, label: row.label, cooldownUntil: elapsedAt },
               why: `現役「${row.label}」の冷却が明けた（${elapsedAt}）。**時計で明けたのであって、通ることを観測したわけではない**`,
+            };
+          }
+          /**
+           * **probe で通らないと観測したのに冷却を書けなかった回は `none` にしない**
+           * （issue #2147 の続き）。設定が読めないので冷却の既定（`cooldownMs`）へ
+           * すり替えて書くことはしない（記録は1文字も動かさない）が、`none` で返すと
+           * 「probe で通らない」も「設定が読めない」も出力から消える。
+           * **`signal` は下の設定が読めない門と同じ `settings_unreadable`**
+           * （`stranded` は借りない）。
+           */
+          if (probeUnusableUnrecorded !== undefined && !settingsRead.readable) {
+            return {
+              kind: 'ignored' as const,
+              signal: 'settings_unreadable' as const,
+              reason,
+              why: `現役「${row?.label ?? currentId}」は probe で通らないことを観測した（${probeUnusableUnrecorded}）。回転の設定が読めなかったので冷却を書けず、この回は回さない（${settingsRead.reason}）`,
             };
           }
           return {

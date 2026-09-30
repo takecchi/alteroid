@@ -1,4 +1,9 @@
-import { fetchAccountUsage, type AccountUsageState, type UsageProbeQuery } from '@alteroid/core';
+import {
+  fetchAccountUsage,
+  type AccountUsageState,
+  type LimitsUnavailableCause,
+  type UsageProbeQuery,
+} from '@alteroid/core';
 
 /**
  * アカウント全体の利用状況を定期的に取り直す。
@@ -73,6 +78,12 @@ export const USAGE_POLL_UNAVAILABLE_INTERVAL_MS = 30 * 60_000;
  * **誰も正当化できない数**である（`AGENTS.md`「値が同じでも使い回さない」の裏面
  * ——**根拠の無い新しい数を作らない**）。線は「取れないと分かったか」の2値で足りる。
  *
+ * ## 網羅の形
+ *
+ * **`switch` で各状態・各理由の行き先を明示し、末尾を `never` で締める。** 状態や理由が
+ * 増えたとき、かつては既定で「聞き続ける」側へ静かに落ちていた（意図は変わらない）が、
+ * いまは型検査が落ち、足した人がどちらへ行くかを書く。
+ *
  * ## 欄が無い回も通常の間隔へ倒す
  *
  * `cause` は optional である（`AccountUsageState` の doc: 版がずれる）。**無いのは
@@ -84,15 +95,49 @@ export function intervalForState(
   state: AccountUsageState,
   intervals: { normal: number; unavailable: number },
 ): number {
-  if (state.state !== 'unavailable') return intervals.normal;
-  // **数え上げで書く**（`switch` ではなく明示の2値）。`LimitsUnavailableCause` に
-  // 値が増えたとき、**既定で「聞き続ける」側へ落ちる** —— 増えた値がどちらの意味
-  // なのかは、足した人が決めてここへ書くべきものである。**黙って諦める側へ倒す
-  // 形にしないこと**（それが #681 の誤りの形そのものである）。
-  if (state.cause === 'not_logged_in' || state.cause === 'non_first_party') {
-    return intervals.unavailable;
+  switch (state.state) {
+    // 取れた・まだ聞いていない・失敗した —— どれも「取れないと分かった」ではない。
+    case 'ok':
+    case 'unknown':
+    case 'failed':
+      return intervals.normal;
+    case 'unavailable':
+      return intervalForUnavailableCause(state.cause, intervals);
+    default: {
+      // **型の歯**: `AccountUsageState` に状態が増えると、ここで `never` に代入できず
+      // 型検査が落ちる —— 増えた状態の行き先は、足した人が上へ書く。
+      // **実行時の倒れ先**は従来どおり「聞き続ける」側である（版がずれた応答が知らない
+      // 状態を運んできても、黙って諦める側へ倒さない）。
+      const unhandled: never = state;
+      void unhandled;
+      return intervals.normal;
+    }
   }
-  return intervals.normal;
+}
+
+/** `unavailable` の理由ごとの間隔。各値の行き先を明示する（`intervalForState` の doc）。 */
+function intervalForUnavailableCause(
+  cause: LimitsUnavailableCause | undefined,
+  intervals: { normal: number; unavailable: number },
+): number {
+  switch (cause) {
+    // 取れないと分かった2つ。鍵が届く・バックエンドが変わるまで答えは変わらない。
+    case 'not_logged_in':
+    case 'non_first_party':
+      return intervals.unavailable;
+    // 断定できていない側 —— 聞き続ける（#681 の本題）。`undefined`（欄が無い回。版のずれ）も
+    // 断定できない側へ倒す（`intervalForState` の doc）。
+    case 'undetermined':
+    case undefined:
+      return intervals.normal;
+    default: {
+      // **型の歯**: `LimitsUnavailableCause` に値が増えると、ここで型検査が落ちる。
+      // **実行時の倒れ先**は「聞き続ける」側（**黙って諦める側へ倒さない**。#681 の誤りの形）。
+      const unhandled: never = cause;
+      void unhandled;
+      return intervals.normal;
+    }
+  }
 }
 
 export interface UsagePollerOptions {
