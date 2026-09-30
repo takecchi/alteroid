@@ -396,17 +396,13 @@ function ConversationList({
       error={error}
       notes={notes}
       inDrawer={onNavigate !== undefined}
-      // 見た目は従来の画面のまま（往復の数を包まない・選択中は `bg-muted`・Tab の順路も従来どおり）。
-      numericCount={false}
-      rowClassName="block border-b border-border px-3 py-2 hover:bg-muted"
-      activeRowClassName="bg-muted"
+      // 従来は「新しい会話」のボタンも Tab の順路に残っていた（振る舞いは変えない）。
       newConversationTabStop
       renderLink={(target, slot) => (
         <Link
           to={target.id === undefined ? '/chat' : `/chat/${target.id}`}
           onClick={onNavigate}
-          // 「新しい会話」の枠は class を持たない（空の `class=""` を出さない）。
-          className={slot.className === '' ? undefined : slot.className}
+          className={slot.className}
         >
           {slot.children}
         </Link>
@@ -2151,8 +2147,6 @@ export function ChatPane({
             <ErrorNote error={shownFailure} />
           )
         }
-        // 従来の入力欄の帯は背景色を敷いていない。
-        opaque={false}
       />
     </div>
   );

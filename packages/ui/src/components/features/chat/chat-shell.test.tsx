@@ -2,9 +2,8 @@
 /**
  * `ConversationList` / `ChatHeader` / `ChatComposer` の省略可能な口と、その既定。
  *
- * 口は画面（`apps/web/app/routes/chat.tsx`）が従来の表示をそのまま出すために足した
- * （`numericCount` / `rowClassName` / `activeRowClassName` / `newConversationTabStop` /
- * `opaque`）。**口を渡さないときの振る舞いは変えていない**——既定の側もここで押さえる。
+ * 口は `newConversationTabStop` だけ（画面が従来の Tab の順路を保つために足した）。
+ * **口を渡さないときの振る舞いは変えていない**——既定の側もここで押さえる。
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -32,8 +31,8 @@ function row(preview: string): HTMLElement {
   return link;
 }
 
-describe('ConversationList: 行の見た目', () => {
-  it('既定: 往復の数を data-numeric で包み、選択中は lumen-edge bg-accent', () => {
+describe('ConversationList: 行の見た目（既定）', () => {
+  it('往復の数を data-numeric で包み、選択中は lumen-edge bg-accent', () => {
     render(<ConversationList items={items} activeId="a" renderLink={renderLink} />);
     const active = row('選んでいる');
     expect(active.querySelector('[data-numeric]')?.textContent).toBe('4');
@@ -41,29 +40,6 @@ describe('ConversationList: 行の見た目', () => {
       expect.arrayContaining(['lumen-edge', 'bg-accent', 'transition-colors', 'hover:bg-muted']),
     );
     expect(row('別の会話').className.split(/\s+/)).not.toContain('lumen-edge');
-  });
-
-  it('numericCount を偽にすると、数字を包まず1つの <p> の文字で出す', () => {
-    render(
-      <ConversationList items={items} activeId="a" renderLink={renderLink} numericCount={false} />,
-    );
-    const paragraph = row('選んでいる').querySelectorAll('p')[1];
-    expect(paragraph?.querySelector('[data-numeric]')).toBeNull();
-    expect(paragraph?.textContent).toBe('3 分前 · 4 往復');
-  });
-
-  it('rowClassName / activeRowClassName は既定を置き換える（足さない）', () => {
-    render(
-      <ConversationList
-        items={items}
-        activeId="a"
-        renderLink={renderLink}
-        rowClassName="block hover:bg-muted"
-        activeRowClassName="bg-muted"
-      />,
-    );
-    expect(row('選んでいる').className).toBe('block hover:bg-muted bg-muted');
-    expect(row('別の会話').className).toBe('block hover:bg-muted');
   });
 });
 
@@ -171,13 +147,11 @@ describe('ChatComposer', () => {
     return { onSend, band };
   }
 
-  it('既定: 帯に bg-background を敷く。opaque を偽にすると敷かない', () => {
+  it('帯に bg-background と縦横の safe-area を持つ', () => {
     const { band } = composer();
-    expect(band.className.split(/\s+/)).toContain('bg-background');
-    cleanup();
-    const { band: transparent } = composer({ opaque: false });
-    expect(transparent.className.split(/\s+/)).not.toContain('bg-background');
-    expect(transparent.className.split(/\s+/)).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
+    const classes = band.className.split(/\s+/);
+    expect(classes).toContain('bg-background');
+    expect(classes).toContain('pb-[calc(0.75rem+var(--safe-bottom))]');
   });
 
   it('⌘/Ctrl + Enter で送る。Enter 単体・IME の確定の Enter では送らない', () => {

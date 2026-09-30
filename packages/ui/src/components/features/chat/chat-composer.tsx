@@ -1,8 +1,6 @@
 import { Send, Square } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-import { cn } from '@/lib/utils';
-
 import { Button, Textarea } from '../../common';
 
 import { isSubmitShortcut } from './ime';
@@ -21,7 +19,7 @@ import { isSubmitShortcut } from './ime';
  *
  * `error` には送信・中断の失敗を渡す（入力欄の上に出る）。渡すと `mb-2` の `div` で
  * 包む。**失敗が無いときは `undefined` を渡す**（空の `div` の余白が残る）。
- * `opaque` を偽にすると、帯に背景色を敷かない（既定は敷く）。
+
  */
 export function ChatComposer({
   value,
@@ -31,7 +29,6 @@ export function ChatComposer({
   onStopReceiving,
   error,
   placeholder = 'クローンに話しかける（⌘/Ctrl + Enter で送信）',
-  opaque = true,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -41,17 +38,10 @@ export function ChatComposer({
   onStopReceiving?: () => void;
   error?: ReactNode;
   placeholder?: string;
-  /** 偽なら帯に `bg-background` を敷かない（背後の面の色をそのまま見せる）。既定は敷く。 */
-  opaque?: boolean;
 }) {
   const empty = value.trim() === '';
   return (
-    <div
-      className={cn(
-        'shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
-        opaque && 'bg-background',
-      )}
-    >
+    <div className="shrink-0 border-t border-border bg-background pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
       {error !== undefined && <div className="mb-2">{error}</div>}
       <div className="flex items-end gap-2">
         <div className="min-w-0 flex-1">
