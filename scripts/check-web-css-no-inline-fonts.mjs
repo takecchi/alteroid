@@ -70,10 +70,10 @@ function main() {
   if (hits.length > 0) {
     const total = hits.reduce((sum, hit) => sum + hit.count, 0);
     logError(
-      `check-web-css-no-inline-fonts: NG — ${hits.length}ファイルに data:font/ が計${total}個ある:`,
+      `check-web-css-no-inline-fonts: NG — フォントの base64 埋め込みが計${total}個ある（${hits.length}件のパターン別ヒット）:`,
     );
     for (const hit of hits) {
-      logError(`  ${hit.path} : ${hit.count}個`);
+      logError(`  ${hit.path} : ${hit.pattern} ${hit.count}個`);
       logError(`    …${hit.snippet}…`);
     }
     logError(FAILURE_ADVICE);

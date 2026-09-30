@@ -27,6 +27,35 @@ describe('check-web-css-no-inline-fonts', () => {
     expect(findInlineFontHits([{ path: 'root.css', content }])).toEqual([]);
   });
 
+  it('data:application/font-woff（古い MIME）を含む CSS を落とす', () => {
+    const content = '@font-face{src:url(data:application/font-woff;base64,AAAA)}';
+    const hits = findInlineFontHits([{ path: 'root.css', content }]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ pattern: 'data:application/font-', count: 1 });
+  });
+
+  it('data:application/x-font-ttf を含む CSS を落とす', () => {
+    const content = '@font-face{src:url(data:application/x-font-ttf;base64,AAAA)}';
+    const hits = findInlineFontHits([{ path: 'root.css', content }]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ pattern: 'data:application/x-font-', count: 1 });
+  });
+
+  it('大文字小文字を区別しない', () => {
+    const content =
+      'a{src:url(DATA:FONT/woff2;base64,A)}b{src:url(Data:Application/X-Font-OTF;base64,B)}';
+    const patterns = findInlineFontHits([{ path: 'root.css', content }]).map(
+      (h: { pattern: string }) => h.pattern,
+    );
+    expect(patterns).toEqual(['data:font/', 'data:application/x-font-']);
+  });
+
+  it('フォント以外の data:（application/json など）は通す', () => {
+    const content =
+      'a{x:url(data:application/json;base64,AAAA)}b{x:url(data:application/octet-stream,AA)}';
+    expect(findInlineFontHits([{ path: 'root.css', content }])).toEqual([]);
+  });
+
   it('CSS が 0 本なら落ちる（空で緑にならない）', () => {
     expect(assertHasCssFiles([])).not.toBeNull();
     expect(assertHasCssFiles([{ path: 'root.css', content: '' }])).toBeNull();

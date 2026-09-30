@@ -22,15 +22,28 @@
  *
  * - **言えること**: コンパイル後の CSS に `data:font/` が1つも無い。原因を直接塞ぐ
  *   検査なので、CSS 全体のサイズ予算より誤って落ちにくい
- * - **言えないこと**: CSS のサイズが小さいこと。フォント以外の埋め込み（画像など）や
- *   別の原因での肥大は見ない（オーナー判断でサイズ予算は入れていない）。
- *   `data:application/font-woff` のような別の MIME で埋め込まれた場合も拾わない
+ * - **言えること（その2）**: 古い MIME（`data:application/font-woff` / `font-woff2` など
+ *   `data:application/font-` 始まり、`data:application/x-font-woff` / `x-font-ttf` /
+ *   `x-font-otf` など `data:application/x-font-` 始まり）も、大文字小文字を問わず拾う。
+ *   フォント以外の `data:`（`data:application/json` など）には反応しない
+ * - **言えないこと**: CSS のサイズが小さいこと。フォント以外の埋め込み（`data:image/` など）や
+ *   別の原因での肥大は見ない（オーナー判断でサイズ予算は入れていない）
  */
 
-/** フォントの base64 埋め込み（`url(data:font/woff2;base64,…)` の頭）。 */
-export const INLINE_FONT = /data:font\//;
+/** フォントの base64 埋め込み（`url(data:font/woff2;base64,…)` の頭）。大文字小文字は区別しない。 */
+export const INLINE_FONT = /data:font\//i;
 
-export const PATTERNS = [{ name: 'inline-font-data-url', re: INLINE_FONT }];
+/** 古い MIME（`data:application/font-woff` / `font-woff2` など `font-` 始まり）。 */
+export const INLINE_APP_FONT = /data:application\/font-/i;
+
+/** 古い `x-` 付きの MIME（`x-font-woff` / `x-font-ttf` / `x-font-otf` など）。 */
+export const INLINE_APP_X_FONT = /data:application\/x-font-/i;
+
+export const PATTERNS = [
+  { name: 'data:font/', re: INLINE_FONT },
+  { name: 'data:application/font-', re: INLINE_APP_FONT },
+  { name: 'data:application/x-font-', re: INLINE_APP_X_FONT },
+];
 
 /**
  * 落ちたときに CLI が添える説明（原因の候補と、なぜ困るか）。
@@ -40,23 +53,25 @@ export const FAILURE_ADVICE =
   '埋め込むと困る理由: unicode-range に関係なく、CSS と一緒に最初に落ちてくる（画面が使わない断片まで先に落ちる）。';
 
 /**
- * `files`（`{ path, content }` の配列）を走査し、`data:font/` が現れる箇所を返す。
- * 1ファイルにつき1件（`count` に個数を持つ）。CSS が0本なら空配列ではなく呼び側で
- * 落とす（空で緑にしない）ため、`assertHasCssFiles` を使う。
+ * `files`（`{ path, content }` の配列）を全パターンで走査し、当たった箇所を返す。
+ * 1ファイル・1パターンにつき1件（`count` に個数を持つ）。CSS が0本なら空配列ではなく
+ * 呼び側で落とす（空で緑にしない）ため、`assertHasCssFiles` を使う。
  */
 export function findInlineFontHits(files) {
   const hits = [];
   for (const file of files) {
-    const global = new RegExp(INLINE_FONT.source, 'g');
-    const matches = [...file.content.matchAll(global)];
-    if (matches.length > 0) {
-      const first = matches[0].index;
-      hits.push({
-        path: file.path,
-        pattern: PATTERNS[0].name,
-        count: matches.length,
-        snippet: file.content.slice(Math.max(0, first - 40), first + 40),
-      });
+    for (const pattern of PATTERNS) {
+      const global = new RegExp(pattern.re.source, 'gi');
+      const matches = [...file.content.matchAll(global)];
+      if (matches.length > 0) {
+        const first = matches[0].index;
+        hits.push({
+          path: file.path,
+          pattern: pattern.name,
+          count: matches.length,
+          snippet: file.content.slice(Math.max(0, first - 40), first + 40),
+        });
+      }
     }
   }
   return hits;
