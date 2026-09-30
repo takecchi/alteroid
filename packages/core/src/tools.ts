@@ -24,7 +24,9 @@ import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
 import { filterTranscriptLines } from './transcript-filter.js';
 import {
+  describeOffsetRequiredTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   isReadableJournalTimeBoundary,
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
@@ -1581,7 +1583,7 @@ async function describeMissingReport(
   } catch (error) {
     return (
       `${base} 生ログは読めなかった（` +
-      (error instanceof Error ? error.message : String(error)) +
+      reasonOf(error) +
       '）。「まだ書いていない」か「書いたのに届いていない」かは、これだけでは判定できない。'
     );
   }
@@ -2299,10 +2301,20 @@ export function formatWorkKindRangeJa(): string {
   });
 }
 
-function describeWorkKindViolation(value: string | undefined): string | null {
+/**
+ * `field` は断り文に出す欄名。commitment 系（`commitment_close` /
+ * `commitment_appraise` / `manager_appraise`）の欄は `workKind` なので既定値を
+ * それにしてある。`practice_write` の欄は `kind`（`practiceKindSchema` は
+ * `workKindSchema` の別名）なので `'kind'` を渡す——呼んだ側が渡していない
+ * 欄名で断ると、どの引数を直せばよいかが読めない。issue #2450。
+ */
+function describeWorkKindViolation(
+  value: string | undefined,
+  field: string = 'workKind',
+): string | null {
   if (value === undefined) return null;
   if (workKindSchema.safeParse(value).success) return null;
-  return `workKind は使えない（${formatWorkKindRangeJa()}のみ）。`;
+  return `${field} は使えない（${formatWorkKindRangeJa()}のみ）。`;
 }
 
 /**
@@ -5937,7 +5949,7 @@ export function createCloneTools(context: ToolContext) {
         try {
           fromWritten = await stores.persona.write(fromSlug, nextContent);
         } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
+          const reason = reasonOf(error);
           if (toAppend.length > 0) {
             // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
             // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
@@ -8550,6 +8562,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `この時刻までに載った行だけを対象にする（ISO8601。${formatStringLengthJa({ min: 1 })}。その瞬間ちょうどの行は含む）。` +
+              '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-11T19:00:00Z。時差の無い形は断る）。' +
               '閉じている最中に届いた新しい行を巻き込まないために使う',
           ),
         // **issue #1752。** 同上。
@@ -8618,10 +8631,14 @@ export function createCloneTools(context: ToolContext) {
         // 形（`2026-09-25T10:00Z`）を落とすようになり（PR #1561）、書き方の揺れだけで
         // 断るようになった。絞り込みはもともと `Date.parse` で比べている（下の
         // `untilMs`）ので、判定と比較の読み方がこれで1つに揃う。
-        if (until !== undefined && !isReadableJournalTimeBoundary(until)) {
+        //
+        // **ただしこの口は元に戻せない一括操作なので、時差（`Z` / `±hh:mm`）を必須にする**
+        // （#2462）。時差の無い形は `Date.parse` がサーバーの地方時刻として読み、
+        // 境界が黙ってずれる。読むだけの `journal_read` の `since` / `until` は緩いまま。
+        if (until !== undefined && !isOffsetQualifiedTimeBoundary(until)) {
           return text(
-            `until に渡された「${until}」は ISO8601 として読めない` +
-              '（例 2026-09-11T19:00:00.000Z）。**1件も閉じていない。**',
+            describeOffsetRequiredTimeBoundary('until', until, '2026-09-11T19:00:00.000Z') +
+              '**1件も閉じていない。**',
           );
         }
 
@@ -8923,6 +8940,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `この時刻**以前**（ISO8601、その瞬間ちょうども含む。${formatStringLengthJa({ min: 1 })}）に積まれた行だけを対象にする。` +
+              '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-15T00:00:00Z。時差の無い形は断る）。' +
               '消している最中に届いた新しい行を巻き込まないために使う',
           ),
         // **issue #1752。** 同上。
@@ -8986,10 +9004,11 @@ export function createCloneTools(context: ToolContext) {
         // **読めない `before` を「絞り込みが当たらなかった」に混ぜない**
         // （`commitment_close_many` の `until` と同じ理由・同じ読み方。比較は
         // `matchesInboxRemoveManyFilter` が `Date.parse` で行う）。
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        // 元に戻せない一括操作なので時差を必須にする（#2462。`until` と同じ）。
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+              '**1件も消していない。**',
           );
         }
 
@@ -9779,6 +9798,15 @@ export function createCloneTools(context: ToolContext) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #2450。** `kind`（`practiceKindSchema` = `workKindSchema` の
+        // `.min(1).max(128)`）も書く前に見る。見ないと保存層の `parse` が
+        // 生の ZodError を投げ、それがそのままクローンへ返る（`PUT
+        // /practices/:slug` は `practiceBody` の検査で 400 を返す）。入力
+        // スキーマ側に `.min/.max` を足さないのは #1752 と同じ理由
+        // （`workKindToolInputSchema` の doc。SDK がハンドラより前に英語の
+        // zod の文で断ってしまう）。
+        const kindError = describeWorkKindViolation(kind, 'kind');
+        if (kindError !== null) return text(kindError);
         // **issue #2011。** `before` は「作ったか書き直したか」の分岐と、
         // 差分表示（`describeTokenDiff`）にしか使わない（`write()` 自体は
         // `before` の値に依存しない）。以前は `read()` が壊れた行をそのまま
@@ -10475,7 +10503,7 @@ export function createCloneTools(context: ToolContext) {
           try {
             list = await pool.list();
           } catch (error: unknown) {
-            return { kind: 'unreadable', reason: String(error) };
+            return { kind: 'unreadable', reason: reasonOf(error) };
           }
           const manager = list.find((entry) => entry.managerId === managerId);
           return manager === undefined ? { kind: 'absent' } : { kind: 'found', manager };
@@ -10547,7 +10575,7 @@ export function createCloneTools(context: ToolContext) {
             })
             .catch((error: unknown): ManagerUnpushedWork => ({
               kind: 'unavailable',
-              reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+              reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
             }));
 
           return text(

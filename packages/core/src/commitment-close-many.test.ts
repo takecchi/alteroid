@@ -252,6 +252,50 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
     });
   });
 
+  // **時差の無い until は断る**（#2462）。`Date.parse` はサーバーの地方時刻として読むので、
+  // 元に戻せない一括操作の境界が黙ってずれる。読める形でも1件も閉じない。
+  describe.each([
+    '2026-02-01T00:00',
+    '2026-02-01T00:00:00',
+    '2026/02/01',
+    'Feb 1 2026',
+    '2026-02-01',
+  ])('7c. 時差の無い until: %s', (until) => {
+    it('断り、当たる行があっても1件も閉じない', async () => {
+      const stores = createMemoryStores();
+      const entry = entryAt(0, 'external', { at: '2026-01-01T00:00:00.000Z' });
+      await openAll(stores, [entry]);
+
+      const reply = await closer(stores)({
+        origin: ['external'],
+        until,
+        reason: '時差の無い until',
+        dryRun: false,
+      });
+
+      expect(reply).toContain(`until に渡された「${until}」`);
+      expect(reply).toContain('時差');
+      expect((await stores.commitments.get(entry.id))?.closedAt).toBeUndefined();
+    });
+  });
+
+  it('7d. 時差の付いた until（小数秒・-05:00 を含む）は通る', async () => {
+    for (const until of ['2026-02-01T00:00:00.123+09:00', '2026-01-31T19:00-05:00']) {
+      const stores = createMemoryStores();
+      const entry = entryAt(0, 'external', { at: '2026-01-01T00:00:00.000Z' });
+      await openAll(stores, [entry]);
+
+      await closer(stores)({
+        origin: ['external'],
+        until,
+        reason: '時差の付いた until',
+        dryRun: false,
+      });
+
+      expect((await stores.commitments.get(entry.id))?.closedAt, until).not.toBeUndefined();
+    }
+  });
+
   it('8. 0件の3つの区別は互いに異なる文言で、該当する段の実数を含む', async () => {
     // ① 台帳が空。
     const emptyStores = createMemoryStores();

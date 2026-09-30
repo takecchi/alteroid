@@ -6363,6 +6363,17 @@ describe('クローンの道具', () => {
     expect(reply, '読めなかっただけなのに「居ない」と言っている').not.toContain('居ない');
   });
 
+  it('manager_stop は止める前に一覧を読めなかった原因の、2行目以降の値を応答へ出さない（#2468）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setListFailures([1], 'Failed query: select 1\nparams: FAKE_SECRET_VALUE_2468');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('読めなかった原因: Error: Failed query: select 1\n');
+    expect(reply).not.toContain('FAKE_SECRET_VALUE_2468');
+  });
+
   it('manager_stop は止める前に一覧を読めなくても、force: true なら止めに進む', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -12742,6 +12753,21 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).toContain('ECONNRESET');
     expect(reply).not.toContain('生ログにも本文は無い');
     expect(reply).not.toContain('⚠');
+  });
+
+  it('生ログが読めなかった理由の、2行目以降の値と URL の資格は応答へ出さない（#2468）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscriptFailure(
+      'mgr-1',
+      'Failed query: select 1\nparams: FAKE_SECRET_VALUE_2468 postgres://u:FAKE_SECRET_VALUE_2468@h/db',
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('生ログは読めなかった（');
+    expect(reply).toContain('Failed query');
+    expect(reply).not.toContain('FAKE_SECRET_VALUE_2468');
   });
 
   it('上限（REPORT_GENERATED_PROBE_CHARS）まで遡っても見つからなかったら「見つからなかった」であって「無い」ではない', async () => {

@@ -489,6 +489,10 @@ export function ChatPane({
    * が `setDraft('')` を呼ぶのは常に「いま見ている会話」に対してで、次に
    * この会話から離れるときにその空の値がここへしまわれる（下の同期ブロック）
    * ので、送った会話の下書きだけが空になり、他の会話のエントリには触れない。
+   * **新しい会話で送ると、離れるときの鍵は `undefined` ではなく確定した id に
+   * 替わっている**（`open` の `setShownId(stream.id)`）。だから入ってくる会話の
+   * 鍵は、読み出した時点で Map から消しておく（下の同期ブロック、#2453）——
+   * そうしないと鍵 `undefined` に送る前の値が残る。
    *
    * **再読み込みを跨いでは残さない**（`localStorage` 等は Issue #1618 の
    * 範囲外）。この Map はメモリの中だけの state である。
@@ -811,10 +815,19 @@ export function ChatPane({
        * 時点の値）から読む。** まだ一度もこの鍵に何もしまっていなければ
        * `undefined` なので `?? ''` で空にする——初めて開く会話や、送信済みで
        * まだ何も書きかけていない会話がこれに当たる。
+       *
+       * **読んだ鍵（`routeId`）は Map から消す（#2453）。** 読み出した値は
+       * これ以降 `draft` が持つので、Map に残す理由が無い。残すと、新しい
+       * 会話（鍵 `undefined`）で送ったときに古い値が生き残る——送信の
+       * `setDraft('')` の後、`open` で `shownId` が確定した id へ替わるので、
+       * 次に離れるときの鍵はその id になり、鍵 `undefined` は空で上書き
+       * されない。そのまま次に新しい会話を開くと、送ったはずの文章が
+       * 下書きとして戻っていた。
        */
       setDrafts((previous) => {
         const next = new Map(previous);
         next.set(shownId, draft);
+        next.delete(routeId);
         return next;
       });
       setDraft(drafts.get(routeId) ?? '');

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createCredentialService, resolveCredentialRows } from './credential-service.js';
 import {
@@ -1184,5 +1184,65 @@ describe('secret（値を API/CLI/Web UI に返すかどうか）', () => {
     const rows = await service.fingerprints();
     expect(rows).toEqual([expect.objectContaining({ name: 'TZ', secret: true })]);
     expect(rows[0]).not.toHaveProperty('value');
+  });
+});
+
+describe('名前が長すぎる既存の行（#2445）', () => {
+  const LONG_NAME = `LONG_${'A'.repeat(130)}`;
+
+  it('空文字で消せる（長さの検査が外す操作まで拒まない）', async () => {
+    const runner = fakeRunner();
+    const { stores, service } = serviceOf([runner]);
+    await stores.credentials.put([{ name: LONG_NAME, value: 'old' }]);
+
+    await expect(service.apply([{ name: LONG_NAME, value: '' }])).resolves.toBeDefined();
+    expect(await stores.credentials.list()).toEqual([]);
+    // runner の受け口は上限超えの名前を配列ごと弾くので、外す合図にも載せない
+    expect(runner.received.flat().some((entry) => entry.name === LONG_NAME)).toBe(false);
+  });
+
+  it('空でない値で置くのは、これまでどおり拒む', async () => {
+    const { stores, service } = serviceOf([fakeRunner()]);
+
+    await expect(service.apply([{ name: LONG_NAME, value: 'x' }])).rejects.toThrow(/長すぎる/);
+    expect(await stores.credentials.list()).toEqual([]);
+  });
+
+  it('正本に居ても配らず、ほかの鍵は配る。落としたことは stderr に名前の頭と長さで残る', async () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const runner = fakeRunner();
+      const { stores, service } = serviceOf([runner]);
+      await stores.credentials.put([
+        { name: LONG_NAME, value: 'old' },
+        { name: 'NPM_TOKEN', value: 'npm_x' },
+      ]);
+
+      await service.syncRunner(runner);
+      expect(runner.held.get('NPM_TOKEN')).toBe('npm_x');
+      expect(runner.held.has(LONG_NAME)).toBe(false);
+
+      await service.apply([{ name: 'GIT_AUTHOR_NAME', value: 'takecchi' }]);
+      expect(runner.held.get('GIT_AUTHOR_NAME')).toBe('takecchi');
+      expect(runner.received.flat().some((entry) => entry.name === LONG_NAME)).toBe(false);
+
+      const out = write.mock.calls.map((call) => String(call[0])).join('');
+      expect(out).toContain('LONG_AAAA');
+      expect(out).toContain(String(LONG_NAME.length));
+      expect(out).not.toContain(LONG_NAME);
+      expect(out).not.toContain('old');
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('resolveCredentialRows は長い名前の行を落とす', () => {
+    const rows: StoredCredential[] = [
+      { name: LONG_NAME, value: 'old', updatedAt: '2026-01-01T00:00:00.000Z' },
+      { name: 'NPM_TOKEN', value: 'npm_x', updatedAt: '2026-01-01T00:00:00.000Z' },
+    ];
+    expect(resolveCredentialRows(rows, {}, 'manager').map((row) => row.name)).toEqual([
+      'NPM_TOKEN',
+    ]);
   });
 });
