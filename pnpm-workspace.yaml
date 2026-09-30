@@ -87,9 +87,9 @@ catalog:
   # 描画する（人間の依頼: 「AIの返答ってMarkdown返却多いからWebUIも表示を
   # Markdownにしたほうがこっちとしては見やすい」）。
   #
-  # 描画は `mdast-util-from-markdown`（Markdown→mdast）→ `mdast-util-to-hast`
-  # （mdast→hast）→ 自前の小さな hast→React 変換
-  # （`packages/ui/src/components/markdown.tsx` の `toReact`）で完結し、
+  # 描画は `mdast-util-from-markdown`（Markdown→mdast）→ 自前の小さな
+  # mdast→React 変換（`packages/ui/src/components/markdown-mdast.ts` の
+  # `mdastToReact`。`mdast-util-to-hast` も使わない）で完結し、
   # **`dangerouslySetInnerHTML` も HTML 文字列も経由しない**。HTML 文字列を
   # 作ってから貼る方式（`marked` + `dangerouslySetInnerHTML` など）は、サニタイズを
   # 足し忘れた瞬間に注入経路になる。この形はその経路自体が無い。
@@ -130,11 +130,9 @@ catalog:
   # `packages/ui/src/components/markdown.test.tsx` の「生 HTML が要素にならない」
   # テストを先に見ること。
   'react-markdown': ^10.1.0
-  'html-url-attributes': ^3.0.1
   'mdast-util-from-markdown': ^2.0.3
   'mdast-util-gfm': ^3.1.0
   'mdast-util-newline-to-break': ^2.0.0
-  'mdast-util-to-hast': ^13.2.1
   'micromark-extension-gfm': ^3.0.0
   'remark-breaks': ^4.0.0
   # 画面の回帰テスト（描画して操作する分だけ。DOM が要るファイルにだけ jsdom を指定する）
