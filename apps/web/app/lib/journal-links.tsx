@@ -61,7 +61,8 @@ export function JournalEntryLinks({ entry }: { entry: JournalEntry }) {
   const links = journalEntryLinks(entry);
   if (links.length === 0) return null;
   return (
-    <div className="mt-2 flex flex-wrap gap-3 text-xs">
+    // 上の余白は持たない（余白は包む側が持つ。部品の `JournalEntryRow` の開いた領域が間隔を作るので、ここで持つと二重になる）
+    <div className="flex flex-wrap gap-3 text-xs">
       {links.map((link) => (
         <Link key={link.to} to={link.to} className="text-primary hover:underline">
           {link.label} →
