@@ -54,6 +54,12 @@ export interface ExpectNotSuperlinearOptions {
    * 終わらない。正しい実装の t(n) は floorMs よりずっと小さく、比が跳ねる帯に入らない。
    */
   maxScale?: number;
+  /**
+   * 時計（ms）。既定は `performance.now`。助け自身の歯が、最小値の取り方や n の倍し方を
+   * 実時間に頼らず確かめるための口（#2240: 実時間で測る自己テストが CI の混みで落ちた）。
+   * 呼び出し側の歯は渡さないこと——渡すと、実装の伸び方を測らなくなる。
+   */
+  now?: () => number;
 }
 
 /** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う。 */
@@ -68,10 +74,14 @@ export interface GrowthMeasurement {
   ratio: number;
 }
 
-function timeOnceMs<TInput>(run: (input: TInput) => unknown, input: TInput): number {
-  const start = performance.now();
+function timeOnceMs<TInput>(
+  run: (input: TInput) => unknown,
+  input: TInput,
+  now: () => number,
+): number {
+  const start = now();
   run(input);
-  return performance.now() - start;
+  return now() - start;
 }
 
 /**
@@ -97,26 +107,27 @@ export function expectNotSuperlinear<TInput>(
     repeats = 5,
     minSmallMs = 5,
     maxScale = factor >= 4 ? 16 : 1,
+    now = () => performance.now(),
   } = options;
 
   // JIT の温め——最初の1回は捨てる（ここで測りたいのは「温まった後」の伸び方である）。
   let n = options.n;
   let small = makeInput(n);
-  let tFirst = timeOnceMs(run, small);
-  tFirst = Math.min(tFirst, timeOnceMs(run, small));
+  let tFirst = timeOnceMs(run, small, now);
+  tFirst = Math.min(tFirst, timeOnceMs(run, small, now));
   // t(n) が小さすぎると、分母が器の混み具合でぶれる。届くまで n を倍にする。
   while (tFirst < minSmallMs && n * 2 <= options.n * maxScale) {
     n *= 2;
     small = makeInput(n);
-    tFirst = timeOnceMs(run, small);
+    tFirst = timeOnceMs(run, small, now);
   }
   const large = makeInput(n * factor);
 
   let tSmallMs = Infinity;
   let tLargeMs = Infinity;
   for (let i = 0; i < repeats; i += 1) {
-    tSmallMs = Math.min(tSmallMs, timeOnceMs(run, small));
-    const tLarge = timeOnceMs(run, large);
+    tSmallMs = Math.min(tSmallMs, timeOnceMs(run, small, now));
+    const tLarge = timeOnceMs(run, large, now);
     tLargeMs = Math.min(tLargeMs, tLarge);
     // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
     // 限らないので、超えた1回の値で落とす）。

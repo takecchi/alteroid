@@ -1,3 +1,5 @@
+import { useId } from 'react';
+
 import { cn } from '@/lib/utils';
 
 /**
@@ -19,6 +21,9 @@ export function BrandMark({
   withWordmark?: boolean;
   className?: string;
 }) {
+  // 同じ画面に2つ以上出る（上端の帯とドロワーの中など）ので、id は固定にしない。
+  // `useId` は `:r1:` の形で返すので、`url(#…)` に載せられる文字だけにする。
+  const clipId = `alteroid-mark-clone-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   return (
     <span className={cn('inline-flex items-center gap-2 text-foreground', className)}>
       <svg
@@ -29,18 +34,12 @@ export function BrandMark({
         fill="none"
       >
         <defs>
-          <clipPath id="alteroid-mark-clone">
+          <clipPath id={clipId}>
             <circle cx="14.5" cy="12" r="6.5" />
           </clipPath>
         </defs>
         {/* 重なり（写し取った部分）。 */}
-        <circle
-          cx="9.5"
-          cy="12"
-          r="6.5"
-          clipPath="url(#alteroid-mark-clone)"
-          className="fill-primary"
-        />
+        <circle cx="9.5" cy="12" r="6.5" clipPath={`url(#${clipId})`} className="fill-primary" />
         <circle cx="9.5" cy="12" r="6.5" className="stroke-foreground" strokeWidth="1.5" />
         <circle
           cx="14.5"
