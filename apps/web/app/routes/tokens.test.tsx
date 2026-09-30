@@ -510,6 +510,73 @@ describe('/tokens 画面 — 空のプール', () => {
     // 設定は読めているので、設定の直し方のカードは出ない。
     expect(screen.queryByText(/回転の設定は読めない/)).toBeNull();
   });
+
+  /**
+   * issue #2354。書き換えは読めない行を「持ち越す」。断りは「捨てる」と言わず、消す口
+   * （id を指すボタン）を案内する。id が取れない行にはボタンが無い。
+   */
+  it('断りは「持ち越す」と言い、「一緒に捨てる」と言わない。id のある行にだけ消すボタンが出る（#2354）', async () => {
+    stubScreen({
+      tokens: [],
+      rowsUnreadable: {
+        count: 2,
+        rows: [
+          { id: 'tok-bad', label: 'broken-label', reason: '不正な欄: order' },
+          { reason: 'x' },
+        ],
+      },
+    });
+
+    renderTokens();
+
+    expect(await screen.findByText(/捨てずに持ち越す/)).toBeTruthy();
+    expect(screen.queryByText(/一緒に捨てる/)).toBeNull();
+    expect(screen.getByText(/id が取れない行は、ここでは消せない/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+  });
+
+  it('「この行を消す」は id を指して POST /tokens/unreadable/remove を呼ぶ。値は送らない（#2354）', async () => {
+    const posts: unknown[] = [];
+    let unreadable = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/journal')) return json({ entries: [] });
+      if (url.includes('/tokens/unreadable/remove') && method === 'POST') {
+        posts.push(request !== null ? await request.json() : JSON.parse(String(init?.body)));
+        unreadable = false;
+        return json({ tokens: [], settings: DEFAULT_SETTINGS, removedIds: ['tok-bad'] });
+      }
+      if (url.includes('/tokens')) {
+        return json({
+          tokens: [],
+          settings: DEFAULT_SETTINGS,
+          ...(unreadable
+            ? {
+                rowsUnreadable: {
+                  count: 1,
+                  rows: [{ id: 'tok-bad', label: 'broken-label', reason: '不正な欄: order' }],
+                },
+              }
+            : {}),
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+
+    renderTokens();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+
+    await waitFor(() => {
+      expect(posts).toEqual([{ ids: ['tok-bad'] }]);
+    });
+    // 消したあとの再取得で、読めない行の断りが消え、「まだ1件も無い」側へ戻る。
+    await waitFor(() => {
+      expect(screen.queryByText(/読めないトークンの行が/)).toBeNull();
+    });
+  });
 });
 
 describe('/tokens 画面 — 403', () => {

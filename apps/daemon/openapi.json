@@ -15739,6 +15739,10 @@
                             },
                             "required": ["reason"]
                           }
+                        },
+                        "carriedOver": {
+                          "type": "boolean",
+                          "const": true
                         }
                       },
                       "required": ["count", "rows"]
@@ -15771,10 +15775,10 @@
         "operationId": "putTokens",
         "tags": ["tokens"],
         "summary": "認証トークンのプールを全文置換する",
-        "description": "入力に無い行は消える。壊れた入力（新規行に value が無い・消えた id を指す・id 重複）は 400 で理由を返し、保存しない。",
+        "description": "入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（issue #2354。消すには `POST /tokens/unreadable/remove`）。壊れた入力（新規行に value が無い・消えた id を指す・id 重複）は 400 で理由を返し、保存しない。",
         "responses": {
           "200": {
-            "description": "置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。issue #2095）。",
+            "description": "置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——**読めない行は捨てずに持ち越した**（issue #2354）。消すには `POST /tokens/unreadable/remove`。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15891,6 +15895,10 @@
                             },
                             "required": ["reason"]
                           }
+                        },
+                        "carriedOver": {
+                          "type": "boolean",
+                          "const": true
                         }
                       },
                       "required": ["count", "rows"]
@@ -15988,6 +15996,239 @@
                   }
                 },
                 "required": ["tokens"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tokens/unreadable/remove": {
+      "post": {
+        "operationId": "postTokensUnreadableRemove",
+        "tags": ["tokens"],
+        "summary": "読めない認証トークンの行を、id を指して消す",
+        "description": "`GET /tokens` の `rowsUnreadable.rows[].id` を指した読めない行だけを消す。読めた行・設定には触れない。id が取れない行はこの口では消せない。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。",
+        "responses": {
+          "200": {
+            "description": "消した後のプール（値は出さない）と、消した id。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "order": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": ["stored"]
+                          },
+                          "disabledAt": {
+                            "type": "string"
+                          },
+                          "cooldownUntil": {
+                            "type": "number"
+                          },
+                          "cooldownSource": {
+                            "type": "string",
+                            "enum": ["quota_reset", "overage_reset", "notice_text", "default"]
+                          },
+                          "lastRejectedAt": {
+                            "type": "string"
+                          },
+                          "lastRejectedReason": {
+                            "type": "string"
+                          },
+                          "invalidatedAt": {
+                            "type": "string"
+                          },
+                          "invalidatedReason": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "recovery": {
+                            "type": "string",
+                            "enum": ["time", "action", "unknown"]
+                          }
+                        },
+                        "required": ["id", "label", "order"]
+                      }
+                    },
+                    "settings": {
+                      "type": "object",
+                      "properties": {
+                        "rotateOn": {
+                          "type": "string",
+                          "enum": ["free_exhausted", "overage_exhausted", "off"]
+                        },
+                        "cooldownMs": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "updatedAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["rotateOn", "cooldownMs"]
+                    },
+                    "settingsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["reason"]
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["reason"]
+                          }
+                        },
+                        "carriedOver": {
+                          "type": "boolean",
+                          "const": true
+                        }
+                      },
+                      "required": ["count", "rows"]
+                    },
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["tokens", "removedIds"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "トークンのプールの器が無い、または入力の形が不正（何も消していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": ["ids"]
               }
             }
           }

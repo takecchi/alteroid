@@ -80,11 +80,33 @@ export type TokenPoolView = (
     }
 ) & { rowsUnreadable?: TokenRowsUnreadable };
 
-/** {@link TokenPoolView.rowsUnreadable}。`count` は `rows.length` と等しい。 */
+/**
+ * {@link TokenPoolView.rowsUnreadable}。`count` は `rows.length` と等しい。
+ *
+ * **`carriedOver` は全文置換（{@link TokenPoolService.replace}）の応答にだけ付く**
+ * （issue #2354）。「この読めない行（`count` 行）は、置換で捨てずに持ち越した」の印で、
+ * 読み取り（`list()`）には付かない。
+ */
 export interface TokenRowsUnreadable {
   count: number;
   rows: UnreadableToken[];
+  carriedOver?: true;
 }
+
+/** {@link TokenPoolService.removeUnreadable} の追加の引数。 */
+export interface RemoveUnreadableOptions {
+  /**
+   * 消すと決まった id（読めない行に実在するものだけ）を、**消す前に**渡して呼ぶ。
+   * 書き込みの鍵の中で呼ぶ。**投げたら何も消さない。**
+   */
+  beforeRemove?: (ids: readonly string[]) => Promise<void>;
+}
+
+export type RemoveUnreadableResult =
+  /** 消した。`ids` は消した id（重複なし）、`view` は消した後のプール。 */
+  | { kind: 'removed'; ids: string[]; view: TokenPoolView }
+  /** 指された id のうち `count` 件が読めない行に無かった。何も消していない。 */
+  | { kind: 'unknown'; count: number };
 
 export interface TokenPoolService {
   /** 現在のプール（外向きの顔）と設定。設定が読めないときは {@link TokenPoolView} を見よ。 */
@@ -98,6 +120,22 @@ export interface TokenPoolService {
    * 理由にプールの置換まで止めない。
    */
   replace(inputs: readonly AgentTokenInput[]): Promise<TokenPoolView>;
+  /**
+   * **読めない行を、id で指して消す**（issue #2354）。全文置換（{@link replace}）は
+   * 読めない行を持ち越すので、読めない行を消す口はこれだけである。
+   *
+   * - `ids` のどれかが読めない行に無ければ、**何も消さずに** `{ kind: 'unknown' }` を返す
+   *   （全部か無か。打ち間違いで別の行を消さない）。**件数だけ返し、指された文字列は
+   *   返さない**（取り違えて貼ったトークンの値を応答へ映さない）。
+   * - 消すと決まったら、{@link RemoveUnreadableOptions.beforeRemove} を**書き込みの鍵の中で
+   *   先に**呼ぶ。**投げたら何も消さずに投げ直す**（日誌を先に書き、書けなければ状態を変えない
+   *   作法のための口）。
+   * - **id が取れない読めない行は、この口では消せない**（指す名前が無い）。
+   */
+  removeUnreadable(
+    ids: readonly string[],
+    options?: RemoveUnreadableOptions,
+  ): Promise<RemoveUnreadableResult>;
   /**
    * 回す契機・冷却の既定を部分更新する。
    *
@@ -260,6 +298,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
     tokens: AgentTokenView[],
     settingsResult: Awaited<ReturnType<typeof readSettingsOrUnreadable>>,
     unreadableRows: readonly UnreadableToken[],
+    options: { carriedOver?: boolean } = {},
   ): TokenPoolView {
     const base = settingsResult.ok
       ? { tokens, settings: settingsResult.settings }
@@ -267,7 +306,14 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
     // **1件でも在るときだけ鍵を載せる**（{@link TokenPoolView} の doc）。
     return unreadableRows.length === 0
       ? base
-      : { ...base, rowsUnreadable: { count: unreadableRows.length, rows: [...unreadableRows] } };
+      : {
+          ...base,
+          rowsUnreadable: {
+            count: unreadableRows.length,
+            rows: [...unreadableRows],
+            ...(options.carriedOver === true ? { carriedOver: true as const } : {}),
+          },
+        };
   }
 
   async function currentView(): Promise<TokenPoolView> {
@@ -354,7 +400,44 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
         const unreadableRows = await stores.tokens.listUnreadable();
         // **保存できた後に知らせる**（`announceChange` の doc）。
         announceChange('pool');
-        return viewOf(stored.map(toAgentTokenView), settingsResult, unreadableRows);
+        // **読めない行は持ち越した**と応答で言う（issue #2354。ストアの `replace` は
+        // 読めない行を捨てない）。
+        return viewOf(stored.map(toAgentTokenView), settingsResult, unreadableRows, {
+          carriedOver: true,
+        });
+      }),
+
+    removeUnreadable: (ids: readonly string[], options: RemoveUnreadableOptions = {}) =>
+      serial(async () => {
+        const wanted = [...new Set(ids)];
+        const removed = await writeLock.run(
+          async (): Promise<RemoveUnreadableResult | string[]> => {
+            const present = new Set(
+              (await stores.tokens.listUnreadable()).flatMap((row) =>
+                row.id === undefined ? [] : [row.id],
+              ),
+            );
+            const unknown = wanted.filter((id) => !present.has(id));
+            if (unknown.length > 0 || wanted.length === 0) {
+              return { kind: 'unknown', count: unknown.length };
+            }
+            // **日誌などを先に。投げたら、ここで止まり、何も消さない。**
+            await options.beforeRemove?.(wanted);
+            return stores.tokens.removeUnreadable(wanted);
+          },
+        );
+        if (!Array.isArray(removed)) return removed;
+        const [tokens, settingsResult, unreadableRows] = await Promise.all([
+          stores.tokens.list(),
+          readSettingsOrUnreadable(),
+          stores.tokens.listUnreadable(),
+        ]);
+        announceChange('pool');
+        return {
+          kind: 'removed',
+          ids: removed,
+          view: viewOf(tokens.map(toAgentTokenView), settingsResult, unreadableRows),
+        };
       }),
 
     noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>

@@ -132,9 +132,22 @@ export class PgTokenPoolStore implements TokenPoolStore {
   }
 
   /**
+   * **常に空を返す**（issue #2354。`TokenPoolStore.removeUnreadable` の doc）。
+   * 読めない行を持てないので、消すものが無い。
+   */
+  async removeUnreadable(): Promise<string[]> {
+    return [];
+  }
+
+  /**
    * 全文置換。**1トランザクションで delete → insert**——途中で落ちて半分だけ
    * 入る形を作らない（片方の行だけ古い・新しいが混ざると、`order` の一意性も
    * 「全部消えて全部戻る」という約束も崩れる）。
+   *
+   * **fs 実装とは違い、持ち越す「読めない行」が無い**（issue #2354。fs は読めない行を
+   * 持ち越す——`FsTokenPoolStore.replace` の doc）。pg は正規化された列で持つので
+   * 読めない行を作れず、`listUnreadable()` は常に空である。そのため全消去して積み直しても
+   * 失う読めない行は無く、意味は実装間で食い違わない。
    */
   async replace(tokens: readonly AgentToken[]): Promise<AgentToken[]> {
     await this.#db.transaction(async (tx) => {

@@ -768,6 +768,26 @@ export function useAddToken() {
   );
 }
 
+/**
+ * 読めないトークンの行を、id を指して消す（`POST /tokens/unreadable/remove`。issue #2354）。
+ * 追加・削除・無効化（全文置換）は読めない行を持ち越すので、消す口はこれだけ。
+ * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
+ */
+export function useRemoveUnreadableTokens() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (ids: readonly string[]) => {
+      const result = await api.api
+        .POST('/tokens/unreadable/remove', { body: { ids: [...ids] } })
+        .then(unwrap);
+      await mutate(KEY.tokens);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
 /** プールから1本外す。 */
 export function useRemoveToken() {
   const api = useApi();

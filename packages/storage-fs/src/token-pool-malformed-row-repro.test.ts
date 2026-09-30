@@ -140,19 +140,80 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     expect(badRow).toEqual(BAD_TOKEN_RAW);
   });
 
-  it(
-    'replace() は全文置換——呼び手が正本の全体を渡す操作なので、古い壊れた行も' +
-      '一緒に置き換わる（残さない）',
-    async () => {
+  // **意味を直した歯（issue #2354）。** 以前は「replace() は全文置換なので、古い壊れた行も
+  // 一緒に消える」を固定していた（#1942）。#2354 の決定で、読めない行は全文置換でも
+  // 持ち越す（人が入れた行を自動の回転が知らせずに消してよい理由が無い）に改めた。
+  it('replace() は読めた行を全文置換するが、読めない行は消さず、元の形のまま持ち越す（issue #2354）', async () => {
+    await writeRawTokensFile();
+    const stores = createFsStores(root);
+
+    await captureStderr(async () => {
+      await stores.tokens.replace([{ ...GOOD_TOKEN, label: 'renamed' }]);
+    });
+
+    const raw = JSON.parse(await readFile(tokensPath, 'utf8')) as { tokens: unknown[] };
+    expect(raw.tokens.map((row) => (row as { id?: unknown }).id).sort()).toEqual([
+      'tok-bad',
+      'tok-good',
+    ]);
+    expect(raw.tokens.find((row) => (row as { id?: unknown }).id === 'tok-bad')).toEqual(
+      BAD_TOKEN_RAW,
+    );
+    expect(
+      (raw.tokens.find((row) => (row as { id?: unknown }).id === 'tok-good') as { label: string })
+        .label,
+    ).toBe('renamed');
+  });
+
+  it('replace([]) でも、読めた行は空になり、読めない行は残る（issue #2354）', async () => {
+    await writeRawTokensFile();
+    const stores = createFsStores(root);
+
+    await captureStderr(async () => {
+      expect(await stores.tokens.replace([])).toEqual([]);
+      expect((await stores.tokens.listUnreadable()).map((row) => row.id)).toEqual(['tok-bad']);
+    });
+  });
+
+  describe('removeUnreadable()（issue #2354）', () => {
+    it('id で指した読めない行だけを消す。読めた行は残り、消した id を返す。値は返さない', async () => {
       await writeRawTokensFile();
       const stores = createFsStores(root);
 
       await captureStderr(async () => {
-        await stores.tokens.replace([{ ...GOOD_TOKEN, label: 'renamed' }]);
+        const removed = await stores.tokens.removeUnreadable(['tok-bad']);
+        expect(removed).toEqual(['tok-bad']);
+        expect(JSON.stringify(removed)).not.toContain(BAD_TOKEN_RAW.value);
+        expect(await stores.tokens.listUnreadable()).toEqual([]);
+        expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-good']);
       });
-
       const raw = JSON.parse(await readFile(tokensPath, 'utf8')) as { tokens: unknown[] };
       expect(raw.tokens.map((row) => (row as { id?: unknown }).id)).toEqual(['tok-good']);
-    },
-  );
+    });
+
+    it('知らない id は何も消さず、空を返す。読めた行の id を指しても消えない', async () => {
+      await writeRawTokensFile();
+      const stores = createFsStores(root);
+
+      await captureStderr(async () => {
+        expect(await stores.tokens.removeUnreadable(['no-such-id', 'tok-good'])).toEqual([]);
+        expect((await stores.tokens.list()).map((t) => t.id)).toEqual(['tok-good']);
+        expect((await stores.tokens.listUnreadable()).map((r) => r.id)).toEqual(['tok-bad']);
+      });
+    });
+
+    it('id が取れない読めない行は、この口では消せない（残る）', async () => {
+      await writeRawTokensFile();
+      const raw = JSON.parse(await readFile(tokensPath, 'utf8')) as { tokens: unknown[] };
+      raw.tokens.push({ label: 'no-id', value: 'secret-noid', order: 'x' });
+      await writeFile(tokensPath, `${JSON.stringify(raw, null, 2)}\n`);
+      const stores = createFsStores(root);
+
+      await captureStderr(async () => {
+        expect(await stores.tokens.removeUnreadable(['tok-bad', ''])).toEqual(['tok-bad']);
+        const left = await stores.tokens.listUnreadable();
+        expect(left).toEqual([{ label: 'no-id', reason: '不正な欄: id,order' }]);
+      });
+    });
+  });
 });

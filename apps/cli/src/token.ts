@@ -72,6 +72,8 @@ interface TokensView {
   rowsUnreadable?: {
     count: number;
     rows: { id?: string; label?: string; reason: string }[];
+    /** `PUT /tokens` の応答にだけ付く（issue #2354）。この行は置換で捨てずに持ち越した。 */
+    carriedOver?: true;
   };
 }
 
@@ -111,9 +113,10 @@ export function describeSettingsUnreadable(reason: string | undefined): string {
  *
  * **「消えたのではなく、読めない形で入っている」と言う**（`describeSettingsUnreadable`
  * と同じ向き）。識別は id とラベルだけで、トークンの値は出さない（デーモンが返さない）。
- * **プールを書き換える操作はこの行を捨てる**（`FsTokenPoolStore.replace` の doc。
- * `token add` / `remove` / `disable` / `enable` は全文置換の `PUT /tokens` を通る）ので、
- * 直す前にそれを知らせる——知らせずに書き換えを勧めると、壊れた行を黙って消すことになる。
+ * **プールを書き換える操作はこの行を捨てずに持ち越す**（issue #2354 の決定。
+ * `FsTokenPoolStore.replace` の doc。`token add` / `remove` / `disable` / `enable` は
+ * 全文置換の `PUT /tokens` を通る）。消すには、id を指す `token remove-unreadable <id>`。
+ * id が取れない行はその口では消せないので、そう言う。
  */
 export function describeRowsUnreadable(
   unreadable: TokensView['rowsUnreadable'] | undefined,
@@ -133,8 +136,47 @@ export function describeRowsUnreadable(
     `読めないトークンの行が ${String(unreadable.count)} 件ある（消えたのではなく、読めない形で入っている）。` +
     'この一覧には載っていない:\n' +
     lines.join('') +
-    'プールを書き換える操作（token add / remove / disable / enable）は、この行を一緒に捨てる。\n'
+    'プールを書き換える操作（token add / remove / disable / enable）は、この行を捨てずに持ち越す。\n' +
+    '消すには、id を指す: alteroid token remove-unreadable <id>' +
+    (unreadable.rows.some((row) => row.id === undefined)
+      ? '（id が取れない行は、この口では消せない）'
+      : '') +
+    '\n'
   );
+}
+
+/**
+ * 書き換え（`token add` / `remove` / `disable` / `enable`）の出力の末尾に足す1行
+ * （issue #2354）。読めない行を持ち越したときだけ（0件なら空文字）。**値は出さない（件数だけ）。**
+ */
+export function describeCarriedOver(view: TokensView): string {
+  const unreadable = view.rowsUnreadable;
+  if (unreadable === undefined || unreadable.count === 0) return '';
+  return (
+    `読めないトークンの行 ${String(unreadable.count)} 行は、捨てずに持ち越した` +
+    '（消すには alteroid token remove-unreadable <id>。id は token list で見る）。\n'
+  );
+}
+
+/**
+ * 読めないトークンの行を、id を指して消す（issue #2354）。**値は出さない**（id と件数だけ）。
+ * 指した id が読めない行に無ければ、デーモンが何も消さずに断る（エラーとして投げる）。
+ */
+export async function tokenRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+  const target = await resolveTarget();
+  const result = (await request(target, '/tokens/unreadable/remove', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })) as TokensView & { removedIds: string[] };
+  stdout.write(
+    `読めないトークンの行を ${String(result.removedIds.length)} 行消した（id: ${result.removedIds.join(', ')}）。\n`,
+  );
+  const left = result.rowsUnreadable;
+  if (left !== undefined) {
+    stdout.write(
+      `読めない行は、まだ ${String(left.count)} 行ある（alteroid token list で見る）。\n`,
+    );
+  }
 }
 
 export async function tokenListCommand(): Promise<void> {
@@ -283,8 +325,9 @@ export async function tokenAddCommand(options: { label: string; file?: string })
     ...current.tokens.map(toInput),
     { label: options.label, value },
   ];
-  await putTokens(target, inputs);
+  const view = await putTokens(target, inputs);
   stdout.write(`トークン「${options.label}」を追加しました。\n`);
+  stdout.write(describeCarriedOver(view));
 }
 
 export async function tokenRemoveCommand(id: string): Promise<void> {
@@ -295,8 +338,9 @@ export async function tokenRemoveCommand(id: string): Promise<void> {
     return;
   }
   const inputs = current.tokens.filter((token) => token.id !== id).map(toInput);
-  await putTokens(target, inputs);
+  const view = await putTokens(target, inputs);
   stdout.write(`トークン（id ${id}）を削除しました。\n`);
+  stdout.write(describeCarriedOver(view));
 }
 
 export async function tokenDisableCommand(id: string): Promise<void> {
@@ -317,8 +361,9 @@ async function setDisabled(id: string, disabled: boolean): Promise<void> {
   const inputs = current.tokens.map((token) =>
     token.id === id ? { ...toInput(token), disabled } : toInput(token),
   );
-  await putTokens(target, inputs);
+  const view = await putTokens(target, inputs);
   stdout.write(`トークン（id ${id}）を${disabled ? '外しました' : '戻しました'}。\n`);
+  stdout.write(describeCarriedOver(view));
 }
 
 /**

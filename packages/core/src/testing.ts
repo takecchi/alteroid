@@ -1443,6 +1443,10 @@ export function createMemoryStores(): Stores {
       // 読めない行は持てない（`replace` がスキーマを通す）ので常に空。
       return [];
     },
+    async removeUnreadable() {
+      // 読めない行は持てないので、消すものが無い（`TokenPoolStore.removeUnreadable` の doc）。
+      return [];
+    },
     async replace(next) {
       // **本物（fs の `agentTokenRowSchema` / pg の `order` 列の SQL 整数型）と
       // 同じ検査を掛ける。** かつてはインメモリだけが何でも受け付けたので、

@@ -162,7 +162,7 @@ describe('TokenPoolService.list() / replace() — 行が読めないとき（iss
     expect('rowsUnreadable' in view).toBe(false);
   });
 
-  it('replace() の返り値にも、読めない行が在れば rowsUnreadable が載る', async () => {
+  it('replace() の返り値にも、読めない行が在れば rowsUnreadable が載る。持ち越した印（carriedOver）付き（#2354）', async () => {
     const view = await createTokenPoolService({
       stores: storesWithUnreadableRows(createMemoryStores(), [
         { id: 'tok-bad', reason: '不正な行' },
@@ -172,6 +172,18 @@ describe('TokenPoolService.list() / replace() — 行が読めないとき（iss
     expect(view.rowsUnreadable).toEqual({
       count: 1,
       rows: [{ id: 'tok-bad', reason: '不正な行' }],
+      carriedOver: true,
     });
+    expect(JSON.stringify(view)).not.toContain('tok-a-value');
+  });
+
+  it('対照: list() の rowsUnreadable には carriedOver が付かない（持ち越したと言うのは置換の応答だけ）（#2354）', async () => {
+    const view = await createTokenPoolService({
+      stores: storesWithUnreadableRows(createMemoryStores(), [
+        { id: 'tok-bad', reason: '不正な行' },
+      ]),
+    }).list();
+
+    expect(view.rowsUnreadable).not.toHaveProperty('carriedOver');
   });
 });

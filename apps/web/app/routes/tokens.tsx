@@ -19,6 +19,7 @@ import {
 import {
   useAddToken,
   useRemoveToken,
+  useRemoveUnreadableTokens,
   useSetTokenDisabled,
   useSetTokenPolicy,
   useJournal,
@@ -429,11 +430,29 @@ function PoolCard({
  *
  * **「消えたのではなく、読めない形で入っている」と言う**（`UnreadableSettingsCard` と同じ
  * 向き）。識別は id とラベルだけで、トークンの値は出ない（デーモンが返さない）。
- * **プールを書き換える操作（追加・削除・無効化/戻す）はこの行を一緒に捨てる**
- * （`PUT /tokens` は全文置換。`FsTokenPoolStore.replace` の doc）——知らせずに操作を
- * 許すと、壊れた行を黙って消すことになる。
+ * **プールを書き換える操作（追加・削除・無効化/戻す）はこの行を捨てずに持ち越す**
+ * （issue #2354 の決定。`PUT /tokens` は全文置換だが読めない行は残す。
+ * `FsTokenPoolStore.replace` の doc）。消すのは、id を指す消すボタン
+ * （`POST /tokens/unreadable/remove`）だけである。id が取れない行にはボタンが無い
+ * （指す名前が無い）。
  */
 function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }) {
+  const removeUnreadable = useRemoveUnreadableTokens();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  async function remove(id: string) {
+    setBusyId(id);
+    setFailure(undefined);
+    try {
+      await removeUnreadable([id]);
+    } catch (caught) {
+      setFailure(caught);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div
       role="status"
@@ -459,12 +478,28 @@ function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }
               )}
               {' — '}
               {row.reason}
+              {row.id !== undefined && (
+                <>
+                  {' '}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={busyId === row.id}
+                    onClick={() => void remove(row.id as string)}
+                  >
+                    この行を消す
+                  </Button>
+                </>
+              )}
             </li>
           ))}
         </ul>
         <p className="mt-1">
-          プールを書き換える操作（追加・削除・無効化/戻す）は、この行を一緒に捨てる。
+          プールを書き換える操作（追加・削除・無効化/戻す）は、この行を捨てずに持ち越す。
+          消すには、行ごとの「この行を消す」を使う（alteroid token remove-unreadable と同じ）。id
+          が取れない行は、ここでは消せない。
         </p>
+        <ErrorNote error={failure} />
       </div>
     </div>
   );

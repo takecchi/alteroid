@@ -67,6 +67,7 @@ import {
   tokenListCommand,
   tokenPolicyCommand,
   tokenRemoveCommand,
+  tokenRemoveUnreadableCommand,
 } from './token.js';
 import { progressCommand } from './progress.js';
 import { usageCommand } from './usage.js';
@@ -856,6 +857,16 @@ tokenCommand
   .description('外したトークンを戻す')
   .action(async (id: string) => {
     await tokenEnableCommand(id);
+  });
+
+tokenCommand
+  .command('remove-unreadable <ids...>')
+  .description(
+    '読めないトークンの行を id を指して消す（token list の「読めない行」の id。' +
+      'add / remove などの書き換えは、読めない行を持ち越す）',
+  )
+  .action(async (ids: string[]) => {
+    await tokenRemoveUnreadableCommand(ids);
   });
 
 tokenCommand

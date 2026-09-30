@@ -34,6 +34,7 @@ const {
   tokenDisableCommand,
   tokenEnableCommand,
   tokenPolicyCommand,
+  tokenRemoveUnreadableCommand,
 } = await import('./token.js');
 
 interface Reply {
@@ -292,6 +293,10 @@ describe('alteroid token list', () => {
     expect(text).toContain('不正な欄: order');
     expect(text).toContain('消えたのではなく、読めない形で入っている');
     expect(text).toContain('読めたトークンの行は無い');
+    // #2354: 書き換えは読めない行を「持ち越す」と言い、「捨てる」とは言わない。消す口を案内する。
+    expect(text).toContain('捨てずに持ち越す');
+    expect(text).toContain('alteroid token remove-unreadable <id>');
+    expect(text).not.toContain('一緒に捨てる');
     expect(text).not.toContain('トークンは登録されていません');
     expect(text).not.toContain('一切効きません');
     expect(text).not.toContain('記録が残りません');
@@ -330,6 +335,117 @@ describe('alteroid token list', () => {
     await tokenListCommand();
 
     expect(read()).not.toContain('読めない');
+  });
+});
+
+/**
+ * issue #2354。全文置換（`PUT /tokens`）は読めない行を持ち越す。`add` / `remove` / `disable` /
+ * `enable` の出力は「読めない N 行は持ち越した」と言う（応答の `rowsUnreadable.carriedOver`）。
+ * トークンの値（偽の値）はどの出力にも出ない。
+ */
+describe('読めない行の持ち越しを言う（#2354）', () => {
+  const CARRIED = {
+    tokens: [{ id: 'tok-a', label: 'a', order: 0, sha256: 'aaaaaaaaaaaa' }],
+    settings: EMPTY_SETTINGS,
+    rowsUnreadable: {
+      count: 2,
+      rows: [{ id: 'tok-bad', reason: '不正な欄: order' }, { reason: '不正な行' }],
+      carriedOver: true,
+    },
+  };
+  const SECRET = 'fake-secret-value-never-print';
+
+  async function readCurrent(): Promise<void> {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'a', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    setReply('PUT', '/tokens', { status: 200, body: CARRIED });
+  }
+
+  it('add / remove / disable / enable の出力が「読めない 2 行は、捨てずに持ち越した」と言う', async () => {
+    await readCurrent();
+    const dir = await makeTempDir('alteroid-token-carried-');
+    const path = join(dir, 'token.txt');
+    await writeFile(path, `${SECRET}\n`, 'utf8');
+
+    for (const run of [
+      () => tokenAddCommand({ label: 'n', file: path }),
+      () => tokenRemoveCommand('tok-a'),
+      () => tokenDisableCommand('tok-a'),
+      () => tokenEnableCommand('tok-a'),
+    ]) {
+      const read = captureStdout();
+      await run();
+      const text = read();
+      expect(text).toContain('読めないトークンの行 2 行は、捨てずに持ち越した');
+      expect(text).toContain('alteroid token remove-unreadable <id>');
+      expect(text).not.toContain('捨てる');
+      expect(text).not.toContain(SECRET);
+    }
+  });
+
+  it('対照: 読めない行が無い応答では、持ち越しの文は1文字も出ない', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'a', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    setReply('PUT', '/tokens', { status: 200, body: { tokens: [], settings: EMPTY_SETTINGS } });
+    const read = captureStdout();
+
+    await tokenDisableCommand('tok-a');
+
+    expect(read()).not.toContain('持ち越');
+  });
+});
+
+describe('alteroid token remove-unreadable（#2354）', () => {
+  it('id を POST /tokens/unreadable/remove へ送り、消した id と件数を言う。値は出ない', async () => {
+    setReply('POST', '/tokens/unreadable/remove', {
+      status: 200,
+      body: { tokens: [], settings: EMPTY_SETTINGS, removedIds: ['tok-bad'] },
+    });
+    const read = captureStdout();
+
+    await tokenRemoveUnreadableCommand(['tok-bad']);
+
+    expect(read()).toContain('読めないトークンの行を 1 行消した（id: tok-bad）');
+    const post = sent.find((call) => call.method === 'POST');
+    expect(post?.body).toEqual({ ids: ['tok-bad'] });
+    // 読めない行の取得も、PUT も打たない（全文置換を通さない）。
+    expect(sent.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
+  it('まだ読めない行が残っていれば、その件数を言う', async () => {
+    setReply('POST', '/tokens/unreadable/remove', {
+      status: 200,
+      body: {
+        tokens: [],
+        settings: EMPTY_SETTINGS,
+        removedIds: ['tok-bad'],
+        rowsUnreadable: { count: 1, rows: [{ reason: '不正な行' }] },
+      },
+    });
+    const read = captureStdout();
+
+    await tokenRemoveUnreadableCommand(['tok-bad']);
+
+    expect(read()).toContain('読めない行は、まだ 1 行ある');
+  });
+
+  it('デーモンが断ったら（読めない行に無い id）、その理由で投げる', async () => {
+    setReply('POST', '/tokens/unreadable/remove', {
+      status: 404,
+      body: { error: '指した id のうち 1 件が、読めない行に無い（何も消していない。）' },
+    });
+
+    await expect(tokenRemoveUnreadableCommand(['ghost'])).rejects.toThrow('何も消していない');
   });
 });
 

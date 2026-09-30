@@ -2073,13 +2073,37 @@ export interface TokenPoolStore {
    */
   listUnreadable(): Promise<UnreadableToken[]>;
   /**
-   * 全文置換。**入力に無い行は消える。**
+   * 全文置換。**入力に無い（読めた）行は消える。読めない行は消さずに持ち越す**
+   * （issue #2354 の決定。fs 実装。`FsTokenPoolStore.replace` の doc）。
+   *
+   * **理由（#2354 の決定）**: トークンを登録・無効化するのは人の手で、クローンにも
+   * 回し手にもその権限は無い。人が入れた行を、自動の回転（回し手の書き戻しも
+   * この口を通る）が知らせずに消してよい理由が無い。「普段の書き戻しでは生の行を
+   * 残す」という #1942 の半分とも揃う。失うものの重さも違う——捨てた跡が残っても
+   * 鍵そのものは戻らない。持ち越して失うのは「全文置換の意味の純粋さ」だけである。
+   * 読めない行を消したいときは {@link TokenPoolStore.removeUnreadable}（id で指す）を使う。
+   *
+   * **pg 実装とインメモリ実装は、そもそも読めない行を持てない**（正規化された列・
+   * スキーマ検査済みの配列）ので、持ち越すものが無く、挙動は変わらない
+   * （`listUnreadable()` が常に空）。
    *
    * `settings` / `active` が壊れていても道連れにしない（`list()` の doc と
    * 同じ理由。issue #2053）——この操作が全文置換するのは `tokens` だけで、
    * `settings` / `active` の値には触れない。
    */
   replace(tokens: readonly AgentToken[]): Promise<AgentToken[]>;
+  /**
+   * **読めない行を、id で指して消す**（issue #2354）。`listUnreadable()` が返す `id` と
+   * 一致する読めない行だけを消し、読めた行・`settings` / `active` には触れない。
+   * 消した行の id を返す（指された id のうち、読めない行に無かったものは含まれない
+   * ——呼び手が突き合わせる）。
+   *
+   * **id が取れない読めない行（`UnreadableToken.id` が無い行）は、この口では消せない**
+   * （指す名前が無い。`tokens.json` を手で直す）。同じ id の読めない行が複数あれば
+   * まとめて消える。pg・インメモリは読めない行を持てないので、常に空を返す。
+   * **⚠️ 値（`value`）は返さない。**
+   */
+  removeUnreadable(ids: readonly string[]): Promise<string[]>;
   /**
    * 回す契機と冷却の既定。置かれていなければ core の既定
    * （`DEFAULT_TOKEN_ROTATION_SETTINGS`）を返す。
@@ -2611,7 +2635,13 @@ export function describeUnreadableTokens(
   return (
     `読めないトークンの行が ${unreadable.length} 件ある${note}。` +
     '壊れた行であって、消されたトークンではない。この一覧には載っていない。' +
-    'プールを全文置換する操作（PUT /tokens。alteroid token add などが通る）は、この行を一緒に捨てる。'
+    'プールを全文置換する操作（PUT /tokens。alteroid token add などが通る）や回し手の書き戻しは、' +
+    'この行を捨てずに持ち越す。消すには、id を指して消す口（POST /tokens/unreadable/remove。' +
+    'alteroid token remove-unreadable <id>）を使う' +
+    (unreadable.some((row) => row.id === undefined)
+      ? '（id が取れない行は、その口では消せない）'
+      : '') +
+    '。'
   );
 }
 

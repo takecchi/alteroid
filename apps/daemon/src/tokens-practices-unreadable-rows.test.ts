@@ -364,4 +364,13 @@ describe('トークンプール（pg 実装。#2346）', () => {
     expect('rowsUnreadable' in body).toBe(false);
     expect((body.tokens as { id: string }[]).map((token) => token.id)).toEqual(['tok-good']);
   });
+
+  it('removeUnreadable() は常に空（#2354）。読めない行を持てないので、消すものも持ち越すものも無い', async () => {
+    const { stores } = await seedPg();
+    await stores.tokens.replace([
+      { id: 'tok-good', label: 'good', value: GOOD_TOKEN_VALUE, source: 'stored', order: 0 },
+    ]);
+    expect(await stores.tokens.removeUnreadable(['tok-good', 'tok-bad'])).toEqual([]);
+    expect((await stores.tokens.list()).map((token) => token.id)).toEqual(['tok-good']);
+  });
 });

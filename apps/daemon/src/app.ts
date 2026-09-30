@@ -201,6 +201,8 @@ import {
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensResponseSchema,
+  tokensUnreadableRemoveRequestSchema,
+  tokensUnreadableRemoveResponseSchema,
   tokensUpdateRequestSchema,
   usageResponseSchema,
 } from './openapi.js';
@@ -6132,14 +6134,17 @@ export function createApp(deps: AppDeps) {
         tags: ['tokens'],
         summary: '認証トークンのプールを全文置換する',
         description:
-          '入力に無い行は消える。壊れた入力（新規行に value が無い・消えた id を' +
+          '入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（issue #2354。' +
+          '消すには `POST /tokens/unreadable/remove`）。壊れた入力（新規行に value が無い・消えた id を' +
           '指す・id 重複）は 400 で理由を返し、保存しない。',
         responses: {
           200: {
             description:
               '置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の' +
               '代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。' +
-              'issue #2095）。',
+              'issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——' +
+              '**読めない行は捨てずに持ち越した**（issue #2354）。消すには ' +
+              '`POST /tokens/unreadable/remove`。',
             content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
           },
           400: {
@@ -6210,6 +6215,126 @@ export function createApp(deps: AppDeps) {
             `count=${String(c.req.valid('json').tokens.length)}`,
             error,
           );
+          return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
+        }
+      },
+    )
+
+    /**
+     * **読めないプールの行を、id で指して消す**（issue #2354 の決定）。`PUT /tokens`
+     * （全文置換）と回し手の書き戻しは読めない行を**持ち越す**ので、読めない行を
+     * 消す口はここだけである。`rowsUnreadable.rows[].id`（`GET /tokens`）を指す。
+     *
+     * **形は `POST /inbox/remove` / `POST /archive/remove`（id の配列を取る POST）に合わせた。**
+     * 読めない行は `DELETE /tokens/:id` の `:id`（読めた行の id）と名前空間が重なりうるので、
+     * 別の語（`unreadable`）の下に置いて取り違えを避ける。
+     *
+     * **日誌を先に書き、書けなければ状態を変えずに 500**（`appendJournalOrDrop` の doc。
+     * `PUT /credentials` と同じ作法）。**日誌に残すのは消す id と件数だけで、行の中身
+     * （とくにトークンの値）は書かない。** 読めない行に無い id が1つでもあれば、何も消さず
+     * 日誌も書かずに 404（件数だけ返し、指された文字列は返さない）。
+     *
+     * **資格は `authenticate` だけ（`/tokens` と同じ強さ）。**
+     */
+    .post(
+      '/tokens/unreadable/remove',
+      describeRoute({
+        tags: ['tokens'],
+        summary: '読めない認証トークンの行を、id を指して消す',
+        description:
+          '`GET /tokens` の `rowsUnreadable.rows[].id` を指した読めない行だけを消す。読めた行・' +
+          '設定には触れない。id が取れない行はこの口では消せない。1つでも読めない行に無い id が' +
+          'あれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
+        responses: {
+          200: {
+            description: '消した後のプール（値は出さない）と、消した id。',
+            content: {
+              'application/json': { schema: resolver(tokensUnreadableRemoveResponseSchema) },
+            },
+          },
+          400: {
+            description: 'トークンのプールの器が無い、または入力の形が不正（何も消していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description:
+              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。' +
+              '理由の本文は返さない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(tokensUnreadableRemoveRequestSchema, (where) => ({
+        error:
+          '読めない行の id の入力の形が不正（何も消していない）' +
+          (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        if (deps.tokens === undefined) {
+          return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
+        }
+        const requested = c.req.valid('json').ids;
+        // 閉じ込めで代入するので、`let` ではなく入れ物にする（型の絞り込みが `never` に倒れない）。
+        const written: { detail?: string } = {};
+        try {
+          const result = await deps.tokens.removeUnreadable(requested, {
+            // **日誌を先に書く。書けなければここで投げ、状態を変えずに `base.onError` へ抜ける。**
+            // id と件数だけ（トークンの値は書かない）。
+            beforeRemove: async (ids) => {
+              await deps.stores.journal.append({
+                type: 'decision',
+                decision: `読めない認証トークンの行を ${String(ids.length)} 件消そうとしている（id: ${ids.join(', ')}）`,
+                grounds:
+                  `${describeActor(c.get('principal'))}（POST /tokens/unreadable/remove）。` +
+                  '消すのは id で指した読めない行だけ。行の中身（トークンの値）は書かない。',
+              });
+              // 書けた後にだけ印を立てる（書けなかった回は「日誌が無い」＝打ち消す行も要らない）。
+              written.detail = `ids=${ids.join(',')}`;
+            },
+          });
+          if (result.kind === 'unknown') {
+            return c.json(
+              {
+                error:
+                  `指した id のうち ${String(result.count)} 件が、読めない行に無い` +
+                  '（何も消していない。alteroid token list で読めない行の id を確かめる）',
+              },
+              404,
+            );
+          }
+          return c.json(
+            tokensUnreadableRemoveResponseSchema.parse({ ...result.view, removedIds: result.ids }),
+          );
+        } catch (error) {
+          // 日誌が書けなかった（`beforeRemove` の中で投げた）回は、状態を変えていない。
+          // そのまま投げ直して `base.onError` の 500 に任せる。
+          const journaled = written.detail;
+          if (journaled === undefined) throw error;
+          // 日誌は書いたが消せなかった。打ち消しの行を足す（`PUT /credentials` と同じ形）。
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: '読めない認証トークンの行を消せなかった',
+              grounds:
+                `${describeActor(c.get('principal'))}（POST /tokens/unreadable/remove、` +
+                `状態の変更が失敗）。${journaled}`,
+            },
+            '読めない認証トークンの行の打ち消しの日誌',
+            journaled,
+          );
+          noteDroppedRecord('読めない認証トークンの行の削除', journaled, error);
           return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
         }
       },

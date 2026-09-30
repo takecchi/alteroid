@@ -1789,8 +1789,32 @@ export const tokensResponseSchema = z.object({
   settings: tokenRotationSettingsSchema.optional(),
   settingsUnreadable: z.object({ reason: z.string() }).optional(),
   rowsUnreadable: z
-    .object({ count: z.number().int().positive(), rows: z.array(unreadableTokenSchema) })
+    .object({
+      count: z.number().int().positive(),
+      rows: z.array(unreadableTokenSchema),
+      /**
+       * **`PUT /tokens` の応答にだけ付く**（issue #2354）。この `count` 行は、全文置換で
+       * 捨てずに持ち越した、の印。`GET /tokens` には付かない。
+       */
+      carriedOver: z.literal(true).optional(),
+    })
     .optional(),
+});
+
+/**
+ * `POST /tokens/unreadable/remove` の body（issue #2354）。**読めない行を id で指して消す。**
+ * `id` は `GET /tokens` の `rowsUnreadable.rows[].id`。id が取れない行は指せない。
+ */
+export const tokensUnreadableRemoveRequestSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+});
+
+/**
+ * `POST /tokens/unreadable/remove` の応答。消した後のプール（{@link tokensResponseSchema}）に、
+ * 消した id を足す。**id と件数だけで、行の中身（トークンの値）は含まない。**
+ */
+export const tokensUnreadableRemoveResponseSchema = tokensResponseSchema.extend({
+  removedIds: z.array(z.string()),
 });
 
 /**

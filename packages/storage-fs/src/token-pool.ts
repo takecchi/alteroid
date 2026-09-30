@@ -82,10 +82,11 @@ type AgentTokenRow = z.infer<typeof agentTokenRowSchema>;
  * 持ち回るのが、この直しの核心である。`writeSettings` / `writeActive` は
  * いずれも最終的にこれを丸ごとシリアライズし直す（`#update`）ので、ここへ
  * 入れなかった値は次の書き込みで消える——検査を通った値だけを書けば、版
- * ずれ・手編集でできた不正な値が黙って消えることになる。**`replace()` は
- * `tokens` に限って例外**——直下の doc を見よ（`settings` / `active` の
- * 壊れた生の値は `replace()` でも保持される。`replace()` が全文置換すると
- * 約束しているのは `tokens` だけである）。
+ * ずれ・手編集でできた不正な値が黙って消えることになる。**`replace()` も
+ * `invalidTokensRaw` を持ち越す**（issue #2354。かつては `tokens` に限って
+ * 捨てていた〈#1942〉が、決定で改めた。`replace()` の doc）。`replace()` が
+ * 全文置換すると約束しているのは、読めた `tokens` だけである。読めない行を
+ * 消す口は `removeUnreadable()`（id で指す）だけである。
  */
 interface TokenPoolFile {
   tokens: AgentTokenRow[];
@@ -216,18 +217,52 @@ export class FsTokenPoolStore implements TokenPoolStore {
   }
 
   /**
-   * 全文置換（`TokenPoolStore.replace` の doc）。**呼び手が「これが正本の
-   * 全体だ」と渡す操作なので、壊れて持ち回っていた行（`invalidTokensRaw`）も
-   * ここで一緒に捨てる**（issue #1942）——`FsJobStore.clear()` と同じ
-   * 「壊れているかどうかを問わず消す」向き。pg 実装（`PgTokenPoolStore.replace`）
-   * も `delete → insert` の1トランザクションで全消去してから積み直すので、
-   * fs だけが古い壊れた行を持ち越すと、実装ごとに `replace()` の意味が
-   * 変わってしまう。
+   * 全文置換（`TokenPoolStore.replace` の doc）。**入力に無い読めた行は消えるが、読めずに
+   * 持ち回っていた行（`invalidTokensRaw`）は消さずに持ち越す**（issue #2354 の決定）。
+   *
+   * **かつては一緒に捨てていた**（issue #1942。`FsJobStore.clear()` と同じ「壊れて
+   * いるかどうかを問わず消す」向き、pg の全消去との揃え）。**#2354 で、理由を3つ
+   * 挙げて持ち越しに改めた。**
+   * - トークンを登録・無効化するのは人の手で、クローンにも回し手にもその権限は無い。
+   *   人が入れた行を、自動の回転が知らせずに消してよい理由が無い——**この口は人の
+   *   `PUT /tokens`（`TokenPoolService.replace`）と回し手の書き戻し
+   *   （`token-rotator.ts` の `replace()`）の両方が通る**ので、捨てれば回転のたびに
+   *   読めない行が消えうる。
+   * - 「普段の書き戻しでは生の行を残す」という #1942 の半分（`writeSettings` /
+   *   `writeActive` は `invalid*Raw` を持ち回る）と揃う。
+   * - 失うものの重さが違う。捨てた跡が残っても鍵そのものは戻らない。持ち越して失う
+   *   のは「全文置換の意味の純粋さ」だけである。
+   *
+   * **pg 実装（`PgTokenPoolStore.replace`）は全消去して積み直すが、読めない行を
+   * そもそも持てない**（`listUnreadable()` が常に空）ので、実装間で失うものは
+   * 食い違わない。**読めない行を消したいときは {@link FsTokenPoolStore.removeUnreadable}**
+   * （id で指す）を使う。
    */
   async replace(tokens: readonly AgentToken[]): Promise<AgentToken[]> {
     const parsed = tokens.map((token) => agentTokenRowSchema.parse(token));
-    await this.#update((file) => ({ ...file, tokens: parsed, invalidTokensRaw: [] }));
+    await this.#update((file) => ({ ...file, tokens: parsed }));
     return this.list();
+  }
+
+  /**
+   * 読めない行を id で指して消す（`TokenPoolStore.removeUnreadable` の doc。issue #2354）。
+   * `invalidTokensRaw` のうち `extractRowId` が一致する行だけを落とす——id が取れない行は
+   * 指せないので残る。読めた行・`settings` / `active` には触れない。
+   * **消した行の id だけを返す**（値は返さない）。読み書きは `#update` の排他の中で1回にまとめる。
+   */
+  async removeUnreadable(ids: readonly string[]): Promise<string[]> {
+    const wanted = new Set(ids);
+    const removed: string[] = [];
+    await this.#update((file) => ({
+      ...file,
+      invalidTokensRaw: file.invalidTokensRaw.filter((raw) => {
+        const id = extractRowId(raw);
+        if (id === undefined || !wanted.has(id)) return true;
+        removed.push(id);
+        return false;
+      }),
+    }));
+    return removed;
   }
 
   /**
@@ -311,7 +346,8 @@ export class FsTokenPoolStore implements TokenPoolStore {
    * どこが不正かだけ**）、`invalidTokensRaw` / `invalidSettingsRaw` /
    * `invalidActiveRaw` として生の形のまま保持する——`writeSettings` /
    * `writeActive` がこれを書き戻すことで、版ずれ・手編集でできた不正な値を
-   * 黙って消さない（`tokens` に限り `replace()` が例外——直上の doc）。
+   * 黙って消さない（`replace()` も持ち越す。消すのは `removeUnreadable()` だけ
+   * ——issue #2354）。
    */
   async #read(): Promise<TokenPoolFile> {
     try {
