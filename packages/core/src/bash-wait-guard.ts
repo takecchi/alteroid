@@ -128,10 +128,16 @@ function buildReason(shapeDescription: string): string {
  * 先頭に環境変数の代入（`FOO=bar timeout 60 ...`）が在ってもよい —
  * シェルはそれを `timeout` コマンドへの環境変数付与として扱うので、
  * 有界性そのものは変わらない。
+ *
+ * #2423: `timeout` の直後のオプション（`--foreground 60`・`-k5 60`）は `timeout\b` で
+ * 既に有界と読む（前置きの形には依存しない）。パス付き（`/usr/bin/timeout 60 …`）も
+ * 同じく有界なので、先頭の語に `(?:[^\s=]{0,64}\/)?` を許す（上限の理由は
+ * `TIMEOUT_COMMAND_PREFIX_SRC` の doc。無制限だと空白の無い長い1語で2乗になる）。
  */
 function isTimeoutWrapped(trimmed: string): boolean {
   return (
-    /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\b/.test(trimmed) && isSingleSimpleCommand(trimmed)
+    /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:[^\s=]{0,64}\/)?timeout\b/.test(trimmed) &&
+    isSingleSimpleCommand(trimmed)
   );
 }
 
@@ -1500,13 +1506,30 @@ const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}[ \t]+`;
  * `ENV_COMMAND_OPTION_SRC` と同じ理由（1個ずつが独立して終端するので、
  * 繰り返しの中で「どこまでが1個のオプションか」があいまいにならない）。
  *
- * ⚠️ **`timeout` の全オプション文法までは解いていない**（`--foreground`
- * 等、確認していない残りは doc「弾けないと分かっている形」参照は無い
- * ——このオプション自体が既知の全部ではないため、列挙漏れの前置きは
- * 単に読み飛ばせないだけで、誤って弾く方向にはならない）。
+ * **#2423 で GNU timeout の文法どおりに広げた。** GNU の短いフラグは値なしの
+ * `-f`（`--foreground`）・`-v`（`--verbose`）・`-p`（`--preserve-status`）と、
+ * 値を取る `-k`（`--kill-after`）・`-s`（`--signal`）。値は詰めても
+ * （`-k5`・`-sKILL`）空白で区切っても（`-k 5`）よく、長い形は `=` でも空白でもよい。
+ * 値なしの短いフラグは束ねられる（`-fv`・`-vk5`）。選択肢は先頭の文字列で
+ * 排他（`--kill-after`/`--signal`/`--foreground`/`--preserve-status`/`--verbose`
+ * と `-` + 束）で、値は `\S+`（空白を含まない）なので、1語の読み方は1通りに決まる。
+ * 束は `-[fvp]*` の後ろが `[ks]` か空白かで分かれ、`[fvp]` と `[ks]` は重ならない。
+ *
+ * 継続時間は `timeout` の最初の非オプション語なので、`[^\s-]\S*` で読み飛ばす
+ * （`1e1`・`0x10`・`inf` も通る。`-` 始まりを除くのでオプションと重ならない。
+ * 上の小数の doc は、この緩めた読み方の一部として引き続き成り立つ）。
+ * 先頭の語は `/usr/bin/timeout` のようなパス付きも読む。パス部分は `=` を含めない
+ * （`[^\s=]{0,64}`）—— `ENV_ASSIGNMENT_SRC` の語（`A=/x/timeout`）と同じ語が2通りに
+ * 読めると、同じ語の繰り返しで読み方が指数的に増えるため。**上限 64 は必須**:
+ * 無制限の `*` だと、空白の無い長い1語（`a;a;a;…`）で各開始位置が語末まで走り2乗になった
+ * （bash-wait-guard-heredoc-scan の時間の歯が赤くなった。`ssh` の `\S{0,64}` と同じ手当て）。
+ *
+ * 残る穴: 長いオプションの省略形（`--kill=5`・`--sig KILL`。GNU の getopt は
+ * 一意な省略を受ける）と `--`（オプションの終わり）は読まない。読めないだけで、
+ * 誤って弾く方向にはならない。
  */
-const TIMEOUT_COMMAND_OPTION_SRC = String.raw`(?:-k[ \t]+\S+[ \t]+|--kill-after=\S+[ \t]+|-s[ \t]+\S+[ \t]+|--signal=\S+[ \t]+|--preserve-status[ \t]+)`;
-const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`timeout[ \t]+(?:${TIMEOUT_COMMAND_OPTION_SRC})*(?:\d+(?:\.\d*)?|\.\d+)[a-zA-Z]*[ \t]+`;
+const TIMEOUT_COMMAND_OPTION_SRC = String.raw`(?:--kill-after(?:=\S*|[ \t]+\S+)[ \t]+|--signal(?:=\S*|[ \t]+\S+)[ \t]+|--(?:foreground|preserve-status|verbose)[ \t]+|-[fvp]+[ \t]+|-[fvp]*[ks](?:\S+|[ \t]+\S+)[ \t]+)`;
+const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`(?:[^\s=]{0,64}\/)?timeout[ \t]+(?:${TIMEOUT_COMMAND_OPTION_SRC})*[^\s-]\S*[ \t]+`;
 
 /**
  * `env` コマンド経由の単純な前置き —— `env`（引数無し）・

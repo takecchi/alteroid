@@ -253,3 +253,88 @@ describe('gh-pr-merge-delete-branch: timeout 前置きの小数の継続時間�
     expect(inspectBashCommand('timeout 1. gh pr merge 1 --delete-branch').blocked).toBe(true);
   });
 });
+
+/**
+ * issue #2423 —— `timeout` の前置きを GNU timeout のオプション文法どおりに読む。
+ * 以前は `-k <秒>`・`--kill-after=`・`-s <sig>`・`--signal=`・`--preserve-status` の
+ * 空白区切りの狭い形と、`\d+<単位>` の継続時間しか読み飛ばさなかった。
+ */
+describe('gh-pr-merge-delete-branch: timeout 前置きのオプション・継続時間・パスを読み飛ばす（issue #2423）', () => {
+  const tail = 'gh pr merge 7 --squash --delete-branch';
+  it.each([
+    ['-k5 (詰めた短い形)', `timeout -k5 60 ${tail}`],
+    ['-k 5 (空白区切りの短い形)', `timeout -k 5 60 ${tail}`],
+    ['--kill-after 5 (空白区切りの長い形)', `timeout --kill-after 5 60 ${tail}`],
+    ['--kill-after=5 (= の長い形)', `timeout --kill-after=5 60 ${tail}`],
+    ['--signal KILL', `timeout --signal KILL 60 ${tail}`],
+    ['--signal=KILL', `timeout --signal=KILL 60 ${tail}`],
+    ['-sKILL', `timeout -sKILL 60 ${tail}`],
+    ['-s KILL', `timeout -s KILL 60 ${tail}`],
+    ['--foreground', `timeout --foreground 60 ${tail}`],
+    ['--preserve-status', `timeout --preserve-status 60 ${tail}`],
+    ['-v', `timeout -v 60 ${tail}`],
+    ['--verbose', `timeout --verbose 60 ${tail}`],
+    ['-fv (値なしの束)', `timeout -fv 60 ${tail}`],
+    ['-vk5 (束 + 値)', `timeout -vk5 60 ${tail}`],
+    ['-pfs KILL (束 + 空白区切りの値)', `timeout -pfs KILL 60 ${tail}`],
+    ['オプションの併用', `timeout --foreground -k5 -s KILL --verbose 60 ${tail}`],
+    ['/usr/bin/timeout', `/usr/bin/timeout 60 ${tail}`],
+    ['パス付き + オプション', `/usr/bin/timeout -k5 60 ${tail}`],
+    ['継続時間 1e1', `timeout 1e1 ${tail}`],
+    ['継続時間 0x10', `timeout 0x10 ${tail}`],
+    ['継続時間 inf', `timeout inf ${tail}`],
+    ['&& の後ろ + オプション', `cd /tmp && timeout -k5 60 ${tail}`],
+    ['-d（短縮形）+ オプション', `timeout --foreground 60 gh pr merge 7 -d`],
+  ])('弾く: %s', (_label, command) => {
+    expect(inspectBashCommand(command)).toMatchObject({
+      blocked: true,
+      form: 'gh-pr-merge-delete-branch',
+    });
+  });
+
+  it.each([
+    [
+      '--delete-branch 無しの gh pr merge',
+      'timeout 20 gh pr merge 7 --squash --body x --match-head-commit abc',
+    ],
+    [
+      'オプション付きで --delete-branch 無し',
+      'timeout -k5 --foreground 60 gh pr merge 7 --squash --body x --match-head-commit abc',
+    ],
+    [
+      'パス付きで --delete-branch 無し',
+      '/usr/bin/timeout 60 gh pr merge 7 --squash --body x --match-head-commit abc',
+    ],
+    ['無関係なコマンド', 'timeout --signal KILL -k5 60 pnpm test'],
+    ['echo の引数', 'echo /usr/bin/timeout -k5 60 gh pr merge 1 --delete-branch'],
+  ])('通す: %s', (_label, command) => {
+    expect(inspectBashCommand(command).blocked).toBe(false);
+  });
+
+  it('isTimeoutWrapped: パス付き timeout に包まれた単一コマンドは有界と読んで通す', () => {
+    expect(inspectBashCommand('/usr/bin/timeout 60 tail -f /tmp/x').blocked).toBe(false);
+    expect(inspectBashCommand('timeout --foreground 60 tail -f /tmp/x').blocked).toBe(false);
+    expect(inspectBashCommand('/usr/bin/timeout 60 tail -f /tmp/x; tail -f /tmp/y').blocked).toBe(
+      true,
+    );
+  });
+
+  it('オプションの繰り返しが長くても後戻りで爆発しない（弾かれる入力）', () => {
+    const makeInput = (n: number) =>
+      `${'timeout -k5 -fv -s KILL --kill-after 5 60 '.repeat(n)}gh pr merge 1 --delete-branch`;
+    expect(inspectBashCommand(makeInput(30)).blocked).toBe(true);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 15, factor: 2 });
+  });
+
+  it('前置きの繰り返しの末尾が外れる入力でも後戻りで爆発しない', () => {
+    const makeInput = (n: number) => `${'/x/timeout -k5 60 A=/timeout '.repeat(n)}gh pr view 1`;
+    expect(inspectBashCommand(makeInput(30)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 15, factor: 2 });
+  });
+
+  it('オプションだけの長い並びでも爆発しない', () => {
+    const makeInput = (n: number) => `timeout ${'-fvp '.repeat(n)}x`;
+    expect(inspectBashCommand(makeInput(400)).blocked).toBe(false);
+    expectNotSuperlinear(inspectBashCommand, makeInput, { n: 200, factor: 2 });
+  });
+});
