@@ -766,8 +766,8 @@ describe('クローンの道具', () => {
      *
      * **⚠️ この歯が当たっているのは3つある `PersonaStore.append` のうち
      * 1つ（`testing.ts` のインメモリ実装）だけである。** fs / pg には
-     * 当たらない——そちらは `packages/storage-fs` /
-     * `packages/storage-pg` の `index.test.ts` に同じ性質の歯を置いた。
+     * 当たらない——そちらは `packages/storage-fs/src/index.test.ts` /
+     * `packages/storage-pg/src/index.persona.test.ts` に同じ性質の歯を置いた。
      * **3つのうち1つを測って3つとも測ったことにしないこと。**
      */
     it('末尾の行が見出しの文書へ追記しても、その見出しは消えた見出しに出ない（説明文の「常に0件」の根拠）', async () => {

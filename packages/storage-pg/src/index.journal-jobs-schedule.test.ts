@@ -534,8 +534,8 @@ describe('PgJournalStore', () => {
    * 実装**に対して測る。同じ形の歯が3つ在る——インメモリ
    * （`packages/core/src/journal-search-contract.test.ts`）/ fs
    * （`packages/storage-fs/src/index.test.ts`）/ pg
-   * （`packages/storage-pg/src/index.test.ts`）。1つで測って3つとも測ったことに
-   * しない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
+   * （このファイル、`packages/storage-pg/src/index.journal-jobs-schedule.test.ts`）。
+   * 1つで測って3つとも測ったことにしない（`with` 契約 / `order` 契約 / `query edge` 契約と同じ作法）。
    *
    * **pg だけが持ちうる壊れ方**: `ILIKE` のパターンで `%` / `_` を
    * エスケープし忘れると、`q: '50%'` が全件を返す（契約4）。fs /

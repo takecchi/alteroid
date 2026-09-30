@@ -12,7 +12,7 @@ import { createMemoryStores } from './testing.js';
  *
  * - インメモリ — このファイル
  * - fs — `packages/storage-fs/src/index.test.ts`
- * - pg — `packages/storage-pg/src/index.test.ts`
+ * - pg — `packages/storage-pg/src/index.journal-jobs-schedule.test.ts`
  */
 describe('PermissionGrantStore の契約（インメモリ実装）', () => {
   it('get/list の往復・revoke/markUsedのdocに書かれた約束', async () => {

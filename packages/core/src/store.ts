@@ -659,16 +659,6 @@ export interface PermissionGrantStore {
 }
 
 /**
- * 継続中の定期の依頼（PRD「自律」の起点②）。
- *
- * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
- * 受信箱は揮発し、記憶は根拠を持つ場所であって時計を持たない。ここが無いと
- * 「定期的に見ておいて」は次の compaction かデーモン再起動で静かに消える。
- *
- * 人間もここを読んで直せること（CLI / HTTP API）が要件である — 人間の制御手段は
- * 記憶・日誌・境界の3つだが、自分が出した継続の依頼が見えないのは可観測性の穴になる。
- */
-/**
  * `ScheduleStore.get(kind)` が、その行を `scheduledRequestSchema` として
  * 読めなかったときに投げる専用のエラー型（issue #2177）。`UnreadablePracticeError`
  * （本ファイル）と同じ形——「無い」（`null`）と「読めない」（throw）の区別を、
@@ -692,6 +682,16 @@ export class UnreadableScheduleError extends Error {
   }
 }
 
+/**
+ * 継続中の定期の依頼（PRD「自律」の起点②）。
+ *
+ * **人間の依頼のうち「これから先ずっと」の部分を持つ器である。** 会話は消え、
+ * 受信箱は揮発し、記憶は根拠を持つ場所であって時計を持たない。ここが無いと
+ * 「定期的に見ておいて」は次の compaction かデーモン再起動で静かに消える。
+ *
+ * 人間もここを読んで直せること（CLI / HTTP API）が要件である — 人間の制御手段は
+ * 記憶・日誌・境界の3つだが、自分が出した継続の依頼が見えないのは可観測性の穴になる。
+ */
 export interface ScheduleStore {
   /** kind の昇順。 */
   list(): Promise<ScheduledRequest[]>;
