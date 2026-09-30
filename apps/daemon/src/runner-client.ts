@@ -1772,12 +1772,18 @@ class HttpRunner implements RunnerClient {
    * `profile()` と同じく `/health` から拾う（新しい口を足さない）。古い runner は
    * 欄を持たないので `undefined` になる —— 「置いていない」と区別できないが、
    * 区別は押し込みの側（`setMcpServers` の 404）が持つ。
+   *
+   * **欄が在るのに形が読めなかったときは投げる（#2487）。** `undefined`（何も載って
+   * いない）へ倒すと、呼び出し側（`syncRunner`）が「外した登録と一致」と読み、
+   * 外したはずの登録が runner に残り続ける。
    */
   async mcpServers(): Promise<RunnerMcpServersFingerprint | undefined> {
     const response = await this.#call('GET', '/health');
     const body = (await response.json()) as HealthBody;
+    if (body.mcpServers === undefined || body.mcpServers === null) return undefined;
     const parsed = runnerMcpServersFingerprintSchema.safeParse(body.mcpServers);
-    return parsed.success ? parsed.data : undefined;
+    if (!parsed.success) throw new Error('runner の /health の mcpServers の欄を読めなかった');
+    return parsed.data;
   }
 
   /**

@@ -96,7 +96,13 @@ interface Rig {
  * `mcpServers` の1本道を渡さない（＝降ろさない）。
  */
 async function rig(
-  options: { stores?: Stores; oldRunner?: boolean; oldDaemon?: boolean } = {},
+  options: {
+    stores?: Stores;
+    oldRunner?: boolean;
+    oldDaemon?: boolean;
+    /** `on` の間、`/health` の `mcpServers` の欄を読めない形に差し替える（#2487）。 */
+    garbleHealth?: { on: boolean };
+  } = {},
 ): Promise<Rig> {
   const { fn, started } = fakeSdk();
   const outbox = new Outbox();
@@ -117,6 +123,14 @@ async function rig(
       if (init?.method === 'POST') posted.push(String(init.body));
     }
     const response = await app.request(`${url.pathname}${url.search}`, init as never);
+    if (options.garbleHealth?.on === true && url.pathname === '/health') {
+      const body = (await response.json()) as Record<string, unknown>;
+      body.mcpServers = { sha256: 42 };
+      return new Response(JSON.stringify(body), {
+        status: response.status,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (options.oldRunner === true && url.pathname === '/health') {
       const body = (await response.json()) as Record<string, unknown>;
       delete body.mcpServers;
@@ -270,6 +284,18 @@ describe('MCP の登録を runner へ降ろす（#325 段3）', () => {
     // 古い runner の `/health` は欄を持たない ⟹「置いていない」とは区別できないが、
     // 指紋を作りもしない（区別は押し込みの 404 が持つ）。
     expect(await r.client.mcpServers?.()).toBeUndefined();
+  });
+
+  it('HttpRunner: /health の mcpServers の欄が在るのに読めない形なら、undefined（何も載っていない）ではなく投げる（#2487）', async () => {
+    const garbleHealth = { on: false };
+    const stores = createMemoryStores();
+    await stores.mcpServers.write(REGISTRATION);
+    const r = await rig({ stores, garbleHealth, oldDaemon: true });
+    await r.client.setMcpServers?.(REGISTRATION);
+    expect((await r.client.mcpServers?.())?.sha256).toBe(mcpServersFingerprintOf(REGISTRATION));
+
+    garbleHealth.on = true;
+    await expect(r.client.mcpServers?.()).rejects.toThrow('mcpServers の欄を読めなかった');
   });
 
   it('形が不正な登録は runner が 400 で拒み、前の登録が残る（応答に値を載せない）', async () => {

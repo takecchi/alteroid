@@ -162,11 +162,22 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
         const want =
           Object.keys(servers).length === 0 ? undefined : mcpServersFingerprintOf(servers);
 
-        // **既に同じ版が載っていれば触らない。** 指紋が取れなかったときは「差がある」に
+        // **既に同じ版が載っていれば触らない。** 指紋が**読めなかった**ときは「差がある」に
         // 倒す（降ろす）—— 同じ登録を置き直すのは無害で、降ろし損なうと連携が0本の
         // まま走る（`credential-service.ts` の `syncRunner` と同じ倒し方）。
-        const current = await runner.mcpServers?.().catch(() => undefined);
-        if (want === undefined ? current === undefined : current?.sha256 === want) return null;
+        //
+        // **「読めなかった」を `undefined`（何も載っていない）に潰さない（#2487）。**
+        // 潰すと `want === undefined`（外した）のとき「一致」になり、外したはずの登録
+        // （鍵を含む）が runner に残り続ける。空を降ろすのは外す向きなので安全側である。
+        let unreadable = false;
+        let current: RunnerMcpServersFingerprint | undefined;
+        try {
+          current = await runner.mcpServers?.();
+        } catch {
+          unreadable = true;
+        }
+        const matches = want === undefined ? current === undefined : current?.sha256 === want;
+        if (!unreadable && matches) return null;
 
         const placed = await runner.setMcpServers(servers);
         return placed === undefined ? {} : { mcpServers: placed };

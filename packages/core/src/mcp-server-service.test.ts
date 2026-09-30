@@ -221,3 +221,83 @@ describe('MCP の登録の押し込みの挑み直し', () => {
     await s.pool.stop();
   });
 });
+
+describe('syncRunner: runner の指紋を読めなかった回（#2487）', () => {
+  it('登録が空（want が無い）で指紋が読めなくても、「何も載っていない」と読まず、空を降ろす', async () => {
+    const s = await setup();
+    // 空の登録（外した）。runner は古い登録を持ったままで、指紋の読み取りだけが落ちる。
+    await s.runner.setMcpServers?.(REGISTRATION);
+    const readReal = s.runner.mcpServers?.bind(s.runner);
+    const placed: McpServers[] = [];
+    const setReal = s.runner.setMcpServers?.bind(s.runner);
+    s.runner.setMcpServers = async (servers) => {
+      placed.push(servers);
+      return setReal?.(servers);
+    };
+    s.runner.mcpServers = async () => {
+      throw new Error('health unreadable (test)');
+    };
+
+    await s.service.syncRunner(s.runner);
+
+    expect(placed).toEqual([{}]);
+    expect(await readReal?.()).toBeUndefined();
+    await s.pool.stop();
+  });
+
+  it('登録があって指紋が読めなくても、降ろす', async () => {
+    const s = await setup();
+    await s.stores.mcpServers.write(REGISTRATION);
+    const placed: McpServers[] = [];
+    s.runner.setMcpServers = async (servers) => {
+      placed.push(servers);
+      return undefined;
+    };
+    s.runner.mcpServers = async () => {
+      throw new Error('health unreadable (test)');
+    };
+
+    await s.service.syncRunner(s.runner);
+
+    expect(placed).toEqual([REGISTRATION]);
+    await s.pool.stop();
+  });
+
+  it('対照: 読めて、空のままなら何もしない。読めて一致していれば何もしない', async () => {
+    const s = await setup();
+    const placed: McpServers[] = [];
+    s.runner.setMcpServers = async (servers) => {
+      placed.push(servers);
+      return undefined;
+    };
+    s.runner.mcpServers = async () => undefined;
+    expect(await s.service.syncRunner(s.runner)).toBeNull();
+
+    await s.stores.mcpServers.write(REGISTRATION);
+    s.runner.mcpServers = async () => ({
+      sha256: mcpServersFingerprintOf(REGISTRATION),
+      names: ['github'],
+      updatedAt: new Date().toISOString(),
+    });
+    expect(await s.service.syncRunner(s.runner)).toBeNull();
+    expect(placed).toEqual([]);
+    await s.pool.stop();
+  });
+
+  it('対照: 読めて、空なのに runner に載っていれば、空を降ろす', async () => {
+    const s = await setup();
+    const placed: McpServers[] = [];
+    s.runner.setMcpServers = async (servers) => {
+      placed.push(servers);
+      return undefined;
+    };
+    s.runner.mcpServers = async () => ({
+      sha256: mcpServersFingerprintOf(REGISTRATION),
+      names: ['github'],
+      updatedAt: new Date().toISOString(),
+    });
+    await s.service.syncRunner(s.runner);
+    expect(placed).toEqual([{}]);
+    await s.pool.stop();
+  });
+});
