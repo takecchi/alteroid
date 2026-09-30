@@ -460,8 +460,10 @@ export interface AgentPermissionDeniedRecord {
  * （実際に道具を通すのは、撃ち直しの後の `PreToolUse` の役目——
  * `AgentPreToolDecision` の `allow`）。
  *
- * - `retry`: クローンが1回限りの許可を出した。同じ入力で撃ち直せば、
- *   `PreToolUse`（`runner.ts` の `#consumeOneShotAllow`）が今度は通す。
+ * - `retry`: クローンが1回限りの許可を出した。**担い手のモデルが**同じ入力で
+ *   撃ち直したときにだけ、`PreToolUse`（`runner.ts` の `#consumeOneShotAllow`）が
+ *   今度は通す。撃ち直すかどうかはモデルが決める（`retry` は助言でしかなく、
+ *   分類器の拒否文が再試行を禁じていれば撃ち直さないことがある）。
  * - `no-retry`: クローンが拒否した・答えが時間切れになった・入力を安全に
  *   一致判定できる形へ畳めなかった、のいずれか。**安全側（許可しない）が
  *   既定**（issue #1105 本文の設計判断5）。

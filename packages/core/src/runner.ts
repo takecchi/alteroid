@@ -4309,6 +4309,9 @@ class RunnerSession {
     const kind = 'permission';
     const summary =
       `分類器が ${actor} の ${toolName} 呼び出しを拒否した。この1回だけ許可しますか。\n` +
+      `（allow は「同じ入力での撃ち直しを1回だけ通す」許可で、撃ち直すかは担い手が決める。` +
+      `拒否文が再試行を禁じていると撃ち直されないことがある。その場合は allow の後で担い手へ` +
+      `manager_send で伝える必要がある。効くかは確かめていない）\n` +
       `理由: ${record.reason ?? '(無し)'}\n` +
       `入力の先頭（伏せ字・最大160字。issue #1105 P0）: ${inputHead ?? '(取れなかった)'}`;
     const askedAt = new Date().toISOString();
@@ -4419,8 +4422,13 @@ class RunnerSession {
       type: 'note',
       managerId: this.#id,
       text:
-        `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直せば通る` +
-        `（${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分以内。issue #1105 P1）。`,
+        `クローンが分類器の拒否（${actor}・${toolName}）を1回だけ許可した。同じ入力で撃ち直された` +
+        `ときにだけ、${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分以内なら1回通す（issue #1105 P1）。` +
+        `撃ち直すかどうかは担い手のモデルが決めることで、retry は「もう一度試してよい」という助言でしかない。` +
+        `分類器の拒否文が再試行や別の手段を禁じていると、担い手は撃ち直さないことがある` +
+        `（撃ち直しが来なければ、この許可は使われないまま期限が切れる）。` +
+        `その場合は許可を出したクローンが、担い手へ manager_send で同じ入力で撃ち直してよいこと` +
+        `（1回だけの許可が有効なこと）を明示して伝える。これで撃ち直されるかは確かめていない。`,
     });
     return { kind: 'retry' };
   }

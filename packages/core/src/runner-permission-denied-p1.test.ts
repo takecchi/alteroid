@@ -240,6 +240,13 @@ describe('allow の一往復（issue #1105 P1）', () => {
       hookSpecificOutput: { hookEventName: 'PermissionDenied', retry: true },
     });
 
+    // **allow の後の note は「撃ち直せば通る」と言い切らない**（文言の歯。動作の assert ではない）。
+    const allowNote = noteEvents(events).find((n) => n.text.includes('1回だけ許可した'));
+    expect(allowNote?.text).toContain('担い手のモデルが決める');
+    expect(allowNote?.text).toContain('manager_send');
+    expect(allowNote?.text).not.toContain('撃ち直せば通る');
+    expect(asks[0]?.summary).toContain('撃ち直すかは担い手が決める');
+
     // **撃ち直しの PreToolUse が通す。**
     const retryResult = await firePreToolUse(started.options, {
       hook_event_name: 'PreToolUse',
