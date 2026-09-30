@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr } from '@alteroid/core';
+import { captureStderr, UnreadablePermissionGrantError } from '@alteroid/core';
 import type { PermissionGrant } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -184,18 +184,22 @@ describe('FsPermissionGrantStore — permission-grants.json の不正な1行を�
     expect(lines).toHaveLength(0);
   });
 
-  it('revoke() / markUsed() は、無い id と同じく壊れた行の id にも「無い」として振る舞う（fail-closed）', async () => {
+  it('markUsed() は壊れた行の id を「無い」として扱い、revoke() は「無い」と言わず投げる（fail-closed。issue #2425）', async () => {
     await writeRawGrantsFile();
     const stores = createFsStores(root);
 
-    let revoked: PermissionGrant | null = null;
+    let revokeError: unknown;
     let used: boolean | undefined;
     await captureStderr(async () => {
-      revoked = await stores.permissionGrants.revoke('grant-bad', '2026-01-05T00:00:00.000Z');
+      try {
+        await stores.permissionGrants.revoke('grant-bad', '2026-01-05T00:00:00.000Z');
+      } catch (error) {
+        revokeError = error;
+      }
       used = await stores.permissionGrants.markUsed('grant-bad', '2026-01-05T00:00:00.000Z');
     });
 
-    expect(revoked).toBeNull();
+    expect(revokeError).toBeInstanceOf(UnreadablePermissionGrantError);
     expect(used).toBe(false);
 
     // ファイル上の壊れた行はそのまま——revoke/markUsed が触れて壊すことも無い。

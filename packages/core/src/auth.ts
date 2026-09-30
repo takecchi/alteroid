@@ -222,10 +222,16 @@ export interface AuthStore {
    * 塞いだのと同じ形の lost update。対象がアクセストークンの `lastUsedAt`
    * から account の `lastLoginAt` に変わっただけ）。
    *
-   * その id の行が無いときは何もしない（投げない）。
+   * その id の行が無いときは何もしない（投げない）。**ただし行が在るのに読めない
+   * （`authAccountSchema` に合わない。fs の `invalidAccountsRaw`）ときは
+   * `UnreadableAccountError` を投げ、行は変えない**（issue #2425）。「無い」と
+   * 同じ扱いにすると、落としたつもりの `grantedAt` が残ったまま、後で行が読める
+   * ようになったときに許可が生き返る。読めない行は `getAccount()` に現れず認可は
+   * 通らないので、投げても許可が余計に通ることは無い。
    *
    * ドライバはそれぞれの器で原子性を出す — fs は1つの排他区間、pg は
-   * 条件無しの UPDATE 1文で、3欄だけを書く。
+   * 条件無しの UPDATE 1文で、3欄だけを書く（pg は列で持つので読めない行の
+   * 概念が無い）。
    */
   revokeAccountAccess(accountId: string): Promise<void>;
 

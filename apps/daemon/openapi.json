@@ -11590,6 +11590,22 @@
               }
             }
           },
+          "409": {
+            "description": "該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めない許可は「許可が無い」ものとして扱われる（通らない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "415": {
             "description": "content-type が application/json ではない（ブラウザの単純リクエスト対策 — 状態を変える POST は必ずここを通す）。",
             "content": {
@@ -19368,6 +19384,22 @@
           },
           "404": {
             "description": "該当するアカウントが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めないアカウントは認可を通らない。",
             "content": {
               "application/json": {
                 "schema": {

@@ -524,6 +524,52 @@ export class UnreadableApprovalError extends Error {
 }
 
 /**
+ * `PermissionGrantStore.revoke()` が、id の行は**在るが読めない**（`permissionGrantSchema`
+ * に合わない。版ずれ・手編集）ときに投げる専用のエラー型（issue #2425）。
+ * `UnreadableJobError` と同じ線——「無い」（`null`）と「在ったが読めない」（throw）を
+ * 区別する。`instanceof` で見分けること。
+ *
+ * **投げるだけで、行は1バイトも変えない。** 取り消しは効いていない——呼び手（daemon の
+ * `POST /permission-grants/:id/revoke`）は「取り消した」とも「無い」とも言わず、
+ * 「読めない形で入っている」と言う。**許可が余計に通る向きにはならない**（読めない行は
+ * `list()` / `get()` に現れず、`#onPreToolUse` からは「許可が無い」ものとして扱われる）。
+ *
+ * **id 以外の値は持たない。** 許可の欄には人間の回答の原文が入りうる。
+ */
+export class UnreadablePermissionGrantError extends Error {
+  readonly id: string;
+
+  constructor(params: { id: string; reason?: string }) {
+    super(
+      `許可 ${params.id} は在るが読めない（壊れた行。消されたのでも、取り消されたのでもない）` +
+        (params.reason === undefined ? '' : `: ${params.reason}`),
+    );
+    this.name = 'UnreadablePermissionGrantError';
+    this.id = params.id;
+  }
+}
+
+/**
+ * `AuthStore.revokeAccountAccess()` が、id の行は**在るが読めない**（`authAccountSchema`
+ * に合わない。版ずれ・手編集）ときに投げる専用のエラー型（issue #2425）。
+ * `UnreadablePermissionGrantError` と同じ線。行は変えない（許可は落ちていない）。
+ * 読めない行は `getAccount()` / `listAccounts()` に現れないので、認可は通らない
+ * （fail-closed）。id 以外の値は持たない。
+ */
+export class UnreadableAccountError extends Error {
+  readonly id: string;
+
+  constructor(params: { id: string; reason?: string }) {
+    super(
+      `アカウント ${params.id} は在るが読めない（壊れた行。消されたのでも、許可が落ちたのでもない）` +
+        (params.reason === undefined ? '' : `: ${params.reason}`),
+    );
+    this.name = 'UnreadableAccountError';
+    this.id = params.id;
+  }
+}
+
+/**
  * `JobStore.listApprovals` の返り値（issue #2298。`CommitmentList` と同じ形）。
  *
  * **`PendingApproval[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない
@@ -781,8 +827,12 @@ export interface PermissionGrantStore {
    * `CommitmentStore.open()` / `#1667` の `ScheduleStore.editRequest` と同じ
    * 理由・同じ形（アプリ層の「読んでから書く」をストア側の排他区間へ引き取る）。
    *
-   * **読めない行（版ずれ・手編集）は無いと同じ。書き換えない**（fs / pg で
-   * 揃える。issue #2158）。
+   * **読めない行（版ずれ・手編集）は書き換えない**（fs / pg で揃える。issue
+   * #2158）。**ただし「無い」（`null`）とは分ける**——`UnreadablePermissionGrantError`
+   * を投げる（issue #2425）。`null` にすると呼び手が「無い」と言い切り、取り消した
+   * つもりの行が残ったまま、後で読めるようになったときに許可が生き返る。読めない
+   * 行の許可は `list()` / `get()` に現れず「許可が無い」ものとして扱われるので、
+   * 投げても許可が余計に通ることは無い（fail-closed のまま）。
    */
   revoke(id: string, at: string): Promise<PermissionGrant | null>;
 
