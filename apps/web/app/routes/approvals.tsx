@@ -83,7 +83,20 @@ function UnreadableApprovalNote({ unreadable }: { unreadable: UnreadableApproval
 export default function Approvals() {
   const [showAnswered, setShowAnswered] = useState(false);
   const { data, error, isLoading } = useApprovals(!showAnswered);
-  const unreadable = data?.unreadable ?? [];
+  /**
+   * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す**
+   * （issue #2308。外枠 `shell.tsx` の PR #2307 と同じ判断）。デーモンと画面は別デプロイで
+   * 版がずれうる。`data.approvals.length` のままだと `TypeError` で画面ごと落ち、
+   * `?? []` で黙らせると読めていないのに「答えを待っているものはない」と言う。
+   * 型は配列と言っているので、ここが守るのは実行時の倒れ先だけである。
+   */
+  const approvalsList: PendingApproval[] | undefined = Array.isArray(data?.approvals)
+    ? data.approvals
+    : undefined;
+  const approvalsMalformed = data !== undefined && approvalsList === undefined;
+  // `unreadable` は、読めない行が1件以上あるときだけ載る欄（#2298）。形が違えば無いものとして扱う
+  // （読めた一覧まで巻き込んで落とさない）。
+  const unreadable: UnreadableApproval[] = Array.isArray(data?.unreadable) ? data.unreadable : [];
   const answerApprovals = useAnswerApprovals();
 
   /**
@@ -112,11 +125,11 @@ export default function Approvals() {
   const unansweredIds = useMemo(
     () =>
       new Set(
-        (data?.approvals ?? [])
+        (approvalsList ?? [])
           .filter((approval) => !isAnswered(approval) && !isWithdrawn(approval))
           .map((a) => a.id),
       ),
-    [data],
+    [approvalsList],
   );
   const pendingDrafts = Object.entries(drafts).filter(
     ([id, text]) => text.trim() !== '' && unansweredIds.has(id),
@@ -183,7 +196,18 @@ export default function Approvals() {
 
       {isLoading ? (
         <Spinner />
-      ) : data === undefined || data.approvals.length === 0 ? (
+      ) : approvalsMalformed ? (
+        // **0件と描かない**（issue #2308）。応答は届いたが、一覧の形をしていない。
+        <ErrorNote
+          error={
+            new Error(
+              '承認待ちの一覧が読めない形で届いた（デーモンと画面の版がずれている可能性がある）。' +
+                '答えを待っているものが無いという意味ではない。',
+            )
+          }
+          className="mb-4"
+        />
+      ) : approvalsList === undefined || approvalsList.length === 0 ? (
         <Card>
           <Empty>
             {showAnswered
@@ -195,7 +219,7 @@ export default function Approvals() {
         </Card>
       ) : (
         <ul className="flex flex-col gap-3">
-          {data.approvals.map((approval) => (
+          {approvalsList.map((approval) => (
             <li key={approval.id}>
               <ApprovalEntry
                 approval={approval}
