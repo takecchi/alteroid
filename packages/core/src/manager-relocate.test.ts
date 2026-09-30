@@ -814,7 +814,8 @@ describe('ManagerPool.vacate（#485 PR-2）', () => {
     const fake = createFakeRegistry();
     const { pool } = setup(stores, fake.registry);
 
-    await expect(pool.vacate('runner-ghost')).resolves.toBeUndefined();
+    // 握手を飛ばしたのではない（居ないだけ）ので、戻り値に `handshakeSkipped` は無い（#2376）。
+    await expect(pool.vacate('runner-ghost')).resolves.toStrictEqual({});
 
     await pool.stop();
   });

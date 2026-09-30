@@ -586,6 +586,28 @@ describe('runnersVacateCommand', () => {
     expect(out).toContain('runner runner-2 を空けると立てた');
     expect(out).toContain('まだ空き終わってはいない');
     expect(out).toContain('alteroid runners');
+    // 対照（#2376）: 握手を飛ばしていない応答には、飛ばした旨を足さない。
+    expect(out).not.toContain('握手は飛ばした');
+  });
+
+  it('握手を飛ばした応答（handshakeSkipped）には、飛ばしたことと呼び直しを言う（#2376）', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        ok: true,
+        handshakeSkipped: {
+          reason: 'runner_unreadable',
+          message: '名簿を読めなかったので握手を飛ばした',
+          retry: true,
+        },
+      },
+    });
+    const read = captureStdout();
+    await runnersVacateCommand('runner-2');
+    const out = read();
+
+    expect(out).toContain('握手は飛ばした（名簿を読めなかったので握手を飛ばした）');
+    expect(out).toContain('呼び直す');
   });
 
   /**

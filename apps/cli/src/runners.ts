@@ -97,6 +97,22 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
       '載っている委譲は確かめた停止を経て他の runner へ移る。' +
       '進捗は alteroid runners（state: vacating）と、委譲の runnerId が動いたかで追うこと。\n',
   );
+  /*
+   * **握手を飛ばした回は、そう言う**（#2376）。HTTP は 200 のままなので、応答の
+   * `handshakeSkipped` を見ないと、名簿や一覧を読めなかったことが端末から見えない。
+   * 欄が無い応答（普通の成功）では何も足さない。
+   */
+  const body: unknown = await response.json().catch(() => null);
+  const skipped =
+    typeof body === 'object' && body !== null && 'handshakeSkipped' in body
+      ? body.handshakeSkipped
+      : undefined;
+  if (typeof skipped === 'object' && skipped !== null && 'message' in skipped) {
+    stdout.write(
+      `⚠️ 載っている委譲への握手は飛ばした（${String(skipped.message)}）——` +
+        '同じコマンドを呼び直すと握手をやり直す。\n',
+    );
+  }
 }
 
 /**

@@ -341,7 +341,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     // 移送の契機も同じくデーモン側（`onLost`）にある。
     relocateFrom() {},
     // drain の契機は HTTP 側（`POST /runners/vacate`）にある。クローンの道具は呼ばない。
-    async vacate() {},
+    async vacate() {
+      return {};
+    },
     /**
      * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `'absent'`」と
      * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つは、道具の側の

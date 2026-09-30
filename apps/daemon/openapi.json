@@ -14827,7 +14827,7 @@
         "description": "空けると立てるだけで、その場では終わらない。載っている委譲は「確かめた停止」の握手を経て、貸し出し期限を待たずに他の runner へ移る。**応答は「立てた」ことの確認であって「終わった」ことの確認ではない**——進捗は GET /runners（state: vacating）と GET /managers（runnerId が動いたか）で追う。",
         "responses": {
           "200": {
-            "description": "空けると立てた。名簿に無い runnerId でも同じ 200 を返す（`RunnerRegistry#unregister` と同じ作法——名乗ってすらいない宛先を「無かった」と取り立てて言うほどの情報ではない）。",
+            "description": "空けると立てた。名簿に無い runnerId でも同じ 200 を返す（`RunnerRegistry#unregister` と同じ作法——名乗ってすらいない宛先を「無かった」と取り立てて言うほどの情報ではない）。**握手を飛ばした回は `handshakeSkipped` が載る**（状態は 200 のまま）。runner の名簿を読めなかった（`runner_unreadable`）か、台帳の委譲の一覧を読めなかった（`jobs_unreadable`）回で、載っている委譲への確かめた停止の握手をしておらず、貸し出しも返していない。**呼び直せば握手をやり直す。**飛ばさなかった回は欄が無い（`{ ok: true }` のまま）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -14836,6 +14836,23 @@
                     "ok": {
                       "type": "boolean",
                       "const": true
+                    },
+                    "handshakeSkipped": {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string",
+                          "enum": ["runner_unreadable", "jobs_unreadable"]
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "retry": {
+                          "type": "boolean",
+                          "const": true
+                        }
+                      },
+                      "required": ["reason", "message", "retry"]
                     }
                   },
                   "required": ["ok"]

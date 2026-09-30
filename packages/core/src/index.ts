@@ -736,6 +736,8 @@ export {
   type ManagerDenial,
   type ManagerPool,
   type ManagerPoolOptions,
+  type VacateHandshakeSkipReason,
+  type VacateResult,
   type ManagerSendOptions,
   type ManagerSendResult,
   type ManagerAbortResult,

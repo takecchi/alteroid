@@ -45,14 +45,18 @@ function createFakeRegistry(): {
   registry: RunnerRegistry;
   entries: RunnerEntry[];
   addClient: (client: RunnerClient) => void;
+  /** 名簿の読み（`get`）を投げさせる（#2376）。`undefined` で直す。 */
+  breakGet: (reason: string | undefined) => void;
 } {
   const clients = new Map<string, RunnerClient>();
   const entries: RunnerEntry[] = [];
+  let getFailure: string | undefined;
   const registry: RunnerRegistry = {
     async list() {
       return [...clients.values()];
     },
     async get(runnerId) {
+      if (getFailure !== undefined) throw new Error(getFailure);
       return clients.get(runnerId) ?? null;
     },
     async select() {
@@ -74,7 +78,14 @@ function createFakeRegistry(): {
     },
     async stop() {},
   };
-  return { registry, entries, addClient: (client) => clients.set(client.runnerId, client) };
+  return {
+    registry,
+    entries,
+    addClient: (client) => clients.set(client.runnerId, client),
+    breakGet: (reason) => {
+      getFailure = reason;
+    },
+  };
 }
 
 function fakeRunner(runnerId: string): {
@@ -221,9 +232,48 @@ describe('vacate の握手（manager.ts の vacate）', () => {
 
   it('一覧が読めた回は、載っている委譲へ握手する（対照）', async () => {
     const { h, runner } = await setupVacate();
-    await h.pool.vacate('runner-a');
+    const result = await h.pool.vacate('runner-a');
     expect(runner.stops).toEqual(['mgr-a']);
     expect(decisionsOf(await h.journal()).join('\n')).not.toContain('一覧を読めなかった');
+    // 対照（#2376）: 握手を飛ばしていないので、戻り値に欄が無い（キーそのものが無い）。
+    expect(result).toStrictEqual({});
+    await h.pool.stop();
+  });
+
+  it('runner が名簿に居ない回は、握手する相手が無いだけで、飛ばしたとは言わない（対照。#2376）', async () => {
+    const h = harness();
+    await h.base.jobs.putJob(jobWith('mgr-a', 'runner-a'));
+    h.fake.entries.push(entryOf('runner-a', 'connected', 'runner-a'));
+    // runner-a のクライアントは名簿に足さない（`get` は読めて `null`）。
+
+    const result = await h.pool.vacate('runner-a');
+
+    expect(result).toStrictEqual({});
+    expect(decisionsOf(await h.journal()).join('\n')).not.toContain('名簿を読めなかった');
+    await h.pool.stop();
+  });
+
+  it('名簿が読めなかった回は、居ないとみなさず握手を飛ばし、日誌と戻り値に残す（#2376）', async () => {
+    const { h, runner } = await setupVacate();
+    h.fake.breakGet('名簿が応えない');
+
+    const result = await h.pool.vacate('runner-a');
+
+    // 握手していない（居ないと確かめたのではない）。貸し出しにも触っていない。
+    expect(runner.stops).toEqual([]);
+    const text = decisionsOf(await h.journal()).join('\n');
+    expect(text).toContain('runnerId=runner-a の vacate で、runner の名簿を読めなかった');
+    expect(text).toContain('握手を飛ばした');
+    expect(text).toContain('名簿が応えない');
+    expect(result.handshakeSkipped?.reason).toBe('runner_unreadable');
+    expect(result.handshakeSkipped?.retry).toBe(true);
+    expect(result.handshakeSkipped?.message).toContain('名簿を読めなかった');
+
+    // 呼び直せば握手をやり直す（飛ばしたのは握手だけで、名簿の読みが直れば進む）。
+    h.fake.breakGet(undefined);
+    const again = await h.pool.vacate('runner-a');
+    expect(runner.stops).toEqual(['mgr-a']);
+    expect(again).toStrictEqual({});
     await h.pool.stop();
   });
 
@@ -231,7 +281,12 @@ describe('vacate の握手（manager.ts の vacate）', () => {
     const { h, runner } = await setupVacate();
     h.breakListJobs('ストアが応えない');
 
-    await h.pool.vacate('runner-a');
+    const result = await h.pool.vacate('runner-a');
+
+    // 応答で言う（#2376）: 握手を飛ばした（一覧を読めなかった）。呼び直せばやり直す。
+    expect(result.handshakeSkipped?.reason).toBe('jobs_unreadable');
+    expect(result.handshakeSkipped?.retry).toBe(true);
+    expect(result.handshakeSkipped?.message).toContain('一覧を読めなかった');
 
     // 握手していない（委譲が無いと確かめたのではない）。貸し出しにも触っていない。
     expect(runner.stops).toEqual([]);
