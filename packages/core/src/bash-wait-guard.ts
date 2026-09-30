@@ -1884,11 +1884,14 @@ const COMMAND_POSITION_LOOKBEHIND_SRC = String.raw`(?<=^|[;&|\n()\u0060])`;
  * を読み飛ばしても、その後ろに本物の `pr\s+merge` と `--delete-branch`/
  * `-d` が無ければ検出器は何も弾かない（誤検知が増えるだけで、実害の
  * すり抜けは増えない）。
+ *
+ * #2271 B: `pr` と `merge` のあいだ（`gh pr -R o/r merge 1 -d`）にも同じ読み飛ばしを足した。
+ * cobra は継承フラグをサブコマンド名の前後どちらにも置ける。受けなくても弾く側に倒れるだけ。
  */
 const GH_REPO_FLAG_SRC = String.raw`(?:(?:-R|--repo)(?:=\S+|[ \t]+\S+)[ \t]+)`;
 
 const GH_PR_MERGE_DELETE_BRANCH_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${GH_WORD_SRC}\s+(?:${GH_REPO_FLAG_SRC})*pr\s+merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|${SHORT_DELETE_BRANCH_FLAG_SRC})`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${GH_WORD_SRC}\s+(?:${GH_REPO_FLAG_SRC})*pr\s+(?:${GH_REPO_FLAG_SRC})*merge\b(?:(?!;|&&|\|\||\||\n)[\s\S])*?(?:--delete-branch\b|${SHORT_DELETE_BRANCH_FLAG_SRC})`,
 );
 
 /**
@@ -2633,10 +2636,37 @@ function joinLineContinuations(command: string): string {
     : command;
 }
 
+/**
+ * 引用符の中（`computeOutsideQuoteMask` が「外」と言い切れない位置）の改行を空白にした写しを返す
+ * （#2271 B）。呼び出し区間の切り出しは改行で止まるので、`--body "$(cat <<'EOF'` の本文が
+ * 複数行の形（ヒアドキュメントで本文を渡す打ち方）だと、その後ろの `--delete-branch` / `-d`
+ * へ届かなかった。引用符が閉じていない・読めない（`unknown`）ときも「外」ではないので
+ * 空白にする——弾く側にしか倒れない。無ければ同じ文字列を返す。
+ */
+function flattenNewlinesInsideQuotes(command: string): string {
+  if (!command.includes('\n')) return command;
+  const outside = computeOutsideQuoteMask(command);
+  let out = '';
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i] as string;
+    out += ch === '\n' && !outside[i] ? ' ' : ch;
+  }
+  return out;
+}
+
 function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
   const withoutHeredocs = stripHeredocs(command);
   const withoutQuotedSubjectBodyValues = stripGhPrMergeQuotedSubjectBodyValues(withoutHeredocs);
   if (GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues)) return true;
+  // 引用符の中の改行は区切りではない（#2271 B。`--body "$(cat <<'EOF' … EOF)" --squash -d`）。
+  // 元の文字列と、引用符の中の改行を空白にした写しの両方にかける（弾く側にしか倒れない）。
+  const flattened = flattenNewlinesInsideQuotes(withoutQuotedSubjectBodyValues);
+  if (
+    flattened !== withoutQuotedSubjectBodyValues &&
+    GH_PR_MERGE_DELETE_BRANCH_RE.test(flattened)
+  ) {
+    return true;
+  }
   if (depth >= MAX_NESTED_SHELL_DEPTH) {
     // 上限に達したら、さらに取り出して再帰はしない。代わりに、取り出せる中身に
     // `gh` … `merge` … `--delete-branch` / `-…d` の字面が在れば弾く側へ倒す
@@ -2655,7 +2685,7 @@ function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
  * 区間は捕捉群 1 に入る。`g` 付きなので `matchAll` で全部の呼び出しを見る。
  */
 const GH_PR_MERGE_INVOCATION_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${GH_WORD_SRC}\s+(?:${GH_REPO_FLAG_SRC})*pr\s+merge\b((?:(?!;|&&|\|\||\||\n)[\s\S])*)`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${GH_WORD_SRC}\s+(?:${GH_REPO_FLAG_SRC})*pr\s+(?:${GH_REPO_FLAG_SRC})*merge\b((?:(?!;|&&|\|\||\||\n)[\s\S])*)`,
   'g',
 );
 
