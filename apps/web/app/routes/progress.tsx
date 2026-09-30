@@ -5,8 +5,8 @@ import {
   Badge,
   Card,
   CardHeader,
+  ChoiceChips,
   ErrorNote,
-  FilterChips,
   KeyValueList,
   Page,
   Spinner,
@@ -69,17 +69,6 @@ export default function ProgressPage() {
     );
   }
 
-  function resetWindow() {
-    setSearchParams(
-      (previous) => {
-        const params = new URLSearchParams(previous);
-        params.delete(WINDOW_PARAM);
-        return params;
-      },
-      { replace: true },
-    );
-  }
-
   return (
     <Page
       title="作業の進捗"
@@ -87,13 +76,11 @@ export default function ProgressPage() {
     >
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">速度と見込みを数える窓</span>
-        <FilterChips
+        <ChoiceChips
           label="窓の長さ"
-          clearLabel="既定（7日）に戻す"
           options={WINDOWS.map((hours) => ({ value: String(hours), label: WINDOW_LABEL[hours] }))}
-          selected={[String(windowHours)]}
-          onToggle={(value) => selectWindow(parseWindow(value))}
-          onClear={resetWindow}
+          value={String(windowHours)}
+          onChange={(value) => selectWindow(parseWindow(value))}
         />
       </div>
 

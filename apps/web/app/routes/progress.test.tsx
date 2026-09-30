@@ -17,9 +17,9 @@
  * 時刻は相対（「3日前」）でしか assert しないので、時間帯には依らない。
  * 待ちは `findBy*` だけで、実時間の `setTimeout` は使わない。
  */
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
@@ -34,6 +34,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   globalThis.fetch = originalFetch;
 });
@@ -382,8 +383,8 @@ describe('/progress 画面 — 窓の切替', () => {
 
     await card('積み上がり');
     expect(stub.calls.some((url) => url.includes('windowHours=168'))).toBe(true);
-    expect(screen.getByRole('button', { name: '7日' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: '24時間' }).getAttribute('aria-pressed')).toBe(
+    expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe(
       'false',
     );
   });
@@ -394,7 +395,7 @@ describe('/progress 画面 — 窓の切替', () => {
 
     await card('積み上がり');
     expect(stub.calls.some((url) => url.includes('windowHours=720'))).toBe(true);
-    expect(screen.getByRole('button', { name: '30日' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('radio', { name: '30日' }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('知らない windowHours は既定（168）へ倒す', async () => {
@@ -413,19 +414,56 @@ describe('/progress 画面 — 窓の切替', () => {
     const router = renderPage();
     await card('積み上がり');
 
-    fireEvent.click(screen.getByRole('button', { name: '24時間' }));
+    fireEvent.click(screen.getByRole('radio', { name: '24時間' }));
 
     await screen.findByRole('heading', { name: '積み上がり' });
     expect(router.state.location.search).toBe('?windowHours=24');
     expect(stub.calls.some((url) => url.includes('windowHours=24'))).toBe(true);
-    expect(screen.getByRole('button', { name: '24時間' }).getAttribute('aria-pressed')).toBe(
-      'true',
-    );
-    expect(screen.getByRole('button', { name: '7日' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('false');
 
-    fireEvent.click(screen.getByRole('button', { name: '既定（7日）に戻す' }));
+    // Issue #2275: 単一選択の部品（ChoiceChips）へ替えたので、「既定（7日）に戻す」の
+    // 読み替えは無い（以前はここでそのボタンを押して URL が空に戻ることを固定していた）。
+    expect(screen.queryByRole('button', { name: '既定（7日）に戻す' })).toBeNull();
+  });
+
+  it('選択中をもう一度押しても、URL も選択も変わらない', async () => {
+    stubProgress();
+    const router = renderPage('/progress?windowHours=24');
+    await card('積み上がり');
+
+    fireEvent.click(screen.getByRole('radio', { name: '24時間' }));
+
+    expect(router.state.location.search).toBe('?windowHours=24');
+    expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('窓は radiogroup で、名前は「窓の長さ」。矢印キーで窓が変わる', async () => {
+    const stub = stubProgress();
+    const router = renderPage();
+    await card('積み上がり');
+
+    const group = screen.getByRole('radiogroup', { name: '窓の長さ' });
+    expect(
+      within(group)
+        .getAllByRole('radio')
+        .map((r) => r.getAttribute('aria-checked')),
+    ).toEqual(['false', 'true', 'false']);
+
+    // Radix の roving focus は次のチップへの focus を setTimeout(0) で行う。偽の時計で進める。
+    vi.useFakeTimers();
+    screen.getByRole('radio', { name: '7日' }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+    act(() => {
+      vi.runAllTimers();
+    });
+    vi.useRealTimers();
+
+    expect(router.state.location.search).toBe('?windowHours=720');
+    expect(screen.getByRole('radio', { name: '30日' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('false');
     await screen.findByRole('heading', { name: '積み上がり' });
-    expect(router.state.location.search).toBe('');
+    expect(stub.calls.some((url) => url.includes('windowHours=720'))).toBe(true);
   });
 });
 
