@@ -6328,7 +6328,10 @@ export function createApp(deps: AppDeps) {
           'あれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
         responses: {
           200: {
-            description: '消した後のプール（値は出さない）と、消した id。',
+            description:
+              '消した後のプール（値は出さない）と、消した id。**消した後の表示の読み直しに' +
+              '失敗したときも 200**（消したので「消せなかった」とは言わない）: `removedIds` と ' +
+              '`viewUnavailable` だけを返し、プールの欄は載せない。',
             content: {
               'application/json': { schema: resolver(tokensUnreadableRemoveResponseSchema) },
             },
@@ -6394,8 +6397,48 @@ export function createApp(deps: AppDeps) {
               404,
             );
           }
+          // **ここから先は行を消した後である**（issue #2390）。失敗しても「消せなかった」
+          // ではない。下の `catch`（打ち消しの日誌と 500）へ落とさず、消したと言って返す。
+          // 原因は種類（`error.name`）だけを日誌に使う——メッセージには行の中身
+          // （トークンの値）が載りうる。
+          let cause: unknown;
+          if (result.kind === 'removedViewFailed') {
+            cause = result.cause;
+          } else {
+            try {
+              return c.json(
+                tokensUnreadableRemoveResponseSchema.parse({
+                  ...result.view,
+                  removedIds: result.ids,
+                }),
+              );
+            } catch (parseError) {
+              cause = parseError;
+            }
+          }
+          const kindOfCause = cause instanceof Error ? cause.name : typeof cause;
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `読めない認証トークンの行を消した（id: ${result.ids.join(', ')}）が、表示の読み直しに失敗した`,
+              grounds:
+                `${describeActor(c.get('principal'))}（POST /tokens/unreadable/remove）。` +
+                `行は消えている。読み直しの失敗の種類: ${kindOfCause}。` +
+                '行の中身（トークンの値）は書かない。',
+            },
+            '読めない認証トークンの行の削除後の読み直しの失敗の日誌',
+            `ids=${result.ids.join(',')}`,
+          );
           return c.json(
-            tokensUnreadableRemoveResponseSchema.parse({ ...result.view, removedIds: result.ids }),
+            tokensUnreadableRemoveResponseSchema.parse({
+              removedIds: result.ids,
+              viewUnavailable: {
+                reason:
+                  '読めない行は消した。消した後のプールを読み直せなかった' +
+                  '（alteroid token list で今の姿を確かめる）',
+              },
+            }),
           );
         } catch (error) {
           // 日誌が書けなかった（`beforeRemove` の中で投げた）回は、状態を変えていない。
