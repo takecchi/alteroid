@@ -2726,6 +2726,37 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
     expect(outcome.kind === 'ignored' && outcome.reopened?.tokenId).toBe('tok-a');
   });
 
+  it('probe で通らないと観測したのに設定が読めない回は settings_unreadable で、reopened を出さず記録もしない。次に通る回で1回だけ立つ（#2391）', async () => {
+    const h = harness();
+    const elapsed = await seedElapsed(h);
+    breakTokenSettings(h, 'cooldownMs が負の数');
+
+    const blocked = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '枠が尽きた' },
+        origin: { source: 'account_probe' },
+      },
+    });
+
+    // (a) 門が先に返る。「明けた」の合図は出ない。
+    expect(blocked.kind).toBe('ignored');
+    if (blocked.kind !== 'ignored') return;
+    expect(blocked.signal).toBe('settings_unreadable');
+    expect(blocked.reopened).toBeUndefined();
+    expect(blocked.why).toContain('枠が尽きた');
+    expect(blocked.why).toContain('cooldownMs が負の数');
+
+    // (b) 記録していないので、設定が読めて probe も無い次の回で1回だけ立つ。
+    await h.stores.tokens.writeSettings({ rotateOn: 'free_exhausted', cooldownMs: 18_000_000 });
+    const next = await h.rotator.reconsider({ reason: 'tick' });
+    expect(next.kind === 'ignored' && next.reopened?.cooldownUntil).toBe(
+      new Date(elapsed).toISOString(),
+    );
+    const again = await h.rotator.reconsider({ reason: 'tick' });
+    expect(again.kind === 'ignored' && again.reopened === undefined).toBe(true);
+  });
+
   it('冷却がまだ明けていなければ立たない（park の途中では起こさない）', async () => {
     const h = harness();
     await h.stores.tokens.replace([
