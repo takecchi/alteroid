@@ -16,7 +16,12 @@ export function inspectBashCommand(
   invocation: BashInvocation = {},
 ): WaitGuardVerdict {
   const verdict = inspectRaw(command, invocation);
-  if (verdict.blocked && verdict.form === 'gh-pr-merge-no-match-head-commit') {
+  // squash に本文が無い形（#2280）も、この歯の関心と直交するので同じく読み替える。
+  if (
+    verdict.blocked &&
+    (verdict.form === 'gh-pr-merge-no-match-head-commit' ||
+      verdict.form === 'gh-pr-merge-squash-no-body')
+  ) {
     return { blocked: false };
   }
   return verdict;

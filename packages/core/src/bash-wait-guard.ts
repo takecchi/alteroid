@@ -99,7 +99,8 @@ export type WaitGuardForm =
   | 'tail-f'
   | 'gh-run-watch-background'
   | 'gh-pr-merge-delete-branch'
-  | 'gh-pr-merge-no-match-head-commit';
+  | 'gh-pr-merge-no-match-head-commit'
+  | 'gh-pr-merge-squash-no-body';
 
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
@@ -2740,6 +2741,51 @@ function hasGhPrMergeWithoutMatchHeadCommit(command: string, depth = 0): boolean
 }
 
 /**
+ * squash を選ぶフラグ: `--squash`、`-s`、束ねた短いフラグ（`-sd` など）。
+ * 引用符で潰された値の中の字面は、`stripGhPrMergeQuotedSubjectBodyValues` が先に空白にする。
+ */
+const SQUASH_FLAG_RE = /(?<=[\s'"])(?:--squash(?=[\s'"=]|$)|-(?!-)[A-Za-z]*s[A-Za-z]*(?=[\s'"]|$))/;
+
+/**
+ * 本文を明示するフラグ: `--body` / `--body=…` / `--body-file` / `--body-file=…`、`-b` / `-F`
+ * （束ねた形と、値をくっつけた形 `-bfoo` も含む）。値が空かどうかは見ない（`--body ""` も明示）。
+ */
+const BODY_FLAG_RE = /(?<=[\s'"])(?:--body(?:-file)?(?=[\s'"=]|$)|-(?!-)[A-Za-z]*[bF])/;
+
+/**
+ * コマンドの位置に在る `gh pr merge` で squash を選び、本文（`--body` / `-b` / `--body-file` / `-F`）
+ * を明示していないものが在るか（#1350 の決定、#2280）。
+ *
+ * 既定の本文で squash すると、GitHub が `Co-authored-by:` の行を足すことがある（PR 内のコミットの
+ * author が、マージする人と別の身元のとき）。前処理・入れ子のシェルの取り出し・区間の切り出しは
+ * `hasGhPrMergeWithoutMatchHeadCommit` と同じ部品（新しい族は起こさない）。squash でない
+ * （`--merge` / `--rebase` / 戦略の指定なし）とマージしない呼び出し（`--disable-auto` / `--help`）は弾かない。
+ *
+ * ⚠️ 残る限界: 区間の切り出しは引用符を追跡しない。潰されなかった引用符の値の中の `--body` の字面は
+ * 「明示している」と読み、通す側に倒れる。`gh api` での直接マージ・alias・MCP の `merge_pull_request` は対象外。
+ */
+function hasGhPrMergeSquashWithoutBody(command: string, depth = 0): boolean {
+  const stripped = stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command));
+  for (const match of stripped.matchAll(GH_PR_MERGE_INVOCATION_RE)) {
+    const segment = match[1] ?? '';
+    if (GH_PR_MERGE_NO_MERGE_RE.test(segment)) continue;
+    if (SQUASH_FLAG_RE.test(segment) && !BODY_FLAG_RE.test(segment)) return true;
+  }
+  if (depth >= MAX_NESTED_SHELL_DEPTH) {
+    // 上限に達したら字面で粗く判定する（弾く側へ倒す）。
+    return extractNestedShellPayloads(command).some((payload) => {
+      const gh = payload.indexOf('gh');
+      const merge = gh < 0 ? -1 : payload.indexOf('merge', gh + 2);
+      return merge >= 0 && payload.includes('--squash') && !payload.includes('--body');
+    });
+  }
+  for (const payload of extractNestedShellPayloads(command)) {
+    if (payload.length > 0 && hasGhPrMergeSquashWithoutBody(payload, depth + 1)) return true;
+  }
+  return false;
+}
+
+/**
  * `Bash` ツールの呼び出しのうち、コマンド文字列に現れない事実。
  *
  * **省略時は「背景ではない」に倒す**（fail-open）。呼び出し側が形の崩れた
@@ -2884,18 +2930,41 @@ export function inspectBashCommand(
   // `gh pr merge` に `--match-head-commit <sha>` が無い形（#1192 N7）。delete-branch と同じ理由で
   // `timeout` の早期 return より先に見る。行の継続を取り除いた写しにだけかける（理由は
   // `hasGhPrMergeWithoutMatchHeadCommit` の doc）。
-  if (hasGhPrMergeWithoutMatchHeadCommit(joinLineContinuations(trimmed))) {
+  //
+  // `gh pr merge --squash` に本文（`--body` / `-b` / `--body-file` / `-F`）が無い形（#1350 の決定、
+  // #2280）も同じ位置で見る。**両方が欠けているときは、理由に両方を書く**（片方を直して打ち直すと
+  // もう片方で弾かれる、を避ける）。形の名前は head の欠落を優先する（先に入れた形を変えない）。
+  const joinedForMerge = joinLineContinuations(trimmed);
+  const missingHead = hasGhPrMergeWithoutMatchHeadCommit(joinedForMerge);
+  const missingBody = hasGhPrMergeSquashWithoutBody(joinedForMerge);
+  if (missingHead || missingBody) {
+    const headReason =
+      '`gh pr merge` に `--match-head-commit <sha>` が付いていない。' +
+      '**「緑を見た head」と「マージされる head」がずれうる** —— PR の CI は ' +
+      '`refs/pull/N/merge` を見ていて、見た後に push された head は機械では突き合わされない ' +
+      '（#1192 N7）。' +
+      '代わりに次を使うこと: `--match-head-commit <確かめた head の sha>` を足して打つ' +
+      '（sha は `gh pr view <N> --json headRefOid` で、緑を確かめた head と同じものを取る。' +
+      'head が動いていれば gh が拒むので、確かめ直してからやり直す。`--auto` にも要る）。';
+    const bodyReason =
+      '`gh pr merge --squash` に本文（`--body` / `-b` / `--body-file` / `-F`）が付いていない。' +
+      '**既定の本文で squash すると、GitHub が `Co-authored-by:` の行を足すことがある** —— ' +
+      'PR 内のコミットの author がマージする人と別の身元のとき、その身元が共著者として ' +
+      'main のコミットに焼かれて消せない（#1350 の決定。実例: #1473 の `87eec2bb`、' +
+      'author が `claude` の別の身元）。マージする側が本文を明示する。' +
+      '代わりに次を使うこと: 本文を書いたファイルを用意して ' +
+      '`gh pr merge <N> --squash --match-head-commit <sha> --body-file <file>` と打つ' +
+      '（`--body "<本文>"` でもよい。本文には帰属のトレーラと閉じるキーワードを書かない。' +
+      '手順は `.claude/skills/pr-merge/SKILL.md`）。';
     return {
       blocked: true,
-      form: 'gh-pr-merge-no-match-head-commit',
+      form: missingHead ? 'gh-pr-merge-no-match-head-commit' : 'gh-pr-merge-squash-no-body',
       reason:
-        '`gh pr merge` に `--match-head-commit <sha>` が付いていない。' +
-        '**「緑を見た head」と「マージされる head」がずれうる** —— PR の CI は ' +
-        '`refs/pull/N/merge` を見ていて、見た後に push された head は機械では突き合わされない ' +
-        '（#1192 N7）。' +
-        '代わりに次を使うこと: `--match-head-commit <確かめた head の sha>` を足して打つ' +
-        '（sha は `gh pr view <N> --json headRefOid` で、緑を確かめた head と同じものを取る。' +
-        'head が動いていれば gh が拒むので、確かめ直してからやり直す。`--auto` にも要る）。',
+        missingHead && missingBody
+          ? `次の2点が欠けている。(1) ${headReason} (2) ${bodyReason}`
+          : missingHead
+            ? headReason
+            : bodyReason,
     };
   }
 

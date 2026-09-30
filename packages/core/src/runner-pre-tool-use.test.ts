@@ -441,7 +441,9 @@ describe('gh pr merge --delete-branch の配線', () => {
     const result = await firePreToolUse(started.options, {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
-      tool_input: { command: 'gh pr merge 123 --squash --match-head-commit abc123' },
+      tool_input: {
+        command: 'gh pr merge 123 --squash --match-head-commit abc123 --body-file body.md',
+      },
     });
     expect(result).toEqual({ continue: true });
     expect(waitGuardNotes(events).length).toBe(0);
