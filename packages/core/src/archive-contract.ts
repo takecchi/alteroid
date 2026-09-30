@@ -817,7 +817,8 @@ export async function verifyTranscriptArchiveContract(
   // 🔴 **`<=` ではなく `<=` を落とす側（＝厳密に上回ること）を測る。** 本文が
   // maxChars より長いのに、返す量がちょうど maxChars だと、呼び出し側の
   // `tailOf`（`clone.ts`）が「切り詰め済みの窓」を「本文がもとから短かった」
-  // と取り違える（`readTail` interface doc の逐語で同じ注意。clone.test.ts
+  // と取り違える（`readTail` interface doc の逐語で同じ注意。
+  // `clone-grave-pickup-startup.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
   // 「歯2」で実測）。⟹ ここは `< tailMaxChars` ではなく
   // `<= tailMaxChars` を落とす——「ちょうど」を許さない。
   if (tailResult.body.length <= tailMaxChars) {

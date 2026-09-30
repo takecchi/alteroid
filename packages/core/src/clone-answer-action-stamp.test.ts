@@ -15,14 +15,15 @@ import type { ToolContext } from './tools.js';
  * ## なぜ専用の偽 SDK を持つのか
  *
  * 印は「いま走っているターン」（`Clone` の `#turn`）から読むので、**道具の実行と
- * フックはターンが開いている間に起きなければ測れない。** `clone.test.ts` の
- * `fakeSdk` は入力を受けると同期に返答を作って即座にターンを閉じるので、その間に
+ * フックはターンが開いている間に起きなければ測れない。** `clone-test-harness.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）の `fakeSdk` は入力を受けると同期に返答を作って即座にターンを閉じるので、その間に
  * 非同期の道具（`journal_write` のハンドラ）を走らせる口が無い。ここの偽 SDK は
  * 入力を受けたあと `onTurn` を **await してから** 返答を流す——実物の SDK が道具を
  * 呼び終えてから返答を返す順序と同じである。
  *
  * 道具のハンドラは `mcpServerFactory` で控えた本物の `ToolContext` から
- * `createCloneTools` で取り出す（`clone.test.ts` の `self_status` の節と同じ形）。
+ * `createCloneTools` で取り出す（`clone-self-status-and-memory-cause.test.ts` の `self_status` の節と同じ形。
+ * 旧 `clone.test.ts`、#1744 で分割済み）。
  * ⟹ クローンが道具へ渡す日誌の包み（`#toolContext` の `stampingJournal`）を
  * 本物のまま通る。
  */

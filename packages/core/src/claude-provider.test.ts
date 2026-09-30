@@ -48,8 +48,8 @@ import { captureStderr } from './testing.js';
  * 3. **消費は成功した result からしか載らないこと** —— ゼロ埋めが台帳の基準を
  *    下げる（`usage.ts` の `isSuccessResult`）
  *
- * **ここが緑でも層の反応が正しい保証にはならない**（それは `clone.test.ts` /
- * `runner-*.test.ts` の仕事）。
+ * **ここが緑でも層の反応が正しい保証にはならない**（それは `clone-*.test.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）/ `runner-*.test.ts` の仕事）。
  */
 
 function sdk(fields: Record<string, unknown>): SDKMessage {

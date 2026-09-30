@@ -93,7 +93,7 @@ type PendingCollapseEntry = { readonly id: string; readonly at: string; collapse
  *    だけを触るメンバー」は0本**である。⟹ 前例（`CloneRedeliveryState` 等）
  *    と同じ限界——この切り出しの実体は「暗黙の参照を、明示のメソッド呼び出し
  *    に変える」案である。
- * 2. **テストの分離は買えない。** `clone.test.ts` 等の配送系の `it` は
+ * 2. **テストの分離は買えない。** `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）等の配送系の `it` は
  *    どれも `Clone` をブラックボックスとして通した統合テストで、切り出しの
  *    前後で一体のまま動く。
  * 3. **挙動は1ビットも変えていない。** 呼び出し側（`Clone`）の `await` の

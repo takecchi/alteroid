@@ -15,7 +15,7 @@ import { humanMessage } from './testing.js';
  *
  * `Clone` 側の配線（`#pump` / `#handle` / `#restoreUnread*` / `post()` が
  * 実際にこのクラスのメソッドを呼ぶ順序）までは測らない——それは
- * `clone.test.ts` がブラックボックスで持つ。ここが固定するのは、切り出した
+ * `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）がブラックボックスで持つ。ここが固定するのは、切り出した
  * 11フィールドの**器としての性質**だけである。
  */
 
