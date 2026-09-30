@@ -47,6 +47,7 @@ useManagersWindowMock.mockImplementation((status: readonly ManagerStatus[]) => {
     managers: [],
     isLoadingInitial: false,
     error: undefined,
+    unreadable: [],
     olderStatus: 'end',
     isLoadingOlder: false,
     olderError: undefined,

@@ -1,11 +1,55 @@
+import { AlertTriangle } from 'lucide-react';
 import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
-import { Page, Card, Empty, ErrorNote, FilterChips, Spinner, StatusBadge } from '@alteroid/ui';
+import { Page, Card, Empty, ErrorNote, FilterChips, Spinner, StatusBadge, cn } from '@alteroid/ui';
 import { useManagersWindow } from '@alteroid/swr';
 import { formatRelative, STATUS_SEARCH_PARAM } from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
-import type { ManagerDenial, ManagerStatus, ManagerSummary } from '@alteroid/logic';
+import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
+
+/** 読めない委譲の id を並べる上限（これを超えたら件数で言う）。 */
+const UNREADABLE_JOB_IDS_SHOWN = 20;
+
+/**
+ * 読めない委譲が在ることを、一覧の上で断る（issue #2345。継続中の依頼の
+ * `UnreadableScheduleNote` と同じ形。ダッシュボードのカードも使う）。**0件なら描かない**
+ * （0 の行を作らない）。
+ *
+ * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。
+ * **「居ないのでも、畳まれたのでもない」を落とさない**——落とすと、行が消えたのと
+ * 区別が付かない。
+ */
+export function UnreadableJobNote({
+  unreadable,
+  className,
+}: {
+  unreadable: readonly UnreadableJob[];
+  className?: string;
+}) {
+  if (unreadable.length === 0) return null;
+  const idsAll = unreadable.map((entry) => entry.id).filter((id): id is string => id != null);
+  const ids = idsAll.slice(0, UNREADABLE_JOB_IDS_SHOWN);
+  const idsRest = idsAll.length - ids.length;
+  return (
+    <div
+      role="status"
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
+        className,
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない委譲が {unreadable.length} 件ある
+        {ids.length > 0 &&
+          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+        。<strong>壊れた行であって、居ないのでも、畳まれたのでもない。</strong>
+        この一覧には載っていない。
+      </span>
+    </div>
+  );
+}
 
 const STATUS: Record<ManagerStatus, { tone: 'ok' | 'warn' | 'danger' | 'neutral'; label: string }> =
   {
@@ -671,8 +715,16 @@ export default function Managers() {
 }
 
 function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
-  const { managers, isLoadingInitial, error, olderStatus, isLoadingOlder, olderError, loadOlder } =
-    useManagersWindow(selected);
+  const {
+    managers,
+    isLoadingInitial,
+    error,
+    unreadable,
+    olderStatus,
+    isLoadingOlder,
+    olderError,
+    loadOlder,
+  } = useManagersWindow(selected);
   /**
    * **取れなかったのを0件と描かない**（issue #2322）。一覧をまだ1件も読めていないまま
    * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「まだ1体も起きていない」を並べると、
@@ -686,14 +738,20 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
   return (
     <>
       <ErrorNote error={error} className="mb-4" />
+      {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように（issue #2345）。 */}
+      <UnreadableJobNote unreadable={unreadable} className="mb-4" />
       {isLoadingInitial ? (
         <Spinner />
       ) : listUnavailable ? null : managers.length === 0 ? (
         <Card>
           <Empty>
-            {selected.length === 0
-              ? 'まだ1体も起きていない。会話で依頼するか、発意 tick を待つ。'
-              : 'この状態のマネージャーは無い（絞りを解除すれば他の状態も出る）。'}
+            {unreadable.length > 0
+              ? selected.length === 0
+                ? '読めたマネージャーは無い（読めない行が在るので、居ないとは言えない）。'
+                : '読めた範囲では、この状態のマネージャーは無い（読めない行の状態は分からない）。'
+              : selected.length === 0
+                ? 'まだ1体も起きていない。会話で依頼するか、発意 tick を待つ。'
+                : 'この状態のマネージャーは無い（絞りを解除すれば他の状態も出る）。'}
           </Empty>
         </Card>
       ) : (

@@ -13,6 +13,7 @@ import type {
   JobStore,
   PendingApproval,
   UnreadableApproval,
+  UnreadableJob,
 } from '@alteroid/core';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
@@ -70,7 +71,14 @@ function describeUnreadableApprovalRow(params: { op: string; id: string; reason:
  */
 type JobCacheEntry =
   | { version: string; ok: true; job: Job }
-  | { version: string; ok: false; type: string | undefined; bytes: number };
+  | {
+      version: string;
+      ok: false;
+      type: string | undefined;
+      bytes: number;
+      /** 不正な欄名だけ（値は載せない）。`listUnreadableJobs()` が使う（issue #2345）。 */
+      reason: string;
+    };
 
 /**
  * 行の「版」——`xmin`（システム列。UPDATE のたびに必ず変わる）と
@@ -216,6 +224,34 @@ export class PgJobStore implements JobStore {
    * 508行のほぼ全部がここで止まる。
    */
   async listJobs(): Promise<Job[]> {
+    const { found, skipped } = await this.#scan();
+    // 飛ばした行の跡は、ここ（`listJobs()`）だけが残す。`listUnreadableJobs()` は残さない
+    // ——同じ行を2つの口で数えない。
+    const dropped = new Map<string, number>();
+    for (const row of skipped) {
+      noteDroppedJournalRow(dropped, 'unknown-shape', row.type, row.bytes);
+    }
+    noteDroppedJournalRowsSummary(dropped);
+    return found;
+  }
+
+  /**
+   * `listJobs()` が飛ばした行を、本文を載せずに返す（issue #2345。`listApprovals()` の
+   * `unreadable` と同じ作り方）。id（列）と不正な欄名だけを持つ。
+   *
+   * 段1/段2の読み（`#scan()`）は `listJobs()` と共有するので、覚え（`#cache`）も同じく
+   * 効く——普段は版が変わった行だけ jsonb を引き直す。stderr の「読み飛ばした」要約は
+   * `listJobs()` だけが出す（同じ行について2回出さない）。
+   */
+  async listUnreadableJobs(): Promise<UnreadableJob[]> {
+    const { skipped } = await this.#scan();
+    return skipped.map((row): UnreadableJob => ({ id: row.id, reason: row.reason }));
+  }
+
+  async #scan(): Promise<{
+    found: Job[];
+    skipped: { id: string; reason: string; type: string | undefined; bytes: number }[];
+  }> {
     // 段1: jsonb には触れない。508行でも数十KB程度で済む。
     const rows = await this.#db
       .select({ id: jobs.id, xmin: sql<string>`xmin::text`, updatedAt: jobs.updatedAt })
@@ -268,7 +304,13 @@ export class PgJobStore implements JobStore {
           row.id,
           parsed.success
             ? { version, ok: true, job: deepFreeze(parsed.data) }
-            : { version, ok: false, type: journalRowType(row.job), bytes: byteLength(row.job) },
+            : {
+                version,
+                ok: false,
+                type: journalRowType(row.job),
+                bytes: byteLength(row.job),
+                reason: summarizeInvalidFields(parsed.error.issues),
+              },
         );
       }
     }
@@ -282,7 +324,7 @@ export class PgJobStore implements JobStore {
 
     // 段1の順（`created_at` 昇順）で結果を組む。
     const found: Job[] = [];
-    const dropped = new Map<string, number>();
+    const skipped: { id: string; reason: string; type: string | undefined; bytes: number }[] = [];
     for (const row of rows) {
       const entry = this.#cache.get(row.id);
       // 段1に在ったのに覚えへ入らなかった行。**段1と段2の間に消えた行だけが
@@ -296,11 +338,11 @@ export class PgJobStore implements JobStore {
         // （`#cache` の doc）。
         found.push({ ...entry.job });
       } else {
-        noteDroppedJournalRow(dropped, 'unknown-shape', entry.type, entry.bytes);
+        // id は列から取れる（行の本文は見ない）。
+        skipped.push({ id: row.id, reason: entry.reason, type: entry.type, bytes: entry.bytes });
       }
     }
-    noteDroppedJournalRowsSummary(dropped);
-    return found;
+    return { found, skipped };
   }
 
   async putJob(job: Job): Promise<void> {

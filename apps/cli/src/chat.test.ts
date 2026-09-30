@@ -73,6 +73,24 @@ function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingIt
 
 describe('renderManagerList', () => {
   /**
+   * **読めない委譲が在るとき、0件を「居ません」と言わない**（#2345）。読めない行は状態も
+   * 取れないので、`status=` で絞った先に居ないとも言えない。
+   */
+  it('読めない行が在る0件は「居ません」と言わず、居ないとは言えないと言う（#2345）', () => {
+    const unreadable = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
+    const plain = renderManagerList([], undefined, unreadable);
+    expect(plain).not.toBe('（マネージャーは1本も居ません）');
+    expect(plain).toBe('（読めたマネージャーは居ません。居ないとは言えません）');
+    const filtered = renderManagerList([], 'done', unreadable);
+    expect(filtered).toContain('status=done に当たる読めたマネージャーは居ません');
+    expect(filtered).toContain('居ないとは言えません');
+  });
+
+  it('対照: 読めない行が空配列なら、0件の文言は従来どおり（#2345）', () => {
+    expect(renderManagerList([], undefined, [])).toBe('（マネージャーは1本も居ません）');
+  });
+
+  /**
    * **絞り込んだ結果の0件を、絞っていないときの0件と同じ文言で出さない**
    * （#2203。手本は CLI `/journal` の `type=` 0件、#2073 / PR #2089）。
    * `status` を渡していないときの0件文言は変わらない。
@@ -1544,6 +1562,8 @@ function stubClient(
     managersStatus?: number;
     /** `GET /managers` の失敗時の本体。既定は `{ error: … }`（デーモンと同じ形）。 */
     managersBody?: unknown;
+    /** `GET /managers` の `unreadable`（#2345）。渡さなければ鍵ごと無い（0件と同じ）。 */
+    managersUnreadable?: { id?: string; reason: string }[];
     /** `POST /managers/:id/messages` の応答コード。既定は 200。 */
     messagesStatus?: number;
     /** `POST /managers/:id/messages` の応答本体。既定は `delivered`。 */
@@ -1584,7 +1604,12 @@ function stubClient(
           reply(
             status,
             status === 200
-              ? { managers: options.managers ?? [] }
+              ? {
+                  managers: options.managers ?? [],
+                  ...(options.managersUnreadable === undefined
+                    ? {}
+                    : { unreadable: options.managersUnreadable }),
+                }
               : (options.managersBody ?? { error: 'status に知らない値が入っている: runing' }),
           ),
         );
@@ -4272,6 +4297,50 @@ describe('chat の /managers（番号付き一覧）', () => {
  * 4. **切ったら黙らない** — `limit` 件ちょうど返ったら、その事実と続きの打ち方を出す
  * 5. **400 の理由をそのまま出す** — 3種類の断り方を1つの一言に畳まない
  */
+describe('chat の /managers が読めない委譲を「居ない」と言わない（#2345）', () => {
+  it('読めない行が在れば、読めた一覧の後に断りを出す。本文は出さない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [manager({ managerId: 'mgr-ok' })],
+      managersUnreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }, { reason: '不正な行' }],
+    });
+
+    await runSlashCommand('/managers', client, emptyListed());
+
+    const out = read();
+    expect(out).toContain('mgr-ok');
+    expect(out).toContain('⚠ 読めない委譲が 2 件あります（id: mgr-bad）');
+    expect(out).toContain('居ないのでも、畳まれたのでもありません');
+    expect(out).not.toContain('不正な欄');
+  });
+
+  it('読めた行が0件でも「マネージャーは1本も居ません」と言わない', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      managers: [],
+      managersUnreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }],
+    });
+
+    await runSlashCommand('/managers', client, emptyListed());
+
+    const out = read();
+    expect(out).not.toContain('マネージャーは1本も居ません');
+    expect(out).toContain('居ないとは言えません');
+    expect(out).toContain('読めない委譲が 1 件あります');
+  });
+
+  it('対照: 鍵が無ければ（0件）、断りは出ず、0件の文言は従来どおり', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ managers: [] });
+
+    await runSlashCommand('/managers', client, emptyListed());
+
+    const out = read();
+    expect(out).toContain('（マネージャーは1本も居ません）');
+    expect(out).not.toContain('読めない');
+  });
+});
+
 describe('chat の /managers の絞り込みと窓（#670）', () => {
   /**
    * **既定の呼びが1バイトも変わらないことの歯。**

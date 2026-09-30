@@ -94,7 +94,8 @@ function renderDashboard(
   }> = [],
   // 概要カードが打ち切る側の分岐へ入れるための材料。既定は空なので、
   // 既存のテストは1つも振る舞いが変わらない。
-  lists: { approvals?: unknown[]; managers?: unknown[] } = {},
+  // `managersUnreadable` は `GET /managers` の `unreadable`（#2345）。渡さなければ鍵ごと無い。
+  lists: { approvals?: unknown[]; managers?: unknown[]; managersUnreadable?: unknown[] } = {},
   // 「次の自動実行」カードの材料。既定は空なので既存のテストは変わらない。
   scheduleEntries: Array<{ kind: string; description: string; nextAt: string }> = [],
   // **`/approvals` / `/schedule` を読めなかったことにする（issue #2138）。**
@@ -113,7 +114,12 @@ function renderDashboard(
         ? json({ error: 'internal' }, 500)
         : json({ approvals: lists.approvals ?? [] });
     }
-    if (url.includes('/managers')) return json({ managers: lists.managers ?? [] });
+    if (url.includes('/managers')) {
+      return json({
+        managers: lists.managers ?? [],
+        ...(lists.managersUnreadable === undefined ? {} : { unreadable: lists.managersUnreadable }),
+      });
+    }
     if (url.includes('/schedule')) {
       return failures.schedule === true
         ? json({ error: 'internal' }, 500)
@@ -492,6 +498,53 @@ describe('「稼働中のマネージャー」は知らない status を静か�
     // ここまで来ればデータは届いている——「いま走っているものはない」
     // （0件の空表示）が同時に出ていないことを確かめられる。
     expect(screen.queryByText('いま走っているものはない。')).toBeNull();
+  });
+});
+
+/**
+ * **「稼働中のマネージャー」カードが、読めない委譲を「走っているものはない」の顔で隠さない
+ * （#2345）。** 読めない行は状態も取れないので、走っていないとは言えない。0件（鍵が無い）の
+ * ときは何も出さない。
+ */
+describe('「稼働中のマネージャー」カードの読めない委譲（#2345）', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+  const UNREADABLE = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
+
+  it('走っている委譲が0件でも、読めない行が在れば「走っているものはない」と言わない', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], { managers: [], managersUnreadable: UNREADABLE });
+
+    const note = await screen.findByText(/読めない委譲が 1 件ある/);
+    expect(note.textContent).toContain('id: mgr-bad');
+    expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
+    expect(screen.queryByText('いま走っているものはない。')).toBeNull();
+    expect(screen.getByText(/読めた範囲では、走っているものはない/)).toBeTruthy();
+  });
+
+  it('走っている委譲が在るときは、一覧と一緒に断りを出す', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], {
+      managers: [
+        {
+          managerId: 'mgr-1',
+          status: 'running',
+          live: true,
+          cwd: '/workspace',
+          request: '読める依頼',
+          startedAt: '2026-08-14T09:00:00.000Z',
+          updatedAt: '2026-08-14T09:00:00.000Z',
+        },
+      ],
+      managersUnreadable: UNREADABLE,
+    });
+
+    expect(await screen.findByText('読める依頼')).toBeTruthy();
+    expect(await screen.findByText(/読めない委譲が 1 件ある/)).toBeTruthy();
+  });
+
+  it('対照: 鍵が無ければ（0件）、断りは出ず、従来の文言のまま', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], { managers: [] });
+
+    expect(await screen.findByText('いま走っているものはない。')).toBeTruthy();
+    expect(screen.queryByText(/読めない委譲/)).toBeNull();
   });
 });
 

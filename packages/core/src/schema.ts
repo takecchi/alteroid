@@ -4463,6 +4463,26 @@ export const unreadableApprovalSchema = z.object({
 export type UnreadableApproval = z.infer<typeof unreadableApprovalSchema>;
 
 /**
+ * 委譲（ジョブ台帳）の1行が `jobSchema` として読めなかったときに、その行の代わりに
+ * 外へ出すもの（issue #2345。`unreadableApprovalSchema` と同じ形）。
+ *
+ * **「居ない」でも「畳まれた」でもない第3の状態。** `listJobs()` が読めない行を黙って
+ * 飛ばすと、`manager_list` は「マネージャーは1本も居ない」、`GET /managers` は空の
+ * 一覧を返し、digest・進捗からも委譲が消える。
+ *
+ * **⚠️ 本文（依頼文・報告・cwd など）を載せないこと。** job の欄には人間の依頼文・
+ * マネージャーの報告がそのまま入りうる（`UnreadableJobError` の doc、#52 と同じ理由）。
+ * `reason` は「どの欄が不正か」だけにする。
+ */
+export const unreadableJobSchema = z.object({
+  /** 行から取れた id。取れないこともある（fs 版で行そのものが id を持たない形のとき）。 */
+  id: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadableJob = z.infer<typeof unreadableJobSchema>;
+
+/**
  * 一覧の `updatedAt`（更新＝回答が付いた時刻。まだなら作成時刻）を出す。
  *
  * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）

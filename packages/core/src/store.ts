@@ -30,6 +30,7 @@ import type {
   ScheduleSpec,
   UnreadableApproval,
   UnreadableCommitment,
+  UnreadableJob,
   UnreadableSchedule,
 } from './schema.js';
 import type {
@@ -570,9 +571,55 @@ export function describeUnreadableApprovals(
   );
 }
 
+/**
+ * 読めない委譲の行が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
+ * 「読めない委譲は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
+ *
+ * クローンの道具（`manager_list`）・digest・進捗・HTTP・CLI・画面が同じ文面の骨を使う
+ * （issue #2345）。id が取れた行は上限つきで並べ、取れない行は件数だけで言う。
+ * 本文は載せない（`unreadableJobSchema` の doc）。
+ */
+export function describeUnreadableJobs(
+  unreadable: readonly UnreadableJob[],
+  options: { idLimit?: number } = {},
+): string | null {
+  if (unreadable.length === 0) return null;
+  const idLimit = options.idLimit ?? 10;
+  const ids = unreadable.flatMap((row) => (row.id === undefined ? [] : [row.id]));
+  const shown = ids.slice(0, idLimit);
+  const idNote =
+    ids.length === 0
+      ? '（id も取れない）'
+      : `（id: ${shown.join(', ')}` +
+        (ids.length > shown.length ? ` ほか ${ids.length - shown.length} 件` : '') +
+        (ids.length < unreadable.length
+          ? `。id が取れない行が ${unreadable.length - ids.length} 件`
+          : '') +
+        '）';
+  return (
+    `読めない委譲が ${unreadable.length} 件ある${idNote}。` +
+    '壊れた行であって、居ないのでも、畳まれたのでもない。この一覧には載っていない。'
+  );
+}
+
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
+  /**
+   * **`listJobs()` が読み飛ばした行**（`jobSchema` に合わない行）を、本文を含まない形で
+   * 返す（issue #2345）。**0件のときだけ「委譲は居ない」と言える**——読めない行が在る
+   * のに台帳を空と見せない（`listApprovals()` の `unreadable` と対）。
+   *
+   * **`listJobs()` の戻り型を変えなかった理由**: 本番の呼び手が約64か所（`manager.ts` の
+   * `find` 群・`clone.ts`・`runner-swap-notice.ts` など）あり、その大半は id で1本を
+   * 探す・読んだ行をそのまま書き戻すなど、読めない行を見せる先を持たない。型を変えても
+   * 気づける呼び手が増えない。見せる先（`manager_list`・`GET /managers`・digest・進捗）は
+   * 少数で、この口を呼ぶ（`TokenPoolStore.listUnreadable()` と同じ向き）。
+   *
+   * **⚠️ 本文は返さない**（`unreadableJobSchema` の doc）。メモリ実装（`testing.ts`）は
+   * 常に空（`putJob` がスキーマを通すので壊れた行を持てない）。
+   */
+  listUnreadableJobs(): Promise<UnreadableJob[]>;
   putJob(job: Job): Promise<void>;
 
   /**

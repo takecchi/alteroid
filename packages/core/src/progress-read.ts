@@ -116,7 +116,8 @@ export interface ReadProgressOptions {
  *
  * 台帳は `list({ includeClosed: true })` の各行に `respondedAt` / `activeManagerIds` を
  * 足したもの、委譲は `stores.jobs.listJobs()`。`unreadable` / `trimmedClosed` はストアが
- * 返したまま渡す（取れない行を 0 に丸めない）。
+ * 返したまま渡す（取れない行を 0 に丸めない）。読めない委譲の行の数は
+ * `stores.jobs.listUnreadableJobs()` から取り、`backlog.completeness.unreadableJobs` に載せる。
  */
 export async function readProgress(
   stores: Stores,
@@ -126,6 +127,8 @@ export async function readProgress(
   const commitments = await stores.commitments.list({ includeClosed: true });
   // job 一覧は summarizeProgress にも要るので1回だけ読み、導出の材料にも使い回す。
   const jobs = await stores.jobs.listJobs();
+  // 読めない委譲の行は `listJobs()` に載らない。数を別に取り、`completeness` で言う（issue #2345）。
+  const unreadableJobs = (await stores.jobs.listUnreadableJobs()).length;
   const { repliesByConversation, activeManagersByConversation } = await buildCommitmentDerivations(
     stores,
     commitments.entries,
@@ -143,6 +146,7 @@ export async function readProgress(
         })),
       },
       jobs,
+      unreadableJobs,
       now,
       windowHours,
     });

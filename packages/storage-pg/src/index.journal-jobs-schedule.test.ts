@@ -685,6 +685,62 @@ describe('PgJobStore', () => {
       expect(joined).not.toContain(secret);
     });
 
+    // **意味は変わっていない**: 上の `listJobs()` の歯は、戻り型を変えていないので
+    // そのまま成り立つ。変わったのは、飛ばした行が出力から消えなくなったこと
+    // ——`listUnreadableJobs()` が別の口で返す（issue #2345）。
+    it('listUnreadableJobs(): 飛ばした行を id（列）と不正な欄名だけで返す。本文は載せない（issue #2345）', async () => {
+      const now = new Date().toISOString();
+      await stores.jobs.putJob({
+        id: 'mgr-ok-u',
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: '健全な行',
+      });
+      await db.execute(
+        sql`insert into jobs (id, status, created_at, updated_at, job)
+            values (
+              'broken-u',
+              'future-status',
+              '2026-08-12T00:00:00.000Z',
+              '2026-08-12T00:00:00.000Z',
+              ${JSON.stringify({
+                id: 'broken-u',
+                status: 'future-status',
+                createdAt: '2026-08-12T00:00:00.000Z',
+                updatedAt: '2026-08-12T00:00:00.000Z',
+                request: `秘密は ${secret} だった`,
+              })}::jsonb
+            )`,
+      );
+
+      let unreadable: Awaited<ReturnType<typeof stores.jobs.listUnreadableJobs>> = [];
+      const lines = await captureStderr(async () => {
+        unreadable = await stores.jobs.listUnreadableJobs();
+        // 覚え（`#cache`）が温まった後の2回目も同じ答えを返す。
+        expect(await stores.jobs.listUnreadableJobs()).toEqual(unreadable);
+      });
+
+      // この行は `status` が未知で `summary` も無い（不正な欄名だけを並べる）。
+      expect(unreadable).toEqual([{ id: 'broken-u', reason: '不正な欄: status,summary' }]);
+      expect(JSON.stringify(unreadable)).not.toContain(secret);
+      // `listUnreadableJobs()` は「読み飛ばした」の跡を出さない（同じ行を `listJobs()` と
+      // 2回数えない）。
+      expect(lines.join('')).not.toContain('日誌の行を読み出せずに飛ばした');
+    });
+
+    it('対照: 壊れた行が無ければ listUnreadableJobs() は空（issue #2345）', async () => {
+      const now = new Date().toISOString();
+      await stores.jobs.putJob({
+        id: 'mgr-ok-u2',
+        createdAt: now,
+        updatedAt: now,
+        status: 'running',
+        summary: '健全な行のみ',
+      });
+      expect(await stores.jobs.listUnreadableJobs()).toEqual([]);
+    });
+
     it('listJobs(): 壊れた行が無ければ跡は出ない（回帰）', async () => {
       const now = new Date().toISOString();
       await stores.jobs.putJob({

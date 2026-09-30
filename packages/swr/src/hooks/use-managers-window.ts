@@ -145,7 +145,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { managersToQuery, useManagers } from './queries';
 import { unwrap, useApi } from '../api';
-import type { ManagerStatus, ManagerSummary } from '@alteroid/logic';
+import type { ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
 
 /**
  * 初期表示・1回の「もっと見る」で読む件数。
@@ -181,6 +181,12 @@ export interface ManagersWindow {
   isLoadingInitial: boolean;
   /** 先頭の頁（SWR）の失敗。 */
   error: unknown;
+  /**
+   * 読めなかった委譲の行（issue #2345）。**「居ない」でも「畳まれた」でもない第3の状態。**
+   * 先頭の頁の応答から取る——`GET /managers` は窓（`status` / `limit` / 錨）では切らず、
+   * どの頁にも全件を載せる（0件なら鍵が無いので、ここは空配列）。
+   */
+  unreadable: UnreadableJob[];
 
   olderStatus: ManagersOlderStatus;
   isLoadingOlder: boolean;
@@ -400,6 +406,7 @@ export function useManagersWindow(status: readonly ManagerStatus[]): ManagersWin
     managers,
     isLoadingInitial: first.isLoading,
     error: first.error,
+    unreadable: first.data?.unreadable ?? [],
     olderStatus,
     isLoadingOlder,
     olderError,

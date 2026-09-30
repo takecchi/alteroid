@@ -89,6 +89,12 @@ export type ProgressCommitments = Omit<CommitmentList, 'entries'> & {
 export interface SummarizeProgressInput {
   commitments: ProgressCommitments;
   jobs: readonly Job[];
+  /**
+   * `jobs`（`JobStore.listJobs()`）が飛ばした、読めない委譲の行の数
+   * （`JobStore.listUnreadableJobs()` の件数。issue #2345）。**省略できない**——
+   * 省略を 0 と読ませない（取れないものを 0 にしない）。
+   */
+  unreadableJobs: number;
   now: Date;
   windowHours: number;
 }
@@ -141,8 +147,12 @@ export interface ProgressBacklog {
     delegated: number;
     notApplicable: number;
   };
-  /** 0 でなければ上の数は欠けうる。 */
-  completeness: { unreadable: number; trimmedClosed: number };
+  /**
+   * 0 でなければ上の数は欠けうる。`unreadable` / `trimmedClosed` は台帳の行、
+   * `unreadableJobs` は委譲の行（issue #2345）——0 でなければ `byState.delegated`・
+   * `inProgress` の各数・`throughput.delegationsEnded` は読めた委譲の分しか数えていない。
+   */
+  completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
 }
 
 export interface ProgressInProgress {
@@ -247,7 +257,7 @@ function jobBucket(status: JobStatus): 'running' | 'awaitingHuman' | 'lost' | 'o
  *   （窓が作れないのに数を返すと、全部 0 の「進捗なし」に化ける）
  */
 export function summarizeProgress(input: SummarizeProgressInput): ProgressSummary {
-  const { commitments, jobs, now, windowHours } = input;
+  const { commitments, jobs, unreadableJobs, now, windowHours } = input;
   const nowMs = now.getTime();
   if (!Number.isFinite(nowMs)) throw new RangeError('summarizeProgress: now が不正な日時');
   if (!Number.isFinite(windowHours) || windowHours <= 0) {
@@ -327,6 +337,7 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
     completeness: {
       unreadable: commitments.unreadable.length,
       trimmedClosed: commitments.trimmedClosed,
+      unreadableJobs,
     },
   };
 

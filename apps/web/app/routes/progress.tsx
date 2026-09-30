@@ -205,6 +205,10 @@ function BacklogCard({ progress }: { progress: Progress }) {
 function InProgressCard({ progress }: { progress: Progress }) {
   const { inProgress, observedAt } = progress;
   const { lastReport } = inProgress;
+  // **読めない委譲の行（issue #2345）。** デーモンが古いと欄が無いので、型は number でも
+  // 無いことを許す（無いときは「0 件」ではなく、何も言わない）。
+  const unreadableJobs =
+    (progress.backlog.completeness as { unreadableJobs?: number }).unreadableJobs ?? 0;
   const items: KeyValueItem[] = [
     {
       label: '最終報告（最古）',
@@ -232,6 +236,12 @@ function InProgressCard({ progress }: { progress: Progress }) {
           <Stat label="行方不明" value={count(inProgress.lost)} unit="件" />
         </StatRow>
         <KeyValueList items={items} labelWidth="8rem" />
+        {unreadableJobs !== 0 && (
+          <p className="text-xs text-warn">
+            ⚠ 読めない委譲の行が {count(unreadableJobs)} 件ある。上の数は読めた委譲の分だけで、
+            下限として読むこと（壊れた行であって、居ないのではない）。
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           「実行中」は走らせたという意味で、進んでいるとは限らない。最終報告が古い走行を見るなら
           マネージャーの一覧へ。

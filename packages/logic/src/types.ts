@@ -23,6 +23,11 @@ export type ManagerStatus = ManagerSummary['status'];
  * （無いときは何も描かない）。
  */
 export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
+/**
+ * 委譲の行が読めなかったもの（issue #2345）。「居ない」でも「畳まれた」でもない第3の
+ * 状態——`GET /managers` の `unreadable`（1件でも在るときだけ載る）から導く。
+ */
+export type UnreadableJob = NonNullable<Ok<paths['/managers']['get']>['unreadable']>[number];
 
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
 /**

@@ -613,6 +613,10 @@ export function createMemoryStores(): Stores {
     async listJobs() {
       return [...jobs.values()].map(isolate);
     },
+    // 読めない行は持てない（`putJob` がスキーマを通す）ので常に空（issue #2345）。
+    async listUnreadableJobs() {
+      return [];
+    },
     async putJob(job) {
       // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1715。同じストアの
       // `updateJob` は #1652 で先に直っていたが、`putJob` だけ食い違って残った）。

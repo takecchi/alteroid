@@ -9,6 +9,7 @@ import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js'
 import {
   UnreadableApprovalError,
   describeUnreadableApprovals,
+  describeUnreadableJobs,
   describeUnreadableSchedules,
 } from './store.js';
 import type { Stores } from './store.js';
@@ -1136,6 +1137,10 @@ export async function buildActivityDigest(
   const untilIso = until.toISOString();
 
   const jobs = await stores.jobs.listJobs();
+  // **読めない委譲の行（`listJobs()` が飛ばしたもの）を、件数からもここからも消さない**
+  // （issue #2345）。0件のときは何も出さない（下の2か所とも `null` / 条件で出さない）。
+  const unreadableJobs = await stores.jobs.listUnreadableJobs();
+  const unreadableJobNote = describeUnreadableJobs(unreadableJobs);
   // **直す前と同じ、有界な取得のまま。** 承認待ちキューの行を消す口が無い
   // （`JobStore` は `listApprovals` / `getApproval` / `putApproval` だけ）ので、
   // `pendingOnly` を外して全件を毎回引くと、運用のあいだ聞いた質問が積み上がる
@@ -1344,6 +1349,10 @@ export async function buildActivityDigest(
     '',
     `- 人間からの発言: ${humanTurnsCount} 件`,
     `- マネージャーへの委譲（この期間に動いたもの）: ${managers.length} 本`,
+    // **0件のときは行を作らない**（承認待ちの行と同じ。詳細は「マネージャー」の節）。
+    ...(unreadableJobs.length === 0
+      ? []
+      : [`- 読めない委譲（壊れた行。上の本数には入っていない）: ${unreadableJobs.length} 件`]),
     `- 自分で決めたこと（日誌の decision）: ${decisionsCount} 件`,
     escalationCountLine,
     `- 記憶の更新: ${memoryUpdatesCount} 件`,
@@ -1529,7 +1538,7 @@ export async function buildActivityDigest(
     );
   }
 
-  if (managers.length > 0) {
+  if (managers.length > 0 || unreadableJobNote !== null) {
     sections.push('', '## マネージャー（走行中・返事待ちから先に出す）');
     const shownManagers = managers.slice(0, MAX_ITEMS);
     for (const job of shownManagers) {
@@ -1539,13 +1548,16 @@ export async function buildActivityDigest(
           describeLastFailureLine(job.lastFailure),
       );
     }
-    sections.push(
-      ...omitted(
-        managers.length,
-        shownManagers.length,
-        '`manager_list` で状態を見る。あちらも入る分までで、残りの件数が本文に出る',
-      ),
-    );
+    if (managers.length > 0) {
+      sections.push(
+        ...omitted(
+          managers.length,
+          shownManagers.length,
+          '`manager_list` で状態を見る。あちらも入る分までで、残りの件数が本文に出る',
+        ),
+      );
+    }
+    if (unreadableJobNote !== null) sections.push(`- ${unreadableJobNote}`);
   }
 
   if (decisionsCount > 0) {

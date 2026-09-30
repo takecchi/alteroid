@@ -19,6 +19,7 @@ import {
   type Commitment,
   type UnreadableApproval,
   type UnreadableCommitment,
+  type UnreadableJob,
   type UnreadableSchedule,
   type UsageLayer,
   type UsageSite,
@@ -996,7 +997,7 @@ export async function runSlashCommand(
         stdout.write(`マネージャーの一覧を読めませんでした — ${await errorDetail(response)}\n`);
         return 'ok';
       }
-      const { managers } = await response.json();
+      const { managers, unreadable = [] } = await response.json();
       // **番号を振る。** `/manager` `/stop` `/msg` がこの並びを引く（#336）。
       listed.managers.length = 0;
       listed.managers.push(...managers.map((entry) => entry.managerId));
@@ -1004,7 +1005,10 @@ export async function runSlashCommand(
       // いま画面に出ていない行を起点にできてしまい、番号と錨が食い違う。
       for (const key of Object.keys(listed.managerAnchors)) delete listed.managerAnchors[key];
       for (const entry of managers) listed.managerAnchors[entry.managerId] = entry.startedAt;
-      stdout.write(`${renderManagerList(managers, parsed.query.status)}\n`);
+      stdout.write(`${renderManagerList(managers, parsed.query.status, unreadable)}\n`);
+      // **読めない行は「居ない」と分けて言う**（issue #2345）。0件なら何も足さない。
+      const unreadableJobNote = renderUnreadableJobNotice(unreadable);
+      if (unreadableJobNote !== '') stdout.write(`${unreadableJobNote}\n`);
       // **切ったなら黙らない**（`renderManagersWindowNote` の doc）。
       const note = renderManagersWindowNote(managers.length, parsed.query);
       if (note !== null) stdout.write(note);
@@ -2569,8 +2573,19 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
  * 文言は変えない** — 呼び出し元が `status` を渡さなければ、この関数は
  * 1文字も変わらない。
  */
-export function renderManagerList(managers: ManagerListItem[], status?: string): string {
+export function renderManagerList(
+  managers: ManagerListItem[],
+  status?: string,
+  unreadable: readonly UnreadableJob[] = [],
+): string {
   if (managers.length === 0) {
+    // **読めない行が在るときは「居ない」と言わない**（issue #2345）。読めない行は状態も
+    // 取れないので、`status` で絞った先に居ないとも言えない。
+    if (unreadable.length > 0) {
+      return status === undefined
+        ? '（読めたマネージャーは居ません。居ないとは言えません）'
+        : `status=${status} に当たる読めたマネージャーは居ません（読めない行の状態は分からないので、居ないとは言えません）`;
+    }
     return status === undefined
       ? '（マネージャーは1本も居ません）'
       : `status=${status} に当たるマネージャーは居ません（絞り込みを外せば見えるかもしれません）`;
@@ -3402,6 +3417,21 @@ function renderUnreadableApprovalNotice(unreadable: UnreadableApproval[]): strin
     `  ⚠ 読めない承認待ちが ${unreadable.length} 件あります` +
     (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
     '。壊れた行であって、回答済み・取り下げ済みではありません。この一覧には載っていません。'
+  );
+}
+
+/**
+ * 読めない委譲の断り（issue #2345。`renderUnreadableApprovalNotice` と同じ形）。
+ * 0件なら空文字。**「壊れた行であって、居ないのでも、畳まれたのでもない」を落とさない。**
+ * 番号は振らない（読めない行へは `/msg` も `/stop` もできない）。
+ */
+function renderUnreadableJobNotice(unreadable: readonly UnreadableJob[]): string {
+  if (unreadable.length === 0) return '';
+  const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
+  return (
+    `  ⚠ 読めない委譲が ${unreadable.length} 件あります` +
+    (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
+    '。壊れた行であって、居ないのでも、畳まれたのでもありません。この一覧には載っていません。'
   );
 }
 

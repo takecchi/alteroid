@@ -7056,7 +7056,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       byOrigin: Record<string, number>;
       age: { oldestAt: string | null; medianHours: number | null };
       byState: { untouched: number; responded: number; delegated: number; notApplicable: number };
-      completeness: { unreadable: number; trimmedClosed: number };
+      completeness: { unreadable: number; trimmedClosed: number; unreadableJobs: number };
     };
     inProgress: {
       running: number;
@@ -7227,6 +7227,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     const expected = summarizeProgress({
       commitments: ledger,
       jobs: await stores.jobs.listJobs(),
+      unreadableJobs: (await stores.jobs.listUnreadableJobs()).length,
       now: new Date(body.observedAt),
       windowHours: 168,
     });
@@ -7304,7 +7305,12 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       },
     };
     const body = await read();
-    expect(body.backlog.completeness).toEqual({ unreadable: 2, trimmedClosed: 7 });
+    // 委譲の欠け（`unreadableJobs`）は別の欄。この台帳の欠けには混ざらない（#2345）。
+    expect(body.backlog.completeness).toEqual({
+      unreadable: 2,
+      trimmedClosed: 7,
+      unreadableJobs: 0,
+    });
     expect(body.forecast.basis.unreadable).toBe(2);
   });
 

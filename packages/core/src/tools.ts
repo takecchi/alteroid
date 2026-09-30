@@ -222,6 +222,7 @@ import {
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
   describeUnreadableCommitment,
+  describeUnreadableJobs,
   describeUnreadableSchedules,
 } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
@@ -10826,9 +10827,22 @@ export function createCloneTools(context: ToolContext) {
         // 型で潰すことになる。だから `ManagerPool.runnerBacklog` は非 optional
         // にしてある（その doc を参照）。
         const runnerBacklog = describeRunnerBacklog(context.managers.runnerBacklog());
+        // **読めない委譲の行は、「居ない」と分けて名乗る（issue #2345）。** `list()` は
+        // 読めない行を飛ばすので、黙っていると壊れた行だけの台帳が「1本も居ない」に見える。
+        // 0件なら `null` で、出力は1文字も変わらない。
+        const unreadableJobNote = describeUnreadableJobs(
+          await context.stores.jobs.listUnreadableJobs(),
+        );
         if (managers.length === 0) {
           return text(
-            ['（マネージャーは1本も居ない）', inboxBacklog, runnerBacklog]
+            [
+              unreadableJobNote === null
+                ? '（マネージャーは1本も居ない）'
+                : '（読めたマネージャーは無い。居ないとは言えない）',
+              unreadableJobNote,
+              inboxBacklog,
+              runnerBacklog,
+            ]
               .filter((line): line is string => line !== null)
               .join('\n'),
           );
@@ -11280,6 +11294,8 @@ export function createCloneTools(context: ToolContext) {
             // 形にしてはいけない——この行が在る理由そのものが「一覧を数えて
             // 本数を答えさせない」ことだからである（`describeManagerCounts` の doc）。
             describeManagerCounts(managers),
+            // 件数の行と同じく予算に切られない場所に置く（issue #2345）。
+            unreadableJobNote,
             // **絞ったことは、件数の行とは別の行で言う。** 件数の行に混ぜると
             // 「絞る前の全体」と「絞った後」が1行の中で並び、どちらの数なのかを
             // 読み分ける負担が読み手に移る。

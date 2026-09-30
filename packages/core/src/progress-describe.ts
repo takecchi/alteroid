@@ -108,11 +108,19 @@ export function describeProgress(view: ProgressView): string {
       `窓で受けた ${String(basis.openedInWindow)} / 窓 ${String(basis.windowHours)} 時間 / ${basis.method}`,
   );
 
-  const { unreadable, trimmedClosed } = backlog.completeness;
+  const { unreadable, trimmedClosed, unreadableJobs } = backlog.completeness;
   if (unreadable !== 0 || trimmedClosed !== 0) {
     lines.push(
       '',
       `※ 数が欠けうる（読めなかった行 ${String(unreadable)} 件 / 刈り取られた片付き行 ${String(trimmedClosed)} 件）`,
+    );
+  }
+  // 委譲の行の欠け（issue #2345）。0 件なら行を作らない（上の行と同じ作法）。
+  if (unreadableJobs !== 0) {
+    lines.push(
+      '',
+      `※ 読めない委譲の行が ${String(unreadableJobs)} 件ある。実施中・窓で終えた委譲・進行中（委譲あり）の数は、` +
+        '読めた委譲の分しか数えていない（壊れた行であって、居ないのではない）',
     );
   }
 

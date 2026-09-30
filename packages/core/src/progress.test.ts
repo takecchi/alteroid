@@ -50,11 +50,17 @@ function job(id: string, overrides: Partial<Job> = {}): Job {
 function summarize(
   entries: ProgressCommitmentRow[],
   jobs: Job[] = [],
-  extra: { unreadable?: number; trimmedClosed?: number; windowHours?: number } = {},
+  extra: {
+    unreadable?: number;
+    trimmedClosed?: number;
+    unreadableJobs?: number;
+    windowHours?: number;
+  } = {},
 ) {
   return summarizeProgress({
     commitments: ledger(entries, extra),
     jobs,
+    unreadableJobs: extra.unreadableJobs ?? 0,
     now: NOW,
     windowHours: extra.windowHours ?? HOURS,
   });
@@ -75,13 +81,20 @@ describe('summarizeProgress — 窓', () => {
   it('windowHours が有限の正数でない・now が不正なら、0 の集計へ化けずに投げる', () => {
     for (const windowHours of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() =>
-        summarizeProgress({ commitments: ledger([]), jobs: [], now: NOW, windowHours }),
+        summarizeProgress({
+          commitments: ledger([]),
+          jobs: [],
+          unreadableJobs: 0,
+          now: NOW,
+          windowHours,
+        }),
       ).toThrow(RangeError);
     }
     expect(() =>
       summarizeProgress({
         commitments: ledger([]),
         jobs: [],
+        unreadableJobs: 0,
         now: new Date('invalid'),
         windowHours: HOURS,
       }),
@@ -172,8 +185,14 @@ describe('summarizeProgress — backlog', () => {
 
   it('completeness は unreadable と trimmedClosed をそのまま運ぶ（unreadable は total に入らない）', () => {
     const b = summarize([row('a', OLD)], [], { unreadable: 2, trimmedClosed: 5 }).backlog;
-    expect(b.completeness).toEqual({ unreadable: 2, trimmedClosed: 5 });
+    // 委譲の欠け（`unreadableJobs`）は、渡さなければ 0（この行では委譲の欠けを足していない）。
+    expect(b.completeness).toEqual({ unreadable: 2, trimmedClosed: 5, unreadableJobs: 0 });
     expect(b.total).toBe(1);
+  });
+
+  it('completeness.unreadableJobs は読めない委譲の行の数をそのまま運ぶ（台帳の欠けとは別の欄）（#2345）', () => {
+    const b = summarize([row('a', OLD)], [], { unreadableJobs: 3 }).backlog;
+    expect(b.completeness).toEqual({ unreadable: 0, trimmedClosed: 0, unreadableJobs: 3 });
   });
 });
 

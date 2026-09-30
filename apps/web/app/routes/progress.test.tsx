@@ -68,7 +68,7 @@ function baseBody(overrides: Record<string, unknown> = {}) {
         buckets: { under1h: 1, under24h: 4, under7d: 6, over7d: 1 },
       },
       byState: { untouched: 6, responded: 3, delegated: 2, notApplicable: 4 },
-      completeness: { unreadable: 0, trimmedClosed: 0 },
+      completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 0 },
     },
     inProgress: {
       running: 3,
@@ -360,6 +360,44 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(
       backlog.getByText(/数が欠けうる（読めなかった行 2 件 \/ 刈り取られた片付き行 5 件）/),
     ).toBeTruthy();
+  });
+
+  it('completeness.unreadableJobs が 0 でなければ、「実施中」に委譲の欠けの但し書きを出す（#2345）', async () => {
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...baseBody().backlog,
+          completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs: 2 },
+        },
+      }),
+    });
+    renderPage();
+
+    const inProgress = within(await card('実施中'));
+    expect(inProgress.getByText(/読めない委譲の行が 2 件ある/)).toBeTruthy();
+    expect(inProgress.getByText(/居ないのではない/)).toBeTruthy();
+    // 台帳の欠けの但し書きは、委譲の欠けだけでは出ない。
+    const backlog = within(await card('積み上がり'));
+    expect(backlog.queryByText(/数が欠けうる/)).toBeNull();
+  });
+
+  it('対照: unreadableJobs が 0 なら、委譲の欠けの但し書きは出ない（#2345）', async () => {
+    stubProgress();
+    renderPage();
+    expect(within(await card('実施中')).queryByText(/読めない委譲/)).toBeNull();
+  });
+
+  it('対照: 欄が無い（古いデーモン）でも、委譲の欠けの但し書きは出ず、落ちない（#2345）', async () => {
+    stubProgress({
+      body: baseBody({
+        backlog: {
+          ...baseBody().backlog,
+          completeness: { unreadable: 0, trimmedClosed: 0 },
+        },
+      }),
+    });
+    renderPage();
+    expect(within(await card('実施中')).queryByText(/読めない委譲/)).toBeNull();
   });
 
   it('GitHub は「観測していない（0 件ではない）」と reason をそのまま出し、0 を作らない', async () => {

@@ -68,8 +68,16 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function renderManagers(managers: ManagerSummary[]) {
-  stubFetch((url) => (url.includes('/managers') ? json({ managers }) : undefined));
+function renderManagers(
+  managers: ManagerSummary[],
+  unreadable?: { id?: string; reason: string }[],
+) {
+  // `unreadable` は `GET /managers` の `unreadable`（#2345）。渡さなければ鍵ごと無い（0件と同じ）。
+  stubFetch((url) =>
+    url.includes('/managers')
+      ? json({ managers, ...(unreadable === undefined ? {} : { unreadable }) })
+      : undefined,
+  );
   const router = createMemoryRouter([{ path: '/', Component: Managers }], {
     initialEntries: ['/'],
   });
@@ -79,6 +87,39 @@ function renderManagers(managers: ManagerSummary[]) {
     </Providers>,
   );
 }
+
+/**
+ * **読めない委譲を「まだ1体も起きていない」の顔で隠さない（#2345）。** `GET /managers` は
+ * 読めない行を `unreadable` に別欄で返す（1件でも在るときだけ鍵が載る）。読めた行が0件でも、
+ * 読めない行が在れば「居ない」とは言えない。
+ */
+describe('読めない委譲（#2345）', () => {
+  it('読めた行が0件でも「まだ1体も起きていない」と言わず、件数と id を断る', async () => {
+    renderManagers([], [{ id: 'mgr-bad', reason: '不正な欄: status' }]);
+
+    const note = await screen.findByText(/読めない委譲が 1 件ある/);
+    expect(note.textContent).toContain('id: mgr-bad');
+    expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
+    expect(screen.queryByText(/まだ1体も起きていない/)).toBeNull();
+    expect(screen.getByText(/読めたマネージャーは無い/)).toBeTruthy();
+  });
+
+  it('読めた行が在るときは、一覧の上に断りを出し、読めた行もそのまま出る', async () => {
+    renderManagers([{ ...BASE }], [{ reason: '不正な行' }]);
+
+    const note = await screen.findByText(/読めない委譲が 1 件ある/);
+    // id が取れない行は件数だけで言う（id の列挙は出ない）。
+    expect(note.textContent).not.toContain('id:');
+    expect(screen.getByText('PR を出して')).toBeTruthy();
+  });
+
+  it('対照: 鍵が無ければ（0件）、断りは出ず、従来の空の文言のまま', async () => {
+    renderManagers([]);
+
+    expect(await screen.findByText(/まだ1体も起きていない/)).toBeTruthy();
+    expect(screen.queryByText(/読めない委譲/)).toBeNull();
+  });
+});
 
 describe('一覧の札は、観測した分しか言わない', () => {
   /**

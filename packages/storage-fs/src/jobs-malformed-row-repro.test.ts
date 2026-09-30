@@ -91,6 +91,30 @@ describe('FsJobStore — jobs.json の不正な1行を読み飛ばす（issue #1
     expect(joined).not.toContain(BAD_JOB_RAW.summary);
   });
 
+  // **意味は変わっていない**: 上の `listJobs()` の歯（飛ばして読めた行だけを返す）は、
+  // `listJobs()` の戻り型を変えていないので、そのまま成り立つ（issue #2345）。変わったのは、
+  // 飛ばした行が出力から消えなくなったこと——`listUnreadableJobs()` が別の口で返す。
+  it('listUnreadableJobs() は飛ばした行を id と不正な欄名だけで返す（本文は載せない）（issue #2345）', async () => {
+    await writeRawJobsFile();
+    const stores = createFsStores(root);
+
+    let unreadable: Awaited<ReturnType<typeof stores.jobs.listUnreadableJobs>> = [];
+    await captureStderr(async () => {
+      unreadable = await stores.jobs.listUnreadableJobs();
+    });
+
+    expect(unreadable).toEqual([{ id: 'mgr-bad', reason: '不正な欄: status' }]);
+    expect(JSON.stringify(unreadable)).not.toContain(BAD_JOB_RAW.summary);
+    expect(JSON.stringify(unreadable)).not.toContain(GOOD_JOB.summary);
+  });
+
+  it('対照: 不正な行が無ければ listUnreadableJobs() は空（issue #2345）', async () => {
+    const stores = createFsStores(root);
+    expect(await stores.jobs.listUnreadableJobs()).toEqual([]);
+    await stores.jobs.putJob(GOOD_JOB);
+    expect(await stores.jobs.listUnreadableJobs()).toEqual([]);
+  });
+
   it('putJob() は投げない。書いた後のファイルに不正な行が元の形のまま残っている', async () => {
     await writeRawJobsFile();
     const stores = createFsStores(root);

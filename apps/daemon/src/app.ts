@@ -4631,7 +4631,10 @@ export function createApp(deps: AppDeps) {
           '当てる順序は **`status` 絞り → 錨 → `limit`** である（先に窓で切ると、次の頁の' +
           '起点がずれる。issue #418 が `/commitments` で塞いだ穴と同じ形）。' +
           '**クエリを1つも渡さない呼びは、この変更の前と応答が1バイトも変わらない**（opt-in）。' +
-          '**CLI とクローンの `manager_list` はこの窓を使っていない**（別 issue）。',
+          '**CLI とクローンの `manager_list` はこの窓を使っていない**（別 issue）。' +
+          '行が読めない（版ずれ・手編集）委譲が在るときだけ、`unreadable`（id が取れれば id と' +
+          '不正な欄名。本文は載せない）を載せる（issue #2345）。**「居ない」でも「畳まれた」でもない**。' +
+          '`status` の絞り・`limit`・錨では切らず、常に全件を返す。0件なら鍵ごと無い。',
         responses: {
           200: {
             description: 'マネージャーの一覧と状態。',
@@ -4752,9 +4755,16 @@ export function createApp(deps: AppDeps) {
 
         const page = optedIn && limit !== undefined ? view.slice(0, limit) : view;
 
+        // **読めない行は 1 件でも在るときだけ `unreadable` を載せる**（issue #2345）。
+        // 0 件なら鍵ごと無い（「読めない行は 0 件」と読める空配列を作らず、既存の呼び手の
+        // 応答を1バイトも変えない）。窓（`status` / `limit` / 錨）では切らない——行が
+        // 読めないので、どの状態のものかも分からない。
+        const unreadable = await stores.jobs.listUnreadableJobs();
+
         return c.json(
           managersListResponseSchema.parse({
             managers: page.map((summary) => managerView(clone.managers, summary)),
+            ...(unreadable.length > 0 ? { unreadable } : {}),
           }),
         );
       },

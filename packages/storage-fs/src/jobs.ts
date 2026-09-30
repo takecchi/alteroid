@@ -13,6 +13,7 @@ import type {
   JobStore,
   PendingApproval,
   UnreadableApproval,
+  UnreadableJob,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -106,6 +107,15 @@ function summarizeRawApprovalProblem(raw: unknown): string {
 }
 
 /**
+ * 読めなかった生の job 行を、値を出さずに要約する（`listUnreadableJobs()` 用。
+ * `summarizeRawApprovalProblem` と同じ形。**不正な欄名だけ**）。
+ */
+function summarizeRawJobProblem(raw: unknown): string {
+  const result = jobSchema.safeParse(raw);
+  return result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
+}
+
+/**
  * 飛ばした job 行を stderr へ1行で要約する。**id 以外の値は絶対に載せない**
  * ——job の欄には人間の依頼文・マネージャーの報告がそのまま入りうる
  * （`noteDroppedRecord` の doc、#52 と同じ理由）。
@@ -152,6 +162,19 @@ export class FsJobStore implements JobStore {
 
   async listJobs(): Promise<Job[]> {
     return (await this.#read()).jobs;
+  }
+
+  /**
+   * `listJobs()` が飛ばした行を、本文を載せずに返す（issue #2345。`listApprovals()` の
+   * `unreadable` と同じ作り方）。id と不正な欄名だけを持つ。
+   */
+  async listUnreadableJobs(): Promise<UnreadableJob[]> {
+    const { invalidJobsRaw } = await this.#read();
+    return invalidJobsRaw.map((raw): UnreadableJob => {
+      const id = extractRowId(raw);
+      const reason = summarizeRawJobProblem(raw);
+      return id === undefined ? { reason } : { id, reason };
+    });
   }
 
   async putJob(job: Job): Promise<void> {

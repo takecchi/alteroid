@@ -30,6 +30,7 @@ import {
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
   unreadableCommitmentSchema,
+  unreadableJobSchema,
   unreadableScheduleSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
@@ -1213,6 +1214,16 @@ export const managerSummarySchema = z.object({
 
 export const managersListResponseSchema = z.object({
   managers: z.array(managerSummarySchema),
+  /**
+   * 読めなかった委譲の行（issue #2345）。**「居ない」でも「畳まれた」でもない第3の状態。**
+   *
+   * `JobStore.listUnreadableJobs()`（`packages/core/src/store.ts`）をそのまま外へ出す。
+   * クローンの `manager_list` が足す断りと同じ材料を、人間の側にも渡す。**1件でも在る
+   * ときだけ載る**（0件なら鍵が無い。空配列を作ると「読めない行は無い」と読めてしまう）。
+   * 行の状態が取れないので、`status` の絞り・`limit`・錨の窓では切らず、常に全件を返す
+   * （`GET /commitments` の `unreadable` と同じ）。本文は載せない（id と不正な欄名だけ）。
+   */
+  unreadable: z.array(unreadableJobSchema).optional(),
 });
 
 export const managerDetailResponseSchema = z.object({ manager: managerSummarySchema });
@@ -1960,6 +1971,9 @@ const progressForecastBasisSchema = z.object({
  *   「デーモンは PR もブランチも見に行かない」）ので、open Issue / PR / CI の数は
  *   載せられない。0 と区別できるよう、取れていないことを `state` で言う。
  * - `backlog.completeness`: 0 でなければ `backlog` と `throughput` の数は欠けうる。
+ *   `unreadable` / `trimmedClosed` は台帳の行、`unreadableJobs` は委譲の行（issue #2345）で、
+ *   0 でなければ `backlog.byState.delegated`・`inProgress`・`throughput.delegationsEnded` は
+ *   読めた委譲の分しか数えていない。
  * - `inProgress.lastReport.oldestAt` / `newestAt`: 報告が1件も無いとき `null`（0 の
  *   代わりの値は作らない）。報告の無い走行は `withoutReport` に数える。
  */
@@ -1990,7 +2004,12 @@ export const progressResponseSchema = z.object({
       delegated: progressCount,
       notApplicable: progressCount,
     }),
-    completeness: z.object({ unreadable: progressCount, trimmedClosed: progressCount }),
+    completeness: z.object({
+      unreadable: progressCount,
+      trimmedClosed: progressCount,
+      /** 読めなかった委譲の行（issue #2345）。0 でなければ `inProgress` などの委譲の数は欠けうる。 */
+      unreadableJobs: progressCount,
+    }),
   }),
   inProgress: z.object({
     running: progressCount,

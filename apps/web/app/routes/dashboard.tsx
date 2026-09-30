@@ -25,7 +25,7 @@ import {
 import { formatDateTime, formatRelative, managersHref, usageHref } from '@alteroid/logic';
 import { journalEntryLinks } from '~/lib/journal-links';
 
-import { ManagerStatusBadge } from './managers';
+import { ManagerStatusBadge, UnreadableJobNote } from './managers';
 import { UnreadableScheduleNote } from './schedule';
 // **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
 // あるので、判定と文言を書き写すと片方だけが古びる（本文がエラー文のまま出る側が
@@ -271,9 +271,18 @@ export default function Dashboard() {
               // 読み込み中は「走っているものはない」と描かない（issue #2325）。
               <Spinner />
             ) : running.length === 0 ? (
-              <Empty>いま走っているものはない。</Empty>
+              <>
+                {/* 読めない委譲を、「走っているものはない」で隠さない（issue #2345）。 */}
+                <UnreadableJobNote unreadable={managers.data.unreadable ?? []} className="m-4" />
+                <Empty>
+                  {(managers.data.unreadable ?? []).length > 0
+                    ? '読めた範囲では、走っているものはない（読めない行の状態は分からない）。'
+                    : 'いま走っているものはない。'}
+                </Empty>
+              </>
             ) : (
               <>
+                <UnreadableJobNote unreadable={managers.data.unreadable ?? []} className="m-4" />
                 <ul>
                   {running.slice(0, MANAGER_LIMIT).map((manager) => (
                     <li
