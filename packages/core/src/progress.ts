@@ -184,9 +184,7 @@ export interface ProgressForecastBasis {
 }
 
 export type ProgressUnavailableReason =
-  | 'closed_too_few'
-  | 'ledger_younger_than_window'
-  | 'history_incomplete';
+  'closed_too_few' | 'ledger_younger_than_window' | 'history_incomplete';
 
 export type ProgressForecast =
   | {
@@ -253,7 +251,9 @@ export function summarizeProgress(input: SummarizeProgressInput): ProgressSummar
   const nowMs = now.getTime();
   if (!Number.isFinite(nowMs)) throw new RangeError('summarizeProgress: now が不正な日時');
   if (!Number.isFinite(windowHours) || windowHours <= 0) {
-    throw new RangeError(`summarizeProgress: windowHours は有限の正数（受け取った値: ${windowHours}）`);
+    throw new RangeError(
+      `summarizeProgress: windowHours は有限の正数（受け取った値: ${windowHours}）`,
+    );
   }
   const fromMs = nowMs - windowHours * HOUR_MS;
   const inWindow = (iso: string | undefined): boolean => {

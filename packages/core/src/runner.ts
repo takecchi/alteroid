@@ -2431,10 +2431,16 @@ class RunnerSession {
    * 「委譲のセッション」ではないので、対象を広げない。
    *
    * **`spawnClaudeCodeProcess` は、SDK が1つの `RunnerSession` の寿命の中で
-   * 複数回呼びうる**（マネージャー本体に加えて、並列で走る作業者ごとに1回ずつ）。
+   * 複数回呼びうる**（開き直しや鍵の入れ替えで query を作り直したとき。SDK は
+   * transport を作るときに1回だけ呼ぶ——`sdk.mjs` の
+   * `this.process=this.options.spawnClaudeCodeProcess(…)`）。
    * だから pid 追跡は「セッションが1本開いた／閉じた」ではなく「委譲プロセスが
-   * 1本起きた／終わった」の粒度で行う——`runner-2` で観測された「3本並列の作業者」
-   * のような形でも、それぞれが独立したセッション ID を持つようにするためである。
+   * 1本起きた／終わった」の粒度で行う。
+   *
+   * ⚠ **作業者（Task の subagent）ごとには呼ばれない。** 作業者はマネージャーの
+   * CLI プロセスの中で走るので、作業者が起こしたプロセスはマネージャーの CLI と
+   * 同じセッション ID を持つ（#1334 の 2026-09-25T14:27Z のコメント）。
+   * 「並列の作業者がそれぞれ独立したセッション ID を持つ」とは読まないこと。
    */
   #spawnDelegationProcess(options: SpawnClaudeCodeProcessOptions): DelegationProcessHandle {
     const child = this.#spawnClaudeCodeProcessFn(options);

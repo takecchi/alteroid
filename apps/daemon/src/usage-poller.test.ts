@@ -95,6 +95,23 @@ describe('#681: 聞く間隔は「取れないと分かったか」で決まる'
     }
   });
 
+  it('知らない状態・知らない理由は、型では弾かれ、実行時は聞き続ける側へ倒れる', () => {
+    // **型の歯**: 知らない状態 / 理由は `AccountUsageState` に代入できない。増やした側が
+    // `intervalForState` の `switch` へ足さないと、`never` への代入で型検査が落ちる。
+    // 実行時（版がずれた応答が運んでくる形）は、黙って諦める側ではなく通常の間隔である。
+    // @ts-expect-error 知らない状態は型で弾かれる
+    const futureState: AccountUsageState = { state: 'future' };
+    expect(intervalForState(futureState, INTERVALS)).toBe(INTERVALS.normal);
+    // @ts-expect-error 知らない理由は型で弾かれる
+    const futureCause: AccountUsageState = {
+      state: 'unavailable',
+      at,
+      reason: 'r',
+      cause: 'future',
+    };
+    expect(intervalForState(futureCause, INTERVALS)).toBe(INTERVALS.normal);
+  });
+
   /**
    * `apiProvider` が SDK の union（8値）に無い未知の値だったとき、probe 間隔が
    * 通常（5分）のまま保たれることを、**`toAccountUsage` → `classifyLimitsUnavailable`

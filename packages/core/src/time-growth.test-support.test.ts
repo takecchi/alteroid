@@ -121,18 +121,30 @@ describe('expectNotSuperlinear', () => {
   it('大きいほうの測定の何回かに混みの波が乗っても、最小値を取るので線形は落ちない（#2214 の揺れ）', () => {
     // 小さいほうと大きいほうを交互に測る。大きいほうの最初の3回にだけ 30ms の待ちを足す
     // （器が混んだ波が大きいほうにだけ乗った状態を模す）。中央値なら比が跳ねるが、最小値は動かない。
+    //
+    // 時計は偽物を渡す（#2240）。実時間で測っていたころは、既定の repeats=5 のうち波の乗らない
+    // 大きいほうが2回しか残らず、その2回にも CI の混みが乗って比 9.70 で落ちた。ここで確かめたいのは
+    // 「波が乗った回を最小値が捨てること」という算術で、器の速さではない。
+    // 偽の時計では、仕事の長さは n / 1,000,000 ms ちょうど（小さいほう 5ms・大きいほう 20ms）で、
+    // 波の乗った回だけ 30ms 足す（50ms）。
+    let clock = 0;
     let largeCalls = 0;
     const result = expectNotSuperlinear(
       (n: number) => {
+        clock += n / 1_000_000;
         if (n >= 20_000_000) {
           largeCalls += 1;
-          if (largeCalls <= 3) busyWaitMs(30);
+          if (largeCalls <= 3) clock += 30;
         }
-        return linearWork(n);
       },
       identity,
-      { n: 5_000_000, minSmallMs: 0 },
+      { n: 5_000_000, minSmallMs: 0, now: () => clock },
     );
-    expect(result.ratio).toBeLessThan(8);
+    // 波は実際に乗っている（大きいほうを5回測り、最初の3回が 50ms）。中央値なら 50 / 5 = 10 で
+    // 既定の maxRatio=10 を踏む。
+    expect(largeCalls).toBe(5);
+    expect(result.tSmallMs).toBe(5);
+    expect(result.tLargeMs).toBe(20);
+    expect(result.ratio).toBe(4);
   });
 });
