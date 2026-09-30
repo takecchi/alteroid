@@ -13414,6 +13414,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     done.status = 'done';
 
     const reply = await h.call('manager_list', {});
+    // mgr-2 の目印が消えると `indexOf` が -1 になり、`doneEntry` は末尾の1文字になって
+    // 下の `not.toContain('⚠')` が緑のまま残る。切り出す前に在ることを確かめる。
+    expect(reply).toContain('mgr-2');
     const lostEntry = reply.slice(reply.indexOf('mgr-1'), reply.indexOf('mgr-2'));
     const doneEntry = reply.slice(reply.indexOf('mgr-2'));
 
