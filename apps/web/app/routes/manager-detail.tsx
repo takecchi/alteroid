@@ -23,6 +23,7 @@ import {
   useSendManagerMessage,
   useManager,
   useManagerTranscript,
+  ApiError,
 } from '@alteroid/swr';
 import { APPRAISAL_LABELS, formatDateTime, formatRelative, usageHref } from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
@@ -121,6 +122,16 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
   const [failure, setFailure] = useState<unknown>(undefined);
 
   const manager = data?.manager;
+  /**
+   * **「見つからない」は 404 のときだけ言う**（issue #2321）。詳細をまだ一度も読めていない
+   * まま 500・通信断で失敗したとき、失敗は上の `ErrorNote` が言う。ここで「見つからない」を
+   * 出すと、読めていないのに委譲が存在しないように読める。再検証の失敗で `data` が残って
+   * いるときは当たらず、詳細をそのまま出す。
+   */
+  const detailUnavailable =
+    data === undefined &&
+    error !== undefined &&
+    !(error instanceof ApiError && error.status === 404);
 
   return (
     <Page
@@ -191,7 +202,7 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
 
       {isLoading ? (
         <Spinner />
-      ) : manager === undefined ? (
+      ) : detailUnavailable ? null : manager === undefined ? (
         <Card>
           <Empty>見つからない。</Empty>
         </Card>
@@ -1715,6 +1726,12 @@ function Transcript({ id }: { id: string }) {
   const [open, setOpen] = useState(false);
   // 開くまで取りに行かない（長いので、見たいと言われてから読む）。
   const { data, error, isLoading } = useManagerTranscript(open ? id : null);
+  /**
+   * **取れなかったのを空と描かない**（issue #2321）。まだ一度も読めていないまま失敗した
+   * とき、失敗は上の `ErrorNote` が言う。ここで「(空)」を出すと、セッションログが空だった
+   * ように読める。本当に空の文字列が返ったときの「(空)」は残す。
+   */
+  const transcriptUnavailable = data === undefined && error !== undefined;
 
   return (
     <Card>
@@ -1732,7 +1749,7 @@ function Transcript({ id }: { id: string }) {
           <ErrorNote error={error} />
           {isLoading ? (
             <Spinner />
-          ) : (
+          ) : transcriptUnavailable ? null : (
             <pre className="max-h-[32rem] overflow-auto rounded border border-border bg-background p-2 text-[11px] text-muted-foreground">
               {data === undefined || data === '' ? '(空)' : data}
             </pre>

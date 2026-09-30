@@ -49,6 +49,12 @@ export default function Schedule() {
   const [removing, setRemoving] = useState<string | undefined>(undefined);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<unknown>(undefined);
+  /**
+   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。「登録された定期ジョブが無い」は状態の
+   * 断定になる。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Page title="スケジュールと外部イベント" description="時間起点と外部イベント起点を手で起こす">
@@ -58,7 +64,7 @@ export default function Schedule() {
         <CardHeader title="定期ジョブ" subtitle="既定で回っている。ここは待たずに試すための口" />
         {isLoading ? (
           <Spinner />
-        ) : data === undefined || data.entries.length === 0 ? (
+        ) : listUnavailable ? null : data === undefined || data.entries.length === 0 ? (
           <Empty>登録された定期ジョブが無い（`off` にしている可能性がある）。</Empty>
         ) : (
           <ul>

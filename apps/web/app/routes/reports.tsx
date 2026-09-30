@@ -141,6 +141,13 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
     そのときは本文側が取得した中の先頭に落ちる。
   */
   const selectedId = reportId ?? reports.find((report) => report.date === selectedDate)?.id;
+  /**
+   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。一覧の「まだ無い」も、右の
+   * 「日報が1件も無い」も並べない（どちらも一覧が空であることに乗っている）。再検証の
+   * 失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
+   */
+  const listUnavailable = list.data === undefined && list.error !== undefined;
 
   return (
     <Page title="日報" description="普段の接点はほぼこれだけでよい。掘りたくなったら日誌へ降りる">
@@ -171,7 +178,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
         <Card className="h-fit">
           {list.isLoading ? (
             <Spinner />
-          ) : reports.length === 0 ? (
+          ) : listUnavailable ? null : reports.length === 0 ? (
             <Empty>まだ無い。</Empty>
           ) : (
             <>
@@ -227,7 +234,7 @@ export default function Reports({ loaderData }: Route.ComponentProps) {
           )}
         </Card>
 
-        {selectedDate === undefined ? (
+        {selectedDate === undefined && listUnavailable ? null : selectedDate === undefined ? (
           <Card className="min-w-0">
             <Empty>
               日報が1件も無い。クローンが締め時刻にまとめる（スケジュールから今すぐ回せる）。
@@ -261,6 +268,12 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
     出すより、その日の日報を出すほうが人間の役に立つ）。
   */
   const report = reports.find((entry) => entry.id === reportId) ?? reports[0];
+  /**
+   * **取れなかったのを「この日の日報は無い」と描かない**（issue #2324）。本文をまだ一度も
+   * 読めていないまま失敗したとき、失敗は上の `ErrorNote` が言う。再検証の失敗で `data` が
+   * 残っているときは当たらず、本文をそのまま出す。
+   */
+  const bodyUnavailable = data === undefined && error !== undefined;
 
   return (
     <Card className="min-w-0">
@@ -272,7 +285,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
         <Spinner />
-      ) : report === undefined ? (
+      ) : bodyUnavailable ? null : report === undefined ? (
         <Empty>この日の日報は無い。</Empty>
       ) : (
         <article className="min-w-0 px-4 py-3">

@@ -28,6 +28,10 @@ export type ConversationRenderLink = (
  * 会話の一覧（会話の画面の脇の面）。
  *
  * - `newConversation` —— 「新しい会話」の口（上の帯の右）。リンクにするのは画面
+ * - `unavailable` —— 取得に失敗して1件も読めていないとき（#2323）。「まだ会話がない。」を
+ *   出さない（読めていないのに会話が無いように読める）。失敗は `error` の `ErrorNote` が
+ *   言う。再検証の失敗で一覧が残っているときは立てない（一覧をそのまま出す）。
+ *   **`items` が未取得なだけ（失敗していない）なら、従来どおり「まだ会話がない。」**
  * - `notes` —— 一覧の下に出す但し書き（何件遡ったか・先頭に届いていない・
  *   件数で落とした会話がある）。**切ったことは切ったと分かる形で言う**ので、
  *   画面が組み立てて渡す
@@ -41,6 +45,7 @@ export function ConversationList({
   renderLink,
   loading = false,
   error,
+  unavailable = false,
   notes,
   inDrawer = false,
   newConversationTabStop = false,
@@ -50,6 +55,7 @@ export function ConversationList({
   renderLink: ConversationRenderLink;
   loading?: boolean;
   error?: unknown;
+  unavailable?: boolean;
   notes?: readonly ReactNode[];
   inDrawer?: boolean;
   newConversationTabStop?: boolean;
@@ -86,7 +92,7 @@ export function ConversationList({
         <ErrorNote error={error} className="m-3" />
         {loading ? (
           <Spinner />
-        ) : items === undefined || items.length === 0 ? (
+        ) : unavailable ? null : items === undefined || items.length === 0 ? (
           <Empty>まだ会話がない。</Empty>
         ) : (
           <ul aria-label="会話">

@@ -301,6 +301,12 @@ function Runners() {
   const { data, error, isLoading } = useRunners();
   const runners = data?.runners ?? [];
   const daemonRevision = data?.daemonRevision;
+  /**
+   * **取れなかったのを0台と描かない**（issue #2324）。名簿をまだ一度も読めていないまま
+   * 失敗したとき、失敗は下の `ErrorNote` が言う。「登録された runner が無い」は状態の
+   * 断定になる。再検証の失敗で `data` が残っているときは当たらず、名簿をそのまま出す。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Card>
@@ -331,7 +337,7 @@ function Runners() {
       )}
       {isLoading ? (
         <Spinner />
-      ) : runners.length === 0 ? (
+      ) : listUnavailable ? null : runners.length === 0 ? (
         <Empty>登録された runner が無い。ローカルでは同一プロセスの runner に落ちている。</Empty>
       ) : (
         <ul>

@@ -89,19 +89,25 @@ function EnvVarList() {
   }
 
   const credentials = data?.credentials ?? [];
+  /**
+   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は下の `ErrorNote` が言う。再検証の失敗で `data` が残っているときは
+   * 当たらず、一覧をそのまま出す。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Card>
       <CardHeader
         title="一覧"
         subtitle="alteroid credential list / GET /credentials と同じもの"
-        action={<Badge>{credentials.length}</Badge>}
+        action={listUnavailable ? undefined : <Badge>{credentials.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
       <ErrorNote error={removeFailure} className="m-4" />
       {isLoading ? (
         <Spinner />
-      ) : credentials.length === 0 ? (
+      ) : listUnavailable ? null : credentials.length === 0 ? (
         <Empty>置かれた環境変数がまだ1件も無い。</Empty>
       ) : (
         <ul>

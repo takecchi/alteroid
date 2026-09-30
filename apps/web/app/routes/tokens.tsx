@@ -1007,18 +1007,24 @@ function RotationHistory() {
   const entries = (data?.entries ?? []).filter(
     (entry): entry is TokenRotationEntry => entry.type === 'token_rotation',
   );
+  /**
+   * **取れなかったのを0件と描かない**（issue #2324）。履歴をまだ一度も読めていないまま
+   * 失敗したとき、失敗は下の `ErrorNote` が言う。再検証の失敗で `data` が残っている
+   * ときは当たらず、履歴をそのまま出す。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Card>
       <CardHeader
         title="回転の履歴（エラー状況）"
         subtitle="日誌の token_rotation を新しい順で表示。event は潰さない"
-        action={<Badge>{entries.length}</Badge>}
+        action={listUnavailable ? undefined : <Badge>{entries.length}</Badge>}
       />
       <ErrorNote error={error} className="m-4" />
       {isLoading ? (
         <Spinner />
-      ) : entries.length === 0 ? (
+      ) : listUnavailable ? null : entries.length === 0 ? (
         <Empty>回転の記録がまだ1件も無い。</Empty>
       ) : (
         <ul>

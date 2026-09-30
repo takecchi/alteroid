@@ -45,3 +45,16 @@ const args = { items: [], activeId: undefined, renderLink: () => null };
 
 export const Default: Story = { args, render: () => <Demo /> };
 export const Empty: Story = { args, render: () => <Demo empty /> };
+/** 取得に失敗して1件も読めていない。「まだ会話がない。」は出さず、失敗だけを言う（#2323）。 */
+export const Unavailable: Story = {
+  args: {
+    ...args,
+    error: new Error('会話の一覧を取得できなかった'),
+    unavailable: true,
+  },
+  render: (storyArgs) => (
+    <div className="flex h-[480px]">
+      <ConversationList {...storyArgs} />
+    </div>
+  ),
+};
