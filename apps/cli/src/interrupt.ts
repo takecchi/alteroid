@@ -30,18 +30,19 @@ import { describeAuthFailure, resolveTarget } from './target.js';
  * （既定 `'unknown'`）でここへ丸投げしてよい（`chat.ts` / `inbox.ts` と同じ判断。
  * `target.ts` の `describeAuthFailure` の doc）。
  *
- * **`target.note`（未ログイン）の分岐はそのまま残す。** `reset.ts` / `access.ts` /
- * `token.ts` はこの分岐を持たない独自の `request()` ヘルパを使っているが、
- * ここは `inboxRemoveCommand`（`inbox.ts`）と同じく `createClient` を使う形なので、
- * より構造の近いそちらに揃えてある——`inboxRemoveCommand` も「未ログインなら
- * note を出して return、それ以外は throw」という同じ2段構えである。
+ * **`target.note`（未ログイン）のときも例外にする（#2456、クローン teto の判断
+ * 2026-09-30）。** 以前はここを「`inboxRemoveCommand` と同じ2段構え（未ログインなら
+ * note を出して return、それ以外は throw）に揃えたので残す」としていたが、この
+ * 判断は #2456 で上書きされた。状態を変えるつもりで叩いたのに何もせず終了コード 0 で
+ * 返ると、cron などが「済んだ」と誤読する——静かに成功に見せない側を採る。
+ * `reset.ts` / `access.ts` / `token.ts` が同じ条件で非 0 になるのとも揃う。note の文は
+ * 変えず、入口（`index.ts` の `program.parseAsync(...).catch(...)`）が stderr へ出す。
+ * 読み取り系（`usage` / `progress` / `conversations` など）は今のまま note を stdout に
+ * 出して 0 で返す。
  */
 export async function interruptCommand(): Promise<void> {
   const target = await resolveTarget();
-  if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
-    return;
-  }
+  if (target.note !== null) throw new Error(target.note);
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.clone.interrupt.$post();
   if (!response.ok) {

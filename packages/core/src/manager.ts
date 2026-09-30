@@ -6938,8 +6938,11 @@ class Pool implements ManagerPool {
     if (record === undefined) {
       return { kind: 'unavailable', reason: 'この委譲はいま像を持っていない（走行中ではない）。' };
     }
+    // **観測の時刻は、問い合わせる前に取る**（#2461）。後で取ると、遅れて
+    // 返った観測がいつも「新しい」ことになり、上書きガードが働かない。
+    const observedAt = new Date(this.#now()).toISOString();
     const outcome = await this.#probeUnpushedWork(managerId, record, options);
-    await this.#recordUnpushedWorkObservation(record, outcome, options?.source);
+    await this.#recordUnpushedWorkObservation(record, outcome, options?.source, observedAt);
     return outcome;
   }
 
@@ -7027,7 +7030,14 @@ class Pool implements ManagerPool {
    * ある（このガードがあるので、どちらが先に着いても新しいほうが勝つ）。
    * 比較は `at`（ISO8601・UTC・`Z` 終端）の辞書式比較——`runnerBacklog()` の
    * `observedAt` 比較と同じ作法。同点は新しいほうを勝たせる（`>`
-   * 厳密な超過だけを弾く条件にする）。**`source` はこの比較に加わらない**
+   * 厳密な超過だけを弾く条件にする）。
+   *
+   * **`observedAt`（観測した時刻）は、問い合わせる前に取って渡す**
+   * （`unpushedWork()`）。後で取ると、遅れて返った観測がいつも新しく見え、
+   * 門が働かない（#2461）。省くと書く時刻（`shutdown_unpushed_work` は
+   * runner が時刻を運ばないので、届いた時刻が最も近い）。
+   *
+   * **`source` はこの比較に加わらない**
    * ——新しければ経路が何であれ勝つ（古い観測を「経路が偉いから」残す形は
    * 作らない）。
    */
@@ -7035,8 +7045,9 @@ class Pool implements ManagerPool {
     record: ManagerRecord,
     outcome: ManagerUnpushedWork,
     source: UnpushedWorkObservationSource | undefined,
+    observedAt?: string,
   ): Promise<void> {
-    const at = new Date(this.#now()).toISOString();
+    const at = observedAt ?? new Date(this.#now()).toISOString();
     const observation = unpushedWorkObservationOf(outcome, at, source);
     if (
       !isUnpushedWorkObservationAtLeastAsNewAs(observation, record.job.lastUnpushedWorkObservation)

@@ -462,6 +462,50 @@ describe('inbox_remove_many（絞り込みでの一括削除。issue #972）', (
     });
   });
 
+  // **時差の無い before は断る**（#2462）。`Date.parse` はサーバーの地方時刻として読むので、
+  // 元に戻せない一括操作の境界が黙ってずれる。読める形でも1件も消さない。
+  describe.each([
+    '2026-02-01T00:00',
+    '2026-02-01T00:00:00',
+    '2026/02/01',
+    'Feb 1 2026',
+    '2026-02-01',
+  ])('7c. 時差の無い before: %s', (before) => {
+    it('断り、当たる行があっても1件も消さない', async () => {
+      const stores = createMemoryStores();
+      const event = managerEvent(0, { at: '2026-01-01T00:00:00.000Z' } as Partial<InboxEvent>);
+      await putAll(stores, [event]);
+
+      const reply = await remover(stores)({
+        types: ['manager_message'],
+        before,
+        reason: '時差の無い before',
+        dryRun: false,
+      });
+
+      expect(reply).toContain(`before に渡された「${before}」`);
+      expect(reply).toContain('時差');
+      expect((await stores.inbox.peekPending()).entries.map((r) => r.event.id)).toEqual(['evt-0']);
+    });
+  });
+
+  it('7d. 時差の付いた before（小数秒・-05:00 を含む）は通る', async () => {
+    for (const before of ['2026-02-01T00:00:00.123+09:00', '2026-01-31T19:00-05:00']) {
+      const stores = createMemoryStores();
+      const event = managerEvent(0, { at: '2026-01-01T00:00:00.000Z' } as Partial<InboxEvent>);
+      await putAll(stores, [event]);
+
+      await remover(stores)({
+        types: ['manager_message'],
+        before,
+        reason: '時差の付いた before',
+        dryRun: false,
+      });
+
+      expect((await stores.inbox.peekPending()).entries, before).toEqual([]);
+    }
+  });
+
   it('8. limit は古い側から limit 件だけを消し、残りは残す。戻り値に残件数が出る', async () => {
     const stores = createMemoryStores();
     const events = [0, 1, 2, 3, 4].map((i) => managerEvent(i));

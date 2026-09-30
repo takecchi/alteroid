@@ -249,8 +249,14 @@ function assertEntries(
      * いることに誰も気づけない（#1790）。**長さだけを言い、名前そのものは
      * メッセージに含めない**——上限超えの名前は任意の長さになりうるので、
      * エラーメッセージ自身が際限なく伸びるのを避ける。
+     *
+     * **拒むのは置く操作（空でない値）だけ。外す（空文字）のは通す**（#2445）。
+     * vault の行の形には長さの上限が無く（`credentials.ts` / pg）、#1790 より前に
+     * 保存された上限超えの名前の行が残りうる。消し口は `PUT /credentials` の空文字
+     * だけなので、ここで空文字まで拒むと、その行を二度と消せなくなる
+     * （直下の `ENV_FILE_OWNED_CREDENTIAL_NAMES` の検査と同じ理由）。
      */
-    if (entry.name.length > CREDENTIAL_NAME_MAX_LENGTH) {
+    if (entry.value.length > 0 && entry.name.length > CREDENTIAL_NAME_MAX_LENGTH) {
       throw new CredentialEntryRejectedError(
         `鍵の名前が長すぎる（${entry.name.length} 文字。上限は ${CREDENTIAL_NAME_MAX_LENGTH} ` +
           '文字——runner の受け口と同じ上限）',
@@ -431,9 +437,16 @@ export function resolveCredentialRows(
   // **正本が器の生の環境変数である名前は、ここで落とす**（直上の doc）。scope の
   // 前後どちらでもよいが、**落とす理由が scope とは無関係**（層への効かせ分けでは
   // なく「そもそも袋の持ち物ではない」）なので、条件を分けて書いてある。
+  //
+  // **名前が上限（`CREDENTIAL_NAME_MAX_LENGTH`）を超える行も落とす**（#2445）。#1790 より
+  // 前に保存された行が残りうるが、runner の受け口（`runnerSetCredentialsCommandSchema`）は
+  // 1行でも上限超えがあると配列全体を 400 で弾き、ほかの鍵の配布まで止まる。
+  // 落としたことの通知は呼び手の役目（`overlongCredentialNames`）。
   const scoped = authoritative.filter(
     (row) =>
-      !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name) && scopeAppliesTo(row.scope, target),
+      !ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(row.name) &&
+      row.name.length <= CREDENTIAL_NAME_MAX_LENGTH &&
+      scopeAppliesTo(row.scope, target),
   );
   // **「正本にその名前の行があるか」は、scope で絞る前の行で決める**（issue #1867）。
   // 器の env を最後の土台として埋めるのは「正本に行が無い」名前だけである（直上の doc）。
@@ -520,6 +533,11 @@ function resolveEntryForWrite(
   };
 }
 
+/** 名前が上限を超えていて、配らずに落とす行の名前（{@link resolveCredentialRows}）。 */
+export function overlongCredentialNames(rows: readonly StoredCredential[]): string[] {
+  return rows.map((row) => row.name).filter((name) => name.length > CREDENTIAL_NAME_MAX_LENGTH);
+}
+
 export function createCredentialService(options: CredentialServiceOptions): CredentialService {
   const { stores, runners, withheldEnvKeys, onCloneEnvShadowed } = options;
   const env = options.env ?? process.env;
@@ -564,6 +582,26 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     lastShadowSignature = signature;
     if (shadowed.length === 0) return;
     onCloneEnvShadowed(shadowed, appScopedNames);
+  }
+
+  /**
+   * **配らずに落とした上限超えの名前の行を、黙らせない**（#2445。`env-vars-boot.ts` の
+   * 「配らなかった行を黙らせない」と同じく stderr。新しい口は作らない）。同じ集合は
+   * 続けて出さない。**名前は頭と長さだけ出す**（任意の長さになりうる。値は出さない）。
+   */
+  let lastOverlongSignature = '';
+  function reportOverlong(rows: readonly StoredCredential[]): void {
+    const names = overlongCredentialNames(rows);
+    const signature = names.join('\n');
+    if (signature === lastOverlongSignature) return;
+    lastOverlongSignature = signature;
+    if (names.length === 0) return;
+    process.stderr.write(
+      `alteroidd: 名前が ${CREDENTIAL_NAME_MAX_LENGTH} 文字を超える鍵の行が正本に残っており、` +
+        `**配っていません**（runner の受け口が配列ごと弾くため）。` +
+        `消すには PUT /credentials に { name, value: "" } を送る: ` +
+        `${names.map((name) => `${name.slice(0, 32)}…（${name.length} 文字）`).join(', ')}\n`,
+    );
   }
 
   /**
@@ -644,9 +682,16 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
          * 無害な no-op である。
          */
         const removed = entries
-          .filter((entry) => entry.value.length === 0)
+          // 上限超えの名前は runner の受け口が配列ごと弾くので、外す合図にも載せない（#2445）。
+          .filter(
+            (entry) => entry.value.length === 0 && entry.name.length <= CREDENTIAL_NAME_MAX_LENGTH,
+          )
           .map((entry) => ({ name: entry.name, value: '' }));
-        const upserted = rows.filter((row) => scopeAppliesTo(row.scope, 'manager'));
+        reportOverlong(rows);
+        const upserted = rows.filter(
+          (row) =>
+            row.name.length <= CREDENTIAL_NAME_MAX_LENGTH && scopeAppliesTo(row.scope, 'manager'),
+        );
         const payload = [...upserted.map(({ name, value }) => ({ name, value })), ...removed];
 
         const pushed = await pushAll(payload);
@@ -713,6 +758,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
     const rows = await stores.credentials.list();
     reportCloneEnvShadow(rows);
     noteVaultSnapshot(rows);
+    reportOverlong(rows);
     return resolveCredentialRows(rows, env, 'manager');
   }
 

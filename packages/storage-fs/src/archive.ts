@@ -1,5 +1,5 @@
 import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import {
   MAX_UTF8_BYTES_PER_CODE_POINT,
@@ -662,10 +662,19 @@ function sanitize(value: string): string {
  * どう変えても——将来 `.` を許さなくする／許す文字を増やす、どちらの
  * 変更をしても——境界の判定はそれに引きずられない。
  *
+ * **「配下」ではなく「直下」を比べる（issue #2454）。** 以前の
+ * `resolvedPath.startsWith(resolvedDir + sep)` は配下の深い道筋も通していた
+ * ——既存の `<sid>-<stamp>.jsonl` の下を指す `'<その名前>/x'` が境界を通り、
+ * `#readMarker()` の `readFile()` が `ENOTDIR` を投げ（`ENOENT` しか missing に
+ * 倒さない）、`GET /archive/:id` / `DELETE /archive/:id`（どちらも try/catch を
+ * 持たない）で 404 のはずが 500 になっていた。archive の id はディレクトリ
+ * 直下の1ファイルの名前なので、`dirname(resolve(dir, id)) === resolve(dir)`
+ * で判定する。
+ *
  * `resolve(dir, id)` が `resolve(dir)` 自身と一致する（`id === '.'` 等）場合も
- * 「ディレクトリそのもの」であって「ディレクトリ配下の1ファイル」では
- * ないので、`false` を返す（`startsWith(resolvedDir + sep)` は一致する
- * 文字列そのものには真を返さない——境界の `sep` を含めて比べているため）。
+ * 「ディレクトリそのもの」であって「ディレクトリ直下の1ファイル」では
+ * ないので、`false` を返す（`dir` がファイルシステムの根のときは
+ * `dirname(根) === 根` になるので、一致そのものを別に弾く）。
  *
  * `resolve()` が例外を投げる入力（null バイトを含む文字列等）も、境界の
  * 外にあるのと同じ扱い（`false`）にする——`sanitize(id) !== id` はこの種の
@@ -679,5 +688,5 @@ function isWithinArchiveDir(dir: string, id: string): boolean {
     return false;
   }
   const resolvedDir = resolve(dir);
-  return resolvedPath.startsWith(resolvedDir + sep);
+  return resolvedPath !== resolvedDir && dirname(resolvedPath) === resolvedDir;
 }

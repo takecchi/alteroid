@@ -54,7 +54,7 @@ export interface PracticeSummary {
 }
 
 export async function practiceListCommand(): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const { client } = conn;
   const response = await client.practices.$get();
@@ -111,7 +111,7 @@ export async function practiceShowCommand(
   slug: string,
   options: { version?: number } = {},
 ): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const { client } = conn;
 
@@ -155,7 +155,7 @@ export async function practiceShowCommand(
  * `alteroid practice show <slug> --version <n>` で読む。
  */
 export async function practiceHistoryCommand(slug: string): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const { client } = conn;
   const response = await client.practices[':slug'].versions.$get({ param: { slug } });
@@ -193,7 +193,7 @@ export async function practiceEditCommand(
   slug: string,
   options: { kind?: string; title?: string } = {},
 ): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const current = await read(client, target, slug);
@@ -243,7 +243,7 @@ export async function practiceSetCommand(
   slug: string,
   options: { file?: string; kind?: string; title?: string } = {},
 ): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const current = await read(client, target, slug);
@@ -282,7 +282,7 @@ export async function practiceSetCommand(
  * いた。
  */
 export async function practiceRemoveCommand(slug: string): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const response = await client.practices[':slug'].$delete({ param: { slug } });
@@ -309,10 +309,17 @@ export async function practiceRemoveCommand(slug: string): Promise<void> {
  * **`target` も一緒に返す。** 書き込み系（`write` / `practiceRemoveCommand`）
  * が HTTP の失敗を `describeAuthFailure` で判定するのに要る（#1641。
  * `memory.ts` の `connect` と同じ理由）。
+ *
+ * **`access: 'write'` のときは、未ログインの note を例外にする**（#2456、クローン
+ * teto の判断 2026-09-30。`memory.ts` の `connect` と同じ）。読み取り系（`'read'`）は
+ * 今のまま、note を stdout に出して `null` を返す。
  */
-async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
+async function connect(
+  access: 'read' | 'write',
+): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
+    if (access === 'write') throw new Error(target.note);
     stdout.write(`${target.note}\n`);
     return null;
   }
