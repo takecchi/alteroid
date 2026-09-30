@@ -470,6 +470,29 @@ describe('引き取りの関門（貸し出し期限）', () => {
   });
 
   /**
+   * **台帳の書き込みの例外は、drizzle の形（`Failed query: …` の次の行に `params:`）で
+   * 値を運びうる（#2483）。** 引き取らなかった理由は `decision` の `grounds` として
+   * 日誌に載り、クローン（`journal_read`）にも人にも出る。2行目以降が出てはならない。
+   */
+  it('貸し出しを書けなかった理由の日誌に、例外の2行目（params）の値は出ない', async () => {
+    const h = await harnessOf();
+    await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
+    h.advance(LEASE_DRAIN_MS + LEASE_MARGIN_MS + 1_000);
+    h.breakWrites('Failed query: update "jobs" set "lease" = $1\nparams: FAKE_SECRET_VALUE_2483');
+
+    await h.pool.restore();
+
+    const decided = (await h.journal()).filter((entry) => entry.type === 'decision');
+    const text = JSON.stringify(decided);
+    // 読めること（理由の1行目は残る）と、値が出ないこと。
+    expect(text).toContain('貸し出しを台帳へ書けなかったので引き取らない');
+    expect(text).toContain('Failed query');
+    expect(text).not.toContain('FAKE_SECRET_VALUE_2483');
+
+    await h.close();
+  });
+
+  /**
    * **「まだ」と「無理」を言い分ける。** クローンが読むのはこの文であって、内部の
    * 真偽値ではない。同じ文言にすると、待てば通る委譲を新しく起こし直して**同じ仕事が
    * 2本になる**（この関門が防ごうとしているものそのもの）。

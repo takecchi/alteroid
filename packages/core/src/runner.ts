@@ -44,13 +44,14 @@ import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
 import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
-import { buildDenialInputHead, matchInputOf } from './denial-input-head.js';
+import { buildDenialInputHead, matchInputOf, redactErrorText } from './denial-input-head.js';
 import {
   noteBackgroundFailure,
   noteMissingRecordSource,
   noteUnclassifiedFailure,
   noteUnclassifiedFailuresSummary,
   noteUnreadableRecord,
+  reasonOf,
 } from './dropped-record.js';
 import { ROTATABLE_CREDENTIAL_KEYS } from './credentials.js';
 import type { CredentialEntry, CredentialFingerprint, CredentialStore } from './credentials.js';
@@ -779,7 +780,7 @@ class Host implements RunnerHost {
           this.#emit({
             type: 'note',
             managerId,
-            text: `貸し出し期限の自己失効に失敗した（このセッションは畳まれていない可能性がある）: ${String(error)}`,
+            text: `貸し出し期限の自己失効に失敗した（このセッションは畳まれていない可能性がある）: ${reasonOf(error)}`,
           });
         });
     }
@@ -2705,10 +2706,16 @@ class RunnerSession {
       // `runner-protocol.ts` が `reasonType` の doc で禁じている形になる。だから
       // **発生点で分類を作り、`reason` とは別の欄で並べて運ぶ**（`system-error.ts`）。
       //
-      // **`reason` は1文字も変えない。** ここを変えると、この一文を読んでいる
-      // 既存の受け手（受信箱・日誌・`closed_failed` の合成通知）が一斉に変わる。
+      // **`reason` の人が読む一文は、今までと1文字も変えない**（受信箱・日誌・
+      // `closed_failed` の合成通知がこの一文を読む。`runner-closed-system-error.test.ts`
+      // の「reason はこれまでと変わらない」）。ただし素の `String(error)` のままだと、
+      // 値を運ぶ例外（drizzle の `params:`、URL の資格など）がそのまま日誌と受信箱へ
+      // 出る（#2483）。そこで `reasonOf`（構造化の欄を後ろに足すので文が変わる）では
+      // なく、`String(error)` に伏せ字（`redactErrorText`）だけを通す——普通の例外では
+      // 文は変わらず、値を運ぶ部分だけが伏せられる。`systemError` は `error` から
+      // 直に取るので、この文字列には依らない。
       const systemError = systemErrorFactsOf(error);
-      const reason = String(error);
+      const reason = redactErrorText(String(error), process.env);
       // **`#stopped` なら、ここから下は何もしない（#1589）。** 止めているのは
       // `stop()` であり、畳むのも `stop()` の仕事である —— `stop()` は
       // `#query.close()` の後に `await this.#reader` でこの `#read` を待って
@@ -5651,7 +5658,7 @@ class RunnerSession {
         this.#emit({
           type: 'note',
           managerId: this.#id,
-          text: `SubagentStop の観測に失敗した: ${String(error)}`,
+          text: `SubagentStop の観測に失敗した: ${reasonOf(error)}`,
         });
       } catch {
         // ここまで失敗したら、もう上げる手段が無い。黙って諦める
@@ -5997,7 +6004,7 @@ class RunnerSession {
         this.#emit({
           type: 'note',
           managerId: this.#id,
-          text: `Stop の観測に失敗した: ${String(error)}`,
+          text: `Stop の観測に失敗した: ${reasonOf(error)}`,
         });
       } catch {
         // ここまで失敗したら、もう上げる手段が無い。黙って諦める

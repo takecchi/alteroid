@@ -2801,6 +2801,18 @@ async function appendJournalOrThrow(
 }
 
 /**
+ * 例外の**種類（クラス名）だけ**を返す。`message` も `reasonOf` も使わない
+ * （#2483。`apps/daemon/src/app.ts` の `kindOfError` と同じ線）。
+ *
+ * **鍵・プロファイルのスクリプトを運ぶ口（`profile_write`）の打ち消しの
+ * `grounds` 専用。** `profile.apply` の例外は、失敗したクエリの `params:` に
+ * スクリプト全文を添えうる。1行目だけでも断片が出うるので、名前だけを書く。
+ */
+function errorKindOf(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+/**
  * `stores.journal.append` を、失敗しても投げずに跡だけ残して続ける形で呼ぶ
  * （`apps/daemon/src/app.ts` の `appendJournalOrDrop` と同じ役目。issue #2145）。
  *
@@ -9482,7 +9494,7 @@ export function createCloneTools(context: ToolContext) {
               error instanceof ProfileRollbackFailedError
                 ? `実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）: ${summary}`
                 : `実行環境プロファイルを差し替えられなかった: ${summary}`,
-            grounds: `差し替えようとしたが、状態の変更が失敗した: ${String(error)}`,
+            grounds: `差し替えようとしたが、状態の変更が失敗した: ${errorKindOf(error)}`,
           });
           throw error;
         }
@@ -10226,7 +10238,7 @@ export function createCloneTools(context: ToolContext) {
             decision: `マネージャーを起こせなかった${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
             }: ${request}`,
-            grounds: `委譲しようとしたが、状態の変更が失敗した: ${String(error)}`,
+            grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
           });
           throw error;
         }
