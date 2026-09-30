@@ -289,7 +289,30 @@ interface SetupOptions {
   tokenIdentity?: () => { tokenId: string; generation: number } | undefined;
   /** 名乗ってきた runner へ鍵を降ろす口（Issue #393）。 */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
+  /**
+   * 合流窓の長さ（`ManagerPoolOptions.synthesizedNoticeWindowMs`）。**省略時は渡さない**
+   * ＝ 本番と同じ既定（`resolveSynthesizedNoticeWindowMs()`、3000ms）のまま。窓の後に
+   * 届く知らせの**中身**を測るテストだけが `TEST_NOTICE_WINDOW_MS` を渡す。
+   */
+  synthesizedNoticeWindowMs?: number;
 }
+
+/**
+ * **合流窓の長さを、窓の満了を待つテストだけ既定（3000ms）ではなく短く取る**（`setup()` /
+ * `setupRejecting()` に明示で渡したときだけ効く。渡さないテストは既定のまま）。
+ *
+ * 渡すテストが測っているのは「窓の後に受信箱へ届く**中身**」（戻せなかった知らせの本文・
+ * 台帳の `lost`・一覧の `live`）であって、窓が何ミリ秒かではない。窓そのもの（既定
+ * 3000ms・窓の中の合流・窓の外の別扱い）は `synthesized-notice-window-ms.test.ts` と
+ * `manager-synthesized-notices.test.ts` が持つ。`runner-failure.test.ts` の
+ * `TEST_NOTICE_WINDOW_MS` と同じ理由・同じ値（PR #2302）。
+ *
+ * **0 に近づけすぎない。** 渡すテストの知らせは、1回の `restore()` の中で連続して積まれる
+ * （数ミリ秒差）ので 100ms で1つの束に収まる。仮に器の混雑で束が割れても、各テストは
+ * 本文の一部（`戻せなかった` / `生ログ` / `落ちた`）で `find` してからその1通の中身を
+ * 見るので、件数を数える検算には依らない。
+ */
+const TEST_NOTICE_WINDOW_MS = 100;
 
 /**
  * デーモン側のプール＋同一プロセスの runner。
@@ -341,6 +364,9 @@ function setup(
       : { onUsageObservation: options.onUsageObservation }),
     ...(options.tokenIdentity === undefined ? {} : { tokenIdentity: options.tokenIdentity }),
     ...(options.syncRunnerToken === undefined ? {} : { syncRunnerToken: options.syncRunnerToken }),
+    ...(options.synthesizedNoticeWindowMs === undefined
+      ? {}
+      : { synthesizedNoticeWindowMs: options.synthesizedNoticeWindowMs }),
   });
   return { pool, stores, sessions, inbox, runner };
 }
@@ -3832,7 +3858,11 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     const stores = createMemoryStores();
     await stores.jobs.putJob(runningJob);
     const fake = swappableRunner();
-    const s = setup(undefined, { stores, runner: fake.runner });
+    const s = setup(undefined, {
+      stores,
+      runner: fake.runner,
+      synthesizedNoticeWindowMs: TEST_NOTICE_WINDOW_MS,
+    });
 
     await s.pool.restore();
     let attempts = 0;
@@ -4062,6 +4092,8 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
      * 記憶（`#unresumable`）は引き継がれない — そこが問題の在り処である。
      */
     reuse?: Stores,
+    /** 省略時は既定の窓（3000ms）のまま。窓の後に届く知らせを待つテストだけが渡す。 */
+    synthesizedNoticeWindowMs?: number,
   ) {
     const { fn, opened } = resumeRejectingSdk(how);
     const sessionStore = {
@@ -4083,6 +4115,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
       post: (event) => inbox.push(event),
       runners: registry,
       profile: createProfileService({ stores, runners: registry }),
+      ...(synthesizedNoticeWindowMs === undefined ? {} : { synthesizedNoticeWindowMs }),
     });
     return { pool, stores, inbox, opened };
   }
@@ -4091,7 +4124,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // **黙って引き下がらない。** 器が落ちたことを理由に仕事を止めてよいのは
     // 承認待ちのときだけである（PRD「自律」）。session_id が腐っていても、
     // 生ログはデーモンが預かっているのだから、そこから組み立て直せる。
-    const s = setupRejecting(savedLog);
+    const s = setupRejecting(savedLog, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
@@ -4134,7 +4167,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
     const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
     const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
-    const s = setupRejecting(savedLog);
+    const s = setupRejecting(savedLog, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob({ ...runningJob, request: hugeRequest, lastReport: hugeReport });
 
     await s.pool.restore();
@@ -4174,7 +4207,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // 投げ直しても同じ答えしか返らない失敗である。**黙って挑み続けない** —
     // 同じ session_id の resume が繰り返されると、同じ障害通知が受信箱に積み上がる
     // だけで、誰も状況を知れないまま台帳の `running` が残る。
-    const s = setupRejecting(null);
+    const s = setupRejecting(null, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
@@ -4214,7 +4247,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // 一度それで落ちた）。抜粋に絶対に現れない一意な目印を末尾へ置く。
     const hugeRequest = 'これは巨大な依頼文である。'.repeat(300) + REQUEST_TAIL_MARKER;
     const hugeReport = 'これは巨大な直近の報告である。'.repeat(300) + REPORT_TAIL_MARKER;
-    const s = setupRejecting(null);
+    const s = setupRejecting(null, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob({ ...runningJob, request: hugeRequest, lastReport: hugeReport });
 
     await s.pool.restore();
@@ -4260,7 +4293,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
    * 知らせが「起こし直せ」で終わると、済んだ仕事をもう一度走らせる。
    */
   it('戻せなかった知らせは、成果の有無を断定せずリモートを確かめさせる', async () => {
-    const s = setupRejecting(null);
+    const s = setupRejecting(null, 'no-conversation', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
@@ -4308,7 +4341,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // ここを「落ちたら作り直す」に広げると、コミットや PR を出した後の失敗で
     // 同じ作業を記録から二度走らせることになる。resume の失敗として扱うのは
     // **このセッションがまだ何もしていないとき**だけである。
-    const s = setupRejecting(savedLog, 'after-work');
+    const s = setupRejecting(savedLog, 'after-work', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
@@ -4338,7 +4371,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // しか無い。デプロイのたびに同じ死体へ話しかけ、同じ失敗の通知が積み上がる。
     // **戻せなかった仕事が「終わった」に見えるのが最も悪い** — 失われた仕事が
     // 完了として片付き、誰も起こし直さない。
-    const first = setupRejecting(null, 'error-result');
+    const first = setupRejecting(null, 'error-result', undefined, TEST_NOTICE_WINDOW_MS);
     await first.stores.jobs.putJob(runningJob);
 
     await first.pool.restore();
@@ -4413,7 +4446,7 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     // ので、そのとき像は既に `#records` に居る。ここで `status: lost` /
     // `attached: false` へ落としても、一覧が像を無条件に `live: true` と数えるなら
     // 表示は変わらない。**`#load()` を直すだけでは塞がらない**のはこの経路である。
-    const s = setupRejecting(null, 'error-result');
+    const s = setupRejecting(null, 'error-result', undefined, TEST_NOTICE_WINDOW_MS);
     await s.stores.jobs.putJob(runningJob);
 
     await s.pool.restore();
