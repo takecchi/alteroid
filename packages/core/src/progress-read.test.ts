@@ -45,7 +45,6 @@ function progressTool(stores: ReturnType<typeof createMemoryStores>) {
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
-    env: {},
   });
   const found = tools.find((entry) => entry.name === 'progress_read');
   if (!found) throw new Error('progress_read が登録されていない');

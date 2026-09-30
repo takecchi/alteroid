@@ -8294,7 +8294,7 @@ export function createCloneTools(context: ToolContext) {
         '積み上がり（未了の件数・起点別・齢）・実施中（委譲）・窓の中の消化・見込みを返す。',
         '**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。取れないものは 0 にせず、状態か理由で言う。',
         '**GitHub（Issue / PR / CI）は観測していない**——出力にある「観測していない」は 0 件という意味ではない。',
-        '観測時刻を出力に含む。人間が \`alteroid progress\` や GET /progress で見るものと同じ数・同じ文である。',
+        '観測時刻を出力に含む。人間が `alteroid progress` や GET /progress で見るものと同じ数・同じ文である。',
       ].join(' '),
       {
         windowHours: z
