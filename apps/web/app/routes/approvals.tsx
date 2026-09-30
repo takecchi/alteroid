@@ -94,6 +94,13 @@ export default function Approvals() {
     ? data.approvals
     : undefined;
   const approvalsMalformed = data !== undefined && approvalsList === undefined;
+  /**
+   * **取れなかったのを0件と描かない**（issue #2313）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「答えを待っているものはない」を
+   * 並べると、読めていないのに承認待ちが無いように読め、承認を見落とす。再検証の失敗で
+   * `data` が残っているときは当たらず、一覧をそのまま出す（#2266 と同じ）。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
   // `unreadable` は、読めない行が1件以上あるときだけ載る欄（#2298）。形が違えば無いものとして扱う
   // （読めた一覧まで巻き込んで落とさない）。
   const unreadable: UnreadableApproval[] = Array.isArray(data?.unreadable) ? data.unreadable : [];
@@ -196,7 +203,7 @@ export default function Approvals() {
 
       {isLoading ? (
         <Spinner />
-      ) : approvalsMalformed ? (
+      ) : listUnavailable ? null : approvalsMalformed ? (
         // **0件と描かない**（issue #2308）。応答は届いたが、一覧の形をしていない。
         <ErrorNote
           error={

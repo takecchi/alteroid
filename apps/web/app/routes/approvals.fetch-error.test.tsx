@@ -6,7 +6,7 @@
  * 承認を見落とす原因になる（AGENTS.md の地雷「取れない軸に 0 の行を作る」）。形の違う応答は
  * `approvals.malformed.test.tsx`（#2308）が見ている。こちらは通信・サーバの失敗である。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -74,5 +74,39 @@ describe('承認待ちの一覧の取得に失敗したとき（issue #2313）',
       await screen.findByText(/答えを待っているものはない。クローンは進んでいる。/),
     ).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('再検証の失敗で一覧が読めたまま残っているときは、一覧を隠さない（失敗は注記で知らせる）', async () => {
+    let calls = 0;
+    stubApprovals(() => {
+      calls += 1;
+      if (calls === 1) {
+        return json({
+          approvals: [
+            {
+              id: 'a-1',
+              createdAt: '2026-08-19T10:00:00.000Z',
+              updatedAt: '2026-08-19T10:00:00.000Z',
+              question: '本番に出してよいか',
+            },
+          ],
+        });
+      }
+      return json({ error: 'internal' }, 500);
+    });
+    renderPage();
+
+    expect(await screen.findByText('本番に出してよいか')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    // 再検証を起こす（SWR は focus で再検証する。足場は throttle 0。chat.revalidate-error.test.tsx と同じ）。
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(calls).toBeGreaterThanOrEqual(2);
+    // 読めていた一覧は消えていない。
+    expect(screen.getByText('本番に出してよいか')).toBeTruthy();
   });
 });
