@@ -472,7 +472,7 @@ export function lastSessionCall(calls: FakeCall[]): FakeCall {
  * 壁時計の ms ではなく macrotask の tick 数で締め切れば負荷に依らない、と考えたが、
  * **この歯は本物のタイマーを跨ぐ** —— `fakeSdk` の `delayMs` は 60 / 120 / 150 /
  * 200 / 250 / 1500 ms が実在し、`setTimeout` で本物の遅延を作る
- * （`grep -Fn -- 'delayMs: 1500' packages/core/src/clone.test.ts`）。tick で回すと、
+ * （`grep -Fn -- 'delayMs: 1500' packages/core/src/clone-memory-and-commitment-fixes.test.ts`）。tick で回すと、
  * タイマーが発火するまで tick を空回りで使い切る。
  *
  * ## いま残っている締め切りは何か（⚠ 賭けが消えたのではなく、1本に集約された）
@@ -634,7 +634,8 @@ export async function waitForTerminal(events: ChatStreamEvent[]): Promise<void> 
  * **壁時計でポーリングしていた頃は、この窓を実時間が黙って埋めていた。**
  * `waitForTerminal` / `waitFor` が出来事を同期でつかむ形（#1220）になり、
  * テストの続きがほぼ同じ tick で走るようになったことで、**この窓に入ったまま
- * 次のコードが動く**ことが実測で確認できた（`packages/core/src/clone.test.ts`
+ * 次のコードが動く**ことが実測で確認できた（旧 `packages/core/src/clone.test.ts`。いまは
+ * `packages/core/src/clone-quota-hold.test.ts`
  * の「受信箱が閉じた後に解除の印が残っていても、受信箱のループを殺さない」が
  * これを踏んで `Test timed out` になっていた——原因は `stop()` が `#query` を
  * まだ非 null と見て蒸留を待ち、その間に届いていた次の合図の解除が先に走って
