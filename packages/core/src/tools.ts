@@ -3518,6 +3518,26 @@ function unobservedOutcomeLine(manager: ManagerSummary): string | null {
 }
 
 /**
+ * `manager_list` の「直近の報告（… 受信、⚠ status 食い違い）」に添える印の生成元
+ * （Issue #2432）。判定は `describeReportDrift`、ここは印の字面だけを持つ。CLI の
+ * `/managers` も同じ関数を呼ぶ。食い違いが無い・欄が無い（古い daemon）ときは `null`。
+ * `now` は呼び出し側が渡す（純関数のまま保つ）。
+ */
+export function describeReportDriftMark(
+  manager: Pick<ManagerSummary, 'managerId' | 'lastReportAt' | 'lastReportStatus' | 'status'>,
+  now: Date,
+): string | null {
+  const drift = describeReportDrift({
+    managerId: manager.managerId,
+    lastReportAt: manager.lastReportAt,
+    lastReportStatus: manager.lastReportStatus,
+    status: manager.status,
+    now,
+  });
+  return drift === '' ? null : '⚠ status 食い違い（manager_report で詳細）';
+}
+
+/**
  * {@link managerActivityInputOf} が読む欄だけを名指しした型。CLI（`GET /managers` の
  * 応答は `ManagerSummary` の全欄を持たない）が `describeTurnEnd` /
  * `describeToolUseStall` を同じ関数のまま呼べるようにするため（Issue #2428）。
@@ -11052,14 +11072,9 @@ export function createCloneTools(context: ToolContext) {
           // 1本増やすと予算に張り付いている一覧では出る件数が減る）。
           // 判定のコピーは作らない——生成元は `describeReportDrift` 1箇所で、
           // `manager_report` と同じ字面の元から取る（真偽だけをここで使う）。
-          const drift = describeReportDrift({
-            managerId: manager.managerId,
-            lastReportAt: manager.lastReportAt,
-            lastReportStatus: manager.lastReportStatus,
-            status: manager.status,
-            now,
-          });
-          const driftMark = drift === '' ? '' : '、⚠ status 食い違い（manager_report で詳細）';
+          // 印の字面も同じ関数（`describeReportDriftMark`）から取る（CLI の `/managers` も呼ぶ。#2432）。
+          const drift = describeReportDriftMark(manager, now);
+          const driftMark = drift === null ? '' : `、${drift}`;
           // **Issue #1394 段⑤: 「手が空いた委譲を畳む候補」を表示だけする。**
           // 畳む操作そのものは作らない——判定は `manager-fold-candidate.ts` の
           // `describeManagerFoldCandidate` 1箇所（このファイルでは判定を

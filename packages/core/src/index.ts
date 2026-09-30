@@ -1133,6 +1133,7 @@ export {
   createCloneTools,
   // **字面の生成元を1つに保つために出す（#2428）。** `apps/cli` の `/managers` が
   // `manager_list`（`tools.ts`）と同じ判定・同じ字面の ⚠ を出すため。
+  describeReportDriftMark,
   describeToolUseStall,
   describeTurnEnd,
   isFoldedTurnReport,
