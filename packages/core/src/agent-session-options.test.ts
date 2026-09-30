@@ -596,7 +596,8 @@ describe('マネージャー（runner）へ渡す Options', () => {
 
 describe('クローンの蒸留サイドクエリへ渡す Options', () => {
   /**
-   * `clone.test.ts` の `firePreCompact` と同じ形。`PreCompact` フックを直接
+   * `clone-precompact-and-distill-tail.test.ts`（旧 `clone.test.ts`。#1744 で
+   * 分割済み）の `firePreCompact` と同じ形。`PreCompact` フックを直接
    * 叩いて `#distillFromTranscript`（別の短命セッション）を実際に走らせる。
    * これが `queryFn` を2回目に呼ぶ呼び出しになり、`calls[1]` に蒸留側の
    * `options` が積まれる。

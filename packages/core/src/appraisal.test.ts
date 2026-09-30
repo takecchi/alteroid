@@ -10,7 +10,10 @@ import type { CommitmentList } from './store.js';
 
 const T1 = '2026-08-01T00:00:00.000Z';
 
-/** 台帳の1件を組み立てる（`clone.test.ts` の `commitment` ヘルパと同じ形）。 */
+/**
+ * 台帳の1件を組み立てる（`clone-interrupt-and-ledger.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の `commitment` ヘルパと同じ形）。
+ */
 function commitment(id: string, overrides: Partial<Commitment> = {}): Commitment {
   return {
     id,
