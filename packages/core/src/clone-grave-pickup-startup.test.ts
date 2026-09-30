@@ -115,6 +115,11 @@ describe('クローン — 起動時に墓標を拾い直す（#564 E1b）', () 
     expect(texts.some((text) => text.includes('前の器が記憶へ移せなかった区間を拾い直す'))).toBe(
       false,
     );
+    // 消したバイト数には、置き場で解放した量ではないという単位の断りが付く
+    // （#2074 — `archive_remove_many` と同じ正本）。
+    const removedLine = texts.find((text) => text.includes('退避の本文が消されている'));
+    expect(removedLine).toContain('置き場で解放した量ではなく');
+    expect(removedLine).toContain('storedBytes');
 
     await s.clone.stop();
   });

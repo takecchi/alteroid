@@ -21,6 +21,7 @@ import {
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
+import { ARCHIVE_REMOVED_BYTES_UNIT_NOTE } from '@alteroid/core';
 import {
   CGROUP_EVENTS_UNKNOWN_NOTE,
   formatCgroupEventsNote,
@@ -1368,7 +1369,7 @@ export async function runSlashCommand(
             : '';
         stdout.write(
           `${result.alreadyRemoved ? '前から消されていました' : '消しました'}` +
-            `（${result.bytes}バイト）${overrideNote}\n`,
+            `（${result.bytes}バイト。${ARCHIVE_REMOVED_BYTES_UNIT_NOTE}）${overrideNote}\n`,
         );
         return 'ok';
       }

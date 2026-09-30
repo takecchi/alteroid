@@ -12692,6 +12692,54 @@ describe('archive_remove（退避済み生ログの本文を消す）', () => {
     expect(reply).toContain('前から消されている');
   });
 
+  /**
+   * ⚠️ ここだけは文言そのものを見る——測りたいのが、消したバイト数の断りが
+   * 単位を誤読させないことそのものだから（Issue #2074 / PR #2076 の残り）。
+   * 消した量を出す口（単体削除の応答・日誌・二重削除・`manager_transcript`・
+   * `manager_report`）が、`archive_remove_many` と同じ断り（素の UTF-8
+   * バイト数で、`storedBytes` とは別の単位）を1つの正本から出すことを測る。
+   */
+  it('消したバイト数に、置き場で解放した量ではないという単位の断りが付く（応答・日誌・二重削除。#2074）', async () => {
+    const h = harness();
+    const archiveId = (await h.stores.archive.archive('sess-unit', 'BODY\n')).id;
+
+    const first = await h.call('archive_remove', { archiveId, summary: '単位の断り' });
+    const second = await h.call('archive_remove', { archiveId, summary: '2回目' });
+    const entries = await h.stores.journal.list({ types: ['decision'] });
+    const journaled = entries.find((e) => e.type === 'decision' && e.decision.includes(archiveId));
+
+    for (const [label, text] of [
+      ['単体削除の応答', first],
+      ['二重削除の応答', second],
+      ['日誌', journaled?.type === 'decision' ? journaled.decision : ''],
+    ] as const) {
+      expect(text, label).toContain('置き場で解放した量ではなく');
+      expect(text, label).toContain('storedBytes');
+    }
+  });
+
+  it('manager_transcript / manager_report が tombstone を言うときも、バイト数に単位の断りが付く（#2074）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscriptRemoved('mgr-1', {
+      archiveId: 'mgr-1-removed-0001.jsonl',
+      removedAt: '2026-01-02T00:00:00.000Z',
+      bytes: 1234567,
+    });
+
+    const transcript = await h.call('manager_transcript', { managerId: 'mgr-1' });
+    const report = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    for (const [label, text] of [
+      ['manager_transcript', transcript],
+      ['manager_report', report],
+    ] as const) {
+      expect(text, label).toContain('1,234,567');
+      expect(text, label).toContain('置き場で解放した量ではなく');
+      expect(text, label).toContain('storedBytes');
+    }
+  });
+
   /** ⭐ 走行中のマネージャーの退避は、クローンの道具からも消せない（#698）。 */
   it('走行中のマネージャーの退避は消せない（どのマネージャーが走行中かを言う）', async () => {
     const h = harness();

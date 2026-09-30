@@ -68,6 +68,7 @@ import {
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
 import { readConversationWindow } from './conversation.js';
+import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
 import {
   EXCHANGE_KIND_DECISION_PREFIX,
   EXCHANGE_KIND_FAILURE_PREFIX,
@@ -7725,7 +7726,7 @@ class Clone implements CloneHost {
       const text =
         result.kind === 'removed'
           ? `記憶へ移せていない区間の退避の本文が消されているので、印を下ろした: ${grave.archiveId}` +
-            `（${result.removedAt} に ${result.bytes} バイトを落とした。` +
+            `（${result.removedAt} に ${result.bytes} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
             '⚠️ この区間は記憶へ移せていない）'
           : `記憶へ移せていない区間の退避が見つからないので、印を下ろした: ${grave.archiveId}` +
             '（器を作り直した、あるいはそもそも積まれなかった。⚠️ この区間は記憶へ移せていない）';

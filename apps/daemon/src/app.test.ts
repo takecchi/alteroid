@@ -1815,6 +1815,18 @@ describe('HTTP API', () => {
     });
   });
 
+  it('DELETE /archive/:id が日誌へ残す決定文にも、バイト数の単位の断りが付く（#2074）', async () => {
+    const id = (await stores.archive.archive('sess-remove-unit', 'BODY\n')).id;
+
+    await app.request(`/archive/${id}`, { method: 'DELETE' });
+
+    const entries = await stores.journal.list({ types: ['decision'] });
+    const decision = entries.find((e) => e.type === 'decision' && e.decision.includes(id));
+    const text = decision?.type === 'decision' ? decision.decision : '';
+    expect(text).toContain('置き場で解放した量ではなく');
+    expect(text).toContain('storedBytes');
+  });
+
   it('DELETE /archive/:id は無い id を黙って成功にしない（404）', async () => {
     const response = await app.request('/archive/居ない', { method: 'DELETE' });
     expect(response.status).toBe(404);

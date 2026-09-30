@@ -5163,6 +5163,22 @@ describe('chat の /archive', () => {
       expect(args.query).toStrictEqual({});
     });
 
+    it('消したバイト数には、置き場で解放した量ではないという単位の断りが付く（#2074）', async () => {
+      for (const alreadyRemoved of [false, true]) {
+        const read = captureStdout();
+        const { client } = stubClient({
+          archiveRemoveBody: { ok: true, id: 'sess-1.jsonl', bytes: 1234, alreadyRemoved },
+        });
+
+        await runSlashCommand('/archive remove sess-1.jsonl', client, emptyListed());
+
+        expect(read(), `alreadyRemoved=${String(alreadyRemoved)}`).toContain(
+          '置き場で解放した量ではなく',
+        );
+        expect(read(), `alreadyRemoved=${String(alreadyRemoved)}`).toContain('storedBytes');
+      }
+    });
+
     it('前から消されていた（alreadyRemoved）はその旨を出す', async () => {
       const read = captureStdout();
       const { client } = stubClient({

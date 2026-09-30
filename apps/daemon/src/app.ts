@@ -29,6 +29,7 @@ import type {
   TokenPoolService,
 } from '@alteroid/core';
 import {
+  ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   MCP_SERVER_NAME,
   mcpServerNames,
   mcpServersFingerprintOf,
@@ -6397,7 +6398,7 @@ export function createApp(deps: AppDeps) {
           {
             type: 'decision',
             decision:
-              `退避済み生ログの本文を消した: ${id}（${result.bytes} バイト。` +
+              `退避済み生ログの本文を消した: ${id}（${result.bytes} バイト。${ARCHIVE_REMOVED_BYTES_UNIT_NOTE}。` +
               `${result.kind === 'already' ? '前から消されていた' : 'いま消した'}）` +
               overrideNote,
             grounds:

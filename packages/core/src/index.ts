@@ -561,6 +561,10 @@ export {
  * ここ（`@alteroid/core` の公開バレル）を経由しないと届かない。
  */
 export { countCodePoints, tailByCodePoints } from './excerpt.js';
+export {
+  ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
+  describeArchiveRemovedBytesUnit,
+} from './archive-removed-bytes.js';
 /**
  * `archive` を絞り込んで一括で tombstone する対象を選ぶ純関数（#698）。
  *

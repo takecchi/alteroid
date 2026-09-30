@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
+import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
+
 import {
   bySpeaker,
   collectConversations,
@@ -1564,7 +1566,7 @@ async function describeMissingReport(
     // 消されている、という3つ目の状態。
     return (
       `${base} 生ログは退避されていたが本文が消されている` +
-      `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした。` +
+      `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
       `archive id: ${result.archiveId}）。現物は確かめられない。`
     );
   }
@@ -12170,7 +12172,7 @@ export function createCloneTools(context: ToolContext) {
           // で落とされている。「どこにも無かった」ではなく「消された」である。
           return text(
             `マネージャー ${managerId} の生ログは退避されていたが、本文は消されている` +
-              `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした。` +
+              `（${result.removedAt} に ${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}。` +
               `archive id: ${result.archiveId}）。` +
               '走行中の runner のディスク・預かったセッションの生ログにも見当たらなかった。',
           );
@@ -12326,7 +12328,7 @@ export function createCloneTools(context: ToolContext) {
         if (result.kind === 'already') {
           return text(
             `アーカイブ ${archiveId} は前から消されている（${result.removedAt} に ` +
-              `${result.bytes.toLocaleString('ja-JP')} バイトを落とした）。何も変わっていない。`,
+              `${result.bytes.toLocaleString('ja-JP')} バイトを落とした${describeArchiveRemovedBytesUnit()}）。何も変わっていない。`,
           );
         }
         const overrideNote =
@@ -12340,7 +12342,7 @@ export function createCloneTools(context: ToolContext) {
           {
             type: 'decision',
             decision:
-              `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト）: ${summary}` +
+              `退避済み生ログの本文を消した: ${archiveId}（${result.bytes} バイト${describeArchiveRemovedBytesUnit()}）: ${summary}` +
               overrideNote,
             grounds:
               guard.kind === 'allowed-with-override' ? `${summary}／${overrideNote}` : summary,
@@ -12348,7 +12350,7 @@ export function createCloneTools(context: ToolContext) {
           'act-completed',
         );
         return text(
-          `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト）。` +
+          `アーカイブ ${archiveId} の本文を消した（${result.bytes.toLocaleString('ja-JP')} バイト${describeArchiveRemovedBytesUnit()}）。` +
             `行そのものは残っている（list には引き続き出る）。${overrideNote}`,
         );
       },
@@ -12682,8 +12684,8 @@ export function createCloneTools(context: ToolContext) {
             `絞り込み: ${filterText}`,
             skippedLine,
             remainingLine,
-            `消した本文の素のバイト数（UTF-8。直前の合計。置き場で解放した量ではなく、` +
-              `minStoredBytes/storedBytes とは単位が違う）: ${removedBytes.toLocaleString('ja-JP')}`,
+            `消した本文の合計: ${removedBytes.toLocaleString('ja-JP')} バイト` +
+              describeArchiveRemovedBytesUnit(),
             `消した id（先頭 ${shownRemoved.length} 件）: ${shownRemoved.join(', ')}${
               hiddenRemoved > 0
                 ? ` …ほか ${hiddenRemoved} 件は省略（**全 id は日誌に ${journaledChunks} 件に分けて残してある**）`
