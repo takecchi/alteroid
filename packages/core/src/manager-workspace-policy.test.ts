@@ -106,6 +106,47 @@ describe('resolveWorkspacePolicy', () => {
 
     expect(policy).toEqual({ kind: 'unknown', reason: UNVERIFIED_WORKSPACE_REASON });
   });
+
+  describe('_REPOSITORY の資格は台帳へ入れる前に落とす（#2492）', () => {
+    const repositoryOf = (value: string): string => {
+      const policy = resolveWorkspacePolicy({
+        [WORKSPACE_KIND_ENV_KEY]: 'git',
+        [WORKSPACE_REPOSITORY_ENV_KEY]: value,
+      });
+      if (policy.kind !== 'git') throw new Error('git のはず');
+      return policy.repository;
+    };
+    const fakeToken = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+
+    it('userinfo（user:pass・token だけ）・クエリ・フラグメントを落とす', () => {
+      expect(repositoryOf(`https://x-access-token:${fakeToken}@github.com/o/r.git`)).toBe(
+        'https://github.com/o/r.git',
+      );
+      expect(repositoryOf(`https://${fakeToken}@github.com/o/r.git`)).toBe(
+        'https://github.com/o/r.git',
+      );
+      expect(repositoryOf('https://github.com/o/r.git?access=secret#frag')).toBe(
+        'https://github.com/o/r.git',
+      );
+    });
+
+    it('scheme の無い user:pass@host は伏せる', () => {
+      expect(repositoryOf('x:secretpass@github.com/o/r.git')).not.toContain('secretpass');
+    });
+
+    it('資格の無い URL は1バイトも変えない', () => {
+      expect(repositoryOf('https://github.com/acme/widgets.git')).toBe(
+        'https://github.com/acme/widgets.git',
+      );
+      expect(repositoryOf('https://github.com')).toBe('https://github.com');
+      expect(repositoryOf('takecchi/alteroid')).toBe('takecchi/alteroid');
+    });
+
+    it('scp 形式と ssh のアカウント名（パスワード無し）は変えない', () => {
+      expect(repositoryOf('git@github.com:o/r.git')).toBe('git@github.com:o/r.git');
+      expect(repositoryOf('ssh://git@github.com/o/r.git')).toBe('ssh://git@github.com/o/r.git');
+    });
+  });
 });
 
 /** `manager-workspace-nudge.test.ts` の `swappableRunner` の縮小版（swap は不要）。 */

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
+import { redactSecretsInText } from './denial-input-head.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
 import {
   journalEntryShape,
@@ -2736,6 +2737,50 @@ function workspaceLocatorFrom(
   }
 }
 
+/** userinfo がアカウント名（`git@` 等）で、秘密ではない慣習の scheme。 */
+const WORKSPACE_REPOSITORY_USERNAME_ONLY_PROTOCOLS: ReadonlySet<string> = new Set([
+  'ssh:',
+  'git+ssh:',
+  'ssh+git:',
+  'sftp:',
+  'git:',
+  'rsync:',
+]);
+
+/**
+ * `ALTEROID_WORKSPACE_REPOSITORY` の値から、資格になりうる部分を落とす（#2492）。
+ * この値は台帳の `job.workspace.repository` に残り、器の入れ替えの一言と
+ * クローンへの報告にそのまま出る。
+ *
+ * - URL として読め、host を持つ形: userinfo・クエリ・フラグメントを落とす。
+ *   ただし ssh 系 scheme の **パスワードの無い** userinfo（`ssh://git@host/…`）は
+ *   アカウント名なので残す。落とす物が無ければ入力を1バイトも変えない。
+ * - URL として読めない・host を持たない形（scp 形式 `git@github.com:o/r.git`・
+ *   `o/r` など）: 秘密の形（`user:pass@host`・既知のトークン）だけを伏せ、
+ *   それ以外は変えない。**安全側に倒す**——読めないものの中の資格は、URL の
+ *   解釈では落とせないので、字面の伏せ字に任せる。
+ */
+function redactWorkspaceRepository(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return redactSecretsInText(raw, undefined);
+  }
+  if (parsed.host === '') return redactSecretsInText(raw, undefined);
+  const keepUsername =
+    parsed.password === '' && WORKSPACE_REPOSITORY_USERNAME_ONLY_PROTOCOLS.has(parsed.protocol);
+  const hasCredential = keepUsername ? false : parsed.username !== '' || parsed.password !== '';
+  if (!hasCredential && parsed.search === '' && parsed.hash === '') {
+    return redactSecretsInText(raw, undefined);
+  }
+  if (!keepUsername) parsed.username = '';
+  parsed.password = '';
+  parsed.search = '';
+  parsed.hash = '';
+  return redactSecretsInText(parsed.toString(), undefined);
+}
+
 export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): WorkspacePolicy {
   const kindRaw = env[WORKSPACE_KIND_ENV_KEY];
   const kind = kindRaw === undefined ? '' : kindRaw.trim();
@@ -2751,8 +2796,8 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
   }
   if (kind === 'git') {
     const repositoryRaw = env[WORKSPACE_REPOSITORY_ENV_KEY];
-    const repository = repositoryRaw === undefined ? '' : repositoryRaw.trim();
-    if (repository.length === 0) {
+    const repositoryTrimmed = repositoryRaw === undefined ? '' : repositoryRaw.trim();
+    if (repositoryTrimmed.length === 0) {
       return {
         kind: 'unknown',
         reason:
@@ -2762,6 +2807,8 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
     }
     const refRaw = env[WORKSPACE_REF_ENV_KEY];
     const ref = refRaw === undefined ? '' : refRaw.trim();
+    // 台帳・器の入れ替えの一言・クローンへの報告へ出る値なので、資格を落としてから入れる（#2492）。
+    const repository = redactWorkspaceRepository(repositoryTrimmed);
     return { kind: 'git', repository, ref: ref.length === 0 ? 'main' : ref };
   }
   return {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { createManagerPool } from './manager.js';
+import {
+  WORKSPACE_KIND_ENV_KEY,
+  WORKSPACE_REPOSITORY_ENV_KEY,
+  createManagerPool,
+  resolveWorkspacePolicy,
+} from './manager.js';
 import { createProfileService } from './profile-service.js';
 import {
   createRunnerRegistry,
@@ -400,6 +405,28 @@ describe('runner-swap の一言は job.workspace を読む（#485 の141行目�
 
     expect(cloneText).toContain('https://github.com/acme/widgets.git');
     expect(cloneText).toContain('feature/migrate-db');
+  });
+
+  it('git: userinfo 付きの URL は、env から台帳へ入る時点で資格が落ち、2つの一言のどちらにもトークンが出ない（#2492）', async () => {
+    const fakeToken = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+    const policy = resolveWorkspacePolicy({
+      [WORKSPACE_KIND_ENV_KEY]: 'git',
+      [WORKSPACE_REPOSITORY_ENV_KEY]: `https://x-access-token:${fakeToken}@github.com/acme/widgets.git`,
+    });
+    if (policy.kind !== 'git') throw new Error('git のはず');
+    const job = jobWith('mgr-git-userinfo', {
+      kind: 'git',
+      repository: policy.repository,
+      ref: policy.ref,
+    });
+    const { message, cloneText } = await runnerSwapNudge(job);
+
+    expect(message).toContain('https://github.com/acme/widgets.git');
+    expect(message).not.toContain(fakeToken);
+    expect(message).not.toContain('x-access-token');
+    expect(cloneText).toContain('https://github.com/acme/widgets.git');
+    expect(cloneText).not.toContain(fakeToken);
+    expect(cloneText).not.toContain('x-access-token');
   });
 
   it('unknown + 未 push 観測あり: クローン向けも host/path/branch を列挙し、path 単体（/data/work）は出さない', async () => {
