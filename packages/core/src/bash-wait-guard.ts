@@ -98,7 +98,8 @@ export type WaitGuardForm =
   | 'for-sleep'
   | 'tail-f'
   | 'gh-run-watch-background'
-  | 'gh-pr-merge-delete-branch';
+  | 'gh-pr-merge-delete-branch'
+  | 'gh-pr-merge-no-match-head-commit';
 
 export type WaitGuardVerdict =
   { blocked: false } | { blocked: true; form: WaitGuardForm; reason: string };
@@ -2647,6 +2648,66 @@ function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
 }
 
 /**
+ * コマンドの位置に在る `gh pr merge` と、その呼び出し区間（`;`/`&&`/`||`/`|`/改行の手前まで）。
+ * 前置き・コマンド位置の判定は `GH_PR_MERGE_DELETE_BRANCH_RE` と同じ部品（新しい族は起こさない）。
+ * 区間は捕捉群 1 に入る。`g` 付きなので `matchAll` で全部の呼び出しを見る。
+ */
+const GH_PR_MERGE_INVOCATION_RE = new RegExp(
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${GH_WORD_SRC}\s+(?:${GH_REPO_FLAG_SRC})*pr\s+merge\b((?:(?!;|&&|\|\||\||\n)[\s\S])*)`,
+  'g',
+);
+
+/**
+ * `--match-head-commit <sha>` / `--match-head-commit=<sha>`。値が空（`=` の直後が空白・末尾・
+ * 空の引用符 `""` `''`）や、次のフラグ（`-` で始まる）は「付いていない」とみなす。
+ */
+const MATCH_HEAD_COMMIT_WITH_VALUE_RE =
+  /(?<=[\s'"])--match-head-commit(?:=(?!["']{2}(?:\s|$)|\s|$)|[ \t]+(?!["']{2}(?:\s|$)|-|$))\S/;
+
+/**
+ * マージが起きない呼び出し（`--disable-auto`＝自動マージの取り消し、`--help`/`-h`）。
+ * どちらも head を突き合わせる相手が無いので要求しない。`--auto` は要求する
+ * （`gh pr merge --help` で `--match-head-commit` は他のフラグと排他と書かれておらず、
+ * 自動マージでも「見た head」と「マージされる head」のずれは同じに起きる）。
+ */
+const GH_PR_MERGE_NO_MERGE_RE = /(?<=\s)(?:--disable-auto|--help|-h)(?=\s|$)/;
+
+/**
+ * コマンドの位置に在る `gh pr merge` に `--match-head-commit <sha>` が付いていないものが在るか（#1192 N7）。
+ *
+ * 「緑を見た head」と「マージされる head」のずれを、gh の側で拒ませる。PR の CI は
+ * `refs/pull/N/merge` を見ていて `strict: false` なので、見た後に push された head は機械では
+ * 突き合わされていない。前処理（ヒアドキュメントの本文・`--subject`/`--body` の引用符の値を潰す）と
+ * 入れ子のシェルの取り出しは `hasGhPrMergeDeleteBranch` と同じ。
+ *
+ * 行の継続（`\` + 改行）は、呼び出し側が取り除いた写しだけを渡す（元の文字列の改行で区間が
+ * 切れると、次の行の `--match-head-commit` を見落として誤って弾くため）。
+ *
+ * ⚠️ 残る限界: 区間の切り出しは引用符を追跡しない（既存の検出器と同じ）。潰されなかった
+ * 引用符の値の中の `--match-head-commit` の字面は「付いている」と読む（通す側に倒れる）。
+ */
+function hasGhPrMergeWithoutMatchHeadCommit(command: string, depth = 0): boolean {
+  const stripped = stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command));
+  for (const match of stripped.matchAll(GH_PR_MERGE_INVOCATION_RE)) {
+    const segment = match[1] ?? '';
+    if (GH_PR_MERGE_NO_MERGE_RE.test(segment)) continue;
+    if (!MATCH_HEAD_COMMIT_WITH_VALUE_RE.test(segment)) return true;
+  }
+  if (depth >= MAX_NESTED_SHELL_DEPTH) {
+    // 上限に達したら字面で粗く判定する（弾く側へ倒す。`looksLikeGhPrMergeDeleteBranch` と同じ考え）。
+    return extractNestedShellPayloads(command).some((payload) => {
+      const gh = payload.indexOf('gh');
+      const merge = gh < 0 ? -1 : payload.indexOf('merge', gh + 2);
+      return merge >= 0 && !payload.includes('--match-head-commit');
+    });
+  }
+  for (const payload of extractNestedShellPayloads(command)) {
+    if (payload.length > 0 && hasGhPrMergeWithoutMatchHeadCommit(payload, depth + 1)) return true;
+  }
+  return false;
+}
+
+/**
  * `Bash` ツールの呼び出しのうち、コマンド文字列に現れない事実。
  *
  * **省略時は「背景ではない」に倒す**（fail-open）。呼び出し側が形の崩れた
@@ -2785,6 +2846,24 @@ export function inspectBashCommand(
         '（この repo は `delete_branch_on_merge` でマージ後に枝を消すので、' +
         '付けなくても枝は消える。積んだ PR が在るなら、先に依存側の base を' +
         '`gh pr edit <N> --base main` で付け替えてから base 側をマージすること）。',
+    };
+  }
+
+  // `gh pr merge` に `--match-head-commit <sha>` が無い形（#1192 N7）。delete-branch と同じ理由で
+  // `timeout` の早期 return より先に見る。行の継続を取り除いた写しにだけかける（理由は
+  // `hasGhPrMergeWithoutMatchHeadCommit` の doc）。
+  if (hasGhPrMergeWithoutMatchHeadCommit(joinLineContinuations(trimmed))) {
+    return {
+      blocked: true,
+      form: 'gh-pr-merge-no-match-head-commit',
+      reason:
+        '`gh pr merge` に `--match-head-commit <sha>` が付いていない。' +
+        '**「緑を見た head」と「マージされる head」がずれうる** —— PR の CI は ' +
+        '`refs/pull/N/merge` を見ていて、見た後に push された head は機械では突き合わされない ' +
+        '（#1192 N7）。' +
+        '代わりに次を使うこと: `--match-head-commit <確かめた head の sha>` を足して打つ' +
+        '（sha は `gh pr view <N> --json headRefOid` で、緑を確かめた head と同じものを取る。' +
+        'head が動いていれば gh が拒むので、確かめ直してからやり直す。`--auto` にも要る）。',
     };
   }
 

@@ -6,14 +6,15 @@
  * 「どれだけ前か」の注釈だけである。
  *
  * 元は `apps/cli/src/chat.ts` の `/commitments` にだけあった実装
- * （`formatElapsed(iso, now)`）を、ほかの一覧（`access` / `conversations` /
+ * （`formatElapsedAgo(iso, now)`）を、ほかの一覧（`access` / `conversations` /
  * `runners` / `memory list` / `daemon status`）からも使えるようここへ引き
  * 上げた（#2141）。**`/commitments` の出力は1文字も変えていない** — 呼び先が
  * 変わっただけで、字面・分岐は逐語のまま移した。
  */
 
 /**
- * 受け取ってからの経過（＝齢）。実体は core（`packages/core/src/format-elapsed.ts`）に引き上げた
- * ——進捗の文（`describeProgress`）をクローンの道具と共有するため。字面・分岐は逐語のまま。
+ * 受け取ってからの経過（＝齢）を「N分前」の形まで。実体は core
+ * （`packages/core/src/format-elapsed.ts`）に引き上げた——進捗の文（`describeProgress`）を
+ * クローンの道具と共有するため。字面・分岐・doc は逐語のまま移した。
  */
-export { formatElapsed } from '@alteroid/core';
+export { formatElapsedAgo } from '@alteroid/core';

@@ -1,18 +1,36 @@
 /**
- * 受け取ってから（あるいは、その時刻になってから）の経過（＝齢）を「N分 / N時間 / N日」で。
- *
- * 元は `apps/cli/src/format.ts` にあった実装。進捗の文（`describeProgress`）を
- * core へ寄せたとき、CLI と道具の両方が同じ丸めを使えるようここへ引き上げた
- * （字面・分岐は逐語のまま。CLI の `format.ts` はここからの再輸出）。
- *
- * 未来の時刻（時計のずれ）は 0 に丸める。読めない ISO（パース不能）は「不明」——
- * 0分前のように読める値を作らない。Node 専用のものは持ち込まない（web 向けバンドルに載りうる）。
+ * 経過（＝齢）の注釈。元は `apps/cli/src/format.ts` にあった実装（#2141 / #2253）を、
+ * 進捗の文（`describeProgress`）をクローンの道具と CLI で共有するためにここへ引き上げた
+ * （#2241 の 3）。**字面・分岐は逐語のまま**で、CLI の `format.ts` はここからの再輸出。
+ * Node 専用のものは持ち込まない（web 向けバンドルに載りうる）。
  */
-export function formatElapsed(iso: string, now: number): string {
+
+/**
+ * 受け取ってから（あるいは、その時刻になってから）の経過（＝齢）を、
+ * **「N分前」の形まで**返す。呼び出し側は括弧（`（${formatElapsedAgo(...)}）`）だけ
+ * 持つ。
+ *
+ * **「前」をここが持つ理由（PR #2151 の欠陥）。** 単位だけを返して呼び出し側
+ * が `${...}前` と書く形だと、読めない時刻で画面に `（不明前）` と出た。「前」を
+ * 付けてよいのは読めた時刻のときだけで、それを知っているのはこの関数だけで
+ * ある。読めないときは「前」の付かない `経過不明` を返す。
+ *
+ * **台帳は優先度も締切も持たない**ので、人間が急ぎ方を決める材料はこれだけで
+ * ある。ISO の時刻だけを出すと、読むたびに引き算をさせることになる。
+ *
+ * 未来の時刻（時計のずれ）は 0 に丸める。ここで負の齢を出しても人間には直せ
+ * ない。読めない ISO（パース不能）は「経過不明」——0分前のように読める値を
+ * 作らない。
+ *
+ * **丸めは単位の上限を越えない。** `Math.round` だけだと 3570〜3599 秒が
+ * `60分`、84,600〜86,399 秒が `24時間` になっていた（次の単位へ上がるのは境目
+ * ちょうど）。
+ */
+export function formatElapsedAgo(iso: string, now: number): string {
   const at = new Date(iso).getTime();
-  if (Number.isNaN(at)) return '不明';
+  if (Number.isNaN(at)) return '経過不明';
   const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 3600) return `${Math.round(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}時間`;
-  return `${Math.round(seconds / 86_400)}日`;
+  if (seconds < 3600) return `${Math.min(59, Math.round(seconds / 60))}分前`;
+  if (seconds < 86_400) return `${Math.min(23, Math.round(seconds / 3600))}時間前`;
+  return `${Math.round(seconds / 86_400)}日前`;
 }

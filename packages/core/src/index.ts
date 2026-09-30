@@ -315,7 +315,7 @@ export {
 } from './progress-read.js';
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
 export { describeProgress } from './progress-describe.js';
-export { formatElapsed } from './format-elapsed.js';
+export { formatElapsedAgo } from './format-elapsed.js';
 /**
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。

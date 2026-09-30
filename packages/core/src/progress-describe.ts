@@ -10,7 +10,7 @@
  * （`null` は「—」、見込みが `unavailable` / `not_converging` なら状態と理由を言って時間は作らない）。
  * Node 専用のものは持ち込まない（web 向けバンドルに載りうる）。
  */
-import { formatElapsed } from './format-elapsed.js';
+import { formatElapsedAgo } from './format-elapsed.js';
 import type { ProgressView } from './progress-read.js';
 
 const NONE = '—';
@@ -28,7 +28,7 @@ function hours(value: number | null): string {
 
 function at(iso: string | null, now: number): string {
   if (iso === null) return NONE;
-  return `${iso}（${formatElapsed(iso, now)}前）`;
+  return `${iso}（${formatElapsedAgo(iso, now)}）`;
 }
 
 /**

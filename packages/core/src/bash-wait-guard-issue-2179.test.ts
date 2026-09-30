@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inspectBashCommand } from './bash-wait-guard.js';
+import { inspectBashCommand } from './bash-wait-guard-delete-branch.test-support.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
