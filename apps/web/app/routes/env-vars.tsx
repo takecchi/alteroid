@@ -9,6 +9,7 @@ import {
   Empty,
   ErrorNote,
   Input,
+  KeyValueList,
   Select,
   Spinner,
 } from '@alteroid/ui';
@@ -141,17 +142,20 @@ function EnvVarRow({
         </Badge>
       </div>
 
-      <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
-        <dt className="text-muted-foreground">値</dt>
-        <dd className="font-mono break-all">
-          {entry.secret
-            ? `（シークレット。値は表示されない。指紋 sha256=${entry.sha256}）`
-            : (entry.value ?? '（サーバがまだ値を返していない版）')}
-        </dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">更新</dt>
-        <dd>{formatDateTime(entry.updatedAt)}</dd>
-      </dl>
+      <KeyValueList
+        className="mt-2"
+        labelWidth="6rem"
+        items={[
+          {
+            label: '値',
+            mono: true,
+            value: entry.secret
+              ? `（シークレット。値は表示されない。指紋 sha256=${entry.sha256}）`
+              : (entry.value ?? '（サーバがまだ値を返していない版）'),
+          },
+          { label: '更新', value: formatDateTime(entry.updatedAt) },
+        ]}
+      />
 
       {entry.shadowsCloneEnv === true && (
         <p className="mt-2 text-[11px] break-words text-warn">

@@ -1,6 +1,16 @@
 import { useState } from 'react';
 
-import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  KeyValueList,
+  Spinner,
+} from '@alteroid/ui';
 import {
   useDeclareOwner,
   useGrantAccess,
@@ -136,39 +146,34 @@ function AccountRow({ account }: { account: AccessAccount }) {
         </Badge>
       </div>
 
-      <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted-foreground">id</dt>
-        <dd className="font-mono break-all">{account.id}</dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">作成</dt>
-        <dd>{formatDateTime(account.createdAt)}</dd>
-
-        {via.length > 0 && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">ログイン手段</dt>
-            <dd className="break-all">{via}</dd>
-          </>
-        )}
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">最終ログイン</dt>
-        <dd>
-          {account.lastLoginAt === null ? '（まだ無い）' : formatDateTime(account.lastLoginAt)}
-        </dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">許可した日時</dt>
-        <dd>
-          {account.grantedAt === null
-            ? '（未許可）'
-            : `${formatDateTime(account.grantedAt)}（${describeGrantedBy(account.grantedBy)}）`}
-        </dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">実行環境の持ち主として宣言</dt>
-        <dd>
-          {account.ownerDeclaredAt === null
-            ? '（未宣言）'
-            : formatDateTime(account.ownerDeclaredAt)}
-        </dd>
-      </dl>
+      <KeyValueList
+        className="mt-2"
+        labelWidth="9rem"
+        items={[
+          { label: 'id', value: account.id, mono: true },
+          { label: '作成', value: formatDateTime(account.createdAt) },
+          ...(via.length > 0 ? [{ label: 'ログイン手段', value: via }] : []),
+          {
+            label: '最終ログイン',
+            value:
+              account.lastLoginAt === null ? '（まだ無い）' : formatDateTime(account.lastLoginAt),
+          },
+          {
+            label: '許可した日時',
+            value:
+              account.grantedAt === null
+                ? '（未許可）'
+                : `${formatDateTime(account.grantedAt)}（${describeGrantedBy(account.grantedBy)}）`,
+          },
+          {
+            label: '実行環境の持ち主として宣言',
+            value:
+              account.ownerDeclaredAt === null
+                ? '（未宣言）'
+                : formatDateTime(account.ownerDeclaredAt),
+          },
+        ]}
+      />
 
       <AccessGrantControl account={account} />
       <OwnerDeclarationControl account={account} />

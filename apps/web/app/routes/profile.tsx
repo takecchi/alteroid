@@ -1,7 +1,17 @@
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
-import { Page, Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '@alteroid/ui';
+import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  ErrorNote,
+  KeyValueList,
+  Spinner,
+  Textarea,
+} from '@alteroid/ui';
 import { ProfileRejectedError, useSetProfile, useProfile } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
 import type { ProfileState, ProfileUpdateResult } from '@alteroid/logic';
@@ -66,24 +76,28 @@ function ProfileView({ profile }: { profile: ProfileState }) {
 
   return (
     <div className="flex flex-col gap-3 text-sm">
-      <dl className="grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
-        <dt className="text-muted-foreground">状態</dt>
-        <dd>
-          {empty ? (
-            <Badge>置かれていない</Badge>
-          ) : (
-            <Badge tone="accent">{`${String(profile.bytes ?? 0)} バイト`}</Badge>
-          )}
-        </dd>
-        {!empty && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">指紋</dt>
-            <dd className="font-mono break-all">sha256={profile.sha256 ?? '?'}</dd>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">更新</dt>
-            <dd>{profile.updatedAt === undefined ? '?' : formatDateTime(profile.updatedAt)}</dd>
-          </>
-        )}
-      </dl>
+      <KeyValueList
+        labelWidth="6rem"
+        items={[
+          {
+            label: '状態',
+            value: empty ? (
+              <Badge>置かれていない</Badge>
+            ) : (
+              <Badge tone="accent">{`${String(profile.bytes ?? 0)} バイト`}</Badge>
+            ),
+          },
+          ...(!empty
+            ? [
+                { label: '指紋', value: `sha256=${profile.sha256 ?? '?'}`, mono: true },
+                {
+                  label: '更新',
+                  value: profile.updatedAt === undefined ? '?' : formatDateTime(profile.updatedAt),
+                },
+              ]
+            : []),
+        ]}
+      />
 
       {!empty && (
         <div className="flex flex-col gap-2">

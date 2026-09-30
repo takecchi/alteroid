@@ -4,7 +4,17 @@ import { maskUrl } from '@alteroid/core/mask-url';
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
-import { Page, Badge, Button, Card, CardHeader, ErrorNote, Spinner, Textarea } from '@alteroid/ui';
+import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  ErrorNote,
+  KeyValueList,
+  Spinner,
+  Textarea,
+} from '@alteroid/ui';
 import { useSetMcpServers, useMcpServers, ApiError } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
 import type {
@@ -72,22 +82,22 @@ function McpServersView({ state }: { state: McpServersState }) {
 
   return (
     <div className="flex flex-col gap-3 text-sm">
-      <dl className="grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[6rem_1fr]">
-        <dt className="text-muted-foreground">状態</dt>
-        <dd>
-          {empty ? (
-            <Badge>置かれていない</Badge>
-          ) : (
-            <Badge tone="accent">{`${String(names.length)} 件`}</Badge>
-          )}
-        </dd>
-        {state.updatedAt !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">更新</dt>
-            <dd>{formatDateTime(state.updatedAt)}</dd>
-          </>
-        )}
-      </dl>
+      <KeyValueList
+        labelWidth="6rem"
+        items={[
+          {
+            label: '状態',
+            value: empty ? (
+              <Badge>置かれていない</Badge>
+            ) : (
+              <Badge tone="accent">{`${String(names.length)} 件`}</Badge>
+            ),
+          },
+          ...(state.updatedAt !== undefined
+            ? [{ label: '更新', value: formatDateTime(state.updatedAt) }]
+            : []),
+        ]}
+      />
 
       {!empty && (
         <ul className="flex flex-col gap-2" aria-label="MCP サーバの登録の一覧">

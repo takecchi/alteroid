@@ -5,7 +5,17 @@ import {
 } from '@alteroid/core/permission-staleness';
 import { useState } from 'react';
 
-import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
+import {
+  Page,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Empty,
+  ErrorNote,
+  KeyValueList,
+  Spinner,
+} from '@alteroid/ui';
 import { useRevokePermissionGrant, usePermissionGrants } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
 import type { PermissionGrant } from '@alteroid/logic';
@@ -144,29 +154,27 @@ function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
         )}
       </div>
 
-      <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted-foreground">id</dt>
-        <dd className="font-mono break-all">{grant.id}</dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">承認</dt>
-        <dd className="break-all">
-          {formatDateTime(grant.grantedAt)}（{grant.route.accountId}・&quot;{grant.answer}&quot;）
-        </dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">最終使用</dt>
-        <dd>
-          {grant.lastUsedAt === undefined
-            ? '（まだ使われていません）'
-            : formatDateTime(grant.lastUsedAt)}
-        </dd>
-
-        {revokedAt !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">取り消し</dt>
-            <dd>{formatDateTime(revokedAt)}</dd>
-          </>
-        )}
-      </dl>
+      <KeyValueList
+        className="mt-2"
+        labelWidth="9rem"
+        items={[
+          { label: 'id', value: grant.id, mono: true },
+          {
+            label: '承認',
+            value: `${formatDateTime(grant.grantedAt)}（${grant.route.accountId}・"${grant.answer}"）`,
+          },
+          {
+            label: '最終使用',
+            value:
+              grant.lastUsedAt === undefined
+                ? '（まだ使われていません）'
+                : formatDateTime(grant.lastUsedAt),
+          },
+          ...(revokedAt !== undefined
+            ? [{ label: '取り消し', value: formatDateTime(revokedAt) }]
+            : []),
+        ]}
+      />
 
       {!revoked && <RevokeControl grant={grant} />}
     </li>

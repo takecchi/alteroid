@@ -11,6 +11,7 @@ import {
   Empty,
   ErrorNote,
   Input,
+  KeyValueList,
   Select,
   Spinner,
   cn,
@@ -477,94 +478,93 @@ function TokenRow({
         <span className="text-xs text-muted-foreground">order {token.order}</span>
       </div>
 
-      <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted-foreground">指紋</dt>
-        <dd className="font-mono break-all">{describeFingerprint(token)}</dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">作成</dt>
-        <dd>
-          {token.createdAt === undefined
-            ? '不明（先行バージョンで作られた行のため記録が無い。「いま作られた」とは埋めない）'
-            : formatDateTime(token.createdAt)}
-        </dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">最終更新</dt>
-        <dd>
-          {token.updatedAt === undefined
-            ? '不明（この行が実際に変わったことは無い）'
-            : formatDateTime(token.updatedAt)}
-        </dd>
-
-        {token.disabledAt !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">無効化</dt>
-            <dd>{formatDateTime(token.disabledAt)}（人間が明示的に外した。戻らない）</dd>
-          </>
-        )}
-
-        {token.invalidatedAt !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">失効</dt>
-            <dd>{formatDateTime(token.invalidatedAt)}</dd>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">失効の理由（原文）</dt>
-            <dd className="font-mono text-[11px] break-words whitespace-pre-wrap">
-              {token.invalidatedReason ?? '（理由の記録が無い）'}
-            </dd>
-          </>
-        )}
-
-        {token.cooldownUntil !== undefined && (
-          <>
-            {/*
-              **冷却は絶対時刻を必ず出す。** 実測で「冷却が5時間なのに断られた
-              理由の原文は『weekly limit resets 5pm』と言っていた」という桁の
-              食い違いが観測されている——相対表現（「あと◯時間」）だけでは
-              この食い違いに気づけない。絶対時刻を主に、相対は括弧で添えるだけ
-              にする。
-            */}
-            <dt className="mt-2 text-muted-foreground sm:mt-0">冷却の期限</dt>
-            <dd>
-              {formatEpochMs(token.cooldownUntil)}（{formatEpochMsRelative(token.cooldownUntil)}）
-            </dd>
-            {/*
-              **出所を必ず出す（#683）。** 絶対時刻を出しても、**それが権威ある
-              値なのか5時間足しただけの推測なのかは書けていなかった** ——
-              #678 の調査は「文言が 22:10 と言っているのに 01:42 と出ている」を
-              人間が目で見つけたところから始まった。行が出所を持てば、その1行で
-              終わる。
-
-              **「推測のときだけ出す」形にしないこと。** 権威ある値のときも
-              出さないと、**何も書いていないことが「推測ではない」と「まだ
-              対応していない」の両方を意味する**（`AGENTS.md` の地雷
-              「取れない軸に 0 の行を作る」の裏返し）。
-            */}
-            <dt className="mt-2 text-muted-foreground sm:mt-0">期限の出所</dt>
-            <dd>{describeCooldownSource(token.cooldownSource)}</dd>
-          </>
-        )}
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">断られた記録</dt>
-        <dd>
-          {!rejected ? (
-            '断られた記録が無い'
-          ) : (
-            <div className="flex flex-col gap-1">
-              {token.lastRejectedAt !== undefined && (
-                <span>最後に断られた時刻: {formatDateTime(token.lastRejectedAt)}</span>
-              )}
-              {token.lastRejectedReason !== undefined && (
-                // **原文をそのまま出す。Markdown は解釈しない。**
-                <span className="font-mono text-[11px] break-words whitespace-pre-wrap">
-                  {token.lastRejectedReason}
-                </span>
-              )}
-              {token.recovery !== undefined && (
-                <span className="text-muted-foreground">{describeRecovery(token.recovery)}</span>
-              )}
-            </div>
-          )}
-        </dd>
-      </dl>
+      <KeyValueList
+        className="mt-2"
+        labelWidth="9rem"
+        items={[
+          { label: '指紋', value: describeFingerprint(token), mono: true },
+          {
+            label: '作成',
+            value:
+              token.createdAt === undefined
+                ? '不明（先行バージョンで作られた行のため記録が無い。「いま作られた」とは埋めない）'
+                : formatDateTime(token.createdAt),
+          },
+          {
+            label: '最終更新',
+            value:
+              token.updatedAt === undefined
+                ? '不明（この行が実際に変わったことは無い）'
+                : formatDateTime(token.updatedAt),
+          },
+          ...(token.disabledAt !== undefined
+            ? [
+                {
+                  label: '無効化',
+                  value: `${formatDateTime(token.disabledAt)}（人間が明示的に外した。戻らない）`,
+                },
+              ]
+            : []),
+          ...(token.invalidatedAt !== undefined
+            ? [
+                { label: '失効', value: formatDateTime(token.invalidatedAt) },
+                {
+                  label: '失効の理由（原文）',
+                  value: (
+                    <span className="font-mono text-[11px] break-words whitespace-pre-wrap">
+                      {token.invalidatedReason ?? '（理由の記録が無い）'}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
+          ...(token.cooldownUntil !== undefined
+            ? [
+                // **冷却は絶対時刻を必ず出す。** 実測で「冷却が5時間なのに断られた
+                // 理由の原文は『weekly limit resets 5pm』と言っていた」という桁の
+                // 食い違いが観測されている——相対表現（「あと◯時間」）だけでは
+                // この食い違いに気づけない。絶対時刻を主に、相対は括弧で添えるだけ
+                // にする。
+                {
+                  label: '冷却の期限',
+                  value: `${formatEpochMs(token.cooldownUntil)}（${formatEpochMsRelative(token.cooldownUntil)}）`,
+                },
+                // **出所を必ず出す（#683）。** 絶対時刻を出しても、**それが権威ある
+                // 値なのか5時間足しただけの推測なのかは書けていなかった** ——
+                // #678 の調査は「文言が 22:10 と言っているのに 01:42 と出ている」を
+                // 人間が目で見つけたところから始まった。行が出所を持てば、その1行で
+                // 終わる。
+                //
+                // **「推測のときだけ出す」形にしないこと。** 権威ある値のときも
+                // 出さないと、**何も書いていないことが「推測ではない」と「まだ
+                // 対応していない」の両方を意味する**（`AGENTS.md` の地雷
+                // 「取れない軸に 0 の行を作る」の裏返し）。
+                { label: '期限の出所', value: describeCooldownSource(token.cooldownSource) },
+              ]
+            : []),
+          {
+            label: '断られた記録',
+            value: !rejected ? (
+              '断られた記録が無い'
+            ) : (
+              <div className="flex flex-col gap-1">
+                {token.lastRejectedAt !== undefined && (
+                  <span>最後に断られた時刻: {formatDateTime(token.lastRejectedAt)}</span>
+                )}
+                {token.lastRejectedReason !== undefined && (
+                  // **原文をそのまま出す。Markdown は解釈しない。**
+                  <span className="font-mono text-[11px] break-words whitespace-pre-wrap">
+                    {token.lastRejectedReason}
+                  </span>
+                )}
+                {token.recovery !== undefined && (
+                  <span className="text-muted-foreground">{describeRecovery(token.recovery)}</span>
+                )}
+              </div>
+            ),
+          },
+        ]}
+      />
 
       <ErrorNote error={failure} className="mt-2" />
       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -672,30 +672,32 @@ function SettingsCard({ settings }: { settings: TokenRotationSettings }) {
         title="回転の設定"
         subtitle="alteroid token policy / PUT /tokens/policy と同じもの"
       />
-      <dl className="grid grid-cols-1 gap-y-1 px-4 py-3 text-sm sm:grid-cols-[9rem_1fr]">
-        <dt className="text-muted-foreground">回す契機</dt>
-        <dd>{describeRotateOn(settings.rotateOn)}</dd>
-
-        <dt className="mt-2 text-muted-foreground sm:mt-0">冷却の既定</dt>
-        <dd>
-          {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
-            maximumFractionDigits: 2,
-          })}
-          時間（{settings.cooldownMs.toLocaleString('en-US')} ミリ秒）。
-          <br />
-          <span className="text-xs text-muted-foreground">
-            `resetsAt` が取れなかったときだけ使うフォールバック。権威ある期限は行ごとの
-            「冷却の期限」のほう。
-          </span>
-        </dd>
-
-        {settings.updatedAt !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">最終変更</dt>
-            <dd>{formatDateTime(settings.updatedAt)}</dd>
-          </>
-        )}
-      </dl>
+      <KeyValueList
+        className="px-4 py-3"
+        labelWidth="9rem"
+        items={[
+          { label: '回す契機', value: describeRotateOn(settings.rotateOn) },
+          {
+            label: '冷却の既定',
+            value: (
+              <>
+                {(settings.cooldownMs / (60 * 60 * 1000)).toLocaleString('ja-JP', {
+                  maximumFractionDigits: 2,
+                })}
+                時間（{settings.cooldownMs.toLocaleString('en-US')} ミリ秒）。
+                <br />
+                <span className="text-xs text-muted-foreground">
+                  `resetsAt` が取れなかったときだけ使うフォールバック。権威ある期限は行ごとの
+                  「冷却の期限」のほう。
+                </span>
+              </>
+            ),
+          },
+          ...(settings.updatedAt !== undefined
+            ? [{ label: '最終変更', value: formatDateTime(settings.updatedAt) }]
+            : []),
+        ]}
+      />
 
       <div className="flex flex-col gap-3 border-t border-border px-4 py-3 text-sm">
         <label className="flex flex-col gap-1">
@@ -1087,44 +1089,29 @@ function RotationRow({ entry }: { entry: TokenRotationEntry }) {
       {/* 人間が読む1行（整形済み）。原文ではないので Markdown 扱いにはしないが、装飾もしない。 */}
       <p className="mt-1 text-sm break-words whitespace-pre-wrap">{entry.text}</p>
 
-      <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[8rem_1fr]">
-        {entry.label !== undefined && (
-          <>
-            <dt className="text-muted-foreground">ラベル</dt>
-            <dd>{entry.label}</dd>
-          </>
-        )}
-        {entry.tokenId !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">移った先/撒いた先 id</dt>
-            <dd className="font-mono break-all">{entry.tokenId}</dd>
-          </>
-        )}
-        {entry.fromTokenId !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">降りた側 id</dt>
-            <dd className="font-mono break-all">{entry.fromTokenId}</dd>
-          </>
-        )}
-        {entry.generation !== undefined && (
-          <>
-            <dt className="mt-2 text-muted-foreground sm:mt-0">世代</dt>
-            <dd>{entry.generation}</dd>
-          </>
-        )}
-        {entry.earliestAt !== undefined && (
-          <>
-            {/*
-              **`parked` の回はこれが「撒いた鍵が通るようになる時刻」である**
-              （`tokenRotationEntry` の doc: `exhausted` の同じ欄と意味は同じ ——
-              `parked` はまさにその候補を撒いた回だからである）。⟹ 見出しは
-              どちらでも読める言い方にしてある。
-            */}
-            <dt className="mt-2 text-muted-foreground sm:mt-0">最速の復帰見込み</dt>
-            <dd>{formatDateTime(entry.earliestAt)}</dd>
-          </>
-        )}
-      </dl>
+      <KeyValueList
+        className="mt-2"
+        labelWidth="8rem"
+        items={[
+          ...(entry.label !== undefined ? [{ label: 'ラベル', value: entry.label }] : []),
+          ...(entry.tokenId !== undefined
+            ? [{ label: '移った先/撒いた先 id', value: entry.tokenId, mono: true }]
+            : []),
+          ...(entry.fromTokenId !== undefined
+            ? [{ label: '降りた側 id', value: entry.fromTokenId, mono: true }]
+            : []),
+          ...(entry.generation !== undefined ? [{ label: '世代', value: entry.generation }] : []),
+          ...(entry.earliestAt !== undefined
+            ? [
+                // **`parked` の回はこれが「撒いた鍵が通るようになる時刻」である**
+                // （`tokenRotationEntry` の doc: `exhausted` の同じ欄と意味は同じ ——
+                // `parked` はまさにその候補を撒いた回だからである）。⟹ 見出しは
+                // どちらでも読める言い方にしてある。
+                { label: '最速の復帰見込み', value: formatDateTime(entry.earliestAt) },
+              ]
+            : []),
+        ]}
+      />
 
       {entry.noticeText !== undefined && (
         // **当たった文言は言い換えずそのまま。** `text` の中にも出るが、整形が
