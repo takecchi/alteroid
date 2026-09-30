@@ -549,7 +549,22 @@ describe('runnersCommand', () => {
 
     await runnersCommand();
 
-    expect(read()).toBe('runner の一覧を読めませんでした\n');
+    // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
+    expect(read()).toBe('runner の一覧を読めませんでした（HTTP 500）\n');
+  });
+
+  it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
+    replies.push({
+      status: 500,
+      body: { error: '一覧の読み出しが失敗した（runners のテスト用）' },
+    });
+    const read = captureStdout();
+
+    await runnersCommand();
+
+    expect(read()).toBe(
+      'runner の一覧を読めませんでした（HTTP 500）: 一覧の読み出しが失敗した（runners のテスト用）\n',
+    );
   });
 });
 

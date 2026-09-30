@@ -506,3 +506,80 @@ describe('alteroid practice history / show --version', () => {
     expect(read()).toContain('そんな版はありません: review 版999');
   });
 });
+
+/**
+ * 読み出しの失敗は、固定の文言や「無い」に化けさせず、状態コードとデーモンの理由を載せる
+ * （PR #2175 / PR #2256 の残り）。
+ */
+describe('alteroid practice の読み出しの失敗の理由', () => {
+  it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '一覧が読めない（practice のテスト用）' } });
+
+    await practiceListCommand();
+
+    const text = read();
+    expect(text).toContain('やり方の一覧を読めませんでした（HTTP 500）');
+    expect(text).toContain('一覧が読めない（practice のテスト用）');
+  });
+
+  it('history: 500 + { error } なら、状態コードと理由を出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '履歴が読めない（practice のテスト用）' } });
+
+    await practiceHistoryCommand('review');
+
+    const text = read();
+    expect(text).toContain('版の履歴を読めませんでした（HTTP 500）');
+    expect(text).toContain('履歴が読めない（practice のテスト用）');
+  });
+
+  it('show --version: 500 を「そんな版はありません」と言わず、理由を載せる', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '版が読めない（practice のテスト用）' } });
+
+    await practiceShowCommand('review', { version: 1 });
+
+    const text = read();
+    expect(text).not.toContain('そんな版はありません');
+    expect(text).toContain('HTTP 500');
+    expect(text).toContain('版が読めない（practice のテスト用）');
+  });
+
+  it('show: 404 は「無い」のまま', async () => {
+    const read = captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await practiceShowCommand('nothing');
+
+    expect(read()).toContain('そんなやり方はありません: nothing');
+  });
+
+  it('show: 500 を「そんなやり方はありません」と言わず、理由を載せて投げる', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: 'やり方が読めない（practice のテスト用）' } });
+
+    const error = await practiceShowCommand('review').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('HTTP 500');
+    expect(String(error)).toContain('やり方が読めない（practice のテスト用）');
+    expect(read()).not.toContain('そんなやり方はありません');
+  });
+
+  it('set: 読み出しが 500 なら、無いものとして新規に書きに行かない（PUT を打たない）', async () => {
+    captureStdout();
+    replies.push({ status: 500, body: { error: 'やり方が読めない（practice のテスト用）' } });
+
+    const error = await practiceSetCommand('review', {
+      file: fileWith('本文\n'),
+      kind: '調査',
+      title: '題',
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('やり方が読めない（practice のテスト用）');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('GET');
+  });
+});

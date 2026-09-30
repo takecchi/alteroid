@@ -8,6 +8,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { resolveTarget } from './target.js';
 
 /**
@@ -55,7 +56,9 @@ export async function droppedCommand(): Promise<void> {
     return;
   }
   if (!response.ok) {
-    stdout.write('握り潰しの跡を読めませんでした\n');
+    stdout.write(
+      `${await withErrorReason(`握り潰しの跡を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    );
     return;
   }
   stdout.write(`${renderDropped(await response.json())}\n`);

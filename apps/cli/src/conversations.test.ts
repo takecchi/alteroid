@@ -505,3 +505,42 @@ describe('alteroid conversations show', () => {
     expect(read().endsWith('\n')).toBe(true);
   });
 });
+
+/**
+ * 読み出しの失敗は、固定の文言だけにせず、状態コードとデーモンの理由を載せる
+ * （PR #2175 / PR #2256 の残り）。
+ */
+describe('alteroid conversations の失敗の理由', () => {
+  it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '一覧が読めない（conversations のテスト用）' } });
+
+    await conversationsListCommand();
+
+    const text = read();
+    expect(text).toContain('会話の一覧を読めませんでした');
+    expect(text).toContain('HTTP 500');
+    expect(text).toContain('一覧が読めない（conversations のテスト用）');
+  });
+
+  it('show: 500 + { error } なら、状態コードと理由を出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '会話が読めない（conversations のテスト用）' } });
+
+    await conversationsShowCommand('conv-1');
+
+    const text = read();
+    expect(text).toContain('会話を読めませんでした');
+    expect(text).toContain('HTTP 500');
+    expect(text).toContain('会話が読めない（conversations のテスト用）');
+  });
+
+  it('show: 本文が読めない 500 でも、状態コードは出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: null });
+
+    await conversationsShowCommand('conv-1');
+
+    expect(read()).toContain('HTTP 500');
+  });
+});

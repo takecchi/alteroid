@@ -25,6 +25,7 @@ vi.mock('./target.js', () => ({
 
 const {
   freshnessMarker,
+  memoryEditCommand,
   memoryListCommand,
   memoryRemoveCommand,
   memorySetCommand,
@@ -403,5 +404,63 @@ describe('freshnessMarker（CLI 側の印。core と別実装だが同じ理由�
     expect(atLeast).not.toContain('%');
     expect(measured).toContain('%');
     expect(atLeast).not.toContain('2026-08-20T12:00:00Z');
+  });
+});
+
+/**
+ * 読み出しの失敗は、固定の文言や「無い」に化けさせず、状態コードとデーモンの理由を載せる
+ * （PR #2175 / PR #2256 の残り）。
+ */
+describe('alteroid memory の読み出しの失敗の理由', () => {
+  it('list: 500 + { error } なら、状態コードと理由を出す', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '一覧が読めない（memory のテスト用）' } });
+
+    await memoryListCommand();
+
+    const text = read();
+    expect(text).toContain('記憶の一覧を読めませんでした（HTTP 500）');
+    expect(text).toContain('一覧が読めない（memory のテスト用）');
+  });
+
+  it('show: 404 は「無い」のまま', async () => {
+    const read = captureStdout();
+    replies.push({ status: 404, body: { error: 'not found' } });
+
+    await memoryShowCommand('nothing');
+
+    expect(read()).toContain('そんな記憶はありません: nothing');
+  });
+
+  it('show: 500 を「そんな記憶はありません」と言わず、理由を載せて投げる', async () => {
+    const read = captureStdout();
+    replies.push({ status: 500, body: { error: '記憶が読めない（memory のテスト用）' } });
+
+    const error = await memoryShowCommand('values').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('HTTP 500');
+    expect(String(error)).toContain('記憶が読めない（memory のテスト用）');
+    expect(read()).not.toContain('そんな記憶はありません');
+  });
+
+  it('edit: 読み出しが 500 なら、あるはずの記憶を無いものとして空のひな形でエディタを開かない', async () => {
+    captureStdout();
+    const savedEditor = process.env.EDITOR;
+    // 開いてしまえば、保存して PUT（上書き）へ進む。開かなければ GET の1本で止まる。
+    process.env.EDITOR = `sh -c 'printf "空のひな形で上書き\\n" > "$1"' _`;
+    replies.push({ status: 500, body: { error: '記憶が読めない（memory のテスト用）' } });
+
+    try {
+      const error = await memoryEditCommand('values').catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain('記憶が読めない（memory のテスト用）');
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.method).toBe('GET');
+    } finally {
+      if (savedEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = savedEditor;
+    }
   });
 });

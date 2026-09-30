@@ -508,7 +508,19 @@ describe('usageCommand', () => {
 
     await usageCommand({});
 
-    expect(read()).toBe('利用状況を読めませんでした（クエリの形を確かめてください）\n');
+    // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
+    expect(read()).toBe('利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）\n');
+  });
+
+  it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
+    replies.push({ status: 500, body: { error: '集計が失敗した（usage のテスト用）' } });
+    const read = captureStdout();
+
+    await usageCommand({});
+
+    expect(read()).toBe(
+      '利用状況を読めませんでした（HTTP 500。クエリの形を確かめてください）: 集計が失敗した（usage のテスト用）\n',
+    );
   });
 
   /**

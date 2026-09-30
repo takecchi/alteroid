@@ -160,7 +160,19 @@ describe('droppedCommand', () => {
 
     await droppedCommand();
 
-    expect(read()).toBe('握り潰しの跡を読めませんでした\n');
+    // 理由が読めない本文（`{}`）でも、状態コードは載せる（固定の文言だけにしない）。
+    expect(read()).toBe('握り潰しの跡を読めませんでした（HTTP 500）\n');
+  });
+
+  it('応答が失敗（500 + { error }）なら、状態コードとデーモンの理由も書く', async () => {
+    replies.push({ status: 500, body: { error: '跡の読み出しが失敗した（dropped のテスト用）' } });
+    const read = captureStdout();
+
+    await droppedCommand();
+
+    expect(read()).toBe(
+      '握り潰しの跡を読めませんでした（HTTP 500）: 跡の読み出しが失敗した（dropped のテスト用）\n',
+    );
   });
 
   /**

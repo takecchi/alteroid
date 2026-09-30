@@ -1,7 +1,7 @@
 import { stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
-import { formatElapsedAgo } from './format.js';
+import { formatElapsedAgo, withErrorReason } from './format.js';
 import { resolveTarget } from './target.js';
 
 /**
@@ -76,7 +76,12 @@ export async function conversationsListCommand(
     },
   });
   if (!response.ok) {
-    stdout.write('会話の一覧を読めませんでした（--limit / --scan の値を確かめてください）\n');
+    stdout.write(
+      `${await withErrorReason(
+        `会話の一覧を読めませんでした（HTTP ${String(response.status)}。--limit / --scan の値を確かめてください）`,
+        response,
+      )}\n`,
+    );
     return;
   }
   const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
@@ -193,7 +198,12 @@ export async function conversationsShowCommand(
     return;
   }
   if (!response.ok) {
-    stdout.write('会話を読めませんでした（--scan の値を確かめてください）\n');
+    stdout.write(
+      `${await withErrorReason(
+        `会話を読めませんでした（HTTP ${String(response.status)}。--scan の値を確かめてください）`,
+        response,
+      )}\n`,
+    );
     return;
   }
   const { messages, scanned, reachedStart, supersededCount } = await response.json();

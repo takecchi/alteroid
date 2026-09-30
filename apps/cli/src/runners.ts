@@ -37,7 +37,9 @@ export async function runnersCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.runners.$get();
   if (!response.ok) {
-    stdout.write('runner の一覧を読めませんでした\n');
+    stdout.write(
+      `${await withErrorReason(`runner の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    );
     return;
   }
   // **`now` はここで1回だけ取る**（issue #2141 段1）。`renderRunners` はテストで

@@ -59,7 +59,9 @@ export async function practiceListCommand(): Promise<void> {
   const { client } = conn;
   const response = await client.practices.$get();
   if (!response.ok) {
-    stdout.write('やり方の一覧を読めませんでした\n');
+    stdout.write(
+      `${await withErrorReason(`やり方の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    );
     return;
   }
   const { practices } = (await response.json()) as { practices: PracticeSummary[] };
@@ -95,10 +97,18 @@ export async function practiceShowCommand(
       param: { slug, version: String(options.version) },
     });
     if (!response.ok) {
+      // 「無い」は 404 だけ。5xx 等を「そんな版はありません」と言わない。
       stdout.write(
-        response.status === 400
-          ? `版番号として成立しません: ${String(options.version)}\n`
-          : `そんな版はありません: ${slug} 版${String(options.version)}\n`,
+        `${
+          response.status === 400
+            ? `版番号として成立しません: ${String(options.version)}`
+            : response.status === 404
+              ? `そんな版はありません: ${slug} 版${String(options.version)}`
+              : await withErrorReason(
+                  `版を読めませんでした: ${slug} 版${String(options.version)}（HTTP ${String(response.status)}）`,
+                  response,
+                )
+        }\n`,
       );
       return;
     }
@@ -108,7 +118,7 @@ export async function practiceShowCommand(
     return;
   }
 
-  const found = await read(client, slug);
+  const found = await read(client, conn.target, slug);
   if (found === null) {
     stdout.write(`そんなやり方はありません: ${slug}\n`);
     return;
@@ -127,7 +137,9 @@ export async function practiceHistoryCommand(slug: string): Promise<void> {
   const { client } = conn;
   const response = await client.practices[':slug'].versions.$get({ param: { slug } });
   if (!response.ok) {
-    stdout.write('版の履歴を読めませんでした\n');
+    stdout.write(
+      `${await withErrorReason(`版の履歴を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    );
     return;
   }
   const { versions } = (await response.json()) as {
@@ -161,7 +173,7 @@ export async function practiceEditCommand(
   const conn = await connect();
   if (conn === null) return;
   const { client, target } = conn;
-  const current = await read(client, slug);
+  const current = await read(client, target, slug);
 
   const kind = options.kind ?? current?.kind;
   const title = options.title ?? current?.title;
@@ -211,7 +223,7 @@ export async function practiceSetCommand(
   const conn = await connect();
   if (conn === null) return;
   const { client, target } = conn;
-  const current = await read(client, slug);
+  const current = await read(client, target, slug);
 
   const kind = options.kind ?? current?.kind;
   const title = options.title ?? current?.title;
@@ -284,13 +296,29 @@ async function connect(): Promise<{ client: DaemonClient; target: Target } | nul
   return { client: createClient(target.baseUrl, target.headers), target };
 }
 
-/** 無ければ `null`。 */
+/**
+ * 無ければ `null`。**`null` は「無い」（404）と「名前が成立しない」（400）だけである。**
+ * それ以外の失敗（401/403/5xx）を `null` にすると、`show` は「そんなやり方はありません」と
+ * 嘘を言い、`edit` / `set` は**読めていないだけの既存のやり方を無いものとして**扱う
+ * （`memory.ts` の `read` と同じ理由）。読めなかった理由は例外で上へ通す。
+ */
 async function read(
   client: DaemonClient,
+  target: Target,
   slug: string,
 ): Promise<{ kind: string; title: string; content: string } | null> {
   const response = await client.practices[':slug'].$get({ param: { slug } });
-  if (!response.ok) return null;
+  if (response.status === 404 || response.status === 400) return null;
+  if (!response.ok) {
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `やり方を読めませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
+  }
   const body = await response.json();
   return 'practice' in body
     ? { kind: body.practice.kind, title: body.practice.title, content: body.practice.content }

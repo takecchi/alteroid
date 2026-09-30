@@ -112,7 +112,9 @@ export async function memoryListCommand(now: number = Date.now()): Promise<void>
   const { client } = conn;
   const response = await client.memory.$get();
   if (!response.ok) {
-    stdout.write('記憶の一覧を読めませんでした\n');
+    stdout.write(
+      `${await withErrorReason(`記憶の一覧を読めませんでした（HTTP ${String(response.status)}）`, response)}\n`,
+    );
     return;
   }
   const { documents } = (await response.json()) as { documents: MemorySummary[] };
@@ -265,7 +267,7 @@ export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']
 export async function memoryShowCommand(slug: string): Promise<void> {
   const conn = await connect();
   if (conn === null) return;
-  const content = await read(conn.client, slug);
+  const content = await read(conn.client, conn.target, slug);
   if (content === null) {
     stdout.write(`そんな記憶はありません: ${slug}\n`);
     return;
@@ -284,7 +286,7 @@ export async function memoryEditCommand(slug: string): Promise<void> {
   const conn = await connect();
   if (conn === null) return;
   const { client, target } = conn;
-  const current = await read(client, slug);
+  const current = await read(client, target, slug);
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-memory-'));
   const path = join(dir, `${slug}.md`);
@@ -379,10 +381,27 @@ async function connect(): Promise<{ client: DaemonClient; target: Target } | nul
   return { client: createClient(target.baseUrl, target.headers), target };
 }
 
-/** 無ければ `null`。**空文字と区別する**（空の記憶は在りうる）。 */
-async function read(client: DaemonClient, slug: string): Promise<string | null> {
+/**
+ * 無ければ `null`。**空文字と区別する**（空の記憶は在りうる）。
+ *
+ * **`null` は「無い」（404）と「名前が成立しない」（400）だけである。** それ以外の失敗
+ * （401/403/5xx）を `null` にすると、`show` は「そんな記憶はありません」と嘘を言い、
+ * `edit` は**あるはずの記憶を読めていないのに空のひな形でエディタを開く**（保存すれば
+ * 既存の中身を上書きする）。読めなかった理由は例外で上へ通す。
+ */
+async function read(client: DaemonClient, target: Target, slug: string): Promise<string | null> {
   const response = await client.memory[':slug'].$get({ param: { slug } });
-  if (!response.ok) return null;
+  if (response.status === 404 || response.status === 400) return null;
+  if (!response.ok) {
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(
+        `記憶を読めませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
+  }
   const body = await response.json();
   return 'document' in body ? body.document.content : null;
 }

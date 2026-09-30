@@ -424,7 +424,14 @@ export async function runSlashCommand(
       if (date) {
         const response = await client.reports[':date'].$get({ param: { date } });
         if (!response.ok) {
-          stdout.write(`${date} の日報はありません\n`);
+          // 「無い」は 404 だけ。400（日付の形）・5xx を「ありません」と言わない。
+          stdout.write(
+            `${
+              response.status === 404
+                ? `${date} の日報はありません`
+                : await withDetail(`${date} の日報を読めませんでした`, response)
+            }\n`,
+          );
           return 'ok';
         }
         const body = await response.json();
@@ -433,7 +440,7 @@ export async function runSlashCommand(
       }
       const response = await client.reports.$get({ query: { limit: '1' } });
       if (!response.ok) {
-        stdout.write('日報を読めませんでした\n');
+        stdout.write(`${await withDetail('日報を読めませんでした', response)}\n`);
         return 'ok';
       }
       const { reports } = await response.json();
@@ -449,7 +456,7 @@ export async function runSlashCommand(
       const limit = rest[0] ?? '14';
       const response = await client.reports.$get({ query: { limit } });
       if (!response.ok) {
-        stdout.write('日報を読めませんでした\n');
+        stdout.write(`${await withDetail('日報を読めませんでした', response)}\n`);
         return 'ok';
       }
       const { reports } = await response.json();
@@ -484,7 +491,10 @@ export async function runSlashCommand(
         stdout.write(
           created.ok
             ? `${kind ?? ''} を仕込みました（/schedule で確認できます）\n`
-            : `仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません。cron 式なら書式も確かめてください）\n`,
+            : `${await withDetail(
+                '仕込めませんでした（名前は英小文字・数字・. _ -、既定の定期ジョブの名前は使えません。cron 式なら書式も確かめてください）',
+                created,
+              )}\n`,
         );
         return 'ok';
       }
@@ -494,7 +504,7 @@ export async function runSlashCommand(
       }
       const response = await client.schedule.$get();
       if (!response.ok) {
-        stdout.write('定期ジョブを読めませんでした\n');
+        stdout.write(`${await withDetail('定期ジョブを読めませんでした', response)}\n`);
         return 'ok';
       }
       const { entries } = await response.json();
@@ -529,10 +539,15 @@ export async function runSlashCommand(
         return 'ok';
       }
       const response = await client.schedule[':kind'].$delete({ param: { kind } });
+      // 「無い」は 404 だけ。それ以外の失敗を「ありません」と言わない。
       stdout.write(
-        response.ok
-          ? `${kind} を外しました\n`
-          : `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）\n`,
+        `${
+          response.ok
+            ? `${kind} を外しました`
+            : response.status === 404
+              ? `${kind} という継続中の依頼はありません（既定の定期ジョブは外せません）`
+              : await withDetail(`${kind} を外せませんでした`, response)
+        }\n`,
       );
       return 'ok';
     }
@@ -545,9 +560,13 @@ export async function runSlashCommand(
       }
       const response = await client.schedule[':kind'].run.$post({ param: { kind } });
       stdout.write(
-        response.ok
-          ? `${kind} を起こしました（結果は日誌・日報に出ます）\n`
-          : `${kind} という定期ジョブはありません\n`,
+        `${
+          response.ok
+            ? `${kind} を起こしました（結果は日誌・日報に出ます）`
+            : response.status === 404
+              ? `${kind} という定期ジョブはありません`
+              : await withDetail(`${kind} を起こせませんでした`, response)
+        }\n`,
       );
       return 'ok';
     }
@@ -561,9 +580,11 @@ export async function runSlashCommand(
       }
       const response = await client.events.$post({ json: { source, payload: body } });
       stdout.write(
-        response.ok
-          ? '外部イベントとして届けました（クローンが判断します）\n'
-          : '届けられませんでした\n',
+        `${
+          response.ok
+            ? '外部イベントとして届けました（クローンが判断します）'
+            : await withDetail('届けられませんでした', response)
+        }\n`,
       );
       return 'ok';
     }
@@ -576,6 +597,11 @@ export async function runSlashCommand(
       const slug = rest[0];
       if (!slug) {
         const response = await client.memory.$get();
+        // 失敗の本文（`{ error }`）に `documents` は無い。確かめずに読むと TypeError で落ちる。
+        if (!response.ok) {
+          stdout.write(`${await withDetail('記憶の一覧を読めませんでした', response)}\n`);
+          return 'ok';
+        }
         const { documents } = await response.json();
         if (documents.length === 0) stdout.write('（記憶はまだ空）\n');
         // **表記は `alteroid memory list`（`memory.ts`）に寄せる。** 同じ
@@ -596,7 +622,14 @@ export async function runSlashCommand(
       }
       const response = await client.memory[':slug'].$get({ param: { slug } });
       if (!response.ok) {
-        stdout.write('そんな記憶はありません\n');
+        // 「無い」は 404 だけ。400（スラッグの形）・5xx を「ありません」と言わない。
+        stdout.write(
+          `${
+            response.status === 404
+              ? 'そんな記憶はありません'
+              : await withDetail('記憶を読めませんでした', response)
+          }\n`,
+        );
         return 'ok';
       }
       const body = await response.json();
@@ -629,7 +662,9 @@ export async function runSlashCommand(
         },
       });
       if (!response.ok) {
-        stdout.write('日誌を読めませんでした（件数 / type= / q= の値を確かめてください）\n');
+        stdout.write(
+          `${await withDetail('日誌を読めませんでした（件数 / type= / q= の値を確かめてください）', response)}\n`,
+        );
         return 'ok';
       }
       const { entries } = await response.json();
@@ -689,7 +724,9 @@ export async function runSlashCommand(
       };
       const response = await client.conversations.$get({ query });
       if (!response.ok) {
-        stdout.write('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）\n');
+        stdout.write(
+          `${await withDetail('会話の一覧を読めませんでした（limit= / scan= の値を確かめてください）', response)}\n`,
+        );
         return 'ok';
       }
       const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
@@ -783,7 +820,9 @@ export async function runSlashCommand(
         return 'ok';
       }
       if (!response.ok) {
-        stdout.write('会話を読めませんでした（scan= の値を確かめてください）\n');
+        stdout.write(
+          `${await withDetail('会話を読めませんでした（scan= の値を確かめてください）', response)}\n`,
+        );
         return 'ok';
       }
       const { messages, scanned, reachedStart, supersededCount } = await response.json();
@@ -989,7 +1028,7 @@ export async function runSlashCommand(
         query: {},
       });
       if (!response.ok) {
-        stdout.write('マネージャーの一覧を読めませんでした\n');
+        stdout.write(`${await withDetail('マネージャーの一覧を読めませんでした', response)}\n`);
         return 'ok';
       }
       const { managers } = await response.json();
@@ -1126,7 +1165,14 @@ export async function runSlashCommand(
       }
       const response = await client.managers[':id'].transcript.$get({ param: { id } });
       if (!response.ok) {
-        stdout.write('そのマネージャーの生ログはまだありません\n');
+        // 「まだ無い」は 404 だけ。5xx 等を「まだありません」と言わない。
+        stdout.write(
+          `${
+            response.status === 404
+              ? 'そのマネージャーの生ログはまだありません'
+              : await withDetail('そのマネージャーの生ログを読めませんでした', response)
+          }\n`,
+        );
         return 'ok';
       }
       stdout.write(`${await response.text()}\n`);
@@ -1306,7 +1352,7 @@ export async function runSlashCommand(
       if (sub === 'sessions') {
         const response = await client.archive.sessions.$get();
         if (!response.ok) {
-          stdout.write('アーカイブの集計を読めませんでした\n');
+          stdout.write(`${await withDetail('アーカイブの集計を読めませんでした', response)}\n`);
           return 'ok';
         }
         const { sessions } = await response.json();
@@ -1377,7 +1423,7 @@ export async function runSlashCommand(
       if (!id) {
         const response = await client.archive.$get();
         if (!response.ok) {
-          stdout.write('アーカイブを読めませんでした\n');
+          stdout.write(`${await withDetail('アーカイブを読めませんでした', response)}\n`);
           return 'ok';
         }
         const { entries } = await response.json();
@@ -1390,7 +1436,14 @@ export async function runSlashCommand(
       }
       const response = await client.archive[':id'].$get({ param: { id } });
       if (!response.ok) {
-        stdout.write('その生ログはありません\n');
+        // 「無い」は 404 だけ。5xx 等を「ありません」と言わない。
+        stdout.write(
+          `${
+            response.status === 404
+              ? 'その生ログはありません'
+              : await withDetail('その生ログを読めませんでした', response)
+          }\n`,
+        );
         return 'ok';
       }
       stdout.write(`${await response.text()}\n`);
@@ -1423,7 +1476,7 @@ export async function runSlashCommand(
         query: { order: 'asc', ...(includeSettled ? { pending: 'false' as const } : {}) },
       });
       if (!response.ok) {
-        stdout.write('承認待ちを読めませんでした\n');
+        stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
         return 'ok';
       }
       const { approvals } = await response.json();
@@ -1521,7 +1574,7 @@ export async function runSlashCommand(
         return 'ok';
       }
       if (!response.ok) {
-        stdout.write('承認の答えと行動の対を読めませんでした\n');
+        stdout.write(`${await withDetail('承認の答えと行動の対を読めませんでした', response)}\n`);
         return 'ok';
       }
       const trace = (await response.json()) as ApprovalTrace;
@@ -1551,7 +1604,9 @@ export async function runSlashCommand(
         param: { id },
         json: { answer },
       });
-      stdout.write(response.ok ? '回答しました\n' : '回答に失敗しました\n');
+      stdout.write(
+        `${response.ok ? '回答しました' : await withDetail('回答に失敗しました', response)}\n`,
+      );
       return 'ok';
     }
 
@@ -1599,7 +1654,9 @@ export async function runSlashCommand(
 
       const response = await client.approvals.answer.$post({ json: { answers: requests } });
       if (!response.ok) {
-        stdout.write('まとめて答えられませんでした（サーバ側の検査に落ちました）\n');
+        stdout.write(
+          `${await withDetail('まとめて答えられませんでした（サーバ側の検査に落ちました）', response)}\n`,
+        );
         return 'ok';
       }
       // **成功件数だけを言わない。** 1件が駄目でも残りは進む設計なので、
@@ -1637,7 +1694,7 @@ export async function runSlashCommand(
         query: includeClosed ? { includeClosed: 'true' } : {},
       });
       if (!response.ok) {
-        stdout.write('台帳を読めませんでした\n');
+        stdout.write(`${await withDetail('台帳を読めませんでした', response)}\n`);
         return 'ok';
       }
       const { entries, unreadable, trimmedClosed } = await response.json();
@@ -1829,7 +1886,9 @@ export async function runSlashCommand(
       }
       const response = await client.usage.$get({ query: parsed.filters });
       if (!response.ok) {
-        stdout.write('利用状況を読めませんでした（from=/to= の日付の形を確かめてください）\n');
+        stdout.write(
+          `${await withDetail('利用状況を読めませんでした（from=/to= の日付の形を確かめてください）', response)}\n`,
+        );
         return 'ok';
       }
       const aggregate = await response.json();
@@ -2983,6 +3042,18 @@ function resolveListedId(reference: string, listed: string[]): string | null {
  * `login.ts` が既に同じ倒し方をしている（`typeof body.error === 'string'`）。
  * **黙って空文字を返さない**（理由が無いのと、理由が読めないのを混ぜない）。
  */
+/**
+ * 既存の文言の後ろへ、`errorDetail` を足す（`マネージャーの一覧を読めませんでした — …`
+ * の形。issue #2172 / PR #2175 と同じ）。**固定の文言だけを返して状態コードも理由も
+ * 捨てる口を作らないための、口ごとに共通の1本。**
+ */
+async function withDetail(
+  message: string,
+  response: { status: number; json: () => Promise<unknown> },
+): Promise<string> {
+  return `${message} — ${await errorDetail(response)}`;
+}
+
 async function errorDetail(response: { status: number; json: () => Promise<unknown> }) {
   try {
     const body: unknown = await response.json();
@@ -3133,7 +3204,10 @@ async function resolveWaitingTarget(
     query: {},
   });
   if (!response.ok) {
-    return { ok: false, message: 'マネージャーの一覧を読めませんでした' };
+    return {
+      ok: false,
+      message: await withDetail('マネージャーの一覧を読めませんでした', response),
+    };
   }
   const { managers } = await response.json();
   const owners = managers.filter((manager) =>
@@ -3186,7 +3260,10 @@ async function resolveDecisionOnlyManager(
     query: {},
   });
   if (!response.ok) {
-    return { ok: false, message: 'マネージャーの一覧を読めませんでした' };
+    return {
+      ok: false,
+      message: await withDetail('マネージャーの一覧を読めませんでした', response),
+    };
   }
   const { managers } = await response.json();
   const waiting = managers.filter((manager) => manager.waiting.length > 0);

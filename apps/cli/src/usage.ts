@@ -19,6 +19,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { resolveTarget } from './target.js';
 
 /**
@@ -101,7 +102,12 @@ export async function usageCommand(options: UsageOptions): Promise<void> {
     },
   });
   if (!response.ok) {
-    stdout.write('利用状況を読めませんでした（クエリの形を確かめてください）\n');
+    stdout.write(
+      `${await withErrorReason(
+        `利用状況を読めませんでした（HTTP ${String(response.status)}。クエリの形を確かめてください）`,
+        response,
+      )}\n`,
+    );
     return;
   }
   const aggregate = await response.json();
