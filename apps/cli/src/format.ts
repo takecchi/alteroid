@@ -6,26 +6,38 @@
  * 「どれだけ前か」の注釈だけである。
  *
  * 元は `apps/cli/src/chat.ts` の `/commitments` にだけあった実装
- * （`formatElapsed(iso, now)`）を、ほかの一覧（`access` / `conversations` /
+ * （`formatElapsedAgo(iso, now)`）を、ほかの一覧（`access` / `conversations` /
  * `runners` / `memory list` / `daemon status`）からも使えるようここへ引き
  * 上げた（#2141）。**`/commitments` の出力は1文字も変えていない** — 呼び先が
  * 変わっただけで、字面・分岐は逐語のまま移した。
  */
 
 /**
- * 受け取ってから（あるいは、その時刻になってから）の経過（＝齢）。
+ * 受け取ってから（あるいは、その時刻になってから）の経過（＝齢）を、
+ * **「N分前」の形まで**返す。呼び出し側は括弧（`（${formatElapsedAgo(...)}）`）だけ
+ * 持つ。
+ *
+ * **「前」をここが持つ理由（PR #2151 の欠陥）。** 単位だけを返して呼び出し側
+ * が `${...}前` と書く形だと、読めない時刻で画面に `（不明前）` と出た。「前」を
+ * 付けてよいのは読めた時刻のときだけで、それを知っているのはこの関数だけで
+ * ある。読めないときは「前」の付かない `経過不明` を返す。
  *
  * **台帳は優先度も締切も持たない**ので、人間が急ぎ方を決める材料はこれだけで
  * ある。ISO の時刻だけを出すと、読むたびに引き算をさせることになる。
  *
  * 未来の時刻（時計のずれ）は 0 に丸める。ここで負の齢を出しても人間には直せ
- * ない。読めない ISO（パース不能）は「不明」——0分前のように読める値を作らない。
+ * ない。読めない ISO（パース不能）は「経過不明」——0分前のように読める値を
+ * 作らない。
+ *
+ * **丸めは単位の上限を越えない。** `Math.round` だけだと 3570〜3599 秒が
+ * `60分`、84,600〜86,399 秒が `24時間` になっていた（次の単位へ上がるのは境目
+ * ちょうど）。
  */
-export function formatElapsed(iso: string, now: number): string {
+export function formatElapsedAgo(iso: string, now: number): string {
   const at = new Date(iso).getTime();
-  if (Number.isNaN(at)) return '不明';
+  if (Number.isNaN(at)) return '経過不明';
   const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 3600) return `${Math.round(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}時間`;
-  return `${Math.round(seconds / 86_400)}日`;
+  if (seconds < 3600) return `${Math.min(59, Math.round(seconds / 60))}分前`;
+  if (seconds < 86_400) return `${Math.min(23, Math.round(seconds / 3600))}時間前`;
+  return `${Math.round(seconds / 86_400)}日前`;
 }

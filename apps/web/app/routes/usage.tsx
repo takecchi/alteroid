@@ -12,11 +12,13 @@ import {
   USAGE_LAYERS,
   USAGE_SITES,
 } from '@alteroid/core/usage';
+import type { ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import {
   Page,
   Badge,
+  BarList,
   Card,
   CardHeader,
   Empty,
@@ -24,7 +26,6 @@ import {
   Input,
   Select,
   Spinner,
-  TruncationNote,
 } from '@alteroid/ui';
 import { useUsage, type UsageQuery } from '@alteroid/swr';
 import {
@@ -560,8 +561,9 @@ function UsageBody({
         //
         // 膨らまない理由 — 直接の子（`<AxisCard>` が返す `<Card>`。
         // className 未指定）自身は緩和クラスを持たない。膨らみを止めている
-        // のは3階層下、`AxisCard`（このファイル内、下に定義）の `<li>` 直下
-        // `<span className="min-w-0 truncate" ...>` である。`truncate` は
+        // のは `AxisCard`（このファイル内、下に定義）が並べる `BarList`
+        // （`packages/ui/src/components/features/charts/bar-list.tsx`）の
+        // 行の名前 `<span className="min-w-0 truncate" ...>` である。`truncate` は
         // `overflow: hidden` と `white-space: nowrap` を含む（実測:
         // `tailwindcss@4.3.3` のユーティリティ定義を grep で確認 —
         // `truncate` → `overflow:hidden` / `text-overflow:ellipsis` /
@@ -679,44 +681,40 @@ function AxisCard({
   /** `href` を持つ行だけ `label` を `<Link>` にする（issue #2046）。文言は変えない。 */
   entries: { label: string; costUsd: number; href?: string }[];
 }) {
-  const shown = entries.slice(0, AXIS_LIMIT);
-
   return (
     <Card>
       <CardHeader title={title} action={<Badge>{entries.length}</Badge>} />
-      {shown.length === 0 ? (
-        <Empty>無し。</Empty>
-      ) : (
-        <ul>
-          {shown.map((entry) => (
-            <li
-              key={entry.label}
-              className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
-            >
-              <span
-                className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
-                title={entry.label}
-              >
-                {entry.href === undefined ? (
-                  entry.label
-                ) : (
-                  <Link to={entry.href} className="hover:underline">
-                    {entry.label}
-                  </Link>
-                )}
-              </span>
-              <span className="shrink-0">{formatUsd(entry.costUsd)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
       {/*
         **打ち切ったら必ずそう書く。** 黙って切り捨てると「全部でこれだけ」と読める
-        出力が嘘になる。文言と判定は `TruncationNote` が1つ持つ（ここに直接書いて
-        いたものを移した）— 面ごとに書き分けると、片方だけ直したときに「同じ切り方
-        なのに片方だけ黙る」が生まれる。
+        出力が嘘になる。切り詰めと注記（`TruncationNote`）・空のときの `無し。` は
+        `BarList` が持つ（面ごとに書き分けると、片方だけ直したときに「同じ切り方
+        なのに片方だけ黙る」が生まれる）。
+
+        **帯の値は `costUsd` そのもの**（core の `usageTotalsSchema` が非負の数に
+        限っている）。値の無い項目はこの軸には来ないので、0 の帯で補う場面は無い。
+        金額の文字は今までどおり `formatUsd` が出す（帯は文字を持たない）。
       */}
-      <TruncationNote shown={AXIS_LIMIT} total={entries.length} />
+      <BarList
+        limit={AXIS_LIMIT}
+        formatValue={formatUsd}
+        empty="無し。"
+        items={entries.map((entry) => {
+          const { href } = entry;
+          return {
+            label: entry.label,
+            value: entry.costUsd,
+            ...(href === undefined
+              ? {}
+              : {
+                  renderLabel: (label: ReactNode) => (
+                    <Link to={href} className="hover:underline">
+                      {label}
+                    </Link>
+                  ),
+                }),
+          };
+        })}
+      />
     </Card>
   );
 }

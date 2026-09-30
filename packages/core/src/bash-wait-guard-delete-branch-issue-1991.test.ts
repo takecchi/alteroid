@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inspectBashCommand } from './bash-wait-guard.js';
+import { inspectBashCommand } from './bash-wait-guard-delete-branch.test-support.js';
 
 /**
  * issue #1991 —— `gh pr merge 1 "-d"` / `gh pr merge 1 '-d'` のように、
