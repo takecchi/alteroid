@@ -1686,6 +1686,8 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  *
  * ⚠️ **その後、`flock` 自身のオプションを読むようにした**（mgr-712ad619、2026-09-29T06:2xZ）。
  * `flock -n /tmp/l gh pr merge 1 -d` など、オプション付きの7形がすり抜けていた。
+ * （#2402: 短いオプションの束ねで最後が `w` / `E` の形 `-nw 5` も、値を1つ取る側で読む。
+ * 値を取らない側の否定の先読みも同じ形に揃えてあるので、1つの語の読み方は1通りのまま。）
  * `FLOCK_OPTION_SRC` が、値を取るもの（`-w` / `-E` と長い形の `--wait` /
  * `--timeout` / `--conflict-exit-code`）と、値を取らないもの（`-n` / `-x` / `--nonblock` …）
  * を分けて読む。**値を取らない側は、値を取る名前を否定の先読みで除く**（`-w` を値なしで
@@ -1716,7 +1718,7 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  * 3445.4ms → 5.2ms。mgr-712ad619 の実測 2026-09-29T06:2xZ。歯は
  * `bash-wait-guard-delete-branch-flock.test.ts`）。
  */
-const FLOCK_OPTION_SRC = String.raw`(?:-[wE][ \t]+\S+|--(?:wait|timeout|conflict-exit-code)(?:=\S+|[ \t]+\S+)|(?!-[wE](?:[ \t]|$))(?!--(?:wait|timeout|conflict-exit-code)(?:[ \t=]|$))(?!-c(?:[ \t]|$))(?!--command(?:[ \t=]|$))-\S+)`;
+const FLOCK_OPTION_SRC = String.raw`(?:-[A-Za-z]*[wE][ \t]+\S+|--(?:wait|timeout|conflict-exit-code)(?:=\S+|[ \t]+\S+)|(?!-[A-Za-z]*[wE](?:[ \t]|$))(?!--(?:wait|timeout|conflict-exit-code)(?:[ \t=]|$))(?!-c(?:[ \t]|$))(?!--command(?:[ \t=]|$))-\S+)`;
 
 const FLOCK_PREFIX_SRC = String.raw`(?:flock\b(?:[ \t]+${FLOCK_OPTION_SRC})*[ \t]+(?!-)\S+[ \t]+)`;
 
