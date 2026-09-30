@@ -73,7 +73,30 @@
  * 拾わない。だから `packages/core/src/tools.ts` の
  * `formatJournalNotRecordedMessage`（クローンへ返す「理由:」行）も
  * この関数を直接使う。
+ *
+ * ## 伏せ字（issue #2415）
+ *
+ * **各段の message は、1行目を取る前に `redactErrorText`（`denial-input-head.ts`）を
+ * 通す。** 「1行目だけ」はドライバの改行の位置に頼った守りで、設計上の保証では
+ * ない。1行目に値が載る形（`params:` が同じ行に続く、URL の資格、`Bearer <token>`、
+ * `NAME=value`）はここで伏せる。**切る前に伏せる**——200字の境界で割れたトークンの
+ * 断片は、どの伏せ字にも合わなくなって残る（`denial-input-head.ts` の doc）。
+ * 診断に要る部分（SQL 文・エラーの種類・URL の host）は残す。
+ *
+ * **段ごとに通す理由**: 最後の連結済みの文字列に通すより、段の境界（` <- `）を
+ * またぐ規則の誤作動が無く、構造化フィールドの値（短い識別子）と `name` も同じ
+ * 入口で伏せられる。ここを通る文は `reasonOf`（stderr の跡・`base.onError`・
+ * `noteDroppedRecord` 等）と `formatJournalNotRecordedMessage` のすべてなので、
+ * 各呼び出し側に足すより漏れがない。
+ *
+ * 環境変数の網には `process.env` を渡す（名前が `TOKEN` / `KEY` 等に合い、8文字
+ * 以上の値だけが対象。`denial-input-head.ts` の doc）。
  */
+
+import { redactErrorText } from './denial-input-head.js';
+
+/** 伏せ字を通す前に読む message の上限。巨大な message で伏せ字の走査が伸びないように。 */
+const REDACT_INPUT_LIMIT = 8192;
 
 /** 段ごとの `name: message` の切り詰め上限。1段目は `reasonOf` の既存の
  * 上限（`dropped-record.ts` の `REASON_LIMIT`）と同じ値にして、`.cause` を
@@ -136,10 +159,15 @@ export function collapseErrorCause(error: unknown): string {
 function levelText(value: unknown, limit: number): string {
   const head =
     value instanceof Error
-      ? clip(`${value.name}: ${firstLine(value.message)}`, limit)
-      : clip(firstLine(String(value)), limit);
+      ? clip(safeLine(`${value.name}: ${value.message}`), limit)
+      : clip(safeLine(String(value)), limit);
   const fields = structuredFieldsOf(value);
   return fields === '' ? head : `${head} ${fields}`;
+}
+
+/** 伏せ字を通してから1行目を取る（切るのはこの後。境界で割れた断片を残さない）。 */
+function safeLine(text: string): string {
+  return firstLine(redactErrorText(text.slice(0, REDACT_INPUT_LIMIT), process.env));
 }
 
 /**
@@ -154,7 +182,9 @@ function structuredFieldsOf(value: unknown): string {
   const record = value as Record<string, unknown>;
   return STRUCTURED_KEYS.flatMap((key) => {
     const raw = record[key];
-    return typeof raw === 'string' && raw !== '' ? [`${key}=${clip(raw, FIELD_LIMIT)}`] : [];
+    return typeof raw === 'string' && raw !== ''
+      ? [`${key}=${clip(safeLine(raw), FIELD_LIMIT)}`]
+      : [];
   }).join(' ');
 }
 

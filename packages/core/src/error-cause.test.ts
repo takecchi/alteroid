@@ -164,3 +164,72 @@ describe('collapseErrorCause', () => {
     expect(result).toBe('Error: weird');
   });
 });
+
+/**
+ * issue #2415: 各段の message は、1行目を取る前に伏せ字を通す。値はすべて偽である。
+ * 「1行目だけ」はドライバの改行の位置に頼った守りなので、1行目に値が載る形を測る。
+ */
+describe('collapseErrorCause / 伏せ字（issue #2415）', () => {
+  const FAKE = 'FAKE_SECRET_VALUE_2415B';
+
+  it('drizzle の形（params が同じ行）: 値は出ず、SQL 文と印は残る', () => {
+    const result = collapseErrorCause(
+      new Error(`Failed query: insert into "t" ("a") values ($1) params: ${FAKE}`),
+    );
+    expect(result).not.toContain(FAKE);
+    expect(result).toContain('Failed query: insert into "t" ("a") values ($1)');
+    expect(result).toContain('params: [REDACTED]');
+  });
+
+  it('drizzle の形（params が2行目）: 値は出ない', () => {
+    const result = collapseErrorCause(new Error(`Failed query: select 1\nparams: ${FAKE}`));
+    expect(result).not.toContain(FAKE);
+    expect(result).toContain('Failed query: select 1');
+  });
+
+  it('URL の資格: 値は出ず、host は残る', () => {
+    const result = collapseErrorCause(new Error(`connect postgres://u:${FAKE}@db.internal:5432/x`));
+    expect(result).not.toContain(FAKE);
+    expect(result).toContain('db.internal:5432');
+    expect(result).toContain('Error: connect postgres://u:[REDACTED]@');
+  });
+
+  it('Bearer: 値は出ない', () => {
+    const result = collapseErrorCause(new Error(`401 Authorization: Bearer ${FAKE}`));
+    expect(result).not.toContain(FAKE);
+    expect(result).toContain('Bearer [REDACTED]');
+  });
+
+  it('cause の中の値も出ない（段ごとに伏せる）', () => {
+    const cause = new Error(`connect postgres://u:${FAKE}@db.internal/x`);
+    const result = collapseErrorCause(new Error('Failed query: select 1', { cause }));
+    expect(result).not.toContain(FAKE);
+    expect(result).toContain('Failed query: select 1');
+    expect(result).toContain('db.internal');
+  });
+
+  it('Error でない値（文字列）も伏せる', () => {
+    expect(collapseErrorCause(`Bearer ${FAKE}`)).not.toContain(FAKE);
+  });
+
+  it('切り口で割れる位置にトークンが来ても断片を残さない（伏せてから切る）', () => {
+    const token = `ghp_${'1234567890abcdef1234567890abcdef1234'}`;
+    const prefix = 'x'.repeat(200 - 10);
+    const result = collapseErrorCause(new Error(`${prefix} ${token}`));
+    expect(result).not.toContain('ghp_1234');
+    expect(result).not.toContain('1234567890abcdef');
+  });
+
+  it('環境変数の値（秘密らしい名前・8文字以上）も伏せる', () => {
+    const before = process.env.FAKE_2415B_API_TOKEN;
+    process.env.FAKE_2415B_API_TOKEN = 'plain-fake-value-2415b';
+    try {
+      const result = collapseErrorCause(new Error('boom plain-fake-value-2415b end'));
+      expect(result).not.toContain('plain-fake-value-2415b');
+      expect(result).toContain('boom [REDACTED] end');
+    } finally {
+      if (before === undefined) delete process.env.FAKE_2415B_API_TOKEN;
+      else process.env.FAKE_2415B_API_TOKEN = before;
+    }
+  });
+});

@@ -9802,6 +9802,49 @@ describe('認証トークンのプール', () => {
     expect(lines.join('\n')).not.toBe('');
   });
 
+  /**
+   * issue #2415: `base.onError` の stderr は、例外の文を**伏せ字を通して**出す。
+   * 上のテストは値が2行目（`params:` の次の行）にあるので「1行目だけ」で落ちるが、
+   * ここは値が**1行目**にある形（URL の資格・Bearer・同じ行の `params:`）を測る。
+   * 診断（SQL 文・host）は残る。値はすべて偽である。
+   */
+  it('base.onError: 例外の1行目に値があっても stderr に出ない（診断は残る）', async () => {
+    const FAKE = 'FAKE_SECRET_VALUE_2415B';
+    const failing: Stores = {
+      ...stores,
+      tokens: {
+        ...stores.tokens,
+        list: () => {
+          throw new Error(
+            `connect postgres://u:${FAKE}@db.internal:5432/x Authorization: Bearer ${FAKE} ` +
+              `Failed query: select "value" from "agent_tokens" params: ${FAKE}`,
+          );
+        },
+      },
+    };
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores: failing,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: failing }),
+    });
+
+    let response: Response | undefined;
+    const lines = await captureStderr(async () => {
+      response = await withTokens.request('/tokens');
+    });
+
+    expect(response?.status).toBe(500);
+    expect(await (response as Response).text()).not.toContain(FAKE);
+    const stderr = lines.join('\n');
+    expect(stderr).toContain('HTTP 経路で例外を捕まえました');
+    expect(stderr).not.toContain(FAKE);
+    expect(stderr).toContain('postgres://u:[REDACTED]@db.internal:5432/x');
+    expect(stderr).toContain('Failed query: select "value" from "agent_tokens"');
+    expect(stderr).toContain('params: [REDACTED]');
+  });
+
   it('PUT /tokens/policy で回す契機・冷却を変えられる（部分更新）', async () => {
     const withTokens = createApp({
       clone: fake.clone,

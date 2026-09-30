@@ -16,6 +16,7 @@ import {
   createMemoryStores,
   DEFAULT_SSE_HEARTBEAT_MS,
   HEARTBEAT_FRAME,
+  RunnerHttpError,
   type ManagerPool,
   type InboxEvent,
   type Stores,
@@ -3779,5 +3780,64 @@ describe('Last-Event-ID の申告（#275）', () => {
     await client.close();
 
     expect(headersSeen()[1]).toBeUndefined();
+  });
+});
+
+/**
+ * issue #2415: runner の失敗応答の本文は、`RunnerHttpError` の message に入る前に
+ * 伏せ字を通し、長さで切る。status は残す。値はすべて偽である。
+ */
+describe('RunnerHttpError の message は本文を伏せて切る（issue #2415）', () => {
+  const FAKE = 'FAKE_SECRET_VALUE_2415B';
+
+  const failWith = async (status: number, body: string): Promise<unknown> => {
+    const fetchFn = (async () => new Response(body, { status })) as unknown as typeof fetch;
+    return createHttpRunner({ baseUrl: 'http://runner.test', token: TOKEN, fetchFn }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  };
+
+  it('本文の値は出ず、status は残り、診断の語（host）は残る', async () => {
+    const error = await failWith(
+      400,
+      `connect postgres://u:${FAKE}@db.internal:5432/x Authorization: Bearer ${FAKE}`,
+    );
+
+    expect(error).toBeInstanceOf(RunnerHttpError);
+    const httpError = error as RunnerHttpError;
+    expect(httpError.status).toBe(400);
+    expect(httpError.message).toContain('(400)');
+    expect(httpError.message).not.toContain(FAKE);
+    expect(httpError.message).toContain('db.internal:5432');
+  });
+
+  it('params: 以降は落ちる', async () => {
+    const error = (await failWith(
+      400,
+      `Failed query: select 1\nparams: ${FAKE}`,
+    )) as RunnerHttpError;
+
+    expect(error.message).not.toContain(FAKE);
+    expect(error.message).toContain('Failed query: select 1');
+    expect(error.message).toContain('params: [REDACTED]');
+  });
+
+  it('長い本文は切る（前置きの分を除いて 512 字＋印）', async () => {
+    const error = (await failWith(400, 'z'.repeat(100_000))) as RunnerHttpError;
+
+    expect(error.status).toBe(400);
+    expect(error.message).toContain('z'.repeat(512));
+    expect(error.message).not.toContain('z'.repeat(513));
+    expect(error.message.endsWith('…')).toBe(true);
+    expect(error.message.length).toBeLessThan(700);
+  });
+
+  it('切り口をまたぐトークンの断片は残らない（伏せてから切る）', async () => {
+    const token = `ghp_${'1234567890abcdef1234567890abcdef1234'}`;
+    const error = (await failWith(400, `${'a '.repeat(250)}${token} tail`)) as RunnerHttpError;
+
+    expect(error.message).not.toContain('ghp_');
+    expect(error.message).not.toContain('1234567890abcdef');
   });
 });

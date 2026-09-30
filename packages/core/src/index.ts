@@ -1249,6 +1249,13 @@ export {
 export { collapseErrorCause } from './error-cause.js';
 
 /**
+ * 文字列に含まれる秘密の伏せ字（issue #2415）。`redactSecretsInText` は
+ * `buildDenialInputHead` の伏せ字そのもの、`redactErrorText` はそれに `params:`
+ * 以降を落とす規則を足した、例外の文用。`denial-input-head.ts` の doc を見よ。
+ */
+export { redactErrorText, redactSecretsInText } from './denial-input-head.js';
+
+/**
  * `dropped-record.ts` のテスト専用フック（本番の配線には出てこない）。
  *
  * **`captureStderr`（`testing.ts` から export 済み）と対で使う。** 帳面
