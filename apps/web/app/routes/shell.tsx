@@ -8,6 +8,7 @@ import {
   DollarSign,
   Footprints,
   Gauge,
+  Hourglass,
   Inbox as InboxIcon,
   KeyRound,
   LayoutDashboard,
@@ -61,6 +62,9 @@ const NAV = [
   // 「クローンが止まっている」で、こちらは「まだ片付いていない」である（止まって
   // いなくても片付いていない仕事はある）。
   { to: '/commitments', label: '未了の仕事', icon: ListChecks, end: false },
+  // 未了の仕事の隣。あちらは行を1件ずつ見る一覧で、こちらは同じ台帳と委譲を**数え直した集計**
+  // （積み上がり・実施中・片付いた速度・見込み。Issue #2241）。行の本文は持たない。
+  { to: '/progress', label: '作業の進捗', icon: Hourglass, end: false },
   { to: '/managers', label: 'マネージャー', icon: Users, end: false },
   // マネージャーの隣。評定（good/bad/unclear）は台帳（未了の仕事）と委譲
   // （マネージャー）の両方の軸を跨いで集計するので、どちらか一方の詳細画面では
