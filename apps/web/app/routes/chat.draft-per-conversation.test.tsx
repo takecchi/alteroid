@@ -22,8 +22,11 @@
  * 2本）。ここではそれを正式なテストとして起こし、以下を追加する:
  * - 送ったら、その会話の下書きだけが空になり、別の会話の下書きは残る
  * - 新しい会話 → 既存の会話 → 新しい会話 で、新しい会話の下書きが戻る
+ *
+ * Issue #2453 で1本足した: 新しい会話で送った文章が、次に新しい会話を開いた
+ * ときに下書きとして戻らない。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -212,5 +215,62 @@ describe('会話ごとの下書き（#1618）', () => {
     // 「これから変わる、切り替えの完了そのものを示す要素」へ差し替える直し。
     expect(await screen.findByText('新しい会話')).toBeTruthy();
     expect((await draftBox()).value).toBe('新しい会話の下書き');
+  });
+
+  /*
+   * Issue #2453: 新しい会話で送った文章が、次に新しい会話を開くと下書きとして
+   * 復活していた。
+   *
+   * 鍵 `undefined` にしまった下書きは、戻ってきて `draft` へ読み出しても
+   * Map に残ったままだった。新しい会話で送ると `setDraft('')` の後に `open`
+   * で `shownId` が確定した id へ替わるので、次に離れるときの鍵はその id に
+   * なり、鍵 `undefined` の古い値は空で上書きされない。直しは、入ってくる
+   * 会話の鍵を読んだら Map から消すこと（読み出した値は `draft` が持つ）。
+   */
+  it('新しい会話で送る → 別の会話 → 新しい会話 で、送った文章が下書きとして戻らない（#2453）', async () => {
+    const CONVERSATION_NEW = 'conv-draft-new';
+    const STREAM_NEW = [
+      { event: 'open', data: { conversationId: CONVERSATION_NEW } },
+      { event: 'text', data: { type: 'text', text: '受け取った' } },
+      { event: 'done', data: { type: 'done' } },
+    ];
+    const route: Route = (url, init) => {
+      if (url.endsWith('/chat')) return sse(STREAM_NEW, { signal: init?.signal });
+      if (url.includes(`/conversations/${CONVERSATION_NEW}`)) {
+        return json({ conversationId: CONVERSATION_NEW, messages: [] });
+      }
+      return conversationRoutes(url);
+    };
+    stubFetch(route);
+
+    const { router } = renderChat('/chat');
+
+    // 新しい会話で書きかけ、送らずに A へ移る（鍵 undefined にしまわれる）。
+    fireEvent.change(await draftBox(), { target: { value: '新しい会話から送る発言' } });
+    await router.navigate(`/chat/${CONVERSATION_A}`);
+    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    expect((await draftBox()).value).toBe('');
+
+    // 新しい会話へ戻ると下書きが戻る（直前の歯と同じ前提）。
+    await router.navigate('/chat');
+    expect(await screen.findByText('新しい会話')).toBeTruthy();
+    expect((await draftBox()).value).toBe('新しい会話から送る発言');
+
+    // それを送る。`open` で id が確定し、URL が `/chat/<新しい id>` へ追いつく。
+    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    expect((await draftBox()).value).toBe('');
+    await screen.findByText('受け取った');
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(`/chat/${CONVERSATION_NEW}`);
+    });
+    expect((await draftBox()).value).toBe('');
+
+    // 別の会話へ移ってから、もう一度「新しい会話」を開く。
+    await router.navigate(`/chat/${CONVERSATION_A}`);
+    expect(await screen.findByText(CONVERSATION_A)).toBeTruthy();
+    await router.navigate('/chat');
+    expect(await screen.findByText('新しい会話')).toBeTruthy();
+    // あるべき形: 送った文章は下書きとして戻らない。
+    expect((await draftBox()).value).toBe('');
   });
 });
