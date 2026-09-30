@@ -25,6 +25,11 @@ export type ManagerStatus = ManagerSummary['status'];
 export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
 
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
+/**
+ * 承認待ちの行が読めなかったもの（issue #2298）。「無い」でも「回答済み」でもない
+ * 第3の状態——`GET /approvals` の `unreadable`（1件でも在るときだけ載る）から導く。
+ */
+export type UnreadableApproval = NonNullable<Ok<paths['/approvals']['get']>['unreadable']>[number];
 
 /**
  * 引き受けたまま終わっていない仕事の台帳の1行（`GET /commitments`）。

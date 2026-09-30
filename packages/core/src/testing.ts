@@ -638,9 +638,13 @@ export function createMemoryStores(): Stores {
     async listApprovals(options = {}) {
       const all = [...approvals.values()].map(isolate);
       // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える）。
-      return options.pendingOnly
-        ? all.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
-        : all;
+      // 読めない行は持てない（`putApproval` がスキーマを通す）ので `unreadable` は常に空。
+      return {
+        entries: options.pendingOnly
+          ? all.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
+          : all,
+        unreadable: [],
+      };
     },
     async getApproval(id) {
       const found = approvals.get(id);

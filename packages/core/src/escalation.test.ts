@@ -172,7 +172,7 @@ describe('エスカレーション（受け入れ基準2）', () => {
       });
     }
 
-    const approvals = await stores.jobs.listApprovals({ pendingOnly: true });
+    const approvals = (await stores.jobs.listApprovals({ pendingOnly: true })).entries;
     expect(approvals).toHaveLength(2);
     // 宛先が承認待ちの永続データに残っていること（ここが欠けると戻せない）
     expect(approvals.map((a) => [a.jobId, a.requestId])).toEqual([
@@ -333,7 +333,7 @@ describe('クローンが記憶を根拠に、人間を経由せず答える経�
     // 承認待ちキュー（jobs.putApproval）へ積むのは `ask_human` だけである。
     // `escalation` 型の日誌は `manager.ts` が ask/answer のたびに機械的に書く
     // （どちらの経路でも書かれるので、ここでは経路の判定材料にしない）。
-    const approvals = await stores.jobs.listApprovals({ pendingOnly: true });
+    const approvals = (await stores.jobs.listApprovals({ pendingOnly: true })).entries;
     expect(approvals).toHaveLength(0);
 
     // --- ② 判断が journal_write で日誌（decision）に残っている ---------------

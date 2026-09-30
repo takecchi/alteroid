@@ -593,7 +593,7 @@ describe('PgJobStore', () => {
       question: 'これをやってよいか',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(1);
 
     const approval = await stores.jobs.getApproval('ap-1');
     await stores.jobs.putApproval({
@@ -602,7 +602,7 @@ describe('PgJobStore', () => {
       answer: 'よい',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
 
@@ -616,7 +616,7 @@ describe('PgJobStore', () => {
       question: 'これをやってよいか',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(1);
 
     const approval = await stores.jobs.getApproval('ap-withdraw');
     await stores.jobs.putApproval({
@@ -625,8 +625,8 @@ describe('PgJobStore', () => {
       withdrawnReason: '自分で答えを見つけた',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
-    expect(await stores.jobs.listApprovals()).toHaveLength(1);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
+    expect((await stores.jobs.listApprovals()).entries).toHaveLength(1);
     const after = await stores.jobs.getApproval('ap-withdraw');
     expect(after?.withdrawnReason).toBe('自分で答えを見つけた');
   });

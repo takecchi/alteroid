@@ -6,7 +6,7 @@ import { scanJournalPages } from './journal-scan.js';
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js';
-import { UnreadableApprovalError } from './store.js';
+import { UnreadableApprovalError, describeUnreadableApprovals } from './store.js';
 import type { Stores } from './store.js';
 import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
 
@@ -1140,7 +1140,11 @@ export async function buildActivityDigest(
   // エスカレーション節が権威ある出所を引く必要があるときは、表示する分
   // （`MAX_ITEMS` 件まで）だけ `describeEscalationState` の中で個別に引く
   // （そちらの doc を参照。呼び出し回数はそこで頭打ちになる）。
-  const pending = await stores.jobs.listApprovals({ pendingOnly: true });
+  const approvalList = await stores.jobs.listApprovals({ pendingOnly: true });
+  const pending = approvalList.entries;
+  // **読めない承認待ち（`unreadable`）を件数からもここからも消さない**（issue #2298）。
+  // 0件のときは何も出さない（下の2か所とも `null` / 条件で出さない）。
+  const unreadableApprovalNote = describeUnreadableApprovals(approvalList.unreadable);
   const pendingById = new Map(pending.map((approval) => [approval.id, approval] as const));
   // 継続中の依頼は期間で切らない。「いま何を頼まれたままか」は常に材料である
   // （これが無いと、発意 tick のたびに頼まれた仕事を思い出せるかの賭けになる）。
@@ -1358,6 +1362,13 @@ export async function buildActivityDigest(
     `- マネージャー・作業者のツール実行: ${delegatedToolUsesCount} 件`,
     `- あなた自身が手を動かした回数（委譲せずに使った道具）: ${cloneToolUsesCount} 件`,
     `- いま人間の回答を待っているもの: ${pending.length} 件`,
+    // **0件のときは行を作らない**（0 の行は「読めない行は無い」と読めるが、ここは
+    // 読めない行が在ったときだけ言う。詳細は「人間の回答待ち」の節）。
+    ...(approvalList.unreadable.length === 0
+      ? []
+      : [
+          `- 読めない承認待ち（壊れた行。上の件数には入っていない）: ${approvalList.unreadable.length} 件`,
+        ]),
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
     `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
     // **0件でも出す**（他の行と同じ扱い）。台帳の破損は稀だが、無いことも
@@ -1551,7 +1562,7 @@ export async function buildActivityDigest(
     );
   }
 
-  if (pending.length > 0) {
+  if (pending.length > 0 || unreadableApprovalNote !== null) {
     sections.push('', '## 人間の回答待ち（保留中。他の仕事は進めてよい）');
     const shownPending = pending.slice(0, MAX_ITEMS);
     for (const approval of shownPending) {
@@ -1561,7 +1572,12 @@ export async function buildActivityDigest(
       );
     }
     // ここだけは打ち切らない道具があるので「全部見える」と書ける。
-    sections.push(...omitted(pending.length, shownPending.length, '`approvals_list` で全部見える'));
+    if (pending.length > 0) {
+      sections.push(
+        ...omitted(pending.length, shownPending.length, '`approvals_list` で全部見える'),
+      );
+    }
+    if (unreadableApprovalNote !== null) sections.push(`- ${unreadableApprovalNote}`);
   }
 
   if (memoryUpdatesCount > 0) {

@@ -4425,6 +4425,25 @@ export const pendingApprovalSchema = z.object({
 export type PendingApproval = z.infer<typeof pendingApprovalSchema>;
 
 /**
+ * 承認待ちの1行が `pendingApprovalSchema` として読めなかったときに、その行の
+ * 代わりに一覧へ載せるもの（issue #2298。`unreadableCommitmentSchema` と同じ形）。
+ *
+ * **「無い」でも「回答済み」でもない第3の状態。** 一覧が読めない行を黙って飛ばすと、
+ * 人間もクローンも、読めない承認待ちが在ること自体に気づけない。
+ *
+ * **⚠️ 本文（`question` / `context` / `answer`）を載せないこと。** 承認の欄には人間の
+ * 依頼文や回答がそのまま入りうる（`UnreadableApprovalError` の doc、#52 と同じ理由）。
+ * `reason` は「どの欄が不正か」だけにする。
+ */
+export const unreadableApprovalSchema = z.object({
+  /** 行から取れた id。取れないこともある（fs 版で行そのものが id を持たない形のとき）。 */
+  id: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadableApproval = z.infer<typeof unreadableApprovalSchema>;
+
+/**
  * 一覧の `updatedAt`（更新＝回答が付いた時刻。まだなら作成時刻）を出す。
  *
  * **なぜここへ寄せたか。** かつては MCP（`tools.ts`）と CLI（`apps/cli/src/chat.ts`）

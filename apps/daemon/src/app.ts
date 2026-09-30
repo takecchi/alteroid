@@ -3302,7 +3302,8 @@ export function createApp(deps: AppDeps) {
           c.req.query('limit') !== undefined ||
           c.req.query('cursor') !== undefined;
 
-        const byPending = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
+        const approvalList = await stores.jobs.listApprovals({ pendingOnly: pending !== 'false' });
+        const byPending = approvalList.entries;
         // **`conversationId` は `pending` の直後、`total` を数える前に当てる。**
         // `total` は「この呼びが対象にしている集合」の件数であって、絞り込みを
         // 当てる前の全件ではない——`pending` が既にそうしている（未回答のみに
@@ -3352,6 +3353,7 @@ export function createApp(deps: AppDeps) {
 
         const responseBody: {
           approvals: unknown[];
+          unreadable?: unknown[];
           total?: number;
           nextCursor?: string;
         } = {
@@ -3360,6 +3362,11 @@ export function createApp(deps: AppDeps) {
             updatedAt: approvalUpdatedAt(approval),
           })),
         };
+        // **読めない行は 1 件でも在るときだけ `unreadable` を載せる**（issue #2298）。
+        // 0 件なら鍵ごと無い（「読めない行は 0 件」と読める空配列を作らず、既存の呼び手の
+        // 応答を1バイトも変えない）。窓（`limit`/`cursor`）でも `conversationId` の
+        // 絞りでも切らない——行が読めないので、どの会話のものかも分からない。
+        if (approvalList.unreadable.length > 0) responseBody.unreadable = approvalList.unreadable;
         if (optedIn) {
           responseBody.total = total;
           if (hasMore && lastOfPage !== undefined) {

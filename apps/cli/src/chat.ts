@@ -17,6 +17,7 @@ import {
   usageSiteSchema,
   type ApprovalTrace,
   type Commitment,
+  type UnreadableApproval,
   type UnreadableCommitment,
   type UsageLayer,
   type UsageSite,
@@ -1480,10 +1481,17 @@ export async function runSlashCommand(
         stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
         return 'ok';
       }
-      const { approvals } = await response.json();
+      const { approvals, unreadable = [] } = await response.json();
       listed.approvals.length = 0;
       if (approvals.length === 0) {
-        stdout.write('（承認待ちはありません）\n');
+        // 読めない行が在るのに「ありません」とだけ言わない（issue #2298）。
+        stdout.write(
+          unreadable.length === 0
+            ? '（承認待ちはありません）\n'
+            : '（読めた承認待ちはありません）\n',
+        );
+        const note = renderUnreadableApprovalNotice(unreadable);
+        if (note !== '') stdout.write(`${note}\n`);
         return 'ok';
       }
       approvals.forEach((approval, index) => {
@@ -1547,6 +1555,8 @@ export async function runSlashCommand(
         );
       });
       stdout.write('  /answer <番号> <回答> で答えられます（答えた仕事だけが再開します）\n');
+      const unreadableNote = renderUnreadableApprovalNotice(unreadable);
+      if (unreadableNote !== '') stdout.write(`${unreadableNote}\n`);
       return 'ok';
     }
 
@@ -3367,6 +3377,21 @@ function renderUnreadableNotice(unreadable: UnreadableCommitment[]): string {
     `  ⚠ 読めない行が ${unreadable.length} 件あります` +
     (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
     '。片付いたのではありません。'
+  );
+}
+
+/**
+ * 読めない承認待ちの断り（issue #2298。`renderUnreadableNotice` と同じ形）。0件なら空文字。
+ * **「壊れた行であって、回答済み・取り下げ済みではない」を落とさない。** 番号は振らない
+ * （読めない行へは `/answer` できない）。
+ */
+function renderUnreadableApprovalNotice(unreadable: UnreadableApproval[]): string {
+  if (unreadable.length === 0) return '';
+  const ids = unreadable.map((entry) => entry.id).filter((id): id is string => id !== undefined);
+  return (
+    `  ⚠ 読めない承認待ちが ${unreadable.length} 件あります` +
+    (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
+    '。壊れた行であって、回答済み・取り下げ済みではありません。この一覧には載っていません。'
   );
 }
 

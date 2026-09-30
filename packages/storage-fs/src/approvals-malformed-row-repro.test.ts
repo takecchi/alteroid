@@ -97,7 +97,7 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
 
     let found: PendingApproval[] = [];
     await captureStderr(async () => {
-      found = await stores.jobs.listApprovals();
+      found = (await stores.jobs.listApprovals()).entries;
     });
 
     expect(found.map((a) => a.id)).toEqual(['appr-good']);
@@ -163,7 +163,7 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
 
     let found: PendingApproval[] = [];
     await captureStderr(async () => {
-      found = await stores.jobs.listApprovals();
+      found = (await stores.jobs.listApprovals()).entries;
     });
     expect(found.map((a) => a.id).sort()).toEqual(['appr-good', 'appr-new']);
   });
@@ -193,7 +193,7 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
 
     // 直したので、次の listApprovals() では跡が1行も出ない。
     const lines = await captureStderr(async () => {
-      const found = await stores.jobs.listApprovals();
+      const found = (await stores.jobs.listApprovals()).entries;
       expect(found.map((a) => a.id).sort()).toEqual(['appr-bad', 'appr-good']);
     });
     expect(lines).toHaveLength(0);
@@ -218,7 +218,7 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
 
     let found: PendingApproval[] = [];
     await captureStderr(async () => {
-      found = await stores.jobs.listApprovals();
+      found = (await stores.jobs.listApprovals()).entries;
     });
     expect(found).toEqual([]);
   });

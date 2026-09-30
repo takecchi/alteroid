@@ -28,6 +28,7 @@ import type {
   SchedulePhase,
   ScheduledRequest,
   ScheduleSpec,
+  UnreadableApproval,
   UnreadableCommitment,
 } from './schema.js';
 import type {
@@ -517,6 +518,57 @@ export class UnreadableApprovalError extends Error {
   }
 }
 
+/**
+ * `JobStore.listApprovals` の返り値（issue #2298。`CommitmentList` と同じ形）。
+ *
+ * **`PendingApproval[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない
+ * 形にするため。** 読めない行を空配列（無い）へ潰すと、人間もクローンも「読めない
+ * 承認待ちが在る」ことに気づけない。`entries` だけを見て `unreadable` を読み飛ばす
+ * ことは書けても、`ApprovalList` を受け取っておいて `unreadable` がコンパイラの目に
+ * 触れないことはできない。
+ */
+export interface ApprovalList {
+  entries: PendingApproval[];
+  /**
+   * 読めなかった行。**「無い」でも「回答済み」でもない第3の状態。** 一覧全体は落とさない。
+   * `pendingOnly: true` のとき、回答済み・取り下げ済みと分かる行は含めない（pg は列で、
+   * fs は生の行の `answeredAt` / `withdrawnAt` で見る）。**どちらも取れない行は含める**
+   * （数える側へ倒す。「回答済みだったかもしれない」を理由に消さない）。
+   */
+  unreadable: UnreadableApproval[];
+}
+
+/**
+ * 読めない承認待ちが在るときの1文（0件なら `null`。**0件のときは何も出さない**——
+ * 「読めない承認待ちは 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
+ *
+ * クローンの道具（`approvals_list`）と digest が同じ文面を使う。id が取れた行は
+ * 上限つきで並べ、取れない行は件数だけで言う。本文は載せない
+ * （`unreadableApprovalSchema` の doc）。
+ */
+export function describeUnreadableApprovals(
+  unreadable: readonly UnreadableApproval[],
+  options: { idLimit?: number } = {},
+): string | null {
+  if (unreadable.length === 0) return null;
+  const idLimit = options.idLimit ?? 10;
+  const ids = unreadable.flatMap((row) => (row.id === undefined ? [] : [row.id]));
+  const shown = ids.slice(0, idLimit);
+  const idNote =
+    ids.length === 0
+      ? '（id も取れない）'
+      : `（id: ${shown.join(', ')}` +
+        (ids.length > shown.length ? ` ほか ${ids.length - shown.length} 件` : '') +
+        (ids.length < unreadable.length
+          ? `。id が取れない行が ${unreadable.length - ids.length} 件`
+          : '') +
+        '）';
+  return (
+    `読めない承認待ちが ${unreadable.length} 件ある${idNote}。` +
+    '壊れた行であって、回答済み・取り下げ済みではない。この一覧には載っていない。'
+  );
+}
+
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
@@ -556,14 +608,20 @@ export interface JobStore {
    */
   updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null>;
 
-  listApprovals(options?: { pendingOnly?: boolean }): Promise<PendingApproval[]>;
+  /**
+   * 承認待ちの一覧。**読めない行（`pendingApprovalSchema` に合わない行）は一覧全体を
+   * 落とさず、`unreadable` に別欄で返す**（issue #2298。`CommitmentStore.list` と同じ形）。
+   * **メモリ実装（`testing.ts`）は常に空**——`putApproval` がスキーマを通すので、壊れた行を
+   * 持てない。
+   */
+  listApprovals(options?: { pendingOnly?: boolean }): Promise<ApprovalList>;
   /**
    * 承認待ち1件を id で読む。**無ければ `null`。在るが読めない行（版ずれ・手編集で
    * `pendingApprovalSchema` に合わなくなった行）は `null` ではなく
    * `UnreadableApprovalError`（本ファイル）を投げる**——`null` に畳むと、呼び出し元が
    * 「存在しない」「id が違う」と言い切ってしまう。**メモリ実装（`testing.ts`）は
    * 投げない**——`putApproval` がスキーマを通すので、壊れた行を持てない。
-   * `listApprovals()` は従来どおり読めない行を飛ばす（一覧全体を落とさない）。
+   * `listApprovals()` は一覧全体を落とさず、読めない行を `unreadable` に返す。
    */
   getApproval(id: string): Promise<PendingApproval | null>;
   putApproval(approval: PendingApproval): Promise<void>;

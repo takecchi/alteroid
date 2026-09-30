@@ -1618,7 +1618,7 @@ describe('FsJobStore', () => {
       question: 'これをやってよいか',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(1);
 
     const approval = await stores.jobs.getApproval('ap-1');
     await stores.jobs.putApproval({
@@ -1627,7 +1627,7 @@ describe('FsJobStore', () => {
       answer: 'よい',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
   });
 
@@ -1640,7 +1640,7 @@ describe('FsJobStore', () => {
       question: 'これをやってよいか',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(1);
 
     const approval = await stores.jobs.getApproval('ap-withdraw');
     await stores.jobs.putApproval({
@@ -1649,9 +1649,9 @@ describe('FsJobStore', () => {
       withdrawnReason: '自分で答えを見つけた',
     });
 
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(0);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(0);
     // 消えたわけではない——全件（pendingOnly を外した）一覧には残る。
-    expect(await stores.jobs.listApprovals()).toHaveLength(1);
+    expect((await stores.jobs.listApprovals()).entries).toHaveLength(1);
     const after = await stores.jobs.getApproval('ap-withdraw');
     expect(after?.withdrawnReason).toBe('自分で答えを見つけた');
   });
@@ -1661,7 +1661,7 @@ describe('FsJobStore', () => {
     await stores.jobs.putApproval(base);
     await stores.jobs.putApproval({ ...base, question: 'q2' });
 
-    expect(await stores.jobs.listApprovals()).toHaveLength(1);
+    expect((await stores.jobs.listApprovals()).entries).toHaveLength(1);
   });
 
   /**
@@ -1692,7 +1692,10 @@ describe('FsJobStore', () => {
     });
 
     // 作成順（＝ createdAt 昇順）そのままなら [ap-old, ap-new] のはず。
-    expect((await stores.jobs.listApprovals()).map((a) => a.id)).toEqual(['ap-old', 'ap-new']);
+    expect((await stores.jobs.listApprovals()).entries.map((a) => a.id)).toEqual([
+      'ap-old',
+      'ap-new',
+    ]);
 
     // 先に作った方（ap-old）に答える —— putApproval が再度走る。
     await stores.jobs.putApproval({
@@ -1704,7 +1707,10 @@ describe('FsJobStore', () => {
     });
 
     // ⟹ createdAt の昇順なら変わらないはずの並びが、答えた行の移動で崩れる。
-    expect((await stores.jobs.listApprovals()).map((a) => a.id)).toEqual(['ap-new', 'ap-old']);
+    expect((await stores.jobs.listApprovals()).entries.map((a) => a.id)).toEqual([
+      'ap-new',
+      'ap-old',
+    ]);
   });
 });
 

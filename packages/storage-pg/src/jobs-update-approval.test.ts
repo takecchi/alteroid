@@ -45,7 +45,7 @@ describe('PgJobStore.updateApproval（issue #2007）', () => {
     expect(result?.answer).toBe('よい');
     expect((await stores.jobs.getApproval('ap-1'))?.answer).toBe('よい');
     // answered_at の列も書いている（pendingOnly は列で絞る）
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toEqual([]);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toEqual([]);
   });
 
   it('mutate が null を返したら何も書かず null を返す', async () => {

@@ -6264,6 +6264,21 @@
                         "required": ["id", "createdAt", "question", "updatedAt"]
                       }
                     },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
+                      }
+                    },
                     "total": {
                       "type": "integer",
                       "minimum": -9007199254740991,

@@ -7,7 +7,13 @@ import {
   UnreadableApprovalError,
   UnreadableJobError,
 } from '@alteroid/core';
-import type { Job, JobStore, PendingApproval } from '@alteroid/core';
+import type {
+  ApprovalList,
+  Job,
+  JobStore,
+  PendingApproval,
+  UnreadableApproval,
+} from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -77,6 +83,26 @@ function extractRowId(raw: unknown): string | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined;
   const id = (raw as Record<string, unknown>).id;
   return typeof id === 'string' ? id : undefined;
+}
+
+/**
+ * 生の承認の行が、回答済み・取り下げ済みと分かるか（`pendingOnly` で読めない行を
+ * 除くかの判断にだけ使う）。**値は返さず真偽だけ**。
+ */
+function isSettledRaw(raw: unknown): boolean {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const row = raw as Record<string, unknown>;
+  const set = (v: unknown): boolean => v !== undefined && v !== null;
+  return set(row.answeredAt) || set(row.withdrawnAt);
+}
+
+/**
+ * 読めなかった生の承認の行を、値を出さずに要約する（`#read()` の stderr の跡と同じ
+ * 検査をやり直す。**不正な欄名だけ**）。
+ */
+function summarizeRawApprovalProblem(raw: unknown): string {
+  const result = pendingApprovalSchema.safeParse(raw);
+  return result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
 }
 
 /**
@@ -181,14 +207,26 @@ export class FsJobStore implements JobStore {
     });
   }
 
-  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<PendingApproval[]> {
-    const { approvals } = await this.#read();
+  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<ApprovalList> {
+    const { approvals, invalidApprovalsRaw } = await this.#read();
     // **未回答かつ未取り下げだけを「保留」とする（#963）。** 取り下げも
     // `answeredAt` と同じく「もう保留ではない」終端の一形態である
     // （`pendingApprovalSchema.withdrawnAt` の doc）。
-    return options.pendingOnly
+    const entries = options.pendingOnly
       ? approvals.filter((a) => a.answeredAt === undefined && a.withdrawnAt === undefined)
       : approvals;
+    // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**（issue #2298）。
+    // 読めない行に `answeredAt` / `withdrawnAt` が立っていれば、`pendingOnly` では
+    // 「もう保留ではない」側へ寄せて除く（pg が列で絞るのと揃える）。**どちらも読めない
+    // ときは数える側へ倒す**。本文は載せず、id と不正な欄名だけを持つ。
+    const unreadable = invalidApprovalsRaw
+      .filter((raw) => options.pendingOnly !== true || !isSettledRaw(raw))
+      .map((raw): UnreadableApproval => {
+        const id = extractRowId(raw);
+        const reason = summarizeRawApprovalProblem(raw);
+        return id === undefined ? { reason } : { id, reason };
+      });
+    return { entries, unreadable };
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {

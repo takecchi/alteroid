@@ -7,7 +7,13 @@ import {
   UnreadableApprovalError,
   UnreadableJobError,
 } from '@alteroid/core';
-import type { Job, JobStore, PendingApproval } from '@alteroid/core';
+import type {
+  ApprovalList,
+  Job,
+  JobStore,
+  PendingApproval,
+  UnreadableApproval,
+} from '@alteroid/core';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -37,6 +43,19 @@ function summarizeInvalidFields(issues: readonly { path: readonly PropertyKey[] 
 function describeUnreadableJobRow(params: { id: string; reason: string }): string {
   return (
     `alteroid: updateJob() で job 行を読み出せませんでした` +
+    `（id=${JSON.stringify(params.id)}、${params.reason}）`
+  );
+}
+
+/**
+ * 承認待ちの行が読めなかったことを stderr へ1行で要約する（issue #2298。
+ * `describeUnreadableJobRow` と同じ形）。`op` は読もうとした口の名前。
+ * **id 以外の値は絶対に載せない**——承認の欄には質問文・文脈・人間の回答が
+ * そのまま入りうる（#52 と同じ理由）。
+ */
+function describeUnreadableApprovalRow(params: { op: string; id: string; reason: string }): string {
+  return (
+    `alteroid: ${params.op}() で承認待ちの行を読み出せませんでした` +
     `（id=${JSON.stringify(params.id)}、${params.reason}）`
   );
 }
@@ -359,11 +378,11 @@ export class PgJobStore implements JobStore {
     });
   }
 
-  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<PendingApproval[]> {
+  async listApprovals(options: { pendingOnly?: boolean } = {}): Promise<ApprovalList> {
     // 未回答かつ未取り下げだけを「保留」とする（#963。3実装で揃える —
     // `storage-fs` の `jobs.ts` / `testing.ts` の同名フィルタと同じ条件）。
     const rows = await this.#db
-      .select({ approval: approvals.approval })
+      .select({ id: approvals.id, approval: approvals.approval })
       .from(approvals)
       .where(
         options.pendingOnly === true
@@ -371,10 +390,24 @@ export class PgJobStore implements JobStore {
           : undefined,
       )
       .orderBy(asc(approvals.createdAt));
-    return rows.flatMap((row) => {
+    // **読めない行は飛ばして消さず、`unreadable` に別欄で返す**（issue #2298）。
+    // `pendingOnly` の絞りは列（`answered_at` / `withdrawn_at`）で SQL が済ませている
+    // ので、読めない行も未回答・未取り下げのものだけが来る。id は列から取れる。
+    const entries: PendingApproval[] = [];
+    const unreadable: UnreadableApproval[] = [];
+    for (const row of rows) {
       const parsed = pendingApprovalSchema.safeParse(row.approval);
-      return parsed.success ? [parsed.data] : [];
-    });
+      if (parsed.success) {
+        entries.push(parsed.data);
+        continue;
+      }
+      const reason = summarizeInvalidFields(parsed.error.issues);
+      process.stderr.write(
+        `${describeUnreadableApprovalRow({ op: 'listApprovals', id: row.id, reason })}\n`,
+      );
+      unreadable.push({ id: row.id, reason });
+    }
+    return { entries, unreadable };
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {
@@ -387,11 +420,10 @@ export class PgJobStore implements JobStore {
     if (row === undefined) return null;
     const parsed = pendingApprovalSchema.safeParse(row.approval);
     if (!parsed.success) {
+      const reason = summarizeInvalidFields(parsed.error.issues);
+      process.stderr.write(`${describeUnreadableApprovalRow({ op: 'getApproval', id, reason })}\n`);
       // 行は在る。「無い」（`null`）とは分けて投げる。
-      throw new UnreadableApprovalError({
-        id,
-        reason: summarizeInvalidFields(parsed.error.issues),
-      });
+      throw new UnreadableApprovalError({ id, reason });
     }
     return parsed.data;
   }
@@ -422,7 +454,8 @@ export class PgJobStore implements JobStore {
    *
    * **読めない行（`pendingApprovalSchema` に合わない）は `null`（無い）とは分けて
    * `UnreadableApprovalError` を投げる**（`mutate` は呼ばない。投げるとトランザクション
-   * は何も書かずに巻き戻る）。`listApprovals` は従来どおり `safeParse` で飛ばす。
+   * は何も書かずに巻き戻る）。跡は `describeUnreadableApprovalRow` で stderr へ1行だけ残す
+   * （id とどの欄が不正かのみ）。`listApprovals` は `unreadable` に返す（issue #2298）。
    * **`mutate` が `null` を返したら何も書かない**（`updateJob` には無い拡張）。
    */
   async updateApproval(
@@ -440,10 +473,11 @@ export class PgJobStore implements JobStore {
       if (row === undefined) return null;
       const parsed = pendingApprovalSchema.safeParse(row.approval);
       if (!parsed.success) {
-        throw new UnreadableApprovalError({
-          id,
-          reason: summarizeInvalidFields(parsed.error.issues),
-        });
+        const reason = summarizeInvalidFields(parsed.error.issues);
+        process.stderr.write(
+          `${describeUnreadableApprovalRow({ op: 'updateApproval', id, reason })}\n`,
+        );
+        throw new UnreadableApprovalError({ id, reason });
       }
 
       const result = mutate(parsed.data);

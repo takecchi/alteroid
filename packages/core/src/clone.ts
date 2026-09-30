@@ -6177,7 +6177,17 @@ class Clone implements CloneHost {
   async #reconcileUndeliveredAnswers(claimedIds: ReadonlySet<string>): Promise<void> {
     let approvals: PendingApproval[];
     try {
-      approvals = await this.#stores.jobs.listApprovals({ pendingOnly: false });
+      const list = await this.#stores.jobs.listApprovals({ pendingOnly: false });
+      approvals = list.entries;
+      // **読めない行は拾い直せない**（回答済み未配達だったかも分からない）。消さずに
+      // 跡を残す（issue #2298）。本文は出さず、件数だけ。行は書き換えない。
+      if (list.unreadable.length > 0) {
+        noteDroppedRecord(
+          `読めない承認待ち ${list.unreadable.length} 件の回答済み未配達の拾い直し`,
+          '',
+          new Error('行が読めない形で入っている。行は書き換えていない'),
+        );
+      }
     } catch (error) {
       // 読めなければ拾い直せないが、承認の行そのものは無事なので、次の起動で
       // また試せる。

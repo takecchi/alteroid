@@ -28,6 +28,7 @@ import {
   scheduleSpecSchema,
   tokenRotationPolicySchema,
   tokenRotationSettingsSchema,
+  unreadableApprovalSchema,
   unreadableCommitmentSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
@@ -414,6 +415,17 @@ export const reportsResponseSchema = z.object({ reports: z.array(dailyReportEntr
  */
 export const approvalsResponseSchema = z.object({
   approvals: z.array(pendingApprovalSchema.extend({ updatedAt: isoDateTimeSchema })),
+  /**
+   * 読めなかった承認待ちの行（issue #2298）。**「無い」でも「回答済み」でもない第3の状態。**
+   *
+   * `JobStore.listApprovals`（`packages/core/src/store.ts`）が返す
+   * `ApprovalList.unreadable` をそのまま外へ出す。クローンの `approvals_list` が末尾に
+   * 足す断りと同じ材料を、人間の側にも渡す。**1件でも在るときだけ載る**（0件なら鍵が
+   * 無い。空配列を作ると「読めない行は無い」と読めてしまう）。窓（`limit`/`cursor`）でも
+   * `conversationId` の絞りでも切らない。`pending` の絞りは、回答済み・取り下げ済みと
+   * 分かる行だけを除く（`ApprovalList.unreadable` の doc）。
+   */
+  unreadable: z.array(unreadableApprovalSchema).optional(),
   total: z.number().int().optional(),
   nextCursor: z.string().optional(),
 });

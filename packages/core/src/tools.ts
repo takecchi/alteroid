@@ -220,6 +220,7 @@ import {
   UnreadablePracticeError,
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
+  describeUnreadableApprovals,
   describeUnreadableCommitment,
 } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
@@ -6672,10 +6673,21 @@ export function createCloneTools(context: ToolContext) {
         // ⚠️ **ストア側の `orderBy`（`storage-pg/src/jobs.ts`）は消さないこと** —
         // 消すと pg が大きな表を未整列のまま全件返してから、ここで並べることに
         // なる（#757 の注記）。
-        const pending = [...(await stores.jobs.listApprovals({ pendingOnly: true }))].sort(
+        const approvalList = await stores.jobs.listApprovals({ pendingOnly: true });
+        const pending = [...approvalList.entries].sort(
           (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         );
-        if (pending.length === 0) return text('（人間の回答待ちは無い）');
+        // **読めない行は一覧から消さず、件数と id で言う**（issue #2298。0件のときは
+        // `null` で、何も出さない）。予算（`APPROVAL_LIST_BUDGET`）の外に置く——
+        // `describeUnreadableApprovals` が id の数を締めているので、伸びない。
+        const unreadableNote = describeUnreadableApprovals(approvalList.unreadable);
+        if (pending.length === 0) {
+          return text(
+            unreadableNote === null
+              ? '（人間の回答待ちは無い）'
+              : `（読めた回答待ちは無い）\n${unreadableNote}`,
+          );
+        }
         const items = pending.map((approval) =>
           renderListingEntry({
             id: approval.id,
@@ -6713,6 +6725,7 @@ export function createCloneTools(context: ToolContext) {
             // **#757 で並びをこの口が保証する形にした。** 以前はここで
             // 「並べ直しは1行も持たない」と申告していたが、いまは持つ。
             '（並び順: 作成時刻の昇順。同じ作成時刻なら id の昇順で全順序にしてある。保存先の実装には依存しない）',
+            ...(unreadableNote === null ? [] : [unreadableNote]),
           ].join('\n'),
         );
       },

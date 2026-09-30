@@ -1398,7 +1398,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     await waitFor(() => (s.calls[0]?.inputs ?? []).length > 0, '最初の入力');
     // 保留は保留のまま（回答待ちを勝手に片付けない）
-    expect(await stores.jobs.listApprovals({ pendingOnly: true })).toHaveLength(1);
+    expect((await stores.jobs.listApprovals({ pendingOnly: true })).entries).toHaveLength(1);
     // それでも発意 tick は状況を見て動いている
     expect((s.calls[0]?.inputs ?? []).join('\n')).toContain('本番に出してよいか');
 

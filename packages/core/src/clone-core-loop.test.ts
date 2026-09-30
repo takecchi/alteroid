@@ -1655,7 +1655,7 @@ describe('クローン', () => {
     await s.clone.answerApproval('ap-1', 'よい');
 
     // 回答済みになる
-    expect(await s.stores.jobs.listApprovals({ pendingOnly: true })).toEqual([]);
+    expect((await s.stores.jobs.listApprovals({ pendingOnly: true })).entries).toEqual([]);
 
     // クローンに回答が届く（内部ターンなので chat には出さない）
     await waitFor(
@@ -2757,7 +2757,7 @@ describe('クローン', () => {
       await askHuman('人間のターン中の質問');
       await waitForDone(events);
 
-      const duringHuman = (await stores.jobs.listApprovals({ pendingOnly: true })).find(
+      const duringHuman = (await stores.jobs.listApprovals({ pendingOnly: true })).entries.find(
         (approval) => approval.question === '人間のターン中の質問',
       );
       expect(duringHuman?.conversationId).toBe('conv-1');
@@ -2780,7 +2780,7 @@ describe('クローン', () => {
       );
       await askHuman('内部ターン中の質問');
 
-      const duringInternal = (await stores.jobs.listApprovals({ pendingOnly: true })).find(
+      const duringInternal = (await stores.jobs.listApprovals({ pendingOnly: true })).entries.find(
         (approval) => approval.question === '内部ターン中の質問',
       );
       expect(duringInternal?.conversationId).toBeUndefined();
