@@ -1725,7 +1725,8 @@ export interface TranscriptArchive {
    *   ——ここで「ちょうど `maxChars`」を返すと、それが「切り詰め済みの窓」
    *   なのか「本文がもとから短かった」なのかを呼び出し側は区別できず、
    *   前者を後者と誤読して行の途中の窓をそのまま蒸留へ渡してしまう
-   *   （clone.test.ts「歯2」で実測。窓の境界をちょうど `maxChars` に合わせる
+   *   （`clone-grave-pickup-startup.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の
+   *   「歯2」で実測。窓の境界をちょうど `maxChars` に合わせる
    *   実装で実際に踏んだ）。⟹ **実装は、切り詰めが起きるときは必ず
    *   `maxChars + 1` コードポイントぶん以上を返すこと**（pg は
    *   `right(body, maxChars + 1)`、fs は窓のバイト数を

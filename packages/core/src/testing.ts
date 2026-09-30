@@ -1009,7 +1009,8 @@ export function createMemoryStores(): Stores {
     // より長いとき、返す量は `maxChars` を厳密に上回ること」に従う。ここを
     // `maxChars` ちょうどにすると、呼び出し側の `tailOf`（`clone.ts`）が
     // 「切り詰め済みの窓」を「本文がもとから短かった」と誤読し、行の途中の
-    // 窓がそのまま蒸留へ渡る（clone.test.ts「歯2」で実測）。
+    // 窓がそのまま蒸留へ渡る（`clone-grave-pickup-startup.test.ts`（旧 `clone.test.ts`。
+    // #1744 で分割済み）の「歯2」で実測）。
     async readTail(id, maxChars) {
       if (!Number.isInteger(maxChars) || maxChars <= 0) {
         throw new Error(

@@ -2129,7 +2129,7 @@ class Clone implements CloneHost {
    *    「通知は構造的に孤立しているから切れる」とは言えない。** 切る根拠は
    *    1の価値の軸だけであり、この切り出しの実体は「暗黙の参照を明示の
    *    メソッド呼び出しに変える」案であって「疎結合な部分を剥がす」案ではない。
-   * 3. **テストの分離は買えない。** `clone.test.ts`（測定当時 16,233行・428ブロック）は
+   * 3. **テストの分離は買えない。** `clone.test.ts`（旧。#1744 で分割済み。測定当時 16,233行・428ブロック）は
    *    切り出しの前後で一体のまま動き続ける。
    */
   readonly #notices = new CloneNotices();
@@ -6966,7 +6966,7 @@ class Clone implements CloneHost {
    *
    * **`batch.length === 1` は、以前の1件専用の実装を1文字も変えない**（issue
    * #783）。いちばん多い経路（単発）の出力を変えないため、かつ既存の歯
-   * （`clone.test.ts` / `inbox-persistence.test.ts` の逐語一致）を壊さないため
+   * （`clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）/ `inbox-persistence.test.ts` の逐語一致）を壊さないため
    * である。
    *
    * **`batch.length >= 2` で印付きが1件以上あるときだけ束の行にする。** 1件

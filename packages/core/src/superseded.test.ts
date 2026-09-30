@@ -279,7 +279,8 @@ function managerReportEvent(
  *
  * **なぜこの歯が要るか。** このファイルの `report()` / `question()` /
  * `permission()` を含め、`superseded.test.ts` / `clone-superseded-notice.test.ts`
- * / `commitment.test.ts` / `tools.test.ts` / `clone.test.ts` /
+ * / `commitment.test.ts` / `tools.test.ts` /
+ * `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）/
  * `commitments.test.tsx` の全フィクスチャは `commitmentFor` を経由せず、
  * `'[report] '` 等の接頭辞を**手で書き写している**（issue #872 の実測）。
  * ⟹ `commitmentFor` の接頭辞の組み立てが将来変わっても、それらのテストは

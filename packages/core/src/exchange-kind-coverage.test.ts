@@ -305,7 +305,7 @@ describe('exchange-kind-apply-branch: clone.ts の apply（with が self/human �
     expect(textValue).toBeDefined();
     // self 側にだけ EXCHANGE_KIND_REPLY_PREFIX を足す形（三項演算子で分岐）に
     // なっていることをソースの形で確かめる。human 側の分岐（`turn.text` その
-    // もの）に接頭辞の定数が紛れ込んでいないことは、`clone.test.ts` 側の
+    // もの）に接頭辞の定数が紛れ込んでいないことは、`clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）側の
     // 実行時の歯（human 応答の本文が1文字も変わらないこと）で別途測る。
     expect(textValue).toContain('EXCHANGE_KIND_REPLY_PREFIX');
     expect(textValue).toMatch(/turn\.conversationId === null \? EXCHANGE_KIND_REPLY_PREFIX : ''/);
