@@ -371,7 +371,13 @@ describe('台帳の lastUnpushedWorkObservation が、closed（Issue #1266 候�
         worktrees: [{ relativePath: '.', branch: 'feat/closed-ok' }],
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 実時間では待たない（#2146 のラチェット）。closed の観測が台帳に届いたことを確かめてから進む。
+    await vi.waitFor(async () => {
+      const listed = await listedOf(pool, 'mgr-late');
+      if (listed.lastUnpushedWorkObservation?.kind !== 'observed') {
+        throw new Error('closed の観測がまだ台帳に届いていない');
+      }
+    });
 
     // その後で問い合わせが unavailable（答えなし）で返る（書く時刻は T2 だが、観測は T0）。
     clock = new Date('2026-09-25T00:10:00.000Z').getTime();
