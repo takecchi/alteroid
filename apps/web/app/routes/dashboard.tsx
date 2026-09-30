@@ -217,6 +217,10 @@ export default function Dashboard() {
             />
             {approvals.error !== undefined ? (
               <ErrorNote error={approvals.error} className="m-4" />
+            ) : approvals.data === undefined ? (
+              // **読み込み中（まだ一度も取れていない）に「なし。」と描かない**（issue #2325）。
+              // 失敗は上の `error` が先に拾うので、ここへ来るのは取得中だけ。
+              <Spinner />
             ) : approvalsMalformed ? (
               <ErrorNote error={new Error(APPROVALS_MALFORMED_MESSAGE)} className="m-4" />
             ) : pending.length === 0 ? (
@@ -262,6 +266,9 @@ export default function Dashboard() {
             />
             {managers.error !== undefined ? (
               <ErrorNote error={managers.error} className="m-4" />
+            ) : managers.data === undefined ? (
+              // 読み込み中は「走っているものはない」と描かない（issue #2325）。
+              <Spinner />
             ) : running.length === 0 ? (
               <Empty>いま走っているものはない。</Empty>
             ) : (
