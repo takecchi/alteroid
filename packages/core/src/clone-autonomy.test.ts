@@ -916,7 +916,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
     // ターンは1本も走っていない（Fable を曖昧な仕事で消費しない）
     expect(s.calls).toEqual([]);
     // 「動いた」ことにもしない。次の発火で同じ依頼がそのまま来る
-    expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+    expect((await stores.schedules.list()).entries[0]?.lastRunAt).toBeUndefined();
 
     await s.clone.stop();
   });
@@ -959,7 +959,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       '『記録できなかった』を含む exchange が日誌に積まれる',
     );
     expect(s.calls).toEqual([]);
-    expect((await stores.schedules.list())[0]?.lastRunAt).toBeUndefined();
+    expect((await stores.schedules.list()).entries[0]?.lastRunAt).toBeUndefined();
 
     // ② 復旧すれば、次の発火で依頼の本文つきで動く
     failing = false;
@@ -969,7 +969,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       () => inputsOf(s)().includes('open issue を見て'),
       '『open issue を見て』という定期実行の入力が届く',
     );
-    expect((await stores.schedules.list())[0]?.lastRunAt).toBe('2026-08-12T00:00:00.000Z');
+    expect((await stores.schedules.list()).entries[0]?.lastRunAt).toBe('2026-08-12T00:00:00.000Z');
 
     // ③ 走ったのは1回だけ（再起動相当の拾い直しでも二重に実行しない）
     const runs = (await stores.journal.list({ types: ['exchange'] })).filter((entry) =>
@@ -1074,13 +1074,15 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     await waitForExpect(
       async () =>
-        expect((await stores.schedules.list())[0]?.pendingRun?.at).toBe('2026-08-12T00:00:00.000Z'),
+        expect((await stores.schedules.list()).entries[0]?.pendingRun?.at).toBe(
+          '2026-08-12T00:00:00.000Z',
+        ),
       'pendingRun.at が更新される',
     );
     // モデルには何も届いていない
     expect(crashing.calls).toEqual([]);
     // 定期の基準は進んでいない（「もう動いた」ことにしない）
-    expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeUndefined();
+    expect((await stores.schedules.list()).entries[0]?.lastScheduledRunAt).toBeUndefined();
 
     // --- 2回目の器: 同じ Stores から作り直す -----------------------------------
     await crashing.clone.stop();
@@ -1106,10 +1108,10 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     // 終わったので印は消え、定期の基準が進む
     await waitForExpect(
-      async () => expect((await stores.schedules.list())[0]?.pendingRun).toBeUndefined(),
+      async () => expect((await stores.schedules.list()).entries[0]?.pendingRun).toBeUndefined(),
       'pendingRun が消える（undefined になる）',
     );
-    expect((await stores.schedules.list())[0]?.lastScheduledRunAt).toBeDefined();
+    expect((await stores.schedules.list()).entries[0]?.lastScheduledRunAt).toBeDefined();
 
     scheduler.stop();
     await restarted.clone.stop();
@@ -1139,11 +1141,11 @@ describe('クローン — 自律（人間以外の起点）', () => {
     });
 
     await waitForExpect(
-      async () => expect((await stores.schedules.list())[0]?.pendingRun).toBeUndefined(),
+      async () => expect((await stores.schedules.list()).entries[0]?.pendingRun).toBeUndefined(),
       'pendingRun が消える（undefined になる）',
     );
 
-    const after = (await stores.schedules.list())[0];
+    const after = (await stores.schedules.list()).entries[0];
     // 手で起こした1回だったので、配り直しても定期の基準は動かない
     expect(after?.lastScheduledRunAt).toBeUndefined();
     expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
@@ -1177,7 +1179,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       '『open issue を見て』という定期実行の入力が届く',
     );
 
-    const after = (await stores.schedules.list())[0];
+    const after = (await stores.schedules.list()).entries[0];
     expect(after?.lastRunAt).toBe('2026-08-12T09:10:00.000Z');
     // 定期の予定の基準は動かない（次の起動で位相がずれない）
     expect(after?.lastScheduledRunAt).toBeUndefined();
@@ -1209,7 +1211,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
       '『open issue を見て』という定期実行の入力が届く',
     );
 
-    const after = (await stores.schedules.list())[0];
+    const after = (await stores.schedules.list()).entries[0];
     expect(after?.lastRunAt).toBe('2026-08-12T09:00:00.000Z');
     expect(after?.lastScheduledRunAt).toBe('2026-08-12T09:00:00.000Z');
 
@@ -1252,7 +1254,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
 
     // ストアの呼び出し（claimRun/completeRun）は引き続き2値のまま —
     // 「取りこぼし」でも定期の基準（lastScheduledRunAt）は普通に進む
-    const after = (await stores.schedules.list())[0];
+    const after = (await stores.schedules.list()).entries[0];
     expect(after?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
     expect(after?.lastScheduledRunAt).toBe('2026-08-13T00:00:00.000Z');
 
@@ -1357,7 +1359,7 @@ describe('クローン — 自律（人間以外の起点）', () => {
     // 取り消された本文は渡っていない
     expect(inputsOf(s)()).not.toContain('すべての issue を実装する');
     // 発火の跡は新しい版に付く
-    expect((await stores.schedules.list())[0]).toMatchObject({
+    expect((await stores.schedules.list()).entries[0]).toMatchObject({
       updatedAt: '2026-08-11T12:00:00.000Z',
       lastRunAt: '2026-08-12T00:00:00.000Z',
     });

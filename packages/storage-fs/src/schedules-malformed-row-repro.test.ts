@@ -75,16 +75,45 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
     );
   }
 
-  it('list() は、不正な行があっても落ちず、正しい依頼だけを返す（直す前は例外で赤）', async () => {
+  it('list() は、不正な行があっても落ちず、正しい依頼を entries に返す（直す前は例外で赤）', async () => {
     await writeRawSchedulesFile();
     const stores = createFsStores(root);
 
     let found: ScheduledRequest[] = [];
     await captureStderr(async () => {
-      found = await stores.schedules.list();
+      found = (await stores.schedules.list()).entries;
     });
 
     expect(found.map((entry) => entry.kind)).toEqual(['good-kind']);
+  });
+
+  /**
+   * **「飛ばす」の意味が変わった（issue #2343）。** 上の歯が固定するのは `entries` に
+   * 不正な行が混ざらないことで、今もそのまま成り立つ。変わったのは、飛ばした行が
+   * 出力から消えなくなったこと——`unreadable` に kind と不正な欄名だけで載る。
+   * 本文（request）は載せない。
+   */
+  it('list() は、不正な行を消さず unreadable に返す（kind と不正な欄名だけ。本文は載せない）', async () => {
+    await writeRawSchedulesFile();
+    const stores = createFsStores(root);
+
+    let list: Awaited<ReturnType<typeof stores.schedules.list>> | undefined;
+    await captureStderr(async () => {
+      list = await stores.schedules.list();
+    });
+
+    expect(list?.unreadable).toEqual([{ kind: 'bad-kind', reason: '不正な欄: spec' }]);
+    expect(JSON.stringify(list?.unreadable)).not.toContain(BAD_SCHEDULE_RAW.request);
+  });
+
+  it('list() は、不正な行が無ければ unreadable が空（対照）', async () => {
+    const stores = createFsStores(root);
+    await stores.schedules.put(GOOD_SCHEDULE);
+
+    const list = await stores.schedules.list();
+
+    expect(list.entries.map((entry) => entry.kind)).toEqual(['good-kind']);
+    expect(list.unreadable).toEqual([]);
   });
 
   it('跡: 飛ばした行を stderr へ1行出す。本文（request）の値は絶対に含めない', async () => {
@@ -153,7 +182,7 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
 
     let found: ScheduledRequest[] = [];
     await captureStderr(async () => {
-      found = await stores.schedules.list();
+      found = (await stores.schedules.list()).entries;
     });
     expect(found.map((entry) => entry.kind).sort()).toEqual(['good-kind', 'new-kind']);
   });
@@ -275,7 +304,7 @@ describe('FsScheduleStore — schedules.json の不正な1行を読み飛ばす�
 
     let found: ScheduledRequest[] = [];
     await captureStderr(async () => {
-      found = await stores.schedules.list();
+      found = (await stores.schedules.list()).entries;
     });
     expect(found).toEqual([]);
   });

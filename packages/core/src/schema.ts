@@ -2571,6 +2571,25 @@ export type ScheduleSpec = z.infer<typeof scheduleSpecSchema>;
 export type ScheduledRequest = z.infer<typeof scheduledRequestSchema>;
 
 /**
+ * 継続中の依頼の1行が `scheduledRequestSchema` として読めなかったときに、その行の
+ * 代わりに一覧へ載せるもの（issue #2343。`unreadableApprovalSchema` と同じ形）。
+ *
+ * **「無い」でも「消された」でもない第3の状態。** 一覧が読めない行を黙って飛ばすと、
+ * クローンも人間も、読めない依頼が在ること自体に気づけず「依頼は無い」と言い切る
+ * （単票の `schedule_list kind=` は `UnreadableScheduleError` で言い分けている）。
+ *
+ * **⚠️ 本文（`request`）を載せないこと。** 依頼の欄には人間の依頼文がそのまま入りうる。
+ * `reason` は「どの欄が不正か」だけにする。
+ */
+export const unreadableScheduleSchema = z.object({
+  /** 行から取れた kind。取れないこともある（fs 版で行そのものが kind を持たない形のとき）。 */
+  kind: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadableSchedule = z.infer<typeof unreadableScheduleSchema>;
+
+/**
  * 既定の仕込み（日報・発意 tick）の位相。
  *
  * **これは「依頼」ではない。** 継続中の依頼（`ScheduledRequest`）は人間かクローンが

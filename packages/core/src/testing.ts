@@ -680,7 +680,11 @@ export function createMemoryStores(): Stores {
 
   const scheduleStore: ScheduleStore = {
     async list() {
-      return [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(isolate);
+      // 読めない行は持てない（`put` がスキーマを通す）ので `unreadable` は常に空。
+      return {
+        entries: [...schedules.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(isolate),
+        unreadable: [],
+      };
     },
     async get(kind) {
       const found = schedules.get(kind);

@@ -3760,6 +3760,10 @@ export function createApp(deps: AppDeps) {
       describeRoute({
         tags: ['schedule'],
         summary: '定期ジョブの一覧と次の発火時刻',
+        description:
+          '行が読めない（版ずれ・手編集）継続中の依頼が在るときだけ、`unreadable`（kind が取れれば' +
+          'kind と不正な欄名）が載る。**壊れた行であって、消された依頼ではない。**' +
+          '0件なら鍵ごと無い（issue #2343）。',
         responses: {
           200: {
             description: '定期ジョブの一覧。',
@@ -3767,7 +3771,17 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      (c) => c.json(scheduleListResponseSchema.parse({ entries: deps.scheduler?.list() ?? [] })),
+      (c) => {
+        // **読めない行は 1 件でも在るときだけ `unreadable` を載せる**（issue #2343）。
+        // 0 件なら鍵ごと無い（既存の呼び手の応答を1バイトも変えない）。
+        const unreadable = deps.scheduler?.unreadable() ?? [];
+        return c.json(
+          scheduleListResponseSchema.parse({
+            entries: deps.scheduler?.list() ?? [],
+            ...(unreadable.length > 0 ? { unreadable } : {}),
+          }),
+        );
+      },
     )
 
     /**

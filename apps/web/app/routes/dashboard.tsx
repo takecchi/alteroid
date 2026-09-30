@@ -26,6 +26,7 @@ import { formatDateTime, formatRelative, managersHref, usageHref } from '@altero
 import { journalEntryLinks } from '~/lib/journal-links';
 
 import { ManagerStatusBadge } from './managers';
+import { UnreadableScheduleNote } from './schedule';
 // **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
 // あるので、判定と文言を書き写すと片方だけが古びる（本文がエラー文のまま出る側が
 // 静かに残る）。
@@ -366,22 +367,29 @@ export default function Dashboard() {
               // `error` のどちらかへ必ず変わるので専用の見た目は足さない）。
               <Empty>—</Empty>
             ) : (
-              <ul>
-                {schedule.data.entries.map((entry) => (
-                  <li
-                    key={entry.kind}
-                    className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
-                  >
-                    <span
-                      className="min-w-0 truncate text-muted-foreground"
-                      title={entry.description}
+              <>
+                {/* 読めない継続中の依頼を、一覧が空に見えることで隠さない（issue #2343）。 */}
+                <UnreadableScheduleNote
+                  unreadable={schedule.data.unreadable ?? []}
+                  className="m-4"
+                />
+                <ul>
+                  {schedule.data.entries.map((entry) => (
+                    <li
+                      key={entry.kind}
+                      className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-sm last:border-b-0"
                     >
-                      {entry.description}
-                    </span>
-                    <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
-                  </li>
-                ))}
-              </ul>
+                      <span
+                        className="min-w-0 truncate text-muted-foreground"
+                        title={entry.description}
+                      >
+                        {entry.description}
+                      </span>
+                      <Badge tone="accent">{formatRelative(entry.nextAt)}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
           </Card>
         </div>
