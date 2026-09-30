@@ -40,6 +40,7 @@ import {
   CredentialEntryRejectedError,
   JournalAnchorNotFoundError,
   ProfileRollbackFailedError,
+  redactProfileFailure,
   TokenPoolInputError,
   UnreadableCommitmentError,
   UnreadablePracticeError,
@@ -5667,12 +5668,14 @@ export function createApp(deps: AppDeps) {
             '実行環境プロファイルの打ち消しの日誌',
             'PUT /profile',
           );
+          // **シェルの stderr は構文エラーで入力の行を引用し、`set -x` は値ごと
+          // 吐く（issue #2429）。** 伏せてから切る（`redactProfileFailure`。
+          // クローンの道具 `profile_write` の戻りと同じ関数）。
+          const failure = redactProfileFailure(result.clone, process.env);
           return c.json(
             {
               error: 'プロファイルが読めなかったので保存していない' as const,
-              detail: [result.clone.error ?? '理由不明', result.clone.output ?? '']
-                .join('\n')
-                .trim(),
+              detail: [failure.error, failure.output].join('\n').trim(),
             },
             400,
           );
@@ -5717,7 +5720,15 @@ export function createApp(deps: AppDeps) {
             ...(result.sha256 === undefined
               ? {}
               : { sha256: result.sha256, bytes: result.bytes as number }),
-            clone: result.clone,
+            // 成功でも `set -x` の出力（値入り）は `output` に載る（issue #2429）。
+            clone:
+              result.clone.output === undefined
+                ? result.clone
+                : {
+                    ...result.clone,
+                    output: redactProfileFailure({ output: result.clone.output }, process.env)
+                      .output,
+                  },
             runners: result.runners,
           }),
         );

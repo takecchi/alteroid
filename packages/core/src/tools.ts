@@ -156,6 +156,7 @@ import {
   scanMemorySections,
 } from './memory.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
+import { redactProfileFailure } from './profile.js';
 import { ProfileRollbackFailedError, type ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -9484,9 +9485,12 @@ export function createCloneTools(context: ToolContext) {
             decision: `実行環境プロファイルを差し替えられなかった（読めなかった）: ${summary}`,
             grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
           });
+          // シェルの stderr は入力の行を引用し、`set -x` は値ごと吐く（issue #2429）。
+          // クローンの文脈に鍵の値を入れない——`PUT /profile` の 400 と同じ関数で伏せる。
+          const failure = redactProfileFailure(result.clone, process.env);
           return text(
-            `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${result.clone.error ?? '理由不明'}` +
-              `${result.clone.output === undefined || result.clone.output.length === 0 ? '' : `\n${result.clone.output}`}`,
+            `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${failure.error}` +
+              `${failure.output.length === 0 ? '' : `\n${failure.output}`}`,
           );
         }
 

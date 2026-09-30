@@ -316,6 +316,73 @@ describe('評価', () => {
     expect(Object.keys(result.env)).toEqual(['FROM_PROFILE']);
   });
 
+  /**
+   * issue #2429。シェルの stderr は、構文エラーで入力の行をそのまま引用し、
+   * `set -x` は値ごと吐く。`output`（と `error`）にそれが載ると `PUT /profile` の
+   * 応答・`profile_write` の戻り・CLI の表示のすべてに鍵の値が出る。
+   * 偽の値だけを使い、実物の /bin/sh と /bin/bash に吐かせる。
+   */
+  describe.each(['/bin/sh', '/bin/bash'])('失敗の output に鍵の値を出さない（%s）', (shell) => {
+    const FAKE = 'FAKE_SECRET_VALUE_2429';
+
+    it('構文エラーが入力の行を引用しても、値は伏せ、診断の文は残る', async () => {
+      const path = join(dir, 'profile.sh');
+      writeFileSync(path, `export OK=1\nexport GH_TOKEN=${FAKE} )\n`);
+
+      const result = await evaluateProfile({ path, baseEnv: {}, shell });
+
+      expect(result.error).toBeDefined();
+      expect(result.output).not.toContain(FAKE);
+      expect(result.error ?? '').not.toContain(FAKE);
+      expect(result.output).toMatch(/syntax error|unexpected/i);
+      expect(result.output).toMatch(/line 2|:\s*2:/);
+    });
+
+    it('set -x の "+ export NAME=値" も、値は伏せる', async () => {
+      const path = join(dir, 'profile.sh');
+      writeFileSync(path, `set -x\nexport GH_TOKEN=${FAKE}\nreturn 1\n`);
+
+      const result = await evaluateProfile({ path, baseEnv: {}, shell });
+
+      expect(result.error).toBeDefined();
+      expect(result.output).not.toContain(FAKE);
+      expect(result.output).toContain('export GH_TOKEN=');
+    });
+
+    it('環境変数にある値は、名前の形に合わない行に出ても伏せる', async () => {
+      const path = join(dir, 'profile.sh');
+      writeFileSync(path, `echo "using ${FAKE}" >&2\nreturn 1\n`);
+
+      const result = await evaluateProfile({
+        path,
+        baseEnv: { DEPLOY_API_TOKEN: FAKE },
+        shell,
+      });
+
+      expect(result.output).toContain('using');
+      expect(result.output).not.toContain(FAKE);
+    });
+
+    it('長い stderr は末尾4000字に切る。値は切り口をまたいでも残らない', async () => {
+      const path = join(dir, 'profile.sh');
+      // 値の途中が、末尾4000字の切り口に来るよう置く（全体 4011字＋α のうち先頭11字を
+      // 切る位置に、値の中ほどが当たる）。先に切ると、割れた断片が伏せ字に合わず残る。
+      const body = `echo "${'x'.repeat(10)} ${FAKE} ${'y'.repeat(3_987)}" >&2\nreturn 1\n`;
+      writeFileSync(path, body);
+
+      const result = await evaluateProfile({
+        path,
+        baseEnv: { DEPLOY_API_TOKEN: FAKE },
+        shell,
+      });
+
+      expect(result.output.length).toBeLessThanOrEqual(4_000 + '…（前略）\n'.length);
+      expect(result.output).not.toContain(FAKE);
+      expect(result.output).not.toContain('FAKE_SECRET');
+      expect(result.output).not.toContain('_2429');
+    });
+  });
+
   it('後始末が飛ばされていたら、それを検出して報告する', async () => {
     // **抜け道を数え上げて弾く形にしない。** 数え忘れた1つがそのまま穴になる
     // （実際に `return` を数え忘れた）。ここでは「器が `unset` を書かなかった」

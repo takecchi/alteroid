@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chown, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { redactErrorText } from './denial-input-head.js';
+
 /**
  * 実行環境プロファイル — 人間の `.zprofile` / `.zshenv` に当たるものを、
  * **記憶ストアに1本置いて全層へ効かせる**器。
@@ -531,6 +533,20 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
         stdio: ['ignore', 'pipe', 'pipe'],
       }));
 
+  /**
+   * **シェルの stderr は、伏せてから切る（issue #2429）。** 構文エラーは入力の行を
+   * そのまま引用し、`set -x` は `+ export GH_TOKEN=<値>` を吐く。ここから出た文は
+   * `PUT /profile` の応答（400 の `detail` も 200 の `clone.output` も）・
+   * クローンの道具 `profile_write` の戻り・CLI の表示のすべてに載るので、出口ごとに
+   * 伏せず、集める場所（ここ）で1回伏せる。**先に切ると切り口で割れた鍵の断片が
+   * 伏せ字のどれにも合わずに残る**ので、順は「伏せる→切る」。診断に要る文
+   * （行番号・`syntax error`）は値ではないので残る。
+   */
+  const redactionEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+  function scrub(text: string): string {
+    return tail(redactErrorText(text.slice(-PROFILE_REDACT_INPUT_LIMIT), redactionEnv));
+  }
+
   /** 1回起こして env を JSON で受け取る。失敗は理由つきで返す（黙って空を返さない）。 */
   async function capture(
     program: string,
@@ -566,7 +582,7 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
 
       if (code !== 0) {
         return {
-          output: tail(output),
+          output: scrub(output),
           error:
             code === 97
               ? `プロファイルの読み込みが失敗した（${shell} が非 0 で終了）`
@@ -576,16 +592,21 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
     } catch (error) {
       const reason = controller.signal.aborted
         ? `プロファイルの評価が ${String(timeoutMs)}ms 以内に終わらなかった（返ってこないコマンドを書いていないか）`
-        : String(error);
-      return { output: tail(output), error: reason };
+        : redactErrorText(String(error), redactionEnv);
+      return { output: scrub(output), error: reason };
     } finally {
       clearTimeout(timer);
     }
 
     try {
-      return { env: JSON.parse(stdout) as Record<string, string>, output: tail(output) };
+      return { env: JSON.parse(stdout) as Record<string, string>, output: scrub(output) };
     } catch (error) {
-      return { output: tail(output), error: `評価結果を読めなかった: ${String(error)}` };
+      // `JSON.parse` の例外は、パースできなかった箇所の周りの本文（＝ env の値）を
+      // メッセージへ引くことがある。伏せる。
+      return {
+        output: scrub(output),
+        error: `評価結果を読めなかった: ${redactErrorText(String(error), redactionEnv)}`,
+      };
     }
   }
 
@@ -632,8 +653,42 @@ export async function evaluateProfile(options: EvaluateProfileOptions): Promise<
 }
 
 /** 人間が読む窓であって記録ではない。長い出力で日誌を溢れさせない。 */
-function tail(text: string, limit = 4_000): string {
-  return text.length <= limit ? text : `…（前略）\n${text.slice(-limit)}`;
+function tail(text: string, limit = PROFILE_FAILURE_TEXT_LIMIT): string {
+  return text.length <= limit ? text : `${TAIL_MARK}${text.slice(-limit)}`;
+}
+
+const TAIL_MARK = '…（前略）\n';
+
+/** 失敗の文（error・output）を応答・道具の戻りへ載せる長さの上限。 */
+export const PROFILE_FAILURE_TEXT_LIMIT = 4_000;
+
+/** 伏せ字へ渡す入力の上限。巨大な stderr を丸ごと正規表現に掛けない（末尾側を残す）。 */
+const PROFILE_REDACT_INPUT_LIMIT = 100_000;
+
+/**
+ * 評価の失敗（`ProfileApplyResult` の `error` / `output`）を、応答・道具の戻りへ
+ * 載せられる形にする（issue #2429）。
+ *
+ * `evaluateProfile` の側でも伏せてあるが、**出口でも同じ関数を通す**——
+ * 器（`ProfileApplier`）はテストや別実装に差し替えられるので、出口が入口の伏せ字に
+ * 頼り切ると、差し替えた器の出力が素通りする。**伏せてから切る順**（先に切ると
+ * 切り口で割れた鍵の断片が残る）。
+ */
+export function redactProfileFailure(
+  failure: { error?: string | undefined; output?: string | undefined },
+  env: NodeJS.ProcessEnv | undefined = process.env,
+): { error: string; output: string } {
+  const scrubbed = (text: string): string => {
+    const redacted = redactErrorText(text.slice(-PROFILE_REDACT_INPUT_LIMIT), env);
+    // 入口（`evaluateProfile`）で切った印つきの文を、もう一度切って印を壊さない。
+    return redacted.length <= PROFILE_FAILURE_TEXT_LIMIT + TAIL_MARK.length
+      ? redacted
+      : tail(redacted);
+  };
+  return {
+    error: scrubbed(failure.error ?? '理由不明'),
+    output: scrubbed(failure.output ?? ''),
+  };
 }
 
 // ---------------------------------------------------------------------------
