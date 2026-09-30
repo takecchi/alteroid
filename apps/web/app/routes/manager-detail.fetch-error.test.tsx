@@ -83,6 +83,24 @@ describe('詳細の取得に失敗したとき（issue #2321）', () => {
     expect(screen.queryByText(/見つからない/)).toBeNull();
   });
 
+  it('409（委譲の行は在るが読めない形。issue #2359）: サーバの言い分を出し、「見つからない」は出さない', async () => {
+    stubManager({
+      detail: () =>
+        json(
+          {
+            error:
+              'マネージャー mgr-1 は読めない形で入っている（消されたのではない）。理由: 不正な欄: status。本文はここでは取れない。',
+          },
+          409,
+        ),
+    });
+    renderPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('読めない形で入っている');
+    expect(screen.queryByText(/見つからない/)).toBeNull();
+  });
+
   it('通信の失敗: エラーは出し、「見つからない」は出さない', async () => {
     stubManager({ detail: () => Promise.reject(new TypeError('Failed to fetch')) });
     renderPage();

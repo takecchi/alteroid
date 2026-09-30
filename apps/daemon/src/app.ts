@@ -4797,12 +4797,35 @@ export function createApp(deps: AppDeps) {
             description: '該当するマネージャーが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
+              'issue #2359）。本文は載せず、理由は不正な欄名だけ。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       async (c) => {
         const id = c.req.param('id');
         const manager = (await clone.managers.list()).find((entry) => entry.managerId === id);
-        if (!manager) return c.json({ error: 'not found' as const }, 404);
+        if (!manager) {
+          // **issue #2359 の1。** `list()` は読めない委譲の行を飛ばすので、壊れた行の id は
+          // ここで見つからない。見つからなかったときだけ台帳を読み直し、行が在るなら
+          // 「居ない」（404）ではなく「読めない形で在る」（409）と言い分ける
+          // （`GET /practices/:slug` の #2011 と同じ線）。本文は載せず、理由は不正な欄名だけ。
+          const unreadableRow = (await stores.jobs.listUnreadableJobs()).find(
+            (row) => row.id === id,
+          );
+          if (unreadableRow !== undefined) {
+            return c.json(
+              {
+                error: `マネージャー ${id} は読めない形で入っている（消されたのではない）。理由: ${unreadableRow.reason}。本文はここでは取れない。`,
+              },
+              409,
+            );
+          }
+          return c.json({ error: 'not found' as const }, 404);
+        }
         return c.json(
           managerDetailResponseSchema.parse({ manager: managerView(clone.managers, manager) }),
         );

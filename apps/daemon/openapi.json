@@ -13894,6 +13894,22 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2359）。本文は載せず、理由は不正な欄名だけ。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "parameters": [

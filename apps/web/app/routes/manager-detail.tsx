@@ -127,6 +127,9 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
    * まま 500・通信断で失敗したとき、失敗は上の `ErrorNote` が言う。ここで「見つからない」を
    * 出すと、読めていないのに委譲が存在しないように読める。再検証の失敗で `data` が残って
    * いるときは当たらず、詳細をそのまま出す。
+   *
+   * **409（委譲の行は在るが、読めない形で入っている。issue #2359）も「見つからない」ではない。**
+   * 居ないのではなく壊れているだけなので、デーモンの言い分（理由つき）を `ErrorNote` が出す。
    */
   const detailUnavailable =
     data === undefined &&

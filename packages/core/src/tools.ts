@@ -11475,6 +11475,19 @@ export function createCloneTools(context: ToolContext) {
         const managers = await context.managers.list();
         const found = managers.find((manager) => manager.managerId === managerId);
         if (!found) {
+          // **読めない委譲の行は、「居ない」と分けて言う（issue #2359 の1）。** `list()` は
+          // 読めない行を飛ばすので、壊れた行の id を引いても見つからない。見つからなかった
+          // ときだけ台帳を読み直して確かめる（単票の取得のたびに一覧を読まない）。
+          // `schedule_list kind=` の `UnreadableScheduleError` の言い分けと同じ線。
+          const unreadableRow = (await context.stores.jobs.listUnreadableJobs()).find(
+            (row) => row.id === managerId,
+          );
+          if (unreadableRow !== undefined) {
+            return text(
+              `マネージャー ${managerId} は読めない形で入っている（消されたのでも、畳まれたのでもない）。` +
+                `理由: ${unreadableRow.reason}。本文はここでは取れない。`,
+            );
+          }
           return text(
             `マネージャー ${managerId} は居ない（もう畳まれたか、id が違う）。` +
               'manager_list で今あるものが見える。',
