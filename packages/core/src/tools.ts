@@ -2299,10 +2299,20 @@ export function formatWorkKindRangeJa(): string {
   });
 }
 
-function describeWorkKindViolation(value: string | undefined): string | null {
+/**
+ * `field` は断り文に出す欄名。commitment 系（`commitment_close` /
+ * `commitment_appraise` / `manager_appraise`）の欄は `workKind` なので既定値を
+ * それにしてある。`practice_write` の欄は `kind`（`practiceKindSchema` は
+ * `workKindSchema` の別名）なので `'kind'` を渡す——呼んだ側が渡していない
+ * 欄名で断ると、どの引数を直せばよいかが読めない。issue #2450。
+ */
+function describeWorkKindViolation(
+  value: string | undefined,
+  field: string = 'workKind',
+): string | null {
   if (value === undefined) return null;
   if (workKindSchema.safeParse(value).success) return null;
-  return `workKind は使えない（${formatWorkKindRangeJa()}のみ）。`;
+  return `${field} は使えない（${formatWorkKindRangeJa()}のみ）。`;
 }
 
 /**
@@ -9779,6 +9789,15 @@ export function createCloneTools(context: ToolContext) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
+        // **issue #2450。** `kind`（`practiceKindSchema` = `workKindSchema` の
+        // `.min(1).max(128)`）も書く前に見る。見ないと保存層の `parse` が
+        // 生の ZodError を投げ、それがそのままクローンへ返る（`PUT
+        // /practices/:slug` は `practiceBody` の検査で 400 を返す）。入力
+        // スキーマ側に `.min/.max` を足さないのは #1752 と同じ理由
+        // （`workKindToolInputSchema` の doc。SDK がハンドラより前に英語の
+        // zod の文で断ってしまう）。
+        const kindError = describeWorkKindViolation(kind, 'kind');
+        if (kindError !== null) return text(kindError);
         // **issue #2011。** `before` は「作ったか書き直したか」の分岐と、
         // 差分表示（`describeTokenDiff`）にしか使わない（`write()` 自体は
         // `before` の値に依存しない）。以前は `read()` が壊れた行をそのまま
