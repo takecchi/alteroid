@@ -1160,6 +1160,20 @@ describe('折り返しの付け忘れ（本2）', () => {
  * ここでは1つも観測できない。固定できるのは「そのクラス名が書かれていること」
  * までである。本2・本3 のテストより歯が弱い — breakpoint は CSS の話なので、
  * jsdom では「効いている」ことそのものが原理的に見えない。
+ *
+ * **追記: この一覧は `KeyValueList`（`packages/ui`）へ移した。** 以前は `dl` に
+ * 固定幅の列指定と、`dt` に「上の余白・先頭だけ余白なし・`sm:` で余白なし」の
+ * class を手書きしていた。`KeyValueList` は同じ意図を別の形で書く — ラベル列の幅は
+ * CSS 変数 `--kv-label`（この画面は 8rem）で渡し、`sm:` の grid がその変数を使い、
+ * 組の境目は先頭以外の `dt` に上の余白と `sm:mt-0` を付けて作る（先頭かどうかは添字で
+ * 決める。各項目が `contents` の包みに入り、`dt` が常に包みの最初の子になるため）。
+ * class の文字が変わったので、下の assert は文字ではなく意図を測る形へ書き換えた。
+ * 意図は3つ: (a) 狭い画面は1列（基底の grid が1列で、`sm:` で2列に切り替わる）、
+ * (b) 広い画面はラベル列が固定幅（`--kv-label` に 8rem が入り、`sm:` の grid がそれを使う）、
+ * (c) 積んだときの組の境目（先頭以外の `dt` に上の余白と `sm:mt-0`、先頭には無い）。
+ * jsdom はレイアウトを持たないので、測れるのは class と style の有無までである
+ * （上の警告のとおり。`KeyValueList` 自身の class の試験は
+ * `packages/ui/src/components/features/key-value-list.test.tsx`）。
  */
 describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
   /*
@@ -1175,24 +1189,33 @@ describe('横並びの積み替え（本4-A）: 状態カードの dl', () => {
     const dl = anchor.closest('dl');
     expect(dl).not.toBeNull();
     const dlTokens = dl!.className.split(/\s+/);
+    // (a) 基底は1列。
     expect(dlTokens).toContain('grid-cols-1');
-    expect(dlTokens).toContain('sm:grid-cols-[8rem_1fr]');
-    expect(dlTokens).not.toContain('grid-cols-[8rem_1fr]');
+    // (b) sm: 以上はラベル列が変数の幅（固定幅）で、値の列が残りを取る。
+    expect(dl!.style.getPropertyValue('--kv-label')).toBe('8rem');
+    const smCols = dlTokens.filter((token) => token.startsWith('sm:grid-cols-'));
+    expect(smCols).toHaveLength(1);
+    expect(smCols[0]).toContain('var(--kv-label)');
+    // sm: 無しの列指定は 1 列のものだけ（残っていれば狭い画面でも2列のままになる）。
+    expect(dlTokens.filter((token) => /^grid-cols-/.test(token))).toEqual(['grid-cols-1']);
   });
 
-  it('全ての dt に mt-3 first:mt-0 sm:mt-0 が付いている（積んだときの組の境目）', async () => {
+  it('先頭以外の dt に上の余白と sm:mt-0 が付いている（積んだときの組の境目）', async () => {
     renderDetail(BASE);
 
     const anchor = await screen.findByText('作業ディレクトリ');
     const dl = anchor.closest('dl');
     expect(dl).not.toBeNull();
-    const scope = within(dl!);
-
-    for (const label of ['状態', '作業ディレクトリ', '作成', '更新']) {
-      const dt = scope.getByText(label);
+    const dts = Array.from(dl!.querySelectorAll('dt'));
+    expect(dts.length).toBeGreaterThan(1);
+    // (c) 先頭には上の余白も sm:mt-0 も無い。
+    const first = dts[0]!.className.split(/\s+/);
+    expect(first).not.toContain('mt-3');
+    expect(first).not.toContain('sm:mt-0');
+    // 先頭以外は、狭い画面で上の余白、sm: 以上で打ち消し。
+    for (const dt of dts.slice(1)) {
       const tokens = dt.className.split(/\s+/);
       expect(tokens).toContain('mt-3');
-      expect(tokens).toContain('first:mt-0');
       expect(tokens).toContain('sm:mt-0');
     }
   });

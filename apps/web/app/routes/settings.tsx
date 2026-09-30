@@ -18,6 +18,7 @@ import {
   Input,
   Spinner,
   StatusBadge,
+  KeyValueList,
 } from '@alteroid/ui';
 import {
   useRunners,
@@ -81,20 +82,19 @@ function Account() {
         ) : (
           <>
             {/*
-              **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
-              の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
-              （ここは6remなのでなお余裕がある）。
+              **`sm:`（640px）未満は1列に積む。** 理由と組の境目の意味は
+              `KeyValueList` の doc と `manager-detail.tsx` の同型の一覧に書いた
+              コメントと同じ（ここは6remなのでなお余裕がある）。
             */}
-            <dl className="grid grid-cols-1 gap-y-1 sm:grid-cols-[6rem_1fr]">
-              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">アカウント</dt>
-              <dd className="font-mono text-xs break-all">{auth.account?.id ?? '—'}</dd>
-              {auth.account?.email !== null && auth.account?.email !== undefined && (
-                <>
-                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">メール</dt>
-                  <dd className="text-xs break-all">{auth.account.email}</dd>
-                </>
-              )}
-            </dl>
+            <KeyValueList
+              labelWidth="6rem"
+              items={[
+                { label: 'アカウント', value: auth.account?.id ?? '—', mono: true },
+                ...(auth.account?.email !== null && auth.account?.email !== undefined
+                  ? [{ label: 'メール', value: auth.account.email }]
+                  : []),
+              ]}
+            />
             <div className="mt-3 flex items-center gap-2">
               <Button size="sm" onClick={handleLogout}>
                 ログアウト

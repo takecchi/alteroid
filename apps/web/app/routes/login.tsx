@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
-import { Badge, Button, Card, ErrorNote, Input, Spinner } from '@alteroid/ui';
+import { Badge, Button, Card, ErrorNote, Input, KeyValueList, Spinner } from '@alteroid/ui';
 import {
   useAuth,
   useApiContext,
@@ -269,22 +269,22 @@ function Ungranted() {
       </p>
 
       {/*
-          **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
-          の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
-          （ここは5remで4つの中でいちばん狭いので、なおのこと余裕がある）。
-          外側の `mt-3` は上の段落からの間隔で、`dt` に足した `mt-3` とは
-          別の役目である（混同しないこと）。
+          **`sm:`（640px）未満は1列に積む。** 理由と、組の境目（先頭以外の名前に上の
+          余白）の意味は `KeyValueList` の doc と、`manager-detail.tsx` の同型の
+          一覧に書いたコメントと同じ（ここは5remで4つの中でいちばん狭いので、なおのこと
+          余裕がある）。外側の `mt-3` は上の段落からの間隔で、`KeyValueList` が
+          名前に足す組の境目とは別の役目である（混同しないこと）。
         */}
-      <dl className="mt-3 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[5rem_1fr]">
-        <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">アカウント</dt>
-        <dd className="font-mono break-all">{auth.account?.id ?? '—'}</dd>
-        {auth.account?.email !== null && auth.account?.email !== undefined && (
-          <>
-            <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">メール</dt>
-            <dd className="break-all">{auth.account.email}</dd>
-          </>
-        )}
-      </dl>
+      <KeyValueList
+        className="mt-3"
+        labelWidth="5rem"
+        items={[
+          { label: 'アカウント', value: auth.account?.id ?? '—', mono: true },
+          ...(auth.account?.email !== null && auth.account?.email !== undefined
+            ? [{ label: 'メール', value: auth.account.email }]
+            : []),
+        ]}
+      />
 
       <p className="mt-3 text-xs text-muted-foreground">デーモンと同じ環境で次を実行する:</p>
       <Input readOnly value={command} className="mt-1.5 font-mono text-xs" />

@@ -12,6 +12,7 @@ import {
   Empty,
   ErrorNote,
   Input,
+  KeyValueList,
   Spinner,
   Textarea,
   cn,
@@ -222,82 +223,84 @@ export default function ManagerDetail({ loaderData }: Route.ComponentProps) {
               太い列だからその境目を選んでいるが、ここは最大でも8rem(128px)＝
               sm(640px)の20%に過ぎず、`md:`/`lg:` まで待つ理由が無い。
 
-              **積んだとき `dt`→`dd` が交互に並ぶので、`gap-y-1.5` だけでは
+              **積んだとき `dt`→`dd` が交互に並ぶので、行間だけでは
               「どの `dd` がどの `dt` のものか」が読めなくなる**（同じ間隔が
-              対になる行にも次の組にも掛かる）。対策として `dt` に
-              `mt-3 first:mt-0` を足す — 対になる `dd` との間隔は据え置きの
-              `gap-y-1.5` のまま、次の組が始まる前にだけ余分な間隔が入るので、
-              組の境目が間隔の差で分かるようにした（`sm:` 以上では `sm:mt-0`
-              で打ち消し、2列表示の見た目は変えていない）。
+              対になる行にも次の組にも掛かる）。対策として、先頭以外の `dt` に
+              上の余白を足す — 対になる `dd` との間隔は据え置きのまま、次の組が
+              始まる前にだけ余分な間隔が入るので、組の境目が間隔の差で分かる
+              （`sm:` 以上では打ち消し、2列表示の見た目は変えていない）。
+              **この余白は `KeyValueList` が付ける**（先頭かどうかは添字で決める。
+              理由は `KeyValueList` の doc）。
             */}
-            <dl className="grid grid-cols-1 gap-y-1.5 px-4 py-3 text-sm sm:grid-cols-[8rem_1fr]">
-              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">状態</dt>
-              <dd className="flex items-center gap-2">
-                <ManagerStatusBadge status={manager.status} />
-                {manager.live ? (
-                  <Badge tone="ok">接続あり</Badge>
-                ) : (
-                  <Badge tone="danger">セッション切断</Badge>
-                )}
-                {/*
-                  **状態の札の隣に並べる。** 拒否は `status` を置き換えない
-                  — 分類器か deny 規則がその場で止めた仕事は「実行中」のまま
-                  手が動かない。札を差し替えると、その事実が消える。
-                */}
-                {denialTotal(manager.denials) > 0 && (
-                  <Badge tone="warn">
-                    ⚠ 確認へ上がらず止められた {denialTotal(manager.denials)} 件
-                  </Badge>
-                )}
-                {/*
-                  **ここも札を差し替えない。** 上限に当たった回も `status` は
-                  `done`（終えて待機中）のままである — 直近の1ターンがどう終わった
-                  かは、状態とは別の軸である（`schema.ts` の `lastFailure`）。
-                */}
-                {manager.lastFailure !== undefined && manager.lastFailure !== null && (
-                  <Badge tone="danger">⚠ 直近のターンは失敗で終わった</Badge>
-                )}
-              </dd>
-              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">作業ディレクトリ</dt>
-              <dd className="font-mono text-xs break-all">{manager.cwd}</dd>
-              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">作成</dt>
-              <dd>
-                {formatDateTime(manager.startedAt)}（{formatRelative(manager.startedAt)}）
-              </dd>
-              <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">更新</dt>
-              <dd>
-                {formatDateTime(manager.updatedAt)}（{formatRelative(manager.updatedAt)}）
-              </dd>
-              {manager.runnerId !== undefined && manager.runnerId !== null && (
-                <>
-                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">runner</dt>
-                  <dd className="font-mono text-xs break-all">{manager.runnerId}</dd>
-                </>
-              )}
-              {manager.sessionId !== undefined && manager.sessionId !== null && (
-                <>
-                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">セッション</dt>
-                  <dd className="font-mono text-xs break-all">{manager.sessionId}</dd>
-                </>
-              )}
-              {/*
-                貸し出し（どのプロセスが握っているか）。**判定は書かない** — 引き取って
-                よいかは時刻で変わるので（`packages/core/src/lease.ts`）、画面に焼くと
-                読んだ瞬間から古びる。ここに出すのは材料だけである。
+            <KeyValueList
+              className="px-4 py-3"
+              labelWidth="8rem"
+              items={[
+                {
+                  label: '状態',
+                  value: (
+                    <div className="flex items-center gap-2">
+                      <ManagerStatusBadge status={manager.status} />
+                      {manager.live ? (
+                        <Badge tone="ok">接続あり</Badge>
+                      ) : (
+                        <Badge tone="danger">セッション切断</Badge>
+                      )}
+                      {/*
+                        **状態の札の隣に並べる。** 拒否は `status` を置き換えない
+                        — 分類器か deny 規則がその場で止めた仕事は「実行中」のまま
+                        手が動かない。札を差し替えると、その事実が消える。
+                      */}
+                      {denialTotal(manager.denials) > 0 && (
+                        <Badge tone="warn">
+                          ⚠ 確認へ上がらず止められた {denialTotal(manager.denials)} 件
+                        </Badge>
+                      )}
+                      {/*
+                        **ここも札を差し替えない。** 上限に当たった回も `status` は
+                        `done`（終えて待機中）のままである — 直近の1ターンがどう終わった
+                        かは、状態とは別の軸である（`schema.ts` の `lastFailure`）。
+                      */}
+                      {manager.lastFailure !== undefined && manager.lastFailure !== null && (
+                        <Badge tone="danger">⚠ 直近のターンは失敗で終わった</Badge>
+                      )}
+                    </div>
+                  ),
+                },
+                { label: '作業ディレクトリ', value: manager.cwd, mono: true },
+                {
+                  label: '作成',
+                  value: `${formatDateTime(manager.startedAt)}（${formatRelative(manager.startedAt)}）`,
+                },
+                {
+                  label: '更新',
+                  value: `${formatDateTime(manager.updatedAt)}（${formatRelative(manager.updatedAt)}）`,
+                },
+                ...(manager.runnerId !== undefined && manager.runnerId !== null
+                  ? [{ label: 'runner', value: manager.runnerId, mono: true }]
+                  : []),
+                ...(manager.sessionId !== undefined && manager.sessionId !== null
+                  ? [{ label: 'セッション', value: manager.sessionId, mono: true }]
+                  : []),
+                /*
+                  貸し出し（どのプロセスが握っているか）。**判定は書かない** — 引き取って
+                  よいかは時刻で変わるので（`packages/core/src/lease.ts`）、画面に焼くと
+                  読んだ瞬間から古びる。ここに出すのは材料だけである。
 
-                材料が見えないと、引き取りが動かないのを見た人間は「忘れている」と
-                「まだ握られていて待っている」を区別できない。
-              */}
-              {manager.lease !== undefined && manager.lease !== null && (
-                <>
-                  <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">貸し出し</dt>
-                  <dd className="font-mono text-xs break-all">
-                    {manager.lease.instanceId ?? 'プロセスは未名乗り'} / 世代 {manager.lease.fence}
-                    （生存確認 {formatDateTime(manager.lease.seenAt)}）
-                  </dd>
-                </>
-              )}
-            </dl>
+                  材料が見えないと、引き取りが動かないのを見た人間は「忘れている」と
+                  「まだ握られていて待っている」を区別できない。
+                */
+                ...(manager.lease !== undefined && manager.lease !== null
+                  ? [
+                      {
+                        label: '貸し出し',
+                        value: `${manager.lease.instanceId ?? 'プロセスは未名乗り'} / 世代 ${manager.lease.fence}（生存確認 ${formatDateTime(manager.lease.seenAt)}）`,
+                        mono: true,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
             <DisconnectedNote live={manager.live} />
             {/*
               **`DisconnectedNote` の直後に置く。** あちらは「繋がっていない」と

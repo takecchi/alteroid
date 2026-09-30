@@ -32,7 +32,16 @@ import {
   type EndpointOrigin,
 } from '@alteroid/logic';
 
-import { Badge, Button, Card, CardHeader, ErrorNote, Input, Select } from '@alteroid/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  ErrorNote,
+  Input,
+  KeyValueList,
+  Select,
+} from '@alteroid/ui';
 
 /**
  * 3段のどれから来たかを、人間が読む言葉にする。
@@ -164,20 +173,25 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
 
         {health.data !== undefined && (
           /*
-            **`sm:`（640px）未満は1列に積む。** 理由・`dt` の `mt-3 first:mt-0`
-            の意味は `manager-detail.tsx` の同型の `dl` に書いたコメントと同じ
-            （ここも6remなのでなお余裕がある）。
+            **`sm:`（640px）未満は1列に積む。** 理由と組の境目の意味は
+            `KeyValueList` の doc と `manager-detail.tsx` の同型の一覧に書いた
+            コメントと同じ（ここも6remなのでなお余裕がある）。
           */
-          <dl className="grid grid-cols-1 gap-y-1 text-sm sm:grid-cols-[6rem_1fr]">
-            <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">記憶</dt>
-            <dd className="font-mono text-xs break-all">{health.data.storage}</dd>
-            <dt className="mt-3 text-muted-foreground first:mt-0 sm:mt-0">pid</dt>
-            {/* pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。
-                有界の小さい整数（Linux の pid_max は既定で7桁までしか無い）なので、
-                このセクションの幅で折り返しが要る長さにはならない。break-all は
-                意図して付けていない。 */}
-            <dd className="font-mono text-xs">{health.data.pid}</dd>
-          </dl>
+          <KeyValueList
+            labelWidth="6rem"
+            items={[
+              { label: '記憶', value: health.data.storage, mono: true },
+              {
+                label: 'pid',
+                // pid は `z.number().int()`（apps/daemon/src/openapi.ts）＝ process.pid。
+                // 有界の小さい整数（Linux の pid_max は既定で7桁までしか無い）なので、
+                // このセクションの幅で折り返しが要る長さにはならない。break-all は
+                // 意図して付けていない。`KeyValueList` の `mono` は `break-all` を当てるので、
+                // ここは `mono` を使わず、旧と同じ `font-mono text-xs` の `span` で包む。
+                value: <span className="font-mono text-xs">{health.data.pid}</span>,
+              },
+            ]}
+          />
         )}
 
         {/*
