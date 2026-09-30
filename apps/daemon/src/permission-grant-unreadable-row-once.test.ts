@@ -1,7 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr, type PermissionGrant, type PermissionGrantStore } from '@alteroid/core';
+import {
+  captureStderr,
+  type PermissionGrant,
+  type PermissionGrantStore,
+  UnreadablePermissionGrantError,
+} from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -266,7 +271,11 @@ describe('PermissionGrantStore — 壊れた行は1回だけ知らせる（fs / 
     });
 
     const lines = await captureStderr(async () => {
-      await harness.stores.permissionGrants.revoke(ID, '2026-01-05T00:00:00.000Z');
+      // `revoke()` は、読めない行の id には「無い」ではなく「在るが読めない」と投げる
+      // （issue #2425）。投げる前に跡を書くので、「毎回知らせる」はそのまま測れる。
+      await expect(
+        harness.stores.permissionGrants.revoke(ID, '2026-01-05T00:00:00.000Z'),
+      ).rejects.toBeInstanceOf(UnreadablePermissionGrantError);
       await harness.stores.permissionGrants.markUsed(ID, '2026-01-05T00:00:00.000Z');
     });
 
