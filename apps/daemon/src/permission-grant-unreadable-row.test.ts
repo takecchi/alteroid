@@ -3,14 +3,12 @@ import { join } from 'node:path';
 
 import { captureStderr, type PermissionGrant, type PermissionGrantStore } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import { PGlite } from '@electric-sql/pglite';
-import { createPgStoresFromDb, migrate, tables } from '@alteroid/storage-pg';
-import type { Db } from '@alteroid/storage-pg';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * pg の `PermissionGrantStore.revoke()` / `markUsed()` が読めない行
@@ -103,9 +101,7 @@ describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書�
   }
 
   async function setupPg(): Promise<Harness & { close(): Promise<void> }> {
-    const client = new PGlite();
-    const db: Db = drizzle(client);
-    await migrate(db);
+    const { client, db } = await createMigratedPglite();
     const stores = createPgStoresFromDb(db);
 
     return {

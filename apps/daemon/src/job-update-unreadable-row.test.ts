@@ -9,18 +9,12 @@ import {
 } from '@alteroid/core';
 import type { Job, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import {
-  createPgStoresFromDb,
-  migrate,
-  tables,
-  type Db,
-  type PgStores,
-} from '@alteroid/storage-pg';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb, tables, type Db, type PgStores } from '@alteroid/storage-pg';
+import type { PGlite } from '@electric-sql/pglite';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * `JobStore.updateJob()` の、読めない（`jobSchema` に合わない）行に対する
@@ -159,9 +153,7 @@ describe('JobStore.updateJob() — 読めない job 行の扱い', () => {
     });
 
     async function seed() {
-      client = new PGlite();
-      db = drizzle(client);
-      await migrate(db);
+      ({ client, db } = await createMigratedPglite());
       stores = createPgStoresFromDb(db);
 
       // 行を直接 insert する——`putJob()` を経由すると `jobSchema.parse` を

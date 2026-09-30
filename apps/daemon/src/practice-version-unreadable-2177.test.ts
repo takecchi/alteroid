@@ -4,14 +4,13 @@ import { join } from 'node:path';
 import type { CloneHost, Stores } from '@alteroid/core';
 import { createCloneTools } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import { PGlite } from '@electric-sql/pglite';
-import { createPgStoresFromDb, migrate, tables, type Db } from '@alteroid/storage-pg';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #2177。`PracticeStore.readVersion()`（fs / pg どちらも issue #2011 の
@@ -99,9 +98,7 @@ async function fsStoresWithBadVersionRow(): Promise<Stores> {
 
 /** 上と同じ状況を pg の `practice_versions` 表へ直接 insert して作る。 */
 async function pgStoresWithBadVersionRow(): Promise<Stores> {
-  const client = new PGlite();
-  const db: Db = drizzle(client);
-  await migrate(db);
+  const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);
   await stores.practices.write({
     slug: BAD_SLUG,
@@ -284,9 +281,7 @@ async function fsStoresWithBadCurrentRow(): Promise<Stores> {
 
 /** 上と同じ状況を pg の `practices` 表へ直接 insert して作る。 */
 async function pgStoresWithBadCurrentRow(): Promise<Stores> {
-  const client = new PGlite();
-  const db: Db = drizzle(client);
-  await migrate(db);
+  const { db } = await createMigratedPglite();
   const stores = createPgStoresFromDb(db);
   await stores.practices.write({
     slug: 'good-practice-current',

@@ -4,12 +4,11 @@ import {
   type PermissionGrantStore,
 } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import { PGlite } from '@electric-sql/pglite';
-import { createPgStoresFromDb, migrate } from '@alteroid/storage-pg';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb } from '@alteroid/storage-pg';
 import { describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * `PermissionGrantStore.put()` の3実装の食い違い（issue #2052、#2012・#1715 の族）。
@@ -57,9 +56,7 @@ describe('PermissionGrantStore.put() — 必須欄が欠けた grant の扱い�
     [
       'pg 実装（PGlite）',
       async () => {
-        const client = new PGlite();
-        const db = drizzle(client);
-        await migrate(db);
+        const { db } = await createMigratedPglite();
         return createPgStoresFromDb(db);
       },
     ],

@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import type { CloneHost } from '@alteroid/core';
-import { createPgStoresFromDb, migrate, type Db, type PgStores } from '@alteroid/storage-pg';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb, type Db, type PgStores } from '@alteroid/storage-pg';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * Issue #1670。
@@ -24,7 +23,6 @@ import { createApp } from './app.js';
  * 直す前: 500（`Internal Server Error`）。
  * 直した後: 400（`{ error: 'やり方のスラッグが不正' }`）。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 let app: ReturnType<typeof createApp>;
@@ -54,9 +52,7 @@ function stubCloneHost(): CloneHost {
 const badSlug = 'Not_Valid_SLUG!';
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
   app = createApp({
     clone: stubCloneHost(),

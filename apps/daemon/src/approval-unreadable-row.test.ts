@@ -9,20 +9,14 @@ import {
 } from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import {
-  createPgStoresFromDb,
-  migrate,
-  tables,
-  type Db,
-  type PgStores,
-} from '@alteroid/storage-pg';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
+import { createPgStoresFromDb, tables, type Db, type PgStores } from '@alteroid/storage-pg';
+import type { PGlite } from '@electric-sql/pglite';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * `JobStore.getApproval()` / `updateApproval()` の、読めない（`pendingApprovalSchema` に
@@ -226,9 +220,7 @@ describe('JobStore.getApproval() / updateApproval() — 読めない承認の行
     });
 
     async function seed() {
-      client = new PGlite();
-      db = drizzle(client);
-      await migrate(db);
+      ({ client, db } = await createMigratedPglite());
       stores = createPgStoresFromDb(db);
       await stores.jobs.putApproval(GOOD_APPROVAL);
       // 行を直接 insert する——`putApproval()` は `pendingApprovalSchema.parse` を通す。
