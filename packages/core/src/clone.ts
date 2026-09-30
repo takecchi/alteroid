@@ -66,6 +66,7 @@ import {
   distillSucceededEntry,
 } from './distill-gap.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
+import { redactErrorText } from './denial-input-head.js';
 import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
 import { readConversationWindow } from './conversation.js';
 import { describeArchiveRemovedBytesUnit } from './archive-removed-bytes.js';
@@ -10161,7 +10162,11 @@ class Clone implements CloneHost {
               }
             : {
                 input: raw?.toolInput,
-                error: excerptLine(validation.message, TOOL_USE_ERROR_EXCERPT),
+                // 伏せてから切る（#2493）。
+                error: excerptLine(
+                  redactErrorText(validation.message, this.#env),
+                  TOOL_USE_ERROR_EXCERPT,
+                ),
               }),
         },
         this.#answeredApprovalFor(mainThreadActor),
@@ -10289,7 +10294,8 @@ class Clone implements CloneHost {
           // の doc）。`raw?.error` が読めない形（文字列でない）のときは欄ごと
           // 省く——作り物の文言で埋めない。
           ...(typeof raw?.error === 'string'
-            ? { error: excerptLine(raw.error, TOOL_USE_ERROR_EXCERPT) }
+            ? // 道具の出力を運びうるので、伏せてから切る（#2493）。
+              { error: excerptLine(redactErrorText(raw.error, this.#env), TOOL_USE_ERROR_EXCERPT) }
             : {}),
         },
         this.#answeredApprovalFor(mainThreadActor),

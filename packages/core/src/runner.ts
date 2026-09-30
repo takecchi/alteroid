@@ -5196,7 +5196,8 @@ class RunnerSession {
     const tool = record.toolName ?? '(不明)';
     const error =
       typeof record.error === 'string'
-        ? excerptLine(record.error, TOOL_USE_FAILURE_ERROR_EXCERPT)
+        ? // 道具の出力（トークン・資格付き URL）を運びうる自由文なので、伏せてから切る（#2493）。
+          excerptLine(redactErrorText(record.error, process.env), TOOL_USE_FAILURE_ERROR_EXCERPT)
         : '(不明)';
 
     this.#emit({
