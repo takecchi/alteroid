@@ -94,10 +94,12 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
       expect(screen.queryByText(/Unexpected Application Error/)).toBeNull();
       expect(screen.getByText('稼働中のマネージャー')).toBeTruthy();
       // カードは承認待ちのもので、0件の表示も「答える」リンクも出ていない
-      const card = note.closest('[data-slot="card"]') ?? note.parentElement!.parentElement!;
-      expect(within(card as HTMLElement).getByText('承認待ち')).toBeTruthy();
-      expect(within(card as HTMLElement).queryByText('なし。')).toBeNull();
-      expect(within(card as HTMLElement).queryByText('答える')).toBeNull();
+      // 範囲が取れなければここで落とす（別の要素の中を見て緑になるのを防ぐ）。
+      const card = note.closest<HTMLElement>('[data-slot="card"]');
+      expect(card).not.toBeNull();
+      expect(within(card!).getByText('承認待ち')).toBeTruthy();
+      expect(within(card!).queryByText('なし。')).toBeNull();
+      expect(within(card!).queryByText('答える')).toBeNull();
     },
   );
 
