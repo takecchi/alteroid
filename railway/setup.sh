@@ -237,7 +237,7 @@ TZ_VALUE="$(env_file_get TZ)"
 : "${TZ_VALUE:=Asia/Tokyo}"
 DAILY_REPORT_AT="$(env_file_get ALTEROID_DAILY_REPORT_AT)"
 INITIATIVE_EVERY="$(env_file_get ALTEROID_INITIATIVE_EVERY)"
-# 層とモデル帯の対応（クローン Opus / マネージャー Opus / 作業者 Sonnet）の差し替え。
+# 層とモデル帯の対応（クローン Fable または Opus（既定 Opus）/ マネージャー Opus / 作業者 Sonnet）の差し替え。
 # **これは設定ではなく、人間の承認の置き場である**（変更には人間の承認が要る。
 # AGENTS.md 地雷5）。だから尋ねない — 在れば運ぶだけで、無ければ既定のまま置かない
 CLONE_MODEL="$(env_file_get ALTEROID_CLONE_MODEL)"
