@@ -818,6 +818,7 @@ export {
  * 置いて配るまでの1本道（`credential-service.ts`）。**正本はデーモンが持つ。**
  */
 export {
+  CredentialEntryRejectedError,
   createCredentialService,
   resolveCredentialRows,
   type ApplyCredentialsResult,

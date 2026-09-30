@@ -37,6 +37,7 @@ import {
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  CredentialEntryRejectedError,
   JournalAnchorNotFoundError,
   ProfileRollbackFailedError,
   TokenPoolInputError,
@@ -101,6 +102,7 @@ import {
   describeUnreadableManagerRow,
   resetWorkspaceState,
   resolveBuildRevision,
+  RunnerHttpError,
   runnerSetCredentialsCommandSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -1354,6 +1356,32 @@ async function appendJournalOrDrop(
  */
 function kindOfError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
+}
+
+/**
+ * 鍵を runner へ配る呼び出し（`POST /runners/credentials`）の失敗を、**値の出ない
+ * 短い文**にする（issue #2407）。応答と日誌へ載せるのはこれだけである。
+ *
+ * **`message` は使わない。`reasonOf`（1行目を出す）も使わない。** 鍵を運ぶ呼び出し
+ * なので、例外の文面に送った値が載る形（`RunnerHttpError` は runner や間の中継の
+ * 応答本文をそのまま `message` に入れる。RPC / 検証系の例外が入力を添える形も同じ）
+ * があれば、1行目の断片でも鍵が出る。出すのは次の2つだけ:
+ *
+ * - `error.name`（クラス名）。識別子の形（英数字と `_`・`.`）でなければ `Error` に
+ *   落とす——名前を後から書き換えられる例外でも、任意の文字列は通さない
+ * - `RunnerHttpError` の `status`（数値。本文ではない）
+ *
+ * `PUT /tokens` の `kindOfError`（#2396）と同じ考えで、こちらは HTTP の状態を足して
+ * 「runner が拒んだ（4xx）か、落ちていた（5xx）か」を人が追えるようにしてある。
+ */
+function credentialDeliveryFailureOf(error: unknown): string {
+  const name =
+    error instanceof Error && /^[A-Za-z0-9_.]{1,64}$/u.test(error.name) ? error.name : 'Error';
+  const status =
+    error instanceof RunnerHttpError && Number.isInteger(error.status)
+      ? `、HTTP ${String(error.status)}`
+      : '';
+  return `${name}${status}`;
 }
 
 /**
@@ -5292,7 +5320,14 @@ export function createApp(deps: AppDeps) {
                   credentials: await runner.setCredentials(credentials),
                 };
               } catch (error) {
-                return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
+                // **素の `String(error)` を載せない**（issue #2407。`probe` の doc と同じ）。
+                const kind = credentialDeliveryFailureOf(error);
+                return {
+                  runnerId: runner.runnerId,
+                  ok: false as const,
+                  kind,
+                  error: `鍵の配布に失敗した（${kind}）`,
+                };
               }
             }),
           );
@@ -5315,7 +5350,8 @@ export function createApp(deps: AppDeps) {
               decision: `runner へ環境変数（鍵）を配れなかった（${wanted}）`,
               grounds:
                 `${describeActor(c.get('principal'))}（POST /runners/credentials、配布が失敗）: ` +
-                String(error),
+                `runner の一覧を取れなかった（${credentialDeliveryFailureOf(error)}）。` +
+                '値は書かない（鍵そのものである）。',
             },
             '環境変数（鍵）配布の打ち消しの日誌',
             `names=${credentials.map((entry) => entry.name).join(',')}`,
@@ -5326,7 +5362,7 @@ export function createApp(deps: AppDeps) {
         // **配布の結果（runner ごとの成否）は配った後でないと分からないので、
         // 2行目として `appendJournalOrDrop`（best-effort）で足す。値は書かない。**
         const delivered = results
-          .map((result) => `${result.runnerId}=${result.ok ? 'ok' : '失敗'}`)
+          .map((result) => `${result.runnerId}=${result.ok ? 'ok' : `失敗（${result.kind}）`}`)
           .join(', ');
         await appendJournalOrDrop(
           deps.stores,
@@ -5605,7 +5641,7 @@ export function createApp(deps: AppDeps) {
                 error instanceof ProfileRollbackFailedError
                   ? '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）'
                   : '実行環境プロファイルを差し替えられなかった',
-              grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${String(error)}`,
+              grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${kindOfError(error)}`,
             },
             '実行環境プロファイルの打ち消しの日誌',
             'PUT /profile',
@@ -6080,12 +6116,23 @@ export function createApp(deps: AppDeps) {
            * 同じ1呼び〈`apply`〉の中にあり、ここからは分けられない）。
            *
            * 理由を返す——「置けなかった」だけでは、人間は名前を疑うのか権限を
-           * 疑うのか分からない。**`String(error)` に値は入らない**（サービス側の
-           * 例外文は名前しか載せていない）。日誌には「差し替えようとしている」が
-           * 残っているので、打ち消す（grant の「アクセス許可付与の打ち消しの
-           * 日誌」と同じ形。**検証で断られた回も同じ扱いにする**——記録が多すぎる
-           * 側の穴で、記録の無い差し替えより安全側と判断した。teto の判断）。
+           * 疑うのか分からない。
+           *
+           * **理由を返してよいのは、検証で断った例外（`CredentialEntryRejectedError`。
+           * 名前と理由だけで値を載せない文）だけ**（issue #2415）。`apply` は保存も
+           * 担うので、それ以外の例外（ストアの書き込みの失敗など）の `message` には
+           * 値が載りうる（drizzle は `Failed query: … params: <値>` を複数行で添える）。
+           * こちらは `name` だけを、応答にも日誌にも載せる。見分けは文言でなく型で行う。
+           *
+           * 日誌には「差し替えようとしている」が残っているので、打ち消す（grant の
+           * 「アクセス許可付与の打ち消しの日誌」と同じ形。**検証で断られた回も同じ
+           * 扱いにする**——記録が多すぎる側の穴で、記録の無い差し替えより安全側と
+           * 判断した。teto の判断）。
            */
+          const reason =
+            error instanceof CredentialEntryRejectedError
+              ? error.message
+              : `鍵の差し替えに失敗した（${kindOfError(error)}）。詳細は値が載りうるので返さない`;
           await appendJournalOrDrop(
             deps.stores,
             {
@@ -6093,12 +6140,12 @@ export function createApp(deps: AppDeps) {
               decision: `環境変数（鍵）を差し替えられなかった（${wanted}）`,
               grounds:
                 `${describeActor(c.get('principal'))}（PUT /credentials、状態の変更が失敗）: ` +
-                String(error),
+                reason,
             },
             '環境変数（鍵）の打ち消しの日誌',
             `names=${entries.map((e) => e.name).join(',')}`,
           );
-          return c.json({ error: String(error) }, 400);
+          return c.json({ error: reason }, 400);
         }
 
         /**

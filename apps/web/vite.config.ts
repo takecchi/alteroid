@@ -1,5 +1,6 @@
 import { reactRouter } from '@react-router/dev/vite';
 import tailwindcss from '@tailwindcss/vite';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 /** 開発時に画面が繋ぎに行くデーモン。既定はデーモンの既定ポート。 */
@@ -49,7 +50,29 @@ export default defineConfig({
   plugins: [tailwindcss(), reactRouter()],
   css: { postcss: { plugins: [dropWoff1FromFontFace] } },
   // `~/*` を tsconfig の paths から解く（vite 8 の native 解決。専用プラグインは要らない）。
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    tsconfigPaths: true,
+    alias: [
+      /**
+       * `use-sync-external-store/shim` を React 標準の `useSyncExternalStore` に差し替える。
+       *
+       * `swr`（と、それを包む `@alteroid/swr`）が `use-sync-external-store/shim` を import する。
+       * shim は React 16.8〜18 向けの後備えで、React が `useSyncExternalStore` を持つときは
+       * それをそのまま返す（`cjs/use-sync-external-store-shim.{development,production}.js` の
+       * `exports.useSyncExternalStore = React.useSyncExternalStore !== undefined ? React.useSyncExternalStore : shim`）。
+       * React 19 は必ず持つので、差し替えても同一の関数で挙動は変わらない。
+       * 後備えの実装（useState / useLayoutEffect 版）が bundle から消え、合計が約 0.6 KB 減る。
+       * 予算（`scripts/check-web-bundle-size.mjs`）の余裕を稼ぐための差し替えである。
+       *
+       * `use-sync-external-store/shim/with-selector` は shim ではなく本物の実装なので、
+       * 正規表現は当たらない（末尾が `shim` か `shim/index.js` のものだけ）。
+       */
+      {
+        find: /^use-sync-external-store\/shim(\/index\.js)?$/,
+        replacement: fileURLToPath(new URL('./use-sync-external-store-shim.ts', import.meta.url)),
+      },
+    ],
+  },
   build: {
     /**
      * フォントのファイルだけは CSS へ base64 で埋め込まない（`/assets/…` の URL 参照にする）。

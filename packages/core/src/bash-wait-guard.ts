@@ -2361,8 +2361,19 @@ const SHELL_DASH_C_ARG_SRC = String.raw`(?:"(${NESTED_SHELL_DOUBLE_QUOTED_INNER_
  */
 const SHELL_DASH_C_FLAG_SRC = String.raw`-[A-Za-z]*c\b`;
 
+/**
+ * シェル名と `-c` のあいだのオプション（#2397）——`-e`・`-euo pipefail`・`-o pipefail`・
+ * `--norc`・`+o errexit`。`-c` 自身（`c` で終わる束ね）は読み飛ばさない。`-o`/`-O`/`+o` で
+ * 終わる束ねだけが値を1語取る。値は `-` 始まりを許さない（`-` 始まりの語は次の
+ * オプションとして読むので、1語の読み方が1通りに決まり後戻りが線形になる）。
+ */
+const SHELL_PRE_C_OPTION_SRC = String.raw`(?:-[A-Za-z]*[oO][ \t]+(?!-)\S+|\+o[ \t]+(?!-)\S+|(?!-[A-Za-z]*c\b)--?[A-Za-z][\w-]*)`;
+
+/** `-c` のあとの `--`（オプションの終わり）。 */
+const SHELL_DASH_C_END_OF_OPTIONS_SRC = String.raw`(?:--[ \t]+)?`;
+
 const SHELL_DASH_C_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_ARG_SRC}`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}(?:[ \t]+${SHELL_PRE_C_OPTION_SRC})*[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_END_OF_OPTIONS_SRC}${SHELL_DASH_C_ARG_SRC}`,
   'g',
 );
 
@@ -2826,8 +2837,17 @@ const DATA_HEREDOC_READER_RE = new RegExp(
  * と同じく本文が後で実行される。#2204 までは名前の列挙（`SHELL_NAME_SRC`）にしか当てず、無限ループを
  * 書いた本文を「データだけ」と読んで弾かなかった。変数の形は `SHELL_NAME_SRC` に含めてある（#2238）。
  */
+/**
+ * シェル名の後ろで「何かを走らせる」形（#2398）。次のどちらか。
+ * - オプション（`-x` など。`-c` で終わる束ねと `--version`/`--help` は除く——`-c` の中身は別の経路が見る）を読み飛ばして、
+ *   `-` で始まらない語（スクリプト）が来る形（`bash -x r.sh`）
+ * - 引数が無く、区切り・行末が来る形（`cat r.sh | bash` / `| sh`。標準入力を読んで走らせる）
+ * オプション（`-` 始まり）と語（`-` 以外）は先頭の文字で分かれるので、後戻りは線形。
+ */
+const SCRIPT_RUN_SHELL_TAIL_SRC = String.raw`(?:[ \t]+(?!-[A-Za-z]*c\b|--(?:version|help)\b)-\S*)*(?:[ \t]+(?!-)\S|[ \t]*(?:$|[;&|)\n]))`;
+
 const SCRIPT_RUN_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}${SCRIPT_RUN_SHELL_TAIL_SRC}|source\b|\.[ \t]|\.{0,2}\/\S)|>\([ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}`,
 );
 
 /**
