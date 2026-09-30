@@ -131,12 +131,13 @@ export type JournalScanPageHandler = (page: readonly JournalEntry[]) => void | b
  * 最後の行から）作り直す**——`query.after` を読むのは最初の1回の
  * `journal.list()` 呼び出しだけで、以降は上書きする。
  *
- * **終端の判定は2通りある。** (1) 空ページが返った (2) 返った件数が要求した
- * `limit` より少なかった——「空ページ、または返った件数がページの大きさ未満に
- * なったら終端」という約束をこの2つで満たす。**(2) を見るのは、日誌が
- * 追記専用（既存行の削除・更新の口を持たない）だからである**——同じ走査の
- * 途中でページの中身が減ることは無いので、「要求より少なく返ってきた」は
- * 「その先にもう行が無い」を意味してよい。
+ * **終端は「空ページが返った」ときだけである（Issue #2494）。** 返った件数が
+ * 要求した `limit` より少なくても、終端とは読まない。store は SQL で `LIMIT` を
+ * 掛けた後に形の合わない（壊れた）行を捨てる（pg の日誌の `list()`）ので、
+ * 壊れた行が1行あれば 500 件のページが 499 件で返る——「要求より少なく返った
+ * ＝ その先にもう行が無い」は、store が壊れた行を捨てると成り立たない。
+ * 読み損ねると `truncated: false`（探しきった）と誤って返してしまう。
+ * 代わりに往復が1回増える。次の錨は短いページでも最後の行から取る。
  */
 export async function scanJournalPages(
   journal: Pick<JournalStore, 'list'>,
@@ -172,9 +173,8 @@ export async function scanJournalPages(
 
     if (onPage(page) === false) return { scanned, truncated: false };
 
-    // 要求したページの大きさより少なく返ってきた ＝ その先にもう行が無い
-    // （追記専用ゆえに成り立つ判定。このファイル冒頭の doc）。
-    if (page.length < budget) return { scanned, truncated: false };
+    // **短いページは終端の印ではない**（Issue #2494。冒頭の doc）。空ページが
+    // 返るまで、最後の行から錨を取って読み継ぐ。
 
     if (maxScanned !== undefined && scanned >= maxScanned) return { scanned, truncated: true };
 

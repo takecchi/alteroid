@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { JOURNAL_SCAN_PAGE_SIZE, scanJournalPages } from './journal-scan.js';
 import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import { JournalAnchorNotFoundError } from './store.js';
+import type { JournalStore } from './store.js';
 
 /**
  * `scanJournalPages` そのものの単体の歯。
@@ -45,8 +46,8 @@ describe('scanJournalPages', () => {
     // 新しい順（index 昇順）で届く——`order` 未指定の既定は `desc`。
     expect(seen[0]).toBe('d-0');
     expect(seen.at(-1)).toBe(`d-${total - 1}`);
-    // 3ページ（500 + 500 + 3）——最後は短いページで自然終端する。
-    expect(fake.calls).toHaveLength(3);
+    // 3ページ（500 + 500 + 3）に、終端を確かめる空のページ1回を足して4回。
+    expect(fake.calls).toHaveLength(4);
   });
 
   it('渡す limit は常に有限の正の整数である（undefined にも MAX_SAFE_INTEGER にもならない）', async () => {
@@ -98,6 +99,51 @@ describe('scanJournalPages', () => {
 
     expect(pages).toBe(1);
     expect(result).toEqual({ scanned: 100, truncated: false });
+  });
+
+  describe('短いページは終端ではない（Issue #2494）', () => {
+    /** SQL の LIMIT の後で壊れた行を捨てる store（pg の日誌の list と同じ形）の偽物。 */
+    function droppingStore(total: number, broken: ReadonlySet<number>) {
+      const inner = createSyntheticJournalStore({
+        total,
+        entryAt: (index) => ({ type: 'decision', decision: `d-${index}`, grounds: 'g' }),
+      });
+      const brokenIds = new Set([...broken].map((index) => inner.entryOf(index).id));
+      const store: Pick<JournalStore, 'list'> = {
+        list: async (query) => (await inner.store.list(query)).filter((e) => !brokenIds.has(e.id)),
+      };
+      return { store, inner };
+    }
+
+    it('(a) 短いページの後にも行があれば、読み続けて全件を見る', async () => {
+      const { store } = droppingStore(10, new Set([1, 5]));
+      const seen: string[] = [];
+      const result = await scanJournalPages(
+        store,
+        {},
+        (page) => {
+          for (const e of page) seen.push(e.id);
+        },
+        { pageSize: 4 },
+      );
+      expect(seen).toHaveLength(8);
+      expect(result).toEqual({ scanned: 8, truncated: false });
+    });
+
+    it('(b) 空のページで止まり、truncated: false になる', async () => {
+      const { store, inner } = droppingStore(4, new Set([1]));
+      const result = await scanJournalPages(store, {}, () => {}, { pageSize: 4 });
+      expect(result).toEqual({ scanned: 3, truncated: false });
+      // 短い1ページ目の後に、空の2ページ目を読んで終わる。
+      expect(inner.calls).toHaveLength(2);
+    });
+
+    it('(c) maxScanned の打ち切りは truncated: true のまま', async () => {
+      const { store } = droppingStore(100, new Set([1]));
+      const result = await scanJournalPages(store, {}, () => {}, { pageSize: 4, maxScanned: 6 });
+      expect(result.truncated).toBe(true);
+      expect(result.scanned).toBe(6);
+    });
   });
 
   it('空ページで自然終端する（total が0件）', async () => {

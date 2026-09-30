@@ -1148,7 +1148,9 @@ export async function missingDailyReportDates({
       }
       active.add(localDate(new Date(entry.at)));
     }
-    if (page.length < scanPageSize) break;
+    // 終端は空ページだけ（Issue #2494）。store が壊れた行を捨てると、ページは
+    // 短くなっても先に行が在りうる（`journal-scan.ts` の doc）。
+    if (page.length === 0) break;
     const last = page[page.length - 1];
     if (last === undefined) break;
     after = { id: last.id, at: last.at };

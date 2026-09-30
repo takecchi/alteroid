@@ -414,6 +414,28 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
     },
   );
 
+  it('壊れた行を捨てて短くなったページを終端と読まず、先の行まで読む（Issue #2494）', async () => {
+    const entries: JournalEntry[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const at = new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString();
+      entries.push(memoryUpdateEntry(`slug-${i}`, at, 'write', { cause: 'human', id: `id-${i}` }));
+    }
+    entries.reverse();
+    const inner = fakeJournal(entries);
+    // pg の list() と同じ形: LIMIT の後で壊れた行を捨てる（ここでは id-1）。
+    const dropping: Pick<JournalStore, 'list'> = {
+      list: async (query) => (await inner.list(query)).filter((e) => e.id !== 'id-1'),
+    };
+
+    const created = await deriveMemoryCreatedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
+    const touched = await deriveHumanTouchedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
+
+    expect([...created.keys()].sort()).toEqual(
+      ['slug-0', 'slug-2', 'slug-3', 'slug-4', 'slug-5'].sort(),
+    );
+    expect(touched.size).toBe(5);
+  });
+
   it('既定の pageSize（MEMORY_JOURNAL_SCAN_PAGE_SIZE）を省略しても動く（境界の桁だけ確認）', async () => {
     // 既定値そのものを1001件生成して確かめるのは重いので、ここでは既定値が
     // 有効な正の整数であることと、省略時に動作すること（例外にならない）だけ

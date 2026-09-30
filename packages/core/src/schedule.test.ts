@@ -1600,6 +1600,28 @@ describe('取りこぼした日報', () => {
       },
     );
 
+    it('壊れた行を捨てて短くなったページを終端と読まず、先の行まで読む（Issue #2494）', async () => {
+      const first = entry('decision', at(2026, 8, 10, 15, 0));
+      const broken = entry('decision', at(2026, 8, 10, 16, 0));
+      const later = entry('decision', at(2026, 8, 11, 15, 0));
+      const inner = fakeJournal([first, broken, later]);
+      // pg の list() と同じ形: LIMIT の後で壊れた行を捨てる。
+      const journal: JournalStore = {
+        ...inner,
+        list: async (query) => (await inner.list(query)).filter((e) => e.id !== broken.id),
+      };
+
+      await expect(
+        missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+          scanPageSize: 2,
+        }),
+      ).resolves.toEqual(['2026-08-10', '2026-08-11']);
+    });
+
     it('scanPageSize を省略しても既定値（MISSING_DAILY_REPORT_SCAN_PAGE_SIZE）で動く', async () => {
       expect(MISSING_DAILY_REPORT_SCAN_PAGE_SIZE).toBeGreaterThan(0);
       const journal = fakeJournal([entry('decision', at(2026, 8, 11, 15, 0))]);
