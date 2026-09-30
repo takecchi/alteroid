@@ -107,6 +107,7 @@ import {
   startSseHeartbeat,
   readProgress,
   buildCommitmentDerivations,
+  readUnreadableJobsForCommitments,
   DEFAULT_PROGRESS_WINDOW_HOURS,
   InvalidProgressWindowError,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
@@ -4054,7 +4055,12 @@ export function createApp(deps: AppDeps) {
           '各行の `activeManagerIds` も同じ目的の導出値（issue #1003 段2）——同じ会話の' +
           '中で、この行より後に始まって、いまも走っている委譲の `managerId` を並べた' +
           'もので、無ければ欄自体が無い。正確な1対1の紐付けではない（`packages/core' +
-          '/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。',
+          '/src/schema.ts` の `commitmentActiveDelegationIds` を参照）。' +
+          '`unreadableJobs` は読めなかった委譲の行（issue #2359）。`activeManagerIds` は' +
+          '読めた委譲だけから組むので、読めない委譲に紐づく行は「委譲なし」に見える。' +
+          '**どの行に紐づくかは、行が壊れているので言えない**（推測で紐づけない）。' +
+          '1件でも在るときだけ載り（0件なら鍵が無い）、窓では切らない。`activeManagerIds` の' +
+          '導出の対象になる行（`origin` が `human` で `source` を持つ）が1件も無いときは載らない。',
         responses: {
           200: {
             description: '台帳の中身。',
@@ -4099,6 +4105,10 @@ export function createApp(deps: AppDeps) {
         // （`buildCommitmentDerivations` の doc）。
         const { repliesByConversation, activeManagersByConversation } =
           await buildCommitmentDerivations(stores, entries);
+        // **読めない委譲の行（issue #2359）。** `activeManagerIds` は `listJobs()` から組むので、
+        // 読めない委譲に紐づく行は「委譲なし」に見える。どの行に紐づくかは言えない（行が壊れて
+        // いる）ので、行へは紐づけず、1件でも在るときだけ `unreadableJobs` として別に載せる。
+        const unreadableJobs = await readUnreadableJobsForCommitments(stores, entries);
 
         let cursorPayload: z.infer<typeof commitmentsCursorSchema> | undefined;
         if (cursor !== undefined) {
@@ -4154,6 +4164,7 @@ export function createApp(deps: AppDeps) {
           entries: unknown[];
           unreadable: unknown[];
           trimmedClosed: number;
+          unreadableJobs?: unknown[];
           total?: number;
           nextCursor?: string;
         } = {
@@ -4166,6 +4177,8 @@ export function createApp(deps: AppDeps) {
           unreadable,
           trimmedClosed,
         };
+        // 窓では切らない（`unreadable` と同じ）。0件なら鍵ごと無い（既存の応答は1バイトも変わらない）。
+        if (unreadableJobs.length > 0) responseBody.unreadableJobs = unreadableJobs;
         if (optedIn) {
           responseBody.total = total;
           if (hasMore && lastOfPage !== undefined) {

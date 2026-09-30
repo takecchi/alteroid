@@ -316,6 +316,47 @@ describe('/commitments 画面', () => {
     expect(screen.getByText(/…ほか \d+ 件は省略/)).toBeTruthy();
   });
 
+  /**
+   * **読めない委譲の断り（issue #2359）。** `activeManagerIds`（「進行中（委譲あり）」）は読めた
+   * 委譲だけから組まれるので、読めない委譲に紐づく行は印が付かない。どの行かは言えない。
+   */
+  it('読めない委譲があれば、どの行かは言えないという断りが一覧の上に出る', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/commitments')) return undefined;
+      return json({
+        entries: [commitment({ origin: 'human', source: 'conv-1' })],
+        unreadable: [],
+        trimmedClosed: 0,
+        unreadableJobs: [{ id: 'mgr-bad', reason: '不正な欄: status' }],
+      });
+    });
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    const note = screen.getByRole('status');
+    expect(note.textContent).toContain('読めない委譲が 1 件ある（id: mgr-bad）');
+    expect(note.textContent).toContain('どの行に紐づくかは分からない');
+    expect(note.textContent).toContain('進行中（委譲あり）」の印が無い行の中に');
+    // 行そのものに「委譲なし」とは書かない（推測で紐づけない）。
+    expect(screen.queryByText(/委譲なし/)).toBeNull();
+  });
+
+  it('対照: 読めない委譲が無ければ（デーモンが古く欄が無いときも）断りを出さない', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/commitments')) return undefined;
+      return json({
+        entries: [commitment({ origin: 'human', source: 'conv-1' })],
+        unreadable: [],
+        trimmedClosed: 0,
+      });
+    });
+    renderPage();
+
+    await screen.findByText('ドキュメントの誤りを直す');
+    expect(screen.queryByText(/読めない委譲/)).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('物理削除が0件なら断りを出さない', async () => {
     stubCommitments([commitment()]);
     renderPage();

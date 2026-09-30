@@ -645,6 +645,24 @@ export const commitmentListResponseSchema = z.object({
    */
   trimmedClosed: z.number().int().nonnegative(),
   /**
+   * 読めなかった委譲の行（issue #2359）。**`entries` の `activeManagerIds` が少なく出ていることの断り。**
+   *
+   * `activeManagerIds` は `JobStore.listJobs()` から組むので、読めない委譲（`jobSchema` に
+   * 合わない行）に紐づく台帳の行は「委譲なし」に見える。`JobStore.listUnreadableJobs()`
+   * （`packages/core/src/store.ts`）をそのまま外へ出す（`GET /managers` の `unreadable` と
+   * 同じ材料・同じ形。本文は載せない）。
+   *
+   * **読めない委譲がどの台帳の行に紐づくかは、行が壊れているので言えない。** だから行へは
+   * 紐づけない——「委譲なし」に見える行のうち、どれが本当は委譲ありかは分からない。
+   *
+   * **1件でも在るときだけ載る**（0件なら鍵が無い。`GET /managers` と同じ。空配列を作ると
+   * 「読めない行は無い」と読めてしまうが、`unreadable`（台帳）と違い、この欄は後から足した
+   * ので、古い呼び手の応答を1バイトも変えないために鍵ごと省く）。窓では切らない。
+   * `activeManagerIds` の導出の対象になる行（`origin` が `human` で `source` を持つ）が
+   * 1件も無いときは、誰にも「委譲なし」と言っていないので載らない。
+   */
+  unreadableJobs: z.array(unreadableJobSchema).optional(),
+  /**
    * **`total` / `nextCursor` は頁の封筒（2026-08-25、人間の明示の「はい」を受けて
    * `limit`/`cursor` の opt-in で足した）。** `/approvals` の `total` / `nextCursor`
    * と同じ形——`limit` / `cursor` のいずれかを明示的に渡したときだけ載る。何も

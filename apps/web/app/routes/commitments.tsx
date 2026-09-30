@@ -31,7 +31,7 @@ import type {
   CommitmentOrigin,
   TextMarkup,
 } from '@alteroid/core';
-import type { Commitment, UnreadableCommitment } from '@alteroid/logic';
+import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
 /**
  * 引き受けたまま終わっていない仕事の台帳（`packages/core/src/schema.ts` の
@@ -90,6 +90,7 @@ export default function Commitments() {
         <>
           {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
           <UnreadableNote unreadable={unreadable} />
+          <UnreadableJobsNote unreadableJobs={data?.unreadableJobs ?? []} />
           <TrimmedClosedNote trimmedClosed={trimmedClosed} />
 
           <Card className="mb-4">
@@ -182,6 +183,40 @@ function UnreadableNote({ unreadable }: { unreadable: UnreadableCommitment[] }) 
         {ids.length > 0 &&
           `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
         。<strong>片付いたのではない。</strong>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 読めない委譲が在ることを、一覧の上で断る（issue #2359）。
+ *
+ * 「進行中（委譲あり）」の印（`InProgressBadge`）は読めた委譲だけから組まれる。読めない委譲に
+ * 紐づく行は印が付かず、「委譲なし」と見分けが付かない。**どの行に紐づくかは、委譲の行が壊れて
+ * いるので言えない**——だから行には何も足さず、一覧の上で1回だけ断る（推測で紐づけない）。
+ *
+ * `managers.tsx` の `UnreadableJobNote`（「居ない」「畳まれた」ではないという断り）とは言う
+ * ことが違うので、別の部品にする（あちらは「この一覧に載っていない」と言う画面の部品）。
+ *
+ * **0件なら描かない**（デーモンが古く欄が無いときも同じ）。id の列挙には上限を置き、切ったら言う。
+ */
+function UnreadableJobsNote({ unreadableJobs }: { unreadableJobs: readonly UnreadableJob[] }) {
+  if (unreadableJobs.length === 0) return null;
+  const idsAll = unreadableJobs.map((entry) => entry.id).filter((id): id is string => id != null);
+  const ids = idsAll.slice(0, UNREADABLE_IDS_SHOWN);
+  const idsRest = idsAll.length - ids.length;
+  return (
+    <div
+      role="status"
+      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない委譲が {unreadableJobs.length} 件ある
+        {ids.length > 0 &&
+          `（id: ${ids.join(', ')}${idsRest > 0 ? ` …ほか ${idsRest} 件は省略` : ''}）`}
+        。<strong>どの行に紐づくかは分からない</strong>
+        ——「進行中（委譲あり）」の印が無い行の中に、本当は委譲が走っているものがあるかもしれない。
       </span>
     </div>
   );

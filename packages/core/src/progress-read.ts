@@ -11,7 +11,7 @@
  */
 import { readConversationWindow } from './conversation.js';
 import { commitmentActiveDelegationIds, commitmentRespondedAt } from './schema.js';
-import type { Commitment, Job } from './schema.js';
+import type { Commitment, Job, UnreadableJob } from './schema.js';
 import { summarizeProgress } from './progress.js';
 import type { ProgressSummary } from './progress.js';
 import type { Stores } from './store.js';
@@ -28,6 +28,29 @@ export class InvalidProgressWindowError extends RangeError {
     super(PROGRESS_WINDOW_HOURS_INVALID_MESSAGE);
     this.name = 'InvalidProgressWindowError';
   }
+}
+
+/** `activeManagerIds` の導出の対象になりうる行（`origin` が `human` で `source` を持つ）か。 */
+function hasDelegationDerivableEntry(entries: readonly Commitment[]): boolean {
+  return entries.some((entry) => entry.origin === 'human' && entry.source !== undefined);
+}
+
+/**
+ * `GET /commitments` が「進行中（委譲あり）」の導出と一緒に言う、読めない委譲の行（issue #2359）。
+ *
+ * `activeManagerIds` は `listJobs()` から組むので、読めない委譲に紐づく台帳の行は「委譲なし」に
+ * 見える。**その委譲がどの台帳の行に紐づくかは、行が壊れているので言えない**ため、ここは
+ * 行へ紐づけず、読めない行（id と不正な欄名だけ）をそのまま返す。
+ *
+ * 導出の対象になりうる行が1件も無ければ読まない（`buildCommitmentDerivations` と同じ条件。
+ * どの行にも「委譲なし」と言っていないので、断る相手が居ない）。
+ */
+export async function readUnreadableJobsForCommitments(
+  stores: Stores,
+  entries: readonly Commitment[],
+): Promise<UnreadableJob[]> {
+  if (!hasDelegationDerivableEntry(entries)) return [];
+  return stores.jobs.listUnreadableJobs();
 }
 
 /**
@@ -47,7 +70,7 @@ export async function buildCommitmentDerivations(
     string,
     { managerId: string; createdAt: string }[]
   >();
-  if (!entries.some((entry) => entry.origin === 'human' && entry.source !== undefined)) {
+  if (!hasDelegationDerivableEntry(entries)) {
     return { repliesByConversation, activeManagersByConversation };
   }
 

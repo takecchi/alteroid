@@ -312,6 +312,7 @@ export {
   PROGRESS_GITHUB_NOT_OBSERVED,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
+  readUnreadableJobsForCommitments,
 } from './progress-read.js';
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
 export { describeProgress } from './progress-describe.js';
