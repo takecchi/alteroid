@@ -82,12 +82,37 @@ describe('PgPracticeStore — practices の不正な1行を読み飛ばす（iss
     await stores.practices.write(GOOD_PRACTICE);
     await insertBadPracticeRow();
 
-    let found: Awaited<ReturnType<typeof stores.practices.list>> = [];
+    let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
     await captureStderr(async () => {
       found = await stores.practices.list();
     });
 
-    expect(found.map((entry) => entry.slug)).toEqual(['good-practice']);
+    // 戻り型が `{ entries, unreadable }` になった（issue #2346）ので `entries` から読む。
+    // 保証（飛ばして正しい行だけを返す）は `entries` に対して今もそのまま成り立つ。
+    expect(found.entries.map((entry) => entry.slug)).toEqual(['good-practice']);
+  });
+
+  it('list() の unreadable に slug と不正な欄名だけが返る。題・本文は載らない（issue #2346）', async () => {
+    await stores.practices.write(GOOD_PRACTICE);
+    await insertBadPracticeRow();
+
+    let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
+    await captureStderr(async () => {
+      found = await stores.practices.list();
+    });
+
+    expect(found.unreadable).toEqual([{ slug: BAD_SLUG, reason: '不正な欄: kind' }]);
+    const serialized = JSON.stringify(found.unreadable);
+    expect(serialized).not.toContain(BAD_TITLE);
+    expect(serialized).not.toContain(BAD_CONTENT);
+  });
+
+  it('対照: 不正な行が無ければ unreadable は空。0件なら entries も空（issue #2346）', async () => {
+    expect(await stores.practices.list()).toEqual({ entries: [], unreadable: [] });
+    await stores.practices.write(GOOD_PRACTICE);
+    const found = await stores.practices.list();
+    expect(found.entries.map((entry) => entry.slug)).toEqual(['good-practice']);
+    expect(found.unreadable).toEqual([]);
   });
 
   it('跡: list() で飛ばした行を stderr へ1行出す。title / content の値は絶対に含めない', async () => {

@@ -64,15 +64,23 @@ export async function practiceListCommand(): Promise<void> {
     );
     return;
   }
-  const { practices } = (await response.json()) as { practices: PracticeSummary[] };
-  if (practices.length === 0) {
+  const { practices, unreadable = [] } = (await response.json()) as {
+    practices: PracticeSummary[];
+    /** 読めなかった行（issue #2346）。1件でも在るときだけ載る。 */
+    unreadable?: { slug?: string; reason: string }[];
+  };
+  if (practices.length === 0 && unreadable.length === 0) {
     // **「0 件」で終わらせない。** `memory list` と同じ理由——空なのか
     // 読めていないのかを、次の一手が無いと人間の側から区別できない。
     // **ただしここは異常ではない。** やり方が1件も無いのは正常な状態
-    // （`practice_list` クローンの道具の文言と同じ語彙）。
+    // （`practice_list` クローンの道具の文言と同じ語彙）。**「正常」と言えるのは、
+    // 読めない行が0件のときだけ**（issue #2346。下の断りを見よ）。
     stdout.write('やり方はまだ1件も無い（これは正常な状態）。\n');
     stdout.write('置くには: alteroid practice edit <slug> --kind <種類> --title <題>\n');
     return;
+  }
+  if (practices.length === 0) {
+    stdout.write('読めたやり方は無い（無いとも、正常だとも言えない。読めない行が在る——下）。\n');
   }
   for (const p of practices) {
     stdout.write(
@@ -80,8 +88,23 @@ export async function practiceListCommand(): Promise<void> {
         ` (作成: ${p.createdAt} / 更新: ${p.updatedAt} / ${String(p.chars)} 文字)\n`,
     );
   }
+  // **読めない行は末尾で言う**（issue #2346）。0件なら何も出さない。題・本文は出ない
+  // （デーモンが返さない）。slug が取れた行は書き直す（`practice edit`）か消せる。
+  if (unreadable.length > 0) {
+    stdout.write(
+      `読めないやり方が ${String(unreadable.length)} 件ある（消えたのではなく、読めない形で入っている）。` +
+        'この一覧には載っていない:\n',
+    );
+    for (const row of unreadable) {
+      stdout.write(`  ${row.slug ?? '（slug も取れない）'}  ${row.reason}\n`);
+    }
+    stdout.write(
+      'slug が分かる行は、alteroid practice edit <slug> で書き直すか、' +
+        'alteroid practice remove <slug> で外せる。\n',
+    );
+  }
   // **一覧から次の一手へつなぐ。** `memory list` と同じ（`memoryListCommand` の doc）。
-  stdout.write('本文を読むには: alteroid practice show <slug>\n');
+  if (practices.length > 0) stdout.write('本文を読むには: alteroid practice show <slug>\n');
 }
 
 export async function practiceShowCommand(

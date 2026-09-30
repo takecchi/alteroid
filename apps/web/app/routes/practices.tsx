@@ -1,9 +1,50 @@
+import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import { Page, Button, Card, Empty, ErrorNote, Input, Spinner } from '@alteroid/ui';
 import { usePractices } from '@alteroid/swr';
 import { formatRelative } from '@alteroid/logic';
+import type { UnreadablePractice } from '@alteroid/logic';
+
+/**
+ * 読めないやり方の行の断り（issue #2346。`tokens.tsx` の `UnreadableRowsNote` /
+ * `commitments.tsx` の `UnreadableNote` と同じ形）。
+ *
+ * **「消えたのではなく、読めない形で入っている」と言う。** 題・本文は出ない（デーモンが
+ * 返さない）。slug が取れた行は、その slug を開いて書き直すか消せる。
+ */
+function UnreadablePracticesNote({ unreadable }: { unreadable: readonly UnreadablePractice[] }) {
+  return (
+    <div
+      role="status"
+      className="mb-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <div className="min-w-0 break-words">
+        <p>
+          読めないやり方が {unreadable.length} 件ある（消えたのではなく、読めない形で入っている）。
+          この一覧には載っていない。
+        </p>
+        <ul className="mt-1 list-disc pl-5">
+          {unreadable.map((row, index) => (
+            <li key={`${row.slug ?? ''}:${index}`}>
+              {row.slug === undefined ? (
+                '（slug も取れない）'
+              ) : (
+                <Link to={`/practices/${row.slug}`} className="font-mono underline break-all">
+                  {row.slug}
+                </Link>
+              )}
+              {' — '}
+              {row.reason}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
 
 /** サーバ側と同じ規則（`practiceSlugSchema`）。ここで弾いて 400 を待たない。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
@@ -23,6 +64,9 @@ export default function Practices() {
   const [slug, setSlug] = useState('');
 
   const practices = data?.practices ?? [];
+  // **読めなかった行**（`GET /practices` の `unreadable`。issue #2346）。1件でも在るときだけ
+  // 載る——無ければ空配列として扱う（0件のとき何も出さない）。
+  const unreadable = data?.unreadable ?? [];
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
   /**
    * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
@@ -64,11 +108,21 @@ export default function Practices() {
         )}
       </Card>
 
+      {isLoading || listUnavailable || unreadable.length === 0 ? null : (
+        <UnreadablePracticesNote unreadable={unreadable} />
+      )}
+
       {isLoading ? (
         <Spinner />
       ) : listUnavailable ? null : practices.length === 0 ? (
         <Card>
-          <Empty>まだ1件も無い。これは正常な状態——やり方が書かれていない仕事も普通に進む。</Empty>
+          {unreadable.length > 0 ? (
+            // **「まだ1件も無い」「正常」と言えるのは、読めない行が0件のときだけ**
+            // （issue #2346）。読めない行が在れば、読めた行が無いとしか言えない。
+            <Empty>読めたやり方は無い。無いとも、正常だとも言えない（読めない行が在る）。</Empty>
+          ) : (
+            <Empty>まだ1件も無い。これは正常な状態——やり方が書かれていない仕事も普通に進む。</Empty>
+          )}
         </Card>
       ) : (
         <Card>

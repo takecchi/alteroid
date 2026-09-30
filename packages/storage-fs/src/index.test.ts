@@ -1467,7 +1467,7 @@ describe('FsJournalStore', () => {
         }),
       );
 
-      const list = await stores.practices.list();
+      const list = (await stores.practices.list()).entries;
       expect(list).toHaveLength(1);
       expect(list[0]?.chars).toBe([...legacyContent].length);
 

@@ -30,6 +30,8 @@ import {
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
   unreadableCommitmentSchema,
+  unreadablePracticeSchema,
+  unreadableTokenSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
   usageDateSchema,
@@ -330,7 +332,18 @@ export const memoryDeleteResponseSchema = z.object({ ok: z.literal(true), slug: 
 // 『こう実行せよ』ではない」——ここに `apply` / `enforce` に当たる口を作らない）
 // ---------------------------------------------------------------------------
 
-export const practiceListResponseSchema = z.object({ practices: z.array(practiceMetaSchema) });
+export const practiceListResponseSchema = z.object({
+  practices: z.array(practiceMetaSchema),
+  /**
+   * 読めなかったやり方の行（issue #2346）。**「無い」でも「消された」でもない第3の
+   * 状態。** `PracticeStore.list` の `PracticeList.unreadable`（`packages/core/src/store.ts`）
+   * をそのまま外へ出す。クローンの `practice_list` が末尾に足す断りと同じ材料を、
+   * 人間の側にも渡す。**1件でも在るときだけ載る**（0件なら鍵が無い。空配列を作ると
+   * 「読めない行は無い」と読めてしまう）。slug（取れれば）と不正な欄名だけで、
+   * 題・本文は含まない。
+   */
+  unreadable: z.array(unreadablePracticeSchema).optional(),
+});
 export const practiceReadResponseSchema = z.object({ practice: practiceSchema });
 export const practiceDeleteResponseSchema = z.object({ ok: z.literal(true), slug: z.string() });
 
@@ -1746,11 +1759,23 @@ export const credentialsUpdateResponseSchema = z.object({
  * 直し方の導線はすでにある——`PUT /tokens/policy`（issue #2053）へ
  * `rotateOn` と `cooldownMs` の両方を指定すれば、読めない現在値を読まずに
  * 書き直せる（`TokenPoolService.setSettings` の doc）。
+ *
+ * **`rowsUnreadable` は行が読めないときだけ載る**（issue #2346。`settingsUnreadable`
+ * の行版）。プールの行（`tokens.json` の1要素）が `agentTokenSchema` に合わず、
+ * 読み飛ばされたとき、以前は `tokens` が「読めた分」のまま返り、空なら
+ * 「登録されていない」と読めた。**1件でも在るときだけ鍵が載り、0件なら鍵ごと
+ * 無い**（既存の呼び手の応答は1バイトも変わらない。`{ count: 0 }` を作ると
+ * 「読めない行は無いと確かめた」と読める）。`rows` は id・ラベル・不正な欄名だけで、
+ * **トークンの値は含まない**。`tokens` が空で `rowsUnreadable` が在るときは
+ * 「登録されていない」ではなく「読めた行が無い」である。
  */
 export const tokensResponseSchema = z.object({
   tokens: z.array(agentTokenViewSchema),
   settings: tokenRotationSettingsSchema.optional(),
   settingsUnreadable: z.object({ reason: z.string() }).optional(),
+  rowsUnreadable: z
+    .object({ count: z.number().int().positive(), rows: z.array(unreadableTokenSchema) })
+    .optional(),
 });
 
 /**

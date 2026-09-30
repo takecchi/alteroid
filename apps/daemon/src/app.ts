@@ -2580,7 +2580,10 @@ export function createApp(deps: AppDeps) {
         summary: '仕事のやり方の一覧',
         description:
           '仕事のやり方（PracticeStore）の一覧。本文は含まない（メタ情報だけ）。' +
-          '**やり方が1件も無いのは正常な状態である**——やり方が書かれていない仕事も普通に進む。',
+          '**読めない行が無いのにやり方が1件も無いのは正常な状態である**——やり方が書かれていない' +
+          '仕事も普通に進む。行が読めない（版ずれ・手編集）やり方が在るときだけ、`unreadable`' +
+          '（slug が取れれば slug と不正な欄名）が載る。**壊れた行であって、消されたやり方ではない。**' +
+          '0件なら鍵ごと無い（issue #2346）。',
         responses: {
           200: {
             description: 'やり方のメタ情報一覧（slug の昇順）。',
@@ -2588,7 +2591,15 @@ export function createApp(deps: AppDeps) {
           },
         },
       }),
-      async (c) => c.json({ practices: await stores.practices.list() }),
+      async (c) => {
+        // **読めない行は 1 件でも在るときだけ `unreadable` を載せる**（issue #2346）。
+        // 0 件なら鍵ごと無い（既存の呼び手の応答を1バイトも変えない）。
+        const { entries, unreadable } = await stores.practices.list();
+        return c.json({
+          practices: entries,
+          ...(unreadable.length > 0 ? { unreadable } : {}),
+        });
+      },
     )
 
     .get(
@@ -6059,12 +6070,17 @@ export function createApp(deps: AppDeps) {
           'プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す' +
           '（受け入れ基準7: プールが空の既定構成の挙動を変えない）。' +
           '回す契機・冷却の設定が壊れていて読めないときも 200 を返す——' +
-          '`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。',
+          '`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。' +
+          'プールの行が読めない（版ずれ・手編集）ものが在るときだけ、`rowsUnreadable`' +
+          '（件数と、id・ラベル・不正な欄名。**値は含まない**）が載る。**壊れた行であって、' +
+          '消されたトークンではない。** `tokens` が空でも `rowsUnreadable` が在れば' +
+          '「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。',
         responses: {
           200: {
             description:
               'プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに' +
-              '`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。',
+              '`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。' +
+              '行が読めないものが在るときは `rowsUnreadable` も載る。',
             content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
           },
           403: {

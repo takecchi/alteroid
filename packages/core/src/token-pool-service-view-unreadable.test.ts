@@ -108,3 +108,70 @@ describe('TokenPoolService.list() / replace() — 設定が読めないとき（
     );
   });
 });
+
+/**
+ * issue #2346。`settingsUnreadable`（設定の軸）と独立に、行が読めなかったときは
+ * `rowsUnreadable`（行の軸）を載せる。**1件でも在るときだけ鍵が載り、0件なら鍵ごと無い。**
+ * 実物の fs ストアで不正な行を置いた歯は `apps/daemon/src/tokens-practices-unreadable-rows.test.ts`
+ * が持つ——ここは、サービスが `stores.tokens.listUnreadable()` をそのまま運ぶことだけを測る。
+ */
+describe('TokenPoolService.list() / replace() — 行が読めないとき（issue #2346）', () => {
+  function storesWithUnreadableRows(
+    memory: Stores,
+    rows: { id?: string; label?: string; reason: string }[],
+  ): Stores {
+    return {
+      ...memory,
+      tokens: {
+        ...memory.tokens,
+        async listUnreadable() {
+          return rows;
+        },
+      },
+    };
+  }
+
+  it('list(): 読めない行が在れば rowsUnreadable に件数と行を載せる。読めた行・設定は今までどおり', async () => {
+    const memory = createMemoryStores();
+    const service = createTokenPoolService({ stores: memory });
+    await service.replace([{ label: 'work', value: 'tok-secret-value' }]);
+    const rows = [{ id: 'tok-bad', label: 'broken', reason: '不正な欄: order' }];
+
+    const view = await createTokenPoolService({
+      stores: storesWithUnreadableRows(memory, rows),
+    }).list();
+
+    expect(view.rowsUnreadable).toEqual({ count: 1, rows });
+    expect(view.tokens).toHaveLength(1);
+    expect(view.settings).toBeDefined();
+    expect(JSON.stringify(view)).not.toContain('tok-secret-value');
+  });
+
+  it('list(): 読めた行が0件でも、読めない行が在れば rowsUnreadable が載る（「空」に化けない）', async () => {
+    const view = await createTokenPoolService({
+      stores: storesWithUnreadableRows(createMemoryStores(), [{ reason: '不正な行' }]),
+    }).list();
+
+    expect(view.tokens).toEqual([]);
+    expect(view.rowsUnreadable).toEqual({ count: 1, rows: [{ reason: '不正な行' }] });
+  });
+
+  it('対照: 読めない行が0件なら、rowsUnreadable は鍵ごと無い', async () => {
+    const view = await createTokenPoolService({ stores: createMemoryStores() }).list();
+
+    expect('rowsUnreadable' in view).toBe(false);
+  });
+
+  it('replace() の返り値にも、読めない行が在れば rowsUnreadable が載る', async () => {
+    const view = await createTokenPoolService({
+      stores: storesWithUnreadableRows(createMemoryStores(), [
+        { id: 'tok-bad', reason: '不正な行' },
+      ]),
+    }).replace([{ label: 'a', value: 'tok-a-value' }]);
+
+    expect(view.rowsUnreadable).toEqual({
+      count: 1,
+      rows: [{ id: 'tok-bad', reason: '不正な行' }],
+    });
+  });
+});

@@ -75,6 +75,31 @@ describe('FsTokenPoolStore — tokens.json の不正な1行を読み飛ばす（
     expect(list.map((t) => t.id)).toEqual(['tok-good']);
   });
 
+  it('listUnreadable() は飛ばした行を id・ラベル・不正な欄名だけで返す。value は載らない（issue #2346）', async () => {
+    await writeRawTokensFile();
+    const stores = createFsStores(root);
+
+    let rows: Awaited<ReturnType<typeof stores.tokens.listUnreadable>> = [];
+    await captureStderr(async () => {
+      rows = await stores.tokens.listUnreadable();
+    });
+
+    expect(rows).toEqual([{ id: 'tok-bad', label: 'legacy', reason: '不正な欄: order' }]);
+    expect(JSON.stringify(rows)).not.toContain(BAD_TOKEN_RAW.value);
+    expect(JSON.stringify(rows)).not.toContain(GOOD_TOKEN.value as string);
+  });
+
+  it('対照: 不正な行が無ければ listUnreadable() は空（issue #2346）', async () => {
+    const stores = createFsStores(root);
+    await stores.tokens.replace([GOOD_TOKEN]);
+
+    expect(await stores.tokens.listUnreadable()).toEqual([]);
+    // ファイルが無い（本当に0件）ときも空。
+    expect(
+      await createFsStores(await makeTempDir('alteroid-test-')).tokens.listUnreadable(),
+    ).toEqual([]);
+  });
+
   it('readSettings() / readActive() は不正な行があっても落ちない', async () => {
     await writeRawTokensFile();
     const stores = createFsStores(root);

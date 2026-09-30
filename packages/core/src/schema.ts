@@ -4683,6 +4683,46 @@ export const practiceMetaSchema = z.object({
 });
 
 /**
+ * やり方の1行が `practiceMetaSchema` として読めなかったときに、その行の代わりに
+ * 一覧へ載せるもの（issue #2346。`unreadableScheduleSchema` と同じ形）。
+ *
+ * **「無い」でも「消された」でもない第3の状態。** 一覧が読めない行を黙って飛ばすと、
+ * 「やり方はまだ1件も無い。これは正常な状態である」と言い切れてしまう（単票の
+ * `GET /practices/:slug` は 409 で言い分けている）。
+ *
+ * **⚠️ 本文（`content`）も題（`title`）も載せないこと。** どちらも人間・クローンの
+ * 自由文がそのまま入りうる。`reason` は「どの欄が不正か」だけにする。
+ */
+export const unreadablePracticeSchema = z.object({
+  /** 行から取れた slug。取れないこともある（fs 版で行が slug を持たない形のとき）。 */
+  slug: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadablePractice = z.infer<typeof unreadablePracticeSchema>;
+
+/**
+ * 認証トークンのプールの1行が `agentTokenSchema` として読めなかったときに、その行の
+ * 代わりに外へ出すもの（issue #2346。`unreadableScheduleSchema` と同じ形）。
+ *
+ * **「登録されていない」でも「消された」でもない第3の状態。** 読めない行を黙って
+ * 飛ばすと、行だけが読めないプールが「トークンは登録されていません」に見える
+ * （同じ応答の `settings` は `settingsUnreadable` で言い分けている）。
+ *
+ * **⚠️ トークンの値（`value`）を決して載せないこと。** 識別に使うのは値を含まない
+ * 欄（`id`・`label`）だけで、取れなければ載せない。`reason` は「どの欄が不正か」だけ。
+ */
+export const unreadableTokenSchema = z.object({
+  /** 行から取れた id（文字列のときだけ）。 */
+  id: z.string().optional(),
+  /** 行から取れたラベル（文字列のときだけ。値ではなく人間が付けた名前）。 */
+  label: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadableToken = z.infer<typeof unreadableTokenSchema>;
+
+/**
  * 仕事のやり方（#1055 段3）。**器が持つのは「こう書いてある」までである。**
  *
  * ## ⛔ ここに「実行される」欄を足さないこと（北極星に触る）

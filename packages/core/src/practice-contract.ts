@@ -41,7 +41,8 @@ export async function verifyPracticeStoreContract(
   // **`list()` が空でも throw しない**こと。ここが落ちる器は「やり方が書かれて
   // いない仕事も普通に進む」を満たせない。
   const before = await practices.list();
-  if (!Array.isArray(before)) fail('list() が配列を返さない');
+  if (!Array.isArray(before.entries)) fail('list() の entries が配列でない');
+  if (!Array.isArray(before.unreadable)) fail('list() の unreadable が配列でない');
   if ((await practices.read('contract-missing')) !== null) {
     fail('read() は無い slug に対して null を返すこと');
   }
@@ -87,7 +88,7 @@ export async function verifyPracticeStoreContract(
     title: '日報のやり方',
     content: 'い',
   });
-  const listed = (await practices.list())
+  const listed = (await practices.list()).entries
     .map((entry) => entry.slug)
     .filter((slug) => slug.startsWith('contract-'));
   if (listed.join(',') !== 'contract-a,contract-b,contract-c') {
@@ -130,7 +131,7 @@ export async function verifyPracticeStoreContract(
   if ((await practices.read('contract-a'))?.content !== 'あああ\n') {
     fail('read() が返した参照を書き換えたら、器の中身まで動いた');
   }
-  const meta = (await practices.list()).find((entry) => entry.slug === 'contract-a');
+  const meta = (await practices.list()).entries.find((entry) => entry.slug === 'contract-a');
   if (meta !== undefined) meta.title = '一覧の側で書き換えた';
   if ((await practices.read('contract-a'))?.title !== '実装のやり方（改）') {
     fail('list() が返した参照を書き換えたら、器の中身まで動いた');
@@ -158,7 +159,9 @@ export async function verifyPracticeStoreContract(
   if (unicodeReread === null || unicodeReread.chars !== expectedChars) {
     fail(`read() の chars がコードポイント数になっていない: ${unicodeReread?.chars}`);
   }
-  const unicodeListed = (await practices.list()).find((entry) => entry.slug === 'contract-unicode');
+  const unicodeListed = (await practices.list()).entries.find(
+    (entry) => entry.slug === 'contract-unicode',
+  );
   if (unicodeListed === undefined || unicodeListed.chars !== expectedChars) {
     fail(`list() の chars がコードポイント数になっていない: ${unicodeListed?.chars}`);
   }
@@ -251,7 +254,9 @@ export async function verifyPracticeStoreContract(
   // --- 10. clear（件数を返し、あとで空になる） ---
   const removed = await practices.clear();
   if (removed < 3) fail(`clear() が消した件数を返していない: ${removed}`);
-  if ((await practices.list()).length !== 0) fail('clear() の後も list() が空にならない');
+  if ((await practices.list()).entries.length !== 0) {
+    fail('clear() の後も list() が空にならない');
+  }
   // ⚠️ **`remove()` とは違い、`clear()` は版も一緒に消す**（`clear()` の doc、
   // #1309）——`contract-v` は上で `remove()` 済みだが、版はここまで残っていた。
   if ((await practices.listVersions('contract-v')).length !== 0) {

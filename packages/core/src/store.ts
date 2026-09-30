@@ -30,6 +30,8 @@ import type {
   ScheduleSpec,
   UnreadableApproval,
   UnreadableCommitment,
+  UnreadablePractice,
+  UnreadableToken,
 } from './schema.js';
 import type {
   UsageAccumulation,
@@ -1947,6 +1949,24 @@ export interface TokenPoolStore {
    */
   list(): Promise<AgentToken[]>;
   /**
+   * **`list()` が読み飛ばした行**（`agentTokenSchema` に合わない行）を、値を含まない形で
+   * 返す（issue #2346）。**0件のときだけ「登録されていない」と言える**——読めない行が
+   * 在るのにプールを空と見せない（`readSettings()` の `UnreadableTokenSettingsError`
+   * が設定について言い分けているのと対）。
+   *
+   * **`list()` の戻り型を変えなかった理由**: `list()` は回し手（`token-rotator.ts`）の
+   * 読み直しが十数か所で使い、読んだ行をそのまま `replace()` で書き戻す。そこには
+   * 読めない行を見せる先が無く、型を変えても気づける呼び手が増えない。見せる先
+   * （`TokenPoolService.list()` の `rowsUnreadable` 経由の HTTP・CLI・Web と、
+   * `token_list`）は、読めない行が在るときだけ載る別欄として受ける。
+   *
+   * **⚠️ 値（`value`）は決して返さない**（`unreadableTokenSchema` の doc）。
+   * メモリ実装（`testing.ts`）は常に空（`replace()` がスキーマを通すので壊れた行を
+   * 持てない）。pg 実装も常に空（正規化された列で持ち、型が合わない行を作れない。
+   * 読み捨てるのは過去の `source = 'env'` の行だけで、これは「読めない」ではない）。
+   */
+  listUnreadable(): Promise<UnreadableToken[]>;
+  /**
    * 全文置換。**入力に無い行は消える。**
    *
    * `settings` / `active` が壊れていても道連れにしない（`list()` の doc と
@@ -2402,6 +2422,94 @@ export class UnreadablePracticeError extends Error {
 }
 
 /**
+ * `PracticeStore.list` の返り値（issue #2346。`ScheduleList` と同じ形）。
+ *
+ * **`PracticeMeta[]` のままにしなかったのは、呼び出し側が読めない行を握り潰せない形に
+ * するため。** 読めない行を空配列（無い）へ潰すと、「やり方はまだ1件も無い。正常」と
+ * 言い切れてしまう。`unreadable` はコンパイラの目に触れる。
+ */
+export interface PracticeList {
+  /** 読めた行。slug の昇順。 */
+  entries: PracticeMeta[];
+  /**
+   * 読めなかった行。**「無い」でも「消された」でもない第3の状態。** 一覧全体は落とさない。
+   * 行そのものは消さない（`read(slug)` は投げ、`remove` で外せる）。
+   */
+  unreadable: UnreadablePractice[];
+}
+
+/**
+ * 読めないやり方が在るときの1文（0件なら `null`。**0件のときは何も出さない**——
+ * 「読めないやり方は 0 件」の行を作らない。AGENTS.md「取れない軸に 0 の行を作る」）。
+ *
+ * クローンの道具（`practice_list`）・HTTP・CLI・画面が同じ文面の骨を使う。slug が取れた
+ * 行は上限つきで並べ、取れない行は件数だけで言う。本文・題は載せない
+ * （`unreadablePracticeSchema` の doc）。
+ */
+export function describeUnreadablePractices(
+  unreadable: readonly UnreadablePractice[],
+  options: { slugLimit?: number } = {},
+): string | null {
+  if (unreadable.length === 0) return null;
+  const slugLimit = options.slugLimit ?? 10;
+  const slugs = unreadable.flatMap((row) => (row.slug === undefined ? [] : [row.slug]));
+  const shown = slugs.slice(0, slugLimit);
+  const slugNote =
+    slugs.length === 0
+      ? '（slug も取れない）'
+      : `（slug: ${shown.join(', ')}` +
+        (slugs.length > shown.length ? ` ほか ${slugs.length - shown.length} 件` : '') +
+        (slugs.length < unreadable.length
+          ? `。slug が取れない行が ${unreadable.length - slugs.length} 件`
+          : '') +
+        '）';
+  return (
+    `読めないやり方が ${unreadable.length} 件ある${slugNote}。` +
+    '壊れた行であって、消されたやり方ではない。この一覧には載っていない。'
+  );
+}
+
+/**
+ * 読めない認証トークンの行が在るときの1文（0件なら `null`。0件のときは何も出さない）。
+ *
+ * **トークンの値は載せない**（`unreadableTokenSchema` の doc）。識別は id とラベルだけ。
+ * 取れた行は上限つきで並べ、取れない行は件数だけで言う。
+ */
+export function describeUnreadableTokens(
+  unreadable: readonly UnreadableToken[],
+  options: { rowLimit?: number } = {},
+): string | null {
+  if (unreadable.length === 0) return null;
+  const rowLimit = options.rowLimit ?? 10;
+  const named = unreadable.flatMap((row) => {
+    if (row.id === undefined && row.label === undefined) return [];
+    return [
+      [
+        row.id === undefined ? null : `id ${row.id}`,
+        row.label === undefined ? null : `ラベル ${row.label}`,
+      ]
+        .filter((part) => part !== null)
+        .join(' / '),
+    ];
+  });
+  const shown = named.slice(0, rowLimit);
+  const note =
+    named.length === 0
+      ? '（id もラベルも取れない）'
+      : `（${shown.join(', ')}` +
+        (named.length > shown.length ? ` ほか ${named.length - shown.length} 件` : '') +
+        (named.length < unreadable.length
+          ? `。id もラベルも取れない行が ${unreadable.length - named.length} 件`
+          : '') +
+        '）';
+  return (
+    `読めないトークンの行が ${unreadable.length} 件ある${note}。` +
+    '壊れた行であって、消されたトークンではない。この一覧には載っていない。' +
+    'プールを全文置換する操作（PUT /tokens。alteroid token add などが通る）は、この行を一緒に捨てる。'
+  );
+}
+
+/**
  * 仕事の**やり方** = クローンが読む素材（#1055 段3）。
  *
  * ## ⛔ 器が実行を強制しない（ここが壊れると北極星が壊れる）
@@ -2418,16 +2526,25 @@ export class UnreadablePracticeError extends Error {
  * `list()` が空を返すことは、どこかの前提を崩してはいけない（段3 の受け入れ基準
  * 「やり方が書かれていない仕事も普通に進む」）。**空を「未設定」の異常として
  * 扱わないこと。**
+ *
+ * **⚠️ ただし「正常」と言えるのは、読めない行も0件のときだけである**（issue #2346。
+ * `PracticeList.unreadable`）。読めない行を飛ばして「1件も無い。正常」と言うと、
+ * 壊れた行が在るのに無いと見せることになる。
  */
 export interface PracticeStore {
   /**
-   * **slug の昇順。**（`PersonaStore.list` と同じ理由で契約にしてある —— 続きを
-   * 取る口（#662 の形）を後から足すとき、一覧が並んでいることに全面的に依拠する。
+   * **`entries` は slug の昇順。**（`PersonaStore.list` と同じ理由で契約にしてある ——
+   * 続きを取る口（#662 の形）を後から足すとき、一覧が並んでいることに全面的に依拠する。
    * 偶然揃っている状態のままでは置けない。）
    *
    * ⚠️ 照合順序の厳密な一致までは保証しない（`PersonaStore.list` の doc と同じ）。
+   *
+   * **読めない行（`practiceMetaSchema` に合わない行）は一覧全体を落とさず、`unreadable`
+   * に別欄で返す**（issue #2346。`ScheduleStore.list` の `ScheduleList` と同じ形）。
+   * **メモリ実装（`testing.ts`）は `unreadable` が常に空**——`write()` がスキーマを
+   * 通すので、壊れた行を持てない。
    */
-  list(): Promise<PracticeMeta[]>;
+  list(): Promise<PracticeList>;
   /**
    * 無ければ `null`（「読めない」は throw。`CommitmentStore.get` と同じ線）。
    * 投げるのは `UnreadablePracticeError`（本ファイル、issue #2011）——

@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { PracticeSummary } from '@alteroid/logic';
+import type { PracticeSummary, UnreadablePractice } from '@alteroid/logic';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
 import Practices from './practices';
@@ -48,8 +48,16 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function renderPractices(practices: PracticeSummary[]) {
-  stubFetch((url) => (url.includes('/practices') ? json({ practices }) : undefined));
+function renderPractices(
+  practices: PracticeSummary[],
+  /** `GET /practices` の `unreadable`（issue #2346）。渡さなければ鍵ごと無い（0件と同じ）。 */
+  unreadable?: UnreadablePractice[],
+) {
+  stubFetch((url) =>
+    url.includes('/practices')
+      ? json(unreadable === undefined ? { practices } : { practices, unreadable })
+      : undefined,
+  );
   const router = createMemoryRouter(
     [
       { path: '/', Component: Practices },
@@ -127,6 +135,31 @@ describe('0件のとき', () => {
     // 「未設定」「異常」という、まだ設定されていないかのような語を避ける
     // （`practice_list` の道具の文言と同じ語彙。`tools.ts` を参照）。
     expect(screen.queryByText(/未設定/)).toBeNull();
+    // 対照（issue #2346）: 読めない行が無いので、その断りは出ない。
+    expect(screen.queryByText(/読めないやり方/)).toBeNull();
+  });
+
+  /**
+   * issue #2346。`GET /practices` の `unreadable`（読めない行。1件でも在るときだけ載る）が
+   * 在るとき、読めた行が0件でも「まだ1件も無い」「正常な状態」と言わない。
+   */
+  it('読めない行が在るとき、「まだ1件も無い」「正常な状態」と言わず、件数を断る（#2346）', async () => {
+    renderPractices([], [{ slug: 'bad-practice', reason: '不正な欄: kind' }]);
+
+    expect(await screen.findByText(/読めないやり方が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/bad-practice/)).toBeTruthy();
+    expect(screen.getByText(/不正な欄: kind/)).toBeTruthy();
+    expect(screen.getByText(/読めたやり方は無い/)).toBeTruthy();
+    expect(screen.queryByText(/まだ1件も無い/)).toBeNull();
+    expect(screen.queryByText(/これは正常な状態/)).toBeNull();
+  });
+
+  it('読めない行が在っても、読めた行は今までどおり一覧に出る（#2346）', async () => {
+    renderPractices([practice()], [{ reason: '不正な行' }]);
+
+    expect(await screen.findByText('日報の書き方')).toBeTruthy();
+    expect(screen.getByText(/読めないやり方が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/slug も取れない/)).toBeTruthy();
   });
 });
 

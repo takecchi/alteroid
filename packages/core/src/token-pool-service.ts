@@ -12,6 +12,7 @@ import {
   type TokenRotationPolicy,
   type TokenRotationSettings,
 } from './token-pool.js';
+import type { UnreadableToken } from './schema.js';
 import { UnreadableTokenSettingsError, type Stores } from './store.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 
@@ -63,14 +64,27 @@ import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-
  * 両方の枝に存在する（片方は常に `undefined`）ので、読む側は
  * `result.settings === undefined` で分岐でき、strict null checks が
  * 「読める前提」の直接アクセスを型検査で落とす。
+ *
+ * **`rowsUnreadable` は設定の2枝とは独立の欄である**（issue #2346）。読めなかった
+ * 行（`stores.tokens.listUnreadable()`）が**1件でも在るときだけ**載る（0件なら鍵ごと
+ * 無い。`{ count: 0 }` を作ると「読めない行は無いと確かめた」と読めてしまう）。
+ * **`tokens` が空のとき「登録されていない」と言ってよいのは、この欄が無いときだけ
+ * である。** 載せるのは id・ラベル・不正な欄名だけで、トークンの値は載せない。
  */
-export type TokenPoolView =
+export type TokenPoolView = (
   | { tokens: AgentTokenView[]; settings: TokenRotationSettings; settingsUnreadable?: undefined }
   | {
       tokens: AgentTokenView[];
       settings?: undefined;
       settingsUnreadable: { reason: string };
-    };
+    }
+) & { rowsUnreadable?: TokenRowsUnreadable };
+
+/** {@link TokenPoolView.rowsUnreadable}。`count` は `rows.length` と等しい。 */
+export interface TokenRowsUnreadable {
+  count: number;
+  rows: UnreadableToken[];
+}
 
 export interface TokenPoolService {
   /** 現在のプール（外向きの顔）と設定。設定が読めないときは {@link TokenPoolView} を見よ。 */
@@ -245,18 +259,24 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
   function viewOf(
     tokens: AgentTokenView[],
     settingsResult: Awaited<ReturnType<typeof readSettingsOrUnreadable>>,
+    unreadableRows: readonly UnreadableToken[],
   ): TokenPoolView {
-    return settingsResult.ok
+    const base = settingsResult.ok
       ? { tokens, settings: settingsResult.settings }
       : { tokens, settingsUnreadable: { reason: settingsResult.reason } };
+    // **1件でも在るときだけ鍵を載せる**（{@link TokenPoolView} の doc）。
+    return unreadableRows.length === 0
+      ? base
+      : { ...base, rowsUnreadable: { count: unreadableRows.length, rows: [...unreadableRows] } };
   }
 
   async function currentView(): Promise<TokenPoolView> {
-    const [tokens, settingsResult] = await Promise.all([
+    const [tokens, settingsResult, unreadableRows] = await Promise.all([
       stores.tokens.list(),
       readSettingsOrUnreadable(),
+      stores.tokens.listUnreadable(),
     ]);
-    return viewOf(tokens.map(toAgentTokenView), settingsResult);
+    return viewOf(tokens.map(toAgentTokenView), settingsResult, unreadableRows);
   }
 
   /**
@@ -331,9 +351,10 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           return stores.tokens.replace(normalized);
         });
         const settingsResult = await readSettingsOrUnreadable();
+        const unreadableRows = await stores.tokens.listUnreadable();
         // **保存できた後に知らせる**（`announceChange` の doc）。
         announceChange('pool');
-        return viewOf(stored.map(toAgentTokenView), settingsResult);
+        return viewOf(stored.map(toAgentTokenView), settingsResult, unreadableRows);
       }),
 
     noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>

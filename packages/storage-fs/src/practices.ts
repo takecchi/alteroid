@@ -9,10 +9,12 @@ import {
 } from '@alteroid/core';
 import type {
   Practice,
+  PracticeList,
   PracticeMeta,
   PracticeStore,
   PracticeVersion,
   PracticeVersionMeta,
+  UnreadablePractice,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -242,15 +244,26 @@ export class FsPracticeStore implements PracticeStore {
   }
 
   /**
-   * slug の昇順。**不正な行は返さない**（issue #1967。`FsJobStore.listJobs` /
-   * `FsScheduleStore.list` が #1868 / #1944 でそろえた形と同じ）——飛ばした
-   * 行は `#read()` が stderr へ跡を残し、`invalidPracticesRaw` として書き
-   * 戻しでも生かしたまま持ち回る（消さない）。
+   * `entries` は slug の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
+   * 返す**（issue #2346。以前は黙って飛ばしていたため、上の層が「やり方は1件も無い。
+   * 正常」と言い切れた。`FsScheduleStore.list` の #2343 と同じ形）——飛ばした行は
+   * `#read()` が stderr へ跡を残し（issue #1967）、`invalidPracticesRaw` として書き
+   * 戻しでも生かしたまま持ち回る（消さない）。`unreadable` は slug（取れれば）と
+   * 不正な欄名だけを持ち、題・本文は載せない。
    */
-  async list(): Promise<PracticeMeta[]> {
-    return [...(await this.#read()).practices]
-      .sort((a, b) => a.slug.localeCompare(b.slug))
-      .map((entry) => toMeta(entry));
+  async list(): Promise<PracticeList> {
+    const { practices, invalidPracticesRaw } = await this.#read();
+    return {
+      entries: [...practices]
+        .sort((a, b) => a.slug.localeCompare(b.slug))
+        .map((entry) => toMeta(entry)),
+      unreadable: invalidPracticesRaw.map((raw): UnreadablePractice => {
+        const slug = extractSlug(raw);
+        const result = practiceRecordSchema.safeParse(raw);
+        const reason = result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
+        return slug === undefined ? { reason } : { slug, reason };
+      }),
+    };
   }
 
   /**

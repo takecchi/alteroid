@@ -12,6 +12,7 @@ import {
   type AgentToken,
   type TokenPoolStore,
   type TokenRotationSettings,
+  type UnreadableToken,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -121,6 +122,16 @@ function extractRowId(raw: unknown): string | undefined {
 }
 
 /**
+ * 生の要素から、値を出さずに「ラベル」だけを安全に取り出す（取れなければ
+ * `undefined`）。**`value` には決して触れない**（issue #2346）。
+ */
+function extractRowLabel(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const label = (raw as Record<string, unknown>).label;
+  return typeof label === 'string' ? label : undefined;
+}
+
+/**
  * 飛ばした token 行を stderr へ1行で要約する。**id 以外の値は絶対に載せない**
  * ——`value`（トークン本体）が入りうる（`describeSkippedCredentialRow` と
  * 同じ理由。issue #1942）。
@@ -180,6 +191,28 @@ export class FsTokenPoolStore implements TokenPoolStore {
     return file.tokens
       .filter((token): token is AgentToken => token.source !== 'env')
       .sort((a, b) => a.order - b.order);
+  }
+
+  /**
+   * `list()` が読み飛ばした行を、**値を含まない形**（id・ラベル・不正な欄名だけ）で
+   * 返す（issue #2346。`TokenPoolStore.listUnreadable` の doc）。飛ばした行は
+   * `#read()` が stderr へ跡を残し、`invalidTokensRaw` として生かしたまま持ち回る。
+   * **`value`（トークン本体）は取り出す経路そのものを作らない**——`extractRowId` /
+   * `extractRowLabel` は名指しした欄しか読まない。
+   */
+  async listUnreadable(): Promise<UnreadableToken[]> {
+    const { invalidTokensRaw } = await this.#read();
+    return invalidTokensRaw.map((raw): UnreadableToken => {
+      const id = extractRowId(raw);
+      const label = extractRowLabel(raw);
+      const result = agentTokenRowSchema.safeParse(raw);
+      const reason = result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
+      return {
+        ...(id === undefined ? {} : { id }),
+        ...(label === undefined ? {} : { label }),
+        reason,
+      };
+    });
   }
 
   /**

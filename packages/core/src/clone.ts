@@ -8095,7 +8095,10 @@ class Clone implements CloneHost {
             const kindKeys = practiceCandidateKindKeys({ commitments, jobs });
             const practices: PracticeCandidateMaterial[] = [];
             if (kindKeys.size > 0) {
-              for (const meta of await this.#stores.practices.list()) {
+              // **読めない行（`unreadable`）はここでは使わない**——材料にできる本文が
+              // 読めないので候補には載せられない。見せる先は `practice_list` /
+              // `GET /practices`（issue #2346）で、ここは「無い」と言う場所ではない。
+              for (const meta of (await this.#stores.practices.list()).entries) {
                 if (!kindKeys.has(workKindGroupKey(meta.kind) ?? '')) continue;
                 const found = await this.#stores.practices.read(meta.slug);
                 if (found === null) continue; // 一覧と読みの間に消えた

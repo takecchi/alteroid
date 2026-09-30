@@ -14,7 +14,9 @@ describe('PracticeStore — 仕事のやり方を器に持つ（#1055 段3）', 
     const stores = createMemoryStores();
     // 受け入れ基準「やり方が書かれていない仕事も普通に進む」。**空で落ちる器は
     // これを満たせない。** 「未設定」という異常状態を作らない。
-    expect(await stores.practices.list()).toEqual([]);
+    // 戻り型が `{ entries, unreadable }` になった（issue #2346）。対照: 本当に0件なら
+    // 読めない行も無い（「正常」と言えるのは、この2つがどちらも空のときだけ）。
+    expect(await stores.practices.list()).toEqual({ entries: [], unreadable: [] });
     expect(await stores.practices.read('nothing-here')).toBeNull();
     expect(await stores.practices.clear()).toBe(0);
     await stores.practices.remove('nothing-here');

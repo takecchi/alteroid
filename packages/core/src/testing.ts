@@ -1434,6 +1434,10 @@ export function createMemoryStores(): Stores {
     async list() {
       return [...tokenPool].sort((a, b) => a.order - b.order);
     },
+    async listUnreadable() {
+      // 読めない行は持てない（`replace` がスキーマを通す）ので常に空。
+      return [];
+    },
     async replace(next) {
       // **本物（fs の `agentTokenRowSchema` / pg の `order` 列の SQL 整数型）と
       // 同じ検査を掛ける。** かつてはインメモリだけが何でも受け付けたので、
@@ -1677,18 +1681,22 @@ export function createMemoryStores(): Stores {
    */
   const practiceStore: PracticeStore = {
     async list() {
-      return [...practices.values()]
-        .sort((a, b) => a.slug.localeCompare(b.slug))
-        .map((entry) =>
-          isolate({
-            slug: entry.slug,
-            kind: entry.kind,
-            title: entry.title,
-            createdAt: entry.createdAt,
-            updatedAt: entry.updatedAt,
-            chars: entry.chars,
-          }),
-        );
+      // 読めない行は持てない（`write` がスキーマを通す）ので `unreadable` は常に空。
+      return {
+        entries: [...practices.values()]
+          .sort((a, b) => a.slug.localeCompare(b.slug))
+          .map((entry) =>
+            isolate({
+              slug: entry.slug,
+              kind: entry.kind,
+              title: entry.title,
+              createdAt: entry.createdAt,
+              updatedAt: entry.updatedAt,
+              chars: entry.chars,
+            }),
+          ),
+        unreadable: [],
+      };
     },
     async read(slug) {
       const found = practices.get(slug);
