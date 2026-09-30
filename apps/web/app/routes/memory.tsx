@@ -22,6 +22,12 @@ export default function Memory() {
 
   const documents = data?.documents ?? [];
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
+  /**
+   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。「正しい動作」は言い切りになる。
+   * 再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Page
@@ -58,7 +64,7 @@ export default function Memory() {
 
       {isLoading ? (
         <Spinner />
-      ) : documents.length === 0 ? (
+      ) : listUnavailable ? null : documents.length === 0 ? (
         <Card>
           <Empty>
             まだ空。起動直後に人間の登場が多いのは正しい動作で、価値観が溜まるほど確認は減る。

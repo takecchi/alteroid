@@ -90,6 +90,22 @@ describe('ConversationList: 枠・空・但し書き', () => {
     expect(screen.getByText('一つ目').tagName).toBe('P');
     expect(screen.getByText('二つ目').tagName).toBe('P');
   });
+
+  it('取得に失敗して1件も読めていない（unavailable）ときは「まだ会話がない。」を出さない（#2323）', () => {
+    const { rerender } = render(
+      <ConversationList
+        items={undefined}
+        activeId={undefined}
+        renderLink={renderLink}
+        error={new Error('失敗')}
+        unavailable
+      />,
+    );
+    expect(screen.queryByText('まだ会話がない。')).toBeNull();
+    // 本当に0件で成功したときは、いままでどおり言う。
+    rerender(<ConversationList items={[]} activeId={undefined} renderLink={renderLink} />);
+    expect(screen.getByText('まだ会話がない。')).toBeTruthy();
+  });
 });
 
 describe('ChatHeader', () => {

@@ -392,6 +392,8 @@ function ConversationList({
       activeId={activeId}
       loading={isLoading}
       error={error}
+      // 取れなかったのを0件と描かない（#2323）。再検証の失敗で `data` が残るときは当たらない。
+      unavailable={data === undefined && error !== undefined}
       notes={notes}
       inDrawer={onNavigate !== undefined}
       // 従来は「新しい会話」のボタンも Tab の順路に残っていた（振る舞いは変えない）。

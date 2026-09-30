@@ -5,10 +5,10 @@ import { captureStderr, type PermissionGrant, type PermissionGrantStore } from '
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
 /**
  * pg の `PermissionGrantStore.revoke()` / `markUsed()` が読めない行
@@ -32,6 +32,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 対象が無い。
  */
 describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書き換えない（fs / pg。issue #2158）', () => {
+  // PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
+  // 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2337）。
+  beforeAll(async () => {
+    await migratedTemplate();
+  }, 30_000);
+
   const GOOD_GRANT: PermissionGrant = {
     id: 'grant-good',
     rule: 'Bash(gh release edit:*)',

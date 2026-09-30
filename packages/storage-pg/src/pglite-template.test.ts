@@ -1,5 +1,5 @@
 import type { PGlite } from '@electric-sql/pglite';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
@@ -14,6 +14,12 @@ async function countUsageRows(client: PGlite): Promise<number> {
 }
 
 describe('createMigratedPglite', () => {
+  // 雛形（WASM の起動＋migrate）は最初に呼んだ歯が払う。歯の本体（既定 5000ms）でなく
+  // hook（明示 30_000ms）で払わせる（issue #2337）。「1回しか作らない」の歯は別に測る。
+  beforeAll(async () => {
+    await migratedTemplate();
+  }, 30_000);
+
   it('migrate 済みで、行は1つも無い状態から始まる', async () => {
     const { client } = await createMigratedPglite();
     try {

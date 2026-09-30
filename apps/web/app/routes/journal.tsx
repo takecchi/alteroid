@@ -427,6 +427,14 @@ function JournalBody({
   }
 
   const lastId = entries.at(-1)?.id;
+  /**
+   * **取れなかったのを0件と描かない**（issue #2322）。日誌をまだ1件も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「何も記録されていない」を並べると、
+   * 読めていないのに記録が無いように読める。フックは `error` を初回の失敗と後続の失敗で
+   * 共用するが、後続は行が在って初めて起こるので、`error` と0件の組は初回の失敗を指す。
+   * 一覧が残っているときは当たらず、そのまま出す。
+   */
+  const listUnavailable = error !== undefined && entries.length === 0;
 
   return (
     <>
@@ -440,7 +448,7 @@ function JournalBody({
       <Card>
         {isLoadingInitial ? (
           <Spinner />
-        ) : entries.length === 0 ? (
+        ) : listUnavailable ? null : entries.length === 0 ? (
           <Empty>{journalEmptyMessage(selected, q)}</Empty>
         ) : (
           <Virtualizer
