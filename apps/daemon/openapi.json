@@ -13971,6 +13971,22 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "該当する委譲の行は在るが、型に合わない形で入っていて読めない（`unreadable`。居ないのとは区別する。issue #2359）。止めておらず、行も書き換えていない。本文は載せず、理由は不正な欄名だけ。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "requestBody": {
@@ -14020,6 +14036,22 @@
           },
           "404": {
             "description": "該当するマネージャーの生ログが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2359）。本文は載せず、理由は不正な欄名だけ。",
             "content": {
               "application/json": {
                 "schema": {
@@ -14128,6 +14160,22 @@
           },
           "404": {
             "description": "該当するマネージャーが無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2359）。送っていない。本文は載せず、理由は不正な欄名だけ。",
             "content": {
               "application/json": {
                 "schema": {

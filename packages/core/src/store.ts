@@ -605,6 +605,21 @@ export function describeUnreadableJobs(
   );
 }
 
+/**
+ * **id を1本指して引いたとき、その id の行が読めない形で在る**ことの1文（issue #2359）。
+ * 「${id} は居ない」と言い分ける先（`manager_stop` / `manager_send` / `manager_transcript` と、
+ * 対応する HTTP の口）がここを共有する。`describeUnreadableJobs`（一覧の骨）の単票版。
+ *
+ * **本文は載せない**（`unreadableJobSchema` の doc）。理由は不正な欄名だけ。
+ * 見つからなかったときだけ `JobStore.listUnreadableJobs()` を読んで使う。
+ */
+export function describeUnreadableManagerRow(id: string, reason: string): string {
+  return (
+    `マネージャー ${id} は読めない形で入っている（消されたのでも、畳まれたのでもない）。` +
+    `理由: ${reason}。本文はここでは取れない。`
+  );
+}
+
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
 export interface JobStore {
   listJobs(): Promise<Job[]>;

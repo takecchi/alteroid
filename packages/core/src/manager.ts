@@ -93,7 +93,7 @@ import type {
   UnpushedWorkObservationSource,
   WorkspaceLocator,
 } from './schema.js';
-import { UnreadableJobError, type Stores } from './store.js';
+import { UnreadableJobError, describeUnreadableManagerRow, type Stores } from './store.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
@@ -849,6 +849,11 @@ export interface ManagerSummary {
  *   （`transcript()` の doc）——tombstone された archiveId が在っても、
  *   他の経路に本文が見つかればそちらを `body` として返す。
  * - **`missing`** — id 自体が存在しない、あるいは3段のどこにも痕跡が無い。
+ * - **`unreadable`** — 台帳に id の行は**在るが読めない**（`jobSchema` に合わない。
+ *   版ずれ・手編集。issue #2359）。**`missing` に畳まない**——居ないのではなく壊れて
+ *   いるだけで、直せば読める行を「無い」として扱わせてしまう。`detail` は
+ *   `describeUnreadableManagerRow` の1文（本文は載せない）。HTTP では 409。
+ *   **台帳に行が無かったとき（`missing` になる側）にだけ**台帳の読めない行を見に行く。
  */
 export type ManagerTranscript =
   | { readonly kind: 'body'; readonly body: string; readonly archiveId?: string }
@@ -858,7 +863,8 @@ export type ManagerTranscript =
       readonly removedAt: string;
       readonly bytes: number;
     }
-  | { readonly kind: 'missing' };
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
 
 /**
  * `ManagerPool.unpushedWork()` の戻り値（Issue #1039）。
@@ -1694,6 +1700,7 @@ export type ManagerDecision = 'allow' | 'deny';
  * | `'delivered'` | 追加指示として届けた（**runner にセッションが無くて resume から入り直した回も含む。`detail` がそう言う**） | 200 |
  * | `'session_missing'` | **runner がこの委譲のセッションを持っておらず、resume でも入り直せなかった。** そのものは居る | 200 |
  * | `'unknown'` | 届けられたか確かめられなかった（宛先の runner が名簿に開いていない・待ちの宛先が決められない・引き取り中 など） | `'unknown'` のみ 404 |
+ * | `'unreadable'` | **台帳に行は在るが読めない形で入っている**（issue #2359）。送っていない。`'unknown'`（居ない）と分ける | 409 |
  *
  * **`'session_missing'` を `'unknown'` へ畳まないこと。** 畳むと `app.ts` の
  * `if (result.outcome === 'unknown')` が 404 を返し、`ManagerAbortResult` の doc が
@@ -1712,7 +1719,7 @@ export type ManagerDecision = 'allow' | 'deny';
  * したことで、2つの実装は同じ入力に同じ `outcome` を返す。
  */
 export interface ManagerSendResult {
-  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown';
+  outcome: 'answered' | 'delivered' | 'session_missing' | 'unknown' | 'unreadable';
   detail: string;
 }
 
@@ -1764,6 +1771,12 @@ export type ManagerStopActor = 'human' | 'clone' | 'auto-fold';
  * | `'not_stopped'` | `sessionGone === false`。**止まっていないと確かめた**（明確な失敗） | 何も書かない | 200 |
  * | `'unknown'` | 確かめられなかった（`runner.list()` が答えない／`runner.stop()` が期限切れ／**宛先の runner が名簿に開いていない**） | 何も書かない | 200 |
  * | `'absent'` | **そのマネージャーが台帳に居ない。** 旧 `'unknown'` の改名 | — | 404 |
+ * | `'unreadable'` | **台帳に行は在るが読めない形で入っている**（issue #2359）。止めていない。行は書き換えていない | 何も書かない | 409 |
+ *
+ * **`'unreadable'` を `'absent'` に畳まない。** 「居ない」と言うと、直せば読める行を
+ * 消えたものとして扱わせる（`ManagerAppraiseResult` の `'unreadable'` と同じ線）。
+ * **これは「一覧が読めなかった」（`manager_stop` の #2342）とは別の話である**——あちらは
+ * 道具が一覧を読めなかった側、こちらは行そのものが読めない側。
  *
  * **`'absent'` は「宛先の runner が居ない」を含んでいた。** その2つは別である —
  * 台帳に居ないマネージャーは存在しないが、**宛先が開いていないだけのマネージャーは
@@ -1776,7 +1789,7 @@ export type ManagerStopActor = 'human' | 'clone' | 'auto-fold';
  * 既に在る。新しい値は足していない。
  */
 export interface ManagerAbortResult {
-  outcome: 'stopped' | 'not_stopped' | 'unknown' | 'absent';
+  outcome: 'stopped' | 'not_stopped' | 'unknown' | 'absent' | 'unreadable';
   detail: string;
   /**
    * **止めた結果、本当に止まったか。** runner のセッション一覧から消えたことを
@@ -5526,6 +5539,12 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
     if (!record) {
+      // **読めない形で在る行は「居ない」と言わない（issue #2359）。** 見つからなかった
+      // ときだけ台帳の読めない行を見る。送ってはいない（行にも触れない）。
+      const unreadable = await this.#unreadableRowDetail(managerId);
+      if (unreadable !== undefined) {
+        return { outcome: 'unreadable', detail: `${unreadable}送っていない。` };
+      }
       return { outcome: 'unknown', detail: `${managerId} というマネージャーは居ない。` };
     }
 
@@ -6773,7 +6792,13 @@ class Pool implements ManagerPool {
 
   async transcript(managerId: string): Promise<ManagerTranscript> {
     const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
-    if (!job) return { kind: 'missing' };
+    if (!job) {
+      // **読めない形で在る行は `missing`（＝居ない）にしない（issue #2359）。**
+      const unreadable = await this.#unreadableRowDetail(managerId);
+      return unreadable === undefined
+        ? { kind: 'missing' }
+        : { kind: 'unreadable', detail: unreadable };
+    }
 
     // 走行中なら runner のディスクの上にある。
     const record = this.#records.get(managerId);
@@ -8540,6 +8565,15 @@ class Pool implements ManagerPool {
 
     const record = this.#records.get(managerId) ?? (await this.#load(managerId));
     if (!record) {
+      // **読めない形で在る行は「居ない」と言わない（issue #2359）。** 見つからなかった
+      // ときだけ台帳の読めない行を見る。止めていない（行にも触れない）。
+      const unreadable = await this.#unreadableRowDetail(managerId);
+      if (unreadable !== undefined) {
+        return {
+          outcome: 'unreadable',
+          detail: `${unreadable}止めていない。行は書き換えていない。`,
+        };
+      }
       return { outcome: 'absent', detail: `${managerId} というマネージャーは居ない。` };
     }
 
@@ -12958,6 +12992,21 @@ class Pool implements ManagerPool {
    * `ManagerRecord.stopConfirmedAt` と `ResumeOutcome.stopped-meanwhile`
    * （`#resume` の doc）が塞ぐ。
    */
+  /**
+   * 台帳に `managerId` の行が**読めない形で在る**なら、その1文（`describeUnreadableManagerRow`）。
+   * 無ければ `undefined`（本当に居ない）。issue #2359。
+   *
+   * **見つからなかった枝でだけ呼ぶ**（見つかった回に一覧を余分に読まない）。`listJobs()` は
+   * 読めない行を飛ばすので、壊れた行の id はそこで見つからず、「居ない」に見えていた。
+   * 読めない行は委譲の行であって像ではない——ここは読むだけで、何も書かず、止めず、送らない。
+   */
+  async #unreadableRowDetail(managerId: string): Promise<string | undefined> {
+    const row = (await this.#stores.jobs.listUnreadableJobs()).find(
+      (entry) => entry.id === managerId,
+    );
+    return row === undefined ? undefined : describeUnreadableManagerRow(managerId, row.reason);
+  }
+
   async #load(managerId: string): Promise<ManagerRecord | null> {
     const job = (await this.#stores.jobs.listJobs()).find((entry) => entry.id === managerId);
     if (!job) return null;

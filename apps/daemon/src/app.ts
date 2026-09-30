@@ -4830,6 +4830,12 @@ export function createApp(deps: AppDeps) {
             description: '該当するマネージャーの生ログが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
+              'issue #2359）。本文は載せず、理由は不正な欄名だけ。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           410: {
             description:
               '退避はあったが、本文は `DELETE /archive/:id` で消されている（#698）。' +
@@ -4841,6 +4847,8 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const result = await clone.managers.transcript(c.req.param('id'));
         if (result.kind === 'missing') return c.json({ error: 'not found' as const }, 404);
+        // **読めない行は 404 にしない（issue #2359）。** 居ないのではなく壊れている。
+        if (result.kind === 'unreadable') return c.json({ error: result.detail }, 409);
         if (result.kind === 'removed') {
           return c.json(
             archiveRemovedResponseSchema.parse({
@@ -4897,6 +4905,12 @@ export function createApp(deps: AppDeps) {
             description: '該当するマネージャーが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。' +
+              'issue #2359）。送っていない。本文は載せず、理由は不正な欄名だけ。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(managerMessageBody, (where) => ({
@@ -4921,6 +4935,9 @@ export function createApp(deps: AppDeps) {
         // 文言も応答本文に1文字も出ず、跡は stderr にしか残らなかった。** ⟹ クローンには
         // 文言が届き、人間には 500 しか届かないという非対称ができていた。
         if (result.outcome === 'unknown') return c.json({ error: result.detail }, 404);
+        // **`'unreadable'`（行は在るが読めない。issue #2359）は 409。** 「居ない」の 404 に
+        // しない。送っていない。
+        if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
         return c.json({ outcome: result.outcome, detail: result.detail });
       },
     )
@@ -5011,6 +5028,12 @@ export function createApp(deps: AppDeps) {
             description: '該当するマネージャー（`absent`）が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する委譲の行は在るが、型に合わない形で入っていて読めない（`unreadable`。居ないのとは' +
+              '区別する。issue #2359）。止めておらず、行も書き換えていない。本文は載せず、理由は不正な欄名だけ。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(abortBody, (where) => ({
@@ -5026,6 +5049,9 @@ export function createApp(deps: AppDeps) {
         // 居るが、止まった/止まっていない/確かめられなかった」という観測結果で
         // あって、リクエスト自体は正しく処理できている（200 で `outcome` を返す）。
         if (result.outcome === 'absent') return c.json({ error: result.detail }, 404);
+        // **`'unreadable'`（行は在るが読めない。issue #2359）は 409。** 「居ない」の 404 に
+        // しない。止めていない。
+        if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
         return c.json({ outcome: result.outcome, detail: result.detail });
       },
     )

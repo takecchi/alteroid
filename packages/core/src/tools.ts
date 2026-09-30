@@ -1593,6 +1593,11 @@ async function describeMissingReport(
       `archive id: ${result.archiveId}）。現物は確かめられない。`
     );
   }
+  if (result.kind === 'unreadable') {
+    // **読めない行を「生ログにも無い」と言わない**（issue #2359）。ここへ来るのは
+    // 報告の組み立て中に行が読めなくなった稀な回だけだが、型の穴は塞いでおく。
+    return `${base} 生ログは読みに行けなかった。${result.detail}`;
+  }
   if (result.kind === 'missing' || result.body.length === 0) {
     return (
       `${base} 生ログにも本文は無い` +
@@ -10535,6 +10540,13 @@ export function createCloneTools(context: ToolContext) {
         // **outcome ごとに言い分ける。** 以前は `outcome` が常に `'stopped'` で、
         // 止まっていない・不明なときも「止めた」と機械可読な形で答えていた
         // （R1）。ここで4値をそのまま文言に写す。
+        if (result.outcome === 'unreadable') {
+          // **読めない行を「居ない」と言わない（issue #2359）。** 台帳に行は在るが
+          // 読めない形で入っている。止めていない・行は書き換えていない。
+          // **#2342（止める前の状態を一覧から読めなかった）とは別の話**で、あちらは
+          // 下の `absent` 枝の中に残る——一覧が読めなかったのではなく、行が読めない。
+          return text(`${managerId} は止められなかった: ${result.detail}`);
+        }
         if (result.outcome === 'absent') {
           // **エラーで終わらせず、何が起きているかを言う。**
           if (beforeLookup.kind === 'unreadable') {
@@ -12366,6 +12378,11 @@ export function createCloneTools(context: ToolContext) {
         }
         if (!context.managers) return NO_POOL;
         const result = await context.managers.transcript(managerId);
+        if (result.kind === 'unreadable') {
+          // **読めない行を「生ログは無い」と言わない（issue #2359）。** 台帳に行は
+          // 在るが読めない形で入っている。生ログには降りていない。
+          return text(`${result.detail}生ログには降りていない。`);
+        }
         if (result.kind === 'missing') {
           // **`missing` は2つの意味を畳んでいる** — 「そのマネージャー自体が
           // 台帳に居ない」か、「居るが3段のどこにも生ログが無い」か。
