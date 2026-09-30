@@ -794,6 +794,23 @@ export function ChatPane({
       // 出し直す理由が無い（`interruptNotice` と同じ判断）。
       setInterruptNotice(undefined);
       setInterruptFailure(undefined);
+      /*
+       * **白紙の新しい会話へ入るときだけ、鍵 `undefined` の失敗を消す（#2460）。**
+       * 鍵 `undefined` は「まだ id の無い新しい会話」全部が共有するので、前回の
+       * 新しい会話の失敗（`open` の前の投函の失敗）を残すと、別の白紙の新しい
+       * 会話にそのまま出てしまう。id のある会話の鍵は触らない（#1585 の
+       * 「切り替えでは消さない」はそのまま）。**入るときに消す**のは、失敗した
+       * 新しい会話から離れずにいるあいだは出続けるため、そして離れるときに
+       * 消すと `open` 後に URL が追いつくだけの遷移でも消しうるため。
+       */
+      if (routeId === undefined) {
+        setFailures((prev) => {
+          if (!prev.has(undefined)) return prev;
+          const next = new Map(prev);
+          next.delete(undefined);
+          return next;
+        });
+      }
       // 編集中の入力を別の会話へ持ち越さない（`editingKey` は `Line.key` で、
       // 別の会話へ移ればどのみち画面に出なくなるが、下書きを残す理由も無い）。
       setEditingKey(undefined);

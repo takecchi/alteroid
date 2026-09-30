@@ -257,3 +257,88 @@ describe('#1585: 送信/追送の失敗は会話ごとに持ち、切り替え�
     expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
   });
 });
+
+describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙の新しい会話へ持ち越さない', () => {
+  const NEW_CONVERSATION_ERROR = '新しい会話の投函に失敗した（テスト用の文言、#2460）';
+  const CONVERSATION_C = 'conv-2460-c';
+
+  /** 新しい会話の送信は、`open` の前に投函そのものが失敗する（鍵 undefined に積まれる形）。 */
+  function stubNewConversationFailure() {
+    stubFetch((url) => {
+      if (url.includes(`/conversations/${CONVERSATION_C}`)) {
+        return json({ conversationId: CONVERSATION_C, messages: [] });
+      }
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/chat')) return Promise.reject(new TypeError(NEW_CONVERSATION_ERROR));
+      return undefined;
+    });
+  }
+
+  it('新しい会話で失敗 → B → C → もう一度新しい会話: 白紙の新しい会話に出ない', async () => {
+    stubNewConversationFailure();
+    const { router } = renderChat('/chat');
+    await typeAndSend('送れない発言');
+    expect(await screen.findByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
+
+    await router.navigate(`/chat/${CONVERSATION_B}`);
+    expect(await screen.findByText(CONVERSATION_B)).toBeTruthy();
+    await router.navigate(`/chat/${CONVERSATION_C}`);
+    expect(await screen.findByText(CONVERSATION_C)).toBeTruthy();
+
+    await router.navigate('/chat');
+    expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();
+    // 入力欄は前の画面にも在るので、見つかっても切り替えの描画が済んだとは限らない。
+    // 「出ていない状態になる」のを待つ（直す前の実装なら出続けるので、ここで落ちる）。
+    await waitFor(() => {
+      expect(screen.queryByText(NEW_CONVERSATION_ERROR)).toBeNull();
+    });
+  });
+
+  it('対照: 失敗した新しい会話から離れないあいだは、失敗が出続ける', async () => {
+    stubNewConversationFailure();
+    renderChat('/chat');
+    await typeAndSend('送れない発言');
+    expect(await screen.findByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
+
+    // たまっている再描画と効果を流し切っても消えない。実時間は待たない（#2146 の
+    // 見張り。器が混むと実時間の待ちは足りなくなる）——0ms のタスクを2回挟んで、
+    // その間に積まれた描画と効果を一巡させる。
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(screen.getByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
+  });
+
+  it('対照: id のある会話の失敗は、新しい会話を経由しても消えない（#1587）', async () => {
+    stubFetch((url, init) => {
+      const conversation = conversationRoutes(url);
+      if (conversation !== undefined) return conversation;
+      if (url.endsWith('/chat')) {
+        return sse(
+          [
+            { event: 'open', data: { conversationId: CONVERSATION_A } },
+            { event: 'error', data: { type: 'error', message: ERROR_MESSAGE } },
+          ],
+          { signal: init?.signal },
+        );
+      }
+      return undefined;
+    });
+
+    const { router } = renderChat(`/chat/${CONVERSATION_A}`);
+    await typeAndSend('やあ');
+    expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
+
+    await router.navigate('/chat');
+    expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();
+    // 入力欄は会話 A の画面にも在るので、見つかっても切り替えの描画が済んだとは限らない
+    // （CI の混んだ器で、A の失敗がまだ残って見えて落ちた）。消えるのを待つ。
+    await waitFor(() => {
+      expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
+    });
+
+    await router.navigate(`/chat/${CONVERSATION_A}`);
+    expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
+  });
+});

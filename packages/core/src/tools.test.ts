@@ -9921,6 +9921,50 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
     });
 
     /**
+     * **#2483。** 打ち消しの行の `grounds` は、`PUT /profile` 側（`kindOfError`）と同じく
+     * 例外の種類（クラス名）だけを書く。drizzle の形（`Failed query: …` の次の行に
+     * `params:`）の例外は、プロファイルのスクリプト全文を運びうる。
+     */
+    it('(b2) 打ち消しの行の grounds に、例外の message（params の値）は出ず、名前だけが残る', async () => {
+      const stores = createMemoryStores();
+      const throwingStores: Stores = {
+        ...stores,
+        profile: {
+          ...stores.profile,
+          write: () => {
+            throw new TypeError(
+              'Failed query: insert into "profile" ("script") values ($1)\nparams: FAKE_SECRET_VALUE_2483',
+            );
+          },
+        },
+      };
+      const tools = createCloneTools({
+        stores: throwingStores,
+        emit: () => {},
+        profile: createProfileService({ stores: throwingStores }),
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+
+      const { isError } = await callExpectingError(tools, 'profile_write', {
+        script: 'export A=1',
+        summary: '(b2) の検証',
+      });
+
+      expect(isError).toBe(true);
+      const entries = await stores.journal.list({ types: ['decision'], order: 'asc' });
+      const cancel = entries.find(
+        (entry) =>
+          entry.type === 'decision' &&
+          entry.decision.startsWith('実行環境プロファイルを差し替えられなかった'),
+      );
+      expect(cancel?.type === 'decision' ? cancel.grounds : undefined).toBe(
+        '差し替えようとしたが、状態の変更が失敗した: TypeError',
+      );
+      expect(JSON.stringify(entries)).not.toContain('FAKE_SECRET_VALUE_2483');
+    });
+
+    /**
      * **issue #2163。** 反映（`prepared.commit()`）が落ち、正本への書き戻し
      * （`stores.profile.revert(previous)`）まで落ちたときは、正本だけが新しい
      * 版のまま残る（クローンは前の版）——(b) と違い、この状態で「差し替え
