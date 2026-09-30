@@ -148,6 +148,61 @@ const URL_USERINFO_WITH_PASSWORD = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@?#"'`]*
  */
 const URL_USERINFO_TOKEN_ONLY = /\b([a-z][a-z0-9+.-]{0,31}):\/\/[^\s:/@?#"'`]+@/gi;
 
+/**
+ * scheme の無い形の資格（`user:pass@host` / `user:pass@host:5432` /
+ * `//user:pass@host`）。issue #2383。`user:` を残し、`pass` を伏せる。
+ *
+ * ## 資格とみなす線
+ *
+ * 次を**すべて**満たすときだけ資格とみなす。
+ * - `user` が 1〜64 文字の `[A-Za-z0-9._~%+-]`、直後が `:`
+ * - `pass` が 1〜128 文字で、空白・`/` `?` `#` 引用符・`@` を含まない（`:` は含んでよい）
+ * - 直後が `@`、その次が 2 文字以上のホスト名（`[A-Za-z0-9][A-Za-z0-9.-]+`）
+ * - `user` の手前が、`user` に使える文字・`:`・`@` ではない（語の頭から始まる）
+ * - `user` が数字だけではない（時刻 `12:34@…`）、かつ `mailto` 等、`scheme:` の形で
+ *   メールアドレス等を続ける語（{@link SCHEMELESS_NON_CREDENTIAL_USERS}）ではない
+ *
+ * **ユーザー名だけの形（`user@host`・`git@github.com:o/r.git`・メールアドレス）は
+ * 伏せない。** `:` が `@` より前に無いので、この形に合わない。scheme の無い
+ * `token@host` も伏せない——ssh の宛先・メールと見分けられず、伏せると巻き込みが
+ * 大きすぎる（scheme のある形は {@link URL_USERINFO_TOKEN_ONLY}）。`host:port`
+ * （`@` が無い）も合わない。
+ *
+ * ## 塞げていないもの
+ *
+ * - `pass` に生の `@` が入る形は、最初の `@` までしか取れない（scheme のある形と
+ *   違い、後半が残る。scheme が無いと「どこまでが資格か」の手掛かりが無い）
+ * - ホスト名が 1 文字の形（`a:b@c`）は伏せない（資格と普通の文字列の見分けがつかない）
+ *
+ * ## 線形であること
+ *
+ * scheme が無いので**どこからでも走り出しうる**。2乗にしない手当てが3つある。
+ * (1) 走り出せる位置を、手前が `user` の文字・`:`・`@` ではない位置（語の頭）に
+ * 絞る（後ろ向き先読み）。`a:a:a:…`・`a.a.a.…` のような連なりは先頭でしか走り出さない。
+ * (2) `user` と `pass` に長さの上限を付け、1か所から読む長さを定数（約200字）で抑える。
+ * (3) `pass` は `@` を含まない文字クラスなので、失敗したとき後戻りが長くならない。
+ * 上限だけを外すと `a:,a:,…` の歯が、上限と先読みを外すと `a:` / `.` の連なりの歯が、
+ * さらに `pass` が `@` を読む形にすると `@` の歯も赤になる（テストの線形性の歯）。
+ */
+const URL_SCHEMELESS_USERINFO_WITH_PASSWORD =
+  /(?<![A-Za-z0-9._~%+:@-])([A-Za-z0-9._~%+-]{1,64}:)([^\s/?#"'`@]{1,128})@(?=[A-Za-z0-9][A-Za-z0-9.-])/g;
+
+/**
+ * scheme の無い形の `user` としては資格とみなさない語。`mailto:alice@example.com` の
+ * ように、`scheme:` の直後にメールアドレス等が続く形が、形だけでは `user:pass@host`
+ * と区別できないため。
+ */
+const SCHEMELESS_NON_CREDENTIAL_USERS: ReadonlySet<string> = new Set([
+  'mailto',
+  'xmpp',
+  'sip',
+  'sips',
+  'tel',
+  'callto',
+  'im',
+  'acct',
+]);
+
 /** userinfo がアカウント名（`git@` 等）であって秘密ではない慣習の scheme。 */
 const USERNAME_ONLY_SCHEMES: ReadonlySet<string> = new Set([
   'ssh',
@@ -177,6 +232,16 @@ function redactKnownSecretPatterns(text: string): string {
   result = result.replace(URL_USERINFO_TOKEN_ONLY, (match, scheme: string) =>
     USERNAME_ONLY_SCHEMES.has(scheme.toLowerCase()) ? match : `${scheme}://${REDACTED}@`,
   );
+  // scheme の無い形（`user:pass@host`・`//user:pass@host`）。issue #2383。
+  // scheme のある形を伏せた後に当てる（`scheme://u:[REDACTED]@h` には再び合うが、
+  // 同じ文字列へ置き換わるだけで害は無い）。
+  result = result.replace(URL_SCHEMELESS_USERINFO_WITH_PASSWORD, (match, head: string) => {
+    const user = head.slice(0, -1);
+    if (/^[0-9]+$/.test(user) || SCHEMELESS_NON_CREDENTIAL_USERS.has(user.toLowerCase())) {
+      return match;
+    }
+    return `${head}${REDACTED}@`;
+  });
 
   // GitHub のトークン（`ghp_` 等の旧形式・`github_pat_` の新形式）。
   result = result.replace(/\bgh[oprsu]_[A-Za-z0-9]{20,255}\b/g, REDACTED);
