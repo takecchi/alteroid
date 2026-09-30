@@ -5,6 +5,7 @@ import {
   DENIAL_INPUT_HEAD_LIMIT,
   matchInputOf,
 } from './denial-input-head.js';
+import { expectNotSuperlinear } from './time-growth.test-support.js';
 
 /**
  * `buildDenialInputHead`（拒否より前に見た入力の先頭。issue #1105）。
@@ -322,5 +323,110 @@ describe('matchInputOf / __proto__ という名前の欄も鍵に入れる（iss
     const a = parse('{"command":"echo x","__proto__":{"b":1,"a":2}}');
     const b = parse('{"__proto__":{"a":2,"b":1},"command":"echo x"}');
     expect(matchInputOf(a)).toEqual(matchInputOf(b));
+  });
+});
+
+describe('buildDenialInputHead / URL の userinfo に入った資格を伏せる（issue #2375）', () => {
+  // 値はすべて偽である。
+  it('postgres://user:pass@host の pass を伏せ、user と host は残す', () => {
+    const head = buildDenialInputHead(
+      { command: 'psql postgres://app:FAKEPASS@db.internal:5432/app' },
+      undefined,
+    );
+    expect(head).not.toContain('FAKEPASS');
+    expect(head).toBe('psql postgres://app:[REDACTED]@db.internal:5432/app');
+  });
+
+  it('user が空（redis://:pass@host）でも pass を伏せる', () => {
+    const head = buildDenialInputHead(
+      { command: 'redis-cli -u redis://:FAKEPASS@host' },
+      undefined,
+    );
+    expect(head).not.toContain('FAKEPASS');
+    expect(head).toBe('redis-cli -u redis://:[REDACTED]@host');
+  });
+
+  it('パスワードの無い scheme://token@host の token を伏せる', () => {
+    const head = buildDenialInputHead(
+      { command: 'git clone https://FAKETOKEN@github.com/o/r.git' },
+      undefined,
+    );
+    expect(head).not.toContain('FAKETOKEN');
+    expect(head).toBe('git clone https://[REDACTED]@github.com/o/r.git');
+  });
+
+  it('パーセント符号化されたパスワード（amqp://u:p%40ss@h）を伏せる', () => {
+    const head = buildDenialInputHead({ command: 'x amqp://u:p%40ss@h' }, undefined);
+    expect(head).not.toContain('p%40ss');
+    expect(head).toBe('x amqp://u:[REDACTED]@h');
+  });
+
+  it('パスワードに生の @ が入っていても、最後の @ までを伏せる', () => {
+    const head = buildDenialInputHead({ command: 'x postgres://u:FAKE@PASS@h/db' }, undefined);
+    expect(head).not.toContain('FAKE');
+    expect(head).not.toContain('PASS@');
+    expect(head).toBe('x postgres://u:[REDACTED]@h/db');
+  });
+
+  it('JSON の1行に埋まった URL も伏せる', () => {
+    const head = buildDenialInputHead({ url: 'postgres://app:FAKEPASS@db/app' }, undefined);
+    expect(head).not.toContain('FAKEPASS');
+  });
+
+  it('対照: 資格の無い URL はそのまま残す', () => {
+    for (const command of [
+      'curl https://example.com/path',
+      'curl http://localhost:3000',
+      'curl http://localhost:3000/a?page=2',
+      'curl https://example.com/a@b',
+    ]) {
+      expect(buildDenialInputHead({ command }, undefined)).toBe(command);
+    }
+  });
+
+  it('対照: ssh://git@host の git は秘密ではないので残す（scp 形式も同じ）', () => {
+    for (const command of [
+      'git clone ssh://git@example.com/repo.git',
+      'git clone git@example.com:o/r.git',
+    ]) {
+      expect(buildDenialInputHead({ command }, undefined)).toBe(command);
+    }
+  });
+
+  it('対照: 既存の伏せ字（代入・Bearer）は今までどおり効く', () => {
+    const head = buildDenialInputHead(
+      { command: 'FOO_TOKEN=abcdef0123456789 curl -H "Authorization: Bearer abcdefgh12345678"' },
+      undefined,
+    );
+    expect(head).toContain('FOO_TOKEN=[REDACTED]');
+    expect(head).toContain('Bearer [REDACTED]');
+  });
+
+  it('境界: 160字目がパスワードの途中で切れても、切れ端が出ない（伏せてから切る）', () => {
+    // `postgres://app:` は15字。URL を140字目から始めると、160字目は
+    // パスワード `FAKEPASS` の5字目（`FAKEP`）の直後に当たる。
+    // 先に切ってから伏せると、切れ端 `FAKEP` は userinfo の形を失い残る。
+    const prefix = `${'a'.repeat(139)} `;
+    const raw = `${prefix}postgres://app:FAKEPASS@db.internal:5432/app`;
+    expect(prefix.length).toBe(140);
+    expect(raw.slice(0, DENIAL_INPUT_HEAD_LIMIT).endsWith('postgres://app:FAKEP')).toBe(true);
+
+    const head = buildDenialInputHead({ command: raw }, undefined);
+
+    expect(head).not.toContain('FAKEP');
+    // 伏せた後の文字列を160字で切るので、切り口は `[REDACTED]` の途中に来る。
+    expect(head).toContain('postgres://app:[REDA');
+    expect(head).not.toContain('PASS');
+    expect(head!.length).toBeLessThanOrEqual(DENIAL_INPUT_HEAD_LIMIT + 1);
+  });
+
+  // 伏せ字は切る前の全文にかかる。`.` `-` で区切られた長い連なり（ミニファイされた
+  // コード等）で、scheme の走査が語の境目ごとに末尾まで読むと2乗になる。
+  it('`.` で区切られた長い連なりでも、入力の長さに比例して終わる', () => {
+    expectNotSuperlinear(
+      (command: string) => buildDenialInputHead({ command }, undefined),
+      (n) => `x ${'a.'.repeat(n)}b`,
+      { n: 2000 },
+    );
   });
 });

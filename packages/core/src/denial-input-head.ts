@@ -25,6 +25,10 @@
  *     `sk-ant-` / `AKIA`）・`Bearer <token>`・秘密らしい名前への代入
  *     （`NAME=value` / `"NAME":"value"`）・40桁 hex（git の SHA）・
  *     英数字混在24文字以上の塊
+ *   - URL の userinfo（issue #2375）: `scheme://user:pass@host` は `pass` を、
+ *     `scheme://token@host` は `token` を伏せる。ユーザー名（パスワードが
+ *     ある形の `user`）は残す。`ssh://git@` のようにアカウント名が慣習の
+ *     scheme（ssh / sftp / git 等）の user だけの形は残す
  *
  * ## 伏せてから切る
  *
@@ -119,6 +123,42 @@ const SECRET_ISH_MIN_LENGTH = 24;
 const SECRET_ASSIGNMENT_NAME = `[A-Za-z_][A-Za-z0-9_]*(?:${SECRET_ENV_NAME_PATTERN.source})[A-Za-z0-9_]*`;
 
 /**
+ * URL の userinfo のうちパスワードを持つ形（`scheme://user:pass@host`。`user` は
+ * 空でもよい）。`head`（`scheme://user:`）を残し、`pass` を伏せる。
+ *
+ * **ユーザー名は残す**——どのアカウントで繋いだかは分かったほうがよく、秘密では
+ * ない。パスワードは最後の `@` までを取る（生の `@` を含むパスワードの後半を
+ * 残さないため）。`/` `?` `#` と空白・引用符で止めるので、後ろの別の `@`
+ * （メールアドレス等）や JSON の隣の欄は巻き込まない。
+ * （`mask-url.ts` の `maskUrl` は URL 1本を `new URL` で読む関数で、本文の中の
+ * 部分文字列には使えず、クエリまで丸ごと `***` にする。置き換え先も違うので
+ * 流用していない。）
+ *
+ * **scheme は32文字までに絞る。** `[a-z0-9+.-]` は `.` `-` で区切られた長い連なり
+ * （ミニファイされたコード等）の語の境目ごとに走り出し、上限が無いと末尾まで
+ * 読んで入力の長さの2乗になりうる。この網は切る前の全文にかかるので、上限で
+ * 線形に抑える（実在する scheme はずっと短い）。
+ */
+const URL_USERINFO_WITH_PASSWORD = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@?#"'`]*:)[^\s/?#"'`]+@/gi;
+
+/**
+ * パスワードの無い userinfo（`scheme://token@host`）。この形の `token` は
+ * ユーザー名か token か見分けられないので、{@link USERNAME_ONLY_SCHEMES} 以外は
+ * 伏せる。scheme を32文字までに絞る理由は {@link URL_USERINFO_WITH_PASSWORD} と同じ。
+ */
+const URL_USERINFO_TOKEN_ONLY = /\b([a-z][a-z0-9+.-]{0,31}):\/\/[^\s:/@?#"'`]+@/gi;
+
+/** userinfo がアカウント名（`git@` 等）であって秘密ではない慣習の scheme。 */
+const USERNAME_ONLY_SCHEMES: ReadonlySet<string> = new Set([
+  'ssh',
+  'git+ssh',
+  'ssh+git',
+  'sftp',
+  'git',
+  'rsync',
+]);
+
+/**
  * 既知のトークンの形・代入・SHA を伏せる（`env` を経由しない、字面だけの判定）。
  *
  * **順序に意味がある。** 先に既知の接頭辞（GitHub のトークン・Anthropic の
@@ -129,6 +169,14 @@ const SECRET_ASSIGNMENT_NAME = `[A-Za-z_][A-Za-z0-9_]*(?:${SECRET_ENV_NAME_PATTE
  */
 function redactKnownSecretPatterns(text: string): string {
   let result = text;
+
+  // URL の userinfo（`scheme://user:pass@host`）の資格。issue #2375。
+  // **先に当てる**——ほかの規則が userinfo の一部だけを先に伏せると、形が崩れて
+  // この規則に合わなくなる。
+  result = result.replace(URL_USERINFO_WITH_PASSWORD, (_m, head: string) => `${head}${REDACTED}@`);
+  result = result.replace(URL_USERINFO_TOKEN_ONLY, (match, scheme: string) =>
+    USERNAME_ONLY_SCHEMES.has(scheme.toLowerCase()) ? match : `${scheme}://${REDACTED}@`,
+  );
 
   // GitHub のトークン（`ghp_` 等の旧形式・`github_pat_` の新形式）。
   result = result.replace(/\bgh[oprsu]_[A-Za-z0-9]{20,255}\b/g, REDACTED);
