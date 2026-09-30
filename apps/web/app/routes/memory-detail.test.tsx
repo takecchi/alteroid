@@ -408,3 +408,110 @@ describe('横並びの積み替え（本4-D）: タイトル行の slug', () => 
     expect(tokens).toContain('break-all');
   });
 });
+
+/**
+ * 編集欄を `MarkdownEditor`（`packages/ui`）へ移したときに、今の画面の振る舞いから
+ * ずれうる所を固定する。**ここに足した it は、移す前の実装（手書きのタブ）にも当てて
+ * 緑になる**ことを確かめてある（PR 本文）。
+ */
+describe('編集欄の振る舞い（部品へ移しても変わらないもの）', () => {
+  it('タブの並びは「プレビュー → 編集」の2つだけ（並べては出ない）', async () => {
+    renderDetail('notes', docRoute(DOC));
+
+    await screen.findByRole('heading', { name: '見出し' });
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'プレビュー',
+      '編集',
+    ]);
+  });
+
+  it('プレビューが既定のとき、選ばれているのはプレビュー、編集は選ばれていない', async () => {
+    renderDetail('notes', docRoute(DOC));
+
+    await screen.findByRole('heading', { name: '見出し' });
+    expect(screen.getByRole('tab', { name: 'プレビュー' }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: '編集' }).getAttribute('aria-selected')).toBe('false');
+  });
+
+  it('空の記憶に最初の1文字を打っても、編集タブのまま（プレビューへ勝手に移らない）', async () => {
+    renderDetail('empty', docRoute({ ...DOC, slug: 'empty', content: '' }));
+
+    const textarea = await screen.findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'a' } });
+
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('a');
+    expect(screen.getByRole('tab', { name: '編集' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('空のプレビューに「まだ何も書いていない」の一言は出ない', async () => {
+    renderDetail('empty', docRoute({ ...DOC, slug: 'empty', content: '' }));
+
+    await screen.findByRole('textbox');
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'プレビュー' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('textbox')).toBeNull();
+    });
+    expect(screen.queryByText(/まだ何も書いていない/)).toBeNull();
+  });
+
+  it('編集タブの上の一文は文言のまま出て、「⌘/Ctrl + S で保存」は出ない。placeholder も無い', async () => {
+    renderDetail('notes', docRoute(DOC));
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await screen.findByRole('textbox');
+    expect(
+      screen.getByText('ここで書き換えたものは `memory_update`（cause: human）として日誌に残る。'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Ctrl \+ S/)).toBeNull();
+    expect(textarea.getAttribute('placeholder') ?? '').toBe('');
+    expect(textarea.getAttribute('spellcheck')).toBe('false');
+  });
+
+  it('⌘/Ctrl + S で保存する（PUT の本文は入力どおり）。s 以外・修飾なしでは保存しない', async () => {
+    const puts: unknown[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (!request.url.includes('/memory/notes')) {
+        return Promise.reject(new TypeError(`Failed to fetch: ${request.url}`));
+      }
+      if (request.method === 'PUT') {
+        puts.push(await request.json());
+        return json({ document: { ...DOC, content: 'キーで保存' } });
+      }
+      return json({ document: DOC });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await screen.findByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'キーで保存' } });
+
+    fireEvent.keyDown(textarea, { key: 's' });
+    fireEvent.keyDown(textarea, { key: 'a', ctrlKey: true });
+    expect(puts).toEqual([]);
+
+    // preventDefault されること（ブラウザの「ページを保存」を出さない）も見る。
+    const notPrevented = fireEvent.keyDown(textarea, { key: 's', metaKey: true });
+    expect(notPrevented).toBe(false);
+    await waitFor(() => {
+      expect(puts).toEqual([{ content: 'キーで保存' }]);
+    });
+  });
+
+  it('書き換えていないとき（下書きが無い）の ⌘/Ctrl + S は PUT しない', async () => {
+    const puts: unknown[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === 'PUT') puts.push(await request.json());
+      return json({ document: DOC });
+    }) as typeof fetch;
+    mountDetail('notes');
+
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: '編集' }));
+    const textarea = await screen.findByRole('textbox');
+    expect(fireEvent.keyDown(textarea, { key: 's', ctrlKey: true })).toBe(false);
+    expect(puts).toEqual([]);
+  });
+});
