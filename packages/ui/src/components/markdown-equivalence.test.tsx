@@ -72,7 +72,7 @@ function current(text: string, components: Parameters<typeof toReact>[1]): strin
  *   `接頭辞 + 'user-content-'` にして描く（react-markdown の
  *   `remarkRehypeOptions`）。
  * - `footnote-label`（節の見出しの id と、参照の `aria-describedby`）は、
- *   to-hast が `clobberPrefix` に関係なく固定で付ける（`lib/footer.js` の
+ *   `mdast-util-to-hast` が `clobberPrefix` に関係なく固定で付ける（`lib/footer.js` の
  *   `id: 'footnote-label'`、`lib/handlers/footnote-reference.js` の
  *   `ariaDescribedBy: ['footnote-label']`）ので、旧実装には口が無い。
  *   だから旧実装の出力の**属性値としての** `footnote-label`（`id="…"` と

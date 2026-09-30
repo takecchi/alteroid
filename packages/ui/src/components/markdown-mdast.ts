@@ -189,7 +189,7 @@ function listLoose(node: Parent): boolean {
 function convert(tree: Root, idPrefix: string): Out[] {
   // 脚注の id の接頭辞。`mdast-util-to-hast` の `clobberPrefix`（既定
   // `user-content-`）の前に、描画ごとの `idPrefix` を足す。**脚注の節の見出し
-  // （`footnote-label`）にも同じ `idPrefix` を付ける** — to-hast はこの id を
+  // （`footnote-label`）にも同じ `idPrefix` を付ける** — `mdast-util-to-hast` はこの id を
   // `clobberPrefix` に関係なく固定で付けるが、固定のままだと1画面に
   // `<Markdown>` が2つあるとき（チャットの各応答・台帳の各行）id が重複し、
   // 2つ目の `aria-describedby` が1つ目の見出しを指す（#2452）。`idPrefix` が
