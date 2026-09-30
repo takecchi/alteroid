@@ -9,20 +9,14 @@ import {
 } from '@alteroid/core';
 import type { CloneHost, PendingApproval, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
-import {
-  createPgStoresFromDb,
-  migrate,
-  tables,
-  type Db,
-  type PgStores,
-} from '@alteroid/storage-pg';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { createPgStoresFromDb, tables, type Db, type PgStores } from '@alteroid/storage-pg';
+import type { PGlite } from '@electric-sql/pglite';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 import { createApp } from './app.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
 /**
  * `JobStore.listApprovals()` の、読めない（`pendingApprovalSchema` に合わない）行の扱い
@@ -120,6 +114,14 @@ async function expectListShowsUnreadable(stores: Stores): Promise<void> {
   expect((windowed.unreadable as unknown[]).length).toBe(1);
 }
 
+// PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
+// 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2378、#2360 / #2364 と同じ形）。
+// このファイルは `new PGlite()` + `migrate` を歯の中で直に呼んでいたので、雛形（`createMigratedPglite`）へ寄せた。
+// 各歯が「空の、migrate 済みの、自分専用の PGlite」から始まること、`afterEach` で閉じることは変わらない。
+beforeAll(async () => {
+  await migratedTemplate();
+}, 30_000);
+
 describe('JobStore.listApprovals() — 読めない承認の行の扱い（#2298）', () => {
   describe('fs 実装', () => {
     async function seed(rows: unknown[]) {
@@ -173,9 +175,7 @@ describe('JobStore.listApprovals() — 読めない承認の行の扱い（#2298
     });
 
     async function seed(withBad: boolean) {
-      client = new PGlite();
-      db = drizzle(client);
-      await migrate(db);
+      ({ client, db } = await createMigratedPglite());
       stores = createPgStoresFromDb(db);
       await stores.jobs.putApproval(GOOD_APPROVAL);
       if (!withBad) return;
