@@ -24,7 +24,9 @@ import { isRunningJobStatus } from './job-status-running.js';
 import { journalWindowCrossesHorizon } from './journal-horizon.js';
 import { filterTranscriptLines } from './transcript-filter.js';
 import {
+  describeOffsetRequiredTimeBoundary,
   describeUnreadableJournalTimeBoundary,
+  isOffsetQualifiedTimeBoundary,
   isReadableJournalTimeBoundary,
   normalizeJournalTimeBoundary,
 } from './journal-time.js';
@@ -8550,6 +8552,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `この時刻までに載った行だけを対象にする（ISO8601。${formatStringLengthJa({ min: 1 })}。その瞬間ちょうどの行は含む）。` +
+              '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-11T19:00:00Z。時差の無い形は断る）。' +
               '閉じている最中に届いた新しい行を巻き込まないために使う',
           ),
         // **issue #1752。** 同上。
@@ -8618,10 +8621,14 @@ export function createCloneTools(context: ToolContext) {
         // 形（`2026-09-25T10:00Z`）を落とすようになり（PR #1561）、書き方の揺れだけで
         // 断るようになった。絞り込みはもともと `Date.parse` で比べている（下の
         // `untilMs`）ので、判定と比較の読み方がこれで1つに揃う。
-        if (until !== undefined && !isReadableJournalTimeBoundary(until)) {
+        //
+        // **ただしこの口は元に戻せない一括操作なので、時差（`Z` / `±hh:mm`）を必須にする**
+        // （#2462）。時差の無い形は `Date.parse` がサーバーの地方時刻として読み、
+        // 境界が黙ってずれる。読むだけの `journal_read` の `since` / `until` は緩いまま。
+        if (until !== undefined && !isOffsetQualifiedTimeBoundary(until)) {
           return text(
-            `until に渡された「${until}」は ISO8601 として読めない` +
-              '（例 2026-09-11T19:00:00.000Z）。**1件も閉じていない。**',
+            describeOffsetRequiredTimeBoundary('until', until, '2026-09-11T19:00:00.000Z') +
+              '**1件も閉じていない。**',
           );
         }
 
@@ -8923,6 +8930,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe(
             `この時刻**以前**（ISO8601、その瞬間ちょうども含む。${formatStringLengthJa({ min: 1 })}）に積まれた行だけを対象にする。` +
+              '元に戻せない操作なので時差が必須（Z か +09:00。例 2026-09-15T00:00:00Z。時差の無い形は断る）。' +
               '消している最中に届いた新しい行を巻き込まないために使う',
           ),
         // **issue #1752。** 同上。
@@ -8986,10 +8994,11 @@ export function createCloneTools(context: ToolContext) {
         // **読めない `before` を「絞り込みが当たらなかった」に混ぜない**
         // （`commitment_close_many` の `until` と同じ理由・同じ読み方。比較は
         // `matchesInboxRemoveManyFilter` が `Date.parse` で行う）。
-        if (before !== undefined && !isReadableJournalTimeBoundary(before)) {
+        // 元に戻せない一括操作なので時差を必須にする（#2462。`until` と同じ）。
+        if (before !== undefined && !isOffsetQualifiedTimeBoundary(before)) {
           return text(
-            `before に渡された「${before}」は ISO8601 として読めない` +
-              '（例 2026-09-15T00:00:00.000Z）。**1件も消していない。**',
+            describeOffsetRequiredTimeBoundary('before', before, '2026-09-15T00:00:00.000Z') +
+              '**1件も消していない。**',
           );
         }
 
