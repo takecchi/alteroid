@@ -3,7 +3,7 @@
  * **IME で変換している最中の Enter を、送信として拾わないこと。**
  *
  * ⭐ **この歯が守っている門は、いまは誰も踏まない。** 送信条件は `⌘/Ctrl + Enter`
- * だけで、Enter 単体で送る道が `chat.tsx` にまだ無いからである（#247 の 2）。
+ * だけで、Enter 単体で送る道が `ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）にまだ無いからである（#247 の 2）。
  * それでも歯を置くのは、**Enter 単体送信を足した瞬間に、門が無いと IME の
  * 「変換を確定する Enter」がそのまま誤送信になる**ためで、足す人がそのときに
  * 門の不在へ気づく契機を持たない。下の最後の1本（「Enter 単体では送らない」）が、
@@ -205,8 +205,8 @@ describe('IME 変換中の Enter', () => {
    * ⭐ **これは「いまの仕様」を留めている歯である**（欠陥を固定しているのではない）。
    *
    * **Enter 単体送信を足すことになったら、この本は反転させてよい。** ただし
-   * そのときは `chat.tsx` の `onKeyDown` にある `event.nativeEvent.isComposing`
-   * の門が **Enter 単体の枝も通っていること**を必ず確かめること — 通っていないと、
+   * そのときは `packages/ui/src/components/features/chat/ime.ts` の `isImeConfirmEnter`（`event.nativeEvent.isComposing`
+   * を見る門）が **Enter 単体の枝も通っていること**を必ず確かめること — 通っていないと、
    * IME で変換を確定した Enter が、そのまま途中の文字列を投函する。
    * **この本が落ちることが、その確認を促す唯一の合図である。**
    */

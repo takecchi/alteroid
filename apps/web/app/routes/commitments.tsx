@@ -979,9 +979,9 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
           onChange={(event) => setReason(event.target.value)}
           onKeyDown={(event) => {
             // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
-            // 変換確定の Enter がそのまま誤送信になる（`chat.tsx` の
+            // 変換確定の Enter がそのまま誤送信になる（`ChatComposer` の
             // ⌘/Ctrl+Enter より直接踏む形）。門の形と理由（`event.nativeEvent.isComposing`
-            // を見る理由・`keyCode === 229` を併用する理由）は `chat.tsx` の
+            // を見る理由・`keyCode === 229` を併用する理由）は `packages/ui/src/components/features/chat/ime.ts` の `isImeConfirmEnter` と `packages/ui/src/components/features/chat/chat-composer.tsx` の
             // 「IME で変換している最中の Enter では送らない。」のコメントを参照。
             if (
               event.key === 'Enter' &&
@@ -1286,9 +1286,9 @@ function PushForm() {
           onChange={(event) => setBody(event.target.value)}
           onKeyDown={(event) => {
             // IME 変換中の Enter を拾わない。ここは Enter 単体で送るので、
-            // 変換確定の Enter がそのまま誤送信になる（`chat.tsx` の
+            // 変換確定の Enter がそのまま誤送信になる（`ChatComposer` の
             // ⌘/Ctrl+Enter より直接踏む形）。門の形と理由（`event.nativeEvent.isComposing`
-            // を見る理由・`keyCode === 229` を併用する理由）は `chat.tsx` の
+            // を見る理由・`keyCode === 229` を併用する理由）は `packages/ui/src/components/features/chat/ime.ts` の `isImeConfirmEnter` と `packages/ui/src/components/features/chat/chat-composer.tsx` の
             // 「IME で変換している最中の Enter では送らない。」のコメントを参照。
             if (
               event.key === 'Enter' &&

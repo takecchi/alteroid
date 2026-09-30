@@ -198,7 +198,7 @@ describe('会話ごとの下書き（#1618）', () => {
     // 新しい会話へ戻る。
     await router.navigate('/chat');
     // `findByText(CONVERSATION_...)` に相当する「新しい会話に戻った」の確認——
-    // ヘッダー（`chat.tsx` の `{shownId ?? '新しい会話'}`）が新しい会話では
+    // ヘッダー（`ChatHeader`（`packages/ui/src/components/features/chat/chat-header.tsx`）の `{conversationId ?? '新しい会話'}`）が新しい会話では
     // 常にこの文字列を出すので、それを待つ。**入力欄（`draftBox()`）は会話を
     // 切り替えても同じ DOM ノードのまま残る（`key` を付けない設計）ため、
     // `findByPlaceholderText` は「既に存在する」の一致で即座に解決してしまい、

@@ -86,7 +86,7 @@ describe('折り返しの付け忘れ（本2）', () => {
  *
  * **C: 「接続先」入力欄がボタン2つとの取り合いで潰れうる。** `input` は
  * フォームコントロールの既定の最小幅を持ち、本3で `Button` が狭い画面で
- * `h-11`（44px）になった分、この行の取り合いは悪化している。`chat.tsx` の
+ * `h-11`（44px）になった分、この行の取り合いは悪化している。`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）の
  * `Textarea` と同じ形（`<div className="min-w-0 flex-1">` で包む）に揃えた。
  *
  * **⚠️ どちらも「積み替わった」「潰れなくなった」ことの試験ではない。**

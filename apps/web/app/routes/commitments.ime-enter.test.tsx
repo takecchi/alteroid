@@ -3,7 +3,7 @@
  * **IME で変換している最中の Enter を、送信として拾わないこと。**
  *
  * `/commitments` 画面には、Enter 単体で送る口が2つある — 「片付ける」の理由欄
- * （`OpenRow`）と「積む」の本文欄（`PushForm`）。**`chat.tsx` と違い、こちらは
+ * （`OpenRow`）と「積む」の本文欄（`PushForm`）。**`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）と違い、こちらは
  * 修飾キーを要らない形（Enter 単体）なので、日本語入力の変換確定 Enter が
  * 毎回そのまま送信になっていた。** `chat.ime-enter.test.tsx` が置いた歯（門の
  * 形・測り方）に倣い、この2箇所についても同じ形の歯を置く。

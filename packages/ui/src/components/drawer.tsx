@@ -54,7 +54,7 @@ export function Drawer({
         /*
          * 閉じるボタンは出さない。**押せる場所が要らないからではなく、置く場所が
          * 無いからである** — この中に入るのは脇の面（`shell.tsx` の Nav /
-         * `chat.tsx` の会話一覧）で、右上には既に「新しい会話」のボタンが居る。
+         * `ConversationList`（`packages/ui/src/components/features/chat/conversation-list.tsx`）の会話一覧）で、右上には既に「新しい会話」のボタンが居る。
          * 閉じる手は覆いを押す・Escape・行き先を押すの3つが残る（前2つは Radix）。
          */
         showCloseButton={false}

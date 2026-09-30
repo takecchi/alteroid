@@ -93,7 +93,7 @@ export function ConnectionCard({ compact = false }: { compact?: boolean }) {
 
       <div className="flex flex-col gap-3 px-4 py-3">
         {/*
-          **`Select` を `min-w-0 flex-1` で包む**（`chat.tsx` の
+          **`Select` を `min-w-0 flex-1` で包む**（`ChatComposer`（`packages/ui/src/components/features/chat/chat-composer.tsx`）の
           `<div className="min-w-0 flex-1"><Textarea .../></div>` と同じ形。
           #53 由来）。フォームコントロールは既定の最小幅を持つので、この div が
           無いと本3で `h-11`（44px、md: 以上は既定のまま）になったボタンとの
