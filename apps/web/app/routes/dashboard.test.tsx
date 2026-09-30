@@ -100,6 +100,9 @@ function renderDashboard(
   // **`/approvals` / `/schedule` を読めなかったことにする（issue #2138）。**
   // 既定はどちらも真っ当に取れるので、既存のテストは1つも振る舞いが変わらない。
   failures: { approvals?: boolean; schedule?: boolean } = {},
+  // **`/schedule` の `unreadable`（#2343）。** 渡さなければ鍵ごと無い（0件と同じ）なので、
+  // 既存のテストは1つも振る舞いが変わらない。
+  scheduleUnreadable: unknown[] | undefined = undefined,
 ): FetchStub {
   // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
   // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
@@ -114,7 +117,10 @@ function renderDashboard(
     if (url.includes('/schedule')) {
       return failures.schedule === true
         ? json({ error: 'internal' }, 500)
-        : json({ entries: scheduleEntries });
+        : json({
+            entries: scheduleEntries,
+            ...(scheduleUnreadable === undefined ? {} : { unreadable: scheduleUnreadable }),
+          });
     }
     if (url.includes('/usage')) {
       const { today, ...rest } = usageBody;
@@ -586,6 +592,39 @@ describe('「次の自動実行」カードが読めないとき（issue #2138 �
     // 一覧（古い予定）にはならない。既存の空表示（`—`）にも戻らない。
     expect(screen.queryByText('古い予定')).toBeNull();
     expect(screen.queryByText('—')).toBeNull();
+  });
+});
+
+/**
+ * **「次の自動実行」カードが、読めない継続中の依頼を「予定が無い」の顔で隠さない（#2343）。**
+ *
+ * 直す前は `entries` だけを描いていたので、読めない行が在っても、空の一覧と区別が
+ * 付かなかった。0件（鍵が無い）のときは何も出さない。
+ */
+describe('「次の自動実行」カードの読めない継続中の依頼（#2343）', () => {
+  const USAGE = { rows: [], since: null, beforeLedger: false };
+  const ENTRY = {
+    kind: 'daily_report',
+    description: '毎日 22:00 に日報',
+    nextAt: '2026-08-15T05:00:00.000Z',
+  };
+
+  it('読めない行が在るとき、件数と kind を断る。読めた予定はそのまま出る', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], {}, [ENTRY], {}, [
+      { kind: 'broken-1', reason: '不正な欄: spec' },
+    ]);
+
+    expect(await screen.findByText('毎日 22:00 に日報')).toBeTruthy();
+    const note = await screen.findByText(/読めない継続中の依頼が 1 件ある/);
+    expect(note.textContent).toContain('kind: broken-1');
+    expect(note.textContent).toContain('消された依頼ではない');
+  });
+
+  it('0件（鍵が無い）のときは何も出さない', async () => {
+    renderDashboard(USAGE, EMPTY_FEED, [], {}, [ENTRY]);
+
+    expect(await screen.findByText('毎日 22:00 に日報')).toBeTruthy();
+    expect(screen.queryByText(/読めない継続中の依頼/)).toBeNull();
   });
 });
 

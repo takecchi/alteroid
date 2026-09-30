@@ -3,7 +3,14 @@ import {
   schedulePhaseSchema,
   scheduledRequestSchema,
 } from '@alteroid/core';
-import type { SchedulePhase, ScheduleSpec, ScheduleStore, ScheduledRequest } from '@alteroid/core';
+import type {
+  SchedulePhase,
+  ScheduleList,
+  ScheduleSpec,
+  ScheduleStore,
+  ScheduledRequest,
+  UnreadableSchedule,
+} from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -85,29 +92,29 @@ export class PgScheduleStore implements ScheduleStore {
   }
 
   /**
-   * kind の昇順。**不正な行は返さない**（issue #1944）——飛ばした行は stderr
-   * へ跡を残すだけで、`get(kind)` はこれまでどおり投げる（`parsePlan` の doc）。
+   * `entries` は kind の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
+   * 返す**（issue #2343。以前は黙って飛ばしていた）。stderr の跡（issue #1944）は
+   * そのまま残し、`get(kind)` はこれまでどおり投げる（`parsePlan` の doc）。
+   * `unreadable` は kind（列から取れる）と不正な欄名だけを持ち、本文は載せない。
    */
-  async list(): Promise<ScheduledRequest[]> {
+  async list(): Promise<ScheduleList> {
     const rows = await this.#db
       .select({ kind: schedules.kind, plan: schedules.plan })
       .from(schedules)
       .orderBy(asc(schedules.kind));
-    const result: ScheduledRequest[] = [];
+    const entries: ScheduledRequest[] = [];
+    const unreadable: UnreadableSchedule[] = [];
     for (const row of rows) {
       const parsed = scheduledRequestSchema.safeParse(row.plan);
       if (parsed.success) {
-        result.push(parsed.data);
+        entries.push(parsed.data);
         continue;
       }
-      process.stderr.write(
-        `${describeSkippedScheduleRow({
-          kind: row.kind,
-          reason: summarizeInvalidFields(parsed.error.issues),
-        })}\n`,
-      );
+      const reason = summarizeInvalidFields(parsed.error.issues);
+      process.stderr.write(`${describeSkippedScheduleRow({ kind: row.kind, reason })}\n`);
+      unreadable.push({ kind: row.kind, reason });
     }
-    return result;
+    return { entries, unreadable };
   }
 
   async get(kind: string): Promise<ScheduledRequest | null> {

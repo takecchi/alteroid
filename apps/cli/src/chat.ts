@@ -19,6 +19,7 @@ import {
   type Commitment,
   type UnreadableApproval,
   type UnreadableCommitment,
+  type UnreadableSchedule,
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
@@ -509,8 +510,15 @@ export async function runSlashCommand(
         stdout.write(`${await withDetail('定期ジョブを読めませんでした', response)}\n`);
         return 'ok';
       }
-      const { entries } = await response.json();
-      if (entries.length === 0) stdout.write('（定期ジョブは仕込まれていません）\n');
+      const { entries, unreadable = [] } = await response.json();
+      // 読めない行が在るのに「仕込まれていません」とだけ言わない（issue #2343）。
+      if (entries.length === 0) {
+        stdout.write(
+          unreadable.length === 0
+            ? '（定期ジョブは仕込まれていません）\n'
+            : '（読めた定期ジョブは仕込まれていません）\n',
+        );
+      }
       for (const entry of entries) {
         stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
         // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
@@ -531,6 +539,8 @@ export async function runSlashCommand(
           stdout.write(`      前回: ${entry.lastRunAt ?? '（まだ一度も動いていません）'}\n`);
         }
       }
+      const unreadableNote = renderUnreadableScheduleNotice(unreadable);
+      if (unreadableNote !== '') stdout.write(`${unreadableNote}\n`);
       return 'ok';
     }
 
@@ -3392,6 +3402,24 @@ function renderUnreadableApprovalNotice(unreadable: UnreadableApproval[]): strin
     `  ⚠ 読めない承認待ちが ${unreadable.length} 件あります` +
     (ids.length === 0 ? '' : `（id: ${ids.join(', ')}）`) +
     '。壊れた行であって、回答済み・取り下げ済みではありません。この一覧には載っていません。'
+  );
+}
+
+/**
+ * 読めない継続中の依頼の断り（issue #2343。`renderUnreadableApprovalNotice` と同じ形）。
+ * 0件なら空文字。**「壊れた行であって、消された依頼ではない」を落とさない。**
+ * kind が取れた行は `/unschedule <kind>` で外せる（ストアの `removeIfPresent` は読めない行も外す）。
+ */
+function renderUnreadableScheduleNotice(unreadable: UnreadableSchedule[]): string {
+  if (unreadable.length === 0) return '';
+  const kinds = unreadable
+    .map((entry) => entry.kind)
+    .filter((kind): kind is string => kind !== undefined);
+  return (
+    `  ⚠ 読めない継続中の依頼が ${unreadable.length} 件あります` +
+    (kinds.length === 0 ? '' : `（kind: ${kinds.join(', ')}）`) +
+    '。壊れた行であって、消された依頼ではありません。この一覧には載っていません。' +
+    (kinds.length === 0 ? '' : '外すなら /unschedule <kind> です。')
   );
 }
 

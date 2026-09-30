@@ -76,7 +76,7 @@ const SPEC_ENTRY = {
  * `undefined` になり、**method も本文も落ちる**（それで「何も送っていない」と
  * 同じ見え方になった）。何を送ったかを見ないと、経路が合っているだけのテストになる。
  */
-function stubSchedule(entries: unknown[]): void {
+function stubSchedule(entries: unknown[], unreadable?: unknown[]): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : null;
     const url = request?.url ?? (typeof input === 'string' ? input : String(input));
@@ -86,7 +86,12 @@ function stubSchedule(entries: unknown[]): void {
       // 知らない URL は「繋がらない」（経路の書き忘れを空の応答で通さない）。
       return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
     }
-    if (method === 'GET') return Promise.resolve(json({ entries }));
+    if (method === 'GET') {
+      // `unreadable` は渡さなければ鍵ごと無い（0件と同じ。#2343）。
+      return Promise.resolve(
+        json({ entries, ...(unreadable === undefined ? {} : { unreadable }) }),
+      );
+    }
 
     sent.push({
       url,
@@ -388,5 +393,41 @@ describe('仕込まれた依頼を編集できる（#496）', () => {
 
     fireEvent.click(save);
     expect(sent).toEqual([]);
+  });
+});
+
+/**
+ * 読めない継続中の依頼の行（#2343）。一覧が読めない行を黙って飛ばすと、人間には
+ * 「登録された定期ジョブが無い」と見える。件数と kind を、一覧の上で断る。
+ */
+describe('/schedule 画面: 読めない継続中の依頼の断り', () => {
+  it('読めない行が在るとき、件数・kind・「消された依頼ではない」を出す。読めた行はそのまま出る', async () => {
+    stubSchedule(
+      [DEFAULT_ENTRY],
+      [{ kind: 'broken-1', reason: '不正な欄: spec' }, { reason: '不正な行' }],
+    );
+    renderSchedule();
+
+    expect(await screen.findByText(DEFAULT_ENTRY.kind)).toBeTruthy();
+    const note = await screen.findByText(/読めない継続中の依頼が 2 件ある/);
+    expect(note.textContent).toContain('kind: broken-1');
+    expect(note.textContent).toContain('壊れた行であって、消された依頼ではない');
+  });
+
+  it('読めた行が0件でも「登録された定期ジョブが無い」と言い切らない', async () => {
+    stubSchedule([], [{ kind: 'broken-1', reason: '不正な欄: spec' }]);
+    renderSchedule();
+
+    expect(await screen.findByText(/読めない継続中の依頼が 1 件ある/)).toBeTruthy();
+    expect(screen.queryByText(/登録された定期ジョブが無い（/)).toBeNull();
+    expect(screen.getByText(/読めた範囲では、登録された定期ジョブが無い/)).toBeTruthy();
+  });
+
+  it('0件のとき（鍵が無い）は何も出さない。本当に0件なら「無い」と言う', async () => {
+    stubSchedule([]);
+    renderSchedule();
+
+    expect(await screen.findByText(/登録された定期ジョブが無い（/)).toBeTruthy();
+    expect(screen.queryByText(/読めない/)).toBeNull();
   });
 });

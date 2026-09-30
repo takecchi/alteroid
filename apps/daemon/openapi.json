@@ -11738,6 +11738,7 @@
         "operationId": "getSchedule",
         "tags": ["schedule"],
         "summary": "定期ジョブの一覧と次の発火時刻",
+        "description": "行が読めない（版ずれ・手編集）継続中の依頼が在るときだけ、`unreadable`（kind が取れればkind と不正な欄名）が載る。**壊れた行であって、消された依頼ではない。**0件なら鍵ごと無い（issue #2343）。",
         "responses": {
           "200": {
             "description": "定期ジョブの一覧。",
@@ -11821,6 +11822,21 @@
                           }
                         },
                         "required": ["kind", "description", "nextAt"]
+                      }
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
                       }
                     }
                   },

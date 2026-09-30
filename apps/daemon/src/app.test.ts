@@ -332,6 +332,11 @@ function fakeScheduler() {
         },
       ];
     },
+    // 読めない行はこのフェイクでは持たない（本物のスケジューラ越しの歯は
+    // `schedule-unreadable-list.test.ts`）。
+    unreadable() {
+      return [];
+    },
     run(kind) {
       ran.push(kind);
       return kind === 'daily_report';
@@ -3758,7 +3763,7 @@ describe('HTTP API', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await stores.schedules.list()).toMatchObject([
+    expect((await stores.schedules.list()).entries).toMatchObject([
       { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
     ]);
     expect(schedule.refreshCount()).toBe(before + 1);
@@ -3871,7 +3876,7 @@ describe('HTTP API', () => {
       );
       expect(response.status, at).toBe(400);
     }
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('cron 式でも仕込めるが、読めない式は弾く', async () => {
@@ -3884,7 +3889,7 @@ describe('HTTP API', () => {
       }),
     );
     expect(ok.status).toBe(200);
-    expect(await stores.schedules.list()).toMatchObject([
+    expect((await stores.schedules.list()).entries).toMatchObject([
       { spec: { type: 'cron', expression: '0 10 * * 1' } },
     ]);
 
@@ -3906,7 +3911,7 @@ describe('HTTP API', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('継続中の依頼を外せる。無いものは 404', async () => {
@@ -3923,7 +3928,7 @@ describe('HTTP API', () => {
       headers: { 'content-type': 'application/json' },
     });
     expect(removed.status).toBe(200);
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
 
     const missing = await app.request('/schedule/nope', {
       method: 'DELETE',

@@ -93,7 +93,7 @@ describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない�
         '2026-08-13T00:00:00.000Z',
       ),
     ).toBeNull();
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('空文字の request は拒む（put() と同じく scheduledRequestSchema を通す）', async () => {

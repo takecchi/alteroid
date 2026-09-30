@@ -5,16 +5,16 @@
  * ほうがこっちとしては見やすい」（alteroid の Web UI について）。
  *
  * **`dangerouslySetInnerHTML` は使わない。** Markdown 文字列は
- * `mdast-util-from-markdown`（Markdown → mdast）→ `mdast-util-to-hast`
- * （mdast → hast）→ 下の `toReact`（hast → React 要素）で完結し、HTML 文字列を
- * 経由しない。だからサニタイズを足し忘れるという失敗の形そのものが無い。
+ * `mdast-util-from-markdown`（Markdown → mdast）→ `markdown-mdast.ts` の
+ * `mdastToReact`（mdast → React 要素）で完結し、HTML 文字列を経由しない
+ * （`mdast-util-to-hast` も hast も使わない。理由は `markdown-mdast.ts` の冒頭）。だからサニタイズを足し忘れるという失敗の形そのものが無い。
  *
  * **`rehype-raw` は入れない。** 本文中に書かれた `<script>` や
  * `onerror` 付きタグは、**要素として解釈されず、そのままテキストとして
- * 表示される**。`mdast-util-to-hast` は `allowDangerousHtml: true` のとき
- * 生 HTML を `raw` ノードにするので、`toReact` がそれを文字列（hast の
- * `text` 相当）にして描く（以前使っていた react-markdown の
- * `lib/index.js` の `transform` と同じ処理）。`rehype-raw` はその `raw` ノードを
+ * 表示される**。mdast の `html` ノード（生 HTML）は、`mdastToReact` が
+ * 要素にせず文字列にして描く（以前使っていた react-markdown が
+ * `allowDangerousHtml: true` で `raw` ノードにし、`lib/index.js` の `transform` で
+ * 文字列にしていたのと同じ結果）。`rehype-raw` はその `raw` ノードを
  * 実際の hast 要素へ解釈し直す道具で、足した瞬間にこの性質が消え、本文が
  * そのまま実行可能な HTML になる注入経路が生まれる。**足したくなったら、まず
  * `markdown.test.tsx` の「生 HTML が要素にならない」テストを見ること** —
@@ -46,156 +46,13 @@
  * が「`line-clamp` で切ると、収まっているように見えたまま読めない部分ができる」
  * として避ける理由を既に書いている。**対象は、詳細で全文を出す面だけである。**
  */
-import { urlAttributes } from 'html-url-attributes';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { newlineToBreak } from 'mdast-util-newline-to-break';
-import { toHast } from 'mdast-util-to-hast';
 import { gfm } from 'micromark-extension-gfm';
-import type { ComponentProps, ElementType, JSX, ReactNode } from 'react';
-import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
+import type { ComponentProps, ReactNode } from 'react';
 
-type HastNode = ReturnType<typeof toHast>;
-type HastElement = Extract<HastNode, { type: 'element' }>;
-type HastParent = Extract<HastNode, { children: unknown[] }>;
-type HastChild = HastParent['children'][number];
-
-/**
- * タグ名 → 差し替える部品。無いタグは素の要素（`section` / `sup` /
- * `input` / `br` など）のまま描く。
- */
-type Components = {
-  [Tag in keyof JSX.IntrinsicElements]?: (props: ComponentProps<Tag>) => ReactNode;
-};
-
-/**
- * 危険なプロトコルの URL を空にする。react-markdown の `defaultUrlTransform`
- * （`react-markdown/lib/index.js`）を逐語で移したもの。`javascript:` や
- * `data:` は許可するプロトコル以外として空になる。
- */
-const safeProtocol = /^(https?|ircs?|mailto|xmpp)$/i;
-
-function defaultUrlTransform(value: string): string {
-  const colon = value.indexOf(':');
-  const questionMark = value.indexOf('?');
-  const numberSign = value.indexOf('#');
-  const slash = value.indexOf('/');
-
-  if (
-    // プロトコルが無い（相対）。
-    colon === -1 ||
-    // 最初の `:` が `?` `#` `/` より後なら、プロトコルではない。
-    (slash !== -1 && colon > slash) ||
-    (questionMark !== -1 && colon > questionMark) ||
-    (numberSign !== -1 && colon > numberSign) ||
-    // 許可するプロトコル。
-    safeProtocol.test(value.slice(0, colon))
-  ) {
-    return value;
-  }
-
-  return '';
-}
-
-/**
- * hast のプロパティ名を React の prop 名にする。`mdast-util-to-hast` が出す
- * プロパティは閉じた集合（`className` / `id` / `href` / `src` / `alt` /
- * `title` / `start` / `type` / `checked` / `disabled` / `align`、脚注の
- * `dataFootnotes` / `dataFootnoteRef` / `dataFootnoteBackref` /
- * `ariaDescribedBy` / `ariaLabel`）なので、property-information の全表は
- * 持たず、`data*` / `aria*` をケバブにするだけで足りる。残りは hast と
- * React で名前が同じ。
- */
-function toPropName(name: string): string {
-  // `ariaDescribedBy` → `aria-describedby`（ARIA の属性名は単語の区切りを
-  // ハイフンにしない）、`dataFootnoteRef` → `data-footnote-ref`。
-  if (/^aria[A-Z]/.test(name)) return `aria-${name.slice(4).toLowerCase()}`;
-  if (/^data[A-Z]/.test(name)) return name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
-  return name;
-}
-
-/** 表の構造要素。直下の空白だけの文字列は描かない（React の警告になる）。 */
-const TABLE_TAGS = new Set(['table', 'tbody', 'thead', 'tfoot', 'tr']);
-
-function toChildren(node: HastParent, components: Components): ReactNode[] {
-  const counts = new Map<string, number>();
-  const result: ReactNode[] = [];
-  for (const child of node.children as HastChild[]) {
-    if (child.type === 'element') {
-      // 同じタグ名の兄弟に連番を振ってキーにする（キーの警告を出さない）。
-      const count = counts.get(child.tagName) ?? 0;
-      counts.set(child.tagName, count + 1);
-      result.push(toElement(child, `${child.tagName}-${count}`, components));
-    } else if (child.type === 'text') {
-      result.push(child.value);
-    } else if ((child.type as string) === 'raw') {
-      // 生 HTML。要素にせず、そのままテキストとして見せる（ファイル冒頭）。
-      result.push((child as unknown as { value: string }).value);
-    }
-  }
-  return result;
-}
-
-function withChildren(props: Record<string, unknown>, children: ReactNode[]) {
-  if (children.length > 0) {
-    const value = children.length > 1 ? children : children[0];
-    if (value) props.children = value;
-  }
-}
-
-function create(type: ElementType, props: Record<string, unknown>, key?: string) {
-  const fn = Array.isArray(props.children) ? jsxs : jsx;
-  return key ? fn(type, props, key) : fn(type, props);
-}
-
-function toElement(node: HastElement, key: string, components: Components): ReactNode {
-  const props: Record<string, unknown> = {};
-  let align: string | undefined;
-
-  for (const name in node.properties) {
-    if (!Object.hasOwn(node.properties, name)) continue;
-    let value: unknown = node.properties[name];
-    // URL を持つ属性は、許可したプロトコルだけ通す。
-    if (Object.hasOwn(urlAttributes, name)) {
-      const tags: readonly string[] | null | undefined =
-        urlAttributes[name as keyof typeof urlAttributes];
-      if (!tags || tags.includes(node.tagName)) {
-        value = defaultUrlTransform(String(value || ''));
-      }
-    }
-    if (
-      value === null ||
-      value === undefined ||
-      (typeof value === 'number' && Number.isNaN(value))
-    ) {
-      continue;
-    }
-    if (Array.isArray(value)) value = value.join(' ');
-    const propName = toPropName(name);
-    if (
-      propName === 'align' &&
-      typeof value === 'string' &&
-      (node.tagName === 'td' || node.tagName === 'th')
-    ) {
-      // 表のセルの揃えは `align` 属性ではなく `style` で出す。
-      align = value;
-    } else {
-      props[propName] = value;
-    }
-  }
-  if (align) props.style = { textAlign: align };
-
-  let children = toChildren(node, components);
-  if (TABLE_TAGS.has(node.tagName)) {
-    children = children.filter((child) => typeof child !== 'string' || /[^\t\n\f\r ]/.test(child));
-  }
-  withChildren(props, children);
-
-  const type: ElementType = Object.hasOwn(components, node.tagName)
-    ? (components[node.tagName as keyof Components] as ElementType)
-    : (node.tagName as ElementType);
-  return create(type, props, key);
-}
+import { type Components, mdastToReact } from './markdown-mdast';
 
 /**
  * **`remark-gfm` パッケージそのものは使わない。** `remark-gfm` は
@@ -221,10 +78,7 @@ export function toReact(markdown: string, components: Components = markdownCompo
     mdastExtensions: [gfmFromMarkdown()],
   });
   newlineToBreak(mdast);
-  const hast = toHast(mdast, { allowDangerousHtml: true }) as HastParent;
-  const props: Record<string, unknown> = {};
-  withChildren(props, toChildren(hast, components));
-  return create(Fragment, props);
+  return mdastToReact(mdast, components);
 }
 
 /**
@@ -357,9 +211,8 @@ export const markdownComponents: Components = {
     // **だから許可した名前だけを明示して渡す** — `id` と、GFM が脚注の
     // `<a>` に付ける4つ（`data-footnote-ref` / `aria-describedby`＝本文の
     // 参照、`data-footnote-backref` / `aria-label`＝脚注からの戻るリンク）
-    // だけをこの形で足す。`clobberPrefix`（既定 `user-content-`）は
-    // `toHast` へ `clobberPrefix` を渡していないので `mdast-util-to-hast` の
-    // 既定のまま外していない。
+    // だけをこの形で足す。`clobberPrefix`（`user-content-`）は
+    // `mdast-util-to-hast` の既定値を `markdown-mdast.ts` に固定してあり、外していない。
     //
     // **`#` で始まる href（同じ文書内を指すリンク）には `target` / `rel` を
     // 付けない。** GFM の脚注の参照（`#user-content-fn-N`）・戻るリンク

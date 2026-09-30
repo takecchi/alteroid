@@ -1518,6 +1518,8 @@ function stubClient(
     approvalTraceBody?: unknown;
     /** `GET /schedule` が返す一覧。既定は空。 */
     scheduleEntries?: ScheduleEntryLike[];
+    /** `GET /schedule` の `unreadable`（#2343）。渡さなければ鍵ごと無い（0件と同じ）。 */
+    scheduleUnreadable?: { kind?: string; reason: string }[];
     /** `GET /memory` が返す一覧。既定は空。 */
     memoryDocuments?: MemoryDocLike[];
     /** `GET /journal` が返す一覧。既定は空。 */
@@ -1733,7 +1735,14 @@ function stubClient(
     schedule: {
       $get: (args: unknown) => {
         calls.push({ route: 'GET /schedule', args });
-        return Promise.resolve(reply(200, { entries: options.scheduleEntries ?? [] }));
+        return Promise.resolve(
+          reply(200, {
+            entries: options.scheduleEntries ?? [],
+            ...(options.scheduleUnreadable === undefined
+              ? {}
+              : { unreadable: options.scheduleUnreadable }),
+          }),
+        );
       },
     },
     memory: {
@@ -2784,6 +2793,43 @@ describe('chat の /schedule', () => {
       '作成・更新: 無し（コードに書かれた既定の仕込みで、仕込まれた記録がありません）',
     );
     expect(text).not.toContain('undefined');
+  });
+
+  it('読めない継続中の依頼が在るとき、件数と kind を出す。読めた行は今までどおり出る（#2343）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({
+      scheduleEntries: [
+        { kind: 'daily-report', description: '日報', nextAt: '2026-08-20T00:00:00.000Z' },
+      ],
+      scheduleUnreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }, { reason: '不正な行' }],
+    });
+
+    await runSlashCommand('/schedule', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('daily-report');
+    expect(text).toContain('読めない継続中の依頼が 2 件あります（kind: broken-1）');
+    expect(text).toContain('壊れた行であって、消された依頼ではありません');
+    expect(text).toContain('/unschedule <kind>');
+  });
+
+  it('読めた定期ジョブが0件でも、読めない行が在れば「仕込まれていません」とだけ言わない。0件のときは何も出さない（#2343）', async () => {
+    const read = captureStdout();
+    const only = stubClient({
+      scheduleUnreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }],
+    });
+    await runSlashCommand('/schedule', only.client, emptyListed());
+    const text = read();
+    expect(text).toContain('（読めた定期ジョブは仕込まれていません）');
+    expect(text).not.toContain('（定期ジョブは仕込まれていません）');
+    expect(text).toContain('broken-1');
+
+    const none = stubClient({});
+    await runSlashCommand('/schedule', none.client, emptyListed());
+    // `read()` は累積なので、1本目の分を除く。
+    const textNone = read().slice(text.length);
+    expect(textNone).toContain('（定期ジョブは仕込まれていません）');
+    expect(textNone).not.toContain('読めない');
   });
 });
 
