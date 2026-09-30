@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 
 import { Badge, Button, Card, Textarea } from '../../common';
 import { Markdown } from '../../markdown';
@@ -25,11 +25,16 @@ export const APPROVAL_QUICK_ANSWERS = {
  *   送らない（`chat/ime.ts`）
  * - `jobLink` はどのマネージャーの件かへのリンク（画面が `<Link>` で渡す）
  * - `footer` は回答済みのときの経緯（画面の `TracePanel`）などを置く口
+ * - **省略可能な口（既定の振る舞いは変えない）。** 画面が今の表示をそのまま出せるように
+ *   足した: `time`（時刻の位置に差し込む。渡すと `Timestamp` は出ない）・`isSubmitKey`
+ *   （送るキーの判定。既定は `isSubmitShortcut`）・`trailing`（`error` の後ろ。カードの
+ *   いちばん下）
  */
 export function ApprovalCard({
   state,
   createdAt,
   createdLabel,
+  time,
   jobLink,
   question,
   context,
@@ -42,11 +47,16 @@ export function ApprovalCard({
   busy = false,
   error,
   footer,
+  trailing,
+  isSubmitKey = isSubmitShortcut,
 }: {
   state: ApprovalState;
-  createdAt: string;
+  /** `time` を渡すときは要らない（渡しても使わない）。 */
+  createdAt?: string;
   /** 「3 分前」（整形は呼ぶ側）。 */
-  createdLabel: string;
+  createdLabel?: string;
+  /** 時刻の位置に差し込むもの。渡すと `Timestamp`（相対の表示と JST/UTC の tooltip）の代わりに出る。 */
+  time?: ReactNode;
   jobLink?: ReactNode;
   question: string;
   context?: string;
@@ -60,6 +70,10 @@ export function ApprovalCard({
   busy?: boolean;
   error?: ReactNode;
   footer?: ReactNode;
+  /** `error` の後ろ（カードのいちばん下）に置くもの。 */
+  trailing?: ReactNode;
+  /** 回答欄で「送る」キーかの判定。既定は `isSubmitShortcut`（IME の確定の Enter を除く）。 */
+  isSubmitKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
 }) {
   return (
     <Card className="p-4">
@@ -67,7 +81,11 @@ export function ApprovalCard({
         <Badge tone={state === 'withdrawn' ? 'accent' : state === 'answered' ? 'neutral' : 'warn'}>
           {state === 'withdrawn' ? '取り下げ済' : state === 'answered' ? '回答済' : '未回答'}
         </Badge>
-        <Timestamp at={createdAt} label={createdLabel} />
+        {time !== undefined ? (
+          time
+        ) : createdAt !== undefined ? (
+          <Timestamp at={createdAt} label={createdLabel} />
+        ) : null}
         {jobLink !== undefined && <span className="font-mono">{jobLink}</span>}
       </div>
 
@@ -102,7 +120,7 @@ export function ApprovalCard({
             placeholder="答える（書いておくと「まとめて送る」の対象になる。この場ですぐ送ってもよい）"
             onChange={(event) => onDraftChange?.(event.target.value)}
             onKeyDown={(event) => {
-              if (isSubmitShortcut(event)) {
+              if (isSubmitKey(event)) {
                 event.preventDefault();
                 if (draft.trim() !== '') onSubmit?.(draft);
               }
@@ -139,6 +157,7 @@ export function ApprovalCard({
 
       {footer}
       {error !== undefined && <div className="mt-2">{error}</div>}
+      {trailing}
     </Card>
   );
 }
