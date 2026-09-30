@@ -4119,6 +4119,21 @@ class Clone implements CloneHost {
       // 「見に行け」という仕事そのものは失われない。
       this.#heldForUsage.delete(event.id);
       await this.#forget(event);
+    } else if (defer && this.#isSupersededTokenPoolNotice(event)) {
+      // **代表でなくなった token-pool 通知は、延期の列へ積まずに畳む**（Issue #2495）。
+      // 代表がターンの処理中だと、新しい通知が届いても `#evictPendingTokenPoolRepresentative`
+      // は古い方を外せず（`null`）、代表だけが新しい方へ差し替わる。その古い方が枠で
+      // 失敗して戻ってくると、積めば新旧2件が並び、解除で古い方が先に配られる
+      // （#1368 が塞いだ症状の再発）。外すときと同じ作法 —— 本文を先に日誌へ書き、
+      // `folded` を数え、`#forget` で器から消す。
+      const current = this.#delivery.pendingTokenPoolNotice;
+      if (current !== null) {
+        const folded = current.folded + 1;
+        this.#delivery.setPendingTokenPoolNotice({ ...current, folded });
+        await this.#journalSupersededTokenPoolNotice(event, null, folded);
+      }
+      this.#heldForUsage.delete(event.id);
+      await this.#forget(event);
     } else if (defer) {
       this.#delivery.pushDeferred(event);
       // 保持したことを覚えておく（`#heldForUsage` の doc）。**印を消すのは
@@ -4154,6 +4169,21 @@ class Clone implements CloneHost {
    */
   #foldsIntoHeldTick(event: InboxEvent): boolean {
     return isTick(event) && this.#delivery.someDeferred((held) => isSameTick(held, event));
+  }
+
+  /**
+   * 枠で延期しようとしている合図が、もう代表ではない token-pool 通知か
+   * （`#pendingTokenPoolNotice` が別の通知を指している。Issue #2495）。
+   *
+   * 代表が `null`（既に片付いた・器の入れ替えで空になった）のときは偽 —— 比較する
+   * 相手が居ないので、これまでどおり延期の列へ積む（何も失わない側へ倒す）。
+   */
+  #isSupersededTokenPoolNotice(event: InboxEvent): boolean {
+    if (event.type !== 'external' || event.source !== DAEMON_TOKEN_POOL_REOPENED_SOURCE) {
+      return false;
+    }
+    const current = this.#delivery.pendingTokenPoolNotice;
+    return current !== null && current.id !== event.id;
   }
 
   /**
@@ -4893,7 +4923,9 @@ class Clone implements CloneHost {
    */
   async #journalSupersededTokenPoolNotice(
     old: InboxEvent,
-    next: InboxEvent,
+    // `null` ＝ 枠で延期する時点で、既に別の代表へ差し替わっていた場合
+    // （`#settleInboxEvent`。処理中で外せなかった代表が枠で失敗して戻ってきた。#2495）。
+    next: InboxEvent | null,
     folded: number,
   ): Promise<void> {
     await this.#journalIncomingBody(old);
@@ -4902,10 +4934,13 @@ class Clone implements CloneHost {
       with: 'self',
       role: 'outbound',
       text:
-        `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
-        `内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（` +
-        `${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。合流はここまでで` +
-        `累計 ${folded} 件——時間の窓ではなく「未処理のまま残っているか」だけで判定している）。`,
+        (next === null
+          ? `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）は、処理中に内容の違う同種の通知が届いて` +
+            `代表が差し替わった後に枠で失敗して戻ってきたので、延期の列へは積まずに畳んだ（モデルへ渡るのは新しい代表だけ。`
+          : `${EXCHANGE_KIND_THINNING_PREFIX}token-pool の「戻った」通知（本文は直前の行）がまだ未処理のまま残っていたところへ、` +
+            `内容の違う同種の通知が届いたので、古い方は配らずに畳み、新しい方（` +
+            `${inboxEventShape(next)}）を代表にした（モデルへ渡るのは新しい方だけ。`) +
+        `合流はここまでで累計 ${folded} 件——時間の窓ではなく「未処理のまま残っているか」だけで判定している）。`,
     });
   }
 

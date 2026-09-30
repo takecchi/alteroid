@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
+import type { query as sdkQuery, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { ALWAYS_REDELIVER, createClone, DAEMON_TOKEN_POOL_REOPENED_SOURCE } from './clone.js';
 import type { InboxEvent, JournalEntry } from './schema.js';
 import { createMemoryStores, humanMessage } from './testing.js';
-import { setup, waitFor } from './clone-test-harness.js';
+import { createLocalRunner } from './runner-local.js';
+import { createRunnerRegistry } from './runner-protocol.js';
+import { fakeSdk, setup, waitFor } from './clone-test-harness.js';
 import type { FakeCall } from './clone-test-harness.js';
 
 /**
@@ -274,6 +277,112 @@ describe('クローン — token-pool の「戻った」通知は同時に未処
     s.clone.post(tokenPoolNotice('done-B', '認証トークンが通る状態に戻った: 「alteroid-done-B」'));
     await waitFor(() => (s.calls[0]?.inputs.length ?? 0) >= 2, 'done-B が自分自身のターンを持つ');
     expect((s.calls[0] as FakeCall).inputs[1]).toContain('alteroid-done-B');
+
+    await s.clone.stop();
+  });
+
+  /**
+   * 最初のターンの結果を返す直前（assistant の後）で、明示的に解くまで握る。
+   * 最初のターンは枠で失敗し、2本目以降は成功する。時間で近似しない。
+   */
+  function clonePausedFirstTurnThatFailsOnQuota() {
+    const base = fakeSdk(undefined, {
+      resultFor: (turnIndex) =>
+        turnIndex < 1 ? { subtype: 'error_during_execution', text: spendLimitMessage } : undefined,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let first = true;
+    const fn = ((params: Parameters<typeof sdkQuery>[0]) => {
+      const inner = base.fn(params);
+      if (!first) return inner;
+      first = false;
+      async function* held(): AsyncGenerator<SDKMessage, void> {
+        let gated = false;
+        for await (const message of inner) {
+          if (!gated && message.type === 'assistant') {
+            gated = true;
+            await gate;
+          }
+          yield message;
+        }
+      }
+      return Object.assign(held(), { close: () => undefined, interrupt: async () => undefined });
+    }) as unknown as typeof sdkQuery;
+    const stores = createMemoryStores();
+    const clone = createClone({
+      redeliveryGate: ALWAYS_REDELIVER,
+      stores,
+      queryFn: fn,
+      env: {},
+      runners: createRunnerRegistry([
+        createLocalRunner({ workspacePath: '/work', queryFn: fakeSdk().fn, env: {} }),
+      ]),
+    });
+    return { clone, stores, calls: base.calls, release: () => release() };
+  }
+
+  it('Issue #2495: 代表 A の処理中に B が届き（A は外せず B が代表になる）、A が枠で失敗しても A は延期の列に積まれず畳まれ、延期が解けて配られるのは B だけである', async () => {
+    const s = clonePausedFirstTurnThatFailsOnQuota();
+
+    s.clone.post(tokenPoolNotice('A', '認証トークンが通る状態に戻った: 「tok-A」'));
+    await waitFor(
+      () => s.calls[0]?.inputs.some((text) => text.includes('tok-A')) ?? false,
+      'A がターンへ渡る（処理中）',
+    );
+    s.clone.post(tokenPoolNotice('B', '認証トークンが通る状態に戻った: 「tok-B」'));
+    s.release();
+    await waitFor(() => s.clone.usageBlocked, 'A のターンが枠で失敗して保持される');
+    // 人間の発言で再武装する（保持が解ける契機）。
+    s.clone.post(humanMessage('起きてる？'));
+    await waitFor(
+      () => s.calls.flatMap((c) => c.inputs).some((text) => text.includes('tok-B')),
+      'B がモデルへ渡る',
+    );
+    await waitFor(() => !s.clone.usageBlocked, '枠が晴れる');
+
+    // A は最初のターンで1回渡ったきり、再び配られない。
+    const inputs = s.calls.flatMap((c) => c.inputs);
+    expect(inputs.filter((text) => text.includes('tok-A'))).toHaveLength(1);
+    expect(inputs.filter((text) => text.includes('tok-B'))).toHaveLength(1);
+
+    // 畳んだことは日誌に残る（本文も）。
+    const exchanges = await s.stores.journal.list({ types: ['exchange'] });
+    const foldNotes = exchanges.filter(
+      (row): row is Extract<JournalEntry, { type: 'exchange' }> =>
+        row.type === 'exchange' && row.text.includes('時間の窓ではなく'),
+    );
+    expect(foldNotes.length).toBe(1);
+    expect(foldNotes[0]?.text).toContain('累計 1 件');
+    const bodies = await s.stores.journal.list({ types: ['external_event'] });
+    expect(
+      bodies.some((row) => row.type === 'external_event' && row.summary.includes('tok-A')),
+    ).toBe(true);
+
+    await s.clone.stop();
+  });
+
+  it('Issue #2495 の陰性対照: 代表 A 自身が枠で失敗した場合（B は来ていない）は、これまでどおり延期の列に積まれ、解除で配り直される', async () => {
+    const s = clonePausedFirstTurnThatFailsOnQuota();
+
+    s.clone.post(tokenPoolNotice('A', '認証トークンが通る状態に戻った: 「tok-A」'));
+    await waitFor(
+      () => s.calls[0]?.inputs.some((text) => text.includes('tok-A')) ?? false,
+      'A がターンへ渡る（処理中）',
+    );
+    s.release();
+    await waitFor(() => s.clone.usageBlocked, 'A のターンが枠で失敗して保持される');
+    s.clone.post(humanMessage('起きてる？'));
+    await waitFor(() => !s.clone.usageBlocked, '保持が解けて A の再試行が通る');
+
+    const inputs = s.calls.flatMap((c) => c.inputs);
+    expect(inputs.filter((text) => text.includes('tok-A'))).toHaveLength(2);
+    const exchanges = await s.stores.journal.list({ types: ['exchange'] });
+    expect(
+      exchanges.some((row) => row.type === 'exchange' && row.text.includes('時間の窓ではなく')),
+    ).toBe(false);
 
     await s.clone.stop();
   });
