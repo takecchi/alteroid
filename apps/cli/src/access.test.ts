@@ -143,6 +143,39 @@ describe('alteroid access list', () => {
   });
 
   /**
+   * 読めない時刻のとき、画面に `（不明前）` と出ていた（PR #2151 の欠陥）。
+   * 「前」は経過の単位側が持つので、読めないときは `（経過不明）` になる。
+   */
+  it('作成が読めない時刻のとき「不明前」と出さない', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        accounts: [
+          {
+            id: 'acc-1',
+            displayName: 'たけっち',
+            email: 'takecchi@example.com',
+            createdAt: 'not-a-real-timestamp',
+            lastLoginAt: null,
+            grantedAt: null,
+            grantedBy: null,
+            granted: true,
+            ownerDeclaredAt: null,
+            identities: [],
+          },
+        ],
+      },
+    });
+
+    await accessListCommand(new Date('2026-08-02T00:00:00.000Z').getTime());
+
+    const text = read();
+    expect(text).not.toContain('不明前');
+    expect(text).toContain('作成: not-a-real-timestamp（経過不明）');
+  });
+
+  /**
    * **誰が許可したか（#1398 c7-3）。** 3分岐（`'operator'`・アカウントの id・
    * `null`）を1回で確かめる。文言は Web UI の `describeGrantedBy()` と同じ。
    */
@@ -335,6 +368,17 @@ describe('alteroid access owner', () => {
 
     await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
       /このアカウントはまだ許可されていない/,
+    );
+  });
+
+  it('404・409・認証以外の失敗は、状態コードだけでなくデーモンの理由も出す', async () => {
+    replies.push({
+      status: 500,
+      body: { error: 'アカウント台帳の書き込みが失敗した（テスト用）' },
+    });
+
+    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
+      /が失敗しました \(500\): アカウント台帳の書き込みが失敗した（テスト用）/,
     );
   });
 

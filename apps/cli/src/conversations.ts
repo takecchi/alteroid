@@ -1,7 +1,7 @@
 import { stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo } from './format.js';
 import { resolveTarget } from './target.js';
 
 /**
@@ -123,8 +123,8 @@ export function renderConversationsList(
       // そのまま残す。
       lines.push(
         `  [${index + 1}] ${conversation.conversationId}` +
-          `  作成: ${conversation.startedAt}（${formatElapsed(conversation.startedAt, now)}前）` +
-          `  更新: ${conversation.updatedAt}（${formatElapsed(conversation.updatedAt, now)}前）` +
+          `  作成: ${conversation.startedAt}（${formatElapsedAgo(conversation.startedAt, now)}）` +
+          `  更新: ${conversation.updatedAt}（${formatElapsedAgo(conversation.updatedAt, now)}）` +
           `  (${conversation.messages}件)`,
       );
       lines.push(`      ${conversation.preview}`);

@@ -11,7 +11,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -84,7 +84,10 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
-      `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）`,
+      await withErrorReason(
+        `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
   }
   stdout.write(
@@ -209,7 +212,7 @@ export function renderRunners(view: RunnersView, now: number = Date.now()): stri
     // #211 の決定）。名簿がインメモリで再起動すると作り直される注記は、
     // 器ごとに繰り返さず一覧の末尾に1度だけ出す（下の `tail`）。
     // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す。
-    lines.push(`  この状態になった: ${runner.since}（${formatElapsed(runner.since, now)}前）`);
+    lines.push(`  この状態になった: ${runner.since}（${formatElapsedAgo(runner.since, now)}）`);
     if (runner.runnerId !== undefined) lines.push(`  宛先: ${runner.label}`);
     if (runner.workspacePath !== undefined) lines.push(`  workspace: ${runner.workspacePath}`);
     // **「どのプロセスか」を版と並べて出す。** クローンの `runner_list` と Web UI の

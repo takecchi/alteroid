@@ -132,6 +132,9 @@ describe('interruptCommand', () => {
     await expect(interruptCommand()).rejects.toThrow(
       'クローンのターンを止められませんでした（HTTP 500）',
     );
+    // デーモンが返した理由も添える（状態コードだけを見せない）。
+    replies.push({ status: 500, body: { error: '内部エラー' } });
+    await expect(interruptCommand()).rejects.toThrow('内部エラー');
   });
 
   /**

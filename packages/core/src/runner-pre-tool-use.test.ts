@@ -441,10 +441,26 @@ describe('gh pr merge --delete-branch の配線', () => {
     const result = await firePreToolUse(started.options, {
       ...PRE_TOOL_USE_BASE,
       tool_name: 'Bash',
-      tool_input: { command: 'gh pr merge 123 --squash' },
+      tool_input: { command: 'gh pr merge 123 --squash --match-head-commit abc123' },
     });
     expect(result).toEqual({ continue: true });
     expect(waitGuardNotes(events).length).toBe(0);
+  });
+
+  it('--match-head-commit の無い gh pr merge は deny し、note に 形=gh-pr-merge-no-match-head-commit を書く（#1192 N7）', async () => {
+    const { started, events } = await startSession();
+    const result = await firePreToolUse(started.options, {
+      ...PRE_TOOL_USE_BASE,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh pr merge 123 --squash' },
+    });
+    const output = (result as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput;
+    expect(output?.permissionDecision).toBe('deny');
+    expect(String(output?.permissionDecisionReason)).toContain('--match-head-commit');
+    const notes = waitGuardNotes(events);
+    expect(notes.length).toBe(1);
+    expect(notes[0]?.text).toContain('形=gh-pr-merge-no-match-head-commit');
+    expect(notes[0]?.escalate).toBeUndefined();
   });
 });
 

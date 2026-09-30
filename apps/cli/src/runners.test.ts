@@ -602,6 +602,8 @@ describe('runnersVacateCommand', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain('空けると立てた。');
+    // デーモンが返した理由も添える（状態コードだけを見せない）。
+    expect(String(error)).toContain('内部エラー');
   });
 
   it('#1641: デーモンが 401 を返しても投げる', async () => {

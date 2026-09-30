@@ -165,7 +165,8 @@ describe('#1641 の再現（Issue 本文）', () => {
     await writeFile(path, 'なにか', 'utf8');
     replies.push({ status: 500, body: { error: '内部エラー' } });
 
-    await expect(memorySetCommand('some-slug', { file: path })).rejects.toThrow();
+    // デーモンが返した理由も添える（状態コードだけを見せない）。
+    await expect(memorySetCommand('some-slug', { file: path })).rejects.toThrow('内部エラー');
   });
 
   it('memory set: PUT が 401 なら投げる（名前が不正、と案内しない）', async () => {
@@ -187,6 +188,8 @@ describe('#1641 の再現（Issue 本文）', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain('そんな記憶はありません');
+    // デーモンが返した理由も添える（状態コードだけを見せない）。
+    expect(String(error)).toContain('内部エラー');
   });
 });
 

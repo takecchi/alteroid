@@ -75,3 +75,31 @@ export const Withdrawn: Story = {
     withdrawnReason: '別の手順で索引を作り直せたので、migrate は要らなくなった',
   },
 };
+
+/** 時刻の位置に画面が用意した表示を差し込む口（`time`）。渡すと `Timestamp` は出ない。 */
+export const CustomTime: Story = {
+  args: {
+    ...base,
+    state: 'unanswered',
+    time: (
+      <>
+        <span>2026/09/30 05:06</span>
+        <span>(42 分前)</span>
+      </>
+    ),
+  },
+};
+
+/** `error`（回答欄の下）と `trailing`（そのさらに下。画面では会話のパネル）。 */
+export const WithErrorAndTrailing: Story = {
+  args: {
+    ...base,
+    state: 'unanswered',
+    error: <p className="text-sm text-destructive">送れなかった: 通信に失敗した</p>,
+    trailing: (
+      <div className="mt-3 border-t border-border pt-3 text-[11px] text-muted-foreground">
+        この確認が上がった会話（画面が差し込む）
+      </div>
+    ),
+  },
+};

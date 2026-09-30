@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
@@ -95,13 +95,13 @@ export function formatCreatedAt(createdAt: MemorySummary['createdAt']): string {
  * list` だけ）。
  *
  * **`unknown` の倒れ先はそのまま。** 「不明」に経過を添えると、読めないのに
- * 何かが分かったかのような値（例えば `0分前`）を作ることになる——`formatElapsed`
- * が読めない ISO を「不明」に倒すのと同じ理由で、ここでも `known` のときだけ
+ * 何かが分かったかのような値（例えば `0分前`）を作ることになる——`formatElapsedAgo`
+ * が読めない ISO を「経過不明」に倒すのと同じ理由で、ここでも `known` のときだけ
  * 添える。
  */
 function formatCreatedAtWithElapsed(createdAt: MemorySummary['createdAt'], now: number): string {
   if (createdAt.kind === 'known') {
-    return `${createdAt.at}（${formatElapsed(createdAt.at, now)}前）`;
+    return `${createdAt.at}（${formatElapsedAgo(createdAt.at, now)}）`;
   }
   return formatCreatedAt(createdAt);
 }
@@ -351,7 +351,12 @@ export async function memoryRemoveCommand(slug: string): Promise<void> {
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`記憶を消せませんでした: ${slug}（HTTP ${String(response.status)}）`);
+    throw new Error(
+      await withErrorReason(
+        `記憶を消せませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
   }
   stdout.write(`消しました: ${slug}\n`);
 }
@@ -405,7 +410,12 @@ async function write(
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`);
+    throw new Error(
+      await withErrorReason(
+        `書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
   }
   stdout.write(`書き換えました: ${slug}\n`);
   // **どこに効くかを言う。** 記憶はクローンのシステムプロンプトに載るので、

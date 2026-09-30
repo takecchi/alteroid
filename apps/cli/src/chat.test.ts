@@ -5207,6 +5207,36 @@ describe('chat の /archive', () => {
       expect(text).not.toContain('消しました');
     });
 
+    /**
+     * issue #2172 と同じ穴（PR #2175 が他の口で直したもの）。404・409 以外
+     * （400・5xx 等）は状態コードだけを見せず、サーバの `{ error }` の文を
+     * そのまま出す（`errorDetail`）。
+     */
+    it('404・409 以外はサーバの理由（{ error }）をそのまま出す', async () => {
+      const serverError = captureStdout();
+      const { client: serverErrorClient } = stubClient({
+        archiveRemoveStatus: 500,
+        archiveRemoveBody: { error: '生ログの削除が失敗した（archive remove のテスト用）' },
+      });
+      await runSlashCommand('/archive remove sess-1.jsonl', serverErrorClient, emptyListed());
+      const serverErrorText = serverError();
+      vi.restoreAllMocks();
+
+      const badRequest = captureStdout();
+      const { client: badRequestClient } = stubClient({
+        archiveRemoveStatus: 400,
+        archiveRemoveBody: { error: 'overrideReason が長すぎる（archive remove のテスト用）' },
+      });
+      await runSlashCommand('/archive remove sess-1.jsonl', badRequestClient, emptyListed());
+      const badRequestText = badRequest();
+
+      expect(serverErrorText).toContain('生ログの削除が失敗した（archive remove のテスト用）');
+      expect(badRequestText).toContain('overrideReason が長すぎる（archive remove のテスト用）');
+      // 状態コードだけの表示（旧文言）へ戻していないこと。
+      expect(serverErrorText).not.toContain('消せませんでした');
+      expect(badRequestText).not.toContain('消せませんでした');
+    });
+
     it('理由を付けて打ち直すと overrideReason を送り、override した旨を出す', async () => {
       const read = captureStdout();
       const { calls, client } = stubClient({

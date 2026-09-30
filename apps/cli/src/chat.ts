@@ -38,7 +38,7 @@ import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/un
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo } from './format.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
@@ -1355,7 +1355,9 @@ export async function runSlashCommand(
           return 'ok';
         }
         if (!response.ok) {
-          stdout.write(`消せませんでした (${response.status})\n`);
+          // 404・409 以外（400・5xx 等）はサーバの理由（`errorDetail`）をそのまま出す
+          // （issue #2172 / PR #2175 と同じ形）。状態コードだけでは何が悪いか分からない。
+          stdout.write(`${await errorDetail(response)}\n`);
           return 'ok';
         }
         const result = await response.json();
@@ -3365,7 +3367,7 @@ export function renderCommitments(
     // 一覧を読むときに効くのはそこで、ISO を足したから要らなくなるものではない。
     lines.push(
       `      id: ${commitment.id}  起点: ${from}  作成: ${commitment.at}` +
-        `（${formatElapsed(commitment.at, now)}前）  更新: ${commitmentUpdatedAt(commitment)}`,
+        `（${formatElapsedAgo(commitment.at, now)}）  更新: ${commitmentUpdatedAt(commitment)}`,
     );
     if (closed) {
       lines.push(

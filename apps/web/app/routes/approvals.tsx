@@ -4,15 +4,13 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import {
-  Markdown,
+  ApprovalCard as ApprovalCardView,
   Page,
-  Badge,
   Button,
   Card,
   Empty,
   ErrorNote,
   Spinner,
-  Textarea,
   cn,
 } from '@alteroid/ui';
 import {
@@ -163,7 +161,7 @@ export default function Approvals() {
         <ul className="flex flex-col gap-3">
           {data.approvals.map((approval) => (
             <li key={approval.id}>
-              <ApprovalCard
+              <ApprovalEntry
                 approval={approval}
                 draft={drafts[approval.id] ?? ''}
                 onDraftChange={(text) => setDraft(approval.id, text)}
@@ -178,7 +176,19 @@ export default function Approvals() {
   );
 }
 
-function ApprovalCard({
+/**
+ * 承認の1件。見た目は `@alteroid/ui` の `ApprovalCard`（Twin Plate）に任せ、ここは
+ * データの取り方と送り方だけを持つ。
+ *
+ * **今の画面の表示をそのまま出すために、部品の省略可能な口を使っている。**
+ * - `time`: 時刻は `formatDateTime` と `formatRelative`（`@alteroid/logic`）の2つの
+ *   span のまま。時間帯は閲覧者の端末に任せる（部品の `Timestamp` は JST 固定）
+ * - `isSubmitKey`: 送るキーは `(metaKey || ctrlKey) && key === 'Enter'` のまま。
+ *   部品の既定（`isSubmitShortcut`）は IME の確定の Enter を除くが、それを入れるかは
+ *   この置き換えでは決めない
+ * - `trailing`: 会話のパネルは、エラーの後ろ（カードのいちばん下）に置く
+ */
+function ApprovalEntry({
   approval,
   draft,
   onDraftChange,
@@ -200,6 +210,9 @@ function ApprovalCard({
 
   const answered = isAnswered(approval);
   const withdrawn = isWithdrawn(approval);
+  // 取り下げ済み（#963）は回答済みと別の終端。両方 true の行は無い想定だが、
+  // 来たら今までどおり取り下げを優先する。
+  const state = withdrawn ? 'withdrawn' : answered ? 'answered' : 'unanswered';
 
   async function submit(text: string) {
     if (text.trim() === '') return;
@@ -215,197 +228,95 @@ function ApprovalCard({
     }
   }
 
-  return (
-    <Card className="p-4">
-      {/*
-        **本3 で `Badge` に `shrink-0` が入り、縮まなくなった。** メタ行の
-        バッジ（未回答/回答済/取り下げ済）は文字数を持たないので普段は
-        問題ないが、`job {jobId}` は `z.string()` に長さの上限が無く、他の
-        バッジ・時刻表示と合わせて `flex-wrap` が無いと押し出す側へ振れる。
-        同じ画面の `:98`（`flex flex-wrap items-center gap-3 ...`）に既に
-        在る流儀へ揃える。
+  // エラーは今までどおり、個別の失敗 → まとめ送信の失敗の順に、それぞれ別の
+  // ErrorNote で出す。どちらも無いときは何も渡さない（部品は `error` が在ると
+  // 余白の箱を出すので、空の箱を作らない）。
+  const hasFailure = failure !== undefined && failure !== null;
+  const errors =
+    hasFailure || bulkError !== undefined ? (
+      <>
+        <ErrorNote error={failure} />
+        {bulkError !== undefined && (
+          <ErrorNote
+            error={`まとめて送った回答は通らなかった: ${bulkError}`}
+            className={hasFailure ? 'mt-2' : undefined}
+          />
+        )}
+      </>
+    ) : undefined;
 
-        **取り下げ済み（`accent`）を回答済み（`neutral`）と別のトーンにする
-        （#963）。** 両方とも「もう待っていない」点は同じだが、次の一手が
-        違う——回答済みは人間が既に応えた終端、取り下げ済みはクローンが
-        自分で不要と判断した終端で、混同すると「答えたのに何も起きて
-        いない」ように見える。
-      */}
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        <Badge tone={withdrawn ? 'accent' : answered ? 'neutral' : 'warn'}>
-          {withdrawn ? '取り下げ済' : answered ? '回答済' : '未回答'}
-        </Badge>
-        <span>{formatDateTime(approval.createdAt)}</span>
-        <span>({formatRelative(approval.createdAt)})</span>
-        {/*
-          **`jobId` を委譲の詳細へつなぐ（issue #2041）。** `jobId` はマネージャー id
-          である（`packages/core/src/schema.ts` の `pendingApprovalSchema` の doc
-          「どのマネージャーの件か（= manager_id）」。積むのは
-          `packages/core/src/tools.ts` の `jobId: managerId` だけ）。
-          `commitments.tsx` の `OriginBadge`（issue #2028）と同じ作法で、文言は
-          1文字も変えず id の部分だけを `<Link>` にする。
-        */}
-        {approval.jobId !== undefined && approval.jobId !== null && (
-          <span className="font-mono">
+  return (
+    <ApprovalCardView
+      state={state}
+      time={
+        <>
+          <span>{formatDateTime(approval.createdAt)}</span>
+          <span>({formatRelative(approval.createdAt)})</span>
+        </>
+      }
+      /*
+        **`jobId` を委譲の詳細へつなぐ（issue #2041）。** `jobId` はマネージャー id
+        である（`packages/core/src/schema.ts` の `pendingApprovalSchema` の doc
+        「どのマネージャーの件か（= manager_id）」。積むのは
+        `packages/core/src/tools.ts` の `jobId: managerId` だけ）。
+        `commitments.tsx` の `OriginBadge`（issue #2028）と同じ作法で、文言は
+        1文字も変えず id の部分だけを `<Link>` にする。
+      */
+      jobLink={
+        approval.jobId !== undefined && approval.jobId !== null ? (
+          <>
             {'job '}
             <Link to={`/managers/${approval.jobId}`} className="hover:underline">
               {approval.jobId}
             </Link>
-          </span>
-        )}
-      </div>
-
-      {/*
-        **クローン（AI）が書いた文字列だけを Markdown で描く。** `question` は
-        クローンが書いた設問なのでこの線の内側である（線そのものの根拠は下の
-        `answer` の側のコメントに在る）。
-
-        **`whitespace-pre-wrap` は外してよい。** `Markdown` は `remark-breaks` を
-        積んでいて単独の改行を `<br>` にするので、行区切りはこれまでどおり保たれる
-        （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
-      */}
-      <Markdown>{approval.question}</Markdown>
-
-      {approval.context !== undefined && approval.context !== null && approval.context !== '' && (
-        /*
-          `context` もクローンが書いた文字列なので Markdown で描く。
-
-          **スクロールの箱（`max-h-48 overflow-y-auto`）は残す。** 外すと長い背景が
-          回答欄を画面外へ押し出す。`packages/ui/src/components/page.tsx`
-          （`grep -Fn -- 'スクロールへ閉じ込める' packages/ui/src/components/page.tsx`）と
-          `apps/web/app/routes/manager-detail.tsx` の `RequestCard` が同じ流儀 —
-          **文字は1つも捨てず、スクロールへ閉じ込める。**
-
-          `min-w-0` は中の表・コードブロックが `overflow-x-auto` で収まるため
-          （`markdown.tsx` の `table` / `pre` が横スクロールを持つ）。`text-xs` は
-          落とす — `Markdown` のルートが `text-sm` を持つので、外から掛けても効かない。
-        */
-        <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded border border-border bg-background p-2 text-muted-foreground">
-          <Markdown>{approval.context}</Markdown>
-        </div>
-      )}
-
-      {withdrawn ? (
-        /*
-          **クローンが取り下げた件（#963）。** 回答欄は出さない——`answered`の
-          分岐と同じ理由で、取り下げも「もう入力を受け付ける状態ではない」
-          終端である。`withdrawnReason` はクローンが書いた自由文だが、
-          `answer`（人間の発言）と同じ枠に置くので素のテキストのままにする
-          （Markdown にするかどうかで枠の意味を変えない）。
-        */
-        <p className="mt-3 rounded border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
-          <span className="mr-2 text-[11px] text-muted-foreground">取り下げた理由</span>
-          {approval.withdrawnReason ?? '（理由の記録なし）'}
-        </p>
-      ) : answered ? (
-        /*
-          **`answer` は Markdown にしない。** これは人間が打った文だからである。
-          repo の既存方針が `apps/web/app/routes/chat.tsx`
-          （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
-          に逐語で在る —
-          「**クローンの行だけを Markdown にする。** 人間が打った本文
-          （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
-          勝手に化けないため」。`question` / `context` はクローンが書いた文字列
-          なので線の内側だが、`answer` は外側である。**「承認待ちも全部 Markdown に
-          しよう」と思ったら、まずその行を読むこと**（`approvals.test.tsx` の
-          「answer は Markdown の描画経路を通らない」がこの判断を押さえている）。
-
-          **`whitespace-pre-wrap` は Markdown 化とは別の、不具合の修正である。**
-          `packages/ui/src/styles.css` の `white-space` 指定は `pre` に対する1件だけで
-          `p` を狙う規則が無いため、ここは CSS 既定の `white-space: normal` で
-          描かれていた — 人間が改行を入れて答えても1行に潰れていた（`question` /
-          `context` には効いていたのに `answer` だけ無いという見落としである）。
-        */
-        <>
-          <p className="mt-3 rounded border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
-            <span className="mr-2 text-[11px] text-muted-foreground">回答</span>
-            {approval.answer}
-          </p>
-          {/*
-            **回答経路（Issue #1479）。** 記録が無い（`answeredVia` を持たない古い
-            経路で答えられた）行では出さない——「わからない」を「operator では
-            ない」に化けさせない（`packages/core/src/schema.ts` の
-            `answeredViaSchema` の doc）。`describeAnsweredVia` は
-            `@alteroid/core/answered-via`（ブラウザが読む軽い口。
-            `packages/core/tsup.config.ts` の doc）から import する——
-            `@alteroid/core` バレルからの値 import はサーバ専用のドメイン層を
-            引き込むので禁じている（行動一覧の `describeTraceAction`
-            ——`@alteroid/core/trace-action`——と同じ理由・同じパターン。
-            issue #1528 でこちらも正本を1つに揃えた）。
-          */}
-          {approval.answeredVia && (
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              回答経路: {describeAnsweredVia(approval.answeredVia)}
-            </p>
-          )}
-        </>
-      ) : (
-        <div className="mt-3">
-          <Textarea
-            rows={2}
-            value={draft}
-            placeholder="答える（書いておくと「まとめて送る」の対象になる。この場ですぐ送ってもよい）"
-            onChange={(event) => onDraftChange(event.target.value)}
-            onKeyDown={(event) => {
-              // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
-              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                event.preventDefault();
-                void submit(draft);
-              }
-            }}
-          />
-          {/*
-            **本3 で `Button` が狭い画面で `h-11`（44px）になり、以前より
-            横幅を食う。** ボタン3つ＋ショートカット表示が横一列に並ぶこの行は
-            折り返さないと画面外へ出る側へ振れるので `flex-wrap` を足す。
-          */}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              loading={busy}
-              disabled={draft.trim() === ''}
-              onClick={() => void submit(draft)}
-            >
-              回答する
-            </Button>
-            <Button size="sm" disabled={busy} onClick={() => void submit('はい、進めてよい')}>
-              許可
-            </Button>
-            <Button size="sm" disabled={busy} onClick={() => void submit('いいえ、やらないで')}>
-              却下
-            </Button>
-            <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter</span>
-          </div>
-        </div>
-      )}
-
-      {/*
+          </>
+        ) : undefined
+      }
+      question={approval.question}
+      context={approval.context ?? undefined}
+      answer={approval.answer ?? undefined}
+      /*
+        **回答経路（Issue #1479）。** 記録が無い（`answeredVia` を持たない古い
+        経路で答えられた）行では渡さない——「わからない」を「operator では
+        ない」に化けさせない（`packages/core/src/schema.ts` の
+        `answeredViaSchema` の doc）。部品は `!== undefined` で判定するので、
+        今の画面の truthy 判定はここで保つ。`describeAnsweredVia` は
+        `@alteroid/core/answered-via`（ブラウザが読む軽い口）から import する——
+        `@alteroid/core` バレルからの値 import はサーバ専用のドメイン層を
+        引き込むので禁じている。
+      */
+      answeredVia={approval.answeredVia ? describeAnsweredVia(approval.answeredVia) : undefined}
+      withdrawnReason={approval.withdrawnReason ?? undefined}
+      draft={draft}
+      onDraftChange={onDraftChange}
+      onSubmit={(text) => void submit(text)}
+      busy={busy}
+      // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
+      // IME の確定の Enter を除くかは #2259 で決める（ここは今の判定のまま）。
+      isSubmitKey={(event) => (event.metaKey || event.ctrlKey) && event.key === 'Enter'}
+      /*
         **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
         出し、開いたときだけ読む（`useApprovalTrace` の doc）。
-      */}
-      {answered && !withdrawn && <TracePanel approvalId={approval.id} />}
-
-      <ErrorNote error={failure} className="mt-2" />
-      {bulkError !== undefined && (
-        <ErrorNote error={`まとめて送った回答は通らなかった: ${bulkError}`} className="mt-2" />
-      )}
-
-      {/*
+      */
+      footer={state === 'answered' ? <TracePanel approvalId={approval.id} /> : undefined}
+      error={errors}
+      /*
         **この確認が上がった会話（issue #782 の3）。** 承認だけを見ていると、
         クローンが実際にこの人間と何を話していたかが分からない。4状態を
         別々に出す（`ConversationPanel` の doc）。
-      */}
-      <div className="mt-3 border-t border-border pt-3">
-        {approval.conversationId === undefined || approval.conversationId === null ? (
-          <p className="text-[11px] text-muted-foreground italic">
-            この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
-          </p>
-        ) : (
-          <ConversationPanel conversationId={approval.conversationId} />
-        )}
-      </div>
-    </Card>
+      */
+      trailing={
+        <div className="mt-3 border-t border-border pt-3">
+          {approval.conversationId === undefined || approval.conversationId === null ? (
+            <p className="text-[11px] text-muted-foreground italic">
+              この確認は会話に紐づいていない（マネージャー発・内部ターンには紐づけられる会話が存在しない）
+            </p>
+          ) : (
+            <ConversationPanel conversationId={approval.conversationId} />
+          )}
+        </div>
+      }
+    />
   );
 }
 
