@@ -687,8 +687,8 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
   /**
    * **⭐ 人間の指示で名指しされた歯。** 「AIが書いたものはマークダウンで
    * 表示する」の裏返しとして、人間が書いた本文は化けさせない
-   * （`apps/web/app/routes/chat.tsx`
-   * （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+   * （`packages/ui/src/components/features/chat/chat-message.tsx`
+   * （`grep -Fn -- 'クローンの行だけを Markdown にする' packages/ui/src/components/features/chat/chat-message.tsx`）
    * と同じ線）。
    */
   it('起点が人間（human）の本文は Markdown の描画経路を通らない', async () => {
@@ -827,7 +827,7 @@ describe('本文を origin で Markdown / 素のテキストへ切り分ける',
 
   /**
    * `closedBy: 'human'` は素のテキストのまま
-   * （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`
+   * （`grep -Fn -- 'クローンの行だけを Markdown にする' packages/ui/src/components/features/chat/chat-message.tsx`
    * と同じ線 — 人間が打った文字を化けさせない）。`whitespace-pre-wrap` も保つ。
    */
   it('closedReason は closedBy が human のとき素のテキストのまま（whitespace-pre-wrap を保つ）', async () => {

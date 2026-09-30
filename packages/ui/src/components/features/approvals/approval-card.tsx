@@ -149,8 +149,8 @@ export function ApprovalCard({
       ) : state === 'answered' ? (
         /*
           **`answer` は Markdown にしない。** これは人間が打った文だからである。
-          repo の既存方針が `apps/web/app/routes/chat.tsx`
-          （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+          repo の既存方針が `packages/ui/src/components/features/chat/chat-message.tsx`
+          （`grep -Fn -- 'クローンの行だけを Markdown にする' packages/ui/src/components/features/chat/chat-message.tsx`）
           に逐語で在る —
           「**クローンの行だけを Markdown にする。** 人間が打った本文
           （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
