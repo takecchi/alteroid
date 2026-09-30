@@ -7,6 +7,37 @@ import type {
 import type { UsageBreakdown, UsageRow, UsageTotals, UsageTurnRow } from './usage.js';
 
 /**
+ * 台帳でクローンを名指す actor の id。
+ *
+ * **ブラウザが読めるようにこのファイルに置く**（`usage.ts` から再輸出している。
+ * 画面が `mgr-` の接頭辞で委譲かどうかを見分けていたのを、この値との比較へ寄せるため —
+ * Issue #2269）。
+ *
+ * 台帳の actor 列は `managerId` という名前のままである（既存の行・API・CLI・
+ * 画面が読んでいる名前を変えるのは別の作業になる）。**名前はマネージャーの
+ * ものだが、意味は「誰の分か」の一般名である** — どの層の分かは `layer` が言う。
+ *
+ * マネージャーの id は `mgr-` に続けて発行される（`manager.ts`）ので、この値
+ * （接頭辞を持たない）とは衝突しない。**衝突しないことは偶然ではなく、
+ * テストで固定してある。** ただしこれが固定しているのは `mgr-` 名前空間と
+ * この値が衝突しないことだけである — `mgr-` 名前空間の内部の一意性は
+ * `manager.ts` の `#claimManagerId` の doc が持つ（#238）。
+ */
+export const CLONE_ACTOR_ID = 'clone';
+
+/**
+ * 台帳・日誌の `managerId`（「誰の分か」の一般名）が、**委譲（マネージャー）の id か**。
+ *
+ * **接頭辞（`mgr-`）で見分けない**（Issue #2269）。接頭辞は発行側の既定
+ * （`manager.ts` の `#generateManagerId`）にすぎず、差し替えれば `mgr-` で始まらない id が
+ * 委譲に付く。クローンの分は {@link CLONE_ACTOR_ID} に決まっているので、それ以外を
+ * 委譲として扱う。画面（日誌のリンク・使用量の「マネージャー別」）はこの1つの関数を共有する。
+ */
+export function isDelegationActorId(managerId: string): boolean {
+  return managerId !== CLONE_ACTOR_ID;
+}
+
+/**
  * 層（**誰が**）と場所（**どこで**）の取りうる値。**この2本が唯一の一覧である。**
  *
  * 意味と「なぜこの値しか無いか」は `usage.ts` の `usageLayerSchema` /

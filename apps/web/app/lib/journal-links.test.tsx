@@ -77,6 +77,29 @@ describe('journalEntryLinks（issue #2064）', () => {
     ]);
   });
 
+  /**
+   * **`mgr-` で始まらない委譲の id でもつなぐ（Issue #2269）。** id の発行は差し替えられる
+   * （`ManagerPoolOptions.generateManagerId`）ので、接頭辞は委譲の証拠にならない。
+   * クローンの id（`clone`）だけがつながらない。
+   */
+  it('mgr- で始まらない委譲の id でもつなぎ、クローンの id はつながない', () => {
+    const base: JournalEntry = {
+      type: 'turn_usage',
+      id: 't-3',
+      at: AT,
+      layer: 'manager',
+      site: 'session',
+      managerId: 'job-7f3a',
+      models: MODELS,
+    };
+    expect(journalEntryLinks(base)).toEqual([
+      { to: '/managers/job-7f3a', label: '委譲 job-7f3a の詳細', short: '委譲' },
+    ]);
+    expect(journalEntryLinks({ ...base, id: 't-4', layer: 'clone', managerId: 'clone' })).toEqual(
+      [],
+    );
+  });
+
   it('memory_update は slug の記憶（いまの版）へつなぐ', () => {
     const entry: JournalEntry = {
       type: 'memory_update',

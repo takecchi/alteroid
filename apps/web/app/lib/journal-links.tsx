@@ -1,3 +1,4 @@
+import { isDelegationActorId } from '@alteroid/core/usage';
 import { Link } from 'react-router';
 
 import type { JournalEntry } from '@alteroid/logic';
@@ -26,8 +27,9 @@ export interface JournalLink {
  * 開閉の `<button>` なので、その中へリンクを入れると入れ子の対話要素に
  * なる。リンクは開いた後の領域に置く。
  *
- * - **`managerId` は `mgr-` の接頭辞を持つものだけ。** `turn_usage` /
- *   `context_usage` の `managerId` は「誰の分か」の一般名で、クローンの分は
+ * - **`managerId` は、クローンの id（`CLONE_ACTOR_ID`）ではないものだけ**
+ *   （`isDelegationActorId`。`mgr-` の接頭辞では見分けない — Issue #2269）。
+ *   `turn_usage` / `context_usage` の `managerId` は「誰の分か」の一般名で、クローンの分は
  *   `CLONE_ACTOR_ID` になる（`packages/core/src/schema.ts` の doc。見分けの
  *   根拠は `packages/core/src/usage.ts` の `CLONE_ACTOR_ID` の doc）。
  *   種別を名指しせず欄の有無で見るので、`managerId` を持つ種別が増えても
@@ -39,7 +41,7 @@ export interface JournalLink {
 export function journalEntryLinks(entry: JournalEntry): JournalLink[] {
   const links: JournalLink[] = [];
   const managerId = (entry as { managerId?: unknown }).managerId;
-  if (typeof managerId === 'string' && managerId.startsWith('mgr-')) {
+  if (typeof managerId === 'string' && isDelegationActorId(managerId)) {
     links.push({
       to: `/managers/${managerId}`,
       label: `委譲 ${managerId} の詳細`,

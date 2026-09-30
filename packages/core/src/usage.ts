@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 // 再輸出（下）とは別に、この中でも使うので取り込む。
 import {
+  CLONE_ACTOR_ID,
   USAGE_DATE_PATTERN,
   USAGE_ESTIMATE_NOTICE,
   USAGE_LAYERS,
@@ -73,6 +74,7 @@ import { settleWithin } from './usage-probe.js';
  */
 export {
   ACCOUNT_USAGE_TITLE,
+  CLONE_ACTOR_ID,
   USAGE_DATE_PATTERN,
   USAGE_ESTIMATE_NOTICE,
   USAGE_UNREADABLE_FIELDS,
@@ -86,6 +88,7 @@ export {
   describeWebSearchRequests,
   findUnrecordedManagers,
   formatUsd,
+  isDelegationActorId,
   sumUsageRows,
   summarizeUsage,
   usageDate,
@@ -221,21 +224,6 @@ export type UsageLayer = z.infer<typeof usageLayerSchema>;
 export const usageSiteSchema = z.enum(USAGE_SITES);
 
 export type UsageSite = z.infer<typeof usageSiteSchema>;
-
-/**
- * 台帳でクローンを名指す actor の id。
- *
- * 台帳の actor 列は `managerId` という名前のままである（既存の行・API・CLI・
- * 画面が読んでいる名前を変えるのは別の作業になる）。**名前はマネージャーの
- * ものだが、意味は「誰の分か」の一般名である** — どの層の分かは `layer` が言う。
- *
- * マネージャーの id は `mgr-` に続けて発行される（`manager.ts`）ので、この値
- * （接頭辞を持たない）とは衝突しない。**衝突しないことは偶然ではなく、
- * テストで固定してある。** ただしこれが固定しているのは `mgr-` 名前空間と
- * この値が衝突しないことだけである — `mgr-` 名前空間の内部の一意性は
- * `manager.ts` の `#claimManagerId` の doc が持つ（#238）。
- */
-export const CLONE_ACTOR_ID = 'clone';
 
 /**
  * クローンが**自分の道具の中で起こしたサブエージェント**を名指す接頭辞。

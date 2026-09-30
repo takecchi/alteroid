@@ -305,6 +305,30 @@ describe('/usage 画面', () => {
   });
 
   /**
+   * **`mgr-` で始まらない委譲の id でも、マネージャー別の行は詳細へつながる（Issue #2269）。**
+   * クローンの id（`clone`）の行だけがつながらない。
+   */
+  it('マネージャー別は、mgr- で始まらない委譲の id もリンクにし、clone の行はしない', async () => {
+    stubUsage({
+      rows: [
+        row(2, { managerId: 'job-7f3a' }),
+        row(1, { managerId: 'clone', layer: 'clone', site: 'distill' }),
+      ],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: 'マネージャー別' });
+    const managers = axisCard('マネージャー別');
+    const link = within(managers).getByRole('link', { name: 'job-7f3a' });
+    expect(link.getAttribute('href')).toBe('/managers/job-7f3a');
+    expect(within(managers).queryByRole('link', { name: 'clone' })).toBeNull();
+    expect(within(managers).getAllByRole('link')).toHaveLength(1);
+  });
+
+  /**
    * **マネージャー別の id を委譲の詳細へつなぐ（issue #2046）。** マネージャーの
    * 行（`mgr-…`）だけがリンクになり、クローンの分（`CLONE_ACTOR_ID` ＝ `clone`）は
    * 委譲ではないのでリンクにしない。`title`（全文の出口）は両方とも残る。

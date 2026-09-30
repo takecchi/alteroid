@@ -6,6 +6,7 @@ import {
   describeUsageDateOrder,
   describeWebSearchRequests,
   formatUsd,
+  isDelegationActorId,
   isRealUsageDate,
   summarizeUsage,
   USAGE_DATE_PATTERN,
@@ -594,12 +595,10 @@ function UsageBody({
             になる（`packages/core/src/usage.ts` の `usageRowSchema` の doc）。
             その行は委譲ではないので `/managers/<id>` へは飛ばさない。
 
-            **`mgr-` の接頭辞で見分ける。** マネージャーの id は `mgr-` に続けて
-            発行され、`CLONE_ACTOR_ID` とは衝突しない（`usage.ts` の
-            `CLONE_ACTOR_ID` の doc）。`CLONE_ACTOR_ID` そのものはブラウザの口
-            （`@alteroid/core/usage` ＝ `usage-format.ts`）から出ていないので比べない。
-            見分けられない id は倒れ先として文字のまま出す（リンクが無いだけで、
-            文言は1文字も変わらない）。
+            **クローンの id（`CLONE_ACTOR_ID`）ではないものを委譲とする**
+            （`isDelegationActorId`。日誌のリンクと同じ1つの関数。`mgr-` の接頭辞では
+            見分けない — Issue #2269）。この軸には層が無く、クローンの分は
+            `CLONE_ACTOR_ID` に決まっている（`usage.ts` の `CLONE_ACTOR_ID` の doc）。
           */}
           <AxisCard
             title="マネージャー別"
@@ -608,7 +607,7 @@ function UsageBody({
               .map((entry) => ({
                 label: entry.managerId,
                 costUsd: entry.totals.costUsd,
-                ...(entry.managerId.startsWith('mgr-')
+                ...(isDelegationActorId(entry.managerId)
                   ? { href: `/managers/${entry.managerId}` }
                   : {}),
               }))}
