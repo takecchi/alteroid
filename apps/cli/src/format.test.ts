@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatElapsed } from './format.js';
+import { errorReason, formatElapsed, withErrorReason } from './format.js';
 
 /**
  * `formatElapsed` の単体（issue #2141 段1）。
@@ -39,5 +39,30 @@ describe('formatElapsed', () => {
 
   it('読めない ISO は「不明」——0分前のように読める値を作らない', () => {
     expect(formatElapsed('not-a-real-timestamp', NOW)).toBe('不明');
+  });
+});
+
+describe('errorReason / withErrorReason', () => {
+  const json = (body: unknown) => ({ json: () => Promise.resolve(body) });
+
+  it('{ error: 文字列 } の理由を取り出し、既存の文言の後ろへ足す', async () => {
+    expect(await errorReason(json({ error: '台帳が壊れている' }))).toBe('台帳が壊れている');
+    expect(await withErrorReason('失敗しました（500）', json({ error: '台帳が壊れている' }))).toBe(
+      '失敗しました（500）: 台帳が壊れている',
+    );
+  });
+
+  it('読めない本文（JSON でない・error が無い・空文字）は null で、既存の文言をそのまま返す', async () => {
+    const notJson = { json: () => Promise.reject(new SyntaxError('Unexpected token <')) };
+    for (const response of [
+      notJson,
+      json({}),
+      json({ error: '' }),
+      json({ error: 500 }),
+      json(null),
+    ]) {
+      expect(await errorReason(response)).toBeNull();
+      expect(await withErrorReason('失敗しました（500）', response)).toBe('失敗しました（500）');
+    }
   });
 });

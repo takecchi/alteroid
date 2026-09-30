@@ -3,6 +3,7 @@ import { stdout } from 'node:process';
 import { describePermissionRuleBreadth, type PermissionGrant } from '@alteroid/core';
 
 import { createClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -44,7 +45,9 @@ export async function permissionListCommand(options: PermissionListOptions = {})
   const response = await client['permission-grants'].$get();
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
-    stdout.write(`${described ?? `許可の一覧を読めませんでした（${response.status}）`}\n`);
+    stdout.write(
+      `${described ?? (await withErrorReason(`許可の一覧を読めませんでした（${response.status}）`, response))}\n`,
+    );
     return;
   }
   const { grants } = (await response.json()) as { grants: PermissionGrant[] };
@@ -91,7 +94,9 @@ export async function permissionRevokeCommand(id: string): Promise<void> {
     if (response.status === 404) throw new Error(`該当する許可がありません: ${id}`);
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`許可を取り消せませんでした（${response.status}）`);
+    throw new Error(
+      await withErrorReason(`許可を取り消せませんでした（${response.status}）`, response),
+    );
   }
   stdout.write(`許可を取り消しました: ${id}\n`);
   // **即座に効く。** `#onPreToolUse` は毎回ストアを引き直すので、キャッシュされた

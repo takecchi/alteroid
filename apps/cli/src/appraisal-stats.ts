@@ -3,6 +3,7 @@ import { stdout } from 'node:process';
 import { describeAppraisalStats } from '@alteroid/core';
 
 import { createClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -41,7 +42,7 @@ export async function appraisalStatsCommand(): Promise<void> {
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
     stdout.write(
-      `${described ?? `評定の内訳を読めませんでした（HTTP ${String(response.status)}）`}\n`,
+      `${described ?? (await withErrorReason(`評定の内訳を読めませんでした（HTTP ${String(response.status)}）`, response))}\n`,
     );
     return;
   }
