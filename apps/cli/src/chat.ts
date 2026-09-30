@@ -1355,7 +1355,9 @@ export async function runSlashCommand(
           return 'ok';
         }
         if (!response.ok) {
-          stdout.write(`消せませんでした (${response.status})\n`);
+          // 404・409 以外（400・5xx 等）はサーバの理由（`errorDetail`）をそのまま出す
+          // （issue #2172 / PR #2175 と同じ形）。状態コードだけでは何が悪いか分からない。
+          stdout.write(`${await errorDetail(response)}\n`);
           return 'ok';
         }
         const result = await response.json();
