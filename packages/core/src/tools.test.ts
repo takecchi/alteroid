@@ -11146,6 +11146,125 @@ describe('runner_list（器の一覧）', () => {
   });
 
   /**
+   * **`notFired`（#2352）の表示。** 3つの形を固定する——全部在る・判定材料が無い
+   * （`held` / `bySid` / `observeOnly` が欄ごと無い）・`notFired` 自体が無い。
+   */
+  describe('resources.tasks.reclaim.notFired', () => {
+    const reclaimBase = {
+      mode: 'observe' as const,
+      candidates: 5,
+      candidateThreads: 9,
+      signalled: 0,
+      killed: 0,
+      freedThreads: 0,
+      lastRunAt: 1_767_225_600_000,
+    };
+    const listWith = async (notFired?: Record<string, unknown>) => {
+      const h = harness();
+      h.setRunnersOverview({
+        runners: [
+          {
+            label: 'runner-a',
+            revision: { status: 'unheard' },
+            state: 'connected',
+            since: '2026-01-01T00:00:00.000Z',
+            runnerId: 'runner-a',
+            managers: [],
+            resources: {
+              pids: { current: 999, max: 1000 },
+              tasks: {
+                threads: 999,
+                processes: 96,
+                zombies: 0,
+                reclaim: { ...reclaimBase, ...(notFired === undefined ? {} : { notFired }) },
+              },
+            },
+          },
+        ],
+        unassigned: [],
+        daemonRevision: { status: 'unknown' },
+      } as never);
+      return h.call('runner_list', { resources: true });
+    };
+
+    it('全部在れば、孤児ルート外・hold・observe の3行が候補の行の下に出る', async () => {
+      const reply = await listWith({
+        outsideRoots: {
+          total: 3,
+          parentInScan: 1,
+          bySid: {
+            wouldFire: 1,
+            sidUnknown: 0,
+            sidLive: 1,
+            sidLeaderPresent: 1,
+            sidUnrecognised: 0,
+          },
+        },
+        held: { sidUnknown: 1, sidLive: 1, sidLeaderPresent: 1, sidUnrecognised: 1 },
+        observeOnly: 1,
+      });
+
+      expect(reply).toContain(
+        '孤児ルート外: 3（うち親が生存 1。孤児ルートの部分木に入らず、撃つ判定に掛からない）' +
+          '。仮に孤児ルートに入っていたら: 撃つ 1 / sid 不明 0 / sid が live 1 / ' +
+          'sid の長が残存 1 / sid 未認識 0',
+      );
+      expect(reply).toContain(
+        'hold（候補のうち撃たなかった理由）: sid 不明 1 / sid が live 1 / ' +
+          'sid の長が残存 1 / sid 未認識 1',
+      );
+      expect(reply).toContain('observe なので撃たなかった: 1');
+      expect(reply).not.toContain('判定材料');
+      expect(reply.indexOf('孤児ルート外')).toBeGreaterThan(reply.indexOf('孤児（観測のみ'));
+    });
+
+    it('held / bySid / observeOnly が欄ごと無ければ、0 と書かず「出せない」と1行だけ添える', async () => {
+      const reply = await listWith({ outsideRoots: { total: 3, parentInScan: 1 } });
+
+      expect(reply).toContain(
+        '孤児ルート外: 3（うち親が生存 1。孤児ルートの部分木に入らず、撃つ判定に掛からない）\n',
+      );
+      expect(reply).not.toContain('仮に孤児ルートに入っていたら');
+      expect(reply).not.toContain('hold（');
+      expect(reply).not.toContain('observe なので撃たなかった');
+      expect(reply).toContain(
+        'hold の内訳: この走査には判定材料（live / 終端済みの sid）が渡っていないので出せない',
+      );
+    });
+
+    it('held だけ無ければ、hold の行を作らず、在る欄（bySid / observeOnly）は出る', async () => {
+      const reply = await listWith({
+        outsideRoots: {
+          total: 2,
+          parentInScan: 0,
+          bySid: {
+            wouldFire: 2,
+            sidUnknown: 0,
+            sidLive: 0,
+            sidLeaderPresent: 0,
+            sidUnrecognised: 0,
+          },
+        },
+        observeOnly: 2,
+      });
+
+      expect(reply).toContain('孤児ルート外: 2（うち親が生存 0。');
+      expect(reply).toContain('仮に孤児ルートに入っていたら: 撃つ 2 /');
+      expect(reply).not.toContain('hold（');
+      expect(reply).toContain('observe なので撃たなかった: 2');
+    });
+
+    it('notFired 自体が無ければ（古い runner）、3行とも出ない', async () => {
+      const reply = await listWith();
+
+      expect(reply).toContain('孤児（観測のみ。撃たない）');
+      expect(reply).not.toContain('孤児ルート外');
+      expect(reply).not.toContain('hold');
+      expect(reply).not.toContain('observe なので');
+    });
+  });
+
+  /**
    * **`reclaim` が無い回では、孤児の行そのものを出さない。** 欄が無いのは
    * 「切ってある」か「走査が読めなかった」かのどちらかで、**どちらも「0本だった」
    * ではない**（`tasks.reclaim` の doc）。ここで 0 に潰すと、その区別が消える。

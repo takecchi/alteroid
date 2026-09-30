@@ -13446,6 +13446,48 @@ export function createCloneTools(context: ToolContext) {
                         `中央値 ${describeZombieAge(reclaim.medianAgeSec)} / ${buckets}`,
                     );
                   }
+                  /*
+                   * **撃たれなかった木の内訳（#2352）。表示だけで、判定は runner が持つ。**
+                   * `notFired` が無い runner（古い版）では3行とも出さない。
+                   *
+                   * - `held` / `bySid` / `observeOnly` は、runner が判定材料を渡されていない
+                   *   回には欄ごと無い——**0 に潰さず、行を出さない**。`held` が無いときだけ
+                   *   「材料が無いので出せない」と1行添える（`notFired` は在るので、古い版
+                   *   とは区別できる。`observeOnly` の欠けは撃つ構えでも起きるので、
+                   *   そちらには添えない——理由を言い切れない）。
+                   * - 在る欄の0は「数えて0本だった」（取れなかったのではない）。
+                   */
+                  const { notFired } = reclaim;
+                  if (notFired !== undefined) {
+                    const { outsideRoots, held, observeOnly } = notFired;
+                    const bySid =
+                      outsideRoots.bySid === undefined
+                        ? ''
+                        : `。仮に孤児ルートに入っていたら: 撃つ ${outsideRoots.bySid.wouldFire} / ` +
+                          `sid 不明 ${outsideRoots.bySid.sidUnknown} / ` +
+                          `sid が live ${outsideRoots.bySid.sidLive} / ` +
+                          `sid の長が残存 ${outsideRoots.bySid.sidLeaderPresent} / ` +
+                          `sid 未認識 ${outsideRoots.bySid.sidUnrecognised}`;
+                    lines.push(
+                      `    孤児ルート外: ${outsideRoots.total}（うち親が生存 ` +
+                        `${outsideRoots.parentInScan}。孤児ルートの部分木に入らず、撃つ判定に掛からない）` +
+                        bySid,
+                    );
+                    if (held !== undefined) {
+                      lines.push(
+                        `    hold（候補のうち撃たなかった理由）: sid 不明 ${held.sidUnknown} / ` +
+                          `sid が live ${held.sidLive} / sid の長が残存 ${held.sidLeaderPresent} / ` +
+                          `sid 未認識 ${held.sidUnrecognised}`,
+                      );
+                    } else {
+                      lines.push(
+                        '    hold の内訳: この走査には判定材料（live / 終端済みの sid）が渡っていないので出せない',
+                      );
+                    }
+                    if (observeOnly !== undefined) {
+                      lines.push(`    observe なので撃たなかった: ${observeOnly}`);
+                    }
+                  }
                 }
               }
             }
