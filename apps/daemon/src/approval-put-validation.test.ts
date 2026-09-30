@@ -1,10 +1,10 @@
 import { createMemoryStores, type JobStore, type PendingApproval } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb } from '@alteroid/storage-pg';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { makeTempDir } from '../../../vitest.tmpdir.js';
-import { createMigratedPglite } from './pglite-template.test-support.js';
+import { createMigratedPglite, migratedTemplate } from './pglite-template.test-support.js';
 
 /**
  * `JobStore.putApproval()` の3実装の食い違い（issue #2012、#1715 の族）。
@@ -27,6 +27,12 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * ここは1ファイル・1本の `it.each` で済む）。
  */
 describe('JobStore.putApproval() — 必須欄が欠けた approval の扱い（3実装。issue #2012）', () => {
+  // PGlite の雛形（WASM の起動＋migrate）は、ワーカーで最初に呼んだ歯が払う。
+  // 歯の本体（既定 5000ms）でなく hook（明示 30_000ms）で払わせる（issue #2337）。
+  beforeAll(async () => {
+    await migratedTemplate();
+  }, 30_000);
+
   // `question`（必須）が無い——実行時にしか検査できない違反（TS の型では
   // 弾けないので `as unknown as PendingApproval` で通す）。他の必須欄
   // （`id` / `createdAt`）は有効な値のまま——検査したいのは `question` の
