@@ -11217,6 +11217,8 @@ describe('runner_list（器の一覧）', () => {
       );
       expect(reply).toContain('observe なので撃たなかった: 1');
       expect(reply).not.toContain('判定材料');
+      // 先に `孤児（観測のみ` の行が在ることを確かめる（#2009 と同じ型。無いと `n > -1` で素通りする）。
+      expect(reply).toContain('孤児（観測のみ');
       expect(reply.indexOf('孤児ルート外')).toBeGreaterThan(reply.indexOf('孤児（観測のみ'));
     });
 

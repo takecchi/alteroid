@@ -4,6 +4,8 @@ import {
   buildDenialInputHead,
   DENIAL_INPUT_HEAD_LIMIT,
   matchInputOf,
+  redactErrorText,
+  redactSecretsInText,
 } from './denial-input-head.js';
 import { expectNotSuperlinear } from './time-growth.test-support.js';
 
@@ -523,5 +525,78 @@ describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issu
   it('`.` で区切られた長い連なり（ユーザー名の位置）でも、入力の長さに比例して終わる', () => {
     linear((n) => `x ${'a.'.repeat(n)}:b`);
     linear((n) => `x ${'a.'.repeat(n)}:${'p'.repeat(n)}`);
+  });
+});
+
+// 値はすべて偽である。
+describe('redactSecretsInText / redactErrorText（issue #2415）', () => {
+  it('redactSecretsInText は buildDenialInputHead と同じ伏せ字（切らない）', () => {
+    const text = `x postgres://app:FAKE_SECRET_VALUE_2415B@db.internal/app ${'y'.repeat(300)}`;
+    const out = redactSecretsInText(text, undefined);
+    expect(out).toBe(`x postgres://app:[REDACTED]@db.internal/app ${'y'.repeat(300)}`);
+  });
+
+  it('redactSecretsInText は params: を落とさない（道具の入力の契約を変えない）', () => {
+    expect(redactSecretsInText('params: a,b', undefined)).toBe('params: a,b');
+  });
+
+  it('env の秘密らしい名前の値を伏せる', () => {
+    const env = { MY_API_TOKEN: 'FAKE_SECRET_VALUE_2415B', LANG: 'C.UTF-8' };
+    expect(redactErrorText('failed with FAKE_SECRET_VALUE_2415B', env)).toBe(
+      'failed with [REDACTED]',
+    );
+  });
+
+  it('drizzle の形: params: 以降を落とし、SQL 文は残し、落とした印を残す', () => {
+    const text =
+      'Failed query: insert into "t" ("a") values ($1)\nparams: hunter2,FAKE_SECRET_VALUE_2415B';
+    expect(redactErrorText(text, undefined)).toBe(
+      'Failed query: insert into "t" ("a") values ($1)\nparams: [REDACTED]',
+    );
+  });
+
+  it('params: が同じ行に続く形も落とす', () => {
+    const out = redactErrorText(
+      'Failed query: select 1 params: FAKE_SECRET_VALUE_2415B',
+      undefined,
+    );
+    expect(out).toBe('Failed query: select 1 params: [REDACTED]');
+  });
+
+  it('params: の無い文は、伏せ字以外を変えない', () => {
+    expect(redactErrorText('connect ECONNREFUSED 127.0.0.1:5432', undefined)).toBe(
+      'connect ECONNREFUSED 127.0.0.1:5432',
+    );
+  });
+
+  it('URL の資格と Bearer は伏せ、host は残す', () => {
+    const out = redactErrorText(
+      'connect postgres://u:FAKE_SECRET_VALUE_2415B@db.internal:5432/x; Authorization: Bearer FAKE_SECRET_VALUE_2415B',
+      undefined,
+    );
+    expect(out).not.toContain('FAKE_SECRET_VALUE_2415B');
+    expect(out).toContain('db.internal:5432');
+  });
+
+  // 伏せ字は長い入力の全文にかかる。`params:` の規則も2乗にしない。
+  const linear = (make: (n: number) => string) =>
+    expectNotSuperlinear((text: string) => redactErrorText(text, undefined), make, { n: 2000 });
+
+  it('`params:` の長い繰り返しでも、入力の長さに比例して終わる', () => {
+    linear((n) => `x ${'params:'.repeat(n)}`);
+    linear((n) => `${'params: a\n'.repeat(n)}`);
+    linear((n) => `${'params'.repeat(n)}`);
+    linear((n) => `${'xparams:'.repeat(n)}`);
+  });
+
+  it('`params:` の後ろが長い・改行が多い入力でも、入力の長さに比例して終わる', () => {
+    linear((n) => `Failed query: select 1\nparams: ${'a,'.repeat(n)}`);
+    linear((n) => `params:${'\n'.repeat(n)}`);
+  });
+
+  it('URL の資格・トークンの規則を通る長い入力でも、入力の長さに比例して終わる', () => {
+    linear((n) => `x ${'a.'.repeat(n)}b`);
+    linear((n) => `${'a:b@'.repeat(n)}c`);
+    linear((n) => `${'Bearer '.repeat(n)}`);
   });
 });

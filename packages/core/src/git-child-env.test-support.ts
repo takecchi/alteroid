@@ -1,6 +1,4 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 /**
  * `write-canon.test.ts` が本物の `git` を子として起こすときに渡す共通の env
@@ -23,11 +21,16 @@ import { join } from 'node:path';
  * `journal-scan.test-support.ts` と同じ命名——テスト専用の補助で、
  * `tsup.config.ts` の `entry` には載せず、公開 API（`package.json` の
  * `exports`）にも出さない。
+ *
+ * ## 後片付け（#2419）
+ *
+ * 偽の `HOME` は `vitest.tmpdir.ts` の `makeTempDirSync` で作る。そのテスト
+ * ファイルの最後に `vitest.setup.ts` の `afterAll` が消す。
  */
 let fakeHome: string | undefined;
 
 function getFakeHome(): string {
-  fakeHome ??= mkdtempSync(join(tmpdir(), 'alteroid-git-child-env-'));
+  fakeHome ??= makeTempDirSync('alteroid-git-child-env-');
   return fakeHome;
 }
 
