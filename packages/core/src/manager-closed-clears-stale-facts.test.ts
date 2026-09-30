@@ -167,7 +167,20 @@ async function listedOf(pool: ManagerPool, managerId: string) {
   return found;
 }
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+/**
+ * closed の知らせが pool の記録に反映されるのを、時間ではなく条件で待つ
+ * （実時間の待ちを足さない。#2146）。`until` は「この回の反映が済んだら真」。
+ */
+async function listedWhen(
+  pool: ManagerPool,
+  managerId: string,
+  until: (m: Awaited<ReturnType<typeof listedOf>>) => boolean,
+) {
+  await vi.waitFor(async () => {
+    if (!until(await listedOf(pool, managerId))) throw new Error('closed の反映がまだ');
+  });
+  return listedOf(pool, managerId);
+}
 
 const FIRST_SYSTEM_ERROR: SystemErrorFacts = {
   code: 'EAGAIN',
@@ -183,17 +196,15 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
       cgroupEvents: { pidsMaxDelta: 3 },
       systemError: FIRST_SYSTEM_ERROR,
     });
-    await settle();
-    const first = await listedOf(pool, 'mgr-twice');
+    const first = await listedWhen(pool, 'mgr-twice', (m) => m.lastCgroupEvents !== undefined);
     expect(first.lastCgroupEvents).toMatchObject({ pidsMaxDelta: 3 });
     expect(first.lastSystemError).toMatchObject({ code: 'EAGAIN' });
 
     // resume され、report が一度も届かないまま、欄の無い failed で閉じる。
     fake.revive('mgr-twice');
     fake.closed('mgr-twice', 'failed');
-    await settle();
-
-    const second = await listedOf(pool, 'mgr-twice');
+    // 2回目の反映が済んだ印は、1回目の値が下りたこと（#2463 の直しそのもの）。
+    const second = await listedWhen(pool, 'mgr-twice', (m) => m.lastCgroupEvents === undefined);
     // `manager_list` / `manager_report` はこの欄が undefined のとき
     // `CGROUP_EVENTS_UNKNOWN_NOTE`（判定できなかった）を出す。
     expect(second.status).toBe('failed');
@@ -213,16 +224,14 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
       cgroupEvents: { pidsMaxDelta: 3 },
       systemError: FIRST_SYSTEM_ERROR,
     });
-    await settle();
+    await listedWhen(pool, 'mgr-replace', (m) => m.lastCgroupEvents?.pidsMaxDelta === 3);
 
     fake.revive('mgr-replace');
     fake.closed('mgr-replace', 'failed', {
       cgroupEvents: { oomKillDelta: 2 },
       systemError: { code: 'ENOMEM' },
     });
-    await settle();
-
-    const second = await listedOf(pool, 'mgr-replace');
+    const second = await listedWhen(pool, 'mgr-replace', (m) => m.lastCgroupEvents?.oomKillDelta === 2);
     expect(second.lastCgroupEvents?.oomKillDelta).toBe(2);
     expect(second.lastCgroupEvents?.pidsMaxDelta).toBeUndefined();
     expect(second.lastSystemError?.code).toBe('ENOMEM');
@@ -238,13 +247,11 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
       cgroupEvents: { pidsMaxDelta: 3 },
       systemError: FIRST_SYSTEM_ERROR,
     });
-    await settle();
+    await listedWhen(pool, 'mgr-then-done', (m) => m.lastCgroupEvents?.pidsMaxDelta === 3);
 
     fake.revive('mgr-then-done');
     fake.closed('mgr-then-done', 'done');
-    await settle();
-
-    const after = await listedOf(pool, 'mgr-then-done');
+    const after = await listedWhen(pool, 'mgr-then-done', (m) => m.status === 'done');
     expect(after.lastCgroupEvents).toBeUndefined();
     expect(after.lastSystemError).toBeUndefined();
 
