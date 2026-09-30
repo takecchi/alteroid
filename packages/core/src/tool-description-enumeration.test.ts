@@ -167,6 +167,10 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'memory_list',
     why: '説明文が名乗る一覧が実装側に配列として存在しない（保護状態の言い方は describeMemoryProtectionStatus が持つが、説明文はその値を列挙していない）。ふるまいの歯は tools.test.ts の memory_list の節が持つ',
   },
+  {
+    tool: 'progress_read',
+    why: '説明文が名乗る一覧（enum・配列）が無い。窓の既定は引数の説明が DEFAULT_PROGRESS_WINDOW_HOURS から作る。ふるまいの歯は progress-read.test.ts が持つ',
+  },
   { tool: 'memory_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_append', why: '実装側に、説明文が数え直すような一覧が無い' },
