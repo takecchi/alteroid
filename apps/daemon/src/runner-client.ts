@@ -1748,8 +1748,13 @@ class HttpRunner implements RunnerClient {
   async profile(): Promise<RunnerProfileFingerprint | undefined> {
     const response = await this.#call('GET', '/health');
     const body = (await response.json()) as HealthBody;
+    // **欄が在るのに形が読めなかったときは投げる（#2508）。** `undefined`（何も載って
+    // いない）へ倒すと、呼び出し側（`syncRunner`）が「外したプロファイルと一致」と読み、
+    // 外したはずのプロファイルが runner に残り続ける。欄が無いときは従来どおり `undefined`。
+    if (body.profile === undefined || body.profile === null) return undefined;
     const parsed = runnerProfileFingerprintSchema.safeParse(body.profile);
-    return parsed.success ? parsed.data : undefined;
+    if (!parsed.success) throw new Error('runner の /health の profile の欄を読めなかった');
+    return parsed.data;
   }
 
   /**

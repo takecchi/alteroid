@@ -5,7 +5,12 @@ import {
   type ProfileApplier,
   type ProfileApplyResult,
 } from './profile.js';
-import type { RunnerClient, RunnerProfileResult, RunnerRegistry } from './runner-protocol.js';
+import type {
+  RunnerClient,
+  RunnerProfileFingerprint,
+  RunnerProfileResult,
+  RunnerRegistry,
+} from './runner-protocol.js';
 import type { EnvProfile, Stores } from './store.js';
 
 /**
@@ -287,11 +292,22 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         const stored = await stores.profile.read();
         const script = stored?.script ?? '';
 
-        // 既に同じものが載っていれば触らない。
-        const current = await runner.profile().catch(() => undefined);
+        // 既に同じものが載っていれば触らない。指紋が**読めなかった**ときは「差がある」に
+        // 倒す（降ろす）。
+        //
+        // **「読めなかった」を `undefined`（何も載っていない）に潰さない（#2508）。**
+        // 潰すと `script` が空（外した）のとき「一致」になり、外したはずのプロファイル
+        // （鍵を含みうる）が runner に残り続ける。空を降ろすのは外す向きなので安全側である。
+        let unreadable = false;
+        let current: RunnerProfileFingerprint | undefined;
+        try {
+          current = await runner.profile();
+        } catch {
+          unreadable = true;
+        }
         const same =
           script.length === 0 ? current === undefined : current?.sha256 === fingerprintOf(script);
-        if (same) return null;
+        if (!unreadable && same) return null;
 
         return runner.setProfile(script);
       }),

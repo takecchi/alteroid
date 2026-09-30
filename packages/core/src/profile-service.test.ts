@@ -461,4 +461,44 @@ describe('降ろし直し', () => {
     expect(await service.syncRunner(runner)).toBeNull();
     expect(runner.received).toHaveLength(1);
   });
+
+  it('プロファイルが空で、指紋が読めなくても、「何も載っていない」と読まず、空を降ろす（#2508）', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, runners: registryOf([runner]) });
+
+    // runner には外したはずのプロファイルが載っている。正本は空。
+    await runner.setProfile('export FAKE_SECRET_VALUE_2508=1');
+    const held = runner.profile.bind(runner);
+    runner.received.length = 0;
+    runner.profile = async () => {
+      throw new Error('health unreadable (test)');
+    };
+
+    await service.syncRunner(runner);
+
+    expect(runner.received).toEqual(['']);
+    runner.profile = held;
+    expect(await runner.profile()).toBeUndefined();
+  });
+
+  it('対照: 空で、読めて何も載っていなければ何もしない', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, runners: registryOf([runner]) });
+
+    expect(await service.syncRunner(runner)).toBeNull();
+    expect(runner.received).toEqual([]);
+  });
+
+  it('対照: 空で、読めて載っていれば空を降ろす', async () => {
+    const stores = createMemoryStores();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, runners: registryOf([runner]) });
+
+    await runner.setProfile('export FAKE_SECRET_VALUE_2508=1');
+    runner.received.length = 0;
+    await service.syncRunner(runner);
+    expect(runner.received).toEqual(['']);
+  });
 });
