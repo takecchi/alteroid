@@ -6,9 +6,8 @@
  * `approvals.test.tsx` が見ていない差だけをここに置く（そちらは変えていない）:
  *
  * 1. 時刻は `formatDateTime` と `formatRelative` の2つの span（部品の `Timestamp` = `<time>` ではない）
- * 2. 送るキーは `(metaKey || ctrlKey) && key === 'Enter'`。IME の確定の Enter を除く
- *    部品の既定（`isSubmitShortcut`）は使わない。**除くべきかはこのテストでは決めない**
- *    ——今の振る舞いを固定しているだけである
+ * 2. 送るキーは `(metaKey || ctrlKey) && key === 'Enter'` で、IME の確定の Enter は送信に
+ *    数えない（部品の既定 `isSubmitShortcut`。issue #2259 で会話・約束の入力欄に揃えた）
  * 3. エラーは「個別の失敗」→「まとめ送信の失敗」の順に別々に出し、どちらも無ければ出さない。
  *    その後ろに会話のパネルが来る
  */

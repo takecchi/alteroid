@@ -183,9 +183,8 @@ export default function Approvals() {
  * **今の画面の表示をそのまま出すために、部品の省略可能な口を使っている。**
  * - `time`: 時刻は `formatDateTime` と `formatRelative`（`@alteroid/logic`）の2つの
  *   span のまま。時間帯は閲覧者の端末に任せる（部品の `Timestamp` は JST 固定）
- * - `isSubmitKey`: 送るキーは `(metaKey || ctrlKey) && key === 'Enter'` のまま。
- *   部品の既定（`isSubmitShortcut`）は IME の確定の Enter を除くが、それを入れるかは
- *   この置き換えでは決めない
+ * - `isSubmitKey` は渡さない。部品の既定（`isSubmitShortcut`）に任せ、IME の確定の
+ *   ⌘/Ctrl + Enter は送信に数えない（issue #2259。会話・約束の入力欄と同じ）
  * - `trailing`: 会話のパネルは、エラーの後ろ（カードのいちばん下）に置く
  */
 function ApprovalEntry({
@@ -291,9 +290,8 @@ function ApprovalEntry({
       onDraftChange={onDraftChange}
       onSubmit={(text) => void submit(text)}
       busy={busy}
-      // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
-      // IME の確定の Enter を除くかは #2259 で決める（ここは今の判定のまま）。
-      isSubmitKey={(event) => (event.metaKey || event.ctrlKey) && event.key === 'Enter'}
+      // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter（部品の既定
+      // `isSubmitShortcut`）。IME の確定の Enter は送信に数えない（issue #2259）。
       /*
         **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに
         出し、開いたときだけ読む（`useApprovalTrace` の doc）。
