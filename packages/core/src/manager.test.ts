@@ -4396,14 +4396,19 @@ describe('前のセッションへ戻れなかったとき（M4 受け入れ基�
     expect(await second.pool.restore()).toEqual([]);
     // resume を投げ直していない（同じ死体をもう一度起こしに行かない）。
     expect(second.opened).toHaveLength(0);
-    // 同じ通知も積み直さない（一度知らせたことを毎回言い直さない）。
-    expect(second.inbox.filter((event) => event.type === 'manager_message')).toEqual([]);
-
     // **「終わった」ではない。** クローンが起こし直す対象として見分けられる。
     const listed = (await second.pool.list()).find((m) => m.managerId === 'mgr-lost');
     expect(listed).toMatchObject({ status: 'lost', live: false });
 
+    // 同じ通知も積み直さない（一度知らせたことを毎回言い直さない）。
+    // **これは `restore()` の直後には測れない。** 戻せなかった知らせは即配られず
+    // 合流窓（既定 3000ms）へ積まれるので、積み直す回帰が入っても窓が満ちるまで
+    // 受信箱は空のままで、直後に見た `[]` は何も測らない（PR #2310 の作業者が上げた
+    // 範囲外の指摘）。`stop()` は窓に積んだ知らせを同期的に配り切る
+    // （`#flushSynthesizedNotices`）ので、**止めた後**に見れば、窓の長さにも
+    // 器の混み具合にも依らず「積まれていたものは全部届いた後」の受信箱を見られる。
     await second.pool.stop();
+    expect(second.inbox.filter((event) => event.type === 'manager_message')).toEqual([]);
   });
 
   it('送信に失敗した直後の一覧が、lost を live: true へ格上げしない', async () => {
