@@ -155,6 +155,23 @@ function fakeSdk() {
   return { fn, sessions };
 }
 
+/**
+ * **合流窓の長さを、このファイルでは既定（3000ms）ではなく短く取る。**
+ *
+ * このファイルの26本が測っているのは「窓の後に受信箱へ届く**中身**」（本文・台帳・
+ * 畳んだ記録）であって、窓が何ミリ秒かではない。既定のまま実時間で待つと1本あたり
+ * 約3秒（ファイル全体で約76秒）を窓の満了待ちに使っていた。窓そのものの長さ（既定
+ * 3000ms・窓の中の合流・窓の外の別扱い）は、`synthesized-notice-window-ms.test.ts`
+ * （`resolveSynthesizedNoticeWindowMs` の既定）と `manager-synthesized-notices.test.ts`
+ * （窓の長さが日誌に「窓の長さ 3000ms」と出ること・30ms 窓の境界）が持つ。
+ *
+ * **0 に近づけすぎない。** 「一枠落ち一合図」は `usage_notice` と `turn_failed` が
+ * 同じ窓の中で1件にまとまることに頼っており、窓が両者の間隔より短いと2件に割れて
+ * 「受信箱に立つのは1件」の検算が器の混み具合で揺れる。100ms は同じ1回の
+ * `dispatch` の中の連続した2回の emit を跨ぐには十分に長く、3000ms よりは十分に短い。
+ */
+const TEST_NOTICE_WINDOW_MS = 100;
+
 function setup(): {
   pool: ReturnType<typeof createManagerPool>;
   stores: Stores;
@@ -176,6 +193,7 @@ function setup(): {
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
+    synthesizedNoticeWindowMs: TEST_NOTICE_WINDOW_MS,
   });
   return { pool, stores, sessions, inbox };
 }
@@ -212,8 +230,10 @@ async function reportTexts(inbox: InboxEvent[], expected: number): Promise<strin
       return found.map((entry) => (entry as { text: string }).text);
     },
     // **失敗した回の報告は機構が合成した知らせ（`synthesized: 'turn_failed'`）
-    // として合流窓（既定3000ms）に積まれる**（「一枠落ち一合図」）。`vi.waitFor`
-    // の既定（1000ms）ではこの窓を待ちきれないので明示的に伸ばす。
+    // として合流窓に積まれる**（「一枠落ち一合図」）。窓は `setup()` で
+    // `TEST_NOTICE_WINDOW_MS`（100ms）に絞ってあるので、既定（3000ms）を待つための
+    // 4000ms は要らない。ただし器が混んだときの余裕として伸ばしたままにしてある
+    // （成功すれば待たずに返る）。
     { timeout: 4000 },
   );
 }

@@ -146,6 +146,12 @@ async function setup(): Promise<{
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
+    // 合流窓は既定（3000ms）ではなく短く取る。この describe 群が測るのは「同じ内容を二度
+    // 配らない・違う内容は取りこぼさない」（配った事実の記憶）であって窓の長さではない。
+    // 判定は窓の手前で同期に決まる（`push` のコメント）ので、窓を縮めても保証は変わらない。
+    // 窓そのものは `synthesized-notice-window-ms.test.ts` / `manager-synthesized-notices.test.ts`
+    // が持つ。既定のまま実時間で待つと配達1回ごとに約3秒かかっていた。
+    synthesizedNoticeWindowMs: 100,
   });
   await pool.start({ request: '枠の知らせを観測する' });
   const session = await vi.waitFor(() => {

@@ -154,6 +154,11 @@ function setup(options: { getContextUsage?: (callIndex: number) => unknown } = {
     stores,
     post: (event) => inbox.push(event),
     runners: registry,
+    // 合流窓は既定（3000ms）ではなく短く取る。ここが測るのは contextUsage の配線であって
+    // 窓の長さではない（窓は `synthesized-notice-window-ms.test.ts` /
+    // `manager-synthesized-notices.test.ts` が持つ）。`runner-failure.test.ts` の
+    // `TEST_NOTICE_WINDOW_MS` と同じ理由・同じ値。
+    synthesizedNoticeWindowMs: 100,
   });
   return { pool, stores, sessions, inbox };
 }
@@ -222,7 +227,7 @@ describe('委譲層（ランナー）の contextUsage 配線（Issue #977 / #976
 
     // 何らかの跡（報告・通知）が届くまで待ってから確かめる——即座に見ると
     // 「まだ処理していないだけ」と「本当に無い」が区別できない。
-    // **既定の合流窓（3000ms）より長く取る**（`runner-failure.test.ts` の
+    // **合流窓（`setup()` で 100ms に絞ってある）より長く取る**（`runner-failure.test.ts` の
     // `reportTexts` と同じ理由——分類できなかった失敗の報告は
     // `synthesized: 'turn_failed'` として合流窓を挟んでから配られる）。
     await vi.waitFor(

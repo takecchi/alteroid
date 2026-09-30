@@ -142,6 +142,11 @@ async function setupTwoTokens(): Promise<{
     post: (event) => inbox.push(event),
     runners: registry,
     tokenIdentity: () => active,
+    // 合流窓は既定（3000ms）ではなく短く取る。ここが測るのは記憶の鍵（トークンを跨ぐか）と
+    // 「配ったか・畳んだか」であって窓の長さではない（冒頭の ⚠️ のとおり、窓は測っていない）。
+    // 窓そのものは `synthesized-notice-window-ms.test.ts` / `manager-synthesized-notices.test.ts`
+    // が持つ。既定のまま実時間で待つと配達1回ごとに約3秒かかっていた。
+    synthesizedNoticeWindowMs: 100,
   });
 
   await pool.start({ request: '古い鍵で走り続ける委譲' });
