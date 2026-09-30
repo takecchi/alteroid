@@ -469,6 +469,35 @@ describe('alteroid token policy', () => {
     expect(text).not.toContain('回す契機:');
     expect(sent.some((call) => call.method === 'PUT')).toBe(false);
   });
+
+  /**
+   * Web の同じ画面（PR #2120）と揃える——読めないときは「消えたのではなく、
+   * 読めない形で入っている」ことと、CLI での直し方を出す。`list` と `policy`
+   * （引数無し）は同じ関数から出すので、2つの出力が同じ案内を含むことを測る。
+   */
+  it('設定が読めないとき、policy（引数無し）と list の両方が「読めない形で入っている」と直し方を出す', async () => {
+    const REASON = 'rotateOn が enum の外（テスト用）';
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: { tokens: [], settingsUnreadable: { reason: REASON } },
+    });
+
+    const readPolicy = captureStdout();
+    await tokenPolicyCommand(undefined, {});
+    const policyText = readPolicy();
+
+    const readList = captureStdout();
+    await tokenListCommand();
+    const listText = readList();
+
+    for (const text of [policyText, listText]) {
+      expect(text).toContain('消えたのではなく、読めない形で入っている');
+      expect(text).toContain(REASON);
+      expect(text).toContain('alteroid token policy');
+      expect(text).toContain('--cooldown-ms');
+      expect(text).toContain('free_exhausted|overage_exhausted|off');
+    }
+  });
 });
 
 /**

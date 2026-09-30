@@ -38,6 +38,7 @@ const { initWorkspace } = await import('@alteroid/storage-fs');
 const daemon = await import('./daemon.js');
 const { initCommand, daemonStartCommand, daemonStopCommand, daemonStatusCommand, program } =
   await import('./index.js');
+const { SETTINGS_UNREADABLE_FIX_COMMAND } = await import('./token.js');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -378,5 +379,30 @@ describe('サブコマンドの登録（入口が在ること）', () => {
     expect(optionsOf('start')).toEqual(['--force']);
     expect(optionsOf('stop')).toEqual([]);
     expect(optionsOf('status')).toEqual([]);
+  });
+
+  /**
+   * 「回転の設定は読めない」の案内が指すコマンドが、`token policy` の引数解釈で
+   * 実際に受け付けられること（案内が腐らないように）。フラグを改名・削除したら
+   * 案内が存在しないフラグを指す——それを赤にする。
+   */
+  it('token policy の読めないとき案内は、登録済みのフラグと位置引数だけを指す', () => {
+    const tokenCmd = program.commands.find((c) => c.name() === 'token');
+    const policy = tokenCmd?.commands.find((c) => c.name() === 'policy');
+    expect(policy).toBeDefined();
+
+    const words = SETTINGS_UNREADABLE_FIX_COMMAND.split(' ');
+    expect(words.slice(0, 3)).toEqual(['alteroid', 'token', 'policy']);
+
+    const flags = words.filter((w) => w.startsWith('--'));
+    expect(flags).toEqual(['--cooldown-ms']);
+    const registered = (policy?.options ?? []).map((o) => o.long);
+    for (const flag of flags) expect(registered).toContain(flag);
+
+    // フラグの直後の値と、位置引数（回す契機）が1つ。それ以外の語は無い。
+    const positionals = words
+      .slice(3)
+      .filter((w, i, all) => !w.startsWith('--') && all[i - 1] !== '--cooldown-ms');
+    expect(positionals).toHaveLength(policy?.registeredArguments.length ?? -1);
   });
 });

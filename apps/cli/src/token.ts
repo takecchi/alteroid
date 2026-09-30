@@ -75,6 +75,29 @@ interface AgentTokenInput {
   disabled?: boolean;
 }
 
+/**
+ * 回転の設定が読めないときに出す案内（`token list` と `token policy`（引数無し）が
+ * 同じ関数から出す。片方だけ直る形にしない）。
+ *
+ * **「消えたのではなく、読めない形で入っている」と言う。** 空欄と壊れた値を混同
+ * すると、設定したことが無いと誤読する（Web の同じ画面と同じ言い方。PR #2120）。
+ *
+ * **直し方は `--cooldown-ms` と回す契機の両方を渡す形だけ。** 読めない現在値は、
+ * 両方揃った入力でしか上書きできない（片方だけだと読めない現在値を埋められない。
+ * `TokenPoolService.setSettings` の doc）。案内するフラグは
+ * `index.test.ts` が `token policy` の登録と突き合わせている。
+ */
+export const SETTINGS_UNREADABLE_FIX_COMMAND =
+  'alteroid token policy <free_exhausted|overage_exhausted|off> --cooldown-ms <ミリ秒>';
+
+export function describeSettingsUnreadable(reason: string | undefined): string {
+  return (
+    `回転の設定は読めない（消えたのではなく、読めない形で入っている）: ${reason ?? '理由不明'}\n` +
+    `直すには、回す契機と冷却の既定の両方を指定して保存し直す（片方だけでは保存できない）:\n` +
+    `  ${SETTINGS_UNREADABLE_FIX_COMMAND}\n`
+  );
+}
+
 export async function tokenListCommand(): Promise<void> {
   const target = await resolveTarget();
   const view = (await request(target, '/tokens')) as TokensView;
@@ -83,7 +106,7 @@ export async function tokenListCommand(): Promise<void> {
   // 理由だけを出す——きちんとした表示は Web 側の別 Issue の領域なので、
   // ここでは落ちずに理由を出すところまでにとどめる。
   if (view.settings === undefined) {
-    stdout.write(`回転の設定は読めない: ${view.settingsUnreadable?.reason ?? '理由不明'}\n`);
+    stdout.write(describeSettingsUnreadable(view.settingsUnreadable?.reason));
   } else {
     stdout.write(
       `回す契機: ${view.settings.rotateOn}（resetsAt が取れないときの冷却の既定 ${String(view.settings.cooldownMs)}ms）\n`,
@@ -259,11 +282,11 @@ export async function tokenPolicyCommand(
 
   if (value === undefined && options.cooldownMs === undefined) {
     const current = (await request(target, '/tokens')) as TokensView;
-    // **既定値で埋めない**（issue #2095）。読めないときは理由を出す——直すには
-    // `alteroid token policy <値> --cooldown-ms <値>` で両方を指定し直す
-    // （読めない現在値を読まずに書ける。`TokenPoolService.setSettings` の doc）。
+    // **既定値で埋めない**（issue #2095）。読めないときは理由と直し方を出す
+    // （`describeSettingsUnreadable`。終了コードは 0 のまま——読み取りは成功して
+    // おり、`token list` と揃える）。
     if (current.settings === undefined) {
-      stdout.write(`回転の設定は読めない: ${current.settingsUnreadable?.reason ?? '理由不明'}\n`);
+      stdout.write(describeSettingsUnreadable(current.settingsUnreadable?.reason));
       return;
     }
     printSettings(current.settings);
