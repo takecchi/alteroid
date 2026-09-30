@@ -100,23 +100,30 @@ const slimGroupIds = new Set(Object.keys(tailwindMergeConfig.classGroups));
 
 /**
  * 既定の設定で、class 本体がどのグループに属するかを求める。tailwind-merge はそれを公開して
- * いないので、**挙動で測る**: 既定の全グループに1本ずつ「探り針」のグループ（`zzprobe<n>` という
- * class）を足し、グループ G が衝突する先に G の探り針を足す。探り針を全部並べた後ろへ測りたい
- * class を置いて `twMerge` にかけると、その class が属するグループの探り針だけが消える。
+ * いないので、**挙動で測る**: グループ G の番号 `n = index + 1` を2進数で表し、n の立っている
+ * ビット k ごとに「探り針」のグループ（`zzprobe<k>` という class）を1本ずつ用意して、G が衝突する
+ * 先へ足す。探り針を全部並べた後ろへ測りたい class を置いて `twMerge` にかけると、その class が
+ * 属するグループの番号のビットに当たる探り針だけが消える。消えた探り針から番号を読み戻す。
  * 既定が知らない class は何も消さない（= `undefined`）。
+ *
+ * （以前は全グループに1本ずつ、約 400 本の探り針を並べていた。1 token あたりの `twMerge` が
+ * 探り針の本数に比例するので、番号のビット数（約 9 本）に減らした。答えは同じで、
+ * 実装の差し替え時に旧方式と全 token で一致することを確かめてある。）
  */
-const probeClasses = fullGroupIds.map((_, index) => `zzprobe${index}`);
+const probeBits = Math.ceil(Math.log2(fullGroupIds.length + 1));
+const probeClasses = Array.from({ length: probeBits }, (_, bit) => `zzprobe${bit}`);
 const probeMerge = (() => {
   const classGroups: Config<string, string>['classGroups'] = { ...fullConfig.classGroups };
   const conflictingClassGroups: Config<string, string>['conflictingClassGroups'] = {
     ...fullConfig.conflictingClassGroups,
   };
+  probeClasses.forEach((probe, bit) => {
+    classGroups[`probe${bit}`] = [probe];
+  });
   fullGroupIds.forEach((id, index) => {
-    classGroups[`probe${index}`] = [`zzprobe${index}`];
-    conflictingClassGroups[id] = [
-      ...(fullConfig.conflictingClassGroups[id] ?? []),
-      `probe${index}`,
-    ];
+    const number = index + 1;
+    const bits = probeClasses.flatMap((_, bit) => (number & (1 << bit) ? [`probe${bit}`] : []));
+    conflictingClassGroups[id] = [...(fullConfig.conflictingClassGroups[id] ?? []), ...bits];
   });
   return { classGroups, conflictingClassGroups };
 })();
@@ -125,10 +132,11 @@ const probePrefix = probeClasses.join(' ');
 
 function fullGroupOf(baseToken: string): string | undefined {
   const kept = new Set(probeTwMerge(`${probePrefix} ${baseToken}`).split(' '));
-  const gone = probeClasses.flatMap((probe, index) =>
-    kept.has(probe) ? [] : [fullGroupIds[index]],
-  );
-  return gone[0];
+  let number = 0;
+  probeClasses.forEach((probe, bit) => {
+    if (!kept.has(probe)) number |= 1 << bit;
+  });
+  return number === 0 ? undefined : fullGroupIds[number - 1];
 }
 
 const groupTokens = new Map<string, string[]>();
@@ -473,101 +481,87 @@ describe('cn の tailwind-merge 設定（slim）', () => {
 
     it('修飾子付き（hover: / data-[...]: / md: / ! / 任意値 / 順序に敏感な修飾子）', () => {
       const modifiers = [
-        '',
-        'hover:',
-        'md:',
-        'md:hover:',
-        'hover:md:',
-        'dark:',
-        'focus-visible:',
-        'group-hover:',
-        'peer-checked:',
-        'data-[state=open]:',
-        'data-[state=open]:hover:',
-        'aria-invalid:',
-        'aria-[sort=ascending]:',
-        'supports-[display:grid]:',
-        '[&>svg]:',
-        '[&_svg:not([class*=size-])]:',
-        '*:',
-        '**:',
-        'before:',
-        'after:',
-        'file:',
-        'placeholder:',
-        'selection:',
-        'marker:',
-        'backdrop:',
-        'first-line:',
-        'before:hover:',
-        'hover:before:',
-        'after:[&>svg]:',
-        '[&>svg]:after:',
-        'min-[400px]:',
-        'max-md:',
-        '@md:',
-        'has-[>svg]:',
-        'not-hover:',
+        ...new Set([
+          '',
+          'hover:',
+          'md:',
+          'md:hover:',
+          'hover:md:',
+          'dark:',
+          'focus-visible:',
+          'group-hover:',
+          'peer-checked:',
+          'data-[state=open]:',
+          'data-[state=open]:hover:',
+          'aria-invalid:',
+          'aria-[sort=ascending]:',
+          'supports-[display:grid]:',
+          '[&>svg]:',
+          '[&_svg:not([class*=size-])]:',
+          '*:',
+          '**:',
+          'before:',
+          'after:',
+          'file:',
+          'placeholder:',
+          'selection:',
+          'marker:',
+          'backdrop:',
+          'first-line:',
+          'before:hover:',
+          'hover:before:',
+          'after:[&>svg]:',
+          '[&>svg]:after:',
+          'min-[400px]:',
+          'max-md:',
+          '@md:',
+          'has-[>svg]:',
+          'not-hover:',
+          // 既定の `orderSensitiveModifiers` は全て入れる（1つ欠けても、並べ替えの効き方が変わる）
+          ...fullConfig.orderSensitiveModifiers.map((modifier) => `${modifier}:`),
+        ]),
       ];
       const important = ['', '!'];
-      // 衝突しうる組（同じグループ・衝突するグループ）の代表だけを修飾子と掛け合わせる
-      const basics = [
-        'p-4',
-        'px-2',
-        'py-1',
-        'pt-2',
-        'inset-0',
-        'top-1',
-        'inset-x-0',
-        'left-0',
-        'text-sm',
-        'text-red-500',
-        'text-left',
-        'leading-4',
-        'text-sm/6',
-        'bg-card',
-        'bg-[#fff]',
-        'border',
-        'border-2',
-        'border-t',
-        'border-red-500',
-        'rounded',
-        'rounded-t-md',
-        'size-4',
-        'w-4',
-        'h-4',
-        'flex',
-        'hidden',
-        'overflow-hidden',
-        'overflow-x-auto',
-        'line-clamp-2',
-        'gap-2',
-        'gap-x-1',
-        'opacity-50',
-        'shadow-md',
-        'shadow-red-500',
-        'p-[3px]',
-        'font-bold',
-        'font-mono',
+      // 修飾子の効き方の根拠（tailwind-merge 3.7.0 の mergeClassList / createSortModifiers）:
+      //  - 衝突の判定は `classId = 並べ替えた修飾子 + '!'(あれば) + グループ id` の文字列の一致だけで決まる。
+      //    修飾子は class 本体のグループ判定（getClassGroupId）にも、衝突表（getConflictingClassGroupIds）
+      //    にも入らない。だから「修飾子の効き方」は class のグループではなく、修飾子の**種類**で決まる。
+      //  - 種類は、並べ替えの分岐に対応する: 無し / 1つ（並べ替えを飛ばす）/ 複数の通常の修飾子
+      //    （辞書順に並べ替える）/ `orderSensitiveModifiers` に在る修飾子（並べ替えの壁になる）/
+      //    `[` で始まる任意の variant（同じく壁）/ `:` を含む任意値（data-[a:b] など。区切りとして
+      //    割らない）。`!`（後置と、v3 形式の前置）は `!` の有無で classId を分ける。
+      //  - 唯一 class 側と交わるのは接尾辞 `/`（postfix）で、これは修飾子ではなく class 本体の性質
+      //    （conflictingClassGroupModifiers）。text-sm/6 と leading-4 の組で測る。
+      //  したがって、修飾子（と `!`）の全ての組み合わせに、下の代表の組を掛ければ足りる。
+      //  全 class の総当たりにしても、通る分岐は増えない。
+      const basicPairs: [string, string][] = [
+        ['p-4', 'p-2'], // 同じグループ
+        ['p-4', 'px-2'], // 衝突するグループ（広い側が先）
+        ['px-2', 'p-4'], // 衝突するグループ（広い側が後）
+        ['p-4', 'm-2'], // 衝突しない
+        ['inset-0', 'inset-y-0'], // conflictingClassGroups（inset → inset-y）
+        ['inset-y-0', 'inset-0'],
+        ['text-sm/6', 'leading-4'], // postfix と conflictingClassGroupModifiers
+        ['leading-4', 'text-sm/6'],
+        ['text-sm', 'text-red-500'], // 同じ接頭辞で別のグループ（font-size / text-color）
+        ['p-[3px]', 'p-4'], // 任意値
+        ['border-t', 'border-red-500'], // 同じ接頭辞の別グループ
+        ['not-a-tailwind-class', 'p-4'], // 既定が知らない class は修飾子の下でも素通し
       ];
+      // 修飾子の組（修飾子 × 修飾子 × `!` の有無）は全数。掛け合わせる class の組は代表だけ。
       const inputs: string[] = [];
       for (const m1 of modifiers) {
         for (const m2 of modifiers) {
           for (const i1 of important) {
             for (const i2 of important) {
-              for (const a of basics) {
-                for (const b of basics) {
-                  inputs.push(`${m1}${i1}${a} ${m2}${i2}${b}`);
-                }
+              for (const [a, b] of basicPairs) {
+                inputs.push(`${m1}${i1}${a} ${m2}${i2}${b}`);
               }
             }
           }
         }
       }
-      // 上の総当たりは大きいので、間引いて走らせる（決定的に、全ての修飾子の組が残る間引き方）
-      const stride = Math.max(1, Math.floor(inputs.length / 250000));
-      const sampled = inputs.filter((_, index) => index % stride === 0);
-      expect(expectSame(sampled, '修飾子付き')).toBeGreaterThan(50000);
+      expect(expectSame(inputs, '修飾子付き')).toBeGreaterThan(50000);
       // 末尾の `!`（v3 形式）と、repo の実際の修飾子付き token 自身とその本体の組
       const real: string[] = [];
       for (const token of allTokens) {
