@@ -12358,7 +12358,15 @@ class Pool implements ManagerPool {
          * （`AGENTS.md`「取れない軸に 0 の行を作る」）——枠（429）や signal で
          * 畳まれた回は `code` が付かないので、欄ごと undefined のままにする
          * （`schema.ts` の `lastSystemError` の doc）。
+         *
+         * **先に、前の回の値を下ろす（#2463）。** この欄が指すのは「直近の
+         * `closed` の落ち方」なので、新しい `closed` を受けた時点で前の回の値は
+         * 過去になる。欄が無い回に下ろさないと、`report` を挟まずに続けて
+         * `failed` で閉じたとき、1回目の値が今回の落ち方として `manager_list` /
+         * `manager_report` に残る。`status` では絞らない（`done` / `lost` で
+         * 閉じた回にも貼り付かせない）。
          */
+        delete record.job.lastSystemError;
         if (event.status === 'failed' && event.systemError !== undefined) {
           record.job.lastSystemError = { ...event.systemError, at: new Date().toISOString() };
         }
@@ -12373,7 +12381,10 @@ class Pool implements ManagerPool {
          * と同じ条件に揃える。`done` / `lost` まで広げるかは保留——
          * `schema.ts` の `lastCgroupEvents` の doc）。**無い回に既定値を
          * 作らない**——読めなかった回は欄ごと undefined のままにする。
+         *
+         * **`lastSystemError` と同じく、先に前の回の値を下ろす（#2463）。**
          */
+        delete record.job.lastCgroupEvents;
         if (event.status === 'failed' && event.cgroupEvents !== undefined) {
           record.job.lastCgroupEvents = { ...event.cgroupEvents, at: new Date().toISOString() };
         }
