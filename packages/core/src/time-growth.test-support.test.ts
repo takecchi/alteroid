@@ -6,115 +6,178 @@ import { expectNotSuperlinear } from './time-growth.test-support.js';
  * `expectNotSuperlinear`（issue #2187）自身の歯。
  *
  * **測るのは「線形の関数は通り、2乗の関数は比で落ちる」ことそのもの。**
- * `n` に対して `n²` 回だけ小さな仕事を回す小さな関数を対照に置き、伸びの比
- * （既定 factor=4 なら2乗は約16倍）が既定の `maxRatio`（10）を超えて落ちる
- * ことを確かめる——**対照が落ちなければ、この助け自体が「弱い歯」である。**
+ * `n` に対して `n²` に比例する仕事を対照に置き、伸びの比（既定 factor=4 なら2乗は
+ * 16倍）が既定の `maxRatio`（10）を超えて落ちることを確かめる——**対照が落ちなければ、
+ * この助け自体が「弱い歯」である。**
  *
- * 定数（`n` の大きさ）は、手元の器で実測しながら選んである
- * （`t(n)` が測定ノイズや `floorMs` の底に埋もれない大きさにすること。
- * 2026-09-29 実測: 線形は n=5,000,000 で t(n)≈3.5ms・比≈4、2乗は n=2000 で
- * t(n)≈2.7ms・比≈15〜16——どちらも安定して同じ側に落ちる）。
+ * **時計は偽物を渡す（#2240 / #2243 と同じ方針）。** 実時間（`performance.now()`）で
+ * 測っていたころは、CI の混みで「線形が比 9.70 で落ちる」「2乗が throw しない」といった
+ * 揺れが4 run に出た。ここで確かめたいのは助けの算術（最小値の取り方・n の倍し方・
+ * 比の判定・文言）であって器の速さではない。偽の時計では、仕事の長さは仕事量に比例して
+ * ちょうど決まる（線形は `n / 1e6` ms、2乗は `n² / 1e6` ms）ので、「線形なら必ず通る」
+ * 「2乗なら必ず落ちる」は算術で確定する。
+ *
+ * 助けが本物の `performance.now()` でも動くことは、最後の smoke 1本だけが見る
+ * （閾値を無効にして、値が有限の正の数であることだけを見る。比の閾値は偽の時計の側で測る）。
  */
 
-/** 単純な線形の仕事（O(n)）。 */
+/** 偽の時計。`work` の各関数が呼ばれるたびに、仕事量に応じて `clock` を進める。 */
+function makeFakeClock(): { now: () => number; advance: (ms: number) => void } {
+  let clock = 0;
+  return {
+    now: () => clock,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+  };
+}
+
+/** 単純な線形の仕事（O(n)）。実時間の smoke でだけ使う。 */
 function linearWork(n: number): number {
   let sum = 0;
   for (let i = 0; i < n; i += 1) sum += i ^ (i << 1);
   return sum;
 }
 
-/** `n` に対して `n²` 回だけ小さな仕事を回す（O(n²)）。 */
-function quadraticWork(n: number): number {
-  let sum = 0;
-  for (let i = 0; i < n; i += 1) {
-    for (let j = 0; j < n; j += 1) sum += i ^ j;
-  }
-  return sum;
-}
-
 const identity = (n: number): number => n;
 
-/** 忙しい待ち（意図的なビジーループ）。CI が混んだときの「一様な底上げ」を模す。 */
-function busyWaitMs(ms: number): void {
-  if (ms <= 0) return;
-  const end = performance.now() + ms;
-  while (performance.now() < end) {
-    // 忙しい待ち。何もしない。
-  }
+/** 線形の仕事を偽の時計で表す: n あたり `msPerUnit` ms。 */
+function linearOn(clock: ReturnType<typeof makeFakeClock>, msPerUnit: number) {
+  return (n: number): void => clock.advance(n * msPerUnit);
+}
+
+/** 2乗の仕事を偽の時計で表す: n² あたり 1e-6 ms。 */
+function quadraticOn(clock: ReturnType<typeof makeFakeClock>) {
+  return (n: number): void => clock.advance((n * n) / 1_000_000);
 }
 
 describe('expectNotSuperlinear', () => {
-  it('線形の関数は通り、伸びの比は約 factor に収まる', () => {
-    const result = expectNotSuperlinear(linearWork, identity, { n: 5_000_000, factor: 4 });
-    // 理論値は4だが、実測の揺れを見込んで緩い範囲で確かめる
-    // （下の「2乗は約16倍」と混同しないよう、maxRatio の既定10より十分低い
-    // ところに閾値を置く）。
-    expect(result.ratio).toBeGreaterThan(1);
-    expect(result.ratio).toBeLessThan(8);
+  it('線形の関数は通り、伸びの比はちょうど factor になる', () => {
+    const clock = makeFakeClock();
+    // n=5,000,000 で 5ms（minSmallMs 既定 5 に届くので倍にならない）、n*4 で 20ms。
+    const result = expectNotSuperlinear(linearOn(clock, 1e-6), identity, {
+      n: 5_000_000,
+      factor: 4,
+      now: clock.now,
+    });
+    expect(result.n).toBe(5_000_000);
+    expect(result.tSmallMs).toBeCloseTo(5, 9);
+    expect(result.tLargeMs).toBeCloseTo(20, 9);
+    expect(result.ratio).toBeCloseTo(4, 9);
   });
 
-  it('2乗の関数（n に対して n² 回回す小さな関数）は比で落ちる', () => {
-    // maxRatio は既定の10のまま——2乗の理論比は16なので、hardCapMs ではなく
+  it('2乗の関数（n² に比例する仕事）は比で落ちる', () => {
+    const clock = makeFakeClock();
+    // maxRatio は既定の10のまま——2乗の比は16なので、hardCapMs ではなく
     // 「伸びの比が大きすぎる」の側で落ちることも合わせて確かめる。
-    expect(() => expectNotSuperlinear(quadraticWork, identity, { n: 2000, factor: 4 })).toThrow(
-      /伸びの比が大きすぎる/,
-    );
+    expect(() =>
+      expectNotSuperlinear(quadraticOn(clock), identity, {
+        n: 2000,
+        factor: 4,
+        now: clock.now,
+      }),
+    ).toThrow(/伸びの比が大きすぎる/);
   });
 
   it('固まり・指数的な後戻り（hardCapMs 超過）は、比とは別の文言で落ちる', () => {
+    const clock = makeFakeClock();
+    // n が大きいときだけ、比の判定より先に hardCapMs 自体を超える待ち（50ms）を作る。
     const hang = (n: number): void => {
-      // n が大きいときだけ、比の判定より先に hardCapMs 自体を超える待ちを作る。
-      if (n > 100) busyWaitMs(50);
+      if (n > 100) clock.advance(50);
     };
-    expect(() => expectNotSuperlinear(hang, identity, { n: 50, factor: 4, hardCapMs: 20 })).toThrow(
-      /hardCapMs を超えた/,
-    );
+    const run = (): unknown =>
+      expectNotSuperlinear(hang, identity, {
+        n: 50,
+        factor: 4,
+        hardCapMs: 20,
+        minSmallMs: 0,
+        now: clock.now,
+      });
+    expect(run).toThrow(/hardCapMs を超えた/);
+    expect(run).not.toThrow(/伸びの比が大きすぎる/);
   });
 
-  it('壁時計が一様に遅くなっても（線形の関数へ n 比例の追加busy-waitを足しても）比は保たれる', () => {
-    // 本物の CI 混雑は手元では再現できないので、代わりに「1単位あたりの
-    // コストが一様に底上げされた」状態を、線形の関数へ n に比例する
-    // busy-wait を追加で足す形で模す——器が混んで全体が遅くなっても、
+  it('壁時計が一様に遅くなっても（線形の関数へ n 比例の追加の待ちを足しても）比は保たれる', () => {
+    // 本物の CI 混雑は再現できないので、代わりに「1単位あたりのコストが一様に底上げされた」
+    // 状態を、線形の仕事へ n に比例する追加の待ちを足す形で模す——全体が遅くなっても、
     // 追加した分もやはり n に比例するので、比そのものは動かないはずである。
-    const withoutDelay = expectNotSuperlinear(linearWork, identity, { n: 5_000_000, factor: 4 });
+    const clockA = makeFakeClock();
+    const withoutDelay = expectNotSuperlinear(linearOn(clockA, 1e-6), identity, {
+      n: 5_000_000,
+      factor: 4,
+      now: clockA.now,
+    });
+    const clockB = makeFakeClock();
     const withDelay = expectNotSuperlinear(
       (n: number) => {
-        busyWaitMs(n * 0.0000015);
-        return linearWork(n);
+        clockB.advance(n * 1.5e-6); // 追加の待ち（n 比例）
+        clockB.advance(n * 1e-6); // もとの仕事
       },
       identity,
-      { n: 5_000_000, factor: 4 },
+      { n: 5_000_000, factor: 4, now: clockB.now },
     );
 
-    // どちらも「2乗の疑い」の閾値（maxRatio 既定10）には遠く届かない。
-    expect(withoutDelay.ratio).toBeLessThan(10);
-    expect(withDelay.ratio).toBeLessThan(10);
-    // busy-wait を足しても、比が大きく動かない（一様な底上げでは比が保たれる）。
-    expect(Math.abs(withDelay.ratio - withoutDelay.ratio)).toBeLessThan(6);
+    // 底上げは実際に乗っている（時間は 2.5 倍）が、比はどちらも 4 のまま。
+    expect(withDelay.tSmallMs).toBeCloseTo(withoutDelay.tSmallMs * 2.5, 9);
+    expect(withoutDelay.ratio).toBeCloseTo(4, 9);
+    expect(withDelay.ratio).toBeCloseTo(4, 9);
+    expect(withDelay.ratio).toBeCloseTo(withoutDelay.ratio, 9);
   });
 
   it('落ちたときの文に t(n) / t(n*factor) / 比が載る', () => {
+    const clock = makeFakeClock();
+    let error: unknown;
     try {
-      expectNotSuperlinear(quadraticWork, identity, { n: 2000, factor: 4 });
-      throw new Error('unreachable: 落ちるはず');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // n は t(n) が minSmallMs に届くまで倍にされうるので、数は決め打ちしない。
-      expect(message).toMatch(/t\(\d+\)=/);
-      expect(message).toMatch(/出発点 2000/);
-      expect(message).toMatch(/ratio=/);
+      expectNotSuperlinear(quadraticOn(clock), identity, {
+        n: 2000,
+        factor: 4,
+        now: clock.now,
+      });
+    } catch (e) {
+      error = e;
     }
+    // 落ちなかったときは error が undefined のまま——ここで落とす（try の中で throw すると
+    // catch に拾われて別の文言の検査になる。#2222）。
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    // n=2000 の2乗は 4ms で minSmallMs(5) に届かず、1回倍にされて n=4000（16ms）。
+    // 大きいほうは n=16000（256ms）、比は 16。
+    expect(message).toMatch(/t\(4000\)=16\.00ms/);
+    expect(message).toMatch(/t\(16000\)=256\.00ms/);
+    expect(message).toMatch(/出発点 2000/);
+    expect(message).toMatch(/ratio=16\.00/);
   });
 
   it('t(n) が小さすぎると n を倍にする（分母が器の揺れに埋もれないように）', () => {
-    // 出発点の n=1000 の線形の仕事は 1ms にも届かない。minSmallMs（既定 5ms）へ向けて倍にされる。
-    const result = expectNotSuperlinear(linearWork, identity, { n: 1000, maxScale: 1024 });
-    expect(result.n).toBeGreaterThan(1000);
-    expect(result.n).toBeLessThanOrEqual(1000 * 1024);
+    const clock = makeFakeClock();
+    // n=1000 で 0.1ms。5ms（minSmallMs 既定）に届くまで倍にする: 0.1 * 2^6 = 6.4ms ⟹ n=64000。
+    const result = expectNotSuperlinear(linearOn(clock, 1e-4), identity, {
+      n: 1000,
+      maxScale: 1024,
+      now: clock.now,
+    });
+    expect(result.n).toBe(64_000);
+  });
+
+  it('n の倍加は maxScale で止まる（届かない仕事で無限に倍にしない）', () => {
+    const clock = makeFakeClock();
+    // n=1000 で 0.001ms。maxScale=1024 まで倍にしても 5ms に届かない ⟹ n=1000*1024 で止まる。
+    const result = expectNotSuperlinear(linearOn(clock, 1e-6), identity, {
+      n: 1000,
+      maxScale: 1024,
+      now: clock.now,
+    });
+    expect(result.n).toBe(1000 * 1024);
   });
 
   it('factor が 4 未満（指数を見る歯）なら、既定では n を倍にしない', () => {
-    const result = expectNotSuperlinear(linearWork, identity, { n: 1000, factor: 2 });
+    const clock = makeFakeClock();
+    // t(n)=0.1ms は minSmallMs(5) に届かないが、factor=2 の既定 maxScale=1 で倍にしない。
+    const result = expectNotSuperlinear(linearOn(clock, 1e-4), identity, {
+      n: 1000,
+      factor: 2,
+      now: clock.now,
+    });
     expect(result.n).toBe(1000);
   });
 
@@ -146,5 +209,23 @@ describe('expectNotSuperlinear', () => {
     expect(result.tSmallMs).toBe(5);
     expect(result.tLargeMs).toBe(20);
     expect(result.ratio).toBe(4);
+  });
+
+  it('smoke: 既定の時計（performance.now）でも例外なく動き、測った値は有限の正の数になる', () => {
+    // 実時間で動くことだけを見る。比の閾値・hardCapMs は無効にしてある（Infinity）ので、
+    // 器がどれだけ混んでも揺れない。閾値の判定は上の偽の時計のテストが持つ。
+    const result = expectNotSuperlinear(linearWork, identity, {
+      n: 200_000,
+      minSmallMs: 0,
+      maxRatio: Number.POSITIVE_INFINITY,
+      hardCapMs: Number.POSITIVE_INFINITY,
+    });
+    expect(result.n).toBe(200_000);
+    expect(Number.isFinite(result.tSmallMs)).toBe(true);
+    expect(Number.isFinite(result.tLargeMs)).toBe(true);
+    expect(Number.isFinite(result.ratio)).toBe(true);
+    expect(result.tSmallMs).toBeGreaterThan(0);
+    expect(result.tLargeMs).toBeGreaterThan(0);
+    expect(result.ratio).toBeGreaterThan(0);
   });
 });
