@@ -82,3 +82,16 @@ export const List: Story = {
     </>
   ),
 };
+
+/**
+ * 右端の位置に画面が用意した表示を差し込む口（`time`）と、生の中身の上の帯を消す口
+ * （`rawBar`）。渡すと `Timestamp`（JST/UTC の tooltip と焦点を受ける `<time>`）は出ない。
+ */
+export const PlainTimeWithoutRawBar: Story = {
+  args: {
+    ...Decision.args,
+    time: '3 分前',
+    rawBar: false,
+    defaultOpen: true,
+  },
+};
