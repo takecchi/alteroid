@@ -59,8 +59,16 @@ export default function Commitments() {
   // **保持上限を超えて物理削除された片付き行の累計（issue #416）。**
   // `unreadable` と同じ理由で読む——`data` が無ければ0件として扱う
   // （読み込み中・エラー時に「削除が0件」と誤読させる意図ではなく、後段の
-  // `TrimmedClosedNote` は `isLoading` の外では描かれないので実害は無い）。
+  // `TrimmedClosedNote` は `isLoading` と `listUnavailable` の外では描かれないので実害は無い）。
   const trimmedClosed = data?.trimmedClosed ?? 0;
+  /**
+   * **取れなかったのを0件と描かない**（issue #2320）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。ここで「引き受けたまま終わっていない仕事は
+   * ない」を並べると、読めていないのに引き受けた仕事が無いように読め、忘れさせないための
+   * 器が空に見える。再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す
+   * （#2266 と同じ）。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Page
@@ -78,7 +86,7 @@ export default function Commitments() {
 
       {isLoading ? (
         <Spinner />
-      ) : (
+      ) : listUnavailable ? null : (
         <>
           {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
           <UnreadableNote unreadable={unreadable} />
