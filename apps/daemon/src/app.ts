@@ -3265,6 +3265,9 @@ export function createApp(deps: AppDeps) {
         summary: '承認待ちの一覧',
         description:
           '`ask_human` が積んだ承認待ち。既定では未回答のみ（`pending=false` で全部）。' +
+          '行が読めない（版ずれ・手編集）承認待ちが在るときだけ、`unreadable`（id が取れれば id と' +
+          '不正な欄名）が載る。**壊れた行であって、回答済みでも取り下げ済みでもない。**' +
+          '0件なら鍵ごと無い。窓（`limit`/`cursor`）や `conversationId` の絞りでは切らない（issue #2298）。' +
           '`order` / `limit` / `cursor` のいずれかを明示すると頁の封筒（`total` /' +
           '`nextCursor`）が応答へ載る。**明示しない既定の呼びは、この変更の前と応答が' +
           '1バイトも変わらない**（opt-in。`.claude/skills/listing-and-detail/SKILL.md`' +
