@@ -79,10 +79,7 @@ export function ChatMessage({
   return (
     <li className={cn('group flex flex-col gap-1', role === 'human' ? 'items-end' : 'items-start')}>
       <div
-        className={cn(
-          'flex min-w-0 max-w-full items-start gap-1',
-          role === 'clone' && 'w-full max-w-[46rem]',
-        )}
+        className={cn('flex min-w-0 max-w-full items-start gap-1', role === 'clone' && 'w-full')}
       >
         {onEdit !== undefined && !editing && (
           <Button
@@ -102,7 +99,10 @@ export function ChatMessage({
             // が自前で `min-w-0 ... break-words` を持つが、人間・システムの行は
             // 素のテキストを直接ここへ置くだけなので、同じ指定がここに無いと
             // 長い一続きの文字列（URL・パス等）で吹き出しがはみ出す。
-            'min-w-0 max-w-[46rem] text-sm leading-relaxed break-words',
+            'min-w-0 text-sm leading-relaxed break-words',
+            // 読む幅の上限は吹き出し（人間）と事情の行（システム）にだけ掛ける。
+            // クローンの応答は地の上の本文なので、会話欄の幅いっぱい（`w-full`）に置く。
+            role !== 'clone' && 'max-w-[46rem]',
             // クローンの本文だけ Markdown で描く（下のコメント参照）。
             // 人間・システムの行は素のテキストのままなので、これまでどおり
             // 改行をそのまま見せる。
