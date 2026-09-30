@@ -11197,6 +11197,22 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -11216,7 +11232,7 @@
         "operationId": "postApprovalsAnswer",
         "tags": ["approvals"],
         "summary": "溜まった承認待ちにまとめて答える",
-        "description": "1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に独立に再開する）。結果は `answers` と同じ順で返る。",
+        "description": "1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に独立に再開する）。結果は `answers` と同じ順で返る。行が在るが読めない件は、その件だけ`ok: false` と読めない旨の `error` で返る（`not found` とは言わない）。",
         "responses": {
           "200": {
             "description": "各件の結果（1件ごとの成否）。",
@@ -11357,7 +11373,7 @@
             }
           },
           "409": {
-            "description": "既に回答済み。",
+            "description": "既に回答済み・取り下げ済み。または承認待ちの行は在るが読めない形で入っている（版ずれ・手編集。消されたのではない。回答は書いていない）。",
             "content": {
               "application/json": {
                 "schema": {

@@ -6622,7 +6622,8 @@ export function createCloneTools(context: ToolContext) {
           try {
             approval = await stores.jobs.getApproval(id);
           } catch (error) {
-            if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
+            if (error instanceof UnreadableApprovalError)
+              return text(describeUnreadableApproval(id));
             throw error;
           }
           if (!approval) return text(`承認待ち ${id} は無い（id が違う）。`);

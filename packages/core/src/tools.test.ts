@@ -40,6 +40,7 @@ import {
 } from './schema.js';
 import type { ScheduleStatus } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS, describeCloneRuntime, type CloneRuntimeFacts } from './self.js';
+import { UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import {
   UnreadableActiveTokenError,
@@ -5301,6 +5302,62 @@ describe('クローンの道具', () => {
     expect(reply).toContain('req-9');
     // 回答済みは並べない（片付ける先がここだから）
     expect(reply).not.toContain('済んだ質問');
+  });
+
+  describe('読めない承認の行（#2279）: 「無い（id が違う）」と言わず、在るが読めないと言う', () => {
+    /** fs / pg が読めない行に対してすること（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
+    function unreadableHarness() {
+      const h = harness();
+      const originalUpdate = h.stores.jobs.updateApproval.bind(h.stores.jobs);
+      h.stores.jobs.getApproval = async (id) => {
+        if (id === 'ap-bad') throw new UnreadableApprovalError({ id });
+        return null;
+      };
+      h.stores.jobs.updateApproval = async (id, mutate) => {
+        if (id === 'ap-bad') throw new UnreadableApprovalError({ id });
+        return originalUpdate(id, mutate);
+      };
+      return h;
+    }
+
+    it('approval_withdraw は「無い（id が違う）」と言わず、在るが読めないと言う。何も書かない', async () => {
+      const h = unreadableHarness();
+      const reply = await h.call('approval_withdraw', { id: 'ap-bad', reason: '理由' });
+      expect(reply).toContain('承認待ち ap-bad は在るが読めない');
+      expect(reply).not.toContain('id が違う');
+      expect(await h.stores.journal.list({ types: ['escalation'] })).toHaveLength(0);
+    });
+
+    it('approval_withdraw: getApproval の後に行が読めなくなっても（updateApproval が投げても）同じ', async () => {
+      const h = harness();
+      await h.call('ask_human', { question: '質問' });
+      const [pending] = await h.stores.jobs.listApprovals({ pendingOnly: true });
+      const id = pending?.id as string;
+      h.stores.jobs.updateApproval = async () => {
+        throw new UnreadableApprovalError({ id });
+      };
+      const reply = await h.call('approval_withdraw', { id, reason: '理由' });
+      expect(reply).toContain(`承認待ち ${id} は在るが読めない`);
+      expect(reply).not.toContain('取り下げた。');
+      expect(reply).not.toContain('id が違う');
+    });
+
+    it('approvals_list id=... と approval_trace も「無い」と言わない', async () => {
+      const h = unreadableHarness();
+      const full = await h.call('approvals_list', { id: 'ap-bad' });
+      expect(full).toContain('承認待ち ap-bad は在るが読めない');
+      expect(full).not.toContain('id が違う');
+      const trace = await h.call('approval_trace', { id: 'ap-bad' });
+      expect(trace).toContain('承認待ち ap-bad は在るが読めない');
+      expect(trace).not.toContain('id が違う');
+    });
+
+    it('本当に無い id は従来どおり「無い（id が違う）」', async () => {
+      const h = unreadableHarness();
+      expect(await h.call('approval_withdraw', { id: 'ap-nowhere', reason: '理由' })).toContain(
+        'id が違う',
+      );
+    });
   });
 
   describe('approval_withdraw（issue #963）', () => {

@@ -3416,7 +3416,8 @@ export function createApp(deps: AppDeps) {
           trace = await traceApproval(stores, c.req.param('id'));
         } catch (error) {
           // 在るが読めない行を「無い」（404）と言わない。
-          if (error instanceof UnreadableApprovalError) return c.json({ error: error.message }, 409);
+          if (error instanceof UnreadableApprovalError)
+            return c.json({ error: error.message }, 409);
           throw error;
         }
         if (trace === null) return c.json({ error: 'not found' as const }, 404);
@@ -3549,7 +3550,8 @@ export function createApp(deps: AppDeps) {
           approval = await stores.jobs.getApproval(id);
         } catch (error) {
           // 在るが読めない行を「無い」（404）と言わない。行は書き換えていない。
-          if (error instanceof UnreadableApprovalError) return c.json({ error: error.message }, 409);
+          if (error instanceof UnreadableApprovalError)
+            return c.json({ error: error.message }, 409);
           throw error;
         }
         if (!approval) return c.json({ error: 'not found' as const }, 404);
@@ -3575,7 +3577,8 @@ export function createApp(deps: AppDeps) {
           if (settled === 'answered') return c.json({ error: 'already answered' as const }, 409);
           if (settled === 'withdrawn') return c.json({ error: 'withdrawn' as const }, 409);
           // 先の `getApproval` の後に行が読めなくなった窓。
-          if (error instanceof UnreadableApprovalError) return c.json({ error: error.message }, 409);
+          if (error instanceof UnreadableApprovalError)
+            return c.json({ error: error.message }, 409);
           throw error;
         }
         return c.json({ ok: true });

@@ -18,6 +18,7 @@ import {
 import { JOURNAL_SCAN_PAGE_SIZE } from './journal-scan.js';
 import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import type { SessionMissingKind } from './manager.js';
+import { UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
 import { usageDate } from './usage.js';
@@ -685,6 +686,29 @@ describe('## エスカレーション — approvalId で束ねる（同じ問い
     // 「2」（未回答でキューに在る）とは次の一手が違うので、同じ文言にしない。
     expect(line).not.toContain('承認待ちキューに在る。下の');
     expect(line).toContain('id: ap-answered-later');
+  });
+
+  it('キューに行は在るが読めない（UnreadableApprovalError）: digest 全体を落とさず、その1件を「読めない」と出す（#2279）', async () => {
+    const stores = createMemoryStores();
+    // メモリ実装は壊れた行を持てないので、読めない行を返す実装（fs / pg）の
+    // 振る舞いだけを差し替えで模す。
+    stores.jobs.getApproval = async (id) => {
+      throw new UnreadableApprovalError({ id });
+    };
+    await stores.journal.append({
+      type: 'escalation',
+      question: '壊れた行の確認',
+      approvalId: 'ap-unreadable',
+    });
+
+    const digest = await buildActivityDigest(stores, { since: since() });
+
+    const line = digest.split('\n').find((l) => l.includes('壊れた行の確認 →'));
+    expect(line).toContain('在るが読めない形で入っている');
+    expect(line).toContain('判定できない');
+    // 「本当に無い」側の文言に倒れていない。
+    expect(line).not.toContain('承認待ちキューに見つからず');
+    expect(line).toContain('id: ap-unreadable');
   });
 
   it('この期間の外で回答されたが、回答の本文が無い記録（answeredAt はあるが answer が欠けている）', async () => {
