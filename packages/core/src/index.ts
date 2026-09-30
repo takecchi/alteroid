@@ -366,6 +366,9 @@ export {
   // **同じ理由で出す（#579）。** `apps/cli` が `sessionMissingKind` の由来を
   // 自前で書くと、`manager_list`（`tools.ts`）と字面が割れる。
   describeSessionMissingKind,
+  // **同じ理由で出す（#2428）。** `manager_list` の `unobservedOutcomeLine` が
+  // 呼ぶ生成元。
+  describeUnobservedOutcome,
   type DigestWindow,
 } from './digest.js';
 /**
@@ -1122,6 +1125,11 @@ export {
   chunkIdsByChars,
   createCloneMcpServer,
   createCloneTools,
+  // **字面の生成元を1つに保つために出す（#2428）。** `apps/cli` の `/managers` が
+  // `manager_list`（`tools.ts`）と同じ判定・同じ字面の ⚠ を出すため。
+  describeToolUseStall,
+  describeTurnEnd,
+  isFoldedTurnReport,
   qualifiedToolName,
   resolveMemoryGuard,
   type MemoryGuardValue,

@@ -10,6 +10,10 @@ import {
   describeDenialFollowUp,
   describeManagerState,
   describeSessionMissingKind,
+  describeToolUseStall,
+  describeTurnEnd,
+  describeUnobservedOutcome,
+  isFoldedTurnReport,
   JOURNAL_ENTRY_TYPES,
   jobStatusSchema,
   renderApprovalTrace,
@@ -2724,6 +2728,11 @@ export function renderManagerList(
           '起こし直す前にそこを確かめること',
       );
     }
+    // **Issue #2428**: 依頼者が何を観測していないか（`lost` / `failed` の但し書き）。
+    // 字面は `manager_list` の `unobservedOutcomeLine` と同じ生成元
+    // （`describeUnobservedOutcome`）から取る。対象外の委譲では `null` で 1 文字も足さない。
+    const unobserved = describeUnobservedOutcome(manager);
+    if (unobserved !== null) lines.push(`      ${unobserved}`);
     const denied = denialLine(manager.denials, manager.lastReportAt);
     if (denied !== null) lines.push(`      ${denied}`);
     // **`kind`（質問／実行許可）と `askedAt` も出す（#336）。** 種別が読めない
@@ -2773,9 +2782,20 @@ export function renderManagerList(
           summarizeText(manager.lastFoldedTurn.text),
       );
     } else if (manager.lastReport) {
-      const label = manager.lastFailure === undefined ? '直近の報告' : '直近のターンの中身';
+      // **Issue #2428**: `result` を受け取らないまま畳まれた回（`lastUnreported`）も
+      // 「報告」と呼ばない。判定は `manager_list` と同じ `isFoldedTurnReport`。
+      const label = isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
+    // **Issue #2428**: ターン終了の報告漏れ（`describeTurnEnd`）と、道具の応答待ちの
+    // 矛盾／実行中（`describeToolUseStall`）。**判定も字面も `manager_list`
+    // （`packages/core/src/tools.ts`）と同じ関数を呼ぶ**——ここで組み直さない。
+    // 欄が無い（古い daemon）・健全な委譲では `null` で、何も出さない（0 や「無い」は書かない）。
+    // 返る文字列は `manager_list` の行頭インデント（2 桁）を含むので、この面の深さへ替える。
+    const turnEnd = describeTurnEnd(manager);
+    if (turnEnd !== null) lines.push(`      ${turnEnd.trimStart()}`);
+    const toolUseStall = describeToolUseStall(manager);
+    if (toolUseStall !== null) lines.push(`      ${toolUseStall.trimStart()}`);
     // **Issue #1883**: この委譲が抱えている認証トークンの世代が分からない
     // ときに、なぜ分からないかを添える（`tokenGenerationUnknownReasonLine` の
     // doc）。

@@ -3388,7 +3388,7 @@ function describeWithheldReports(manager: ManagerSummary): string | null {
  * ——見出しの生成元を2つに割らない（`describeManagerFailure` の doc と
  * 同じ理由）。
  */
-function isFoldedTurnReport(
+export function isFoldedTurnReport(
   manager: Pick<ManagerSummary, 'lastFailure' | 'lastUnreported'>,
 ): boolean {
   return manager.lastFailure !== undefined || manager.lastUnreported !== undefined;
@@ -3489,6 +3489,17 @@ function unobservedOutcomeLine(manager: ManagerSummary): string | null {
 }
 
 /**
+ * {@link managerActivityInputOf} が読む欄だけを名指しした型。CLI（`GET /managers` の
+ * 応答は `ManagerSummary` の全欄を持たない）が `describeTurnEnd` /
+ * `describeToolUseStall` を同じ関数のまま呼べるようにするため（Issue #2428）。
+ * `ManagerSummary` はそのまま渡せる。
+ */
+type ManagerActivityFields = Pick<
+  ManagerSummary,
+  'turnEndReason' | 'turnEndedAt' | 'lastReportAt' | 'toolUseStallPending'
+> & { waiting: readonly unknown[] };
+
+/**
  * `ManagerSummary` から {@link classifyManagerActivity} への入力を作る。
  *
  * **判定のコピーを2つ作らないための唯一の変換点。** `describeTurnEnd` /
@@ -3496,7 +3507,7 @@ function unobservedOutcomeLine(manager: ManagerSummary): string | null {
  * `manager.ts` の `flushWithheldReports()` も同じ純関数を、`ManagerRecord`
  * から作った同型の入力で呼ぶ（`manager-activity.ts` の doc）。
  */
-function managerActivityInputOf(manager: ManagerSummary): ManagerActivityInput {
+function managerActivityInputOf(manager: ManagerActivityFields): ManagerActivityInput {
   return {
     turnEndReason: manager.turnEndReason,
     turnEndedAt: manager.turnEndedAt,
@@ -3541,7 +3552,9 @@ function managerActivityInputOf(manager: ManagerSummary): ManagerActivityInput {
  * あるときだけにする——一覧は文字数の予算に張り付いていて、行を1本増やすと
  * 出る件数が減る（`manager.lastReport` の行の doc と同じ理由）。
  */
-function describeTurnEnd(manager: ManagerSummary): string | null {
+export function describeTurnEnd(
+  manager: ManagerActivityFields & Pick<ManagerSummary, 'turnEndTail'>,
+): string | null {
   if (manager.turnEndReason === undefined) return null;
 
   // **判定そのものは `classifyManagerActivity` へ切り出してある**
@@ -3660,7 +3673,9 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
  * ⚠️ **この行は長い。** 予算に張り付いた一覧では長さがそのまま出る件数を削る
  * ので、足すなら「読んだクローンの次の一手が1つに決まる」に効く語だけにすること。
  */
-function describeToolUseStall(manager: ManagerSummary): string | null {
+export function describeToolUseStall(
+  manager: ManagerActivityFields & Pick<ManagerSummary, 'toolUseStallAt'>,
+): string | null {
   const pending = manager.toolUseStallPending;
   if (pending === undefined || pending.length === 0) return null;
   // **判定そのものは `classifyManagerActivity` へ切り出してある**
