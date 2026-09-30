@@ -52,7 +52,9 @@ describe('memory_list の cursor は、親の slug が子より大きくても�
     // PersonaStore.list() の契約どおり slug 昇順に並べる。
     const documents = [
       doc('b', 'z', '子'),
-      ...Array.from({ length: 200 }, (_, i) => doc(`c${String(i + 1).padStart(3, '0')}`, undefined, long)),
+      ...Array.from({ length: 200 }, (_, i) =>
+        doc(`c${String(i + 1).padStart(3, '0')}`, undefined, long),
+      ),
       doc('z', undefined, '親'),
     ].sort((x, y) => (x.slug < y.slug ? -1 : x.slug > y.slug ? 1 : 0));
 
@@ -80,7 +82,12 @@ describe('memory_list の cursor は、親の slug が子より大きくても�
         documents.findIndex((d) => d.slug === from) <=
           documents.findIndex((d) => d.slug === froms[i - 1]),
     );
-    expect({ stalled, froms, reachedAll: seen.size === documents.length, missing: documents.length - seen.size }).toEqual({
+    expect({
+      stalled,
+      froms,
+      reachedAll: seen.size === documents.length,
+      missing: documents.length - seen.size,
+    }).toEqual({
       stalled: false,
       froms: froms,
       reachedAll: true,

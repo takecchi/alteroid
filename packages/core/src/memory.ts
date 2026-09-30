@@ -3359,19 +3359,30 @@ export interface MemoryListingEntry {
  */
 export function renderMemoryListing(
   entries: readonly MemoryListingEntry[],
-  paging?: { total: number },
+  paging?: { total: number; anchor?: string },
 ): string {
   if (entries.length === 0) return '（記憶はまだ空）';
 
   const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+  // **錨（続きの頁の先頭。#2510）は親から切り離して root の先頭に描く。**
+  // 親が view に在ると錨が子として親の後ろへ回って落ち、同じ cursor が返り
+  // 続ける（`memory-cursor.ts` の「頁が必ず進むこと」）。
+  const anchor = paging?.anchor;
   const tocEntries: MemoryTocEntry[] = entries.map((entry) => ({
     slug: entry.slug,
     title: entry.title,
     description: entry.description,
     descriptionFreshness: entry.descriptionFreshness,
-    parent: entry.parent,
+    parent:
+      entry.slug === anchor && entry.parent !== undefined && bySlug.has(entry.parent)
+        ? undefined
+        : entry.parent,
   }));
-  const flat = flattenMemoryToc(resolveMemoryHierarchy(tocEntries));
+  const roots = resolveMemoryHierarchy(tocEntries);
+  const anchorRootIndex =
+    anchor === undefined ? -1 : roots.findIndex((root) => root.entry.slug === anchor);
+  if (anchorRootIndex > 0) roots.unshift(...roots.splice(anchorRootIndex, 1));
+  const flat = flattenMemoryToc(roots);
 
   const items = flat.map((node) => {
     const meta = bySlug.get(node.entry.slug);
@@ -3409,8 +3420,11 @@ export function renderMemoryListing(
       // 錨の順（slug 昇順）が一致しないので、「最後に出した行の後ろから」では
       // 行が飛ぶ——理由の全文は `memory-cursor.ts` の
       // 「`schedule-cursor.ts` とあえて違えた点」に在る。
-      const omittedSlugs = flat.slice(shown).map((node) => node.entry.slug);
-      const from = omittedSlugs.reduce((min, slug) => (slug < min ? slug : min), omittedSlugs[0]!);
+      // 「いちばん小さい」は **entries（＝view＝ストア順）での最初**で取る。JS の
+      // 文字列比較で取ると、view を切った順序（照合順序）と食い違ったとき間の
+      // 文書が飛ぶ。錨は必ず出ているので、from は錨より厳密に後ろ（頁が進む）。
+      const omittedSlugs = new Set(flat.slice(shown).map((node) => node.entry.slug));
+      const from = entries.find((entry) => omittedSlugs.has(entry.slug))!.slug;
       return (
         head +
         `続きは memory_list cursor=${encodeMemoryCursor({ from })} で取れる` +

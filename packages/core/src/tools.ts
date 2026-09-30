@@ -4774,7 +4774,7 @@ export function createCloneTools(context: ToolContext) {
               updatedAt: doc.updatedAt,
               createdAt: doc.createdAt,
             })),
-            { total: documents.length },
+            { total: documents.length, anchor: resolved.anchor },
           ),
         );
       },
