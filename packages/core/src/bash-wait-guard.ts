@@ -131,7 +131,8 @@ function buildReason(shapeDescription: string): string {
  *
  * #2423: `timeout` の直後のオプション（`--foreground 60`・`-k5 60`）は `timeout\b` で
  * 既に有界と読む（前置きの形には依存しない）。パス付き（`/usr/bin/timeout 60 …`）も
- * 同じく有界なので、先頭の語に `(?:[^\s=]*\/)?` を許す。
+ * 同じく有界なので、先頭の語に `(?:[^\s=]{0,64}\/)?` を許す（上限の理由は
+ * `TIMEOUT_COMMAND_PREFIX_SRC` の doc。無制限だと空白の無い長い1語で2乗になる）。
  */
 function isTimeoutWrapped(trimmed: string): boolean {
   return (
