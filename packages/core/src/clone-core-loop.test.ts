@@ -79,10 +79,10 @@ describe('クローン', () => {
     await waitForDone(s.events);
 
     const { options } = s.calls[0] as FakeCall;
-    // クローン = Fable。既定はここから動かない。降ろせるのは人間だけであり、
+    // クローン = Opus（2026-09-30 の人間の決定で Fable から変更）。既定はここから動かない。降ろせるのは人間だけであり、
     // 実装や AI の都合で既定を下げない（AGENTS.md 地雷5 / north_star 禁止1）
     expect(options.model).toBe(CLONE_MODEL);
-    expect(CLONE_MODEL).toBe('fable');
+    expect(CLONE_MODEL).toBe('opus');
     // 組み込みツールは持たせない（人間の写像としての配置）
     //
     // ↑ **この期待は #32 で反転した。** 元の文（と実装）は north_star「適用範囲」が

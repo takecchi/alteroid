@@ -167,7 +167,7 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
  *
  * ### 群2: 層とモデル帯の対応（2026-09-15）
  *
- * - `ALTEROID_CLONE_MODEL` — クローンの帯（既定 `fable`）
+ * - `ALTEROID_CLONE_MODEL` — クローンの帯（既定 `opus`）
  * - `ALTEROID_MANAGER_MODEL` — マネージャーの帯（既定 `opus`）
  * - `ALTEROID_WORKER_MODEL` — 作業者の帯（既定 `sonnet`）
  *

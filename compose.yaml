@@ -75,7 +75,7 @@
 #
 # ```
 #   app（デーモン・uid 1000）──── db（PostgreSQL）   ← data ネットワーク
-#     ├ クローン（Fable）                             記憶・日誌・ジョブ・生ログ
+#     ├ クローン（Opus）                             記憶・日誌・ジョブ・生ログ
 #     └ 記憶ストアの鍵を持つ**唯一の**プロセス
 #     │  Unix ソケット（共有 volume。mode 0600 / owner uid 1000）
 #     └───────────── runner（root）
@@ -131,7 +131,7 @@ x-shared-env: &shared-env
   ALTEROID_RUNNER_ID: ${ALTEROID_RUNNER_ID:-runner-primary}
   # **認証は 2026-09-14 からトークンプール（DB 正本）だけで持つ。** ここには
   # 環境変数を置かない——`alteroid token add` で登録する（`.env.example` 冒頭）。
-  # 層とモデル帯の対応（クローン Fable / マネージャー Opus / 作業者 Sonnet）を
+  # 層とモデル帯の対応（クローン Opus / マネージャー Opus / 作業者 Sonnet）を
   # 差し替えるための置き場。**これは設定ではなく、人間の承認の置き場である** —
   # 対応は設計判断であり、変更には人間の承認が要る（AGENTS.md 地雷5）。費用を詰める
   # ための旋盤ではないので、既定は動かさない（空のままでよい）。

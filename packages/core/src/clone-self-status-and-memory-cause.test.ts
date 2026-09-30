@@ -77,14 +77,14 @@ describe('クローン — self_status（runtime facts の配線）', () => {
     await s.clone.stop();
   });
 
-  it('env が無ければ declaredModel は既定（fable）で出て、差し替えなしと読める', async () => {
+  it('env が無ければ declaredModel は既定（opus）で出て、差し替えなしと読める', async () => {
     const s = setupCapturing({});
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
 
     const body = await s.selfStatus();
     expect(body).toContain(`宣言されたモデル帯: ${CLONE_MODEL}`);
-    expect(CLONE_MODEL).toBe('fable');
+    expect(CLONE_MODEL).toBe('opus');
     expect(body).toContain(`既定。\`${CLONE_MODEL_ENV_KEY}\` は置かれていない`);
     expect(body).not.toContain('に置いた値');
 

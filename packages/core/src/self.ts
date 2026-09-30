@@ -168,7 +168,7 @@ export interface CloneRuntimeFacts {
    * 人間が `ALTEROID_CLONE_MODEL` に値を**置いたか**。
    *
    * **「既定と違うか」ではない。** 置いた値がたまたま既定と同じ
-   * （`ALTEROID_CLONE_MODEL=fable`）でも真である — ここが答えるのは
+   * （`ALTEROID_CLONE_MODEL=opus`）でも真である — ここが答えるのは
    * 「差し替えの承認が置かれているか」であって、値の比較ではない
    * （`clone.ts` の `placedCloneModel`）。
    */
@@ -433,7 +433,7 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
       '自身は PR もブランチも見に行かない。反映間隔の実測は `gh run list ' +
       '--workflow=release-prod.yml` で測り直すこと）。',
     // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
-    // \`ALTEROID_CLONE_MODEL=fable\` を明示的に置いた場合、前者では「既定のまま」と
+    // \`ALTEROID_CLONE_MODEL=opus\` を明示的に置いた場合、前者では「既定のまま」と
     // 嘘になる（承認が置かれている事実が消える）。
     `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden

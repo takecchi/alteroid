@@ -171,9 +171,9 @@ export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 /**
  * **誰が**使ったか。
  *
- * モデル id では層を区別できない。`ALTEROID_CLONE_MODEL` でクローンを opus へ
- * 上げれば、クローンとマネージャーは台帳上で同じ `model` に並ぶ（いま偶然
- * fable / opus / sonnet に分かれているだけである）。**だからモデル名を層の
+ * モデル id では層を区別できない。既定でクローンとマネージャーは
+ * どちらも opus で、台帳上で同じ `model` に並ぶ（2026-09-30 までは既定が
+ * fable / opus / sonnet に分かれていたが、それも偶然にすぎなかった）。**だからモデル名を層の
  * 代わりに使わないこと。**
  *
  * ## `worker`（作業者）という値が無い理由
@@ -798,8 +798,8 @@ function toModelTotals(raw: unknown): Record<string, UsageTotals> | undefined {
  *
  * ## モデル id を層の代わりに使わないこと
  *
- * `ALTEROID_CLONE_MODEL` を置けばクローンとマネージャーは同じ `model` に並ぶ。
- * いま fable / opus / sonnet に分かれているのは偶然である。
+ * 既定でクローンとマネージャーは同じ `model`（opus）に並ぶ。`ALTEROID_CLONE_MODEL`
+ * を置いて帯が分かれたとしても、それは偶然である。
  */
 export const usageRowSchema = z.object({
   date: usageDateSchema,
@@ -1009,7 +1009,7 @@ export const usageBreakdownSchema = z.object({
   byManager: z.array(
     z.object({ managerId: z.string(), totals: usageTotalsSchema, turns: turnsField }),
   ),
-  /** どのモデル帯（Fable / Opus / Sonnet）で使ったか。**回数の欄は持たない**（上記）。 */
+  /** どのモデル帯（Opus / Sonnet など）で使ったか。**回数の欄は持たない**（上記）。 */
   byModel: z.array(z.object({ model: z.string(), totals: usageTotalsSchema })),
   /**
    * **誰が**使ったか。

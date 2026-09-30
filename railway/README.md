@@ -320,7 +320,7 @@ railway add --database postgres
 | --------------------------- | -------- |
 | `ALTEROID_DAILY_REPORT_AT`  | `22:00`  |
 | `ALTEROID_INITIATIVE_EVERY` | `55`     |
-| `ALTEROID_CLONE_MODEL`      | `fable`  |
+| `ALTEROID_CLONE_MODEL`      | `opus`   |
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 

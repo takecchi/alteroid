@@ -11292,8 +11292,8 @@ class Pool implements ManagerPool {
         let fold;
         try {
           fold = await this.#stores.usage.record({
-            // **モデル id で層を代用しないこと。** マネージャーは opus だが、
-            // `ALTEROID_CLONE_MODEL` を置けばクローンも opus で走る。
+            // **モデル id で層を代用しないこと。** マネージャーは opus で、
+            // クローンも既定で opus で走る（`ALTEROID_CLONE_MODEL`）。
             layer: 'manager',
             // マネージャーのセッション本体。**その中の作業者（Task subagent）と
             // compaction 自体の分もここに混ざっている** — SDK の `modelUsage` が

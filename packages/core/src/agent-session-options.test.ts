@@ -178,8 +178,9 @@ describe('クローン本セッションへ渡す Options', () => {
 
     const { options } = calls[0] as { options: Options };
 
-    // 既定はクローン = Fable。降ろせるのは人間の承認だけである（AGENTS.md 地雷5）。
-    expect(options.model).toBe('fable');
+    // 既定はクローン = Opus（2026-09-30 の人間の決定で Fable から変更）。差し替えられるのは
+    // 人間の承認だけである（AGENTS.md 地雷5）。
+    expect(options.model).toBe('opus');
     // preset 一式（明示リストで絞らない = 地雷1）。CLONE_ALLOWED_TOOLS は
     // 「確認なしで通す一覧」であって「使える道具の一覧」ではない。
     expect(options.allowedTools).toEqual(CLONE_ALLOWED_TOOLS);

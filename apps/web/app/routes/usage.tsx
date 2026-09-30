@@ -619,8 +619,8 @@ function UsageBody({
               .map((entry) => ({ label: entry.model, costUsd: entry.totals.costUsd }))}
           />
           {/*
-            **モデル別と層別を1つにしない。** `ALTEROID_CLONE_MODEL` を置けば
-            クローンとマネージャーは同じモデル帯に並ぶので、モデル名では
+            **モデル別と層別を1つにしない。** 既定でクローンとマネージャーは
+            どちらも opus で同じモデル帯に並ぶので、モデル名では
             「誰が使ったか」に答えられない。
           */}
           <AxisCard

@@ -259,8 +259,8 @@ export function renderUsage(view: UsageView): string {
         .sort((a, b) => b.totals.costUsd - a.totals.costUsd)
         .map((e) => ({ label: e.model, costUsd: e.totals.costUsd })),
     );
-    // **誰が**・**どこで**。モデル別と別に出す — `ALTEROID_CLONE_MODEL` を置けば
-    // クローンとマネージャーは同じモデル帯に並ぶので、モデル名では層を見分けられない。
+    // **誰が**・**どこで**。モデル別と別に出す — 既定で
+    // クローンとマネージャーはどちらも opus で同じモデル帯に並ぶので、モデル名では層を見分けられない。
     axis(
       '層別（誰が）:',
       [...summary.byLayer]

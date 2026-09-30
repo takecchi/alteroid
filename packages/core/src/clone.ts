@@ -278,7 +278,7 @@ type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
 /**
  * クローン = デーモン内の長寿命 SDK セッション1本（docs/architecture.md）。
  *
- * - model の既定は `fable`。役割とモデル帯の対応は設計判断であり、変更には
+ * - model の既定は `opus`（2026-09-30 の人間の決定で `fable` から変更）。役割とモデル帯の対応は設計判断であり、変更には
  *   人間の承認が要る（AGENTS.md 地雷5）。`ALTEROID_CLONE_MODEL` はその
  *   **承認そのもの**であって、AI や実装の都合で動かしてよい旋盤ではない。
  * - **道具は全部渡す。** `tools` を渡さない（preset 一式）＋インプロセス MCP の
@@ -294,13 +294,13 @@ type PendingCollapseVerdict = 'pass' | 'folded' | 'row-folded';
  */
 
 /** クローンのモデル帯の既定。変更には人間の承認が要る。 */
-export const CLONE_MODEL = 'fable';
+export const CLONE_MODEL = 'opus';
 
 /**
  * クローンのモデル帯を人間が差し替えるための環境変数。
  *
  * **これは設定ではなく、人間の承認の置き場である。** 層とモデル帯の対応は
- * 設計判断であり（AGENTS.md 地雷5）、既定は `fable` のまま動かさない。ここに
+ * 設計判断であり（AGENTS.md 地雷5）、既定は `opus` のまま動かさない。ここに
  * 値を置けるのは人間だけで、置いた事実はデーモンの起動時に必ず表へ出す
  * （黙って上位帯から降りることを許さない）。
  *
@@ -311,7 +311,7 @@ export const CLONE_MODEL = 'fable';
 export const CLONE_MODEL_ENV_KEY = 'ALTEROID_CLONE_MODEL';
 
 /**
- * 環境変数を見てクローンのモデル帯を決める。空・空白なら既定（`fable`）。
+ * 環境変数を見てクローンのモデル帯を決める。空・空白なら既定（`opus`）。
  *
  * 判定の本体は `model-tier.ts` にある（マネージャーと作業者も同じ形を使う）。
  * 値は検証しない — 理由はあちらに書いてある。
@@ -324,7 +324,7 @@ export function resolveCloneModel(env: NodeJS.ProcessEnv = process.env): string 
  * 人間が実際に値を置いたか（置いていなければ `null`）。
  *
  * **{@link resolveCloneModel} と同じ判定を2か所に書かないためにここに居る。**
- * 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=fable`）でも「置いた」で
+ * 置いた値がたまたま既定と同じ（`ALTEROID_CLONE_MODEL=opus`）でも「置いた」で
  * あり、「既定と違うか」では言い換えられない — `self_status` が返すのは
  * 「差し替えの承認がここに置かれているか」だからである。
  */
