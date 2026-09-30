@@ -676,7 +676,21 @@ const RUN_WATCH_SEGMENT_END_SRC = /[;|\n\r\u2028\u2029]|&&/.source;
  * `run watch` の検索は前へしか進まないので、見つけた一致を使い回す。
  */
 export function findGhRunWatch(command: string): { index: number; end: number } | null {
+  const found = findGhRunWatchFrom(command, 0);
+  return found === null ? null : { index: found.index, end: found.end };
+}
+
+/**
+ * `findGhRunWatch` の、`from` 以降を探す版（#2400）。見つけた一致に、その区切りの末尾（`limit`）を
+ * 添える。次の一致は `limit` から探せば、区切りごとに1件を前へ進みながら全部を線形に拾える
+ * （同じ区切りの中の後ろの一致は、同じ区切りまでしか読めないので、最初の1件で足りる）。
+ */
+function findGhRunWatchFrom(
+  command: string,
+  from0: number,
+): { index: number; end: number; limit: number } | null {
   const gh = new RegExp(GH_WORD_SRC_FOR_RUN_WATCH, 'g');
+  gh.lastIndex = from0;
   const runWatch = new RegExp(RUN_WATCH_SRC, 'g');
   const segmentEnd = new RegExp(RUN_WATCH_SEGMENT_END_SRC, 'g');
   let nextRunWatch: RegExpExecArray | null | undefined;
@@ -692,7 +706,7 @@ export function findGhRunWatch(command: string): { index: number; end: number } 
     }
     if (nextRunWatch === null) return null;
     if (nextRunWatch.index < limit) {
-      return { index: m.index, end: nextRunWatch.index + nextRunWatch[0].length };
+      return { index: m.index, end: nextRunWatch.index + nextRunWatch[0].length, limit };
     }
     // 同じ区切りの中の後ろの `gh` も、同じ区切りまでしか読めない。区切りの先へ飛ぶ。
     gh.lastIndex = Math.max(gh.lastIndex, limit);
@@ -711,22 +725,38 @@ export function findGhRunWatch(command: string): { index: number; end: number } 
  */
 const FIRST_CONTROL_OPERATOR_RE = /[;\n]|(?<![<>&|])&(?![&>])/;
 
+const FIRST_CONTROL_OPERATOR_GLOBAL_RE = new RegExp(FIRST_CONTROL_OPERATOR_RE.source, 'g');
+
+/**
+ * **すべての** `gh run watch` を順に見る（#2400）。最初の1件だけを見ると、前景の run watch の
+ * 後ろに背景の run watch が続く形（`gh run watch 1; gh run watch 2 &`）を見落とす。
+ * 一致は区切りごとに1件ずつ、前へ進みながら拾う（`findGhRunWatchFrom`）。最初の制御演算子の探索も
+ * 前へしか進まないので、見つけた位置を使い回す（一致のたびに末尾まで読み直すと2乗になる）。
+ */
 function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boolean {
-  const match = findGhRunWatch(trimmed);
+  let match = findGhRunWatchFrom(trimmed, 0);
   if (match === null) return false;
   // ツール側の背景指定は、コマンド文字列のどこに在っても背景である。
   if (backgrounded) return true;
-  const rest = trimmed.slice(match.end);
-  const operator = FIRST_CONTROL_OPERATOR_RE.exec(rest);
-  if (operator !== null && operator[0] === '&') return true;
-  // `setsid`（`-w` / `--wait` が無い形）も背景へ置く形である（#2129）。
-  const segment = trimmed.slice(commandPositionStartBefore(trimmed, match.index), match.index);
-  if (isBackgroundingSetsid(segment)) return true;
-  // `coproc` は子を非同期で起こす（#2179）。`setsid` と同じく、背景へ置く形である。
-  if (COPROC_RE.test(segment)) return true;
-  // `{ …; } &` の中（#2179）。`;` が `&` より先に来るので、上の最初の制御演算子の判定では
-  // 背景と読めない。`( … ) &` は `)` の直後の `&` が最初の制御演算子なので、上で弾ける。
-  return isInsideBackgroundedBraceGroup(trimmed, match.index);
+  let operator: RegExpExecArray | null | undefined;
+  const isInsideBackgrounded = createBackgroundedBraceGroupChecker(trimmed);
+  while (match !== null) {
+    if (operator === undefined || (operator !== null && operator.index < match.end)) {
+      FIRST_CONTROL_OPERATOR_GLOBAL_RE.lastIndex = match.end;
+      operator = FIRST_CONTROL_OPERATOR_GLOBAL_RE.exec(trimmed);
+    }
+    if (operator !== null && operator[0] === '&') return true;
+    // `setsid`（`-w` / `--wait` が無い形）も背景へ置く形である（#2129）。
+    const segment = trimmed.slice(commandPositionStartBefore(trimmed, match.index), match.index);
+    if (isBackgroundingSetsid(segment)) return true;
+    // `coproc` は子を非同期で起こす（#2179）。`setsid` と同じく、背景へ置く形である。
+    if (COPROC_RE.test(segment)) return true;
+    // `{ …; } &` の中（#2179）。`;` が `&` より先に来るので、上の最初の制御演算子の判定では
+    // 背景と読めない。`( … ) &` は `)` の直後の `&` が最初の制御演算子なので、上で弾ける。
+    if (isInsideBackgrounded(match.index)) return true;
+    match = findGhRunWatchFrom(trimmed, match.limit);
+  }
+  return false;
 }
 
 /** `coproc [名前] <コマンド>` の `coproc`（#2179）。語の途中の `coproc` は拾わない。 */
@@ -760,30 +790,24 @@ function isBraceCloseAt(command: string, i: number): boolean {
  * 引用符の中の `{` / `}` を読み違えても、弾く側か、いまと同じ（背景と読まない）側に倒れる。
  * 走査は線形である。
  */
-function isInsideBackgroundedBraceGroup(command: string, index: number): boolean {
-  // 内側のグループから外側へ順に見る（`{ { … }; } &` のように、外側のグループだけが背景へ
-  // 送られる形があるため）。手前の走査は `left` から、後ろの走査は `right` から続けるので、
-  // 入れ子が深くても走査は全体で線形である。
-  let left = index - 1;
-  let right = index;
-  for (;;) {
+function createBackgroundedBraceGroupChecker(command: string): (index: number) => boolean {
+  // `index` を昇順に渡す前提（一致は前へしか進まない。#2400）。前から1回だけ走査して、まだ閉じていない
+  // `{` の積み（`stack`。外側が先）を持ち回る。`gh run watch` が何件並んでも、手前への走査を
+  // 一致ごとにやり直さない（やり直すと2乗になる）。対の `}` の位置は `{` ごとに1度だけ探す。
+  const stack: number[] = [];
+  let pos = 0;
+  const closeOf = new Map<number, number>();
+  const operatorRe = new RegExp(FIRST_CONTROL_OPERATOR_RE.source, 'g');
+  let lastOperator: RegExpExecArray | null | undefined;
+  let lastOperatorFrom = 0;
+  // `from` は `open` の内側で、そこまでの `{` と `}` が釣り合っている位置（内側のグループの閉じの
+  // 次）。外側のグループの対を、内側の続きから探すので、深い入れ子でも全体で線形になる。
+  const findClose = (open: number, from: number): number => {
+    const known = closeOf.get(open);
+    if (known !== undefined) return known;
     let depth = 0;
-    let open = -1;
-    for (let i = left; i >= 0; i -= 1) {
-      if (isBraceCloseAt(command, i)) {
-        depth += 1;
-      } else if (isBraceOpenAt(command, i)) {
-        if (depth === 0) {
-          open = i;
-          break;
-        }
-        depth -= 1;
-      }
-    }
-    if (open < 0) return false;
-    depth = 0;
     let close = -1;
-    for (let i = right; i < command.length; i += 1) {
+    for (let i = from; i < command.length; i += 1) {
       if (isBraceOpenAt(command, i)) {
         depth += 1;
       } else if (isBraceCloseAt(command, i)) {
@@ -794,12 +818,37 @@ function isInsideBackgroundedBraceGroup(command: string, index: number): boolean
         depth -= 1;
       }
     }
-    if (close < 0) return false;
-    const operator = FIRST_CONTROL_OPERATOR_RE.exec(command.slice(close + 1));
-    if (operator !== null && operator[0] === '&') return true;
-    left = open - 1;
-    right = close + 1;
-  }
+    closeOf.set(open, close);
+    return close;
+  };
+  return (index: number): boolean => {
+    for (; pos < index; pos += 1) {
+      if (isBraceOpenAt(command, pos)) stack.push(pos);
+      else if (isBraceCloseAt(command, pos)) stack.pop();
+    }
+    // 内側のグループから外側へ順に見る（`{ { … }; } &` のように、外側のグループだけが背景へ
+    // 送られる形があるため）。
+    let balancedFrom = -1;
+    for (let k = stack.length - 1; k >= 0; k -= 1) {
+      const open = stack[k] as number;
+      const close = findClose(open, balancedFrom >= 0 ? balancedFrom : open + 1);
+      if (close < 0) return false;
+      balancedFrom = close + 1;
+      // `close` の後ろで最初の制御演算子。直前の探索が `close + 1` を含む区間の結果なら使い回す
+      // （外側へ進むほど `close` は後ろになる。毎回末尾まで読み直すと深い入れ子で2乗になる）。
+      if (
+        lastOperator === undefined ||
+        lastOperatorFrom > close + 1 ||
+        (lastOperator !== null && lastOperator.index < close + 1)
+      ) {
+        operatorRe.lastIndex = close + 1;
+        lastOperatorFrom = close + 1;
+        lastOperator = operatorRe.exec(command);
+      }
+      if (lastOperator !== null && lastOperator[0] === '&') return true;
+    }
+    return false;
+  };
 }
 
 /**
