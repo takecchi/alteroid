@@ -1918,11 +1918,18 @@ export function ChatPane({
           会話の案内文（「目的や価値観を伝えると…」）と紛れる——失敗と「本当に
           空」が見分けられない。`dashboard.tsx`/`practice-detail.tsx`
           （issue #2138/#2139、PR #2143）と同じ判断をここでも採る。
+
+          **ただし本文を差し替えるのは、読めた `data` が無いときだけ（issue
+          #2266）。** SWR は再検証が失敗しても前回の `data` を残したまま
+          `error` を立てるので、`error` だけで分けると、一過性の失敗1回で読めて
+          いた履歴と手元の行まで消える。`data` があるときは本文を出したまま、
+          失敗は本文の上の注記で知らせる（黙って消さない）。
         */}
-        {history.error !== undefined ? (
+        {history.error !== undefined && history.data === undefined ? (
           <ErrorNote error={history.error} className="m-3" />
         ) : (
           <>
+            {history.error !== undefined && <ErrorNote error={history.error} className="mb-3" />}
             {conversationApprovals.error !== undefined && (
               // **この会話の承認待ち（`ask_human`）が読めていない（issue
               // #2210）。** `conversationApprovals.data` が無いままだと
