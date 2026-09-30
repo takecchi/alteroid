@@ -32,9 +32,13 @@ export const CLONE_ACTOR_ID = 'clone';
  * （`manager.ts` の `#generateManagerId`）にすぎず、差し替えれば `mgr-` で始まらない id が
  * 委譲に付く。クローンの分は {@link CLONE_ACTOR_ID} に決まっているので、それ以外を
  * 委譲として扱う。画面（日誌のリンク・使用量の「マネージャー別」）はこの1つの関数を共有する。
+ *
+ * **空文字は委譲にしない。** 基準値の `managerId` は「呼び出し側が後から入れる」契約で、
+ * 入れる前は `''` である（`usage.ts` の `baseline?.managerId ?? ''`）。接頭辞で見ていた頃は
+ * 空文字を弾けていたので、ここでも弾く（弾かないと `/managers/` への空のリンクが出る）。
  */
 export function isDelegationActorId(managerId: string): boolean {
-  return managerId !== CLONE_ACTOR_ID;
+  return managerId !== '' && managerId !== CLONE_ACTOR_ID;
 }
 
 /**

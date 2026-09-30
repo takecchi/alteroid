@@ -7,6 +7,7 @@ import {
   describeUsageDateOrder,
   describeWebSearchRequests,
   findUnrecordedManagers,
+  isDelegationActorId,
   isRealUsageDate,
   USAGE_DATE_PATTERN,
   ZERO_USAGE,
@@ -553,5 +554,17 @@ describe('addUnreadableCounts（欄ごとの「読めなかった数」を足す
     // 実際には正の数どうしの足し算なので0にはならないが、境界として
     // 「空オブジェクトどうし」は undefined になることを確かめる。
     expect(addUnreadableCounts({}, {})).toBeUndefined();
+  });
+});
+
+describe('isDelegationActorId（issue #2269）', () => {
+  it('mgr- で始まらない委譲の id も委譲と読む', () => {
+    expect(isDelegationActorId('mgr-1')).toBe(true);
+    expect(isDelegationActorId('job-7f3a')).toBe(true);
+  });
+
+  it('クローンの id と空文字は委譲と読まない（空文字は、基準値の managerId を入れる前の値）', () => {
+    expect(isDelegationActorId('clone')).toBe(false);
+    expect(isDelegationActorId('')).toBe(false);
   });
 });
