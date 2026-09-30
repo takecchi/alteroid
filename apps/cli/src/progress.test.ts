@@ -159,6 +159,37 @@ describe('progressCommand', () => {
     expect(read()).toContain('数が欠けうる（読めなかった行 2 件');
   });
 
+  it('欄 unreadableJobs の無い古いデーモンの応答でも、「undefined」を書かず、読めない委譲について何も言わない（#2382）', async () => {
+    // `body()` の completeness は、もともと unreadableJobs の無い形（古い応答）。
+    replies.push({ status: 200, body: body() });
+    const read = captureStdout();
+    await progressCommand();
+    const text = read();
+    expect(text).toContain('積み上がり');
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('読めない委譲');
+  });
+
+  it('対照: unreadableJobs が 0 なら何も言わず、1 以上なら言う（#2382）', async () => {
+    const base = body() as { backlog: Record<string, unknown> };
+    const withCount = (unreadableJobs: number): Record<string, unknown> =>
+      body({
+        backlog: {
+          ...base.backlog,
+          completeness: { unreadable: 0, trimmedClosed: 0, unreadableJobs },
+        },
+      });
+    replies.push({ status: 200, body: withCount(0) });
+    const readZero = captureStdout();
+    await progressCommand();
+    expect(readZero()).not.toContain('読めない委譲');
+
+    replies.push({ status: 200, body: withCount(2) });
+    const readTwo = captureStdout();
+    await progressCommand();
+    expect(readTwo()).toContain('※ 読めない委譲の行が 2 件ある');
+  });
+
   it('400 は daemon の文言で失敗する（stdout には書かない）', async () => {
     replies.push({ status: 400, body: { error: 'windowHours は有限の正数（時間）で指定する' } });
     const read = captureStdout();

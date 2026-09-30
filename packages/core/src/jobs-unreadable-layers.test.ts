@@ -134,4 +134,15 @@ describe('digest と進捗', () => {
     expect(view.backlog.completeness.unreadableJobs).toBe(0);
     expect(describeProgress(view)).not.toContain('読めない委譲');
   });
+
+  it('describeProgress: 欄が無い古いデーモンの応答では、「undefined」を書かず、読めない委譲について何も言わない（#2382）', async () => {
+    const view = await readProgress(withUnreadable([]), { now: new Date() });
+    const { unreadable, trimmedClosed } = view.backlog.completeness;
+    const text = describeProgress({
+      ...view,
+      backlog: { ...view.backlog, completeness: { unreadable, trimmedClosed } },
+    });
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('読めない委譲');
+  });
 });

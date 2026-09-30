@@ -207,6 +207,23 @@ export interface ApplyCredentialsResult {
 }
 
 /**
+ * `apply()` が**入力の形を検めて断った**ときに投げる（issue #2415）。
+ *
+ * **文言では見分けないこと。** 呼び出し側（`PUT /credentials` の `app.ts`）は
+ * これを `instanceof` で見分け、`message`（人が入力を直すための文。鍵の名前と
+ * 理由だけで、**値は1文字も載せない**）を応答へ返す。これ以外の例外（ストアの
+ * 書き込みの失敗・配布の失敗など）は `message` に値が載りうる（drizzle は
+ * `Failed query: … params: <値>` を添える）ので、応答にも日誌にも `name` しか
+ * 載せない。⟹ **この型を投げる文には、値を載せないこと。**
+ */
+export class CredentialEntryRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CredentialEntryRejectedError';
+  }
+}
+
+/**
  * 受け取った入力の形を検める。**落ちるなら、何も書かない前に落ちる。**
  *
  * 名前の重複もここで落とす——同じ名前を2行で渡されると、正本には後の行が入り、
@@ -219,7 +236,7 @@ function assertEntries(
   existingByName: ReadonlyMap<string, StoredCredential>,
 ): void {
   if (entries.length === 0) {
-    throw new Error('鍵が1つも渡されていない（置くものが無い）');
+    throw new CredentialEntryRejectedError('鍵が1つも渡されていない（置くものが無い）');
   }
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -234,24 +251,24 @@ function assertEntries(
      * エラーメッセージ自身が際限なく伸びるのを避ける。
      */
     if (entry.name.length > CREDENTIAL_NAME_MAX_LENGTH) {
-      throw new Error(
+      throw new CredentialEntryRejectedError(
         `鍵の名前が長すぎる（${entry.name.length} 文字。上限は ${CREDENTIAL_NAME_MAX_LENGTH} ` +
           '文字——runner の受け口と同じ上限）',
       );
     }
     if (!CREDENTIAL_NAME.test(entry.name)) {
-      throw new Error(
+      throw new CredentialEntryRejectedError(
         `鍵の名前として認められない: ${JSON.stringify(entry.name)}（英大文字・数字・_ のみ）`,
       );
     }
     if (isWithheldCredentialName(entry.name, withheld)) {
-      throw new Error(
+      throw new CredentialEntryRejectedError(
         `${entry.name} は子プロセスへ伏せる鍵なので、鍵として配れない` +
           '（伏せる仕組みを鍵の仕組みで越えさせない）',
       );
     }
     if (POOL_OWNED_CREDENTIAL_NAMES.includes(entry.name)) {
-      throw new Error(
+      throw new CredentialEntryRejectedError(
         `${entry.name} の正本は認証トークンのプールである（alteroid token add / PUT /tokens）。` +
           'ここへ置くと撒き手が2つになり、回した鍵をこちらが名乗り直しで上書きして' +
           'ローテーションが黙って効かなくなる',
@@ -272,14 +289,16 @@ function assertEntries(
      * 1文字も倒れない。
      */
     if (ENV_FILE_OWNED_CREDENTIAL_NAMES.includes(entry.name) && entry.value.length > 0) {
-      throw new Error(
+      throw new CredentialEntryRejectedError(
         `${entry.name} の正本は器の生の環境変数（.env / Railway の Service 変数）である。` +
           'ここへ置いても誰にも配られない（正本を2つにしないため、読み出しでも落とす）' +
           '（直すのは railway/setup.sh が置く側、または器の .env）',
       );
     }
     if (seen.has(entry.name)) {
-      throw new Error(`${entry.name} が2回渡されている（どちらが残るかを決めない）`);
+      throw new CredentialEntryRejectedError(
+        `${entry.name} が2回渡されている（どちらが残るかを決めない）`,
+      );
     }
     seen.add(entry.name);
 
@@ -292,7 +311,7 @@ function assertEntries(
       if (existing !== undefined) {
         const existingSecret = existing.secret ?? true;
         if (entry.secret !== existingSecret) {
-          throw new Error(
+          throw new CredentialEntryRejectedError(
             `${entry.name} の secret（シークレット可否）は作成時に決まり、後から変更できない` +
               `（いまは ${existingSecret ? 'シークレット' : '非シークレット'}）。` +
               '値を変えたいだけなら secret を省略すること',

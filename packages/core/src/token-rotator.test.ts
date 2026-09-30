@@ -2050,6 +2050,64 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
     expect(entry?.text).not.toContain('free_exhausted');
   });
 
+  describe('#2403: 設定が読めないあいだも、枠の拒否の事実は覚える（#680）', () => {
+    const GUESS = Date.parse(AT) + 5 * 60 * 60_000;
+    const RESETS_AT = Date.parse(AT) + 90 * 60_000;
+    const settingsBack = { rotateOn: 'free_exhausted', cooldownMs: 5 * 60 * 60_000 } as const;
+
+    async function cooldownOf(h: Harness, id: string): Promise<number | undefined> {
+      return (await h.stores.tokens.list()).find((token) => token.id === id)?.cooldownUntil;
+    }
+
+    it('(a) 読めないあいだに届いた期限の事実を、設定が戻った後の文言だけの拒否で使う', async () => {
+      const h = harness();
+      await seedTwo(h);
+      breakTokenSettings(h);
+
+      const first = await h.rotator.observe({
+        facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+        statusNow: 'rejected',
+      });
+      expect(first.kind).toBe('ignored');
+      if (first.kind !== 'ignored') return;
+      expect(first.signal).toBe('settings_unreadable');
+
+      await h.stores.tokens.writeSettings(settingsBack); // 読める状態へ戻す
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+
+      expect(outcome.kind).toBe('rotated');
+      expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
+      expect(await cooldownOf(h, 'tok-a')).not.toBe(GUESS);
+    });
+
+    it('(b) 覚えた後、読めないあいだに allowed が届けば、古い期限は使わない', async () => {
+      const h = harness();
+      await seedTwo(h);
+      breakTokenSettings(h);
+
+      await h.rotator.observe({
+        facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+        statusNow: 'rejected',
+      });
+      await h.rotator.observe({
+        facts: { kind: 'five_hour', status: 'allowed', resetsAt: RESETS_AT },
+        statusNow: 'allowed',
+      });
+
+      await h.stores.tokens.writeSettings(settingsBack);
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+
+      expect(outcome.kind).toBe('rotated');
+      expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+    });
+  });
+
   it('(e) UnreadableTokenSettingsError 以外はそのまま投げる（observe）', async () => {
     const h = harness();
     await seedTwo(h);
@@ -2724,6 +2782,37 @@ describe('reconsider: 現役の冷却が明けたら、止まっていた層を�
     const outcome = await h.rotator.reconsider({ reason: 'tick' });
 
     expect(outcome.kind === 'ignored' && outcome.reopened?.tokenId).toBe('tok-a');
+  });
+
+  it('probe で通らないと観測したのに設定が読めない回は settings_unreadable で、reopened を出さず記録もしない。次に通る回で1回だけ立つ（#2391）', async () => {
+    const h = harness();
+    const elapsed = await seedElapsed(h);
+    breakTokenSettings(h, 'cooldownMs が負の数');
+
+    const blocked = await h.rotator.reconsider({
+      reason: 'account_probe',
+      current: {
+        verdict: { verdict: 'unusable', reason: '枠が尽きた' },
+        origin: { source: 'account_probe' },
+      },
+    });
+
+    // (a) 門が先に返る。「明けた」の合図は出ない。
+    expect(blocked.kind).toBe('ignored');
+    if (blocked.kind !== 'ignored') return;
+    expect(blocked.signal).toBe('settings_unreadable');
+    expect(blocked.reopened).toBeUndefined();
+    expect(blocked.why).toContain('枠が尽きた');
+    expect(blocked.why).toContain('cooldownMs が負の数');
+
+    // (b) 記録していないので、設定が読めて probe も無い次の回で1回だけ立つ。
+    await h.stores.tokens.writeSettings({ rotateOn: 'free_exhausted', cooldownMs: 18_000_000 });
+    const next = await h.rotator.reconsider({ reason: 'tick' });
+    expect(next.kind === 'ignored' && next.reopened?.cooldownUntil).toBe(
+      new Date(elapsed).toISOString(),
+    );
+    const again = await h.rotator.reconsider({ reason: 'tick' });
+    expect(again.kind === 'ignored' && again.reopened === undefined).toBe(true);
   });
 
   it('冷却がまだ明けていなければ立たない（park の途中では起こさない）', async () => {

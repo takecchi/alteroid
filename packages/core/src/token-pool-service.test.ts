@@ -31,9 +31,12 @@ describe('直列化', () => {
     const second = service.replace([{ id: 'tok-a', label: 'renamed-by-second' }]);
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
+    if (firstResult.kind !== 'replaced' || secondResult.kind !== 'replaced') {
+      throw new Error('保存後の読み直しは失敗しないはず');
+    }
 
-    expect(firstResult.tokens[0]?.id).toBe('tok-a');
-    expect(secondResult.tokens).toEqual([
+    expect(firstResult.view.tokens[0]?.id).toBe('tok-a');
+    expect(secondResult.view.tokens).toEqual([
       expect.objectContaining({ id: 'tok-a', label: 'renamed-by-second' }),
     ]);
   });
@@ -81,7 +84,9 @@ describe('外へ出す顔', () => {
     const service = createTokenPoolService({ stores });
     const SECRET = 'tok-another-secret';
 
-    const { tokens } = await service.replace([{ label: 'a', value: SECRET }]);
+    const result = await service.replace([{ label: 'a', value: SECRET }]);
+    if (result.kind !== 'replaced') throw new Error('保存後の読み直しは失敗しないはず');
+    const { tokens } = result.view;
 
     expect(tokens[0]).not.toHaveProperty('value');
     expect(JSON.stringify(tokens)).not.toContain(SECRET);
@@ -297,7 +302,9 @@ describe('プールが変わったことを知らせる（onChanged）', () => {
       },
     });
 
-    const { tokens } = await service.replace([{ label: 'first', value: 'value-a' }]);
+    const result = await service.replace([{ label: 'first', value: 'value-a' }]);
+    if (result.kind !== 'replaced') throw new Error('保存後の読み直しは失敗しないはず');
+    const { tokens } = result.view;
 
     expect(tokens).toHaveLength(1);
     expect((await stores.tokens.list())[0]?.value).toBe('value-a');
@@ -312,7 +319,9 @@ describe('プールが変わったことを知らせる（onChanged）', () => {
       stores,
       onChanged: (change) => changes.push(change),
     });
-    const { tokens } = await service.replace([{ label: 'first', value: 'value-a' }]);
+    const replaced = await service.replace([{ label: 'first', value: 'value-a' }]);
+    if (replaced.kind !== 'replaced') throw new Error('保存後の読み直しは失敗しないはず');
+    const { tokens } = replaced.view;
     changes.length = 0;
     const id = tokens[0]?.id ?? '';
 

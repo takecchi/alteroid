@@ -1696,6 +1696,8 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  *
  * ⚠️ **その後、`flock` 自身のオプションを読むようにした**（mgr-712ad619、2026-09-29T06:2xZ）。
  * `flock -n /tmp/l gh pr merge 1 -d` など、オプション付きの7形がすり抜けていた。
+ * （#2402: 短いオプションの束ねで最後が `w` / `E` の形 `-nw 5` も、値を1つ取る側で読む。
+ * 値を取らない側の否定の先読みも同じ形に揃えてあるので、1つの語の読み方は1通りのまま。）
  * `FLOCK_OPTION_SRC` が、値を取るもの（`-w` / `-E` と長い形の `--wait` /
  * `--timeout` / `--conflict-exit-code`）と、値を取らないもの（`-n` / `-x` / `--nonblock` …）
  * を分けて読む。**値を取らない側は、値を取る名前を否定の先読みで除く**（`-w` を値なしで
@@ -1726,7 +1728,7 @@ const LEADING_COMMAND_PREFIX_SRC = String.raw`(?:${LEADING_COMMAND_PREFIX_NAME_S
  * 3445.4ms → 5.2ms。mgr-712ad619 の実測 2026-09-29T06:2xZ。歯は
  * `bash-wait-guard-delete-branch-flock.test.ts`）。
  */
-const FLOCK_OPTION_SRC = String.raw`(?:-[wE][ \t]+\S+|--(?:wait|timeout|conflict-exit-code)(?:=\S+|[ \t]+\S+)|(?!-[wE](?:[ \t]|$))(?!--(?:wait|timeout|conflict-exit-code)(?:[ \t=]|$))(?!-c(?:[ \t]|$))(?!--command(?:[ \t=]|$))-\S+)`;
+const FLOCK_OPTION_SRC = String.raw`(?:-[A-Za-z]*[wE][ \t]+\S+|--(?:wait|timeout|conflict-exit-code)(?:=\S+|[ \t]+\S+)|(?!-[A-Za-z]*[wE](?:[ \t]|$))(?!--(?:wait|timeout|conflict-exit-code)(?:[ \t=]|$))(?!-c(?:[ \t]|$))(?!--command(?:[ \t=]|$))-\S+)`;
 
 const FLOCK_PREFIX_SRC = String.raw`(?:flock\b(?:[ \t]+${FLOCK_OPTION_SRC})*[ \t]+(?!-)\S+[ \t]+)`;
 
@@ -2369,8 +2371,19 @@ const SHELL_DASH_C_ARG_SRC = String.raw`(?:"(${NESTED_SHELL_DOUBLE_QUOTED_INNER_
  */
 const SHELL_DASH_C_FLAG_SRC = String.raw`-[A-Za-z]*c\b`;
 
+/**
+ * シェル名と `-c` のあいだのオプション（#2397）——`-e`・`-euo pipefail`・`-o pipefail`・
+ * `--norc`・`+o errexit`。`-c` 自身（`c` で終わる束ね）は読み飛ばさない。`-o`/`-O`/`+o` で
+ * 終わる束ねだけが値を1語取る。値は `-` 始まりを許さない（`-` 始まりの語は次の
+ * オプションとして読むので、1語の読み方が1通りに決まり後戻りが線形になる）。
+ */
+const SHELL_PRE_C_OPTION_SRC = String.raw`(?:-[A-Za-z]*[oO][ \t]+(?!-)\S+|\+o[ \t]+(?!-)\S+|(?!-[A-Za-z]*c\b)--?[A-Za-z][\w-]*)`;
+
+/** `-c` のあとの `--`（オプションの終わり）。 */
+const SHELL_DASH_C_END_OF_OPTIONS_SRC = String.raw`(?:--[ \t]+)?`;
+
 const SHELL_DASH_C_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_ARG_SRC}`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}(?:[ \t]+${SHELL_PRE_C_OPTION_SRC})*[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_END_OF_OPTIONS_SRC}${SHELL_DASH_C_ARG_SRC}`,
   'g',
 );
 
@@ -2648,19 +2661,22 @@ function joinLineContinuations(command: string): string {
 }
 
 /**
- * 引用符の中（`computeOutsideQuoteMask` が「外」と言い切れない位置）の改行を空白にした写しを返す
- * （#2271 B）。呼び出し区間の切り出しは改行で止まるので、`--body "$(cat <<'EOF'` の本文が
- * 複数行の形（ヒアドキュメントで本文を渡す打ち方）だと、その後ろの `--delete-branch` / `-d`
- * へ届かなかった。引用符が閉じていない・読めない（`unknown`）ときも「外」ではないので
- * 空白にする——弾く側にしか倒れない。無ければ同じ文字列を返す。
+ * 引用符の中（`computeOutsideQuoteMask` が「外」と言い切れない位置）の区切り（改行・`;`・`|`・`&`）を
+ * 空白にした写しを返す（#2271 B で改行、#2388 で他の区切りへ広げた）。呼び出し区間の切り出しは
+ * 区切りで止まるので、`--body "$(cat <<'EOF'` の本文が複数行の形だと、その後ろの
+ * `--delete-branch` / `-d` へ届かなかった。`$` やバッククォートを含む二重引用符の `--body` の値は
+ * 前処理で潰されない（意図的）ので、本文の中の `;` / `|` でも区間が途中で切れ、
+ * `--match-head-commit` を見落として正しいマージを弾く・後ろの `-d` を見落として素通しする、が
+ * 起きていた（#2388）。引用符が閉じていない・読めない（`unknown`）ときも「外」ではないので
+ * 空白にする。引用符の外の区切りはそのまま残す。無ければ同じ文字列を返す。
  */
-function flattenNewlinesInsideQuotes(command: string): string {
-  if (!command.includes('\n')) return command;
+function flattenSeparatorsInsideQuotes(command: string): string {
+  if (!/[\n;|&]/.test(command)) return command;
   const outside = computeOutsideQuoteMask(command);
   let out = '';
   for (let i = 0; i < command.length; i++) {
     const ch = command[i] as string;
-    out += ch === '\n' && !outside[i] ? ' ' : ch;
+    out += '\n;|&'.includes(ch) && !outside[i] ? ' ' : ch;
   }
   return out;
 }
@@ -2671,7 +2687,7 @@ function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
   if (GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues)) return true;
   // 引用符の中の改行は区切りではない（#2271 B。`--body "$(cat <<'EOF' … EOF)" --squash -d`）。
   // 元の文字列と、引用符の中の改行を空白にした写しの両方にかける（弾く側にしか倒れない）。
-  const flattened = flattenNewlinesInsideQuotes(withoutQuotedSubjectBodyValues);
+  const flattened = flattenSeparatorsInsideQuotes(withoutQuotedSubjectBodyValues);
   if (
     flattened !== withoutQuotedSubjectBodyValues &&
     GH_PR_MERGE_DELETE_BRANCH_RE.test(flattened)
@@ -2730,7 +2746,10 @@ const GH_PR_MERGE_NO_MERGE_RE = /(?<=\s)(?:--disable-auto|--help|-h)(?=\s|$)/;
  * 引用符の値の中の `--match-head-commit` の字面は「付いている」と読む（通す側に倒れる）。
  */
 function hasGhPrMergeWithoutMatchHeadCommit(command: string, depth = 0): boolean {
-  const stripped = stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command));
+  // 引用符の中の `;` `|` `&` と改行は区切りとして読まない（#2388。`flattenSeparatorsInsideQuotes`）。
+  const stripped = flattenSeparatorsInsideQuotes(
+    stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command)),
+  );
   for (const match of stripped.matchAll(GH_PR_MERGE_INVOCATION_RE)) {
     const segment = match[1] ?? '';
     if (GH_PR_MERGE_NO_MERGE_RE.test(segment)) continue;
@@ -2775,7 +2794,10 @@ const BODY_FLAG_RE = /(?<=[\s'"])(?:--body(?:-file)?(?=[\s'"=]|$)|-(?!-)[A-Za-z]
  * 「明示している」と読み、通す側に倒れる。`gh api` での直接マージ・alias・MCP の `merge_pull_request` は対象外。
  */
 function hasGhPrMergeSquashWithoutBody(command: string, depth = 0): boolean {
-  const stripped = stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command));
+  // 引用符の中の区切りは区切りとして読まない（#2388）。
+  const stripped = flattenSeparatorsInsideQuotes(
+    stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command)),
+  );
   for (const match of stripped.matchAll(GH_PR_MERGE_INVOCATION_RE)) {
     const segment = match[1] ?? '';
     if (GH_PR_MERGE_NO_MERGE_RE.test(segment)) continue;
@@ -2825,8 +2847,17 @@ const DATA_HEREDOC_READER_RE = new RegExp(
  * と同じく本文が後で実行される。#2204 までは名前の列挙（`SHELL_NAME_SRC`）にしか当てず、無限ループを
  * 書いた本文を「データだけ」と読んで弾かなかった。変数の形は `SHELL_NAME_SRC` に含めてある（#2238）。
  */
+/**
+ * シェル名の後ろで「何かを走らせる」形（#2398）。次のどちらか。
+ * - オプション（`-x` など。`-c` で終わる束ねと `--version`/`--help` は除く——`-c` の中身は別の経路が見る）を読み飛ばして、
+ *   `-` で始まらない語（スクリプト）が来る形（`bash -x r.sh`）
+ * - 引数が無く、区切り・行末が来る形（`cat r.sh | bash` / `| sh`。標準入力を読んで走らせる）
+ * オプション（`-` 始まり）と語（`-` 以外）は先頭の文字で分かれるので、後戻りは線形。
+ */
+const SCRIPT_RUN_SHELL_TAIL_SRC = String.raw`(?:[ \t]+(?!-[A-Za-z]*c\b|--(?:version|help)\b)-\S*)*(?:[ \t]+(?!-)\S|[ \t]*(?:$|[;&|)\n]))`;
+
 const SCRIPT_RUN_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}[ \t]+(?!-)\S|source\b|\.[ \t]|\.{0,2}\/\S)`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}(?:${SHELL_NAME_SRC}${SCRIPT_RUN_SHELL_TAIL_SRC}|source\b|\.[ \t]|\.{0,2}\/\S)|>\([ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}`,
 );
 
 /**

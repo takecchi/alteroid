@@ -664,7 +664,11 @@ export interface AppraisalStatsBudget {
 export function describeAppraisalStats(
   input: {
     journal: AppraisalJournalStats;
-    jobCoverage: JobAppraisalCoverage;
+    /**
+     * `JobAppraisalCoverage`（デーモンが返す型。変えない）と違い、`unreadableJobs` だけが任意
+     * ——後から足した欄（issue #2359）なので、古いデーモンの応答には無い（issue #2382）。
+     */
+    jobCoverage: Omit<JobAppraisalCoverage, 'unreadableJobs'> & { unreadableJobs?: number };
     reconciliation: AppraisalReconciliationStats;
   },
   budget?: AppraisalStatsBudget,
@@ -718,7 +722,8 @@ export function describeAppraisalStats(
       'まだ続きうるので「評定が無い」を欠落として数えていない）',
   );
   // 読めない委譲の行（issue #2359）。0 件なら行を作らない（出力は今までと1文字も変わらない）。
-  if (jobCoverage.unreadableJobs !== 0) {
+  // 欄が無い（古いデーモンの応答。issue #2382）ときも何も言わない（「undefined 件」とも「0 件」とも書かない）。
+  if (jobCoverage.unreadableJobs !== undefined && jobCoverage.unreadableJobs !== 0) {
     lines.push(
       `※ 読めない委譲が ${jobCoverage.unreadableJobs} 件あり、上の内訳には入っていない` +
         '（終端したかも、評定の有無も分からない。評定なしでも評定ありでもない）。' +
