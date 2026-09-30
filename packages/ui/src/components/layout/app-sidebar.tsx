@@ -58,9 +58,24 @@ export function AppSidebar({
       className={cn(
         'flex flex-col bg-card',
         /*
-         * ⚠️ ここに角括弧つきの class を例として書かないこと。Tailwind のスキャナは
-         * コメントか本物のコードかを区別せずに拾い、壊れた CSS を生成する
-         * （`apps/web/app/routes/shell.tsx` の Nav に在った注記と同じ実測）。
+         * ドロワーの中では枠と幅は Drawer 側が持っている（左端の safe-area も含めて —
+         * `drawer.tsx` の `SheetContent` に既にある）。**ここで同じものを足すと二重に効く**
+         * （余白が倍になる）ので、`inDrawer` でない側（広い画面でこの `nav` が単独で
+         * ページの左端に立つとき）にだけ足す。
+         *
+         * 横向きで画面幅が 768px（`useIsMobile` の境目）を超える端末では
+         * `MobileTopBar` ではなくこちらが画面の左端に出る（`apps/web/app/routes/shell.tsx`
+         * の `AuthedShell` 参照）。**現行の多くの機種は横向きでこの幅を超える**ので、
+         * 横向きの左端の safe-area はむしろこちらが主な当たり先になる。右は当てていない
+         * — 広い画面では `nav` の右に `main`（`page.tsx` / `chat.tsx`）が続き、画面の
+         * 右端は既にそちら側の右の safe-area の calc() 版が持っている。
+         *
+         * ⚠️ ここで実際の角括弧つきのクラス名を書かないこと。Tailwind のスキャナは
+         * コメントか本物のコードかを区別せず拾って壊れた CSS を生成する。実測: 移す前の
+         * `shell.tsx` の `Nav` のコメントに、右の safe-area の calc() 版のクラス名を
+         * 角括弧つきで一度書いたところ、コンパイル後の CSS に不正な calc()
+         * （加算の項の前後に空白が無い形）がそのまま出た。使われない・壊れてもいない
+         * ので実害は無かったが、次にここへ角括弧つきの例を書くときは注意すること。
          */
         inDrawer ? 'min-h-0 flex-1' : 'w-56 shrink-0 border-r border-border pl-[var(--safe-left)]',
       )}

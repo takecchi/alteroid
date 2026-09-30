@@ -972,6 +972,10 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
 
     // チップの押下状態は className（`border-primary`）で表現されている
     // （journal.tsx のチップは `aria-pressed` を持たない）。
+    // ↑ 2026-09-29 追記: チップを `FilterChips` へ移して、journal のチップも
+    // `aria-pressed` を持つようになった（この上の文は移す前の事実）。下の assert は
+    // className だけを見ており、`FilterChips` も押した状態に `border-primary` を付けるので
+    // 変えていない。
     expect(screen.getByRole('button', { name: 'exchange' }).className).toContain('border-primary');
     expect(screen.getByRole('button', { name: 'decision' }).className).toContain('border-primary');
     expect(screen.getByRole('button', { name: 'escalation' }).className).not.toContain(

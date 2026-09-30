@@ -161,7 +161,10 @@ describe('summarizeProgress — backlog', () => {
       row('rd', OLD, { respondedAt: '2026-08-02T00:00:00.000Z', activeManagerIds: ['m2', 'm3'] }),
       row('e', OLD, { activeManagerIds: [] }), // 空配列は委譲ありに数えない（未着手）
       row('mg', OLD, { origin: 'manager', activeManagerIds: ['m4'] }), // human 以外は対象外
-      row('cl', OLD, { respondedAt: '2026-08-02T00:00:00.000Z', closedAt: '2026-08-03T00:00:00.000Z' }),
+      row('cl', OLD, {
+        respondedAt: '2026-08-02T00:00:00.000Z',
+        closedAt: '2026-08-03T00:00:00.000Z',
+      }),
     ]).backlog;
     expect(b.byState).toEqual({ untouched: 3, responded: 2, delegated: 2, notApplicable: 1 });
     expect(b.byState.untouched + b.byState.responded + b.byState.notApplicable).toBe(b.total);
@@ -298,10 +301,7 @@ describe('summarizeProgress — forecast', () => {
   });
 
   it('式は windowHours を使う（24 時間窓と 168 時間窓で同じ件数でも hoursToDrain が変わる）', () => {
-    const rows = anchored([
-      ...closedInWindow(3),
-      row('o1', '2026-09-01T00:00:00.000Z'),
-    ]); // open 2, closed 3（closedAt 2026-09-25 は 24h 窓の外）
+    const rows = anchored([...closedInWindow(3), row('o1', '2026-09-01T00:00:00.000Z')]); // open 2, closed 3（closedAt 2026-09-25 は 24h 窓の外）
     const f168 = summarize(rows).forecast;
     expect(f168.state === 'estimated' && f168.hoursToDrain).toBeCloseTo((2 * 168) / 3, 9);
     // 24h 窓では窓の中で閉じた行が 0 になり closed_too_few
@@ -444,8 +444,9 @@ describe('summarizeProgress — forecast', () => {
 
   describe('複数の reason が当たるときの優先順位', () => {
     it('ledger_younger_than_window は history_incomplete と closed_too_few に先立つ', () => {
-      const f = summarize([row('young', '2026-09-25T00:00:00.000Z')], [], { trimmedClosed: 3 })
-        .forecast;
+      const f = summarize([row('young', '2026-09-25T00:00:00.000Z')], [], {
+        trimmedClosed: 3,
+      }).forecast;
       expect(f).toMatchObject({ reason: 'ledger_younger_than_window' });
     });
 
