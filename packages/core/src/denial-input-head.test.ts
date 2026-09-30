@@ -430,3 +430,98 @@ describe('buildDenialInputHead / URL の userinfo に入った資格を伏せる
     );
   });
 });
+
+describe('buildDenialInputHead / scheme の無い形の資格を伏せる（issue #2383）', () => {
+  // 値はすべて偽である。
+  it('user:pass@host:port（接続文字列の一部）の pass を伏せ、user と host は残す', () => {
+    const head = buildDenialInputHead({ command: 'user:FAKEPASS@db.internal:5432' }, undefined);
+    expect(head).not.toContain('FAKEPASS');
+    expect(head).toBe('user:[REDACTED]@db.internal:5432');
+  });
+
+  it('//user:pass@host（scheme を省いた URL）の pass を伏せる', () => {
+    const head = buildDenialInputHead({ command: 'curl //user:FAKEPASS@host/path' }, undefined);
+    expect(head).not.toContain('FAKEPASS');
+    expect(head).toBe('curl //user:[REDACTED]@host/path');
+  });
+
+  it('コマンドに埋まった形（引用符の中・= の右・JSON の1行）も伏せる', () => {
+    for (const command of [
+      'psql "host=x user:FAKEPASS@db.internal:5432"',
+      "mysql --uri='app:FAKEPASS@db.internal:3306'",
+      'DB=app:FAKEPASS@db.internal:3306 run',
+    ]) {
+      expect(buildDenialInputHead({ command }, undefined)).not.toContain('FAKEPASS');
+    }
+    expect(buildDenialInputHead({ dsn: 'app:FAKEPASS@db.internal:3306' }, undefined)).not.toContain(
+      'FAKEPASS',
+    );
+  });
+
+  it('scheme のある形を伏せた結果と、二重に伏せても変わらない', () => {
+    const head = buildDenialInputHead({ command: 'x postgres://app:FAKEPASS@db/app' }, undefined);
+    expect(head).toBe('x postgres://app:[REDACTED]@db/app');
+  });
+
+  it('対照: scp 形式・ssh の宛先・メールアドレスは残す', () => {
+    for (const command of [
+      'git clone git@github.com:o/r.git',
+      'ssh user@host',
+      'ssh -p 22 deploy@host.example.com uptime',
+      'mail alice@example.com',
+      'git remote add origin git@github.com:o/r.git',
+    ]) {
+      expect(buildDenialInputHead({ command }, undefined)).toBe(command);
+    }
+  });
+
+  it('対照: host:port・時刻・mailto・ホスト名が1文字の a:b@c は残す', () => {
+    for (const command of [
+      'curl localhost:5432',
+      'nc db.internal:5432',
+      'date -d 12:34',
+      'at 12:34@home',
+      'echo 12:34:56@host',
+      'open mailto:alice@example.com',
+      'echo a:b@c',
+      'echo a:b@',
+      'echo :@host',
+    ]) {
+      expect(buildDenialInputHead({ command }, undefined)).toBe(command);
+    }
+  });
+
+  // 伏せ字は切る前の全文にかかる。scheme が無いのでどこからでも走り出しうる。
+  // 以下は、走り出す位置の絞り（手前が語の頭）と長さの上限が無いと2乗になる形。
+  const linear = (make: (n: number) => string) =>
+    expectNotSuperlinear((command: string) => buildDenialInputHead({ command }, undefined), make, {
+      n: 2000,
+    });
+
+  it('`a:` の長い繰り返しでも、入力の長さに比例して終わる', () => {
+    linear((n) => `x ${'a:'.repeat(n)}b`);
+  });
+
+  it('`pass` に使える記号で区切られた `a:` の連なり（語の頭が続く形）でも、入力の長さに比例して終わる', () => {
+    // `a:,a:,a:,…`: どの `a` も語の頭なので走り出せ、`pass` は `,` も `:` も読める。
+    linear((n) => `${'a:,'.repeat(n)}b`);
+    linear((n) => `${'a:!'.repeat(n)}b`);
+  });
+
+  it('`@` の多い長い文字列でも、入力の長さに比例して終わる', () => {
+    linear((n) => `u:p${'@'.repeat(n)}`);
+    linear((n) => `${'a@'.repeat(n)}b`);
+    // どの `@` の後ろもホスト名が続かない形（`a:@a:@…`）。
+    linear((n) => `${'a:@'.repeat(n)}`);
+  });
+
+  it('`:` と `@` が交互に来る長い文字列でも、入力の長さに比例して終わる', () => {
+    linear((n) => `${'a:b@'.repeat(n)}c`);
+    linear((n) => `${':@'.repeat(n)}`);
+  });
+
+  it('`.` で区切られた長い連なり（ユーザー名の位置）でも、入力の長さに比例して終わる', () => {
+    linear((n) => `x ${'a.'.repeat(n)}:b`);
+    linear((n) => `x ${'a.'.repeat(n)}:${'p'.repeat(n)}`);
+  });
+});
