@@ -16,7 +16,10 @@ import { createCloneTools } from './tools.js';
  * 1点だけ。この振る舞いは PR #97 が実装済みで、現在の実装
  * （`packages/core/src/clone.ts` の `#withFreshMemory()` にある
  * `documents.filter((doc) => this.#memoryOnRecord.get(doc.slug) !== doc.content)`）
- * が差分判定を行っている。このファイルは #97 のテスト（`clone.test.ts`）とは
+ * が差分判定を行っている。このファイルは #97 のテスト
+ * （`clone-memory-and-commitment-fixes.test.ts` の「記憶を二重に載せない」。
+ * 旧 `clone.test.ts`、#1744 で分割済み。以下、この注釈の `clone.test.ts` は
+ * 分割前のそのファイルを指す）とは
  * 別の組み立て方（下記 `fakeSdk` を自前で組み直したもの）から、その差分判定を
  * 押さえる歯である。
  *
@@ -41,7 +44,8 @@ interface FakeCall {
 }
 
 /**
- * `clone.test.ts` の `fakeSdk` と同じ骨格の簡約版。ここで検証したいのは
+ * `clone-test-harness.ts`（旧 `clone.test.ts`。#1744 で分割済み）の `fakeSdk` と
+ * 同じ骨格の簡約版。ここで検証したいのは
  * 「クローンへ渡る入力テキストに何が載るか」だけなので、レート制限・システム
  * 通知・モデル使用量といった他テストの関心事は削り、`inputs` の捕獲だけを残す。
  */
@@ -122,7 +126,7 @@ function setup(stores: Stores = createMemoryStores()): Setup {
   return { clone, stores, calls, events };
 }
 
-/** chat の1往復が終わる（done が届く）まで待つ（`clone.test.ts` の同名関数と同じ形）。 */
+/** chat の1往復が終わる（done が届く）まで待つ（`clone-test-harness.ts` の同名関数と同じ形）。 */
 function waitForDone(events: ChatStreamEvent[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = Date.now();

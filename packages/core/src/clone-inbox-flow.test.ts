@@ -11,7 +11,8 @@ import { INBOX_EVENT_TYPE_ORDER } from './inbox-backlog.js';
  * ここが固定するのは、切り出した4フィールドの**状態の器としての性質**——
  * 種類別の加算・`{ total, byType }` への整形・reset の中身——である。
  * `#writeInboxFlow` が「いつ `snapshot()` / `reset()` を呼ぶか」「`pending()`
- * が失敗したら何もしないこと」の判断は `clone.test.ts` の `inbox_flow`
+ * が失敗したら何もしないこと」の判断は `clone-inbox-flow-journal.test.ts`
+ * （旧 `clone.test.ts`。#1744 で分割済み）の `inbox_flow`
  * 系（ブラックボックス、`journal.list` を読む）が引き続き持つ——ここでは
  * 扱わない。
  */

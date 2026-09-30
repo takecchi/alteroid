@@ -40,7 +40,7 @@ import type { InboxEvent } from './schema.js';
  *    直接アクセス）を、明示のメソッド呼び出し（`this.#inboxFlow.arrived(...)` /
  *    `.snapshot()` / `.reset()`）に変える」案である——PR #1359・#1433 と
  *    同じ限界。
- * 2. **テストの分離は買えない。** `clone.test.ts` の `inbox_flow` 系の
+ * 2. **テストの分離は買えない。** `clone-inbox-flow-journal.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）の `inbox_flow` 系の
  *    `describe` ブロックはどれも `#writeInboxFlow` が書く日誌の行を通した
  *    ブラックボックスのテストで、切り出しの前後で一体のまま動く——検証は
  *    `journal.list({ types: ['inbox_flow'] })` の中身であって、この

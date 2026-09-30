@@ -1051,8 +1051,8 @@ describe('クローン — 中身の同じ external をまとめて読む（#841
    * 組み立てが誰の呼び出しにも自動で乗せる。
    * `#mergedExternalBatch` もこの共有関数を経由する（`#mergedManagerReportBatch`
    * / `#mergedHumanBatch` と同じ）ので、`external` の束が切れたときも
-   * 断り書きが載るはずである——ここはその歯（`clone.test.ts` の「人間の発言
-   * でも同じ断り書きが載る」と同型）。
+   * 断り書きが載るはずである——ここはその歯（このファイルの「人間の発言
+   * でも同じ断り書きが載る」と同型。旧 `clone.test.ts`、#1744 で分割済み）。
    *
    * **この歯が無いと、`#pump` で `const mergedExternal = ...` を
    * `this.#notices.set('mergedBatchTruncation', '')` より上に置く事故を誰も
