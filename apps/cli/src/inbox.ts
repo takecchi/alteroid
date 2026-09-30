@@ -72,10 +72,9 @@ interface InboxRemoveManyResult {
 
 export async function inboxRemoveCommand(options: InboxRemoveOptions): Promise<void> {
   const target = await resolveTarget();
-  if (target.note !== null) {
-    stdout.write(`${target.note}\n`);
-    return;
-  }
+  // 未ログインの note も例外にする（#2456、クローン teto の判断 2026-09-30）。
+  // 何もせず 0 で返すと「消した」と誤読される。読み取り系（`inboxShowCommand`）は今のまま。
+  if (target.note !== null) throw new Error(target.note);
 
   const types = splitList(options.types);
   if (types.length === 0) {
