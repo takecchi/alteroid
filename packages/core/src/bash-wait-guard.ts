@@ -2359,8 +2359,19 @@ const SHELL_DASH_C_ARG_SRC = String.raw`(?:"(${NESTED_SHELL_DOUBLE_QUOTED_INNER_
  */
 const SHELL_DASH_C_FLAG_SRC = String.raw`-[A-Za-z]*c\b`;
 
+/**
+ * シェル名と `-c` のあいだのオプション（#2397）——`-e`・`-euo pipefail`・`-o pipefail`・
+ * `--norc`・`+o errexit`。`-c` 自身（`c` で終わる束ね）は読み飛ばさない。`-o`/`-O`/`+o` で
+ * 終わる束ねだけが値を1語取る。値は `-` 始まりを許さない（`-` 始まりの語は次の
+ * オプションとして読むので、1語の読み方が1通りに決まり後戻りが線形になる）。
+ */
+const SHELL_PRE_C_OPTION_SRC = String.raw`(?:-[A-Za-z]*[oO][ \t]+(?!-)\S+|\+o[ \t]+(?!-)\S+|(?!-[A-Za-z]*c\b)--?[A-Za-z][\w-]*)`;
+
+/** `-c` のあとの `--`（オプションの終わり）。 */
+const SHELL_DASH_C_END_OF_OPTIONS_SRC = String.raw`(?:--[ \t]+)?`;
+
 const SHELL_DASH_C_RE = new RegExp(
-  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_ARG_SRC}`,
+  String.raw`${COMMAND_POSITION_LOOKBEHIND_SRC}[ \t]*${LEADING_ENV_PREFIX_SRC}${SHELL_NAME_SRC}(?:[ \t]+${SHELL_PRE_C_OPTION_SRC})*[ \t]+${SHELL_DASH_C_FLAG_SRC}[ \t]+${SHELL_DASH_C_END_OF_OPTIONS_SRC}${SHELL_DASH_C_ARG_SRC}`,
   'g',
 );
 
