@@ -6,6 +6,7 @@ import { scanJournalPages } from './journal-scan.js';
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js';
+import { UnreadableApprovalError } from './store.js';
 import type { Stores } from './store.js';
 import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
 
@@ -775,7 +776,15 @@ async function describeEscalationState(
   // は未回答かつ未取り下げの分しか持たないので、「本当に無い」のか
   // 「答えが付いた／取り下げられて pendingOnly の窓から外れた」のかは、
   // これを呼ばないと分からない。
-  const approval = await stores.jobs.getApproval(group.approvalId);
+  let approval: PendingApproval | null;
+  try {
+    approval = await stores.jobs.getApproval(group.approvalId);
+  } catch (error) {
+    // 一覧全体を落とさない。この1件だけ「在るが読めない」と出す（「本当に無い」
+    // とも「判定できない」とも別の状態——行は在って、読めないだけ）。
+    if (!(error instanceof UnreadableApprovalError)) throw error;
+    return '承認待ちキューに行は在るが読めない形で入っている（壊れた行。消されたのではない。回答済みかどうかも判定できない）';
+  }
   if (approval !== null) {
     // **取り下げを先に見る。** `withdrawnAt` が付いた行は `answer` を
     // 持たないので、この判定を後回しにすると次の分岐の「回答の本文が無い

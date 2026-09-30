@@ -494,6 +494,29 @@ export class UnreadableJobError extends Error {
   }
 }
 
+/**
+ * `JobStore.getApproval()` / `JobStore.updateApproval()` が、id の行は**在るが
+ * 読めない**（`pendingApprovalSchema` に合わない。版ずれ・手編集）ときに投げる
+ * 専用のエラー型。`UnreadableJobError` と同じ線——「無い」（`null`）と「在った
+ * が読めない」（throw）を区別する。`instanceof` で見分けること（メッセージの
+ * 文字列で判定しない）。
+ *
+ * **id 以外の値は持たない。** 承認の欄には質問文・文脈・人間の回答がそのまま
+ * 入りうるので、メッセージにも載せない（stderr の跡と同じ理由、#52）。
+ */
+export class UnreadableApprovalError extends Error {
+  readonly id: string;
+
+  constructor(params: { id: string; reason?: string }) {
+    super(
+      `承認待ち ${params.id} は在るが読めない（壊れた行。消されたのではない）` +
+        (params.reason === undefined ? '' : `: ${params.reason}`),
+    );
+    this.name = 'UnreadableApprovalError';
+    this.id = params.id;
+  }
+}
+
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
@@ -534,6 +557,14 @@ export interface JobStore {
   updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null>;
 
   listApprovals(options?: { pendingOnly?: boolean }): Promise<PendingApproval[]>;
+  /**
+   * 承認待ち1件を id で読む。**無ければ `null`。在るが読めない行（版ずれ・手編集で
+   * `pendingApprovalSchema` に合わなくなった行）は `null` ではなく
+   * `UnreadableApprovalError`（本ファイル）を投げる**——`null` に畳むと、呼び出し元が
+   * 「存在しない」「id が違う」と言い切ってしまう。**メモリ実装（`testing.ts`）は
+   * 投げない**——`putApproval` がスキーマを通すので、壊れた行を持てない。
+   * `listApprovals()` は従来どおり読めない行を飛ばす（一覧全体を落とさない）。
+   */
   getApproval(id: string): Promise<PendingApproval | null>;
   putApproval(approval: PendingApproval): Promise<void>;
 
@@ -558,6 +589,10 @@ export interface JobStore {
    * トランザクションの中でだけ意味を持つ）。
    *
    * **無ければ何もせず `null`。`mutate` は呼ばれない**——`updateJob` と同じ。
+   *
+   * **在るが読めない行（`pendingApprovalSchema` に合わない）は `null` ではなく
+   * `UnreadableApprovalError`（本ファイル）を投げる。`mutate` は呼ばれず、行にも
+   * 触れない**（`updateJob` の `UnreadableJobError` と同じ線）。
    *
    * **`mutate` が書かないと決めたときも `null` を返す（`updateJob` には無い
    * 拡張）。** `mutate` は `current` を見て「もう終端に達している」

@@ -1,7 +1,12 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { jobSchema, pendingApprovalSchema, UnreadableJobError } from '@alteroid/core';
+import {
+  jobSchema,
+  pendingApprovalSchema,
+  UnreadableApprovalError,
+  UnreadableJobError,
+} from '@alteroid/core';
 import type { Job, JobStore, PendingApproval } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -187,8 +192,14 @@ export class FsJobStore implements JobStore {
   }
 
   async getApproval(id: string): Promise<PendingApproval | null> {
-    const { approvals } = await this.#read();
-    return approvals.find((approval) => approval.id === id) ?? null;
+    const { approvals, invalidApprovalsRaw } = await this.#read();
+    const found = approvals.find((approval) => approval.id === id);
+    if (found !== undefined) return found;
+    // 壊れた行（`invalidApprovalsRaw`）にしか無ければ「無い」ではなく「読めない」。
+    if (invalidApprovalsRaw.some((raw) => extractRowId(raw) === id)) {
+      throw new UnreadableApprovalError({ id });
+    }
+    return null;
   }
 
   async putApproval(approval: PendingApproval): Promise<void> {
@@ -215,8 +226,9 @@ export class FsJobStore implements JobStore {
    * 実装全体へ広がってしまう。
    *
    * **`found` は検査を通った `approvals` からしか探さない。** id が壊れた行
-   * （`invalidApprovalsRaw`）にしか無ければ「無い」と同じ扱いになる
-   * （`updateJob` の同じ注意）。
+   * （`invalidApprovalsRaw`）にしか無ければ、`mutate` に渡せる形が無いので書かない
+   * ——ただし **`null`（無い）とは分け**、`UnreadableApprovalError` を投げる。
+   * ファイルは書き戻さない（`updateJob` の同じ注意）。
    *
    * **`mutate` が `null` を返したら何も書かない**（`JobStore.updateApproval`
    * の「`updateJob` には無い拡張」）。壊れた行（`invalidApprovalsRaw`）の
@@ -231,7 +243,12 @@ export class FsJobStore implements JobStore {
     return withPathLock(this.#path, async () => {
       const file = await this.#read();
       const found = file.approvals.find((entry) => entry.id === id);
-      if (found === undefined) return null;
+      if (found === undefined) {
+        if (file.invalidApprovalsRaw.some((raw) => extractRowId(raw) === id)) {
+          throw new UnreadableApprovalError({ id });
+        }
+        return null;
+      }
       // 同期のまま最後まで書き換える（`updateJob` と同じ注意——`mutate` に
       // await を挟ませない）。
       const result = mutate(found);

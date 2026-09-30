@@ -180,7 +180,7 @@ import { matchPermissionRule } from './permission-rule.js';
 import { collapseErrorCause } from './error-cause.js';
 import { resolveBuildRevision, resolveBuildTime } from './revision.js';
 import type { CloneRuntimeFacts, SelfFacts } from './self.js';
-import { findOpenManagerDuplicate } from './store.js';
+import { UnreadableApprovalError, findOpenManagerDuplicate } from './store.js';
 import type { CommitmentList, PendingInboxEvent, Stores } from './store.js';
 import {
   cloneToolCarriesSecrets,
@@ -2833,6 +2833,9 @@ class Clone implements CloneHost {
   }
 
   async answerApproval(approvalId: string, answer: string, via?: AnswerApprovalVia): Promise<void> {
+    // **行は在るが読めないときは `UnreadableApprovalError` がそのまま出る**（「存在しない」
+    // に畳まない。`getApproval` / `updateApproval` の doc）。呼び手が `instanceof` で
+    // 「在るが読めない」と言う（HTTP は 409）。
     const approval = await this.#stores.jobs.getApproval(approvalId);
     if (!approval) throw new Error(`承認待ち ${approvalId} は存在しない`);
 
@@ -6050,7 +6053,9 @@ class Clone implements CloneHost {
    *
    * **書くのは、現在の行がまだ `'pending'` で、`answeredAt` が同じ回答のときだけ。**
    * それ以外（既に `'delivered'`・別の回答に置き換わっている）は何もしない。
-   * 例外はそのまま投げる（呼び手がそれぞれの跡を残す）。
+   * 例外はそのまま投げる（呼び手がそれぞれの跡を残す）。**行が読めなくなっていたとき
+   * の `UnreadableApprovalError` も同じ**——呼び手 4 か所は全部握って
+   * `noteDroppedRecord` へ渡す（メッセージが「在るが読めない」と言う）。
    */
   async #markAnswerDelivered(approvalId: string, answeredAt: string): Promise<void> {
     await this.#stores.jobs.updateApproval(approvalId, (current) =>
@@ -8170,9 +8175,23 @@ class Clone implements CloneHost {
         // だけを配り、その全文を `turnInputEntry`（`human_answer_closed`）で日誌へ
         // 残していた（#243）。**残す先は消していない** —— 断り書きの全文は畳んだ側の
         // 1行へ写している（`#foldClosedRedelivery` の doc）。
-        const approval = await this.#stores.jobs.getApproval(event.approvalId);
+        // **行が読めなくなっていても、回答は失わない**（`UnreadableApprovalError`。回答の
+        // 本文は `event` が持つ）。質問だけが取れないので、そう言って続きへ進む。
+        let approval: PendingApproval | null = null;
+        let approvalUnreadable = false;
+        try {
+          approval = await this.#stores.jobs.getApproval(event.approvalId);
+        } catch (error) {
+          if (!(error instanceof UnreadableApprovalError)) throw error;
+          approvalUnreadable = true;
+          noteDroppedRecord('回答済みの承認待ちの読み出し', inboxEventShape(event), error);
+        }
         await this.#markAnswerDeliveredOnHandle(approval, event);
-        const question = approval?.question ?? '(不明な質問)';
+        const question =
+          approval?.question ??
+          (approvalUnreadable
+            ? '(不明な質問。承認待ちの行は在るが読めない形で入っている)'
+            : '(不明な質問)');
         // 宛先は managerId と requestId の対で戻す。requestId を落とすと、
         // そのマネージャーが複数を待っているとき宛先が決まらず、人間が答えたのに
         // 仕事が再開しない（人間へ回る経路の端から端まで id を運ぶこと）。

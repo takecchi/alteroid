@@ -113,6 +113,7 @@ import {
   summarizeUsage,
   tokenRotationSettingsSchema,
   traceApproval,
+  UnreadableApprovalError,
   usageDate,
   usageDateSchema,
   usageLayerSchema,
@@ -3402,10 +3403,22 @@ export function createApp(deps: AppDeps) {
             description: '該当する承認待ちが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '承認待ちの行は在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       async (c) => {
-        const trace = await traceApproval(stores, c.req.param('id'));
+        let trace: Awaited<ReturnType<typeof traceApproval>>;
+        try {
+          trace = await traceApproval(stores, c.req.param('id'));
+        } catch (error) {
+          // 在るが読めない行を「無い」（404）と言わない。
+          if (error instanceof UnreadableApprovalError) return c.json({ error: error.message }, 409);
+          throw error;
+        }
         if (trace === null) return c.json({ error: 'not found' as const }, 404);
         return c.json(approvalTraceResponseSchema.parse(trace));
       },
@@ -3422,7 +3435,8 @@ export function createApp(deps: AppDeps) {
         summary: '溜まった承認待ちにまとめて答える',
         description:
           '1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に' +
-          '独立に再開する）。結果は `answers` と同じ順で返る。',
+          '独立に再開する）。結果は `answers` と同じ順で返る。行が在るが読めない件は、その件だけ' +
+          '`ok: false` と読めない旨の `error` で返る（`not found` とは言わない）。',
         responses: {
           200: {
             description: '各件の結果（1件ごとの成否）。',
@@ -3442,7 +3456,15 @@ export function createApp(deps: AppDeps) {
       async (c) => {
         const results: { id: string; ok: boolean; error?: string }[] = [];
         for (const { id, answer } of c.req.valid('json').answers) {
-          const approval = await stores.jobs.getApproval(id);
+          let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
+          try {
+            approval = await stores.jobs.getApproval(id);
+          } catch (error) {
+            // この1件だけ「在るが読めない」と返し、残りは進める（`not found` と言わない）。
+            if (!(error instanceof UnreadableApprovalError)) throw error;
+            results.push({ id, ok: false, error: error.message });
+            continue;
+          }
           if (!approval) {
             results.push({ id, ok: false, error: 'not found' });
             continue;
@@ -3477,7 +3499,9 @@ export function createApp(deps: AppDeps) {
                   ? 'already answered'
                   : settled === 'withdrawn'
                     ? 'withdrawn'
-                    : String(error),
+                    : error instanceof UnreadableApprovalError
+                      ? error.message
+                      : String(error),
             });
           }
         }
@@ -3508,7 +3532,9 @@ export function createApp(deps: AppDeps) {
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           409: {
-            description: '既に回答済み。',
+            description:
+              '既に回答済み・取り下げ済み。または承認待ちの行は在るが読めない形で入っている' +
+              '（版ずれ・手編集。消されたのではない。回答は書いていない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -3518,7 +3544,14 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const id = c.req.param('id');
-        const approval = await stores.jobs.getApproval(id);
+        let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
+        try {
+          approval = await stores.jobs.getApproval(id);
+        } catch (error) {
+          // 在るが読めない行を「無い」（404）と言わない。行は書き換えていない。
+          if (error instanceof UnreadableApprovalError) return c.json({ error: error.message }, 409);
+          throw error;
+        }
         if (!approval) return c.json({ error: 'not found' as const }, 404);
         // 二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も
         // 上書きされる。答え直したいなら新しい確認として来るのが正しい。
@@ -3541,6 +3574,8 @@ export function createApp(deps: AppDeps) {
           const settled = approvalSettledKindOf(error);
           if (settled === 'answered') return c.json({ error: 'already answered' as const }, 409);
           if (settled === 'withdrawn') return c.json({ error: 'withdrawn' as const }, 409);
+          // 先の `getApproval` の後に行が読めなくなった窓。
+          if (error instanceof UnreadableApprovalError) return c.json({ error: error.message }, 409);
           throw error;
         }
         return c.json({ ok: true });

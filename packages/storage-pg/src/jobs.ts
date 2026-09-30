@@ -4,6 +4,7 @@ import {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   pendingApprovalSchema,
+  UnreadableApprovalError,
   UnreadableJobError,
 } from '@alteroid/core';
 import type { Job, JobStore, PendingApproval } from '@alteroid/core';
@@ -385,7 +386,14 @@ export class PgJobStore implements JobStore {
     const row = rows[0];
     if (row === undefined) return null;
     const parsed = pendingApprovalSchema.safeParse(row.approval);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) {
+      // 行は在る。「無い」（`null`）とは分けて投げる。
+      throw new UnreadableApprovalError({
+        id,
+        reason: summarizeInvalidFields(parsed.error.issues),
+      });
+    }
+    return parsed.data;
   }
 
   async putApproval(approval: PendingApproval): Promise<void> {
@@ -412,8 +420,9 @@ export class PgJobStore implements JobStore {
    * `JobStore.updateApproval` の doc）。`updateJob`（上）と同じ形——1つの
    * トランザクションの中で `select … for update` で行を押さえてから書く。
    *
-   * **読めない行（`pendingApprovalSchema` に合わない）は「無い」と同じに扱う**
-   * （`getApproval` / `listApprovals` が `safeParse` で外すのと揃える）。
+   * **読めない行（`pendingApprovalSchema` に合わない）は `null`（無い）とは分けて
+   * `UnreadableApprovalError` を投げる**（`mutate` は呼ばない。投げるとトランザクション
+   * は何も書かずに巻き戻る）。`listApprovals` は従来どおり `safeParse` で飛ばす。
    * **`mutate` が `null` を返したら何も書かない**（`updateJob` には無い拡張）。
    */
   async updateApproval(
@@ -430,7 +439,12 @@ export class PgJobStore implements JobStore {
       const row = rows[0];
       if (row === undefined) return null;
       const parsed = pendingApprovalSchema.safeParse(row.approval);
-      if (!parsed.success) return null;
+      if (!parsed.success) {
+        throw new UnreadableApprovalError({
+          id,
+          reason: summarizeInvalidFields(parsed.error.issues),
+        });
+      }
 
       const result = mutate(parsed.data);
       if (result === null) return null;

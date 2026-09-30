@@ -215,6 +215,7 @@ import type { CloneRuntimeFacts } from './self.js';
 import {
   EXCHANGE_WITH_VALUES,
   UnreadableActiveTokenError,
+  UnreadableApprovalError,
   UnreadableCommitmentError,
   UnreadablePracticeError,
   UnreadableScheduleError,
@@ -1918,6 +1919,14 @@ const TOKEN_COOLDOWN_SOURCE_LABEL: Record<CooldownSource | 'unrecorded', string>
 };
 const APPROVAL_QUESTION_EXCERPT = 200;
 /** 承認待ち1件の全文を取りに来たときの1回分。続きは `offset` で取れる。 */
+/**
+ * 承認待ちの行が**在るが読めない**（`UnreadableApprovalError`）ときの応答文。
+ * 「無い（id が違う）」とは言わない——id は合っていて、消されたのでもない。行は
+ * 書き換えていない。
+ */
+function describeUnreadableApproval(id: string): string {
+  return `承認待ち ${id} は在るが読めない（壊れた行。消されたのではない。id は合っている）。行は書き換えていない。`;
+}
 const APPROVAL_PAGE = 8_000;
 /**
  * `approval_trace` の行動の一覧の予算と、1件ぶんの要旨の厚み（issue #847 の案B）。
@@ -6609,7 +6618,13 @@ export function createCloneTools(context: ToolContext) {
         if (offsetError !== null) return text(offsetError);
         // --- 全文モード（1件だけ） ---
         if (id !== undefined) {
-          const approval = await stores.jobs.getApproval(id);
+          let approval: PendingApproval | null;
+          try {
+            approval = await stores.jobs.getApproval(id);
+          } catch (error) {
+            if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
+            throw error;
+          }
           if (!approval) return text(`承認待ち ${id} は無い（id が違う）。`);
           // **答えが付いた件も、取り下げた件も読める。** 「もう答えが来た/
           // 取り下げた」ことと「その質問が何だったか」は別の問いで、後者は
@@ -6726,7 +6741,13 @@ export function createCloneTools(context: ToolContext) {
         id: z.string().describe('承認の id（approvals_list や日誌の escalation に出ている id）'),
       },
       async ({ id }) => {
-        const trace = await traceApproval(stores, id);
+        let trace: Awaited<ReturnType<typeof traceApproval>>;
+        try {
+          trace = await traceApproval(stores, id);
+        } catch (error) {
+          if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
+          throw error;
+        }
         if (trace === null) return text(`承認 ${id} は無い（id が違う）。`);
         return text(
           renderApprovalTrace(trace, {
@@ -6799,7 +6820,13 @@ export function createCloneTools(context: ToolContext) {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
         if (reasonError !== null) return text(reasonError);
-        const existing = await stores.jobs.getApproval(id);
+        let existing: PendingApproval | null;
+        try {
+          existing = await stores.jobs.getApproval(id);
+        } catch (error) {
+          if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
+          throw error;
+        }
         if (!existing) return text(`承認待ち ${id} は無い（id が違う）。`);
         if (existing.answeredAt !== undefined) {
           return text(
@@ -6818,13 +6845,20 @@ export function createCloneTools(context: ToolContext) {
         // 戻していたので、読んでから書くまでの間に人間の回答が入ると、その回答を消して
         // 取り下げを立てていた。
         let settledNow: PendingApproval | undefined;
-        const written = await stores.jobs.updateApproval(id, (current) => {
-          if (current.answeredAt !== undefined || current.withdrawnAt !== undefined) {
-            settledNow = current;
-            return null;
-          }
-          return { ...current, withdrawnAt, withdrawnReason: reason };
-        });
+        let written: PendingApproval | null;
+        try {
+          written = await stores.jobs.updateApproval(id, (current) => {
+            if (current.answeredAt !== undefined || current.withdrawnAt !== undefined) {
+              settledNow = current;
+              return null;
+            }
+            return { ...current, withdrawnAt, withdrawnReason: reason };
+          });
+        } catch (error) {
+          // 上の `getApproval` の後に行が読めなくなった窓。取り下げは書いていない。
+          if (error instanceof UnreadableApprovalError) return text(describeUnreadableApproval(id));
+          throw error;
+        }
         if (written === null) {
           if (settledNow?.answeredAt !== undefined) {
             return text(
