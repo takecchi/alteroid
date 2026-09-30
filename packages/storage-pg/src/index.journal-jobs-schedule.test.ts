@@ -1093,7 +1093,7 @@ describe('PgScheduleStore', () => {
       lastScheduledRunAt: '2026-08-12T01:00:00.000Z',
     });
 
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
     expect(await stores.schedules.get('self_initiative')).toBeNull();
   });
 
@@ -1131,7 +1131,7 @@ describe('PgScheduleStore', () => {
   it('仕込んだ依頼は読み戻せる（fs 版と同じ振る舞い）', async () => {
     await stores.schedules.put(plan);
 
-    expect(await stores.schedules.list()).toEqual([plan]);
+    expect((await stores.schedules.list()).entries).toEqual([plan]);
     expect((await stores.schedules.get('issue-round'))?.request).toContain('open issue');
     expect(await stores.schedules.get('しらない')).toBeNull();
   });
@@ -1144,7 +1144,7 @@ describe('PgScheduleStore', () => {
       spec: { type: 'every', minutes: 30 },
     });
 
-    const plans = await stores.schedules.list();
+    const plans = (await stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]?.request).toBe('直した依頼');
     expect(plans[0]?.spec).toEqual({ type: 'every', minutes: 30 });
@@ -1165,7 +1165,7 @@ describe('PgScheduleStore', () => {
     // 列だけ直しても読み出しは jsonb からなので、両方が揃っていること
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
     expect((await stores.schedules.get('issue-round'))?.updatedAt).toBe(plan.updatedAt);
-    expect(await stores.schedules.list()).toHaveLength(1);
+    expect((await stores.schedules.list()).entries).toHaveLength(1);
   });
 
   it('引き受けた印は完了で消える。印が残っていれば配り直せる', async () => {
@@ -1271,7 +1271,7 @@ describe('PgScheduleStore', () => {
     await stores.schedules.put(plan);
     await stores.schedules.remove('issue-round');
 
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('読めない行を「消された」に潰さない（fs 版と同じく失敗を表へ出す）', async () => {
@@ -1298,7 +1298,7 @@ describe('PgScheduleStore', () => {
     // 保っているので（直前の assertion）、`list()` が黙ってではなく跡付きで
     // 飛ばすことと両立する。ここでは他に正しい依頼が無いので `list()` は
     // 空配列を返す。
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
 
     // 「無い」ことだけが null である
     expect(await stores.schedules.get('しらない')).toBeNull();

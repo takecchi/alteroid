@@ -222,6 +222,7 @@ import {
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
   describeUnreadableCommitment,
+  describeUnreadableSchedules,
 } from './store.js';
 import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
 import {
@@ -7141,8 +7142,20 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // --- 一覧モード ---
-        const plans = await stores.schedules.list();
-        if (plans.length === 0) return text('（継続中の依頼は無い）');
+        const scheduleList = await stores.schedules.list();
+        const plans = scheduleList.entries;
+        // **読めない行は一覧から消さず、件数と kind で言う**（issue #2343。単票の
+        // `UnreadableScheduleError` の言い分けと同じ線。0件のときは `null` で、何も出さない）。
+        // 予算（`SCHEDULE_LIST_BUDGET`）の外に置く——`describeUnreadableSchedules` が
+        // kind の数を締めているので、伸びない。
+        const unreadableNote = describeUnreadableSchedules(scheduleList.unreadable);
+        if (plans.length === 0) {
+          return text(
+            unreadableNote === null
+              ? '（継続中の依頼は無い）'
+              : `（読めた継続中の依頼は無い）\n${unreadableNote}`,
+          );
+        }
 
         // **cursor は `plans.length === 0` の早期リターンの後で解決する。**
         // `commitment_list` と同じ順序（予算で切る前・絞りを当てた後）——
@@ -7216,6 +7229,7 @@ export function createCloneTools(context: ToolContext) {
         if (view.length > 0) {
           lines.push('（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）');
         }
+        if (unreadableNote !== null) lines.push(unreadableNote);
         return text(lines.join('\n'));
       },
     ),

@@ -1782,7 +1782,7 @@ describe('クローンの道具', () => {
     });
     expect(created).toContain('毎日 09:00');
 
-    const plans = await h.stores.schedules.list();
+    const plans = (await h.stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({
       kind: 'issue-round',
@@ -2008,7 +2008,7 @@ describe('クローンの道具', () => {
 
     await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
 
-    const plans = await h.stores.schedules.list();
+    const plans = (await h.stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({
       request: '直した依頼',
@@ -2070,7 +2070,7 @@ describe('クローンの道具', () => {
     });
     expect(created).toContain('cron: 0 10 * * 1');
 
-    expect((await h.stores.schedules.list())[0]).toMatchObject({
+    expect((await h.stores.schedules.list()).entries[0]).toMatchObject({
       spec: { type: 'cron', expression: '0 10 * * 1' },
     });
   });
@@ -2085,7 +2085,7 @@ describe('クローンの道具', () => {
     });
 
     expect(result).toContain('cron 式として読めない');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   it('周期の指定は1つだけ。読めない指定は仕込まない', async () => {
@@ -2114,7 +2114,7 @@ describe('クローンの道具', () => {
     expect(
       await h.call('schedule_create', { kind: 'ダメな名前', request: 'x', dailyAt: '09:00' }),
     ).toContain('使えない');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   it('既定の定期ジョブの名前は奪えない（日報を潰せない）', async () => {
@@ -2125,7 +2125,7 @@ describe('クローンの道具', () => {
       everyMinutes: 1,
     });
     expect(result).toContain('既定の定期ジョブ');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   it('schedule_remove は依頼を片付ける。無い依頼なら何もしない', async () => {
@@ -2133,10 +2133,10 @@ describe('クローンの道具', () => {
     await h.call('schedule_create', { kind: 'watch', request: '見張る', everyMinutes: 30 });
 
     expect(await h.call('schedule_remove', { kind: 'しらない' })).toContain('無い');
-    expect(await h.stores.schedules.list()).toHaveLength(1);
+    expect((await h.stores.schedules.list()).entries).toHaveLength(1);
 
     expect(await h.call('schedule_remove', { kind: 'watch' })).toContain('外した');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   /**
@@ -2244,6 +2244,46 @@ describe('クローンの道具', () => {
     await expect(h.call('schedule_list', { kind: 'broken-other' })).rejects.toThrow(
       '実測用のダミー',
     );
+  });
+
+  describe('読めない継続中の依頼の行が在る一覧（#2343）: 一覧から消さず、件数と kind で言う', () => {
+    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
+    function listWithUnreadable(unreadable: { kind?: string; reason: string }[]) {
+      const h = harness();
+      const original = h.stores.schedules.list.bind(h.stores.schedules);
+      h.stores.schedules.list = async () => ({ ...(await original()), unreadable });
+      return h;
+    }
+
+    it('読めた行は今までどおり並べ、末尾に「読めない継続中の依頼が N 件ある」を kind つきで出す', async () => {
+      const h = listWithUnreadable([
+        { kind: 'broken-1', reason: '不正な欄: spec' },
+        { reason: '不正な行' },
+      ]);
+      await h.call('schedule_create', { kind: 'watch', request: '読める依頼', everyMinutes: 30 });
+      const reply = await h.call('schedule_list', {});
+      expect(reply).toContain('読める依頼');
+      expect(reply).toContain('読めない継続中の依頼が 2 件ある');
+      expect(reply).toContain('broken-1');
+      expect(reply).toContain('kind が取れない行が 1 件');
+      expect(reply).toContain('消された依頼ではない');
+    });
+
+    it('読めた行が0件でも「継続中の依頼は無い」とだけ言わない', async () => {
+      const h = listWithUnreadable([{ kind: 'broken-1', reason: '不正な欄: spec' }]);
+      const reply = await h.call('schedule_list', {});
+      expect(reply).toContain('読めない継続中の依頼が 1 件ある');
+      expect(reply).toContain('broken-1');
+      expect(reply).not.toContain('（継続中の依頼は無い）');
+    });
+
+    it('0件のときは何も出さない（0 の行を作らない）。本当に0件なら「無い」と言う', async () => {
+      const h = listWithUnreadable([]);
+      await h.call('schedule_create', { kind: 'watch', request: '読める依頼', everyMinutes: 30 });
+      expect(await h.call('schedule_list', {})).not.toContain('読めない');
+      const empty = listWithUnreadable([]);
+      expect(await empty.call('schedule_list', {})).toBe('（継続中の依頼は無い）');
+    });
   });
 
   it('memory_append は既存の記述を消さない（人間の手書きを守る）', async () => {
@@ -9547,7 +9587,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
 
       expect(isError).toBe(true);
       expect(await stores.schedules.get('watch-2145a')).toBeNull();
-      expect(await stores.schedules.list()).toEqual([]);
+      expect((await stores.schedules.list()).entries).toEqual([]);
     });
 
     it('(b) 状態変更（editRequest/put）が投げたときは、先の行と打ち消しの行の両方が日誌に残る', async () => {

@@ -9,6 +9,7 @@ import type {
   SchedulePhase,
   ScheduleSpec,
   ScheduledRequest,
+  UnreadableSchedule,
 } from './schema.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 
@@ -96,6 +97,13 @@ export interface Scheduler {
   stop(): void;
   /** 何が仕込まれていて、次はいつ起きるか（可観測性）。 */
   list(): ScheduleStatus[];
+  /**
+   * 直近の読み直し（`refresh()`）で、ストアの行が読めず仕込めなかった継続中の依頼
+   * （issue #2343）。**`list()` に載っていないことが「依頼が無い」ではない**ことを、
+   * `GET /schedule` が言うための材料。読み直しのたびに置き換わる（直った行は消える）。
+   * 本文は持たない（`UnreadableSchedule` の doc）。
+   */
+  unreadable(): UnreadableSchedule[];
   /**
    * 定期ジョブを今すぐ起こす。定期の予定はずらさない（予定に代えて割り込むのでは
    * なく、余分に1回起こす）。知らない kind なら false。
@@ -207,6 +215,8 @@ class TimerScheduler implements Scheduler {
   readonly #now: () => Date;
   readonly #store: ScheduleStore | undefined;
   readonly #due = new Map<string, number>();
+  /** 直近の読み直しで読めなかった継続中の依頼（`Scheduler.unreadable`）。 */
+  #unreadable: UnreadableSchedule[] = [];
 
   #timer: ReturnType<typeof setTimeout> | null = null;
   #started = false;
@@ -302,6 +312,10 @@ class TimerScheduler implements Scheduler {
     });
   }
 
+  unreadable(): UnreadableSchedule[] {
+    return [...this.#unreadable];
+  }
+
   run(kind: string): boolean {
     const entry = this.#entries().find((candidate) => candidate.kind === kind);
     if (!entry) return false;
@@ -356,7 +370,10 @@ class TimerScheduler implements Scheduler {
     if (this.#store === undefined) return;
     // 既定の仕込みの位相を先に引き継ぐ（依頼の読み込みが落ちても位相は入る）。
     await this.#seedBase();
-    const plans = await this.#store.list();
+    const list = await this.#store.list();
+    const plans = list.entries;
+    // 読めない行は仕込めないが、在ることは消さない（issue #2343）。読み直すたびに置き換える。
+    this.#unreadable = list.unreadable;
     const now = this.#now();
     const seen = new Set<string>();
 

@@ -6,7 +6,11 @@ import { scanJournalPages } from './journal-scan.js';
 import type { ManagerAwaitingBackground, SessionMissingKind } from './manager.js';
 import { describeScheduleSpec } from './schedule.js';
 import type { Job, JobStatus, JournalEntry, PendingApproval } from './schema.js';
-import { UnreadableApprovalError, describeUnreadableApprovals } from './store.js';
+import {
+  UnreadableApprovalError,
+  describeUnreadableApprovals,
+  describeUnreadableSchedules,
+} from './store.js';
 import type { Stores } from './store.js';
 import { formatUsd, isCloneActor, summarizeUsage, usageDate } from './usage.js';
 
@@ -1148,7 +1152,11 @@ export async function buildActivityDigest(
   const pendingById = new Map(pending.map((approval) => [approval.id, approval] as const));
   // 継続中の依頼は期間で切らない。「いま何を頼まれたままか」は常に材料である
   // （これが無いと、発意 tick のたびに頼まれた仕事を思い出せるかの賭けになる）。
-  const standing = await stores.schedules.list();
+  const standingList = await stores.schedules.list();
+  const standing = standingList.entries;
+  // **読めない継続中の依頼（`unreadable`）を件数からもここからも消さない**（issue #2343）。
+  // 0件のときは何も出さない（下の2か所とも `null` / 条件で出さない）。
+  const unreadableStandingNote = describeUnreadableSchedules(standingList.unreadable);
   // 未了も期間で切らない。**切ると、この器の目的そのものが消える** — 24時間の窓で
   // 切れば、2日前に頼まれてまだ手を付けていない仕事だけが静かに落ちる（それは
   // いちばん落としてはいけないものである）。
@@ -1370,6 +1378,12 @@ export async function buildActivityDigest(
           `- 読めない承認待ち（壊れた行。上の件数には入っていない）: ${approvalList.unreadable.length} 件`,
         ]),
     `- 継続中の依頼（定期の仕込み）: ${standing.length} 件`,
+    // **0件のときは行を作らない**（承認待ちの行と同じ。詳細は「継続中の依頼」の節）。
+    ...(standingList.unreadable.length === 0
+      ? []
+      : [
+          `- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: ${standingList.unreadable.length} 件`,
+        ]),
     `- 引き受けたまま終わっていない仕事: ${commitments.length} 件`,
     // **0件でも出す**（他の行と同じ扱い）。台帳の破損は稀だが、無いことも
     // 常に言えるようにしておく（「取れない軸に0の行を作る」の逆 — ここは
@@ -1479,7 +1493,7 @@ export async function buildActivityDigest(
     }
   }
 
-  if (standing.length > 0) {
+  if (standing.length > 0 || unreadableStandingNote !== null) {
     sections.push('', '## 継続中の依頼（時刻が来れば届く。前回からの続きがあるか見ること）');
     const shownStanding = standing.slice(0, MAX_ITEMS);
     for (const plan of shownStanding) {
@@ -1490,9 +1504,12 @@ export async function buildActivityDigest(
     }
     // 黙って切らない。他の節は期間で切った一部だが、ここは「常に材料である」ことが
     // 趣旨なので、切ったことを見せないと「あるのに見えない」になる。
-    sections.push(
-      ...omitted(standing.length, shownStanding.length, '`schedule_list` で全部見える'),
-    );
+    if (standing.length > 0) {
+      sections.push(
+        ...omitted(standing.length, shownStanding.length, '`schedule_list` で全部見える'),
+      );
+    }
+    if (unreadableStandingNote !== null) sections.push(`- ${unreadableStandingNote}`);
   }
 
   if (settled.length > 0) {

@@ -276,6 +276,49 @@ describe('活動の要約', () => {
     expect(digest).toContain('まだ一度も動いていない');
   });
 
+  describe('読めない継続中の依頼の行（#2343）: 件数からもこの節からも消さない', () => {
+    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
+    function withUnreadable(unreadable: { kind?: string; reason: string }[]) {
+      const stores = createMemoryStores();
+      const original = stores.schedules.list.bind(stores.schedules);
+      stores.schedules.list = async () => ({ ...(await original()), unreadable });
+      return stores;
+    }
+    const since = () => new Date(Date.now() - 60_000);
+
+    it('読めない行が在るとき、件数の行と節の両方で言う。読めた依頼は今までどおり出る', async () => {
+      const stores = withUnreadable([{ kind: 'broken-1', reason: '不正な欄: spec' }]);
+      await stores.schedules.put({
+        kind: 'issue-round',
+        spec: { type: 'daily', at: '09:00' },
+        request: '読める依頼の本文',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+      const digest = await buildActivityDigest(stores, { since: since() });
+      expect(digest).toContain('- 継続中の依頼（定期の仕込み）: 1 件');
+      expect(digest).toContain(
+        '- 読めない継続中の依頼（壊れた行。上の件数には入っていない）: 1 件',
+      );
+      expect(digest).toContain('読める依頼の本文');
+      expect(digest).toContain('読めない継続中の依頼が 1 件ある（kind: broken-1）');
+    });
+
+    it('読めた依頼が0件でも、読めない行の節は出る', async () => {
+      const stores = withUnreadable([{ reason: '不正な行' }]);
+      const digest = await buildActivityDigest(stores, { since: since() });
+      expect(digest).toContain('## 継続中の依頼');
+      expect(digest).toContain('読めない継続中の依頼が 1 件ある（kind も取れない）');
+    });
+
+    it('0件のときは行も節も作らない', async () => {
+      const stores = withUnreadable([]);
+      const digest = await buildActivityDigest(stores, { since: since() });
+      expect(digest).not.toContain('読めない継続中の依頼');
+      expect(digest).not.toContain('## 継続中の依頼');
+    });
+  });
+
   it('走行中のマネージャーと、人間の回答待ちは「いまの状態」として必ず出る', async () => {
     const stores = createMemoryStores();
     const now = new Date().toISOString();
