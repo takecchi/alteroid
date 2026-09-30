@@ -10,6 +10,23 @@ export default defineConfig({
   plugins: [tailwindcss(), reactRouter()],
   // `~/*` を tsconfig の paths から解く（vite 8 の native 解決。専用プラグインは要らない）。
   resolve: { tsconfigPaths: true },
+  build: {
+    /**
+     * フォントのファイルだけは CSS へ base64 で埋め込まない（`/assets/…` の URL 参照にする）。
+     *
+     * 既定（4096 B 未満は base64 化）のままだと、IBM Plex Sans JP の小さい断片
+     * （太さ3 × 8 断片 × woff2 / woff）が `url(data:font/…)` として CSS に入る。
+     * すると `unicode-range` に関係なく、CSS と一緒にその本体（生で約 200 KB）が
+     * 最初に落ちてくる。`packages/ui/src/styles.css` の冒頭が想定している
+     * 「画面が実際に使う字の断片しか落ちてこない」は、埋め込まれた断片には効かない。
+     *
+     * 関数形の戻り値は、`boolean` ならそれが答えで、`undefined` なら Vite 既定の
+     * 判定（4096 B のしきい値）に落ちる（vite 8.3.1 の `shouldInline`）。
+     * だからフォント以外（画像など）には `undefined` を返して、扱いを変えない。
+     */
+    assetsInlineLimit: (filePath) =>
+      /\.(woff2?|ttf|otf|eot)$/i.test(filePath) ? false : undefined,
+  },
   server: {
     port: 5173,
     /**
