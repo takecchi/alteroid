@@ -303,6 +303,20 @@ export type {
   SummarizeProgressInput,
 } from './progress.js';
 /**
+ * 進捗を読む口の共有部分（#2241 の 3）。daemon の `/progress`・`/commitments` と道具 `progress_read` が使う。
+ */
+export {
+  buildCommitmentDerivations,
+  DEFAULT_PROGRESS_WINDOW_HOURS,
+  InvalidProgressWindowError,
+  PROGRESS_GITHUB_NOT_OBSERVED,
+  PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
+  readProgress,
+} from './progress-read.js';
+export type { ProgressView, ReadProgressOptions } from './progress-read.js';
+export { describeProgress } from './progress-describe.js';
+export { formatElapsed } from './format-elapsed.js';
+/**
  * 記憶をクローンの文脈へ載せる形。**器（storage-fs / storage-pg）もここを使う** —
  * 器ごとに書いた結果、実際に食い違ったことがある（`memory.ts` の冒頭）。
  */

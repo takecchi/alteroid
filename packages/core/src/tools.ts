@@ -102,6 +102,12 @@ import {
   isTerminalJobStatus,
 } from './appraisal-stats.js';
 import {
+  DEFAULT_PROGRESS_WINDOW_HOURS,
+  InvalidProgressWindowError,
+  readProgress,
+} from './progress-read.js';
+import { describeProgress } from './progress-describe.js';
+import {
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   selectArchiveRemovalTargets,
@@ -691,6 +697,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_edit',
   'commitment_appraise',
   'appraisal_stats',
+  'progress_read',
   'inbox_remove_many',
   'profile_read',
   'profile_write',
@@ -790,6 +797,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'schedule_list',
   'commitment_list',
   'appraisal_stats',
+  'progress_read',
   'profile_read',
   'practice_list',
   'practice_read',
@@ -8267,6 +8275,47 @@ export function createCloneTools(context: ToolContext) {
             { workKind: APPRAISAL_STATS_WORK_KIND_BUDGET },
           ),
         );
+      },
+    ),
+
+    /**
+     * 作業の進捗（積み上がり・実施中・窓の中の消化・見込み）を数え直して読む口（#2241 の 3）。
+     *
+     * **人間が `GET /progress` と `alteroid progress` で見られるものは、クローンからも見られること。**
+     * 集計の入力の組み立ては `readProgress`、文にするのは `describeProgress`——daemon・CLI と
+     * 同じ関数なので、口によって数が食い違わない。**読むだけで日誌は書かない。**
+     *
+     * **GitHub（Issue / PR / CI）は数えていない**（0 件ではない）。応答にもそう書く。
+     */
+    tool(
+      'progress_read',
+      [
+        '作業の進捗を、台帳（引き受けた仕事）と委譲の行から数え直して読む。',
+        '積み上がり（未了の件数・起点別・齢）・実施中（委譲）・窓の中の消化・見込みを返す。',
+        '**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。取れないものは 0 にせず、状態か理由で言う。',
+        '**GitHub（Issue / PR / CI）は観測していない**——出力にある「観測していない」は 0 件という意味ではない。',
+        '観測時刻を出力に含む。人間が \`alteroid progress\` や GET /progress で見るものと同じ数・同じ文である。',
+      ].join(' '),
+      {
+        windowHours: z
+          .number()
+          .optional()
+          .describe(
+            `速度と見込みを数える窓の長さ（時間。有限の正数。省略時は ${String(DEFAULT_PROGRESS_WINDOW_HOURS)}）`,
+          ),
+      },
+      async ({ windowHours }) => {
+        try {
+          return text(
+            describeProgress(await readProgress(stores, { now: new Date(), windowHours })),
+          );
+        } catch (error) {
+          // 不正値は道具のエラーとして返す（daemon の 400 と同じ文言）。
+          if (error instanceof InvalidProgressWindowError) {
+            throw new Error(error.message, { cause: error });
+          }
+          throw error;
+        }
       },
     ),
 

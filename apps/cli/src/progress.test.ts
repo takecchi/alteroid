@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { describeProgress } from '@alteroid/core';
+
 import { captureStdout } from './test-support.js';
 
 /**
@@ -17,7 +19,7 @@ vi.mock('./target.js', async () => {
   };
 });
 
-const { progressCommand, renderProgress } = await import('./progress.js');
+const { progressCommand } = await import('./progress.js');
 const { program } = await import('./index.js');
 
 let sent: string[] = [];
@@ -174,13 +176,13 @@ describe('progressCommand', () => {
   });
 });
 
-describe('renderProgress', () => {
+describe('describeProgress', () => {
   it('null は「—」で、0 と書かない', () => {
     const base = body() as {
       backlog: { age: Record<string, unknown> } & Record<string, unknown>;
       inProgress: Record<string, unknown>;
     };
-    const text = renderProgress({
+    const text = describeProgress({
       ...body(),
       backlog: {
         ...base.backlog,
@@ -200,7 +202,7 @@ describe('renderProgress', () => {
   });
 
   it('not_converging は状態を言い、時間を作らない', () => {
-    const text = renderProgress(
+    const text = describeProgress(
       body({
         forecast: { state: 'not_converging', basis: { ...basis, openedInWindow: 9 } },
       }) as never,
@@ -211,7 +213,7 @@ describe('renderProgress', () => {
   });
 
   it('unavailable は理由をそのまま言い、時間を作らない', () => {
-    const text = renderProgress(
+    const text = describeProgress(
       body({
         forecast: {
           state: 'unavailable',

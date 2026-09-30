@@ -106,7 +106,11 @@ import {
   scheduleSpecSchema,
   selectArchiveRemovalTargets,
   startSseHeartbeat,
-  summarizeProgress,
+  readProgress,
+  buildCommitmentDerivations,
+  DEFAULT_PROGRESS_WINDOW_HOURS,
+  InvalidProgressWindowError,
+  PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   summarizeUsage,
   tokenRotationSettingsSchema,
   traceApproval,
@@ -829,9 +833,6 @@ const progressQuery = z.object({
   windowHours: z.string().optional(),
 });
 
-/** `GET /progress` の窓の既定（時間）。core の `summarizeProgress` は既定を持たない。 */
-const DEFAULT_PROGRESS_WINDOW_HOURS = 168;
-
 /**
  * `/commitments` のカーソルの中身。**段（segment）を持つ keyset。**
  *
@@ -1214,74 +1215,6 @@ function queryParams<Schema extends z.ZodTypeAny>(
     if (result.success) return;
     return c.json(onInvalid(whereValidationFailed(result.error)), 400);
   });
-}
-
-/**
- * 台帳の行に足す2つの導出値の材料（issue #1003）——会話 id ごとの返答時刻と、
- * 会話 id ごとの走行中の委譲。**`GET /commitments` と `GET /progress` が同じ
- * 組み立てを使う**（`respondedAt` / `activeManagerIds` の意味が2つの口でずれると、
- * 一覧の「返答済み」と集計の `byState.responded` が食い違う）。
- *
- * `GET /commitments` のハンドラの中にあったものを、出力を1文字も変えずに切り出した
- * （2口目が要ったため。手で組み直すと `commitmentRespondedAt` の「昇順」の契約などを
- * 片方だけ直し忘れる）。
- *
- * **一致しうる行（`origin` が `human` で `source` を持つ）が1件も無ければ、日誌も
- * job 一覧も読まない**（どの行でも `undefined` にしかならない）。`readJobs` は
- * 呼び手が既に job 一覧を読んでいるときに、二重に読まないための差し込み口。
- */
-async function buildCommitmentDerivations(
-  stores: Stores,
-  entries: readonly Commitment[],
-  readJobs: () => Promise<readonly Job[]> = () => stores.jobs.listJobs(),
-) {
-  const repliesByConversation = new Map<string, string[]>();
-  const activeManagersByConversation = new Map<
-    string,
-    { managerId: string; createdAt: string }[]
-  >();
-  if (!entries.some((entry) => entry.origin === 'human' && entry.source !== undefined)) {
-    return { repliesByConversation, activeManagersByConversation };
-  }
-
-  // **窓の組み立ては `readConversationWindow`（`@alteroid/core`）を通す。**
-  // `types: ['exchange'], with: ['human']` を手組みし直すと、issue #418 の症状
-  // （`with` の絞りを1か所直し忘れる余地）を再び作る——
-  // `scripts/conversation-window-single-source.test.ts` がこれを歯として測っている。
-  // ここは「会話を1本表示する窓」ではなく「返答済みを判定するための全履歴」が要るので、
-  // `scan` に事実上の無制限（`Number.MAX_SAFE_INTEGER`。`packages/storage-pg/src/
-  // journal.ts` が `limit` 省略時に使うのと同じ値）を渡す。
-  const humanExchanges = await readConversationWindow(stores.journal, {
-    scan: Number.MAX_SAFE_INTEGER,
-  });
-  for (const exchange of humanExchanges) {
-    if (exchange.type !== 'exchange') continue;
-    if (exchange.role !== 'outbound' || exchange.conversationId === undefined) continue;
-    const existing = repliesByConversation.get(exchange.conversationId);
-    if (existing) {
-      existing.push(exchange.at);
-    } else {
-      repliesByConversation.set(exchange.conversationId, [exchange.at]);
-    }
-  }
-  // `commitmentRespondedAt` の契約は「昇順」——ここで1回だけ並べる。
-  for (const list of repliesByConversation.values()) list.sort();
-
-  // **`stores.jobs.listJobs()` を直接読む。** `clone.managers.list()`
-  // （`ManagerSummary`）は `conversationId` を持たない（`GET /commitments` の
-  // 従来のコメントの理由。台帳（`Job`）は「デーモンが観測できたこと」の正本）。
-  for (const job of await readJobs()) {
-    if (job.conversationId === undefined) continue;
-    if (job.status !== 'running' && job.status !== 'waiting_human') continue;
-    const existing = activeManagersByConversation.get(job.conversationId);
-    const entry = { managerId: job.id, createdAt: job.createdAt };
-    if (existing) {
-      existing.push(entry);
-    } else {
-      activeManagersByConversation.set(job.conversationId, [entry]);
-    }
-  }
-  return { repliesByConversation, activeManagersByConversation };
 }
 
 /**
@@ -7209,55 +7142,24 @@ export function createApp(deps: AppDeps) {
         let windowHours = DEFAULT_PROGRESS_WINDOW_HOURS;
         if (rawWindowHours !== undefined) {
           if (rawWindowHours.trim() === '') {
-            return c.json({ error: 'windowHours は有限の正数（時間）で指定する' as const }, 400);
+            return c.json({ error: PROGRESS_WINDOW_HOURS_INVALID_MESSAGE }, 400);
           }
           windowHours = Number(rawWindowHours);
         }
 
-        const now = new Date();
-        const commitments = await stores.commitments.list({ includeClosed: true });
-        // job 一覧は summarizeProgress にも要るので1回だけ読み、導出の材料にも使い回す。
-        const jobs = await stores.jobs.listJobs();
-        const { repliesByConversation, activeManagersByConversation } =
-          await buildCommitmentDerivations(stores, commitments.entries, async () => jobs);
-
-        let summary: ReturnType<typeof summarizeProgress>;
+        let view: Awaited<ReturnType<typeof readProgress>>;
         try {
-          summary = summarizeProgress({
-            commitments: {
-              ...commitments,
-              entries: commitments.entries.map((entry) => ({
-                ...entry,
-                respondedAt: commitmentRespondedAt(entry, repliesByConversation),
-                activeManagerIds: commitmentActiveDelegationIds(
-                  entry,
-                  activeManagersByConversation,
-                ),
-              })),
-            },
-            jobs,
-            now,
-            windowHours,
-          });
+          view = await readProgress(stores, { now: new Date(), windowHours });
         } catch (error) {
-          // `windowHours` の検査だけを 400 にする（`now` は自分で作った有効な日時）。
-          if (error instanceof RangeError) {
-            return c.json({ error: 'windowHours は有限の正数（時間）で指定する' as const }, 400);
+          // `windowHours` の検査だけを 400 にする（ストアの `RangeError` は握らない）。
+          if (error instanceof InvalidProgressWindowError) {
+            return c.json({ error: PROGRESS_WINDOW_HOURS_INVALID_MESSAGE }, 400);
           }
           throw error;
         }
 
         return c.json(
-          progressResponseSchema.parse({
-            observedAt: now.toISOString(),
-            ...summary,
-            github: {
-              state: 'not_observed',
-              reason:
-                'デーモンは GitHub（Issue / PR / CI）を見に行かない境界にあるため、数を取っていない。' +
-                'ここに数が無いのは 0 件という意味ではない。',
-            },
-          }),
+          progressResponseSchema.parse(view),
         );
       },
     )

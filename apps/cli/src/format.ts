@@ -13,19 +13,7 @@
  */
 
 /**
- * 受け取ってから（あるいは、その時刻になってから）の経過（＝齢）。
- *
- * **台帳は優先度も締切も持たない**ので、人間が急ぎ方を決める材料はこれだけで
- * ある。ISO の時刻だけを出すと、読むたびに引き算をさせることになる。
- *
- * 未来の時刻（時計のずれ）は 0 に丸める。ここで負の齢を出しても人間には直せ
- * ない。読めない ISO（パース不能）は「不明」——0分前のように読める値を作らない。
+ * 受け取ってからの経過（＝齢）。実体は core（`packages/core/src/format-elapsed.ts`）に引き上げた
+ * ——進捗の文（`describeProgress`）をクローンの道具と共有するため。字面・分岐は逐語のまま。
  */
-export function formatElapsed(iso: string, now: number): string {
-  const at = new Date(iso).getTime();
-  if (Number.isNaN(at)) return '不明';
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 3600) return `${Math.round(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}時間`;
-  return `${Math.round(seconds / 86_400)}日`;
-}
+export { formatElapsed } from '@alteroid/core';
