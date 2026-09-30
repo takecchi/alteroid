@@ -138,6 +138,7 @@ export default defineConfig({
     'src/journal-search.ts',
     'src/clone-tool-relay-child.ts',
     'src/permission-rule.ts',
+    'src/permission-staleness.ts',
     'src/answered-via.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',

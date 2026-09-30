@@ -1,4 +1,8 @@
 import { describePermissionRuleBreadth } from '@alteroid/core/permission-rule';
+import {
+  assessPermissionGrantStaleness,
+  PERMISSION_GRANT_STALE_DAYS,
+} from '@alteroid/core/permission-staleness';
 import { useState } from 'react';
 
 import { Page, Badge, Button, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
@@ -74,7 +78,12 @@ export default function Permissions() {
         {isLoading ? (
           <Spinner />
         ) : data === undefined ? null : (
-          <PermissionsBody grants={shown} showAll={showAll} revokedCount={revoked} />
+          <PermissionsBody
+            grants={shown}
+            showAll={showAll}
+            revokedCount={revoked}
+            now={new Date()}
+          />
         )}
       </Card>
     </Page>
@@ -85,10 +94,12 @@ function PermissionsBody({
   grants,
   showAll,
   revokedCount,
+  now,
 }: {
   grants: readonly PermissionGrant[];
   showAll: boolean;
   revokedCount: number;
+  now: Date;
 }) {
   if (grants.length === 0) {
     // CLI（`permissionListCommand`）と同じ文言（「--all」は「取り消し済みも見る」
@@ -106,13 +117,14 @@ function PermissionsBody({
   return (
     <ul>
       {grants.map((grant) => (
-        <PermissionRow key={grant.id} grant={grant} />
+        <PermissionRow key={grant.id} grant={grant} now={now} />
       ))}
     </ul>
   );
 }
 
-function PermissionRow({ grant }: { grant: PermissionGrant }) {
+function PermissionRow({ grant, now }: { grant: PermissionGrant; now: Date }) {
+  const staleness = assessPermissionGrantStaleness(grant, now);
   const revokedAt = grant.revokedAt;
   const revoked = revokedAt !== undefined;
   const breadth = describeBreadth(grant.rule);
@@ -123,6 +135,13 @@ function PermissionRow({ grant }: { grant: PermissionGrant }) {
         <span className="font-mono text-sm break-all">{grant.rule}</span>
         <Badge tone={revoked ? 'neutral' : 'ok'}>{revoked ? '取り消し済み' : '有効'}</Badge>
         <Badge tone={breadth.tone}>{breadth.label}</Badge>
+        {staleness.stale && (
+          <Badge tone="warn">
+            {staleness.idleDays} 日使われていない（起点:{' '}
+            {staleness.basis === 'lastUsedAt' ? '最終使用' : '付与'}・{PERMISSION_GRANT_STALE_DAYS}{' '}
+            日以上）
+          </Badge>
+        )}
       </div>
 
       <dl className="mt-2 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-[9rem_1fr]">

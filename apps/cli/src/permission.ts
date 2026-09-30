@@ -1,6 +1,11 @@
 import { stdout } from 'node:process';
 
-import { describePermissionRuleBreadth, type PermissionGrant } from '@alteroid/core';
+import {
+  assessPermissionGrantStaleness,
+  describePermissionRuleBreadth,
+  PERMISSION_GRANT_STALE_DAYS,
+  type PermissionGrant,
+} from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
@@ -33,9 +38,12 @@ import { describeAuthFailure, resolveTarget } from './target.js';
 export interface PermissionListOptions {
   /** 取り消し済みも含めて全部見る。既定は有効な（`revokedAt` の無い）ものだけ。 */
   all?: boolean;
+  /** 「長く使われていない」の起点になる現在時刻。テストが時計を注入する。既定は今。 */
+  now?: Date;
 }
 
 export async function permissionListCommand(options: PermissionListOptions = {}): Promise<void> {
+  const now = options.now ?? new Date();
   const target = await resolveTarget();
   if (target.note !== null) {
     stdout.write(`${target.note}\n`);
@@ -68,10 +76,19 @@ export async function permissionListCommand(options: PermissionListOptions = {})
     return;
   }
 
-  stdout.write(shown.map(renderGrant).join('\n'));
+  stdout.write(shown.map((grant) => renderGrant(grant, now)).join('\n'));
 
   const active = grants.filter((grant) => grant.revokedAt === undefined).length;
   const revoked = grants.length - active;
+  // 長く使われていない許可の要約（Issue #1804）。目立たせるだけで、取り消しは人が決める。
+  const staleCount = shown.filter(
+    (grant) => assessPermissionGrantStaleness(grant, now).stale,
+  ).length;
+  if (staleCount > 0) {
+    stdout.write(
+      `\n長く使われていない許可: ${staleCount} 件（${PERMISSION_GRANT_STALE_DAYS} 日以上）`,
+    );
+  }
   stdout.write(`\n計 ${grants.length} 件（有効 ${active} 件・取り消し済み ${revoked} 件）`);
   if (options.all !== true && revoked > 0) {
     stdout.write('。--all で取り消し済みも見られます');
@@ -121,15 +138,23 @@ function describeBreadth(rule: string): string {
   }
 }
 
-function renderGrant(grant: PermissionGrant): string {
+function renderGrant(grant: PermissionGrant, now: Date): string {
+  const staleness = assessPermissionGrantStaleness(grant, now);
   const lines: string[] = [];
-  lines.push(`${grant.revokedAt === undefined ? '[有効]' : '[取り消し済み]'} ${grant.rule}`);
+  lines.push(
+    `${grant.revokedAt === undefined ? '[有効]' : '[取り消し済み]'}${staleness.stale ? ' ⚠️ [長期未使用]' : ''} ${grant.rule}`,
+  );
   lines.push(`  id: ${grant.id}`);
   lines.push(`  広さ: ${describeBreadth(grant.rule)}`);
   lines.push(`  承認: ${grant.grantedAt}（${grant.route.accountId}・"${grant.answer}"）`);
   lines.push(
     `  最終使用: ${grant.lastUsedAt === undefined ? '（まだ使われていません）' : grant.lastUsedAt}`,
   );
+  if (staleness.stale) {
+    lines.push(
+      `  ⚠️ ${staleness.idleDays} 日使われていません（起点: ${staleness.basis === 'lastUsedAt' ? '最終使用' : '付与'}）。取り消すなら \`alteroid permission revoke ${grant.id}\``,
+    );
+  }
   if (grant.revokedAt !== undefined) lines.push(`  取り消し: ${grant.revokedAt}`);
   lines.push('');
   return lines.join('\n');

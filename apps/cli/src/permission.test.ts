@@ -326,3 +326,65 @@ describe('alteroid permission revoke', () => {
     await expect(permissionRevokeCommand('grant-1')).rejects.toThrow(/access grant/);
   });
 });
+
+describe('alteroid permission list — 長く使われていない許可（Issue #1804）', () => {
+  // 時計は引数で注入する（実時間の待ちも Date.now の差し替えも要らない）。
+  const now = new Date('2026-09-30T00:00:00.000Z');
+
+  it('古い許可にだけ印・日数・取り消しの案内が出て、末尾に要約が出る', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        grants: [
+          grant({ id: 'old-1', lastUsedAt: '2026-08-10T00:00:00.000Z' }),
+          grant({ id: 'new-1', lastUsedAt: '2026-09-25T00:00:00.000Z' }),
+        ],
+      },
+    });
+    const read = captureStdout();
+
+    await permissionListCommand({ now });
+
+    const text = read();
+    const [oldPart = '', newPart = ''] = text.split('id: new-1');
+    expect(oldPart).toContain('[長期未使用]');
+    expect(oldPart).toContain('51 日使われていません（起点: 最終使用）');
+    expect(oldPart).toContain('alteroid permission revoke old-1');
+    expect(newPart).not.toContain('長期未使用');
+    expect(newPart).not.toContain('使われていません（');
+    expect(text.match(/\[長期未使用\]/g)).toHaveLength(1);
+    expect(text).toContain('長く使われていない許可: 1 件（45 日以上）');
+  });
+
+  it('一度も使われていない許可は付与を起点にする。取り消し済みは対象外。古いものが無ければ要約も出ない', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        grants: [grant({ id: 'unused-1', grantedAt: '2026-08-01T00:00:00.000Z' })],
+      },
+    });
+    let read = captureStdout();
+    await permissionListCommand({ now });
+    let text = read();
+    expect(text).toContain('60 日使われていません（起点: 付与）');
+
+    replies.push({
+      status: 200,
+      body: {
+        grants: [
+          grant({
+            id: 'revoked-1',
+            grantedAt: '2026-01-01T00:00:00.000Z',
+            revokedAt: '2026-09-05T00:00:00.000Z',
+          }),
+          grant({ id: 'fresh-1', grantedAt: '2026-09-20T00:00:00.000Z' }),
+        ],
+      },
+    });
+    read = captureStdout();
+    await permissionListCommand({ all: true, now });
+    text = read();
+    expect(text).not.toContain('長期未使用');
+    expect(text).not.toContain('長く使われていない許可');
+  });
+});

@@ -1079,6 +1079,12 @@ export {
   type PermissionRuleParseResult,
 } from './permission-rule.js';
 export {
+  PERMISSION_GRANT_STALE_DAYS,
+  assessPermissionGrantStaleness,
+  type PermissionGrantStaleness,
+  type PermissionGrantStalenessInput,
+} from './permission-staleness.js';
+export {
   CLONE_ALLOWED_TOOLS,
   CLONE_TOOL_NAMES,
   DEFAULT_MEMORY_GUARD,

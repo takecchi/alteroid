@@ -12,7 +12,7 @@
  * - 取り消し済みの行には取り消しボタンが無い
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
 
@@ -230,5 +230,60 @@ describe('/permissions 画面 — 取り消し', () => {
     fireEvent.click(screen.getByText('取り消し済みも見る'));
 
     expect(screen.queryByText('取り消す')).toBeNull();
+  });
+});
+
+describe('/permissions 画面 — 長く使われていない許可（Issue #1804）', () => {
+  // 時計は Date だけ差し替える（タイマーは本物のまま。実時間の待ちは足さない）。
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-30T00:00:00.000Z') });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('古い許可にだけ印と「N日使われていない」が出る', async () => {
+    stubGrants({
+      body: {
+        grants: [
+          grant({
+            id: 'grant-old',
+            rule: 'Bash(gh pr view:*)',
+            lastUsedAt: '2026-08-10T00:00:00.000Z',
+          }),
+          grant({
+            id: 'grant-new',
+            rule: 'Bash(gh pr merge:*)',
+            lastUsedAt: '2026-09-25T00:00:00.000Z',
+          }),
+        ],
+      },
+    });
+
+    await renderPermissions();
+
+    expect(screen.getAllByText(/日使われていない/)).toHaveLength(1);
+    expect(screen.getByText(/51 日使われていない（起点: 最終使用/)).toBeTruthy();
+  });
+
+  it('一度も使われていない許可は付与を起点にし、取り消し済みには出ない', async () => {
+    stubGrants({
+      body: {
+        grants: [
+          grant({ id: 'grant-unused', grantedAt: '2026-08-01T00:00:00.000Z' }),
+          grant({
+            id: 'grant-revoked',
+            grantedAt: '2026-01-01T00:00:00.000Z',
+            revokedAt: '2026-09-05T00:00:00.000Z',
+          }),
+        ],
+      },
+    });
+
+    await renderPermissions();
+    fireEvent.click(screen.getByText('取り消し済みも見る'));
+
+    expect(screen.getAllByText(/日使われていない/)).toHaveLength(1);
+    expect(screen.getByText(/60 日使われていない（起点: 付与/)).toBeTruthy();
   });
 });
