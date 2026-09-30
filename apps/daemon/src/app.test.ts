@@ -332,6 +332,11 @@ function fakeScheduler() {
         },
       ];
     },
+    // 読めない行はこのフェイクでは持たない（本物のスケジューラ越しの歯は
+    // `schedule-unreadable-list.test.ts`）。
+    unreadable() {
+      return [];
+    },
     run(kind) {
       ran.push(kind);
       return kind === 'daily_report';
@@ -2026,7 +2031,7 @@ describe('HTTP API', () => {
       });
 
       // manager_message だけが消え、human_message は残る。
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
 
       const journalEntries = (await stores.journal.list({ types: ['decision'] })) as {
@@ -2114,7 +2119,7 @@ describe('HTTP API', () => {
         removedIds: ['evt-a'],
       });
 
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-b']);
     });
 
@@ -2144,7 +2149,7 @@ describe('HTTP API', () => {
         remaining: 1,
       });
 
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-3']);
     });
 
@@ -2306,7 +2311,7 @@ describe('HTTP API', () => {
         '2026-08-11T00:00:00.000Z',
       );
 
-      const rows = await stores.inbox.peekPending();
+      const rows = (await stores.inbox.peekPending()).entries;
       const expected = summarizeInboxBacklog(rows, Date.now());
 
       const response = await app.request('/inbox');
@@ -3758,7 +3763,7 @@ describe('HTTP API', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await stores.schedules.list()).toMatchObject([
+    expect((await stores.schedules.list()).entries).toMatchObject([
       { kind: 'issue-round', spec: { type: 'daily', at: '09:00' } },
     ]);
     expect(schedule.refreshCount()).toBe(before + 1);
@@ -3871,7 +3876,7 @@ describe('HTTP API', () => {
       );
       expect(response.status, at).toBe(400);
     }
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('cron 式でも仕込めるが、読めない式は弾く', async () => {
@@ -3884,7 +3889,7 @@ describe('HTTP API', () => {
       }),
     );
     expect(ok.status).toBe(200);
-    expect(await stores.schedules.list()).toMatchObject([
+    expect((await stores.schedules.list()).entries).toMatchObject([
       { spec: { type: 'cron', expression: '0 10 * * 1' } },
     ]);
 
@@ -3906,7 +3911,7 @@ describe('HTTP API', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('継続中の依頼を外せる。無いものは 404', async () => {
@@ -3923,7 +3928,7 @@ describe('HTTP API', () => {
       headers: { 'content-type': 'application/json' },
     });
     expect(removed.status).toBe(200);
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
 
     const missing = await app.request('/schedule/nope', {
       method: 'DELETE',

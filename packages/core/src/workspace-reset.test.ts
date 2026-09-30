@@ -116,9 +116,9 @@ describe('resetWorkspaceState', () => {
     expect(await stores.journal.list()).toEqual([]);
     expect(await stores.jobs.listJobs()).toEqual([]);
     expect((await stores.jobs.listApprovals()).entries).toEqual([]);
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
     expect(await stores.schedules.getPhase('daily_report')).toBeNull();
-    expect((await stores.inbox.peekPending()).length).toBe(0);
+    expect((await stores.inbox.peekPending()).entries.length).toBe(0);
     expect((await stores.commitments.list({ includeClosed: true })).entries).toEqual([]);
     // ⭐ **消したのに申告へ出ない形を作らない**（`WorkspaceResetSummary.practices`）。
     expect((await stores.practices.list()).entries).toEqual([]);

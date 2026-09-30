@@ -18,7 +18,7 @@ import {
   memoryTidyEntry,
 } from './schedule.js';
 import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
-import { JournalAnchorNotFoundError } from './store.js';
+import { JournalAnchorNotFoundError, describeUnreadableSchedules } from './store.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
 import { createMemoryStores } from './testing.js';
 
@@ -1362,6 +1362,35 @@ describe('継続中の依頼（時間起点の仕込み）', () => {
     s.scheduler.stop();
   });
 
+  /**
+   * issue #2343。`GET /schedule` は `Scheduler#list()` の写しを返すので、ストアが
+   * 読めない行を返しても、スケジューラがそれを持ち回らなければ HTTP には届かない。
+   * 読み直しのたびに置き換わる（直った行は消える）。
+   */
+  it('読めない行は unreadable() で持ち回り、読み直しで直っていれば消える（#2343）', async () => {
+    const s = setup(at(2026, 8, 12, 8, 0));
+    await s.stores.schedules.put(plan('watch', { type: 'every', minutes: 30 }));
+    // 対照: 読めない行が無いときは空。
+    await s.scheduler.refresh();
+    expect(s.scheduler.unreadable()).toEqual([]);
+
+    const real = s.stores.schedules.list.bind(s.stores.schedules);
+    let broken = true;
+    s.stores.schedules.list = async () => ({
+      ...(await real()),
+      unreadable: broken ? [{ kind: 'broken', reason: '不正な欄: spec' }] : [],
+    });
+
+    await s.scheduler.refresh();
+    expect(s.scheduler.unreadable()).toEqual([{ kind: 'broken', reason: '不正な欄: spec' }]);
+    // 読めた行は今までどおり仕込まれている。
+    expect(s.scheduler.list().map((item) => item.kind)).toContain('watch');
+
+    broken = false;
+    await s.scheduler.refresh();
+    expect(s.scheduler.unreadable()).toEqual([]);
+  });
+
   it('手で今すぐ起こせる（人間が待たずに確かめる経路も本番と同じ形）', async () => {
     const s = setup(at(2026, 8, 12, 8, 0));
     await s.stores.schedules.put(plan('issue-round', { type: 'daily', at: '09:00' }));
@@ -1681,5 +1710,28 @@ describe('memoryTidyEntry — 記憶の棚卸しの刻み', () => {
 
   it('説明に時刻が入る（人間が schedule_list で読む唯一の手掛かり）', () => {
     expect(memoryTidyEntry({ at: { hour: 5, minute: 7 } }).description).toContain('05:07');
+  });
+});
+
+describe('describeUnreadableSchedules — クローンと digest が使う1文（#2343）', () => {
+  it('0件は null（何も出さない）', () => {
+    expect(describeUnreadableSchedules([])).toBeNull();
+  });
+
+  it('件数と kind、消された依頼ではないこと、kind が取れない行の数を言う', () => {
+    const note = describeUnreadableSchedules([{ kind: 'a', reason: 'r' }, { reason: 'r' }]);
+    expect(note).toContain('読めない継続中の依頼が 2 件ある');
+    expect(note).toContain('kind: a');
+    expect(note).toContain('kind が取れない行が 1 件');
+    expect(note).toContain('消された依頼ではない');
+  });
+
+  it('kind が全部取れないときはそう言う。kind は上限で切って、切ったと言う', () => {
+    expect(describeUnreadableSchedules([{ reason: 'r' }])).toContain('kind も取れない');
+    const many = Array.from({ length: 12 }, (_, i) => ({ kind: `x${i}`, reason: 'r' }));
+    const note = describeUnreadableSchedules(many);
+    expect(note).toContain('読めない継続中の依頼が 12 件ある');
+    expect(note).toContain('ほか 2 件');
+    expect(note).not.toContain('x11');
   });
 });

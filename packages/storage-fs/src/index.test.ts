@@ -1805,7 +1805,7 @@ describe('FsScheduleStore', () => {
 
     // `schedule_list` はこの `list()` を直に読み、「既定の日報・発意 tick はここには
     // 出ない」と約束している。混ざると `schedule_remove` で消せてしまう。
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
     expect(await stores.schedules.get('self_initiative')).toBeNull();
   });
 
@@ -1847,7 +1847,7 @@ describe('FsScheduleStore', () => {
   it('仕込んだ依頼は読み戻せる（デーモンを作り直しても残る）', async () => {
     await stores.schedules.put(plan);
 
-    expect(await stores.schedules.list()).toEqual([plan]);
+    expect((await stores.schedules.list()).entries).toEqual([plan]);
     expect((await stores.schedules.get('issue-round'))?.request).toContain('open issue');
     expect(await stores.schedules.get('しらない')).toBeNull();
   });
@@ -1856,7 +1856,7 @@ describe('FsScheduleStore', () => {
     await stores.schedules.put(plan);
     await stores.schedules.put({ ...plan, request: '直した依頼' });
 
-    const plans = await stores.schedules.list();
+    const plans = (await stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]?.request).toBe('直した依頼');
   });
@@ -2026,7 +2026,7 @@ describe('FsScheduleStore', () => {
       stores.schedules.remove('しらない'),
     ]);
 
-    const plans = await stores.schedules.list();
+    const plans = (await stores.schedules.list()).entries;
     expect(plans.map((entry) => entry.kind)).toEqual(['a', 'b', 'issue-round']);
     expect((await stores.schedules.get('issue-round'))?.lastRunAt).toBe('2026-08-13T00:00:00.000Z');
   });
@@ -2035,7 +2035,7 @@ describe('FsScheduleStore', () => {
     await stores.schedules.put(plan);
     await stores.schedules.remove('issue-round');
 
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 
   it('読めない中身を「消された」に潰さない（pg 版と同じ振る舞い）', async () => {
@@ -2060,7 +2060,7 @@ describe('FsScheduleStore', () => {
     // そろえた——`get('broken')` が読めない行を投げたまま区別を保っているので
     // （直前の assertion）、`list()` が黙ってではなく跡付きで飛ばすことと
     // 両立する。ここでは他に正しい依頼が無いので `list()` は空配列を返す。
-    expect(await stores.schedules.list()).toEqual([]);
+    expect((await stores.schedules.list()).entries).toEqual([]);
   });
 });
 
@@ -2842,15 +2842,15 @@ describe('FsInboxStore', () => {
         '2026-08-10T00:00:00.000Z',
       );
 
-      const rows = await stores.inbox.peekPending();
+      const { entries: rows } = await stores.inbox.peekPending();
 
       expect(rows.map((r) => r.event.id)).toEqual(['evt-1', 'evt-2']);
       expect((rows[0]?.event as { text: string }).text).toBe('1件目');
       expect(rows.every((r) => r.deliveries === 0)).toBe(true);
     });
 
-    it('0件なら空配列を返す', async () => {
-      expect(await stores.inbox.peekPending()).toEqual([]);
+    it('0件なら空配列を返す（読めない行も無い）', async () => {
+      expect(await stores.inbox.peekPending()).toEqual({ entries: [], unreadable: [] });
     });
 
     /**
@@ -2921,7 +2921,7 @@ describe('FsInboxStore', () => {
       const removed = await stores.inbox.removeMany(['evt-1', 'evt-3']);
 
       expect([...removed].sort()).toEqual(['evt-1', 'evt-3']);
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
     });
 
@@ -2968,7 +2968,7 @@ describe('FsInboxStore', () => {
       await stores.inbox.removeMany(['evt-1']);
 
       expect(await stores.inbox.claimPending()).toEqual([]);
-      expect(await stores.inbox.peekPending()).toEqual([]);
+      expect((await stores.inbox.peekPending()).entries).toEqual([]);
     });
   });
 });

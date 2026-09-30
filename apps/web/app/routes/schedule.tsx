@@ -1,3 +1,4 @@
+import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Tabs } from 'radix-ui';
 
@@ -26,7 +27,50 @@ import {
   useSchedule,
 } from '@alteroid/swr';
 import { formatDateTime, formatRelative } from '@alteroid/logic';
-import type { ScheduleEntry, ScheduleSpec } from '@alteroid/logic';
+import type { ScheduleEntry, ScheduleSpec, UnreadableSchedule } from '@alteroid/logic';
+
+/**
+ * 読めない継続中の依頼が在ることを、一覧の上で断る（issue #2343。承認待ち画面の
+ * `UnreadableApprovalNote` と同じ形。ダッシュボードのカードも使う）。**0件なら描かない**
+ * （0 の行を作らない）。
+ *
+ * kind が取れない行は件数だけに数える。kind の列挙には上限を置き、切ったら言う。
+ * **「消された依頼ではない」を落とさない**——落とすと、行が消えたのと区別が付かない。
+ */
+const UNREADABLE_SCHEDULE_KINDS_SHOWN = 20;
+
+export function UnreadableScheduleNote({
+  unreadable,
+  className,
+}: {
+  unreadable: UnreadableSchedule[];
+  className?: string;
+}) {
+  if (unreadable.length === 0) return null;
+  const kindsAll = unreadable
+    .map((entry) => entry.kind)
+    .filter((kind): kind is string => kind != null);
+  const kinds = kindsAll.slice(0, UNREADABLE_SCHEDULE_KINDS_SHOWN);
+  const kindsRest = kindsAll.length - kinds.length;
+  return (
+    <div
+      role="status"
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
+        className,
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">
+        読めない継続中の依頼が {unreadable.length} 件ある
+        {kinds.length > 0 &&
+          `（kind: ${kinds.join(', ')}${kindsRest > 0 ? ` …ほか ${kindsRest} 件は省略` : ''}）`}
+        。<strong>壊れた行であって、消された依頼ではない。</strong>
+        この一覧には載っていない。
+      </span>
+    </div>
+  );
+}
 
 /**
  * 仕事の起点のうち、時間（②）と外部イベント（③）を人間から起こす画面。
@@ -60,12 +104,19 @@ export default function Schedule() {
     <Page title="スケジュールと外部イベント" description="時間起点と外部イベント起点を手で起こす">
       <ErrorNote error={error ?? failure} className="mb-4" />
 
+      {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}
+      <UnreadableScheduleNote unreadable={data?.unreadable ?? []} className="mb-4" />
+
       <Card className="mb-4">
         <CardHeader title="定期ジョブ" subtitle="既定で回っている。ここは待たずに試すための口" />
         {isLoading ? (
           <Spinner />
         ) : listUnavailable ? null : data === undefined || data.entries.length === 0 ? (
-          <Empty>登録された定期ジョブが無い（`off` にしている可能性がある）。</Empty>
+          <Empty>
+            {(data?.unreadable ?? []).length > 0
+              ? '読めた範囲では、登録された定期ジョブが無い。'
+              : '登録された定期ジョブが無い（`off` にしている可能性がある）。'}
+          </Empty>
         ) : (
           <ul>
             {data.entries.map((entry) => (

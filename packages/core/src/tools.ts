@@ -221,11 +221,13 @@ import {
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
+  describeUnreadableInboxEvents,
   describeUnreadableCommitment,
   describeUnreadablePractices,
+  describeUnreadableSchedules,
   describeUnreadableTokens,
 } from './store.js';
-import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
+import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
   STALE_TOKEN_RESTART_ADVICE,
@@ -238,6 +240,7 @@ import {
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
   describeInboxBacklogQueuedInMemory,
+  describeNoReadableInboxEvents,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
   removeInboxEventsAndStopDelivery,
@@ -1179,11 +1182,18 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * （`clone.ts` の `#toolContext()`）は必ず渡す。
  */
 function describeInboxBacklog(
-  rows: readonly PendingInboxEvent[],
+  peek: InboxPeek,
   now: number,
   queuedInMemory: number | undefined,
 ): string {
+  const rows = peek.entries;
   const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory);
+  // issue #2344: 読めない行が在るとき、「未処理の合図は無い」とは言わない。
+  // **「無い」は、読めた行も読めない行も0件のときにしか言わない。**
+  const noReadable = describeNoReadableInboxEvents(peek.unreadable);
+  if (rows.length === 0 && noReadable !== null) {
+    return queuedLine === null ? noReadable : `${noReadable}\n${queuedLine}`;
+  }
   if (rows.length === 0) {
     if (queuedLine === null) return 'クローンの受信箱に未処理の合図は無い。';
     // **器の行は0だが、メモリの配達待ち行列には残っている**——issue #1133 が
@@ -1191,7 +1201,7 @@ function describeInboxBacklog(
     // 「両方空」を騙る文言は出さない。
     return `器の行に未処理の合図は無い（メモリの配達待ち行列は別の軸——下）。\n${queuedLine}`;
   }
-  const breakdown = summarizeInboxBacklog(rows, now);
+  const breakdown = summarizeInboxBacklog(rows, now, peek.unreadable);
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
   // #917 (B): 人間起点の行を、大きい数字（次の行）より先に出す。0件なら
@@ -7143,8 +7153,20 @@ export function createCloneTools(context: ToolContext) {
         }
 
         // --- 一覧モード ---
-        const plans = await stores.schedules.list();
-        if (plans.length === 0) return text('（継続中の依頼は無い）');
+        const scheduleList = await stores.schedules.list();
+        const plans = scheduleList.entries;
+        // **読めない行は一覧から消さず、件数と kind で言う**（issue #2343。単票の
+        // `UnreadableScheduleError` の言い分けと同じ線。0件のときは `null` で、何も出さない）。
+        // 予算（`SCHEDULE_LIST_BUDGET`）の外に置く——`describeUnreadableSchedules` が
+        // kind の数を締めているので、伸びない。
+        const unreadableNote = describeUnreadableSchedules(scheduleList.unreadable);
+        if (plans.length === 0) {
+          return text(
+            unreadableNote === null
+              ? '（継続中の依頼は無い）'
+              : `（読めた継続中の依頼は無い）\n${unreadableNote}`,
+          );
+        }
 
         // **cursor は `plans.length === 0` の早期リターンの後で解決する。**
         // `commitment_list` と同じ順序（予算で切る前・絞りを当てた後）——
@@ -7218,6 +7240,7 @@ export function createCloneTools(context: ToolContext) {
         if (view.length > 0) {
           lines.push('（依頼本文は抜粋。全文は schedule_list kind=<kind> で取れる）');
         }
+        if (unreadableNote !== null) lines.push(unreadableNote);
         return text(lines.join('\n'));
       },
     ),
@@ -8952,7 +8975,11 @@ export function createCloneTools(context: ToolContext) {
         // **絞りはツール層で当てる**（`matchesInboxRemoveManyFilter` の doc——
         // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
         // filter は順序を変えず、matched もそのまま古い順になる。
-        const allPending = await stores.inbox.peekPending();
+        const peek = await stores.inbox.peekPending();
+        const allPending = peek.entries;
+        // issue #2344: 読めない行は絞り込みの材料（種類・送信元）が取れないので対象にできない。
+        // **だから「未読が1件も無い」とは言わない**——消していないだけで、受信箱に在る。
+        const unreadableNote = describeUnreadableInboxEvents(peek.unreadable);
         const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
 
         const filterText = [
@@ -8966,7 +8993,9 @@ export function createCloneTools(context: ToolContext) {
 
         if (matched.length === 0) {
           let why: string;
-          if (allPending.length === 0) {
+          if (allPending.length === 0 && unreadableNote !== null) {
+            why = `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
+          } else if (allPending.length === 0) {
             why =
               '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
           } else {
@@ -10382,7 +10411,8 @@ export function createCloneTools(context: ToolContext) {
         '暴走しているとき、報告を出したのに終わらないとき、依頼自体が要らなくなったときに使う。',
         '止めたあと本当に止まったかを確かめて返すので、返ってきた状態まで読むこと。',
         '⚠️ いまターンの途中（running）の委譲は既定では止めない——畳むと進行中の作業が' +
-          '失われるため。それでも止めるなら force: true を渡すこと。',
+          '失われるため。それでも止めるなら force: true を渡すこと。' +
+          '止める前に一覧を読めなかったときも、走行中かどうか判定できないので同じく断る。',
       ].join(' '),
       {
         managerId: z.string().describe('manager_list に出ている id'),
@@ -10397,18 +10427,49 @@ export function createCloneTools(context: ToolContext) {
             'いまターンの途中（status: running）の委譲でも止める。既定（false/省略）だと、' +
               'running の委譲は abort を呼ばずに断って理由を返す——畳むと、そのターンが抱えて' +
               'いる進行中の作業（未 push の実装・起こした作業者・監視中の CI）が失われるため。' +
+              '止める前に一覧を読めなかったとき（走行中か判定できない）も同じく断る。' +
               '断りを読んだうえで、それでも畳んでよいと判断したら true で呼び直すこと。',
           ),
       },
       async ({ managerId, reason, force }) => {
         if (!context.managers) return NO_POOL;
         const pool = context.managers;
-        const find = async (): Promise<ManagerSummary | undefined> =>
-          (await pool.list().catch(() => [])).find((manager) => manager.managerId === managerId);
+        // **3状態（Issue #2342）。** 以前は `pool.list()` の失敗を `[]` に倒していて、
+        // 「居ない」と「読めなかった」が区別できなかった——読めなかっただけなのに
+        // 走行中の断り（#1037）を素通りし、「一覧から消えている」と書いていた。
+        type ManagerLookup =
+          | { kind: 'found'; manager: ManagerSummary }
+          | { kind: 'absent' }
+          | { kind: 'unreadable'; reason: string };
+        const find = async (): Promise<ManagerLookup> => {
+          let list: ManagerSummary[];
+          try {
+            list = await pool.list();
+          } catch (error: unknown) {
+            return { kind: 'unreadable', reason: String(error) };
+          }
+          const manager = list.find((entry) => entry.managerId === managerId);
+          return manager === undefined ? { kind: 'absent' } : { kind: 'found', manager };
+        };
 
         // 止める前の状態を控える。**既に終わっていた仕事を止めたときに、それを
         // そうと言えるようにする**ため（黙って何もしないのが一番悪い）。
-        const before = await find();
+        const beforeLookup = await find();
+        const before = beforeLookup.kind === 'found' ? beforeLookup.manager : undefined;
+
+        // **止める前に読めなかったとき、走行中かどうか判定できない。** `force` が
+        // 無ければ running の断り（下）と同じく、abort を呼ばずに断る。`force: true`
+        // なら素通りして止める（暴走を止める道を塞がない。下のコメント）。
+        if (beforeLookup.kind === 'unreadable' && force !== true) {
+          return text(
+            `[${managerId}] 止めていない。**いまの状態を一覧から読めなかった**ので、` +
+              '走行中（running）かどうか判定できない — 走行中なら、畳むと未 push の実装・' +
+              '起こした作業者・監視中の CI が失われる。\n' +
+              `読めなかった原因: ${beforeLookup.reason}\n` +
+              'manager_list で状態を確かめること。読めても判断が同じなら、🔴 force: true で' +
+              '呼び直すと止まる。',
+          );
+        }
 
         // **ターンの途中（running）は、既定では abort を呼ばずに断る（#1037）。**
         //
@@ -10475,6 +10536,14 @@ export function createCloneTools(context: ToolContext) {
         // （R1）。ここで4値をそのまま文言に写す。
         if (result.outcome === 'absent') {
           // **エラーで終わらせず、何が起きているかを言う。**
+          if (beforeLookup.kind === 'unreadable') {
+            // **読めなかったことを「居ない」と言い切らない（#2342）。**
+            return text(
+              `${managerId} は止められなかった: ${result.detail}\n` +
+                `止める前の状態を一覧から読めなかった（${beforeLookup.reason}）ので、` +
+                '台帳にあるかどうかは分からない。manager_list で今あるものを確かめること。',
+            );
+          }
           if (!before) {
             return text(
               `${managerId} は居ない（id が違うか、台帳からも消えている）。` +
@@ -10488,14 +10557,20 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
-        const after = await find();
+        const afterLookup = await find();
+        const after = afterLookup.kind === 'found' ? afterLookup.manager : undefined;
+        // 止めた後の状態の言い方。**読めなかったときは「消えている」と言わない**（#2342）。
+        const afterUnreadable =
+          afterLookup.kind === 'unreadable'
+            ? `止めた後の状態を一覧から読めなかった（${afterLookup.reason}）`
+            : undefined;
 
         if (result.outcome === 'not_stopped') {
           // **止まっていないと確かめた（明確な失敗）。「止めた」と言わない。**
           return text(
             `[${managerId}] ${result.detail}\n` +
               `**止まっていない。** runner には ${managerId} のセッションがまだ残っている。` +
-              `いまの状態: ${after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, after.awaitingBackground)}。` +
+              `いまの状態: ${afterUnreadable ?? (after === undefined ? '一覧から消えている' : describeManagerState(after.status, after.live, after.awaitingBackground))}。` +
               ' manager_list で確かめ、必要ならもう一度止めること。',
           );
         }
@@ -10525,9 +10600,11 @@ export function createCloneTools(context: ToolContext) {
           );
         }
         lines.push(
-          after === undefined
-            ? '一覧からも消えている。'
-            : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
+          afterUnreadable !== undefined
+            ? `${afterUnreadable}。manager_list で状態を確かめること。`
+            : after === undefined
+              ? '一覧からも消えている。'
+              : `いまの状態: ${describeManagerState(after.status, after.live, after.awaitingBackground)}。`,
         );
         // **畳んだターンの本文へ、止めた直後に到達できるようにする（Issue
         // #1038）。** 誤って止めたことに気づく契機が、止めた直後には無かった

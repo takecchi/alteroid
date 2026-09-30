@@ -2,7 +2,13 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { inboxEventSchema } from '@alteroid/core';
-import type { InboxEvent, InboxStore, PendingInboxEvent } from '@alteroid/core';
+import type {
+  InboxEvent,
+  InboxPeek,
+  InboxStore,
+  PendingInboxEvent,
+  UnreadableInboxEvent,
+} from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -43,6 +49,24 @@ function extractEventId(raw: unknown): string | undefined {
   if (typeof event !== 'object' || event === null) return undefined;
   const id = (event as Record<string, unknown>).id;
   return typeof id === 'string' ? id : undefined;
+}
+
+/** 生の行から、受信時刻（`at`）を安全に取り出す（文字列でなければ `undefined`）。 */
+function extractEntryAt(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const at = (raw as Record<string, unknown>).at;
+  return typeof at === 'string' ? at : undefined;
+}
+
+/**
+ * 不正な欄の名前だけを `,` でつなぐ（値は出さない。zod のメッセージは受け取った値を含みうる）。
+ * 欄が取れなければ「不正な行」。
+ */
+function summarizeInvalidFields(paths: readonly (readonly PropertyKey[])[]): string {
+  const fields = [
+    ...new Set(paths.map((path) => (path.length > 0 ? path.map(String).join('.') : '(root)'))),
+  ];
+  return fields.length > 0 ? `不正な欄: ${fields.join(',')}` : '不正な行';
 }
 
 /**
@@ -146,11 +170,29 @@ export class FsInboxStore implements InboxStore {
    * 残っている未読を古い順に返す。**`claimPending` と違い、`#update` を
    * 通さない — 1文字も書かない**（`InboxStore.peekPending` の doc）。
    */
-  async peekPending(): Promise<PendingInboxEvent[]> {
+  async peekPending(): Promise<InboxPeek> {
     const file = await this.#read();
-    return [...file.events]
-      .sort((a, b) => a.at.localeCompare(b.at))
-      .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries }));
+    return {
+      entries: [...file.events]
+        .sort((a, b) => a.at.localeCompare(b.at))
+        .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries })),
+      // **読めない行も返す**（issue #2344。以前は黙って飛ばしていた）。`pending().count` は
+      // 壊れた行も数えるので、`entries.length + unreadable.length` はそれに一致する。
+      // id・受信時刻（取れれば）と不正な欄名だけで、本文は載せない。
+      unreadable: file.invalidEventsRaw.map((raw): UnreadableInboxEvent => {
+        const id = extractEventId(raw);
+        const at = extractEntryAt(raw);
+        const result = inboxEntrySchema.safeParse(raw);
+        const reason = result.success
+          ? '不正な行'
+          : summarizeInvalidFields(result.error.issues.map((issue) => issue.path));
+        return {
+          ...(id === undefined ? {} : { id }),
+          ...(at === undefined ? {} : { at }),
+          reason,
+        };
+      }),
+    };
   }
 
   /**

@@ -6,7 +6,14 @@ import {
   schedulePhaseSchema,
   scheduledRequestSchema,
 } from '@alteroid/core';
-import type { SchedulePhase, ScheduleSpec, ScheduleStore, ScheduledRequest } from '@alteroid/core';
+import type {
+  SchedulePhase,
+  ScheduleList,
+  ScheduleSpec,
+  ScheduleStore,
+  ScheduledRequest,
+  UnreadableSchedule,
+} from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -145,13 +152,24 @@ export class FsScheduleStore implements ScheduleStore {
   }
 
   /**
-   * kind の昇順。**不正な行は返さない**（issue #1944。`FsJobStore.listJobs` /
-   * `listApprovals` が #1868 / #1928 でそろえた形と同じ）——飛ばした行は
-   * `#read()` が stderr へ跡を残し、`invalidSchedulesRaw` として書き戻しでも
-   * 生かしたまま持ち回る（消さない）。
+   * `entries` は kind の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
+   * 返す**（issue #2343。以前は黙って飛ばしていたため、上の層が「依頼は無い」と
+   * 言い切れた。`listApprovals` の #2298 と同じ形）——飛ばした行は `#read()` が
+   * stderr へ跡を残し、`invalidSchedulesRaw` として書き戻しでも生かしたまま
+   * 持ち回る（消さない）。`unreadable` は kind（取れれば）と不正な欄名だけを持ち、
+   * 本文は載せない。
    */
-  async list(): Promise<ScheduledRequest[]> {
-    return [...(await this.#read()).schedules].sort((a, b) => a.kind.localeCompare(b.kind));
+  async list(): Promise<ScheduleList> {
+    const { schedules, invalidSchedulesRaw } = await this.#read();
+    return {
+      entries: [...schedules].sort((a, b) => a.kind.localeCompare(b.kind)),
+      unreadable: invalidSchedulesRaw.map((raw): UnreadableSchedule => {
+        const kind = extractKind(raw);
+        const result = scheduledRequestSchema.safeParse(raw);
+        const reason = result.success ? '不正な行' : summarizeInvalidFields(result.error.issues);
+        return kind === undefined ? { reason } : { kind, reason };
+      }),
+    };
   }
 
   /**

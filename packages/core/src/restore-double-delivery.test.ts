@@ -133,7 +133,8 @@ describe('起動直後に post した合図が、未読の配り直しで二重�
     // post の永続化（`#remember`）が受信箱へ着くまで待つ——これで claimPending() が
     // 後から読む受信箱に、同じ合図が在る状態になる。
     await waitFor(
-      async () => (await stores.inbox.peekPending()).some((p) => p.event.id === 'evt-live-1'),
+      async () =>
+        (await stores.inbox.peekPending()).entries.some((p) => p.event.id === 'evt-live-1'),
       '受信箱への書き込み',
     );
     release();

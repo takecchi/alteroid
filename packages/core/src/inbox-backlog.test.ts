@@ -11,6 +11,7 @@ import {
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
   describeInboxBacklogQueuedInMemory,
+  describeNoReadableInboxEvents,
   foldInboxBacklogByType,
   inboxBacklogCrossManagerDedupeKey,
   inboxBacklogDedupeKey,
@@ -22,6 +23,7 @@ import {
   type InboxRemoveManyFilter,
 } from './inbox-backlog.js';
 import type { InboxEvent } from './schema.js';
+import { describeUnreadableInboxEvents } from './store.js';
 import type { PendingInboxEvent } from './store.js';
 
 const NOW = Date.parse('2026-09-11T12:00:00.000Z');
@@ -1437,6 +1439,54 @@ describe('describeInboxBacklogQueuedInMemory（issue #1084 / #1133）', () => {
     const line = describeInboxBacklogQueuedInMemory(3326);
     expect(line).toContain('メモリの配達待ち行列 3326 件');
     expect(line).toContain('足しても引いても意味が無い');
+  });
+});
+
+describe('読めない合図（issue #2344）', () => {
+  const NOW = Date.parse('2026-09-28T12:00:00.000Z');
+  const UNREADABLE = [
+    { id: 'evt-bad', at: '2026-09-27T00:00:00.000Z', reason: '不正な欄: event.type' },
+    { reason: '不正な行' },
+  ];
+
+  it('summarizeInboxBacklog: unreadable は total に入れず、そのまま載せる', () => {
+    const b = summarizeInboxBacklog([], NOW, UNREADABLE);
+    expect(b.total).toBe(0);
+    expect(b.unreadable).toEqual(UNREADABLE);
+  });
+
+  it('summarizeInboxBacklog: 0件なら鍵ごと無い（「読めない合図は 0 件」の値を作らない）', () => {
+    expect('unreadable' in summarizeInboxBacklog([], NOW)).toBe(false);
+    expect('unreadable' in summarizeInboxBacklog([], NOW, [])).toBe(false);
+  });
+
+  it('describeUnreadableInboxEvents: id が取れた行は並べ、取れない行は件数で言う。0件は null', () => {
+    expect(describeUnreadableInboxEvents([])).toBeNull();
+    expect(describeUnreadableInboxEvents(UNREADABLE)).toContain(
+      '読めない合図が 2 件ある（id: evt-bad。id が取れない行が 1 件）',
+    );
+    expect(describeUnreadableInboxEvents([{ reason: 'x' }])).toContain('（id も取れない）');
+  });
+
+  it('describeUnreadableInboxEvents: id の列挙は上限で切り、切ったことを言う', () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ id: `e${i}`, reason: 'x' }));
+    const text = describeUnreadableInboxEvents(many) ?? '';
+    expect(text).toContain('e9');
+    expect(text).not.toContain('e10');
+    expect(text).toContain('ほか 2 件');
+  });
+
+  it('describeNoReadableInboxEvents: 読めない行が在るときだけ文を返す（「無い」とは言わない）', () => {
+    expect(describeNoReadableInboxEvents([])).toBeNull();
+    const text = describeNoReadableInboxEvents(UNREADABLE) ?? '';
+    expect(text).not.toContain('未処理の合図は無い。');
+    expect(text).toContain('読めた未処理の合図は無い（ただし、読めない行が在る');
+  });
+
+  it('describeInboxBacklogBreakdown: 読めない行が在れば末尾に足し、無ければ1文字も足さない', () => {
+    const withRows = summarizeInboxBacklog([], NOW, UNREADABLE);
+    expect(describeInboxBacklogBreakdown(withRows)).toContain('上の計には入っていない');
+    expect(describeInboxBacklogBreakdown(summarizeInboxBacklog([], NOW))).not.toContain('読めない');
   });
 });
 

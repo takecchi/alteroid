@@ -30,7 +30,9 @@ import {
   tokenRotationSettingsSchema,
   unreadableApprovalSchema,
   unreadableCommitmentSchema,
+  unreadableInboxEventSchema,
   unreadablePracticeSchema,
+  unreadableScheduleSchema,
   unreadableTokenSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
@@ -543,7 +545,20 @@ export const scheduleStatusSchema = z.object({
   lastRunAt: z.string().optional(),
 });
 
-export const scheduleListResponseSchema = z.object({ entries: z.array(scheduleStatusSchema) });
+export const scheduleListResponseSchema = z.object({
+  entries: z.array(scheduleStatusSchema),
+  /**
+   * 読めなかった継続中の依頼の行（issue #2343）。**「無い」でも「消された」でもない第3の状態。**
+   *
+   * スケジューラが直近の読み直しで `ScheduleStore.list` の `ScheduleList.unreadable`
+   * （`packages/core/src/store.ts`）から持っているものをそのまま外へ出す。クローンの
+   * `schedule_list` が末尾に足す断りと同じ材料を、人間の側にも渡す。**1件でも在るときだけ
+   * 載る**（0件なら鍵が無い。空配列を作ると「読めない行は無い」と読めてしまう）。
+   * 直近の読み直しの時点のもので、`POST /schedule` / `DELETE /schedule/:kind` の直後に
+   * 読み直される。
+   */
+  unreadable: z.array(unreadableScheduleSchema).optional(),
+});
 
 // ---------------------------------------------------------------------------
 // 引き受けたまま終わっていない仕事の台帳（/commitments）
@@ -2298,6 +2313,15 @@ export const inboxBacklogResponseSchema = z.object({
     oldestAt: z.string().optional(),
     undelivered: z.number().int(),
   }),
+  /**
+   * 読めなかった受信箱の行（issue #2344）。**「無い」でも「処理済み」でもない第3の状態。**
+   *
+   * `InboxStore.peekPending` が返す `InboxPeek.unreadable` をそのまま外へ出す。**`total` には
+   * 入らない**（`total` は読めた行の数）。**1件でも在るときだけ載る**（0件なら鍵が無い。
+   * 空配列を作ると「読めない行は無い」と読めてしまう）。本文は載せない（id・受信時刻・
+   * 不正な欄名だけ）。
+   */
+  unreadable: z.array(unreadableInboxEventSchema).optional(),
 });
 
 /**

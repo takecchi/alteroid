@@ -171,6 +171,13 @@ interface Harness {
    */
   setUnpushedWorkThrows(managerId: string, message: string): void;
   /**
+   * `managers.list()` を、この呼び出しの後の n 回目（1 始まり）だけ例外で失敗させる
+   * （#2342。一覧が読めなかった、を模す）。数えるのは設定した後の呼び出しだけ。
+   * `manager_stop` は止める前に1回、止めた後に1回引くので、`[1]` は止める前だけ、
+   * `[2]` は止めた後だけが失敗する。
+   */
+  setListFailures(calls: number[], message: string): void;
+  /**
    * `managers.unpushedWork(managerId)` が呼ばれるたびに積む（#1039）。
    * **`manager_list` や `force: true` の経路から呼ばれていないこと**を、
    * この配列が空のままであることで確かめる。
@@ -240,6 +247,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   const unpushedWorkResults = new Map<string, ManagerUnpushedWork>();
   const unpushedWorkErrors = new Map<string, string>();
   const unpushedWorkCalls: { managerId: string; hasSignal: boolean }[] = [];
+  let listCallCount = 0;
+  let listFailure: { calls: number[]; message: string } = { calls: [], message: '' };
   const runningOwners = new Map<string, string>();
   let memoryCause: 'distill' | 'clone' = 'clone';
   // **`ToolContext.conversationId` の呼び出し文脈（issue #1003 段2・#781）。**
@@ -288,6 +297,8 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
       return sendResult;
     },
     async list() {
+      listCallCount += 1;
+      if (listFailure.calls.includes(listCallCount)) throw new Error(listFailure.message);
       // 本物の `list()` は毎回作り直した写しを返す（`summaryOf`）。同じ物を返すと、
       // 呼び手が控えた「前の状態」が後から書き換わってしまう。
       return running.map((manager) => ({ ...manager }));
@@ -526,6 +537,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setUnpushedWorkThrows(managerId, message) {
       unpushedWorkErrors.set(managerId, message);
+    },
+    setListFailures(calls, message) {
+      listCallCount = 0;
+      listFailure = { calls, message };
     },
     unpushedWorkCalls,
     transcriptCalls,
@@ -1782,7 +1797,7 @@ describe('クローンの道具', () => {
     });
     expect(created).toContain('毎日 09:00');
 
-    const plans = await h.stores.schedules.list();
+    const plans = (await h.stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({
       kind: 'issue-round',
@@ -2008,7 +2023,7 @@ describe('クローンの道具', () => {
 
     await h.call('schedule_create', { kind: 'watch', request: '直した依頼', everyMinutes: 10 });
 
-    const plans = await h.stores.schedules.list();
+    const plans = (await h.stores.schedules.list()).entries;
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({
       request: '直した依頼',
@@ -2070,7 +2085,7 @@ describe('クローンの道具', () => {
     });
     expect(created).toContain('cron: 0 10 * * 1');
 
-    expect((await h.stores.schedules.list())[0]).toMatchObject({
+    expect((await h.stores.schedules.list()).entries[0]).toMatchObject({
       spec: { type: 'cron', expression: '0 10 * * 1' },
     });
   });
@@ -2085,7 +2100,7 @@ describe('クローンの道具', () => {
     });
 
     expect(result).toContain('cron 式として読めない');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   it('周期の指定は1つだけ。読めない指定は仕込まない', async () => {
@@ -2114,7 +2129,7 @@ describe('クローンの道具', () => {
     expect(
       await h.call('schedule_create', { kind: 'ダメな名前', request: 'x', dailyAt: '09:00' }),
     ).toContain('使えない');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   it('既定の定期ジョブの名前は奪えない（日報を潰せない）', async () => {
@@ -2125,7 +2140,7 @@ describe('クローンの道具', () => {
       everyMinutes: 1,
     });
     expect(result).toContain('既定の定期ジョブ');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   it('schedule_remove は依頼を片付ける。無い依頼なら何もしない', async () => {
@@ -2133,10 +2148,10 @@ describe('クローンの道具', () => {
     await h.call('schedule_create', { kind: 'watch', request: '見張る', everyMinutes: 30 });
 
     expect(await h.call('schedule_remove', { kind: 'しらない' })).toContain('無い');
-    expect(await h.stores.schedules.list()).toHaveLength(1);
+    expect((await h.stores.schedules.list()).entries).toHaveLength(1);
 
     expect(await h.call('schedule_remove', { kind: 'watch' })).toContain('外した');
-    expect(await h.stores.schedules.list()).toEqual([]);
+    expect((await h.stores.schedules.list()).entries).toEqual([]);
   });
 
   /**
@@ -2244,6 +2259,46 @@ describe('クローンの道具', () => {
     await expect(h.call('schedule_list', { kind: 'broken-other' })).rejects.toThrow(
       '実測用のダミー',
     );
+  });
+
+  describe('読めない継続中の依頼の行が在る一覧（#2343）: 一覧から消さず、件数と kind で言う', () => {
+    /** fs / pg が返す形（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
+    function listWithUnreadable(unreadable: { kind?: string; reason: string }[]) {
+      const h = harness();
+      const original = h.stores.schedules.list.bind(h.stores.schedules);
+      h.stores.schedules.list = async () => ({ ...(await original()), unreadable });
+      return h;
+    }
+
+    it('読めた行は今までどおり並べ、末尾に「読めない継続中の依頼が N 件ある」を kind つきで出す', async () => {
+      const h = listWithUnreadable([
+        { kind: 'broken-1', reason: '不正な欄: spec' },
+        { reason: '不正な行' },
+      ]);
+      await h.call('schedule_create', { kind: 'watch', request: '読める依頼', everyMinutes: 30 });
+      const reply = await h.call('schedule_list', {});
+      expect(reply).toContain('読める依頼');
+      expect(reply).toContain('読めない継続中の依頼が 2 件ある');
+      expect(reply).toContain('broken-1');
+      expect(reply).toContain('kind が取れない行が 1 件');
+      expect(reply).toContain('消された依頼ではない');
+    });
+
+    it('読めた行が0件でも「継続中の依頼は無い」とだけ言わない', async () => {
+      const h = listWithUnreadable([{ kind: 'broken-1', reason: '不正な欄: spec' }]);
+      const reply = await h.call('schedule_list', {});
+      expect(reply).toContain('読めない継続中の依頼が 1 件ある');
+      expect(reply).toContain('broken-1');
+      expect(reply).not.toContain('（継続中の依頼は無い）');
+    });
+
+    it('0件のときは何も出さない（0 の行を作らない）。本当に0件なら「無い」と言う', async () => {
+      const h = listWithUnreadable([]);
+      await h.call('schedule_create', { kind: 'watch', request: '読める依頼', everyMinutes: 30 });
+      expect(await h.call('schedule_list', {})).not.toContain('読めない');
+      const empty = listWithUnreadable([]);
+      expect(await empty.call('schedule_list', {})).toBe('（継続中の依頼は無い）');
+    });
   });
 
   it('memory_append は既存の記述を消さない（人間の手書きを守る）', async () => {
@@ -6183,6 +6238,76 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * **止める前に一覧が読めなかったとき、`running` かどうか判定できないまま止めない
+   * （Issue #2342）。** 以前は読めなかった失敗を `[]`（＝居ない）に倒していたので、
+   * `before` が `undefined` になり、#1037 の断りを素通りして abort に進んでいた。
+   * 本題は `abort()` が一度も呼ばれないこと（`h.aborted` が空）。
+   */
+  it('manager_stop は止める前に一覧を読めなかったら、force 無しでは abort を呼ばずに断る', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setListFailures([1], 'ledger 応答なし（模擬）');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(h.aborted).toEqual([]);
+    expect(reply).toContain('止めていない');
+    expect(reply).toContain('読めなかった');
+    expect(reply).toContain('判定できない');
+    expect(reply, '原因（エラーの要約）が添えられていない').toContain('ledger 応答なし（模擬）');
+    expect(reply, '次の手（manager_list で確かめる）が無い').toContain('manager_list');
+    expect(reply, '次の手（force: true で呼び直す）が無い').toContain('force: true');
+    expect(reply, '読めなかっただけなのに「居ない」と言っている').not.toContain('居ない');
+  });
+
+  it('manager_stop は止める前に一覧を読めなくても、force: true なら止めに進む', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setListFailures([1], 'ledger 応答なし（模擬）');
+
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '暴走した',
+      force: true,
+    });
+
+    expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
+    expect(reply).toContain('stopped');
+  });
+
+  it('manager_stop は止めた後の一覧だけ読めなかったとき、「消えている」と書かず「読めなかった」と書く', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setListFailures([2], 'ledger 応答なし（模擬）');
+
+    const reply = await h.call('manager_stop', {
+      managerId: 'mgr-1',
+      reason: '暴走した',
+      force: true,
+    });
+
+    expect(h.aborted).toEqual([{ managerId: 'mgr-1', reason: '暴走した' }]);
+    expect(reply).toContain('止めた後の状態を一覧から読めなかった');
+    expect(reply, '読めなかっただけなのに一覧から消えたと言っている').not.toContain('消えている');
+  });
+
+  it('manager_stop は abort が absent で、止める前も読めなかったとき、「居ない」と言い切らない', async () => {
+    const h = harness();
+    h.setListFailures([1], 'ledger 応答なし（模擬）');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-nope', force: true });
+
+    // `abort()` の detail は転記されるので、実装が自分で書いた文だけを見るため差し引く
+    // （`Harness.abortDetails` の doc）。
+    const own = h.abortDetails.reduce((rest, detail) => rest.replace(detail, ''), reply);
+    expect(own).toContain('読めなかった');
+    expect(own, '読めなかっただけなのに「居ない」と言い切っている').not.toContain('居ない');
+    expect(own, '読めなかっただけなのに「台帳からも消えている」と言っている').not.toContain(
+      '消えている',
+    );
+  });
+
+  /**
    * `before?.status === 'done'` の既存の分岐は、running 用の断りを足しても
    * そのまま従来どおり動く（force 無しでも止まり、「もともと待機中（done）」の
    * 文言が出る）——running の断りが done 側の経路を塞いでいないことを見る。
@@ -9547,7 +9672,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
 
       expect(isError).toBe(true);
       expect(await stores.schedules.get('watch-2145a')).toBeNull();
-      expect(await stores.schedules.list()).toEqual([]);
+      expect((await stores.schedules.list()).entries).toEqual([]);
     });
 
     it('(b) 状態変更（editRequest/put）が投げたときは、先の行と打ち消しの行の両方が日誌に残る', async () => {

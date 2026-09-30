@@ -5737,12 +5737,15 @@ class Clone implements CloneHost {
             // 固定する。
             if (count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
             try {
-              const rows = await this.#stores.inbox.peekPending();
+              const peek = await this.#stores.inbox.peekPending();
               // **`Date.now()` をここで固定する。** `summarizeInboxBacklog` の
               // 齢バケツは使わない（この行は種類しか描かない）が、関数の契約
               // として基準時刻を渡す必要があるので、他の材料と同じ「呼んだ
               // 時点」を渡す。
-              return { ...base, typeBreakdown: summarizeInboxBacklog(rows, Date.now()) };
+              return {
+                ...base,
+                typeBreakdown: summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
+              };
             } catch {
               // **内訳が読めなくても、件数自体は取れているので base のまま
               // 返す。** `situation.ts` 側は `typeBreakdown` が無い回、既存の
