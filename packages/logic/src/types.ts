@@ -54,6 +54,11 @@ export type ApprovalAnswerResult = Ok<paths['/approvals/answer']['post']>['resul
 
 export type DailyReport = Ok<paths['/reports']['get']>['reports'][number];
 
+/** `GET /progress` の応答（Issue #2241）。率（%）は持たない。 */
+export type Progress = Ok<paths['/progress']['get']>;
+export type ProgressForecast = Progress['forecast'];
+export type ProgressForecastBasis = ProgressForecast['basis'];
+
 export type ScheduleEntry = Ok<paths['/schedule']['get']>['entries'][number];
 /**
  * 周期そのもの（#496）。仕込まれた依頼だけが持つので `entry.spec` は
