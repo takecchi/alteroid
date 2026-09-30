@@ -231,7 +231,11 @@ describe('closed を受けた時点で、前の回の lastCgroupEvents / lastSys
       cgroupEvents: { oomKillDelta: 2 },
       systemError: { code: 'ENOMEM' },
     });
-    const second = await listedWhen(pool, 'mgr-replace', (m) => m.lastCgroupEvents?.oomKillDelta === 2);
+    const second = await listedWhen(
+      pool,
+      'mgr-replace',
+      (m) => m.lastCgroupEvents?.oomKillDelta === 2,
+    );
     expect(second.lastCgroupEvents?.oomKillDelta).toBe(2);
     expect(second.lastCgroupEvents?.pidsMaxDelta).toBeUndefined();
     expect(second.lastSystemError?.code).toBe('ENOMEM');
