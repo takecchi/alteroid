@@ -133,7 +133,8 @@ describe('alteroid token list', () => {
     await tokenListCommand();
 
     const text = read();
-    // 順序は order 昇順（first が先）。
+    // 順序は order 昇順（first が先）。先に `first` が在ることを確かめる（無いと `-1 < n` で素通りする）。
+    expect(text).toContain('first');
     expect(text.indexOf('first')).toBeLessThan(text.indexOf('second'));
     expect(text).toContain('id=tok-a');
     expect(text).toContain('sha256=aaaaaaaaaaaa');

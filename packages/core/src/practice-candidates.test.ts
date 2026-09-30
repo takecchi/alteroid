@@ -181,6 +181,8 @@ describe('describePracticeCandidates — 種類ごとの候補を材料として
     expect(commitments).toContain('### 種類「返信」 評定済み 3 件');
     expect(commitments).toContain('### 種類「日報」 評定済み 1 件');
     // 証拠の順: bad が unclear より先（新しい unclear があっても bad を先に出す）。
+    // 先に `うまくいかなかった本文` が在ることを確かめる（#2009 と同じ型。無いと `-1 < n` で素通りする）。
+    expect(commitments).toContain('うまくいかなかった本文');
     expect(commitments.indexOf('うまくいかなかった本文')).toBeLessThan(
       commitments.indexOf('判定できない本文'),
     );
