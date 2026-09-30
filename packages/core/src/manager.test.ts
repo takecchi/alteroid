@@ -3927,15 +3927,8 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
       .poll(() => fake.state.resumes.some((r) => r.managerId === 'mgr-flaky'), { timeout: 8000 })
       .toBe(true);
 
-    // その間、broken は1回しか試されず、通知も1回だけ。
+    // その間、broken は1回しか試されない。
     expect(tries.broken).toBe(1);
-    const notices = s.inbox.filter(
-      (event) =>
-        event.type === 'manager_message' &&
-        (event as { managerId: string }).managerId === 'mgr-broken' &&
-        (event as { text: string }).text.includes('戻せなかった'),
-    );
-    expect(notices).toHaveLength(1);
 
     // **人間とクローンの明示的な経路は塞がない。** 諦めたのは自動の取り直しだけで、
     // 頼まれたら投げに行く（結果は呼び手へ返る。ここでは runner が 400 を返す）。
@@ -3943,6 +3936,21 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     expect(tries.broken).toBe(2);
 
     await s.pool.stop();
+
+    // 通知も1回だけ。**これは梯子の終わり（約3秒）には数えられない。** 通知は即配られず
+    // 合流窓（既定 3000ms）へ積まれるので、梯子の終わりと窓の満了がほぼ同じ時刻になり、
+    // その時点で数えると 0 件（まだ窓の中）にも 1 件にもなりうる（PR #2310 の作業者が上げた
+    // 範囲外の指摘）。`stop()` は窓に積んだ知らせを同期的に配り切る
+    // （`#flushSynthesizedNotices`）ので、**止めた後**に数えれば、窓の長さにも器の混み具合にも
+    // 依らず「積まれていたものは全部届いた後」を数えられる。明示の `send` の失敗は呼び手へ
+    // 返るだけで、この通知を足さない（足すなら、この歯が 2 件で落ちて知らせる）。
+    const notices = s.inbox.filter(
+      (event) =>
+        event.type === 'manager_message' &&
+        (event as { managerId: string }).managerId === 'mgr-broken' &&
+        (event as { text: string }).text.includes('戻せなかった'),
+    );
+    expect(notices).toHaveLength(1);
   });
 
   it('別の runner のジョブには手を出さない（M5 で runner が増えても混ざらない）', async () => {
