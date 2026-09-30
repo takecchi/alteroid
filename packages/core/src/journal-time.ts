@@ -85,6 +85,36 @@ export function isReadableJournalTimeBoundary(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
 }
 
+// `YYYY-MM-DDThh:mm[:ss[.fff]]` + (`Z` | `±hh:mm`)。量指定子は入れ子にせず線形。
+const OFFSET_QUALIFIED_TIME_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * `value` が**時差（`Z` か `±hh:mm`）の付いた** ISO 8601 の日時か。
+ * **元に戻せない一括操作**（`commitment_close_many` の `until`・`inbox_remove_many` の
+ * `before`）の門に使う（#2462）。`isReadableJournalTimeBoundary` は時差の無い
+ * `2026-09-25T19:00` / `2026/09/25` / `Sep 25 2026` も通し、**サーバーの地方時刻として読む**ため、
+ * 境界が時差ぶんずれたまま消す・閉じる対象が決まってしまう。
+ *
+ * 形は `T` 区切りのみ（空白区切りは断る）、時差は `Z` か `±hh:mm`（`±hhmm` は断る）。
+ * 秒は省略でき（#1515）、小数秒も通す。読むだけの `journal_read` は変えない。
+ */
+export function isOffsetQualifiedTimeBoundary(value: string): boolean {
+  return OFFSET_QUALIFIED_TIME_PATTERN.test(value) && isReadableJournalTimeBoundary(value);
+}
+
+/** 時差の無い境界を一括操作の口が断るときの共通の言い方。 */
+export function describeOffsetRequiredTimeBoundary(
+  field: string,
+  value: string,
+  example: string,
+): string {
+  return (
+    `${field} に渡された「${value}」は ISO8601 として読めない、または時差が無い` +
+    `（時差 Z か +09:00 を必ず書くこと。例 ${example} / 2026-09-11T19:00+09:00）。`
+  );
+}
+
 /**
  * `since` / `until` を正規化する。**読めなければ `null`。** 読めれば
  * `toISOString()`（UTC・ミリ秒3桁・`Z` 終端——`entry.at` と同じ固定形式）へ

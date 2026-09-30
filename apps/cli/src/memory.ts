@@ -107,7 +107,7 @@ function formatCreatedAtWithElapsed(createdAt: MemorySummary['createdAt'], now: 
 }
 
 export async function memoryListCommand(now: number = Date.now()): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const { client } = conn;
   const response = await client.memory.$get();
@@ -265,7 +265,7 @@ export function freshnessMarker(freshness: MemorySummary['descriptionFreshness']
 }
 
 export async function memoryShowCommand(slug: string): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('read');
   if (conn === null) return;
   const content = await read(conn.client, conn.target, slug);
   if (content === null) {
@@ -283,7 +283,7 @@ export async function memoryShowCommand(slug: string): Promise<void> {
  * 雛形を入れる。
  */
 export async function memoryEditCommand(slug: string): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const current = await read(client, target, slug);
@@ -313,7 +313,7 @@ export async function memorySetCommand(
   slug: string,
   options: { file?: string } = {},
 ): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('write');
   if (conn === null) return;
   const content =
     options.file === undefined || options.file === '-'
@@ -340,7 +340,7 @@ export async function memorySetCommand(
  * サーバの内部エラーでも「そんな記憶はありません」と誤案内していた。
  */
 export async function memoryRemoveCommand(slug: string): Promise<void> {
-  const conn = await connect();
+  const conn = await connect('write');
   if (conn === null) return;
   const { client, target } = conn;
   const response = await client.memory[':slug'].$delete({ param: { slug } });
@@ -366,15 +366,24 @@ export async function memoryRemoveCommand(slug: string): Promise<void> {
 /**
  * 繋ぎ先を決めて型付きクライアントを作る。**繋げない理由はそのまま出す。**
  *
- * 例外にしないのは `usage.ts` と揃えるためである（`alteroid: Error: …` の形に
- * すると、「ログインしていません」という人間向けの案内が例外の見た目で出る）。
+ * 読み取り系で例外にしないのは `usage.ts` と揃えるためである（`alteroid: Error: …` の
+ * 形にすると、「ログインしていません」という人間向けの案内が例外の見た目で出る）。
+ * 書き込み系は下の #2456 の判断で例外にする（見た目より、終了コードが 0 でないことを採る）。
  *
  * **`target` も一緒に返す。** 書き込み系（`write` / `memoryRemoveCommand`）が
  * HTTP の失敗を `describeAuthFailure` で判定するのに要る（#1641）。
+ *
+ * **`access: 'write'` のときは、未ログインの note を例外にする**（#2456、クローン
+ * teto の判断 2026-09-30）。状態を変えるつもりで叩いたのに何もせず終了コード 0 で
+ * 返ると、cron などが「済んだ」と誤読する。読み取り系（`'read'`）は今のまま、
+ * note を stdout に出して `null` を返す（呼び出し側は 0 で return する）。
  */
-async function connect(): Promise<{ client: DaemonClient; target: Target } | null> {
+async function connect(
+  access: 'read' | 'write',
+): Promise<{ client: DaemonClient; target: Target } | null> {
   const target = await resolveTarget();
   if (target.note !== null) {
+    if (access === 'write') throw new Error(target.note);
     stdout.write(`${target.note}\n`);
     return null;
   }

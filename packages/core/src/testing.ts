@@ -9,6 +9,7 @@ import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
 import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
 import { matchesJournalSearch } from './journal-search.js';
+import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type {
   Commitment,
   AppraisalValue,
@@ -777,7 +778,9 @@ export function createMemoryStores(): Stores {
       const all = [...commitments.values()].map(isolate);
       const open = all
         .filter((entry) => entry.closedAt === undefined)
-        .sort((a, b) => a.at.localeCompare(b.at));
+        // 実時刻で比べる（issue #2451。`compareIsoInstant` の doc——文字列比較だと
+        // オフセット表記の違う行で pg の `asc(at)` と並びが食い違う）
+        .sort((a, b) => compareIsoInstant(a.at, b.at));
       // **この偽物は `unreadable` を常に空にする。** ここが持つのは常に
       // `commitmentSchema.parse` を経た `Commitment` だけで（`open()` を見よ）、
       // 保存層のように行が壊れた形で入る経路が無い。`entries` /
@@ -793,7 +796,8 @@ export function createMemoryStores(): Stores {
         return { entries: open, unreadable: [], trimmedClosed: 0 };
       const closed = all
         .filter((entry) => entry.closedAt !== undefined)
-        .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
+        // 実時刻の降順（issue #2451。pg の `desc(closedAt)` と揃える）
+        .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''));
       return { entries: [...open, ...closed], unreadable: [], trimmedClosed: 0 };
     },
     async get(id) {
@@ -1330,8 +1334,9 @@ export function createMemoryStores(): Stores {
   /** 人間が承認した Bash 許可の記録（インメモリ。Issue #863）。 */
   const permissionGrants: PermissionGrantStore = {
     async list() {
+      // 実時刻で比べる（issue #2451。pg の `asc(grantedAt)` と揃える）
       return [...permissionGrantRows.values()].sort((a, b) =>
-        a.grantedAt.localeCompare(b.grantedAt),
+        compareIsoInstant(a.grantedAt, b.grantedAt),
       );
     },
     async get(id) {
@@ -1836,7 +1841,8 @@ function createMemoryInboxStore(): InboxStore {
       unread.delete(id);
     },
     async claimPending(): Promise<PendingInboxEvent[]> {
-      const rows = [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      // 実時刻で比べる（issue #2451。pg は `at`〈timestamptz〉の `getTime()` で並べる）
+      const rows = [...unread.values()].sort((a, b) => compareIsoInstant(a.at, b.at));
       // 読むことと回数を進めることを1操作に閉じる（`InboxStore.claimPending`）。
       return rows.map((row) => {
         const next = { ...row, deliveries: row.deliveries + 1 };
@@ -1848,10 +1854,8 @@ function createMemoryInboxStore(): InboxStore {
       // **`claimPending` と違い、`unread` を1文字も書き換えない**
       // （`InboxStore.pending` の doc）。
       const rows = [...unread.values()];
-      const oldest = rows.reduce<string | undefined>(
-        (min, row) => (min === undefined || row.at < min ? row.at : min),
-        undefined,
-      );
+      // 実時刻でいちばん古いもの（issue #2451。pg の `min(at)` と揃える）
+      const oldest = earliestIsoInstant(rows.map((row) => row.at));
       return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
     },
     async peekPending(): Promise<InboxPeek> {
@@ -1859,7 +1863,7 @@ function createMemoryInboxStore(): InboxStore {
       // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
       // メモリ実装は `put()` がスキーマを通すので、壊れた行を持てない（`unreadable` は常に空）。
       return {
-        entries: [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)),
+        entries: [...unread.values()].sort((a, b) => compareIsoInstant(a.at, b.at)),
         unreadable: [],
       };
     },

@@ -181,6 +181,16 @@ import type { TranscriptArchive } from './store.js';
  *     正確に「末尾から `maxChars + 1` 個ぶんの完全なコードポイント」と一致する
  *     形で測る（Issue #1829 の再現2）。
  *
+ * **38 は #2454（fs の境界判定が「直下」ではなく「配下」を見ていた）の検査
+ * である:**
+ *
+ * 38. 🔴 **在る行の id の下を指す id（`'<在る id>/x'`）は、`read()` /
+ *     `readTail()` / `remove()` のどれでも `missing` になる。** fs 実装は
+ *     `'<在る id>/x'` を境界の内側と判定し、印ファイル
+ *     `'<在る id>/x.removed'` を読みに行って `ENOTDIR` を投げていた（404 の
+ *     はずが 500）。`remove()` は missing で断るなら何も変えないこと——
+ *     元の行はそのまま本文を返す。
+ *
  * 呼び出し側は使い捨ての archive を渡すこと（後始末はしない）。
  *
  * @param deps.seedFingerprintlessRow 指紋（`bodyChars`/`bodyMd5`）を持たない
@@ -281,6 +291,21 @@ export async function verifyTranscriptArchiveContract(
   if (bodyA.kind !== 'body' || bodyA.body !== 'BODY-A\n') fail('積んで読める(A)', bodyA);
   const bodyB = await archive.read(idB);
   if (bodyB.kind !== 'body' || bodyB.body !== 'BODY-B\n') fail('積んで読める(B)', bodyB);
+
+  // 38. 在る行の id の下を指す id は missing（issue #2454）。
+  {
+    const underB = `${idB}/x`;
+    const readUnder = await archive.read(underB);
+    if (readUnder.kind !== 'missing') fail('read(在るidの下)はmissing', readUnder);
+    const tailUnder = await archive.readTail(underB, 10);
+    if (tailUnder.kind !== 'missing') fail('readTail(在るidの下)はmissing', tailUnder);
+    const removeUnder = await archive.remove(underB);
+    if (removeUnder.kind !== 'missing') fail('remove(在るidの下)はmissing', removeUnder);
+    const bodyBAfter = await archive.read(idB);
+    if (bodyBAfter.kind !== 'body' || bodyBAfter.body !== 'BODY-B\n') {
+      fail('remove(在るidの下)はBを巻き添えにしない', bodyBAfter);
+    }
+  }
 
   // 5. 空の生ログを退避しても removed にならない（判定に本文の中身を使わない）。
   const idEmpty = (await archive.archive('archive-contract-session-empty', '')).id;
