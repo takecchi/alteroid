@@ -151,7 +151,7 @@ function trimLines(value: string): string {
       let from = 0;
       let to = part.length;
       if (line > 0) while (isSpace(part.charCodeAt(from))) from++;
-      if (line < lines - 1) while (to > from && isSpace(part.charCodeAt(to - 1))) to--;
+      if (line < lines - 1) while (to > from && isSpace(part.charCodeAt(to - 1))) to -= 1;
       return part.slice(from, to);
     })
     .join('');
