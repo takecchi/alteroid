@@ -120,4 +120,3 @@ export function describeProgress(view: ProgressView): string {
 
   return lines.join('\n');
 }
-

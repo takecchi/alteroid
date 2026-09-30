@@ -7158,9 +7158,7 @@ export function createApp(deps: AppDeps) {
           throw error;
         }
 
-        return c.json(
-          progressResponseSchema.parse(view),
-        );
+        return c.json(progressResponseSchema.parse(view));
       },
     )
 
