@@ -1831,6 +1831,34 @@ export interface ManagerAppraiseResult {
   previous: string | null;
 }
 
+/**
+ * `vacate()` が「載っている委譲への確かめた停止の握手」を飛ばした理由（#2376）。
+ *
+ * - `runner_unreadable` — runner の名簿（`RunnerRegistry#get`）を読めなかった。
+ *   **名簿に居ない回（`null`）とは別である**（居ないなら握手する相手が無い）。
+ * - `jobs_unreadable` — 台帳の委譲の一覧（`listJobs()`）を読めなかった。
+ */
+export type VacateHandshakeSkipReason = 'runner_unreadable' | 'jobs_unreadable';
+
+/**
+ * `vacate()` の戻り値（#2376）。
+ *
+ * **`handshakeSkipped` は、握手を飛ばした回にだけ載る。** 普通の成功（握手をした、
+ * または握手する相手が居ない）では欄そのものが無い——空の値を載せると「飛ばさなかった」
+ * と「言っていない」が区別できなくなる。飛ばしたときは貸し出しを返していないので、
+ * **呼び直せば握手をやり直す**（`retry` がそれを言う）。`'vacating'` は立てて
+ * `relocateFrom` も呼んでいる——飛ばしたのは握手だけである。
+ */
+export interface VacateResult {
+  handshakeSkipped?: {
+    reason: VacateHandshakeSkipReason;
+    /** 人が読む1文。何を読めなかったために何をしなかったか。 */
+    message: string;
+    /** 呼び直せば握手をやり直す、の意味。常に `true`（欄の形を固定するための印）。 */
+    retry: true;
+  };
+}
+
 export interface ManagerPool {
   start(input: ManagerStartInput): Promise<ManagerSummary>;
   send(
@@ -2263,8 +2291,13 @@ export interface ManagerPool {
    * **どちらの順序も失敗しうるが、1 を先にする側だけが回復不能な窓を作らない。**
    * 先に立てて途中で失敗しても安全側に倒れる——`#shouldRelocateFrom` が真の
    * ままなので移送は続き、貸し出しの関門が二重実行を止める。
+   *
+   * **2の握手を飛ばした回は、戻り値の `handshakeSkipped` で言う**（#2376）。
+   * runner の名簿を読めなかった回と、委譲の一覧を読めなかった回である。**どちらも
+   * 「居ない／無い」とみなして進まない**——貸し出しは返しておらず、呼び直せば握手を
+   * やり直す。飛ばさなかった回は欄が無い。
    */
-  vacate(runnerId: string): Promise<void>;
+  vacate(runnerId: string): Promise<VacateResult>;
   /**
    * 走行中のマネージャーについて、生ログの末尾から「ターンが終わっているらしい」
    * という助言を計算し直す（Issue #567）。
@@ -7796,8 +7829,9 @@ class Pool implements ManagerPool {
     for (const target of targets) void this.#reattach(target);
   }
 
-  async vacate(runnerId: string): Promise<void> {
-    if (this.#stopped) return;
+  async vacate(runnerId: string): Promise<VacateResult> {
+    if (this.#stopped) return {};
+    let result: VacateResult = {};
 
     /*
      * **1. 先に立てる。** ここを最初にしないと `list()` / `select()` は
@@ -7813,8 +7847,39 @@ class Pool implements ManagerPool {
      * ジョブを持っていないことがある（`#reattach` の同じ理由の注記「ジョブの
      * 一覧は store から引く」）。
      */
-    const runner = await this.#runners.get(runnerId).catch(() => null);
-    if (runner !== null && !this.#stopped) {
+    /*
+     * **名簿を読めなかった回を「runner が名簿に居ない」とみなさない**（#2376。
+     * 以前は `.catch(() => null)` で、読めなかった回も居ない回も同じ `null` になり、
+     * 握手を飛ばしたことが日誌にも応答にも残らなかった）。3状態に分ける:
+     * 居た／居ない（`null`。握手する相手が無い）／読めなかった（`'unreadable'`）。
+     * 読めなかった回は握手を**しない**——居ないと確かめたのではないので、貸し出しも
+     * 返さない。飛ばしたことは日誌と戻り値に残す。**呼び直せば握手はやり直せる。**
+     * （`#retryFailedPushes` の同じ形は、繋ぎ直しで改めて試みる「諦めない」設計なので
+     * 変えていない。）
+     */
+    const runner: RunnerClient | null | 'unreadable' = await this.#runners
+      .get(runnerId)
+      .catch(async (error: unknown) => {
+        await this.#journal({
+          type: 'decision',
+          decision: `runnerId=${runnerId} の vacate で、runner の名簿を読めなかったので、載っている委譲への確かめた停止の握手を飛ばした（貸し出しは返していない。vacate を呼び直すと握手をやり直す）`,
+          grounds:
+            `読めなかった原因: ${reasonOf(error)}。` +
+            '名簿を読めなかったことは「runner が名簿に居ない」ではない（この回は握手を判定していない）。',
+        });
+        return 'unreadable' as const;
+      });
+    if (runner === 'unreadable') {
+      result = {
+        handshakeSkipped: {
+          reason: 'runner_unreadable',
+          message:
+            `runnerId=${runnerId} の名簿を読めなかったので、載っている委譲への確かめた停止の握手を飛ばした` +
+            '（貸し出しは返していない）。vacate を呼び直すと握手をやり直す。',
+          retry: true,
+        },
+      };
+    } else if (runner !== null && !this.#stopped) {
       /*
        * **一覧を読めなかった回を「載っている委譲が無い」とみなさない**（#2359 の4。
        * 以前は `.catch(() => [])` で、握手を飛ばしたことが日誌にも残らなかった）。
@@ -7826,6 +7891,17 @@ class Pool implements ManagerPool {
       const jobs = await this.#listJobsOrNote(
         `runnerId=${runnerId} の vacate で、載っている委譲への確かめた停止の握手を飛ばした（貸し出しは返していない。vacate を呼び直すと握手をやり直す）`,
       );
+      if (jobs === null) {
+        result = {
+          handshakeSkipped: {
+            reason: 'jobs_unreadable',
+            message:
+              `台帳の委譲の一覧を読めなかったので、runnerId=${runnerId} の載っている委譲への確かめた停止の握手を飛ばした` +
+              '（貸し出しは返していない）。vacate を呼び直すと握手をやり直す。',
+            retry: true,
+          },
+        };
+      }
       for (const job of jobs ?? []) {
         if (this.#stopped) break;
         if (job.runnerId !== runnerId) continue;
@@ -7906,6 +7982,7 @@ class Pool implements ManagerPool {
 
     // **3. 移送を起こす。** 貸し出しを先に返してあるので、期限を待たずに移る。
     this.relocateFrom(runnerId);
+    return result;
   }
 
   async #restoreExclusive(): Promise<ManagerSummary[]> {

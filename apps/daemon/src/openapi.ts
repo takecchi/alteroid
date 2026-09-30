@@ -1567,6 +1567,28 @@ export const runnersVacateCommandSchema = z.object({
   runnerId: z.string(),
 });
 
+/**
+ * `POST /runners/vacate` の応答（#2376）。`{ ok: true }` に、**握手を飛ばした回
+ * にだけ** `handshakeSkipped` が載る（飛ばさなかった回は今までどおり `{ ok: true }`）。
+ *
+ * HTTP の状態は飛ばした回も 200 のまま——「空けると立てた」こと自体は成功している。
+ * 飛ばしたのは載っている委譲への確かめた停止の握手だけで、貸し出しは返していない。
+ * **呼び直せば握手をやり直す**（`retry: true`）。
+ *
+ * - `runner_unreadable` — runner の名簿を読めなかった（名簿に居ない回ではない）
+ * - `jobs_unreadable` — 台帳の委譲の一覧を読めなかった
+ */
+export const runnersVacateResponseSchema = z.object({
+  ok: z.literal(true),
+  handshakeSkipped: z
+    .object({
+      reason: z.enum(['runner_unreadable', 'jobs_unreadable']),
+      message: z.string(),
+      retry: z.literal(true),
+    })
+    .optional(),
+});
+
 // ---------------------------------------------------------------------------
 // 実行環境プロファイル（/profile）
 // ---------------------------------------------------------------------------

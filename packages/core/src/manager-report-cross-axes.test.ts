@@ -75,7 +75,9 @@ function harness(): Harness {
     },
     async reattachRunner() {},
     relocateFrom() {},
-    async vacate() {},
+    async vacate() {
+      return {};
+    },
     async appraise(managerId: string) {
       return {
         outcome: 'absent' as const,

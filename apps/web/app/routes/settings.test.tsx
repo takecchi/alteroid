@@ -823,9 +823,9 @@ describe('ワークスペースのリセット（ResetWorkspace） — issue #21
  * 走っているマネージャーを他の器へ動かす操作なので、確認の一手を挟むまで叩かない。
  */
 describe('runner を空ける（vacate）', () => {
-  function renderWithVacate(runners: RunnerSummary[]) {
+  function renderWithVacate(runners: RunnerSummary[], vacateBody: object = { ok: true }) {
     const stub = stubFetch((url) => {
-      if (url.includes('/runners/vacate')) return json({ ok: true });
+      if (url.includes('/runners/vacate')) return json(vacateBody);
       if (url.includes('/runners')) return json({ runners, daemonRevision: DAEMON_UNKNOWN });
       if (url.includes('/auth/providers')) return json({ providers: [] });
       if (url.includes('/me')) return json({ status: 'open' });
@@ -860,6 +860,30 @@ describe('runner を空ける（vacate）', () => {
     const entry = stub.entries.find((e) => e.url.includes('/runners/vacate'));
     expect(entry).toBeDefined();
     expect(await entry?.request?.clone().json()).toEqual({ runnerId: 'runner-primary' });
+  });
+
+  it('普通の成功には、握手を飛ばしたとは言わない（対照。#2376）', async () => {
+    renderWithVacate([BASE]);
+    fireEvent.click(await screen.findByText('この器を空ける'));
+    fireEvent.click(screen.getByText('本当に空ける'));
+    expect(await screen.findByText(/空けると立てた。まだ空き終わってはいない/)).toBeTruthy();
+    expect(screen.queryByText(/握手は飛ばした/)).toBeNull();
+  });
+
+  it('握手を飛ばした応答（handshakeSkipped）には、飛ばしたことと呼び直しを言う（#2376）', async () => {
+    renderWithVacate([BASE], {
+      ok: true,
+      handshakeSkipped: {
+        reason: 'jobs_unreadable',
+        message: '一覧を読めなかったので握手を飛ばした',
+        retry: true,
+      },
+    });
+    fireEvent.click(await screen.findByText('この器を空ける'));
+    fireEvent.click(screen.getByText('本当に空ける'));
+    expect(
+      await screen.findByText(/握手は飛ばした（一覧を読めなかったので握手を飛ばした）/),
+    ).toBeTruthy();
   });
 
   it('空けている最中の器と、名乗っていない器には出さない', async () => {

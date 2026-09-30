@@ -433,12 +433,16 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [done, setDone] = useState(false);
+  // 握手を飛ばした回は `skipped` に理由の文が入る（#2376。応答は 200 のまま欄で言う）。
+  const [done, setDone] = useState<{ skipped: string | null } | null>(null);
 
-  if (done) {
+  if (done !== null) {
     return (
       <p className="mt-2 text-[11px] break-words text-muted-foreground">
         空けると立てた。まだ空き終わってはいない——載っている委譲は他の器へ移る。進み具合はこの一覧の状態で見える。
+        {done.skipped === null
+          ? ''
+          : ` ⚠️ 載っている委譲への握手は飛ばした（${done.skipped}）。vacate を呼び直すと握手をやり直す（この一覧は空けている最中の器に押す口を出さないので、alteroid runners vacate ${runnerId} で呼び直す）。`}
       </p>
     );
   }
@@ -456,7 +460,7 @@ function VacateRunner({ runnerId }: { runnerId: string }) {
               setBusy(true);
               setError(null);
               vacate(runnerId)
-                .then(() => setDone(true))
+                .then((result) => setDone({ skipped: result.handshakeSkipped?.message ?? null }))
                 .catch((reason: unknown) => setError(reason))
                 .finally(() => setBusy(false));
             }}

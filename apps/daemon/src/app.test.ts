@@ -20,6 +20,7 @@ import type {
   Stores,
   UsageProbeHandle,
   UsageProbeQuery,
+  VacateResult,
 } from '@alteroid/core';
 import {
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
@@ -101,6 +102,8 @@ function fakeClone() {
   const managerAborts: { managerId: string; reason?: string }[] = [];
   // `POST /runners/vacate` が `ManagerPool.vacate()` へ渡した runnerId を記録する。
   const vacateCalls: string[] = [];
+  // `ManagerPool.vacate()` の戻り値（#2376。既定は握手を飛ばさなかった普通の成功）。
+  let vacateResult: VacateResult = {};
   // `DELETE /managers/:id` が outcome ごとに正しい HTTP ステータスを写すことを見る
   // ためのノブ。既定は従来どおり `'stopped'`（居れば必ず止まる）。
   let abortOutcome: 'stopped' | 'not_stopped' | 'unknown' = 'stopped';
@@ -230,6 +233,7 @@ function fakeClone() {
     // 呼ばれた引数を記録する。
     async vacate(runnerId) {
       vacateCalls.push(runnerId);
+      return vacateResult;
     },
     // HTTP 境界の検証では触らない（#567 の計算はデーモンのポーラーが起こす）。
     async probeTurnEnds() {},
@@ -296,6 +300,9 @@ function fakeClone() {
     managerSends,
     managerAborts,
     vacateCalls,
+    setVacateResult(result: VacateResult) {
+      vacateResult = result;
+    },
     setAbortOutcome(outcome: 'stopped' | 'not_stopped' | 'unknown') {
       abortOutcome = outcome;
     },
@@ -7887,6 +7894,26 @@ describe('POST /runners/vacate（#485 PR-2）', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
     expect(fake.vacateCalls).toEqual(['runner-a']);
+  });
+
+  it('握手を飛ばした回は、200 のまま handshakeSkipped を載せる（#2376）。飛ばさない回には欄が無い', async () => {
+    for (const reason of ['runner_unreadable', 'jobs_unreadable'] as const) {
+      const handshakeSkipped = {
+        reason,
+        message: `${reason} のため握手を飛ばした。vacate を呼び直すと握手をやり直す。`,
+        retry: true,
+      } as const;
+      fake.setVacateResult({ handshakeSkipped });
+      const response = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, handshakeSkipped });
+    }
+
+    // 対照: 飛ばさなかった回は今までと同じ `{ ok: true }`（欄のキーそのものが無い）。
+    fake.setVacateResult({});
+    const plain = await app.request('/runners/vacate', json({ runnerId: 'runner-a' }));
+    expect(plain.status).toBe(200);
+    expect(await plain.json()).toStrictEqual({ ok: true });
   });
 
   it('runnerId を欠いた本文は 400 で拒み、ManagerPool.vacate() を呼ばない', async () => {

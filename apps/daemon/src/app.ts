@@ -200,6 +200,7 @@ import {
   runnersCredentialsResponseSchema,
   runnersListResponseSchema,
   runnersVacateCommandSchema,
+  runnersVacateResponseSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
   tokensResponseSchema,
@@ -5367,8 +5368,13 @@ export function createApp(deps: AppDeps) {
             description:
               '空けると立てた。名簿に無い runnerId でも同じ 200 を返す' +
               '（`RunnerRegistry#unregister` と同じ作法——名乗ってすらいない' +
-              '宛先を「無かった」と取り立てて言うほどの情報ではない）。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
+              '宛先を「無かった」と取り立てて言うほどの情報ではない）。' +
+              '**握手を飛ばした回は `handshakeSkipped` が載る**（状態は 200 のまま）。' +
+              'runner の名簿を読めなかった（`runner_unreadable`）か、台帳の委譲の一覧を' +
+              '読めなかった（`jobs_unreadable`）回で、載っている委譲への確かめた停止の' +
+              '握手をしておらず、貸し出しも返していない。**呼び直せば握手をやり直す。**' +
+              '飛ばさなかった回は欄が無い（`{ ok: true }` のまま）。',
+            content: { 'application/json': { schema: resolver(runnersVacateResponseSchema) } },
           },
           400: {
             description:
@@ -5383,8 +5389,15 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const { runnerId } = c.req.valid('json');
-        await clone.managers.vacate(runnerId);
-        return c.json(okResponseSchema.parse({ ok: true }));
+        const { handshakeSkipped } = await clone.managers.vacate(runnerId);
+        // 握手を飛ばした回だけ欄を載せる（#2376）。状態は 200 のまま——立てたこと
+        // 自体は成功している。欄が無い応答は今までと同じ `{ ok: true }`。
+        return c.json(
+          runnersVacateResponseSchema.parse({
+            ok: true,
+            ...(handshakeSkipped === undefined ? {} : { handshakeSkipped }),
+          }),
+        );
       },
     )
 

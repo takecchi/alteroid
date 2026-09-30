@@ -93,7 +93,9 @@ function stubManagerPool(): ManagerPool {
     },
     async reattachRunner() {},
     relocateFrom() {},
-    async vacate() {},
+    async vacate() {
+      return {};
+    },
     async probeTurnEnds() {},
     async flushWithheldReports() {},
     async settleStalledUsageWakes() {
