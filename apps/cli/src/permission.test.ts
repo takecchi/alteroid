@@ -346,6 +346,8 @@ describe('alteroid permission list — 長く使われていない許可（Issue
     await permissionListCommand({ now });
 
     const text = read();
+    // 目印が無いと newPart が '' になり、下の not.toContain は空振りする。分ける前に在ることを確かめる（#2431）。
+    expect(text).toContain('id: new-1');
     const [oldPart = '', newPart = ''] = text.split('id: new-1');
     expect(oldPart).toContain('[長期未使用]');
     expect(oldPart).toContain('51 日使われていません（起点: 最終使用）');

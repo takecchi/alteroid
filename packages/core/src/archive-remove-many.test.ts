@@ -425,6 +425,10 @@ describe('archive_remove_many（アーカイブ済み生ログの本文を絞り
     const texts = await decisionTexts(stores);
     expect(texts.length).toBeGreaterThanOrEqual(2);
 
+    // 目印が消えると indexOf が -1 になり、下の slice が id 列でないものを切り出す（後ろの長さの上限は緑のまま残る）。
+    // 切り出す前に、全 decision に目印が在ることを確かめる（#2431）。
+    for (const text of texts) expect(text).toContain('消した id: ');
+
     const seen = new Set<string>();
     for (const text of texts) {
       const idsPart = text.slice(text.indexOf('消した id: ') + '消した id: '.length);
