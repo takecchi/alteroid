@@ -55,6 +55,8 @@ interface ManualRunner {
   alive: RunnerManagerState[];
   /** `pool.unpushedWork()` が呼ばれたときに返す値を差し替える。 */
   setUnpushedWorkResult(result: UnpushedWorkResult): void;
+  /** 以後の `unpushedWork()` を、返された関数が呼ばれるまで止める（`undefined` を返す）。 */
+  holdUnpushedWork(): () => void;
   closed(
     managerId: string,
     status: 'done' | 'lost' | 'failed',
@@ -68,6 +70,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
   let emit: ((event: RunnerEvent) => void) | null = null;
   const alive: RunnerManagerState[] = [];
   let unpushedWorkResult: UnpushedWorkResult | undefined;
+  let unpushedWorkGate: Promise<void> | undefined;
 
   const runner: RunnerClient = {
     runnerId,
@@ -118,6 +121,7 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
       /* この検証では使わない */
     },
     async unpushedWork() {
+      if (unpushedWorkGate !== undefined) await unpushedWorkGate;
       return unpushedWorkResult;
     },
   };
@@ -137,6 +141,13 @@ function manualRunner(runnerId = 'runner-primary'): ManualRunner {
     alive,
     setUnpushedWorkResult(result) {
       unpushedWorkResult = result;
+    },
+    holdUnpushedWork() {
+      let release: () => void = () => undefined;
+      unpushedWorkGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
     },
     closed(managerId, status, reason, unpushedWork) {
       const at = alive.findIndex((entry) => entry.managerId === managerId);
@@ -338,6 +349,58 @@ describe('台帳の lastUnpushedWorkObservation が、closed（Issue #1266 候�
     const after = await listedOf(pool, 'mgr-fresh');
     expect(after.lastUnpushedWorkObservation).toMatchObject({
       worktrees: [{ branch: 'feat/newest-observation' }],
+    });
+
+    await pool.stop();
+  });
+
+  it('6.（#2461）問い合わせの間に closed が ok を書いたら、遅れて返った unavailable で上書きしない', async () => {
+    let clock = new Date('2026-09-25T00:00:00.000Z').getTime();
+    const { pool, fake } = await runningManualSetup('mgr-late', () => clock);
+
+    // 問い合わせを始める（時刻は T0 = 00:00 で取られるべき）。runner は止めておく。
+    const release = fake.holdUnpushedWork();
+    const pending = pool.unpushedWork('mgr-late');
+
+    // 往復の最中に closed が、より新しい ok の観測を書く（T1）。
+    clock = new Date('2026-09-25T00:05:00.000Z').getTime();
+    fake.closed('mgr-late', 'failed', '枠に当たって落ちた', {
+      kind: 'ok',
+      result: {
+        cwd: '/work/project',
+        worktrees: [{ relativePath: '.', branch: 'feat/closed-ok' }],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // その後で問い合わせが unavailable（答えなし）で返る（書く時刻は T2 だが、観測は T0）。
+    clock = new Date('2026-09-25T00:10:00.000Z').getTime();
+    release();
+    expect((await pending).kind).toBe('unavailable');
+
+    const after = await listedOf(pool, 'mgr-late');
+    expect(after.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'observed',
+      worktrees: [{ branch: 'feat/closed-ok' }],
+    });
+
+    await pool.stop();
+  });
+
+  it('7.（#2461 対照）何も割り込まない通常の順では、問い合わせの結果がそのまま記録される', async () => {
+    let clock = new Date('2026-09-25T00:00:00.000Z').getTime();
+    const { pool, fake } = await runningManualSetup('mgr-plain', () => clock);
+
+    const release = fake.holdUnpushedWork();
+    const pending = pool.unpushedWork('mgr-plain');
+    clock = new Date('2026-09-25T00:10:00.000Z').getTime();
+    release();
+    expect((await pending).kind).toBe('unavailable');
+
+    const after = await listedOf(pool, 'mgr-plain');
+    expect(after.lastUnpushedWorkObservation).toMatchObject({
+      kind: 'unavailable',
+      at: '2026-09-25T00:00:00.000Z',
     });
 
     await pool.stop();
