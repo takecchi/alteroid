@@ -50,7 +50,7 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { newlineToBreak } from 'mdast-util-newline-to-break';
 import { gfm } from 'micromark-extension-gfm';
-import type { ComponentProps, ReactNode } from 'react';
+import { type ComponentProps, type ReactNode, useId } from 'react';
 
 import { type Components, mdastToReact } from './markdown-mdast';
 
@@ -71,14 +71,22 @@ import { type Components, mdastToReact } from './markdown-mdast';
  * `markdownComponents`（等価性テストが「差し替え無し」でも比べるので引数に
  * している）。`remarkRehypeOptions` の既定（`allowDangerousHtml: true`）も
  * react-markdown と同じ。
+ *
+ * `idPrefix` は脚注の id の先頭に付ける（`mdastToReact` の注釈）。既定の空
+ * 文字列なら旧実装と同じ id になる。画面に描くのは `Markdown`（下）で、そちらは
+ * 描画ごとに一意の接頭辞を渡す。
  */
-export function toReact(markdown: string, components: Components = markdownComponents): ReactNode {
+export function toReact(
+  markdown: string,
+  components: Components = markdownComponents,
+  idPrefix = '',
+): ReactNode {
   const mdast = fromMarkdown(markdown, {
     extensions: [gfm()],
     mdastExtensions: [gfmFromMarkdown()],
   });
   newlineToBreak(mdast);
-  return mdastToReact(mdast, components);
+  return mdastToReact(mdast, components, idPrefix);
 }
 
 /**
@@ -297,7 +305,24 @@ export const markdownComponents: Components = {
  * **既存の色トークンだけを使う**（`text-foreground` は基底の文字色に既に乗っている
  * ので明示していない。`text-muted-foreground` / `border-border` / `bg-muted` /
  * `text-primary` は `styles.css` に実在するものだけを使っている）。
+ *
+ * **脚注の id は描画ごとに一意にする**（#2452）。1画面に `<Markdown>` が
+ * 複数ある（チャットの各応答・台帳の各行）と、固定の id
+ * （`user-content-fn-1` / `user-content-fnref-1` / `footnote-label`）が重複し、
+ * 2つ目の参照・戻るリンク・`aria-describedby` が1つ目の脚注を指していた
+ * （ブラウザは文書で最初の要素へ飛ぶ）。だから React の `useId()` から
+ * 接頭辞を作り、id と、それを指す `href` / `aria-describedby` の両方に同じ
+ * ものを付ける。`useId()` の値（`_r_0_` / `«r0»` / `:r0:` など版で形が違う）は
+ * 英数字・`_`・`-` 以外を落として使う — CSS セレクタ（`#id`）でエスケープ
+ * せずに引ける形にしておくため。`idPrefix` を渡せばそれを使う（空文字列で
+ * 旧実装と同じ id になる。1画面に1つしか描かないと分かっているときだけ使うこと）。
  */
-export function Markdown({ children }: { children: string }) {
-  return <div className="min-w-0 text-sm break-words">{toReact(children)}</div>;
+export function Markdown({ children, idPrefix }: { children: string; idPrefix?: string }) {
+  const reactId = useId();
+  const prefix = idPrefix ?? 'md' + reactId.replace(/[^A-Za-z0-9_-]/g, '') + '-';
+  return (
+    <div className="min-w-0 text-sm break-words">
+      {toReact(children, markdownComponents, prefix)}
+    </div>
+  );
 }
