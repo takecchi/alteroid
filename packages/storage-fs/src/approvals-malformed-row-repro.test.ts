@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr } from '@alteroid/core';
+import { captureStderr, UnreadableApprovalError } from '@alteroid/core';
 import type { PendingApproval } from '@alteroid/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -119,19 +119,26 @@ describe('FsJobStore — jobs.json の approvals の不正な1行を読み飛ば
     expect(joined).not.toContain(BAD_APPROVAL_RAW.context);
   });
 
-  it('getApproval() は、不正な行を id 指定しても例外を投げず null を返す。正しい行は返す', async () => {
+  it('getApproval() は、不正な行を id 指定すると null ではなく UnreadableApprovalError を投げる。正しい行は返し、無い id は null（#2279）', async () => {
     await writeRawJobsFile();
     const stores = createFsStores(root);
 
     let good: PendingApproval | null = null;
-    let bad: PendingApproval | null = null;
+    let missing: PendingApproval | null = null;
+    let thrown: unknown;
     await captureStderr(async () => {
       good = await stores.jobs.getApproval('appr-good');
-      bad = await stores.jobs.getApproval('appr-bad');
+      missing = await stores.jobs.getApproval('appr-nowhere');
+      try {
+        await stores.jobs.getApproval('appr-bad');
+      } catch (error) {
+        thrown = error;
+      }
     });
 
     expect(good).toEqual(GOOD_APPROVAL);
-    expect(bad).toBeNull();
+    expect(missing).toBeNull();
+    expect(thrown).toBeInstanceOf(UnreadableApprovalError);
   });
 
   it('putApproval() は投げない。書いた後のファイルに不正な行が元の形のまま残っている', async () => {
