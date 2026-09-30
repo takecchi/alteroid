@@ -115,6 +115,17 @@ export interface JournalFoldRun {
   readonly firstAt: string;
   /** 畳んだ最後の観測の時刻（ISO 8601）。 */
   readonly lastAt: string;
+  /**
+   * ⭐ **この連なりで2本目以降の要約のときだけ在る。** 件数か総経過の上限で途中の
+   * 要約を吐いた後も連なりは続くので、その後の要約の「直前」は1回目の本文では
+   * なく**前の要約**である。**「1 + N」と書くと、合計を要約の本数ぶん多く読ませる。**
+   */
+  readonly later?: {
+    /** この連なりで何本目の要約か（2以上）。 */
+    readonly index: number;
+    /** この要約より前の要約が畳んだ件数の合計。通算は `1 + priorSuppressed + suppressed`。 */
+    readonly priorSuppressed: number;
+  };
 }
 
 /** {@link JournalFoldWindow.observe} の判定。 */
@@ -140,6 +151,10 @@ interface OpenRun {
   spanFromMs: number;
   firstAtMs?: number;
   lastAtMs?: number;
+  /** この連なりで既に吐いた要約の本数。 */
+  summaries: number;
+  /** この連なりで既に吐いた要約が畳んだ件数の合計。 */
+  priorSuppressed: number;
 }
 
 /**
@@ -201,6 +216,8 @@ export class JournalFoldWindow {
         suppressed: 0,
         seenAtMs: atMs,
         spanFromMs: atMs,
+        summaries: 0,
+        priorSuppressed: 0,
       };
       return flush !== undefined ? { write: true, flush } : { write: true };
     }
@@ -216,10 +233,7 @@ export class JournalFoldWindow {
 
     const spanned = atMs - run.spanFromMs >= this.#maxSpanMs;
     if (run.suppressed >= this.#maxSuppressed || spanned) {
-      const flush = snapshot(run);
-      run.suppressed = 0;
-      run.firstAtMs = undefined;
-      run.lastAtMs = undefined;
+      const flush = takeSummary(run);
       // **数え直しの起点も進める。** ここを戻し忘れると、総経過の上限が
       // 一度効いた後は毎回効きっぱなしになり、畳みが実質止まる。
       run.spanFromMs = atMs;
@@ -238,11 +252,7 @@ export class JournalFoldWindow {
   flush(): JournalFoldRun | undefined {
     const run = this.#run;
     if (run === undefined) return undefined;
-    const flushed = snapshot(run);
-    run.suppressed = 0;
-    run.firstAtMs = undefined;
-    run.lastAtMs = undefined;
-    return flushed;
+    return takeSummary(run);
   }
 }
 
@@ -255,7 +265,24 @@ function snapshot(run: OpenRun): JournalFoldRun | undefined {
     suppressed: run.suppressed,
     firstAt: new Date(run.firstAtMs).toISOString(),
     lastAt: new Date(run.lastAtMs).toISOString(),
+    // 2本目以降だけ印を付ける（1本目の形は変えない）。
+    ...(run.summaries > 0
+      ? { later: { index: run.summaries + 1, priorSuppressed: run.priorSuppressed } }
+      : {}),
   };
+}
+
+/** 要約を1本取り出し、連なりを数え直す（連なり自体は閉じない）。 */
+function takeSummary(run: OpenRun): JournalFoldRun | undefined {
+  const flushed = snapshot(run);
+  if (flushed !== undefined) {
+    run.summaries += 1;
+    run.priorSuppressed += flushed.suppressed;
+  }
+  run.suppressed = 0;
+  run.firstAtMs = undefined;
+  run.lastAtMs = undefined;
+  return flushed;
 }
 
 /**
@@ -267,8 +294,25 @@ function snapshot(run: OpenRun): JournalFoldRun | undefined {
  *
  * ⚠️ **「1回目は直前に書いてある」と明記する。** これが無いと、読み手は
  * `suppressed` を「起きた回数」と読む。実際には**起きた回数は N + 1** である。
+ *
+ * ⚠️ **ただしそれは連なりの1本目の要約だけである。** 途中の要約を吐いた後の
+ * 要約（`run.later`）の「直前」は前の要約なので、「1 + N」と書くと要約の本数ぶん
+ * 多く読ませる。⟹ 2本目以降は「前の要約の後にさらに N 回」と書き、通算も出す。
  */
 export function foldedRunText(run: JournalFoldRun): string {
+  if (run.later !== undefined) {
+    const total = run.later.priorSuppressed + run.suppressed;
+    return [
+      `同じ合図が続いたので畳んだ（この連なりの ${run.later.index} 本目の要約。前の要約の後の ${run.suppressed} 回ぶん。${run.firstAt} 〜 ${run.lastAt}）。`,
+      '⚠ 1回目はこの連なりの最初の要約より前に書いてある。前の要約の後に、さらに ' +
+        String(run.suppressed) +
+        ' 回起きた。この要約までの通算は 1 + ' +
+        String(total) +
+        ' 回である（この要約の件数を、前の要約の件数に足し直さないこと）。',
+      '畳んだ本文:',
+      run.text,
+    ].join('\n');
+  }
   return [
     `同じ合図が続いたので畳んだ（2回目以降を ${run.suppressed} 回ぶん。${run.firstAt} 〜 ${run.lastAt}）。`,
     '⚠ 1回目はこの直前に書いてあるので、起きた回数は 1 + ' + String(run.suppressed) + ' である。',
