@@ -1885,7 +1885,14 @@ export function createTokenRotator(options: TokenRotatorOptions): TokenRotator {
         // （`describeTokenRotation` が `signal === 'none'` を日誌に出さない
         // ので、設定が壊れている事実が消える——`token-rotation.ts` の
         // `TokenRotationSignal` の doc）。
+        //
+        // **ただし枠が拒否した事実は覚える**（#2403。#680 の約束——回さない回でも
+        // 覚える——が、設定が読めないあいだだけ崩れていた）。`rememberRejection` は
+        // 設定を読まないので、ここで呼べる。**`stale` は除く**——下の呼び出しが
+        // `stale` の後に在るのと同じ理由（前の世代の鍵の期限を今の鍵として覚える）。
+        // `staleRun` の数え上げはここでは変えない。
         if (!settingsRead.readable) {
+          if (freshness !== 'stale') rememberRejection(active, observation);
           return {
             kind: 'ignored' as const,
             signal: 'settings_unreadable' as const,
