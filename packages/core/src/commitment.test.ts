@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import {
   ALWAYS_REDELIVER,
   closedRedeliveryNotice,
@@ -124,30 +125,13 @@ function setup(
 
 /** 何らかの終端（done か error）が届くまで待つ。 */
 function waitForSettled(events: ChatStreamEvent[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const tick = setInterval(() => {
-      if (events.some((event) => event.type === 'done' || event.type === 'error')) {
-        clearInterval(tick);
-        resolve();
-      } else if (Date.now() - started > 3000) {
-        clearInterval(tick);
-        reject(new Error(`終端が来ない: ${JSON.stringify(events)}`));
-      }
-    }, 5);
-  });
+  return waitFor(
+    () => events.some((event) => event.type === 'done' || event.type === 'error'),
+    '終端（done か error）が来る',
+  );
 }
 
 /** 内部ターン（人間に見せない起点）が器へ届くまで待つ。 */
-async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (await check()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 function managerMessage(text: string, id = 'evt-mgr'): InboxEvent {
   return {
     type: 'manager_message',
