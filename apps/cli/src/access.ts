@@ -1,6 +1,6 @@
 import { stdout } from 'node:process';
 
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -88,7 +88,7 @@ export async function accessListCommand(now: number = Date.now()): Promise<void>
     // なので null チェックは要らない。
     // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す——曖昧さが
     // 無く、コピーしてほかの道具へ渡せる。
-    stdout.write(`  作成: ${account.createdAt}（${formatElapsed(account.createdAt, now)}前）\n`);
+    stdout.write(`  作成: ${account.createdAt}（${formatElapsedAgo(account.createdAt, now)}）\n`);
     const via = account.identities
       .map(
         (identity) =>

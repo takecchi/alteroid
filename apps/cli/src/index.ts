@@ -18,7 +18,7 @@ import { chatCommand } from './chat.js';
 import { conversationsListCommand, conversationsShowCommand } from './conversations.js';
 import * as daemon from './daemon.js';
 import { droppedCommand } from './dropped.js';
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo } from './format.js';
 import { inboxRemoveCommand, inboxShowCommand } from './inbox.js';
 import { loginCommand, logoutCommand, whoamiCommand } from './login.js';
 import {
@@ -187,7 +187,7 @@ export async function daemonStatusCommand(now: number = Date.now()): Promise<voi
   if (presence === 'present' && info) {
     stdout.write(`稼働中: pid ${info.pid}, http://127.0.0.1:${info.port}\n`);
     // **経過（issue #2141 段1）を横に添える。** ISO はそのまま残す。
-    stdout.write(`  起動: ${info.startedAt}（${formatElapsed(info.startedAt, now)}前）\n`);
+    stdout.write(`  起動: ${info.startedAt}（${formatElapsedAgo(info.startedAt, now)}）\n`);
   } else if (presence === 'unknown') {
     // 「居ない」と確定できたわけではない — 応答が無かっただけかもしれない。
     // ここで「停止中」と言い切ると、生きているデーモンを見落とした誤報になる。
