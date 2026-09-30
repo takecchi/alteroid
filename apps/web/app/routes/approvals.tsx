@@ -292,6 +292,7 @@ function ApprovalEntry({
       onSubmit={(text) => void submit(text)}
       busy={busy}
       // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
+      // IME の確定の Enter を除くかは #2259 で決める（ここは今の判定のまま）。
       isSubmitKey={(event) => (event.metaKey || event.ctrlKey) && event.key === 'Enter'}
       /*
         **答えの後にクローンが何をしたか（issue #847 の案B）。** 答え済みの件だけに

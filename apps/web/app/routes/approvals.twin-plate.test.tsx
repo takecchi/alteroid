@@ -136,6 +136,7 @@ describe('送るキー', () => {
     expect(singles).toEqual([]);
   });
 
+  // IME の確定の Enter を除くかは #2259 で決める。
   it('今の振る舞い: IME の変換中の Ctrl + Enter も送る（部品の既定なら除かれる差。この PR では合わせない）', async () => {
     const singles = await press({ key: 'Enter', ctrlKey: true, isComposing: true });
     await waitFor(() => expect(singles).toEqual(['a-1']));
