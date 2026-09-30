@@ -2,6 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  compareIsoInstant,
   createUnreadableRowOnce,
   permissionGrantSchema,
   UnreadablePermissionGrantError,
@@ -102,8 +103,12 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
   async list(): Promise<PermissionGrant[]> {
     // **`grantedAt` の昇順で返す**（3実装で揃える——`PgPermissionGrantStore` /
     // インメモリ実装〈`testing.ts`〉と同じ並び。ファイルの生の順序は書き込み
-    // 順であって時系列の保証が無いので、ここで揃える）。
-    return [...(await this.#read()).grants].sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
+    // 順であって時系列の保証が無いので、ここで揃える）。**実時刻で比べる**（issue
+    // #2451。`compareIsoInstant` の doc——文字列比較だとオフセット表記の違う行で
+    // pg の `asc(grantedAt)` と並びが食い違う）。
+    return [...(await this.#read()).grants].sort((a, b) =>
+      compareIsoInstant(a.grantedAt, b.grantedAt),
+    );
   }
 
   async get(id: string): Promise<PermissionGrant | null> {

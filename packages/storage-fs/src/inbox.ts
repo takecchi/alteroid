@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { inboxEventSchema } from '@alteroid/core';
+import { compareIsoInstant, earliestIsoInstant, inboxEventSchema } from '@alteroid/core';
 import type {
   InboxEvent,
   InboxPeek,
@@ -134,7 +134,8 @@ export class FsInboxStore implements InboxStore {
    */
   async claimPending(): Promise<PendingInboxEvent[]> {
     return this.#update((file) => {
-      const sorted = [...file.events].sort((a, b) => a.at.localeCompare(b.at));
+      // 実時刻で比べる（issue #2451。pg は `at`〈timestamptz〉の `getTime()` で並べる）
+      const sorted = [...file.events].sort((a, b) => compareIsoInstant(a.at, b.at));
       const claimed = sorted.map((entry) => ({ ...entry, deliveries: entry.deliveries + 1 }));
       return {
         next: { ...file, events: claimed },
@@ -154,10 +155,8 @@ export class FsInboxStore implements InboxStore {
    */
   async pending(): Promise<{ count: number; oldestAt?: string }> {
     const file = await this.#read();
-    const oldest = file.events.reduce<string | undefined>(
-      (min, entry) => (min === undefined || entry.at < min ? entry.at : min),
-      undefined,
-    );
+    // 実時刻でいちばん古いもの（issue #2451。pg の `min(at)` と揃える）
+    const oldest = earliestIsoInstant(file.events.map((entry) => entry.at));
     return {
       // **壊れた行も件数に数える**（issue #1966）。pg の `count(*)` と同じく、
       // 受信箱に残っている行の数である。`oldestAt` は時刻を読める正しい行だけから取る。
@@ -174,7 +173,7 @@ export class FsInboxStore implements InboxStore {
     const file = await this.#read();
     return {
       entries: [...file.events]
-        .sort((a, b) => a.at.localeCompare(b.at))
+        .sort((a, b) => compareIsoInstant(a.at, b.at))
         .map((entry) => ({ event: entry.event, at: entry.at, deliveries: entry.deliveries })),
       // **読めない行も返す**（issue #2344。以前は黙って飛ばしていた）。`pending().count` は
       // 壊れた行も数えるので、`entries.length + unreadable.length` はそれに一致する。
