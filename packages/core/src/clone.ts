@@ -2828,14 +2828,17 @@ class Clone implements CloneHost {
     } catch (error) {
       // **止められなかったのに「止めた」だけが残らないようにする。** 打ち消しの行を
       // 足してから投げ直す（呼び手は失敗を知る）。理由は秘密を伏せた1行にする
-      // （`describeProbeError`。`#observeContextUsage` と同じ作法）。この行の書き込みが
-      // 失敗しても `#journal` が stderr へ跡を残して飲むので、元の例外は必ず届く。
+      // （`describeProbeError`）。伏せる手がかりの env は**このクローンに注入された env**
+      // （`this.#env`）を渡す——`process.env` だと、器の環境変数の値に一致する字面まで
+      // 伏せてしまい、結果が器ごとに変わる（CI の器で、テストの例外の文 `boom-2488` の
+      // 数字が伏せられて落ちた）。この行の書き込みが失敗しても `#journal` が stderr へ
+      // 跡を残して飲むので、元の例外は必ず届く。
       await this.#journal({
         type: 'exchange',
         with: 'self',
         role: 'outbound',
         text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}ターンを止められなかった（${describeProbeError(error, process.env)}）。` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}ターンを止められなかった（${describeProbeError(error, this.#env)}）。` +
           '直前の「止めた」の行は取り消す。ターンは走ったまま',
         ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
       });
