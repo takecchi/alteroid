@@ -10987,6 +10987,63 @@ describe('runner_list（器の一覧）', () => {
   });
 
   /**
+   * Issue #2426 — 「訊けなかった」の中を、繋がっていない（unheard）／訊いて失敗した
+   * （failed。理由つき）／口を持たない古い runner（unsupported）で別の文言にする。
+   * 対照として、取れた器は今までどおり pids を出す。
+   */
+  it('pids が出ない理由を、繋がっていない・失敗した・古い runner で別の文言にし、失敗は理由を載せる', async () => {
+    const base = {
+      revision: { status: 'unheard' as const },
+      since: '2026-01-01T00:00:00.000Z',
+      managers: [],
+    };
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          ...base,
+          label: 'runner-a',
+          state: 'unreachable',
+          resourcesProbe: { status: 'unheard' },
+        },
+        {
+          ...base,
+          label: 'runner-b',
+          state: 'connected',
+          runnerId: 'runner-b',
+          resourcesProbe: { status: 'failed', error: 'Error: resources RPC failed (test)' },
+        },
+        {
+          ...base,
+          label: 'runner-c',
+          state: 'connected',
+          runnerId: 'runner-c',
+          resourcesProbe: { status: 'unsupported' },
+        },
+        {
+          ...base,
+          label: 'runner-d',
+          state: 'connected',
+          runnerId: 'runner-d',
+          resources: { pids: { current: 12, max: 100 } },
+          resourcesProbe: { status: 'asked' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('pids: 確かめていない（繋がっていないので聞いていない）');
+    expect(reply).toContain('pids: 訊いたが失敗した: Error: resources RPC failed (test)');
+    expect(reply).toContain('pids: 確かめられない（この runner は口を持たない。古い版）');
+    expect(reply).toContain('pids: 12 / 100');
+    // 旧来の1文（3つを潰した文言）は、probe が在れば出ない。
+    expect(reply).not.toContain('器が開いていない、または応答が無い');
+  });
+
+  /**
    * `tasks`（#315 の可視化。器の pids の内訳）が在れば、pids の行に続けて
    * 内訳・ゾンビの comm 別集計・いちばん古いゾンビの年齢が出る。
    */

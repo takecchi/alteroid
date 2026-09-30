@@ -67,6 +67,7 @@ import type {
   RunnerLegState,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
+  RunnerPlacementResources,
   RunnerProfileFingerprint,
   RunnerRegistry,
   RunnerRevisionStatus,
@@ -1399,6 +1400,23 @@ export type RunnerFingerprintProbe =
 export type RunnerMcpServersProbe = RunnerFingerprintProbe | { status: 'unsupported' };
 
 /**
+ * 資源（pids など）を聞きに行けたかどうか（Issue #2426）。
+ *
+ * **`RunnerMcpServersProbe` と同じ4状態**——`client.resources` は `RunnerClient` の
+ * 任意メソッドなので（口を持たない古い runner・テストの偽物）、`unsupported` を持つ。
+ *
+ * - `asked` — 叩いて応答が返った（`resources` が `undefined` のままでも、
+ *   それは「応答が資源を名乗らなかった」であって、失敗ではない）
+ * - `unheard` — 叩いていない。繋がっていない相手には聞きに行かない
+ * - `failed` — 叩いたが失敗した。理由は `reasonOf` で1行に畳む
+ * - `unsupported` — そもそも呼べる口が無い（古い runner）
+ *
+ * **疑う先が違う**——`unheard` は接続、`failed` は器の RPC、`unsupported` は
+ * runner の版である。同じ文言に潰すと、どこを見るかが出力から決まらない。
+ */
+export type RunnerResourcesProbe = RunnerMcpServersProbe;
+
+/**
  * 器（runner）1台の様子と、そこに紐づくマネージャー（`runner_list` の材料）。
  *
  * `label` / `state` / `since` / `error?` / `runnerId?` / `workspacePath?` は
@@ -1484,15 +1502,24 @@ export interface RunnerOverview {
    *
    * 1. **読めた** — `resources.pids` が在る
    * 2. **runner に訊けなかった** — `resources` 自体が `undefined`
-   *    （器が開いていない・`resources()` が失敗した・応答が無かった）
+   *    （**理由は `resourcesProbe` が持つ**——Issue #2426。以前は器が開いて
+   *    いない・`resources()` が失敗した・口を持たない古い runner が同じ
+   *    `undefined` に潰れていた）
    * 3. **訊けたが pids が読めなかった** — `resources` は在るが `pids` が無い
    *    （cgroup を持たない器。ローカル開発など。フォールバック先が無いので
    *    `readExecutionResources` の doc のとおり欄ごと省略される）
    *
    * **2 と 3 を同じ文言に倒さないこと。** どちらも「pids が出せない」で終わるが、
    * 疑う先が違う——2 は接続・器の生死、3 は器の cgroup 構成である。
+   * **そして 2 の中も `resourcesProbe` で分けて読むこと**（下）。
    */
   resources?: RunnerExecutionResources;
+  /**
+   * 資源を聞きに行けたか（Issue #2426）。`resources: true` を渡したときだけ載る
+   * （渡さない回は欄自体が無い——1文字も増えない）。上の `resources` が無い理由
+   * （`unheard` / `failed` / `unsupported`）を持つ。
+   */
+  resourcesProbe?: RunnerResourcesProbe;
   /**
    * runner が名乗った版（コミット sha）。**3状態を区別する**
    * （`RunnerRevisionStatus`）——`known`（版が取れた）/ `unknown`（名乗ったが
@@ -1961,8 +1988,9 @@ export interface ManagerPool {
    * 足したのは「明示的に頼まれたときの経路」1本だけである。出すのは pids
    * （cgroup の `pids.current` / `pids.max`。合計であって内訳ではない——
    * #315 の本題である内訳の特定にはこれは触れない）。開いていない器・
-   * `resources()` が失敗した器は `RunnerOverview.resources` が `undefined` の
-   * ままになる（「訊けなかった」）。開けたが `pids` を持たない器（cgroup が無い）
+   * `resources()` が失敗した器・口を持たない古い器は `RunnerOverview.resources` が
+   * `undefined` のままになる（「訊けなかった」）が、**理由は
+   * `RunnerOverview.resourcesProbe` が分けて持つ**（Issue #2426）。開けたが `pids` を持たない器（cgroup が無い）
    * とは区別すること（`RunnerOverview.resources` の doc の3値）。
    */
   runners(options?: { fingerprints?: boolean; resources?: boolean }): Promise<RunnerFleetOverview>;
@@ -4689,6 +4717,28 @@ async function probeRunnerMcpServersFingerprint(
   }
 }
 
+/**
+ * 資源を聞きに行けたかごと聞く（Issue #2426）。`probeRunnerMcpServersFingerprint` と
+ * 同じ作法——`.catch(() => undefined)` で「繋がっていない」「失敗した」「口を
+ * 持たない古い runner」を同じ `undefined` に潰さない。
+ */
+async function probeRunnerResources(
+  client: RunnerClient | undefined,
+  resources: boolean | undefined,
+): Promise<{
+  value: RunnerPlacementResources | undefined;
+  probe: RunnerResourcesProbe | undefined;
+}> {
+  if (!resources) return { value: undefined, probe: undefined };
+  if (client === undefined) return { value: undefined, probe: { status: 'unheard' } };
+  if (client.resources === undefined) return { value: undefined, probe: { status: 'unsupported' } };
+  try {
+    return { value: (await client.resources()) ?? undefined, probe: { status: 'asked' } };
+  } catch (error) {
+    return { value: undefined, probe: { status: 'failed', error: reasonOf(error) } };
+  }
+}
+
 class Pool implements ManagerPool {
   readonly #stores: Stores;
   readonly #post: (event: InboxEvent) => void;
@@ -6361,13 +6411,11 @@ class Pool implements ManagerPool {
         const profile = profileProbed.value;
         const mcpServers = mcpServersProbed.value;
         // **`resources` 自体が `undefined` = 訊けなかった。** `resources` が在って
-        // `pids` が無い = 訊けたが読めなかった。この2つを区別するために、失敗も
-        // 「呼ばなかった」も同じ `undefined` へ潰す（`RunnerOverview.resources` の
-        // doc の3値）。
-        const resources =
-          client === undefined || !options.resources
-            ? undefined
-            : ((await client.resources?.().catch(() => undefined)) ?? undefined);
+        // `pids` が無い = 訊けたが読めなかった（`RunnerOverview.resources` の doc の
+        // 3値）。**訊けなかった理由は `resourcesProbe` が持つ**（Issue #2426。以前は
+        // 失敗も「繋がっていない」も「口を持たない」も同じ `undefined` へ潰していた）。
+        const resourcesProbed = await probeRunnerResources(client, options.resources);
+        const resources = resourcesProbed.value;
 
         // #358 案b: `pendingEvents` / `oldestPendingAt` を `#runnerBacklog`
         // へ書く。**新しい往復ではない**——直上で払った往復（`options.resources`
@@ -6415,6 +6463,7 @@ class Pool implements ManagerPool {
             ? {}
             : { mcpServersProbe: mcpServersProbed.probe }),
           ...(resources === undefined ? {} : { resources }),
+          ...(resourcesProbed.probe === undefined ? {} : { resourcesProbe: resourcesProbed.probe }),
           revision: entry.revision,
           // **`credentials`/`profile` と違い、`fingerprints` の要否を見ない。**
           // runner への新しい往復を払わない（プロセス内の記憶を読むだけ）ので、

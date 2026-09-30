@@ -13035,10 +13035,12 @@ export function createCloneTools(context: ToolContext) {
           '上がるだけで pids が +131 跳ねている。**対応している runner なら、' +
           'その合計の内訳（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古い' +
           'ゾンビの年齢）が別行で出る**（#315 の可視化）——対応していない runner' +
-          '（古い版）ではこの内訳の行自体が出ない。「runner に訊けなかった」' +
-          '（器が開いていない・応答が無い）と「訊けたが pids が読めない」' +
-          '（cgroup を持たない器）は別の文言で出る——どちらも数字が出ない点は' +
-          '同じだが、疑う先が違う。**そしてこの pids は、いまは配置の材料でもある**' +
+          '（古い版）ではこの内訳の行自体が出ない。pids が出ない器は、理由ごとに別の' +
+          '文言で出る（#2426）——「確かめていない」（繋がっていないので聞いていない）・' +
+          '「訊いたが失敗した: 理由」（resources() が落ちた）・「確かめられない」' +
+          '（この runner は口を持たない古い版）・「訊けたが pids が読めない」' +
+          '（cgroup を持たない器）。どれも数字が出ない点は同じだが、疑う先' +
+          '（接続・器の RPC・runner の版・器の cgroup 構成）が違う。**そしてこの pids は、いまは配置の材料でもある**' +
           // **#756 で1項を足した。** 実装の分母には `failures`（直近に起動が
           // 失敗した本数）が在るのに、説明文はそれに1文字も触れていなかった——
           // 同じ #712 が足したものである。クローンは道具の説明しか読まないので、
@@ -13329,13 +13331,20 @@ export function createCloneTools(context: ToolContext) {
            *
            * 1. 読めた — `runner.resources.pids` が在る
            * 2. runner に訊けなかった — `runner.resources` 自体が `undefined`
-           *    （器が開いていない・`resources()` が失敗した）
+           *    **理由は `runner.resourcesProbe` で3つに分ける**（Issue #2426。
+           *    指紋の `*Probe`（#1949）と同じ形）——`unheard`（繋がっていない
+           *    ので聞いていない）／`failed`（`resources()` を叩いたが失敗した。
+           *    理由つき）／`unsupported`（口を持たない古い runner）。`asked` なのに
+           *    `resources` が無いのは、応答が資源を名乗らなかった回である。
+           *    **`resourcesProbe` 自体が無い（`ManagerPool.runners()` を経由しない
+           *    テスト用の固定値など）ときは、旧来の1文へ倒す。**
            * 3. 訊けたが pids が読めない — `resources` は在るが `pids` が無い
            *    （cgroup を持たない器。フォールバック先が無い——
            *    `runner-resources.ts` の doc）
            *
            * 2 と 3 は同じ「数字が出ない」結果だが、疑う先が違うので同じ文言に
-           * 倒さない。
+           * 倒さない。2 の3つも、疑う先（接続・器の RPC・runner の版）が違うので
+           * 同じ文言に倒さない。
            *
            * **「言えないこと」は器ごとに繰り返さず、一覧の末尾に1度だけ出す**
            * （下の `tail`）。器の台数ぶん同じ3行を並べると、断りの長さが本体を
@@ -13346,7 +13355,18 @@ export function createCloneTools(context: ToolContext) {
            */
           if (resources === true) {
             if (runner.resources === undefined) {
-              lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
+              const probe = runner.resourcesProbe;
+              if (probe?.status === 'unheard') {
+                lines.push('  pids: 確かめていない（繋がっていないので聞いていない）');
+              } else if (probe?.status === 'failed') {
+                lines.push(`  pids: 訊いたが失敗した: ${probe.error}`);
+              } else if (probe?.status === 'unsupported') {
+                lines.push('  pids: 確かめられない（この runner は口を持たない。古い版）');
+              } else if (probe?.status === 'asked') {
+                lines.push('  pids: 訊けたが、応答に資源が無かった');
+              } else {
+                lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
+              }
             } else if (runner.resources.pids === undefined) {
               lines.push('  pids: 訊けたが読めない器だった（cgroup を持たない。ローカル開発など）');
             } else {

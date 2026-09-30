@@ -7915,8 +7915,11 @@ class FakePoolRunner implements RunnerClient {
     }
   }
 
+  /** `resources()` を「叩いたが失敗した」にする（Issue #2426。`credentialsError` と同じ形）。 */
+  resourcesError: string | undefined;
   async resources(): Promise<RunnerPlacementResources | undefined> {
     this.resourcesCalls += 1;
+    if (this.resourcesError !== undefined) throw new Error(this.resourcesError);
     return this.report;
   }
   async connect(onEvent: (event: RunnerEvent) => void): Promise<void> {
@@ -8837,6 +8840,63 @@ describe('runner の一覧（ManagerPool.runners）', () => {
 
     await pool.stop();
     await registry.stop();
+  });
+
+  /**
+   * Issue #2426 — 「繋がっていない」「resources() が失敗した」「口を持たない古い
+   * runner」が同じ `undefined` に潰れていた。`resourcesProbe` で分ける。
+   */
+  describe('resourcesProbe（Issue #2426）', () => {
+    it('繋がっていない・失敗した・口を持たない・取れた を別の状態で返し、失敗は理由つき', async () => {
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([], { retryBaseMs: 5, retryMaxMs: 5 });
+      await registry.register({
+        label: 'runner-unreachable',
+        open: () => Promise.reject(new Error('fetch failed')),
+      });
+      const failing = new FakePoolRunner('runner-failing', { managers: 0 });
+      failing.resourcesError = 'resources RPC failed (test)';
+      await registry.register({ label: 'runner-failing', open: () => Promise.resolve(failing) });
+      const old = new FakePoolRunner('runner-old', { managers: 0 });
+      // 口を持たない古い runner を模す（`RunnerClient.resources` は任意メソッド）。
+      (old as { resources?: unknown }).resources = undefined;
+      await registry.register({ label: 'runner-old', open: () => Promise.resolve(old) });
+      const ok = new FakePoolRunner('runner-ok', { managers: 0, pids: { current: 5, max: 10 } });
+      await registry.register({ label: 'runner-ok', open: () => Promise.resolve(ok) });
+
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+      const overview = await pool.runners({ resources: true });
+      const byLabel = new Map(overview.runners.map((r) => [r.label, r]));
+
+      expect(byLabel.get('runner-unreachable')?.resourcesProbe).toEqual({ status: 'unheard' });
+      expect(byLabel.get('runner-failing')?.resourcesProbe).toEqual({
+        status: 'failed',
+        error: expect.stringContaining('resources RPC failed (test)'),
+      });
+      expect(byLabel.get('runner-old')?.resourcesProbe).toEqual({ status: 'unsupported' });
+      // 対照: 取れた器は今までどおり pids を出す。
+      expect(byLabel.get('runner-ok')?.resourcesProbe).toEqual({ status: 'asked' });
+      expect(byLabel.get('runner-ok')?.resources?.pids).toEqual({ current: 5, max: 10 });
+      for (const label of ['runner-unreachable', 'runner-failing', 'runner-old']) {
+        expect(byLabel.get(label)?.resources).toBeUndefined();
+      }
+
+      await pool.stop();
+      await registry.stop();
+    });
+
+    it('resources: true を渡さない回は resourcesProbe の欄自体が無い', async () => {
+      const a = new FakePoolRunner('runner-a', { managers: 0 });
+      const stores = createMemoryStores();
+      const registry = createRunnerRegistry([a]);
+      const pool = createManagerPool({ stores, post: () => undefined, runners: registry });
+
+      const overview = await pool.runners();
+      expect(overview.runners[0]).not.toHaveProperty('resourcesProbe');
+
+      await pool.stop();
+      await registry.stop();
+    });
   });
 });
 
