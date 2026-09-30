@@ -3065,8 +3065,9 @@ function parseUsageFilters(tokens: string[]): ParsedUsageFilters {
 /**
  * `/rate` / `/rate-manager` の理由の並びから、`--kind=<種類>`（仕事の種類。#1308）を
  * 1つ抜き出す。**理由は自由文の末尾なので、種類は印の付いた1語として分ける。**
- * 無ければ `undefined`（＝送らない。前の種類が残る）、`--kind=` だけなら `''`
- * （呼び出し側が断る）。2つ以上あれば最後のものを採る。
+ * `--kind <種類>`（空白で区切った形。#2486）も同じに読み、次の1語を種類として取る。
+ * 無ければ `undefined`（＝送らない。前の種類が残る）、`--kind=` だけ・値の無い
+ * 末尾の `--kind` なら `''`（呼び出し側が断る）。2つ以上あれば最後のものを採る。
  */
 export function splitWorkKindFlag(parts: readonly string[]): {
   workKind: string | undefined;
@@ -3074,8 +3075,10 @@ export function splitWorkKindFlag(parts: readonly string[]): {
 } {
   let workKind: string | undefined;
   const rest: string[] = [];
-  for (const part of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i] as string;
     if (part.startsWith('--kind=')) workKind = part.slice('--kind='.length).trim();
+    else if (part === '--kind') workKind = (parts[++i] ?? '').trim();
     else rest.push(part);
   }
   return { workKind, rest };
