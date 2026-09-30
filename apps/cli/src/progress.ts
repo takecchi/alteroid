@@ -3,7 +3,7 @@ import { stdout } from 'node:process';
 import type { ProgressSummary } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { formatElapsed } from './format.js';
+import { formatElapsedAgo } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -48,7 +48,7 @@ function hours(value: number | null): string {
 
 function at(iso: string | null, now: number): string {
   if (iso === null) return NONE;
-  return `${iso}（${formatElapsed(iso, now)}前）`;
+  return `${iso}（${formatElapsedAgo(iso, now)}）`;
 }
 
 /**
