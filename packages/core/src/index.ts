@@ -366,6 +366,9 @@ export {
   // **同じ理由で出す（#579）。** `apps/cli` が `sessionMissingKind` の由来を
   // 自前で書くと、`manager_list`（`tools.ts`）と字面が割れる。
   describeSessionMissingKind,
+  // **同じ理由で出す（#2428）。** `manager_list` の `unobservedOutcomeLine` が
+  // 呼ぶ生成元。
+  describeUnobservedOutcome,
   type DigestWindow,
 } from './digest.js';
 /**
@@ -847,6 +850,7 @@ export {
   createProfileVessel,
   evaluateProfile,
   normalizeProfileScript,
+  redactProfileFailure,
   renderProfileFile,
   type EvaluateProfileOptions,
   type ProfileApplier,
@@ -1122,6 +1126,11 @@ export {
   chunkIdsByChars,
   createCloneMcpServer,
   createCloneTools,
+  // **字面の生成元を1つに保つために出す（#2428）。** `apps/cli` の `/managers` が
+  // `manager_list`（`tools.ts`）と同じ判定・同じ字面の ⚠ を出すため。
+  describeToolUseStall,
+  describeTurnEnd,
+  isFoldedTurnReport,
   qualifiedToolName,
   resolveMemoryGuard,
   type MemoryGuardValue,
@@ -1248,6 +1257,13 @@ export {
  * `error-cause.ts` の doc を見よ。
  */
 export { collapseErrorCause } from './error-cause.js';
+
+/**
+ * 文字列に含まれる秘密の伏せ字（issue #2415）。`redactSecretsInText` は
+ * `buildDenialInputHead` の伏せ字そのもの、`redactErrorText` はそれに `params:`
+ * 以降を落とす規則を足した、例外の文用。`denial-input-head.ts` の doc を見よ。
+ */
+export { redactErrorText, redactSecretsInText } from './denial-input-head.js';
 
 /**
  * `dropped-record.ts` のテスト専用フック（本番の配線には出てこない）。

@@ -36,6 +36,10 @@
       "types": "./dist/trace-action.d.ts",
       "import": "./dist/trace-action.js"
     },
+    "./redact": {
+      "types": "./dist/redact.d.ts",
+      "import": "./dist/redact.js"
+    },
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"

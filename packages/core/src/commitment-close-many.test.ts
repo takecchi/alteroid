@@ -362,6 +362,8 @@ describe('commitment_close_many（絞り込みでの一括 close。issue #844）
 
     // 各 decision の id 列は予算 + id 1個分を大きくは超えない。
     for (const text of texts) {
+      // 目印が消えると slice が id 列でないものを切り出し、下の長さの上限は緑のまま残る。切り出す前に在ることを確かめる（#2431）。
+      expect(text).toContain('閉じた id: ');
       const idsPart = text.slice(text.indexOf('閉じた id: ') + '閉じた id: '.length);
       expect(idsPart.length).toBeLessThanOrEqual(CLOSE_MANY_JOURNAL_ID_CHARS_COPY + 37);
     }

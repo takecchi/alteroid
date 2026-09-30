@@ -130,7 +130,39 @@ function buildReason(shapeDescription: string): string {
  * 有界性そのものは変わらない。
  */
 function isTimeoutWrapped(trimmed: string): boolean {
-  return /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\b/.test(trimmed);
+  return (
+    /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\b/.test(trimmed) && isSingleSimpleCommand(trimmed)
+  );
+}
+
+/**
+ * 全体が1つの単純コマンドか（#2399）。`timeout 60 make; tail -f x` のように、先頭の `timeout` が
+ * 包むのは最初の単純コマンドだけなので、区切りの後ろを有界と読んではいけない。
+ *
+ * 引用符の外（`computeOutsideQuoteMask`）の `;` / `|`（`||` と `|&` も含む）/ 改行 /
+ * 単体の `&` と `&&` が、**後ろに中身を持つ**とき、複数の単純コマンドと読む。
+ * 末尾の区切り（`timeout 60 cmd &` / `;`）は、後ろに別のコマンドが無いので数えない。
+ * `>&` / `<&` / `&>` のリダイレクトの `&` は区切りではない。ヒアドキュメントの本体は
+ * 先に空白へ潰す（本体の改行と中身は、区切りでも別のコマンドでもない）。行の継続は先に外す。
+ * 走査は1回で、線形。
+ */
+function isSingleSimpleCommand(trimmed: string): boolean {
+  const command = stripHeredocs(joinLineContinuations(trimmed));
+  const mask = computeOutsideQuoteMask(command);
+  let lastContent = command.length - 1;
+  while (lastContent >= 0 && /[\s;&]/.test(command.charAt(lastContent))) lastContent -= 1;
+  for (let i = 0; i < lastContent; i++) {
+    if (!mask[i]) continue;
+    const ch = command[i];
+    if (ch === ';' || ch === '|' || ch === '\n') return false;
+    if (ch === '&') {
+      const prev = i > 0 ? command[i - 1] : '';
+      if (prev === '>' || prev === '<') continue;
+      if (command[i + 1] === '>') continue;
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -233,7 +265,14 @@ function splitOutsideQuoteSimpleCommands(
   let start = 0;
   let i = 0;
   while (i < command.length) {
-    const tokenLength = mask[i] ? boundaryTokenLengthAt(command, i) : 0;
+    let tokenLength = mask[i] ? boundaryTokenLengthAt(command, i) : 0;
+    // 単体の `&`（背景化の区切り。#2401）も単純コマンドを分ける。`boundaryTokenLengthAt` は
+    // `TAIL_FOLLOW_RE` の一致の規則と揃えてあるので単体の `&` を境界に数えない。ここ（引用符を
+    // 潰す区間の切り出し）だけで足す。`>&` / `<&` / `|&` / `&>` のリダイレクト・パイプの `&` は除く。
+    if (tokenLength === 0 && mask[i] && command[i] === '&') {
+      const prev = i > 0 ? command[i - 1] : '';
+      if (prev !== '>' && prev !== '<' && prev !== '|' && command[i + 1] !== '>') tokenLength = 1;
+    }
     if (tokenLength > 0) {
       spans.push({ start, end: i });
       i += tokenLength;
@@ -270,8 +309,9 @@ function splitOutsideQuoteSimpleCommands(
  * - 先頭の語が引用符で囲まれている（コマンド名そのものが引用符の中）——
  *   `"echo" "tail -f x"` のような偽装を防ぐ
  * - `VAR=…` の代入で始まる——代入の右辺が後で実行されるかはこの語だけでは分からない
- * - 同じ単純コマンドにコマンド置換（`$(`/バッククォート）かプロセス置換の出力側（`>(`）が
- *   在る——置換の中身は実際に実行される。`echo "…" > >(sh)` は出力をシェルへ渡す
+ * - 同じ単純コマンドにコマンド置換（`$(`/バッククォート）かプロセス置換（出力側 `>(`・
+ *   入力側 `<(`。#2401）が在る——置換の中身は実際に実行される。`echo "…" > >(sh)` は出力を
+ *   シェルへ渡す。`grep x <(bash -c "…")` は中身を実行する
  *
  * 語の終わりは空白か行末で見る（`\b` だと `echo-x` / `grep.sh` のような別のコマンドまで当たる）。
  */
@@ -286,7 +326,9 @@ function isNonExecutingArgsSimpleCommand(command: string, span: SimpleCommandSpa
   if (ch === "'" || ch === '"' || (ch === '$' && command[i + 1] === "'")) return false;
   const rest = command.slice(i, span.end);
   if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) return false;
-  if (rest.includes('$(') || rest.includes('`') || rest.includes('>(')) return false;
+  if (rest.includes('$(') || rest.includes('`') || rest.includes('>(') || rest.includes('<(')) {
+    return false;
+  }
   return NON_EXECUTING_ARGS_COMMAND_RE.test(rest);
 }
 

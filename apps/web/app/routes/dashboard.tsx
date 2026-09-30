@@ -27,6 +27,7 @@ import { journalEntryLinks } from '~/lib/journal-links';
 
 import { ManagerStatusBadge, UnreadableJobNote } from './managers';
 import { UnreadableScheduleNote } from './schedule';
+import { UnreadableUsageRowsNote } from './usage';
 // **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
 // あるので、判定と文言を書き写すと片方だけが古びる（本文がエラー文のまま出る側が
 // 静かに残る）。
@@ -360,6 +361,17 @@ export default function Dashboard() {
                 {/* 省略・要約しない。数字を出すところには必ず添える。 */}
                 <p className="mt-1 text-[11px] text-muted-foreground">{usage.data.notice}</p>
               </div>
+            )}
+            {/* **読めずに集計から外した行が在れば、合計に入っていないと言う**（Issue #2427）。
+                窓（今日の前後2日）から、今日の行か、日が取れない行だけに絞る——カードの
+                数字（今日1日）と同じ母集合で言う。0件・欄なしなら描かない。 */}
+            {usage.error === undefined && usage.data !== undefined && today !== undefined && (
+              <UnreadableUsageRowsNote
+                rows={usage.data.unreadableRows?.filter(
+                  (row) => row.date === undefined || row.date === today,
+                )}
+                className="m-4"
+              />
             )}
           </Card>
 

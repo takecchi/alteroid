@@ -103,6 +103,11 @@ function stubUsage(body: {
    */
   unrecordedManagers?: unknown[];
   /**
+   * 集計で読めずに外した行（Issue #2427）。**渡さなければ鍵ごと無い**（0件・欄の無い古い
+   * デーモンと同じ）ので、既存のテストは1つも振る舞いが変わらない。
+   */
+  unreadableRows?: unknown[];
+  /**
    * 「起きた回数」の別会計。**既定は空配列**——`summarizeUsage` が無条件で
    * `turnRows.reduce` を呼ぶので、`rows` と同じく必須の欄として渡す
    * （`tokensSince` / `beforeTokens` と違い、省略すると画面側の分岐に入る前に
@@ -843,6 +848,70 @@ describe('/usage 画面の取れなかった区切り（unreadable）', () => {
     renderUsage();
 
     expect(await screen.findByText(/取れなかった/)).toBeTruthy();
+  });
+});
+
+/**
+ * 集計で読めずに外した行（`describeUnreadableUsageRows`。Issue #2427）。
+ *
+ * 文言そのものの試験は core が持つ。ここで見るのは「画面に実際に繋がっているか」
+ * 「記録が無い画面でも言うか」「無ければ1文字も増やさないこと」。
+ */
+describe('/usage 画面の読めずに外した行（unreadableRows）', () => {
+  const UNREADABLE = [
+    { table: 'usage_daily', date: '2026-08-13', fields: ['layer'] },
+    { table: 'usage_turns', date: '2026-08-13', fields: ['layer'] },
+  ];
+
+  it('在れば、合計の上で「合計に入っていない」と言う（role=status）', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unreadableRows: UNREADABLE,
+    });
+
+    renderUsage();
+
+    const note = await screen.findByRole('status');
+    expect(note.textContent).toContain('読めない使用量の行が 2 行あり、合計に入っていない');
+    expect(note.textContent).toContain('日付: 2026-08-13');
+  });
+
+  it('台帳の始点が無い（since が null）画面でも言う', async () => {
+    stubUsage({
+      rows: [],
+      since: null,
+      beforeLedger: false,
+      unreadableRows: UNREADABLE,
+    });
+
+    renderUsage();
+
+    expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
+  });
+
+  it('対照: 欄が無い・空配列なら、何も出さない', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    const { unmount } = renderUsage();
+    await screen.findByText(/合計/);
+    expect(screen.queryByText(/読めない使用量/)).toBeNull();
+    unmount();
+
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unreadableRows: [],
+    });
+    renderUsage();
+    await screen.findByText(/合計/);
+    expect(screen.queryByText(/読めない使用量/)).toBeNull();
   });
 });
 

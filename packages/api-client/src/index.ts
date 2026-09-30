@@ -12,6 +12,7 @@
  * 型共有で足りているので、無理に置き換えない（Issue #20「設計上の注意」）。
  */
 
+import { redactedExcerpt } from '@alteroid/core/redact';
 import createClient, { type Client, type ClientOptions } from 'openapi-fetch';
 
 import type { paths } from './generated/openapi.js';
@@ -43,6 +44,19 @@ export type ChatMessage =
 /** 日誌の SSE メッセージ。`open` は配線が生きていることの合図だけを運ぶ。 */
 export type JournalMessage =
   { event: 'open'; data: { ok: boolean } } | { event: JournalEntry['type']; data: JournalEntry };
+
+/**
+ * SSE の口が ok でない応答を受けたとき、Error の message に入れる本文の長さの上限
+ * （issue #2418）。本文は中継（プロキシ）や古いデーモンが返す任意の文字列で、鍵や
+ * URL の資格を含みうる。**伏せてから切る**（`@alteroid/core/redact` の
+ * `redactedExcerpt`）——先に切ると、切り口で割れたトークンの断片が残る。
+ * status と path は message に別に残る。
+ *
+ * **`@alteroid/core` 本体を import しない。** このパッケージは core を実行時の依存に
+ * 持たず、`packages/swr` 経由で Web の画面も読む。軽い口（`/redact`）は
+ * `process.env` を自分では読まない。
+ */
+const ERROR_BODY_LIMIT = 512;
 
 export interface AlteroidClientOptions extends Omit<ClientOptions, 'baseUrl' | 'headers'> {
   /** 例: `http://127.0.0.1:4517`。 */
@@ -134,7 +148,15 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
       headers: { ...defaultHeaders, ...(init.headers ?? {}) },
     });
     if (!response.ok) {
-      throw new Error(`${path} が ${response.status} を返した: ${await response.text()}`);
+      throw new Error(
+        `${path} が ${response.status} を返した: ${redactedExcerpt(
+          await response.text(),
+          ERROR_BODY_LIMIT,
+          // ブラウザ（Web の画面）でも動くので `process.env` は読まない。
+          // 字面の規則（既知の形・URL の資格・`params:` 以降）だけを使う。
+          undefined,
+        )}`,
+      );
     }
     if (response.body === null) throw new Error(`${path} の応答に本文が無い`);
 

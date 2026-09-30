@@ -156,6 +156,7 @@ import {
   scanMemorySections,
 } from './memory.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
+import { redactProfileFailure } from './profile.js';
 import { ProfileRollbackFailedError, type ProfileService } from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
@@ -254,6 +255,7 @@ import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
   describeUnreadableUsage,
+  describeUnreadableUsageRows,
   describeUnrecordedManagers,
   describeUsageDateOrder,
   describeWebSearchRequests,
@@ -3388,7 +3390,7 @@ function describeWithheldReports(manager: ManagerSummary): string | null {
  * ——見出しの生成元を2つに割らない（`describeManagerFailure` の doc と
  * 同じ理由）。
  */
-function isFoldedTurnReport(
+export function isFoldedTurnReport(
   manager: Pick<ManagerSummary, 'lastFailure' | 'lastUnreported'>,
 ): boolean {
   return manager.lastFailure !== undefined || manager.lastUnreported !== undefined;
@@ -3489,6 +3491,17 @@ function unobservedOutcomeLine(manager: ManagerSummary): string | null {
 }
 
 /**
+ * {@link managerActivityInputOf} が読む欄だけを名指しした型。CLI（`GET /managers` の
+ * 応答は `ManagerSummary` の全欄を持たない）が `describeTurnEnd` /
+ * `describeToolUseStall` を同じ関数のまま呼べるようにするため（Issue #2428）。
+ * `ManagerSummary` はそのまま渡せる。
+ */
+type ManagerActivityFields = Pick<
+  ManagerSummary,
+  'turnEndReason' | 'turnEndedAt' | 'lastReportAt' | 'toolUseStallPending'
+> & { waiting: readonly unknown[] };
+
+/**
  * `ManagerSummary` から {@link classifyManagerActivity} への入力を作る。
  *
  * **判定のコピーを2つ作らないための唯一の変換点。** `describeTurnEnd` /
@@ -3496,7 +3509,7 @@ function unobservedOutcomeLine(manager: ManagerSummary): string | null {
  * `manager.ts` の `flushWithheldReports()` も同じ純関数を、`ManagerRecord`
  * から作った同型の入力で呼ぶ（`manager-activity.ts` の doc）。
  */
-function managerActivityInputOf(manager: ManagerSummary): ManagerActivityInput {
+function managerActivityInputOf(manager: ManagerActivityFields): ManagerActivityInput {
   return {
     turnEndReason: manager.turnEndReason,
     turnEndedAt: manager.turnEndedAt,
@@ -3541,7 +3554,9 @@ function managerActivityInputOf(manager: ManagerSummary): ManagerActivityInput {
  * あるときだけにする——一覧は文字数の予算に張り付いていて、行を1本増やすと
  * 出る件数が減る（`manager.lastReport` の行の doc と同じ理由）。
  */
-function describeTurnEnd(manager: ManagerSummary): string | null {
+export function describeTurnEnd(
+  manager: ManagerActivityFields & Pick<ManagerSummary, 'turnEndTail'>,
+): string | null {
   if (manager.turnEndReason === undefined) return null;
 
   // **判定そのものは `classifyManagerActivity` へ切り出してある**
@@ -3660,7 +3675,9 @@ function describeTurnEnd(manager: ManagerSummary): string | null {
  * ⚠️ **この行は長い。** 予算に張り付いた一覧では長さがそのまま出る件数を削る
  * ので、足すなら「読んだクローンの次の一手が1つに決まる」に効く語だけにすること。
  */
-function describeToolUseStall(manager: ManagerSummary): string | null {
+export function describeToolUseStall(
+  manager: ManagerActivityFields & Pick<ManagerSummary, 'toolUseStallAt'>,
+): string | null {
   const pending = manager.toolUseStallPending;
   if (pending === undefined || pending.length === 0) return null;
   // **判定そのものは `classifyManagerActivity` へ切り出してある**
@@ -9484,9 +9501,12 @@ export function createCloneTools(context: ToolContext) {
             decision: `実行環境プロファイルを差し替えられなかった（読めなかった）: ${summary}`,
             grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
           });
+          // シェルの stderr は入力の行を引用し、`set -x` は値ごと吐く（issue #2429）。
+          // クローンの文脈に鍵の値を入れない——`PUT /profile` の 400 と同じ関数で伏せる。
+          const failure = redactProfileFailure(result.clone, process.env);
           return text(
-            `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${result.clone.error ?? '理由不明'}` +
-              `${result.clone.output === undefined || result.clone.output.length === 0 ? '' : `\n${result.clone.output}`}`,
+            `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${failure.error}` +
+              `${failure.output.length === 0 ? '' : `\n${failure.output}`}`,
           );
         }
 
@@ -13035,10 +13055,12 @@ export function createCloneTools(context: ToolContext) {
           '上がるだけで pids が +131 跳ねている。**対応している runner なら、' +
           'その合計の内訳（ゾンビ/生存の内訳・ゾンビの comm 別集計・いちばん古い' +
           'ゾンビの年齢）が別行で出る**（#315 の可視化）——対応していない runner' +
-          '（古い版）ではこの内訳の行自体が出ない。「runner に訊けなかった」' +
-          '（器が開いていない・応答が無い）と「訊けたが pids が読めない」' +
-          '（cgroup を持たない器）は別の文言で出る——どちらも数字が出ない点は' +
-          '同じだが、疑う先が違う。**そしてこの pids は、いまは配置の材料でもある**' +
+          '（古い版）ではこの内訳の行自体が出ない。pids が出ない器は、理由ごとに別の' +
+          '文言で出る（#2426）——「確かめていない」（繋がっていないので聞いていない）・' +
+          '「訊いたが失敗した: 理由」（resources() が落ちた）・「確かめられない」' +
+          '（この runner は口を持たない古い版）・「訊けたが pids が読めない」' +
+          '（cgroup を持たない器）。どれも数字が出ない点は同じだが、疑う先' +
+          '（接続・器の RPC・runner の版・器の cgroup 構成）が違う。**そしてこの pids は、いまは配置の材料でもある**' +
           // **#756 で1項を足した。** 実装の分母には `failures`（直近に起動が
           // 失敗した本数）が在るのに、説明文はそれに1文字も触れていなかった——
           // 同じ #712 が足したものである。クローンは道具の説明しか読まないので、
@@ -13329,13 +13351,20 @@ export function createCloneTools(context: ToolContext) {
            *
            * 1. 読めた — `runner.resources.pids` が在る
            * 2. runner に訊けなかった — `runner.resources` 自体が `undefined`
-           *    （器が開いていない・`resources()` が失敗した）
+           *    **理由は `runner.resourcesProbe` で3つに分ける**（Issue #2426。
+           *    指紋の `*Probe`（#1949）と同じ形）——`unheard`（繋がっていない
+           *    ので聞いていない）／`failed`（`resources()` を叩いたが失敗した。
+           *    理由つき）／`unsupported`（口を持たない古い runner）。`asked` なのに
+           *    `resources` が無いのは、応答が資源を名乗らなかった回である。
+           *    **`resourcesProbe` 自体が無い（`ManagerPool.runners()` を経由しない
+           *    テスト用の固定値など）ときは、旧来の1文へ倒す。**
            * 3. 訊けたが pids が読めない — `resources` は在るが `pids` が無い
            *    （cgroup を持たない器。フォールバック先が無い——
            *    `runner-resources.ts` の doc）
            *
            * 2 と 3 は同じ「数字が出ない」結果だが、疑う先が違うので同じ文言に
-           * 倒さない。
+           * 倒さない。2 の3つも、疑う先（接続・器の RPC・runner の版）が違うので
+           * 同じ文言に倒さない。
            *
            * **「言えないこと」は器ごとに繰り返さず、一覧の末尾に1度だけ出す**
            * （下の `tail`）。器の台数ぶん同じ3行を並べると、断りの長さが本体を
@@ -13346,7 +13375,18 @@ export function createCloneTools(context: ToolContext) {
            */
           if (resources === true) {
             if (runner.resources === undefined) {
-              lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
+              const probe = runner.resourcesProbe;
+              if (probe?.status === 'unheard') {
+                lines.push('  pids: 確かめていない（繋がっていないので聞いていない）');
+              } else if (probe?.status === 'failed') {
+                lines.push(`  pids: 訊いたが失敗した: ${probe.error}`);
+              } else if (probe?.status === 'unsupported') {
+                lines.push('  pids: 確かめられない（この runner は口を持たない。古い版）');
+              } else if (probe?.status === 'asked') {
+                lines.push('  pids: 訊けたが、応答に資源が無かった');
+              } else {
+                lines.push('  pids: runner に訊けなかった（器が開いていない、または応答が無い）');
+              }
             } else if (runner.resources.pids === undefined) {
               lines.push('  pids: 訊けたが読めない器だった（cgroup を持たない。ローカル開発など）');
             } else {
@@ -14597,11 +14637,15 @@ function renderUsage(
     beforeTurns,
     notice,
   } = aggregate;
+  // **集計で読めずに外した行が在れば、どの分岐でも「合計に入っていない」と言う**
+  // （Issue #2427）。無ければ空配列なので、既存の出力は1文字も変わらない。
+  const unreadableRowsLines = describeUnreadableUsageRows(aggregate.unreadableRows);
 
   if (since === null) {
     return [
       '台帳にはまだ1件も記録が無い。',
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
+      ...unreadableRowsLines,
       ...(view.unrecordedManagers === undefined ? [] : ['', ...view.unrecordedManagers]),
     ].join('\n');
   }
@@ -14665,8 +14709,10 @@ function renderUsage(
       }
     }
     lines.push(...renderRisenSection(risen, formatUsageAxisLine));
+    lines.push(...unreadableRowsLines);
   } else if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
+    lines.push(...unreadableRowsLines);
     // **取りこぼしは照会範囲と無関係に全期間で判定する**（`findUnrecordedManagers`
     // の doc）ので、この範囲に台帳の行が無くても出す。
     if (view.unrecordedManagers !== undefined) lines.push('', ...view.unrecordedManagers);
@@ -14687,6 +14733,7 @@ function renderUsage(
     // **取れなかった区切りが在れば、その旨を1行**（Issue #2086）。無ければ
     // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
     lines.push(...describeUnreadableUsage(summary.total));
+    lines.push(...unreadableRowsLines);
     // **合計値の隣に必ず出す（Issue #98）。**
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
 

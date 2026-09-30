@@ -30,6 +30,7 @@ import {
   RunnerMcpServersUnsupportedError,
   buildRevisionSchema,
   reasonOf,
+  redactErrorText,
   reportRunnerRevision,
   runnerCredentialFingerprintSchema,
   runnerMcpServersFingerprintSchema,
@@ -1930,7 +1931,7 @@ class HttpRunner implements RunnerClient {
       ...(signal === undefined ? {} : { signal }),
     });
     if (!response.ok) {
-      const detail = await response.text().catch(() => '');
+      const detail = runnerErrorBodyOf(await response.text().catch(() => ''));
       throw new RunnerHttpError(
         `runner ${method} ${path} が失敗した (${response.status}) ${detail}`,
         response.status,
@@ -1938,6 +1939,28 @@ class HttpRunner implements RunnerClient {
     }
     return response;
   }
+}
+
+/** `RunnerHttpError` の message に入れる応答の本文の長さの上限（issue #2415）。 */
+const RUNNER_ERROR_BODY_LIMIT = 512;
+
+/** 伏せ字を通す前に読む本文の上限。巨大な本文で走査が伸びないように。 */
+const RUNNER_ERROR_BODY_READ_LIMIT = 8192;
+
+/**
+ * runner の失敗応答の本文を、message に入れてよい形にする（issue #2415）。
+ *
+ * message は stderr・日誌・（経路によっては）応答へ出る。runner の本文は任意の
+ * 文字列で、鍵や URL の資格を含みうるので、**伏せ字（`redactErrorText`）を通して
+ * から{@link RUNNER_ERROR_BODY_LIMIT}字に切る**。順序が逆だと、切り口で割れた
+ * トークンの断片がどの伏せ字にも合わずに残る。切ったときは `…` を付ける。
+ * status は呼び出し側が別に持つ（`RunnerHttpError.status`）。
+ */
+function runnerErrorBodyOf(body: string): string {
+  const redacted = redactErrorText(body.slice(0, RUNNER_ERROR_BODY_READ_LIMIT), process.env);
+  return redacted.length > RUNNER_ERROR_BODY_LIMIT || body.length > RUNNER_ERROR_BODY_READ_LIMIT
+    ? `${redacted.slice(0, RUNNER_ERROR_BODY_LIMIT)}…`
+    : redacted;
 }
 
 /** node:http で Unix ソケットへ投げ、`fetch` と同じ形の応答に均す。 */

@@ -1,5 +1,8 @@
 import {
   appraisalSchema,
+  describeToolUseStall,
+  describeTurnEnd,
+  describeUnobservedOutcome,
   JOURNAL_ENTRY_TYPES,
   jobStatusSchema,
   USAGE_ESTIMATE_NOTICE,
@@ -350,6 +353,8 @@ describe('renderManagerList', () => {
     const header = text.indexOf('[running]');
     const denial = text.indexOf('確認へ上がらず止められた道具');
     const waiting = text.indexOf('返事待ち');
+    // 先に状態の札が在ることを確かめる（無いと `-1 < n` で素通りする）。
+    expect(text).toContain('[running]');
     expect(header).toBeLessThan(denial);
     expect(denial).toBeLessThan(waiting);
   });
@@ -879,6 +884,96 @@ describe('renderManagerList', () => {
   });
 
   /**
+   * **Issue #2428: GET /managers が返す `turnEndedAt` / `turnEndReason` /
+   * `toolUseStallAt` / `toolUseStallPending` / `lastUnreported` を CLI が出して
+   * いなかった。** 判定も字面も core の `manager_list` と同じ関数を呼ぶ——
+   * ここでは「同じ字面が出る」ことと「欄が無ければ何も出ない」ことを測る。
+   */
+  describe('Issue #2428: manager_list と同じ ⚠（ターン終了・道具の応答待ち・畳まれた回）', () => {
+    const stalledTurnEnd = manager({
+      lastReport: '途中経過',
+      lastReportAt: '2026-09-30T00:00:00.000Z',
+      turnEndReason: 'end_turn',
+      turnEndedAt: '2026-09-30T00:10:00.000Z',
+    });
+
+    it('turnEndedAt が lastReportAt より新しければ、manager_list と同じ字面の ⚠ を出す', () => {
+      const expected = describeTurnEnd(stalledTurnEnd);
+      expect(expected).not.toBeNull();
+      const text = renderManagerList([stalledTurnEnd]);
+      expect(text).toContain(expected?.trimStart());
+      expect(text).toContain(
+        '⚠ ターンは 2026-09-30T00:10:00.000Z に end_turn で終わっているが、報告がまだ届いていない。',
+      );
+    });
+
+    it('ターン終了の ⚠ は、直近の報告の行より後に出る', () => {
+      const text = renderManagerList([stalledTurnEnd]);
+      expect(text).toContain('直近の報告: 途中経過');
+      expect(text).toContain('⚠ ターンは');
+      expect(text.indexOf('直近の報告')).toBeLessThan(text.indexOf('⚠ ターンは'));
+    });
+
+    it('報告のほうが新しければ（正常な待機）出さない', () => {
+      const text = renderManagerList([
+        manager({
+          lastReport: '報告',
+          lastReportAt: '2026-09-30T00:20:00.000Z',
+          turnEndReason: 'end_turn',
+          turnEndedAt: '2026-09-30T00:10:00.000Z',
+        }),
+      ]);
+      expect(text).not.toContain('ターンは');
+    });
+
+    it('デーモンが答える道具の応答待ちで waiting が空なら、manager_list と同じ字面の ⚠ を出す', () => {
+      const stalled = manager({
+        toolUseStallAt: '2026-09-30T00:00:00.000Z',
+        toolUseStallPending: [{ id: 'toolu_1', name: 'AskUserQuestion' }],
+      });
+      const expected = describeToolUseStall(stalled);
+      expect(expected).toContain('⚠ 道具の応答待ちのまま、誰もその応答を待っていない（矛盾）。');
+      const text = renderManagerList([stalled]);
+      expect(text).toContain(expected?.trimStart());
+      expect(text).toContain('未応答の道具: AskUserQuestion(toolu_1)');
+    });
+
+    it('ふつうの道具を実行中なだけなら ⚠ ではなく「実行中」の注記になる', () => {
+      const text = renderManagerList([
+        manager({ toolUseStallPending: [{ id: 'toolu_2', name: 'Bash' }] }),
+      ]);
+      expect(text).toContain('道具を実行中（矛盾ではない。Issue #2173）');
+      expect(text).not.toContain('⚠ 道具の応答待ち');
+    });
+
+    it('欄が無い（古い daemon）なら、何も出さない・0 も「無い」も書かない', () => {
+      const text = renderManagerList([manager()]);
+      expect(text).not.toContain('ターンは');
+      expect(text).not.toContain('道具');
+      expect(text).not.toContain('turnEnd');
+      expect(text).not.toContain('toolUseStall');
+    });
+
+    it('lastUnreported が在る回は「直近の報告」ではなく「直近のターンの中身」と呼ぶ', () => {
+      const text = renderManagerList([
+        manager({
+          lastReport: '（このターンは結果を受け取らないまま畳まれた: 途中）',
+          lastUnreported: { at: '2026-09-30T00:00:00.000Z', reason: 'no-result' },
+        } as Partial<ManagerListItem>),
+      ]);
+      expect(text).toContain('直近のターンの中身:');
+      expect(text).not.toContain('直近の報告:');
+    });
+
+    it('lost は manager_list と同じ unobservedOutcome の行を出す', () => {
+      const lost = manager({ status: 'lost', live: false });
+      const expected = describeUnobservedOutcome(lost);
+      expect(expected).not.toBeNull();
+      expect(renderManagerList([lost])).toContain(expected);
+    });
+  });
+
+  /**
    * **Issue #1883: GET /managers が返す `tokenGenerationUnknownReason` を
    * CLI が出していなかった。** `tokenGeneration` / `activeTokenGeneration`
    * （世代の生の番号）は Web の `DiagnosticsCard` と揃えて出さないと決めた
@@ -1255,6 +1350,8 @@ describe('renderWaitingList', () => {
       { managerId: 'mgr-a', requestId: 'req-a' },
       { managerId: 'mgr-b', requestId: 'req-b' },
     ]);
+    // 先に `[1]` が在ることを確かめる（無いと `-1 < n` で素通りする）。
+    expect(text).toContain('[1]');
     expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
   });
 
@@ -1880,6 +1977,9 @@ describe('renderCommitments', () => {
     );
 
     expect(ids).toEqual(['a', 'b', 'c']);
+    // 先に `[1]` と `id: a` が在ることを確かめる（無いと `-1 < n` で素通りする）。
+    expect(text).toContain('[1]');
+    expect(text).toContain('id: a');
     expect(text.indexOf('[1]')).toBeLessThan(text.indexOf('[2]'));
     expect(text.indexOf('id: a')).toBeLessThan(text.indexOf('id: b'));
     expect(text.indexOf('id: b')).toBeLessThan(text.indexOf('id: c'));
