@@ -288,7 +288,11 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
 
     await router.navigate('/chat');
     expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();
-    expect(screen.queryByText(NEW_CONVERSATION_ERROR)).toBeNull();
+    // 入力欄は前の画面にも在るので、見つかっても切り替えの描画が済んだとは限らない。
+    // 「出ていない状態になる」のを待つ（直す前の実装なら出続けるので、ここで落ちる）。
+    await waitFor(() => {
+      expect(screen.queryByText(NEW_CONVERSATION_ERROR)).toBeNull();
+    });
   });
 
   it('対照: 失敗した新しい会話から離れないあいだは、失敗が出続ける', async () => {
@@ -328,7 +332,11 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
 
     await router.navigate('/chat');
     expect(await screen.findByPlaceholderText(/クローンに話しかける/)).toBeTruthy();
-    expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
+    // 入力欄は会話 A の画面にも在るので、見つかっても切り替えの描画が済んだとは限らない
+    // （CI の混んだ器で、A の失敗がまだ残って見えて落ちた）。消えるのを待つ。
+    await waitFor(() => {
+      expect(screen.queryByText(ERROR_MESSAGE)).toBeNull();
+    });
 
     await router.navigate(`/chat/${CONVERSATION_A}`);
     expect(await screen.findByText(ERROR_MESSAGE)).toBeTruthy();
