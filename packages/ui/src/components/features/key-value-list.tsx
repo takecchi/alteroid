@@ -16,7 +16,8 @@ export interface KeyValueItem {
  *
  * 広い画面では名前の列を `labelWidth` で固定して2列に、狭い画面では1列に
  * 積む（名前の下に値）。**値は折り返す** — パスや識別子は空白を持たないので、
- * `break-all` を付けないと枠を突き破る。
+ * 等幅（`mono`）の値には `break-all` を当てる。それ以外（文・日時）は `break-words` で、
+ * 語で折り返す（`break-all` を全部に当てると、幅が足りていても語の途中で折れる）。
  *
  * **狭い画面（1列に積むとき）は、先頭以外の名前に上の余白を足して組の境目を作る**
  * （本4-A。理由は `apps/web/app/routes/manager-detail.test.tsx` の
@@ -51,7 +52,12 @@ export function KeyValueList({
           >
             {item.label}
           </dt>
-          <dd className={cn('min-w-0 break-all', item.mono === true && 'font-mono text-xs')}>
+          <dd
+            className={cn(
+              'min-w-0',
+              item.mono === true ? 'font-mono text-xs break-all' : 'break-words',
+            )}
+          >
             {item.value}
           </dd>
         </div>

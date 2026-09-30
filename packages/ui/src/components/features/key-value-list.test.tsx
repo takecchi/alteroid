@@ -34,4 +34,20 @@ describe('KeyValueList', () => {
       expect(cls.contains('sm:mt-0')).toBe(true);
     }
   });
+
+  it('dd の折り返し: mono の行は break-all、それ以外は break-words で break-all は無い', () => {
+    render(
+      <KeyValueList
+        items={[
+          { label: 'id', value: 'abcdef', mono: true },
+          { label: '時刻', value: '2026-09-30' },
+        ]}
+      />,
+    );
+    const mono = screen.getByText('abcdef').classList;
+    expect(mono.contains('break-all')).toBe(true);
+    const plain = screen.getByText('2026-09-30').classList;
+    expect(plain.contains('break-words')).toBe(true);
+    expect(plain.contains('break-all')).toBe(false);
+  });
 });
