@@ -149,7 +149,15 @@ function AuthedShell() {
   // SSE はここで1本だけ張る。下の画面はこれが回した無効化に相乗りする。
   const live = useJournalLive();
   const { data: approvals, error: approvalsError } = useApprovals(true);
-  const pending = approvals?.approvals.length ?? 0;
+  /**
+   * **形の違う応答（`approvals` が配列でない）は「0件」ではなく「読めていない」へ倒す。**
+   * デーモンと画面は別デプロイで版がずれうる。`approvals?.approvals.length` のままだと
+   * `TypeError` で外枠ごと落ち、`?.length ?? 0` で黙らせると読めていないのに0件（札無し）に
+   * 見える。`null` も読み込み中（`undefined`）とは別で、「読めていない」側へ倒す。
+   */
+  const approvalsList = Array.isArray(approvals?.approvals) ? approvals.approvals : undefined;
+  const approvalsMalformed = approvals !== undefined && approvalsList === undefined;
+  const pending = approvalsList?.length ?? 0;
   /**
    * 「読めていない」を「0件」と区別する（issue #2105）。`GET /approvals` が
    * 失敗しても、`useApprovals` を呼んでいるのがこの1箇所だけなのでナビの
@@ -169,7 +177,7 @@ function AuthedShell() {
    * 「読めていない」のどちらかへ必ず変わるので、その一瞬のためだけの見た目を
    * 足すと変化が多すぎて逆に読みにくくなる）。
    */
-  const approvalsUnavailable = approvalsError !== undefined;
+  const approvalsUnavailable = approvalsError !== undefined || approvalsMalformed;
 
   /*
    * 狭い画面では脇の面を畳む。**畳まないと本文が読めない** — 会話の画面は
