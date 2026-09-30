@@ -14153,6 +14153,22 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "そのマネージャーは台帳に在るが読めない形で入っている（版ずれ・手編集）。消されたのではない。評定は付けておらず、行も書き換えていない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
           }
         },
         "requestBody": {

@@ -1,8 +1,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr } from '@alteroid/core';
-import type { Job } from '@alteroid/core';
+import {
+  captureStderr,
+  createManagerPool,
+  createRunnerRegistry,
+  UnreadableJobError,
+} from '@alteroid/core';
+import type { Job, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import {
   createPgStoresFromDb,
@@ -19,38 +24,53 @@ import { makeTempDir } from '../../../vitest.tmpdir.js';
 
 /**
  * `JobStore.updateJob()` の、読めない（`jobSchema` に合わない）行に対する
- * 扱いの食い違い（issue #2051）。
+ * 扱い（issue #2051、および「読めない」を「無い」へ倒していた穴）。
  *
- * pg 実装（`PgJobStore.updateJob`）は `jobSchema.parse(row.job)` を使っていた
- * ため、版ずれ・手編集でできた不正な行を渡された `mutate` を1回も呼ばずに
- * `ZodError` を投げていた——同じ `PgJobStore` の `listJobs()`
- * （`jobSchema.safeParse` で飛ばす）とも、fs 実装の `FsJobStore.updateJob`
- * （検査を通った行からしか探さないので「無い」と同じ扱いになる）とも食い違って
- * いた。この歯は、fs（既存の直った挙動）と pg（この直しの対象）を並べて、
- * どちらも「読めない行は `null`。`mutate` は呼ばれない。行は書き換えない」を
- * 満たすことを確かめる。
+ * #2051（PR #2061）で pg 実装の `ZodError` を直したとき、読めない行を
+ * 「無い」と同じ `null` にそろえた。その結果、呼び出し元の
+ * `ManagerPool.appraise()` が「<id> というマネージャーは台帳に居ない。」と
+ * 言い切っていた（在るが読めないだけの行を「無い」と報告する）。今は
+ * `UnreadableJobError` を投げて「無い」（`null`）と分ける。
  *
- * **メモリ実装（`createMemoryStores`）はここに並べない。** `packages/core/
- * src/testing.ts` の `putJob` は既に `jobSchema.parse` を書き込み時に通す
- * （issue #1715）ので、そもそも壊れた行を保持できない——ここで確かめたい
- * 「既に壊れて保存されている行を読むとき」の状態を作れないため、対象は
- * fs / pg の2実装だけにしてある。
+ * この歯は fs / pg の2実装を並べて、どちらも「読めない行では
+ * `UnreadableJobError`。`mutate` は呼ばれない。行は1バイトも変わらない。
+ * stderr に id だけの跡が出る（本文は出ない）」を満たすこと、そして本当に
+ * 無い id は従来どおり `null` であることを確かめる。最後に `ManagerPool.
+ * appraise()` まで通して、応答が「台帳に居ない」と言わないことを確かめる。
+ *
+ * **メモリ実装（`createMemoryStores`）はここに並べない。** `putJob` が既に
+ * `jobSchema.parse` を書き込み時に通す（issue #1715）ので、壊れた行を保持
+ * できない——確かめたい「既に壊れて保存されている行」の状態を作れない。
  */
-describe('JobStore.updateJob() — 読めない job 行の扱い（issue #2051）', () => {
-  // status が jobStatusSchema に無い値——版ずれ（新しいデーモンが先に書いた
-  // status を、古いデーモンがまだ知らない）・手編集を模す
-  // （`packages/storage-fs/src/jobs-malformed-row-repro.test.ts` の
-  // `BAD_JOB_RAW` と同じ形）。
-  const BAD_JOB_RAW = {
-    id: 'mgr-bad',
-    createdAt: '2026-09-02T00:00:00.000Z',
-    updatedAt: '2026-09-02T00:00:00.000Z',
-    status: 'not-a-real-status-from-a-newer-deploy',
-    summary: '壊れた job の本文（この文字列は跡に出てはいけない）',
-  };
 
+// status が jobStatusSchema に無い値——版ずれ（新しいデーモンが先に書いた
+// status を、古いデーモンがまだ知らない）・手編集を模す
+// （`packages/storage-fs/src/jobs-malformed-row-repro.test.ts` の
+// `BAD_JOB_RAW` と同じ形）。
+const BAD_JOB_RAW = {
+  id: 'mgr-bad',
+  createdAt: '2026-09-02T00:00:00.000Z',
+  updatedAt: '2026-09-02T00:00:00.000Z',
+  status: 'not-a-real-status-from-a-newer-deploy',
+  summary: '壊れた job の本文（この文字列は跡に出てはいけない）',
+};
+
+const NOW = '2026-09-03T00:00:00.000Z';
+
+/** 評定を書こうとして、応答が何と言うかを測る。 */
+async function appraiseThrough(stores: Stores, id: string) {
+  const pool = createManagerPool({
+    stores,
+    post: () => {},
+    runners: createRunnerRegistry([]),
+    now: () => Date.parse(NOW),
+  });
+  return pool.appraise(id, 'good', 'human');
+}
+
+describe('JobStore.updateJob() — 読めない job 行の扱い', () => {
   describe('fs 実装', () => {
-    it('updateJob() は読めない行を null として扱う。mutate は呼ばれず、行は書き換えられない', async () => {
+    async function seed() {
       const root = await makeTempDir('alteroid-test-');
       const dir = join(root, 'jobs');
       const jobsPath = join(dir, 'jobs.json');
@@ -59,23 +79,73 @@ describe('JobStore.updateJob() — 読めない job 行の扱い（issue #2051�
         jobsPath,
         `${JSON.stringify({ jobs: [BAD_JOB_RAW], approvals: [] }, null, 2)}\n`,
       );
+      return { root, jobsPath, stores: createFsStores(root) };
+    }
 
-      const stores = createFsStores(root);
+    it('updateJob() は読めない行で UnreadableJobError を投げる。mutate は呼ばれず、行は1バイトも変わらず、跡は id だけ', async () => {
+      const { jobsPath, stores } = await seed();
+      const before = await readFile(jobsPath, 'utf8');
+
       let called = false;
-      let result: Job | null = null;
-      await captureStderr(async () => {
-        result = await stores.jobs.updateJob(BAD_JOB_RAW.id, (current) => {
-          called = true;
-          return current;
-        });
+      let thrown: unknown;
+      const lines = await captureStderr(async () => {
+        try {
+          await stores.jobs.updateJob(BAD_JOB_RAW.id, (current) => {
+            called = true;
+            return current;
+          });
+        } catch (error) {
+          thrown = error;
+        }
       });
 
-      expect(result).toBeNull();
+      expect(thrown).toBeInstanceOf(UnreadableJobError);
+      expect((thrown as UnreadableJobError).id).toBe(BAD_JOB_RAW.id);
+      expect((thrown as UnreadableJobError).message).not.toContain(BAD_JOB_RAW.summary);
       expect(called).toBe(false);
 
-      const raw = JSON.parse(await readFile(jobsPath, 'utf8')) as { jobs: unknown[] };
-      // 行は元の形のまま——書き換えられず、消えてもいない。
-      expect(raw.jobs).toEqual([BAD_JOB_RAW]);
+      // 跡: id は出るが本文（summary）は絶対に出ない（pg 側と対称）。
+      const joined = lines.join('');
+      expect(joined).toContain(BAD_JOB_RAW.id);
+      expect(joined).not.toContain(BAD_JOB_RAW.summary);
+
+      // 行は元のバイト列のまま——書き換えられず、消えてもいない。
+      expect(await readFile(jobsPath, 'utf8')).toBe(before);
+    });
+
+    it('本当に無い id は従来どおり null（読めない行と混ざらない）', async () => {
+      const { stores } = await seed();
+      let result: Job | null | undefined;
+      await captureStderr(async () => {
+        result = await stores.jobs.updateJob('mgr-nowhere', (current) => current);
+      });
+      expect(result).toBeNull();
+    });
+
+    it('ManagerPool.appraise() は読めない行を「台帳に居ない」と言わない。行は1バイトも変わらない', async () => {
+      const { jobsPath, stores } = await seed();
+      const before = await readFile(jobsPath, 'utf8');
+
+      let result: Awaited<ReturnType<typeof appraiseThrough>> | undefined;
+      await captureStderr(async () => {
+        result = await appraiseThrough(stores, BAD_JOB_RAW.id);
+      });
+
+      expect(result?.outcome).toBe('unreadable');
+      expect(result?.detail).not.toContain('台帳に居ない');
+      expect(result?.detail).toContain(BAD_JOB_RAW.id);
+      expect(result?.detail).not.toContain(BAD_JOB_RAW.summary);
+      expect(await readFile(jobsPath, 'utf8')).toBe(before);
+    });
+
+    it('ManagerPool.appraise() は本当に無い id を従来どおり absent と言う', async () => {
+      const { stores } = await seed();
+      let result: Awaited<ReturnType<typeof appraiseThrough>> | undefined;
+      await captureStderr(async () => {
+        result = await appraiseThrough(stores, 'mgr-nowhere');
+      });
+      expect(result?.outcome).toBe('absent');
+      expect(result?.detail).toContain('台帳に居ない');
     });
   });
 
@@ -88,7 +158,7 @@ describe('JobStore.updateJob() — 読めない job 行の扱い（issue #2051�
       await client.close();
     });
 
-    it('updateJob() は読めない行を null として扱う（直す前は ZodError を投げる）。mutate は呼ばれず、行は書き換えられない', async () => {
+    async function seed() {
       client = new PGlite();
       db = drizzle(client);
       await migrate(db);
@@ -103,13 +173,16 @@ describe('JobStore.updateJob() — 読めない job 行の扱い（issue #2051�
         updatedAt: new Date(BAD_JOB_RAW.updatedAt),
         job: BAD_JOB_RAW,
       });
+    }
+
+    it('updateJob() は読めない行で UnreadableJobError を投げる。mutate は呼ばれず、行は書き換えられず、跡は id だけ', async () => {
+      await seed();
 
       let called = false;
-      let result: Job | null = null;
       let thrown: unknown;
       const lines = await captureStderr(async () => {
         try {
-          result = await stores.jobs.updateJob(BAD_JOB_RAW.id, (current) => {
+          await stores.jobs.updateJob(BAD_JOB_RAW.id, (current) => {
             called = true;
             return current;
           });
@@ -118,8 +191,9 @@ describe('JobStore.updateJob() — 読めない job 行の扱い（issue #2051�
         }
       });
 
-      expect(thrown).toBeUndefined();
-      expect(result).toBeNull();
+      expect(thrown).toBeInstanceOf(UnreadableJobError);
+      expect((thrown as UnreadableJobError).id).toBe(BAD_JOB_RAW.id);
+      expect((thrown as UnreadableJobError).message).not.toContain(BAD_JOB_RAW.summary);
       expect(called).toBe(false);
 
       // 跡: id は出るが本文（summary）は絶対に出ない。
@@ -128,6 +202,29 @@ describe('JobStore.updateJob() — 読めない job 行の扱い（issue #2051�
       expect(joined).not.toContain(BAD_JOB_RAW.summary);
 
       // 行は書き換えられない。
+      const rows = await db.select().from(tables.jobs);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.job).toEqual(BAD_JOB_RAW);
+    });
+
+    it('本当に無い id は従来どおり null（読めない行と混ざらない）', async () => {
+      await seed();
+      const result = await stores.jobs.updateJob('mgr-nowhere', (current) => current);
+      expect(result).toBeNull();
+    });
+
+    it('ManagerPool.appraise() は読めない行を「台帳に居ない」と言わない。行は書き換えられない', async () => {
+      await seed();
+
+      let result: Awaited<ReturnType<typeof appraiseThrough>> | undefined;
+      await captureStderr(async () => {
+        result = await appraiseThrough(stores, BAD_JOB_RAW.id);
+      });
+
+      expect(result?.outcome).toBe('unreadable');
+      expect(result?.detail).not.toContain('台帳に居ない');
+      expect(result?.detail).toContain(BAD_JOB_RAW.id);
+      expect(result?.detail).not.toContain(BAD_JOB_RAW.summary);
       const rows = await db.select().from(tables.jobs);
       expect(rows).toHaveLength(1);
       expect(rows[0]?.job).toEqual(BAD_JOB_RAW);

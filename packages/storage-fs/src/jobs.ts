@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { jobSchema, pendingApprovalSchema } from '@alteroid/core';
+import { jobSchema, pendingApprovalSchema, UnreadableJobError } from '@alteroid/core';
 import type { Job, JobStore, PendingApproval } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -146,15 +146,23 @@ export class FsJobStore implements JobStore {
    * ために触ると、この変更の範囲が承認待ちキューの実装にまで広がってしまう。
    *
    * **`found` は検査を通った `jobs` からしか探さない。** id が壊れた行
-   * （`invalidJobsRaw`）にしか無ければ「無い」と同じ扱いになる——壊れた行は
-   * `mutate` に渡せる形をそもそも持たないので、これは正しい（`JobStore.updateJob`
-   * の「無ければ何もせず `null`」と同じ意味）。
+   * （`invalidJobsRaw`）にしか無ければ、`mutate` に渡せる形をそもそも持たない
+   * ので書かない——ただし **`null`（無い）とは分ける**。`UnreadableJobError` を
+   * 投げ、行は1バイトも変えない（ファイルを書き戻さない。`JobStore.updateJob`
+   * の doc）。「読めない」を「無い」へ倒すと、呼び出し元が「台帳に居ない」と
+   * 言い切ってしまう。跡は `#read()` が飛ばした行ごとに stderr へ残している
+   * （`describeSkippedJobRow`。id のみ）。
    */
   async updateJob(id: string, mutate: (current: Job) => Job): Promise<Job | null> {
     return withPathLock(this.#path, async () => {
       const file = await this.#read();
       const found = file.jobs.find((entry) => entry.id === id);
-      if (found === undefined) return null;
+      if (found === undefined) {
+        if (file.invalidJobsRaw.some((raw) => extractRowId(raw) === id)) {
+          throw new UnreadableJobError({ id });
+        }
+        return null;
+      }
       // 同期のまま最後まで書き換える（`mutate` に await を挟ませない——区間の
       // 外へ出ると排他の意味が崩れる。`CommitmentStore.open` の同じ注意）。
       const next = jobSchema.parse(mutate(found));
