@@ -130,7 +130,39 @@ function buildReason(shapeDescription: string): string {
  * 有界性そのものは変わらない。
  */
 function isTimeoutWrapped(trimmed: string): boolean {
-  return /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\b/.test(trimmed);
+  return (
+    /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*timeout\b/.test(trimmed) && isSingleSimpleCommand(trimmed)
+  );
+}
+
+/**
+ * 全体が1つの単純コマンドか（#2399）。`timeout 60 make; tail -f x` のように、先頭の `timeout` が
+ * 包むのは最初の単純コマンドだけなので、区切りの後ろを有界と読んではいけない。
+ *
+ * 引用符の外（`computeOutsideQuoteMask`）の `;` / `|`（`||` と `|&` も含む）/ 改行 /
+ * 単体の `&` と `&&` が、**後ろに中身を持つ**とき、複数の単純コマンドと読む。
+ * 末尾の区切り（`timeout 60 cmd &` / `;`）は、後ろに別のコマンドが無いので数えない。
+ * `>&` / `<&` / `&>` のリダイレクトの `&` は区切りではない。ヒアドキュメントの本体は
+ * 先に空白へ潰す（本体の改行と中身は、区切りでも別のコマンドでもない）。行の継続は先に外す。
+ * 走査は1回で、線形。
+ */
+function isSingleSimpleCommand(trimmed: string): boolean {
+  const command = stripHeredocs(joinLineContinuations(trimmed));
+  const mask = computeOutsideQuoteMask(command);
+  let lastContent = command.length - 1;
+  while (lastContent >= 0 && /[\s;&]/.test(command.charAt(lastContent))) lastContent -= 1;
+  for (let i = 0; i < lastContent; i++) {
+    if (!mask[i]) continue;
+    const ch = command[i];
+    if (ch === ';' || ch === '|' || ch === '\n') return false;
+    if (ch === '&') {
+      const prev = i > 0 ? command[i - 1] : '';
+      if (prev === '>' || prev === '<') continue;
+      if (command[i + 1] === '>') continue;
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
