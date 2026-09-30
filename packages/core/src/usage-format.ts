@@ -373,6 +373,65 @@ export function describeUnreadableUsage(totals: UsageTotals): string[] {
 }
 
 /**
+ * 集計で読めずに外した台帳の行（Issue #2427）。**本文（値）は持たない**——どの表の、
+ * どの日の行か（日が取れたときだけ）と、どの欄が読めなかったかの名前だけ。
+ *
+ * **`UsageTotals.unreadable`（上の `describeUnreadableUsage`）とは別物である。** あちらは
+ * 「読めた行の中で、SDK から値が取れなかった欄の数」で、値は行に 0 で入っている。
+ * こちらは「行そのものが読めず、合計に足していない」——足されていない値がある、という
+ * 断りであって、欄の数ではない。1つに畳むと、片方の意味（0 を書いた行 / 行が無い）が
+ * 消える。
+ *
+ * `table` は pg の表名で言う（fs の `rows` / `turns` も同じ意味の行）。
+ */
+export interface UnreadableUsageRow {
+  table: 'usage_daily' | 'usage_turns';
+  /** 行の日（`YYYY-MM-DD`）。読めた（暦に実在する）ときだけ。 */
+  date?: string;
+  /** 読めなかった欄の名前（値は含まない）。 */
+  fields: string[];
+}
+
+/** 日付を並べる上限（文が長くならないように。超えた分は「ほか N 日」と数で言う）。 */
+const UNREADABLE_USAGE_ROWS_DATE_LIMIT = 5;
+
+/**
+ * 集計で読めずに外した行が在ることを、合計に入っていないと言う1文にする（Issue #2427）。
+ *
+ * **0件・欄なしのときは空配列**——「読めない行は 0 行」という行を作らない
+ * （AGENTS.md 地雷表「取れない軸に0の行を作る」）。欄が無い（古いデーモンの応答）と
+ * 0 件は、どちらも何も言わない代わりに、`undefined` を件数として書かない
+ * （`undefined !== 0` が真になる #2382 の形を踏まない）。
+ *
+ * **外した行の値は足さない・推測もしない。** 文は「その分、合計は少ない」と言うだけで、
+ * 幾つ少ないかは言えない（読めないので）。
+ *
+ * **CLI・Web・`usage_read` が同じ文言をここから直接呼ぶ**（`describeUnreadableUsage` と同じ設計）。
+ */
+export function describeUnreadableUsageRows(
+  rows: readonly UnreadableUsageRow[] | undefined,
+): string[] {
+  if (rows === undefined || rows.length === 0) return [];
+  const daily = rows.filter((row) => row.table === 'usage_daily').length;
+  const turns = rows.filter((row) => row.table === 'usage_turns').length;
+  const breakdown = [
+    ...(daily > 0 ? [`消費量の行 ${daily} 行`] : []),
+    ...(turns > 0 ? [`回数の行 ${turns} 行`] : []),
+  ].join(' / ');
+  const dates = [
+    ...new Set(rows.flatMap((row) => (row.date === undefined ? [] : [row.date]))),
+  ].sort();
+  const shown = dates.slice(0, UNREADABLE_USAGE_ROWS_DATE_LIMIT).join(', ');
+  const rest = dates.length - UNREADABLE_USAGE_ROWS_DATE_LIMIT;
+  const datePart =
+    dates.length === 0 ? '' : `。日付: ${shown}${rest > 0 ? ` ほか ${rest} 日` : ''}`;
+  return [
+    `⚠ 読めない使用量の行が ${rows.length} 行あり、合計に入っていない` +
+      `（読めない行の値は足していない。合計はその分少ない。内訳: ${breakdown}${datePart}）。`,
+  ];
+}
+
+/**
  * 金額の表示（USD）。**$1 未満は 4 桁**まで出す。
  *
  * 委譲1本の費用はふつう $1 を大きく下回るので、2 桁に丸めると `$0.00` になって

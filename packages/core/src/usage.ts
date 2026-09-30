@@ -11,7 +11,11 @@ import {
   ZERO_USAGE,
   isRealUsageDate,
 } from './usage-format.js';
-import type { UsageUnreadableCounts, UsageUnreadableField } from './usage-format.js';
+import type {
+  UnreadableUsageRow,
+  UsageUnreadableCounts,
+  UsageUnreadableField,
+} from './usage-format.js';
 // `readSessionUsage` の締め切りに使う。**`usage-probe.ts` はこのファイルを
 // import していない**（SDK の型だけを型 import している）ので、循環しない。
 import { settleWithin } from './usage-probe.js';
@@ -83,6 +87,7 @@ export {
   addUnreadableCounts,
   describeAccountUsage,
   describeUnreadableUsage,
+  describeUnreadableUsageRows,
   describeUnrecordedManagers,
   describeUsageDateOrder,
   describeWebSearchRequests,
@@ -92,6 +97,7 @@ export {
   sumUsageRows,
   summarizeUsage,
   usageDate,
+  type UnreadableUsageRow,
   type UnrecordedManager,
   type UnrecordedManagerCandidate,
   type UsageUnreadableCounts,
@@ -896,6 +902,13 @@ export const usageQuerySchema = z.object({
 
 export type UsageQuery = z.infer<typeof usageQuerySchema>;
 
+/** 集計で読めずに外した行（Issue #2427）。型と意味は `usage-format.ts` の `UnreadableUsageRow`。 */
+export const unreadableUsageRowSchema = z.object({
+  table: z.enum(['usage_daily', 'usage_turns']),
+  date: usageDateSchema.optional(),
+  fields: z.array(z.string()),
+}) satisfies z.ZodType<UnreadableUsageRow>;
+
 /**
  * 集計の答え。
  *
@@ -973,6 +986,20 @@ export const usageAggregateSchema = z.object({
    * `before*` と同じ形——数字が無いことを「0回だった」に見せない。
    */
   beforeTurns: z.boolean(),
+  /**
+   * 集計で読めずに外した行（Issue #2427）。**1行でも外したときだけ載せる。0件なら
+   * 鍵ごと無い**（`ScheduleList.unreadable` / `GET /schedule` の `unreadable` と同じ形。
+   * 既存の応答は1文字も変わらない）。
+   *
+   * **欄が無いのは「外した行が無い」か「この版は数えていない」（古いデーモン）**——
+   * どちらも `describeUnreadableUsageRows` は何も言わず、`undefined` を件数として
+   * 書かない。**`UsageTotals.unreadable` とは別物**（あちらは読めた行の中の取れなかった
+   * 欄の数。`UnreadableUsageRow` の doc）。
+   *
+   * **本文（値）は載せない。** 表・日（取れたときだけ）・読めなかった欄の名前だけ。
+   * 外した行の値は `rows` にも合計にも足さない（読めないので、推測で補わない）。
+   */
+  unreadableRows: z.array(unreadableUsageRowSchema).optional(),
   /** 数字に必ず添える但し書き。 */
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });
