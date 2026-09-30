@@ -138,13 +138,13 @@ describe('restoredInboxEventVerdict は usageBlocked を受け取らない（門
  * Issue #1534 案1。`#removeStaleRedeliveryChunk`（`clone.ts`）が
  * `#redeliveredClosed.delete` に歯を持てないのは、**いまの判定の下では
  * stale の合図が `commitmentFor` 非 null（＝台帳に載る＝`#redeliveredClosed`
- * に載りうる）になることが無いから**である（`clone.test.ts` の
- * grep -Fn -- '`#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` には歯を' packages/core/src/clone.test.ts
+ * に載りうる）になることが無いから**である（`clone-summary-reindex-and-tail.test.ts` の
+ * grep -Fn -- '`#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` には歯を' packages/core/src/clone-summary-reindex-and-tail.test.ts
  * の注釈）。**その前提そのものを、判定の側（ここ）で固定する。**
  *
  * ⚠️ **この歯が赤くなったら**——`restoredInboxEventVerdict` が
  * `commitmentFor` 非 null の種別を `stale` と判定するよう変わった、
- * ということ。そのときは #1534 と上の `clone.test.ts` の注釈を読み、
+ * ということ。そのときは #1534 と上の `clone-summary-reindex-and-tail.test.ts` の注釈を読み、
  * `#removeStaleRedeliveryChunk` の `#redeliveredClosed.delete` に歯を
  * 足すこと（この歯はその歯の不在を正当化していた前提が崩れたと知らせる
  * だけで、崩れた後の穴そのものは塞がない）。
