@@ -6208,6 +6208,8 @@ describe('premise の焼き込み（カード）と、載せ直しの絞り込�
     // 4,000 文字の見出しが丸ごと断り書きへ出ることは無い。
     expect(rendered).not.toContain('長'.repeat(4_000));
     // 名指しのぶんは予算 ＋ 切った跡の合図ぶんに収まる。
+    // 見出しが消えると slice(-1) が末尾1文字になり、下の長さの上限は緑のまま残る。切り出す前に在ることを確かめる（#2431）。
+    expect(rendered).toContain('落ちた末尾のうち直近の節');
     const namedBlock = rendered.slice(rendered.indexOf('落ちた末尾のうち直近の節'));
     expect(namedBlock.length).toBeLessThan(MEMORY_PROMPT_OMITTED_TAIL_BUDGET * 4);
   });

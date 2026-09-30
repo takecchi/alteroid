@@ -425,6 +425,89 @@ describe('renderUsage はアカウント全体の残りも出す', () => {
 });
 
 /**
+ * 集計で読めずに外した行（`describeUnreadableUsageRows`。Issue #2427）。
+ *
+ * 文言そのものは core が1箇所で持つ。ここで測るのは「合計の隣に繋がっているか」「記録が
+ * 無いだけの出力で終わらないか」「欄の無い古いデーモンの応答で `undefined` を書かず、
+ * 0 件とも言わないか」（#2382 と同じ作法）と、「無ければ1文字も増やさないこと」。
+ */
+describe('renderUsage / usageCommand の読めずに外した行（unreadableRows）', () => {
+  const UNREADABLE = [
+    { table: 'usage_daily' as const, date: '2026-08-13', fields: ['layer'] },
+    { table: 'usage_turns' as const, date: '2026-08-13', fields: ['layer'] },
+  ];
+  const SENTENCE = '読めない使用量の行が 2 行あり、合計に入っていない';
+
+  it('在れば、合計の隣で「合計に入っていない」と言う', () => {
+    const text = renderUsage(
+      aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        unreadableRows: UNREADABLE,
+      }),
+    );
+
+    expect(text).toContain(SENTENCE);
+    expect(text).toContain('日付: 2026-08-13');
+    expect(text.indexOf('合計 $1.00')).toBeLessThan(text.indexOf(SENTENCE));
+    expect(text.indexOf(SENTENCE)).toBeLessThan(text.indexOf('日別:'));
+  });
+
+  it('読めた行が0件でも、「その範囲には記録が無い」だけで終わらない', () => {
+    const text = renderUsage(aggregate({ rows: [], unreadableRows: UNREADABLE }));
+
+    expect(text).toContain('その範囲には記録が無い');
+    expect(text).toContain(SENTENCE);
+  });
+
+  it('台帳の始点が無い（since が null）ときも言う', () => {
+    const text = renderUsage(aggregate({ rows: [], since: null, unreadableRows: UNREADABLE }));
+
+    expect(text).toContain(SENTENCE);
+  });
+
+  it('対照: 欄が無い・空配列なら、何も言わない（0 とも undefined とも書かない）', () => {
+    const base = { rows: [row({ managerId: 'm1', costUsd: 1 })] };
+    const without = renderUsage(aggregate(base));
+    const empty = renderUsage(aggregate({ ...base, unreadableRows: [] }));
+
+    expect(without).not.toContain('読めない使用量');
+    expect(without).not.toContain('undefined');
+    expect(empty).toBe(without);
+  });
+
+  it('usageCommand: 欄の無い古いデーモンの応答でも「undefined」を書かず、何も言わない', async () => {
+    // 応答は型で検査されない（`response.json()` をそのまま渡す）。欄が無いまま届く。
+    replies.push({
+      status: 200,
+      body: aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })] }),
+    });
+    const read = captureStdout();
+
+    await usageCommand({});
+
+    const text = read();
+    expect(text).toContain('合計 $1.00');
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('読めない使用量');
+  });
+
+  it('usageCommand: 欄が在る応答は、端末へ書く文にも載る', async () => {
+    replies.push({
+      status: 200,
+      body: aggregate({
+        rows: [row({ managerId: 'm1', costUsd: 1 })],
+        unreadableRows: UNREADABLE,
+      }),
+    });
+    const read = captureStdout();
+
+    await usageCommand({});
+
+    expect(read()).toContain(SENTENCE);
+  });
+});
+
+/**
  * #361: 「書く側」— `renderUsage` が正しい文字列を作っても、`usageCommand` が
  * それを書かない・別のものを書く・書く先を間違えれば、上の `renderUsage` の
  * テストは全部緑のまま通る。ここではその経路自体を測る。

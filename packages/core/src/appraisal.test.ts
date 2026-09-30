@@ -94,6 +94,8 @@ describe('describeAppraisalTargets — 評定を台帳・委譲の2節に束ね�
       jobs: [],
     });
 
+    // 見出しが消えると indexOf が -1 になり、slice(0, -1) がほぼ全文になる。切り出す前に在ることを確かめる（#2431）。
+    expect(reply).toContain('## 委譲');
     const section = reply.slice(0, reply.indexOf('## 委譲'));
     const order = ['bad-new', 'bad-old', 'unclear-1', 'other', 'good-new', 'good-old'];
     const positions = order.map((id) => section.indexOf(id));
@@ -195,6 +197,8 @@ describe('describeAppraisalTargets — 評定を台帳・委譲の2節に束ね�
     });
     expect(zeroBad).toContain('「うまくいかなかった」が0件である');
     // 委譲の節は評定済みが0件 ⟹ そちらには出ない。
+    // 見出しが消えると slice(-1) が末尾1文字になり、下の not.toContain が空振りする。切り出す前に在ることを確かめる（#2431）。
+    expect(zeroBad).toContain('## 委譲');
     const jobSection = zeroBad.slice(zeroBad.indexOf('## 委譲'));
     expect(jobSection).not.toContain('「うまくいかなかった」が0件である');
 
@@ -256,6 +260,8 @@ describe('describeAppraisalTargets — 仕事の種類ごとの内訳（#1308 �
       ]),
       jobs: [],
     });
+    // 見出しが消えると slice(0, -1) がほぼ全文になる。切り出す前に在ることを確かめる（#2431）。
+    expect(reply).toContain('## 委譲');
     const section = reply.slice(0, reply.indexOf('## 委譲'));
     // 表記ゆれ（末尾の空白）は束ねる側で寄せる —— 実装は2件で1群。
     expect(section).toContain(
@@ -274,6 +280,8 @@ describe('describeAppraisalTargets — 仕事の種類ごとの内訳（#1308 �
       commitments: commitmentList([commitment('c-1', { appraisal: 'good', appraisedAt: T1 })]),
       jobs: [job('j-1')],
     });
+    // 見出しが消えると slice(-1) が末尾1文字になり、下の not.toContain が空振りする。切り出す前に在ることを確かめる（#2431）。
+    expect(reply).toContain('## 委譲');
     const jobSection = reply.slice(reply.indexOf('## 委譲'));
     expect(jobSection).not.toContain('種類ごと');
   });

@@ -78,6 +78,8 @@ function renderDashboard(
     // デーモンの暦の今日（`GET /usage` の `today`）。既定は行の日付と同じ 2026-08-14。
     // `null` は「応答に `today` が無い」（古いデーモン）。
     today?: string | null;
+    // 集計で読めずに外した行（#2427）。渡さなければ鍵ごと無い（0件・古いデーモンと同じ）。
+    unreadableRows?: unknown[];
   },
   live: JournalLive = EMPTY_FEED,
   // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
@@ -812,5 +814,55 @@ describe('日誌は AuthedShell の購読から受け取る', () => {
 
     await screen.findByText(summarizeJournalEntry(RECENT));
     expect(await screen.findByText(/残り 969 件は出していない/)).toBeTruthy();
+  });
+});
+
+/**
+ * **「今日の利用」カードが、集計で読めずに外した行を「合計に入っていない」と言う（#2427）。**
+ * カードの数字は今日1日なので、窓（前後2日）の中から、今日の行と日の取れない行だけを言う。
+ * 0件・欄なし（古いデーモン）のときは何も出さない。
+ */
+describe('「今日の利用」カードの読めずに外した行（#2427）', () => {
+  const USAGE = { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false };
+  const TODAY = '2026-08-14';
+
+  it('今日の行が読めずに外れていれば、合計に入っていないと言う', async () => {
+    renderDashboard({
+      ...USAGE,
+      unreadableRows: [{ table: 'usage_daily', date: TODAY, fields: ['layer'] }],
+    });
+
+    const note = await screen.findByText(/読めない使用量の行が 1 行あり、合計に入っていない/);
+    expect(note.textContent).toContain(`日付: ${TODAY}`);
+  });
+
+  it('今日ではない日の行は、このカードでは言わない', async () => {
+    renderDashboard({
+      ...USAGE,
+      unreadableRows: [{ table: 'usage_daily', date: '2026-08-13', fields: ['layer'] }],
+    });
+
+    await screen.findByText('$0.0000');
+    expect(screen.queryByText(/読めない使用量/)).toBeNull();
+  });
+
+  it('日が取れない行は、今日ではないと言い切れないので言う', async () => {
+    renderDashboard({
+      ...USAGE,
+      unreadableRows: [{ table: 'usage_turns', fields: ['layer'] }],
+    });
+
+    expect(await screen.findByText(/読めない使用量の行が 1 行あり/)).toBeTruthy();
+  });
+
+  it('対照: 欄が無い・空配列なら、何も出さない', async () => {
+    renderDashboard(USAGE);
+    await screen.findByText('$0.0000');
+    expect(screen.queryByText(/読めない使用量/)).toBeNull();
+    cleanup();
+
+    renderDashboard({ ...USAGE, unreadableRows: [] });
+    await screen.findByText('$0.0000');
+    expect(screen.queryByText(/読めない使用量/)).toBeNull();
   });
 });

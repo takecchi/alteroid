@@ -850,6 +850,7 @@ export {
   createProfileVessel,
   evaluateProfile,
   normalizeProfileScript,
+  redactProfileFailure,
   renderProfileFile,
   type EvaluateProfileOptions,
   type ProfileApplier,

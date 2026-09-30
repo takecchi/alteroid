@@ -1,5 +1,9 @@
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+
+import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import {
   clearRecentTracesForTesting,
@@ -26,6 +30,8 @@ import { CLONE_ACTOR_ID } from './usage.js';
 import { STALE_TOKEN_RECOVERY_CAVEAT } from './usage-limits.js';
 import { measureMemoryFloor, renderMemoryDocuments, scanMemorySections } from './memory.js';
 import { createProfileService } from './profile-service.js';
+import { createProfileApplier, createProfileVessel } from './profile.js';
+import type { ProfileApplier } from './profile.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
   COMMITMENT_APPRAISAL_DECISION_PREFIX,
@@ -1693,6 +1699,101 @@ describe('クローンの道具', () => {
     const body = await h.call('profile_read', {});
 
     expect(body).toContain('export A=1');
+  });
+
+  /**
+   * issue #2429。`profile_write` の戻りはクローンの文脈に入る。評価の失敗の文は
+   * シェルの stderr（構文エラーは入力の行を引用し、`set -x` は値ごと吐く）を含むので、
+   * 伏せずに戻すと鍵の値がクローンの文脈へ入る。偽の値だけを使い、実物の /bin/sh に吐かせる。
+   */
+  describe('評価の失敗の戻りに、シェルの stderr の鍵の値を載せない（issue #2429）', () => {
+    const FAKE = 'FAKE_SECRET_VALUE_2429';
+
+    function writeToolWith(applier: ProfileApplier, stores: Stores) {
+      const tools = createCloneTools({
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+        stores,
+        emit: () => undefined,
+        profile: createProfileService({ stores, applier }),
+      });
+      const write = tools.find((entry) => entry.name === 'profile_write');
+      return async (script: string) => {
+        const result = await write?.handler({ script, summary: '2429' } as never, {});
+        return (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+      };
+    }
+
+    function realApplier(): ProfileApplier {
+      const path = join(makeTempDirSync('alteroid-profile-2429-'), 'profile.sh');
+      return createProfileApplier({
+        vessel: createProfileVessel({ path }),
+        baseEnv: () => ({ PATH: process.env.PATH }),
+      });
+    }
+
+    it('実物のシェル: 構文エラーの引用の値は出ず、診断の文は残る', async () => {
+      const call = writeToolWith(realApplier(), createMemoryStores());
+
+      const body = await call(`export OK=1\nexport GH_TOKEN=${FAKE} )\n`);
+
+      expect(body).toContain('実行環境プロファイルを置けなかった');
+      expect(body).not.toContain(FAKE);
+      expect(body).toMatch(/syntax error|unexpected/i);
+    });
+
+    it('実物のシェル: set -x の "+ export NAME=値" の値は出ない', async () => {
+      const call = writeToolWith(realApplier(), createMemoryStores());
+
+      const body = await call(`set -x\nexport GH_TOKEN=${FAKE}\nexit 3\n`);
+
+      expect(body).toContain('実行環境プロファイルを置けなかった');
+      expect(body).not.toContain(FAKE);
+      expect(body).toContain('export GH_TOKEN=');
+    });
+
+    it('出口: 器が伏せずに返した文でも、環境変数の網で伏せ、長さを切る', async () => {
+      vi.stubEnv('DEPLOY_API_TOKEN', FAKE);
+      try {
+        const applier: ProfileApplier = {
+          vessel: {} as never,
+          fingerprint: () => undefined,
+          env: () => ({}),
+          async apply() {
+            throw new Error('この検証では使わない');
+          },
+          async prepare() {
+            return {
+              ok: false,
+              error: '評価が失敗した',
+              output: `${'x'.repeat(10)} ${FAKE} ${'y'.repeat(3_987)}`,
+              commit: async () => undefined,
+              discard: async () => undefined,
+            };
+          },
+        };
+        const call = writeToolWith(applier, createMemoryStores());
+
+        const body = await call('export A=1');
+
+        expect(body).not.toContain(FAKE);
+        expect(body).not.toContain('_2429');
+        expect(body.length).toBeLessThan(4_200);
+        expect(body).toContain('評価が失敗した');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('対照: 成功したときは今までどおり「更新した」を返す', async () => {
+      const stores = createMemoryStores();
+      const call = writeToolWith(realApplier(), stores);
+
+      const body = await call('export OK_2429=1\n');
+
+      expect(body).toContain('更新した');
+      expect((await stores.profile.read())?.script).toContain('OK_2429');
+    });
   });
 
   /**
@@ -10984,6 +11085,63 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).not.toContain('undefined');
     expect(reply).not.toContain('pids: 0');
     expect(reply).not.toContain('pids: unknown');
+  });
+
+  /**
+   * Issue #2426 — 「訊けなかった」の中を、繋がっていない（unheard）／訊いて失敗した
+   * （failed。理由つき）／口を持たない古い runner（unsupported）で別の文言にする。
+   * 対照として、取れた器は今までどおり pids を出す。
+   */
+  it('pids が出ない理由を、繋がっていない・失敗した・古い runner で別の文言にし、失敗は理由を載せる', async () => {
+    const base = {
+      revision: { status: 'unheard' as const },
+      since: '2026-01-01T00:00:00.000Z',
+      managers: [],
+    };
+    const h = harness();
+    h.setRunnersOverview({
+      runners: [
+        {
+          ...base,
+          label: 'runner-a',
+          state: 'unreachable',
+          resourcesProbe: { status: 'unheard' },
+        },
+        {
+          ...base,
+          label: 'runner-b',
+          state: 'connected',
+          runnerId: 'runner-b',
+          resourcesProbe: { status: 'failed', error: 'Error: resources RPC failed (test)' },
+        },
+        {
+          ...base,
+          label: 'runner-c',
+          state: 'connected',
+          runnerId: 'runner-c',
+          resourcesProbe: { status: 'unsupported' },
+        },
+        {
+          ...base,
+          label: 'runner-d',
+          state: 'connected',
+          runnerId: 'runner-d',
+          resources: { pids: { current: 12, max: 100 } },
+          resourcesProbe: { status: 'asked' },
+        },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', { resources: true });
+
+    expect(reply).toContain('pids: 確かめていない（繋がっていないので聞いていない）');
+    expect(reply).toContain('pids: 訊いたが失敗した: Error: resources RPC failed (test)');
+    expect(reply).toContain('pids: 確かめられない（この runner は口を持たない。古い版）');
+    expect(reply).toContain('pids: 12 / 100');
+    // 旧来の1文（3つを潰した文言）は、probe が在れば出ない。
+    expect(reply).not.toContain('器が開いていない、または応答が無い');
   });
 
   /**

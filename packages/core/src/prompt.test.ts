@@ -390,6 +390,8 @@ describe('バックグラウンドの完了を待つときの事実の告知（#
     // 数字が含まれているので、そこは対象にしない。**今回足した節だけ**を
     // 切り出して見る（節の見出しは新設したものなので、これより後ろが対象）。
     const manager = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    // 見出しが消えると slice(-1) が末尾1文字になり、下の not.toMatch は空振りする。切り出す前に在ることを確かめる（#2431）。
+    expect(manager).toContain('# バックグラウンドの完了を待つとき');
     const addedSection = manager.slice(manager.indexOf('# バックグラウンドの完了を待つとき'));
     expect(addedSection).not.toMatch(/\d+\s*(回|体)/);
 
@@ -865,6 +867,8 @@ describe('auto-memory についての事実の告知（#1189）', () => {
     for (const prompt of [manager, worker]) {
       // auto-memory の節だけを切り出して調べる（他の節に「しないこと」が
       // 含まれていても、ここでは見たくない）。
+      // 目印が消えると slice(-1) が末尾1文字になり、下の not.toContain は空振りする。切り出す前に在ることを確かめる（#2431）。
+      expect(prompt).toContain('auto-memory');
       const section = prompt.slice(prompt.indexOf('auto-memory'));
       expect(section).not.toContain('禁止');
       expect(section).not.toContain('しないこと');

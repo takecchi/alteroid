@@ -6,6 +6,7 @@ import {
   addUnreadableCounts,
   foldOneshotUsage,
   foldUsageSnapshot,
+  isRealUsageDate,
   usageAggregateSchema,
   usageBaselineSchema,
   usageDate,
@@ -15,6 +16,7 @@ import {
   usageTurnRowSchema,
 } from '@alteroid/core';
 import type {
+  UnreadableUsageRow,
   UsageAccumulation,
   UsageAggregate,
   UsageBaseline,
@@ -138,9 +140,14 @@ function splitRecord<T>(
   label: 'rows' | 'baselines' | 'turns',
   raw: Record<string, unknown>,
   schema: z.ZodType<T>,
-): { valid: Record<string, T>; invalid: Record<string, unknown> } {
+): {
+  valid: Record<string, T>;
+  invalid: Record<string, unknown>;
+  unreadable: UnreadableEntry[];
+} {
   const valid: Record<string, T> = {};
   const invalid: Record<string, unknown> = {};
+  const unreadable: UnreadableEntry[] = [];
   for (const [key, value] of Object.entries(raw)) {
     const result = schema.safeParse(value);
     if (result.success) {
@@ -156,11 +163,72 @@ function splitRecord<T>(
         ),
       ),
     ];
+    unreadable.push({ raw: value, fields });
     process.stderr.write(
       `alteroid: 使用量台帳の不正なエントリを読み飛ばしました（${label}、鍵=${JSON.stringify(key)}、不正な欄: ${fields.join(',') || '(不明)'}）\n`,
     );
   }
-  return { valid, invalid };
+  return { valid, invalid, unreadable };
+}
+
+/**
+ * 読めずに外したエントリ（生の値と、読めなかった欄の名前）。**`aggregate` が出力へ運ぶ**
+ * （Issue #2427。stderr の跡だけでは、集計を読む側に外した行が見えない）。生の値は
+ * 絞り込みの判定にだけ使い、出力には日付（暦に実在するとき）以外を載せない。
+ */
+interface UnreadableEntry {
+  raw: unknown;
+  fields: string[];
+}
+
+interface UnreadableUsageEntries {
+  rows: UnreadableEntry[];
+  turns: UnreadableEntry[];
+}
+
+const NO_UNREADABLE: UnreadableUsageEntries = { rows: [], turns: [] };
+
+/**
+ * 外したエントリのうち、照会の絞り込みに掛かるものを `UnreadableUsageRow` にする。
+ *
+ * **読めた欄だけで絞る。** 生の値の該当欄が文字列のときだけ照会と比べ、違えば外す（範囲外の
+ * 行を「合計に入っていない」と言わない）。欄が読めない・無いときは、範囲外と言い切れない
+ * ので残す（黙って落とさない）。layer が enum に無い行は、`layer` の絞りを掛けると外れる
+ * （pg が `eq(layer)` で引いて外すのと揃う）。
+ */
+function toUnreadableRows(
+  table: 'usage_daily' | 'usage_turns',
+  entries: readonly UnreadableEntry[],
+  query: UsageQuery,
+): UnreadableUsageRow[] {
+  const out: UnreadableUsageRow[] = [];
+  for (const { raw, fields } of entries) {
+    const record =
+      typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : undefined;
+    const str = (name: string): string | undefined => {
+      const value = record?.[name];
+      return typeof value === 'string' ? value : undefined;
+    };
+    const date = str('date');
+    if (date !== undefined) {
+      if (query.from !== undefined && date < query.from) continue;
+      if (query.to !== undefined && date > query.to) continue;
+    }
+    const differs = (name: string, wanted: string | undefined): boolean => {
+      const value = str(name);
+      return wanted !== undefined && value !== undefined && value !== wanted;
+    };
+    if (differs('managerId', query.managerId)) continue;
+    if (differs('layer', query.layer)) continue;
+    if (differs('site', query.site)) continue;
+    if (differs('tokenId', query.tokenId)) continue;
+    out.push({
+      table,
+      ...(date !== undefined && isRealUsageDate(date) ? { date } : {}),
+      fields,
+    });
+  }
+  return out;
 }
 
 /** 書き戻す直前に、壊れたエントリを戻す。**同じ鍵に新しい値を書いたときは、そちらで置き換える。** */
@@ -479,7 +547,7 @@ export class FsUsageStore implements UsageStore {
   }
 
   async aggregate(query: UsageQuery): Promise<UsageAggregate> {
-    const file = await this.#read();
+    const { file, unreadable } = await this.#readAll();
     const rows = Object.values(file.rows)
       .filter((row) => {
         if (query.from !== undefined && row.date < query.from) return false;
@@ -521,8 +589,15 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
+    // **読めずに外した行は、出力へ運ぶ**（Issue #2427）。無ければ鍵ごと出さない。
+    const unreadableRows = [
+      ...toUnreadableRows('usage_daily', unreadable.rows, query),
+      ...toUnreadableRows('usage_turns', unreadable.turns, query),
+    ];
+
     return usageAggregateSchema.parse({
       rows,
+      ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
       since: file.startedAt,
       layersSince: file.layeredAt,
       tokensSince: file.tokensAt,
@@ -587,14 +662,18 @@ export class FsUsageStore implements UsageStore {
    * 読めない・トップレベルの形が違う（`startedAt` 等が壊れている）ときは、今までどおり
    * 例外にする（1エントリの問題ではないため。`jobs.ts` と同じ線）。
    */
-  async #readAll(): Promise<{ file: UsageFile; invalid: InvalidUsageEntries }> {
+  async #readAll(): Promise<{
+    file: UsageFile;
+    invalid: InvalidUsageEntries;
+    unreadable: UnreadableUsageEntries;
+  }> {
     let top: z.infer<typeof fileSchema>;
     try {
       const raw = await readFile(this.#path, 'utf8');
       top = fileSchema.parse(JSON.parse(raw));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return { file: EMPTY, invalid: NO_INVALID };
+        return { file: EMPTY, invalid: NO_INVALID, unreadable: NO_UNREADABLE };
       throw error;
     }
     const rows = splitRecord('rows', top.rows, storedRowSchema);
@@ -608,6 +687,8 @@ export class FsUsageStore implements UsageStore {
         turns: turns.valid,
       }),
       invalid: { rows: rows.invalid, baselines: baselines.invalid, turns: turns.invalid },
+      // 基準（baselines）は集計の合計に入らないので、ここには載せない。
+      unreadable: { rows: rows.unreadable, turns: turns.unreadable },
     };
   }
 

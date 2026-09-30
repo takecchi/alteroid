@@ -2,11 +2,13 @@ import {
   USAGE_ESTIMATE_NOTICE,
   foldOneshotUsage,
   foldUsageSnapshot,
+  isRealUsageDate,
   usageDate,
   usageLayerSchema,
   usageSiteSchema,
 } from '@alteroid/core';
 import type {
+  UnreadableUsageRow,
   UsageAccumulation,
   UsageAggregate,
   UsageBaseline,
@@ -482,16 +484,31 @@ export class PgUsageStore implements UsageStore {
     const turnsSince =
       ledger === undefined || ledger.turnsAt === null ? null : toIso(ledger.turnsAt);
 
+    // **読めない行（layer / site が enum に無い）は外す**（issue #1996。`#toRow` の doc）。
+    // 外した行は stderr の跡だけで終わらせず、出力へ運ぶ（Issue #2427）。
+    const unreadableRows: UnreadableUsageRow[] = [];
+    const readableRows = rows.flatMap((row) => {
+      const read = this.#toRow(row);
+      if (read === undefined) unreadableRows.push(unreadableUsageRowOf('usage_daily', row));
+      return read ?? [];
+    });
+    const readableTurnRows = turnRows.flatMap((row) => {
+      const read = this.#toTurnRow(row);
+      if (read === undefined) unreadableRows.push(unreadableUsageRowOf('usage_turns', row));
+      return read ?? [];
+    });
+
     return {
-      // **読めない行（layer / site が enum に無い）は外す**（issue #1996。`#toRow` の doc）。
-      rows: rows.flatMap((row) => this.#toRow(row) ?? []),
+      rows: readableRows,
+      // 0件なら鍵ごと出さない（既存の応答を変えない）。
+      ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
       since,
       layersSince,
       tokensSince,
       beforeLedger: isBeforeLedger(since, query.from),
       beforeLayers: isBeforeLayers(layersSince, query.from),
       beforeTokens: isBeforeTokens(tokensSince, query.from),
-      turnRows: turnRows.flatMap((row) => this.#toTurnRow(row) ?? []),
+      turnRows: readableTurnRows,
       turnsSince,
       beforeTurns: isBeforeTurns(turnsSince, query.from),
       notice: USAGE_ESTIMATE_NOTICE,
@@ -622,6 +639,22 @@ export class PgUsageStore implements UsageStore {
       lastResetAt: optionalIso(row.lastResetAt),
     };
   }
+}
+
+/**
+ * 集計から外した行を、出力へ運ぶ形にする（Issue #2427）。**値は載せない**——表・日（暦に
+ * 実在するときだけ）・読めなかった欄の名前だけ。`#toRow` / `#toTurnRow` が外す条件
+ * （layer / site が enum に無い）と揃える。
+ */
+function unreadableUsageRowOf(
+  table: 'usage_daily' | 'usage_turns',
+  row: { readonly date: string; readonly layer: string; readonly site: string },
+): UnreadableUsageRow {
+  const fields = [
+    ...(usageLayerSchema.safeParse(row.layer).success ? [] : ['layer']),
+    ...(usageSiteSchema.safeParse(row.site).success ? [] : ['site']),
+  ];
+  return { table, ...(isRealUsageDate(row.date) ? { date: row.date } : {}), fields };
 }
 
 /**

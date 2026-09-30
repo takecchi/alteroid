@@ -1,7 +1,9 @@
+import { AlertTriangle } from 'lucide-react';
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
   describeUnreadableUsage,
+  describeUnreadableUsageRows,
   describeUnrecordedManagers,
   describeUsageDateOrder,
   describeWebSearchRequests,
@@ -12,6 +14,7 @@ import {
   USAGE_DATE_PATTERN,
   USAGE_LAYERS,
   USAGE_SITES,
+  type UnreadableUsageRow,
 } from '@alteroid/core/usage';
 import type { ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
@@ -22,6 +25,7 @@ import {
   BarList,
   Card,
   CardHeader,
+  cn,
   Empty,
   ErrorNote,
   Input,
@@ -57,6 +61,37 @@ import type {
 
 /** 軸ごとの表示上限。**打ち切ったら必ずそう書く**（黙って切り捨てない）。 */
 const AXIS_LIMIT = 20;
+
+/**
+ * 集計で読めずに外した行が在ることを、合計の上で断る（Issue #2427。ダッシュボードの
+ * 「今日の利用」カードも使う）。**0件・欄なし（古いデーモン）なら描かない**——
+ * 「読めない行は 0 行」を作らない。
+ *
+ * **文言を画面で書き直さない。** `describeUnreadableUsageRows`（core）が出した行を
+ * そのまま並べる（CLI・`usage_read` と同じ言葉になる）。
+ */
+export function UnreadableUsageRowsNote({
+  rows,
+  className,
+}: {
+  rows: readonly UnreadableUsageRow[] | undefined;
+  className?: string;
+}) {
+  const lines = describeUnreadableUsageRows(rows);
+  if (lines.length === 0) return null;
+  return (
+    <div
+      role="status"
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
+        className,
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">{lines.join(' ')}</span>
+    </div>
+  );
+}
 
 /**
  * 絞り込みを載せる URL のクエリパラメタ名（issue #2050）。
@@ -362,6 +397,7 @@ export default function Usage() {
                   台帳にはまだ1件も記録が無い。（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）
                 </Empty>
               </Card>
+              <UnreadableUsageRowsNote rows={data.unreadableRows} />
               <UnrecordedManagersCard unrecordedManagers={data.unrecordedManagers} />
             </>
           ) : (
@@ -376,6 +412,7 @@ export default function Usage() {
               beforeTokens={data.beforeTokens}
               notice={data.notice}
               unrecordedManagers={data.unrecordedManagers}
+              unreadableRows={data.unreadableRows}
             />
           )}
         </div>
@@ -478,7 +515,9 @@ function UsageBody({
   beforeTokens,
   notice,
   unrecordedManagers,
+  unreadableRows,
 }: {
+  unreadableRows: readonly UnreadableUsageRow[] | undefined;
   rows: readonly UsageRow[];
   turnRows: readonly UsageTurnRow[];
   since: string;
@@ -496,6 +535,8 @@ function UsageBody({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* **合計の上に出す**（Issue #2427）。外した行の値は合計に足していない。 */}
+      <UnreadableUsageRowsNote rows={unreadableRows} />
       <Card>
         <CardHeader title="合計" subtitle={`台帳の始点: ${since}`} />
         <div className="px-4 py-3">

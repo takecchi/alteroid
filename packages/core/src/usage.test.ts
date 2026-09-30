@@ -5,6 +5,7 @@ import {
   CLONE_DISTILL_ACTOR_ID,
   CLONE_SUB_ACTOR_PREFIX,
   describeUnreadableUsage,
+  describeUnreadableUsageRows,
   isCloneActor,
   foldOneshotUsage,
   foldUsageSnapshot,
@@ -840,6 +841,40 @@ describe('取れなかった区切りの1行（describeUnreadableUsage。Issue #
     expect(lines[0]).toContain('入力 3回');
     expect(lines[0]).toContain('費用 1回');
     expect(lines[0]).not.toContain('出力');
+  });
+});
+
+describe('読めずに外した行の1文（describeUnreadableUsageRows。Issue #2427）', () => {
+  it('欄が無い（古いデーモン）・空配列なら空配列。「0 行」も「undefined 行」も作らない', () => {
+    expect(describeUnreadableUsageRows(undefined)).toEqual([]);
+    expect(describeUnreadableUsageRows([])).toEqual([]);
+  });
+
+  it('在れば、合計に入っていないと言い、内訳と日付を値なしで1文にする', () => {
+    expect(
+      describeUnreadableUsageRows([
+        { table: 'usage_daily', date: '2026-09-27', fields: ['layer'] },
+        { table: 'usage_turns', date: '2026-09-27', fields: ['layer'] },
+        { table: 'usage_daily', fields: ['site'] },
+      ]),
+    ).toEqual([
+      '⚠ 読めない使用量の行が 3 行あり、合計に入っていない' +
+        '（読めない行の値は足していない。合計はその分少ない。' +
+        '内訳: 消費量の行 2 行 / 回数の行 1 行。日付: 2026-09-27）。',
+    ]);
+  });
+
+  it('日付は上限で切り、切った分は数で言う', () => {
+    const rows = ['01', '02', '03', '04', '05', '06', '07'].map((day) => ({
+      table: 'usage_daily' as const,
+      date: `2026-09-${day}`,
+      fields: ['layer'],
+    }));
+    const [line] = describeUnreadableUsageRows(rows);
+    expect(line).toContain(
+      '日付: 2026-09-01, 2026-09-02, 2026-09-03, 2026-09-04, 2026-09-05 ほか 2 日',
+    );
+    expect(line).not.toContain('2026-09-06');
   });
 });
 

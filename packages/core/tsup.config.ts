@@ -117,6 +117,12 @@ export default defineConfig({
    *   した型と構造的に一致することは `schema.ts` の型レベルの検査
    *   （`_AssertUnpushedWorkObservationIncompletenessMatchesLikeType`）が
    *   保証する。
+   * - `redact.ts` — 応答の本文・例外の文を、伏せてから切って出す口
+   *   （issue #2418。`@alteroid/core/redact`）。**`packages/api-client` が
+   *   使う**——api-client は core を実行時の依存に持たず、Web の画面
+   *   （`packages/swr` 経由）も読むので、本体（Node の組み込みと SDK）を
+   *   引かない軽い口が要る。`process.env` は自分では読まない（`env` は
+   *   呼び出し側が渡す）。ファイルの doc を見よ。
    * - `journal-diagnostics-format.ts` — 日誌の4種（`worker_wait` /
    *   `turn_usage` / `context_usage` / `inbox_flow`）を1行の要約へ潰す表示
    *   （issue #2016。`@alteroid/core/journal-diagnostics-format`）。
@@ -142,6 +148,7 @@ export default defineConfig({
     'src/answered-via.ts',
     'src/trace-action.ts',
     'src/mask-url.ts',
+    'src/redact.ts',
     'src/manager-activity.ts',
     'src/job-status-running.ts',
     'src/cgroup-events-format.ts',

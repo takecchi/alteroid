@@ -287,3 +287,62 @@ describe('403（本文で理由を分ける）', () => {
     expect(message).not.toContain('access grant');
   });
 });
+
+/**
+ * 失敗の応答の `error` / `detail`（issue #2418）。`detail` はデーモンが評価した
+ * シェルの stderr で、bash は構文エラーで**入力の行そのもの**を引用する
+ * （`export GH_TOKEN=… )` → 「`export GH_TOKEN=…`」）。Error の message は画面に出るので、
+ * 伏せてから切る。値はすべて偽物。
+ */
+describe('失敗の応答（error / detail）を画面に出す前に伏せる', () => {
+  const FAKE_GHP = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+
+  async function failWith(body: unknown): Promise<string> {
+    setReply('GET', '/profile', { status: 400, body });
+    try {
+      await profileShowCommand();
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error('400 で失敗するはずが、成功してしまった');
+  }
+
+  it('detail に入力の断片（GH_TOKEN=…・ghp_…・URL の資格・params:）があっても出さない', async () => {
+    const message = await failWith({
+      error: 'プロファイルが読めなかったので保存していない',
+      detail:
+        "bash: -c: line 1: `export GH_TOKEN=FAKE_SECRET_VALUE_2418 )'\n" +
+        `${FAKE_GHP} postgres://u:FAKE@h/db\nparams: FAKE`,
+    });
+
+    expect(message).toContain('プロファイルが読めなかったので保存していない');
+    expect(message).toContain('bash: -c: line 1');
+    expect(message).not.toContain('FAKE_SECRET_VALUE_2418');
+    expect(message).not.toContain(FAKE_GHP);
+    expect(message).not.toContain('u:FAKE@');
+    expect(message).not.toMatch(/params: FAKE/);
+  });
+
+  it('error に値があっても出さない', async () => {
+    const message = await failWith({ error: `boom ${FAKE_GHP}` });
+    expect(message).toContain('boom');
+    expect(message).not.toContain(FAKE_GHP);
+  });
+
+  it('長い detail は切る（伏せてから切るので、上限をまたぐトークンの断片も残らない）', async () => {
+    const message = await failWith({
+      error: '失敗',
+      detail: `${'x '.repeat(1000)}${FAKE_GHP}${'あ'.repeat(10_000)}`,
+    });
+    expect(message.length).toBeLessThan(3000);
+    expect(message.endsWith('…')).toBe(true);
+    expect(message).not.toContain('ghp_A1b2');
+  });
+
+  it('値を含まない普通の error / detail は、今までどおり出る（対照）', async () => {
+    expect(await failWith({ error: '形が不正', detail: '形が不正な項目: script' })).toBe(
+      '形が不正\n形が不正な項目: script',
+    );
+    expect(await failWith({ error: 'だけ' })).toBe('だけ');
+  });
+});
