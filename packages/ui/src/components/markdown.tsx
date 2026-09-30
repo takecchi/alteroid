@@ -4,29 +4,40 @@
  * 人間の依頼: 「AIの返答ってMarkdown返却多いからWebUIも表示をMarkdownにした
  * ほうがこっちとしては見やすい」（alteroid の Web UI について）。
  *
- * **`dangerouslySetInnerHTML` は使わない。** react-markdown は
- * remark（Markdown → mdast）→ remark-rehype（mdast → hast）→
- * hast-util-to-jsx-runtime（hast → React 要素）で完結し、HTML 文字列を
+ * **`dangerouslySetInnerHTML` は使わない。** Markdown 文字列は
+ * `mdast-util-from-markdown`（Markdown → mdast）→ `mdast-util-to-hast`
+ * （mdast → hast）→ 下の `toReact`（hast → React 要素）で完結し、HTML 文字列を
  * 経由しない。だからサニタイズを足し忘れるという失敗の形そのものが無い。
  *
  * **`rehype-raw` は入れない。** 本文中に書かれた `<script>` や
- * `onerror` 付きタグは、react-markdown の既定では**要素として解釈されず、
- * そのままテキストとして表示される**（`react-markdown/lib/index.js` の
- * `transform`: `raw` ノードを `skipHtml` でなければ `{type: 'text', ...}` に
- * 差し替える）。`rehype-raw` はその `raw` ノードを実際の hast 要素へ
- * 解釈し直す道具で、足した瞬間にこの性質が消え、本文がそのまま実行可能な
- * HTML になる注入経路が生まれる。**足したくなったら、まず
+ * `onerror` 付きタグは、**要素として解釈されず、そのままテキストとして
+ * 表示される**。`mdast-util-to-hast` は `allowDangerousHtml: true` のとき
+ * 生 HTML を `raw` ノードにするので、`toReact` がそれを文字列（hast の
+ * `text` 相当）にして描く（以前使っていた react-markdown の
+ * `lib/index.js` の `transform` と同じ処理）。`rehype-raw` はその `raw` ノードを
+ * 実際の hast 要素へ解釈し直す道具で、足した瞬間にこの性質が消え、本文が
+ * そのまま実行可能な HTML になる注入経路が生まれる。**足したくなったら、まず
  * `markdown.test.tsx` の「生 HTML が要素にならない」テストを見ること** —
  * あのテストは今回の変更のために存在し、`rehype-raw` を足すと最初に落ちる。
  *
- * `remark-breaks` を入れる理由: 素の Markdown は単独の改行を畳む（半角の
- * 行末スペース2つや空行との改行しか区別しない）。この画面はこれまで
- * `whitespace-pre-wrap` で改行をそのまま見せていたので、`remark-breaks` が
- * 無いと「今まで見えていた行区切りが消える」という劣化になる。
+ * **react-markdown（と unified / vfile / hast-util-to-jsx-runtime /
+ * property-information）は本番の依存に入れない。** 描く DOM は変えずに、
+ * Web UI の JS の合計（`check:web-bundle-size` の予算。遅延読み込みでは
+ * 合計は減らない）から約42KB を外すため、hast → React の変換だけを下の
+ * 小さな自前の関数（`toReact`）にした。**等価性の担保は
+ * `markdown-equivalence.test.tsx`** — react-markdown を devDependency に残し、
+ * 旧実装と同じ入力の広いコーパスで `renderToStaticMarkup` の完全一致を見て
+ * いる。**そのテストが落ちたら、描かれる DOM が変わっている。**
+ *
+ * `newlineToBreak`（`remark-breaks` の中身）を掛ける理由: 素の Markdown は
+ * 単独の改行を畳む（半角の行末スペース2つや空行との改行しか区別しない）。
+ * この画面はこれまで `whitespace-pre-wrap` で改行をそのまま見せていたので、
+ * これが無いと「今まで見えていた行区切りが消える」という劣化になる。
  *
  * GFM（表・取り消し線・タスクリスト・フッターノート・オートリンク）は
- * `remarkGfmParseOnly`（下）で足す。**`remark-gfm` パッケージそのものは
- * ここでは使わない** — 理由は下のコメントに書いた。
+ * `micromark-extension-gfm` の `gfm()` と `mdast-util-gfm` の
+ * `gfmFromMarkdown()` を `fromMarkdown` へ直接渡して足す。**`remark-gfm`
+ * パッケージそのものはここでは使わない** — 理由は `toReact` の直前に書いた。
  *
  * **一覧の1行（`truncate` / `line-clamp`）は Markdown 化の対象ではない。**
  * そこに出ているのは畳んだ索引であって本文の面ではなく、押せば全文の面へ
@@ -35,78 +46,192 @@
  * が「`line-clamp` で切ると、収まっているように見えたまま読めない部分ができる」
  * として避ける理由を既に書いている。**対象は、詳細で全文を出す面だけである。**
  */
-import { gfm } from 'micromark-extension-gfm';
+import { urlAttributes } from 'html-url-attributes';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
-import type { ComponentProps, ReactNode } from 'react';
-import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
-import remarkBreaks from 'remark-breaks';
+import { newlineToBreak } from 'mdast-util-newline-to-break';
+import { toHast } from 'mdast-util-to-hast';
+import { gfm } from 'micromark-extension-gfm';
+import type { ComponentProps, ElementType, JSX, ReactNode } from 'react';
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
+
+type HastNode = ReturnType<typeof toHast>;
+type HastElement = Extract<HastNode, { type: 'element' }>;
+type HastParent = Extract<HastNode, { children: unknown[] }>;
+type HastChild = HastParent['children'][number];
 
 /**
- * unified の `Processor.data()` が実際に返す形の一部だけを、ここで使う分だけ
- * 切り出した最小限の型。**`unified` パッケージを型のためだけに依存へ足さない
- * ための割り切り**（`apps/web` はまだ `unified` を直接の依存に持っていない
- * ——react-markdown 経由の間接依存でしかなく、`apps/web/node_modules` に
- * 解決できない）。
- *
- * **`this` パラメータの型は `unknown` にする（`UnifiedProcessorDataOnly` を
- * 直接使わない）。** react-markdown の `remarkPlugins` は unified の
- * `Plugin<...>`（`this: Processor` を要求）を期待する。`this` パラメータの
- * 型チェックは反変（呼び出し側の型が自分の宣言した型へ代入できるか）なので、
- * `this: UnifiedProcessorDataOnly` だと「本物の `Processor.data()` が返す
- * `Data`（`unified` 側でこの画面から見える範囲では空に見える——
- * `mdast-util-from-markdown` の型による宣言マージをこのファイルは読み込んで
- * いない）が `UnifiedProcessorDataOnly` に代入できるか」を TS が構造的に
- * 検査し、共通のプロパティが無いとして落ちる（実測: `tsc --noEmit` で
- * `The types returned by 'data()' are incompatible` ）。`this: unknown` なら
- * 「`Processor` は `unknown` に代入できるか」という自明に真の問いになり、
- * ここで初めて `UnifiedProcessorDataOnly` へ関数内で明示キャストする。
+ * タグ名 → 差し替える部品。無いタグは素の要素（`section` / `sup` /
+ * `input` / `br` など）のまま描く。
  */
-interface UnifiedProcessorDataOnly {
-  data(): {
-    micromarkExtensions?: unknown[];
-    fromMarkdownExtensions?: unknown[];
-  };
+type Components = {
+  [Tag in keyof JSX.IntrinsicElements]?: (props: ComponentProps<Tag>) => ReactNode;
+};
+
+/**
+ * 危険なプロトコルの URL を空にする。react-markdown の `defaultUrlTransform`
+ * （`react-markdown/lib/index.js`）を逐語で移したもの。`javascript:` や
+ * `data:` は許可するプロトコル以外として空になる。
+ */
+const safeProtocol = /^(https?|ircs?|mailto|xmpp)$/i;
+
+function defaultUrlTransform(value: string): string {
+  const colon = value.indexOf(':');
+  const questionMark = value.indexOf('?');
+  const numberSign = value.indexOf('#');
+  const slash = value.indexOf('/');
+
+  if (
+    // プロトコルが無い（相対）。
+    colon === -1 ||
+    // 最初の `:` が `?` `#` `/` より後なら、プロトコルではない。
+    (slash !== -1 && colon > slash) ||
+    (questionMark !== -1 && colon > questionMark) ||
+    (numberSign !== -1 && colon > numberSign) ||
+    // 許可するプロトコル。
+    safeProtocol.test(value.slice(0, colon))
+  ) {
+    return value;
+  }
+
+  return '';
 }
 
 /**
- * `remark-gfm`（`node_modules/remark-gfm/lib/index.js` 逐語）は
- * `mdast-util-gfm` から `gfmFromMarkdown`（解析）と `gfmToMarkdown`
- * （mdast → Markdown 文字列への書き戻し）の**両方を無条件に呼ぶ**——
- * `data.toMarkdownExtensions.push(gfmToMarkdown(settings))` が実行される。
- *
- * この画面（`<Markdown>`）は react-markdown で「Markdown 文字列 → mdast →
- * hast → React 要素」の一方向にしか使わない。`unified().stringify()` は
- * 一度も呼ばれない（react-markdown 自身が呼ばない）ので、`gfmToMarkdown()`
- * が組み立てる「書き戻し」側の実装（`mdast-util-to-markdown` 本体・
- * `markdown-table` を含む）は**実行はされるが結果を誰も読まない**——
- * 呼び出し自体は生きたコードなので bundler の tree-shaking では削れず、
- * 実測でクライアント JS に ~13KB 乗っていた
- * （`mdast-util-to-markdown` 11,435B + `markdown-table` 1,570B、
- * 2026-09-27 観測。手段は tmp の source-map 集計スクリプト、`.claude/skills/`
- * には無い一時的なもの）。
- *
- * **だから `remark-gfm` パッケージ自体を使わず、`gfmFromMarkdown`（解析側）
- * だけを呼ぶ。** 呼んでいる関数は `remark-gfm` が内部で呼んでいるのと
- * **同じ** `mdast-util-gfm` の `gfmFromMarkdown()` そのもの——解析結果
- * （mdast）は1文字も変わらない。独自のパーサ実装は無い。
- *
- * オプションは常に空（`remarkGfm` を呼んでいた既存呼び出しも無指定だった）。
- * `mdast-util-gfm` の `gfmFromMarkdown()` はオプションを取らない
- * （`remark-gfm` 自身もオプション無しで呼ぶ）ので、ここでも渡さない。
+ * hast のプロパティ名を React の prop 名にする。`mdast-util-to-hast` が出す
+ * プロパティは閉じた集合（`className` / `id` / `href` / `src` / `alt` /
+ * `title` / `start` / `type` / `checked` / `disabled` / `align`、脚注の
+ * `dataFootnotes` / `dataFootnoteRef` / `dataFootnoteBackref` /
+ * `ariaDescribedBy` / `ariaLabel`）なので、property-information の全表は
+ * 持たず、`data*` / `aria*` をケバブにするだけで足りる。残りは hast と
+ * React で名前が同じ。
  */
-function remarkGfmParseOnly(this: unknown) {
-  const data = (this as UnifiedProcessorDataOnly).data();
-  const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = []);
-  const fromMarkdownExtensions = data.fromMarkdownExtensions ?? (data.fromMarkdownExtensions = []);
-  micromarkExtensions.push(gfm());
-  fromMarkdownExtensions.push(gfmFromMarkdown());
+function toPropName(name: string): string {
+  // `ariaDescribedBy` → `aria-describedby`（ARIA の属性名は単語の区切りを
+  // ハイフンにしない）、`dataFootnoteRef` → `data-footnote-ref`。
+  if (/^aria[A-Z]/.test(name)) return `aria-${name.slice(4).toLowerCase()}`;
+  if (/^data[A-Z]/.test(name)) return name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  return name;
+}
+
+/** 表の構造要素。直下の空白だけの文字列は描かない（React の警告になる）。 */
+const TABLE_TAGS = new Set(['table', 'tbody', 'thead', 'tfoot', 'tr']);
+
+function toChildren(node: HastParent, components: Components): ReactNode[] {
+  const counts = new Map<string, number>();
+  const result: ReactNode[] = [];
+  for (const child of node.children as HastChild[]) {
+    if (child.type === 'element') {
+      // 同じタグ名の兄弟に連番を振ってキーにする（キーの警告を出さない）。
+      const count = counts.get(child.tagName) ?? 0;
+      counts.set(child.tagName, count + 1);
+      result.push(toElement(child, `${child.tagName}-${count}`, components));
+    } else if (child.type === 'text') {
+      result.push(child.value);
+    } else if ((child.type as string) === 'raw') {
+      // 生 HTML。要素にせず、そのままテキストとして見せる（ファイル冒頭）。
+      result.push((child as unknown as { value: string }).value);
+    }
+  }
+  return result;
+}
+
+function withChildren(props: Record<string, unknown>, children: ReactNode[]) {
+  if (children.length > 0) {
+    const value = children.length > 1 ? children : children[0];
+    if (value) props.children = value;
+  }
+}
+
+function create(type: ElementType, props: Record<string, unknown>, key?: string) {
+  const fn = Array.isArray(props.children) ? jsxs : jsx;
+  return key ? fn(type, props, key) : fn(type, props);
+}
+
+function toElement(node: HastElement, key: string, components: Components): ReactNode {
+  const props: Record<string, unknown> = {};
+  let align: string | undefined;
+
+  for (const name in node.properties) {
+    if (!Object.hasOwn(node.properties, name)) continue;
+    let value: unknown = node.properties[name];
+    // URL を持つ属性は、許可したプロトコルだけ通す。
+    if (Object.hasOwn(urlAttributes, name)) {
+      const tags: readonly string[] | null | undefined =
+        urlAttributes[name as keyof typeof urlAttributes];
+      if (!tags || tags.includes(node.tagName)) {
+        value = defaultUrlTransform(String(value || ''));
+      }
+    }
+    if (
+      value === null ||
+      value === undefined ||
+      (typeof value === 'number' && Number.isNaN(value))
+    ) {
+      continue;
+    }
+    if (Array.isArray(value)) value = value.join(' ');
+    const propName = toPropName(name);
+    if (
+      propName === 'align' &&
+      typeof value === 'string' &&
+      (node.tagName === 'td' || node.tagName === 'th')
+    ) {
+      // 表のセルの揃えは `align` 属性ではなく `style` で出す。
+      align = value;
+    } else {
+      props[propName] = value;
+    }
+  }
+  if (align) props.style = { textAlign: align };
+
+  let children = toChildren(node, components);
+  if (TABLE_TAGS.has(node.tagName)) {
+    children = children.filter((child) => typeof child !== 'string' || /[^\t\n\f\r ]/.test(child));
+  }
+  withChildren(props, children);
+
+  const type: ElementType = Object.hasOwn(components, node.tagName)
+    ? (components[node.tagName as keyof Components] as ElementType)
+    : (node.tagName as ElementType);
+  return create(type, props, key);
+}
+
+/**
+ * **`remark-gfm` パッケージそのものは使わない。** `remark-gfm` は
+ * `mdast-util-gfm` から `gfmFromMarkdown`（解析）と `gfmToMarkdown`
+ * （mdast → Markdown 文字列への書き戻し）の**両方を無条件に呼ぶ**。この画面は
+ * 「Markdown 文字列 → mdast → hast → React 要素」の一方向にしか使わないので、
+ * 書き戻し側（`mdast-util-to-markdown` 本体・`markdown-table`）は結果を誰も
+ * 読まないのに、呼び出しが生きたコードなので tree-shaking では削れず、実測で
+ * クライアント JS に ~13KB 乗っていた（`mdast-util-to-markdown` 11,435B +
+ * `markdown-table` 1,570B、2026-09-27 観測）。**だから解析側の
+ * `gfmFromMarkdown()` だけを呼ぶ。** `remark-gfm` が内部で呼ぶのと**同じ**
+ * 関数で、解析結果（mdast）は変わらない。独自のパーサ実装は無い。
+ * どちらもオプションは取らない（`remark-gfm` 自身も無指定で呼ぶ）。
+ *
+ * Markdown 文字列を React 要素にする。`components` は既定で下の
+ * `markdownComponents`（等価性テストが「差し替え無し」でも比べるので引数に
+ * している）。`remarkRehypeOptions` の既定（`allowDangerousHtml: true`）も
+ * react-markdown と同じ。
+ */
+export function toReact(markdown: string, components: Components = markdownComponents): ReactNode {
+  const mdast = fromMarkdown(markdown, {
+    extensions: [gfm()],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+  newlineToBreak(mdast);
+  const hast = toHast(mdast, { allowDangerousHtml: true }) as HastParent;
+  const props: Record<string, unknown> = {};
+  withChildren(props, toChildren(hast, components));
+  return create(Fragment, props);
 }
 
 /**
  * コードが行内（inline）か、フェンスされたコードブロックかを見分ける。
  *
- * react-markdown v9 以降、`code` コンポーネントに `inline` は渡されない
- * （hast にその情報が無いため）。**言語付き**のフェンス（```ts` など）は
+ * `code` コンポーネントに `inline` は渡されない（hast にその情報が無いため。
+ * react-markdown v9 以降と同じ形にしてある）。**言語付き**のフェンス（```ts` など）は
  * `language-xxx` という className が付くので判別できるが、**言語無しの
  * フェンス**（`docs/architecture.md` の罫線図がまさにこれ）には className が
  * 付かない。CommonMark の仕様上、行内コードスパンの中には改行を書けない
@@ -186,7 +311,7 @@ function heading(tag: HeadingTag) {
   };
 }
 
-const components: Components = {
+export const markdownComponents: Components = {
   p: ({ children }) => <p className="mt-2 leading-relaxed first:mt-0">{children}</p>,
   h1: heading('h1'),
   h2: heading('h2'),
@@ -215,28 +340,26 @@ const components: Components = {
     'aria-label': ariaLabel,
     'data-footnote-ref': dataFootnoteRef,
     'data-footnote-backref': dataFootnoteBackref,
-  }: ComponentProps<'a'> &
-    ExtraProps & {
-      // `data-*` は @types/react の型に汎用の index signature が無いため、
-      // 明示的に広げないと destructure できない（`id` / `aria-describedby` /
-      // `aria-label` は標準の HTML/ARIA 属性としてすでに `ComponentProps<'a'>`
-      // に在るので、ここでは広げていない）。
-      'data-footnote-ref'?: boolean;
-      'data-footnote-backref'?: string;
-    }) => (
+  }: ComponentProps<'a'> & {
+    // `data-*` は @types/react の型に汎用の index signature が無いため、
+    // 明示的に広げないと destructure できない（`id` / `aria-describedby` /
+    // `aria-label` は標準の HTML/ARIA 属性としてすでに `ComponentProps<'a'>`
+    // に在るので、ここでは広げていない）。
+    'data-footnote-ref'?: boolean;
+    'data-footnote-backref'?: string;
+  }) => (
     // 外部リンク扱いで開く。本文は AI・人間が書いた自由文であって、この
     // アプリ内の経路を指す相対リンクを前提にしていない。
-    // **任意の hast 属性を丸ごと素通ししない。** react-markdown は hast の
-    // `node`（`ExtraProps`）を毎回この形へ渡すので、そのまま `<a>` へ広げる
-    // と DOM が知らない `node` prop を渡すことになる（React の警告）ほか、
-    // Markdown 本文が持ちうる任意の `className` / `style` でこの部品の見た目
-    // ・安全性（下の外部リンク扱い・`rel`）を上書きされる経路にもなる。
+    // **任意の hast 属性を丸ごと素通ししない。** hast 由来の props をそのまま
+    // `<a>` へ広げると、Markdown 本文が持ちうる任意の `className` / `style` で
+    // この部品の見た目・安全性（下の外部リンク扱い・`rel`）を上書きされる
+    // 経路になる（以前は react-markdown が渡す `node` も広げてしまう形だった）。
     // **だから許可した名前だけを明示して渡す** — `id` と、GFM が脚注の
     // `<a>` に付ける4つ（`data-footnote-ref` / `aria-describedby`＝本文の
     // 参照、`data-footnote-backref` / `aria-label`＝脚注からの戻るリンク）
     // だけをこの形で足す。`clobberPrefix`（既定 `user-content-`）は
-    // `remarkRehypeOptions` を渡していないので `mdast-util-to-hast` の既定
-    // のまま外していない。
+    // `toHast` へ `clobberPrefix` を渡していないので `mdast-util-to-hast` の
+    // 既定のまま外していない。
     //
     // **`#` で始まる href（同じ文書内を指すリンク）には `target` / `rel` を
     // 付けない。** GFM の脚注の参照（`#user-content-fn-N`）・戻るリンク
@@ -323,11 +446,5 @@ const components: Components = {
  * `text-primary` は `styles.css` に実在するものだけを使っている）。
  */
 export function Markdown({ children }: { children: string }) {
-  return (
-    <div className="min-w-0 text-sm break-words">
-      <ReactMarkdown remarkPlugins={[remarkGfmParseOnly, remarkBreaks]} components={components}>
-        {children}
-      </ReactMarkdown>
-    </div>
-  );
+  return <div className="min-w-0 text-sm break-words">{toReact(children)}</div>;
 }

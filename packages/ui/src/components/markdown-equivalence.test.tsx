@@ -1,0 +1,291 @@
+/**
+ * `<Markdown>` の描画が、react-markdown を使っていた旧実装と**1文字も違わない**
+ * ことの証明（差分テスト）。
+ *
+ * `markdown.tsx` は react-markdown（と unified / vfile /
+ * hast-util-to-jsx-runtime / property-information）を本番の依存から外し、
+ * `fromMarkdown` → `newlineToBreak` → `toHast` → 自前の `toReact` に置き換えた。
+ * 目的は Web UI の JS の合計を減らすことだけで、DOM を変えてよい理由は無い。
+ * だから旧実装（下の `legacy`。react-markdown をその時の設定のまま使う）を
+ * devDependency に残し、同じ入力を両方へ通して `renderToStaticMarkup` の出力
+ * 文字列の完全一致を見る。
+ *
+ * 比べるのは2通り — (1) 本物の `markdownComponents` を差した描画（画面に出る
+ * もの）、(2) 部品を差さない素の要素の描画（`section` / `sup` / `input` /
+ * `br` など、部品を持たない要素の属性名・値の変換と、`td` / `th` の
+ * `style` 化を、部品が props を取捨選択する前の形で見るため）。
+ *
+ * コーパスは人が書いた節（機能ごと）と、リポジトリ自身の Markdown
+ * （実在の文書）からなる。**旧実装が警告（キーなど）を出さないのと同じく、
+ * 新実装も `console.error` を出さない**ことも見る。
+ */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { createElement, type ReactNode } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
+import { gfm } from 'micromark-extension-gfm';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { markdownComponents, toReact } from './markdown';
+
+/** 旧実装の GFM（解析側だけ）。以前の `remarkGfmParseOnly` の逐語。 */
+function remarkGfmParseOnly(this: unknown) {
+  const data = (
+    this as {
+      data(): { micromarkExtensions?: unknown[]; fromMarkdownExtensions?: unknown[] };
+    }
+  ).data();
+  (data.micromarkExtensions ??= []).push(gfm());
+  (data.fromMarkdownExtensions ??= []).push(gfmFromMarkdown());
+}
+
+function legacy(text: string, components: Components): string {
+  return renderToStaticMarkup(
+    createElement(
+      'div',
+      null,
+      createElement(ReactMarkdown, {
+        remarkPlugins: [remarkGfmParseOnly, remarkBreaks],
+        components,
+        children: text,
+      }),
+    ),
+  );
+}
+
+function current(text: string, components: Parameters<typeof toReact>[1]): string {
+  return renderToStaticMarkup(createElement('div', null, toReact(text, components) as ReactNode));
+}
+
+const FOOTNOTES = `本文[^a] と、もう一度[^a]、別の脚注[^b]。
+
+[^a]: 最初の脚注。
+[^b]: 2つ目の脚注。
+
+    インデントした続きの段落。`;
+
+const CORPUS: Array<[string, string]> = [
+  // 見出し
+  ['h1', '# 見出し1'],
+  ['h2', '## 見出し2'],
+  ['h3', '### 見出し3'],
+  ['h4', '#### 見出し4'],
+  ['h5', '##### 見出し5'],
+  ['h6', '###### 見出し6'],
+  ['setext 見出し', '見出し\n===\n\n小見出し\n---'],
+  ['見出し中の強調とコード', '## **太字** と `code` と [link](https://example.com)'],
+  ['id 付きっぽい見出し', '# footnote-label'],
+  // 段落と改行
+  ['段落', '一つ目の段落。\n\n二つ目の段落。'],
+  ['単独改行', '1行目\n2行目\n3行目'],
+  ['行末スペース2つの改行', '1行目  \n2行目'],
+  ['行末バックスラッシュの改行', '1行目\\\n2行目'],
+  ['先頭末尾の空白行', '\n\n本文\n\n\n'],
+  // 強調
+  ['強調', '*em* と _em_ と **strong** と __strong__ と ***both***'],
+  ['取り消し線', '~~消す~~ と ~単独~ と ~~~三つ~~~'],
+  ['入れ子の強調', '**太字の中の *斜体* と ~~取り消し~~**'],
+  // リスト
+  ['箇条書き', '- a\n- b\n- c'],
+  ['入れ子リスト', '- a\n  - a1\n    - a11\n  - a2\n- b\n  1. b1\n  2. b2'],
+  ['順序付き', '1. a\n2. b\n3. c'],
+  ['順序付き start=3', '3. a\n4. b'],
+  ['順序付き start=0', '0. a\n1. b'],
+  ['順序付き start=1', '1. a\n1. b'],
+  ['疎なリスト', '- a\n\n- b\n\n- c'],
+  ['リスト項目内の段落とコード', '- a\n\n  段落\n\n  ```\n  code\n  ```\n- b'],
+  ['アスタリスクのリスト', '* a\n* b\n+ c'],
+  // タスクリスト
+  ['タスクリスト', '- [x] 済\n- [ ] 未\n- [X] 大文字'],
+  ['タスクリスト（疎）', '- [x] 済\n\n- [ ] 未'],
+  ['タスクリスト入れ子', '- [ ] 親\n  - [x] 子\n  - 普通の子'],
+  ['順序付きタスク', '1. [x] a\n2. [ ] b'],
+  // 表
+  [
+    '表（揃え4種）',
+    '| 左 | 中 | 右 | 無 |\n| :-- | :-: | --: | --- |\n| a | b | c | d |\n| e | f | g | h |',
+  ],
+  ['表（揃え無しのみ）', '| a | b |\n|---|---|\n| 1 | 2 |'],
+  [
+    '表（本文に強調とコードとリンク）',
+    '| a | b |\n|---|---|\n| **x** | `y` |\n| [l](https://e.com) | ~~z~~ |',
+  ],
+  ['表（セル不足・過剰）', '| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |'],
+  ['表の前後の段落', '前\n\n| a |\n|---|\n| 1 |\n\n後'],
+  ['表（パイプのエスケープ）', '| a |\n|---|\n| x \\| y |'],
+  ['表ヘッダのみ', '| a | b |\n|---|---|'],
+  // 脚注
+  ['脚注（複数参照・戻るリンク）', FOOTNOTES],
+  ['脚注（定義のみ）', '[^x]: 定義だけ'],
+  ['脚注（参照のみ）', '参照だけ[^x]'],
+  ['脚注（定義に強調とリンク）', '本文[^1]\n\n[^1]: **強調** と [link](https://example.com)'],
+  ['脚注（日本語ラベル）', '本文[^注]\n\n[^注]: 日本語のラベル'],
+  ['脚注（ラベルに記号）', '本文[^a b]と[^a&b]\n\n[^a&b]: 記号'],
+  // コード
+  ['言語付きフェンス', '```ts\nconst a = 1;\n```'],
+  ['言語無しフェンス（複数行）', '```\nline1\nline2\n```'],
+  ['言語無しフェンス（1行）', '```\nonly\n```'],
+  ['言語付き・属性付きフェンス', '```js {1,3} title="a"\nx\n```'],
+  ['チルダのフェンス', '~~~py\nprint(1)\n~~~'],
+  ['インデントコード', '段落\n\n    indented\n    code'],
+  ['フェンス内の HTML と記号', '```html\n<div class="a">&amp; <b>x</b></div>\n```'],
+  ['空のフェンス', '```\n```'],
+  ['行内コード', '`a` と `` a`b `` と `<b>`'],
+  ['フェンス内の罫線図', '```\n┌──┐\n│ a│\n└──┘\n```'],
+  // 引用・hr
+  ['引用', '> 引用\n> 続き\n\n> 別の引用'],
+  ['入れ子の引用', '> a\n>\n> > b\n> >\n> > - c'],
+  ['引用の中のコードと表', '> ```\n> x\n> ```\n>\n> | a |\n> |---|\n> | 1 |'],
+  ['hr（3種）', '---\n\n***\n\n___'],
+  ['hr の前後', '前\n\n---\n\n後'],
+  // リンク・画像
+  ['リンク', '[text](https://example.com "title")'],
+  ['相対リンク', '[a](/path?x=1#h) [b](./rel) [c](#frag) [d](?q=1)'],
+  ['参照リンク', '[ref][a] と [b]\n\n[a]: https://example.com "T"\n[b]: /rel'],
+  ['画像', '![alt](https://example.com/a.png "title")'],
+  ['画像（alt 無し・title 無し）', '![](https://example.com/a.png)'],
+  ['画像参照', '![alt][img]\n\n[img]: https://example.com/a.png "T"'],
+  ['画像参照（未定義）', '![alt][none]'],
+  ['リンク参照（未定義）', '[text][none]'],
+  ['画像を含むリンク', '[![alt](https://example.com/a.png)](https://example.com)'],
+  // autolink
+  ['autolink', '<https://example.com> と <mailto:a@example.com> と <a@example.com>'],
+  [
+    'リテラル autolink',
+    'https://example.com と www.example.com と a@example.com と http://x.y/z?a=1&b=2.',
+  ],
+  ['リテラル autolink（括弧と句読点）', '(https://example.com/a_(b)) と https://example.com/a,'],
+  // 危険な URL
+  ['javascript: リンク', '[x](javascript:alert(1))'],
+  ['JavaScript: 大文字', '[x](JaVaScRiPt:alert(1))'],
+  ['data: リンク', '[x](data:text/html;base64,PHNjcmlwdD4=)'],
+  ['vbscript: リンク', '[x](vbscript:msgbox(1))'],
+  ['javascript: 画像', '![x](javascript:alert(1))'],
+  ['data: 画像', '![x](data:image/png;base64,AAAA)'],
+  ['javascript: 参照リンク', '[x][a]\n\n[a]: javascript:alert(1)'],
+  ['javascript: autolink', '<javascript:alert(1)>'],
+  [
+    '許可プロトコル群',
+    '[a](http://a.b) [b](HTTPS://a.b) [c](mailto:a@b) [d](xmpp:a@b) [e](irc://a.b) [f](ircs://a.b)',
+  ],
+  ['他のプロトコル', '[a](ftp://a.b) [b](tel:123) [c](file:///etc/passwd) [d](//a.b)'],
+  ['コロンが後ろのパス', '[a](a/b:c) [b](a?b:c) [c](a#b:c)'],
+  ['空の href', '[x]()'],
+  ['エンコードが要る URL', '[x](https://example.com/日本語 あ?q=あ&r="x")'],
+  // 生 HTML
+  ['script', '<script>alert(1)</script>'],
+  ['onerror 付き img', '<img src=x onerror=alert(1)>'],
+  [
+    'インライン HTML',
+    '文中の <b>太字</b> と <span style="color:red">色</span> と <br> と <a href="javascript:alert(1)">x</a>',
+  ],
+  ['ブロック HTML', '<div class="a">\n<p>in</p>\n</div>\n\n後'],
+  ['HTML コメント', '前 <!-- コメント --> 後\n\n<!-- block -->'],
+  ['HTML 内の Markdown', '<div>\n\n**強調**\n\n</div>'],
+  [
+    'iframe と style',
+    '<iframe src="javascript:alert(1)"></iframe>\n\n<style>body{display:none}</style>',
+  ],
+  ['生 HTML と改行', '<b>a</b>\nb <i>c</i>\nd'],
+  ['テーブル内の生 HTML', '| a |\n|---|\n| <b>x</b> |'],
+  ['リスト内の生 HTML', '- <b>x</b>\n- y'],
+  // 実体参照・エスケープ
+  ['実体参照', '&amp; &lt; &gt; &quot; &copy; &#35; &#x1F600; &nbsp; &unknown;'],
+  ['バックスラッシュエスケープ', '\\* \\_ \\# \\[ \\] \\\\ \\<b\\>'],
+  ['特殊文字', '< > & " \' ` ~'],
+  // 空・日本語・CRLF
+  ['空文字列', ''],
+  ['空白のみ', '   \n\n  '],
+  [
+    '日本語本文',
+    '# 日報\n\n今日は**大事な**作業をした。\n\n- 項目A\n- 項目B\n\n> 引用。「かぎ括弧」と（全角括弧）。',
+  ],
+  ['日本語と改行', '一行目の日本語\n二行目の日本語\n\n三行目'],
+  [
+    'CRLF',
+    '# a\r\n\r\n本文1\r\n本文2\r\n\r\n- x\r\n- y\r\n\r\n| a |\r\n|---|\r\n| 1 |\r\n\r\n```\r\ncode\r\n```\r\n',
+  ],
+  ['CR のみ', '行1\r行2\r\r行3'],
+  ['BOM 付き', '﻿# 見出し'],
+  ['タブとインデント', '\t- a\n\t- b\n\n-\ta\n-\tb'],
+  ['絵文字と結合文字', '😀 👨‍👩‍👧 é é'],
+  ['長い行', `${'あ'.repeat(3000)}\n${'x'.repeat(3000)}`],
+  // 混在
+  [
+    '混在',
+    '# タイトル\n\n本文 **強** *斜* ~~消~~ `code` [l](https://e.com)\n改行\n\n- [x] a\n- [ ] b\n\n| a | b |\n|:-|-:|\n| 1 | 2 |\n\n> 引用[^1]\n\n---\n\n```sh\nls\n```\n\n[^1]: 脚注',
+  ],
+];
+
+/** リポジトリ自身の Markdown（実在の文書）も同じ比較に掛ける。 */
+function repoDocs(): Array<[string, string]> {
+  const root = resolve(__dirname, '../../../..');
+  return [
+    'AGENTS.md',
+    'README.md',
+    'docs/north_star.md',
+    'docs/PRD.md',
+    'docs/architecture.md',
+  ].flatMap((file): Array<[string, string]> => {
+    try {
+      return [[`実在の文書: ${file}`, readFileSync(resolve(root, file), 'utf8')]];
+    } catch {
+      return [];
+    }
+  });
+}
+
+const ALL = [...CORPUS, ...repoDocs()];
+
+beforeEach(() => {
+  // 空の `src` の警告（旧実装も同じ）で出力が埋まらないようにする。
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('<Markdown> の描画は react-markdown の旧実装と完全一致する', () => {
+  it('コーパスは十分に広い（手で書いた節だけで 100 件近く）', () => {
+    expect(CORPUS.length).toBeGreaterThanOrEqual(100);
+  });
+
+  it.each(ALL)('%s（部品あり）', (_name, text) => {
+    expect(current(text, markdownComponents)).toBe(legacy(text, markdownComponents as Components));
+  });
+
+  it.each(ALL)('%s（部品なし＝素の要素）', (_name, text) => {
+    expect(current(text, {})).toBe(legacy(text, {}));
+  });
+
+  it('一致の比較が空振りしていない（出力が空でなく、タグを含む）', () => {
+    const out = current('# a\n\n- [x] b\n\n| a |\n|:-:|\n| 1 |\n\nx[^1]\n\n[^1]: y', {});
+    expect(out).toContain('<h1>a</h1>');
+    expect(out).toContain('<input type="checkbox" disabled="" checked=""/>');
+    expect(out).toContain('style="text-align:center"');
+    expect(out).toContain('data-footnotes="true"');
+    expect(out).toContain('aria-describedby="footnote-label"');
+  });
+
+  it('キーなどの警告を出さず、旧実装が出す警告の集合とも一致する', () => {
+    // `![x](javascript:…)` は `src=""` になり、React が空文字列の `src` を
+    // 警告する。これは旧実装も同じなので「出さない」ではなく「同じ」を見る。
+    const warnings = (run: (text: string) => string) => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      for (const [, text] of ALL) run(text);
+      const calls = [...error.mock.calls, ...warn.mock.calls].map((c) => String(c[0]));
+      vi.restoreAllMocks();
+      return calls;
+    };
+    const now = warnings((t) => current(t, markdownComponents));
+    const before = warnings((t) => legacy(t, markdownComponents as Components));
+    expect(now.filter((m) => /key/i.test(m))).toEqual([]);
+    expect(now).toEqual(before);
+  });
+});

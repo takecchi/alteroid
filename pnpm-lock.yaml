@@ -96,6 +96,9 @@ catalogs:
     hono-openapi:
       specifier: ^1.3.1
       version: 1.3.3
+    html-url-attributes:
+      specifier: ^3.0.1
+      version: 3.0.1
     isbot:
       specifier: ^5.2.1
       version: 5.2.2
@@ -105,9 +108,18 @@ catalogs:
     lucide-react:
       specifier: ^1.31.0
       version: 1.48.0
+    mdast-util-from-markdown:
+      specifier: ^2.0.3
+      version: 2.0.3
     mdast-util-gfm:
       specifier: ^3.1.0
       version: 3.1.0
+    mdast-util-newline-to-break:
+      specifier: ^2.0.0
+      version: 2.0.0
+    mdast-util-to-hast:
+      specifier: ^13.2.1
+      version: 13.2.1
     micromark-extension-gfm:
       specifier: ^3.0.0
       version: 3.0.0
@@ -612,12 +624,24 @@ importers:
       cmdk:
         specifier: 'catalog:'
         version: 1.1.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      html-url-attributes:
+        specifier: 'catalog:'
+        version: 3.0.1
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
+      mdast-util-from-markdown:
+        specifier: 'catalog:'
+        version: 2.0.3(supports-color@10.2.2)
       mdast-util-gfm:
         specifier: 'catalog:'
         version: 3.1.0(supports-color@10.2.2)
+      mdast-util-newline-to-break:
+        specifier: 'catalog:'
+        version: 2.0.0
+      mdast-util-to-hast:
+        specifier: 'catalog:'
+        version: 13.2.1
       micromark-extension-gfm:
         specifier: 'catalog:'
         version: 3.0.0
@@ -633,15 +657,9 @@ importers:
       react-dom:
         specifier: 'catalog:'
         version: 19.3.0(react@19.3.0)
-      react-markdown:
-        specifier: 'catalog:'
-        version: 10.1.0(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)
       recharts:
         specifier: 'catalog:'
         version: 3.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@17.0.2)(react@19.3.0)(redux@5.0.1)
-      remark-breaks:
-        specifier: 'catalog:'
-        version: 4.0.0
       shadcn:
         specifier: 'catalog:'
         version: 4.21.0(supports-color@10.2.2)(typescript@6.0.3)
@@ -682,6 +700,12 @@ importers:
       jsdom:
         specifier: 'catalog:'
         version: 30.1.1
+      react-markdown:
+        specifier: 'catalog:'
+        version: 10.1.0(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)
+      remark-breaks:
+        specifier: 'catalog:'
+        version: 4.0.0
       storybook:
         specifier: 'catalog:'
         version: 10.6.0(@types/react@19.3.0)(prettier@3.9.9)(react@19.3.0)
