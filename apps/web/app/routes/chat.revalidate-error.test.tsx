@@ -64,10 +64,9 @@ describe('再検証の失敗（issue #2266）', () => {
       return undefined;
     });
 
-    const router = createMemoryRouter(
-      [{ path: '/chat/:conversationId', Component: Harness }],
-      { initialEntries: [`/chat/${CONVERSATION}`] },
-    );
+    const router = createMemoryRouter([{ path: '/chat/:conversationId', Component: Harness }], {
+      initialEntries: [`/chat/${CONVERSATION}`],
+    });
     render(
       <Providers>
         <RouterProvider router={router} />
