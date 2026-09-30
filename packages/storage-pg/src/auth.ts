@@ -16,6 +16,7 @@ import type {
   RevokeAccessTokenOutcome,
 } from '@alteroid/core';
 import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import type { SQL, SQLWrapper } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso } from './db.js';
@@ -43,6 +44,22 @@ function optionalIso(value: Date | null): string | null {
 }
 
 /**
+ * 並びの2次キー（`id` / `provider` / `subject`）を**照合順 C（バイト順）で**比べる式
+ * （issue #2458）。
+ *
+ * **列の既定の照合順に任せないこと。** これらの列は `text` で `COLLATE` の指定が
+ * 無いので、DB を作ったときの照合順（`datcollate`）に従う。PGlite は C だが、
+ * 本番の pg が `en_US.UTF-8` などなら大文字と小文字、`-` と `_` の前後が変わる
+ * ——pg 同士（本番と PGlite）でも、fs / インメモリ（コード単位の比較。
+ * `packages/storage-fs/src/auth.ts` の `compareCodeUnits`）とも並びが食い違う。
+ * `ORDER BY` の式に `COLLATE "C"` を付けるだけなのでスキーマは変えない
+ * （migration は要らない）。
+ */
+function byteOrder(column: SQLWrapper): SQL {
+  return sql`${column} collate "C"`;
+}
+
+/**
  * ログインとアクセス許可（PostgreSQL）。fs ドライバと同じ IF を満たす別の器。
  *
  * **素のトークンは1文字も入らない**（`sha256` だけ）。記憶へ到達できる鍵なので、
@@ -58,11 +75,12 @@ export class PgAuthStore implements AuthStore {
   async listAccounts(): Promise<AuthAccount[]> {
     // **2次キーに `id` を持つ**（issue #1688）。`createdAt` だけの `ORDER BY` は
     // 同着（`createdAt` が完全に同じ）行どうしの順を SQL が保証しない
-    // （`AuthStore` の doc「並びの契約」）。
+    // （`AuthStore` の doc「並びの契約」）。**2次キーは照合順を C に固定する**
+    // （issue #2458。`byteOrder` の doc）。
     const rows = await this.#db
       .select()
       .from(authAccounts)
-      .orderBy(asc(authAccounts.createdAt), asc(authAccounts.id));
+      .orderBy(asc(authAccounts.createdAt), asc(byteOrder(authAccounts.id)));
     return rows.map((row) => this.#toAccount(row));
   }
 
@@ -143,15 +161,16 @@ export class PgAuthStore implements AuthStore {
 
   async listIdentities(accountId: string): Promise<AuthIdentity[]> {
     // **2次キーに `provider` → `subject` を持つ**（issue #1688。`(provider,
-    // subject)` は一意なので、これで完全に決まった順になる）。
+    // subject)` は一意なので、これで完全に決まった順になる）。**2次キーは照合順を
+    // C に固定する**（issue #2458。`byteOrder` の doc）。
     const rows = await this.#db
       .select()
       .from(authIdentities)
       .where(eq(authIdentities.accountId, accountId))
       .orderBy(
         asc(authIdentities.createdAt),
-        asc(authIdentities.provider),
-        asc(authIdentities.subject),
+        asc(byteOrder(authIdentities.provider)),
+        asc(byteOrder(authIdentities.subject)),
       );
     return rows.map((row) => this.#toIdentity(row));
   }
@@ -404,12 +423,13 @@ export class PgAuthStore implements AuthStore {
 
   async listAccessTokens(accountId: string): Promise<AccessTokenRecord[]> {
     // **2次キーに `id` を持つ**（issue #1688。`id` は一意なので、これで完全に
-    // 決まった順になる）。
+    // 決まった順になる）。**2次キーは照合順を C に固定する**（issue #2458。
+    // `byteOrder` の doc）。
     const rows = await this.#db
       .select()
       .from(authAccessTokens)
       .where(eq(authAccessTokens.accountId, accountId))
-      .orderBy(asc(authAccessTokens.createdAt), asc(authAccessTokens.id));
+      .orderBy(asc(authAccessTokens.createdAt), asc(byteOrder(authAccessTokens.id)));
     return rows.map((row) => this.#toAccessToken(row));
   }
 

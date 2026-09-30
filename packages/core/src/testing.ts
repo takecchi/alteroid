@@ -1144,7 +1144,15 @@ export function createMemoryStores(): Stores {
    * 2次キーで並びを決める。
    */
   const compareAccountOrder = (a: AuthAccount, b: AuthAccount): number =>
-    compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+    compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
+
+  /**
+   * 2次キーの比較。**UTF-16 のコード単位の順**（issue #2458。fs 版と同じ形——
+   * `packages/storage-fs/src/auth.ts` の `compareCodeUnits` の doc）。
+   * **`localeCompare` を使わないこと**——大文字と小文字、`-` と `_` の前後が、
+   * pg の `COLLATE "C"` の順と逆になる。
+   */
+  const compareCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
   /**
    * `listIdentities` の並び全体（issue #1688）。
@@ -1152,14 +1160,14 @@ export function createMemoryStores(): Stores {
    */
   const compareIdentityOrder = (a: AuthIdentity, b: AuthIdentity): number =>
     compareCreatedAt(a, b) ||
-    a.provider.localeCompare(b.provider) ||
-    a.subject.localeCompare(b.subject);
+    compareCodeUnits(a.provider, b.provider) ||
+    compareCodeUnits(a.subject, b.subject);
 
   /**
    * `listAccessTokens` の並び全体（issue #1688）。`createdAt` の実時刻 → `id`。
    */
   const compareAccessTokenOrder = (a: AccessTokenRecord, b: AccessTokenRecord): number =>
-    compareCreatedAt(a, b) || a.id.localeCompare(b.id);
+    compareCreatedAt(a, b) || compareCodeUnits(a.id, b.id);
 
   const auth: AuthStore = {
     async listAccounts() {
