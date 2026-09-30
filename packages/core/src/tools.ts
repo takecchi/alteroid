@@ -204,7 +204,6 @@ import type {
   Practice,
   ScheduleSpec,
   ScheduledRequest,
-  UnpushedWorkObservationSource,
 } from './schema.js';
 import { describeRevisionStatus } from './revision.js';
 import {
@@ -273,7 +272,11 @@ import {
   type UsageTotals,
 } from './usage.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
-import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
+import {
+  describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationSource,
+  UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
+} from './unpushed-work-observation-format.js';
 
 /**
  * クローンの道具（インプロセス MCP）。
@@ -3943,42 +3946,8 @@ function formatUnpushedWorkObservationWorktrees(
         .join(' / ');
 }
 
-/**
- * `lastUnpushedWorkObservation.source` を人間可読な1句にする（クローンの
- * 指摘を受けて追加）。**`undefined` は「その経路だ」と見なさない**——
- * この欄を書かなかった版・呼び出しが在ったことをそのまま名乗る
- * （`unpushedWorkObservationSourceSchema` の doc「無いことは、どれかの
- * 経路だと見なさない」と同じ注意）。
- */
-function describeUnpushedWorkObservationSource(
-  source: UnpushedWorkObservationSource | undefined,
-): string {
-  if (source === undefined) {
-    return '経路不明（この欄を書かない版が残した行、または経路を渡さなかった呼び出し）';
-  }
-  switch (source) {
-    case 'stop-refusal':
-      return 'manager_stop（running・非force）の断り';
-    case 'report':
-      return 'ターンが report で終わったとき';
-    case 'tool_use':
-      return 'Bash で git push か新しい枝を作る操作を検出したとき';
-    case 'auto-fold':
-      return 'done を自動で畳む前の安全弁（auto-fold）';
-    case 'vacate':
-      return 'runner を意図して空ける直前（vacate）';
-    case 'stop':
-      return 'manager_stop（force・done/waiting_human の非force）・人間の停止・自動畳みが止める直前';
-    case 'closed':
-      return 'runner が closed を出す直前に先取り';
-    case 'shutdown':
-      return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
-    default: {
-      const exhaustive: never = source;
-      throw new Error(`未知の unpushedWork observation source: ${JSON.stringify(exhaustive)}`);
-    }
-  }
-}
+// `describeUnpushedWorkObservationSource`（観測の経路の1句）と断りの1文は、
+// Web UI と共有する定義元 `unpushed-work-observation-format.ts` から引く（Issue #2457）。
 
 /**
  * `manager_stop`（running・非 force）の断り、委譲のターンが `report` で
@@ -4088,11 +4057,7 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
           ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
           : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}` +
             unpushedWorkObservationIncompleteSuffix(observation);
-    return (
-      '  ⚠ 未push観測: 器が止まる直前の観測は届いていない' +
-      '（best-effort の送信のため。未pushが無かったことを意味しない）。' +
-      shown
-    );
+    return `  ${UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE}` + shown;
   }
 
   if (observation === undefined) return null;

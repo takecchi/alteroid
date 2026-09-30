@@ -1868,6 +1868,139 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
       expect(screen.queryByText(/探しきっていない/)).toBeNull();
     });
 
+    /**
+     * **Issue #2457** — 器の入れ替えで応答不能（`sessionMissingSince`）の委譲は、
+     * 止まる直前の観測が届いたかを `shutdownObservationArrivedAfterSwap` で
+     * 言い分ける（クローンの `manager_list` の `describeUnpushedWorkObservation`
+     * と同じ3通り）。直す前は、届かなかったときも古い観測が ⚠ なしに出る。
+     */
+    describe('器の入れ替えで応答不能（Issue #2457）', () => {
+      const SWAPPED = '2026-08-16T04:00:00.000Z';
+      const STALE_OBSERVED: NonNullable<ManagerSummary['lastUnpushedWorkObservation']> = {
+        kind: 'observed',
+        at: '2026-08-16T03:50:00.000Z',
+        cwd: '/work/project',
+        worktrees: [],
+        source: 'report',
+      };
+
+      it('止まる直前の観測が届いていないとき、⚠ と「届いていない」を出し、古い観測を最新のように見せない', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'running',
+          sessionMissingSince: SWAPPED,
+          shutdownObservationArrivedAfterSwap: false,
+          lastUnpushedWorkObservation: STALE_OBSERVED,
+        });
+
+        expect(
+          await screen.findByText(/⚠ 未push観測: 器が止まる直前の観測は届いていない/),
+        ).toBeTruthy();
+        expect(screen.getByText(/未pushが無かったことを意味しない/)).toBeTruthy();
+        // 表示中の観測は、時刻と経路つきの「古いもの」として出る。
+        expect(
+          screen.getByText(/表示中の観測は .* 時点・ターンが report で終わったとき のもの/),
+        ).toBeTruthy();
+        // 「止まる直前の観測」とは名乗らない。
+        expect(screen.queryByText(/器が止まる直前（/)).toBeNull();
+      });
+
+      it('shutdownObservationArrivedAfterSwap が無い（旧デーモン）ときも、届いたとは見なさない', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'running',
+          sessionMissingSince: SWAPPED,
+          lastUnpushedWorkObservation: STALE_OBSERVED,
+        });
+
+        expect(await screen.findByText(/器が止まる直前の観測は届いていない/)).toBeTruthy();
+      });
+
+      it('観測が一度も無いときも黙らず、「表示中の観測は無い」と言う', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'running',
+          sessionMissingSince: SWAPPED,
+          shutdownObservationArrivedAfterSwap: false,
+        });
+
+        expect(await screen.findByText(/器が止まる直前の観測は届いていない/)).toBeTruthy();
+        expect(screen.getByText(/表示中の観測は無い（一度も取れていない）/)).toBeTruthy();
+      });
+
+      it('届いていない観測が unavailable のときも、理由を「表示中の観測」として添える', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'running',
+          sessionMissingSince: SWAPPED,
+          shutdownObservationArrivedAfterSwap: false,
+          lastUnpushedWorkObservation: {
+            kind: 'unavailable',
+            at: '2026-08-16T03:50:00.000Z',
+            reason: 'git が見つからなかった',
+            source: 'report',
+          },
+        });
+
+        expect(await screen.findByText(/器が止まる直前の観測は届いていない/)).toBeTruthy();
+        expect(screen.getByText(/取れなかった: git が見つからなかった/)).toBeTruthy();
+      });
+
+      it('（対照）止まる直前の観測が届いているときは、今までどおり ⚠ なしで「器が止まる直前」の観測として出す', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'running',
+          sessionMissingSince: SWAPPED,
+          shutdownObservationArrivedAfterSwap: true,
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-08-16T03:59:00.000Z',
+            cwd: '/work/project',
+            worktrees: [{ relativePath: '.', branch: 'feat/x' }],
+            source: 'shutdown',
+          },
+        });
+
+        expect(await screen.findByText(/未push観測: 器が止まる直前（.*）の観測:/)).toBeTruthy();
+        expect(screen.getByText(/branch=feat\/x/)).toBeTruthy();
+        await waitFor(() => {
+          expect(screen.queryByText(/届いていない/)).toBeNull();
+        });
+        expect(screen.queryByText(/⚠ 未push観測/)).toBeNull();
+      });
+
+      it('（対照）届いた観測が unavailable のときは、取れなかった理由を言う', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'running',
+          sessionMissingSince: SWAPPED,
+          shutdownObservationArrivedAfterSwap: true,
+          lastUnpushedWorkObservation: {
+            kind: 'unavailable',
+            at: '2026-08-16T03:59:00.000Z',
+            reason: 'git が見つからなかった',
+            source: 'shutdown',
+          },
+        });
+
+        expect(
+          await screen.findByText(/に取ろうとしたが取れなかった: git が見つからなかった/),
+        ).toBeTruthy();
+        expect(screen.queryByText(/届いていない/)).toBeNull();
+      });
+
+      it('（対照）sessionMissingSince が無ければ、今までの「最後の1回」の書き方のまま', async () => {
+        renderDetail({
+          ...BASE,
+          status: 'done',
+          lastUnpushedWorkObservation: STALE_OBSERVED,
+        });
+
+        expect(await screen.findByText(/未push観測（manager_stop/)).toBeTruthy();
+        expect(screen.queryByText(/届いていない/)).toBeNull();
+      });
+    });
+
     it('知らない kind でも落ちない（#1623 / #1630 の流儀）', async () => {
       renderDetail({
         ...BASE,

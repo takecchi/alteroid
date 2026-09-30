@@ -76,7 +76,11 @@ import {
  * `describeUnpushedWorkObservation`）が読んでいるのと同じ1文を、この画面
  * にも同じ生成元から届ける。
  */
-import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/unpushed-work-observation-format';
+import {
+  describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationSource,
+  UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
+} from '@alteroid/core/unpushed-work-observation-format';
 import type { ManagerDenial, ManagerStatus, ManagerSummary } from '@alteroid/logic';
 
 import type { Route } from './+types/manager-detail';
@@ -1282,51 +1286,126 @@ function ResetTimeSkewNote({ manager }: { manager: ManagerSummary }) {
  */
 function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   const observation = manager.lastUnpushedWorkObservation;
+  const swapped = manager.sessionMissingSince !== undefined;
+  if (observation === undefined && !swapped) return null;
+
+  // **Issue #2457** — 器の入れ替えで応答不能（`sessionMissingSince`）の委譲は、
+  // クローンの `manager_list`（`describeUnpushedWorkObservation`）と同じ3通りに
+  // 言い分ける。判定（`shutdownObservationArrivedAfterSwap === true` かつ観測が
+  // 在る）も文言（断りの1文・経路の1句）もそちらと同じ生成元
+  // （`unpushed-work-observation-format`）を通す。
+  if (swapped) {
+    if (manager.shutdownObservationArrivedAfterSwap === true && observation !== undefined) {
+      if (observation.kind === 'unavailable') {
+        return `未push観測: 器が止まる直前（${formatDateTime(observation.at)}）に取ろうとしたが取れなかった: ${observation.reason}`;
+      }
+      if (observation.kind === 'observed') {
+        return observedUnpushedWorkNode(
+          `未push観測: 器が止まる直前（${formatDateTime(observation.at)}）の観測:`,
+          observation,
+        );
+      }
+    } else {
+      // 届いていない（観測が無い・古いセッションのもの・`source` が
+      // `'shutdown'` ではない、のどれかを区別しない）。**古い観測を最新のように
+      // 見せない**——断りの後に「表示中の観測」として時刻と経路つきで添える。
+      const warn = (
+        <div className="text-warn">{UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE}</div>
+      );
+      if (observation === undefined) {
+        return (
+          <>
+            {warn}
+            <div className="mt-1">表示中の観測は無い（一度も取れていない）</div>
+          </>
+        );
+      }
+      if (observation.kind === 'unavailable') {
+        return (
+          <>
+            {warn}
+            <div className="mt-1">
+              {`表示中の観測は ${formatDateTime(observation.at)} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`}
+            </div>
+          </>
+        );
+      }
+      if (observation.kind === 'observed') {
+        return (
+          <>
+            {warn}
+            <div className="mt-1">
+              {observedUnpushedWorkNode(
+                `表示中の観測は ${formatDateTime(observation.at)} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの:`,
+                observation,
+              )}
+            </div>
+          </>
+        );
+      }
+    }
+  }
+  // 以降は、器の入れ替えで応答不能ではない委譲（と、知らない kind）。
   if (observation === undefined) return null;
+
   const provenance =
     'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
     'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
     '（manager_stop の force・done/waiting_human の非force・人間の停止・自動畳み）で' +
-    '取った最後の1回（器の入れ替え（redeploy・枠落ちでセッションを失う経路）では' +
-    '更新されない。いまの状態そのものではない）';
+    '取った最後の1回（器の入れ替え（redeploy・枠落ちでセッションを失う経路）の直前には' +
+    'best-effort で取るが、届かないことがある。いまの状態そのものではない）';
 
   if (observation.kind === 'unavailable') {
     return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${observation.reason}`;
   }
   if (observation.kind === 'observed') {
-    // **Issue #1885** — 確かめきれなかったことの4欄が載っているとき、
-    // クローンの `manager_list`（`describeUnpushedWorkObservation`）と
-    // 同じ1文をここにも出す。判定はそちらと同じ生成元
-    // （`describeUnpushedWorkObservationIncompleteness`）を素通しするだけ。
-    const incompleteNote = describeUnpushedWorkObservationIncompleteness(observation);
-    if (observation.worktrees.length === 0) {
-      return (
-        `未push観測（${provenance}、${formatDateTime(observation.at)}）: 見つかった作業ツリー0本` +
-        (incompleteNote === null ? '' : ` ${incompleteNote}`)
-      );
-    }
-    return (
-      <>
-        未push観測（{provenance}、{formatDateTime(observation.at)}）:
-        {incompleteNote !== null && <div className="mt-1 text-warn">{incompleteNote}</div>}
-        <ul className="mt-1 list-disc pl-4">
-          {observation.worktrees.map((wt, index) => (
-            // key に index を混ぜる——相対パスだけでは、同名の worktree が
-            // 2箇所に無いとは限らないので一意にならない。
-            <li key={`${wt.relativePath}::${index}`} className="break-all">
-              {wt.relativePath}: branch=
-              {wt.branch === null ? 'null（取れなかった）' : wt.branch}
-              {wt.remoteOrigin !== undefined &&
-                ` / origin=${maskUrl(`https://${wt.remoteOrigin.host}${wt.remoteOrigin.path}`)}`}
-            </li>
-          ))}
-        </ul>
-      </>
+    return observedUnpushedWorkNode(
+      `未push観測（${provenance}、${formatDateTime(observation.at)}）:`,
+      observation,
     );
   }
   // 版のずれ（新しいデーモンがこの画面の知らない kind を返した）でも落ちない。
   const unknownKind: string = (observation as { kind: string }).kind;
   return `未push観測: この画面が知らない種類 "${unknownKind}"（デーモンの版が新しい可能性）。`;
+}
+
+/**
+ * `kind: 'observed'` の観測の本体（作業ツリーの一覧と、確かめきれなかった
+ * ことの注記）を、`lead`（何の観測かを言う1句）の後ろへ描く。
+ */
+function observedUnpushedWorkNode(
+  lead: string,
+  observation: Extract<
+    NonNullable<ManagerSummary['lastUnpushedWorkObservation']>,
+    { kind: 'observed' }
+  >,
+): ReactNode {
+  // **Issue #1885** — 確かめきれなかったことの4欄が載っているとき、
+  // クローンの `manager_list`（`describeUnpushedWorkObservation`）と
+  // 同じ1文をここにも出す。判定はそちらと同じ生成元
+  // （`describeUnpushedWorkObservationIncompleteness`）を素通しするだけ。
+  const incompleteNote = describeUnpushedWorkObservationIncompleteness(observation);
+  if (observation.worktrees.length === 0) {
+    return `${lead} 見つかった作業ツリー0本${incompleteNote === null ? '' : ` ${incompleteNote}`}`;
+  }
+  return (
+    <>
+      {lead}
+      {incompleteNote !== null && <div className="mt-1 text-warn">{incompleteNote}</div>}
+      <ul className="mt-1 list-disc pl-4">
+        {observation.worktrees.map((wt, index) => (
+          // key に index を混ぜる——相対パスだけでは、同名の worktree が
+          // 2箇所に無いとは限らないので一意にならない。
+          <li key={`${wt.relativePath}::${index}`} className="break-all">
+            {wt.relativePath}: branch=
+            {wt.branch === null ? 'null（取れなかった）' : wt.branch}
+            {wt.remoteOrigin !== undefined &&
+              ` / origin=${maskUrl(`https://${wt.remoteOrigin.host}${wt.remoteOrigin.path}`)}`}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
 }
 
 function UnpushedWorkObservationNote({ manager }: { manager: ManagerSummary }) {
@@ -1381,7 +1460,8 @@ function DiagnosticsCard({ manager }: { manager: ManagerSummary }) {
     cgroupEventsText(manager) !== null ||
     systemErrorText(manager) !== null ||
     resetTimeSkewText(manager) !== null ||
-    manager.lastUnpushedWorkObservation !== undefined;
+    // 観測が無くても、器の入れ替えで応答不能なら「届いていない」を言う（Issue #2457）。
+    unpushedWorkText(manager) !== null;
   if (!visible) return null;
 
   return (

@@ -9,7 +9,10 @@ import type { JournalDiagnosticsEntryLike } from './journal-diagnostics-format.j
 import type { SystemErrorFactsLike } from './system-error-format.js';
 import { systemErrorFactsSchema, type SystemErrorFacts } from './system-error.js';
 import type { TraceActionLike } from './trace-action.js';
-import type { UnpushedWorkObservationIncompletenessLike } from './unpushed-work-observation-format.js';
+import type {
+  UnpushedWorkObservationIncompletenessLike,
+  UnpushedWorkObservationSourceLike,
+} from './unpushed-work-observation-format.js';
 // `usage.ts` はこちら（`schema.js`）を import していない（確認済み。下記
 // `turn_usage` の doc）ので循環しない。日誌の `turn_usage.layer` / `.site` /
 // `.models` は台帳（`UsageStore`）の同名の列と**同じ値**であるべきなので、
@@ -3859,6 +3862,20 @@ export type _AssertUnpushedWorkObservationIncompletenessMatchesLikeType = Assert
     { kind: 'observed' }
   > extends UnpushedWorkObservationIncompletenessLike
     ? true
+    : false
+>;
+
+/**
+ * `unpushed-work-observation-format.ts` の手で複製した
+ * `UnpushedWorkObservationSourceLike` が、`unpushedWorkObservationSourceSchema`
+ * と**両向きで**一致することの保証（Issue #2457）。経路を足して揃え忘れれば
+ * `pnpm typecheck` が落ちる。
+ */
+export type _AssertUnpushedWorkObservationSourceMatchesLikeType = AssertTrue<
+  [UnpushedWorkObservationSource] extends [UnpushedWorkObservationSourceLike]
+    ? [UnpushedWorkObservationSourceLike] extends [UnpushedWorkObservationSource]
+      ? true
+      : false
     : false
 >;
 

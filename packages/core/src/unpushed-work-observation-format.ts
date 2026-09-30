@@ -76,3 +76,62 @@ export function describeUnpushedWorkObservationIncompleteness(
   if (reasons.length === 0) return null;
   return `この観測は探しきっていない（${reasons.join('・')}）——ここに無い作業ツリーが在りうる。`;
 }
+
+/**
+ * `lastUnpushedWorkObservation.source` の手で複製した型（`schema.ts` を
+ * import しない理由は上と同じ）。**欄が増えたのに揃え忘れたら `typecheck` が
+ * 落ちる**——`schema.ts` の `_AssertUnpushedWorkObservationSourceMatchesLikeType`
+ * が両向きで保証する。
+ */
+export type UnpushedWorkObservationSourceLike =
+  'stop-refusal' | 'report' | 'tool_use' | 'auto-fold' | 'vacate' | 'stop' | 'closed' | 'shutdown';
+
+/**
+ * 観測を残した経路を人間可読な1句にする、`tools.ts`（`manager_list`）と
+ * Web UI（`manager-detail.tsx`）の**共通の定義元**（Issue #2457）。
+ * **`undefined` は「その経路だ」と見なさない**——この欄を書かなかった版・
+ * 呼び出しが在ったことをそのまま名乗る（`unpushedWorkObservationSourceSchema`
+ * の doc「無いことは、どれかの経路だと見なさない」と同じ注意）。
+ *
+ * 知らない値（デーモンの版が新しい）でも投げない——Web UI が描画中に落ちる
+ * より、知らないと名乗るほうを取る。
+ */
+export function describeUnpushedWorkObservationSource(
+  source: UnpushedWorkObservationSourceLike | undefined,
+): string {
+  if (source === undefined) {
+    return '経路不明（この欄を書かない版が残した行、または経路を渡さなかった呼び出し）';
+  }
+  switch (source) {
+    case 'stop-refusal':
+      return 'manager_stop（running・非force）の断り';
+    case 'report':
+      return 'ターンが report で終わったとき';
+    case 'tool_use':
+      return 'Bash で git push か新しい枝を作る操作を検出したとき';
+    case 'auto-fold':
+      return 'done を自動で畳む前の安全弁（auto-fold）';
+    case 'vacate':
+      return 'runner を意図して空ける直前（vacate）';
+    case 'stop':
+      return 'manager_stop（force・done/waiting_human の非force）・人間の停止・自動畳みが止める直前';
+    case 'closed':
+      return 'runner が closed を出す直前に先取り';
+    case 'shutdown':
+      return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
+    default:
+      return `知らない経路 "${String(source)}"（デーモンの版が新しい可能性）`;
+  }
+}
+
+/**
+ * 器の入れ替え（`sessionMissingSince`）で、止まる直前の観測が
+ * **届いていない**（`shutdownObservationArrivedAfterSwap !== true`）ときの
+ * 断りの1文（Issue #1266 / PR #1777、Web への写しは Issue #2457）。
+ * `tools.ts` の `describeUnpushedWorkObservation` と Web UI が同じ文を出す
+ * ための唯一の定義元。**「未pushが無かったことを意味しない」を外さないこと**
+ * ——届いていないのは「無かった」ではなく「分からない」である。
+ */
+export const UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE =
+  '⚠ 未push観測: 器が止まる直前の観測は届いていない' +
+  '（best-effort の送信のため。未pushが無かったことを意味しない）。';
