@@ -15889,7 +15889,7 @@
         "description": "入力に無い（読めた）行は消える。**読めない行は消さずに持ち越す**（issue #2354。消すには `POST /tokens/unreadable/remove`）。壊れた入力（新規行に value が無い・消えた id を指す・id 重複）は 400 で理由を返し、保存しない。",
         "responses": {
           "200": {
-            "description": "置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——**読めない行は捨てずに持ち越した**（issue #2354）。消すには `POST /tokens/unreadable/remove`。",
+            "description": "置き換え後のプール（値は出さない）と設定。設定が読めないときは `settings` の代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——**読めない行は捨てずに持ち越した**（issue #2354）。消すには `POST /tokens/unreadable/remove`。**保存した後の表示の読み直しに失敗したときも 200**（保存したので「保存できなかった」とは言わない）: `viewUnavailable` だけを返し、プールの欄（`tokens` など）は載せない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16013,9 +16013,17 @@
                         }
                       },
                       "required": ["count", "rows"]
+                    },
+                    "viewUnavailable": {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["reason"]
                     }
-                  },
-                  "required": ["tokens"]
+                  }
                 }
               }
             }
@@ -16121,7 +16129,7 @@
         "description": "`GET /tokens` の `rowsUnreadable.rows[].id` を指した読めない行だけを消す。読めた行・設定には触れない。id が取れない行はこの口では消せない。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。",
         "responses": {
           "200": {
-            "description": "消した後のプール（値は出さない）と、消した id。",
+            "description": "消した後のプール（値は出さない）と、消した id。**消した後の表示の読み直しに失敗したときも 200**（消したので「消せなかった」とは言わない）: `removedIds` と `viewUnavailable` だけを返し、プールの欄は載せない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16251,9 +16259,18 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "viewUnavailable": {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["reason"]
                     }
                   },
-                  "required": ["tokens", "removedIds"]
+                  "required": ["removedIds"]
                 }
               }
             }

@@ -60,6 +60,7 @@ import { createApp, parseAllowedOrigins } from './app.js';
 import { encodeCursor } from './cursor.js';
 import type { AuthPlan } from './auth.js';
 import { createJournalBus, type JournalBus } from './journal-bus.js';
+import { createHttpRunner } from './runner-client.js';
 import {
   managerSummarySchema,
   practiceListResponseSchema,
@@ -9507,6 +9508,137 @@ describe('runner への鍵配布を日誌へ残す（POST /runners/credentials�
     expect(ours[1]).toContain('配れなかった');
     expect(JSON.stringify(ours)).not.toContain(DUMMY_VALUE);
   });
+
+  /**
+   * **配布が失敗したとき、error の文面（`message`）を応答・日誌・stderr へ載せない**
+   * （issue #2407）。例外は失敗した呼び出しのパラメータを添えてくることがある——
+   * 実物の runner は固定文言を返すが、`RunnerHttpError` は runner（や間の中継）の
+   * 応答本文をそのまま `message` に入れる作りなので、本文が送った値を写せば載る。
+   * ここは偽の値だけを使う。
+   */
+  describe('配布の失敗に鍵の値を載せない（issue #2407）', () => {
+    const FAKE_SECRET = 'FAKE_SECRET_VALUE_2407';
+
+    async function journalText(): Promise<string> {
+      return JSON.stringify(await stores.journal.list({ types: ['decision'] }));
+    }
+
+    it('setCredentials が値入りの error を投げても、応答・日誌・stderr に値が出ず、種類は残る', async () => {
+      const failing = {
+        ...fakeRunner('runner-bad'),
+        async setCredentials(entries: { name: string; value: string }[]) {
+          throw Object.assign(
+            new Error(`rpc failed: params=${JSON.stringify(entries)}`, {
+              cause: new Error(`inner ${entries[0]?.value ?? ''}`),
+            }),
+            { name: 'FakeRpcError' },
+          );
+        },
+      };
+      const good = fakeRunner('runner-good');
+      const target = withRunners([failing, good] as never);
+
+      const lines = await captureStderr(async () => {
+        const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(text).not.toContain(FAKE_SECRET);
+        const body = JSON.parse(text) as {
+          results: { runnerId: string; ok: boolean; error?: string }[];
+        };
+        expect(body.results[0]).toEqual({
+          runnerId: 'runner-bad',
+          ok: false,
+          error: '鍵の配布に失敗した（FakeRpcError）',
+        });
+        // 対照: もう1台には普通に配れている。
+        expect(body.results[1]).toMatchObject({ runnerId: 'runner-good', ok: true });
+      });
+      expect(lines.join('\n')).not.toContain(FAKE_SECRET);
+
+      const text = await journalText();
+      expect(text).not.toContain(FAKE_SECRET);
+      expect(text).toContain('runner-bad=失敗（FakeRpcError）');
+      expect(text).toContain('runner-good=ok');
+    });
+
+    it('runner の HTTP 応答が送った値を写しても（RunnerHttpError の message）、値が出ず、状態は残る', async () => {
+      const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(typeof input === 'string' ? input : input.toString());
+        if (url.pathname === '/health') {
+          return Response.json({ ok: true, runnerId: 'runner-http', workspacePath: '/work' });
+        }
+        // 送られた本文をそのまま写して 500 を返す runner（または間の中継）。
+        return new Response(`echo: ${String(init?.body)}`, { status: 500 });
+      }) as typeof fetch;
+      const httpRunner = await createHttpRunner({
+        baseUrl: 'http://runner.test',
+        token: 'test-runner-token',
+        fetchFn,
+      });
+      try {
+        // 前提: この error の message には値が載っている（歯が空撃ちでないこと）。
+        const raw = await httpRunner
+          .setCredentials([{ name: 'NPM_TOKEN', value: FAKE_SECRET }])
+          .then(
+            () => '',
+            (error: unknown) => String(error),
+          );
+        expect(raw).toContain(FAKE_SECRET);
+
+        const target = withRunners([httpRunner] as never);
+        const lines = await captureStderr(async () => {
+          const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
+          expect(response.status).toBe(200);
+          const text = await response.text();
+          expect(text).not.toContain(FAKE_SECRET);
+          const body = JSON.parse(text) as { results: { ok: boolean; error?: string }[] };
+          expect(body.results[0]?.ok).toBe(false);
+          expect(body.results[0]?.error).toBe('鍵の配布に失敗した（RunnerHttpError、HTTP 500）');
+        });
+        expect(lines.join('\n')).not.toContain(FAKE_SECRET);
+        const text = await journalText();
+        expect(text).not.toContain(FAKE_SECRET);
+        expect(text).toContain('runner-http=失敗（RunnerHttpError、HTTP 500）');
+      } finally {
+        await httpRunner.close();
+      }
+    });
+
+    it('registry.list() が値入りの error を投げても、打ち消しの日誌に値が出ず、種類は残る', async () => {
+      const throwingRegistry = {
+        async list() {
+          throw Object.assign(new Error(`registry down: ${FAKE_SECRET}`), {
+            name: 'FakeRegistryError',
+          });
+        },
+        async get() {
+          throw new Error('この検証では使わない');
+        },
+        async select() {
+          throw new Error('この検証では使わない');
+        },
+      } as never;
+      const target = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        runners: throwingRegistry,
+      });
+
+      // 日誌の検査が対象。500 の後始末（`base.onError`）が stderr に書く1行は
+      // 元から変えていない口なので、ここでは見ない。
+      const response = await distribute(target, [{ name: 'NPM_TOKEN', value: FAKE_SECRET }]);
+      expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain(FAKE_SECRET);
+
+      const text = await journalText();
+      expect(text).not.toContain(FAKE_SECRET);
+      expect(text).toContain('配れなかった');
+      expect(text).toContain('runner の一覧を取れなかった（FakeRegistryError）');
+    });
+  });
 });
 
 /**
@@ -9800,6 +9932,49 @@ describe('認証トークンのプール', () => {
     // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
     expect(lines.join('\n')).not.toContain(SECRET);
     expect(lines.join('\n')).not.toBe('');
+  });
+
+  /**
+   * issue #2415: `base.onError` の stderr は、例外の文を**伏せ字を通して**出す。
+   * 上のテストは値が2行目（`params:` の次の行）にあるので「1行目だけ」で落ちるが、
+   * ここは値が**1行目**にある形（URL の資格・Bearer・同じ行の `params:`）を測る。
+   * 診断（SQL 文・host）は残る。値はすべて偽である。
+   */
+  it('base.onError: 例外の1行目に値があっても stderr に出ない（診断は残る）', async () => {
+    const FAKE = 'FAKE_SECRET_VALUE_2415B';
+    const failing: Stores = {
+      ...stores,
+      tokens: {
+        ...stores.tokens,
+        list: () => {
+          throw new Error(
+            `connect postgres://u:${FAKE}@db.internal:5432/x Authorization: Bearer ${FAKE} ` +
+              `Failed query: select "value" from "agent_tokens" params: ${FAKE}`,
+          );
+        },
+      },
+    };
+    const withTokens = createApp({
+      clone: fake.clone,
+      stores: failing,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: failing }),
+    });
+
+    let response: Response | undefined;
+    const lines = await captureStderr(async () => {
+      response = await withTokens.request('/tokens');
+    });
+
+    expect(response?.status).toBe(500);
+    expect(await (response as Response).text()).not.toContain(FAKE);
+    const stderr = lines.join('\n');
+    expect(stderr).toContain('HTTP 経路で例外を捕まえました');
+    expect(stderr).not.toContain(FAKE);
+    expect(stderr).toContain('postgres://u:[REDACTED]@db.internal:5432/x');
+    expect(stderr).toContain('Failed query: select "value" from "agent_tokens"');
+    expect(stderr).toContain('params: [REDACTED]');
   });
 
   it('PUT /tokens/policy で回す契機・冷却を変えられる（部分更新）', async () => {

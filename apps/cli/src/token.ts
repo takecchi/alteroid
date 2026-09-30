@@ -149,7 +149,16 @@ export function describeRowsUnreadable(
  * 書き換え（`token add` / `remove` / `disable` / `enable`）の出力の末尾に足す1行
  * （issue #2354）。読めない行を持ち越したときだけ（0件なら空文字）。**値は出さない（件数だけ）。**
  */
-export function describeCarriedOver(view: TokensView): string {
+export function describeCarriedOver(view: PutTokensView): string {
+  // **保存した後の読み直しに失敗した**（issue #2396）。保存したことは確かだが、持ち越した
+  // 行の有無は分からない——「持ち越した行は無い」と読めないよう、件数は言わずに確かめ方を言う。
+  // **撃ち直さない**ことも言う（保存は済んでいる）。
+  if (view.viewUnavailable !== undefined) {
+    return (
+      '保存した。ただし、保存後のプールを読み直せなかった（今の姿は分からない。' +
+      '撃ち直さず、alteroid token list で確かめる）。\n'
+    );
+  }
   const unreadable = view.rowsUnreadable;
   if (unreadable === undefined || unreadable.count === 0) return '';
   return (
@@ -167,10 +176,22 @@ export async function tokenRemoveUnreadableCommand(ids: readonly string[]): Prom
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',
     body: JSON.stringify({ ids }),
-  })) as TokensView & { removedIds: string[] };
+  })) as Partial<TokensView> & {
+    removedIds: string[];
+    viewUnavailable?: { reason: string };
+  };
   stdout.write(
     `読めないトークンの行を ${String(result.removedIds.length)} 行消した（id: ${result.removedIds.join(', ')}）。\n`,
   );
+  // **消した後の読み直しに失敗した**（issue #2390）。消したことは確かだが、残りの行は
+  // 分からない——「読めない行は無い」と読めないよう、残りの件数は言わずに確かめ方を言う。
+  if (result.viewUnavailable !== undefined) {
+    stdout.write(
+      '消した後のプールを読み直せなかった（残りの読めない行は分からない。' +
+        'alteroid token list で確かめる）。\n',
+    );
+    return;
+  }
   const left = result.rowsUnreadable;
   if (left !== undefined) {
     stdout.write(
@@ -417,11 +438,17 @@ function toInput(token: AgentTokenView): AgentTokenInput {
   return { id: token.id, label: token.label, order: token.order };
 }
 
-async function putTokens(target: Target, tokens: AgentTokenInput[]): Promise<TokensView> {
+/**
+ * `PUT /tokens` の応答。保存した後の読み直しに失敗したとき（issue #2396）は、200 のまま
+ * `viewUnavailable` だけが載り、`tokens` などの欄は無い。
+ */
+type PutTokensView = Partial<TokensView> & { viewUnavailable?: { reason: string } };
+
+async function putTokens(target: Target, tokens: AgentTokenInput[]): Promise<PutTokensView> {
   return (await request(target, '/tokens', {
     method: 'PUT',
     body: JSON.stringify({ tokens }),
-  })) as TokensView;
+  })) as PutTokensView;
 }
 
 async function readAll(): Promise<string> {

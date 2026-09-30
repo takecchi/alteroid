@@ -10,6 +10,7 @@ import {
 import {
   ALLOWLIST,
   findDirectMkdtempCalls,
+  HELPER_GLOBS,
   judgeMkdtempScan,
   // @ts-expect-error -- 素の .mjs（型宣言を持たない、この歯の中核）を読む
 } from './no-direct-mkdtemp-core.mjs';
@@ -133,6 +134,32 @@ describe('本番スキャン（このファイル自身も含め、repo 全体�
     const result = judgeMkdtempScan(matchedPaths, hits, ALLOWLIST);
 
     expect(result.ok, result.ok ? undefined : result.message).toBe(true);
+  });
+
+  it('テストからしか import されない helper（HELPER_GLOBS）も、直接呼び出しが無い（#2419）', () => {
+    const helperPaths = collectMatchingTestFiles(ROOT, HELPER_GLOBS);
+    // 「判定できない」側に落ちていないことの前提: 3つの git-child-env が全部見えている
+    expect(helperPaths).toEqual(
+      expect.arrayContaining([
+        'scripts/git-child-env.ts',
+        '.github/scripts/git-child-env.ts',
+        'packages/core/src/git-child-env.test-support.ts',
+      ]),
+    );
+
+    const hits = findDirectMkdtempCalls(readFilesForScan(ROOT, helperPaths));
+    const result = judgeMkdtempScan(helperPaths, hits, ALLOWLIST);
+
+    expect(result.ok, result.ok ? undefined : result.message).toBe(true);
+  });
+
+  it('helper の走査は、直接呼び出しを含む helper を実際に検出する（陰性対照）', () => {
+    const path = 'packages/core/src/fake.test-support.ts';
+    const files = [{ path, content: `const d = ${callText('mkdtempSync')}join(tmpdir(), 'x-'));` }];
+    const hits = findDirectMkdtempCalls(files);
+    const result = judgeMkdtempScan([path], hits, ALLOWLIST);
+    expect(result.ok).toBe(false);
+    expect(result.kind).toBe('violation');
   });
 
   it('許可リストに載っている間接呼び出し専用ファイル（cli-stub.ts）は *.test.ts ではないので、走査自体の対象に入らない', async () => {
