@@ -74,7 +74,6 @@ describe('memory_list の cursor は、親の slug が子より大きくても�
       const decoded = decodeMemoryCursor(c);
       return decoded.ok ? decoded.cursor.from : '?';
     });
-    // 同じ cursor が2回続けて返る = 頁が進んでいない
     // 同じ cursor が2回続けて返る = 頁が進んでいない（ストア順で from が増えること）
     const stalled = froms.some(
       (from, i) =>
