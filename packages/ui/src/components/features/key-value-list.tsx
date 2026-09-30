@@ -17,6 +17,11 @@ export interface KeyValueItem {
  * 広い画面では名前の列を `labelWidth` で固定して2列に、狭い画面では1列に
  * 積む（名前の下に値）。**値は折り返す** — パスや識別子は空白を持たないので、
  * `break-all` を付けないと枠を突き破る。
+ *
+ * **狭い画面（1列に積むとき）は、先頭以外の名前に上の余白を足して組の境目を作る**
+ * （本4-A。理由は `apps/web/app/routes/manager-detail.test.tsx` の
+ * 「横並びの積み替え（本4-A）」の doc）。各項目は `contents` の要素で包むので、名前は
+ * 常に包みの最初の子になり `first:` が全部に効いてしまう ⟹ 先頭かどうかは添字で決める。
  */
 export function KeyValueList({
   items,
@@ -41,7 +46,11 @@ export function KeyValueList({
           key={item.key ?? (typeof item.label === 'string' ? item.label : index)}
           className="contents"
         >
-          <dt className="text-xs text-muted-foreground sm:pt-0.5">{item.label}</dt>
+          <dt
+            className={cn('text-xs text-muted-foreground sm:pt-0.5', index > 0 && 'mt-3 sm:mt-0')}
+          >
+            {item.label}
+          </dt>
           <dd className={cn('min-w-0 break-all', item.mono === true && 'font-mono text-xs')}>
             {item.value}
           </dd>
