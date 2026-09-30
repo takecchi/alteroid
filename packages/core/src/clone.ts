@@ -2783,6 +2783,9 @@ class Clone implements CloneHost {
    * - 止めたことは `[判断]` の1行として日誌に残す（人間が後から「誰が止めたか」を
    *   読めるように）。**先に書いてから止める** —— 止めた後に書くと、止めたことで
    *   起きた失敗の記録より後ろに並んで、順序が逆に読める
+   * - **書いた後にもう一度、同じターンかを確かめる**（#2488）。書く間に別のターンへ
+   *   入れ替わっていたら止めず、打ち消しの行を足して `'idle'` を返す。`q.interrupt()`
+   *   が投げたときも、打ち消しの行を足してから例外を投げ直す
    * - 止めた後、SDK はそのターンを失敗として終える。それは既存の失敗の経路
    *   （`#reportFailure`）がそのまま記録する
    */
@@ -2799,7 +2802,45 @@ class Clone implements CloneHost {
         `${turn.kind === 'distill' ? '蒸留' : '通常'}のターン）。セッションと受信箱はそのまま残る`,
       ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
     });
-    await q.interrupt();
+
+    // **日誌を待っている間に、ターンは入れ替わりうる**（#2488）。上の `await` の間に
+    // そのターンが終わって次のターンが始まると、`q.interrupt()` は人間が止めようと
+    // していない次のターンを止める。**日誌を書く順は変えない**（上の doc）ので、
+    // 書いた後にもう一度、同じターン・同じ query かを確かめる。違えば止めず、
+    // 先に書いた「止めた」を打ち消す1行を足して `'idle'`（止めるものが無かった）を返す。
+    // 呼び手の契約（`'interrupted' | 'idle'`）は変えない —— 人間から見て、止める
+    // ターンが無かったことに変わりはない。
+    if (this.#sdkSession.turn !== turn || this.#sdkSession.query !== q) {
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_DECISION_PREFIX}止めようとしたターンは既に終わっていたので、止めなかった` +
+          '（直前の「止めた」の行は取り消す。次のターンには触れていない）',
+        ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+      });
+      return 'idle';
+    }
+
+    try {
+      await q.interrupt();
+    } catch (error) {
+      // **止められなかったのに「止めた」だけが残らないようにする。** 打ち消しの行を
+      // 足してから投げ直す（呼び手は失敗を知る）。理由は秘密を伏せた1行にする
+      // （`describeProbeError`。`#observeContextUsage` と同じ作法）。この行の書き込みが
+      // 失敗しても `#journal` が stderr へ跡を残して飲むので、元の例外は必ず届く。
+      await this.#journal({
+        type: 'exchange',
+        with: 'self',
+        role: 'outbound',
+        text:
+          `${EXCHANGE_KIND_FAILURE_PREFIX}ターンを止められなかった（${describeProbeError(error, process.env)}）。` +
+          '直前の「止めた」の行は取り消す。ターンは走ったまま',
+        ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+      });
+      throw error;
+    }
     return 'interrupted';
   }
 
