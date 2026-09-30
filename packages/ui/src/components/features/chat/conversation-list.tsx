@@ -24,6 +24,9 @@ export type ConversationRenderLink = (
   slot: { className: string; children: ReactNode },
 ) => ReactNode;
 
+const DEFAULT_ROW_CLASS = 'block border-b border-border px-3 py-2 transition-colors hover:bg-muted';
+const DEFAULT_ACTIVE_ROW_CLASS = 'lumen-edge bg-accent text-accent-foreground';
+
 /**
  * 会話の一覧（会話の画面の脇の面）。
  *
@@ -32,6 +35,12 @@ export type ConversationRenderLink = (
  *   件数で落とした会話がある）。**切ったことは切ったと分かる形で言う**ので、
  *   画面が組み立てて渡す
  * - `inDrawer` —— 狭い画面でドロワーの中に置くとき（枠と幅はドロワーが持つ）
+ * - `numericCount` —— 往復の数を `data-numeric` の `span` で包むか（既定は包む）。
+ *   偽なら「更新時刻 · N 往復」を包まずに出す
+ * - `rowClassName` / `activeRowClassName` —— 行の見た目。渡すと既定を**置き換える**
+ *   （足すのではない）。`activeRowClassName` は選択中の行にだけ `rowClassName` へ足される
+ * - `newConversationTabStop` —— 「新しい会話」のボタンを Tab の順路に残すか。既定は
+ *   外す（リンクの中のボタンなので、Tab が同じ行き先に2回止まる）。真なら残す
  */
 export function ConversationList({
   items,
@@ -41,6 +50,10 @@ export function ConversationList({
   error,
   notes,
   inDrawer = false,
+  numericCount = true,
+  rowClassName = DEFAULT_ROW_CLASS,
+  activeRowClassName = DEFAULT_ACTIVE_ROW_CLASS,
+  newConversationTabStop = false,
 }: {
   items: readonly ConversationListItem[] | undefined;
   activeId: string | undefined;
@@ -49,11 +62,16 @@ export function ConversationList({
   error?: unknown;
   notes?: readonly ReactNode[];
   inDrawer?: boolean;
+  numericCount?: boolean;
+  rowClassName?: string;
+  activeRowClassName?: string;
+  newConversationTabStop?: boolean;
 }) {
   return (
     <aside
       className={cn(
         'flex flex-col bg-card',
+        // ドロワーの中では枠と幅は Drawer 側が持っている。
         inDrawer ? 'min-h-0 flex-1' : 'w-64 shrink-0 border-r border-border',
       )}
     >
@@ -64,7 +82,12 @@ export function ConversationList({
           {
             className: '',
             children: (
-              <Button size="sm" variant="ghost" aria-label="新しい会話" tabIndex={-1}>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="新しい会話"
+                tabIndex={newConversationTabStop ? undefined : -1}
+              >
                 <Plus className="size-4" aria-hidden />
               </Button>
             ),
@@ -85,15 +108,21 @@ export function ConversationList({
                 {renderLink(
                   { id: item.id },
                   {
-                    className: cn(
-                      'block border-b border-border px-3 py-2 transition-colors hover:bg-muted',
-                      item.id === activeId && 'lumen-edge bg-accent text-accent-foreground',
-                    ),
+                    className: cn(rowClassName, item.id === activeId && activeRowClassName),
                     children: (
                       <>
+                        {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
                         <p className="truncate text-xs">{item.preview}</p>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          {item.updatedLabel} · <span data-numeric>{item.messages}</span> 往復
+                          {numericCount ? (
+                            <>
+                              {item.updatedLabel} · <span data-numeric>{item.messages}</span> 往復
+                            </>
+                          ) : (
+                            <>
+                              {item.updatedLabel} · {item.messages} 往復
+                            </>
+                          )}
                         </p>
                       </>
                     ),

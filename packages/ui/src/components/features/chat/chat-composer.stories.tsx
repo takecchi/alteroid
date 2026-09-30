@@ -53,3 +53,13 @@ const args = { value: '', onChange: () => undefined, onSend: () => undefined };
 export const Default: Story = { args, render: () => <Demo /> };
 export const Sending: Story = { args, render: () => <Demo sending /> };
 export const WithError: Story = { args, render: () => <Demo error /> };
+
+/** 帯に背景色を敷かない（`opaque` を偽にする。背後の面の色がそのまま見える）。 */
+export const Transparent: Story = {
+  args: { ...args, opaque: false },
+  render: () => (
+    <div className="flex h-40 flex-col justify-end bg-card">
+      <ChatComposer value="" onChange={() => undefined} onSend={() => undefined} opaque={false} />
+    </div>
+  ),
+};

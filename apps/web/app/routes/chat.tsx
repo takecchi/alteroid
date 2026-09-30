@@ -1,8 +1,12 @@
-import { OctagonPause, PanelLeft, Pencil, Plus, Send, Square } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 
 import {
+  ChatComposer,
+  ChatHeader,
+  ConversationList as UiConversationList,
   Drawer,
   Markdown,
   Button,
@@ -344,87 +348,70 @@ function ConversationList({
 }) {
   const { data, error, isLoading } = useConversations(30);
 
+  /*
+   * 但し書きを組み立てるのは画面の側（`ConversationList` の `notes`）。出す条件は
+   * 従来どおり、この順に並べる。
+   */
+  const notes: ReactNode[] = [];
+  /*
+   * `scanned` は「人間との往復をどこまで遡ったか」（マネージャーとの往復・
+   * 内部ターンは数えない。issue #418）。全部を見たとは限らないので、
+   * 黙って切らずに出す（掘れば降りられる、が要件）。
+   */
+  if (data !== undefined) notes.push(`人間との往復 ${data.scanned} 件を走査`);
+  /*
+   * **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
+   * の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
+   * 出さない（窓が先頭に届いているなら、そこに但し書きを出すと「常に
+   * 出ているもの」になって情報でなくなる）。
+   */
+  if (data?.reachedStart === false) {
+    notes.push(
+      `人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`,
+    );
+  }
+  /*
+   * **窓の中で `limit` に収まらず落とした会話があることを言う（#418 の
+   * 裏返し）。** #418 は「他の種別に食われる」窓、こちらは「自分の種別で
+   * 溢れる」窓 — 人間との会話は増え続けるので、時間が経てば必ず踏む。
+   * 語彙はクローンの道具（`tools.ts` の「…ほか N 件は省略」）に寄せる。
+   * `reachedStart` とは別の条件なので、両方出ることも片方だけのこともある。
+   */
+  if (data !== undefined && data.hiddenByLimit > 0) {
+    notes.push(
+      `…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`,
+    );
+  }
+
   return (
-    <aside
-      className={cn(
-        'flex flex-col bg-card',
-        // ドロワーの中では枠と幅は Drawer 側が持っている。
-        onNavigate === undefined ? 'w-64 shrink-0 border-r border-border' : 'min-h-0 flex-1',
-      )}
-    >
-      <div className="flex items-center justify-between border-b border-border px-3 py-3">
-        <span className="text-sm font-semibold">会話</span>
-        <Link to="/chat" onClick={onNavigate}>
-          <Button size="sm" variant="ghost" aria-label="新しい会話">
-            <Plus className="size-4" aria-hidden />
-          </Button>
+    <UiConversationList
+      items={data?.conversations.map((conversation) => ({
+        id: conversation.conversationId,
+        preview: conversation.preview,
+        updatedLabel: formatRelative(conversation.updatedAt),
+        messages: conversation.messages,
+      }))}
+      activeId={activeId}
+      loading={isLoading}
+      error={error}
+      notes={notes}
+      inDrawer={onNavigate !== undefined}
+      // 見た目は従来の画面のまま（往復の数を包まない・選択中は `bg-muted`・Tab の順路も従来どおり）。
+      numericCount={false}
+      rowClassName="block border-b border-border px-3 py-2 hover:bg-muted"
+      activeRowClassName="bg-muted"
+      newConversationTabStop
+      renderLink={(target, slot) => (
+        <Link
+          to={target.id === undefined ? '/chat' : `/chat/${target.id}`}
+          onClick={onNavigate}
+          // 「新しい会話」の枠は class を持たない（空の `class=""` を出さない）。
+          className={slot.className === '' ? undefined : slot.className}
+        >
+          {slot.children}
         </Link>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <ErrorNote error={error} className="m-3" />
-        {isLoading ? (
-          <Spinner />
-        ) : data === undefined || data.conversations.length === 0 ? (
-          <Empty>まだ会話がない。</Empty>
-        ) : (
-          <ul aria-label="会話">
-            {data.conversations.map((conversation) => (
-              <li key={conversation.conversationId}>
-                <Link
-                  to={`/chat/${conversation.conversationId}`}
-                  onClick={onNavigate}
-                  className={cn(
-                    'block border-b border-border px-3 py-2 hover:bg-muted',
-                    conversation.conversationId === activeId && 'bg-muted',
-                  )}
-                >
-                  {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-                  <p className="truncate text-xs">{conversation.preview}</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {formatRelative(conversation.updatedAt)} · {conversation.messages} 往復
-                  </p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/*
-        `scanned` は「人間との往復をどこまで遡ったか」（マネージャーとの往復・
-        内部ターンは数えない。issue #418）。全部を見たとは限らないので、
-        黙って切らずに出す（掘れば降りられる、が要件）。
-      */}
-      {data !== undefined && (
-        <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-          人間との往復 {data.scanned} 件を走査
-        </p>
       )}
-      {/*
-        **窓（`scan`）が日誌の先頭に届いていないことを言う。** 下の `ChatPane`
-        の「先頭には届いていない」と同じ作法 — `reachedStart` が真のときは
-        出さない（窓が先頭に届いているなら、そこに但し書きを出すと「常に
-        出ているもの」になって情報でなくなる）。
-      */}
-      {data?.reachedStart === false && (
-        <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-          {`人間との往復を ${data.scanned} 件遡ったが、先頭には届いていない。これより古いやりとりが残っている可能性がある。`}
-        </p>
-      )}
-      {/*
-        **窓の中で `limit` に収まらず落とした会話があることを言う（#418 の
-        裏返し）。** #418 は「他の種別に食われる」窓、こちらは「自分の種別で
-        溢れる」窓 — 人間との会話は増え続けるので、時間が経てば必ず踏む。
-        語彙はクローンの道具（`tools.ts` の「…ほか N 件は省略」）に寄せる。
-        `reachedStart` とは別の条件なので、両方出ることも片方だけのこともある。
-      */}
-      {data !== undefined && data.hiddenByLimit > 0 && (
-        <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-          {`…ほか ${data.hiddenByLimit} 件は省略（この窓に ${data.conversations.length + data.hiddenByLimit} 件あり、新しい順に ${data.conversations.length} 件だけ出した）。`}
-        </p>
-      )}
-    </aside>
+    />
   );
 }
 
@@ -1818,77 +1805,26 @@ export function ChatPane({
    */
   const visibleFailure = failures.has(shownId) ? failures.get(shownId) : undefined;
 
+  const shownFailure = visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure;
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
-        {onOpenList !== undefined && (
-          <button
-            type="button"
-            onClick={onOpenList}
-            aria-label="会話一覧を開く"
-            className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <PanelLeft className="size-5" aria-hidden />
-          </button>
-        )}
-        <div className="min-w-0 flex-1">
-          <h1 className="text-base font-semibold">クローンと話す</h1>
-          <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-            {shownId ?? '新しい会話'}
-          </p>
-        </div>
-        {shownId !== undefined && (
-          <div className="flex shrink-0 items-center gap-2">
-            {/*
-              **「受信をやめる」（下、入力欄の脇）とは別のボタン。** あちらは
-              この画面の購読を切るだけで、クローンのターンは走り続ける
-              （そのボタンの `title` が明言している）。これは `POST
-              /clone/interrupt` を叩いてサーバ側のターンそのものを止める
-              ——CLI の `alteroid interrupt` と同じ経路で、Web UI にだけ
-              無かった口（#1398 c23-1/c30-2。入口の等価性）。
-
-              **`sending`（この画面が受信中かどうか）では出し分けない。**
-              走っているターンはこの画面が起こしたものとは限らない（別の
-              タブ・CLI・自律の起点から始まったターンも同じクローンの
-              ものである）。会話を持てるならこのボタンは常に押せてよい
-              ——資格の判定はサーバに委ね（`useInterruptClone` の doc）、
-              ここでは先回りして隠さない。
-            */}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void handleInterrupt(shownId)}
-              loading={interrupting}
-              title="いま走っているクローンのターンだけを止める。会話とセッションはそのまま残り、次の合図で次のターンが始まる"
-              aria-label="クローンのターンを止める"
-            >
-              <OctagonPause className="size-3.5" aria-hidden />
-              <span className="hidden md:inline">ターンを止める</span>
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => void handleEndConversation(shownId)}
-              loading={endingConversation}
-              title="クローンがここまでの学びを記憶へ蒸留する"
-            >
-              会話を終える
-            </Button>
-          </div>
-        )}
-      </header>
-
-      {/*
-        「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
-        （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
-        出るので、ここに乗るのは正しく応答が返った場合だけである。**いま出している
-        会話（`shownId`）が押した時点の会話と一致するときだけ出す**
-        （`visibleInterruptNotice` の doc）。
-      */}
-      {visibleInterruptNotice !== undefined && (
-        <p className="shrink-0 border-b border-border py-2 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] text-[11px] text-muted-foreground md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
-          {visibleInterruptNotice}
-        </p>
-      )}
+      <ChatHeader
+        conversationId={shownId}
+        onOpenList={onOpenList}
+        onInterrupt={shownId === undefined ? undefined : () => void handleInterrupt(shownId)}
+        interrupting={interrupting}
+        onEnd={shownId === undefined ? undefined : () => void handleEndConversation(shownId)}
+        ending={endingConversation}
+        /*
+         * 「ターンを止める」の結果（3値のどれか）。呼べなかった失敗
+         * （ネットワーク断・403 等）は下の `ErrorNote`（`visibleInterruptFailure`）に
+         * 出るので、ここに乗るのは正しく応答が返った場合だけである。**いま出している
+         * 会話（`shownId`）が押した時点の会話と一致するときだけ出す**
+         * （`visibleInterruptNotice` の doc）。
+         */
+        notice={visibleInterruptNotice}
+      />
 
       <div
         ref={scrollContainerRef}
@@ -2035,7 +1971,7 @@ export function ChatPane({
                             /*
                              * **クリックで textarea になり、送信で確定する**
                              * （チャットのメッセージ編集、#1010）。キー操作は
-                             * 既存の送信欄（下の主入力欄）と揃える —
+                             * 既存の送信欄（下の `ChatComposer`）と揃える —
                              * `⌘/Ctrl + Enter` で確定、IME 変換中の Enter では
                              * 確定しない（`chat.ime-enter.test.tsx` と同じ門）。
                              * `Escape` で取消——編集前の内容は保存していないが、
@@ -2195,117 +2131,29 @@ export function ChatPane({
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-border pt-3 pb-[calc(0.75rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
-        {/*
-          `visibleFailure`（送信経路: `send`/`followUp`、会話が一致するときだけ、
-          #1576）・`visibleInterruptFailure`（interrupt 由来、同じく会話が
-          一致するときだけ、#1570）・`visibleEndFailure`（「会話を終える」由来、
-          同じく会話が一致するときだけ、#2171）を同じ枠へ合流させる。3つとも
-          同時に立つことは無い想定だが、立っても先勝ちの優先順位そのものに
-          強い意味は無い——どれが出ても「何かの失敗が出ている」という事実
-          自体は変わらない。
-        */}
-        <ErrorNote
-          error={visibleFailure ?? visibleInterruptFailure ?? visibleEndFailure}
-          className="mb-2"
-        />
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1">
-            {/*
-              **受信中も打てる。** 塞ぐと、順番待ちのあいだに言い足したいことが
-              あっても待つしかなく、サーバ側にある「まとめて1ターンで読む」機構
-              （`followUp` の doc）へ一度も届かない。
-            */}
-            <Textarea
-              rows={2}
-              value={draft}
-              placeholder="クローンに話しかける（⌘/Ctrl + Enter で送信）"
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                /*
-                  **IME で変換している最中の Enter では送らない。**
-
-                  ⭐ **いまこの門を踏む経路は無い。** 送信条件は `⌘/Ctrl + Enter` だけで、
-                  Enter 単体で送る道がまだ存在しないからである（#247 の 2）。それでも
-                  先に置くのは、**Enter 単体送信を足した瞬間に、この門が無いと IME の
-                  「変換を確定する Enter」がそのまま誤送信になる**からで、しかも足す人が
-                  そのときに門の不在へ気づく契機を持たない（この Issue を読む理由が無い）。
-                  ＝ **後から足すものではなく、Enter 単体送信の前提条件として先に満たして
-                  おくものである。** 下の `chat.ime-enter.test.tsx` の「Enter 単体では
-                  送らない」が、Enter 単体送信を足した人をここへ連れてくる網である。
-
-                  **いま既に効く分もある** — `⌘/Ctrl + Enter` を変換中に打った場合である。
-                  変換中でも `input` は飛ぶ（Chrome）ので `draft` には確定前の途中の文字列
-                  （「こんにちh」のような）が入っており、そのまま投函されていた。
-
-                  `event.isComposing` ではなく **`event.nativeEvent.isComposing` を見る** —
-                  React の合成イベントの型は `isComposing` を持たない（DOM の
-                  `KeyboardEvent` の側にしか無い）。
-
-                  **`keyCode === 229` を併せて見るのは、`isComposing` が false のまま
-                  変換確定の Enter を配る実装が在るからである**（Android の IME や古い
-                  WebKit で報告されている形。229 は「IME が処理中」を表す慣用の値）。
-                  PR #53 がこの項目を予告したときに挙げた既存実装（virchamate の
-                  `isIMEActive`）も、この2つを併用している。⚠️ **実機での確認はしていない**
-                  — 229 を配るブラウザをこの器から触れないので、ここで測れているのは
-                  「229 が来たら送らない」という分岐の存在だけである。
-                */
-                if (
-                  event.key === 'Enter' &&
-                  (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
-                ) {
-                  return;
-                }
-                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                  event.preventDefault();
-                  void send(draft);
-                }
-              }}
-            />
-          </div>
-          {/*
-            **「受信をやめる」は「送る」の代わりではない。** 並べて出す —
-            受信中でも続けて送れるので、送る口を消してしまうと、追送するには
-            いったん受信を捨てるしかなくなる（捨てているあいだに届いた応答は画面に出ない）。
-
-            **狭い画面ではラベルだけ畳み、アイコンは常に出す**（`hidden md:inline`）。
-            2つ並ぶと入力欄と幅を取り合うため、本3 で `h-11` になったこのボタンは
-            アイコン化しないと狭い画面で収まらない。`aria-label` は明示する —
-            ラベルの `<span>` を隠しても中の文字は DOM から消えないので付けなくても
-            アクセシブルネームは保たれるが、実機（Tailwind が効く環境）で見出しの
-            文字が本当に消えたときに備え、頼らない形にしてある。
-          */}
-          {sending && (
-            <Button
-              variant="default"
-              onClick={() => streamRef.current?.controller.abort()}
-              title="読むのをやめる。クローンのターンは止まらない"
-              aria-label="受信をやめる"
-            >
-              <Square className="size-3.5" aria-hidden />
-              <span className="hidden md:inline">受信をやめる</span>
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            disabled={draft.trim() === ''}
-            onClick={() => void send(draft)}
-            aria-label="送る"
-          >
-            <Send className="size-3.5" aria-hidden />
-            <span className="hidden md:inline">送る</span>
-          </Button>
-        </div>
-        {/*
-          進行中かどうかは、やりとりの中の「考えている…」と「受信をやめる」で
-          既に見えている。ここに残すのは**他に書いてある場所が無い事実**だけ。
-        */}
-        {sending && (
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
-            画面を閉じてもクローンは考え続ける。順番待ちのあいだに続けて送った分は、まとめて1つの応答になる
-          </p>
-        )}
-      </div>
+      {/*
+        `visibleFailure`（送信経路: `send`/`followUp`、会話が一致するときだけ、
+        #1576）・`visibleInterruptFailure`（interrupt 由来、同じく会話が
+        一致するときだけ、#1570）・`visibleEndFailure`（「会話を終える」由来、
+        同じく会話が一致するときだけ、#2171）を同じ枠へ合流させる。3つとも
+        同時に立つことは無い想定だが、立っても先勝ちの優先順位そのものに
+        強い意味は無い——どれが出ても「何かの失敗が出ている」という事実
+        自体は変わらない。
+      */}
+      <ChatComposer
+        value={draft}
+        onChange={setDraft}
+        onSend={() => void send(draft)}
+        sending={sending}
+        onStopReceiving={() => streamRef.current?.controller.abort()}
+        error={
+          shownFailure === undefined || shownFailure === null ? undefined : (
+            <ErrorNote error={shownFailure} />
+          )
+        }
+        // 従来の入力欄の帯は背景色を敷いていない。
+        opaque={false}
+      />
     </div>
   );
 }

@@ -56,6 +56,21 @@ export function ChatHeader({
         {conversationId !== undefined && (onInterrupt !== undefined || onEnd !== undefined) && (
           <div className="flex shrink-0 items-center gap-2">
             {onInterrupt !== undefined && (
+              /*
+               * **「受信をやめる」（`ChatComposer`、入力欄の脇）とは別のボタン。** あちらは
+               * この画面の購読を切るだけで、クローンのターンは走り続ける
+               * （そのボタンの `title` が明言している）。これは `POST
+               * /clone/interrupt` を叩いてサーバ側のターンそのものを止める
+               * ——CLI の `alteroid interrupt` と同じ経路で、Web UI にだけ
+               * 無かった口（#1398 c23-1/c30-2。入口の等価性）。
+               *
+               * **`sending`（この画面が受信中かどうか）では出し分けない。**
+               * 走っているターンはこの画面が起こしたものとは限らない（別の
+               * タブ・CLI・自律の起点から始まったターンも同じクローンの
+               * ものである）。会話を持てるならこのボタンは常に押せてよい
+               * ——資格の判定はサーバに委ね（`useInterruptClone` の doc）、
+               * ここでは先回りして隠さない。
+               */
               <Button
                 size="sm"
                 variant="ghost"

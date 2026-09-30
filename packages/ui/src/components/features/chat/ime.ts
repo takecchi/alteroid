@@ -12,9 +12,9 @@ import type { KeyboardEvent } from 'react';
  *   実装が在る（Android の IME や古い WebKit。229 は「IME が処理中」を表す慣用の値）。
  *   ⚠️ 実機での確認はしていない
  *
- * 判断の出どころは `apps/web/app/routes/chat.tsx` の入力欄（`chat.ime-enter.test.tsx`
- * が守っている）。ここはその判断を部品の側からも使えるように置いたもので、
- * 判断そのものは変えていない。
+ * 判断の出どころは会話の入力欄（かつて `apps/web/app/routes/chat.tsx` に在り、いまは
+ * `ChatComposer`。`chat.ime-enter.test.tsx` が守っている）。ここはその判断を部品の
+ * 側からも使えるように置いたもので、判断そのものは変えていない。
  */
 export function isImeConfirmEnter(event: KeyboardEvent): boolean {
   return (

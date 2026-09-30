@@ -45,3 +45,28 @@ const args = { items: [], activeId: undefined, renderLink: () => null };
 
 export const Default: Story = { args, render: () => <Demo /> };
 export const Empty: Story = { args, render: () => <Demo empty /> };
+
+/**
+ * 口で従来の表示に合わせた形（`apps/web` の会話の画面が渡しているもの）。
+ * 往復の数を包まず、選択中は `bg-muted`、新しい会話のボタンは Tab の順路に残る。
+ */
+export const PlainRows: Story = {
+  args,
+  render: () => (
+    <div className="flex h-[480px]">
+      <ConversationList
+        items={SAMPLE_CONVERSATIONS}
+        activeId="conv_a"
+        numericCount={false}
+        rowClassName="block border-b border-border px-3 py-2 hover:bg-muted"
+        activeRowClassName="bg-muted"
+        newConversationTabStop
+        renderLink={(target, slot) => (
+          <a href="#" aria-label={target.label} className={slot.className || undefined}>
+            {slot.children}
+          </a>
+        )}
+      />
+    </div>
+  ),
+};
