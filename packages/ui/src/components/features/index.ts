@@ -1,6 +1,7 @@
 export * from './approvals';
 export * from './charts';
 export * from './chat';
+export * from './choice-chips';
 export * from './code-block';
 export * from './command-menu';
 export * from './confirm-dialog';
