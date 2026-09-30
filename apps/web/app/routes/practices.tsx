@@ -24,6 +24,12 @@ export default function Practices() {
 
   const practices = data?.practices ?? [];
   const valid = SLUG_PATTERN.test(slug) && slug.length <= 128;
+  /**
+   * **取れなかったのを0件と描かない**（issue #2324）。一覧をまだ一度も読めていないまま
+   * 失敗したとき、失敗は上の `ErrorNote` が言う。「正常な状態」は言い切りになる。
+   * 再検証の失敗で `data` が残っているときは当たらず、一覧をそのまま出す。
+   */
+  const listUnavailable = data === undefined && error !== undefined;
 
   return (
     <Page
@@ -60,7 +66,7 @@ export default function Practices() {
 
       {isLoading ? (
         <Spinner />
-      ) : practices.length === 0 ? (
+      ) : listUnavailable ? null : practices.length === 0 ? (
         <Card>
           <Empty>まだ1件も無い。これは正常な状態——やり方が書かれていない仕事も普通に進む。</Empty>
         </Card>
