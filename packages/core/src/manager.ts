@@ -6852,7 +6852,7 @@ class Pool implements ManagerPool {
           type: 'decision',
           decision:
             `[auto-fold-skip] runner=${runnerId} の配置契機（manager_start の自動配置）で` +
-            `畳み処理そのものが例外で落ち、判定できなかった: ${String(error)}`,
+            `畳み処理そのものが例外で落ち、判定できなかった: ${reasonOf(error)}`,
           grounds:
             'デーモンの自動畳み（Issue #1394 の2つ目の契機。manager_start の配置経由）: ' +
             '例外により判定不能（判定できないときは畳まない側へ倒す）',
@@ -7740,7 +7740,7 @@ class Pool implements ManagerPool {
         role: 'outbound',
         text:
           `${EXCHANGE_KIND_FAILURE_PREFIX}[${managerId}] 認証トークンが通る状態へ戻ったので続きを促したが、落ちた: ` +
-          String(error),
+          reasonOf(error),
       });
       return 'skipped';
     }
@@ -8405,7 +8405,7 @@ class Pool implements ManagerPool {
           await this.#journal({
             type: 'decision',
             decision: `[${job.id}] 起動時の引き取りを止めた（runner がより新しい世代を持っている＝別の誰かが握っている）`,
-            grounds: String(error),
+            grounds: reasonOf(error),
           });
           this.#post({
             type: 'manager_message',
@@ -8888,9 +8888,7 @@ class Pool implements ManagerPool {
     // **止めたことを日誌に残す。** 消えた理由が分からないマネージャーを作らない
     // （PRD「可観測性」）。クローンにも知らせるので、次のターンで気づける。
     const stopErrorNote =
-      stopError === undefined
-        ? ''
-        : `（runner.stop() が例外を投げた: ${stopError instanceof Error ? stopError.message : String(stopError)}）`;
+      stopError === undefined ? '' : `（runner.stop() が例外を投げた: ${reasonOf(stopError)}）`;
     const attemptedBase =
       reason === undefined ? `${who}が停止を試みた。` : `${who}が停止を試みた: ${reason}`;
     const stoppedBase =
@@ -9143,7 +9141,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ実行環境プロファイルを降ろせなかった: ${reasonOf(error)}`,
       });
     }
   }
@@ -9179,7 +9177,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へマネージャーの環境変数を降ろせなかった（この runner で起こすマネージャーは、器の環境変数に在るものだけで走る）: ${reasonOf(error)}`,
       });
     }
   }
@@ -9220,7 +9218,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runnerId} へ MCP サーバの登録を降ろせなかった（この runner で起こすマネージャー・作業者は、記憶ストアの登録を持たずに走る）: ${reasonOf(error)}`,
       });
     }
   }
@@ -9677,7 +9675,7 @@ class Pool implements ManagerPool {
             await this.#journal({
               type: 'decision',
               decision: `[${job.id}] 取り直しを止めた（runner がより新しい世代を持っている＝別の誰かが握っている）`,
-              grounds: String(error),
+              grounds: reasonOf(error),
             });
             this.#post({
               type: 'manager_message',
@@ -9798,7 +9796,7 @@ class Pool implements ManagerPool {
         (cause === 'session'
           ? '前のセッションから戻せなかった（SDK に会話が残っていない）。'
           : 'runner の器が作り直されたが、前のセッションから戻せなかった。') +
-        ` 理由: ${String(error)}`,
+        ` 理由: ${reasonOf(error)}`,
     });
     // **即配らず合流窓へ積む（「一枠落ち一合図」の対象を広げた側。依頼者の
     // 実測——委譲が器と一緒に失われた族は `resume_fallback` /
@@ -10276,7 +10274,7 @@ class Pool implements ManagerPool {
       record.job.lease = before;
       record.job.updatedAt = beforeUpdatedAt;
       record.leaseRefusal = {
-        detail: `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${String(error)}`,
+        detail: `貸し出しを台帳へ書けなかったので引き取らない（書けないまま走らせると、次の契機が同じ委譲を無条件で奪える）: ${reasonOf(error)}`,
         // **`ambiguous` ではない。** `ALTEROID_RUNNER_ID` の設定は正しいままで、
         // 落ちたのは台帳への書き込みだけである（#200 測った事実3）。
         kind: 'persist-failed',
@@ -12772,7 +12770,7 @@ class Pool implements ManagerPool {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}${runner.runnerId} に認証トークンを降ろせなかった（この runner で起こすマネージャーは、器の環境変数に認証トークンが入っていればそれで走り、入っていなければ資格を1つも持たずに走る——どちらになるかは器の env 次第で、ここからは分からない）: ${reasonOf(error)}`,
       });
     }
   }

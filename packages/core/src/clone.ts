@@ -3565,7 +3565,7 @@ class Clone implements CloneHost {
         else if (mergedExternal !== null) await this.#runExternalBatch(mergedExternal);
         else await this.#handle(event);
       } catch (error) {
-        await this.#reportFailure(this.#conversationOf(event), String(error));
+        await this.#reportFailure(this.#conversationOf(event), { error });
         this.#finishTurn();
       } finally {
         this.#notices.clearTurn();
@@ -7103,8 +7103,9 @@ class Clone implements CloneHost {
    * `finally` で走るので、書き終える前に落ちれば合図は未読のまま残って配り
    * 直される。跡を残す窓と競合しない以上、stderr へ落とす理由が無い。
    *
-   * **本文（`message`）を stderr へは出さない。** ここに入るのは呼び出し側3か所
-   * すべてで `String(error)` である。**いま辿れる範囲に、人間の発言そのものを
+   * **本文（`message`）を stderr へは出さない。** 例外で来る呼び出し側3か所は
+   * `{ error }` で渡し、外へ出す文は `reasonOf` を通す（#2483。分類だけが
+   * 生の `String(error)` を見る）。**いま辿れる範囲に、人間の発言そのものを
    * 載せて戻ってくる経路は無い**（発言を束縛して書くのは `#handle` の
    * `#journal` だが、あれは自分で握って `noteDroppedRecord` へ落とすので
    * ここまで投げてこない）。だが `message` は SDK・API・ストアのドライバが
@@ -7149,7 +7150,19 @@ class Clone implements CloneHost {
    * `CloneNotices` の `#humanFailure`）。**人間から新しい発言が来れば `post()`
    * が記憶を落とす**ので、発言1件につき1行は必ず返る。
    */
-  async #reportFailure(conversationId: string | null, message: string): Promise<void> {
+  async #reportFailure(
+    conversationId: string | null,
+    cause: string | { readonly error: unknown },
+  ): Promise<void> {
+    // **例外で来た失敗は、分類を生の文字列で先に行い、外へ出す文だけを `reasonOf`
+    // （伏せ字 → 1行目 → 200字）にする（#2483）。** `classifyContextWindowFailure` は
+    // 部分文字列で判定し、`prompt is too long` 等が2行目以降に在る形もある——
+    // 入口で1行目へ畳むと判定が壊れる。一方、`emit`・日誌・`failure`
+    // （`TurnOutcome.reason` → 日報などの `reason`）に載る文は、drizzle の
+    // `params:`（2行目）のように値を運びうる。⟹ 分類だけが生の文字列を見る。
+    // 文字列で来たもの（こちらが書いた固定文・SDK の `result` の文言）は今までどおり。
+    const rawMessage = typeof cause === 'string' ? cause : String(cause.error);
+    const message = typeof cause === 'string' ? cause : reasonOf(cause.error);
     // **走っているターンに失敗の印を残す。** `#runTurn` の戻り値をこれで分岐させる
     // （`TurnOutcome`）。ここに置いてあるのは、失敗を畳む経路が4つある（セッションの
     // 起動失敗 / 読み取りループの例外 / 失敗した `result` / `#handle` の例外）ため —
@@ -7176,7 +7189,7 @@ class Clone implements CloneHost {
     // `text.startsWith(...)` の歯を壊す。生の `message` は既に逐語で載って
     // いるので、目印はその後ろに足すだけでよい（判定・弱さの断り書きは
     // `context-window-failure.ts` の doc）。
-    const contextWindowFailure = classifyContextWindowFailure(message);
+    const contextWindowFailure = classifyContextWindowFailure(rawMessage);
     // **長さで落ちたなら、次の境界でセッションを畳んで作り直す**（#553。人間の依頼
     // 「今後発生した際に落ちないように対策」）。**判定はここでしかしない** ——
     // `classifyContextWindowFailure` の呼び出しはこの1か所だけで、`#apply` 側で
@@ -7642,7 +7655,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の生ログの退避に失敗した: ${String(error)}` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の生ログの退避に失敗した: ${reasonOf(error)}` +
           '（⚠️ この区間の生ログは器の外に残っていない）',
       });
     }
@@ -7663,7 +7676,7 @@ class Clone implements CloneHost {
         with: 'self',
         role: 'outbound',
         text:
-          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の蒸留に失敗した: ${String(error)}` +
+          `${EXCHANGE_KIND_FAILURE_PREFIX}文脈窓で畳む前の蒸留に失敗した: ${reasonOf(error)}` +
           // **退避が落ちた回に「退避は済んでいる」と書かない**（守れない約束になる）。
           (archiveId !== null
             ? '（生ログの退避は済んでいる。記憶へは移せていない。次の起動で拾い直す）'
@@ -8500,7 +8513,7 @@ class Clone implements CloneHost {
       // より必ず先に届く。
       this.#emit(conversationId, { type: 'thinking' });
     } catch (error) {
-      await this.#reportFailure(conversationId, String(error));
+      await this.#reportFailure(conversationId, { error });
       this.#finishTurn();
     }
 
@@ -8566,7 +8579,7 @@ class Clone implements CloneHost {
       try {
         return { status: 'ok', plan: await this.#stores.schedules.get(kind) };
       } catch (error) {
-        last = String(error);
+        last = reasonOf(error);
       }
     }
     return { status: 'unreadable', error: last };
@@ -8600,7 +8613,7 @@ class Clone implements CloneHost {
           plan: await this.#stores.schedules.claimRun(kind, expectedUpdatedAt, at, cause),
         };
       } catch (error) {
-        last = String(error);
+        last = reasonOf(error);
       }
     }
     return { status: 'failed', error: last };
@@ -8628,7 +8641,7 @@ class Clone implements CloneHost {
         await this.#stores.schedules.completeRun(kind, at, cause);
         return;
       } catch (error) {
-        last = String(error);
+        last = reasonOf(error);
       }
     }
     await this.#journal({
@@ -10727,7 +10740,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の退避に失敗した: ${reasonOf(error)}`,
       });
     }
 
@@ -10741,7 +10754,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'self',
         role: 'outbound',
-        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${String(error)}`,
+        text: `${EXCHANGE_KIND_FAILURE_PREFIX}PreCompact の蒸留に失敗した: ${reasonOf(error)}`,
       });
     }
   }
@@ -11147,7 +11160,7 @@ class Clone implements CloneHost {
   }
 
   async #read(q: Query): Promise<void> {
-    let failure: string | null = null;
+    let failure: { readonly error: unknown } | null = null;
 
     try {
       for await (const message of q) {
@@ -11157,7 +11170,7 @@ class Clone implements CloneHost {
         for (const event of foldClaudeMessage(message)) await this.#apply(event);
       }
     } catch (error) {
-      failure = String(error);
+      failure = { error };
 
       // init すら来ずに落ちたなら resume 素材が腐っている。捨てて作り直す。
       // 同一性はセッションではなく記憶に宿るので、捨てて困るものは無い。
