@@ -224,6 +224,7 @@ import {
   describeUnreadableInboxEvents,
   describeUnreadableCommitment,
   describeUnreadableJobs,
+  describeUnreadableManagerRow,
   describeUnreadablePractices,
   describeUnreadableSchedules,
   describeUnreadableTokens,
@@ -11495,10 +11496,7 @@ export function createCloneTools(context: ToolContext) {
             (row) => row.id === managerId,
           );
           if (unreadableRow !== undefined) {
-            return text(
-              `マネージャー ${managerId} は読めない形で入っている（消されたのでも、畳まれたのでもない）。` +
-                `理由: ${unreadableRow.reason}。本文はここでは取れない。`,
-            );
+            return text(describeUnreadableManagerRow(managerId, unreadableRow.reason));
           }
           return text(
             `マネージャー ${managerId} は居ない（もう畳まれたか、id が違う）。` +

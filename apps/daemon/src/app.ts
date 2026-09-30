@@ -98,6 +98,7 @@ import {
   REMOVE_MANY_LIMIT_MAX,
   reportRunnerRevision,
   describeResetTargets,
+  describeUnreadableManagerRow,
   resetWorkspaceState,
   resolveBuildRevision,
   runnerSetCredentialsCommandSchema,
@@ -4830,12 +4831,7 @@ export function createApp(deps: AppDeps) {
             (row) => row.id === id,
           );
           if (unreadableRow !== undefined) {
-            return c.json(
-              {
-                error: `マネージャー ${id} は読めない形で入っている（消されたのではない）。理由: ${unreadableRow.reason}。本文はここでは取れない。`,
-              },
-              409,
-            );
+            return c.json({ error: describeUnreadableManagerRow(id, unreadableRow.reason) }, 409);
           }
           return c.json({ error: 'not found' as const }, 404);
         }

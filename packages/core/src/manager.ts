@@ -7815,8 +7815,18 @@ class Pool implements ManagerPool {
      */
     const runner = await this.#runners.get(runnerId).catch(() => null);
     if (runner !== null && !this.#stopped) {
-      const jobs = await this.#stores.jobs.listJobs().catch(() => []);
-      for (const job of jobs) {
+      /*
+       * **一覧を読めなかった回を「載っている委譲が無い」とみなさない**（#2359 の4。
+       * 以前は `.catch(() => [])` で、握手を飛ばしたことが日誌にも残らなかった）。
+       * `null` のときは握手を**しない**——委譲が無いと確かめたのではないので、
+       * 貸し出しも返さず、`attached` も書かない。飛ばしたことは日誌に残す。3の
+       * `relocateFrom` は従来どおり呼ぶ（貸し出しが生きている間は `#reattach` が
+       * 断って梯子に乗る）。**呼び直せば握手はやり直せる。**
+       */
+      const jobs = await this.#listJobsOrNote(
+        `runnerId=${runnerId} の vacate で、載っている委譲への確かめた停止の握手を飛ばした（貸し出しは返していない。vacate を呼び直すと握手をやり直す）`,
+      );
+      for (const job of jobs ?? []) {
         if (this.#stopped) break;
         if (job.runnerId !== runnerId) continue;
         const known = this.#records.get(job.id);
@@ -9247,20 +9257,39 @@ class Pool implements ManagerPool {
          * のような「誤解決した相手への副作用」ではないので、ここで読んでも
          * #390 が塞いだ穴には触れない。
          */
-        const jobIds = (await this.#stores.jobs.listJobs().catch(() => []))
-          .filter((job) => job.runnerId === runnerId)
-          .map((job) => job.id);
-        this.#noteAmbiguousSighting(runnerId, sighting.duplicates, jobIds);
+        /*
+         * **一覧を読めなかった回を「紐づく委譲が無い」とみなさない**（#2359 の4。
+         * 以前は `.catch(() => [])` で、通知を見送ったことが日誌にも残らなかった）。
+         * `null` のときは `#noteAmbiguousSighting` を呼ばない——呼ばなければ通知済みに
+         * もならないので、`hello` のたびに来るこの経路の次の機会に再挑戦できる
+         * （`#noteAmbiguousSighting` の doc「jobIds が空なら見送り、通知済みにも
+         * しない」と同じ線。見送る設計は変えていない）。見送ったことは日誌に残す。
+         */
+        const listed = await this.#listJobsOrNote(
+          `runnerId=${runnerId} の併存の通知を見送った（通知済みにはしていない。次の hello で再挑戦する）`,
+        );
+        if (listed !== null) {
+          const jobIds = listed.filter((job) => job.runnerId === runnerId).map((job) => job.id);
+          this.#noteAmbiguousSighting(runnerId, sighting.duplicates, jobIds);
+        }
         return;
       }
       if (this.#ambiguousRunnersNotified.has(runnerId)) {
         // **併存から戻った直後の1回だけ、ここに来る。** 通常はここに来ない
         // （`#ambiguousRunnersNotified` に載っているのは過去に通知したときだけ）
         // ので、store への余分な問い合わせを増やさない。
-        const jobIds = (await this.#stores.jobs.listJobs().catch(() => []))
-          .filter((job) => job.runnerId === runnerId)
-          .map((job) => job.id);
-        this.#noteAmbiguousResolved(runnerId, jobIds);
+        // **読めなかった回は「解けた」を言わず、通知済みのまま残す**（#2359 の4。
+        // `#noteAmbiguousResolved` の doc「jobIds が空のときは通知済みの状態を
+        // まだ消さない」と同じ線）。次に読めた回に言う。
+        const listed = await this.#listJobsOrNote(
+          `runnerId=${runnerId} の併存が解けた通知を見送った（通知済みの印は残している。次に読めた回に言う）`,
+        );
+        if (listed !== null) {
+          this.#noteAmbiguousResolved(
+            runnerId,
+            listed.filter((job) => job.runnerId === runnerId).map((job) => job.id),
+          );
+        }
       }
 
       // **取り直しの前に環境を整える。** 器が入れ替わっていれば置いたものは
@@ -9314,10 +9343,13 @@ class Pool implements ManagerPool {
       // 委譲が「runner に居ないのに台帳には居る」と見えて、走り出したばかりの仕事を
       // 死んだものとして起こし直す。この順なら、隙間で生まれた仕事はそもそも
       // 手元の一覧に入らない。
-      const jobs = await this.#stores.jobs.listJobs().catch(() => {
-        retry = true;
-        return null;
-      });
+      //
+      // **読めなかった回は予約して挑み直す（従来どおり）が、黙らない**（#2359 の4。
+      // 以前は `retry` を立てるだけで、なぜ取り直しが進まないのかが日誌にも残らなかった）。
+      const jobs = await this.#listJobsOrNote(
+        `runnerId=${runnerId} の取り直しを進めなかった（居ない委譲を起こすことも、居る委譲を死んだと読むこともしていない。予約して挑み直す）`,
+      );
+      if (jobs === null) retry = true;
       if (jobs === null || this.#stopped) return;
 
       // **聞けなかったときは何もしない。** 応答が無いことを「セッションが無い」と
@@ -13674,6 +13706,36 @@ class Pool implements ManagerPool {
       // **ただし黙って消さない。** 跡がどこにも無いと「日誌に無い」が
       // 「起きなかった」と読めてしまう（本文を出さない理由は `noteDroppedRecord`）。
       noteDroppedRecord('日誌', journalEntryShape(entry), error);
+    }
+  }
+
+  /**
+   * 台帳の委譲の一覧を読む。**読めなかった回は `null` を返し、空の一覧
+   * （＝「委譲が無い」）には倒さない**（#2359 の4。先例 #2342 の `manager_stop`
+   * の3状態と同じ線）。
+   *
+   * 以前の呼び出し元は `listJobs().catch(() => [])` と書いていた。`[]` は
+   * 「読めたが1本も無い」と区別できないので、**読めなかった事実が日誌にも
+   * stderr にも残らず**、呼び出し元は「この runner に委譲が無い」という
+   * 結論で進んでいた。ここは読めなかったことを日誌の `decision` に1本残し、
+   * 呼び出し元には `null` で渡す。**`null` をどう扱うか（見送る／予約して
+   * 挑み直す）は呼び出し元が決める** — 一覧が読めなかった理由は、ここでは
+   * 直せないからである。
+   *
+   * @param skipped 読めなかったために何をしなかったか（固定文言。呼び出し側が書く）
+   */
+  async #listJobsOrNote(skipped: string): Promise<Job[] | null> {
+    try {
+      return await this.#stores.jobs.listJobs();
+    } catch (error) {
+      await this.#journal({
+        type: 'decision',
+        decision: `台帳の委譲の一覧を読めなかったので、${skipped}`,
+        grounds:
+          `読めなかった原因: ${reasonOf(error)}。` +
+          '一覧が読めなかったことは「委譲が無い」ではない（この回は何も判定していない）。',
+      });
+      return null;
     }
   }
 }

@@ -6,6 +6,7 @@ import {
   createCloneTools,
   createManagerPool,
   createRunnerRegistry,
+  describeUnreadableManagerRow,
 } from '@alteroid/core';
 import type { CloneHost, Job, ManagerPool, Stores } from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
@@ -164,6 +165,8 @@ describe.each([
     expect(error).toContain('読めない形で入っている');
     expect(error).toContain('不正な欄: status');
     expect(error).not.toContain('居ない');
+    // 文は共通の関数（`describeUnreadableManagerRow`）の1文そのものである（直書きにしない。#2359）。
+    expect(error).toBe(describeUnreadableManagerRow('mgr-bad', '不正な欄: status'));
     expect(result?.raw).not.toContain(BAD_SUMMARY);
   });
 
@@ -181,6 +184,8 @@ describe.each([
     expect(reply).toContain('マネージャー mgr-bad は読めない形で入っている');
     expect(reply).toContain('不正な欄: status');
     expect(reply).not.toContain(BAD_SUMMARY);
+    // HTTP の口（409）と同じ、共通の関数の1文である（#2359）。
+    expect(reply).toBe(describeUnreadableManagerRow('mgr-bad', '不正な欄: status'));
   });
 
   it('対照: 本当に無い id は、今までどおり 404 と「居ない」（読めない行が別に在っても）', async () => {
