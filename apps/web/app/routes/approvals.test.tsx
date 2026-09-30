@@ -397,7 +397,8 @@ describe('個別の回答が 409 で断られたとき（issue #1619）', () => 
  *
  * **`whitespace-pre-wrap` のクラス名の検査は、`question` については別の保証へ
  * 置き換えた。** あの行が守っていたのはクラス名そのものではなく「単独の改行が
- * 保たれること」で、Markdown 化後はそれを `remark-breaks` が `<br>` として
+ * 保たれること」で、Markdown 化後はそれを `mdast-util-newline-to-break`
+ * （`remark-breaks` の中身。`<Markdown>` が直接掛けている）が `<br>` として
  * 担う。だからクラス名ではなく `<br>` が出ることを直接押さえる — クラス名より
  * 強い保証である（実装の手段が変わっても、見えるものが変わったときだけ落ちる）。
  * `answer` は Markdown にしていないので、あちらはクラス名のままで押さえる。
@@ -411,7 +412,7 @@ describe('折り返しの付け忘れ（本2）', () => {
     // `break-words` はその祖先（`Markdown` のルート）に在る（doc 参照）。
     const question = await screen.findByText(/質問1/);
     expect(question.closest('.break-words')).not.toBeNull();
-    // 単独の改行は `remark-breaks` が `<br>` にして保つ。
+    // 単独の改行は `<Markdown>` が（`mdast-util-newline-to-break` で）`<br>` にして保つ。
     expect(question.querySelector('br')).not.toBeNull();
   });
 

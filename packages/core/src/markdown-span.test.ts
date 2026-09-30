@@ -12,8 +12,10 @@ import { codeSpan } from './markdown-span.js';
  */
 describe('codeSpan（Markdown として書かれていない文字列を包む）', () => {
   it('Bash のコマンド置換を含む JSON ダンプが、そこで閉じない包みになる', () => {
-    // この入力は実機のレンダラ（react-markdown ＋ remark-gfm）で、包まないと
-    // `` `date` `` が本物の `<code>` になることを実測した回である。
+    // この入力は実機のレンダラで、包まないと `` `date` `` が本物の `<code>` に
+    // なることを実測した回である（測った当時は react-markdown ＋ remark-gfm。
+    // 今の `<Markdown>` は同じ DOM を出すことを `markdown-equivalence.test.tsx`
+    // で固定している）。
     const dump = '{"command":"echo `date` && rm -rf /"}';
     const wrapped = codeSpan(dump);
 
