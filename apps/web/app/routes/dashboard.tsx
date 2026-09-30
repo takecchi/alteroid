@@ -42,6 +42,21 @@ const MANAGER_LIMIT = 5;
 const LIVE_LIMIT = 30;
 
 /**
+ * 「今日の利用」を引く窓の片側の日数（issue #2268）。
+ *
+ * **「今日」はデーモンが決める**（`GET /usage` の `today`。台帳の `date` はデーモンの TZ の
+ * 暦で切られる）。ブラウザはそれを引く前に知らないので、ブラウザの今日の前後にこの日数だけ
+ * 広げた窓で1回引き、応答の `today` の行だけを使う。TZ のオフセットは UTC−12〜UTC+14 で、
+ * 同じ瞬間の暦の日は最大2日ずれる——だから2日である（1日では足りない）。
+ */
+const USAGE_WINDOW_DAYS = 2;
+
+/** `base` の暦（ブラウザの TZ）の日から `days` 日ずらした日を `YYYY-MM-DD` で返す。 */
+function shiftedDate(base: Date, days: number): string {
+  return usageDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + days));
+}
+
+/**
  * 「稼働中のマネージャー」カードの「一覧」が飛ぶ先の絞り込み（issue #2090）。
  *
  * カード自身の絞り込み（下の `running` の doc）と**同じ母集合**から作る——
@@ -69,9 +84,19 @@ export default function Dashboard() {
   // 意図があった形跡はコメントにも履歴にも無く、`shell.tsx` は最初から「ここで1本だけ
   // 張る」と書いてあったので、漏れとして context 越しに寄せた）。**戻さないこと。**
   const live = useJournalFeed();
-  // 「今日」はローカル時刻（日報と同じ区切り）。UTC で切ると日報の「今日」とずれる。
-  const today = usageDate(new Date());
-  const usage = useUsage({ from: today, to: today });
+  // **「今日」はデーモンの TZ の日**（日報・台帳の区切りと同じ。ブラウザの TZ ではない）。
+  // デーモンの今日は応答の `today` が言う。ブラウザの今日の前後 `USAGE_WINDOW_DAYS` 日の窓で
+  // 1回だけ引き、応答の `today` の行だけを「今日の利用」にする（issue #2268）。
+  const browserNow = new Date();
+  const usage = useUsage({
+    from: shiftedDate(browserNow, -USAGE_WINDOW_DAYS),
+    to: shiftedDate(browserNow, USAGE_WINDOW_DAYS),
+  });
+  // **`today` が無いとき（読み込み中・`today` を返さない古いデーモン）に、黙ってブラウザの
+  // 今日にしない。** 型は `string` だが、古いデーモンの応答には無いので `undefined` を許す。
+  const today: string | undefined = usage.data?.today;
+  const todayRows = usage.data?.rows.filter((row) => row.date === today) ?? [];
+  const todayTurnRows = usage.data?.turnRows.filter((row) => row.date === today) ?? [];
 
   const latestReport = reports.data?.reports[0];
   const pending = approvals.data?.approvals ?? [];
@@ -260,29 +285,41 @@ export default function Dashboard() {
               action={
                 // **カードの数字（`usage`）と同じ母集合（今日1日）で飛ぶ（issue
                 // #2078）。** `today` はこのカードが集計に使っているのと同じ
-                // 変数——別に作り直すと、カードとリンク先の「今日」がずれうる。
-                <Link
-                  to={usageHref({ from: today, to: today })}
-                  className="text-xs text-primary hover:underline"
-                >
-                  詳しく見る
-                </Link>
+                // 変数（応答の `today`）——別に作り直すと、カードとリンク先の「今日」が
+                // ずれうる。分からないうちは、ブラウザの今日で飛ばずリンクを出さない。
+                today === undefined ? undefined : (
+                  <Link
+                    to={usageHref({ from: today, to: today })}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    詳しく見る
+                  </Link>
+                )
               }
             />
             {usage.error !== undefined ? (
               <ErrorNote error={usage.error} className="m-4" />
             ) : usage.isLoading || usage.data === undefined ? (
               <Spinner />
+            ) : today === undefined ? (
+              // **0 や記録なしと出さない。** デーモンが今日を返さないので、どの行が今日かを
+              // 決められない（古いデーモン）。ブラウザの今日で代用すると TZ が違えば別の日を
+              // 「今日」と言う。
+              <Empty>デーモンの今日が分からない（デーモンが古い可能性がある）。</Empty>
             ) : usage.data.since === null ? (
               // **`$0.00` と出さない。** まだ台帳に1件も無いのを「使っていない」に見せない。
               <Empty>まだ記録が無い。</Empty>
-            ) : usage.data.beforeLedger && usage.data.rows.length === 0 ? (
+            ) : usage.data.beforeLedger && todayRows.length === 0 ? (
               // **0 と出さない。** 台帳の始点より前を「使っていない」に見せない。
-              <Empty>今日の分はまだ記録が無い（台帳の始点より前）。</Empty>
+              // `beforeLedger` は窓（今日の前後2日）に対する判定で、今日そのものではない——
+              // だから「今日が始点より前」とは言い切らず、「かかっている可能性」と言う。
+              <Empty>
+                今日の分はまだ記録が無い（台帳の始点より前にかかっている可能性がある）。
+              </Empty>
             ) : (
               <div className="px-4 py-3">
                 <p className="text-xl font-semibold">
-                  {formatUsd(summarizeUsage(usage.data.rows, usage.data.turnRows).total.costUsd)}
+                  {formatUsd(summarizeUsage(todayRows, todayTurnRows).total.costUsd)}
                 </p>
                 {/* 省略・要約しない。数字を出すところには必ず添える。 */}
                 <p className="mt-1 text-[11px] text-muted-foreground">{usage.data.notice}</p>

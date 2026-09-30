@@ -75,6 +75,9 @@ function renderDashboard(
     beforeLedger: boolean;
     notice?: string;
     turnRows?: unknown[];
+    // デーモンの暦の今日（`GET /usage` の `today`）。既定は行の日付と同じ 2026-08-14。
+    // `null` は「応答に `today` が無い」（古いデーモン）。
+    today?: string | null;
   },
   live: JournalLive = EMPTY_FEED,
   // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
@@ -114,8 +117,10 @@ function renderDashboard(
         : json({ entries: scheduleEntries });
     }
     if (url.includes('/usage')) {
+      const { today, ...rest } = usageBody;
       return json({
-        ...usageBody,
+        ...rest,
+        ...(today === null ? {} : { today: today ?? '2026-08-14' }),
         notice: usageBody.notice ?? USAGE_ESTIMATE_NOTICE,
         turnRows: usageBody.turnRows ?? [],
         breakdown: null,
@@ -190,29 +195,112 @@ describe('ダッシュボードの「今日の利用」', () => {
 describe('「今日の利用」カードの「詳しく見る」は今日の期間へ飛ぶ（issue #2078）', () => {
   const USAGE = { rows: [], since: null, beforeLedger: false };
 
-  it('カードの today と同じ from/to を持つ /usage を開く', () => {
+  it('カードの today と同じ from/to を持つ /usage を開く', async () => {
     // 2026-08-14T05:00:00.000Z は TZ=Asia/Tokyo で 08/14 14:00（日を跨がない）。
     const fixedNow = new Date('2026-08-14T05:00:00.000Z');
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(fixedNow);
     try {
       renderDashboard(USAGE);
 
       // **「詳しく見る」は「次の自動実行」カードとも文言が同じ**（#347 のテスト
       // が同じ理由でやっているのと同じ手当て）。href で `/usage` 宛てのものを選ぶ。
+      // 応答の `today` が来てからリンクが出る（それまでは出さない。issue #2268）。
+      await screen.findByText('まだ記録が無い。');
       const links = screen.getAllByRole('link', { name: '詳しく見る' });
       const usageLink = links.find((link) =>
         (link.getAttribute('href') ?? '').startsWith('/usage'),
       );
       expect(usageLink).toBeTruthy();
 
-      // `usageDate` はカードが使っているのと同じ関数——書き写した期待値では
-      // なく、同じ入力（固定した `fixedNow`）に対する同じ関数の戻り値と比べる。
+      // 「今日」は応答の `today`（デーモンの暦）。ここではブラウザの今日と同じ日にしてある。
       const today = usageDate(fixedNow);
       expect(usageLink!.getAttribute('href')).toBe(`/usage?from=${today}&to=${today}`);
       // 具体の日付でも固定して落ちることを確かめておく（TZ・system time の
       // 固定が本当に効いているかの対照）。
       expect(today).toBe('2026-08-14');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * **「今日」はブラウザの TZ ではなくデーモンの暦で決まる（issue #2268）。**
+ *
+ * 直す前は `usageDate(new Date())`（ブラウザの今日）で `from = to = 今日` を引いていたので、
+ * デーモンの TZ とブラウザの TZ が違う日に、別の日の行を「今日の利用」に出し、リンクも
+ * 別の日へ飛んだ。
+ */
+describe('「今日の利用」の今日はデーモンの応答の today で決まる（issue #2268）', () => {
+  // ブラウザ（TZ=Asia/Tokyo、冒頭の `vi.hoisted`）の今日は 2026-10-01（09-30T20:00Z = 10/01 05:00）。
+  const browserNow = new Date('2026-09-30T20:00:00.000Z');
+  // デーモンは別の TZ で、まだ 2026-09-30。
+  const DAEMON_TODAY = '2026-09-30';
+  const row = (date: string, costUsd: number) => ({
+    date,
+    managerId: 'm1',
+    model: 'claude-opus-4',
+    updatedAt: '2026-09-30T10:00:00.000Z',
+    totals: { ...ZERO_USAGE, costUsd },
+  });
+
+  function usageLinkOf(): HTMLElement {
+    const link = screen
+      .getAllByRole('link', { name: '詳しく見る' })
+      .find((l) => (l.getAttribute('href') ?? '').startsWith('/usage'));
+    expect(link).toBeTruthy();
+    return link!;
+  }
+
+  it('ブラウザの今日の前後2日で1回だけ引き、応答の today の行とリンクを使う', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(browserNow);
+    try {
+      const stub = renderDashboard({
+        // 応答の today（09-30）の行と、ブラウザの今日（10-01）の行が別の金額で並ぶ。
+        rows: [row('2026-09-29', 0.01), row(DAEMON_TODAY, 0.02), row('2026-10-01', 0.04)],
+        since: '2026-08-01T00:00:00.000Z',
+        beforeLedger: false,
+        today: DAEMON_TODAY,
+      });
+
+      // 応答の today の行だけが「今日の利用」になる（ブラウザの今日の行 $0.0400 ではない）。
+      expect(await screen.findByText('$0.0200')).toBeTruthy();
+      expect(renderedMoneyTexts()).toEqual(new Set(['$0.0200']));
+      expect(usageLinkOf().getAttribute('href')).toBe(
+        `/usage?from=${DAEMON_TODAY}&to=${DAEMON_TODAY}`,
+      );
+
+      // 引くのは1回だけで、窓はブラウザの今日（2026-10-01）の前後2日。
+      const usageCalls = stub.calls.filter((url) => url.includes('/usage'));
+      expect(usageCalls).toHaveLength(1);
+      const query = new URL(usageCalls[0]!).searchParams;
+      expect(query.get('from')).toBe('2026-09-29');
+      expect(query.get('to')).toBe('2026-10-03');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('応答に today が無い（古いデーモン）とき、ブラウザの今日にせず、分からないと出す', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(browserNow);
+    try {
+      renderDashboard({
+        rows: [row('2026-10-01', 0.04)],
+        since: '2026-08-01T00:00:00.000Z',
+        beforeLedger: false,
+        today: null,
+      });
+
+      expect(await screen.findByText(/デーモンの今日が分からない/)).toBeTruthy();
+      // ブラウザの今日の行の金額を出さず、ブラウザの今日へのリンクも作らない。
+      expect(renderedMoneyTexts()).toEqual(new Set());
+      const usageLinks = screen
+        .getAllByRole('link', { name: '詳しく見る' })
+        .filter((l) => (l.getAttribute('href') ?? '').startsWith('/usage'));
+      expect(usageLinks).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -536,7 +624,13 @@ describe('「承認待ち」カードが読めないとき、「答える」を�
       if (url.includes('/managers')) return json({ managers: [] });
       if (url.includes('/schedule')) return json({ entries: [] });
       if (url.includes('/usage')) {
-        return json({ ...USAGE, notice: USAGE_ESTIMATE_NOTICE, turnRows: [], breakdown: null });
+        return json({
+          ...USAGE,
+          today: '2026-08-14',
+          notice: USAGE_ESTIMATE_NOTICE,
+          turnRows: [],
+          breakdown: null,
+        });
       }
       return undefined;
     });

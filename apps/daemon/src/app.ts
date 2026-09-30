@@ -110,6 +110,7 @@ import {
   summarizeUsage,
   tokenRotationSettingsSchema,
   traceApproval,
+  usageDate,
   usageDateSchema,
   usageLayerSchema,
   usageSiteSchema,
@@ -239,6 +240,12 @@ export interface AppDeps {
   token: string;
   /** `daemon stop` の受け口。 */
   shutdown: () => void;
+  /**
+   * 「いま」を返す時計。`GET /usage` の `today`（デーモンの暦の今日）を作る。
+   * 省略すれば実時間（`new Date()`）。テストが時計を注入するための口で、
+   * 本番は渡さない（Issue #2268）。
+   */
+  now?: () => Date;
   /** 時間起点のジョブ。テストの HTTP 層検証では省略できる。 */
   scheduler?: Scheduler;
   /**
@@ -3194,6 +3201,9 @@ export function createApp(deps: AppDeps) {
           // 「枠を使っていない」と読める（テストの HTTP 層検証では省略できる）。
           account: deps.accountUsage?.() ?? { state: 'unknown' as const },
           unrecordedManagers,
+          // **台帳の `date` を書くのと同じ関数（`usageDate`）・同じ TZ で評価する**
+          // （Issue #2268）。ブラウザの TZ で「今日」を決めると、台帳の日とずれる。
+          today: usageDate((deps.now ?? (() => new Date()))()),
         });
       },
     )

@@ -1,6 +1,11 @@
-import { createManagerPool, createMemoryStores, createRunnerRegistry } from '@alteroid/core';
+import {
+  createManagerPool,
+  createMemoryStores,
+  createRunnerRegistry,
+  usageDate,
+} from '@alteroid/core';
 import type { CloneHost, Stores } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
@@ -33,13 +38,14 @@ function fakeCloneHost(stores: Stores): CloneHost {
   };
 }
 
-function appWith(): ReturnType<typeof createApp> {
+function appWith(now?: () => Date): ReturnType<typeof createApp> {
   const stores = createMemoryStores();
   return createApp({
     clone: fakeCloneHost(stores),
     stores,
     token: 'test-token',
     shutdown: () => {},
+    ...(now === undefined ? {} : { now }),
   });
 }
 
@@ -67,4 +73,32 @@ describe('GET /usage の from / to は、実在しない日を 400 で断る（I
     expect((await app.request('/usage?from=2024-02-29&to=2026-08-31')).status).toBe(200);
     expect((await app.request('/usage?from=2026-12-31')).status).toBe(200);
   });
+});
+
+describe('GET /usage の today は、台帳の日と同じ関数・同じ TZ の値（Issue #2268）', () => {
+  const originalTz = process.env['TZ'];
+  afterEach(() => {
+    if (originalTz === undefined) delete process.env['TZ'];
+    else process.env['TZ'] = originalTz;
+  });
+
+  // 同じ瞬間でも、TZ によって暦の日が違う（UTC・東京は 9/30、ロサンゼルスは 9/29）。
+  const instant = new Date('2026-09-30T00:30:00Z');
+  const cases = [
+    ['UTC', '2026-09-30'],
+    ['Asia/Tokyo', '2026-09-30'],
+    ['America/Los_Angeles', '2026-09-29'],
+  ] as const;
+  for (const [tz, expected] of cases) {
+    it(`TZ=${tz} で、注入した時計 ${instant.toISOString()} の today は ${expected}`, async () => {
+      process.env['TZ'] = tz;
+      const app = appWith(() => instant);
+      const res = await app.request('/usage');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { today: string };
+      expect(body.today).toBe(expected);
+      // 台帳の `date` を書く関数（clone.ts / manager.ts の `usageDate`）と同じ値になる。
+      expect(body.today).toBe(usageDate(instant));
+    });
+  }
 });

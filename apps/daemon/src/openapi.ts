@@ -31,6 +31,7 @@ import {
   unreadableCommitmentSchema,
   usageAggregateSchema,
   usageBreakdownSchema,
+  usageDateSchema,
   waitingKindSchema,
   workspaceLocatorSchema,
   type CloneHost,
@@ -1248,6 +1249,14 @@ export const usageResponseSchema = usageAggregateSchema.extend({
    * CLI・Web・クローンの `usage_read` も同じ判定を返す）。
    */
   unrecordedManagers: z.array(unrecordedManagerSchema),
+  /**
+   * デーモンの暦の今日（`YYYY-MM-DD`）。台帳の `date` を書くのと同じ関数
+   * （`usageDate`）・同じ TZ で評価した値（Issue #2268）。
+   *
+   * **画面は「今日」をブラウザの TZ で決めない。** 台帳の日はデーモンの TZ で切られるので、
+   * 「今日の利用」はこの日の行を指す。
+   */
+  today: usageDateSchema,
 });
 
 export const managerActionResponseSchema = z.object({
