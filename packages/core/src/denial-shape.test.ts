@@ -266,7 +266,7 @@ describe('denialInputShape（秘密が漏れないこと）', () => {
 });
 
 describe('denialInputAbsence（Markdown 安全性）', () => {
-  // この一文は react-markdown で描かれる報告本文へそのまま埋まる。
+  // この一文は `<Markdown>` で描かれる報告本文へそのまま埋まる。
   // `_` や `*` を書くと `<em>` に化ける（doc に明記）。
   it('via: live の一文に "_" も "*" も含まない', () => {
     const text = denialInputAbsence('live');

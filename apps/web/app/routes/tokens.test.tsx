@@ -49,6 +49,14 @@ function stubScreen(options: {
    * 埋めない）。
    */
   settingsUnreadable?: { reason: string };
+  /**
+   * issue #2346。渡すと応答へ `rowsUnreadable` を足す（`GET /tokens` がプールの行を読めな
+   * かったときと同じ形。渡さなければ鍵ごと無い）。`settings` の軸とは独立。
+   */
+  rowsUnreadable?: {
+    count: number;
+    rows: { id?: string; label?: string; reason: string }[];
+  };
   tokensStatus?: number;
   journalEntries?: unknown[];
 }) {
@@ -56,6 +64,7 @@ function stubScreen(options: {
     tokens = [],
     settings = DEFAULT_SETTINGS,
     settingsUnreadable,
+    rowsUnreadable,
     tokensStatus = 200,
     journalEntries = [],
   } = options;
@@ -64,9 +73,10 @@ function stubScreen(options: {
       if (tokensStatus !== 200) {
         return json({ error: '実行環境の持ち主だけが操作できる' }, tokensStatus);
       }
+      const rows = rowsUnreadable === undefined ? {} : { rowsUnreadable };
       return settingsUnreadable === undefined
-        ? json({ tokens, settings })
-        : json({ tokens, settingsUnreadable });
+        ? json({ tokens, settings, ...rows })
+        : json({ tokens, settingsUnreadable, ...rows });
     }
     if (url.includes('/journal')) return json({ entries: journalEntries });
     return undefined;
@@ -457,6 +467,48 @@ describe('/tokens 画面 — 空のプール', () => {
     renderTokens();
 
     expect(await screen.findByText(/登録された認証トークンがまだ1件も無い/)).toBeTruthy();
+    // 対照（issue #2346）: 読めない行が無いので、その断りは出ない。
+    expect(screen.queryByText(/読めないトークンの行/)).toBeNull();
+  });
+
+  /**
+   * issue #2346（`settingsUnreadable` の行版）。`GET /tokens` が `rowsUnreadable` を返す
+   * とき、読めた行が0件でも「登録された認証トークンがまだ1件も無い」「正常」と言わない。
+   * 値は出ない（応答に混ぜても画面のどこにも出ない）。
+   */
+  it('読めない行が在るとき、「まだ1件も無い」と言わず、件数と id・ラベルを断る。値は出ない（#2346）', async () => {
+    stubScreen({
+      tokens: [],
+      rowsUnreadable: {
+        count: 1,
+        rows: [{ id: 'tok-bad', label: 'broken-label', reason: '不正な欄: order' }],
+      },
+    });
+
+    renderTokens();
+
+    expect(await screen.findByText(/読めないトークンの行が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText('tok-bad')).toBeTruthy();
+    expect(screen.getByText(/broken-label/)).toBeTruthy();
+    expect(screen.getByText(/不正な欄: order/)).toBeTruthy();
+    expect(screen.getByText(/読めた認証トークンの行は無い/)).toBeTruthy();
+    expect(screen.queryByText(/登録された認証トークンがまだ1件も無い/)).toBeNull();
+    expect(screen.queryByText(/これは正常/)).toBeNull();
+  });
+
+  it('読めない行が在っても、読めた行は今までどおり出る。設定の軸とは独立（#2346）', async () => {
+    stubScreen({
+      tokens: [{ id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa', source: 'stored' }],
+      rowsUnreadable: { count: 1, rows: [{ reason: '不正な行' }] },
+    });
+
+    renderTokens();
+
+    expect(await screen.findByText(/読めないトークンの行が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/id もラベルも取れない/)).toBeTruthy();
+    expect(screen.getByText('first')).toBeTruthy();
+    // 設定は読めているので、設定の直し方のカードは出ない。
+    expect(screen.queryByText(/回転の設定は読めない/)).toBeNull();
   });
 });
 

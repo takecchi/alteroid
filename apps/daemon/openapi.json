@@ -2863,7 +2863,7 @@
         "operationId": "getPractices",
         "tags": ["practices"],
         "summary": "仕事のやり方の一覧",
-        "description": "仕事のやり方（PracticeStore）の一覧。本文は含まない（メタ情報だけ）。**やり方が1件も無いのは正常な状態である**——やり方が書かれていない仕事も普通に進む。",
+        "description": "仕事のやり方（PracticeStore）の一覧。本文は含まない（メタ情報だけ）。**読めない行が無いのにやり方が1件も無いのは正常な状態である**——やり方が書かれていない仕事も普通に進む。行が読めない（版ずれ・手編集）やり方が在るときだけ、`unreadable`（slug が取れれば slug と不正な欄名）が載る。**壊れた行であって、消されたやり方ではない。**0件なら鍵ごと無い（issue #2346）。",
         "responses": {
           "200": {
             "description": "やり方のメタ情報一覧（slug の昇順）。",
@@ -2908,6 +2908,21 @@
                           }
                         },
                         "required": ["slug", "kind", "title", "createdAt", "updatedAt", "chars"]
+                      }
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slug": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
                       }
                     }
                   },
@@ -15619,10 +15634,10 @@
         "operationId": "getTokens",
         "tags": ["tokens"],
         "summary": "認証トークンのプールと設定を読む",
-        "description": "プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す（受け入れ基準7: プールが空の既定構成の挙動を変えない）。回す契機・冷却の設定が壊れていて読めないときも 200 を返す——`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。",
+        "description": "プールが空でも 200 を返し、既定の設定（`free_exhausted`）を返す（受け入れ基準7: プールが空の既定構成の挙動を変えない）。回す契機・冷却の設定が壊れていて読めないときも 200 を返す——`settings` を省いて `settingsUnreadable.reason` を返す（issue #2095）。プールの行が読めない（版ずれ・手編集）ものが在るときだけ、`rowsUnreadable`（件数と、id・ラベル・不正な欄名。**値は含まない**）が載る。**壊れた行であって、消されたトークンではない。** `tokens` が空でも `rowsUnreadable` が在れば「登録されていない」ではない。0件なら鍵ごと無い（issue #2346）。",
         "responses": {
           "200": {
-            "description": "プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。",
+            "description": "プール（値は出さない）と設定。設定が読めないときは `settings` の代わりに`settingsUnreadable: { reason }` を返す（プールの一覧は道連れにしない）。行が読めないものが在るときは `rowsUnreadable` も載る。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15713,6 +15728,35 @@
                         }
                       },
                       "required": ["reason"]
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["tokens"]
@@ -15836,6 +15880,35 @@
                         }
                       },
                       "required": ["reason"]
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["tokens"]
@@ -16683,7 +16756,7 @@
         "description": "クローンの道具 `manager_list` の中にしか出ていなかった内訳（`summarizeInboxBacklog` の結果）を、人間の入口（HTTP）から読む（issue #783 段0）。`claimPending()` ではなく `peekPending()` を使うので、呼んでも `deliveries`（器の入れ替え回数）は1つも進まない。集計は`@alteroid/core` の同じ関数を通すので、クローンの道具と違う数を返すことは無い。",
         "responses": {
           "200": {
-            "description": "受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く（値を作らない。`InboxStore.pending` と同じ作法）。",
+            "description": "受信箱の内訳。0件のときは `oldestAt` 等、実際には取れていない欄を省く（値を作らない。`InboxStore.pending` と同じ作法）。読めない行が1件でも在るときだけ`unreadable`（id・受信時刻・不正な欄名。本文は載せない）が載る。`total` は読めた行の数で、読めない行は入っていない。**`total: 0` で `unreadable` が無いときだけ「未処理の合図は無い」。**",
             "content": {
               "application/json": {
                 "schema": {
@@ -16867,6 +16940,24 @@
                         }
                       },
                       "required": ["total", "byType", "undelivered"]
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
+                      }
                     }
                   },
                   "required": [

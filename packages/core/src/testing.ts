@@ -59,6 +59,7 @@ import {
 import type {
   CredentialVaultStore,
   EnvProfile,
+  InboxPeek,
   InboxStore,
   JobStore,
   McpServerStore,
@@ -1442,6 +1443,10 @@ export function createMemoryStores(): Stores {
     async list() {
       return [...tokenPool].sort((a, b) => a.order - b.order);
     },
+    async listUnreadable() {
+      // 読めない行は持てない（`replace` がスキーマを通す）ので常に空。
+      return [];
+    },
     async replace(next) {
       // **本物（fs の `agentTokenRowSchema` / pg の `order` 列の SQL 整数型）と
       // 同じ検査を掛ける。** かつてはインメモリだけが何でも受け付けたので、
@@ -1685,18 +1690,22 @@ export function createMemoryStores(): Stores {
    */
   const practiceStore: PracticeStore = {
     async list() {
-      return [...practices.values()]
-        .sort((a, b) => a.slug.localeCompare(b.slug))
-        .map((entry) =>
-          isolate({
-            slug: entry.slug,
-            kind: entry.kind,
-            title: entry.title,
-            createdAt: entry.createdAt,
-            updatedAt: entry.updatedAt,
-            chars: entry.chars,
-          }),
-        );
+      // 読めない行は持てない（`write` がスキーマを通す）ので `unreadable` は常に空。
+      return {
+        entries: [...practices.values()]
+          .sort((a, b) => a.slug.localeCompare(b.slug))
+          .map((entry) =>
+            isolate({
+              slug: entry.slug,
+              kind: entry.kind,
+              title: entry.title,
+              createdAt: entry.createdAt,
+              updatedAt: entry.updatedAt,
+              chars: entry.chars,
+            }),
+          ),
+        unreadable: [],
+      };
     },
     async read(slug) {
       const found = practices.get(slug);
@@ -1834,10 +1843,14 @@ function createMemoryInboxStore(): InboxStore {
       );
       return { count: rows.length, ...(oldest === undefined ? {} : { oldestAt: oldest }) };
     },
-    async peekPending(): Promise<PendingInboxEvent[]> {
+    async peekPending(): Promise<InboxPeek> {
       // **`claimPending` と違い、`unread` を1文字も書き換えない**
       // （`InboxStore.peekPending` の doc。`pending()` と同じ倒れ先）。
-      return [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      // メモリ実装は `put()` がスキーマを通すので、壊れた行を持てない（`unreadable` は常に空）。
+      return {
+        entries: [...unread.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)),
+        unreadable: [],
+      };
     },
     async removeMany(ids: readonly string[]): Promise<string[]> {
       const removedIds: string[] = [];

@@ -664,6 +664,7 @@ export {
   inboxBacklogSourceFor,
   summarizeInboxBacklog,
   describeInboxBacklogBreakdown,
+  describeNoReadableInboxEvents,
   // #783 段0 の最後の欠落（HTTP `GET /inbox` / CLI `alteroid inbox show`）が
   // クローンの道具（`manager_list`）と同じ文言を出すための2つ。**再定義せず
   // ここから import する**——`inboxBacklogDedupeKey` の doc「なぜ1箇所に
@@ -950,6 +951,7 @@ export {
   type TokenPoolService,
   type TokenPoolServiceOptions,
   type TokenPoolView,
+  type TokenRowsUnreadable,
 } from './token-pool-service.js';
 /**
  * 回し手（Issue #393 PR3）。**デーモンの中の1本。** 撒く先（runner / クローン）は

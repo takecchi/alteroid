@@ -9,10 +9,12 @@ import {
 } from '@alteroid/core';
 import type {
   Practice,
+  PracticeList,
   PracticeMeta,
   PracticeStore,
   PracticeVersion,
   PracticeVersionMeta,
+  UnreadablePractice,
 } from '@alteroid/core';
 import { and, asc, eq, sql } from 'drizzle-orm';
 
@@ -103,11 +105,12 @@ export class PgPracticeStore implements PracticeStore {
   }
 
   /**
-   * slug の昇順。**不正な行は返さない**（issue #2011。`PgScheduleStore.list`
-   * が #1944 でそろえた形と同じ）——飛ばした行は stderr へ跡を残すだけで、
-   * `read(slug)` はこれまでどおり投げる。DB の行そのものには触れない。
+   * `entries` は slug の昇順。**不正な行は `entries` に入れず、`unreadable` に別欄で
+   * 返す**（issue #2346。以前は黙って飛ばしていた）。stderr の跡（issue #2011）は
+   * そのまま残し、`read(slug)` はこれまでどおり投げる。DB の行そのものには触れない。
+   * `unreadable` は slug（列から取れる）と不正な欄名だけを持ち、題・本文は載せない。
    */
-  async list(): Promise<PracticeMeta[]> {
+  async list(): Promise<PracticeList> {
     const rows = await this.#db
       .select({
         slug: practices.slug,
@@ -121,7 +124,8 @@ export class PgPracticeStore implements PracticeStore {
       })
       .from(practices)
       .orderBy(asc(practices.slug));
-    const result: PracticeMeta[] = [];
+    const entries: PracticeMeta[] = [];
+    const unreadable: UnreadablePractice[] = [];
     for (const row of rows) {
       const parsed = practiceMetaSchema.safeParse({
         slug: row.slug,
@@ -132,17 +136,14 @@ export class PgPracticeStore implements PracticeStore {
         chars: row.chars,
       });
       if (parsed.success) {
-        result.push(parsed.data);
+        entries.push(parsed.data);
         continue;
       }
-      process.stderr.write(
-        `${describeSkippedPracticeRow({
-          slug: row.slug,
-          reason: summarizeInvalidFields(parsed.error.issues),
-        })}\n`,
-      );
+      const reason = summarizeInvalidFields(parsed.error.issues);
+      process.stderr.write(`${describeSkippedPracticeRow({ slug: row.slug, reason })}\n`);
+      unreadable.push({ slug: row.slug, reason });
     }
-    return result;
+    return { entries, unreadable };
   }
 
   /**

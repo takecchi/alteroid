@@ -109,8 +109,9 @@ export function ApprovalCard({
         クローンが書いた設問なのでこの線の内側である（線そのものの根拠は下の
         `answer` の側のコメントに在る）。
 
-        **`whitespace-pre-wrap` は外してよい。** `Markdown` は `remark-breaks` を
-        積んでいて単独の改行を `<br>` にするので、行区切りはこれまでどおり保たれる
+        **`whitespace-pre-wrap` は外してよい。** `Markdown` は
+        `mdast-util-newline-to-break`（`remark-breaks` の中身）を掛けていて単独の
+        改行を `<br>` にするので、行区切りはこれまでどおり保たれる
         （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
       */}
       <Markdown>{question}</Markdown>

@@ -343,6 +343,57 @@ describe('alteroid practice list / show', () => {
     expect(text).not.toContain('alteroid practice show');
   });
 
+  /**
+   * issue #2346。`GET /practices` が `unreadable`（読めない行。1件でも在るときだけ載る）を
+   * 返すとき、読めた行が0件でも「1件も無い」「正常」と言わない。上の対照は、`unreadable` が
+   * 無ければ今までどおり言う。
+   */
+  it('読めない行が在り、読めた行が0件のとき、「1件も無い」「正常」と言わない（#2346）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: { practices: [], unreadable: [{ slug: 'bad-practice', reason: '不正な欄: kind' }] },
+    });
+
+    await practiceListCommand();
+
+    const text = read();
+    expect(text).toContain('読めないやり方が 1 件ある');
+    expect(text).toContain('bad-practice');
+    expect(text).toContain('不正な欄: kind');
+    expect(text).toContain('消えたのではなく、読めない形で入っている');
+    expect(text).toContain('読めたやり方は無い');
+    expect(text).not.toContain('まだ1件も無い');
+    expect(text).not.toContain('これは正常な状態');
+  });
+
+  it('読めない行と読めた行が両方在るとき、読めた行は出し、末尾に件数を足す（#2346）', async () => {
+    const read = captureStdout();
+    replies.push({
+      status: 200,
+      body: {
+        practices: [
+          {
+            slug: 'review',
+            kind: 'レビュー',
+            title: 'レビューの進め方',
+            createdAt: '2026-09-20T00:00:00.000Z',
+            updatedAt: '2026-09-21T00:00:00.000Z',
+            chars: 30,
+          },
+        ],
+        unreadable: [{ reason: '不正な行' }],
+      },
+    });
+
+    await practiceListCommand();
+
+    const text = read();
+    expect(text).toContain('[レビュー] review  — レビューの進め方');
+    expect(text).toContain('読めないやり方が 1 件ある');
+    expect(text).toContain('（slug も取れない）');
+  });
+
   it('一覧は種類・slug・題・作成・更新・文字数を出す', async () => {
     const read = captureStdout();
     replies.push({

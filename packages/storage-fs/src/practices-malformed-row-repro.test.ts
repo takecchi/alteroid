@@ -107,12 +107,52 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     await writeRawPracticesFile();
     const stores = createFsStores(root);
 
-    let found: Awaited<ReturnType<typeof stores.practices.list>> = [];
+    let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
     await captureStderr(async () => {
       found = await stores.practices.list();
     });
 
-    expect(found.map((p) => p.slug)).toEqual(['good-practice']);
+    // 戻り型が `{ entries, unreadable }` になった（issue #2346）ので `entries` から読む。
+    // 保証（飛ばして正しい行だけを返す）は `entries` に対して今もそのまま成り立つ。
+    expect(found.entries.map((p) => p.slug)).toEqual(['good-practice']);
+  });
+
+  it('list() の unreadable に slug と不正な欄名だけが返る。題・本文は載らない（issue #2346）', async () => {
+    await writeRawPracticesFile();
+    const stores = createFsStores(root);
+
+    let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
+    await captureStderr(async () => {
+      found = await stores.practices.list();
+    });
+
+    // 読めない行は「無い」へ潰れない。kind が欠けた行は slug と欄名だけで返る。
+    expect(found.unreadable).toEqual([{ slug: 'bad-practice', reason: '不正な欄: kind' }]);
+    const serialized = JSON.stringify(found.unreadable);
+    expect(serialized).not.toContain(BAD_PRACTICE_RAW.title);
+    expect(serialized).not.toContain(BAD_PRACTICE_RAW.content);
+  });
+
+  it('壊れた行しか無くても entries は空・unreadable は1件。対照: 壊れた行が無ければ unreadable は空（issue #2346）', async () => {
+    await mkdir(join(root, 'jobs'), { recursive: true });
+    await writeFile(
+      practicesPath,
+      `${JSON.stringify({ practices: [BAD_PRACTICE_RAW], practiceVersions: [] }, null, 2)}\n`,
+    );
+    const broken = createFsStores(root);
+    let onlyBroken: Awaited<ReturnType<typeof broken.practices.list>> = {
+      entries: [],
+      unreadable: [],
+    };
+    await captureStderr(async () => {
+      onlyBroken = await broken.practices.list();
+    });
+    expect(onlyBroken.entries).toEqual([]);
+    expect(onlyBroken.unreadable).toHaveLength(1);
+
+    // 対照: 本当に0件（ファイルが無い）なら unreadable は空。
+    const empty = createFsStores(await makeTempDir('alteroid-test-'));
+    expect(await empty.practices.list()).toEqual({ entries: [], unreadable: [] });
   });
 
   it('read() は正しい slug をちゃんと返す（直す前は list 経由でなくても例外で赤）', async () => {
@@ -183,11 +223,13 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     // **元の形のまま**——書き換えられず、消えてもいない（別の slug を write しただけ）。
     expect(badRows).toEqual([BAD_PRACTICE_RAW]);
 
-    let found: Awaited<ReturnType<typeof stores.practices.list>> = [];
+    let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
     await captureStderr(async () => {
       found = await stores.practices.list();
     });
-    expect(found.map((p) => p.slug).sort()).toEqual(['good-practice', 'new-practice']);
+    expect(found.entries.map((p) => p.slug).sort()).toEqual(['good-practice', 'new-practice']);
+    // 書いた後も、壊れた行は消えずに unreadable に残り続ける（issue #2346）。
+    expect(found.unreadable.map((row) => row.slug)).toEqual(['bad-practice']);
   });
 
   it('clear() は正しい行も壊れた行も両方消す——practices.json にやり方が1つも残らない', async () => {
@@ -209,11 +251,11 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
     expect(raw.practices).toEqual([]);
     expect(raw.practiceVersions).toEqual([]);
 
-    let found: Awaited<ReturnType<typeof stores.practices.list>> = [];
+    let found: Awaited<ReturnType<typeof stores.practices.list>> = { entries: [], unreadable: [] };
     await captureStderr(async () => {
       found = await stores.practices.list();
     });
-    expect(found).toEqual([]);
+    expect(found).toEqual({ entries: [], unreadable: [] });
   });
 
   /**

@@ -5737,12 +5737,15 @@ class Clone implements CloneHost {
             // 固定する。
             if (count <= INBOX_BACKLOG_LOUD_THRESHOLD) return base;
             try {
-              const rows = await this.#stores.inbox.peekPending();
+              const peek = await this.#stores.inbox.peekPending();
               // **`Date.now()` をここで固定する。** `summarizeInboxBacklog` の
               // 齢バケツは使わない（この行は種類しか描かない）が、関数の契約
               // として基準時刻を渡す必要があるので、他の材料と同じ「呼んだ
               // 時点」を渡す。
-              return { ...base, typeBreakdown: summarizeInboxBacklog(rows, Date.now()) };
+              return {
+                ...base,
+                typeBreakdown: summarizeInboxBacklog(peek.entries, Date.now(), peek.unreadable),
+              };
             } catch {
               // **内訳が読めなくても、件数自体は取れているので base のまま
               // 返す。** `situation.ts` 側は `typeBreakdown` が無い回、既存の
@@ -8095,7 +8098,10 @@ class Clone implements CloneHost {
             const kindKeys = practiceCandidateKindKeys({ commitments, jobs });
             const practices: PracticeCandidateMaterial[] = [];
             if (kindKeys.size > 0) {
-              for (const meta of await this.#stores.practices.list()) {
+              // **読めない行（`unreadable`）はここでは使わない**——材料にできる本文が
+              // 読めないので候補には載せられない。見せる先は `practice_list` /
+              // `GET /practices`（issue #2346）で、ここは「無い」と言う場所ではない。
+              for (const meta of (await this.#stores.practices.list()).entries) {
                 if (!kindKeys.has(workKindGroupKey(meta.kind) ?? '')) continue;
                 const found = await this.#stores.practices.read(meta.slug);
                 if (found === null) continue; // 一覧と読みの間に消えた

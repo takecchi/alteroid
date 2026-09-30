@@ -263,6 +263,74 @@ describe('alteroid token list', () => {
     // 一覧（読めている分）は出ている。
     expect(text).toContain('first');
   });
+
+  /**
+   * issue #2346。プールの行が読めないとき（`rowsUnreadable`。`settingsUnreadable` の行版）、
+   * 読めた行が0件でも「トークンは登録されていません」「自動切替は一切効きません」と断定
+   * しない。対照（上の「プールが空なら…」）は、`rowsUnreadable` が無ければ今までどおり言う。
+   */
+  it('読めない行が在り、読めた行が0件のとき、「登録されていません」「一切効きません」と言わない（#2346）', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [],
+        settings: EMPTY_SETTINGS,
+        rowsUnreadable: {
+          count: 1,
+          rows: [{ id: 'tok-bad', label: 'broken-label', reason: '不正な欄: order' }],
+        },
+      },
+    });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text).toContain('読めないトークンの行が 1 件ある');
+    expect(text).toContain('id=tok-bad');
+    expect(text).toContain('label=broken-label');
+    expect(text).toContain('不正な欄: order');
+    expect(text).toContain('消えたのではなく、読めない形で入っている');
+    expect(text).toContain('読めたトークンの行は無い');
+    expect(text).not.toContain('トークンは登録されていません');
+    expect(text).not.toContain('一切効きません');
+    expect(text).not.toContain('記録が残りません');
+  });
+
+  it('読めない行が在り、読めた行も在るとき、一覧の前に断りを出し、読めた行は今までどおり出る（#2346）', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+        rowsUnreadable: { count: 1, rows: [{ reason: '不正な行' }] },
+      },
+    });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    const text = read();
+    expect(text).toContain('読めないトークンの行が 1 件ある');
+    expect(text).toContain('（id もラベルも取れない）');
+    expect(text.indexOf('読めないトークンの行')).toBeLessThan(text.indexOf('first'));
+    expect(text).toContain('first');
+  });
+
+  it('対照: rowsUnreadable が無ければ、断りは1文字も出ない（#2346）', async () => {
+    setReply('GET', '/tokens', {
+      status: 200,
+      body: {
+        tokens: [{ id: 'tok-a', label: 'first', order: 0, sha256: 'aaaaaaaaaaaa' }],
+        settings: EMPTY_SETTINGS,
+      },
+    });
+    const read = captureStdout();
+
+    await tokenListCommand();
+
+    expect(read()).not.toContain('読めない');
+  });
 });
 
 describe('alteroid token add', () => {

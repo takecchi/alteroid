@@ -221,11 +221,14 @@ import {
   UnreadableScheduleError,
   UnreadableTokenSettingsError,
   describeUnreadableApprovals,
+  describeUnreadableInboxEvents,
   describeUnreadableCommitment,
   describeUnreadableJobs,
+  describeUnreadablePractices,
   describeUnreadableSchedules,
+  describeUnreadableTokens,
 } from './store.js';
-import type { ArchiveEntry, JournalStore, PendingInboxEvent, Stores } from './store.js';
+import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
   STALE_TOKEN_RESTART_ADVICE,
@@ -238,6 +241,7 @@ import {
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
   describeInboxBacklogQueuedInMemory,
+  describeNoReadableInboxEvents,
   inboxRemoveManyTypesSchema,
   matchesInboxRemoveManyFilter,
   removeInboxEventsAndStopDelivery,
@@ -1179,11 +1183,18 @@ function describeAskedAt(askedAt: ManagerWaitingItem['askedAt']): string {
  * （`clone.ts` の `#toolContext()`）は必ず渡す。
  */
 function describeInboxBacklog(
-  rows: readonly PendingInboxEvent[],
+  peek: InboxPeek,
   now: number,
   queuedInMemory: number | undefined,
 ): string {
+  const rows = peek.entries;
   const queuedLine = describeInboxBacklogQueuedInMemory(queuedInMemory);
+  // issue #2344: 読めない行が在るとき、「未処理の合図は無い」とは言わない。
+  // **「無い」は、読めた行も読めない行も0件のときにしか言わない。**
+  const noReadable = describeNoReadableInboxEvents(peek.unreadable);
+  if (rows.length === 0 && noReadable !== null) {
+    return queuedLine === null ? noReadable : `${noReadable}\n${queuedLine}`;
+  }
   if (rows.length === 0) {
     if (queuedLine === null) return 'クローンの受信箱に未処理の合図は無い。';
     // **器の行は0だが、メモリの配達待ち行列には残っている**——issue #1133 が
@@ -1191,7 +1202,7 @@ function describeInboxBacklog(
     // 「両方空」を騙る文言は出さない。
     return `器の行に未処理の合図は無い（メモリの配達待ち行列は別の軸——下）。\n${queuedLine}`;
   }
-  const breakdown = summarizeInboxBacklog(rows, now);
+  const breakdown = summarizeInboxBacklog(rows, now, peek.unreadable);
   const oldest =
     breakdown.oldestAt === undefined ? '' : `（最も古いものは ${breakdown.oldestAt} から）`;
   // #917 (B): 人間起点の行を、大きい数字（次の行）より先に出す。0件なら
@@ -8965,7 +8976,11 @@ export function createCloneTools(context: ToolContext) {
         // **絞りはツール層で当てる**（`matchesInboxRemoveManyFilter` の doc——
         // SQL 側に同じ判定を複製しない）。`peekPending()` は古い順で返すので、
         // filter は順序を変えず、matched もそのまま古い順になる。
-        const allPending = await stores.inbox.peekPending();
+        const peek = await stores.inbox.peekPending();
+        const allPending = peek.entries;
+        // issue #2344: 読めない行は絞り込みの材料（種類・送信元）が取れないので対象にできない。
+        // **だから「未読が1件も無い」とは言わない**——消していないだけで、受信箱に在る。
+        const unreadableNote = describeUnreadableInboxEvents(peek.unreadable);
         const matched = allPending.filter((row) => matchesInboxRemoveManyFilter(row, filter));
 
         const filterText = [
@@ -8979,7 +8994,9 @@ export function createCloneTools(context: ToolContext) {
 
         if (matched.length === 0) {
           let why: string;
-          if (allPending.length === 0) {
+          if (allPending.length === 0 && unreadableNote !== null) {
+            why = `読めた未読が1件も無い。ただし ${unreadableNote}この道具では選べず、1件も消していない。`;
+          } else if (allPending.length === 0) {
             why =
               '受信箱に未読が1件も無い。**絞り込みの問題ではない**（消すべきものがそもそも無い）。';
           } else {
@@ -9223,6 +9240,10 @@ export function createCloneTools(context: ToolContext) {
         // 飲み込まずそのまま投げる**（`UnreadableCommitmentError` と同じ作法、
         // 上の doc）。
         const allTokens = await stores.tokens.list();
+        // **読めなかった行（issue #2346）。** `list()` は読めない行を飛ばすので、
+        // プールが「空」に見えても、壊れた行が在るかもしれない。値は載らない
+        // （id・ラベル・不正な欄名だけ）。0件なら `null`（何も出さない）。
+        const unreadableTokensNote = describeUnreadableTokens(await stores.tokens.listUnreadable());
         let settingsLine: string;
         try {
           const settings = await stores.tokens.readSettings();
@@ -9279,13 +9300,24 @@ export function createCloneTools(context: ToolContext) {
         // `token-pool.ts` の `AgentTokenView` の doc 1つだけにしておく）。
         const views = tokens.map((token) => toAgentTokenView(token));
         const now = Date.now();
-        const head = [settingsLine, activeLine];
+        const head = [
+          settingsLine,
+          activeLine,
+          ...(unreadableTokensNote === null ? [] : [unreadableTokensNote]),
+        ];
         if (views.length === 0) {
+          // **「プールは空である。この状態では回らない」は、読めない行が0件のときだけ**
+          // （issue #2346）。読めない行が在れば、読めた行が無いとしか言えない。
           return text(
             [
               ...head,
               '',
-              'プールは空である。**この状態では回らない**——枠に当たっても次の候補が無い。',
+              ...(unreadableTokensNote === null
+                ? ['プールは空である。**この状態では回らない**——枠に当たっても次の候補が無い。']
+                : [
+                    '読めたトークンの行は無い。**プールが空だとは言えない**——読めない行が在り、' +
+                      'それが使えるかどうかはここから分からない。',
+                  ]),
               '登録は人間の手で（`alteroid token add --label <名前> --file <path>`）。',
             ].join('\n'),
           );
@@ -9493,16 +9525,28 @@ export function createCloneTools(context: ToolContext) {
         '仕事のやり方の一覧を返す（本文は返さない。slug・種類・題・文字数・作成/更新時刻だけ）。',
         'やり方はあなたが読んで従うかどうかを毎回自分で決める素材であって、実行される定義ではない',
         '（従わせる道具はここには無い）。',
-        '**やり方が1件も無いのは正常な状態である。** やり方が書かれていない仕事も普通に進む——',
+        '**読めない行が無いのにやり方が1件も無いのは正常な状態である。** やり方が書かれていない仕事も普通に進む——',
         '空を「まだ設定されていない」という異常として読まないこと。',
+        '読めない行が在るときは、応答の末尾にその件数と slug が出る（壊れた行であって、消されたやり方ではない）。',
         '中身が要るなら practice_read slug=<slug> で開くこと。',
       ].join(' '),
       {},
       async () => {
-        const entries = await stores.practices.list();
+        const { entries, unreadable } = await stores.practices.list();
+        // **読めない行は別に言う**（issue #2346）。予算の外に置く——一覧が溢れても
+        // 「壊れた行が在る」は必ず届く。0件なら `null`（何も出さない）。
+        const unreadableNote = describeUnreadablePractices(unreadable);
         // ⭐ **空は正常。** `practice-contract.ts` の受け入れ基準そのもの——
-        // ここで異常や未設定であるかのような文言を出さない。
+        // ここで異常や未設定であるかのような文言を出さない。**ただし「無い」
+        // 「正常」と言えるのは読めない行が0件のときだけである**（issue #2346）。
         if (entries.length === 0) {
+          if (unreadableNote !== null) {
+            return text(
+              `（読めたやり方は無い）${unreadableNote}` +
+                '**やり方が無いとも、正常だとも言えない。**' +
+                'slug が分かる行は、practice_write で同じ slug を書き直すか practice_remove で外せる。',
+            );
+          }
           return text(
             'やり方はまだ1件も無い。**これは正常な状態である**——やり方が書かれていない' +
               '仕事も普通に進む。書くなら practice_write slug=<slug> kind=<種類> title=<題> content=<本文>。',
@@ -9519,18 +9563,18 @@ export function createCloneTools(context: ToolContext) {
             updatedAt: entry.updatedAt,
           }),
         );
-        return text(
-          renderListing(items, {
-            budget: PRACTICE_LIST_BUDGET,
-            omitted: ({ rest, shown, total }) =>
-              // **続きを取る口が無いので、無いと正直に言う**（`ListingBudget.omitted`
-              // の doc——口が無いまま断り書きだけ出すと、落ちた分へ呼び手が
-              // 到達できない）。やり方は少数を意図して置く場所なので、いまは
-              // 予算いっぱいの標本を見せたうえで正直に伝える側へ倒す。
-              `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち slug の昇順に ${String(shown)} 件だけ出した）。` +
-              'この一覧に続きを取る口はまだ無い——個別に読むには practice_read slug=<slug> を使うこと。',
-          }),
-        );
+        const listing = renderListing(items, {
+          budget: PRACTICE_LIST_BUDGET,
+          omitted: ({ rest, shown, total }) =>
+            // **続きを取る口が無いので、無いと正直に言う**（`ListingBudget.omitted`
+            // の doc——口が無いまま断り書きだけ出すと、落ちた分へ呼び手が
+            // 到達できない）。やり方は少数を意図して置く場所なので、いまは
+            // 予算いっぱいの標本を見せたうえで正直に伝える側へ倒す。
+            `…ほか ${String(rest)} 件は省略（全 ${String(total)} 件のうち slug の昇順に ${String(shown)} 件だけ出した）。` +
+            'この一覧に続きを取る口はまだ無い——個別に読むには practice_read slug=<slug> を使うこと。',
+        });
+        // 読めない行の断りは予算の外（末尾）に足す（issue #2346）。
+        return text(unreadableNote === null ? listing : `${listing}\n\n${unreadableNote}`);
       },
     ),
 

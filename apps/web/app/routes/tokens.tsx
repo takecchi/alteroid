@@ -32,6 +32,7 @@ import type {
   TokenRecovery,
   TokenRotationEntry,
   TokenRotationSettings,
+  TokensRowsUnreadable,
 } from '@alteroid/logic';
 
 /**
@@ -177,7 +178,11 @@ function PoolAndSettings() {
         </Card>
       ) : data === undefined ? null : (
         <>
-          <PoolCard tokens={data.tokens} targetTokenId={targetTokenId} />
+          <PoolCard
+            tokens={data.tokens}
+            targetTokenId={targetTokenId}
+            rowsUnreadable={data.rowsUnreadable}
+          />
           {data.settings === undefined ? (
             // **issue #2096（#2095 の表示側）。** 回す契機・冷却の設定が壊れて
             // いて読めないとき、デーモンは `settings` を省いて
@@ -349,6 +354,7 @@ function formatEpochMsRelative(ms: number): string {
 function PoolCard({
   tokens,
   targetTokenId,
+  rowsUnreadable,
 }: {
   tokens: readonly AgentTokenView[];
   /**
@@ -356,6 +362,11 @@ function PoolCard({
    * `undefined` なら「飛んできていない」——通常の一覧表示と何も変わらない。
    */
   targetTokenId?: string;
+  /**
+   * 読めなかった行（`GET /tokens` の `rowsUnreadable`。issue #2346。`settingsUnreadable` の
+   * 行版）。1件でも在るときだけ載る——`undefined` なら「読めない行は無い」。
+   */
+  rowsUnreadable?: TokensRowsUnreadable;
 }) {
   const sorted = [...tokens].sort((a, b) => a.order - b.order);
   // **プールから外れた id で飛んできたときの倒れ先。** 使用量には残っている
@@ -386,13 +397,22 @@ function PoolCard({
           </span>
         </div>
       )}
+      {rowsUnreadable !== undefined && <UnreadableRowsNote unreadable={rowsUnreadable} />}
       {sorted.length === 0 ? (
-        // **プールが空の構成は正常でありうる**（`.claude/skills/token-pool/SKILL.md`
-        // 「何は変わらないか」）。「まだ取れていない」との混同を避けるため、
-        // 正常な既定構成でもありうると添える。
-        <Empty>
-          登録された認証トークンがまだ1件も無い。（器の環境変数1本だけの既定構成でも、これは正常）
-        </Empty>
+        rowsUnreadable !== undefined ? (
+          // **「まだ1件も無い」「正常」と言えるのは、読めない行が0件のときだけ**
+          // （issue #2346）。読めない行が在れば、読めた行が無いとしか言えない。
+          <Empty>
+            読めた認証トークンの行は無い。登録されていない、とは言えない（読めない行が在る）。
+          </Empty>
+        ) : (
+          // **プールが空の構成は正常でありうる**（`.claude/skills/token-pool/SKILL.md`
+          // 「何は変わらないか」）。「まだ取れていない」との混同を避けるため、
+          // 正常な既定構成でもありうると添える。
+          <Empty>
+            登録された認証トークンがまだ1件も無い。（器の環境変数1本だけの既定構成でも、これは正常）
+          </Empty>
+        )
       ) : (
         <ul>
           {sorted.map((token) => (
@@ -401,6 +421,52 @@ function PoolCard({
         </ul>
       )}
     </Card>
+  );
+}
+
+/**
+ * 読めないトークンの行の断り（issue #2346。`commitments.tsx` の `UnreadableNote` と同じ形）。
+ *
+ * **「消えたのではなく、読めない形で入っている」と言う**（`UnreadableSettingsCard` と同じ
+ * 向き）。識別は id とラベルだけで、トークンの値は出ない（デーモンが返さない）。
+ * **プールを書き換える操作（追加・削除・無効化/戻す）はこの行を一緒に捨てる**
+ * （`PUT /tokens` は全文置換。`FsTokenPoolStore.replace` の doc）——知らせずに操作を
+ * 許すと、壊れた行を黙って消すことになる。
+ */
+function UnreadableRowsNote({ unreadable }: { unreadable: TokensRowsUnreadable }) {
+  return (
+    <div
+      role="status"
+      className="m-4 flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <div className="min-w-0 break-words">
+        <p>
+          読めないトークンの行が {unreadable.count} 件ある（消えたのではなく、読めない形で
+          入っている）。この一覧には載っていない。
+        </p>
+        <ul className="mt-1 list-disc pl-5">
+          {unreadable.rows.map((row, index) => (
+            <li key={`${row.id ?? ''}:${index}`}>
+              {row.id === undefined && row.label === undefined ? (
+                '（id もラベルも取れない）'
+              ) : (
+                <>
+                  {row.id !== undefined && <code className="font-mono break-all">{row.id}</code>}
+                  {row.id !== undefined && row.label !== undefined && ' / '}
+                  {row.label !== undefined && <span>{row.label}</span>}
+                </>
+              )}
+              {' — '}
+              {row.reason}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1">
+          プールを書き換える操作（追加・削除・無効化/戻す）は、この行を一緒に捨てる。
+        </p>
+      </div>
+    </div>
   );
 }
 

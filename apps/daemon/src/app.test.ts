@@ -2031,7 +2031,7 @@ describe('HTTP API', () => {
       });
 
       // manager_message だけが消え、human_message は残る。
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
 
       const journalEntries = (await stores.journal.list({ types: ['decision'] })) as {
@@ -2119,7 +2119,7 @@ describe('HTTP API', () => {
         removedIds: ['evt-a'],
       });
 
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-b']);
     });
 
@@ -2149,7 +2149,7 @@ describe('HTTP API', () => {
         remaining: 1,
       });
 
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-3']);
     });
 
@@ -2311,7 +2311,7 @@ describe('HTTP API', () => {
         '2026-08-11T00:00:00.000Z',
       );
 
-      const rows = await stores.inbox.peekPending();
+      const rows = (await stores.inbox.peekPending()).entries;
       const expected = summarizeInboxBacklog(rows, Date.now());
 
       const response = await app.request('/inbox');

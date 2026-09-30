@@ -9,6 +9,7 @@ import {
   type AgentToken,
   type TokenPoolStore,
   type TokenRotationSettings,
+  type UnreadableToken,
 } from '@alteroid/core';
 import { asc, eq } from 'drizzle-orm';
 
@@ -116,6 +117,18 @@ export class PgTokenPoolStore implements TokenPoolStore {
     // 廃止した（値を持たないので、渡すと `credentialOf` が「値が無い」で
     // 投げる）——`fromRow` の doc と同じ理由。
     return rows.filter((row) => row.source !== 'env').map(fromRow);
+  }
+
+  /**
+   * **常に空**（issue #2346。`TokenPoolStore.listUnreadable` の doc）。pg は行を正規化した
+   * 列で持つので、fs のように「形が合わない行」を作れない——`fromRow` は知らない
+   * `cooldownSource` の語を落とすだけで、その行は読めている（「出所を言えない」が
+   * 正しい）。`source = 'env'` の行を読み捨てるのは廃止した概念の残骸であって、
+   * 読めない行ではない。**これを「読めない行が無いことの証明」と読まないこと**——
+   * 列の型が守っているのは DB が受け付けた値の形までである。
+   */
+  async listUnreadable(): Promise<UnreadableToken[]> {
+    return [];
   }
 
   /**

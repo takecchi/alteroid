@@ -1,5 +1,11 @@
 import { inboxEventSchema } from '@alteroid/core';
-import type { InboxEvent, InboxStore, PendingInboxEvent } from '@alteroid/core';
+import type {
+  InboxEvent,
+  InboxPeek,
+  InboxStore,
+  PendingInboxEvent,
+  UnreadableInboxEvent,
+} from '@alteroid/core';
 import { eq, inArray, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -21,9 +27,12 @@ import { inboxEvents } from './schema.js';
  * 跡には id と読めなかった欄の名前だけを書き、値は出さない（zod のメッセージは受け取った
  * 値を含みうるので載せない）。
  */
-function parseEvent(id: string, value: unknown): InboxEvent | undefined {
+function parseEventOrReason(
+  id: string,
+  value: unknown,
+): { event: InboxEvent } | { reason: string } {
   const parsed = inboxEventSchema.safeParse(value);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) return { event: parsed.data };
   const fields = [
     ...new Set(
       parsed.error.issues.map((issue) =>
@@ -34,7 +43,16 @@ function parseEvent(id: string, value: unknown): InboxEvent | undefined {
   process.stderr.write(
     `alteroid: 受信箱の読めない合図を配る側から外しました（id=${JSON.stringify(id)}、不正な欄: ${fields.join(',')}。行は消していない）\n`,
   );
-  return undefined;
+  // fs 版（`FsInboxStore`）は行（`{ event, at, deliveries }`）ごと検査するので欄名が `event.type`
+  // の形になる。pg は列 `event` だけを検査するので、同じ形にそろえて `event.` を前置する
+  // （同じ壊れ方が、どちらの実装でも同じ `reason` になる）。
+  const named = fields.map((field) => (field === '(root)' ? 'event' : `event.${field}`));
+  return { reason: `不正な欄: ${named.join(',')}` };
+}
+
+function parseEvent(id: string, value: unknown): InboxEvent | undefined {
+  const result = parseEventOrReason(id, value);
+  return 'event' in result ? result.event : undefined;
 }
 
 /**
@@ -119,15 +137,31 @@ export class PgInboxStore implements InboxStore {
    * （`InboxStore.peekPending` の doc — 読むだけで配達回数を進めない）。
    * `claimPending` と同じ `parseEvent` / `toIso` を使う。
    */
-  async peekPending(): Promise<PendingInboxEvent[]> {
+  async peekPending(): Promise<InboxPeek> {
     const rows = await this.#db.select().from(inboxEvents);
-    return rows
-      .flatMap((row) => {
-        const event = parseEvent(row.id, row.event);
-        return event === undefined ? [] : [{ event, at: row.at, deliveries: row.deliveries }];
-      })
-      .sort((a, b) => a.at.getTime() - b.at.getTime())
-      .map((entry) => ({ event: entry.event, at: toIso(entry.at), deliveries: entry.deliveries }));
+    const readable: { event: InboxEvent; at: Date; deliveries: number }[] = [];
+    const unreadable: UnreadableInboxEvent[] = [];
+    for (const row of rows) {
+      const result = parseEventOrReason(row.id, row.event);
+      if ('event' in result) {
+        readable.push({ event: result.event, at: row.at, deliveries: row.deliveries });
+      } else {
+        // **読めない行も返す**（issue #2344。以前は黙って飛ばしていた）。`pending().count`
+        // （`count(*)`）は壊れた行も数えるので、`entries.length + unreadable.length` は
+        // それに一致する。id・受信時刻（列）と不正な欄名だけで、本文は載せない。
+        unreadable.push({ id: row.id, at: toIso(row.at), reason: result.reason });
+      }
+    }
+    return {
+      entries: readable
+        .sort((a, b) => a.at.getTime() - b.at.getTime())
+        .map((entry) => ({
+          event: entry.event,
+          at: toIso(entry.at),
+          deliveries: entry.deliveries,
+        })),
+      unreadable,
+    };
   }
 
   /**

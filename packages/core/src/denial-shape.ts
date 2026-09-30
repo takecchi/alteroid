@@ -126,7 +126,7 @@ export interface RecentDenial {
  * 見えていた——それがこの修正の出発点である。**「無い」の種類を潰さない。**
  *
  * **Markdown の記号を書かないこと。** この一文はそのまま報告本文
- * （`react-markdown` で描かれる面）へ埋まる。`_` や `*` を書くと `<em>` に
+ * （`<Markdown>` で描かれる面）へ埋まる。`_` や `*` を書くと `<em>` に
  * 化ける（`manager.ts` の `#emit` 側の doc）。
  */
 export function denialInputAbsence(via: 'live' | 'result'): string {

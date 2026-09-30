@@ -37,6 +37,12 @@ export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number
 export type UnreadableApproval = NonNullable<Ok<paths['/approvals']['get']>['unreadable']>[number];
 
 /**
+ * 受信箱の行が読めなかったもの（issue #2344）。「無い」でも「処理済み」でもない第3の状態
+ * ——`GET /inbox` の `unreadable`（1件でも在るときだけ載る）から導く。
+ */
+export type UnreadableInboxEvent = NonNullable<Ok<paths['/inbox']['get']>['unreadable']>[number];
+
+/**
  * 引き受けたまま終わっていない仕事の台帳の1行（`GET /commitments`）。
  *
  * **`respondedAt`（issue #1003）を含む。** サーバ（`apps/daemon/src/openapi.ts`
@@ -92,6 +98,11 @@ export type MemoryDocument = Ok<paths['/memory/{slug}']['get']>['document'];
  * 生成 spec 経由で導く。手で複製しない（この冒頭の doc と同じ理由）。
  */
 export type PracticeSummary = Ok<paths['/practices']['get']>['practices'][number];
+/**
+ * やり方の行が読めなかったもの（issue #2346）。「無い」でも「消された」でもない
+ * 第3の状態——`GET /practices` の `unreadable`（1件でも在るときだけ載る）から導く。
+ */
+export type UnreadablePractice = NonNullable<Ok<paths['/practices']['get']>['unreadable']>[number];
 export type Practice = Ok<paths['/practices/{slug}']['get']>['practice'];
 
 /**
@@ -188,6 +199,12 @@ export type AgentTokenView = TokensState['tokens'][number];
  */
 export type TokenRotationSettings = NonNullable<TokensState['settings']>;
 export type TokensSettingsUnreadable = NonNullable<TokensState['settingsUnreadable']>;
+/**
+ * プールの行が読めなかったもの（issue #2346）。**`settingsUnreadable` の行版。**
+ * 1件でも在るときだけ載る。`rows` は id・ラベル・不正な欄名だけで、トークンの値は
+ * 型に無い。
+ */
+export type TokensRowsUnreadable = NonNullable<TokensState['rowsUnreadable']>;
 /** `disabled` > `invalidated` > `cooling` > `ready` の4値。3値に潰さないこと。 */
 export type TokenAvailability = 'disabled' | 'invalidated' | 'cooling' | 'ready';
 /**

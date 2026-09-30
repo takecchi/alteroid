@@ -1467,7 +1467,7 @@ describe('FsJournalStore', () => {
         }),
       );
 
-      const list = await stores.practices.list();
+      const list = (await stores.practices.list()).entries;
       expect(list).toHaveLength(1);
       expect(list[0]?.chars).toBe([...legacyContent].length);
 
@@ -2842,15 +2842,15 @@ describe('FsInboxStore', () => {
         '2026-08-10T00:00:00.000Z',
       );
 
-      const rows = await stores.inbox.peekPending();
+      const { entries: rows } = await stores.inbox.peekPending();
 
       expect(rows.map((r) => r.event.id)).toEqual(['evt-1', 'evt-2']);
       expect((rows[0]?.event as { text: string }).text).toBe('1件目');
       expect(rows.every((r) => r.deliveries === 0)).toBe(true);
     });
 
-    it('0件なら空配列を返す', async () => {
-      expect(await stores.inbox.peekPending()).toEqual([]);
+    it('0件なら空配列を返す（読めない行も無い）', async () => {
+      expect(await stores.inbox.peekPending()).toEqual({ entries: [], unreadable: [] });
     });
 
     /**
@@ -2921,7 +2921,7 @@ describe('FsInboxStore', () => {
       const removed = await stores.inbox.removeMany(['evt-1', 'evt-3']);
 
       expect([...removed].sort()).toEqual(['evt-1', 'evt-3']);
-      const rest = await stores.inbox.peekPending();
+      const rest = (await stores.inbox.peekPending()).entries;
       expect(rest.map((r) => r.event.id)).toEqual(['evt-2']);
     });
 
@@ -2968,7 +2968,7 @@ describe('FsInboxStore', () => {
       await stores.inbox.removeMany(['evt-1']);
 
       expect(await stores.inbox.claimPending()).toEqual([]);
-      expect(await stores.inbox.peekPending()).toEqual([]);
+      expect((await stores.inbox.peekPending()).entries).toEqual([]);
     });
   });
 });

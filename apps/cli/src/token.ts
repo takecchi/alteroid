@@ -65,6 +65,14 @@ interface TokensView {
    */
   settings?: TokenRotationSettings;
   settingsUnreadable?: { reason: string };
+  /**
+   * **読めなかった行（issue #2346。`settingsUnreadable` の行版）。** 1件でも在るときだけ
+   * 載る（0件なら鍵ごと無い）。`rows` は id・ラベル・不正な欄名だけで、値は含まない。
+   */
+  rowsUnreadable?: {
+    count: number;
+    rows: { id?: string; label?: string; reason: string }[];
+  };
 }
 
 interface AgentTokenInput {
@@ -98,6 +106,37 @@ export function describeSettingsUnreadable(reason: string | undefined): string {
   );
 }
 
+/**
+ * 読めないトークンの行が在るときの断り（0件・無いときは空文字）。
+ *
+ * **「消えたのではなく、読めない形で入っている」と言う**（`describeSettingsUnreadable`
+ * と同じ向き）。識別は id とラベルだけで、トークンの値は出さない（デーモンが返さない）。
+ * **プールを書き換える操作はこの行を捨てる**（`FsTokenPoolStore.replace` の doc。
+ * `token add` / `remove` / `disable` / `enable` は全文置換の `PUT /tokens` を通る）ので、
+ * 直す前にそれを知らせる——知らせずに書き換えを勧めると、壊れた行を黙って消すことになる。
+ */
+export function describeRowsUnreadable(
+  unreadable: TokensView['rowsUnreadable'] | undefined,
+): string {
+  if (unreadable === undefined || unreadable.count === 0) return '';
+  const lines = unreadable.rows.map((row) => {
+    const identity =
+      [
+        row.id === undefined ? null : `id=${row.id}`,
+        row.label === undefined ? null : `label=${row.label}`,
+      ]
+        .filter((part) => part !== null)
+        .join(' ') || '（id もラベルも取れない）';
+    return `  ${identity}  ${row.reason}\n`;
+  });
+  return (
+    `読めないトークンの行が ${String(unreadable.count)} 件ある（消えたのではなく、読めない形で入っている）。` +
+    'この一覧には載っていない:\n' +
+    lines.join('') +
+    'プールを書き換える操作（token add / remove / disable / enable）は、この行を一緒に捨てる。\n'
+  );
+}
+
 export async function tokenListCommand(): Promise<void> {
   const target = await resolveTarget();
   const view = (await request(target, '/tokens')) as TokensView;
@@ -111,6 +150,17 @@ export async function tokenListCommand(): Promise<void> {
     stdout.write(
       `回す契機: ${view.settings.rotateOn}（resetsAt が取れないときの冷却の既定 ${String(view.settings.cooldownMs)}ms）\n`,
     );
+  }
+
+  // **読めない行は一覧の前に言う**（issue #2346）。0件なら何も出さない。
+  stdout.write(describeRowsUnreadable(view.rowsUnreadable));
+
+  if (view.tokens.length === 0 && view.rowsUnreadable !== undefined) {
+    // **「登録されていません」「自動切替は一切効きません」と言えるのは、読めない行が0件の
+    // ときだけ**（issue #2346）。読めない行が使えるかどうかは、ここからは分からない。
+    stdout.write('読めたトークンの行は無い（登録されていない、とは言えない）。\n');
+    stdout.write('読めない行が使えるかどうかは分からないので、自動切替が効かないとも言えない。\n');
+    return;
   }
 
   if (view.tokens.length === 0) {

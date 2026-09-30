@@ -1668,6 +1668,36 @@ describe('状況の1行に受信箱の滞留が載る（#783 段0）', () => {
     expect(out).toContain('本文は載せない');
   });
 
+  // issue #2344: 見出しの件数は読めない行も数える（`pending()`）。種類の内訳は読めた行だけなので、
+  // 読めない行が在れば、その数をこの行で言う。無ければ1文字も足さない。
+  it('閾値超え・typeBreakdown に読めない行が在れば、その数と「処理済みではない」を添える', () => {
+    const typeBreakdown = summarizeInboxBacklog(
+      [
+        {
+          event: {
+            type: 'external',
+            id: 'e1',
+            at: '2026-09-16T18:15:00.000Z',
+            source: 's',
+            payload: {},
+          },
+          at: '2026-09-16T18:15:00.000Z',
+          deliveries: 0,
+        },
+      ],
+      Date.parse('2026-09-16T18:23:22.000Z'),
+      [{ id: 'evt-bad', reason: '不正な欄: event.type' }],
+    );
+    const out = describeSituation({
+      managers: [],
+      runners: [],
+      backlog: { count: ABOVE_THRESHOLD, typeBreakdown },
+    });
+
+    expect(out).toContain('器の生の行 1 件を数えた（このほか読めない行が 1 件あり');
+    expect(out).toContain('処理済みではない');
+  });
+
   it('閾値超え・typeBreakdown 無しは、従来どおり manager_list への案内のまま', () => {
     const count = ABOVE_THRESHOLD;
     const out = describeSituation({
