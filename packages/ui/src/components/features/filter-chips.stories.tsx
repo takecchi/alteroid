@@ -61,3 +61,32 @@ export const WithCounts: Story = {
     ],
   },
 };
+
+function ToggleDemo() {
+  const [selected, setSelected] = useState<(typeof TYPES)[number][]>(['decision']);
+  // 正本が別の場所（URL など）にあり、押した時点の値から次を作る呼び手の形。
+  return (
+    <div className="max-w-2xl space-y-3">
+      <FilterChips
+        label="種別で絞り込む"
+        options={TYPES.map((value) => ({ value }))}
+        selected={selected}
+        onToggle={(value) =>
+          setSelected((current) =>
+            current.includes(value) ? current.filter((v) => v !== value) : [...current, value],
+          )
+        }
+        onClear={() => setSelected([])}
+      />
+      <p className="font-mono text-xs text-muted-foreground">
+        {selected.length === 0 ? '全部' : selected.join(',')}
+      </p>
+    </div>
+  );
+}
+
+/** `onToggle` / `onClear`（省略可）。押された1つ／解除だけを渡す。 */
+export const ToggleAndClear: Story = {
+  args: { label: '', options: [], selected: [] },
+  render: () => <ToggleDemo />,
+};
