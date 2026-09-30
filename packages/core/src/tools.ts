@@ -8327,12 +8327,14 @@ export function createCloneTools(context: ToolContext) {
       ].join(' '),
       {},
       async () => {
-        const [journalStats, jobs, reconciliation] = await Promise.all([
+        const [journalStats, jobs, unreadableJobs, reconciliation] = await Promise.all([
           computeAppraisalJournalStats(stores.journal, {
             commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
             jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
           }),
           stores.jobs.listJobs(),
+          // 読めない委譲の行は `listJobs()` に載らない。件数を別に取って言う（issue #2359）。
+          stores.jobs.listUnreadableJobs().then((rows) => rows.length),
           computeAppraisalReconciliation(stores.journal, {
             commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
             jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
@@ -8342,7 +8344,7 @@ export function createCloneTools(context: ToolContext) {
           describeAppraisalStats(
             {
               journal: journalStats,
-              jobCoverage: computeJobAppraisalCoverage(jobs),
+              jobCoverage: computeJobAppraisalCoverage(jobs, unreadableJobs),
               reconciliation,
             },
             // **予算はこの道具（MCP）の側だけに掛ける**（#2223。

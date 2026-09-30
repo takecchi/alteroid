@@ -17277,7 +17277,7 @@
         "operationId": "getAppraisalStats",
         "tags": ["appraisal"],
         "summary": "評定の内訳を数える",
-        "description": "クローンの `appraisal_stats` と同じものを人間の手から。`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて 読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を 状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 （`nonTerminalTotal` に件数だけ出す）。`reconciliation` はクローンが付けた評定を人間が付け直した対を数えた較正の材料（#1055 段4）で、`commitments` / `jobs` の軸ごとに `transitions`（値の遷移の内訳）・`matched` / `mismatched`・復元できなかった件数（`undetermined`）を持つ。",
+        "description": "クローンの `appraisal_stats` と同じものを人間の手から。`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて 読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を 状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 （`nonTerminalTotal` に件数だけ出す）。`jobCoverage.unreadableJobs` は行が読めない（版ずれ・手編集）委譲の件数（0 も載せる）で、内訳には入っていない——読めない行は終端したかも評定の有無も分からないので、評定なしにも評定ありにも入れていない。0 でなければ内訳は読めた委譲だけの数である（issue #2359）。`reconciliation` はクローンが付けた評定を人間が付け直した対を数えた較正の材料（#1055 段4）で、`commitments` / `jobs` の軸ごとに `transitions`（値の遷移の内訳）・`matched` / `mismatched`・復元できなかった件数（`undetermined`）を持つ。",
         "responses": {
           "200": {
             "description": "評定の内訳。",
@@ -17491,6 +17491,11 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "unreadableJobs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -17498,7 +17503,8 @@
                         "terminalTotal",
                         "terminalAppraised",
                         "terminalUnappraised",
-                        "nonTerminalTotal"
+                        "nonTerminalTotal",
+                        "unreadableJobs"
                       ]
                     },
                     "reconciliation": {

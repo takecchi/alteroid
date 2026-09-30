@@ -231,6 +231,9 @@ function jobStatusLabel(status: JobAppraisalCoverageRow['status']): string {
 }
 
 function JobCoverageCard({ jobCoverage }: { jobCoverage: AppraisalStats['jobCoverage'] }) {
+  // 読めない委譲の行（issue #2359）。デーモンが古いと欄が無いので、型は number でも無いことを
+  // 許す（無いときは「0 件」ではなく、何も言わない）。
+  const unreadableJobs = (jobCoverage as { unreadableJobs?: number }).unreadableJobs ?? 0;
   return (
     <Card>
       <CardHeader
@@ -257,6 +260,13 @@ function JobCoverageCard({ jobCoverage }: { jobCoverage: AppraisalStats['jobCove
           {jobCoverage.nonTerminalTotal} 件。まだ続きうるので「評定が無い」を欠落として
           数えていない）
         </p>
+        {unreadableJobs !== 0 && (
+          <p role="status" className="text-xs text-warn">
+            {`⚠ 読めない委譲が ${String(unreadableJobs)} 件あり、上の内訳には入っていない` +
+              '（終端したかも、評定の有無も分からない。評定なしでも評定ありでもない）。' +
+              '上の件数は読めた委譲だけから数えている。'}
+          </p>
+        )}
       </div>
     </Card>
   );

@@ -1960,6 +1960,8 @@ export const appraisalReconciliationSchema = z.object({
  * - `jobCoverage`: `JobStore` を終端の仕方（`done`/`failed`/`lost`/`stopped`）
  *   ごとに割った、評定の有無の内訳。`running`/`waiting_human`（まだ終端して
  *   いない）は `byStatus` に含めず、件数だけ `nonTerminalTotal` に出す。
+ *   `unreadableJobs`（issue #2359）は読めない委譲の行の件数で、内訳のどこにも入れない
+ *   （終端したかも評定の有無も分からない。推測で評定なし・ありに入れない）。
  * - `reconciliation`（#1310）: (b) 人間 と (c) クローンの食い違い——クローンが
  *   付けた評定を人間が後から付け直した対を `commitments` / `jobs` の軸ごとに
  *   数えたもの。台帳と委譲は混ぜない（同じ理由）。
@@ -1982,6 +1984,11 @@ export const appraisalStatsResponseSchema = z.object({
     terminalAppraised: z.number().int(),
     terminalUnappraised: z.number().int(),
     nonTerminalTotal: z.number().int(),
+    /**
+     * 読めない委譲の行の件数（issue #2359。0 も載せる）。`byStatus` と合計のどれにも入って
+     * いない——終端したかも評定の有無も分からない。0 でなければ上の数は読めた委譲だけの数。
+     */
+    unreadableJobs: z.number().int().min(0),
   }),
   reconciliation: z.object({
     commitments: appraisalReconciliationSchema,

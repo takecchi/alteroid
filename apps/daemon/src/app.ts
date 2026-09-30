@@ -7290,7 +7290,10 @@ export function createApp(deps: AppDeps) {
           'decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて ' +
           '読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を ' +
           '状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 ' +
-          '（`nonTerminalTotal` に件数だけ出す）。`reconciliation` はクローンが' +
+          '（`nonTerminalTotal` に件数だけ出す）。`jobCoverage.unreadableJobs` は行が読めない' +
+          '（版ずれ・手編集）委譲の件数（0 も載せる）で、内訳には入っていない——読めない行は' +
+          '終端したかも評定の有無も分からないので、評定なしにも評定ありにも入れていない。' +
+          '0 でなければ内訳は読めた委譲だけの数である（issue #2359）。`reconciliation` はクローンが' +
           '付けた評定を人間が付け直した対を数えた較正の材料（#1055 段4）で、' +
           '`commitments` / `jobs` の軸ごとに `transitions`（値の遷移の内訳）・' +
           '`matched` / `mismatched`・復元できなかった件数（`undetermined`）を持つ。',
@@ -7302,12 +7305,14 @@ export function createApp(deps: AppDeps) {
         },
       }),
       async (c) => {
-        const [journalStats, jobs, reconciliation] = await Promise.all([
+        const [journalStats, jobs, unreadableJobs, reconciliation] = await Promise.all([
           computeAppraisalJournalStats(stores.journal, {
             commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
             jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
           }),
           stores.jobs.listJobs(),
+          // 読めない委譲の行は `listJobs()` に載らない。件数を別に取って言う（issue #2359）。
+          stores.jobs.listUnreadableJobs().then((rows) => rows.length),
           computeAppraisalReconciliation(stores.journal, {
             commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
             jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
@@ -7316,7 +7321,7 @@ export function createApp(deps: AppDeps) {
         return c.json(
           appraisalStatsResponseSchema.parse({
             journal: journalStats,
-            jobCoverage: computeJobAppraisalCoverage(jobs),
+            jobCoverage: computeJobAppraisalCoverage(jobs, unreadableJobs),
             reconciliation,
           }),
         );

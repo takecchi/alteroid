@@ -480,6 +480,14 @@ export interface JobAppraisalCoverage {
    * ない実測値）。
    */
   nonTerminalTotal: number;
+  /**
+   * `listJobs()` が読み飛ばした、読めない委譲の行の数（`JobStore.listUnreadableJobs()` の件数。
+   * issue #2359）。**上の内訳・合計・`nonTerminalTotal` のどれにも入っていない**——
+   * 読めない行は、終端したかも、評定の有無も分からない。評定なし・評定ありのどちらにも
+   * 推測で入れない。0 でなければ、上の数は読めた委譲だけから数えている（分母が欠けている）。
+   * **省略できない**（省略を 0 と読ませない）。
+   */
+  unreadableJobs: number;
 }
 
 /**
@@ -494,7 +502,10 @@ export interface JobAppraisalCoverage {
  * `ManagerPool.appraise` は常に `putJob` で台帳へ書く（呼ばれていれば）ので、
  * 終端後の `appraisal` 欄の有無は `JobStore` を信頼できる。
  */
-export function computeJobAppraisalCoverage(jobs: readonly Job[]): JobAppraisalCoverage {
+export function computeJobAppraisalCoverage(
+  jobs: readonly Job[],
+  unreadableJobs: number,
+): JobAppraisalCoverage {
   const rows = new Map<JobStatus, { total: number; appraised: number }>();
   for (const status of jobStatusSchema.options) {
     if (isTerminalJobStatus(status)) rows.set(status, { total: 0, appraised: 0 });
@@ -529,6 +540,7 @@ export function computeJobAppraisalCoverage(jobs: readonly Job[]): JobAppraisalC
     terminalAppraised,
     terminalUnappraised: terminalTotal - terminalAppraised,
     nonTerminalTotal,
+    unreadableJobs,
   };
 }
 
@@ -705,6 +717,14 @@ export function describeAppraisalStats(
     `（参考・この集計の対象外: running/waiting_human で終端していない委譲が ${jobCoverage.nonTerminalTotal} 件。` +
       'まだ続きうるので「評定が無い」を欠落として数えていない）',
   );
+  // 読めない委譲の行（issue #2359）。0 件なら行を作らない（出力は今までと1文字も変わらない）。
+  if (jobCoverage.unreadableJobs !== 0) {
+    lines.push(
+      `※ 読めない委譲が ${jobCoverage.unreadableJobs} 件あり、上の内訳には入っていない` +
+        '（終端したかも、評定の有無も分からない。評定なしでも評定ありでもない）。' +
+        '上の件数は読めた委譲だけから数えている。',
+    );
+  }
   lines.push('');
   lines.push(
     '## (b) 人間 と (c) クローンの食い違い（#1055 段4。クローンが付けた評定を人間が後から付け直した対）',

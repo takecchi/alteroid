@@ -728,7 +728,7 @@ describe('computeJobAppraisalCoverage — 終端した委譲を状態ごとに�
       job('f', { status: 'running' }), // 非終端——対象外
       job('g', { status: 'waiting_human' }), // 非終端——対象外
     ];
-    const coverage = computeJobAppraisalCoverage(jobs);
+    const coverage = computeJobAppraisalCoverage(jobs, 0);
 
     expect(coverage.terminalTotal).toBe(5);
     expect(coverage.terminalAppraised).toBe(2);
@@ -745,7 +745,7 @@ describe('computeJobAppraisalCoverage — 終端した委譲を状態ごとに�
   });
 
   it('全ての終端状態が0件でも byStatus は4行とも出る（取れない軸に0の行を作るのとは逆——ここは実際に測れている0）', () => {
-    const coverage = computeJobAppraisalCoverage([]);
+    const coverage = computeJobAppraisalCoverage([], 0);
     expect(coverage.byStatus).toHaveLength(4);
     expect(coverage.byStatus.every((row) => row.total === 0)).toBe(true);
     expect(coverage.terminalTotal).toBe(0);
@@ -758,9 +758,53 @@ describe('computeJobAppraisalCoverage — 終端した委譲を状態ごとに�
     // 値の中身（既知の3値かどうか）は問わない——「評定を1度でも付けたか」を
     // 数えるのがこの関数の役割であって、内訳（good/bad/unclear/other）を
     // 数えるのは日誌側（`tallyAppraisalDecisions`）の役割である。
-    const coverage = computeJobAppraisalCoverage([job('x', { status: 'done', appraisal: '' })]);
+    const coverage = computeJobAppraisalCoverage([job('x', { status: 'done', appraisal: '' })], 0);
     const doneRow = coverage.byStatus.find((row) => row.status === 'done');
     expect(doneRow).toEqual({ status: 'done', total: 1, appraised: 1, unappraised: 0 });
+  });
+});
+
+describe('読めない委譲（issue #2359）— 内訳に入れず、欠けていることを言う', () => {
+  const emptyJournal = {
+    commitments: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+    jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
+    byWorkKind: { commitments: [], jobs: [] },
+  };
+
+  it('computeJobAppraisalCoverage: 件数を unreadableJobs に載せ、内訳・合計は変えない', () => {
+    const jobs: Job[] = [
+      job('a', { status: 'done', appraisal: 'good' }),
+      job('b', { status: 'lost' }),
+    ];
+    const without = computeJobAppraisalCoverage(jobs, 0);
+    const withUnreadable = computeJobAppraisalCoverage(jobs, 3);
+    expect(withUnreadable.unreadableJobs).toBe(3);
+    expect(without.unreadableJobs).toBe(0);
+    expect({ ...withUnreadable, unreadableJobs: 0 }).toEqual(without);
+  });
+
+  it('describeAppraisalStats: 0 でなければ「読めない委譲が N 件あり、内訳には入っていない」と言う', () => {
+    const text = describeAppraisalStats({
+      journal: emptyJournal,
+      jobCoverage: computeJobAppraisalCoverage([job('a', { status: 'done' })], 2),
+      reconciliation: emptyReconciliation(),
+    });
+    expect(text).toContain(
+      '※ 読めない委譲が 2 件あり、上の内訳には入っていない' +
+        '（終端したかも、評定の有無も分からない。評定なしでも評定ありでもない）。' +
+        '上の件数は読めた委譲だけから数えている。',
+    );
+    expect(text).toContain('合計: 終端した委譲 1 件中、評定なしが 1 件（評定あり 0 件）。');
+  });
+
+  it('対照: 0 件なら文は増えない（0 の行も作らない）', () => {
+    const text = describeAppraisalStats({
+      journal: emptyJournal,
+      jobCoverage: computeJobAppraisalCoverage([job('a', { status: 'done' })], 0),
+      reconciliation: emptyReconciliation(),
+    });
+    expect(text).not.toContain('読めない委譲');
+    expect(text).not.toContain('※');
   });
 });
 
@@ -772,10 +816,10 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
         jobs: { good: 105, bad: 0, unclear: 9, other: 0, total: 114 },
         byWorkKind: { commitments: [], jobs: [] },
       },
-      jobCoverage: computeJobAppraisalCoverage([
-        job('a', { status: 'done', appraisal: 'good' }),
-        job('b', { status: 'stopped' }),
-      ]),
+      jobCoverage: computeJobAppraisalCoverage(
+        [job('a', { status: 'done', appraisal: 'good' }), job('b', { status: 'stopped' })],
+        0,
+      ),
       reconciliation: emptyReconciliation(),
     });
     expect(text).toContain('引き受けた仕事');
@@ -793,7 +837,7 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
         jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
         byWorkKind: { commitments: [], jobs: [] },
       },
-      jobCoverage: computeJobAppraisalCoverage([]),
+      jobCoverage: computeJobAppraisalCoverage([], 0),
       reconciliation: {
         commitments: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 3 },
         jobs: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 0 },
@@ -813,7 +857,7 @@ describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混
         jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
         byWorkKind: { commitments: [], jobs: [] },
       },
-      jobCoverage: computeJobAppraisalCoverage([]),
+      jobCoverage: computeJobAppraisalCoverage([], 0),
       reconciliation: {
         commitments: {
           transitions: [{ cloneValue: 'good', humanValue: 'bad', count: 4 }],
@@ -923,7 +967,7 @@ describe('computeAppraisalJournalStats の byWorkKind — 仕事の種類ごと�
           jobs: [],
         },
       },
-      jobCoverage: computeJobAppraisalCoverage([]),
+      jobCoverage: computeJobAppraisalCoverage([], 0),
       reconciliation: emptyReconciliation(),
     });
     expect(text).toContain('## 仕事の種類ごとの評定行');
@@ -964,7 +1008,7 @@ describe('describeAppraisalStats の budget（種類ごとの内訳だけに掛�
         jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
         byWorkKind: { commitments: tallies, jobs: [] },
       },
-      jobCoverage: computeJobAppraisalCoverage([]),
+      jobCoverage: computeJobAppraisalCoverage([], 0),
       reconciliation: emptyReconciliation(),
     });
     for (const tally of tallies) {
@@ -982,7 +1026,7 @@ describe('describeAppraisalStats の budget（種類ごとの内訳だけに掛�
           jobs: { good: 0, bad: 0, unclear: 0, other: 0, total: 0 },
           byWorkKind: { commitments: tallies, jobs: [] },
         },
-        jobCoverage: computeJobAppraisalCoverage([]),
+        jobCoverage: computeJobAppraisalCoverage([], 0),
         reconciliation: emptyReconciliation(),
       },
       { workKind: 2_000 },
@@ -1008,7 +1052,7 @@ describe('describeAppraisalStats の budget（種類ごとの内訳だけに掛�
           jobs: [],
         },
       },
-      jobCoverage: computeJobAppraisalCoverage([]),
+      jobCoverage: computeJobAppraisalCoverage([], 0),
       reconciliation: emptyReconciliation(),
     };
     const withoutBudget = describeAppraisalStats(input);

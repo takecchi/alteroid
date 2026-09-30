@@ -7024,6 +7024,7 @@ describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
         terminalTotal: number;
         terminalUnappraised: number;
         nonTerminalTotal: number;
+        unreadableJobs: number;
       };
     };
 
@@ -7035,6 +7036,8 @@ describe('GET /appraisal-stats（#1278 の HTTP 面）', () => {
     expect(body.jobCoverage.nonTerminalTotal).toBe(1);
     expect(body.jobCoverage.terminalTotal).toBe(2);
     expect(body.jobCoverage.terminalUnappraised).toBe(1);
+    // 読めない委譲が無いときは 0 が載る（issue #2359）。
+    expect(body.jobCoverage.unreadableJobs).toBe(0);
   });
 });
 

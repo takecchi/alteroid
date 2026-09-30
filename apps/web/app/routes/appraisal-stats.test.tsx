@@ -59,6 +59,7 @@ function baseBody(overrides: Record<string, unknown> = {}) {
       terminalAppraised: 0,
       terminalUnappraised: 0,
       nonTerminalTotal: 0,
+      unreadableJobs: 0,
     },
     reconciliation: {
       commitments: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 0 },
@@ -209,6 +210,49 @@ describe('/appraisal-stats 画面 — 委譲の評定の有無', () => {
 
     // 落ちずに、未知の値をそのまま文字列として出す。
     expect(screen.getByText('archived')).toBeTruthy();
+  });
+});
+
+describe('/appraisal-stats 画面 — 読めない委譲（issue #2359）', () => {
+  it('unreadableJobs が 0 でなければ、内訳に入っていないと断る', async () => {
+    stubAppraisalStats({
+      body: baseBody({
+        jobCoverage: {
+          ...baseBody().jobCoverage,
+          byStatus: [{ status: 'done', total: 1, appraised: 0, unappraised: 1 }],
+          terminalTotal: 1,
+          terminalUnappraised: 1,
+          unreadableJobs: 2,
+        },
+      }),
+    });
+
+    await renderPage();
+
+    const note = await screen.findByRole('status');
+    expect(note.textContent).toBe(
+      '⚠ 読めない委譲が 2 件あり、上の内訳には入っていない' +
+        '（終端したかも、評定の有無も分からない。評定なしでも評定ありでもない）。' +
+        '上の件数は読めた委譲だけから数えている。',
+    );
+  });
+
+  it('対照: 0 件なら断りは出ない', async () => {
+    stubAppraisalStats({ body: baseBody() });
+
+    await renderPage();
+
+    expect(screen.queryByText(/読めない委譲/)).toBeNull();
+  });
+
+  it('対照: デーモンが古く欄が無いときも、断りも「0 件」も出さない', async () => {
+    const oldCoverage: Record<string, unknown> = { ...baseBody().jobCoverage };
+    delete oldCoverage.unreadableJobs;
+    stubAppraisalStats({ body: baseBody({ jobCoverage: oldCoverage }) });
+
+    await renderPage();
+
+    expect(screen.queryByText(/読めない委譲/)).toBeNull();
   });
 });
 

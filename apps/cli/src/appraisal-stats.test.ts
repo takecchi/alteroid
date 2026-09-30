@@ -83,6 +83,7 @@ function statsBody(overrides: Partial<Record<string, unknown>> = {}): Record<str
       terminalAppraised: 3,
       terminalUnappraised: 2,
       nonTerminalTotal: 1,
+      unreadableJobs: 0,
     },
     reconciliation: {
       commitments: { transitions: [], totalPairs: 0, matched: 0, mismatched: 0, undetermined: 0 },
@@ -148,6 +149,30 @@ describe('appraisalStatsCommand', () => {
     // reconciliation（(b) 人間 と (c) クローンの食い違い）
     expect(text).toContain('(b) 人間 と (c) クローンの食い違い');
     expect(text).toContain('判定できない');
+  });
+
+  it('読めない委譲が在れば「内訳には入っていない」と書く（issue #2359）。0 件なら書かない', async () => {
+    const jobCoverage = {
+      byStatus: [{ status: 'done', total: 5, appraised: 3, unappraised: 2 }],
+      terminalTotal: 5,
+      terminalAppraised: 3,
+      terminalUnappraised: 2,
+      nonTerminalTotal: 1,
+    };
+    replies.push({
+      status: 200,
+      body: statsBody({ jobCoverage: { ...jobCoverage, unreadableJobs: 2 } }),
+    });
+    const readWith = captureStdout();
+    await appraisalStatsCommand();
+    const withText = readWith();
+    expect(withText).toContain('※ 読めない委譲が 2 件あり、上の内訳には入っていない');
+    expect(withText).toContain('上の件数は読めた委譲だけから数えている');
+
+    replies.push({ status: 200, body: statsBody() });
+    const readWithout = captureStdout();
+    await appraisalStatsCommand();
+    expect(readWithout()).not.toContain('読めない委譲');
   });
 
   it('404 は「読めませんでした」を書いて正常終了する（読み取り専用の作法）', async () => {
