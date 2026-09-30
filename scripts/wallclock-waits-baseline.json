@@ -45,7 +45,6 @@
   "packages/core/src/manager-denial-renotify-cross-tool.test.ts": 7,
   "packages/core/src/manager-denial-renotify.test.ts": 12,
   "packages/core/src/manager-flush-activity.test.ts": 6,
-  "packages/core/src/manager-journal-fold.test.ts": 2,
   "packages/core/src/manager-lastSystemError.test.ts": 8,
   "packages/core/src/manager-lease.test.ts": 12,
   "packages/core/src/manager-report-waiting-human-without-waiting.test.ts": 2,

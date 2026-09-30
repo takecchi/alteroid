@@ -104,9 +104,14 @@ async function setup(): Promise<{
   stores: Stores;
   session: FakeSession;
   advance: (ms: number) => void;
+  /** いまの注入時計の値（`now` の呼び出しとしては数えない）。 */
+  clockNow: () => number;
+  /** プールが `now()` を呼んだ時点の時計の値（呼ばれた順）。 */
+  nowCalls: number[];
 }> {
   const { fn, sessions } = fakeSdk();
   const stores = createMemoryStores();
+  const nowCalls: number[] = [];
   // **時計は注入する**（`manager-withheld-reports.test.ts` と同じ作法）。
   // 畳みの窓は `setTimeout` ではなく観測時の判定なので、`vi.useFakeTimers` は要らない。
   let clock = Date.parse('2026-09-23T00:00:00.000Z');
@@ -122,7 +127,10 @@ async function setup(): Promise<{
     stores,
     post: () => undefined,
     runners: registry,
-    now: () => clock,
+    now: () => {
+      nowCalls.push(clock);
+      return clock;
+    },
   });
   await pool.start({ request: '枠の知らせを観測する' });
   const session = await vi.waitFor(() => {
@@ -137,7 +145,31 @@ async function setup(): Promise<{
     advance: (ms) => {
       clock += ms;
     },
+    clockNow: () => clock,
+    nowCalls,
   };
+}
+
+/**
+ * ⭐ **いまの時計の値で起きた縁の処理が済むのを待つ**（実時間の待ちの代わり）。
+ *
+ * 畳まれた回は日誌に何も書かないので、「行が増えた」では済んだことが分からない。
+ * 代わりに、縁の処理が `now()` を**2回**呼ぶことを印にする: 畳みの判定（`observe`
+ * に渡す時刻。日誌への書き込みより手前）と、その後の合成通知の組み立て
+ * （`#queueSynthesizedNotice`）。**後者は日誌の書き込みの後ろ**なので、2回目が
+ * 見えたときには、この縁の日誌の行は書き終わっている。
+ *
+ * ⚠️ `allowed` は `now()` を呼ばないので、時計を進めたあとの縁だけが数えられる。
+ * **時計の値は縁ごとに違うこと**（呼び出し側が先に `advance` する）。
+ */
+async function waitForEdgeHandled(s: {
+  clockNow: () => number;
+  nowCalls: number[];
+}): Promise<void> {
+  const at = s.clockNow();
+  await vi.waitFor(() => {
+    expect(s.nowCalls.filter((value) => value === at).length).toBeGreaterThanOrEqual(2);
+  });
 }
 
 /** 日誌に残った本文のうち、断片を含むもの（古い順）。 */
@@ -185,8 +217,9 @@ describe('日誌の畳み込み — 速い反復は1行にまとまる', () => {
     s.advance(8_000);
     await bounceAgain(s.session);
 
-    // 2件目・3件目は畳まれるので、行は増えない
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 2件目・3件目は畳まれるので、行は増えない。「増えないこと」は待てないので、
+    // 先に3回目の処理が済んだことを待つ（待たずに数えると、処理が遅れたとき空振りで緑になる）
+    await waitForEdgeHandled(s);
     expect(await bounceLines(s.stores)).toHaveLength(1);
 
     await s.pool.stop();
@@ -200,7 +233,7 @@ describe('日誌の畳み込み — 速い反復は1行にまとまる', () => {
     await bounceAgain(s.session);
     s.advance(8_000);
     await bounceAgain(s.session);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitForEdgeHandled(s);
 
     expect(await journalTexts(s.stores, FOLD_FRAGMENT)).toHaveLength(0);
 
