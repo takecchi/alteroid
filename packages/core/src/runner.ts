@@ -1706,7 +1706,12 @@ class RunnerSession {
    * - 寿命（`ONE_SHOT_ALLOW_TTL_MS`）を過ぎていたら、`#consumeOneShotAllow`
    *   は消しはするが `allow` は返さない（期限切れの許可を使わない）
    */
-  readonly #oneShotAllows = createRecentMap<{ readonly expiresAt: number }>({
+  readonly #oneShotAllows = createRecentMap<{
+    readonly expiresAt: number;
+    /** 期限切れの note に載せる表示用。鍵の材料（入力）ではない。 */
+    readonly actor: string;
+    readonly tool: string;
+  }>({
     limit: ONE_SHOT_ALLOW_MEMORY_LIMIT,
     onForget: (ids) =>
       this.#emit({
@@ -4417,7 +4422,13 @@ class RunnerSession {
       return { kind: 'no-retry' };
     }
 
-    this.#oneShotAllows.set(permitKey, { expiresAt: Date.now() + ONE_SHOT_ALLOW_TTL_MS });
+    // 先に、ほかの期限切れ・未使用の許可を note へ降ろす（遅延評価。動作は変えない）。
+    this.#noteUnusedExpiredOneShotAllows(undefined);
+    this.#oneShotAllows.set(permitKey, {
+      expiresAt: Date.now() + ONE_SHOT_ALLOW_TTL_MS,
+      actor,
+      tool: toolName,
+    });
     this.#emit({
       type: 'note',
       managerId: this.#id,
@@ -4672,6 +4683,10 @@ class RunnerSession {
         ? `manager:${this.#id}`
         : `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`;
     const key = oneShotAllowKey(oneShotActorOf(this.#id, record), toolName, digestOf(matchInput));
+    // 今回の鍵以外で、撃ち直されないまま期限が切れた許可を note へ降ろす。今回の鍵は
+    // 下の既存の分岐（撃ち直しが遅れて来た）が扱う。ここは帳面を掃除して note を出すだけで、
+    // 今回の鍵の判定には触れない。
+    this.#noteUnusedExpiredOneShotAllows(key);
     const grant = this.#oneShotAllows.get(key);
     if (grant === undefined) return { kind: 'continue' };
     // 使い切る。一致しても1回だけ。
@@ -4703,6 +4718,38 @@ class RunnerSession {
       kind: 'allow',
       reason: 'クローンが分類器の拒否をこの1回だけ上書きした（issue #1105 P1）。',
     };
+  }
+
+  /**
+   * 1回だけの許可が**撃ち直されないまま**期限切れになったことを、note に残す
+   * （#2352 の点3）。`#consumeOneShotAllow` の「撃ち直しが遅れて来た」note とは
+   * 別の事実である（こちらは撃ち直しが来ていない）。
+   *
+   * **遅延評価である（タイマーは置かない）。** `#consumeOneShotAllow`（あらゆる
+   * 道具の `PreToolUse`）と `#onPermissionDenied` の入口で、期限を過ぎた鍵を
+   * 捨てて1件ずつ note を出す。タイマーを置かないので、セッションの終了・畳みで
+   * 片付け漏れる物が無い。**限界：次の道具呼び出しか次の拒否が来ない限り
+   * 観測されない**（担い手が黙ったまま・畳まれた場合は出ない）。
+   *
+   * 動作は変えない：消すのは既に `expiresAt <= now` で `allow` を返せない鍵だけで、
+   * 鍵・TTL・retry・consume の条件は同じ。`except` は今回 consume しようとしている鍵。
+   */
+  #noteUnusedExpiredOneShotAllows(except: string | undefined): void {
+    const now = Date.now();
+    for (const [key, grant] of this.#oneShotAllows.entries()) {
+      if (key === except || grant.expiresAt > now) continue;
+      this.#oneShotAllows.delete(key);
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text:
+          `クローンが出した1回だけの許可（${grant.actor}・${grant.tool}）は、撃ち直されないまま` +
+          `${Math.round(ONE_SHOT_ALLOW_TTL_MS / 60000)}分の期限が切れた（使われていない。issue #1105 P1）。` +
+          `撃ち直すかどうかは担い手のモデルが決めることで、retry は助言でしかない。` +
+          `manager_send で伝える案が効くかは確かめていない。` +
+          `この note は期限後の次の道具呼び出しか次の拒否の時点で出る（それまで何も呼ばれなければ出ない）。`,
+      });
+    }
   }
 
   /**

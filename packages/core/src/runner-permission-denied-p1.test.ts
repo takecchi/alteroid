@@ -649,3 +649,129 @@ describe('#1603 と同じ形の検出——allow を返した呼び出しがそ�
     ).toBe(true);
   });
 });
+
+/**
+ * #2352 の点3 —— 1回だけの許可が撃ち直されないまま期限切れになったことを、note に残す。
+ * 遅延評価（次の道具呼び出し・次の拒否の時点）なので、時計は `Date.now` を進めて偽る
+ * （上の寿命のテストと同じ作法）。
+ */
+describe('撃ち直されないまま期限切れになった1回だけの許可は note に残る（#2352 の点3）', () => {
+  const TTL = 10 * 60 * 1000;
+  const UNUSED = '撃ち直されないまま';
+
+  async function grantOnce(
+    started: Started,
+    h: RunnerHost,
+    command: string,
+    toolUseId: string,
+  ): Promise<void> {
+    const denialPromise = firePermissionDenied(started.options, {
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Bash',
+      tool_input: { command },
+      tool_use_id: toolUseId,
+      reason: '分類器が拒否した（テスト）',
+    });
+    await tick();
+    await h.answer('mgr-1', { requestId: toolUseId, decision: 'allow', message: 'どうぞ' });
+    await denialPromise;
+  }
+
+  const unrelatedPreToolUse = (started: Started, id: string) =>
+    firePreToolUse(started.options, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `echo unrelated-${id}` },
+      tool_use_id: id,
+    });
+
+  it('撃ち直しが来て consume されたときは、期限が過ぎても出ない', async () => {
+    const { started, events, host: h } = await startSession();
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await grantOnce(started, h, 'echo unused-a', 'tu-unused-a');
+      const retry = await firePreToolUse(started.options, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo unused-a' },
+        tool_use_id: 'tu-unused-a-retry',
+      });
+      const asRecord = retry as { hookSpecificOutput?: Record<string, unknown> };
+      expect(asRecord.hookSpecificOutput?.permissionDecision).toBe('allow');
+
+      nowSpy.mockReturnValue(now + TTL + 1);
+      await unrelatedPreToolUse(started, 'tu-other-a');
+      expect(noteEvents(events).some((n) => n.text.includes(UNUSED))).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('撃ち直しが来ないまま TTL を過ぎたら、次の道具呼び出しで1回だけ出る', async () => {
+    const { started, events, host: h } = await startSession();
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await grantOnce(started, h, 'echo unused-b', 'tu-unused-b');
+
+      // 寿命の手前では出ない。
+      nowSpy.mockReturnValue(now + TTL - 1);
+      await unrelatedPreToolUse(started, 'tu-other-b0');
+      expect(noteEvents(events).some((n) => n.text.includes(UNUSED))).toBe(false);
+
+      nowSpy.mockReturnValue(now + TTL);
+      const other = await unrelatedPreToolUse(started, 'tu-other-b1');
+      expect(other).toEqual({ continue: true });
+      await unrelatedPreToolUse(started, 'tu-other-b2');
+
+      const unused = noteEvents(events).filter((n) => n.text.includes(UNUSED));
+      expect(unused).toHaveLength(1);
+      expect(unused[0]?.text).toContain('manager:mgr-1・Bash');
+      expect(unused[0]?.text).toContain('担い手のモデルが決める');
+      expect(unused[0]?.text).toContain('確かめていない');
+      // 生の入力は載せない。
+      expect(unused[0]?.text).not.toContain('unused-b');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('同じ入力の撃ち直しが期限後に来たときは、従来の「期限切れだった」だけで、未使用の note は重ねない', async () => {
+    const { started, events, host: h } = await startSession();
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await grantOnce(started, h, 'echo unused-c', 'tu-unused-c');
+      nowSpy.mockReturnValue(now + TTL + 1);
+      const retry = await firePreToolUse(started.options, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'echo unused-c' },
+        tool_use_id: 'tu-unused-c-retry',
+      });
+      expect(retry).toEqual({ continue: true });
+      const notes = noteEvents(events);
+      expect(notes.filter((n) => n.text.includes('期限切れだったので使わなかった'))).toHaveLength(
+        1,
+      );
+      expect(notes.some((n) => n.text.includes(UNUSED))).toBe(false);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('次の拒否の入口でも出る', async () => {
+    const { started, events, host: h } = await startSession();
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      await grantOnce(started, h, 'echo unused-d', 'tu-unused-d');
+      nowSpy.mockReturnValue(now + TTL + 1);
+      await grantOnce(started, h, 'echo unused-d2', 'tu-unused-d2');
+      expect(noteEvents(events).filter((n) => n.text.includes(UNUSED))).toHaveLength(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
