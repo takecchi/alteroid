@@ -7,7 +7,7 @@
  *
  * 1. 時刻は `formatDateTime` と `formatRelative` の2つの span（部品の `Timestamp` = `<time>` ではない）
  * 2. 送るキーは `(metaKey || ctrlKey) && key === 'Enter'` で、IME の確定の Enter は送信に
- *    数えない（部品の既定 `isSubmitShortcut`。issue #2259 で会話・約束の入力欄に揃えた）
+ *    数えない（部品の既定 `isSubmitShortcut`。issue #2259 で会話と約束の入力欄に揃えた）
  * 3. エラーは「個別の失敗」→「まとめ送信の失敗」の順に別々に出し、どちらも無ければ出さない。
  *    その後ろに会話のパネルが来る
  */
