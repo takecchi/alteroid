@@ -504,6 +504,10 @@ export const RESET_SUMMARY_LABELS: [keyof WorkspaceResetSummary, string][] = [
  * `RESET_SUMMARY_LABELS` へ足したのに、ここへ足し忘れると歯が落ちる
  * （issue #2196 で `practices` を消した後の報告にだけ足して確認の文に
  * 足し忘れたのが、まさにこの抜けである）。
+ *
+ * **出所は core の `RESET_CONFIRM_GROUPS`（`packages/core/src/workspace-reset.ts`）で、
+ * これはその写しである。** 並び・ラベル・キーが core と同じであることは
+ * `app/reset-confirm-groups-core.test.ts` が測る（issue #2261）。
  */
 const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)[] }[] = [
   { label: '記憶', keys: ['memory'] },
@@ -512,7 +516,7 @@ const RESET_CONFIRM_GROUPS: { label: string; keys: (keyof WorkspaceResetSummary)
   { label: '承認待ち', keys: ['approvals'] },
   { label: '継続中の依頼', keys: ['schedules', 'schedulePhases'] },
   { label: '受信箱', keys: ['inbox'] },
-  { label: '引き受けたまま終わっていない仕事', keys: ['commitments'] },
+  { label: '引き受けた仕事', keys: ['commitments'] },
   { label: '仕事のやり方', keys: ['practices'] },
   { label: 'アーカイブ', keys: ['archive'] },
   { label: 'セッション', keys: ['sessions'] },
