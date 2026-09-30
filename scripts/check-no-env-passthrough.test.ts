@@ -637,6 +637,127 @@ describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（Issue #204
   });
 });
 
+describe('check-no-env-passthrough: findMissingEnvChildProcessCalls（promisify を名前空間経由で包む形。PR #2062 の隣に在った見逃し）', () => {
+  // 名前空間の取り込み方 × promisify の書き方。どの形でも env 無しの呼び出しは検出し、
+  // env を渡していれば検出しない（対）。
+  const withoutEnv = "run('node', ['-e', 'x']);";
+  const withEnv = "run('node', ['-e', 'x'], { env: { PATH: '/usr/bin' } });";
+  const cases: Array<{ name: string; head: string }> = [
+    {
+      name: 'promisify(cp.execFile)（import * as cp）',
+      head:
+        "import * as cp from 'node:child_process';\n" +
+        "import { promisify } from 'node:util';\n" +
+        'const run = promisify(cp.execFile);\n',
+    },
+    {
+      name: 'promisify(childProcess.exec)（import childProcess from）',
+      head:
+        "import childProcess from 'node:child_process';\n" +
+        "import { promisify } from 'node:util';\n" +
+        'const run = promisify(childProcess.exec);\n',
+    },
+    {
+      name: 'util.promisify(cp.execFile)（import * as util）',
+      head:
+        "import * as cp from 'node:child_process';\n" +
+        "import * as util from 'node:util';\n" +
+        'const run = util.promisify(cp.execFile);\n',
+    },
+    {
+      name: 'util.promisify(execFile)（named import + util 経由）',
+      head:
+        "import { execFile } from 'node:child_process';\n" +
+        "import * as util from 'node:util';\n" +
+        'const run = util.promisify(execFile);\n',
+    },
+    {
+      name: 'promisify(cp.execFile)（const cp = require(...)）',
+      head:
+        "const cp = require('node:child_process');\n" +
+        "const { promisify } = require('node:util');\n" +
+        'const run = promisify(cp.execFile);\n',
+    },
+    {
+      name: 'const { execFile } = cp; promisify(execFile)（名前空間からの分割代入）',
+      head:
+        "import * as cp from 'node:child_process';\n" +
+        "import { promisify } from 'node:util';\n" +
+        'const { execFile } = cp;\n' +
+        'const run = promisify(execFile);\n',
+    },
+  ];
+
+  for (const { name, head } of cases) {
+    it(`${name}: env 無しの別名呼び出しを検出する`, () => {
+      const hits = findMissingEnvChildProcessCalls([
+        { path: 'a.test.ts', content: head + withoutEnv },
+      ]) as Hit[];
+      expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+    });
+
+    it(`${name}: env を渡していれば検出しない（回帰）`, () => {
+      const hits = findMissingEnvChildProcessCalls([
+        { path: 'a.test.ts', content: head + withEnv },
+      ]) as Hit[];
+      expect(hits).toEqual([]);
+    });
+  }
+
+  it('名前空間からの分割代入 `const { spawn: sp } = cp` の `sp(...)` を検出する（リネーム）', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content: "import * as cp from 'node:child_process';\nconst { spawn: sp } = cp;\nsp(cmd);",
+      },
+    ]) as Hit[];
+    expect(hits.map((h) => h.path)).toEqual(['a.test.ts']);
+  });
+
+  it('⚠️ 対照: child_process の名前空間ではない変数のメンバー（promisify(other.execFile)）は検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import * as cp from 'node:child_process';\n" +
+          "import * as other from './other';\n" +
+          "import { promisify } from 'node:util';\n" +
+          'const run = promisify(other.execFile);\n' +
+          "run('node', ['-e', 'x']);",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('⚠️ 対照: 名前空間の別のメンバー（promisify(cp.ChildProcess)）は検出しない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import * as cp from 'node:child_process';\n" +
+          "import { promisify } from 'node:util';\n" +
+          'const run = promisify(cp.ChildProcess);\n' +
+          "run('node', ['-e', 'x']);",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+
+  it('⚠️ 対照: child_process ではない名前空間からの分割代入（const { execFile } = other）は束縛にしない', () => {
+    const hits = findMissingEnvChildProcessCalls([
+      {
+        path: 'a.test.ts',
+        content:
+          "import * as cp from 'node:child_process';\n" +
+          "import * as other from './other';\n" +
+          'const { execFile } = other;\n' +
+          "execFile('node', ['-e', 'x']);",
+      },
+    ]) as Hit[];
+    expect(hits).toEqual([]);
+  });
+});
+
 describe('check-no-env-passthrough: classifyEnvPassthroughHits', () => {
   it('ALLOWLIST に載ったパスの当たりは violations に出ない', () => {
     const hits: Hit[] = [

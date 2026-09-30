@@ -783,6 +783,12 @@ const REQUIRE_OR_IMPORT_DESTRUCTURE_RE =
  *   集める——`import * as cp from …` / `import cp from …`（default import）/
  *   `const cp = require(…)` / `const cp = await import(…)`
  *
+ * 名前空間からの分割代入（`const { execFile } = cp;` / リネーム
+ * `{ spawn: sp } = cp`）も `callNameToOriginal` に加える。`cp` が上の
+ * `namespaceLocalNames` に在るときだけで、無関係な変数からの分割代入は
+ * 束縛にしない。`promisify(cp.execFile)` / `util.promisify(cp.execFile)` は
+ * `findPromisifyAliases` が読む。
+ *
  * 元の名前（`callNameToOriginal` の値、`namespaceLocalNames` 経由なら
  * メンバー名そのもの）を `ARGS_ARRAY_FAMILY` の分類に使う——**局所名
  * （別名）で照らさない**。別名を局所名のまま照らすと、`import { spawn as sp }`
@@ -827,6 +833,20 @@ function findChildProcessBindings(rawContent) {
   REQUIRE_OR_IMPORT_NS_RE.lastIndex = 0;
   while ((m = REQUIRE_OR_IMPORT_NS_RE.exec(rawContent))) namespaceLocalNames.add(m[1]);
 
+  // 名前空間からの分割代入（`const { execFile } = cp;` / `{ spawn: sp } = cp`）。
+  // 上で集めた名前空間の変数にだけ掛ける——`const { execFile } = other` は束縛にしない。
+  for (const ns of namespaceLocalNames) {
+    const re = new RegExp(
+      `\\b(?:const|let|var)\\s*\\{\\s*([^}]*)\\}\\s*=\\s*${escapeIdentifier(ns)}(?![\\w$.(\\[])`,
+      'g',
+    );
+    while ((m = re.exec(rawContent))) {
+      for (const [local, orig] of parseNamedBindings(m[1], ':')) {
+        callNameToOriginal.set(local, orig);
+      }
+    }
+  }
+
   return { callNameToOriginal, namespaceLocalNames };
 }
 
@@ -835,15 +855,21 @@ function findChildProcessBindings(rawContent) {
  * 探し、`callNameToOriginal` に実在する局所名 `FUNC` の**元の名前**への
  * エイリアスだけを返す（`NAME -> 元の名前` の Map）。
  */
-function findPromisifyAliases(maskedContent, callNameToOriginal) {
+function findPromisifyAliases(maskedContent, callNameToOriginal, namespaceLocalNames) {
   const aliasMap = new Map();
+  // `promisify(<識別子>)` に加えて、`util.promisify(…)`（`promisify` の前に名前空間が付く形）と
+  // `promisify(<名前空間>.<メンバー>)`（`promisify(cp.execFile)`）も読む。名前空間経由の
+  // 呼び出しを追う PR #2062 と同じ流儀で、実在する束縛（`namespaceLocalNames` /
+  // `CHILD_PROCESS_CALL_NAMES`）に一致したものだけを別名にする——ただの `other.execFile` は拾わない。
   const promisifyRe =
-    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*promisify\(\s*([A-Za-z_$][\w$]*)\s*\)/g;
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)?promisify\(\s*([A-Za-z_$][\w$]*)(?:\s*\.\s*([A-Za-z_$][\w$]*))?\s*\)/g;
   let m;
   while ((m = promisifyRe.exec(maskedContent))) {
-    const [, aliasName, funcLocalName] = m;
-    if (callNameToOriginal.has(funcLocalName)) {
-      aliasMap.set(aliasName, callNameToOriginal.get(funcLocalName));
+    const [, aliasName, first, member] = m;
+    if (member === undefined) {
+      if (callNameToOriginal.has(first)) aliasMap.set(aliasName, callNameToOriginal.get(first));
+    } else if (namespaceLocalNames.has(first) && CHILD_PROCESS_CALL_NAMES.includes(member)) {
+      aliasMap.set(aliasName, member);
     }
   }
   return aliasMap;
@@ -867,7 +893,7 @@ export function findMissingEnvChildProcessCalls(files) {
     const { callNameToOriginal, namespaceLocalNames } = findChildProcessBindings(file.content);
     if (callNameToOriginal.size === 0 && namespaceLocalNames.size === 0) continue;
 
-    const aliasMap = findPromisifyAliases(masked, callNameToOriginal);
+    const aliasMap = findPromisifyAliases(masked, callNameToOriginal, namespaceLocalNames);
     const callNameToKind = new Map(callNameToOriginal);
     for (const [alias, orig] of aliasMap) callNameToKind.set(alias, orig);
 
