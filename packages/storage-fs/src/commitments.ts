@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   commitmentClosedBySchema,
   commitmentSchema,
+  compareIsoInstant,
   findOpenManagerDuplicate,
   UnreadableCommitmentError,
   unreadableCommitmentSchema,
@@ -289,7 +290,9 @@ export class FsCommitmentStore implements CommitmentStore {
     // 未了は古い順。齢が判断の材料なので、放置されているものから見せる
     const open = file.entries
       .filter((entry) => entry.closedAt === undefined)
-      .sort((a, b) => a.at.localeCompare(b.at));
+      // 実時刻で比べる（issue #2451。`compareIsoInstant` の doc——文字列比較だと
+      // オフセット表記の違う行で pg の `asc(at)` と並びが食い違う）
+      .sort((a, b) => compareIsoInstant(a.at, b.at));
     // **公開する形（`UnreadableCommitment`）へ写してから返す。** `file.unreadable`
     // は書き戻しのために生の値（`value`）を抱えている内部表現であり、そのまま
     // 外へ渡すと、構造的には型に無い `value`（＝行の本体。`body` を含みうる）へ
@@ -317,7 +320,8 @@ export class FsCommitmentStore implements CommitmentStore {
     }
     const closed = file.entries
       .filter((entry) => entry.closedAt !== undefined)
-      .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''));
+      // 実時刻の降順（issue #2451。pg の `desc(closedAt)` と揃える）
+      .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''));
     // 閉じた読めない行も含めて出す（新しい順・古い順を判定する材料が無いので、
     // 未了扱いの読めない行の後ろへそのまま連結する）。
     const unreadableClosed = file.unreadable
@@ -734,7 +738,8 @@ function trimClosed(file: CommitmentFile): CommitmentFile {
 
   const kept = new Set(
     [...closed]
-      .sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? ''))
+      // 実時刻の降順（issue #2451。`list()` の片付き側と同じ比べ方で「新しい順」を決める）
+      .sort((a, b) => compareIsoInstant(b.closedAt ?? '', a.closedAt ?? ''))
       .slice(0, CLOSED_HISTORY_LIMIT)
       .map((entry) => entry.id),
   );

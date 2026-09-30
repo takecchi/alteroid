@@ -471,6 +471,46 @@ describe('フックの持ち時間切れは安全側（issue #1105 本文の設�
   });
 });
 
+describe('畳んで解いた確認は取り下げとして残し、クローンの判断として書かない（issue #2448）', () => {
+  it('ask の後に stop() すると settled に withdrawn が載り、「許可を出さなかった」の note は出ない', async () => {
+    const { started, events, host: h } = await startSession();
+
+    const denialPromise = firePermissionDenied(started.options, {
+      hook_event_name: 'PermissionDenied',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo withdrawn-probe' },
+      tool_use_id: 'tu-withdrawn-1',
+      reason: '分類器が拒否した（テスト）',
+    });
+    await tick();
+    // 確認がクローンへ上がっていること（上がっていなければ、畳みが解く確認がそもそも無い）。
+    expect(askEvents(events).some((e) => e.requestId === 'tu-withdrawn-1')).toBe(true);
+
+    // クローンが答える前に、セッションを畳む（`#settleAll` が確認を解く）。
+    await h.stop('mgr-1');
+    const decision = await denialPromise;
+    expect(decision).toEqual({ continue: true });
+
+    const settled = events.filter(
+      (event): event is Extract<RunnerEvent, { type: 'settled' }> =>
+        event.type === 'settled' && event.requestId === 'tu-withdrawn-1',
+    );
+    expect(settled).toHaveLength(1);
+    // **`#onPermission` と同じ形で `withdrawn` が載る**（#1586。manager.ts の
+    // `case 'settled'` が取り下げの行を日誌へ書くのは、これが在るときだけ）。
+    expect(settled[0]?.withdrawn?.reason).toBe('デーモンから停止を指示された。');
+    // プロトコルの型を通っても `withdrawn` が落ちない（デーモン側で読める形である）。
+    expect(runnerEventSchema.parse(settled[0])).toMatchObject({
+      withdrawn: { reason: 'デーモンから停止を指示された。' },
+    });
+
+    // **クローンは答えていない** ——「クローンが…出さなかった」をクローンの判断として残さない。
+    const notes = noteEvents(events);
+    expect(notes.some((n) => n.text.includes('への1回だけの許可を出さなかった'))).toBe(false);
+    expect(notes.some((n) => n.text.includes('デーモンから停止を指示された。'))).toBe(false);
+  });
+});
+
 describe('bash-wait-guard の deny が1回だけの許可より先に効く（issue #1105 P1）', () => {
   it('無限に待つだけの Bash は、1回だけの許可が出ていても弾く', async () => {
     const { started, events, host: h } = await startSession();
