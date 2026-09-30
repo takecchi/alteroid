@@ -1,24 +1,20 @@
 import type { PendingApproval } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #2007。`PgJobStore.updateApproval` は、1つのトランザクションの中で
  * `select … for update` で承認の行を押さえてから、`mutate` の結果を書く。
  * `mutate` が `null` を返したら何も書かない。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

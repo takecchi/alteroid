@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from './db.js';
 import { createPgStoresFromDb, migrate, seedPgWorkspace, type PgStores } from './index.js';
 import { jobs as jobsTable, journal as journalTable } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -51,9 +52,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

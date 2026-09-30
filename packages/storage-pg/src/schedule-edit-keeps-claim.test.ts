@@ -1,9 +1,9 @@
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * Issue #1654。fs 版（`packages/storage-fs/src/schedule-edit-keeps-claim
@@ -25,9 +25,7 @@ describe('ScheduleStore.editRequest() — claimRun 済みの印を消さない�
   };
 
   beforeEach(async () => {
-    client = new PGlite();
-    db = drizzle(client);
-    await migrate(db);
+    ({ client, db } = await createMigratedPglite());
     stores = createPgStoresFromDb(db);
   });
 

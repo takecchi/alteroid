@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import { createCloneTools } from '@alteroid/core';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * Issue #1662（pg 実装で赤を取る）。
@@ -17,14 +16,11 @@ import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
  * （`practice_*` の非対称——fs は無検査・pg だけ throw——とは違い、
  * `memory_*` は fs も pg も両方が throw する）。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

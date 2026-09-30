@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
 import { createCloneTools } from '@alteroid/core';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * Issue #1651（pg 実装に対する確認）。
@@ -26,14 +25,11 @@ import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
  * 確かめる——直した後は道具の側で先に断るので、`PgPracticeStore#slug()`
  * まで呼び出しが届かない。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

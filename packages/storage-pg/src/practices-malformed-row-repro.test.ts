@@ -1,12 +1,11 @@
 import { captureStderr } from '@alteroid/core';
 import type { Practice, PracticeVersion } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { practices, practiceVersions } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #2011（#1975 の pg 側。fs の practices を直した issue #1967 の続き）。
@@ -34,14 +33,11 @@ import { practices, practiceVersions } from './schema.js';
  * （`packages/storage-fs/src/practices-malformed-row-repro.test.ts`、issue #1967）
  * と同じ形。DB の行そのものは触らない（`UPDATE` / `DELETE` をしない）。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

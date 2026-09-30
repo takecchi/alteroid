@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 
+import type { Db } from './db.js';
 import { migrate } from './migrate.js';
 
 /**
@@ -45,10 +46,7 @@ export function migratedTemplate(): Promise<Blob> {
 /**
  * 空の、migrate 済みの、自分専用の PGlite を返す。呼び手が `client.close()` する。
  */
-export async function createMigratedPglite(): Promise<{
-  client: PGlite;
-  db: ReturnType<typeof drizzle>;
-}> {
+export async function createMigratedPglite(): Promise<{ client: PGlite; db: Db }> {
   const loadDataDir = await migratedTemplate();
   const client = new PGlite({ loadDataDir });
   await client.waitReady;

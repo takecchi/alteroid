@@ -1,10 +1,9 @@
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { agentTokenActive, agentTokenSettings } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #2053。`PgTokenPoolStore.readSettings()` は `tokenRotationPolicySchema
@@ -36,14 +35,11 @@ import { agentTokenActive, agentTokenSettings } from './schema.js';
  * は元から道連れにならない（`PgTokenPoolStore` の doc）——ここでは対照として
  * 確かめるだけで、直す前後で変わらない。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

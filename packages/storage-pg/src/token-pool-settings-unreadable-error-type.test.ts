@@ -1,11 +1,10 @@
 import { UnreadableActiveTokenError, UnreadableTokenSettingsError } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { agentTokenActive, agentTokenSettings } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #2053。`readSettings()` / `readActive()` が読めないときに投げる型を
@@ -18,14 +17,11 @@ import { agentTokenActive, agentTokenSettings } from './schema.js';
  * `token-pool-settings-active-unreadable-repro.test.ts`（型を import しない
  * 形）で別に取ってある。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

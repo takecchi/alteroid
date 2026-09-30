@@ -1,10 +1,10 @@
 import type { AuthAccount } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * `AuthStore.revokeAccountAccess`（issue #1915）単体の歯（pg 実装、PGlite）。
@@ -19,9 +19,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

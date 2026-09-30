@@ -1,12 +1,12 @@
 import { renderMemoryDocuments } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { memory } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -34,9 +34,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

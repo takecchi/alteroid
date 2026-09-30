@@ -1,10 +1,10 @@
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { schedules } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #1955（#1929 の同じ形の残り）。`ScheduleStore.clear()` の契約は「継続中の
@@ -30,9 +30,7 @@ const PLAN = {
 };
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 
   // schedule_phases への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

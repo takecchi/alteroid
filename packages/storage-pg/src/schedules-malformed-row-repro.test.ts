@@ -1,13 +1,12 @@
 import { UnreadableScheduleError, captureStderr } from '@alteroid/core';
 import type { ScheduledRequest } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { schedules } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #1944（#1868 / #1928 の線を継続中の依頼にそろえる）。`PgScheduleStore.list()`
@@ -22,14 +21,11 @@ import { schedules } from './schema.js';
  * 発火した依頼を「人間が手で仕込んだ kind を起こした」と誤解し、本文なしの曖昧な
  * ターンを走らせる。飛ばすのは `list()` だけでよい。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

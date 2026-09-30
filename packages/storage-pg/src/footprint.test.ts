@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
 import { measureStorageFootprint, STATEMENT_TIMEOUT_MS, type TableSizeStats } from './footprint.js';
-import { migrate } from './migrate.js';
 import { archive, commitments, inboxEvents, jobs, journal } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * `pg_column_size` は**保存された（圧縮後の）**サイズを見る。`'x'.repeat(n)`
@@ -87,9 +87,7 @@ let client: PGlite;
 let db: Db;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
 });
 
 afterEach(async () => {

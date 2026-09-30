@@ -13,6 +13,7 @@ import {
   type PgStores,
 } from './index.js';
 import { AUTH_ACCOUNTS_EMAIL_LOWER_INDEX } from './migrate.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * pg ドライバの受け入れ確認。
@@ -39,9 +40,7 @@ let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

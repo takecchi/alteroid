@@ -1,11 +1,11 @@
 import type { Job } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { jobs } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #1929。`JobStore.clear()` の契約は「jobs と approvals を一緒に1操作で
@@ -30,9 +30,7 @@ const GOOD_JOB: Job = {
 };
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 
   // approvals への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

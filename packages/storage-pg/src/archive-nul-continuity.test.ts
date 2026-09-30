@@ -1,10 +1,10 @@
 import { createMemoryStores, type ArchiveContinuity } from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * **NUL の位置だけが違う本文は、pg でも「続いていない」と読む（#1709）。** pg は NUL を
@@ -18,9 +18,7 @@ describe('pg の archive() の連続性の判定は、NUL を含む本文で fs 
   let pgStores: PgStores;
 
   beforeEach(async () => {
-    client = new PGlite();
-    db = drizzle(client);
-    await migrate(db);
+    ({ client, db } = await createMigratedPglite());
     pgStores = createPgStoresFromDb(db);
   });
 

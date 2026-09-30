@@ -1,13 +1,12 @@
 import { captureStderr } from '@alteroid/core';
 import type { UsageSnapshot } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { usageDaily, usageTurns } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * pg の `PgUsageStore.aggregate()` は、`usage_daily` / `usage_turns` の各行を
@@ -22,14 +21,11 @@ import { usageDaily, usageTurns } from './schema.js';
  * ここでは、壊れた行は読み出しから外して stderr に跡を残し、ほかの行は読めることを
  * 固定する。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

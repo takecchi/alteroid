@@ -1,10 +1,10 @@
 import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { sessionEntries } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #1961。`PgSessionStore.clearAll()` の契約は「session_entries と索引の
@@ -23,9 +23,7 @@ let stores: PgStores;
 const KEY = { projectKey: 'proj-1', sessionId: 'sess-1' };
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ client, db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 
   // sessions への DELETE だけを確実に失敗させる（BEFORE DELETE トリガ）。

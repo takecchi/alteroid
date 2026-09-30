@@ -1,11 +1,10 @@
 import type { Job } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
 import { jobs } from './schema.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #1892。`JobStore.clear()` が返す件数は、**行の中身が壊れているかに
@@ -17,14 +16,11 @@ import { jobs } from './schema.js';
  * いた。どちらかが黙って動いたときに、片側だけ緑のまま食い違いが戻らない
  * よう、両方の実装で同じ期待値を置く。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 

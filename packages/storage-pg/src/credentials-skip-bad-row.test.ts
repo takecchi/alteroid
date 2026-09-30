@@ -1,10 +1,9 @@
 import { captureStderr } from '@alteroid/core';
-import { PGlite } from '@electric-sql/pglite';
-import { drizzle } from 'drizzle-orm/pglite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { Db } from './db.js';
-import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
+import { createPgStoresFromDb, type PgStores } from './index.js';
+import { createMigratedPglite } from './pglite-template.test-support.js';
 
 /**
  * issue #1740。pg 実装は元から `list()` の中で `CREDENTIAL_NAME` に合わない行を
@@ -18,7 +17,6 @@ import { createPgStoresFromDb, migrate, type PgStores } from './index.js';
  * `PgCredentialVaultStore.put()` 自体は `CREDENTIAL_NAME` を検査しない
  * （検査は読みの `list()` 側にしかない）。
  */
-let client: PGlite;
 let db: Db;
 let stores: PgStores;
 
@@ -27,9 +25,7 @@ const FAKE_BAD_VALUE = 'ghp_FAKEFAKE2222222222222222222222222222';
 const BAD_NAME = '../../etc/bad-name';
 
 beforeEach(async () => {
-  client = new PGlite();
-  db = drizzle(client);
-  await migrate(db);
+  ({ db } = await createMigratedPglite());
   stores = createPgStoresFromDb(db);
 });
 
