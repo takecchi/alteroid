@@ -37,6 +37,7 @@ import {
   ARCHIVE_REMOVE_MANY_LIMIT_MAX,
   DEFAULT_SSE_HEARTBEAT_MS,
   DEFAULT_TOKEN_ROTATION_SETTINGS,
+  CredentialEntryRejectedError,
   JournalAnchorNotFoundError,
   ProfileRollbackFailedError,
   TokenPoolInputError,
@@ -5640,7 +5641,7 @@ export function createApp(deps: AppDeps) {
                 error instanceof ProfileRollbackFailedError
                   ? '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）'
                   : '実行環境プロファイルを差し替えられなかった',
-              grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${String(error)}`,
+              grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${kindOfError(error)}`,
             },
             '実行環境プロファイルの打ち消しの日誌',
             'PUT /profile',
@@ -6115,12 +6116,23 @@ export function createApp(deps: AppDeps) {
            * 同じ1呼び〈`apply`〉の中にあり、ここからは分けられない）。
            *
            * 理由を返す——「置けなかった」だけでは、人間は名前を疑うのか権限を
-           * 疑うのか分からない。**`String(error)` に値は入らない**（サービス側の
-           * 例外文は名前しか載せていない）。日誌には「差し替えようとしている」が
-           * 残っているので、打ち消す（grant の「アクセス許可付与の打ち消しの
-           * 日誌」と同じ形。**検証で断られた回も同じ扱いにする**——記録が多すぎる
-           * 側の穴で、記録の無い差し替えより安全側と判断した。teto の判断）。
+           * 疑うのか分からない。
+           *
+           * **理由を返してよいのは、検証で断った例外（`CredentialEntryRejectedError`。
+           * 名前と理由だけで値を載せない文）だけ**（issue #2415）。`apply` は保存も
+           * 担うので、それ以外の例外（ストアの書き込みの失敗など）の `message` には
+           * 値が載りうる（drizzle は `Failed query: … params: <値>` を複数行で添える）。
+           * こちらは `name` だけを、応答にも日誌にも載せる。見分けは文言でなく型で行う。
+           *
+           * 日誌には「差し替えようとしている」が残っているので、打ち消す（grant の
+           * 「アクセス許可付与の打ち消しの日誌」と同じ形。**検証で断られた回も同じ
+           * 扱いにする**——記録が多すぎる側の穴で、記録の無い差し替えより安全側と
+           * 判断した。teto の判断）。
            */
+          const reason =
+            error instanceof CredentialEntryRejectedError
+              ? error.message
+              : `鍵の差し替えに失敗した（${kindOfError(error)}）。詳細は値が載りうるので返さない`;
           await appendJournalOrDrop(
             deps.stores,
             {
@@ -6128,12 +6140,12 @@ export function createApp(deps: AppDeps) {
               decision: `環境変数（鍵）を差し替えられなかった（${wanted}）`,
               grounds:
                 `${describeActor(c.get('principal'))}（PUT /credentials、状態の変更が失敗）: ` +
-                String(error),
+                reason,
             },
             '環境変数（鍵）の打ち消しの日誌',
             `names=${entries.map((e) => e.name).join(',')}`,
           );
-          return c.json({ error: String(error) }, 400);
+          return c.json({ error: reason }, 400);
         }
 
         /**
