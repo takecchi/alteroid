@@ -178,6 +178,32 @@ describe('/archive 画面 — 一覧・集計・削除（#776）', () => {
     expect(screen.queryByRole('button', { name: '本文を消す' })).toBeNull();
   });
 
+  it('消した本文のバイト数は、保存量とは単位が違うと読める文言で出す（issue #2270 / #2074）', async () => {
+    stubArchiveScreen([
+      {
+        id: 'sess-3-a.jsonl',
+        sessionId: 'sess-3',
+        at: '2026-09-01T00:00:00.000Z',
+        storedBytes: 11452,
+        removedAt: '2026-09-02T00:00:00.000Z',
+        removedBytes: 1000000,
+      },
+    ]);
+
+    await renderArchive();
+
+    // 保存量（`storedBytes`）は「使用量」。置き場が実際に使っている量である。
+    expect(await screen.findByText(/使用量 11452バイト/)).toBeTruthy();
+    // 消した量（`removedBytes`）は「消した本文の素の UTF-8 バイト数」。
+    // 使用量とは単位が違い、置き場で解放した量でもないと言う。
+    const removedLine = screen.getByText(/削除:/);
+    expect(removedLine.textContent).toContain('消した本文の素の UTF-8 バイト数 1000000');
+    expect(removedLine.textContent).toContain('使用量とは単位が違い');
+    expect(removedLine.textContent).toContain('解放した量ではない');
+    // 単位の区別なしの「（1000000バイト）」の形は出さない。
+    expect(screen.queryByText(/（1000000バイト）/)).toBeNull();
+  });
+
   it('「本文を消す」で DELETE /archive/:id を叩き、成功すれば一覧が「本文は削除済み」に変わる', async () => {
     stubArchiveScreen([
       {
