@@ -28,14 +28,15 @@ vi.mock('virtua', () => ({
 
 const NOW = new Date('2026-08-20T12:00:00.000Z');
 
-const DECISION: JournalEntry = {
+// `managerId` は型に無いが、実データの一部の行が持つ（`~/lib/journal-links` が型を通さずに読む）。
+const DECISION = {
   type: 'decision',
   id: 'row-decision',
   at: '2026-08-20T11:57:00.000Z',
   decision: '行の見た目を確かめる判断',
   grounds: '記憶',
   managerId: 'mgr-abc12345',
-};
+} as JournalEntry;
 
 const OTHER: JournalEntry = {
   type: 'decision',

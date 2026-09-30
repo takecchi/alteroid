@@ -17,7 +17,7 @@ import {
 import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
 import { formatDateTime, formatRelative, shiftForPrepend } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
-import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
+import type { JournalEntryType } from '@alteroid/logic';
 
 /**
  * 種別ごとの見た目の強さ。**`Record<JournalEntryType, ...>` で縛ってあるので、
