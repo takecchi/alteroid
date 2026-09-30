@@ -29,6 +29,7 @@ import {
   judgeExecution,
   judgeObservationScan,
   judgeStaticSkipScan,
+  loadVitestFlagInfo,
   matchScopedPositionals,
   parseAggregateLines,
   parsePassedCount,
@@ -365,7 +366,7 @@ describe('resolveScopedArgs（I/O込みの合成。#1691 レビュー差し戻�
  *
  * **`=` 形（`--shard=1/3`）は無条件に安全**——`isFlagLike` が `-` で始まる引数を
  * フラグとみなすので、`VALUE_TAKING_FLAGS` に載っていなくても位置引数側には
- * 回らない（`findPositionalIndices` の doc）。
+ * 回らない（`classifyArgs` の doc）。
  *
  * **空白区切りの値渡し（`--shard 1/3`）も、いまは同じく素通しされる**
  * （#2063 の続きで `--shard` を `VALUE_TAKING_FLAGS` へ足した）。当初は
@@ -417,7 +418,7 @@ describe('resolveScopedArgs は --shard=1/3 / --reporter=dot（`=` 形）を位�
  * いたので、これで両形が対称になる——`--reporter` / `--maxWorkers` など他の
  * 値必須フラグと同じ扱いに揃った。**保証が弱くなっていない理由**: 素通しの
  * 対象は文字列としてちょうど `--shard` に一致し、かつ直後の要素が `-` で
- * 始まらない（＝値らしい）ときだけ——`findPositionalIndices` の
+ * 始まらない（＝値らしい）ときだけ——`classifyArgs` の
  * `isFlagLike` 判定は変えていないので、`--shard` 単体（値が省略された形）や
  * `--shardx` のような紛らわしい別名は今までどおり位置引数側として扱われる
  * （安全側に倒れる）。範囲外・範囲内不一致の判定そのもの
@@ -443,6 +444,181 @@ describe('--shard 1/3（空白区切り）は --scope と併用しても素通�
     expect(result).toEqual({
       ok: true,
       args: ['--shard', '1/3', 'pkg-a/src/bar-widget.test.ts'],
+    });
+  });
+});
+
+/**
+ * 空白区切りで値を取る vitest のフラグ（`--testTimeout 5000` / `--retry 2` /
+ * `--bail 1` / `--project x` / `--exclude x`）と `--scope` の併用。
+ *
+ * **直す前の実測（main、`resolveScopedArgs` を直接呼んだ。scope=`scripts`）**:
+ * `--testTimeout 5000` ⟹ exit 8「範囲内に一致なし — 「5000」…」、
+ * `--retry 2` ⟹ exit 8（「2」）、`--bail 1` ⟹ **断られず**、値 `1` が
+ * `scripts/…1761-open-side.repro.test.ts` など `1` を含む2本へ差し替わって範囲が
+ * 黙って狭まる、`--project x` / `--exclude x` ⟹ 同じく `x` を含む3本へ狭まる。
+ * `=` 形は素通し。#2063 は `--shard` だけを `VALUE_TAKING_FLAGS` へ足した。
+ *
+ * **直し方**: 値を取るフラグの一覧を vitest 自身の CLI 定義から読み
+ * （`loadVitestFlagInfo`）、値を取るか分からないフラグの直後のトークンは
+ * 範囲へ持ち込まず断る。「範囲外は断る」向きは弱めていない（下の最後の2本）。
+ */
+describe('空白区切りで値を取る vitest のフラグは --scope と併用しても値を範囲に持ち込まない', () => {
+  const VALUE_FLAGS: Array<[string, string]> = [
+    ['--testTimeout', '5000'],
+    ['--retry', '2'],
+    ['--bail', '1'],
+    ['--project', 'x'],
+    ['--exclude', 'x'],
+  ];
+
+  it.each(VALUE_FLAGS)(
+    '%s %s（空白区切り）: 位置引数が無ければ値はそのまま残り、範囲がフィルタになる',
+    async (flag: string, value: string) => {
+      const root = makeScopeFixtureRoot();
+      const result = await resolveScopedArgs(['--scope=pkg-a/src', flag, value], {
+        cwd: join(root, 'pkg-a'),
+        repoRoot: root,
+      });
+      expect(result).toEqual({ ok: true, args: [flag, value, 'pkg-a/src'] });
+    },
+  );
+
+  it.each(VALUE_FLAGS)(
+    '%s %s（空白区切り）: 利用者の位置引数（widget）と併用しても、値は絞り込みに化けず widget だけが解決される',
+    async (flag: string, value: string) => {
+      const root = makeScopeFixtureRoot();
+      const result = await resolveScopedArgs(['--scope=pkg-a/src', flag, value, 'widget'], {
+        cwd: join(root, 'pkg-a'),
+        repoRoot: root,
+      });
+      expect(result).toEqual({
+        ok: true,
+        args: [flag, value, 'pkg-a/src/bar-widget.test.ts'],
+      });
+    },
+  );
+
+  it.each(VALUE_FLAGS)('%s=%s（`=` 形）も同じに扱われる', async (flag: string, value: string) => {
+    const root = makeScopeFixtureRoot();
+    const eq = `${flag}=${value}`;
+    const bare = await resolveScopedArgs(['--scope=pkg-a/src', eq], {
+      cwd: join(root, 'pkg-a'),
+      repoRoot: root,
+    });
+    expect(bare).toEqual({ ok: true, args: [eq, 'pkg-a/src'] });
+    const withPositional = await resolveScopedArgs(['--scope=pkg-a/src', eq, 'widget'], {
+      cwd: join(root, 'pkg-a'),
+      repoRoot: root,
+    });
+    expect(withPositional).toEqual({ ok: true, args: [eq, 'pkg-a/src/bar-widget.test.ts'] });
+  });
+
+  it('本当に範囲外の位置引数は、値を取るフラグと併用しても今までどおり断られる（範囲内に一致なし）', async () => {
+    const root = makeScopeFixtureRoot();
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', '--testTimeout', '5000', 'baz'], {
+      cwd: join(root, 'pkg-a'),
+      repoRoot: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲内に一致なし/);
+    expect(result.message).toContain('「baz」');
+  });
+
+  it('範囲の外を明らかに指すパスも、値を取るフラグと併用して今までどおり断られる（範囲外）', async () => {
+    const root = makeScopeFixtureRoot();
+    const result = await resolveScopedArgs(
+      ['--scope=pkg-a/src', '--retry', '2', '../pkg-b/src/baz.test.ts'],
+      { cwd: join(root, 'pkg-a'), repoRoot: root },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/範囲外/);
+  });
+
+  it('値を取らない vitest のフラグ（--run）の直後の語は、位置引数として解決される', async () => {
+    const root = makeScopeFixtureRoot();
+    const result = await resolveScopedArgs(
+      ['--scope=pkg-a/src', '--bail', '1', '--run', 'widget'],
+      {
+        cwd: join(root, 'pkg-a'),
+        repoRoot: root,
+      },
+    );
+    expect(result).toEqual({
+      ok: true,
+      args: ['--bail', '1', '--run', 'pkg-a/src/bar-widget.test.ts'],
+    });
+  });
+
+  it('vitest の CLI 定義に無いフラグの直後のトークンは、範囲に持ち込まず断る（「判定できない」）', async () => {
+    const root = makeScopeFixtureRoot();
+    const result = await resolveScopedArgs(['--scope=pkg-a/src', '--noSuchFlag', 'widget'], {
+      cwd: join(root, 'pkg-a'),
+      repoRoot: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/判定できない/);
+    expect(result.message).toContain('--noSuchFlag widget');
+  });
+
+  it('vitest の CLI 定義を読めないとき（flagInfo: null）: 既知の少数以外は断る側へ倒れる', () => {
+    const result = matchScopedPositionals(['--testTimeout', '5000'], 'pkg-a/src', {
+      cwd: '/repo/pkg-a',
+      repoRoot: '/repo',
+      filesInScope: ['pkg-a/src/foo.test.ts'],
+      flagInfo: null,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.exitCode).toBe(EXIT_SCOPE_VIOLATION);
+    expect(result.message).toMatch(/読めなかった/);
+  });
+
+  it('次の vitest の版で増えるフラグ: 一覧に載れば手で足さなくても値として飲まれる（flagInfo を注入した純関数）', () => {
+    const result = matchScopedPositionals(['--futureFlag', '9', 'foo'], 'pkg-a/src', {
+      cwd: '/repo/pkg-a',
+      repoRoot: '/repo',
+      filesInScope: ['pkg-a/src/foo.test.ts'],
+      flagInfo: { valueTaking: new Set(['--futureFlag']), booleans: new Set() },
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: ['--futureFlag', '9', 'pkg-a/src/foo.test.ts'],
+    });
+  });
+
+  it('loadVitestFlagInfo は node_modules の vitest から、値を取るフラグと取らないフラグを読む', async () => {
+    const info = await loadVitestFlagInfo();
+    expect(info).not.toBeNull();
+    for (const f of ['--testTimeout', '--retry', '--bail', '--project', '-p', '--exclude', '-t']) {
+      expect(info.valueTaking.has(f), f).toBe(true);
+    }
+    for (const f of ['--run', '--watch', '--coverage']) {
+      expect(info.booleans.has(f), f).toBe(true);
+    }
+  });
+
+  it('--deadline-seconds はラッパが先に食うので、空白区切りの値フラグと併用しても範囲判定に届かない', async () => {
+    const root = makeScopeFixtureRoot();
+    const deadline = extractDeadlineSeconds([
+      '--scope=pkg-a/src',
+      '--deadline-seconds',
+      '200',
+      '--testTimeout',
+      '20000',
+      'widget',
+    ]);
+    expect(deadline.ok).toBe(true);
+    expect(deadline.deadlineSeconds).toBe(200);
+    const result = await resolveScopedArgs(deadline.rest, {
+      cwd: join(root, 'pkg-a'),
+      repoRoot: root,
+    });
+    expect(result).toEqual({
+      ok: true,
+      args: ['--testTimeout', '20000', 'pkg-a/src/bar-widget.test.ts'],
     });
   });
 });

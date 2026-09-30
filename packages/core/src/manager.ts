@@ -93,7 +93,7 @@ import type {
   UnpushedWorkObservationSource,
   WorkspaceLocator,
 } from './schema.js';
-import type { Stores } from './store.js';
+import { UnreadableJobError, type Stores } from './store.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
@@ -1801,12 +1801,18 @@ export interface ManagerAbortResult {
  *   （`describeAppraisal` の出力。初めて付けたなら `null`）
  * - `'absent'` — その委譲が台帳に居ない。**`abort` の `'absent'` と同じ意味**で、
  *   HTTP では 404 になる
+ * - `'unreadable'` — 台帳に**在るが読めない**（版ずれ・手編集で `jobSchema` に
+ *   合わない行）。**評定は書いていない**（行は1バイトも変えない）。`'absent'`
+ *   （消えた）とは別——「居ない」と言うと、直せば読める行を消えたものとして
+ *   扱わせてしまう。HTTP では 409（読めない行の他の口と同じ）
  *
  * **「書けなかった」を `'appraised'` に畳まない。** 畳むと、台帳から消えた委譲へ
  * 付けた評定が「付いた」として返り、読み手には確かめる術が無くなる。
+ * **「読めなかった」を `'absent'` にも畳まない**（同じ理由。判定できないを
+ * 「無い」へ倒さない）。
  */
 export interface ManagerAppraiseResult {
-  outcome: 'appraised' | 'absent';
+  outcome: 'appraised' | 'absent' | 'unreadable';
   detail: string;
   /** 覆す前の評定の字面。初めて付けたなら `null`。 */
   previous: string | null;
@@ -8445,22 +8451,38 @@ class Pool implements ManagerPool {
       let capturedPrevious: string | null | undefined;
       let capturedPreviousValue: string | undefined;
       let capturedPreviousBy: string | undefined;
-      const updated = await this.#stores.jobs.updateJob(managerId, (current) => {
-        capturedPrevious = describeAppraisal(current);
-        capturedPreviousValue = current.appraisal;
-        capturedPreviousBy = current.appraisedBy;
-        const next: Job = {
-          ...current,
-          appraisal,
-          appraisedAt: at,
-          appraisedBy: by,
-          updatedAt: at,
+      let updated: Job | null;
+      try {
+        updated = await this.#stores.jobs.updateJob(managerId, (current) => {
+          capturedPrevious = describeAppraisal(current);
+          capturedPreviousValue = current.appraisal;
+          capturedPreviousBy = current.appraisedBy;
+          const next: Job = {
+            ...current,
+            appraisal,
+            appraisedAt: at,
+            appraisedBy: by,
+            updatedAt: at,
+          };
+          delete next.appraisalReason;
+          if (reason !== undefined) next.appraisalReason = reason;
+          if (workKind !== undefined) next.workKind = workKind;
+          return next;
+        });
+      } catch (error) {
+        // **在るが読めない行は「居ない」と言わない。** `null`（無い）と
+        // `UnreadableJobError`（在ったが読めない）は `JobStore.updateJob` の
+        // 契約で分かれている。行には触れていないので、評定は付いていない。
+        if (!(error instanceof UnreadableJobError)) throw error;
+        return {
+          outcome: 'unreadable',
+          detail:
+            `${managerId} は台帳に読めない形で入っている（消されたのではない）。` +
+            '評定は付けていない。行は書き換えていない。' +
+            '版ずれ・手編集で job の形が合わなくなっている（stderr に id と不正な欄の跡が出る）。',
+          previous: null,
         };
-        delete next.appraisalReason;
-        if (reason !== undefined) next.appraisalReason = reason;
-        if (workKind !== undefined) next.workKind = workKind;
-        return next;
-      });
+      }
       if (updated === null) {
         return {
           outcome: 'absent',

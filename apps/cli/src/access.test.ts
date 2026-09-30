@@ -371,6 +371,17 @@ describe('alteroid access owner', () => {
     );
   });
 
+  it('404・409・認証以外の失敗は、状態コードだけでなくデーモンの理由も出す', async () => {
+    replies.push({
+      status: 500,
+      body: { error: 'アカウント台帳の書き込みが失敗した（テスト用）' },
+    });
+
+    await expect(accessOwnerCommand('acc-1')).rejects.toThrow(
+      /が失敗しました \(500\): アカウント台帳の書き込みが失敗した（テスト用）/,
+    );
+  });
+
   it('該当するアカウントが無ければ 404', async () => {
     replies.push({ status: 404, body: { error: 'not found' } });
 

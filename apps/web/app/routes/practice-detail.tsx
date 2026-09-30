@@ -251,7 +251,15 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               <p className="mb-2 text-xs text-muted-foreground">
                 write のたびに版が1つ増える。remove しても版は消えない（#1309）。
               </p>
-              {historyError !== undefined ? (
+              {/*
+                **読めた `data` が在るなら、再検証の失敗で一覧を消さない（issue
+                #2266）。** SWR は失敗しても前回の `data` を残す。失敗は一覧の
+                上の注記で知らせる（黙って消さない）。
+              */}
+              {historyError !== undefined && history !== undefined && (
+                <ErrorNote error={historyError} className="mb-2" />
+              )}
+              {historyError !== undefined && history === undefined ? (
                 // **「読めていない」を「読み込み中」と区別する（issue #2139）。**
                 // `error` を受けていなかったので、取れなかったときも
                 // `Spinner` が回り続けていた——`usePractice(slug)`（このカード
@@ -293,7 +301,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 <p className="text-xs text-muted-foreground">
                   左の一覧から版を選ぶと、本文をここに読み取り専用で出す。
                 </p>
-              ) : historyDetailError !== undefined ? (
+              ) : historyDetailError !== undefined && historyDetail === undefined ? (
                 // 版1本のほうも同じ判断（issue #2139）。`historyVersion` を
                 // 選んだ後に取れなかった場合、`Spinner` のまま回り続けない。
                 <ErrorNote error={historyDetailError} />
@@ -301,6 +309,10 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
                 <Spinner />
               ) : (
                 <>
+                  {historyDetailError !== undefined && (
+                    // 読めた版の本文は残す（issue #2266）。失敗は注記で知らせる。
+                    <ErrorNote error={historyDetailError} className="mb-2" />
+                  )}
                   <p className="mb-2 text-xs text-muted-foreground">
                     版{historyDetail.version.version}（{historyDetail.version.kind}）
                     {historyDetail.version.title} · {formatDateTime(historyDetail.version.at)}

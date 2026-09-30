@@ -272,6 +272,11 @@ describe('alteroid inbox remove — サーバの断りをそのまま投げる',
     await expect(inboxRemoveCommand({ types: 'timer', reason: 'r' })).rejects.toThrow(
       '受信箱を畳めませんでした（500）',
     );
+    // デーモンが返した理由も添える（状態コードだけを見せない）。
+    replies = [{ status: 500, body: { error: '受信箱の書き込みが失敗した（テスト用）' } }];
+    await expect(inboxRemoveCommand({ types: 'timer', reason: 'r' })).rejects.toThrow(
+      '受信箱の書き込みが失敗した（テスト用）',
+    );
   });
 
   it('繋がらない（fetch そのものが失敗する）も投げる', async () => {
@@ -401,12 +406,14 @@ describe('alteroid inbox show', () => {
   });
 
   it('5xx も stdout へ書いて正常終了する', async () => {
-    replies = [{ status: 500, body: { error: 'internal' } }];
+    replies = [{ status: 500, body: { error: '受信箱の集計が失敗した（テスト用）' } }];
     const read = captureStdout();
 
     await inboxShowCommand();
 
-    expect(read()).toContain('受信箱の内訳を読めませんでした（500）');
+    const text = read();
+    expect(text).toContain('受信箱の内訳を読めませんでした（500）');
+    expect(text).toContain('受信箱の集計が失敗した（テスト用）');
   });
 
   it('繋がらない（fetch そのものが失敗する）も投げる', async () => {

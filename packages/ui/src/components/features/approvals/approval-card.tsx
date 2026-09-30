@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 
 import { Badge, Button, Card, Textarea } from '../../common';
 import { Markdown } from '../../markdown';
@@ -25,11 +25,16 @@ export const APPROVAL_QUICK_ANSWERS = {
  *   送らない（`chat/ime.ts`）
  * - `jobLink` はどのマネージャーの件かへのリンク（画面が `<Link>` で渡す）
  * - `footer` は回答済みのときの経緯（画面の `TracePanel`）などを置く口
+ * - **省略可能な口（既定の振る舞いは変えない）。** 画面が今の表示をそのまま出せるように
+ *   足した: `time`（時刻の位置に差し込む。渡すと `Timestamp` は出ない）・`isSubmitKey`
+ *   （送るキーの判定。既定は `isSubmitShortcut`）・`trailing`（`error` の後ろ。カードの
+ *   いちばん下）
  */
 export function ApprovalCard({
   state,
   createdAt,
   createdLabel,
+  time,
   jobLink,
   question,
   context,
@@ -42,11 +47,16 @@ export function ApprovalCard({
   busy = false,
   error,
   footer,
+  trailing,
+  isSubmitKey = isSubmitShortcut,
 }: {
   state: ApprovalState;
-  createdAt: string;
+  /** `time` を渡すときは要らない（渡しても使わない）。 */
+  createdAt?: string;
   /** 「3 分前」（整形は呼ぶ側）。 */
-  createdLabel: string;
+  createdLabel?: string;
+  /** 時刻の位置に差し込むもの。渡すと `Timestamp`（相対の表示と JST/UTC の tooltip）の代わりに出る。 */
+  time?: ReactNode;
   jobLink?: ReactNode;
   question: string;
   context?: string;
@@ -60,31 +70,102 @@ export function ApprovalCard({
   busy?: boolean;
   error?: ReactNode;
   footer?: ReactNode;
+  /** `error` の後ろ（カードのいちばん下）に置くもの。 */
+  trailing?: ReactNode;
+  /** 回答欄で「送る」キーかの判定。既定は `isSubmitShortcut`（IME の確定の Enter を除く）。 */
+  isSubmitKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
 }) {
   return (
     <Card className="p-4">
+      {/*
+        **本3 で `Badge` に `shrink-0` が入り、縮まなくなった。** メタ行の
+        バッジ（未回答/回答済/取り下げ済）は文字数を持たないので普段は
+        問題ないが、`job {jobId}` は `z.string()` に長さの上限が無く、他の
+        バッジ・時刻表示と合わせて `flex-wrap` が無いと押し出す側へ振れる。
+        承認待ちの画面の「まとめて送る」の帯
+        （`grep -Fn -- 'mb-4 flex flex-wrap items-center gap-3' apps/web/app/routes/approvals.tsx`）に
+        既に在る流儀へ揃える。
+
+        **取り下げ済み（`accent`）を回答済み（`neutral`）と別のトーンにする
+        （#963）。** 両方とも「もう待っていない」点は同じだが、次の一手が
+        違う——回答済みは人間が既に応えた終端、取り下げ済みはクローンが
+        自分で不要と判断した終端で、混同すると「答えたのに何も起きて
+        いない」ように見える。
+      */}
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         <Badge tone={state === 'withdrawn' ? 'accent' : state === 'answered' ? 'neutral' : 'warn'}>
           {state === 'withdrawn' ? '取り下げ済' : state === 'answered' ? '回答済' : '未回答'}
         </Badge>
-        <Timestamp at={createdAt} label={createdLabel} />
+        {time !== undefined ? (
+          time
+        ) : createdAt !== undefined ? (
+          <Timestamp at={createdAt} label={createdLabel} />
+        ) : null}
         {jobLink !== undefined && <span className="font-mono">{jobLink}</span>}
       </div>
 
+      {/*
+        **クローン（AI）が書いた文字列だけを Markdown で描く。** `question` は
+        クローンが書いた設問なのでこの線の内側である（線そのものの根拠は下の
+        `answer` の側のコメントに在る）。
+
+        **`whitespace-pre-wrap` は外してよい。** `Markdown` は `remark-breaks` を
+        積んでいて単独の改行を `<br>` にするので、行区切りはこれまでどおり保たれる
+        （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
+      */}
       <Markdown>{question}</Markdown>
 
       {context !== undefined && context !== '' && (
+        /*
+          `context` もクローンが書いた文字列なので Markdown で描く。
+
+          **スクロールの箱（`max-h-48 overflow-y-auto`）は残す。** 外すと長い背景が
+          回答欄を画面外へ押し出す。`packages/ui/src/components/page.tsx`
+          （`grep -Fn -- 'スクロールへ閉じ込める' packages/ui/src/components/page.tsx`）と
+          `apps/web/app/routes/manager-detail.tsx` の `RequestCard` が同じ流儀 —
+          **文字は1つも捨てず、スクロールへ閉じ込める。**
+
+          `min-w-0` は中の表・コードブロックが `overflow-x-auto` で収まるため
+          （`markdown.tsx` の `table` / `pre` が横スクロールを持つ）。`text-xs` は
+          落とす — `Markdown` のルートが `text-sm` を持つので、外から掛けても効かない。
+        */
         <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded-md border border-border bg-background p-2 text-muted-foreground">
           <Markdown>{context}</Markdown>
         </div>
       )}
 
       {state === 'withdrawn' ? (
+        /*
+          **クローンが取り下げた件（#963）。** 回答欄は出さない——回答済みの
+          分岐と同じ理由で、取り下げも「もう入力を受け付ける状態ではない」
+          終端である。`withdrawnReason` はクローンが書いた自由文だが、
+          `answer`（人間の発言）と同じ枠に置くので素のテキストのままにする
+          （Markdown にするかどうかで枠の意味を変えない）。
+        */
         <p className="mt-3 rounded-md border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
           <span className="mr-2 text-[11px] text-muted-foreground">取り下げた理由</span>
           {withdrawnReason ?? '（理由の記録なし）'}
         </p>
       ) : state === 'answered' ? (
+        /*
+          **`answer` は Markdown にしない。** これは人間が打った文だからである。
+          repo の既存方針が `apps/web/app/routes/chat.tsx`
+          （`grep -Fn -- 'クローンの行だけを Markdown にする' apps/web/app/routes/chat.tsx`）
+          に逐語で在る —
+          「**クローンの行だけを Markdown にする。** 人間が打った本文
+          （`role === 'human'`）は素のテキストのままにする — 自分が書いた文字が
+          勝手に化けないため」。`question` / `context` はクローンが書いた文字列
+          なので線の内側だが、`answer` は外側である。**「承認待ちも全部 Markdown に
+          しよう」と思ったら、まずその行を読むこと**
+          （`grep -Fn -- '回答（answer）は Markdown の描画経路を通らない' apps/web/app/routes/approvals.test.tsx`
+          がこの判断を押さえている）。
+
+          **`whitespace-pre-wrap` は Markdown 化とは別の、不具合の修正である。**
+          `packages/ui/src/styles.css` の `white-space` 指定は `pre` に対する1件だけで
+          `p` を狙う規則が無いため、ここは CSS 既定の `white-space: normal` で
+          描かれていた — 人間が改行を入れて答えても1行に潰れていた（`question` /
+          `context` には効いていたのに `answer` だけ無いという見落としである）。
+        */
         <>
           <p className="mt-3 rounded-md border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
             <span className="mr-2 text-[11px] text-muted-foreground">回答</span>
@@ -102,12 +183,18 @@ export function ApprovalCard({
             placeholder="答える（書いておくと「まとめて送る」の対象になる。この場ですぐ送ってもよい）"
             onChange={(event) => onDraftChange?.(event.target.value)}
             onKeyDown={(event) => {
-              if (isSubmitShortcut(event)) {
+              // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter。
+              if (isSubmitKey(event)) {
                 event.preventDefault();
                 if (draft.trim() !== '') onSubmit?.(draft);
               }
             }}
           />
+          {/*
+            **本3 で `Button` が狭い画面で `h-11`（44px）になり、以前より
+            横幅を食う。** ボタン3つ＋ショートカット表示が横一列に並ぶこの行は
+            折り返さないと画面外へ出る側へ振れるので `flex-wrap` を足す。
+          */}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button
               variant="primary"
@@ -139,6 +226,7 @@ export function ApprovalCard({
 
       {footer}
       {error !== undefined && <div className="mt-2">{error}</div>}
+      {trailing}
     </Card>
   );
 }

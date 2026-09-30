@@ -5,7 +5,7 @@ import { Virtualizer, type VirtualizerHandle } from 'virtua';
 
 import {
   Page,
-  Badge,
+  JournalEntryRow,
   Card,
   Empty,
   ErrorNote,
@@ -17,7 +17,7 @@ import {
 import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
 import { formatDateTime, formatRelative, shiftForPrepend } from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
-import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
+import type { JournalEntryType } from '@alteroid/logic';
 
 /**
  * 種別ごとの見た目の強さ。**`Record<JournalEntryType, ...>` で縛ってあるので、
@@ -455,7 +455,24 @@ function JournalBody({
             onScroll={handleScroll}
           >
             {entries.map((entry) => (
-              <JournalRow key={entry.id} entry={entry} isLast={entry.id === lastId} />
+              <JournalEntryRow
+                key={entry.id}
+                atLabel={formatDateTime(entry.at)}
+                // **`time` で渡す（`at` / `relativeLabel` にしない）。** 部品の既定の
+                // `Timestamp` は JST 固定の tooltip と焦点を受ける `<time>` を持つ。この画面の
+                // 時刻は `@alteroid/logic` の整形で閲覧者の端末の時間帯のまま出しており、
+                // 開閉の `<button>` の中に Tab の停止点も増やさない。
+                time={formatRelative(entry.at)}
+                type={entry.type}
+                tone={TONE[entry.type]}
+                summary={summarizeJournalEntry(entry)}
+                links={<JournalEntryLinks entry={entry} />}
+                raw={entry}
+                isLast={entry.id === lastId}
+                // 種別は行の頭の札に出ている。帯（種別の名前と「写す」ボタン）を出すと、
+                // 開いた行で種別の文字が2箇所に出て、この画面に無かった操作も増える。
+                rawBar={false}
+              />
             ))}
           </Virtualizer>
         )}
@@ -519,47 +536,6 @@ function BlockedNote({ children, className }: { children: React.ReactNode; class
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <span className="min-w-0 break-words">{children}</span>
-    </div>
-  );
-}
-
-function JournalRow({ entry, isLast }: { entry: JournalEntry; isLast: boolean }) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <div className={cn('px-4 py-2', !isLast && 'border-b border-border')}>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-start gap-3 text-left"
-      >
-        <span className="w-24 shrink-0 font-mono text-[11px] text-muted-foreground">
-          {formatDateTime(entry.at)}
-        </span>
-        <Badge tone={TONE[entry.type]}>{entry.type}</Badge>
-        {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-          {summarizeJournalEntry(entry)}
-        </span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          {formatRelative(entry.at)}
-        </span>
-      </button>
-
-      {open && (
-        <>
-          {/*
-            **行が指している実体の詳細へつなぐ（issue #2064）。** 行全体が開閉の
-            `<button>` なので、リンクは要旨の中ではなく開いた後の領域に置く
-            （どれをつなぐかは `journalEntryLinks` の doc）。
-          */}
-          <JournalEntryLinks entry={entry} />
-          {/* 掘れば生の中身まで降りられること（PRD 可観測性）。要約で止めない。 */}
-          <pre className="mt-2 max-h-96 overflow-y-auto rounded border border-border bg-background p-2 text-xs text-muted-foreground">
-            {JSON.stringify(entry, null, 2)}
-          </pre>
-        </>
-      )}
     </div>
   );
 }

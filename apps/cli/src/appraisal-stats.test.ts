@@ -164,7 +164,10 @@ describe('appraisalStatsCommand', () => {
     const read = captureStdout();
 
     await expect(appraisalStatsCommand()).resolves.toBeUndefined();
-    expect(read()).toContain('評定の内訳を読めませんでした（HTTP 500）');
+    const text = read();
+    expect(text).toContain('評定の内訳を読めませんでした（HTTP 500）');
+    // デーモンが返した理由も添える（状態コードだけを見せない）。
+    expect(text).toContain('内部エラー');
   });
 
   it('401 は describeAuthFailure の文言を書いて正常終了する（permissionListCommand と同じ形）', async () => {

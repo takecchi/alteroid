@@ -4,6 +4,7 @@ import {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
   pendingApprovalSchema,
+  UnreadableJobError,
 } from '@alteroid/core';
 import type { Job, JobStore, PendingApproval } from '@alteroid/core';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -312,8 +313,10 @@ export class PgJobStore implements JobStore {
    * doc）ので、次の `listJobs()` の段1がこの行を「版が変わった」と検出して
    * 自然に引き直す——手で消さなくても覚えは腐らない。
    *
-   * **読めない行（`jobSchema` に合わない。版ずれ・手編集）は「無い」と同じ
-   * `null` を返す。`mutate` は呼ばない。行にも触れない**（issue #2051）。
+   * **読めない行（`jobSchema` に合わない。版ずれ・手編集）は `null`（無い）とは
+   * 分けて `UnreadableJobError` を投げる。`mutate` は呼ばない。行にも触れない**
+   * （issue #2051 で `ZodError` を `null` に倒し、この直しで「無い」と「読めない」
+   * を分けた。`null` だと呼び出し元が「台帳に居ない」と言い切る）。
    * 以前は `jobSchema.parse` を使っていたため、この形の行に対して `mutate` を
    * 1回も呼ばずに `ZodError` を投げていた——同じ `PgJobStore` の `listJobs()`
    * （`jobSchema.safeParse` で飛ばす）とも、fs 実装の `FsJobStore.updateJob`
@@ -337,10 +340,10 @@ export class PgJobStore implements JobStore {
 
       const parsed = jobSchema.safeParse(row.job);
       if (!parsed.success) {
-        process.stderr.write(
-          `${describeUnreadableJobRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
-        );
-        return null;
+        const reason = summarizeInvalidFields(parsed.error.issues);
+        process.stderr.write(`${describeUnreadableJobRow({ id, reason })}\n`);
+        // 投げてもトランザクションは何も書かずに巻き戻る（行は変わらない）。
+        throw new UnreadableJobError({ id, reason });
       }
       const current = parsed.data;
       // 依頼文や報告に NUL が混ざりうる（`putJob` と同じ理由）。

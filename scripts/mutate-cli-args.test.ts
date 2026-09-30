@@ -158,7 +158,16 @@ describe('mutate.mjs の CLI は、--help と知らない引数では何も走�
 
   it('run --plan <p> --help も同じく何も走らせない', () => {
     const root = makeFakeRoot();
-    const result = runCli(['run', '--plan', path.join(root, 'no-such-plan.json'), '--help']);
+    // `--root` を渡さないと、偽の root を作っても `run` は本物の repo root を向き、下の
+    // 「RAN が無い」は回帰しても常に真になる（何も測らない）。
+    const result = runCli([
+      'run',
+      '--plan',
+      path.join(root, 'no-such-plan.json'),
+      '--help',
+      '--root',
+      root,
+    ]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('使い方: node mutate.mjs');
     expect(fs.existsSync(path.join(root, 'RAN'))).toBe(false);

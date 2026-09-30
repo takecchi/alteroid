@@ -1,6 +1,7 @@
 import { stdout } from 'node:process';
 
 import { createClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -46,7 +47,12 @@ export async function interruptCommand(): Promise<void> {
   if (!response.ok) {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`クローンのターンを止められませんでした（HTTP ${String(response.status)}）`);
+    throw new Error(
+      await withErrorReason(
+        `クローンのターンを止められませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
   }
   stdout.write(`${describeInterruptOutcome((await response.json()).outcome)}\n`);
 }

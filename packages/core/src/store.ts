@@ -471,6 +471,29 @@ export interface JournalStore {
   clear(): Promise<number>;
 }
 
+/**
+ * `JobStore.updateJob()` が、id の行は**在るが読めない**（`jobSchema` に合わない。
+ * 版ずれ・手編集）ときに投げる専用のエラー型。`UnreadableScheduleError` /
+ * `UnreadablePracticeError` と同じ線——「無い」（`null`）と「在ったが読めない」
+ * （throw）を区別する。`instanceof` で見分けること（メッセージの文字列で
+ * 判定しない）。
+ *
+ * **id 以外の値は持たない。** job の欄には人間の依頼文・マネージャーの報告が
+ * そのまま入りうるので、メッセージにも載せない（stderr の跡と同じ理由、#52）。
+ */
+export class UnreadableJobError extends Error {
+  readonly id: string;
+
+  constructor(params: { id: string; reason?: string }) {
+    super(
+      `job ${JSON.stringify(params.id)} は読めない形で入っている（消されたのではない）` +
+        (params.reason === undefined ? '' : `: ${params.reason}`),
+    );
+    this.name = 'UnreadableJobError';
+    this.id = params.id;
+  }
+}
+
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
 export interface JobStore {
   listJobs(): Promise<Job[]>;
@@ -497,10 +520,14 @@ export interface JobStore {
    * **無ければ何もせず `null`。`mutate` は呼ばれない**——存在しない行に対して
    * 書き換えの結果を作らせても、書く先が無い。
    *
-   * **読めない行（版ずれ・手編集でスキーマに合わなくなった行）も、無いのと
-   * 同じく `null` を返す。`mutate` は呼ばれず、行にも触れない**（issue #2051）。
-   * 版ずれの行を古い版が誤って上書きしないためでもある——`current` を作れない
-   * 以上、`mutate` に渡す値そのものが無い。
+   * **読めない行（版ずれ・手編集でスキーマに合わなくなった行）は `null` では
+   * なく `UnreadableJobError`（本ファイル）を投げる。`mutate` は呼ばれず、行にも
+   * 触れない**（issue #2051 で「投げる」→「`null`」に倒し、この直しで「無い」と
+   * 「読めない」を分けた）。`null` に畳むと、呼び出し元が「台帳に居ない」と
+   * 言い切ってしまう（`ManagerPool.appraise` がそうだった）。版ずれの行を古い版が
+   * 誤って上書きしないためでもある——`current` を作れない以上、`mutate` に渡す
+   * 値そのものが無い。**メモリ実装（`testing.ts`）は投げない**——`putJob` が
+   * `jobSchema.parse` を通すので、壊れた行を持てない。
    *
    * 返すのは書き込んだ後の値。
    */

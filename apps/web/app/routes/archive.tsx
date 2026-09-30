@@ -174,13 +174,21 @@ function EntryRow({ entry }: { entry: ArchiveEntry }) {
         {entry.continuity !== undefined && <Badge tone="neutral">{entry.continuity}</Badge>}
       </div>
       <div className="mt-1 text-muted-foreground">
-        session {entry.sessionId} ・ {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
+        session {entry.sessionId} ・ 使用量 {entry.storedBytes}バイト ・ {formatDateTime(entry.at)}
       </div>
 
       {removed ? (
         <div className="mt-1 text-muted-foreground">
           削除: {entry.removedAt === undefined ? '' : formatDateTime(entry.removedAt)}
-          {entry.removedBytes !== undefined && `（${entry.removedBytes}バイト）`}
+          {
+            // **保存量（`storedBytes`）と同じ「バイト」で並べない**（issue #2270）。
+            // `removedBytes` は消した本文の素の UTF-8 バイト数で、置き場が使って
+            // いた量（pg では圧縮後）とは単位が違う。core の doc
+            // （`ArchiveEntry` / `ArchiveRemoval`、PR #2076）と、`archive_remove_many`
+            // の結果の文言に合わせた言い回しにする。
+            entry.removedBytes !== undefined &&
+              `（消した本文の素の UTF-8 バイト数 ${entry.removedBytes}。使用量とは単位が違い、置き場で解放した量ではない）`
+          }
         </div>
       ) : (
         <>

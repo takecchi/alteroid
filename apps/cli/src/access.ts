@@ -1,6 +1,6 @@
 import { stdout } from 'node:process';
 
-import { formatElapsedAgo } from './format.js';
+import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -230,7 +230,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
         typeof body.error === 'string' ? body.error : '既に別のアカウントが許可されています',
       );
     }
-    throw new Error(`${path} が失敗しました (${response.status})`);
+    throw new Error(await withErrorReason(`${path} が失敗しました (${response.status})`, response));
   }
   return response.json();
 }

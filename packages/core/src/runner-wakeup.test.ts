@@ -683,4 +683,32 @@ describe('worker_wait は作業者（local_agent）のタスクだけで開く�
     expect(event.tasks).toBe(1); // agent-task-2 の1件だけ
     expect(event.settled).toBe(true);
   });
+
+  /**
+   * **#2113 と同じ穴が `task_notification` 側にも在った**（作業者ではない
+   * タスクの通知を `worker_wait.notifications` に数えていた）。
+   * `task_notification` に `task_type` は無いので、`task_started` で作業者では
+   * ないと見た `taskId` を控えて弾く。対応する `task_started` が無い通知は
+   * 従来どおり数える（上の「対応する task_started が無い…」の歯）。
+   */
+  it('task_started で作業者ではないと見た local_bash の task_notification は notifications に数えない', async () => {
+    const s = setup();
+    const session = await startPrimed(s.host, s.sessions);
+
+    await session.taskStarted('agent-task-3', { task_type: 'local_agent' });
+    await session.taskStarted('bash-task-3', { task_type: 'local_bash' });
+    await session.taskNotification('bash-task-3');
+    await session.taskNotification('agent-task-3');
+    await session.finish('通知2件を契機に回った回');
+
+    const [event] = await vi.waitFor(() => {
+      const found = workerWaitEvents(s.events);
+      if (found.length === 0) throw new Error('worker_wait がまだ上がっていない');
+      return found;
+    });
+    expect(event).toBeDefined();
+    if (event === undefined) return;
+    expect(event.tasks).toBe(1);
+    expect(event.notifications).toBe(1); // 作業者(agent-task-3)の1件だけ
+  });
 });

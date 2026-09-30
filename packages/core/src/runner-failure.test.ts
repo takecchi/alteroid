@@ -810,6 +810,58 @@ describe('openedWorkers は作業者（local_agent）のタスクだけを数え
 
     await s.pool.stop();
   });
+
+  /**
+   * **#2113 と同じ穴が `task_notification` 側にも在った。** `task_notification` に
+   * `task_type` は無いので、`task_started` で作業者ではないと見た `taskId` を
+   * 控えて、その通知を作業者の failed 通知として数えない。
+   */
+  it('作業者を開いた区間で local_bash が failed で終わっても、作業者の failed 通知にも枠の件数にも数えない', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('agent-task-1', { task_type: 'local_agent' });
+    await session.taskStarted('bash-task-1', { task_type: 'local_bash' });
+    await session.taskNotification('bash-task-1', {
+      status: 'failed',
+      summary: `Agent terminated early due to an API error: ${ORG_SPEND_LIMIT} (error type rate_limit, HTTP 429)`,
+    });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    // 作業者は1体開いていて、失敗した作業者は0体（Bash の失敗は数えない）。
+    expect(texts[0]).toBe(
+      `${BASELINE_FAILURE_TEXT}\n（このターンでは作業者が 1 体開いていた。どちらが当たったかは SDK からは分からない）`,
+    );
+
+    await s.pool.stop();
+  });
+
+  it('陽性対照: local_agent と task_type を名乗らない task の failed 通知は従来どおり数える', async () => {
+    const s = setup();
+    await s.pool.start({ request: '調べて' });
+    const session = await vi.waitFor(() => {
+      const found = s.sessions[0];
+      if (!found) throw new Error('セッションがまだ開いていない');
+      return found;
+    });
+
+    await session.taskStarted('agent-task-1', { task_type: 'local_agent' });
+    await session.taskStarted('untyped-task-1');
+    await session.taskNotification('agent-task-1', { status: 'failed', summary: '失敗' });
+    await session.taskNotification('untyped-task-1', { status: 'failed', summary: '失敗' });
+    await session.finish('', { isError: true });
+
+    const texts = await reportTexts(s.inbox, 1);
+    expect(texts[0]).toContain('作業者 2 体が失敗で終わった');
+
+    await s.pool.stop();
+  });
 });
 
 /**

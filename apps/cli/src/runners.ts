@@ -11,7 +11,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { formatElapsedAgo } from './format.js';
+import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -84,7 +84,10 @@ export async function runnersVacateCommand(runnerId: string): Promise<void> {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     throw new Error(
-      `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）`,
+      await withErrorReason(
+        `runner ${runnerId} を空けると立てられませんでした（HTTP ${String(response.status)}）`,
+        response,
+      ),
     );
   }
   stdout.write(

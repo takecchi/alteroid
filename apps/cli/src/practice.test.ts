@@ -310,7 +310,7 @@ describe('#1641 の再現（Issue 本文）', () => {
 
     await expect(
       practiceSetCommand('some-slug', { file: fileWith('本文\n'), kind: 'x', title: 'y' }),
-    ).rejects.toThrow();
+    ).rejects.toThrow('内部エラー'); // デーモンが返した理由も添える（状態コードだけを見せない）
   });
 
   it('practice remove: DELETE が 500 なら投げる（「そんなやり方はありません」に化けない）', async () => {
@@ -320,6 +320,7 @@ describe('#1641 の再現（Issue 本文）', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain('そんなやり方はありません');
+    expect(String(error)).toContain('内部エラー');
   });
 });
 

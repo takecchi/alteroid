@@ -266,6 +266,17 @@ describe('alteroid permission list', () => {
     expect(read()).toContain('規則が不正');
   });
 
+  it('500 は状態コードに加えてデーモンの理由を stdout へ書く', async () => {
+    replies.push({ status: 500, body: { error: '許可の台帳が読めない（テスト用）' } });
+    const read = captureStdout();
+
+    await permissionListCommand();
+
+    const text = read();
+    expect(text).toContain('許可の一覧を読めませんでした（500）');
+    expect(text).toContain('許可の台帳が読めない（テスト用）');
+  });
+
   it('403 は stdout へ書いて正常終了する（読み取り専用の作法）', async () => {
     replies.push({
       status: 403,
@@ -296,6 +307,14 @@ describe('alteroid permission revoke', () => {
     replies.push({ status: 404, body: { error: 'not found' } });
 
     await expect(permissionRevokeCommand('missing')).rejects.toThrow(/該当する許可がありません/);
+  });
+
+  it('500 は状態コードに加えてデーモンの理由を載せて投げる', async () => {
+    replies.push({ status: 500, body: { error: '許可の取り消しが書けない（テスト用）' } });
+
+    await expect(permissionRevokeCommand('grant-1')).rejects.toThrow(
+      /許可を取り消せませんでした（500）: 許可の取り消しが書けない（テスト用）/,
+    );
   });
 
   it('403 は例外を投げる', async () => {

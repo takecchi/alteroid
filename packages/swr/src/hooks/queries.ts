@@ -113,6 +113,8 @@ export const KEY = {
   report: (date: string) => ({ type: 'report', date }) as const,
   journal: (limit: number, types: string) => ({ type: 'journal', limit, types }) as const,
   schedule: { type: 'schedule' } as const,
+  /** `windowHours` を含める。窓ごとに別の集計なので、キーが同じだと切り替えても古い窓の値が出る。 */
+  progress: (windowHours: number | undefined) => ({ type: 'progress', windowHours }) as const,
   usage: (query: UsageQuery) => ({ type: 'usage', ...query }) as const,
   memory: { type: 'memory' } as const,
   memoryDoc: (slug: string) => ({ type: 'memoryDoc', slug }) as const,
@@ -349,6 +351,24 @@ export function useSchedule() {
   return useSWR(KEY.schedule, () => api.api.GET('/schedule').then(unwrap), {
     refreshInterval: 30_000,
   });
+}
+
+/**
+ * 作業の進捗（`GET /progress`）。`windowHours` は速度と見込みを数える窓の長さで、省略すると
+ * デーモンの既定（168 時間）。30 秒ごとに取り直す（`useSchedule` と同じ間隔）。
+ */
+export function useProgress(windowHours?: number) {
+  const api = useApi();
+  return useSWR(
+    KEY.progress(windowHours),
+    ({ windowHours }) =>
+      api.api
+        .GET('/progress', {
+          params: { query: windowHours === undefined ? {} : { windowHours: String(windowHours) } },
+        })
+        .then(unwrap),
+    { refreshInterval: 30_000 },
+  );
 }
 
 /**

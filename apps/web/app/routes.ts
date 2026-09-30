@@ -45,6 +45,8 @@ export default [
     route('inbox', 'routes/inbox.tsx'),
     route('schedule', 'routes/schedule.tsx'),
     route('settings', 'routes/settings.tsx'),
+    // 作業の進捗（Issue #2241 の 4）。`GET /progress` を読むだけの頁。
+    route('progress', 'routes/progress.tsx'),
     route('*', 'routes/not-found.tsx'),
   ]),
 ] satisfies RouteConfig;

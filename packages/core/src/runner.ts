@@ -1314,9 +1314,19 @@ function isOwnerRecordableTaskType(type: unknown): boolean {
  * **`taskType` が無ければ作業者として数える。** 旧い SDK・`task_type` を
  * 名乗らない provider から来た場合がこれに当たる——取りこぼすより多く数える、
  * という `#onTaskStarted` の `taskId` 代用（`randomUUID()`）と同じ向きを保つ。
- * **既知の非作業者の値（`local_bash` 等）だけを除く**——SDK がこの先で
- * 新しい値を増やしても、知らない値は「作業者ではない」側ではなく安全側
- * （＝取りこぼさない側）の「作業者として数える」へ倒れる。
+ * **名乗った値は `local_agent` だけを数える。`local_bash` 等の既知の値も、
+ * SDK がこの先で増やす知らない値も、数えない側へ倒れる。** `agent-events.ts` の
+ * `taskType` の doc（「知らない値は自然に『作業者ではない』側へ倒れる」）と
+ * 同じ向きである。
+ *
+ * **なぜ「知らない値は数えない」側に倒したか。** 作業者でないタスクまで
+ * 数えた過大計上が #2113 の症状そのものだった（枠の失敗で「作業者が35体
+ * 開いていた」と報告した回に、実際に開いた作業者は1体）。知らない値を数える
+ * 側に倒すと、SDK が新しい種類（`local_workflow` 等）を増やすたびに同じ
+ * 過大計上が黙って再発する。`undefined` だけを数えるのは、名乗らない相手に
+ * は数えない根拠が無いからである（取りこぼしの側の誤りを避ける）。
+ * この線引きは PR #2118 の実装で、以前この doc は「知らない値は数える」と
+ * 逆を書いていた（実装と食い違っていた）。
  */
 function isWorkerTaskType(taskType: string | undefined): boolean {
   return taskType === undefined || taskType === 'local_agent';
@@ -1757,6 +1767,15 @@ class RunnerSession {
    * 切り出しの理由と限界は `RunnerWorkerWaitWindow` 自身の doc を見よ。
    */
   readonly #workerWaitWindow = new RunnerWorkerWaitWindow();
+  /**
+   * `task_started` で「作業者ではない」と見たタスク（`local_bash` 等）の
+   * `taskId`（Issue #2113 の続き）。`task_notification` に `task_type` は無い
+   * ので、通知を作業者の分として数えないための控えである
+   * （`#onTaskNotification`）。**通知が来たら消す**。器が開き直されるとき・
+   * 前のセッションの作業を捨てるとき（`discardCarriedOverWork`）にも空にする
+   * ——前の器のタスクの通知はもう来ないので、残すと溜まるだけである。
+   */
+  readonly #nonWorkerTaskIds = new Set<string>();
 
   /**
    * **起こし直しの上限で打ち切った作業者を追う2フィールドの器**（Issue #1190
@@ -2306,6 +2325,7 @@ class RunnerSession {
     // が `#workerWaitWindow.clear()` を「前のセッションの task_id を持ち越さない」
     // ために置いているのと同じ理由で、ここでも前の器の在り高を持ち越さない。
     this.#sdkSession.resetLiveBackgroundTasks();
+    this.#nonWorkerTaskIds.clear();
     const generation = this.#sdkSession.generation;
     const q = this.#queryFn({ prompt: this.#inputStream(), options: this.#buildOptions(resume) });
     // **`#query` を先に、`#reader` を後に代入していた元の2行を、
@@ -2846,6 +2866,7 @@ class RunnerSession {
       // **必ず `closeWorkerWaitWindow`（直上）の後に呼ぶこと**（`close()` を
       // 先に、`clear()` を後に——`RunnerWorkerWaitWindow` の doc「順序の約束」）。
       this.#workerWaitWindow.clear();
+      this.#nonWorkerTaskIds.clear();
       // **このターンで開いた作業者の数（#1373）も、同じ理由で持ち越さない。**
       // この経路は `turn_ended` を通らないので、あちらの読み出しと空への
       // 戻しが走らない。ここで捨てないと、前のセッションで開いた作業者が
@@ -3412,7 +3433,12 @@ class RunnerSession {
     // （委譲を待つ区間）にも足さない。対応する `task_notification` が後で
     // 来ても、`#openTasks` に入っていないので `RunnerWorkerWaitWindow.notified`
     // は「対応の無い通知」として無害に無視する（あちらの doc を見よ）。
-    if (!isWorkerTaskType(event.taskType)) return;
+    if (!isWorkerTaskType(event.taskType)) {
+      // 通知側で弾くために控える（`task_notification` は `task_type` を運ばない）。
+      // 代用の id（`randomUUID()`）は通知と突き合わないので控えない。
+      if (event.taskId !== undefined) this.#nonWorkerTaskIds.add(event.taskId);
+      return;
+    }
     // **#1373: `RunnerWorkerWaitWindow` の `#openTasks` の開閉とは無関係に、
     // このターンで開いた作業者を別勘定で数える。** `RunnerTurnTally` の
     // `#openedWorkersThisTurn` の doc を参照。
@@ -3460,11 +3486,19 @@ class RunnerSession {
     // 切り出した**（Issue #1190 案X）。対応の無い通知（本来起きない想定だが
     // 防御的に見る）で誤って閉じ待ちを立てないのは、あちら側の doc を見よ。
     this.#workerWaitWindow.notified(taskId);
+    // **作業者ではないタスク（`local_bash` 等）の通知は、下の2つの数え上げ
+    // （`notifications`・failed 通知）に入れない**（Issue #2113 の続き。
+    // `task_started` 側だけを直すと、Bash の失敗が「作業者の failed 通知」に
+    // 積まれ、要旨が枠を名乗れば枠の件数まで立つ）。**#901 / #1554 の付け替えは
+    // 下でこれまでどおり通す**——背景の Bash 処理の完了は #1554 の材料そのもの
+    // である。対応する `task_started` を見ていない通知は、この控えに無いので
+    // 従来どおり数える。
+    const nonWorker = taskId !== undefined && this.#nonWorkerTaskIds.delete(taskId);
     // **`worker_wait.notifications` の材料。** 対応する `task_started` を見て
     // いなくても数える — 通知そのものは事実である。
-    this.#turnTally.incrementNotificationsSinceResult();
+    if (!nonWorker) this.#turnTally.incrementNotificationsSinceResult();
 
-    if (event.status === 'failed') {
+    if (!nonWorker && event.status === 'failed') {
       const limitNamed =
         event.summary !== undefined && classifyUsageNotice(event.summary) !== undefined;
       this.#turnTally.recordFailedWorkerNotification(taskId, limitNamed);

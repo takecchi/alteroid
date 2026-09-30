@@ -7,6 +7,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
@@ -150,7 +151,9 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`受信箱を畳めませんでした（${response.status}）`);
+    throw new Error(
+      await withErrorReason(`受信箱を畳めませんでした（${response.status}）`, response),
+    );
   }
 
   return (await response.json()) as InboxRemoveManyResult;
@@ -226,7 +229,9 @@ export async function inboxShowCommand(): Promise<void> {
   const client = createClient(target.baseUrl, target.headers);
   const response = await client.inbox.$get();
   if (!response.ok) {
-    stdout.write(`受信箱の内訳を読めませんでした（${response.status}）\n`);
+    stdout.write(
+      `${await withErrorReason(`受信箱の内訳を読めませんでした（${response.status}）`, response)}\n`,
+    );
     return;
   }
   const breakdown = (await response.json()) as InboxBacklogBreakdown;

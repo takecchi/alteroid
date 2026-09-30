@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { createClient, type DaemonClient } from './client.js';
+import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 
 /**
@@ -259,7 +260,12 @@ export async function practiceRemoveCommand(slug: string): Promise<void> {
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`やり方を消せませんでした: ${slug}（HTTP ${String(response.status)}）`);
+    throw new Error(
+      await withErrorReason(
+        `やり方を消せませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
   }
   stdout.write(`消しました: ${slug}\n`);
 }
@@ -320,7 +326,12 @@ async function write(
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    throw new Error(`書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`);
+    throw new Error(
+      await withErrorReason(
+        `書き換えられませんでした: ${slug}（HTTP ${String(response.status)}）`,
+        response,
+      ),
+    );
   }
   stdout.write(`書き換えました: ${slug}\n`);
 }

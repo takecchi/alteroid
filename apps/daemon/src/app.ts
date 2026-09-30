@@ -4861,6 +4861,12 @@ export function createApp(deps: AppDeps) {
             description: 'そのマネージャーは台帳に居ない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              'そのマネージャーは台帳に在るが読めない形で入っている（版ずれ・手編集）。' +
+              '消されたのではない。評定は付けておらず、行も書き換えていない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
         },
       }),
       jsonBody(managerAppraiseBody, (where) => ({
@@ -4871,6 +4877,9 @@ export function createApp(deps: AppDeps) {
         const { appraisal, reason, workKind } = c.req.valid('json');
         const result = await clone.managers.appraise(id, appraisal, 'human', reason, workKind);
         if (result.outcome === 'absent') return c.json({ error: 'not found' as const }, 404);
+        // **`'unreadable'` を成功に落とさない**（落とすと評定が付いていないのに
+        // `{ ok: true }` を返す）。
+        if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
         return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
