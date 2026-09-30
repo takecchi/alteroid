@@ -57,6 +57,7 @@ GATE_NAMES=(
   web-bundle-node-traces
   web-bundle-size
   web-css-comment-classnames
+  web-css-no-inline-fonts
   openapi
   sdk-quotes
   stale-token-restart-advice
@@ -72,6 +73,7 @@ GATE_COMMANDS=(
   'pnpm check:web-bundle-node-traces'
   'pnpm check:web-bundle-size'
   'pnpm check:web-css-comment-classnames'
+  'pnpm check:web-css-no-inline-fonts'
   'git diff --exit-code HEAD -- apps/daemon/openapi.json'
   'pnpm check:sdk-quotes'
   'pnpm check:stale-token-restart-advice'

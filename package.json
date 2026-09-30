@@ -23,6 +23,7 @@
     "check:web-bundle-node-traces": "node ./scripts/check-web-bundle-node-traces.mjs",
     "check:web-bundle-size": "node ./scripts/check-web-bundle-size.mjs",
     "check:web-css-comment-classnames": "node ./scripts/check-web-css-comment-classnames.mjs",
+    "check:web-css-no-inline-fonts": "node ./scripts/check-web-css-no-inline-fonts.mjs",
     "issue-done-trailer": "node ./scripts/issue-done-trailer.mjs",
     "main-ci-alarm": "node ./scripts/main-ci-alarm.mjs",
     "storybook": "pnpm --filter @alteroid/ui storybook",

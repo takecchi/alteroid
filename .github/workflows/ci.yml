@@ -203,6 +203,15 @@ jobs:
       # `check:sdk-quotes` と同じ形の穴だった）。**
       - run: pnpm check:web-css-comment-classnames
 
+      # **`apps/web` の生成物の CSS に、フォントの base64 埋め込み（`data:font/`）が
+      # 無いことを見る（原因を直接塞ぐ歯）。**
+      # 埋め込まれた断片は `unicode-range` に関係なく CSS と一緒に最初に落ちてくる
+      # （PR #2357 の前は 46 個・約 200 KB）。CSS 全体のサイズ予算は、無関係な増減で
+      # 誤って落ちるので置かず、原因の `data:font/` だけを見る。落ちたら
+      # `apps/web/vite.config.ts` の `build.assetsInlineLimit` を疑う。
+      # 詳細は `scripts/check-web-css-no-inline-fonts-core.mjs` の doc を見よ。
+      - run: pnpm check:web-css-no-inline-fonts
+
       # **コードと OpenAPI spec がずれたまま気づかない状態を作らない。**
       # spec は経路の zod スキーマから機械生成され、`pnpm build` が毎回書き直す。
       # つまりここに差分が出るのは「コードを変えたのに commit した spec が古い」

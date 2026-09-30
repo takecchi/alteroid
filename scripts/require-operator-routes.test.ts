@@ -52,7 +52,8 @@ import { describe, expect, it } from 'vitest';
  * **なぜ独立 CLI（`*-core.mjs` への切り出し）にしないか。** この repo で3分割
  * している検査は、`package.json` に `check:*` を持ち **CI から vitest とは別に
  * 直接叩かれる**もの（`check:sdk-quotes` / `check:web-bundle-node-traces` /
- * `check:web-bundle-size` / `check:web-css-comment-classnames` の4本）に限られて
+ * `check:web-bundle-size` / `check:web-css-comment-classnames` /
+ * `check:web-css-no-inline-fonts` の5本）に限られて
  * いる。この歯は vitest 専用の突き合わせで、他から叩く理由が無いので
  * `.test.ts` 内に直書きする
  * （`journal-store-with-contract-registry.test.ts` / `conversation-window-single-source.test.ts`

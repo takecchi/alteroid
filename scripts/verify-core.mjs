@@ -522,6 +522,16 @@ export const STEPS = [
       '確認すること（scripts/check-web-css-comment-classnames-core.mjs の doc、#317）',
   },
   {
+    name: 'web-css-no-inline-fonts',
+    cmd: 'pnpm',
+    args: ['check:web-css-no-inline-fonts'],
+    hint:
+      'apps/web の生成物の CSS にフォントの base64 埋め込み（`data:font/`）が入っている。' +
+      'apps/web/vite.config.ts の build.assetsInlineLimit（フォントを埋め込まない関数形）が' +
+      '外れていないか確認すること。埋め込むと unicode-range に関係なく CSS と一緒に最初に' +
+      '落ちてくる（scripts/check-web-css-no-inline-fonts-core.mjs の doc）',
+  },
+  {
     name: 'openapi',
     cmd: 'git',
     args: ['diff', '--exit-code', 'HEAD', '--', 'apps/daemon/openapi.json'],
