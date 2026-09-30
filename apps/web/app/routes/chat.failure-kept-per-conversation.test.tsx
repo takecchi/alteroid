@@ -297,8 +297,12 @@ describe('#2460: 新しい会話（鍵 undefined）の失敗は、別の白紙�
     await typeAndSend('送れない発言');
     expect(await screen.findByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
 
-    // 待っても（再描画が重なっても）消えない。
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // たまっている再描画と効果を流し切っても消えない。実時間は待たない（#2146 の
+    // 見張り。器が混むと実時間の待ちは足りなくなる）——0ms のタスクを2回挟んで、
+    // その間に積まれた描画と効果を一巡させる。
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     expect(screen.getByText(NEW_CONVERSATION_ERROR)).toBeTruthy();
   });
 
