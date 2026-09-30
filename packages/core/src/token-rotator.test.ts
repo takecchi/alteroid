@@ -2050,6 +2050,64 @@ describe('issue #2147: 回転の設定が読めない（UnreadableTokenSettingsE
     expect(entry?.text).not.toContain('free_exhausted');
   });
 
+  describe('#2403: 設定が読めないあいだも、枠の拒否の事実は覚える（#680）', () => {
+    const GUESS = Date.parse(AT) + 5 * 60 * 60_000;
+    const RESETS_AT = Date.parse(AT) + 90 * 60_000;
+    const settingsBack = { rotateOn: 'free_exhausted', cooldownMs: 5 * 60 * 60_000 } as const;
+
+    async function cooldownOf(h: Harness, id: string): Promise<number | undefined> {
+      return (await h.stores.tokens.list()).find((token) => token.id === id)?.cooldownUntil;
+    }
+
+    it('(a) 読めないあいだに届いた期限の事実を、設定が戻った後の文言だけの拒否で使う', async () => {
+      const h = harness();
+      await seedTwo(h);
+      breakTokenSettings(h);
+
+      const first = await h.rotator.observe({
+        facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+        statusNow: 'rejected',
+      });
+      expect(first.kind).toBe('ignored');
+      if (first.kind !== 'ignored') return;
+      expect(first.signal).toBe('settings_unreadable');
+
+      await h.stores.tokens.writeSettings(settingsBack); // 読める状態へ戻す
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+
+      expect(outcome.kind).toBe('rotated');
+      expect(await cooldownOf(h, 'tok-a')).toBe(RESETS_AT);
+      expect(await cooldownOf(h, 'tok-a')).not.toBe(GUESS);
+    });
+
+    it('(b) 覚えた後、読めないあいだに allowed が届けば、古い期限は使わない', async () => {
+      const h = harness();
+      await seedTwo(h);
+      breakTokenSettings(h);
+
+      await h.rotator.observe({
+        facts: { kind: 'five_hour', status: 'rejected', resetsAt: RESETS_AT },
+        statusNow: 'rejected',
+      });
+      await h.rotator.observe({
+        facts: { kind: 'five_hour', status: 'allowed', resetsAt: RESETS_AT },
+        statusNow: 'allowed',
+      });
+
+      await h.stores.tokens.writeSettings(settingsBack);
+      const outcome = await h.rotator.observe({
+        notice: reached,
+        observedBy: { tokenId: 'tok-a', generation: 1 },
+      });
+
+      expect(outcome.kind).toBe('rotated');
+      expect(await cooldownOf(h, 'tok-a')).toBe(GUESS);
+    });
+  });
+
   it('(e) UnreadableTokenSettingsError 以外はそのまま投げる（observe）', async () => {
     const h = harness();
     await seedTwo(h);
