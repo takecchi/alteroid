@@ -2638,19 +2638,22 @@ function joinLineContinuations(command: string): string {
 }
 
 /**
- * 引用符の中（`computeOutsideQuoteMask` が「外」と言い切れない位置）の改行を空白にした写しを返す
- * （#2271 B）。呼び出し区間の切り出しは改行で止まるので、`--body "$(cat <<'EOF'` の本文が
- * 複数行の形（ヒアドキュメントで本文を渡す打ち方）だと、その後ろの `--delete-branch` / `-d`
- * へ届かなかった。引用符が閉じていない・読めない（`unknown`）ときも「外」ではないので
- * 空白にする——弾く側にしか倒れない。無ければ同じ文字列を返す。
+ * 引用符の中（`computeOutsideQuoteMask` が「外」と言い切れない位置）の区切り（改行・`;`・`|`・`&`）を
+ * 空白にした写しを返す（#2271 B で改行、#2388 で他の区切りへ広げた）。呼び出し区間の切り出しは
+ * 区切りで止まるので、`--body "$(cat <<'EOF'` の本文が複数行の形だと、その後ろの
+ * `--delete-branch` / `-d` へ届かなかった。`$` やバッククォートを含む二重引用符の `--body` の値は
+ * 前処理で潰されない（意図的）ので、本文の中の `;` / `|` でも区間が途中で切れ、
+ * `--match-head-commit` を見落として正しいマージを弾く・後ろの `-d` を見落として素通しする、が
+ * 起きていた（#2388）。引用符が閉じていない・読めない（`unknown`）ときも「外」ではないので
+ * 空白にする。引用符の外の区切りはそのまま残す。無ければ同じ文字列を返す。
  */
-function flattenNewlinesInsideQuotes(command: string): string {
-  if (!command.includes('\n')) return command;
+function flattenSeparatorsInsideQuotes(command: string): string {
+  if (!/[\n;|&]/.test(command)) return command;
   const outside = computeOutsideQuoteMask(command);
   let out = '';
   for (let i = 0; i < command.length; i++) {
     const ch = command[i] as string;
-    out += ch === '\n' && !outside[i] ? ' ' : ch;
+    out += '\n;|&'.includes(ch) && !outside[i] ? ' ' : ch;
   }
   return out;
 }
@@ -2661,7 +2664,7 @@ function hasGhPrMergeDeleteBranch(command: string, depth = 0): boolean {
   if (GH_PR_MERGE_DELETE_BRANCH_RE.test(withoutQuotedSubjectBodyValues)) return true;
   // 引用符の中の改行は区切りではない（#2271 B。`--body "$(cat <<'EOF' … EOF)" --squash -d`）。
   // 元の文字列と、引用符の中の改行を空白にした写しの両方にかける（弾く側にしか倒れない）。
-  const flattened = flattenNewlinesInsideQuotes(withoutQuotedSubjectBodyValues);
+  const flattened = flattenSeparatorsInsideQuotes(withoutQuotedSubjectBodyValues);
   if (
     flattened !== withoutQuotedSubjectBodyValues &&
     GH_PR_MERGE_DELETE_BRANCH_RE.test(flattened)
@@ -2720,7 +2723,10 @@ const GH_PR_MERGE_NO_MERGE_RE = /(?<=\s)(?:--disable-auto|--help|-h)(?=\s|$)/;
  * 引用符の値の中の `--match-head-commit` の字面は「付いている」と読む（通す側に倒れる）。
  */
 function hasGhPrMergeWithoutMatchHeadCommit(command: string, depth = 0): boolean {
-  const stripped = stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command));
+  // 引用符の中の `;` `|` `&` と改行は区切りとして読まない（#2388。`flattenSeparatorsInsideQuotes`）。
+  const stripped = flattenSeparatorsInsideQuotes(
+    stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command)),
+  );
   for (const match of stripped.matchAll(GH_PR_MERGE_INVOCATION_RE)) {
     const segment = match[1] ?? '';
     if (GH_PR_MERGE_NO_MERGE_RE.test(segment)) continue;
@@ -2765,7 +2771,10 @@ const BODY_FLAG_RE = /(?<=[\s'"])(?:--body(?:-file)?(?=[\s'"=]|$)|-(?!-)[A-Za-z]
  * 「明示している」と読み、通す側に倒れる。`gh api` での直接マージ・alias・MCP の `merge_pull_request` は対象外。
  */
 function hasGhPrMergeSquashWithoutBody(command: string, depth = 0): boolean {
-  const stripped = stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command));
+  // 引用符の中の区切りは区切りとして読まない（#2388）。
+  const stripped = flattenSeparatorsInsideQuotes(
+    stripGhPrMergeQuotedSubjectBodyValues(stripHeredocs(command)),
+  );
   for (const match of stripped.matchAll(GH_PR_MERGE_INVOCATION_RE)) {
     const segment = match[1] ?? '';
     if (GH_PR_MERGE_NO_MERGE_RE.test(segment)) continue;

@@ -176,10 +176,22 @@ export async function tokenRemoveUnreadableCommand(ids: readonly string[]): Prom
   const result = (await request(target, '/tokens/unreadable/remove', {
     method: 'POST',
     body: JSON.stringify({ ids }),
-  })) as TokensView & { removedIds: string[] };
+  })) as Partial<TokensView> & {
+    removedIds: string[];
+    viewUnavailable?: { reason: string };
+  };
   stdout.write(
     `読めないトークンの行を ${String(result.removedIds.length)} 行消した（id: ${result.removedIds.join(', ')}）。\n`,
   );
+  // **消した後の読み直しに失敗した**（issue #2390）。消したことは確かだが、残りの行は
+  // 分からない——「読めない行は無い」と読めないよう、残りの件数は言わずに確かめ方を言う。
+  if (result.viewUnavailable !== undefined) {
+    stdout.write(
+      '消した後のプールを読み直せなかった（残りの読めない行は分からない。' +
+        'alteroid token list で確かめる）。\n',
+    );
+    return;
+  }
   const left = result.rowsUnreadable;
   if (left !== undefined) {
     stdout.write(

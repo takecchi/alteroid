@@ -587,6 +587,52 @@ describe('/tokens 画面 — 空のプール', () => {
       expect(screen.queryByText(/読めないトークンの行が/)).toBeNull();
     });
   });
+
+  it('消した後の読み直しに失敗した応答（viewUnavailable, 200）でも、失敗とは言わず、再取得で消えた姿へ戻る（#2390）', async () => {
+    const posts: unknown[] = [];
+    let unreadable = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/journal')) return json({ entries: [] });
+      if (url.includes('/tokens/unreadable/remove') && method === 'POST') {
+        posts.push(request !== null ? await request.json() : JSON.parse(String(init?.body)));
+        unreadable = false;
+        return json({
+          removedIds: ['tok-bad'],
+          viewUnavailable: { reason: '読めない行は消した。消した後のプールを読み直せなかった' },
+        });
+      }
+      if (url.includes('/tokens')) {
+        return json({
+          tokens: [],
+          settings: DEFAULT_SETTINGS,
+          ...(unreadable
+            ? {
+                rowsUnreadable: {
+                  count: 1,
+                  rows: [{ id: 'tok-bad', label: 'broken-label', reason: '不正な欄: order' }],
+                },
+              }
+            : {}),
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+
+    renderTokens();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+
+    await waitFor(() => {
+      expect(posts).toEqual([{ ids: ['tok-bad'] }]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/読めないトークンの行が/)).toBeNull();
+    });
+    expect(screen.queryByText(/消せなかった|保存できなかった/)).toBeNull();
+  });
 });
 
 describe('/tokens 画面 — 403', () => {

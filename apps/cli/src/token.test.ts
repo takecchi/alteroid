@@ -439,6 +439,25 @@ describe('alteroid token remove-unreadable（#2354）', () => {
     expect(read()).toContain('読めない行は、まだ 1 行ある');
   });
 
+  it('消した後の読み直しに失敗した応答（viewUnavailable）: 消したと言い、残りは分からないと言う（#2390）', async () => {
+    setReply('POST', '/tokens/unreadable/remove', {
+      status: 200,
+      body: {
+        removedIds: ['tok-bad'],
+        viewUnavailable: { reason: '読めない行は消した。消した後のプールを読み直せなかった' },
+      },
+    });
+    const read = captureStdout();
+
+    await tokenRemoveUnreadableCommand(['tok-bad']);
+
+    const text = read();
+    expect(text).toContain('読めないトークンの行を 1 行消した（id: tok-bad）');
+    expect(text).toContain('読み直せなかった');
+    expect(text).toContain('alteroid token list で確かめる');
+    expect(text).not.toContain('まだ');
+  });
+
   it('デーモンが断ったら（読めない行に無い id）、その理由で投げる', async () => {
     setReply('POST', '/tokens/unreadable/remove', {
       status: 404,
