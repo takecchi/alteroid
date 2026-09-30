@@ -95,6 +95,12 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
   // 失敗ではなく空の編集画面として扱う（`memory-detail.tsx` と同じ理由）。
   const missing = error !== undefined && (error as { status?: number }).status === 404;
 
+  // **取れなかったのを空のやり方と描かない**（issue #2319）。`memory-detail.tsx`
+  // と同じ理由: 読めていないまま404以外で失敗したとき、失敗は上の `ErrorNote`
+  // が言い、空の編集欄と保存ボタン（既存のやり方を空で上書きできてしまう）は出さない。
+  // 404と、再検証の失敗で `data` が残っているときは当たらない。
+  const loadFailed = data === undefined && error !== undefined && !missing;
+
   // `kind` は必須（`practiceKindSchema` が `min(1)`）。空のまま送ると 400 が
   // 返るだけなので、ここで弾いて待たせない。
   const canSave = dirty && kind.trim() !== '';
@@ -157,9 +163,11 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
               削除
             </Button>
           )}
-          <Button variant="primary" size="sm" loading={busy} disabled={!canSave} onClick={save}>
-            {dirty ? '保存する' : '変更なし'}
-          </Button>
+          {!loadFailed && (
+            <Button variant="primary" size="sm" loading={busy} disabled={!canSave} onClick={save}>
+              {dirty ? '保存する' : '変更なし'}
+            </Button>
+          )}
         </div>
       }
       className="flex flex-col"
@@ -169,7 +177,7 @@ export default function PracticeDetail({ loaderData }: Route.ComponentProps) {
 
       {isLoading && !missing ? (
         <Spinner />
-      ) : (
+      ) : loadFailed ? null : (
         <Tabs.Root value={activeTab} onValueChange={setTab} className="flex flex-1 flex-col">
           <Tabs.List className="mb-2 flex shrink-0 gap-1 border-b border-border">
             <Tabs.Trigger

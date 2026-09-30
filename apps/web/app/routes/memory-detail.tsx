@@ -46,6 +46,15 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
   const missing = error !== undefined && (error as { status?: number }).status === 404;
 
   /**
+   * **取れなかったのを空の記憶と描かない**（issue #2319）。本文をまだ一度も
+   * 読めていないまま404以外で失敗したとき、失敗は上の `ErrorNote` が言う。
+   * ここで空の編集欄と保存ボタンを出すと、既存の記憶を空のまま上書き保存
+   * できてしまう。404（これから書く）と、再検証の失敗で `data` が残って
+   * いるときは当たらず、編集欄をそのまま出す（#2266 と同じ）。
+   */
+  const loadFailed = data === undefined && error !== undefined && !missing;
+
+  /**
    * `undefined` は「まだ人間がタブに触っていない」— `draft` と同じ作法。
    *
    * データが届く前に既定タブを確定させない。届いたら、**読むものが在れば
@@ -125,9 +134,11 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
               削除
             </Button>
           )}
-          <Button variant="primary" size="sm" loading={busy} disabled={!dirty} onClick={save}>
-            {dirty ? '保存する' : '変更なし'}
-          </Button>
+          {!loadFailed && (
+            <Button variant="primary" size="sm" loading={busy} disabled={!dirty} onClick={save}>
+              {dirty ? '保存する' : '変更なし'}
+            </Button>
+          )}
         </div>
       }
       className="flex flex-col"
@@ -137,7 +148,7 @@ export default function MemoryDetail({ loaderData }: Route.ComponentProps) {
 
       {isLoading && !missing ? (
         <Spinner />
-      ) : (
+      ) : loadFailed ? null : (
         <MarkdownEditor
           value={value}
           onChange={setDraft}
