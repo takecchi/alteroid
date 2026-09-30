@@ -702,11 +702,13 @@ export function findGhRunWatch(command: string): { index: number; end: number } 
 /**
  * 直後に最初に現れる制御演算子が「背景化の `&`」かを見る。
  *
- * `&` は `2>&1`（直前が `>`）と `&&`（直前か直後が `&`）にも現れるので、
- * 単純な `&` の検索では誤爆する。lookbehind と lookahead でその2つを外す。
+ * `&` は `2>&1`・`<&-`（直前が `>` / `<`）、`&&`（直前か直後が `&`）、`|&`（直前が `|`。
+ * stderr もパイプへ流す前景の形）、`&>` / `&>>`（直後が `>`。両方をファイルへ流すリダイレクト）
+ * にも現れるので、単純な `&` の検索では誤爆する。lookbehind と lookahead でそれらを外す
+ * （`|&` と `&>` は #2271 の A）。`cmd |& tee log &` の最後の `&` は外さないので、背景と読む。
  * `;` / 改行が先に来たなら、その `gh run watch` は背景化されていない。
  */
-const FIRST_CONTROL_OPERATOR_RE = /[;\n]|(?<![>&])&(?!&)/;
+const FIRST_CONTROL_OPERATOR_RE = /[;\n]|(?<![<>&|])&(?![&>])/;
 
 function isBackgroundedGhRunWatch(trimmed: string, backgrounded: boolean): boolean {
   const match = findGhRunWatch(trimmed);
