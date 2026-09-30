@@ -806,6 +806,24 @@ describe('読めない委譲（issue #2359）— 内訳に入れず、欠けて�
     expect(text).not.toContain('読めない委譲');
     expect(text).not.toContain('※');
   });
+
+  it('欄が無い古いデーモンの応答では、「undefined」を書かず、読めない委譲について何も言わない（#2382）', () => {
+    const full = computeJobAppraisalCoverage([job('a', { status: 'done' })], 0);
+    const text = describeAppraisalStats({
+      journal: emptyJournal,
+      jobCoverage: {
+        byStatus: full.byStatus,
+        terminalTotal: full.terminalTotal,
+        terminalAppraised: full.terminalAppraised,
+        terminalUnappraised: full.terminalUnappraised,
+        nonTerminalTotal: full.nonTerminalTotal,
+      },
+      reconciliation: emptyReconciliation(),
+    });
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('読めない委譲');
+    expect(text).not.toContain('※');
+  });
 });
 
 describe('describeAppraisalStats — MCP/HTTP が読む文面（2つの印を混ぜず、未評定を明示する）', () => {

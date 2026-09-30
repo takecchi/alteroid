@@ -204,6 +204,7 @@ import {
   runnersVacateResponseSchema,
   scheduleListResponseSchema,
   tokensPolicyUpdateRequestSchema,
+  tokensReplaceResponseSchema,
   tokensResponseSchema,
   tokensUnreadableRemoveRequestSchema,
   tokensUnreadableRemoveResponseSchema,
@@ -1345,6 +1346,15 @@ async function appendJournalOrDrop(
     noteDroppedRecord(what, detail, error);
     return undefined;
   }
+}
+
+/**
+ * error の**種類（`name`）だけ**を文字列にする（issue #2396）。トークンの口が
+ * `noteDroppedRecord` や日誌へ渡す原因に使う。`message` は含めない——ストアのエラー文には
+ * 行の中身（トークンの値）が載りうる。
+ */
+function kindOfError(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 /**
@@ -6260,8 +6270,10 @@ export function createApp(deps: AppDeps) {
               '代わりに `settingsUnreadable: { reason }` を返す（プールの置換は道連れにしない。' +
               'issue #2095）。読めない行が在れば `rowsUnreadable`（`carriedOver: true`）が載る——' +
               '**読めない行は捨てずに持ち越した**（issue #2354）。消すには ' +
-              '`POST /tokens/unreadable/remove`。',
-            content: { 'application/json': { schema: resolver(tokensResponseSchema) } },
+              '`POST /tokens/unreadable/remove`。**保存した後の表示の読み直しに失敗したときも ' +
+              '200**（保存したので「保存できなかった」とは言わない）: `viewUnavailable` だけを' +
+              '返し、プールの欄（`tokens` など）は載せない。',
+            content: { 'application/json': { schema: resolver(tokensReplaceResponseSchema) } },
           },
           400: {
             description: '入力が壊れている（保存していない）。',
@@ -6302,9 +6314,9 @@ export function createApp(deps: AppDeps) {
         if (deps.tokens === undefined) {
           return c.json({ error: 'トークンのプールの器が無い' as const }, 400);
         }
+        let saved: Awaited<ReturnType<TokenPoolService['replace']>>;
         try {
-          const view = await deps.tokens.replace(c.req.valid('json').tokens);
-          return c.json(tokensResponseSchema.parse(view));
+          saved = await deps.tokens.replace(c.req.valid('json').tokens);
         } catch (error) {
           // **返してよい例外だけを返す。型で分ける。**
           //
@@ -6326,13 +6338,56 @@ export function createApp(deps: AppDeps) {
           }
           // **跡は残す。ただし本文は出さない**（`dropped-record.ts` の作法）。
           // detail は**本文を含まない見分け**だけ（`dropped-record.ts` の doc）。
+          // **error は種類（`name`）だけ渡す**（issue #2396）。`noteDroppedRecord` は
+          // `message` の1行目と `cause` の連鎖を stderr へ出すので、生の error を渡すと
+          // エラー文に載ったトークンの値が出うる。
           noteDroppedRecord(
             '認証トークンのプール',
             `count=${String(c.req.valid('json').tokens.length)}`,
-            error,
+            kindOfError(error),
           );
           return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
         }
+        // **ここから先は、保存した後である**（issue #2396）。失敗しても「保存できなかった」
+        // ではない。上の `catch`（500）へ落とさず、保存したと言って返す。
+        // 原因は種類（`error.name`）だけを日誌に使う——メッセージには行の中身
+        // （トークンの値）が載りうる。
+        let cause: unknown;
+        if (saved.kind === 'replaced') {
+          try {
+            return c.json(tokensReplaceResponseSchema.parse(saved.view));
+          } catch (parseError) {
+            cause = parseError;
+          }
+        } else {
+          cause = saved.cause;
+        }
+        // **日誌を先に書く作法（`PUT /credentials` 型）は、この口には入れない。** ここは
+        // 保存した後の、読み直しの失敗の跡だけである。`PUT /tokens` は今まで日誌を書いて
+        // おらず、先に書く形にすると「書けなければ保存しない」へ挙動が変わる。
+        // best-effort で1行だけ残し、書けなければ stderr へ跡を残す。
+        await appendJournalOrDrop(
+          deps.stores,
+          {
+            type: 'decision',
+            decision: '認証トークンのプールを保存したが、表示の読み直しに失敗した',
+            grounds:
+              `${describeActor(c.get('principal'))}（PUT /tokens）。` +
+              `保存は済んでいる。読み直しの失敗の種類: ${kindOfError(cause)}。` +
+              '行の中身（トークンの値）は書かない。',
+          },
+          '認証トークンのプールの保存後の読み直しの失敗の日誌',
+          `count=${String(c.req.valid('json').tokens.length)}`,
+        );
+        return c.json(
+          tokensReplaceResponseSchema.parse({
+            viewUnavailable: {
+              reason:
+                '保存した。保存後のプールを読み直せなかった' +
+                '（撃ち直さず、alteroid token list で今の姿を確かめる）',
+            },
+          }),
+        );
       },
     )
 
@@ -6363,7 +6418,10 @@ export function createApp(deps: AppDeps) {
           'あれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。',
         responses: {
           200: {
-            description: '消した後のプール（値は出さない）と、消した id。',
+            description:
+              '消した後のプール（値は出さない）と、消した id。**消した後の表示の読み直しに' +
+              '失敗したときも 200**（消したので「消せなかった」とは言わない）: `removedIds` と ' +
+              '`viewUnavailable` だけを返し、プールの欄は載せない。',
             content: {
               'application/json': { schema: resolver(tokensUnreadableRemoveResponseSchema) },
             },
@@ -6429,8 +6487,48 @@ export function createApp(deps: AppDeps) {
               404,
             );
           }
+          // **ここから先は行を消した後である**（issue #2390）。失敗しても「消せなかった」
+          // ではない。下の `catch`（打ち消しの日誌と 500）へ落とさず、消したと言って返す。
+          // 原因は種類（`error.name`）だけを日誌に使う——メッセージには行の中身
+          // （トークンの値）が載りうる。
+          let cause: unknown;
+          if (result.kind === 'removedViewFailed') {
+            cause = result.cause;
+          } else {
+            try {
+              return c.json(
+                tokensUnreadableRemoveResponseSchema.parse({
+                  ...result.view,
+                  removedIds: result.ids,
+                }),
+              );
+            } catch (parseError) {
+              cause = parseError;
+            }
+          }
+          const kindOfCause = cause instanceof Error ? cause.name : typeof cause;
+          await appendJournalOrDrop(
+            deps.stores,
+            {
+              type: 'decision',
+              decision: `読めない認証トークンの行を消した（id: ${result.ids.join(', ')}）が、表示の読み直しに失敗した`,
+              grounds:
+                `${describeActor(c.get('principal'))}（POST /tokens/unreadable/remove）。` +
+                `行は消えている。読み直しの失敗の種類: ${kindOfCause}。` +
+                '行の中身（トークンの値）は書かない。',
+            },
+            '読めない認証トークンの行の削除後の読み直しの失敗の日誌',
+            `ids=${result.ids.join(',')}`,
+          );
           return c.json(
-            tokensUnreadableRemoveResponseSchema.parse({ ...result.view, removedIds: result.ids }),
+            tokensUnreadableRemoveResponseSchema.parse({
+              removedIds: result.ids,
+              viewUnavailable: {
+                reason:
+                  '読めない行は消した。消した後のプールを読み直せなかった' +
+                  '（alteroid token list で今の姿を確かめる）',
+              },
+            }),
           );
         } catch (error) {
           // 日誌が書けなかった（`beforeRemove` の中で投げた）回は、状態を変えていない。
@@ -6450,7 +6548,10 @@ export function createApp(deps: AppDeps) {
             '読めない認証トークンの行の打ち消しの日誌',
             journaled,
           );
-          noteDroppedRecord('読めない認証トークンの行の削除', journaled, error);
+          // **error は種類（`name`）だけ渡す**（issue #2396）。生の error を渡すと、
+          // `noteDroppedRecord` が `message` の1行目を stderr へ出し、エラー文に載った
+          // トークンの値が出うる。
+          noteDroppedRecord('読めない認証トークンの行の削除', journaled, kindOfError(error));
           return c.json({ error: 'トークンのプールを保存できなかった' as const }, 500);
         }
       },

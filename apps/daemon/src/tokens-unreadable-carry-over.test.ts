@@ -277,6 +277,253 @@ describe('POST /tokens/unreadable/remove（#2354）', () => {
   });
 });
 
+/**
+ * トークンのストアのエラー文に値が載る形を、わざと偽の値で作って測る（#2390 / #2396）。
+ * ストアはクラスの実体なので、展開（`...`）ではメソッドが落ち、原型の継承では private が
+ * 壊れる。Proxy で、上書きしたメソッド以外は本物の実体へそのまま回す。
+ */
+function withTokens(stores: Stores, overrides: Partial<Stores['tokens']>): Stores {
+  const tokens = new Proxy(stores.tokens, {
+    get(target, prop) {
+      if (prop in overrides) return overrides[prop as keyof typeof overrides];
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { ...stores, tokens };
+}
+
+function put(body: unknown): [string, RequestInit] {
+  return [
+    '/tokens',
+    {
+      method: 'PUT',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  ];
+}
+
+describe('消した後の読み直しの失敗は、「消せなかった」と言わない（#2390）', () => {
+  /** 消す呼び出しが済んだ**後**の `listUnreadable` だけが投げる偽のストア。メッセージに値を載せて漏れを測る。 */
+  function rereadFailing(stores: Stores): Stores {
+    const state = { removed: false };
+    return withTokens(stores, {
+      removeUnreadable: async (ids: readonly string[]) => {
+        const result = await stores.tokens.removeUnreadable(ids);
+        state.removed = true;
+        return result;
+      },
+      listUnreadable: async () => {
+        if (state.removed) throw new Error(`reread failed (test) ${BAD_TOKEN_VALUE}`);
+        return stores.tokens.listUnreadable();
+      },
+    });
+  }
+
+  it('消した後の読み直しだけが投げる: 行は消え、日誌に打ち消しは無く「消した」が残り、応答は消したと言う。値は出ない', async () => {
+    const { stores, path } = await seed();
+    const app = createApp({
+      clone: stubCloneHost(),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: rereadFailing(stores) }),
+    });
+
+    let response: Response | undefined;
+    await captureStderr(async () => {
+      response = await app.request(...post('/tokens/unreadable/remove', { ids: ['tok-bad'] }));
+    });
+
+    const text = await response!.text();
+    expect(response?.status).toBe(200);
+    const body = JSON.parse(text) as {
+      removedIds: string[];
+      tokens?: unknown;
+      viewUnavailable?: { reason: string };
+    };
+    expect(body.removedIds).toEqual(['tok-bad']);
+    expect(body.tokens).toBeUndefined();
+    expect(body.viewUnavailable?.reason).toContain('読み直せなかった');
+    expect(await rawIds(path)).toEqual(['tok-good']);
+
+    const journal = await journalText(stores);
+    expect(journal).not.toContain('消せなかった');
+    expect(journal).toContain('表示の読み直しに失敗した');
+    expect(journal).toContain('消した（id: tok-bad）');
+    for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE]) {
+      expect(text).not.toContain(value);
+      expect(journal).not.toContain(value);
+    }
+  });
+
+  // #2396: 本当に消せなかったときの跡（stderr）にも、値を出さない。
+  it('対照: 消す呼び出しそのものが投げたときは、今までどおり打ち消しの行と 500。stderr にも応答にも日誌にも値は出ない', async () => {
+    const { stores, path } = await seed();
+    const failingRemove = withTokens(stores, {
+      removeUnreadable: async () => {
+        throw new Error(`remove failed (test) ${BAD_TOKEN_VALUE}`);
+      },
+    });
+    const app = createApp({
+      clone: stubCloneHost(),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: failingRemove }),
+    });
+
+    let response: Response | undefined;
+    const stderr = await captureStderr(async () => {
+      response = await app.request(...post('/tokens/unreadable/remove', { ids: ['tok-bad'] }));
+    });
+
+    const text = await response!.text();
+    expect(response?.status).toBe(500);
+    expect(await rawIds(path)).toEqual(['tok-good', 'tok-bad']);
+    const journal = await journalText(stores);
+    expect(journal).toContain('読めない認証トークンの行を消せなかった');
+    expect(journal).not.toContain('表示の読み直しに失敗した');
+    // 跡は残る（この経路を通った証拠）が、値は出ない。
+    expect(stderr.join('')).toContain('読めない認証トークンの行の削除');
+    for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE]) {
+      expect(text).not.toContain(value);
+      expect(stderr.join('')).not.toContain(value);
+      expect(journal).not.toContain(value);
+    }
+  });
+});
+
+describe('PUT /tokens: 保存した後の読み直しの失敗は、「保存できなかった」と言わない（#2396）', () => {
+  /** 保存（`replace`）が済んだ**後**の `listUnreadable` だけが投げる偽のストア。メッセージに値を載せて漏れを測る。 */
+  function rereadFailing(stores: Stores): Stores {
+    const state = { saved: false };
+    return withTokens(stores, {
+      replace: async (...args: Parameters<Stores['tokens']['replace']>) => {
+        const result = await stores.tokens.replace(...args);
+        state.saved = true;
+        return result;
+      },
+      listUnreadable: async () => {
+        if (state.saved) throw new Error(`reread failed (test) ${NEW_TOKEN_VALUE}`);
+        return stores.tokens.listUnreadable();
+      },
+    });
+  }
+
+  it('保存した後の読み直しだけが投げる: 200 と viewUnavailable。保存は済んでいる。応答にも stderr にも日誌にも値は出ない', async () => {
+    const { stores, path } = await seed();
+    const app = createApp({
+      clone: stubCloneHost(),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: rereadFailing(stores) }),
+    });
+
+    let response: Response | undefined;
+    const stderr = await captureStderr(async () => {
+      response = await app.request(
+        ...put({
+          tokens: [
+            { id: 'tok-good', label: 'good' },
+            { label: 'added', value: NEW_TOKEN_VALUE },
+          ],
+        }),
+      );
+    });
+
+    const text = await response!.text();
+    expect(response?.status).toBe(200);
+    const body = JSON.parse(text) as { tokens?: unknown; viewUnavailable?: { reason: string } };
+    expect(body.tokens).toBeUndefined();
+    expect(body.viewUnavailable?.reason).toContain('読み直せなかった');
+    expect(text).not.toContain('保存できなかった');
+    // 保存は済んでいる（追加した行が入っている。読めない行は持ち越している）。
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { tokens: { label?: unknown }[] };
+    expect(raw.tokens.map((row) => row.label)).toEqual(['good', 'added', 'broken-label']);
+
+    const journal = await journalText(stores);
+    expect(journal).toContain('保存したが、表示の読み直しに失敗した');
+    expect(journal).toContain('Error');
+    for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE, NEW_TOKEN_VALUE]) {
+      expect(text).not.toContain(value);
+      expect(stderr.join('')).not.toContain(value);
+      expect(journal).not.toContain(value);
+    }
+  });
+
+  it('日誌が書けなくても、保存した事実は変わらない: 200 と viewUnavailable（best-effort）', async () => {
+    const { stores } = await seed();
+    const failingJournal: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: async () => {
+          throw new Error(`journal store unavailable (test) ${NEW_TOKEN_VALUE}`);
+        },
+      },
+    };
+    const app = createApp({
+      clone: stubCloneHost(),
+      stores: failingJournal,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: rereadFailing(stores) }),
+    });
+
+    let response: Response | undefined;
+    await captureStderr(async () => {
+      response = await app.request(...put({ tokens: [{ id: 'tok-good', label: 'good' }] }));
+    });
+
+    expect(response?.status).toBe(200);
+    expect(await response!.text()).toContain('viewUnavailable');
+  });
+
+  it('対照: 保存そのものが投げたときは、今までどおり 500（保存できなかった）。値は応答にも stderr にも出ない', async () => {
+    const { stores, path } = await seed();
+    const failingSave = withTokens(stores, {
+      replace: async () => {
+        throw new Error(`save failed (test) ${NEW_TOKEN_VALUE}`);
+      },
+    });
+    const app = createApp({
+      clone: stubCloneHost(),
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      tokens: createTokenPoolService({ stores: failingSave }),
+    });
+
+    let response: Response | undefined;
+    const stderr = await captureStderr(async () => {
+      response = await app.request(
+        ...put({
+          tokens: [
+            { id: 'tok-good', label: 'good' },
+            { label: 'added', value: NEW_TOKEN_VALUE },
+          ],
+        }),
+      );
+    });
+
+    const text = await response!.text();
+    expect(response?.status).toBe(500);
+    expect(text).toContain('保存できなかった');
+    expect(text).not.toContain('viewUnavailable');
+    expect(await rawIds(path)).toEqual(['tok-good', 'tok-bad']);
+    expect(await journalText(stores)).not.toContain('読み直しに失敗した');
+    // 跡は残るが、値は出ない（種類だけ）。
+    expect(stderr.join('')).toContain('認証トークンのプール');
+    for (const value of [BAD_TOKEN_VALUE, GOOD_TOKEN_VALUE, NEW_TOKEN_VALUE]) {
+      expect(text).not.toContain(value);
+      expect(stderr.join('')).not.toContain(value);
+    }
+  });
+});
+
 describe('断りの文は「持ち越す」と言い、「捨てる」と言わない（#2354）', () => {
   it('describeUnreadableTokens: 持ち越す・消す口を言う。捨てる・一緒にとは言わない。値は載せない', () => {
     const text = describeUnreadableTokens([{ id: 'tok-bad', label: 'broken-label', reason: 'x' }]);

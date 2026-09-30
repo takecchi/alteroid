@@ -439,6 +439,25 @@ describe('alteroid token remove-unreadable（#2354）', () => {
     expect(read()).toContain('読めない行は、まだ 1 行ある');
   });
 
+  it('消した後の読み直しに失敗した応答（viewUnavailable）: 消したと言い、残りは分からないと言う（#2390）', async () => {
+    setReply('POST', '/tokens/unreadable/remove', {
+      status: 200,
+      body: {
+        removedIds: ['tok-bad'],
+        viewUnavailable: { reason: '読めない行は消した。消した後のプールを読み直せなかった' },
+      },
+    });
+    const read = captureStdout();
+
+    await tokenRemoveUnreadableCommand(['tok-bad']);
+
+    const text = read();
+    expect(text).toContain('読めないトークンの行を 1 行消した（id: tok-bad）');
+    expect(text).toContain('読み直せなかった');
+    expect(text).toContain('alteroid token list で確かめる');
+    expect(text).not.toContain('まだ');
+  });
+
   it('デーモンが断ったら（読めない行に無い id）、その理由で投げる', async () => {
     setReply('POST', '/tokens/unreadable/remove', {
       status: 404,
@@ -447,6 +466,49 @@ describe('alteroid token remove-unreadable（#2354）', () => {
 
     await expect(tokenRemoveUnreadableCommand(['ghost'])).rejects.toThrow('何も消していない');
   });
+});
+
+describe('保存した後の読み直しに失敗した応答（viewUnavailable）を言う（#2396）', () => {
+  const VIEW_UNAVAILABLE = {
+    viewUnavailable: { reason: '保存した。保存後のプールを読み直せなかった' },
+  };
+
+  async function runAdd(): Promise<void> {
+    const dir = await makeTempDir('alteroid-token-add-view-');
+    const path = join(dir, 'token.txt');
+    await writeFile(path, 'tok-aaa-secret\n', 'utf8');
+    await tokenAddCommand({ label: 'new-one', file: path });
+  }
+
+  it.each([
+    ['add', runAdd, 'トークン「new-one」を追加しました。'],
+    ['remove', () => tokenRemoveCommand('tok-a'), 'トークン（id tok-a）を削除しました。'],
+    ['disable', () => tokenDisableCommand('tok-a'), 'トークン（id tok-a）を外しました。'],
+    ['enable', () => tokenEnableCommand('tok-a'), 'トークン（id tok-a）を戻しました。'],
+  ] as const)(
+    'token %s: 保存したと言い、今の姿は読み直せなかったと言う。失敗とは言わず、撃ち直さない',
+    async (_name, run, saidSaved) => {
+      setReply('GET', '/tokens', {
+        status: 200,
+        body: {
+          tokens: [{ id: 'tok-a', label: 'a', order: 0, sha256: 'aaaaaaaaaaaa' }],
+          settings: EMPTY_SETTINGS,
+        },
+      });
+      setReply('PUT', '/tokens', { status: 200, body: VIEW_UNAVAILABLE });
+      const read = captureStdout();
+
+      await run();
+
+      const text = read();
+      expect(text).toContain(saidSaved);
+      expect(text).toContain('保存した。ただし、保存後のプールを読み直せなかった');
+      expect(text).toContain('alteroid token list で確かめる');
+      expect(text).not.toContain('失敗');
+      expect(text).not.toContain('持ち越した');
+      expect(sent.filter((call) => call.method === 'PUT')).toHaveLength(1);
+    },
+  );
 });
 
 describe('alteroid token add', () => {

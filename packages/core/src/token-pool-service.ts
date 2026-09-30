@@ -105,8 +105,32 @@ export interface RemoveUnreadableOptions {
 export type RemoveUnreadableResult =
   /** 消した。`ids` は消した id（重複なし）、`view` は消した後のプール。 */
   | { kind: 'removed'; ids: string[]; view: TokenPoolView }
+  /**
+   * 消した。**ただし、表示のための読み直しに失敗した**（issue #2390）。`ids` は消した id。
+   * **消したことは確かなので、「消せなかった」として扱ってはならない**（呼び出し側が
+   * 打ち消しの日誌を書いたり、失敗を返したりしない）。`cause` は読み直しが投げたもの
+   * （**メッセージに行の中身が載りうるので、そのまま外へ出さない**。種類だけ言う）。
+   */
+  | { kind: 'removedViewFailed'; ids: string[]; cause: unknown }
   /** 指された id のうち `count` 件が読めない行に無かった。何も消していない。 */
   | { kind: 'unknown'; count: number };
+
+/**
+ * {@link TokenPoolService.replace} の結果（issue #2396）。
+ *
+ * **検証に落ちたとき・保存そのものが失敗したときは、今までどおり投げる**（保存していない）。
+ * ここに載るのは、保存した後の話だけである。
+ */
+export type ReplaceResult =
+  /** 保存した。`view` は保存後のプール。 */
+  | { kind: 'replaced'; view: TokenPoolView }
+  /**
+   * 保存した。**ただし、表示のための読み直しに失敗した。** 保存したことは確かなので、
+   * 「保存できなかった」として扱ってはならない（呼び出し側が失敗を返すと、呼んだ人は
+   * 同じ操作を撃ち直す）。`cause` は読み直しが投げたもの（**メッセージに行の中身が載りうる
+   * ので、そのまま外へ出さない**。種類だけ言う）。
+   */
+  | { kind: 'replacedViewFailed'; cause: unknown };
 
 export interface TokenPoolService {
   /** 現在のプール（外向きの顔）と設定。設定が読めないときは {@link TokenPoolView} を見よ。 */
@@ -119,7 +143,7 @@ export interface TokenPoolService {
    * ——置換そのものは `settings` に触れないので、設定が壊れていることを
    * 理由にプールの置換まで止めない。
    */
-  replace(inputs: readonly AgentTokenInput[]): Promise<TokenPoolView>;
+  replace(inputs: readonly AgentTokenInput[]): Promise<ReplaceResult>;
   /**
    * **読めない行を、id で指して消す**（issue #2354）。全文置換（{@link replace}）は
    * 読めない行を持ち越すので、読めない行を消す口はこれだけである。
@@ -396,15 +420,25 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           const normalized = normalizeTokenPool(inputs, existing, { now, newId });
           return stores.tokens.replace(normalized);
         });
-        const settingsResult = await readSettingsOrUnreadable();
-        const unreadableRows = await stores.tokens.listUnreadable();
+        // **ここから先は、保存した後である**（issue #2396）。読み直しの失敗を投げると、
+        // 呼び出し側は「保存できなかった」と読む。保存したことは変わらないので、
+        // 失敗は値で返す。
+        let view: TokenPoolView;
+        try {
+          const settingsResult = await readSettingsOrUnreadable();
+          const unreadableRows = await stores.tokens.listUnreadable();
+          // **読めない行は持ち越した**と応答で言う（issue #2354。ストアの `replace` は
+          // 読めない行を捨てない）。
+          view = viewOf(stored.map(toAgentTokenView), settingsResult, unreadableRows, {
+            carriedOver: true,
+          });
+        } catch (cause) {
+          announceChange('pool');
+          return { kind: 'replacedViewFailed', cause } satisfies ReplaceResult;
+        }
         // **保存できた後に知らせる**（`announceChange` の doc）。
         announceChange('pool');
-        // **読めない行は持ち越した**と応答で言う（issue #2354。ストアの `replace` は
-        // 読めない行を捨てない）。
-        return viewOf(stored.map(toAgentTokenView), settingsResult, unreadableRows, {
-          carriedOver: true,
-        });
+        return { kind: 'replaced', view } satisfies ReplaceResult;
       }),
 
     removeUnreadable: (ids: readonly string[], options: RemoveUnreadableOptions = {}) =>
@@ -427,17 +461,22 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
           },
         );
         if (!Array.isArray(removed)) return removed;
-        const [tokens, settingsResult, unreadableRows] = await Promise.all([
-          stores.tokens.list(),
-          readSettingsOrUnreadable(),
-          stores.tokens.listUnreadable(),
-        ]);
+        // **ここから先は、行を消した後である**（issue #2390）。読み直しの失敗を投げ直すと、
+        // 呼び出し側は「消せなかった」と読む。消したことは変わらないので、失敗は値で返す。
+        let view: TokenPoolView;
+        try {
+          const [tokens, settingsResult, unreadableRows] = await Promise.all([
+            stores.tokens.list(),
+            readSettingsOrUnreadable(),
+            stores.tokens.listUnreadable(),
+          ]);
+          view = viewOf(tokens.map(toAgentTokenView), settingsResult, unreadableRows);
+        } catch (cause) {
+          announceChange('pool');
+          return { kind: 'removedViewFailed', ids: removed, cause };
+        }
         announceChange('pool');
-        return {
-          kind: 'removed',
-          ids: removed,
-          view: viewOf(tokens.map(toAgentTokenView), settingsResult, unreadableRows),
-        };
+        return { kind: 'removed', ids: removed, view };
       }),
 
     noteUnusable: (input: { id: string } & Pick<TokenFailureObservation, 'message' | 'resets'>) =>
