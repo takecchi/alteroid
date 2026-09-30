@@ -16,7 +16,10 @@
  *
  * 測ったのは `packages/ui/src/components/markdown.tsx` と**同じ設定**である
  * （`react-markdown` 10.1.0 ＋ `remark-gfm` 4.0.1 ＋ `remark-breaks` 4.0.0、`rehype-raw`
- * 無し）。観測 2026-08-27。
+ * 無し）。観測 2026-08-27。**これは観測当時の条件である。** 今の `<Markdown>` は
+ * react-markdown を使わず `mdast-util-from-markdown` ＋ `gfmFromMarkdown` ＋
+ * `mdast-util-newline-to-break` から直接 React 要素を作るが、旧構成と同じ DOM を
+ * 出すことを `markdown-equivalence.test.tsx` で固定している（下の実測は今も当てはまる）。
  *
  * **化けた（実測）**:
  *

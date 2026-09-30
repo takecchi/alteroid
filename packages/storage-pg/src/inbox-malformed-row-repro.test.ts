@@ -54,12 +54,48 @@ describe('PgInboxStore — 読めない1行で受信箱ごと落とさない', (
     let ids: string[] = [];
     const stderr = (
       await captureStderr(async () => {
-        ids = (await stores.inbox.peekPending()).map((pending) => pending.event.id);
+        ids = (await stores.inbox.peekPending()).entries.map((pending) => pending.event.id);
       })
     ).join('');
     expect(ids).toEqual(['evt-good']);
     expect(stderr).toContain('evt-bad');
     expect(stderr, '壊れた合図の本文そのものは跡に出さない').not.toContain('壊れた合図の本文');
+  });
+
+  /**
+   * issue #2344。上の歯（正しい行だけを返す）は `entries` について今も成り立つ。変わったのは、
+   * 飛ばした行が出力から消えなくなったこと——`unreadable` に id・受信時刻・不正な欄名だけで返る。
+   */
+  it('peekPending() は読めない行を unreadable に id・受信時刻・不正な欄名だけで返す（本文は載せない）', async () => {
+    await seedWithBadRow();
+    let peek: Awaited<ReturnType<typeof stores.inbox.peekPending>> | undefined;
+    await captureStderr(async () => {
+      peek = await stores.inbox.peekPending();
+    });
+    expect(peek?.unreadable).toEqual([
+      { id: 'evt-bad', at: '2026-09-27T00:00:00.000Z', reason: '不正な欄: event.type' },
+    ]);
+    expect(JSON.stringify(peek), '壊れた行の本文そのものは載せない').not.toContain(
+      '壊れた合図の本文',
+    );
+    // `pending().count`（count(*)）と食い違わない（読めた行 + 読めない行）。
+    const count = (await stores.inbox.pending()).count;
+    expect((peek?.entries.length ?? 0) + (peek?.unreadable.length ?? 0)).toBe(count);
+  });
+
+  it('壊れた行しか無い受信箱でも、peekPending() は entries が空・unreadable が1件になる（空とは言わない）', async () => {
+    await db.insert(inboxEvents).values({
+      id: 'evt-bad',
+      event: { type: 'not-a-real-event-type', id: 'evt-bad', text: '壊れた合図の本文' },
+      at: new Date('2026-09-27T00:00:00.000Z'),
+      deliveries: 0,
+    });
+    let peek: Awaited<ReturnType<typeof stores.inbox.peekPending>> | undefined;
+    await captureStderr(async () => {
+      peek = await stores.inbox.peekPending();
+    });
+    expect(peek?.entries).toEqual([]);
+    expect(peek?.unreadable).toHaveLength(1);
   });
 
   it('claimPending()（起動時の未読の復元）も正しい行だけを配り、読めない行は消さない', async () => {
@@ -84,5 +120,10 @@ describe('PgInboxStore — 読めない1行で受信箱ごと落とさない', (
     ).join('');
     expect(ids).toEqual(['evt-good']);
     expect(stderr).toBe('');
+  });
+
+  it('対照: 読めない行が無ければ unreadable は空', async () => {
+    await stores.inbox.put(GOOD_EVENT, '2026-09-28T00:00:00.000Z');
+    expect((await stores.inbox.peekPending()).unreadable).toEqual([]);
   });
 });

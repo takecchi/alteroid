@@ -157,7 +157,7 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     expect(approval?.answerDelivery).toBe('delivered');
     expect(approval?.answeredAt).toBeDefined();
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     const expectedId = expectedHumanAnswerEventId('ap-1', approval?.answeredAt as string);
     expect(pending[0]?.event.id).toBe(expectedId);
@@ -177,7 +177,7 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
       }),
     );
     // 受信箱は空のまま——`answerApproval` が (a) を書いた直後に落ちた形。
-    expect(await stores.inbox.peekPending()).toEqual([]);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
 
     const { clone, inputs } = bootClone(stores, 'hang');
     await waitFor(() => inputs.length > 0, '拾い直した回答のターンが起きる');
@@ -215,7 +215,7 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     const updated = await stores.jobs.getApproval('ap-1');
     expect(updated?.answerDelivery).toBe('delivered');
 
-    const pending = await stores.inbox.peekPending();
+    const pending = (await stores.inbox.peekPending()).entries;
     expect(pending).toHaveLength(1);
     expect(pending[0]?.event.id).toBe(event.id);
 
@@ -241,7 +241,7 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     expect(inputs).toHaveLength(0);
     const approval = await stores.jobs.getApproval('ap-1');
     expect(approval?.answerDelivery).toBeUndefined();
-    expect(await stores.inbox.peekPending()).toEqual([]);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
 
     void clone;
   });
@@ -264,7 +264,7 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     expect(inputs).toHaveLength(0);
     const approval = await stores.jobs.getApproval('ap-1');
     expect(approval?.answerDelivery).toBe('pending');
-    expect(await stores.inbox.peekPending()).toEqual([]);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
 
     void clone;
   });
@@ -293,7 +293,7 @@ describe('回答済みで未配達の承認の配達（issue #1977）', () => {
     expect(inputs).toHaveLength(0);
     const approval = await stores.jobs.getApproval('ap-1');
     expect(approval?.answerDelivery).toBe('pending');
-    expect(await stores.inbox.peekPending()).toEqual([]);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
 
     void clone;
   });
@@ -525,12 +525,12 @@ describe('配達済みの印の書き込みだけが落ちても、起こし直�
     // 処理し終えて受信箱から消えるまで待つ（`#forget`）。
     const started = Date.now();
     for (;;) {
-      if ((await stores.inbox.peekPending()).length === 0) break;
+      if ((await stores.inbox.peekPending()).entries.length === 0) break;
       if (Date.now() - started > 3000) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(failedOnce).toBe(true);
-    expect(await stores.inbox.peekPending()).toEqual([]);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
 
     // 起こし直し（同じストアで2つ目のクローン）。起動時刻より前に回答された行になるよう、
     // 1ミリ秒以上あける。
@@ -571,7 +571,7 @@ describe('既に終わった承認への回答は断る（issue #2007）', () =>
     const approval = await stores.jobs.getApproval('ap-1');
     expect(approval?.answeredAt).toBeUndefined();
     expect(approval?.answer).toBeUndefined();
-    expect(await stores.inbox.peekPending()).toEqual([]);
+    expect((await stores.inbox.peekPending()).entries).toEqual([]);
     expect(inputs).toHaveLength(0);
   });
 

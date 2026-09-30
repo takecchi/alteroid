@@ -351,6 +351,34 @@ describe('renderInboxBacklog', () => {
     expect(renderInboxBacklog(EMPTY_BACKLOG)).toBe('クローンの受信箱に未処理の合図は無い。');
   });
 
+  // issue #2344: 「無い」は、読めた行も読めない行も0件のときにしか言わない。
+  it('読めた行が0件でも、読めない行が在れば「未処理の合図は無い」と言わず、読めない件数を言う', () => {
+    const text = renderInboxBacklog({
+      ...EMPTY_BACKLOG,
+      unreadable: [
+        { id: 'evt-bad', at: '2026-09-27T00:00:00.000Z', reason: '不正な欄: event.type' },
+      ],
+    });
+    expect(text).not.toContain('未処理の合図は無い。');
+    expect(text).toContain('読めた未処理の合図は無い（ただし、読めない行が在る');
+    expect(text).toContain('読めない合図が 1 件ある（id: evt-bad）');
+    expect(text).toContain('処理済みで消えたのではない');
+  });
+
+  it('読めた行が在り、読めない行も在れば、内訳の末尾に読めない件数を足す（計には入っていない）', () => {
+    const text = renderInboxBacklog({
+      ...BACKLOG_WITH_ROWS,
+      unreadable: [{ reason: '不正な行' }],
+    });
+    expect(text).toContain('内訳（計 3 件）');
+    expect(text).toContain('読めない合図が 1 件ある（id も取れない）');
+    expect(text).toContain('上の計には入っていない');
+  });
+
+  it('対照: unreadable が無ければ、読めない行の文言は出ない', () => {
+    expect(renderInboxBacklog(BACKLOG_WITH_ROWS)).not.toContain('読めない');
+  });
+
   it('人間起点の滞留を、内訳より前・単独の行で出す（issue #917 と同じ並び）', () => {
     const text = renderInboxBacklog(BACKLOG_WITH_ROWS);
     const alertIndex = text.indexOf('人間起点');

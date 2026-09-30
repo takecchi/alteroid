@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 import { isDaemonSelfNotice } from './daemon-self-notice.js';
-import type { InboxEvent } from './schema.js';
+import type { InboxEvent, UnreadableInboxEvent } from './schema.js';
+import { describeUnreadableInboxEvents } from './store.js';
 import type { PendingInboxEvent } from './store.js';
 
 /**
@@ -277,6 +278,13 @@ export interface InboxBacklogBreakdown {
     readonly oldestAt?: string;
     readonly undelivered: number;
   };
+  /**
+   * 読めなかった行（issue #2344）。**`total` には入らない**——`total` は読めた行の数で、
+   * 読めない行は別の軸である。**1件でも在るときだけ鍵が載る**（0件なら鍵ごと無い。
+   * 「読めない合図は 0 件」の値を作らない）。`peekPending().unreadable` をそのまま持つ。
+   * 本文は載せない（`unreadableInboxEventSchema` の doc）。
+   */
+  readonly unreadable?: readonly UnreadableInboxEvent[];
 }
 
 /**
@@ -997,10 +1005,13 @@ export async function removeInboxEventsAndStopDelivery(
  *
  * @param now 齢バケツの基準時刻（epoch ミリ秒）。呼び出し側が渡す
  *   （`Date.now()` を直接呼ばないことでテストから固定できる）。
+ * @param unreadable `peekPending().unreadable`（issue #2344）。内訳の集計には入れず、
+ *   そのまま `unreadable` 欄へ載せる（1件でも在るときだけ）。
  */
 export function summarizeInboxBacklog(
   rows: readonly PendingInboxEvent[],
   now: number,
+  unreadable: readonly UnreadableInboxEvent[] = [],
 ): InboxBacklogBreakdown {
   const total = rows.length;
 
@@ -1131,6 +1142,7 @@ export function summarizeInboxBacklog(
       ...(humanOriginatedOldestAt === undefined ? {} : { oldestAt: humanOriginatedOldestAt }),
       undelivered: humanOriginatedUndelivered,
     },
+    ...(unreadable.length === 0 ? {} : { unreadable }),
   };
 }
 
@@ -1447,6 +1459,20 @@ export function describeInboxBacklogQueuedInMemory(queued: number | undefined): 
   );
 }
 
+/**
+ * 読めた合図が0件で、読めない行だけが在るときの文（issue #2344。読めない行が無ければ `null`）。
+ *
+ * **「未処理の合図は無い」とは言わない。** その文言は、読めた行も読めない行も0件のときにしか
+ * 出さない。`manager_list`（`tools.ts`）と CLI（`alteroid inbox show`）が同じ文面を使う。
+ */
+export function describeNoReadableInboxEvents(
+  unreadable: readonly UnreadableInboxEvent[],
+): string | null {
+  const note = describeUnreadableInboxEvents(unreadable);
+  if (note === null) return null;
+  return `読めた未処理の合図は無い（ただし、読めない行が在る——下）。\n${note}`;
+}
+
 export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string {
   const byTypeText =
     b.byType.length === 0 ? '（無し）' : b.byType.map((e) => `${e.type} ${e.count}`).join(' / ');
@@ -1469,6 +1495,9 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
       ? ''
       : ` ／ 同じ本文がマネージャーを跨いで ${b.distinctAcrossManagers} 件（managerId を無視して数え直した参考値。inboxBacklogCrossManagerDedupeKey の doc）`;
 
+  // 読めない行は計に入っていない別の軸（issue #2344）。0件なら1文字も足さない。
+  const unreadableNote = describeUnreadableInboxEvents(b.unreadable ?? []);
+
   return [
     `内訳（計 ${b.total} 件）:`,
     `種類: ${byTypeText}`,
@@ -1477,5 +1506,6 @@ export function describeInboxBacklogBreakdown(b: InboxBacklogBreakdown): string 
     `器の入れ替え回数: 0回＝いまの器になってから積まれた ${b.undelivered} / 1回 ${b.deliveredOnce} / 2回以上 ${b.redelivered}（最大 ${b.maxDeliveries}）⚠ 配られた回数ではない — 門が畳んだ行はターンが1度も起きないまま数だけ増える`,
     `いまの器になってから積まれた分（0回）の内訳（種類別）: ${undeliveredByTypeText}`,
     `齢（観測 ${b.observedAt} 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）: ${ageBucketsText}`,
+    ...(unreadableNote === null ? [] : [`⚠ ${unreadableNote}（上の計には入っていない）`]),
   ].join('\n');
 }

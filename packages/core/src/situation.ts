@@ -1118,9 +1118,17 @@ function describeSituationInboxBacklog(
   // issue #1140: 種類の内訳（上位 N 件 + 他）を添える。数え方のずれは
   // このファイル doc「閾値超えの回だけ、種類の内訳を持つ」に明記済み。
   const typeLine = foldInboxBacklogByType(backlog.typeBreakdown.byType);
+  // issue #2344: 上の件数（`pending()`）は読めない行も数える。種類の内訳は読めた行だけなので、
+  // 読めない行が在るときは、その数を言う（言わないと、ずれの理由が「1件前後」に見える）。
+  const unreadableCount = backlog.typeBreakdown.unreadable?.length ?? 0;
+  const unreadableClause =
+    unreadableCount === 0
+      ? ''
+      : `（このほか読めない行が ${unreadableCount} 件あり、この数にも種類にも入っていない。` +
+        '壊れた行であって、処理済みではない。`manager_list` で id が分かる）';
   return (
     `⚠ ${base}種類: ${typeLine}` +
-    `（器の生の行 ${backlog.typeBreakdown.total} 件を数えた——このターン自身の分は` +
+    `（器の生の行 ${backlog.typeBreakdown.total} 件を数えた${unreadableClause}——このターン自身の分は` +
     '引いていないので、上の件数と1件前後ずれることがある。本文は載せない。' +
     '残り（送信元 / 同一本文 / 器の入れ替え回数 / 齢）は `manager_list` で見る）。'
   );

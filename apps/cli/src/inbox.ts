@@ -3,6 +3,7 @@ import { stdout } from 'node:process';
 import {
   describeHumanOriginatedInboxAlert,
   describeInboxBacklogBreakdown,
+  describeNoReadableInboxEvents,
   type InboxBacklogBreakdown,
 } from '@alteroid/core';
 
@@ -252,7 +253,14 @@ export async function inboxShowCommand(): Promise<void> {
  * 症状を、この CLI でも再現しないため）。
  */
 export function renderInboxBacklog(breakdown: InboxBacklogBreakdown): string {
-  if (breakdown.total === 0) return 'クローンの受信箱に未処理の合図は無い。';
+  if (breakdown.total === 0) {
+    // issue #2344: 「無い」は、読めた行も読めない行も0件のときにしか言わない。
+    // `unreadable` は1件でも在るときだけ鍵が載る（`GET /inbox`）。
+    return (
+      describeNoReadableInboxEvents(breakdown.unreadable ?? []) ??
+      'クローンの受信箱に未処理の合図は無い。'
+    );
+  }
   const alert = describeHumanOriginatedInboxAlert(breakdown);
   const lines = alert === '' ? [] : [alert, ''];
   lines.push(describeInboxBacklogBreakdown(breakdown));

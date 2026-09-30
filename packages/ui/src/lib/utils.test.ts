@@ -173,6 +173,7 @@ describe('cn の tailwind-merge 設定（slim）', () => {
         '足すもの: 下のグループの定義を tailwind-merge の getDefaultConfig() の classGroups',
         '（node_modules/tailwind-merge/dist/bundle-mjs.mjs）から同じ並びの位置へ写し、必要なら',
         'conflictingClassGroups の該当の行も写す。使う scale* / theme が utils.ts に無ければ足す。',
+        '**足す前に、例の class が本当に class か確かめる** — 走査は文脈を見ないので `to--;` のようなコードも拾う（#2350）。誤検出なのに足すと、使わないグループが bundle に戻る。',
         '(グループ: 例の class)',
       ].join('\n'),
     ).toEqual([]);
