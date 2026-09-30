@@ -1581,7 +1581,7 @@ async function describeMissingReport(
   } catch (error) {
     return (
       `${base} 生ログは読めなかった（` +
-      (error instanceof Error ? error.message : String(error)) +
+      reasonOf(error) +
       '）。「まだ書いていない」か「書いたのに届いていない」かは、これだけでは判定できない。'
     );
   }
@@ -5937,7 +5937,7 @@ export function createCloneTools(context: ToolContext) {
         try {
           fromWritten = await stores.persona.write(fromSlug, nextContent);
         } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
+          const reason = reasonOf(error);
           if (toAppend.length > 0) {
             // **ここで嘘をつかない。** 「移した」と返すと、呼び手は重複に
             // 気づけない。落ちたのは2手目なので、1手目（移し先への追記）は
@@ -10475,7 +10475,7 @@ export function createCloneTools(context: ToolContext) {
           try {
             list = await pool.list();
           } catch (error: unknown) {
-            return { kind: 'unreadable', reason: String(error) };
+            return { kind: 'unreadable', reason: reasonOf(error) };
           }
           const manager = list.find((entry) => entry.managerId === managerId);
           return manager === undefined ? { kind: 'absent' } : { kind: 'found', manager };
@@ -10547,7 +10547,7 @@ export function createCloneTools(context: ToolContext) {
             })
             .catch((error: unknown): ManagerUnpushedWork => ({
               kind: 'unavailable',
-              reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+              reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
             }));
 
           return text(
