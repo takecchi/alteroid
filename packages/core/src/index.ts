@@ -818,6 +818,7 @@ export {
  * 置いて配るまでの1本道（`credential-service.ts`）。**正本はデーモンが持つ。**
  */
 export {
+  CredentialEntryRejectedError,
   createCredentialService,
   resolveCredentialRows,
   type ApplyCredentialsResult,
@@ -951,6 +952,7 @@ export {
 export { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
 export {
   createTokenPoolService,
+  type ReplaceResult,
   type TokenPoolService,
   type TokenPoolServiceOptions,
   type TokenPoolView,
