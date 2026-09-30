@@ -1,6 +1,4 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { makeTempDirSync } from '../vitest.tmpdir.js';
 
 /**
  * `scripts/*.test.ts` が本物の `git` を子として起こすときに渡す共通の env
@@ -36,11 +34,17 @@ import { join } from 'node:path';
  * `git` を起こす箇所（`scripts/verify-core.test.ts` 等）で無駄にディレクトリ
  * が積み上がる。中身を書き込まない（`.gitconfig` を置かない）空のディレクトリ
  * なので、同じファイル内の呼び出しどうしで使い回しても副作用は無い。
+ *
+ * ## 後片付け（#2419）
+ *
+ * 偽の `HOME` は `vitest.tmpdir.ts` の `makeTempDirSync` で作る。そのテスト
+ * ファイルの最後に `vitest.setup.ts` の `afterAll` が消す（`pnpm test` のたびに
+ * `$TMPDIR` へ空のディレクトリが残る問題の解消）。
  */
 let fakeHome: string | undefined;
 
 function getFakeHome(): string {
-  fakeHome ??= mkdtempSync(join(tmpdir(), 'alteroid-git-child-env-'));
+  fakeHome ??= makeTempDirSync('alteroid-git-child-env-');
   return fakeHome;
 }
 

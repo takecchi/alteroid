@@ -45,7 +45,8 @@
  *   （`railway/cli-stub.ts` はテスト用の偽 CLI で production コードではないが、
  *   同様に「helper 関数」という扱い）にまで検出を広げると、helper 関数の
  *   中身を書くたびに歯が誤爆するため（helper 自身は正当に `mkdtemp` を
- *   呼ってよい）。
+ *   呼ってよい）。**例外: `HELPER_GLOBS` に名指しした helper（`*.test-support.ts`、
+ *   `git-child-env.ts`）は #2419 で対象に入れた。**
  * - **子プロセス（シェルスクリプト等）が自分で作る一時ディレクトリも対象外**
  *   （Issue #1436 が最初から挙げていた限界。`vitest.tmpdir.ts` の doc の
  *   「子プロセスの限界」と同じ）。
@@ -69,6 +70,23 @@
  * この判定そのものは生きている——将来また正当な理由で許可リストへ書き戻す
  * ファイルが出たときに、消し忘れがあれば同じ仕組みで気づける。
  */
+
+/**
+ * `*.test.ts` ではないが、**テストからしか import されない helper** の glob（#2419）。
+ * 上の「限界」の1つ目のうち、`vitest.tmpdir.ts` の掃除が届くはずの helper だけを
+ * 名指しで足したもの。`gitChildEnv()` の偽 `HOME` が、`*.test.ts` を走査するこの歯の
+ * 外で `mkdtempSync` を直接呼んで、誰にも消されなかった（`pnpm test` のたびに空の
+ * ディレクトリが残った）のと同じ穴を塞ぐ。
+ *
+ * **全 helper を対象にはしない**（`railway/cli-stub.ts` のように、helper 自身が正当に
+ * `mkdtemp` を呼ぶものがあり、広げると誤爆する）。増やすときは、その helper が
+ * テストからしか import されず、`vitest.tmpdir.ts` へ寄せられることを確かめてから足す。
+ */
+export const HELPER_GLOBS = [
+  '**/*.test-support.ts',
+  'scripts/git-child-env.ts',
+  '.github/scripts/git-child-env.ts',
+];
 
 /** 名前付き呼び出し（`mkdtemp(` / `mkdtempSync(`）と名前空間呼び出し
  * （`fs.mkdtempSync(`）の両方を、1本の正規表現で拾う（doc 参照）。 */
