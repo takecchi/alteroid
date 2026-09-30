@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
+import { redactedExcerpt } from '@alteroid/core/redact';
+
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -18,6 +20,10 @@ import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from
  * 差し替えられる**（これから起こす仕事には即座に。走行中の仕事は `gh` / `git` が
  * 次の呼び出しから拾う）。
  */
+
+/** 失敗の応答の `error` / `detail` を画面に出す長さの上限（伏せた後に切る）。 */
+const ERROR_LIMIT = 512;
+const DETAIL_LIMIT = 2000;
 
 interface ProfileView {
   script: string;
@@ -248,10 +254,14 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
       detail?: unknown;
     };
     if (typeof body.error === 'string') {
+      // **伏せてから切る**（issue #2418）。`detail` はデーモンが評価したシェルの
+      // stderr で、bash は構文エラーで入力の行そのもの（`export GH_TOKEN=…`）を
+      // 引用する。message は画面に出る。
+      const error = redactedExcerpt(body.error, ERROR_LIMIT, process.env);
       throw new Error(
         typeof body.detail === 'string' && body.detail.length > 0
-          ? `${body.error}\n${body.detail}`
-          : body.error,
+          ? `${error}\n${redactedExcerpt(body.detail, DETAIL_LIMIT, process.env)}`
+          : error,
       );
     }
     throw new Error(`${path} が失敗しました (${String(response.status)})`);
