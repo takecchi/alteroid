@@ -15759,6 +15759,10 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
 describe('システムプロンプトの道具一覧', () => {
   it('CLONE_TOOL_NAMES の全部が載っている（一覧に無い道具を作らない）', () => {
     const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    // 終点の `# 委譲` が消えると、節が `# 道具` 以降の全文に広がり、他の節に出る道具名で
+    // 下の照合が通って、一覧からの抜けを見逃す。切る前に両方の見出しが在ることを確かめる。
+    expect(prompt).toContain('\n# 道具\n');
+    expect(prompt).toContain('\n# 委譲\n');
     const section = prompt.split('# 道具')[1]?.split('# 委譲')[0];
     // 節そのものが見つからなければ、下の照合は全部「載っていない」に倒れる。
     // **その状態を「一覧が空だった」と読み替えないこと**（節の名前を変えたなら
