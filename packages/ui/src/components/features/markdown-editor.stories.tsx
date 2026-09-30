@@ -72,3 +72,29 @@ export const Split: Story = {
     );
   },
 };
+
+/**
+ * 省略可能な口を使った形（記憶の詳細の画面）: タブは「プレビュー → 編集」の2つだけ、
+ * 「⌘/Ctrl + S で保存」の一言と空のプレビューの一言と placeholder は出さない。
+ */
+export const Plain: Story = {
+  args,
+  render: function Render() {
+    const [value, setValue] = useState('');
+    return (
+      <div className="flex h-[640px] max-w-5xl flex-col">
+        <MarkdownEditor
+          value={value}
+          onChange={setValue}
+          onSave={() => undefined}
+          modes={['preview', 'edit']}
+          defaultMode="edit"
+          saveHint={null}
+          emptyPreview={null}
+          placeholder=""
+          minHeight="20rem"
+        />
+      </div>
+    );
+  },
+};
