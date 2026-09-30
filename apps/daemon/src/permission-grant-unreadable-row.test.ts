@@ -1,7 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { captureStderr, type PermissionGrant, type PermissionGrantStore } from '@alteroid/core';
+import {
+  captureStderr,
+  UnreadablePermissionGrantError,
+  type PermissionGrant,
+  type PermissionGrantStore,
+} from '@alteroid/core';
 import { createFsStores } from '@alteroid/storage-fs';
 import { createPgStoresFromDb, tables } from '@alteroid/storage-pg';
 import { eq } from 'drizzle-orm';
@@ -155,7 +160,7 @@ describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書�
   });
 
   it.each(implementations)(
-    'revoke() は読めない行に対して null を返し、行を1文字も書き換えない — %s',
+    'revoke() は読めない行に対して「無い」（null）と言わず UnreadablePermissionGrantError を投げ、行を1文字も書き換えない（issue #2425） — %s',
     async (_label, setup) => {
       const harness = await setup();
       if (harness.close !== undefined) cleanup = harness.close;
@@ -163,15 +168,19 @@ describe('PermissionGrantStore.revoke() / markUsed() — 読めない行は書�
 
       const before = await harness.readRawRow(BROKEN_RAW.id);
 
-      let result: PermissionGrant | null = null;
+      let error: unknown;
       await captureStderr(async () => {
-        result = await harness.stores.permissionGrants.revoke(
-          BROKEN_RAW.id,
-          '2026-01-05T00:00:00.000Z',
-        );
+        try {
+          await harness.stores.permissionGrants.revoke(BROKEN_RAW.id, '2026-01-05T00:00:00.000Z');
+        } catch (thrown) {
+          error = thrown;
+        }
       });
 
-      expect(result).toBeNull();
+      expect(error).toBeInstanceOf(UnreadablePermissionGrantError);
+      // 読めない行の許可は「許可が無い」ものとして扱われる（fail-closed のまま）。
+      expect(await harness.stores.permissionGrants.get(BROKEN_RAW.id)).toBeNull();
+      expect(await harness.stores.permissionGrants.list()).toEqual([]);
       const after = await harness.readRawRow(BROKEN_RAW.id);
       expect(after).toEqual(before);
     },

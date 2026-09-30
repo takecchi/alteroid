@@ -2,6 +2,7 @@
 // 置いた同じ形の述語から取る——`manager_list` の並び（`tools.ts`）も同じものを
 // 見るので、2箇所に `status === 'lost'` を書くと *分け方* が割れる（あちらの doc）。
 import { isManagerAwaitingJudgement } from './digest.js';
+import { reasonOf } from './dropped-record.js';
 import {
   INBOX_BACKLOG_LOUD_THRESHOLD,
   describeInboxBacklogQueuedInMemory,
@@ -1344,7 +1345,7 @@ export function describeSituationUnavailable(error: unknown, at: number = Date.n
     // **こちらも時刻を名乗る（#902）。** 数えられた節だけが名乗る形にすると、
     // 「非対称そのものが理由を要求する」という #902 の指摘を、**この関数が
     // そっくり作り直すことになる。**
-    `${SITUATION_HEAD}を数えられなかった（${readAtLabel(at)} 時点）: ${String(error)}`,
+    `${SITUATION_HEAD}を数えられなかった（${readAtLabel(at)} 時点）: ${reasonOf(error)}`,
     'これは「全部片付いている」ではなく「**数えられなかった**」である。' +
       '本数が要るなら `manager_list` / `runner_list` を自分で呼ぶこと。',
   ]);

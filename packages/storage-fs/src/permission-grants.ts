@@ -1,7 +1,12 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { createUnreadableRowOnce, permissionGrantSchema, unreadableRowKey } from '@alteroid/core';
+import {
+  createUnreadableRowOnce,
+  permissionGrantSchema,
+  UnreadablePermissionGrantError,
+  unreadableRowKey,
+} from '@alteroid/core';
 import type { PermissionGrant, PermissionGrantStore, UnreadableRowOnce } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -126,11 +131,22 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
    * `PermissionGrantStore.revoke` の doc（lost update・#1654 と同型）。
    * **現在値を読むのも書くのも同じ `#update` の排他区間の中**——`get()` した
    * 古い写しではなく、ここで読み直した現在値から `revokedAt` の有無を見る。
+   *
+   * **id が `invalidGrantsRaw`（読めない行）にしか無いときは `null`（無い）では
+   * なく `UnreadablePermissionGrantError` を投げ、ファイルは1バイトも書かない**
+   * （issue #2425。`FsJobStore.updateJob` の `UnreadableJobError` と同じ線）。
+   * 読めない行は `list()` / `get()` に現れないので、投げても許可が余計に通る
+   * ことは無い（fail-closed のまま）。
    */
   async revoke(id: string, at: string): Promise<PermissionGrant | null> {
     return this.#update((file) => {
       const found = file.grants.find((grant) => grant.id === id);
-      if (found === undefined) return { next: file, result: null };
+      if (found === undefined) {
+        if (file.invalidGrantsRaw.some((raw) => extractRowId(raw) === id)) {
+          throw new UnreadablePermissionGrantError({ id });
+        }
+        return { next: file, result: null };
+      }
       const next = permissionGrantSchema.parse({ ...found, revokedAt: found.revokedAt ?? at });
       return {
         next: {

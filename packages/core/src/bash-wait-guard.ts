@@ -1519,17 +1519,25 @@ const ENV_ASSIGNMENT_SRC = String.raw`${ENV_ASSIGNMENT_BODY_SRC}[ \t]+`;
  * （`1e1`・`0x10`・`inf` も通る。`-` 始まりを除くのでオプションと重ならない。
  * 上の小数の doc は、この緩めた読み方の一部として引き続き成り立つ）。
  * 先頭の語は `/usr/bin/timeout` のようなパス付きも読む。パス部分は `=` を含めない
- * （`[^\s=]{0,64}`）—— `ENV_ASSIGNMENT_SRC` の語（`A=/x/timeout`）と同じ語が2通りに
- * 読めると、同じ語の繰り返しで読み方が指数的に増えるため。**上限 64 は必須**:
+ * （`[^\s=]{0,62}`）—— `ENV_ASSIGNMENT_SRC` の語（`A=/x/timeout`）と同じ語が2通りに
+ * 読めると、同じ語の繰り返しで読み方が指数的に増えるため。**上限は必須**:
  * 無制限の `*` だと、空白の無い長い1語（`a;a;a;…`）で各開始位置が語末まで走り2乗になった
  * （bash-wait-guard-heredoc-scan の時間の歯が赤くなった。`ssh` の `\S{0,64}` と同じ手当て）。
+ *
+ * **パスは `/`・`./`・`../`・`~/` で始まる形だけを読む**（`TIMEOUT_PATH_SRC`）。任意の文字から
+ * 始められる形（`[^\s=]{0,64}\/`）だと、上限があっても**すべての開始位置で最大64文字先まで
+ * `/` を探して引き返す**ので、`a;a;a;…` の1回あたりが約2.6倍に遅くなり（`a;`×40000 で
+ * 107ms → 283ms）、上の時間の歯が混んだ CI で 5000ms を超えた（#2444 の CI、#2423 の後始末）。
+ * 先頭の1文字（`/` `.` `~`）で候補を絞れば、それ以外の位置は1文字目で落ちる。`bin/timeout` の
+ * ような `./` の無い相対パスは読まないが、読み飛ばせないだけで誤って弾く向きには倒れない。
  *
  * 残る穴: 長いオプションの省略形（`--kill=5`・`--sig KILL`。GNU の getopt は
  * 一意な省略を受ける）と `--`（オプションの終わり）は読まない。読めないだけで、
  * 誤って弾く方向にはならない。
  */
 const TIMEOUT_COMMAND_OPTION_SRC = String.raw`(?:--kill-after(?:=\S*|[ \t]+\S+)[ \t]+|--signal(?:=\S*|[ \t]+\S+)[ \t]+|--(?:foreground|preserve-status|verbose)[ \t]+|-[fvp]+[ \t]+|-[fvp]*[ks](?:\S+|[ \t]+\S+)[ \t]+)`;
-const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`(?:[^\s=]{0,64}\/)?timeout[ \t]+(?:${TIMEOUT_COMMAND_OPTION_SRC})*[^\s-]\S*[ \t]+`;
+const TIMEOUT_PATH_SRC = String.raw`(?:(?:~|\.{1,2})?\/(?:[^\s=]{0,62}\/)?)`;
+const TIMEOUT_COMMAND_PREFIX_SRC = String.raw`${TIMEOUT_PATH_SRC}?timeout[ \t]+(?:${TIMEOUT_COMMAND_OPTION_SRC})*[^\s-]\S*[ \t]+`;
 
 /**
  * `env` コマンド経由の単純な前置き —— `env`（引数無し）・

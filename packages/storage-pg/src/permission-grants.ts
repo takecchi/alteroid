@@ -1,4 +1,9 @@
-import { createUnreadableRowOnce, permissionGrantSchema, unreadableRowKey } from '@alteroid/core';
+import {
+  createUnreadableRowOnce,
+  permissionGrantSchema,
+  UnreadablePermissionGrantError,
+  unreadableRowKey,
+} from '@alteroid/core';
 import type { PermissionGrant, PermissionGrantStore, UnreadableRowOnce } from '@alteroid/core';
 import { asc, eq } from 'drizzle-orm';
 
@@ -127,7 +132,10 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
    * から読み直し、書く**（`PgJobStore.updateJob` と同じ形——issue #2051）。
    *
    * **読めない行（`permissionGrantSchema` に合わない。版ずれ・手編集）は
-   * 「無い」と同じ `null` を返す。行にも触れない**（issue #2158）。
+   * 行に触れない**（issue #2158）。**戻りは `null`（無い）ではなく
+   * `UnreadablePermissionGrantError` を投げる**（issue #2425。fs 実装と同じ線。
+   * 投げても許可が余計に通ることは無い——読めない行は `list()` / `get()` に
+   * 現れない）。
    * 以前は `record`（jsonb）の中身を一切見ずに `jsonb_set` ＋ `coalesce` の
    * 条件無し `UPDATE` で `revoked_at` / `record.revokedAt` を書き換えていた
    * ため、読めない行にも書いたうえで戻り値だけ `null` にしていた——`fs` 実装
@@ -152,7 +160,7 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
         process.stderr.write(
           `${describeUnreadableGrantRow({ id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
         );
-        return null;
+        throw new UnreadablePermissionGrantError({ id });
       }
       const current = parsed.data;
       // 既に取り消し済みなら元の revokedAt を保つ（上書きしない）。

@@ -42,7 +42,9 @@ import {
   ProfileRollbackFailedError,
   redactProfileFailure,
   TokenPoolInputError,
+  UnreadableAccountError,
   UnreadableCommitmentError,
+  UnreadablePermissionGrantError,
   UnreadablePracticeError,
   approvalUpdatedAt,
   chatStreamEventSchema,
@@ -3700,6 +3702,13 @@ export function createApp(deps: AppDeps) {
             description: '該当する許可が無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
+              '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
+              '読めない許可は「許可が無い」ものとして扱われる（通らない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           ...noBodyPostResponses(),
         },
       }),
@@ -3710,7 +3719,23 @@ export function createApp(deps: AppDeps) {
         // （`PermissionGrantStore.revoke` の doc。#1654 と同型）。`revoke` が
         // 排他区間の中で現在値を読み直すので、`#onPreToolUse` の `markUsed`
         // 割り込みでも取り消しが消えない。
-        const grant = await stores.permissionGrants.revoke(id, new Date().toISOString());
+        // **issue #2425。** 読めない行（`invalidGrantsRaw`）は「無い」（404）ではなく
+        // 「読めない形で在る。取り消しはこの口ではできない」（409）と言い分ける
+        // （`GET /managers/:id` の #2359 と同じ線）。行は変わっていない。
+        let grant: Awaited<ReturnType<typeof stores.permissionGrants.revoke>>;
+        try {
+          grant = await stores.permissionGrants.revoke(id, new Date().toISOString());
+        } catch (error) {
+          if (!(error instanceof UnreadablePermissionGrantError)) throw error;
+          return c.json(
+            {
+              error:
+                `許可 ${error.id} は読めない形で入っている（消されたのでも、取り消されたのでもない）。` +
+                '取り消しはこの口ではできない。本文はここでは取れない。',
+            },
+            409,
+          );
+        }
         if (grant === null) return c.json({ error: 'not found' as const }, 404);
         // 誰が取り消したかは必ず残す（`/access/*` の grant/revoke と同じ理由——
         // 「事後に追えることが最終承認の実体」PRD「可観測性」）。
@@ -8118,12 +8143,34 @@ export function createApp(deps: AppDeps) {
             description: '該当するアカウントが無い。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
+          409: {
+            description:
+              '該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
+              '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
+              '読めないアカウントは認可を通らない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
           ...noBodyPostResponses(),
         },
       }),
       deliberateClient,
       async (c) => {
-        const account = await authService.revoke(c.req.param('accountId'));
+        // **issue #2425。** 読めない行は「無い」（404）ではなく「読めない形で在る」（409）
+        // と言い分ける。行は変わっていない（許可は落ちていない）。
+        let account: Awaited<ReturnType<typeof authService.revoke>>;
+        try {
+          account = await authService.revoke(c.req.param('accountId'));
+        } catch (error) {
+          if (!(error instanceof UnreadableAccountError)) throw error;
+          return c.json(
+            {
+              error:
+                `アカウント ${error.id} は読めない形で入っている（消されたのでも、許可が落ちたのでもない）。` +
+                '取り消しはこの口ではできない。本文はここでは取れない。',
+            },
+            409,
+          );
+        }
         if (account === null) return c.json({ error: 'not found' as const }, 404);
         // 取り消しは効いているので、日誌への追記だけが落ちても 500 を返さない
         // ——`appendJournalOrDrop` の doc（#2043。狭める側は #2037 と同じ扱い）。

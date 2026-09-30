@@ -1237,6 +1237,22 @@ describe('describeSituationUnavailable', () => {
     expect(text).not.toContain('器 0 台');
   });
 
+  it('多行の例外（drizzle の形）の2行目以降の値と、URL の資格は、クローンのプロンプトへ出さない（#2468）', () => {
+    const drizzleShaped = new Error(
+      'Failed query: select * from managers where id = $1\nparams: FAKE_SECRET_VALUE_2468',
+    );
+    const text = describeSituationUnavailable(drizzleShaped);
+    expect(text).toContain('Failed query');
+    expect(text).not.toContain('FAKE_SECRET_VALUE_2468');
+    expect(text).not.toContain('params:');
+
+    const withCredential = describeSituationUnavailable(
+      new Error('connect failed: postgres://user:FAKE_SECRET_VALUE_2468@db.example:5432/alteroid'),
+    );
+    expect(withCredential).toContain('connect failed');
+    expect(withCredential).not.toContain('FAKE_SECRET_VALUE_2468');
+  });
+
   it('行そのものは消えない（見出しは数えられたときと同じ語で始まる）', () => {
     const ok = describeSituation({ managers: [], runners: [] });
     const ng = describeSituationUnavailable(new Error('x'));

@@ -6,6 +6,7 @@ import {
   authAccountSchema,
   authIdentitySchema,
   loginRequestSchema,
+  UnreadableAccountError,
 } from '@alteroid/core';
 import type {
   AccessTokenRecord,
@@ -320,11 +321,21 @@ export class FsAuthStore implements AuthStore {
    * `markAccountLoggedIn` と同じ形）。呼び手が読んだときの写しは使わない
    * ——使うと、そのあいだに完了した再ログインの `lastLoginAt` を書き戻して
    * しまう。無い id では何もしない。
+   *
+   * **id が `invalidAccountsRaw`（読めない行）にしか無いときは「無い」ではなく
+   * `UnreadableAccountError` を投げ、ファイルは書かない**（issue #2425）。
+   * 読めない行は `getAccount()` に現れず認可は通らないので、投げても許可が
+   * 余計に通ることは無い（fail-closed のまま）。
    */
   async revokeAccountAccess(accountId: string): Promise<void> {
     await this.#mutate<null>((file): { next: AuthFile | null; result: null } => {
       const account = file.accounts.find((it) => it.id === accountId);
-      if (account === undefined) return { next: null, result: null };
+      if (account === undefined) {
+        if (file.invalidAccountsRaw.some((raw) => extractRowId(raw) === accountId)) {
+          throw new UnreadableAccountError({ id: accountId });
+        }
+        return { next: null, result: null };
+      }
       const updated = authAccountSchema.parse({
         ...account,
         grantedAt: null,

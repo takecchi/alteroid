@@ -61,6 +61,11 @@ const NO_PAIRS: PracticeCandidateReconciliation = {
 
 /** `## 委譲` の見出しで2つの軸に割る。群が軸を跨いでいないかを見るため。 */
 function splitAxes(reply: string): { commitments: string; jobs: string } {
+  // 目印が消えると indexOf が -1 になり、slice が空や全文になって後ろの not.toContain・長さの上限が素通りする。先に在ることを確かめる（#2431）。
+  // `## 委譲` だけだと較正の節の `### 委譲` にも当たるので、軸の見出しは全文で確かめる。
+  expect(reply).toContain('## 引き受けた仕事（台帳）');
+  expect(reply).toContain('## 委譲（マネージャーへ出した仕事）');
+  expect(reply).toContain('## 評定する側の較正の材料');
   const jobsAt = reply.indexOf('## 委譲');
   const calibrationAt = reply.indexOf('## 評定する側の較正の材料');
   return {
@@ -328,6 +333,8 @@ describe('describePracticeCandidates — 種類ごとの候補を材料として
     // 重い群の後ろの種類も見える。
     expect(commitments).toContain('### 種類「調査」');
     expect(commitments).toContain('軽い本文');
+    // 先に見出しが在ることを確かめる。無いと slice(-1, …) が空になり、長さの上限が素通りする（#2431）。
+    expect(commitments).toContain('### 種類「実装」');
     const heavyBlock = commitments.slice(
       commitments.indexOf('### 種類「実装」'),
       commitments.indexOf('### 種類「調査」'),
@@ -360,6 +367,8 @@ describe('describePracticeCandidates — 種類ごとの候補を材料として
 
     const calibration = reply.slice(reply.indexOf('## 評定する側の較正の材料'));
     expect(calibration).toContain('種類ごとには割っていない');
+    // 先に見出しが在ることを確かめる。無いと slice(0, -1) がほぼ全文になり、toContain が他の節の字面で通りうる（#2431）。
+    expect(calibration).toContain('### 委譲');
     const commitmentPart = calibration.slice(0, calibration.indexOf('### 委譲'));
     expect(commitmentPart).toContain(
       'クローン「うまくいった」→人間「うまくいかなかった」: 3 件（食い違い）',

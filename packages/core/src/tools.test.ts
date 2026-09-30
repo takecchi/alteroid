@@ -6363,6 +6363,17 @@ describe('クローンの道具', () => {
     expect(reply, '読めなかっただけなのに「居ない」と言っている').not.toContain('居ない');
   });
 
+  it('manager_stop は止める前に一覧を読めなかった原因の、2行目以降の値を応答へ出さない（#2468）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    h.setListFailures([1], 'Failed query: select 1\nparams: FAKE_SECRET_VALUE_2468');
+
+    const reply = await h.call('manager_stop', { managerId: 'mgr-1', reason: '確認' });
+
+    expect(reply).toContain('読めなかった原因: Error: Failed query: select 1\n');
+    expect(reply).not.toContain('FAKE_SECRET_VALUE_2468');
+  });
+
   it('manager_stop は止める前に一覧を読めなくても、force: true なら止めに進む', async () => {
     const h = harness();
     await h.call('manager_start', { request: 'A' });
@@ -12744,6 +12755,21 @@ describe('manager_report: 報告が空のとき、生ログを見て言い分け
     expect(reply).not.toContain('⚠');
   });
 
+  it('生ログが読めなかった理由の、2行目以降の値と URL の資格は応答へ出さない（#2468）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: '調べて' });
+    h.setTranscriptFailure(
+      'mgr-1',
+      'Failed query: select 1\nparams: FAKE_SECRET_VALUE_2468 postgres://u:FAKE_SECRET_VALUE_2468@h/db',
+    );
+
+    const reply = await h.call('manager_report', { managerId: 'mgr-1' });
+
+    expect(reply).toContain('生ログは読めなかった（');
+    expect(reply).toContain('Failed query');
+    expect(reply).not.toContain('FAKE_SECRET_VALUE_2468');
+  });
+
   it('上限（REPORT_GENERATED_PROBE_CHARS）まで遡っても見つからなかったら「見つからなかった」であって「無い」ではない', async () => {
     const h = harness();
     await h.call('manager_start', { request: '調べて' });
@@ -13414,6 +13440,9 @@ describe('一覧の文言は、観測した分しか言わない', () => {
     done.status = 'done';
 
     const reply = await h.call('manager_list', {});
+    // mgr-2 の目印が消えると `indexOf` が -1 になり、`doneEntry` は末尾の1文字になって
+    // 下の `not.toContain('⚠')` が緑のまま残る。切り出す前に在ることを確かめる。
+    expect(reply).toContain('mgr-2');
     const lostEntry = reply.slice(reply.indexOf('mgr-1'), reply.indexOf('mgr-2'));
     const doneEntry = reply.slice(reply.indexOf('mgr-2'));
 
@@ -15756,6 +15785,10 @@ describe('self_dropped（自分の跡を器の中から読み戻す。#242）', 
 describe('システムプロンプトの道具一覧', () => {
   it('CLONE_TOOL_NAMES の全部が載っている（一覧に無い道具を作らない）', () => {
     const prompt = buildCloneSystemPrompt({ memory: renderMemoryDocuments([]) });
+    // 終点の `# 委譲` が消えると、節が `# 道具` 以降の全文に広がり、他の節に出る道具名で
+    // 下の照合が通って、一覧からの抜けを見逃す。切る前に両方の見出しが在ることを確かめる。
+    expect(prompt).toContain('\n# 道具\n');
+    expect(prompt).toContain('\n# 委譲\n');
     const section = prompt.split('# 道具')[1]?.split('# 委譲')[0];
     // 節そのものが見つからなければ、下の照合は全部「載っていない」に倒れる。
     // **その状態を「一覧が空だった」と読み替えないこと**（節の名前を変えたなら

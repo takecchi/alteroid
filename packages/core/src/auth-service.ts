@@ -108,6 +108,10 @@ export interface AuthService {
    */
   logout(bearer: string): Promise<LogoutResult>;
   grant(accountId: string, by: string): Promise<GrantResult>;
+  /**
+   * 無い id は `null`。**行は在るが読めない（fs の `invalidAccountsRaw`）ときは
+   * `null` にせず `UnreadableAccountError` を投げる**（issue #2425。行は変えない）。
+   */
   revoke(accountId: string): Promise<AuthAccount | null>;
   /** 実行環境の持ち主として宣言する／取り消す（issue #1198）。operator トークンだけが呼ぶ。 */
   setOwner(accountId: string, declared: boolean): Promise<OwnerOutcome>;
@@ -454,7 +458,18 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
 
     async revoke(accountId) {
       const account = await store.getAccount(accountId);
-      if (account === null) return null;
+      if (account === null) {
+        /**
+         * **`getAccount` の `null` は「読めない行」も含む**（fs は `invalidAccountsRaw`
+         * を返さない。issue #2425）。「無い」と言い切る前に `revokeAccountAccess` を
+         * 1回呼ぶ——本当に無い id は何もせず（書かず）、読めない行なら
+         * `UnreadableAccountError` を投げ、呼び手（HTTP 層）が「読めない形で在る」と
+         * 言い分ける。`getAccount` 自体は投げない（認証の経路が 401 でなく 500 に
+         * なるのを避ける）。
+         */
+        await store.revokeAccountAccess(accountId);
+        return null;
+      }
       /**
        * **許可の取り消しは、宣言済みの owner も落とす。**（issue #1198）
        *
