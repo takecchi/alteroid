@@ -56,7 +56,7 @@ import type { PendingInboxEvent } from './store.js';
  *    案ではなく、「暗黙の参照（`this.#redelivered` / `this.#redeliveredClosed`
  *    への直接アクセス）を、明示のメソッド呼び出し（`this.#redeliveryState.get(...)`
  *    等）に変える」案である——PR #1507・#1433・#1359 と同じ限界。
- * 2. **テストの分離は買えない。** `clone.test.ts` / `inbox-persistence.test.ts` /
+ * 2. **テストの分離は買えない。** `clone-*.test.ts`（旧 `clone.test.ts`。#1744 で分割済み）/ `inbox-persistence.test.ts` /
  *    `stale-redelivery-batch.test.ts` の配り直し系の `it` / `describe` はどれも
  *    `Clone` をブラックボックスとして通した統合テストで、切り出しの前後で一体の
  *    まま動く——検証は `journal.list(...)` の中身や `retained.redelivered` /

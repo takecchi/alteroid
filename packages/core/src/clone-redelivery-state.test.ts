@@ -18,7 +18,8 @@ import { humanMessage } from './testing.js';
  * 外す——である。`Clone` 側の4呼び出し元（`dropQueuedInboxEvents` /
  * `#removeStaleRedeliveryChunk` / `#restoreUnreadPass` の
  * `#droppedWhileRestoring` 分岐 / `#forget`）が実際に `drop` を呼ぶ配線までは
- * 測らない——それは `clone.test.ts` の
+ * 測らない——それは `clone-summary-reindex-and-tail.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の
  * `describe('inbox_flow.retained —— #forget 以外の経路の後始末（Issue #1264 の続き）')`
  * がブラックボックスで持つ（Issue #1534 案2。Issue 本文も同じ限界を明記
  * している——「これは『#removeStaleRedeliveryChunk が drop を呼ぶ』配線

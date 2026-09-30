@@ -57,7 +57,7 @@ import { createMemoryStores, humanMessage } from './testing.js';
  *   実測はしていない）。
  */
 
-/** `clone.test.ts` の `fakeSdk` を大きく簡略化したもの。この歯が要るのは
+/** `clone-test-harness.ts`（旧 `clone.test.ts`。#1744 で分割済み）の `fakeSdk` を大きく簡略化したもの。この歯が要るのは
  * 「1件の human_message が1ターンとして最後まで処理された」ことだけなので、
  * 既存のオプション一式（`modelUsage` / `resultFor` 等）は要らない。 */
 function fakeSdk(): { fn: typeof sdkQuery } {
@@ -119,7 +119,7 @@ describe('Issue #1744: Clone#pump — #notices.set の呼び出し順（characte
       // ——変えているのは「呼ばれた順を配列へ積む」という観測だけである。**
       const originalSet = CloneNotices.prototype.set;
       // 6回目（`superseded`）が積まれた瞬間に解決する——壁時計のポーリングを
-      // 持たない（`clone.test.ts` の `waitFor` と同じ考え方。ここでは spy
+      // 持たない（`clone-test-harness.ts` の `waitFor` と同じ考え方。ここでは spy
       // 自身が同期の通知点になるので、専用の待ち行列を組む必要が無い）。
       let resolveDone: (() => void) | undefined;
       const done = new Promise<void>((resolve) => {
@@ -143,7 +143,7 @@ describe('Issue #1744: Clone#pump — #notices.set の呼び出し順（characte
         stores,
         queryFn: fn,
         env: {},
-        // 委譲先も偽物にしておく（`clone.test.ts` の `setup()` と同じ理由——
+        // 委譲先も偽物にしておく（`clone-test-harness.ts` の `setup()` と同じ理由——
         // ここで確かめたいのは `#pump` の通知の順序だけであり、誤って本物の
         // SDK を起こさないようにする）。
         runners: createRunnerRegistry([

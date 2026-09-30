@@ -14,8 +14,8 @@ import { CloneSdkSession } from './clone-sdk-session.js';
  * ——`open` の2行のまとめ、`finishTurn` の4フィールドをまたぐ一括処理、
  * token / 文脈窓の recycle の「消費する読み」、入力の待ち行列（高々1本の
  * 待ち手）である。`Clone` が「いつ開く／畳むか・ターンをどう回すか・畳みの
- * 順序」を決める判断は、既存のブラックボックステスト（`clone.test.ts` の
- * SDK セッションを名指しする `describe`/`it`）が引き続き持つ——ここでは
+ * 順序」を決める判断は、既存のブラックボックステスト（`clone-*.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の SDK セッションを名指しする `describe`/`it`）が引き続き持つ——ここでは
  * 扱わない。
  */
 

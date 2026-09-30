@@ -89,7 +89,8 @@ function summary(id: string, status: JobStatus, live: boolean): ManagerSummary {
  * `ManagerPool` のスタブ。**この節が測っているのは `stores.commitments` の
  * 配線なので、`managers` の中身そのものは重要ではない**——`#situationNoticeFor`
  * が既存の配線として同じターンで `list()` / `runners()` を呼ぶので、投げない
- * 程度に応えれば十分である（`clone.test.ts` の `throwingPool` と同じ作法で
+ * 程度に応えれば十分である（`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の `throwingPool` と同じ作法で
  * それ以外は未実装のまま置く）。
  */
 function stubPool(managers: ManagerSummary[]): ManagerPool {

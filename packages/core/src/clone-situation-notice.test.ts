@@ -95,7 +95,8 @@ function summary(
 
 /**
  * `ManagerPool` のスタブ。**`list()` と `runners()` だけを本物にする**——
- * それ以外は呼ばれない前提で投げる（`clone.test.ts` の `throwingPool` と
+ * それ以外は呼ばれない前提で投げる（`clone-manager-confirmation-and-shutdown.test.ts`（旧 `clone.test.ts`。
+ * #1744 で分割済み）の `throwingPool` と
  * 同じ作法。呼ばれたら歯が落ちる形なので、黙って別の経路を通ることが無い）。
  */
 function stubPool(input: {
