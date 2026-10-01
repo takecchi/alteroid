@@ -60,6 +60,7 @@ import {
   type RunnerResumeCommand,
   type UnpushedWorkResult,
 } from './runner-protocol.js';
+import { buildNotificationFeed } from './notifications.js';
 import type { InboxEvent, Job, JobStatus, JournalEntry } from './schema.js';
 import { workspaceLocatorSchema } from './schema.js';
 import type { Stores } from './store.js';
@@ -13315,5 +13316,44 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
     // ここで呼ばれ続けて「止めたはずのプールが後から動く」形になる
     // （`#reattachTimers` を畳むのと同じ理由）。
     expect(attempts).toBe(attemptsAtStop);
+  });
+});
+
+/**
+ * 通知一覧（issue #2515。`notifications.ts`）の陰性対照。
+ *
+ * マネージャーの確認はクローン宛てで、クローンが記憶に根拠があれば自分で答える。
+ * 日誌には同じ `escalation` の形で残るので、「日誌の `escalation` から通知を作る」
+ * 実装にすると、人間宛てでないこの確認まで人間に知らせてしまう。通知の元を
+ * 承認待ちキューにしていることを、本物の委譲の経路で確かめる。
+ */
+describe('通知一覧（issue #2515）の陰性対照', () => {
+  it('マネージャー→クローンの確認は日誌に escalation を残すが、通知一覧には出ない', async () => {
+    const s = setup();
+    const { managerId } = await s.pool.start({ request: '調べて' });
+    const session = s.sessions[0] as FakeSession;
+
+    const aborter = new AbortController();
+    const asked = session.ask('Bash', { command: 'ls' }, aborter.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // **前提の確認。** 確認が届いていなければ、下の「出ない」は何も測っていない。
+    const escalations = await s.stores.journal.list({ types: ['escalation'] });
+    expect(
+      escalations.some((entry) => entry.type === 'escalation' && entry.managerId === managerId),
+    ).toBe(true);
+    const waiting = (await s.pool.list()).find((m) => m.managerId === managerId)?.waiting;
+    expect(waiting).toHaveLength(1);
+
+    const feed = buildNotificationFeed(
+      await s.stores.jobs.listApprovals({ pendingOnly: true }),
+      await s.stores.notifications.readCursor(),
+    );
+    expect(feed.notifications).toEqual([]);
+    expect(feed.unreadCount).toBe(0);
+
+    aborter.abort();
+    await asked;
+    await s.pool.stop();
   });
 });

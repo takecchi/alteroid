@@ -1,4 +1,8 @@
-import { captureStderr, verifyMcpServerStoreContract } from '@alteroid/core';
+import {
+  captureStderr,
+  verifyMcpServerStoreContract,
+  verifyNotificationStoreContract,
+} from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -24,7 +28,8 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 等分するので、1本のままでは分割にならない——だから最上位の `describe`
  * 単位でファイルを分けた。ここは `PgMcpServerStore` / `PgProfileStore` /
  * `PgCredentialVaultStore` / `PgTokenPoolStore` / `PgSessionRegistry` /
- * `PgSessionStore（SDK のセッション永続化）` を持つ。**`describe` / `it` の
+ * `PgSessionStore（SDK のセッション永続化）` を持つ（分割の後に `PgNotificationStore`
+ * を足した。issue #2515）。**`describe` / `it` の
  * 本文・順序は1文字も変えていない**——元ファイルの対応する範囲とこのファイルを
  * 突き合わせれば同一であることが確認できる。冒頭の足場（`beforeEach` で
  * PGlite を都度立てて `migrate` する形、`afterEach` で閉じる形）も元ファイルと
@@ -52,6 +57,37 @@ afterEach(async () => {
  * いない更新が最後の変更として表示される（デーモンを起こすたびに動いていたのと
  * 同じ意味の壊れ方）。**器が違っても同じ振る舞いになること**を fs / pg の両方で問う。
  */
+/**
+ * 人間への通知の既読の位置（issue #2515）。**Railway ではここが唯一の置き場になる**
+ * （volume が無い）。契約は3実装で同じ関数を通す（`notifications.ts`）。
+ */
+describe('PgNotificationStore', () => {
+  it('器の契約（3実装で同じことを測る）', async () => {
+    await verifyNotificationStoreContract(stores.notifications);
+  });
+
+  it('migrate を2回通しても既読の位置が残る（create table if not exists が no-op）', async () => {
+    await stores.notifications.advanceReadCursor('2026-10-01T00:00:01.000Z');
+    await migrate(db);
+    expect(await stores.notifications.readCursor()).toMatchObject({
+      state: 'ok',
+      cursor: { readThrough: '2026-10-01T00:00:01.000Z' },
+    });
+  });
+
+  it('同時に進めても、遅い側の古い位置で巻き戻らない', async () => {
+    await Promise.all([
+      stores.notifications.advanceReadCursor('2026-10-01T00:00:03.000Z'),
+      stores.notifications.advanceReadCursor('2026-10-01T00:00:01.000Z'),
+      stores.notifications.advanceReadCursor('2026-10-01T00:00:02.000Z'),
+    ]);
+    expect(await stores.notifications.readCursor()).toMatchObject({
+      state: 'ok',
+      cursor: { readThrough: '2026-10-01T00:00:03.000Z' },
+    });
+  });
+});
+
 /**
  * 人間の MCP 連携の登録（#325 段1）。**Railway ではここが唯一の置き場になる**
  * （volume が無い）。契約は3実装で同じ関数を通す（`mcp-server-contract.ts`）。

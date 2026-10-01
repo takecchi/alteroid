@@ -11,6 +11,7 @@ import { FsInboxStore } from './inbox.js';
 import { FsJobStore } from './jobs.js';
 import { FsJournalStore } from './journal.js';
 import { FsMcpServerStore } from './mcp-servers.js';
+import { FsNotificationStore } from './notifications.js';
 import { FsPersonaStore } from './persona.js';
 import { FsPermissionGrantStore } from './permission-grants.js';
 import { FsPracticeStore } from './practices.js';
@@ -31,6 +32,7 @@ export { FsInboxStore } from './inbox.js';
 export { FsJobStore } from './jobs.js';
 export { FsJournalStore } from './journal.js';
 export { FsMcpServerStore } from './mcp-servers.js';
+export { FsNotificationStore } from './notifications.js';
 export { FsPersonaStore } from './persona.js';
 export { FsPermissionGrantStore } from './permission-grants.js';
 export { FsPracticeStore } from './practices.js';
@@ -63,6 +65,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     profile: new FsProfileStore(paths.profile),
     credentials: new FsCredentialVaultStore(paths.credentials),
     mcpServers: new FsMcpServerStore(paths.mcpServers),
+    notifications: new FsNotificationStore(paths.jobs),
     tokens: new FsTokenPoolStore(paths.tokens),
     usage: new FsUsageStore(paths.usage),
   };

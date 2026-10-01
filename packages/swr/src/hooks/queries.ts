@@ -148,6 +148,8 @@ export const KEY = {
   archive: { type: 'archive' } as const,
   archiveSessions: { type: 'archiveSessions' } as const,
   inbox: { type: 'inbox' } as const,
+  /** 人間への通知（issue #2515）。`use-journal-live.ts` が `escalation` で落とす。 */
+  notifications: { type: 'notifications' } as const,
 };
 
 /** デーモンが応答するか。接続先が合っているかの唯一の手がかりでもある。 */
@@ -630,6 +632,16 @@ export function useDropped() {
 export function useInboxBacklog() {
   const api = useApi();
   return useSWR(KEY.inbox, () => api.api.GET('/inbox').then(unwrap));
+}
+
+/**
+ * 人間への通知の一覧と未読数（`GET /notifications`。issue #2515）。**数えるのは
+ * デーモン（`@alteroid/core` の `buildNotificationFeed`）の1か所**で、CLI の
+ * `alteroid notifications list` と同じ値を見る。
+ */
+export function useNotifications() {
+  const api = useApi();
+  return useSWR(KEY.notifications, () => api.api.GET('/notifications').then(unwrap));
 }
 
 /**

@@ -360,6 +360,16 @@ export const mcpServers = pgTable('mcp_servers', {
 });
 
 /**
+ * 人間への通知の既読の位置（issue #2515）。**高々1行**（全員で1組。
+ * `NotificationStore` の doc）。`env_profile` と同じく鍵は固定である。
+ */
+export const notificationCursor = pgTable('notification_cursor', {
+  id: text('id').primaryKey(),
+  readThrough: timestamp('read_through', { withTimezone: true, mode: 'date' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
+
+/**
  * マネージャーへ降ろす環境変数の正本（名前→値）。**1名前1行。**
  *
  * `env_profile` が高々1行なのに対してこちらが行を持つのは、**名前ごとに配る

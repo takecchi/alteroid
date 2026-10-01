@@ -10,6 +10,7 @@ import {
   verifyCommitmentAppraisalContract,
   verifyCommitmentFoldContract,
   verifyMcpServerStoreContract,
+  verifyNotificationStoreContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
@@ -3305,6 +3306,39 @@ describe('FsProfileStore', () => {
     await stores.profile.write('export WHICH=new\n');
     await stores.profile.revert(null);
     expect(await stores.profile.read()).toBeNull();
+  });
+});
+
+/**
+ * 人間への通知の既読の位置（issue #2515）。契約は3実装で同じ関数を通す
+ * （`notifications.ts` の `verifyNotificationStoreContract`）。ここで足すのは
+ * fs だけが持つ形 —— 器を作り直しても残ることと、壊れたファイルの読み方。
+ */
+describe('FsNotificationStore', () => {
+  it('器の契約（3実装で同じことを測る）', async () => {
+    await verifyNotificationStoreContract(stores.notifications);
+  });
+
+  it('器を作り直しても既読の位置が残る（デーモンの入れ替えで消えない）', async () => {
+    await stores.notifications.advanceReadCursor('2026-10-01T00:00:01.000Z');
+    const reopened = createFsStores(root);
+    const read = await reopened.notifications.readCursor();
+    expect(read).toMatchObject({
+      state: 'ok',
+      cursor: { readThrough: '2026-10-01T00:00:01.000Z' },
+    });
+  });
+
+  it('壊れたファイルは「無い」ではなく「読めない」と返し、進めれば書き直す', async () => {
+    await mkdir(join(root, 'jobs'), { recursive: true });
+    await writeFile(join(root, 'jobs', 'notifications.json'), '{ not json', 'utf8');
+    expect((await stores.notifications.readCursor()).state).toBe('unreadable');
+
+    await stores.notifications.advanceReadCursor('2026-10-01T00:00:01.000Z');
+    expect(await stores.notifications.readCursor()).toMatchObject({
+      state: 'ok',
+      cursor: { readThrough: '2026-10-01T00:00:01.000Z' },
+    });
   });
 });
 

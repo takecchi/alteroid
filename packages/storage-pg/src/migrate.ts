@@ -713,6 +713,16 @@ export const STATEMENTS = [
   `alter table usage_daily add column if not exists unreadable_cache_creation_input_tokens bigint not null default 0`,
   `alter table usage_daily add column if not exists unreadable_web_search_requests bigint not null default 0`,
   `alter table usage_daily add column if not exists unreadable_cost_usd bigint not null default 0`,
+
+  // --- 人間への通知の既読の位置（issue #2515）---------------------------------
+  // **`env_profile` と同じ形（高々1行）。** 新しい表を足すだけなので既存行の
+  // 意味は1ビットも変わらず、同名の `drop` をどこにも置いていないので
+  // `create table if not exists` は2周目以降も本当の no-op である。
+  `create table if not exists notification_cursor (
+     id text primary key,
+     read_through timestamptz not null,
+     updated_at timestamptz not null
+   )`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

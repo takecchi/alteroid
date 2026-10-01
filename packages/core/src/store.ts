@@ -4,6 +4,7 @@ import type { ArchiveContinuity } from './archive-continuity.js';
 import type { AuthStore } from './auth.js';
 import type { CredentialEntry } from './credentials.js';
 import type { McpServers, StoredMcpServers } from './mcp-servers.js';
+import type { NotificationCursorRead, NotificationReadCursor } from './notifications.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
@@ -664,6 +665,30 @@ export function describeUnreadableManagerRow(id: string, reason: string): string
     `マネージャー ${id} は読めない形で入っている（消されたのでも、畳まれたのでもない）。` +
     `理由: ${reason}。本文はここでは取れない。`
   );
+}
+
+/**
+ * 人間への通知の既読の位置（issue #2515）。**全員で1組**——PRD「非ゴール」の
+ * 「利用者ごとにデータを分けない」の線で、アカウントごとの既読は持たない。
+ *
+ * 通知一覧そのものは承認待ちキューから作る射影（`notifications.ts` の
+ * `buildNotificationFeed`）で、ここが持つのは位置1つだけである。
+ *
+ * **`clear()` を持たない（`POST /reset` はここに触れない）。** リセットで承認待ちは
+ * 消えるので、残った位置が既読にする相手は居ない。リセット後に積まれた承認待ちは
+ * 位置より新しいので未読になる——`WorkspaceResetSummary` に欄を足して表示を揃える
+ * 手間に見合う差が無い。
+ */
+export interface NotificationStore {
+  readCursor(): Promise<NotificationCursorRead>;
+  /**
+   * 既読の位置を `through` まで進める。**戻らない**——いまの位置より古い値を渡すと
+   * 何もせず、いまの位置を返す（2つの入口がほぼ同時に既読にしたとき、遅れて届いた
+   * 古い位置で巻き戻らないため）。位置が読めない状態なら `through` で書き直す。
+   *
+   * 返すのは書いた後の位置。
+   */
+  advanceReadCursor(through: string): Promise<NotificationReadCursor>;
 }
 
 /** ジョブと承認待ちキュー。M1 では承認待ちだけを使う。 */
@@ -2932,6 +2957,13 @@ export interface Stores {
    * という能力差が生まれる（north_star 禁止1）。
    */
   mcpServers: McpServerStore;
+  /**
+   * 人間への通知の既読の位置（issue #2515）。
+   *
+   * **省略可能にしないこと**（`schedules` / `inbox` と同じ理由）。ここが任意だと、
+   * 片方の器でだけ既読がデーモンの作り直しで消えるという能力差が生まれる。
+   */
+  notifications: NotificationStore;
   /**
    * 認証トークンのプール（Issue #393）。
    *

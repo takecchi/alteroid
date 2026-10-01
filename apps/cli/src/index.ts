@@ -50,6 +50,7 @@ import {
   mcpSetCommand,
   mcpShowCommand,
 } from './mcp.js';
+import { notificationsListCommand, notificationsReadCommand } from './notifications.js';
 import { alteroidRoot } from './paths.js';
 import { permissionListCommand, permissionRevokeCommand } from './permission.js';
 import { resetCommand } from './reset.js';
@@ -371,6 +372,28 @@ program
   .option('--window-hours <n>', '消化と見込みを数える窓の長さ（時間。既定は daemon が決める）')
   .action(async (options: { windowHours?: string }) => {
     await progressCommand(options);
+  });
+
+/**
+ * 人間への通知（issue #2515）。`list`（`GET /notifications`）と `read`
+ * （`POST /notifications/read`）の2本。詳しい設計は `apps/cli/src/notifications.ts`。
+ */
+const notificationsCommand = program
+  .command('notifications')
+  .description('人間への通知（いまは未回答の承認待ち）の一覧と既読');
+
+notificationsCommand
+  .command('list')
+  .description('通知の一覧と未読数を読む（読み取り専用。何も変更しない）')
+  .action(async () => {
+    await notificationsListCommand();
+  });
+
+notificationsCommand
+  .command('read')
+  .description('一覧のいちばん新しい通知までを既読にする（既読は全員で1組）')
+  .action(async () => {
+    await notificationsReadCommand();
   });
 
 /**

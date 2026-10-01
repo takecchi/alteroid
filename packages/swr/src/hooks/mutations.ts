@@ -997,6 +997,27 @@ export function useInboxRemoveMany() {
 }
 
 /**
+ * 通知を既読にする（`POST /notifications/read`。issue #2515）。CLI の
+ * `alteroid notifications read` と同じ口。
+ *
+ * **`through` は呼び出し側が画面で見た `latestAt` を渡す。** 「いま」を渡すと、
+ * 画面を描いた後に積まれた承認待ちまで、見ずに既読になる。応答は進めた後の一覧
+ * なので、それをそのままキャッシュへ置く（GET を1本省く）。
+ */
+export function useMarkNotificationsRead() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (through: string) => {
+      const feed = await api.api.POST('/notifications/read', { body: { through } }).then(unwrap);
+      await mutate(KEY.notifications, feed, { revalidate: false });
+      return feed;
+    },
+    [api, mutate],
+  );
+}
+
+/**
  * 許可を与える／取り消す（`POST /access/:id/grant` `.../revoke`。Issue #213）。
  *
  * **資格は `authenticate` だけ**（2026-09-06 の同格化。`apps/daemon/src/app.ts` の

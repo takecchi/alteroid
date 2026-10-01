@@ -141,6 +141,10 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
   switch (entry.type) {
     case 'escalation':
       void mutate((key) => isKeyOfType(key, 'approvals'));
+      // 通知（issue #2515）の元は承認待ちキューで、積む・答える・取り下げるの
+      // どれも `escalation` を書く。マネージャー→クローンの確認でも落ちるが、
+      // 取り直した一覧には出ない（数えるのはデーモン）ので、無駄な GET が1本増えるだけである。
+      void mutate(KEY.notifications);
       void mutate((key) => isKeyOfType(key, 'managers'));
       // マネージャー詳細・生ログも束で落とす。理由は下の `invalidateManagerDetail` に。
       invalidateManagerDetail(mutate);

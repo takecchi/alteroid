@@ -538,6 +538,18 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
+/** 人間への通知一覧（issue #2515）。元は承認待ちキュー、新しく持つのは既読の位置だけ。 */
+export {
+  NOTIFICATION_KINDS,
+  buildNotificationFeed,
+  verifyNotificationStoreContract,
+  type ApprovalPendingNotification,
+  type Notification,
+  type NotificationCursorRead,
+  type NotificationFeed,
+  type NotificationKind,
+  type NotificationReadCursor,
+} from './notifications.js';
 /**
  * `PermissionGrantStore` の契約（Issue #863。doc は `store.ts`）。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで

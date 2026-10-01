@@ -47,6 +47,7 @@ import {
   UnreadablePermissionGrantError,
   UnreadablePracticeError,
   approvalUpdatedAt,
+  buildNotificationFeed,
   chatStreamEventSchema,
   collectConversations,
   commitmentActiveDelegationIds,
@@ -183,6 +184,8 @@ import {
   memoryListResponseSchema,
   memoryReadResponseSchema,
   meResponseSchema,
+  notificationFeedResponseSchema,
+  notificationReadRequestSchema,
   okResponseSchema,
   openApiDocumentation,
   openApiExcludePaths,
@@ -1177,6 +1180,15 @@ function whereValidationFailed(issues: readonly { readonly path?: readonly unkno
     .filter((path) => path.length > 0)
     .join(', ');
 }
+
+/**
+ * `POST /notifications/read` の `through` が、デーモンの時計よりどれだけ先まで
+ * 許されるか（issue #2515）。`through` は `GET /notifications` の `latestAt`
+ * （＝デーモンが付けた時刻）を渡す前提なので、本来は時計より先にならない。
+ * 先の時刻を受けると、その先に積まれる承認待ちまで見ずに既読になる。
+ * 1分の余裕は、器をまたぐ構成（runner や別ホストの画面）の時計のずれのぶんである。
+ */
+const NOTIFICATION_READ_FUTURE_SKEW_MS = 60_000;
 
 /**
  * `validator('json', schema)` を常にこの形で呼ぶための薄いラッパー（issue #424
@@ -3311,6 +3323,90 @@ export function createApp(deps: AppDeps) {
           .sort(compareDailyReportsNewestFirst);
         if (reports.length === 0) return c.json({ error: 'not found' as const }, 404);
         return c.json({ reports });
+      },
+    )
+
+    // --- 人間への通知（issue #2515）---------------------------------------
+    //
+    // 元は承認待ちキュー。新しく持つ状態は既読の位置1つだけで、全員で1組である
+    // （PRD「非ゴール」——利用者ごとにデータを分けない）。資格は `GET /approvals`
+    // と同じく `authenticate` だけ。中身は `/approvals` で既に読めるものの射影である。
+    .get(
+      '/notifications',
+      describeRoute({
+        tags: ['notifications'],
+        summary: '人間への通知の一覧（いまは承認待ちだけ）',
+        description:
+          '`ask_human` / `request_permission` が積んだ未回答の承認待ちを、新しい順に並べ、' +
+          '既読の位置（全員で1組）より新しいものを未読として数える。答えた・取り下げた' +
+          '承認待ちは既読にしなくても一覧から消える。**日誌の `escalation` からは作らない**' +
+          '（マネージャーからクローンへの確認——人間宛てでないもの——も同じ形で入るため）。' +
+          '既読にするときは、ここで返った `latestAt` を `POST /notifications/read` の ' +
+          '`through` に渡す。既読の位置が読めないときは `cursorUnreadable` に理由が載り、' +
+          '全件を未読として数える。読めない承認待ちが在るときだけ `unreadableApprovals` が載る' +
+          '（一覧にも未読数にも入っていない）。',
+        responses: {
+          200: {
+            description: '通知の一覧と未読数。',
+            content: {
+              'application/json': { schema: resolver(notificationFeedResponseSchema) },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        const feed = buildNotificationFeed(
+          await stores.jobs.listApprovals({ pendingOnly: true }),
+          await stores.notifications.readCursor(),
+        );
+        return c.json(notificationFeedResponseSchema.parse(feed));
+      },
+    )
+
+    .post(
+      '/notifications/read',
+      describeRoute({
+        tags: ['notifications'],
+        summary: '通知を既読にする（位置を進める）',
+        description:
+          '既読の位置を `through` まで進める。**戻らない**——いまの位置より古い値を渡しても' +
+          '何も変わらない（2つの入口がほぼ同時に既読にしたとき、遅れて届いた古い位置で' +
+          '巻き戻らないため）。`through` には `GET /notifications` の `latestAt` を渡す' +
+          '（「いま」を渡すと、一覧を読んだ後に積まれたものまで見ずに既読になる）。' +
+          '未来の時刻（デーモンの時計で1分より先）は断る。応答は進めた後の一覧である。',
+        responses: {
+          200: {
+            description: '既読の位置を進めた後の一覧と未読数。',
+            content: {
+              'application/json': { schema: resolver(notificationFeedResponseSchema) },
+            },
+          },
+          400: {
+            description: '本文が不正、または `through` が未来の時刻。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(notificationReadRequestSchema),
+      async (c) => {
+        const { through } = c.req.valid('json');
+        const now = (deps.now ?? (() => new Date()))().getTime();
+        if (Date.parse(through) > now + NOTIFICATION_READ_FUTURE_SKEW_MS) {
+          return c.json(
+            {
+              error:
+                `through（${through}）がデーモンの時計より先である。GET /notifications の ` +
+                'latestAt を渡すこと。**既読の位置は動かしていない。**',
+            },
+            400,
+          );
+        }
+        await stores.notifications.advanceReadCursor(through);
+        const feed = buildNotificationFeed(
+          await stores.jobs.listApprovals({ pendingOnly: true }),
+          await stores.notifications.readCursor(),
+        );
+        return c.json(notificationFeedResponseSchema.parse(feed));
       },
     )
 
