@@ -5889,10 +5889,22 @@ export function createApp(deps: AppDeps) {
         error: 'MCP サーバの登録の形が不正（保存していない）' + (where === '' ? '' : `: ${where}`),
       })),
       async (c) => {
-        const previous = await deps.stores.mcpServers.read();
+        // **前の登録は日誌の「前の登録」のためにしか使わない**（差分の計算も配布も
+        // 前の登録を見ない全文置換）。保存済みの登録が壊れていて読めなくても、置き
+        // 直す口を塞がない（#2489）——「読めなかった」と日誌に書いて進む。**「なし」
+        // とは書き分ける**（前は空だったと取り違えない）。理由は `reasonOf` を通す
+        // （器の例外は値を載せない作りだが、ここでも伏せ字を通す）。登録の中身は
+        // 日誌にも応答にも出さない。
+        let previousText: string;
+        try {
+          const previous = await deps.stores.mcpServers.read();
+          const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
+          previousText = before.length === 0 ? 'なし' : before.join(', ');
+        } catch (error) {
+          previousText = `読めなかった（${reasonOf(error)}）`;
+        }
         const servers = c.req.valid('json').mcpServers;
         const names = mcpServerNames(servers);
-        const before = previous === null ? [] : mcpServerNames(previous.mcpServers);
 
         // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
         // runner への配布結果は差し替えた後でないと分からないので、ここでは
@@ -5905,7 +5917,7 @@ export function createApp(deps: AppDeps) {
               : `MCP サーバの登録を差し替えようとしている（${names.join(', ')}）`,
           grounds:
             `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
-            `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
+            `前の登録: ${previousText}。` +
             '値は書かない（鍵が入りうる）。',
         });
 
@@ -5965,7 +5977,7 @@ export function createApp(deps: AppDeps) {
                 : `MCP サーバの登録を差し替えた（${names.join(', ')}）`,
             grounds:
               `${describeActor(c.get('principal'))}（PUT /mcp-servers）。` +
-              `前の登録: ${before.length === 0 ? 'なし' : before.join(', ')}。` +
+              `前の登録: ${previousText}。` +
               '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
               `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
               '（マネージャーには次に開くセッションから効く）。',
