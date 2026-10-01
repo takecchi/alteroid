@@ -42,6 +42,7 @@ import {
   fingerprintOf,
   mcpServersFingerprintOf,
   noteDroppedRecord,
+  parseMcpServers,
   RunnerMcpServersUnsupportedError,
   RECENT_TRACE_LIMIT,
   RESERVED_SCHEDULE_KINDS,
@@ -12196,6 +12197,90 @@ describe('MCP サーバの登録（/mcp-servers）', () => {
     // 前のものが残る。
     expect((await stores.mcpServers.read())?.mcpServers).toEqual({
       github: { command: 'gh-mcp' },
+    });
+  });
+
+  /**
+   * **issue #2489。** 保存済みの登録が壊れていて `read()` が投げても、置き直す口は
+   * 塞がない。前の登録は日誌の名前のためにしか使わない（差分の計算も配布も
+   * 前の登録を見ない全文置換）ので、読めなかったことを日誌に書いて進む。
+   * 登録の中身（値）は日誌にも応答にも出さない。
+   */
+  describe('保存済みの登録が壊れていて読めないとき（#2489）', () => {
+    const FAKE = 'FAKE_SECRET_VALUE_2489';
+    const corruptedApp = () => {
+      let corrupted = true;
+      const brokenStores: Stores = {
+        ...stores,
+        mcpServers: {
+          ...stores.mcpServers,
+          read: () => {
+            if (!corrupted) return stores.mcpServers.read();
+            // 器の `read()` と同じ検査（予約名 alteroid が入っている）で投げる。
+            return Promise.resolve().then(() => {
+              parseMcpServers({ alteroid: { command: 'x', env: { K: FAKE } } });
+              throw new Error('unreachable');
+            });
+          },
+          write: async (servers) => {
+            const stored = await stores.mcpServers.write(servers);
+            corrupted = false;
+            return stored;
+          },
+        },
+      };
+      return createApp({
+        clone: fake.clone,
+        stores: brokenStores,
+        token: 'test-token',
+        shutdown: () => undefined,
+      });
+    };
+    const decisionsOf = async () =>
+      (await stores.journal.list({ types: ['decision'] }))
+        .flatMap((entry) => (entry.type === 'decision' ? [entry] : []))
+        .reverse();
+
+    it('200 で上書きでき、日誌に「前の登録を読めなかった」が残り、値は日誌にも応答にも出ない', async () => {
+      const response = await corruptedApp().request('/mcp-servers', {
+        ...json({ mcpServers: { github: { command: 'gh-mcp', env: { T: FAKE } } } }),
+        method: 'PUT',
+      });
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).not.toContain(FAKE);
+      expect((JSON.parse(text) as { names: string[] }).names).toEqual(['github']);
+      expect((await stores.mcpServers.read())?.mcpServers).toEqual({
+        github: { command: 'gh-mcp', env: { T: FAKE } },
+      });
+
+      const decisions = await decisionsOf();
+      expect(decisions).toHaveLength(2);
+      for (const entry of decisions) {
+        expect(entry.grounds).toContain('前の登録: 読めなかった（');
+        expect(entry.grounds).toContain('MCP サーバの登録の形が不正');
+        expect(entry.grounds).not.toContain('なし。');
+      }
+      expect(JSON.stringify(decisions)).not.toContain(FAKE);
+    });
+
+    it('空の {} でも外せる（登録を外す口も塞がない）', async () => {
+      const response = await corruptedApp().request('/mcp-servers', {
+        ...json({ mcpServers: {} }),
+        method: 'PUT',
+      });
+      expect(response.status).toBe(200);
+      expect(await stores.mcpServers.read()).toBeNull();
+      expect((await decisionsOf())[0]?.grounds).toContain('前の登録: 読めなかった（');
+    });
+
+    it('対照: 読めるときは、前の登録の名前を今までどおり書く', async () => {
+      await put({ mcpServers: { old: { command: 'old-mcp' } } });
+      const response = await put({ mcpServers: { github: { command: 'gh-mcp' } } });
+      expect(response.status).toBe(200);
+      const decisions = await decisionsOf();
+      expect(decisions.at(-1)?.grounds).toContain('前の登録: old。');
+      expect(JSON.stringify(decisions)).not.toContain('読めなかった');
     });
   });
 });
