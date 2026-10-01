@@ -947,14 +947,21 @@ export function createMemoryStores(): Stores {
     async archive(sessionId, transcript): Promise<ArchiveWrite> {
       // 積めない sessionId は、3実装とも同じ例外で断る（issue #2233）。
       assertArchivableSessionId(sessionId);
-      const id = `${sessionId}-${nextId()}`;
+      // id は fs / pg と同じ形（`<sessionId>-<stamp>(-<枝番>).jsonl`、#2459）。
+      // 旧実装の `${sessionId}-id-${n}` は `archiveIdBranch` が解析できず、
+      // `selectArchiveRemovalTargets` の同着が id の字面に落ちて `id-10 < id-9` になった。
+      // 枝番は空いている最小の番号（fs の排他作成と同じ。1本目は枝番無し）。
+      const at = new Date().toISOString();
+      const base = `${sessionId}-${at.replace(/[:.]/g, '-')}`;
+      let id = `${base}.jsonl`;
+      for (let attempt = 2; archives.has(id); attempt += 1) id = `${base}-${attempt}.jsonl`;
       const previous = findPreviousArchiveForSession(sessionId);
       const fingerprint = fingerprintArchiveBody(transcript);
       const { continuity, comparedTo } = classifyArchiveContinuity(previous, transcript);
       archives.set(id, transcript);
       archiveMeta.set(id, {
         sessionId,
-        at: new Date().toISOString(),
+        at,
         seq: archiveMeta.size,
         bodyChars: fingerprint.bodyChars,
         bodyMd5: fingerprint.bodyMd5,
