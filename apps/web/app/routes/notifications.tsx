@@ -83,9 +83,12 @@ export default function Notifications() {
         ) : data === undefined ? null : data.notifications.length === 0 ? (
           <Empty>通知は無い（未回答の承認待ちは無い）。</Empty>
         ) : (
-          <ul className="divide-y divide-border">
+          <ul>
             {data.notifications.map((notification) => (
-              <li key={notification.approvalId} className="flex flex-col gap-1 p-4">
+              <li
+                key={notification.approvalId}
+                className="flex flex-col gap-1 border-b border-border p-4 last:border-b-0"
+              >
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   {notification.read ? <Badge>既読</Badge> : <Badge tone="warn">未読</Badge>}
                   <span className="text-muted-foreground">{formatDateTime(notification.at)}</span>

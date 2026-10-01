@@ -7,7 +7,7 @@
  * なる（承認待ちの札と同じ判断。issue #2105）。数えるのはデーモンで、ここは
  * `unreadCount` をそのまま描くだけである。
  */
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -78,12 +78,48 @@ describe('外枠の「通知」の札', () => {
     expect(link.getAttribute('href')).toBe('/notifications');
   });
 
-  it('未読 0 なら札は無い', async () => {
-    stubNotifications({ body: { notifications: [], unreadCount: 0, readThrough: null } });
+  it('日誌の escalation で取り直し、未読 0 になれば札が消える', async () => {
+    // 「読み込み中だから札が無い」と区別するため、先に札が付いた状態を作ってから
+    // 0 へ移す（実時間で待たない。#2146）。移す合図は本物と同じ日誌の SSE。
+    let unreadCount = 2;
+    let releaseEscalation: () => void = () => {};
+    const escalationGate = new Promise<void>((resolve) => {
+      releaseEscalation = resolve;
+    });
+    stubFetch((url, init) => {
+      if (url.endsWith('/health')) return json(HEALTH);
+      if (url.includes('/approvals')) return json({ approvals: [] });
+      if (url.endsWith('/notifications')) {
+        return json({ notifications: [], unreadCount, readThrough: null });
+      }
+      if (url.endsWith('/journal/stream')) {
+        return sse(
+          [
+            {
+              event: 'escalation',
+              data: {
+                type: 'escalation',
+                id: 'j-1',
+                at: '2026-10-01T00:00:02.000Z',
+                question: '確認',
+                approvalId: 'ap-1',
+                answeredAt: '2026-10-01T00:00:02.000Z',
+              },
+              after: escalationGate,
+            },
+          ],
+          { keepOpen: true, signal: init?.signal },
+        );
+      }
+      return undefined;
+    });
     renderShell();
     const link = await notificationsLink();
-    // 取得が終わるのを待ってから「無い」を見る（読み込み中の札無しと区別するため）。
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await within(link).findByText('2')).toBeTruthy();
+
+    unreadCount = 0;
+    releaseEscalation();
+    await waitFor(() => expect(within(link).queryByText('2')).toBeNull());
     expect(within(link).queryByText('0')).toBeNull();
     expect(screen.queryByLabelText('通知を読めていない')).toBeNull();
   });
