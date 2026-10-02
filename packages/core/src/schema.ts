@@ -3442,10 +3442,16 @@ export type _AssertJobStatusMatchesRunningLikeType = AssertTrue<
  * （M5）。共有 FS や git からの再構築へ伸ばせる形で JobStore に残しておく。
  * ここが欠けると、runner が落ちたときに「どこで何を触っていたのか」が復元できない。
  *
- * **いま新しく書かれるのは `unknown` だけである**（`manager.ts` の `start`）。
- * 永続性を確かめる手段がまだ無いからで、詳しい理由はその変種の doc に在る。
- * `runner-volume` は**それ以前に書かれた行が名乗っている値**であり、確かめた
- * 結果ではない — 新旧で意味が違うので、読むときに混ぜないこと。
+ * **新しく書かれる形は運用選択 `ALTEROID_WORKSPACE_KIND` で決まる**
+ * （`manager.ts` の `resolveWorkspacePolicy` → `workspaceLocatorFrom`）。
+ * 設定が無い・読めない（`=git` で `ALTEROID_WORKSPACE_REPOSITORY` が無いときも）
+ * ときは `unknown` へ倒れる。デーモンには永続性を確かめる手段がまだ無いからで、
+ * 詳しい理由はその変種の doc に在る。いまの配備はこれを設定していないので、
+ * 本番で書かれるのは `unknown` である（#1376）。
+ * `runner-volume` は、運用者が `ALTEROID_WORKSPACE_KIND=runner-volume` と明示
+ * したときに書かれるほかは、**それ以前に書かれた行が名乗っている値**であり、確かめた
+ * 結果ではない（「それ以前」は `unknown` が入った #216 より前）— 新旧で意味が
+ * 違うので、読むときに混ぜないこと。
  */
 export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
   /** その runner に固定された volume。M4 の既定。 */
