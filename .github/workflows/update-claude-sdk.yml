@@ -59,7 +59,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # Node と pnpm の版は mise.toml が持つ（CI と同じ）
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
       - id: pnpm-store
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
