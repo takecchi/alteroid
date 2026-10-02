@@ -436,11 +436,18 @@ describe('GITHUB_CREDENTIAL_NAMES（クローンの器の env が正本より勝
     // テストしない。** 一致するのは「たまたま」であって「そう作られている
     // から」ではない——ROTATABLE_CREDENTIAL_KEYS に GitHub 以外の非プールの
     // 名前が増えても、この配列は自動では広がらない（doc の主張そのもの）。
-    // ここでは「現状は一致する」という1つの事実だけを固定する。
+    // ここでは「差は何か」を1つの事実として固定する。
+    //
+    // **#486 S5 で `CODEX_API_KEY` を回せる鍵に足した** ので、もう一致しない——
+    // これは上の主張が実際に起きた最初の例である。差は `CODEX_API_KEY` だけで、
+    // **GitHub 優先は広がっていない**（`GITHUB_CREDENTIAL_NAMES` は GH_TOKEN /
+    // GITHUB_TOKEN のまま）。旧い期待（一致）を、差の名指しへ強めて置き換えた。
     const rotatableMinusPool = ROTATABLE_CREDENTIAL_KEYS.filter(
       (name) => !POOL_OWNED_CREDENTIAL_NAMES.includes(name),
     );
-    expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual([...rotatableMinusPool].sort());
+    const notGitHub = rotatableMinusPool.filter((name) => !GITHUB_CREDENTIAL_NAMES.includes(name));
+    expect(notGitHub).toEqual(['CODEX_API_KEY']);
+    expect([...GITHUB_CREDENTIAL_NAMES].sort()).toEqual(['GITHUB_TOKEN', 'GH_TOKEN'].sort());
   });
 });
 
