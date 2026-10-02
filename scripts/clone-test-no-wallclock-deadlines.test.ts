@@ -228,7 +228,20 @@ const SCAN_EXCLUDE_DIRS: ReadonlySet<string> = new Set([
   '.react-router',
   '.vite',
 ]);
-const DEADLINE_PATTERN = /Date\.now\(\)\s*-\s*[A-Za-z_$][\w$]*\s*[<>]/g;
+/**
+ * 壁時計の打ち切りの形（`Date.now()` と `performance.now()`）。1本の正規表現の選択肢にして、
+ * 同じ場所を2回数えない。
+ *
+ * - `Date.now() - <開始> >|<`（#2507 の形）
+ * - `<締切> - Date.now()`（`const remaining = deadline - Date.now()`。#2537）
+ * - `Date.now() <|> <締切>`、`<締切> <|> Date.now()`（`=>` と `->` は除く。#2537）
+ *
+ * **見ない形（限界）**: `.getTime()` / `new Date()` の比較、`const end = Date.now() + n` を作って
+ * `AbortSignal.timeout` 等の別の道具へ渡す形、`expect(Date.now() - t).toBeLessThan(n)`
+ * （経過の上限を測る表明で、待ちではない）。
+ */
+const DEADLINE_PATTERN =
+  /(?:Date|performance)\.now\(\)\s*-\s*[A-Za-z_$][\w$]*\s*[<>]|[A-Za-z_$][\w$]*\s*-\s*(?:Date|performance)\.now\(\)|(?:Date|performance)\.now\(\)\s*[<>]|(?<![=-])[<>]=?\s*(?:Date|performance)\.now\(\)/g;
 
 const NEGATIVE_WAIT_EXCEPTIONS: Readonly<Record<string, { count: number; reason: string }>> = {
   'packages/core/src/manager.test.ts': {
@@ -237,6 +250,20 @@ const NEGATIVE_WAIT_EXCEPTIONS: Readonly<Record<string, { count: number; reason:
       '`settleAfterJournal`（負の待ち）。「日誌に一行が出ない」ことを 500ms 見てから黙って抜ける ' +
       '仕様そのものが、保証1と保証2の分離を保つ本体（その doc に在る）。予算を外すと、' +
       '変異のもとで待ちが永久に解けなくなる',
+  },
+  'apps/runner/src/events-stale-subscriber-handoff.test.ts': {
+    count: 1,
+    reason:
+      '3本目の接続を 500ms 固定で読み切ってから数える（負の待ち。#2537）。「再配達が起きない' +
+      '（同じ出来事が2回現れない）」を見るので、早期終了すると「まだ来ていない」と「来ない」が' +
+      '区別できず、窓を外すと読み切る条件が無くなる',
+  },
+  'apps/daemon/src/auth.test.ts': {
+    count: 1,
+    reason:
+      '`readForWindow`（負の待ち。#2537）。「ログアウトしていない／operator の資格の流れが、' +
+      '心拍が来ても閉じないまま」を 200ms 見る対照2本。窓を外すと閉じない流れを永久に読む。' +
+      '「閉じる」ことを待つ正の待ち（`readUntilEnd` / `readUntilText`）は窓を持たない',
   },
 };
 
@@ -254,7 +281,7 @@ function walkTestFiles(absoluteDir: string, relativeDir: string): string[] {
   return found;
 }
 
-describe('どのテストにも壁時計の打ち切りを足さない（#2507、列挙でなく走査）', () => {
+describe('どのテストにも壁時計の打ち切りを足さない（#2507・#2537、列挙でなく走査）', () => {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
   const scanned = SCAN_ROOTS.flatMap((root) => walkTestFiles(path.join(repoRoot, root), root)).map(
     (relative) => ({
@@ -274,7 +301,22 @@ describe('どのテストにも壁時計の打ち切りを足さない（#2507�
     expect('if (Date.now() - start >= timeoutMs) return;'.match(DEADLINE_PATTERN)).toHaveLength(1);
   });
 
-  it('`Date.now() - <開始> > <予算>` の形は、名指しの例外の外に無い', () => {
+  it('deadline を先に作って比べる形も検出する（#2537）。経過の表明と `=>` は拾わない', () => {
+    const found = (source: string) => source.match(DEADLINE_PATTERN) ?? [];
+    expect(found('const remaining = deadline - Date.now();')).toHaveLength(1);
+    expect(found('while (Date.now() < deadline) {}')).toHaveLength(1);
+    expect(found('if (Date.now() > deadline) break;')).toHaveLength(1);
+    expect(found('while (deadline > Date.now()) {}')).toHaveLength(1);
+    expect(found('if (performance.now() - t0 > 100) throw e;')).toHaveLength(1);
+    expect(found('const r = end - performance.now();')).toHaveLength(1);
+    // 拾わない: 経過の上限を測る表明（待ちではない）、アロー関数、時刻を作るだけの式。
+    expect(found('expect(Date.now() - started).toBeLessThan(500);')).toEqual([]);
+    expect(found('const now = () => Date.now();')).toEqual([]);
+    expect(found('const at = new Date(Date.now() - 1000).toISOString();')).toEqual([]);
+    expect(found('const deadline = Date.now() + 500;')).toEqual([]);
+  });
+
+  it('壁時計の打ち切りの形（`Date.now() - <開始> > <予算>`・`<締切> - Date.now()` ほか）は、名指しの例外の外に無い', () => {
     const hits = scanned.flatMap((f) => {
       const n = [...f.code.matchAll(DEADLINE_PATTERN)].length;
       const allowed = NEGATIVE_WAIT_EXCEPTIONS[f.relative]?.count ?? 0;
