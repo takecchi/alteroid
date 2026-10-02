@@ -22,15 +22,11 @@ import { formatElapsedAgo } from '../format.js';
 import type { ApprovalRow } from './api.js';
 import { allowsOther, slotsOf } from './approvals-form.js';
 import { isOpen, type DetailState, type ListState } from './approvals-controller.js';
+import { oneLine } from './journal-format.js';
 import type { DisplayLine } from './log.js';
 import type { RichSpan } from './markdown.js';
 import { glyph, theme } from './theme.js';
 import { LINE_BREAK, wrapLogical } from './wrap.js';
-
-const oneLine = (text: string, limit: number): string => {
-  const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
-};
 
 /** 一覧に出す識別子（長い id は先頭だけ。全文は詳細の頭に出す）。 */
 export function shortId(id: string): string {

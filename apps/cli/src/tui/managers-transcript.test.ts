@@ -78,3 +78,24 @@ describe('parseTranscript', () => {
     expect(seqs.size).toBe(2); // seq は一意
   });
 });
+
+describe('切り詰めはサロゲートペアを割らない（#2592）', () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+  const emoji = (n: number): string => `a${'😀'.repeat(n)}`;
+
+  it('発言の全文の予算切り', () => {
+    const body = line({ type: 'user', message: { content: emoji(TEXT_LIMIT) } });
+    const entries = parseTranscript(body);
+    expect(entries[0]?.text).not.toMatch(lone);
+  });
+
+  it('道具の結果の抜粋', () => {
+    const body = line({
+      type: 'user',
+      message: { content: [{ type: 'tool_result', content: emoji(TOOL_RESULT_EXCERPT) }] },
+    });
+    const entries = parseTranscript(body);
+    expect(entries[0]?.text).toContain('先頭だけ');
+    expect(entries[0]?.text).not.toMatch(lone);
+  });
+});

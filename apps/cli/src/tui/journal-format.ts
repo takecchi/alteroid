@@ -8,7 +8,7 @@
  * 一覧の 1 行・詳細の本文の組み立て。
  */
 import { formatDateTime, summarizeJournalEntry as summarizeLogic } from '@alteroid/logic';
-import type { JournalEntry } from '@alteroid/core';
+import { codePointBoundary, type JournalEntry } from '@alteroid/core';
 
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
 
@@ -31,10 +31,13 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
   return `（この画面が知らない種別: ${unknown.type}）`;
 }
 
-/** 改行と連続する空白を 1 つの空白にし、`limit` 字で切る（切ったら `…`）。 */
+/**
+ * 改行と連続する空白を 1 つの空白にし、`limit` 字で切る（切ったら `…`）。
+ * 切り口は補助面の文字（絵文字など）を割らない位置へ寄せる（#2592）。
+ */
 export function oneLine(text: string, limit: number): string {
   const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
+  return single.length > limit ? `${single.slice(0, codePointBoundary(single, limit))}…` : single;
 }
 
 /** 一覧 1 行の要旨の字数の上限（端末の幅でさらに切られる）。長い本文を毎フレーム渡さない。 */
@@ -82,7 +85,7 @@ export function journalDetailText(entry: JournalEntry): string {
   }
   const text = lines.join('\n');
   return text.length > JOURNAL_DETAIL_CHARS
-    ? `${text.slice(0, JOURNAL_DETAIL_CHARS)}\n…（全 ${String(text.length)} 字のうち先頭 ${String(JOURNAL_DETAIL_CHARS)} 字だけ）`
+    ? `${text.slice(0, codePointBoundary(text, JOURNAL_DETAIL_CHARS))}\n…（全 ${String(text.length)} 字のうち先頭 ${String(JOURNAL_DETAIL_CHARS)} 字だけ）`
     : text;
 }
 

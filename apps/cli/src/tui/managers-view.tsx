@@ -12,6 +12,7 @@ import type { FC } from 'react';
 
 import { formatElapsedAgo } from '../format.js';
 import type { ManagerRow, ManagerStatus } from './api.js';
+import { oneLine } from './journal-format.js';
 import type { DetailState, ListState } from './managers-controller.js';
 import { glyph, theme } from './theme.js';
 
@@ -32,11 +33,6 @@ const STATUS_LABEL: Record<ManagerStatus, string> = {
 export function filterLabel(filter: ManagerStatus | null): string {
   return filter === null ? 'すべて' : (STATUS_LABEL[filter] ?? filter);
 }
-
-const oneLine = (text: string, limit: number): string => {
-  const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
-};
 
 /** 一覧に出す識別子（先頭の `mgr-` + 8 文字。全文は詳細の頭に出す）。 */
 export function shortId(id: string): string {
