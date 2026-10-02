@@ -31,13 +31,43 @@
  * `sse()` を使わず、実タイマーを挟まない自前の `ReadableStream` で `error` を
  * 流す。`findBy`/`act()` で待つと効果まで流れてしまい窓を越えるので、それらも使わない。
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, sse, storeTestBaseUrl, stubFetch, type Route } from '~/test-support';
 
 import Chat from './chat';
+
+/*
+ * Issue #2650: 並列で回すと1本だけ落ちた（996 本中1本、単独では通る）。
+ *
+ * 再現（2026-10-03、他の作業者が同じ計算機で試験を回していて load average 約 90 の
+ * ときに `pnpm --filter @alteroid/web test -- app/routes/chat.stream-failure-by-conversation.test.tsx`
+ * を単独で逐次に 6 回）: 1 回、先頭の `it` が `Test timed out in 5000ms.` で落ちた
+ * （そのときの `Duration` は 24.6s。空いているときは 4s 前後）。`waitFor` / `findBy` の
+ * 1000ms の失敗ではなく **`it` 全体の 5000ms（vitest の既定 `testTimeout`）が先に切れた**。
+ * 空いているときこの `it` は 0.5s 前後、混んでいると 1.1〜1.6s（先頭の `it` は
+ * `Chat` の初回描画と import の温めを払う）。待っている相手は実時間ではなく
+ * React の描画・マイクロタスクの連鎖だけなので、**遅くなるのは計算機が混んだぶんだけ**である。
+ *
+ * 実時間の待ちは1つも足していない（`setTimeout` を足していない）。変えたのは待つ予算だけで、
+ * アサーションは1つも変えていない。**ここで予算を広げる根拠は「このテストが遅い」ではなく
+ * 「計算機の混み方に依存する」であって、決定的な原因を直したわけではない**
+ * （`chat.test.tsx` の「会話の切り替え」と同じ形）。どれだけ混むと足りなくなるかは測っていない。
+ * 特に `asyncUtilTimeout` の拡大は、この失敗では実測していない（先に切れたのは `it` の予算）が、
+ * 同じ混み方で 1000ms の予算も縮むので同時に広げた。
+ */
+vi.setConfig({ testTimeout: 30_000 });
+configure({ asyncUtilTimeout: 5000 });
 
 const CONVERSATION_ID = 'conv-fail-1';
 const OTHER_CONVERSATION_ID = 'conv-fail-2';
