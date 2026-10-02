@@ -162,5 +162,9 @@ function summarizeJournalEntryRaw(entry: JournalEntry): string {
  * 出口で、ここで掛ければ全部に効く。
  */
 export function summarizeJournalEntry(entry: JournalEntry): string {
-  return redactBody(summarizeJournalEntryRaw(entry));
+  // 知らない種別（新しいデーモンが流した種別を古い画面が受ける）では、switch がどこにも
+  // 合わず実行時に `undefined` が返る。その形は呼ぶ側（TUI の `journal-format.ts` の包み）が
+  // 受けて種別を言うので、伏せ字に渡して例外にせず、そのまま返す。
+  const raw: string | undefined = summarizeJournalEntryRaw(entry);
+  return raw === undefined ? (raw as unknown as string) : redactBody(raw);
 }

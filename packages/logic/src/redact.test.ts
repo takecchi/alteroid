@@ -51,4 +51,9 @@ describe('summarizeJournalEntry の伏せ字', () => {
     };
     expect(summarizeJournalEntry(entry)).not.toContain(TOKEN);
   });
+
+  it('知らない種別は、伏せ字を足す前と同じく例外を投げずに undefined を返す（TUI の包みが種別を言う）', () => {
+    const entry = { type: 'future_kind', id: 'f-1', at: '2026-08-20T00:00:00.000Z' };
+    expect(summarizeJournalEntry(entry as unknown as JournalEntry)).toBeUndefined();
+  });
 });
