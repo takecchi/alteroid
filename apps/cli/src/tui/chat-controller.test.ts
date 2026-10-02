@@ -289,3 +289,179 @@ describe('会話の操作', () => {
     expect(state().entries.at(-1)?.text).toBe(`n${String(MAX_ENTRIES + 49)}`);
   });
 });
+
+describe('進行中の会話へ戻る（履歴から開く）', () => {
+  const openIn = (conversationId: string, inProgress: boolean) => ({
+    type: 'open' as const,
+    conversationId,
+    inProgress,
+  });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const history = (api: ReturnType<typeof fakeApi>) => {
+    api.messages.c9 = [
+      { id: '1', at: 't', role: 'inbound', text: '前の質問' },
+      { id: '2', at: 't', role: 'outbound', text: '前の答え' },
+      { id: '3', at: 't', role: 'inbound', text: '今の質問' },
+    ];
+  };
+
+  it('進行中なら考え中と途中の文章が出て、続きが流れ、done で確定する（履歴と二重にならない）', async () => {
+    const { api, controller, state, texts } = setup();
+    history(api);
+    const hold = gate();
+    api.streamScripts.push([
+      openIn('c9', true),
+      { type: 'thinking' },
+      { type: 'text', text: 'ここまで' },
+      hold.wait,
+      { type: 'text', text: 'の続き' },
+      { type: 'done' },
+    ]);
+    expect(await controller.openConversation('c9')).toBe(true);
+    await tick();
+    expect(api.streamCalls.map((c) => c.conversationId)).toEqual(['c9']);
+    expect(state()).toMatchObject({ busy: true, streaming: 'ここまで', transient: null });
+    expect(texts('assistant')).toEqual(['前の答え']); // 途中の文章はまだログに入らない
+    hold.open();
+    await tick();
+    expect(state()).toMatchObject({ busy: false, streaming: '', transient: null });
+    expect(texts('assistant')).toEqual(['前の答え', 'ここまでの続き']);
+    expect(texts('user')).toEqual(['前の質問', '今の質問']);
+  });
+
+  it('再生の前は考え中が出る', async () => {
+    const { api, controller, state } = setup();
+    history(api);
+    const hold = gate();
+    api.streamScripts.push([openIn('c9', true), hold.wait, { type: 'done' }]);
+    await controller.openConversation('c9');
+    await tick();
+    expect(state()).toMatchObject({ busy: true, transient: '考えている…' });
+    hold.open();
+    await tick();
+    expect(state().busy).toBe(false);
+  });
+
+  it('進行中でなければ何も出さず、busy も立たない', async () => {
+    const { api, controller, state } = setup();
+    history(api);
+    api.streamScripts.push([openIn('c9', false), { type: 'text', text: '(出ない)' }]);
+    await controller.openConversation('c9');
+    await tick();
+    expect(api.streamCalls).toHaveLength(1);
+    expect(state()).toMatchObject({ busy: false, transient: null, streaming: '' });
+    expect(state().entries.map((e) => e.text)).toEqual(['前の質問', '前の答え', '今の質問']);
+    api.scripts.push([open('c9'), { type: 'done' }]);
+    await controller.send('続き'); // busy でないので追送ではなく通常の送信
+    expect(api.chatCalls).toEqual([{ text: '続き', conversationId: 'c9' }]);
+  });
+
+  it('開けなかった会話では接続を張らない', async () => {
+    const { api, controller } = setup();
+    expect(await controller.openConversation('nope')).toBe(false);
+    expect(api.streamCalls).toEqual([]);
+  });
+
+  it('再生中に送ると追送になる（もう1本の応答ストリームを取り込まない）', async () => {
+    const { api, controller, state, texts } = setup();
+    history(api);
+    const hold = gate();
+    api.streamScripts.push([
+      openIn('c9', true),
+      hold.wait,
+      { type: 'text', text: '応答' },
+      { type: 'done' },
+    ]);
+    api.scripts.push([open('c9'), { type: 'text', text: '(使われない)' }]);
+    await controller.openConversation('c9');
+    await tick();
+    await controller.send('追送です');
+    expect(api.chatCalls).toEqual([{ text: '追送です', conversationId: 'c9' }]);
+    expect(texts('user').at(-1)).toBe('追送です');
+    expect(state().busy).toBe(true);
+    hold.open();
+    await tick();
+    expect(texts('assistant')).toEqual(['前の答え', '応答']);
+    expect(state().busy).toBe(false);
+  });
+
+  it('接続を張っただけ（open 前）に送ると、通常の送信になり戻り接続は捨てる（二重にならない）', async () => {
+    const { api, controller, state, texts } = setup();
+    history(api);
+    const hold = gate();
+    api.streamScripts.push([
+      hold.wait,
+      openIn('c9', true),
+      { type: 'text', text: '二重' },
+      { type: 'done' },
+    ]);
+    api.scripts.push([open('c9'), { type: 'text', text: '本物' }, { type: 'done' }]);
+    await controller.openConversation('c9');
+    await tick();
+    await controller.send('すぐ送る');
+    hold.open();
+    await tick();
+    expect(api.streamCalls[0]?.aborted()).toBe(true);
+    expect(texts('assistant')).toEqual(['前の答え', '本物']);
+    expect(state().busy).toBe(false);
+  });
+
+  it('再生中に別の会話を開くと abort され、古い出来事は新しい画面に混ざらない', async () => {
+    const { api, controller, state, texts } = setup();
+    history(api);
+    api.messages.other = [{ id: '9', at: 't', role: 'inbound', text: '別の会話' }];
+    const hold = gate();
+    api.streamScripts.push(
+      [
+        openIn('c9', true),
+        { type: 'text', text: '途中' },
+        hold.wait,
+        { type: 'text', text: '漏れる' },
+      ],
+      [openIn('other', false)],
+    );
+    await controller.openConversation('c9');
+    await tick();
+    expect(await controller.openConversation('other')).toBe(true);
+    expect(api.streamCalls[0]?.aborted()).toBe(true);
+    expect(state()).toMatchObject({ conversationId: 'other', busy: false, streaming: '' });
+    hold.open();
+    await tick();
+    expect(state()).toMatchObject({ conversationId: 'other', busy: false, streaming: '' });
+    expect(texts('assistant')).toEqual([]);
+  });
+
+  it('newConversation / endConversation / shutdown でも abort される', async () => {
+    for (const leave of ['new', 'end', 'shutdown'] as const) {
+      const { api, controller, state } = setup();
+      history(api);
+      const hold = gate();
+      api.streamScripts.push([openIn('c9', true), hold.wait, { type: 'text', text: '漏れる' }]);
+      await controller.openConversation('c9');
+      await tick();
+      expect(state().busy).toBe(true);
+      if (leave === 'new') expect(controller.newConversation()).toBe(true);
+      else if (leave === 'end') await controller.endConversation();
+      else await controller.shutdown();
+      expect(api.streamCalls[0]?.aborted()).toBe(true);
+      hold.open();
+      await tick();
+      expect(state().streaming).toBe('');
+    }
+  });
+
+  it('接続が途中で切れたら、エラーを残して busy を畳む', async () => {
+    const { api, controller, state, texts } = setup();
+    history(api);
+    api.streamScripts.push([
+      openIn('c9', true),
+      { type: 'text', text: '途中' },
+      new Error('切れた'),
+    ]);
+    await controller.openConversation('c9');
+    await tick();
+    expect(state()).toMatchObject({ busy: false, streaming: '' });
+    expect(texts('assistant')).toEqual(['前の答え', '途中']);
+    expect(texts('error')).toHaveLength(1);
+  });
+});

@@ -38,6 +38,10 @@ export interface ChatCall {
 export interface FakeApi extends TuiApi {
   chatCalls: ChatCall[];
   scripts: ScriptStep[][];
+  /** `chatStream()` の台本（呼び出しごとに 1 つ消費する。足りなければ空）。 */
+  streamScripts: ScriptStep[][];
+  /** `chatStream()` に渡された会話 id と、その接続が abort されたか。 */
+  streamCalls: { conversationId: string; aborted: () => boolean }[];
   ended: string[];
   interrupts: number;
   conversations: ConversationSummary[];
@@ -119,6 +123,8 @@ export function fakeApi(): FakeApi {
     baseUrl: 'http://127.0.0.1:4517',
     chatCalls: [],
     scripts: [],
+    streamScripts: [],
+    streamCalls: [],
     ended: [],
     interrupts: 0,
     conversations: [],
@@ -157,6 +163,19 @@ export function fakeApi(): FakeApi {
         ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
       });
       const script = api.scripts.shift() ?? [];
+      for (const step of script) {
+        if (signal.aborted) return;
+        if (step instanceof Error) throw step;
+        if (step instanceof Promise) {
+          await step;
+          continue;
+        }
+        yield step;
+      }
+    },
+    async *chatStream(conversationId, signal) {
+      api.streamCalls.push({ conversationId, aborted: () => signal.aborted });
+      const script = api.streamScripts.shift() ?? [];
       for (const step of script) {
         if (signal.aborted) return;
         if (step instanceof Error) throw step;

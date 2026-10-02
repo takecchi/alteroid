@@ -12,6 +12,9 @@
  *   先客のターンが走っている間は `thinking` が来ない）。`queued` が来たら「順番を待っている…」
  *   へ、`thinking` が来たら戻す。
  * - `ask_human` / `usage_limited` / `error` は一時表示ではなくログに残る行にする。
+ * - 履歴から開いた会話のターンが進行中なら、`GET /chat/:id/stream` に戻って途中経過
+ *   （考えている…・ここまでの文章）を出し、続きを流す（Issue #2652）。送信と同じ `onEvent` を
+ *   共有し、その間は `busy` で、発言は追送になる。
  */
 import type { ChatEvent, ConversationSummary, TuiApi } from './api.js';
 import type { LogEntry, LogKind } from './log.js';
@@ -69,6 +72,8 @@ export class ChatController {
   private abort: AbortController | null = null;
   /** 走っているストリームの `open`（会話 id の確定）。 */
   private opened: Deferred<string> | null = null;
+  /** 履歴から開いた会話の進行中のターンに戻っている接続（無ければ `null`）。自分の送信とは別。 */
+  private watch: AbortController | null = null;
 
   constructor(private readonly api: TuiApi) {}
 
@@ -111,6 +116,8 @@ export class ChatController {
       await this.followUp(text);
       return;
     }
+    // まだ `open` が来ていない戻り接続があっても、自分のターンを始めるなら要らない（二重に流れる）。
+    this.stopWatch();
     this.push('user', text);
     this.set({ busy: true, transient: '考えている…' });
     const abort = new AbortController();
@@ -222,6 +229,7 @@ export class ChatController {
   /** 新しい会話へ切り替える（今の会話は終えない）。応答中は切り替えない。 */
   newConversation(): boolean {
     if (this.refuseWhileBusy()) return false;
+    this.stopWatch();
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('新しい会話を始めた');
     return true;
@@ -240,6 +248,7 @@ export class ChatController {
       this.addError(messageOf(error));
       return;
     }
+    this.stopWatch();
     this.store.update(() => ({ ...initialChatState }));
     this.addSystem('会話を終えた（学びを記憶へ蒸留している）。次の発言から新しい会話になる');
   }
@@ -247,6 +256,7 @@ export class ChatController {
   /** 終了前の後始末: 受信をやめ、会話があれば終える（既存 CLI の chat と同じ）。 */
   async shutdown(): Promise<void> {
     this.abort?.abort();
+    this.stopWatch();
     const id = this.store.getSnapshot().conversationId;
     if (id !== null) await this.api.endConversation(id).catch(() => undefined);
   }
@@ -294,6 +304,7 @@ export class ChatController {
         text: redactBody(m.text),
       };
     });
+    this.stopWatch();
     this.store.update(() => ({
       ...initialChatState,
       conversationId: id,
@@ -304,11 +315,60 @@ export class ChatController {
         '遡れた範囲だけを出している。これより古い発言は窓の外に残っているかもしれない',
       );
     }
+    this.resume(id);
     return true;
   }
 
+  /** 戻り接続をやめる（状態は触らない。呼ぶ側が畳む）。 */
+  private stopWatch(): void {
+    this.watch?.abort();
+    this.watch = null;
+  }
+
+  /**
+   * 開いた会話の進行中のターンに戻る。待たずに返す（接続は背景で読む）。`inProgress` が
+   * 偽なら何も出さない。履歴に載る返信は確定済みのターンの分だけで、進行中の分はここで
+   * 再生される文章が確定したときに初めてログに入る（二重にならない）。
+   */
+  private resume(conversationId: string): void {
+    const abort = new AbortController();
+    this.watch = abort;
+    void this.runWatch(conversationId, abort);
+  }
+
+  private async runWatch(conversationId: string, abort: AbortController): Promise<void> {
+    const live = () => !abort.signal.aborted;
+    const opened = deferred<string>();
+    opened.resolve(conversationId);
+    let active = false;
+    try {
+      for await (const event of this.api.chatStream(conversationId, abort.signal)) {
+        if (!live()) break;
+        if (event.type === 'open') {
+          if (event.inProgress !== true) break;
+          active = true;
+          this.opened = opened; // 応答中の発言は追送になる（`send`）
+          this.set({ busy: true, transient: '考えている…' });
+          continue;
+        }
+        if (active) this.onEvent(event, opened);
+      }
+    } catch (error) {
+      if (live()) this.addError(messageOf(error));
+    } finally {
+      // 切り替え・終了で止めたときは、状態はもう呼んだ側のもの（触らない）。
+      if (active && live()) {
+        this.flushStreaming();
+        this.set({ busy: false, transient: null });
+      }
+      if (this.opened === opened) this.opened = null;
+      if (this.watch === abort) this.watch = null;
+    }
+  }
+
   private refuseWhileBusy(): boolean {
-    if (!this.store.getSnapshot().busy) return false;
+    // 戻り接続だけで立った busy は、切り替えを止めない（切り替えは接続を abort する）。
+    if (!this.store.getSnapshot().busy || this.watch !== null) return false;
     this.addSystem('応答中は会話を切り替えられない（Ctrl+C で止めてから）');
     return true;
   }

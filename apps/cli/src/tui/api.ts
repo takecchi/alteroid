@@ -19,7 +19,8 @@ import { readSSE } from './sse.js';
 
 /** `POST /chat` の SSE イベント（`apps/daemon/src/app.ts` の `/chat`。Web と同じ語彙）。 */
 export type ChatEvent =
-  | { type: 'open'; conversationId: string }
+  /** `inProgress` は `GET /chat/{id}/stream` だけが付ける（進行中のターンがあるか）。 */
+  | { type: 'open'; conversationId: string; inProgress?: boolean }
   | { type: 'queued' }
   | { type: 'thinking' }
   | { type: 'text'; text: string }
@@ -204,6 +205,12 @@ export interface TuiApi {
     id: string,
   ): Promise<{ messages: ConversationMessage[]; reachedStart: boolean } | null>;
   endConversation(id: string): Promise<void>;
+  /**
+   * `GET /chat/{id}/stream`。進行中のターンの途中経過に戻る（発言は投函しない）。最初に
+   * `open`（`inProgress` つき）が来る。進行中ならそれまでの出来事を順に流してから続きを流し、
+   * `done` / `error` で閉じる。進行中でなければ `open` だけで閉じる。
+   */
+  chatStream(conversationId: string, signal: AbortSignal): AsyncGenerator<ChatEvent>;
   /** 結果を人間の言葉にしたもの（`alteroid interrupt` と同じ文言）。 */
   interrupt(): Promise<string>;
   headerCounts(): Promise<HeaderCounts>;
@@ -310,6 +317,19 @@ export function createTuiApi(target: Target): TuiApi {
         '/chat',
         { method: 'POST', body },
         '送信できませんでした',
+        signal,
+      )) {
+        if (!CHAT_EVENT_NAMES.has(event.name)) continue;
+        const data = event.json<Record<string, unknown>>() ?? {};
+        yield { ...data, type: event.name } as ChatEvent;
+      }
+    },
+
+    async *chatStream(conversationId, signal) {
+      for await (const event of openStream(
+        `/chat/${encodeURIComponent(conversationId)}/stream`,
+        { method: 'GET' },
+        '進行中の応答に戻れませんでした',
         signal,
       )) {
         if (!CHAT_EVENT_NAMES.has(event.name)) continue;
