@@ -85,6 +85,10 @@ export function bottomLineText(state: JournalState, live: LiveStatus): string {
   if (state.newerBlocked) {
     return `新着の取りこぼし確認が、同じ時刻の記録の詰まりで止まった。r で読み直す${liveText}`;
   }
+  // 再読込に失敗している間は新着を一覧へ入れていない（`ingest` は error で捨てる）。追従中とは言わない。
+  if (state.status === 'error') {
+    return `⚠ 読み込みに失敗していて、新着を一覧に入れていない。r で読み直す${liveText}`;
+  }
   const at = selectedIndex(state);
   if (state.follow || at <= 0) return `● 末尾に追従中${liveText}`;
   return `⏸ 位置を止めている（新しい側にあと ${String(at)} 件 · n で最新へ戻って追従）${liveText}`;
