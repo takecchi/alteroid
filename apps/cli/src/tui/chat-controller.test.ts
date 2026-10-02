@@ -84,7 +84,7 @@ describe('send', () => {
   });
 
   it('ask_human は承認待ちの id と質問を残し、答えられる口を案内する', async () => {
-    const { api, controller, texts } = setup();
+    const { api, controller, texts, state } = setup();
     api.scripts.push([
       open('c1'),
       { type: 'ask_human', approvalId: 'ap-9', question: 'どちらにしますか' },
@@ -95,6 +95,23 @@ describe('send', () => {
     expect(ask).toContain('ap-9');
     expect(ask).toContain('どちらにしますか');
     expect(ask).toContain('/answer ap-9');
+    // 承認待ちのタブの詳細へ飛ぶ口（a・/approvals <id>）も案内する。
+    expect(ask).toContain('Esc のあと a');
+    expect(ask).toContain('/approvals ap-9');
+    expect(state().pendingAsk).toBe('ap-9');
+  });
+
+  it('新しい会話を始めると、前の会話の ask_human の覚えは消える', async () => {
+    const { api, controller, state } = setup();
+    api.scripts.push([
+      open('c1'),
+      { type: 'ask_human', approvalId: 'ap-9', question: 'q' },
+      { type: 'done' },
+    ]);
+    await controller.send('x');
+    expect(state().pendingAsk).toBe('ap-9');
+    controller.newConversation();
+    expect(state().pendingAsk).toBeNull();
   });
 
   it('usage_limited は文言を要約せず、発言が保持されていることを添えて残す', async () => {

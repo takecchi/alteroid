@@ -90,3 +90,9 @@ export async function type(stdin: FakeStdin, text: string): Promise<void> {
     await sleep(2);
   }
 }
+
+/** 1 キー（エスケープ列も 1 キー）を打つ。続けて打つキーが前のキーの処理を追い越さないよう、少し譲る。 */
+export async function press(stdin: FakeStdin, key: string): Promise<void> {
+  stdin.write(key);
+  await sleep(2);
+}

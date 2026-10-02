@@ -31,7 +31,11 @@ export interface CommandSpec {
 /** 表示順はこの配列順。 */
 export const COMMANDS: readonly CommandSpec[] = [
   { name: 'chat', action: 'chat', describe: '会話の画面へ移る（1）' },
-  { name: 'approvals', action: 'approvals', describe: '承認待ちの画面へ移る（2）' },
+  {
+    name: 'approvals',
+    action: 'approvals',
+    describe: '承認待ちの画面へ移る（2）。<id> でその詳細を開く',
+  },
   {
     name: 'managers',
     aliases: ['delegations'],
@@ -103,6 +107,8 @@ export function helpLines(): string[] {
     '  Esc 入力欄を抜ける（そのあと 1〜5 で画面を移る、Tab か i で戻る）',
     '  PgUp / PgDn 会話ログのスクロール（末尾へ届くと追従に戻る）',
     '  日誌の画面: ↑↓ 選ぶ / Enter 全文 / f 種別で絞る / n 最新へ戻って追従 / m 古い側 / r 読み直し',
+    '  承認待ちの画面: ↑↓ 選ぶ / Enter 詳細 / a 答える（設問は ↑↓ と Space で選び、s で確認、y で送る） / r 読み直し',
+    '  会話で承認待ちが来たら、Esc のあと a でその詳細へ飛べる',
     '  記憶の画面（読むだけ）: ↑↓ 選ぶ / Enter 本文 / r 読み直し / Esc 一覧へ',
     '  Ctrl+C 走っているターンを止める / Ctrl+D（入力欄が空のとき）終了',
     '  Ctrl+U 入力欄を空にする',

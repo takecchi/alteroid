@@ -7,7 +7,7 @@
  * 画面（`chat-controller.ts` / `app.tsx`）はこの `TuiApi` インターフェースだけを見る。
  * 試験では偽物を渡す。
  */
-import type { JournalEntry } from '@alteroid/core';
+import type { ApprovalQuestion, ApprovalSelection, JournalEntry } from '@alteroid/core';
 
 import { createClient } from '../client.js';
 import { withErrorReason } from '../format.js';
@@ -98,6 +98,40 @@ export interface ManagerActionResult {
   detail: string;
 }
 
+/**
+ * 承認待ち 1 件（`GET /approvals` の `pendingApprovalSchema` のうち TUI が使う欄だけ）。
+ * `request_permission` の承認待ちには `questions` が無く、`permissionRequest` が付く。
+ */
+export interface ApprovalRow {
+  id: string;
+  createdAt: string;
+  question: string;
+  context?: string;
+  /** どのマネージャーの件か。無ければクローン自身の確認。 */
+  jobId?: string;
+  conversationId?: string;
+  answeredAt?: string;
+  /** `selections` で答えたときは、デーモンが畳んだ文。 */
+  answer?: string;
+  questions?: ApprovalQuestion[];
+  selections?: ApprovalSelection[];
+  withdrawnAt?: string;
+  withdrawnReason?: string;
+  permissionRequest?: { rule: string; allows: string[]; denies: string[] };
+}
+
+/** 読めない承認待ちの行（壊れた行。「無い」でも「回答済み」でもない）。 */
+export interface UnreadableApproval {
+  id?: string;
+  reason: string;
+}
+
+/** `POST /approvals/{id}/answer` の本文。どちらか一方は要る（`selections` があれば `answer` は補足）。 */
+export interface ApprovalAnswerBody {
+  answer?: string;
+  selections?: ApprovalSelection[];
+}
+
 /** 記憶の一覧の 1 件。CLI `memory list` と同じ型に、Web の一覧が出す大きさ（`bytes`）を足したもの。 */
 export type MemoryRow = MemorySummary & { bytes?: number };
 
@@ -166,6 +200,16 @@ export interface TuiApi {
   /** 追加指示（`requestId` / `decision` は付けない — 回答として消費させない）。 */
   sendManagerMessage(id: string, text: string): Promise<ManagerActionResult>;
   stopManager(id: string): Promise<ManagerActionResult>;
+  /** `GET /approvals?order=asc`。`pending: true` なら未回答かつ未取り下げのみ。 */
+  listApprovals(query: { pending: boolean }): Promise<{
+    approvals: ApprovalRow[];
+    unreadable: UnreadableApproval[];
+  }>;
+  /**
+   * `POST /approvals/{id}/answer`。失敗（400 の理由・404・409）は `ApiError`。メッセージにデーモンの
+   * 理由（本文の `error`）がそのまま入る。
+   */
+  answerApproval(id: string, body: ApprovalAnswerBody): Promise<void>;
   /**
    * `GET /journal/stream`。接続できたとき `open`、以後は届いたエントリ（種別と本体）を流す。
    * ヘッダの件数と日誌のタブが、この 1 本を共有する（2 本目は張らない）。
@@ -351,6 +395,23 @@ export function createTuiApi(target: Target): TuiApi {
       if (!response.ok) throw await failure('止められませんでした', response);
       const { outcome, detail } = await response.json();
       return { outcome, detail };
+    },
+
+    async listApprovals(query) {
+      const response = await client.approvals.$get({
+        query: { order: 'asc', ...(query.pending ? {} : { pending: 'false' as const }) },
+      });
+      if (!response.ok) throw await failure('承認待ちを読めませんでした', response);
+      const body = await response.json();
+      return {
+        approvals: body.approvals as ApprovalRow[],
+        unreadable: (body.unreadable ?? []) as UnreadableApproval[],
+      };
+    },
+
+    async answerApproval(id, body) {
+      const response = await client.approvals[':id'].answer.$post({ param: { id }, json: body });
+      if (!response.ok) throw await failure('回答に失敗しました', response);
     },
 
     async *journalStream(signal) {

@@ -2,9 +2,11 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { App } from './app.js';
+import { ApprovalsController } from './approvals-controller.js';
 import { ChatController } from './chat-controller.js';
 import {
   fakeApi,
+  approvalRow,
   gate,
   journalEntry,
   managerRow,
@@ -18,7 +20,7 @@ import { HeaderFeed } from './header-feed.js';
 import { JournalController } from './journal-controller.js';
 import { ManagersController } from './managers-controller.js';
 import { MemoryController } from './memory-controller.js';
-import { renderFullscreen, type FakeStdin, type } from './test-helpers.js';
+import { press, renderFullscreen, type FakeStdin, type } from './test-helpers.js';
 import { waitFor } from './test-helpers.js';
 
 /**
@@ -34,6 +36,7 @@ interface Harness {
   api: FakeApi;
   controller: ChatController;
   feed: HeaderFeed;
+  approvals: ApprovalsController;
   managers: ManagersController;
   journal: JournalController;
   memory: MemoryController;
@@ -46,6 +49,7 @@ interface Harness {
 const mounted: Harness[] = [];
 afterEach(() => {
   for (const h of mounted.splice(0)) {
+    h.approvals.dispose();
     h.managers.dispose();
     h.journal.dispose();
     h.memory.dispose();
@@ -62,6 +66,8 @@ function start(
   setup(api);
   const controller = new ChatController(api);
   const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+  const approvals = new ApprovalsController(api, { debounceMs: 10 });
+  approvals.attach(feed);
   const managers = new ManagersController(api, { debounceMs: 10 });
   managers.attach(feed);
   const journal = new JournalController(api);
@@ -74,6 +80,7 @@ function start(
       api,
       controller,
       feed,
+      approvals,
       managers,
       journal,
       memory,
@@ -90,6 +97,7 @@ function start(
     api,
     controller,
     feed,
+    approvals,
     managers,
     journal,
     memory,
@@ -124,16 +132,16 @@ describe('画面の骨組み', () => {
     expect(h.frame().split('\n').length).toBeLessThanOrEqual(20);
   });
 
-  it('承認待ちのタブはまだ「次の段階で実装」。Esc で入力欄を抜けて数字で移り、1 で会話へ戻る', async () => {
+  it('Esc で入力欄を抜けて数字で承認待ちのタブへ移り、1 で会話へ戻る', async () => {
     const h = start();
     await waitFor(() => h.frame().includes('メッセージ'));
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
     h.stdin.write('2');
-    await waitFor(() => h.frame().includes('承認待ち: 次の段階で実装'));
+    await waitFor(() => h.frame().includes('承認待ちは無い。'));
     h.stdin.write('1');
     await waitFor(() => h.frame().includes('メッセージ'));
-    expect(h.frame()).not.toContain('次の段階で実装');
+    expect(h.frame()).not.toContain('承認待ちは無い。');
   });
 
   it('入力欄の外から / を打つと会話へ戻ってコマンドを書き始められる', async () => {
@@ -141,12 +149,12 @@ describe('画面の骨組み', () => {
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
     h.stdin.write('2');
-    await waitFor(() => h.frame().includes('承認待ち: 次の段階で実装'));
+    await waitFor(() => h.frame().includes('承認待ちは無い。'));
     h.stdin.write('/');
     await waitFor(() => h.frame().includes('❯ /'));
     await type(h.stdin, 'approvals');
     h.stdin.write(ENTER);
-    await waitFor(() => h.frame().includes('承認待ち: 次の段階で実装'));
+    await waitFor(() => h.frame().includes('承認待ちは無い。'));
   });
 });
 
@@ -936,3 +944,358 @@ describe('記憶（一覧と詳細。読むだけ）', () => {
 });
 
 const UP_ARROW = '\x1b[A';
+
+describe('承認待ち（一覧と詳細・答える）', () => {
+  const DOWN = '\x1b[B';
+  const SPACE = ' ';
+
+  const deployQuestions = [
+    {
+      id: 'q1',
+      prompt: 'デプロイ先',
+      options: [
+        { id: 'railway', label: 'Railway', recommended: true, description: '今の本番' },
+        { id: 'fly', label: 'Fly' },
+      ],
+    },
+    {
+      id: 'q2',
+      prompt: '通知先',
+      multiple: true,
+      options: [
+        { id: 'slack', label: 'Slack' },
+        { id: 'mail', label: 'Mail' },
+      ],
+    },
+  ];
+
+  function fixture(api: FakeApi): void {
+    api.approvalRows = [
+      approvalRow('ap-free', {
+        createdAt: '2026-10-02T00:00:00.000Z',
+        question: 'このブランチをマージしてよいですか',
+      }),
+      approvalRow('ap-choice', {
+        createdAt: '2026-10-02T01:00:00.000Z',
+        question: 'どこへデプロイしますか。\n二行目の説明',
+        context: '本番の切り替えを伴う',
+        jobId: 'mgr-deploy',
+        questions: deployQuestions,
+      }),
+    ];
+    api.counts = { pendingApprovals: 2, runningManagers: 0 };
+  }
+
+  async function openList(h: Harness): Promise<void> {
+    await type(h.stdin, '/approvals');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  }
+
+  async function openChoiceDetail(h: Harness): Promise<void> {
+    await openList(h);
+    await press(h.stdin, DOWN);
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('二行目の説明'));
+  }
+
+  it('一覧は古い順に 1 件 1 行。設問が在れば要約、無ければ質問の抜粋。全文や設問の中身は載せない', async () => {
+    const h = start(fixture);
+    await openList(h);
+    const frame = h.frame();
+    expect(h.api.approvalListCalls[0]).toEqual({ pending: true });
+    const lines = frame.split('\n');
+    const free = lines.findIndex((l) => l.includes('ap-free'));
+    const choice = lines.findIndex((l) => l.includes('ap-choice'));
+    expect(free).toBeGreaterThan(-1);
+    expect(choice).toBeGreaterThan(free); // 古い順
+    expect(lines[free]).toContain('このブランチをマージしてよいですか');
+    expect(lines[free]).toContain('[クローン]');
+    expect(lines[choice]).toContain('設問 2 件（うち複数選択 1）（選択肢つき）');
+    expect(lines[choice]).toContain('[mgr-deploy]');
+    expect(frame).not.toContain('二行目の説明');
+    expect(frame).not.toContain('Railway');
+  });
+
+  it('詳細に、質問の全文・文脈・出どころ・設問の表示（推奨・単一/複数・その他）が出る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    const frame = h.frame();
+    expect(frame).toContain('[未回答] ap-choice');
+    expect(frame).toContain('どこへデプロイしますか。');
+    expect(frame).toContain('二行目の説明');
+    expect(frame).toContain('本番の切り替えを伴う');
+    expect(frame).toContain('マネージャー mgr-deploy');
+    expect(frame).toContain('Q1 [id=q1] デプロイ先（単一選択・その他を書ける）');
+    expect(frame).toContain('[id=railway] Railway［推奨］ — 今の本番');
+    expect(frame).toContain('Q2 [id=q2] 通知先（複数選択可・その他を書ける）');
+    expect(h.api.approvalAnswers).toEqual([]); // 開いただけでは何も送らない
+  });
+
+  it('設問に答える: 単一は排他・複数は複数、その他と補足を書き、畳んだ文で確認してから送る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('設問に答える'));
+    expect(h.frame()).toContain('Railway［推奨］');
+
+    await press(h.stdin, SPACE); // Railway
+    await waitFor(() => h.frame().includes('(●) a) Railway'));
+    await press(h.stdin, DOWN);
+    await press(h.stdin, SPACE); // Fly（Railway は外れる）
+    await waitFor(() => h.frame().includes('(●) b) Fly'));
+    expect(h.frame()).toContain('( ) a) Railway');
+
+    await press(h.stdin, DOWN); // Q1 その他
+    await press(h.stdin, DOWN); // Slack
+    await press(h.stdin, SPACE);
+    await press(h.stdin, DOWN); // Mail
+    await press(h.stdin, SPACE);
+    await waitFor(() => h.frame().includes('[x] b) Mail'));
+    expect(h.frame()).toContain('[x] a) Slack'); // 複数選択は両方残る
+    await press(h.stdin, DOWN); // Q2 その他
+    await press(h.stdin, SPACE); // 書き始める
+    await waitFor(() => h.frame().includes('Enter 確定'));
+    await type(h.stdin, 'ただし来週');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('[x] その他: ただし来週'));
+    await press(h.stdin, DOWN); // 補足
+    await press(h.stdin, SPACE);
+    await type(h.stdin, '金曜は避けたい');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('補足（任意）: 金曜は避けたい'));
+
+    await press(h.stdin, 's');
+    await waitFor(() => h.frame().includes('この内容で答える?'));
+    const confirm = h.frame();
+    expect(confirm).toContain('Q1 デプロイ先: (b) Fly');
+    expect(confirm).toContain('Q2 通知先: (a) Slack / (b) Mail / その他: ただし来週');
+    expect(confirm).toContain('補足: 金曜は避けたい');
+    expect(confirm).toContain('y で送る');
+    expect(h.api.approvalAnswers).toEqual([]); // 確認の段階ではまだ送らない
+
+    await press(h.stdin, 'y');
+    await waitFor(() => h.api.approvalAnswers.length > 0);
+    expect(h.api.approvalAnswers).toEqual([
+      {
+        id: 'ap-choice',
+        body: {
+          selections: [
+            { questionId: 'q1', optionIds: ['fly'] },
+            { questionId: 'q2', optionIds: ['slack', 'mail'], other: 'ただし来週' },
+          ],
+          answer: '金曜は避けたい',
+        },
+      },
+    ]);
+    await waitFor(() => h.frame().includes('回答した。'));
+    expect(h.frame()).toContain('[回答済み] ap-choice');
+    expect(h.frame()).toContain('Q1 デプロイ先: (b) Fly');
+  });
+
+  it('未回答の設問が在っても送れるが、確認の画面で「未回答」と見える。答えた設問だけを送る', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, SPACE); // Railway だけ
+    await press(h.stdin, 's');
+    await waitFor(() => h.frame().includes('この内容で答える?'));
+    expect(h.frame()).toContain('Q1 デプロイ先: (a) Railway［推奨］');
+    expect(h.frame()).toContain('Q2 通知先: 未回答');
+    expect(h.frame()).toContain('答えていない設問が 1 件ある');
+    await press(h.stdin, 'y');
+    await waitFor(() => h.api.approvalAnswers.length > 0);
+    expect(h.api.approvalAnswers[0]?.body).toEqual({
+      selections: [{ questionId: 'q1', optionIds: ['railway'] }],
+    });
+  });
+
+  it('確認で y 以外を押せば送らずフォームへ戻る。何も答えていなければ確認へ進まない', async () => {
+    const h = start(fixture);
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, 's');
+    await waitFor(() => h.frame().includes('何も答えていない'));
+    expect(h.frame()).not.toContain('この内容で答える?');
+
+    await press(h.stdin, SPACE);
+    await press(h.stdin, 's');
+    await waitFor(() => h.frame().includes('この内容で答える?'));
+    await press(h.stdin, 'n');
+    await waitFor(() => h.frame().includes('設問に答える'));
+    expect(h.frame()).toContain('(●) a) Railway'); // 選んだ内容は残っている
+    expect(h.api.approvalAnswers).toEqual([]);
+  });
+
+  it('400 が返ったら本文をそのまま見せる。閉じず、書いた内容も残す', async () => {
+    const h = start((api) => {
+      fixture(api);
+      api.approvalAnswerFails =
+        'selections が不正: 設問 "q1" は単一選択なので、選択肢は1つしか選べない。';
+    });
+    await openChoiceDetail(h);
+    await press(h.stdin, 'a');
+    await press(h.stdin, SPACE);
+    await press(h.stdin, 's');
+    await waitFor(() => h.frame().includes('この内容で答える?'));
+    await press(h.stdin, 'y');
+    await waitFor(() => h.frame().includes('✗ 回答に失敗しました（HTTP 400）'));
+    const frame = h.frame();
+    expect(frame).toContain('selections が不正: 設問 "q1" は単一選択なので');
+    expect(frame).toContain('設問に答える'); // 閉じない
+    expect(frame).toContain('(●) a) Railway'); // 書いた内容が残る
+    expect(frame).not.toContain('回答した。');
+  });
+
+  it('設問の無い承認待ちは自由文で答える。確認を通ってから { answer } を送る', async () => {
+    const h = start(fixture);
+    await openList(h);
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('[未回答] ap-free'));
+    expect(h.frame()).toContain('設問は無い');
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('回答を書く'));
+    await type(h.stdin, 'はい、どうぞ');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('この内容で答える?'));
+    expect(h.frame()).toContain('はい、どうぞ');
+    expect(h.api.approvalAnswers).toEqual([]);
+    await press(h.stdin, 'y');
+    await waitFor(() => h.api.approvalAnswers.length > 0);
+    expect(h.api.approvalAnswers).toEqual([{ id: 'ap-free', body: { answer: 'はい、どうぞ' } }]);
+    await waitFor(() => h.frame().includes('[回答済み] ap-free'));
+  });
+
+  it('空の自由文は確認へ進まない。Esc で一覧へ戻ると、答えた件は一覧から消えている', async () => {
+    const h = start(fixture);
+    await openList(h);
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('[未回答] ap-free'));
+    await press(h.stdin, 'a');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('回答が空'));
+    expect(h.frame()).not.toContain('この内容で答える?');
+
+    await press(h.stdin, ESC); // フォームから読む画面へ
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    await press(h.stdin, ESC);
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+  });
+
+  it('設問の無い・読み込み前でない回答済みの件は答えられない（a は何もしない）', async () => {
+    const h = start((api) => {
+      fixture(api);
+      api.approvalRows[0] = approvalRow('ap-free', {
+        question: '済んだ件',
+        answeredAt: '2026-10-02T02:00:00.000Z',
+        answer: 'もう答えた',
+      });
+    });
+    await type(h.stdin, '/approvals ap-free');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('[回答済み] ap-free'));
+    expect(h.frame()).toContain('もう答えた');
+    await press(h.stdin, 'a');
+    await press(h.stdin, 'i'); // 後ろに 1 キー足し、それが処理されたあとの画面を見る
+    expect(h.frame()).not.toContain('回答を書く');
+    expect(h.frame()).not.toContain('設問に答える');
+  });
+
+  it('実行許可の承認待ちは、規則と例と「許可します」の答え方を出す。自由文で答える', async () => {
+    const h = start((api) => {
+      api.approvalRows = [
+        approvalRow('ap-perm', {
+          question: 'git push を許可してよいですか',
+          jobId: 'mgr-p',
+          permissionRequest: {
+            rule: 'Bash(git push:*)',
+            allows: ['git push origin main'],
+            denies: ['rm -rf /'],
+          },
+        }),
+      ];
+    });
+    await type(h.stdin, '/approvals');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('[実行許可]'));
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('規則: Bash(git push:*)'));
+    expect(h.frame()).toContain('通すべき例: git push origin main');
+    expect(h.frame()).toContain('拒むべき例: rm -rf /');
+    expect(h.frame()).toContain('「許可します」とちょうど答える');
+  });
+
+  it('会話で ask_human が来たら、Esc のあと a でその承認待ちの詳細へ飛べる。/approvals <id> でも飛べる', async () => {
+    const h = start((api) => {
+      fixture(api);
+      api.scripts.push([
+        { type: 'open', conversationId: 'c1' },
+        { type: 'ask_human', approvalId: 'ap-choice', question: 'どこへデプロイしますか' },
+        { type: 'done' },
+      ]);
+    });
+    await type(h.stdin, 'デプロイして');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('承認待ち ap-choice'));
+    expect(h.frame()).toContain('Esc のあと a');
+    expect(h.frame()).toContain('/approvals ap-choice');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    await press(h.stdin, 'a');
+    await waitFor(() => h.frame().includes('[未回答] ap-choice'));
+    expect(h.frame()).toContain('本番の切り替えを伴う');
+
+    await press(h.stdin, ESC); // 一覧へ
+    await waitFor(() => h.frame().includes('承認待ち（未回答 2 件'));
+    await press(h.stdin, '/');
+    await type(h.stdin, 'approvals ap-free');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('[未回答] ap-free'));
+  });
+
+  it('ask_human が来ていない会話では a は何もしない', async () => {
+    const h = start(fixture);
+    await waitFor(() => h.frame().includes('メッセージ'));
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('1-5 画面'));
+    await press(h.stdin, 'a');
+    await press(h.stdin, '2'); // 後ろに 1 キー足し、それが処理されたあとの画面を見る
+    await waitFor(() => h.frame().includes('承認待ち（未回答'));
+    expect(h.frame()).not.toContain('[未回答] ap-');
+  });
+
+  it('読めなかった一覧は「無い」と描かない。読めない行は居ないと分けて言う', async () => {
+    const h = start((api) => {
+      api.unreadableApprovals = [{ id: 'ap-broken', reason: 'questions' }];
+    });
+    await type(h.stdin, '/approvals');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('読めない承認待ちが 1 件ある'));
+    expect(h.frame()).toContain('ap-broken');
+    expect(h.frame()).toContain('読めた承認待ちは無い');
+    expect(h.frame()).not.toContain('承認待ちは無い。');
+  });
+
+  it('一覧を読めなかったときは、空ではなく失敗を言う', async () => {
+    const h = start((api) => {
+      api.approvalListFails = '繋がらない';
+    });
+    await type(h.stdin, '/approvals');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('繋がらない'));
+    expect(h.frame()).not.toContain('承認待ちは無い。');
+  });
+
+  it('答えるフォームの入力欄に書きかけがあるとき Ctrl+D では終了しない', async () => {
+    const h = start(fixture);
+    await openList(h);
+    await press(h.stdin, ENTER);
+    await waitFor(() => h.frame().includes('[未回答] ap-free'));
+    await press(h.stdin, 'a');
+    await type(h.stdin, '書きかけ');
+    h.stdin.write(CTRL_D);
+    await press(h.stdin, 'x'); // 後ろに 1 キー足し、それが描かれるのを待つ
+    await waitFor(() => h.frame().includes('書きかけx'));
+    expect(h.exited()).toBe(false);
+  });
+});

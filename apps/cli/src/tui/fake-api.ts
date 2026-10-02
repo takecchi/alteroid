@@ -2,9 +2,18 @@
  * 試験用の偽の `TuiApi`。`chat()` は呼び出しごとに「台本」（イベント列）を 1 つ消費し、
  * 台本の途中に `Promise` を置くと、そこで止まって試験が好きな時に再開できる。
  */
-import { matchesJournalSearch, type JournalEntry } from '@alteroid/core';
+import {
+  describeSelectionsViolation,
+  foldSelections,
+  matchesJournalSearch,
+  type JournalEntry,
+} from '@alteroid/core';
 
+import { ApiError } from './api.js';
 import type {
+  ApprovalAnswerBody,
+  ApprovalRow,
+  UnreadableApproval,
   ChatEvent,
   ConversationMessage,
   ConversationSummary,
@@ -61,6 +70,26 @@ export interface FakeApi extends TuiApi {
   /** 次の `listManagers` を失敗させる。 */
   managerListFails: string | null;
   stopResult: { outcome: string; detail: string };
+  /** 古い順（`createdAt` 昇順）の承認待ち。回答すると回答済みになり、未回答の一覧から消える。 */
+  approvalRows: ApprovalRow[];
+  unreadableApprovals: UnreadableApproval[];
+  approvalListCalls: { pending: boolean }[];
+  /** 次の `listApprovals` を失敗させる。 */
+  approvalListFails: string | null;
+  /** 受け取った回答（デーモンへ届いた本文そのまま）。 */
+  approvalAnswers: { id: string; body: ApprovalAnswerBody }[];
+  /** 次の `answerApproval` を、この理由で失敗させる（デーモンが 400 などで返す本文の想定）。 */
+  approvalAnswerFails: string | null;
+}
+
+/** 試験用の承認待ち 1 件。 */
+export function approvalRow(id: string, patch: Partial<ApprovalRow> = {}): ApprovalRow {
+  return {
+    id,
+    createdAt: '2026-10-02T00:00:00.000Z',
+    question: `${id} の質問`,
+    ...patch,
+  };
 }
 
 /** 試験用のマネージャー 1 本。 */
@@ -107,6 +136,12 @@ export function fakeApi(): FakeApi {
     stoppedManagers: [],
     managerListFails: null,
     stopResult: { outcome: 'stopped', detail: '止まったと確かめた。' },
+    approvalRows: [],
+    unreadableApprovals: [],
+    approvalListCalls: [],
+    approvalListFails: null,
+    approvalAnswers: [],
+    approvalAnswerFails: null,
     async *chat(input, signal) {
       api.chatCalls.push({
         text: input.text,
@@ -171,6 +206,44 @@ export function fakeApi(): FakeApi {
     },
     headerCounts() {
       return Promise.resolve(api.counts);
+    },
+    listApprovals(query) {
+      api.approvalListCalls.push(query);
+      if (api.approvalListFails !== null) return Promise.reject(new Error(api.approvalListFails));
+      const rows = query.pending
+        ? api.approvalRows.filter((r) => r.answeredAt === undefined && r.withdrawnAt === undefined)
+        : api.approvalRows;
+      return Promise.resolve({ approvals: rows, unreadable: api.unreadableApprovals });
+    },
+    answerApproval(id, body) {
+      api.approvalAnswers.push({ id, body });
+      if (api.approvalAnswerFails !== null) {
+        return Promise.reject(
+          new ApiError(`回答に失敗しました（HTTP 400）: ${api.approvalAnswerFails}`),
+        );
+      }
+      const row = api.approvalRows.find((r) => r.id === id);
+      if (row === undefined)
+        return Promise.reject(new ApiError('回答に失敗しました（HTTP 404）: not found'));
+      if (row.answeredAt !== undefined) {
+        return Promise.reject(new ApiError('回答に失敗しました（HTTP 409）: already answered'));
+      }
+      // デーモンと同じ検査と畳み方（`POST /approvals/:id/answer`）。
+      if (body.selections !== undefined) {
+        const violation = describeSelectionsViolation(row.questions, body.selections);
+        if (violation !== null) {
+          return Promise.reject(
+            new ApiError(`回答に失敗しました（HTTP 400）: selections が不正: ${violation}`),
+          );
+        }
+      }
+      row.answeredAt = new Date().toISOString();
+      row.answer =
+        body.selections !== undefined && row.questions !== undefined
+          ? foldSelections(row.questions, body.selections, body.answer)
+          : (body.answer ?? '');
+      if (body.selections !== undefined) row.selections = body.selections;
+      return Promise.resolve();
     },
     async *journalStream(signal) {
       const stream = api.journal.shift();

@@ -11,19 +11,30 @@ import { useMemo, useRef, useState, type FC } from 'react';
 import { parseJournalSearchTokens } from '../chat.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
+import type { ApprovalsController } from './approvals-controller.js';
+import {
+  ApprovalList,
+  approvalDocument,
+  approvalStatusText,
+  composerPlaceholder,
+} from './approvals-view.js';
 import { resolveCommand, helpLines, type CommandAction } from './commands.js';
 import {
   ConversationPicker,
   Footer,
   Header,
   LogView,
-  Placeholder,
   PromptInput,
   StatusRow,
   Tabs,
 } from './components.js';
 import type { HeaderFeed } from './header-feed.js';
 import {
+  HINT_AP_CONFIRM,
+  HINT_AP_DETAIL,
+  HINT_AP_FORM,
+  HINT_AP_INPUT,
+  HINT_AP_LIST,
   HINT_INPUT,
   HINT_JOURNAL_DETAIL,
   HINT_JOURNAL_FILTER,
@@ -39,7 +50,7 @@ import {
   HINT_QUITTING,
 } from './hints.js';
 import { useCoalescedStore, useSyncedState } from './hooks.js';
-import { editText, normalizeChord, resolveEnter } from './input.js';
+import { editText, isSpaceKey, normalizeChord, resolveEnter } from './input.js';
 import type { JournalController } from './journal-controller.js';
 import { JOURNAL_TYPES, type JournalType } from './journal-format.js';
 import {
@@ -68,6 +79,7 @@ import {
   detailStatusText,
 } from './managers-view.js';
 import {
+  type DisplayLine,
   logLines,
   logWindow,
   pageStep,
@@ -78,6 +90,7 @@ import {
 } from './log.js';
 import {
   COMPOSER_PREFIX_CELLS,
+  bufferOf,
   composerLayout,
   emptyBuffer,
   isEmptyBuffer,
@@ -86,6 +99,16 @@ import {
 } from './text-buffer.js';
 
 type Zone = 'input' | 'nav';
+
+/** 本文が `height` 行に足りないとき、下を空行で埋める。 */
+function padRows(rows: DisplayLine[], height: number): DisplayLine[] {
+  if (rows.length >= height) return rows;
+  const pad: DisplayLine[] = [];
+  for (let i = rows.length; i < height; i += 1) {
+    pad.push({ key: `pad${String(i)}`, kind: 'assistant', text: ' ' });
+  }
+  return [...rows, ...pad];
+}
 
 interface PickerState {
   status: 'loading' | 'ready';
@@ -99,6 +122,8 @@ export interface AppProps {
   api: TuiApi;
   controller: ChatController;
   feed: HeaderFeed;
+  /** 「承認待ち」タブ（一覧・詳細・答える）の状態と操作。 */
+  approvals: ApprovalsController;
   /** 「委譲」タブ（一覧・詳細）の状態と操作。 */
   managers: ManagersController;
   /** 「日誌」タブ（一覧・種別の絞り込み・全文）の状態と操作。 */
@@ -113,6 +138,7 @@ export const App: FC<AppProps> = ({
   api,
   controller,
   feed,
+  approvals,
   managers,
   journal,
   memory,
@@ -122,6 +148,7 @@ export const App: FC<AppProps> = ({
   const { columns, rows } = useWindowSize();
   const chat = useCoalescedStore(controller.store);
   const header = useCoalescedStore(feed.store);
+  const ap = useCoalescedStore(approvals.store);
   const mgr = useCoalescedStore(managers.store);
   const jr = useCoalescedStore(journal.store);
   const mem = useCoalescedStore(memory.store);
@@ -133,6 +160,9 @@ export const App: FC<AppProps> = ({
   /** 委譲の詳細の入力欄（会話の下書きとは別に持つ）と、生ログのスクロール位置。 */
   const [mgrBuffer, setMgrBuffer, mgrBufferRef] = useSyncedState<TextBuffer>(emptyBuffer());
   const [mgrAnchor, setMgrAnchor, mgrAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
+  /** 承認待ちの詳細の入力欄（「その他」・補足・自由文の回答。会話の下書きとは別に持つ）と、本文のスクロール位置。 */
+  const [apBuffer, setApBuffer, apBufferRef] = useSyncedState<TextBuffer>(emptyBuffer());
+  const [apAnchor, setApAnchor, apAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
   /** 日誌の全文・記憶の本文のスクロール位置。 */
   const [jAnchor, setJAnchor, jAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
   const [memAnchor, setMemAnchor, memAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
@@ -141,7 +171,11 @@ export const App: FC<AppProps> = ({
 
   const wrapWidth = Math.max(1, columns - COMPOSER_PREFIX_CELLS);
   const inMgrDetail = tab === 'managers' && mgr.view === 'detail' && mgr.detail !== null;
-  const composer = composerLayout(inMgrDetail ? mgrBuffer : buffer, wrapWidth);
+  const inApDetail = tab === 'approvals' && ap.view === 'detail' && ap.detail !== null;
+  const composer = composerLayout(
+    inMgrDetail ? mgrBuffer : inApDetail ? apBuffer : buffer,
+    wrapWidth,
+  );
   const layout = chatLayout({ rows, composerRows: composer.rows.length, fullscreen });
   const composerWindow = visibleLineRange(
     composer.rows.length,
@@ -156,6 +190,26 @@ export const App: FC<AppProps> = ({
     [mgr.detail?.transcript, columns],
   );
   const mgrWin = logWindow(mgrRows, mgrLogHeight, mgrAnchor);
+
+  /**
+   * 承認待ちの詳細: 本文を折り返した物理行を、読む画面では上から読み進め、答えるフォームでは
+   * カーソル行が窓の中ほどに来るように置く。本文が窓より短いときは下を空行で埋める
+   * （ログビューは下寄せなので、埋めないと短い本文が画面の底に寄る）。
+   */
+  const apLogHeight = layout.logHeight;
+  const apDoc = useMemo(
+    () =>
+      ap.detail === null ? { rows: [], focusRow: null } : approvalDocument(ap.detail, columns),
+    [ap.detail, columns],
+  );
+  const apRows = useMemo(() => padRows(apDoc.rows, apLogHeight), [apDoc.rows, apLogHeight]);
+  const apWin = logWindow(
+    apRows,
+    apLogHeight,
+    ap.detail?.mode === 'form' && apDoc.focusRow !== null
+      ? apDoc.focusRow - (apLogHeight >> 1) + apLogHeight
+      : apAnchor,
+  );
 
   /** 日誌の全文: 頭 3 行と最下行 1 行のぶん、窓を縮める。 */
   const jLogHeight = Math.max(1, layout.bodyHeight - JOURNAL_DETAIL_HEAD_ROWS - 1);
@@ -209,8 +263,22 @@ export const App: FC<AppProps> = ({
     );
   };
 
+  /** 承認待ちの詳細を id から開く（会話の `ask_human` の案内・`/approvals <id>`）。 */
+  const openApproval = (id: string): void => {
+    setTab('approvals');
+    setZone('nav');
+    setPicker(null);
+    setApAnchor(apLogHeight);
+    setApBuffer(emptyBuffer());
+    void approvals.open(id);
+  };
+
   const goTab = (next: TabId): void => {
     setTab(next);
+    if (next === 'approvals') {
+      approvals.enter();
+      setApAnchor(apLogHeight);
+    }
     if (next === 'managers') managers.enter();
     if (next === 'journal') journal.enter();
     if (next === 'memory') memory.enter();
@@ -270,8 +338,13 @@ export const App: FC<AppProps> = ({
         applyJournalArgs(args);
         goTab(action);
         break;
+      case 'approvals': {
+        const id = args.split(/\s+/)[0] ?? '';
+        if (id.length > 0) openApproval(id);
+        else goTab(action);
+        break;
+      }
       case 'chat':
-      case 'approvals':
       case 'managers':
       case 'memory':
         goTab(action);
@@ -376,6 +449,92 @@ export const App: FC<AppProps> = ({
       setZone('input');
     } else if (input === 's') managers.askStop();
     else if (input === 'r') void managers.refreshDetail();
+    else return false;
+    return true;
+  };
+
+  /** 承認待ちの本文の総行数（ハンドラの中で最新の状態から数える）。 */
+  const apTotalRows = (): number => {
+    const detail = approvals.store.getSnapshot().detail;
+    return detail === null
+      ? 0
+      : padRows(approvalDocument(detail, columns).rows, apLogHeight).length;
+  };
+
+  /** 入力欄へ、カーソルの指す文字欄（その他・補足・自由文の回答）の中身を読み込んで書き始める。 */
+  const startApprovalEdit = (): void => {
+    setApBuffer(bufferOf(approvals.fieldText()));
+    setZone('input');
+  };
+
+  /**
+   * 承認待ちタブの nav ゾーンのキー。消費したら true。数字・`/` は呼び出し側の共通処理へ落とす。
+   * 一覧: ↑↓ 選択 / Enter 詳細 / r 更新。
+   * 詳細（読む）: Esc 一覧へ / a・i・Enter・Tab 答える / ↑↓ PgUp PgDn / r 更新。
+   * 詳細（答える）: ↑↓ 移動 / Space・Enter 選ぶ（文字欄では書く）/ s 確認へ / Esc 読む画面へ。
+   * 確認: y だけが送る。それ以外は全部、フォームへ戻る。
+   */
+  const handleApprovalsNav = (
+    input: string,
+    key: Parameters<Parameters<typeof useInput>[0]>[1],
+  ): boolean => {
+    const state = approvals.store.getSnapshot();
+    if (state.view === 'list') {
+      if (key.upArrow) approvals.moveSelection(-1);
+      else if (key.downArrow) approvals.moveSelection(1);
+      else if (key.pageUp) approvals.moveSelection(-pageStep(layout.bodyHeight));
+      else if (key.pageDown) approvals.moveSelection(pageStep(layout.bodyHeight));
+      else if (key.return) {
+        setApAnchor(apLogHeight);
+        setApBuffer(emptyBuffer());
+        approvals.openSelected();
+      } else if (input === 'r') void approvals.reload();
+      else return false;
+      return true;
+    }
+    const detail = state.detail;
+    if (detail === null) return false;
+    if (detail.mode === 'confirm') {
+      if (input === 'y') {
+        void approvals.confirmSend().then((sent) => {
+          if (!sent) return;
+          setApBuffer(emptyBuffer());
+          setApAnchor(apLogHeight);
+        });
+      } else approvals.cancelConfirm();
+      return true;
+    }
+    if (detail.mode === 'form') {
+      if (key.escape) {
+        setApAnchor(apLogHeight);
+        approvals.leaveForm();
+      } else if (key.upArrow) approvals.moveCursor(-1);
+      else if (key.downArrow) approvals.moveCursor(1);
+      else if (key.pageUp) approvals.moveCursor(-pageStep(apLogHeight));
+      else if (key.pageDown) approvals.moveCursor(pageStep(apLogHeight));
+      else if (isSpaceKey(input) || key.return) {
+        if (approvals.activate() === 'edit') startApprovalEdit();
+      } else if (input === 's') approvals.askConfirm();
+      else if (input === 'r') void approvals.reload();
+      else return false;
+      return true;
+    }
+    const step = pageStep(apLogHeight);
+    if (key.escape) {
+      setApAnchor(apLogHeight);
+      setApBuffer(emptyBuffer());
+      approvals.back();
+    } else if (key.pageUp) {
+      setApAnchor(scrollUp(apAnchorRef.current, apTotalRows(), apLogHeight, step));
+    } else if (key.pageDown) {
+      setApAnchor(scrollDown(apAnchorRef.current, apTotalRows(), apLogHeight, step));
+    } else if (key.upArrow) {
+      setApAnchor(scrollUp(apAnchorRef.current, apTotalRows(), apLogHeight, 1));
+    } else if (key.downArrow) {
+      setApAnchor(scrollDown(apAnchorRef.current, apTotalRows(), apLogHeight, 1));
+    } else if (input === 'a' || input === 'i' || key.return || key.tab) {
+      if (approvals.startAnswer() === 'edit') startApprovalEdit();
+    } else if (input === 'r') void approvals.reload();
     else return false;
     return true;
   };
@@ -487,9 +646,16 @@ export const App: FC<AppProps> = ({
     }
     if (key.ctrl && input === 'd') {
       // 入力欄が空のときだけ（書きかけを誤って捨てない）。入力欄の外・他の画面では常に終了。
-      const draft = tabRef.current === 'chat' ? bufferRef.current : mgrBufferRef.current;
+      const draft =
+        tabRef.current === 'chat'
+          ? bufferRef.current
+          : tabRef.current === 'approvals'
+            ? apBufferRef.current
+            : mgrBufferRef.current;
       if (
-        (tabRef.current !== 'chat' && tabRef.current !== 'managers') ||
+        (tabRef.current !== 'chat' &&
+          tabRef.current !== 'managers' &&
+          tabRef.current !== 'approvals') ||
         zoneRef.current !== 'input' ||
         isEmptyBuffer(draft)
       ) {
@@ -560,7 +726,29 @@ export const App: FC<AppProps> = ({
       return;
     }
 
+    // 承認待ちの詳細の入力欄（「その他」・補足・自由文の回答）。Esc は、書いた文を欄へ置いて抜ける。
+    // 設問の無い承認待ちの Enter は、書いた自由文を回答として確認へ進む。
+    if (tabRef.current === 'approvals' && zoneRef.current === 'input') {
+      if (key.escape || key.tab) {
+        approvals.setFieldText(apBufferRef.current.value);
+        return setZone('nav');
+      }
+      if (key.return) {
+        const action = resolveEnter(apBufferRef.current, key);
+        if (action.kind === 'newline') setApBuffer(action.buffer);
+        else {
+          approvals.submitField(action.text);
+          setZone('nav');
+        }
+        return;
+      }
+      const edited = editText(apBufferRef.current, input, key, { wrapWidth });
+      if (edited.changed) setApBuffer(edited.buffer);
+      return;
+    }
+
     // 入力欄の外（nav）。
+    if (tabRef.current === 'approvals' && handleApprovalsNav(input, key)) return;
     if (tabRef.current === 'managers' && handleManagersNav(input, key)) return;
     if (tabRef.current === 'journal' && handleJournalNav(input, key)) return;
     if (tabRef.current === 'memory' && handleMemoryNav(input, key)) return;
@@ -572,6 +760,9 @@ export const App: FC<AppProps> = ({
     const digit = TABS.find((t) => t.key === input);
     if (digit !== undefined) return goTab(digit.id);
     if (tabRef.current === 'chat') {
+      // 会話で `ask_human` が来ていれば、その承認待ちの詳細へ飛ぶ。
+      const asked = controller.store.getSnapshot().pendingAsk;
+      if (input === 'a' && asked !== null) return openApproval(asked);
       if (key.tab || key.return || input === 'i') return setZone('input');
       if (key.upArrow)
         return setAnchor(scrollUp(anchorRef.current, totalRows(), layout.logHeight, 1));
@@ -588,27 +779,37 @@ export const App: FC<AppProps> = ({
     ? HINT_QUITTING
     : picker !== null
       ? HINT_PICKER
-      : tab === 'journal'
-        ? jr.view === 'filter'
-          ? HINT_JOURNAL_FILTER
-          : jr.view === 'detail'
-            ? HINT_JOURNAL_DETAIL
-            : HINT_JOURNAL_LIST
-        : tab === 'memory'
-          ? mem.view === 'detail'
-            ? HINT_MEM_DETAIL
-            : HINT_MEM_LIST
-          : tab === 'managers'
-            ? mgr.view === 'list'
-              ? HINT_MGR_LIST
-              : mgr.detail?.confirmStop === true
-                ? HINT_MGR_CONFIRM
-                : zone === 'input'
-                  ? HINT_MGR_INPUT
-                  : HINT_MGR_DETAIL
-            : tab === 'chat' && zone === 'input'
-              ? HINT_INPUT
-              : HINT_NAV;
+      : tab === 'approvals'
+        ? ap.view === 'list'
+          ? HINT_AP_LIST
+          : ap.detail?.mode === 'confirm'
+            ? HINT_AP_CONFIRM
+            : zone === 'input'
+              ? HINT_AP_INPUT
+              : ap.detail?.mode === 'form'
+                ? HINT_AP_FORM
+                : HINT_AP_DETAIL
+        : tab === 'journal'
+          ? jr.view === 'filter'
+            ? HINT_JOURNAL_FILTER
+            : jr.view === 'detail'
+              ? HINT_JOURNAL_DETAIL
+              : HINT_JOURNAL_LIST
+          : tab === 'memory'
+            ? mem.view === 'detail'
+              ? HINT_MEM_DETAIL
+              : HINT_MEM_LIST
+            : tab === 'managers'
+              ? mgr.view === 'list'
+                ? HINT_MGR_LIST
+                : mgr.detail?.confirmStop === true
+                  ? HINT_MGR_CONFIRM
+                  : zone === 'input'
+                    ? HINT_MGR_INPUT
+                    : HINT_MGR_DETAIL
+              : tab === 'chat' && zone === 'input'
+                ? HINT_INPUT
+                : HINT_NAV;
 
   return (
     <Box
@@ -618,7 +819,24 @@ export const App: FC<AppProps> = ({
     >
       <Header baseUrl={api.baseUrl} state={header} />
       <Tabs active={tab} counts={header.counts} />
-      {tab === 'managers' ? (
+      {tab === 'approvals' ? (
+        ap.view === 'detail' && ap.detail !== null ? (
+          <>
+            <LogView lines={apWin.entries} height={apLogHeight} />
+            <DetailStatusRow {...approvalStatusText(ap.detail, apWin.hiddenBelow)} />
+            <PromptInput
+              rows={composer.rows.slice(composerWindow.start, composerWindow.end)}
+              window={{ start: 0, end: composerWindow.end - composerWindow.start }}
+              caret={{ row: composer.caret.row - composerWindow.start, col: composer.caret.col }}
+              focused={zone === 'input'}
+              placeholder={composerPlaceholder(ap.detail)}
+              cursorTop={cursorTop}
+            />
+          </>
+        ) : (
+          <ApprovalList list={ap.list} height={layout.bodyHeight} />
+        )
+      ) : tab === 'managers' ? (
         mgr.view === 'detail' && mgr.detail !== null ? (
           <>
             <ManagerDetailHead detail={mgr.detail} />
@@ -658,8 +876,6 @@ export const App: FC<AppProps> = ({
         ) : (
           <MemoryList state={mem} height={layout.bodyHeight} />
         )
-      ) : tab !== 'chat' ? (
-        <Placeholder tab={tab} height={layout.bodyHeight} />
       ) : picker !== null ? (
         <ConversationPicker
           status={picker.status}

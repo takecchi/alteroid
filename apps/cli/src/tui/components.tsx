@@ -215,32 +215,6 @@ export const Footer: FC<{ hint: string }> = ({ hint }) => (
   </Box>
 );
 
-const PLACEHOLDER_NOTES: Record<
-  Exclude<TabId, 'chat' | 'managers' | 'journal' | 'memory'>,
-  string
-> = {
-  approvals: '承認待ちの一覧と、答える画面',
-};
-
-/** 次の段階で作る画面の仮置き。 */
-export const Placeholder: FC<{
-  tab: Exclude<TabId, 'chat' | 'managers' | 'journal' | 'memory'>;
-  height: number;
-}> = ({ tab, height }) => {
-  const label = TABS.find((t) => t.id === tab)?.label ?? '';
-  return (
-    <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>
-      <Text>{`${label}: 次の段階で実装`}</Text>
-      <Text dimColor wrap="truncate-end">
-        {PLACEHOLDER_NOTES[tab]}
-      </Text>
-      <Text dimColor wrap="truncate-end">
-        それまでは alteroid のサブコマンドか Web UI を使う。1 で会話へ戻る。
-      </Text>
-    </Box>
-  );
-};
-
 /** 会話の履歴の選択。窓は選択行が見える範囲だけを描く。 */
 export const ConversationPicker: FC<{
   status: 'loading' | 'ready';

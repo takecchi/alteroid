@@ -26,6 +26,8 @@ export interface ChatState {
   readonly busy: boolean;
   /** 「考えている…」などの進行中の合図。 */
   readonly transient: string | null;
+  /** この会話で最後に来た `ask_human` の承認待ち id（会話の画面で `a` を押すと承認待ちの詳細が開く）。 */
+  readonly pendingAsk: string | null;
 }
 
 /** ログに残す最大件数。超えた古い側は捨てる（長く開いておいても膨らまない）。 */
@@ -37,6 +39,7 @@ export const initialChatState: ChatState = {
   streaming: '',
   busy: false,
   transient: null,
+  pendingAsk: null,
 };
 
 const messageOf = (error: unknown): string =>
@@ -155,13 +158,15 @@ export class ChatController {
         break;
       case 'ask_human':
         this.flushStreaming();
-        // 答える UI は次の段階。いまは id と質問を残し、答えられる口を案内する
-        // （既存 CLI の「/answer <id> <回答> で返せます」と Web の「承認待ちの画面から答えられる」）。
+        // 答える画面は承認待ちのタブ。id と質問を残し、そこへ飛ぶ口（`a`・`/approvals <id>`）を案内する。
+        // 既存 CLI の `/answer <id> <回答>` と Web の承認待ちの画面からも答えられる。
         this.push(
           'ask',
           `確認したいことがある（承認待ち ${event.approvalId}）: ${event.question}\n` +
-            `答えるには alteroid chat の /answer ${event.approvalId} <回答>、または Web の承認待ちの画面から`,
+            `答えるには、Esc のあと a（承認待ちの詳細が開く）か /approvals ${event.approvalId}。` +
+            `alteroid chat の /answer ${event.approvalId} <回答>、Web の承認待ちの画面からも答えられる`,
         );
+        this.set({ pendingAsk: event.approvalId });
         break;
       case 'usage_limited':
         this.flushStreaming();

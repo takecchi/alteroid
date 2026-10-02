@@ -9,6 +9,7 @@ import { createTuiApi, type TuiApi } from './api.js';
 import { App } from './app.js';
 import { ChatController } from './chat-controller.js';
 import { HeaderFeed } from './header-feed.js';
+import { ApprovalsController } from './approvals-controller.js';
 import { JournalController } from './journal-controller.js';
 import { isFullscreenViewport } from './layout.js';
 import { ManagersController } from './managers-controller.js';
@@ -53,6 +54,8 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
   const uninstall = installCrashRestore(restore, io.stderr);
   const controller = new ChatController(api);
   const feed = new HeaderFeed(api);
+  const approvals = new ApprovalsController(api);
+  approvals.attach(feed);
   const managers = new ManagersController(api);
   managers.attach(feed);
   // 日誌と記憶も、ヘッダが張っている 1 本の SSE を共有する（2 本目は張らない）。
@@ -67,6 +70,7 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
         api={api}
         controller={controller}
         feed={feed}
+        approvals={approvals}
         managers={managers}
         journal={journal}
         memory={memory}
@@ -85,6 +89,7 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
     );
     await instance.waitUntilExit();
   } finally {
+    approvals.dispose();
     managers.dispose();
     journal.dispose();
     memory.dispose();
