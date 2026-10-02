@@ -1238,6 +1238,15 @@ export {
   resolveCloneProviderId,
   resolveManagerProviderId,
 } from './agent-provider-selection.js';
+export {
+  CLONE_PEERS_ENV_KEY,
+  MANAGER_PEERS_ENV_KEY,
+  isPeerAllowed,
+  parsePeers,
+  peersEnvKeyOf,
+  resolvePeers,
+  type PeersLayer,
+} from './agent-provider-peers.js';
 /**
  * `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。`inferAppraisedByFromGrounds`
  * （PR #1362、`main` 未マージ）と同じ「本文の先頭に固定の印を置き、前方一致で
