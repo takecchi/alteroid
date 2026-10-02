@@ -248,12 +248,16 @@ export function reclaimScanOf(
 }
 
 /**
- * 撃たない構え（`reap` の無い `ReclaimScanOptions`）に、撃たれなかった理由を数えるための
- * 判定材料 `sessions` を足す（#2352）。**`reap` は足さない**ので、`process.kill` へ届く経路は
- * 増えない。すでに `reap` がある（撃つ構え）ならそのまま返す。`undefined`（観測しない）も
- * そのまま返す。`graceMs` は判定材料ではないので渡さない。
+ * 既定の構え（`reap` の無い `ReclaimScanOptions`）に、判定材料 `sessions` を足す（#2352 / #2626）。
+ *
+ * **`sessions` があると、runner 自身が起こした委譲の CLI のプロセス木のうち、その委譲が終わった
+ * ものを畳む**（`ReclaimScanOptions.sessions` の doc）。環境変数 `ALTEROID_RUNNER_RECLAIM` が置かれて
+ * いなくても効く——「runner が親として pid＝sid を控えた委譲が終わった」ことは runner 自身が
+ * 知っている事実だからである。素性の分からない孤児（分岐1）を撃つ力は足さない（`reap` だけが持つ）。
+ * すでに `reap` がある（`reclaim`）ならそのまま返す。`undefined`（`off`・観測しない）もそのまま返す
+ * ——`off` は観測ごと止める切れる口である。
  */
-export function withObserveOnlySessions(
+export function withTerminatedReclaimSessions(
   scan: ReclaimScanOptions | undefined,
   view: ReclaimSessionView,
 ): ReclaimScanOptions | undefined {
@@ -401,7 +405,10 @@ export async function main(): Promise<void> {
 
   // **知らない値なら、ここで落とす**（`reclaimScanOf` の doc）。起動してから
   // 黙って既定で走るより、起きないほうが人間には見える。
-  const reclaimScan = withObserveOnlySessions(reclaimScanOf(process.env, childUser, reap), reap);
+  const reclaimScan = withTerminatedReclaimSessions(
+    reclaimScanOf(process.env, childUser, reap),
+    reap,
+  );
 
   /**
    * タスクの内訳を測るリーダー（#315 / #1334）。**孤児の観測・回収を構えるためだけに、
@@ -498,7 +505,7 @@ export async function main(): Promise<void> {
         reclaimScan === undefined
           ? '切'
           : reclaimScan.reap === undefined
-            ? '観測のみ（撃たない）'
+            ? '既定（終端した委譲の木だけ畳む。素性の分からない孤児は撃たない）'
             : '回収（撃つ）'
       }` +
       ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
