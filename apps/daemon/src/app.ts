@@ -3100,7 +3100,7 @@ export function createApp(deps: AppDeps) {
           '日誌（追記専用の記録）を読む。`type` `since` `until` で掘れる。' +
           '`q` で本文を語で探せる（大文字小文字を区別しない部分一致。他の絞りと併用できる）。' +
           '**`q` が当たらないことは「日誌にその語が無い」を意味しない** —— ' +
-          '`tool_use` の `input`・`worker_wait`・`turn_usage` は探す対象に入っていない。' +
+          '`tool_use` の `input`・`worker_wait`・`turn_usage`・`github_observation` は探す対象に入っていない。' +
           '`q=`（空）は絞らない。' +
           '既定は新しい順（`order:desc`）——`order:asc` で古い順にもできる。' +
           '`afterId` と `afterAt` を両方渡すと、前の頁の最後の行より後ろ' +

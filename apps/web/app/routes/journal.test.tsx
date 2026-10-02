@@ -922,6 +922,10 @@ describe('日誌画面の検索欄（issue #250）', () => {
     await waitForLoaded();
 
     expect(screen.getByText(/tool_use の input/)).toBeTruthy();
+    // core の `journal-search.ts` が1欄も探さない種別（#2562）。CLI の `/journal` と同じ並び。
+    expect(
+      screen.getByText(/tool_use の input・worker_wait・turn_usage・github_observation/),
+    ).toBeTruthy();
   });
 });
 

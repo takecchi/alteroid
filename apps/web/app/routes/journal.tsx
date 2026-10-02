@@ -317,7 +317,7 @@ export default function Journal() {
         */}
         {committed !== '' && (
           <p className="mb-3 text-[11px] text-muted-foreground">
-            tool_use の input・worker_wait・turn_usage
+            tool_use の input・worker_wait・turn_usage・github_observation
             は探す対象に入っていない（そこにだけ書かれている語は当たらない）。
           </p>
         )}

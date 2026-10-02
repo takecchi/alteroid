@@ -307,6 +307,8 @@ describe('journal_read — q で本文を語で探す（issue #250）', () => {
     const reply = await call('journal_read', { q: 'ナス' });
     expect(reply).toContain('"ナス" に当たる日誌は無い');
     expect(reply).toContain('tool_use の input');
+    // `github_observation` も1欄も探さない（`journal-search.ts`、#2562）。CLI の `/journal` と同じ並び。
+    expect(reply).toContain('tool_use の input・worker_wait・turn_usage・github_observation');
     // 「日誌はまだ空」と言わないこと（実際には1件在る）。
     expect(reply).not.toContain('日誌はまだ空');
   });
