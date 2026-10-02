@@ -28,7 +28,13 @@ export function retryDelay(attempt: number, base = RETRY_BASE_MS, max = RETRY_MA
 }
 
 /** 件数に響かない（量が多く、承認待ち・委譲を動かさない）種別。 */
-const QUIET_TYPES = new Set(['turn_usage', 'context_usage', 'inbox_flow']);
+const QUIET_TYPES = new Set([
+  'turn_usage',
+  'context_usage',
+  'inbox_flow',
+  // GitHub の観測の記帳（#2245）。承認待ちも委譲も動かさない（Web の `use-journal-live` も落とす先を持たない）。
+  'github_observation',
+]);
 
 export function affectsHeader(type: string): boolean {
   return !QUIET_TYPES.has(type);

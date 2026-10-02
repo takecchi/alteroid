@@ -113,7 +113,29 @@ describe('要旨（Web の summarizeJournalEntry と同じ文言）', () => {
     );
   });
 
-  it('絞り込みの選択肢は 13 種すべて（Web のチップと同じ並び）', () => {
+  it('github_observation は観測者を落とさず、取れなかった回は数を作らない（Web と同じ文言）', () => {
+    const base = { observedBy: 'mgr-1', repo: 'takecchi/alteroid', query: 'is:open' };
+    expect(
+      summarizeJournalEntry(
+        journalEntry('x', 'github_observation', at, {
+          ...base,
+          result: { status: 'ok', openIssues: 3, openPulls: 2, truncated: true },
+        }),
+      ),
+    ).toBe(
+      'takecchi/alteroid: open Issue 3 件 / open PR 2 件（limit に達した。下限）（観測者 mgr-1）',
+    );
+    expect(
+      summarizeJournalEntry(
+        journalEntry('x', 'github_observation', at, {
+          ...base,
+          result: { status: 'failed', reason: 'rate limited' },
+        }),
+      ),
+    ).toBe('takecchi/alteroid: 取れなかった（観測者 mgr-1）: rate limited');
+  });
+
+  it('絞り込みの選択肢は 14 種すべて（Web のチップと同じ並び）', () => {
     expect(JOURNAL_TYPES).toEqual([
       'exchange',
       'decision',
@@ -128,6 +150,7 @@ describe('要旨（Web の summarizeJournalEntry と同じ文言）', () => {
       'token_rotation',
       'subagent_stall',
       'inbox_flow',
+      'github_observation',
     ]);
   });
 });

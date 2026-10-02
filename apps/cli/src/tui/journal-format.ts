@@ -34,6 +34,7 @@ const TONE: Record<JournalType, Tone> = {
   token_rotation: 'warn',
   subagent_stall: 'warn',
   inbox_flow: 'neutral',
+  github_observation: 'neutral',
 };
 
 /** 絞り込みに出す種別（Web のチップと同じ並び = `TONE` の宣言順）。 */
@@ -93,6 +94,13 @@ function summarize(entry: JournalEntry): string {
     case 'token_rotation':
       // 見出しの `event` は落とさない（`exhausted` と `not_rotated` を見分けられなくなる）。
       return `[${entry.event}] ${entry.text}`;
+    case 'github_observation':
+      // 申告であることを落とさない（`observedBy`）。取れなかった回は数を作らない。
+      return entry.result.status === 'ok'
+        ? `${entry.repo}: open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
+            (entry.result.truncated ? '（limit に達した。下限）' : '') +
+            `（観測者 ${entry.observedBy}）`
+        : `${entry.repo}: 取れなかった（観測者 ${entry.observedBy}）: ${entry.result.reason}`;
     case 'subagent_stall': {
       const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
       const outcome =
@@ -170,9 +178,13 @@ export function journalEmptyMessage(types: readonly JournalType[], q: string): s
   return `${typeLabel} に絞った上で、「${q}」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
 }
 
-/** 語で探しているとき、探す対象に入っていない欄が在ることの断り（Web と同じ）。 */
+/**
+ * 語で探しているとき、探す対象に入っていない欄が在ることの断り。
+ * `github_observation` は CLI の `/journal`（`chat.ts`）に合わせて足した。core の
+ * `journal-search.ts` がこの種別の欄を1つも探さないため。Web の断りにはまだ入っていない。
+ */
 export const SEARCH_SCOPE_NOTE =
-  'tool_use の input・worker_wait・turn_usage は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+  'tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
 
 /**
  * 詳細の本文（全文）。上位の欄ごとに `名前: 値` で並べ、文字列は改行を保ったまま字下げして出す

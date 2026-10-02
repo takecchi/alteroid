@@ -754,7 +754,7 @@ describe('日誌（ライブで流れる一覧と全文）', () => {
     await waitFor(() => h.frame().includes('雑談'));
     h.stdin.write('f');
     await waitFor(() => h.frame().includes('種別で絞り込む'));
-    expect(h.frame()).toContain('[ ] turn_usage'); // 13 種すべてが選べる
+    expect(h.frame()).toContain('[ ] turn_usage'); // 14 種すべてが選べる
     h.stdin.write(DOWN); // decision
     h.stdin.write(' ');
     await waitFor(() => h.frame().includes('[x] decision'));
