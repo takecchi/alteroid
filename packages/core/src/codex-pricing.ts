@@ -185,3 +185,40 @@ export function computeCodexCostUSD(
     PER_MILLION;
   return usd;
 }
+
+/**
+ * **リクエスト（モデル呼び出し）単位**の使用量の列から USD を計算する。272K の判定は
+ * 各リクエストの入力で行い、結果を足す。**1件でも計算できなければ全体を `undefined`**
+ * （一部だけの合計を「費用」と名乗らない）。列が空のときも `undefined`（観測が無い）。
+ */
+export function computeCodexRequestsCostUSD(
+  model: string | undefined,
+  requests: readonly CodexUsageForPricing[],
+): number | undefined {
+  if (requests.length === 0) return undefined;
+  let sum = 0;
+  for (const request of requests) {
+    const cost = computeCodexCostUSD(model, request);
+    if (cost === undefined) return undefined;
+    sum += cost;
+  }
+  return sum;
+}
+
+/**
+ * **足し込んだ**使用量（リクエスト単位に分けられない値）から USD を計算する。
+ *
+ * 閾値はリクエスト単位なので、足し込んだ値からは長い側かどうかを決められない。
+ * 厳密に計算できるのは次の場合だけで、それ以外は `undefined`（高い単価に寄せない）。
+ * - そのモデルが長い側の単価を持たない（超えても短い側のまま）。
+ * - 足し込んだ入力が 272K 以下（各リクエストの入力 <= 合計 <= 272K なので、どれも超えない）。
+ */
+export function computeCodexAggregatedCostUSD(
+  model: string | undefined,
+  aggregated: CodexUsageForPricing,
+): number | undefined {
+  if (model === undefined || !Object.hasOwn(CODEX_PRICING, model)) return undefined;
+  const { long } = CODEX_PRICING[model]!;
+  if (long && !(aggregated.inputTokens <= CODEX_LONG_CONTEXT_THRESHOLD_TOKENS)) return undefined;
+  return computeCodexCostUSD(model, aggregated);
+}
