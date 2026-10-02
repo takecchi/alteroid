@@ -1385,8 +1385,9 @@ async function removeUnreadableRowsWithJournal(params: {
   const { stores, subject, actor, route } = params;
   // 閉じ込めで代入するので、`let` ではなく入れ物にする（型の絞り込みが `never` に倒れない）。
   const written: { detail?: string } = {};
+  let result: RemoveUnreadableRowsResult;
   try {
-    return await params.remove(params.requested, {
+    result = await params.remove(params.requested, {
       // **日誌を先に書く。書けなければここで投げ、状態を変えずに `base.onError` へ抜ける。**
       beforeRemove: async (ids) => {
         await stores.journal.append({
@@ -1416,6 +1417,22 @@ async function removeUnreadableRowsWithJournal(params: {
     noteDroppedRecord(`読めない${subject}の行の削除`, journaled, error);
     return { kind: 'failed' };
   }
+  // 日誌を書いた後で、ストアが「読めない行に無い」に倒れた（pg は日誌をトランザクションの外で
+  // 書くので、日誌と `for update` の再確認のあいだに行が変わりうる）。何も消していないので、
+  // 「消そうとしている」の行を打ち消しておく。日誌を書く前の `unknown` は日誌が無いので要らない。
+  if (result.kind === 'unknown' && written.detail !== undefined) {
+    await appendJournalOrDrop(
+      stores,
+      {
+        type: 'decision',
+        decision: `読めない${subject}の行を消さなかった`,
+        grounds: `${actor}（${route}、日誌の後の再確認で ${String(result.count)} 件が読めない行に無かった。何も消していない）。${written.detail}`,
+      },
+      `読めない${subject}の行の打ち消しの日誌`,
+      written.detail,
+    );
+  }
+  return result;
 }
 
 /**
@@ -3857,7 +3874,7 @@ export function createApp(deps: AppDeps) {
           },
           404: {
             description:
-              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
+              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない。pg で日誌の後の再確認で倒れた回だけは、日誌に打ち消しの行を足す）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           500: {

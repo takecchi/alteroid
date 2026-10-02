@@ -326,6 +326,39 @@ describe('読めない行を id で消す口（fs。issue #2440）', () => {
       expect(written).not.toContain(FAKE);
     });
 
+    it('日誌を書いた後でストアが「読めない行に無い」に倒れたら、打ち消しの日誌を足して 404', async () => {
+      // pg は日誌をトランザクションの外で書くので、日誌と `for update` の再確認のあいだに行が
+      // 変わりうる。その回に「消そうとしている」の行だけが日誌に残らないこと。
+      const racing = {
+        removeUnreadable: async (
+          _ids: readonly string[],
+          options?: { beforeRemove?: (ids: readonly string[]) => Promise<void> },
+        ) => {
+          await options?.beforeRemove?.([target.badId]);
+          return { kind: 'unknown' as const, count: 1 };
+        },
+      };
+      app =
+        target.key === 'grants'
+          ? makeApp({ permissionGrants: { ...stores.permissionGrants, ...racing } })
+          : makeApp({
+              auth: {
+                ...stores.auth,
+                removeUnreadableAccounts: racing.removeUnreadable,
+              } as Stores['auth'],
+            });
+
+      const { status } = await call({ ids: [target.badId] });
+
+      expect(status).toBe(404);
+      const decisions = (await stores.journal.list({ types: ['decision'] })).map((entry) =>
+        JSON.stringify(entry),
+      );
+      expect(decisions).toHaveLength(2);
+      expect(decisions.some((entry) => entry.includes('消さなかった'))).toBe(true);
+      expect(decisions.join('\n')).not.toContain(FAKE);
+    });
+
     it('入力の形が不正（空配列・空文字・配列でない）は 400。何も消さない', async () => {
       const before = await readFile(target.file(), 'utf8');
       for (const body of [{ ids: [] }, { ids: [''] }, { ids: target.badId }, {}]) {
