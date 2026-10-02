@@ -356,6 +356,48 @@ describe('進行中の会話へ戻る（履歴から開く）', () => {
     expect(api.chatCalls).toEqual([{ text: '続き', conversationId: 'c9' }]);
   });
 
+  it('履歴を読んだ後、open までにターンが終わっていたら、読み直して返信を出す', async () => {
+    const { api, controller, texts } = setup();
+    history(api);
+    const hold = gate();
+    api.streamScripts.push([hold.wait, openIn('c9', false)]);
+    await controller.openConversation('c9');
+    await tick();
+    expect(texts('assistant')).toEqual(['前の答え']);
+    // 接続を張るまでの間にターンが終わり、返信が日誌に載った。
+    api.messages.c9 = [
+      ...(api.messages.c9 ?? []),
+      { id: '4', at: 't', role: 'outbound', text: '今の答え' },
+    ];
+    hold.open();
+    await tick();
+    expect(texts('assistant')).toEqual(['前の答え', '今の答え']);
+    expect(texts('user')).toEqual(['前の質問', '今の質問']);
+  });
+
+  it('読み直しの最中に別の会話へ移ったら、差し替えない', async () => {
+    const { api, controller, state, texts } = setup();
+    history(api);
+    api.messages.other = [{ id: '9', at: 't', role: 'inbound', text: '別の会話' }];
+    api.streamScripts.push([openIn('c9', false)], [openIn('other', false)]);
+    const original = api.readConversation.bind(api);
+    const reread = gate();
+    let calls = 0;
+    api.readConversation = async (id) => {
+      calls += 1;
+      if (calls === 2) await reread.wait; // 戻り接続の読み直し
+      return original(id);
+    };
+    await controller.openConversation('c9');
+    await tick();
+    expect(calls).toBe(2);
+    expect(await controller.openConversation('other')).toBe(true);
+    reread.open();
+    await tick();
+    expect(state().conversationId).toBe('other');
+    expect(texts()).toEqual(['別の会話']);
+  });
+
   it('開けなかった会話では接続を張らない', async () => {
     const { api, controller } = setup();
     expect(await controller.openConversation('nope')).toBe(false);

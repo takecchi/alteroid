@@ -16,7 +16,7 @@
  *   （考えている…・ここまでの文章）を出し、続きを流す（Issue #2652）。送信と同じ `onEvent` を
  *   共有し、その間は `busy` で、発言は追送になる。
  */
-import type { ChatEvent, ConversationSummary, TuiApi } from './api.js';
+import type { ChatEvent, ConversationMessage, ConversationSummary, TuiApi } from './api.js';
 import type { LogEntry, LogKind } from './log.js';
 import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { Store } from './store.js';
@@ -296,14 +296,7 @@ export class ChatController {
       );
       return false;
     }
-    const entries: LogEntry[] = read.messages.map((m) => {
-      this.seq += 1;
-      return {
-        seq: this.seq,
-        kind: m.role === 'inbound' ? 'user' : 'assistant',
-        text: redactBody(m.text),
-      };
-    });
+    const entries = this.historyEntries(read.messages);
     this.stopWatch();
     this.store.update(() => ({
       ...initialChatState,
@@ -317,6 +310,41 @@ export class ChatController {
     }
     this.resume(id);
     return true;
+  }
+
+  private historyEntries(messages: ConversationMessage[]): LogEntry[] {
+    const entries: LogEntry[] = messages.map((m) => {
+      this.seq += 1;
+      return {
+        seq: this.seq,
+        kind: m.role === 'inbound' ? 'user' : 'assistant',
+        text: redactBody(m.text),
+      };
+    });
+    return entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries;
+  }
+
+  /**
+   * 戻り接続が `inProgress:false` を返したあと、履歴を 1 回だけ読み直して差し替える。
+   * 履歴を読んでから戻り接続の `open` までの間にターンが終わっていたら、その返信は
+   * 日誌に載っている（日誌へ書いてから `done` を出す）のに画面には無いため。
+   * 読み直しの最中に会話を移った・送信を始めた(= abort された)ら差し替えない。
+   */
+  private async refreshHistory(conversationId: string, abort: AbortController): Promise<void> {
+    try {
+      const read = await this.api.readConversation(conversationId);
+      if (abort.signal.aborted || read === null) return;
+      if (!read.reachedStart && read.messages.length === 0) return;
+      const entries = this.historyEntries(read.messages);
+      this.store.update((s) => (s.conversationId === conversationId ? { ...s, entries } : s));
+      if (!read.reachedStart) {
+        this.addSystem(
+          '遡れた範囲だけを出している。これより古い発言は窓の外に残っているかもしれない',
+        );
+      }
+    } catch (error) {
+      if (!abort.signal.aborted) this.addError(messageOf(error));
+    }
   }
 
   /** 戻り接続をやめる（状態は触らない。呼ぶ側が畳む）。 */
@@ -341,11 +369,15 @@ export class ChatController {
     const opened = deferred<string>();
     opened.resolve(conversationId);
     let active = false;
+    let refresh = false;
     try {
       for await (const event of this.api.chatStream(conversationId, abort.signal)) {
         if (!live()) break;
         if (event.type === 'open') {
-          if (event.inProgress !== true) break;
+          if (event.inProgress !== true) {
+            refresh = true;
+            break;
+          }
           active = true;
           this.opened = opened; // 応答中の発言は追送になる（`send`）
           this.set({ busy: true, transient: '考えている…' });
@@ -353,6 +385,7 @@ export class ChatController {
         }
         if (active) this.onEvent(event, opened);
       }
+      if (refresh && live()) await this.refreshHistory(conversationId, abort);
     } catch (error) {
       if (live()) this.addError(messageOf(error));
     } finally {
