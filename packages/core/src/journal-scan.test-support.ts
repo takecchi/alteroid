@@ -23,6 +23,12 @@ import type { JournalPage, JournalQuery, JournalStore } from './store.js';
  * ——`store.ts` の `JournalQuery.after` の doc——を、この偽物でも同じ強さで
  * 再現するため）。
  *
+ * **共有の置き場。** `packages/core/src/index.ts` の末尾から再エクスポートしてある
+ * （`createMemoryStores` と同じ `@alteroid/core` の口）。`apps/web` の実デーモンの
+ * テスト（`journal-real-daemon.test.tsx`）も同じ実装を引く——pg の `listPage` の形
+ * （`next` の決め方・錨の扱い）の写しをここ1か所にするため（Issue #2640）。
+ * `oldestAt` は `horizon=true` の経路のために本物を返す。
+ *
  * **`limit` が有限でなければ例外を投げる。** 本番の穴（pg 実装が `limit`
  * 省略時に `Number.MAX_SAFE_INTEGER` を渡す。
  * `grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
@@ -165,6 +171,10 @@ export function createSyntheticJournalStore(
     return readPage(query);
   };
 
+  // 地平（`JournalStore.oldestAt`）。pg は `ORDER BY at ASC LIMIT 1` で、読めない行も
+  // 数える（捨てるのは `listPage` が頁を切った後だけ）ので、`unreadable` を見ない。
+  const oldestAt = async (): Promise<string | null> => (total > 0 ? entryOf(total - 1).at : null);
+
   const notImplemented = (name: string) => (): never => {
     throw new Error(
       `この偽ストアの ${name}() はスタブである（呼ばれない前提）。呼ばれたのなら、` +
@@ -178,7 +188,7 @@ export function createSyntheticJournalStore(
       listPage,
       append: notImplemented('append'),
       get: notImplemented('get'),
-      oldestAt: notImplemented('oldestAt'),
+      oldestAt,
       clear: notImplemented('clear'),
     },
     calls,

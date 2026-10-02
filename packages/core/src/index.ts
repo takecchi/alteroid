@@ -1359,3 +1359,13 @@ export {
   failingJournalAppend,
   humanMessage,
 } from './testing.js';
+
+/**
+ * pg の日誌の形（`LIMIT` の後で読めない行を捨てる）を再現する偽のストア。
+ * 日誌の走査・画面のテストが共有する唯一の写し（Issue #2640）。
+ */
+export {
+  createSyntheticJournalStore,
+  type SyntheticJournalStore,
+  type SyntheticJournalStoreOptions,
+} from './journal-scan.test-support.js';
