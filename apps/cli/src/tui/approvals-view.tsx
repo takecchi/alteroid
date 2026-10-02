@@ -26,6 +26,7 @@ import { oneLine } from './journal-format.js';
 import type { DisplayLine } from './log.js';
 import type { RichSpan } from './markdown.js';
 import { glyph, theme } from './theme.js';
+import { redactBody } from '../redact.js';
 import { LINE_BREAK, wrapLogical } from './wrap.js';
 
 /** 一覧に出す識別子（長い id は先頭だけ。全文は詳細の頭に出す）。 */
@@ -43,7 +44,7 @@ const originTag = (row: ApprovalRow): string =>
 
 /** 一覧の 1 行の要旨。設問が在れば設問の要約（先頭）に質問の抜粋を続ける。無ければ質問の抜粋。 */
 export function approvalSummary(row: ApprovalRow): string {
-  const question = oneLine(row.question, 120);
+  const question = oneLine(redactBody(row.question), 120);
   return row.questions !== undefined && row.questions.length > 0
     ? `${summarizeQuestions(row.questions)}  ${question}`
     : question;
@@ -181,9 +182,9 @@ function permissionLines(b: DocBuilder, a: ApprovalRow): void {
   const p = a.permissionRequest;
   if (p === undefined) return;
   b.push('実行許可の要求（request_permission）', { bold: true });
-  b.push(`規則: ${p.rule}`, { indent: 2 });
-  for (const allow of p.allows) b.push(`通すべき例: ${allow}`, { indent: 2 });
-  for (const deny of p.denies) b.push(`拒むべき例: ${deny}`, { indent: 2 });
+  b.push(`規則: ${redactBody(p.rule)}`, { indent: 2 });
+  for (const allow of p.allows) b.push(`通すべき例: ${redactBody(allow)}`, { indent: 2 });
+  for (const deny of p.denies) b.push(`拒むべき例: ${redactBody(deny)}`, { indent: 2 });
   b.push(
     `許可するなら「${PERMISSION_GRANT_CONSENT_PHRASE}」とちょうど答える（CLI の /answer と同じ。` +
       '許可として記録されるのは、許可されたアカウントの資格で答えたときだけ）。それ以外の文は許可にならない。',
@@ -206,15 +207,15 @@ function formLines(b: DocBuilder, a: ApprovalRow, detail: DetailState): number |
 
   questions.forEach((question, q) => {
     const kind = question.multiple === true ? '複数選択可' : '単一選択';
-    b.push(`Q${String(q + 1)} ${question.prompt}（${kind}）`, { bold: true });
+    b.push(`Q${String(q + 1)} ${redactBody(question.prompt)}（${kind}）`, { bold: true });
     const picked = new Set(form.picks[question.id] ?? []);
     question.options.forEach((option, o) => {
       const on = picked.has(option.id);
       const box = question.multiple === true ? (on ? '[x]' : '[ ]') : on ? '(●)' : '( )';
       const label =
-        `${box} ${String.fromCharCode(97 + (o % 26))}) ${option.label}` +
+        `${box} ${String.fromCharCode(97 + (o % 26))}) ${redactBody(option.label)}` +
         `${option.recommended === true ? '［推奨］' : ''}` +
-        `${option.description === undefined ? '' : ` — ${option.description}`}`;
+        `${option.description === undefined ? '' : ` — ${redactBody(option.description)}`}`;
       const here = isCursor((s) => s.kind === 'option' && s.q === q && s.o === o);
       const at = b.push(`${mark(here)}${label}`, { indent: 0, hang: 8, bold: here });
       if (here) focus = at;
@@ -282,20 +283,24 @@ export function approvalDocument(detail: DetailState, width: number): ApprovalDo
   if (a.conversationId !== undefined) b.push(`会話: ${a.conversationId}`, { dim: true });
   b.blank();
   b.push('質問', { bold: true });
-  b.push(a.question, { indent: 2 });
+  b.push(redactBody(a.question), { indent: 2 });
   if (a.context !== undefined && a.context.trim() !== '') {
     b.blank();
     b.push('背景', { bold: true });
-    b.push(a.context, { indent: 2 });
+    b.push(redactBody(a.context), { indent: 2 });
   }
   b.blank();
   permissionLines(b, a);
   if (a.answeredAt !== undefined) {
     b.push(`回答（${a.answeredAt}）`, { bold: true });
-    b.push(a.answer ?? '（回答の文は記録されていない）', { indent: 2 });
+    b.push(a.answer === undefined ? '（回答の文は記録されていない）' : redactBody(a.answer), {
+      indent: 2,
+    });
   } else if (a.withdrawnAt !== undefined) {
     b.push(`取り下げ済み（${a.withdrawnAt}）`, { bold: true });
-    b.push(a.withdrawnReason ?? '（理由の記録なし）', { indent: 2 });
+    b.push(a.withdrawnReason === undefined ? '（理由の記録なし）' : redactBody(a.withdrawnReason), {
+      indent: 2,
+    });
   }
 
   let focusRow: number | null = null;
@@ -306,7 +311,7 @@ export function approvalDocument(detail: DetailState, width: number): ApprovalDo
   } else if (questions.length > 0) {
     b.push('設問', { bold: true });
     for (const line of describeQuestionLines(questions)) {
-      b.push(line, { indent: 2, hang: 6 });
+      b.push(redactBody(line), { indent: 2, hang: 6 });
     }
     if (isOpen(a)) {
       b.blank();

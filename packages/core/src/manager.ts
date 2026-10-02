@@ -67,6 +67,7 @@ import type {
   RunnerEvent,
   RunnerExecutionResources,
   RunnerLegState,
+  PidsSaturation,
   RunnerLiveness,
   RunnerMcpServersFingerprint,
   RunnerPlacementResources,
@@ -1523,6 +1524,15 @@ export interface RunnerOverview {
    */
   resourcesProbe?: RunnerResourcesProbe;
   /**
+   * **pids 飽和（新しい委譲を置けない）と判定した材料**（#2626 期待2）。**無ければ
+   * 欄ごと無い**——「飽和ではない」とは言わない（材料が無いだけである）。
+   *
+   * 窓の内側の印（EAGAIN の spawn 失敗・fork 拒否）はデーモンのメモリにあるので
+   * `resources` の要否に関わらず載る。`pids` の現在値が上限に達している材料
+   * （`at-limit`）は、`resources: true` で現在値が取れたときだけ足される。
+   */
+  pidsSaturation?: PidsSaturation;
+  /**
    * runner が名乗った版（コミット sha）。**3状態を区別する**
    * （`RunnerRevisionStatus`）——`known`（版が取れた）/ `unknown`（名乗ったが
    * runner が自分の版を知らない）/ `unheard`（名乗り自体をまだ聞けていない）。
@@ -2072,6 +2082,13 @@ export interface ManagerPool {
    * 素直に落ちる。
    */
   runnerIdOf(managerId: string): Promise<string | undefined>;
+  /**
+   * その runner が pids 飽和（新しい委譲を置けない）と判定される材料（#2626）。
+   * 無ければ `undefined`。ネットワークは叩かない（名簿のメモリを読むだけ）。
+   * **省略可能**なのは `runnerHasCapability` と同じ理由（偽のプールが持たなくても型が
+   * 通るように）。持たないプールは「材料なし」と読む。
+   */
+  runnerPidsSaturation?(runnerId: string): PidsSaturation | undefined;
   /**
    * その runner が直近の `hello` で名乗った能力を持つか（#1394 段(C)）。名乗りを
    * 受けていない・欄を送らない旧い runner は `false`（持つと仮定しない）。
@@ -6503,6 +6520,11 @@ class Pool implements ManagerPool {
           });
         }
 
+        const pidsSaturation =
+          entry.runnerId === undefined
+            ? undefined
+            : this.#runners.pidsSaturationOf?.(entry.runnerId, resources?.pids);
+
         const overview: RunnerOverview = {
           label: entry.label,
           state: entry.state,
@@ -6525,6 +6547,7 @@ class Pool implements ManagerPool {
             : { mcpServersProbe: mcpServersProbed.probe }),
           ...(resources === undefined ? {} : { resources }),
           ...(resourcesProbed.probe === undefined ? {} : { resourcesProbe: resourcesProbed.probe }),
+          ...(pidsSaturation === undefined ? {} : { pidsSaturation }),
           revision: entry.revision,
           // **`credentials`/`profile` と違い、`fingerprints` の要否を見ない。**
           // runner への新しい往復を払わない（プロセス内の記憶を読むだけ）ので、
@@ -6927,6 +6950,10 @@ class Pool implements ManagerPool {
             '例外により判定不能（判定できないときは畳まない側へ倒す）',
         });
       });
+  }
+
+  runnerPidsSaturation(runnerId: string): PidsSaturation | undefined {
+    return this.#runners.pidsSaturationOf?.(runnerId);
   }
 
   async runnerIdOf(managerId: string): Promise<string | undefined> {
@@ -12507,6 +12534,27 @@ class Pool implements ManagerPool {
           }
         }
         await this.#persist(record);
+        /*
+         * **pids 飽和の印を名簿へ知らせる（#2626 期待2）。** `failed` だけでなく
+         * `lost` も見る——#2626 は SIGABRT で `failed`（`cgroupEvents.pidsMaxDelta`
+         * が付く）→ resume が `spawn … EAGAIN` で `lost`（`systemError.code` が付く。
+         * `runner.ts` の `#read()` の catch の `unresumable` 枝）の順で、後者は
+         * `noteManagerFailed`（`failed` 専用）には届かない。**判定は構造化された値
+         * だけ**（`reason` の文字列は読まない）。`lost` を確定させる処理そのものは
+         * 変えていない——ここは確定の後で印を足すだけである。
+         * `runnerId` が無い分は、無実の器を沈めないために数えない。
+         */
+        if (
+          (event.status === 'failed' || event.status === 'lost') &&
+          record.job.runnerId !== undefined
+        ) {
+          if (event.systemError?.code === 'EAGAIN') {
+            this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'eagain');
+          }
+          if ((event.cgroupEvents?.pidsMaxDelta ?? 0) > 0) {
+            this.#runners.notePidsSaturationSign?.(record.job.runnerId, 'fork-denied');
+          }
+        }
         // **`event.reason` を包まずに渡す（issue #287）。**
         //
         // **書き手**: `event.status === 'failed'` になる経路は `runner.ts` の

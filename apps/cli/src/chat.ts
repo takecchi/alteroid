@@ -59,6 +59,7 @@ import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo } from './format.js';
+import { redactBody, redactError } from './redact.js';
 import { formatCreatedAt, freshnessMarker } from './memory.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
 import { describeUsageDateOrder, narrowUsageAxis, renderUsage } from './usage.js';
@@ -126,7 +127,7 @@ export async function chatCommand(): Promise<void> {
   }
 }
 
-async function sendMessage(
+export async function sendMessage(
   target: Target,
   text: string,
   conversationId: string | null,
@@ -166,8 +167,19 @@ async function sendMessage(
 
   let nextConversationId = conversationId;
   let wrote = false;
+  // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
+  // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
+  // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
+  // 前と終わりに伏せてから書き出す。本文の網の規則は、どれも1行の中で完結する。
+  let pending = '';
+  const flushPending = (): void => {
+    if (pending === '') return;
+    stdout.write(redactBody(pending));
+    pending = '';
+  };
 
   for await (const event of readSSE(response.body)) {
+    if (event.name !== 'text') flushPending();
     switch (event.name) {
       case 'open': {
         const data = event.json<{ conversationId: string }>();
@@ -177,7 +189,12 @@ async function sendMessage(
       case 'text': {
         const data = event.json<{ text: string }>();
         if (data) {
-          stdout.write(data.text);
+          pending += data.text;
+          const lineEnd = pending.lastIndexOf('\n');
+          if (lineEnd !== -1) {
+            stdout.write(redactBody(pending.slice(0, lineEnd + 1)));
+            pending = pending.slice(lineEnd + 1);
+          }
           wrote = true;
         }
         break;
@@ -190,7 +207,7 @@ async function sendMessage(
       case 'ask_human': {
         const data = event.json<{ approvalId: string; question: string }>();
         if (data) {
-          stdout.write(`\n  ? 人間への確認（${data.approvalId}）: ${data.question}\n`);
+          stdout.write(`\n  ? 人間への確認（${data.approvalId}）: ${redactBody(data.question)}\n`);
           stdout.write('    /answer <id> <回答> で返せます\n');
         }
         break;
@@ -198,7 +215,7 @@ async function sendMessage(
       case 'usage_limited': {
         const data = event.json<{ message: string }>();
         if (data) {
-          stdout.write(`\n  ! ${data.message}\n`);
+          stdout.write(`\n  ! ${redactError(data.message)}\n`);
           stdout.write(
             '    （この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）\n',
           );
@@ -207,7 +224,7 @@ async function sendMessage(
       }
       case 'error': {
         const data = event.json<{ message: string }>();
-        stdout.write(`\nエラー: ${data?.message ?? '不明'}\n`);
+        stdout.write(`\nエラー: ${data ? redactError(data.message) : '不明'}\n`);
         break;
       }
       default:
@@ -215,6 +232,7 @@ async function sendMessage(
     }
   }
 
+  flushPending();
   if (wrote) stdout.write('\n');
   return nextConversationId;
 }
@@ -541,7 +559,9 @@ export async function runSlashCommand(
         );
       }
       for (const entry of entries) {
-        stdout.write(`  ${entry.kind}  次: ${entry.nextAt}\n      ${entry.description}\n`);
+        stdout.write(
+          `  ${entry.kind}  次: ${entry.nextAt}\n      ${redactBody(entry.description)}\n`,
+        );
         // 継続中の依頼だけが持つもの。何を頼まれたままなのかが人間に見えること
         if (entry.request !== undefined) {
           // **概要（何を頼まれたままなのか）。** ここが出ていなかったので、
@@ -777,7 +797,7 @@ export async function runSlashCommand(
               `  作成: ${conversation.startedAt}  更新: ${conversation.updatedAt}` +
               `  (${conversation.messages}件)\n`,
           );
-          stdout.write(`      ${conversation.preview}\n`);
+          stdout.write(`      ${redactBody(conversation.preview)}\n`);
         });
       }
       // **0件でも scanned を出す。** ここで打ち切ると、0件が「本当に無い」の
@@ -891,7 +911,9 @@ export async function runSlashCommand(
               : message.supersedes !== undefined
                 ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
                 : '';
-          stdout.write(`  ${label} [${message.at}] ${speaker}: ${message.text}${edit}\n`);
+          stdout.write(
+            `  ${label} [${message.at}] ${speaker}: ${redactBody(message.text)}${edit}\n`,
+          );
         }
       }
       stdout.write(
@@ -1211,7 +1233,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      stdout.write(`${await response.text()}\n`);
+      stdout.write(`${redactBody(await response.text())}\n`);
       return 'ok';
     }
 
@@ -1446,7 +1468,7 @@ export async function runSlashCommand(
         const overrideNote =
           result.override !== undefined
             ? `（⚠️ override — 走行中のマネージャー ${result.override.managerId} の退避を、` +
-              `理由「${result.override.reason}」で消しました）`
+              `理由「${redactBody(result.override.reason)}」で消しました）`
             : '';
         stdout.write(
           `${result.alreadyRemoved ? '前から消されていました' : '消しました'}` +
@@ -1482,7 +1504,7 @@ export async function runSlashCommand(
         );
         return 'ok';
       }
-      stdout.write(`${await response.text()}\n`);
+      stdout.write(`${redactBody(await response.text())}\n`);
       return 'ok';
     }
 
@@ -1536,7 +1558,7 @@ export async function runSlashCommand(
         //
         // **残りの行は落とさない。** CLI は人間へ返す口なので、切れば能力を削る
         // （north_star 禁止1）。札の下へそのまま続ける。
-        const [head, ...restLines] = approval.question.split('\n');
+        const [head, ...restLines] = redactBody(approval.question).split('\n');
         stdout.write(`  [${index + 1}] ${head ?? ''}\n`);
         for (const line of restLines) stdout.write(`      ${line}\n`);
         stdout.write(
@@ -1560,11 +1582,11 @@ export async function runSlashCommand(
         if (approval.withdrawnAt) {
           stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
           stdout.write(
-            `      取り下げた理由: ${approval.withdrawnReason ?? '（理由の記録なし）'}\n`,
+            `      取り下げた理由: ${approval.withdrawnReason === undefined || approval.withdrawnReason === null ? '（理由の記録なし）' : redactBody(approval.withdrawnReason)}\n`,
           );
         } else if (approval.answeredAt) {
           stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
-          if (approval.answer) stdout.write(`      回答: ${approval.answer}\n`);
+          if (approval.answer) stdout.write(`      回答: ${redactBody(approval.answer)}\n`);
           // **回答経路（Issue #1479）。** 記録が無い（古い経路で答えられた）行では
           // 出さない——「わからない」を「operator ではない」に化けさせない。
           if (approval.answeredVia) {
@@ -1631,11 +1653,13 @@ export async function runSlashCommand(
       }
       const trace = (await response.json()) as ApprovalTrace;
       stdout.write(
-        `${renderApprovalTrace(trace, {
-          budget: null,
-          summaryLimit: null,
-          detailHint: '（行動は日誌の行の全文。前後の文脈は /journal で読めます）',
-        })}\n`,
+        `${redactBody(
+          renderApprovalTrace(trace, {
+            budget: null,
+            summaryLimit: null,
+            detailHint: '（行動は日誌の行の全文。前後の文脈は /journal で読めます）',
+          }),
+        )}\n`,
       );
       return 'ok';
     }
@@ -1667,21 +1691,21 @@ export async function runSlashCommand(
         stdout.write(`[${reference}] （${id}）は見つかりませんでした\n`);
         return 'ok';
       }
-      stdout.write(`  ${approval.question}\n`);
+      stdout.write(`  ${redactBody(approval.question)}\n`);
       stdout.write(`      id: ${approval.id}  作成: ${approval.createdAt}\n`);
-      if (approval.context) stdout.write(`      背景: ${approval.context}\n`);
+      if (approval.context) stdout.write(`      背景: ${redactBody(approval.context)}\n`);
       if (approval.withdrawnAt) {
         stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
       } else if (approval.answeredAt) {
         stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
-        if (approval.answer) stdout.write(`      回答: ${approval.answer}\n`);
+        if (approval.answer) stdout.write(`      回答: ${redactBody(approval.answer)}\n`);
       }
       if (approval.questions === undefined || approval.questions.length === 0) {
         stdout.write('      （設問はありません。/answer <番号> <回答> で自由文で答えます）\n');
         return 'ok';
       }
       for (const questionLine of describeQuestionLines(approval.questions)) {
-        stdout.write(`      ${questionLine}\n`);
+        stdout.write(`      ${redactBody(questionLine)}\n`);
       }
       stdout.write(
         '      答え方: /answer <番号> --select <設問id>=<選択肢id>[,<選択肢id>...]' +
@@ -1728,7 +1752,7 @@ export async function runSlashCommand(
         }
       }
       if (structured !== null && 'error' in structured) {
-        stdout.write(`${structured.error}\n`);
+        stdout.write(`${redactError(structured.error)}\n`);
         return 'ok';
       }
       const answer = structured === null ? answerParts.join(' ') : structured.supplement;
@@ -1808,7 +1832,7 @@ export async function runSlashCommand(
         stdout.write(
           result.ok
             ? `  [${result.id}] 回答しました\n`
-            : `  [${result.id}] 回答に失敗: ${result.error ?? '不明'}\n`,
+            : `  [${result.id}] 回答に失敗: ${result.error === undefined ? '不明' : redactError(result.error)}\n`,
         );
       }
       return 'ok';
@@ -2079,12 +2103,12 @@ export function renderReport(report: {
   if (report.unavailable !== undefined && report.unavailable !== '') {
     return (
       `── ⚠ ${report.date} の日報は作れなかった ──\n` +
-      `理由: ${report.unavailable}\n` +
+      `理由: ${redactBody(report.unavailable)}\n` +
       'この日の記録は日誌に残っている（/journal で辿れる）。' +
       '書けていないだけなので、原因が解ければ /run daily_report で作り直せる\n'
     );
   }
-  return `── ${report.date} の日報 ──\n${report.body}\n`;
+  return `── ${report.date} の日報 ──\n${redactBody(report.body)}\n`;
 }
 
 /**
@@ -2608,7 +2632,7 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
       if (observation.kind === 'unavailable') {
         return (
           `      未push観測: 器が止まる直前（${observation.at}）に取ろうとしたが取れなかった: ` +
-          observation.reason
+          redactBody(observation.reason)
         );
       }
       return (
@@ -2621,7 +2645,7 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
       observation === undefined
         ? '表示中の観測は無い（一度も取れていない）'
         : observation.kind === 'unavailable'
-          ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`
+          ? `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${redactBody(observation.reason)}）`
           : `表示中の観測は ${observation.at} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの: ${formatUnpushedWorkObservationWorktrees(observation.worktrees)}` +
             unpushedWorkObservationIncompleteSuffix(observation);
     return (
@@ -2635,7 +2659,8 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'この一覧');
   if (observation.kind === 'unavailable') {
     return (
-      `      未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
+      `      未push観測（${provenance}）: 取れなかった（${observation.at}）: ` +
+      redactBody(observation.reason)
     );
   }
   return (
@@ -2960,7 +2985,7 @@ export function renderWaitingList(managers: ManagerListItem[]): {
   for (const manager of managers) {
     for (const item of manager.waiting) {
       entries.push({ managerId: manager.managerId, requestId: item.requestId });
-      const [head, ...rest] = item.summary.split('\n');
+      const [head, ...rest] = redactBody(item.summary).split('\n');
       lines.push(`  [${entries.length}] ${head ?? ''}`);
       for (const line of rest) lines.push(`      ${line}`);
       lines.push(
@@ -3208,7 +3233,7 @@ async function errorDetail(response: { status: number; json: () => Promise<unkno
     const body: unknown = await response.json();
     if (typeof body === 'object' && body !== null && 'error' in body) {
       const { error } = body as { error?: unknown };
-      if (typeof error === 'string' && error.length > 0) return error;
+      if (typeof error === 'string' && error.length > 0) return redactError(error);
     }
   } catch {
     // 本文が JSON でない（プロキシの HTML 等）。状態コードへ倒す。
@@ -3809,6 +3834,7 @@ function isJournalDiagnosticsEntry(
 }
 
 function summarizeText(value: string): string {
-  const single = value.replace(/\s+/g, ' ').trim();
+  // 伏せ字を先に掛ける（切ってからだとトークンの途中で切れて形が崩れ、取りこぼす）。
+  const single = redactBody(value).replace(/\s+/g, ' ').trim();
   return single.length > 80 ? `${single.slice(0, 80)}…` : single;
 }

@@ -10,6 +10,7 @@ import { codePointBoundary } from '@alteroid/core';
 import type { MemoryDoc, MemoryRow, TuiApi } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
+import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
 
 /** journal の出来事が続けて届いても、取り直しはこの間隔にまとめる。 */
@@ -53,8 +54,7 @@ export const initialMemoryState: MemoryState = {
   detail: null,
 };
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = redactedErrorMessage;
 
 export class MemoryController {
   readonly store = new Store<MemoryState>(initialMemoryState);

@@ -14,6 +14,7 @@ import { withErrorReason } from '../format.js';
 import { describeInterruptOutcome } from '../interrupt.js';
 import type { MemorySummary } from '../memory.js';
 import { describeAuthFailure, type Target } from '../target.js';
+import { redactError } from '../redact.js';
 import { readSSE } from './sse.js';
 
 /** `POST /chat` の SSE イベント（`apps/daemon/src/app.ts` の `/chat`。Web と同じ語彙）。 */
@@ -286,14 +287,14 @@ export function createTuiApi(target: Target): TuiApi {
       });
     } catch (error) {
       if (signal.aborted) return;
-      throw new ApiError(`${what}: デーモンに繋がりません（${String(error)}）`);
+      throw new ApiError(`${what}: デーモンに繋がりません（${redactError(String(error))}）`);
     }
     if (!response.ok || !response.body) throw await failure(what, response);
     try {
       for await (const event of readSSE(response.body)) yield event;
     } catch (error) {
       if (signal.aborted) return;
-      throw new ApiError(`${what}: 接続が切れました（${String(error)}）`);
+      throw new ApiError(`${what}: 接続が切れました（${redactError(String(error))}）`);
     }
   }
 

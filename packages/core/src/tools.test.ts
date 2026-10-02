@@ -24,7 +24,7 @@ import type {
 } from './manager.js';
 import { commitmentFor } from './clone.js';
 import { encodeRunnerCursor } from './runner-cursor.js';
-import { runnerLivenessSchema } from './runner-protocol.js';
+import { runnerLivenessSchema, type PidsSaturation } from './runner-protocol.js';
 import { encodeUsageCursor } from './usage-cursor.js';
 import { CLONE_ACTOR_ID } from './usage.js';
 import { STALE_TOKEN_RECOVERY_CAVEAT } from './usage-limits.js';
@@ -120,6 +120,8 @@ interface Harness {
    * 見るための状態を作れる。
    */
   setAutoRunnerId(runnerId: string | undefined): void;
+  /** `ManagerPool.runnerPidsSaturation()` の返り値を差し替える（#2626）。既定は材料なし。 */
+  setPidsSaturation(runnerId: string, saturation: PidsSaturation | undefined): void;
   /**
    * `manager_send` が読む `ManagerPool.send()` の返り値を差し替える（#1170）。
    * 既定は `answered` のまま——`outcome` ごとに言い分ける枝を測るために要る。
@@ -233,6 +235,7 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   // **指名しなかったときに Pool.start() が返す runnerId。** 本物は資源で選んだ
   // 器の runnerId を返す——ここでは差し替え可能な既定値でそれを真似る。
   let autoRunnerId: string | undefined = 'runner-test';
+  const pidsSaturations = new Map<string, PidsSaturation>();
   // **`send()` が返す `outcome` を差し替えられるようにする（#1170）。** 既定は
   // これまでどおり `answered` で、`manager_send` の道具は `outcome` ごとに
   // 言い分けるので、`delivered` の枝を測るには本物と同じ4値を作れる必要がある。
@@ -418,6 +421,9 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     runnerBacklog() {
       return runnerBacklog;
     },
+    runnerPidsSaturation(runnerId: string) {
+      return pidsSaturations.get(runnerId);
+    },
     // 本物（`Pool#runnerIdOf`）は像→台帳の順で読むが、この偽物は像と台帳を
     // 分けて持っていない（`running` が両方を兼ねる）ので、単に非同期化するだけ
     // でよい——像/台帳の使い分けそのものは `manager.test.ts`（本物の `Pool`）
@@ -511,6 +517,10 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     },
     setAutoRunnerId(runnerId) {
       autoRunnerId = runnerId;
+    },
+    setPidsSaturation(runnerId, saturation) {
+      if (saturation === undefined) pidsSaturations.delete(runnerId);
+      else pidsSaturations.set(runnerId, saturation);
     },
     setSendResult(result) {
       sendResult = result;
@@ -5959,6 +5969,30 @@ describe('クローンの道具', () => {
     expect(reply).toContain('runner-auto-placed');
   });
 
+  it('置き先が pids 飽和と判定されていれば、断らずに起こし、材料つきの行を付ける（#2626）', async () => {
+    const h = harness();
+    h.setAutoRunnerId('runner-burning');
+    h.setPidsSaturation('runner-burning', {
+      basis: [{ kind: 'eagain', count: 2 }],
+      windowMs: 5 * 60_000,
+    });
+
+    const reply = await h.call('manager_start', { request: '飽和した器でも断らない' });
+
+    expect(reply).toContain('マネージャー');
+    expect(reply).toContain('pids 飽和');
+    expect(reply).toContain('EAGAIN で失敗 2 回');
+  });
+
+  it('飽和の材料が無い置き先には、飽和の行を出さない（「飽和ではない」とも言わない）（#2626）', async () => {
+    const h = harness();
+    h.setAutoRunnerId('runner-fine');
+
+    const reply = await h.call('manager_start', { request: '普通の器' });
+
+    expect(reply).not.toContain('飽和');
+  });
+
   it('runnerId が取れないときは空欄にせず「未記録」と言う', async () => {
     const h = harness();
     h.setAutoRunnerId(undefined);
@@ -10318,6 +10352,59 @@ describe('runner_list（器の一覧）', () => {
     expect(reply).toContain('e'.repeat(40));
   });
 
+  it('connected のままでも、pids 飽和の器は材料つきの行を出し、材料の無い器は出さない（#2626）', async () => {
+    const h = harness();
+    const base = {
+      revision: { status: 'unknown' as const },
+      state: 'connected' as const,
+      since: '2026-01-01T00:00:00.000Z',
+      managers: [],
+    };
+    h.setRunnersOverview({
+      runners: [
+        {
+          ...base,
+          label: 'runner-burning',
+          runnerId: 'runner-burning',
+          pidsSaturation: {
+            basis: [
+              { kind: 'at-limit', current: 1000, max: 1000 },
+              { kind: 'fork-denied', count: 3 },
+            ],
+            windowMs: 5 * 60_000,
+          },
+        },
+        { ...base, label: 'runner-fine', runnerId: 'runner-fine' },
+      ],
+      unassigned: [],
+      daemonRevision: { status: 'unknown' },
+    });
+
+    const reply = await h.call('runner_list', {});
+
+    expect(reply).toContain('pids 飽和: 新しい委譲を置けない');
+    expect(reply).toContain('pids 1000/1000 で上限に達している');
+    expect(reply).toContain('fork が pids 上限で拒まれた委譲 3 本');
+    // 飽和の行は1台ぶんだけ（材料の無い器に「飽和ではない」も作らない）。
+    expect(reply.match(/pids 飽和:/g)?.length).toBe(1);
+    // resources を付けなくても出る。
+    expect(h.runnersCalls.at(-1)?.resources).toBeUndefined();
+  });
+
+  it('説明文が、飽和の器は自動配置から外れる・全台飽和でも断らない・名指しでも断らないと名乗る（#2626）', () => {
+    const tools = createCloneTools({
+      stores: createMemoryStores(),
+      emit: () => undefined,
+      memoryCause: () => 'clone',
+      conversationId: () => undefined,
+    });
+    const list = tools.find((entry) => entry.name === 'runner_list')?.description ?? '';
+    const start = tools.find((entry) => entry.name === 'manager_start')?.description ?? '';
+    expect(list).toMatch(/pids 飽和[\s\S]*候補から外れる/);
+    expect(list).toMatch(/全台が飽和なら断らず/);
+    expect(start).toMatch(/名指ししても断らず/);
+  });
+
   /**
    * **#1542。** 自動畳み（#1394 段④⑥⑦）は `runners()` の中で起きるので、cursor が
    * 読めないと分かった時点では既に済んでいる。その早い return でも、畳んだことを
@@ -11420,7 +11507,7 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { resources: true });
 
     expect(reply).toContain(
-      '孤児（観測のみ。撃たない）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
+      '孤児（既定: 終端した委譲の木だけ畳む）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
         '、走査時 pids 999/1000、送出 0 / 畳み 0 / 返却 0 threads',
     );
     // **木の形・齢の分布の欄が無い回（古い runner）では、その行そのものを出さない**
@@ -11433,7 +11520,7 @@ describe('runner_list（器の一覧）', () => {
    * **孤児プロセス木の形と齢の分布（#1334）。** `roots` / `largestTreeCandidates` /
    * `singletonTrees` で「1本の巨大な木か、バラバラな木が大量にあるか」を、
    * `medianAgeSec` / `ageBuckets` で「候補がどれだけ滞留しているか」を、
-   * 既存の「孤児（観測のみ。撃たない）」の行の**下に**出す。
+   * 既存の「孤児（既定: 終端した委譲の木だけ畳む）」の行の**下に**出す。
    */
   it('resources.tasks.reclaim.roots 等が在れば、孤児の木の形と齢の分布が候補の行の下に出る', async () => {
     const h = harness();
@@ -11487,8 +11574,8 @@ describe('runner_list（器の一覧）', () => {
       '孤児の齢（⚠ 起動から。孤児になってからではない）: 中央値 6時間24分前 / ' +
         '1分未満 0 / 10分未満 5 / 1時間未満 12 / 6時間未満 392 / それ以上 0',
     );
-    // **候補の行の下に出る**（既存の「孤児（観測のみ…）」より後ろの行にある）。
-    const candidateLineIndex = reply.indexOf('孤児（観測のみ。撃たない）');
+    // **候補の行の下に出る**（既存の「孤児（既定: …）」より後ろの行にある）。
+    const candidateLineIndex = reply.indexOf('孤児（既定: 終端した委譲の木だけ畳む）');
     const treeLineIndex = reply.indexOf('孤児の木');
     expect(candidateLineIndex).toBeGreaterThanOrEqual(0);
     expect(treeLineIndex).toBeGreaterThan(candidateLineIndex);
@@ -11562,11 +11649,15 @@ describe('runner_list（器の一覧）', () => {
         'hold（候補のうち撃たなかった理由）: sid 不明 1 / sid が live 1 / ' +
           'sid の長が残存 1 / sid 未認識 1',
       );
-      expect(reply).toContain('observe なので撃たなかった: 1');
+      expect(reply).toContain(
+        '素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: 1',
+      );
       expect(reply).not.toContain('判定材料');
-      // 先に `孤児（観測のみ` の行が在ることを確かめる（#2009 と同じ型。無いと `n > -1` で素通りする）。
-      expect(reply).toContain('孤児（観測のみ');
-      expect(reply.indexOf('孤児ルート外')).toBeGreaterThan(reply.indexOf('孤児（観測のみ'));
+      // 先に `孤児（既定: 終端した委譲の木だけ畳む` の行が在ることを確かめる（#2009 と同じ型。無いと `n > -1` で素通りする）。
+      expect(reply).toContain('孤児（既定: 終端した委譲の木だけ畳む');
+      expect(reply.indexOf('孤児ルート外')).toBeGreaterThan(
+        reply.indexOf('孤児（既定: 終端した委譲の木だけ畳む'),
+      );
     });
 
     it('held / bySid / observeOnly が欄ごと無ければ、0 と書かず「出せない」と1行だけ添える', async () => {
@@ -11577,7 +11668,9 @@ describe('runner_list（器の一覧）', () => {
       );
       expect(reply).not.toContain('仮に孤児ルートに入っていたら');
       expect(reply).not.toContain('hold（');
-      expect(reply).not.toContain('observe なので撃たなかった');
+      expect(reply).not.toContain(
+        '素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった',
+      );
       expect(reply).toContain(
         'hold の内訳: この走査には判定材料（live / 終端済みの sid）が渡っていないので出せない',
       );
@@ -11602,16 +11695,18 @@ describe('runner_list（器の一覧）', () => {
       expect(reply).toContain('孤児ルート外: 2（うち親が生存 0。');
       expect(reply).toContain('仮に孤児ルートに入っていたら: 撃つ 2 /');
       expect(reply).not.toContain('hold（');
-      expect(reply).toContain('observe なので撃たなかった: 2');
+      expect(reply).toContain(
+        '素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: 2',
+      );
     });
 
     it('notFired 自体が無ければ（古い runner）、3行とも出ない', async () => {
       const reply = await listWith();
 
-      expect(reply).toContain('孤児（観測のみ。撃たない）');
+      expect(reply).toContain('孤児（既定: 終端した委譲の木だけ畳む）');
       expect(reply).not.toContain('孤児ルート外');
       expect(reply).not.toContain('hold');
-      expect(reply).not.toContain('observe なので');
+      expect(reply).not.toContain('reclaim でないので');
     });
   });
 

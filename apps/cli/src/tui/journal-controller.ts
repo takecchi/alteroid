@@ -37,6 +37,7 @@ import type { TuiApi } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { JournalType } from './journal-format.js';
 import { JOURNAL_RETAIN_CHARS, trimToBudget } from './journal-window.js';
+import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
 
 export type OlderStatus = PageOutcome | 'budget';
@@ -93,8 +94,7 @@ export const initialJournalState: JournalState = {
   detail: null,
 };
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = redactedErrorMessage;
 
 /** 選択の位置（新しい順での index）。見つからなければ -1。 */
 export function selectedIndex(state: JournalState): number {

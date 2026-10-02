@@ -396,3 +396,67 @@ describe('陰性対照: 後戻りが爆発する正規表現を、助けは実�
     );
   }, 30_000);
 });
+
+/**
+ * **固まらずに赤で終わる（#2579）**。`run` が指数的な後戻りで戻ってこないとき、助けは
+ * `hardCapMs` で `run` を打ち切って、読める assertion で落ちなければならない。以前は同期呼び出しが
+ * 戻らず、`hardCapMs` も vitest の testTimeout も効かないまま CI の job 全体の時間切れまで固まった。
+ * ここの正規表現は、打ち切りが無ければ**何分・何時間でも**終わらない大きさ（`(a+)+$` は n を1増やすごとに約2倍）。
+ * `it` の timeout は打ち切りの総和（hardCapMs 500ms × 1回）よりずっと長い 20 秒。
+ */
+describe('固まりの打ち切り（node:vm の timeout、#2579）', () => {
+  const exponential = /(a+)+$/;
+  const runExponential = (input: string): boolean => exponential.test(input);
+  const makeInput = (n: number): string => `${'a'.repeat(n)}!`;
+
+  it('大きいほうが指数的に固まっても、hardCapMs で打ち切られ、hardCapMs の文言で落ちる', () => {
+    const startedAt = Date.now();
+    let error: unknown;
+    try {
+      // n=12 は一瞬、n*4=48 は 2^48 級で終わらない。
+      expectNotSuperlinear(runExponential, makeInput, {
+        n: 12,
+        minSmallMs: 0,
+        hardCapMs: 500,
+        repeats: 2,
+      });
+    } catch (e) {
+      error = e;
+    }
+    const elapsedMs = Date.now() - startedAt;
+    expect(error, '固まった実装を助けが通した').toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toMatch(/固まり・指数的な後戻りの疑い —— hardCapMs を超えた/);
+    expect(message).toMatch(/大きいほうの入力 n=48 の1回が hardCapMs=500ms で打ち切られた/);
+    expect(message).not.toMatch(/伸びの比が大きすぎる/);
+    // 打ち切りは hardCapMs 付近で効く（終わらないなら、ここへ来ない）。
+    expect(elapsedMs).toBeLessThan(15_000);
+  }, 20_000);
+
+  it('温めの段階で（小さいほうの入力が）固まっても、同じ文言で落ちる', () => {
+    expect(() =>
+      expectNotSuperlinear(runExponential, makeInput, {
+        n: 60,
+        minSmallMs: 0,
+        hardCapMs: 500,
+      }),
+    ).toThrow(/hardCapMs を超えた.*温めの入力 n=60 の1回が hardCapMs=500ms で打ち切られた/);
+  }, 20_000);
+
+  it('run が投げた（打ち切りではない）例外は、そのまま伝わる', () => {
+    const boom = new RangeError('run の失敗');
+    let error: unknown;
+    try {
+      expectNotSuperlinear(
+        () => {
+          throw boom;
+        },
+        identity,
+        { n: 10, hardCapMs: 500 },
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBe(boom);
+  });
+});

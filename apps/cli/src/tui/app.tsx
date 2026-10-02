@@ -9,6 +9,7 @@ import { JOURNAL_MAX_LIMIT, JOURNAL_TYPES } from '@alteroid/logic';
 import { Box, useApp, useInput, useWindowSize } from 'ink';
 import { useMemo, useRef, useState, type FC } from 'react';
 
+import { redactedErrorMessage } from '../redact.js';
 import { parseJournalSearchTokens } from '../chat.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
@@ -282,7 +283,7 @@ export const App: FC<AppProps> = ({
         ),
       (error: unknown) => {
         setPicker(null);
-        controller.addError(error instanceof Error ? error.message : String(error));
+        controller.addError(redactedErrorMessage(error));
       },
     );
   };

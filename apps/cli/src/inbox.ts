@@ -10,6 +10,7 @@ import {
 import { createClient } from './client.js';
 import { withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget, type Target } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid inbox remove` — 受信箱（`inbox_events`。まだ処理し終えていない
@@ -146,7 +147,9 @@ async function post(target: Target, body: Record<string, unknown>): Promise<Inbo
       // ここだけ古いままになる）。
       const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(
-        errorBody.error ?? '受信箱の絞り込みが不正です（400）。1件も消していません。',
+        errorBody.error === undefined
+          ? '受信箱の絞り込みが不正です（400）。1件も消していません。'
+          : redactError(errorBody.error),
       );
     }
     const described = describeAuthFailure(response.status, target);

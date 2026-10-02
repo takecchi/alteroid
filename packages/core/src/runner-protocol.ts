@@ -471,19 +471,21 @@ export const runnerExecutionResourcesSchema = z.object({
         .optional(),
       oldestZombieSeconds: z.number().int().nonnegative().optional(),
       /**
-       * 孤児プロセス木の回収（#315 段0）。**いまの段は数えるだけで1本も撃たない。**
+       * 孤児プロセス木の回収（#315 段0）。**数えるのが本体。撃つのは、runner 自身が起こした
+       * 委譲の CLI のプロセス木のうち、その委譲が終わったもの（既定の `observe` でも撃つ。#2626）と、
+       * `mode: 'reclaim'` のときの素性の分からない孤児だけである。**
        *
        * **生存プロセスの素性はここにも入らない。** 出るのは数と時刻だけで、判定に
        * 使う材料も `stat` と `/proc/<pid>` ディレクトリの所有 UID までである
        * （`cmdline` / `cwd` / `environ` は読んでいない —— `apps/runner/src/tasks.ts`
        * の `ReclaimObservation` の doc）。**直上の「素性は含まない」はそのまま効いている。**
        *
-       * **`mode` は段0 でも `'reclaim'` を受け付ける。** 出す側（runner）は
-       * `'observe'` しか出さないが、**受け取る側を先に広げておかないと、段1 を載せた
+       * **`mode` は `'observe'`（既定。素性の分からない孤児は撃たない）と `'reclaim'`
+       * （素性の分からない孤児も撃つ）の両方を受け付ける。** 受け取る側を先に広げておかないと、段1 を載せた
        * runner と古いデーモンが同時に居る窓でこの欄が丸ごと落ちる**（別デプロイなので
        * 版はずれる）。
        *
-       * `signalled` / `killed` / `freedThreads` は段0 では常に 0 だが、**欄は省かない**
+       * `signalled` / `killed` / `freedThreads` は撃っていない回は 0 だが、**欄は省かない**
        * —— 段1 で欄が生えたように見せると、段0 の観測と段1 の観測が別物に見える。
        *
        * **⚠️ 「0本だった」と「数えられなかった」は別である。** 走査が
@@ -2966,6 +2968,33 @@ export interface RunnerRegistry {
    */
   noteManagerFailed(runnerId: string): void;
   /**
+   * **その器が「いま新しいプロセスを起こせない」ことを示す印を1つ知らせる
+   * （#2626 期待2）。** 印は構造化された値だけ——`closed` の `systemError.code ===
+   * 'EAGAIN'`（spawn が EAGAIN で失敗した）と `cgroupEvents.pidsMaxDelta > 0`
+   * （その委譲の生存中に fork が pids 上限で拒まれた）。**文言は読まない。**
+   *
+   * `noteManagerFailed` と違い、`failed` に限らず `lost` の回も数える
+   * （#2626 は SIGABRT で `failed` → resume が `spawn EAGAIN` で `lost`、の順で、
+   * 後者が `lost` だった）。`noteManagerFailed` の足し戻しは変えない。
+   *
+   * **制限ではない。** 印があっても器は置き先として返りうる（全台が飽和なら最良を
+   * 返す。north_star 禁止2）。同期で完結し、往復は起きない。
+   */
+  /** **省略可能**（偽の名簿が持たなくても型が通る）。実装（`Registry`）は両方持つ。 */
+  notePidsSaturationSign?(runnerId: string, sign: PidsSaturationSign): void;
+  /**
+   * その器が pids 飽和と判定される材料（{@link pidsSaturationFrom}）。無ければ
+   * `undefined`（**「飽和ではない」とは言わない**——材料が無いだけである）。
+   *
+   * `pids` を渡せばそれ（いま取った現在値）を使い、渡さなければ直近の配置で
+   * 取った現在値（窓の内側のもの）を使う。印は窓
+   * （`PLACEMENT_FAILURE_MEMORY_MS`）の内側だけを数える。
+   */
+  pidsSaturationOf?(
+    runnerId: string,
+    pids?: { readonly current: number; readonly max: number },
+  ): PidsSaturation | undefined;
+  /**
    * 登録されている全部。繋がっていないものも並ぶ（`GET /runners` の材料）。
    *
    * ## 並びは登録順。`label` は一意（#662 の継続点が依拠する契約）
@@ -3425,6 +3454,10 @@ class Registry implements RunnerRegistry {
    * 畳む**（`#freshFailuresOf`）ので、別のタイマーは持たない。
    */
   readonly #failures = new Map<string, number[]>();
+  /** pids 飽和の印（{@link notePidsSaturationSign}）。窓の外は読むときに畳む。 */
+  readonly #saturationSigns = new Map<string, { at: number; sign: PidsSaturationSign }[]>();
+  /** 直近の配置で聞いた pids が上限に達していた器（`#place` が書き、窓で切れる）。 */
+  readonly #livePidsAtLimit = new Map<string, { at: number; current: number; max: number }>();
   readonly #now: () => number;
   /** 名乗りを聞きに行く1本。**`stop()` で必ず畳む**（残すとテストがハングする）。 */
   #heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -3613,6 +3646,37 @@ class Registry implements RunnerRegistry {
     this.#failures.set(runnerId, fresh);
   }
 
+  notePidsSaturationSign(runnerId: string, sign: PidsSaturationSign): void {
+    const fresh = this.#freshSaturationSignsOf(runnerId);
+    fresh.push({ at: this.#now(), sign });
+    this.#saturationSigns.set(runnerId, fresh);
+  }
+
+  pidsSaturationOf(
+    runnerId: string,
+    pids?: { readonly current: number; readonly max: number },
+  ): PidsSaturation | undefined {
+    let live = pids;
+    if (live === undefined) {
+      const seen = this.#livePidsAtLimit.get(runnerId);
+      if (seen !== undefined && seen.at > this.#now() - PLACEMENT_FAILURE_MEMORY_MS) live = seen;
+    }
+    return pidsSaturationFrom({
+      ...(live === undefined ? {} : { pids: live }),
+      signs: this.#freshSaturationSignsOf(runnerId).map((entry) => entry.sign),
+    });
+  }
+
+  #freshSaturationSignsOf(runnerId: string): { at: number; sign: PidsSaturationSign }[] {
+    const seen = this.#saturationSigns.get(runnerId);
+    if (seen === undefined) return [];
+    const since = this.#now() - PLACEMENT_FAILURE_MEMORY_MS;
+    const fresh = seen.filter((entry) => entry.at > since);
+    if (fresh.length === 0) this.#saturationSigns.delete(runnerId);
+    else this.#saturationSigns.set(runnerId, fresh);
+    return fresh;
+  }
+
   /**
    * 窓（`PLACEMENT_FAILURE_MEMORY_MS`）の内側に残っている観測時刻。
    *
@@ -3784,10 +3848,23 @@ class Registry implements RunnerRegistry {
             PLACEMENT_PROBE_MS,
             '資源の報告',
           );
+          // **いま取った pids を覚える**（`manager_start` の応答が使う）。上限に
+          // 達していなければ忘れる——窓の記憶は印（`#saturationSigns`）が持つ。
+          const pids = resources?.pids;
+          if (pids !== undefined && pids.current >= pids.max) {
+            this.#livePidsAtLimit.set(client.runnerId, {
+              at: this.#now(),
+              current: pids.current,
+              max: pids.max,
+            });
+          } else if (pids !== undefined) {
+            this.#livePidsAtLimit.delete(client.runnerId);
+          }
           return {
             client,
             resources,
             recentFailures: this.#freshFailuresOf(client.runnerId).length,
+            pidsSaturated: this.pidsSaturationOf(client.runnerId, pids) !== undefined,
           };
         } catch {
           // **資源を聞けなくても、失敗の記憶までは落とさない（#712）。** ここは
@@ -3805,6 +3882,8 @@ class Registry implements RunnerRegistry {
             resources: undefined,
             recentFailures: this.#freshFailuresOf(client.runnerId).length,
             unreachable: true,
+            // 現在値は聞けなかったので、窓の内側の印と直近の観測だけで見る。
+            pidsSaturated: this.pidsSaturationOf(client.runnerId) !== undefined,
           };
         }
       }),
@@ -4482,6 +4561,18 @@ function withDeadline<T>(
  * **0点でも返る。** 資源を見るのは「どこに置くか」を決めるためで、「置けるか」を
  * 決めるためではない（north_star 禁止2）。
  *
+ * ## pids 飽和の器は、飽和していない器の後ろへ回る（#2626 期待2）
+ *
+ * 「新しいプロセスを起こせない」と判定された器（{@link pidsSaturationFrom}。現在値が
+ * 上限に達している、または窓の内側に EAGAIN の spawn 失敗・fork 拒否の印がある）は、
+ * 飽和していない器が1台でも居れば、**点数を見ずに**後ろへ回る（下の「段」）。#712 の
+ * 点数（`pidsRoomOf`）は飽和に近いほど小さくなるだけで、他の軸が大きければ勝てた——
+ * 実際に新しい spawn が全部 EAGAIN の器へ置かれうる。段は順序であって重みではない。
+ * **全台が飽和なら断らない。** その中で点数で選ぶ（「0点でも返る」と同じ理由）。
+ *
+ * `docs/architecture.md` の「`select` に人工的な上限を入れない」と両立する——
+ * 見ているのは runner の実行環境の資源（pids）で、本数の定員ではない。
+ *
  * ## 「報告しなかった」と「聞けなかった」は別の観測である（#712 続き）
  *
  * **平均で埋めるのは「報告しなかった」器だけである。** 口が無い・`undefined` を
@@ -4529,6 +4620,13 @@ function chooseByResources(
      * 振る舞いは1ミリも変わらない。
      */
     unreachable?: boolean;
+    /**
+     * **pids 飽和（{@link pidsSaturationFrom}）と判定された器か（#2626）。** 渡さない
+     * 呼び出しは `false`。立っている器は、飽和していない器が1台でも居れば点数を
+     * 見ずに後ろへ回る（段）。全台が飽和なら、その中で点数で選ぶ——**断らない**
+     * （#712・north_star 禁止2）。
+     */
+    pidsSaturated?: boolean;
   }[],
 ): RunnerClient | undefined {
   const rooms = reports.flatMap((r) =>
@@ -4566,9 +4664,15 @@ function chooseByResources(
   // 報告が聞けた器なら、下の分岐で必ず段の上（`!unreachable`）として置き換わる。
   // 最初の報告が聞けなかった器なら、段が揃ったまま通常の点数比較へ落ちる
   // （`scoresTie(score, -Infinity)` は `false` を返すので、暫定王として正しく立つ）。
-  let bestUnreachable = true;
+  //
+  // **段は3つ（#2626 で足した）。** 0 = 健全、1 = 聞けなかった、2 = pids 飽和
+  // （新しいプロセスを起こせないと分かっている）。小さいほど前で、飽和は「聞けな
+  // かった」より後ろ。**誰も居ない状態は一番後ろ（Infinity）** ——最初の報告が
+  // どの段でも、下の分岐で暫定王として立つ。
+  let bestTier = Infinity;
   for (const report of reports) {
     const unreachable = report.unreachable ?? false;
+    const tier = report.pidsSaturated === true ? 2 : unreachable ? 1 : 0;
     const room = report.resources?.memory ? memoryRoomOf(report.resources.memory) : meanRoom;
     const pidsRoom = report.resources?.pids ? pidsRoomOf(report.resources.pids) : meanPidsRoom;
     // 2軸とも欠けていれば、積ごと「両方を報告した器の積の平均」で埋める（#794）。
@@ -4586,15 +4690,15 @@ function chooseByResources(
     // どこかに居る限り点数でどれだけ勝っていても前へ出ない——同点で揃うことも
     // （報告者が1台だけの艦隊で平均がその1台の写しになる形）、艦隊の作り込みで
     // 逆相関させることも、どちらも段そのものが塞ぐ。
-    if (unreachable !== bestUnreachable) {
-      if (!unreachable) {
-        // 聞けた器が、聞けなかった暫定王を段の上から置き換える。
+    if (tier !== bestTier) {
+      if (tier < bestTier) {
+        // より前の段の器が、暫定王を段の上から置き換える。
         bestScore = score;
         bestFailures = failures;
         best = report.client;
-        bestUnreachable = false;
+        bestTier = tier;
       }
-      // 聞けなかった器は、聞けた暫定王が居るならここで見送る。
+      // より後ろの段の器は、前の段の暫定王が居るならここで見送る。
       continue;
     }
 
@@ -4617,6 +4721,76 @@ function chooseByResources(
     }
   }
   return best;
+}
+
+/**
+ * pids 飽和の印の種類（#2626）。どちらも構造化された値から立てる（文言は読まない）。
+ *
+ * - `eagain` — `closed` の `systemError.code === 'EAGAIN'`（spawn が EAGAIN で失敗）
+ * - `fork-denied` — `closed` の `cgroupEvents.pidsMaxDelta > 0`（pids 上限で fork を拒まれた）
+ */
+export type PidsSaturationSign = 'eagain' | 'fork-denied';
+
+/** pids 飽和と判定した材料の1つ。 */
+export type PidsSaturationBasis =
+  | { readonly kind: 'at-limit'; readonly current: number; readonly max: number }
+  | { readonly kind: PidsSaturationSign; readonly count: number };
+
+/** pids 飽和の判定結果。**材料が無ければ値ごと作らない**（`undefined`）。 */
+export interface PidsSaturation {
+  readonly basis: readonly PidsSaturationBasis[];
+  /** 印を数えた窓の長さ（ms）。 */
+  readonly windowMs: number;
+}
+
+/**
+ * pids 飽和の判定（#2626 期待2）。**純関数で、時計を持たない**（窓の内側の印だけを
+ * 呼び出し側が渡す）。
+ *
+ * 材料は3つで、どれか1つで飽和とする。
+ *
+ * - 現在値が上限に達している（`current >= max`）。一瞬の値なので揺れる
+ * - 窓の内側に `EAGAIN` で spawn が失敗した印がある
+ * - 窓の内側に `pids.events` の fork 拒否が増えた印がある
+ *
+ * **ばたつきは印の窓が抑える。** 現在値は 999 と 1000 の間で揺れるが、一度でも
+ * EAGAIN / fork 拒否が出た器は窓のあいだ飽和のまま扱う。逆に現在値が読めない
+ * （`pids` が無い）ことは「飽和ではない」を意味しない——材料が無いだけで、
+ * 印も無ければ `undefined`（0 や false を作らない）。
+ *
+ * **これは断る材料ではない。** 結果は配置の段（`chooseByResources`）と表示にだけ使う。
+ */
+export function pidsSaturationFrom(input: {
+  pids?: { readonly current: number; readonly max: number };
+  signs: readonly PidsSaturationSign[];
+}): PidsSaturation | undefined {
+  const basis: PidsSaturationBasis[] = [];
+  const { pids } = input;
+  if (pids !== undefined && pids.max > 0 && pids.current >= pids.max) {
+    basis.push({ kind: 'at-limit', current: pids.current, max: pids.max });
+  }
+  for (const kind of ['eagain', 'fork-denied'] as const) {
+    const count = input.signs.filter((sign) => sign === kind).length;
+    if (count > 0) basis.push({ kind, count });
+  }
+  if (basis.length === 0) return undefined;
+  return { basis, windowMs: PLACEMENT_FAILURE_MEMORY_MS };
+}
+
+/** 人が読む一文（材料つき）。 */
+export function describePidsSaturation(saturation: PidsSaturation): string {
+  const minutes = Math.round(saturation.windowMs / 60_000);
+  const parts = saturation.basis.map((entry) => {
+    switch (entry.kind) {
+      case 'at-limit':
+        return `pids ${String(entry.current)}/${String(entry.max)} で上限に達している`;
+      case 'eagain':
+        return `直近${String(minutes)}分に spawn が EAGAIN で失敗 ${String(entry.count)} 回`;
+      case 'fork-denied':
+        return `直近${String(minutes)}分に fork が pids 上限で拒まれた委譲 ${String(entry.count)} 本`;
+    }
+  });
+  return parts.join(' / ');
 }
 
 /**

@@ -14,16 +14,11 @@
  * 「読み込み済みの件数と同じ `limit` で先頭から」読む（錨を持ち回らない — 古い頁を読み足していても
  * 1 回で揃う）。
  */
-import {
-  ApiError,
-  type ManagerRow,
-  type ManagerStatus,
-  type TuiApi,
-  type UnreadableManager,
-} from './api.js';
+import { type ManagerRow, type ManagerStatus, type TuiApi, type UnreadableManager } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
 import { parseTranscript } from './managers-transcript.js';
+import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
 
 /** Web の `MANAGERS_PAGE` と同じ。 */
@@ -100,8 +95,7 @@ export const initialManagersState: ManagersState = {
   detail: null,
 };
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = redactedErrorMessage;
 
 export class ManagersController {
   readonly store = new Store<ManagersState>(initialManagersState);
@@ -402,7 +396,7 @@ export class ManagersController {
     } catch (error) {
       this.setDetail(id, {
         busy: false,
-        notice: `✗ ${error instanceof ApiError ? error.message : messageOf(error)}`,
+        notice: `✗ ${messageOf(error)}`,
       });
       return;
     }

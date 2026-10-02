@@ -79,12 +79,15 @@ export interface TaskBreakdown {
 /**
  * 回収の動作段階。
  *
- * **段0（観測のみ）と段1（実際に撃つ。#1334）の両方が出るようになった。**
- * `reclaim.reap`（{@link ReclaimScanOptions.reap}）を渡さなければ `'observe'` の
- * ままで、いまも撃つ経路は無い。渡した回だけ `'reclaim'` を名乗る——**渡した
- * その回に1本も撃たなかった（候補が0本だった等）としても `'reclaim'` のまま**
+ * **意味（#2626 で直した）。** `'observe'` は既定の構え: **素性の分からない孤児は撃たない**。
+ * ただし `reclaim.sessions`（{@link ReclaimScanOptions.sessions}）があれば、runner 自身が
+ * 起こした委譲の CLI のプロセス木のうち**その委譲が終わったものは撃つ**（`signalled` が
+ * 0を超えうる）。`'reclaim'` は `reclaim.reap`（{@link ReclaimScanOptions.reap}）を渡した回だけ
+ * 名乗り、**素性の分からない孤児（分岐1。把握している委譲が0本のとき sid を問わず撃つ形）
+ * も撃つ**——**渡したその回に1本も撃たなかった（候補が0本だった等）としても `'reclaim'` のまま**
  * である。「その回に何本撃ったか」は `signalled` / `killed` が持つので、
- * `mode` は「撃てる構えになっているか」だけを答える。
+ * `mode` は「どこまで撃つ構えになっているか」だけを答える。`sessions` も `reap` も無い
+ * （判定材料が無い）回は何も撃たない。
  *
  * 型に先に `'reclaim'` を置いてあったのは、段1 を載せた runner と、まだ古い版の
  * デーモンが同時に居る窓を作らないためである（AGENTS.md「Web UI とデーモンの
@@ -96,7 +99,10 @@ export interface TaskBreakdown {
 export type ReclaimMode = 'observe' | 'reclaim';
 
 /**
- * 孤児プロセス木の観測（#315 段0）。**この段は1本も撃たない —— 数えるだけである。**
+ * 孤児プロセス木の観測（#315 段0）。**数えるのが本体で、撃つのは判定材料（`sessions` /
+ * `reap`）が渡った回だけである（#1334 / #2626。{@link ReclaimMode}）。**
+ * 以下の「数えるだけ」「撃たない」は、候補の選び方（所有 UID と親子関係）の説明であり、
+ * 判定材料が無い回の振る舞いである。
  *
  * **何を候補と呼ぶか。** `ppid == 1`（親が既に居らず tini へ里子に出ている）かつ
  * **`/proc/<pid>` の所有 UID が、子プロセスを降ろす UID と一致する**もの
@@ -116,7 +122,7 @@ export type ReclaimMode = 'observe' | 'reclaim';
  * 数えるだけで、撃つかどうかの判断はここに無い。**
  */
 export interface ReclaimObservation {
-  /** いまの段階。**段0 では常に `'observe'`**（{@link ReclaimMode} の doc）。 */
+  /** いまの構え。`'observe'` は既定、`'reclaim'` は `reap` を渡した回（{@link ReclaimMode} の doc）。 */
   mode: ReclaimMode;
   /** 候補のプロセス数。 */
   candidates: number;
@@ -199,9 +205,10 @@ export interface ReclaimObservation {
   /**
    * この回（1回の `scanTasks` 呼び出し）で SIGTERM を送った本数。
    *
-   * **`reclaim.reap`（{@link ReclaimScanOptions.reap}）を渡していなければ常に 0**
+   * **`reclaim.sessions` も `reclaim.reap` も渡していなければ常に 0**
    * である（送出の経路が無い。`apps/runner/src/tasks.test.ts` の「段0 は撃たない」
-   * がそれを振る舞いで固定する）。**累積ではなく、この回だけの本数**——`candidates`
+   * がそれを振る舞いで固定する）。既定の `observe` でも、終端した委譲の木があれば 0 を超える
+   * （#2626）。**累積ではなく、この回だけの本数**——`candidates`
    * など他の欄と同じく、毎回その場で数え直す値である。
    *
    * **0でも欄を省かないのは、段1 で欄が生えたように見せないためである。**
@@ -255,32 +262,36 @@ export interface ReclaimScanOptions {
    */
   childUid: number;
   /**
-   * 段1（実際に撃つ。#1334）を有効にする設定。**省略すれば段0（観測のみ）のまま**
-   * ——`mode` は `'observe'` を名乗り続け、`process.kill` は一度も呼ばれない
+   * 段1（素性の分からない孤児も撃つ。#1334）を有効にする設定。**省略すれば `mode` は
+   * `'observe'` のまま**で、素性の分からない孤児（分岐1）は撃たない。終端した委譲の木は
+   * `sessions` があれば撃つ（#2626）。`sessions` も無ければ `process.kill` は一度も呼ばれない
    * （既存の「段0 は撃たない」歯がそのまま固定する）。
    */
   reap?: ReclaimReapOptions;
   /**
-   * **撃たれなかった理由を数えるための判定材料（観測専用。撃つ力を持たない）。**
-   * `reap` とは別名の別の欄で、**これを渡しても `process.kill` へ届く経路は増えない**
-   * ——発砲の経路は `reap` の有無だけで開閉する（`observeReclaim`）。
+   * **既定の構え（`observe`）の判定材料。撃つ範囲は「終端した委譲の木」だけである（#2626）。**
+   * `reap` とは別名の別の欄で、**これを渡すと、runner 自身が起こした委譲の CLI の
+   * プロセス木のうち、その委譲が終わったもの（{@link ReclaimReapOptions} の分岐4と、
+   * そこから継ぐ子孫）だけを撃つ。** 素性の分からない孤児（分岐1。把握している委譲が
+   * 0本のときに sid を問わず撃つ形）は、`reap` が渡るまで撃たない。
    *
-   * 既定の `observe` では `reap` が渡らないので、「sid が生きた委譲のものだったから
-   * hold」と「sid が終わった既知の委譲のものだった」を区別する材料がそもそも無い
-   * （#2352）。ここに同じ3つの関数を渡すと、`reapDecisionFor` と同じ判定で理由を数えられる。
-   * **省略すれば理由別の内訳は出さない**（{@link ReclaimNotFired} の doc。0の行を作らない）。
+   * 「runner が親として pid＝sid を控えた委譲が終わった」ことは runner 自身が知っている
+   * 事実であって、孤児の素性を読んで当てたものではない。だから環境変数が何であっても
+   * （`off` 以外で）効く。`off` は観測ごと止める（この欄も渡らない）。
+   *
+   * **省略すれば撃たず、理由別の内訳も出さない**（{@link ReclaimNotFired} の doc。0の行を作らない）。
    * `reap` が渡っているときは `reap` が使われるので、この欄は無視される。
    */
   sessions?: ReclaimSessionView;
 }
 
-/** 判定材料だけ（{@link ReclaimReapOptions} から発砲の猶予を除いたもの）。 */
+/** 判定材料と猶予（{@link ReclaimReapOptions} のうち、素性の分からない孤児を撃つ力を持たない部分）。 */
 export type ReclaimSessionView = Pick<
   ReclaimReapOptions,
-  'liveSessionPidsOf' | 'knownTerminatedSessionPidsOf' | 'anyTrackedDelegationsOf'
+  'liveSessionPidsOf' | 'knownTerminatedSessionPidsOf' | 'anyTrackedDelegationsOf' | 'graceMs'
 >;
 
-/** 撃たなかった（hold）理由。`reapDecisionFor` の分岐2・3・4の守り・5に1対1で対応する。 */
+/** 撃たなかった（hold）理由。`reapVerdictOf` の分岐2・3・4の守り・5に1対1で対応する。 */
 export interface ReclaimHeldCounts {
   /** sid が読めない（分岐2）。 */
   sidUnknown: number;
@@ -303,6 +314,8 @@ export interface ReclaimHeldCounts {
  *   （`wouldFire` が多ければ、撃てる残骸がルートに入っていないという意味になる）。
  * - `held`: 孤児の候補のうち撃たれなかったものを理由別に。判定材料が無いと出ない。
  * - `observeOnly`: 判定は fire だが `observe`（`reap` 無し）なので撃たなかった本数。
+ *   **#2626 以降は分岐1の形（素性の分からない孤児）だけ**——終端した委譲の木（分岐4と、
+ *   そこから継ぐ子孫）は `observe` でも撃つので、ここには入らない。
  *   `reap` があるとき（撃つ構え）と判定材料が無いときは欄ごと出ない。
  */
 export interface ReclaimNotFired {
@@ -326,7 +339,7 @@ export interface ReclaimNotFired {
  * ——子孫が `setsid` で自分から抜けない限り、`ppid` が `1` へ付け替わっても
  * セッション ID は起源の委譲プロセスの pid のまま残る。
  *
- * **判定は5分岐（保守的な側へ倒す。全部 {@link reapDecisionFor} が持つ）:**
+ * **判定は5分岐（保守的な側へ倒す。全部 {@link reapVerdictOf} が持つ）:**
  *
  * 1. runner がいま把握している委譲（`managerId`）が1本も無い ⟹ セッション ID を
  *    問わず撃ってよい（属す先が無いのだから、どのセッション ID であっても孤児で
@@ -341,6 +354,13 @@ export interface ReclaimNotFired {
  *
  * **この5分岐のうち「撃つ」のは1と4だけである。** 迷う形（2・3・5のどれでもない
  * 未知の形）は全部「撃たない」側へ倒してある。
+ *
+ * **（#2626）分岐4は `reap` が無い既定の `observe` でも撃つ。** 分岐4は「runner が親として
+ * pid＝sid を控えた委譲が終わった」ことが runner 自身に分かっている形で、素性を読んで
+ * 当てたものではない。分岐4に加えて、**分岐5（自分の sid は認識できない）の子孫が、
+ * 親を辿った先の祖先（か、親が先に死んだ場合は帳）で終端した委譲に帰属する**ときも撃つ
+ * （setsid で抜けた Chromium 等。{@link reapVerdictOf} / {@link attributeSids}）。
+ * 生きた委譲の sid（分岐3）は継がない。**分岐1だけが `reap` を要る。**
  *
  * **⚠️ 2026-09（レビュー指摘・#1334）で分岐1・4の定義を直した。** 直す前は
  * どちらも「プロセスの生死」だけで判定していた——**「委譲（`managerId`）が
@@ -362,7 +382,7 @@ export interface ReclaimNotFired {
  * 終わっている」ことしか意味しないので、OS が同じ pid を**生きた別の委譲の
  * 配下**（`setsid` したプロセス）へ使い回した場合、素朴な分岐4はそれを誤って
  * 撃ってしまう。守りは「その sid と同じ pid が、今回の走査に実在するなら
- * 撃たない」——詳しい理由は {@link reapDecisionFor} の doc を見よ。**この守りは
+ * 撃たない」——詳しい理由は {@link reapVerdictOf} の doc を見よ。**この守りは
  * 分岐1には適用しない**（同じ doc）。
  */
 export interface ReclaimReapOptions {
@@ -519,6 +539,12 @@ export class TaskBreakdownReader {
    * `reclaim.reap` を渡していなければ一度も書き込まれない。
    */
   readonly #reaper = new Map<number, ReaperEntry>();
+  /**
+   * 「どの委譲の sid の子孫か」の帳（#2626）。**runner のメモリだけに持つ**（再起動で消える）。
+   * 親が先に死んで孤児ルートになった setsid の子孫（Playwright が起こす Chromium 等）の
+   * 帰属を、親が居たうちに覚えておくためのもの（{@link LineageEntry}）。
+   */
+  readonly #lineage = new Map<number, LineageEntry>();
 
   constructor(options: TaskBreakdownOptions = {}) {
     this.#root = options.procRoot ?? '/proc';
@@ -563,6 +589,7 @@ export class TaskBreakdownReader {
       ownerUidOf: this.#ownerUidOf,
       killFn: this.#killFn,
       reaper: this.#reaper,
+      lineage: this.#lineage,
     });
     this.#cache = { at: now, value };
     return value;
@@ -621,6 +648,8 @@ async function scanTasks(
     killFn: (pid: number, signal: NodeJS.Signals) => void;
     /** 段1の状態帳。`TaskBreakdownReader` の寿命ぶんだけ持ち回す（{@link ReaperEntry}）。 */
     reaper: Map<number, ReaperEntry>;
+    /** 帰属の帳（{@link LineageEntry}）。 */
+    lineage: Map<number, LineageEntry>;
   },
 ): Promise<TaskBreakdown | undefined> {
   let entries: string[];
@@ -720,13 +749,15 @@ async function ownerUidOrDegraded(
 }
 
 /**
- * 孤児プロセス木を数え、`reclaim.reap` が渡っていれば撃つ（#315 段0 / #1334 段1）。
+ * 孤児プロセス木を数え、判定材料が渡っていれば撃つ（#315 段0 / #1334 段1 / #2626）。
  *
- * **`reclaim.reap` が無ければ、この呼び出しは `process.kill` を1度も呼ばない。**
+ * **`reclaim.sessions` も `reclaim.reap` も無ければ、この呼び出しは `process.kill` を1度も呼ばない。**
+ * `sessions` だけなら終端した委譲の木だけを撃ち、素性の分からない孤児（分岐1）は `reap` が
+ * 渡るまで撃たない。
  * それを `grep` ではなく振る舞いで固定してある —— `tasks.test.ts` の「段0 は
  * 撃たない」が、候補が実在する器を走査させたうえで `process.kill` が1度も
  * 呼ばれないことを見る。**撃つ判断そのもの（どの候補が対象か）は
- * {@link reapDecisionFor}、実際に送る／昇格させる手順は {@link reconcileReaper}
+ * {@link reapVerdictOf}、実際に送る／昇格させる手順は {@link reconcileReaper}
  * が持つ**——ここは木を辿って候補と発砲対象を集めるだけである。
  */
 async function observeReclaim(
@@ -740,6 +771,7 @@ async function observeReclaim(
     procCgroupPath: string;
     killFn: (pid: number, signal: NodeJS.Signals) => void;
     reaper: Map<number, ReaperEntry>;
+    lineage: Map<number, LineageEntry>;
   },
 ): Promise<ReclaimObservation> {
   const children = new Map<number, ScannedProcess[]>();
@@ -777,8 +809,37 @@ async function observeReclaim(
   // 同じ pid が実在するなら、それは (a) pid が使い回されて生きた別の委譲の配下が
   // 新しいセッションを開いたか (b) 何らかの理由で判定が追いついていないだけで
   // 本人がまだ生きているかのどちらかであり、どちらでも撃たない側へ倒す。**
-  // 詳しい理由は {@link reapDecisionFor} の doc を見よ。
+  // 詳しい理由は {@link reapVerdictOf} の doc を見よ。
   const scannedPids = new Set(scanned.map((entry) => entry.pid));
+
+  // **#2626: 終端した委譲の sid を持つ木の子孫が、setsid で自分の sid を持った形
+  // （Playwright が `detached` で起こす Chromium 等）の帰属。** 走査ごとに全プロセスの
+  // 帰属を引き（親を辿る。親が居なければ帳を引く）、view があるときは帳を引き直す。
+  const attributions =
+    view === undefined
+      ? new Map<number, SidAttribution>()
+      : attributeSids(scanned, liveSessionPids, knownTerminatedSessionPids, deps.lineage);
+  if (view !== undefined) {
+    deps.lineage.clear();
+    for (const entry of scanned) {
+      const attribution = attributions.get(entry.pid);
+      if (attribution === undefined || attribution.source === 'own') continue;
+      deps.lineage.set(entry.pid, { starttime: entry.starttime, sid: attribution.sid });
+    }
+  }
+  const verdictOf = (entry: ScannedProcess): ReapVerdict =>
+    reapVerdictOf(
+      entry,
+      attributions.get(entry.pid),
+      liveSessionPids,
+      knownTerminatedSessionPids,
+      anyTrackedDelegations,
+      scannedPids,
+    );
+  // **撃つ範囲（#2626）。** `reap`（`ALTEROID_RUNNER_RECLAIM=reclaim`）がある回は素性の
+  // 分からない孤児（分岐1）も撃つ。無くても、`sessions` があれば終端した委譲の木は撃つ。
+  const firesVerdict = (verdict: ReapVerdict): boolean =>
+    verdict === 'fireNoDelegations' ? reclaim.reap !== undefined : isFireVerdict(verdict);
 
   let candidates = 0;
   let candidateThreads = 0;
@@ -789,7 +850,7 @@ async function observeReclaim(
   // ——ここに積むのは `starttime`（数値）だけで、`comm` はどのエントリにも持たせて
   // いない（{@link ScannedProcess} 自体が `comm` を持たない）。
   const candidateStarttimes: number[] = [];
-  // **撃ってよいと判定した候補だけを積む**（{@link reapDecisionFor}）。
+  // **撃ってよいと判定した候補だけを積む**（{@link reapVerdictOf}）。
   // `reclaim.reap` が無ければ、この判定自体を呼ばないので常に空のまま。
   const fireCandidates: Array<{ pid: number; starttime: number; numThreads: number }> = [];
   // #2352: 撃たれなかった候補の理由別と、observe だから撃たなかった本数。
@@ -817,41 +878,24 @@ async function observeReclaim(
           oldestStarttime = entry.starttime;
         }
 
-        // **撃ってよいかは候補ごとに独立して決める（親の判定を継承しない）。**
-        // `setsid` で自分から抜けた子孫は、親（孤児ルート）とは別のセッション ID を
-        // 持ちうる——親が「終端した委譲の残骸」でも、その子孫だけが生きた委譲の
-        // セッションへ属していれば、その子孫は撃たない。
+        // **撃ってよいかは候補ごとに決める。** 自分の sid が生きた委譲のものなら、
+        // 親が「終端した委譲の残骸」でも撃たない。自分の sid が「認識できない」ときに
+        // 限って、終端した委譲の帰属（親の木か帳）を継ぐ（`reapVerdictOf`）。
         if (view !== undefined) {
-          // **fire/hold を決めるのは従来どおり `reapDecisionFor`。** 理由（下の else）
-          // は、hold と決まった後に同じ材料から引き直すだけで、判定には効かない。
-          if (
-            reapDecisionFor(
-              entry.sid,
-              liveSessionPids,
-              knownTerminatedSessionPids,
-              anyTrackedDelegations,
-              scannedPids,
-            ) === 'fire'
-          ) {
-            // 撃つのは `reap` があるときだけ。無ければ数えるだけ（#2352）。
-            if (reclaim.reap !== undefined) {
+          const verdict = verdictOf(entry);
+          if (isFireVerdict(verdict)) {
+            if (firesVerdict(verdict)) {
               fireCandidates.push({
                 pid: entry.pid,
                 starttime: entry.starttime,
                 numThreads: entry.numThreads,
               });
             } else {
+              // 分岐1の形（素性の分からない孤児）は `reap` が無ければ数えるだけ（#2352）。
               observeOnly += 1;
             }
           } else {
-            const reason = reapVerdictFor(
-              entry.sid,
-              liveSessionPids,
-              knownTerminatedSessionPids,
-              anyTrackedDelegations,
-              scannedPids,
-            );
-            if (reason !== 'fire') held[reason] += 1;
+            held[verdict] += 1;
           }
         }
       }
@@ -877,14 +921,8 @@ async function observeReclaim(
     outsideRoots.total += 1;
     if (scannedPids.has(entry.ppid)) outsideRoots.parentInScan += 1;
     if (view !== undefined) {
-      const verdict = reapVerdictFor(
-        entry.sid,
-        liveSessionPids,
-        knownTerminatedSessionPids,
-        anyTrackedDelegations,
-        scannedPids,
-      );
-      if (verdict === 'fire') outsideBySid.wouldFire += 1;
+      const verdict = verdictOf(entry);
+      if (isFireVerdict(verdict)) outsideBySid.wouldFire += 1;
       else outsideBySid[verdict] += 1;
     }
   }
@@ -897,14 +935,14 @@ async function observeReclaim(
   // 見ているのはまさにこの経路の有無である）。
   const stillPresentStarttimes = new Map(scanned.map((entry) => [entry.pid, entry.starttime]));
   const fired =
-    reclaim.reap === undefined
+    view === undefined
       ? { signalled: 0, killed: 0, freedThreads: 0 }
       : reconcileReaper(
           deps.reaper,
           fireCandidates,
           stillPresentStarttimes,
           nowMs,
-          reclaim.reap.graceMs ?? DEFAULT_REAP_GRACE_MS,
+          view.graceMs ?? DEFAULT_REAP_GRACE_MS,
           deps.killFn,
         );
 
@@ -948,7 +986,9 @@ async function observeReclaim(
 }
 
 /**
- * ある候補（孤児候補として既に選ばれたプロセス）を撃ってよいか（#1334）。
+ * ある候補（孤児候補として既に選ばれたプロセス）を、自分の sid だけから見て撃ってよいか
+ * （#1334）。**帰属を継ぐ形（#2626）を足した判定は {@link reapVerdictOf} が持ち、この関数は
+ * その土台（分岐1〜5）である。**
  *
  * **5分岐（詳しい理由は {@link ReclaimReapOptions} の doc）:**
  *
@@ -988,29 +1028,6 @@ async function observeReclaim(
  * 孤立したサーバの残骸（自分がセッションの長で `ppid == 1`）こそ分岐1で片付け
  * たい主対象であり、ここに守りを入れると**それが永久に残ってしまう**。
  */
-function reapDecisionFor(
-  sid: number | undefined,
-  liveSessionPids: ReadonlySet<number>,
-  knownTerminatedSessionPids: ReadonlySet<number>,
-  anyTrackedDelegations: boolean,
-  scannedPids: ReadonlySet<number>,
-): 'fire' | 'hold' {
-  return reapVerdictFor(
-    sid,
-    liveSessionPids,
-    knownTerminatedSessionPids,
-    anyTrackedDelegations,
-    scannedPids,
-  ) === 'fire'
-    ? 'fire'
-    : 'hold';
-}
-
-/**
- * {@link reapDecisionFor} の判定を、hold の理由つきで返す（#2352）。**分岐の並びと
- * 条件は元の `reapDecisionFor` そのまま**——`reapDecisionFor` はこれを畳んだもの
- * （`'fire'` 以外はすべて `'hold'`）なので、fire/hold の結果は変わりようがない。
- */
 function reapVerdictFor(
   sid: number | undefined,
   liveSessionPids: ReadonlySet<number>,
@@ -1024,6 +1041,158 @@ function reapVerdictFor(
   if (knownTerminatedSessionPids.has(sid))
     return scannedPids.has(sid) ? 'sidLeaderPresent' : 'fire';
   return 'sidUnrecognised';
+}
+
+/**
+ * 撃つ判定の結果（#2626）。撃たない側は {@link ReclaimHeldCounts} の理由そのもの。
+ *
+ * - `fireNoDelegations`: 分岐1。runner が把握している委譲が0本。**素性の分からない孤児**を
+ *   撃つ形なので、`reap`（`reclaim`）がある回だけ撃つ
+ * - `fireTerminated`: 分岐4。自分の sid が、runner が起こして既に終端した委譲のもの
+ * - `fireInherited`: 自分の sid は認識できない（setsid で抜けた）が、親を辿った先の
+ *   祖先が終端した委譲の sid を持つ
+ * - `fireLedger`: 同じく認識できないが、親は既に居ない。帳（{@link LineageEntry}）が
+ *   覚えていた帰属先が終端した委譲のもの
+ *
+ * 後ろ3つは「runner 自身が起こした委譲の木が、終わった後に残ったもの」で、既定の
+ * `observe` でも撃つ。
+ */
+type ReapVerdict =
+  'fireNoDelegations' | 'fireTerminated' | 'fireInherited' | 'fireLedger' | keyof ReclaimHeldCounts;
+
+function isFireVerdict(
+  verdict: ReapVerdict,
+): verdict is 'fireNoDelegations' | 'fireTerminated' | 'fireInherited' | 'fireLedger' {
+  return verdict.startsWith('fire');
+}
+
+/** プロセスがどの委譲の sid に属すか（{@link attributeSids}）。 */
+interface SidAttribution {
+  /** 属する委譲の sid（＝その CLI の pid）。 */
+  sid: number;
+  /**
+   * 分かった経路。`own`: 自分の sid がそれ。`tree`: 親を辿った先の祖先がそう。
+   * `ledger`: 親が居らず、帳（{@link LineageEntry}）が覚えていた。
+   */
+  source: 'own' | 'tree' | 'ledger';
+}
+
+/**
+ * 帳の1行（#2626）。**pid と starttime の組で1つのプロセスを指す**（{@link ReaperEntry} と同じ。
+ * pid が別のプロセスへ使い回されたら starttime が違うので引かない）。runner のメモリだけに持ち、
+ * 走査のたびに「いま居るもので帰属が分かっているもの」へ引き直す（居なくなったものは消える）。
+ */
+interface LineageEntry {
+  starttime: number;
+  sid: number;
+}
+
+/**
+ * 全プロセスについて「どの委譲の sid に属すか」を引く（#2626）。**材料は `stat` の ppid・sid・
+ * starttime と、runner が控えた委譲の pid の集合だけ**（`cmdline` / `cwd` / `environ` / `comm` は読まない）。
+ *
+ * 1. 自分の sid が生きた／終端した委譲のもの ⟹ それ（`own`）
+ * 2. そうでなく、親が走査に居て親の帰属が分かる ⟹ 親と同じ（`tree`）
+ * 3. そうでなく、帳に同じ pid+starttime の行がある ⟹ 帳の値（`ledger`）
+ *
+ * 親を辿るのは setsid で抜けた子孫（Chromium 等）が親の sid を名乗らないためで、辿る親は
+ * 「自分の sid が認識できる最も近い祖先」である。
+ */
+function attributeSids(
+  scanned: readonly ScannedProcess[],
+  liveSessionPids: ReadonlySet<number>,
+  knownTerminatedSessionPids: ReadonlySet<number>,
+  lineage: ReadonlyMap<number, LineageEntry>,
+): Map<number, SidAttribution> {
+  const byPid = new Map(scanned.map((entry) => [entry.pid, entry]));
+  const result = new Map<number, SidAttribution>();
+  const settled = new Set<number>();
+
+  const ownOf = (entry: ScannedProcess): SidAttribution | undefined =>
+    entry.sid !== undefined &&
+    (liveSessionPids.has(entry.sid) || knownTerminatedSessionPids.has(entry.sid))
+      ? { sid: entry.sid, source: 'own' }
+      : undefined;
+  const ledgerOf = (entry: ScannedProcess): SidAttribution | undefined => {
+    const row = lineage.get(entry.pid);
+    return row !== undefined && row.starttime === entry.starttime
+      ? { sid: row.sid, source: 'ledger' }
+      : undefined;
+  };
+
+  for (const start of scanned) {
+    if (settled.has(start.pid)) continue;
+    // 解決済みか、親が居ない（か輪になった）ところまで遡る。
+    const chain: ScannedProcess[] = [];
+    const onChain = new Set<number>();
+    let top: ScannedProcess | undefined = start;
+    while (top !== undefined && !settled.has(top.pid) && !onChain.has(top.pid)) {
+      chain.push(top);
+      onChain.add(top.pid);
+      const parent: ScannedProcess | undefined = byPid.get(top.ppid);
+      top = parent !== undefined && parent.pid !== top.pid ? parent : undefined;
+    }
+    // chain は子 → 親の順。親から順に決める。
+    let above: SidAttribution | undefined =
+      top !== undefined && settled.has(top.pid) ? result.get(top.pid) : undefined;
+    for (let i = chain.length - 1; i >= 0; i -= 1) {
+      const entry = chain[i] as ScannedProcess;
+      const attribution =
+        ownOf(entry) ??
+        (above === undefined ? undefined : ({ sid: above.sid, source: 'tree' } as const)) ??
+        ledgerOf(entry);
+      if (attribution !== undefined) result.set(entry.pid, attribution);
+      settled.add(entry.pid);
+      above = attribution;
+    }
+  }
+  return result;
+}
+
+/**
+ * 候補を撃ってよいか、撃たないなら理由つきで返す（#1334 / #2352 / #2626）。
+ *
+ * **自分の sid が終端した委譲のもの（分岐4。pid 使い回しの守り付き）は、`reap` が無くても
+ * 撃つ側（`fireTerminated`）になる。** 把握している委譲が0本のときも、この判定を分岐1より
+ * 先に置く——runner が起こして終わった委譲の木は、委譲が0本になった後ほど残りやすい
+ * （#2626。1本きりの委譲が落ちた器）。分岐1だけで撃つ形は `fireNoDelegations` のままで、
+ * 素性が分からない孤児として `reap` のときだけ撃つ。
+ *
+ * **継ぐ（`fireInherited` / `fireLedger`）のは、自分の sid が「認識できない」ときだけ。**
+ * 自分の sid が生きた委譲のもの（`sidLive`）・読めない（`sidUnknown`）は継がない。継ぐ先の帰属が
+ * 終端済みで、その sid の長が走査に居なくて（pid 使い回しの守りと同じ）、生きた委譲でもないときに限る。
+ */
+function reapVerdictOf(
+  entry: ScannedProcess,
+  attribution: SidAttribution | undefined,
+  liveSessionPids: ReadonlySet<number>,
+  knownTerminatedSessionPids: ReadonlySet<number>,
+  anyTrackedDelegations: boolean,
+  scannedPids: ReadonlySet<number>,
+): ReapVerdict {
+  const { sid } = entry;
+  if (sid !== undefined && !liveSessionPids.has(sid)) {
+    if (knownTerminatedSessionPids.has(sid)) {
+      if (!scannedPids.has(sid)) return 'fireTerminated';
+    } else if (
+      attribution !== undefined &&
+      attribution.source !== 'own' &&
+      knownTerminatedSessionPids.has(attribution.sid) &&
+      !liveSessionPids.has(attribution.sid) &&
+      !scannedPids.has(attribution.sid)
+    ) {
+      return attribution.source === 'ledger' ? 'fireLedger' : 'fireInherited';
+    }
+  }
+  const base = reapVerdictFor(
+    sid,
+    liveSessionPids,
+    knownTerminatedSessionPids,
+    anyTrackedDelegations,
+    scannedPids,
+  );
+  if (base !== 'fire') return base;
+  return anyTrackedDelegations ? 'fireTerminated' : 'fireNoDelegations';
 }
 
 function emptyHeldCounts(): ReclaimHeldCounts {
@@ -1276,7 +1445,7 @@ async function readStat(
   if (!Number.isFinite(starttime) || starttime < 0) return undefined;
   // **sid が壊れていても、レコード全体は捨てない。** 数え上げ（threads/processes/
   // 候補数）は sid に依存しないので、既存の挙動を保つ。sid が要るのは撃つ判定
-  // （{@link reapDecisionFor}）だけで、そちらは `undefined` を「不明」として
+  // （{@link reapVerdictOf}）だけで、そちらは `undefined` を「不明」として
   // 保守的に扱う。
   const sid = Number.isFinite(sidRaw) && sidRaw >= 0 ? sidRaw : undefined;
   return { comm, state, ppid, numThreads, starttime, sid };

@@ -4,6 +4,7 @@ import { stdin, stdout } from 'node:process';
 import { RESET_CONFIRM_GROUPS } from '@alteroid/core';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid reset` — ワークスペースのリセット（「トークン情報以外を全部消す」）。
@@ -177,7 +178,7 @@ async function post(target: Target): Promise<unknown> {
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
-    if (typeof body.error === 'string') throw new Error(body.error);
+    if (typeof body.error === 'string') throw new Error(redactError(body.error));
     throw new Error(`/reset が失敗しました (${String(response.status)})`);
   }
   return response.json();

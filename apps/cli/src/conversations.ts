@@ -3,6 +3,7 @@ import { stdout } from 'node:process';
 import { createClient, type DaemonClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { resolveTarget } from './target.js';
+import { redactBody } from './redact.js';
 
 /**
  * `alteroid conversations` — 会話（chat の履歴）の一覧・中身を読む。
@@ -132,7 +133,7 @@ export function renderConversationsList(
           `  更新: ${conversation.updatedAt}（${formatElapsedAgo(conversation.updatedAt, now)}）` +
           `  (${conversation.messages}件)`,
       );
-      lines.push(`      ${conversation.preview}`);
+      lines.push(`      ${redactBody(conversation.preview)}`);
     });
   }
   lines.push('');
@@ -254,7 +255,9 @@ export function renderConversationDetail(
             ? `  [編集後の発言 — ${message.supersedes} を置き換えた]`
             : '';
       // **id を出す。** 編集（`supersedes`）の対象を指すのに要る。
-      lines.push(`  [${message.at}] ${speaker} (id: ${message.id}): ${message.text}${edit}`);
+      lines.push(
+        `  [${message.at}] ${speaker} (id: ${message.id}): ${redactBody(message.text)}${edit}`,
+      );
     }
   }
   lines.push('');
