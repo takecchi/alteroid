@@ -4,12 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeProbeError,
-  redactEnvSecrets,
   runUsageProbe,
   settleWithin,
   type UsageProbeHandle,
   type UsageProbeQuery,
 } from './usage-probe.js';
+import { redactEnvSecrets } from './redact-env-secrets.js';
 
 /**
  * `queryFn` に渡された `options`（SDK の `Options`）を横から覗くための偽物。
