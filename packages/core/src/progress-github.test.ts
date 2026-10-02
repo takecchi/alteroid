@@ -115,10 +115,12 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
   it('日誌の読みに types と limit（500）を渡す（無制限に読まない）', async () => {
     const stores = createMemoryStores();
     const queries: unknown[] = [];
-    const list = stores.journal.list.bind(stores.journal);
-    stores.journal.list = (query) => {
+    // 見るのはストアの契約の口（`listPage`。Issue #2604 / #2605）。メモリのストアが内側で
+    // `list` を何件で呼ぶか（先読みの +1）は実装の都合なので、ここでは固定しない。
+    const listPage = stores.journal.listPage.bind(stores.journal);
+    stores.journal.listPage = (query) => {
       queries.push(query);
-      return list(query);
+      return listPage(query);
     };
     await readProgress(stores, { now: NOW });
     const githubQueries = queries.filter(
