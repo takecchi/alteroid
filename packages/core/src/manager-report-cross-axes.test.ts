@@ -269,6 +269,7 @@ describe('manager_report は manager_list の3軸を継承する（Issue #1847�
     target.lastUnpushedWorkObservation = {
       kind: 'observed',
       at: '2026-09-20T00:00:00.000Z',
+      source: 'stop-refusal',
       cwd: '/workspace/mgr-1/repo',
       worktrees: [{ relativePath: '.', branch: 'feat/example' }],
     };
@@ -281,7 +282,10 @@ describe('manager_report は manager_list の3軸を継承する（Issue #1847�
       expect(reply).toContain('feat/example');
       expect(reply).toContain('manager_stop');
       expect(reply).toContain('非force');
-      expect(reply).toContain('枠落ち');
+      // 経路は観測の `source` から言う。器の入れ替え・枠落ちでも更新されうるので、
+      // 「枠落ちでは更新されない」と決め打ちしない（#1266、PR #2545）。
+      expect(reply).toContain('manager_list 自身では更新されない');
+      expect(reply).not.toContain('枠落ち');
       // 探索の起点の絶対パスは出さない（`unpushedWorkTreeSchema` の doc）。
       expect(reply).not.toContain('/workspace/mgr-1/repo');
     }
