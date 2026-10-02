@@ -14,7 +14,7 @@
  *   `requireOperator` を構造的に満たせないので必ず 403 になり、そのとき
  *   アカウント id 入りの端末コマンドを案内する
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -355,5 +355,75 @@ describe('/access 画面 — 実行環境の持ち主としての宣言', () => 
 
     await screen.findByRole('alert');
     expect(screen.queryByText('alteroid access owner acct-a')).toBeNull();
+  });
+});
+
+describe('/access 画面 — 読めない行（issue #2536）', () => {
+  it('読めない行が無ければ、その断りは出ない（鍵ごと無い）', async () => {
+    stubAccess({ body: { accounts: [account()] } });
+
+    await renderAccess();
+
+    expect(screen.queryByText(/読めないアカウントの行/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
+  });
+
+  it('読めない行しか無いとき、「誰もログインしていない」と言わず、件数と id・不正な欄名を断る。id の無い行にはボタンが無い', async () => {
+    stubAccess({
+      body: {
+        accounts: [],
+        rowsUnreadable: { count: 2, rows: [{ id: 'acct-bad', reason: '不正な欄: displayName' }] },
+      },
+    });
+
+    await renderAccess();
+
+    expect(await screen.findByText(/読めないアカウントの行が 2 件ある/)).toBeTruthy();
+    expect(screen.getByText('acct-bad')).toBeTruthy();
+    expect(screen.getByText(/不正な欄: displayName/)).toBeTruthy();
+    expect(screen.getByText(/id が取れない行が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/誰もログインしていない、とは言えない/)).toBeTruthy();
+    expect(screen.queryByText('まだ誰もログインしていません。')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+  });
+
+  it('「この行を消す」は id を指して POST /access/unreadable/remove を呼び、再取得で断りが消える', async () => {
+    const posts: unknown[] = [];
+    let unreadable = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/access/unreadable/remove') && method === 'POST') {
+        posts.push(request !== null ? await request.json() : JSON.parse(String(init?.body)));
+        unreadable = false;
+        return json({ removedIds: ['acct-bad'], count: 1 });
+      }
+      if (url.includes('/access')) {
+        return json({
+          accounts: [],
+          ...(unreadable
+            ? {
+                rowsUnreadable: {
+                  count: 1,
+                  rows: [{ id: 'acct-bad', reason: '不正な欄: displayName' }],
+                },
+              }
+            : {}),
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+
+    await renderAccess();
+    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+
+    await waitFor(() => {
+      expect(posts).toEqual([{ ids: ['acct-bad'] }]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/読めないアカウントの行が/)).toBeNull();
+    });
+    expect(await screen.findByText('まだ誰もログインしていません。')).toBeTruthy();
   });
 });

@@ -227,6 +227,12 @@ export type TokenRotationEntry = Extract<JournalEntry, { type: 'token_rotation' 
  */
 export type AccessState = Ok<paths['/access']['get']>;
 export type AccessAccount = AccessState['accounts'][number];
+/**
+ * 読めないアカウントの行（`GET /access` の `rowsUnreadable`。issue #2536）。1件でも在るときだけ載る。
+ * `rows` は id と不正な欄名だけで、email などの中身は型に無い。`rows` に無い行（id が取れない行）も
+ * `count` には数える。
+ */
+export type AccessRowsUnreadable = NonNullable<AccessState['rowsUnreadable']>;
 
 /**
  * 人間が承認した Bash 許可の一覧（`GET /permission-grants`。Issue #863）。
@@ -239,6 +245,11 @@ export type AccessAccount = AccessState['accounts'][number];
  */
 export type PermissionGrantsState = Ok<paths['/permission-grants']['get']>;
 export type PermissionGrant = PermissionGrantsState['grants'][number];
+/**
+ * 読めない許可の行（`GET /permission-grants` の `rowsUnreadable`。issue #2536）。1件でも在るときだけ載る。
+ * `rows` は id と不正な欄名だけで、許可の本文は型に無い。
+ */
+export type PermissionGrantsRowsUnreadable = NonNullable<PermissionGrantsState['rowsUnreadable']>;
 
 /**
  * 環境変数の袋（`GET /credentials`。旧「マネージャーへ降ろす環境変数」）。
