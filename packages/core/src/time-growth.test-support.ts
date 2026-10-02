@@ -25,6 +25,9 @@ import { expect } from 'vitest';
  * 手元では同じ形が n を倍にするごとにきっちり倍になる線形である）。そこで次の3つを入れた。
  * - **最小値を取る**（中央値ではなく）。器が混むと時間は足されるだけで、引かれはしない。
  * - **小さいほうと大きいほうを交互に測る**。混み具合の波が片方にだけ乗るのを避ける。
+ * - **ラウンドを繰り返し、最小の比で判定する**（#2576、CI run 36798057082 で比 10.23）。揺れは比を
+ *   大きいほうへずらすだけなので、線形はどれかのラウンドで factor 近くへ戻る。2乗以上は全ラウンドが
+ *   大きいままなので落ちる——閾値を上げずに、偽陽性だけを減らす。
  * - **t(n) が `minSmallMs`（既定 5ms）に届くまで n を倍にする**（`maxScale` 倍まで）。
  *   2乗・3乗の実装は n を上げるほど比が理論値へ近づくので、捕まえる力は落ちない。
  *   大きいほうが `hardCapMs` を超えたら、その時点で測るのをやめて落とす。
@@ -49,6 +52,13 @@ export interface ExpectNotSuperlinearOptions {
   /** t(n) がこれに届くまで n を倍にする（ms）。既定 5。0 なら倍にしない。 */
   minSmallMs?: number;
   /**
+   * 測定ラウンドの最大回数（#2576）。比が `maxRatio` に届かなかったラウンドで打ち切り、
+   * 全ラウンドが届いたときだけ落とす（判定は最小の比）。既定 3。1 なら従来どおり1回で決める。
+   */
+  rounds?: number;
+  /** 温めの回数（捨てる。n を倍にする判定はこの最小値で行う）。既定 3。 */
+  warmups?: number;
+  /**
    * n を倍にする上限（出発点の何倍まで）。既定は factor が 4 以上なら 16、それ未満なら 1（倍にしない）。
    * factor を小さくしてある歯は指数の後戻りを見る歯で、壊れた実装では n を倍にした1回が
    * 終わらない。正しい実装の t(n) は floorMs よりずっと小さく、比が跳ねる帯に入らない。
@@ -62,7 +72,7 @@ export interface ExpectNotSuperlinearOptions {
   now?: () => number;
 }
 
-/** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う。 */
+/** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う（最小の比のラウンドのもの）。 */
 export interface GrowthMeasurement {
   /** 実際に測った小さいほうの入力の大きさ（倍にした後）。 */
   n: number;
@@ -106,42 +116,71 @@ export function expectNotSuperlinear<TInput>(
     floorMs = 1,
     repeats = 5,
     minSmallMs = 5,
+    rounds = 3,
+    warmups = 3,
     maxScale = factor >= 4 ? 16 : 1,
     now = () => performance.now(),
   } = options;
 
-  // JIT の温め——最初の1回は捨てる（ここで測りたいのは「温まった後」の伸び方である）。
+  // JIT の温め——温まる前の最初の数回は捨てる（ここで測りたいのは「温まった後」の伸び方である）。
+  // **n を倍にするかどうかも、温まった後の値で決める**（#2576）。以前は最初の2回（まだ遅い）で
+  // 決めていたので、混んだ器では「5ms に届いている」と誤読して倍にせず、1〜2ms の分母で比を
+  // 取ることになった（CI run 36798057082: t(500)=1.79ms, t(2000)=18.35ms, 比 10.23）。
+  const warmedMs = (input: TInput): number => {
+    let min = Infinity;
+    for (let i = 0; i < warmups; i += 1) min = Math.min(min, timeOnceMs(run, input, now));
+    return min;
+  };
   let n = options.n;
   let small = makeInput(n);
-  let tFirst = timeOnceMs(run, small, now);
-  tFirst = Math.min(tFirst, timeOnceMs(run, small, now));
+  let tWarm = warmedMs(small);
   // t(n) が小さすぎると、分母が器の混み具合でぶれる。届くまで n を倍にする。
-  while (tFirst < minSmallMs && n * 2 <= options.n * maxScale) {
+  while (tWarm < minSmallMs && n * 2 <= options.n * maxScale) {
     n *= 2;
     small = makeInput(n);
-    tFirst = timeOnceMs(run, small, now);
+    tWarm = warmedMs(small);
   }
   const large = makeInput(n * factor);
 
-  let tSmallMs = Infinity;
-  let tLargeMs = Infinity;
-  for (let i = 0; i < repeats; i += 1) {
-    tSmallMs = Math.min(tSmallMs, timeOnceMs(run, small, now));
-    const tLarge = timeOnceMs(run, large, now);
-    tLargeMs = Math.min(tLargeMs, tLarge);
-    // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
-    // 限らないので、超えた1回の値で落とす）。
-    if (tLarge >= hardCapMs) {
-      tLargeMs = tLarge;
-      break;
+  // **比は、測定ラウンドを最大 `rounds` 回やり、最も小さい比で判定する**（#2576）。
+  // 器の混みは時間を足すだけで引かないので、ラウンドの比は「揺れのぶん」だけ大きいほうへ
+  // ずれる。線形の実装は、どれか1ラウンドが静かなら factor の近くへ戻って通る。
+  // 2乗以上は全ラウンドが同じように大きい（理論値 factor² 以上）ので、最小の比も落ちる
+  // ——**捕まえる力は閾値を上げずに保たれる**。通ったラウンドで打ち切るので、静かな器では
+  // 1ラウンドしか測らない。
+  let best: { tSmallMs: number; tLargeMs: number; ratio: number } | undefined;
+  const roundRatios: string[] = [];
+  let hung = false;
+  for (let round = 0; round < rounds && !hung; round += 1) {
+    let roundSmallMs = Infinity;
+    let roundLargeMs = Infinity;
+    for (let i = 0; i < repeats; i += 1) {
+      roundSmallMs = Math.min(roundSmallMs, timeOnceMs(run, small, now));
+      const tLarge = timeOnceMs(run, large, now);
+      roundLargeMs = Math.min(roundLargeMs, tLarge);
+      // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
+      // 限らないので、超えた1回の値で落とす）。
+      if (tLarge >= hardCapMs) {
+        roundLargeMs = tLarge;
+        hung = true;
+        break;
+      }
     }
+    const roundRatio = roundLargeMs / Math.max(roundSmallMs, floorMs);
+    roundRatios.push(roundRatio.toFixed(2));
+    if (best === undefined || roundRatio < best.ratio) {
+      best = { tSmallMs: roundSmallMs, tLargeMs: roundLargeMs, ratio: roundRatio };
+    }
+    if (hung || roundRatio < maxRatio) break;
   }
-  const ratio = tLargeMs / Math.max(tSmallMs, floorMs);
+  // rounds >= 1 なので best は必ず埋まる。
+  const { tSmallMs, tLargeMs, ratio } = best ?? { tSmallMs: NaN, tLargeMs: NaN, ratio: NaN };
 
   const detail =
     `t(${n})=${tSmallMs.toFixed(2)}ms, t(${n * factor})=${tLargeMs.toFixed(2)}ms, ` +
-    `ratio=${ratio.toFixed(2)}（n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}, ` +
-    `hardCapMs=${hardCapMs}, repeats=${repeats}, 最小値）`;
+    `ratio=${ratio.toFixed(2)}（ラウンドごとの比 [${roundRatios.join(', ')}] の最小。` +
+    `n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}, ` +
+    `hardCapMs=${hardCapMs}, repeats=${repeats}, rounds=${rounds}, 最小値）`;
 
   expect(tLargeMs, `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${detail}`).toBeLessThan(
     hardCapMs,

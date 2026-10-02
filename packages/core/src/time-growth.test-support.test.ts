@@ -211,6 +211,74 @@ describe('expectNotSuperlinear', () => {
     expect(result.ratio).toBe(4);
   });
 
+  it('温めの最初の数回が遅くても、n を倍にする判定は温まった後の値で行う（#2576）', () => {
+    // 混んだ器では、最初の2回（JIT が温まる前）が 10ms かかり、5ms（minSmallMs）に届いて見える。
+    // 以前は最初の2回で倍にするかを決めていたので、倍にせず 0.1ms の分母で比を取った。
+    // 偽の時計で、最初の2回だけ 10ms 足す。温めの3回目は 0.1ms ⟹ 5ms に届くまで倍にする。
+    const clock = makeFakeClock();
+    let calls = 0;
+    const result = expectNotSuperlinear(
+      (n: number) => {
+        calls += 1;
+        clock.advance(n * 1e-4);
+        if (calls <= 2) clock.advance(10);
+      },
+      identity,
+      { n: 1000, maxScale: 1024, now: clock.now },
+    );
+    expect(result.n).toBe(64_000);
+  });
+
+  it('1ラウンドが丸ごと混んでも、次のラウンドが静かなら線形は通る。比は最小のラウンドのもの（#2576）', () => {
+    // CI run 36798057082 の形（比 10.23）を、偽の時計で作る。大きいほうの最初の5回（=1ラウンド目）
+    // にだけ 100ms の待ちが乗る。1ラウンド目の比は (20+100)/5 = 24、2ラウンド目は 20/5 = 4。
+    const clock = makeFakeClock();
+    let largeCalls = 0;
+    const result = expectNotSuperlinear(
+      (n: number) => {
+        clock.advance(n / 1_000_000);
+        if (n >= 20_000_000) {
+          largeCalls += 1;
+          if (largeCalls <= 5) clock.advance(100);
+        }
+      },
+      identity,
+      { n: 5_000_000, minSmallMs: 0, now: clock.now },
+    );
+    expect(largeCalls).toBe(10); // 1ラウンド目で落ちず、2ラウンド目で通って打ち切る
+    expect(result.ratio).toBe(4);
+  });
+
+  it('rounds=1 なら、同じ波で従来どおり1回で落ちる（ラウンドが効いていることの対照）', () => {
+    const clock = makeFakeClock();
+    let largeCalls = 0;
+    const run = (): unknown =>
+      expectNotSuperlinear(
+        (n: number) => {
+          clock.advance(n / 1_000_000);
+          if (n >= 20_000_000) {
+            largeCalls += 1;
+            if (largeCalls <= 5) clock.advance(100);
+          }
+        },
+        identity,
+        { n: 5_000_000, minSmallMs: 0, rounds: 1, now: clock.now },
+      );
+    expect(run).toThrow(/伸びの比が大きすぎる/);
+  });
+
+  it('2乗は、どのラウンドも大きいままなので、ラウンドを重ねても落ちる（閾値は動いていない）', () => {
+    const clock = makeFakeClock();
+    let error: unknown;
+    try {
+      expectNotSuperlinear(quadraticOn(clock), identity, { n: 4000, now: clock.now });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/ラウンドごとの比 \[16\.00, 16\.00, 16\.00\]/);
+  });
+
   it('smoke: 既定の時計（performance.now）でも例外なく動き、測った値は有限の正の数になる', () => {
     // 実時間で動くことだけを見る。比の閾値・hardCapMs は無効にしてある（Infinity）ので、
     // 器がどれだけ混んでも揺れない。閾値の判定は上の偽の時計のテストが持つ。
@@ -228,4 +296,39 @@ describe('expectNotSuperlinear', () => {
     expect(result.tLargeMs).toBeGreaterThan(0);
     expect(result.ratio).toBeGreaterThan(0);
   });
+});
+
+/**
+ * **陰性対照（常設・実時間・本物の正規表現）**（#2576）。上の偽の時計の歯は助けの算術を
+ * 確かめるが、「本物の後戻りを、本物の `RegExp` と本物の時計で捕まえる」ことは確かめない。
+ * ここでは後戻りが爆発する正規表現を与え、助けが落とすことを確かめる。**この歯が落ちなく
+ * なったら、助けが弱くなっている**（ラウンドの最小値が揺れ以外も隠している、など）。
+ *
+ * 余裕の見積もり（2026-10-02 手元の実測）: `(a+)+$` は n=12 で 0.4ms 未満、n=24 で約 200ms
+ * （n=11→22 で約 50ms、比は数十〜数百倍。理論値は 2^11 = 2048 倍）。`\s+$` を空白の列＋`x` に当てる形は2乗で、n=2000 が
+ * 約 1.5ms、n=32000 が約 320ms（n を16倍で時間は約 200 倍）。どちらも閾値 10 には桁で余裕がある。
+ * 線形のほうの対照（落ちないこと）は、約 65 箇所の本物の歯が毎回測っている。
+ */
+describe('陰性対照: 後戻りが爆発する正規表現を、助けは実時間でも落とす', () => {
+  it('入れ子の量指定子 (a+)+$ ——指数的な後戻りは比で落ちる', () => {
+    const exponential = /(a+)+$/;
+    expect(() =>
+      expectNotSuperlinear(
+        (input: string) => exponential.test(input),
+        (n) => `${'a'.repeat(n)}!`,
+        { n: 11, factor: 2, repeats: 2 },
+      ),
+    ).toThrow(/伸びの比が大きすぎる|hardCapMs を超えた/);
+  }, 30_000);
+
+  it('2乗の後戻り（空白の列＋x に \\s+$）は、既定の factor=4・maxRatio=10 で落ちる', () => {
+    const quadratic = /\s+$/;
+    expect(() =>
+      expectNotSuperlinear(
+        (input: string) => quadratic.test(input),
+        (n) => `${' '.repeat(n)}x`,
+        { n: 4000, minSmallMs: 0, repeats: 2 },
+      ),
+    ).toThrow(/伸びの比が大きすぎる/);
+  }, 30_000);
 });
