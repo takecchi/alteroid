@@ -225,3 +225,31 @@ describe('scanJournalPages', () => {
     await expect(scanJournalPages(fake.store, {}, () => {}, { pageSize: 1.5 })).rejects.toThrow();
   });
 });
+
+/** 偽ストアの `oldestAt`（地平。Issue #2640）。pg の `ORDER BY at ASC LIMIT 1` と同じ形。 */
+describe('createSyntheticJournalStore の oldestAt', () => {
+  const entryAt = (index: number) => ({
+    type: 'decision' as const,
+    decision: `d-${index}`,
+    grounds: 'g',
+  });
+
+  it('総数 0 なら null', async () => {
+    const fake = createSyntheticJournalStore({ total: 0, entryAt });
+    expect(await fake.store.oldestAt()).toBeNull();
+  });
+
+  it('最古の行（index が最大）の at を返す', async () => {
+    const fake = createSyntheticJournalStore({ total: 5, entryAt });
+    expect(await fake.store.oldestAt()).toBe(fake.entryOf(4).at);
+  });
+
+  it('最古の行が読めない行でも、その at を返す（pg は読めない行も数える）', async () => {
+    const fake = createSyntheticJournalStore({
+      total: 5,
+      entryAt,
+      unreadable: (index) => index === 4,
+    });
+    expect(await fake.store.oldestAt()).toBe(fake.entryOf(4).at);
+  });
+});
