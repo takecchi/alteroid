@@ -30,6 +30,10 @@ export type ManagerDenial = NonNullable<ManagerSummary['denials']>[number];
 export type UnreadableJob = NonNullable<Ok<paths['/managers']['get']>['unreadable']>[number];
 
 export type PendingApproval = Ok<paths['/approvals']['get']>['approvals'][number];
+/** 承認待ちの設問（`ask_human` の `questions`。選択肢つき。issue #2525）。 */
+export type ApprovalQuestion = NonNullable<PendingApproval['questions']>[number];
+/** 設問ごとの回答（`PendingApproval.selections`。`POST /approvals/{id}/answer` が受けるのと同じ形）。 */
+export type ApprovalSelection = NonNullable<PendingApproval['selections']>[number];
 /**
  * 承認待ちの行が読めなかったもの（issue #2298）。「無い」でも「回答済み」でもない
  * 第3の状態——`GET /approvals` の `unreadable`（1件でも在るときだけ載る）から導く。

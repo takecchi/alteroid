@@ -1,9 +1,16 @@
+import { useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
 import { Badge, Button, Card, Textarea } from '../../common';
 import { Markdown } from '../../markdown';
 import { isSubmitShortcut } from '../chat/ime';
 import { Timestamp } from '../timestamp';
+import {
+  ApprovalQuestionsForm,
+  summarizeApprovalQuestions,
+  type ApprovalQuestionView,
+  type ApprovalQuestionsAnswer,
+} from './approval-questions';
 
 export type ApprovalState = 'unanswered' | 'answered' | 'withdrawn';
 
@@ -23,6 +30,11 @@ export const APPROVAL_QUICK_ANSWERS = {
  *   混ぜない——前者は人間が応えた終端、後者はクローンが不要と判断した終端である
  * - 未回答のときだけ回答欄を出す。⌘/Ctrl + Enter で送る。IME の確定の Enter では
  *   送らない（`chat/ime.ts`）
+ * - **設問つき（`questions`、issue #2525）の未回答は、回答欄の代わりに設問の要約1行と
+ *   「選択肢を開いて答える」を出す。** 開くと選択肢のフォーム（`ApprovalQuestionsForm`）が出て、
+ *   「回答」で `onSubmitQuestions` へ一括で渡す。一覧に設問を全文で並べない（詳細は開いた側）。
+ *   許可・却下の定型文は出さない（複数の設問への「はい」は意味を持たない）。
+ *   `questions` が無い・空なら、これまでの回答欄のまま
  * - `jobLink` はどのマネージャーの件かへのリンク（画面が `<Link>` で渡す）
  * - `footer` は回答済みのときの経緯（画面の `TracePanel`）などを置く口
  * - **省略可能な口（既定の振る舞いは変えない）。** 画面が今の表示をそのまま出せるように
@@ -49,6 +61,8 @@ export function ApprovalCard({
   footer,
   trailing,
   isSubmitKey = isSubmitShortcut,
+  questions,
+  onSubmitQuestions,
 }: {
   state: ApprovalState;
   /** `time` を渡すときは要らない（渡しても使わない）。 */
@@ -74,7 +88,13 @@ export function ApprovalCard({
   trailing?: ReactNode;
   /** 回答欄で「送る」キーかの判定。既定は `isSubmitShortcut`（IME の確定の Enter を除く）。 */
   isSubmitKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
+  /** 設問つきの承認待ちの設問（無い・空なら普通の回答欄）。 */
+  questions?: readonly ApprovalQuestionView[];
+  /** 設問のフォームの「回答」で呼ぶ。 */
+  onSubmitQuestions?: (answer: ApprovalQuestionsAnswer) => void;
 }) {
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const hasQuestions = questions !== undefined && questions.length > 0;
   return (
     <Card className="p-4">
       {/*
@@ -176,6 +196,29 @@ export function ApprovalCard({
             <p className="mt-1 text-[11px] text-muted-foreground">回答経路: {answeredVia}</p>
           )}
         </>
+      ) : hasQuestions ? (
+        <div className="mt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {summarizeApprovalQuestions(questions)}
+            </span>
+            <Button
+              size="sm"
+              aria-expanded={questionsOpen}
+              onClick={() => setQuestionsOpen((open) => !open)}
+            >
+              {questionsOpen ? '閉じる' : '選択肢を開いて答える'}
+            </Button>
+          </div>
+          {/* 閉じても入力は捨てない（unmount せず隠す）。 */}
+          <div hidden={!questionsOpen}>
+            <ApprovalQuestionsForm
+              questions={questions}
+              busy={busy}
+              onSubmit={(answer) => onSubmitQuestions?.(answer)}
+            />
+          </div>
+        </div>
       ) : (
         <div className="mt-3">
           <Textarea

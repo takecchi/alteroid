@@ -17,6 +17,7 @@ import { useSWRConfig } from 'swr';
 import { ApiError, expectOk, unwrap, useApi } from '../api';
 import type {
   AgentTokenView,
+  ApprovalSelection,
   ConversationSummary,
   EnvVarScope,
   InboxEventType,
@@ -191,11 +192,19 @@ export function useAnswerApproval() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (id: string, answer: string) => {
+    async (id: string, answer: string | undefined, selections?: ApprovalSelection[]) => {
       let answerError: unknown;
       try {
         await api.api
-          .POST('/approvals/{id}/answer', { params: { path: { id } }, body: { answer } })
+          .POST('/approvals/{id}/answer', {
+            params: { path: { id } },
+            // 選択肢で答えたときは `answer` が補足になる（API の約束。どちらか一方は必須）。
+            // `selections` を渡さない呼び方は、これまでと同じ `{ answer }` のまま。
+            body: {
+              ...(answer === undefined ? {} : { answer }),
+              ...(selections === undefined ? {} : { selections }),
+            },
+          })
           .then(unwrap);
       } catch (caught) {
         answerError = caught;
@@ -222,7 +231,7 @@ export function useAnswerApprovals() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (answers: { id: string; answer: string }[]) => {
+    async (answers: { id: string; answer?: string; selections?: ApprovalSelection[] }[]) => {
       const { results } = await api.api
         .POST('/approvals/answer', { body: { answers } })
         .then(unwrap);

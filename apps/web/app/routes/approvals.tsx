@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 
 import {
   ApprovalCard as ApprovalCardView,
+  type ApprovalQuestionsAnswer,
   Page,
   Button,
   Card,
@@ -282,10 +283,25 @@ function ApprovalEntry({
 
   async function submit(text: string) {
     if (text.trim() === '') return;
+    await send(() => answerApproval(approval.id, text));
+  }
+
+  /**
+   * 設問のフォームの「回答」（issue #2525）。選んだ設問ごとの `selections` と、補足があれば
+   * `answer`（補足になる）を1回で送る。畳んだ文はサーバが作る（ここでは作らない）。
+   */
+  async function submitQuestions({ selections, supplement }: ApprovalQuestionsAnswer) {
+    if (selections.length === 0 && supplement === undefined) return;
+    await send(() =>
+      answerApproval(approval.id, supplement, selections.length === 0 ? undefined : selections),
+    );
+  }
+
+  async function send(request: () => Promise<void>) {
     setBusy(true);
     setFailure(undefined);
     try {
-      await answerApproval(approval.id, text);
+      await request();
       onAnswered();
     } catch (caught) {
       setFailure(caught);
@@ -356,6 +372,8 @@ function ApprovalEntry({
       draft={draft}
       onDraftChange={onDraftChange}
       onSubmit={(text) => void submit(text)}
+      questions={approval.questions ?? undefined}
+      onSubmitQuestions={(answer) => void submitQuestions(answer)}
       busy={busy}
       // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter（部品の既定
       // `isSubmitShortcut`）。IME の確定の Enter は送信に数えない（issue #2259）。
