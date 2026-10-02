@@ -14172,6 +14172,53 @@ describe('usage_read（人間が見られるものはクローンからも見ら
     expect(reply).toContain('請求明細ではない');
   });
 
+  // Issue #486 M7。CLI・Web・`GET /usage` と同じく、消費を報告しない provider の
+  // ターンは 0 ではなく「取れなかった」として合計の隣に出す。無ければ1文字も足さない。
+  it('消費を報告しない provider のターンは、合計の隣に「取れなかった」と出す', async () => {
+    const h = harness();
+    await spent(h);
+    await h.stores.usage.recordUnmetered({
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:05:00.000Z',
+      provider: 'codex',
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('消費を報告しない provider のターンがある');
+    expect(reply).toContain('codex');
+    expect(reply).toContain('合計 $2.00');
+  });
+
+  it('台帳が空でも、消費を報告しない provider のターンは「取れなかった」と出す', async () => {
+    const h = harness();
+    await h.stores.usage.recordUnmetered({
+      layer: 'manager',
+      site: 'session',
+      managerId: 'mgr-1',
+      date: '2026-08-14',
+      at: '2026-08-14T10:05:00.000Z',
+      provider: 'codex',
+    });
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).toContain('消費を報告しない provider のターンがある');
+    expect(reply).not.toContain('$0');
+  });
+
+  it('消費を報告しない provider が無ければ、その行を1文字も足さない', async () => {
+    const h = harness();
+    await spent(h);
+
+    const reply = await h.call('usage_read', {});
+
+    expect(reply).not.toContain('消費を報告しない provider');
+  });
+
   it('$1 未満を丸めて 0 にしない（「使っていない」と読めてしまう）', async () => {
     const h = harness();
     await spent(h);

@@ -268,6 +268,7 @@ import {
   describeAccountUsage,
   describeUnreadableUsage,
   describeUnreadableUsageRows,
+  describeUnmeteredUsage,
   describeUnrecordedManagers,
   describeUsageDateOrder,
   describeWebSearchRequests,
@@ -14976,12 +14977,16 @@ function renderUsage(
   // **集計で読めずに外した行が在れば、どの分岐でも「合計に入っていない」と言う**
   // （Issue #2427）。無ければ空配列なので、既存の出力は1文字も変わらない。
   const unreadableRowsLines = describeUnreadableUsageRows(aggregate.unreadableRows);
+  // **消費を報告しない provider のターンが在れば、0 ではなく取れなかったと言う**
+  // （Issue #486 M7）。欄が無ければ空配列で、既存の出力は1文字も変わらない。
+  const unmeteredLines = describeUnmeteredUsage(aggregate.unmeteredRows);
 
   if (since === null) {
     return [
       '台帳にはまだ1件も記録が無い。',
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
       ...unreadableRowsLines,
+      ...unmeteredLines,
       ...(view.unrecordedManagers === undefined ? [] : ['', ...view.unrecordedManagers]),
     ].join('\n');
   }
@@ -15046,9 +15051,11 @@ function renderUsage(
     }
     lines.push(...renderRisenSection(risen, formatUsageAxisLine));
     lines.push(...unreadableRowsLines);
+    lines.push(...unmeteredLines);
   } else if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
     lines.push(...unreadableRowsLines);
+    lines.push(...unmeteredLines);
     // **取りこぼしは照会範囲と無関係に全期間で判定する**（`findUnrecordedManagers`
     // の doc）ので、この範囲に台帳の行が無くても出す。
     if (view.unrecordedManagers !== undefined) lines.push('', ...view.unrecordedManagers);
@@ -15070,6 +15077,7 @@ function renderUsage(
     // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
     lines.push(...describeUnreadableUsage(summary.total));
     lines.push(...unreadableRowsLines);
+    lines.push(...unmeteredLines);
     // **合計値の隣に必ず出す（Issue #98）。**
     if (view.unrecordedManagers !== undefined) lines.push(...view.unrecordedManagers);
 
