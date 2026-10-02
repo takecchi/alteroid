@@ -32,7 +32,11 @@ import {
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
-import { ARCHIVE_REMOVED_BYTES_UNIT_NOTE, describeGithubCi } from '@alteroid/core';
+import {
+  ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
+  describeGithubCi,
+  JOURNAL_SEARCH_UNCOVERED_LIST,
+} from '@alteroid/core';
 import {
   CGROUP_EVENTS_UNKNOWN_NOTE,
   formatCgroupEventsNote,
@@ -716,7 +720,7 @@ export async function runSlashCommand(
           const prefix = type === undefined ? '' : `type=${type} に絞った上で、`;
           stdout.write(
             `${prefix}「${q}」に当たる日誌はありません。` +
-              'ただし tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていないので、' +
+              `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていないので、` +
               'そこにだけ書かれている語はここでは当たりません\n',
           );
         }
