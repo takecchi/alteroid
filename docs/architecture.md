@@ -343,10 +343,13 @@ manager_id → runner_id → sdk session_id → workspace locator
 type WorkspaceLocator =
   | { kind: 'runner-volume'; runnerId: string; path: string }  // M4 の既定
   | { kind: 'shared-volume'; path: string }                    // 共有 FS（M5）
+  | { kind: 'unknown'; runnerId: string; path: string; reason: string } // 永続性を確かめられなかった
   | { kind: 'git'; repository: string; ref: string; patchId?: string }; // 再構築（M5）
 ```
 
-M4 で実際に使うのは `runner-volume` だけである。**runner のローカルパス（走行中の
+`ALTEROID_WORKSPACE_KIND` が無いか読めないときは `unknown` に倒れる。いまの配備はこれを設定していないので、本番で書かれるのは `unknown` だけである（#216 で導入）。
+
+`runner-volume` / `shared-volume` / `git` が書かれるのは、運用者が `ALTEROID_WORKSPACE_KIND` で明示したときだけである。**runner のローカルパス（走行中の
 トランスクリプトの置き場など）を台帳に持たないこと** — runner が入れ替わった瞬間に嘘になる。
 生ログへは runner の API → アーカイブ → 預かったセッションの生ログ、の順で降りる。
 
