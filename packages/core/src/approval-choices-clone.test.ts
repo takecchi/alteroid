@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone, InvalidApprovalSelectionsError } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -75,15 +76,6 @@ function boot(stores: Stores): { clone: CloneHost; inputs: string[] } {
   return { clone, inputs: sdk.inputs };
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
-  await vi.waitFor(
-    () => {
-      if (!predicate()) throw new Error('待ちきれなかった');
-    },
-    { timeout: 3000, interval: 5 },
-  );
-}
-
 function seed(overrides: Partial<PendingApproval> = {}): PendingApproval {
   return {
     id: 'ap-1',
@@ -105,7 +97,7 @@ describe('Clone#answerApproval の selections（issue #2525）', () => {
     ];
 
     await clone.answerApproval('ap-1', '金曜は避けたい', undefined, selections);
-    await waitFor(() => inputs.length > 0);
+    await waitFor(() => inputs.length > 0, '回答のターンが起きる');
 
     const folded =
       'Q1 デプロイ先: (a) Railway［推奨］ / その他: ただし来週\n' +
@@ -201,7 +193,7 @@ describe('Clone#answerApproval の selections（issue #2525）', () => {
       }),
     );
     const { inputs } = boot(stores);
-    await waitFor(() => inputs.length > 0);
+    await waitFor(() => inputs.length > 0, '回答のターンが起きる');
 
     expect(inputs[0]).toContain('"questionId":"target"');
     const [pending] = (await stores.inbox.peekPending()).entries;
