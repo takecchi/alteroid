@@ -29,14 +29,18 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
  * ファイル全体に効くので、混ぜると向こうの歯まで差し替えた実装の上で走る。
  */
 
-const throwing = vi.hoisted(() => ({ inspect: false, inputHead: false }));
+const throwing = vi.hoisted(() => ({
+  inspect: false,
+  inputHead: false,
+  inspectMessage: '判定器が落ちた（テスト用）',
+}));
 
 vi.mock('./bash-wait-guard.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./bash-wait-guard.js')>();
   return {
     ...actual,
     inspectBashCommand: (...args: Parameters<typeof actual.inspectBashCommand>) => {
-      if (throwing.inspect) throw new Error('判定器が落ちた（テスト用）');
+      if (throwing.inspect) throw new Error(throwing.inspectMessage);
       return actual.inspectBashCommand(...args);
     },
   };
@@ -98,11 +102,13 @@ beforeEach(() => {
   dir = makeTempDirSync('alteroid-runner-pre-tool-use-throws-');
   throwing.inspect = false;
   throwing.inputHead = false;
+  throwing.inspectMessage = '判定器が落ちた（テスト用）';
 });
 
 afterEach(async () => {
   throwing.inspect = false;
   throwing.inputHead = false;
+  throwing.inspectMessage = '判定器が落ちた（テスト用）';
   await host?.shutdown().catch(() => undefined);
 });
 
@@ -135,6 +141,19 @@ describe('ガードの判定そのものが投げたら、閉じる側（deny）
     const result = await firePreToolUse(options, bash(ALLOWED_COMMAND));
 
     expect(result).toMatchObject(DENY);
+  });
+
+  it('deny の理由は伏せ字を通す: 例外の2行目以降は CLI・モデル側へ出ない（issue #2559）', async () => {
+    const options = await startedOptions();
+    throwing.inspect = true;
+    throwing.inspectMessage = '判定器が落ちた（テスト用）\nparams: FAKE_SECRET_VALUE_2559';
+
+    const result = await firePreToolUse(options, bash(ALLOWED_COMMAND));
+
+    expect(result).toMatchObject(DENY);
+    const text = JSON.stringify(result);
+    expect(text).toContain('判定器が落ちた（テスト用）');
+    expect(text).not.toContain('FAKE_SECRET_VALUE_2559');
   });
 
   it('対照: inspectBashCommand が投げなければ、弾かない形の Bash は今までどおり通す', async () => {

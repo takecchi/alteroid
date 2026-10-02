@@ -3910,7 +3910,8 @@ class Registry implements RunnerRegistry {
       } catch (error) {
         if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
         entry.client = null;
-        entry.error = redactErrorText(String(error), process.env);
+        const redacted = redactErrorText(String(error), process.env);
+        entry.error = redacted;
         entry.since = new Date().toISOString();
         if (isRetryableRunnerError(error)) {
           // 待てば直る。**回数では諦めない**（諦めた先に残るのは、宛先を失った
@@ -3920,7 +3921,9 @@ class Registry implements RunnerRegistry {
         } else {
           // 待っても直らない。挑み直さずに知らせる（`select` はこの状態を見る）。
           entry.state = 'unusable';
-          this.#notify?.({ label: entry.source.label, error: String(error) });
+          // 知らせはクローンの文脈まで届く（`announce` → `postToClone`）。`entry.error` と同じ
+          // 伏せ字を通した値を渡す（issue #2559）。
+          this.#notify?.({ label: entry.source.label, error: redacted });
           this.#failIfAllUnusable();
         }
       } finally {

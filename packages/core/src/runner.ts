@@ -4617,7 +4617,8 @@ class RunnerSession {
           });
         } catch (error) {
           // 判定できなかった呼び出しは通さない（issue #1960。閉じる側へ倒す）。
-          const message = error instanceof Error ? error.message : String(error);
+          // reason は CLI・モデル側へ出る。伏せ字を通す（issue #2559。#2509 と同じ扱い）。
+          const message = reasonOf(error);
           return {
             kind: 'deny',
             reason: `Bash のガードの判定が例外で終わったので、安全側で拒否した（${message}）。形を変えずに打ち直さず、依頼者へ報告すること。`,

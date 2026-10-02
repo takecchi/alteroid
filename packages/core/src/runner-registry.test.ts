@@ -1,5 +1,5 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool } from './manager.js';
 import { createLocalRunner } from './runner-local.js';
@@ -202,6 +202,37 @@ describe('runner の名簿', () => {
     const started = Date.now();
     await expect(registry.select({})).rejects.toThrow(/どれも使えない/);
     expect(Date.now() - started).toBeLessThan(500);
+
+    await registry.stop();
+  });
+
+  it('クローンへの知らせは伏せ字を通す: URL の資格と params: 以降は載らない（issue #2559）', async () => {
+    const failures: { label: string; error: string }[] = [];
+    const registry = createRunnerRegistry([], {
+      retryBaseMs: 1,
+      retryMaxMs: 1,
+      notify: (failure) => failures.push(failure),
+    });
+
+    await registry.register({
+      label: 'http://runner:4518',
+      open: async () => {
+        throw new RunnerHttpError(
+          '鍵を拒まれた: http://alteroid:FAKEPASS2559@runner:4518\nparams: FAKE_SECRET_VALUE_2559',
+          401,
+        );
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(failures).toHaveLength(1);
+    });
+    const error = failures[0]?.error ?? '';
+    expect(error).toContain('鍵を拒まれた');
+    expect(error).not.toContain('FAKEPASS2559');
+    expect(error).not.toContain('FAKE_SECRET_VALUE_2559');
+    // 名簿の `entry.error` と同じ値である（片方だけ伏せる形に戻らない）。
+    expect(registry.entries()).toMatchObject([{ state: 'unusable', error }]);
 
     await registry.stop();
   });
