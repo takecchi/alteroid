@@ -2,13 +2,19 @@
  * 試験用の偽の `TuiApi`。`chat()` は呼び出しごとに「台本」（イベント列）を 1 つ消費し、
  * 台本の途中に `Promise` を置くと、そこで止まって試験が好きな時に再開できる。
  */
+import { matchesJournalSearch, type JournalEntry } from '@alteroid/core';
+
 import type {
   ChatEvent,
   ConversationMessage,
   ConversationSummary,
   HeaderCounts,
+  JournalListQuery,
+  JournalStreamItem,
   ManagerListQuery,
   ManagerRow,
+  MemoryDoc,
+  MemoryRow,
   TuiApi,
   UnreadableManager,
 } from './api.js';
@@ -30,7 +36,19 @@ export interface FakeApi extends TuiApi {
   /** 窓が日誌の先頭に届いていない会話の id。 */
   unreachedStart: Set<string>;
   counts: HeaderCounts;
-  journal: { events: (string | Error)[] }[];
+  /** 1 本目 = 最初の接続の台本。文字列は種別だけ（本体なし）、オブジェクトは本体つき。 */
+  journal: { events: (string | JournalStreamItem | Error | Promise<void>)[] }[];
+  /** 新しい順（`at` 降順）の日誌。`GET /journal` はこれを絞って返す。 */
+  journalEntries: JournalEntry[];
+  journalListCalls: JournalListQuery[];
+  /** 次の `listJournal` を失敗させる。 */
+  journalListFails: string | null;
+  /** `GET /journal` の応答に載せる地平。 */
+  journalHorizon: { oldestAt?: string | null; crossesHorizon?: boolean };
+  memoryRows: MemoryRow[];
+  memoryDocs: Record<string, MemoryDoc>;
+  memoryListFails: string | null;
+  readMemoryCalls: string[];
   endFails: boolean;
   /** 新しい順（`startedAt` 降順）の委譲。 */
   managerRows: ManagerRow[];
@@ -72,6 +90,14 @@ export function fakeApi(): FakeApi {
     unreachedStart: new Set(),
     counts: { pendingApprovals: 0, runningManagers: 0 },
     journal: [],
+    journalEntries: [],
+    journalListCalls: [],
+    journalListFails: null,
+    journalHorizon: {},
+    memoryRows: [],
+    memoryDocs: {},
+    memoryListFails: null,
+    readMemoryCalls: [],
     endFails: false,
     managerRows: [],
     unreadableManagers: [],
@@ -150,7 +176,7 @@ export function fakeApi(): FakeApi {
       const stream = api.journal.shift();
       if (stream === undefined) {
         // 台本が無ければ繋がったまま黙る（中断されるまで待つ）。
-        yield 'open';
+        yield { type: 'open', entry: null };
         await new Promise<void>((resolve) => {
           signal.addEventListener('abort', () => resolve(), { once: true });
         });
@@ -158,8 +184,46 @@ export function fakeApi(): FakeApi {
       }
       for (const event of stream.events) {
         if (event instanceof Error) throw event;
-        yield event;
+        if (event instanceof Promise) {
+          await event;
+          continue;
+        }
+        yield typeof event === 'string' ? { type: event, entry: null } : event;
       }
+    },
+    listJournal(query) {
+      api.journalListCalls.push(query);
+      if (api.journalListFails !== null) return Promise.reject(new Error(api.journalListFails));
+      let rows = api.journalEntries;
+      const types = query.types ?? [];
+      if (types.length > 0) rows = rows.filter((e) => types.includes(e.type));
+      if (query.q !== undefined && query.q !== '') {
+        const q = query.q;
+        rows = rows.filter((e) => matchesJournalSearch(e, q));
+      }
+      // `since` / `until` は inclusive（デーモンと同じ）。
+      if (query.since !== undefined) {
+        const since = query.since;
+        rows = rows.filter((e) => e.at >= since);
+      }
+      if (query.until !== undefined) {
+        const until = query.until;
+        rows = rows.filter((e) => e.at <= until);
+      }
+      return Promise.resolve({
+        entries: rows.slice(0, query.limit),
+        ...(query.horizon === true || query.since !== undefined || query.until !== undefined
+          ? api.journalHorizon
+          : {}),
+      });
+    },
+    listMemory() {
+      if (api.memoryListFails !== null) return Promise.reject(new Error(api.memoryListFails));
+      return Promise.resolve(api.memoryRows);
+    },
+    readMemory(slug) {
+      api.readMemoryCalls.push(slug);
+      return Promise.resolve(api.memoryDocs[slug] ?? null);
     },
   };
   return api;
@@ -172,4 +236,53 @@ export function gate(): { wait: Promise<void>; open: () => void } {
     open = resolve;
   });
   return { wait, open };
+}
+
+/** 試験用の日誌 1 件（`type` ごとに必要な欄は `extra` で足す。形の検査はしない）。 */
+export function journalEntry(
+  id: string,
+  type: JournalEntry['type'],
+  at: string,
+  extra: Record<string, unknown> = {},
+): JournalEntry {
+  return { id, at, type, ...extra } as unknown as JournalEntry;
+}
+
+/** `n` 分目の ISO 時刻（`n` が大きいほど新しい）。 */
+export function minute(n: number): string {
+  return new Date(Date.UTC(2026, 9, 2, 0, n)).toISOString();
+}
+
+/** 人間との発言（`exchange`）。 */
+export function said(n: number, text = `発言${String(n)}`): JournalEntry {
+  return journalEntry(`e${String(n)}`, 'exchange', minute(n), {
+    with: 'human',
+    role: 'inbound',
+    text,
+  });
+}
+
+/** 試験用の記憶 1 件（一覧の行）。 */
+export function memoryRow(slug: string, patch: Partial<MemoryRow> = {}): MemoryRow {
+  return {
+    slug,
+    title: `${slug} のタイトル`,
+    kind: 'fact',
+    description: `${slug} の要旨`,
+    descriptionFreshness: { kind: 'fresh' },
+    updatedAt: '2026-10-02T00:00:00.000Z',
+    createdAt: { kind: 'known', at: '2026-10-01T00:00:00.000Z' },
+    bytes: 2048,
+    ...patch,
+  };
+}
+
+/** 試験用の記憶 1 件（詳細）。 */
+export function memoryDoc(slug: string, content: string): MemoryDoc {
+  return {
+    slug,
+    content,
+    createdAt: { kind: 'known', at: '2026-10-01T00:00:00.000Z' },
+    updatedAt: '2026-10-02T00:00:00.000Z',
+  };
 }

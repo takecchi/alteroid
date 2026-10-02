@@ -214,15 +214,19 @@ describe('JSON の口（hono/client）', () => {
 });
 
 describe('journalStream（GET /journal/stream）', () => {
-  it('open と、届いたエントリの種別を順に流す。認証ヘッダを付ける', async () => {
+  it('open と、届いたエントリ（種別と本体）を順に流す。認証ヘッダを付ける', async () => {
     replies.push(
       sse(
         'event: open\ndata: {"ok":true}\n\nevent: escalation\ndata: {"type":"escalation"}\n\n: ping\n\n',
       ),
     );
     const api = createTuiApi(target);
-    const names = await collect(api.journalStream(new AbortController().signal));
-    expect(names).toEqual(['open', 'escalation']);
+    const items = await collect(api.journalStream(new AbortController().signal));
+    // 種別と本体（日誌のタブが、この 1 本から本体を受ける）。open は本体なし。
+    expect(items).toEqual([
+      { type: 'open', entry: null },
+      { type: 'escalation', entry: { type: 'escalation' } },
+    ]);
     expect(sent[0]).toMatchObject({ url: 'http://127.0.0.1:4517/journal/stream', method: 'GET' });
     expect(sent[0]?.headers.authorization).toBe('Bearer tok');
   });
@@ -233,5 +237,68 @@ describe('journalStream（GET /journal/stream）', () => {
     await expect(collect(api.journalStream(new AbortController().signal))).rejects.toThrow(
       /alteroid login/,
     );
+  });
+});
+
+describe('日誌と記憶の口', () => {
+  it('GET /journal: limit・type（カンマ区切り）・q・since・until・horizon を Web と同じ名前で送る', async () => {
+    const api = createTuiApi(target);
+    replies.push(
+      json({
+        entries: [{ id: 'e1', at: 't', type: 'exchange' }],
+        oldestAt: 'o',
+        crossesHorizon: true,
+      }),
+    );
+    const result = await api.listJournal({
+      limit: 100,
+      types: ['decision', 'escalation'],
+      q: '語',
+      until: '2026-10-02T00:00:00.000Z',
+      horizon: true,
+    });
+    expect(result).toEqual({
+      entries: [{ id: 'e1', at: 't', type: 'exchange' }],
+      oldestAt: 'o',
+      crossesHorizon: true,
+    });
+    const url = new URL(sent[0]?.url ?? '');
+    expect(url.pathname).toBe('/journal');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      limit: '100',
+      type: 'decision,escalation',
+      q: '語',
+      until: '2026-10-02T00:00:00.000Z',
+      horizon: 'true',
+    });
+    expect(sent[0]?.method).toBe('GET');
+  });
+
+  it('GET /journal: 絞らないときは type も q も送らない。失敗は理由つきの例外', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ entries: [] }));
+    await api.listJournal({ limit: 20, types: [], q: '' });
+    expect(Object.fromEntries(new URL(sent[0]?.url ?? '').searchParams)).toEqual({ limit: '20' });
+    replies.push(json({ error: 'type が不正' }, 400));
+    await expect(api.listJournal({ limit: 20 })).rejects.toThrow(
+      /日誌を読めませんでした（HTTP 400）/,
+    );
+  });
+
+  it('GET /memory は documents、GET /memory/{slug} は document。404 は null', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ documents: [{ slug: 'a', title: 'A' }] }));
+    expect((await api.listMemory()).map((r) => r.slug)).toEqual(['a']);
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/memory');
+
+    replies.push(json({ document: { slug: 'a', content: '# A', updatedAt: 'u' } }));
+    expect((await api.readMemory('a'))?.content).toBe('# A');
+    expect(new URL(sent[1]?.url ?? '').pathname).toBe('/memory/a');
+    expect(sent[1]?.method).toBe('GET');
+
+    replies.push(json({ error: 'no' }, 404));
+    expect(await api.readMemory('zzz')).toBeNull();
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.readMemory('a')).rejects.toThrow(/記憶を読めませんでした（HTTP 500）/);
   });
 });

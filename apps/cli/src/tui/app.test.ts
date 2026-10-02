@@ -3,9 +3,21 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { App } from './app.js';
 import { ChatController } from './chat-controller.js';
-import { fakeApi, gate, managerRow, type FakeApi } from './fake-api.js';
+import {
+  fakeApi,
+  gate,
+  journalEntry,
+  managerRow,
+  memoryDoc,
+  memoryRow,
+  minute,
+  said,
+  type FakeApi,
+} from './fake-api.js';
 import { HeaderFeed } from './header-feed.js';
+import { JournalController } from './journal-controller.js';
 import { ManagersController } from './managers-controller.js';
+import { MemoryController } from './memory-controller.js';
 import { renderFullscreen, type FakeStdin, type } from './test-helpers.js';
 import { waitFor } from './test-helpers.js';
 
@@ -23,6 +35,8 @@ interface Harness {
   controller: ChatController;
   feed: HeaderFeed;
   managers: ManagersController;
+  journal: JournalController;
+  memory: MemoryController;
   stdin: FakeStdin;
   frame: () => string;
   unmount: () => void;
@@ -33,6 +47,8 @@ const mounted: Harness[] = [];
 afterEach(() => {
   for (const h of mounted.splice(0)) {
     h.managers.dispose();
+    h.journal.dispose();
+    h.memory.dispose();
     h.feed.stop();
     h.unmount();
   }
@@ -48,9 +64,21 @@ function start(
   const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
   const managers = new ManagersController(api, { debounceMs: 10 });
   managers.attach(feed);
+  const journal = new JournalController(api);
+  journal.attach(feed);
+  const memory = new MemoryController(api, { debounceMs: 10 });
+  memory.attach(feed);
   feed.start();
   const { app, stdin, lastFrame } = renderFullscreen(
-    createElement(App, { api, controller, feed, managers, fullscreen: size.fullscreen ?? true }),
+    createElement(App, {
+      api,
+      controller,
+      feed,
+      managers,
+      journal,
+      memory,
+      fullscreen: size.fullscreen ?? true,
+    }),
     size.rows ?? 24,
     size.columns ?? 80,
   );
@@ -63,6 +91,8 @@ function start(
     controller,
     feed,
     managers,
+    journal,
+    memory,
     stdin,
     frame: lastFrame,
     unmount: () => app.unmount(),
@@ -94,15 +124,13 @@ describe('画面の骨組み', () => {
     expect(h.frame().split('\n').length).toBeLessThanOrEqual(20);
   });
 
-  it('承認待ち・日誌・記憶のタブは「次の段階で実装」。Esc で入力欄を抜けて数字で移り、1 で会話へ戻る', async () => {
+  it('承認待ちのタブはまだ「次の段階で実装」。Esc で入力欄を抜けて数字で移り、1 で会話へ戻る', async () => {
     const h = start();
     await waitFor(() => h.frame().includes('メッセージ'));
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
     h.stdin.write('2');
     await waitFor(() => h.frame().includes('承認待ち: 次の段階で実装'));
-    h.stdin.write('4');
-    await waitFor(() => h.frame().includes('日誌: 次の段階で実装'));
     h.stdin.write('1');
     await waitFor(() => h.frame().includes('メッセージ'));
     expect(h.frame()).not.toContain('次の段階で実装');
@@ -112,8 +140,8 @@ describe('画面の骨組み', () => {
     const h = start();
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
-    h.stdin.write('4');
-    await waitFor(() => h.frame().includes('日誌: 次の段階で実装'));
+    h.stdin.write('2');
+    await waitFor(() => h.frame().includes('承認待ち: 次の段階で実装'));
     h.stdin.write('/');
     await waitFor(() => h.frame().includes('❯ /'));
     await type(h.stdin, 'approvals');
@@ -584,3 +612,327 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     expect(h.frame()).toContain('❯ abc');
   });
 });
+
+describe('日誌（ライブで流れる一覧と全文）', () => {
+  const UP = '\x1b[A';
+  const DOWN = '\x1b[B';
+  const PGUP = '\x1b[5~';
+
+  /** 新しい順（`n` 分目が大きいほど新しい）。 */
+  const entries = (to: number, from = 1) =>
+    Array.from({ length: to - from + 1 }, (_, i) => said(to - i));
+
+  async function openJournal(h: Harness): Promise<void> {
+    await type(h.stdin, '/journal');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+  }
+
+  it('/journal で直近を読み、1 件 1 行（時刻・種別・要旨）で出す。量の多い種別も Web と同じく隠さない', async () => {
+    const h = start((api) => {
+      api.journalEntries = [
+        journalEntry('t1', 'turn_usage', minute(3), {
+          layer: 'clone',
+          site: 'chat',
+          managerId: 'm',
+          models: { opus: { costUsd: 0.5, cacheReadInputTokens: 1, cacheCreationInputTokens: 2 } },
+        }),
+        journalEntry('d1', 'decision', minute(2), { decision: '進める', grounds: '前例がある' }),
+        said(1, '最初の発言'),
+      ];
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('最初の発言'));
+    const frame = h.frame();
+    expect(frame).toContain('[exchange] human ← 最初の発言');
+    expect(frame).toContain('[decision] 進める（根拠: 前例がある）');
+    expect(frame).toContain('[turn_usage]');
+    expect(frame).toContain('これより古い記録は無い（全 3 件）');
+    expect(h.api.journalListCalls).toEqual([{ limit: 100, types: [], q: '', horizon: true }]);
+    // 古い→新しい。末尾が最新。
+    expect(frame.indexOf('最初の発言')).toBeLessThan(frame.indexOf('[decision]'));
+    expect(frame.indexOf('[decision]')).toBeLessThan(frame.indexOf('[turn_usage]'));
+    // フッタのヒント。
+    expect(frame).toContain('Enter 全文');
+    expect(frame).toContain('f 種別');
+  });
+
+  it('ヘッダが張っている 1 本の SSE の新着が流れ、末尾に追従する', async () => {
+    const live = gate();
+    const h = start((api) => {
+      api.journalEntries = entries(2);
+      api.journal.push({
+        events: ['open', live.wait, { type: 'exchange', entry: said(9, '流れてきた') }],
+      });
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('● 末尾に追従中'));
+    expect(h.frame()).not.toContain('流れてきた');
+    live.open();
+    await waitFor(() => h.frame().includes('流れてきた'));
+    expect(h.frame()).toContain('● 末尾に追従中');
+    expect(h.api.journalListCalls).toHaveLength(1); // 新着は取り直さず、SSE の本体を使う
+  });
+
+  it('上へ遡っている間は位置を止める。新着が来ても動かず、n で最新へ戻って追従する', async () => {
+    const live = gate();
+    const h = start(
+      (api) => {
+        api.journalEntries = entries(40);
+        api.journal.push({
+          events: ['open', live.wait, { type: 'exchange', entry: said(99, '遅れて届いた') }],
+        });
+      },
+      { rows: 24 },
+    );
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('発言40'));
+    // 可視窓だけを描く: 古い行は画面に無い。
+    expect(h.frame()).not.toContain('発言1 ');
+    expect(h.frame().split('\n').length).toBeLessThanOrEqual(24);
+
+    // 半画面ずつ 2 回上がる（最新から 20 件。近いうちは窓が末尾に掛かったままなので、十分に遡る）。
+    h.stdin.write(PGUP);
+    h.stdin.write(PGUP);
+    await waitFor(() => h.frame().includes('位置を止めている（新しい側にあと 20 件'));
+    live.open();
+    // 新着は届いているが、読んでいる位置は動かない。
+    await waitFor(() => h.journal.store.getSnapshot().entries.length === 41);
+    h.stdin.write(UP); // 後ろに 1 つ入力を送り、それが描かれるのを待つ
+    await waitFor(() => h.frame().includes('位置を止めている（新しい側にあと 22 件'));
+    expect(h.frame()).not.toContain('遅れて届いた');
+
+    h.stdin.write('n');
+    await waitFor(() => h.frame().includes('● 末尾に追従中'));
+    expect(h.frame()).toContain('遅れて届いた');
+  });
+
+  it('先頭まで上がると古い側を自動で読み足す（until）', async () => {
+    const h = start((api) => {
+      api.journalEntries = entries(150);
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('古い側はまだ在る'));
+    h.stdin.write(PGUP);
+    // 100 件の先頭（最古）まで一気に上がる。
+    for (let i = 0; i < 12; i += 1) h.stdin.write(PGUP);
+    await waitFor(() => h.api.journalListCalls.length === 2);
+    expect(h.api.journalListCalls[1]).toMatchObject({ until: minute(51) });
+    await waitFor(() => h.journal.store.getSnapshot().entries.length === 150);
+    await waitFor(() => h.frame().includes('これより古い記録は無い（全 150 件）'));
+  });
+
+  it('Enter で 1 件の全文を開き、Esc で一覧へ戻る（PgDn で読み進められる）', async () => {
+    const long = Array.from({ length: 60 }, (_, i) => `長い本文の${String(i)}行目`).join('\n');
+    const h = start((api) => {
+      api.journalEntries = [said(2, long), said(1, '短い発言')];
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('短い発言'));
+    h.stdin.write(ENTER); // 選択は最新（長い方）
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    const detail = h.frame();
+    expect(detail).toContain('[exchange] e2');
+    expect(detail).toContain('長い本文の0行目'); // 頭から読む
+    expect(detail).not.toContain('長い本文の59行目');
+    expect(detail).toContain('↓ あと');
+    for (let i = 0; i < 12; i += 1) h.stdin.write('\x1b[6~');
+    await waitFor(() => h.frame().includes('長い本文の59行目'));
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('日誌（絞り:'));
+    expect(h.frame()).toContain('短い発言');
+  });
+
+  it('f で種別を選んで絞る。サーバへ type を投げ、絞った結果の 0 件は「何も無い」と言わない', async () => {
+    const h = start((api) => {
+      api.journalEntries = [
+        journalEntry('d1', 'decision', minute(2), { decision: '進める', grounds: 'a' }),
+        said(1, '雑談'),
+      ];
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('雑談'));
+    h.stdin.write('f');
+    await waitFor(() => h.frame().includes('種別で絞り込む'));
+    expect(h.frame()).toContain('[ ] turn_usage'); // 13 種すべてが選べる
+    h.stdin.write(DOWN); // decision
+    h.stdin.write(' ');
+    await waitFor(() => h.frame().includes('[x] decision'));
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('絞り: type=decision'));
+    await waitFor(() => !h.frame().includes('雑談'));
+    expect(h.api.journalListCalls.at(-1)).toMatchObject({ types: ['decision'] });
+    expect(h.frame()).toContain('[decision] 進める');
+
+    // tool_use に絞ると 0 件 → 絞り込みを外せば見えるかもしれないと言う。
+    h.stdin.write('f');
+    await waitFor(() => h.frame().includes('種別で絞り込む'));
+    h.stdin.write('c'); // 全部外す（今は decision だけが選ばれている）
+    await waitFor(() => !h.frame().includes('[x] decision'));
+    for (let i = 0; i < 3; i += 1) h.stdin.write(DOWN); // tool_use
+    h.stdin.write(' ');
+    await waitFor(() => h.frame().includes('[x] tool_use'));
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('type=tool_use に当たる記録は無い'));
+    expect(h.frame()).toContain('絞り込みを外せば見えるかもしれない');
+    expect(h.frame()).not.toContain('何も記録されていない');
+  });
+
+  it('Esc で種別の選択をやめると、絞りは変わらない', async () => {
+    const h = start((api) => {
+      api.journalEntries = [said(1, '雑談')];
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('雑談'));
+    h.stdin.write('f');
+    await waitFor(() => h.frame().includes('種別で絞り込む'));
+    h.stdin.write(' ');
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('日誌（絞り: すべて'));
+    expect(h.api.journalListCalls).toHaveLength(1);
+  });
+
+  it('/journal type=… q=… [件数] は CLI /journal と同じ解き方で絞る。知らない種別は問い合わせる前に断る', async () => {
+    const h = start((api) => {
+      api.journalEntries = [
+        journalEntry('d1', 'decision', minute(2), { decision: 'やめる', grounds: 'a' }),
+        said(1, '雑談'),
+      ];
+    });
+    await type(h.stdin, '/journal 50 type=decision,escalation q=や め');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('type=decision,escalation'));
+    expect(h.api.journalListCalls).toEqual([
+      { limit: 50, types: ['decision', 'escalation'], q: 'や め', horizon: true },
+    ]);
+
+    h.stdin.write(ESC); // 一覧の画面は入力欄を持たない。/ で会話へ戻ってコマンドを打つ。
+    await type(h.stdin, '/');
+    await type(h.stdin, 'journal type=bogus');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('type= に知らない値が入っています: bogus'));
+    expect(h.api.journalListCalls).toHaveLength(1); // 撃っていない
+  });
+
+  it('取れなかったのを空と描かない', async () => {
+    const h = start((api) => {
+      api.journalListFails = '繋がらない';
+    });
+    await type(h.stdin, '/journal');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('日誌を読めなかった（空ではない）: 繋がらない'));
+    expect(h.frame()).not.toContain('何も記録されていない');
+  });
+
+  it('ライブ接続が切れていれば、そう言う', async () => {
+    const h = start((api) => {
+      api.journalEntries = [said(1, '雑談')];
+      api.journal.push({ events: ['open', new Error('切れた')] });
+    });
+    await openJournal(h);
+    await waitFor(() => h.frame().includes('ライブ切断'));
+    expect(h.frame()).toContain('ライブ切断（再接続中）');
+  });
+
+  it('日誌のタブでも Ctrl+D で終了できる', async () => {
+    const h = start();
+    await openJournal(h);
+    h.stdin.write(CTRL_D);
+    await waitFor(() => h.exited());
+    expect(h.exited()).toBe(true);
+  });
+});
+
+describe('記憶（一覧と詳細。読むだけ）', () => {
+  async function openMemory(h: Harness): Promise<void> {
+    await type(h.stdin, '/memory');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('記憶（'));
+  }
+
+  const fixture = (api: FakeApi): void => {
+    api.memoryRows = [
+      memoryRow('persona', {
+        title: '人となり',
+        kind: 'premise',
+        description: '判断の前提となる価値観',
+        descriptionFreshness: {
+          kind: 'stale',
+          staleForMs: 3 * 86_400_000,
+          drift: { kind: 'unrecorded' },
+        },
+      }),
+      memoryRow('deploy', { title: 'デプロイの手順', description: '本番へ出す前の確認' }),
+    ];
+    api.memoryDocs['deploy'] = memoryDoc('deploy', '# デプロイ\n\n- 本番の前に **確認** する');
+  };
+
+  it('/memory で一覧（タイトルと要旨だけ）。本文は載せない。要旨の印は要旨の前', async () => {
+    const h = start(fixture, { columns: 120 });
+    await openMemory(h);
+    await waitFor(() => h.frame().includes('デプロイの手順'));
+    const frame = h.frame();
+    expect(frame).toContain('[premise] 人となり  persona');
+    expect(frame).toContain('要旨は本文より');
+    expect(frame).toContain('判断の前提となる価値観');
+    expect(frame).toContain('[fact] デプロイの手順  deploy');
+    expect(frame).toContain('2.0 KB');
+    expect(frame).not.toContain('本番の前に'); // 本文は詳細で読む
+    expect(frame).toContain('読むだけ');
+    expect(h.api.readMemoryCalls).toEqual([]);
+  });
+
+  it('Enter で本文（Markdown）を読み、Esc で一覧へ戻る。編集・削除の口は無い', async () => {
+    const h = start(fixture);
+    await openMemory(h);
+    await waitFor(() => h.frame().includes('デプロイの手順'));
+    h.stdin.write('\x1b[B');
+    await waitFor(() =>
+      h
+        .frame()
+        .split('\n')
+        .some((l) => l.includes('❯') && l.includes('デプロイの手順')),
+    );
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('本番の前に'));
+    const detail = h.frame();
+    expect(h.api.readMemoryCalls).toEqual(['deploy']);
+    expect(detail).toContain('デプロイの手順');
+    expect(detail).not.toContain('**確認**'); // Markdown として整形される
+    expect(detail).toContain('Esc 一覧へ');
+    expect(detail).toContain('読むだけ');
+
+    // 編集・削除に当たるキーは何も起こさない。
+    for (const key of ['e', 'd', 'x', 'i', 's']) h.stdin.write(key);
+    h.stdin.write(UP_ARROW);
+    await waitFor(() => h.frame().includes('本番の前に'));
+    expect(h.api.readMemoryCalls).toEqual(['deploy']);
+
+    h.stdin.write(ESC);
+    await waitFor(() => h.frame().includes('記憶（2 件'));
+    expect(h.frame()).toContain('人となり');
+  });
+
+  it('空の記憶、無い記憶（404）、読めなかったのを区別して言う', async () => {
+    const h = start((api) => {
+      api.memoryRows = [memoryRow('gone')];
+    });
+    await openMemory(h);
+    await waitFor(() => h.frame().includes('gone のタイトル'));
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('この記憶は無い（404）'));
+  });
+
+  it('一覧を読めなかったのを「まだ空」と描かない', async () => {
+    const h = start((api) => {
+      api.memoryListFails = '繋がらない';
+    });
+    await type(h.stdin, '/memory');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('記憶を読めなかった（空ではない）'));
+    expect(h.frame()).toContain('繋がらない');
+    expect(h.frame()).not.toContain('まだ空');
+  });
+});
+
+const UP_ARROW = '\x1b[A';

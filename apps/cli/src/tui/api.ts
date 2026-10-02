@@ -7,9 +7,12 @@
  * 画面（`chat-controller.ts` / `app.tsx`）はこの `TuiApi` インターフェースだけを見る。
  * 試験では偽物を渡す。
  */
+import type { JournalEntry } from '@alteroid/core';
+
 import { createClient } from '../client.js';
 import { withErrorReason } from '../format.js';
 import { describeInterruptOutcome } from '../interrupt.js';
+import type { MemorySummary } from '../memory.js';
 import { describeAuthFailure, type Target } from '../target.js';
 import { readSSE } from './sse.js';
 
@@ -95,6 +98,43 @@ export interface ManagerActionResult {
   detail: string;
 }
 
+/** 記憶の一覧の 1 件。CLI `memory list` と同じ型に、Web の一覧が出す大きさ（`bytes`）を足したもの。 */
+export type MemoryRow = MemorySummary & { bytes?: number };
+
+/** `GET /memory/{slug}` の `document`（TUI が使う欄だけ）。 */
+export interface MemoryDoc {
+  slug: string;
+  content: string;
+  createdAt: MemorySummary['createdAt'];
+  updatedAt: string;
+}
+
+/** `GET /journal` の問い合わせ（Web の `useJournalWindow` と同じ欄）。 */
+export interface JournalListQuery {
+  limit: number;
+  /** 種別（カンマ区切りにして渡す）。空なら絞らない。 */
+  types?: readonly string[];
+  /** 本文を語で探す（空なら渡さない）。 */
+  q?: string;
+  since?: string;
+  until?: string;
+  /** 絞らずに日誌の地平（`oldestAt` / `crossesHorizon`）も欲しいとき。 */
+  horizon?: boolean;
+}
+
+export interface JournalListResult {
+  /** 新しい順。 */
+  entries: JournalEntry[];
+  oldestAt?: string | null;
+  crossesHorizon?: boolean;
+}
+
+/** `GET /journal/stream` で届いた 1 件。`open` と、本体が読めなかったものは `entry` が `null`。 */
+export interface JournalStreamItem {
+  type: string;
+  entry: JournalEntry | null;
+}
+
 export interface TuiApi {
   /** 接続先（ヘッダに出す）。 */
   readonly baseUrl: string;
@@ -126,8 +166,17 @@ export interface TuiApi {
   /** 追加指示（`requestId` / `decision` は付けない — 回答として消費させない）。 */
   sendManagerMessage(id: string, text: string): Promise<ManagerActionResult>;
   stopManager(id: string): Promise<ManagerActionResult>;
-  /** `GET /journal/stream`。接続できたとき `open`、以後は届いたエントリの種別（`exchange` など）を流す。 */
-  journalStream(signal: AbortSignal): AsyncGenerator<string>;
+  /**
+   * `GET /journal/stream`。接続できたとき `open`、以後は届いたエントリ（種別と本体）を流す。
+   * ヘッダの件数と日誌のタブが、この 1 本を共有する（2 本目は張らない）。
+   */
+  journalStream(signal: AbortSignal): AsyncGenerator<JournalStreamItem>;
+  /** `GET /journal`（新しい順）。 */
+  listJournal(query: JournalListQuery): Promise<JournalListResult>;
+  /** `GET /memory`。一覧はタイトルと要旨だけ（本文は詳細で読む）。 */
+  listMemory(): Promise<MemoryRow[]>;
+  /** `GET /memory/{slug}`。`null` は 404（無い）。 */
+  readMemory(slug: string): Promise<MemoryDoc | null>;
 }
 
 /** 人間へそのまま見せてよい文言を持つ失敗。 */
@@ -311,8 +360,45 @@ export function createTuiApi(target: Target): TuiApi {
         '日誌の購読',
         signal,
       )) {
-        yield event.name;
+        yield {
+          type: event.name,
+          entry: event.name === 'open' ? null : event.json<JournalEntry>(),
+        };
       }
+    },
+
+    async listJournal(query) {
+      const type = (query.types ?? []).join(',');
+      const response = await client.journal.$get({
+        query: {
+          limit: String(query.limit),
+          ...(type === '' ? {} : { type }),
+          ...(query.q === undefined || query.q === '' ? {} : { q: query.q }),
+          ...(query.since === undefined ? {} : { since: query.since }),
+          ...(query.until === undefined ? {} : { until: query.until }),
+          ...(query.horizon === true ? { horizon: 'true' as const } : {}),
+        },
+      });
+      if (!response.ok) throw await failure('日誌を読めませんでした', response);
+      const body = await response.json();
+      return {
+        entries: body.entries as JournalEntry[],
+        ...(body.oldestAt === undefined ? {} : { oldestAt: body.oldestAt }),
+        ...(body.crossesHorizon === undefined ? {} : { crossesHorizon: body.crossesHorizon }),
+      };
+    },
+
+    async listMemory() {
+      const response = await client.memory.$get();
+      if (!response.ok) throw await failure('記憶の一覧を読めませんでした', response);
+      return (await response.json()).documents as MemoryRow[];
+    },
+
+    async readMemory(slug) {
+      const response = await client.memory[':slug'].$get({ param: { slug } });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await failure('記憶を読めませんでした', response);
+      return (await response.json()).document as MemoryDoc;
     },
   };
 }

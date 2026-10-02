@@ -215,17 +215,18 @@ export const Footer: FC<{ hint: string }> = ({ hint }) => (
   </Box>
 );
 
-const PLACEHOLDER_NOTES: Record<Exclude<TabId, 'chat' | 'managers'>, string> = {
+const PLACEHOLDER_NOTES: Record<
+  Exclude<TabId, 'chat' | 'managers' | 'journal' | 'memory'>,
+  string
+> = {
   approvals: '承認待ちの一覧と、答える画面',
-  journal: 'ライブで流れる日誌と、種類での絞り込み',
-  memory: '記憶の一覧と詳細（まずは読むだけ）',
 };
 
 /** 次の段階で作る画面の仮置き。 */
-export const Placeholder: FC<{ tab: Exclude<TabId, 'chat' | 'managers'>; height: number }> = ({
-  tab,
-  height,
-}) => {
+export const Placeholder: FC<{
+  tab: Exclude<TabId, 'chat' | 'managers' | 'journal' | 'memory'>;
+  height: number;
+}> = ({ tab, height }) => {
   const label = TABS.find((t) => t.id === tab)?.label ?? '';
   return (
     <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>

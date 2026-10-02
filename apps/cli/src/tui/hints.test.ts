@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HINT_INPUT,
+  HINT_JOURNAL_DETAIL,
+  HINT_JOURNAL_FILTER,
+  HINT_JOURNAL_LIST,
+  HINT_MEM_DETAIL,
+  HINT_MEM_LIST,
   HINT_MGR_CONFIRM,
   HINT_MGR_DETAIL,
   HINT_MGR_INPUT,
@@ -23,6 +28,11 @@ describe('フッタのキーヒント', () => {
       HINT_MGR_DETAIL,
       HINT_MGR_INPUT,
       HINT_MGR_CONFIRM,
+      HINT_JOURNAL_LIST,
+      HINT_JOURNAL_DETAIL,
+      HINT_JOURNAL_FILTER,
+      HINT_MEM_LIST,
+      HINT_MEM_DETAIL,
     ]) {
       expect(stringWidth(hint)).toBeLessThanOrEqual(80);
     }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fakeApi } from './fake-api.js';
+import { fakeApi, said } from './fake-api.js';
 import { affectsHeader, HeaderFeed, retryDelay } from './header-feed.js';
 
 describe('retryDelay（指数バックオフ）', () => {
@@ -126,5 +126,51 @@ describe('HeaderFeed', () => {
     const before = api.journal.length;
     await flush(60_000);
     expect(api.journal.length).toBe(before);
+  });
+});
+
+describe('HeaderFeed.onEntry（日誌のタブが 1 本の SSE を共有する口）', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('届いたエントリの本体を全種別で渡す（件数に響かない種別も）。open は渡さない。解除できる', async () => {
+    const api = fakeApi();
+    api.journal.push({
+      events: [
+        'open',
+        { type: 'exchange', entry: said(1) },
+        { type: 'turn_usage', entry: { ...said(2), type: 'turn_usage' } as never },
+        'escalation', // 本体が読めなかった
+      ],
+    });
+    const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+    const seen: string[] = [];
+    const stop = feed.onEntry((entry) => seen.push(entry.id));
+    const events: string[] = [];
+    feed.onEvent((type) => events.push(type));
+    feed.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen).toEqual(['e1', 'e2']);
+    // onEvent は従来どおり: 量の多い種別は届かない。
+    expect(events).toEqual(['open', 'exchange', 'escalation']);
+    stop();
+    feed.stop();
+  });
+
+  it('2 本目の SSE は張らない（journalStream の呼びは接続ごとに 1 本）', async () => {
+    const api = fakeApi();
+    let opened = 0;
+    const original = api.journalStream.bind(api);
+    api.journalStream = (signal) => {
+      opened += 1;
+      return original(signal);
+    };
+    const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+    feed.onEntry(() => undefined);
+    feed.onEntry(() => undefined);
+    feed.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(opened).toBe(1);
+    feed.stop();
   });
 });

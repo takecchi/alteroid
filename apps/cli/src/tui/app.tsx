@@ -8,6 +8,7 @@
 import { Box, useApp, useInput, useWindowSize } from 'ink';
 import { useMemo, useRef, useState, type FC } from 'react';
 
+import { parseJournalSearchTokens } from '../chat.js';
 import type { ConversationSummary, TuiApi } from './api.js';
 import type { ChatController } from './chat-controller.js';
 import { resolveCommand, helpLines, type CommandAction } from './commands.js';
@@ -24,6 +25,11 @@ import {
 import type { HeaderFeed } from './header-feed.js';
 import {
   HINT_INPUT,
+  HINT_JOURNAL_DETAIL,
+  HINT_JOURNAL_FILTER,
+  HINT_JOURNAL_LIST,
+  HINT_MEM_DETAIL,
+  HINT_MEM_LIST,
   HINT_MGR_CONFIRM,
   HINT_MGR_DETAIL,
   HINT_MGR_INPUT,
@@ -34,7 +40,25 @@ import {
 } from './hints.js';
 import { useCoalescedStore, useSyncedState } from './hooks.js';
 import { editText, normalizeChord, resolveEnter } from './input.js';
+import type { JournalController } from './journal-controller.js';
+import { JOURNAL_TYPES, type JournalType } from './journal-format.js';
+import {
+  JOURNAL_DETAIL_HEAD_ROWS,
+  JournalDetailHead,
+  JournalDetailStatus,
+  JournalFilter,
+  JournalList,
+  journalDetailLines,
+} from './journal-view.js';
+import { JOURNAL_MAX_LIMIT } from './journal-window.js';
 import { chatLayout, TABS, type TabId } from './layout.js';
+import type { MemoryController } from './memory-controller.js';
+import {
+  MEMORY_DETAIL_HEAD_ROWS,
+  MemoryDetailHead,
+  MemoryList,
+  memoryDetailStatus,
+} from './memory-view.js';
 import type { ManagersController } from './managers-controller.js';
 import {
   DETAIL_HEAD_ROWS,
@@ -77,16 +101,30 @@ export interface AppProps {
   feed: HeaderFeed;
   /** 「委譲」タブ（一覧・詳細）の状態と操作。 */
   managers: ManagersController;
+  /** 「日誌」タブ（一覧・種別の絞り込み・全文）の状態と操作。 */
+  journal: JournalController;
+  /** 「記憶」タブ（一覧・詳細。読むだけ）の状態と操作。 */
+  memory: MemoryController;
   /** 全画面レイアウト（root の高さを端末の行数に固定）を使うか。小さい端末ではインライン。 */
   fullscreen: boolean;
 }
 
-export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen }) => {
+export const App: FC<AppProps> = ({
+  api,
+  controller,
+  feed,
+  managers,
+  journal,
+  memory,
+  fullscreen,
+}) => {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
   const chat = useCoalescedStore(controller.store);
   const header = useCoalescedStore(feed.store);
   const mgr = useCoalescedStore(managers.store);
+  const jr = useCoalescedStore(journal.store);
+  const mem = useCoalescedStore(memory.store);
 
   const [tab, setTab, tabRef] = useSyncedState<TabId>('chat');
   const [zone, setZone, zoneRef] = useSyncedState<Zone>('input');
@@ -95,6 +133,9 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
   /** 委譲の詳細の入力欄（会話の下書きとは別に持つ）と、生ログのスクロール位置。 */
   const [mgrBuffer, setMgrBuffer, mgrBufferRef] = useSyncedState<TextBuffer>(emptyBuffer());
   const [mgrAnchor, setMgrAnchor, mgrAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
+  /** 日誌の全文・記憶の本文のスクロール位置。 */
+  const [jAnchor, setJAnchor, jAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
+  const [memAnchor, setMemAnchor, memAnchorRef] = useSyncedState<ScrollAnchor>('bottom');
   const [picker, setPicker, pickerRef] = useSyncedState<PickerState | null>(null);
   const [quitting, setQuitting] = useState(false);
 
@@ -115,6 +156,21 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
     [mgr.detail?.transcript, columns],
   );
   const mgrWin = logWindow(mgrRows, mgrLogHeight, mgrAnchor);
+
+  /** 日誌の全文: 頭 3 行と最下行 1 行のぶん、窓を縮める。 */
+  const jLogHeight = Math.max(1, layout.bodyHeight - JOURNAL_DETAIL_HEAD_ROWS - 1);
+  const jRows = useMemo(
+    () => (jr.detail === null ? [] : journalDetailLines(jr.detail, columns)),
+    [jr.detail, columns],
+  );
+  const jWin = logWindow(jRows, jLogHeight, jAnchor);
+  /** 記憶の本文（Markdown）。 */
+  const memLogHeight = Math.max(1, layout.bodyHeight - MEMORY_DETAIL_HEAD_ROWS - 1);
+  const memRows = useMemo(
+    () => logLines(mem.detail?.body ?? [], columns),
+    [mem.detail?.body, columns],
+  );
+  const memWin = logWindow(memRows, memLogHeight, memAnchor);
 
   const logRows = useMemo(() => logLines(chat.entries, columns), [chat.entries, columns]);
   const streamRows = streamLines(chat.streaming, columns, layout.logHeight);
@@ -156,11 +212,41 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
   const goTab = (next: TabId): void => {
     setTab(next);
     if (next === 'managers') managers.enter();
+    if (next === 'journal') journal.enter();
+    if (next === 'memory') memory.enter();
     setZone(next === 'chat' ? 'input' : 'nav');
     setPicker(null);
   };
 
-  const runCommand = (action: CommandAction): void => {
+  /**
+   * `/journal [件数] [type=<種別,…>] [q=<語>]`。CLI `/journal` と同じ `parseJournalSearchTokens` で解く
+   * （知らない種別は問い合わせる前に断る）。引数が無ければ今の絞りのまま画面へ移るだけ。
+   */
+  const applyJournalArgs = (args: string): void => {
+    const tokens = args.split(/\s+/).filter((t) => t.length > 0);
+    if (tokens.length === 0) return;
+    const parsed = parseJournalSearchTokens(tokens);
+    if (!parsed.ok) {
+      journal.note(parsed.message);
+      return;
+    }
+    let pageSize: number | undefined;
+    if (parsed.limit !== undefined) {
+      const n = Number(parsed.limit);
+      if (!Number.isInteger(n) || n < 1 || n > JOURNAL_MAX_LIMIT) {
+        journal.note(`件数は 1〜${String(JOURNAL_MAX_LIMIT)} の整数で指定する（${parsed.limit}）`);
+        return;
+      }
+      pageSize = n;
+    }
+    const types = (parsed.type ?? '')
+      .split(',')
+      .filter((t): t is JournalType => (JOURNAL_TYPES as readonly string[]).includes(t));
+    setJAnchor('bottom');
+    journal.setFilter(types, parsed.q ?? '', pageSize);
+  };
+
+  const runCommand = (action: CommandAction, args = ''): void => {
     // 会話の側へ効く（または会話のログへ書く）コマンドは、結果が見えるよう会話へ移ってから実行する。
     if (
       tabRef.current !== 'chat' &&
@@ -179,10 +265,14 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
       case 'exit':
         quit();
         break;
+      case 'journal':
+        // 絞りを先に決める（画面を開く読み込みと二重にならないように）。
+        applyJournalArgs(args);
+        goTab(action);
+        break;
       case 'chat':
       case 'approvals':
       case 'managers':
-      case 'journal':
       case 'memory':
         goTab(action);
         break;
@@ -206,7 +296,7 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
     setBuffer(emptyBuffer());
     if (text.length === 0) return;
     const resolved = resolveCommand(text);
-    if (resolved.kind === 'command') return runCommand(resolved.spec.action);
+    if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {
       controller.addSystem(
         `不明なコマンド: /${resolved.name}（/help で一覧。/ で始まる文をそのまま送るなら // で始める）`,
@@ -222,7 +312,7 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
     setMgrBuffer(emptyBuffer());
     if (text.length === 0) return;
     const resolved = resolveCommand(text);
-    if (resolved.kind === 'command') return runCommand(resolved.spec.action);
+    if (resolved.kind === 'command') return runCommand(resolved.spec.action, resolved.args);
     if (resolved.kind === 'unknown') {
       managers.setNotice(
         `不明なコマンド: /${resolved.name}（/help で一覧。/ で始まる文をそのまま送るなら // で始める）`,
@@ -286,6 +376,104 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
       setZone('input');
     } else if (input === 's') managers.askStop();
     else if (input === 'r') void managers.refreshDetail();
+    else return false;
+    return true;
+  };
+
+  /** 日誌の全文の総行数（ハンドラの中で最新の状態から数える）。 */
+  const jTotalRows = (): number => {
+    const detail = journal.store.getSnapshot().detail;
+    return detail === null ? 0 : journalDetailLines(detail, columns).length;
+  };
+  const memTotalRows = (): number =>
+    logLines(memory.store.getSnapshot().detail?.body ?? [], columns).length;
+
+  /**
+   * 日誌タブの nav ゾーンのキー。消費したら true。
+   * 一覧: ↑↓ PgUp/PgDn 選択（最新に居る間は末尾に追従）/ Enter 全文 / f 種別 / n 最新へ / m 古い側 / r 更新。
+   * 種別の選択: ↑↓ Space Enter c Esc。全文: Esc 一覧へ / ↑↓ PgUp PgDn。
+   */
+  const handleJournalNav = (
+    input: string,
+    key: Parameters<Parameters<typeof useInput>[0]>[1],
+  ): boolean => {
+    const state = journal.store.getSnapshot();
+    if (state.view === 'filter') {
+      if (key.escape) journal.cancelFilter();
+      else if (key.upArrow) journal.moveFilterCursor(-1);
+      else if (key.downArrow) journal.moveFilterCursor(1);
+      else if (input === ' ') journal.toggleFilterDraft();
+      else if (key.return) {
+        setJAnchor('bottom');
+        journal.applyFilter();
+      } else if (input === 'c') journal.clearFilterDraft();
+      else return false;
+      return true;
+    }
+    if (state.view === 'detail') {
+      const step = pageStep(jLogHeight);
+      if (key.escape) {
+        setJAnchor('bottom');
+        journal.back();
+      } else if (key.pageUp)
+        setJAnchor(scrollUp(jAnchorRef.current, jTotalRows(), jLogHeight, step));
+      else if (key.pageDown)
+        setJAnchor(scrollDown(jAnchorRef.current, jTotalRows(), jLogHeight, step));
+      else if (key.upArrow) setJAnchor(scrollUp(jAnchorRef.current, jTotalRows(), jLogHeight, 1));
+      else if (key.downArrow)
+        setJAnchor(scrollDown(jAnchorRef.current, jTotalRows(), jLogHeight, 1));
+      else return false;
+      return true;
+    }
+    const page = pageStep(layout.bodyHeight);
+    if (key.upArrow) journal.moveSelection(1);
+    else if (key.downArrow) journal.moveSelection(-1);
+    else if (key.pageUp) journal.moveSelection(page);
+    else if (key.pageDown) journal.moveSelection(-page);
+    else if (key.return) {
+      // 全文は頭から読む（末尾追従のログとは逆に、窓を先頭の 1 画面に置く）。
+      setJAnchor(jLogHeight);
+      journal.openDetail();
+    } else if (input === 'f') journal.openFilter();
+    else if (input === 'n') journal.jumpNewest();
+    else if (input === 'm') void journal.loadOlder();
+    else if (input === 'r') void journal.load();
+    else return false;
+    return true;
+  };
+
+  /** 記憶タブの nav ゾーンのキー。一覧: ↑↓ 選択 / Enter 開く / r 更新。詳細: Esc 一覧へ / ↑↓ PgUp PgDn。 */
+  const handleMemoryNav = (
+    input: string,
+    key: Parameters<Parameters<typeof useInput>[0]>[1],
+  ): boolean => {
+    const state = memory.store.getSnapshot();
+    if (state.view === 'detail') {
+      const step = pageStep(memLogHeight);
+      if (key.escape) {
+        setMemAnchor('bottom');
+        memory.back();
+      } else if (key.pageUp)
+        setMemAnchor(scrollUp(memAnchorRef.current, memTotalRows(), memLogHeight, step));
+      else if (key.pageDown)
+        setMemAnchor(scrollDown(memAnchorRef.current, memTotalRows(), memLogHeight, step));
+      else if (key.upArrow)
+        setMemAnchor(scrollUp(memAnchorRef.current, memTotalRows(), memLogHeight, 1));
+      else if (key.downArrow)
+        setMemAnchor(scrollDown(memAnchorRef.current, memTotalRows(), memLogHeight, 1));
+      else if (input === 'r') void memory.refreshDetail();
+      else return false;
+      return true;
+    }
+    const page = Math.max(1, pageStep(layout.bodyHeight) >> 1);
+    if (key.upArrow) memory.moveSelection(-1);
+    else if (key.downArrow) memory.moveSelection(1);
+    else if (key.pageUp) memory.moveSelection(-page);
+    else if (key.pageDown) memory.moveSelection(page);
+    else if (key.return) {
+      setMemAnchor(memLogHeight);
+      memory.openSelected();
+    } else if (input === 'r') void memory.loadList();
     else return false;
     return true;
   };
@@ -374,6 +562,8 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
 
     // 入力欄の外（nav）。
     if (tabRef.current === 'managers' && handleManagersNav(input, key)) return;
+    if (tabRef.current === 'journal' && handleJournalNav(input, key)) return;
+    if (tabRef.current === 'memory' && handleMemoryNav(input, key)) return;
     if (input === '/') {
       goTab('chat');
       setBuffer({ value: '/', cursor: 1 });
@@ -398,17 +588,27 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
     ? HINT_QUITTING
     : picker !== null
       ? HINT_PICKER
-      : tab === 'managers'
-        ? mgr.view === 'list'
-          ? HINT_MGR_LIST
-          : mgr.detail?.confirmStop === true
-            ? HINT_MGR_CONFIRM
-            : zone === 'input'
-              ? HINT_MGR_INPUT
-              : HINT_MGR_DETAIL
-        : tab === 'chat' && zone === 'input'
-          ? HINT_INPUT
-          : HINT_NAV;
+      : tab === 'journal'
+        ? jr.view === 'filter'
+          ? HINT_JOURNAL_FILTER
+          : jr.view === 'detail'
+            ? HINT_JOURNAL_DETAIL
+            : HINT_JOURNAL_LIST
+        : tab === 'memory'
+          ? mem.view === 'detail'
+            ? HINT_MEM_DETAIL
+            : HINT_MEM_LIST
+          : tab === 'managers'
+            ? mgr.view === 'list'
+              ? HINT_MGR_LIST
+              : mgr.detail?.confirmStop === true
+                ? HINT_MGR_CONFIRM
+                : zone === 'input'
+                  ? HINT_MGR_INPUT
+                  : HINT_MGR_DETAIL
+            : tab === 'chat' && zone === 'input'
+              ? HINT_INPUT
+              : HINT_NAV;
 
   return (
     <Box
@@ -435,6 +635,28 @@ export const App: FC<AppProps> = ({ api, controller, feed, managers, fullscreen 
           </>
         ) : (
           <ManagerList list={mgr.list} height={layout.bodyHeight} />
+        )
+      ) : tab === 'journal' ? (
+        jr.view === 'detail' && jr.detail !== null ? (
+          <>
+            <JournalDetailHead entry={jr.detail} now={jr.loadedAt} />
+            <LogView lines={jWin.entries} height={jLogHeight} />
+            <JournalDetailStatus hiddenBelow={jWin.hiddenBelow} />
+          </>
+        ) : jr.view === 'filter' ? (
+          <JournalFilter state={jr} height={layout.bodyHeight} />
+        ) : (
+          <JournalList state={jr} height={layout.bodyHeight} live={header.live} />
+        )
+      ) : tab === 'memory' ? (
+        mem.view === 'detail' && mem.detail !== null ? (
+          <>
+            <MemoryDetailHead detail={mem.detail} />
+            <LogView lines={memWin.entries} height={memLogHeight} />
+            <DetailStatusRow {...memoryDetailStatus(mem.detail, memWin.hiddenBelow)} />
+          </>
+        ) : (
+          <MemoryList state={mem} height={layout.bodyHeight} />
         )
       ) : tab !== 'chat' ? (
         <Placeholder tab={tab} height={layout.bodyHeight} />

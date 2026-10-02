@@ -38,8 +38,12 @@ export const COMMANDS: readonly CommandSpec[] = [
     action: 'managers',
     describe: '委譲（マネージャー）の画面へ移る（3）',
   },
-  { name: 'journal', action: 'journal', describe: '日誌の画面へ移る（4）' },
-  { name: 'memory', action: 'memory', describe: '記憶の画面へ移る（5）' },
+  {
+    name: 'journal',
+    action: 'journal',
+    describe: '日誌の画面へ移る（4）。[件数] type=<種別,…> q=<語> で絞る',
+  },
+  { name: 'memory', action: 'memory', describe: '記憶の画面へ移る（5。読むだけ）' },
   {
     name: 'conversations',
     aliases: ['history'],
@@ -98,6 +102,8 @@ export function helpLines(): string[] {
     '  Enter 送信 / Shift+Enter か行末の \\ + Enter で改行',
     '  Esc 入力欄を抜ける（そのあと 1〜5 で画面を移る、Tab か i で戻る）',
     '  PgUp / PgDn 会話ログのスクロール（末尾へ届くと追従に戻る）',
+    '  日誌の画面: ↑↓ 選ぶ / Enter 全文 / f 種別で絞る / n 最新へ戻って追従 / m 古い側 / r 読み直し',
+    '  記憶の画面（読むだけ）: ↑↓ 選ぶ / Enter 本文 / r 読み直し / Esc 一覧へ',
     '  Ctrl+C 走っているターンを止める / Ctrl+D（入力欄が空のとき）終了',
     '  Ctrl+U 入力欄を空にする',
     '  `//` で始めると、先頭の `/` を 1 つ外した文をそのまま送る',
