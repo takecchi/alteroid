@@ -1,5 +1,5 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ALWAYS_REDELIVER, createClone, InvalidApprovalSelectionsError } from './clone.js';
 import type { CloneHost } from './host.js';
@@ -76,11 +76,12 @@ function boot(stores: Stores): { clone: CloneHost; inputs: string[] } {
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > 3000) throw new Error('待ちきれなかった');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await vi.waitFor(
+    () => {
+      if (!predicate()) throw new Error('待ちきれなかった');
+    },
+    { timeout: 3000, interval: 5 },
+  );
 }
 
 function seed(overrides: Partial<PendingApproval> = {}): PendingApproval {
