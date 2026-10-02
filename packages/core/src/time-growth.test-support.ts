@@ -196,7 +196,9 @@ export function expectNotSuperlinear<TInput>(
       return assert.fail(
         `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${phase}の入力 n=${size} の1回が ` +
           `hardCapMs=${hardCapMs}ms で打ち切られた（node:vm の timeout で割り込み、終わるのを待たなかった）。` +
-          `それまでの最小: t(small)=${tSmallMs.toFixed(2)}ms, t(large)=${tLargeMs.toFixed(2)}ms。` +
+          (Number.isFinite(tSmallMs)
+            ? `それまでの最小: t(small)=${tSmallMs.toFixed(2)}ms, t(large)=${tLargeMs.toFixed(2)}ms。`
+            : 'まだ最小を測り終えていない。') +
           `n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}`,
       );
     }
