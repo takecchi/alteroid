@@ -16,6 +16,7 @@ import {
   POOL_OWNED_CREDENTIAL_NAMES,
   ROTATABLE_CREDENTIAL_KEYS,
 } from './credentials.js';
+import { CLONE_PROVIDER_ENV_KEY, MANAGER_PROVIDER_ENV_KEY } from './agent-provider-selection.js';
 import { CLONE_MODEL_ENV_KEY } from './clone.js';
 import { MANAGER_MODEL_ENV_KEY, WITHHELD_ENV_KEYS, WORKER_MODEL_ENV_KEY } from './runner.js';
 
@@ -456,9 +457,12 @@ describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が
       'ALTEROID_AUTH',
       // 群2: 層とモデル帯の対応＝人間の承認の置き場（2026-09-15）
       'ALTEROID_CLONE_MODEL',
+      'ALTEROID_CLONE_PROVIDER',
       'ALTEROID_GOOGLE_CLIENT_ID',
       'ALTEROID_GOOGLE_CLIENT_SECRET',
       'ALTEROID_MANAGER_MODEL',
+      // 層ごとの provider（#486 段 S1）。モデル帯と同じ構造
+      'ALTEROID_MANAGER_PROVIDER',
       'ALTEROID_PUBLIC_URL',
       'ALTEROID_WORKER_MODEL',
     ]);
@@ -471,6 +475,12 @@ describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が
    */
   it('モデル帯の3つは、各層が実際に読む環境変数名と一致する', () => {
     for (const key of [CLONE_MODEL_ENV_KEY, MANAGER_MODEL_ENV_KEY, WORKER_MODEL_ENV_KEY]) {
+      expect(ENV_FILE_OWNED_CREDENTIAL_NAMES).toContain(key);
+    }
+  });
+
+  it('provider の2つは、各層が実際に読む環境変数名と一致する', () => {
+    for (const key of [CLONE_PROVIDER_ENV_KEY, MANAGER_PROVIDER_ENV_KEY]) {
       expect(ENV_FILE_OWNED_CREDENTIAL_NAMES).toContain(key);
     }
   });
