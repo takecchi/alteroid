@@ -505,3 +505,43 @@ describe('alteroid access remove-unreadable（issue #2440）', () => {
     await expect(accessRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
   });
 });
+
+describe('alteroid access list — 読めない行（issue #2536）', () => {
+  it('読めない行が無ければ、読めない行の断りを出さない', async () => {
+    replies.push({ status: 200, body: { accounts: [] } });
+    const read = captureStdout();
+
+    await accessListCommand();
+
+    const text = read();
+    expect(text).not.toContain('読めない');
+    expect(text).not.toContain('remove-unreadable');
+    expect(text).toContain('まだ誰もログインしていません。');
+  });
+
+  it('件数と id・不正な欄名を出し、remove-unreadable へ導く。id の無い行は手で直すと言う', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        accounts: [],
+        rowsUnreadable: {
+          count: 2,
+          rows: [{ id: 'acct-bad', reason: '不正な欄: displayName' }],
+        },
+      },
+    });
+    const read = captureStdout();
+
+    await accessListCommand();
+
+    const text = read();
+    expect(text).toContain('読めないアカウントの行が 2 件ある');
+    expect(text).toContain('id=acct-bad  不正な欄: displayName');
+    expect(text).toContain('alteroid access remove-unreadable <id>');
+    expect(text).toContain('id が取れない行が 1 件');
+    expect(text).toContain('auth.json');
+    // 読めない行しか無いのに「誰もログインしていない」とは言わない。
+    expect(text).not.toContain('まだ誰もログインしていません。');
+    expect(text).toContain('誰もログインしていない、とは言えない');
+  });
+});

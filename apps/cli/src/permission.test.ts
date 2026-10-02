@@ -428,3 +428,60 @@ describe('alteroid permission remove-unreadable（issue #2440）', () => {
     await expect(permissionRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
   });
 });
+
+describe('alteroid permission list — 読めない行（issue #2536）', () => {
+  it('読めない行が無ければ、読めない行の断りを出さない', async () => {
+    replies.push({ status: 200, body: { grants: [grant()] } });
+    const read = captureStdout();
+
+    await permissionListCommand();
+
+    const text = read();
+    expect(text).not.toContain('読めない');
+    expect(text).not.toContain('remove-unreadable');
+  });
+
+  it('件数と id・不正な欄名を出し、remove-unreadable へ導く。id の無い行は手で直すと言う', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        grants: [grant()],
+        rowsUnreadable: {
+          count: 2,
+          rows: [{ id: 'row-1', reason: '不正な欄: route' }],
+        },
+      },
+    });
+    const read = captureStdout();
+
+    await permissionListCommand();
+
+    const text = read();
+    expect(text).toContain('読めない許可の行が 2 件ある');
+    expect(text).toContain('id=row-1  不正な欄: route');
+    expect(text).toContain('alteroid permission remove-unreadable <id>');
+    expect(text).toContain('id が取れない行が 1 件');
+    expect(text).toContain('permission-grants.json');
+    // 読める許可はそのまま出る。
+    expect(text).toContain('grant-1');
+  });
+
+  it('読めない行しか無いとき「許可は無い」とは言わない', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        grants: [],
+        rowsUnreadable: { count: 1, rows: [{ id: 'row-1', reason: '不正な欄: route' }] },
+      },
+    });
+    const read = captureStdout();
+
+    await permissionListCommand({ all: true });
+
+    const text = read();
+    expect(text).toContain('id=row-1');
+    expect(text).toContain('許可が無い、とは言えない');
+    expect(text).not.toContain('許可はまだ1件もありません');
+    expect(text).not.toContain('有効な許可はありません');
+  });
+});
