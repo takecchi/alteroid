@@ -483,10 +483,18 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     await router.navigate(`/chat/${OTHER}`);
     expect(await screen.findByText('別の話')).toBeTruthy();
     expect(aborted[0]).toBe(true);
+    // B の再生の口が張られた（2本目の応答を B が取った）のを見てから戻る。見ずに戻ると、
+    // B の口が張られる前に A へ戻った回は、A が2本目（B 向けの応答）を受け取ってしまう。
+    await waitFor(() => expect(streamCalls()).toBe(2));
 
     await router.navigate(`/chat/${ID}`);
+    // 戻った直後の「A の途中」は、再生からではなく、直前の会話として残した行
+    // （`retainedBy`）からも出る（実測: 3本目の再生から「A の途中」を抜いても、
+    // この findByText は通った）。だから文字が見えたことは「3本目の口が張られた」の
+    // 合図にならない。口の数は、文字とは別に待つ（CI で同期の toBe(3) が 2 を見て
+    // 落ちた: run 37067638577）。3本目の再生が本当に届いたかは、下の「と続き」が見る。
     expect(await within(transcript()).findByText('A の途中')).toBeTruthy();
-    expect(streamCalls()).toBe(3);
+    await waitFor(() => expect(streamCalls()).toBe(3));
     more.open();
     expect(await within(transcript()).findByText('A の途中と続き')).toBeTruthy();
   });
