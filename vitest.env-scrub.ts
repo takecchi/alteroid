@@ -27,7 +27,7 @@
  * 外す名前の規則。**迷ったら外す側へ倒す** — テストが本物の値を要ることは無い
  * （要るなら、そのテストが偽の値を自分で置くべきである）。
  *
- * 名前の全体に当てる規則（接頭辞・接続文字列）と、`_` で区切った語に当てる規則
+ * 名前の全体に当てる規則（接頭辞・接続文字列）と、英数字以外（`_` `-` `.` など）で区切った語に当てる規則
  * （`SECRET_ENV_NAME_WORDS`）の2段で見る。**語の単位で見るのは、末尾一致だけだと
  * 語の後ろに何かが付いた名前が漏れるからである**（16回目の横断レビュー:
  * `ALTEROID_RUNNER_TOKEN_SHA256` は `_TOKEN$` に当たらず、`PGPASSWORD` は
@@ -42,7 +42,8 @@ export const SECRET_ENV_NAME_PATTERNS: readonly RegExp[] = [
   // 接続文字列はユーザー名とパスワードを埋め込む
   // （`postgres://alteroid:<password>@db:5432/alteroid`。`compose.yaml` の
   // `ALTEROID_DATABASE_URL`）。
-  /(^|_)DATABASE_URL$/i,
+  // 間に語が挟まる形（Railway の `DATABASE_PUBLIC_URL`。`railway/README.md`）も外す（#1834）。
+  /(^|_)DATABASE(_[A-Z0-9]+)*_URL$/i,
   /(^|_)DB_URL$/i,
   // OAuth の client の ID。単独では秘密ではないが、この repo は client secret と組にして
   // 子プロセスから隠している（`apps/daemon/src/auth.ts` の `AUTH_WITHHELD_ENV_KEYS`。
@@ -51,7 +52,15 @@ export const SECRET_ENV_NAME_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * `_` で区切った語のうち、どれか1つがこの語そのもの（大小文字を区別しない）なら外す。
+ * 区切った語（{@link isSecretEnvName}）のうち、どれか1つがこの語そのもの（大小文字を
+ * 区別しない）なら外す。
+ *
+ * `URI` 以下は #1834 で足した。接続文字列（`MONGODB_URI`・`DB_CONN`・`CONNECTION_STRING`）、
+ * 認可の見出し（`AUTHORIZATION`・`BEARER`）、path そのものが秘密の URL（`SLACK_WEBHOOK_URL`）、
+ * 署名の鍵（`HMAC`・`SIGNATURE`）である。**`URL` という語そのものは足さない**
+ * （`ALTEROID_API_URL` のような資格でない URL を巻き込む）。**`AUTH` も足さない**
+ * （`ALTEROID_AUTH` は on/off の切り替えで、外すと認証の有無を測るテストが器に頼れなくなる。
+ * 足すかは #1834 に残した判断）。
  */
 export const SECRET_ENV_NAME_WORDS: readonly string[] = [
   'TOKEN',
@@ -71,10 +80,26 @@ export const SECRET_ENV_NAME_WORDS: readonly string[] = [
   'PAT',
   'DSN',
   'COOKIE',
+  'URI',
+  'CONN',
+  'CONNECTION',
+  'CONNSTR',
+  'AUTHORIZATION',
+  'BEARER',
+  'WEBHOOK',
+  'WEBHOOKS',
+  'HMAC',
+  'SIGNATURE',
 ];
 
 /**
- * `_` で区切った語が、この語で**終わる**なら外す。区切りの無い書き方
+ * 語が2つ以上ある名前の中にだけ在れば外す語。**単独の名前としては秘密ではない**
+ * （`PWD` は作業ディレクトリ）が、`DB_PWD` / `ADMIN_PWD` の `PWD` はパスワードである（#1834）。
+ */
+export const SECRET_ENV_NAME_WORDS_NOT_ALONE: readonly string[] = ['PWD'];
+
+/**
+ * 区切った語が、この語で**終わる**なら外す。区切りの無い書き方
  * （`PGPASSWORD`、`NPMTOKEN`）を拾うためである。
  */
 export const SECRET_ENV_NAME_WORD_SUFFIXES: readonly string[] = ['PASSWORD', 'TOKEN', 'SECRET'];
@@ -82,13 +107,16 @@ export const SECRET_ENV_NAME_WORD_SUFFIXES: readonly string[] = ['PASSWORD', 'TO
 /** その名前の環境変数を、テストの前に外すか。 */
 export function isSecretEnvName(name: string): boolean {
   if (SECRET_ENV_NAME_PATTERNS.some((pattern) => pattern.test(name))) return true;
+  // 英数字以外のすべてで区切る（#1834）。`_` だけで区切ると、`FAKE-API-KEY` や `FAKE.API.KEY` は
+  // 全体が1つの語になり、`KEY` に当たらずに漏れていた。
   const words = name
     .toUpperCase()
-    .split(/_+/)
+    .split(/[^A-Z0-9]+/)
     .filter((word) => word !== '');
   return words.some(
     (word) =>
       SECRET_ENV_NAME_WORDS.includes(word) ||
+      (words.length > 1 && SECRET_ENV_NAME_WORDS_NOT_ALONE.includes(word)) ||
       SECRET_ENV_NAME_WORD_SUFFIXES.some((suffix) => word.endsWith(suffix)),
   );
 }

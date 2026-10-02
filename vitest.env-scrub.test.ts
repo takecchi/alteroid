@@ -68,6 +68,57 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
     }
   });
 
+  /**
+   * #1834 で塞いだ形。`_` 以外で区切った名前（`-` `.`）、規則に無かった語（接続文字列・
+   * 認可の見出し・webhook・署名）、前に語の付いた `PWD`、間に語の挟まる `DATABASE_…_URL`。
+   * どれも偽の名前で、器の実際の環境変数は見ていない。
+   */
+  it('_ 以外で区切った名前と、#1834 で足した語も外す', () => {
+    for (const name of [
+      'FAKE-API-KEY',
+      'FAKE.API.KEY',
+      'fake-api-key',
+      'FAKE-DB-PASS',
+      'FAKE-AUTH-CREDENTIAL',
+      'FAKE-SVC-SECRET-VALUE',
+      'FAKE-TOKEN-SHA256',
+      'MONGODB_URI',
+      'DB_CONN',
+      'CONNECTION_STRING',
+      'DB_CONNSTR',
+      'HTTP_AUTHORIZATION',
+      'API_BEARER',
+      'SLACK_WEBHOOK_URL',
+      'DISCORD_WEBHOOK',
+      'FAKE_HMAC',
+      'REQUEST_SIGNATURE',
+      'DB_PWD',
+      'ADMIN_PWD',
+      'DATABASE_PUBLIC_URL',
+    ]) {
+      expect(isSecretEnvName(name), name).toBe(true);
+    }
+  });
+
+  it('#1834 で広げた後も、秘密でない名前は残す（外しすぎない対照）', () => {
+    for (const name of [
+      'PWD',
+      'OLDPWD',
+      'ALTEROID_API_URL',
+      'ALTEROID_AUTH',
+      'SSH_AUTH_SOCK',
+      'HTTP_PROXY',
+      'AWS_PROFILE',
+      'LICENSE',
+      'MONKEY',
+      'TURKEY',
+      'GIT_AUTHOR_NAME',
+      'npm_config_user_agent',
+    ]) {
+      expect(isSecretEnvName(name), name).toBe(false);
+    }
+  });
+
   it('秘密の語を部分に含むだけの語は巻き込まない（語の単位で見る対照）', () => {
     for (const name of [
       'GIT_AUTHOR_NAME',
