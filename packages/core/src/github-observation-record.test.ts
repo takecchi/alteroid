@@ -1,0 +1,122 @@
+import { describe, expect, it } from 'vitest';
+
+import { readProgress } from './progress-read.js';
+import { createMemoryStores } from './testing.js';
+import {
+  CLONE_ALLOWED_TOOLS,
+  CLONE_TOOL_NAMES,
+  GITHUB_OBSERVATION_CLONE_OBSERVER,
+  SELF_JOURNALING_CLONE_TOOLS,
+  TRACELESS_CLONE_TOOLS,
+  createCloneTools,
+  qualifiedToolName,
+} from './tools.js';
+
+function recordTool(stores: ReturnType<typeof createMemoryStores>) {
+  const tools = createCloneTools({
+    stores,
+    emit: () => undefined,
+    memoryCause: () => 'clone',
+    conversationId: () => undefined,
+  });
+  const found = tools.find((entry) => entry.name === 'github_observation_record');
+  if (!found) throw new Error('github_observation_record が登録されていない');
+  return {
+    found,
+    call: async (args: Record<string, unknown>) => {
+      const result = await found.handler(args as never, {});
+      return (result.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+    },
+  };
+}
+
+const OK = { status: 'ok', openIssues: 12, openPulls: 0, truncated: false } as const;
+
+describe('github_observation_record（#2245 段2）', () => {
+  it('クローンの許可名簿にあり、自前で日誌へ書く側の名簿に載る', () => {
+    expect(CLONE_TOOL_NAMES).toContain('github_observation_record');
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('github_observation_record'));
+    expect(SELF_JOURNALING_CLONE_TOOLS as readonly string[]).toContain('github_observation_record');
+    expect(TRACELESS_CLONE_TOOLS as readonly string[]).not.toContain('github_observation_record');
+  });
+
+  it('説明文に、failed は数を作らないこと・query に母集合の引数を含めることが書かれている', () => {
+    const { found } = recordTool(createMemoryStores());
+    expect(found.description).toContain('取れなかった回は数を作らない');
+    expect(found.description).toContain('母集合を切った引数');
+    expect(found.description).toContain('--state open --limit');
+  });
+
+  it('ok を日誌へ記録し、observedBy は器が clone と埋める。/progress がそれを返す', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    const reply = await call({
+      repo: 'takecchi/alteroid',
+      query: 'gh issue list --state open --limit 200',
+      limit: 200,
+      result: OK,
+    });
+    expect(reply).toContain('記録した');
+    const rows = await stores.journal.list({ types: ['github_observation'] });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      type: 'github_observation',
+      observedBy: GITHUB_OBSERVATION_CLONE_OBSERVER,
+      repo: 'takecchi/alteroid',
+      limit: 200,
+      result: OK,
+    });
+    const view = await readProgress(stores, { now: new Date() });
+    if (view.github.state !== 'observed') throw new Error('observed のはず');
+    expect(view.github.repos[0]!.latestOk).toMatchObject({ openIssues: 12, observedBy: 'clone' });
+  });
+
+  it('failed を記録し、数は混ざらない（引数に数を足しても落ちる）', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    const reply = await call({
+      repo: 'a/b',
+      query: 'gh issue list',
+      result: { status: 'failed', reason: 'gh: HTTP 502', openIssues: 99, openPulls: 99 },
+    });
+    expect(reply).toContain('取れなかった回として記録した');
+    const [row] = await stores.journal.list({ types: ['github_observation'] });
+    expect(row).toMatchObject({ result: { status: 'failed', reason: 'gh: HTTP 502' } });
+    expect(JSON.stringify(row)).not.toMatch(/openIssues|openPulls|99/);
+  });
+
+  it('observedBy を引数で上書きできない', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    await call({ repo: 'a/b', query: 'q', result: OK, observedBy: 'mgr-evil' });
+    const [row] = await stores.journal.list({ types: ['github_observation'] });
+    expect(row).toMatchObject({ observedBy: 'clone' });
+    expect(JSON.stringify(row)).not.toContain('mgr-evil');
+  });
+
+  it.each([
+    ['ok なのに数が無い', { repo: 'a/b', query: 'q', result: { status: 'ok' } }],
+    ['負の数', { repo: 'a/b', query: 'q', result: { ...OK, openIssues: -1 } }],
+    ['repo が空', { repo: '', query: 'q', result: OK }],
+    ['failed の理由が空', { repo: 'a/b', query: 'q', result: { status: 'failed', reason: '' } }],
+  ])('不正な入力（%s）は記録せず、送られた値を混ぜない', async (_name, args) => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    const reply = await call(args);
+    expect(reply).toContain('記録していない');
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+  });
+
+  it('日誌に書けないときは失敗を返し（書けたふりをしない）、/progress は変わらない', async () => {
+    const stores = createMemoryStores();
+    stores.journal.append = () => {
+      throw new Error('journal store unavailable (test)');
+    };
+    const { call } = recordTool(stores);
+    await expect(call({ repo: 'a/b', query: 'q', result: OK })).rejects.toThrow(
+      /github_observation_record/,
+    );
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+    expect((await readProgress(stores, { now: new Date() })).github.state).toBe('not_observed');
+  });
+});

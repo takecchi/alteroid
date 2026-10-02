@@ -182,6 +182,7 @@ import {
   commitmentUpdatedAt,
   describeAppraisal,
   formatAppraisalDecision,
+  githubObservationInputSchema,
   jobStatusSchema,
   memorySlugSchema,
   practiceSlugSchema,
@@ -684,6 +685,14 @@ export function qualifiedToolName(name: string): string {
   return `mcp__${MCP_SERVER_NAME}__${name}`;
 }
 
+/**
+ * `github_observation_record` が日誌へ書く `observedBy`。**この道具はクローンの MCP サーバにしか
+ * 載らない**（`createCloneTools` が唯一の組み立て点。マネージャーの文脈には載らない）ので、
+ * 呼び手は常にクローンである。**モデルの引数からは受けない**（名乗りを引数に任せると、
+ * 「誰の観測か」が申告の申告になる）。マネージャーの観測は `POST /github-observations` が受ける。
+ */
+export const GITHUB_OBSERVATION_CLONE_OBSERVER = 'clone';
+
 export const CLONE_TOOL_NAMES = [
   'memory_list',
   'memory_read',
@@ -716,6 +725,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_appraise',
   'appraisal_stats',
   'progress_read',
+  'github_observation_record',
   'inbox_remove_many',
   'profile_read',
   'profile_write',
@@ -763,6 +773,7 @@ export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
  * 直接数えること。
  */
 export const SELF_JOURNALING_CLONE_TOOLS = [
+  'github_observation_record',
   'memory_write',
   'memory_append',
   'memory_delete',
@@ -955,6 +966,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   manager_stop: false,
   archive_remove: false,
   archive_remove_many: false,
+  github_observation_record: false,
 };
 
 const SECRET_BEARING_CLONE_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -8426,6 +8438,65 @@ export function createCloneTools(context: ToolContext) {
           }
           throw error;
         }
+      },
+    ),
+
+    /**
+     * 観測した GitHub の数を日誌へ記録する口（#2245 段2）。`POST /github-observations`（daemon）と
+     * **同じ検証・同じ日誌の枝**（`githubObservationInputSchema`）を通る。`GET /progress` /
+     * `progress_read` の `github` がこれを返す。**デーモンは GitHub を見に行かない**——数は
+     * 観測した側（ここではクローン）の申告である。
+     *
+     * **`observedBy` は引数に無い。** 器が `GITHUB_OBSERVATION_CLONE_OBSERVER` を埋める。
+     * **日誌が全行為なので、書けなければ失敗を返す**（`appendJournalOrThrow`。書けたふりをしない）。
+     */
+    tool(
+      'github_observation_record',
+      [
+        '自分（または委譲先）が GitHub を見て数えた open Issue / open PR の件数を、日誌へ記録する。',
+        '`progress_read` / `GET /progress` の「GitHub」欄はこの記録を返す（デーモンは GitHub を見に行かない。値は観測した側の申告）。',
+        '**取れなかった回は数を作らない。** `result: { status: "failed", reason }` で、取れなかったことと理由を記録する（0 件と書かない）。',
+        '`query` には**母集合を切った引数を含める**（例: `gh issue list --state open --limit 200`）。`limit` を付けたなら `limit` にも同じ値を入れ、',
+        '件数が `limit` に達したときは `truncated: true`（数は下限）にする。',
+        '観測者はあなた（clone）として器が記録する（引数では指定できない）。いつ観測するかはここでは決まらない。',
+      ].join(' '),
+      {
+        repo: githubObservationInputSchema.shape.repo.describe('観測した repo（`owner/name`）'),
+        query: githubObservationInputSchema.shape.query.describe(
+          '何をどう数えたか（母集合を切る引数を含めたコマンド・条件）',
+        ),
+        limit:
+          githubObservationInputSchema.shape.limit.describe('母集合を切った件数の上限（あれば）'),
+        result: githubObservationInputSchema.shape.result.describe(
+          '観測の結果。ok のときだけ件数（openIssues / openPulls / truncated）、取れなかったときは failed と reason（数は持たない）',
+        ),
+      },
+      async (args) => {
+        // `observedBy` は引数から読まない（余剰の鍵は `pick` で落ちる）。
+        const parsed = githubObservationInputSchema.omit({ observedBy: true }).safeParse(args);
+        if (!parsed.success) {
+          // 送られた値は混ぜない（where だけ）。
+          const where = parsed.error.issues.map((issue) => issue.path.join('.')).join(', ');
+          return text(
+            `github 観測の形が不正のため記録していない${where === '' ? '' : `: ${where}`}。`,
+          );
+        }
+        const entry = await appendJournalOrThrow(
+          'github_observation_record',
+          stores.journal,
+          {
+            type: 'github_observation',
+            ...parsed.data,
+            observedBy: GITHUB_OBSERVATION_CLONE_OBSERVER,
+          },
+          'act-not-performed',
+        );
+        return text(
+          `GitHub の観測を記録した（${entry.id}。${parsed.data.repo}。観測者 ${GITHUB_OBSERVATION_CLONE_OBSERVER}）。` +
+            (parsed.data.result.status === 'failed'
+              ? '取れなかった回として記録した（数は無い）。'
+              : ''),
+        );
       },
     ),
 

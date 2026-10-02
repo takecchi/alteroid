@@ -9,6 +9,7 @@ import {
   INBOX_EVENT_TYPE_ORDER,
   jobSchema,
   jobStatusSchema,
+  githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
   mcpServersSchema,
@@ -2106,12 +2107,7 @@ const githubObservationFailedSchema = z.object({
  * `type` / `id` / `at` を除いたもの**（`journalVariant`。手で書き直さない）。`id` と `at` は
  * デーモンが振る。観測した側が名乗る申告であって、デーモンは値を確かめない。
  */
-export const githubObservationRequestSchema = (
-  journalVariant('github_observation') as Extract<
-    (typeof journalEntrySchema.options)[number],
-    { shape: { type: { value: 'github_observation' } } }
-  >
-).omit({ type: true, id: true, at: true });
+export const githubObservationRequestSchema = githubObservationInputSchema;
 
 const progressForecastBasisSchema = z.object({
   open: progressCount,

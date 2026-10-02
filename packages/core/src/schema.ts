@@ -2394,6 +2394,20 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
+
+/**
+ * `github_observation` の入力（`type` / `id` / `at` を除いた形。Issue #2245）。**日誌の枝そのものから
+ * 導く**——`POST /github-observations`（daemon）と道具 `github_observation_record` が同じ検証を
+ * 通るように、手で書き直さない。
+ */
+export const githubObservationInputSchema = (
+  journalEntrySchema.options.find(
+    (option) => option.shape.type.value === 'github_observation',
+  ) as Extract<
+    (typeof journalEntrySchema.options)[number],
+    { shape: { type: { value: 'github_observation' } } }
+  >
+).omit({ type: true, id: true, at: true });
 export type JournalEntryType = JournalEntry['type'];
 
 /**

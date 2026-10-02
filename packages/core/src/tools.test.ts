@@ -22833,6 +22833,24 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
         return callExpectingError(tools, 'practice_remove', { slug: 'daily' });
       },
     },
+    {
+      tool: 'github_observation_record',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-github-observation');
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        return callExpectingError(tools, 'github_observation_record', {
+          repo: 'a/b',
+          query: 'gh issue list --state open',
+          result: { status: 'ok', openIssues: 1, openPulls: 0, truncated: false },
+        });
+      },
+    },
   ];
 
   it.each(CASES)(
