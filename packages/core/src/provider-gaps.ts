@@ -100,6 +100,10 @@ export function describeRunnerProviderGaps(entries: readonly RunnerProviderEntry
   return lines;
 }
 
+/** runner の一覧が読めず provider を確かめられなかったときの1行。 */
+export const RUNNER_PROVIDER_UNVERIFIED =
+  'runner の provider を確かめられなかった（マネージャー層・作業者層の欠落は不明）';
+
 /** {@link collectRunnerProviderGaps} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
 export interface RunnerProviderSource {
   runners(): Promise<{
@@ -110,8 +114,10 @@ export interface RunnerProviderSource {
 
 /**
  * 接続中の runner それぞれが名乗るマネージャー層の欠落を、いまのプールから引く。
- * 名乗りを引く口を持たないプールは「確かめられない」ので何も足さない。
- * 読めなかったとき（`runners()` が落ちた）は `[]`（日報・`self_status` を壊さない）。
+ * 名乗りを引く口を持たないプールは何も足さない: 本番の `ManagerPool` は必ず持ち、
+ * 持たないのは型を満たすだけのテストの偽物だけなので、「確かめられなかった」とは読まない。
+ * `runners()` が落ちたときは、`[]`（欠落なしと同じ見た目）にせず「確かめられなかった」と
+ * いう1行を返す（日報・`self_status` を壊さないよう、例外は外へ出さない）。
  */
 export async function collectRunnerProviderGaps(
   pool: RunnerProviderSource,
@@ -129,7 +135,7 @@ export async function collectRunnerProviderGaps(
     }
     return describeRunnerProviderGaps(entries);
   } catch {
-    return [];
+    return [RUNNER_PROVIDER_UNVERIFIED];
   }
 }
 

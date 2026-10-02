@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { ManagerPool } from './manager.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
-import { describeProviderGaps, type ProviderGapSubject } from './provider-gaps.js';
+import {
+  RUNNER_PROVIDER_UNVERIFIED,
+  describeProviderGaps,
+  type ProviderGapSubject,
+} from './provider-gaps.js';
 import { createRunnerRegistry } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
 import type { SelfFacts } from './self.js';
@@ -35,7 +39,7 @@ const SELF: SelfFacts = {
 
 const RUNNER_LINE = 'runner「edge-1」のマネージャー層（偽）は usage を持たない';
 
-function poolWith(provider: string): ManagerPool {
+function poolWith(provider: string, failRunners = false): ManagerPool {
   const base: ManagerPool = {
     start: () => {
       throw new Error('not implemented');
@@ -83,18 +87,20 @@ function poolWith(provider: string): ManagerPool {
     ...base,
     list: () => Promise.resolve([]),
     runners: () =>
-      Promise.resolve({
-        runners: [
-          { label: 'edge-1', state: 'connected', since: 'x', runnerId: 'r1' },
-          { label: 'gone', state: 'lost', since: 'x', runnerId: 'r2' },
-        ],
-        unassigned: [],
-      }) as unknown as ReturnType<ManagerPool['runners']>,
+      failRunners
+        ? Promise.reject(new Error('boom'))
+        : (Promise.resolve({
+            runners: [
+              { label: 'edge-1', state: 'connected', since: 'x', runnerId: 'r1' },
+              { label: 'gone', state: 'lost', since: 'x', runnerId: 'r2' },
+            ],
+            unassigned: [],
+          }) as unknown as ReturnType<ManagerPool['runners']>),
     runnerManagerProvider: () => provider,
   };
 }
 
-function boot(provider: string) {
+function boot(provider: string, failRunners = false) {
   const { fn, calls } = fakeSdk();
   let captured: ToolContext | undefined;
   const clone = createClone({
@@ -102,7 +108,7 @@ function boot(provider: string) {
     stores: createMemoryStores(),
     queryFn: fn,
     env: {},
-    managers: poolWith(provider),
+    managers: poolWith(provider, failRunners),
     self: SELF,
     providerOf: (id) => (id === 'fake' ? FAKE : id === 'claude' ? CLAUDE_PROVIDER : undefined),
     runners: createRunnerRegistry([
@@ -165,6 +171,24 @@ describe('クローン — provider の欠落の配線', () => {
     s.clone.post(humanMessage('やあ'));
     await waitForDone(s.events);
     expect(await s.selfStatus()).toContain('未知の provider（mystery）');
+    await s.clone.stop();
+  });
+
+  it('runners() が落ちたら「確かめられなかった」の行が self_status と digest に出る（欠落なしに見せない）', async () => {
+    const s = boot('fake', true);
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+    expect(await s.selfStatus()).toContain(RUNNER_PROVIDER_UNVERIFIED);
+    s.clone.post({
+      type: 'self_initiative',
+      id: 'evt-unverified',
+      at: new Date().toISOString(),
+      reason: '定期 tick',
+    });
+    await waitFor(
+      () => s.calls.some((c) => c.inputs.join('\n').includes(RUNNER_PROVIDER_UNVERIFIED)),
+      'tick の digest に届く',
+    );
     await s.clone.stop();
   });
 });
