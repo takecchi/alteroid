@@ -10,7 +10,7 @@
  * 作る。待つのは画面に出るかどうかだけ。
  */
 import { useJournalLive } from '@alteroid/swr';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, useParams } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -441,7 +441,14 @@ describe('画面に戻ったとき、処理中の会話の途中経過に戻る'
     stray.open();
     await navigating;
     expect(await screen.findByText('別の話')).toBeTruthy();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // 実時間では待たない（#2146）。この再生の偽 SSE は `delayMs: 0` なので、ゲートを外した
+    // 後の1枠は数回のマクロタスクのうちに投入され、読み手へ渡る。その分だけ回して、
+    // 追いついてくる可能性のある描画を拾う。
+    for (let turn = 0; turn < 5; turn += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
     expect(screen.queryByText(/もれた/)).toBeNull();
     expect(screen.queryByText(/こちら/)).toBeNull();
   });
