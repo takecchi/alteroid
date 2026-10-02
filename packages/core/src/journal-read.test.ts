@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Stores } from './store.js';
+import { createSyntheticJournalStore } from './journal-scan.test-support.js';
 import { createMemoryStores } from './testing.js';
 import { createCloneTools } from './tools.js';
 
@@ -432,6 +433,149 @@ describe('journal_read — since/until の正規化（issue #1515）', () => {
 
     const reply = await call('journal_read', { until: 'not-a-datetime' });
     expect(reply).toContain('until に渡された「not-a-datetime」は日時として読めない');
+    expect(reply).not.toContain('積んだ判断');
+  });
+});
+
+/**
+ * 続きの位置（`afterId` / `afterAt`、Issue #2624）。`GET /journal` の `next` を
+ * `journal_read` でも受け渡せること。
+ */
+describe('journal_read — 続きの位置 afterId / afterAt', () => {
+  /** 応答の「続きは journal_read afterId=… afterAt=…」から2つの値を取る。 */
+  function readCursor(reply: string): { afterId: string; afterAt: string } | null {
+    const match = /続きは journal_read afterId=(\S+) afterAt=(\S+)/.exec(reply);
+    return match === null ? null : { afterId: match[1]!, afterAt: match[2]! };
+  }
+
+  /** pg の形（LIMIT の後で読めない行を捨てる）を再現した偽のストア。 */
+  function brokenStores(unreadable: (index: number) => boolean, total = 10): Stores {
+    const synthetic = createSyntheticJournalStore({
+      total,
+      entryAt: (index) => ({
+        type: 'decision',
+        decision: `判断-${String(index).padStart(2, '0')}`,
+        grounds: '記憶',
+      }),
+      unreadable,
+    });
+    return { ...createMemoryStores(), journal: synthetic.store };
+  }
+
+  it('頁が丸ごと読めない行だったとき、続きの位置を出し、それを渡すと先の行が読める', async () => {
+    // index 0..2 が読めない。limit=3 の最初の頁は空になる。
+    const call = tools(brokenStores((index) => index <= 2));
+
+    const first = await call('journal_read', { limit: 3 });
+    expect(first).toContain('読めない形の行だけだった');
+    // 第一の手段として afterId / afterAt を案内する（窓をずらす案内ではない）。
+    expect(first).toContain('afterId / afterAt');
+    expect(first).not.toContain('窓をずらして読み直すこと');
+    const cursor = readCursor(first);
+    expect(cursor).not.toBeNull();
+    expect(cursor!.afterId).toBe('synthetic-000000000002');
+
+    const second = await call('journal_read', { limit: 3, ...cursor! });
+    expect(second).toContain('判断-03');
+    expect(second).toContain('判断-05');
+    expect(second).not.toContain('判断-02');
+    // まだ先がある（index 6..9）ので、続きの位置がもう一度出る。
+    expect(readCursor(second)?.afterId).toBe('synthetic-000000000005');
+  });
+
+  it('一覧の応答にも続きの位置が出て、渡すと次の行から読み継げる', async () => {
+    const stores = createMemoryStores();
+    for (let i = 0; i < 5; i += 1) {
+      await stores.journal.append({
+        type: 'decision',
+        decision: `判断-${i}`,
+        grounds: '記憶',
+      });
+    }
+    const call = tools(stores);
+
+    const first = await call('journal_read', { limit: 2 });
+    expect(first).toContain('判断-4');
+    expect(first).toContain('判断-3');
+    const cursor = readCursor(first);
+    expect(cursor).not.toBeNull();
+
+    const second = await call('journal_read', { limit: 2, ...cursor! });
+    expect(second).toContain('判断-2');
+    expect(second).toContain('判断-1');
+    expect(second).not.toContain('判断-3');
+  });
+
+  it('next が null（本当の終わり）なら、続きの行を出さない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({ type: 'decision', decision: '最後の判断', grounds: '記憶' });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', {});
+    expect(reply).toContain('最後の判断');
+    expect(reply).not.toContain('続きは');
+    expect(readCursor(reply)).toBeNull();
+  });
+
+  it('予算で省略したときは、next ではなく表示した最後の行を続きにし、省略した行を飛ばさない', async () => {
+    const stores = createMemoryStores();
+    await fillJournal(stores, 100);
+    const call = tools(stores);
+
+    // 全件を頁に入れる（next は null）。それでも予算で省略が起きる。
+    const first = await call('journal_read', { limit: 100 });
+    expect(first).toContain('件は省略');
+    const all = await stores.journal.list({ limit: 100 });
+    const cursor = readCursor(first);
+    expect(cursor).not.toBeNull();
+    const lastShownIndex = all.findIndex((entry) => entry.id === cursor!.afterId);
+    // 表示した最後の行を指す（頁の最後の行ではない）。
+    expect(lastShownIndex).toBeGreaterThanOrEqual(0);
+    expect(lastShownIndex).toBeLessThan(all.length - 1);
+    expect(first).toContain(`id=${all[lastShownIndex]!.id}`);
+    expect(first).not.toContain(`id=${all[lastShownIndex + 1]!.id}`);
+
+    // 続きの先頭は、省略された最初の行である（飛ばしていない）。
+    const second = await call('journal_read', { limit: 100, ...cursor! });
+    expect(second).toContain(`id=${all[lastShownIndex + 1]!.id}`);
+    expect(second).not.toContain(`id=${all[lastShownIndex]!.id}`);
+  });
+
+  it('afterId だけ・afterAt だけは、日誌を読まずに断る', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({ type: 'decision', decision: '積んだ判断', grounds: '記憶' });
+    const call = tools(stores);
+
+    for (const args of [{ afterId: 'x' }, { afterAt: '2026-01-01T00:00:00.000Z' }]) {
+      const reply = await call('journal_read', args);
+      expect(reply).toContain('afterId と afterAt は両方一緒に渡す');
+      expect(reply).toContain('日誌は読んでいない');
+      expect(reply).not.toContain('積んだ判断');
+    }
+  });
+
+  it('afterAt が日時として読めなければ、日誌を読まずに断る', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({ type: 'decision', decision: '積んだ判断', grounds: '記憶' });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', { afterId: 'x', afterAt: 'not-a-datetime' });
+    expect(reply).toContain('afterAt に渡された「not-a-datetime」は日時として読めない');
+    expect(reply).toContain('日誌は読んでいない');
+    expect(reply).not.toContain('積んだ判断');
+  });
+
+  it('錨が見つからなければ「判定できない」と言い、先頭から読み直さない', async () => {
+    const stores = createMemoryStores();
+    await stores.journal.append({ type: 'decision', decision: '積んだ判断', grounds: '記憶' });
+    const call = tools(stores);
+
+    const reply = await call('journal_read', {
+      afterId: 'no-such-id',
+      afterAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(reply).toContain('判定できない');
+    expect(reply).toContain('先頭から読み直してもいない');
     expect(reply).not.toContain('積んだ判断');
   });
 });
