@@ -16041,6 +16041,9 @@
                           "required": ["status"]
                         }
                       ]
+                    },
+                    "cloneProvider": {
+                      "type": "string"
                     }
                   },
                   "required": ["runners", "daemonRevision"]

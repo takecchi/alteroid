@@ -290,6 +290,24 @@ describe('CloneRuntimeFacts の整形 — 観測した値と、取れていな�
   });
 
   /**
+   * クローン層の provider（#486 S9）。渡された id をそのまま出し、渡っていなければ
+   * `claude` と推測せず「まだ分からない」と言う。
+   */
+  it('クローンの provider は、渡された値をそのまま出し、無ければ claude と推測しない', () => {
+    expect(describeCloneRuntime({ ...RUNTIME, cloneProvider: 'claude' })).toContain(
+      'クローンの provider: claude',
+    );
+    expect(describeCloneRuntime({ ...RUNTIME, cloneProvider: 'other' })).toContain(
+      'クローンの provider: other',
+    );
+    const unknown = describeCloneRuntime(RUNTIME)
+      .split('\n')
+      .find((line) => line.startsWith('- クローンの provider'));
+    expect(unknown).toContain('まだ分からない');
+    expect(unknown).not.toContain('claude');
+  });
+
+  /**
    * **宣言の値で埋めていないことを、値そのものを変えて区別する。** 宣言帯
    * （`fable`）とは違う文字列を SDK の観測値に使い、その文字列がそのまま出る
    * ことを見る。

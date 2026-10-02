@@ -1578,6 +1578,8 @@ export async function main(): Promise<void> {
     // **マネージャー層は載せない** — runner ごとに `hello` で名乗りが変わるので、起動時に
     // 焼くと古くなる。あちらは `self_status` と日報・発意 tick の digest が実行時に引く。
     providerGaps: describeProviderGaps({ clone: cloneProvider }),
+    // クローン層の provider の id。`self_status` と `GET /runners` が同じ値を読む。
+    cloneProvider: cloneProvider.id,
   };
 
   /**
@@ -2398,6 +2400,7 @@ export async function main(): Promise<void> {
     scheduler,
     storage: storage.description,
     runners,
+    cloneProvider: cloneProvider.id,
     journalEvents: journalBus,
     accountUsage: () => usagePoller.state(),
     allowedOrigins,

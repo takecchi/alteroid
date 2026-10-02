@@ -9988,6 +9988,9 @@ class Clone implements CloneHost {
       systemPromptChars: heuristicChars(this.#distillMemory.systemPromptChars),
       lastContextUsage: this.#lastContextUsage,
       ...(this.#self?.providerGaps !== undefined ? { providerGaps: this.#self.providerGaps } : {}),
+      ...(this.#self?.cloneProvider !== undefined
+        ? { cloneProvider: this.#self.cloneProvider }
+        : {}),
     };
   }
 

@@ -85,6 +85,7 @@ afterEach(() => {
 interface RunnersResponse {
   runners: RunnerSummary[];
   daemonRevision: DaemonRevision;
+  cloneProvider?: string;
 }
 
 function renderSettings(response: RunnersResponse) {
@@ -223,6 +224,16 @@ describe('版の表示 — 人間もクローンと同じ材料を読める', ()
    * **0台のときこそ版が要る。** 0台は「まだ配線されていない」状態、つまり版を
    * 確かめたい状態そのものである。ここで落とすと、その状態でだけ答えが消える。
    */
+  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', async () => {
+    renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON, cloneProvider: 'claude' });
+    expect(await screen.findByText(/クローンの provider: claude/)).toBeTruthy();
+    cleanup();
+
+    renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
+    const unknown = await screen.findByText(/クローンの provider: 不明/);
+    expect(unknown.textContent).not.toContain('claude');
+  });
+
   it('runner が0台でも、デーモンの版は出す', async () => {
     renderSettings({ runners: [], daemonRevision: KNOWN_DAEMON });
 

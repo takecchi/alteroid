@@ -119,6 +119,12 @@ export interface SelfFacts {
   /** 実際に走っているモデル帯。既定から差し替えられていればその値。 */
   models: { clone: string; manager: string; worker: string };
   /**
+   * クローン層の provider の id（`claude` …。#486 S9）。デーモンが起動時に解決した値
+   * （`resolveCloneProviderId`）。デーモン全体で1つ。省略（テスト）時は `self_status` が
+   * 「不明」と言う（`claude` とは読まない）。
+   */
+  cloneProvider?: string;
+  /**
    * 層を動かす provider が持たない能力（`describeProviderGaps` の出力）。
    * 空・未指定なら何も足さない。
    */
@@ -168,6 +174,11 @@ export interface CloneRuntimeFacts {
    * 持つ（`null` を既定値へ倒さない）。
    */
   buildTime: BuildTime;
+  /**
+   * クローン層の provider の id（#486 S9。`SelfFacts.cloneProvider` と同じ値）。
+   * 渡っていなければ `describeCloneRuntime` は「不明」と言う。`claude` とは読まない。
+   */
+  cloneProvider?: string;
   /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
   /**
@@ -307,6 +318,7 @@ const INIT_NOT_OBSERVED = 'init 未観測';
 const CLONE_RUNTIME_ITEMS = {
   revision: '自分がいま走っているコードのリビジョン',
   buildAge: 'このイメージが焼かれた時刻とそこからの経過',
+  cloneProvider: 'クローンの provider',
   declaredModel: '宣言されたモデル帯',
   sdkModel: 'SDK が実際に報告したモデル id',
   effort: 'effort（実効値）',
@@ -450,6 +462,9 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // **「既定と同じ値か」ではなく「置かれているか」を言う。** 人間が
     // \`ALTEROID_CLONE_MODEL=opus\` を明示的に置いた場合、前者では「既定のまま」と
     // 嘘になる（承認が置かれている事実が消える）。
+    `- ${CLONE_RUNTIME_ITEMS.cloneProvider}: ${
+      facts.cloneProvider ?? unknownBecause('デーモンが provider を渡していない')
+    }`,
     `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden
         ? `人間が \`${facts.modelEnvKey}\` に置いた値`

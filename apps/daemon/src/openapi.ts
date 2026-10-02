@@ -1609,6 +1609,13 @@ export const runnersListResponseSchema = z.object({
    * 突き合わせ忘れがそのまま見逃しになる。
    */
   daemonRevision: daemonRevisionSchema,
+  /**
+   * クローン層の provider の id（`claude` …。#486 S9）。**デーモン全体で1つ**
+   * （`ALTEROID_CLONE_PROVIDER`。委譲ごとの値ではない）で、デーモンが起動時に解決して
+   * 必ず持つので、実デーモンでは常に載る（既定が `claude` であるのは仕様）。
+   * 欄が無いのは配線されていない構成だけで、**そのときは `claude` と読まず「不明」と読む。**
+   */
+  cloneProvider: z.string().optional(),
 });
 
 export const runnersCredentialsResponseSchema = z.object({

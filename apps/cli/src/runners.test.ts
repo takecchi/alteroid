@@ -125,6 +125,19 @@ describe('renderRunners', () => {
    * 確かめたい状態そのものである。早期 return の側に版を載せ忘れると、そこでだけ
    * 答えが消える——1台以上のテストは通るので、落ちる場所がここにしか無い。
    */
+  it('クローンの provider を出す。欄が無ければ claude と推測せず「不明」と書く', () => {
+    const given = renderRunners({
+      runners: [],
+      daemonRevision: KNOWN_DAEMON,
+      cloneProvider: 'claude',
+    });
+    expect(given).toContain('クローンの provider: claude');
+
+    const absent = renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON });
+    expect(absent).toContain('クローンの provider: 不明');
+    expect(absent).not.toContain('provider: claude');
+  });
+
   it('runner が0台でも、デーモンの版は出す', () => {
     const text = renderRunners({ runners: [], daemonRevision: KNOWN_DAEMON });
 

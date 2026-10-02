@@ -28,7 +28,7 @@ import {
   useVacateRunner,
   type WorkspaceResetSummary,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { describeCloneProvider, formatDateTime } from '@alteroid/logic';
 import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 export default function Settings() {
@@ -332,6 +332,9 @@ function Runners() {
           </div>
           <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
             版: {describeRevisionStatus(daemonRevision)}
+          </p>
+          <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
+            クローンの provider: {describeCloneProvider(data?.cloneProvider)}
           </p>
         </div>
       )}

@@ -286,6 +286,11 @@ export interface AppDeps {
    */
   runners?: RunnerRegistry;
   /**
+   * クローン層の provider の id（#486 S9）。デーモンが起動時に解決した値で、デーモン全体で
+   * 1つ（`GET /runners` の `cloneProvider`）。無ければ応答に欄を載せない（＝不明。`claude` とは読まない）。
+   */
+  cloneProvider?: string;
+  /**
    * 日誌の追記を購読する口（`GET /journal/stream`）。
    *
    * 無ければその経路だけが 503 を返す。**能力を落とすのではなく、配線されて
@@ -5592,10 +5597,16 @@ export function createApp(deps: AppDeps) {
         // runner の一覧が空でも、この値だけは常に出す——「自分がどの版で
         // 走っているか」は runner の登録有無と無関係な事実である。
         const daemonRevision = reportRunnerRevision(resolveBuildRevision());
+        // クローン層の provider（デーモン全体で1つ。起動時に解決済み）。runner の一覧が
+        // 空でも出す。配線されていない構成では欄ごと載せない（`claude` と推測しない）。
+        const cloneProvider =
+          deps.cloneProvider === undefined ? {} : { cloneProvider: deps.cloneProvider };
 
         const registry = deps.runners;
         if (registry === undefined) {
-          return c.json(runnersListResponseSchema.parse({ runners: [], daemonRevision }));
+          return c.json(
+            runnersListResponseSchema.parse({ runners: [], daemonRevision, ...cloneProvider }),
+          );
         }
         // **名簿に載っている全部を返す**（開けている分だけではない）。上がって
         // こない runner が一覧から消えるだけだと、人間には「設定し忘れた」のか
@@ -5649,6 +5660,7 @@ export function createApp(deps: AppDeps) {
               }),
             ),
             daemonRevision,
+            ...cloneProvider,
           }),
         );
       },

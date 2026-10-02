@@ -10,6 +10,8 @@ import {
   type RunnerRevisionStatus,
 } from '@alteroid/core';
 
+import { describeCloneProvider } from '@alteroid/logic';
+
 import { createClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
@@ -193,6 +195,8 @@ interface RunnersView {
     pushHealth?: RunnerPushHealth;
   }[];
   daemonRevision: RunnerRevisionReport;
+  /** クローン層の provider（デーモン全体で1つ）。無ければ「不明」と書く。 */
+  cloneProvider?: string;
 }
 
 /**
@@ -205,7 +209,11 @@ interface RunnersView {
  * 別々にデプロイされるので、ずれている窓が実際に在る）。
  */
 export function renderRunners(view: RunnersView, now: number = Date.now()): string {
-  const lines = [`デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`, ''];
+  const lines = [
+    `デーモンの版: ${describeRevisionStatus(view.daemonRevision)}`,
+    `クローンの provider: ${describeCloneProvider(view.cloneProvider)}`,
+    '',
+  ];
 
   if (view.runners.length === 0) {
     lines.push(

@@ -35,6 +35,7 @@ const SELF: SelfFacts = {
   auth: 'a',
   models: { clone: 'opus', manager: 'opus', worker: 'sonnet' },
   providerGaps: describeProviderGaps({ clone: CLAUDE_PROVIDER }),
+  cloneProvider: 'claude',
 };
 
 const RUNNER_LINE = 'runner「edge-1」のマネージャー層（偽）は usage を持たない';
@@ -131,6 +132,15 @@ function boot(provider: string, failRunners = false) {
 }
 
 describe('クローン — provider の欠落の配線', () => {
+  it('SelfFacts の cloneProvider が self_status の「クローンの provider」に出る', async () => {
+    const s = boot('claude');
+    s.clone.post(humanMessage('やあ'));
+    await waitForDone(s.events);
+
+    expect(await s.selfStatus()).toContain('クローンの provider: claude');
+    await s.clone.stop();
+  });
+
   it('偽 provider を名乗る runner のマネージャー層が self_status・digest に出て、システムプロンプトには出ない', async () => {
     const s = boot('fake');
     s.clone.post(humanMessage('やあ'));

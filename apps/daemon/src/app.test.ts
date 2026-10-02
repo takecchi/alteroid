@@ -12051,6 +12051,36 @@ describe('runner の生死', () => {
     await registry.stop();
   });
 
+  it('GET /runners は、デーモン全体で1つのクローン層の provider を載せる（runner が0台でも）', async () => {
+    const fake = fakeClone();
+    const stores = createMemoryStores();
+    const withProvider = createApp({
+      clone: fake.clone,
+      stores,
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: createRunnerRegistry([]),
+      cloneProvider: 'claude',
+    });
+    const body = (await (await withProvider.request('/runners')).json()) as {
+      cloneProvider?: string;
+    };
+    expect(body.cloneProvider).toBe('claude');
+  });
+
+  it('GET /runners は、provider が配線されていなければ欄を載せない（claude と推測しない）', async () => {
+    const fake = fakeClone();
+    const without = createApp({
+      clone: fake.clone,
+      stores: createMemoryStores(),
+      token: 'test-token',
+      shutdown: () => undefined,
+      runners: createRunnerRegistry([]),
+    });
+    const body = (await (await without.request('/runners')).json()) as Record<string, unknown>;
+    expect('cloneProvider' in body).toBe(false);
+  });
+
   /**
    * **#330 の罠そのもの。** `runnerId` は常に文字列を持つ（`HttpRunner` の既定値
    * `'runner-primary'`）ので、`entry.client !== null` だけを根拠に出すと、
