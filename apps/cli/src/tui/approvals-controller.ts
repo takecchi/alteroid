@@ -15,7 +15,7 @@
  * 専用操作。後者は自由文で答える承認待ちとして扱い、`/allow` `/deny`（マネージャーへの
  * `decision` つきメッセージ）には触れない。
  */
-import type { ApprovalRow, TuiApi, UnreadableApproval } from './api.js';
+import { ApiError, type ApprovalRow, type TuiApi, type UnreadableApproval } from './api.js';
 import {
   buildAnswer,
   emptyForm,
@@ -92,11 +92,17 @@ export const isOpen = (approval: ApprovalRow | null): boolean =>
   approval !== null && approval.answeredAt === undefined && approval.withdrawnAt === undefined;
 
 /** もう答えられなくなったときの一言。送ろうとして落ちた理由（`✗ …`）があれば、それを残して添える。 */
-function settledNotice(approval: ApprovalRow, previous: string | null): string {
+function settledNotice(
+  approval: ApprovalRow,
+  previous: string | null,
+  sendUnknown: boolean,
+): string {
   const now =
     approval.withdrawnAt !== undefined
       ? 'この承認待ちは取り下げられた。答えは送っていない'
-      : 'この承認待ちは他の入口で回答済みになった。答えは送っていない';
+      : sendUnknown
+        ? '応答が無く、送れたかは分からない。この承認待ちは回答済みになっている'
+        : 'この承認待ちは他の入口で回答済みになった。答えは送っていない';
   return previous !== null && previous.startsWith('✗') ? `${previous}（${now}）` : now;
 }
 
@@ -106,6 +112,8 @@ export class ApprovalsController {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private detach: (() => void) | undefined;
   private feed: HeaderFeed | undefined;
+  /** 応答が無いまま失敗した送信の承認待ち id（取り直しで回答済みなら「送っていない」と言い切らない）。 */
+  private unknownSendId: string | undefined;
 
   constructor(
     private readonly api: TuiApi,
@@ -248,7 +256,7 @@ export class ApprovalsController {
                 mode: 'read' as const,
                 form: null,
                 confirm: null,
-                notice: settledNotice(approval, d.notice),
+                notice: settledNotice(approval, d.notice, this.unknownSendId === id),
                 noticeTone: 'warn' as const,
               }
             : {}),
@@ -430,6 +438,8 @@ export class ApprovalsController {
     try {
       await this.api.answerApproval(id, built.body);
     } catch (error) {
+      // HTTP の応答が無い失敗（接続断など）は、デーモンが答えを受けたかどうか分からない。
+      if (!(error instanceof ApiError)) this.unknownSendId = id;
       this.setDetail(id, {
         busy: false,
         mode: 'form',
@@ -439,6 +449,7 @@ export class ApprovalsController {
       });
       // 409（既に回答済み・取り下げ済み）などで状態が変わっていれば、取り直して見せる。
       await this.reload();
+      this.unknownSendId = undefined;
       return false;
     }
     this.setDetail(id, {

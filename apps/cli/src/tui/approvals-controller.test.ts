@@ -229,6 +229,29 @@ describe('答える', () => {
     expect(detail?.notice).toContain('他の入口で回答済みになった');
   });
 
+  it('応答が無いまま送信が失敗し、取り直すと回答済み: 「送っていない」と言い切らず、送れたか分からないと言う', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.approvalRows = [approvalRow('free')];
+    });
+    await controller.open('free');
+    controller.startAnswer();
+    controller.submitField('はい');
+    // デーモンは答えを受けたが、応答を受け取る前に接続が切れた（HTTP の応答が無い失敗）。
+    const original = api.answerApproval.bind(api);
+    api.answerApproval = async (id, body) => {
+      await original(id, body);
+      throw new Error('fetch failed');
+    };
+
+    expect(await controller.confirmSend()).toBe(false);
+    const detail = state().detail;
+    expect(detail?.mode).toBe('read');
+    expect(detail?.approval?.answer).toBe('はい');
+    expect(detail?.notice).toContain('fetch failed');
+    expect(detail?.notice).toContain('送れたかは分からない');
+    expect(detail?.notice).not.toContain('答えは送っていない');
+  });
+
   it('journal の合図で取り直したとき、書いている最中に答えられていたら、フォームを閉じて言う', async () => {
     vi.useFakeTimers();
     const { api, controller, state, fire } = setup((a) => {
