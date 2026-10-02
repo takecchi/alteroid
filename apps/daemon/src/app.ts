@@ -115,6 +115,8 @@ import {
   buildCommitmentDerivations,
   readUnreadableJobsForCommitments,
   DEFAULT_PROGRESS_WINDOW_HOURS,
+  approvalSelectionSchema,
+  describeSelectionsViolation,
   InvalidProgressWindowError,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   summarizeUsage,
@@ -438,11 +440,29 @@ const practiceBody = z.object({
   title: z.string(),
   content: z.string(),
 });
-const answerBody = z.object({ answer: z.string().min(1) });
+/**
+ * 承認待ちへの回答の本体（`answer` と `selections` の少なくとも一方）。
+ *
+ * **`selections`（issue #2525）は `questions` を持つ承認待ちへの構造化した回答。** `answer` は
+ * 自由文の回答、`selections` と併用するときは補足。どちらも無いのは 400
+ * （`answerOrSelectionsMissing`）。`selections` の中身を `questions` と突き合わせる検査は
+ * 承認待ちの行が要るので、ここ（形の検査）ではなくハンドラで行う（`describeSelectionsViolation`）。
+ */
+const answerBody = z.object({
+  answer: z.string().min(1).optional(),
+  selections: z.array(approvalSelectionSchema).min(1).optional(),
+});
+/** `answer` も `selections` も無い回答（400 の理由）。 */
+function answerOrSelectionsMissing(body: {
+  answer?: string | undefined;
+  selections?: unknown;
+}): boolean {
+  return body.answer === undefined && body.selections === undefined;
+}
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
   answers: z
-    .array(z.object({ id: z.string().min(1), answer: z.string().min(1) }))
+    .array(z.object({ id: z.string().min(1) }).extend(answerBody.shape))
     .min(1)
     .max(200),
 });
@@ -3504,7 +3524,12 @@ export function createApp(deps: AppDeps) {
         description:
           '1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に' +
           '独立に再開する）。結果は `answers` と同じ順で返る。行が在るが読めない件は、その件だけ' +
-          '`ok: false` と読めない旨の `error` で返る（`not found` とは言わない）。',
+          '`ok: false` と読めない旨の `error` で返る（`not found` とは言わない）。' +
+          '各件は `answer`（自由文）か `selections`（`questions` を持つ承認待ちへの選択肢の回答。' +
+          '`answer` は補足として併用できる）の少なくとも一方を持つ。**`selections` が `questions` と' +
+          '突き合わない件が1つでもあれば、1件も答えずに全体を 400 にする**（知らない設問・選択肢の id、' +
+          '単一選択で2つ以上、`allowOther: false` なのに `other`、同じ設問が2回、`questions` を持たない' +
+          '承認待ちへの `selections`）。',
         responses: {
           200: {
             description: '各件の結果（1件ごとの成否）。',
@@ -3513,7 +3538,9 @@ export function createApp(deps: AppDeps) {
             },
           },
           400: {
-            description: '本文が JSON として不正。',
+            description:
+              '本文が JSON として不正。または `answer` も `selections` も無い件・`selections` が' +
+              '`questions` と突き合わない件がある（この場合、どの件も答えていない）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
         },
@@ -3523,7 +3550,39 @@ export function createApp(deps: AppDeps) {
       })),
       async (c) => {
         const results: { id: string; ok: boolean; error?: string }[] = [];
-        for (const { id, answer } of c.req.valid('json').answers) {
+        const { answers } = c.req.valid('json');
+        // **形の不正は、1件も答える前に全体を 400 にする**（issue #2525）。`selections` が
+        // `questions` と突き合わないのは要求の書き方の誤りで、人間の不在や先着の回答のような
+        // 件ごとの成否（下の `ok: false`）とは違う。直さずに残りだけ進めると、書いたつもりの件が
+        // 黙って落ちる。**まだ回答待ちの件にだけ**突き合わせる（既に答え済み・取り下げ済み・
+        // 読めない・無い件は、下で件ごとの理由として返す）。
+        for (const item of answers) {
+          if (answerOrSelectionsMissing(item)) {
+            return c.json(
+              { error: `answers の形が不正: ${item.id} に answer も selections も無い` },
+              400,
+            );
+          }
+          if (item.selections === undefined) continue;
+          let pending: Awaited<ReturnType<typeof stores.jobs.getApproval>> = null;
+          try {
+            pending = await stores.jobs.getApproval(item.id);
+          } catch (error) {
+            if (!(error instanceof UnreadableApprovalError)) throw error;
+          }
+          if (
+            pending === null ||
+            pending.answeredAt !== undefined ||
+            pending.withdrawnAt !== undefined
+          ) {
+            continue;
+          }
+          const violation = describeSelectionsViolation(pending.questions, item.selections);
+          if (violation !== null) {
+            return c.json({ error: `selections が不正: ${item.id}: ${violation}` }, 400);
+          }
+        }
+        for (const { id, answer, selections } of answers) {
           let approval: Awaited<ReturnType<typeof stores.jobs.getApproval>>;
           try {
             approval = await stores.jobs.getApproval(id);
@@ -3553,7 +3612,12 @@ export function createApp(deps: AppDeps) {
             continue;
           }
           try {
-            await clone.answerApproval(id, answer, answerApprovalViaOf(c.get('principal')));
+            await clone.answerApproval(
+              id,
+              answer ?? '',
+              answerApprovalViaOf(c.get('principal')),
+              selections,
+            );
             results.push({ id, ok: true });
           } catch (error) {
             // 先の判定を通った後に、別の回答・取り下げが先に届いていた（issue #2007）。
@@ -3569,7 +3633,9 @@ export function createApp(deps: AppDeps) {
                     ? 'withdrawn'
                     : error instanceof UnreadableApprovalError
                       ? error.message
-                      : String(error),
+                      : error instanceof Error && error.name === 'InvalidApprovalSelectionsError'
+                        ? error.message
+                        : String(error),
             });
           }
         }
@@ -3585,14 +3651,22 @@ export function createApp(deps: AppDeps) {
         description:
           '二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。' +
           '答え直したいなら新しい確認として来るのが正しい（→ 409）。' +
-          'クローンが approval_withdraw で取り下げた件も答えられない（→ 409 error="withdrawn"。#963）。',
+          'クローンが approval_withdraw で取り下げた件も答えられない（→ 409 error="withdrawn"。#963）。' +
+          '`answer`（自由文）か `selections`（`questions` を持つ承認待ちへの選択肢の回答）の少なくとも' +
+          '一方が要る。`selections` があれば `answer` は省略でき、併用すると補足になる。デーモンが' +
+          '設問・選択肢・その他・補足を人間が読める文に畳んで回答として残す（構造は `selections` に残る。' +
+          '未回答の設問があってもよい）。',
         responses: {
           200: {
             description: '答えた。',
             content: { 'application/json': { schema: resolver(okResponseSchema) } },
           },
           400: {
-            description: '本文が JSON として不正。',
+            description:
+              '本文が JSON として不正。または `answer` も `selections` も無い・`selections` が' +
+              '`questions` と突き合わない（知らない設問・選択肢の id、単一選択で2つ以上、' +
+              '`allowOther: false` なのに `other`、同じ設問が2回、`questions` を持たない承認待ちへの' +
+              '`selections`）。回答は書いていない。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           404: {
@@ -3631,13 +3705,29 @@ export function createApp(deps: AppDeps) {
         if (approval.withdrawnAt !== undefined) {
           return c.json({ error: 'withdrawn' as const }, 409);
         }
+        // **`selections`（issue #2525）の検査。** `questions` を持たない承認待ちへの
+        // `selections`・知らない id・単一選択で2つ以上・`allowOther: false` なのに `other`・
+        // 同じ設問が2回、はどれも 400（何も書かない）。
+        const body = c.req.valid('json');
+        if (answerOrSelectionsMissing(body)) {
+          return c.json({ error: 'answer の形が不正: answer も selections も無い' }, 400);
+        }
+        if (body.selections !== undefined) {
+          const violation = describeSelectionsViolation(approval.questions, body.selections);
+          if (violation !== null) return c.json({ error: `selections が不正: ${violation}` }, 400);
+        }
         try {
           await clone.answerApproval(
             id,
-            c.req.valid('json').answer,
+            body.answer ?? '',
             answerApprovalViaOf(c.get('principal')),
+            body.selections,
           );
         } catch (error) {
+          // クローンの側の検査が先の検査を通り抜けた窓（別の実装・テストの偽物）。
+          if (error instanceof Error && error.name === 'InvalidApprovalSelectionsError') {
+            return c.json({ error: error.message }, 400);
+          }
           // 先の判定を通った後に、別の回答・取り下げが先に届いていた（issue #2007）。
           // 先の判定と同じ 409 で返す。
           const settled = approvalSettledKindOf(error);

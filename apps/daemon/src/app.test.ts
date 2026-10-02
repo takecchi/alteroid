@@ -3,7 +3,8 @@ import { FsPersonaStore } from '@alteroid/storage-fs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type {
+  AnswerApprovalVia,
+  ApprovalSelection,
   AnswerApprovalVia,
   ChatStreamEvent,
   CloneHost,
@@ -77,7 +78,12 @@ import { startUsagePolling } from './usage-poller.js';
 function fakeClone() {
   const listeners = new Map<string, Set<(event: ChatStreamEvent) => void>>();
   const ended: string[] = [];
-  const answered: { id: string; answer: string; via?: AnswerApprovalVia }[] = [];
+  const answered: {
+    id: string;
+    answer: string;
+    via?: AnswerApprovalVia;
+    selections?: readonly ApprovalSelection[];
+  }[] = [];
   const posted: InboxEvent[] = [];
   /**
    * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
@@ -275,8 +281,13 @@ function fakeClone() {
     async endConversation(conversationId) {
       ended.push(conversationId);
     },
-    async answerApproval(id, answer, via) {
-      answered.push({ id, answer, ...(via === undefined ? {} : { via }) });
+    async answerApproval(id, answer, via, selections) {
+      answered.push({
+        id,
+        answer,
+        ...(via === undefined ? {} : { via }),
+        ...(selections === undefined ? {} : { selections }),
+      });
     },
     // 消した合図の配達を止める（issue #1049）。**何を渡されたかを記録する** ——
     // `POST /inbox/remove` が器から消すだけで終わっていないことを、応答の文言
@@ -1449,6 +1460,155 @@ describe('HTTP API', () => {
     expect(fake.answered).toEqual([
       { id: 'ap-1', answer: 'よい', via: { kind: 'operator', auth: 'disabled' } },
     ]);
+  });
+
+  /**
+   * issue #2525: `selections` は `questions` と突き合わせ、合わないものは何も答えずに 400。
+   * 突き合わせの全パターンの歯は `packages/core/src/approval-choices.test.ts`。ここは口の配線。
+   */
+  describe('selections つきの回答（issue #2525）', () => {
+    const questions = [
+      {
+        id: 'target',
+        prompt: 'デプロイ先',
+        options: [
+          { id: 'railway', label: 'Railway', recommended: true },
+          { id: 'fly', label: 'Fly.io' },
+        ],
+      },
+      {
+        id: 'notify',
+        prompt: '通知',
+        multiple: true,
+        allowOther: false,
+        options: [
+          { id: 'slack', label: 'Slack' },
+          { id: 'mail', label: 'メール' },
+        ],
+      },
+    ];
+    const put = (id: string, withQuestions = true) =>
+      stores.jobs.putApproval({
+        id,
+        createdAt: new Date().toISOString(),
+        question: 'どうする',
+        ...(withQuestions ? { questions } : {}),
+      });
+
+    it('GET /approvals は questions を返す', async () => {
+      await put('ap-q-list');
+      const body = (await (await app.request('/approvals')).json()) as {
+        approvals: { id: string; questions?: unknown }[];
+      };
+      expect(body.approvals.find((a) => a.id === 'ap-q-list')?.questions).toEqual(questions);
+    });
+
+    it('selections だけで答えられ、answer は補足として併用できる（クローンへ構造が渡る）', async () => {
+      await put('ap-q-ok');
+      const selections = [
+        { questionId: 'target', optionIds: ['railway'], other: 'ただし来週' },
+        { questionId: 'notify', optionIds: ['slack', 'mail'] },
+      ];
+      const res = await app.request('/approvals/ap-q-ok/answer', json({ selections }));
+      expect(res.status).toBe(200);
+      expect(fake.answered).toEqual([
+        {
+          id: 'ap-q-ok',
+          answer: '',
+          via: { kind: 'operator', auth: 'disabled' },
+          selections,
+        },
+      ]);
+
+      await put('ap-q-ok2');
+      const res2 = await app.request(
+        '/approvals/ap-q-ok2/answer',
+        json({ selections: [{ questionId: 'target', optionIds: ['fly'] }], answer: '補足' }),
+      );
+      expect(res2.status).toBe(200);
+      expect(fake.answered.at(-1)).toMatchObject({ id: 'ap-q-ok2', answer: '補足' });
+    });
+
+    it.each([
+      ['知らない設問 id', [{ questionId: 'nope', optionIds: [] }]],
+      ['知らない選択肢 id', [{ questionId: 'target', optionIds: ['nope'] }]],
+      ['単一選択で2つ', [{ questionId: 'target', optionIds: ['railway', 'fly'] }]],
+      ['allowOther:false に other', [{ questionId: 'notify', optionIds: [], other: 'x' }]],
+      [
+        '同じ設問が2回',
+        [
+          { questionId: 'target', optionIds: ['railway'] },
+          { questionId: 'target', optionIds: ['fly'] },
+        ],
+      ],
+    ])('不正な selections は 400 で、何も答えない（%s）', async (_label, selections) => {
+      await put('ap-q-bad');
+      const res = await app.request('/approvals/ap-q-bad/answer', json({ selections }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain('selections');
+      expect(fake.answered).toEqual([]);
+    });
+
+    it('questions を持たない承認待ちへの selections は 400', async () => {
+      await put('ap-q-none', false);
+      const res = await app.request(
+        '/approvals/ap-q-none/answer',
+        json({ selections: [{ questionId: 'target', optionIds: ['railway'] }] }),
+      );
+      expect(res.status).toBe(400);
+      expect(fake.answered).toEqual([]);
+    });
+
+    it('answer も selections も無いのは 400', async () => {
+      await put('ap-q-empty');
+      const res = await app.request('/approvals/ap-q-empty/answer', json({}));
+      expect(res.status).toBe(400);
+    });
+
+    it('まとめて答える口: 不正な selections が1件でもあれば、1件も答えずに 400', async () => {
+      await put('ap-q-b1');
+      await put('ap-q-b2');
+      const res = await app.request(
+        '/approvals/answer',
+        json({
+          answers: [
+            { id: 'ap-q-b1', answer: 'よい' },
+            { id: 'ap-q-b2', selections: [{ questionId: 'nope', optionIds: [] }] },
+          ],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(fake.answered).toEqual([]);
+    });
+
+    it('まとめて答える口: 正しい selections は通り、答え済みの件は件ごとの理由で返る', async () => {
+      await put('ap-q-c1');
+      await stores.jobs.putApproval({
+        id: 'ap-q-c2',
+        createdAt: new Date().toISOString(),
+        question: 'x',
+        answeredAt: new Date().toISOString(),
+        answer: '済',
+      });
+      const selections = [{ questionId: 'target', optionIds: ['fly'] }];
+      const res = await app.request(
+        '/approvals/answer',
+        json({
+          answers: [
+            { id: 'ap-q-c1', selections },
+            { id: 'ap-q-c2', selections },
+          ],
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        results: [
+          { id: 'ap-q-c1', ok: true },
+          { id: 'ap-q-c2', ok: false, error: 'already answered' },
+        ],
+      });
+      expect(fake.answered).toMatchObject([{ id: 'ap-q-c1', selections }]);
+    });
   });
 
   it('存在しない承認待ちへの回答は 404', async () => {

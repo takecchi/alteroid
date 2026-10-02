@@ -5462,6 +5462,105 @@ describe('クローンの道具', () => {
     expect(reply).not.toContain('済んだ質問');
   });
 
+  describe('ask_human の questions（選択肢つきの設問。issue #2525）', () => {
+    const questions = [
+      {
+        id: 'target',
+        prompt: 'デプロイ先',
+        options: [
+          { id: 'railway', label: 'Railway', recommended: true, description: '既存の基盤' },
+          { id: 'fly', label: 'Fly.io' },
+        ],
+      },
+      {
+        id: 'notify',
+        prompt: '通知先',
+        multiple: true,
+        allowOther: false,
+        options: [
+          { id: 'slack', label: 'Slack' },
+          { id: 'mail', label: 'メール' },
+        ],
+      },
+    ];
+
+    it('questions を承認待ちへ積む。question は必須のまま、無ければ questions の欄も付かない', async () => {
+      const h = harness();
+      await h.call('ask_human', { question: '決めたい', questions });
+      await h.call('ask_human', { question: '自由文だけ' });
+      const entries = (await h.stores.jobs.listApprovals({ pendingOnly: true })).entries;
+      expect(entries.find((e) => e.question === '決めたい')?.questions).toEqual(questions);
+      expect(entries.find((e) => e.question === '自由文だけ')).not.toHaveProperty('questions');
+    });
+
+    it('設問 id の重複・設問の中の選択肢 id の重複は、何も積まずに断る', async () => {
+      const h = harness();
+      const dupQuestion = await h.call('ask_human', {
+        question: '決めたい',
+        questions: [questions[0], { ...questions[1], id: 'target' }],
+      });
+      expect(dupQuestion).toContain('重複');
+      const dupOption = await h.call('ask_human', {
+        question: '決めたい',
+        questions: [
+          {
+            id: 'q',
+            prompt: 'p',
+            options: [
+              { id: 'a', label: 'A' },
+              { id: 'a', label: 'B' },
+            ],
+          },
+        ],
+      });
+      expect(dupOption).toContain('重複');
+      expect((await h.stores.jobs.listApprovals({ pendingOnly: true })).entries).toEqual([]);
+    });
+
+    it('request_permission の承認待ちには questions を付けない', async () => {
+      const h = harness();
+      await h.call('request_permission', {
+        rule: 'Bash(ls:*)',
+        allows: ['ls -la'],
+        denies: ['rm -rf /'],
+        reason: '一覧を見たい',
+      });
+      const entries = (await h.stores.jobs.listApprovals({ pendingOnly: true })).entries;
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).not.toHaveProperty('questions');
+    });
+
+    it('一覧は件数だけ（設問の本文を出さない）、id で開くと設問と選択肢が全部読める', async () => {
+      const h = harness();
+      await h.call('ask_human', { question: '決めたい', questions });
+      const list = await h.call('approvals_list', {});
+      expect(list).toContain('設問 2 件');
+      expect(list).not.toContain('Railway');
+
+      const [approval] = (await h.stores.jobs.listApprovals({ pendingOnly: true })).entries;
+      const detail = await h.call('approvals_list', { id: approval?.id });
+      expect(detail).toContain('[id=target] デプロイ先（単一選択・その他を書ける）');
+      expect(detail).toContain('Railway［推奨］ — 既存の基盤');
+      expect(detail).toContain('[id=notify] 通知先（複数選択可・その他は書けない）');
+    });
+
+    it('道具の説明に questions の書き方・例・(a)(b)(c) より questions を使うこと、が書いてある', () => {
+      const tools = createCloneTools({
+        stores: createMemoryStores(),
+        emit: () => undefined,
+        memoryCause: () => 'clone',
+        conversationId: () => undefined,
+      });
+      const description = tools.find((t) => t.name === 'ask_human')?.description ?? '';
+      expect(description).toContain('questions');
+      expect(description).toContain('(a)(b)(c)');
+      expect(description).toContain('recommended');
+      expect(description).toContain('multiple');
+      expect(description).toContain('allowOther');
+      expect(description).toContain('例:');
+    });
+  });
+
   describe('読めない承認の行（#2279）: 「無い（id が違う）」と言わず、在るが読めないと言う', () => {
     /** fs / pg が読めない行に対してすること（メモリ実装は壊れた行を持てないので差し替えで模す）。 */
     function unreadableHarness() {
