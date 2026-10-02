@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import type { DetailState } from './approvals-controller.js';
+import { ApprovalsController, type DetailState } from './approvals-controller.js';
 import { emptyForm, toggleOption } from './approvals-form.js';
 import {
   approvalDocument,
   approvalListLine,
+  approvalListTitle,
   approvalStatusText,
   composerPlaceholder,
 } from './approvals-view.js';
-import { approvalRow } from './fake-api.js';
+import { approvalRow, fakeApi } from './fake-api.js';
 import { cellWidth } from './wrap.js';
 
 const NOW = Date.parse('2026-10-02T01:00:00.000Z');
@@ -206,5 +207,26 @@ describe('最下行と入力欄', () => {
         }),
       ),
     ).toContain('回答を書く');
+  });
+});
+
+describe('一覧の見出し', () => {
+  it('初回の読み込みが失敗したときは、0 件と言わず「空ではない」と言う', async () => {
+    const api = fakeApi();
+    const controller = new ApprovalsController(api);
+    api.approvalRows = [approvalRow('a')];
+    // 最初の呼びで失敗させる。
+    api.listApprovals = () => Promise.reject(new Error('繋がらない'));
+    await controller.reload();
+    const list = controller.store.getSnapshot().list;
+    expect(list.status).toBe('error');
+    const title = approvalListTitle(list);
+    expect(title).toContain('空ではない');
+    expect(title).not.toContain('0 件');
+  });
+
+  it('読めて 0 件なら件数を言う', () => {
+    const list = { ...new ApprovalsController(fakeApi()).store.getSnapshot().list };
+    expect(approvalListTitle({ ...list, status: 'ready' })).toContain('未回答 0 件');
   });
 });

@@ -119,6 +119,15 @@ export function detailStatusText(
   return { text: ' ', tone: 'dim' };
 }
 
+/** 一覧の見出し。初回の読み込みが失敗したときは件数を言わない（空ではない）。 */
+export function managerListTitle(list: ListState): string {
+  if (list.status === 'loading' || list.status === 'idle') return '委譲を読んでいる…';
+  if (list.status === 'error' && list.items.length === 0) {
+    return '委譲を読めなかった（空ではない）。r で読み直す';
+  }
+  return `委譲（絞り: ${filterLabel(list.filter)} · ${String(list.items.length)} 件読み込み済み · 新しい順）`;
+}
+
 function listEmptyText(list: ListState): string {
   const unreadable = list.unreadable.length > 0;
   if (unreadable) {
@@ -153,10 +162,7 @@ export const ManagerList: FC<{ list: ListState; height: number }> = ({ list, hei
   const cap = Math.max(1, height - fixed);
   const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, items.length - cap));
   const shown = items.slice(start, start + cap);
-  const title =
-    list.status === 'loading' || list.status === 'idle'
-      ? '委譲を読んでいる…'
-      : `委譲（絞り: ${filterLabel(list.filter)} · ${String(items.length)} 件読み込み済み · 新しい順）`;
+  const title = managerListTitle(list);
   return (
     <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>
       <Text bold wrap="truncate-end">

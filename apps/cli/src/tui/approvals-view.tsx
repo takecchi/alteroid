@@ -61,6 +61,15 @@ export function approvalListLine(row: ApprovalRow, now: number): string {
   );
 }
 
+/** 一覧の見出し。初回の読み込みが失敗したときは件数を言わない（空ではない）。 */
+export function approvalListTitle(list: ListState): string {
+  if (list.status === 'loading' || list.status === 'idle') return '承認待ちを読んでいる…';
+  if (list.status === 'error' && list.items.length === 0) {
+    return '承認待ちを読めなかった（空ではない）。r で読み直す';
+  }
+  return `承認待ち（未回答 ${String(list.items.length)} 件 · 古い順）`;
+}
+
 function listEmptyText(list: ListState): string {
   return list.unreadable.length > 0
     ? '読めた承認待ちは無い（読めない行が在るので、無いとは言えない）。'
@@ -81,10 +90,7 @@ export const ApprovalList: FC<{ list: ListState; height: number }> = ({ list, he
   const cap = Math.max(1, height - fixed);
   const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, items.length - cap));
   const shown = items.slice(start, start + cap);
-  const title =
-    list.status === 'loading' || list.status === 'idle'
-      ? '承認待ちを読んでいる…'
-      : `承認待ち（未回答 ${String(items.length)} 件 · 古い順）`;
+  const title = approvalListTitle(list);
   return (
     <Box flexDirection="column" height={height} overflow="hidden" flexShrink={0}>
       <Text bold wrap="truncate-end">
