@@ -1,5 +1,3 @@
-import type { SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
-
 /**
  * `RunnerSession`（`runner.ts`）が持っていた **resume/seed の状態4フィールド**
  * （`#seed` / `#resumeAttempt` / `#sessionId` / `#progressed`）を、独立の単位
@@ -104,7 +102,7 @@ export class RunnerResumeState {
    * 効かなかった」として扱われ、そのときの回復（`renderSessionLog(this.#seed)`）
    * にはまだ `#seed` が要る。ここで解放すると、その回復だけが静かに材料を失う。
    */
-  #seed: SessionStoreEntry[] | undefined;
+  #seed: unknown[] | undefined;
 
   /**
    * 投げたが、まだ効いたと確かめられていない resume。
@@ -147,7 +145,7 @@ export class RunnerResumeState {
   }
 
   /** 預かっている生ログ。無ければ `undefined`。 */
-  get seed(): SessionStoreEntry[] | undefined {
+  get seed(): unknown[] | undefined {
     return this.#seed;
   }
 
@@ -162,7 +160,7 @@ export class RunnerResumeState {
    * ——元の `resume()` 本体にあった3行をそのまま1本のメソッドへまとめただけで、
    * 3行の順序・代入する値は変えていない。
    */
-  beginResume(sessionId: string, entries: SessionStoreEntry[] | undefined): void {
+  beginResume(sessionId: string, entries: unknown[] | undefined): void {
     this.#sessionId = sessionId;
     this.#seed = entries;
     this.#resumeAttempt = { sessionId };
