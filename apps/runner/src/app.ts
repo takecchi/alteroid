@@ -926,10 +926,7 @@ export function createRunnerApp(deps: RunnerAppDeps) {
           const placed = host.setMcpServers(c.req.valid('json').mcpServers);
           return c.json({ ok: true, ...(placed === undefined ? {} : { mcpServers: placed }) });
         } catch (error) {
-          return c.json(
-            { ok: false, error: error instanceof Error ? error.message : '理由不明' },
-            400,
-          );
+          return c.json({ ok: false, error: reasonOf(error) }, 400);
         }
       },
     )

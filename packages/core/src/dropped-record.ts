@@ -1322,6 +1322,14 @@ const TAG_LIMIT = 64;
  * 最初から拾わない作りなので、クローンへ返す側でもそのまま使える——
  * `error-cause.ts` の doc と `tools.ts` の `formatJournalNotRecordedMessage`
  * を見よ）。
+ *
+ * **使い分け（#2565）。** 外へ出す例外の文は、必ず `reasonOf` か `redactErrorText`
+ * （`denial-input-head.ts`）のどちらかを通す。1行の跡でよい（stderr・日誌・知らせ）なら
+ * `reasonOf`。文を変えたくない・全文が要るなら `redactErrorText(String(error), process.env)`
+ * （例: `runner.ts` の `#read`）。`reasonOf` は `redactErrorText` を内側に含む
+ * （`collapseErrorCause` の `safeLine`）ので、`redactErrorText(reasonOf(error), env)` と重ねる
+ * のは `process.env` 以外の env を伏せたいときだけである。
+ * `scripts/stderr-error-through-reasonof.test.ts` が、この規則の破れを機械で見る。
  */
 export function reasonOf(error: unknown): string {
   return collapseErrorCause(error);

@@ -6252,7 +6252,7 @@ export function createCloneTools(context: ToolContext) {
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
         'q で本文を語で探せる（他の絞りと併用できる）。',
         '**q が当たらないことは「日誌にその語が無い」を意味しない** —',
-        'tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていない。',
+        'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない。',
         'with で exchange の相手を絞れる（他の絞りと併用できる）。',
         '**with を指定すると exchange 以外の種別は1件も返らない** —',
         'types で別途除く必要はない。',
@@ -6395,7 +6395,7 @@ export function createCloneTools(context: ToolContext) {
             return text(
               [
                 `"${q}" に当たる日誌は無い（この条件の中では）。` +
-                  'ただし tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていないので、' +
+                  'ただし tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていないので、' +
                   'そこにだけ書かれている語はここでは当たらない。',
                 ...horizonNoteLines,
               ].join('\n'),
@@ -11803,7 +11803,7 @@ export function createCloneTools(context: ToolContext) {
         // 下へ出るのは `foldedTurn.text`（普通の発話でありうる）——注記が予告
         // する本文の種類と実際の本文が食い違う（#1798 の実測）。当てはまらない
         // 注記は出さない。
-        const failure =
+        const managerFailure =
           part === 'request' || foldedTurn !== undefined
             ? null
             : describeManagerFailure(
@@ -11970,7 +11970,7 @@ export function createCloneTools(context: ToolContext) {
         // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
         // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
         // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
-        const failureNote = failure === null ? '' : `${failure}\n\n`;
+        const failureNote = managerFailure === null ? '' : `${managerFailure}\n\n`;
         // **`failureNote` と同じ順・同じ理由で本文の上に置く（Issue #1847）。**
         // `usageStoppedLine`（すぐ上）とは軸が違うので別行——両方が同時に
         // 出ることがある。**対象外の委譲では1文字も増えない。**

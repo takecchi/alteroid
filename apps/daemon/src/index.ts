@@ -39,6 +39,7 @@ import {
   placedClonePermissionMode,
   placedManagerModels,
   reasonOf,
+  redactErrorText,
   resolveCloneModel,
   resolveManagerModel,
   resolveWorkerModel,
@@ -1213,7 +1214,7 @@ export async function main(): Promise<void> {
   const runners = createRunnerRegistry([], {
     notify: ({ label, error }) => {
       announce(
-        `runner (${label}) を開けず、挑み直しても直らない失敗だったので諦めました: ${error}`,
+        `runner (${label}) を開けず、挑み直しても直らない失敗だったので諦めました: ${redactErrorText(error, process.env)}`,
       );
     },
     /**
@@ -1236,7 +1237,7 @@ export async function main(): Promise<void> {
         `runner (${label}${runnerId === undefined ? '' : ` / ${runnerId}`}) が` +
           `名乗らなくなりました。新しい委譲の宛先からは外し、` +
           `そこで走っていた委譲の移送を試みます` +
-          `（貸し出し期限が切れていない委譲は、切れてから自動で移します）: ${error}`,
+          `（貸し出し期限が切れていない委譲は、切れてから自動で移します）: ${redactErrorText(error, process.env)}`,
       );
       reportRunnerLost({ label, runnerId, error });
       relocateOnLost(runnerId);
