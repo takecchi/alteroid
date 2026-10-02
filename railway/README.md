@@ -525,6 +525,8 @@ alteroid credential remove SOME_OLD_KEY               # 外す（runner の器�
 
 **⚠️ `CLAUDE_CODE_OAUTH_TOKEN` はここへは置けない**（400 で断る）。正本はプールの側（`alteroid token add`）で、こちらへ置くと**名乗り直しのたびに回した鍵を巻き戻す**。
 
+**Codex（OpenAI）の API キー `CODEX_API_KEY`（Issue #486 M7）は置ける。** `GH_TOKEN` と同じ扱いで、値は空のまま Service Variables に置かない（置くなら `alteroid credential set CODEX_API_KEY -f -`）。Codex CLI の版は `Dockerfile` の `ARG CODEX_VERSION` が持つ。ChatGPT ログインの `auth.json`（`CODEX_HOME`）は別の経路で、ここでは扱わない。
+
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
 
 **それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_CLONE_MODEL` / `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。後の2つは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。

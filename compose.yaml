@@ -268,6 +268,10 @@ x-shared-env: &shared-env
   GIT_AUTHOR_EMAIL:
   GIT_COMMITTER_NAME:
   GIT_COMMITTER_EMAIL:
+  # Codex（OpenAI）の API キー（Issue #486 M7）。使うときだけ `.env` に置く。正本は
+  # `alteroid credential set CODEX_API_KEY` が先で、これは正本に無いときの土台。
+  # ChatGPT ログインの認証（`auth.json`）は別の経路である。
+  CODEX_API_KEY:
 
 services:
   db:

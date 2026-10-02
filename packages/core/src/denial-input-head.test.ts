@@ -600,3 +600,22 @@ describe('redactSecretsInText / redactErrorText（issue #2415）', () => {
     linear((n) => `${'Bearer '.repeat(n)}`);
   });
 });
+
+describe('CODEX_API_KEY の伏せ字（Issue #486 M7 段 S5。名前の規則は広げていない）', () => {
+  const key = 'FAKE_CODEX_KEY_VALUE_486S5';
+
+  it('器の env の CODEX_API_KEY の値は、既存の名前の規則（KEY）で伏せられる', () => {
+    expect(redactErrorText(`401 with ${key}`, { CODEX_API_KEY: key })).toBe('401 with [REDACTED]');
+  });
+
+  it('CODEX_API_KEY=... の代入の形も、既存の規則で伏せられる', () => {
+    const out = redactErrorText(`CODEX_API_KEY=${key} codex exec`, undefined);
+    expect(out).not.toContain(key);
+    expect(out).toContain('CODEX_API_KEY=[REDACTED]');
+  });
+
+  it('規則は広がっていない: 秘密らしい語を含まない Codex 関連の名前（CODEX_HOME）は伏せない', () => {
+    const home = '/home/worker/.codex-state';
+    expect(redactErrorText(`using ${home}`, { CODEX_HOME: home })).toBe(`using ${home}`);
+  });
+});
