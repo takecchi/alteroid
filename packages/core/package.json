@@ -79,6 +79,8 @@
   "scripts": {
     "build": "node ./scripts/write-canon.mjs && tsup",
     "typecheck": "tsc --noEmit",
+    "codex:schema": "node ./scripts/generate-codex-schema.mjs",
+    "codex:schema:check": "node ./scripts/generate-codex-schema.mjs --check",
     "test": "node ../../scripts/test.mjs --root=../.. --scope=packages/core/src"
   },
   "dependencies": {
@@ -88,6 +90,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@openai/codex": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"

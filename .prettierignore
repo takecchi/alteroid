@@ -21,3 +21,7 @@ MUTATION-IN-PROGRESS.json
 # 担い手・作業者が作業ツリーの中に置く使い捨てのログ・メモ・下書き（.gitignore と同じ）。
 # 中身の形式次第で prettier --check . が落ちないように外す。
 .scratch/
+
+# codex app-server の生成スキーマ（packages/core/scripts/generate-codex-schema.mjs が作る。
+# 1バイトも加工せず置くので整形の対象外。再生成と diff で一致を確かめられる）
+packages/core/codex-schema/
