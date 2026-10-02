@@ -225,10 +225,10 @@ describe('日誌の1行は、日報が書けなかった日を日報と呼ばな
 /**
  * **絞り込みチップが日誌の全種別を尽くしていること。**
  *
- * `journal.tsx` の `TYPES`（チップの表示順）は `TONE` から `Object.keys` で
- * 導出している。ここでは黒箱（画面に実際に出るボタン）として、種別の正本
+ * `@alteroid/logic` の `JOURNAL_TYPES`（チップの表示順）は `JOURNAL_TONE` から `Object.keys` で
+ * 導出している（`journal.tsx` が読む）。ここでは黒箱（画面に実際に出るボタン）として、種別の正本
  * である `@alteroid/core` の `JOURNAL_ENTRY_TYPES` と同じ集合であることを
- * 固定する — `TYPES` はモジュール内部の定数で `journal.tsx` から export
+ * 固定する — チップは画面の出力であって、`journal.tsx` から配列を export
  * していないので、内部の配列を直接読むのではなく画面の出力で確かめる。
  *
  * **これは実行時に測れる保証である。** `invalidate()` 側の `never` 縛りは

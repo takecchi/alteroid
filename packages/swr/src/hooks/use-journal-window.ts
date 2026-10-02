@@ -33,6 +33,7 @@ import {
   applyOlderPage,
   filterRecent,
   JOURNAL_MAX_LIMIT,
+  JOURNAL_PAGE,
   journalHorizonNote,
   newerPageQuery,
   olderPageQuery,
@@ -40,8 +41,8 @@ import {
 } from '@alteroid/logic';
 import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
 
-/** 初期表示・1回の「もっと遡る」で読む件数。 */
-export const JOURNAL_PAGE = 100;
+/** 初期表示・1回の「もっと遡る」で読む件数。定義は `@alteroid/logic`（既存の import 元を壊さないため再 export）。 */
+export { JOURNAL_PAGE };
 
 interface JournalQueryParams {
   limit: number;
