@@ -1184,6 +1184,10 @@ export function createMemoryStores(): Stores {
     async listAccounts() {
       return [...accounts.values()].sort(compareAccountOrder);
     },
+    async listUnreadableAccounts() {
+      // 読めない行は持てない（`putAccount` がスキーマを通す）。常に空。
+      return [];
+    },
     async getAccount(id) {
       return accounts.get(id) ?? null;
     },
@@ -1351,6 +1355,10 @@ export function createMemoryStores(): Stores {
       return [...permissionGrantRows.values()].sort((a, b) =>
         compareIsoInstant(a.grantedAt, b.grantedAt),
       );
+    },
+    async listUnreadable() {
+      // 読めない行は持てない（`put` がスキーマを通す）。常に空。
+      return [];
     },
     async get(id) {
       return permissionGrantRows.get(id) ?? null;

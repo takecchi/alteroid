@@ -8,7 +8,7 @@ import {
 } from '@alteroid/core';
 
 import { createClient } from './client.js';
-import { withErrorReason } from './format.js';
+import { describeUnreadableRowsList, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
 
 /**
@@ -58,11 +58,30 @@ export async function permissionListCommand(options: PermissionListOptions = {})
     );
     return;
   }
-  const { grants } = (await response.json()) as { grants: PermissionGrant[] };
+  const { grants, rowsUnreadable } = (await response.json()) as {
+    grants: PermissionGrant[];
+    /** 読めない行（1件でも在るときだけ載る。issue #2536）。id と不正な欄名だけで、本文は無い。 */
+    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+  };
+  // **読めない行は一覧の前に言う**（0件なら何も出ない）。読めない行しか無いのに「許可は無い」と
+  // 言わないために、下の「無い」の文言もこれで言い分ける。
+  stdout.write(
+    describeUnreadableRowsList({
+      noun: '許可',
+      removeCommand: 'alteroid permission remove-unreadable',
+      file: 'permission-grants.json',
+      rowsUnreadable,
+    }),
+  );
   const shown =
     options.all === true ? grants : grants.filter((grant) => grant.revokedAt === undefined);
 
   if (shown.length === 0) {
+    if (rowsUnreadable !== undefined && grants.length === 0) {
+      // 読めない行が在るので「許可は無い」とは言えない（issue #2536）。
+      stdout.write('読めた許可は無い（許可が無い、とは言えない）。\n');
+      return;
+    }
     // Web（`apps/web/app/routes/permissions.tsx` の `PermissionsBody`）と同じ
     // 条件・文言。`--all` を付けても取り消し済みが1件も無ければ増える見込みが
     // 無いので、案内は「取り消し済みが在るとき」だけに絞る（#1541）。
@@ -123,8 +142,8 @@ export async function permissionRevokeCommand(id: string): Promise<void> {
 /**
  * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`。
  * issue #2440）。読めない行（版ずれ・手編集）は `permission revoke` が 409 で触らないので、
- * 片付ける口はこれだけ。**id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました
- * （… id=…）」の跡で見る**（読めない行は `permission list` に載らない）。**id が取れない行は
+ * 片付ける口はこれだけ。**id は `permission list` が読めない行として出す**
+ * （`GET /permission-grants` の `rowsUnreadable.rows[].id`。issue #2536）。**id が取れない行は
  * この口では消せない**（`permission-grants.json` を手で直す）。指した id が1つでも読めない行に
  * 無ければ、デーモンが何も消さずに断る。**行の中身は出さない**（id と件数だけ）。
  */
@@ -139,6 +158,7 @@ export async function permissionRemoveUnreadableCommand(ids: readonly string[]):
     if (response.status === 404) {
       throw new Error(
         '指した id が、読めない許可の行にありません（何も消していません。' +
+          'id は alteroid permission list の「読めない許可の行」で確かめます。' +
           'id が取れない行はこの口では消せません）',
       );
     }

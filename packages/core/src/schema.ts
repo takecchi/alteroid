@@ -4842,6 +4842,57 @@ export const unreadableTokenSchema = z.object({
 export type UnreadableToken = z.infer<typeof unreadableTokenSchema>;
 
 /**
+ * 許可の記録の1行が `permissionGrantSchema` として読めなかったときに、その行の代わりに
+ * 外へ出すもの（issue #2536。`unreadableTokenSchema` と同じ線）。
+ *
+ * **「許可が無い」でも「取り消された」でもない第3の状態。** 読めない行を黙って飛ばすと、
+ * 読めない行しか無い一覧が「許可はまだ1件も無い」に見える。
+ *
+ * **⚠️ 許可の本文（`allows` / `denies` / `answer` など）を決して載せないこと。** 識別に
+ * 使うのは id だけで、取れなければ載せない。`reason` は「どの欄が不正か」だけ。
+ */
+export const unreadablePermissionGrantSchema = z.object({
+  /** 行から取れた id（文字列のときだけ）。 */
+  id: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadablePermissionGrant = z.infer<typeof unreadablePermissionGrantSchema>;
+
+/**
+ * アカウントの1行が読めなかったときに、その行の代わりに外へ出すもの（issue #2536。
+ * {@link unreadablePermissionGrantSchema} と同じ線）。
+ *
+ * **⚠️ email・identity・アクセストークンなど、行の中身を決して載せないこと。**
+ * 識別に使うのは id だけ。`reason` は「どの欄が不正か」だけ。
+ */
+export const unreadableAccountSchema = z.object({
+  /** 行から取れた id（文字列のときだけ）。 */
+  id: z.string().optional(),
+  /** なぜ読めなかったか（不正な欄名だけ。値は載せない）。 */
+  reason: z.string(),
+});
+export type UnreadableAccount = z.infer<typeof unreadableAccountSchema>;
+
+/**
+ * 読めない行を、外へ返す形（`rowsUnreadable: { count, rows }`）へ畳む（issue #2536）。
+ * **0件なら `undefined`**（鍵ごと無くす。`{ count: 0 }` は作らない——既存の呼び手の応答を
+ * 変えないため）。`count` は全件、`rows` は **id が取れた行だけ**（id の無い行は指せない。
+ * 件数には数える）。
+ */
+export function toRowsUnreadable(
+  unreadable: readonly { id?: string | undefined; reason: string }[],
+): { count: number; rows: { id: string; reason: string }[] } | undefined {
+  if (unreadable.length === 0) return undefined;
+  return {
+    count: unreadable.length,
+    rows: unreadable.flatMap((row) =>
+      row.id === undefined ? [] : [{ id: row.id, reason: row.reason }],
+    ),
+  };
+}
+
+/**
  * 仕事のやり方（#1055 段3）。**器が持つのは「こう書いてある」までである。**
  *
  * ## ⛔ ここに「実行される」欄を足さないこと（北極星に触る）

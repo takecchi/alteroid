@@ -13,6 +13,7 @@ import type {
   PermissionGrantStore,
   RemoveUnreadableRowsOptions,
   RemoveUnreadableRowsResult,
+  UnreadablePermissionGrant,
   UnreadableRowOnce,
 } from '@alteroid/core';
 import { z } from 'zod';
@@ -190,6 +191,23 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
           invalidGrantsRaw: file.invalidGrantsRaw,
         },
         result: true,
+      };
+    });
+  }
+
+  /**
+   * `list()` が読み飛ばした行を、本文を含まない形（id と不正な欄名だけ）で返す
+   * （`PermissionGrantStore.listUnreadable` の doc。issue #2536）。`invalidGrantsRaw` から作る。
+   * `extractRowId` は名指しした欄しか読まないので、`allows` / `answer` などを取り出す経路は無い。
+   */
+  async listUnreadable(): Promise<UnreadablePermissionGrant[]> {
+    const { invalidGrantsRaw } = await this.#read();
+    return invalidGrantsRaw.map((raw): UnreadablePermissionGrant => {
+      const id = extractRowId(raw);
+      const result = permissionGrantSchema.safeParse(raw);
+      return {
+        ...(id === undefined ? {} : { id }),
+        reason: result.success ? '不正な行' : summarizeInvalidFields(result.error.issues),
       };
     });
   }

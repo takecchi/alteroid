@@ -9,6 +9,7 @@ import type {
   PermissionGrantStore,
   RemoveUnreadableRowsOptions,
   RemoveUnreadableRowsResult,
+  UnreadablePermissionGrant,
   UnreadableRowOnce,
 } from '@alteroid/core';
 import { asc, eq, inArray } from 'drizzle-orm';
@@ -93,6 +94,25 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
           `${describeUnreadableGrantRow({ id: row.id, reason: summarizeInvalidFields(parsed.error.issues) })}\n`,
         );
       }
+    }
+    return result;
+  }
+
+  /**
+   * `list()` が読み飛ばした行（`permissionGrantSchema` に合わない `record`）を、本文を含まない形
+   * （id と不正な欄名だけ）で返す（`PermissionGrantStore.listUnreadable` の doc。issue #2536）。
+   * `record` の中身（`allows` / `answer` など）は取り出さない——id は列から取る。
+   */
+  async listUnreadable(): Promise<UnreadablePermissionGrant[]> {
+    const rows = await this.#db
+      .select({ id: permissionGrants.id, record: permissionGrants.record })
+      .from(permissionGrants)
+      .orderBy(asc(permissionGrants.grantedAt));
+    const result: UnreadablePermissionGrant[] = [];
+    for (const row of rows) {
+      const parsed = permissionGrantSchema.safeParse(row.record);
+      if (parsed.success) continue;
+      result.push({ id: row.id, reason: summarizeInvalidFields(parsed.error.issues) });
     }
     return result;
   }

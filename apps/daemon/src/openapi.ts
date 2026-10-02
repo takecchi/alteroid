@@ -217,8 +217,27 @@ export const accountWithIdentitiesSchema = accountViewSchema.extend({
   ),
 });
 
+/**
+ * **読めない行を id で指す一覧**（`GET /permission-grants` と `GET /access` の `rowsUnreadable`。
+ * issue #2536。トークンの `rowsUnreadable`〈#2346〉と同じ線）。
+ *
+ * **1件でも在るときだけ鍵ごと載る**（0件なら鍵が無い。`{ count: 0 }` は作らない——既存の呼び手の
+ * 応答を変えないため）。`count` は読めない行の全件、`rows` は **id が取れた行だけ**（id の無い行は
+ * 指せないので載せない。件数には数える。だから `rows.length <= count`）。`rows[].id` は
+ * `POST /permission-grants/unreadable/remove` / `POST /access/unreadable/remove` の `ids` に渡せる。
+ *
+ * **⚠️ 行の中身（許可の本文・アカウントの email など）は載せない。** id と、不正な欄名だけの
+ * `reason`。
+ */
+export const rowsUnreadableSchema = z.object({
+  count: z.number().int().positive(),
+  rows: z.array(z.object({ id: z.string(), reason: z.string() })),
+});
+
 export const accessListResponseSchema = z.object({
   accounts: z.array(accountWithIdentitiesSchema),
+  /** 読めないアカウントの行（1件でも在るときだけ。{@link rowsUnreadableSchema}）。 */
+  rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
 export const accessAccountResponseSchema = z.object({ account: accountWithIdentitiesSchema });
@@ -488,6 +507,8 @@ export const cloneInterruptResponseSchema = z.object({
 
 export const permissionGrantsResponseSchema = z.object({
   grants: z.array(permissionGrantSchema),
+  /** 読めない許可の行（1件でも在るときだけ。{@link rowsUnreadableSchema}）。 */
+  rowsUnreadable: rowsUnreadableSchema.optional(),
 });
 
 /**

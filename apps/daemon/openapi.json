@@ -11993,7 +11993,7 @@
         "description": "`request_permission` の要求に人間が「許可します」と定型文でちょうど答え、かつ許可されたアカウント経由の回答だったときだけ記録される（`answerApproval` の`#recordPermissionGrantIfConsented`。operator 経由の回答は記録されない——operator の資格はクローンの器から読めるため、人間の証拠にならない）。`revokedAt` が付いていない行だけが、クローン本セッションの Bash 呼び出しで自動的に通る（`clone.ts` の `#onPreToolUse`）。並びは `grantedAt` 昇順。",
         "responses": {
           "200": {
-            "description": "許可の一覧。",
+            "description": "許可の一覧。読めない行（型に合わない形で入っている許可）が1件でも在るときだけ `rowsUnreadable`（件数と id・不正な欄名。本文は載せない）が付く。読めない行しか無いと `grants` は空だが「許可が無い」とは限らない。id を `POST /permission-grants/unreadable/remove` に渡して消せる。",
             "content": {
               "application/json": {
                 "schema": {
@@ -12068,6 +12068,32 @@
                           "route"
                         ]
                       }
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["grants"]
@@ -19778,7 +19804,7 @@
         "description": "alteroid を使う許可があれば読める（実行環境の持ち主と同格。2026-09-06 のオーナー決定）。メールと identity が並ぶ一覧である点は変わらない。",
         "responses": {
           "200": {
-            "description": "アカウントの一覧。",
+            "description": "アカウントの一覧。読めない行（型に合わない形で入っているアカウント）が1件でも在るときだけ `rowsUnreadable`（件数と id・不正な欄名。email などの中身は載せない）が付く。id を `POST /access/unreadable/remove` に渡して消せる。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19890,6 +19916,32 @@
                           "identities"
                         ]
                       }
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["accounts"]

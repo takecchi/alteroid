@@ -20,6 +20,7 @@ import type {
   RemoveUnreadableRowsOptions,
   RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
+  UnreadableAccount,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -278,6 +279,23 @@ export class FsAuthStore implements AuthStore {
   async listAccounts(): Promise<AuthAccount[]> {
     const { accounts } = await this.#read();
     return [...accounts].sort(compareAccountOrder);
+  }
+
+  /**
+   * `listAccounts()` が読み飛ばした行を、中身を含まない形（id と不正な欄名だけ）で返す
+   * （`AuthStore.listUnreadableAccounts` の doc。issue #2536）。`invalidAccountsRaw` から作る。
+   * `extractRowId` は名指しした欄しか読まないので、email などを取り出す経路は無い。
+   */
+  async listUnreadableAccounts(): Promise<UnreadableAccount[]> {
+    const { invalidAccountsRaw } = await this.#read();
+    return invalidAccountsRaw.map((raw): UnreadableAccount => {
+      const id = extractRowId(raw);
+      const result = authAccountSchema.safeParse(raw);
+      return {
+        ...(id === undefined ? {} : { id }),
+        reason: result.success ? '不正な行' : summarizeInvalidFields(result.error.issues),
+      };
+    });
   }
 
   async getAccount(id: string): Promise<AuthAccount | null> {

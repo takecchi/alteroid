@@ -15,6 +15,7 @@ import type {
   OwnerOutcome,
   RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
+  UnreadableAccount,
 } from '@alteroid/core';
 import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { SQL, SQLWrapper } from 'drizzle-orm';
@@ -83,6 +84,14 @@ export class PgAuthStore implements AuthStore {
       .from(authAccounts)
       .orderBy(asc(authAccounts.createdAt), asc(byteOrder(authAccounts.id)));
     return rows.map((row) => this.#toAccount(row));
+  }
+
+  /**
+   * 常に空（`AuthStore.listUnreadableAccounts` の doc。issue #2536）。pg はアカウントを列で持つので、
+   * 型に合わない行を作れない。
+   */
+  async listUnreadableAccounts(): Promise<UnreadableAccount[]> {
+    return [];
   }
 
   async getAccount(id: string): Promise<AuthAccount | null> {

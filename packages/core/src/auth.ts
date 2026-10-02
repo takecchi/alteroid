@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
+import type { UnreadableAccount } from './schema.js';
 import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
 /**
@@ -174,6 +175,13 @@ export interface AuthStore {
    * 3実装とも `id` という明示的な2次キーで並びを完全に決める。
    */
   listAccounts(): Promise<AuthAccount[]>;
+  /**
+   * **`listAccounts()` が読み飛ばした行**（fs の `invalidAccountsRaw`）を、**中身を含まない形**
+   * （id と不正な欄名だけ）で返す（issue #2536。`PermissionGrantStore.listUnreadable` と同じ線）。
+   * email・identity・アクセストークンは決して返さない（`unreadableAccountSchema` の doc）。
+   * **pg とメモリは列/スキーマ越しで持つので読めない行が無く、常に空。**
+   */
+  listUnreadableAccounts(): Promise<UnreadableAccount[]>;
   getAccount(id: string): Promise<AuthAccount | null>;
   /**
    * 検証済みメールの衝突検査に使う。

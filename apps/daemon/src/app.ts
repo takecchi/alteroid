@@ -119,6 +119,7 @@ import {
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   summarizeUsage,
   tokenRotationSettingsSchema,
+  toRowsUnreadable,
   traceApproval,
   UnreadableApprovalError,
   usageDate,
@@ -3751,14 +3752,26 @@ export function createApp(deps: AppDeps) {
           '通る（`clone.ts` の `#onPreToolUse`）。並びは `grantedAt` 昇順。',
         responses: {
           200: {
-            description: '許可の一覧。',
+            description:
+              '許可の一覧。読めない行（型に合わない形で入っている許可）が1件でも在るときだけ ' +
+              '`rowsUnreadable`（件数と id・不正な欄名。本文は載せない）が付く。読めない行しか無いと ' +
+              '`grants` は空だが「許可が無い」とは限らない。id を `POST /permission-grants/unreadable/remove` に渡して消せる。',
             content: { 'application/json': { schema: resolver(permissionGrantsResponseSchema) } },
           },
         },
       }),
       async (c) => {
         const grants = await stores.permissionGrants.list();
-        return c.json(permissionGrantsResponseSchema.parse({ grants }));
+        // **読めない行は、1件でも在るときだけ `rowsUnreadable` に載せる**（issue #2536。
+        // 0件なら鍵ごと無い）。読めない行しか無いと `grants` は空で「許可が無い」に見える。
+        // 本文は載らない（id と不正な欄名だけ）。
+        const rowsUnreadable = toRowsUnreadable(await stores.permissionGrants.listUnreadable());
+        return c.json(
+          permissionGrantsResponseSchema.parse({
+            grants,
+            ...(rowsUnreadable === undefined ? {} : { rowsUnreadable }),
+          }),
+        );
       },
     )
 
@@ -3904,7 +3917,7 @@ export function createApp(deps: AppDeps) {
             {
               error:
                 `指した id のうち ${String(result.count)} 件が、読めない許可の行に無い` +
-                '（何も消していない。id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡で確かめる）',
+                '（何も消していない。id は `GET /permission-grants` の `rowsUnreadable.rows[].id`（alteroid permission list）で確かめる）',
             },
             404,
           );
@@ -8198,7 +8211,10 @@ export function createApp(deps: AppDeps) {
           'オーナー決定）。メールと identity が並ぶ一覧である点は変わらない。',
         responses: {
           200: {
-            description: 'アカウントの一覧。',
+            description:
+              'アカウントの一覧。読めない行（型に合わない形で入っているアカウント）が1件でも在るときだけ ' +
+              '`rowsUnreadable`（件数と id・不正な欄名。email などの中身は載せない）が付く。id を ' +
+              '`POST /access/unreadable/remove` に渡して消せる。',
             content: { 'application/json': { schema: resolver(accessListResponseSchema) } },
           },
           403: {
@@ -8211,9 +8227,13 @@ export function createApp(deps: AppDeps) {
       }),
       async (c) => {
         const accounts = await stores.auth.listAccounts();
+        // **読めない行は、1件でも在るときだけ `rowsUnreadable` に載せる**（issue #2536。
+        // 0件なら鍵ごと無い）。email などの中身は載らない（id と不正な欄名だけ）。
+        const rowsUnreadable = toRowsUnreadable(await stores.auth.listUnreadableAccounts());
         return c.json(
           accessListResponseSchema.parse({
             accounts: await Promise.all(accounts.map((account) => accountView(stores, account))),
+            ...(rowsUnreadable === undefined ? {} : { rowsUnreadable }),
           }),
         );
       },
@@ -8488,7 +8508,7 @@ export function createApp(deps: AppDeps) {
             {
               error:
                 `指した id のうち ${String(result.count)} 件が、読めないアカウントの行に無い` +
-                '（何も消していない。id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡で確かめる）',
+                '（何も消していない。id は `GET /access` の `rowsUnreadable.rows[].id`（alteroid access list）で確かめる）',
             },
             404,
           );

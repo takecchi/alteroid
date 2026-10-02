@@ -32,6 +32,7 @@ import type {
   UnreadableCommitment,
   UnreadableInboxEvent,
   UnreadableJob,
+  UnreadablePermissionGrant,
   UnreadablePractice,
   UnreadableSchedule,
   UnreadableToken,
@@ -892,6 +893,18 @@ export interface PermissionGrantStore {
    * 揃える。issue #2158）。
    */
   markUsed(id: string, at: string): Promise<boolean>;
+
+  /**
+   * **`list()` が読み飛ばした行**（`permissionGrantSchema` に合わない行。fs の `invalidGrantsRaw`、
+   * pg の合わない `record`）を、**本文を含まない形**（id と不正な欄名だけ）で返す（issue #2536。
+   * トークンの `TokenPoolStore.listUnreadable` と同じ線）。読めない行しか無いと `list()` は空で、
+   * 「許可が無い」と読める——その言い分けの元になる。id を指して消すのは `removeUnreadable`。
+   *
+   * **⚠️ 許可の本文（`allows` / `denies` / `answer` など）は決して返さない**
+   * （`unreadablePermissionGrantSchema` の doc）。id が取れない行（fs のみ）は `id` を持たない。
+   * メモリ実装は常に空（スキーマを通した行しか持てない）。
+   */
+  listUnreadable(): Promise<UnreadablePermissionGrant[]>;
 
   /**
    * **読めない行を、id で指して消す**（issue #2440。トークンの `TokenPoolStore.removeUnreadable`
