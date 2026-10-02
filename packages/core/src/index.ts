@@ -653,6 +653,8 @@ export {
   type CloneRuntimeFacts,
   type SelfFacts,
 } from './self.js';
+export { describeProviderGaps, type LayerProviders } from './provider-gaps.js';
+export { DEFAULT_LAYER_PROVIDERS } from './layer-providers.js';
 /**
  * いま走っているプロセスの版（コミット sha）。デーモンと runner は別 Service で
  * 別々にデプロイされるので、両方が自分の版を名乗れることでその窓のずれが見える。

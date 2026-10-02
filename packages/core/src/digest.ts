@@ -1,3 +1,4 @@
+import { providerGapsSection } from './provider-gaps.js';
 import { excerptLine } from './excerpt.js';
 import { scanJournalPages } from './journal-scan.js';
 // **型だけを取る**（`import type` は実行時に消えるので、`manager.ts` との間に
@@ -1125,12 +1126,15 @@ const ESCALATION_RETAIN_CAPPED_NOTICE =
  * ——それは「背景処理を待っていない」という主張ではなく「そう名乗られていない」
  * である（`ManagerAwaitingBackground` の doc）。⟹ 省略しても、取れていない
  * ことを「手が空いている」と偽る側へは倒れない。
+ * @param providerGaps 層を動かす provider が持たない能力の描画済みの行
+ * （`describeProviderGaps`）。**空・省略なら何も足さない**（出力は1バイトも変わらない）。
  */
 export async function buildActivityDigest(
   stores: Stores,
   window: DigestWindow,
   liveness?: ManagerLiveness,
   awaitingBackground?: ManagerAwaitingBackgroundMap,
+  providerGaps?: readonly string[],
 ): Promise<string> {
   const until = window.until ?? new Date(Date.now() + 1);
   const sinceIso = window.since.toISOString();
@@ -1727,6 +1731,10 @@ export async function buildActivityDigest(
   }
 
   sections.push('', ...(await usageSection(stores, window.since, until)));
+
+  // provider が持たない能力。空・未指定なら何も足さない（出力は変わらない）。
+  const gapSection = providerGapsSection(providerGaps);
+  if (gapSection.length > 0) sections.push('', ...gapSection);
 
   return sections.join('\n');
 }
