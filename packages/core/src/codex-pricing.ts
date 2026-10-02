@@ -60,14 +60,6 @@ interface CodexModelPricing extends CodexRates {
 
 export const CODEX_LONG_CONTEXT_THRESHOLD_TOKENS = 272_000;
 
-/**
- * 既定のモデル。モデルの指定が無いときの単価の引き当てに使う。
- * rust-v0.160.0 同梱のカタログ（`models-manager/models.json`）で、`priority` が最小
- * （＝ピッカーの先頭＝既定）の `gpt-6.1-sol`。実際の既定はサーバーのカタログで変わりうる
- * ので、app-server がモデル名を返すならそちらを優先すること。
- */
-export const CODEX_DEFAULT_PRICING_MODEL = 'gpt-6.1-sol';
-
 export const CODEX_PRICING: Readonly<Record<string, CodexModelPricing>> = {
   'gpt-6-astra': {
     input: 10,
@@ -157,17 +149,18 @@ function isCount(n: unknown): n is number {
 }
 
 /**
- * 使用量から USD を計算する。モデルが表に無い（または使用量が数として読めない）ときは
- * `undefined`。モデル名は完全一致で引く（日付付きの別名などを推測で寄せない）。
+ * 使用量から USD を計算する。モデルが分からない・表に無い（または使用量が数として読めない）
+ * ときは `undefined`。モデル名は完全一致で引く（日付付きの別名などを推測で寄せない）。
+ * **モデルが分からないときに Codex の既定を仮定しない。** 既定はサーバーのカタログで変わり
+ * うるので、呼び出し側は app-server が返した実際のモデル名を渡す。
  */
 export function computeCodexCostUSD(
   model: string | undefined,
   usage: CodexUsageForPricing,
 ): number | undefined {
-  const key = model ?? CODEX_DEFAULT_PRICING_MODEL;
   // 継承したプロパティ（`toString` など）を表の行と取り違えない。
-  if (!Object.hasOwn(CODEX_PRICING, key)) return undefined;
-  const pricing = CODEX_PRICING[key]!;
+  if (model === undefined || !Object.hasOwn(CODEX_PRICING, model)) return undefined;
+  const pricing = CODEX_PRICING[model]!;
   const { inputTokens, cachedInputTokens, outputTokens } = usage;
   const cacheWriteInputTokens = usage.cacheWriteInputTokens ?? 0;
   if (

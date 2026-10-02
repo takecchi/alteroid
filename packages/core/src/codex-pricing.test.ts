@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  CODEX_DEFAULT_PRICING_MODEL,
   CODEX_LONG_CONTEXT_THRESHOLD_TOKENS,
   CODEX_PRICING,
   computeCodexCostUSD,
@@ -49,12 +48,9 @@ describe('computeCodexCostUSD', () => {
     expect(cost).toBeCloseTo((100 * 0.125) / 1_000_000, 12);
   });
 
-  it('モデル指定が無ければ既定のモデルの単価を使う', () => {
+  it('モデルが分からなければ undefined を返す（既定のモデルを仮定しない）', () => {
     const u = usage({ inputTokens: 1_000_000, outputTokens: 1_000_000 });
-    expect(computeCodexCostUSD(undefined, u)).toBe(
-      computeCodexCostUSD(CODEX_DEFAULT_PRICING_MODEL, u),
-    );
-    expect(CODEX_PRICING[CODEX_DEFAULT_PRICING_MODEL]).toBeDefined();
+    expect(computeCodexCostUSD(undefined, u)).toBeUndefined();
   });
 
   it('表に無いモデルでは undefined を返す（推測しない）', () => {
