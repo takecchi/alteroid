@@ -16357,6 +16357,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
     permission_grant_list:
       /…ほか \d+ 件は省略（許可の記録は \d+ 件あり、grantedAt の昇順に \d+ 件だけ出した）。/,
+    account_list:
+      /…ほか \d+ 件は省略（アカウントは \d+ 件あり、createdAt の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
     // #1055 段3②。続きを取る口（cursor）がまだ無いので、その旨を正直に言う
@@ -17048,6 +17050,20 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         answer: `許可します ${long}`,
         grantedAt: `2026-01-01T00:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
         route: { principalKind: 'account', accountId: 'acct-fake' },
+      });
+    }
+    // アカウント（account_list）。件数で溢れないことを見る。
+    for (let index = 0; index < count; index += 1) {
+      const pad = String(index).padStart(4, '0');
+      await h.stores.auth.putAccount({
+        id: `acct-${pad}`,
+        displayName: `Flood Name ${pad}`,
+        email: `flood-${pad}@example.test`,
+        createdAt: `2026-01-01T00:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+        lastLoginAt: '2026-02-01T00:00:00.000Z',
+        grantedAt: '2026-01-02T00:00:00.000Z',
+        grantedBy: 'operator',
+        ownerDeclaredAt: null,
       });
     }
     for (const summary of h.running) {
@@ -17775,6 +17791,13 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       name: 'permission_grant_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に状態（有効）が無い: ${firstLine}`).toMatch(/^- \S+ 有効/),
+    },
+    {
+      name: 'account_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に許可の状態（許可済み）が無い: ${firstLine}`).toMatch(
+          /^- \S+ 許可済み/,
+        ),
     },
     {
       name: 'practice_list',
@@ -24303,5 +24326,157 @@ describe('permission_grant_list（読むだけ。HTTP の GET /permission-grants
     const second = await h.call('permission_grant_list', { id: 'pg-01', offset: Number(offset) });
     expect(second).toContain('あ');
     expect(second).not.toContain('ここで切れている');
+  });
+});
+
+describe('account_list（読むだけ。id・許可の状態・時刻だけで、個人の情報は返さない）', () => {
+  // **偽のアカウント。** 特徴的な email・表示名は、出力のどこにも現れてはいけない（#2645）。
+  const EMAIL = 'alice-unique@example.test';
+  const NAME = 'Alice Uniquename';
+  const at = (day: string, index: number) =>
+    `2026-${day}T00:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`;
+  const account = (index: number, over: Record<string, unknown> = {}) => {
+    const pad = String(index).padStart(2, '0');
+    return {
+      id: `acct-${pad}`,
+      displayName: index === 1 ? NAME : `Other Name ${pad}`,
+      email: index === 1 ? EMAIL : `other-${pad}@example.test`,
+      createdAt: at('01-01', index),
+      lastLoginAt: at('02-01', index),
+      grantedAt: at('01-02', index),
+      grantedBy: 'operator',
+      ownerDeclaredAt: null,
+      ...over,
+    };
+  };
+
+  it('道具として配られ、書き込みの道具は配られていない', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('account_list'));
+    for (const name of [
+      'account_grant',
+      'account_revoke',
+      'account_remove',
+      'account_remove_unreadable',
+      'account_set_owner',
+    ]) {
+      expect(CLONE_TOOL_NAMES as readonly string[]).not.toContain(name);
+    }
+  });
+
+  it('対照: 載せるべき値（id・状態・時刻・許可した者）は出る', async () => {
+    const h = harness();
+    await h.stores.auth.putAccount(account(1));
+    await h.stores.auth.putAccount(account(2, { grantedAt: null, grantedBy: null }));
+
+    const reply = await h.call('account_list', {});
+
+    expect(reply).toMatch(/^- acct-01 許可済み$/m);
+    expect(reply).toMatch(/^- acct-02 未許可$/m);
+    expect(reply).toContain('2026-01-01T00:00:01.000Z');
+    expect(reply).toContain('2026-02-01T00:00:01.000Z');
+    expect(reply).toContain('許可した者: operator');
+  });
+
+  it('陰性対照: 一覧・詳細（id 指定）・どの出力にも email と表示名が現れない', async () => {
+    const h = harness();
+    await h.stores.auth.putAccount(account(1));
+    await h.stores.auth.putAccount(account(2));
+    const outputs = [
+      await h.call('account_list', {}),
+      await h.call('account_list', { id: 'acct-01' }),
+      await h.call('account_list', { id: 'acct-02' }),
+      await h.call('account_list', { id: 'acct-99' }),
+      await h.call('account_list', { from: 1 }),
+      await h.call('account_list', { from: 99 }),
+    ];
+    // 対照: 同じ入力で載せるべき id は出ている（空の出力で偽陽性にならない）。
+    expect(outputs[0]).toContain('acct-01');
+    expect(outputs[1]).toContain('acct-01');
+    for (const output of outputs) {
+      expect(output).not.toContain(EMAIL);
+      expect(output).not.toContain('alice-unique');
+      expect(output).not.toContain(NAME);
+      expect(output).not.toContain('Uniquename');
+      expect(output).not.toContain('@example.test');
+      expect(output).not.toContain('Other Name');
+    }
+  });
+
+  it('identity・アクセストークンの値も出ない', async () => {
+    const h = harness();
+    await h.stores.auth.putAccount(account(1));
+    await h.stores.auth.putIdentity({
+      provider: 'google',
+      subject: 'sub-unique-123',
+      accountId: 'acct-01',
+      email: EMAIL,
+      emailVerified: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-01-01T00:00:00.000Z',
+    });
+    const reply = [
+      await h.call('account_list', {}),
+      await h.call('account_list', { id: 'acct-01' }),
+    ].join('\n');
+    expect(reply).toContain('acct-01');
+    expect(reply).not.toContain('sub-unique-123');
+    expect(reply).not.toContain(EMAIL);
+  });
+
+  it('読めない行は rowsUnreadable で出る（件数と id・理由。中身は載らない）', async () => {
+    const h = harness();
+    await h.stores.auth.putAccount(account(1));
+    h.stores.auth.listUnreadableAccounts = async () => [
+      { id: 'acct-bad', reason: 'createdAt が日時でない' },
+      { reason: 'id も取れない' },
+    ];
+
+    const reply = await h.call('account_list', {});
+
+    expect(reply).toContain(
+      'rowsUnreadable: {"count":2,"rows":[{"id":"acct-bad","reason":"createdAt が日時でない"}]}',
+    );
+    expect(reply).toContain('- acct-01 許可済み');
+  });
+
+  it('読めない行しか無いときは「アカウントが無い」と言わない', async () => {
+    const h = harness();
+    h.stores.auth.listUnreadableAccounts = async () => [{ id: 'acct-bad', reason: 'x' }];
+
+    const reply = await h.call('account_list', {});
+
+    expect(reply).toContain('rowsUnreadable');
+    expect(reply).toContain('「アカウントが無い」とは言えない');
+    expect(reply).not.toContain('（アカウントは無い）');
+  });
+
+  it('読めない行が0件なら rowsUnreadable の鍵が無い。アカウントが無ければそう言う', async () => {
+    const h = harness();
+    const empty = await h.call('account_list', {});
+    expect(empty).toContain('（アカウントは無い）');
+    expect(empty).not.toContain('rowsUnreadable');
+    await h.stores.auth.putAccount(account(1));
+    expect(await h.call('account_list', {})).not.toContain('rowsUnreadable');
+  });
+
+  it('件数が多くても予算で締まり、切れたら from で続きが読める', async () => {
+    const h = harness();
+    for (let index = 0; index < 80; index += 1) {
+      await h.stores.auth.putAccount(
+        account(index, {
+          createdAt: `2026-01-01T${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}:00.000Z`,
+        }),
+      );
+    }
+
+    const reply = await h.call('account_list', {});
+
+    expect(reply.length).toBeLessThan(10_000);
+    expect(reply).toMatch(/…ほか \d+ 件は省略（アカウントは 80 件あり/);
+    const next = /account_list from=(\d+) で取れる/.exec(reply)?.[1];
+    expect(next).toBeDefined();
+    const second = await h.call('account_list', { from: Number(next) });
+    expect(second).toContain(`- acct-${String(next).padStart(2, '0')} `);
+    expect(second).not.toContain('- acct-00 ');
   });
 });

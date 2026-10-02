@@ -161,6 +161,7 @@ import {
 } from './memory.js';
 import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js';
 import { redactProfileFailure } from './profile.js';
+import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
 import { ProfileRollbackFailedError, type ProfileService } from './profile-service.js';
 import {
@@ -749,6 +750,7 @@ export const CLONE_TOOL_NAMES = [
   'practice_remove',
   'token_list',
   'permission_grant_list',
+  'account_list',
   'self_read',
   'self_status',
   'self_dropped',
@@ -847,6 +849,7 @@ export const TRACELESS_CLONE_TOOLS = [
   'practice_history',
   'token_list',
   'permission_grant_list',
+  'account_list',
   'self_read',
   'self_status',
   'self_dropped',
@@ -9694,6 +9697,46 @@ export function createCloneTools(context: ToolContext) {
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
         return text(await renderPermissionGrantList(stores, { id, from, offset }));
+      },
+    ),
+
+    // --- アカウント（読むだけ。個人の情報は出さない） ----------------------
+    //
+    // 人間の入口（`GET /access` / `alteroid access list`）と同じ
+    // `AuthStore.listAccounts()` / `listUnreadableAccounts()` に乗せる。
+    // **付与・取り消し・読めない行を消す口は渡さない**（#2522）。
+    // **email と表示名は載せない**（オーナー代理の決定。人間が決めたら変わりうる: #2645）。
+    tool(
+      'account_list',
+      [
+        'alteroid にログインしたアカウントと、使う許可の状態の一覧（読むだけ）。',
+        '出るのは id・許可の状態（許可済み / 未許可、許可した時刻と者、持ち主の宣言）・時刻だけ。',
+        '**個人の情報（email・表示名）は出さない**（identity・アクセストークンも出ない）。人間が決めたら変わりうる。',
+        '**この道具に書き込みは無い。** 許可の付与も取り消しも、読めない行を消すことも人間の手に属する。',
+        '1件だけ読むときは id を渡す。切れたときは from で続きを取る。',
+      ].join(' '),
+      {
+        id: z
+          .string()
+          .optional()
+          .describe('この1件だけを読む（一覧に出ている id）。他の条件は無視される'),
+        from: z
+          .number()
+          .optional()
+          .describe(
+            `一覧で、createdAt 昇順の何件目から出すか（${formatIntRangeJa({ min: 0 })}、0 起点）`,
+          ),
+        offset: z
+          .number()
+          .optional()
+          .describe(`id で読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
+      },
+      async ({ id, from = 0, offset = 0 }) => {
+        const fromError = describeIntRangeViolation('from', from, { min: 0 });
+        if (fromError !== null) return text(fromError);
+        const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
+        if (offsetError !== null) return text(offsetError);
+        return text(await renderAccountList(stores, { id, from, offset }));
       },
     ),
 
