@@ -274,6 +274,7 @@ import {
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
@@ -4005,17 +4006,15 @@ function formatUnpushedWorkObservationWorktrees(
  * force の `done`/`waiting_human`）・人間が Web UI / `DELETE /managers/:id`
  * で止めたとき・自動畳みが止める直前**（`manager.ts` の `abort()` が
  * `runner.stop(managerId)` を呼ぶ直前。Issue #1266 残り2）。
- * **`manager_list` 自身・器の入れ替え（redeploy・枠落ちでセッションを失う
- * 経路）では、どの経路からも一度も更新されない**——`report` も `git
- * push`／枝作成の `tool_use` も届く前に器を失う経路（redeploy・枠落ち）は、
- * どちらの形でも拾えない（`manager.ts` の `#observeUnpushedWorkOnce` の
- * doc）。**`force: true` はもうこの「更新されない」側ではない**——Issue
- * #1266 残り2で `abort()` が埋めた。**時刻だけを出すと、読み手はそれを
- * 「いまの状態」と誤読する**——だから毎回、どの経路が更新するかを行の中に
- * 書く（JSDoc に書いてもクローンには届かない。`resources: true` の説明文と
- * 同じ理由）。**このパラグラフの生の日本語文言はテスト
- * （`tools.test.ts` の「manager_list は observed な未push観測」）が固定
- * しているので、書き換える前に確かめること。**
+ * **`manager_list` 自身は、この欄を更新しない。** 器の入れ替え（redeploy・
+ * 枠落ち）も、いまは `closed`・`vacate`・`shutdown` の経路が先取りして更新
+ * しうる（PR #1545 / #1777。届かないことはある）。**時刻だけを出すと、読み手
+ * はそれを「いまの状態」と誤読する**——だから毎回、観測自身の `source` から
+ * 出どころを行の中に書く（`describeUnpushedWorkObservationProvenance`。
+ * 経路の列挙はここに持たない。Issue #1266。JSDoc に書いてもクローンには
+ * 届かない。`resources: true` の説明文と同じ理由）。**このパラグラフの
+ * 生の日本語文言はテスト（`tools.test.ts` の「manager_list は observed な
+ * 未push観測」）が固定しているので、書き換える前に確かめること。**
  *
  * ## 器の入れ替え（redeploy 等）で応答不能な委譲は、別の言い方をする
  * （クローンの指摘を受けて追加）
@@ -4081,12 +4080,7 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
   }
 
   if (observation === undefined) return null;
-  const provenance =
-    'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
-    '（manager_stop の force・done/waiting_human の非force・人間の停止・自動畳み）' +
-    'で取った最後の1回（manager_list 自身・器の入れ替え（redeploy・枠落ちで' +
-    'セッションを失う経路）では更新されない。いまの状態ではない）';
+  const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'manager_list');
   if (observation.kind === 'unavailable') {
     return (
       `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason

@@ -43,7 +43,11 @@ import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
-import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/unpushed-work-observation-format';
+import {
+  describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationProvenance,
+  describeUnpushedWorkObservationSource,
+} from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -2055,8 +2059,6 @@ type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>[
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
 /** `lastUnpushedWorkObservation` 単体（discriminated union。Issue #1883）。 */
 type ManagerUnpushedWorkObservation = NonNullable<ManagerListItem['lastUnpushedWorkObservation']>;
-/** その観測を取った経路（`kind` のどちらの枝にも乗る。Issue #1883）。 */
-type ManagerUnpushedWorkObservationSource = NonNullable<ManagerUnpushedWorkObservation['source']>;
 
 /**
  * `ManagerDenial.actor` を一行に添える短い印にする。
@@ -2454,30 +2456,6 @@ function formatUnpushedWorkObservationWorktrees(
 }
 
 /**
- * `lastUnpushedWorkObservation.source` を人間可読な1句にする。core の
- * `describeUnpushedWorkObservationSource`（`tools.ts`）と同じ複製——道具の名前
- * だけ CLI のものに言い換える（`manager_stop` → `/stop`）。
- */
-function describeUnpushedWorkObservationSource(
-  source: ManagerUnpushedWorkObservationSource | undefined,
-): string {
-  if (source === undefined) {
-    return '経路不明（この欄を書かない版が残した行、または経路を渡さなかった呼び出し）';
-  }
-  if (source === 'stop-refusal') return '/stop（running・非force）の断り';
-  if (source === 'report') return 'ターンが report で終わったとき';
-  if (source === 'tool_use') return 'Bash で git push か新しい枝を作る操作を検出したとき';
-  if (source === 'auto-fold') return 'done を自動で畳む前の安全弁（auto-fold）';
-  if (source === 'vacate') return 'runner を意図して空ける直前（vacate）';
-  if (source === 'stop')
-    return '/stop（force・done/waiting_human の非force）・人間の停止・自動畳みが止める直前';
-  if (source === 'closed') return 'runner が closed を出す直前に先取り';
-  if (source === 'shutdown')
-    return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
-  return `この一覧が知らない経路 "${String(source)}"（デーモンの版が新しい可能性）`;
-}
-
-/**
  * `/stop`（running・非force）の断り、ターンが `report` で終わったとき、
  * Bash で `git push` か新しい枝を作る操作を検出したとき、または止める操作
  * そのもの（`/stop` の force・`done`/`waiting_human` の非force・人間の停止・
@@ -2546,12 +2524,7 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   }
 
   if (observation === undefined) return null;
-  const provenance =
-    '/stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
-    '（/stop の force・done/waiting_human の非force・人間の停止・自動畳み）で' +
-    '取った最後の1回（この一覧そのもの・器の入れ替え（redeploy・枠落ちでセッションを' +
-    '失う経路）では更新されない。いまの状態ではない）';
+  const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'この一覧');
   if (observation.kind === 'unavailable') {
     return (
       `      未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason

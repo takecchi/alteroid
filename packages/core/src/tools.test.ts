@@ -7307,18 +7307,45 @@ describe('クローンの道具', () => {
 
     expect(reply).toContain('未push観測');
     expect(reply).toContain('feat/example');
-    // **由来（残る族）を行の中に書く**——これが無いと、読み手は時刻だけを見て
-    // 「いまの状態」だと誤読する（AGENTS.md と同じ理由でここに断りを置く）。
-    expect(reply).toContain('manager_stop');
-    expect(reply).toContain('非force');
-    // **Issue #1266 が名指しした「残る族」の1つ——枠落ちでセッションを失う
-    // 経路も更新しない。** `schema.ts` の `lastUnpushedWorkObservationSchema`
-    // の doc（「器の入れ替え（redeploy・枠落ちでセッションを失う経路）」）と
-    // 同じ語をこの行にも出す。
-    expect(reply).toContain('枠落ち');
+    // **由来を行の中に書く**——これが無いと、読み手は時刻だけを見て「いまの状態」と
+    // 誤読する。経路は決め打ちの列挙ではなく観測の `source` から出す（Issue #1266。
+    // この観測は `source` を持たない古い行なので、経路不明と言う）。
+    expect(reply).toContain('経路不明');
+    expect(reply).toContain('manager_list 自身では更新されない');
+    expect(reply).toContain('いまの状態ではない');
+    // 器の入れ替え・枠落ちでは更新されない、という古い断定は出さない
+    // （PR #1545 / #1777 で `closed` / `vacate` / `shutdown` が更新するようになった）。
+    expect(reply).not.toContain('枠落ち');
     // **探索の起点の絶対パスは出さない**（`unpushedWorkTreeSchema` の doc が
     // 引いた線）。
     expect(reply).not.toContain('/workspace/mgr-1/repo');
+  });
+
+  /**
+   * **Issue #1266** — `source: 'closed'` の観測は、`closed` の経路の句を出し、
+   * 「器の入れ替え・枠落ちでは更新されない」とは言わない。`source` が無い行は
+   * 経路不明になる（上の観測がそれ）。
+   */
+  it('manager_list は source: closed の未push観測で closed の経路の句を出し、「更新されない」と言い切らない（Issue #1266）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.lastUnpushedWorkObservation = {
+      kind: 'observed',
+      at: '2026-09-20T00:00:00.000Z',
+      source: 'closed',
+      cwd: '/workspace/mgr-1/repo',
+      worktrees: [{ relativePath: '.', branch: 'feat/example' }],
+    };
+
+    const reply = await h.call('manager_list', {});
+
+    expect(reply).toContain('runner が closed を出す直前に先取り');
+    expect(reply).not.toContain('経路不明');
+    expect(reply).not.toContain('枠落ち');
+    expect(reply).not.toContain('器の入れ替え');
+    expect(reply).not.toContain('manager_stop（running・非force）の断り');
   });
 
   /**

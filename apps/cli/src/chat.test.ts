@@ -1162,6 +1162,37 @@ describe('renderManagerList', () => {
       expect(text).toContain('いまの状態ではない');
     });
 
+    it('Issue #1266: 器を失っていない行は観測の source の経路を言い、source が無ければ経路不明を言う', () => {
+      const closed = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            source: 'closed',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(closed).toContain('runner が closed を出す直前に先取り');
+      expect(closed).toContain('この一覧 自身では更新されない');
+      expect(closed).not.toContain('枠落ち');
+      expect(closed).not.toContain('経路不明');
+      const noSource = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(noSource).toContain('経路不明');
+    });
+
     it('unavailable: 取れなかった理由を出す', () => {
       const text = renderManagerList([
         manager({

@@ -125,6 +125,28 @@ export function describeUnpushedWorkObservationSource(
 }
 
 /**
+ * 器を失っていない委譲の「未push観測」の見出しに入れる、観測の出どころの
+ * 句（Issue #1266）。**経路の列挙を持たない**——観測自身の `source` を
+ * {@link describeUnpushedWorkObservationSource} で言うだけにする（`closed`・
+ * `vacate`・`shutdown` が入ってから、決め打ちの列挙は事実と違っていた）。
+ * `tools.ts`（`manager_list`）・CLI（`/managers`）・Web UI（`manager-detail.tsx`）
+ * の共通の定義元。`source` が無い古い行は経路不明がそのまま出る。
+ *
+ * `refresher` は「この表示そのものでは更新されない」と名乗る相手の名前
+ * （`manager_list` など）。渡さなければ、いまの状態ではないことだけを言う。
+ */
+export function describeUnpushedWorkObservationProvenance(
+  source: UnpushedWorkObservationSourceLike | undefined,
+  refresher?: string,
+): string {
+  const caveat =
+    refresher === undefined
+      ? 'いまの状態そのものではない'
+      : `${refresher} 自身では更新されない。いまの状態ではない`;
+  return `最後の1回の経路: ${describeUnpushedWorkObservationSource(source)}。${caveat}`;
+}
+
+/**
  * 器の入れ替え（`sessionMissingSince`）で、止まる直前の観測が
  * **届いていない**（`shutdownObservationArrivedAfterSwap !== true`）ときの
  * 断りの1文（Issue #1266 / PR #1777、Web への写しは Issue #2457）。

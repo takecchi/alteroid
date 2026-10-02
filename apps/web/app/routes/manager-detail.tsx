@@ -78,6 +78,7 @@ import {
  */
 import {
   describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from '@alteroid/core/unpushed-work-observation-format';
@@ -1348,12 +1349,7 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   // 以降は、器の入れ替えで応答不能ではない委譲（と、知らない kind）。
   if (observation === undefined) return null;
 
-  const provenance =
-    'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
-    '（manager_stop の force・done/waiting_human の非force・人間の停止・自動畳み）で' +
-    '取った最後の1回（器の入れ替え（redeploy・枠落ちでセッションを失う経路）の直前には' +
-    'best-effort で取るが、届かないことがある。いまの状態そのものではない）';
+  const provenance = describeUnpushedWorkObservationProvenance(observation.source);
 
   if (observation.kind === 'unavailable') {
     return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${observation.reason}`;
