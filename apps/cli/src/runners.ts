@@ -13,6 +13,7 @@ import {
 import { createClient } from './client.js';
 import { formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid runners` — 委譲先の器と、**いま走っているコードの版**を見る。
@@ -247,7 +248,7 @@ export function renderRunners(view: RunnersView, now: number = Date.now()): stri
     // こちらは「そのプロセスがどのコミットで走っているか」。並べないと、どちらか
     // 片方でもう片方を推測することになる。
     lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
-    if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
+    if (runner.error !== undefined) lines.push(`  直近の失敗: ${redactError(runner.error)}`);
     // **指紋（credentials/profile）は「聞けたか」の3状態を潰さない**（#1947）。
     // Web の設定画面（`Credentials`）と同じ判断——繋がっていないので聞いて
     // いない（`unheard`）／聞いたが失敗した（`failed`）／聞いて0件だった
@@ -295,7 +296,7 @@ function renderPushHealth(pushHealth: RunnerPushHealth): string | undefined {
       ? undefined
       : outcome.status === 'ok'
         ? `${label} ok（${outcome.at}）`
-        : `${label} 失敗（${outcome.at}）: ${outcome.error ?? '理由不明'}`;
+        : `${label} 失敗（${outcome.at}）: ${outcome.error === undefined ? '理由不明' : redactError(outcome.error)}`;
   const parts = [
     outcomeText('プロファイル', pushHealth.profile),
     outcomeText('環境変数', pushHealth.credentials),
@@ -326,7 +327,7 @@ function renderCredentialsFingerprint(runner: RunnersView['runners'][number]): s
     return '鍵: 確かめていない（繋がっていないので聞いていない）';
   }
   if (runner.credentialsProbe.status === 'failed') {
-    return `鍵を確かめられなかった: ${runner.credentialsProbe.error}`;
+    return `鍵を確かめられなかった: ${redactError(runner.credentialsProbe.error)}`;
   }
   if (runner.credentials.length === 0) {
     return '鍵: 渡している鍵は無い';
@@ -350,7 +351,7 @@ function renderProfileFingerprint(runner: RunnersView['runners'][number]): strin
     return 'プロファイル: 確かめていない（繋がっていないので聞いていない）';
   }
   if (runner.profileProbe.status === 'failed') {
-    return `プロファイルを確かめられなかった: ${runner.profileProbe.error}`;
+    return `プロファイルを確かめられなかった: ${redactError(runner.profileProbe.error)}`;
   }
   if (runner.profile === undefined) {
     return 'プロファイル: 置いていない';

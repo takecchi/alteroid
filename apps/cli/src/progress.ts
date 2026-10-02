@@ -4,6 +4,7 @@ import { describeProgress } from '@alteroid/core';
 
 import { createClient } from './client.js';
 import { describeAuthFailure, resolveTarget } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid progress` — 作業の進捗（積み上がり・実施中・窓の中の消化・見込み）を読む
@@ -40,7 +41,11 @@ export async function progressCommand(options: ProgressOptions = {}): Promise<vo
     if (response.status === 400) {
       // daemon の断り文言をそのまま出す（言い換えると、daemon 側が変わったときここだけ古くなる）。
       const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new Error(errorBody.error ?? '進捗を読めませんでした（windowHours の形が不正です）');
+      throw new Error(
+        errorBody.error === undefined
+          ? '進捗を読めませんでした（windowHours の形が不正です）'
+          : redactError(errorBody.error),
+      );
     }
     const described = describeAuthFailure(response.status, target);
     stdout.write(`${described ?? `進捗を読めませんでした（HTTP ${String(response.status)}）`}\n`);

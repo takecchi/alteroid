@@ -4,6 +4,7 @@ import { stdout } from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { clearCredential, readCredential, writeCredential } from './credentials.js';
+import { redactedErrorMessage, redactError } from './redact.js';
 import { isRunnerContainer, resolveTarget, type Target } from './target.js';
 
 /**
@@ -142,7 +143,7 @@ async function requestServerLogout(baseUrl: string, token: string): Promise<Serv
   } catch (error) {
     return {
       kind: 'failed',
-      detail: `${baseUrl} に届きませんでした（${error instanceof Error ? error.message : String(error)}）`,
+      detail: `${baseUrl} に届きませんでした（${redactedErrorMessage(error)}）`,
     };
   }
   if (response.ok) return { kind: 'revoked' };
@@ -259,7 +260,7 @@ async function postJson(target: Target, path: string, body: unknown): Promise<un
 async function errorText(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { error?: unknown };
-    if (typeof body.error === 'string') return `${response.status} ${body.error}`;
+    if (typeof body.error === 'string') return `${response.status} ${redactError(body.error)}`;
   } catch {
     // JSON でない応答（HTML など）はそのまま状態コードだけ見せる
   }

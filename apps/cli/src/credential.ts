@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { stdin, stdout } from 'node:process';
 
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid credential` — マネージャーへ降ろす環境変数（名前→値の袋）。
@@ -246,7 +247,7 @@ function reportRunners(view: CredentialsUpdateView): void {
     stdout.write(
       runner.ok
         ? `  ${runner.runnerId}: 降ろしました\n`
-        : `  ${runner.runnerId}: 降ろせませんでした（次に名乗ったときに追いつきます）: ${runner.error ?? '理由不明'}\n`,
+        : `  ${runner.runnerId}: 降ろせませんでした（次に名乗ったときに追いつきます）: ${runner.error === undefined ? '理由不明' : redactError(runner.error)}\n`,
     );
   }
 }
@@ -324,7 +325,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
-    if (typeof body.error === 'string') throw new Error(body.error);
+    if (typeof body.error === 'string') throw new Error(redactError(body.error));
     throw new Error(`${path} が失敗しました (${String(response.status)})`);
   }
   return response.json();
