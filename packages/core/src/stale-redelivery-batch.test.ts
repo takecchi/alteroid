@@ -205,7 +205,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await waitFor(
       async () => (await stores.inbox.peekPending()).entries.length === 0,
       '全件（65,536件）が受信箱から消える',
-      60_000,
     );
 
     // **実測**: 上限を1件超えただけで、呼び出しが2回に割れる。
