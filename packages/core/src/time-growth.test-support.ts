@@ -1,4 +1,6 @@
-import { expect } from 'vitest';
+import vm from 'node:vm';
+
+import { assert, expect } from 'vitest';
 
 /**
  * issue #2187 —— ガードと timeout の時間の歯が、壁時計の絶対値
@@ -83,14 +85,70 @@ export interface GrowthMeasurement {
   ratio: number;
 }
 
-function timeOnceMs<TInput>(
+/** hardCapMs で打ち切られたことを、測定の外側（assertion を組み立てる所）へ運ぶ印。 */
+class HungError extends Error {
+  constructor(
+    readonly phase: string,
+    readonly size: number,
+  ) {
+    super(`hung: ${phase} n=${size}`);
+  }
+}
+
+/**
+ * 1回分の `run(input)` を測る道具。`hardCapMs` が有限なら、`node:vm` の `timeout` の下で走らせる。
+ *
+ * #2579 —— 指数的な後戻りの正規表現（`(a+)+$` の形）が `run` の中で走ると、同期呼び出しは
+ * 戻ってこない。`hardCapMs` は `run` が戻ったあとにしか比べられないので、固まった本物の後退は
+ * assertion に辿り着かず、vitest の testTimeout も（同じスレッドが塞がっているので）発火せず、
+ * CI の job 全体の時間切れまで読める失敗が出なかった。
+ *
+ * `vm` の `timeout` は V8 の TerminateExecution で、実行中の irregexp の後戻りの最中でも割り込める。
+ * Worker や子プロセスに逃がさずこれを選んだ理由:
+ * - 同じスレッド・同じ isolate で走るので、測る時間と比が変わらない（スレッド起動や IPC の雑音が乗らない）。
+ * - 約 65 箇所の呼び出し側は閉包を渡している。Worker/子プロセスだと、モジュールのパスを渡す形へ全部移す必要がある。
+ * - プロセスを増やさない（器には pids の上限がある）。
+ *
+ * **時計は `vm` の内側の閉包で読む**（`vm` へ入る・出るコストを t(small) / t(large) に入れない）。
+ * 文脈と Script は呼び出しごとに1つだけ作って使い回す。
+ * `hardCapMs` が有限でないとき（smoke が閾値を無効にする）は `vm` の `timeout` に渡せないので、直接走らせる。
+ * `run` が投げた他の例外は、そのまま呼び出し側へ伝わる。
+ */
+function makeTimer<TInput>(
   run: (input: TInput) => unknown,
-  input: TInput,
   now: () => number,
-): number {
-  const start = now();
-  run(input);
-  return now() - start;
+  hardCapMs: number,
+): (input: TInput, phase: string, size: number) => number {
+  const direct = (input: TInput): number => {
+    const start = now();
+    run(input);
+    return now() - start;
+  };
+  if (!Number.isFinite(hardCapMs)) return direct;
+
+  let pending: TInput;
+  let elapsedMs = 0;
+  const context = vm.createContext({
+    timed: (): void => {
+      const start = now();
+      run(pending);
+      elapsedMs = now() - start;
+    },
+  });
+  const script = new vm.Script('timed()');
+  const timeout = Math.max(1, Math.ceil(hardCapMs));
+  return (input, phase, size) => {
+    pending = input;
+    try {
+      script.runInContext(context, { timeout });
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
+        throw new HungError(phase, size);
+      }
+      throw error;
+    }
+    return elapsedMs;
+  };
 }
 
 /**
@@ -125,19 +183,37 @@ export function expectNotSuperlinear<TInput>(
   // **n を倍にするかどうかも、温まった後の値で決める**（#2576）。以前は最初の2回（まだ遅い）で
   // 決めていたので、混んだ器では「5ms に届いている」と誤読して倍にせず、1〜2ms の分母で比を
   // 取ることになった（CI run 36798057082: t(500)=1.79ms, t(2000)=18.35ms, 比 10.23）。
-  const warmedMs = (input: TInput): number => {
+  let tSmallMs = Infinity;
+  let tLargeMs = Infinity;
+  let ratio = Number.POSITIVE_INFINITY;
+  const timeCapped = makeTimer(run, now, hardCapMs);
+  // hardCapMs で打ち切られたら（#2579）、固まりの assertion として落とす。`run` の他の例外はそのまま伝わる。
+  const timeOnce = (input: TInput, phase: string, size: number): number => {
+    try {
+      return timeCapped(input, phase, size);
+    } catch (error) {
+      if (!(error instanceof HungError)) throw error;
+      return assert.fail(
+        `固まり・指数的な後戻りの疑い —— hardCapMs を超えた。${phase}の入力 n=${size} の1回が ` +
+          `hardCapMs=${hardCapMs}ms で打ち切られた（node:vm の timeout で割り込み、終わるのを待たなかった）。` +
+          `それまでの最小: t(small)=${tSmallMs.toFixed(2)}ms, t(large)=${tLargeMs.toFixed(2)}ms。` +
+          `n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}`,
+      );
+    }
+  };
+  const warmedMs = (input: TInput, size: number): number => {
     let min = Infinity;
-    for (let i = 0; i < warmups; i += 1) min = Math.min(min, timeOnceMs(run, input, now));
+    for (let i = 0; i < warmups; i += 1) min = Math.min(min, timeOnce(input, '温め', size));
     return min;
   };
   let n = options.n;
   let small = makeInput(n);
-  let tWarm = warmedMs(small);
+  let tWarm = warmedMs(small, n);
   // t(n) が小さすぎると、分母が器の混み具合でぶれる。届くまで n を倍にする。
   while (tWarm < minSmallMs && n * 2 <= options.n * maxScale) {
     n *= 2;
     small = makeInput(n);
-    tWarm = warmedMs(small);
+    tWarm = warmedMs(small, n);
   }
   const large = makeInput(n * factor);
 
@@ -148,19 +224,16 @@ export function expectNotSuperlinear<TInput>(
   // あると分母が膨らみ、2乗（理論値 factor²）でも比が閾値を下回って通る（最初の版が CI の
   // 陰性対照 `\s+$` で2乗を通した）。最小時間どうしの比なら、混みはどちらの側でも
   // 「足されるだけ」なので、2乗の比は理論値より下がらない。
-  let tSmallMs = Infinity;
-  let tLargeMs = Infinity;
-  let ratio = Number.POSITIVE_INFINITY;
   const roundLog: string[] = [];
   let hung = false;
   for (let round = 0; round < rounds && !hung; round += 1) {
     let roundSmallMs = Infinity;
     let roundLargeMs = Infinity;
     for (let i = 0; i < repeats; i += 1) {
-      const tSmall = timeOnceMs(run, small, now);
+      const tSmall = timeOnce(small, '小さいほう', n);
       roundSmallMs = Math.min(roundSmallMs, tSmall);
       tSmallMs = Math.min(tSmallMs, tSmall);
-      const tLarge = timeOnceMs(run, large, now);
+      const tLarge = timeOnce(large, '大きいほう', n * factor);
       roundLargeMs = Math.min(roundLargeMs, tLarge);
       tLargeMs = Math.min(tLargeMs, tLarge);
       // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
