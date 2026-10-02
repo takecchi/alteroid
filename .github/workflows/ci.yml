@@ -433,7 +433,9 @@ jobs:
   # 古い `gh` を配らないため）ので、上流が変わって壊れたことに気づく場所が要る。
   # ここが無いと、気づくのがデプロイ時になる。
   #
-  # 焼くのは runtime ステージ = 実際に走る器そのものである。amd64 だけ焼く
+  # 焼くのは最終ステージ `final` = Railway と compose が実際に焼いて走らせる器そのもの
+  # である（どちらも `target` を指定しないので最後のステージになる。`runtime` は `final`
+  # の土台で、追加層（#2534）が空なら中身は同じ）。amd64 だけ焼く
   # （Railway と同じ。アーキテクチャ差は apt の `dpkg --print-architecture` 任せに
   # してあるので、arm64 固有の分岐はもう無い）。
   image:
@@ -459,7 +461,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
-          target: runtime
+          target: final
           load: true
           tags: alteroid:ci
           # クローンの自己認識に載るリビジョン。**ビルド文脈に `.git` は入れない**
@@ -496,6 +498,68 @@ jobs:
           #   反映は止まらない（逐語は
           #   `grep -Fn -- 'SHA が違えば push する。それだけである。' .github/scripts/reflect-release-prod.sh`）
           no-cache: ${{ env.DRIFT == 'true' }}
+
+      # **Issue #2534 段1。ビルド時の追加層（`final` ステージ）の歯。** 追加の2回の
+      # ビルドは上と同じ buildx のキャッシュ（層）を使うので、足す時間は小さい。
+      # `alteroid:ci` は空の引数で焼いた `final` のまま残す（後続の歯がこれを使う）。
+      - name: 追加層を空で焼いた final は runtime と同じ像か（ファイル系・設定）
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          load: true
+          tags: alteroid:ci-runtime
+          build-args: |
+            ALTEROID_BUILD_REV=${{ github.sha }}
+          cache-from: type=gha
+      - name: final（空）と runtime のファイル系・設定を突き合わせる
+        run: |
+          set -eu
+          listing() {
+            # 時刻だけが違うものに引っかからないよう、mtime（4・5列目）は落とす。
+            # 走らせずに作るだけなので /proc など実行時の領域は入らない。
+            c=$(docker create "$1")
+            docker export "$c" | tar -tvf - | awk '{ $4 = ""; $5 = ""; print }' | sort
+            docker rm "$c" >/dev/null
+          }
+          listing alteroid:ci > /tmp/final.list
+          listing alteroid:ci-runtime > /tmp/runtime.list
+          wc -l /tmp/final.list /tmp/runtime.list
+          diff /tmp/runtime.list /tmp/final.list \
+            || { echo "空の final が runtime とファイル系で違う" >&2; exit 1; }
+          cfg() {
+            docker inspect "$1" | jq -S '.[0].Config
+              | {User, Cmd, Entrypoint, Env, WorkingDir, ExposedPorts, Volumes, Labels, Healthcheck, StopSignal, Shell}'
+          }
+          cfg alteroid:ci > /tmp/final.cfg
+          cfg alteroid:ci-runtime > /tmp/runtime.cfg
+          diff /tmp/runtime.cfg /tmp/final.cfg \
+            || { echo "空の final が runtime と image の設定で違う" >&2; exit 1; }
+          jq -e '.User == "node" and .Cmd == ["alteroidd"]' /tmp/final.cfg >/dev/null
+
+      - name: 追加層に実際にパッケージとスクリプトを入れる（hello + SETUP）
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: final
+          load: true
+          tags: alteroid:ci-extra
+          build-args: |
+            ALTEROID_BUILD_REV=${{ github.sha }}
+            ALTEROID_EXTRA_APT_PACKAGES=hello
+            ALTEROID_EXTRA_SETUP=mkdir -p /opt && echo extra-probe-ok > /opt/extra-probe && chmod 0644 /opt/extra-probe
+          cache-from: type=gha
+      - name: 追加層の成果が uid 1001 から使えるか
+        run: |
+          set -eu
+          out=$(docker run --rm -u 1001 alteroid:ci-extra hello)
+          echo "$out"
+          test "$out" = "Hello, world!"
+          probe=$(docker run --rm -u 1001 alteroid:ci-extra cat /opt/extra-probe)
+          test "$probe" = "extra-probe-ok"
+          # 基底の道具は残り、実行時の主体は変わらない。
+          docker run --rm -u 1001 alteroid:ci-extra sh -c 'command -v gh && command -v alteroid && id -u'
+          docker inspect alteroid:ci-extra | jq -e '.[0].Config | .User == "node" and .Cmd == ["alteroidd"]'
 
       # **マネージャーが実際に走る主体（uid 1001）で見る。** root で揃っていても、
       # 降りた先で欠けていれば「コンテナだからできない」が生まれる（north_star 禁止1）。

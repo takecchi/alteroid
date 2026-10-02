@@ -1,0 +1,55 @@
+#!/bin/sh
+# runner の器に「使う人ごとの道具」を足す、ビルド時の追加層（#2534 段1）。
+#
+# `Dockerfile` の最終ステージ `final` が、build arg を環境変数として渡してこれを走らせる。
+# 置き場は Railway の Service 変数（Dockerfile ビルドへ build arg として渡る）。
+#
+#   ALTEROID_EXTRA_APT_PACKAGES  apt のパッケージ名（空白・改行区切り）
+#   ALTEROID_EXTRA_SETUP         ビルド時に root で走らせる sh スクリプトの本文
+#
+# **両方が空なら何もせず 0 で抜ける**（apt-get も呼ばない）。既定ではファイル系は
+# 変わらない。**実行時の境界（uid 1001 の worker）はここでは動かさない。**
+#
+# **パッケージ名は1つずつ `^[a-z0-9][a-z0-9+.-]*$` で検証する。** 外れた名前は名前を
+# 出して非0で落ちる。`-o ...` のようなオプション注入や `;` を通さないため、
+# apt-get を呼ぶ前に全部を検証する（1つでも外れたら何もインストールしない）。
+#
+# テストが本物の apt に触らないよう、実行ファイルは `ALTEROID_EXTRA_APT_GET` で
+# 差し替えられる（既定 `apt-get`）。リストの置き場は `ALTEROID_EXTRA_APT_LISTS`。
+set -eu
+
+# 文字クラスの範囲がロケールで揺れないように。
+LC_ALL=C
+export LC_ALL
+
+APT_GET="${ALTEROID_EXTRA_APT_GET:-apt-get}"
+# apt のリストの置き場も、テストが本物に触らないよう差し替えられる。
+APT_LISTS="${ALTEROID_EXTRA_APT_LISTS:-/var/lib/apt/lists}"
+PACKAGES="${ALTEROID_EXTRA_APT_PACKAGES:-}"
+SETUP="${ALTEROID_EXTRA_SETUP:-}"
+
+# 空白・改行で割るときに `*` などをファイル名へ展開させない。
+set -f
+# shellcheck disable=SC2086
+set -- $PACKAGES
+set +f
+
+for name in "$@"; do
+  case "$name" in
+    [!a-z0-9]* | *[!a-z0-9+.-]*)
+      echo "runner-extra: 不正なパッケージ名: $name（許すのは ^[a-z0-9][a-z0-9+.-]*\$）" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$#" -gt 0 ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  "$APT_GET" update
+  "$APT_GET" install -y --no-install-recommends "$@"
+  rm -rf "${APT_LISTS:?}"/*
+fi
+
+if [ -n "$SETUP" ]; then
+  sh -eu -c "$SETUP"
+fi

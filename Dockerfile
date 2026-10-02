@@ -300,3 +300,25 @@ USER node
 #   デーモン: alteroidd         ← 記憶ストアの鍵を持つ。root で来たら node へ降りる
 #   runner  : alteroid-runner   ← **鍵を持たない**。合鍵は起動時に sha256 へ畳む
 CMD ["alteroidd"]
+
+# 使う人ごとの道具を足す、ビルド時の追加層（#2534 段1）。**最終ステージはここ**
+# （Railway は `target` を指定しないので最後のステージを焼き、compose の `build` にも
+# `target` は無い）。上の「同じ像から2つの役」は、この `final` から起こす。
+#
+# 入力は build arg 2つ（Railway では Service 変数として渡る）:
+#   ALTEROID_EXTRA_APT_PACKAGES  apt のパッケージ名（空白・改行区切り）
+#   ALTEROID_EXTRA_SETUP         root で走らせる sh スクリプトの本文
+# **どちらも空（既定）なら `docker/runner-extra` は何もせず、ファイル系は `runtime` と
+# 変わらない**（CI の `image` が両者の差が無いことを見る）。ただし `RUN` の層は1枚増える
+# ので image の digest は変わる。実行時の主体（uid 1001 の worker）の境界は変えない。
+#
+# **スクリプトは bind mount で渡し、image に残さない**（`COPY` だと中身が層に残る）。
+# BuildKit 前提（Railway の Dockerfile ビルドも compose v2 も既定で BuildKit）。
+FROM runtime AS final
+ARG ALTEROID_EXTRA_APT_PACKAGES=""
+ARG ALTEROID_EXTRA_SETUP=""
+USER root
+RUN --mount=type=bind,source=docker/runner-extra,target=/tmp/runner-extra \
+  sh /tmp/runner-extra
+USER node
+# `CMD` は `runtime` から継ぐ（`alteroidd`。runner は command で選ぶ）。
