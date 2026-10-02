@@ -14,6 +14,7 @@ import {
   usageRowSchema,
   usageSiteSchema,
   usageTurnRowSchema,
+  usageUnmeteredRowSchema,
 } from '@alteroid/core';
 import type {
   UnreadableUsageRow,
@@ -27,6 +28,7 @@ import type {
   UsageSnapshot,
   UsageStore,
   UsageTotals,
+  UsageUnmeteredRow,
 } from '@alteroid/core';
 import { z } from 'zod';
 
@@ -109,6 +111,14 @@ const typedFileSchema = z.object({
    * `turnsSince`）。
    */
   turnsAt: z.string().datetime({ offset: true }).nullable().default(null),
+  /**
+   * 消費を報告しない provider のターン数（Issue #486 M7。鍵は `unmeteredKey`）。
+   *
+   * **`.default({})` で、この欄が無い古い `usage.json` も読める。** 空のときは書き出さない
+   * （`#mutate`）ので、無報告の provider を使わない器のファイルは1バイトも変わらない。
+   * 消費の値を持たず、`rows` / `turns` の合計には混ぜない。
+   */
+  unmetered: z.record(z.string(), usageUnmeteredRowSchema).default({}),
 });
 
 type UsageFile = z.infer<typeof typedFileSchema>;
@@ -251,6 +261,7 @@ const EMPTY: UsageFile = {
   tokensAt: null,
   turns: {},
   turnsAt: null,
+  unmetered: {},
 };
 
 function rowKey(
@@ -290,6 +301,18 @@ function turnKey(
   tokenId: string | undefined,
 ): string {
   return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${tokenId ?? ''}`;
+}
+
+/** 無報告のターンの鍵。`turnKey` に provider を足した形（pg の一意索引と同じ軸）。 */
+function unmeteredKey(
+  date: string,
+  managerId: string,
+  layer: UsageLayer,
+  site: UsageSite,
+  provider: string,
+  tokenId: string | undefined,
+): string {
+  return `${date}\u0000${managerId}\u0000${layer}\u0000${site}\u0000${provider}\u0000${tokenId ?? ''}`;
 }
 
 /**
@@ -540,8 +563,55 @@ export class FsUsageStore implements UsageStore {
           // **回数の軸は「起きた record」でだけ始まる。** 揃えて `?? input.at` に
           // すると、増分が空の record でも軸が始まったことになる。
           turnsAt: file.turnsAt ?? (turned ? input.at : null),
+          unmetered: file.unmetered,
         },
         result: { delta: fold.delta, baseline: nextBaseline, reset: fold.reset },
+      };
+    });
+  }
+
+  /**
+   * 消費を報告しない provider のターンを1回数える（`store.ts` の
+   * `UsageStore.recordUnmetered`）。**`unmetered` の1エントリだけを足す。**
+   * `rows` / `turns` / `baselines` / 台帳の始点には触らない（0 を積まない）。
+   */
+  async recordUnmetered(input: {
+    layer: UsageLayer;
+    site: UsageSite;
+    managerId: string;
+    date: string;
+    at: string;
+    provider: string;
+    tokenId?: string;
+  }): Promise<void> {
+    await this.#mutate((file) => {
+      const key = unmeteredKey(
+        input.date,
+        input.managerId,
+        input.layer,
+        input.site,
+        input.provider,
+        input.tokenId,
+      );
+      const existing = file.unmetered[key];
+      return {
+        next: {
+          ...file,
+          unmetered: {
+            ...file.unmetered,
+            [key]: {
+              date: input.date,
+              managerId: input.managerId,
+              layer: input.layer,
+              site: input.site,
+              provider: input.provider,
+              ...(input.tokenId === undefined ? {} : { tokenId: input.tokenId }),
+              turns: (existing?.turns ?? 0) + 1,
+              updatedAt: input.at,
+            },
+          },
+        },
+        result: undefined,
       };
     });
   }
@@ -589,6 +659,27 @@ export class FsUsageStore implements UsageStore {
           compareTokenId(a.tokenId, b.tokenId),
       );
 
+    // 無報告のターン（`rows` と同じ述語で絞る。無ければ鍵ごと出さない）。
+    const unmeteredRows: UsageUnmeteredRow[] = Object.values(file.unmetered)
+      .filter((row) => {
+        if (query.from !== undefined && row.date < query.from) return false;
+        if (query.to !== undefined && row.date > query.to) return false;
+        if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+        if (query.layer !== undefined && row.layer !== query.layer) return false;
+        if (query.site !== undefined && row.site !== query.site) return false;
+        if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) ||
+          a.managerId.localeCompare(b.managerId) ||
+          a.layer.localeCompare(b.layer) ||
+          a.site.localeCompare(b.site) ||
+          a.provider.localeCompare(b.provider) ||
+          compareTokenId(a.tokenId, b.tokenId),
+      );
+
     // **読めずに外した行は、出力へ運ぶ**（Issue #2427）。無ければ鍵ごと出さない。
     const unreadableRows = [
       ...toUnreadableRows('usage_daily', unreadable.rows, query),
@@ -598,6 +689,7 @@ export class FsUsageStore implements UsageStore {
     return usageAggregateSchema.parse({
       rows,
       ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
+      ...(unmeteredRows.length === 0 ? {} : { unmeteredRows }),
       since: file.startedAt,
       layersSince: file.layeredAt,
       tokensSince: file.tokensAt,
@@ -710,8 +802,12 @@ export class FsUsageStore implements UsageStore {
       const { next, result } = mutate(file, invalid);
       // 壊れたエントリ（生の形のまま）を戻して書く（issue #1968）。`clear()` だけが捨てる。
       const kept = options.dropInvalid === true ? NO_INVALID : invalid;
+      // **空の `unmetered` は書き出さない**（無報告の provider を使わない器の `usage.json` を
+      // 1バイトも変えない）。
+      const { unmetered, ...nextWithoutUnmetered } = next;
       const onDisk = {
-        ...next,
+        ...nextWithoutUnmetered,
+        ...(Object.keys(unmetered).length === 0 ? {} : { unmetered }),
         rows: withInvalid(next.rows, kept.rows),
         baselines: withInvalid(next.baselines, kept.baselines),
         turns: withInvalid(next.turns, kept.turns),

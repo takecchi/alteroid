@@ -161,6 +161,11 @@ export type UsageRow = UsageAggregate['rows'][number];
  */
 export type UsageTurnRow = UsageAggregate['turnRows'][number];
 /**
+ * 消費を報告しない provider のターン（Issue #486 M7）。**欄が無いときは応答に鍵ごと無い**ので
+ * 配列の要素の型だけを取り出す。
+ */
+export type UsageUnmeteredRow = NonNullable<UsageAggregate['unmeteredRows']>[number];
+/**
  * 層と場所の値。**API の型から導く**（画面に書き写さない）。
  * 選択肢の並びは `@alteroid/core/usage` の `USAGE_LAYERS` / `USAGE_SITES` が持つ。
  */

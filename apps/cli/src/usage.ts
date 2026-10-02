@@ -4,6 +4,7 @@ import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
   describeUnreadableUsage,
+  describeUnmeteredUsage,
   describeUnreadableUsageRows,
   describeUnrecordedManagers,
   describeUsageDateOrder,
@@ -183,6 +184,10 @@ export function renderUsage(view: UsageView): string {
   // 古いデーモンの応答では `view.unreadableRows` が `undefined` になる——その場合は
   // 何も言わない（0 件とも「undefined 件」とも書かない。#2382）。
   const unreadableRowsLines = describeUnreadableUsageRows(view.unreadableRows);
+  // **消費を報告しない provider のターンが在れば、0 ではなく取れなかったと言う**
+  // （Issue #486 M7）。欄の無い応答（Claude だけの器・古いデーモン）では空配列で、
+  // 出力は1文字も変わらない。
+  const unmeteredLines = describeUnmeteredUsage(view.unmeteredRows);
 
   /**
    * アカウント全体の残り。**台帳がまだ空の経路にも同じものを付ける** — 台帳が
@@ -201,6 +206,7 @@ export function renderUsage(view: UsageView): string {
       '台帳にはまだ1件も記録が無い。',
       '（消費の記録はこの機能を入れた時点から始まる。それより前の分は残っていない）',
       ...unreadableRowsLines,
+      ...unmeteredLines,
       '',
       ...describeUnrecordedManagers(unrecordedManagers),
       '',
@@ -214,6 +220,7 @@ export function renderUsage(view: UsageView): string {
   if (rows.length === 0) {
     lines.push('その範囲には記録が無い。');
     lines.push(...unreadableRowsLines);
+    lines.push(...unmeteredLines);
     // **取りこぼしは照会範囲と無関係に全期間で判定する。** この範囲に台帳の行が
     // 無くても出す（`findUnrecordedManagers` の doc）。
     lines.push('', ...describeUnrecordedManagers(unrecordedManagers));
@@ -236,6 +243,7 @@ export function renderUsage(view: UsageView): string {
     // 空配列なので、この行を足しても既存の出力は1文字も変わらない。
     lines.push(...describeUnreadableUsage(summary.total));
     lines.push(...unreadableRowsLines);
+    lines.push(...unmeteredLines);
     // **合計値の隣に必ず出す（Issue #98）。** 台帳に1行も無い委譲は上の合計に
     // 入っていないので、合計を読んだ直後にそれが分かる位置へ置く。
     lines.push(...describeUnrecordedManagers(unrecordedManagers));

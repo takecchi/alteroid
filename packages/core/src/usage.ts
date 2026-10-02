@@ -86,6 +86,7 @@ export {
   ZERO_USAGE,
   addUnreadableCounts,
   describeAccountUsage,
+  describeUnmeteredUsage,
   describeUnreadableUsage,
   describeUnreadableUsageRows,
   describeUnrecordedManagers,
@@ -873,6 +874,39 @@ export const usageTurnRowSchema = z.object({
 
 export type UsageTurnRow = z.infer<typeof usageTurnRowSchema>;
 
+/**
+ * 「消費を報告しない provider（`capabilities.usage === false`）で起きたターン」の数
+ * （Issue #486 M7）。**`usage_daily` / `usage_turns` とは別会計である。**
+ *
+ * ## なぜ別の行か
+ *
+ * 消費を報告しない provider の区間を `usage_daily` に 0 で積むと、その層が
+ * 「安い」と読める（PRD provider 節「取れない消費を 0 として積まない」）。かといって
+ * 何も数えないと、その層が動いたこと自体が台帳から消える。だから**消費の値を持たず、
+ * 「報告が無いターンが何回あったか」だけを数える**行にする。合計（`UsageTotals`）には
+ * 一切足さない。
+ *
+ * **起こす条件は provider の `capabilities.usage === false` であって、`usage` が
+ * 無いことではない**（Claude の失敗した result も `usage` を持たないが、あれは
+ * 「報告する provider が今回は報告できなかった」であって無報告ではない）。
+ *
+ * `turns` は `positive()` — 0 の行は作らない（{@link usageTurnRowSchema} と同じ理由）。
+ */
+export const usageUnmeteredRowSchema = z.object({
+  date: usageDateSchema,
+  managerId: z.string(),
+  layer: usageLayerSchema,
+  site: usageSiteSchema,
+  /** 報告しなかった provider の id（`AgentProvider.id`）。 */
+  provider: z.string().min(1),
+  /** `usageRowSchema.tokenId` と同じ形・同じ理由。 */
+  tokenId: z.string().min(1).optional(),
+  turns: z.number().int().positive(),
+  updatedAt: isoDateTime,
+});
+
+export type UsageUnmeteredRow = z.infer<typeof usageUnmeteredRowSchema>;
+
 export const usageQuerySchema = z.object({
   /** この日以降（含む）。 */
   from: usageDateSchema.optional(),
@@ -1000,6 +1034,12 @@ export const usageAggregateSchema = z.object({
    * 外した行の値は `rows` にも合計にも足さない（読めないので、推測で補わない）。
    */
   unreadableRows: z.array(unreadableUsageRowSchema).optional(),
+  /**
+   * 消費を報告しない provider のターン（{@link usageUnmeteredRowSchema}）。**1行でも
+   * あるときだけ載せる。0件なら鍵ごと無い**（`unreadableRows` と同じ形。Claude だけの
+   * 器の応答は1文字も変わらない）。合計（`rows` / `UsageTotals`）には足さない。
+   */
+  unmeteredRows: z.array(usageUnmeteredRowSchema).optional(),
   /** 数字に必ず添える但し書き。 */
   notice: z.literal(USAGE_ESTIMATE_NOTICE),
 });

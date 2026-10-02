@@ -4,7 +4,13 @@ import type {
   AccountUsageState,
   TokenSourcePresence,
 } from './usage-snapshot.js';
-import type { UsageBreakdown, UsageRow, UsageTotals, UsageTurnRow } from './usage.js';
+import type {
+  UsageBreakdown,
+  UsageRow,
+  UsageTotals,
+  UsageTurnRow,
+  UsageUnmeteredRow,
+} from './usage.js';
 
 /**
  * 台帳でクローンを名指す actor の id。
@@ -428,6 +434,33 @@ export function describeUnreadableUsageRows(
   return [
     `⚠ 読めない使用量の行が ${rows.length} 行あり、合計に入っていない` +
       `（読めない行の値は足していない。合計はその分少ない。内訳: ${breakdown}${datePart}）。`,
+  ];
+}
+
+/**
+ * 消費を報告しない provider のターンが在ることを、0 ではなく「取れなかった」として
+ * 1文にする（Issue #486 M7）。provider・層ごとにターン数を言う。
+ *
+ * **0件・欄なしのときは空配列**（Claude だけの器の出力を1文字も変えない。
+ * `describeUnreadableUsageRows` と同じ形）。**合計には足していない**と文中で言う。
+ *
+ * **CLI・Web・`usage_read` が同じ文言をここから直接呼ぶ**（`usage_read` は
+ * `describeUnreadableUsage` の隣から1行で呼べる）。
+ */
+export function describeUnmeteredUsage(rows: readonly UsageUnmeteredRow[] | undefined): string[] {
+  if (rows === undefined || rows.length === 0) return [];
+  const byKey = new Map<string, { provider: string; layer: string; turns: number }>();
+  for (const row of rows) {
+    const key = `${row.provider}\u0000${row.layer}`;
+    const entry = byKey.get(key) ?? { provider: row.provider, layer: row.layer, turns: 0 };
+    entry.turns += row.turns;
+    byKey.set(key, entry);
+  }
+  const parts = [...byKey.values()]
+    .sort((a, b) => a.provider.localeCompare(b.provider) || a.layer.localeCompare(b.layer))
+    .map((e) => `${e.provider}・${e.layer}層 ${e.turns.toLocaleString('en-US')}ターン`);
+  return [
+    `⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: ${parts.join(' / ')}）。`,
   ];
 }
 

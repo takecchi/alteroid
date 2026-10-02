@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addUnreadableCounts,
   describeAccountUsage,
+  describeUnmeteredUsage,
   describeUnrecordedManagers,
   describeUsageDateOrder,
   describeWebSearchRequests,
@@ -13,7 +14,7 @@ import {
   ZERO_USAGE,
   type UnrecordedManagerCandidate,
 } from './usage-format.js';
-import { usageDateSchema } from './usage.js';
+import { usageDateSchema, type UsageUnmeteredRow } from './usage.js';
 import { toAccountUsage, type AccountUsageState } from './usage-snapshot.js';
 
 /**
@@ -566,5 +567,35 @@ describe('isDelegationActorId（issue #2269）', () => {
   it('クローンの id と空文字は委譲と読まない（空文字は、基準値の managerId を入れる前の値）', () => {
     expect(isDelegationActorId('clone')).toBe(false);
     expect(isDelegationActorId('')).toBe(false);
+  });
+});
+
+describe('describeUnmeteredUsage（消費を報告しない provider のターン。Issue #486 M7）', () => {
+  const row = (over: Partial<UsageUnmeteredRow>): UsageUnmeteredRow => ({
+    date: '2026-10-01',
+    managerId: 'clone',
+    layer: 'clone',
+    site: 'session',
+    provider: 'codex',
+    turns: 1,
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    ...over,
+  });
+
+  it('欄が無い・0件なら何も言わない（Claude だけの器の出力を変えない）', () => {
+    expect(describeUnmeteredUsage(undefined)).toEqual([]);
+    expect(describeUnmeteredUsage([])).toEqual([]);
+  });
+
+  it('provider・層ごとにターン数を言い、0 ではなく取れなかった・合計に含まれないと言う', () => {
+    const lines = describeUnmeteredUsage([
+      row({ turns: 2 }),
+      row({ date: '2026-10-02', turns: 3 }),
+      row({ layer: 'manager', managerId: 'mgr-1', turns: 4 }),
+    ]);
+    expect(lines).toEqual([
+      '⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: ' +
+        'codex・clone層 5ターン / codex・manager層 4ターン）。',
+    ]);
   });
 });

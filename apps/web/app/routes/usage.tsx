@@ -2,6 +2,7 @@ import { AlertTriangle } from 'lucide-react';
 import {
   ACCOUNT_USAGE_TITLE,
   describeAccountUsage,
+  describeUnmeteredUsage,
   describeUnreadableUsage,
   describeUnreadableUsageRows,
   describeUnrecordedManagers,
@@ -46,6 +47,7 @@ import type {
   UsageRow,
   UsageSite,
   UsageTurnRow,
+  UsageUnmeteredRow,
 } from '@alteroid/logic';
 
 /**
@@ -78,6 +80,34 @@ export function UnreadableUsageRowsNote({
   className?: string;
 }) {
   const lines = describeUnreadableUsageRows(rows);
+  if (lines.length === 0) return null;
+  return (
+    <div
+      role="status"
+      className={cn(
+        'flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn',
+        className,
+      )}
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 break-words">{lines.join(' ')}</span>
+    </div>
+  );
+}
+
+/**
+ * 消費を報告しない provider のターンが在ることを、合計の上で断る（Issue #486 M7）。
+ * **0 ではなく取れなかった**と言う。0件・欄なし（Claude だけの器・古いデーモン）なら
+ * 描かない。文言は `describeUnmeteredUsage`（core）をそのまま並べる。
+ */
+export function UnmeteredUsageNote({
+  rows,
+  className,
+}: {
+  rows: readonly UsageUnmeteredRow[] | undefined;
+  className?: string;
+}) {
+  const lines = describeUnmeteredUsage(rows);
   if (lines.length === 0) return null;
   return (
     <div
@@ -398,6 +428,7 @@ export default function Usage() {
                 </Empty>
               </Card>
               <UnreadableUsageRowsNote rows={data.unreadableRows} />
+              <UnmeteredUsageNote rows={data.unmeteredRows} />
               <UnrecordedManagersCard unrecordedManagers={data.unrecordedManagers} />
             </>
           ) : (
@@ -413,6 +444,7 @@ export default function Usage() {
               notice={data.notice}
               unrecordedManagers={data.unrecordedManagers}
               unreadableRows={data.unreadableRows}
+              unmeteredRows={data.unmeteredRows}
             />
           )}
         </div>
@@ -516,8 +548,10 @@ function UsageBody({
   notice,
   unrecordedManagers,
   unreadableRows,
+  unmeteredRows,
 }: {
   unreadableRows: readonly UnreadableUsageRow[] | undefined;
+  unmeteredRows: readonly UsageUnmeteredRow[] | undefined;
   rows: readonly UsageRow[];
   turnRows: readonly UsageTurnRow[];
   since: string;
@@ -537,6 +571,7 @@ function UsageBody({
     <div className="flex flex-col gap-4">
       {/* **合計の上に出す**（Issue #2427）。外した行の値は合計に足していない。 */}
       <UnreadableUsageRowsNote rows={unreadableRows} />
+      <UnmeteredUsageNote rows={unmeteredRows} />
       <Card>
         <CardHeader title="合計" subtitle={`台帳の始点: ${since}`} />
         <div className="px-4 py-3">

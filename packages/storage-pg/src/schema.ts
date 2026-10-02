@@ -748,6 +748,41 @@ export const usageTurns = pgTable(
 );
 
 /**
+ * 消費を報告しない provider（`capabilities.usage === false`）のターン数
+ * （`usage.ts` の `usageUnmeteredRowSchema`。Issue #486 M7）。**消費の値の列を
+ * 持たない** — 0 を積むとその層が安いと読めるので、「報告が無いターンが何回あったか」
+ * だけを数え、`usage_daily` / `usage_turns` の合計には混ぜない。
+ *
+ * `provider` を鍵に持つので、provider が複数あっても行が混ざらない。`usage_daily` へ
+ * provider 列は足さない（既存の行を1バイトも変えないため）。
+ */
+export const usageUnmetered = pgTable(
+  'usage_unmetered',
+  {
+    date: text('date').notNull(),
+    managerId: text('manager_id').notNull(),
+    layer: text('layer').notNull(),
+    site: text('site').notNull(),
+    provider: text('provider').notNull(),
+    // **`not null default ''` である理由は `usageDaily.tokenId` と同じ。**
+    tokenId: text('token_id').notNull().default(''),
+    turns: bigint('turns', { mode: 'number' }).notNull().default(0),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    // 主キーではなく一意索引で持つ（`usage_turns` と同じ。`migrate.ts` 冒頭参照）。
+    uniqueIndex('usage_unmetered_key_idx').on(
+      table.date,
+      table.managerId,
+      table.layer,
+      table.site,
+      table.provider,
+      table.tokenId,
+    ),
+  ],
+);
+
+/**
  * 認証トークンのプール（Issue #393「PR1 プールの器」）。**回さない**——ここが
  * 持つのは正本の置き場だけで、検知・切替はここに無い（`@alteroid/core` の
  * `createTokenRotator`）。

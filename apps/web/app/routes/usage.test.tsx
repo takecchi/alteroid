@@ -108,6 +108,11 @@ function stubUsage(body: {
    */
   unreadableRows?: unknown[];
   /**
+   * 消費を報告しない provider のターン（Issue #486 M7）。**渡さなければ鍵ごと無い**
+   * （Claude だけの器と同じ）ので、既存のテストは1つも振る舞いが変わらない。
+   */
+  unmeteredRows?: unknown[];
+  /**
    * 「起きた回数」の別会計。**既定は空配列**——`summarizeUsage` が無条件で
    * `turnRows.reduce` を呼ぶので、`rows` と同じく必須の欄として渡す
    * （`tokensSince` / `beforeTokens` と違い、省略すると画面側の分岐に入る前に
@@ -912,6 +917,70 @@ describe('/usage 画面の読めずに外した行（unreadableRows）', () => {
     renderUsage();
     await screen.findByText(/合計/);
     expect(screen.queryByText(/読めない使用量/)).toBeNull();
+  });
+});
+
+/**
+ * 消費を報告しない provider のターン（`describeUnmeteredUsage`。Issue #486 M7）。
+ *
+ * 文言そのものの試験は core が持つ。ここで見るのは「画面に実際に繋がっているか」
+ * 「記録が無い画面でも言うか」「無ければ何も描かないこと（Claude だけの器の画面を変えない）」。
+ */
+describe('/usage 画面の無報告の provider（unmeteredRows）', () => {
+  const UNMETERED = [
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      layer: 'clone',
+      site: 'session',
+      provider: 'codex',
+      turns: 3,
+      updatedAt: '2026-08-14T10:00:00.000Z',
+    },
+  ];
+
+  it('在れば、合計の上で「0 ではなく取れなかった」と言う（role=status）', async () => {
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unmeteredRows: UNMETERED,
+    });
+
+    renderUsage();
+
+    const note = await screen.findByRole('status');
+    expect(note.textContent).toContain(
+      '消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: codex・clone層 3ターン）',
+    );
+  });
+
+  it('台帳の始点が無い（since が null）画面でも言う', async () => {
+    stubUsage({ rows: [], since: null, beforeLedger: false, unmeteredRows: UNMETERED });
+
+    renderUsage();
+
+    expect(await screen.findByText(/合計に含まれない: codex・clone層 3ターン/)).toBeTruthy();
+  });
+
+  it('対照: 欄が無い・空配列なら、何も描かない（status も文言も無い）', async () => {
+    stubUsage({ rows: [row(1)], since: '2026-08-01T00:00:00.000Z', beforeLedger: false });
+    const { unmount } = renderUsage();
+    await screen.findByText(/合計/);
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText(/報告しない provider/)).toBeNull();
+    unmount();
+
+    stubUsage({
+      rows: [row(1)],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+      unmeteredRows: [],
+    });
+    renderUsage();
+    await screen.findByText(/合計/);
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText(/報告しない provider/)).toBeNull();
   });
 });
 
