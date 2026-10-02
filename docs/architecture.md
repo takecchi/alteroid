@@ -341,7 +341,7 @@ manager_id → runner_id → sdk session_id → workspace locator
 
 ```ts
 type WorkspaceLocator =
-  | { kind: 'runner-volume'; runnerId: string; path: string }  // M4 の既定
+  | { kind: 'runner-volume'; runnerId: string; path: string }  // ALTEROID_WORKSPACE_KIND=runner-volume のとき
   | { kind: 'shared-volume'; path: string }                    // 共有 FS（M5）
   | { kind: 'unknown'; runnerId: string; path: string; reason: string } // 永続性を確かめられなかった
   | { kind: 'git'; repository: string; ref: string; patchId?: string }; // 再構築（M5）
