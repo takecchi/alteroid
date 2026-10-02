@@ -29,6 +29,8 @@ import { assert, expect } from 'vitest';
  * - **小さいほうと大きいほうを交互に測る**。混み具合の波が片方にだけ乗るのを避ける。
  * - **ラウンドを繰り返し、全ラウンドを通した最小時間どうしの比で判定する**（#2576、CI run 36798057082 で比
  *   10.23）。比が閾値を超えている間だけ重ねる。ラウンドごとの比の最小は2乗を通すので採らない。
+ *   閾値のすぐ下の帯（`sqrt(factor * maxRatio)` 以上）でも重ねる（#2649。閾値を下回った1ラウンドで
+ *   止めると、小さいほうだけが混んだ1ラウンドで2乗を通した）。
  * - **t(n) が `minSmallMs`（既定 5ms）に届くまで n を倍にする**（`maxScale` 倍まで）。
  *   2乗・3乗の実装は n を上げるほど比が理論値へ近づくので、捕まえる力は落ちない。
  *   大きいほうが `hardCapMs` を超えたら、その時点で測るのをやめて落とす。
@@ -53,7 +55,8 @@ export interface ExpectNotSuperlinearOptions {
   /** t(n) がこれに届くまで n を倍にする（ms）。既定 5。0 なら倍にしない。 */
   minSmallMs?: number;
   /**
-   * 測定ラウンドの最大回数（#2576）。比が `maxRatio` を超えている間だけ重ね、
+   * 測定ラウンドの最大回数（#2576）。比が `maxRatio` を超えている間か、そのすぐ下の
+   * 「まだ決まっていない」帯（`sqrt(factor * maxRatio)` 以上、#2649）に居る間だけ重ね、
    * 全ラウンドの最小時間どうしの比が超えたまま残ったときに落とす。既定 3。1 なら従来どおり1回で決める。
    */
   rounds?: number;
@@ -221,11 +224,21 @@ export function expectNotSuperlinear<TInput>(
 
   // **比は、全ラウンドを通した「小さいほうの最小時間」と「大きいほうの最小時間」で取る**（#2576）。
   // 器の混みは時間を足すだけで引かないので、最小時間は測るほど真の値へ単調に近づく。
-  // ラウンドを重ねるのは、比が `maxRatio` を超えている間だけ（最大 `rounds` 回）。
+  // ラウンドを重ねるのは、比が `maxRatio` を超えているか、そのすぐ下の帯に居る間だけ（最大 `rounds` 回。
+  // 下の `settledBelow`）。
   // **ラウンドごとの比の最小を採ってはいけない**——小さいほうだけに混みが乗ったラウンドが1つ
   // あると分母が膨らみ、2乗（理論値 factor²）でも比が閾値を下回って通る（最初の版が CI の
   // 陰性対照 `\s+$` で2乗を通した）。最小時間どうしの比なら、混みはどちらの側でも
   // 「足されるだけ」なので、2乗の比は理論値より下がらない。
+  // **閾値のすぐ下でも止めない**（#2649）。以前は比が `maxRatio` を下回った時点で止めていたので、
+  // 線形は閾値を超えたら最大 `rounds` 回まで測り直してもらえるのに、2乗は閾値を下回った1ラウンド
+  // （陰性対照では3回ずつ）だけで通った。CI run 37042693462 の陰性対照 `\s+$` がこの形で、
+  // t(4000)=26.17ms, t(16000)=223.76ms, 比 8.55 の1ラウンドで止まり、2乗を通した。
+  // そこで、対数の目盛りで線形（約 factor）より閾値に近い帯——`sqrt(factor * maxRatio)`
+  // （既定なら約 6.32）以上——は「まだ決まっていない」として重ねる。
+  // `maxRatio` 以上では従来どおり止めないので、従来なら落ちた測定の並びは1つも変わらない。
+  // 変わるのは従来ならこの帯で止めて通していた場合だけで、そこから先は測り直した最小時間で決まる。
+  const settledBelow = Math.min(maxRatio, Math.sqrt(factor * maxRatio));
   const roundLog: string[] = [];
   let hung = false;
   for (let round = 0; round < rounds && !hung; round += 1) {
@@ -251,7 +264,7 @@ export function expectNotSuperlinear<TInput>(
       `#${round + 1}: t(small)最小=${roundSmallMs.toFixed(2)}ms, t(large)最小=${roundLargeMs.toFixed(2)}ms, ` +
         `累積の比=${ratio.toFixed(2)}`,
     );
-    if (hung || ratio < maxRatio) break;
+    if (hung || ratio < settledBelow) break;
   }
 
   const detail =

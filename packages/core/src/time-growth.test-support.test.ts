@@ -307,6 +307,75 @@ describe('expectNotSuperlinear', () => {
     expect((error as Error).message).toMatch(/ratio=16\.00/);
   });
 
+  it('1ラウンド目の小さいほうだけが混んで比が閾値のすぐ下に来ても、止めずに測り直して2乗を落とす（#2649）', () => {
+    // CI run 37042693462 の陰性対照 `\s+$` の形（t(4000)=26.17ms, t(16000)=223.76ms, 比 8.55）。
+    // n=4000 の2乗は 16ms、n=16000 は 256ms。温め3回の後、1ラウンド目の小さいほう3回（4〜6回目）
+    // にだけ 14ms の混みが乗る。1ラウンド目の比は 256/30 = 8.53。閾値を下回った時点で止めると
+    // ここで通る（以前の助け）。帯（sqrt(4*10) = 6.32 以上）の中なので2ラウンド目を測り、
+    // 小さいほうの最小は 16ms に戻って比は 16。
+    const clock = makeFakeClock();
+    let smallCalls = 0;
+    let error: unknown;
+    try {
+      expectNotSuperlinear(
+        (n: number) => {
+          clock.advance((n * n) / 1_000_000);
+          if (n === 4000) {
+            smallCalls += 1;
+            if (smallCalls >= 4 && smallCalls <= 6) clock.advance(14);
+          }
+        },
+        identity,
+        { n: 4000, minSmallMs: 0, repeats: 3, now: clock.now },
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error, '閾値のすぐ下の1ラウンドで止めて2乗を通した').toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/伸びの比が大きすぎる/);
+    expect((error as Error).message).toMatch(
+      /#1: t\(small\)最小=30\.00ms, t\(large\)最小=256\.00ms, 累積の比=8\.53/,
+    );
+    expect((error as Error).message).toMatch(/ratio=16\.00/);
+  });
+
+  it('1ラウンド目の比が帯に入った線形は、測り直して通る。帯より下なら従来どおり1ラウンドで止まる（#2649）', () => {
+    // 大きいほうの1ラウンド目の5回に 17.5ms が乗る（比 37.5/5 = 7.5、帯の中・閾値の下）。
+    // 2ラウンド目は静かで、大きいほうの最小は 20ms、比は 4。
+    const clock = makeFakeClock();
+    let largeCalls = 0;
+    const result = expectNotSuperlinear(
+      (n: number) => {
+        clock.advance(n / 1_000_000);
+        if (n >= 20_000_000) {
+          largeCalls += 1;
+          if (largeCalls <= 5) clock.advance(17.5);
+        }
+      },
+      identity,
+      { n: 5_000_000, minSmallMs: 0, now: clock.now },
+    );
+    expect(result.ratio).toBe(4);
+    expect(largeCalls).toBe(10);
+
+    // 混みが帯の下（比 6.0 < 6.32）に留まるなら、1ラウンド（大きいほう5回）で止まる。
+    const steady = makeFakeClock();
+    let steadyLargeCalls = 0;
+    const settled = expectNotSuperlinear(
+      (n: number) => {
+        steady.advance(n / 1_000_000);
+        if (n >= 20_000_000) {
+          steadyLargeCalls += 1;
+          steady.advance(10);
+        }
+      },
+      identity,
+      { n: 5_000_000, minSmallMs: 0, now: steady.now },
+    );
+    expect(settled.ratio).toBe(6);
+    expect(steadyLargeCalls).toBe(5);
+  });
+
   it('大きいほうだけに混みが乗ったラウンドが混じっても、線形は通る', () => {
     // 大きいほうの最初の7回（1ラウンド目の全部と2ラウンド目の前半）に 100ms が乗る。
     // 2ラウンド目の後半に静かな測定があるので、大きいほうの最小は 20ms、比は 4。
@@ -356,6 +425,15 @@ describe('expectNotSuperlinear', () => {
  * （n=11→22 で約 50ms、比は数十〜数百倍。理論値は 2^11 = 2048 倍）。`\s+$` を空白の列＋`x` に当てる形は2乗で、n=2000 が
  * 約 1.5ms、n=32000 が約 320ms（n を16倍で時間は約 200 倍）。どちらも閾値 10 には桁で余裕がある。
  * 線形のほうの対照（落ちないこと）は、約 65 箇所の本物の歯が毎回測っている。
+ *
+ * **2乗の n は 6000（#2649）**。n=4000 では CI run 37042693462 で t(4000)=26.17ms, t(16000)=223.76ms,
+ * 比 8.55 となり、2乗を通した。手元で t(4000) は約 14ms なので、小さいほうの1回ごとに十数 ms の
+ * 混みが足されると比が 10 を割る。混みが1ラウンドだけなら、助けが帯の中で測り直す（上の #2649 の
+ * 偽の時計の歯）。全ラウンドに続く混みは測り直しでは消えないので、対照の側で分母を太くして耐える。
+ * 手元（2026-10-03）で小さいほうの毎回に busy-wait を足して測ると、n=4000 は 10ms で比 10.1〜11.3、
+ * 16ms で全部通した。n=6000 は 22ms まで全部落とし（比 10.3〜11.2）、30ms で通した。
+ * 足さなければ n=6000 は t(6000) 約 33〜40ms・t(24000) 約 550〜660ms・比 15.4〜19.8 で、
+ * 大きいほうは hardCapMs（2000ms）に3倍の余裕がある。
  */
 /** 投げるはずの測定。投げなかったときは、測った値を表明の文に出す（CI で値が読めるように）。 */
 function expectGrowthDetected(
@@ -392,7 +470,7 @@ describe('陰性対照: 後戻りが爆発する正規表現を、助けは実�
     expectGrowthDetected(
       (input) => quadratic.test(input),
       (n) => `${' '.repeat(n)}x`,
-      { n: 4000, minSmallMs: 0, repeats: 3 },
+      { n: 6000, minSmallMs: 0, repeats: 3 },
     );
   }, 30_000);
 });
