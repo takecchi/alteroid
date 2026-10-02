@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { parseCron } from './cron.js';
-import { noteBackgroundFailure } from './dropped-record.js';
+import { noteBackgroundFailure, reasonOf } from './dropped-record.js';
 import { isWrittenDailyReport } from './schema.js';
 import type {
   InboxEvent,
@@ -498,7 +498,7 @@ class TimerScheduler implements Scheduler {
       } catch (error) {
         // 印を付けないので次の刻みでもう一度試す。**黙って諦めない。**
         this.#onError(
-          `定期ジョブ ${entry.kind} の位相を読めなかった（次の刻みで読み直す）: ${String(error)}`,
+          `定期ジョブ ${entry.kind} の位相を読めなかった（次の刻みで読み直す）: ${reasonOf(error)}`,
         );
         continue;
       }
@@ -555,7 +555,7 @@ class TimerScheduler implements Scheduler {
         await store.putPhase(phase);
       } catch (error) {
         this.#onError(
-          `定期ジョブ ${entry.kind} の位相を保存できなかった（この回を次の起動でもう一度起こす側に倒れる）: ${String(error)}`,
+          `定期ジョブ ${entry.kind} の位相を保存できなかった（この回を次の起動でもう一度起こす側に倒れる）: ${reasonOf(error)}`,
         );
       }
     });

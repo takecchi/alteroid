@@ -3,6 +3,7 @@ import {
   type AccountUsageState,
   type LimitsUnavailableCause,
   type UsageProbeQuery,
+  reasonOf,
 } from '@alteroid/core';
 
 /**
@@ -256,7 +257,7 @@ export function startUsagePolling(options: UsagePollerOptions): UsagePoller {
               notify(next);
             } catch (error) {
               process.stderr.write(
-                `alteroidd: 枠の観測を見張りへ渡せませんでした: ${String(error)}\n`,
+                `alteroidd: 枠の観測を見張りへ渡せませんでした: ${reasonOf(error)}\n`,
               );
             }
           }, 0);

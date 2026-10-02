@@ -1,5 +1,6 @@
 import { resolveCredentialRows } from './credential-service.js';
 import { ENV_FILE_OWNED_CREDENTIAL_NAMES } from './credentials.js';
+import { reasonOf } from './dropped-record.js';
 import type { Stores } from './store.js';
 
 /**
@@ -83,7 +84,7 @@ export async function seedDefaultEnvVars(
     existing = new Set((await stores.credentials.list()).map((row) => row.name));
   } catch (error) {
     process.stderr.write(
-      `alteroidd: 環境変数の播種のための読み出しに失敗しました: ${String(error)}\n`,
+      `alteroidd: 環境変数の播種のための読み出しに失敗しました: ${reasonOf(error)}\n`,
     );
     return;
   }
@@ -108,7 +109,7 @@ export async function seedDefaultEnvVars(
   try {
     await stores.credentials.put(toSeed);
   } catch (error) {
-    process.stderr.write(`alteroidd: 環境変数の既定値の播種に失敗しました: ${String(error)}\n`);
+    process.stderr.write(`alteroidd: 環境変数の既定値の播種に失敗しました: ${reasonOf(error)}\n`);
   }
 }
 
@@ -135,7 +136,7 @@ export async function applyAppScopedEnvVars(
     rows = await stores.credentials.list();
   } catch (error) {
     process.stderr.write(
-      `alteroidd: 環境変数の読み出しに失敗しました（既存の process.env のまま動きます）: ${String(error)}\n`,
+      `alteroidd: 環境変数の読み出しに失敗しました（既存の process.env のまま動きます）: ${reasonOf(error)}\n`,
     );
     return;
   }

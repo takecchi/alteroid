@@ -12,6 +12,7 @@ import {
   type TokenRotationPolicy,
   type TokenRotationSettings,
 } from './token-pool.js';
+import { reasonOf } from './dropped-record.js';
 import type { UnreadableToken } from './schema.js';
 import { UnreadableTokenSettingsError, type Stores } from './store.js';
 import { createTokenPoolWriteLock, type TokenPoolWriteLock } from './token-pool-write-lock.js';
@@ -278,7 +279,7 @@ export function createTokenPoolService(options: TokenPoolServiceOptions): TokenP
       // 通っていないが、この関数は値を扱う経路の中に居る。
       process.stderr.write(
         `alteroidd: 認証トークンのプールの変更（${change}）を見張りへ知らせられなかった: ` +
-          `${error instanceof Error ? (error.message.split('\n')[0] ?? '理由不明') : '理由不明'}\n`,
+          `${reasonOf(error)}\n`,
       );
     }
   }

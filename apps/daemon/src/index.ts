@@ -1066,7 +1066,7 @@ export async function main(): Promise<void> {
       .append({ type: 'external_event', source: 'runner', summary: describeRunnerUnknown(report) })
       .catch((error: unknown) => {
         process.stderr.write(
-          `alteroidd: runner の期限切れを日誌へ残せませんでした: ${String(error)}\n` +
+          `alteroidd: runner の期限切れを日誌へ残せませんでした: ${reasonOf(error)}\n` +
             `  ${describeRunnerUnknown(report)}\n`,
         );
       });
@@ -1486,7 +1486,7 @@ export async function main(): Promise<void> {
     // 意味が消える（本文を一度も変えていなくても監査情報が失われる）。
     const applied = await profileService
       .restore()
-      .catch((error: unknown) => ({ ok: false, error: String(error), output: undefined }));
+      .catch((error: unknown) => ({ ok: false, error: reasonOf(error), output: undefined }));
     if (applied !== null && !applied.ok) {
       // **黙って古い環境で走らせない。** 何が効いていないかが見えないと、
       // 「鍵が届いていない」のか「鍵の権限が足りない」のかを誰も切り分けられない。
@@ -1682,7 +1682,7 @@ export async function main(): Promise<void> {
   {
     const restored = await tokenRotator
       .restore()
-      .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
+      .catch((error: unknown) => ({ kind: 'failed' as const, why: reasonOf(error) }));
     // **何も起きていないとき（`none`）は黙る。** 既定の構成では毎回の起動で出る
     // ことになり、意味のある行が埋もれる。
     // **日誌にも残す。** 標準出力・標準エラーは器のログへ流れて消えるが、日誌は
@@ -2093,7 +2093,7 @@ export async function main(): Promise<void> {
           })
           .catch((error: unknown) => {
             process.stderr.write(
-              `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
+              `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`,
             );
           });
       };
@@ -2236,7 +2236,7 @@ export async function main(): Promise<void> {
    */
   const takeOver = async (): Promise<void> => {
     const restored = await clone.managers.restore().catch((error: unknown) => {
-      process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
+      process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`);
       return [];
     });
     if (restored.length > 0) {
@@ -2279,7 +2279,7 @@ export async function main(): Promise<void> {
     if (runnerId !== undefined) {
       void clone.managers.reattachRunner(runnerId).catch((error: unknown) => {
         process.stderr.write(
-          `alteroidd: 入れ替わった runner (${runnerId}) の取り直しに失敗しました: ${String(error)}\n`,
+          `alteroidd: 入れ替わった runner (${runnerId}) の取り直しに失敗しました: ${reasonOf(error)}\n`,
         );
       });
     }
@@ -2382,7 +2382,7 @@ export async function main(): Promise<void> {
     // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
     // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
     // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
-    writeStderrSync(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);
+    writeStderrSync(`alteroidd: 待ち受けに失敗しました (port ${port}): ${reasonOf(error)}\n`);
     process.exit(1);
   });
 
@@ -2394,7 +2394,7 @@ export async function main(): Promise<void> {
   for (const seed of seeds) {
     void runners.register(seed).catch((error: unknown) => {
       process.stderr.write(
-        `alteroidd: runner (${seed.label}) を名簿に載せられません: ${String(error)}\n`,
+        `alteroidd: runner (${seed.label}) を名簿に載せられません: ${reasonOf(error)}\n`,
       );
     });
   }
@@ -2456,7 +2456,7 @@ export async function main(): Promise<void> {
   // 仕込んであった依頼を先に読み直す。ここを通さないと、前回の会話で仕込んだ
   // 継続中の依頼が、次の刻み（最大1分）まで存在しないことになる。
   await scheduler.refresh().catch((error: unknown) => {
-    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${String(error)}\n`);
+    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${reasonOf(error)}\n`);
   });
   scheduler.start();
 
@@ -2534,7 +2534,7 @@ if (invokedDirectly()) {
 
   main().catch((error: unknown) => {
     // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
-    writeStderrSync(`alteroidd: 起動に失敗しました: ${String(error)}\n`);
+    writeStderrSync(`alteroidd: 起動に失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
 }
