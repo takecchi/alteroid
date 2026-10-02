@@ -9,6 +9,40 @@ import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnos
 
 import type { JournalEntry } from './types.js';
 
+/**
+ * 成功した `github_observation` の CI の軸を1行にする（#2608）。
+ *
+ * **`@alteroid/core` の `describeGithubCi`（`progress-github.ts`）と1文字も違えない写し。**
+ * core 本体の値の import はブラウザバンドルへサーバ専用のドメイン層を入れてしまう
+ * （`@alteroid/core/journal-search` の分離の経緯）ので、ここへ写して持つ。
+ * 文言を結ぶ歯は `journal-summary.test.ts` が持つ（core の関数と突き合わせる）。
+ */
+export function describeGithubCiText(ok: {
+  ci?: {
+    pulls: number;
+    success: number;
+    failure: number;
+    pending: number;
+    checks: string;
+    truncated?: boolean;
+  };
+  ciUnavailable?: string;
+}): string {
+  if (ok.ci !== undefined) {
+    const ci = ok.ci;
+    const counted = ci.success + ci.failure + ci.pending;
+    return (
+      `CI: ${String(ci.pulls)} 件の PR を確認 — success ${String(ci.success)} / failure ${String(ci.failure)} / pending ${String(ci.pending)}` +
+      (counted < ci.pulls ? `（チェックが無い等で未集計 ${String(ci.pulls - counted)} 件）` : '') +
+      `（数えたもの: ${ci.checks}）` +
+      (ci.truncated === true ? '（打ち切り。数は下限）' : '')
+    );
+  }
+  if (ok.ciUnavailable !== undefined)
+    return `CI: 取れなかった — ${ok.ciUnavailable}（0 件ではない）`;
+  return 'CI: 観測していない（0 件ではない）';
+}
+
 /** 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。 */
 export function summarizeJournalEntry(entry: JournalEntry): string {
   switch (entry.type) {
@@ -86,7 +120,10 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
       return entry.result.status === 'ok'
         ? `${entry.repo}: open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
             (entry.result.truncated ? '（limit に達した。下限）' : '') +
-            `（観測者 ${entry.observedBy}）`
+            `（観測者 ${entry.observedBy}）` +
+            // **CI の軸を落とさない（#2608）。** `ci` が無いのは「観測していない」、
+            // `ciUnavailable` は「取れなかった」で、どちらも 0 件ではない。
+            ` / ${describeGithubCiText(entry.result)}`
         : `${entry.repo}: 取れなかった（観測者 ${entry.observedBy}）: ${entry.result.reason}`;
     case 'subagent_stall': {
       // **`token_rotation` と違い、`text` をそのまま出さない。** `entry.text`
