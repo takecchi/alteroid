@@ -137,6 +137,9 @@ describe('終端の無いヒアドキュメントと、区切りの多い長い1
       // n * factor（既定4）の大きさで、直す前と同じ入力に対する blocked を確かめる。
       expect(inspectBashCommand(makeInput(n * 4)).blocked).toBe(blocked);
       expectNotSuperlinear((command: string) => inspectBashCommand(command), makeInput, { n });
-    });
+      // 明示のタイムアウト（vitest の既定 5000ms ではなく）。この歯は n が大きく、助けが5回×ラウンドで
+      // 測るので、手元で約 0.2〜1 秒かかる。2026-09-30 の CI で 5000ms の時間切れを起こした（実装の
+      // 伸び方とは無関係な器の遅さ）。歯の判定は比と hardCapMs（2000ms）が持ち、ここは動かさない（#2576）。
+    }, 30_000);
   }
 });
