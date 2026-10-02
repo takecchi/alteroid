@@ -115,17 +115,19 @@ docker compose exec app alteroid chat
 
 Web UI の画面（配置と接続先は [apps/web/README.md](./apps/web/README.md)）:
 
+<!-- 画像の実体は orphan 枝 `assets` に在る（main は NUL バイトを許さない歯があるので PNG を置けない。#260）。その枝を消すと下の画像が全部切れる -->
+
 **ダッシュボード** — いま何が動いていて、何が人間を待っているか
 
-![ダッシュボード](./.github/assets/readme/dashboard.png)
+![ダッシュボード](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/dashboard.png)
 
 **会話** — クローンと話す（`alteroid chat` と同じ）
 
-![会話](./.github/assets/readme/chat.png)
+![会話](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/chat.png)
 
 **記憶** — クローンの価値観そのもの。人間がいつでも読んで直せる
 
-![記憶](./.github/assets/readme/memory.png)
+![記憶](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/memory.png)
 
 CLI の主なコマンド:
 
