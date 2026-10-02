@@ -472,7 +472,7 @@ export const runnerExecutionResourcesSchema = z.object({
       oldestZombieSeconds: z.number().int().nonnegative().optional(),
       /**
        * 孤児プロセス木の回収（#315 段0）。**数えるのが本体。撃つのは、runner 自身が起こした
-       * 委譲の CLI のプロセス木のうち、その委譲が終わったもの（既定の `observe` でも撃つ。#2626）と、
+       * 委譲の CLI のプロセス木のうち、その委譲が終わったもの（`observe` でも撃つ。#2626）と、
        * `mode: 'reclaim'` のときの素性の分からない孤児だけである。**
        *
        * **生存プロセスの素性はここにも入らない。** 出るのは数と時刻だけで、判定に
@@ -480,8 +480,8 @@ export const runnerExecutionResourcesSchema = z.object({
        * （`cmdline` / `cwd` / `environ` は読んでいない —— `apps/runner/src/tasks.ts`
        * の `ReclaimObservation` の doc）。**直上の「素性は含まない」はそのまま効いている。**
        *
-       * **`mode` は `'observe'`（既定。素性の分からない孤児は撃たない）と `'reclaim'`
-       * （素性の分からない孤児も撃つ）の両方を受け付ける。** 受け取る側を先に広げておかないと、段1 を載せた
+       * **`mode` は `'observe'`（素性の分からない孤児は撃たない）と `'reclaim'`
+       * （素性の分からない孤児も撃つ。runner の既定。#1853）の両方を受け付ける。** 受け取る側を先に広げておかないと、段1 を載せた
        * runner と古いデーモンが同時に居る窓でこの欄が丸ごと落ちる**（別デプロイなので
        * 版はずれる）。
        *

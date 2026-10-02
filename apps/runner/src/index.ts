@@ -208,7 +208,13 @@ export function childUserOf(env: NodeJS.ProcessEnv = process.env): RunnerChildUs
   };
 }
 
-/** 孤児の回収（#315 / #1334）を切る口。**この版が受け付けるのは3値である。** */
+/**
+ * 孤児の回収（#315 / #1334）を切る口。**この版が受け付けるのは3値である。**
+ *
+ * **未設定なら `reclaim`（撃つ）である**（オーナーの決定 2026-10-02、#1853）。それまでの既定は
+ * `observe` で、素性の分からない孤児を回収させるには人間が runner の環境へこの変数を入れる
+ * 必要があった。`observe` / `off` を明示すれば、従来どおりその値に従う。
+ */
 export const RECLAIM_ENV_KEY = 'ALTEROID_RUNNER_RECLAIM';
 
 /**
@@ -239,7 +245,7 @@ export function reclaimScanOf(
   childUser: RunnerChildUser | undefined = childUserOf(env),
   reap?: ReclaimReapOptions,
 ): ReclaimScanOptions | undefined {
-  const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'observe';
+  const raw = envValue(env, RECLAIM_ENV_KEY) ?? 'reclaim';
   if (raw === 'off') return undefined;
   if (raw !== 'observe' && raw !== 'reclaim') {
     throw new Error(
@@ -253,11 +259,11 @@ export function reclaimScanOf(
 }
 
 /**
- * 既定の構え（`reap` の無い `ReclaimScanOptions`）に、判定材料 `sessions` を足す（#2352 / #2626）。
+ * `reap` の無い構え（`observe` を明示した回）に、判定材料 `sessions` を足す（#2352 / #2626）。
  *
  * **`sessions` があると、runner 自身が起こした委譲の CLI のプロセス木のうち、その委譲が終わった
- * ものを畳む**（`ReclaimScanOptions.sessions` の doc）。環境変数 `ALTEROID_RUNNER_RECLAIM` が置かれて
- * いなくても効く——「runner が親として pid＝sid を控えた委譲が終わった」ことは runner 自身が
+ * ものを畳む**（`ReclaimScanOptions.sessions` の doc）。環境変数 `ALTEROID_RUNNER_RECLAIM` が
+ * `observe` でも効く——「runner が親として pid＝sid を控えた委譲が終わった」ことは runner 自身が
  * 知っている事実だからである。素性の分からない孤児（分岐1）を撃つ力は足さない（`reap` だけが持つ）。
  * すでに `reap` がある（`reclaim`）ならそのまま返す。`undefined`（`off`・観測しない）もそのまま返す
  * ——`off` は観測ごと止める切れる口である。
@@ -529,8 +535,8 @@ export async function main(): Promise<void> {
         reclaimScan === undefined
           ? '切'
           : reclaimScan.reap === undefined
-            ? '既定（終端した委譲の木だけ畳む。素性の分からない孤児は撃たない）'
-            : '回収（撃つ）'
+            ? 'observe（終端した委譲の木だけ畳む。素性の分からない孤児は撃たない）'
+            : '回収（撃つ。既定）'
       }` +
       ` / 帯: ${resolveManagerModel(process.env)} → ${resolveWorkerModel(process.env)}）\n`,
   );

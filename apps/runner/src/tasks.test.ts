@@ -9,7 +9,8 @@ import { runnerExecutionResourcesSchema } from '@alteroid/core';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { TaskBreakdownReader, type ReclaimSessionView } from './tasks.js';
+import { RECLAIM_ENV_KEY, reclaimScanOf, withTerminatedReclaimSessions } from './index.js';
+import { TaskBreakdownReader, type ReclaimReapOptions, type ReclaimSessionView } from './tasks.js';
 
 /**
  * **本番経路が実物の `fs` を触っていることを測るために、`stat` だけ包む。**
@@ -1797,6 +1798,106 @@ describe('既定の構え（observe）が終端した委譲の木を畳む（#26
     expect(calls).toEqual([]);
     expect(result?.reclaim?.signalled).toBe(0);
     await new TaskBreakdownReader({ procRoot: root, killFn }).read();
+    expect(calls).toEqual([]);
+  });
+});
+
+/**
+ * **#1853: `ALTEROID_RUNNER_RECLAIM` が未設定なら `reclaim`（オーナーの決定 2026-10-02）。**
+ * `main()` と同じ組み立て（`withTerminatedReclaimSessions(reclaimScanOf(env, childUser, reap), reap)`）
+ * を通し、**環境変数から撃つまで**を1本で測る。
+ *
+ * 既定で撃てるようになったのは分岐1（runner が把握している委譲が0本のとき、素性の分からない孤児を
+ * sid を問わず撃つ形）だけである。**委譲が1本でも走っていれば、その木は撃たない**——ここを固定する。
+ * 陰性対照は2つ: (1) 同じ /proc で委譲が0本になれば既定は撃つ（＝この配置で撃てる。上の「撃たない」が
+ * 空振りではない）、(2) `observe` を明示すれば同じ配置でも撃たない（＝既定が実際に変わった）。
+ */
+describe('既定の構え（未設定 ⟹ reclaim）でも、走っている委譲の木は撃たない（#1853）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+  const CHILD = { uid: OWN_UID, gid: OWN_UID };
+
+  function fakeKillFn(): {
+    fn: (pid: number, signal: NodeJS.Signals) => void;
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+  } {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
+  }
+
+  /**
+   * 走っている委譲（CLI の pid＝sid 555）と、その配下が孤児ルートになった形を置く。
+   *
+   * - 555: 委譲の CLI 本体（親は runner の 50。ppid≠1 なので孤児ルートではない）
+   * - 556: その子（sid 555）
+   * - 570: 委譲の背景ジョブが親を失って ppid 1 へ里子に出たもの（sid 555 のまま）
+   * - 571: 570 の子で、setsid で抜けた（sid 571。帰属は親を辿って 555）
+   * - 580: 委譲が `setsid nohup` で起こした長時間のジョブ（ppid 1・sid 580。どこにも属さない）
+   */
+  function placeLiveDelegationTree(): void {
+    placeProcess(root, 555, 'claude', 'S', 10, 0, 50, 555);
+    placeProcess(root, 556, 'node', 'S', 4, 0, 555, 555);
+    placeProcess(root, 570, 'pnpm', 'S', 3, 0, 1, 555);
+    placeProcess(root, 571, 'chrome', 'S', 7, 0, 570, 571);
+    placeProcess(root, 580, 'server', 'S', 2, 0, 1, 580);
+    placeUptime(root, 1000);
+  }
+
+  function reapOf(delegationRunning: boolean): ReclaimReapOptions {
+    return {
+      liveSessionPidsOf: () => new Set(delegationRunning ? [555] : []),
+      knownTerminatedSessionPidsOf: () => new Set(),
+      anyTrackedDelegationsOf: () => delegationRunning,
+    };
+  }
+
+  async function scanWith(env: NodeJS.ProcessEnv, delegationRunning: boolean) {
+    const reap = reapOf(delegationRunning);
+    const { fn: killFn, calls } = fakeKillFn();
+    const reclaim = withTerminatedReclaimSessions(reclaimScanOf(env, CHILD, reap), reap);
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      ...(reclaim === undefined ? {} : { reclaim }),
+    }).read();
+    return { result, calls };
+  }
+
+  it('未設定（既定 reclaim）: 委譲が走っていれば、その木も setsid で抜けた長時間のジョブも撃たない', async () => {
+    placeLiveDelegationTree();
+    const { result, calls } = await scanWith({}, true);
+
+    expect(result?.reclaim?.mode).toBe('reclaim');
+    expect(result?.reclaim?.candidates).toBe(3); // 570・571・580。候補としては数える
+    expect(result?.reclaim?.signalled).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('陰性対照: 同じ配置で委譲が0本になれば、既定は素性の分からない孤児を sid を問わず撃つ', async () => {
+    placeLiveDelegationTree();
+    const { result, calls } = await scanWith({}, false);
+
+    expect(result?.reclaim?.mode).toBe('reclaim');
+    expect(result?.reclaim?.signalled).toBe(3);
+    expect(calls.map((call) => call.pid).sort((a, b) => a - b)).toEqual([570, 571, 580]);
+    expect(calls.every((call) => call.signal === 'SIGTERM')).toBe(true);
+    // 孤児ルートではない委譲の本体（555・556）には触れない。
+    expect(calls.some((call) => call.pid === 555 || call.pid === 556)).toBe(false);
+  });
+
+  it('陰性対照: observe を明示すれば、委譲が0本でも素性の分からない孤児は撃たない（明示した値に従う）', async () => {
+    placeLiveDelegationTree();
+    const { result, calls } = await scanWith({ [RECLAIM_ENV_KEY]: 'observe' }, false);
+
+    expect(result?.reclaim?.mode).toBe('observe');
+    expect(result?.reclaim?.signalled).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('off を明示すれば観測ごと止まり、撃たない', async () => {
+    placeLiveDelegationTree();
+    const { result, calls } = await scanWith({ [RECLAIM_ENV_KEY]: 'off' }, false);
+
+    expect(result?.reclaim).toBeUndefined();
     expect(calls).toEqual([]);
   });
 });

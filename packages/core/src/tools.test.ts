@@ -11507,7 +11507,7 @@ describe('runner_list（器の一覧）', () => {
     const reply = await h.call('runner_list', { resources: true });
 
     expect(reply).toContain(
-      '孤児（既定: 終端した委譲の木だけ畳む）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
+      '孤児（observe: 終端した委譲の木だけ畳む）: 候補 84 本 / 961 threads（いちばん古い 6時間24分前）' +
         '、走査時 pids 999/1000、送出 0 / 畳み 0 / 返却 0 threads',
     );
     // **木の形・齢の分布の欄が無い回（古い runner）では、その行そのものを出さない**
@@ -11520,7 +11520,7 @@ describe('runner_list（器の一覧）', () => {
    * **孤児プロセス木の形と齢の分布（#1334）。** `roots` / `largestTreeCandidates` /
    * `singletonTrees` で「1本の巨大な木か、バラバラな木が大量にあるか」を、
    * `medianAgeSec` / `ageBuckets` で「候補がどれだけ滞留しているか」を、
-   * 既存の「孤児（既定: 終端した委譲の木だけ畳む）」の行の**下に**出す。
+   * 既存の「孤児（observe: 終端した委譲の木だけ畳む）」の行の**下に**出す。
    */
   it('resources.tasks.reclaim.roots 等が在れば、孤児の木の形と齢の分布が候補の行の下に出る', async () => {
     const h = harness();
@@ -11575,7 +11575,7 @@ describe('runner_list（器の一覧）', () => {
         '1分未満 0 / 10分未満 5 / 1時間未満 12 / 6時間未満 392 / それ以上 0',
     );
     // **候補の行の下に出る**（既存の「孤児（既定: …）」より後ろの行にある）。
-    const candidateLineIndex = reply.indexOf('孤児（既定: 終端した委譲の木だけ畳む）');
+    const candidateLineIndex = reply.indexOf('孤児（observe: 終端した委譲の木だけ畳む）');
     const treeLineIndex = reply.indexOf('孤児の木');
     expect(candidateLineIndex).toBeGreaterThanOrEqual(0);
     expect(treeLineIndex).toBeGreaterThan(candidateLineIndex);
@@ -11653,10 +11653,10 @@ describe('runner_list（器の一覧）', () => {
         '素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: 1',
       );
       expect(reply).not.toContain('判定材料');
-      // 先に `孤児（既定: 終端した委譲の木だけ畳む` の行が在ることを確かめる（#2009 と同じ型。無いと `n > -1` で素通りする）。
-      expect(reply).toContain('孤児（既定: 終端した委譲の木だけ畳む');
+      // 先に `孤児（observe: 終端した委譲の木だけ畳む` の行が在ることを確かめる（#2009 と同じ型。無いと `n > -1` で素通りする）。
+      expect(reply).toContain('孤児（observe: 終端した委譲の木だけ畳む');
       expect(reply.indexOf('孤児ルート外')).toBeGreaterThan(
-        reply.indexOf('孤児（既定: 終端した委譲の木だけ畳む'),
+        reply.indexOf('孤児（observe: 終端した委譲の木だけ畳む'),
       );
     });
 
@@ -11703,7 +11703,7 @@ describe('runner_list（器の一覧）', () => {
     it('notFired 自体が無ければ（古い runner）、3行とも出ない', async () => {
       const reply = await listWith();
 
-      expect(reply).toContain('孤児（既定: 終端した委譲の木だけ畳む）');
+      expect(reply).toContain('孤児（observe: 終端した委譲の木だけ畳む）');
       expect(reply).not.toContain('孤児ルート外');
       expect(reply).not.toContain('hold');
       expect(reply).not.toContain('reclaim でないので');

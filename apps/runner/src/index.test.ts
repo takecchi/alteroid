@@ -173,6 +173,34 @@ describe('reclaimScanOf（孤児の観測を切る口）', () => {
     expect(reclaimScanOf({}, CHILD)).toEqual({ childUid: 1001 });
   });
 
+  /**
+   * **未設定の既定は `reclaim`（オーナーの決定 2026-10-02、#1853）。** `reap` を渡せば、明示した
+   * `reclaim` と同じ形が返る。対照に、`observe` / `off` を明示した回は従来どおりその値に従う。
+   */
+  it('未設定なら reclaim として扱い、reap を渡せばそのまま乗る（observe / off を明示すれば従う）', () => {
+    const reap = {
+      liveSessionPidsOf: () => new Set<number>(),
+      knownTerminatedSessionPidsOf: () => new Set<number>(),
+    };
+    expect(reclaimScanOf({}, CHILD, reap)).toEqual({ childUid: 1001, reap });
+    expect(reclaimScanOf({}, CHILD, reap)).toEqual(
+      reclaimScanOf({ [RECLAIM_ENV_KEY]: 'reclaim' }, CHILD, reap),
+    );
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'observe' }, CHILD, reap)).toEqual({
+      childUid: 1001,
+    });
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD, reap)).toBeUndefined();
+  });
+
+  /** 空文字は「置いていない」と同じ扱い（`envValue`）。既定の `reclaim` へ倒れる。 */
+  it('空文字も未設定と同じく reclaim', () => {
+    const reap = {
+      liveSessionPidsOf: () => new Set<number>(),
+      knownTerminatedSessionPidsOf: () => new Set<number>(),
+    };
+    expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: '' }, CHILD, reap)).toEqual({ childUid: 1001, reap });
+  });
+
   it('off なら欄ごと出さない（undefined）', () => {
     expect(reclaimScanOf({ [RECLAIM_ENV_KEY]: 'off' }, CHILD)).toBeUndefined();
   });

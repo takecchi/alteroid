@@ -79,7 +79,8 @@ export interface TaskBreakdown {
 /**
  * 回収の動作段階。
  *
- * **意味（#2626 で直した）。** `'observe'` は既定の構え: **素性の分からない孤児は撃たない**。
+ * **意味（#2626 で直した）。** `'observe'`（`ALTEROID_RUNNER_RECLAIM=observe` を明示した構え）:
+ * **素性の分からない孤児は撃たない**。
  * ただし `reclaim.sessions`（{@link ReclaimScanOptions.sessions}）があれば、runner 自身が
  * 起こした委譲の CLI のプロセス木のうち**その委譲が終わったものは撃つ**（`signalled` が
  * 0を超えうる）。`'reclaim'` は `reclaim.reap`（{@link ReclaimScanOptions.reap}）を渡した回だけ
@@ -122,7 +123,10 @@ export type ReclaimMode = 'observe' | 'reclaim';
  * 数えるだけで、撃つかどうかの判断はここに無い。**
  */
 export interface ReclaimObservation {
-  /** いまの構え。`'observe'` は既定、`'reclaim'` は `reap` を渡した回（{@link ReclaimMode} の doc）。 */
+  /**
+   * いまの構え。`'reclaim'` は `reap` を渡した回（環境変数が未設定の既定はこれ。#1853）、
+   * `'observe'` はそれ以外（{@link ReclaimMode} の doc）。
+   */
   mode: ReclaimMode;
   /** 候補のプロセス数。 */
   candidates: number;
@@ -207,7 +211,7 @@ export interface ReclaimObservation {
    *
    * **`reclaim.sessions` も `reclaim.reap` も渡していなければ常に 0**
    * である（送出の経路が無い。`apps/runner/src/tasks.test.ts` の「段0 は撃たない」
-   * がそれを振る舞いで固定する）。既定の `observe` でも、終端した委譲の木があれば 0 を超える
+   * がそれを振る舞いで固定する）。`observe` でも、終端した委譲の木があれば 0 を超える
    * （#2626）。**累積ではなく、この回だけの本数**——`candidates`
    * など他の欄と同じく、毎回その場で数え直す値である。
    *
@@ -269,7 +273,7 @@ export interface ReclaimScanOptions {
    */
   reap?: ReclaimReapOptions;
   /**
-   * **既定の構え（`observe`）の判定材料。撃つ範囲は「終端した委譲の木」だけである（#2626）。**
+   * **`observe` の構えの判定材料。撃つ範囲は「終端した委譲の木」だけである（#2626）。**
    * `reap` とは別名の別の欄で、**これを渡すと、runner 自身が起こした委譲の CLI の
    * プロセス木のうち、その委譲が終わったもの（{@link ReclaimReapOptions} の分岐4と、
    * そこから継ぐ子孫）だけを撃つ。** 素性の分からない孤児（分岐1。把握している委譲が
@@ -355,7 +359,7 @@ export interface ReclaimNotFired {
  * **この5分岐のうち「撃つ」のは1と4だけである。** 迷う形（2・3・5のどれでもない
  * 未知の形）は全部「撃たない」側へ倒してある。
  *
- * **（#2626）分岐4は `reap` が無い既定の `observe` でも撃つ。** 分岐4は「runner が親として
+ * **（#2626）分岐4は `reap` が無い `observe` でも撃つ。** 分岐4は「runner が親として
  * pid＝sid を控えた委譲が終わった」ことが runner 自身に分かっている形で、素性を読んで
  * 当てたものではない。分岐4に加えて、**分岐5（自分の sid は認識できない）の子孫が、
  * 親を辿った先の祖先（か、親が先に死んだ場合は帳）で終端した委譲に帰属する**ときも撃つ
@@ -1054,7 +1058,7 @@ function reapVerdictFor(
  * - `fireLedger`: 同じく認識できないが、親は既に居ない。帳（{@link LineageEntry}）が
  *   覚えていた帰属先が終端した委譲のもの
  *
- * 後ろ3つは「runner 自身が起こした委譲の木が、終わった後に残ったもの」で、既定の
+ * 後ろ3つは「runner 自身が起こした委譲の木が、終わった後に残ったもの」で、
  * `observe` でも撃つ。
  */
 type ReapVerdict =
