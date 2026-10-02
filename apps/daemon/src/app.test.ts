@@ -1549,6 +1549,71 @@ describe('HTTP API', () => {
       expect(fake.answered).toEqual([]);
     });
 
+    it.each([
+      ['optionIds が空', [{ questionId: 'target', optionIds: [] }]],
+      ['other が空白だけ', [{ questionId: 'target', optionIds: [], other: '  ' }]],
+    ])(
+      '何も答えていない selections は 400 で、何も答えない（%s。issue #2582）',
+      async (_l, selections) => {
+        await put('ap-q-empty');
+        for (const extra of [{}, { answer: '  ' }]) {
+          const res = await app.request(
+            '/approvals/ap-q-empty/answer',
+            json({ selections, ...extra }),
+          );
+          expect(res.status).toBe(400);
+          const error = ((await res.json()) as { error: string }).error;
+          expect(error).toContain('何も答えていない');
+        }
+        expect(fake.answered).toEqual([]);
+      },
+    );
+
+    it('補足だけ付いた空の selections は通る（issue #2582）', async () => {
+      await put('ap-q-note');
+      const res = await app.request(
+        '/approvals/ap-q-note/answer',
+        json({ selections: [{ questionId: 'target', optionIds: [] }], answer: '金曜は避けたい' }),
+      );
+      expect(res.status).toBe(200);
+      expect(fake.answered).toMatchObject([{ id: 'ap-q-note', answer: '金曜は避けたい' }]);
+    });
+
+    it('まとめて答える口: 何も答えていない selections が1件でもあれば、1件も答えずに 400（issue #2582）', async () => {
+      await put('ap-q-e1');
+      await put('ap-q-e2');
+      const res = await app.request(
+        '/approvals/answer',
+        json({
+          answers: [
+            { id: 'ap-q-e1', answer: 'よい' },
+            { id: 'ap-q-e2', selections: [{ questionId: 'target', optionIds: [], other: '' }] },
+          ],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain('ap-q-e2');
+      expect(fake.answered).toEqual([]);
+    });
+
+    it('まとめて答える口: 補足だけ付いた空の selections は通る（issue #2582）', async () => {
+      await put('ap-q-e3');
+      const res = await app.request(
+        '/approvals/answer',
+        json({
+          answers: [
+            {
+              id: 'ap-q-e3',
+              selections: [{ questionId: 'target', optionIds: [] }],
+              answer: '補足',
+            },
+          ],
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(fake.answered).toMatchObject([{ id: 'ap-q-e3' }]);
+    });
+
     it('questions を持たない承認待ちへの selections は 400', async () => {
       await put('ap-q-none', false);
       const res = await app.request(

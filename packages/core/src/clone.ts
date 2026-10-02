@@ -2914,7 +2914,7 @@ class Clone implements CloneHost {
     // `selections` を渡さない呼びは、今までと1文字も変わらない（`answer` はそのまま回答）。
     let answer = suppliedAnswer;
     if (selections !== undefined) {
-      const violation = describeSelectionsViolation(approval.questions, selections);
+      const violation = describeSelectionsViolation(approval.questions, selections, suppliedAnswer);
       if (violation !== null) throw new InvalidApprovalSelectionsError(approvalId, violation);
       answer = foldSelections(approval.questions ?? [], selections, suppliedAnswer);
     }

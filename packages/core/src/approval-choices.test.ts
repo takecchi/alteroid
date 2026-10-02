@@ -68,7 +68,6 @@ describe('describeSelectionsViolation（selections と questions の突き合わ
         { questionId: 'target', optionIds: ['railway'], other: 'ただし来週' },
       ]),
     ).toBeNull();
-    expect(describeSelectionsViolation(questions, [])).toBeNull();
     expect(
       describeSelectionsViolation(questions, [
         { questionId: 'notify', optionIds: ['slack', 'mail'] },
@@ -116,6 +115,41 @@ describe('describeSelectionsViolation（selections と questions の突き合わ
     const violation = describeSelectionsViolation(qs, selections);
     expect(violation).not.toBeNull();
     expect(violation).toContain(mention);
+  });
+
+  it.each([
+    ['selections が空配列', []],
+    ['optionIds が空', [{ questionId: 'target', optionIds: [] }]],
+    ['other が空白だけ', [{ questionId: 'target', optionIds: [], other: '  ' }]],
+    [
+      '全部の selection が空',
+      [
+        { questionId: 'target', optionIds: [] },
+        { questionId: 'notify', optionIds: [] },
+      ],
+    ],
+  ])('何も答えていない回答は弾く（補足も空）: %s（issue #2582）', (_label, selections) => {
+    for (const supplement of [undefined, '', '  ']) {
+      const violation = describeSelectionsViolation(questions, selections, supplement);
+      expect(violation).toContain('何も答えていない');
+    }
+  });
+
+  it('何も選んでいなくても、補足があれば通す。一部の設問だけ答えても通す（issue #2582）', () => {
+    expect(
+      describeSelectionsViolation(
+        questions,
+        [{ questionId: 'target', optionIds: [] }],
+        '金曜は避けたい',
+      ),
+    ).toBeNull();
+    expect(describeSelectionsViolation(questions, [], '金曜は避けたい')).toBeNull();
+    expect(
+      describeSelectionsViolation(questions, [
+        { questionId: 'target', optionIds: [] },
+        { questionId: 'notify', optionIds: ['slack'] },
+      ]),
+    ).toBeNull();
   });
 
   it('allowOther の既定は true（other を書ける）', () => {

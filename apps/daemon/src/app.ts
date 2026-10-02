@@ -3663,7 +3663,11 @@ export function createApp(deps: AppDeps) {
           ) {
             continue;
           }
-          const violation = describeSelectionsViolation(pending.questions, item.selections);
+          const violation = describeSelectionsViolation(
+            pending.questions,
+            item.selections,
+            item.answer,
+          );
           if (violation !== null) {
             return c.json({ error: `selections が不正: ${item.id}: ${violation}` }, 400);
           }
@@ -3796,7 +3800,11 @@ export function createApp(deps: AppDeps) {
         // 同じ設問が2回、はどれも 400（何も書かない）。
         const body = c.req.valid('json');
         if (body.selections !== undefined) {
-          const violation = describeSelectionsViolation(approval.questions, body.selections);
+          const violation = describeSelectionsViolation(
+            approval.questions,
+            body.selections,
+            body.answer,
+          );
           if (violation !== null) return c.json({ error: `selections が不正: ${violation}` }, 400);
         }
         try {

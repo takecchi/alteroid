@@ -230,7 +230,7 @@ export function fakeApi(): FakeApi {
       }
       // デーモンと同じ検査と畳み方（`POST /approvals/:id/answer`）。
       if (body.selections !== undefined) {
-        const violation = describeSelectionsViolation(row.questions, body.selections);
+        const violation = describeSelectionsViolation(row.questions, body.selections, body.answer);
         if (violation !== null) {
           return Promise.reject(
             new ApiError(`回答に失敗しました（HTTP 400）: selections が不正: ${violation}`),

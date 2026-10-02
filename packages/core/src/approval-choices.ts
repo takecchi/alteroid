@@ -50,12 +50,19 @@ export function describeQuestionsViolation(questions: readonly ApprovalQuestion[
  * - 同じ設問が2回出る・同じ選択肢が1つの設問の中で2回出る
  * - 単一選択（`multiple` でない）で選択肢が2つ以上
  * - `allowOther: false` なのに `other` がある
+ * - **何も答えていない**（全部の selection で `optionIds` が空かつ `other` が trim で空、
+ *   しかも補足 `supplement` も trim で空。`selections` が空配列も同じ。Web UI の `empty` と
+ *   同じ線。issue #2582）
  *
- * **通すもの:** 答えの無い設問（`selections` に出てこない設問）。畳むときに「未回答」と出す。
+ * **通すもの:** 一部の設問だけ答えの無い設問（`selections` に出てこない設問）。畳むときに
+ * 「未回答」と出す。補足だけ付いた回答も通す。
+ *
+ * `supplement` は `selections` と併用する自由文（`answer`）。呼び手は必ず渡すこと。
  */
 export function describeSelectionsViolation(
   questions: readonly ApprovalQuestion[] | undefined,
   selections: readonly ApprovalSelection[],
+  supplement?: string,
 ): string | null {
   if (questions === undefined || questions.length === 0) {
     return 'この承認待ちは questions を持たないので、selections では答えられない（answer で答える）。';
@@ -86,6 +93,14 @@ export function describeSelectionsViolation(
     if (selection.other !== undefined && question.allowOther === false) {
       return `設問 "${question.id}" は allowOther が false なので、other は書けない。`;
     }
+  }
+  const answered = selections.some(
+    (selection) =>
+      selection.optionIds.length > 0 ||
+      (selection.other !== undefined && selection.other.trim() !== ''),
+  );
+  if (!answered && (supplement === undefined || supplement.trim() === '')) {
+    return '何も答えていない（選択肢・other・補足のどれかが要る）。';
   }
   return null;
 }

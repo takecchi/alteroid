@@ -135,6 +135,36 @@ describe('Clone#answerApproval の selections（issue #2525）', () => {
     expect(approval?.answer).toBe('Q1 デプロイ先: (b) Fly.io\nQ2 通知先: 未回答');
   });
 
+  it('何も答えていない selections は InvalidApprovalSelectionsError で、何も書かない（issue #2582）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(seed());
+    const { clone } = boot(stores);
+
+    await expect(
+      clone.answerApproval('ap-1', ' ', undefined, [
+        { questionId: 'target', optionIds: [], other: ' ' },
+      ]),
+    ).rejects.toBeInstanceOf(InvalidApprovalSelectionsError);
+
+    const approval = await stores.jobs.getApproval('ap-1');
+    expect(approval?.answeredAt).toBeUndefined();
+    expect(approval?.answer).toBeUndefined();
+  });
+
+  it('何も選ばず補足だけなら答えられる（issue #2582）', async () => {
+    const stores = createMemoryStores();
+    await stores.jobs.putApproval(seed());
+    const { clone } = boot(stores);
+
+    await clone.answerApproval('ap-1', '金曜は避けたい', undefined, [
+      { questionId: 'target', optionIds: [] },
+    ]);
+
+    const approval = await stores.jobs.getApproval('ap-1');
+    expect(approval?.answeredAt).toBeDefined();
+    expect(approval?.answer).toContain('補足: 金曜は避けたい');
+  });
+
   it('不正な selections は InvalidApprovalSelectionsError で、何も書かない', async () => {
     const stores = createMemoryStores();
     await stores.jobs.putApproval(seed());
