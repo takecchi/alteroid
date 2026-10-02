@@ -122,7 +122,7 @@ describe('要旨（Web の summarizeJournalEntry と同じ文言）', () => {
         }),
       ),
     ).toBe(
-      'takecchi/alteroid: open Issue 3 件 / open PR 2 件（limit に達した。下限）（観測者 mgr-1）',
+      'takecchi/alteroid: open Issue 3 件 / open PR 2 件（limit に達した。下限）（観測者 mgr-1） / CI: 観測していない（0 件ではない）',
     );
     expect(
       summarizeJournalEntry(
