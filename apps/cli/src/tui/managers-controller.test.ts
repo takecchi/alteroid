@@ -4,6 +4,7 @@ import { fakeApi, gate, managerRow } from './fake-api.js';
 import type { HeaderFeed } from './header-feed.js';
 import { MANAGERS_PAGE, ManagersController } from './managers-controller.js';
 import { managerListLine, managerNotes, detailStatusText } from './managers-view.js';
+import { waitFor } from './test-helpers.js';
 
 function setup(configure: (api: ReturnType<typeof fakeApi>) => void = () => undefined) {
   const api = fakeApi();
@@ -51,7 +52,7 @@ describe('一覧', () => {
       a.managerRows = [managerRow('a'), managerRow('b')];
     });
     controller.enter();
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => state().list.status === 'ready');
     controller.moveSelection(1);
     api.managerRows = [managerRow('z'), ...api.managerRows];
     await controller.refreshList();
@@ -92,7 +93,7 @@ describe('一覧', () => {
     api.managerRows = [managerRow('r', { status: 'running' }), managerRow('d', { status: 'done' })];
     const first = controller.loadList(); // 絞りなし（遅い）
     controller.cycleFilter(); // running（速い）
-    await new Promise((r) => setTimeout(r, 10));
+    await waitFor(() => state().list.status === 'ready');
     slow.open();
     await first;
     expect(state().list.filter).toBe('running');

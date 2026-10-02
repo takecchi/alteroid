@@ -577,8 +577,10 @@ describe('委譲（マネージャーの一覧と詳細）', () => {
     h.stdin.write('i');
     await type(h.stdin, 'ab');
     h.stdin.write(CTRL_D);
-    await new Promise((r) => setTimeout(r, 150));
+    // 実時間で待たず、Ctrl+D の後ろに 1 文字打って描かれるのを待つ（#2146。上の同形のテストと同じ）。
+    h.stdin.write('c');
+    await waitFor(() => h.frame().includes('❯ abc'));
     expect(h.exited()).toBe(false);
-    expect(h.frame()).toContain('❯ ab');
+    expect(h.frame()).toContain('❯ abc');
   });
 });
