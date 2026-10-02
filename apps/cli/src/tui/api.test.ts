@@ -302,3 +302,168 @@ describe('日誌と記憶の口', () => {
     await expect(api.readMemory('a')).rejects.toThrow(/記憶を読めませんでした（HTTP 500）/);
   });
 });
+
+const searchOf = (index: number): Record<string, string> =>
+  Object.fromEntries(new URL(sent[index]?.url ?? '').searchParams);
+
+describe('委譲の口（#2591。本物の createTuiApi を通す）', () => {
+  it('GET /managers: status（カンマ区切り）・limit・afterId・afterStartedAt を送る', async () => {
+    const api = createTuiApi(target);
+    replies.push(
+      json({
+        managers: [{ managerId: 'm1', status: 'running' }],
+        unreadable: [{ managerId: 'bad', reason: '壊れている' }],
+      }),
+    );
+    const result = await api.listManagers({
+      status: ['running', 'waiting_human'],
+      limit: 50,
+      after: { managerId: 'm0', startedAt: '2026-10-01T00:00:00.000Z' },
+    });
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/managers');
+    expect(sent[0]?.method).toBe('GET');
+    expect(searchOf(0)).toEqual({
+      status: 'running,waiting_human',
+      limit: '50',
+      afterId: 'm0',
+      afterStartedAt: '2026-10-01T00:00:00.000Z',
+    });
+    expect(result.managers.map((m) => m.managerId)).toEqual(['m1']);
+    expect(result.unreadable).toEqual([{ managerId: 'bad', reason: '壊れている' }]);
+  });
+
+  it('GET /managers: 絞らないときは何も送らない。unreadable が無ければ空配列', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ managers: [] }));
+    const result = await api.listManagers({});
+    expect(searchOf(0)).toEqual({});
+    expect(result).toEqual({ managers: [], unreadable: [] });
+  });
+
+  it('GET /managers/{id}: 404 は null、409 は理由つきの ApiError、成功は manager', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ manager: { managerId: 'm1', status: 'done' } }));
+    expect((await api.readManager('m1'))?.managerId).toBe('m1');
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/managers/m1');
+
+    replies.push(json({ error: 'no' }, 404));
+    expect(await api.readManager('zzz')).toBeNull();
+
+    replies.push(json({ error: '行が読めない形' }, 409));
+    const failure = api.readManager('bad');
+    await expect(failure).rejects.toBeInstanceOf(ApiError);
+    replies.push(json({ error: '行が読めない形' }, 409));
+    await expect(api.readManager('bad')).rejects.toThrow(
+      /委譲を読めませんでした（HTTP 409）: 行が読めない形/,
+    );
+  });
+
+  it('GET /managers/{id}/transcript: 404 は null、成功は生テキストのまま', async () => {
+    const api = createTuiApi(target);
+    replies.push(() => new Response('{"a":1}\n{"b":2}\n', { status: 200 }));
+    expect(await api.readManagerTranscript('m1')).toBe('{"a":1}\n{"b":2}\n');
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/managers/m1/transcript');
+
+    replies.push(json({ error: 'まだ無い' }, 404));
+    expect(await api.readManagerTranscript('m1')).toBeNull();
+
+    replies.push(json({ error: 'boom' }, 500));
+    await expect(api.readManagerTranscript('m1')).rejects.toThrow(
+      /委譲の生ログを読めませんでした（HTTP 500）: boom/,
+    );
+  });
+
+  it('POST /managers/{id}/messages: text だけを送る（requestId / decision は付けない）', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ outcome: 'delivered', detail: '渡した' }));
+    expect(await api.sendManagerMessage('m1', '続けて')).toEqual({
+      outcome: 'delivered',
+      detail: '渡した',
+    });
+    expect(sent[0]).toMatchObject({ method: 'POST' });
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/managers/m1/messages');
+    expect(JSON.parse(sent[0]?.body ?? '')).toEqual({ text: '続けて' });
+
+    replies.push(json({ error: 'no' }, 404));
+    await expect(api.sendManagerMessage('zzz', 'x')).rejects.toThrow(
+      /そのマネージャーは見つかりませんでした: zzz/,
+    );
+    replies.push(json({ error: '空は送れない' }, 400));
+    await expect(api.sendManagerMessage('m1', '')).rejects.toThrow(
+      /送れませんでした（HTTP 400）: 空は送れない/,
+    );
+  });
+
+  it('DELETE /managers/{id}: 結果を返し、404 は見つからない旨、その他は理由つき', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ outcome: 'stopped', detail: '止めた' }));
+    expect(await api.stopManager('m1')).toEqual({ outcome: 'stopped', detail: '止めた' });
+    expect(sent[0]).toMatchObject({ method: 'DELETE' });
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/managers/m1');
+
+    replies.push(json({ error: 'no' }, 404));
+    await expect(api.stopManager('zzz')).rejects.toThrow(
+      /そのマネージャーは見つかりませんでした: zzz/,
+    );
+    replies.push(json({ error: 'もう終わっている' }, 409));
+    await expect(api.stopManager('m1')).rejects.toThrow(
+      /止められませんでした（HTTP 409）: もう終わっている/,
+    );
+  });
+});
+
+describe('承認待ちの口（#2591。本物の createTuiApi を通す）', () => {
+  it('GET /approvals: 未回答だけなら order=asc のみ、全件なら pending=false も送る', async () => {
+    const api = createTuiApi(target);
+    replies.push(
+      json({
+        approvals: [{ id: 'a1', createdAt: 't', question: 'q' }],
+        unreadable: [{ id: 'x', reason: '壊れている' }],
+      }),
+    );
+    const pending = await api.listApprovals({ pending: true });
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/approvals');
+    expect(searchOf(0)).toEqual({ order: 'asc' });
+    expect(pending.approvals.map((a) => a.id)).toEqual(['a1']);
+    expect(pending.unreadable).toEqual([{ id: 'x', reason: '壊れている' }]);
+
+    replies.push(json({ approvals: [] }));
+    const all = await api.listApprovals({ pending: false });
+    expect(searchOf(1)).toEqual({ order: 'asc', pending: 'false' });
+    expect(all).toEqual({ approvals: [], unreadable: [] });
+  });
+
+  it('POST /approvals/{id}/answer: 自由文・選択どちらも本文をそのまま送る', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ ok: true }));
+    await api.answerApproval('a1', { answer: 'いいよ' });
+    expect(sent[0]).toMatchObject({ method: 'POST' });
+    expect(new URL(sent[0]?.url ?? '').pathname).toBe('/approvals/a1/answer');
+    expect(JSON.parse(sent[0]?.body ?? '')).toEqual({ answer: 'いいよ' });
+
+    replies.push(json({ ok: true }));
+    await api.answerApproval('a2', {
+      selections: [{ questionId: 'target', optionIds: ['fly'], other: '来週' }],
+      answer: '補足',
+    });
+    expect(JSON.parse(sent[1]?.body ?? '')).toEqual({
+      selections: [{ questionId: 'target', optionIds: ['fly'], other: '来週' }],
+      answer: '補足',
+    });
+  });
+
+  it('POST /approvals/{id}/answer: 400 / 409 のデーモンの理由が ApiError に載る', async () => {
+    const api = createTuiApi(target);
+    replies.push(json({ error: 'target は単一選択です' }, 400));
+    const bad = api.answerApproval('a1', { selections: [] });
+    await expect(bad).rejects.toBeInstanceOf(ApiError);
+    replies.push(json({ error: 'target は単一選択です' }, 400));
+    await expect(api.answerApproval('a1', { selections: [] })).rejects.toThrow(
+      /回答に失敗しました（HTTP 400）: target は単一選択です/,
+    );
+    replies.push(json({ error: 'もう回答済みです' }, 409));
+    await expect(api.answerApproval('a1', { answer: 'x' })).rejects.toThrow(
+      /回答に失敗しました（HTTP 409）: もう回答済みです/,
+    );
+  });
+});
