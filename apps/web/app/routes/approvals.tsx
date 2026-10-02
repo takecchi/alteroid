@@ -22,7 +22,7 @@ import {
   useApprovals,
   useConversation,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, summarizeQuestions } from '@alteroid/logic';
+import { formatDateTime, formatRelative, redactBody, summarizeQuestions } from '@alteroid/logic';
 import type { PendingApproval, UnreadableApproval } from '@alteroid/logic';
 
 function isAnswered(approval: PendingApproval): boolean {
@@ -550,7 +550,7 @@ function ConversationPanel({ conversationId }: { conversationId: string }) {
             <span className="mr-1 text-[10px] text-muted-foreground">
               {message.role === 'inbound' ? '人間' : 'クローン'}
             </span>
-            {message.text}
+            {redactBody(message.text)}
           </li>
         ))}
       </ul>

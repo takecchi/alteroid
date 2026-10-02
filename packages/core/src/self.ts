@@ -21,6 +21,7 @@
 import { summarizeContextCategories } from './context-usage.js';
 import { excerptLine } from './excerpt.js';
 import { CANON_DOCUMENTS, CANON_REVISION, type CanonDocument } from './generated/canon.js';
+import { providerGapsSection } from './provider-gaps.js';
 import type { HeuristicChars } from './quantity.js';
 import {
   describeBuildAge,
@@ -117,6 +118,11 @@ export interface SelfFacts {
   auth: string;
   /** 実際に走っているモデル帯。既定から差し替えられていればその値。 */
   models: { clone: string; manager: string; worker: string };
+  /**
+   * 層を動かす provider が持たない能力（`describeProviderGaps` の出力）。
+   * 空・未指定なら何も足さない。
+   */
+  providerGaps?: readonly string[];
 }
 
 /**
@@ -253,6 +259,15 @@ export interface CloneRuntimeFacts {
    * `#forgetObservedFacts`）——前のセッションの文脈占有は自分のものではない。
    */
   lastContextUsage: ContextUsageObservation | null;
+  /**
+   * 層を動かす provider が持たない能力（`describeProviderGaps` の出力。マネージャー層の
+   * 欠落も含む）。空・未指定なら `describeCloneRuntime` の出力は1バイトも変わらない。
+   */
+  providerGaps?: readonly string[];
+}
+
+function withLeadingBlank(section: string[]): string[] {
+  return section.length === 0 ? [] : ['', ...section];
 }
 
 /** まだ観測していない値の言い方。埋めるのではなく、取れていない理由を言う。 */
@@ -465,6 +480,8 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // 読み替えが起きていた欠陥への直接の対処）。
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUsedTokens}: ${lastTurnContextUsage.used}`,
     `- ${CLONE_RUNTIME_ITEMS.lastTurnUnusedTokens}: ${lastTurnContextUsage.unused}`,
+    // **項目ではない**（行頭を `- ` にしない。`tools.test.ts` の項目名の歯が拾わない形）。
+    ...withLeadingBlank(providerGapsSection(facts.providerGaps)),
   ].join('\n');
 }
 
@@ -509,6 +526,7 @@ export function buildSelfKnowledge(facts?: SelfFacts): string {
   }
 
   lines.push(
+    ...withLeadingBlank(providerGapsSection(facts?.providerGaps)),
     '',
     '## 自分のことを調べる',
     '',

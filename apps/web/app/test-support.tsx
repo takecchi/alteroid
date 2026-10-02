@@ -11,6 +11,12 @@
  * `@alteroid/swr` の側に在る（その層のテストも同じものを使うため）。
  * 画面のテストは今までどおりここから import すればよい。
  */
+import type { ReactNode } from 'react';
+
+import { Providers as SwrProviders } from '@alteroid/swr/test-support';
+
+import { WebDisplayTextProvider } from '~/lib/display-text';
+
 export * from '@alteroid/swr/test-support';
 
 /**
@@ -222,4 +228,17 @@ export function setViewportWidth(width: number): void {
     // 本物と同じく、そのクエリを新しい幅で評価した結果を載せる。
     listener({ matches: evaluateMediaQuery(query), media: query } as MediaQueryListEvent);
   }
+}
+
+/**
+ * 画面のテストの描画を包む。`@alteroid/swr/test-support` の `Providers` に、本番の root（`App`）と
+ * 同じ `WebDisplayTextProvider` を足したもの（上の `export *` より、この宣言が優先される）。
+ * **包み忘れると ui の部品は伏せずに出る**ので、伏せ字のテストは必ずこれを通す。
+ */
+export function Providers({ children }: { children: ReactNode }) {
+  return (
+    <SwrProviders>
+      <WebDisplayTextProvider>{children}</WebDisplayTextProvider>
+    </SwrProviders>
+  );
 }

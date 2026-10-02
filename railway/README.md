@@ -324,6 +324,13 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
+層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は `claude` だけ**で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
+
+| 変数                        | 値       |
+| --------------------------- | -------- |
+| `ALTEROID_CLONE_PROVIDER`   | `claude` |
+| `ALTEROID_MANAGER_PROVIDER` | `claude` |
+
 **モデル帯の3つは Shared Variables で正しい。** `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` を実際に SDK へ渡すのは `runner` で、そこが正本である。`app` も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけで、両方へ同じ値が降りているから食い違わない（片方にだけ置くと、クローンが「Opus に委譲している」と宣言しながら別の帯が走る）。空・空白のみは「未設定」として既定へ落ちるので、空で残っていても壊れない。
 
 **これを実行環境プロファイル（`alteroid profile edit`）で解かないこと。** 読むのは器（`app` と `runner`）自身の環境変数なので、その先の SDK 子プロセスで評価されるプロファイルは届かない。そしてプロファイルは**クローン自身が `profile_write` で書ける** — そこから読めばクローンが自分のモデル帯を黙って差し替えられる ＝ 承認が承認でなくなる。上の「変数を増やす前にプロファイルを検討すること」の、数少ない例外である。
@@ -521,6 +528,8 @@ alteroid credential remove SOME_OLD_KEY               # 外す（runner の器�
 **⚠️ 移行の順序。** 正本へ置いて `alteroid credential list` と `GET /runners` の指紋が揃うのを見てから、Shared Variables の側を消す。**逆順にすると、消した瞬間から次に降ろすまでのあいだ、器の環境変数にも正本にも無い状態ができる**（`GIT_AUTHOR_NAME` が無いと commit が `empty ident name` で即落ちる）。**空文字で残さないこと** —— 空は未設定より悪い。
 
 **それでも Shared Variables に残すもの**は、正本が降りる前から要るもの（`ALTEROID_RUNNER_TOKEN` / `ALTEROID_RUNNER_ID` / `ALTEROID_RUNNER_SOCKET`）と、**器自身が読むもの**（`ALTEROID_CLONE_MODEL` / `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL`。後の2つは SDK 子プロセスの env ではなく runner のプロセス自身が読むので、降ろしても効かない）である。
+
+**⚠️ 層ごとの provider の2つ（`ALTEROID_CLONE_PROVIDER` / `ALTEROID_MANAGER_PROVIDER`）も、モデル帯と同じ理由でここへは置けない**（正本は器の生の環境変数だけ）。
 
 **⚠️ モデル帯の3つも、ここへは置けない**（400 で断る。2026-09-15）。正本は器の生の環境変数（Shared Variables / `.env`）だけで、**袋に行が在っても誰にも配られない**。置けたままだと層で割れていた —— `ALTEROID_CLONE_MODEL` はデーモン自身のプロセスが読むので**効いてしまい**、`ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` は runner 自身のプロセスが読むので**黙って効かない**。後者を置くと、**デーモン側の宣言だけが変わって runner は既定の帯のまま走る** ＝ 上の「片方にだけ置くと、クローンが『Opus に委譲している』と宣言しながら別の帯が走る」を袋の側から作れてしまう。**そして帯は設定ではなく人間の承認の置き場である**（AGENTS.md 地雷5）—— 承認の置き場は1つでなければならない。拒むようにする前に置いた行が残っていたら、デーモンの起動時に stderr が名前を1行出す（消すのは `alteroid credential remove <名前>`、または Web UI の環境変数の画面から）。
 

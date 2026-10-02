@@ -1,6 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
+import { useDisplayText } from '@/lib/display-text';
 import { cn } from '@/lib/utils';
 
 import { Badge } from '../../common';
@@ -64,6 +65,7 @@ export function JournalEntryRow({
    */
   rawBar?: boolean;
 }) {
+  const { body } = useDisplayText();
   const [open, setOpen] = useState(defaultOpen);
 
   return (
@@ -84,7 +86,9 @@ export function JournalEntryRow({
         <span className="w-24 shrink-0 font-mono text-[11px] text-muted-foreground">{atLabel}</span>
         <Badge tone={tone}>{type}</Badge>
         {/* 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc） */}
-        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{summary}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+          {body(summary)}
+        </span>
         <span className="shrink-0 text-[11px] text-muted-foreground">
           {time !== undefined ? (
             time
@@ -104,7 +108,7 @@ export function JournalEntryRow({
           {links}
           {/* 掘れば生の中身まで降りられること（PRD 可観測性）。要約で止めない。 */}
           <CodeBlock label={rawBar ? type : undefined} copyable={rawBar} maxHeight="24rem">
-            {JSON.stringify(raw, null, 2)}
+            {body(JSON.stringify(raw, null, 2))}
           </CodeBlock>
         </div>
       )}

@@ -24,7 +24,7 @@ import {
   usePushCommitment,
   useCommitments,
 } from '@alteroid/swr';
-import { APPRAISAL_LABELS, formatDateTime, formatRelative } from '@alteroid/logic';
+import { APPRAISAL_LABELS, formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
 import type {
   AppraisalValue,
   CommitmentClosedBy,
@@ -653,12 +653,14 @@ function ManagerRestBody({ rest, bodyMarkup }: { rest: string; bodyMarkup: strin
  * doc）。詳細は `ManagerRestBody` の doc を見よ。
  */
 function CommitmentBody({ commitment }: { commitment: Commitment }) {
+  // 表示だけ伏せる（編集の下書きの初期値は `commitment.body` のまま。issue #2600）。
+  const body = redactBody(commitment.body);
   switch (commitment.origin) {
     case 'self':
-      return <Markdown>{commitment.body}</Markdown>;
+      return <Markdown>{body}</Markdown>;
 
     case 'manager': {
-      const { prefix, rest } = splitManagerPrefix(commitment.body);
+      const { prefix, rest } = splitManagerPrefix(body);
       return (
         <div className="min-w-0">
           {prefix !== null && (
@@ -671,7 +673,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
 
     case 'human':
     case 'external':
-      return <PlainBody body={commitment.body} />;
+      return <PlainBody body={body} />;
 
     default:
       /*
@@ -682,7 +684,7 @@ function CommitmentBody({ commitment }: { commitment: Commitment }) {
        * （素のテキスト）へ倒し、本文は commitment.body のまま1文字も消さない。**
        */
       assertOriginHandled(commitment.origin);
-      return <PlainBody body={commitment.body} />;
+      return <PlainBody body={body} />;
   }
 }
 

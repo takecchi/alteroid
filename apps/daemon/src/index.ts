@@ -17,6 +17,8 @@ import {
   applyAppScopedEnvVars,
   seedDefaultEnvVars,
   createClone,
+  DEFAULT_LAYER_PROVIDERS,
+  describeProviderGaps,
   createLocalRunner,
   createProfileApplier,
   createCredentialService,
@@ -38,6 +40,11 @@ import {
   missingDailyReportDates,
   placedClonePermissionMode,
   placedManagerModels,
+  CLONE_PROVIDER_ENV_KEY,
+  DEFAULT_AGENT_PROVIDER_ID,
+  agentProviderOf,
+  placedAgentProvider,
+  resolveCloneProviderId,
   reasonOf,
   redactErrorText,
   resolveCloneModel,
@@ -1391,6 +1398,20 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * クローン層の provider（#486 段 S1）。**知らない値なら、ここで起動を止める**
+   * （`resolveCloneProviderId` の doc）。置かれていたら帯と同じ流儀で黙って通さない。
+   * マネージャーの provider は runner が読む（デーモンが読むのは `hello` の名乗りだけ）。
+   */
+  const cloneProvider = agentProviderOf(resolveCloneProviderId(process.env));
+  if (placedAgentProvider(process.env, CLONE_PROVIDER_ENV_KEY) !== null) {
+    process.stdout.write(
+      `alteroidd: ${CLONE_PROVIDER_ENV_KEY} が置かれています` +
+        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${cloneProvider.id}）。` +
+        `以後このデーモンのクローンはこの provider で走ります\n`,
+    );
+  }
+
+  /**
    * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
    *
    * **クローンにも効かせる**のは、人間の `.zshenv` が「Claude Code に頼むとき」
@@ -1554,6 +1575,9 @@ export async function main(): Promise<void> {
     // 差し替えが置かれていればそれを載せる。**固定値を載せると自己認識が嘘になる**
     // （人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断する）。
     models: { clone: cloneModel, manager: resolveManagerModel(), worker: resolveWorkerModel() },
+    // 層を動かす provider が持たない能力。いまは各層の既定（Claude）を渡すので `[]`。
+    // 層ごとの選択が入ったら、ここへ選ばれた provider を渡す。
+    providerGaps: describeProviderGaps(DEFAULT_LAYER_PROVIDERS),
   };
 
   /**

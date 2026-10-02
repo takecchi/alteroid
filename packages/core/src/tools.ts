@@ -40,6 +40,7 @@ import {
 import { encodeScheduleCursor, resolveScheduleCursor } from './schedule-cursor.js';
 import {
   assertNeverRunnerLegStatus,
+  describePidsSaturation,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
 } from './runner-protocol.js';
 import { CGROUP_EVENTS_UNKNOWN_NOTE, formatCgroupEventsNote } from './cgroup-events.js';
@@ -10448,6 +10449,12 @@ export function createCloneTools(context: ToolContext) {
         'マネージャー（あなたが起こす Claude Code）に仕事を任せる。',
         '起動して即返るので、完了を待たずに次の判断へ移ってよい。同時に何本走らせてもよい。',
         '依頼できるのは実装だけではない。調査・設計の相談・外部サービスの確認・レビューも同じように頼める。',
+        // **#2626 期待2。**
+        '置き先は資源で自動配置される（runner_list の説明を参照）。新しいプロセスを起こせない' +
+          '（pids 飽和）と判定された器は、飽和していない器が居れば自動配置から外れる。' +
+          '全台が飽和でも、runnerId で名指ししても断らず起こす——置き先が飽和と判定されていれば' +
+          '応答に「⚠ 置き先の runner は pids 飽和と判定されている: 材料」の行が付くので、' +
+          '落ちる前提で読むこと。',
       ].join(' '),
       {
         request: z
@@ -10526,10 +10533,21 @@ export function createCloneTools(context: ToolContext) {
             `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
           grounds: '委譲の判断',
         });
+        // **置き先が pids 飽和と判定されていれば言う（#2626 期待2）。** 明示指名でも
+        // 自動配置（全台が飽和）でも断っていない——起こしたうえで、材料つきで知らせる。
+        const saturation =
+          started.runnerId === undefined
+            ? undefined
+            : context.managers.runnerPidsSaturation?.(started.runnerId);
         return text(
           `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
             `runner: ${started.runnerId ?? '未記録'}）。` +
-            '報告・質問は後から受信箱に届く。',
+            '報告・質問は後から受信箱に届く。' +
+            (saturation === undefined
+              ? ''
+              : `\n⚠ 置き先の runner は pids 飽和と判定されている: ${describePidsSaturation(saturation)}。` +
+                'この委譲は新しいプロセスを起こせず落ちるかもしれない——' +
+                'runner_list で他の器を見て、必要なら止めて別の器へ置き直すこと。'),
         );
       },
     ),
@@ -13350,7 +13368,17 @@ export function createCloneTools(context: ToolContext) {
           '最後の項の分母には抱えている本数に加えて直近に起動が失敗した本数も足す——' +
           '落ちて空いた器が「空いている」ように見えて次も吸い込む輪を切るため）——' +
           'pids が枯れた器は自動配置で選ばれにくくなる。**ただし断る材料ではない**——' +
-          '枯れていても置き先としては返るので、「置けない」と読まないこと。',
+          '枯れていても置き先としては返るので、「置けない」と読まないこと。' +
+          // **#2626 期待2。** 実装がやっていることだけを書く。
+          '**加えて、新しいプロセスを起こせない器（pids 飽和）は、飽和していない器が1台でも' +
+          '居れば自動配置の候補から外れる**（点数を見ずに後ろへ回る）。**全台が飽和なら断らず、' +
+          'その中の最良を返す**（飽和は応答で分かる）。飽和の判定は構造化された値だけ——' +
+          '現在値が上限に達している（resources: true のときだけ分かる・一瞬の値）、' +
+          '直近5分に spawn が EAGAIN で失敗した、直近5分に fork が pids 上限で拒まれた委譲が' +
+          '終わった。後ろ2つは resources を付けなくても、connected の器の行に' +
+          '「pids 飽和: 新しい委譲を置けない（材料）」として出る。**この行が無いことは' +
+          '「飽和ではない」を意味しない**（材料が無いだけ）。' +
+          'manager_start で器を名指しした場合も断らず、飽和なら応答にこの行が付く。',
         // **Issue #1394 段④⑥⑦。** `resources: true` は読むだけの opt-in
         // だったが、いまは副作用を持つことがある——道具の説明文にそれを書く
         // （AGENTS.md「実装が実際にやっていることだけを書く」）。
@@ -13524,6 +13552,13 @@ export function createCloneTools(context: ToolContext) {
            */
           lines.push(`  版: ${describeRevisionStatus(runner.revision)}`);
           if (runner.error !== undefined) lines.push(`  直近の失敗: ${runner.error}`);
+          // **pids 飽和（#2626 期待2）。`state` が connected でも出す。** 材料が無い器には
+          // 行を出さない（「飽和ではない」と言わない）。
+          if (runner.pidsSaturation !== undefined) {
+            lines.push(
+              `  pids 飽和: 新しい委譲を置けない（${describePidsSaturation(runner.pidsSaturation)}）`,
+            );
+          }
           // **内訳は件数で切る。** 切っても能力は落ちない——同じものを
           // `manager_list` が予算つきで持っている。切ったことは必ず言う。
           if (runner.managers.length === 0) {
@@ -13727,7 +13762,10 @@ export function createCloneTools(context: ToolContext) {
                     reclaim.pidsAtScan === undefined
                       ? ''
                       : `、走査時 pids ${reclaim.pidsAtScan.current}/${reclaim.pidsAtScan.max}`;
-                  const mode = reclaim.mode === 'observe' ? '観測のみ。撃たない' : '回収';
+                  const mode =
+                    reclaim.mode === 'observe'
+                      ? '既定: 終端した委譲の木だけ畳む'
+                      : '回収: 素性の分からない孤児も撃つ';
                   lines.push(
                     `    孤児（${mode}）: 候補 ${reclaim.candidates} 本 / ` +
                       `${reclaim.candidateThreads} threads${age}${atScan}` +
@@ -13806,7 +13844,9 @@ export function createCloneTools(context: ToolContext) {
                       );
                     }
                     if (observeOnly !== undefined) {
-                      lines.push(`    observe なので撃たなかった: ${observeOnly}`);
+                      lines.push(
+                        `    素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: ${observeOnly}`,
+                      );
                     }
                   }
                 }

@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 
 import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { useDisplayText } from '@/lib/display-text';
 
 import { Badge, Button, Input, Textarea } from '../../common';
 
@@ -167,6 +168,7 @@ function QuestionField({
   onChange: (patch: (current: DraftOf) => DraftOf) => void;
   disabled: boolean;
 }) {
+  const { body } = useDisplayText();
   const baseId = useId();
   const single = question.multiple !== true;
   const allowOther = question.allowOther !== false;
@@ -203,7 +205,7 @@ function QuestionField({
     <fieldset className="min-w-0 border-0 p-0">
       <legend id={legendId} className="mb-2 text-sm font-medium break-words">
         <span className="mr-1 text-muted-foreground">Q{index + 1}</span>
-        {question.prompt}
+        {body(question.prompt)}
         <Badge tone="neutral" className="ml-2 align-middle">
           {single ? '1つ選ぶ' : '複数選べる'}
         </Badge>
@@ -287,16 +289,17 @@ function QuestionField({
 }
 
 function OptionLabel({ htmlFor, option }: { htmlFor: string; option: ApprovalOptionView }) {
+  const { body } = useDisplayText();
   return (
     <label htmlFor={htmlFor} className="min-w-0 cursor-pointer text-sm break-words">
-      {option.label}
+      {body(option.label)}
       {option.recommended === true && (
         <Badge tone="ok" className="ml-2 align-middle">
           推奨
         </Badge>
       )}
       {option.description !== undefined && option.description !== '' && (
-        <span className="block text-[11px] text-muted-foreground">{option.description}</span>
+        <span className="block text-[11px] text-muted-foreground">{body(option.description)}</span>
       )}
     </label>
   );

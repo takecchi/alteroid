@@ -17,7 +17,7 @@
 import useSWR from 'swr';
 
 import { ApiError, expectOk, unwrap, useApiContext } from '../api';
-import type { StoredAccount } from '@alteroid/logic';
+import { redactError, type StoredAccount } from '@alteroid/logic';
 
 /** `logout()` の結果。失敗のときは人間に見せてよい1行を持つ。 */
 export type LogoutResult = { ok: true } | { ok: false; message: string };
@@ -161,5 +161,5 @@ export function useAuth() {
 }
 
 function describeNetworkFailure(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return redactError(error instanceof Error ? error.message : String(error));
 }

@@ -14,7 +14,7 @@ import {
   type KeyValueItem,
 } from '@alteroid/ui';
 import { ApiError, useProgress } from '@alteroid/swr';
-import { formatDateTime, formatRelative } from '@alteroid/logic';
+import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
 import type { Progress, ProgressForecast, ProgressForecastBasis } from '@alteroid/logic';
 
 /**
@@ -154,7 +154,7 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
       <Stat
         label="open の Issue / PR"
         value={NONE}
-        hint={<>観測していない（0 件ではない）。{github.reason}</>}
+        hint={<>観測していない（0 件ではない）。{redactBody(github.reason)}</>}
       />
     );
   }
@@ -227,7 +227,7 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
           {row.latestFailed !== null && (
             <p className="text-xs text-warn">
               取れなかった回: {atText(row.latestFailed.observedAt, observedAt)} / 観測者{' '}
-              {row.latestFailed.observedBy} — {row.latestFailed.reason}
+              {row.latestFailed.observedBy} — {redactBody(row.latestFailed.reason)}
             </p>
           )}
         </div>

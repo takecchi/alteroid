@@ -8930,6 +8930,7 @@ class Clone implements CloneHost {
         { since: new Date(Date.now() - RECENT_DIGEST_WINDOW_MS) },
         axes.liveness,
         axes.awaitingBackground,
+        this.#self?.providerGaps,
       );
     } catch (error) {
       return `（直近の状況をまとめられなかった: ${reasonOf(error)}）`;
@@ -9092,6 +9093,7 @@ class Clone implements CloneHost {
             range,
             axes.liveness,
             axes.awaitingBackground,
+            this.#self?.providerGaps,
           ).catch((error: unknown) => `（この日の記録をまとめられなかった: ${reasonOf(error)}）`);
 
     // **このターンへ何が入ったかを残す**（#243）。日報は結果（`daily_report` の行）
@@ -9922,6 +9924,7 @@ class Clone implements CloneHost {
       injectedMemoryChars: heuristicChars(this.#distillMemory.promptMemoryChars),
       systemPromptChars: heuristicChars(this.#distillMemory.systemPromptChars),
       lastContextUsage: this.#lastContextUsage,
+      ...(this.#self?.providerGaps !== undefined ? { providerGaps: this.#self.providerGaps } : {}),
     };
   }
 

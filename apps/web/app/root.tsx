@@ -8,7 +8,10 @@ import {
 } from 'react-router';
 import type { ReactNode } from 'react';
 
+import { redactError } from '@alteroid/logic';
 import { ApiProvider } from '@alteroid/swr';
+
+import { WebDisplayTextProvider } from '~/lib/display-text';
 
 import './app.css';
 
@@ -58,7 +61,10 @@ export function Layout({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <ApiProvider>
-      <Outlet />
+      {/* ui の部品へ伏せ字を渡す。全 route を包む（既定は恒等で、外すと伏せずに出る。root.redact.test.tsx が固定） */}
+      <WebDisplayTextProvider>
+        <Outlet />
+      </WebDisplayTextProvider>
     </ApiProvider>
   );
 }
@@ -81,7 +87,7 @@ export function ErrorBoundary({ error }: { error: unknown }) {
         「動かない」以上のことが分からなくなり、掘る先が無くなる。
       */}
       <pre className="mt-4 overflow-auto rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-        {String(detail)}
+        {redactError(String(detail))}
       </pre>
     </main>
   );

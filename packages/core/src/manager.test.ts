@@ -2689,6 +2689,13 @@ function swappableRunner(runnerId = 'runner-primary') {
      * `reconnect()` は capabilities を持たない旧い runner の形を保つため
      * 触っていない——これは能力を名乗る版を模す別口。
      */
+    helloWithManagerProvider(managerProvider: string | undefined) {
+      emit?.({
+        type: 'hello',
+        runnerId,
+        ...(managerProvider === undefined ? {} : { managerProvider }),
+      });
+    },
     helloWithCapabilities(capabilities: string[]) {
       emit?.({ type: 'hello', runnerId, capabilities });
     },
@@ -3517,6 +3524,18 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
 
     expect(fake.state.credentialPushes).toEqual([]);
     expect(fake.state.held.get('GH_TOKEN')).toBe('ghp_from_env');
+  });
+
+  it('hello で名乗られたマネージャーの provider を保持する（欄なしの旧い runner は claude、再名乗りで持ち越さない）', async () => {
+    const fake = swappableRunner();
+    const s = setup(undefined, { runner: fake.runner });
+    await s.pool.restore();
+
+    expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
+    fake.helloWithManagerProvider('other');
+    await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('other');
+    fake.helloWithManagerProvider(undefined);
+    await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
   });
 
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {

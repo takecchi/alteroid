@@ -591,6 +591,25 @@ describe('確認へ上がらずに止められた実行（permissionMode: auto�
     await s.pool.stop();
   }, 15_000);
 
+  it('hello の managerProvider は省略できる（旧い runner の形）。値域は縛らない', () => {
+    expect(runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r-old' }).success).toBe(true);
+    const parsed = runnerEventSchema.safeParse({
+      type: 'hello',
+      runnerId: 'r-new',
+      managerProvider: 'claude',
+    });
+    expect(parsed.success && parsed.data.type === 'hello' && parsed.data.managerProvider).toBe(
+      'claude',
+    );
+    expect(
+      runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r', managerProvider: 'future' })
+        .success,
+    ).toBe(true);
+    expect(
+      runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r', managerProvider: 1 }).success,
+    ).toBe(false);
+  });
+
   it('hello の capabilities は省略できる（旧い runner の形）', () => {
     expect(runnerEventSchema.safeParse({ type: 'hello', runnerId: 'r-old' }).success).toBe(true);
     const parsed = runnerEventSchema.safeParse({

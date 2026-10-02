@@ -25,7 +25,13 @@ import {
   useManagerTranscript,
   ApiError,
 } from '@alteroid/swr';
-import { APPRAISAL_LABELS, formatDateTime, formatRelative, usageHref } from '@alteroid/logic';
+import {
+  APPRAISAL_LABELS,
+  formatDateTime,
+  formatRelative,
+  redactBody,
+  usageHref,
+} from '@alteroid/logic';
 import { terminalFailureNote as sharedTerminalFailureNote } from '~/lib/manager-failure-note';
 
 import type { AppraisalValue } from '@alteroid/core';
@@ -583,7 +589,7 @@ function RequestCard({ request }: { request: string }) {
         文字は1つも捨てていない。
       */}
       <div className="max-h-72 min-w-0 overflow-y-auto px-4 py-3">
-        <p className="text-sm break-words whitespace-pre-wrap">{request}</p>
+        <p className="text-sm break-words whitespace-pre-wrap">{redactBody(request)}</p>
       </div>
     </Card>
   );
@@ -855,11 +861,11 @@ function LastReportBody({
   lastFailure: ManagerSummary['lastFailure'] | undefined;
 }) {
   if (lastFailure === undefined || lastFailure === null) {
-    return <Markdown>{lastReport}</Markdown>;
+    return <Markdown>{redactBody(lastReport)}</Markdown>;
   }
   return (
     <pre className="overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
-      {lastReport}
+      {redactBody(lastReport)}
     </pre>
   );
 }
@@ -1068,7 +1074,7 @@ function UnreportedNote({ lastUnreported }: { lastUnreported: ManagerSummary['la
   return (
     <p className="border-t border-border px-4 py-3 text-xs text-destructive">
       直近のターンは、<strong className="font-medium">result を受け取らないまま畳まれた</strong>（
-      {formatDateTime(lastUnreported.at)}）。理由: {lastUnreported.reason}
+      {formatDateTime(lastUnreported.at)}）。理由: {redactBody(lastUnreported.reason)}
     </p>
   );
 }
@@ -1096,7 +1102,7 @@ function FoldedTurnNote({ lastFoldedTurn }: { lastFoldedTurn: ManagerSummary['la
         （完遂した報告）ではない）:
       </p>
       <pre className="mt-1 overflow-x-auto rounded border border-border bg-background p-2 text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
-        {lastFoldedTurn.text}
+        {redactBody(lastFoldedTurn.text)}
       </pre>
     </div>
   );
@@ -1298,7 +1304,7 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   if (swapped) {
     if (manager.shutdownObservationArrivedAfterSwap === true && observation !== undefined) {
       if (observation.kind === 'unavailable') {
-        return `未push観測: 器が止まる直前（${formatDateTime(observation.at)}）に取ろうとしたが取れなかった: ${observation.reason}`;
+        return `未push観測: 器が止まる直前（${formatDateTime(observation.at)}）に取ろうとしたが取れなかった: ${redactBody(observation.reason)}`;
       }
       if (observation.kind === 'observed') {
         return observedUnpushedWorkNode(
@@ -1326,7 +1332,7 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
           <>
             {warn}
             <div className="mt-1">
-              {`表示中の観測は ${formatDateTime(observation.at)} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${observation.reason}）`}
+              {`表示中の観測は ${formatDateTime(observation.at)} 時点・${describeUnpushedWorkObservationSource(observation.source)} のもの（取れなかった: ${redactBody(observation.reason)}）`}
             </div>
           </>
         );
@@ -1352,7 +1358,7 @@ function unpushedWorkText(manager: ManagerSummary): ReactNode | null {
   const provenance = describeUnpushedWorkObservationProvenance(observation.source);
 
   if (observation.kind === 'unavailable') {
-    return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${observation.reason}`;
+    return `未push観測（${provenance}）: 取れなかった（${formatDateTime(observation.at)}）: ${redactBody(observation.reason)}`;
   }
   if (observation.kind === 'observed') {
     return observedUnpushedWorkNode(
@@ -1532,7 +1538,7 @@ function PermissionWaitingRow({
 
   return (
     <div className="px-4 py-3">
-      <p className="text-sm">{summary}</p>
+      <p className="text-sm">{redactBody(summary)}</p>
       {askedAtNote}
       <div className="mt-2 flex items-center gap-2">
         <Button size="sm" variant="primary" loading={busy} onClick={() => answer('allow')}>
@@ -1589,7 +1595,7 @@ function QuestionWaitingRow({
 
   return (
     <div className="px-4 py-3">
-      <p className="text-sm">{summary}</p>
+      <p className="text-sm">{redactBody(summary)}</p>
       {askedAtNote}
       <div className="mt-2">
         <Textarea
@@ -1731,7 +1737,7 @@ function SendMessage({
     setFailure(undefined);
     send(id, { text })
       .then((result) => {
-        setOutcome(`${result.outcome}: ${result.detail}`);
+        setOutcome(redactBody(`${result.outcome}: ${result.detail}`));
         setText('');
       })
       .catch(setFailure)
@@ -1830,7 +1836,7 @@ function Transcript({ id }: { id: string }) {
             <Spinner />
           ) : transcriptUnavailable ? null : (
             <pre className="max-h-[32rem] overflow-auto rounded border border-border bg-background p-2 text-[11px] text-muted-foreground">
-              {data === undefined || data === '' ? '(空)' : data}
+              {data === undefined || data === '' ? '(空)' : redactBody(data)}
             </pre>
           )}
         </div>

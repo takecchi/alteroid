@@ -22,6 +22,12 @@ export type AgentProviderId = 'claude';
 export const AGENT_PROVIDER_IDS: readonly AgentProviderId[] = ['claude'];
 
 /**
+ * 既定の provider。環境変数が無い・空のとき、および `hello` が provider を名乗らない
+ * 旧い runner の読みがこれになる。ここに置くのは SDK を引かずに読めるようにするため。
+ */
+export const DEFAULT_AGENT_PROVIDER_ID: AgentProviderId = 'claude';
+
+/**
  * このリポジトリが実際に使っている10個の能力。
  *
  * 各フィールドが「alteroid のどの要件を担っているか」を JSDoc に書く —

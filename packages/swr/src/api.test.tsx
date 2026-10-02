@@ -84,3 +84,11 @@ describe('接続先を切り替えたら、キャッシュに残った古い応�
     expect(stub.calls.some((url) => url === `${OTHER_BASE_URL}/health`)).toBe(true);
   });
 });
+
+describe('ApiError の message の伏せ字（issue #2600）', () => {
+  it('トークンが消える', async () => {
+    const { ApiError } = await import('./api');
+    const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+    expect(new ApiError(500, `failed ${token}`).message).not.toContain(token);
+  });
+});
