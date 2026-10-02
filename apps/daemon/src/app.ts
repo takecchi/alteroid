@@ -131,6 +131,8 @@ import {
   type AuthAccount,
   type AuthService,
   type InboxRemoveManyFilter,
+  type RemoveUnreadableRowsOptions,
+  type RemoveUnreadableRowsResult,
 } from '@alteroid/core';
 
 import { bearerOf, isOperator, type AuthPlan, type AuthVariables, type Principal } from './auth.js';
@@ -213,6 +215,8 @@ import {
   tokensUnreadableRemoveRequestSchema,
   tokensUnreadableRemoveResponseSchema,
   tokensUpdateRequestSchema,
+  unreadableRowsRemoveRequestSchema,
+  unreadableRowsRemoveResponseSchema,
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
@@ -1349,6 +1353,68 @@ async function appendJournalOrDrop(
   } catch (error) {
     noteDroppedRecord(what, detail, error);
     return undefined;
+  }
+}
+
+/**
+ * 読めない行を id で指して消す口（`POST /permission-grants/unreadable/remove`・
+ * `POST /access/unreadable/remove`。issue #2440）の共通の運び。トークンの口
+ * （`POST /tokens/unreadable/remove`。#2354）と同じ作法。
+ *
+ * - **日誌を先に書き、書けなければ状態を変えずに投げ直す**（`base.onError` の 500）。
+ *   日誌に残すのは消す id と件数だけで、行の中身（許可の本文・アカウントの email など）は書かない。
+ * - 指した id が読めない行に1つでも無ければ、何も消さず日誌も書かずに `unknown`（件数だけ。
+ *   指された文字列は返さない）。
+ * - 日誌は書いたが消せなかったときは、打ち消しの行を足して `failed`（呼び手が理由の無い 500 を返す）。
+ *   **例外の本文は日誌にも応答にも載せない**（種類 `name` だけ。`kindOfError`）。
+ */
+async function removeUnreadableRowsWithJournal(params: {
+  stores: Stores;
+  /** 日誌の文言に入れる対象の名前（「許可の記録」「アカウント」）。 */
+  subject: string;
+  /** 日誌の `grounds` に載せる「誰が」（`describeActor`）。 */
+  actor: string;
+  /** 日誌の `grounds` に載せる口の名前（`POST /…/unreadable/remove`）。 */
+  route: string;
+  requested: readonly string[];
+  remove: (
+    ids: readonly string[],
+    options: RemoveUnreadableRowsOptions,
+  ) => Promise<RemoveUnreadableRowsResult>;
+}): Promise<RemoveUnreadableRowsResult | { kind: 'failed' }> {
+  const { stores, subject, actor, route } = params;
+  // 閉じ込めで代入するので、`let` ではなく入れ物にする（型の絞り込みが `never` に倒れない）。
+  const written: { detail?: string } = {};
+  try {
+    return await params.remove(params.requested, {
+      // **日誌を先に書く。書けなければここで投げ、状態を変えずに `base.onError` へ抜ける。**
+      beforeRemove: async (ids) => {
+        await stores.journal.append({
+          type: 'decision',
+          decision: `読めない${subject}の行を ${String(ids.length)} 件消そうとしている（id: ${ids.join(', ')}）`,
+          grounds: `${actor}（${route}）。消すのは id で指した読めない行だけ。行の中身は書かない。`,
+        });
+        // 書けた後にだけ印を立てる（書けなかった回は「日誌が無い」＝打ち消す行も要らない）。
+        written.detail = `ids=${ids.join(',')}`;
+      },
+    });
+  } catch (error) {
+    // 日誌が書けなかった（`beforeRemove` の中で投げた）回は、状態を変えていない。
+    const journaled = written.detail;
+    if (journaled === undefined) throw error;
+    // 日誌は書いたが消せなかった。打ち消しの行を足す（`PUT /credentials` と同じ形）。
+    await appendJournalOrDrop(
+      stores,
+      {
+        type: 'decision',
+        decision: `読めない${subject}の行を消せなかった`,
+        grounds: `${actor}（${route}、状態の変更が失敗: ${kindOfError(error)}）。${journaled}`,
+      },
+      `読めない${subject}の行の打ち消しの日誌`,
+      journaled,
+    );
+    noteDroppedRecord(`読めない${subject}の行の削除`, journaled, error);
+    return { kind: 'failed' };
   }
 }
 
@@ -3706,7 +3772,8 @@ export function createApp(deps: AppDeps) {
             description:
               '該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
               '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
-              '読めない許可は「許可が無い」ものとして扱われる（通らない）。',
+              '読めない許可は「許可が無い」ものとして扱われる（通らない）。消すには ' +
+              '`POST /permission-grants/unreadable/remove`（issue #2440）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...noBodyPostResponses(),
@@ -3731,7 +3798,8 @@ export function createApp(deps: AppDeps) {
             {
               error:
                 `許可 ${error.id} は読めない形で入っている（消されたのでも、取り消されたのでもない）。` +
-                '取り消しはこの口ではできない。本文はここでは取れない。',
+                '取り消しはこの口ではできない。本文はここでは取れない。' +
+                '消すには `POST /permission-grants/unreadable/remove`（alteroid permission remove-unreadable <id>）を使う。',
             },
             409,
           );
@@ -3752,6 +3820,86 @@ export function createApp(deps: AppDeps) {
           `id=${id}`,
         );
         return c.json({ ok: true });
+      },
+    )
+
+    /**
+     * **読めない許可の行を、id で指して消す**（issue #2440。`POST /tokens/unreadable/remove`
+     * 〈#2354〉と同じ形）。読めない行（版ずれ・手編集）は `/permission-grants/:id/revoke` が
+     * 409 で触らないので、片付ける口はここだけである。
+     *
+     * **形は `POST /inbox/remove` に合わせた（id の配列を取る POST）。** `:id` の下に置かない
+     * ——読めた行の id と名前空間が重なりうるので、別の語（`unreadable`）の下に置く。
+     * **日誌を先に書き、書けなければ状態を変えずに 500。** 日誌に残すのは消す id と件数だけ
+     * （許可の本文は書かない）。読めない行に無い id が1つでもあれば何も消さず 404（指された
+     * 文字列は返さない）。**資格は `authenticate` だけ（`revoke` と同じ強さ）。**
+     */
+    .post(
+      '/permission-grants/unreadable/remove',
+      describeRoute({
+        tags: ['permission-grants'],
+        summary: '読めない許可の行を、id を指して消す',
+        description:
+          '読めない（型に合わない形で入っている）許可の行だけを、id を指して消す。読める許可には' +
+          '触れない。id が取れない行はこの口では消せない（`permission-grants.json` を手で直す）。' +
+          '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
+          '（行の中身は残さない）。',
+        responses: {
+          200: {
+            description: '消した id と件数。',
+            content: {
+              'application/json': { schema: resolver(unreadableRowsRemoveResponseSchema) },
+            },
+          },
+          400: {
+            description: '入力の形が不正（何も消していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description:
+              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
+        error:
+          '読めない行の id の入力の形が不正（何も消していない）' +
+          (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const result = await removeUnreadableRowsWithJournal({
+          stores,
+          subject: '許可の記録',
+          actor: describeActor(c.get('principal')),
+          route: 'POST /permission-grants/unreadable/remove',
+          requested: c.req.valid('json').ids,
+          remove: (ids, options) => stores.permissionGrants.removeUnreadable(ids, options),
+        });
+        if (result.kind === 'unknown') {
+          return c.json(
+            {
+              error:
+                `指した id のうち ${String(result.count)} 件が、読めない許可の行に無い` +
+                '（何も消していない。id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡で確かめる）',
+            },
+            404,
+          );
+        }
+        if (result.kind === 'failed') {
+          return c.json({ error: '許可の記録を保存できなかった' as const }, 500);
+        }
+        return c.json(
+          unreadableRowsRemoveResponseSchema.parse({
+            removedIds: result.ids,
+            count: result.ids.length,
+          }),
+        );
       },
     )
 
@@ -8159,7 +8307,8 @@ export function createApp(deps: AppDeps) {
             description:
               '該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは' +
               '区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。' +
-              '読めないアカウントは認可を通らない。',
+              '読めないアカウントは認可を通らない。消すには ' +
+              '`POST /access/unreadable/remove`（issue #2440）。',
             content: { 'application/json': { schema: resolver(errorResponseSchema) } },
           },
           ...noBodyPostResponses(),
@@ -8178,7 +8327,8 @@ export function createApp(deps: AppDeps) {
             {
               error:
                 `アカウント ${error.id} は読めない形で入っている（消されたのでも、許可が落ちたのでもない）。` +
-                '取り消しはこの口ではできない。本文はここでは取れない。',
+                '取り消しはこの口ではできない。本文はここでは取れない。' +
+                '消すには `POST /access/unreadable/remove`（alteroid access remove-unreadable <id>）を使う。',
             },
             409,
           );
@@ -8198,6 +8348,92 @@ export function createApp(deps: AppDeps) {
         );
         return c.json(
           accessAccountResponseSchema.parse({ account: await accountView(stores, account) }),
+        );
+      },
+    )
+
+    /**
+     * **読めないアカウントの行を、id で指して消す**（issue #2440。`POST /tokens/unreadable/remove`
+     * 〈#2354〉と同じ形）。読めない行（版ずれ・手編集）は `/access/:accountId/revoke` が 409 で
+     * 触らないので、片付ける口はここだけである。`/access/:accountId/…` の `:accountId` と
+     * 取り違えないよう、別の語（`unreadable`）の下に置く。
+     *
+     * **日誌を先に書き、書けなければ状態を変えずに 500。** 日誌に残すのは消す id と件数だけ
+     * （email などの中身は書かない）。読めない行に無い id が1つでもあれば何も消さず 404（指された
+     * 文字列は返さない）。読めたアカウントと identity・アクセストークンには触れない。
+     * **資格は `authenticate` だけ（`/access/:accountId/revoke` と同じ強さ）。**
+     */
+    .post(
+      '/access/unreadable/remove',
+      describeRoute({
+        tags: ['access'],
+        summary: '読めないアカウントの行を、id を指して消す',
+        description:
+          '読めない（型に合わない形で入っている）アカウントの行だけを、id を指して消す。読める' +
+          'アカウントには触れない。id が取れない行はこの口では消せない（`auth.json` を手で直す）。' +
+          '1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す' +
+          '（行の中身は残さない）。pg はアカウントを列で持つので読めない行が無く、常に 404。',
+        responses: {
+          200: {
+            description: '消した id と件数。',
+            content: {
+              'application/json': { schema: resolver(unreadableRowsRemoveResponseSchema) },
+            },
+          },
+          400: {
+            description: '入力の形が不正（何も消していない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          403: {
+            description:
+              'alteroid を使う許可が無い（ログインしているが `access grant` されて' +
+              'いない）。資格そのものが無い場合は 401。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description:
+              '指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          500: {
+            description:
+              '日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(unreadableRowsRemoveRequestSchema, (where) => ({
+        error:
+          '読めない行の id の入力の形が不正（何も消していない）' +
+          (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const result = await removeUnreadableRowsWithJournal({
+          stores,
+          subject: 'アカウント',
+          actor: describeActor(c.get('principal')),
+          route: 'POST /access/unreadable/remove',
+          requested: c.req.valid('json').ids,
+          remove: (ids, options) => authService.removeUnreadableAccounts(ids, options),
+        });
+        if (result.kind === 'unknown') {
+          return c.json(
+            {
+              error:
+                `指した id のうち ${String(result.count)} 件が、読めないアカウントの行に無い` +
+                '（何も消していない。id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡で確かめる）',
+            },
+            404,
+          );
+        }
+        if (result.kind === 'failed') {
+          return c.json({ error: 'アカウントを保存できなかった' as const }, 500);
+        }
+        return c.json(
+          unreadableRowsRemoveResponseSchema.parse({
+            removedIds: result.ids,
+            count: result.ids.length,
+          }),
         );
       },
     )

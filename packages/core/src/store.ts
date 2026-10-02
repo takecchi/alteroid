@@ -790,6 +790,33 @@ export interface JobStore {
 }
 
 /**
+ * 読めない行を id で指して消す口（`PermissionGrantStore.removeUnreadable` /
+ * `AuthStore.removeUnreadableAccounts`）の追加の引数（issue #2440。トークンの
+ * `RemoveUnreadableOptions`〈#2354〉と同じ形）。
+ */
+export interface RemoveUnreadableRowsOptions {
+  /**
+   * 消すと決まった id（読めない行に実在するものだけ）を、**消す前に**渡して呼ぶ。
+   * 書き込みの排他区間の中で呼ぶ。**投げたら何も消さずに投げ直す**（日誌を先に書き、
+   * 書けなければ状態を変えない作法のための口）。
+   */
+  beforeRemove?: (ids: readonly string[]) => Promise<void>;
+}
+
+/**
+ * 読めない行を id で指して消した結果（issue #2440）。
+ * **値（行の中身）は持たない。** 件数と id だけである。
+ */
+export type RemoveUnreadableRowsResult =
+  /** 消した。`ids` は消した id（重複なし）。 */
+  | { kind: 'removed'; ids: string[] }
+  /**
+   * 指された id のうち `count` 件が読めない行に無かった（読める行・無い id・id が取れない行を
+   * 指した場合を含む）。**何も消していない。件数だけで、指された文字列は持たない。**
+   */
+  | { kind: 'unknown'; count: number };
+
+/**
  * 人間が承認した Bash 許可の記録（Issue #863）。
  *
  * **`clear()` を持たない——意図してである。** `POST /reset`（`workspace-reset.ts`）
@@ -865,6 +892,26 @@ export interface PermissionGrantStore {
    * 揃える。issue #2158）。
    */
   markUsed(id: string, at: string): Promise<boolean>;
+
+  /**
+   * **読めない行を、id で指して消す**（issue #2440。トークンの `TokenPoolStore.removeUnreadable`
+   * 〈#2354〉と同じ形）。読めない行（版ずれ・手編集。fs の `invalidGrantsRaw`、pg の
+   * `permissionGrantSchema` に合わない `record`）は `revoke` が `UnreadablePermissionGrantError`
+   * を投げて触らないので、片付ける口はこれだけである。
+   *
+   * - `ids` のどれかが**読めない行に無ければ**（読める行・無い id を含む）、**何も消さずに**
+   *   `{ kind: 'unknown' }` を返す（全部か無か。打ち間違いで読める許可を消さない）。
+   *   件数だけで、指された文字列は返さない。
+   * - 消すと決まったら、{@link RemoveUnreadableRowsOptions.beforeRemove} を**排他区間の中で
+   *   先に**呼ぶ。**投げたら何も消さずに投げ直す。**
+   * - **id が取れない行（fs のみ。`id` 欄が無い・文字列でない）は、この口では消せない**
+   *   （指す名前が無い。`permission-grants.json` を手で直す）。
+   * - 読める行には一切触れない。読める許可が消えることは無い。
+   */
+  removeUnreadable(
+    ids: readonly string[],
+    options?: RemoveUnreadableRowsOptions,
+  ): Promise<RemoveUnreadableRowsResult>;
 }
 
 /**

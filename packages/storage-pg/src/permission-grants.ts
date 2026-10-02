@@ -4,8 +4,14 @@ import {
   UnreadablePermissionGrantError,
   unreadableRowKey,
 } from '@alteroid/core';
-import type { PermissionGrant, PermissionGrantStore, UnreadableRowOnce } from '@alteroid/core';
-import { asc, eq } from 'drizzle-orm';
+import type {
+  PermissionGrant,
+  PermissionGrantStore,
+  RemoveUnreadableRowsOptions,
+  RemoveUnreadableRowsResult,
+  UnreadableRowOnce,
+} from '@alteroid/core';
+import { asc, eq, inArray } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { permissionGrants } from './schema.js';
@@ -173,6 +179,52 @@ export class PgPermissionGrantStore implements PermissionGrantStore {
         .where(eq(permissionGrants.id, id));
 
       return next;
+    });
+  }
+
+  /**
+   * 読めない行を id で指して消す（`PermissionGrantStore.removeUnreadable` の doc。issue #2440）。
+   * **pg の許可の記録も同じ穴を持つ**——`record`（jsonb）が `permissionGrantSchema` に合わない行を
+   * 作れ、`revoke` は `UnreadablePermissionGrantError` を投げて触らない（#2425）。
+   *
+   * 1. 指された id がすべて読めない行か確かめる（1つでも違えば何も消さず `unknown`）。
+   * 2. 日誌（`beforeRemove`）を呼ぶ。**投げたら何も消さずに投げ直す。** トランザクションの
+   *    外で呼ぶ——日誌ストアが同じ接続を使う器（PGlite など）で、開いたままのトランザクションが
+   *    日誌の書き込みを待たせ続ける形を作らない。
+   * 3. **1つのトランザクションの中で、指された行を `select … for update` で押さえ直し、まだ全部が
+   *    読めない行なら、その id だけを `delete` する。** 1と3のあいだに変わっていたら何も消さずに
+   *    `unknown`（読める行は消さない）。
+   *
+   * **値は返さない（id だけ）。** 読める行には触れない。
+   */
+  async removeUnreadable(
+    ids: readonly string[],
+    options: RemoveUnreadableRowsOptions = {},
+  ): Promise<RemoveUnreadableRowsResult> {
+    const wanted = [...new Set(ids)];
+    if (wanted.length === 0) return { kind: 'unknown', count: 0 };
+    const unknownCount = async (executor: Pick<Db, 'select'>, lock: boolean): Promise<number> => {
+      const query = executor
+        .select({ id: permissionGrants.id, record: permissionGrants.record })
+        .from(permissionGrants)
+        .where(inArray(permissionGrants.id, wanted));
+      const rows = await (lock ? query.for('update') : query);
+      const unreadable = new Set(
+        rows
+          .filter((row) => !permissionGrantSchema.safeParse(row.record).success)
+          .map((row) => row.id),
+      );
+      return wanted.filter((id) => !unreadable.has(id)).length;
+    };
+
+    const before = await unknownCount(this.#db, false);
+    if (before > 0) return { kind: 'unknown', count: before };
+    await options.beforeRemove?.(wanted);
+    return this.#db.transaction(async (tx) => {
+      const unknown = await unknownCount(tx, true);
+      if (unknown > 0) return { kind: 'unknown' as const, count: unknown };
+      await tx.delete(permissionGrants).where(inArray(permissionGrants.id, wanted));
+      return { kind: 'removed' as const, ids: wanted };
     });
   }
 

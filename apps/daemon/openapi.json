@@ -11614,7 +11614,7 @@
             }
           },
           "409": {
-            "description": "該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めない許可は「許可が無い」ものとして扱われる（通らない）。",
+            "description": "該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めない許可は「許可が無い」ものとして扱われる（通らない）。消すには `POST /permission-grants/unreadable/remove`（issue #2440）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11656,6 +11656,109 @@
             "required": true
           }
         ]
+      }
+    },
+    "/permission-grants/unreadable/remove": {
+      "post": {
+        "operationId": "postPermissionGrantsUnreadableRemove",
+        "tags": ["permission-grants"],
+        "summary": "読めない許可の行を、id を指して消す",
+        "description": "読めない（型に合わない形で入っている）許可の行だけを、id を指して消す。読める許可には触れない。id が取れない行はこの口では消せない（`permission-grants.json` を手で直す）。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。",
+        "responses": {
+          "200": {
+            "description": "消した id と件数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "count": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["removedIds", "count"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力の形が不正（何も消していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": ["ids"]
+              }
+            }
+          }
+        }
       }
     },
     "/events": {
@@ -19422,7 +19525,7 @@
             }
           },
           "409": {
-            "description": "該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めないアカウントは認可を通らない。",
+            "description": "該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めないアカウントは認可を通らない。消すには `POST /access/unreadable/remove`（issue #2440）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19464,6 +19567,125 @@
             "required": true
           }
         ]
+      }
+    },
+    "/access/unreadable/remove": {
+      "post": {
+        "operationId": "postAccessUnreadableRemove",
+        "tags": ["access"],
+        "summary": "読めないアカウントの行を、id を指して消す",
+        "description": "読めない（型に合わない形で入っている）アカウントの行だけを、id を指して消す。読めるアカウントには触れない。id が取れない行はこの口では消せない（`auth.json` を手で直す）。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。pg はアカウントを列で持つので読めない行が無く、常に 404。",
+        "responses": {
+          "200": {
+            "description": "消した id と件数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "count": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["removedIds", "count"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力の形が不正（何も消していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": ["ids"]
+              }
+            }
+          }
+        }
       }
     },
     "/access/{accountId}/owner": {

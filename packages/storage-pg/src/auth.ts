@@ -13,6 +13,7 @@ import type {
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
+  RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
 } from '@alteroid/core';
 import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
@@ -132,6 +133,15 @@ export class PgAuthStore implements AuthStore {
       .update(authAccounts)
       .set({ lastLoginAt: new Date(at) })
       .where(eq(authAccounts.id, accountId));
+  }
+
+  /**
+   * **読めない行を持てない**（issue #2440。`AuthStore.removeUnreadableAccounts` の doc）。
+   * アカウントは正規化された列で持つので、「型に合わない形で入っている行」を作れない。
+   * 指された id はすべて「読めない行に無い」ので、何も消さずに `unknown` を返す。
+   */
+  async removeUnreadableAccounts(ids: readonly string[]): Promise<RemoveUnreadableRowsResult> {
+    return { kind: 'unknown', count: new Set(ids).size };
   }
 
   /**

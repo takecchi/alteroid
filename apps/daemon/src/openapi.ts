@@ -490,6 +490,23 @@ export const permissionGrantsResponseSchema = z.object({
   grants: z.array(permissionGrantSchema),
 });
 
+/**
+ * 読めない行を id で指して消す口（`POST /permission-grants/unreadable/remove`・
+ * `POST /access/unreadable/remove`。issue #2440）の body。トークンの
+ * {@link tokensUnreadableRemoveRequestSchema}（#2354）と同じ形。
+ * `id` は読めない行の id（デーモンの stderr の「読み飛ばしました（… id=…）」の跡に出る）。
+ * id が取れない行は指せない。
+ */
+export const unreadableRowsRemoveRequestSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+});
+
+/** 上の応答。**消した id と件数だけで、行の中身は含まない。** */
+export const unreadableRowsRemoveResponseSchema = z.object({
+  removedIds: z.array(z.string()),
+  count: z.number().int().positive(),
+});
+
 // ---------------------------------------------------------------------------
 // 外部イベントの入口（/events）
 // ---------------------------------------------------------------------------

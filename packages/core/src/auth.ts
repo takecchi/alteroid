@@ -2,6 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
+import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
+
 /**
  * ログイン（誰が API を叩いているか）と、その人が alteroid を使ってよいかの2値。
  *
@@ -234,6 +236,22 @@ export interface AuthStore {
    * 概念が無い）。
    */
   revokeAccountAccess(accountId: string): Promise<void>;
+  /**
+   * **読めないアカウントの行を、id で指して消す**（issue #2440。`PermissionGrantStore.
+   * removeUnreadable` と同じ形・同じ約束）。読めない行（fs の `invalidAccountsRaw`）は
+   * `revokeAccountAccess` が `UnreadableAccountError` を投げて触らないので、片付ける口は
+   * これだけである。
+   *
+   * 指した id が1つでも読めない行に無ければ、何も消さずに `{ kind: 'unknown' }`（件数だけ）。
+   * `beforeRemove` を排他区間の中で先に呼び、投げたら何も消さない。**読めたアカウントと、
+   * identity・アクセストークンには触れない。** id が取れない行はこの口では消せない（手で直す）。
+   *
+   * **pg は列で持つので、読めない行という概念が無い**——常に `{ kind: 'unknown' }` を返す。
+   */
+  removeUnreadableAccounts(
+    ids: readonly string[],
+    options?: RemoveUnreadableRowsOptions,
+  ): Promise<RemoveUnreadableRowsResult>;
 
   findIdentity(provider: string, subject: string): Promise<AuthIdentity | null>;
   /**
