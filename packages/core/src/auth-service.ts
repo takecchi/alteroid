@@ -17,6 +17,7 @@ import {
   type OwnerOutcome,
 } from './auth.js';
 import type { AuthProviderRegistry } from './auth-providers.js';
+import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
 
 /**
  * ログインの手続きそのもの。**ストアと HTTP の間に置く。**
@@ -113,6 +114,14 @@ export interface AuthService {
    * `null` にせず `UnreadableAccountError` を投げる**（issue #2425。行は変えない）。
    */
   revoke(accountId: string): Promise<AuthAccount | null>;
+  /**
+   * 読めないアカウントの行を id で指して消す（issue #2440。`AuthStore.removeUnreadableAccounts`
+   * の doc）。`revoke` は読めない行に触れないので、片付ける口はこれだけである。
+   */
+  removeUnreadableAccounts(
+    ids: readonly string[],
+    options?: RemoveUnreadableRowsOptions,
+  ): Promise<RemoveUnreadableRowsResult>;
   /** 実行環境の持ち主として宣言する／取り消す（issue #1198）。operator トークンだけが呼ぶ。 */
   setOwner(accountId: string, declared: boolean): Promise<OwnerOutcome>;
   listAccounts(): Promise<AuthAccount[]>;
@@ -499,6 +508,8 @@ export function createAuthService(options: AuthServiceOptions): AuthService {
         }
       );
     },
+
+    removeUnreadableAccounts: (ids, options) => store.removeUnreadableAccounts(ids, options),
 
     setOwner: (accountId, declared) =>
       store.setAccountOwner(accountId, declared ? now().toISOString() : null),

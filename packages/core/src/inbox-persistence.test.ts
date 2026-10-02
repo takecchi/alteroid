@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import {
   ALWAYS_REDELIVER,
   DAEMON_RUNNER_REGISTRY_SOURCE,
@@ -215,15 +216,6 @@ function bootGatedClone(stores: Stores): Fake & { clone: CloneHost; release: () 
     redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
-}
-
-async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (predicate()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
 }
 
 /** 受信箱のループが動き出し、次の合図を待っている状態にする。 */
@@ -787,33 +779,20 @@ function droppingFirstJournalAppend(stores: Stores): Stores {
 }
 
 async function waitForJournal(stores: Stores, needle: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
+  await waitFor(async () => {
     const entries = await stores.journal.list({ types: ['exchange'] });
-    if (entries.some((entry) => entry.type === 'exchange' && entry.text.includes(needle))) return;
-    if (Date.now() - started > 3000) throw new Error(`日誌に「${needle}」が出ない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+    return entries.some((entry) => entry.type === 'exchange' && entry.text.includes(needle));
+  }, `日誌に「${needle}」が出る`);
 }
 
 /** 未読が空になるまで待つ（消し込みは `#handle` の後に走るので同期では見られない）。 */
 async function waitForNoUnread(stores: Stores): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if ((await stores.inbox.claimPending()).length === 0) return;
-    if (Date.now() - started > 3000) throw new Error('未読が消えない');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await waitFor(async () => (await stores.inbox.claimPending()).length === 0, '未読が消える');
 }
 
 /** 台帳にその id が現れるまで待つ（`#commit` は `post` から見て非同期）。 */
 async function waitForCommitment(stores: Stores, id: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if ((await stores.commitments.get(id)) !== null) return;
-    if (Date.now() - started > 3000) throw new Error(`台帳に ${id} が現れない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await waitFor(async () => (await stores.commitments.get(id)) !== null, `台帳に ${id} が現れる`);
 }
 
 /**
@@ -1658,13 +1637,10 @@ describe('redeliveryGate（Issue #783 続き）: 配り直すその瞬間の usa
  * 行そのものを消す。
  */
 async function waitForAbsentFromPending(stores: Stores, id: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
+  await waitFor(async () => {
     const remaining = (await stores.inbox.peekPending()).entries;
-    if (!remaining.some((r) => r.event.id === id)) return;
-    if (Date.now() - started > 3000) throw new Error(`${id} が受信箱から消えない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+    return !remaining.some((r) => r.event.id === id);
+  }, `${id} が受信箱から消える`);
 }
 
 describe('拾い直した token-pool の合図の消し込み（Issue #783 段1）', () => {
@@ -1907,12 +1883,7 @@ async function waitForCondition(
   predicate: () => Promise<boolean> | boolean,
   label: string,
 ): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (await predicate()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await waitFor(predicate, label);
 }
 
 /**

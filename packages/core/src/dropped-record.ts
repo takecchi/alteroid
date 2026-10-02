@@ -1246,6 +1246,14 @@ export function journalEntryShape(entry: JournalEntryInput): string {
             `retainedRedeliveredClosed=${entry.retained.redeliveredClosed} ` +
             `retainedPendingCollapse=${entry.retained.pendingCollapse}`)
       );
+    // **`observedBy` / `repo` / `query` / `reason` は出さない**——観測した側が名乗る自由文で、
+    // デーモンは値を確かめられない（`schema.ts` の `github_observation` の doc）。出すのは
+    // `status` の列挙と、数・真偽値だけ。
+    case 'github_observation':
+      return entry.result.status === 'ok'
+        ? `github_observation status=ok openIssues=${entry.result.openIssues} ` +
+            `openPulls=${entry.result.openPulls} truncated=${entry.result.truncated}`
+        : 'github_observation status=failed';
   }
 }
 

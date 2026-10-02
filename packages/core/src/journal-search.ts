@@ -120,6 +120,12 @@ const SEARCHABLE_FIELDS_BY_TYPE = {
    * で、素の文字列の自由記述を持たない（`schema.ts` の `inbox_flow` の doc）。
    */
   inbox_flow: [],
+  /**
+   * 自由文の欄を持たない扱いにする——`observedBy` / `repo` / `query` は観測した側が名乗る識別子と
+   * 引数で、検索語で拾いたい本文ではない（`failed.reason` はネストした欄なので対象外。
+   * 直上 `turn_usage` の注と同じ）。
+   */
+  github_observation: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
 
 /**

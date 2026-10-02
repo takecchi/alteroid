@@ -1,3 +1,4 @@
+import { reasonOf } from './dropped-record.js';
 import {
   CREDENTIAL_NAME,
   CREDENTIAL_NAME_MAX_LENGTH,
@@ -779,7 +780,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
             credentials: await runner.setCredentials([...payload]),
           };
         } catch (error) {
-          return { runnerId: runner.runnerId, ok: false as const, error: String(error) };
+          return { runnerId: runner.runnerId, ok: false as const, error: reasonOf(error) };
         }
       }),
     );

@@ -120,6 +120,40 @@ export async function permissionRevokeCommand(id: string): Promise<void> {
   stdout.write('（次の Bash 呼び出しから効きます。取り消し済みなら重ねて叩いても失敗しません）\n');
 }
 
+/**
+ * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`。
+ * issue #2440）。読めない行（版ずれ・手編集）は `permission revoke` が 409 で触らないので、
+ * 片付ける口はこれだけ。**id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました
+ * （… id=…）」の跡で見る**（読めない行は `permission list` に載らない）。**id が取れない行は
+ * この口では消せない**（`permission-grants.json` を手で直す）。指した id が1つでも読めない行に
+ * 無ければ、デーモンが何も消さずに断る。**行の中身は出さない**（id と件数だけ）。
+ */
+export async function permissionRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+  const target = await resolveTarget();
+  if (target.note !== null) throw new Error(target.note);
+  const client = createClient(target.baseUrl, target.headers);
+  const response = await client['permission-grants'].unreadable.remove.$post({
+    json: { ids: [...ids] },
+  });
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(
+        '指した id が、読めない許可の行にありません（何も消していません。' +
+          'id が取れない行はこの口では消せません）',
+      );
+    }
+    const described = describeAuthFailure(response.status, target);
+    if (described !== null) throw new Error(described);
+    throw new Error(
+      await withErrorReason(`読めない許可の行を消せませんでした（${response.status}）`, response),
+    );
+  }
+  const result = (await response.json()) as { removedIds: string[] };
+  stdout.write(
+    `読めない許可の行を ${String(result.removedIds.length)} 行消しました（id: ${result.removedIds.join(', ')}）\n`,
+  );
+}
+
 /** 規則の広さを日本語の文言へ（判定は `describePermissionRuleBreadth` に寄せる）。 */
 function describeBreadth(rule: string): string {
   const breadth = describePermissionRuleBreadth(rule);

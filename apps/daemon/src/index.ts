@@ -649,7 +649,8 @@ export function isTokenPoolReopenedNotice(event: InboxEvent): boolean {
  * ⟹ **規則**: 「また通るようになった／冷却が明けた」をクローンへ配ってよいのは、
  * **前に配ったものと違うとき**だけ。同じものをもう一度配ってよいのは、**そのあいだに
  * 鍵が通らなくなったことを観測したとき**（{@link CloneWakeGate.observeUnusable}）
- * だけである。
+ * だけである。**例外は `回した`（#2511）**: 鍵を実際に移した新しい遷移なので、
+ * 同じトークンへ再び回したなら（A→B→A→B）、`observeUnusable()` を挟まなくても配る。
  *
  * **⛔ 時間の窓（「N 秒以内の同一本文は捨てる」）でも件数の上限（「N 回配ったら
  * 止める」）でもない。** どちらも恣意的な定数で本物の合図を黙って失う＝能力の削除
@@ -811,12 +812,16 @@ export function createCloneWakeGate(): CloneWakeGate {
    * 全体を再武装するのは変わらないが、**再武装の引き金そのものを観測
    * （エッジ）だけに絞った。** これで足りることは
    * `describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件')`（`index.test.ts`）
-   * の `fakeClone` が固定している——本物の `clone.ts` は「止まっていない →
-   * 止まった」の遷移のたびに必ず先に `observeUnusable()` を呼ぶ
-   * （`#noteUsageNotice` が `#observeForTokenRotation` を待ってから
-   * `#usageBlocked` を立てる。`fakeClone` の doc に配線の逐語がある）ので、
-   * #1051 が要求する「起こし損ねを作らない」不変条件はこの edge だけで満たせる
-   * ——`cloneBlocked` の値そのものを見て消す必要は無かった。
+   * の `fakeClone` が固定している。
+   *
+   * **⚠️ 訂正（#2511）: 本物の `clone.ts` が「止まる遷移のたびに必ず先に
+   * `observeUnusable()` を呼ぶ」わけではない。** `clone.ts` は止まる前に
+   * `#observeForTokenRotation` を待つだけで、`observeUnusable()` が呼ばれるのは
+   * その outcome が `parked` / `exhausted` のときだけである。`rotated`（通る
+   * 鍵を選べて回した）では呼ばれない——だから A→B→A→B と回ると2回目の
+   * 「B へ回した」の印が残っていた。`rotated` の側は `decide` が `回した` の
+   * 印を捨てて塞ぐ（下の `decide` の doc）。`parked` / `exhausted` 経由の
+   * 再武装は従来どおり `observeUnusable()` の全消去で足りる。
    *
    * **⛔ 時間の窓や配達回数の上限は持ち込まない**（`docs/north_star.md` の
    * 禁止2）。ここが持つのは状態（最後に配った合図の身元）だけで、再武装は
@@ -827,6 +832,27 @@ export function createCloneWakeGate(): CloneWakeGate {
   return {
     decide(reopened, cloneBlocked, releasePending, staleSameKeyRecovery = false) {
       const tokenId = reopened.tokenId;
+      /**
+       * **`回した` は、それ自体が本物の新しい遷移なので、このトークンの印を先に
+       * 捨てる**（Issue #2511）。`rotated` の outcome は `parked` / `exhausted`
+       * を経ない（`observeUnusable()` は呼ばれない）ので、A→B→A→B と鍵が回ると
+       * 2回目の「B へ回した」が `told[B]` と同じ身元になり、止まったクローンへ
+       * の起こし直しが畳まれていた。印を捨てるのは**このトークンの分だけ**
+       * （他のトークンの `また通るようになった` の印は #1223 のために残す）。
+       * 畳む側の回でも捨てる——印は「この身元を配った」の記録で、新しい遷移が
+       * 来た以上、次にこの身元が出るのは別の遷移だからである。
+       *
+       * **#1223 の再発は戻らない。** 戻っていたのは同じ鍵・同じ根拠の
+       * `また通るようになった` / `冷却が明けた` が遷移なしに繰り返される経路で、
+       * rotator は `回した` を実際に鍵を移した回（世代を1進めて撒いた回）に
+       * しか出さない（`token-rotator.ts` の `kind: 'rotated'`）。
+       *
+       * **身元（{@link deliveredIdentity}）に世代を入れる案は採らなかった**:
+       * 身元は受信箱の畳み込み鍵（`payload.identity`、#1298）にも使われ、
+       * 世代を入れると「同じ鍵へ回した」未読が畳まれなくなる（受信箱の畳み込みの
+       * 挙動が変わる）。印を捨てる案は受信箱側を1文字も動かさない。
+       */
+      if (reopened.how === '回した') told.delete(tokenId);
       if (!worthDeliveringNow(cloneBlocked, releasePending)) {
         // **配達済みの印はここでは触らない**（Issue #1223 再発の手当て。
         // 理由の全文は `told` の doc「全消去（`clear()`）は `observeUnusable()`
@@ -1066,7 +1092,7 @@ export async function main(): Promise<void> {
       .append({ type: 'external_event', source: 'runner', summary: describeRunnerUnknown(report) })
       .catch((error: unknown) => {
         process.stderr.write(
-          `alteroidd: runner の期限切れを日誌へ残せませんでした: ${String(error)}\n` +
+          `alteroidd: runner の期限切れを日誌へ残せませんでした: ${reasonOf(error)}\n` +
             `  ${describeRunnerUnknown(report)}\n`,
         );
       });
@@ -1486,7 +1512,7 @@ export async function main(): Promise<void> {
     // 意味が消える（本文を一度も変えていなくても監査情報が失われる）。
     const applied = await profileService
       .restore()
-      .catch((error: unknown) => ({ ok: false, error: String(error), output: undefined }));
+      .catch((error: unknown) => ({ ok: false, error: reasonOf(error), output: undefined }));
     if (applied !== null && !applied.ok) {
       // **黙って古い環境で走らせない。** 何が効いていないかが見えないと、
       // 「鍵が届いていない」のか「鍵の権限が足りない」のかを誰も切り分けられない。
@@ -1682,7 +1708,7 @@ export async function main(): Promise<void> {
   {
     const restored = await tokenRotator
       .restore()
-      .catch((error: unknown) => ({ kind: 'failed' as const, why: String(error) }));
+      .catch((error: unknown) => ({ kind: 'failed' as const, why: reasonOf(error) }));
     // **何も起きていないとき（`none`）は黙る。** 既定の構成では毎回の起動で出る
     // ことになり、意味のある行が埋もれる。
     // **日誌にも残す。** 標準出力・標準エラーは器のログへ流れて消えるが、日誌は
@@ -2093,7 +2119,7 @@ export async function main(): Promise<void> {
           })
           .catch((error: unknown) => {
             process.stderr.write(
-              `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${String(error)}\n`,
+              `alteroidd: 認証トークンが戻った後のマネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`,
             );
           });
       };
@@ -2236,7 +2262,7 @@ export async function main(): Promise<void> {
    */
   const takeOver = async (): Promise<void> => {
     const restored = await clone.managers.restore().catch((error: unknown) => {
-      process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${String(error)}\n`);
+      process.stderr.write(`alteroidd: マネージャーの引き継ぎに失敗しました: ${reasonOf(error)}\n`);
       return [];
     });
     if (restored.length > 0) {
@@ -2279,7 +2305,7 @@ export async function main(): Promise<void> {
     if (runnerId !== undefined) {
       void clone.managers.reattachRunner(runnerId).catch((error: unknown) => {
         process.stderr.write(
-          `alteroidd: 入れ替わった runner (${runnerId}) の取り直しに失敗しました: ${String(error)}\n`,
+          `alteroidd: 入れ替わった runner (${runnerId}) の取り直しに失敗しました: ${reasonOf(error)}\n`,
         );
       });
     }
@@ -2382,7 +2408,7 @@ export async function main(): Promise<void> {
     // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
     // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
     // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
-    writeStderrSync(`alteroidd: 待ち受けに失敗しました (port ${port}): ${String(error)}\n`);
+    writeStderrSync(`alteroidd: 待ち受けに失敗しました (port ${port}): ${reasonOf(error)}\n`);
     process.exit(1);
   });
 
@@ -2394,7 +2420,7 @@ export async function main(): Promise<void> {
   for (const seed of seeds) {
     void runners.register(seed).catch((error: unknown) => {
       process.stderr.write(
-        `alteroidd: runner (${seed.label}) を名簿に載せられません: ${String(error)}\n`,
+        `alteroidd: runner (${seed.label}) を名簿に載せられません: ${reasonOf(error)}\n`,
       );
     });
   }
@@ -2456,7 +2482,7 @@ export async function main(): Promise<void> {
   // 仕込んであった依頼を先に読み直す。ここを通さないと、前回の会話で仕込んだ
   // 継続中の依頼が、次の刻み（最大1分）まで存在しないことになる。
   await scheduler.refresh().catch((error: unknown) => {
-    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${String(error)}\n`);
+    process.stderr.write(`alteroidd: 継続中の依頼を読み込めませんでした: ${reasonOf(error)}\n`);
   });
   scheduler.start();
 
@@ -2534,7 +2560,7 @@ if (invokedDirectly()) {
 
   main().catch((error: unknown) => {
     // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
-    writeStderrSync(`alteroidd: 起動に失敗しました: ${String(error)}\n`);
+    writeStderrSync(`alteroidd: 起動に失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
 }

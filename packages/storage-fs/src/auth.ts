@@ -17,6 +17,8 @@ import type {
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
+  RemoveUnreadableRowsOptions,
+  RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
 } from '@alteroid/core';
 import { z } from 'zod';
@@ -368,6 +370,54 @@ export class FsAuthStore implements AuthStore {
         },
         result: null,
       };
+    });
+  }
+
+  /**
+   * 読めないアカウントの行を id で指して消す（`AuthStore.removeUnreadableAccounts` の doc。
+   * issue #2440）。`invalidAccountsRaw` のうち `extractRowId` が一致する行だけを落とす——
+   * id が取れない行は指せないので残る。読めたアカウント・identity・アクセストークンには
+   * 触れない。**読んで・突き合わせて・日誌（`beforeRemove`）を呼んで・書くまでを1つの排他区間に
+   * 入れる**（`#mutate` は同期の `mutate` しか受けないので、同じ鍵・同じ書き方で直に書く）。
+   * 知らない id があれば書かない。`beforeRemove` が投げたら書かずに投げ直す。**値は返さない。**
+   */
+  async removeUnreadableAccounts(
+    ids: readonly string[],
+    options: RemoveUnreadableRowsOptions = {},
+  ): Promise<RemoveUnreadableRowsResult> {
+    const wanted = [...new Set(ids)];
+    return withPathLock(this.#path, async () => {
+      const file = await this.#read();
+      const present = new Set(
+        file.invalidAccountsRaw.flatMap((raw) => {
+          const id = extractRowId(raw);
+          return id === undefined ? [] : [id];
+        }),
+      );
+      const unknown = wanted.filter((id) => !present.has(id));
+      if (unknown.length > 0 || wanted.length === 0) {
+        return { kind: 'unknown', count: unknown.length };
+      }
+      // **日誌などを先に。投げたら、ここで止まり、何も書かない。**
+      await options.beforeRemove?.(wanted);
+      const drop = new Set(wanted);
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(
+        this.#path,
+        `${JSON.stringify(
+          this.#serialize({
+            ...file,
+            invalidAccountsRaw: file.invalidAccountsRaw.filter((raw) => {
+              const id = extractRowId(raw);
+              return id === undefined || !drop.has(id);
+            }),
+          }),
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+      return { kind: 'removed', ids: wanted };
     });
   }
 

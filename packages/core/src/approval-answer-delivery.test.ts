@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -92,15 +93,6 @@ function bootClone(
     redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
-}
-
-async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (predicate()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
 }
 
 /** 拾い直しが起きないはずの経路を確かめるための、束の間の待ち。 */
@@ -368,12 +360,10 @@ describe('回答済みで未配達の承認の拾い直しは、作られなか�
 
     const { clone } = bootClone(stores, 'hang');
     await waitFor(() => true, '起動');
-    const started = Date.now();
-    for (;;) {
-      if ((await stores.permissionGrants.list()).length > 0) break;
-      if (Date.now() - started > 3000) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(
+      async () => (await stores.permissionGrants.list()).length > 0,
+      '許可の記録が作られる',
+    );
 
     const grants = await stores.permissionGrants.list();
     expect(grants.map((grant) => ({ approvalId: grant.approvalId, rule: grant.rule }))).toEqual([
@@ -400,12 +390,10 @@ describe('回答済みで未配達の承認の拾い直しは、作られなか�
     const { clone } = bootClone(stores, 'hang');
     await waitFor(() => true, '起動');
     // 拾い直しが済むまで待つ（行が delivered になる）。
-    const started = Date.now();
-    for (;;) {
-      if ((await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered') break;
-      if (Date.now() - started > 3000) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(
+      async () => (await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered',
+      '拾い直しで行が delivered になる',
+    );
     await idle();
 
     expect((await stores.permissionGrants.list()).map((grant) => grant.id)).toEqual([
@@ -420,12 +408,10 @@ describe('回答済みで未配達の承認の拾い直しは、作られなか�
     await stores.jobs.putApproval(consentedPendingRow({ answer: 'はい' }));
 
     const { clone } = bootClone(stores, 'hang');
-    const started = Date.now();
-    for (;;) {
-      if ((await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered') break;
-      if (Date.now() - started > 3000) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(
+      async () => (await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered',
+      '拾い直しで行が delivered になる',
+    );
     await idle();
 
     expect(await stores.permissionGrants.list()).toEqual([]);
@@ -447,12 +433,10 @@ describe('回答済みで未配達の承認の拾い直しは、作られなか�
       await stores.jobs.putApproval(consentedPendingRow({ answeredVia: via }));
 
       const { clone } = bootClone(stores, 'hang');
-      const started = Date.now();
-      for (;;) {
-        if ((await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered') break;
-        if (Date.now() - started > 3000) break;
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await waitFor(
+        async () => (await stores.jobs.getApproval('ap-1'))?.answerDelivery === 'delivered',
+        '拾い直しで行が delivered になる',
+      );
       await idle();
 
       expect((await stores.jobs.getApproval('ap-1'))?.answerDelivery).toBe('delivered');
@@ -523,12 +507,10 @@ describe('配達済みの印の書き込みだけが落ちても、起こし直�
       '1つ目の処理',
     );
     // 処理し終えて受信箱から消えるまで待つ（`#forget`）。
-    const started = Date.now();
-    for (;;) {
-      if ((await stores.inbox.peekPending()).entries.length === 0) break;
-      if (Date.now() - started > 3000) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(
+      async () => (await stores.inbox.peekPending()).entries.length === 0,
+      '処理し終えて受信箱から消える',
+    );
     expect(failedOnce).toBe(true);
     expect((await stores.inbox.peekPending()).entries).toEqual([]);
 

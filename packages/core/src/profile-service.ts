@@ -1,3 +1,5 @@
+import { redactErrorText } from './denial-input-head.js';
+import { reasonOf } from './dropped-record.js';
 import {
   fingerprintOf,
   normalizeProfileScript,
@@ -180,7 +182,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
             ? null
             : await applier.prepare(normalized).catch((error: unknown): PreparedProfile => ({
                 ok: false,
-                error: String(error),
+                error: redactErrorText(String(error), process.env),
                 commit: async () => undefined,
                 discard: async () => undefined,
               }));
@@ -241,12 +243,12 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
             // 残してあるので、どちらも失われない。
             throw new ProfileRollbackFailedError(
               'プロファイルをクローンへ反映できず、正本を書き戻すこともできなかった' +
-                `（正本だけ新版のまま残っている）: 反映=${String(error)} / 書き戻し=${String(rollbackError)}`,
+                `（正本だけ新版のまま残っている）: 反映=${redactErrorText(String(error), process.env)} / 書き戻し=${redactErrorText(String(rollbackError), process.env)}`,
               { cause: rollbackError },
             );
           }
           throw new Error(
-            `プロファイルをクローンへ反映できなかったので、正本も元へ戻した: ${String(error)}`,
+            `プロファイルをクローンへ反映できなかったので、正本も元へ戻した: ${redactErrorText(String(error), process.env)}`,
             { cause: error },
           );
         }
@@ -320,7 +322,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         try {
           return { runnerId: runner.runnerId, ...(await runner.setProfile(script)) };
         } catch (error) {
-          return { runnerId: runner.runnerId, ok: false, error: String(error) };
+          return { runnerId: runner.runnerId, ok: false, error: reasonOf(error) };
         }
       }),
     );

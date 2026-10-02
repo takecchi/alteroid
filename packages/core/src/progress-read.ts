@@ -14,6 +14,8 @@ import { commitmentActiveDelegationIds, commitmentRespondedAt } from './schema.j
 import type { Commitment, Job, UnreadableJob } from './schema.js';
 import { summarizeProgress } from './progress.js';
 import type { ProgressSummary } from './progress.js';
+import { GITHUB_OBSERVATION_SCAN_LIMIT, summarizeGithubObservations } from './progress-github.js';
+import type { ProgressGithub } from './progress-github.js';
 import type { Stores } from './store.js';
 
 /** 窓の既定（時間）。`summarizeProgress` は既定を持たないので、口はここを共有する。 */
@@ -114,18 +116,11 @@ export async function buildCommitmentDerivations(
   return { repliesByConversation, activeManagersByConversation };
 }
 
-/** `github` は core の集計の外側にある。**常に `not_observed`**（0 件ではない）。 */
-export const PROGRESS_GITHUB_NOT_OBSERVED = {
-  state: 'not_observed',
-  reason:
-    'デーモンは GitHub（Issue / PR / CI）を見に行かない境界にあるため、数を取っていない。' +
-    'ここに数が無いのは 0 件という意味ではない。',
-} as const;
-
 /** `GET /progress` の応答と、道具 `progress_read` が文にする入力。 */
 export type ProgressView = ProgressSummary & {
   observedAt: string;
-  github: { state: 'not_observed'; reason: string };
+  /** 観測の記録を返すだけ（デーモンは GitHub を見に行かない）。`progress-github.ts`。 */
+  github: ProgressGithub;
 };
 
 export interface ReadProgressOptions {
@@ -180,6 +175,11 @@ export async function readProgress(
   return {
     observedAt: now.toISOString(),
     ...summary,
-    github: PROGRESS_GITHUB_NOT_OBSERVED,
+    github: summarizeGithubObservations(
+      await stores.journal.list({
+        types: ['github_observation'],
+        limit: GITHUB_OBSERVATION_SCAN_LIMIT,
+      }),
+    ),
   };
 }

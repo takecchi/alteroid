@@ -113,6 +113,22 @@ docker compose exec app alteroid chat
 > **入口の等価性** — ある入口でできることが別の入口でできない状態を作らない（[docs/PRD.md](./docs/PRD.md)
 > 「インターフェース」）。**画面の都合で API に経路を足さないこと。**
 
+Web UI の画面（配置と接続先は [apps/web/README.md](./apps/web/README.md)）:
+
+<!-- 画像の実体は orphan 枝 `assets` に在る（main は NUL バイトを許さない歯があるので PNG を置けない。#260）。その枝を消すと下の画像が全部切れる -->
+
+**ダッシュボード** — いま何が動いていて、何が人間を待っているか
+
+![ダッシュボード](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/dashboard.png)
+
+**会話** — クローンと話す（`alteroid chat` と同じ）
+
+![会話](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/chat.png)
+
+**記憶** — クローンの価値観そのもの。人間がいつでも読んで直せる
+
+![記憶](https://raw.githubusercontent.com/takecchi/alteroid/refs/heads/assets/readme/memory.png)
+
 CLI の主なコマンド:
 
 | コマンド                            | 何をするか                                                |

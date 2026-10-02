@@ -6716,7 +6716,7 @@ class Pool implements ManagerPool {
         signal: AbortSignal.timeout(UNPUSHED_WORK_OBSERVATION_TIMEOUT_MS),
       }).catch((error: unknown): ManagerUnpushedWork => ({
         kind: 'unavailable',
-        reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+        reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
       }));
       const verdict = evaluateAutoFoldUnpushedWork(unpushed);
       if (verdict !== 'clear') {
@@ -7019,7 +7019,7 @@ class Pool implements ManagerPool {
       }
       return { kind: 'ok', result };
     } catch (error) {
-      return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${String(error)}` };
+      return { kind: 'unavailable', reason: `runner への問い合わせが失敗した: ${reasonOf(error)}` };
     }
   }
 
@@ -8463,7 +8463,7 @@ class Pool implements ManagerPool {
             text:
               `${job.id} の起動時の引き取りが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
               `終わったとは限らないので、**新しく起こし直さないでください** — ` +
-              `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${String(error)}`,
+              `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${reasonOf(error)}`,
             ...this.#statusAtDelivery(job.id),
           });
         } else if (isRetryableRunnerError(error)) {
@@ -9182,7 +9182,7 @@ class Pool implements ManagerPool {
       this.#notePushOutcome(runnerId, 'profile', {
         status: 'failed',
         at: this.#nowIso(),
-        error: String(error),
+        error: reasonOf(error),
       });
       await this.#journal({
         type: 'exchange',
@@ -9217,7 +9217,7 @@ class Pool implements ManagerPool {
       this.#notePushOutcome(runnerId, 'credentials', {
         status: 'failed',
         at: this.#nowIso(),
-        error: String(error),
+        error: reasonOf(error),
       });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
       await this.#journal({
@@ -9258,7 +9258,7 @@ class Pool implements ManagerPool {
       this.#notePushOutcome(runnerId, 'mcpServers', {
         status: 'failed',
         at: this.#nowIso(),
-        error: String(error),
+        error: reasonOf(error),
       });
       // **`this.#journal` を経由する**（`#pushProfile` と同じ理由・同じ非対称）。
       await this.#journal({
@@ -9733,7 +9733,7 @@ class Pool implements ManagerPool {
               text:
                 `${job.id} の取り直しが世代で拒まれました（409）。この委譲は**自分より新しい世代の誰かが握っています**。` +
                 `終わったとは限らないので、**新しく起こし直さないでください** — ` +
-                `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${String(error)}`,
+                `台帳の貸し出しと runner の世代が食い違っています（デーモンが2つ走っているか、貸し出しの書き込みが落ちた可能性）。人間へ相談すること: ${reasonOf(error)}`,
               ...this.#statusAtDelivery(job.id),
             });
           } else if (isRetryableRunnerError(error)) retry = true;
@@ -9848,7 +9848,7 @@ class Pool implements ManagerPool {
     // **即配らず合流窓へ積む（「一枠落ち一合図」の対象を広げた側。依頼者の
     // 実測——委譲が器と一緒に失われた族は `resume_fallback` /
     // `resume_failed` / `closed_failed` の3通で構成される）。** この文面は
-    // `manager.ts` 自身が組み立てたもの（`String(error)` の断片を含むが、
+    // `manager.ts` 自身が組み立てたもの（`reasonOf(error)` の断片を含むが、
     // 全体の構成はここで決めている）——`#queueSynthesizedNotice` の doc。
     this.#queueSynthesizedNotice(
       job.id,
@@ -9858,7 +9858,7 @@ class Pool implements ManagerPool {
           ? 'この委譲を前のセッションから戻せなかった（SDK に会話が残っていない）。' +
             '生ログも預かっていないので、続きの材料が無い。'
           : 'runner の器が作り直されたが、この委譲を前のセッションから戻せなかった。',
-        `理由: ${String(error)}`,
+        `理由: ${reasonOf(error)}`,
         `作業ディレクトリ: ${job.cwd ?? '(不明)'}`,
         ...this.#notifyExcerptLines(job),
         '',
@@ -12803,7 +12803,7 @@ class Pool implements ManagerPool {
       this.#notePushOutcome(runner.runnerId, 'agentToken', {
         status: 'failed',
         at: this.#nowIso(),
-        error: String(error),
+        error: reasonOf(error),
       });
       // **`this.#journal` を経由する（`#pushProfile` と同じ理由・同じ非対称）。**
       // 直に `this.#stores.journal.append(...).catch(() => undefined)` で

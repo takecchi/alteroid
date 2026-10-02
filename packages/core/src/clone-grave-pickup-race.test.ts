@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -105,13 +106,10 @@ function report(text: string, id = 'evt-report'): InboxEvent {
 
 /** 日誌にその一行が出るまで待つ（＝拾い上げがその分岐を通り終えた合図）。 */
 async function waitForJournal(stores: Stores, needle: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
+  await waitFor(async () => {
     const entries = await stores.journal.list();
-    if (entries.some((entry) => JSON.stringify(entry).includes(needle))) return;
-    if (Date.now() - started > 3000) throw new Error(`日誌に「${needle}」が出ない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+    return entries.some((entry) => JSON.stringify(entry).includes(needle));
+  }, `日誌に「${needle}」が出る`);
 }
 
 describe('拾い上げが新しい印を消す（#1157 段2）', () => {

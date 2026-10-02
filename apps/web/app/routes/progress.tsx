@@ -143,6 +143,105 @@ function StatRow({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">{children}</div>;
 }
 
+/**
+ * open の Issue / PR。**デーモンは GitHub を見に行かず、観測した側が記録した数を返すだけ**
+ * （Issue #2245）。だから「誰の観測か」「いつか」「母集合の切り方」を必ず並べ、古さは判定しない。
+ * 取れなかった回は数を作らず `—` と理由を出し、0 とは書かない。
+ */
+function GithubBlock({ github, observedAt }: { github: Progress['github']; observedAt: string }) {
+  if (github.state === 'not_observed') {
+    return (
+      <Stat
+        label="open の Issue / PR"
+        value={NONE}
+        hint={<>観測していない（0 件ではない）。{github.reason}</>}
+      />
+    );
+  }
+  if ((github.state as string) !== 'observed') {
+    return (
+      <Stat
+        label="open の Issue / PR"
+        value={NONE}
+        hint={<>この版の画面は知らない状態（{String(github.state)}）。数は出さない。</>}
+      />
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground">
+        観測した側の申告（デーモンは GitHub を見に行かず、値を確かめていない）。古さは判定しない。
+      </p>
+      {github.repos.map((row) => (
+        <div key={row.repo} className="flex flex-col gap-2">
+          {row.latestOk === null ? (
+            <Stat
+              label={`${row.repo} の open の Issue / PR`}
+              value={NONE}
+              hint={
+                github.scan.reachedLimit ? (
+                  <>
+                    読んだ範囲（新しい順 {count(github.scan.limit)}{' '}
+                    件）には成功した観測の記録が無い（0 件ではない）。
+                  </>
+                ) : (
+                  <>成功した観測の記録が無い（0 件ではない）。</>
+                )
+              }
+            />
+          ) : (
+            <>
+              <StatRow>
+                <Stat
+                  label={`${row.repo} open Issue`}
+                  value={count(row.latestOk.openIssues)}
+                  unit="件"
+                />
+                <Stat
+                  label={`${row.repo} open PR`}
+                  value={count(row.latestOk.openPulls)}
+                  unit="件"
+                />
+              </StatRow>
+              <KeyValueList
+                items={[
+                  {
+                    label: '観測',
+                    value: `${atText(row.latestOk.observedAt, observedAt)} / 観測者 ${row.latestOk.observedBy}`,
+                  },
+                  {
+                    label: '母集合',
+                    value:
+                      row.latestOk.query +
+                      (row.latestOk.limit === undefined
+                        ? ''
+                        : ` / limit ${count(row.latestOk.limit)}`) +
+                      (row.latestOk.truncated ? '（limit に達した。数は下限）' : ''),
+                  },
+                ]}
+                labelWidth="8rem"
+              />
+            </>
+          )}
+          {row.latestFailed !== null && (
+            <p className="text-xs text-warn">
+              取れなかった回: {atText(row.latestFailed.observedAt, observedAt)} / 観測者{' '}
+              {row.latestFailed.observedBy} — {row.latestFailed.reason}
+            </p>
+          )}
+        </div>
+      ))}
+      {github.scan.reachedLimit && (
+        <p className="text-xs text-warn">
+          ⚠ 記録の読みが上限（新しい順 {count(github.scan.limit)}{' '}
+          件）に当たった。古い記録にしか現れない repo は載っていない。載っている repo
+          でも、成功・失敗の片方が読んだ範囲の外に押し出されて欠けていることがある。
+        </p>
+      )}
+    </div>
+  );
+}
+
 function BacklogCard({ progress }: { progress: Progress }) {
   const { backlog, github, observedAt } = progress;
   const { byOrigin, age, byState, completeness } = backlog;
@@ -191,11 +290,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
           </p>
         )}
         <div className="border-t border-border pt-3">
-          <Stat
-            label="open の Issue / PR"
-            value={NONE}
-            hint={<>観測していない（0 件ではない）。{github.reason}</>}
-          />
+          <GithubBlock github={github} observedAt={observedAt} />
         </div>
       </Section>
     </Card>

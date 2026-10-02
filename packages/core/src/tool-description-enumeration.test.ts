@@ -171,6 +171,10 @@ const EXEMPT: readonly Exemption[] = [
     tool: 'progress_read',
     why: '説明文が名乗る一覧（enum・配列）が無い。窓の既定は引数の説明が DEFAULT_PROGRESS_WINDOW_HOURS から作る。ふるまいの歯は progress-read.test.ts が持つ',
   },
+  {
+    tool: 'github_observation_record',
+    why: '説明文が名乗る一覧（enum・配列）が無い。入力は githubObservationInputSchema（日誌の枝から導く）が名乗る。ふるまいの歯は github-observation-record.test.ts が持つ',
+  },
   { tool: 'memory_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_write', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_append', why: '実装側に、説明文が数え直すような一覧が無い' },

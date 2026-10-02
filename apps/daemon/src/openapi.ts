@@ -9,6 +9,7 @@ import {
   INBOX_EVENT_TYPE_ORDER,
   jobSchema,
   jobStatusSchema,
+  githubObservationInputSchema,
   journalEntrySchema,
   memoryDocumentMetaSchema,
   mcpServersSchema,
@@ -488,6 +489,23 @@ export const cloneInterruptResponseSchema = z.object({
 
 export const permissionGrantsResponseSchema = z.object({
   grants: z.array(permissionGrantSchema),
+});
+
+/**
+ * 読めない行を id で指して消す口（`POST /permission-grants/unreadable/remove`・
+ * `POST /access/unreadable/remove`。issue #2440）の body。トークンの
+ * {@link tokensUnreadableRemoveRequestSchema}（#2354）と同じ形。
+ * `id` は読めない行の id（デーモンの stderr の「読み飛ばしました（… id=…）」の跡に出る）。
+ * id が取れない行は指せない。
+ */
+export const unreadableRowsRemoveRequestSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+});
+
+/** 上の応答。**消した id と件数だけで、行の中身は含まない。** */
+export const unreadableRowsRemoveResponseSchema = z.object({
+  removedIds: z.array(z.string()),
+  count: z.number().int().positive(),
 });
 
 // ---------------------------------------------------------------------------
@@ -2067,6 +2085,30 @@ export const appraisalStatsResponseSchema = z.object({
 const progressCount = z.number().int().min(0);
 const progressIso = z.string();
 
+const githubObservationBaseShape = {
+  observedAt: progressIso,
+  observedBy: z.string(),
+  query: z.string(),
+  limit: z.number().int().positive().optional(),
+};
+const githubObservationOkSchema = z.object({
+  ...githubObservationBaseShape,
+  openIssues: progressCount,
+  openPulls: progressCount,
+  truncated: z.boolean(),
+});
+const githubObservationFailedSchema = z.object({
+  ...githubObservationBaseShape,
+  reason: z.string(),
+});
+
+/**
+ * `POST /github-observations` の本文（Issue #2245）。**日誌の `github_observation` の枝から
+ * `type` / `id` / `at` を除いたもの**（`journalVariant`。手で書き直さない）。`id` と `at` は
+ * デーモンが振る。観測した側が名乗る申告であって、デーモンは値を確かめない。
+ */
+export const githubObservationRequestSchema = githubObservationInputSchema;
+
 const progressForecastBasisSchema = z.object({
   open: progressCount,
   closedInWindow: progressCount,
@@ -2088,8 +2130,10 @@ const progressForecastBasisSchema = z.object({
  *
  * - `observedAt`: 集計した時刻（daemon の `now`）。`window.to` と同じ瞬間。
  * - `github`: **デーモンは GitHub を見に行かない**（`packages/core/src/schema.ts` の
- *   「デーモンは PR もブランチも見に行かない」）ので、open Issue / PR / CI の数は
- *   載せられない。0 と区別できるよう、取れていないことを `state` で言う。
+ *   「デーモンは PR もブランチも見に行かない」）。`POST /github-observations` で観測した側が
+ *   記録した数を repo ごとに返すだけで、値は申告である（`observedBy` を必ず付ける）。記録が
+ *   無ければ `state: 'not_observed'`（0 件ではない）。`latestOk` / `latestFailed` は repo ごとの
+ *   最新の成功・失敗で、失敗の回に数は無い。**古さは判定しない**（`observedAt` をそのまま返す）。
  * - `backlog.completeness`: 0 でなければ `backlog` と `throughput` の数は欠けうる。
  *   `unreadable` / `trimmedClosed` は台帳の行、`unreadableJobs` は委譲の行（issue #2345）で、
  *   0 でなければ `backlog.byState.delegated`・`inProgress`・`throughput.delegationsEnded` は
@@ -2160,7 +2204,20 @@ export const progressResponseSchema = z.object({
       basis: progressForecastBasisSchema,
     }),
   ]),
-  github: z.object({ state: z.literal('not_observed'), reason: z.string() }),
+  github: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('not_observed'), reason: z.string() }),
+    z.object({
+      state: z.literal('observed'),
+      repos: z.array(
+        z.object({
+          repo: z.string(),
+          latestOk: githubObservationOkSchema.nullable(),
+          latestFailed: githubObservationFailedSchema.nullable(),
+        }),
+      ),
+      scan: z.object({ limit: z.number().int().positive(), reachedLimit: z.boolean() }),
+    }),
+  ]),
 });
 
 // ---------------------------------------------------------------------------

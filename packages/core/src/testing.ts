@@ -1207,6 +1207,11 @@ export function createMemoryStores(): Stores {
       accounts.set(accountId, authAccountSchema.parse({ ...account, lastLoginAt: at }));
     },
     // 検査から書き込みまでの間に await を挟まない（他の1操作と同じ理由。issue #1915）。
+    // インメモリは読めない行を持てない（`Map` への書き手は常に `authAccountSchema` を通す）ので、
+    // 消すものが無い（issue #2440）。指された id はすべて「読めない行に無い」。
+    async removeUnreadableAccounts(ids) {
+      return { kind: 'unknown', count: new Set(ids).size };
+    },
     async revokeAccountAccess(accountId) {
       const account = accounts.get(accountId);
       if (account === undefined) return;
@@ -1369,6 +1374,11 @@ export function createMemoryStores(): Stores {
       const next = permissionGrantSchema.parse({ ...found, revokedAt: found.revokedAt ?? at });
       permissionGrantRows.set(id, next);
       return next;
+    },
+    // インメモリは読めない行を持てない（書き手は常に `permissionGrantSchema` を通す）ので、
+    // 消すものが無い（issue #2440）。指された id はすべて「読めない行に無い」。
+    async removeUnreadable(ids) {
+      return { kind: 'unknown', count: new Set(ids).size };
     },
     async markUsed(id, at) {
       const found = permissionGrantRows.get(id);

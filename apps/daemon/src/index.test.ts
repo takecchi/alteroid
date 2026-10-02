@@ -627,11 +627,11 @@ describe('createCloneWakeGate', () => {
    * ついて何も観測していない——それは「クローンはいま動けている」という事実
    * でしかなく、鍵が通らなくなったことを1文字も意味しない（`told` の doc
    * 「全消去は `observeUnusable()` のときだけ」）。**本物の `clone.ts` は
-   * 「止まっていない → 止まった」の遷移のたびに必ず先に `observeUnusable()` を
-   * 呼ぶ**（`#noteUsageNotice` が `#observeForTokenRotation` を待ってから
-   * `#usageBlocked` を立てる。配線の逐語は下の `describe('🔴 #1051...')` の
-   * `fakeClone` の doc）——ここではその対を模して「また枠に当たって落ちた」を
-   * `observeUnusable()` で表す。**`observeUnusable()` を呼ばずに `true` を
+   * 止まる前に `#observeForTokenRotation` を待つが、`observeUnusable()` が
+   * 呼ばれるのはその outcome が `parked` / `exhausted` のときだけである**
+   * （`rotated` では呼ばれない。#2511。`rotated` の側は `decide` が `回した` の
+   * 印を捨てる）——ここでは `parked` / `exhausted` 経由の「また枠に当たって
+   * 落ちた」を `observeUnusable()` で表す。**`observeUnusable()` を呼ばずに `true` を
    * 2回連続で呼ぶ形は、この不変条件が指す状況ではない**——それは「まだ
    * 何も変わっていないのに同じ知らせが2回来た」という #1223 の症状そのもの
    * で、直上のテストが指すとおり2回目は畳む。
@@ -1418,19 +1418,19 @@ describe('🔴 #1051: 1回の再開の機会につき、配る合図は1件', ()
    *
    * ## `gate` を受け取り、`hitUsageLimit()` で `observeUnusable()` も呼ぶ理由（Issue #1223）
    *
-   * **本物の `clone.ts` では、この2つは対になっている。** `#reportUsageNotice`
-   * は `await this.#observeForTokenRotation({ notice })`
+   * **本物の `clone.ts` では、この2つは `parked` / `exhausted` の outcome のときだけ
+   * 対になる**（#2511 で訂正。以前の doc は「止まる遷移のたびに必ず」と書いて
+   * いたが誤り）。`#reportUsageNotice` は `await this.#observeForTokenRotation({ notice })`
    * （→ `apps/daemon/src/index.ts` の `onUsageObservation` → `tokenRotator.observe`
    * → `settleTokenOutcome`。`outcome.kind` が `parked` / `exhausted` なら
    * `cloneWakeGate.observeUnusable()` を呼ぶ）を**待ってから**
    * `this.#usageBlocked = withNoticeTextResetsAt(notice, Date.now());` を代入する（`grep -Fn -- 'this.#usageBlocked = withNoticeTextResetsAt(notice' packages/core/src/clone.ts`
-   * の直前の行）。⟹ **クローンが「まだ止まっていない」状態から「また止まった」
-   * 状態へ移るときは、必ずその直前に `observeUnusable()` が走っている。**
+   * の直前の行）。`rotated` の outcome ではその呼び出しが無い——その側は
+   * `decide` が `回した` の印を捨てて塞ぐ。
    *
-   * ここでこの対を省くと、この模型だけが本物より「told を持ち越しやすい」形に
-   * なり、#1223 の歯（同じ身元は畳む）が #1051 の不変条件3（起こし損ねを
-   * 作らない）を壊しているように**見えてしまう**——実際には壊れていない。
-   * 本物はこの2つを必ず対にして呼ぶので、輪はここで閉じる。
+   * この模型の `hitUsageLimit()` は `parked` / `exhausted` 経由の落ち方を表す。
+   * これを省くと、この模型だけが本物より「told を持ち越しやすい」形になり、
+   * #1223 の歯が #1051 の不変条件3を壊しているように**見えてしまう**。
    */
   function fakeClone(gate: CloneWakeGate) {
     let blocked = false;

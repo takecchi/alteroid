@@ -143,6 +143,27 @@ export async function accessRevokeCommand(accountId: string): Promise<void> {
 }
 
 /**
+ * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`。issue #2440）。
+ * 読めない行（版ずれ・手編集）は `access revoke` が 409 で触らないので、片付ける口はこれだけ。
+ * **id はデーモンの stderr の「accounts の不正な行を読み飛ばしました（… id=…）」の跡で見る**
+ * （読めない行は `access list` に載らない）。**id が取れない行はこの口では消せない**
+ * （`auth.json` を手で直す）。指した id が1つでも読めない行に無ければ、デーモンが何も消さずに
+ * 断る。**行の中身は出さない**（id と件数だけ）。
+ */
+export async function accessRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+  const target = await resolveTarget();
+  const result = (await request(
+    target,
+    '/access/unreadable/remove',
+    { method: 'POST', body: JSON.stringify({ ids }) },
+    '指した id が、読めないアカウントの行にありません（何も消していません。id が取れない行はこの口では消せません）',
+  )) as { removedIds: string[] };
+  stdout.write(
+    `読めないアカウントの行を ${String(result.removedIds.length)} 行消しました（id: ${result.removedIds.join(', ')}）\n`,
+  );
+}
+
+/**
  * 実行環境の持ち主として宣言する／取り消す（issue #1198。本来の形）。
  *
  * **`POST /access/:accountId/owner`（宣言）/ `.../owner/revoke`（取り消し）
@@ -177,7 +198,13 @@ export async function accessOwnerCommand(
   stdout.write('（これで alteroid credential set / alteroid reset が通ります）\n');
 }
 
-async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
+async function request(
+  target: Target,
+  path: string,
+  init: RequestInit = {},
+  /** 404 の文言。既定は「該当するアカウントが無い」（id で引く口向き）。 */
+  notFoundMessage = '該当するアカウントがありません',
+): Promise<unknown> {
   const response = await fetch(`${target.baseUrl}${path}`, {
     ...init,
     // 本文の無い POST もデーモンは application/json を要求する（ブラウザの
@@ -218,7 +245,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    if (response.status === 404) throw new Error('該当するアカウントがありません');
+    if (response.status === 404) throw new Error(notFoundMessage);
     if (response.status === 409) {
       // ⚠️ **いまのデーモンはここを返さない**（2026-09-09 のオーナー決定で、許可
       // できるアカウントの上限が消えた）。**それでも残す** — `ALTEROID_URL` で

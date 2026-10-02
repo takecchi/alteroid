@@ -1,5 +1,6 @@
 import {
   judgeTokenCandidate,
+  reasonOf,
   type AccountUsageState,
   type TokenCandidateVerdict,
   type TokenReconsiderReason,
@@ -287,7 +288,7 @@ export function startTokenRotationWatch(options: TokenRotationWatchOptions): Tok
         await options.onOutcome(outcome);
       } catch (error) {
         process.stderr.write(
-          `alteroidd: 認証トークンの見直し（${reason}）が落ちました: ${String(error)}\n`,
+          `alteroidd: 認証トークンの見直し（${reason}）が落ちました: ${reasonOf(error)}\n`,
         );
       }
     })();

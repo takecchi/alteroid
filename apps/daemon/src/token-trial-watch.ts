@@ -5,6 +5,7 @@ import {
   credentialOf,
   describeTrialFailureFold,
   doubledTrialIntervalMs,
+  reasonOf,
   selectTokenForTrial,
   type ActiveAgentToken,
   type AgentToken,
@@ -274,7 +275,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
       if (!activeUnreadable) {
         activeUnreadable = true;
         process.stderr.write(
-          `alteroidd: 現役の指名が読めない（${error.message}）。読めるようになるまで` +
+          `alteroidd: 現役の指名が読めない（${reasonOf(error)}）。読めるようになるまで` +
             'トークンの試しを止める。\n',
         );
       }
@@ -298,7 +299,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     try {
       await runOneTrial(target);
     } catch (error) {
-      process.stderr.write(`alteroidd: 認証トークンの試しが落ちました: ${String(error)}\n`);
+      process.stderr.write(`alteroidd: 認証トークンの試しが落ちました: ${reasonOf(error)}\n`);
     } finally {
       inFlight = false;
     }

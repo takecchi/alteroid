@@ -7247,7 +7247,7 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       hoursToDrain?: number;
       basis: { open: number; unreadable: number };
     };
-    github: { state: string; reason: string };
+    github: { state: string; reason?: string; repos?: Record<string, unknown>[] };
   };
 
   const read = async (query = ''): Promise<ProgressBody> => {
@@ -7276,10 +7276,12 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
     expect(body.throughput.delegationsEnded).toEqual({ count: 0, basis: 'updatedAt' });
   });
 
-  it('github は常に not_observed で、理由が付く（0 件とは言わない）', async () => {
+  // **#2245 段1で反転した。** 以前は「github は常に not_observed」を固定していた（観測を載せる
+  // 口が無かったので）。いまは記録が無いときだけ not_observed——0 件とは言わない。
+  it('観測の記録が無ければ github は not_observed で、理由が付く（0 件とは言わない）', async () => {
     const body = await read();
     expect(body.github.state).toBe('not_observed');
-    expect(body.github.reason.length).toBeGreaterThan(0);
+    expect((body.github.reason ?? '').length).toBeGreaterThan(0);
     expect(Object.keys(body.github).sort()).toEqual(['reason', 'state']);
   });
 
@@ -7531,6 +7533,183 @@ describe('GET /progress（#2241 の HTTP 面）', () => {
       'throughput',
       'window',
     ]);
+  });
+});
+
+/**
+ * `POST /github-observations`（#2245 段1）。観測した側が数えた GitHub の数を日誌へ置き、
+ * `GET /progress` の `github` がそれを返す。**デーモンは GitHub を見に行かない**——値は申告。
+ */
+describe('POST /github-observations（#2245 段1）', () => {
+  type GithubBody = {
+    state: string;
+    repos?: {
+      repo: string;
+      latestOk: Record<string, unknown> | null;
+      latestFailed: Record<string, unknown> | null;
+    }[];
+    scan?: { limit: number; reachedLimit: boolean };
+  };
+
+  const okBody = (over: Record<string, unknown> = {}) => ({
+    observedBy: 'clone',
+    repo: 'takecchi/alteroid',
+    query: 'gh issue list --state open',
+    limit: 100,
+    result: { status: 'ok', openIssues: 12, openPulls: 3, truncated: false },
+    ...over,
+  });
+  const failedBody = (over: Record<string, unknown> = {}) => ({
+    observedBy: 'mgr-1',
+    repo: 'takecchi/alteroid',
+    query: 'gh issue list --state open',
+    result: { status: 'failed', reason: 'gh: HTTP 502' },
+    ...over,
+  });
+  const github = async (): Promise<GithubBody> => {
+    const response = await app.request('/progress');
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { github: GithubBody }).github;
+  };
+
+  it('記録すると日誌の先頭へ書かれ、id が返り、/progress が観測者・時刻・母集合つきで返す', async () => {
+    const response = await app.request('/github-observations', json(okBody()));
+    expect(response.status).toBe(200);
+    const { ok, id } = (await response.json()) as { ok: boolean; id: string };
+    expect(ok).toBe(true);
+
+    const rows = await stores.journal.list({ types: ['github_observation'] });
+    expect(rows.map((row) => row.id)).toEqual([id]);
+
+    const body = await github();
+    expect(body.state).toBe('observed');
+    expect(body.repos).toHaveLength(1);
+    const row = body.repos![0]!;
+    expect(row.repo).toBe('takecchi/alteroid');
+    expect(row.latestFailed).toBeNull();
+    expect(row.latestOk).toMatchObject({
+      observedBy: 'clone',
+      query: 'gh issue list --state open',
+      limit: 100,
+      openIssues: 12,
+      openPulls: 3,
+      truncated: false,
+    });
+    // 観測時刻はデーモンが記録を受けた時刻（観測した側の時計ではない）
+    expect(row.latestOk!.observedAt).toBe(rows[0]!.at);
+  });
+
+  it('観測して 0 件だったときは「0 件」と読める（not_observed と区別される）', async () => {
+    await app.request(
+      '/github-observations',
+      json(okBody({ result: { status: 'ok', openIssues: 0, openPulls: 0, truncated: false } })),
+    );
+    const body = await github();
+    expect(body.state).toBe('observed');
+    expect(body.repos![0]!.latestOk).toMatchObject({ openIssues: 0, openPulls: 0 });
+  });
+
+  it('取れなかった回は数を作らない。直前の成功の数も失敗の回へ写さず、両方を別々に返す', async () => {
+    await app.request('/github-observations', json(okBody()));
+    await app.request('/github-observations', json(failedBody()));
+    const row = (await github()).repos![0]!;
+    expect(row.latestOk).toMatchObject({ openIssues: 12, observedBy: 'clone' });
+    expect(row.latestFailed).toMatchObject({ reason: 'gh: HTTP 502', observedBy: 'mgr-1' });
+    expect(row.latestFailed).not.toHaveProperty('openIssues');
+    expect(row.latestFailed).not.toHaveProperty('openPulls');
+  });
+
+  it('失敗だけの repo は latestOk が null で、数を作らない', async () => {
+    await app.request('/github-observations', json(failedBody()));
+    const row = (await github()).repos![0]!;
+    expect(row.latestOk).toBeNull();
+    expect(row.latestFailed).not.toBeNull();
+    expect(JSON.stringify(row)).not.toContain('openIssues');
+  });
+
+  it('repo ごとに最新の1件を返す（古い観測は新しいものに置き換わる）', async () => {
+    await app.request('/github-observations', json(okBody()));
+    await app.request(
+      '/github-observations',
+      json(okBody({ result: { status: 'ok', openIssues: 5, openPulls: 0, truncated: true } })),
+    );
+    await app.request('/github-observations', json(okBody({ repo: 'takecchi/other' })));
+    const body = await github();
+    expect(body.repos!.map((row) => row.repo)).toEqual(['takecchi/alteroid', 'takecchi/other']);
+    expect(body.repos![0]!.latestOk).toMatchObject({ openIssues: 5, truncated: true });
+  });
+
+  it('日誌へ書けなければ 500 で、/progress の github は変わらない（日誌が先）', async () => {
+    const failingJournal: Stores = {
+      ...stores,
+      journal: {
+        ...stores.journal,
+        append: () => {
+          throw new Error('journal store unavailable (test)');
+        },
+      },
+    };
+    const withFailingJournal = createApp({
+      clone: fake.clone,
+      stores: failingJournal,
+      token: 'test-token',
+      shutdown: () => undefined,
+    });
+    const lines = await captureStderr(async () => {
+      const response = await withFailingJournal.request('/github-observations', json(okBody()));
+      expect(response.status).toBe(500);
+    });
+    // 例外の文面は `reasonOf` を通った形で stderr へ（応答へは出ない）
+    expect(lines.join('')).toContain('journal store unavailable (test)');
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+    expect((await github()).state).toBe('not_observed');
+  });
+
+  it.each([
+    ['ok なのに数が無い', okBody({ result: { status: 'ok' } })],
+    [
+      'ok なのに truncated が無い',
+      okBody({ result: { status: 'ok', openIssues: 1, openPulls: 1 } }),
+    ],
+    [
+      '数が負',
+      okBody({ result: { status: 'ok', openIssues: -1, openPulls: 0, truncated: false } }),
+    ],
+    [
+      '数が小数',
+      okBody({ result: { status: 'ok', openIssues: 1.5, openPulls: 0, truncated: false } }),
+    ],
+    ['failed なのに理由が無い', failedBody({ result: { status: 'failed' } })],
+    ['failed の理由が空', failedBody({ result: { status: 'failed', reason: '' } })],
+    ['観測者が無い', okBody({ observedBy: undefined })],
+    ['観測者が空', okBody({ observedBy: '' })],
+    ['repo が空', okBody({ repo: '' })],
+    ['未知の status', okBody({ result: { status: 'unknown' } })],
+    ['limit が 0', okBody({ limit: 0 })],
+  ])('本文が不正（%s）は 400 で、何も書かない・送られた値を混ぜない', async (_name, body) => {
+    const response = await app.request('/github-observations', json(body));
+    expect(response.status).toBe(400);
+    const error = ((await response.json()) as { error: string }).error;
+    expect(error).toContain('github 観測の形が不正');
+    expect(error).not.toContain('gh issue list');
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+  });
+
+  it('JSON でない本文（content-type 無し）は通らない（他の書き込み口と同じ門番）', async () => {
+    const response = await app.request('/github-observations', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify(okBody()),
+    });
+    expect(response.status).toBe(400);
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+  });
+
+  it('応答は宣言した OpenAPI スキーマを通る（observed の形）', async () => {
+    await app.request('/github-observations', json(okBody()));
+    await app.request('/github-observations', json(failedBody({ repo: 'a/b' })));
+    const body = (await (await app.request('/progress')).json()) as unknown;
+    expect(progressResponseSchema.parse(body)).toEqual(body);
   });
 });
 

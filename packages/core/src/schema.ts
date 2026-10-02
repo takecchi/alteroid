@@ -2405,9 +2405,58 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
+  /**
+   * **誰かが GitHub を見て数えた結果の記録**（Issue #2245）。`GET /progress` の `github` が
+   * これを読んで返す。**デーモン自身は GitHub を見に行かない**（`JobStatus` の doc の
+   * 「デーモンは PR もブランチも見に行かない」）——この行は「観測した側が名乗った申告」を
+   * 日誌へ置くだけで、デーモンは値を確かめられない。だから `observedBy` を必須にし、
+   * 読み手へも「誰の観測か」を必ず出す。
+   *
+   * - `repo`: 観測した側が名乗る `owner/name`。デーモンは repo を決めない。
+   * - `query` / `limit`: 母集合をどう切ったか（`gh issue list --state open --limit N` の
+   *   引数など）。**数は母集合の切り方とセットでしか読めない。**
+   * - `result`: **`status` で判別する。** `ok` のときだけ数を持つ。`failed`（取れなかった回）は
+   *   数の欄そのものが無い——0 を作ると「0 件だった」と読める（取れないことが出力から消える）。
+   *   `truncated` が真なら `limit` に達しており、実数はもっと多い（数は下限）。
+   *
+   * **古さは判定しない。** `at`（デーモンが受けた時刻）をそのまま返し、新しさの判断は読み手に任せる。
+   * CI の状態は後の回で `ok` の枝へ足す。
+   */
+  z.object({
+    type: z.literal('github_observation'),
+    id: z.string(),
+    at: isoDateTime,
+    observedBy: z.string().min(1).max(200),
+    repo: z.string().min(1).max(200),
+    query: z.string().max(1000),
+    limit: z.number().int().positive().optional(),
+    result: z.discriminatedUnion('status', [
+      z.object({
+        status: z.literal('ok'),
+        openIssues: z.number().int().nonnegative(),
+        openPulls: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+      }),
+      z.object({ status: z.literal('failed'), reason: z.string().min(1).max(1000) }),
+    ]),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
+
+/**
+ * `github_observation` の入力（`type` / `id` / `at` を除いた形。Issue #2245）。**日誌の枝そのものから
+ * 導く**——`POST /github-observations`（daemon）と道具 `github_observation_record` が同じ検証を
+ * 通るように、手で書き直さない。
+ */
+export const githubObservationInputSchema = (
+  journalEntrySchema.options.find(
+    (option) => option.shape.type.value === 'github_observation',
+  ) as Extract<
+    (typeof journalEntrySchema.options)[number],
+    { shape: { type: { value: 'github_observation' } } }
+  >
+).omit({ type: true, id: true, at: true });
 export type JournalEntryType = JournalEntry['type'];
 
 /**
@@ -2502,6 +2551,7 @@ const journalEntryTypeNames = {
   subagent_stall: true,
   context_usage: true,
   inbox_flow: true,
+  github_observation: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
@@ -3491,10 +3541,16 @@ export type _AssertJobStatusMatchesRunningLikeType = AssertTrue<
  * （M5）。共有 FS や git からの再構築へ伸ばせる形で JobStore に残しておく。
  * ここが欠けると、runner が落ちたときに「どこで何を触っていたのか」が復元できない。
  *
- * **いま新しく書かれるのは `unknown` だけである**（`manager.ts` の `start`）。
- * 永続性を確かめる手段がまだ無いからで、詳しい理由はその変種の doc に在る。
- * `runner-volume` は**それ以前に書かれた行が名乗っている値**であり、確かめた
- * 結果ではない — 新旧で意味が違うので、読むときに混ぜないこと。
+ * **新しく書かれる形は運用選択 `ALTEROID_WORKSPACE_KIND` で決まる**
+ * （`manager.ts` の `resolveWorkspacePolicy` → `workspaceLocatorFrom`）。
+ * 設定が無い・読めない（`=git` で `ALTEROID_WORKSPACE_REPOSITORY` が無いときも）
+ * ときは `unknown` へ倒れる。デーモンには永続性を確かめる手段がまだ無いからで、
+ * 詳しい理由はその変種の doc に在る。いまの配備はこれを設定していないので、
+ * 本番で書かれるのは `unknown` である（#1376）。
+ * `runner-volume` は、運用者が `ALTEROID_WORKSPACE_KIND=runner-volume` と明示
+ * したときに書かれるほかは、**それ以前に書かれた行が名乗っている値**であり、確かめた
+ * 結果ではない（「それ以前」は `unknown` が入った #216 より前）— 新旧で意味が
+ * 違うので、読むときに混ぜないこと。
  */
 export const workspaceLocatorSchema = z.discriminatedUnion('kind', [
   /** その runner に固定された volume。M4 の既定。 */
