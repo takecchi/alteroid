@@ -94,3 +94,60 @@ describe('memory_list の cursor は、親の slug が子より大きくても�
     });
   });
 });
+
+describe('memory_list の頁送り: 親子が入り乱れても、必ず進み・欠落しない（#2510）', () => {
+  // 決まった種から作る擬似乱数（失敗を再現できるように）。
+  function rng(seed: number): () => number {
+    let s = seed;
+    return () => {
+      s = (s * 1664525 + 1013904223) % 4294967296;
+      return s / 4294967296;
+    };
+  }
+
+  it('親の向き（slug の大小）をばらした 40 通りで、from が厳密に増え、全文書に届く', () => {
+    const long = 'あ'.repeat(120);
+    for (let seed = 1; seed <= 40; seed++) {
+      const rand = rng(seed);
+      const slugs = Array.from({ length: 160 }, (_, i) => `s${String(i).padStart(3, '0')}`);
+      const documents = slugs.map((slug, i) => {
+        // 約半数に、自分より前・後ろどちらの slug にもなりうる親を付ける（自己参照は除く）。
+        const parentIndex = Math.floor(rand() * slugs.length);
+        const parent = rand() < 0.5 && parentIndex !== i ? slugs[parentIndex] : undefined;
+        return doc(slug, parent, long);
+      });
+      const seen = new Set<string>();
+      let previousIndex = -1;
+      let cursor: string | undefined;
+      let finished = false;
+      for (let i = 0; i < documents.length + 1; i++) {
+        const listing = page(documents, cursor);
+        for (const d of documents) if (listing.includes(`- [fact] ${d.slug}:`)) seen.add(d.slug);
+        const next = nextCursor(listing);
+        if (next === undefined) {
+          finished = true;
+          break;
+        }
+        const decoded = decodeMemoryCursor(next);
+        const from = decoded.ok ? decoded.cursor.from : '?';
+        const index = documents.findIndex((d) => d.slug === from);
+        expect(index, `seed=${String(seed)} 頁 ${String(i)}`).toBeGreaterThan(previousIndex);
+        previousIndex = index;
+        cursor = next;
+      }
+      expect({ seed, finished, missing: documents.length - seen.size }).toEqual({
+        seed,
+        finished: true,
+        missing: 0,
+      });
+    }
+  });
+
+  it('cursor 無しの1頁目は、錨を渡さない描き方と同じ（1頁目の表示は変わらない）', () => {
+    const documents = [doc('a', 'z', '子'), doc('m', undefined, '根'), doc('z', undefined, '親')];
+    const entries = documents.map((d) => ({ ...d }));
+    expect(page(documents, undefined)).toBe(
+      renderMemoryListing(entries, { total: documents.length }),
+    );
+  });
+});
