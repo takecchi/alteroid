@@ -82,7 +82,17 @@ describe('github_observation_record（#2245 段2）', () => {
     expect(reply).toContain('取れなかった回として記録した');
     const [row] = await stores.journal.list({ types: ['github_observation'] });
     expect(row).toMatchObject({ result: { status: 'failed', reason: 'gh: HTTP 502' } });
-    expect(JSON.stringify(row)).not.toMatch(/openIssues|openPulls|99/);
+    // 数は鍵でも値でも混ざらない。`result` は status と reason だけ（余分な鍵があれば落ちる）。
+    // 行全体を `/99/` で照合すると、`at` の時刻のミリ秒（例: `42.994Z`）に当たって揺れる
+    // （PR #2578 の CI、2026-10-02）。だから数は「前後が数字でも小数点でもない 99」として見る。
+    if (row?.type !== 'github_observation') throw new Error('github_observation の行のはず');
+    expect(row.result).toEqual({
+      status: 'failed',
+      reason: 'gh: HTTP 502',
+    });
+    const json = JSON.stringify(row);
+    expect(json).not.toMatch(/"openIssues"|"openPulls"/);
+    expect(json).not.toMatch(/(?<![\d.])99(?![\d.])/);
   });
 
   it('observedBy を引数で上書きできない', async () => {
