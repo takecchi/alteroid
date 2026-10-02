@@ -7,7 +7,6 @@ import { isSubmitShortcut } from '../chat/ime';
 import { Timestamp } from '../timestamp';
 import {
   ApprovalQuestionsForm,
-  summarizeApprovalQuestions,
   type ApprovalQuestionView,
   type ApprovalQuestionsAnswer,
 } from './approval-questions';
@@ -62,6 +61,7 @@ export function ApprovalCard({
   trailing,
   isSubmitKey = isSubmitShortcut,
   questions,
+  questionsSummary,
   onSubmitQuestions,
 }: {
   state: ApprovalState;
@@ -90,6 +90,12 @@ export function ApprovalCard({
   isSubmitKey?: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   /** 設問つきの承認待ちの設問（無い・空なら普通の回答欄）。 */
   questions?: readonly ApprovalQuestionView[];
+  /**
+   * 設問の1行の要約（一覧・閉じた状態に出す）。**文言は呼ぶ側が作って渡す**（ui は logic も core も
+   * import しない。定義は `@alteroid/core/approval-questions-format`、画面は `@alteroid/logic` の
+   * `summarizeQuestions` から引く）。
+   */
+  questionsSummary?: string;
   /** 設問のフォームの「回答」で呼ぶ。 */
   onSubmitQuestions?: (answer: ApprovalQuestionsAnswer) => void;
 }) {
@@ -199,9 +205,7 @@ export function ApprovalCard({
       ) : hasQuestions ? (
         <div className="mt-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">
-              {summarizeApprovalQuestions(questions)}
-            </span>
+            <span className="text-[11px] text-muted-foreground">{questionsSummary}</span>
             <Button
               size="sm"
               aria-expanded={questionsOpen}

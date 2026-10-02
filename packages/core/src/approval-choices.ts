@@ -9,7 +9,10 @@
  * 構造そのものは `PendingApproval.selections` に残り、畳んだ文は
  * `PendingApproval.answer` と日誌の `escalation` の回答に入る（`Clone#answerApproval`）。
  */
+import { optionMarker } from './approval-questions-format.js';
 import type { ApprovalQuestion, ApprovalSelection } from './schema.js';
+
+export { describeQuestionLines, summarizeQuestions } from './approval-questions-format.js';
 
 /**
  * `questions` の中身の検査（道具の入力）。問題が無ければ `null`、あれば人間・クローンが
@@ -87,11 +90,6 @@ export function describeSelectionsViolation(
   return null;
 }
 
-/** `(a)` `(b)` … `(z)`、27 番目以降は `(27)` と数字にする。 */
-function optionMarker(index: number): string {
-  return index < 26 ? `(${String.fromCharCode(97 + index)})` : `(${index + 1})`;
-}
-
 /**
  * 回答を人間が読める文へ畳む。**設問・選んだ選択肢のラベル・その他の文・補足が全部読める**
  * こと、答えの無い設問は「未回答」と出すことが約束で、`PendingApproval.answer` と日誌の
@@ -131,36 +129,4 @@ export function foldSelections(
   const note = supplement?.trim();
   if (note !== undefined && note !== '') lines.push(`補足: ${note}`);
   return lines.join('\n');
-}
-
-/**
- * 設問と選択肢を人間・クローンが読む行にする（`approvals_list id=…` の詳細と CLI の詳細が
- * 通る。一覧には使わない——一覧は件数だけを出す: {@link summarizeQuestions}）。
- * 推奨の印・単一か複数か・その他を書けるか・答えるときの id を全部出す。
- */
-export function describeQuestionLines(questions: readonly ApprovalQuestion[]): string[] {
-  const lines: string[] = [];
-  questions.forEach((question, index) => {
-    const kind = question.multiple === true ? '複数選択可' : '単一選択';
-    const other = question.allowOther === false ? 'その他は書けない' : 'その他を書ける';
-    lines.push(`Q${index + 1} [id=${question.id}] ${question.prompt}（${kind}・${other}）`);
-    question.options.forEach((option, at) => {
-      lines.push(
-        `  ${optionMarker(at)} [id=${option.id}] ${option.label}` +
-          (option.recommended === true ? '［推奨］' : '') +
-          (option.description === undefined ? '' : ` — ${option.description}`),
-      );
-    });
-  });
-  return lines;
-}
-
-/** 一覧に出す1行ぶんの要約（件数と、単一・複数の内訳だけ。本文は出さない）。 */
-export function summarizeQuestions(questions: readonly ApprovalQuestion[]): string {
-  const multiple = questions.filter((question) => question.multiple === true).length;
-  return (
-    `設問 ${questions.length} 件` +
-    (multiple === 0 ? '' : `（うち複数選択 ${multiple}）`) +
-    '（選択肢つき）'
-  );
 }

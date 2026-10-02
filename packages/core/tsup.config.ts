@@ -155,6 +155,7 @@ export default defineConfig({
     'src/system-error-format.ts',
     'src/unpushed-work-observation-format.ts',
     'src/journal-diagnostics-format.ts',
+    'src/approval-questions-format.ts',
   ],
   format: ['esm'],
   dts: true,

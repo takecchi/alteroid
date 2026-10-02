@@ -12,9 +12,9 @@ import {
   ApprovalCard,
   ApprovalQuestionsForm,
   buildApprovalAnswer,
-  summarizeApprovalQuestions,
   type ApprovalQuestionView,
 } from '@alteroid/ui';
+import { summarizeQuestions } from '@alteroid/logic';
 
 afterEach(cleanup);
 
@@ -183,8 +183,16 @@ describe('ApprovalCard と設問', () => {
   };
 
   it('一覧では設問を全文で出さず、要約1行と開くボタンだけ（開くまでフォームは見えない）', () => {
-    render(<ApprovalCard {...base} questions={questions} />);
-    expect(screen.getByText(summarizeApprovalQuestions(questions))).toBeTruthy();
+    render(
+      <ApprovalCard
+        {...base}
+        questions={questions}
+        questionsSummary={summarizeQuestions(questions)}
+      />,
+    );
+    // **文言を直に書く。** 旧い写し（ui の `summarizeApprovalQuestions`、#2558 で消した）が返していた文字列と
+    // 同じであること（3 設問・うち複数選択 1）。要約は ui ではなく呼ぶ側が作って渡す。
+    expect(screen.getByText('設問 3 件（うち複数選択 1）（選択肢つき）')).toBeTruthy();
     expect(screen.queryByRole('radio')).toBeNull();
     const open = screen.getByRole('button', { name: '選択肢を開いて答える' });
     fireEvent.click(open);

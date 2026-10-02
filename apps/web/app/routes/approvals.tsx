@@ -22,7 +22,7 @@ import {
   useApprovals,
   useConversation,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative } from '@alteroid/logic';
+import { formatDateTime, formatRelative, summarizeQuestions } from '@alteroid/logic';
 import type { PendingApproval, UnreadableApproval } from '@alteroid/logic';
 
 function isAnswered(approval: PendingApproval): boolean {
@@ -373,6 +373,11 @@ function ApprovalEntry({
       onDraftChange={onDraftChange}
       onSubmit={(text) => void submit(text)}
       questions={approval.questions ?? undefined}
+      questionsSummary={
+        approval.questions && approval.questions.length > 0
+          ? summarizeQuestions(approval.questions)
+          : undefined
+      }
       onSubmitQuestions={(answer) => void submitQuestions(answer)}
       busy={busy}
       // 長文になりうるので Enter は改行のまま。送信は Cmd/Ctrl+Enter（部品の既定

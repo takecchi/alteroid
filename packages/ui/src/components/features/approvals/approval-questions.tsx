@@ -37,16 +37,6 @@ export interface ApprovalQuestionsAnswer {
   supplement?: string;
 }
 
-/** 設問の1行の要約（一覧・閉じた状態に出す。本文は出さない）。 */
-export function summarizeApprovalQuestions(questions: readonly ApprovalQuestionView[]): string {
-  const multiple = questions.filter((question) => question.multiple === true).length;
-  return (
-    `設問 ${questions.length} 件` +
-    (multiple === 0 ? '' : `（うち複数選択 ${multiple}）`) +
-    '（選択肢つき）'
-  );
-}
-
 /** 設問1つぶんの入力の状態。 */
 interface DraftOf {
   /** 選んだ選択肢の id（単一選択では高々1つ）。 */

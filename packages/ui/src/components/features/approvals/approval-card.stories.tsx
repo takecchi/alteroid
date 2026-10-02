@@ -128,6 +128,7 @@ export const WithQuestions: Story = {
         ],
       },
     ],
+    questionsSummary: '設問 2 件（うち複数選択 1）（選択肢つき）',
     onSubmitQuestions: () => undefined,
   },
 };
