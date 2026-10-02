@@ -11,6 +11,7 @@ import {
   buildWorkerPrompt,
   PROMPT_CHARACTER_BUDGET,
 } from './prompt.js';
+import { matchesManagerScratchDirName } from './unpushed-work.js';
 
 /**
  * マネージャーのシステムプロンプトに書く「委譲の指針」を守るテスト。
@@ -187,8 +188,8 @@ describe('作業ツリーの指示文書への到達経路', () => {
  * 作った後**である。置き場所を決める時点では到達経路が1つも無い。
  *
  * 文言そのものではなく、**事実を告げていること**と、**そこから何をするか（`cwd` そのものを
- * 作業ツリーにしない）を告げていること**と、**置き場所を指図していないこと**の3つに歯を当てる。
- * 最後のひとつが消えると、alteroid 専用の運用スタイルがプロンプトへ入る。
+ * 作業ツリーにしない）を告げていること**と、**置き場所の指図が探索の規則に当たる1つのパスだけであること（#1266）**の3つに歯を当てる。
+ * 最後のひとつが崩れると、alteroid 専用の運用スタイルがプロンプトへ入る。
  */
 describe('器が共有であることの告知', () => {
   it('マネージャーに、`cwd` が自分専用ではないという事実を告げている', () => {
@@ -216,30 +217,63 @@ describe('器が共有であることの告知', () => {
     expect(prompt).toContain('あなたの側は最後まで緑');
   });
 
-  it('置き場所は指図していない（alteroid 専用の記述にしない）', () => {
-    // マネージャーは人間の任意のプロジェクトを触るので、`/tmp` や `/workspace` の
-    // ような具体のパスは書けない。書くのは事実だけで、どこへ clone するかの判断は
-    // 読み手に残す（north_star の「一運用スタイルを要件のように書かない」）。
-    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
-    expect(prompt).not.toContain('/tmp');
+  // 実物の委譲 id の形（`mgr-` + 16進8桁 + …）。`mgr-test` は16進ではないので規則に当たらない。
+  const REAL_ID = 'mgr-7305184d-0a1b-4c2d-8e3f-123456789abc';
+
+  /** プロンプトが置き場所として書いた `/tmp` 直下の名前（`<何か>` は具体の文字へ置き換える）。 */
+  function scratchNamesIn(prompt: string): string[] {
+    const filled = prompt.replaceAll('<何か>', 'x');
+    return [...filled.matchAll(/\/tmp\/([^\s`)/]+)/g)].map((m) => m[1] ?? '');
+  }
+
+  it('置き場所を `/tmp/mgr-<自分の委譲 id の先頭8桁>` と名指しし、複数なら `-<何か>` を付けると書いている（#1266）', () => {
+    const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
+    expect(prompt).toContain('/tmp/mgr-7305184d');
+    expect(prompt).toContain('/tmp/mgr-7305184d-<何か>');
+    // 理由（器が消えたとき台帳から引ける場所はここだけ）まで書いている。
+    expect(prompt).toContain('台帳から引ける');
+  });
+
+  it('⭐ プロンプトが例として書く置き場所は、未 push 観測の探索の規則に実際に当たる（#1266）', () => {
+    // 文言と `unpushed-work.ts` の規則（`matchesManagerScratchDirName`）がずれたら赤くなる歯。
+    const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
+    const names = scratchNamesIn(prompt);
+    // 素の名前・`-<何か>` 付き・例の3つ以上が拾えていること（空振りで緑にならない）。
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    for (const name of names) {
+      expect(matchesManagerScratchDirName(name, REAL_ID), name).toBe(true);
+    }
+  });
+
+  it('陰性対照: 実際に使われていた `/tmp/b-96878531-1834` の形や、別の委譲の名前は規則に当たらない', () => {
+    // 規則の関数が何でも通す形になっていたら、上の歯は何も測っていない。
+    expect(matchesManagerScratchDirName('b-96878531-1834', REAL_ID)).toBe(false);
+    const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
+    for (const name of scratchNamesIn(prompt)) {
+      expect(matchesManagerScratchDirName(name, 'mgr-1cbff9a2-0000')).toBe(false);
+    }
+  });
+
+  it('置き場所の指図は `/tmp/mgr-<id の先頭>` の1つだけで、他の具体のパスは書かない', () => {
+    // #191 の線は「プロジェクトの運用を書かない」。#1266 で動かしたのは観測の規則に合わせた
+    // この1つのパスだけである。
+    const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
     expect(prompt).not.toContain('/workspace');
   });
 
-  it('具体のパスが1つも現れない（`/tmp` `/workspace` 以外も含めて）', () => {
-    // 直上の歯は `/tmp` と `/workspace` の2語しか見ていないので、親切心で別の絶対パス
-    // （`/home/...` や `/var/...`）を書き足す形は止まらない。#191 の線は「置き場所を
-    // 名指ししない」であって「この2語を書かない」ではないため、語ではなく形で見る。
+  it('具体のパスが、置き場所の1つを除いて現れない（`/tmp` 以外の根も含めて）', () => {
+    // 語ではなく形で見る。#1266 の置き場所（`/tmp/mgr-<16進8桁>`＋任意の `-…`）だけを先に除く。
     //
     // ⚠️ **この歯が拾えない範囲を明示しておく。** 測っているのは「下に列挙した接頭辞が
     // 現れないこと」であって、「具体のパスが1つも現れないこと」ではない。**列挙外の形は
     // 通る** — 別の根（`/srv2` のような列挙漏れ）・相対パス（`../repo`）・`~` 展開
     // （`~/work`）・文の中に埋め込まれた断片などである。**#191 の線は「置き場所を
-    // 名指ししない」であって「この列挙に当たらない」ではない。** 新しい形で置き場所を
-    // 書いた人は、この歯に当たらなくても線を破っている — 網が全部を覆っていると
-    // 読まれるほうが、覆っていないと分かっているより悪い。
-    const prompt = buildManagerSystemPrompt({ managerId: 'mgr-test', workerName: 'worker' });
+    // 名指ししない」であって「この列挙に当たらない」ではない**（#1266 で動かしたのは
+    // 観測の規則に合わせた1点だけ）。
+    const prompt = buildManagerSystemPrompt({ managerId: REAL_ID, workerName: 'worker' });
+    const withoutScratch = prompt.replaceAll(/\/tmp\/mgr-[0-9a-f]{8}(?:-[^\s`)]*)?/g, '');
     const paths =
-      prompt.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
+      withoutScratch.match(/\/(?:tmp|workspace|home|root|var|usr|opt|mnt|srv|Users|data)\b/g) ?? [];
     expect(paths).toEqual([]);
   });
 });
