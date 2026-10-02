@@ -34,8 +34,11 @@ import { collectRepoFiles } from './repo-scan-files.js';
  *     ように配列へ積んでから `c.json({ results })` で返す口を取りこぼさないため）。
  *     省略形の `{ error }` は、`error` が `catch (error)` の変数そのものなら数える。
  *
- * 素のエラーの文字列化とは、次のどれか（`<e|err|error|cause|failure>`）:
- * `String(<id>)` / `<id>.message` / テンプレートの `${<id>}`。
+ * 素のエラーの文字列化とは、次のどれか（#2606 で広げた）。`<id>` はエラーを指す識別子で、
+ * **`catch (<任意の名前>)` / `.catch((<任意の名前>) => …)` の束縛**（名前を問わない）か、
+ * 束縛の無い断片のための補助の名前（`ERROR_NAMES`）:
+ * `String(<id>)` / `<id>.message` / `<id>.stack` / `<id>.cause`（`<id>["message"]` も）/
+ * テンプレートの `${<id>}` / `<id>.toString()` / `JSON.stringify(<id>)` / `<id> + …`・`… + <id>`。
  *
  * **一度別の変数へ入れてから書く形も見る**（#2538）。同じ関数（`this.#x` の形は同じクラス）の中で、
  * 素のエラーの文字列化を含む式を `const message = …` / `this.#last = …` へ入れ、その
@@ -44,28 +47,52 @@ import { collectRepoFiles } from './repo-scan-files.js';
  * ## 数えない形
  * - **伏せ字を通したもの。** `reasonOf` / `redactErrorText` / `redactSecretsInText` /
  *   `collapseErrorCause` の呼び出しの引数の中に在る文字列化。
- * - **型で絞った自前の例外。** 同じ識別子について `<id> instanceof <Class>`（`Error` 以外）が
+ * - **型で絞った自前の例外。** 同じ識別子について `<id> instanceof <Class>`（`Class` は
+ *   `ALLOWED_CUSTOM_CLASSES` の許可リストに在るものだけ。#2606）が
  *   真のときだけ通る枝の中（`if` の then 側・三項演算子の真の側）。返してよい例外かどうかは
  *   型で分ける、という `reasonOf` の doc の線（例: `TokenPoolInputError`）。
  *   `instanceof Error` は絞りにならない（検出する）。
  * - **`.name` で絞った枝（#2570）。** `<id>.name === '<文字列リテラル>'`（`==` も。リテラルが
- *   `'Error'` 以外）が真のときだけ通る枝。`instanceof` と同じ扱い。`&&` の連なりに1つでも在れば絞りとみなす
+ *   `ALLOWED_NAME_LITERALS` の許可リストに在るリテラルだけ。#2606）が真のときだけ通る枝。`instanceof` と同じ扱い。`&&` の連なりに1つでも在れば絞りとみなす
  *   （例: `error instanceof Error && error.name === 'InvalidApprovalSelectionsError' ? error.message : …`）。
  * - **早期に抜ける形の絞り込み（#2570）。** 同じブロックの前の文に
  *   `if (!(<id> instanceof X)) throw …;`（または `return …;`）が在れば、後続の文は絞られたとみなす。
- *   `.name` の比較を否定した形（`if (!(<id>.name === '…')) throw …`）も同じ。`X` が `Error` なら絞りにならない。
+ *   `.name` の比較を否定した形（`if (!(<id>.name === '…')) throw …`）も同じ。`X` が許可リストに無ければ絞りにならない。
  *
  * ## 何を見ないか（取りこぼす形）
  * - zod の `parsed.error.message` のように、`error` 名の識別子ではないもの
  * - 上の2ファイル以外の HTTP の応答（`c.json`）。他のファイルは走査しない
  * - 関数をまたぐ受け渡し（引数・戻り値・別の関数が読むフィールド）。同じ関数内の代入だけを追う
+ * - 別名・分割代入（`const e2 = error` / `const { message } = error`）と、配列へ入れて `join` する形（#2606 で確認した取りこぼし）
  * - `apps/cli`（利用者自身の端末へ出す文）
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const EXCLUDE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.react-router', '.vite']);
 const SCAN_ROOTS = ['apps/daemon/src/', 'apps/runner/src/', 'packages/core/src/'];
+/**
+ * エラーを指す識別子とみなす名前。**catch の束縛・`.catch((x) => …)` の引数は、名前を問わず
+ * 束縛で判定する**（`isErrorRef`、#2606）。この一覧は、束縛が無い断片（純粋関数のフィクスチャ、
+ * 関数の引数で受けたエラー）を拾う補助で、一覧に無い名前の catch も検出する。
+ */
 const ERROR_NAMES = new Set(['e', 'err', 'error', 'cause', 'failure']);
+/**
+ * **絞りとして認める自前の例外クラスの許可リスト**（#2606）。`message` が値を含まないと
+ * 確かめたクラスだけをここへ足す。`<id> instanceof X` の `X` がここに無ければ絞りとみなさない
+ * （`instanceof Error` と同じに検出する）。
+ */
+const ALLOWED_CUSTOM_CLASSES = new Set<string>([
+  'JournalAnchorNotFoundError',
+  'InvalidCursorError',
+  'UnreadableApprovalError',
+  'CredentialEntryRejectedError',
+  'TokenPoolInputError',
+]);
+/**
+ * **絞りとして認める `<id>.name === '<リテラル>'` のリテラルの許可リスト**（#2606）。
+ * ここに無いリテラルの比較は絞りとみなさない。
+ */
+const ALLOWED_NAME_LITERALS = new Set<string>(['InvalidApprovalSelectionsError']);
 /** 引数の中の文字列化を伏せ字に通す関数。 */
 const REDACTORS = new Set([
   'reasonOf',
@@ -120,7 +147,7 @@ function isNameLiteralCheck(cond: ts.BinaryExpression, id: string): boolean {
     ts.isIdentifier(e.expression) &&
     e.expression.text === id;
   const isNarrowLiteral = (e: ts.Expression): boolean =>
-    ts.isStringLiteralLike(e) && e.text !== 'Error';
+    ts.isStringLiteralLike(e) && ALLOWED_NAME_LITERALS.has(e.text);
   return (
     (isNameOfId(cond.left) && isNarrowLiteral(cond.right)) ||
     (isNameOfId(cond.right) && isNarrowLiteral(cond.left))
@@ -139,7 +166,8 @@ function impliesCustomInstanceof(cond: ts.Expression, id: string): boolean {
       return (
         ts.isIdentifier(cond.left) &&
         cond.left.text === id &&
-        !(ts.isIdentifier(cond.right) && cond.right.text === 'Error')
+        ts.isIdentifier(cond.right) &&
+        ALLOWED_CUSTOM_CLASSES.has(cond.right.text)
       );
     }
     if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
@@ -199,39 +227,104 @@ function narrowedToCustomClass(node: ts.Node, id: string): boolean {
   return false;
 }
 
+/** `node` が、`.catch((<id>) => …)` / `.catch(function (<id>) {…})` の引数 `<id>` を読める所に在るか。 */
+function isCatchCallbackParam(node: ts.Node, id: string): boolean {
+  for (let cur: ts.Node | undefined = node.parent; cur !== undefined; cur = cur.parent) {
+    if (
+      (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) &&
+      ts.isCallExpression(cur.parent) &&
+      ts.isPropertyAccessExpression(cur.parent.expression) &&
+      cur.parent.expression.name.text === 'catch' &&
+      cur.parent.arguments.includes(cur)
+    ) {
+      const first = cur.parameters[0];
+      if (first !== undefined && ts.isIdentifier(first.name) && first.name.text === id) return true;
+    }
+  }
+  return false;
+}
+
 /**
- * 式の部分木に在る、素のエラーの文字列化（String(error) / error.message / ${error}）。
- * 伏せ字の関数の呼び出しの中と、自前の例外の型で絞った枝の中は数えない。
+ * `node` が、エラーを指す識別子か（#2606）。名前の一覧ではなく**束縛**で決める:
+ * `catch (<任意の名前>)` の中、または `.catch((<任意の名前>) => …)` の中でその名前を読む識別子。
+ * 束縛が無い断片のために `ERROR_NAMES` も補助として数える。
+ */
+function isErrorRef(node: ts.Node): node is ts.Identifier {
+  if (!ts.isIdentifier(node)) return false;
+  return (
+    ERROR_NAMES.has(node.text) ||
+    isCatchVariable(node, node.text) ||
+    isCatchCallbackParam(node, node.text)
+  );
+}
+
+/** エラーの文字列化に使われるプロパティ（`error.message` / `.stack` / `.cause`）。 */
+const LEAKY_PROPS = new Set(['message', 'stack', 'cause']);
+
+/**
+ * 式の部分木に在る、素のエラーの文字列化。伏せ字の関数の呼び出しの中と、許可リストの
+ * 自前の例外の型で絞った枝の中は数えない。拾う形（`<err>` はエラーを指す識別子）:
+ * `String(<err>)` / `<err>.message|stack|cause`（`<err>['message']` も）/ `${<err>}` /
+ * `<err>.toString()` / `JSON.stringify(<err>)` / `<err> + …`・`… + <err>`（`+=` の右辺も）。
  */
 function bareErrorNodes(root: ts.Node): ts.Node[] {
   const found: ts.Node[] = [];
-  const add = (node: ts.Node, id: string): void => {
-    if (!narrowedToCustomClass(node, id)) found.push(node);
+  const add = (node: ts.Node, id: ts.Identifier): void => {
+    if (!narrowedToCustomClass(node, id.text)) found.push(node);
   };
   const inspect = (node: ts.Node): void => {
     if (isRedactorCall(node)) return;
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === 'String' &&
-      node.arguments.length === 1 &&
-      ts.isIdentifier(node.arguments[0]!) &&
-      ERROR_NAMES.has(node.arguments[0].text)
-    ) {
-      add(node, node.arguments[0].text);
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const arg = node.arguments[0];
+      if (
+        ts.isIdentifier(callee) &&
+        callee.text === 'String' &&
+        node.arguments.length === 1 &&
+        arg !== undefined &&
+        isErrorRef(arg)
+      ) {
+        add(node, arg);
+      } else if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === 'toString' &&
+        isErrorRef(callee.expression)
+      ) {
+        add(node, callee.expression);
+      } else if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === 'stringify' &&
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === 'JSON' &&
+        arg !== undefined &&
+        isErrorRef(arg)
+      ) {
+        add(node, arg);
+      }
     } else if (
       ts.isPropertyAccessExpression(node) &&
-      node.name.text === 'message' &&
-      ts.isIdentifier(node.expression) &&
-      ERROR_NAMES.has(node.expression.text)
+      LEAKY_PROPS.has(node.name.text) &&
+      isErrorRef(node.expression)
     ) {
-      add(node, node.expression.text);
+      add(node, node.expression);
     } else if (
-      ts.isTemplateSpan(node) &&
-      ts.isIdentifier(node.expression) &&
-      ERROR_NAMES.has(node.expression.text)
+      ts.isElementAccessExpression(node) &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      LEAKY_PROPS.has(node.argumentExpression.text) &&
+      isErrorRef(node.expression)
     ) {
-      add(node.expression, node.expression.text);
+      add(node, node.expression);
+    } else if (ts.isTemplateSpan(node) && isErrorRef(node.expression)) {
+      add(node.expression, node.expression);
+    } else if (
+      ts.isBinaryExpression(node) &&
+      (node.operatorToken.kind === ts.SyntaxKind.PlusToken ||
+        node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken)
+    ) {
+      if (node.operatorToken.kind === ts.SyntaxKind.PlusToken && isErrorRef(node.left)) {
+        add(node.left, node.left);
+      }
+      if (isErrorRef(node.right)) add(node.right, node.right);
     }
     ts.forEachChild(node, inspect);
   };
@@ -538,7 +631,7 @@ describe('findBareErrorSinkWrites（純粋関数）: 型で絞った自前の例
     expect(count(ifBare)).toBe(0);
     const ternary = `${sink}(error instanceof TokenPoolInputError ? error.message : '固定');`;
     expect(count(ternary)).toBe(0);
-    const andChain = `${sink}(ok && error instanceof FooError ? error.message : '固定');`;
+    const andChain = `${sink}(ok && error instanceof TokenPoolInputError ? error.message : '固定');`;
     expect(count(andChain)).toBe(0);
   });
   it('変数へ入れる式が型で絞った枝の中なら、その変数も検出しない', () => {
@@ -556,13 +649,19 @@ describe('findBareErrorSinkWrites（純粋関数）: 型で絞った自前の例
     expect(count(ifThen)).toBe(1);
   });
   it('偽の側・else 側・別の識別子で絞った形・|| で繋いだ形は絞りとみなさない', () => {
-    expect(count(`${sink}(error instanceof FooError ? '固定' : error.message);`)).toBe(1);
+    expect(count(`${sink}(error instanceof TokenPoolInputError ? '固定' : error.message);`)).toBe(
+      1,
+    );
     const elseSide = `function f() { try {} catch (error) {
-      if (error instanceof FooError) { return; } else { ${sink}(error.message); }
+      if (error instanceof TokenPoolInputError) { return; } else { ${sink}(error.message); }
     } }`;
     expect(count(elseSide)).toBe(1);
-    expect(count(`${sink}(other instanceof FooError ? error.message : '固定');`)).toBe(1);
-    expect(count(`${sink}(a || error instanceof FooError ? error.message : '固定');`)).toBe(1);
+    expect(count(`${sink}(other instanceof TokenPoolInputError ? error.message : '固定');`)).toBe(
+      1,
+    );
+    expect(
+      count(`${sink}(a || error instanceof TokenPoolInputError ? error.message : '固定');`),
+    ).toBe(1);
   });
 });
 
@@ -605,25 +704,31 @@ describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）',
     const other = `function f(error: string) { results.push({ id, error }); }`;
     expect(count(other, daemon)).toBe(0);
     const narrowed = `function f() { try {} catch (error) {
-      if (error instanceof FooError) results.push({ id, error });
+      if (error instanceof TokenPoolInputError) results.push({ id, error });
     } }`;
     expect(count(narrowed, daemon)).toBe(0);
   });
   it(".name === '<リテラル>' で絞った枝は検出しない", () => {
     const tern =
-      "error instanceof Error && error.name === 'FooError' ? error.message : reasonOf(error)";
+      "error instanceof Error && error.name === 'InvalidApprovalSelectionsError' ? error.message : reasonOf(error)";
     expect(count(`return c.json({ error: ${tern} }, 400);`, daemon)).toBe(0);
     const ifThen = `function f() { try {} catch (error) {
-      if (error instanceof Error && error.name === 'FooError') {
+      if (error instanceof Error && error.name === 'InvalidApprovalSelectionsError') {
         return c.json({ error: error.message }, 400);
       }
     } }`;
     expect(count(ifThen, daemon)).toBe(0);
     expect(
-      count("c.json({ error: error.name == 'FooError' ? error.message : '固定' });", daemon),
+      count(
+        "c.json({ error: error.name == 'InvalidApprovalSelectionsError' ? error.message : '固定' });",
+        daemon,
+      ),
     ).toBe(0);
     expect(
-      count("c.json({ error: ok && 'FooError' === error.name ? error.message : '固定' });", daemon),
+      count(
+        "c.json({ error: ok && 'InvalidApprovalSelectionsError' === error.name ? error.message : '固定' });",
+        daemon,
+      ),
     ).toBe(0);
   });
   it(".name を 'Error' と比べる形・別の識別子・偽の側・!== は絞りとみなさない（対照）", () => {
@@ -631,13 +736,22 @@ describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）',
       count("c.json({ error: error.name === 'Error' ? error.message : '固定' });", daemon),
     ).toBe(1);
     expect(
-      count("c.json({ error: other.name === 'FooError' ? error.message : '固定' });", daemon),
+      count(
+        "c.json({ error: other.name === 'InvalidApprovalSelectionsError' ? error.message : '固定' });",
+        daemon,
+      ),
     ).toBe(1);
     expect(
-      count("c.json({ error: error.name === 'FooError' ? '固定' : error.message });", daemon),
+      count(
+        "c.json({ error: error.name === 'InvalidApprovalSelectionsError' ? '固定' : error.message });",
+        daemon,
+      ),
     ).toBe(1);
     expect(
-      count("c.json({ error: error.name !== 'FooError' ? error.message : '固定' });", daemon),
+      count(
+        "c.json({ error: error.name !== 'InvalidApprovalSelectionsError' ? error.message : '固定' });",
+        daemon,
+      ),
     ).toBe(1);
     expect(count("c.json({ error: error.name === kind ? error.message : '固定' });", daemon)).toBe(
       1,
@@ -648,10 +762,18 @@ describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）',
       ${guard}
       results.push({ id, ok: false, error: error.message });
     } }`;
-    expect(count(early('if (!(error instanceof FooError)) throw error;'), daemon)).toBe(0);
-    expect(count(early('if (!(error instanceof FooError)) { return; }'), daemon)).toBe(0);
-    expect(count(early("if (!(error.name === 'FooError')) throw error;"), daemon)).toBe(0);
-    expect(count(early('if (!(error instanceof FooError) || !ok) throw error;'), daemon)).toBe(0);
+    expect(count(early('if (!(error instanceof TokenPoolInputError)) throw error;'), daemon)).toBe(
+      0,
+    );
+    expect(count(early('if (!(error instanceof TokenPoolInputError)) { return; }'), daemon)).toBe(
+      0,
+    );
+    expect(
+      count(early("if (!(error.name === 'InvalidApprovalSelectionsError')) throw error;"), daemon),
+    ).toBe(0);
+    expect(
+      count(early('if (!(error instanceof TokenPoolInputError) || !ok) throw error;'), daemon),
+    ).toBe(0);
   });
   it('早期に抜ける形の対照: instanceof Error・抜けない・別の識別子・前に無い文は検出する', () => {
     const early = (guard: string): string => `function f() { try {} catch (error) {
@@ -660,17 +782,106 @@ describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）',
     } }`;
     expect(count(early('if (!(error instanceof Error)) throw error;'), daemon)).toBe(1);
     expect(count(early("if (!(error.name === 'Error')) throw error;"), daemon)).toBe(1);
-    expect(count(early('if (!(error instanceof FooError)) log(error);'), daemon)).toBe(1);
-    expect(count(early('if (!(other instanceof FooError)) throw error;'), daemon)).toBe(1);
-    expect(count(early('if (error instanceof FooError) throw error;'), daemon)).toBe(1);
-    expect(count(early('if (!(error instanceof FooError)) throw error; else log();'), daemon)).toBe(
+    expect(count(early('if (!(error instanceof TokenPoolInputError)) log(error);'), daemon)).toBe(
       1,
     );
+    expect(count(early('if (!(other instanceof TokenPoolInputError)) throw error;'), daemon)).toBe(
+      1,
+    );
+    expect(count(early('if (error instanceof TokenPoolInputError) throw error;'), daemon)).toBe(1);
+    expect(
+      count(early('if (!(error instanceof TokenPoolInputError)) throw error; else log();'), daemon),
+    ).toBe(1);
     const after = `function f() { try {} catch (error) {
       results.push({ id, ok: false, error: error.message });
-      if (!(error instanceof FooError)) throw error;
+      if (!(error instanceof TokenPoolInputError)) throw error;
     } }`;
     expect(count(after, daemon)).toBe(1);
+  });
+});
+
+describe('findBareErrorSinkWrites（純粋関数）: 広げた形・catch の束縛・許可リスト（#2606）', () => {
+  const write = 'process.stderr.write';
+  it.each([
+    ['.stack', `${write}(error.stack);`],
+    ['.stack（テンプレート）', `${write}(\`x: \${error.stack}\`);`],
+    ['.cause', `${write}(\`x: \${error.cause}\`);`],
+    ['toString()', `${write}(error.toString());`],
+    ['+ の右辺', `${write}('x ' + error);`],
+    ['+ の左辺', `${write}(error + ' x');`],
+    ['JSON.stringify', `${write}(JSON.stringify(error));`],
+    ["['message']", `${write}(error['message']);`],
+    ["['stack']", `${write}(error["stack"]);`],
+  ])('%s を検出する', (_label, src) => {
+    expect(count(src)).toBe(1);
+  });
+  it('新しい形も、変数へ入れてから書く形で検出する', () => {
+    const src = (init: string): string => `function f() { try {} catch (error) {
+      const s = ${init};
+      ${write}(s);
+    } }`;
+    expect(count(src('error.stack'))).toBe(1);
+    expect(count(src('error.toString()'))).toBe(1);
+    expect(count(src('JSON.stringify(error)'))).toBe(1);
+    expect(count(src("'x ' + error"))).toBe(1);
+  });
+  it('伏せ字を通した新しい形は検出しない', () => {
+    expect(count(`${write}(reasonOf(error.stack));`)).toBe(0);
+    expect(count(`${write}(redactErrorText(JSON.stringify(error), env));`)).toBe(0);
+    expect(count(`${write}(reasonOf(error) + ' x');`)).toBe(0);
+    expect(count(`${write}(error.name);`)).toBe(0);
+    expect(count(`${write}('x' + 'y');`)).toBe(0);
+  });
+  it('catch の束縛は名前を問わず検出する（一覧に無い名前）', () => {
+    const inCatch = (name: string, body: string): string =>
+      `function f() { try {} catch (${name}) { ${body} } }`;
+    expect(count(inCatch('caught', `${write}(String(caught));`))).toBe(1);
+    expect(count(inCatch('boom', `${write}(\`\${boom.message}\`);`))).toBe(1);
+    expect(count(inCatch('ex', `${write}(ex.stack);`))).toBe(1);
+    expect(count(inCatch('thrown', `announce('x ' + thrown);`))).toBe(1);
+    expect(count(inCatch('oops', `const m = String(oops); announce(m);`))).toBe(1);
+  });
+  it('.catch((x) => …) の引数も、名前を問わず検出する', () => {
+    expect(count(`p.catch((caught) => ${write}(String(caught)));`)).toBe(1);
+    expect(count(`p.catch(function (boom) { ${write}(boom.stack); });`)).toBe(1);
+  });
+  it('束縛の外・別の名前の読みは検出しない（対照）', () => {
+    const outside = `function f() { try {} catch (caught) {}
+      const caught = 'x'; ${write}(String(caught)); }`;
+    expect(count(outside)).toBe(0);
+    const otherName = `function f() { try {} catch (caught) { ${write}(String(other)); } }`;
+    expect(count(otherName)).toBe(0);
+    expect(count(`p.then((value) => ${write}(String(value)));`)).toBe(0);
+  });
+  it('許可リストにない自前のクラスで絞った枝は検出する', () => {
+    const sink = 'announce';
+    expect(ALLOWED_CUSTOM_CLASSES.has('SomeUnlistedError')).toBe(false);
+    expect(count(`${sink}(error instanceof SomeUnlistedError ? error.message : '固定');`)).toBe(1);
+    const ifThen = `function f() { try {} catch (error) {
+      if (error instanceof SomeUnlistedError) { ${sink}(error.stack); }
+    } }`;
+    expect(count(ifThen)).toBe(1);
+    expect(count(`${sink}(error instanceof TokenPoolInputError ? error.message : '固定');`)).toBe(
+      0,
+    );
+  });
+  it('許可リストにない .name のリテラルで絞った枝は検出する', () => {
+    const daemon = 'apps/daemon/src/app.ts';
+    expect(ALLOWED_NAME_LITERALS.has('SomeUnlistedError')).toBe(false);
+    expect(
+      count("c.json({ error: error.name === 'SomeUnlistedError' ? error.message : '' });", daemon),
+    ).toBe(1);
+    expect(
+      count(
+        "c.json({ error: error.name === 'InvalidApprovalSelectionsError' ? error.message : '' });",
+        daemon,
+      ),
+    ).toBe(0);
+    const early = `function f() { try {} catch (error) {
+      if (!(error.name === 'SomeUnlistedError')) throw error;
+      results.push({ id, ok: false, error: error.message });
+    } }`;
+    expect(count(early, daemon)).toBe(1);
   });
 });
 

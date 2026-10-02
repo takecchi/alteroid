@@ -11,9 +11,10 @@
  */
 import { readConversationWindow } from './conversation.js';
 import { commitmentActiveDelegationIds, commitmentRespondedAt } from './schema.js';
-import type { Commitment, Job, UnreadableJob } from './schema.js';
+import type { Commitment, Job, JournalEntry, UnreadableJob } from './schema.js';
 import { summarizeProgress } from './progress.js';
 import type { ProgressSummary } from './progress.js';
+import { scanJournalPages } from './journal-scan.js';
 import { GITHUB_OBSERVATION_SCAN_LIMIT, summarizeGithubObservations } from './progress-github.js';
 import type { ProgressGithub } from './progress-github.js';
 import type { Stores } from './store.js';
@@ -175,11 +176,26 @@ export async function readProgress(
   return {
     observedAt: now.toISOString(),
     ...summary,
-    github: summarizeGithubObservations(
-      await stores.journal.list({
-        types: ['github_observation'],
-        limit: GITHUB_OBSERVATION_SCAN_LIMIT,
-      }),
-    ),
+    github: summarizeGithubObservations(await readGithubObservations(stores)),
   };
+}
+
+/**
+ * 日誌の `github_observation` を新しい順に `GITHUB_OBSERVATION_SCAN_LIMIT + 1` 件まで読む（#2603）。
+ * 「先が在る」かは読めた行の数が上限に届いたかでは決められない——pg の `list()` は SQL の `LIMIT` の
+ * 後で読めない行を捨てるので、500 件を要求しても 499 件で返りうる。`scanJournalPages` は短いページを
+ * 終端とみなさず、要求した件数に届くか空ページが返るまで読み継ぐ。
+ */
+async function readGithubObservations(stores: Stores): Promise<JournalEntry[]> {
+  const want = GITHUB_OBSERVATION_SCAN_LIMIT + 1;
+  const found: JournalEntry[] = [];
+  await scanJournalPages(
+    stores.journal,
+    { types: ['github_observation'] },
+    (page) => {
+      found.push(...page);
+    },
+    { pageSize: want, maxScanned: want },
+  );
+  return found;
 }

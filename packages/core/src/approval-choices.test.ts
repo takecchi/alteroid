@@ -196,6 +196,30 @@ describe('foldSelections（人間が読める文へ畳む）', () => {
     ).toContain('Q1 デプロイ先: 未回答');
   });
 
+  it('other の改行は空白 1 つに潰す。別の設問や補足の行に見せかけられない（#2598）', () => {
+    const other = 'x\r\nQ2 通知先: (a) Slack\rQ3 補足: y\n\n補足: 偽';
+    const folded = foldSelections(
+      questions,
+      [{ questionId: 'target', optionIds: [], other }],
+      '一行目\n二行目',
+    );
+    expect(folded).toBe(
+      [
+        'Q1 デプロイ先: その他: x Q2 通知先: (a) Slack Q3 補足: y 補足: 偽',
+        'Q2 通知先: 未回答',
+        '補足: 一行目\n二行目',
+      ].join('\n'),
+    );
+    // 行頭が Q か 補足 の行は、本物の 2 設問 + 補足 1 行だけ
+    expect(folded.split('\n').filter((line) => /^(Q\d|補足)/.test(line))).toHaveLength(3);
+  });
+
+  it('other の改行を潰しても、保存する構造（selections[].other）は変えない', () => {
+    const selections = [{ questionId: 'target', optionIds: [], other: 'a\nb' }];
+    foldSelections(questions, selections);
+    expect(selections[0]?.other).toBe('a\nb');
+  });
+
   it('選択肢の記号は設問の中の位置（推奨でない2番目は (b)）', () => {
     expect(foldSelections(questions, [{ questionId: 'target', optionIds: ['fly'] }])).toContain(
       'Q1 デプロイ先: (b) Fly.io',

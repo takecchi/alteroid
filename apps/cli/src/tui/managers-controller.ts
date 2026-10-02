@@ -159,9 +159,10 @@ export class ManagersController {
 
   // --- 一覧 ---------------------------------------------------------------
 
-  /** タブを開いたとき。初回だけ読む（以後は journal の合図で取り直す）。 */
+  /** タブを開いたとき。まだ読んでいない（idle）か、前の読みが失敗した（error）ときに読む（以後は journal の合図で取り直す）。 */
   enter(): void {
-    if (this.store.getSnapshot().list.status === 'idle') void this.loadList();
+    const { status } = this.store.getSnapshot().list;
+    if (status === 'idle' || status === 'error') void this.loadList();
   }
 
   /** 先頭の頁から読み直す（絞りの変更・初回）。 */

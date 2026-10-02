@@ -32,7 +32,11 @@ import {
   type UsageLayer,
   type UsageSite,
 } from '@alteroid/core';
-import { ARCHIVE_REMOVED_BYTES_UNIT_NOTE, describeGithubCi } from '@alteroid/core';
+import {
+  ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
+  describeGithubCi,
+  JOURNAL_SEARCH_UNCOVERED_LIST,
+} from '@alteroid/core';
 import {
   CGROUP_EVENTS_UNKNOWN_NOTE,
   formatCgroupEventsNote,
@@ -716,7 +720,7 @@ export async function runSlashCommand(
           const prefix = type === undefined ? '' : `type=${type} に絞った上で、`;
           stdout.write(
             `${prefix}「${q}」に当たる日誌はありません。` +
-              'ただし tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていないので、' +
+              `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていないので、` +
               'そこにだけ書かれている語はここでは当たりません\n',
           );
         }
@@ -1688,23 +1692,48 @@ export async function runSlashCommand(
 
     case '/answer': {
       const [reference, ...answerParts] = rest;
-      // **`--select` / `--other` があれば構造化した回答（issue #2525）。** 無ければ今までどおり
-      // 残り全部を1つの自由文として答える（引用符も解釈しない）。
-      const structured = /(^|\s)--(select|other)(=|\s|$)/.test(line)
-        ? parseStructuredAnswer(tokenizeWithQuotes(line.replace(/^\S+\s*/, '')).slice(1))
-        : null;
-      if (structured !== null && 'error' in structured) {
-        stdout.write(`${structured.error}\n`);
-        return 'ok';
-      }
-      const answer = structured === null ? answerParts.join(' ') : structured.supplement;
-      if (!reference || (answer.length === 0 && structured === null)) {
+      if (!reference) {
         stdout.write('使い方: /answer <番号|id> <回答>\n');
         return 'ok';
       }
       const id = resolveListedId(reference, listed.approvals);
       if (id === null) {
         stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
+        return 'ok';
+      }
+      // **構造化した回答として読むのは、その承認待ちが設問（`questions`）を持つときだけ**
+      // （issue #2583）。`--select` / `--other` の字面が行にあるときだけ、その1件を取ってきて
+      // 確かめる。設問の無い承認待ちには、残り全部を今までどおり1つの自由文として送る
+      // （引用符も解釈しない）。**取れなかったときに黙って自由文へ倒さない** — 設問つきの
+      // 承認待ちへ、構造化のつもりの字面をそのまま自由文として送ってしまうため。
+      let structured: ReturnType<typeof parseStructuredAnswer> | null = null;
+      if (/(^|\s)--(select|other)(=|\s|$)/.test(line)) {
+        const lookup = await client.approvals.$get({ query: { order: 'asc', pending: 'false' } });
+        if (!lookup.ok) {
+          stdout.write(
+            `${await withDetail('承認待ちを読めなかったので、回答を送っていません', lookup)}\n`,
+          );
+          return 'ok';
+        }
+        const { approvals } = await lookup.json();
+        const target = approvals.find((entry) => entry.id === id);
+        if (target === undefined) {
+          stdout.write(`[${reference}] （${id}）は見つからなかったので、回答を送っていません\n`);
+          return 'ok';
+        }
+        if (target.questions !== undefined && target.questions.length > 0) {
+          structured = parseStructuredAnswer(
+            tokenizeWithQuotes(line.replace(/^\S+\s*/, '')).slice(1),
+          );
+        }
+      }
+      if (structured !== null && 'error' in structured) {
+        stdout.write(`${structured.error}\n`);
+        return 'ok';
+      }
+      const answer = structured === null ? answerParts.join(' ') : structured.supplement;
+      if (answer.length === 0 && structured === null) {
+        stdout.write('使い方: /answer <番号|id> <回答>\n');
         return 'ok';
       }
       const response = await client.approvals[':id'].answer.$post({

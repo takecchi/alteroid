@@ -17,6 +17,7 @@
  * 時刻は相対（「3日前」）でしか assert しないので、時間帯には依らない。
  * 待ちは `findBy*` だけで、実時間の `setTimeout` は使わない。
  */
+import { describeGithubCi } from '@alteroid/core';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -472,6 +473,34 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       const text = view.getByText(/3 件の PR を確認/).textContent ?? '';
       expect(text).toContain('success 2 / failure 1 / pending 0');
       expect(text).toContain('必須チェックだけ');
+    });
+
+    it('CI の文言は core の describeGithubCi（原本）と、先頭の「CI: 」を除いて同じ（#2608）', async () => {
+      const cases: Record<string, unknown>[] = [
+        { ci: { pulls: 5, success: 3, failure: 1, pending: 0, checks: '必須チェックだけ' } },
+        { ci: { pulls: 2, success: 2, failure: 0, pending: 0, checks: 'x', truncated: true } },
+        { ciUnavailable: 'HTTP 403' },
+        {},
+      ];
+      for (const extra of cases) {
+        cleanup();
+        stubProgress({
+          body: baseBody({
+            github: {
+              state: 'observed',
+              repos: [
+                { repo: 'x/y', latestOk: { ...okRow.latestOk, ...extra }, latestFailed: null },
+              ],
+              scan: { limit: 500, reachedLimit: false },
+            },
+          }),
+        });
+        renderPage();
+        const view = within(await card('積み上がり'));
+        const original = describeGithubCi(extra as Parameters<typeof describeGithubCi>[0]);
+        expect(original.startsWith('CI: ')).toBe(true);
+        expect(view.getByText(original.slice('CI: '.length))).toBeTruthy();
+      }
     });
 
     it('CI: ciUnavailable は理由を出し、ci が無ければ観測していないと出す（success 0 を作らない）', async () => {

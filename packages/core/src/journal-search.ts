@@ -79,7 +79,7 @@ export type JournalSearchTarget = Readonly<Record<string, unknown>>;
  * だけ書かれている語は、`q` からは見えない。呼び出し口（`journal_read` の
  * 説明文・`GET /journal` の description）はこれを黙らないこと。
  */
-const SEARCHABLE_FIELDS_BY_TYPE = {
+export const SEARCHABLE_FIELDS_BY_TYPE = {
   exchange: ['text'],
   decision: ['decision', 'grounds'],
   token_rotation: ['text', 'noticeText'],
@@ -127,6 +127,34 @@ const SEARCHABLE_FIELDS_BY_TYPE = {
    */
   github_observation: [],
 } as const satisfies Record<JournalEntryType, readonly string[]>;
+
+/**
+ * 照合の対象に**自由文の欄を1つも持たない**種別（`SEARCHABLE_FIELDS_BY_TYPE` の値が `[]`）。
+ * **表から導く** —— 種別を足して `[]` と書けば、下の断りの並びに自動で載る（#2609。
+ * 断りを各所に手書きしていた間は、#2562 / #2573 の2回、表だけ直して断りが置き去りになった）。
+ */
+export const JOURNAL_SEARCH_UNSEARCHABLE_TYPES: readonly JournalEntryType[] = (
+  Object.keys(SEARCHABLE_FIELDS_BY_TYPE) as JournalEntryType[]
+).filter((type) => SEARCHABLE_FIELDS_BY_TYPE[type].length === 0);
+
+/**
+ * 「`q` では探せない」ものの並び（`・` 区切り。素の文）。**呼び出し口の断りはすべてこれを使う**
+ * （`journal_read` の説明文と0件の応答・CLI の `/journal`・Web の `SEARCH_SCOPE_NOTE`）。
+ *
+ * 先頭の `tool_use の input` だけは表に載らない。`tool_use` は `error` を持つので `[]` ではなく、
+ * 外しているのは `input`（上の doc「対象にしていない欄」。3実装で同じ答えにならない）だけである。
+ * それ以外は {@link JOURNAL_SEARCH_UNSEARCHABLE_TYPES}。
+ */
+export const JOURNAL_SEARCH_UNCOVERED_LIST: string = [
+  'tool_use の input',
+  ...JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
+].join('・');
+
+/** {@link JOURNAL_SEARCH_UNCOVERED_LIST} の Markdown 版（各名前をバッククォートで囲む。`GET /journal` の description 用）。 */
+export const JOURNAL_SEARCH_UNCOVERED_LIST_MD: string = [
+  '`tool_use` の `input`',
+  ...JOURNAL_SEARCH_UNSEARCHABLE_TYPES.map((type) => `\`${type}\``),
+].join('・');
 
 /**
  * 照合の対象になる欄の名前を、**重複を潰して名前順に並べた平らな一覧**。

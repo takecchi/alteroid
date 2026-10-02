@@ -1,5 +1,8 @@
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
+import { redactErrorText } from './denial-input-head.js';
+import { redactEnvSecrets } from './redact-env-secrets.js';
+
 /**
  * 「SDK に1つ聞いて、すぐ立ち去る」ための配管。
  *
@@ -16,37 +19,21 @@ import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 export const USAGE_PROBE_TIMEOUT_MS = 20_000;
 
 /**
- * `UsageProbeOptions.env` に渡した値（候補トークンなど）を、文字列から取り除く。
- *
- * **理由の文字列は、呼び出し元が保存したり画面に出したりしうる。** `env` の doc に
- * 書いたとおり「ここへ渡す値は資格そのものになりうる」ので、SDK やその配下が
- * 例外メッセージへ値をそのまま含めて返してきても、`reason` へ漏らさないための
- * 最後の網である。**単純な文字列置換なので、値が変形されて出てきた場合までは
- * 塞げない**（これは「塞げないと分かっていることを塞いだことにしない」ため、
- * ここに明記する）。
- */
-export function redactEnvSecrets(text: string, env: NodeJS.ProcessEnv | undefined): string {
-  if (env === undefined) return text;
-  let result = text;
-  for (const value of Object.values(env)) {
-    if (typeof value === 'string' && value.length > 0) {
-      result = result.split(value).join('[REDACTED]');
-    }
-  }
-  return result;
-}
-
-/**
  * 例外・rejection の理由を、秘密を伏せた1行に丸める。
  *
  * **`error.message` をそのまま出さないのは、ここへ来る値の出所を選べないから
  * である。** SDK やその配下が投げるものは呼び出し側の型宣言に無いので、
  * `redactEnvSecrets` は最後の網として必ず通す。改行は1行目だけを見る
  * （複数行のスタックトレースを理由として持ち帰らない）。
+ *
+ * **伏せ字は 2 段（#2607）。** `env`（このプローブに注入した候補トークンなど）の値は
+ * `redactEnvSecrets` で、Bearer・URL の資格・`params:` の形などは `redactErrorText`
+ * （`denial-input-head.ts`。使い分けの規則は `dropped-record.ts` の `reasonOf` の doc）で伏せる。
+ * 1 行目に畳む形（`name: message`）をここで保つので `reasonOf` ではなく `redactErrorText` を使う。
  */
 export function describeProbeError(error: unknown, env: NodeJS.ProcessEnv | undefined): string {
   const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return redactEnvSecrets(text.split('\n', 1)[0] ?? text, env);
+  return redactErrorText(redactEnvSecrets(text.split('\n', 1)[0] ?? text, env), env);
 }
 
 /**

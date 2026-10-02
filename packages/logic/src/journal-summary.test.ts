@@ -14,11 +14,12 @@
  * 描いているが、そちらのテストは `decision` しか使っていないので
  * `daily_report`/`worker_wait`/`turn_usage` の文言は元々ここにしか無かった）。
  */
+import { describeGithubCi } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
 import type { JournalEntry } from './types.js';
 
-import { summarizeJournalEntry } from './journal-summary.js';
+import { describeGithubCiText, summarizeJournalEntry } from './journal-summary.js';
 
 describe('summarizeJournalEntry — daily_report', () => {
   const REASON = "You've hit your org's monthly spend limit";
@@ -263,5 +264,63 @@ describe('summarizeJournalEntry — escalation（取り下げ #963）', () => {
       answer: 'よい',
     };
     expect(summarizeJournalEntry(answered)).toBe('回答済: 進めてよいですか？');
+  });
+});
+
+describe('summarizeJournalEntry — github_observation の CI（#2608）', () => {
+  type Ok = Extract<
+    Extract<JournalEntry, { type: 'github_observation' }>['result'],
+    { status: 'ok' }
+  >;
+  const observed = (extra: Partial<Ok>): JournalEntry => ({
+    type: 'github_observation',
+    id: 'gh-1',
+    at: '2026-10-02T00:00:00.000Z',
+    repo: 'a/b',
+    query: 'is:open',
+    observedBy: 'clone',
+    result: { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra },
+  });
+  const cases: [string, Partial<Ok>][] = [
+    [
+      'ci あり',
+      { ci: { pulls: 5, success: 3, failure: 1, pending: 0, checks: '必須チェックだけ' } },
+    ],
+    [
+      'ci あり・打ち切り',
+      { ci: { pulls: 2, success: 2, failure: 0, pending: 0, checks: 'x', truncated: true } },
+    ],
+    ['ciUnavailable', { ciUnavailable: 'HTTP 403' }],
+    ['ci も ciUnavailable も無い古い行', {}],
+  ];
+
+  // **core の `describeGithubCi` が文言の持ち主である。** logic の写し（`describeGithubCiText`）と
+  // 要約の1行が、それと1文字も違わないことを固定する。Web の `ciText` は
+  // `apps/web/app/routes/progress.test.tsx` が同じ原本と突き合わせる。
+  it.each(cases)('%s: 要約は core の describeGithubCi と同じ文言を含む', (_label, extra) => {
+    const ok = { status: 'ok', openIssues: 3, openPulls: 2, truncated: false, ...extra } as const;
+    expect(describeGithubCiText(ok)).toBe(describeGithubCi(ok));
+    expect(summarizeJournalEntry(observed(extra))).toBe(
+      `a/b: open Issue 3 件 / open PR 2 件（観測者 clone） / ${describeGithubCi(ok)}`,
+    );
+  });
+
+  it('ciUnavailable の行は、CI を取れなかったことと理由が見える（0 件とは読めない）', () => {
+    const line = summarizeJournalEntry(observed({ ciUnavailable: 'HTTP 403' }));
+    expect(line).toContain('取れなかった — HTTP 403');
+    expect(line).not.toMatch(/success|failure|pending/);
+  });
+
+  it('取れなかった回には CI を作らない', () => {
+    const failed: JournalEntry = {
+      type: 'github_observation',
+      id: 'gh-2',
+      at: '2026-10-02T00:00:00.000Z',
+      repo: 'a/b',
+      query: 'is:open',
+      observedBy: 'clone',
+      result: { status: 'failed', reason: 'HTTP 502' },
+    };
+    expect(summarizeJournalEntry(failed)).toBe('a/b: 取れなかった（観測者 clone）: HTTP 502');
   });
 });

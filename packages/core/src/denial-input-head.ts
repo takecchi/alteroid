@@ -20,7 +20,7 @@
  *   - 秘密らしい名前（`TOKEN` / `KEY` / `SECRET` / `PASSWORD` / `CREDENTIAL` /
  *     `AUTH` を含む）の環境変数の値。ただし{@link SECRET_ENV_VALUE_MIN_LENGTH}
  *     未満の値は対象にしない（`redactEnvSecrets` 自体に長さの下限が無いため。
- *     `usage-probe.ts` の同関数の doc）
+ *     `redact-env-secrets.ts` の同関数の doc）
  *   - 既知のトークンの接頭辞（`ghp_` / `gho_` / `ghs_` / `github_pat_` /
  *     `sk-ant-` / `AKIA`）・`Bearer <token>`・秘密らしい名前への代入
  *     （`NAME=value` / `"NAME":"value"`）・40桁 hex（git の SHA）・
@@ -61,7 +61,7 @@
  */
 
 import { codePointBoundary } from './excerpt.js';
-import { redactEnvSecrets } from './usage-probe.js';
+import { redactEnvSecrets } from './redact-env-secrets.js';
 
 /** 伏せてから切る、最終的な文字数の上限（issue #1105 本文の「先頭最大160字」）。 */
 export const DENIAL_INPUT_HEAD_LIMIT = 160;
@@ -89,7 +89,7 @@ const SECRET_ENV_NAME_PATTERN = /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
 /**
  * これ未満の長さの値は置換の対象にしない。
  *
- * {@link redactEnvSecrets}（`usage-probe.ts`）自体は値の長さに下限を持たない
+ * {@link redactEnvSecrets}（`redact-env-secrets.ts`）自体は値の長さに下限を持たない
  * ——`LANG=C` のような短い値まで置換すると、出力の大半が `[REDACTED]` に
  * 化ける（あの関数の doc）。ここで長さの下限を先に掛けてから渡すことで、
  * その事故を避ける。
@@ -99,7 +99,7 @@ const SECRET_ENV_VALUE_MIN_LENGTH = 8;
 /**
  * `env` から、名前が {@link SECRET_ENV_NAME_PATTERN} に合い・値が
  * {@link SECRET_ENV_VALUE_MIN_LENGTH} 以上のものだけを抜き出し、
- * {@link redactEnvSecrets}（`usage-probe.ts`）へ渡す。
+ * {@link redactEnvSecrets}（`redact-env-secrets.ts`）へ渡す。
  *
  * **`process.env` を丸ごと渡さない。** 上の2条件で候補を絞ってから渡す
  * ——`denial-shape.ts` の「環境変数による最後の網を掛けていない理由」が

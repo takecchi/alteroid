@@ -12,6 +12,7 @@ import type { FC } from 'react';
 
 import { formatElapsedAgo } from '../format.js';
 import type { ManagerRow, ManagerStatus } from './api.js';
+import { oneLine } from './journal-format.js';
 import type { DetailState, ListState } from './managers-controller.js';
 import { glyph, theme } from './theme.js';
 
@@ -32,11 +33,6 @@ const STATUS_LABEL: Record<ManagerStatus, string> = {
 export function filterLabel(filter: ManagerStatus | null): string {
   return filter === null ? 'すべて' : (STATUS_LABEL[filter] ?? filter);
 }
-
-const oneLine = (text: string, limit: number): string => {
-  const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
-};
 
 /** 一覧に出す識別子（先頭の `mgr-` + 8 文字。全文は詳細の頭に出す）。 */
 export function shortId(id: string): string {
@@ -63,6 +59,10 @@ export function managerListLine(row: ManagerRow, now: number): string {
 /** 詳細の注記（観測した分だけ言う。断定しない）。先頭ほど優先。 */
 export function managerNotes(row: ManagerRow): string[] {
   const notes: string[] = [];
+  // 確かめる前に起こし直すと取り返しがつかないので、1 行に連結して末尾が切れる狭い端末でも見えるよう先頭に置く（#2590）。
+  if (row.runnerVanished === true) {
+    notes.push('宛先の器が名簿から消えている（状態は走行中のまま。確かめる前に起こし直さない）');
+  }
   const first = row.waiting[0];
   if (first !== undefined) {
     notes.push(
@@ -79,9 +79,6 @@ export function managerNotes(row: ManagerRow): string[] {
     notes.push(
       `宛先の器が ${row.runnerLostSince} 以降 名乗っていない（この委譲が失われたという意味ではない）`,
     );
-  }
-  if (row.runnerVanished === true) {
-    notes.push('宛先の器が名簿から消えている（状態は走行中のまま。確かめる前に起こし直さない）');
   }
   if (row.sessionMissingSince !== undefined) {
     notes.push(
