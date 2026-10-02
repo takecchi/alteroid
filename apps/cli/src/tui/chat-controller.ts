@@ -15,6 +15,7 @@
  */
 import type { ChatEvent, ConversationSummary, TuiApi } from './api.js';
 import type { LogEntry, LogKind } from './log.js';
+import { redactBody, redactedErrorMessage, redactError } from '../redact.js';
 import { Store } from './store.js';
 
 export interface ChatState {
@@ -42,8 +43,7 @@ export const initialChatState: ChatState = {
   pendingAsk: null,
 };
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = redactedErrorMessage;
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -154,7 +154,11 @@ export class ChatController {
         this.set({ transient: `${event.tool} を実行中…` });
         break;
       case 'text':
-        this.store.update((s) => ({ ...s, streaming: s.streaming + event.text, transient: null }));
+        this.store.update((s) => ({
+          ...s,
+          streaming: redactBody(s.streaming + event.text),
+          transient: null,
+        }));
         break;
       case 'ask_human':
         this.flushStreaming();
@@ -162,7 +166,7 @@ export class ChatController {
         // 既存 CLI の `/answer <id> <回答>` と Web の承認待ちの画面からも答えられる。
         this.push(
           'ask',
-          `確認したいことがある（承認待ち ${event.approvalId}）: ${event.question}\n` +
+          `確認したいことがある（承認待ち ${event.approvalId}）: ${redactBody(event.question)}\n` +
             `答えるには、Esc のあと a（承認待ちの詳細が開く）か /approvals ${event.approvalId}。` +
             `alteroid chat の /answer ${event.approvalId} <回答>、Web の承認待ちの画面からも答えられる`,
         );
@@ -173,12 +177,12 @@ export class ChatController {
         // 文言は要約しない（人間が検索できる形を保つ）。発言は捨てられていないことを添える。
         this.push(
           'system',
-          `${event.message}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
+          `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
         );
         break;
       case 'error':
         this.flushStreaming();
-        this.push('error', event.message);
+        this.push('error', redactError(event.message));
         break;
       case 'done':
         this.flushStreaming();
@@ -284,7 +288,11 @@ export class ChatController {
     }
     const entries: LogEntry[] = read.messages.map((m) => {
       this.seq += 1;
-      return { seq: this.seq, kind: m.role === 'inbound' ? 'user' : 'assistant', text: m.text };
+      return {
+        seq: this.seq,
+        kind: m.role === 'inbound' ? 'user' : 'assistant',
+        text: redactBody(m.text),
+      };
     });
     this.store.update(() => ({
       ...initialChatState,

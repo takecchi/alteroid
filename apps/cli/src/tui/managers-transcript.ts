@@ -10,6 +10,7 @@
  */
 import { codePointBoundary } from '@alteroid/core';
 
+import { redactBody } from '../redact.js';
 import type { LogEntry, LogKind } from './log.js';
 
 /** 抜粋の長さ。道具の入力。 */
@@ -54,7 +55,9 @@ function resultText(content: unknown): string {
 function blocksToPieces(role: 'user' | 'assistant', content: unknown): Piece[] {
   const textKind: LogKind = role === 'user' ? 'user' : 'assistant';
   if (typeof content === 'string') {
-    return content.trim().length > 0 ? [{ kind: textKind, text: capText(content.trim()) }] : [];
+    return content.trim().length > 0
+      ? [{ kind: textKind, text: capText(redactBody(content.trim())) }]
+      : [];
   }
   if (!Array.isArray(content)) return [];
   const out: Piece[] = [];
@@ -63,17 +66,20 @@ function blocksToPieces(role: 'user' | 'assistant', content: unknown): Piece[] {
     switch (block['type']) {
       case 'text':
         if (typeof block['text'] === 'string' && block['text'].trim().length > 0) {
-          out.push({ kind: textKind, text: capText(block['text'].trim()) });
+          out.push({ kind: textKind, text: capText(redactBody(block['text'].trim())) });
         }
         break;
       case 'tool_use': {
         const name = typeof block['name'] === 'string' ? block['name'] : '(道具名なし)';
         const input = block['input'] === undefined ? '' : JSON.stringify(block['input']);
-        out.push({ kind: 'tool', text: `${name} ${excerpt(input, TOOL_INPUT_EXCERPT)}`.trim() });
+        out.push({
+          kind: 'tool',
+          text: `${name} ${excerpt(redactBody(input), TOOL_INPUT_EXCERPT)}`.trim(),
+        });
         break;
       }
       case 'tool_result': {
-        const body = excerpt(resultText(block['content']), TOOL_RESULT_EXCERPT);
+        const body = excerpt(redactBody(resultText(block['content'])), TOOL_RESULT_EXCERPT);
         out.push({ kind: 'tool', text: `↳ ${body.length > 0 ? body : '(結果なし)'}` });
         break;
       }
@@ -92,12 +98,18 @@ export function transcriptLinePieces(line: string): Piece[] {
     parsed = JSON.parse(line);
   } catch {
     return [
-      { kind: 'system', text: `(JSON として読めない行) ${excerpt(line, TOOL_RESULT_EXCERPT)}` },
+      {
+        kind: 'system',
+        text: `(JSON として読めない行) ${excerpt(redactBody(line), TOOL_RESULT_EXCERPT)}`,
+      },
     ];
   }
   if (!isRecord(parsed)) {
     return [
-      { kind: 'system', text: `(オブジェクトでない行) ${excerpt(line, TOOL_INPUT_EXCERPT)}` },
+      {
+        kind: 'system',
+        text: `(オブジェクトでない行) ${excerpt(redactBody(line), TOOL_INPUT_EXCERPT)}`,
+      },
     ];
   }
   const type = parsed['type'];
@@ -106,7 +118,7 @@ export function transcriptLinePieces(line: string): Piece[] {
     return blocksToPieces(type, message['content']);
   }
   // user / assistant 以外（result・system・summary など）。種類名と抜粋を残す。
-  const rest = excerpt(line, TOOL_INPUT_EXCERPT);
+  const rest = excerpt(redactBody(line), TOOL_INPUT_EXCERPT);
   return [{ kind: 'system', text: `[${typeof type === 'string' ? type : '種類なし'}] ${rest}` }];
 }
 

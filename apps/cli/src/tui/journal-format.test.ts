@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { journalEntry, minute, said } from './fake-api.js';
 import { JOURNAL_TYPES, SEARCH_SCOPE_NOTE } from '@alteroid/logic';
@@ -12,6 +12,15 @@ import {
 } from './journal-format.js';
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
 
+// 実機の環境変数の値が、試験の固定の文字列（リポジトリ名など）を伏せてしまわないよう、
+// 伏せ字の env を偽の値だけにする（本物の process.env を材料にしない）。
+vi.mock('../redact.js', async () => {
+  const { redactSecretsInBody } = await import('@alteroid/core/redact');
+  return {
+    redactBody: (text: string): string =>
+      redactSecretsInBody(text, { FAKE_TEST_ONLY_VALUE: 'zz-not-a-real-value-zz' }),
+  };
+});
 const at = minute(0);
 
 describe('要旨（Web の summarizeJournalEntry と同じ文言）', () => {

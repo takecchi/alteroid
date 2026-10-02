@@ -13,6 +13,7 @@ import type { FC } from 'react';
 import { formatElapsedAgo } from '../format.js';
 import type { ManagerRow, ManagerStatus } from './api.js';
 import { oneLine } from './journal-format.js';
+import { redactBody } from '../redact.js';
 import type { DetailState, ListState } from './managers-controller.js';
 import { glyph, theme } from './theme.js';
 
@@ -52,7 +53,7 @@ export function managerListLine(row: ManagerRow, now: number): string {
   const wait = row.waiting.length > 0 ? ` ⏸確認待ち${String(row.waiting.length)}` : '';
   return (
     `[${stateText(row)}] ${shortId(row.managerId)} ${formatElapsedAgo(row.updatedAt, now)}` +
-    `${wait}  ${oneLine(row.request, 120)}`
+    `${wait}  ${oneLine(redactBody(row.request), 120)}`
   );
 }
 
@@ -66,7 +67,7 @@ export function managerNotes(row: ManagerRow): string[] {
   const first = row.waiting[0];
   if (first !== undefined) {
     notes.push(
-      `返事待ち ${String(row.waiting.length)} 件: ${oneLine(first.summary, 60)}` +
+      `返事待ち ${String(row.waiting.length)} 件: ${oneLine(redactBody(first.summary), 60)}` +
         '（答えるのは Web か alteroid chat の /reply /allow /deny）',
     );
   }
@@ -223,7 +224,7 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
       <Text wrap="truncate-end" dimColor>
         {`${m.cwd}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`}
       </Text>
-      <Text wrap="truncate-end">{`依頼: ${oneLine(m.request, 300)}`}</Text>
+      <Text wrap="truncate-end">{`依頼: ${oneLine(redactBody(m.request), 300)}`}</Text>
       <Text wrap="truncate-end" color={theme.warn}>
         {notes.length > 0 ? `⚠ ${notes.join(' / ')}` : ' '}
       </Text>

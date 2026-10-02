@@ -28,6 +28,7 @@ import {
   type FormState,
 } from './approvals-form.js';
 import type { HeaderFeed } from './header-feed.js';
+import { redactedErrorMessage } from '../redact.js';
 import { Store } from './store.js';
 
 /** journal の出来事が続けて届いても、取り直しはこの間隔にまとめる。 */
@@ -84,8 +85,7 @@ export const initialApprovalsState: ApprovalsState = {
   detail: null,
 };
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const messageOf = redactedErrorMessage;
 
 /** まだ答えられる承認待ちか（未回答かつ未取り下げ）。 */
 export const isOpen = (approval: ApprovalRow | null): boolean =>
