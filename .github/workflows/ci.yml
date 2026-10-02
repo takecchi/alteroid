@@ -517,6 +517,41 @@ jobs:
             cd /tmp && git clone --depth 1 -q https://github.com/cli/cli.git probe
           '
 
+      # **Issue #486 S5。Codex CLI が uid 1001 で動き、版が Dockerfile の
+      # `ARG CODEX_VERSION`（版を持つ唯一の場所）と一致するか。** 「入れた」と
+      # 「マネージャーの主体から動く」は別の主張なので、`-u 1001` で見る。
+      - name: Codex CLI が uid 1001 で動き、版が Dockerfile の固定と一致するか
+        run: |
+          expected=$(sed -n 's/^ARG CODEX_VERSION=\(.*\)$/\1/p' Dockerfile)
+          test -n "$expected" || { echo "Dockerfile に ARG CODEX_VERSION= が無い" >&2; exit 1; }
+          actual=$(docker run --rm -u 1001 alteroid:ci codex --version)
+          echo "期待: codex-cli $expected / 実際: $actual"
+          test "$actual" = "codex-cli $expected" \
+            || { echo "Codex の版が Dockerfile の固定と違う" >&2; exit 1; }
+
+      # **Issue #486 S5。Codex の Linux サンドボックスがイメージの中・uid 1001 で
+      # 使えるかの「測定」。門ではない（失敗しても落とさない）。** Codex は bubblewrap
+      # （同梱）で名前空間を作るが、docker の既定の seccomp は userns / mount の名前空間
+      # を許さないことがあり、本番（Railway）の許可も CI の runner と同じとは限らない。
+      # ⟹ **ここで赤にすると「測れていないこと」で required の `image` を止める** ので、
+      # 結果をログに出すだけにする。**サンドボックスが使えない器で
+      # `danger-full-access` へ倒す設定はどこにも入れていない** — 使えないと分かったら
+      # 人間に確かめる（境界の話）。
+      # 1つ目は既定の `docker run`、2つ目は seccomp を外した対照（原因の切り分け。
+      # 製品の設定ではない）。`CODEX_HOME` は使い捨ての場所を測定のためだけに渡す。
+      - name: Codex のサンドボックスが uid 1001 で使えるか（測定。門ではない）
+        continue-on-error: true
+        run: |
+          probe='mkdir -p /tmp/codex-home && CODEX_HOME=/tmp/codex-home codex sandbox -- true'
+          echo "::group::既定の docker run（-u 1001）"
+          docker run --rm -u 1001 alteroid:ci sh -c "$probe" \
+            && echo "RESULT default: sandbox OK" || echo "RESULT default: sandbox NG (exit $?)"
+          echo "::endgroup::"
+          echo "::group::対照（-u 1001 + seccomp=unconfined）"
+          docker run --rm -u 1001 --security-opt seccomp=unconfined alteroid:ci sh -c "$probe" \
+            && echo "RESULT seccomp-unconfined: sandbox OK" || echo "RESULT seccomp-unconfined: sandbox NG (exit $?)"
+          echo "::endgroup::"
+
       # **Issue #965 段2。「入れた」で終わらせない。** パッケージが apt の依存解決を
       # 通ることと、initdb して拡張が実際に使えることは別の主張である。ここで
       # 使い捨てのクラスタを立て、`CREATE EXTENSION vector` まで確かめる。

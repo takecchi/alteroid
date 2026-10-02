@@ -5,6 +5,19 @@
 # Claude Code でやることと同じ）。だから ca-certificates・git・ripgrep のような
 # 素の道具は入れる。入れないと「コンテナだからできない」が生まれ、それは仕様では
 # なくバグである（north_star 禁止1）。
+
+# Codex CLI（Issue #486 M7）の版。**版を持つ場所はここ1か所だけ**（`runtime` ステージの
+# `npm install -g` も、CI の `image` の版の突き合わせも、後の段で `codex app-server
+# generate-ts` のスキーマを生成するときも、この値を読む）。
+#
+# **`gh` などの素の道具とは逆に、版を固定する。** Codex の app-server のプロトコルは
+# 版ごとに変わりうる（スキーマは `codex app-server generate-ts` が版ごとに吐く）ので、
+# 器に入る版と、alteroid が型を生成した版がずれた瞬間に黙って壊れる。
+# 上げるときは npm の `latest` dist-tag の安定版（alpha でないもの）を採る:
+#   npm view @openai/codex dist-tags.latest
+# 0.160.0 は 2026-10-02 に `latest` だったもの。
+ARG CODEX_VERSION=0.160.0
+
 FROM node:22-trixie-slim AS build
 
 ENV PNPM_HOME=/pnpm
@@ -150,6 +163,17 @@ RUN set -eux; \
 
 # git の資格情報は `gh` から借りる（人間が `gh auth setup-git` でやることと同じ）。
 # **鍵をイメージに焼かない。** ここにあるのは経路だけである。
+# Codex CLI。版は先頭の `ARG CODEX_VERSION`（ステージをまたぐには再宣言が要る）。
+# root で `-g` に入れるので、uid 1001（マネージャーが走る主体）からは読んで実行する
+# だけである。**`CODEX_HOME`（認証情報の置き場）はここでは決めない** — 鍵も
+# auth.json もイメージには焼かない。
+# `codex --version` が版と一致することは CI の `image` が uid 1001 で見る。
+ARG CODEX_VERSION
+RUN set -eux; \
+  npm install -g --omit=dev --no-fund --no-audit "@openai/codex@${CODEX_VERSION}"; \
+  npm cache clean --force; \
+  codex --version
+
 RUN git config --system credential.https://github.com.helper '!gh auth git-credential'
 
 # `gh` は鍵を**呼ばれるたびにファイルから**読む。
