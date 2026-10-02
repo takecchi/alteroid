@@ -445,24 +445,31 @@ const practiceBody = z.object({
  *
  * **`selections`（issue #2525）は `questions` を持つ承認待ちへの構造化した回答。** `answer` は
  * 自由文の回答、`selections` と併用するときは補足。どちらも無いのは 400
- * （`answerOrSelectionsMissing`）。`selections` の中身を `questions` と突き合わせる検査は
+ * （`hasAnswerOrSelections`）。`selections` の中身を `questions` と突き合わせる検査は
  * 承認待ちの行が要るので、ここ（形の検査）ではなくハンドラで行う（`describeSelectionsViolation`）。
  */
-const answerBody = z.object({
+const answerFields = {
   answer: z.string().min(1).optional(),
   selections: z.array(approvalSelectionSchema).min(1).optional(),
-});
-/** `answer` も `selections` も無い回答（400 の理由）。 */
-function answerOrSelectionsMissing(body: {
-  answer?: string | undefined;
-  selections?: unknown;
-}): boolean {
-  return body.answer === undefined && body.selections === undefined;
-}
+};
+/**
+ * **形の検査で弾く（ハンドラまで通さない）。** ブラウザの単純リクエスト（`text/plain` で JSON を
+ * 送る CSRF）は本文が空として読まれ、以前は `answer` が必須だったためここで 400 になっていた。
+ * 両方が任意になっても、空の本文が形の検査を通り抜けて 404 / 409 の判定まで進まないようにする。
+ */
+const hasAnswerOrSelections = (body: { answer?: unknown; selections?: unknown }) =>
+  body.answer !== undefined || body.selections !== undefined;
+const answerBody = z
+  .object(answerFields)
+  .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' });
 /** まとめて答える（溜まった保留を人間が一度に片付けるための口）。 */
 const answersBody = z.object({
   answers: z
-    .array(z.object({ id: z.string().min(1) }).extend(answerBody.shape))
+    .array(
+      z
+        .object({ id: z.string().min(1), ...answerFields })
+        .refine(hasAnswerOrSelections, { message: 'answer も selections も無い' }),
+    )
     .min(1)
     .max(200),
 });
@@ -3557,12 +3564,6 @@ export function createApp(deps: AppDeps) {
         // 黙って落ちる。**まだ回答待ちの件にだけ**突き合わせる（既に答え済み・取り下げ済み・
         // 読めない・無い件は、下で件ごとの理由として返す）。
         for (const item of answers) {
-          if (answerOrSelectionsMissing(item)) {
-            return c.json(
-              { error: `answers の形が不正: ${item.id} に answer も selections も無い` },
-              400,
-            );
-          }
           if (item.selections === undefined) continue;
           let pending: Awaited<ReturnType<typeof stores.jobs.getApproval>> = null;
           try {
@@ -3709,9 +3710,6 @@ export function createApp(deps: AppDeps) {
         // `selections`・知らない id・単一選択で2つ以上・`allowOther: false` なのに `other`・
         // 同じ設問が2回、はどれも 400（何も書かない）。
         const body = c.req.valid('json');
-        if (answerOrSelectionsMissing(body)) {
-          return c.json({ error: 'answer の形が不正: answer も selections も無い' }, 400);
-        }
         if (body.selections !== undefined) {
           const violation = describeSelectionsViolation(approval.questions, body.selections);
           if (violation !== null) return c.json({ error: `selections が不正: ${violation}` }, 400);
