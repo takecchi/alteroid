@@ -22,6 +22,7 @@ export * from './format.js';
 export * from './journal-display.js';
 export * from './journal-summary.js';
 export * from './journal-window.js';
+export * from './manager-provider.js';
 export * from './managers-links.js';
 export * from './redact.js';
 export * from './tokens-links.js';

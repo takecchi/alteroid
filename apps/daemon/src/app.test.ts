@@ -102,6 +102,8 @@ function fakeClone() {
 
   const managerList: ManagerSummary[] = [];
   const managerDenials = new Map<string, ManagerDenial[]>();
+  /** `ManagerPool.runnerReportedManagerProvider()` の返り値（#486 S9）。無ければ不明。 */
+  const runnerManagerProviders = new Map<string, string>();
   const transcripts = new Map<string, string>();
   /** `transcript()` を `kind: 'removed'` にする（#698）。 */
   const removedTranscripts = new Map<
@@ -198,6 +200,9 @@ function fakeClone() {
     },
     runnerBacklog() {
       return [];
+    },
+    runnerReportedManagerProvider(runnerId) {
+      return runnerManagerProviders.get(runnerId);
     },
     async runnerIdOf(managerId) {
       return managerList.find((manager) => manager.managerId === managerId)?.runnerId;
@@ -325,6 +330,7 @@ function fakeClone() {
     posted,
     droppedFromDelivery,
     managerList,
+    runnerManagerProviders,
     managerDenials,
     transcripts,
     removedTranscripts,
@@ -3507,6 +3513,42 @@ describe('HTTP API', () => {
    * **状態は置き換えない。** 拒否は `running` に映らない（拒否があったことしか
    * 観測していない）ので、`status` はそのままにして添える。
    */
+  it('マネージャー層の provider が、名乗りのある runner の委譲にだけ一覧と詳細へ載る（不明は欄なし。#486 S9）', async () => {
+    const base = {
+      status: 'running' as const,
+      live: true,
+      cwd: '/work/project',
+      request: '仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+    };
+    fake.managerList.push(
+      { ...base, managerId: 'mgr-codex', runnerId: 'r-codex' },
+      { ...base, managerId: 'mgr-silent', runnerId: 'r-silent' },
+      { ...base, managerId: 'mgr-unplaced' },
+    );
+    fake.runnerManagerProviders.set('r-codex', 'codex');
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; managerProvider?: string }[];
+    };
+    const byId = new Map(list.managers.map((m) => [m.managerId, m]));
+    expect(byId.get('mgr-codex')?.managerProvider).toBe('codex');
+    // **不明は claude にしない。** 欄ごと無い。
+    expect(byId.get('mgr-silent')).not.toHaveProperty('managerProvider');
+    expect(byId.get('mgr-unplaced')).not.toHaveProperty('managerProvider');
+
+    const detail = (await (await app.request('/managers/mgr-codex')).json()) as {
+      manager: { managerProvider?: string };
+    };
+    expect(detail.manager.managerProvider).toBe('codex');
+    const silent = (await (await app.request('/managers/mgr-silent')).json()) as {
+      manager: object;
+    };
+    expect(silent.manager).not.toHaveProperty('managerProvider');
+  });
+
   it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-denied',

@@ -3538,6 +3538,23 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     await expect.poll(() => s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
   });
 
+  it('表示用の読み口は、名乗りが無いとき claude と推測せず undefined（不明）を返す（#486 S9）', async () => {
+    const fake = swappableRunner();
+    const s = setup(undefined, { runner: fake.runner });
+    await s.pool.restore();
+
+    fake.helloWithManagerProvider('codex');
+    await expect.poll(() => s.pool.runnerReportedManagerProvider?.('runner-primary')).toBe('codex');
+    fake.helloWithManagerProvider(undefined);
+    await expect
+      .poll(() => s.pool.runnerReportedManagerProvider?.('runner-primary'))
+      .toBeUndefined();
+    // 経路判断の読み口は既定 claude のまま
+    expect(s.pool.runnerManagerProvider?.('runner-primary')).toBe('claude');
+    // 一度も名乗っていない runner も不明
+    expect(s.pool.runnerReportedManagerProvider?.('runner-never')).toBeUndefined();
+  });
+
   it('取り直しの最中に起こされた委譲を、死んだものとして起こし直さない', async () => {
     // **台帳と runner は別の瞬間に読まれる。** runner を先に読むと、その隙間で
     // 起こされた委譲が「runner に居ないのに台帳には居る」と見え、走り出した

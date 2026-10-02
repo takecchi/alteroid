@@ -14622,6 +14622,9 @@
                               },
                               "required": ["tool", "count"]
                             }
+                          },
+                          "managerProvider": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -15224,6 +15227,9 @@
                             },
                             "required": ["tool", "count"]
                           }
+                        },
+                        "managerProvider": {
+                          "type": "string"
                         }
                       },
                       "required": [

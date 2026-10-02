@@ -4,7 +4,12 @@ import { Link, useSearchParams } from 'react-router';
 
 import { Page, Card, Empty, ErrorNote, FilterChips, Spinner, StatusBadge, cn } from '@alteroid/ui';
 import { useManagersWindow } from '@alteroid/swr';
-import { formatRelative, redactBody, STATUS_SEARCH_PARAM } from '@alteroid/logic';
+import {
+  describeManagerProvider,
+  formatRelative,
+  redactBody,
+  STATUS_SEARCH_PARAM,
+} from '@alteroid/logic';
 import { terminalFailureNote } from '~/lib/manager-failure-note';
 import type { ManagerDenial, ManagerStatus, ManagerSummary, UnreadableJob } from '@alteroid/logic';
 
@@ -771,6 +776,10 @@ function ManagersBody({ selected }: { selected: readonly ManagerStatus[] }) {
                     <p className="truncate text-sm">{redactBody(manager.request)}</p>
                     <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
                       {manager.cwd}
+                    </p>
+                    {/* 欄が無いのは「不明」。claude とは描かない（`describeManagerProvider`）。 */}
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      provider: {describeManagerProvider(manager.managerProvider)}
                     </p>
                     {manager.waiting.length > 0 && (
                       // 一覧の1行は Markdown 化の対象外（`components/markdown.tsx` の doc）

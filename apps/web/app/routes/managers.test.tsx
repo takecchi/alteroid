@@ -664,7 +664,16 @@ describe('セッションが無いことは、`live` も状態も置き換えず
    * （セッションが無かったという事実）はそのまま出る——由来の一言だけが無い。
    */
   it('sessionMissingKind が無いときは、由来の字面も「不明」も出さない', async () => {
-    renderManagers([{ ...BASE, status: 'running', live: true, sessionMissingSince: MISSING }]);
+    // provider 欄の「不明」（#486 S9）と混ざらないよう、名乗り済みの行にする。
+    renderManagers([
+      {
+        ...BASE,
+        status: 'running',
+        live: true,
+        sessionMissingSince: MISSING,
+        managerProvider: 'claude',
+      },
+    ]);
 
     expect(await screen.findByText(/この委譲のセッションを持っていなかった/)).toBeTruthy();
     expect(screen.queryByText(/resume でも入り直せなかった/)).toBeNull();
@@ -1396,5 +1405,19 @@ describe('知らない status に倒れ先がある（#1623）', () => {
 
     expect(await screen.findByText('prototype key row')).toBeTruthy();
     expect(screen.getByText('知らない状態（constructor）')).toBeTruthy();
+  });
+});
+
+describe('マネージャー層の provider（#486 S9）', () => {
+  it('名乗られた provider を行に出し、欄が無い行は claude と推測せず「不明」と出す', async () => {
+    renderManagers([
+      { ...BASE, managerId: 'mgr-codex', managerProvider: 'codex' },
+      { ...BASE, managerId: 'mgr-silent', request: '名乗り無し' },
+    ]);
+
+    expect(await screen.findByText(/provider: codex/)).toBeTruthy();
+    expect(screen.getByText(/provider: 不明/)).toBeTruthy();
+    // 欄が無いのに claude と描かない
+    expect(screen.queryByText(/provider: claude/)).toBeNull();
   });
 });

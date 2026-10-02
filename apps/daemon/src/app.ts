@@ -1283,7 +1283,23 @@ function queryParams<Schema extends z.ZodTypeAny>(
  */
 function managerView(managers: ManagerPool, summary: ManagerSummary) {
   const denials = managers.denials(summary.managerId);
-  return denials.length === 0 ? summary : { ...summary, denials };
+  // **取れなければ載せない（＝不明）。** `claude` へ倒さない（`managerProviderOf`）。
+  const managerProvider = managerProviderOf(managers, summary);
+  return {
+    ...summary,
+    ...(denials.length === 0 ? {} : { denials }),
+    ...(managerProvider === undefined ? {} : { managerProvider }),
+  };
+}
+
+/**
+ * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
+ * 置き先が無い・名乗りを受けていない・旧い runner の欄なしは `undefined`（不明）。
+ * 経路判断用の `runnerManagerProvider()`（既定 `claude`）は使わない。
+ */
+function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): string | undefined {
+  if (summary.runnerId === undefined) return undefined;
+  return managers.runnerReportedManagerProvider?.(summary.runnerId);
 }
 
 /** 一覧・詳細で返すアカウント（identity を畳んで、秘密は載せない）。 */

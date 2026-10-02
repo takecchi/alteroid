@@ -2085,3 +2085,18 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
     expect(document.body.textContent).not.toContain('**');
   });
 });
+
+describe('詳細のマネージャー層の provider（#486 S9）', () => {
+  it('名乗られた provider を出す', async () => {
+    renderDetail({ ...BASE, managerProvider: 'codex' });
+    expect(await screen.findByText('provider')).toBeTruthy();
+    expect(screen.getByText('codex')).toBeTruthy();
+  });
+
+  it('欄が無いときは claude と推測せず「不明」と出す', async () => {
+    renderDetail({ ...BASE });
+    expect(await screen.findByText('provider')).toBeTruthy();
+    expect(screen.getByText(/^不明/)).toBeTruthy();
+    expect(screen.queryByText('claude')).toBeNull();
+  });
+});
