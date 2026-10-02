@@ -7,6 +7,7 @@
  */
 import { summarizeJournalDiagnosticsEntry } from '@alteroid/core/journal-diagnostics-format';
 
+import { redactBody } from './redact.js';
 import type { JournalEntry } from './types.js';
 
 /**
@@ -43,8 +44,8 @@ export function describeGithubCiText(ok: {
   return 'CI: 観測していない（0 件ではない）';
 }
 
-/** 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。 */
-export function summarizeJournalEntry(entry: JournalEntry): string {
+/** 伏せる前の1行（外へ出さない。出口は {@link summarizeJournalEntry}）。 */
+function summarizeJournalEntryRaw(entry: JournalEntry): string {
   switch (entry.type) {
     case 'exchange':
       return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}`;
@@ -151,4 +152,15 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
       );
     }
   }
+}
+
+/**
+ * 日誌エントリを人間が読む1行に潰す（一覧と通知で同じ文言を使うため）。
+ *
+ * **本文（`text`・`summary`・`question`・`reason` など、人や agent が書いた自由文）は伏せ字を
+ * 通してから返す**（issue #2600。`redactBody`）。Web の一覧・ダッシュボードと TUI が共有する
+ * 出口で、ここで掛ければ全部に効く。
+ */
+export function summarizeJournalEntry(entry: JournalEntry): string {
+  return redactBody(summarizeJournalEntryRaw(entry));
 }

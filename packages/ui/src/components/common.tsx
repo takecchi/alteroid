@@ -28,6 +28,7 @@ import { Input as ShadcnInput } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { Spinner as ShadcnSpinner } from '@/components/ui/spinner';
 import { Textarea as ShadcnTextarea } from '@/components/ui/textarea';
+import { redactError } from '@/lib/redact';
 import { cn } from '@/lib/utils';
 
 /**
@@ -249,7 +250,7 @@ export function Empty({ children }: { children: ReactNode }) {
  */
 export function ErrorNote({ error, className }: { error: unknown; className?: string }) {
   if (error === undefined || error === null) return null;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = redactError(error instanceof Error ? error.message : String(error));
   return (
     <Alert variant="destructive" className={cn('border-destructive/40', className)}>
       <AlertTriangle aria-hidden />

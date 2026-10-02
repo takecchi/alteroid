@@ -8,6 +8,7 @@ import {
 } from 'react-router';
 import type { ReactNode } from 'react';
 
+import { redactError } from '@alteroid/logic';
 import { ApiProvider } from '@alteroid/swr';
 
 import './app.css';
@@ -81,7 +82,7 @@ export function ErrorBoundary({ error }: { error: unknown }) {
         「動かない」以上のことが分からなくなり、掘る先が無くなる。
       */}
       <pre className="mt-4 overflow-auto rounded-md border border-border bg-card p-3 text-xs text-muted-foreground">
-        {String(detail)}
+        {redactError(String(detail))}
       </pre>
     </main>
   );

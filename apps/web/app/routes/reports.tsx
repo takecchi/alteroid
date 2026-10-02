@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 
 import { Markdown, Page, Card, Empty, ErrorNote, Spinner, cn } from '@alteroid/ui';
 import { useReport, useReports } from '@alteroid/swr';
-import { formatDateTime, formatTime } from '@alteroid/logic';
+import { formatDateTime, formatTime, redactBody } from '@alteroid/logic';
 
 import type { DailyReport } from '@alteroid/logic';
 
@@ -301,7 +301,7 @@ function ReportBody({ date, reportId }: { date: string; reportId: string | undef
           {isUnavailable(report) ? (
             <UnavailableNote reason={report.unavailable} />
           ) : (
-            <Markdown>{report.body}</Markdown>
+            <Markdown>{redactBody(report.body)}</Markdown>
           )}
         </article>
       )}

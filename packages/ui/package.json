@@ -20,6 +20,7 @@
     "shadcn:add": "node ./scripts/shadcn-add.mjs"
   },
   "dependencies": {
+    "@alteroid/core": "workspace:*",
     "@fontsource/ibm-plex-mono": "catalog:",
     "@fontsource/ibm-plex-sans-jp": "catalog:",
     "@fontsource/michroma": "catalog:",

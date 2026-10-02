@@ -23,6 +23,7 @@ export * from './journal-display.js';
 export * from './journal-summary.js';
 export * from './journal-window.js';
 export * from './managers-links.js';
+export * from './redact.js';
 export * from './tokens-links.js';
 export * from './types.js';
 export * from './usage-links.js';

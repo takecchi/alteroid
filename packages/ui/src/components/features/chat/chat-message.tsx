@@ -1,6 +1,7 @@
 import { Pencil } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { redactBody } from '@/lib/redact';
 import { cn } from '@/lib/utils';
 
 import { Button } from '../../common';
@@ -73,6 +74,8 @@ export function ChatMessage({
   versions?: ChatMessageVersions;
   children?: ReactNode;
 }) {
+  // 伏せるのは描画の直前だけ（`text` も編集の下書きも元のまま持つ。issue #2600）。
+  const shown = redactBody(text);
   const editing = children !== undefined;
   const viewingOld = versions !== undefined && versions.index < versions.total - 1;
 
@@ -152,7 +155,7 @@ export function ChatMessage({
                * が受信の途中では正しく解釈されず、閉じた瞬間に表示が
                * 変わって見える揺れが起きうる**（受信が終われば安定する）。
                */
-              <Markdown>{text}</Markdown>
+              <Markdown>{shown}</Markdown>
             )
           ) : transient ? (
             <span className="inline-flex items-center gap-2">
@@ -160,10 +163,10 @@ export function ChatMessage({
                 <span className="absolute inset-0 rounded-full bg-primary opacity-60 motion-safe:animate-ping" />
                 <span className="relative size-1.5 rounded-full bg-primary" />
               </span>
-              {text}
+              {shown}
             </span>
           ) : (
-            text
+            shown
           )}
         </div>
       </div>
@@ -213,7 +216,7 @@ export function ChatMessage({
                   <span className="mr-1 font-semibold">
                     {entry.role === 'human' ? '人間' : 'クローン'}
                   </span>
-                  {entry.text}
+                  {redactBody(entry.text)}
                 </p>
               ))}
             </div>

@@ -22,7 +22,13 @@ import {
   useUsage,
   useJournalFeed,
 } from '@alteroid/swr';
-import { formatDateTime, formatRelative, managersHref, usageHref } from '@alteroid/logic';
+import {
+  formatDateTime,
+  formatRelative,
+  managersHref,
+  redactBody,
+  usageHref,
+} from '@alteroid/logic';
 import { journalEntryLinks } from '~/lib/journal-links';
 
 import { ManagerStatusBadge, UnreadableJobNote } from './managers';
@@ -199,7 +205,7 @@ export default function Dashboard() {
               {isUnavailable(latestReport) ? (
                 <UnavailableNote reason={latestReport.unavailable} />
               ) : (
-                <Markdown>{latestReport.body}</Markdown>
+                <Markdown>{redactBody(latestReport.body)}</Markdown>
               )}
             </div>
           )}
@@ -248,7 +254,7 @@ export default function Dashboard() {
                           doc）。`line-clamp-2` の内側へブロック要素を入れると、その
                           畳み方そのものが効かなくなる。
                         */}
-                        <span className="line-clamp-2">{approval.question}</span>
+                        <span className="line-clamp-2">{redactBody(approval.question)}</span>
                         <span className="mt-0.5 block text-[11px] text-muted-foreground">
                           {formatRelative(approval.createdAt)}
                         </span>

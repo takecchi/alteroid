@@ -26,7 +26,7 @@ import {
   postChat,
   useApi,
 } from '@alteroid/swr';
-import { formatRelative } from '@alteroid/logic';
+import { formatRelative, redactError } from '@alteroid/logic';
 import type { ConversationMessage } from '@alteroid/logic';
 
 import type { Route } from './+types/chat';
@@ -1572,7 +1572,7 @@ export function ChatPane({
                   key: `u-${Date.now()}`,
                   role: 'system',
                   of: stream.id,
-                  text: `${event.message}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
+                  text: `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
                 },
               ]);
               break;

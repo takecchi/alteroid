@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
+import { redactBody } from '@/lib/redact';
+
 import { Badge, Button, Card, Textarea } from '../../common';
 import { Markdown } from '../../markdown';
 import { isSubmitShortcut } from '../chat/ime';
@@ -140,7 +142,7 @@ export function ApprovalCard({
         改行を `<br>` にするので、行区切りはこれまでどおり保たれる
         （`packages/ui/src/components/markdown.tsx` の doc に理由が逐語で在る）。
       */}
-      <Markdown>{question}</Markdown>
+      <Markdown>{redactBody(question)}</Markdown>
 
       {context !== undefined && context !== '' && (
         /*
@@ -157,7 +159,7 @@ export function ApprovalCard({
           落とす — `Markdown` のルートが `text-sm` を持つので、外から掛けても効かない。
         */
         <div className="mt-2 max-h-48 min-w-0 overflow-y-auto rounded-md border border-border bg-background p-2 text-muted-foreground">
-          <Markdown>{context}</Markdown>
+          <Markdown>{redactBody(context)}</Markdown>
         </div>
       )}
 
@@ -171,7 +173,7 @@ export function ApprovalCard({
         */
         <p className="mt-3 rounded-md border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
           <span className="mr-2 text-[11px] text-muted-foreground">取り下げた理由</span>
-          {withdrawnReason ?? '（理由の記録なし）'}
+          {withdrawnReason === undefined ? '（理由の記録なし）' : redactBody(withdrawnReason)}
         </p>
       ) : state === 'answered' ? (
         /*
@@ -196,7 +198,7 @@ export function ApprovalCard({
         <>
           <p className="mt-3 rounded-md border border-border bg-background p-2 text-sm break-words whitespace-pre-wrap">
             <span className="mr-2 text-[11px] text-muted-foreground">回答</span>
-            {answer}
+            {answer === undefined ? undefined : redactBody(answer)}
           </p>
           {answeredVia !== undefined && (
             <p className="mt-1 text-[11px] text-muted-foreground">回答経路: {answeredVia}</p>
@@ -205,7 +207,9 @@ export function ApprovalCard({
       ) : hasQuestions ? (
         <div className="mt-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">{questionsSummary}</span>
+            <span className="text-[11px] text-muted-foreground">
+              {questionsSummary === undefined ? undefined : redactBody(questionsSummary)}
+            </span>
             <Button
               size="sm"
               aria-expanded={questionsOpen}

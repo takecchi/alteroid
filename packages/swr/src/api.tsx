@@ -24,6 +24,7 @@ import {
   migrateSelectionIntoStoredEndpoints,
   normalizeEndpointUrl,
   readStoredEndpoints,
+  redactError,
   resolveApiBaseUrl,
   storeApiBaseUrl,
   storeEndpoints,
@@ -313,7 +314,8 @@ export class ApiError extends Error {
   readonly status: number;
 
   constructor(status: number, message: string) {
-    super(message);
+    // 画面へ出る前に伏せる（issue #2600。`ErrorNote` ほか `error.message` を出す口すべてに効く）。
+    super(redactError(message));
     this.name = 'ApiError';
     this.status = status;
   }
