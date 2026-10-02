@@ -11,6 +11,8 @@ import type { ReactNode } from 'react';
 import { redactError } from '@alteroid/logic';
 import { ApiProvider } from '@alteroid/swr';
 
+import { WebDisplayTextProvider } from '~/lib/display-text';
+
 import './app.css';
 
 export function meta() {
@@ -59,7 +61,10 @@ export function Layout({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <ApiProvider>
-      <Outlet />
+      {/* ui の部品へ伏せ字を渡す。全 route を包む（既定は恒等で、外すと伏せずに出る。root.redact.test.tsx が固定） */}
+      <WebDisplayTextProvider>
+        <Outlet />
+      </WebDisplayTextProvider>
     </ApiProvider>
   );
 }

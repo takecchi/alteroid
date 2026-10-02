@@ -3,15 +3,24 @@
  * 画面の部品が、本文と error の文を描画の直前に伏せ字へ通す（issue #2600）。
  *
  * 偽のトークンが出力から消え、40桁の sha は残る。データ（props）は書き換えない。
+ * 伏せる関数は `@alteroid/ui` の外（apps/web の `WebDisplayTextProvider`）から渡る。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render as baseRender, screen } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ErrorNote } from './components/common';
-import { ApprovalCard } from './components/features/approvals/approval-card';
-import { ApprovalQuestionsForm } from './components/features/approvals/approval-questions';
-import { ChatMessage } from './components/features/chat/chat-message';
-import { JournalEntryRow } from './components/features/journal/journal-entry-row';
+import {
+  ApprovalCard,
+  ApprovalQuestionsForm,
+  ChatMessage,
+  ErrorNote,
+  JournalEntryRow,
+} from '@alteroid/ui';
+
+import { WebDisplayTextProvider } from '~/lib/display-text';
+
+/** 本番の root と同じ provider で包んで描く。 */
+const render = (ui: ReactElement) => baseRender(ui, { wrapper: WebDisplayTextProvider });
 
 afterEach(() => {
   cleanup();

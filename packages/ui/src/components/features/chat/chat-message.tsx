@@ -1,7 +1,7 @@
 import { Pencil } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-import { redactBody } from '@/lib/redact';
+import { useDisplayText } from '@/lib/display-text';
 import { cn } from '@/lib/utils';
 
 import { Button } from '../../common';
@@ -75,7 +75,8 @@ export function ChatMessage({
   children?: ReactNode;
 }) {
   // 伏せるのは描画の直前だけ（`text` も編集の下書きも元のまま持つ。issue #2600）。
-  const shown = redactBody(text);
+  const { body } = useDisplayText();
+  const shown = body(text);
   const editing = children !== undefined;
   const viewingOld = versions !== undefined && versions.index < versions.total - 1;
 
@@ -216,7 +217,7 @@ export function ChatMessage({
                   <span className="mr-1 font-semibold">
                     {entry.role === 'human' ? '人間' : 'クローン'}
                   </span>
-                  {redactBody(entry.text)}
+                  {body(entry.text)}
                 </p>
               ))}
             </div>

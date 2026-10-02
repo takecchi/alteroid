@@ -10,8 +10,8 @@
  * （伏せ字を人が再送する本文へ入れないため）。ブラウザに `process.env` は無いので env は
  * `undefined`。id・時刻・URL の欄には掛けない。
  *
- * `packages/ui` は logic を import できないので、同じ2行の写しを
- * `packages/ui/src/lib/redact.ts` が持つ。
+ * `@alteroid/ui` は logic を import できないので、apps/web の `WebDisplayTextProvider`
+ * （`apps/web/app/lib/display-text.tsx`）がこの2つを ui の部品へ渡す。
  */
 import { redactErrorText, redactSecretsInBody } from '@alteroid/core/redact';
 
