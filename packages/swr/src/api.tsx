@@ -3,6 +3,7 @@ import {
   readSse,
   type AlteroidClient,
   type ChatMessage,
+  type ChatStreamMessage,
 } from '@alteroid/api-client';
 import {
   createContext,
@@ -15,6 +16,8 @@ import {
   type ReactNode,
 } from 'react';
 import { SWRConfig, useSWRConfig } from 'swr';
+
+export type { ChatStreamEvent } from '@alteroid/api-client';
 
 import {
   readCredential,
@@ -369,6 +372,34 @@ export async function* postChat(
       event: message.event,
       data: message.data === '' ? undefined : JSON.parse(message.data),
     } as ChatMessage;
+  }
+}
+
+/**
+ * 進行中のターンの途中経過に戻り、続きを SSE で受け取る（発言は投函しない）。
+ *
+ * `postChat` の隣に同じ形で置く（`client.chatStream()` を使わない理由も同じで、Web は
+ * 型付きの `client.api` を通す）。最初の `open` は `{conversationId, inProgress}`。
+ * `inProgress` が false なら進行中のターンは無く、そこで終わる。true なら、いままでの
+ * 分に続けて続きが流れ、`done` / `error` で終わる。
+ */
+export async function* getChatStream(
+  client: AlteroidClient,
+  conversationId: string,
+  options?: { signal?: AbortSignal },
+): AsyncGenerator<ChatStreamMessage> {
+  const result = await client.api.GET('/chat/{conversationId}/stream', {
+    params: { path: { conversationId } },
+    parseAs: 'stream',
+    ...(options?.signal === undefined ? {} : { signal: options.signal }),
+  });
+  const body = unwrap(result);
+  if (body === null) throw new Error('/chat/:conversationId/stream の応答に本文が無い');
+  for await (const message of readSse(body)) {
+    yield {
+      event: message.event,
+      data: message.data === '' ? undefined : JSON.parse(message.data),
+    } as ChatStreamMessage;
   }
 }
 

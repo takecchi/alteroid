@@ -23,8 +23,10 @@ import {
   useConversation,
   useConversationApprovals,
   useConversations,
+  getChatStream,
   postChat,
   useApi,
+  type ChatStreamEvent,
 } from '@alteroid/swr';
 import { formatRelative, redactError } from '@alteroid/logic';
 import type { ConversationMessage } from '@alteroid/logic';
@@ -663,6 +665,14 @@ export function ChatPane({
    */
   const lastSeenShownIdRef = useRef(shownId);
 
+  /**
+   * 張りかけの再生（`open` をまだ見ていない接続）。**`send` が自分のストリームを
+   * 始めるとき、先にこれを畳む**——登録の前に人間が送ると、再生と送信の2本が
+   * 同じ応答を受けて二重に出る。登録（`streamRef`）した後なら `followUp` の経路に
+   * 乗るので、これは要らない。
+   */
+  const pendingResumeRef = useRef<AbortController | undefined>(undefined);
+
   /** 走っているストリーム。無ければ `undefined`。 */
   const streamRef = useRef<Stream | undefined>(undefined);
   /**
@@ -1294,6 +1304,213 @@ export function ChatPane({
     [api, recordOwnMessage, showOwnLine],
   );
 
+  /**
+   * 1本のストリームから届いた出来事を、画面へ書く手（`setTransient` / `apply`）。
+   *
+   * **`send`（自分の送信）と、画面に戻ったときの再生（下の `useEffect`）が同じ分岐を
+   * 共有する。** 別々に書くと、`ask_human` の文面など履歴由来の行と1文字でも違えた
+   * 瞬間に、`pendingOwnLines` の照合が当たらず二重に出る。
+   * 状態を触るのは安定した setter と ref だけなので、依存は無い。
+   */
+  const createStreamWriter = useCallback((stream: Stream, controller: AbortController) => {
+    /**
+     * このストリームの結果を、いま見えている画面へ書いてよいか。
+     *
+     * **「止まったか」と混ぜてはいけない。** 混ぜると、人間が受信をやめたときに
+     * 進行中の合図（考えている… / 実行中…）を片付ける処理まで飛ばしてしまい、
+     * 入力欄は戻るのに本文にだけ合図が residue として残り続ける。
+     *
+     * - `owns()` — まだこの会話を見ている（別の会話へ移っていない）
+     * - `stopped()` — 人間が受信をやめた
+     *
+     * ---
+     *
+     * **⚠️ #363（変異試験）: `owns()` 単独の効きは、いまの構造では測れない。
+     * 「歯が無い」わけではない——測定そのものが成立しない。歯を無理に
+     * 生やしてもいない。**
+     *
+     * 変異試験（`.claude/skills/mutation-testing/`）で `owns()` を
+     * `() => true` に固定する変異（`chat-owns-always-true`）を当てると、
+     * 既存のテスト（`chat.test.tsx`。#356 で足した、navigate と同じ tick
+     * で前の会話のストリームからチャンクが届く回帰テストを含む）が
+     * 1本も落ちない（生存）。一方、切り替え時の `setLines([])`
+     * （上の「捨てる」ブロック）を消す変異（`chat-discard-setlines-removed`）
+     * は、まさにその回帰テストを含む2本を落とす（検出）。
+     *
+     * **理由は「壁が1枚しか無い」からではない。** 上の切り替え検知の
+     * `useEffect`（`shownIdRef.current = shownId; ...abort()...`）の
+     * doc に書いたとおり、`shownIdRef.current` の更新と `abort()` は
+     * **同じ effect の中で同期している**——`owns()` が「移った」と
+     * 言えるようになる瞬間には、`stopped()` も既に「止まった」と
+     * 言えるようになっている。だから **その effect が走った後**は、
+     * `owns()` を壊しても `stopped()` が `writable()` を締め続ける。
+     *
+     * **そしてその effect が走る前（render の commit から、この
+     * 受動的 effect が走るまでの短い窓）は、`owns()`/`stopped()` の
+     * どちらも本物のままで「まだ移っていない」側の値を返す** ——
+     * `shownIdRef.current`/`controller.signal.aborted` がまだ更新されて
+     * いないため。この窓で `append()`（`text` チャンク）が実際には
+     * 漏れないのは、`owns()`/`stopped()` が締めているからではなく、
+     * 上の「捨てる」ブロックが**同じ render の中で同期的に** `lines` を
+     * `[]` にしていて、`append()` の `findIndex(line => line.key ===
+     * replyKey)` が対象を見失い無害な no-op になるからである
+     * （`setTransient()` は既存の行を探さず無条件に積むので、この
+     * 窓ではこの保護を受けない——これは #363 とは別に見つかった実際の
+     * 描画バグとして別途報告する。ここでは「この窓で owns()/stopped()
+     * は保護していない」ことの裏付けとしてだけ書く）。
+     *
+     * **つまり `owns()` が単独で効く窓は、いまの実装には無い。** 効果が
+     * 走った後は `stopped()` に隠れ、効果が走る前は `setLines([])` に
+     * 隠れる（`append()` の場合）か、そもそも保護されていない
+     * （`setTransient()` の場合）。`owns()` を壊しても壊さなくても、
+     * 既存のどのテストの結果も変わらない——これは
+     * `.claude/skills/mutation-testing/SKILL.md` の生存の4分類のうち
+     * **3（テストの構造が観測不能にしている）** であって、2（歯が無い）
+     * ではない。**`owns()` を残しているのは、いま測れているからではなく、
+     * `stopped()` だけでは説明が付かない前提——`shownIdRef` と
+     * `controller` の同期がこの1つの effect に将来も乗り続けるという
+     * 前提——が崩れたときの保険であり、その保険の効きは今回の変異試験の
+     * 対象にできなかった、というだけである。** 歯を追加で書けば
+     * 「この性質は測って確認した」と嘘をつくことになるので、足していない
+     * （同 SKILL.md「2 と判断しても、歯を無理に生やさないこと」）。
+     */
+    const owns = () => stream.id === shownIdRef.current;
+    const stopped = () => controller.signal.aborted;
+    /** 新しい中身を足してよいのは、見ていて、かつ止めていないときだけ。 */
+    const writable = () => owns() && !stopped();
+
+    // クローンの応答は細切れで届く。1行に継ぎ足していく。
+    let replyKey: string | undefined;
+    const append = (chunk: string) => {
+      if (!writable()) return;
+      setLines((previous) => {
+        const index = previous.findIndex((line) => line.key === replyKey);
+        if (index === -1) return previous;
+        const next = [...previous];
+        const current = next[index];
+        if (current === undefined) return previous;
+        next[index] = { ...current, text: current.text + chunk, transient: false };
+        return next;
+      });
+    };
+
+    const setTransient = (text: string) => {
+      if (!writable()) return;
+      setLines((previous) => {
+        const withoutTransient = previous.filter((line) => line.transient !== true);
+        return [
+          ...withoutTransient,
+          { key: `t-${Date.now()}`, role: 'system', text, transient: true, of: stream.id },
+        ];
+      });
+    };
+    const apply = (event: ChatStreamEvent) => {
+      switch (event.type) {
+        /*
+         * **`queued` は「考えている」ではない。** サーバが言っているのは
+         * 「受理したが、まだ順番が来ていない」である（先客のターンが走って
+         * いれば、ここで数分待つ）。上の楽観的な「考えている…」は、この画面が
+         * 言える範囲＝「送った」までの表示なので、サーバから届いた**より
+         * 正確な事実**で上書きする。続けて `thinking` が来たら、そのときに
+         * 初めて「考えている…」へ戻る。
+         */
+        case 'queued':
+          setTransient('順番を待っている…');
+          break;
+        case 'thinking':
+          setTransient('考えている…');
+          break;
+        case 'tool':
+          setTransient(`${event.tool} を実行中…`);
+          break;
+        case 'text':
+          if (replyKey === undefined) {
+            replyKey = `c-${Date.now()}`;
+            const key = replyKey;
+            // `pendingOwnLines` による刈り込みから、この行が完成するまで
+            // 守る（`activeReplyKey` の doc）。
+            setActiveReplyKey(key);
+            setLines((previous) => [
+              ...previous.filter((line) => line.transient !== true),
+              { key, role: 'clone', text: '', of: stream.id },
+            ]);
+          }
+          append(event.text);
+          break;
+        case 'ask_human':
+          setLines((previous) => [
+            ...previous.filter((line) => line.transient !== true),
+            {
+              key: `a-${event.approvalId}`,
+              role: 'system',
+              of: stream.id,
+              text: `確認したいことがある: ${event.question}\n（承認待ちの画面から答えられる）`,
+            },
+          ]);
+          break;
+        /*
+         * **枠（利用上限）が閉じていて、この合図はモデルへ一度も渡っていない
+         * ことを画面に残す。** 終端ではない — 直後に必ず `error` が続く
+         * （`schema.ts` の `usage_limited` の doc。送り主を待たせないための
+         * 終端で、枠が閉じたこと自体はターンの失敗とは別の事実）。
+         *
+         * **`setTransient(...)` にしないこと。** transient で出すと、続く
+         * `error` はこの行に触れないが、この `switch` の下にある `case 'done'`
+         * と、ストリーム終了時の `finally` の両方が `line.transient !== true`
+         * で transient な行を残らず消す（filter が2か所ある）。枠が閉じている
+         * ことは「そのとき考え中だった」ような一時的な状態ではなく、人間が
+         * あとから検索して追うべき事実なので、`ask_human` と同じ**残る行**
+         * として積む。
+         *
+         * 文言は要約しない。`event.message`（`describeUsageNotice()` が作った、
+         * SDK 自身の文言をそのまま含む文字列）をそのまま出す — 言い換えると
+         * `usage-limits.ts` が約束している「人間が検索できる形」が崩れる。
+         * 加えて、この発言は**捨てられておらず**次に届く合図（人間の発言・
+         * 自律の発意など）で配り直されて試し直されることを一文添える。ここが
+         * 欠けると、人間が「届いていない」と誤解してもう一度同じ発言を
+         * 送り直してしまう（すでに保持されている分と重複する）。
+         */
+        case 'usage_limited':
+          setLines((previous) => [
+            ...previous.filter((line) => line.transient !== true),
+            {
+              key: `u-${Date.now()}`,
+              role: 'system',
+              of: stream.id,
+              text: `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
+            },
+          ]);
+          break;
+        /*
+         * **`writable()` では締めない（#1576）。** `append`/`setTransient`
+         * と違い、ここは同じ会話の中で一度しか起きない終端の事実であって、
+         * 積み足す・差し替える対象の行を持たない——`writable()` で弾いて
+         * 握り潰すと、人間に一度も見せないまま消える。**その代わり、下の
+         * `conversationId: stream.id` で会話を持たせ、出すかどうかは描画の
+         * 時点の `shownId` との突き合わせ（`visibleFailure`）に任せる**
+         * （`interruptNotice`/`interruptFailure` と同じ形、#1570）。
+         *
+         * この形が要る理由: 会話を切り替えたときにストリームを止める効果
+         * （`shownIdRef.current = shownId; ...abort()...`）が走るより前——
+         * B の画面が commit された直後の窓——に A のこの `error` が届くと、
+         * 以前は無条件に `failure` を立てていたので B の画面に A のエラーが
+         * 出ていた。
+         *
+         * **`stream.id` をキーに Map へ積む（#1585）。** 会話ごとに持つので、
+         * 切り替えて A に戻っても消えていない——上と同じく出すかどうかは
+         * `visibleFailure` が `shownId` で引いて決める。
+         */
+        case 'error':
+          setFailures((prev) => new Map(prev).set(stream.id, new Error(event.message)));
+          break;
+        case 'done':
+          setLines((previous) => previous.filter((line) => line.transient !== true));
+          break;
+      }
+    };
+    return { setTransient, apply };
+  }, []);
+
   const send = useCallback(
     /**
      * `options.supersedes` — 送信済みの人間の発言を編集して送り直すときだけ
@@ -1316,6 +1533,8 @@ export function ChatPane({
         return;
       }
 
+      // 張りかけの再生があれば畳む（`pendingResumeRef` の doc）。
+      pendingResumeRef.current?.abort();
       const controller = new AbortController();
       const stream = createStream(controller, shownId);
       streamRef.current = stream;
@@ -1331,97 +1550,7 @@ export function ChatPane({
       setDraft('');
       showOwnLine(text);
 
-      /**
-       * このストリームの結果を、いま見えている画面へ書いてよいか。
-       *
-       * **「止まったか」と混ぜてはいけない。** 混ぜると、人間が受信をやめたときに
-       * 進行中の合図（考えている… / 実行中…）を片付ける処理まで飛ばしてしまい、
-       * 入力欄は戻るのに本文にだけ合図が residue として残り続ける。
-       *
-       * - `owns()` — まだこの会話を見ている（別の会話へ移っていない）
-       * - `stopped()` — 人間が受信をやめた
-       *
-       * ---
-       *
-       * **⚠️ #363（変異試験）: `owns()` 単独の効きは、いまの構造では測れない。
-       * 「歯が無い」わけではない——測定そのものが成立しない。歯を無理に
-       * 生やしてもいない。**
-       *
-       * 変異試験（`.claude/skills/mutation-testing/`）で `owns()` を
-       * `() => true` に固定する変異（`chat-owns-always-true`）を当てると、
-       * 既存のテスト（`chat.test.tsx`。#356 で足した、navigate と同じ tick
-       * で前の会話のストリームからチャンクが届く回帰テストを含む）が
-       * 1本も落ちない（生存）。一方、切り替え時の `setLines([])`
-       * （上の「捨てる」ブロック）を消す変異（`chat-discard-setlines-removed`）
-       * は、まさにその回帰テストを含む2本を落とす（検出）。
-       *
-       * **理由は「壁が1枚しか無い」からではない。** 上の切り替え検知の
-       * `useEffect`（`shownIdRef.current = shownId; ...abort()...`）の
-       * doc に書いたとおり、`shownIdRef.current` の更新と `abort()` は
-       * **同じ effect の中で同期している**——`owns()` が「移った」と
-       * 言えるようになる瞬間には、`stopped()` も既に「止まった」と
-       * 言えるようになっている。だから **その effect が走った後**は、
-       * `owns()` を壊しても `stopped()` が `writable()` を締め続ける。
-       *
-       * **そしてその effect が走る前（render の commit から、この
-       * 受動的 effect が走るまでの短い窓）は、`owns()`/`stopped()` の
-       * どちらも本物のままで「まだ移っていない」側の値を返す** ——
-       * `shownIdRef.current`/`controller.signal.aborted` がまだ更新されて
-       * いないため。この窓で `append()`（`text` チャンク）が実際には
-       * 漏れないのは、`owns()`/`stopped()` が締めているからではなく、
-       * 上の「捨てる」ブロックが**同じ render の中で同期的に** `lines` を
-       * `[]` にしていて、`append()` の `findIndex(line => line.key ===
-       * replyKey)` が対象を見失い無害な no-op になるからである
-       * （`setTransient()` は既存の行を探さず無条件に積むので、この
-       * 窓ではこの保護を受けない——これは #363 とは別に見つかった実際の
-       * 描画バグとして別途報告する。ここでは「この窓で owns()/stopped()
-       * は保護していない」ことの裏付けとしてだけ書く）。
-       *
-       * **つまり `owns()` が単独で効く窓は、いまの実装には無い。** 効果が
-       * 走った後は `stopped()` に隠れ、効果が走る前は `setLines([])` に
-       * 隠れる（`append()` の場合）か、そもそも保護されていない
-       * （`setTransient()` の場合）。`owns()` を壊しても壊さなくても、
-       * 既存のどのテストの結果も変わらない——これは
-       * `.claude/skills/mutation-testing/SKILL.md` の生存の4分類のうち
-       * **3（テストの構造が観測不能にしている）** であって、2（歯が無い）
-       * ではない。**`owns()` を残しているのは、いま測れているからではなく、
-       * `stopped()` だけでは説明が付かない前提——`shownIdRef` と
-       * `controller` の同期がこの1つの effect に将来も乗り続けるという
-       * 前提——が崩れたときの保険であり、その保険の効きは今回の変異試験の
-       * 対象にできなかった、というだけである。** 歯を追加で書けば
-       * 「この性質は測って確認した」と嘘をつくことになるので、足していない
-       * （同 SKILL.md「2 と判断しても、歯を無理に生やさないこと」）。
-       */
-      const owns = () => stream.id === shownIdRef.current;
-      const stopped = () => controller.signal.aborted;
-      /** 新しい中身を足してよいのは、見ていて、かつ止めていないときだけ。 */
-      const writable = () => owns() && !stopped();
-
-      // クローンの応答は細切れで届く。1行に継ぎ足していく。
-      let replyKey: string | undefined;
-      const append = (chunk: string) => {
-        if (!writable()) return;
-        setLines((previous) => {
-          const index = previous.findIndex((line) => line.key === replyKey);
-          if (index === -1) return previous;
-          const next = [...previous];
-          const current = next[index];
-          if (current === undefined) return previous;
-          next[index] = { ...current, text: current.text + chunk, transient: false };
-          return next;
-        });
-      };
-
-      const setTransient = (text: string) => {
-        if (!writable()) return;
-        setLines((previous) => {
-          const withoutTransient = previous.filter((line) => line.transient !== true);
-          return [
-            ...withoutTransient,
-            { key: `t-${Date.now()}`, role: 'system', text, transient: true, of: stream.id },
-          ];
-        });
-      };
+      const { setTransient, apply } = createStreamWriter(stream, controller);
 
       /*
        * **送ると決めた瞬間から「考えている…」を出す。サーバの `thinking` を待たない。**
@@ -1499,109 +1628,7 @@ export function ChatPane({
             continue;
           }
 
-          const event = message.data;
-          switch (event.type) {
-            /*
-             * **`queued` は「考えている」ではない。** サーバが言っているのは
-             * 「受理したが、まだ順番が来ていない」である（先客のターンが走って
-             * いれば、ここで数分待つ）。上の楽観的な「考えている…」は、この画面が
-             * 言える範囲＝「送った」までの表示なので、サーバから届いた**より
-             * 正確な事実**で上書きする。続けて `thinking` が来たら、そのときに
-             * 初めて「考えている…」へ戻る。
-             */
-            case 'queued':
-              setTransient('順番を待っている…');
-              break;
-            case 'thinking':
-              setTransient('考えている…');
-              break;
-            case 'tool':
-              setTransient(`${event.tool} を実行中…`);
-              break;
-            case 'text':
-              if (replyKey === undefined) {
-                replyKey = `c-${Date.now()}`;
-                const key = replyKey;
-                // `pendingOwnLines` による刈り込みから、この行が完成するまで
-                // 守る（`activeReplyKey` の doc）。
-                setActiveReplyKey(key);
-                setLines((previous) => [
-                  ...previous.filter((line) => line.transient !== true),
-                  { key, role: 'clone', text: '', of: stream.id },
-                ]);
-              }
-              append(event.text);
-              break;
-            case 'ask_human':
-              setLines((previous) => [
-                ...previous.filter((line) => line.transient !== true),
-                {
-                  key: `a-${event.approvalId}`,
-                  role: 'system',
-                  of: stream.id,
-                  text: `確認したいことがある: ${event.question}\n（承認待ちの画面から答えられる）`,
-                },
-              ]);
-              break;
-            /*
-             * **枠（利用上限）が閉じていて、この合図はモデルへ一度も渡っていない
-             * ことを画面に残す。** 終端ではない — 直後に必ず `error` が続く
-             * （`schema.ts` の `usage_limited` の doc。送り主を待たせないための
-             * 終端で、枠が閉じたこと自体はターンの失敗とは別の事実）。
-             *
-             * **`setTransient(...)` にしないこと。** transient で出すと、続く
-             * `error` はこの行に触れないが、この `switch` の下にある `case 'done'`
-             * と、ストリーム終了時の `finally` の両方が `line.transient !== true`
-             * で transient な行を残らず消す（filter が2か所ある）。枠が閉じている
-             * ことは「そのとき考え中だった」ような一時的な状態ではなく、人間が
-             * あとから検索して追うべき事実なので、`ask_human` と同じ**残る行**
-             * として積む。
-             *
-             * 文言は要約しない。`event.message`（`describeUsageNotice()` が作った、
-             * SDK 自身の文言をそのまま含む文字列）をそのまま出す — 言い換えると
-             * `usage-limits.ts` が約束している「人間が検索できる形」が崩れる。
-             * 加えて、この発言は**捨てられておらず**次に届く合図（人間の発言・
-             * 自律の発意など）で配り直されて試し直されることを一文添える。ここが
-             * 欠けると、人間が「届いていない」と誤解してもう一度同じ発言を
-             * 送り直してしまう（すでに保持されている分と重複する）。
-             */
-            case 'usage_limited':
-              setLines((previous) => [
-                ...previous.filter((line) => line.transient !== true),
-                {
-                  key: `u-${Date.now()}`,
-                  role: 'system',
-                  of: stream.id,
-                  text: `${redactError(event.message)}\n（この発言は保持されていて、次に枠が開いたときに配り直されて試し直される）`,
-                },
-              ]);
-              break;
-            /*
-             * **`writable()` では締めない（#1576）。** `append`/`setTransient`
-             * と違い、ここは同じ会話の中で一度しか起きない終端の事実であって、
-             * 積み足す・差し替える対象の行を持たない——`writable()` で弾いて
-             * 握り潰すと、人間に一度も見せないまま消える。**その代わり、下の
-             * `conversationId: stream.id` で会話を持たせ、出すかどうかは描画の
-             * 時点の `shownId` との突き合わせ（`visibleFailure`）に任せる**
-             * （`interruptNotice`/`interruptFailure` と同じ形、#1570）。
-             *
-             * この形が要る理由: 会話を切り替えたときにストリームを止める効果
-             * （`shownIdRef.current = shownId; ...abort()...`）が走るより前——
-             * B の画面が commit された直後の窓——に A のこの `error` が届くと、
-             * 以前は無条件に `failure` を立てていたので B の画面に A のエラーが
-             * 出ていた。
-             *
-             * **`stream.id` をキーに Map へ積む（#1585）。** 会話ごとに持つので、
-             * 切り替えて A に戻っても消えていない——上と同じく出すかどうかは
-             * `visibleFailure` が `shownId` で引いて決める。
-             */
-            case 'error':
-              setFailures((prev) => new Map(prev).set(stream.id, new Error(event.message)));
-              break;
-            case 'done':
-              setLines((previous) => previous.filter((line) => line.transient !== true));
-              break;
-          }
+          apply(message.data);
         }
       } catch (caught) {
         /*
@@ -1649,8 +1676,83 @@ export function ChatPane({
         }
       }
     },
-    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp],
+    [api, shownId, navigate, recordOwnMessage, showOwnLine, followUp, createStreamWriter],
   );
+
+  /**
+   * **画面に戻ったとき、処理中の会話の途中経過へ戻る**（Issue #2652）。同じタブで別の
+   * 画面へ行って戻った・再読み込みした・同じ画面で会話を切り替えて戻った、のどれも
+   * ここに来る（アンマウントや切り替えで購読は切れており、`lines` は空から始まる）。
+   *
+   * - 張るのは `shownId` が確定していて、**自分の送信中のストリームが無い**とき。
+   *   新しい会話（`shownId === undefined`）では張らない。`open` で採番して
+   *   `shownId` が動いたときも、そのときの送信が `streamRef` を持っているので張らない。
+   * - `shownId` が変わったとき・アンマウントのときに abort する（クローンのターンは
+   *   止まらない。購読を外すだけ）。
+   * - `inProgress: false` のときは何も出さずに閉じる（会話の中身は履歴が持つ）。
+   * - `inProgress: true` のときだけ `Stream` として `streamRef` に登録する。**`open` を
+   *   見る前に登録しない**——進行中でなかったとき、その間に送った発言が `followUp` に
+   *   乗り、応答の流れる先が無くなる。登録後に送った発言は `followUp` になり、
+   *   同じ応答が二重に流れない。
+   * - `sending` は立てる。受信中の見た目（「受信をやめる」の口）が、再生中にも
+   *   本当に効くため。
+   * - 受けた出来事は `send` と同じ書き手（`createStreamWriter`）で反映する。
+   *   `ask_human` の文面を含め、履歴由来の行と同じなので、履歴を取り直しても
+   *   `pendingOwnLines` が引き取って二重にならない。
+   * - 失敗は、再生を始めた（`inProgress: true` を見た）後のものだけ出す。始める前
+   *   （古いデーモンの 503・繋がらない）は何も見せていないので、履歴側のエラーに任せる。
+   */
+  useEffect(() => {
+    if (shownId === undefined) return;
+    const existing = streamRef.current;
+    if (existing !== undefined && !existing.controller.signal.aborted) return;
+
+    const id = shownId;
+    const controller = new AbortController();
+    pendingResumeRef.current = controller;
+    void (async () => {
+      let stream: Stream | undefined;
+      let writer: ReturnType<typeof createStreamWriter> | undefined;
+      try {
+        for await (const message of getChatStream(api, id, { signal: controller.signal })) {
+          if (message.event === 'open') {
+            if (!message.data.inProgress) return;
+            const current = streamRef.current;
+            if (current !== undefined && !current.controller.signal.aborted) return;
+            stream = createStream(controller, id);
+            streamRef.current = stream;
+            pendingResumeRef.current = undefined;
+            setSending(true);
+            writer = createStreamWriter(stream, controller);
+            writer.setTransient('考えている…');
+            continue;
+          }
+          writer?.apply(message.data);
+        }
+      } catch (caught) {
+        if (!controller.signal.aborted && stream !== undefined) {
+          const failedId = stream.id;
+          setFailures((prev) => new Map(prev).set(failedId, caught));
+        }
+      } finally {
+        // 途中で抜けた場合（進行中でなかった等）も、接続は閉じておく。
+        controller.abort();
+        if (pendingResumeRef.current === controller) pendingResumeRef.current = undefined;
+        if (stream !== undefined) {
+          const ended = stream;
+          setLines((previous) =>
+            previous.filter((line) => !(line.transient === true && line.of === ended.id)),
+          );
+          if (streamRef.current === ended) {
+            setSending(false);
+            streamRef.current = undefined;
+            setActiveReplyKey(undefined);
+          }
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [api, shownId, createStreamWriter]);
 
   /**
    * 編集を確定する（チャットのメッセージ編集、#1010）。
