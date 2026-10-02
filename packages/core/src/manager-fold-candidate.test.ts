@@ -133,15 +133,15 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
   // ------------------------------------------------------------------
   // 名乗りの無い器（旧い runner・名乗りを受けていない器）を模した回帰——条件3が false のとき
   // ------------------------------------------------------------------
-  it('本番と同じ形（条件3が常に false）では、他の条件が何であれ候補は1件も出ない', () => {
-    const productionLikeInput: ManagerFoldCandidateInput = {
+  it('器が名乗っていない形（条件3が false）では、他の条件が何であれ候補は1件も出ない', () => {
+    const unconfirmedInput: ManagerFoldCandidateInput = {
       status: 'done',
       hasAwaitingBackgroundSignal: false,
       awaitingBackgroundSignalVersionConfirmed: false,
       activityKind: 'active',
       lastTurnEndedAt: '2000-01-01T00:00:00.000Z',
     };
-    expect(isManagerFoldCandidate(productionLikeInput, NOW)).toBe(false);
-    expect(describeManagerFoldCandidate(productionLikeInput, NOW)).toBeNull();
+    expect(isManagerFoldCandidate(unconfirmedInput, NOW)).toBe(false);
+    expect(describeManagerFoldCandidate(unconfirmedInput, NOW)).toBeNull();
   });
 });
