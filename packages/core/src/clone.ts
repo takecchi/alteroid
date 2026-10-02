@@ -65,6 +65,7 @@ import {
   describeDistillGap,
   distillSucceededEntry,
 } from './distill-gap.js';
+import { describeSelectionsViolation, foldSelections } from './approval-choices.js';
 import { stampAnsweredApproval, stampingJournal } from './approval-trace.js';
 import { redactErrorText } from './denial-input-head.js';
 import { excerpt, excerptLine, renderListingFromEnd, tailByCodePoints } from './excerpt.js';
@@ -167,6 +168,7 @@ import {
 } from './schema.js';
 import { workKindGroupKey } from './work-kind.js';
 import type {
+  ApprovalSelection,
   ChatStreamEvent,
   Commitment,
   InboxEvent,
@@ -1553,6 +1555,21 @@ export class ApprovalAlreadySettledError extends Error {
   }
 }
 
+/**
+ * `selections` が承認待ちの `questions` と突き合わず、回答を断った（issue #2525。
+ * `Clone#answerApproval` が投げる）。`apps/daemon` はこれを 400 に写す。
+ * 何も書いていない（回答は立てていない）。
+ */
+export class InvalidApprovalSelectionsError extends Error {
+  constructor(
+    readonly approvalId: string,
+    readonly reason: string,
+  ) {
+    super(`承認待ち ${approvalId} への selections が不正なので、回答しなかった: ${reason}`);
+    this.name = 'InvalidApprovalSelectionsError';
+  }
+}
+
 export function humanAnswerEventId(approvalId: string, answeredAt: string): string {
   return `human-answer-${approvalId}-${answeredAt}`;
 }
@@ -1576,6 +1593,7 @@ function buildHumanAnswerEvent(
   answer: string,
   answeredAt: string,
   via: AnswerApprovalVia | undefined,
+  selections?: readonly ApprovalSelection[],
 ): Extract<InboxEvent, { type: 'human_answer' }> {
   return {
     type: 'human_answer',
@@ -1583,6 +1601,7 @@ function buildHumanAnswerEvent(
     at: answeredAt,
     approvalId: approval.id,
     answer,
+    ...(selections === undefined ? {} : { selections: [...selections] }),
     ...(approval.conversationId === undefined ? {} : { conversationId: approval.conversationId }),
     ...(via === undefined ? {} : { answeredVia: via }),
   };
@@ -2877,12 +2896,28 @@ class Clone implements CloneHost {
     this.#notices.forgetConversation(conversationId);
   }
 
-  async answerApproval(approvalId: string, answer: string, via?: AnswerApprovalVia): Promise<void> {
+  async answerApproval(
+    approvalId: string,
+    suppliedAnswer: string,
+    via?: AnswerApprovalVia,
+    selections?: readonly ApprovalSelection[],
+  ): Promise<void> {
     // **行は在るが読めないときは `UnreadableApprovalError` がそのまま出る**（「存在しない」
     // に畳まない。`getApproval` / `updateApproval` の doc）。呼び手が `instanceof` で
     // 「在るが読めない」と言う（HTTP は 409）。
     const approval = await this.#stores.jobs.getApproval(approvalId);
     if (!approval) throw new Error(`承認待ち ${approvalId} は存在しない`);
+
+    // **`selections`（issue #2525）は `questions` と突き合わせ、何も書く前に断る。** 畳んだ文を
+    // 回答として扱い（`PendingApproval.answer`・日誌の `escalation`・`human_answer`）、
+    // 構造は `selections` へ残す。このとき `suppliedAnswer` は補足（空でもよい）。
+    // `selections` を渡さない呼びは、今までと1文字も変わらない（`answer` はそのまま回答）。
+    let answer = suppliedAnswer;
+    if (selections !== undefined) {
+      const violation = describeSelectionsViolation(approval.questions, selections);
+      if (violation !== null) throw new InvalidApprovalSelectionsError(approvalId, violation);
+      answer = foldSelections(approval.questions ?? [], selections, suppliedAnswer);
+    }
 
     const answeredAt = new Date().toISOString();
     // **`answeredVia`（Issue #1479）は `via` が渡されたときだけ足す。** 渡さずに
@@ -2915,6 +2950,7 @@ class Clone implements CloneHost {
         ...current,
         answeredAt,
         answer,
+        ...(selections === undefined ? {} : { selections: [...selections] }),
         answerDelivery: 'pending',
         ...(via === undefined ? {} : { answeredVia: via }),
       };
@@ -2945,7 +2981,7 @@ class Clone implements CloneHost {
     // **`answeredVia` も運ぶ（#1479）。** クローンは人間の代理であり、`operator`
     // 経由の回答が人間本人とは限らないことを、隠さず自分の判断材料にできる
     // ようにするため（`case 'human_answer'` がこれをターンの入力の文面へ足す）。
-    const event = buildHumanAnswerEvent(approval, answer, answeredAt, via);
+    const event = buildHumanAnswerEvent(approval, answer, answeredAt, via, selections);
 
     // **合図そのものを、`post()`（ライブ配達）より先に受信箱へ直接永続化する
     // （issue #1977）。** ここが成功していれば、この直後に `post()` が
@@ -6296,6 +6332,7 @@ class Clone implements CloneHost {
         approval.answer,
         approval.answeredAt,
         approval.answeredVia,
+        approval.selections,
       );
       // **作られなかった許可の記録も作り直す**（issue #1999。`#reconcilePermissionGrant`
       // の doc）。配達より先に置く——落ちた窓は `answerApproval` の許可の記録
@@ -8319,9 +8356,15 @@ class Clone implements CloneHost {
           event.answeredVia === undefined
             ? ''
             : `\n回答経路: ${describeAnsweredVia(event.answeredVia)}`;
+        // **構造も添える（issue #2525）。** 回答の文（上）は人間向けに畳んだもので、設問 id と
+        // 選んだ選択肢 id の対は文からは読み取れない。クローンが機械的に拾えるよう JSON で足す。
+        const selectionsLine =
+          event.selections === undefined
+            ? ''
+            : `\n選択（構造。設問 id → 選んだ選択肢 id ＋ その他）: ${JSON.stringify(event.selections)}`;
         const answerPrompt =
           `[system] 承認待ちにしていた質問に人間が答えた。\n\n質問: ${question}\n回答: ${event.answer}` +
-          `${viaLine}${waiting}\n\n` +
+          `${selectionsLine}${viaLine}${waiting}\n\n` +
           'この回答に沿って続きを進めよ。今後同じ判断を自分でできるよう、必要なら記憶へ残すこと。';
         // **全文を残す**（#243）。回答そのものは承認待ちの器にも在るが、質問・回答・
         // 宛先を1本にしたこの形＝**このターンへ入ったもの**は、ここにしか無い。

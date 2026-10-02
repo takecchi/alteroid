@@ -482,6 +482,49 @@ export type _AssertAnsweredViaMatchesLikeType = AssertTrue<
 >;
 
 /**
+ * `ask_human` の設問の選択肢（issue #2525）。`id` は設問の中で一意
+ * （`describeQuestionsViolation`）。
+ */
+export const approvalOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  /** クローンが推すもの。人間の画面・CLI が印を付ける。選ばれるとは限らない。 */
+  recommended: z.boolean().optional(),
+});
+
+export type ApprovalOption = z.infer<typeof approvalOptionSchema>;
+
+/**
+ * `ask_human` の任意の構造化された設問（issue #2525）。自由文の `question` は
+ * 全体の前置き・背景として必須のまま残り、これは「選んで答えてほしい」ものだけを持つ。
+ * `id` は承認待ちの中で一意。
+ */
+export const approvalQuestionSchema = z.object({
+  id: z.string().min(1),
+  prompt: z.string().min(1),
+  options: z.array(approvalOptionSchema).min(1),
+  /** 既定 false（単一選択）。 */
+  multiple: z.boolean().optional(),
+  /** 既定 true。選択肢の最後に「その他（自由入力）」を付ける。 */
+  allowOther: z.boolean().optional(),
+});
+
+export type ApprovalQuestion = z.infer<typeof approvalQuestionSchema>;
+
+/**
+ * 人間の回答のうち、1つの設問への答え（issue #2525）。`optionIds` は空でもよい
+ * （`other` だけで答える、または何も選ばない＝未回答）。
+ */
+export const approvalSelectionSchema = z.object({
+  questionId: z.string().min(1),
+  optionIds: z.array(z.string().min(1)),
+  other: z.string().optional(),
+});
+
+export type ApprovalSelection = z.infer<typeof approvalSelectionSchema>;
+
+/**
  * 仕事の起点（PRD「自律」の4つ）。M1 で届くのは `human` だけだが、
  * 判別可能ユニオンとして最初から4つ揃えておく。
  */
@@ -512,6 +555,12 @@ export const inboxEventSchema = z.discriminatedUnion('type', [
     /** 承認待ちキューの項目 id */
     approvalId: z.string(),
     answer: z.string(),
+    /**
+     * `PendingApproval.selections` の写し（issue #2525）。`answer` は同じ回答を畳んだ文で、
+     * こちらは構造（設問 id → 選んだ選択肢 id の配列 ＋ その他の文）。`selections` で答えて
+     * いない回答には無い。
+     */
+    selections: z.array(approvalSelectionSchema).optional(),
     /**
      * 元の承認（`PendingApproval.conversationId`）が持っていた会話 id の
      * 写し（#768）。承認が会話 id を持たなければ undefined のままで、
@@ -4397,7 +4446,19 @@ export const pendingApprovalSchema = z.object({
    */
   requestId: z.string().optional(),
   answeredAt: isoDateTime.optional(),
+  /**
+   * 回答の文。`selections` で答えたときは、デーモンが設問・選んだ選択肢・その他・補足を
+   * 人間が読める文に畳んだもの（`foldSelections`。issue #2525）。
+   */
   answer: z.string().optional(),
+  /**
+   * `ask_human` が積んだ構造化の設問（issue #2525）。無い承認待ち（この欄より前の行・
+   * `request_permission`・設問を付けなかった `ask_human`）は自由文だけで答える。
+   * **`request_permission` の承認待ちには付けない**（許可/拒否は `decision` が持つ）。
+   */
+  questions: z.array(approvalQuestionSchema).optional(),
+  /** `questions` への人間の答えの構造（設問 id → 選んだ選択肢 id ＋ その他の文）。 */
+  selections: z.array(approvalSelectionSchema).optional(),
   /**
    * 回答がどの経路を通ったか（Issue #1479）。doc は {@link answeredViaSchema} を
    * 見よ。**`answeredAt` と対で埋まる**——`Clone#answerApproval` が同じ呼びの中で

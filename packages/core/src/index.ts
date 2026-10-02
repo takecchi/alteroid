@@ -483,6 +483,17 @@ export {
   type JournalScanResult,
 } from './journal-scan.js';
 /**
+ * 承認待ちの質問を選択肢で答える部品（issue #2525）。道具・クローン・デーモンの
+ * HTTP の口が同じ検査・同じ畳み方を通るために公開する。
+ */
+export {
+  describeQuestionsViolation,
+  describeSelectionsViolation,
+  describeQuestionLines,
+  foldSelections,
+  summarizeQuestions,
+} from './approval-choices.js';
+/**
  * 承認の答えとその後の行動を対で読む口（issue #847 の案B）。デーモンの
  * `GET /approvals/:id/trace` と CLI が、クローンの `approval_trace` と同じ
  * 関数を通るために公開する（`approval-trace.ts` の doc）。
@@ -1181,6 +1192,7 @@ export {
   type RedeliveryGate,
   type TokenPoolReopenedPayload,
   ApprovalAlreadySettledError,
+  InvalidApprovalSelectionsError,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
 /**

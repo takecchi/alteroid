@@ -175,6 +175,7 @@ import {
   JOB_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
   PERMISSION_GRANT_CONSENT_PHRASE,
+  approvalQuestionSchema,
   approvalUpdatedAt,
   appraisalSchema,
   workKindSchema,
@@ -205,6 +206,11 @@ import type {
   ScheduleSpec,
   ScheduledRequest,
 } from './schema.js';
+import {
+  describeQuestionLines,
+  describeQuestionsViolation,
+  summarizeQuestions,
+} from './approval-choices.js';
 import { describeRevisionStatus } from './revision.js';
 import {
   CANON_REVISION,
@@ -6459,10 +6465,24 @@ export function createCloneTools(context: ToolContext) {
         '止まるのはこの件だけであり、他の仕事は進めてよい。',
         '回答は後から受信箱に届く。',
         '不要になったら approval_withdraw で理由付きで取り下げられる（未回答のうちだけ）。',
+        '複数の案から選んでもらうときは、question の本文に (a)(b)(c) を書くより questions を使うほうが人間が答えやすい（選択肢を押して答えられる）。',
+        'questions は任意で、question（全体の前置き・背景）は必須のまま。',
+        '各設問は { id, prompt, options: [{ id, label, description?, recommended? }], multiple?, allowOther? }。',
+        'id は設問が承認待ちの中で、選択肢は設問の中で一意にする。multiple: true で複数選択、allowOther は既定 true（選択肢の最後に自由入力の「その他」が付く）。',
+        'あなたの推しの選択肢には recommended: true を付ける。',
+        '例: question: "デプロイ先を決めたい"、questions: [{ id: "target", prompt: "デプロイ先は？", options: [{ id: "railway", label: "Railway", recommended: true }, { id: "fly", label: "Fly.io" }] }, { id: "notify", prompt: "通知する先（複数可）", multiple: true, allowOther: false, options: [{ id: "slack", label: "Slack" }, { id: "mail", label: "メール" }] }]。',
+        '人間の回答は「Q1 デプロイ先は？: (a) Railway［推奨］ / その他: …」のような文に畳まれて届き、構造（設問 id → 選んだ選択肢 id）も添えられる。未回答の設問は「未回答」と出る。',
       ].join(' '),
       {
         question: z.string().describe('人間への質問。何を判断してほしいかを具体的に'),
         context: z.string().optional().describe('判断に必要な背景'),
+        questions: z
+          .array(approvalQuestionSchema)
+          .optional()
+          .describe(
+            '選んで答えてほしい設問（任意）。設問の id は一意、選択肢の id は設問の中で一意（重複は断られる）。' +
+              '複数案の提示は question に (a)(b)(c) を書かずこちらへ',
+          ),
         managerId: z
           .string()
           .optional()
@@ -6485,7 +6505,12 @@ export function createCloneTools(context: ToolContext) {
               '受信箱に届いていない確認に、生ログから答える手段は無い（#572）',
           ),
       },
-      async ({ question, context: background, managerId, requestId }) => {
+      async ({ question, context: background, questions, managerId, requestId }) => {
+        // **設問の id の重複は道具の側で弾く（issue #2525）。** 何も積まない。
+        if (questions !== undefined) {
+          const violation = describeQuestionsViolation(questions);
+          if (violation !== null) return text(`承認待ちには積まなかった: ${violation}`);
+        }
         // **いまのターンの会話 id を積む（#768）。** マネージャー発の確認・蒸留・
         // timer など内部ターンでは呼んだ結果が `undefined` になるので、その場合は
         // ここも undefined のままになる（= 今までどおり `self` へ積まれる。
@@ -6497,6 +6522,7 @@ export function createCloneTools(context: ToolContext) {
           createdAt: new Date().toISOString(),
           question,
           ...(background === undefined ? {} : { context: background }),
+          ...(questions === undefined || questions.length === 0 ? {} : { questions }),
           ...(managerId === undefined ? {} : { jobId: managerId }),
           ...(requestId === undefined ? {} : { requestId }),
           ...(conversationId === undefined ? {} : { conversationId }),
@@ -6672,6 +6698,11 @@ export function createCloneTools(context: ToolContext) {
           const body = [
             `質問: ${approval.question}`,
             ...(approval.context === undefined ? [] : [`背景: ${approval.context}`]),
+            ...(approval.questions === undefined
+              ? []
+              : [
+                  `設問:\n${describeQuestionLines(approval.questions).join('\n')}`,
+                ]),
             ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
             ...(approval.withdrawnReason === undefined
               ? []
@@ -6727,6 +6758,9 @@ export function createCloneTools(context: ToolContext) {
             updatedAt: approvalUpdatedAt(approval),
             summary: excerptLine(approval.question, APPROVAL_QUESTION_EXCERPT),
             extra: [
+              approval.questions === undefined || approval.questions.length === 0
+                ? null
+                : `  ${summarizeQuestions(approval.questions)}（詳細は approvals_list id=<id>）`,
               approval.jobId === undefined
                 ? null
                 : `  宛先: managerId: "${approval.jobId}"` +

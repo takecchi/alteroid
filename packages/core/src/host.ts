@@ -1,5 +1,5 @@
 import type { ManagerPool } from './manager.js';
-import type { ChatStreamEvent, InboxEvent } from './schema.js';
+import type { ApprovalSelection, ChatStreamEvent, InboxEvent } from './schema.js';
 
 /**
  * `answerApproval` を叩いた経路（Issue #863、#1479）。**プレーンな TS の型で
@@ -90,8 +90,17 @@ export interface CloneHost {
    * `via` は回答の経路（Issue #863）。渡さなければ `request_permission` の
    * 要求への回答でも許可は記録されない（既定は不許可——`Clone#answerApproval`
    * の doc）。
+   *
+   * `selections`（issue #2525）は `questions` を持つ承認待ちへの構造化した回答。渡すと
+   * `answer` は補足（空文字でもよい）になり、設問・選んだ選択肢・その他・補足を畳んだ文が
+   * 回答として残る。`questions` と突き合わず断るときは `InvalidApprovalSelectionsError`。
    */
-  answerApproval(approvalId: string, answer: string, via?: AnswerApprovalVia): Promise<void>;
+  answerApproval(
+    approvalId: string,
+    answer: string,
+    via?: AnswerApprovalVia,
+    selections?: readonly ApprovalSelection[],
+  ): Promise<void>;
 
   /**
    * 委譲先の一覧と生ログ。HTTP 層はここから可観測性の下2層へ降りる。

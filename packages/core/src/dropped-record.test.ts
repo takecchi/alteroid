@@ -885,6 +885,13 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
     human_answer: {
       approvalId: { emit: 'tag', token: 'approvalId' },
       answer: { emit: 'size', token: 'answer' },
+      selections: {
+        emit: 'never',
+        why:
+          '回答の構造（issue #2525）。設問 id・選択肢 id と、人間が書いた `other` の自由文を運ぶ。' +
+          'この関数は参照しない——自由文は `answer`（畳んだ文）と同じく長さだけに逃がす対象で、' +
+          '長さは `answer` が既に言っている。',
+      },
       conversationId: {
         emit: 'never',
         why:
@@ -984,6 +991,7 @@ describe('inboxEventShape の名簿（schema に足した型・欄の足し忘�
       at: AT,
       approvalId: 'ap-1',
       answer: SECRET,
+      selections: [{ questionId: 'q1', optionIds: ['a'], other: SECRET }],
       conversationId: SECRET,
       answeredVia: { kind: 'account', accountId: SECRET },
     },
@@ -1158,6 +1166,14 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
       emit: 'never',
       why: '`answeredAt` と同じ理由（回答は後段の欄）。回答の本文は `journalEntryShape` の `escalation.answer` 側が扱う。',
     },
+    questions: {
+      emit: 'never',
+      why: '設問と選択肢（issue #2525）。人間向けの自由文（prompt / label / description）を運ぶので出さない。',
+    },
+    selections: {
+      emit: 'never',
+      why: '`answer` と同じ理由（回答は後段の欄。`other` は人間の自由文）。',
+    },
     conversationId: {
       emit: 'never',
       why: 'この関数は参照しない。`inboxEventShape`/`journalEntryShape` の対応欄と違い、対になる journal 欄も無い（単に本体が触れていない欄）。',
@@ -1206,6 +1222,8 @@ describe('approvalShape の名簿（schema に足した欄の足し忘れを赤�
     requestId: 'req-1',
     answeredAt: SECRET,
     answer: SECRET,
+    questions: [{ id: 'q1', prompt: SECRET, options: [{ id: 'a', label: SECRET }] }],
+    selections: [{ questionId: 'q1', optionIds: ['a'], other: SECRET }],
     conversationId: SECRET,
     withdrawnAt: SECRET,
     withdrawnReason: SECRET,

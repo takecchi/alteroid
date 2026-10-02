@@ -6226,6 +6226,76 @@
                           "answer": {
                             "type": "string"
                           },
+                          "questions": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "options": {
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "description": {
+                                        "type": "string"
+                                      },
+                                      "recommended": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["id", "label"]
+                                  }
+                                },
+                                "multiple": {
+                                  "type": "boolean"
+                                },
+                                "allowOther": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["id", "prompt", "options"]
+                            }
+                          },
+                          "selections": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "questionId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "optionIds": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "other": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["questionId", "optionIds"]
+                            }
+                          },
                           "answeredVia": {
                             "oneOf": [
                               {
@@ -6437,6 +6507,76 @@
                         },
                         "answer": {
                           "type": "string"
+                        },
+                        "questions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "prompt": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "options": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "description": {
+                                      "type": "string"
+                                    },
+                                    "recommended": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": ["id", "label"]
+                                }
+                              },
+                              "multiple": {
+                                "type": "boolean"
+                              },
+                              "allowOther": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": ["id", "prompt", "options"]
+                          }
+                        },
+                        "selections": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "questionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "optionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "other": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["questionId", "optionIds"]
+                          }
                         },
                         "answeredVia": {
                           "oneOf": [
