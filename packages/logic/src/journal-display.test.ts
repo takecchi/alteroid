@@ -40,7 +40,7 @@ describe('日誌の表示の定数', () => {
 
   it('検索の断りは移す前と同じ文言', () => {
     expect(SEARCH_SCOPE_NOTE).toBe(
-      'tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
   });
 

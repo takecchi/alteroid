@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeApi, gate, journalEntry, minute, said } from './fake-api.js';
 import type { HeaderFeed } from './header-feed.js';
 import { JournalController } from './journal-controller.js';
-import { JOURNAL_PAGE } from './journal-window.js';
+import { JOURNAL_PAGE } from '@alteroid/logic';
 import { waitFor } from './test-helpers.js';
 
 function setup(

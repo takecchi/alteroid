@@ -67,7 +67,7 @@ export const JOURNAL_TYPES = Object.keys(JOURNAL_TONE) as [JournalEntryType, ...
  * 「対象にしていない欄」）。**検索していないときは出さない**のは読む側の仕事。
  */
 export const SEARCH_SCOPE_NOTE =
-  'tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+  'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
 
 /** 初期表示・1回の「もっと遡る」で読む件数。 */
 export const JOURNAL_PAGE = 100;

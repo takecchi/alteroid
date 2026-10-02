@@ -852,7 +852,28 @@ describe('日誌画面の検索欄（issue #250）', () => {
   /**
    * **探す対象に入っていない欄が在ることを、探している人にだけ見せる。**
    * 常に出すと本当に効いているときの目印にならない。
+   * 文は `@alteroid/logic` の `SEARCH_SCOPE_NOTE`（TUI と共有）。期待値は #2573 で揃えた6種別の文を逐語で書く。
    */
+  it('探す対象に入っていない欄の断りは、語で探しているときだけ出る', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    const NOTE =
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+    const { unmount } = renderJournal({ status: 'live', recent: [] }, [
+      `/?q=${encodeURIComponent('当たらない語')}`,
+    ]);
+    await waitForLoaded();
+    expect(screen.getByText(NOTE)).toBeTruthy();
+    unmount();
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
   /**
    * **絞ったまま遡れること**（`q` と `until` が同じ要求に載る）。
    *
@@ -924,7 +945,9 @@ describe('日誌画面の検索欄（issue #250）', () => {
     expect(screen.getByText(/tool_use の input/)).toBeTruthy();
     // core の `journal-search.ts` が1欄も探さない種別（#2562）。CLI の `/journal` と同じ並び。
     expect(
-      screen.getByText(/tool_use の input・worker_wait・turn_usage・github_observation/),
+      screen.getByText(
+        /tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation/,
+      ),
     ).toBeTruthy();
   });
 });

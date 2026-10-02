@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { journalEntry, minute, said } from './fake-api.js';
+import { JOURNAL_TYPES, SEARCH_SCOPE_NOTE } from '@alteroid/logic';
 import {
-  JOURNAL_TYPES,
   filterText,
-  formatDateTime,
   journalDetailText,
   journalEmptyMessage,
   journalListLine,
@@ -168,13 +167,6 @@ describe('一覧の 1 行と文言', () => {
     expect(line.endsWith('…')).toBe(true);
   });
 
-  it('時刻は今年なら年を足さず、今年でなければ足す', () => {
-    const now = Date.parse('2026-10-02T00:00:00.000Z');
-    expect(formatDateTime('2026-09-29T07:00:00.000Z', now)).not.toContain('2026');
-    expect(formatDateTime('2025-09-29T07:00:00.000Z', now)).toContain('2025');
-    expect(formatDateTime('壊れた', now)).toBe('壊れた');
-  });
-
   it('絞った 0 件を、絞っていない 0 件と同じ文言にしない', () => {
     expect(journalEmptyMessage([], '')).toBe('この条件では何も記録されていない。');
     expect(journalEmptyMessage(['decision'], '')).toContain('type=decision');
@@ -213,5 +205,13 @@ describe('詳細の本文', () => {
     const text = journalDetailText(said(1, 'あ'.repeat(JOURNAL_DETAIL_CHARS * 2)));
     expect(text).toContain('字のうち先頭');
     expect(text.length).toBeLessThan(JOURNAL_DETAIL_CHARS + 200);
+  });
+});
+
+describe('語で探すときの断り', () => {
+  it('探す対象に入っていない欄を、CLI・Web・道具・GET /journal と同じ6つの並びで言う（#2573）', () => {
+    expect(SEARCH_SCOPE_NOTE).toBe(
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
+    );
   });
 });

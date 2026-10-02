@@ -7,23 +7,25 @@
  * （`.claude/skills/listing-and-detail`）。可視窓の行だけを描く。
  */
 import type { JournalEntry } from '@alteroid/core';
+import {
+  JOURNAL_TONE,
+  JOURNAL_TYPES,
+  SEARCH_SCOPE_NOTE,
+  formatDateTime,
+  type JournalTone,
+} from '@alteroid/logic';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
 import { formatElapsedAgo } from '../format.js';
 import type { LiveStatus } from './header-feed.js';
 import {
-  JOURNAL_TYPES,
-  SEARCH_SCOPE_NOTE,
   filterText,
-  formatDateTime,
   journalDetailText,
   journalEmptyMessage,
   journalListLine,
   oneLine,
   summarizeJournalEntry,
-  toneOf,
-  type Tone,
 } from './journal-format.js';
 import type { JournalState } from './journal-controller.js';
 import { selectedIndex } from './journal-controller.js';
@@ -37,7 +39,7 @@ export const LIST_FIXED_ROWS = 3;
 /** 詳細の頭の行数（種別と id・時刻・要旨）。ログの高さからこの分を引く。 */
 export const JOURNAL_DETAIL_HEAD_ROWS = 3;
 
-const toneColor = (tone: Tone): string | undefined => {
+const toneColor = (tone: JournalTone): string | undefined => {
   switch (tone) {
     case 'warn':
       return theme.warn;
@@ -130,7 +132,7 @@ export const JournalList: FC<{
       ) : null}
       {shown.map(({ entry, fromNewest }) => {
         const selected = fromNewest === at;
-        const color = toneColor(toneOf(entry.type));
+        const color = toneColor(JOURNAL_TONE[entry.type]);
         return (
           <Box key={entry.id} flexShrink={0}>
             <Text wrap="truncate-end" {...(selected ? { inverse: true } : {})}>

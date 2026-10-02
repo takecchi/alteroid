@@ -27,6 +27,12 @@ import { collectRepoFiles } from './repo-scan-files.js';
  *   `announce` はクローンへ届く）
  * - `packages/core/src/tools.ts` の中の `text(...)`（クローンの道具の応答）
  * - `kind: 'deny'` を持つオブジェクトリテラルの `reason` の値（`runner.ts` の Bash のガード）
+ * - **HTTP の応答（#2570）。`apps/daemon/src/app.ts` と `apps/runner/src/app.ts` の2ファイルに限る**
+ *   （`rel` で判定する）。この2ファイルでは、次の2つも口とみなす。
+ *   - `c.json(...)` の引数
+ *   - オブジェクトリテラルの `error` プロパティの値（`results.push({ id, ok: false, error: … })` の
+ *     ように配列へ積んでから `c.json({ results })` で返す口を取りこぼさないため）。
+ *     省略形の `{ error }` は、`error` が `catch (error)` の変数そのものなら数える。
  *
  * 素のエラーの文字列化とは、次のどれか（`<e|err|error|cause|failure>`）:
  * `String(<id>)` / `<id>.message` / テンプレートの `${<id>}`。
@@ -42,10 +48,16 @@ import { collectRepoFiles } from './repo-scan-files.js';
  *   真のときだけ通る枝の中（`if` の then 側・三項演算子の真の側）。返してよい例外かどうかは
  *   型で分ける、という `reasonOf` の doc の線（例: `TokenPoolInputError`）。
  *   `instanceof Error` は絞りにならない（検出する）。
+ * - **`.name` で絞った枝（#2570）。** `<id>.name === '<文字列リテラル>'`（`==` も。リテラルが
+ *   `'Error'` 以外）が真のときだけ通る枝。`instanceof` と同じ扱い。`&&` の連なりに1つでも在れば絞りとみなす
+ *   （例: `error instanceof Error && error.name === 'InvalidApprovalSelectionsError' ? error.message : …`）。
+ * - **早期に抜ける形の絞り込み（#2570）。** 同じブロックの前の文に
+ *   `if (!(<id> instanceof X)) throw …;`（または `return …;`）が在れば、後続の文は絞られたとみなす。
+ *   `.name` の比較を否定した形（`if (!(<id>.name === '…')) throw …`）も同じ。`X` が `Error` なら絞りにならない。
  *
  * ## 何を見ないか（取りこぼす形）
  * - zod の `parsed.error.message` のように、`error` 名の識別子ではないもの
- * - HTTP の応答（`c.json`）。今回の範囲外
+ * - 上の2ファイル以外の HTTP の応答（`c.json`）。他のファイルは走査しない
  * - 関数をまたぐ受け渡し（引数・戻り値・別の関数が読むフィールド）。同じ関数内の代入だけを追う
  * - `apps/cli`（利用者自身の端末へ出す文）
  */
@@ -65,6 +77,8 @@ const REDACTORS = new Set([
 const CLONE_SINK_NAMES = new Set(['announce', 'postToClone']);
 /** `text(...)` を道具の応答の口とみなすファイル。 */
 const TOOLS_FILE = 'packages/core/src/tools.ts';
+/** `c.json(...)` の引数と `error` プロパティの値を口とみなすファイル（HTTP の応答、#2570）。 */
+const HTTP_FILES = new Set(['apps/daemon/src/app.ts', 'apps/runner/src/app.ts']);
 
 interface BareErrorHit {
   line: number;
@@ -94,7 +108,29 @@ function isRedactorCall(node: ts.Node): boolean {
   return name !== undefined && REDACTORS.has(name);
 }
 
-/** `cond` が真のとき `<id> instanceof <Error 以外>` が必ず真になるか。 */
+/** `<id>.name === '<'Error' 以外の文字列リテラル>'`（`==` も）か。 */
+function isNameLiteralCheck(cond: ts.BinaryExpression, id: string): boolean {
+  const op = cond.operatorToken.kind;
+  if (op !== ts.SyntaxKind.EqualsEqualsEqualsToken && op !== ts.SyntaxKind.EqualsEqualsToken) {
+    return false;
+  }
+  const isNameOfId = (e: ts.Expression): boolean =>
+    ts.isPropertyAccessExpression(e) &&
+    e.name.text === 'name' &&
+    ts.isIdentifier(e.expression) &&
+    e.expression.text === id;
+  const isNarrowLiteral = (e: ts.Expression): boolean =>
+    ts.isStringLiteralLike(e) && e.text !== 'Error';
+  return (
+    (isNameOfId(cond.left) && isNarrowLiteral(cond.right)) ||
+    (isNameOfId(cond.right) && isNarrowLiteral(cond.left))
+  );
+}
+
+/**
+ * `cond` が真のとき、`<id>` が自前の例外に絞られるか
+ * （`<id> instanceof <Error 以外>`、または `<id>.name === '<Error 以外のリテラル>'`）。
+ */
 function impliesCustomInstanceof(cond: ts.Expression, id: string): boolean {
   if (ts.isParenthesizedExpression(cond)) return impliesCustomInstanceof(cond.expression, id);
   if (ts.isBinaryExpression(cond)) {
@@ -109,11 +145,40 @@ function impliesCustomInstanceof(cond: ts.Expression, id: string): boolean {
     if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
       return impliesCustomInstanceof(cond.left, id) || impliesCustomInstanceof(cond.right, id);
     }
+    if (isNameLiteralCheck(cond, id)) return true;
   }
   return false;
 }
 
-/** `node` が、`<id> instanceof <自前の Class>` が真のときだけ通る枝の中に在るか。 */
+/** `cond` が偽のとき（`if (cond) <抜ける>` を通り抜けたとき）、`<id>` が絞られるか。 */
+function impliesNarrowedWhenFalse(cond: ts.Expression, id: string): boolean {
+  if (ts.isParenthesizedExpression(cond)) return impliesNarrowedWhenFalse(cond.expression, id);
+  if (ts.isPrefixUnaryExpression(cond) && cond.operator === ts.SyntaxKind.ExclamationToken) {
+    return impliesCustomInstanceof(cond.operand, id);
+  }
+  if (ts.isBinaryExpression(cond) && cond.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    return impliesNarrowedWhenFalse(cond.left, id) || impliesNarrowedWhenFalse(cond.right, id);
+  }
+  return false;
+}
+
+/** 文が、必ず抜ける（`throw` / `return`、またはそれを直下に持つブロック）か。 */
+function alwaysExits(stmt: ts.Statement): boolean {
+  const exits = (st: ts.Statement): boolean => ts.isThrowStatement(st) || ts.isReturnStatement(st);
+  return exits(stmt) || (ts.isBlock(stmt) && stmt.statements.some(exits));
+}
+
+/** `stmt` が `if (!<絞り>) throw/return …;`（else 無し）で、通り抜けると `id` が絞られるか。 */
+function isNarrowingEarlyExit(stmt: ts.Statement, id: string): boolean {
+  return (
+    ts.isIfStatement(stmt) &&
+    stmt.elseStatement === undefined &&
+    alwaysExits(stmt.thenStatement) &&
+    impliesNarrowedWhenFalse(stmt.expression, id)
+  );
+}
+
+/** `node` が、`<id>` を自前の例外に絞る枝（then 側・真の側・早期に抜けた後）の中に在るか。 */
 function narrowedToCustomClass(node: ts.Node, id: string): boolean {
   for (
     let child: ts.Node = node, cur = node.parent;
@@ -124,6 +189,11 @@ function narrowedToCustomClass(node: ts.Node, id: string): boolean {
       if (impliesCustomInstanceof(cur.expression, id)) return true;
     } else if (ts.isConditionalExpression(cur) && cur.whenTrue === child) {
       if (impliesCustomInstanceof(cur.condition, id)) return true;
+    } else if (ts.isBlock(cur) || ts.isSourceFile(cur) || ts.isCaseClause(cur)) {
+      // 早期に抜ける形: 前の文の `if (!(id instanceof X)) throw …;`
+      const stmts = cur.statements;
+      const at = stmts.findIndex((st) => st === child);
+      if (at > 0 && stmts.slice(0, at).some((st) => isNarrowingEarlyExit(st, id))) return true;
     }
   }
   return false;
@@ -211,15 +281,48 @@ function collectTaintedNames(file: ts.SourceFile): Map<string, ts.Node[]> {
   return tainted;
 }
 
+/** `node` が、`catch (<id>)` の中に在るか。 */
+function isCatchVariable(node: ts.Node, id: string): boolean {
+  for (let cur: ts.Node | undefined = node.parent; cur !== undefined; cur = cur.parent) {
+    if (
+      ts.isCatchClause(cur) &&
+      cur.variableDeclaration !== undefined &&
+      ts.isIdentifier(cur.variableDeclaration.name) &&
+      cur.variableDeclaration.name.text === id
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** 口の引数に当たる式を集める。 */
 function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
   if (ts.isCallExpression(node)) {
     if (isStderrWrite(node.expression)) return node.arguments;
+    if (
+      HTTP_FILES.has(rel) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === 'json' &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'c'
+    ) {
+      return node.arguments;
+    }
     const name = calleeName(node.expression);
     if (name !== undefined && CLONE_SINK_NAMES.has(name)) return node.arguments;
     if (rel === TOOLS_FILE && ts.isIdentifier(node.expression) && node.expression.text === 'text') {
       return node.arguments;
     }
+  }
+  if (ts.isObjectLiteralExpression(node) && HTTP_FILES.has(rel)) {
+    return node.properties.flatMap((p) =>
+      ts.isPropertyAssignment(p) &&
+      (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+      p.name.text === 'error'
+        ? [p.initializer]
+        : [],
+    );
   }
   if (ts.isObjectLiteralExpression(node)) {
     const isDeny = node.properties.some(
@@ -252,7 +355,12 @@ function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
   const file = ts.createSourceFile('scan.ts', source, ts.ScriptTarget.Latest, true);
   const tainted = collectTaintedNames(file);
   const hits: BareErrorHit[] = [];
+  const seen = new Set<string>();
   const report = (node: ts.Node, text: string): void => {
+    // c.json({ error: … }) は c.json の引数と error プロパティの両方から見えるので、重複を畳む
+    const key = `${String(node.getStart(file))}:${text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
     hits.push({ line: line + 1, text });
   };
@@ -276,6 +384,19 @@ function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
     ts.forEachChild(node, inspectIndirect);
   };
   const visit = (node: ts.Node): void => {
+    if (HTTP_FILES.has(rel) && ts.isObjectLiteralExpression(node)) {
+      // 省略形の `{ error }`: `error` が `catch (error)` の変数そのものなら素のエラーを返している
+      for (const p of node.properties) {
+        if (
+          ts.isShorthandPropertyAssignment(p) &&
+          p.name.text === 'error' &&
+          isCatchVariable(p.name, 'error') &&
+          !narrowedToCustomClass(p.name, 'error')
+        ) {
+          report(p.name, '{ error }（catch の変数そのもの）');
+        }
+      }
+    }
     for (const arg of sinkArguments(node, rel)) {
       for (const bare of bareErrorNodes(arg)) report(bare, bare.getText(file));
       inspectIndirect(arg);
@@ -445,8 +566,116 @@ describe('findBareErrorSinkWrites（純粋関数）: 型で絞った自前の例
   });
 });
 
+describe('findBareErrorSinkWrites（純粋関数）: HTTP の応答（#2570）', () => {
+  const daemon = 'apps/daemon/src/app.ts';
+  const runner = 'apps/runner/src/app.ts';
+  it('c.json(...) の引数の素のエラーを、対象の2ファイルだけで検出する', () => {
+    const src = 'return c.json({ error: error.message }, 400);';
+    expect(count(src, daemon)).toBe(1);
+    expect(count(src, runner)).toBe(1);
+    expect(count('return c.json({ ok: false, why: `${String(err)}` });', daemon)).toBe(1);
+    expect(count('return c.json({ error: reasonOf(error) }, 400);', daemon)).toBe(0);
+    expect(count("return c.json({ error: 'not found' as const }, 404);", daemon)).toBe(0);
+  });
+  it('対象外のファイル・rel 無しでは c.json も error プロパティも見ない（対照）', () => {
+    const src = 'return c.json({ error: error.message }, 400);';
+    expect(count(src, 'apps/daemon/src/index.ts')).toBe(0);
+    expect(count(src, 'packages/core/src/tools.ts')).toBe(0);
+    expect(count(src)).toBe(0);
+    expect(count('results.push({ id, error: error.message });', 'apps/daemon/src/other.ts')).toBe(
+      0,
+    );
+  });
+  it('c.json 以外の呼び出し（c.req.json() など）は口とみなさない', () => {
+    expect(count('const b = c.req.json(String(error));', daemon)).toBe(0);
+    expect(count('res.json({ x: error.message });', daemon)).toBe(0);
+  });
+  it('error プロパティの値を、配列へ積む形でも検出する', () => {
+    expect(count('results.push({ id, ok: false, error: error.message });', daemon)).toBe(1);
+    expect(count("const r = { 'error': `${err}` };", daemon)).toBe(1);
+    expect(count('results.push({ id, ok: false, error: reasonOf(error) });', daemon)).toBe(0);
+    expect(count('results.push({ id, ok: false, message: error.message });', daemon)).toBe(0);
+  });
+  it('c.json の中の error プロパティは二重に数えない', () => {
+    expect(count('return c.json({ error: error.message }, 400);', daemon)).toBe(1);
+  });
+  it('省略形の { error } は catch の変数そのものなら検出する', () => {
+    const bare = `function f() { try {} catch (error) { results.push({ id, error }); } }`;
+    expect(count(bare, daemon)).toBe(1);
+    const other = `function f(error: string) { results.push({ id, error }); }`;
+    expect(count(other, daemon)).toBe(0);
+    const narrowed = `function f() { try {} catch (error) {
+      if (error instanceof FooError) results.push({ id, error });
+    } }`;
+    expect(count(narrowed, daemon)).toBe(0);
+  });
+  it(".name === '<リテラル>' で絞った枝は検出しない", () => {
+    const tern =
+      "error instanceof Error && error.name === 'FooError' ? error.message : reasonOf(error)";
+    expect(count(`return c.json({ error: ${tern} }, 400);`, daemon)).toBe(0);
+    const ifThen = `function f() { try {} catch (error) {
+      if (error instanceof Error && error.name === 'FooError') {
+        return c.json({ error: error.message }, 400);
+      }
+    } }`;
+    expect(count(ifThen, daemon)).toBe(0);
+    expect(
+      count("c.json({ error: error.name == 'FooError' ? error.message : '固定' });", daemon),
+    ).toBe(0);
+    expect(
+      count("c.json({ error: ok && 'FooError' === error.name ? error.message : '固定' });", daemon),
+    ).toBe(0);
+  });
+  it(".name を 'Error' と比べる形・別の識別子・偽の側・!== は絞りとみなさない（対照）", () => {
+    expect(
+      count("c.json({ error: error.name === 'Error' ? error.message : '固定' });", daemon),
+    ).toBe(1);
+    expect(
+      count("c.json({ error: other.name === 'FooError' ? error.message : '固定' });", daemon),
+    ).toBe(1);
+    expect(
+      count("c.json({ error: error.name === 'FooError' ? '固定' : error.message });", daemon),
+    ).toBe(1);
+    expect(
+      count("c.json({ error: error.name !== 'FooError' ? error.message : '固定' });", daemon),
+    ).toBe(1);
+    expect(count("c.json({ error: error.name === kind ? error.message : '固定' });", daemon)).toBe(
+      1,
+    );
+  });
+  it('早期に抜ける形（if (!(error instanceof X)) throw / return）の後の文は検出しない', () => {
+    const early = (guard: string): string => `function f() { try {} catch (error) {
+      ${guard}
+      results.push({ id, ok: false, error: error.message });
+    } }`;
+    expect(count(early('if (!(error instanceof FooError)) throw error;'), daemon)).toBe(0);
+    expect(count(early('if (!(error instanceof FooError)) { return; }'), daemon)).toBe(0);
+    expect(count(early("if (!(error.name === 'FooError')) throw error;"), daemon)).toBe(0);
+    expect(count(early('if (!(error instanceof FooError) || !ok) throw error;'), daemon)).toBe(0);
+  });
+  it('早期に抜ける形の対照: instanceof Error・抜けない・別の識別子・前に無い文は検出する', () => {
+    const early = (guard: string): string => `function f() { try {} catch (error) {
+      ${guard}
+      results.push({ id, ok: false, error: error.message });
+    } }`;
+    expect(count(early('if (!(error instanceof Error)) throw error;'), daemon)).toBe(1);
+    expect(count(early("if (!(error.name === 'Error')) throw error;"), daemon)).toBe(1);
+    expect(count(early('if (!(error instanceof FooError)) log(error);'), daemon)).toBe(1);
+    expect(count(early('if (!(other instanceof FooError)) throw error;'), daemon)).toBe(1);
+    expect(count(early('if (error instanceof FooError) throw error;'), daemon)).toBe(1);
+    expect(count(early('if (!(error instanceof FooError)) throw error; else log();'), daemon)).toBe(
+      1,
+    );
+    const after = `function f() { try {} catch (error) {
+      results.push({ id, ok: false, error: error.message });
+      if (!(error instanceof FooError)) throw error;
+    } }`;
+    expect(count(after, daemon)).toBe(1);
+  });
+});
+
 describe('外へ出る口へ置く例外の文は reasonOf / redactErrorText を通す（#2512 / #2538 / #2565）', () => {
-  it('stderr・announce・postToClone・tools.ts の text・deny の理由に、素の String(error) / error.message が無い', () => {
+  it('stderr・announce・postToClone・tools.ts の text・deny の理由に、素の String(error) / error.message が無い（HTTP の応答は daemon / runner の app.ts、#2570）', () => {
     const files = collectRepoFiles(ROOT, EXCLUDE_DIRS).filter(isScannedSource);
     // 走査が空振りして「0件で緑」にならないようにする
     expect(files.length).toBeGreaterThan(100);

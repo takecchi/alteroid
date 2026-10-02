@@ -3336,6 +3336,10 @@ describe('chat の /journal', () => {
     const text = read();
     expect(text).toContain('「ナス」に当たる日誌はありません');
     expect(text).toContain('tool_use の input');
+    // core の `journal-search.ts` が1欄も探さない種別を全部言う（#2562）。Web・道具・GET /journal と同じ並び。
+    expect(text).toContain(
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation',
+    );
     expect(text).not.toContain('日誌はまだ空');
   });
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createRunnerHost, type RunnerHost } from '@alteroid/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
@@ -167,5 +167,27 @@ describe('POST /managers/:id/answers の hook（#1852）', () => {
     const raw = JSON.stringify(body);
     expect(raw).not.toContain('FAKE-answer-message');
     expect(raw).not.toContain('FAKE-not-allow-or-deny');
+  });
+});
+
+describe('POST /mcp-servers の 400（#2570）', () => {
+  it('登録が投げた例外の2行目以降（束縛パラメータ等）は本文へ出さず、reasonOf の1行だけを返す', async () => {
+    const dir = makeTempDirSync('alteroid-mcp-servers-400-');
+    const app = makeApp(dir);
+    vi.spyOn(host as RunnerHost, 'setMcpServers').mockImplementation(() => {
+      throw new Error('登録できない\nparams: FAKE-secret-value');
+    });
+
+    const res = await app.request('/mcp-servers', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({ mcpServers: {} }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('登録できない');
+    expect(JSON.stringify(body)).not.toContain('FAKE-secret-value');
   });
 });

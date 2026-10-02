@@ -3,12 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeApi, memoryDoc, memoryRow } from './fake-api.js';
 import type { HeaderFeed } from './header-feed.js';
 import { MEMORY_DETAIL_CHARS, MemoryController } from './memory-controller.js';
-import {
-  formatBytes,
-  memoryDescriptionLine,
-  memoryDetailStatus,
-  memoryTitleLine,
-} from './memory-view.js';
+import { memoryDescriptionLine, memoryDetailStatus, memoryTitleLine } from './memory-view.js';
 import { waitFor } from './test-helpers.js';
 
 function setup(configure: (api: ReturnType<typeof fakeApi>) => void = () => undefined) {
@@ -153,6 +148,5 @@ describe('一覧の文言', () => {
     expect(
       memoryDescriptionLine(memoryRow('y', { descriptionFreshness: { kind: 'unknown' } })),
     ).toContain('要旨を書いた時刻が記録されていない: ');
-    expect(formatBytes(10)).toBe('10 B');
   });
 });
