@@ -98,12 +98,12 @@ export function journalEmptyMessage(types: readonly JournalType[], q: string): s
 
 /**
  * 語で探しているとき、探す対象に入っていない欄が在ることの断り。
- * Web の `apps/web/app/routes/journal.tsx`（JSX の中の文）と同じ文言（#2572 で `github_observation` を足して
- * 揃った）。Web のそれは route ファイルの私物で logic に無いので、ここは写しのまま残してある。
+ * Web の `apps/web/app/routes/journal.tsx`（JSX の中の文）と同じ並び（#2573 で `context_usage`・`inbox_flow` を足して
+ * CLI・Web・道具・`GET /journal` が揃った）。Web のそれは route ファイルの私物で logic に無いので、ここは写しのまま残してある。
  * 変えるときは Web・core の `journal_read`・CLI の `/journal` と並べて直すこと。
  */
 export const SEARCH_SCOPE_NOTE =
-  'tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+  'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
 
 /**
  * 詳細の本文（全文）。上位の欄ごとに `名前: 値` で並べ、文字列は改行を保ったまま字下げして出す
