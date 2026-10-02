@@ -158,7 +158,11 @@ export function describeProgress(view: ProgressViewInput): string {
             (ok.limit === undefined ? '' : ` / limit ${String(ok.limit)}`),
         );
       } else {
-        lines.push('    数: — （成功した観測の記録が無い。0 件ではない）');
+        lines.push(
+          github.scan.reachedLimit
+            ? `    数: — （読んだ範囲（新しい順 ${String(github.scan.limit)} 件）には成功した観測の記録が無い。0 件ではない）`
+            : '    数: — （成功した観測の記録が無い。0 件ではない）',
+        );
       }
       if (row.latestFailed !== null) {
         const failed = row.latestFailed;
@@ -169,7 +173,7 @@ export function describeProgress(view: ProgressViewInput): string {
     }
     if (github.scan.reachedLimit) {
       lines.push(
-        `  ※ 記録の読みが上限（${String(github.scan.limit)} 件）に当たった。古い記録にしか現れない repo は載っていない`,
+        `  ※ 記録の読みが上限（新しい順 ${String(github.scan.limit)} 件）に当たった。古い記録にしか現れない repo は載っていない。載っている repo でも、成功・失敗の片方が読んだ範囲の外に押し出されて欠けていることがある`,
       );
     }
   }

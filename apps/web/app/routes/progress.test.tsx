@@ -476,8 +476,12 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       const stat = backlog.getByText('takecchi/other の open の Issue / PR').parentElement;
       expect(stat?.textContent).toContain('—');
       expect(stat?.textContent).toContain('0 件ではない');
+      // 上限に当たったので「記録が無い」とは言わず、読んだ範囲に無いと言う
+      expect(stat?.textContent).toContain(
+        '読んだ範囲（新しい順 500 件）には成功した観測の記録が無い',
+      );
       expect(backlog.getByText(/取れなかった回/).textContent).toContain('gh: HTTP 502');
-      expect(backlog.getByText(/上限（500 件）に当たった/)).toBeTruthy();
+      expect(backlog.getByText(/上限（新しい順 500 件）に当たった/)).toBeTruthy();
     });
 
     it('知らない github.state が来ても落ちず、数を作らない', async () => {

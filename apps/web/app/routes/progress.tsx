@@ -178,7 +178,16 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
             <Stat
               label={`${row.repo} の open の Issue / PR`}
               value={NONE}
-              hint={<>成功した観測の記録が無い（0 件ではない）。</>}
+              hint={
+                github.scan.reachedLimit ? (
+                  <>
+                    読んだ範囲（新しい順 {count(github.scan.limit)}{' '}
+                    件）には成功した観測の記録が無い（0 件ではない）。
+                  </>
+                ) : (
+                  <>成功した観測の記録が無い（0 件ではない）。</>
+                )
+              }
             />
           ) : (
             <>
@@ -224,8 +233,9 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
       ))}
       {github.scan.reachedLimit && (
         <p className="text-xs text-warn">
-          ⚠ 記録の読みが上限（{count(github.scan.limit)} 件）に当たった。古い記録にしか現れない repo
-          は載っていない。
+          ⚠ 記録の読みが上限（新しい順 {count(github.scan.limit)}{' '}
+          件）に当たった。古い記録にしか現れない repo は載っていない。載っている repo
+          でも、成功・失敗の片方が読んだ範囲の外に押し出されて欠けていることがある。
         </p>
       )}
     </div>

@@ -704,7 +704,7 @@ export async function runSlashCommand(
           const prefix = type === undefined ? '' : `type=${type} に絞った上で、`;
           stdout.write(
             `${prefix}「${q}」に当たる日誌はありません。` +
-              'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
+              'ただし tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていないので、' +
               'そこにだけ書かれている語はここでは当たりません\n',
           );
         }
@@ -3572,14 +3572,39 @@ function summarize(entry: Record<string, unknown>): string {
     const value = entry[key];
     if (typeof value === 'string') return summarizeText(value);
   }
-  // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow` の4種は
+  // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow`（と、下の `github_observation`）は
   // 上の6キーのどれも持たず、ここまで来ると要約が空欄のまま出ていた**
   // （issue #2016）。Web（`packages/swr/src/hooks/queries.ts` の
   // `summarizeJournalEntry`）と同じ文言を、共有の口
   // （`@alteroid/core/journal-diagnostics-format`）から借りる——2箇所で
   // 複製しない。残り9種（この6キーで拾えている種別）は1文字も変えない。
   if (isJournalDiagnosticsEntry(entry)) return summarizeJournalDiagnosticsEntry(entry);
+  // **`github_observation`（#2245）も6キーのどれも持たない**（本文は `result` の中）。repo・観測者
+  // （申告であることを落とさない）・ok なら件数、failed なら理由を出す。failed に数は無い。
+  if (entry.type === 'github_observation') return summarizeGithubObservation(entry);
   return '';
+}
+
+function summarizeGithubObservation(entry: Record<string, unknown>): string {
+  const result = entry.result as
+    | {
+        status?: string;
+        openIssues?: number;
+        openPulls?: number;
+        truncated?: boolean;
+        reason?: string;
+      }
+    | undefined;
+  const head = `${String(entry.repo)}（観測者 ${String(entry.observedBy)}）`;
+  if (result?.status === 'ok') {
+    return (
+      `${head} open Issue ${String(result.openIssues)} 件 / open PR ${String(result.openPulls)} 件` +
+      (result.truncated === true ? '（limit に達した。下限）' : '')
+    );
+  }
+  if (result?.status === 'failed')
+    return `${head} 取れなかった: ${summarizeText(result.reason ?? '')}`;
+  return head;
 }
 
 /**

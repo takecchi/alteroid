@@ -101,6 +101,31 @@ describe('summarizeGithubObservations（#2245 段1）', () => {
 describe('readProgress / describeProgress の github（#2245 段1）', () => {
   const NOW = new Date('2026-10-02T12:00:00.000Z');
 
+  it('日誌の読みに types と limit（500）を渡す（無制限に読まない）', async () => {
+    const stores = createMemoryStores();
+    const queries: unknown[] = [];
+    const list = stores.journal.list.bind(stores.journal);
+    stores.journal.list = (query) => {
+      queries.push(query);
+      return list(query);
+    };
+    await readProgress(stores, { now: NOW });
+    const githubQueries = queries.filter(
+      (q) =>
+        (q as { types?: string[] } | undefined)?.types?.includes('github_observation') === true,
+    );
+    expect(githubQueries).toEqual([{ types: ['github_observation'], limit: 500 }]);
+    expect(GITHUB_OBSERVATION_SCAN_LIMIT).toBe(500);
+  });
+
+  it('上限に当たったとき、欠けた側を「記録が無い」と言わず、読んだ範囲に無いと言う', async () => {
+    const base = await readProgress(createMemoryStores(), { now: NOW });
+    const github = summarizeGithubObservations([failed('a/b', '2026-10-02T00:00:00.000Z')], 1);
+    const text = describeProgress({ ...base, github });
+    expect(text).toContain('読んだ範囲（新しい順 1 件）には成功した観測の記録が無い');
+    expect(text).not.toContain('数: — （成功した観測の記録が無い');
+  });
+
   it('日誌の記録を repo ごとに返し、日誌が空なら not_observed', async () => {
     const stores = createMemoryStores();
     expect((await readProgress(stores, { now: NOW })).github.state).toBe('not_observed');
