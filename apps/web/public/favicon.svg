@@ -4,7 +4,9 @@
     形を変えるときは両方を直すこと。
 
     タブの地は画面のテーマではなくブラウザ側の明暗で決まるので、色は `prefers-color-scheme` で切り替える。
-    値は `packages/ui/src/styles.css` の `--foreground` / `--primary`（明るい側は `:root`、暗い側は `.dark`）。
+    値は `packages/ui/src/styles.css` の foreground / primary の変数（明るい側は `:root`、暗い側は `.dark`）。
+    この注釈の中にハイフン2つの並びを書かないこと。XML の注釈では禁止で、ファイルごと壊れて
+    ブラウザがタブに何も描かない（`app/public-svg-well-formed.test.ts` が測る）。
   -->
   <style>
     .fg { stroke: oklch(0.22 0.03 275); }
