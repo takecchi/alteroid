@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 
 import type { Options, Query, SDKMessage, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
@@ -228,10 +228,16 @@ describe('受信箱の合成通知に、例外の2行目以降が載らない（
     });
 
     await pool.restore();
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    // 実時間で待たず、知らせが届いた状態を待つ（#2146 の歯。混んだ器で 600ms に賭けない）。
+    const texts = await vi.waitFor(
+      () => {
+        const seen = posted.map((event) => event.text ?? '');
+        expect(seen.some((text) => text.includes(marker))).toBe(true);
+        return seen;
+      },
+      { timeout: 10_000 },
+    );
 
-    const texts = posted.map((event) => event.text ?? '');
-    expect(texts.some((text) => text.includes(marker))).toBe(true);
     expect(texts.join('\n')).not.toContain(FAKE_SECRET);
     await pool.stop();
   });
