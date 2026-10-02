@@ -264,3 +264,17 @@ describe('表示の文言', () => {
     expect(detailStatusText(base, 0).text).toBe(' ');
   });
 });
+
+describe('enter（#2599）', () => {
+  it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
+    const { api, controller, state } = setup();
+    api.managerListFails = '繋がらない';
+    controller.enter();
+    await waitFor(() => state().list.status === 'error');
+    api.managerListFails = null;
+    api.managerRows = [managerRow('a')];
+    controller.enter();
+    await waitFor(() => state().list.status === 'ready');
+    expect(state().list.items.map((m) => m.managerId)).toEqual(['a']);
+  });
+});
