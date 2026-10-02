@@ -303,7 +303,7 @@ export async function deriveDistillGapFromJournal(
   // 1回呼び、窓の全 `decision` 行を配列へ載せてから `.find()` していた——
   // `decision` は他の型より少ないとはいえ、無制限に伸びうる点は同じ穴
   // （pg 実装が `limit` 省略時に `Number.MAX_SAFE_INTEGER` を渡す。
-  // `grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+  // `grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
   // に無防備だった。**ここには打ち切りの上限を置かない**（`scanJournalPages`
   // の `maxScanned` を渡さない）——印は「最後に成功した蒸留」なので、通常は
   // 新しい側のごく近くに在り、`onPage` が見つけ次第 `false` を返して止まる。

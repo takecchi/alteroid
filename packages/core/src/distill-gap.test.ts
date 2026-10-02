@@ -79,7 +79,7 @@ describe('countsAsUndistilledActivity（allowlist の外は false）', () => {
  *
  * `createSyntheticJournalStore`（`journal-scan.test-support.ts`）は、有限の
  * `limit` が渡らないとその場で例外を投げる偽物——本番の穴
- * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * （`grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
  * と同じ形をここでも再現させない。
  */
 describe('OOM の本体を直す（issue #1283）— distill-gap の走査をページ単位に有界化する', () => {

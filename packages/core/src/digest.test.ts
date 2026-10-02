@@ -2453,7 +2453,7 @@ describe('#857: 終端していて誰も望んでいない終わり方（lost / 
  * OOM の本体を直す（issue #1283）。`buildActivityDigest` の `stores.journal.list()`
  * は、直す前は `limit` を渡さずに窓の全行を1クエリでヒープへ載せていた——pg 実装は
  * `limit` 省略時に `Number.MAX_SAFE_INTEGER` を渡す
- * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * （`grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
  * ので、窓の中身が多い日（実測: ある1日で約247万行・約1.4GB）にそれを1クエリで
  * 読もうとして落ちる。
  *

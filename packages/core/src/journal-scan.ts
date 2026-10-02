@@ -8,7 +8,7 @@ import type { JournalQuery, JournalStore } from './store.js';
  *
  * `JournalStore.list()` を `limit` なしで呼ぶ口が複数在り、pg 実装は `limit`
  * 省略時に `Number.MAX_SAFE_INTEGER` を渡す
- * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）。
+ * （`grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）。
  * ⟹ 窓の中身が多い日（実測: ある1日で約247万行・本文だけで約1.4GB）は、それを
  * 1クエリで JS のヒープへ全部載せようとして落ちる。
  *

@@ -55,7 +55,7 @@ export const MAX_ITEMS = 15;
  * 直す前の `buildActivityDigest` は `stores.journal.list({ since })` を
  * `limit` なしで呼び、窓の全行を本文ごと1配列へ載せていた。pg 実装は `limit`
  * 省略時に `Number.MAX_SAFE_INTEGER` を渡す
- * （`grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * （`grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
  * ので、窓の中身が多い日（実測: ある1日で約247万行・約1.4GB）にそれを1クエリで
  * ヒープへ載せようとして落ちる。
  *

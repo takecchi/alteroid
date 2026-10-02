@@ -25,7 +25,7 @@ import type { JournalPage, JournalQuery, JournalStore } from './store.js';
  *
  * **`limit` が有限でなければ例外を投げる。** 本番の穴（pg 実装が `limit`
  * 省略時に `Number.MAX_SAFE_INTEGER` を渡す。
- * `grep -Fn -- 'query.limit ?? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
+ * `grep -Fn -- '? Number.MAX_SAFE_INTEGER' packages/storage-pg/src/journal.ts`）
  * と同じ形を呼び出し側が再現したら、この偽物はそれを**歯を書く前に検算
  * ミスとして落とす**——「歯が赤くなったのは実装のバグのためか、歯自体の
  * 書き間違いか」を混同しないため。この偽物を呼ぶ全ての口が有限の `limit` を
