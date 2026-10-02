@@ -31,7 +31,7 @@ type Result = {
   stdout: string;
   stderr: string;
   aptCalls: string[];
-  root: string;
+  listsLeft: string[];
 };
 
 function run(extra: Record<string, string>): Result {
