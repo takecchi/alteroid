@@ -3,6 +3,8 @@
  * （#2558）。React にも Tailwind にも依存しない — 色は名前（`'warn'` など）で持ち、どの色に
  * 塗るかは読む側が決める。
  */
+import { JOURNAL_SEARCH_UNCOVERED_LIST } from '@alteroid/core/journal-search';
+
 import type { JournalEntryType } from './types.js';
 
 /** 種別ごとの見た目の強さ。 */
@@ -66,8 +68,7 @@ export const JOURNAL_TYPES = Object.keys(JOURNAL_TONE) as [JournalEntryType, ...
  * 語で探しているとき、探す対象に入っていない欄が在ることの断り（`journal-search.ts` の
  * 「対象にしていない欄」）。**検索していないときは出さない**のは読む側の仕事。
  */
-export const SEARCH_SCOPE_NOTE =
-  'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+export const SEARCH_SCOPE_NOTE = `${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていない（そこにだけ書かれている語は当たらない）。`;
 
 /** 初期表示・1回の「もっと遡る」で読む件数。 */
 export const JOURNAL_PAGE = 100;

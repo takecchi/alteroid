@@ -287,3 +287,18 @@ describe('答える', () => {
     expect(state().detail?.form?.others['q1']).toBe('別の所');
   });
 });
+
+describe('enter（#2599）', () => {
+  it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.approvalListFails = '繋がらない';
+    });
+    controller.enter();
+    await waitFor(() => state().list.status === 'error');
+    api.approvalListFails = null;
+    api.approvalRows = [approvalRow('a')];
+    controller.enter();
+    await waitFor(() => state().list.status === 'ready');
+    expect(state().list.items.map((a) => a.id)).toEqual(['a']);
+  });
+});

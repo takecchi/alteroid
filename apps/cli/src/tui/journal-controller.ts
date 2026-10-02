@@ -150,9 +150,10 @@ export class JournalController {
 
   // --- 読み込み -----------------------------------------------------------
 
-  /** タブを開いたとき。初回だけ読む（以後は SSE で流れる）。 */
+  /** タブを開いたとき。まだ読んでいない（idle）か、前の読みが失敗した（error）ときに読む（以後は SSE で流れる）。 */
   enter(): void {
-    if (this.store.getSnapshot().status === 'idle') void this.load();
+    const { status } = this.store.getSnapshot();
+    if (status === 'idle' || status === 'error') void this.load();
   }
 
   /** 先頭の頁から読み直す（初回・絞りの変更・`r`）。 */

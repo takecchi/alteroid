@@ -392,3 +392,23 @@ describe('describeProbeError（#429）', () => {
     );
   });
 });
+
+describe('describeProbeError の伏せ字（#2607）', () => {
+  it('Bearer・URL の資格を伏せる（env に無い値でも）', () => {
+    const bearer = new Error('401 Authorization: Bearer sk-FAKE0123456789abcdefSECRET');
+    expect(describeProbeError(bearer, undefined)).not.toContain('sk-FAKE0123456789abcdefSECRET');
+    const url = new Error('connect failed https://user:hunter2-FAKE-pass@example.com/x');
+    expect(describeProbeError(url, undefined)).not.toContain('hunter2-FAKE-pass');
+  });
+
+  it('env の値の伏せ字も引き続き効く', () => {
+    expect(describeProbeError(new Error('with SECRET-VALUE'), { TOKEN: 'SECRET-VALUE' })).toBe(
+      'Error: with [REDACTED]',
+    );
+  });
+
+  it('params: 以降を落とす', () => {
+    const error = new Error('Failed query: select 1 params: shortvalue');
+    expect(describeProbeError(error, undefined)).not.toContain('shortvalue');
+  });
+});

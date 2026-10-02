@@ -34,8 +34,16 @@ import type { DisplayLine } from './log.js';
 import { glyph, theme } from './theme.js';
 import { wrapDisplayLines } from './wrap.js';
 
-/** 一覧の固定行: タイトル・古い側の注記・最下行の状態。 */
+/** 一覧の固定行（語で絞っていないとき）: タイトル・古い側の注記・最下行の状態。 */
 export const LIST_FIXED_ROWS = 3;
+
+/**
+ * 一覧の固定行数。語（q）で絞っているときは、最下行の状態の下に検索の断り書き（`SEARCH_SCOPE_NOTE`）を
+ * もう 1 行出す（#2588）ので 1 行増える。窓の行数（`cap`）はこれで引く。
+ */
+export function listFixedRows(state: JournalState): number {
+  return LIST_FIXED_ROWS + (state.q !== '' ? 1 : 0);
+}
 /** 詳細の頭の行数（種別と id・時刻・要旨）。ログの高さからこの分を引く。 */
 export const JOURNAL_DETAIL_HEAD_ROWS = 3;
 
@@ -94,6 +102,16 @@ export function bottomLineText(state: JournalState, live: LiveStatus): string {
   return `⏸ 位置を止めている（新しい側にあと ${String(at)} 件 · n で最新へ戻って追従）${liveText}`;
 }
 
+/**
+ * 一覧の最下の行々（#2588）。上が状態（ライブ切断・取りこぼし確認の停止・再読込の失敗・追従）、
+ * 下が検索の断り書き。状態を優先して上に置き、語で絞っているときだけ断り書きを足す。
+ */
+export function bottomLines(state: JournalState, live: LiveStatus): string[] {
+  const lines = [bottomLineText(state, live)];
+  if (state.q !== '') lines.push(SEARCH_SCOPE_NOTE);
+  return lines;
+}
+
 /** 一覧。可視窓の行だけを描く（古い→新しい、末尾が最新）。 */
 export const JournalList: FC<{
   state: JournalState;
@@ -101,7 +119,7 @@ export const JournalList: FC<{
   live: LiveStatus;
 }> = ({ state, height, live }) => {
   const { entries } = state;
-  const cap = Math.max(1, height - LIST_FIXED_ROWS);
+  const cap = Math.max(1, height - listFixedRows(state));
   const at = Math.max(0, selectedIndex(state));
   const win = listWindow(entries.length, at, state.follow, cap);
   // 表示位置 d（0 = 最古）→ 新しい順の index = n - 1 - d。
@@ -149,9 +167,11 @@ export const JournalList: FC<{
         );
       })}
       <Box flexGrow={1} />
-      <Text dimColor wrap="truncate-end">
-        {state.q !== '' ? SEARCH_SCOPE_NOTE : bottomLineText(state, live)}
-      </Text>
+      {bottomLines(state, live).map((line, i) => (
+        <Text key={i} dimColor wrap="truncate-end">
+          {line}
+        </Text>
+      ))}
     </Box>
   );
 };

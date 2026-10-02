@@ -280,6 +280,7 @@ import {
   type UsageRow,
   type UsageTotals,
 } from './usage.js';
+import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
@@ -6252,7 +6253,7 @@ export function createCloneTools(context: ToolContext) {
         '一覧の本文は抜粋で、全文が要る1件は id を渡して取る。',
         'q で本文を語で探せる（他の絞りと併用できる）。',
         '**q が当たらないことは「日誌にその語が無い」を意味しない** —',
-        'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない。',
+        `${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていない。`,
         'with で exchange の相手を絞れる（他の絞りと併用できる）。',
         '**with を指定すると exchange 以外の種別は1件も返らない** —',
         'types で別途除く必要はない。',
@@ -6409,7 +6410,7 @@ export function createCloneTools(context: ToolContext) {
             return text(
               [
                 `"${q}" に当たる日誌は無い（この条件の中では）。` +
-                  'ただし tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていないので、' +
+                  `ただし ${JOURNAL_SEARCH_UNCOVERED_LIST} は探す対象に入っていないので、` +
                   'そこにだけ書かれている語はここでは当たらない。',
                 ...horizonNoteLines,
               ].join('\n'),

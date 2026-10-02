@@ -137,7 +137,9 @@ export function foldSelections(
           : `${optionMarker(at)} ${option.label}${option.recommended === true ? '［推奨］' : ''}`,
       );
     }
-    const other = selection?.other?.trim();
+    // other の改行は空白 1 つに潰す（#2598）。残すと、畳んだ文の中で別の設問や補足の行に見える。
+    // 保存する構造（selections[].other）は変えない。補足（supplement）は自由文なので改行を残す。
+    const other = selection?.other?.trim().replace(/(?:\r\n|\r|\n)+/g, ' ');
     if (other !== undefined && other !== '') parts.push(`その他: ${other}`);
     return `${head} ${parts.length === 0 ? '未回答' : parts.join(' / ')}`;
   });

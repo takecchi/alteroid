@@ -97,9 +97,10 @@ export class MemoryController {
     }, this.options.debounceMs ?? MEMORY_REFRESH_DEBOUNCE_MS);
   }
 
-  /** タブを開いたとき。初回だけ読む。 */
+  /** タブを開いたとき。まだ読んでいない（idle）か、前の読みが失敗した（error）ときに読む。 */
   enter(): void {
-    if (this.store.getSnapshot().status === 'idle') void this.loadList();
+    const { status } = this.store.getSnapshot();
+    if (status === 'idle' || status === 'error') void this.loadList();
   }
 
   async loadList(): Promise<void> {

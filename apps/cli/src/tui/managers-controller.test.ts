@@ -242,6 +242,18 @@ describe('表示の文言', () => {
     expect(notes.join(' ')).toContain('成果がリモートまで届いていることがある');
   });
 
+  it('runnerVanished の警告（確かめる前に起こし直さない）は注記の先頭に置く（#2590）', () => {
+    const notes = managerNotes(
+      managerRow('a', {
+        status: 'lost',
+        runnerVanished: true,
+        waiting: [{ requestId: 'r', summary: '許可して', kind: 'permission' }],
+      }),
+    );
+    expect(notes[0]).toContain('確かめる前に起こし直さない');
+    expect(notes.join(' ')).toContain('返事待ち 1 件');
+  });
+
   it('最下行の優先順は 確認 > 操作結果 > 失敗 > 窓の外', () => {
     const base = {
       id: 'a',
@@ -262,5 +274,19 @@ describe('表示の文言', () => {
     expect(detailStatusText({ ...base, error: 'e' }, 3).text).toContain('e');
     expect(detailStatusText(base, 3).text).toContain('あと 3 行');
     expect(detailStatusText(base, 0).text).toBe(' ');
+  });
+});
+
+describe('enter（#2599）', () => {
+  it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
+    const { api, controller, state } = setup();
+    api.managerListFails = '繋がらない';
+    controller.enter();
+    await waitFor(() => state().list.status === 'error');
+    api.managerListFails = null;
+    api.managerRows = [managerRow('a')];
+    controller.enter();
+    await waitFor(() => state().list.status === 'ready');
+    expect(state().list.items.map((m) => m.managerId)).toEqual(['a']);
   });
 });

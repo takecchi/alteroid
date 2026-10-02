@@ -474,6 +474,9 @@ export {
  */
 export {
   JOURNAL_SEARCH_FIELDS,
+  JOURNAL_SEARCH_UNCOVERED_LIST,
+  JOURNAL_SEARCH_UNCOVERED_LIST_MD,
+  JOURNAL_SEARCH_UNSEARCHABLE_TYPES,
   journalSearchText,
   matchesJournalSearch,
   type JournalSearchTarget,
