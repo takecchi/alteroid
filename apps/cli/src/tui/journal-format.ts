@@ -1,23 +1,24 @@
 /**
  * 日誌 1 件の文言（一覧の 1 行・詳細の本文）。純粋（I/O 無し）。
  *
- * **要旨は Web の `summarizeJournalEntry`（`packages/swr/src/hooks/queries.ts`）と同じ文言**。
- * 写してあるのは、apps/cli から `@alteroid/swr` を引けない（react と swr を持ち込む）ためで、
- * 4 種の診断（`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow`）は CLI `/journal`
- * と同じ共有の口（`@alteroid/core/journal-diagnostics-format`）から取る。**Web 側の文言を
- * 変えたらここも直すこと。**
+ * 要旨（`summarizeJournalEntry`）と時刻（`formatDateTime`）の規則は Web と共有の
+ * `@alteroid/logic` のものをそのまま使う（#2558。以前は写しだった）。ここに残すのは TUI だけの事情:
+ * 欄の形が合わない行・知らない種別で画面を落とさない包み（下の `summarizeJournalEntry`）、
+ * 絞り込みの並びと色（Web の `TONE` は route ファイルにしか無く logic に無いため写しのまま）、
+ * 一覧の 1 行・詳細の本文の組み立て。
  */
-import {
-  summarizeJournalDiagnosticsEntry,
-  type JournalDiagnosticsEntryLike,
-} from '@alteroid/core/journal-diagnostics-format';
+import { formatDateTime, summarizeJournalEntry as summarizeLogic } from '@alteroid/logic';
 import type { JournalEntry } from '@alteroid/core';
 
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
 
 export type JournalType = JournalEntry['type'];
 
-/** 種別ごとの見た目の強さ（Web の `TONE`）。`Record` で縛るので、種別が増えたら型で落ちる。 */
+/**
+ * 種別ごとの見た目の強さ（Web の `TONE`）。`Record` で縛るので、種別が増えたら型で落ちる。
+ * **写しのまま残してある**: Web の `TONE` は `apps/web/app/routes/journal.tsx` の私物で、logic には無い（#2558）。
+ * Web 側を変えたらここも直すこと（`JOURNAL_TYPES` の並びはこの宣言順）。
+ */
 export type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
 
 const TONE: Record<JournalType, Tone> = {
@@ -45,80 +46,20 @@ export function toneOf(type: JournalType): Tone {
 }
 
 /**
- * 日誌エントリを人間が読む 1 行に潰す。**欄の形が合わない行（古い形・壊れた行）で画面を落とさない**
- * — 要旨を作れなかったと言い、種別と id は一覧の別の欄に出ている。
+ * 日誌エントリを人間が読む 1 行に潰す。文言は logic の `summarizeJournalEntry`（Web と同じ）。
+ * **TUI だけの包み:** 欄の形が合わない行（古い形・壊れた行）と、知らない種別（新しいデーモンが流した種別を
+ * 古い画面が受ける）で画面を落とさない — logic の側は例外を投げるか `undefined` を返すので、ここで受ける。
+ * 種別と id は一覧の別の欄に出ている。
  */
 export function summarizeJournalEntry(entry: JournalEntry): string {
   try {
-    return summarize(entry);
+    const text: string | undefined = summarizeLogic(entry);
+    if (typeof text === 'string') return text;
   } catch {
     return '（要旨を作れなかった。全文は Enter で読める）';
   }
-}
-
-function summarize(entry: JournalEntry): string {
-  switch (entry.type) {
-    case 'exchange':
-      return `${entry.with} ${entry.role === 'inbound' ? '←' : '→'} ${entry.text}`;
-    case 'decision':
-      return `${entry.decision}（根拠: ${entry.grounds}）`;
-    case 'escalation':
-      // 取り下げを先に見る（`withdrawnAt` と `answeredAt` は両立しない）。
-      if (entry.withdrawnAt !== undefined) return `取り下げ済み: ${entry.question}`;
-      return entry.answeredAt === undefined
-        ? `確認: ${entry.question}`
-        : `回答済: ${entry.question}`;
-    case 'tool_use':
-      return `${entry.actor} が ${entry.tool}`;
-    case 'memory_update': {
-      // 取れない軸を 0 と見せない: 旧形式（バイト数なし）は「不明」と言う。
-      const action = entry.action === undefined ? '' : `/${entry.action}`;
-      const bytes =
-        entry.bytesBefore === undefined || entry.bytesAfter === undefined
-          ? '前後バイト数不明（旧形式）'
-          : `${String(entry.bytesBefore)}→${String(entry.bytesAfter)} バイト`;
-      return `記憶 ${entry.slug} を更新（${entry.cause}${action} / ${bytes}）: ${entry.summary}`;
-    }
-    case 'daily_report':
-      // 印の付いた行を「日報」と呼ばない。
-      return entry.unavailable === undefined
-        ? `${entry.date} の日報`
-        : `⚠ ${entry.date} の日報は作れなかった: ${entry.unavailable}`;
-    case 'external_event':
-      return `${entry.source}: ${entry.summary}`;
-    case 'worker_wait':
-    case 'turn_usage':
-    case 'context_usage':
-    case 'inbox_flow':
-      return summarizeJournalDiagnosticsEntry(entry as unknown as JournalDiagnosticsEntryLike);
-    case 'token_rotation':
-      // 見出しの `event` は落とさない（`exhausted` と `not_rotated` を見分けられなくなる）。
-      return `[${entry.event}] ${entry.text}`;
-    case 'github_observation':
-      // 申告であることを落とさない（`observedBy`）。取れなかった回は数を作らない。
-      return entry.result.status === 'ok'
-        ? `${entry.repo}: open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
-            (entry.result.truncated ? '（limit に達した。下限）' : '') +
-            `（観測者 ${entry.observedBy}）`
-        : `${entry.repo}: 取れなかった（観測者 ${entry.observedBy}）: ${entry.result.reason}`;
-    case 'subagent_stall': {
-      const agentType = entry.agentType === undefined ? '' : `/${entry.agentType}`;
-      const outcome =
-        entry.outcome === 'woken'
-          ? `起こし直した（${String(entry.wakeupCount)}回目）`
-          : `上限に達し、起こし直さなかった（要対応。既に${String(entry.wakeupCount)}回起こし直し済み）`;
-      return (
-        `作業者 ${entry.agentId}${agentType} が自分で起こした背景処理を ` +
-        `${String(entry.ownedTaskCount)}件 残したまま畳もうとした（セッション全体 ${String(entry.sessionTaskCount)}件）: ` +
-        outcome
-      );
-    }
-    default: {
-      // 知らない種別（新しいデーモンが流した種別を古い画面が受ける）。落とさず、種別だけ言う。
-      const unknown: { type: string } = entry;
-      return `（この画面が知らない種別: ${unknown.type}）`;
-    }
-  }
+  const unknown: { type: string } = entry;
+  return `（この画面が知らない種別: ${unknown.type}）`;
 }
 
 /** 改行と連続する空白を 1 つの空白にし、`limit` 字で切る（切ったら `…`）。 */
@@ -129,29 +70,6 @@ export function oneLine(text: string, limit: number): string {
 
 /** 一覧 1 行の要旨の字数の上限（端末の幅でさらに切られる）。長い本文を毎フレーム渡さない。 */
 export const SUMMARY_LIMIT = 300;
-
-const dateTime = new Intl.DateTimeFormat('ja-JP', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-});
-const dateTimeWithYear = new Intl.DateTimeFormat('ja-JP', {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-});
-const yearOnly = new Intl.DateTimeFormat('ja-JP', { year: 'numeric' });
-
-/** Web の `formatDateTime` と同じ。今年でない時刻にだけ年を足す（読めない値はそのまま）。 */
-export function formatDateTime(iso: string, now: number = Date.now()): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const isThisYear = yearOnly.format(date) === yearOnly.format(new Date(now));
-  return isThisYear ? dateTime.format(date) : dateTimeWithYear.format(date);
-}
 
 /** 一覧の 1 行（選択の印は付けない）。 */
 export function journalListLine(entry: JournalEntry, now: number): string {
@@ -180,8 +98,9 @@ export function journalEmptyMessage(types: readonly JournalType[], q: string): s
 
 /**
  * 語で探しているとき、探す対象に入っていない欄が在ることの断り。
- * `github_observation` は CLI の `/journal`（`chat.ts`）に合わせて足した。core の
- * `journal-search.ts` がこの種別の欄を1つも探さないため。Web の断りにはまだ入っていない。
+ * Web の `apps/web/app/routes/journal.tsx`（JSX の中の文）と同じ文言（#2572 で `github_observation` を足して
+ * 揃った）。Web のそれは route ファイルの私物で logic に無いので、ここは写しのまま残してある。
+ * 変えるときは Web・core の `journal_read`・CLI の `/journal` と並べて直すこと。
  */
 export const SEARCH_SCOPE_NOTE =
   'tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';

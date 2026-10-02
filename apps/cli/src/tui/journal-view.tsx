@@ -7,6 +7,7 @@
  * （`.claude/skills/listing-and-detail`）。可視窓の行だけを描く。
  */
 import type { JournalEntry } from '@alteroid/core';
+import { formatDateTime } from '@alteroid/logic';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
@@ -16,7 +17,6 @@ import {
   JOURNAL_TYPES,
   SEARCH_SCOPE_NOTE,
   filterText,
-  formatDateTime,
   journalDetailText,
   journalEmptyMessage,
   journalListLine,

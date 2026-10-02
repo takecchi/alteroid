@@ -5,6 +5,7 @@
  * **一覧はタイトルと要旨だけ**（1 件 2 行: 種別・タイトル・slug・大きさ・更新 / 要旨）。本文は Enter で
  * 開く詳細で読む（`.claude/skills/listing-and-detail`）。可視窓の行だけを描く。
  */
+import { formatBytes } from '@alteroid/logic';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
@@ -25,13 +26,6 @@ const oneLine = (text: string, limit: number): string => {
   const single = text.replace(/\s+/g, ' ').trim();
   return single.length > limit ? `${single.slice(0, limit)}…` : single;
 };
-
-/** Web の `formatBytes` と同じ見せ方（B / KB / MB）。 */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${String(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 /** 1 行目: 種別・タイトル・slug・大きさ・更新。 */
 export function memoryTitleLine(row: MemoryRow, now: number): string {

@@ -1,94 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { journalEntry, minute, said } from './fake-api.js';
-import {
-  JOURNAL_MAX_LIMIT,
-  applyInitialPage,
-  applyNewerPage,
-  applyOlderPage,
-  entryChars,
-  journalHorizonNote,
-  listWindow,
-  mergeBack,
-  mergeFront,
-  newerPageQuery,
-  olderPageQuery,
-  pageOutcome,
-  trimToBudget,
-} from './journal-window.js';
+import { entryChars, listWindow, trimToBudget } from './journal-window.js';
 
-describe('マージ（id で重複を除き、新しい順を保つ）', () => {
-  it('新着は先頭へ、過去は末尾へ。既に在る id は足さない', () => {
-    const existing = [said(3), said(2)];
-    expect(mergeFront(existing, [said(4), said(3)]).entries.map((e) => e.id)).toEqual([
-      'e4',
-      'e3',
-      'e2',
-    ]);
-    expect(mergeFront(existing, [said(3)])).toEqual({ entries: existing, freshCount: 0 });
-    expect(mergeBack(existing, [said(2), said(1)])).toMatchObject({ freshCount: 1 });
-    expect(mergeBack(existing, [said(2), said(1)]).entries.map((e) => e.id)).toEqual([
-      'e3',
-      'e2',
-      'e1',
-    ]);
-    expect(mergeBack(existing, [])).toEqual({ entries: existing, freshCount: 0 });
-  });
-});
-
-describe('pageOutcome（Web の journal-window.test.ts と同じ表）', () => {
-  it.each([
-    // [返った件数, limit, 新規, maxLimit, 期待]
-    [10, 10, 3, 1000, 'progress'],
-    [5, 10, 0, 1000, 'end'],
-    [10, 10, 0, 1000, 'retryLarger'],
-    [1000, 1000, 0, 1000, 'blocked'],
-    [0, 10, 0, 1000, 'end'],
-  ] as const)('%i 件 / limit %i / 新規 %i → %s', (len, limit, fresh, max, expected) => {
-    expect(pageOutcome(len, limit, fresh, max)).toBe(expected);
-  });
-
-  it('上限は 1000（daemon の journalQuery と同じ）', () => {
-    expect(JOURNAL_MAX_LIMIT).toBe(1000);
-  });
-
-  it('初期読み込みは limit 未満で終端と言い切れる（境界の曖昧さが無い）', () => {
-    expect(applyInitialPage([said(1)], 100).outcome).toBe('end');
-    expect(
-      applyInitialPage(
-        Array.from({ length: 100 }, (_, i) => said(i)),
-        100,
-      ).outcome,
-    ).toBe('progress');
-  });
-
-  it('applyOlderPage / applyNewerPage は境界の再送を数えない', () => {
-    const existing = [said(3), said(2)];
-    expect(applyOlderPage(existing, [said(2)], 5).outcome).toBe('end');
-    expect(applyNewerPage(existing, [said(3)], 5).outcome).toBe('end');
-    expect(applyNewerPage(existing, [said(3)], 1).outcome).toBe('retryLarger');
-  });
-
-  it('次に撃つ引数は、過去なら末尾（最古）の at を until、新着なら先頭（最新）の at を since', () => {
-    const entries = [said(3), said(2), said(1)];
-    expect(olderPageQuery(entries)).toEqual({ until: minute(1) });
-    expect(newerPageQuery(entries)).toEqual({ since: minute(3) });
-    expect(olderPageQuery([])).toBeUndefined();
-    expect(newerPageQuery([])).toBeUndefined();
-  });
-});
-
-describe('日誌の地平の注記', () => {
-  it('終端で、地平にかかっていて、最古が分かるときだけ言う', () => {
-    expect(journalHorizonNote('end', '2026-01-01T00:00:00.000Z', true)).toContain(
-      '2026-01-01T00:00:00.000Z',
-    );
-    expect(journalHorizonNote('progress', 'x', true)).toBeUndefined();
-    expect(journalHorizonNote('end', 'x', false)).toBeUndefined();
-    expect(journalHorizonNote('end', null, true)).toBeUndefined();
-    expect(journalHorizonNote('end', undefined, true)).toBeUndefined();
-  });
-});
+// ページの送り方（マージ・pageOutcome・apply*Page・*PageQuery・journalHorizonNote）は
+// `@alteroid/logic` の規則をそのまま import している（#2558）。その表は
+// `packages/logic/src/journal-window.test.ts` が見る。TUI の振る舞いとしての確認は
+// `journal-controller.test.ts` にある。ここは TUI にだけ在る予算と可視窓を見る。
 
 describe('文字数の予算', () => {
   it('大きさは JSON にした長さ。超えたら古い側（末尾）から手放し、最低 1 件は残す', () => {

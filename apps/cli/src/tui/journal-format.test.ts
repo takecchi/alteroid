@@ -4,7 +4,6 @@ import { journalEntry, minute, said } from './fake-api.js';
 import {
   JOURNAL_TYPES,
   filterText,
-  formatDateTime,
   journalDetailText,
   journalEmptyMessage,
   journalListLine,
@@ -166,13 +165,6 @@ describe('一覧の 1 行と文言', () => {
     expect(line).not.toContain('\n');
     expect(line.length).toBeLessThan(400);
     expect(line.endsWith('…')).toBe(true);
-  });
-
-  it('時刻は今年なら年を足さず、今年でなければ足す', () => {
-    const now = Date.parse('2026-10-02T00:00:00.000Z');
-    expect(formatDateTime('2026-09-29T07:00:00.000Z', now)).not.toContain('2026');
-    expect(formatDateTime('2025-09-29T07:00:00.000Z', now)).toContain('2025');
-    expect(formatDateTime('壊れた', now)).toBe('壊れた');
   });
 
   it('絞った 0 件を、絞っていない 0 件と同じ文言にしない', () => {
