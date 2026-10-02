@@ -1717,6 +1717,8 @@ function stubClient(
     ) => { id: string; ok: boolean; error?: string }[];
     /** `GET /approvals` が返す一覧。既定は空。 */
     approvals?: ApprovalLike[];
+    /** `GET /approvals` の応答コード。既定は 200（#2583: 取れなかったときの試験用）。 */
+    approvalsStatus?: number;
     /** `GET /approvals` の `unreadable`（#2298）。渡さなければ鍵ごと無い（0件と同じ）。 */
     approvalsUnreadable?: { id?: string; reason: string }[];
     /** `GET /approvals/:id/trace` の応答コードと本体（issue #847）。既定は 404。 */
@@ -1914,7 +1916,7 @@ function stubClient(
       $get: (args: unknown) => {
         calls.push({ route: 'GET /approvals', args });
         return Promise.resolve(
-          reply(200, {
+          reply(options.approvalsStatus ?? 200, {
             approvals: options.approvals ?? [],
             ...(options.approvalsUnreadable === undefined
               ? {}
@@ -2600,7 +2602,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
   it('/answer --select / --other は selections として送る（補足の自由文も併用できる）', async () => {
     const read = captureStdout();
-    const { calls, client } = stubClient();
+    const { calls, client } = stubClient({ approvals: [approval] });
 
     await runSlashCommand(
       '/answer 1 --select target=railway --select notify=slack,mail --other target="ただし 来週" 金曜は避けたい',
@@ -2623,7 +2625,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
   it('--select=q=a の形・補足なし・その他だけ、も送れる', async () => {
     captureStdout();
-    const { calls, client } = stubClient();
+    const { calls, client } = stubClient({ approvals: [approval] });
 
     await runSlashCommand(
       '/answer ap-q --select=target=fly --other=notify=x=y',
@@ -2641,7 +2643,7 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
 
   it('形の崩れた --select は送らずに使い方を出す', async () => {
     const read = captureStdout();
-    const { calls, client } = stubClient();
+    const { calls, client } = stubClient({ approvals: [approval] });
 
     await runSlashCommand('/answer 1 --select target', client, listedOne());
     await runSlashCommand('/answer 1 --other', client, listedOne());
@@ -2657,6 +2659,54 @@ describe('chat の設問つきの承認待ち（issue #2525）', () => {
     await runSlashCommand('/answer 1 railway で  お願い', client, listedOne());
 
     expect(sentJson(calls)?.json).toEqual({ answer: 'railway で お願い' });
+  });
+
+  it('設問の無い承認待ちには、--select / --other の字面があっても自由文のまま送る（#2583）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({
+      approvals: [{ ...approval, questions: undefined }],
+    });
+
+    await runSlashCommand('/answer 1 git の --select は "使わない"', client, listedOne());
+    await runSlashCommand('/answer 1 --other a=b を試した', client, listedOne());
+
+    const sent = calls
+      .filter((call) => call.route === 'POST /approvals/:id/answer')
+      .map((call) => (call.args as { json: unknown }).json);
+    expect(sent).toEqual([
+      { answer: 'git の --select は "使わない"' },
+      { answer: '--other a=b を試した' },
+    ]);
+    expect(read()).not.toContain('使い方');
+  });
+
+  it('承認待ちを取れなかったら、自由文として送らずに失敗を言って止まる（#2583）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ approvals: [approval], approvalsStatus: 500 });
+
+    await runSlashCommand('/answer 1 --select target=railway', client, listedOne());
+
+    expect(sentJson(calls)).toBeNull();
+    expect(read()).toContain('回答を送っていません');
+  });
+
+  it('一覧に居ても取ってきた中に無ければ、送らずに言って止まる（#2583）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient({ approvals: [] });
+
+    await runSlashCommand('/answer 1 --select target=railway', client, listedOne());
+
+    expect(sentJson(calls)).toBeNull();
+    expect(read()).toContain('見つからなかった');
+  });
+
+  it('--select を書かない /answer は承認待ちを取りに行かない', async () => {
+    captureStdout();
+    const { calls, client } = stubClient({ approvals: [approval] });
+
+    await runSlashCommand('/answer 1 ok', client, listedOne());
+
+    expect(calls.some((call) => call.route === 'GET /approvals')).toBe(false);
   });
 });
 
