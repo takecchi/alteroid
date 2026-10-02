@@ -49,7 +49,7 @@ import type { MemoryDocumentMeta } from './schema.js';
  * `schedule_list` は**出す順と錨の順が同じ**（どちらも `kind` 昇順）なので、
  * 「最後に出した行の後ろから」で過不足なく続きが決まる。**`memory_list` は
  * そうではない**——描くのは `parent` から組んだ木の順（DFS。
- * `grep -Fn -- 'const flat = flattenMemoryToc(resolveMemoryHierarchy(tocEntries));' packages/core/src/memory.ts`）
+ * `grep -Fn -- 'const flat = flattenMemoryToc(roots);' packages/core/src/memory.ts`）
  * で、錨はストアの `slug` 昇順である。⟹ **2つの順は一致しない。**
  *
  * 具体例: 根が `a` と `b`、`a` の子が `z` のとき、描く順は `a, z, b`
