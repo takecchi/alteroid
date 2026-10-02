@@ -59,6 +59,10 @@ export function managerListLine(row: ManagerRow, now: number): string {
 /** 詳細の注記（観測した分だけ言う。断定しない）。先頭ほど優先。 */
 export function managerNotes(row: ManagerRow): string[] {
   const notes: string[] = [];
+  // 確かめる前に起こし直すと取り返しがつかないので、1 行に連結して末尾が切れる狭い端末でも見えるよう先頭に置く（#2590）。
+  if (row.runnerVanished === true) {
+    notes.push('宛先の器が名簿から消えている（状態は走行中のまま。確かめる前に起こし直さない）');
+  }
   const first = row.waiting[0];
   if (first !== undefined) {
     notes.push(
@@ -75,9 +79,6 @@ export function managerNotes(row: ManagerRow): string[] {
     notes.push(
       `宛先の器が ${row.runnerLostSince} 以降 名乗っていない（この委譲が失われたという意味ではない）`,
     );
-  }
-  if (row.runnerVanished === true) {
-    notes.push('宛先の器が名簿から消えている（状態は走行中のまま。確かめる前に起こし直さない）');
   }
   if (row.sessionMissingSince !== undefined) {
     notes.push(

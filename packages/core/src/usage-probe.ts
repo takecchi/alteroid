@@ -1,5 +1,7 @@
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
+import { redactErrorText } from './denial-input-head.js';
+
 /**
  * 「SDK に1つ聞いて、すぐ立ち去る」ための配管。
  *
@@ -43,10 +45,15 @@ export function redactEnvSecrets(text: string, env: NodeJS.ProcessEnv | undefine
  * である。** SDK やその配下が投げるものは呼び出し側の型宣言に無いので、
  * `redactEnvSecrets` は最後の網として必ず通す。改行は1行目だけを見る
  * （複数行のスタックトレースを理由として持ち帰らない）。
+ *
+ * **伏せ字は 2 段（#2607）。** `env`（このプローブに注入した候補トークンなど）の値は
+ * `redactEnvSecrets` で、Bearer・URL の資格・`params:` の形などは `redactErrorText`
+ * （`denial-input-head.ts`。使い分けの規則は `dropped-record.ts` の `reasonOf` の doc）で伏せる。
+ * 1 行目に畳む形（`name: message`）をここで保つので `reasonOf` ではなく `redactErrorText` を使う。
  */
 export function describeProbeError(error: unknown, env: NodeJS.ProcessEnv | undefined): string {
   const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return redactEnvSecrets(text.split('\n', 1)[0] ?? text, env);
+  return redactErrorText(redactEnvSecrets(text.split('\n', 1)[0] ?? text, env), env);
 }
 
 /**

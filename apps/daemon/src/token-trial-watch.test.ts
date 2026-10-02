@@ -479,6 +479,43 @@ describe('token-trial-watch: 現役の指名が読めない（issue #2125）', (
   });
 });
 
+describe('token-trial-watch: 試しが投げた例外の文は伏せ字を通す（#2607）', () => {
+  it('Bearer・URL の資格が stderr の跡に出ない', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const stores = createMemoryStores();
+      await seedToken(stores, { id: 'a', order: 0, cooldownUntil: AT + 60 * 60 * 1000 });
+      await stores.tokens.writeActive({ tokenId: 'a', generation: 1, rotatedAt: '' });
+      const port: TokenTrialPort = {
+        trial: () =>
+          Promise.reject(
+            new Error(
+              'boom Authorization: Bearer sk-FAKE0123456789abcdefSECRET https://user:hunter2-FAKE-pass@example.com/x',
+            ),
+          ),
+      };
+      const watch = startTokenTrialWatch({
+        stores,
+        recordTrialVerdict: realRecordTrialVerdict(stores),
+        trial: port,
+        reconsider: () => Promise.resolve(RECOVERED),
+        onOutcome: () => Promise.resolve(),
+        tickMs: 5,
+        now: () => AT,
+      });
+      await settle();
+      watch.stop();
+      const written = stderr.mock.calls.map((call: unknown[]) => String(call[0])).join('');
+      expect(written).toContain('判定できなかった');
+      expect(written).toContain('boom');
+      expect(written).not.toContain('sk-FAKE0123456789abcdefSECRET');
+      expect(written).not.toContain('hunter2-FAKE-pass');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
 describe('token-trial-watch: 失敗したら', () => {
   it('日誌にも受信箱にも積まない（onOutcome を呼ばない）', async () => {
     const stores = createMemoryStores();

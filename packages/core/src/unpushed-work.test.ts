@@ -996,3 +996,39 @@ describe('computeUnpushedWork — 2本目以降の起点（/tmp スクラッチ�
     expect(result.unreadableDirSample).toBeUndefined();
   });
 });
+
+describe('未push観測の reason は伏せ字を通す（#2607）', () => {
+  const BEARER = 'Bearer sk-FAKE0123456789abcdefSECRET';
+  const URL_CRED = 'https://user:hunter2-FAKE-pass@example.com/repo.git';
+
+  it('起点の readdir 失敗の理由（rootUnreadable）に資格を残さない', async () => {
+    const readdirFn: ReaddirFn = async () => {
+      throw new Error(`EACCES: ${BEARER} が漏れる模擬`);
+    };
+    const found = await findGitDirs('/fake-root', { readdirFn });
+    expect(found.rootUnreadable).toBeDefined();
+    expect(found.rootUnreadable).not.toContain('sk-FAKE0123456789abcdefSECRET');
+  });
+
+  it('子ディレクトリの readdir 失敗のサンプル（unreadableDirSample）に資格を残さない', async () => {
+    const readdirFn: ReaddirFn = async (dir) => {
+      if (dir === '/fake-root') return [{ name: 'child', isDirectory: () => true }];
+      throw new Error(`failed to read ${URL_CRED}`);
+    };
+    const found = await findGitDirs('/fake-root', { readdirFn });
+    expect(found.unreadableDirCount).toBe(1);
+    expect(found.unreadableDirSample).toContain('/fake-root/child');
+    expect(found.unreadableDirSample).not.toContain('hunter2-FAKE-pass');
+  });
+
+  it('tmpRootDir の readdir 失敗の理由（unknownReason）に資格を残さない', async () => {
+    const readdirFn: ReaddirFn = async () => {
+      throw new Error(`EACCES: ${BEARER}`);
+    };
+    const found = await findManagerScratchRoots('/fake-tmp', 'mgr-abcd1234-xxxxxxxx', {
+      readdirFn,
+    });
+    expect(found.unknownReason).toContain('確かめられなかった');
+    expect(found.unknownReason).not.toContain('sk-FAKE0123456789abcdefSECRET');
+  });
+});

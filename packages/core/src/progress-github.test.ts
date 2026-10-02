@@ -89,13 +89,23 @@ describe('summarizeGithubObservations（#2245 段1）', () => {
     expect(JSON.stringify(result)).not.toMatch(/stale|古い|fresh/);
   });
 
-  it('読みが上限に当たったら reachedLimit が真になる', () => {
-    const entries = [ok('a/b', '2026-10-01T00:00:00.000Z'), ok('a/b', '2026-09-30T00:00:00.000Z')];
+  it('上限より先が在るとき（limit+1 件目が在るとき）だけ reachedLimit が真になる', () => {
+    const entries = [
+      ok('a/b', '2026-10-01T00:00:00.000Z'),
+      ok('a/b', '2026-09-30T00:00:00.000Z'),
+      ok('c/d', '2026-09-29T00:00:00.000Z'),
+    ];
     const hit = summarizeGithubObservations(entries, 2);
+    const exact = summarizeGithubObservations(entries.slice(0, 2), 2);
     const miss = summarizeGithubObservations(entries, 3);
-    if (hit.state !== 'observed' || miss.state !== 'observed') throw new Error('observed のはず');
+    if (hit.state !== 'observed' || exact.state !== 'observed' || miss.state !== 'observed')
+      throw new Error('observed のはず');
     expect(hit.scan).toEqual({ limit: 2, reachedLimit: true });
+    // ちょうど limit 件で尽きているなら、先は無い
+    expect(exact.scan).toEqual({ limit: 2, reachedLimit: false });
     expect(miss.scan).toEqual({ limit: 3, reachedLimit: false });
+    // limit+1 件目は畳みに使わない（先の存在を知るためだけの 1 件）
+    expect(hit.repos.map((r) => r.repo)).toEqual(['a/b']);
   });
 });
 
@@ -115,16 +125,70 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
       (q) =>
         (q as { types?: string[] } | undefined)?.types?.includes('github_observation') === true,
     );
-    expect(githubQueries).toEqual([{ types: ['github_observation'], limit: 500 }]);
+    // 先が在るかを見るため limit+1 件を要求する（#2603。読めた行の数では判定しない）
+    expect(githubQueries).toMatchObject([{ types: ['github_observation'], limit: 501 }]);
+    expect(githubQueries).toHaveLength(1);
     expect(GITHUB_OBSERVATION_SCAN_LIMIT).toBe(500);
   });
 
   it('上限に当たったとき、欠けた側を「記録が無い」と言わず、読んだ範囲に無いと言う', async () => {
     const base = await readProgress(createMemoryStores(), { now: NOW });
-    const github = summarizeGithubObservations([failed('a/b', '2026-10-02T00:00:00.000Z')], 1);
+    const github = summarizeGithubObservations(
+      [failed('a/b', '2026-10-02T00:00:00.000Z'), failed('c/d', '2026-10-01T00:00:00.000Z')],
+      1,
+    );
     const text = describeProgress({ ...base, github });
     expect(text).toContain('読んだ範囲（新しい順 1 件）には成功した観測の記録が無い');
     expect(text).not.toContain('数: — （成功した観測の記録が無い');
+  });
+
+  it('pg のように LIMIT の後で読めない行を捨てる store でも、先が在れば reachedLimit が真（#2603）', async () => {
+    const stores = createMemoryStores();
+    const unreadable = new Set<string>();
+    // 古い順に 600 件。いちばん古い 1 件だけ別の repo
+    for (let i = 0; i < 600; i += 1) {
+      const entry = await stores.journal.append({
+        type: 'github_observation',
+        observedBy: 'clone',
+        repo: i === 0 ? 'old/only' : 'new/repo',
+        query: 'gh issue list --state open',
+        result: { status: 'ok', openIssues: i, openPulls: 0, truncated: false },
+      });
+      // 直近 500 行のうち 1 行を「読めない形」にする
+      if (i === 590) unreadable.add(entry.id);
+    }
+    const list = stores.journal.list.bind(stores.journal);
+    stores.journal.list = async (query) => {
+      // SQL の LIMIT を掛けてから、読めない行を捨てる（要求より少なく返りうる）
+      const rows = await list(query);
+      return rows.filter((row) => !unreadable.has(row.id));
+    };
+    const view = await readProgress(stores, { now: NOW });
+    if (view.github.state !== 'observed') throw new Error('observed のはず');
+    expect(view.github.scan).toEqual({ limit: 500, reachedLimit: true });
+    // 古い側にしか無い repo は載っていない（断りが要る場面）
+    expect(view.github.repos.map((r) => r.repo)).toEqual(['new/repo']);
+  });
+
+  it('読めない行を捨てても、先が無ければ reachedLimit は偽（上限ちょうどで尽きた場合）', async () => {
+    const stores = createMemoryStores();
+    const unreadable = new Set<string>();
+    for (let i = 0; i < 500; i += 1) {
+      const entry = await stores.journal.append({
+        type: 'github_observation',
+        observedBy: 'clone',
+        repo: 'new/repo',
+        query: 'gh issue list --state open',
+        result: { status: 'ok', openIssues: i, openPulls: 0, truncated: false },
+      });
+      if (i === 250) unreadable.add(entry.id);
+    }
+    const list = stores.journal.list.bind(stores.journal);
+    stores.journal.list = async (query) =>
+      (await list(query)).filter((row) => !unreadable.has(row.id));
+    const view = await readProgress(stores, { now: NOW });
+    if (view.github.state !== 'observed') throw new Error('observed のはず');
+    expect(view.github.scan.reachedLimit).toBe(false);
   });
 
   it('日誌の記録を repo ごとに返し、日誌が空なら not_observed', async () => {

@@ -169,3 +169,18 @@ describe('一覧の要旨の切り詰めはサロゲートペアを割らない�
     expect(memoryDescriptionLine(row)).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 });
+
+describe('enter（#2599）', () => {
+  it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.memoryListFails = '繋がらない';
+    });
+    controller.enter();
+    await waitFor(() => state().status === 'error');
+    api.memoryListFails = null;
+    api.memoryRows = [memoryRow('a')];
+    controller.enter();
+    await waitFor(() => state().status === 'ready');
+    expect(state().rows).toHaveLength(1);
+  });
+});

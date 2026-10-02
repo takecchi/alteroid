@@ -241,7 +241,7 @@ export function startTokenTrialWatch(options: TokenTrialWatchOptions): TokenTria
     try {
       verdict = await options.trial.trial({ id: token.id, ...credentialOf(token) });
     } catch (error) {
-      verdict = { verdict: 'undecidable', reason: String(error) };
+      verdict = { verdict: 'undecidable', reason: reasonOf(error) };
     }
     if (verdict.verdict === 'usable') {
       await handleSuccess(token);
