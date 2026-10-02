@@ -44,6 +44,15 @@ import { collectRepoFiles } from './repo-scan-files.js';
  * 素のエラーの文字列化を含む式を `const message = …` / `this.#last = …` へ入れ、その
  * `message` / `this.#last` を上の口の引数へ置いたら落とす。
  *
+ * **別名・分割代入・配列を通す形も見る**（#2621）。
+ * - 別名: `const e2 = error`（`e2 = error`、`(error as Error)`、連鎖 `const e3 = e2` も）の `e2` は、同じ関数の
+ *   中でエラーを指す識別子として扱う（`String(e2)` / `e2.message` / `${e2}` を検出する）。
+ * - 分割代入: `const { message, stack: s } = error`（`({ message } = error)`・`catch ({ message })`・
+ *   `.catch(({ message }) => …)` も）で `message` / `stack` / `cause` を受けた名前は、「素のエラーの文字列化を
+ *   入れた変数」とみなす。
+ * - 配列: `lines = [String(error)]` / `lines.push(String(error))` の `lines` を口の引数で読んだら
+ *   （`lines.join()` のようにプロパティアクセスの左辺でも）落とす。
+ *
  * ## 数えない形
  * - **伏せ字を通したもの。** `reasonOf` / `redactErrorText` / `redactSecretsInText` /
  *   `collapseErrorCause` の呼び出しの引数の中に在る文字列化。
@@ -63,7 +72,8 @@ import { collectRepoFiles } from './repo-scan-files.js';
  * - zod の `parsed.error.message` のように、`error` 名の識別子ではないもの
  * - 上の2ファイル以外の HTTP の応答（`c.json`）。他のファイルは走査しない
  * - 関数をまたぐ受け渡し（引数・戻り値・別の関数が読むフィールド）。同じ関数内の代入だけを追う
- * - 別名・分割代入（`const e2 = error` / `const { message } = error`）と、配列へ入れて `join` する形（#2606 で確認した取りこぼし）
+ * - 別名・分割代入のうち、上に書いた形以外（入れ子の分割 `const { a: { message } } = error`、`...rest`、
+ *   関数・オブジェクトのフィールドをまたぐ別名、`.map` / `concat` / `splice` などで配列へ入れる形）
  * - `apps/cli`（利用者自身の端末へ出す文）
  */
 
@@ -254,8 +264,77 @@ function isErrorRef(node: ts.Node): node is ts.Identifier {
   return (
     ERROR_NAMES.has(node.text) ||
     isCatchVariable(node, node.text) ||
-    isCatchCallbackParam(node, node.text)
+    isCatchCallbackParam(node, node.text) ||
+    isErrorAlias(node)
   );
+}
+
+/** `node` が `scope` の範囲の中に在るか。 */
+function isInside(node: ts.Node, scope: ts.Node): boolean {
+  return node.pos >= scope.pos && node.end <= scope.end;
+}
+
+/** 括弧・型表明・非 null 表明を外す（`(error as Error)` / `error!` を `error` と同じに見る）。 */
+function unwrapExpr(expr: ts.Expression): ts.Expression {
+  let cur = expr;
+  while (
+    ts.isParenthesizedExpression(cur) ||
+    ts.isAsExpression(cur) ||
+    ts.isNonNullExpression(cur) ||
+    ts.isTypeAssertionExpression(cur) ||
+    ts.isSatisfiesExpression(cur)
+  ) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
+/**
+ * **エラーの別名**（#2621）: `const e2 = error` / `e2 = error`（`error` はエラーを指す識別子。
+ * 連鎖 `const e3 = e2` も）で束縛した名前を、同じ関数の中で `isErrorRef` が真にする。
+ * ファイルごとに `collectErrorAliases` が集める。
+ */
+const aliasesByFile = new WeakMap<ts.SourceFile, Map<string, ts.Node[]>>();
+
+function isErrorAlias(node: ts.Identifier): boolean {
+  const scopes = aliasesByFile.get(node.getSourceFile())?.get(node.text) ?? [];
+  return scopes.some((scope) => isInside(node, scope));
+}
+
+function collectErrorAliases(file: ts.SourceFile): void {
+  const aliases = new Map<string, ts.Node[]>();
+  aliasesByFile.set(file, aliases);
+  const pairs: { name: string; init: ts.Expression; at: ts.Node }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined
+    ) {
+      pairs.push({ name: node.name.text, init: node.initializer, at: node });
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left)
+    ) {
+      pairs.push({ name: node.left.text, init: node.right, at: node });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  // 連鎖（e3 = e2 = error）のため、増えなくなるまで回す
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const { name, init, at } of pairs) {
+      const rhs = unwrapExpr(init);
+      const scope = scopeOf(at, false);
+      if (scope === undefined || !isErrorRef(rhs) || narrowedToCustomClass(rhs, rhs.text)) continue;
+      const known = aliases.get(name) ?? [];
+      if (known.includes(scope)) continue;
+      aliases.set(name, [...known, scope]);
+      changed = true;
+    }
+  }
 }
 
 /** エラーの文字列化に使われるプロパティ（`error.message` / `.stack` / `.cause`）。 */
@@ -347,7 +426,94 @@ function collectTaintedNames(file: ts.SourceFile): Map<string, ts.Node[]> {
     if (scope === undefined) return;
     tainted.set(name, [...(tainted.get(name) ?? []), scope]);
   };
+  /** 分割代入 `{ message, stack: s }` の、`message` / `stack` / `cause` を受ける名前（#2621）。 */
+  const addFromPattern = (
+    pattern: ts.ObjectBindingPattern,
+    source: ts.Expression | undefined,
+    scope: ts.Node | undefined,
+  ): void => {
+    if (source !== undefined) {
+      const src = unwrapExpr(source);
+      if (!isErrorRef(src) || narrowedToCustomClass(src, src.text)) return;
+    }
+    for (const el of pattern.elements) {
+      const key = el.propertyName ?? el.name;
+      if (
+        el.dotDotDotToken === undefined &&
+        ts.isIdentifier(el.name) &&
+        (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) &&
+        LEAKY_PROPS.has(key.text)
+      ) {
+        add(el.name.text, scope);
+      }
+    }
+  };
   const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer !== undefined
+    ) {
+      addFromPattern(node.name, node.initializer, scopeOf(node, false));
+    } else if (
+      ts.isCatchClause(node) &&
+      node.variableDeclaration !== undefined &&
+      ts.isObjectBindingPattern(node.variableDeclaration.name)
+    ) {
+      addFromPattern(node.variableDeclaration.name, undefined, node.block);
+    } else if (
+      (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+      ts.isCallExpression(node.parent) &&
+      ts.isPropertyAccessExpression(node.parent.expression) &&
+      node.parent.expression.name.text === 'catch' &&
+      node.parent.arguments[0] === node &&
+      node.parameters[0] !== undefined &&
+      ts.isObjectBindingPattern(node.parameters[0].name)
+    ) {
+      addFromPattern(node.parameters[0].name, undefined, node);
+    } else if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isObjectLiteralExpression(node.left)
+    ) {
+      // ({ message } = error)
+      const src = unwrapExpr(node.right);
+      if (isErrorRef(src) && !narrowedToCustomClass(src, src.text)) {
+        for (const p of node.left.properties) {
+          const key =
+            ts.isShorthandPropertyAssignment(p) || ts.isPropertyAssignment(p) ? p.name : undefined;
+          const target = ts.isShorthandPropertyAssignment(p)
+            ? p.name
+            : ts.isPropertyAssignment(p)
+              ? p.initializer
+              : undefined;
+          if (
+            key !== undefined &&
+            (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) &&
+            LEAKY_PROPS.has(key.text) &&
+            target !== undefined &&
+            ts.isIdentifier(target)
+          ) {
+            add(target.text, scopeOf(node, false));
+          }
+        }
+      }
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      (node.expression.name.text === 'push' || node.expression.name.text === 'unshift') &&
+      node.arguments.some((a) => bareErrorNodes(a).length > 0)
+    ) {
+      // lines.push(String(error)) — 配列へ積む形
+      const target = node.expression.expression;
+      if (ts.isIdentifier(target)) add(target.text, scopeOf(node, false));
+      else if (
+        ts.isPropertyAccessExpression(target) &&
+        target.expression.kind === ts.SyntaxKind.ThisKeyword
+      ) {
+        add(`this.${target.name.text}`, scopeOf(node, true));
+      }
+    }
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
@@ -446,6 +612,7 @@ function sinkArguments(node: ts.Node, rel: string): readonly ts.Node[] {
  */
 function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
   const file = ts.createSourceFile('scan.ts', source, ts.ScriptTarget.Latest, true);
+  collectErrorAliases(file);
   const tainted = collectTaintedNames(file);
   const hits: BareErrorHit[] = [];
   const seen = new Set<string>();
@@ -457,13 +624,16 @@ function findBareErrorSinkWrites(source: string, rel = ''): BareErrorHit[] {
     const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
     hits.push({ line: line + 1, text });
   };
-  const isInside = (node: ts.Node, scope: ts.Node): boolean =>
-    node.pos >= scope.pos && node.end <= scope.end;
   /** 引数の中で、素のエラーを入れた名前を読んでいる所。 */
   const inspectIndirect = (node: ts.Node): void => {
     if (isRedactorCall(node)) return;
+    // 読む所だけを数える。`x.name` の `name` と `{ name: … }` のキーは読みではない。
+    // `lines.join()` の `lines` のようにプロパティアクセスの左辺は読み（#2621）
+    const isLabel =
+      (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
+      (ts.isPropertyAssignment(node.parent) && node.parent.name === node);
     const asName =
-      ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node.parent)
+      ts.isIdentifier(node) && !isLabel
         ? node.text
         : ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword
           ? `this.${node.name.text}`
@@ -882,6 +1052,105 @@ describe('findBareErrorSinkWrites（純粋関数）: 広げた形・catch の束
       results.push({ id, ok: false, error: error.message });
     } }`;
     expect(count(early, daemon)).toBe(1);
+  });
+});
+
+describe('findBareErrorSinkWrites（純粋関数）: 別名・分割代入・配列（#2621）', () => {
+  const write = 'process.stderr.write';
+  const inCatch = (body: string): string => `function f() { try {} catch (error) { ${body} } }`;
+  it('別名（const / 代入 / 連鎖 / 型表明つき）を通した文字列化を検出する', () => {
+    expect(count(inCatch(`const e2 = error; ${write}(String(e2));`))).toBe(1);
+    expect(count(inCatch(`const e2 = error; ${write}(e2.message);`))).toBe(1);
+    expect(count(inCatch(`const e2 = error; ${write}(\`x \${e2}\`);`))).toBe(1);
+    expect(count(inCatch(`let e2; e2 = error; ${write}(e2.stack);`))).toBe(1);
+    expect(count(inCatch(`const e2 = error; const e3 = e2; ${write}(String(e3));`))).toBe(1);
+    expect(count(inCatch(`const e2 = error as Error; ${write}(e2.message);`))).toBe(1);
+    expect(count(inCatch(`const e2 = (error as Error); announce(String(e2));`))).toBe(1);
+    expect(count(inCatch(`const e2 = error; const m = e2.message; ${write}(m);`))).toBe(1);
+  });
+  it('別名の陰性対照: 伏せ字を通す・別の関数の同名・エラーでない値の別名・絞った枝は検出しない', () => {
+    expect(count(inCatch(`const e2 = error; ${write}(reasonOf(e2));`))).toBe(0);
+    expect(count(inCatch(`const e2 = error; ${write}(e2.name);`))).toBe(0);
+    expect(count(inCatch(`const e2 = other; ${write}(String(e2));`))).toBe(0);
+    expect(
+      count(
+        `function a() { try {} catch (error) { const e2 = error; } }
+         function b(e2: unknown) { ${write}(String(e2)); }`,
+      ),
+    ).toBe(0);
+    expect(
+      count(
+        inCatch(
+          `if (error instanceof TokenPoolInputError) { const e2 = error; ${write}(e2.message); }`,
+        ),
+      ),
+    ).toBe(0);
+    expect(count(inCatch(`const e2 = error; ${write}('固定');`))).toBe(0);
+  });
+  it('分割代入（message / stack / 別名つき / catch の束縛 / 代入）を通した値を検出する', () => {
+    expect(count(inCatch(`const { message } = error; ${write}(message);`))).toBe(1);
+    expect(count(inCatch(`const { message, stack } = error; ${write}(\`\${stack}\`);`))).toBe(1);
+    expect(count(inCatch(`const { message: m } = error; announce(m);`))).toBe(1);
+    expect(count(inCatch(`const { stack: s = '' } = error; ${write}(s);`))).toBe(1);
+    expect(count(inCatch(`let message; ({ message } = error); ${write}(message);`))).toBe(1);
+    expect(count(inCatch(`const e2 = error; const { message } = e2; ${write}(message);`))).toBe(1);
+    expect(count(`try {} catch ({ message }) { ${write}(message); }`)).toBe(1);
+    expect(count(`p.catch(({ message }) => ${write}(message));`)).toBe(1);
+  });
+  it('分割代入の陰性対照: name だけ・伏せ字を通す・エラーでない値・別の関数・絞った枝は検出しない', () => {
+    expect(count(inCatch(`const { name } = error; ${write}(name);`))).toBe(0);
+    expect(count(inCatch(`const { message } = error; ${write}(reasonOf(message));`))).toBe(0);
+    expect(count(inCatch(`const { message } = other; ${write}(message);`))).toBe(0);
+    expect(count(inCatch(`const { message } = error; ${write}('固定');`))).toBe(0);
+    expect(
+      count(
+        `function a() { try {} catch (error) { const { message } = error; } }
+         function b(message: string) { ${write}(message); }`,
+      ),
+    ).toBe(0);
+    expect(
+      count(
+        inCatch(
+          `if (error instanceof TokenPoolInputError) { const { message } = error; ${write}(message); }`,
+        ),
+      ),
+    ).toBe(0);
+    // { message: 'x' } のキーは読みではない
+    expect(
+      count(inCatch(`const { message } = error; ${write}(JSON.stringify({ message: 'x' }));`)),
+    ).toBe(0);
+  });
+  it('配列へ入れて join する形（プロパティアクセスの左辺の読み）を検出する', () => {
+    expect(count(inCatch(`const lines = [String(error)]; ${write}(lines.join());`))).toBe(1);
+    expect(count(inCatch(`const lines = ['x', error.message]; ${write}(lines.join(','));`))).toBe(
+      1,
+    );
+    expect(
+      count(inCatch(`const lines = []; lines.push(String(error)); ${write}(lines.join());`)),
+    ).toBe(1);
+    expect(count(inCatch(`let lines; lines = [String(error)]; announce(lines.join(' '));`))).toBe(
+      1,
+    );
+    expect(count(inCatch(`const lines = [String(error)]; ${write}(lines[0]);`))).toBe(1);
+    expect(count(inCatch(`const m = String(error); ${write}(m.slice(0, 80));`))).toBe(1);
+    const viaField = `class C { f() { try {} catch (error) {
+      this.#lines = [String(error)]; ${write}(this.#lines.join());
+    } } }`;
+    expect(count(viaField)).toBe(1);
+  });
+  it('配列の陰性対照: 伏せ字を通す・固定文言・書かない・別の関数は検出しない', () => {
+    expect(count(inCatch(`const lines = [reasonOf(error)]; ${write}(lines.join());`))).toBe(0);
+    expect(
+      count(inCatch(`const lines = []; lines.push(reasonOf(error)); ${write}(lines.join());`)),
+    ).toBe(0);
+    expect(count(inCatch(`const lines = ['固定']; ${write}(lines.join());`))).toBe(0);
+    expect(count(inCatch(`const lines = [String(error)]; log(lines.join());`))).toBe(0);
+    expect(
+      count(
+        `function a() { try {} catch (error) { const lines = [String(error)]; } }
+         function b(lines: string[]) { ${write}(lines.join()); }`,
+      ),
+    ).toBe(0);
   });
 });
 
