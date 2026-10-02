@@ -2025,6 +2025,18 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       // 1つの schema 欄の中身なので、代表1つで足りる）。
       retained: { emit: 'raw', token: 'retainedUnread' },
     },
+    // Issue #2245。観測した側が名乗る自由文（`observedBy` / `repo` / `query`）は出さない。
+    // `result` は `status` の列挙と数・真偽値だけを出す（自由文の `reason` は出さない）。
+    github_observation: {
+      observedBy: {
+        emit: 'never',
+        why: '観測した側が名乗る値で、デーモンは確かめられない。跡（stderr）へ出さない。',
+      },
+      repo: { emit: 'never', why: '観測した側が名乗る自由文。`observedBy` と同じ判断。' },
+      query: { emit: 'never', why: '観測した側が書く引数の文字列。`observedBy` と同じ判断。' },
+      limit: { emit: 'never', why: '母集合の切り方は跡の見分けに要らない（`query` と同じ側）。' },
+      result: { emit: 'raw', token: 'status' },
+    },
   } satisfies { [T in JournalEntryType]: Record<ShapedFieldsOf<T>, FieldPlan> };
 
   /**
@@ -2346,6 +2358,14 @@ describe('journalEntryShape の名簿（schema に足した欄の足し忘れを
       settled: { total: 0, byType: [] },
       pending: { count: 2, oldestAt: '2026-09-15T00:00:00.000Z' },
       retained: { unread: 1, redelivered: 1, redeliveredClosed: 1, pendingCollapse: 1 },
+    },
+    github_observation: {
+      type: 'github_observation',
+      observedBy: SECRET,
+      repo: SECRET,
+      query: SECRET,
+      limit: 100,
+      result: { status: 'ok', openIssues: 3, openPulls: 1, truncated: false },
     },
   };
 

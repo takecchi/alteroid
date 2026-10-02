@@ -63,6 +63,8 @@ const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'acc
   // 何を意味するかは読んだ人が窓どうしを並べて決めることで、行の色では
   // 言えない（`turn_usage` / `context_usage` と同じ理由）。
   inbox_flow: 'neutral',
+  // **`neutral`。** 観測した側の申告の記録で、それ自体は壊れていることを表さない。
+  github_observation: 'neutral',
 };
 
 /**

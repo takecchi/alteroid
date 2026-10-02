@@ -169,6 +169,7 @@ import {
   droppedResponseSchema,
   errorResponseSchema,
   eventAcceptedResponseSchema,
+  githubObservationRequestSchema,
   healthResponseSchema,
   inboxBacklogResponseSchema,
   inboxRemoveManyRequestSchema,
@@ -7616,8 +7617,9 @@ export function createApp(deps: AppDeps) {
      * 非有限は core の `RangeError` を 400 にする。エラー文言に送られてきた値は
      * 混ぜない（`whereValidationFailed` の不変条件と同じ）。
      *
-     * **`github` は常に `not_observed`。** デーモンは GitHub を見に行かない
-     * （`packages/core/src/schema.ts` の「デーモンは PR もブランチも見に行かない」）。
+     * **`github` は観測の記録を返すだけ。** デーモンは GitHub を見に行かない
+     * （`packages/core/src/schema.ts` の「デーモンは PR もブランチも見に行かない」）。`POST
+     * /github-observations` が日誌へ置いた記録を repo ごとに組む。記録が無ければ `not_observed`。
      */
     .get(
       '/progress',
@@ -7630,7 +7632,8 @@ export function createApp(deps: AppDeps) {
           '**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。' +
           '`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず ' +
           '`null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。' +
-          '`github` は常に `not_observed`——デーモンは GitHub を見に行かない。' +
+          '`github` は観測の記録（`POST /github-observations`）を返すだけで、デーモンは GitHub を見に行かない。' +
+          '記録が無ければ `not_observed`（0 件ではない）。' +
           '中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。',
         responses: {
           200: {
@@ -7668,6 +7671,53 @@ export function createApp(deps: AppDeps) {
         }
 
         return c.json(progressResponseSchema.parse(view));
+      },
+    )
+
+    /**
+     * 観測した側（クローン・マネージャー・人間）が数えた GitHub の数を、日誌へ置く（#2245 段1）。
+     *
+     * **デーモンは GitHub を見に行かない**（`packages/core/src/schema.ts` の「デーモンは PR も
+     * ブランチも見に行かない」）。この口は申告を受けて残すだけで、値は確かめない——`observedBy`
+     * を必須にし、`GET /progress` の `github` が「誰の観測か」を必ず返す。いつ・誰が観測するかも
+     * ここでは決めない（対応表を持った瞬間に自動化ジョブに戻る）。
+     *
+     * **状態を変える口なので、日誌が状態そのものである。** 日誌（`github_observation`）へ追記
+     * できなければ記録は1行も残らず、そのまま 500（下の `base.onError` へ抜けるに任せる。
+     * `appendJournalOrDrop` は使わない——あれは「状態変更が済んだ後」の型）。
+     *
+     * **資格は `/commitments` と同じ（`authenticate` だけ）。** 本文は `jsonBody` が検査する
+     * （`content-type: application/json` の要求を兼ねる）。不正な本文は 400（送られてきた値は
+     * エラー文へ混ぜない）。
+     */
+    .post(
+      '/github-observations',
+      describeRoute({
+        tags: ['progress'],
+        summary: '観測した GitHub の数を記録する（申告。デーモンは確かめない）',
+        description:
+          '観測した側が数えた open Issue / open PR の件数を、観測者・repo・母集合の切り方付きで' +
+          '日誌へ置く。`GET /progress` の `github` がこれを repo ごとに返す。**デーモンは GitHub を' +
+          '見に行かない**（値は申告で、確かめていない）。`result.status` が `failed` の回は数を' +
+          '持てない（取れなかったことを理由付きで残す）。日誌へ書けなければ何も残さず 500。',
+        responses: {
+          200: {
+            description: '記録した。',
+            content: { 'application/json': { schema: resolver(eventAcceptedResponseSchema) } },
+          },
+          400: {
+            description: '本文の形が不正。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      jsonBody(githubObservationRequestSchema, (where) => ({
+        error: 'github 観測の形が不正' + (where === '' ? '' : `: ${where}`),
+      })),
+      async (c) => {
+        const body = c.req.valid('json');
+        const entry = await stores.journal.append({ type: 'github_observation', ...body });
+        return c.json(eventAcceptedResponseSchema.parse({ ok: true, id: entry.id }));
       },
     )
 

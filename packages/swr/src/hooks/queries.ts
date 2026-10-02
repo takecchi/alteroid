@@ -725,6 +725,13 @@ export function summarizeJournalEntry(entry: JournalEntry): string {
       // **見出しの `event` は落とさない** — 一覧の1行しか読まない人が、
       // `exhausted`（全層が止まる）と `not_rotated`（正常）を見分けられなくなる。
       return `[${entry.event}] ${entry.text}`;
+    case 'github_observation':
+      // **申告であることを落とさない**（`observedBy`）。取れなかった回は数を作らない。
+      return entry.result.status === 'ok'
+        ? `${entry.repo}: open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
+            (entry.result.truncated ? '（limit に達した。下限）' : '') +
+            `（観測者 ${entry.observedBy}）`
+        : `${entry.repo}: 取れなかった（観測者 ${entry.observedBy}）: ${entry.result.reason}`;
     case 'subagent_stall': {
       // **`token_rotation` と違い、`text` をそのまま出さない。** `entry.text`
       // は `runner.ts` の `#onSubagentStop` が組み立てた `note.text` そのままで、

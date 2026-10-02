@@ -1842,6 +1842,85 @@
                         "settled",
                         "pending"
                       ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "github_observation"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "observedBy": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "repo": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "query": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "limit": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "result": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "const": "ok"
+                                },
+                                "openIssues": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "openPulls": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "truncated": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["status", "openIssues", "openPulls", "truncated"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "const": "failed"
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1000
+                                }
+                              },
+                              "required": ["status", "reason"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["type", "id", "at", "observedBy", "repo", "query", "result"]
                     }
                   ]
                 }
@@ -4632,6 +4711,93 @@
                               "delivered",
                               "settled",
                               "pending"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "github_observation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "observedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "repo": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "query": {
+                                "type": "string",
+                                "maxLength": 1000
+                              },
+                              "limit": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "result": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "ok"
+                                      },
+                                      "openIssues": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "openPulls": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["status", "openIssues", "openPulls", "truncated"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "failed"
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1000
+                                      }
+                                    },
+                                    "required": ["status", "reason"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "at",
+                              "observedBy",
+                              "repo",
+                              "query",
+                              "result"
                             ]
                           }
                         ]
@@ -7688,6 +7854,93 @@
                                 "settled",
                                 "pending"
                               ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "github_observation"
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "observedBy": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "repo": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "query": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "result": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "ok"
+                                        },
+                                        "openIssues": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "openPulls": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "truncated": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": ["status", "openIssues", "openPulls", "truncated"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "failed"
+                                        },
+                                        "reason": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        }
+                                      },
+                                      "required": ["status", "reason"]
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "id",
+                                "at",
+                                "observedBy",
+                                "repo",
+                                "query",
+                                "result"
+                              ]
                             }
                           ]
                         },
@@ -8864,6 +9117,93 @@
                                 "settled",
                                 "pending"
                               ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "github_observation"
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "observedBy": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "repo": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "query": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "result": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "ok"
+                                        },
+                                        "openIssues": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "openPulls": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "truncated": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": ["status", "openIssues", "openPulls", "truncated"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "failed"
+                                        },
+                                        "reason": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        }
+                                      },
+                                      "required": ["status", "reason"]
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "id",
+                                "at",
+                                "observedBy",
+                                "repo",
+                                "query",
+                                "result"
+                              ]
                             }
                           ]
                         },
@@ -10032,6 +10372,93 @@
                               "settled",
                               "pending"
                             ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "github_observation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "observedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "repo": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "query": {
+                                "type": "string",
+                                "maxLength": 1000
+                              },
+                              "limit": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "result": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "ok"
+                                      },
+                                      "openIssues": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "openPulls": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["status", "openIssues", "openPulls", "truncated"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "failed"
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1000
+                                      }
+                                    },
+                                    "required": ["status", "reason"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "at",
+                              "observedBy",
+                              "repo",
+                              "query",
+                              "result"
+                            ]
                           }
                         ]
                       }
@@ -11195,6 +11622,93 @@
                               "delivered",
                               "settled",
                               "pending"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "github_observation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "observedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "repo": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "query": {
+                                "type": "string",
+                                "maxLength": 1000
+                              },
+                              "limit": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "result": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "ok"
+                                      },
+                                      "openIssues": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "openPulls": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["status", "openIssues", "openPulls", "truncated"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "failed"
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1000
+                                      }
+                                    },
+                                    "required": ["status", "reason"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "at",
+                              "observedBy",
+                              "repo",
+                              "query",
+                              "result"
                             ]
                           }
                         ]
@@ -17819,7 +18333,7 @@
         "operationId": "getProgress",
         "tags": ["progress"],
         "summary": "作業の進捗（積み上がり・実施中・片付いた速度・見込み）",
-        "description": "台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 168）は速度と見込みを数える窓の長さ（時間、有限の正数）。**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず `null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。`github` は常に `not_observed`——デーモンは GitHub を見に行かない。中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。",
+        "description": "台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 168）は速度と見込みを数える窓の長さ（時間、有限の正数）。**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず `null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。`github` は観測の記録（`POST /github-observations`）を返すだけで、デーモンは GitHub を見に行かない。記録が無ければ `not_observed`（0 件ではない）。中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。",
         "responses": {
           "200": {
             "description": "進捗の集計。",
@@ -18225,17 +18739,134 @@
                       ]
                     },
                     "github": {
-                      "type": "object",
-                      "properties": {
-                        "state": {
-                          "type": "string",
-                          "const": "not_observed"
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "not_observed"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["state", "reason"]
                         },
-                        "reason": {
-                          "type": "string"
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "observed"
+                            },
+                            "repos": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "repo": {
+                                    "type": "string"
+                                  },
+                                  "latestOk": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "observedAt": {
+                                            "type": "string"
+                                          },
+                                          "observedBy": {
+                                            "type": "string"
+                                          },
+                                          "query": {
+                                            "type": "string"
+                                          },
+                                          "limit": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "openIssues": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "openPulls": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "truncated": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "observedAt",
+                                          "observedBy",
+                                          "query",
+                                          "openIssues",
+                                          "openPulls",
+                                          "truncated"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "latestFailed": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "observedAt": {
+                                            "type": "string"
+                                          },
+                                          "observedBy": {
+                                            "type": "string"
+                                          },
+                                          "query": {
+                                            "type": "string"
+                                          },
+                                          "limit": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "reason": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["observedAt", "observedBy", "query", "reason"]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["repo", "latestOk", "latestFailed"]
+                              }
+                            },
+                            "scan": {
+                              "type": "object",
+                              "properties": {
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "reachedLimit": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["limit", "reachedLimit"]
+                            }
+                          },
+                          "required": ["state", "repos", "scan"]
                         }
-                      },
-                      "required": ["state", "reason"]
+                      ]
                     }
                   },
                   "required": [
@@ -18277,6 +18908,126 @@
             }
           }
         ]
+      }
+    },
+    "/github-observations": {
+      "post": {
+        "operationId": "postGithubObservations",
+        "tags": ["progress"],
+        "summary": "観測した GitHub の数を記録する（申告。デーモンは確かめない）",
+        "description": "観測した側が数えた open Issue / open PR の件数を、観測者・repo・母集合の切り方付きで日誌へ置く。`GET /progress` の `github` がこれを repo ごとに返す。**デーモンは GitHub を見に行かない**（値は申告で、確かめていない）。`result.status` が `failed` の回は数を持てない（取れなかったことを理由付きで残す）。日誌へ書けなければ何も残さず 500。",
+        "responses": {
+          "200": {
+            "description": "記録した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文の形が不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "observedBy": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "repo": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "query": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "result": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "const": "ok"
+                          },
+                          "openIssues": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "openPulls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "truncated": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["status", "openIssues", "openPulls", "truncated"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "const": "failed"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          }
+                        },
+                        "required": ["status", "reason"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["observedBy", "repo", "query", "result"]
+              }
+            }
+          }
+        }
       }
     },
     "/auth/providers": {

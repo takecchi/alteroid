@@ -14298,6 +14298,20 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           retainedLine,
       };
     }
+    case 'github_observation': {
+      // **申告であることを見出しに出す**（`observedBy`）。数が取れなかった回は数を出さない。
+      const head = `[github_observation ${entry.repo} by ${entry.observedBy} ${entry.result.status}]`;
+      const scope = `母集合: ${entry.query}${entry.limit === undefined ? '' : ` / limit ${entry.limit}`}`;
+      return entry.result.status === 'ok'
+        ? {
+            head,
+            body:
+              `open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
+              (entry.result.truncated ? '（limit に達した。実数はこれ以上）' : '') +
+              `\n${scope}`,
+          }
+        : { head, body: `取れなかった: ${entry.result.reason}\n${scope}` };
+    }
   }
 }
 

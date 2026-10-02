@@ -309,12 +309,22 @@ export {
   buildCommitmentDerivations,
   DEFAULT_PROGRESS_WINDOW_HOURS,
   InvalidProgressWindowError,
-  PROGRESS_GITHUB_NOT_OBSERVED,
   PROGRESS_WINDOW_HOURS_INVALID_MESSAGE,
   readProgress,
   readUnreadableJobsForCommitments,
 } from './progress-read.js';
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
+export {
+  GITHUB_OBSERVATION_SCAN_LIMIT,
+  PROGRESS_GITHUB_NOT_OBSERVED,
+  summarizeGithubObservations,
+} from './progress-github.js';
+export type {
+  GithubObservationFailed,
+  GithubObservationOk,
+  GithubRepoObservation,
+  ProgressGithub,
+} from './progress-github.js';
 export { describeProgress } from './progress-describe.js';
 export { formatElapsedAgo } from './format-elapsed.js';
 /**

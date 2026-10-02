@@ -140,7 +140,39 @@ export function describeProgress(view: ProgressViewInput): string {
     );
   }
 
-  lines.push('', `GitHub: 観測していない（0 件ではない）— ${github.reason}`);
+  if (github.state === 'not_observed') {
+    lines.push('', `GitHub: 観測していない（0 件ではない）— ${github.reason}`);
+  } else {
+    lines.push(
+      '',
+      'GitHub: 観測した側の申告（デーモンは GitHub を見に行かず、値を確かめていない。古さは判定しない）',
+    );
+    for (const row of github.repos) {
+      lines.push(`  ${row.repo}`);
+      if (row.latestOk !== null) {
+        const ok = row.latestOk;
+        lines.push(
+          `    open Issue ${String(ok.openIssues)} 件 / open PR ${String(ok.openPulls)} 件` +
+            (ok.truncated ? '（limit に達した。実数はこれ以上）' : ''),
+          `    観測: ${at(ok.observedAt, now)} 観測者 ${ok.observedBy} / 母集合 ${ok.query}` +
+            (ok.limit === undefined ? '' : ` / limit ${String(ok.limit)}`),
+        );
+      } else {
+        lines.push('    数: — （成功した観測の記録が無い。0 件ではない）');
+      }
+      if (row.latestFailed !== null) {
+        const failed = row.latestFailed;
+        lines.push(
+          `    取れなかった回: ${at(failed.observedAt, now)} 観測者 ${failed.observedBy} — ${failed.reason}`,
+        );
+      }
+    }
+    if (github.scan.reachedLimit) {
+      lines.push(
+        `  ※ 記録の読みが上限（${String(github.scan.limit)} 件）に当たった。古い記録にしか現れない repo は載っていない`,
+      );
+    }
+  }
 
   return lines.join('\n');
 }

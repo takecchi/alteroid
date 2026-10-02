@@ -2377,9 +2377,9 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     type: z.literal('github_observation'),
     id: z.string(),
     at: isoDateTime,
-    observedBy: z.string().min(1),
-    repo: z.string().min(1),
-    query: z.string(),
+    observedBy: z.string().min(1).max(200),
+    repo: z.string().min(1).max(200),
+    query: z.string().max(1000),
     limit: z.number().int().positive().optional(),
     result: z.discriminatedUnion('status', [
       z.object({
@@ -2388,7 +2388,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
         openPulls: z.number().int().nonnegative(),
         truncated: z.boolean(),
       }),
-      z.object({ status: z.literal('failed'), reason: z.string().min(1) }),
+      z.object({ status: z.literal('failed'), reason: z.string().min(1).max(1000) }),
     ]),
   }),
 ]);
@@ -2488,6 +2488,7 @@ const journalEntryTypeNames = {
   subagent_stall: true,
   context_usage: true,
   inbox_flow: true,
+  github_observation: true,
 } satisfies Record<JournalEntryType, true>;
 
 export const JOURNAL_ENTRY_TYPES = Object.keys(journalEntryTypeNames) as [
