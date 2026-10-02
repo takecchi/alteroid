@@ -13,7 +13,7 @@ import { createProfileService } from './profile-service.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import type { RunnerEvent } from './runner-protocol.js';
 import { createLocalRunner } from './runner-local.js';
-import { createRunnerRegistry } from './runner-protocol.js';
+import { createRunnerRegistry, RunnerHttpError } from './runner-protocol.js';
 import { createMemoryStores } from './testing.js';
 
 /**
@@ -190,38 +190,23 @@ describe('未 push の観測の reason に、例外の2行目以降が載らな�
 });
 
 describe('受信箱の合成通知に、例外の2行目以降が載らない（#2509）', () => {
-  it('resume が例外で拒まれて戻せなかった知らせ（理由行）', async () => {
-    const queryFn = ((params: { prompt: unknown; options?: Options }) => {
-      const options = params.options ?? {};
-      void (async () => {
-        for await (const message of params.prompt as AsyncIterable<unknown>) void message;
-      })();
-      async function* generate(): AsyncGenerator<SDKMessage, void> {
-        if (options.resume !== undefined) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          throw leakyError();
-        }
-        yield {
-          type: 'system',
-          subtype: 'init',
-          session_id: 'sess-after',
-          uuid: 'uuid-init',
-        } as unknown as SDKMessage;
-        await new Promise<void>(() => undefined);
-      }
-      return Object.assign(generate(), {
-        close: () => undefined,
-        interrupt: async () => undefined,
-      }) as unknown as Query;
-    }) as unknown as typeof sdkQuery;
+  // 一時障害ではない失敗（4xx）だけが「戻せなかった」へ進む。409 は世代の食い違い、
+  // 400 は戻せなかった知らせ（理由行）の経路になる。
+  it.each([
+    [409, '食い違っています'],
+    [400, '戻せなかった'],
+  ])('runner.resume が %i で拒まれたときの知らせ', async (status, marker) => {
     const stores = createMemoryStores();
     const posted: { type: string; text?: string }[] = [];
     const runner = createLocalRunner({
       runnerId: 'runner-test',
       workspacePath: '/work/project',
-      queryFn,
+      queryFn: fakeSdk(),
       env: { PATH: '/usr/bin' },
     });
+    runner.resume = async () => {
+      throw new RunnerHttpError(`resume rejected\nparams: ${FAKE_SECRET}`, status);
+    };
     const registry = createRunnerRegistry([runner]);
     const pool = createManagerPool({
       stores,
@@ -246,7 +231,7 @@ describe('受信箱の合成通知に、例外の2行目以降が載らない（
     await new Promise((resolve) => setTimeout(resolve, 600));
 
     const texts = posted.map((event) => event.text ?? '');
-    expect(texts.some((text) => text.includes('戻せなかった'))).toBe(true);
+    expect(texts.some((text) => text.includes(marker))).toBe(true);
     expect(texts.join('\n')).not.toContain(FAKE_SECRET);
     await pool.stop();
   });
