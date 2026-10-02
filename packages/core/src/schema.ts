@@ -2356,6 +2356,41 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
       })
       .optional(),
   }),
+  /**
+   * **誰かが GitHub を見て数えた結果の記録**（Issue #2245）。`GET /progress` の `github` が
+   * これを読んで返す。**デーモン自身は GitHub を見に行かない**（`JobStatus` の doc の
+   * 「デーモンは PR もブランチも見に行かない」）——この行は「観測した側が名乗った申告」を
+   * 日誌へ置くだけで、デーモンは値を確かめられない。だから `observedBy` を必須にし、
+   * 読み手へも「誰の観測か」を必ず出す。
+   *
+   * - `repo`: 観測した側が名乗る `owner/name`。デーモンは repo を決めない。
+   * - `query` / `limit`: 母集合をどう切ったか（`gh issue list --state open --limit N` の
+   *   引数など）。**数は母集合の切り方とセットでしか読めない。**
+   * - `result`: **`status` で判別する。** `ok` のときだけ数を持つ。`failed`（取れなかった回）は
+   *   数の欄そのものが無い——0 を作ると「0 件だった」と読める（取れないことが出力から消える）。
+   *   `truncated` が真なら `limit` に達しており、実数はもっと多い（数は下限）。
+   *
+   * **古さは判定しない。** `at`（デーモンが受けた時刻）をそのまま返し、新しさの判断は読み手に任せる。
+   * CI の状態は後の回で `ok` の枝へ足す。
+   */
+  z.object({
+    type: z.literal('github_observation'),
+    id: z.string(),
+    at: isoDateTime,
+    observedBy: z.string().min(1),
+    repo: z.string().min(1),
+    query: z.string(),
+    limit: z.number().int().positive().optional(),
+    result: z.discriminatedUnion('status', [
+      z.object({
+        status: z.literal('ok'),
+        openIssues: z.number().int().nonnegative(),
+        openPulls: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+      }),
+      z.object({ status: z.literal('failed'), reason: z.string().min(1) }),
+    ]),
+  }),
 ]);
 
 export type JournalEntry = z.infer<typeof journalEntrySchema>;
