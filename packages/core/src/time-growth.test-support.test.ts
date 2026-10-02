@@ -229,7 +229,7 @@ describe('expectNotSuperlinear', () => {
     expect(result.n).toBe(64_000);
   });
 
-  it('1ラウンドが丸ごと混んでも、次のラウンドが静かなら線形は通る。比は最小のラウンドのもの（#2576）', () => {
+  it('1ラウンドが丸ごと混んでも、次のラウンドが静かなら線形は通る。比は全ラウンドの最小時間で取る（#2576）', () => {
     // CI run 36798057082 の形（比 10.23）を、偽の時計で作る。大きいほうの最初の5回（=1ラウンド目）
     // にだけ 100ms の待ちが乗る。1ラウンド目の比は (20+100)/5 = 24、2ラウンド目は 20/5 = 4。
     const clock = makeFakeClock();
@@ -276,7 +276,55 @@ describe('expectNotSuperlinear', () => {
       error = e;
     }
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/ラウンドごとの比 \[16\.00, 16\.00, 16\.00\]/);
+    expect((error as Error).message).toMatch(/累積の比=16\.00.*累積の比=16\.00.*累積の比=16\.00/);
+  });
+
+  it('小さいほうだけに混みが乗ったラウンドが混じっても、2乗は落ちる（ラウンドごとの比の最小なら通ってしまう筋書き）', () => {
+    // 最初の版（ラウンドごとの比の最小）が CI の陰性対照で2乗を通した形。n=4000 の2乗は 16ms、
+    // n=16000 は 256ms（理論値 16 倍）。小さいほうの 9 回目以降（2・3ラウンド目）にだけ 100ms
+    // の混みが乗る。ラウンドごとの比の最小なら 256/116 = 2.2 で通るが、最小時間どうしなら
+    // 小さいほうの最小は 16ms のままで、比は 16。
+    const clock = makeFakeClock();
+    let smallCalls = 0;
+    let error: unknown;
+    try {
+      expectNotSuperlinear(
+        (n: number) => {
+          clock.advance((n * n) / 1_000_000);
+          if (n === 4000) {
+            smallCalls += 1;
+            if (smallCalls >= 9) clock.advance(100);
+          }
+        },
+        identity,
+        { n: 4000, minSmallMs: 0, now: clock.now },
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/伸びの比が大きすぎる/);
+    expect((error as Error).message).toMatch(/ratio=16\.00/);
+  });
+
+  it('大きいほうだけに混みが乗ったラウンドが混じっても、線形は通る', () => {
+    // 大きいほうの最初の7回（1ラウンド目の全部と2ラウンド目の前半）に 100ms が乗る。
+    // 2ラウンド目の後半に静かな測定があるので、大きいほうの最小は 20ms、比は 4。
+    const clock = makeFakeClock();
+    let largeCalls = 0;
+    const result = expectNotSuperlinear(
+      (n: number) => {
+        clock.advance(n / 1_000_000);
+        if (n >= 20_000_000) {
+          largeCalls += 1;
+          if (largeCalls <= 7) clock.advance(100);
+        }
+      },
+      identity,
+      { n: 5_000_000, minSmallMs: 0, now: clock.now },
+    );
+    expect(result.ratio).toBe(4);
+    expect(largeCalls).toBe(10);
   });
 
   it('smoke: 既定の時計（performance.now）でも例外なく動き、測った値は有限の正の数になる', () => {
@@ -309,26 +357,42 @@ describe('expectNotSuperlinear', () => {
  * 約 1.5ms、n=32000 が約 320ms（n を16倍で時間は約 200 倍）。どちらも閾値 10 には桁で余裕がある。
  * 線形のほうの対照（落ちないこと）は、約 65 箇所の本物の歯が毎回測っている。
  */
+/** 投げるはずの測定。投げなかったときは、測った値を表明の文に出す（CI で値が読めるように）。 */
+function expectGrowthDetected(
+  run: (input: string) => unknown,
+  makeInput: (n: number) => string,
+  options: Parameters<typeof expectNotSuperlinear>[2],
+): void {
+  let measured: unknown;
+  let thrown: unknown;
+  try {
+    measured = expectNotSuperlinear(run, makeInput, options);
+  } catch (e) {
+    thrown = e;
+  }
+  expect(
+    thrown,
+    `後戻りを助けが通した。測定値: ${JSON.stringify(measured)}（n・t(small)・t(large)・ratio）`,
+  ).toBeInstanceOf(Error);
+  expect((thrown as Error).message).toMatch(/伸びの比が大きすぎる|hardCapMs を超えた/);
+}
+
 describe('陰性対照: 後戻りが爆発する正規表現を、助けは実時間でも落とす', () => {
   it('入れ子の量指定子 (a+)+$ ——指数的な後戻りは比で落ちる', () => {
     const exponential = /(a+)+$/;
-    expect(() =>
-      expectNotSuperlinear(
-        (input: string) => exponential.test(input),
-        (n) => `${'a'.repeat(n)}!`,
-        { n: 11, factor: 2, repeats: 2 },
-      ),
-    ).toThrow(/伸びの比が大きすぎる|hardCapMs を超えた/);
+    expectGrowthDetected(
+      (input) => exponential.test(input),
+      (n) => `${'a'.repeat(n)}!`,
+      { n: 11, factor: 2, repeats: 2 },
+    );
   }, 30_000);
 
   it('2乗の後戻り（空白の列＋x に \\s+$）は、既定の factor=4・maxRatio=10 で落ちる', () => {
     const quadratic = /\s+$/;
-    expect(() =>
-      expectNotSuperlinear(
-        (input: string) => quadratic.test(input),
-        (n) => `${' '.repeat(n)}x`,
-        { n: 4000, minSmallMs: 0, repeats: 2 },
-      ),
-    ).toThrow(/伸びの比が大きすぎる/);
+    expectGrowthDetected(
+      (input) => quadratic.test(input),
+      (n) => `${' '.repeat(n)}x`,
+      { n: 4000, minSmallMs: 0, repeats: 3 },
+    );
   }, 30_000);
 });

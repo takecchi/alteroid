@@ -25,9 +25,8 @@ import { expect } from 'vitest';
  * 手元では同じ形が n を倍にするごとにきっちり倍になる線形である）。そこで次の3つを入れた。
  * - **最小値を取る**（中央値ではなく）。器が混むと時間は足されるだけで、引かれはしない。
  * - **小さいほうと大きいほうを交互に測る**。混み具合の波が片方にだけ乗るのを避ける。
- * - **ラウンドを繰り返し、最小の比で判定する**（#2576、CI run 36798057082 で比 10.23）。揺れは比を
- *   大きいほうへずらすだけなので、線形はどれかのラウンドで factor 近くへ戻る。2乗以上は全ラウンドが
- *   大きいままなので落ちる——閾値を上げずに、偽陽性だけを減らす。
+ * - **ラウンドを繰り返し、全ラウンドを通した最小時間どうしの比で判定する**（#2576、CI run 36798057082 で比
+ *   10.23）。比が閾値を超えている間だけ重ねる。ラウンドごとの比の最小は2乗を通すので採らない。
  * - **t(n) が `minSmallMs`（既定 5ms）に届くまで n を倍にする**（`maxScale` 倍まで）。
  *   2乗・3乗の実装は n を上げるほど比が理論値へ近づくので、捕まえる力は落ちない。
  *   大きいほうが `hardCapMs` を超えたら、その時点で測るのをやめて落とす。
@@ -52,8 +51,8 @@ export interface ExpectNotSuperlinearOptions {
   /** t(n) がこれに届くまで n を倍にする（ms）。既定 5。0 なら倍にしない。 */
   minSmallMs?: number;
   /**
-   * 測定ラウンドの最大回数（#2576）。比が `maxRatio` に届かなかったラウンドで打ち切り、
-   * 全ラウンドが届いたときだけ落とす（判定は最小の比）。既定 3。1 なら従来どおり1回で決める。
+   * 測定ラウンドの最大回数（#2576）。比が `maxRatio` を超えている間だけ重ね、
+   * 全ラウンドの最小時間どうしの比が超えたまま残ったときに落とす。既定 3。1 なら従来どおり1回で決める。
    */
   rounds?: number;
   /** 温めの回数（捨てる。n を倍にする判定はこの最小値で行う）。既定 3。 */
@@ -72,7 +71,7 @@ export interface ExpectNotSuperlinearOptions {
   now?: () => number;
 }
 
-/** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う（最小の比のラウンドのもの）。 */
+/** 測定結果——助け自身の歯や、呼び出し側の追加の検算に使う（全ラウンドの最小時間による）。 */
 export interface GrowthMeasurement {
   /** 実際に測った小さいほうの入力の大きさ（倍にした後）。 */
   n: number;
@@ -142,43 +141,47 @@ export function expectNotSuperlinear<TInput>(
   }
   const large = makeInput(n * factor);
 
-  // **比は、測定ラウンドを最大 `rounds` 回やり、最も小さい比で判定する**（#2576）。
-  // 器の混みは時間を足すだけで引かないので、ラウンドの比は「揺れのぶん」だけ大きいほうへ
-  // ずれる。線形の実装は、どれか1ラウンドが静かなら factor の近くへ戻って通る。
-  // 2乗以上は全ラウンドが同じように大きい（理論値 factor² 以上）ので、最小の比も落ちる
-  // ——**捕まえる力は閾値を上げずに保たれる**。通ったラウンドで打ち切るので、静かな器では
-  // 1ラウンドしか測らない。
-  let best: { tSmallMs: number; tLargeMs: number; ratio: number } | undefined;
-  const roundRatios: string[] = [];
+  // **比は、全ラウンドを通した「小さいほうの最小時間」と「大きいほうの最小時間」で取る**（#2576）。
+  // 器の混みは時間を足すだけで引かないので、最小時間は測るほど真の値へ単調に近づく。
+  // ラウンドを重ねるのは、比が `maxRatio` を超えている間だけ（最大 `rounds` 回）。
+  // **ラウンドごとの比の最小を採ってはいけない**——小さいほうだけに混みが乗ったラウンドが1つ
+  // あると分母が膨らみ、2乗（理論値 factor²）でも比が閾値を下回って通る（最初の版が CI の
+  // 陰性対照 `\s+$` で2乗を通した）。最小時間どうしの比なら、混みはどちらの側でも
+  // 「足されるだけ」なので、2乗の比は理論値より下がらない。
+  let tSmallMs = Infinity;
+  let tLargeMs = Infinity;
+  let ratio = Number.POSITIVE_INFINITY;
+  const roundLog: string[] = [];
   let hung = false;
   for (let round = 0; round < rounds && !hung; round += 1) {
     let roundSmallMs = Infinity;
     let roundLargeMs = Infinity;
     for (let i = 0; i < repeats; i += 1) {
-      roundSmallMs = Math.min(roundSmallMs, timeOnceMs(run, small, now));
+      const tSmall = timeOnceMs(run, small, now);
+      roundSmallMs = Math.min(roundSmallMs, tSmall);
+      tSmallMs = Math.min(tSmallMs, tSmall);
       const tLarge = timeOnceMs(run, large, now);
       roundLargeMs = Math.min(roundLargeMs, tLarge);
+      tLargeMs = Math.min(tLargeMs, tLarge);
       // 大きいほうが1回でも上限を超えたら、残りは測らない（最小値も上限を超えているとは
       // 限らないので、超えた1回の値で落とす）。
       if (tLarge >= hardCapMs) {
-        roundLargeMs = tLarge;
+        tLargeMs = tLarge;
         hung = true;
         break;
       }
     }
-    const roundRatio = roundLargeMs / Math.max(roundSmallMs, floorMs);
-    roundRatios.push(roundRatio.toFixed(2));
-    if (best === undefined || roundRatio < best.ratio) {
-      best = { tSmallMs: roundSmallMs, tLargeMs: roundLargeMs, ratio: roundRatio };
-    }
-    if (hung || roundRatio < maxRatio) break;
+    ratio = tLargeMs / Math.max(tSmallMs, floorMs);
+    roundLog.push(
+      `#${round + 1}: t(small)最小=${roundSmallMs.toFixed(2)}ms, t(large)最小=${roundLargeMs.toFixed(2)}ms, ` +
+        `累積の比=${ratio.toFixed(2)}`,
+    );
+    if (hung || ratio < maxRatio) break;
   }
-  // rounds >= 1 なので best は必ず埋まる。
-  const { tSmallMs, tLargeMs, ratio } = best ?? { tSmallMs: NaN, tLargeMs: NaN, ratio: NaN };
 
   const detail =
     `t(${n})=${tSmallMs.toFixed(2)}ms, t(${n * factor})=${tLargeMs.toFixed(2)}ms, ` +
-    `ratio=${ratio.toFixed(2)}（ラウンドごとの比 [${roundRatios.join(', ')}] の最小。` +
+    `ratio=${ratio.toFixed(2)}（ラウンドごと [${roundLog.join(' | ')}]。` +
     `n=${n}（出発点 ${options.n}）, factor=${factor}, maxRatio=${maxRatio}, ` +
     `hardCapMs=${hardCapMs}, repeats=${repeats}, rounds=${rounds}, 最小値）`;
 
