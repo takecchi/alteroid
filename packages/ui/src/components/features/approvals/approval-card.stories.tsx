@@ -103,3 +103,31 @@ export const WithErrorAndTrailing: Story = {
     ),
   },
 };
+
+/** 設問つき（`questions`）。閉じていると要約1行だけで、開くと選択肢を押して「回答」で一括送信する。 */
+export const WithQuestions: Story = {
+  args: {
+    ...base,
+    state: 'unanswered',
+    questions: [
+      {
+        id: 'deploy',
+        prompt: 'デプロイ先',
+        options: [
+          { id: 'railway', label: 'Railway', description: '今の本番と同じ', recommended: true },
+          { id: 'fly', label: 'Fly.io' },
+        ],
+      },
+      {
+        id: 'notify',
+        prompt: '通知先',
+        multiple: true,
+        options: [
+          { id: 'slack', label: 'Slack' },
+          { id: 'mail', label: 'メール' },
+        ],
+      },
+    ],
+    onSubmitQuestions: () => undefined,
+  },
+};
