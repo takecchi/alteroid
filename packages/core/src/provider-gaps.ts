@@ -50,21 +50,87 @@ const LOST_WHEN_MISSING: Record<RequirementKey, string> = {
   usage: '台帳: 消費が報告されない（この層の消費は台帳の合計に含まれない）',
 };
 
+function gapLines(owner: string, provider: ProviderGapSubject): string[] {
+  return missingRequirementCapabilities(provider.capabilities).map(
+    (key) =>
+      `${owner}（${provider.displayName}）は ${key} を持たない — ${LOST_WHEN_MISSING[key as RequirementKey]}`,
+  );
+}
+
 /**
  * 欠けた要件の能力ごとに1行（層の順、層の中は `REQUIREMENT_BEARING_CAPABILITIES`
- * の順）。欠落が1つも無ければ `[]`。
+ * の順）。欠落が1つも無ければ `[]`。**渡した層だけ数える**（省略した層は載せない —
+ * クローン層だけを起動時に確定して載せるため。マネージャー層は runner ごとに
+ * 変わるので {@link describeRunnerProviderGaps} が実行時に出す）。
  */
-export function describeProviderGaps(providers: LayerProviders): string[] {
+export function describeProviderGaps(providers: Partial<LayerProviders>): string[] {
   const lines: string[] = [];
   for (const layer of PROVIDER_GAP_LAYERS) {
     const provider = providers[layer];
-    for (const key of missingRequirementCapabilities(provider.capabilities)) {
-      lines.push(
-        `${LAYER_LABEL[layer]}（${provider.displayName}）は ${key} を持たない — ${LOST_WHEN_MISSING[key as RequirementKey]}`,
-      );
-    }
+    if (provider === undefined) continue;
+    lines.push(...gapLines(LAYER_LABEL[layer], provider));
   }
   return lines;
+}
+
+/** 接続中の runner 1台が名乗ったマネージャー層の provider。`subject` が `undefined` は未知の id。 */
+export interface RunnerProviderEntry {
+  runnerLabel: string;
+  providerId: string;
+  subject: ProviderGapSubject | undefined;
+}
+
+/**
+ * runner ごとのマネージャー層（作業者層は親に従うので同じ provider）の欠落。
+ * 「どの runner の」が分かるよう、行の主語に runner の名前を入れる。欠落が無ければ `[]`。
+ */
+export function describeRunnerProviderGaps(entries: readonly RunnerProviderEntry[]): string[] {
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const owner = `runner「${entry.runnerLabel}」の`;
+    if (entry.subject === undefined) {
+      lines.push(
+        `${owner}マネージャー層・作業者層は未知の provider（${entry.providerId}）を名乗る — 持たない能力を確かめられない`,
+      );
+      continue;
+    }
+    lines.push(...gapLines(`${owner}${LAYER_LABEL.manager}`, entry.subject));
+    lines.push(...gapLines(`${owner}${LAYER_LABEL.worker}`, entry.subject));
+  }
+  return lines;
+}
+
+/** {@link collectRunnerProviderGaps} が読むプールの最小の形（`ManagerPool` の部分集合）。 */
+export interface RunnerProviderSource {
+  runners(): Promise<{
+    runners: readonly { label: string; state: string; runnerId?: string }[];
+  }>;
+  runnerManagerProvider?(runnerId: string): string;
+}
+
+/**
+ * 接続中の runner それぞれが名乗るマネージャー層の欠落を、いまのプールから引く。
+ * 名乗りを引く口を持たないプールは「確かめられない」ので何も足さない。
+ * 読めなかったとき（`runners()` が落ちた）は `[]`（日報・`self_status` を壊さない）。
+ */
+export async function collectRunnerProviderGaps(
+  pool: RunnerProviderSource,
+  providerOf: (id: string) => ProviderGapSubject | undefined,
+): Promise<string[]> {
+  if (pool.runnerManagerProvider === undefined) return [];
+  try {
+    const fleet = await pool.runners();
+    const entries: RunnerProviderEntry[] = [];
+    for (const runner of fleet.runners) {
+      if (runner.runnerId === undefined) continue;
+      if (runner.state !== 'connected' && runner.state !== 'vacating') continue;
+      const providerId = pool.runnerManagerProvider(runner.runnerId);
+      entries.push({ runnerLabel: runner.label, providerId, subject: providerOf(providerId) });
+    }
+    return describeRunnerProviderGaps(entries);
+  } catch {
+    return [];
+  }
 }
 
 /** 欠落の節の見出し。3面で同じものを使う。 */

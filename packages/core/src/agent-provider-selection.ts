@@ -74,3 +74,9 @@ const AGENT_PROVIDERS: Record<AgentProviderId, AgentProvider> = {
 export function agentProviderOf(id: AgentProviderId): AgentProvider {
   return AGENT_PROVIDERS[id];
 }
+
+/** runner が名乗った provider id（文字列）から実体を引く。受け付ける id 以外は `undefined`。 */
+export function knownProviderOf(id: string): AgentProvider | undefined {
+  const known = AGENT_PROVIDER_IDS.find((candidate) => candidate === id);
+  return known === undefined ? undefined : agentProviderOf(known);
+}

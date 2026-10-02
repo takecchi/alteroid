@@ -653,7 +653,13 @@ export {
   type CloneRuntimeFacts,
   type SelfFacts,
 } from './self.js';
-export { describeProviderGaps, type LayerProviders } from './provider-gaps.js';
+export {
+  collectRunnerProviderGaps,
+  describeProviderGaps,
+  describeRunnerProviderGaps,
+  type LayerProviders,
+  type ProviderGapSubject,
+} from './provider-gaps.js';
 export { DEFAULT_LAYER_PROVIDERS } from './layer-providers.js';
 /**
  * いま走っているプロセスの版（コミット sha）。デーモンと runner は別 Service で

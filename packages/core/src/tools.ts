@@ -577,6 +577,11 @@ export interface ToolContext {
    */
   runtime?: () => CloneRuntimeFacts;
   /**
+   * 層を動かす provider が持たない能力の行（クローン層＋接続中 runner のマネージャー層）。
+   * `self_status` が実行時に引く。省略（テスト）時は `runtime()` が持つ静的な行のまま。
+   */
+  providerGaps?: () => Promise<readonly string[]>;
+  /**
    * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
    *
    * クローンの道具は人間の口ではないので、ここから `'human'` は出ない
@@ -10291,6 +10296,7 @@ export function createCloneTools(context: ToolContext) {
           return text(renderLedgerCrossReference(runtime.sdkModel, aggregate, ledgerCursor));
         }
 
+        const providerGaps = await context.providerGaps?.();
         const [documents, memoryDocuments, aggregate] = await Promise.all([
           stores.persona.list(),
           stores.persona.documents(),
@@ -10300,7 +10306,9 @@ export function createCloneTools(context: ToolContext) {
 
         return text(
           [
-            describeCloneRuntime(runtime),
+            describeCloneRuntime(
+              providerGaps === undefined ? runtime : { ...runtime, providerGaps },
+            ),
             '',
             // **クローンの文脈へ実際に載る形で数える。** 本文だけを足すと、見出しの
             // ぶんだけ本当より少ない数を「いまの総文字数」として名乗ることになる。

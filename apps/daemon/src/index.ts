@@ -17,7 +17,6 @@ import {
   applyAppScopedEnvVars,
   seedDefaultEnvVars,
   createClone,
-  DEFAULT_LAYER_PROVIDERS,
   describeProviderGaps,
   createLocalRunner,
   createProfileApplier,
@@ -1575,9 +1574,10 @@ export async function main(): Promise<void> {
     // 差し替えが置かれていればそれを載せる。**固定値を載せると自己認識が嘘になる**
     // （人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断する）。
     models: { clone: cloneModel, manager: resolveManagerModel(), worker: resolveWorkerModel() },
-    // 層を動かす provider が持たない能力。いまは各層の既定（Claude）を渡すので `[]`。
-    // 層ごとの選択が入ったら、ここへ選ばれた provider を渡す。
-    providerGaps: describeProviderGaps(DEFAULT_LAYER_PROVIDERS),
+    // クローン層の provider が持たない能力だけ。上で解いた `cloneProvider`（S1）を再利用する。
+    // **マネージャー層は載せない** — runner ごとに `hello` で名乗りが変わるので、起動時に
+    // 焼くと古くなる。あちらは `self_status` と日報・発意 tick の digest が実行時に引く。
+    providerGaps: describeProviderGaps({ clone: cloneProvider }),
   };
 
   /**
