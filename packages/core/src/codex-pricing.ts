@@ -9,7 +9,7 @@
  *
  * ## 出典
  *
- * 原典は https://developers.openai.com/api/docs/pricing 。確認日 2026-10-03（UTC）。
+ * 原典は https://developers.openai.com/api/docs/pricing 。確認日 2026-10-02（UTC）。
  * 取得は同ページの markdown 版（`Accept: text/markdown`、または URL に `.md`）。
  * 単位は 100 万トークンあたりの USD。
  *
