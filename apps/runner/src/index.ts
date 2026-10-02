@@ -11,6 +11,7 @@ import {
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
   placedManagerModels,
+  reasonOf,
   resolveManagerModel,
   resolveWorkerModel,
   WITHHELD_ENV_KEYS,
@@ -418,7 +419,7 @@ export async function main(): Promise<void> {
     // 直後に process.exit(1) が来るので `process.stderr.write` は使わない
     // （fd がパイプだと POSIX 上は非同期で、書いた行が exit に巻き込まれて
     // 失われることがある。#248）。`writeStderrSync` は fd 2 へ同期で書く。
-    writeStderrSync(`alteroid-runner: 待ち受けに失敗しました: ${String(error)}\n`);
+    writeStderrSync(`alteroid-runner: 待ち受けに失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
 
@@ -531,7 +532,7 @@ if (invokedDirectly()) {
 
   main().catch((error: unknown) => {
     // 同じ理由で `writeStderrSync` を使う（直上の `server.on('error')` と同型。#248）。
-    writeStderrSync(`alteroid-runner: 起動に失敗しました: ${String(error)}\n`);
+    writeStderrSync(`alteroid-runner: 起動に失敗しました: ${reasonOf(error)}\n`);
     process.exit(1);
   });
 }
