@@ -3,9 +3,9 @@ import { FsPersonaStore } from '@alteroid/storage-fs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type {
   AnswerApprovalVia,
   ApprovalSelection,
-  AnswerApprovalVia,
   ChatStreamEvent,
   CloneHost,
   InboxBacklogBreakdown,

@@ -9,6 +9,7 @@ import {
   describeAppraisal,
   describeDenialFollowUp,
   describeManagerState,
+  describeQuestionLines,
   describeSessionMissingKind,
   describeToolUseStall,
   describeTurnEnd,
@@ -17,8 +18,10 @@ import {
   JOURNAL_ENTRY_TYPES,
   jobStatusSchema,
   renderApprovalTrace,
+  summarizeQuestions,
   usageLayerSchema,
   usageSiteSchema,
+  type ApprovalSelection,
   type ApprovalTrace,
   type Commitment,
   type UnreadableApproval,
@@ -307,6 +310,10 @@ const HELP = `/report [日付]        日報（既定は直近。日付は YYYY-
 /approvals           承認待ち（番号付き）
 /approvals all       回答済み・取り下げ済みも含めて見る
 /answer <番号|id> <回答>  承認待ちに答える（番号は /approvals の並び）
+/answer <番号|id> --select <設問id>=<選択肢id>[,<選択肢id>...] [--other <設問id>=<文>] [補足]
+                     設問つきの承認待ちに選んで答える（--select / --other は何度でも書ける。
+                     文に空白があれば "..." で囲む。補足の自由文は併用できる。設問は /approval で読む）
+/approval <番号|id>  承認待ちを詳しく見る（設問・選択肢・推奨・単一/複数・その他の可否）
 /approval-trace <番号|id>  その承認の答えと、答えを受けてクローンが取った行動を対で見る
                      （番号は /approvals の並び。答えが無い・対が無いときは理由が出る）
 /answers <番号|id> <回答> [<番号|id> <回答> ...]  溜まった承認待ちにまとめて答える
@@ -1529,6 +1536,13 @@ export async function runSlashCommand(
         );
         if (approval.jobId) stdout.write(`      マネージャー: ${approval.jobId}\n`);
         if (approval.context) stdout.write(`      背景: ${summarizeText(approval.context)}\n`);
+        // **設問は件数だけ（一覧は短く。issue #2525）。** 選択肢・推奨・id は `/approval` で読む。
+        if (approval.questions !== undefined && approval.questions.length > 0) {
+          stdout.write(
+            `      ${summarizeQuestions(approval.questions)}` +
+              `（/approval ${index + 1} で選択肢を読める）\n`,
+          );
+        }
         // **取り下げ済み・回答済みの状態を出す（#963）。** `/approvals all` で
         // 初めて視界に入る2状態——`approval_withdraw` はクローンが起こす行為
         // なので人間に取り下げボタンは無いが、取り下げられた事実と理由は
@@ -1617,10 +1631,69 @@ export async function runSlashCommand(
       return 'ok';
     }
 
+    /**
+     * 承認待ち1件の詳細（issue #2525）。`/approvals` は件数だけにして短く保ち、設問と選択肢
+     * （推奨の印・単一か複数か・その他を書けるか・答えるときの id）はここで全部出す。
+     * 回答済み・取り下げ済みの件も開ける（番号は `/approvals` の並び）。
+     */
+    case '/approval': {
+      const reference = rest[0];
+      if (!reference) {
+        stdout.write('使い方: /approval <番号|id>\n');
+        return 'ok';
+      }
+      const id = resolveListedId(reference, listed.approvals);
+      if (id === null) {
+        stdout.write(`[${reference}] は /approvals の一覧にありません\n`);
+        return 'ok';
+      }
+      const response = await client.approvals.$get({ query: { order: 'asc', pending: 'false' } });
+      if (!response.ok) {
+        stdout.write(`${await withDetail('承認待ちを読めませんでした', response)}\n`);
+        return 'ok';
+      }
+      const { approvals } = await response.json();
+      const approval = approvals.find((entry) => entry.id === id);
+      if (approval === undefined) {
+        stdout.write(`[${reference}] （${id}）は見つかりませんでした\n`);
+        return 'ok';
+      }
+      stdout.write(`  ${approval.question}\n`);
+      stdout.write(`      id: ${approval.id}  作成: ${approval.createdAt}\n`);
+      if (approval.context) stdout.write(`      背景: ${approval.context}\n`);
+      if (approval.withdrawnAt) {
+        stdout.write(`      状態: 取り下げ済み（${approval.withdrawnAt}）\n`);
+      } else if (approval.answeredAt) {
+        stdout.write(`      状態: 回答済み（${approval.answeredAt}）\n`);
+        if (approval.answer) stdout.write(`      回答: ${approval.answer}\n`);
+      }
+      if (approval.questions === undefined || approval.questions.length === 0) {
+        stdout.write('      （設問はありません。/answer <番号> <回答> で自由文で答えます）\n');
+        return 'ok';
+      }
+      for (const questionLine of describeQuestionLines(approval.questions)) {
+        stdout.write(`      ${questionLine}\n`);
+      }
+      stdout.write(
+        '      答え方: /answer <番号> --select <設問id>=<選択肢id>[,<選択肢id>...]' +
+          ' [--other <設問id>=<文>] [補足]\n',
+      );
+      return 'ok';
+    }
+
     case '/answer': {
       const [reference, ...answerParts] = rest;
-      const answer = answerParts.join(' ');
-      if (!reference || answer.length === 0) {
+      // **`--select` / `--other` があれば構造化した回答（issue #2525）。** 無ければ今までどおり
+      // 残り全部を1つの自由文として答える（引用符も解釈しない）。
+      const structured = /(^|\s)--(select|other)(=|\s|$)/.test(line)
+        ? parseStructuredAnswer(tokenizeWithQuotes(line.replace(/^\S+\s*/, '')).slice(1))
+        : null;
+      if (structured !== null && 'error' in structured) {
+        stdout.write(`${structured.error}\n`);
+        return 'ok';
+      }
+      const answer = structured === null ? answerParts.join(' ') : structured.supplement;
+      if (!reference || (answer.length === 0 && structured === null)) {
         stdout.write('使い方: /answer <番号|id> <回答>\n');
         return 'ok';
       }
@@ -1631,7 +1704,13 @@ export async function runSlashCommand(
       }
       const response = await client.approvals[':id'].answer.$post({
         param: { id },
-        json: { answer },
+        json:
+          structured === null
+            ? { answer }
+            : {
+                selections: structured.selections,
+                ...(answer.length === 0 ? {} : { answer }),
+              },
       });
       stdout.write(
         `${response.ok ? '回答しました' : await withDetail('回答に失敗しました', response)}\n`,
@@ -3359,6 +3438,97 @@ function tokenizeQuoted(text: string): string[] {
     tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
   }
   return tokens;
+}
+
+/**
+ * シェルに近い分け方: 空白で割るが、引用符（`"..."` / `'...'`）の中の空白は保ち、**語の途中の
+ * 引用符も効く**（`--other q2="ただし 来週"` が1語になる）。`tokenizeQuoted`（`/answers` 用）は
+ * 引用符が語の先頭にあるときだけ効くので、`設問id=文` の形には使えない。
+ */
+function tokenizeWithQuotes(text: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let started = false;
+  let quote: '"' | "'" | null = null;
+  for (const char of text) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else current += char;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      started = true;
+    } else if (/\s/.test(char)) {
+      if (started) tokens.push(current);
+      current = '';
+      started = false;
+    } else {
+      current += char;
+      started = true;
+    }
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * `/answer <番号|id> --select q1=a --select q2=a,b --other q2=テキスト [補足]` の、番号の後ろの
+ * トークンを読む（issue #2525）。`--select` は `<設問id>=<選択肢id>[,<選択肢id>...]`、
+ * `--other` は `<設問id>=<文>`（文に `=` があってもよい。最初の `=` で割る）。どちらも `--名前 値` と
+ * `--名前=値` の両方で書け、同じ設問に何度書いてもよい（選択肢は書いた順に足す）。残りの
+ * トークンは補足の自由文になる。**突き合わせはデーモンが行う**（知らない id は 400 で返る）。
+ */
+function parseStructuredAnswer(
+  tokens: string[],
+): { selections: ApprovalSelection[]; supplement: string } | { error: string } {
+  const selections: ApprovalSelection[] = [];
+  const supplement: string[] = [];
+  const entryOf = (questionId: string): ApprovalSelection => {
+    let entry = selections.find((candidate) => candidate.questionId === questionId);
+    if (entry === undefined) {
+      entry = { questionId, optionIds: [] };
+      selections.push(entry);
+    }
+    return entry;
+  };
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i] ?? '';
+    const flag = /^--(select|other)(?:=([\s\S]*))?$/.exec(token);
+    if (flag === null) {
+      supplement.push(token);
+      continue;
+    }
+    const name = flag[1] as 'select' | 'other';
+    let value = flag[2];
+    if (value === undefined) {
+      i += 1;
+      value = tokens[i];
+    }
+    const eq = value === undefined ? -1 : value.indexOf('=');
+    if (value === undefined || eq <= 0) {
+      return {
+        error:
+          `--${name} は --${name} <設問id>=${name === 'select' ? '<選択肢id>[,<選択肢id>...]' : '<文>'}` +
+          ' の形で書いてください',
+      };
+    }
+    const questionId = value.slice(0, eq);
+    const rest = value.slice(eq + 1);
+    const entry = entryOf(questionId);
+    if (name === 'select') {
+      entry.optionIds.push(
+        ...rest
+          .split(',')
+          .map((optionId) => optionId.trim())
+          .filter((optionId) => optionId !== ''),
+      );
+    } else {
+      entry.other = entry.other === undefined ? rest : `${entry.other} ${rest}`;
+    }
+  }
+  if (selections.length === 0) {
+    return { error: '--select か --other に1つ以上の設問を書いてください' };
+  }
+  return { selections, supplement: supplement.join(' ') };
 }
 
 /** `/answers` の1件ぶん — どの承認待ちに、何を答えるか。 */

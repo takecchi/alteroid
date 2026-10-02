@@ -6700,9 +6700,7 @@ export function createCloneTools(context: ToolContext) {
             ...(approval.context === undefined ? [] : [`背景: ${approval.context}`]),
             ...(approval.questions === undefined
               ? []
-              : [
-                  `設問:\n${describeQuestionLines(approval.questions).join('\n')}`,
-                ]),
+              : [`設問:\n${describeQuestionLines(approval.questions).join('\n')}`]),
             ...(approval.answer === undefined ? [] : [`回答: ${approval.answer}`]),
             ...(approval.withdrawnReason === undefined
               ? []

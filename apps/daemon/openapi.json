@@ -11425,7 +11425,7 @@
         "operationId": "postApprovalsAnswer",
         "tags": ["approvals"],
         "summary": "溜まった承認待ちにまとめて答える",
-        "description": "1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に独立に再開する）。結果は `answers` と同じ順で返る。行が在るが読めない件は、その件だけ`ok: false` と読めない旨の `error` で返る（`not found` とは言わない）。",
+        "description": "1件が駄目でも残りは進める（人間の不在で止まっていたそれぞれの仕事が、答えた順に独立に再開する）。結果は `answers` と同じ順で返る。行が在るが読めない件は、その件だけ`ok: false` と読めない旨の `error` で返る（`not found` とは言わない）。各件は `answer`（自由文）か `selections`（`questions` を持つ承認待ちへの選択肢の回答。`answer` は補足として併用できる）の少なくとも一方を持つ。**`selections` が `questions` と突き合わない件が1つでもあれば、1件も答えずに全体を 400 にする**（知らない設問・選択肢の id、単一選択で2つ以上、`allowOther: false` なのに `other`、同じ設問が2回、`questions` を持たない承認待ちへの `selections`）。",
         "responses": {
           "200": {
             "description": "各件の結果（1件ごとの成否）。",
@@ -11459,7 +11459,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。",
+            "description": "本文が JSON として不正。または `answer` も `selections` も無い件・`selections` が`questions` と突き合わない件がある（この場合、どの件も答えていない）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11496,9 +11496,33 @@
                         "answer": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "selections": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "questionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "optionIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "other": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["questionId", "optionIds"]
+                          }
                         }
                       },
-                      "required": ["id", "answer"]
+                      "required": ["id"]
                     }
                   }
                 },
@@ -11514,7 +11538,7 @@
         "operationId": "postApprovalsByIdAnswer",
         "tags": ["approvals"],
         "summary": "承認待ちに1件答える",
-        "description": "二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。答え直したいなら新しい確認として来るのが正しい（→ 409）。クローンが approval_withdraw で取り下げた件も答えられない（→ 409 error=\"withdrawn\"。#963）。",
+        "description": "二度答えると、既に再開した仕事へ同じ回答がもう一度流れ、記録上の回答も上書きされる。答え直したいなら新しい確認として来るのが正しい（→ 409）。クローンが approval_withdraw で取り下げた件も答えられない（→ 409 error=\"withdrawn\"。#963）。`answer`（自由文）か `selections`（`questions` を持つ承認待ちへの選択肢の回答）の少なくとも一方が要る。`selections` があれば `answer` は省略でき、併用すると補足になる。デーモンが設問・選択肢・その他・補足を人間が読める文に畳んで回答として残す（構造は `selections` に残る。未回答の設問があってもよい）。",
         "responses": {
           "200": {
             "description": "答えた。",
@@ -11534,7 +11558,7 @@
             }
           },
           "400": {
-            "description": "本文が JSON として不正。",
+            "description": "本文が JSON として不正。または `answer` も `selections` も無い・`selections` が`questions` と突き合わない（知らない設問・選択肢の id、単一選択で2つ以上、`allowOther: false` なのに `other`、同じ設問が2回、`questions` を持たない承認待ちへの`selections`）。回答は書いていない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11592,9 +11616,32 @@
                   "answer": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "selections": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "questionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "optionIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "other": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["questionId", "optionIds"]
+                    }
                   }
-                },
-                "required": ["answer"]
+                }
               }
             }
           }

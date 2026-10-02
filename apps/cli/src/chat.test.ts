@@ -1519,6 +1519,14 @@ interface ApprovalLike {
   jobId?: string;
   answeredAt?: string;
   answer?: string;
+  /** `ask_human` の設問（issue #2525）。 */
+  questions?: {
+    id: string;
+    prompt: string;
+    options: { id: string; label: string; description?: string; recommended?: boolean }[];
+    multiple?: boolean;
+    allowOther?: boolean;
+  }[];
   /** クローンが `approval_withdraw` で取り下げた時刻（issue #963）。 */
   withdrawnAt?: string;
   /** 取り下げの理由（issue #963）。 */
@@ -1842,6 +1850,12 @@ function stubClient(
         },
       },
       ':id': {
+        answer: {
+          $post: (args: unknown) => {
+            calls.push({ route: 'POST /approvals/:id/answer', args });
+            return Promise.resolve(reply(200, { ok: true }));
+          },
+        },
         trace: {
           $get: (args: unknown) => {
             calls.push({ route: 'GET /approvals/:id/trace', args });
@@ -2444,6 +2458,126 @@ describe('chat の台帳コマンド', () => {
  * こと、(3) 途中でやめられる（書いた分だけ送れる）こと、(4) 1件が駄目でも
  * 残りが進み、その失敗が id ごとに見えること、である。
  */
+describe('chat の設問つきの承認待ち（issue #2525）', () => {
+  const approval: ApprovalLike = {
+    id: 'ap-q',
+    createdAt: '2026-10-02T00:00:00.000Z',
+    question: 'デプロイ先を決めたい',
+    questions: [
+      {
+        id: 'target',
+        prompt: 'デプロイ先は？',
+        options: [
+          { id: 'railway', label: 'Railway', recommended: true, description: '既存の基盤' },
+          { id: 'fly', label: 'Fly.io' },
+        ],
+      },
+      {
+        id: 'notify',
+        prompt: '通知先',
+        multiple: true,
+        allowOther: false,
+        options: [
+          { id: 'slack', label: 'Slack' },
+          { id: 'mail', label: 'メール' },
+        ],
+      },
+    ],
+  };
+  const listedOne = (): Listed => ({ ...emptyListed(), approvals: ['ap-q'] });
+  const sentJson = (calls: { route: string; args: unknown }[]) =>
+    (calls.find((call) => call.route === 'POST /approvals/:id/answer')?.args as {
+      param: { id: string };
+      json: unknown;
+    }) ?? null;
+
+  it('/approvals は設問を件数だけで出す（選択肢の本文は出さない）', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ approvals: [approval] });
+
+    await runSlashCommand('/approvals', client, emptyListed());
+
+    const text = read();
+    expect(text).toContain('設問 2 件');
+    expect(text).toContain('/approval 1');
+    expect(text).not.toContain('Railway');
+  });
+
+  it('/approval は設問と選択肢（推奨・単一/複数・その他・id）を全部出す', async () => {
+    const read = captureStdout();
+    const { client } = stubClient({ approvals: [approval] });
+
+    await runSlashCommand('/approval 1', client, listedOne());
+
+    const text = read();
+    expect(text).toContain('Q1 [id=target] デプロイ先は？（単一選択・その他を書ける）');
+    expect(text).toContain('(a) [id=railway] Railway［推奨］ — 既存の基盤');
+    expect(text).toContain('Q2 [id=notify] 通知先（複数選択可・その他は書けない）');
+    expect(text).toContain('--select');
+  });
+
+  it('/answer --select / --other は selections として送る（補足の自由文も併用できる）', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(
+      '/answer 1 --select target=railway --select notify=slack,mail --other target="ただし 来週" 金曜は避けたい',
+      client,
+      listedOne(),
+    );
+
+    expect(sentJson(calls)).toEqual({
+      param: { id: 'ap-q' },
+      json: {
+        selections: [
+          { questionId: 'target', optionIds: ['railway'], other: 'ただし 来週' },
+          { questionId: 'notify', optionIds: ['slack', 'mail'] },
+        ],
+        answer: '金曜は避けたい',
+      },
+    });
+    expect(read()).toContain('回答しました');
+  });
+
+  it('--select=q=a の形・補足なし・その他だけ、も送れる', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand(
+      '/answer ap-q --select=target=fly --other=notify=x=y',
+      client,
+      listedOne(),
+    );
+
+    expect(sentJson(calls)?.json).toEqual({
+      selections: [
+        { questionId: 'target', optionIds: ['fly'] },
+        { questionId: 'notify', optionIds: [], other: 'x=y' },
+      ],
+    });
+  });
+
+  it('形の崩れた --select は送らずに使い方を出す', async () => {
+    const read = captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/answer 1 --select target', client, listedOne());
+    await runSlashCommand('/answer 1 --other', client, listedOne());
+
+    expect(sentJson(calls)).toBeNull();
+    expect(read()).toContain('--select は --select <設問id>=');
+  });
+
+  it('--select を書かない /answer は今までどおり、残り全部を自由文として送る', async () => {
+    captureStdout();
+    const { calls, client } = stubClient();
+
+    await runSlashCommand('/answer 1 railway で  お願い', client, listedOne());
+
+    expect(sentJson(calls)?.json).toEqual({ answer: 'railway で お願い' });
+  });
+});
+
 describe('chat の /answers（まとめて答える）', () => {
   function listedApprovals(ids: string[]): Listed {
     return { ...emptyListed(), approvals: ids };

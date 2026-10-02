@@ -70,7 +70,9 @@ describe('describeSelectionsViolation（selections と questions の突き合わ
     ).toBeNull();
     expect(describeSelectionsViolation(questions, [])).toBeNull();
     expect(
-      describeSelectionsViolation(questions, [{ questionId: 'notify', optionIds: ['slack', 'mail'] }]),
+      describeSelectionsViolation(questions, [
+        { questionId: 'notify', optionIds: ['slack', 'mail'] },
+      ]),
     ).toBeNull();
     // 何も選ばず other だけ
     expect(
@@ -155,9 +157,9 @@ describe('foldSelections（人間が読める文へ畳む）', () => {
   it('未回答の設問は「未回答」と出す。補足が無ければ補足の行は出さない', () => {
     const folded = foldSelections(questions, [{ questionId: 'notify', optionIds: ['mail'] }]);
     expect(folded).toBe('Q1 デプロイ先: 未回答\nQ2 通知先: (b) メール');
-    expect(foldSelections(questions, [{ questionId: 'target', optionIds: [], other: '  ' }])).toContain(
-      'Q1 デプロイ先: 未回答',
-    );
+    expect(
+      foldSelections(questions, [{ questionId: 'target', optionIds: [], other: '  ' }]),
+    ).toContain('Q1 デプロイ先: 未回答');
   });
 
   it('選択肢の記号は設問の中の位置（推奨でない2番目は (b)）', () => {
