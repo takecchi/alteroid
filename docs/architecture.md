@@ -57,6 +57,7 @@
   - **SDK の `query()` の署名を共通 IF にしないこと。** `AsyncIterable<SDKUserMessage>` + `Options` + `canUseTool` + control request は Claude 固有の制御モデルであり、これを IF にすると全 provider にその模倣を強いる（`queryFn` はテスト用の差し替え口として残す。provider の境界ではない）
   - 中立の語彙は `packages/core/src/agent-ports.ts`、`Options` の組み立ては `packages/core/src/claude-provider.ts` に閉じる。**前者から SDK を import しない**（番人テストで固定してある）
   - 「要件を担う能力」の機械可読な一覧は `agent-ports.ts` の `REQUIREMENT_BEARING_CAPABILITIES` が持つ。**要件の出所は PRD であって、こちらは写しである**（増減は PRD 側で決まる）
+  - **相互呼び出しの口**（要件は PRD「provider」）: マネージャー層は alteroid の MCP `peer`（`peer_run` / `peer_reply`）で、クローン層は `manager_start` の `provider` 引数で、もう一方の provider を呼ぶ。見えるのは人間が `ALTEROID_<層>_PEERS` で開けた provider だけで、空なら道具ごと出さない。**Codex の層のモデルは人間の設定で決まり、指定が無ければ Codex の既定のモデルである**（alteroid は選ばない）
   - **境界は2つ要る。** マネージャーと作業者は1ターンぶんのストリームで足りるが、**クローンは自作の道具をインプロセス MCP（SDK の機能）で持っている**ので、道具を stdio MCP サーバへ外へ出すまで中立の口を作れない。無理に中立の顔を被せると SDK の型が `agent-ports.ts` へ漏れ、`queryFn` を別名で作り直すだけになる
 
 ## プロセス境界 — なぜ manager-runner を分けるか
