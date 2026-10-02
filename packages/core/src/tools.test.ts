@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
+import { describeManagerProvider } from './manager-provider-format.js';
 
 import {
   clearRecentTracesForTesting,
@@ -6709,6 +6710,36 @@ describe('クローンの道具', () => {
     const reply = await h.call('manager_list', {});
 
     expect(reply).toContain('走行中 1 本（うち話しかけられる 1 本）');
+  });
+
+  /**
+   * **マネージャー層の provider（#486 S9）。** 置き先の runner が名乗った値だけを出し、
+   * 取れないときは「不明」と書く。`claude` とは推測しない。
+   */
+  it('manager_list は名乗られた provider を出し、取れないときは「不明」と書く（#486 S9）', async () => {
+    const h = harness();
+    await h.call('manager_start', { request: 'A' });
+    const target = h.running[0];
+    if (!target) throw new Error('準備に失敗');
+    target.runnerId = 'runner-a';
+    h.managers.runnerReportedManagerProvider = (runnerId) =>
+      runnerId === 'runner-a' ? 'codex' : undefined;
+    expect(await h.call('manager_list', {})).toContain('provider: codex');
+    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
+      'provider: codex',
+    );
+
+    // 名乗りを受けていない器・置き先が無い委譲は「不明」。claude とは書かない。
+    target.runnerId = 'runner-silent';
+    const silent = await h.call('manager_list', {});
+    expect(silent).toContain(`provider: ${describeManagerProvider(undefined)}`);
+    expect(silent).toContain('provider: 不明');
+    expect(silent).not.toContain('provider: claude');
+    delete target.runnerId;
+    expect(await h.call('manager_list', {})).toContain('provider: 不明');
+    expect(await h.call('manager_report', { managerId: target.managerId })).toContain(
+      'provider: 不明',
+    );
   });
 
   /**

@@ -7,6 +7,7 @@
  * 経過・依頼の抜粋）。cwd・報告・失敗などの中身は詳細を明示的に開いて読む。
  */
 import { describeManagerState } from '@alteroid/core';
+import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import { Box, Text } from 'ink';
 import type { FC } from 'react';
 
@@ -222,7 +223,7 @@ export const ManagerDetailHead: FC<{ detail: DetailState }> = ({ detail }) => {
         {` ${m.managerId}`}
       </Text>
       <Text wrap="truncate-end" dimColor>
-        {`${m.cwd}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`}
+        {`${m.cwd}  provider: ${describeManagerProvider(m.managerProvider)}  作成 ${m.startedAt}  更新 ${formatElapsedAgo(m.updatedAt, detail.loadedAt)}`}
       </Text>
       <Text wrap="truncate-end">{`依頼: ${oneLine(redactBody(m.request), 300)}`}</Text>
       <Text wrap="truncate-end" color={theme.warn}>

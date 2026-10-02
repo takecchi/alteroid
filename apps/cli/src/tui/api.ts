@@ -85,6 +85,8 @@ export interface ManagerRow {
   runnerLostSince?: string;
   runnerVanished?: boolean;
   sessionMissingSince?: string;
+  /** 置き先の runner が名乗ったマネージャー層の provider。欄が無いのは「不明」（claude と推測しない。#486 S9）。 */
+  managerProvider?: string;
   appraisal?: string;
 }
 

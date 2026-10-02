@@ -1,3 +1,4 @@
+import { describeManagerProvider } from '@alteroid/core/manager-provider-format';
 import {
   appraisalSchema,
   describeReportDriftMark,
@@ -77,6 +78,16 @@ function legacyWaiting(over: Partial<ManagerWaitingItem> = {}): ManagerWaitingIt
 }
 
 describe('renderManagerList', () => {
+  it('provider を出し、欄が無いときは「不明」と書く（claude とは推測しない。#486 S9）', () => {
+    expect(renderManagerList([manager({ managerProvider: 'codex' })])).toContain(
+      '      provider: codex',
+    );
+    const unknown = renderManagerList([manager()]);
+    expect(unknown).toContain(`      provider: ${describeManagerProvider(undefined)}`);
+    expect(unknown).toContain('provider: 不明');
+    expect(unknown).not.toContain('claude');
+  });
+
   /**
    * **読めない委譲が在るとき、0件を「居ません」と言わない**（#2345）。読めない行は状態も
    * 取れないので、`status=` で絞った先に居ないとも言えない。

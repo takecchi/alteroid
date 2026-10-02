@@ -286,6 +286,7 @@ import {
 } from './usage.js';
 import { JOURNAL_SEARCH_UNCOVERED_LIST } from './journal-search.js';
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
+import { describeManagerProvider } from './manager-provider-format.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
   describeUnpushedWorkObservationProvenance,
@@ -11500,6 +11501,10 @@ export function createCloneTools(context: ToolContext) {
                   ? ''
                   : `（この器は ${manager.runnerLostSince} 以降 名乗っていない。新しい委譲の宛先からは外れている（置き先として数えない）。**この委譲が失われたという意味ではない** — 黙っているのが器なのか経路なのかは、ここからは言えない（器の中でまだ走っていることもある）。話しかけることは塞いでいない — 戻る先（session_id）が在れば manager_send が resume を試みる（届くとは限らない）。${RESTART_BEFORE_CHECK_ADVICE}器そのものは runner_list で見る）`
               }`,
+              // **マネージャー層の provider（#486 S9）。** 置き先の runner が名乗った値だけを出す。
+              // 取れなければ「不明」と書き、`claude` とは推測しない（`describeManagerProvider`。
+              // CLI・Web UI と同じ字面）。
+              `  provider: ${describeManagerProvider(managerProviderOf(context.managers, manager))}`,
               // **`runnerLostSince` と同じ作法で、別の行として出す（#563）。**
               // `describeManagerState` は動かさない——`manager_list` と要約
               // （`digest.ts`）で字面が割れると、そこで潰れることを防ぐために
@@ -11878,6 +11883,9 @@ export function createCloneTools(context: ToolContext) {
           );
         }
 
+        // **マネージャー層の provider（#486 S9）。** `manager_list` と同じ字面（`describeManagerProvider`）。
+        // 取れなければ「不明」で、`claude` とは推測しない。
+        const providerLine = `provider: ${describeManagerProvider(managerProviderOf(context.managers, found))}`;
         // **停止後に届いた、畳まれたターンの本文（Issue #1038）。**
         // `part === 'request'` では扱わない——依頼文の話ではない。**在れば
         // `lastReport`（完遂した報告）より優先して見せる**——`lastFoldedTurn`
@@ -11948,6 +11956,7 @@ export function createCloneTools(context: ToolContext) {
           const withheldReportsNote = describeWithheldReports(found);
           return text(
             [
+              providerLine,
               missing,
               usageStopped,
               runnerVanished,
@@ -12206,7 +12215,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${appraisalNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${providerLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${appraisalNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
@@ -15572,4 +15581,18 @@ export function createCloneMcpServer(context: ToolContext) {
       'マネージャーへの委譲。',
     tools: createCloneTools(context),
   });
+}
+
+/**
+ * 委譲のマネージャー層の provider（#486 S9）。宛先の runner が名乗った値だけを返し、
+ * 置き先が無い・名乗りを受けていない・旧い runner（欄なし）・この口を持たない
+ * プールは `undefined`（不明）。経路判断用の `runnerManagerProvider()`（既定 `claude`）は
+ * 使わない。デーモンの `managerProviderOf`（`apps/daemon/src/app.ts`）と同じ読み方。
+ */
+function managerProviderOf(
+  managers: ManagerPool | undefined,
+  summary: { runnerId?: string | undefined },
+): string | undefined {
+  if (summary.runnerId === undefined) return undefined;
+  return managers?.runnerReportedManagerProvider?.(summary.runnerId);
 }

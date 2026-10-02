@@ -40,6 +40,10 @@
       "types": "./dist/redact.d.ts",
       "import": "./dist/redact.js"
     },
+    "./manager-provider-format": {
+      "types": "./dist/manager-provider-format.d.ts",
+      "import": "./dist/manager-provider-format.js"
+    },
     "./mask-url": {
       "types": "./dist/mask-url.d.ts",
       "import": "./dist/mask-url.js"
