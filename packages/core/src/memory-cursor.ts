@@ -49,7 +49,7 @@ import type { MemoryDocumentMeta } from './schema.js';
  * `schedule_list` は**出す順と錨の順が同じ**（どちらも `kind` 昇順）なので、
  * 「最後に出した行の後ろから」で過不足なく続きが決まる。**`memory_list` は
  * そうではない**——描くのは `parent` から組んだ木の順（DFS。
- * `grep -Fn -- 'const flat = flattenMemoryToc(resolveMemoryHierarchy(tocEntries));' packages/core/src/memory.ts`）
+ * `grep -Fn -- 'const flat = flattenMemoryToc(roots);' packages/core/src/memory.ts`）
  * で、錨はストアの `slug` 昇順である。⟹ **2つの順は一致しない。**
  *
  * 具体例: 根が `a` と `b`、`a` の子が `z` のとき、描く順は `a, z, b`
@@ -62,6 +62,36 @@ import type { MemoryDocumentMeta } from './schema.js';
  * ⟹ ⭐ **後者を採る。** この継続点が在る理由は「落ちた文書が到達不能に
  * ならないこと」であって、重複を避けることではない。**欠落と重複が
  * 両立しないなら、欠落しない側へ倒す。**
+ *
+ * ## 🔴 頁が必ず進むこと（#2510）——「含む」にした代償の手当て
+ *
+ * 「落ちた中でいちばん小さい slug から（含む）」だけでは、**同じ cursor が
+ * 何度でも返る**ことがあった。slug の小さい子 `b`（親 `z` は slug が大きい）
+ * の前に、1頁の予算を食う root が並ぶと、1頁目は `b` が親 `z` の直後に回って
+ * 落ち `from=b`。2頁目の view は `b` 以降の全部で **`z` も残る**ので、`b` は
+ * また子として最後に回って落ち、`from=b` が返る。⟹ 頁が進まず、`b` より後ろ
+ * の文書には届かない。
+ *
+ * **直し方: view の先頭（錨）を、必ず先頭に描く。** `resolveMemoryCursor` が
+ * 返す `anchor`（view のストア順で最初の文書）を `renderMemoryListing` が
+ * 受け取り、(1) 親が view に在っても親から切り離して root にし、(2) root の
+ * 先頭へ置く。`renderListing` は1件だけで予算を超えてもその1件を切って出す
+ * ので、**錨は必ずその頁に出る**。
+ *
+ * - **進む**: 錨は出るので落ちた側に入らない。次の `from` は「落ちた文書の
+ *   うち、view（＝ストア順）で最初のもの」で、必ず錨より後ろ。⟹ from の
+ *   ストア上の位置は頁ごとに**厳密に増える**。
+ * - **欠落しない**: `from` より前のストア順の文書は、どれかの頁で出ている
+ *   （`from` が落ちた中で最初のものだから）。上の「ここから（含む）」の
+ *   理由はそのまま保たれる。重複（`z` が次の頁に再び出る等）も従来どおり許す。
+ * - 「いちばん小さい slug」は JS の文字列比較だったが、view はストア順
+ *   （照合順序）で切っているので、**落ちた中の最初も view の並びで取る**
+ *   ——比較と探索で順序が食い違うと、食い違った間の文書が飛ぶ。
+ * - 錨を親から切り離すと、その頁では錨の字下げが出ない（親は別の頁に在る）。
+ *   錨の親が view の外に在るときは従来どおり注記が出る。
+ * - **cursor の形は変えていない**（`{ from }` のまま）ので、古い cursor も
+ *   そのまま読める。意味も同じ（「ここから、含む」）で、変わったのは描き方だけ。
+ *   （古い cursor は malformed にしない——形が同じで、意味も変わらないため。）
  *
  * ## `index.ts` へ export しない
  *
@@ -111,14 +141,19 @@ export function decodeMemoryCursor(raw: string): DecodeMemoryCursorResult {
 export function resolveMemoryCursor(
   entries: readonly MemoryDocumentMeta[],
   cursorRaw: string | undefined,
-): { kind: 'ok'; view: MemoryDocumentMeta[] } | { kind: 'malformed' } {
+): { kind: 'ok'; view: MemoryDocumentMeta[]; anchor?: string } | { kind: 'malformed' } {
   if (cursorRaw === undefined) return { kind: 'ok', view: [...entries] };
   const decoded = decodeMemoryCursor(cursorRaw);
   if (!decoded.ok) return { kind: 'malformed' };
   const pivotSlug = decoded.cursor.from;
   // 第一の手段: 位置の探索（ストアの並びをそのまま使う）。
   const index = entries.findIndex((entry) => entry.slug === pivotSlug);
-  if (index !== -1) return { kind: 'ok', view: entries.slice(index) };
-  // 第二の手段: 錨が消えていた（文書が消された等）ので比較へ落ちる。
-  return { kind: 'ok', view: entries.filter((entry) => entry.slug >= pivotSlug) };
+  const view =
+    index !== -1
+      ? entries.slice(index)
+      : // 第二の手段: 錨が消えていた（文書が消された等）ので比較へ落ちる。
+        entries.filter((entry) => entry.slug >= pivotSlug);
+  // `anchor` = view の先頭（ストア順で最初の文書）。`renderMemoryListing` が
+  // これを必ず先頭に描く（頁が進むことの保証。冒頭 doc「頁が必ず進むこと」）。
+  return { kind: 'ok', view, anchor: view[0]?.slug };
 }

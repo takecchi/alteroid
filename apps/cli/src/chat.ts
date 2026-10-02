@@ -10,6 +10,7 @@ import {
   describeDenialFollowUp,
   describeManagerState,
   describeQuestionLines,
+  describeReportDriftMark,
   describeSessionMissingKind,
   describeToolUseStall,
   describeTurnEnd,
@@ -45,7 +46,11 @@ import {
   formatSystemErrorFacts,
   formatSystemErrorUnknownNote,
 } from '@alteroid/core/system-error-format';
-import { describeUnpushedWorkObservationIncompleteness } from '@alteroid/core/unpushed-work-observation-format';
+import {
+  describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationProvenance,
+  describeUnpushedWorkObservationSource,
+} from '@alteroid/core/unpushed-work-observation-format';
 import type { InferResponseType } from 'hono/client';
 
 import { createClient, type DaemonClient } from './client.js';
@@ -711,7 +716,7 @@ export async function runSlashCommand(
           const prefix = type === undefined ? '' : `type=${type} に絞った上で、`;
           stdout.write(
             `${prefix}「${q}」に当たる日誌はありません。` +
-              'ただし tool_use の input・worker_wait・turn_usage は探す対象に入っていないので、' +
+              'ただし tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていないので、' +
               'そこにだけ書かれている語はここでは当たりません\n',
           );
         }
@@ -2133,8 +2138,6 @@ type ManagerListItem = InferResponseType<DaemonClient['managers']['$get'], 200>[
 type ManagerDenial = NonNullable<ManagerListItem['denials']>[number];
 /** `lastUnpushedWorkObservation` 単体（discriminated union。Issue #1883）。 */
 type ManagerUnpushedWorkObservation = NonNullable<ManagerListItem['lastUnpushedWorkObservation']>;
-/** その観測を取った経路（`kind` のどちらの枝にも乗る。Issue #1883）。 */
-type ManagerUnpushedWorkObservationSource = NonNullable<ManagerUnpushedWorkObservation['source']>;
 
 /**
  * `ManagerDenial.actor` を一行に添える短い印にする。
@@ -2532,30 +2535,6 @@ function formatUnpushedWorkObservationWorktrees(
 }
 
 /**
- * `lastUnpushedWorkObservation.source` を人間可読な1句にする。core の
- * `describeUnpushedWorkObservationSource`（`tools.ts`）と同じ複製——道具の名前
- * だけ CLI のものに言い換える（`manager_stop` → `/stop`）。
- */
-function describeUnpushedWorkObservationSource(
-  source: ManagerUnpushedWorkObservationSource | undefined,
-): string {
-  if (source === undefined) {
-    return '経路不明（この欄を書かない版が残した行、または経路を渡さなかった呼び出し）';
-  }
-  if (source === 'stop-refusal') return '/stop（running・非force）の断り';
-  if (source === 'report') return 'ターンが report で終わったとき';
-  if (source === 'tool_use') return 'Bash で git push か新しい枝を作る操作を検出したとき';
-  if (source === 'auto-fold') return 'done を自動で畳む前の安全弁（auto-fold）';
-  if (source === 'vacate') return 'runner を意図して空ける直前（vacate）';
-  if (source === 'stop')
-    return '/stop（force・done/waiting_human の非force）・人間の停止・自動畳みが止める直前';
-  if (source === 'closed') return 'runner が closed を出す直前に先取り';
-  if (source === 'shutdown')
-    return '日常の redeploy で runner が stop する直前に先取り（best-effort）';
-  return `この一覧が知らない経路 "${String(source)}"（デーモンの版が新しい可能性）`;
-}
-
-/**
  * `/stop`（running・非force）の断り、ターンが `report` で終わったとき、
  * Bash で `git push` か新しい枝を作る操作を検出したとき、または止める操作
  * そのもの（`/stop` の force・`done`/`waiting_human` の非force・人間の停止・
@@ -2624,12 +2603,7 @@ function unpushedWorkObservationLine(manager: ManagerListItem): string | null {
   }
 
   if (observation === undefined) return null;
-  const provenance =
-    '/stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
-    '（/stop の force・done/waiting_human の非force・人間の停止・自動畳み）で' +
-    '取った最後の1回（この一覧そのもの・器の入れ替え（redeploy・枠落ちでセッションを' +
-    '失う経路）では更新されない。いまの状態ではない）';
+  const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'この一覧');
   if (observation.kind === 'unavailable') {
     return (
       `      未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
@@ -2660,6 +2634,7 @@ export function renderManagerList(
   managers: ManagerListItem[],
   status?: string,
   unreadable: readonly UnreadableJob[] = [],
+  now: Date = new Date(),
 ): string {
   if (managers.length === 0) {
     // **読めない行が在るときは「居ない」と言わない**（issue #2345）。読めない行は状態も
@@ -2866,6 +2841,13 @@ export function renderManagerList(
       const label = isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
+    // **Issue #2432**: 受信した報告の status と、いまの status の食い違い。判定も字面も
+    // `manager_list` の「（… 受信、⚠ status 食い違い）」と同じ関数（`describeReportDriftMark`）
+    // から取る。CLI の報告の行には受信時刻が無く、足すと既存の行の形が変わるので、
+    // 印だけを報告の行の直後に別の行で出す。`now` は引数（テストで固定する）。
+    // 食い違いが無い・欄が無い（古い daemon）ときは `null` で、何も出さない。
+    const reportDrift = describeReportDriftMark(manager, now);
+    if (reportDrift !== null) lines.push(`      ${reportDrift}`);
     // **Issue #2428**: ターン終了の報告漏れ（`describeTurnEnd`）と、道具の応答待ちの
     // 矛盾／実行中（`describeToolUseStall`）。**判定も字面も `manager_list`
     // （`packages/core/src/tools.ts`）と同じ関数を呼ぶ**——ここで組み直さない。
@@ -3742,14 +3724,39 @@ function summarize(entry: Record<string, unknown>): string {
     const value = entry[key];
     if (typeof value === 'string') return summarizeText(value);
   }
-  // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow` の4種は
+  // **`worker_wait` / `turn_usage` / `context_usage` / `inbox_flow`（と、下の `github_observation`）は
   // 上の6キーのどれも持たず、ここまで来ると要約が空欄のまま出ていた**
   // （issue #2016）。Web（`packages/swr/src/hooks/queries.ts` の
   // `summarizeJournalEntry`）と同じ文言を、共有の口
   // （`@alteroid/core/journal-diagnostics-format`）から借りる——2箇所で
   // 複製しない。残り9種（この6キーで拾えている種別）は1文字も変えない。
   if (isJournalDiagnosticsEntry(entry)) return summarizeJournalDiagnosticsEntry(entry);
+  // **`github_observation`（#2245）も6キーのどれも持たない**（本文は `result` の中）。repo・観測者
+  // （申告であることを落とさない）・ok なら件数、failed なら理由を出す。failed に数は無い。
+  if (entry.type === 'github_observation') return summarizeGithubObservation(entry);
   return '';
+}
+
+function summarizeGithubObservation(entry: Record<string, unknown>): string {
+  const result = entry.result as
+    | {
+        status?: string;
+        openIssues?: number;
+        openPulls?: number;
+        truncated?: boolean;
+        reason?: string;
+      }
+    | undefined;
+  const head = `${String(entry.repo)}（観測者 ${String(entry.observedBy)}）`;
+  if (result?.status === 'ok') {
+    return (
+      `${head} open Issue ${String(result.openIssues)} 件 / open PR ${String(result.openPulls)} 件` +
+      (result.truncated === true ? '（limit に達した。下限）' : '')
+    );
+  }
+  if (result?.status === 'failed')
+    return `${head} 取れなかった: ${summarizeText(result.reason ?? '')}`;
+  return head;
 }
 
 /**

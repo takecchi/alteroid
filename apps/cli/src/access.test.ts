@@ -30,11 +30,13 @@ vi.mock('./target.js', async (importOriginal) => ({
     }),
 }));
 
-const { accessListCommand, accessOwnerCommand } = await import('./access.js');
+const { accessListCommand, accessOwnerCommand, accessRemoveUnreadableCommand } =
+  await import('./access.js');
 
 interface Sent {
   url: string;
   method: string;
+  body?: unknown;
 }
 
 let sent: Sent[] = [];
@@ -45,7 +47,7 @@ function stubFetch(): void {
   globalThis.fetch = ((input: unknown, init?: RequestInit) => {
     const request = input as { url?: string; method?: string };
     const url = typeof input === 'string' ? input : (request.url ?? String(input));
-    sent.push({ url, method: init?.method ?? request.method ?? 'GET' });
+    sent.push({ url, method: init?.method ?? request.method ?? 'GET', body: init?.body });
     const reply = replies.shift() ?? { status: 200, body: {} };
     return Promise.resolve(
       new Response(JSON.stringify(reply.body), {
@@ -465,5 +467,81 @@ describe('403（本文で理由を分ける）', () => {
     expect(message).toContain('403');
     expect(message).not.toContain('docker compose exec');
     expect(message).not.toContain('access grant');
+  });
+});
+
+describe('alteroid access remove-unreadable（issue #2440）', () => {
+  it('id を POST /access/unreadable/remove へ送り、消した id と件数を言う。値は出ない', async () => {
+    replies.push({ status: 200, body: { removedIds: ['row-1', 'row-2'], count: 2 } });
+    const read = captureStdout();
+
+    await accessRemoveUnreadableCommand(['row-1', 'row-2']);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/access/unreadable/remove');
+    expect(sent[0]?.method).toBe('POST');
+    expect(JSON.parse(String(sent[0]?.body))).toEqual({ ids: ['row-1', 'row-2'] });
+    const text = read();
+    expect(text).toContain('読めないアカウントの行を 2 行消し');
+    expect(text).toContain('row-1, row-2');
+  });
+
+  it('404（指した id が読めない行に無い）は、何も消していないと言って投げる。指した文字列は映さない', async () => {
+    replies.push({ status: 404, body: { error: 'x' } });
+
+    const error = await accessRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440']).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('何も消していません');
+    expect((error as Error).message).toContain('id が取れない行はこの口では消せません');
+    expect((error as Error).message).not.toContain('FAKE_SECRET_VALUE_2440');
+  });
+
+  it('500 はデーモンの理由を載せて投げる', async () => {
+    replies.push({ status: 500, body: { error: '保存できなかった（テスト用）' } });
+
+    await expect(accessRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
+  });
+});
+
+describe('alteroid access list — 読めない行（issue #2536）', () => {
+  it('読めない行が無ければ、読めない行の断りを出さない', async () => {
+    replies.push({ status: 200, body: { accounts: [] } });
+    const read = captureStdout();
+
+    await accessListCommand();
+
+    const text = read();
+    expect(text).not.toContain('読めない');
+    expect(text).not.toContain('remove-unreadable');
+    expect(text).toContain('まだ誰もログインしていません。');
+  });
+
+  it('件数と id・不正な欄名を出し、remove-unreadable へ導く。id の無い行は手で直すと言う', async () => {
+    replies.push({
+      status: 200,
+      body: {
+        accounts: [],
+        rowsUnreadable: {
+          count: 2,
+          rows: [{ id: 'acct-bad', reason: '不正な欄: displayName' }],
+        },
+      },
+    });
+    const read = captureStdout();
+
+    await accessListCommand();
+
+    const text = read();
+    expect(text).toContain('読めないアカウントの行が 2 件ある');
+    expect(text).toContain('id=acct-bad  不正な欄: displayName');
+    expect(text).toContain('alteroid access remove-unreadable <id>');
+    expect(text).toContain('id が取れない行が 1 件');
+    expect(text).toContain('auth.json');
+    // 読めない行しか無いのに「誰もログインしていない」とは言わない。
+    expect(text).not.toContain('まだ誰もログインしていません。');
+    expect(text).toContain('誰もログインしていない、とは言えない');
   });
 });

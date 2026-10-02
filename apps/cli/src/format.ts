@@ -50,3 +50,35 @@ export async function withErrorReason(
   const reason = await errorReason(response);
   return reason === null ? message : `${message}: ${reason}`;
 }
+
+/**
+ * 読めない行（`GET /permission-grants` / `GET /access` の `rowsUnreadable`。issue #2536）の断り。
+ * 0件・無いときは空文字。
+ *
+ * **「消えたのではなく、読めない形で入っている」と言う**（トークンの `describeRowsUnreadable` と
+ * 同じ向き）。行の中身は出さない（デーモンが返さない。id と不正な欄名だけ）。`count` が
+ * `rows` より多いぶんは id が取れない行で、`removeCommand` では消せない（手で直す）。
+ */
+export function describeUnreadableRowsList(params: {
+  /** 「許可」「アカウント」。 */
+  noun: string;
+  /** 消す口（`alteroid permission remove-unreadable` など）。 */
+  removeCommand: string;
+  /** 手で直すファイル。 */
+  file: string;
+  rowsUnreadable: { count: number; rows: { id: string; reason: string }[] } | undefined;
+}): string {
+  const unreadable = params.rowsUnreadable;
+  if (unreadable === undefined || unreadable.count === 0) return '';
+  const lines = unreadable.rows.map((row) => `  id=${row.id}  ${row.reason}\n`);
+  const noId = unreadable.count - unreadable.rows.length;
+  return (
+    `読めない${params.noun}の行が ${String(unreadable.count)} 件ある` +
+    `（消えたのではなく、読めない形で入っている）。この一覧には載っていない:\n` +
+    lines.join('') +
+    (noId > 0
+      ? `  （id が取れない行が ${String(noId)} 件。この口では消せない。${params.file} を手で直す）\n`
+      : '') +
+    (unreadable.rows.length > 0 ? `消すには、id を指す: ${params.removeCommand} <id>\n` : '')
+  );
+}

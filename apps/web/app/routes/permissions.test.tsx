@@ -11,7 +11,7 @@
  * - **取り消し（`revoke`）は確認の一手を挟むまで叩かない**
  * - 取り消し済みの行には取り消しボタンが無い
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -285,5 +285,89 @@ describe('/permissions 画面 — 長く使われていない許可（Issue #180
 
     expect(screen.getAllByText(/日使われていない/)).toHaveLength(1);
     expect(screen.getByText(/60 日使われていない（起点: 付与/)).toBeTruthy();
+  });
+});
+
+describe('/permissions 画面 — 読めない行（issue #2536）', () => {
+  it('読めない行が無ければ、その断りは出ない（鍵ごと無い）', async () => {
+    stubGrants({ body: { grants: [grant()] } });
+
+    await renderPermissions();
+
+    expect(screen.queryByText(/読めない許可の行/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'この行を消す' })).toBeNull();
+  });
+
+  it('読めない行しか無いとき、「許可は無い」と言わず、件数と id・不正な欄名を断る。id の無い行にはボタンが無い', async () => {
+    stubGrants({
+      body: {
+        grants: [],
+        rowsUnreadable: { count: 2, rows: [{ id: 'grant-bad', reason: '不正な欄: route' }] },
+      },
+    });
+
+    await renderPermissions();
+
+    expect(await screen.findByText(/読めない許可の行が 2 件ある/)).toBeTruthy();
+    expect(screen.getByText('grant-bad')).toBeTruthy();
+    expect(screen.getByText(/不正な欄: route/)).toBeTruthy();
+    expect(screen.getByText(/id が取れない行が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText(/許可が無い、とは言えない/)).toBeTruthy();
+    expect(screen.queryByText('有効な許可はありません。')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'この行を消す' })).toHaveLength(1);
+  });
+
+  it('読めない行が在っても、読めた許可は今までどおり出る', async () => {
+    stubGrants({
+      body: {
+        grants: [grant()],
+        rowsUnreadable: { count: 1, rows: [{ id: 'grant-bad', reason: '不正な欄: route' }] },
+      },
+    });
+
+    await renderPermissions();
+
+    expect(await screen.findByText(/読めない許可の行が 1 件ある/)).toBeTruthy();
+    expect(screen.getByText('Bash(gh pr merge:*)')).toBeTruthy();
+  });
+
+  it('「この行を消す」は id を指して POST /permission-grants/unreadable/remove を呼び、再取得で断りが消える', async () => {
+    const posts: unknown[] = [];
+    let unreadable = true;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : null;
+      const url = request?.url ?? (typeof input === 'string' ? input : String(input));
+      const method = request?.method ?? init?.method ?? 'GET';
+      if (url.includes('/permission-grants/unreadable/remove') && method === 'POST') {
+        posts.push(request !== null ? await request.json() : JSON.parse(String(init?.body)));
+        unreadable = false;
+        return json({ removedIds: ['grant-bad'], count: 1 });
+      }
+      if (url.includes('/permission-grants')) {
+        return json({
+          grants: [],
+          ...(unreadable
+            ? {
+                rowsUnreadable: {
+                  count: 1,
+                  rows: [{ id: 'grant-bad', reason: '不正な欄: route' }],
+                },
+              }
+            : {}),
+        });
+      }
+      return Promise.reject(new TypeError(`Failed to fetch: ${url}`));
+    }) as typeof fetch;
+
+    await renderPermissions();
+    fireEvent.click(await screen.findByRole('button', { name: 'この行を消す' }));
+
+    await waitFor(() => {
+      expect(posts).toEqual([{ ids: ['grant-bad'] }]);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/読めない許可の行が/)).toBeNull();
+    });
+    expect(await screen.findByText('有効な許可はありません。')).toBeTruthy();
   });
 });

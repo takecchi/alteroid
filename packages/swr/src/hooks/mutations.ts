@@ -1117,3 +1117,43 @@ export function useSetMcpServers() {
     [api, mutate],
   );
 }
+
+/**
+ * 読めない許可の行を、id を指して消す（`POST /permission-grants/unreadable/remove`。issue #2440）。
+ * id は `GET /permission-grants` の `rowsUnreadable.rows[].id`（issue #2536）。
+ * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
+ */
+export function useRemoveUnreadablePermissionGrants() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (ids: readonly string[]) => {
+      const result = await api.api
+        .POST('/permission-grants/unreadable/remove', { body: { ids: [...ids] } })
+        .then(unwrap);
+      await mutate(KEY.permissionGrants);
+      return result;
+    },
+    [api, mutate],
+  );
+}
+
+/**
+ * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`。issue #2440）。
+ * id は `GET /access` の `rowsUnreadable.rows[].id`（issue #2536）。
+ * 読めない行に無い id を指すとデーモンが何も消さずに断る（`ApiError`）。
+ */
+export function useRemoveUnreadableAccounts() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (ids: readonly string[]) => {
+      const result = await api.api
+        .POST('/access/unreadable/remove', { body: { ids: [...ids] } })
+        .then(unwrap);
+      await mutate(KEY.access);
+      return result;
+    },
+    [api, mutate],
+  );
+}

@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, DAEMON_TOKEN_POOL_REOPENED_SOURCE, createClone } from './clone.js';
 import { EXCHANGE_KIND_GAUGE_PREFIX } from './exchange-kind.js';
 import type { CloneHost } from './host.js';
@@ -91,19 +92,6 @@ function bootClone(stores: Stores): Fake & { clone: CloneHost } {
     redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
-}
-
-async function waitFor(
-  predicate: () => boolean | Promise<boolean>,
-  label: string,
-  timeoutMs = 5000,
-): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (await predicate()) return;
-    if (Date.now() - started > timeoutMs) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
 }
 
 /** stale（token-pool）の `external` 合図。`at` は個別に指定できる（受け取り時刻）。 */
@@ -217,7 +205,6 @@ describe('stale な配り直しの一括消し込み（issue #903）', () => {
     await waitFor(
       async () => (await stores.inbox.peekPending()).entries.length === 0,
       '全件（65,536件）が受信箱から消える',
-      60_000,
     );
 
     // **実測**: 上限を1件超えただけで、呼び出しが2回に割れる。

@@ -153,6 +153,16 @@ export default tseslint.config(
     extends: [reactHooks.configs.flat.recommended],
   },
   /**
+   * CLI の TUI（`apps/cli/src/tui`、Issue #2528）にも hooks の規則を掛ける。
+   * ink の画面も React のコンポーネントで、`useEffect` の依存の取りこぼしが
+   * 「古い値をつかんだまま動き続ける」形で出るのは Web UI と同じ。
+   * Web UI の他の規則（core の値 import 禁止・層の向き）はブラウザバンドルの話なので掛けない。
+   */
+  {
+    files: ['apps/cli/src/tui/**/*.{ts,tsx}'],
+    extends: [reactHooks.configs.flat.recommended],
+  },
+  /**
    * Web UI（`WEB_UI_FILES`）のソースから `@alteroid/core`（バレル export）を**値**として
    * import することを禁じる。
    *

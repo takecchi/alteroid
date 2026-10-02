@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -77,15 +78,6 @@ function bootClone(stores: Stores): Fake & { clone: CloneHost } {
     redeliveryGate: ALWAYS_REDELIVER,
   });
   return { ...fake, clone };
-}
-
-async function waitFor(predicate: () => Promise<boolean> | boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (await predicate()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
 }
 
 /** `claimPending()` だけを、テストが解くまで待たせるストア。 */

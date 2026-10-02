@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
+import {
+  describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationProvenance,
+} from './unpushed-work-observation-format.js';
 
 /**
  * `describeUnpushedWorkObservationIncompleteness` の純粋な入出力を固定する
@@ -70,5 +73,33 @@ describe('describeUnpushedWorkObservationIncompleteness — 読み失敗の件�
     const text = describeUnpushedWorkObservationIncompleteness({ unreadableDirCount: 1 });
     expect(text).toContain('子ディレクトリの読み失敗が1件あった');
     expect(text).toContain('/tmp スクラッチの起点そのものの読み失敗を含む');
+  });
+});
+
+/**
+ * Issue #1266 — 器を失っていない委譲の見出しは、決め打ちの列挙ではなく観測自身の
+ * `source` を言う。
+ */
+describe('describeUnpushedWorkObservationProvenance（Issue #1266）', () => {
+  it('closed の経路の句を出し、「器の入れ替えでは更新されない」とは言わない', () => {
+    const text = describeUnpushedWorkObservationProvenance('closed', 'manager_list');
+    expect(text).toContain('runner が closed を出す直前に先取り');
+    expect(text).toContain('manager_list 自身では更新されない');
+    expect(text).toContain('いまの状態ではない');
+    expect(text).not.toContain('器の入れ替え');
+    expect(text).not.toContain('枠落ち');
+  });
+
+  it('source が無い古い行は経路不明を出す', () => {
+    expect(describeUnpushedWorkObservationProvenance(undefined, 'manager_list')).toContain(
+      '経路不明',
+    );
+  });
+
+  it('refresher を渡さなければ「自身では更新されない」とは言わず、いまの状態ではないことだけを言う', () => {
+    const text = describeUnpushedWorkObservationProvenance('shutdown');
+    expect(text).toContain('日常の redeploy で runner が stop する直前に先取り');
+    expect(text).toContain('いまの状態そのものではない');
+    expect(text).not.toContain('自身では更新されない');
   });
 });

@@ -17,10 +17,13 @@ import {
   useRevokeAccess,
   useRevokeOwnerDeclaration,
   useAccess,
+  useRemoveUnreadableAccounts,
   ApiError,
 } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
 import type { AccessAccount } from '@alteroid/logic';
+
+import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 
 /**
  * `/access` — ログインしたアカウントと許可の一覧（`GET /access` / CLI の
@@ -87,6 +90,7 @@ import type { AccessAccount } from '@alteroid/logic';
  */
 export default function Access() {
   const { data, error, isLoading } = useAccess();
+  const removeUnreadable = useRemoveUnreadableAccounts();
 
   return (
     <Page
@@ -100,18 +104,37 @@ export default function Access() {
           action={data === undefined ? undefined : <Badge>{data.accounts.length}</Badge>}
         />
         <ErrorNote error={error} className="m-4" />
+        {/* 読めない行は一覧の前に言う（issue #2536。0件なら鍵ごと無いので何も出ない）。 */}
+        {data?.rowsUnreadable !== undefined && (
+          <UnreadableRowsNote
+            noun="アカウント"
+            unreadable={data.rowsUnreadable}
+            removeUnreadable={removeUnreadable}
+            hand="auth.json"
+          />
+        )}
         {isLoading ? (
           <Spinner />
         ) : data === undefined ? null : (
-          <AccessBody accounts={data.accounts} />
+          <AccessBody accounts={data.accounts} hasUnreadable={data.rowsUnreadable !== undefined} />
         )}
       </Card>
     </Page>
   );
 }
 
-function AccessBody({ accounts }: { accounts: readonly AccessAccount[] }) {
+function AccessBody({
+  accounts,
+  hasUnreadable,
+}: {
+  accounts: readonly AccessAccount[];
+  /** 読めない行が在るか（在れば「誰もログインしていない」とは言えない。issue #2536）。 */
+  hasUnreadable: boolean;
+}) {
   if (accounts.length === 0) {
+    if (hasUnreadable) {
+      return <Empty>読めたアカウントは無い（誰もログインしていない、とは言えない）。</Empty>;
+    }
     // CLI（`accessListCommand`）と同じ文言。まだ誰もログインしていない既定の
     // 構成でもありうる——「まだ取れていない」との混同を避けるため断る。
     return <Empty>まだ誰もログインしていません。</Empty>;

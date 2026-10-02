@@ -7,6 +7,7 @@ import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
 } from './clone-tool-relay-protocol.js';
+import { reasonOf } from './dropped-record.js';
 
 // **互換のための re-export。** 既存のテスト（`clone-tool-relay-host.test.ts` /
 // `clone-tool-relay-integration.test.ts`）はこのファイルからこの2つの名前を
@@ -111,7 +112,7 @@ function invokedDirectly(): boolean {
 if (invokedDirectly()) {
   runCloneToolRelayChild(process.env, { stdin: process.stdin, stdout: process.stdout }).catch(
     (error: unknown) => {
-      process.stderr.write(`alteroid-clone-tool-relay: ${String(error)}\n`);
+      process.stderr.write(`alteroid-clone-tool-relay: ${reasonOf(error)}\n`);
       process.exit(1);
     },
   );

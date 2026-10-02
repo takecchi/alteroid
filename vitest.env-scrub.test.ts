@@ -80,6 +80,26 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
   });
 
   /**
+   * 動的 import（変換と読み込み）は、突き合わせ本体（8 個の名前の判定、実測 0.1ms 未満）と
+   * 違って器の混雑で伸びるので、歯の本体（既定 5000ms）でなく hook の寿命で払わせる（#2533）。
+   * 実測（2026-10-02、loadavg 約 16 の器）: runner.ts 約 1.5s + auth.ts 約 1.1s = 約 2.6s。
+   * 混んだ時の 5s 超えを吸収する余裕として、同種の前例（PGlite の雛形を `beforeAll` で払わせる
+   * #2337、`apps/daemon/src/permission-grant-unreadable-row-once.test.ts`）と同じ 30_000ms にする。
+   * 壁時計の打ち切りを足すものではなく、vitest の寿命を延ばすだけである（#2507）。
+   */
+  const SOURCES: readonly { file: string; exportName: string }[] = [
+    { file: 'packages/core/src/runner.ts', exportName: 'WITHHELD_ENV_KEYS' },
+    { file: 'apps/daemon/src/auth.ts', exportName: 'AUTH_WITHHELD_ENV_KEYS' },
+  ];
+  const loaded: { file: string; exportName: string; mod: Record<string, unknown> }[] = [];
+  beforeAll(async () => {
+    for (const { file, exportName } of SOURCES) {
+      const modulePath: string = pathToFileURL(join(REPO_ROOT, file)).href;
+      loaded.push({ file, exportName, mod: (await import(modulePath)) as Record<string, unknown> });
+    }
+  }, 30_000);
+
+  /**
    * **製品が子プロセスから隠す名前（`WITHHELD_ENV_KEYS`）は、テストからも隠れているか、
    * 資格ではないと明示してあるかの、どちらかでなければならない。** 規則とこの一覧は
    * 別々に手で書くので、製品の側に資格の名前を足しても、規則に足し忘れると漏れる
@@ -96,15 +116,9 @@ describe('isSecretEnvName / scrubSecretEnv（単体）', () => {
    * import の先を変数にしているのは、`tsconfig.vitest.json` の型検査が製品のコードまで
    * 降りないようにするためである（製品の型は各パッケージの typecheck が見る）。
    */
-  it('製品が子プロセスから隠す名前は、規則で外れるか、資格ではないと明示してある', async () => {
-    const SOURCES: readonly { file: string; exportName: string }[] = [
-      { file: 'packages/core/src/runner.ts', exportName: 'WITHHELD_ENV_KEYS' },
-      { file: 'apps/daemon/src/auth.ts', exportName: 'AUTH_WITHHELD_ENV_KEYS' },
-    ];
+  it('製品が子プロセスから隠す名前は、規則で外れるか、資格ではないと明示してある', () => {
     const withheld: string[] = [];
-    for (const { file, exportName } of SOURCES) {
-      const modulePath: string = pathToFileURL(join(REPO_ROOT, file)).href;
-      const mod = (await import(modulePath)) as Record<string, unknown>;
+    for (const { file, exportName, mod } of loaded) {
       const keys = mod[exportName];
       expect(Array.isArray(keys), `${file} の ${exportName} が配列として読めない`).toBe(true);
       expect((keys as unknown[]).length, `${file} の ${exportName} が空`).toBeGreaterThan(0);

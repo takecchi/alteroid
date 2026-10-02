@@ -1842,6 +1842,85 @@
                         "settled",
                         "pending"
                       ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "github_observation"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "observedBy": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "repo": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "query": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "limit": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "result": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "const": "ok"
+                                },
+                                "openIssues": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "openPulls": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "truncated": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["status", "openIssues", "openPulls", "truncated"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "const": "failed"
+                                },
+                                "reason": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 1000
+                                }
+                              },
+                              "required": ["status", "reason"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["type", "id", "at", "observedBy", "repo", "query", "result"]
                     }
                   ]
                 }
@@ -4632,6 +4711,93 @@
                               "delivered",
                               "settled",
                               "pending"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "github_observation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "observedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "repo": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "query": {
+                                "type": "string",
+                                "maxLength": 1000
+                              },
+                              "limit": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "result": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "ok"
+                                      },
+                                      "openIssues": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "openPulls": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["status", "openIssues", "openPulls", "truncated"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "failed"
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1000
+                                      }
+                                    },
+                                    "required": ["status", "reason"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "at",
+                              "observedBy",
+                              "repo",
+                              "query",
+                              "result"
                             ]
                           }
                         ]
@@ -7828,6 +7994,93 @@
                                 "settled",
                                 "pending"
                               ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "github_observation"
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "observedBy": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "repo": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "query": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "result": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "ok"
+                                        },
+                                        "openIssues": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "openPulls": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "truncated": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": ["status", "openIssues", "openPulls", "truncated"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "failed"
+                                        },
+                                        "reason": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        }
+                                      },
+                                      "required": ["status", "reason"]
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "id",
+                                "at",
+                                "observedBy",
+                                "repo",
+                                "query",
+                                "result"
+                              ]
                             }
                           ]
                         },
@@ -9004,6 +9257,93 @@
                                 "settled",
                                 "pending"
                               ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "const": "github_observation"
+                                },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "at": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                "observedBy": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "repo": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "query": {
+                                  "type": "string",
+                                  "maxLength": 1000
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "result": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "ok"
+                                        },
+                                        "openIssues": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "openPulls": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "truncated": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": ["status", "openIssues", "openPulls", "truncated"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "const": "failed"
+                                        },
+                                        "reason": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000
+                                        }
+                                      },
+                                      "required": ["status", "reason"]
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "id",
+                                "at",
+                                "observedBy",
+                                "repo",
+                                "query",
+                                "result"
+                              ]
                             }
                           ]
                         },
@@ -10172,6 +10512,93 @@
                               "settled",
                               "pending"
                             ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "github_observation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "observedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "repo": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "query": {
+                                "type": "string",
+                                "maxLength": 1000
+                              },
+                              "limit": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "result": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "ok"
+                                      },
+                                      "openIssues": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "openPulls": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["status", "openIssues", "openPulls", "truncated"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "failed"
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1000
+                                      }
+                                    },
+                                    "required": ["status", "reason"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "at",
+                              "observedBy",
+                              "repo",
+                              "query",
+                              "result"
+                            ]
                           }
                         ]
                       }
@@ -11336,6 +11763,93 @@
                               "settled",
                               "pending"
                             ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "const": "github_observation"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "at": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                              },
+                              "observedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "repo": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "query": {
+                                "type": "string",
+                                "maxLength": 1000
+                              },
+                              "limit": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "result": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "ok"
+                                      },
+                                      "openIssues": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "openPulls": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "truncated": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["status", "openIssues", "openPulls", "truncated"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "const": "failed"
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 1000
+                                      }
+                                    },
+                                    "required": ["status", "reason"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "id",
+                              "at",
+                              "observedBy",
+                              "repo",
+                              "query",
+                              "result"
+                            ]
                           }
                         ]
                       }
@@ -11666,7 +12180,7 @@
         "description": "`request_permission` の要求に人間が「許可します」と定型文でちょうど答え、かつ許可されたアカウント経由の回答だったときだけ記録される（`answerApproval` の`#recordPermissionGrantIfConsented`。operator 経由の回答は記録されない——operator の資格はクローンの器から読めるため、人間の証拠にならない）。`revokedAt` が付いていない行だけが、クローン本セッションの Bash 呼び出しで自動的に通る（`clone.ts` の `#onPreToolUse`）。並びは `grantedAt` 昇順。",
         "responses": {
           "200": {
-            "description": "許可の一覧。",
+            "description": "許可の一覧。読めない行（型に合わない形で入っている許可）が1件でも在るときだけ `rowsUnreadable`（件数と id・不正な欄名。本文は載せない）が付く。読めない行しか無いと `grants` は空だが「許可が無い」とは限らない。id を `POST /permission-grants/unreadable/remove` に渡して消せる。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11741,6 +12255,32 @@
                           "route"
                         ]
                       }
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["grants"]
@@ -11801,7 +12341,7 @@
             }
           },
           "409": {
-            "description": "該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めない許可は「許可が無い」ものとして扱われる（通らない）。",
+            "description": "該当する許可の行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めない許可は「許可が無い」ものとして扱われる（通らない）。消すには `POST /permission-grants/unreadable/remove`（issue #2440）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11843,6 +12383,109 @@
             "required": true
           }
         ]
+      }
+    },
+    "/permission-grants/unreadable/remove": {
+      "post": {
+        "operationId": "postPermissionGrantsUnreadableRemove",
+        "tags": ["permission-grants"],
+        "summary": "読めない許可の行を、id を指して消す",
+        "description": "読めない（型に合わない形で入っている）許可の行だけを、id を指して消す。読める許可には触れない。id が取れない行はこの口では消せない（`permission-grants.json` を手で直す）。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。",
+        "responses": {
+          "200": {
+            "description": "消した id と件数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "count": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["removedIds", "count"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力の形が不正（何も消していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない。pg で日誌の後の再確認で倒れた回だけは、日誌に打ち消しの行を足す）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": ["ids"]
+              }
+            }
+          }
+        }
       }
     },
     "/events": {
@@ -18006,7 +18649,7 @@
         "operationId": "getProgress",
         "tags": ["progress"],
         "summary": "作業の進捗（積み上がり・実施中・片付いた速度・見込み）",
-        "description": "台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 168）は速度と見込みを数える窓の長さ（時間、有限の正数）。**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず `null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。`github` は常に `not_observed`——デーモンは GitHub を見に行かない。中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。",
+        "description": "台帳（引き受けた仕事）と委譲の行を数え直した集計。`windowHours`（既定 168）は速度と見込みを数える窓の長さ（時間、有限の正数）。**率（%）は出さない**（台帳に総量が無く、分母が定まらない）。`backlog.completeness` が 0 でなければ数は欠けうる。取れないものは 0 にせず `null` か `state` で言う（`forecast.state` が `unavailable` のとき数は作らない）。`github` は観測の記録（`POST /github-observations`）を返すだけで、デーモンは GitHub を見に行かない。記録が無ければ `not_observed`（0 件ではない）。中身の定義は `packages/core/src/progress.ts` の冒頭 doc を参照。",
         "responses": {
           "200": {
             "description": "進捗の集計。",
@@ -18412,17 +19055,134 @@
                       ]
                     },
                     "github": {
-                      "type": "object",
-                      "properties": {
-                        "state": {
-                          "type": "string",
-                          "const": "not_observed"
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "not_observed"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["state", "reason"]
                         },
-                        "reason": {
-                          "type": "string"
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "observed"
+                            },
+                            "repos": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "repo": {
+                                    "type": "string"
+                                  },
+                                  "latestOk": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "observedAt": {
+                                            "type": "string"
+                                          },
+                                          "observedBy": {
+                                            "type": "string"
+                                          },
+                                          "query": {
+                                            "type": "string"
+                                          },
+                                          "limit": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "openIssues": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "openPulls": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "truncated": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "observedAt",
+                                          "observedBy",
+                                          "query",
+                                          "openIssues",
+                                          "openPulls",
+                                          "truncated"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "latestFailed": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "observedAt": {
+                                            "type": "string"
+                                          },
+                                          "observedBy": {
+                                            "type": "string"
+                                          },
+                                          "query": {
+                                            "type": "string"
+                                          },
+                                          "limit": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "reason": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["observedAt", "observedBy", "query", "reason"]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["repo", "latestOk", "latestFailed"]
+                              }
+                            },
+                            "scan": {
+                              "type": "object",
+                              "properties": {
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "reachedLimit": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["limit", "reachedLimit"]
+                            }
+                          },
+                          "required": ["state", "repos", "scan"]
                         }
-                      },
-                      "required": ["state", "reason"]
+                      ]
                     }
                   },
                   "required": [
@@ -18464,6 +19224,126 @@
             }
           }
         ]
+      }
+    },
+    "/github-observations": {
+      "post": {
+        "operationId": "postGithubObservations",
+        "tags": ["progress"],
+        "summary": "観測した GitHub の数を記録する（申告。デーモンは確かめない）",
+        "description": "観測した側が数えた open Issue / open PR の件数を、観測者・repo・母集合の切り方付きで日誌へ置く。`GET /progress` の `github` がこれを repo ごとに返す。**デーモンは GitHub を見に行かない**（値は申告で、確かめていない）。`result.status` が `failed` の回は数を持てない（取れなかったことを理由付きで残す）。日誌へ書けなければ何も残さず 500。",
+        "responses": {
+          "200": {
+            "description": "記録した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["ok", "id"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "本文の形が不正。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "observedBy": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "repo": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "query": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "result": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "const": "ok"
+                          },
+                          "openIssues": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "openPulls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "truncated": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": ["status", "openIssues", "openPulls", "truncated"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "const": "failed"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          }
+                        },
+                        "required": ["status", "reason"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["observedBy", "repo", "query", "result"]
+              }
+            }
+          }
+        }
       }
     },
     "/auth/providers": {
@@ -19111,7 +19991,7 @@
         "description": "alteroid を使う許可があれば読める（実行環境の持ち主と同格。2026-09-06 のオーナー決定）。メールと identity が並ぶ一覧である点は変わらない。",
         "responses": {
           "200": {
-            "description": "アカウントの一覧。",
+            "description": "アカウントの一覧。読めない行（型に合わない形で入っているアカウント）が1件でも在るときだけ `rowsUnreadable`（件数と id・不正な欄名。email などの中身は載せない）が付く。id を `POST /access/unreadable/remove` に渡して消せる。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19223,6 +20103,32 @@
                           "identities"
                         ]
                       }
+                    },
+                    "rowsUnreadable": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "reason"]
+                          }
+                        }
+                      },
+                      "required": ["count", "rows"]
                     }
                   },
                   "required": ["accounts"]
@@ -19609,7 +20515,7 @@
             }
           },
           "409": {
-            "description": "該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めないアカウントは認可を通らない。",
+            "description": "該当するアカウントの行は在るが、型に合わない形で入っていて読めない（居ないのとは区別する。issue #2425）。取り消しはこの口ではできず、行は変わっていない。読めないアカウントは認可を通らない。消すには `POST /access/unreadable/remove`（issue #2440）。",
             "content": {
               "application/json": {
                 "schema": {
@@ -19651,6 +20557,125 @@
             "required": true
           }
         ]
+      }
+    },
+    "/access/unreadable/remove": {
+      "post": {
+        "operationId": "postAccessUnreadableRemove",
+        "tags": ["access"],
+        "summary": "読めないアカウントの行を、id を指して消す",
+        "description": "読めない（型に合わない形で入っている）アカウントの行だけを、id を指して消す。読めるアカウントには触れない。id が取れない行はこの口では消せない（`auth.json` を手で直す）。1つでも読めない行に無い id があれば何も消さない。消した id と件数を日誌に残す（行の中身は残さない）。pg はアカウントを列で持つので読めない行が無く、常に 404。",
+        "responses": {
+          "200": {
+            "description": "消した id と件数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "removedIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "count": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["removedIds", "count"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "入力の形が不正（何も消していない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "alteroid を使う許可が無い（ログインしているが `access grant` されていない）。資格そのものが無い場合は 401。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "指した id のうち、読めない行に無いものがあった（何も消していない。日誌も書いていない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "日誌が書けなかった（**状態を変えていない**）か、消すのに失敗した。理由の本文は返さない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": ["ids"]
+              }
+            }
+          }
+        }
       }
     },
     "/access/{accountId}/owner": {

@@ -29,7 +29,7 @@ import {
   type CloneHost,
   type Stores,
 } from '@alteroid/core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
 
@@ -126,11 +126,23 @@ function setupRealCloneApp(
   return { app, stores, clone };
 }
 
+/**
+ * テストの区切り。**待ちの取り消しに使う**（壁時計の締め切りではなく「テストが
+ * 終わったか」で切る。`packages/core/src/clone-test-harness.ts` の `waitFor` と同じ
+ * 作法。#1220 / #2507）。
+ */
+let testEpoch = 0;
+afterEach(() => {
+  testEpoch += 1;
+});
+
 async function waitFor(check: () => Promise<boolean> | boolean, label: string): Promise<void> {
-  const started = Date.now();
+  const epoch = testEpoch;
   for (;;) {
     if (await check()) return;
-    if (Date.now() - started > 5000) throw new Error(`${label} が起きない`);
+    if (testEpoch !== epoch) {
+      throw new Error(`${label} を待っている途中でテストが終わった（待ちは解けていない）`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

@@ -16,9 +16,15 @@ import {
   KeyValueList,
   Spinner,
 } from '@alteroid/ui';
-import { useRevokePermissionGrant, usePermissionGrants } from '@alteroid/swr';
+import {
+  useRemoveUnreadablePermissionGrants,
+  useRevokePermissionGrant,
+  usePermissionGrants,
+} from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
 import type { PermissionGrant } from '@alteroid/logic';
+
+import { UnreadableRowsNote } from '~/components/unreadable-rows-note';
 
 /**
  * `/permissions` — 人間が承認した Bash 許可の一覧と取り消し（`GET
@@ -63,6 +69,7 @@ export default function Permissions() {
   const [showAll, setShowAll] = useState(false);
   const { data, error, isLoading } = usePermissionGrants();
 
+  const removeUnreadable = useRemoveUnreadablePermissionGrants();
   const grants = data?.grants ?? [];
   const active = grants.filter((grant) => grant.revokedAt === undefined);
   const revoked = grants.length - active.length;
@@ -85,6 +92,15 @@ export default function Permissions() {
           action={data === undefined ? undefined : <Badge>{shown.length}</Badge>}
         />
         <ErrorNote error={error} className="m-4" />
+        {/* 読めない行は一覧の前に言う（issue #2536。0件なら鍵ごと無いので何も出ない）。 */}
+        {data?.rowsUnreadable !== undefined && (
+          <UnreadableRowsNote
+            noun="許可"
+            unreadable={data.rowsUnreadable}
+            removeUnreadable={removeUnreadable}
+            hand="permission-grants.json"
+          />
+        )}
         {isLoading ? (
           <Spinner />
         ) : data === undefined ? null : (
@@ -92,6 +108,7 @@ export default function Permissions() {
             grants={shown}
             showAll={showAll}
             revokedCount={revoked}
+            hasUnreadable={data.rowsUnreadable !== undefined}
             now={new Date()}
           />
         )}
@@ -104,14 +121,21 @@ function PermissionsBody({
   grants,
   showAll,
   revokedCount,
+  hasUnreadable,
   now,
 }: {
   grants: readonly PermissionGrant[];
   showAll: boolean;
   revokedCount: number;
+  /** 読めない行が在るか（在れば「許可は無い」とは言えない。issue #2536）。 */
+  hasUnreadable: boolean;
   now: Date;
 }) {
   if (grants.length === 0) {
+    if (hasUnreadable && revokedCount === 0) {
+      // 読めない行が在るので「許可は無い」とは言えない（CLI の `permissionListCommand` と同じ文言）。
+      return <Empty>読めた許可は無い（許可が無い、とは言えない）。</Empty>;
+    }
     // CLI（`permissionListCommand`）と同じ文言（「--all」は「取り消し済みも見る」
     // ボタンへ言い換えてある——Web UI にフラグは無い）。
     return (

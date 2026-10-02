@@ -79,12 +79,22 @@ function fakeSdk(): FakeSdk {
   return { fn, consumed, opened: () => calls, releaseUsage: () => releaseUsage?.() };
 }
 
-async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
+/**
+ * テストの区切り。**待ちの取り消しに使う**（壁時計の締め切りではなく「テストが
+ * 終わったか」で切る。`packages/core/src/clone-test-harness.ts` の `waitFor` と同じ
+ * 作法。#1220 / #2507）。
+ */
+let testEpoch = 0;
+afterEach(() => {
+  testEpoch += 1;
+});
+
+async function waitUntil(check: () => boolean): Promise<void> {
+  const epoch = testEpoch;
   for (;;) {
     if (check()) return;
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`waitUntil: ${String(timeoutMs)}ms 以内に条件が満たされなかった`);
+    if (testEpoch !== epoch) {
+      throw new Error('waitUntil: 条件が満たされないままテストが終わった');
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }

@@ -2,6 +2,9 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
+import type { UnreadableAccount } from './schema.js';
+import type { RemoveUnreadableRowsOptions, RemoveUnreadableRowsResult } from './store.js';
+
 /**
  * ログイン（誰が API を叩いているか）と、その人が alteroid を使ってよいかの2値。
  *
@@ -172,6 +175,13 @@ export interface AuthStore {
    * 3実装とも `id` という明示的な2次キーで並びを完全に決める。
    */
   listAccounts(): Promise<AuthAccount[]>;
+  /**
+   * **`listAccounts()` が読み飛ばした行**（fs の `invalidAccountsRaw`）を、**中身を含まない形**
+   * （id と不正な欄名だけ）で返す（issue #2536。`PermissionGrantStore.listUnreadable` と同じ線）。
+   * email・identity・アクセストークンは決して返さない（`unreadableAccountSchema` の doc）。
+   * **pg とメモリは列/スキーマ越しで持つので読めない行が無く、常に空。**
+   */
+  listUnreadableAccounts(): Promise<UnreadableAccount[]>;
   getAccount(id: string): Promise<AuthAccount | null>;
   /**
    * 検証済みメールの衝突検査に使う。
@@ -234,6 +244,22 @@ export interface AuthStore {
    * 概念が無い）。
    */
   revokeAccountAccess(accountId: string): Promise<void>;
+  /**
+   * **読めないアカウントの行を、id で指して消す**（issue #2440。`PermissionGrantStore.
+   * removeUnreadable` と同じ形・同じ約束）。読めない行（fs の `invalidAccountsRaw`）は
+   * `revokeAccountAccess` が `UnreadableAccountError` を投げて触らないので、片付ける口は
+   * これだけである。
+   *
+   * 指した id が1つでも読めない行に無ければ、何も消さずに `{ kind: 'unknown' }`（件数だけ）。
+   * `beforeRemove` を排他区間の中で先に呼び、投げたら何も消さない。**読めたアカウントと、
+   * identity・アクセストークンには触れない。** id が取れない行はこの口では消せない（手で直す）。
+   *
+   * **pg は列で持つので、読めない行という概念が無い**——常に `{ kind: 'unknown' }` を返す。
+   */
+  removeUnreadableAccounts(
+    ids: readonly string[],
+    options?: RemoveUnreadableRowsOptions,
+  ): Promise<RemoveUnreadableRowsResult>;
 
   findIdentity(provider: string, subject: string): Promise<AuthIdentity | null>;
   /**

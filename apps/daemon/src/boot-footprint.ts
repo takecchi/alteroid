@@ -1,6 +1,6 @@
 import { getHeapStatistics } from 'node:v8';
 
-import type { Stores } from '@alteroid/core';
+import { reasonOf, type Stores } from '@alteroid/core';
 import type { StorageFootprint, TableSizeStats } from '@alteroid/storage-pg';
 
 /**
@@ -274,11 +274,11 @@ export async function reportBootFootprint(
       .append({ type: 'external_event', source: 'boot-storage-footprint', summary: report.summary })
       .catch((error: unknown) => {
         process.stderr.write(
-          `alteroidd: 起動時の器の実寸を日誌へ残せませんでした: ${String(error)}\n`,
+          `alteroidd: 起動時の器の実寸を日誌へ残せませんでした: ${reasonOf(error)}\n`,
         );
       });
   } catch (error) {
     // 測定そのもの（heap の取得・文字列の組み立て）が投げても起動は続ける。
-    process.stderr.write(`alteroidd: 起動時の器の実寸の測定に失敗しました: ${String(error)}\n`);
+    process.stderr.write(`alteroidd: 起動時の器の実寸の測定に失敗しました: ${reasonOf(error)}\n`);
   }
 }

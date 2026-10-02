@@ -3,6 +3,7 @@ import {
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
   chunkIdsByChars,
   guardArchiveRemoval,
+  reasonOf,
   selectArchiveRemovalTargets,
   type ArchiveEntry,
   type ManagerPool,
@@ -404,7 +405,7 @@ export function startArchiveFolding(options: ArchiveFolderOptions): ArchiveFolde
       })
       .catch((error: unknown) => {
         process.stderr.write(
-          `alteroidd: 退避済み生ログの自動畳み込みに失敗しました: ${String(error)}\n`,
+          `alteroidd: 退避済み生ログの自動畳み込みに失敗しました: ${reasonOf(error)}\n`,
         );
         return null;
       })

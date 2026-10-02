@@ -1996,7 +1996,9 @@ describe('診断（クローンの manager_list / manager_report と同じ材料
           lastUnpushedWorkObservation: STALE_OBSERVED,
         });
 
-        expect(await screen.findByText(/未push観測（manager_stop/)).toBeTruthy();
+        expect(
+          await screen.findByText(/未push観測（最後の1回の経路: ターンが report で終わったとき/),
+        ).toBeTruthy();
         expect(screen.queryByText(/届いていない/)).toBeNull();
       });
     });

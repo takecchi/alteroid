@@ -1,5 +1,6 @@
 import {
   appraisalSchema,
+  describeReportDriftMark,
   describeToolUseStall,
   describeTurnEnd,
   describeUnobservedOutcome,
@@ -975,6 +976,56 @@ describe('renderManagerList', () => {
   });
 
   /**
+   * **Issue #2432: GET /managers が返す `lastReportStatus` を CLI が出していなかった。**
+   * 判定も字面も core の `manager_list` と同じ関数（`describeReportDriftMark`）を呼ぶ。
+   * `now` は引数で固定する。
+   */
+  describe('Issue #2432: manager_list と同じ ⚠ status 食い違い（lastReportStatus）', () => {
+    const now = new Date('2026-09-30T01:00:00.000Z');
+    const drifted = manager({
+      status: 'running',
+      lastReport: '途中経過',
+      lastReportAt: '2026-09-30T00:00:00.000Z',
+      lastReportStatus: 'waiting_human',
+    });
+
+    it('報告が名乗った status と今の status が違えば、core の関数の戻り値と同じ印を出す', () => {
+      const expected = describeReportDriftMark(drifted, now);
+      expect(expected).toBe('⚠ status 食い違い（manager_report で詳細）');
+      const text = renderManagerList([drifted], undefined, [], now);
+      expect(text).toContain(expected);
+    });
+
+    it('印は直近の報告の行より後に出る', () => {
+      const text = renderManagerList([drifted], undefined, [], now);
+      expect(text).toContain('直近の報告: 途中経過');
+      expect(text).toContain('⚠ status 食い違い');
+      expect(text.indexOf('直近の報告')).toBeLessThan(text.indexOf('⚠ status 食い違い'));
+    });
+
+    it('食い違いが無ければ出さない', () => {
+      const text = renderManagerList(
+        [manager({ ...drifted, lastReportStatus: 'running' })],
+        undefined,
+        [],
+        now,
+      );
+      expect(text).not.toContain('status 食い違い');
+    });
+
+    it('欄が無い（古い daemon）なら、何も出さない・0 も「無い」も書かない', () => {
+      const text = renderManagerList(
+        [manager({ lastReport: '途中経過', lastReportAt: '2026-09-30T00:00:00.000Z' })],
+        undefined,
+        [],
+        now,
+      );
+      expect(text).not.toContain('食い違い');
+      expect(text).not.toContain('lastReportStatus');
+    });
+  });
+
+  /**
    * **Issue #1883: GET /managers が返す `tokenGenerationUnknownReason` を
    * CLI が出していなかった。** `tokenGeneration` / `activeTokenGeneration`
    * （世代の生の番号）は Web の `DiagnosticsCard` と揃えて出さないと決めた
@@ -1109,6 +1160,37 @@ describe('renderManagerList', () => {
       expect(text).toContain('2026-09-24T00:00:00.000Z');
       // いまの状態ではないという断りを含む。
       expect(text).toContain('いまの状態ではない');
+    });
+
+    it('Issue #1266: 器を失っていない行は観測の source の経路を言い、source が無ければ経路不明を言う', () => {
+      const closed = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            source: 'closed',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(closed).toContain('runner が closed を出す直前に先取り');
+      expect(closed).toContain('この一覧 自身では更新されない');
+      expect(closed).not.toContain('枠落ち');
+      expect(closed).not.toContain('経路不明');
+      const noSource = renderManagerList([
+        manager({
+          status: 'done',
+          lastUnpushedWorkObservation: {
+            kind: 'observed',
+            at: '2026-09-24T00:00:00.000Z',
+            cwd: '/workspace',
+            worktrees: [],
+          },
+        }),
+      ]);
+      expect(noSource).toContain('経路不明');
     });
 
     it('unavailable: 取れなかった理由を出す', () => {
@@ -3538,6 +3620,43 @@ describe('chat の /journal', () => {
       expect(text).toContain('消し込み3');
       expect(text).toContain('滞留2');
       expect(text).not.toMatch(/\[inbox_flow\]\s*\n/);
+    });
+
+    it('github_observation は空欄ではなく、repo・観測者・件数を出す。failed は理由を出し数を作らない（#2245）', async () => {
+      const read = captureStdout();
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            id: 'j-go1',
+            at: '2026-09-01T00:00:00.000Z',
+            type: 'github_observation',
+            observedBy: 'clone',
+            repo: 'a/b',
+            query: 'q',
+            result: { status: 'ok', openIssues: 12, openPulls: 0, truncated: true },
+          },
+          {
+            id: 'j-go2',
+            at: '2026-09-01T00:01:00.000Z',
+            type: 'github_observation',
+            observedBy: 'mgr-1',
+            repo: 'a/c',
+            query: 'q',
+            result: { status: 'failed', reason: 'gh: HTTP 502' },
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const text = read();
+      expect(text).toContain(
+        'a/b（観測者 clone） open Issue 12 件 / open PR 0 件（limit に達した。下限）',
+      );
+      expect(text).toContain('a/c（観測者 mgr-1） 取れなかった: gh: HTTP 502');
+      expect(text).not.toMatch(/\[github_observation\]\s*\n/);
+      const failedLine = text.split('\n').find((l) => l.includes('a/c')) ?? '';
+      expect(failedLine).not.toMatch(/open Issue|open PR/);
     });
 
     /**

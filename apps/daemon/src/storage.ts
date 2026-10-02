@@ -4,6 +4,7 @@ import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import {
   deriveHumanTouchedAtFromJournal,
   deriveMemoryCreatedAtFromJournal,
+  reasonOf,
   type Stores,
 } from '@alteroid/core';
 import { AUTH_WITHHELD_ENV_KEYS } from './auth.js';
@@ -144,7 +145,7 @@ async function backfillMemoryHumanTouch(stores: Stores): Promise<void> {
     }
   } catch (error) {
     process.stderr.write(
-      `alteroidd: 記憶の保護状態の backfill に失敗した（unknown のまま起動を続ける）: ${String(error)}\n`,
+      `alteroidd: 記憶の保護状態の backfill に失敗した（unknown のまま起動を続ける）: ${reasonOf(error)}\n`,
     );
   }
 }
@@ -207,7 +208,7 @@ async function backfillMemoryCreatedAt(stores: Stores): Promise<void> {
     );
   } catch (error) {
     process.stderr.write(
-      `alteroidd: 記憶の created_at backfill に失敗した（unknown のまま起動を続ける）: ${String(error)}\n`,
+      `alteroidd: 記憶の created_at backfill に失敗した（unknown のまま起動を続ける）: ${reasonOf(error)}\n`,
     );
   }
 }

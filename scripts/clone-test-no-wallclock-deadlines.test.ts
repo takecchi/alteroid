@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -18,6 +19,10 @@ import { describe, expect, it } from 'vitest';
  * 測っていない。** あちらが測るのは「いま在る待ちが時計を進めずに解けること」で、
  * **件数が増えることは測れない。** 65 箇所を 0 にしても、次の PR が1箇所
  * 足し戻せば静かに元へ戻る —— そのとき赤くなるものが無かった。ここがそれである。
+ *
+ * ⭐ **3. の「経過時間の比較」だけは、列挙の外にも効く走査がファイル末尾に在る**
+ * （issue #2507。`packages/` と `apps/` の全 `*.test.ts(x)` を見る。例外は名指し）。
+ * 以下の「列挙」の話は、残りの禁止（`expect.poll` / `timeout:` / `_BUDGET_MS`）の範囲である。
  *
  * ## 測る範囲（issue #1744 で1本 → 25本へ分割された）
  *
@@ -196,4 +201,143 @@ describe('clone.test.ts に壁時計の打ち切りを足し戻さない（#1220
       ).toEqual([]);
     });
   }
+});
+
+/**
+ * **列挙の外へも効かせる走査（issue #2507）。**
+ *
+ * 上の3本は `TARGET_RELATIVE_PATHS` に列挙したファイルしか見ない。#1275 のあと、
+ * 列挙の外（`commitment.test.ts` / `approval-answer-delivery.test.ts` /
+ * `inbox-persistence.test.ts` など15ファイル）に同じ形の
+ * 「`Date.now() - started > 3000` を過ぎたら throw する」正の待ちが残っていて、
+ * 列挙は新しいファイルが増えるたびに外れる。⟹ `packages/` と `apps/` の
+ * `*.test.ts` / `*.test.tsx` を**全部**走査して、同じ形を見る。
+ *
+ * ## 例外（名指し・理由付き）
+ *
+ * 「起きないこと」を一定時間見る**負の待ち**は、予算を外すと意味が変わる
+ * （外すと永久に待つか、待ちそのものが無くなる）。残すものは**ここに名指しで**
+ * 1件ずつ書く。件数も固定する（同じファイルに2件目が足されたら落ちる）。
+ */
+const SCAN_ROOTS: readonly string[] = ['packages', 'apps'];
+const SCAN_EXCLUDE_DIRS: ReadonlySet<string> = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  '.react-router',
+  '.vite',
+]);
+/**
+ * 壁時計の打ち切りの形（`Date.now()` と `performance.now()`）。1本の正規表現の選択肢にして、
+ * 同じ場所を2回数えない。
+ *
+ * - `Date.now() - <開始> >|<`（#2507 の形）
+ * - `<締切> - Date.now()`（`const remaining = deadline - Date.now()`。#2537）
+ * - `Date.now() <|> <締切>`、`<締切> <|> Date.now()`（`=>` と `->` は除く。#2537）
+ *
+ * **見ない形（限界）**: `.getTime()` / `new Date()` の比較、`const end = Date.now() + n` を作って
+ * `AbortSignal.timeout` 等の別の道具へ渡す形、`expect(Date.now() - t).toBeLessThan(n)`
+ * （経過の上限を測る表明で、待ちではない）。
+ */
+const DEADLINE_PATTERN =
+  /(?:Date|performance)\.now\(\)\s*-\s*[A-Za-z_$][\w$]*\s*[<>]|[A-Za-z_$][\w$]*\s*-\s*(?:Date|performance)\.now\(\)|(?:Date|performance)\.now\(\)\s*[<>]|(?<![=-])[<>]=?\s*(?:Date|performance)\.now\(\)/g;
+
+const NEGATIVE_WAIT_EXCEPTIONS: Readonly<Record<string, { count: number; reason: string }>> = {
+  'packages/core/src/manager.test.ts': {
+    count: 1,
+    reason:
+      '`settleAfterJournal`（負の待ち）。「日誌に一行が出ない」ことを 500ms 見てから黙って抜ける ' +
+      '仕様そのものが、保証1と保証2の分離を保つ本体（その doc に在る）。予算を外すと、' +
+      '変異のもとで待ちが永久に解けなくなる',
+  },
+  'apps/runner/src/events-stale-subscriber-handoff.test.ts': {
+    count: 1,
+    reason:
+      '3本目の接続を 500ms 固定で読み切ってから数える（負の待ち。#2537）。「再配達が起きない' +
+      '（同じ出来事が2回現れない）」を見るので、早期終了すると「まだ来ていない」と「来ない」が' +
+      '区別できず、窓を外すと読み切る条件が無くなる',
+  },
+  'apps/daemon/src/auth.test.ts': {
+    count: 1,
+    reason:
+      '`readForWindow`（負の待ち。#2537）。「ログアウトしていない／operator の資格の流れが、' +
+      '心拍が来ても閉じないまま」を 200ms 見る対照2本。窓を外すと閉じない流れを永久に読む。' +
+      '「閉じる」ことを待つ正の待ち（`readUntilEnd` / `readUntilText`）は窓を持たない',
+  },
+};
+
+function walkTestFiles(absoluteDir: string, relativeDir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(absoluteDir, { withFileTypes: true })) {
+    if (SCAN_EXCLUDE_DIRS.has(entry.name)) continue;
+    const relative = `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      found.push(...walkTestFiles(path.join(absoluteDir, entry.name), relative));
+    } else if (entry.isFile() && /\.test\.tsx?$/.test(entry.name)) {
+      found.push(relative);
+    }
+  }
+  return found;
+}
+
+describe('どのテストにも壁時計の打ち切りを足さない（#2507・#2537、列挙でなく走査）', () => {
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+  const scanned = SCAN_ROOTS.flatMap((root) => walkTestFiles(path.join(repoRoot, root), root)).map(
+    (relative) => ({
+      relative,
+      code: stripComments(readFileSync(path.join(repoRoot, relative), 'utf8')),
+    }),
+  );
+
+  it('走査の対象が空虚でない（packages と apps の両方に、テストが在る）', () => {
+    expect(scanned.length).toBeGreaterThan(100);
+    expect(scanned.some((f) => f.relative.startsWith('packages/core/src/'))).toBe(true);
+    expect(scanned.some((f) => f.relative.startsWith('apps/'))).toBe(true);
+    // 形の検出器が生きている（何も拾えないと、下は空虚に緑になる）。
+    expect('if (Date.now() - started > 3000) throw new Error(x);'.match(DEADLINE_PATTERN)).toEqual([
+      'Date.now() - started >',
+    ]);
+    expect('if (Date.now() - start >= timeoutMs) return;'.match(DEADLINE_PATTERN)).toHaveLength(1);
+  });
+
+  it('deadline を先に作って比べる形も検出する（#2537）。経過の表明と `=>` は拾わない', () => {
+    const found = (source: string) => source.match(DEADLINE_PATTERN) ?? [];
+    expect(found('const remaining = deadline - Date.now();')).toHaveLength(1);
+    expect(found('while (Date.now() < deadline) {}')).toHaveLength(1);
+    expect(found('if (Date.now() > deadline) break;')).toHaveLength(1);
+    expect(found('while (deadline > Date.now()) {}')).toHaveLength(1);
+    expect(found('if (performance.now() - t0 > 100) throw e;')).toHaveLength(1);
+    expect(found('const r = end - performance.now();')).toHaveLength(1);
+    // 拾わない: 経過の上限を測る表明（待ちではない）、アロー関数、時刻を作るだけの式。
+    expect(found('expect(Date.now() - started).toBeLessThan(500);')).toEqual([]);
+    expect(found('const now = () => Date.now();')).toEqual([]);
+    expect(found('const at = new Date(Date.now() - 1000).toISOString();')).toEqual([]);
+    expect(found('const deadline = Date.now() + 500;')).toEqual([]);
+  });
+
+  it('壁時計の打ち切りの形（`Date.now() - <開始> > <予算>`・`<締切> - Date.now()` ほか）は、名指しの例外の外に無い', () => {
+    const hits = scanned.flatMap((f) => {
+      const n = [...f.code.matchAll(DEADLINE_PATTERN)].length;
+      const allowed = NEGATIVE_WAIT_EXCEPTIONS[f.relative]?.count ?? 0;
+      return n === allowed ? [] : [`${f.relative}: ${n} 件（許す件数 ${allowed}）`];
+    });
+    expect(
+      hits,
+      '壁時計の予算で諦める待ちが、名指しの例外の外に在る（または例外の件数と合わない）。' +
+        '⟹ 正の待ち（条件が成り立つまで待つ）なら、予算を外して諦める条件をテストの寿命へ移すこと' +
+        '（`clone-test-harness.ts` の `waitFor`。テストの外なら afterEach で進める epoch）。' +
+        '⛔ 3000 を大きくする直しは、確率を下げるだけで同じ賭けが残る。' +
+        '「起きないこと」を見る負の待ちなら、NEGATIVE_WAIT_EXCEPTIONS に理由付きで名指しで足す。',
+    ).toEqual([]);
+  });
+
+  it('名指しの例外は、まだ実在して理由を持つ（残骸を抱えない）', () => {
+    for (const [relative, exception] of Object.entries(NEGATIVE_WAIT_EXCEPTIONS)) {
+      const file = scanned.find((f) => f.relative === relative);
+      expect(file, `${relative} が走査の対象に無い`).toBeDefined();
+      expect([...(file?.code.matchAll(DEADLINE_PATTERN) ?? [])]).toHaveLength(exception.count);
+      expect(exception.reason.length).toBeGreaterThan(20);
+    }
+  });
 });

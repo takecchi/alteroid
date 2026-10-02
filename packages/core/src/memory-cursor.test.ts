@@ -82,4 +82,17 @@ describe('resolveMemoryCursor（分岐）', () => {
     const result = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'c-gone' }));
     expect(result).toEqual({ kind: 'ok', view: [] });
   });
+
+  it('B7: anchor は view の先頭（#2510。描画側が必ず先頭に出す文書）', () => {
+    const hit = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'b' }));
+    expect(hit.kind === 'ok' && hit.anchor).toBe('b');
+    // 錨が消えていても、view の先頭が錨になる。
+    const gone = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'a-gone' }));
+    expect(gone.kind === 'ok' && gone.anchor).toBe('b');
+    // cursor 未指定（先頭から）と終端（view が空）には錨が無い。
+    const first = resolveMemoryCursor(entries, undefined);
+    expect(first.kind === 'ok' && first.anchor).toBeUndefined();
+    const end = resolveMemoryCursor(entries, encodeMemoryCursor({ from: 'c-gone' }));
+    expect(end.kind === 'ok' && end.anchor).toBeUndefined();
+  });
 });

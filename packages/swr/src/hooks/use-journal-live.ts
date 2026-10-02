@@ -216,6 +216,10 @@ function invalidate(entry: JournalEntry, mutate: ReturnType<typeof useSWRConfig>
     // 無い。冒頭で束にした日誌一覧の無効化だけで足りる。
     case 'inbox_flow':
       break;
+    // **落とす先が無い（Issue #2245）。** 進捗の頁（`/progress`）は 30 秒ごとに取り直す
+    // ので、この種別専用の無効化は要らない。冒頭で束にした日誌一覧の無効化だけで足りる。
+    case 'github_observation':
+      break;
     default: {
       // 網羅性チェック本体。ここへ来る値があれば、上の case が
       // `JournalEntryType` の全種別を尽くしていない（型エラーになる）。

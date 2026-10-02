@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import { createLocalRunner } from './runner-local.js';
@@ -147,15 +148,6 @@ function report(text: string, id = 'evt-report'): InboxEvent {
     kind: 'report',
     text,
   };
-}
-
-async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-  const started = Date.now();
-  for (;;) {
-    if (predicate()) return;
-    if (Date.now() - started > 3000) throw new Error(`${label} が起きない`);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
 }
 
 function linesWith(lines: string[], needle: string): string[] {

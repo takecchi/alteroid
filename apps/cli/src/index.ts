@@ -11,6 +11,7 @@ import {
   accessGrantCommand,
   accessListCommand,
   accessOwnerCommand,
+  accessRemoveUnreadableCommand,
   accessRevokeCommand,
 } from './access.js';
 import { appraisalStatsCommand } from './appraisal-stats.js';
@@ -51,8 +52,13 @@ import {
   mcpShowCommand,
 } from './mcp.js';
 import { alteroidRoot } from './paths.js';
-import { permissionListCommand, permissionRevokeCommand } from './permission.js';
+import {
+  permissionListCommand,
+  permissionRemoveUnreadableCommand,
+  permissionRevokeCommand,
+} from './permission.js';
 import { resetCommand } from './reset.js';
+import { launchTui, opensTuiByDefault } from './tui/launch.js';
 import { interruptCommand } from './interrupt.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
 import {
@@ -233,6 +239,15 @@ program
   .description('クローンと会話する（デーモンが居なければ起こす）')
   .action(async () => {
     await chatCommand();
+  });
+
+program
+  .command('tui')
+  .description(
+    '全画面の TUI を開く（いまは会話の画面。承認待ち・委譲・日誌・記憶は #2528 で順に足す。端末でだけ動く）',
+  )
+  .action(async () => {
+    await launchTui();
   });
 
 /**
@@ -490,6 +505,16 @@ accessCommand
     await accessRevokeCommand(accountId);
   });
 
+accessCommand
+  .command('remove-unreadable <ids...>')
+  .description(
+    '読めないアカウントの行を id を指して消す（id はデーモンの stderr の「accounts の不正な行を読み飛ばしました」の跡。' +
+      'access revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
+  )
+  .action(async (ids: string[]) => {
+    await accessRemoveUnreadableCommand(ids);
+  });
+
 /**
  * 実行環境の持ち主としての宣言（issue #1198）。**`access grant` とは別の資格**
  * ——`alteroid credential set` / `alteroid reset` を通すのに要る。デーモンが
@@ -526,6 +551,16 @@ permissionCommand
   .option('--all', '取り消し済みも含めて全部見る')
   .action(async (options: { all?: boolean }) => {
     await permissionListCommand(options);
+  });
+
+permissionCommand
+  .command('remove-unreadable <ids...>')
+  .description(
+    '読めない許可の行を id を指して消す（id はデーモンの stderr の「許可の記録の不正な行を読み飛ばしました」の跡。' +
+      'permission revoke は読めない行に触れない。id が取れない行はこの口では消せない）',
+  )
+  .action(async (ids: string[]) => {
+    await permissionRemoveUnreadableCommand(ids);
   });
 
 permissionCommand
@@ -943,7 +978,11 @@ function invokedDirectly(): boolean {
 }
 
 if (invokedDirectly()) {
-  program.parseAsync(process.argv).catch((error: unknown) => {
+  // 引数なし かつ stdin/stdout がともに TTY のときだけ TUI。そうでなければ従来どおり（help）。
+  const run = opensTuiByDefault(process.argv.slice(2), process.stdin, process.stdout)
+    ? launchTui()
+    : program.parseAsync(process.argv);
+  run.catch((error: unknown) => {
     process.stderr.write(`alteroid: ${String(error)}\n`);
     process.exit(1);
   });

@@ -1578,14 +1578,49 @@ describe('宣言済み owner（ownerDeclaredAt）は /credentials と /reset を
 describe('開いている SSE の資格の確かめ直し（issue #1820）', () => {
   const HEARTBEAT_MS = 10;
 
-  /** 流れが閉じる（done）か、期限が来るまで読む。読んだ本文も返す。 */
+  /**
+   * 流れが閉じる（done）まで読む。読んだ本文も返す。**壁時計の期限を持たない**（正の待ち）。
+   * 閉じなければテストの寿命（vitest の testTimeout）で切れる（#2537。#2507 と同じ直し方）。
+   */
   async function readUntilEnd(
     reader: ReadableStreamDefaultReader<Uint8Array>,
-    timeoutMs: number,
   ): Promise<{ done: boolean; text: string }> {
     const decoder = new TextDecoder();
     let text = '';
-    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const result = await reader.read();
+      if (result.done) return { done: true, text };
+      text += decoder.decode(result.value, { stream: true });
+    }
+  }
+
+  /** 読んだ本文に `needle` が現れるまで読む（壁時計の期限を持たない正の待ち。流れが先に閉じたら、そこまでを返す）。 */
+  async function readUntilText(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    needle: string,
+  ): Promise<{ done: boolean; text: string }> {
+    const decoder = new TextDecoder();
+    let text = '';
+    while (!text.includes(needle)) {
+      const result = await reader.read();
+      if (result.done) return { done: true, text };
+      text += decoder.decode(result.value, { stream: true });
+    }
+    return { done: false, text };
+  }
+
+  /**
+   * **負の待ち。** 流れが「閉じないこと」を `windowMs` だけ見る（対照の2本）。窓を外すと
+   * 永久に待つので、壁時計の窓は残す。歯（`scripts/clone-test-no-wallclock-deadlines.test.ts`）
+   * の `NEGATIVE_WAIT_EXCEPTIONS` に名指しで在る（件数固定）。
+   */
+  async function readForWindow(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    windowMs: number,
+  ): Promise<{ done: boolean; text: string }> {
+    const decoder = new TextDecoder();
+    let text = '';
+    const deadline = Date.now() + windowMs;
     for (;;) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) return { done: false, text };
@@ -1612,7 +1647,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     const response = await app.request('/journal/stream', { headers });
     expect(response.status).toBe(200);
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    const first = await readUntilEnd(reader, 1000);
+    const first = await readUntilText(reader, 'event: open');
     expect(first.text).toContain('event: open');
     return reader;
   }
@@ -1629,7 +1664,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     });
     expect(logout.status).toBe(200);
 
-    expect((await readUntilEnd(reader, 2000)).done).toBe(true);
+    expect((await readUntilEnd(reader)).done).toBe(true);
   });
 
   it('journal: アカウントの許可を取り消した後の心拍で、流れが閉じる', async () => {
@@ -1643,7 +1678,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     });
     expect(revoked.status).toBe(200);
 
-    expect((await readUntilEnd(reader, 2000)).done).toBe(true);
+    expect((await readUntilEnd(reader)).done).toBe(true);
   });
 
   it('chat: ログアウトした後の心拍で、理由を error イベントで伝えてから閉じる', async () => {
@@ -1657,11 +1692,11 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     });
     expect(response.status).toBe(200);
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    expect((await readUntilEnd(reader, 1000)).text).toContain('event: open');
+    expect((await readUntilText(reader, 'event: open')).text).toContain('event: open');
 
     await app.request('/auth/logout', { ...post, headers: { ...post.headers, ...auth } });
 
-    const rest = await readUntilEnd(reader, 2000);
+    const rest = await readUntilEnd(reader);
     expect(rest.done).toBe(true);
     expect(rest.text).toContain('event: error');
     expect(rest.text).toContain('資格が使えなくなった');
@@ -1674,7 +1709,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     const claimed = await grantedLogin(app);
     const reader = await openJournal(app, { authorization: `Bearer ${claimed.token}` });
 
-    const result = await readUntilEnd(reader, 200);
+    const result = await readForWindow(reader, 200);
     expect(result.done).toBe(false);
     expect(result.text).toContain(': hb');
     await reader.cancel();
@@ -1684,7 +1719,7 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
     const reader = await openJournal(app, OPERATOR);
 
-    const result = await readUntilEnd(reader, 200);
+    const result = await readForWindow(reader, 200);
     expect(result.done).toBe(false);
     await reader.cancel();
   });

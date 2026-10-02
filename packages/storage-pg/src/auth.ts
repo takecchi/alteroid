@@ -13,7 +13,9 @@ import type {
   GrantOutcome,
   LoginRequest,
   OwnerOutcome,
+  RemoveUnreadableRowsResult,
   RevokeAccessTokenOutcome,
+  UnreadableAccount,
 } from '@alteroid/core';
 import { and, asc, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { SQL, SQLWrapper } from 'drizzle-orm';
@@ -84,6 +86,14 @@ export class PgAuthStore implements AuthStore {
     return rows.map((row) => this.#toAccount(row));
   }
 
+  /**
+   * 常に空（`AuthStore.listUnreadableAccounts` の doc。issue #2536）。pg はアカウントを列で持つので、
+   * 型に合わない行を作れない。
+   */
+  async listUnreadableAccounts(): Promise<UnreadableAccount[]> {
+    return [];
+  }
+
   async getAccount(id: string): Promise<AuthAccount | null> {
     const rows = await this.#db.select().from(authAccounts).where(eq(authAccounts.id, id)).limit(1);
     const row = rows[0];
@@ -132,6 +142,15 @@ export class PgAuthStore implements AuthStore {
       .update(authAccounts)
       .set({ lastLoginAt: new Date(at) })
       .where(eq(authAccounts.id, accountId));
+  }
+
+  /**
+   * **読めない行を持てない**（issue #2440。`AuthStore.removeUnreadableAccounts` の doc）。
+   * アカウントは正規化された列で持つので、「型に合わない形で入っている行」を作れない。
+   * 指された id はすべて「読めない行に無い」ので、何も消さずに `unknown` を返す。
+   */
+  async removeUnreadableAccounts(ids: readonly string[]): Promise<RemoveUnreadableRowsResult> {
+    return { kind: 'unknown', count: new Set(ids).size };
   }
 
   /**

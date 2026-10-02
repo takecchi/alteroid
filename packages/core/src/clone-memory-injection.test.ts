@@ -1,6 +1,7 @@
 import type { query as sdkQuery, Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 
+import { waitFor } from './clone-test-harness.js';
 import { ALWAYS_REDELIVER, createClone } from './clone.js';
 import type { CloneHost } from './host.js';
 import type { ChatStreamEvent } from './schema.js';
@@ -128,18 +129,7 @@ function setup(stores: Stores = createMemoryStores()): Setup {
 
 /** chat の1往復が終わる（done が届く）まで待つ（`clone-test-harness.ts` の同名関数と同じ形）。 */
 function waitForDone(events: ChatStreamEvent[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const tick = setInterval(() => {
-      if (events.some((event) => event.type === 'done')) {
-        clearInterval(tick);
-        resolve();
-      } else if (Date.now() - started > 3000) {
-        clearInterval(tick);
-        reject(new Error(`done が来ない: ${JSON.stringify(events)}`));
-      }
-    }, 5);
-  });
+  return waitFor(() => events.some((event) => event.type === 'done'), 'done が来る');
 }
 
 // 記憶を2文書にする。「十分長い」を実際に確かめられるよう、about-me は

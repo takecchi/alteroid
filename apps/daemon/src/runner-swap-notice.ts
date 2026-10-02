@@ -1,4 +1,4 @@
-import type { Job } from '@alteroid/core';
+import { reasonOf, type Job } from '@alteroid/core';
 
 /**
  * 器の入れ替え（`onSwap`。`apps/daemon/src/index.ts`）でクローンを起こすかどうかを決める。
@@ -229,6 +229,6 @@ export async function noteRunnerSwap(deps: NoteRunnerSwapDeps): Promise<void> {
   try {
     await deps.journal({ type: 'decision', decision: decisionText, grounds });
   } catch (error: unknown) {
-    deps.warn(`器の入れ替えの判断を日誌へ残せませんでした: ${String(error)}\n  ${decisionText}`);
+    deps.warn(`器の入れ替えの判断を日誌へ残せませんでした: ${reasonOf(error)}\n  ${decisionText}`);
   }
 }

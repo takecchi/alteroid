@@ -1,6 +1,6 @@
 import { stdout } from 'node:process';
 
-import { formatElapsedAgo, withErrorReason } from './format.js';
+import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -67,9 +67,27 @@ function describeGrantedBy(grantedBy: string | null): string {
 
 export async function accessListCommand(now: number = Date.now()): Promise<void> {
   const target = await resolveTarget();
-  const { accounts } = (await request(target, '/access')) as { accounts: AccountView[] };
+  const { accounts, rowsUnreadable } = (await request(target, '/access')) as {
+    accounts: AccountView[];
+    /** 読めない行（1件でも在るときだけ載る。issue #2536）。id と不正な欄名だけで、email などは無い。 */
+    rowsUnreadable?: { count: number; rows: { id: string; reason: string }[] };
+  };
+  // **読めない行は一覧の前に言う**（0件なら何も出ない）。
+  stdout.write(
+    describeUnreadableRowsList({
+      noun: 'アカウント',
+      removeCommand: 'alteroid access remove-unreadable',
+      file: 'auth.json',
+      rowsUnreadable,
+    }),
+  );
 
   if (accounts.length === 0) {
+    if (rowsUnreadable !== undefined) {
+      // 読めない行が在るので「誰もログインしていない」とは言えない。
+      stdout.write('読めたアカウントは無い（誰もログインしていない、とは言えない）。\n');
+      return;
+    }
     stdout.write('まだ誰もログインしていません。\n');
     return;
   }
@@ -143,6 +161,27 @@ export async function accessRevokeCommand(accountId: string): Promise<void> {
 }
 
 /**
+ * 読めないアカウントの行を、id を指して消す（`POST /access/unreadable/remove`。issue #2440）。
+ * 読めない行（版ずれ・手編集）は `access revoke` が 409 で触らないので、片付ける口はこれだけ。
+ * **id は `access list` が読めない行として出す**
+ * （`GET /access` の `rowsUnreadable.rows[].id`。issue #2536）。**id が取れない行はこの口では消せない**
+ * （`auth.json` を手で直す）。指した id が1つでも読めない行に無ければ、デーモンが何も消さずに
+ * 断る。**行の中身は出さない**（id と件数だけ）。
+ */
+export async function accessRemoveUnreadableCommand(ids: readonly string[]): Promise<void> {
+  const target = await resolveTarget();
+  const result = (await request(
+    target,
+    '/access/unreadable/remove',
+    { method: 'POST', body: JSON.stringify({ ids }) },
+    '指した id が、読めないアカウントの行にありません（何も消していません。id は alteroid access list の「読めないアカウントの行」で確かめます。id が取れない行はこの口では消せません）',
+  )) as { removedIds: string[] };
+  stdout.write(
+    `読めないアカウントの行を ${String(result.removedIds.length)} 行消しました（id: ${result.removedIds.join(', ')}）\n`,
+  );
+}
+
+/**
  * 実行環境の持ち主として宣言する／取り消す（issue #1198。本来の形）。
  *
  * **`POST /access/:accountId/owner`（宣言）/ `.../owner/revoke`（取り消し）
@@ -177,7 +216,13 @@ export async function accessOwnerCommand(
   stdout.write('（これで alteroid credential set / alteroid reset が通ります）\n');
 }
 
-async function request(target: Target, path: string, init: RequestInit = {}): Promise<unknown> {
+async function request(
+  target: Target,
+  path: string,
+  init: RequestInit = {},
+  /** 404 の文言。既定は「該当するアカウントが無い」（id で引く口向き）。 */
+  notFoundMessage = '該当するアカウントがありません',
+): Promise<unknown> {
   const response = await fetch(`${target.baseUrl}${path}`, {
     ...init,
     // 本文の無い POST もデーモンは application/json を要求する（ブラウザの
@@ -218,7 +263,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
     }
     const described = describeAuthFailure(response.status, target);
     if (described !== null) throw new Error(described);
-    if (response.status === 404) throw new Error('該当するアカウントがありません');
+    if (response.status === 404) throw new Error(notFoundMessage);
     if (response.status === 409) {
       // ⚠️ **いまのデーモンはここを返さない**（2026-09-09 のオーナー決定で、許可
       // できるアカウントの上限が消えた）。**それでも残す** — `ALTEROID_URL` で

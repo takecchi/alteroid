@@ -8,7 +8,14 @@ import {
   UnreadablePermissionGrantError,
   unreadableRowKey,
 } from '@alteroid/core';
-import type { PermissionGrant, PermissionGrantStore, UnreadableRowOnce } from '@alteroid/core';
+import type {
+  PermissionGrant,
+  PermissionGrantStore,
+  RemoveUnreadableRowsOptions,
+  RemoveUnreadableRowsResult,
+  UnreadablePermissionGrant,
+  UnreadableRowOnce,
+} from '@alteroid/core';
 import { z } from 'zod';
 
 import { writeFileAtomic } from './atomic.js';
@@ -185,6 +192,69 @@ export class FsPermissionGrantStore implements PermissionGrantStore {
         },
         result: true,
       };
+    });
+  }
+
+  /**
+   * `list()` が読み飛ばした行を、本文を含まない形（id と不正な欄名だけ）で返す
+   * （`PermissionGrantStore.listUnreadable` の doc。issue #2536）。`invalidGrantsRaw` から作る。
+   * `extractRowId` は名指しした欄しか読まないので、`allows` / `answer` などを取り出す経路は無い。
+   */
+  async listUnreadable(): Promise<UnreadablePermissionGrant[]> {
+    const { invalidGrantsRaw } = await this.#read();
+    return invalidGrantsRaw.map((raw): UnreadablePermissionGrant => {
+      const id = extractRowId(raw);
+      const result = permissionGrantSchema.safeParse(raw);
+      return {
+        ...(id === undefined ? {} : { id }),
+        reason: result.success ? '不正な行' : summarizeInvalidFields(result.error.issues),
+      };
+    });
+  }
+
+  /**
+   * 読めない行を id で指して消す（`PermissionGrantStore.removeUnreadable` の doc。issue #2440）。
+   * `invalidGrantsRaw` のうち `extractRowId` が一致する行だけを落とす——id が取れない行は
+   * 指せないので残る。読めた行には触れない。**読んで・突き合わせて・日誌（`beforeRemove`）を
+   * 呼んで・書くまでを1つの排他区間に入れる。** 知らない id があれば書かない（ファイルを
+   * 1バイトも変えない）。`beforeRemove` が投げたら書かずに投げ直す。**値は返さない（id だけ）。**
+   */
+  async removeUnreadable(
+    ids: readonly string[],
+    options: RemoveUnreadableRowsOptions = {},
+  ): Promise<RemoveUnreadableRowsResult> {
+    const wanted = [...new Set(ids)];
+    return withPathLock(this.#path, async () => {
+      const file = await this.#read();
+      const present = new Set(
+        file.invalidGrantsRaw.flatMap((raw) => {
+          const id = extractRowId(raw);
+          return id === undefined ? [] : [id];
+        }),
+      );
+      const unknown = wanted.filter((id) => !present.has(id));
+      if (unknown.length > 0 || wanted.length === 0) {
+        return { kind: 'unknown', count: unknown.length };
+      }
+      // **日誌などを先に。投げたら、ここで止まり、何も書かない。**
+      await options.beforeRemove?.(wanted);
+      const drop = new Set(wanted);
+      await mkdir(this.#dir, { recursive: true });
+      await writeFileAtomic(
+        this.#path,
+        `${JSON.stringify(
+          this.#serialize({
+            grants: file.grants,
+            invalidGrantsRaw: file.invalidGrantsRaw.filter((raw) => {
+              const id = extractRowId(raw);
+              return id === undefined || !drop.has(id);
+            }),
+          }),
+          null,
+          2,
+        )}\n`,
+      );
+      return { kind: 'removed', ids: wanted };
     });
   }
 

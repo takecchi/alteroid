@@ -183,6 +183,7 @@ import {
   commitmentUpdatedAt,
   describeAppraisal,
   formatAppraisalDecision,
+  githubObservationInputSchema,
   jobStatusSchema,
   memorySlugSchema,
   practiceSlugSchema,
@@ -280,6 +281,7 @@ import {
 import { describeManagerFoldCandidate } from './manager-fold-candidate.js';
 import {
   describeUnpushedWorkObservationIncompleteness,
+  describeUnpushedWorkObservationProvenance,
   describeUnpushedWorkObservationSource,
   UNPUSHED_WORK_SHUTDOWN_OBSERVATION_NOT_ARRIVED_NOTE,
 } from './unpushed-work-observation-format.js';
@@ -690,6 +692,14 @@ export function qualifiedToolName(name: string): string {
   return `mcp__${MCP_SERVER_NAME}__${name}`;
 }
 
+/**
+ * `github_observation_record` が日誌へ書く `observedBy`。**この道具はクローンの MCP サーバにしか
+ * 載らない**（`createCloneTools` が唯一の組み立て点。マネージャーの文脈には載らない）ので、
+ * 呼び手は常にクローンである。**モデルの引数からは受けない**（名乗りを引数に任せると、
+ * 「誰の観測か」が申告の申告になる）。マネージャーの観測は `POST /github-observations` が受ける。
+ */
+export const GITHUB_OBSERVATION_CLONE_OBSERVER = 'clone';
+
 export const CLONE_TOOL_NAMES = [
   'memory_list',
   'memory_read',
@@ -722,6 +732,7 @@ export const CLONE_TOOL_NAMES = [
   'commitment_appraise',
   'appraisal_stats',
   'progress_read',
+  'github_observation_record',
   'inbox_remove_many',
   'profile_read',
   'profile_write',
@@ -769,6 +780,7 @@ export type CloneToolName = (typeof CLONE_TOOL_NAMES)[number];
  * 直接数えること。
  */
 export const SELF_JOURNALING_CLONE_TOOLS = [
+  'github_observation_record',
   'memory_write',
   'memory_append',
   'memory_delete',
@@ -961,6 +973,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   manager_stop: false,
   archive_remove: false,
   archive_remove_many: false,
+  github_observation_record: false,
 };
 
 const SECRET_BEARING_CLONE_TOOL_NAMES: ReadonlySet<string> = new Set(
@@ -3524,6 +3537,26 @@ function unobservedOutcomeLine(manager: ManagerSummary): string | null {
 }
 
 /**
+ * `manager_list` の「直近の報告（… 受信、⚠ status 食い違い）」に添える印の生成元
+ * （Issue #2432）。判定は `describeReportDrift`、ここは印の字面だけを持つ。CLI の
+ * `/managers` も同じ関数を呼ぶ。食い違いが無い・欄が無い（古い daemon）ときは `null`。
+ * `now` は呼び出し側が渡す（純関数のまま保つ）。
+ */
+export function describeReportDriftMark(
+  manager: Pick<ManagerSummary, 'managerId' | 'lastReportAt' | 'lastReportStatus' | 'status'>,
+  now: Date,
+): string | null {
+  const drift = describeReportDrift({
+    managerId: manager.managerId,
+    lastReportAt: manager.lastReportAt,
+    lastReportStatus: manager.lastReportStatus,
+    status: manager.status,
+    now,
+  });
+  return drift === '' ? null : '⚠ status 食い違い（manager_report で詳細）';
+}
+
+/**
  * {@link managerActivityInputOf} が読む欄だけを名指しした型。CLI（`GET /managers` の
  * 応答は `ManagerSummary` の全欄を持たない）が `describeTurnEnd` /
  * `describeToolUseStall` を同じ関数のまま呼べるようにするため（Issue #2428）。
@@ -3991,17 +4024,15 @@ function formatUnpushedWorkObservationWorktrees(
  * force の `done`/`waiting_human`）・人間が Web UI / `DELETE /managers/:id`
  * で止めたとき・自動畳みが止める直前**（`manager.ts` の `abort()` が
  * `runner.stop(managerId)` を呼ぶ直前。Issue #1266 残り2）。
- * **`manager_list` 自身・器の入れ替え（redeploy・枠落ちでセッションを失う
- * 経路）では、どの経路からも一度も更新されない**——`report` も `git
- * push`／枝作成の `tool_use` も届く前に器を失う経路（redeploy・枠落ち）は、
- * どちらの形でも拾えない（`manager.ts` の `#observeUnpushedWorkOnce` の
- * doc）。**`force: true` はもうこの「更新されない」側ではない**——Issue
- * #1266 残り2で `abort()` が埋めた。**時刻だけを出すと、読み手はそれを
- * 「いまの状態」と誤読する**——だから毎回、どの経路が更新するかを行の中に
- * 書く（JSDoc に書いてもクローンには届かない。`resources: true` の説明文と
- * 同じ理由）。**このパラグラフの生の日本語文言はテスト
- * （`tools.test.ts` の「manager_list は observed な未push観測」）が固定
- * しているので、書き換える前に確かめること。**
+ * **`manager_list` 自身は、この欄を更新しない。** 器の入れ替え（redeploy・
+ * 枠落ち）も、いまは `closed`・`vacate`・`shutdown` の経路が先取りして更新
+ * しうる（PR #1545 / #1777。届かないことはある）。**時刻だけを出すと、読み手
+ * はそれを「いまの状態」と誤読する**——だから毎回、観測自身の `source` から
+ * 出どころを行の中に書く（`describeUnpushedWorkObservationProvenance`。
+ * 経路の列挙はここに持たない。Issue #1266。JSDoc に書いてもクローンには
+ * 届かない。`resources: true` の説明文と同じ理由）。**このパラグラフの
+ * 生の日本語文言はテスト（`tools.test.ts` の「manager_list は observed な
+ * 未push観測」）が固定しているので、書き換える前に確かめること。**
  *
  * ## 器の入れ替え（redeploy 等）で応答不能な委譲は、別の言い方をする
  * （クローンの指摘を受けて追加）
@@ -4067,12 +4098,7 @@ function describeUnpushedWorkObservation(manager: ManagerSummary): string | null
   }
 
   if (observation === undefined) return null;
-  const provenance =
-    'manager_stop（running・非force）の断り、ターンが report で終わったとき、' +
-    'Bash で git push か新しい枝を作る操作を検出したとき、または止める操作そのもの' +
-    '（manager_stop の force・done/waiting_human の非force・人間の停止・自動畳み）' +
-    'で取った最後の1回（manager_list 自身・器の入れ替え（redeploy・枠落ちで' +
-    'セッションを失う経路）では更新されない。いまの状態ではない）';
+  const provenance = describeUnpushedWorkObservationProvenance(observation.source, 'manager_list');
   if (observation.kind === 'unavailable') {
     return (
       `  未push観測（${provenance}）: 取れなかった（${observation.at}）: ` + observation.reason
@@ -4780,7 +4806,7 @@ export function createCloneTools(context: ToolContext) {
               updatedAt: doc.updatedAt,
               createdAt: doc.createdAt,
             })),
-            { total: documents.length },
+            { total: documents.length, anchor: resolved.anchor },
           ),
         );
       },
@@ -8441,6 +8467,65 @@ export function createCloneTools(context: ToolContext) {
       },
     ),
 
+    /**
+     * 観測した GitHub の数を日誌へ記録する口（#2245 段2）。`POST /github-observations`（daemon）と
+     * **同じ検証・同じ日誌の枝**（`githubObservationInputSchema`）を通る。`GET /progress` /
+     * `progress_read` の `github` がこれを返す。**デーモンは GitHub を見に行かない**——数は
+     * 観測した側（ここではクローン）の申告である。
+     *
+     * **`observedBy` は引数に無い。** 器が `GITHUB_OBSERVATION_CLONE_OBSERVER` を埋める。
+     * **日誌が全行為なので、書けなければ失敗を返す**（`appendJournalOrThrow`。書けたふりをしない）。
+     */
+    tool(
+      'github_observation_record',
+      [
+        '自分（または委譲先）が GitHub を見て数えた open Issue / open PR の件数を、日誌へ記録する。',
+        '`progress_read` / `GET /progress` の「GitHub」欄はこの記録を返す（デーモンは GitHub を見に行かない。値は観測した側の申告）。',
+        '**取れなかった回は数を作らない。** `result: { status: "failed", reason }` で、取れなかったことと理由を記録する（0 件と書かない）。',
+        '`query` には**母集合を切った引数を含める**（例: `gh issue list --state open --limit 200`）。`limit` を付けたなら `limit` にも同じ値を入れ、',
+        '件数が `limit` に達したときは `truncated: true`（数は下限）にする。',
+        '観測者はあなた（clone）として器が記録する（引数では指定できない）。いつ観測するかはここでは決まらない。',
+      ].join(' '),
+      {
+        repo: githubObservationInputSchema.shape.repo.describe('観測した repo（`owner/name`）'),
+        query: githubObservationInputSchema.shape.query.describe(
+          '何をどう数えたか（母集合を切る引数を含めたコマンド・条件）',
+        ),
+        limit:
+          githubObservationInputSchema.shape.limit.describe('母集合を切った件数の上限（あれば）'),
+        result: githubObservationInputSchema.shape.result.describe(
+          '観測の結果。ok のときだけ件数（openIssues / openPulls / truncated）、取れなかったときは failed と reason（数は持たない）',
+        ),
+      },
+      async (args) => {
+        // `observedBy` は引数から読まない（余剰の鍵は `pick` で落ちる）。
+        const parsed = githubObservationInputSchema.omit({ observedBy: true }).safeParse(args);
+        if (!parsed.success) {
+          // 送られた値は混ぜない（where だけ）。
+          const where = parsed.error.issues.map((issue) => issue.path.join('.')).join(', ');
+          return text(
+            `github 観測の形が不正のため記録していない${where === '' ? '' : `: ${where}`}。`,
+          );
+        }
+        const entry = await appendJournalOrThrow(
+          'github_observation_record',
+          stores.journal,
+          {
+            type: 'github_observation',
+            ...parsed.data,
+            observedBy: GITHUB_OBSERVATION_CLONE_OBSERVER,
+          },
+          'act-not-performed',
+        );
+        return text(
+          `GitHub の観測を記録した（${entry.id}。${parsed.data.repo}。観測者 ${GITHUB_OBSERVATION_CLONE_OBSERVER}）。` +
+            (parsed.data.result.status === 'failed'
+              ? '取れなかった回として記録した（数は無い）。'
+              : ''),
+        );
+      },
+    ),
+
     tool(
       'commitment_edit',
       [
@@ -11084,14 +11169,9 @@ export function createCloneTools(context: ToolContext) {
           // 1本増やすと予算に張り付いている一覧では出る件数が減る）。
           // 判定のコピーは作らない——生成元は `describeReportDrift` 1箇所で、
           // `manager_report` と同じ字面の元から取る（真偽だけをここで使う）。
-          const drift = describeReportDrift({
-            managerId: manager.managerId,
-            lastReportAt: manager.lastReportAt,
-            lastReportStatus: manager.lastReportStatus,
-            status: manager.status,
-            now,
-          });
-          const driftMark = drift === '' ? '' : '、⚠ status 食い違い（manager_report で詳細）';
+          // 印の字面も同じ関数（`describeReportDriftMark`）から取る（CLI の `/managers` も呼ぶ。#2432）。
+          const drift = describeReportDriftMark(manager, now);
+          const driftMark = drift === null ? '' : `、${drift}`;
           // **Issue #1394 段⑤: 「手が空いた委譲を畳む候補」を表示だけする。**
           // 畳む操作そのものは作らない——判定は `manager-fold-candidate.ts` の
           // `describeManagerFoldCandidate` 1箇所（このファイルでは判定を
@@ -14329,6 +14409,20 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
           (entry.pending.oldestAt === undefined ? '' : `\n最古の滞留: ${entry.pending.oldestAt}`) +
           retainedLine,
       };
+    }
+    case 'github_observation': {
+      // **申告であることを見出しに出す**（`observedBy`）。数が取れなかった回は数を出さない。
+      const head = `[github_observation ${entry.repo} by ${entry.observedBy} ${entry.result.status}]`;
+      const scope = `母集合: ${entry.query}${entry.limit === undefined ? '' : ` / limit ${entry.limit}`}`;
+      return entry.result.status === 'ok'
+        ? {
+            head,
+            body:
+              `open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
+              (entry.result.truncated ? '（limit に達した。実数はこれ以上）' : '') +
+              `\n${scope}`,
+          }
+        : { head, body: `取れなかった: ${entry.result.reason}\n${scope}` };
     }
   }
 }
