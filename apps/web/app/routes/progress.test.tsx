@@ -412,6 +412,81 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     expect(stat?.textContent).toContain('—');
     expect(stat?.textContent).not.toMatch(/(^|[^\d])0 ?件(?!ではない)/);
   });
+
+  describe('観測の記録がある（#2245 段1）', () => {
+    const okRow = {
+      repo: 'takecchi/alteroid',
+      latestOk: {
+        observedAt: '2026-09-30T01:00:00.000Z',
+        observedBy: 'clone',
+        query: 'gh issue list --state open',
+        limit: 100,
+        openIssues: 12,
+        openPulls: 0,
+        truncated: false,
+      },
+      latestFailed: null,
+    };
+
+    it('数に、観測者・観測時刻・母集合を添える（申告であり、古さは判定しない）。open PR の 0 は観測した 0 として出る', async () => {
+      stubProgress({
+        body: baseBody({
+          github: { state: 'observed', repos: [okRow], scan: { limit: 500, reachedLimit: false } },
+        }),
+      });
+      renderPage();
+
+      const backlog = within(await card('積み上がり'));
+      expect(backlog.getByText(/観測した側の申告/)).toBeTruthy();
+      expect(
+        backlog.getByText('takecchi/alteroid open Issue').parentElement?.textContent,
+      ).toContain('12');
+      expect(backlog.getByText('takecchi/alteroid open PR').parentElement?.textContent).toContain(
+        '0',
+      );
+      expect(backlog.getByText(/観測者 clone/)).toBeTruthy();
+      expect(backlog.getByText(/gh issue list --state open \/ limit 100/)).toBeTruthy();
+      expect(backlog.queryByText(/観測していない（0 件ではない）/)).toBeNull();
+    });
+
+    it('取れなかった回は数を作らず理由を出す。成功が無い repo の数は — で、0 と書かない', async () => {
+      stubProgress({
+        body: baseBody({
+          github: {
+            state: 'observed',
+            repos: [
+              {
+                repo: 'takecchi/other',
+                latestOk: null,
+                latestFailed: {
+                  observedAt: '2026-09-30T02:00:00.000Z',
+                  observedBy: 'mgr-1',
+                  query: 'gh pr list',
+                  reason: 'gh: HTTP 502',
+                },
+              },
+            ],
+            scan: { limit: 500, reachedLimit: true },
+          },
+        }),
+      });
+      renderPage();
+
+      const backlog = within(await card('積み上がり'));
+      const stat = backlog.getByText('takecchi/other の open の Issue / PR').parentElement;
+      expect(stat?.textContent).toContain('—');
+      expect(stat?.textContent).toContain('0 件ではない');
+      expect(backlog.getByText(/取れなかった回/).textContent).toContain('gh: HTTP 502');
+      expect(backlog.getByText(/上限（500 件）に当たった/)).toBeTruthy();
+    });
+
+    it('知らない github.state が来ても落ちず、数を作らない', async () => {
+      stubProgress({ body: baseBody({ github: { state: 'future', reason: 'x' } }) });
+      renderPage();
+      const backlog = within(await card('積み上がり'));
+      expect(backlog.getByText(/この版の画面は知らない状態（future）/)).toBeTruthy();
+    });
+  });
 });
 
 describe('/progress 画面 — 窓の切替', () => {
