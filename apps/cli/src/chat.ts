@@ -167,8 +167,19 @@ export async function sendMessage(
 
   let nextConversationId = conversationId;
   let wrote = false;
+  // **本文は改行までためて、行ごとに伏せてから書く**（#2635）。チャンクごとに伏せると、
+  // 2つのチャンクにまたがったトークンはどちらの断片も規則に合わずに出る。端末へ書いた
+  // ものは取り消せないので、まだ改行の来ていない残りは `pending` に持ち、ほかの出来事の
+  // 前と終わりに伏せてから書き出す。本文の網の規則は、どれも1行の中で完結する。
+  let pending = '';
+  const flushPending = (): void => {
+    if (pending === '') return;
+    stdout.write(redactBody(pending));
+    pending = '';
+  };
 
   for await (const event of readSSE(response.body)) {
+    if (event.name !== 'text') flushPending();
     switch (event.name) {
       case 'open': {
         const data = event.json<{ conversationId: string }>();
@@ -178,7 +189,12 @@ export async function sendMessage(
       case 'text': {
         const data = event.json<{ text: string }>();
         if (data) {
-          stdout.write(redactBody(data.text));
+          pending += data.text;
+          const lineEnd = pending.lastIndexOf('\n');
+          if (lineEnd !== -1) {
+            stdout.write(redactBody(pending.slice(0, lineEnd + 1)));
+            pending = pending.slice(lineEnd + 1);
+          }
           wrote = true;
         }
         break;
@@ -216,6 +232,7 @@ export async function sendMessage(
     }
   }
 
+  flushPending();
   if (wrote) stdout.write('\n');
   return nextConversationId;
 }

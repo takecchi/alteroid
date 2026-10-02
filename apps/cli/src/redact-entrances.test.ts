@@ -141,6 +141,31 @@ describe('CLI の会話', () => {
     expect(out).toContain('ap-1');
     expect(out).toContain('エラー: 失敗');
   });
+
+  it('SSE の text のチャンクをまたいだトークンも消え、本文の順は保たれる（#2635）', async () => {
+    const half = TOKEN.length / 2;
+    const texts = [
+      `1行目 ${TOKEN.slice(0, half)}`,
+      `${TOKEN.slice(half)} 続き\n2行目 ${TOKEN.slice(0, 10)}`,
+      `${TOKEN.slice(10)} ${SHA}`,
+    ];
+    const sse =
+      texts.map((text) => `event: text\ndata: ${JSON.stringify({ text })}\n\n`).join('') +
+      `event: tool\ndata: ${JSON.stringify({ tool: 'Bash' })}\n\n`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(sse, { status: 200 }))),
+    );
+    const read = captureStdout();
+    await sendMessage(
+      { baseUrl: 'http://x', headers: {}, remote: false, note: null },
+      'こんにちは',
+      null,
+    );
+    const out = read();
+    expectRedacted(out);
+    expect(out).toContain(`1行目 [REDACTED] 続き\n2行目 [REDACTED] ${SHA}\n  · Bash\n`);
+  });
 });
 
 describe('CLI の委譲', () => {
