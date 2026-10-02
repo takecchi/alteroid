@@ -11803,7 +11803,7 @@ export function createCloneTools(context: ToolContext) {
         // 下へ出るのは `foldedTurn.text`（普通の発話でありうる）——注記が予告
         // する本文の種類と実際の本文が食い違う（#1798 の実測）。当てはまらない
         // 注記は出さない。
-        const failure =
+        const managerFailure =
           part === 'request' || foldedTurn !== undefined
             ? null
             : describeManagerFailure(
@@ -11970,7 +11970,7 @@ export function createCloneTools(context: ToolContext) {
         // **失敗は本文の`上`に置く**（`manager_list` と同じ順。人間の CLI も
         // 同じ順である）。下に置くと、包まれたエラー文を先に読んでから「実は
         // 報告ではない」と分かる順になる。**失敗していない回は1文字も増えない。**
-        const failureNote = failure === null ? '' : `${failure}\n\n`;
+        const failureNote = managerFailure === null ? '' : `${managerFailure}\n\n`;
         // **`failureNote` と同じ順・同じ理由で本文の上に置く（Issue #1847）。**
         // `usageStoppedLine`（すぐ上）とは軸が違うので別行——両方が同時に
         // 出ることがある。**対象外の委譲では1文字も増えない。**

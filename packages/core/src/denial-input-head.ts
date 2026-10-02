@@ -316,6 +316,10 @@ const QUERY_PARAMS_TAIL = /\bparams:[\s\S]*$/i;
  *
  * **`params:` の落としを先に行う。** 落とす部分に後続の規則を走らせないので、
  * 無駄な走査をしないうえ、落とす部分を伏せ字の取りこぼしに頼らない。
+ *
+ * **使い分け（#2565）。** 全文が要る・文を変えたくないときの口。1行の跡でよいなら
+ * `dropped-record.ts` の `reasonOf` を使う（1行目だけ・長さを切り・`.cause` の構造化の欄を足す。
+ * `process.env` を伏せる `redactErrorText` は内側に含む）。外へ出す例外の文は、どちらかを必ず通す。
  */
 export function redactErrorText(text: string, env: NodeJS.ProcessEnv | undefined): string {
   return redactSecretsInText(text.replace(QUERY_PARAMS_TAIL, `params: ${REDACTED}`), env);
