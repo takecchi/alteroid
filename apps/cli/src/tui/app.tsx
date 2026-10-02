@@ -22,6 +22,7 @@ import {
   Tabs,
 } from './components.js';
 import type { HeaderFeed } from './header-feed.js';
+import { HINT_INPUT, HINT_NAV, HINT_PICKER, HINT_QUITTING } from './hints.js';
 import { useCoalescedStore, useSyncedState } from './hooks.js';
 import { editText, normalizeChord, resolveEnter } from './input.js';
 import { chatLayout, TABS, type TabId } from './layout.js';
@@ -60,13 +61,6 @@ export interface AppProps {
   /** 全画面レイアウト（root の高さを端末の行数に固定）を使うか。小さい端末ではインライン。 */
   fullscreen: boolean;
 }
-
-const HINT_INPUT =
-  'Enter 送信 · Esc 画面移動 · PgUp/PgDn スクロール · /help · Ctrl+C 中断 · Ctrl+D 終了';
-const HINT_NAV =
-  '1-5 画面 · Tab/i 入力へ · ↑↓/PgUp/PgDn スクロール · / コマンド · Ctrl+C 中断 · Ctrl+D 終了';
-const HINT_PICKER = '↑↓ 選択 · Enter 開く · Esc 戻る · Ctrl+C 中断';
-const HINT_QUITTING = '終了しています（会話を終えて学びを記憶へ蒸留している）…';
 
 export const App: FC<AppProps> = ({ api, controller, feed, fullscreen }) => {
   const { exit } = useApp();

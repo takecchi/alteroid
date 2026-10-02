@@ -57,8 +57,13 @@ export interface TuiApi {
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
   listConversations(): Promise<ConversationSummary[]>;
-  /** `null` は 404（遡り切れた上で「無い」）。 */
-  readConversation(id: string): Promise<ConversationMessage[] | null>;
+  /**
+   * `null` は 404（遡り切れた上で「無い」）。`reachedStart` が偽なら、窓の外に続き（古い発言）が
+   * 残っているかもしれない。`messages` が空でこれが偽のときは「無い」ではなく**判定できない**。
+   */
+  readConversation(
+    id: string,
+  ): Promise<{ messages: ConversationMessage[]; reachedStart: boolean } | null>;
   endConversation(id: string): Promise<void>;
   /** 結果を人間の言葉にしたもの（`alteroid interrupt` と同じ文言）。 */
   interrupt(): Promise<string>;
@@ -154,7 +159,8 @@ export function createTuiApi(target: Target): TuiApi {
       const response = await client.conversations[':id'].$get({ param: { id }, query: {} });
       if (response.status === 404) return null;
       if (!response.ok) throw await failure('会話を読めませんでした', response);
-      return (await response.json()).messages;
+      const body = await response.json();
+      return { messages: body.messages, reachedStart: body.reachedStart };
     },
 
     async endConversation(id) {

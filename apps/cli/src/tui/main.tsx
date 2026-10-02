@@ -60,6 +60,9 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
         stderr: io.stderr,
         // Ctrl+C は終了ではなく中断に使う。
         exitOnCtrlC: false,
+        // TTY であることはここまでで確かめてある。`CI=true` の環境（コンテナの既定など）でも、
+        // Ink に非対話扱い（最後のフレームしか書かない）へ倒させない。
+        interactive: true,
       },
     );
     await instance.waitUntilExit();

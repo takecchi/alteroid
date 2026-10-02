@@ -251,18 +251,26 @@ export class ChatController {
   /** 履歴の会話を開き直す。 */
   async openConversation(id: string): Promise<boolean> {
     if (this.refuseWhileBusy()) return false;
-    let messages;
+    let read;
     try {
-      messages = await this.api.readConversation(id);
+      read = await this.api.readConversation(id);
     } catch (error) {
       this.addError(messageOf(error));
       return false;
     }
-    if (messages === null) {
+    if (read === null) {
       this.addError(`そんな会話はありません: ${id}`);
       return false;
     }
-    const entries: LogEntry[] = messages.map((m) => {
+    // 窓が先頭に届いておらず中身も空なのは「無い」ではなく**判定できない**。空の会話として
+    // 開かない（続きを送ると、既存の会話ではない別の会話の続きとして話してしまう）。
+    if (!read.reachedStart && read.messages.length === 0) {
+      this.addError(
+        `会話 ${id} は判定できない（日誌の遡れた範囲に発言が無い。窓の外にあるかもしれない）`,
+      );
+      return false;
+    }
+    const entries: LogEntry[] = read.messages.map((m) => {
       this.seq += 1;
       return { seq: this.seq, kind: m.role === 'inbound' ? 'user' : 'assistant', text: m.text };
     });
@@ -271,6 +279,11 @@ export class ChatController {
       conversationId: id,
       entries: entries.length > MAX_ENTRIES ? entries.slice(-MAX_ENTRIES) : entries,
     }));
+    if (!read.reachedStart) {
+      this.addSystem(
+        '遡れた範囲だけを出している。これより古い発言は窓の外に残っているかもしれない',
+      );
+    }
     return true;
   }
 
