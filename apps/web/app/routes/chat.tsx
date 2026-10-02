@@ -691,6 +691,18 @@ export function ChatPane({
    */
   const unfinishedReplyRef = useRef(new Map<string, string>());
   /**
+   * その会話の、終端を見なかった途中の返信行を捨てる（再生の `open` から、進行中かどうかを
+   * 問わず呼ぶ。Issue #2662）。進行中なら再生が頭から積み直し、進行中でなければ確定した
+   * 本文を履歴が出す。どちらでも前の途中の行は残さない。
+   */
+  const discardUnfinishedReply = useCallback((conversationId: string) => {
+    const stale = unfinishedReplyRef.current.get(conversationId);
+    if (stale === undefined) return;
+    unfinishedReplyRef.current.delete(conversationId);
+    setLines((previous) => previous.filter((line) => line.key !== stale));
+    setActiveReplyKey((key) => (key === stale ? undefined : key));
+  }, []);
+  /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
    *
    * ストリームの後片付けは「**この結果を今の画面へ書いてよいか**」で決まるが、
@@ -1740,17 +1752,15 @@ export function ChatPane({
       try {
         for await (const message of getChatStream(api, id, { signal: controller.signal })) {
           if (message.event === 'open') {
-            if (!message.data.inProgress) return;
+            // 進行中でなくても捨てる。離れている間にターンが終わっていれば、確定した
+            // 本文は履歴が出す（途中の行は本文が違うので `pendingOwnLines` に引き取られない）。
+            if (!message.data.inProgress) {
+              discardUnfinishedReply(id);
+              return;
+            }
             const current = streamRef.current;
             if (current !== undefined && !current.controller.signal.aborted) return;
-            // 前のストリームが終端を見ずに残した途中の返信行は、この再生が頭から
-            // 積み直すので捨てる（#2662。`unfinishedReplyRef` の doc）。
-            const stale = unfinishedReplyRef.current.get(id);
-            if (stale !== undefined) {
-              unfinishedReplyRef.current.delete(id);
-              setLines((previous) => previous.filter((line) => line.key !== stale));
-              setActiveReplyKey((key) => (key === stale ? undefined : key));
-            }
+            discardUnfinishedReply(id);
             stream = createStream(controller, id);
             streamRef.current = stream;
             pendingResumeRef.current = undefined;
@@ -1784,7 +1794,7 @@ export function ChatPane({
       }
     })();
     return () => controller.abort();
-  }, [api, shownId, createStreamWriter]);
+  }, [api, shownId, createStreamWriter, discardUnfinishedReply]);
 
   /**
    * 編集を確定する（チャットのメッセージ編集、#1010）。

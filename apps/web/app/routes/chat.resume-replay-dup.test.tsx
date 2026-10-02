@@ -106,9 +106,11 @@ interface Replay {
 function setup({
   replays,
   chat,
+  finishedReply,
 }: {
   replays: Replay[];
   chat?: { frames: Frames; keepOpen: boolean };
+  finishedReply?: () => string | undefined;
 }) {
   let replayIndex = 0;
   const route: Route = (url, init) => {
@@ -137,6 +139,16 @@ function setup({
             role: 'inbound',
             text: id === ID ? 'やあ' : '別の話',
           },
+          ...(id === ID && finishedReply?.() !== undefined
+            ? [
+                {
+                  id: 'm-reply',
+                  at: '2026-10-01T00:00:01.000Z',
+                  role: 'outbound',
+                  text: finishedReply(),
+                },
+              ]
+            : []),
         ],
       });
     }
@@ -313,6 +325,39 @@ describe('再生し直しても、前の途中経過が残って二重になら�
     expect(await within(transcript()).findByText('こんにちは')).toBeTruthy();
     expect(within(transcript()).queryAllByText('こんにち')).toHaveLength(0);
     expect(within(transcript()).getAllByText('済んだ返事')).toHaveLength(1);
+  });
+
+  it('離れている間にターンが終わって履歴に確定した会話へ戻る（open が inProgress:false）と、途中の行は捨てられ二重にならない', async () => {
+    let finished = false;
+    const { streamCalls } = setup({
+      finishedReply: () => (finished ? 'こんにちは' : undefined),
+      chat: {
+        frames: [{ event: 'open', data: { conversationId: ID } }, text('こんにち')],
+        keepOpen: true,
+      },
+      replays: [
+        { frames: [open(false)], keepOpen: false },
+        { frames: [open(false, OTHER)], keepOpen: false },
+        { frames: [open(false)], keepOpen: false },
+      ],
+    });
+
+    const { router } = renderApp(`/chat/${ID}`);
+    await screen.findByText('やあ');
+    fireEvent.change(screen.getByPlaceholderText(/クローンに話しかける/), {
+      target: { value: 'おーい' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /送る/ }));
+    expect(await within(transcript()).findByText('こんにち')).toBeTruthy();
+
+    await router.navigate(`/chat/${OTHER}`);
+    expect(await screen.findByText('別の話')).toBeTruthy();
+    finished = true;
+    await router.navigate(`/chat/${ID}`);
+    await waitFor(() => expect(streamCalls()).toBe(3));
+    expect(await within(transcript()).findByText('こんにちは')).toBeTruthy();
+    await waitFor(() => expect(within(transcript()).queryAllByText('こんにち')).toHaveLength(0));
+    expect(within(transcript()).getAllByText('こんにちは')).toHaveLength(1);
   });
 
   it('陰性対照: 再生中でない会話で資格が替わっても、既にある行は消えない', async () => {
