@@ -716,7 +716,7 @@ export async function runSlashCommand(
           const prefix = type === undefined ? '' : `type=${type} に絞った上で、`;
           stdout.write(
             `${prefix}「${q}」に当たる日誌はありません。` +
-              'ただし tool_use の input・worker_wait・turn_usage・github_observation は探す対象に入っていないので、' +
+              'ただし tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていないので、' +
               'そこにだけ書かれている語はここでは当たりません\n',
           );
         }
