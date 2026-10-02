@@ -676,6 +676,21 @@ export function ChatPane({
   /** 走っているストリーム。無ければ `undefined`。 */
   const streamRef = useRef<Stream | undefined>(undefined);
   /**
+   * **終端（`done`/`error`）を見ないまま途中で終わったかもしれない返信行**のキー
+   * （会話 id → `replyKey`）。Issue #2662。
+   *
+   * サーバの再生（`GET /chat/:id/stream`）は進行中のターンを**頭から**流す。資格が
+   * 替わって効果が張り直された・会話を切り替えて戻った・自分の送信が途中で切れた、の
+   * どれでも、前のストリームが積んだ途中の返信行は `lines` に残る（まだ履歴に無いので
+   * `pendingOwnLines` が引き取らない）。そこへ再生が新しい行を頭から積むと二重になる。
+   * だから再生の `open`（`inProgress: true`）を受けたとき、この会話のぶんだけ捨ててから積む。
+   *
+   * 書くのは `createStreamWriter`（返信行を作ったとき登録し、`done`/`error` で外す）、
+   * 読むのは再生の効果だけ。`done` まで届いて確定した行は外れているので消えない。
+   * render では読まないので ref でよい。
+   */
+  const unfinishedReplyRef = useRef(new Map<string, string>());
+  /**
    * いま見えている会話を、受信の途中からも読めるようにしたもの。
    *
    * ストリームの後片付けは「**この結果を今の画面へ書いてよいか**」で決まるが、
@@ -1404,6 +1419,12 @@ export function ChatPane({
         ];
       });
     };
+    /** 終端まで届いた＝この返信行は確定した。再生の頭出しで捨てる対象から外す。 */
+    const settleReply = () => {
+      if (stream.id !== undefined && unfinishedReplyRef.current.get(stream.id) === replyKey) {
+        unfinishedReplyRef.current.delete(stream.id);
+      }
+    };
     const apply = (event: ChatStreamEvent) => {
       switch (event.type) {
         /*
@@ -1427,6 +1448,7 @@ export function ChatPane({
           if (replyKey === undefined) {
             replyKey = `c-${Date.now()}`;
             const key = replyKey;
+            if (stream.id !== undefined) unfinishedReplyRef.current.set(stream.id, key);
             // `pendingOwnLines` による刈り込みから、この行が完成するまで
             // 守る（`activeReplyKey` の doc）。
             setActiveReplyKey(key);
@@ -1501,9 +1523,11 @@ export function ChatPane({
          * `visibleFailure` が `shownId` で引いて決める。
          */
         case 'error':
+          settleReply();
           setFailures((prev) => new Map(prev).set(stream.id, new Error(event.message)));
           break;
         case 'done':
+          settleReply();
           setLines((previous) => previous.filter((line) => line.transient !== true));
           break;
       }
@@ -1719,6 +1743,14 @@ export function ChatPane({
             if (!message.data.inProgress) return;
             const current = streamRef.current;
             if (current !== undefined && !current.controller.signal.aborted) return;
+            // 前のストリームが終端を見ずに残した途中の返信行は、この再生が頭から
+            // 積み直すので捨てる（#2662。`unfinishedReplyRef` の doc）。
+            const stale = unfinishedReplyRef.current.get(id);
+            if (stale !== undefined) {
+              unfinishedReplyRef.current.delete(id);
+              setLines((previous) => previous.filter((line) => line.key !== stale));
+              setActiveReplyKey((key) => (key === stale ? undefined : key));
+            }
             stream = createStream(controller, id);
             streamRef.current = stream;
             pendingResumeRef.current = undefined;
