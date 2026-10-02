@@ -16,7 +16,7 @@
  */
 import { matchesJournalSearch } from '@alteroid/core/journal-search';
 
-import type { JournalEntry } from './types';
+import type { JournalEntry } from './types.js';
 
 /** ページ（1回の `GET /journal` 応答）を、既にある一覧の**先頭**へ差し込む。 */
 export interface MergeResult {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { usageHref } from './usage-links';
+import { usageHref } from './usage-links.js';
 
 describe('usageHref（issue #2077 / #2078）', () => {
   it('managerId だけ渡すと /usage?managerId=<id> になる', () => {

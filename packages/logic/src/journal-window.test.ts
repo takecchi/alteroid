@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { JournalEntry } from './types';
+import type { JournalEntry } from './types.js';
 
 import {
   applyInitialPage,
@@ -25,7 +25,7 @@ import {
   olderPageQuery,
   pageOutcome,
   shiftForPrepend,
-} from './journal-window';
+} from './journal-window.js';
 
 function entry(id: string, at: string, type: JournalEntry['type'] = 'decision'): JournalEntry {
   if (type === 'decision') {

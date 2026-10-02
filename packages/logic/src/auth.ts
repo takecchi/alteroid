@@ -103,6 +103,7 @@ export function storePendingLogin(pending: PendingLogin | null): void {
 
 /** この端末を人間が見分けるための名前（`alteroid access list` に並ぶ）。 */
 export function deviceLabel(): string {
-  const host = typeof location === 'undefined' ? 'web' : location.host;
+  // `location` を直に書かない。DOM の lib を持たない側（`apps/cli`）が型検査に載せても通すため（#2558）。
+  const host = (globalThis as { location?: { host: string } }).location?.host ?? 'web';
   return `Web UI (${host})`.slice(0, 200);
 }

@@ -15,7 +15,7 @@
 import { APPRAISAL_LABELS as CORE_APPRAISAL_LABELS } from '@alteroid/core';
 import { describe, expect, it } from 'vitest';
 
-import { APPRAISAL_LABELS } from './appraisal-labels';
+import { APPRAISAL_LABELS } from './appraisal-labels.js';
 
 describe('APPRAISAL_LABELS と @alteroid/core の APPRAISAL_LABELS の一致（issue #2164）', () => {
   const keys = Object.keys(CORE_APPRAISAL_LABELS) as (keyof typeof CORE_APPRAISAL_LABELS)[];

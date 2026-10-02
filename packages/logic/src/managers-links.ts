@@ -1,4 +1,4 @@
-import type { ManagerStatus } from './types';
+import type { ManagerStatus } from './types.js';
 
 /**
  * `/managers` への導線を組み立てる（issue #2090）。

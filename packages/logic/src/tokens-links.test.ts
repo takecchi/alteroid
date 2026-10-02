@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { tokensHref } from './tokens-links';
+import { tokensHref } from './tokens-links.js';
 
 describe('tokensHref（issue #2109）', () => {
   it('tokenId を渡すと /tokens?tokenId=<id> になる', () => {

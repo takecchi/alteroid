@@ -26,6 +26,7 @@
     "string-width": "catalog:"
   },
   "devDependencies": {
+    "@alteroid/logic": "workspace:*",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "tsup": "catalog:",

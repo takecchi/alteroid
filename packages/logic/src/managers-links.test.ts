@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { managersHref, STATUS_SEARCH_PARAM } from './managers-links';
+import { managersHref, STATUS_SEARCH_PARAM } from './managers-links.js';
 
 describe('managersHref（issue #2090）', () => {
   it('status を渡すと /managers?status=<値> になる', () => {

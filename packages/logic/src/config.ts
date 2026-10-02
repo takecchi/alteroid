@@ -1,3 +1,7 @@
+/// <reference types="vite/client" />
+// ↑ `import.meta.env`（`readBuildTime`）の型。`apps/cli`（lib に DOM も vite の型も持たない
+// NodeNext の世界）が `@alteroid/logic` を型検査に載せても通すため、参照を自分で持つ（#2558）。
+
 /**
  * 接続先（デーモンの所在）の決め方。
  *
