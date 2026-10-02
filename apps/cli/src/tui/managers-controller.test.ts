@@ -99,6 +99,32 @@ describe('一覧', () => {
     expect(state().list.filter).toBe('running');
     expect(state().list.items.map((m) => m.managerId)).toEqual(['r']);
   });
+
+  it('古い側を読んでいる最中に取り直しが走っても、読み込み中のまま止まらない', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.managerRows = Array.from({ length: 60 }, (_, i) => managerRow(`m${String(100 - i)}`));
+    });
+    await controller.loadList();
+    expect(state().list.older).toBe('progress');
+    const slow = gate();
+    const original = api.listManagers.bind(api);
+    let first = true;
+    api.listManagers = async (query) => {
+      if (query.after !== undefined && first) {
+        first = false;
+        await slow.wait;
+      }
+      return original(query);
+    };
+    const pending = controller.loadOlder();
+    await controller.refreshList(); // 読み足しの応答待ちの間に、journal の合図で取り直しが済む
+    slow.open();
+    await pending;
+    expect(state().list.olderLoading).toBe(false);
+    // 立ったままだと、ここでの読み足しが即 return して一覧が増えない。
+    await controller.loadOlder();
+    expect(state().list.items.length).toBeGreaterThan(MANAGERS_PAGE);
+  });
 });
 
 describe('詳細', () => {

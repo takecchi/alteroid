@@ -216,6 +216,8 @@ export class ManagersController {
             unreadable,
             selected,
             older: managers.length >= limit ? 'progress' : 'end',
+            // 読み足しの応答待ち中に取り直しが済むと、その応答は gen 違いで捨てられる。立てた印を残さない。
+            olderLoading: false,
             error: null,
             loadedAt: this.now(),
           },
@@ -223,7 +225,7 @@ export class ManagersController {
       });
     } catch (error) {
       if (gen !== this.listGen) return;
-      this.setList({ error: messageOf(error) });
+      this.setList({ error: messageOf(error), olderLoading: false });
     }
   }
 
