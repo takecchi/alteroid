@@ -215,15 +215,46 @@ export const Footer: FC<{ hint: string }> = ({ hint }) => (
   </Box>
 );
 
+/**
+ * 履歴の一覧の断り書き（文言は `conversations.ts` の `renderConversationsList` に揃える）。
+ * 窓が先頭に届いていないとき、0 件でも「会話はまだありません」とは言えない（判定できない）。
+ */
+export function conversationPickerNotes(
+  count: number,
+  scanned: number,
+  reachedStart: boolean,
+  hiddenByLimit: number,
+): string[] {
+  const notes: string[] = [];
+  if (!reachedStart) {
+    notes.push(
+      `人間との往復を ${String(scanned)} 件遡ったが、先頭には届いていない。これより古い会話が残っているかもしれない`,
+    );
+  }
+  if (hiddenByLimit > 0) {
+    notes.push(
+      `…ほか ${String(hiddenByLimit)} 件は省略（この窓に ${String(count + hiddenByLimit)} 件あり、新しい順に ${String(count)} 件だけ出した）`,
+    );
+  }
+  return notes;
+}
+
 /** 会話の履歴の選択。窓は選択行が見える範囲だけを描く。 */
 export const ConversationPicker: FC<{
   status: 'loading' | 'ready';
   items: readonly ConversationSummary[];
+  scanned: number;
+  reachedStart: boolean;
+  hiddenByLimit: number;
   selected: number;
   height: number;
   now: number;
-}> = ({ status, items, selected, height, now }) => {
-  const cap = Math.max(1, height - 1);
+}> = ({ status, items, scanned, reachedStart, hiddenByLimit, selected, height, now }) => {
+  const notes =
+    status === 'ready'
+      ? conversationPickerNotes(items.length, scanned, reachedStart, hiddenByLimit)
+      : [];
+  const cap = Math.max(1, height - 1 - notes.length);
   const start = Math.min(Math.max(0, selected - cap + 1), Math.max(0, items.length - cap));
   const shown = items.slice(start, start + cap);
   return (
@@ -233,7 +264,18 @@ export const ConversationPicker: FC<{
           ? '会話の履歴を読んでいる…'
           : `会話の履歴（${String(items.length)} 件）`}
       </Text>
-      {status === 'ready' && items.length === 0 ? <Text dimColor>会話はまだありません</Text> : null}
+      {status === 'ready' && items.length === 0 ? (
+        <Text dimColor wrap="truncate-end">
+          {reachedStart
+            ? '会話はまだありません'
+            : '会話があるかどうか判定できない（窓の外にあるかもしれない）'}
+        </Text>
+      ) : null}
+      {notes.map((note) => (
+        <Text key={note} dimColor wrap="truncate-end">
+          {note}
+        </Text>
+      ))}
       {shown.map((item, i) => {
         const index = start + i;
         const preview = item.preview.replace(/\s+/g, ' ').slice(0, 120);

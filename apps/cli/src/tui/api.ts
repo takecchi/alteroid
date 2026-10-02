@@ -28,6 +28,14 @@ export type ChatEvent =
   | { type: 'error'; message: string }
   | { type: 'done' };
 
+/** `GET /conversations` の応答のうち、画面が使う欄（既存の CLI の `conversations` と同じ）。 */
+export interface ConversationList {
+  conversations: ConversationSummary[];
+  scanned: number;
+  reachedStart: boolean;
+  hiddenByLimit: number;
+}
+
 export interface ConversationSummary {
   conversationId: string;
   startedAt: string;
@@ -177,7 +185,11 @@ export interface TuiApi {
     input: { text: string; conversationId?: string },
     signal: AbortSignal,
   ): AsyncGenerator<ChatEvent>;
-  listConversations(): Promise<ConversationSummary[]>;
+  /**
+   * 履歴の一覧。`reachedStart` が偽なら、窓（`scanned` 件の往復）の外に古い会話が残っているかもしれない
+   * （一覧が空でも「無い」とは言えない）。`hiddenByLimit` は窓の中で上限に収まらず省いた会話の数。
+   */
+  listConversations(): Promise<ConversationList>;
   /**
    * `null` は 404（遡り切れた上で「無い」）。`reachedStart` が偽なら、窓の外に続き（古い発言）が
    * 残っているかもしれない。`messages` が空でこれが偽のときは「無い」ではなく**判定できない**。
@@ -303,7 +315,8 @@ export function createTuiApi(target: Target): TuiApi {
     async listConversations() {
       const response = await client.conversations.$get({ query: {} });
       if (!response.ok) throw await failure('会話の一覧を読めませんでした', response);
-      return (await response.json()).conversations;
+      const { conversations, scanned, reachedStart, hiddenByLimit } = await response.json();
+      return { conversations, scanned, reachedStart, hiddenByLimit };
     },
 
     async readConversation(id) {

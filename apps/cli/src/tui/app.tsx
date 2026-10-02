@@ -113,6 +113,10 @@ function padRows(rows: DisplayLine[], height: number): DisplayLine[] {
 interface PickerState {
   status: 'loading' | 'ready';
   items: readonly ConversationSummary[];
+  /** 窓の見え方（読み終えるまでは「届いた」「省略なし」の既定）。 */
+  scanned: number;
+  reachedStart: boolean;
+  hiddenByLimit: number;
   selected: number;
   /** 一覧を読んだ時刻（「何分前」の基準。描画のたびに時刻を読まない）。 */
   loadedAt: number;
@@ -252,10 +256,30 @@ export const App: FC<AppProps> = ({
   };
 
   const openPicker = (): void => {
-    setPicker({ status: 'loading', items: [], selected: 0, loadedAt: 0 });
+    setPicker({
+      status: 'loading',
+      items: [],
+      scanned: 0,
+      reachedStart: true,
+      hiddenByLimit: 0,
+      selected: 0,
+      loadedAt: 0,
+    });
     controller.listConversations().then(
-      ({ items, at }) =>
-        setPicker((p) => (p === null ? p : { status: 'ready', items, selected: 0, loadedAt: at })),
+      ({ items, at, scanned, reachedStart, hiddenByLimit }) =>
+        setPicker((p) =>
+          p === null
+            ? p
+            : {
+                status: 'ready',
+                items,
+                scanned,
+                reachedStart,
+                hiddenByLimit,
+                selected: 0,
+                loadedAt: at,
+              },
+        ),
       (error: unknown) => {
         setPicker(null);
         controller.addError(error instanceof Error ? error.message : String(error));
@@ -880,6 +904,9 @@ export const App: FC<AppProps> = ({
         <ConversationPicker
           status={picker.status}
           items={picker.items}
+          scanned={picker.scanned}
+          reachedStart={picker.reachedStart}
+          hiddenByLimit={picker.hiddenByLimit}
           selected={picker.selected}
           height={layout.bodyHeight}
           now={picker.loadedAt}

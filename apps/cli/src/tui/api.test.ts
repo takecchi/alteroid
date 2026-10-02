@@ -155,7 +155,9 @@ describe('JSON の口（hono/client）', () => {
         hiddenByLimit: 0,
       }),
     );
-    expect((await api.listConversations()).map((c) => c.conversationId)).toEqual(['c1']);
+    const list = await api.listConversations();
+    expect(list.conversations.map((c) => c.conversationId)).toEqual(['c1']);
+    expect(list).toMatchObject({ scanned: 1, reachedStart: true, hiddenByLimit: 0 }); // #2585
     expect(sent[0]?.url).toContain('/conversations');
 
     replies.push(

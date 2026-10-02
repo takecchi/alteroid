@@ -248,9 +248,16 @@ export class ChatController {
   }
 
   /** 履歴の一覧。`at` は読んだ時刻（「何分前」の基準）。 */
-  async listConversations(): Promise<{ items: ConversationSummary[]; at: number }> {
-    const items = await this.api.listConversations();
-    return { items, at: Date.now() };
+  async listConversations(): Promise<{
+    items: ConversationSummary[];
+    at: number;
+    scanned: number;
+    reachedStart: boolean;
+    hiddenByLimit: number;
+  }> {
+    const { conversations, scanned, reachedStart, hiddenByLimit } =
+      await this.api.listConversations();
+    return { items: conversations, at: Date.now(), scanned, reachedStart, hiddenByLimit };
   }
 
   /** 履歴の会話を開き直す。 */

@@ -1299,3 +1299,71 @@ describe('承認待ち（一覧と詳細・答える）', () => {
     expect(h.exited()).toBe(false);
   });
 });
+
+describe('履歴の選択の断り書き（#2585）', () => {
+  const summary = (id: string) => ({
+    conversationId: id,
+    startedAt: 's',
+    updatedAt: new Date().toISOString(),
+    messages: 2,
+    preview: `話 ${id}`,
+  });
+  const open = async (h: Harness): Promise<void> => {
+    await type(h.stdin, '/conversations');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('会話の履歴（'));
+  };
+
+  it('先頭に届いていなければ、そう断る', async () => {
+    const h = start((api) => {
+      api.listConversations = () =>
+        Promise.resolve({
+          conversations: [summary('c1')],
+          scanned: 2000,
+          reachedStart: false,
+          hiddenByLimit: 0,
+        });
+    });
+    await open(h);
+    expect(h.frame()).toContain('2000 件遡ったが、先頭には届いていない');
+    expect(h.frame()).not.toContain('ほか');
+  });
+
+  it('上限で省いた会話があれば、件数を言う', async () => {
+    const h = start((api) => {
+      api.listConversations = () =>
+        Promise.resolve({
+          conversations: [summary('c1')],
+          scanned: 50,
+          reachedStart: true,
+          hiddenByLimit: 7,
+        });
+    });
+    await open(h);
+    expect(h.frame()).toContain('…ほか 7 件は省略');
+    expect(h.frame()).not.toContain('先頭には届いていない');
+  });
+
+  it('0 件でも先頭に届いていなければ「会話はまだありません」とは言わず、判定できないと言う', async () => {
+    const h = start((api) => {
+      api.listConversations = () =>
+        Promise.resolve({
+          conversations: [],
+          scanned: 2000,
+          reachedStart: false,
+          hiddenByLimit: 0,
+        });
+    });
+    await open(h);
+    expect(h.frame()).not.toContain('会話はまだありません');
+    expect(h.frame()).toContain('判定できない');
+    expect(h.frame()).toContain('先頭には届いていない');
+  });
+
+  it('0 件で先頭まで届いていれば「会話はまだありません」', async () => {
+    const h = start();
+    await open(h);
+    expect(h.frame()).toContain('会話はまだありません');
+    expect(h.frame()).not.toContain('先頭には届いていない');
+  });
+});

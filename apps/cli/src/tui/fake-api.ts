@@ -159,7 +159,12 @@ export function fakeApi(): FakeApi {
       }
     },
     listConversations() {
-      return Promise.resolve(api.conversations);
+      return Promise.resolve({
+        conversations: api.conversations,
+        scanned: api.conversations.length,
+        reachedStart: true,
+        hiddenByLimit: 0,
+      });
     },
     readConversation(id) {
       const messages = api.messages[id];
