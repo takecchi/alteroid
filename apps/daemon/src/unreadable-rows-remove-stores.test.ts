@@ -156,6 +156,8 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
       expect(ids).toContain('grant-good');
       expect((await h.store.get('grant-good'))?.id).toBe('grant-good');
     },
+    // pg 実装は1本ごとに PGlite を起こす。CPU が詰まると既定の 5 秒を超える（#2650）。
+    30_000,
   );
 
   it.each(implementations)(
@@ -180,6 +182,8 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
       expect(called).toBe(false);
       expect(await h.rawIds()).toEqual(before);
     },
+    // pg 実装は1本ごとに PGlite を起こす。CPU が詰まると既定の 5 秒を超える（#2650）。
+    30_000,
   );
 
   it.each(implementations)(
@@ -200,6 +204,8 @@ describe('PermissionGrantStore.removeUnreadable()（fs / pg。issue #2440）', (
 
       expect(await h.rawIds()).toEqual(before);
     },
+    // pg 実装は1本ごとに PGlite を起こす。CPU が詰まると既定の 5 秒を超える（#2650）。
+    30_000,
   );
 });
 
