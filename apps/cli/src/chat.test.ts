@@ -1,5 +1,6 @@
 import {
   appraisalSchema,
+  describeReportDriftMark,
   describeToolUseStall,
   describeTurnEnd,
   describeUnobservedOutcome,
@@ -971,6 +972,56 @@ describe('renderManagerList', () => {
       const expected = describeUnobservedOutcome(lost);
       expect(expected).not.toBeNull();
       expect(renderManagerList([lost])).toContain(expected);
+    });
+  });
+
+  /**
+   * **Issue #2432: GET /managers が返す `lastReportStatus` を CLI が出していなかった。**
+   * 判定も字面も core の `manager_list` と同じ関数（`describeReportDriftMark`）を呼ぶ。
+   * `now` は引数で固定する。
+   */
+  describe('Issue #2432: manager_list と同じ ⚠ status 食い違い（lastReportStatus）', () => {
+    const now = new Date('2026-09-30T01:00:00.000Z');
+    const drifted = manager({
+      status: 'running',
+      lastReport: '途中経過',
+      lastReportAt: '2026-09-30T00:00:00.000Z',
+      lastReportStatus: 'waiting_human',
+    });
+
+    it('報告が名乗った status と今の status が違えば、core の関数の戻り値と同じ印を出す', () => {
+      const expected = describeReportDriftMark(drifted, now);
+      expect(expected).toBe('⚠ status 食い違い（manager_report で詳細）');
+      const text = renderManagerList([drifted], undefined, [], now);
+      expect(text).toContain(expected);
+    });
+
+    it('印は直近の報告の行より後に出る', () => {
+      const text = renderManagerList([drifted], undefined, [], now);
+      expect(text).toContain('直近の報告: 途中経過');
+      expect(text).toContain('⚠ status 食い違い');
+      expect(text.indexOf('直近の報告')).toBeLessThan(text.indexOf('⚠ status 食い違い'));
+    });
+
+    it('食い違いが無ければ出さない', () => {
+      const text = renderManagerList(
+        [manager({ ...drifted, lastReportStatus: 'running' })],
+        undefined,
+        [],
+        now,
+      );
+      expect(text).not.toContain('status 食い違い');
+    });
+
+    it('欄が無い（古い daemon）なら、何も出さない・0 も「無い」も書かない', () => {
+      const text = renderManagerList(
+        [manager({ lastReport: '途中経過', lastReportAt: '2026-09-30T00:00:00.000Z' })],
+        undefined,
+        [],
+        now,
+      );
+      expect(text).not.toContain('食い違い');
+      expect(text).not.toContain('lastReportStatus');
     });
   });
 

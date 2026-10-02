@@ -10,6 +10,7 @@ import {
   describeDenialFollowUp,
   describeManagerState,
   describeQuestionLines,
+  describeReportDriftMark,
   describeSessionMissingKind,
   describeToolUseStall,
   describeTurnEnd,
@@ -2660,6 +2661,7 @@ export function renderManagerList(
   managers: ManagerListItem[],
   status?: string,
   unreadable: readonly UnreadableJob[] = [],
+  now: Date = new Date(),
 ): string {
   if (managers.length === 0) {
     // **読めない行が在るときは「居ない」と言わない**（issue #2345）。読めない行は状態も
@@ -2866,6 +2868,13 @@ export function renderManagerList(
       const label = isFoldedTurnReport(manager) ? '直近のターンの中身' : '直近の報告';
       lines.push(`      ${label}: ${summarizeText(manager.lastReport)}`);
     }
+    // **Issue #2432**: 受信した報告の status と、いまの status の食い違い。判定も字面も
+    // `manager_list` の「（… 受信、⚠ status 食い違い）」と同じ関数（`describeReportDriftMark`）
+    // から取る。CLI の報告の行には受信時刻が無く、足すと既存の行の形が変わるので、
+    // 印だけを報告の行の直後に別の行で出す。`now` は引数（テストで固定する）。
+    // 食い違いが無い・欄が無い（古い daemon）ときは `null` で、何も出さない。
+    const reportDrift = describeReportDriftMark(manager, now);
+    if (reportDrift !== null) lines.push(`      ${reportDrift}`);
     // **Issue #2428**: ターン終了の報告漏れ（`describeTurnEnd`）と、道具の応答待ちの
     // 矛盾／実行中（`describeToolUseStall`）。**判定も字面も `manager_list`
     // （`packages/core/src/tools.ts`）と同じ関数を呼ぶ**——ここで組み直さない。

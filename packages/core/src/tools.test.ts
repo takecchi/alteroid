@@ -7138,6 +7138,8 @@ describe('クローンの道具', () => {
       withDrift.split('\n').length,
     );
     expect(withDrift).toContain('⚠');
+    // 印の字面と前置き（`、`）は `describeReportDriftMark` へ切り出した後も変わらない（#2432）。
+    expect(withDrift).toContain('、⚠ status 食い違い（manager_report で詳細）');
     expect(clean, '一致している回は1文字も増えない').not.toContain('⚠');
   });
 
