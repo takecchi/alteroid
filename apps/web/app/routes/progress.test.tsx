@@ -446,7 +446,66 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       );
       expect(backlog.getByText(/観測者 clone/)).toBeTruthy();
       expect(backlog.getByText(/gh issue list --state open \/ limit 100/)).toBeTruthy();
-      expect(backlog.queryByText(/観測していない（0 件ではない）/)).toBeNull();
+      // GitHub 全体が未観測のときの文言（句点で終わる）。CI の軸の「観測していない（0 件ではない）」とは別
+      expect(backlog.queryByText(/観測していない（0 件ではない）。/)).toBeNull();
+    });
+
+    it('CI: ci があれば内訳と数えたもの、ciUnavailable は理由、無ければ「観測していない」。0 と読ませない（#2549）', async () => {
+      const render = async (extra: Record<string, unknown>) => {
+        stubProgress({
+          body: baseBody({
+            github: {
+              state: 'observed',
+              repos: [
+                { repo: 'x/y', latestOk: { ...okRow.latestOk, ...extra }, latestFailed: null },
+              ],
+              scan: { limit: 500, reachedLimit: false },
+            },
+          }),
+        });
+        renderPage();
+        return within(await card('積み上がり'));
+      };
+      const view = await render({
+        ci: { pulls: 3, success: 2, failure: 1, pending: 0, checks: '必須チェックだけ' },
+      });
+      const text = view.getByText(/3 件の PR を確認/).textContent ?? '';
+      expect(text).toContain('success 2 / failure 1 / pending 0');
+      expect(text).toContain('必須チェックだけ');
+    });
+
+    it('CI: ciUnavailable は理由を出し、ci が無ければ観測していないと出す（success 0 を作らない）', async () => {
+      stubProgress({
+        body: baseBody({
+          github: {
+            state: 'observed',
+            repos: [
+              {
+                repo: 'x/y',
+                latestOk: { ...okRow.latestOk, ciUnavailable: 'HTTP 403' },
+                latestFailed: null,
+              },
+            ],
+            scan: { limit: 500, reachedLimit: false },
+          },
+        }),
+      });
+      renderPage();
+      const view = within(await card('積み上がり'));
+      expect(view.getByText(/取れなかった — HTTP 403/)).toBeTruthy();
+      expect(view.queryByText(/success/)).toBeNull();
+    });
+
+    it('CI: ci も ciUnavailable も無い古い行は「観測していない」で、success 0 を作らない', async () => {
+      stubProgress({
+        body: baseBody({
+          github: { state: 'observed', repos: [okRow], scan: { limit: 500, reachedLimit: false } },
+        }),
+      });
+      renderPage();
+      const view = within(await card('積み上がり'));
+      expect(view.getByText(/観測していない（0 件ではない）/)).toBeTruthy();
+      expect(view.queryByText(/success/)).toBeNull();
     });
 
     it('取れなかった回は数を作らず理由を出す。成功が無い repo の数は — で、0 と書かない', async () => {

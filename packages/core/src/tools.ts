@@ -111,6 +111,7 @@ import {
   readProgress,
 } from './progress-read.js';
 import { describeProgress } from './progress-describe.js';
+import { describeGithubCi } from './progress-github.js';
 import {
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
   ARCHIVE_REMOVE_MANY_LIMIT_DEFAULT,
@@ -8458,6 +8459,9 @@ export function createCloneTools(context: ToolContext) {
         '**取れなかった回は数を作らない。** `result: { status: "failed", reason }` で、取れなかったことと理由を記録する（0 件と書かない）。',
         '`query` には**母集合を切った引数を含める**（例: `gh issue list --state open --limit 200`）。`limit` を付けたなら `limit` にも同じ値を入れ、',
         '件数が `limit` に達したときは `truncated: true`（数は下限）にする。',
+        '**CI の数え方**: ok のとき、open PR の CI を見たなら `result.ci: { pulls, success, failure, pending, checks }` を付ける（`pulls` は CI を見た PR の数。1つの PR は success / failure / pending のどれか1つに数え、チェックが1件も無い PR はどれにも数えない。3つの和は `pulls` 以下）。',
+        '**何を数えたかを `checks` に書く**（例「必須チェックだけ」・check の名前の列挙。500字まで）。`query` が母集合の切り方を持つのと同じで、これが無いと数は読めない。打ち切ったら `ci.truncated: true`。',
+        '**CI を取れなかったら `ci` を置かず `result.ciUnavailable` に理由を書く**（`ci` と同時には置けない。0 を書かない）。CI を見ていないなら両方とも省く（読み手には「観測していない」と出る）。',
         '観測者はあなた（clone）として器が記録する（引数では指定できない）。いつ観測するかはここでは決まらない。',
       ].join(' '),
       {
@@ -8468,7 +8472,7 @@ export function createCloneTools(context: ToolContext) {
         limit:
           githubObservationInputSchema.shape.limit.describe('母集合を切った件数の上限（あれば）'),
         result: githubObservationInputSchema.shape.result.describe(
-          '観測の結果。ok のときだけ件数（openIssues / openPulls / truncated）、取れなかったときは failed と reason（数は持たない）',
+          '観測の結果。ok のときだけ件数（openIssues / openPulls / truncated と、任意で ci または ciUnavailable）、取れなかったときは failed と reason（数は持たない）',
         ),
       },
       async (args) => {
@@ -14394,6 +14398,7 @@ function renderJournalEntry(entry: JournalEntry): { head: string; body: string }
             body:
               `open Issue ${entry.result.openIssues} 件 / open PR ${entry.result.openPulls} 件` +
               (entry.result.truncated ? '（limit に達した。実数はこれ以上）' : '') +
+              `\n${describeGithubCi(entry.result)}` +
               `\n${scope}`,
           }
         : { head, body: `取れなかった: ${entry.result.reason}\n${scope}` };

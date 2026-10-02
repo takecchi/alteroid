@@ -316,10 +316,12 @@ export {
 export type { ProgressView, ReadProgressOptions } from './progress-read.js';
 export {
   GITHUB_OBSERVATION_SCAN_LIMIT,
+  describeGithubCi,
   PROGRESS_GITHUB_NOT_OBSERVED,
   summarizeGithubObservations,
 } from './progress-github.js';
 export type {
+  GithubObservationCi,
   GithubObservationFailed,
   GithubObservationOk,
   GithubRepoObservation,

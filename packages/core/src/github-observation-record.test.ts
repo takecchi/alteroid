@@ -120,3 +120,85 @@ describe('github_observation_record（#2245 段2）', () => {
     expect((await readProgress(stores, { now: new Date() })).github.state).toBe('not_observed');
   });
 });
+
+describe('github_observation の CI の軸（#2549）', () => {
+  const CI = {
+    pulls: 5,
+    success: 3,
+    failure: 1,
+    pending: 1,
+    checks: '必須チェックだけ（test / lint）',
+  };
+
+  it('説明文に、checks へ何を数えたか書くこと・取れなければ ciUnavailable と書くことがある', () => {
+    const { found } = recordTool(createMemoryStores());
+    expect(found.description).toContain('`checks` に書く');
+    expect(found.description).toContain('ciUnavailable');
+  });
+
+  it('ok と ci あり: 日誌へ記録され、/progress が ci を返す', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    expect(await call({ repo: 'a/b', query: 'q', result: { ...OK, ci: CI } })).toContain(
+      '記録した',
+    );
+    const [row] = await stores.journal.list({ types: ['github_observation'] });
+    expect(row).toMatchObject({ result: { ci: CI } });
+    const view = await readProgress(stores, { now: new Date() });
+    if (view.github.state !== 'observed') throw new Error('observed のはず');
+    expect(view.github.repos[0]!.latestOk).toMatchObject({ ci: CI });
+  });
+
+  it('ok と ci なし（古い行）: そのまま読め、ci も ciUnavailable も作られない（0 を作らない）', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    await call({ repo: 'a/b', query: 'q', result: OK });
+    const view = await readProgress(stores, { now: new Date() });
+    if (view.github.state !== 'observed') throw new Error('observed のはず');
+    const latest = view.github.repos[0]!.latestOk!;
+    expect(latest.openIssues).toBe(12);
+    expect('ci' in latest).toBe(false);
+    expect('ciUnavailable' in latest).toBe(false);
+  });
+
+  it('ciUnavailable あり: 理由が残り、ci は無い', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    await call({
+      repo: 'a/b',
+      query: 'q',
+      result: { ...OK, ciUnavailable: 'gh: check-runs が 403' },
+    });
+    const view = await readProgress(stores, { now: new Date() });
+    if (view.github.state !== 'observed') throw new Error('observed のはず');
+    const latest = view.github.repos[0]!.latestOk!;
+    expect(latest.ciUnavailable).toBe('gh: check-runs が 403');
+    expect('ci' in latest).toBe(false);
+  });
+
+  it.each([
+    ['ci と ciUnavailable が両方ある', { ...OK, ci: CI, ciUnavailable: '取れなかった' }],
+    ['ci の和が pulls を超える', { ...OK, ci: { ...CI, pulls: 2 } }],
+    ['checks が空', { ...OK, ci: { ...CI, checks: '' } }],
+    ['checks が長すぎる', { ...OK, ci: { ...CI, checks: 'x'.repeat(501) } }],
+    ['ci の数が負', { ...OK, ci: { ...CI, failure: -1 } }],
+    ['ciUnavailable が空', { ...OK, ciUnavailable: '' }],
+  ])('不正（%s）は記録しない', async (_name, result) => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    expect(await call({ repo: 'a/b', query: 'q', result })).toContain('記録していない');
+    expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+  });
+
+  it('failed に ci / ciUnavailable を混ぜても日誌には入らない', async () => {
+    const stores = createMemoryStores();
+    const { call } = recordTool(stores);
+    await call({
+      repo: 'a/b',
+      query: 'q',
+      result: { status: 'failed', reason: 'gh: HTTP 502', ci: CI, ciUnavailable: 'x' },
+    });
+    const [row] = await stores.journal.list({ types: ['github_observation'] });
+    expect(JSON.stringify(row)).not.toMatch(/"ci"|ciUnavailable|必須チェック/);
+  });
+});

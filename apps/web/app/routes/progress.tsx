@@ -218,6 +218,7 @@ function GithubBlock({ github, observedAt }: { github: Progress['github']; obser
                         : ` / limit ${count(row.latestOk.limit)}`) +
                       (row.latestOk.truncated ? '（limit に達した。数は下限）' : ''),
                   },
+                  { label: 'CI', value: ciText(row.latestOk) },
                 ]}
                 labelWidth="8rem"
               />
@@ -475,4 +476,33 @@ function BasisList({ basis }: { basis: ProgressForecastBasis }) {
       )}
     </div>
   );
+}
+
+/**
+ * 成功した観測の CI の軸（#2549）。**`ci` が無いことは「観測していない」と出す**——`success 0` とは書かない。
+ * `describeGithubCi`（core）と同じ文言。
+ */
+function ciText(ok: {
+  ci?: {
+    pulls: number;
+    success: number;
+    failure: number;
+    pending: number;
+    checks: string;
+    truncated?: boolean;
+  };
+  ciUnavailable?: string;
+}): string {
+  if (ok.ci !== undefined) {
+    const ci = ok.ci;
+    const counted = ci.success + ci.failure + ci.pending;
+    return (
+      `${count(ci.pulls)} 件の PR を確認 — success ${count(ci.success)} / failure ${count(ci.failure)} / pending ${count(ci.pending)}` +
+      (counted < ci.pulls ? `（チェックが無い等で未集計 ${count(ci.pulls - counted)} 件）` : '') +
+      `（数えたもの: ${ci.checks}）` +
+      (ci.truncated === true ? '（打ち切り。数は下限）' : '')
+    );
+  }
+  if (ok.ciUnavailable !== undefined) return `取れなかった — ${ok.ciUnavailable}（0 件ではない）`;
+  return '観測していない（0 件ではない）';
 }

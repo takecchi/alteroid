@@ -2096,6 +2096,17 @@ const githubObservationOkSchema = z.object({
   openIssues: progressCount,
   openPulls: progressCount,
   truncated: z.boolean(),
+  ci: z
+    .object({
+      pulls: progressCount,
+      success: progressCount,
+      failure: progressCount,
+      pending: progressCount,
+      checks: z.string(),
+      truncated: z.boolean().optional(),
+    })
+    .optional(),
+  ciUnavailable: z.string().optional(),
 });
 const githubObservationFailedSchema = z.object({
   ...githubObservationBaseShape,

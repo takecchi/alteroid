@@ -2371,7 +2371,7 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
    *   `truncated` が真なら `limit` に達しており、実数はもっと多い（数は下限）。
    *
    * **古さは判定しない。** `at`（デーモンが受けた時刻）をそのまま返し、新しさの判断は読み手に任せる。
-   * CI の状態は後の回で `ok` の枝へ足す。
+   * CI の状態は `ok` の枝の `ci`（取れなければ `ciUnavailable`。排他）が持つ（#2549）。
    */
   z.object({
     type: z.literal('github_observation'),
@@ -2382,12 +2382,48 @@ export const journalEntrySchema = z.discriminatedUnion('type', [
     query: z.string().max(1000),
     limit: z.number().int().positive().optional(),
     result: z.discriminatedUnion('status', [
-      z.object({
-        status: z.literal('ok'),
-        openIssues: z.number().int().nonnegative(),
-        openPulls: z.number().int().nonnegative(),
-        truncated: z.boolean(),
-      }),
+      z
+        .object({
+          status: z.literal('ok'),
+          openIssues: z.number().int().nonnegative(),
+          openPulls: z.number().int().nonnegative(),
+          truncated: z.boolean(),
+          /**
+           * **PR の CI の状態の軸**（Issue #2549。#2245 の後続）。**任意**——この欄が増える前に書かれた
+           * 行には無く、必須にすると既存の行が読み出し時に丸ごと落ちる（`inbox_flow.retained` と同じ
+           * 理由）。**無いことは「CI を観測していない」であって「0 件だった」ではない。`default` で
+           * 埋めない。**
+           *
+           * - `pulls`: CI を見た PR の数（open PR の総数 `openPulls` とは別。見ていない PR がありうる）
+           * - `success` / `failure` / `pending`: その PR を CI の状態で分けた数。**1つの PR は高々1つの
+           *   欄に数える**（チェックが1件も無い PR はどれにも数えない）ので、3つの和は `pulls` 以下
+           * - `checks`: **何を数えたか**（例「必須チェックだけ」・check の名前の列挙）。これが無いと
+           *   数は読めない（`query` が母集合の切り方を持つのと同じ）。上限付き
+           * - `truncated`: 真なら上限で打ち切っており、数は下限
+           */
+          ci: z
+            .object({
+              pulls: z.number().int().nonnegative(),
+              success: z.number().int().nonnegative(),
+              failure: z.number().int().nonnegative(),
+              pending: z.number().int().nonnegative(),
+              checks: z.string().min(1).max(500),
+              truncated: z.boolean().optional(),
+            })
+            .refine((ci) => ci.success + ci.failure + ci.pending <= ci.pulls, {
+              message: 'success + failure + pending は pulls 以下でなければならない',
+            })
+            .optional(),
+          /**
+           * CI を取れなかった理由（観測した側の申告）。**`ci` と排他**——取れなかったのに数を置くと
+           * 0 を作ることになり、両方あれば読み手はどちらを信じるか決められない。
+           */
+          ciUnavailable: z.string().min(1).max(1000).optional(),
+        })
+        .refine((result) => result.ci === undefined || result.ciUnavailable === undefined, {
+          message: '`ci` と `ciUnavailable` は同時に置けない',
+          path: ['ciUnavailable'],
+        }),
       z.object({ status: z.literal('failed'), reason: z.string().min(1).max(1000) }),
     ]),
   }),

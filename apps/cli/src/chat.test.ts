@@ -3494,6 +3494,50 @@ describe('chat の /journal', () => {
       expect(failedLine).not.toMatch(/open Issue|open PR/);
     });
 
+    it('github_observation の CI: ci があれば内訳、ciUnavailable は理由、無ければ「観測していない」。0 と読ませない（#2549）', async () => {
+      const read = captureStdout();
+      const base = { type: 'github_observation', observedBy: 'clone', query: 'q' };
+      const okR = { status: 'ok', openIssues: 1, openPulls: 2, truncated: false };
+      const { client } = stubClient({
+        journalEntries: [
+          {
+            ...base,
+            id: 'j-ci1',
+            at: '2026-09-01T00:00:00.000Z',
+            repo: 'a/withci',
+            result: {
+              ...okR,
+              ci: { pulls: 2, success: 1, failure: 1, pending: 0, checks: '必須チェックだけ' },
+            },
+          },
+          {
+            ...base,
+            id: 'j-ci2',
+            at: '2026-09-01T00:01:00.000Z',
+            repo: 'a/unavail',
+            result: { ...okR, ciUnavailable: 'HTTP 403' },
+          },
+          {
+            ...base,
+            id: 'j-ci3',
+            at: '2026-09-01T00:02:00.000Z',
+            repo: 'a/old',
+            result: okR,
+          },
+        ],
+      });
+
+      await runSlashCommand('/journal', client, emptyListed());
+
+      const lines = read().split('\n');
+      const line = (repo: string) => lines.find((l) => l.includes(repo)) ?? '';
+      expect(line('a/withci')).toContain('success 1 / failure 1 / pending 0');
+      expect(line('a/withci')).toContain('必須チェックだけ');
+      expect(line('a/unavail')).toContain('CI: 取れなかった — HTTP 403');
+      expect(line('a/old')).toContain('CI: 観測していない');
+      expect(line('a/old')).not.toMatch(/success|failure|pending/);
+    });
+
     /**
      * **陰性**: 4種を直す変更が、既に空欄ではなかった既存の種別の要約を
      * 変えていないこと。`escalation` は `question` キーの duck typing で

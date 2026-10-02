@@ -11,6 +11,7 @@
  * Node 専用のものは持ち込まない（web 向けバンドルに載りうる）。
  */
 import { formatElapsedAgo } from './format-elapsed.js';
+import { describeGithubCi } from './progress-github.js';
 import type { ProgressView } from './progress-read.js';
 
 const NONE = '—';
@@ -157,6 +158,7 @@ export function describeProgress(view: ProgressViewInput): string {
           `    観測: ${at(ok.observedAt, now)} 観測者 ${ok.observedBy} / 母集合 ${ok.query}` +
             (ok.limit === undefined ? '' : ` / limit ${String(ok.limit)}`),
         );
+        lines.push(`    ${describeGithubCi(ok)}`);
       } else {
         lines.push(
           github.scan.reachedLimit

@@ -7449,6 +7449,64 @@ describe('POST /github-observations（#2245 段1）', () => {
     expect(body.repos![0]!.latestOk).toMatchObject({ openIssues: 0, openPulls: 0 });
   });
 
+  describe('CI の軸（#2549）', () => {
+    const ciResult = (extra: Record<string, unknown>) => ({
+      status: 'ok',
+      openIssues: 1,
+      openPulls: 2,
+      truncated: false,
+      ...extra,
+    });
+    const ci = { pulls: 2, success: 1, failure: 1, pending: 0, checks: '必須チェックだけ' };
+
+    it('ci あり: 受けて、/progress が ci を返す', async () => {
+      const response = await app.request(
+        '/github-observations',
+        json(okBody({ result: ciResult({ ci }) })),
+      );
+      expect(response.status).toBe(200);
+      expect((await github()).repos![0]!.latestOk).toMatchObject({ ci });
+    });
+
+    it('ci なし（古い形）: 受けて、/progress の行に ci も ciUnavailable も作らない', async () => {
+      await app.request('/github-observations', json(okBody()));
+      const latest = (await github()).repos![0]!.latestOk!;
+      expect(latest).not.toHaveProperty('ci');
+      expect(latest).not.toHaveProperty('ciUnavailable');
+    });
+
+    it('ciUnavailable あり: 受けて理由を返し、ci は無い', async () => {
+      await app.request(
+        '/github-observations',
+        json(okBody({ result: ciResult({ ciUnavailable: 'HTTP 403' }) })),
+      );
+      const latest = (await github()).repos![0]!.latestOk!;
+      expect(latest).toMatchObject({ ciUnavailable: 'HTTP 403' });
+      expect(latest).not.toHaveProperty('ci');
+    });
+
+    it('ci と ciUnavailable が両方あれば 400 で、日誌に書かない', async () => {
+      const response = await app.request(
+        '/github-observations',
+        json(okBody({ result: ciResult({ ci, ciUnavailable: 'x' }) })),
+      );
+      expect(response.status).toBe(400);
+      expect(await stores.journal.list({ types: ['github_observation'] })).toEqual([]);
+    });
+
+    it('failed に ci を混ぜても、日誌にも /progress にも出ない', async () => {
+      await app.request(
+        '/github-observations',
+        json(failedBody({ result: { status: 'failed', reason: 'gh: HTTP 502', ci } })),
+      );
+      const row = (await github()).repos![0]!;
+      expect(JSON.stringify(row)).not.toContain('必須チェック');
+      expect(
+        JSON.stringify(await stores.journal.list({ types: ['github_observation'] })),
+      ).not.toContain('"ci"');
+    });
+  });
+
   it('取れなかった回は数を作らない。直前の成功の数も失敗の回へ写さず、両方を別々に返す', async () => {
     await app.request('/github-observations', json(okBody()));
     await app.request('/github-observations', json(failedBody()));

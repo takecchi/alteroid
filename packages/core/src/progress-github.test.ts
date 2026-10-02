@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { describeProgress } from './progress-describe.js';
 import {
   GITHUB_OBSERVATION_SCAN_LIMIT,
+  describeGithubCi,
   PROGRESS_GITHUB_NOT_OBSERVED,
   summarizeGithubObservations,
 } from './progress-github.js';
@@ -172,5 +173,54 @@ describe('readProgress / describeProgress の github（#2245 段1）', () => {
     expect(text).toContain('gh: HTTP 502');
     expect(text).not.toContain('GitHub: 観測していない');
     expect(text).not.toContain('%');
+  });
+});
+
+describe('describeGithubCi（#2549）', () => {
+  it('ci があれば内訳と、何を数えたかを出す', () => {
+    const text = describeGithubCi({
+      ci: { pulls: 5, success: 3, failure: 1, pending: 0, checks: '必須チェックだけ' },
+    });
+    expect(text).toContain('5 件の PR を確認');
+    expect(text).toContain('success 3 / failure 1 / pending 0');
+    expect(text).toContain('必須チェックだけ');
+    expect(text).toContain('未集計 1 件');
+  });
+
+  it('打ち切りは下限と書く', () => {
+    expect(
+      describeGithubCi({
+        ci: { pulls: 1, success: 1, failure: 0, pending: 0, checks: 'x', truncated: true },
+      }),
+    ).toContain('下限');
+  });
+
+  it('ci が無ければ「観測していない」で、success 0 などの数を作らない', () => {
+    const text = describeGithubCi({});
+    expect(text).toContain('観測していない');
+    expect(text).not.toMatch(/success|failure|pending/);
+  });
+
+  it('ciUnavailable は理由を出し、数を作らない', () => {
+    const text = describeGithubCi({ ciUnavailable: 'HTTP 403' });
+    expect(text).toContain('HTTP 403');
+    expect(text).not.toMatch(/success|failure|pending/);
+  });
+
+  it('summarize が ci を repo の最新へ運び、古い行（ci なし）には欄を作らない', () => {
+    const withCi = ok('a/b', '2026-10-02T00:00:00.000Z');
+    if (withCi.type !== 'github_observation' || withCi.result.status !== 'ok') throw new Error();
+    withCi.result.ci = { pulls: 1, success: 1, failure: 0, pending: 0, checks: 'x' };
+    const old = ok('a/c', '2026-10-01T00:00:00.000Z');
+    const view = summarizeGithubObservations([withCi, old]);
+    if (view.state !== 'observed') throw new Error();
+    expect(view.repos[0]!.latestOk!.ci).toEqual({
+      pulls: 1,
+      success: 1,
+      failure: 0,
+      pending: 0,
+      checks: 'x',
+    });
+    expect('ci' in view.repos[1]!.latestOk!).toBe(false);
   });
 });

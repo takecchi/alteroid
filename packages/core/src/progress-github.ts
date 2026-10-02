@@ -19,6 +19,18 @@ import type { JournalEntry } from './schema.js';
 /** 日誌から読む `github_observation` の件数の上限（新しい順）。 */
 export const GITHUB_OBSERVATION_SCAN_LIMIT = 500;
 
+export interface GithubObservationCi {
+  /** CI を見た PR の数（open PR の総数とは別）。 */
+  pulls: number;
+  success: number;
+  failure: number;
+  pending: number;
+  /** 何を数えたか（必須チェックだけ・check の名前の列挙など）。 */
+  checks: string;
+  /** 真なら上限で打ち切っており、数は下限。 */
+  truncated?: boolean;
+}
+
 export interface GithubObservationOk {
   /** デーモンが記録を受けた時刻（観測した側の時計ではない）。 */
   observedAt: string;
@@ -31,6 +43,12 @@ export interface GithubObservationOk {
   openPulls: number;
   /** 真なら `limit` に達しており、数は下限。 */
   truncated: boolean;
+  /**
+   * PR の CI の状態（#2549）。**無ければ CI を観測していない**（0 件の意味ではない）。`ciUnavailable` と排他。
+   */
+  ci?: GithubObservationCi;
+  /** CI を取れなかった理由（観測した側の申告）。`ci` と排他。 */
+  ciUnavailable?: string;
 }
 
 export interface GithubObservationFailed {
@@ -98,6 +116,10 @@ export function summarizeGithubObservations(
         openIssues: entry.result.openIssues,
         openPulls: entry.result.openPulls,
         truncated: entry.result.truncated,
+        ...(entry.result.ci === undefined ? {} : { ci: entry.result.ci }),
+        ...(entry.result.ciUnavailable === undefined
+          ? {}
+          : { ciUnavailable: entry.result.ciUnavailable }),
       };
     } else {
       row.latestFailed ??= { ...common, reason: entry.result.reason };
@@ -109,4 +131,24 @@ export function summarizeGithubObservations(
     repos: [...byRepo.values()].sort((a, b) => (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0)),
     scan: { limit: scanLimit, reachedLimit: seen >= scanLimit },
   };
+}
+
+/**
+ * 成功した観測の CI の軸を1行にする（`describeProgress` と CLI の `/journal` が共有。#2549）。
+ * **`ci` が無いことは「観測していない」と書く**——`success 0 / failure 0` とは書かない（0 件と読ませない）。
+ */
+export function describeGithubCi(ok: Pick<GithubObservationOk, 'ci' | 'ciUnavailable'>): string {
+  if (ok.ci !== undefined) {
+    const ci = ok.ci;
+    const counted = ci.success + ci.failure + ci.pending;
+    return (
+      `CI: ${String(ci.pulls)} 件の PR を確認 — success ${String(ci.success)} / failure ${String(ci.failure)} / pending ${String(ci.pending)}` +
+      (counted < ci.pulls ? `（チェックが無い等で未集計 ${String(ci.pulls - counted)} 件）` : '') +
+      `（数えたもの: ${ci.checks}）` +
+      (ci.truncated === true ? '（打ち切り。数は下限）' : '')
+    );
+  }
+  if (ok.ciUnavailable !== undefined)
+    return `CI: 取れなかった — ${ok.ciUnavailable}（0 件ではない）`;
+  return 'CI: 観測していない（0 件ではない）';
 }
