@@ -225,6 +225,7 @@ import {
 import type { CloneRuntimeFacts } from './self.js';
 import {
   EXCHANGE_WITH_VALUES,
+  JournalAnchorNotFoundError,
   UnreadableActiveTokenError,
   UnreadableApprovalError,
   UnreadableCommitmentError,
@@ -1088,6 +1089,17 @@ function describeWaitingKind(kind: ManagerWaitingItem['kind']): string {
   if (kind === 'question') return '質問';
   if (kind === 'permission') return '実行許可';
   return '種別不明';
+}
+
+/**
+ * `journal_read` の応答に出す「続きの位置」の1行。次の呼び出しへそのまま渡せる
+ * （`GET /journal` の `next` → `afterId` / `afterAt` と同じ値）。
+ */
+function describeJournalContinuation(cursor: { id: string; at: string }): string {
+  return (
+    `続きは journal_read afterId=${cursor.id} afterAt=${cursor.at}` +
+    ' （ほかの絞りは同じものを渡す）'
+  );
 }
 
 /**
@@ -6257,6 +6269,9 @@ export function createCloneTools(context: ToolContext) {
         'with で exchange の相手を絞れる（他の絞りと併用できる）。',
         '**with を指定すると exchange 以外の種別は1件も返らない** —',
         'types で別途除く必要はない。',
+        '応答に「続きは journal_read afterId=… afterAt=…」と出たら、その2つをそのまま渡すと',
+        'その行の次（新しい順なら、より古い側）から読み継げる（ほかの絞りは同じものを渡す）。',
+        '頁の行が全部読めない形だったときも、これで読めない区間の向こうへ進める。',
       ].join(' '),
       {
         // **issue #1720。** `.int().min(1).max(200)` は入力スキーマ側ではなく
@@ -6301,8 +6316,35 @@ export function createCloneTools(context: ToolContext) {
           .number()
           .optional()
           .describe(`id で全文を読むとき、何文字目から読むか（${formatIntRangeJa({ min: 0 })}）`),
+        // **`GET /journal` の `afterId` / `afterAt` と同じ名前・同じ意味**
+        // （`store.ts` の `JournalQuery.after`）。応答の「続きは …」の行の値を
+        // そのまま渡す。
+        afterId: z
+          .string()
+          .optional()
+          .describe(
+            '続きの位置の id。応答に出た「続きは journal_read afterId=… afterAt=…」の値をそのまま渡す。' +
+              'afterAt と必ず対で渡す。この行の次から読む',
+          ),
+        afterAt: z
+          .string()
+          .optional()
+          .describe(
+            '続きの位置の時刻（ISO 8601）。afterId と必ず対で渡す。応答に出た値をそのまま渡すこと',
+          ),
       },
-      async ({ limit, since, until, types, q, with: withFilter, id, offset = 0 }) => {
+      async ({
+        limit,
+        since,
+        until,
+        types,
+        q,
+        with: withFilter,
+        id,
+        offset = 0,
+        afterId,
+        afterAt,
+      }) => {
         // **issue #1720（#1651/#1689 の揃え漏れ）。** limit / offset は入力
         // スキーマ側の `.int()` / `.min()` / `.max()` に弾かれると英語の zod
         // の JSON が返っていた——ここで断って日本語の平文にする。
@@ -6338,6 +6380,22 @@ export function createCloneTools(context: ToolContext) {
             describeUnreadableJournalTimeBoundary('until', until) + '**日誌は読んでいない。**',
           );
         }
+        // **続きの位置（`afterId` / `afterAt`）の検査。** `GET /journal` と同じ
+        // 2つの断り（片方だけ・`afterAt` が ISO として読めない）を、日誌を
+        // 読まずに平文で言う。`afterAt` は錨の `at` と文字列で一致させる値なので、
+        // 正規化はせず応答の値をそのまま渡させる（ルートも同じ）。
+        if ((afterId === undefined) !== (afterAt === undefined)) {
+          return text(
+            'afterId と afterAt は両方一緒に渡す（片方だけでは続きの位置が決まらない。' +
+              '応答の「続きは …」の2つをそのまま渡すこと）。**日誌は読んでいない。**',
+          );
+        }
+        if (afterAt !== undefined && Number.isNaN(Date.parse(afterAt))) {
+          return text(
+            `afterAt に渡された「${afterAt}」は日時として読めない（ISO 8601 で、` +
+              '応答の「続きは …」の値をそのまま渡すこと）。**日誌は読んでいない。**',
+          );
+        }
         const normalizedSince =
           since === undefined ? undefined : (normalizeJournalTimeBoundary(since) ?? undefined);
         const normalizedUntil =
@@ -6345,28 +6403,49 @@ export function createCloneTools(context: ToolContext) {
 
         // --- 一覧モード ---
         const requested = limit ?? 20;
-        const { entries, next: moreBeyond } = await stores.journal.listPage({
-          limit: requested,
-          ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
-          ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
-          // **`[]`（空配列）もそのまま転送する。** `types: []` は
-          // `store.ts` の `JournalQuery.types` の doc で「0件」に決まっている
-          // 契約である（#425）。`length === 0` を `{}` へ落とすと、その契約を
-          // **道具の層で覆して「絞らない」に化けさせる。**
-          //
-          // ⚠️ **そして化けたことは、契約の歯からは見えない。**
-          // `verifyJournalStoreQueryEdgeContract` は3実装に「`types: []` = 0件」を
-          // 当てているが、ここで `{}` へ落とすと**値がストアへ届かない**ので、
-          // その歯は緑のまま素通りする（issue #426）。
-          ...(types === undefined ? {} : { types }),
-          ...(q === undefined ? {} : { q }),
-          // **`[]`（空配列）もそのまま転送する。** 理由はすぐ上の `types` と
-          // 同じで、`with: []` も `store.ts` の doc で「0件」に決まっている
-          // （#418）。**この2つは同じ渡し方である**——かつて `types` だけが
-          // `length === 0` を `{}` へ落としており、同じ道具の隣り合う2行で
-          // 同じ表記が違う意味を持っていた（issue #426 で揃えた）。
-          ...(withFilter === undefined ? {} : { with: withFilter }),
-        });
+        let journalPage: Awaited<ReturnType<JournalStore['listPage']>>;
+        try {
+          journalPage = await stores.journal.listPage({
+            limit: requested,
+            ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
+            ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
+            // **`[]`（空配列）もそのまま転送する。** `types: []` は
+            // `store.ts` の `JournalQuery.types` の doc で「0件」に決まっている
+            // 契約である（#425）。`length === 0` を `{}` へ落とすと、その契約を
+            // **道具の層で覆して「絞らない」に化けさせる。**
+            //
+            // ⚠️ **そして化けたことは、契約の歯からは見えない。**
+            // `verifyJournalStoreQueryEdgeContract` は3実装に「`types: []` = 0件」を
+            // 当てているが、ここで `{}` へ落とすと**値がストアへ届かない**ので、
+            // その歯は緑のまま素通りする（issue #426）。
+            ...(types === undefined ? {} : { types }),
+            ...(q === undefined ? {} : { q }),
+            // **`[]`（空配列）もそのまま転送する。** 理由はすぐ上の `types` と
+            // 同じで、`with: []` も `store.ts` の doc で「0件」に決まっている
+            // （#418）。**この2つは同じ渡し方である**——かつて `types` だけが
+            // `length === 0` を `{}` へ落としており、同じ道具の隣り合う2行で
+            // 同じ表記が違う意味を持っていた（issue #426 で揃えた）。
+            ...(withFilter === undefined ? {} : { with: withFilter }),
+            ...(afterId === undefined || afterAt === undefined
+              ? {}
+              : { after: { id: afterId, at: afterAt } }),
+          });
+        } catch (error) {
+          // **錨が見つからないのは「判定できない」であって「先頭から」ではない**
+          // （`store.ts` の `JournalAnchorNotFoundError` / `JournalQuery.after`）。
+          // 黙って先頭から読み直すと、続きを読んでいるつもりのクローンが同じ行を
+          // 読み返す。
+          if (error instanceof JournalAnchorNotFoundError) {
+            return text(
+              `afterId=${afterId ?? ''} afterAt=${afterAt ?? ''} が指す日誌の行が見つからない` +
+                '（id と at の両方が一致する行が無い）。続きの位置は判定できない。' +
+                '応答に出た「続きは …」の値を書き写し間違えていないか確かめること。' +
+                '**日誌は読んでいない（先頭から読み直してもいない）。**',
+            );
+          }
+          throw error;
+        }
+        const { entries, next: moreBeyond } = journalPage;
         // **日誌の地平（issue #1510）。** `oldestAt()` は since/until の
         // どちらかを指定したときだけ引く（索引1行なので、0件でも非空でも
         // 安く引ける）。実際に注記へ載せるかどうかの判断は
@@ -6392,7 +6471,9 @@ export function createCloneTools(context: ToolContext) {
           return text(
             [
               `この頁の ${requested} 行は読めない形の行だけだった（日誌が無いのではない）。` +
-                'さらに古い側に行が在る。limit を大きくするか since / until で窓をずらして読み直すこと。',
+                'さらに古い側に行が在る。下の続きの位置を afterId / afterAt に渡せば、' +
+                '読めない行の向こうへ進める（窓をずらして読み直す必要は無い）。',
+              describeJournalContinuation(moreBeyond),
               ...horizonNoteLines,
             ].join('\n'),
           );
@@ -6471,14 +6552,35 @@ export function createCloneTools(context: ToolContext) {
               ]
             : [];
 
+        // **続きの位置。予算で省略したときは `next` を案内してはならない。**
+        // `next` は「頁の最後の生の行」を指すので、省略した行（表示していない
+        // `rest` 件）を飛び越えてしまう。省略したなら、**表示した最後の行**を
+        // 続きの位置にする——それは実在する行（id と at が一致する）なので錨に
+        // なれ、`after` は「錨 → 絞り込み → limit」の順で効く（`store.ts` の
+        // `JournalQuery.after`）から、錨のすぐ次の行（省略した先頭の行）から
+        // 読み継げる。省略しなかったときだけ、ストアの `next`（捨てた行まで含めた
+        // 頁の終端）を使う。
+        let shownCount = items.length;
+        const listing = renderListing(items, {
+          budget: JOURNAL_BUDGET,
+          omitted: ({ rest, shown, total }) => {
+            shownCount = shown;
+            return (
+              `…ほか ${rest} 件は省略（この条件で ${total} 件あり、新しい順に ${shown} 件だけ出した）。` +
+              '省略した行から読み継ぐには、下の続きの位置を afterId / afterAt に渡すこと' +
+              '（狭めるなら since / types / with / q を指定する）。'
+            );
+          },
+        });
+        const lastShown = entries[shownCount - 1];
+        const cursor =
+          shownCount < entries.length && lastShown !== undefined
+            ? { id: lastShown.id, at: lastShown.at }
+            : moreBeyond;
         return text(
           [
-            renderListing(items, {
-              budget: JOURNAL_BUDGET,
-              omitted: ({ rest, shown, total }) =>
-                `…ほか ${rest} 件は省略（この条件で ${total} 件あり、新しい順に ${shown} 件だけ出した）。` +
-                'さらに遡るなら until を、狭めるなら since / types / with / q を指定すること。',
-            }),
+            listing,
+            ...(cursor === null ? [] : [describeJournalContinuation(cursor)]),
             '（本文は抜粋。全文は journal_read id=<id> で取れる）',
             ...toolUseNotice,
             ...horizonNoteLines,
