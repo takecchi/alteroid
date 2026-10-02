@@ -1301,7 +1301,7 @@ export { collapseErrorCause } from './error-cause.js';
  * `buildDenialInputHead` の伏せ字そのもの、`redactErrorText` はそれに `params:`
  * 以降を落とす規則を足した、例外の文用。`denial-input-head.ts` の doc を見よ。
  */
-export { redactErrorText, redactSecretsInText } from './denial-input-head.js';
+export { redactErrorText, redactSecretsInBody, redactSecretsInText } from './denial-input-head.js';
 
 /**
  * `dropped-record.ts` のテスト専用フック（本番の配線には出てこない）。

@@ -21,7 +21,7 @@
 import { codePointBoundary } from './excerpt.js';
 import { redactErrorText } from './denial-input-head.js';
 
-export { redactErrorText, redactSecretsInText } from './denial-input-head.js';
+export { redactErrorText, redactSecretsInBody, redactSecretsInText } from './denial-input-head.js';
 
 /** 伏せ字を通す前に読む本文の上限。巨大な本文で走査が伸びないように。 */
 export const REDACTED_EXCERPT_READ_LIMIT = 8192;

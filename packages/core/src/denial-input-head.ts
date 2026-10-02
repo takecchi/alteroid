@@ -214,15 +214,11 @@ const USERNAME_ONLY_SCHEMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 既知のトークンの形・代入・SHA を伏せる（`env` を経由しない、字面だけの判定）。
- *
- * **順序に意味がある。** 先に既知の接頭辞（GitHub のトークン・Anthropic の
- * API 鍵・AWS のアクセスキー id）を伏せ、次に代入の形、最後に「英数字混在
- * 24文字以上」という一般則を当てる。一般則を先に当てても既知の接頭辞は
- * （長さの条件を満たす限り）どのみち伏せられるので結果は変わらないが、
- * この順のほうが「何を狙って書いたか」が読める。
+ * URL の資格・既知のトークンの形・`Bearer`・代入だけを伏せる（`env` を経由しない、
+ * 字面だけの判定）。**SHA と「英数字混在の長い塊」の一般則は当てない**——
+ * {@link redactSecretsInBody} が本文に掛ける狭い網はこれだけである（issue #2600）。
  */
-function redactKnownSecretPatterns(text: string): string {
+function redactCredentialPatterns(text: string): string {
   let result = text;
 
   // URL の userinfo（`scheme://user:pass@host`）の資格。issue #2375。
@@ -263,6 +259,21 @@ function redactKnownSecretPatterns(text: string): string {
     new RegExp(`"(${SECRET_ASSIGNMENT_NAME})"\\s*:\\s*"([^"]*)"`, 'gi'),
     (_match, name: string) => `"${name}":"${REDACTED}"`,
   );
+
+  return result;
+}
+
+/**
+ * 既知のトークンの形・代入・SHA を伏せる（`env` を経由しない、字面だけの判定）。
+ *
+ * **順序に意味がある。** 先に既知の接頭辞（GitHub のトークン・Anthropic の
+ * API 鍵・AWS のアクセスキー id）を伏せ、次に代入の形、最後に「英数字混在
+ * 24文字以上」という一般則を当てる。一般則を先に当てても既知の接頭辞は
+ * （長さの条件を満たす限り）どのみち伏せられるので結果は変わらないが、
+ * この順のほうが「何を狙って書いたか」が読める。
+ */
+function redactKnownSecretPatterns(text: string): string {
+  let result = redactCredentialPatterns(text);
   // git の SHA（40桁 hex）。**取りこぼしより誤伏せを選ぶ**——本文に40桁 hex が
   // 現れること自体まれで、秘密ではない大半を伏せても実害は小さい。
   result = result.replace(/\b[0-9a-f]{40}\b/gi, REDACTED);
@@ -291,6 +302,22 @@ function redactKnownSecretPatterns(text: string): string {
  */
 export function redactSecretsInText(text: string, env: NodeJS.ProcessEnv | undefined): string {
   return redactKnownSecretPatterns(redactSecretEnvValues(text, env));
+}
+
+/**
+ * 人が読む本文（会話・委譲の生ログ・承認待ちの設問・日誌）を画面へ出す前に通す
+ * **狭い網**（issue #2600）。環境変数の値 → URL の資格・既知のトークンの形・
+ * `Bearer`・`*_TOKEN=` などの代入、の順に伏せる。
+ *
+ * **{@link redactSecretsInText} との違い: 40桁の SHA と「英数字混在24字以上の塊」を
+ * 伏せない。** 本文にはコミットの sha・UUID・枝名（`fix/2621-redaction-gate-alias`）が
+ * 普通に現れ、それが化けると報告や日誌が観測として使えなくなる。例外の文には
+ * 取りこぼしより誤伏せを選ぶ {@link redactErrorText} を使い、こちらは使わない。
+ *
+ * @param env 値を伏せる対象の環境変数（`undefined` なら環境変数の網は掛けない）
+ */
+export function redactSecretsInBody(text: string, env: NodeJS.ProcessEnv | undefined): string {
+  return redactCredentialPatterns(redactSecretEnvValues(text, env));
 }
 
 /**
