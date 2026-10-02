@@ -1,5 +1,4 @@
-import type { Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-
+import type { AgentManagerSession, AgentUserInput } from './agent-session.js';
 import { RunnerFenceError, type RunnerLease } from './runner-protocol.js';
 import type { JobStatus } from './schema.js';
 
@@ -86,7 +85,7 @@ export class RunnerSdkSession {
   // ---------------------------------------------------------------------
 
   /** いま開いている SDK クエリ（器＝CLI プロセス）。無ければ `null`。 */
-  #query: Query | null = null;
+  #query: AgentManagerSession | null = null;
   /** `#query` を読み続けている `#read` ループの Promise。無ければ `null`。 */
   #reader: Promise<void> | null = null;
   /**
@@ -98,7 +97,7 @@ export class RunnerSdkSession {
    */
   #generation = 0;
 
-  get query(): Query | null {
+  get query(): AgentManagerSession | null {
     return this.#query;
   }
 
@@ -118,7 +117,7 @@ export class RunnerSdkSession {
    * 自分の引数 `q` だけを見て `this.#query` を読まないので、まとめても
    * 観測できる違いは無い。
    */
-  open(query: Query, reader: Promise<void>): void {
+  open(query: AgentManagerSession, reader: Promise<void>): void {
     this.#query = query;
     this.#reader = reader;
   }
@@ -345,16 +344,16 @@ export class RunnerSdkSession {
   // マネージャーへの一言の待ち行列と、次の入力を待つ側の起こし待ち
   // ---------------------------------------------------------------------
 
-  readonly #input: SDKUserMessage[] = [];
+  readonly #input: AgentUserInput[] = [];
   readonly #inputWaiters = new Set<() => void>();
 
   /** `RunnerSession#push` が呼ぶ。待ち行列の末尾へ積む。 */
-  enqueueInput(message: SDKUserMessage): void {
+  enqueueInput(message: AgentUserInput): void {
     this.#input.push(message);
   }
 
   /** `#inputStream` が呼ぶ。先頭から1件取り出す（無ければ `undefined`）。 */
-  dequeueInput(): SDKUserMessage | undefined {
+  dequeueInput(): AgentUserInput | undefined {
     return this.#input.shift();
   }
 
@@ -362,7 +361,7 @@ export class RunnerSdkSession {
    * 作り直しで前の器へ向けた入力を持ち越すため、待ち行列を空にしながら
    * 中身を丸ごと返す（`ResumeRecoveryHost.teardownForRecreate` が呼ぶ）。
    */
-  drainInput(): SDKUserMessage[] {
+  drainInput(): AgentUserInput[] {
     return this.#input.splice(0);
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Query } from '@anthropic-ai/claude-agent-sdk';
+import type { AgentManagerSession } from './agent-session.js';
 
 import { RunnerFenceError } from './runner-protocol.js';
 import { RunnerSdkSession } from './runner-sdk-session.js';
@@ -20,8 +20,8 @@ import { RunnerSdkSession } from './runner-sdk-session.js';
  * 持つ——ここでは扱わない。
  */
 
-function fakeQuery(): Query {
-  return { close: vi.fn() } as unknown as Query;
+function fakeQuery(): AgentManagerSession {
+  return { close: vi.fn() } as unknown as AgentManagerSession;
 }
 
 describe('RunnerSdkSession — 初期状態', () => {
@@ -84,7 +84,7 @@ describe('RunnerSdkSession — open / closeQuery / teardownForRecreate（`#open`
       close: () => {
         throw new Error('already closed');
       },
-    } as unknown as Query;
+    } as unknown as AgentManagerSession;
     s.open(q, Promise.resolve());
     expect(() => s.closeQuery()).not.toThrow();
   });

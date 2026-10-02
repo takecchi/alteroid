@@ -28,7 +28,9 @@ import type {
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
 } from './agent-hooks.js';
+import type { AgentProvider } from './agent-ports.js';
 import {
+  CLAUDE_PROVIDER,
   buildCloneDistillOptions,
   buildCloneSessionOptions,
   foldClaudeMessage,
@@ -1115,6 +1117,12 @@ function usageBlockAlwaysRearms(event: InboxEvent): boolean {
 
 export interface CloneOptions {
   stores: Stores;
+  /**
+   * このクローンが走らせる provider（Issue #486 M7）。**省略は Claude**（いまのクローンの
+   * provider は Claude 固定）。台帳の「取れなかった」の起こし口が見るのは
+   * `capabilities.usage === false` だけである。
+   */
+  provider?: Pick<AgentProvider, 'id' | 'capabilities'>;
   /** 主にテスト用。既定は SDK の `query`。 */
   queryFn?: typeof query;
   /**
@@ -2201,6 +2209,8 @@ class Clone implements CloneHost {
    */
   readonly #credentials: (() => Record<string, string>) | undefined;
   readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
+  /** {@link CloneOptions.provider}。 */
+  readonly #provider: Pick<AgentProvider, 'id' | 'capabilities'>;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   /** {@link CloneOptions.onTokenSessionRecycled}。**畳んだ後**に1度だけ鳴らす。 */
@@ -2278,6 +2288,7 @@ class Clone implements CloneHost {
   constructor(options: CloneOptions) {
     const {
       stores,
+      provider,
       queryFn,
       cwd,
       runners,
@@ -2306,6 +2317,7 @@ class Clone implements CloneHost {
       redeliveryGate,
     } = options;
     this.#stores = stores;
+    this.#provider = provider ?? CLAUDE_PROVIDER;
     this.#queryFn = queryFn ?? query;
     this.#cwd = cwd;
     // **預け先を包んで `projectKey` を拾う**（#564 E1b。`withProjectKeyProbe`）。
@@ -11191,7 +11203,13 @@ class Clone implements CloneHost {
     // が `event.succeeded` を見る前に独立の `context_usage` journal 行として
     // 既に書いてある——ここで早期 return するのは、あくまで `turn_usage`
     // （消費の増分の行）とその欄に相乗りする `contextUsage` の写しだけである。
-    if (usage === undefined) return;
+    if (usage === undefined) {
+      // **消費を報告しない provider だけが「取れなかった」を数える。** 条件は
+      // `capabilities.usage === false` であって `usage === undefined` ではない——Claude の
+      // 失敗した result も usage を持たないが、あれは無報告ではない（数えない）。
+      if (this.#provider.capabilities.usage === false) await this.#recordUnmeteredTurn(site);
+      return;
+    }
 
     const snapshot: UsageSnapshot = usage;
 
@@ -11310,6 +11328,29 @@ class Clone implements CloneHost {
         role: 'outbound',
         text: `${EXCHANGE_KIND_FAILURE_PREFIX}[site=${site}] 消費を台帳へ記録できなかった（この分は集計に出ない）`,
       });
+    }
+  }
+
+  /**
+   * 消費を報告しない provider のターンを台帳へ「取れなかった」として1回数える。**0 を積まない**
+   * （`UsageStore.recordUnmetered`）。台帳に積めなくてもターンは止めず、跡は stderr に残す。
+   */
+  async #recordUnmeteredTurn(site: UsageSite): Promise<void> {
+    const at = new Date();
+    try {
+      await this.#stores.usage.recordUnmetered({
+        layer: 'clone',
+        site,
+        managerId: CLONE_ACTOR_ID,
+        date: usageDate(at),
+        at: at.toISOString(),
+        provider: this.#provider.id,
+        ...(this.#sdkSession.sessionTokenIdentity === undefined
+          ? {}
+          : { tokenId: this.#sdkSession.sessionTokenIdentity.tokenId }),
+      });
+    } catch (error) {
+      noteDroppedRecord('利用状況の台帳（無報告のターン）', `layer=clone site=${site}`, error);
     }
   }
 

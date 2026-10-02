@@ -670,3 +670,82 @@ describe('describeUsageDateOrder', () => {
     expect(describeUsageDateOrder(undefined, undefined)).toBeNull();
   });
 });
+
+/**
+ * 消費を報告しない provider のターン（`unmeteredRows`。Issue #486 M7）。文言は core の
+ * `describeUnmeteredUsage` が1箇所で持つ。ここで測るのは「合計の隣に繋がっているか」「記録が
+ * 無いだけの出力で終わらないか」「欄の無い応答（Claude だけの器・古いデーモン）で1文字も
+ * 増えないか」。
+ */
+const EXPECTED_WITHOUT_UNMETERED = [
+  '合計 $1.00',
+  '  入力 0 / 出力 0 / キャッシュ読み 0 / キャッシュ書き 0',
+  '台帳に1行も記録が無い委譲: 0件（台帳が始まってから立った委譲は、全部台帳に最低1行ある。照会の期間では絞っていない）。',
+  '',
+  '日別:',
+  '  2026-08-14: $1.00',
+  '',
+  'マネージャー別:',
+  '  m1: $1.00',
+  '',
+  'モデル別:',
+  '  claude-opus-4: $1.00',
+  '',
+  '層別（誰が）:',
+  '  manager: $1.00',
+  '',
+  '場所別（どこで）:',
+  '  session: $1.00',
+  '',
+  '認証トークン別:',
+  '  （トークンの帰属が無い分）: $1.00',
+  '',
+  '台帳の始点: 2026-08-01T00:00:00.000Z',
+  '層と場所の軸の始点: 2026-08-01T00:00:00.000Z',
+  '認証トークンの軸の始点: 2026-08-01T00:00:00.000Z',
+  'SDK が返す推定値であり、Anthropic の請求明細ではない（一致しないことがある）。',
+  '',
+  'アカウント全体の残り（claude.ai 側の値）:',
+  '  まだ取りに行っていない（起動直後）。0 ではなく、分からない。',
+].join('\n');
+
+describe('renderUsage の無報告の provider（unmeteredRows）', () => {
+  const UNMETERED = [
+    {
+      date: '2026-08-14',
+      managerId: 'clone',
+      layer: 'clone' as const,
+      site: 'session' as const,
+      provider: 'codex',
+      turns: 3,
+      updatedAt: '2026-08-14T10:00:00.000Z',
+    },
+  ];
+  const SENTENCE =
+    '⚠ 消費を報告しない provider のターンがある（0 ではなく取れなかった。合計に含まれない: codex・clone層 3ターン）。';
+
+  it('在れば、合計の隣で「0 ではなく取れなかった」と言う', () => {
+    const text = renderUsage(
+      aggregate({ rows: [row({ managerId: 'm1', costUsd: 1 })], unmeteredRows: UNMETERED }),
+    );
+    expect(text).toContain(SENTENCE);
+    expect(text.indexOf('合計 $1.00')).toBeLessThan(text.indexOf(SENTENCE));
+    expect(text.indexOf(SENTENCE)).toBeLessThan(text.indexOf('日別:'));
+  });
+
+  it('読めた行が0件でも、台帳の始点が無くても言う', () => {
+    expect(renderUsage(aggregate({ rows: [], unmeteredRows: UNMETERED }))).toContain(SENTENCE);
+    expect(renderUsage(aggregate({ rows: [], since: null, unmeteredRows: UNMETERED }))).toContain(
+      SENTENCE,
+    );
+  });
+
+  it('対照: 欄が無い・空配列なら、出力は導入前と1文字も変わらない', () => {
+    const base = { rows: [row({ managerId: 'm1', costUsd: 1 })] };
+    const without = renderUsage(aggregate(base));
+    expect(renderUsage(aggregate({ ...base, unmeteredRows: [] }))).toBe(without);
+    expect(without).not.toContain('報告しない provider');
+    // 導入前（origin/main）の出力そのもの。
+    expect(without).toBe(EXPECTED_WITHOUT_UNMETERED);
+  });
+});

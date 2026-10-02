@@ -21,12 +21,13 @@ import type {
   UsageStore,
   UsageTotals,
   UsageTurnRow,
+  UsageUnmeteredRow,
 } from '@alteroid/core';
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 
 import type { Db } from './db.js';
 import { stripNulls, toIso, toNumber } from './db.js';
-import { usageBaseline, usageDaily, usageLedger, usageTurns } from './schema.js';
+import { usageBaseline, usageDaily, usageLedger, usageTurns, usageUnmetered } from './schema.js';
 
 /** `usage_ledger` は単一行。id はこの値に固定する。 */
 const LEDGER_ID = 'default';
@@ -415,6 +416,46 @@ export class PgUsageStore implements UsageStore {
     });
   }
 
+  /**
+   * 消費を報告しない provider のターンを1回数える（`store.ts` の
+   * `UsageStore.recordUnmetered`）。**`usage_unmetered` の1行だけを足す。**
+   * `usage_daily` / `usage_turns` / 基準 / 台帳の始点には触らない（0 を積まない）。
+   */
+  async recordUnmetered(input: {
+    layer: UsageLayer;
+    site: UsageSite;
+    managerId: string;
+    date: string;
+    at: string;
+    provider: string;
+    tokenId?: string;
+  }): Promise<void> {
+    const updatedAt = new Date(input.at);
+    await this.#db
+      .insert(usageUnmetered)
+      .values({
+        date: input.date,
+        managerId: input.managerId,
+        layer: input.layer,
+        site: input.site,
+        provider: input.provider,
+        tokenId: input.tokenId ?? '',
+        turns: 1,
+        updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: [
+          usageUnmetered.date,
+          usageUnmetered.managerId,
+          usageUnmetered.layer,
+          usageUnmetered.site,
+          usageUnmetered.provider,
+          usageUnmetered.tokenId,
+        ],
+        set: { turns: sql`${usageUnmetered.turns} + 1`, updatedAt },
+      });
+  }
+
   async aggregate(query: UsageQuery): Promise<UsageAggregate> {
     const conditions = [
       ...(query.from === undefined ? [] : [gte(usageDaily.date, query.from)]),
@@ -470,6 +511,27 @@ export class PgUsageStore implements UsageStore {
         sql`nullif(${usageTurns.tokenId}, '') asc nulls last`,
       );
 
+    const unmeteredConditions = [
+      ...(query.from === undefined ? [] : [gte(usageUnmetered.date, query.from)]),
+      ...(query.to === undefined ? [] : [lte(usageUnmetered.date, query.to)]),
+      ...(query.managerId === undefined ? [] : [eq(usageUnmetered.managerId, query.managerId)]),
+      ...(query.layer === undefined ? [] : [eq(usageUnmetered.layer, query.layer)]),
+      ...(query.site === undefined ? [] : [eq(usageUnmetered.site, query.site)]),
+      ...(query.tokenId === undefined ? [] : [eq(usageUnmetered.tokenId, query.tokenId)]),
+    ];
+    const unmeteredRows = await this.#db
+      .select()
+      .from(usageUnmetered)
+      .where(unmeteredConditions.length === 0 ? undefined : and(...unmeteredConditions))
+      .orderBy(
+        asc(usageUnmetered.date),
+        asc(usageUnmetered.managerId),
+        asc(usageUnmetered.layer),
+        asc(usageUnmetered.site),
+        asc(usageUnmetered.provider),
+        sql`nullif(${usageUnmetered.tokenId}, '') asc nulls last`,
+      );
+
     const ledgerRows = await this.#db
       .select()
       .from(usageLedger)
@@ -498,10 +560,16 @@ export class PgUsageStore implements UsageStore {
       return read ?? [];
     });
 
+    // **layer / site が enum に無い行は外す**（`#toRow` と同じ。無報告の行は値を持たず合計にも
+    // 入らないので、外しても合計は変わらない）。
+    const readableUnmeteredRows = unmeteredRows.flatMap((row) => this.#toUnmeteredRow(row) ?? []);
+
     return {
       rows: readableRows,
       // 0件なら鍵ごと出さない（既存の応答を変えない）。
       ...(unreadableRows.length === 0 ? {} : { unreadableRows }),
+      // 0件なら鍵ごと出さない（Claude だけの器の応答を変えない）。
+      ...(readableUnmeteredRows.length === 0 ? {} : { unmeteredRows: readableUnmeteredRows }),
       since,
       layersSince,
       tokensSince,
@@ -542,7 +610,8 @@ export class PgUsageStore implements UsageStore {
   }
 
   /**
-   * 4テーブルを丸ごと消す（`UsageStore.clear` の doc）。**`usage_ledger` も
+   * 4テーブル（と、消費を報告しない provider の `usage_unmetered`）を丸ごと消す
+   * （`UsageStore.clear` の doc）。**`usage_ledger` も
    * 消す** — `since` / `layersSince` / `tokensSince` / `turnsSince` の基準が
    * 台帳と一緒に無かったことになる。
    *
@@ -558,6 +627,8 @@ export class PgUsageStore implements UsageStore {
         .returning({ managerId: usageBaseline.managerId });
       const ledger = await tx.delete(usageLedger).returning({ id: usageLedger.id });
       const turns = await tx.delete(usageTurns).returning({ date: usageTurns.date });
+      // 返り値の型は広げない（波及を避ける）。件数は返さず、同じトランザクションで消す。
+      await tx.delete(usageUnmetered);
       return {
         daily: daily.length,
         baseline: baseline.length,
@@ -622,6 +693,23 @@ export class PgUsageStore implements UsageStore {
       layer: layer.data,
       site: site.data,
       // **空文字は `undefined` へ戻す。** `usageDaily` の `#toRow` と同じ理由。
+      ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
+      turns: toNumber(row.turns),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  /** 1行を読む。layer / site が enum に無い行は `undefined`（`#toRow` と同じ扱い）。 */
+  #toUnmeteredRow(row: typeof usageUnmetered.$inferSelect): UsageUnmeteredRow | undefined {
+    const layer = usageLayerSchema.safeParse(row.layer);
+    const site = usageSiteSchema.safeParse(row.site);
+    if (!layer.success || !site.success) return undefined;
+    return {
+      date: row.date,
+      managerId: row.managerId,
+      layer: layer.data,
+      site: site.data,
+      provider: row.provider,
       ...(row.tokenId === '' ? {} : { tokenId: row.tokenId }),
       turns: toNumber(row.turns),
       updatedAt: toIso(row.updatedAt),

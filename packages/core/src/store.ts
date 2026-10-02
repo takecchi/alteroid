@@ -2437,6 +2437,29 @@ export interface UsageStore {
   }): Promise<UsageFold>;
 
   /**
+   * 消費を報告しない provider（`capabilities.usage === false`）のターンを1回数える
+   * （Issue #486 M7）。
+   *
+   * **消費の値を積まない。** `usage_daily` / `usage_turns` / 基準 / 台帳の始点には
+   * 触らず、別の行（`UsageUnmeteredRow`）だけを足す。0 を積むとその層が安いと読める
+   * ため、「取れなかった」として `aggregate().unmeteredRows` に出す。
+   *
+   * **呼ぶ側は `usage === undefined` を理由に呼ばないこと。** 起こす条件は
+   * provider の `capabilities.usage === false` である（Claude の失敗 result は
+   * usage が無いが無報告ではない）。
+   */
+  recordUnmetered(input: {
+    layer: UsageLayer;
+    site: UsageSite;
+    managerId: string;
+    date: string;
+    at: string;
+    /** 報告しなかった provider の id。 */
+    provider: string;
+    tokenId?: string;
+  }): Promise<void>;
+
+  /**
    * 期間の集計。日 × actor × モデル × 層 × 場所 × 認証トークンの行を返す。
    *
    * **`since` を必ず載せること。** 台帳が始まる前を照会されたら 0 ではなく

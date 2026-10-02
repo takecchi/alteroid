@@ -3,18 +3,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  Options,
-  PermissionResult,
-  Query,
-  SDKUserMessage,
-  SessionKey,
-  SessionStore,
-  SessionStoreEntry,
-  SpawnedProcess,
-} from '@anthropic-ai/claude-agent-sdk';
-
 import type {
   AgentContentBlock,
   AgentDelegationNotified,
@@ -40,8 +28,19 @@ import type {
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
-import { isDaemonAnsweredTool } from './daemon-answered-tool.js';
-import { buildManagerSessionOptions, foldClaudeMessage } from './claude-provider.js';
+import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
+import type {
+  AgentChildProcess,
+  AgentManagerDriver,
+  AgentManagerSession,
+  AgentManagerSessionSpec,
+  AgentPermissionDecision,
+  AgentPermissionRequest,
+  AgentSessionLog,
+  AgentSessionLogKey,
+  AgentSpawnOptions,
+  AgentUserInput,
+} from './agent-session.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
 import { denialInputShape, type DeniedRecord } from './denial-shape.js';
 import { buildDenialInputHead, matchInputOf, redactErrorText } from './denial-input-head.js';
@@ -114,7 +113,6 @@ import { assistantFailureOf, type SdkFailure } from './sdk-failure.js';
 import { systemErrorFactsOf, type SystemErrorFacts } from './system-error.js';
 import { classifyUsageNotice } from './usage-limits.js';
 import { describeProbeError } from './usage-probe.js';
-import { readSessionUsage } from './usage.js';
 
 /**
  * manager-runner — SDK を隔離して走らせる層（roadmap M4）。
@@ -332,7 +330,7 @@ export interface RunnerHostOptions {
   /** この runner の作業ディレクトリ（cwd を省いた委譲の既定）。 */
   workspacePath: string;
   /** 主にテスト用。既定は SDK の `query`。 */
-  queryFn?: typeof query;
+  queryFn?: ClaudeQueryFn;
   /** 主にテスト用。既定は `process.env`。 */
   env?: NodeJS.ProcessEnv;
   /** `WITHHELD_ENV_KEYS` に足して伏せる鍵。 */
@@ -590,7 +588,7 @@ class Host implements RunnerHost {
   readonly runnerId: string;
   readonly workspacePath: string;
   readonly #emit: (event: RunnerEvent) => void;
-  readonly #queryFn: typeof query;
+  readonly #queryFn: ClaudeQueryFn | undefined;
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
@@ -649,7 +647,7 @@ class Host implements RunnerHost {
     this.runnerId = options.runnerId;
     this.workspacePath = options.workspacePath;
     this.#emit = options.emit;
-    this.#queryFn = options.queryFn ?? query;
+    this.#queryFn = options.queryFn;
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
@@ -926,7 +924,7 @@ class Host implements RunnerHost {
       request,
       cwd: this.#resolveCwd(cwd),
       emit: this.#emit,
-      queryFn: this.#queryFn,
+      ...(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
@@ -1424,17 +1422,11 @@ interface PendingRequest {
     aborted?: true;
   }) => void;
   /** 同じ確認が再送されたときに同じ結果を返すための約束（SDK は再送しうる）。 */
-  result: Promise<PermissionResult>;
+  result: Promise<AgentPermissionDecision>;
 }
 
 /** `spawnClaudeCodeProcess`（SDK の型 `SpawnOptions`）と同じ形。ここだけで書き写す理由は `spawnAsUser` の doc を見よ。 */
-type SpawnClaudeCodeProcessOptions = {
-  command: string;
-  args: string[];
-  cwd?: string;
-  env: Record<string, string | undefined>;
-  signal: AbortSignal;
-};
+type SpawnClaudeCodeProcessOptions = AgentSpawnOptions;
 
 /**
  * `spawnClaudeCodeProcess` が返す実体（#1334 段1）。
@@ -1446,14 +1438,21 @@ type SpawnClaudeCodeProcessOptions = {
  * 見えるようにしておく**——`SpawnedProcess` の約束（`stdin` / `stdout` / `kill`
  * / `on` / `once` / `off`）はそのまま引き継ぐ交差型である。
  */
-type DelegationProcessHandle = SpawnedProcess & { pid?: number };
+type DelegationProcessHandle = AgentChildProcess;
 
 interface RunnerSessionOptions {
   managerId: string;
   request: string;
   cwd: string;
   emit: (event: RunnerEvent) => void;
-  queryFn: typeof query;
+  /** `ClaudeManagerDriver` のテスト用の差し替え口（`driver` があれば使われない）。 */
+  queryFn?: ClaudeQueryFn;
+  /**
+   * セッションの駆動役（provider ごとの実装。`agent-session.ts`）。省略すると Claude
+   * （`ClaudeManagerDriver`）。この段では provider の選択は Claude 固定で、これは
+   * 次の段（Codex の駆動役）の差し込み口である。
+   */
+  driver?: AgentManagerDriver;
   env: NodeJS.ProcessEnv;
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
@@ -1574,7 +1573,7 @@ class RunnerSession {
   readonly #request: string;
   readonly #cwd: string;
   readonly #emit: (event: RunnerEvent) => void;
-  readonly #queryFn: typeof query;
+  readonly #driver: AgentManagerDriver;
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
@@ -1626,7 +1625,7 @@ class RunnerSession {
    * だから覚える。再送には**同じ結果をそのまま返す**（`ask` は出さない）。
    * 帳面はセッションと一緒に消え、件数にも上限がある（`RESOLVED_MEMORY_LIMIT`）。
    */
-  readonly #resolved = createRecentMap<PermissionResult>({
+  readonly #resolved = createRecentMap<AgentPermissionDecision>({
     limit: RESOLVED_MEMORY_LIMIT,
     // **忘れたことを黙らない。** 忘れた id の再送はもう一度クローンへ出るので、
     // ここが記録に無いと「なぜ二度届いたのか」を誰も辿れない。
@@ -1834,7 +1833,9 @@ class RunnerSession {
     this.#request = options.request;
     this.#cwd = options.cwd;
     this.#emit = options.emit;
-    this.#queryFn = options.queryFn;
+    this.#driver =
+      options.driver ??
+      new ClaudeManagerDriver(options.queryFn === undefined ? {} : { queryFn: options.queryFn });
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
@@ -1916,7 +1917,7 @@ class RunnerSession {
    * 器が落ちたことを理由に止まったままにはしない。
    */
   resume(sessionId: string, entries: unknown[] | undefined, message: string | undefined): void {
-    this.#resumeState.beginResume(sessionId, entries as SessionStoreEntry[] | undefined);
+    this.#resumeState.beginResume(sessionId, entries);
     if (message !== undefined) this.push(message);
     this.#open(sessionId);
   }
@@ -1983,11 +1984,7 @@ class RunnerSession {
    */
   push(text: string): void {
     if (this.#sdkSession.stopped) return;
-    this.#sdkSession.enqueueInput({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-    });
+    this.#sdkSession.enqueueInput({ text });
     this.#sdkSession.setStatus('running');
     this.#sdkSession.wakeInput();
   }
@@ -2338,17 +2335,18 @@ class RunnerSession {
     this.#sdkSession.resetLiveBackgroundTasks();
     this.#nonWorkerTaskIds.clear();
     const generation = this.#sdkSession.generation;
-    const q = this.#queryFn({ prompt: this.#inputStream(), options: this.#buildOptions(resume) });
+    const session = this.#driver.open(this.#buildSpec(resume));
     // **`#query` を先に、`#reader` を後に代入していた元の2行を、
     // `RunnerSdkSession#open` の1回の呼び出しへまとめた**（Issue #1190
     // 案X）。`#read`（`reader` の中身）は同期の前置きの中で `this.#query` を
     // 読まないので、まとめても観測できる違いは無い（`runner-sdk-session.ts`
     // の `open` の doc）。
-    this.#sdkSession.open(q, this.#read(q, generation));
+    this.#sdkSession.open(session, this.#read(session, generation));
   }
 
-  #buildOptions(resume?: string): Options {
-    return buildManagerSessionOptions({
+  #buildSpec(resume?: string): AgentManagerSessionSpec {
+    return {
+      input: this.#inputStream(),
       // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
       // （設定ではなく承認の置き場。`model-tier.ts`）。**ここが正本である** —
       // デーモン側の自己認識に出るのは同じ env から解いた宣言であって、
@@ -2380,14 +2378,14 @@ class RunnerSession {
       })(),
       // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
       // 鍵を runner に置かないため）。
-      sessionStore: this.#sessionStore(),
+      sessionLog: this.#sessionLog(),
       ...(resume === undefined ? {} : { resume }),
       // 子プロセスを別 UID へ降ろす。**能力は1つも削らない** — 道具も preset も
       // そのままで、変えるのは実行する主体だけである（実行環境の境界）。
       ...(this.#childUser === undefined
         ? {}
-        : { spawnClaudeCodeProcess: (options) => this.#spawnDelegationProcess(options) }),
-      canUseTool: (toolName, input, extra) => this.#onPermission(toolName, input, extra),
+        : { spawnProcess: (options) => this.#spawnDelegationProcess(options) }),
+      onPermission: (request) => this.#onPermission(request),
       // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
       // 理由は `#onPreToolUse` の doc を見よ。
       onPreToolUse: (record) => this.#onPreToolUse(record),
@@ -2409,7 +2407,7 @@ class RunnerSession {
       // **観測専用**（#861）。`{ continue: true }` を返すだけで、**何も判断せず、
       // 何も抑制しない。** 理由は `#onStop` の doc を見よ。
       onStop: (record) => this.#onStop(record),
-    });
+    };
   }
 
   /**
@@ -2419,9 +2417,9 @@ class RunnerSession {
    * 渡してきた素材を返す — runner のディスクに前回の生ログが残っている前提を
    * 置かないための口である（器は作り直される）。
    */
-  #sessionStore(): SessionStore {
+  #sessionLog(): AgentSessionLog {
     return {
-      append: async (key: SessionKey, entries: SessionStoreEntry[]) => {
+      append: async (key: AgentSessionLogKey, entries: unknown[]) => {
         this.#emit({
           type: 'mirror',
           managerId: this.#id,
@@ -2434,7 +2432,7 @@ class RunnerSession {
         });
         this.#emit({ type: 'project_key', managerId: this.#id, projectKey: key.projectKey });
       },
-      load: async (key: SessionKey) => {
+      load: async (key: AgentSessionLogKey) => {
         if (key.subpath !== undefined) return null;
         return this.#resumeState.seed ?? null;
       },
@@ -2546,7 +2544,7 @@ class RunnerSession {
   }
 
   /** 待っているストリームを全部起こす。**1本だけ覚えない** — 世代が重なる。 */
-  async *#inputStream(): AsyncGenerator<SDKUserMessage> {
+  async *#inputStream(): AsyncGenerator<AgentUserInput> {
     const generation = this.#sdkSession.generation;
     for (;;) {
       // **世代の確認を `shift` より先に。** 逆にすると、畳まれる直前の死んだ
@@ -2642,14 +2640,12 @@ class RunnerSession {
    * 引き継ぎで新しいセッションを開くと、畳まれた古いストリームの `for await` が
    * そこで終わって降りてくるが、それは失敗でも完了でもない。
    */
-  async #read(q: Query, generation: number): Promise<void> {
+  async #read(session: AgentManagerSession, generation: number): Promise<void> {
     try {
-      for await (const message of q) {
-        // **provider の綴りを読むのはここまでである**（`claude-provider.ts` の
-        // `foldClaudeMessage`）。ここから下へ流れるのは中立イベントだけで、
-        // 次の provider を足しても `#apply` は1本のままになる（#486）。
-        for (const event of foldClaudeMessage(message)) await this.#apply(event);
-      }
+      // **provider の綴りを読むのは駆動役の中までである**（Claude は
+      // `claude-manager-driver.ts` の `foldClaudeMessage`）。ここへ流れるのは中立
+      // イベントだけで、次の provider を足しても `#apply` は1本のままになる（#486）。
+      await session.readEvents((event) => this.#apply(event));
       if (this.#sdkSession.stopped || generation !== this.#sdkSession.generation) return;
       // **認証トークンの畳み直しで、自分から入力ストリームを終えた回。**
       // 判定は `#endedInputForTokenRotation` だけで行う（`#recycleForToken`
@@ -2912,7 +2908,7 @@ class RunnerSession {
       // （落とすと、人間やクローンがちょうど送った指示だけが消える）。
       return this.#sdkSession
         .drainInput()
-        .map((message) => String(message.message.content))
+        .map((message) => message.text)
         .filter((text) => text.length > 0);
     },
     pushHandoff: (input) => {
@@ -3818,11 +3814,11 @@ class RunnerSession {
    * ——新しい伏せ字の仕組みは作っていない。
    */
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
-    const q = this.#sdkSession.query;
-    if (q === null) return undefined;
+    const session = this.#sdkSession.query;
+    if (session === null) return undefined;
     const startedAt = Date.now();
     try {
-      const usage = await q.getContextUsage();
+      const usage = await session.contextUsage();
       // **内訳は既に払ってあるものを写すだけである。** `clone.ts` の
       // `#observeContextUsage` と同じ理由（あちらの doc に逐語）——
       // 既定の `detail: 'full'` により、内訳を取り出さなくても費用は同じ。
@@ -3904,7 +3900,7 @@ class RunnerSession {
    * 読ませる（そちらの doc に、なぜ両方要るかを逐語で書いた）。
    */
   async #flushUsage(): Promise<void> {
-    const models = await readSessionUsage(this.#sdkSession.query);
+    const models = await this.#sdkSession.query?.sessionModelUsage();
     if (models === undefined) return;
     this.#emit({
       type: 'usage',
@@ -4121,16 +4117,13 @@ class RunnerSession {
    * **`permissionMode` が `auto` でもこの配線は外さない。** SDK が確認を降ろして
    * きたとき（`AskUserQuestion` を含む）の行き先はここ1本である。
    */
-  async #onPermission(
-    toolName: string,
-    input: Record<string, unknown>,
-    extra: { signal: AbortSignal; requestId?: string; toolUseID?: string },
-  ): Promise<PermissionResult> {
+  async #onPermission(permission: AgentPermissionRequest): Promise<AgentPermissionDecision> {
+    const { toolName, input, kind, signal } = permission;
     // 確認を出せている＝セッションは開いて手を動かしている。
     this.#markProgressed();
     // SDK は同じ確認を再送しうる。id を SDK 側の識別子に揃えて、再送では新しい
     // 待ちを積まずに同じ結果を返す（二重に消費されると片方が永久に返らない）。
-    const id = extra.requestId ?? extra.toolUseID ?? randomUUID();
+    const id = permission.requestId ?? randomUUID();
     const already = this.#pending.find((request) => request.id === id);
     if (already) return already.result;
     // **解けた後の再送も同じ扱いにする。** ここを `#pending` だけで見ていたのが
@@ -4138,13 +4131,10 @@ class RunnerSession {
     const resolved = this.#resolved.get(id);
     if (resolved !== undefined) return resolved;
 
-    // **分け方の出所はここ1行——`isDaemonAnsweredTool`（`daemon-answered-tool.ts`）
-    // へ切り出した（Issue #2173）。挙動は変えていない**（`isDaemonAnsweredTool`
-    // は `name === 'AskUserQuestion'` と同じ真偽値を返すだけの関数）——
-    // `manager-activity.ts` の `classifyManagerActivity` が同じ分け方を
-    // 「デーモンの `waiting` が空なのが矛盾かどうか」の判定に使うため、
-    // 判定のコピーを2つ作らないようにここへ寄せた。
-    const kind = isDaemonAnsweredTool(toolName) ? 'question' : 'permission';
+    // **分け方（`kind`）は駆動役が決めて渡す**（Claude は `isDaemonAnsweredTool`
+    // ——`daemon-answered-tool.ts`、Issue #2173。`name === 'AskUserQuestion'` と
+    // 同じ真偽値）。`manager-activity.ts` の `classifyManagerActivity` も同じ分け方を
+    // 使うので、判定のコピーを2つ作らない。
     const summary =
       kind === 'question' ? describeQuestions(input) : `${toolName} の実行許可: ${brief(input)}`;
     // **ここで1度だけ取る（#334）。** `state()` も `ask` イベントもこの値を
@@ -4190,7 +4180,7 @@ class RunnerSession {
       // 外している。
       const denyMessage =
         !teardown && unreadable ? unreadableDenyMessage(answer.message) : answer.message;
-      const outcome: PermissionResult =
+      const outcome: AgentPermissionDecision =
         teardown || decision === 'deny'
           ? { behavior: 'deny', message: denyMessage }
           : kind === 'question'
@@ -4248,11 +4238,11 @@ class RunnerSession {
         decision: 'deny',
         aborted: true,
       });
-    if (extra.signal.aborted) {
+    if (signal.aborted) {
       onAbort();
     } else {
-      extra.signal.addEventListener('abort', onAbort, { once: true });
-      unlisten = () => extra.signal.removeEventListener('abort', onAbort);
+      signal.addEventListener('abort', onAbort, { once: true });
+      unlisten = () => signal.removeEventListener('abort', onAbort);
     }
 
     this.#emit({ type: 'ask', managerId: this.#id, requestId: id, kind, summary, askedAt });
@@ -4409,7 +4399,7 @@ class RunnerSession {
       const teardown = answer.aborted === true || answer.withdrawn === true;
       const denyMessage =
         !teardown && unreadable ? unreadableDenyMessage(answer.message) : answer.message;
-      const outcome: PermissionResult =
+      const outcome: AgentPermissionDecision =
         teardown || decision === 'deny'
           ? { behavior: 'deny', message: denyMessage }
           : { behavior: 'allow' };

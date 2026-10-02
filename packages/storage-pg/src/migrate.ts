@@ -713,6 +713,24 @@ export const STATEMENTS = [
   `alter table usage_daily add column if not exists unreadable_cache_creation_input_tokens bigint not null default 0`,
   `alter table usage_daily add column if not exists unreadable_web_search_requests bigint not null default 0`,
   `alter table usage_daily add column if not exists unreadable_cost_usd bigint not null default 0`,
+
+  // --- 消費を報告しない provider のターン数（Issue #486 M7） ------------------
+  // **新規テーブルなので既存の4表（usage_daily / usage_turns / usage_baseline /
+  // usage_ledger）には何もしない。** 消費の値の列を持たない（0 を積むとその層が
+  // 安いと読める。`schema.ts` の `usageUnmetered` の doc）。primary key は書かず、
+  // 最初から一意索引で持つ（このファイル冒頭「鍵を差し替える」）。
+  `create table if not exists usage_unmetered (
+     date text not null,
+     manager_id text not null,
+     layer text not null,
+     site text not null,
+     provider text not null,
+     token_id text not null default '',
+     turns bigint not null default 0,
+     updated_at timestamptz not null
+   )`,
+  `create unique index if not exists usage_unmetered_key_idx
+     on usage_unmetered (date, manager_id, layer, site, provider, token_id)`,
 ] as const;
 
 /** `ensureOpenManagerBodyIndex` が作る部分 unique 索引の名前（issue #1041）。 */

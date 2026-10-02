@@ -112,6 +112,7 @@ import {
   type UsageRow,
   type UsageSite,
   type UsageTurnRow,
+  type UsageUnmeteredRow,
 } from './usage.js';
 
 /**
@@ -1542,6 +1543,8 @@ export function createMemoryStores(): Stores {
   const usageRows = new Map<string, UsageRow>();
   const usageBaselines = new Map<string, UsageBaseline>();
   const usageTurns = new Map<string, UsageTurnRow>();
+  // 無報告の provider のターン（`UsageStore.recordUnmetered`）。値を持たず合計に混ぜない。
+  const usageUnmetered = new Map<string, UsageUnmeteredRow>();
   let usageStartedAt: string | null = null;
   let usageLayeredAt: string | null = null;
   let usageTokensAt: string | null = null;
@@ -1679,8 +1682,28 @@ export function createMemoryStores(): Stores {
                   ? -1
                   : a.tokenId.localeCompare(b.tokenId)),
         );
+      const unmeteredRows = [...usageUnmetered.values()]
+        .filter((row) => {
+          if (query.from !== undefined && row.date < query.from) return false;
+          if (query.to !== undefined && row.date > query.to) return false;
+          if (query.managerId !== undefined && row.managerId !== query.managerId) return false;
+          if (query.layer !== undefined && row.layer !== query.layer) return false;
+          if (query.site !== undefined && row.site !== query.site) return false;
+          if (query.tokenId !== undefined && row.tokenId !== query.tokenId) return false;
+          return true;
+        })
+        .sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            a.managerId.localeCompare(b.managerId) ||
+            a.layer.localeCompare(b.layer) ||
+            a.site.localeCompare(b.site) ||
+            a.provider.localeCompare(b.provider) ||
+            (a.tokenId ?? '\uffff').localeCompare(b.tokenId ?? '\uffff'),
+        );
       return {
         rows,
+        ...(unmeteredRows.length === 0 ? {} : { unmeteredRows }),
         since: usageStartedAt,
         layersSince: usageLayeredAt,
         tokensSince: usageTokensAt,
@@ -1698,6 +1721,20 @@ export function createMemoryStores(): Stores {
         beforeTurns: isBeforeUsageStart(usageTurnsAt, query.from),
         notice: USAGE_ESTIMATE_NOTICE,
       };
+    },
+    async recordUnmetered({ layer, site, managerId, date, at, provider, tokenId }) {
+      const key = [date, managerId, layer, site, provider, tokenId ?? ''].join('\u0000');
+      const existing = usageUnmetered.get(key);
+      usageUnmetered.set(key, {
+        date,
+        managerId,
+        layer,
+        site,
+        provider,
+        ...(tokenId === undefined ? {} : { tokenId }),
+        turns: (existing?.turns ?? 0) + 1,
+        updatedAt: at,
+      });
     },
     async baseline(layer, managerId) {
       return usageBaselines.get(usageBaselineKey(layer, managerId)) ?? null;
@@ -1721,6 +1758,7 @@ export function createMemoryStores(): Stores {
       usageRows.clear();
       usageBaselines.clear();
       usageTurns.clear();
+      usageUnmetered.clear();
       usageStartedAt = null;
       usageLayeredAt = null;
       usageTokensAt = null;
