@@ -2600,6 +2600,47 @@ export const inboxRemoveManyResponseSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// 人間への通知（/notifications）— issue #2515
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /notifications` と `POST /notifications/read` の応答。`@alteroid/core` の
+ * `buildNotificationFeed` の結果をそのまま JSON にしたもので、**ここでは数え直さない**
+ * （CLI・Web UI が違う未読数を見ることにならないように、数えるのは core の1か所）。
+ *
+ * 元は承認待ちキュー（`ask_human` / `request_permission` が積むもの）である。
+ * 日誌の `escalation` からは作らない——そこにはマネージャーからクローンへの確認
+ * （人間宛てでないもの）も同じ形で入る。
+ */
+export const notificationFeedResponseSchema = z.object({
+  notifications: z.array(
+    z.object({
+      kind: z.literal('approval_pending'),
+      approvalId: z.string(),
+      at: isoDateTimeSchema,
+      question: z.string(),
+      conversationId: z.string().optional(),
+      managerId: z.string().optional(),
+      read: z.boolean(),
+    }),
+  ),
+  unreadCount: z.number().int(),
+  readThrough: isoDateTimeSchema.nullable(),
+  latestAt: isoDateTimeSchema.optional(),
+  cursorUnreadable: z.string().optional(),
+  unreadableApprovals: z.number().int().optional(),
+});
+
+/**
+ * `POST /notifications/read` の入力。**`through` は必須**——一覧で見た
+ * `latestAt` を渡す。省略して「いま」で既読にする形を作らないのは、一覧を読んだ後・
+ * 既読にする前に積まれた承認待ちまで、見ていないのに既読になるからである。
+ */
+export const notificationReadRequestSchema = z.object({
+  through: isoDateTimeSchema,
+});
+
+// ---------------------------------------------------------------------------
 // ワークスペースのリセット（/reset）— #workspace-reset
 // ---------------------------------------------------------------------------
 

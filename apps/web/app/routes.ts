@@ -21,6 +21,8 @@ export default [
     route('memory/:slug', 'routes/memory-detail.tsx'),
     route('practices', 'routes/practices.tsx'),
     route('practices/:slug', 'routes/practice-detail.tsx'),
+    // 人間への通知（issue #2515）。CLI の `alteroid notifications` と同じ口。
+    route('notifications', 'routes/notifications.tsx'),
     route('approvals', 'routes/approvals.tsx'),
     route('commitments', 'routes/commitments.tsx'),
     // 評定の内訳（issue #1278 の HTTP 面、issue #1620 の Web 面）。クローンの

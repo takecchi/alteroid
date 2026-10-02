@@ -1,6 +1,7 @@
 import {
   Activity,
   Archive as ArchiveIcon,
+  Bell,
   BellRing,
   BookText,
   Brain,
@@ -45,6 +46,7 @@ import {
   useHealth,
   useAuth,
   useJournalLive,
+  useNotifications,
 } from '@alteroid/swr';
 
 /**
@@ -57,6 +59,9 @@ import {
 const NAV = [
   { to: '/', label: 'ダッシュボード', icon: LayoutDashboard, end: true },
   { to: '/chat', label: '会話', icon: MessageSquare, end: false },
+  // 承認待ちの手前に置く（issue #2515）。いまの元は承認待ちだけだが、こちらは
+  // 「どこまで見たか」（既読）を持つ。答えるのは隣の承認待ちの画面である。
+  { to: '/notifications', label: '通知', icon: Bell, end: false },
   { to: '/approvals', label: '承認待ち', icon: BellRing, end: false },
   // 承認待ちの隣に置く。**両方とも「人間が片付けるまで残るもの」**だが、承認待ちは
   // 「クローンが止まっている」で、こちらは「まだ片付いていない」である（止まって
@@ -179,6 +184,17 @@ function AuthedShell() {
    */
   const approvalsUnavailable = approvalsError !== undefined || approvalsMalformed;
 
+  /**
+   * 通知の未読数（issue #2515）。**承認待ちの札と同じ判断で、「読めていない」を
+   * 「0件」と混ぜない**——エラーと形の違う応答（`unreadCount` が数でない）は「?」へ倒す。
+   * 数えるのはデーモンで、ここでは数え直さない。
+   */
+  const { data: notifications, error: notificationsError } = useNotifications();
+  const unread =
+    typeof notifications?.unreadCount === 'number' ? notifications.unreadCount : undefined;
+  const notificationsUnavailable =
+    notificationsError !== undefined || (notifications !== undefined && unread === undefined);
+
   /*
    * 狭い画面では脇の面を畳む。**畳まないと本文が読めない** — 会話の画面は
    * これに加えてもう1枚（会話一覧）を脇に置くので、幅 375px では本文の取り分が
@@ -200,12 +216,21 @@ function AuthedShell() {
     pending > 0 && <Badge tone="warn">{pending}</Badge>
   );
 
-  // `NAV`（`end` を持つ自前の型）から `AppSidebarItem` へ写す。札は承認待ちにだけ付く。
+  const notificationsBadge: ReactNode = notificationsUnavailable ? (
+    <Badge tone="danger" aria-label="通知を読めていない" title="通知を読めていない">
+      ?
+    </Badge>
+  ) : (
+    (unread ?? 0) > 0 && <Badge tone="warn">{unread}</Badge>
+  );
+
+  // `NAV`（`end` を持つ自前の型）から `AppSidebarItem` へ写す。札は承認待ちと通知にだけ付く。
   const items: AppSidebarItem[] = NAV.map(({ to, label, icon }) => ({
     to,
     label,
     icon,
     ...(to === '/approvals' ? { badge: approvalsBadge } : {}),
+    ...(to === '/notifications' ? { badge: notificationsBadge } : {}),
   }));
   const endByTo = new Map<string, boolean>(NAV.map((n) => [n.to, n.end]));
 

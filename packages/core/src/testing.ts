@@ -33,6 +33,7 @@ import type {
   ScheduledRequest,
 } from './schema.js';
 import { parseMcpServers, type StoredMcpServers } from './mcp-servers.js';
+import type { NotificationReadCursor } from './notifications.js';
 import {
   commitmentSchema,
   inboxEventSchema,
@@ -65,6 +66,7 @@ import type {
   InboxStore,
   JobStore,
   McpServerStore,
+  NotificationStore,
   PendingInboxEvent,
   JournalQuery,
   JournalStore,
@@ -297,6 +299,7 @@ export function createMemoryStores(): Stores {
   let projectKey: string | null = null;
   let envProfile: EnvProfile | null = null;
   let storedMcpServers: StoredMcpServers | null = null;
+  let notificationCursor: NotificationReadCursor | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
 
@@ -1438,6 +1441,24 @@ export function createMemoryStores(): Stores {
     },
   };
 
+  /** 通知の既読の位置（インメモリ。契約は `notifications.ts` の `verifyNotificationStoreContract`）。 */
+  const notifications: NotificationStore = {
+    async readCursor() {
+      return notificationCursor === null
+        ? { state: 'none' }
+        : { state: 'ok', cursor: { ...notificationCursor } };
+    },
+    async advanceReadCursor(through) {
+      if (
+        notificationCursor === null ||
+        compareIsoInstant(through, notificationCursor.readThrough) > 0
+      ) {
+        notificationCursor = { readThrough: through, updatedAt: new Date().toISOString() };
+      }
+      return { ...notificationCursor };
+    },
+  };
+
   /**
    * マネージャーへ降ろす環境変数の正本（インメモリ）。
    *
@@ -1837,6 +1858,7 @@ export function createMemoryStores(): Stores {
     profile,
     credentials,
     mcpServers,
+    notifications,
     tokens,
     usage,
   };
