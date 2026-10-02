@@ -93,7 +93,9 @@
  * 上書きしない）。**締め切りに達して打ち切った回（`EXIT_DEADLINE`）も同じ扱い**——
  * 歯A/歯B/歯Cの判定は一切走らせない（下の「締め切り」節）。
  * **ラッパ自身が例外で落ちたときも exit 0 にはならない**（末尾の
- * `main().catch(...)` が exit code 1 で拾う。緑を名乗る経路を1本も作らない）。
+ * `main().catch(...)` が exit code 1 で拾う。緑を名乗る経路を1本も作らない。
+ * vitest が見つからない（`spawn vitest ENOENT`）回の歯は
+ * `scripts/test-mjs-missing-vitest.test.ts`、#2661）。
  *
  * ## 既定の reporter（`CLAUDECODE`——Claude Code の Bash ツール経由——のときだけ dot）
  *
