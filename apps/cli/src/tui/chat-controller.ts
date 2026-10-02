@@ -66,6 +66,9 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+/** `/resume`（id 無し）が進行中かを確かめに行く会話の数（履歴の新しい順）。 */
+export const RESUME_PROBE_LIMIT = 5;
+
 export class ChatController {
   readonly store = new Store<ChatState>(initialChatState);
   private seq = 0;
@@ -310,6 +313,63 @@ export class ChatController {
     }
     this.resume(id);
     return true;
+  }
+
+  /**
+   * `/resume [id]`。明示したときだけ、進行中のターンのある会話へ戻る（起動時に自動では戻らない）。
+   * `id` があればその会話、無ければ履歴の新しい順に最大 {@link RESUME_PROBE_LIMIT} 件を
+   * 見て、最初に進行中だったもの。進行中の会話の一覧を返す口は daemon に無いので、
+   * 会話ごとに `GET /chat/:id/stream` を張って `open.inProgress` だけ読む（すぐ閉じる）。
+   * 見つかったら {@link openConversation} で開く（履歴を出し、途中経過を再生し、続きを流す）。
+   */
+  async resumeConversation(id?: string): Promise<boolean> {
+    const state = this.store.getSnapshot();
+    if (state.busy && this.watch !== null && (id === undefined || id === state.conversationId)) {
+      this.addSystem('すでにこの会話の進行中のターンを表示している');
+      return true;
+    }
+    if (this.refuseWhileBusy()) return false;
+    let candidates: string[];
+    if (id !== undefined) {
+      candidates = [id];
+    } else {
+      try {
+        const { conversations } = await this.api.listConversations();
+        candidates = conversations.slice(0, RESUME_PROBE_LIMIT).map((c) => c.conversationId);
+      } catch (error) {
+        this.addError(messageOf(error));
+        return false;
+      }
+    }
+    for (const candidate of candidates) {
+      let inProgress: boolean;
+      try {
+        inProgress = await this.probeInProgress(candidate);
+      } catch (error) {
+        this.addError(messageOf(error));
+        return false;
+      }
+      if (inProgress) return this.openConversation(candidate);
+    }
+    this.addSystem(
+      id === undefined
+        ? '進行中の会話は無い（/history で履歴から開ける）'
+        : `会話 ${id} に進行中のターンは無い（/history で履歴から開ける）`,
+    );
+    return false;
+  }
+
+  /** `GET /chat/:id/stream` の最初の `open` だけ読み、`inProgress` を返して接続を閉じる。 */
+  private async probeInProgress(conversationId: string): Promise<boolean> {
+    const abort = new AbortController();
+    try {
+      for await (const event of this.api.chatStream(conversationId, abort.signal)) {
+        if (event.type === 'open') return event.inProgress === true;
+      }
+      return false;
+    } finally {
+      abort.abort();
+    }
   }
 
   private historyEntries(messages: ConversationMessage[]): LogEntry[] {

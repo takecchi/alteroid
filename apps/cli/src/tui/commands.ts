@@ -15,6 +15,7 @@ export type CommandAction =
   | 'journal'
   | 'memory'
   | 'conversations'
+  | 'resume'
   | 'new'
   | 'end'
   | 'interrupt';
@@ -53,6 +54,11 @@ export const COMMANDS: readonly CommandSpec[] = [
     aliases: ['history'],
     action: 'conversations',
     describe: '会話の履歴から選んで開き直す',
+  },
+  {
+    name: 'resume',
+    action: 'resume',
+    describe: '進行中の会話へ戻る。[会話 id] 省略なら新しい順に探す（自動では戻らない）',
   },
   { name: 'new', action: 'new', describe: '新しい会話を始める（今の会話は終えない）' },
   {

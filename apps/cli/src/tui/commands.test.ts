@@ -18,6 +18,19 @@ describe('resolveCommand', () => {
     expect(resolveCommand('/?')).toMatchObject({ kind: 'command', spec: { action: 'help' } });
   });
 
+  it('/resume は進行中の会話へ戻るコマンドで、引数に会話 id を取る', () => {
+    expect(resolveCommand('/resume')).toMatchObject({
+      kind: 'command',
+      spec: { action: 'resume' },
+      args: '',
+    });
+    expect(resolveCommand('/RESUME c-1')).toMatchObject({
+      kind: 'command',
+      spec: { action: 'resume' },
+      args: 'c-1',
+    });
+  });
+
   it('/ だけなら help', () => {
     expect(resolveCommand('/')).toMatchObject({ kind: 'command', spec: { action: 'help' } });
   });

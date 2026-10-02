@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ChatController, MAX_ENTRIES } from './chat-controller.js';
+import { ChatController, MAX_ENTRIES, RESUME_PROBE_LIMIT } from './chat-controller.js';
 import { fakeApi, gate } from './fake-api.js';
 
 const open = (conversationId: string) => ({ type: 'open' as const, conversationId });
@@ -505,5 +505,155 @@ describe('進行中の会話へ戻る（履歴から開く）', () => {
     expect(state()).toMatchObject({ busy: false, streaming: '' });
     expect(texts('assistant')).toEqual(['前の答え', '途中']);
     expect(texts('error')).toHaveLength(1);
+  });
+});
+
+describe('/resume（明示して進行中の会話へ戻る）', () => {
+  const openIn = (conversationId: string, inProgress: boolean) => ({
+    type: 'open' as const,
+    conversationId,
+    inProgress,
+  });
+  // 実時間を待たず、積まれた約束だけを流す。
+  const flush = async () => {
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  };
+  const summary = (conversationId: string) => ({
+    conversationId,
+    startedAt: 't',
+    updatedAt: 't',
+    messages: 2,
+    preview: conversationId,
+  });
+  const withHistory = (api: ReturnType<typeof fakeApi>, ids: string[]) => {
+    api.conversations = ids.map(summary);
+    for (const id of ids) {
+      api.messages[id] = [
+        { id: `${id}a`, at: 't', role: 'inbound', text: `${id} の質問` },
+        { id: `${id}b`, at: 't', role: 'outbound', text: `${id} の前の答え` },
+        { id: `${id}c`, at: 't', role: 'inbound', text: `${id} の今の質問` },
+      ];
+    }
+  };
+
+  it('id 無しは、新しい順に探して最初の進行中の会話へ戻る（途中経過を再生し、続きを流す）', async () => {
+    const { api, controller, state, texts } = setup();
+    withHistory(api, ['c1', 'c2', 'c3']);
+    const hold = gate();
+    api.streamScripts.push(
+      [openIn('c1', false)], // 探す: 進行中でない
+      [openIn('c2', true)], // 探す: 進行中
+      [
+        openIn('c2', true),
+        { type: 'text', text: 'ここまで' },
+        hold.wait,
+        { type: 'text', text: '続き' },
+        { type: 'done' },
+      ],
+    );
+    expect(await controller.resumeConversation()).toBe(true);
+    await flush();
+    expect(api.streamCalls.map((c) => c.conversationId)).toEqual(['c1', 'c2', 'c2']);
+    expect(api.streamCalls[0]?.aborted()).toBe(true); // 探すための接続は閉じる
+    expect(api.streamCalls[1]?.aborted()).toBe(true);
+    expect(state()).toMatchObject({ conversationId: 'c2', busy: true, streaming: 'ここまで' });
+    hold.open();
+    await flush();
+    expect(state()).toMatchObject({ busy: false, streaming: '' });
+    expect(texts('assistant')).toEqual(['c2 の前の答え', 'ここまで続き']);
+  });
+
+  it('id 指定は、その会話だけを見る', async () => {
+    const { api, controller, state } = setup();
+    withHistory(api, ['c1', 'c2']);
+    api.streamScripts.push([openIn('c2', true)], [openIn('c2', true), { type: 'done' }]);
+    expect(await controller.resumeConversation('c2')).toBe(true);
+    await flush();
+    expect(api.streamCalls.map((c) => c.conversationId)).toEqual(['c2', 'c2']);
+    expect(state().conversationId).toBe('c2');
+  });
+
+  it('進行中の会話が無ければ通知を出し、画面は変えない', async () => {
+    const { api, controller, state, texts } = setup();
+    withHistory(api, ['c1', 'c2']);
+    api.streamScripts.push([openIn('c1', false)], [openIn('c2', false)]);
+    expect(await controller.resumeConversation()).toBe(false);
+    expect(texts('system')).toEqual(['進行中の会話は無い（/history で履歴から開ける）']);
+    expect(state()).toMatchObject({ conversationId: null, busy: false });
+    expect(api.streamCalls).toHaveLength(2);
+  });
+
+  it('id 指定で進行中でなければ、その id を添えて通知する', async () => {
+    const { api, controller, texts } = setup();
+    withHistory(api, ['c1']);
+    api.streamScripts.push([openIn('c1', false)]);
+    expect(await controller.resumeConversation('c1')).toBe(false);
+    expect(texts('system')).toEqual([
+      '会話 c1 に進行中のターンは無い（/history で履歴から開ける）',
+    ]);
+  });
+
+  it('探すのは新しい順に最大 RESUME_PROBE_LIMIT 件まで', async () => {
+    const { api, controller } = setup();
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    withHistory(api, ids);
+    for (const id of ids) api.streamScripts.push([openIn(id, false)]);
+    await controller.resumeConversation();
+    expect(api.streamCalls.map((c) => c.conversationId)).toEqual(ids.slice(0, RESUME_PROBE_LIMIT));
+  });
+
+  it('履歴が空なら接続を張らずに通知する', async () => {
+    const { api, controller, texts } = setup();
+    expect(await controller.resumeConversation()).toBe(false);
+    expect(api.streamCalls).toEqual([]);
+    expect(texts('system')).toEqual(['進行中の会話は無い（/history で履歴から開ける）']);
+  });
+
+  it('接続できなければエラーを残す', async () => {
+    const { api, controller, texts } = setup();
+    withHistory(api, ['c1']);
+    api.streamScripts.push([new Error('つながらない')]);
+    expect(await controller.resumeConversation()).toBe(false);
+    expect(texts('error')).toHaveLength(1);
+  });
+
+  it('自分のターンが応答中は切り替えない', async () => {
+    const { api, controller, texts } = setup();
+    withHistory(api, ['c1']);
+    const hold = gate();
+    api.scripts.push([open('c9'), hold.wait, { type: 'done' }]);
+    const sending = controller.send('x');
+    await flush();
+    expect(await controller.resumeConversation()).toBe(false);
+    expect(api.streamCalls).toEqual([]);
+    expect(texts('system').at(-1)).toContain('応答中は会話を切り替えられない');
+    hold.open();
+    await sending;
+  });
+
+  it('すでに戻って再生中なら、もう1本は張らない', async () => {
+    const { api, controller, texts } = setup();
+    withHistory(api, ['c1']);
+    const hold = gate();
+    api.streamScripts.push([openIn('c1', true)], [openIn('c1', true), hold.wait, { type: 'done' }]);
+    await controller.resumeConversation();
+    await flush();
+    expect(await controller.resumeConversation()).toBe(true);
+    expect(api.streamCalls).toHaveLength(2);
+    expect(texts('system').at(-1)).toBe('すでにこの会話の進行中のターンを表示している');
+    hold.open();
+    await flush();
+  });
+
+  it('履歴から開く（/history）の自動の戻りは変えない（resume を呼ばなくても戻る）', async () => {
+    const { api, controller, state } = setup();
+    withHistory(api, ['c1']);
+    const hold = gate();
+    api.streamScripts.push([openIn('c1', true), hold.wait, { type: 'done' }]);
+    await controller.openConversation('c1');
+    await flush();
+    expect(state().busy).toBe(true);
+    hold.open();
+    await flush();
   });
 });

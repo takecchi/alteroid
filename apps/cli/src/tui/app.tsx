@@ -345,6 +345,7 @@ export const App: FC<AppProps> = ({
       tabRef.current !== 'chat' &&
       (action === 'help' ||
         action === 'conversations' ||
+        action === 'resume' ||
         action === 'new' ||
         action === 'end' ||
         action === 'interrupt')
@@ -377,6 +378,13 @@ export const App: FC<AppProps> = ({
       case 'conversations':
         openPicker();
         break;
+      case 'resume': {
+        const id = args.split(/\s+/)[0] ?? '';
+        void controller.resumeConversation(id.length > 0 ? id : undefined).then((ok) => {
+          if (ok) setAnchor('bottom');
+        });
+        break;
+      }
       case 'new':
         controller.newConversation();
         setAnchor('bottom');
