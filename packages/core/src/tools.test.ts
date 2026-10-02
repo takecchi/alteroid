@@ -16207,6 +16207,8 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
     schedule_list: /…ほか \d+ 件は省略（継続中の依頼は \d+ 件あり、\d+ 件だけ出した。/,
     commitment_list: /…ほか \d+ 件は省略（未了は \d+ 件あり、古い順に \d+ 件だけ出した。/,
     token_list: /…ほか \d+ 件は省略（プールは \d+ 件あり、order の昇順に \d+ 件だけ出した）。/,
+    permission_grant_list:
+      /…ほか \d+ 件は省略（許可の記録は \d+ 件あり、grantedAt の昇順に \d+ 件だけ出した）。/,
     manager_list: /…ほか \d+ 件は省略（全 \d+ 件）。/,
     runner_list: /…ほか \d+ 台は省略（登録は \d+ 台あり、\d+ 台だけ出した）。/,
     // #1055 段3②。続きを取る口（cursor）がまだ無いので、その旨を正直に言う
@@ -16885,6 +16887,21 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
         };
       }),
     );
+    // 許可の記録（permission_grant_list）。**規則・回答・allows に長い本文を入れる**
+    // （ここが短いと、抜粋を外す変異が生き残る）。
+    for (let index = 0; index < count; index += 1) {
+      const pad = String(index).padStart(4, '0');
+      await h.stores.permissionGrants.put({
+        id: `pg-${pad}`,
+        rule: `Bash(echo fake-${pad}-${long}:*)`,
+        allows: [`echo fake-${pad}-${long}`],
+        denies: [`rm fake-${pad}-${long}`],
+        approvalId: `ap-pg-${pad}`,
+        answer: `許可します ${long}`,
+        grantedAt: `2026-01-01T00:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+        route: { principalKind: 'account', accountId: 'acct-fake' },
+      });
+    }
     for (const summary of h.running) {
       summary.lastReport = `報告: ${'ほ'.repeat(3_000)}`;
       summary.waiting = [
@@ -17607,6 +17624,11 @@ describe('一覧は例外なく件数で壊れない（`*_list` の総当たり�
       // #1055 段3②。`flooded()` は `kind: 種類<pad>` で積むので、id の隣に
       // その種類の札（`[種類0000]`）が出るはずである——タイトルが id の
       // 繰り返しへ落ちていないことの同じ確かめ方。
+      name: 'permission_grant_list',
+      check: (firstLine) =>
+        expect(firstLine, `id の隣に状態（有効）が無い: ${firstLine}`).toMatch(/^- \S+ 有効/),
+    },
+    {
       name: 'practice_list',
       check: (firstLine) =>
         expect(firstLine, `id の隣に種類の札（[種類0000]）が無い: ${firstLine}`).toMatch(
@@ -24022,5 +24044,116 @@ describe('self_status の台帳の内訳は、打ち切った続きを ledgerCur
     expect(new Set(seen).size).toBe(total);
     expect(seen.length).toBe(total);
     expect(pages).toBeGreaterThan(1);
+  });
+});
+
+describe('permission_grant_list（読むだけ。HTTP の GET /permission-grants と同じ中身）', () => {
+  const grant = (index: number, over: Record<string, unknown> = {}) => {
+    const pad = String(index).padStart(2, '0');
+    return {
+      id: `pg-${pad}`,
+      rule: `Bash(echo fake-${pad})`,
+      allows: [`echo fake-${pad}`],
+      denies: [],
+      approvalId: `ap-${pad}`,
+      answer: '許可します',
+      grantedAt: `2026-01-01T00:00:${pad}.000Z`,
+      route: { principalKind: 'account' as const, accountId: 'acct-fake' },
+      ...over,
+    };
+  };
+
+  it('道具として配られ、書き込みの道具（取り消し・消す口）は配られていない', () => {
+    expect(CLONE_ALLOWED_TOOLS).toContain(qualifiedToolName('permission_grant_list'));
+    for (const name of [
+      'permission_grant_revoke',
+      'permission_grant_remove',
+      'permission_grant_remove_unreadable',
+    ]) {
+      expect(CLONE_TOOL_NAMES as readonly string[]).not.toContain(name);
+    }
+  });
+
+  it('読める行が出る（有効と取り消し済みの両方。状態つき）', async () => {
+    const h = harness();
+    await h.stores.permissionGrants.put(grant(1));
+    await h.stores.permissionGrants.put(grant(2, { revokedAt: '2026-01-02T00:00:00.000Z' }));
+
+    const reply = await h.call('permission_grant_list', {});
+
+    expect(reply).toMatch(/^- pg-01 有効$/m);
+    expect(reply).toMatch(/^- pg-02 取り消し済み$/m);
+    expect(reply).toContain('Bash(echo fake-01)');
+    expect(reply).toContain('取り消し 2026-01-02T00:00:00.000Z');
+  });
+
+  it('読めない行は rowsUnreadable で出る（件数と id・理由。本文は載らない）', async () => {
+    const h = harness();
+    await h.stores.permissionGrants.put(grant(1));
+    h.stores.permissionGrants.listUnreadable = async () => [
+      { id: 'pg-bad', reason: 'rule が文字列でない' },
+      { reason: 'id も取れない' },
+    ];
+
+    const reply = await h.call('permission_grant_list', {});
+
+    expect(reply).toContain(
+      'rowsUnreadable: {"count":2,"rows":[{"id":"pg-bad","reason":"rule が文字列でない"}]}',
+    );
+    // 読めた行は道連れにならない。
+    expect(reply).toContain('- pg-01 有効');
+  });
+
+  it('読めない行しか無いときは「許可が無い」と言わない', async () => {
+    const h = harness();
+    h.stores.permissionGrants.listUnreadable = async () => [{ id: 'pg-bad', reason: 'x' }];
+
+    const reply = await h.call('permission_grant_list', {});
+
+    expect(reply).toContain('rowsUnreadable');
+    expect(reply).toContain('「許可が無い」とは言えない');
+    expect(reply).not.toContain('（許可の記録は無い）');
+  });
+
+  it('読めない行が0件なら、rowsUnreadable の鍵が無い', async () => {
+    const h = harness();
+    expect(await h.call('permission_grant_list', {})).not.toContain('rowsUnreadable');
+    await h.stores.permissionGrants.put(grant(1));
+    expect(await h.call('permission_grant_list', {})).not.toContain('rowsUnreadable');
+  });
+
+  it('長い本文でも予算で締まり、切れたら続きの取り方（from）が出る。from で続きが読める', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(5_000);
+    for (let index = 0; index < 40; index += 1) {
+      await h.stores.permissionGrants.put(
+        grant(index, { rule: `Bash(echo ${long}:*)`, answer: `許可します ${long}` }),
+      );
+    }
+
+    const reply = await h.call('permission_grant_list', {});
+
+    expect(reply.length).toBeLessThan(10_000);
+    expect(reply).toMatch(/…ほか \d+ 件は省略（許可の記録は 40 件あり/);
+    const next = /permission_grant_list from=(\d+) で取れる/.exec(reply)?.[1];
+    expect(next).toBeDefined();
+    const second = await h.call('permission_grant_list', { from: Number(next) });
+    expect(second).toContain(`- pg-${String(next).padStart(2, '0')} `);
+    expect(second).not.toContain('- pg-00 ');
+  });
+
+  it('id を渡すと全文が読め、長ければ offset で続きが読める', async () => {
+    const h = harness();
+    const long = 'あ'.repeat(10_000);
+    await h.stores.permissionGrants.put(grant(1, { answer: `許可します ${long}` }));
+
+    const first = await h.call('permission_grant_list', { id: 'pg-01' });
+
+    expect(first).toContain('Bash(echo fake-01)');
+    const offset = /offset=(\d+)/.exec(first)?.[1];
+    expect(offset).toBeDefined();
+    const second = await h.call('permission_grant_list', { id: 'pg-01', offset: Number(offset) });
+    expect(second).toContain('あ');
+    expect(second).not.toContain('ここで切れている');
   });
 });

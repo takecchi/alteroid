@@ -250,6 +250,10 @@ const EXEMPT: readonly Exemption[] = [
     why: '状態の語は実装が出す文言そのもので、説明文はそれを列挙していない',
   },
   {
+    tool: 'permission_grant_list',
+    why: '状態の語（有効 / 取り消し済み）は実装が出す文言そのもので、説明文はそれを列挙していない',
+  },
+  {
     tool: 'self_read',
     why: '読める正典の名前は canonNames() から引数説明を組み立てており、既に導出されている',
   },
