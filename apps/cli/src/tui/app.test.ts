@@ -363,8 +363,11 @@ describe('中断・履歴・終了', () => {
     const h = start();
     await type(h.stdin, 'ab');
     h.stdin.write(CTRL_D);
-    await new Promise((r) => setTimeout(r, 150));
+    // 実時間で待たずに（#2146）、Ctrl+D の後ろに 1 文字打って、それが描かれるのを待つ。
+    // キーは届いた順に処理されるので、Ctrl+D で終了していればこの 1 文字は描かれない。
+    h.stdin.write('c');
+    await waitFor(() => h.frame().includes('❯ abc'));
     expect(h.exited()).toBe(false);
-    expect(h.frame()).toContain('❯ ab');
+    expect(h.frame()).toContain('❯ abc');
   });
 });

@@ -1,8 +1,8 @@
 /**
  * 画面の部品（見た目だけ。キー操作は `app.tsx` の 1 つの `useInput` が持つ）。
  *
- * Ink の地雷への対処（出所: takecchi/codiva（MIT）`.claude/rules/ink-components.md` と
- * `docs/TECH_NOTES.md`）:
+ * Ink の地雷への対処（出所: takecchi/codiva（MIT）の `codiva/.claude/rules/ink-components.md` と
+ * `codiva/docs/TECH_NOTES.md`。どちらも codiva の repo のファイルで、この repo には無い）:
  * - 空の `<Text>` は高さ 0。空行は半角スペース 1 つにして必ず 1 行ぶん確保する。
  * - Yoga は溢れた子を縮める。行の入れ物に `flexShrink={0}` を付け、窓の行数は可視高さ以下にする。
  * - 1 行に `<Text>` を 2 つ並べない（Box の row に置かない）。1 行は 1 つの `<Text>` の中に入れ子で組む。
