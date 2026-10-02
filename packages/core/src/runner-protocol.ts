@@ -1,3 +1,4 @@
+import { redactErrorText } from './denial-input-head.js';
 import { z } from 'zod';
 
 import { cgroupEventsDeltaSchema } from './cgroup-events.js';
@@ -3909,7 +3910,7 @@ class Registry implements RunnerRegistry {
       } catch (error) {
         if (this.#stopped || this.#entries.get(entry.source.label) !== entry) return;
         entry.client = null;
-        entry.error = String(error);
+        entry.error = redactErrorText(String(error), process.env);
         entry.since = new Date().toISOString();
         if (isRetryableRunnerError(error)) {
           // 待てば直る。**回数では諦めない**（諦めた先に残るのは、宛先を失った
@@ -3998,7 +3999,7 @@ class Registry implements RunnerRegistry {
         HEARTBEAT_PROBE_MS,
       );
     } catch (error) {
-      failure = String(error);
+      failure = redactErrorText(String(error), process.env);
     }
 
     // 聞いている間に外された / 開き直された / 名簿が止まった。**古い答えで上書きしない。**

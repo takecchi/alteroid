@@ -1,3 +1,4 @@
+import { reasonOf } from './dropped-record.js';
 import {
   mcpServerNames,
   mcpServersFingerprintOf,
@@ -206,7 +207,7 @@ export function createMcpServerService(options: McpServerServiceOptions): McpSer
               ...(error instanceof RunnerMcpServersUnsupportedError
                 ? { unsupported: true as const }
                 : {}),
-              error: String(error),
+              error: reasonOf(error),
             };
           }
         }),

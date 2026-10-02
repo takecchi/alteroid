@@ -2270,7 +2270,7 @@ class RunnerSession {
         .then((result): FinishUnpushedWorkOutcome => ({ kind: 'ok', result }))
         .catch((error: unknown): FinishUnpushedWorkOutcome => ({
           kind: 'unavailable',
-          reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+          reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
         }));
       this.#emit({ type: 'shutdown_unpushed_work', managerId: this.#id, unpushedWork });
     }
@@ -4081,7 +4081,7 @@ class RunnerSession {
       .then((result): FinishUnpushedWorkOutcome => ({ kind: 'ok', result }))
       .catch((error: unknown): FinishUnpushedWorkOutcome => ({
         kind: 'unavailable',
-        reason: `確かめようとして例外が飛んだ: ${String(error)}`,
+        reason: `確かめようとして例外が飛んだ: ${reasonOf(error)}`,
       }));
     // **「畳んだとき」の1点を、ここで初めて読む（Issue #1517「最小の形」1）。**
     // `#openedCgroupEvents` は構築時（＝「開いたとき」）に読み始めた
