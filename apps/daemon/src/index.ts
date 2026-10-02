@@ -38,6 +38,11 @@ import {
   missingDailyReportDates,
   placedClonePermissionMode,
   placedManagerModels,
+  CLONE_PROVIDER_ENV_KEY,
+  DEFAULT_AGENT_PROVIDER_ID,
+  agentProviderOf,
+  placedAgentProvider,
+  resolveCloneProviderId,
   reasonOf,
   redactErrorText,
   resolveCloneModel,
@@ -1387,6 +1392,20 @@ export async function main(): Promise<void> {
     process.stdout.write(
       `alteroidd: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
         `実際にセッションへ渡すのは runner なので、効いているかは runner の起動ログで確かめてください\n`,
+    );
+  }
+
+  /**
+   * クローン層の provider（#486 段 S1）。**知らない値なら、ここで起動を止める**
+   * （`resolveCloneProviderId` の doc）。置かれていたら帯と同じ流儀で黙って通さない。
+   * マネージャーの provider は runner が読む（デーモンが読むのは `hello` の名乗りだけ）。
+   */
+  const cloneProvider = agentProviderOf(resolveCloneProviderId(process.env));
+  if (placedAgentProvider(process.env, CLONE_PROVIDER_ENV_KEY) !== null) {
+    process.stdout.write(
+      `alteroidd: ${CLONE_PROVIDER_ENV_KEY} が置かれています` +
+        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${cloneProvider.id}）。` +
+        `以後このデーモンのクローンはこの provider で走ります\n`,
     );
   }
 

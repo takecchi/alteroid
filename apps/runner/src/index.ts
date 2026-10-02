@@ -10,6 +10,11 @@ import {
   createRunnerHost,
   DEFAULT_PROFILE_PATH,
   installUncaughtNet,
+  MANAGER_PROVIDER_ENV_KEY,
+  DEFAULT_AGENT_PROVIDER_ID,
+  agentProviderOf,
+  placedAgentProvider,
+  resolveManagerProviderId,
   placedManagerModels,
   reasonOf,
   resolveManagerModel,
@@ -366,6 +371,9 @@ export async function main(): Promise<void> {
     withheldEnvKeys: WITHHELD_ENV_KEYS,
   });
 
+  // **知らない値なら、ここで落とす**（`resolveManagerProviderId` の doc）。
+  const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
+
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
@@ -412,7 +420,13 @@ export async function main(): Promise<void> {
     ...(reclaimScan === undefined ? {} : { reclaim: reclaimScan }),
   });
 
-  const app = createRunnerApp({ host, outbox, tokenSha256, taskBreakdownReader });
+  const app = createRunnerApp({
+    host,
+    outbox,
+    tokenSha256,
+    taskBreakdownReader,
+    managerProvider: managerProvider.id,
+  });
   const server = createAdaptorServer({ fetch: app.fetch });
 
   server.on('error', (error: unknown) => {
@@ -486,6 +500,16 @@ export async function main(): Promise<void> {
       `alteroid-runner: ${key} が置かれています（既定 ${fallback} → ${value}）。` +
         `以後この runner が起こすセッションはこの帯で走ります。` +
         `既定へ戻すにはこの環境変数を外してください\n`,
+    );
+  }
+
+  // provider も同じ流儀で、置かれたもの（既定と同じ値の明示も含む）を黙って通さない。
+  const placedProvider = placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY);
+  if (placedProvider !== null) {
+    process.stdout.write(
+      `alteroid-runner: ${MANAGER_PROVIDER_ENV_KEY} が置かれています` +
+        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${managerProvider.id}）。` +
+        `以後この runner が起こすマネージャーと作業者はこの provider で走ります\n`,
     );
   }
 

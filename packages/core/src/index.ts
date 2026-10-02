@@ -1216,6 +1216,15 @@ export {
   InvalidApprovalSelectionsError,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
+export {
+  CLONE_PROVIDER_ENV_KEY,
+  DEFAULT_AGENT_PROVIDER_ID,
+  MANAGER_PROVIDER_ENV_KEY,
+  agentProviderOf,
+  placedAgentProvider,
+  resolveCloneProviderId,
+  resolveManagerProviderId,
+} from './agent-provider-selection.js';
 /**
  * `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。`inferAppraisedByFromGrounds`
  * （PR #1362、`main` 未マージ）と同じ「本文の先頭に固定の印を置き、前方一致で

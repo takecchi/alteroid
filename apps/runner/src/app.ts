@@ -101,6 +101,12 @@ export interface RunnerAppDeps {
    * 固定値を確かめる。
    */
   taskBreakdownReader?: TaskBreakdownReader;
+  /**
+   * この runner のマネージャー層の provider id（`ALTEROID_MANAGER_PROVIDER` を解いたもの。
+   * #486 段 S1）。`hello` に載せてデーモンへ名乗る。省略（旧い呼び出し・テスト）は
+   * 欄を載せない ＝ 読み側が `claude` と読む。
+   */
+  managerProvider?: string;
 }
 
 const AUTH_SCHEME = /^Bearer\s+(.+)$/i;
@@ -1085,6 +1091,9 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   type: 'hello',
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
+                  ...(deps.managerProvider === undefined
+                    ? {}
+                    : { managerProvider: deps.managerProvider }),
                 }),
               }),
             sseWriteDeadlineMs,

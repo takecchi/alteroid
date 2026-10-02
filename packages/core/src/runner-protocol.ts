@@ -880,11 +880,19 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
    *
    * `capabilities`（#1394 段(C)）は `.optional()` —— 旧い runner は送らない。
    * 無いことは「どの能力も名乗っていない」であって、既定値で埋めない。
+   *
+   * `managerProvider`（#486 段 S1）はこの runner のマネージャー層の provider id
+   * （`ALTEROID_MANAGER_PROVIDER` を解いたもの）。`.optional()` —— 旧い runner は
+   * 送らず、**無ければ読み側が `claude` と読む**（旧い runner は Claude しか
+   * 持たない。`capabilities` と違い、ここは「名乗っていない」が既定の読みを持つ）。
+   * 値域を `z.enum` で縛らない: provider を足した新しい runner の名乗りを、旧い
+   * デーモンが parse 失敗で捨てないため（未知の id は文字列のまま保持する）。
    */
   z.object({
     type: z.literal('hello'),
     runnerId: z.string(),
     capabilities: z.array(z.string()).optional(),
+    managerProvider: z.string().optional(),
   }),
   z.object({ type: z.literal('session'), managerId: z.string(), sessionId: z.string() }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */

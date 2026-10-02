@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DEFAULT_AGENT_PROVIDER_ID } from './agent-ports.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { redactSecretsInText } from './denial-input-head.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
@@ -2078,6 +2079,12 @@ export interface ManagerPool {
    * ため —— 持たないプールは「確かめられない」＝ `false` として読む。
    */
   runnerHasCapability?(runnerId: string, capability: string): boolean;
+  /**
+   * その runner が直近の `hello` で名乗ったマネージャー層の provider id（#486 段 S1）。
+   * 欄を送らない旧い runner・名乗りを受けていない器は `claude`。**省略可能**なのは
+   * `runnerHasCapability?` と同じ理由（テストの偽のプールのため）。
+   */
+  runnerManagerProvider?(runnerId: string): string;
   /**
    * Issue #1394 の2つ目の契機 — `manager_start` の自動配置
    * （`RunnerRegistry#place`）が全台へ既に払った `resources()` の応答を使って、
@@ -4943,6 +4950,13 @@ class Pool implements ManagerPool {
    */
   readonly #runnerCapabilities = new Map<string, ReadonlySet<string>>();
   /**
+   * runner ごとに、直近の `hello` で名乗られたマネージャー層の provider id（#486 段 S1）。
+   * **保持するだけで、表示にも分岐にもまだ使わない**（読むのは {@link runnerManagerProvider}）。
+   * 欄を送らない旧い runner は `claude` と読む。前の名乗りは持ち越さない
+   * （`#runnerCapabilities` と同じ）。
+   */
+  readonly #runnerManagerProviders = new Map<string, string>();
+  /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
    *
@@ -6872,6 +6886,14 @@ class Pool implements ManagerPool {
 
   runnerHasCapability(runnerId: string, capability: string): boolean {
     return this.#runnerCapabilities.get(runnerId)?.has(capability) ?? false;
+  }
+
+  /**
+   * その runner が名乗ったマネージャー層の provider id（#486 段 S1）。名乗りを
+   * まだ受けていない器・欄を送らない旧い runner は `claude`。
+   */
+  runnerManagerProvider(runnerId: string): string {
+    return this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
   }
 
   /**
@@ -10588,6 +10610,10 @@ class Pool implements ManagerPool {
       // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
       // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
       this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
+      this.#runnerManagerProviders.set(
+        event.runnerId,
+        event.managerProvider ?? DEFAULT_AGENT_PROVIDER_ID,
+      );
       // **名乗りは全部 `#reattach` に通す。** 「初回だけ素通り」にすると、起動時に
       // 掴んだ器と、SSE が繋がった先の器が違う場合（畳まれつつある旧 runner が
       // まだ `/health` に答える猶予の間）に取り直しが起きない。`#reattach` は

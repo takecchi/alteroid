@@ -324,6 +324,13 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
+層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は `claude` だけ**で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
+
+| 変数                        | 値       |
+| --------------------------- | -------- |
+| `ALTEROID_CLONE_PROVIDER`   | `claude` |
+| `ALTEROID_MANAGER_PROVIDER` | `claude` |
+
 **モデル帯の3つは Shared Variables で正しい。** `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` を実際に SDK へ渡すのは `runner` で、そこが正本である。`app` も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけで、両方へ同じ値が降りているから食い違わない（片方にだけ置くと、クローンが「Opus に委譲している」と宣言しながら別の帯が走る）。空・空白のみは「未設定」として既定へ落ちるので、空で残っていても壊れない。
 
 **これを実行環境プロファイル（`alteroid profile edit`）で解かないこと。** 読むのは器（`app` と `runner`）自身の環境変数なので、その先の SDK 子プロセスで評価されるプロファイルは届かない。そしてプロファイルは**クローン自身が `profile_write` で書ける** — そこから読めばクローンが自分のモデル帯を黙って差し替えられる ＝ 承認が承認でなくなる。上の「変数を増やす前にプロファイルを検討すること」の、数少ない例外である。
