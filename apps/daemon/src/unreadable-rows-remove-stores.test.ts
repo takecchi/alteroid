@@ -2,7 +2,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  ACCESS_TOKEN_PREFIX,
   captureStderr,
+  createAuthProviderRegistry,
+  createAuthService,
+  decodeState,
+  sha256Hex,
+  type OAuthProvider,
   createMemoryStores,
   type AuthAccount,
   type PermissionGrant,
@@ -295,4 +301,99 @@ describe('AuthStore.removeUnreadableAccounts()（fs。pg・インメモリは読
       await client.close();
     }
   }, 30_000);
+});
+
+/**
+ * 読めないアカウントの行を消した後、その行を指す identity・アクセストークンが残っても
+ * fail-closed のままであること（issue #2440）。`authenticate` は `getAccount` が `null` なので
+ * `null`（401）、同じ identity での login は `completeLogin` が `exchange_failed` を返す
+ * （投げない・アカウントを作らない・トークンを出さない）。**消す口は identity・トークンに
+ * 触れない**（`revoke` と同じ。読めない行を消す前と同じ「通らない」状態が続くだけ）。
+ */
+describe('読めないアカウントを消した後の identity / トークン（fs。issue #2440）', () => {
+  it('authenticate は null、同じ identity での login は error で、アカウントは増えない', async () => {
+    const root = await makeTempDir('alteroid-test-');
+    const path = join(root, 'auth', 'auth.json');
+    const stores = createFsStores(root);
+    const bearer = `${ACCESS_TOKEN_PREFIX}fake-token-2440`;
+    await stores.auth.putAccount({
+      id: 'acct-good',
+      displayName: 'Good',
+      email: 'good@example.test',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: null,
+      grantedAt: '2026-01-01T00:00:00.000Z',
+      grantedBy: 'operator',
+      ownerDeclaredAt: null,
+    });
+    await stores.auth.putIdentity({
+      provider: 'fake',
+      subject: 'sub-bad',
+      accountId: 'acct-bad',
+      email: null,
+      emailVerified: false,
+      createdAt: '2026-01-02T00:00:00.000Z',
+      lastLoginAt: '2026-01-02T00:00:00.000Z',
+    });
+    await stores.auth.putAccessToken({
+      id: 'tok-bad',
+      accountId: 'acct-bad',
+      sha256: sha256Hex(bearer),
+      label: 'x',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      expiresAt: null,
+      lastUsedAt: null,
+      revokedAt: null,
+    });
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { accounts: unknown[] };
+    raw.accounts.push({
+      id: 'acct-bad',
+      email: `${FAKE}@example.test`,
+      createdAt: '2026-01-02T00:00:00.000Z',
+      grantedAt: '2026-01-02T00:00:00.000Z',
+      grantedBy: 'operator',
+    });
+    await writeFile(path, `${JSON.stringify(raw, null, 2)}\n`);
+
+    const provider: OAuthProvider = {
+      kind: 'oauth2',
+      id: 'fake',
+      label: 'Fake',
+      authorizationUrl: (request) => `https://example.test/authorize?state=${request.state}`,
+      exchange: async () => ({
+        subject: 'sub-bad',
+        email: `${FAKE}@example.test`,
+        emailVerified: true,
+        displayName: 'x',
+      }),
+    };
+    const service = createAuthService({
+      store: stores.auth,
+      providers: createAuthProviderRegistry([provider]),
+    });
+
+    await captureStderr(async () => {
+      const removed = await stores.auth.removeUnreadableAccounts(['acct-bad']);
+      expect(removed).toEqual({ kind: 'removed', ids: ['acct-bad'] });
+
+      expect(await service.authenticate(bearer)).toBeNull();
+
+      const started = await service.startLogin({
+        provider: 'fake',
+        redirectUri: 'http://127.0.0.1:4517/auth/fake/callback',
+      });
+      const state = decodeState(new URL(started.authorizationUrl).searchParams.get('state') ?? '');
+      const completed = await service.completeLogin({
+        state: `${state?.requestId}.${state?.nonce}`,
+        code: 'code',
+      });
+      expect(completed).toEqual({ status: 'error', reason: 'exchange_failed' });
+      expect((await stores.auth.listAccounts()).map((a) => a.id)).toEqual(['acct-good']);
+      const claimed = await service.claim({
+        requestId: started.requestId,
+        claimSecret: started.claimSecret,
+      });
+      expect(claimed.status).not.toBe('ready');
+    });
+  });
 });
