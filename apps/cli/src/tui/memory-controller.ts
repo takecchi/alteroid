@@ -5,6 +5,8 @@
  * 取り直し: ヘッダの `HeaderFeed.onEvent`（journal の SSE）の `memory_update`（と繋ぎ直しの `open`）を
  * 合図に、まとめて取り直す。まだ一度も開いていなければ読まない。
  */
+import { codePointBoundary } from '@alteroid/core';
+
 import type { MemoryDoc, MemoryRow, TuiApi } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
 import type { LogEntry } from './log.js';
@@ -198,7 +200,9 @@ export class MemoryController {
         }
         const unchanged = s.detail.doc?.content === doc.content;
         const cut = doc.content.length > MEMORY_DETAIL_CHARS;
-        const text = cut ? doc.content.slice(0, MEMORY_DETAIL_CHARS) : doc.content;
+        const text = cut
+          ? doc.content.slice(0, codePointBoundary(doc.content, MEMORY_DETAIL_CHARS))
+          : doc.content;
         return {
           ...s,
           detail: {

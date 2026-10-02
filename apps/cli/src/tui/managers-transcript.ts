@@ -8,6 +8,8 @@
  * 捨てずに `system` の行として残す（生ログは「日誌で足りないときの最後の拠り所」）。
  * `thinking` ブロックだけは出さない（後述の PR 本文の表に書く）。
  */
+import { codePointBoundary } from '@alteroid/core';
+
 import type { LogEntry, LogKind } from './log.js';
 
 /** 抜粋の長さ。道具の入力。 */
@@ -22,13 +24,13 @@ export const MAX_TRANSCRIPT_ENTRIES = 1_500;
 function excerpt(text: string, limit: number): string {
   const single = text.replace(/\s+/g, ' ').trim();
   return single.length > limit
-    ? `${single.slice(0, limit)}…（全 ${String(single.length)} 字のうち先頭だけ）`
+    ? `${single.slice(0, codePointBoundary(single, limit))}…（全 ${String(single.length)} 字のうち先頭だけ）`
     : single;
 }
 
 function capText(text: string): string {
   return text.length > TEXT_LIMIT
-    ? `${text.slice(0, TEXT_LIMIT)}\n…（全 ${String(text.length)} 字のうち先頭 ${String(TEXT_LIMIT)} 字だけ）`
+    ? `${text.slice(0, codePointBoundary(text, TEXT_LIMIT))}\n…（全 ${String(text.length)} 字のうち先頭 ${String(TEXT_LIMIT)} 字だけ）`
     : text;
 }
 

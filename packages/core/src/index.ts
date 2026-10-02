@@ -609,7 +609,7 @@ export {
  * （issue #1829）。`storage-fs` / `storage-pg` はパッケージが別なので、
  * ここ（`@alteroid/core` の公開バレル）を経由しないと届かない。
  */
-export { countCodePoints, tailByCodePoints } from './excerpt.js';
+export { codePointBoundary, countCodePoints, tailByCodePoints } from './excerpt.js';
 /**
  * オフセット付き ISO 時刻を実時刻で比べる唯一の出所（issue #2451）。`storage-fs` と
  * インメモリの許可の記録・台帳・受信箱の並びが、pg の `timestamptz` 順と揃うように使う。

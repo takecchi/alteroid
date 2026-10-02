@@ -151,6 +151,25 @@ describe('一覧の文言', () => {
   });
 });
 
+describe('切り詰めはサロゲートペアを割らない（#2592）', () => {
+  it('詳細の本文の予算切り', async () => {
+    const { controller, state } = setup((a) => {
+      a.memoryDocs['emoji'] = memoryDoc('emoji', `a${'😀'.repeat(MEMORY_DETAIL_CHARS)}`);
+    });
+    await controller.open('emoji');
+    const text = state().detail?.body[0]?.text ?? '';
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+});
+
+describe('一覧の要旨の切り詰めはサロゲートペアを割らない（#2592）', () => {
+  it('memoryDescriptionLine', () => {
+    const row = memoryRow('a', { description: `a${'😀'.repeat(400)}` });
+    expect(memoryDescriptionLine(row)).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+});
+
 describe('enter（#2599）', () => {
   it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
     const { api, controller, state } = setup((a) => {

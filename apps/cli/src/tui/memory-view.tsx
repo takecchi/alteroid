@@ -13,6 +13,7 @@ import { formatElapsedAgo } from '../format.js';
 import type { MemoryRow } from './api.js';
 import { formatCreatedAt, freshnessMarker } from '../memory.js';
 import type { MemoryDetailState, MemoryState } from './memory-controller.js';
+import { oneLine } from './journal-format.js';
 import { glyph, theme } from './theme.js';
 
 /** 一覧 1 件の行数。 */
@@ -21,11 +22,6 @@ export const MEMORY_ITEM_ROWS = 2;
 export const MEMORY_DETAIL_HEAD_ROWS = 3;
 /** 要旨の字数の上限（端末の幅でさらに切られる）。 */
 const DESCRIPTION_LIMIT = 200;
-
-const oneLine = (text: string, limit: number): string => {
-  const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
-};
 
 /** 1 行目: 種別・タイトル・slug・大きさ・更新。 */
 export function memoryTitleLine(row: MemoryRow, now: number): string {

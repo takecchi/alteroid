@@ -17,6 +17,7 @@ import stringWidth from 'string-width';
 import type { ConversationSummary } from './api.js';
 import { formatElapsedAgo } from '../format.js';
 import type { HeaderState } from './header-feed.js';
+import { oneLine } from './journal-format.js';
 import { TABS, type TabId } from './layout.js';
 import type { DisplayLine } from './log.js';
 import { glyph, logColor, theme, toneColor } from './theme.js';
@@ -236,7 +237,7 @@ export const ConversationPicker: FC<{
       {status === 'ready' && items.length === 0 ? <Text dimColor>会話はまだありません</Text> : null}
       {shown.map((item, i) => {
         const index = start + i;
-        const preview = item.preview.replace(/\s+/g, ' ').slice(0, 120);
+        const preview = oneLine(item.preview, 120);
         return (
           <Box key={item.conversationId} flexShrink={0}>
             <Text wrap="truncate-end" {...(index === selected ? { inverse: true } : {})}>

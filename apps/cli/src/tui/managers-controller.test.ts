@@ -277,6 +277,19 @@ describe('表示の文言', () => {
   });
 });
 
+describe('切り詰めはサロゲートペアを割らない（#2592）', () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+
+  it('一覧の依頼と、注記の返事待ちの要約', () => {
+    const emoji = `a${'😀'.repeat(400)}`;
+    expect(managerListLine(managerRow('a', { request: emoji }), Date.now())).not.toMatch(lone);
+    const notes = managerNotes(
+      managerRow('a', { waiting: [{ requestId: 'r', summary: emoji, kind: 'permission' }] }),
+    );
+    expect(notes.join(' ')).not.toMatch(lone);
+  });
+});
+
 describe('enter（#2599）', () => {
   it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
     const { api, controller, state } = setup();

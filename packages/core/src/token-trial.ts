@@ -9,7 +9,8 @@ import {
   type TokenCredential,
 } from './token-pool.js';
 import { toRateLimitFacts } from './usage-limits.js';
-import { describeProbeError, redactEnvSecrets } from './usage-probe.js';
+import { redactEnvSecrets } from './redact-env-secrets.js';
+import { describeProbeError } from './usage-probe.js';
 import type { TokenCandidateVerdict } from './token-candidate.js';
 
 /**

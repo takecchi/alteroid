@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApprovalsController } from './approvals-controller.js';
+import { approvalSummary } from './approvals-view.js';
 import { approvalRow, fakeApi, type FakeApi } from './fake-api.js';
 import type { HeaderFeed } from './header-feed.js';
 import { waitFor } from './test-helpers.js';
@@ -285,6 +286,13 @@ describe('答える', () => {
     expect(state().detail?.mode).toBe('form');
     expect(state().detail?.form?.text).toBe('ついでに');
     expect(state().detail?.form?.others['q1']).toBe('別の所');
+  });
+});
+
+describe('切り詰めはサロゲートペアを割らない（#2592）', () => {
+  it('一覧の質問の要約', () => {
+    const out = approvalSummary(approvalRow('a', { question: `a${'😀'.repeat(400)}` }));
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 });
 
