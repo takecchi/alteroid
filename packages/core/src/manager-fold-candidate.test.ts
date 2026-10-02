@@ -11,15 +11,14 @@ import {
  * Issue #1394 段⑤ の歯。**畳む操作は作っていない** ——ここで測るのは
  * 「畳む候補」の判定と表示だけである（`manager_stop` はどこからも呼ばない）。
  *
- * **条件3（`awaitingBackgroundSignalVersionConfirmed`）は、いまの
- * `tools.ts` 側の配線では常に `false` を渡される**（材料が無いため。
- * `manager-fold-candidate.ts` の doc）。この純関数自体は `true` を渡されても
- * 正しく動く形で書いてあるので、ここでは意図的に `true` を渡して条件1・2・
+ * **条件3（`awaitingBackgroundSignalVersionConfirmed`）は、呼び出し元が器の
+ * 機能申告を読んで渡す**（#1394 段(C) / PR #1461。名乗りが無ければ `false`。
+ * `manager-fold-candidate.ts` の doc）。この純関数は渡された値に従うだけなので、
+ * ここでは意図的に `true` を渡して条件1・2・
  * 4・5の判定を単体で測る——さもないと、どの入力を与えても常に `false` にしか
  * ならず、条件を1つずつ外す変異試験が「候補が出る」ケースを1つも作れない
  * （変異試験の生存の4分類3「テストの構造が観測不能」と同じ形になる）。
- * 呼び出し元（`tools.ts`）が実際に `false` を固定で渡していることは
- * `tools.test.ts` 側の統合の歯が確かめる。
+ * 呼び出し元が機能申告をどう読むかは、`manager.test.ts` 側の歯が確かめる。
  */
 
 const NOW = new Date('2026-09-24T12:00:00.000Z');
@@ -132,7 +131,7 @@ describe('isManagerFoldCandidate / describeManagerFoldCandidate', () => {
   });
 
   // ------------------------------------------------------------------
-  // 本番の配線（tools.ts）を模した回帰——条件3が常に false のとき
+  // 名乗りの無い器（旧い runner・名乗りを受けていない器）を模した回帰——条件3が false のとき
   // ------------------------------------------------------------------
   it('本番と同じ形（条件3が常に false）では、他の条件が何であれ候補は1件も出ない', () => {
     const productionLikeInput: ManagerFoldCandidateInput = {

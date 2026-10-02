@@ -11360,12 +11360,13 @@ export function createCloneTools(context: ToolContext) {
           // `describeManagerFoldCandidate` 1箇所（このファイルでは判定を
           // 作り直さない）。
           //
-          // **条件3（その器が背景処理待ちの印を送る版であると確かめられる）の
-          // 材料はいま存在しない**（`manager-fold-candidate.ts` の doc）——
-          // 確かめられないので `awaitingBackgroundSignalVersionConfirmed` は
-          // 常に `false` を渡す。**⟹ この行はいまのところ、他の条件が
-          // どうであっても出ない。** 器がプロトコル版・機能申告を送る
-          // ようになったら、ここを `false` から実際の確認結果へ差し替える。
+          // **条件3（その器が背景処理待ちの印を送る版であると確かめられる）は、
+          // 器の機能申告で確かめる**（#1394 段(C) / PR #1461）。器が `hello` で
+          // `RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL` を名乗った分だけ
+          // `true` になる——名乗りを受けていない・旧い器・runnerId が無い委譲は
+          // `false`（「送っているはず」と仮定しない）。自動で畳む側
+          // （`manager.ts` の `#autoFoldIdleOnRunnerIfUnderPressure`）も同じ
+          // `runnerHasCapability` を読む。
           //
           // 条件5の材料は `turnEndedAt` ではなく `updatedAt` を渡す——
           // `turnEndedAt` は `status: 'running'` の委譲でしか計算されない

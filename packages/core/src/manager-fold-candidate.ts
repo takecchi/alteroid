@@ -38,39 +38,28 @@ import type { JobStatus } from './schema.js';
  * **どれか1つでも判定に要る値が取れなければ、候補にしない。** 「取れない」を
  * 「空いた」へ倒さない（AGENTS.md「取れない軸に0の行を作る」と同じ理由）。
  *
- * ## 条件3 — 材料が無いので常に偽として実装した
+ * ## 条件3 — 器の機能申告で確かめる
  *
  * `tools.ts` の `manager_list` の説明文は逐語で「**この印は器が名乗った分にだけ
  * 立つ** — この欄を送らない古い器では、背景処理を待っていても立たない」と
  * 言っている（`awaitingBackground` の doc・`ManagerAwaitingBackground` の doc
- * も同じ「`undefined` ＝『そう名乗られていない』」という約束）。**では、
- * どの器がその印を送る版なのかを確かめる材料は無いか**——`runner-protocol.ts`
- * の `hello` イベント（`{ type: 'hello', runnerId }`）・`report` イベント・
- * `ManagerSummary` のどこにも、runner/manager 側のプロトコル版・機能申告
- * （`protocolVersion` / `capabilities` のようなもの）は無い（調査時点
- * 2026-09-24、`grep -rn 'protocolVersion\|capabilities' packages/core/src`
- * で確認——`ManagerSummary` にはこの種の欄が1つも無い）。
+ * も同じ「`undefined` ＝『そう名乗られていない』」という約束）。だから印が
+ * 無いことを「背景処理を待っていない」と読めるのは、その器が印を送る版だと
+ * 確かめられたときに限る。
  *
- * **⟹ 「送っているはず」と仮定しない。** 材料が無いので、この条件は常に偽
- * ——{@link ManagerFoldCandidateInput.awaitingBackgroundSignalVersionConfirmed}
- * を **必須の（optional ではない）** boolean フィールドとしてこの純関数には
- * 持たせるが、**実際の呼び出し元（`tools.ts` の `manager_list`）は、いまは
- * 常に `false` を渡す**（呼び出し側のコメントに同じ理由を書く）。この関数
- * 自身を「常に false を返す」形にはしていない——理由は2つ:
+ * **確かめる材料は、器の `hello` の機能申告である**（#1394 段(C) / PR #1461。
+ * `runner-protocol.ts` の `RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL`）。
+ * 書き始めた時点（2026-09-24）にはこの材料が無く、呼び出し元は常に `false`
+ * を渡していたが、いまは `ManagerRegistry.runnerHasCapability` の結果を渡す。
+ * 名乗らない器（旧い runner）・名乗りをまだ受けていない器・runnerId が無い
+ * 委譲は `false`——**「送っているはず」と仮定しない。**
  *
- * - この関数を「入力に関わらず常に false」にすると、条件1・2・4・5・6の
- *   単体テストが書けなくなる（どんな入力を与えても false にしかならず、
- *   変異試験で「条件2を外したら背景処理待ちの委譲まで候補に出る」ことを
- *   赤く示せない——テストの構造そのものが観測不能になる、変異試験の
- *   生存の4分類3と同じ形）
- * - 将来、器がプロトコル版・機能申告を送るようになったとき、この関数を
- *   直さなくても呼び出し元が正しい値を渡すだけで機能する（純関数自体は
- *   条件3の判定材料が「今は取れない」ことにしか依存していない）
+ * この関数は条件3を {@link ManagerFoldCandidateInput.awaitingBackgroundSignalVersionConfirmed}
+ * という **必須の（optional ではない）** boolean として受け取るだけで、判定の
+ * 材料を自分では取りに行かない。呼び出し元は2つある:
  *
- * **だから「常に偽」は、この純関数の中にではなく、呼び出し元の配線
- * （`tools.ts`）に置く。** 呼び出し元がいま `false` を固定で渡している
- * ことは、呼び出し元のコメントと、統合の歯（`tools.test.ts` 側。⚠ の行が
- * 一度も出ないことを確かめる）で担保する。
+ * - `tools.ts` の `manager_list`（表示だけ。段⑤）
+ * - `manager.ts` の `#autoFoldIdleOnRunnerIfUnderPressure`（自動で畳む。段④⑥⑦）
  *
  * ## 条件6 — 材料が無いので判定に使わない
  *
@@ -97,9 +86,9 @@ export interface ManagerFoldCandidateInput {
   readonly hasAwaitingBackgroundSignal: boolean;
   /**
    * 条件3の材料。**この委譲の器が、条件2の印（`awaitingBackground`）を送る版
-   * であると確かめられたか。** このファイル冒頭の doc のとおり、確かめる
-   * 材料はいま存在しない——呼び出し元（`tools.ts`）はいまは常に `false` を
-   * 渡す。`true` を渡せる経路ができるまで、この条件は事実上つねに偽になる。
+   * であると確かめられたか。** 呼び出し元が器の機能申告
+   * （`RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL`、#1394 段(C)）を読んで渡す。
+   * 名乗りが無ければ `false`（このファイル冒頭の doc）。
    */
   readonly awaitingBackgroundSignalVersionConfirmed: boolean;
   /**
@@ -158,7 +147,7 @@ function evaluateFoldCandidate(
   if (input.status !== 'done') return null;
   // 条件2
   if (input.hasAwaitingBackgroundSignal) return null;
-  // 条件3（いまは常に false を渡される——このファイル冒頭の doc）
+  // 条件3（器の機能申告。名乗りが無ければ false——このファイル冒頭の doc）
   if (!input.awaitingBackgroundSignalVersionConfirmed) return null;
   // 条件4
   if (input.activityKind !== 'active') return null;
