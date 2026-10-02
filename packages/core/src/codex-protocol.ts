@@ -539,9 +539,7 @@ export interface CodexLoginChatgptDeviceCodeParams {
 }
 
 export type CodexLoginAccountParams =
-  | CodexLoginApiKeyParams
-  | CodexLoginChatgptParams
-  | CodexLoginChatgptDeviceCodeParams;
+  CodexLoginApiKeyParams | CodexLoginChatgptParams | CodexLoginChatgptDeviceCodeParams;
 
 export interface CodexLoginApiKeyResponse {
   type: 'apiKey';
@@ -561,9 +559,7 @@ export interface CodexLoginChatgptDeviceCodeResponse {
 }
 
 export type CodexLoginAccountResponse =
-  | CodexLoginApiKeyResponse
-  | CodexLoginChatgptResponse
-  | CodexLoginChatgptDeviceCodeResponse;
+  CodexLoginApiKeyResponse | CodexLoginChatgptResponse | CodexLoginChatgptDeviceCodeResponse;
 
 export interface CodexModelListParams {
   cursor?: string | null;
@@ -731,9 +727,7 @@ function use<T>(
   fields: FieldMap<T>,
   variant?: { key: string; value: string },
 ): CodexSchemaUse {
-  return variant === undefined
-    ? { def, direction, fields }
-    : { def, direction, fields, variant };
+  return variant === undefined ? { def, direction, fields } : { def, direction, fields, variant };
 }
 
 export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
@@ -886,11 +880,15 @@ export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
     last: 'required',
     modelContextWindow: 'optional',
   }),
-  use<CodexThreadTokenUsageUpdatedNotification>('v2/ThreadTokenUsageUpdatedNotification', 'receive', {
-    threadId: 'required',
-    turnId: 'required',
-    tokenUsage: 'required',
-  }),
+  use<CodexThreadTokenUsageUpdatedNotification>(
+    'v2/ThreadTokenUsageUpdatedNotification',
+    'receive',
+    {
+      threadId: 'required',
+      turnId: 'required',
+      tokenUsage: 'required',
+    },
+  ),
   use<CodexThreadCompactedNotification>('v2/ContextCompactedNotification', 'receive', {
     threadId: 'required',
     turnId: 'required',

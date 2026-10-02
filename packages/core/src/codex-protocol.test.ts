@@ -188,7 +188,9 @@ describe('欄', () => {
       for (const [field, kind] of Object.entries(use.fields)) {
         expect(Object.keys(props), `${field} がスキーマに在る`).toContain(field);
         if (use.direction === 'receive' && kind === 'required') {
-          expect(required.has(field), `受ける型で必須にした ${field} がスキーマでも必須`).toBe(true);
+          expect(required.has(field), `受ける型で必須にした ${field} がスキーマでも必須`).toBe(
+            true,
+          );
         }
       }
       if (use.direction === 'send') {
