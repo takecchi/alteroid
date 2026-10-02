@@ -33,11 +33,13 @@ vi.mock('./target.js', async (importOriginal) => ({
     }),
 }));
 
-const { permissionListCommand, permissionRevokeCommand } = await import('./permission.js');
+const { permissionListCommand, permissionRemoveUnreadableCommand, permissionRevokeCommand } =
+  await import('./permission.js');
 
 interface Sent {
   url: string;
   method: string;
+  body?: unknown;
 }
 
 let sent: Sent[] = [];
@@ -48,7 +50,7 @@ function stubFetch(): void {
   globalThis.fetch = ((input: unknown, init?: RequestInit) => {
     const request = input as { url?: string; method?: string };
     const url = typeof input === 'string' ? input : (request.url ?? String(input));
-    sent.push({ url, method: init?.method ?? request.method ?? 'GET' });
+    sent.push({ url, method: init?.method ?? request.method ?? 'GET', body: init?.body });
     const reply = replies.shift() ?? { status: 200, body: {} };
     return Promise.resolve(
       new Response(JSON.stringify(reply.body), {
@@ -388,5 +390,41 @@ describe('alteroid permission list — 長く使われていない許可（Issue
     text = read();
     expect(text).not.toContain('長期未使用');
     expect(text).not.toContain('長く使われていない許可');
+  });
+});
+
+describe('alteroid permission remove-unreadable（issue #2440）', () => {
+  it('id を POST /permission-grants/unreadable/remove へ送り、消した id と件数を言う。値は出ない', async () => {
+    replies.push({ status: 200, body: { removedIds: ['row-1', 'row-2'], count: 2 } });
+    const read = captureStdout();
+
+    await permissionRemoveUnreadableCommand(['row-1', 'row-2']);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toBe('http://127.0.0.1:4517/permission-grants/unreadable/remove');
+    expect(sent[0]?.method).toBe('POST');
+    expect(JSON.parse(String(sent[0]?.body))).toEqual({ ids: ['row-1', 'row-2'] });
+    const text = read();
+    expect(text).toContain('読めない許可の行を 2 行消し');
+    expect(text).toContain('row-1, row-2');
+  });
+
+  it('404（指した id が読めない行に無い）は、何も消していないと言って投げる。指した文字列は映さない', async () => {
+    replies.push({ status: 404, body: { error: 'x' } });
+
+    const error = await permissionRemoveUnreadableCommand(['FAKE_SECRET_VALUE_2440']).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('何も消していません');
+    expect((error as Error).message).toContain('id が取れない行はこの口では消せません');
+    expect((error as Error).message).not.toContain('FAKE_SECRET_VALUE_2440');
+  });
+
+  it('500 はデーモンの理由を載せて投げる', async () => {
+    replies.push({ status: 500, body: { error: '保存できなかった（テスト用）' } });
+
+    await expect(permissionRemoveUnreadableCommand(['row-1'])).rejects.toThrow(/500/);
   });
 });
