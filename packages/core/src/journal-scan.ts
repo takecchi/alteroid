@@ -38,9 +38,9 @@ import type { JournalQuery, JournalStore } from './store.js';
  *
  * `JournalQuery.after` が指す錨は「id と at の両方が一致する行が無ければ
  * {@link JournalAnchorNotFoundError} を投げる」契約を持つ（`store.ts` の
- * `JournalQuery.after` の doc）。この足場が渡す錨は**直前に自分がそのページの
- * 最後の行として受け取った行そのもの**（同じ `journal.list()` 呼び出し列の
- * 中で、直前の応答から取った `{ id, at }`）なので、追記専用の日誌
+ * `JournalQuery.after` の doc）。この足場が渡す錨は**直前に store が継続点として
+ * 返した行そのもの**（`listPage()` の `next`。読めずに捨てた行を含む、ページの
+ * 最後の生の行）なので、追記専用の日誌
  * （`JournalStore` に更新・削除の口が無い）である限り、次の呼び出しでも
  * 必ず見つかる。**それでも例外そのものを握り潰さない**——呼び出し側が
  * `journal.clear()`（ワークスペースのリセット専用の例外的な消去口）を同じ
@@ -131,16 +131,18 @@ export type JournalScanPageHandler = (page: readonly JournalEntry[]) => void | b
  * 最後の行から）作り直す**——`query.after` を読むのは最初の1回の
  * `journal.list()` 呼び出しだけで、以降は上書きする。
  *
- * **終端は「空ページが返った」ときだけである（Issue #2494）。** 返った件数が
- * 要求した `limit` より少なくても、終端とは読まない。store は SQL で `LIMIT` を
- * 掛けた後に形の合わない（壊れた）行を捨てる（pg の日誌の `list()`）ので、
- * 壊れた行が1行あれば 500 件のページが 499 件で返る——「要求より少なく返った
- * ＝ その先にもう行が無い」は、store が壊れた行を捨てると成り立たない。
- * 読み損ねると `truncated: false`（探しきった）と誤って返してしまう。
- * 代わりに往復が1回増える。次の錨は短いページでも最後の行から取る。
+ * **終端は store が言う（`JournalStore.listPage()` の `next === null`。Issue #2604 / #2605）。**
+ * 返った件数が要求した `limit` より少なくても、空ページでも、終端とは読まない。
+ * store は SQL で `LIMIT` を掛けた後に形の合わない（壊れた）行を捨てる（pg の日誌の
+ * `list()`）ので、壊れた行が1行あれば 500 件のページが 499 件で返り、500 行が全部
+ * 壊れていれば空で返る——「少ない／空 ＝ その先にもう行が無い」は成り立たない。
+ * （#2494 は「空ページだけが終端」と読んでいたが、ページが丸ごと壊れていると
+ * 空ページの向こうの古い行を `truncated: false` のまま取りこぼした。）
+ * 次の頁は store が返す継続点（捨てた行を含む最後の行）から読む。空のページは
+ * `onPage` へ渡さない。
  */
 export async function scanJournalPages(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   query: Omit<JournalQuery, 'limit'>,
   onPage: JournalScanPageHandler,
   options: JournalScanOptions = {},
@@ -167,21 +169,21 @@ export async function scanJournalPages(
     // 止まる——1回も `journal.list()` を呼ばずに「打ち切った」と返す。
     if (budget <= 0) return { scanned, truncated: true };
 
-    const page = await journal.list({ ...query, order, after, limit: budget });
-    if (page.length === 0) return { scanned, truncated: false };
-    scanned += page.length;
+    const { entries: page, next } = await journal.listPage({
+      ...query,
+      order,
+      after,
+      limit: budget,
+    });
+    if (page.length > 0) {
+      scanned += page.length;
+      if (onPage(page) === false) return { scanned, truncated: false };
+      if (maxScanned !== undefined && scanned >= maxScanned) return { scanned, truncated: true };
+    }
 
-    if (onPage(page) === false) return { scanned, truncated: false };
-
-    // **短いページは終端の印ではない**（Issue #2494。冒頭の doc）。空ページが
-    // 返るまで、最後の行から錨を取って読み継ぐ。
-
-    if (maxScanned !== undefined && scanned >= maxScanned) return { scanned, truncated: true };
-
-    const last = page[page.length - 1];
-    // `page.length === 0` は既に上で return しているので、ここには必ず
-    // 最後の行が在る。念のための型ガードで、実行時に踏むことは無い。
-    if (last === undefined) return { scanned, truncated: false };
-    after = { id: last.id, at: last.at };
+    // **終端は `next === null` だけ**（Issue #2604 / #2605。冒頭の doc）。短い
+    // ページも空ページも終端の印ではない。
+    if (next === null) return { scanned, truncated: false };
+    after = next;
   }
 }

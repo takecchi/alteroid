@@ -20,6 +20,7 @@ import {
 import type { InboxEvent, JournalEntry, ScheduledRequest } from './schema.js';
 import { JournalAnchorNotFoundError, describeUnreadableSchedules } from './store.js';
 import type { JournalQuery, JournalStore, ScheduleStore } from './store.js';
+import { listPageByOverfetch } from './journal-page.js';
 import { createMemoryStores } from './testing.js';
 
 /**
@@ -38,7 +39,7 @@ import { createMemoryStores } from './testing.js';
  * 動く（`order` 省略時は desc のまま、`after` 省略時は先頭から）。
  */
 function fakeJournal(entries: JournalEntry[]): JournalStore {
-  return {
+  const journal: JournalStore = {
     async append() {
       throw new Error('このテストでは追記しない');
     },
@@ -74,11 +75,30 @@ function fakeJournal(entries: JournalEntry[]): JournalStore {
       }
       return query.limit === undefined ? windowed : windowed.slice(0, query.limit);
     },
+    async listPage(query: JournalQuery = {}) {
+      return listPageByOverfetch(journal, query);
+    },
     async oldestAt() {
       throw new Error('このテストでは使わない');
     },
     async clear() {
       throw new Error('このテストでは消さない');
+    },
+  };
+  return journal;
+}
+
+/** pg の list() と同じ形: LIMIT の後で壊れた行を捨てる。継続点は捨てた行を含む生の最後の行。 */
+function droppingAfterLimit(
+  inner: JournalStore,
+  isBroken: (e: JournalEntry) => boolean,
+): JournalStore {
+  return {
+    ...inner,
+    list: async (query) => (await inner.list(query)).filter((e) => !isBroken(e)),
+    listPage: async (query) => {
+      const page = await inner.listPage(query);
+      return { entries: page.entries.filter((e) => !isBroken(e)), next: page.next };
     },
   };
 }
@@ -1605,11 +1625,27 @@ describe('取りこぼした日報', () => {
       const broken = entry('decision', at(2026, 8, 10, 16, 0));
       const later = entry('decision', at(2026, 8, 11, 15, 0));
       const inner = fakeJournal([first, broken, later]);
-      // pg の list() と同じ形: LIMIT の後で壊れた行を捨てる。
-      const journal: JournalStore = {
-        ...inner,
-        list: async (query) => (await inner.list(query)).filter((e) => e.id !== broken.id),
-      };
+      const journal = droppingAfterLimit(inner, (e) => e.id === broken.id);
+
+      await expect(
+        missingDailyReportDates({
+          journal,
+          at: cutoff,
+          now: at(2026, 8, 12, 9, 0),
+          lookbackDays: 3,
+          scanPageSize: 2,
+        }),
+      ).resolves.toEqual(['2026-08-10', '2026-08-11']);
+    });
+
+    it('ページが丸ごと壊れていても、その先の古くない行まで読む（Issue #2605）', async () => {
+      const first = entry('decision', at(2026, 8, 10, 15, 0));
+      const brokenA = entry('decision', at(2026, 8, 10, 16, 0));
+      const brokenB = entry('decision', at(2026, 8, 10, 17, 0));
+      const later = entry('decision', at(2026, 8, 11, 15, 0));
+      const inner = fakeJournal([first, brokenA, brokenB, later]);
+      // scanPageSize 2 の 2 ページ目（brokenA, brokenB）が全部壊れている。
+      const journal = droppingAfterLimit(inner, (e) => e.id === brokenA.id || e.id === brokenB.id);
 
       await expect(
         missingDailyReportDates({

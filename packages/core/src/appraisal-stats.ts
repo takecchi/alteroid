@@ -249,7 +249,7 @@ function sortWorkKindTallies(acc: WorkKindAccumulator): AppraisalWorkKindTally[]
  * `COUNT`）へ出すこと**——上限を足す道は、出力の意味を変えずには通れない。
  */
 export async function computeAppraisalJournalStats(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   prefixes: { commitmentPrefix: string; jobPrefix: string },
 ): Promise<AppraisalJournalStats> {
   const commitments = emptyTally();
@@ -413,7 +413,7 @@ export interface AppraisalReconciliationStats {
  * ストア側の集計へ出す」判断は、この関数にも同様に当てはまる。
  */
 export async function computeAppraisalReconciliation(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   prefixes: { commitmentPrefix: string; jobPrefix: string },
 ): Promise<AppraisalReconciliationStats> {
   const commitments = emptyReconciliationAccumulator();

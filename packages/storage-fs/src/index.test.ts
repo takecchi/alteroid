@@ -15,6 +15,7 @@ import {
   verifyStoreIsolationContract,
   verifyJournalStoreHorizonContract,
   verifyJournalStoreOrderContract,
+  verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
@@ -1566,6 +1567,12 @@ describe('FsJournalStore', () => {
    * でも1件目を push した後で初めて 0 >= 0 に当たり、1件返っていた
    * （`journal.ts` の `if (limit <= 0) return found;` がこの歯を直した箇所）。
    */
+  describe('listPage 契約（Issue #2604 / #2605）', () => {
+    it('entries は list() と同じ／next は本当に先が在るときだけ／next で全件を過不足なく読める', async () => {
+      await verifyJournalStorePageContract(stores.journal);
+    });
+  });
+
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);

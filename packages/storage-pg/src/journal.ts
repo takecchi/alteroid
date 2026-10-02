@@ -8,7 +8,13 @@ import {
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
 } from '@alteroid/core';
-import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
+import type {
+  JournalEntry,
+  JournalEntryInput,
+  JournalPage,
+  JournalQuery,
+  JournalStore,
+} from '@alteroid/core';
 import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from './db.js';
@@ -105,6 +111,18 @@ export class PgJournalStore implements JournalStore {
    * という壊れ方をする余地が構造的に無い。
    */
   async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
+    return (await this.listPage(query)).entries;
+  }
+
+  /**
+   * `list()` の本体。**続きの有無と次の頁の継続点**も返す（Issue #2604 / #2605）。
+   *
+   * SQL は `limit + 1` 行を取る。余った1行があれば先に行が在る——**形が合わず
+   * 捨てる行も数える**ので、読めた件数が `limit` に満たなくても、頁が空でも、
+   * 続きを正しく言える。継続点は返す `limit` 行（捨てた行を含む）の最後の行で、
+   * 捨てた行も `id` と `at` が一致する行としては在るので `after` の錨になる。
+   */
+  async listPage(query: JournalQuery = {}): Promise<JournalPage> {
     const order = query.order ?? 'desc';
 
     // **錨の `seq` は絞り込み（types/with/since/until）を一切通さずに引く。**
@@ -166,14 +184,28 @@ export class PgJournalStore implements JournalStore {
       .from(journal)
       .where(filters.length === 0 ? undefined : and(...filters))
       .orderBy(order === 'desc' ? desc(journal.seq) : asc(journal.seq))
-      .limit(query.limit ?? Number.MAX_SAFE_INTEGER);
+      // 余りの1行は「続きが在る」を知るためだけに取る（返さない）。
+      // `limit: 0` は従来どおり 0 のまま渡す（0件の契約。#425）。
+      .limit(
+        query.limit === undefined
+          ? Number.MAX_SAFE_INTEGER
+          : query.limit > 0
+            ? query.limit + 1
+            : query.limit,
+      );
+
+    // `limit` が未指定・0 以下の呼びに「続き」は無い（全件／0件を求めている）。
+    const pageLimit = query.limit !== undefined && query.limit > 0 ? query.limit : undefined;
+    const hasMore = pageLimit !== undefined && rows.length > pageLimit;
+    const pageRows = pageLimit === undefined ? rows : rows.slice(0, pageLimit);
+    const lastRow = pageRows[pageRows.length - 1];
 
     const found: JournalEntry[] = [];
     // **この呼び出し1回ぶんのローカルな器。** `PgJournalStore` のインスタンスへ
     // 状態を持たせない（この `for` でループが完結するので、これで足りる。
     // Issue #224）。
     const dropped = new Map<string, number>();
-    for (const row of rows) {
+    for (const row of pageRows) {
       // 壊れた行があっても日誌全体を読めなくしない（fs 版と同じ扱い）。
       // ただし飛ばしたことは跡に残す——`get` と扱いを変えない。
       const restored = restoreEntry(row);
@@ -190,7 +222,11 @@ export class PgJournalStore implements JournalStore {
       }
     }
     noteDroppedJournalRowsSummary(dropped);
-    return found;
+    return {
+      entries: found,
+      next:
+        hasMore && lastRow !== undefined ? { id: lastRow.id, at: lastRow.at.toISOString() } : null,
+    };
   }
 
   /** id で1件引く（`id` は一意索引なので1行で当たる）。 */

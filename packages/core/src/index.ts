@@ -487,6 +487,11 @@ export {
  * 呼び出し側（`digest.ts` / `distill-gap.ts`）が畳んだ結果だけを残す形に
  * すれば、ヒープは有界のまま保てる（`journal-scan.ts` の doc）。
  */
+export { listPageByOverfetch } from './journal-page.js';
+export {
+  verifyJournalStorePageContract,
+  type JournalStorePageContractSubject,
+} from './journal-page-contract.js';
 export {
   JOURNAL_SCAN_PAGE_SIZE,
   scanJournalPages,

@@ -428,6 +428,28 @@ export class JournalAnchorNotFoundError extends Error {
   }
 }
 
+/**
+ * 日誌の頁の継続点。`JournalQuery.after` へそのまま渡せる形（`{ id, at }`）。
+ *
+ * **返ってきた行の最後ではなく、ストアが実際に読んだ最後の行（形が合わず捨てた
+ * 行を含む）を指す。** 捨てた行も `id` と `at` の両方が一致する行としては在る
+ * ので、`after` の錨として引ける。
+ */
+export type JournalCursor = { id: string; at: string };
+
+/** `JournalStore.listPage` の返り値（Issue #2604 / #2605）。 */
+export interface JournalPage {
+  /** `list()` と同じ中身（読めた行だけ。捨てた行は含まない）。 */
+  entries: JournalEntry[];
+  /**
+   * 次の頁の継続点。**`null` = ストアの上でもうこの先に行が無い（本当の終端）。**
+   * 非 `null` = まだ先に行が在る。`entries` が空でも非 `null` でありうる——
+   * 頁の行が全部読めずに捨てられたとき（`list()` では「空」と「終端」を区別
+   * できなかった）。次の頁は `list({ ...query, after: next })` で読む。
+   */
+  next: JournalCursor | null;
+}
+
 /** 日誌 = 追記専用の記録（PRD「可観測性」）。 */
 export interface JournalStore {
   append(entry: JournalEntryInput): Promise<JournalEntry>;
@@ -437,6 +459,23 @@ export interface JournalStore {
    * （issue #432 の2本目。`JournalQuery.order` / `JournalQuery.after` の doc）。
    */
   list(query?: JournalQuery): Promise<JournalEntry[]>;
+  /**
+   * `list()` と同じ問い合わせに、**続きの有無と次の頁の継続点**を添えて返す
+   * （Issue #2604 / #2605）。
+   *
+   * **なぜ要るか。** pg の `list()` は SQL の `LIMIT` を掛けた**後で**形の合わない
+   * 行を捨てる。だから「要求した `limit` より少ない」も「空」も、「その先に行が
+   * 無い」を意味しない。件数や空ページから終端を推すと、読めない行の向こうにある
+   * 古い行を静かに取りこぼす。ここは終端をストア自身が言う。
+   *
+   * 契約（fs・インメモリ・pg と中継層で揃える）:
+   * - `entries` は同じ問い合わせの `list()` と同じ
+   * - `next === null` は、この問い合わせの続きが（読めない行も含めて）もう
+   *   無いことだけを意味する。`limit` 未指定・`0` のときは常に `null`
+   * - `next` が非 `null` なら、`list({ ...query, after: next })` の先頭は
+   *   `entries` の続きである
+   */
+  listPage(query?: JournalQuery): Promise<JournalPage>;
   /**
    * 1件を id で引く。
    *

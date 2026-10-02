@@ -397,8 +397,18 @@ export const practiceVersionReadResponseSchema = z.object({ version: practiceVer
  *   前にかかるか（`journalWindowCrossesHorizon`、`@alteroid/core`）。真なら
  *   「その窓には無かった」と「日誌がそこまで遡れないだけ」を区別できない
  */
+/**
+ * 日誌の頁の継続点（Issue #2604 / #2605）。`GET /journal` の `afterId` / `afterAt` へ
+ * そのまま渡せる。`null` = この問い合わせの本当の終端。非 `null` なら、`entries` が
+ * `limit` 未満でも空でも先に行が在る（ストアは読めない行を `limit` の後で捨てる）。
+ * 旧デーモンはこの欄を返さない——読む側は `undefined` を「終端かどうか不明」とし、
+ * 従来の件数による推定へ倒すこと。
+ */
+export const journalNextSchema = z.object({ id: z.string(), at: isoDateTimeSchema }).nullable();
+
 export const journalListResponseSchema = z.object({
   entries: z.array(journalEntrySchema),
+  next: journalNextSchema.optional(),
   oldestAt: isoDateTimeSchema.nullable().optional(),
   crossesHorizon: z.boolean().optional(),
 });

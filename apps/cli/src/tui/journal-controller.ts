@@ -28,6 +28,8 @@ import {
   mergeFront,
   newerPageQuery,
   olderPageQuery,
+  readThroughUnreadable,
+  type PageCursor,
   type PageOutcome,
 } from '@alteroid/logic';
 
@@ -105,6 +107,11 @@ export class JournalController {
   private gen = 0;
   /** 初期読み込みの最中に届いた新着（新しい順）。読み終えたら前へ重ねる。 */
   private pending: JournalEntry[] = [];
+  /**
+   * 古い側の継続点（`GET /journal` の `next`。Issue #2604 / #2605）。`undefined` =
+   * 持っていない／欄が無い（古いデーモン。`until` で遡る）、`null` = 終端。
+   */
+  private olderCursor: PageCursor | null | undefined = undefined;
   private detachers: (() => void)[] = [];
 
   constructor(
@@ -153,6 +160,7 @@ export class JournalController {
     const gen = ++this.gen;
     const { types, q, pageSize } = this.store.getSnapshot();
     this.pending = [];
+    this.olderCursor = undefined;
     this.patch({
       status: 'loading',
       error: null,
@@ -162,14 +170,26 @@ export class JournalController {
       detail: null,
     });
     try {
-      const page = await this.api.listJournal({
+      const first = await this.api.listJournal({
         limit: pageSize,
         types,
         q,
         horizon: true,
       });
+      // 頁が全部読めない行で、空なのに終端ではないとき、継続点から読み継ぐ。
+      const page = await readThroughUnreadable(first, (cursor) =>
+        this.api.listJournal({
+          limit: pageSize,
+          types,
+          q,
+          afterId: cursor.id,
+          afterAt: cursor.at,
+          horizon: true,
+        }),
+      );
       if (gen !== this.gen) return;
-      const applied = applyInitialPage([...page.entries], pageSize);
+      this.olderCursor = page.next;
+      const applied = applyInitialPage([...page.entries], pageSize, page.next);
       const merged = mergeFront(applied.entries, this.pending).entries;
       this.pending = [];
       const budgeted = trimToBudget(merged, this.budget());
@@ -208,20 +228,39 @@ export class JournalController {
     try {
       for (;;) {
         const current = this.store.getSnapshot();
-        const query = olderPageQuery([...current.entries]);
+        const query = olderPageQuery([...current.entries], this.olderCursor);
         if (query === undefined) {
           this.patch({ olderLoading: false });
           return;
         }
-        const page = await this.api.listJournal({
+        // 継続点で読むと `until` が付かず地平の材料が付かない——`horizon` で求める。
+        const first = await this.api.listJournal({
           limit,
           types: current.types,
           q: current.q,
           ...query,
+          ...('afterId' in query ? { horizon: true } : {}),
         });
+        const page = await readThroughUnreadable(first, (cursor) =>
+          this.api.listJournal({
+            limit,
+            types: current.types,
+            q: current.q,
+            afterId: cursor.id,
+            afterAt: cursor.at,
+            horizon: true,
+          }),
+        );
         if (gen !== this.gen) return;
+        this.olderCursor = page.next;
         const latest = this.store.getSnapshot();
-        const applied = applyOlderPage([...latest.entries], [...page.entries], limit);
+        const applied = applyOlderPage(
+          [...latest.entries],
+          [...page.entries],
+          limit,
+          JOURNAL_MAX_LIMIT,
+          page.next,
+        );
         if (applied.outcome === 'retryLarger') {
           // 黙って終端に見せない。limit を上げて同じ境界を撃ち直す。
           limit = JOURNAL_MAX_LIMIT;
@@ -325,6 +364,7 @@ export class JournalController {
   setFilter(types: readonly JournalType[], q: string, pageSize?: number): void {
     this.gen += 1;
     this.pending = [];
+    this.olderCursor = undefined;
     this.patch({
       types,
       q,

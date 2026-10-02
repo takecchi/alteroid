@@ -152,6 +152,9 @@ export interface JournalListQuery {
   q?: string;
   since?: string;
   until?: string;
+  /** 頁の継続点（`GET /journal` の `next`）。組で渡す。 */
+  afterId?: string;
+  afterAt?: string;
   /** 絞らずに日誌の地平（`oldestAt` / `crossesHorizon`）も欲しいとき。 */
   horizon?: boolean;
 }
@@ -159,6 +162,8 @@ export interface JournalListQuery {
 export interface JournalListResult {
   /** 新しい順。 */
   entries: JournalEntry[];
+  /** 次の頁の継続点。`null` = 本当の終端。`undefined` = 欄が無い（古いデーモン）。 */
+  next?: { id: string; at: string } | null;
   oldestAt?: string | null;
   crossesHorizon?: boolean;
 }
@@ -437,6 +442,9 @@ export function createTuiApi(target: Target): TuiApi {
           ...(query.q === undefined || query.q === '' ? {} : { q: query.q }),
           ...(query.since === undefined ? {} : { since: query.since }),
           ...(query.until === undefined ? {} : { until: query.until }),
+          ...(query.afterId === undefined || query.afterAt === undefined
+            ? {}
+            : { afterId: query.afterId, afterAt: query.afterAt }),
           ...(query.horizon === true ? { horizon: 'true' as const } : {}),
         },
       });
@@ -444,6 +452,7 @@ export function createTuiApi(target: Target): TuiApi {
       const body = await response.json();
       return {
         entries: body.entries as JournalEntry[],
+        ...(body.next === undefined ? {} : { next: body.next }),
         ...(body.oldestAt === undefined ? {} : { oldestAt: body.oldestAt }),
         ...(body.crossesHorizon === undefined ? {} : { crossesHorizon: body.crossesHorizon }),
       };

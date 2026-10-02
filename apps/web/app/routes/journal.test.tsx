@@ -454,6 +454,35 @@ describe('もっと遡る（過去方向のカーソル送り）', () => {
     expect(new URL(secondCall).searchParams.get('until')).toBe(PAGE.at(-1)!.at);
   });
 
+  it('next が先を指すなら、100件未満で返っても終端にせず、継続点（afterId/afterAt）で読み継ぐ（Issue #2604 / #2605）', async () => {
+    // 読めない行が1行あって99件で返った初期読み込み。以前はここで終端（「これより古い
+    // 記録は無い」）になり、「もっと遡る」が出なかった。
+    const short = PAGE.slice(0, 99);
+    const cursor = { id: 'dropped-row', at: PAGE[99]!.at };
+    const stub = stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      const params = new URL(url).searchParams;
+      if (params.has('afterId')) return json({ entries: [pastDecision('older', 200)], next: null });
+      return json({ entries: short, next: cursor });
+    });
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+
+    expect(screen.queryByText(/これより古い記録は無い/)).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /もっと遡る/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/これより古い記録は無い/)).toBeTruthy();
+    });
+    const second = new URL(stub.calls.filter((url) => url.includes('/journal'))[1]!);
+    expect(second.searchParams.get('afterId')).toBe('dropped-row');
+    expect(second.searchParams.get('afterAt')).toBe(cursor.at);
+    // 継続点で読むときは until を併送しない（inclusive な境界の再送を呼ばない）。
+    expect(second.searchParams.has('until')).toBe(false);
+    expect(second.searchParams.get('horizon')).toBe('true');
+  });
+
   it('retryLarger（同じ境界が limit ちょうど埋まった）のとき limit を JOURNAL_MAX_LIMIT へ上げて撃ち直す', async () => {
     // **呼び出し回数で応答を決める（`limit` の値では決めない）。** `limit` の
     // 値で分岐すると、「limit を上げない」変異（B2）を当てたときに同じ分岐へ

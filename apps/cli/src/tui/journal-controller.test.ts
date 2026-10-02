@@ -342,3 +342,53 @@ describe('詳細', () => {
     expect(state()).toMatchObject({ view: 'list', detail: null });
   });
 });
+
+/**
+ * 継続点（`GET /journal` の `next`。Issue #2604 / #2605）。デーモンは読めない行を
+ * `limit` の後で捨てるので、頁が短い・空であることは終端ではない。
+ */
+describe('継続点 next（Issue #2604 / #2605）', () => {
+  it('limit 未満で返っても next が先を指すなら end にせず、続きを読んで古い行へ届く', async () => {
+    const { api, controller, state, ids } = setup((a) => {
+      a.journalCursors = true;
+      a.journalEntries = run(6);
+      a.journalUnreadable = new Set(['e5']);
+    });
+    controller.setFilter([], '', 3);
+    await waitFor(() => state().status === 'ready');
+    // 生の頁は e6 e5 e4 のうち e5 が読めず、2 件で返る。先に e3.. が在る。
+    expect(ids()).toEqual(['e6', 'e4']);
+    expect(state().older).toBe('progress');
+
+    await controller.loadOlder();
+    expect(ids()).toEqual(['e6', 'e4', 'e3', 'e2', 'e1']);
+    expect(state().older).toBe('end');
+    // 古い側は until ではなく継続点（afterId）で読む。
+    expect(api.journalListCalls.at(-1)).toMatchObject({ afterId: 'e4', horizon: true });
+  });
+
+  it('最初の頁が丸ごと読めなくても、空と描かずに古い側まで読み継ぐ', async () => {
+    const { controller, state, ids } = setup((a) => {
+      a.journalCursors = true;
+      a.journalEntries = run(8);
+      a.journalUnreadable = new Set(['e8', 'e7', 'e6']);
+    });
+    controller.setFilter([], '', 3);
+    await waitFor(() => state().status === 'ready');
+    expect(ids()).toEqual(['e5', 'e4', 'e3']);
+    expect(state().older).toBe('progress');
+  });
+
+  it('本当の終端: 件数がちょうど limit でも next が null なら end で、読み足さない', async () => {
+    const { api, controller, state, ids } = setup((a) => {
+      a.journalCursors = true;
+      a.journalEntries = run(3);
+    });
+    controller.setFilter([], '', 3);
+    await waitFor(() => state().status === 'ready');
+    expect(ids()).toEqual(['e3', 'e2', 'e1']);
+    expect(state().older).toBe('end');
+    await controller.loadOlder();
+    expect(api.journalListCalls).toHaveLength(1);
+  });
+});

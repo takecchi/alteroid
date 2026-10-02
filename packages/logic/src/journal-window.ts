@@ -93,6 +93,48 @@ export const JOURNAL_MAX_LIMIT = 1000;
  */
 export type PageOutcome = 'progress' | 'end' | 'retryLarger' | 'blocked';
 
+/**
+ * `GET /journal` が返す次の頁の継続点（`next`。`afterId` / `afterAt` へそのまま渡せる）。
+ *
+ * **`next` の三状態（Issue #2604 / #2605）。**
+ * - `null` = ストアが「この先に行は無い」と言った（本当の終端）
+ * - `{ id, at }` = まだ先に行が在る。応答の `entries` が `limit` 未満でも空でも
+ * - `undefined` = 応答に欄が無い（`next` を返さない古いデーモン）。件数での推定
+ *   （下の `pageOutcome`）へ倒す——**この三つ目を `null` と同じ顔にしないこと**
+ *
+ * ストアは `LIMIT` を掛けた**後**で読めない行を捨てる（pg）ので、件数が少ない・
+ * 空であることは終端の印にならない。件数から終端を推すのは `next` が無いときだけの
+ * 後方互換である。
+ */
+export interface PageCursor {
+  id: string;
+  at: string;
+}
+
+/** 継続点があれば、それが示す終端／継続。無ければ `undefined`（件数で推すしかない）。 */
+function outcomeFromNext(next: PageCursor | null | undefined): 'end' | 'progress' | undefined {
+  if (next === undefined) return undefined;
+  return next === null ? 'end' : 'progress';
+}
+
+/**
+ * 頁が空で、かつ先に行が在る（`next` が非 `null`）間、継続点から読み継ぐ。
+ *
+ * **頁の行が全部読めずに捨てられると、応答は空なのに終端ではない**（Issue #2604 /
+ * #2605）。空の応答をそのまま画面に載せると「何も無い」画面になり、読み継ぐ手がかりも
+ * 失う——利用者の手を待たずにここで読み切る。継続点は毎回ストアの先へ進むので、
+ * 有限回で止まる。`next` が無い（古いデーモン）頁・`null` の頁は、そのまま返す。
+ */
+export async function readThroughUnreadable<
+  P extends { entries: readonly unknown[]; next?: PageCursor | null },
+>(first: P, fetchAfter: (cursor: PageCursor) => Promise<P>): Promise<P> {
+  let page = first;
+  while (page.entries.length === 0 && page.next !== undefined && page.next !== null) {
+    page = await fetchAfter(page.next);
+  }
+  return page;
+}
+
 export function pageOutcome(
   pageLength: number,
   limit: number,
@@ -152,7 +194,18 @@ export function newerPageQuery(entries: JournalEntry[]): { since: string } | und
  * 取り違え（B1）は「もっと遡る」ボタン経由で既に jsdom から届いているので、
  * **ここへ出したことで新しく測れるようになったものは無い** — 揃えただけである。
  */
-export function olderPageQuery(entries: JournalEntry[]): { until: string } | undefined {
+export function olderPageQuery(
+  entries: JournalEntry[],
+  cursor?: PageCursor | null,
+): { until: string } | { afterId: string; afterAt: string } | undefined {
+  // **継続点が在れば、それで読む（Issue #2604 / #2605）。** 一覧の末尾の `at` は
+  // 読めずに捨てられた行を越えられない（その向こうの行を飛ばす）うえ、inclusive な
+  // `until` は境界の行を再送する。継続点は「ストアが実際に読んだ最後の行」を指し、
+  // 空の一覧からでも続けられる。`until` を使わないので、地平の材料
+  // （`oldestAt`/`crossesHorizon`）は呼び出し側が `horizon` で明示に求めること。
+  if (cursor !== undefined) {
+    return cursor === null ? undefined : { afterId: cursor.id, afterAt: cursor.at };
+  }
   const until = oldestAt(entries);
   return until === undefined ? undefined : { until };
 }
@@ -189,10 +242,16 @@ export interface PageApplication {
  * （`use-journal-window.ts` の初期 `useEffect`）だけでは足りず、この関数で
  * 初期読み込み自身が `'end'` を言い切れるようにする必要がある。**
  */
-export function applyInitialPage(page: JournalEntry[], limit: number): PageApplication {
+export function applyInitialPage(
+  page: JournalEntry[],
+  limit: number,
+  next?: PageCursor | null,
+): PageApplication {
   return {
     entries: page,
-    outcome: page.length < limit ? 'end' : 'progress',
+    // **終端は `next` が言う**（無ければ従来どおり件数で推す。`PageCursor` の doc）。
+    // ストアが読めない行を捨てると、499 件で返っても先に行が在りうる。
+    outcome: outcomeFromNext(next) ?? (page.length < limit ? 'end' : 'progress'),
     freshCount: page.length,
   };
 }
@@ -206,11 +265,14 @@ export function applyOlderPage(
   page: JournalEntry[],
   limit: number,
   maxLimit: number = JOURNAL_MAX_LIMIT,
+  next?: PageCursor | null,
 ): PageApplication {
   const merged = mergeBack(existing, page);
   return {
     entries: merged.entries,
-    outcome: pageOutcome(page.length, limit, merged.freshCount, maxLimit),
+    // 継続点で読んだ頁には、inclusive な境界の再送も「同じ `at` の詰まり」も無い——
+    // 終端は `next` が言う。無いとき（古いデーモン）だけ件数で推す。
+    outcome: outcomeFromNext(next) ?? pageOutcome(page.length, limit, merged.freshCount, maxLimit),
     freshCount: merged.freshCount,
   };
 }

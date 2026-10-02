@@ -24,6 +24,7 @@ import {
   oldestAt,
   olderPageQuery,
   pageOutcome,
+  readThroughUnreadable,
   shiftForPrepend,
 } from './journal-window.js';
 
@@ -370,5 +371,104 @@ describe('journalHorizonNote（issue #1510 の積み残し）', () => {
 
   it('crossesHorizon が未定義（サーバの応答に無い）なら注記は無い', () => {
     expect(journalHorizonNote('end', '2026-09-12T20:21:05.123Z', undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * 継続点（`GET /journal` の `next`。Issue #2604 / #2605）。ストアは `LIMIT` の後で
+ * 読めない行を捨てるので、件数が `limit` 未満・空でも終端ではない。終端は `next` が言う。
+ */
+describe('継続点 next（Issue #2604 / #2605）', () => {
+  const cursor = { id: 'c', at: '2026-08-20T00:00:00.000Z' };
+  const page499 = Array.from({ length: 499 }, (_, i) =>
+    entry(`p${i}`, new Date(Date.UTC(2026, 7, 20) - i * 60_000).toISOString()),
+  );
+
+  it('applyInitialPage: 499 件で返っても next が非 null なら progress（end にしない）', () => {
+    expect(applyInitialPage(page499, 500, cursor).outcome).toBe('progress');
+  });
+
+  it('applyInitialPage: next が null なら、limit ちょうどでも end（本当の終端）', () => {
+    const exact = Array.from({ length: 3 }, (_, i) =>
+      entry(`e${i}`, `2026-08-20T00:0${i}:00.000Z`),
+    );
+    expect(applyInitialPage(exact, 3, null).outcome).toBe('end');
+  });
+
+  it('applyInitialPage: 空の頁でも next が非 null なら progress', () => {
+    expect(applyInitialPage([], 500, cursor).outcome).toBe('progress');
+  });
+
+  it('applyInitialPage: next の欄が無い（古いデーモン）なら従来どおり件数で推す', () => {
+    expect(applyInitialPage(page499, 500).outcome).toBe('end');
+    expect(applyInitialPage(page499, 499).outcome).toBe('progress');
+  });
+
+  it('applyOlderPage: next が非 null なら、短い頁（freshCount 0 を含む）でも progress', () => {
+    const existing = [entry('a', '2026-08-20T00:02:00.000Z')];
+    const older = [entry('b', '2026-08-20T00:01:00.000Z')];
+    expect(applyOlderPage(existing, older, 500, 1000, cursor).outcome).toBe('progress');
+    expect(applyOlderPage(existing, [], 500, 1000, cursor).outcome).toBe('progress');
+  });
+
+  it('applyOlderPage: next が null なら end。next が無ければ従来の判定（短い頁は end）', () => {
+    const existing = [entry('a', '2026-08-20T00:02:00.000Z')];
+    const older = [entry('b', '2026-08-20T00:01:00.000Z')];
+    expect(applyOlderPage(existing, older, 500, 1000, null).outcome).toBe('end');
+    expect(applyOlderPage(existing, existing, 1, 1000).outcome).toBe('retryLarger');
+  });
+
+  it('olderPageQuery: 継続点が在れば afterId/afterAt で読む（一覧が空でも）。null なら撃たない', () => {
+    expect(olderPageQuery([], cursor)).toEqual({ afterId: 'c', afterAt: cursor.at });
+    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')], cursor)).toEqual({
+      afterId: 'c',
+      afterAt: cursor.at,
+    });
+    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')], null)).toBeUndefined();
+    // 継続点を持たない（古いデーモン）なら従来どおり until
+    expect(olderPageQuery([entry('a', '2026-08-20T00:02:00.000Z')])).toEqual({
+      until: '2026-08-20T00:02:00.000Z',
+    });
+  });
+
+  describe('readThroughUnreadable（空なのに終端でない頁を読み継ぐ）', () => {
+    type P = { entries: JournalEntry[]; next?: { id: string; at: string } | null };
+    const real = entry('r', '2026-08-20T00:00:00.000Z');
+
+    it('空で next が非 null の間、継続点で読み継ぎ、読めた頁か終端の頁で止まる', async () => {
+      const seen: string[] = [];
+      const pages: Record<string, P> = {
+        c1: { entries: [], next: { id: 'c2', at: cursor.at } },
+        c2: { entries: [real], next: null },
+      };
+      const result = await readThroughUnreadable<P>(
+        { entries: [], next: { id: 'c1', at: cursor.at } },
+        async (c) => {
+          seen.push(c.id);
+          return pages[c.id]!;
+        },
+      );
+      expect(seen).toEqual(['c1', 'c2']);
+      expect(result).toEqual({ entries: [real], next: null });
+    });
+
+    it('空でも next が null／欄が無いなら読み継がない（終端・古いデーモン）', async () => {
+      const never = async (): Promise<P> => {
+        throw new Error('呼ばれない');
+      };
+      expect(await readThroughUnreadable<P>({ entries: [], next: null }, never)).toEqual({
+        entries: [],
+        next: null,
+      });
+      expect(await readThroughUnreadable<P>({ entries: [] }, never)).toEqual({ entries: [] });
+    });
+
+    it('1件でも読めた頁は、next が非 null でもそのまま返す', async () => {
+      const never = async (): Promise<P> => {
+        throw new Error('呼ばれない');
+      };
+      const first: P = { entries: [real], next: cursor };
+      expect(await readThroughUnreadable<P>(first, never)).toBe(first);
+    });
   });
 });

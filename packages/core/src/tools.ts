@@ -6344,7 +6344,7 @@ export function createCloneTools(context: ToolContext) {
 
         // --- 一覧モード ---
         const requested = limit ?? 20;
-        const entries = await stores.journal.list({
+        const { entries, next: moreBeyond } = await stores.journal.listPage({
           limit: requested,
           ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
           ...(normalizedUntil === undefined ? {} : { until: normalizedUntil }),
@@ -6382,6 +6382,20 @@ export function createCloneTools(context: ToolContext) {
           entries.length === 0,
         );
         const horizonNoteLines = horizonNote === undefined ? [] : [horizonNote];
+
+        if (entries.length === 0 && moreBeyond !== null) {
+          // **頁の行が全部読めずに捨てられた（Issue #2604 / #2605）。** ストアは
+          // 形の合わない行を `limit` の後で捨てるので、空は「無かった」ではない。
+          // 「その条件に当たる日誌は無い」と言うと、読めない行の向こうの行を
+          // 無かったことにする。
+          return text(
+            [
+              `この頁の ${requested} 行は読めない形の行だけだった（日誌が無いのではない）。` +
+                'さらに古い側に行が在る。limit を大きくするか since / until で窓をずらして読み直すこと。',
+              ...horizonNoteLines,
+            ].join('\n'),
+          );
+        }
 
         if (entries.length === 0) {
           // **`q` で0件だったとき、探す対象に入っていない欄が在ることまで言う。**

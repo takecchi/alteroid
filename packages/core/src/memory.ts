@@ -259,25 +259,23 @@ export const MEMORY_JOURNAL_SCAN_PAGE_SIZE = 1000;
  * すべてに対して測る契約と同じ前提）。
  */
 async function walkMemoryUpdateJournalAscending(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   pageSize: number,
   onPage: (page: JournalEntry[]) => void,
 ): Promise<void> {
   let after: JournalQuery['after'];
   for (;;) {
-    const page = await journal.list({
+    const { entries: page, next } = await journal.listPage({
       types: ['memory_update'],
       order: 'asc',
       limit: pageSize,
       ...(after === undefined ? {} : { after }),
     });
-    // 終端は空ページだけ（Issue #2494）。store が壊れた行を捨てると、ページは
-    // 短くなっても先に行が在りうる（`journal-scan.ts` の doc）。
-    if (page.length === 0) return;
-    onPage(page);
-    const last = page[page.length - 1];
-    if (last === undefined) return;
-    after = { id: last.id, at: last.at };
+    if (page.length > 0) onPage(page);
+    // 終端は store が言う（`next === null`。Issue #2604 / #2605）。store が壊れた行を
+    // 捨てると、ページは短くなっても・空でも先に行が在りうる（`journal-scan.ts` の doc）。
+    if (next === null) return;
+    after = next;
   }
 }
 
@@ -305,7 +303,7 @@ async function walkMemoryUpdateJournalAscending(
  * 「先着を残す」と、古い順の「毎回上書きする」は同じ集計の裏表である。
  */
 export async function deriveHumanTouchedAtFromJournal(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
 ): Promise<Map<string, string>> {
   const pageSize = options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE;
@@ -352,7 +350,7 @@ export async function deriveHumanTouchedAtFromJournal(
  * 基準のまま、という穴ができるので実装はここに1本化する。
  */
 export async function deriveMemoryCreatedAtFromJournal(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'listPage'>,
   options: { pageSize?: number } = {},
 ): Promise<Map<string, string>> {
   const pageSize = options.pageSize ?? MEMORY_JOURNAL_SCAN_PAGE_SIZE;

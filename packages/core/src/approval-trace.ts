@@ -98,6 +98,7 @@ export function stampingJournal(
   return {
     append: (entry) => journal.append(stampAnsweredApproval(entry, currentApprovalId())),
     list: (query) => journal.list(query),
+    listPage: (query) => journal.listPage(query),
     get: (id) => journal.get(id),
     oldestAt: () => journal.oldestAt(),
     clear: () => journal.clear(),

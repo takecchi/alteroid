@@ -284,7 +284,7 @@ export interface DistillGap {
  * 終わらない）ので、**倒す向きとしてはこちらが正しい。**
  */
 export async function deriveDistillGapFromJournal(
-  journal: Pick<JournalStore, 'list'>,
+  journal: Pick<JournalStore, 'list' | 'listPage'>,
   options: { until: string; activityScanLimit?: number },
 ): Promise<DistillGap | null> {
   const { until } = options;

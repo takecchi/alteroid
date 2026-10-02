@@ -39,10 +39,21 @@ function fakeJournal(appended: readonly JournalEntry[]) {
       throw new Error('このテストでは追記しない');
     },
     async list(query: JournalQuery = {}) {
+      return (await journal.listPage(query)).entries;
+    },
+    async listPage(query: JournalQuery = {}) {
       windows.push(query.limit);
       let found = [...appended].reverse();
       if (query.types) found = found.filter((entry) => query.types?.includes(entry.type));
-      return query.limit === undefined ? found : found.slice(0, query.limit);
+      const { limit } = query;
+      if (limit === undefined) return { entries: found, next: null };
+      const entries = found.slice(0, limit);
+      const last = entries[entries.length - 1];
+      // 窓を埋めたうえでまだ行が残っているときだけ続きを言う（ストアと同じ）。
+      return {
+        entries,
+        next: found.length > limit && last !== undefined ? { id: last.id, at: last.at } : null,
+      };
     },
     async get() {
       return null;
@@ -171,6 +182,28 @@ describe('日報の並び', () => {
     await listDailyReports(journal, 7);
 
     expect(windows).toEqual([7 + REPORT_WINDOW_SLACK]);
+  });
+
+  it('窓が丸ごと読めない行で埋まっていても、先の日報まで読む（Issue #2604 / #2605）', async () => {
+    const good = report('2026-08-19', '2026-08-19T22:00:00.000Z');
+    // 新しい側の窓（limit 1 + スラック）が、全部読めずに捨てられる行。
+    const broken = Array.from({ length: 1 + REPORT_WINDOW_SLACK }, (_, i) =>
+      report('2026-08-20', `2026-08-20T22:${String(i).padStart(2, '0')}:00.000Z`),
+    );
+    const brokenIds = new Set(broken.map((entry) => entry.id));
+    const { journal: inner } = fakeJournal([good, ...broken]);
+    // pg の list() と同じ形: LIMIT の後で読めない行を捨てる。継続点は捨てた行を含む。
+    const journal: JournalStore = {
+      ...inner,
+      listPage: async (query) => {
+        const page = await inner.listPage(query);
+        return { entries: page.entries.filter((e) => !brokenIds.has(e.id)), next: page.next };
+      },
+    };
+
+    const reports = await listDailyReports(journal, 1);
+
+    expect(reports.map((entry) => entry.id)).toEqual([good.id]);
   });
 
   it('「作れなかった」印の行も一覧に出す（隠すと、来ていない日と区別できない）', async () => {

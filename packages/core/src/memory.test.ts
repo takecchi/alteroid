@@ -60,6 +60,7 @@ import {
   type MemoryTocIssue,
 } from './memory.js';
 import type { JournalEntry, MemoryDescriptionFreshness, MemoryProtectionStatus } from './schema.js';
+import { listPageByOverfetch } from './journal-page.js';
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalQuery, JournalStore } from './store.js';
 
@@ -190,8 +191,11 @@ describe('MemoryProtectionStatus の網羅性', () => {
  * `entries` は**新しい順（desc）**で渡す——既存のテストの慣習（下のコメント
  * 「journal.list() は新しい順に返るので、新しい順に並べて渡す」）を保つ。
  */
-function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list'> {
-  return {
+function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list' | 'listPage'> {
+  const journal: Pick<JournalStore, 'list' | 'listPage'> = {
+    async listPage(query: JournalQuery = {}) {
+      return listPageByOverfetch(journal, query);
+    },
     async list(query: JournalQuery = {}): Promise<JournalEntry[]> {
       let pool = entries;
       if (query.types !== undefined) {
@@ -213,6 +217,7 @@ function fakeJournal(entries: JournalEntry[]): Pick<JournalStore, 'list'> {
       return query.limit === undefined ? windowed : windowed.slice(0, query.limit);
     },
   };
+  return journal;
 }
 
 /** `memory_update` の日誌エントリを1件作る（テストの意図を読みやすくする）。 */
@@ -423,8 +428,12 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
     entries.reverse();
     const inner = fakeJournal(entries);
     // pg の list() と同じ形: LIMIT の後で壊れた行を捨てる（ここでは id-1）。
-    const dropping: Pick<JournalStore, 'list'> = {
-      list: async (query) => (await inner.list(query)).filter((e) => e.id !== 'id-1'),
+    // 継続点は捨てた行を含む生の最後の行。
+    const dropping: Pick<JournalStore, 'listPage'> = {
+      listPage: async (query) => {
+        const page = await inner.listPage(query);
+        return { entries: page.entries.filter((e) => e.id !== 'id-1'), next: page.next };
+      },
     };
 
     const created = await deriveMemoryCreatedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
@@ -434,6 +443,29 @@ describe('ページング（Issue #1283）— pageSize を変えても導出結�
       ['slug-0', 'slug-2', 'slug-3', 'slug-4', 'slug-5'].sort(),
     );
     expect(touched.size).toBe(5);
+  });
+
+  it('ページが丸ごと壊れていても、その先の行まで読む（Issue #2605）', async () => {
+    const entries: JournalEntry[] = [];
+    for (let i = 0; i < 9; i += 1) {
+      const at = new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString();
+      entries.push(memoryUpdateEntry(`slug-${i}`, at, 'write', { cause: 'human', id: `id-${i}` }));
+    }
+    entries.reverse();
+    const inner = fakeJournal(entries);
+    // PAGE_SIZE=3 の 2 ページ目（asc で id-3..id-5）が全部壊れている。
+    const broken = new Set(['id-3', 'id-4', 'id-5']);
+    const dropping: Pick<JournalStore, 'listPage'> = {
+      listPage: async (query) => {
+        const page = await inner.listPage(query);
+        return { entries: page.entries.filter((e) => !broken.has(e.id)), next: page.next };
+      },
+    };
+
+    const created = await deriveMemoryCreatedAtFromJournal(dropping, { pageSize: PAGE_SIZE });
+    expect([...created.keys()].sort()).toEqual(
+      ['slug-0', 'slug-1', 'slug-2', 'slug-6', 'slug-7', 'slug-8'].sort(),
+    );
   });
 
   it('既定の pageSize（MEMORY_JOURNAL_SCAN_PAGE_SIZE）を省略しても動く（境界の桁だけ確認）', async () => {

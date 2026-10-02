@@ -2,10 +2,12 @@ import {
   captureStderr,
   createManagerPool,
   createRunnerRegistry,
+  scanJournalPages,
   verifyCommitmentAppraisalContract,
   verifyCommitmentFoldContract,
   verifyJournalStoreHorizonContract,
   verifyJournalStoreOrderContract,
+  verifyJournalStorePageContract,
   verifyJournalStoreQueryEdgeContract,
   verifyJournalStoreSearchContract,
   verifyJournalStoreWithContract,
@@ -504,6 +506,134 @@ describe('PgJournalStore', () => {
    * `query.types.length === 0` を特別扱いして「絞らない」に倒していた
    * （`journal.ts` の `with` の行はこの特別扱いを持たない）。
    */
+  /**
+   * **読めない行が `LIMIT` の後で捨てられる実 SQL（PGlite）での、続きの言い方**
+   * （Issue #2604 / #2605）。`list()` は 500 件を求めて 499 件、または 0 件で返る
+   * ことがあり、そのどちらも「先に行が無い」ではない。
+   */
+  describe('listPage: 読めない行と頁の境界（Issue #2604 / #2605）', () => {
+    /** seq は挿入順。`broken` は schema に合わない種別（未知の版の行）。 */
+    async function insertRows(rows: readonly { id: string; broken?: true }[]): Promise<void> {
+      for (const [index, row] of rows.entries()) {
+        const at = new Date(Date.UTC(2026, 7, 1, 0, 0, index));
+        await db.insert(journalTable).values(
+          row.broken === true
+            ? { id: row.id, at, type: 'future-type', entry: { leaked: 'x' } }
+            : {
+                id: row.id,
+                at,
+                type: 'decision',
+                entry: { decision: row.id, grounds: 'g' },
+              },
+        );
+      }
+    }
+    const ids = (entries: readonly JournalEntry[]): string[] => entries.map((e) => e.id);
+
+    it('頁の途中に読めない行があると、entries は短いが next は先の行を指す', async () => {
+      await insertRows([{ id: 'g0' }, { id: 'g1' }, { id: 'b2', broken: true }, { id: 'g3' }]);
+
+      // desc の生の頁は [g3, b2]。b2 が捨てられて entries は 1 件だが、g1・g0 が先に在る。
+      const page = await stores.journal.listPage({ limit: 2 });
+
+      expect(ids(page.entries)).toEqual(['g3']);
+      expect(page.next).toEqual({ id: 'b2', at: '2026-08-01T00:00:02.000Z' });
+    });
+
+    it('頁が丸ごと読めなくても entries は空で next が先を指し、next から古い行へ届く', async () => {
+      await insertRows([
+        { id: 'g0' },
+        { id: 'b1', broken: true },
+        { id: 'b2', broken: true },
+        { id: 'g3' },
+      ]);
+
+      const first = await stores.journal.listPage({ limit: 1 });
+      expect(ids(first.entries)).toEqual(['g3']);
+      expect(first.next?.id).toBe('g3');
+
+      // 生の頁は [b2, b1] で全部読めない。空だが終端ではない。
+      const second = await stores.journal.listPage({ limit: 2, after: first.next! });
+      expect(second.entries).toEqual([]);
+      expect(second.next).toEqual({ id: 'b1', at: '2026-08-01T00:00:01.000Z' });
+
+      // 継続点（捨てた行）は after の錨として引ける。その先に g0 が在る。
+      const third = await stores.journal.listPage({ limit: 2, after: second.next! });
+      expect(ids(third.entries)).toEqual(['g0']);
+      expect(third.next).toBeNull();
+    });
+
+    it('本当の終端: 末尾（最古）の読めない行だけが残っているなら next は null', async () => {
+      await insertRows([{ id: 'b0', broken: true }, { id: 'g1' }]);
+
+      const page = await stores.journal.listPage({ limit: 2 });
+
+      expect(ids(page.entries)).toEqual(['g1']);
+      expect(page.next).toBeNull();
+    });
+
+    it('list() は従来どおり（読めた行だけを返す）', async () => {
+      await insertRows([{ id: 'g0' }, { id: 'b1', broken: true }, { id: 'g2' }]);
+
+      expect(ids(await stores.journal.list({ limit: 2 }))).toEqual(['g2']);
+      expect(ids(await stores.journal.list())).toEqual(['g2', 'g0']);
+    });
+
+    it('scanJournalPages: 頁が丸ごと読めなくても、その先の古い行まで読み、探し切ったと言う', async () => {
+      await insertRows([
+        { id: 'g0' },
+        { id: 'g1' },
+        { id: 'b2', broken: true },
+        { id: 'b3', broken: true },
+        { id: 'g4' },
+      ]);
+      const seen: string[] = [];
+
+      const result = await scanJournalPages(
+        stores.journal,
+        {},
+        (page) => {
+          seen.push(...page.map((e) => e.id));
+        },
+        { pageSize: 2 },
+      );
+
+      // 頁は [g4, b3] / [b2, g1] / [g0]。b2 と b3 が別の頁の端でも先を取りこぼさない。
+      expect(seen).toEqual(['g4', 'g1', 'g0']);
+      expect(result).toEqual({ scanned: 3, truncated: false });
+    });
+
+    it('scanJournalPages: 頁が全部読めない行の区間を越えて、古い行に届く', async () => {
+      await insertRows([
+        { id: 'g0' },
+        { id: 'b1', broken: true },
+        { id: 'b2', broken: true },
+        { id: 'g3' },
+        { id: 'g4' },
+      ]);
+      const seen: string[] = [];
+
+      const result = await scanJournalPages(
+        stores.journal,
+        {},
+        (page) => {
+          seen.push(...page.map((e) => e.id));
+        },
+        { pageSize: 2 },
+      );
+
+      // desc の頁は [g4, g3] / [b2, b1]（丸ごと読めない）/ [g0]。空の頁で打ち切ると g0 を逃す。
+      expect(seen).toEqual(['g4', 'g3', 'g0']);
+      expect(result).toEqual({ scanned: 3, truncated: false });
+    });
+  });
+
+  describe('listPage 契約（Issue #2604 / #2605）', () => {
+    it('entries は list() と同じ／next は本当に先が在るときだけ／next で全件を過不足なく読める', async () => {
+      await verifyJournalStorePageContract(stores.journal);
+    });
+  });
+
   describe('query edge 契約（issue #425）', () => {
     it('types: []=0件／limit: 0=0件／types 未指定=絞らない／指定=その種別だけ／limit:N(N>=1)はN件で切る／同時指定でも0件', async () => {
       await verifyJournalStoreQueryEdgeContract(stores.journal);

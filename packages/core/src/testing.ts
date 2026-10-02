@@ -8,6 +8,7 @@ import { assertArchivableSessionId } from './archive-session-id.js';
 import { setStderrSinkForTesting } from './dropped-record.js';
 import { tailByCodePoints } from './excerpt.js';
 import { deriveMemoryFrontmatter, nextDescribedState } from './memory.js';
+import { listPageByOverfetch } from './journal-page.js';
 import { matchesJournalSearch } from './journal-search.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type {
@@ -573,6 +574,9 @@ export function createMemoryStores(): Stores {
         found = found.filter((entry) => entry.at <= until);
       }
       return query.limit === undefined ? found : found.slice(0, query.limit);
+    },
+    async listPage(query: JournalQuery = {}) {
+      return listPageByOverfetch(journal, query);
     },
     async get(id: string) {
       return entries.find((entry) => entry.id === id) ?? null;

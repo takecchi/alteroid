@@ -1,4 +1,10 @@
-import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
+import type {
+  JournalEntry,
+  JournalEntryInput,
+  JournalPage,
+  JournalQuery,
+  JournalStore,
+} from '@alteroid/core';
 
 /**
  * 日誌の追記をそのまま購読できるようにする層。
@@ -39,6 +45,9 @@ export function createJournalBus(inner: JournalStore): JournalBus {
     },
     list(query?: JournalQuery): Promise<JournalEntry[]> {
       return inner.list(query);
+    },
+    listPage(query?: JournalQuery): Promise<JournalPage> {
+      return inner.listPage(query);
     },
     get(id: string): Promise<JournalEntry | null> {
       return inner.get(id);

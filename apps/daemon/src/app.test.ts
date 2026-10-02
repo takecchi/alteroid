@@ -6221,7 +6221,7 @@ describe('GET /journal の q（issue #250）', () => {
     const body = (await (
       await app.request(`/journal?q=${encodeURIComponent('トマト')}`)
     ).json()) as Record<string, unknown>;
-    expect(Object.keys(body)).toEqual(['entries']);
+    expect(Object.keys(body)).toEqual(['entries', 'next']);
   });
 });
 describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', () => {
@@ -6229,11 +6229,11 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
     vi.useRealTimers();
   });
 
-  it('既定の呼びでも afterId/afterAt を渡した呼びでも、応答の鍵は増えない', async () => {
+  it('既定の呼びでも afterId/afterAt を渡した呼びでも、応答の鍵は entries と next だけ', async () => {
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
 
     const plain = (await (await app.request('/journal')).json()) as Record<string, unknown>;
-    expect(Object.keys(plain)).toEqual(['entries']);
+    expect(Object.keys(plain)).toEqual(['entries', 'next']);
 
     const first = (await (await app.request('/journal?limit=1')).json()) as {
       entries: { id: string; at: string }[];
@@ -6244,7 +6244,31 @@ describe('GET /journal の order/afterId/afterAt（issue #432 の2本目）', ()
       string,
       unknown
     >;
-    expect(Object.keys(withCursor)).toEqual(['entries']);
+    expect(Object.keys(withCursor)).toEqual(['entries', 'next']);
+  });
+
+  it('next: 先に行が在るときだけ継続点を返し、それを afterId/afterAt に渡して読み継げる（Issue #2604 / #2605）', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await stores.journal.append({ type: 'decision', decision: `d${i}`, grounds: 'g' });
+    }
+    type Body = { entries: { id: string; at: string }[]; next: { id: string; at: string } | null };
+    const get = async (qs: string): Promise<Body> =>
+      (await (await app.request(`/journal?${qs}`)).json()) as Body;
+
+    const seen: string[] = [];
+    let body = await get('limit=2');
+    for (let guard = 0; guard < 10; guard += 1) {
+      seen.push(...body.entries.map((e) => e.id));
+      if (body.next === null) break;
+      const { id, at } = body.next;
+      body = await get(new URLSearchParams({ limit: '2', afterId: id, afterAt: at }).toString());
+    }
+    const all = await get('limit=100');
+    expect(seen).toEqual(all.entries.map((e) => e.id));
+    expect(all.next).toBeNull();
+    // limit がちょうど総数でも、先は無い。
+    expect((await get('limit=5')).next).toBeNull();
+    expect((await get('limit=4')).next).not.toBeNull();
   });
 
   it('order=asc は order=desc の正確な逆順', async () => {
@@ -6427,7 +6451,7 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
   it('since/until を指定しなければ、oldestAt/crossesHorizon は付かない（既存の応答は1バイトも変わらない）', async () => {
     await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
     const body = (await (await app.request('/journal')).json()) as Record<string, unknown>;
-    expect(Object.keys(body)).toEqual(['entries']);
+    expect(Object.keys(body)).toEqual(['entries', 'next']);
   });
 
   it('窓がまるごと地平より後ろなら、crossesHorizon は偽（oldestAt は付く）', async () => {
@@ -6510,7 +6534,7 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
     it('horizon を渡さなければ、既存の呼びと1バイトも変わらない（応答の欄が増えない）', async () => {
       await stores.journal.append({ type: 'decision', decision: 'd', grounds: 'g' });
       const body = (await (await app.request('/journal')).json()) as Record<string, unknown>;
-      expect(Object.keys(body)).toEqual(['entries']);
+      expect(Object.keys(body)).toEqual(['entries', 'next']);
     });
 
     it('horizon=false は horizon を渡さないのと同じ（欄が付かない）', async () => {
@@ -6519,7 +6543,7 @@ describe('GET /journal の日誌の地平（issue #1510 の積み残し）', () 
         string,
         unknown
       >;
-      expect(Object.keys(body)).toEqual(['entries']);
+      expect(Object.keys(body)).toEqual(['entries', 'next']);
     });
 
     it('since/until を両方省略しても、horizon=true なら oldestAt/crossesHorizon が付く', async () => {

@@ -37,6 +37,8 @@ import {
   journalHorizonNote,
   newerPageQuery,
   olderPageQuery,
+  readThroughUnreadable,
+  type PageCursor,
   type PageOutcome,
 } from '@alteroid/logic';
 import type { JournalEntry, JournalEntryType } from '@alteroid/logic';
@@ -50,6 +52,8 @@ interface JournalQueryParams {
   q?: string;
   since?: string;
   until?: string;
+  afterId?: string;
+  afterAt?: string;
   horizon?: 'true';
 }
 
@@ -154,6 +158,10 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   // （＝更新式に副作用を詰め込む）よりも、ref を素直に読むほうが単純になる。
   // **これは render 中には読まない** — 読むのは `.then()`/effect の中だけ
   // なので `react-hooks/refs` には当たらない。
+  // **過去方向の継続点**（`GET /journal` の `next`。Issue #2604 / #2605）。
+  // `undefined` = まだ持っていない／応答に欄が無い（古いデーモン。`until` で遡る）、
+  // `null` = 終端。ストアが読めない行を捨てても、ここが先の行へ運ぶ。
+  const olderCursorRef = useRef<PageCursor | null | undefined>(undefined);
   const entriesRef = useRef<JournalEntry[]>(entries);
   useEffect(() => {
     entriesRef.current = entries;
@@ -162,7 +170,13 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   const buildQuery = useCallback(
     (
       limit: number,
-      extra?: { since?: string; until?: string; horizon?: 'true' },
+      extra?: {
+        since?: string;
+        until?: string;
+        afterId?: string;
+        afterAt?: string;
+        horizon?: 'true';
+      },
     ): JournalQueryParams => ({
       limit,
       ...(joined === '' ? {} : { type: joined }),
@@ -183,6 +197,22 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
     api.api
       .GET('/journal', { params: { query: buildQuery(JOURNAL_PAGE, { horizon: 'true' }) } })
       .then(unwrap)
+      // 頁が全部読めない行で、空なのに終端ではないとき、継続点から読み継ぐ。
+      .then((first) =>
+        readThroughUnreadable(first, (cursor) =>
+          api.api
+            .GET('/journal', {
+              params: {
+                query: buildQuery(JOURNAL_PAGE, {
+                  afterId: cursor.id,
+                  afterAt: cursor.at,
+                  horizon: 'true',
+                }),
+              },
+            })
+            .then(unwrap),
+        ),
+      )
       .then((data) => {
         if (cancelled) return;
         // **`applyOlderPage` ではなく `applyInitialPage` を使う**（issue
@@ -192,7 +222,8 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
         // 言い切れる（`applyInitialPage` の doc）。これが無いと、日誌が
         // 短くても初期読み込みは常に `'progress'` になり、「もっと遡る」を
         // 1回押すまで `'end'`（と地平の注記）が出ない。
-        const applied = applyInitialPage(data.entries, JOURNAL_PAGE);
+        const applied = applyInitialPage(data.entries, JOURNAL_PAGE, data.next);
+        olderCursorRef.current = data.next;
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
         setOlderStatus(applied.outcome);
@@ -224,14 +255,41 @@ export function useJournalWindow(selected: readonly JournalEntryType[], q = ''):
   // （メモ化しない代わりに、再帰は毎回そのレンダーの `entriesRef`/`buildQuery`
   // をそのまま閉じ込めるので、古い束縛を掴む心配が無い）。
   function loadOlderAt(limit: number): void {
-    const query = olderPageQuery(entriesRef.current);
+    const query = olderPageQuery(entriesRef.current, olderCursorRef.current);
     if (query === undefined) return;
     setLoadingOlder(true);
     api.api
-      .GET('/journal', { params: { query: buildQuery(limit, query) } })
+      .GET('/journal', {
+        params: {
+          // 継続点で読むと `until` が付かず地平の材料が付かない——`horizon` で求める。
+          query: buildQuery(limit, 'afterId' in query ? { ...query, horizon: 'true' } : query),
+        },
+      })
       .then(unwrap)
+      .then((first) =>
+        readThroughUnreadable(first, (cursor) =>
+          api.api
+            .GET('/journal', {
+              params: {
+                query: buildQuery(limit, {
+                  afterId: cursor.id,
+                  afterAt: cursor.at,
+                  horizon: 'true',
+                }),
+              },
+            })
+            .then(unwrap),
+        ),
+      )
       .then((data) => {
-        const applied = applyOlderPage(entriesRef.current, data.entries, limit, JOURNAL_MAX_LIMIT);
+        const applied = applyOlderPage(
+          entriesRef.current,
+          data.entries,
+          limit,
+          JOURNAL_MAX_LIMIT,
+          data.next,
+        );
+        olderCursorRef.current = data.next;
         setEntries(applied.entries);
         entriesRef.current = applied.entries;
         if (applied.outcome === 'retryLarger') {

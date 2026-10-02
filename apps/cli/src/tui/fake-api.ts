@@ -54,6 +54,13 @@ export interface FakeApi extends TuiApi {
   journalListFails: string | null;
   /** `GET /journal` の応答に載せる地平。 */
   journalHorizon: { oldestAt?: string | null; crossesHorizon?: boolean };
+  /**
+   * `true` なら新しいデーモンのように継続点（`next`）を返す。`journalEntries` のうち
+   * `journalUnreadable` の id は、pg と同じく `limit` の後で捨てる（頁は短く・空になりうる）。
+   * `false`（既定）は `next` を返さない古いデーモン。
+   */
+  journalCursors: boolean;
+  journalUnreadable: Set<string>;
   memoryRows: MemoryRow[];
   memoryDocs: Record<string, MemoryDoc>;
   memoryListFails: string | null;
@@ -123,6 +130,8 @@ export function fakeApi(): FakeApi {
     journalListCalls: [],
     journalListFails: null,
     journalHorizon: {},
+    journalCursors: false,
+    journalUnreadable: new Set<string>(),
     memoryRows: [],
     memoryDocs: {},
     memoryListFails: null,
@@ -282,6 +291,23 @@ export function fakeApi(): FakeApi {
       if (query.until !== undefined) {
         const until = query.until;
         rows = rows.filter((e) => e.at <= until);
+      }
+      if (api.journalCursors) {
+        // 新しいデーモン: 生の頁を `limit` で切り、その後で読めない行を捨てる。
+        if (query.afterId !== undefined) {
+          const afterId = query.afterId;
+          rows = rows.slice(rows.findIndex((e) => e.id === afterId) + 1);
+        }
+        const raw = rows.slice(0, query.limit);
+        const last = raw[raw.length - 1];
+        return Promise.resolve({
+          entries: raw.filter((e) => !api.journalUnreadable.has(e.id)),
+          next:
+            rows.length > query.limit && last !== undefined ? { id: last.id, at: last.at } : null,
+          ...(query.horizon === true || query.since !== undefined || query.until !== undefined
+            ? api.journalHorizon
+            : {}),
+        });
       }
       return Promise.resolve({
         entries: rows.slice(0, query.limit),

@@ -55,8 +55,9 @@ export const REPORT_WINDOW_SLACK = 32;
  * 返す最後の行の日付がその境界以上なら、**窓の外の行はどれもそれより下にしか
  * 並べられない** ＝ 読み足す必要が無い。
  *
- * 足りなければ窓を倍にして読み直す。日誌を読み切った（要求より少なく返った）
- * ときは、それ以上は存在しないのでそこで終わる。
+ * 足りなければ窓を倍にして読み直す。日誌を読み切った（ストアが続きは無いと言った）
+ * ときは、それ以上は存在しないのでそこで終わる（終端はストアが言う。件数が少ない
+ * ことは終端の印ではない——読めない行は `limit` の後で捨てられる）。
  */
 export async function listDailyReports(
   journal: JournalStore,
@@ -65,12 +66,24 @@ export async function listDailyReports(
   let window = limit + REPORT_WINDOW_SLACK;
 
   for (;;) {
-    const entries = await journal.list({ types: ['daily_report'], limit: window });
+    const { entries, next } = await journal.listPage({ types: ['daily_report'], limit: window });
     const reports = entries.filter(isDailyReport).sort(compareDailyReportsNewestFirst);
     const picked = reports.slice(0, limit);
 
-    // 窓より少なく返ったなら日誌を読み切っている（これ以上は存在しない）。
-    if (entries.length < window) return picked;
+    // ストアが続きは無いと言ったなら日誌を読み切っている（これ以上は存在しない）。
+    // 件数が窓に満たないことは終端の印ではない——読めない行は `limit` の後で
+    // 捨てられる（Issue #2604 / #2605）。
+    if (next === null) return picked;
+
+    // **窓は読み切っていないのに limit 未満なら、isSettled の前に窓を倍にする。**
+    // 読めない行が `limit` の後で捨てられると、窓を埋めても `picked` が `limit` に
+    // 届かない（空もありうる）。`isSettled` は `picked` が空なら無条件に真なので、
+    // ここで倒さないと、読めない行の向こうの日報を取りこぼす。
+    if (picked.length < limit) {
+      window *= 2;
+      continue;
+    }
+
     if (isSettled(picked, entries)) return picked;
 
     window *= 2;
@@ -164,12 +177,14 @@ export async function listDailyReportsBefore(
   let window = limit + REPORT_WINDOW_SLACK;
 
   for (;;) {
-    const entries = await journal.list({ types: ['daily_report'], limit: window });
+    const { entries, next } = await journal.listPage({ types: ['daily_report'], limit: window });
     const reports = entries.filter(isDailyReport).sort(compareDailyReportsNewestFirst);
     const picked = reports.filter((report) => isOlderThanBoundary(report, before)).slice(0, limit);
 
-    // 窓より少なく返ったなら日誌を読み切っている（これ以上は存在しない）。
-    if (entries.length < window) return picked;
+    // ストアが続きは無いと言ったなら日誌を読み切っている（これ以上は存在しない）。
+    // 件数が窓に満たないことは終端の印ではない——読めない行は `limit` の後で
+    // 捨てられる（Issue #2604 / #2605）。
+    if (next === null) return picked;
 
     // **窓は読み切っていないのに limit 未満 —— isSettled の前にここで倒す。**
     // 境界の外側にまだ行があるかもしれないのに、`picked` が空（または少ない）

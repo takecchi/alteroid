@@ -6,11 +6,18 @@ import {
   journalEntrySchema,
   JournalAnchorNotFoundError,
   journalRowType,
+  listPageByOverfetch,
   matchesJournalSearch,
   noteDroppedJournalRow,
   noteDroppedJournalRowsSummary,
 } from '@alteroid/core';
-import type { JournalEntry, JournalEntryInput, JournalQuery, JournalStore } from '@alteroid/core';
+import type {
+  JournalEntry,
+  JournalEntryInput,
+  JournalPage,
+  JournalQuery,
+  JournalStore,
+} from '@alteroid/core';
 
 /**
  * 日誌 = 追記専用 JSONL（日付ごとに1ファイル）。
@@ -150,6 +157,11 @@ export class FsJournalStore implements JournalStore {
     }
     noteDroppedJournalRowsSummary(dropped);
     return found;
+  }
+
+  /** `list()` に続きの有無と次の頁の継続点を添える（Issue #2604 / #2605）。 */
+  async listPage(query: JournalQuery = {}): Promise<JournalPage> {
+    return listPageByOverfetch(this, query);
   }
 
   /**

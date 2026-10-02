@@ -3121,7 +3121,10 @@ export function createApp(deps: AppDeps) {
             description:
               '日誌エントリの一覧。`since`/`until` のどちらかを指定した呼び、' +
               'または `horizon=true` を渡した呼びには `oldestAt`/`crossesHorizon` ' +
-              'が付く（どちらも渡さない呼びには付かない）。',
+              'が付く（どちらも渡さない呼びには付かない）。' +
+              '`next` は次の頁の継続点（`afterId` / `afterAt` へそのまま渡せる）で、' +
+              '`null` のときだけ本当の終端。`entries` が `limit` 未満でも空でも、' +
+              '`null` でなければ先に行が在る（読めない行は `limit` の後で捨てられる）。',
             content: { 'application/json': { schema: resolver(journalListResponseSchema) } },
           },
           400: {
@@ -3174,7 +3177,7 @@ export function createApp(deps: AppDeps) {
           until === undefined ? undefined : normalizeJournalTimeBoundary(until)!;
 
         try {
-          const entries = await stores.journal.list({
+          const { entries, next } = await stores.journal.listPage({
             limit,
             order,
             ...(normalizedSince === undefined ? {} : { since: normalizedSince }),
@@ -3210,6 +3213,10 @@ export function createApp(deps: AppDeps) {
 
           return c.json({
             entries,
+            // **続きの有無と次の頁の継続点**（Issue #2604 / #2605）。`null` = 本当の終端。
+            // `entries` が `limit` 未満・空でも、`null` でない限り先に行が在る
+            // （ストアは読めない行を `limit` の後で捨てる）。次は `afterId`/`afterAt` へ渡す。
+            next,
             ...(oldestAt === undefined ? {} : { oldestAt }),
             ...(crossesHorizon === undefined ? {} : { crossesHorizon }),
           });

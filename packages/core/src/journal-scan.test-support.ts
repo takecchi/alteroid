@@ -1,6 +1,6 @@
 import { JournalAnchorNotFoundError } from './store.js';
 import type { JournalEntry } from './schema.js';
-import type { JournalQuery, JournalStore } from './store.js';
+import type { JournalPage, JournalQuery, JournalStore } from './store.js';
 
 /**
  * OOM の本体（issue #1283）を歯にするための、日誌ストアの偽物。
@@ -38,6 +38,12 @@ export interface SyntheticJournalStoreOptions {
   entryAt: (index: number) => Omit<JournalEntry, 'id' | 'at'>;
   /** `index === 0` の `at`（既定は固定の時刻——実時間に依存させない）。 */
   baseTimeMs?: number;
+  /**
+   * 読めない行（`index` で指す）。**pg の `list()` と同じ形で捨てる** —— `limit`
+   * を数えた**後**で `list()` の結果から落とす（ページは短く、全部読めなければ空で
+   * 返る）。`listPage()` の `next` は捨てた行を含む、ページの最後の生の行を指す。
+   */
+  unreadable?: (index: number) => boolean;
 }
 
 export interface SyntheticJournalStore {
@@ -93,9 +99,7 @@ export function createSyntheticJournalStore(
     }
   }
 
-  const list = async (query: JournalQuery = {}): Promise<JournalEntry[]> => {
-    calls.push(query);
-
+  const readPage = (query: JournalQuery): JournalPage => {
     if (query.limit === undefined || !Number.isFinite(query.limit) || query.limit <= 0) {
       // **本番の穴（`limit ?? Number.MAX_SAFE_INTEGER`）をこの偽物で再現
       // させない。** ここへ来た時点で、呼び出し側の設計が壊れている
@@ -125,7 +129,8 @@ export function createSyntheticJournalStore(
     }
 
     const order = query.order ?? 'desc';
-    const result: JournalEntry[] = [];
+    // 生の頁（読めない行を含む）を `limit + 1` 件まで集める。余りの1件が「続き」。
+    const raw: number[] = [];
     for (const index of indices(order, anchorIndex)) {
       const entry = entryOf(index);
       if (query.since !== undefined && entry.at < query.since) continue;
@@ -134,11 +139,30 @@ export function createSyntheticJournalStore(
       if (query.with !== undefined) {
         if (entry.type !== 'exchange' || !query.with.includes(entry.with)) continue;
       }
-      result.push(entry);
-      if (result.length >= query.limit) break;
+      raw.push(index);
+      if (raw.length > query.limit) break;
     }
-    totalReturned += result.length;
-    return result;
+    const pageRaw = raw.slice(0, query.limit);
+    const lastRaw = pageRaw[pageRaw.length - 1];
+    const entries = pageRaw
+      .filter((index) => options.unreadable?.(index) !== true)
+      .map((index) => entryOf(index));
+    totalReturned += entries.length;
+    const next =
+      raw.length > query.limit && lastRaw !== undefined
+        ? { id: idOf(lastRaw), at: entryOf(lastRaw).at }
+        : null;
+    return { entries, next };
+  };
+
+  const list = async (query: JournalQuery = {}): Promise<JournalEntry[]> => {
+    calls.push(query);
+    return readPage(query).entries;
+  };
+
+  const listPage = async (query: JournalQuery = {}): Promise<JournalPage> => {
+    calls.push(query);
+    return readPage(query);
   };
 
   const notImplemented = (name: string) => (): never => {
@@ -151,6 +175,7 @@ export function createSyntheticJournalStore(
   return {
     store: {
       list,
+      listPage,
       append: notImplemented('append'),
       get: notImplemented('get'),
       oldestAt: notImplemented('oldestAt'),

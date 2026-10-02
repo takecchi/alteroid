@@ -46,8 +46,9 @@ describe('scanJournalPages', () => {
     // 新しい順（index 昇順）で届く——`order` 未指定の既定は `desc`。
     expect(seen[0]).toBe('d-0');
     expect(seen.at(-1)).toBe(`d-${total - 1}`);
-    // 3ページ（500 + 500 + 3）に、終端を確かめる空のページ1回を足して4回。
-    expect(fake.calls).toHaveLength(4);
+    // 3ページ（500 + 500 + 3）。終端は store が言う（`next: null`）ので、空のページを
+    // 確かめに行く往復は無い。
+    expect(fake.calls).toHaveLength(3);
   });
 
   it('渡す limit は常に有限の正の整数である（undefined にも MAX_SAFE_INTEGER にもならない）', async () => {
@@ -107,11 +108,9 @@ describe('scanJournalPages', () => {
       const inner = createSyntheticJournalStore({
         total,
         entryAt: (index) => ({ type: 'decision', decision: `d-${index}`, grounds: 'g' }),
+        unreadable: (index) => broken.has(index),
       });
-      const brokenIds = new Set([...broken].map((index) => inner.entryOf(index).id));
-      const store: Pick<JournalStore, 'list'> = {
-        list: async (query) => (await inner.store.list(query)).filter((e) => !brokenIds.has(e.id)),
-      };
+      const store: Pick<JournalStore, 'listPage'> = inner.store;
       return { store, inner };
     }
 
@@ -130,12 +129,37 @@ describe('scanJournalPages', () => {
       expect(result).toEqual({ scanned: 8, truncated: false });
     });
 
-    it('(b) 空のページで止まり、truncated: false になる', async () => {
+    it('(b) store が続きは無いと言えば、1ページで止まり truncated: false になる', async () => {
       const { store, inner } = droppingStore(4, new Set([1]));
       const result = await scanJournalPages(store, {}, () => {}, { pageSize: 4 });
       expect(result).toEqual({ scanned: 3, truncated: false });
-      // 短い1ページ目の後に、空の2ページ目を読んで終わる。
-      expect(inner.calls).toHaveLength(2);
+      // 空ページを確かめに行く往復は要らない（store が next: null を返す）。
+      expect(inner.calls).toHaveLength(1);
+    });
+
+    it('(d) ページが丸ごと読めなくても、その先の古い行を見る（Issue #2605）', async () => {
+      // pageSize 4 の 2 ページ目（index 4..7）が全部読めない。
+      const { store } = droppingStore(12, new Set([4, 5, 6, 7]));
+      const seen: string[] = [];
+      const result = await scanJournalPages(
+        store,
+        {},
+        (page) => {
+          expect(page.length).toBeGreaterThan(0);
+          for (const e of page) seen.push(e.id);
+        },
+        { pageSize: 4 },
+      );
+      // 0..3 と 8..11。空ページで「探し切った」と言って 8..11 を取りこぼさない。
+      expect(seen).toHaveLength(8);
+      expect(seen).toContain('synthetic-000000000011');
+      expect(result).toEqual({ scanned: 8, truncated: false });
+    });
+
+    it('(e) 末尾の読めない行だけの区間も、終端として終わる（無限に読まない）', async () => {
+      const { store } = droppingStore(8, new Set([4, 5, 6, 7]));
+      const result = await scanJournalPages(store, {}, () => {}, { pageSize: 4 });
+      expect(result).toEqual({ scanned: 4, truncated: false });
     });
 
     it('(c) maxScanned の打ち切りは truncated: true のまま', async () => {

@@ -5,7 +5,6 @@ import { noteBackgroundFailure, reasonOf } from './dropped-record.js';
 import { isWrittenDailyReport } from './schema.js';
 import type {
   InboxEvent,
-  JournalEntry,
   SchedulePhase,
   ScheduleSpec,
   ScheduledRequest,
@@ -1132,7 +1131,7 @@ export async function missingDailyReportDates({
   // 集合演算）ので、`asc` / `desc` のどちらで読んでも結果は変わらない。
   let after: JournalQuery['after'];
   for (;;) {
-    const page: JournalEntry[] = await journal.list({
+    const { entries: page, next } = await journal.listPage({
       since: oldest.toISOString(),
       order: 'asc',
       limit: scanPageSize,
@@ -1148,12 +1147,10 @@ export async function missingDailyReportDates({
       }
       active.add(localDate(new Date(entry.at)));
     }
-    // 終端は空ページだけ（Issue #2494）。store が壊れた行を捨てると、ページは
-    // 短くなっても先に行が在りうる（`journal-scan.ts` の doc）。
-    if (page.length === 0) break;
-    const last = page[page.length - 1];
-    if (last === undefined) break;
-    after = { id: last.id, at: last.at };
+    // 終端は store が言う（`next === null`。Issue #2604 / #2605）。store が壊れた行を
+    // 捨てると、ページは短くなっても・空でも先に行が在りうる（`journal-scan.ts` の doc）。
+    if (next === null) break;
+    after = next;
   }
 
   const missing: string[] = [];
