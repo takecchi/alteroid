@@ -326,6 +326,151 @@
         }
       }
     },
+    "/chat/{conversationId}/stream": {
+      "get": {
+        "operationId": "getChatByConversationIdStream",
+        "tags": ["chat"],
+        "summary": "進行中のターンの途中経過に戻る（SSE）",
+        "description": "発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（`{conversationId, inProgress}`）を流す。`inProgress` が true なら、そのターンでいままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / `usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが無い。会話の中身は `GET /conversations/:id` が持つ）。**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** `POST /chat` と同じく、**コメント行（`:` で始まる行）の heartbeat が周期的に流れる**ほか、開いている間も資格を確かめ直す（失効したら `error` を1つ流して閉じる）。人間がこの口を閉じてもターンは走り続ける。",
+        "responses": {
+          "200": {
+            "description": "SSE ストリーム。",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "text"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "text"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "queued"
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "thinking"
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "usage_limited"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "message"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "tool"
+                        },
+                        "tool": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "tool"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "ask_human"
+                        },
+                        "approvalId": {
+                          "type": "string"
+                        },
+                        "question": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "approvalId", "question"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "done"
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "error"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "message"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "この器は途中経過を持たない（能力を落とさず、黙って隠さない）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "conversationId",
+            "required": true
+          }
+        ]
+      }
+    },
     "/chat/{conversationId}/end": {
       "post": {
         "operationId": "postChatByConversationIdEnd",

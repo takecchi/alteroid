@@ -1680,6 +1680,100 @@ export function createApp(deps: AppDeps) {
       },
     };
   }
+  /**
+   * **chat の SSE の骨（`POST /chat` と `GET /chat/:conversationId/stream` の共通部分）。**
+   *
+   * 出来事を溜める列・心拍と資格の確かめ直し・列を吐き切るループ・購読の解除を1か所に
+   * 持つ。2本の口でループを別々に持つと、資格が尽きたときの閉じ方や心拍の扱いが片方だけ
+   * 変わる（issue #1820 が `/journal/stream` との間で一度踏んだ形）。
+   *
+   * - `pump.push` を購読者として渡す。`done` / `error` が来たら吐き切って閉じる
+   * - `beforeLoop` は心拍を起こした後、ループに入る前に呼ばれる（`POST /chat` は投函と
+   *   `open`、`GET .../stream` は `open` と途中経過の再送）。投げても購読は漏れない
+   * - `unsubscribe` は購読を張った側が渡す。**`try` は購読の直後から始める**ために、
+   *   購読は呼び出し側で済ませてからここへ来る
+   */
+  function chatEventPump() {
+    const queue: ChatStreamEvent[] = [];
+    let wake: (() => void) | null = null;
+    let finished = false;
+    return {
+      push(event: ChatStreamEvent): void {
+        queue.push(event);
+        if (event.type === 'done' || event.type === 'error') finished = true;
+        wake?.();
+      },
+      /** これ以上は流さない（接続が切れた・流すものが無い）。 */
+      finish(): void {
+        finished = true;
+        wake?.();
+      },
+      async serve(
+        stream: Parameters<typeof startSseHeartbeat>[0] & {
+          writeSSE(message: { event: string; data: string }): Promise<void>;
+          onAbort(listener: () => void | Promise<void>): void;
+        },
+        request: { principal: Principal; authorization: string | undefined },
+        unsubscribe: () => void,
+        beforeLoop: () => Promise<void>,
+      ): Promise<void> {
+        // **`try` は購読の直後から始める。** 以前はここより後ろにあり、`clone.post` や
+        // `open` の書き込みが投げたら購読が漏れていた（現行の実装では投げないので今は
+        // 踏まれないが、将来ここに検査や変換が増えたときに静かにリークへ転化する）。
+        try {
+          // 人間が chat を閉じても、クローンのターンは走り続ける（人間の不在で
+          // 止まるのは承認待ちの仕事だけ）。ここで手放すのは購読だけである。
+          stream.onAbort(() => {
+            finished = true;
+            wake?.();
+          });
+
+          // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
+          // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
+          // **1拍ごとに資格も確かめ直す**（issue #1820。`watchSseCredential` の doc）。
+          const credential = watchSseCredential(request.principal, request.authorization);
+          const stopHeartbeat = startSseHeartbeat(
+            stream,
+            sseHeartbeatMs,
+            () => wake?.(),
+            () => credential.tick(() => wake?.()),
+          );
+
+          try {
+            await beforeLoop();
+
+            for (;;) {
+              if (stream.aborted || stream.closed) break;
+              if (credential.lost()) {
+                // **閉じる前に理由を1つ送る**（issue #1820）。画面が「接続が切れた」と
+                // 区別できるように、既存の `error` イベントの形で言う。
+                await stream.writeSSE({
+                  event: 'error',
+                  data: JSON.stringify({ type: 'error', message: SSE_CREDENTIAL_LOST_MESSAGE }),
+                });
+                break;
+              }
+              const event = queue.shift();
+              if (event === undefined) {
+                if (finished) break;
+                await new Promise<void>((resolve) => {
+                  wake = resolve;
+                });
+                wake = null;
+                continue;
+              }
+              await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+              if (event.type === 'done' || event.type === 'error') break;
+            }
+          } finally {
+            stopHeartbeat();
+          }
+        } finally {
+          unsubscribe();
+        }
+      },
+    };
+  }
   const providerList = authPlan.providers.map(({ id, label, kind }) => ({ id, label, kind }));
   /**
    * プロバイダへ登録する戻り先。**1プロバイダにつき1本だけ**にしてある。
@@ -2040,43 +2134,14 @@ export function createApp(deps: AppDeps) {
         const conversationId = given ?? randomUUID();
 
         return streamSSE(c, async (stream) => {
-          const queue: ChatStreamEvent[] = [];
-          let wake: (() => void) | null = null;
-          let finished = false;
+          const pump = chatEventPump();
+          const unsubscribe = clone.subscribe(conversationId, (event) => pump.push(event));
 
-          const unsubscribe = clone.subscribe(conversationId, (event) => {
-            queue.push(event);
-            if (event.type === 'done' || event.type === 'error') finished = true;
-            wake?.();
-          });
-
-          // **`try` は `subscribe()` の直後から始める。** 以前はここより後ろに
-          // あり、`clone.post` や `open` の書き込みが投げたら購読が漏れていた
-          // （現行の実装では投げないので今は踏まれないが、将来ここに検査や
-          // 変換が増えたときに静かにリークへ転化する）。
-          try {
-            // 人間が chat を閉じても、クローンのターンは走り続ける（人間の不在で
-            // 止まるのは承認待ちの仕事だけ）。ここで手放すのは購読だけである。
-            stream.onAbort(() => {
-              finished = true;
-              wake?.();
-            });
-
-            // heartbeat は SSE のコメント行を流す（クライアントは読み捨てる）。
-            // 死んだ接続の掃除の契機でもある（詳細は `@alteroid/core` の `sse-heartbeat.ts`）。
-            // **1拍ごとに資格も確かめ直す**（issue #1820。`watchSseCredential` の doc）。
-            const credential = watchSseCredential(
-              c.get('principal'),
-              c.req.header('authorization'),
-            );
-            const stopHeartbeat = startSseHeartbeat(
-              stream,
-              sseHeartbeatMs,
-              () => wake?.(),
-              () => credential.tick(() => wake?.()),
-            );
-
-            try {
+          await pump.serve(
+            stream,
+            { principal: c.get('principal'), authorization: c.req.header('authorization') },
+            unsubscribe,
+            async () => {
               /*
                * **`open` を書く前に積む。順序に意味がある。**
                *
@@ -2104,36 +2169,81 @@ export function createApp(deps: AppDeps) {
               });
 
               await stream.writeSSE({ event: 'open', data: JSON.stringify({ conversationId }) });
+            },
+          );
+        });
+      },
+    )
 
-              for (;;) {
-                if (stream.aborted || stream.closed) break;
-                if (credential.lost()) {
-                  // **閉じる前に理由を1つ送る**（issue #1820）。画面が「接続が切れた」と
-                  // 区別できるように、既存の `error` イベントの形で言う。
-                  await stream.writeSSE({
-                    event: 'error',
-                    data: JSON.stringify({ type: 'error', message: SSE_CREDENTIAL_LOST_MESSAGE }),
-                  });
-                  break;
-                }
-                const event = queue.shift();
-                if (event === undefined) {
-                  if (finished) break;
-                  await new Promise<void>((resolve) => {
-                    wake = resolve;
-                  });
-                  wake = null;
-                  continue;
-                }
+    /**
+     * **進行中のターンの途中経過に戻る口**（Issue #2652）。
+     *
+     * `POST /chat` は投函と購読が一体で、画面を離れた・読み込み直した人間は、進行中の
+     * ターンの「考えている」と途中の文章を失い、続きにも戻れなかった。これは**投函せずに
+     * 購読だけを張る**。いままでの分（`Clone#attach` の `inProgress`）を先に流し、続きを
+     * 流して、`done` / `error` で閉じる。進行中でなければ `open` だけ流して閉じる。
+     * 認証・心拍・資格の確かめ直しは `POST /chat` と同じ骨（`chatEventPump`）を通る。
+     */
+    .get(
+      '/chat/:conversationId/stream',
+      describeRoute({
+        tags: ['chat'],
+        summary: '進行中のターンの途中経過に戻る（SSE）',
+        description:
+          '発言を投函せずに、会話の購読だけを張る。**SSE。** 最初に `open`（' +
+          '`{conversationId, inProgress}`）を流す。`inProgress` が true なら、そのターンで' +
+          'いままでに出た分（`queued` / `thinking` / `tool` / `text` / `ask_human` / ' +
+          '`usage_limited`。隣り合う `text` は1つにまとめてある）を先に流し、続きを流して、' +
+          '`done` / `error` で閉じる。false なら `open` だけで閉じる（進行中のターンが' +
+          '無い。会話の中身は `GET /conversations/:id` が持つ）。' +
+          '**いままでの分と続きの継ぎ目で、取りこぼしも二重渡しも起きない。** ' +
+          '`POST /chat` と同じく、**コメント行（`:` で始まる行）の heartbeat が周期的に' +
+          '流れる**ほか、開いている間も資格を確かめ直す（失効したら `error` を1つ流して' +
+          '閉じる）。人間がこの口を閉じてもターンは走り続ける。',
+        responses: {
+          200: {
+            description: 'SSE ストリーム。',
+            content: {
+              'text/event-stream': { schema: resolver(chatStreamEventSchema) },
+            },
+          },
+          503: {
+            description: 'この器は途中経過を持たない（能力を落とさず、黙って隠さない）。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      (c) => {
+        if (clone.attach === undefined) {
+          return c.json({ error: 'この器は進行中のターンの途中経過を持たない' as const }, 503);
+        }
+        const attach = clone.attach.bind(clone);
+        const conversationId = c.req.param('conversationId');
+
+        return streamSSE(c, async (stream) => {
+          const pump = chatEventPump();
+          // **写しを取ることと購読を張ることは `attach` の中で同じ同期区間に入る。**
+          // ここから `await` を挟む前に呼ぶこと（挟むと継ぎ目に出来事が割り込む）。
+          const { inProgress, unsubscribe } = attach(conversationId, (event) => pump.push(event));
+          // 進行中でなければ流すものは無い。`open` を書く間に届く分を溜めない。
+          if (inProgress === null) pump.finish();
+
+          await pump.serve(
+            stream,
+            { principal: c.get('principal'), authorization: c.req.header('authorization') },
+            unsubscribe,
+            async () => {
+              await stream.writeSSE({
+                event: 'open',
+                data: JSON.stringify({ conversationId, inProgress: inProgress !== null }),
+              });
+              // いままでの分が先、続き（`pump` の列）が後。`pump` の列に入っているのは
+              // `attach` より後の出来事だけなので、順序も重複も崩れない。
+              for (const event of inProgress ?? []) {
                 await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-                if (event.type === 'done' || event.type === 'error') break;
               }
-            } finally {
-              stopHeartbeat();
-            }
-          } finally {
-            unsubscribe();
-          }
+            },
+          );
         });
       },
     )

@@ -41,6 +41,17 @@ export type ChatMessage =
   | { event: 'open'; data: { conversationId: string } }
   | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
 
+/**
+ * 途中経過に戻る口（`GET /chat/:conversationId/stream`）の SSE メッセージ。
+ *
+ * `open` は `POST /chat` のものと形が違う。`inProgress` が false なら、進行中のターンが
+ * 無いので `open` だけで終わる。true なら、いままでの分（`queued` / `thinking` / `tool` /
+ * `text` / …。隣り合う `text` は1つ）が続き、そのあとに続きが来て、`done` / `error` で終わる。
+ */
+export type ChatStreamMessage =
+  | { event: 'open'; data: { conversationId: string; inProgress: boolean } }
+  | { event: ChatStreamEvent['type']; data: ChatStreamEvent };
+
 /** 日誌の SSE メッセージ。`open` は配線が生きていることの合図だけを運ぶ。 */
 export type JournalMessage =
   { event: 'open'; data: { ok: boolean } } | { event: JournalEntry['type']; data: JournalEntry };
@@ -103,6 +114,12 @@ export interface AlteroidClient {
   api: Client<paths>;
   /** クローンに話しかけ、返答を SSE で受け取る。 */
   chat(input: ChatInput, options?: StreamOptions): AsyncGenerator<ChatMessage>;
+  /**
+   * 進行中のターンの途中経過に戻り、続きを SSE で受け取る（発言は投函しない）。
+   * 画面を離れた・読み込み直したあとに、`chat()` で始めたターンへ戻るための口。
+   * CLI・TUI・Web のどれもこの1本に乗る。
+   */
+  chatStream(conversationId: string, options?: StreamOptions): AsyncGenerator<ChatStreamMessage>;
   /** 日誌への追記を SSE で受け取る（承認待ちが出たことに気づける口）。 */
   journalStream(options?: JournalStreamOptions): AsyncGenerator<JournalMessage>;
 }
@@ -183,6 +200,17 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
         ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
       };
       yield* stream('/chat', init) as AsyncGenerator<ChatMessage>;
+    },
+
+    async *chatStream(conversationId, streamOptions) {
+      const init: RequestInit = {
+        method: 'GET',
+        ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
+      };
+      yield* stream(
+        `/chat/${encodeURIComponent(conversationId)}/stream`,
+        init,
+      ) as AsyncGenerator<ChatStreamMessage>;
     },
 
     async *journalStream(streamOptions) {

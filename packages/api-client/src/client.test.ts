@@ -25,6 +25,11 @@ import { createAlteroidClient, type AlteroidClient, type paths } from './index.j
 function fakeClone(stores: Stores) {
   const listeners = new Map<string, Set<(event: ChatStreamEvent) => void>>();
   const answered: { id: string; answer: string }[] = [];
+  /** 進行中のターンの途中経過（会話ごと。`attach` が写しを返す）。 */
+  const inProgress = new Map<string, ChatStreamEvent[]>();
+  const emit = (conversationId: string, event: ChatStreamEvent) => {
+    for (const listener of listeners.get(conversationId) ?? []) listener(event);
+  };
 
   const managers: ManagerPool = {
     async start() {
@@ -142,6 +147,16 @@ function fakeClone(stores: Stores) {
       listeners.set(conversationId, set);
       return () => set.delete(listener);
     },
+    attach(conversationId, listener) {
+      const snapshot = inProgress.get(conversationId);
+      const set = listeners.get(conversationId) ?? new Set();
+      set.add(listener);
+      listeners.set(conversationId, set);
+      return {
+        inProgress: snapshot === undefined ? null : [...snapshot],
+        unsubscribe: () => set.delete(listener),
+      };
+    },
     async endConversation() {},
     async answerApproval(id, answer) {
       answered.push({ id, answer });
@@ -157,7 +172,7 @@ function fakeClone(stores: Stores) {
     async stop() {},
   };
 
-  return { clone, answered };
+  return { clone, answered, inProgress, emit, listeners };
 }
 
 let server: ServerType;
@@ -243,6 +258,47 @@ it('外部アプリが chat → 保留の取得 → 回答 → 日誌の取得�
   });
   expect(conversation.response.status).toBe(200);
   expect(conversation.data?.messages[0]?.text).toBe('本番に出したい');
+});
+
+it('chatStream — 進行中のターンの途中経過に戻り、続きを受け取る（発言は投函しない）', async () => {
+  fake.inProgress.set('conv-a', [{ type: 'thinking' }, { type: 'text', text: '途中まで' }]);
+
+  const seen: { event: string; data: unknown }[] = [];
+  const reading = (async () => {
+    for await (const message of client.chatStream('conv-a')) {
+      seen.push({ event: message.event, data: message.data });
+      // 購読が張られたあとに続きを流す
+      if (message.event === 'open') {
+        fake.emit('conv-a', { type: 'text', text: '続き' });
+        fake.emit('conv-a', { type: 'done' });
+      }
+    }
+  })();
+  await reading;
+
+  expect(seen).toEqual([
+    { event: 'open', data: { conversationId: 'conv-a', inProgress: true } },
+    { event: 'thinking', data: { type: 'thinking' } },
+    { event: 'text', data: { type: 'text', text: '途中まで' } },
+    { event: 'text', data: { type: 'text', text: '続き' } },
+    { event: 'done', data: { type: 'done' } },
+  ]);
+  // 購読だけで、発言は日誌に積まれていない
+  const journal = await client.api.GET('/journal', { params: { query: { limit: 50 } } });
+  expect(journal.data?.entries.some((entry) => entry.type === 'exchange')).toBe(false);
+  // 解除済み（購読が漏れていない）
+  expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
+});
+
+it('chatStream — 進行中でなければ open だけで閉じる', async () => {
+  const seen: { event: string; data: unknown }[] = [];
+  for await (const message of client.chatStream('conv-none')) {
+    seen.push({ event: message.event, data: message.data });
+  }
+  expect(seen).toEqual([
+    { event: 'open', data: { conversationId: 'conv-none', inProgress: false } },
+  ]);
+  expect(fake.listeners.get('conv-none')?.size ?? 0).toBe(0);
 });
 
 it('日誌の SSE を外から購読できる（承認待ちが出たことに気づける）', async () => {

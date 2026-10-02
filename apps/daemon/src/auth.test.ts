@@ -76,6 +76,8 @@ function stubClone(): CloneHost {
     managers,
     post: () => 'conversation-1',
     subscribe: () => () => undefined,
+    // 途中経過に戻る口（Issue #2652）。終端の来ない進行中を返し、流れを開いたままにする。
+    attach: () => ({ inProgress: [{ type: 'thinking' }], unsubscribe: () => undefined }),
     endConversation: () => Promise.resolve(),
     answerApproval: () => Promise.resolve(true),
     stop: () => Promise.resolve(),
@@ -284,6 +286,8 @@ describe('認証が有効なとき', () => {
   it('資格が無ければ 401（記憶にも日誌にも触れない）', async () => {
     expect((await app.request('/memory')).status).toBe(401);
     expect((await app.request('/journal')).status).toBe(401);
+    // 途中経過に戻る口も `POST /chat` と同じ強さ（会話の本文が流れる）。Issue #2652
+    expect((await app.request('/chat/conv-a/stream')).status).toBe(401);
   });
 
   it('/health と /auth/* は資格が無くても読める（ログインの前に通る必要がある）', async () => {
@@ -1701,6 +1705,24 @@ describe('開いている SSE の資格の確かめ直し（issue #1820）', () 
     expect(rest.text).toContain('event: error');
     expect(rest.text).toContain('資格が使えなくなった');
     // 応答に鍵を載せない。
+    expect(rest.text).not.toContain(claimed.token);
+  });
+
+  it('chat/stream: ログアウトした後の心拍で、理由を error イベントで伝えてから閉じる（Issue #2652）', async () => {
+    const app = buildApp({}, { sseHeartbeatMs: HEARTBEAT_MS });
+    const claimed = await grantedLogin(app);
+    const auth = { authorization: `Bearer ${claimed.token}` };
+    const response = await app.request('/chat/conv-a/stream', { headers: auth });
+    expect(response.status).toBe(200);
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    expect((await readUntilText(reader, 'event: thinking')).text).toContain('event: thinking');
+
+    await app.request('/auth/logout', { ...post, headers: { ...post.headers, ...auth } });
+
+    const rest = await readUntilEnd(reader);
+    expect(rest.done).toBe(true);
+    expect(rest.text).toContain('event: error');
+    expect(rest.text).toContain('資格が使えなくなった');
     expect(rest.text).not.toContain(claimed.token);
   });
 

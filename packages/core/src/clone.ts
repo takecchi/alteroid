@@ -198,6 +198,7 @@ import {
   type ToolContext,
 } from './tools.js';
 import { CloneDelivery } from './clone-delivery.js';
+import { CloneProgress } from './clone-progress.js';
 import { CloneDistillMemoryState } from './clone-distill-memory-state.js';
 import { CloneInboxFlow } from './clone-inbox-flow.js';
 import { CloneNotices } from './clone-notices.js';
@@ -1949,6 +1950,13 @@ class Clone implements CloneHost {
   readonly #delivery = new CloneDelivery();
 
   /**
+   * 進行中のターンの途中経過（会話ごと。Issue #2652）。`#emit` が記録し、`done` / `error`・
+   * `#finishTurn()`・`stop()` が捨てる。配送の束（`#delivery`）には入れない —— あちらの
+   * 11フィールドは受信箱の遷移で、これは `#emit` の出口の側の状態である。
+   */
+  readonly #progress = new CloneProgress();
+
+  /**
    * 受信箱の到着・配達・消し込みの窓を測るカウンタ（Issue #783 段0）。
    * 状態と doc の本体は `clone-inbox-flow.ts` の `CloneInboxFlow` へ移した
    * （Issue #1190 の続き）——**永続化しない理由・3本に分けている理由は
@@ -2781,6 +2789,15 @@ class Clone implements CloneHost {
       this.#delivery.deleteUnread(event.id);
       this.#delivery.redeliveryState.drop(event.id);
       this.#dropPendingCollapse(event);
+      // 受理時に `queued` を記録した発言が、ターンを一度も起こさずに消える経路。
+      // 走っているターンがその会話のものなら、そのターンの終端が捨てるので触らない
+      // （Issue #2652。残すと「進行中」が終端の無いまま残る）。
+      if (
+        event.type === 'human_message' &&
+        this.#sdkSession.turn?.conversationId !== event.conversationId
+      ) {
+        this.#progress.clear(event.conversationId);
+      }
     }
 
     const dropped = fromQueue.length + fromHeld.length;
@@ -2811,6 +2828,27 @@ class Clone implements CloneHost {
     return () => {
       this.#delivery.unsubscribeListener(conversationId, listener, set);
     };
+  }
+
+  /**
+   * **いままでの分を受け取り、続きを購読する**（Issue #2652）。画面を離れた・読み込み直した
+   * 人間が、進行中のターンの「考えている」と途中の文章に戻るための口。
+   *
+   * - `inProgress` は、その会話に出た出来事のうち、まだ終端（`done` / `error`）に至って
+   *   いないものの写し（隣り合う `text` は1つ）。進行中でなければ `null`。
+   *   **`listener` へは渡し直さない** —— 呼び手が自分で先に流してから、続きを流す
+   * - **写しを取ることと購読を張ることを、await を挟まない同じ同期区間で行う。**
+   *   `#emit` も同期なので、この2つの間に出来事は割り込めない ⟹ 写しに入った分は
+   *   `listener` へ来ず、来る分は写しに入っていない（取りこぼしも二重渡しも無い）
+   * - 解除は {@link subscribe} と同じ
+   */
+  attach(
+    conversationId: string,
+    listener: Listener,
+  ): { inProgress: ChatStreamEvent[] | null; unsubscribe: () => void } {
+    const inProgress = this.#progress.snapshot(conversationId);
+    const unsubscribe = this.subscribe(conversationId, listener);
+    return { inProgress, unsubscribe };
   }
 
   /**
@@ -3225,6 +3263,8 @@ class Clone implements CloneHost {
     await this.#sdkSession.pumpLoop;
 
     this.#sdkSession.markStopped();
+    // 畳んだクローンの途中経過は「進行中」ではない（終端を出さずに止まった分）。
+    this.#progress.clearAll();
     this.#sdkSession.wakeInput();
     // **閉じる前に累積を1回読む**（`#flushSessionUsage` の doc）。デーモンの停止で
     // ここを通ったぶんは `result` を出さないので、読まなければ台帳に1行も残らない。
@@ -11998,11 +12038,20 @@ class Clone implements CloneHost {
    * 移せた。ここは薄い口である。
    */
   #finishTurn(): void {
+    // **ターンの終わりでも途中経過を捨てる**（Issue #2652）。失敗の経路は
+    // `#reportFailure` が `error` を出してから来るので、ふつうは `#emit` が既に捨てている。
+    // ここは、`error` / `done` を出さずに終わる経路が将来増えても記録が残り続けない
+    // ための二重の網である（残ると、会話を開き直した人間に終わったターンの途中経過が
+    // 「進行中」として流れ続ける）。畳む前に会話 id を読む（畳んだ後は `turn` が無い）。
+    const conversationId = this.#sdkSession.turn?.conversationId ?? null;
     this.#sdkSession.finishTurn();
+    if (conversationId !== null) this.#progress.clear(conversationId);
   }
 
   #emit(conversationId: string | null, event: ChatStreamEvent): void {
     if (conversationId === null) return;
+    // 記録は購読者への配送より先に、同じ同期区間で行う（`attach` の継ぎ目の保証）。
+    this.#progress.record(conversationId, event);
     for (const listener of this.#delivery.listenersFor(conversationId)) {
       try {
         listener(event);

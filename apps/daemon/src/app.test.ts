@@ -85,6 +85,10 @@ function fakeClone() {
     selections?: readonly ApprovalSelection[];
   }[] = [];
   const posted: InboxEvent[] = [];
+  /** 進行中のターンの途中経過（会話ごと。`attach` が写しを返す。Issue #2652）。 */
+  const inProgress = new Map<string, ChatStreamEvent[]>();
+  /** `attach` が呼ばれた会話 id（別の会話の途中経過を引いていないことを見る）。 */
+  const attachCalls: string[] = [];
   /**
    * `CloneHost.dropQueuedInboxEvents` が受け取った id の塊（issue #1049）。
    * **塊ごとに1要素**（`POST /inbox/remove` は id を塊に分けて回す）。
@@ -278,6 +282,17 @@ function fakeClone() {
       listeners.set(conversationId, set);
       return () => set.delete(listener);
     },
+    attach(conversationId, listener) {
+      attachCalls.push(conversationId);
+      const snapshot = inProgress.get(conversationId);
+      const set = listeners.get(conversationId) ?? new Set();
+      set.add(listener);
+      listeners.set(conversationId, set);
+      return {
+        inProgress: snapshot === undefined ? null : [...snapshot],
+        unsubscribe: () => set.delete(listener),
+      };
+    },
     async endConversation(conversationId) {
       ended.push(conversationId);
     },
@@ -301,6 +316,10 @@ function fakeClone() {
 
   return {
     clone,
+    emit,
+    listeners,
+    inProgress,
+    attachCalls,
     ended,
     answered,
     posted,
@@ -572,6 +591,166 @@ describe('HTTP API', () => {
     expect(fake.posted[0]).toMatchObject({ type: 'human_message', text: 'やあ' });
 
     await reader.cancel();
+  });
+
+  /**
+   * **`GET /chat/:conversationId/stream`（Issue #2652）。** 投函せずに購読だけを張り、
+   * 進行中のターンの「いままでの分」を先に、続きを後に流す。
+   */
+  describe('GET /chat/:conversationId/stream', () => {
+    /** 本文を最後まで読む。**壁時計の期限を持たない**（閉じなければテストの寿命で切れる）。 */
+    async function readAll(response: Response): Promise<string> {
+      return await response.text();
+    }
+    /** 読んだ本文に `needle` が現れるまで読む（正の待ち）。 */
+    async function readUntil(
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      needle: string,
+    ): Promise<string> {
+      const decoder = new TextDecoder();
+      let seen = '';
+      while (!seen.includes(needle)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+      return seen;
+    }
+    /** SSE 本文を `{event, data}` の列に割る（コメント行は捨てる）。 */
+    function frames(body: string): { event: string; data: unknown }[] {
+      return body
+        .split('\n\n')
+        .map((chunk) => chunk.split('\n').filter((line) => !line.startsWith(':')))
+        .filter((lines) => lines.some((line) => line.startsWith('event: ')))
+        .map((lines) => ({
+          event: lines.find((line) => line.startsWith('event: '))?.slice(7) ?? '',
+          data: JSON.parse(lines.find((line) => line.startsWith('data: '))?.slice(6) ?? 'null'),
+        }));
+    }
+
+    it('進行中なら open(inProgress: true) → いままでの分 → 続き → done で閉じる', async () => {
+      fake.inProgress.set('conv-a', [
+        { type: 'queued' },
+        { type: 'thinking' },
+        { type: 'text', text: '途中まで' },
+      ]);
+      const response = await app.request('/chat/conv-a/stream');
+      expect(response.status).toBe(200);
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      let seen = await readUntil(reader, '途中まで');
+
+      // 続きは replay のあとに届く
+      fake.emit('conv-a', { type: 'tool', tool: 'shell' });
+      fake.emit('conv-a', { type: 'text', text: '続き' });
+      fake.emit('conv-a', { type: 'done' });
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+
+      expect(frames(seen)).toEqual([
+        { event: 'open', data: { conversationId: 'conv-a', inProgress: true } },
+        { event: 'queued', data: { type: 'queued' } },
+        { event: 'thinking', data: { type: 'thinking' } },
+        { event: 'text', data: { type: 'text', text: '途中まで' } },
+        { event: 'tool', data: { type: 'tool', tool: 'shell' } },
+        { event: 'text', data: { type: 'text', text: '続き' } },
+        { event: 'done', data: { type: 'done' } },
+      ]);
+      // 投函していない・購読は解除されている
+      expect(fake.posted).toEqual([]);
+      expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0);
+    });
+
+    it('error でも閉じる', async () => {
+      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+      const response = await app.request('/chat/conv-a/stream');
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      let seen = await readUntil(reader, 'event: thinking');
+      fake.emit('conv-a', { type: 'error', message: '壊れた' });
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += decoder.decode(value, { stream: true });
+      }
+      expect(frames(seen).map((f) => f.event)).toEqual(['open', 'thinking', 'error']);
+    });
+
+    it('進行中でなければ open(inProgress: false) だけで閉じ、購読を残さない', async () => {
+      const response = await app.request('/chat/conv-none/stream');
+      expect(response.status).toBe(200);
+      expect(frames(await readAll(response))).toEqual([
+        { event: 'open', data: { conversationId: 'conv-none', inProgress: false } },
+      ]);
+      expect(fake.posted).toEqual([]);
+      expect(fake.listeners.get('conv-none')?.size ?? 0).toBe(0);
+    });
+
+    it('別の会話の途中経過は流れない', async () => {
+      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+      const response = await app.request('/chat/conv-b/stream');
+      expect(frames(await readAll(response))).toEqual([
+        { event: 'open', data: { conversationId: 'conv-b', inProgress: false } },
+      ]);
+      expect(fake.attachCalls).toEqual(['conv-b']);
+    });
+
+    it('接続を切ったら購読を解除する（ターンは止めない）', async () => {
+      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+      const response = await app.request('/chat/conv-a/stream');
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      await readUntil(reader, 'event: thinking');
+      expect(fake.listeners.get('conv-a')?.size).toBe(1);
+
+      await reader.cancel();
+      await vi.waitFor(() => expect(fake.listeners.get('conv-a')?.size ?? 0).toBe(0));
+      expect(fake.ended).toEqual([]);
+    });
+
+    it('クローンが黙っていても heartbeat のコメント行を流す（POST /chat と同じ骨）', async () => {
+      fake.inProgress.set('conv-a', [{ type: 'thinking' }]);
+      const beating = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => (shutdowns += 1),
+        scheduler: schedule.scheduler,
+        journalEvents: journalBus,
+        sseHeartbeatMs: 5,
+      });
+      const response = await beating.request('/chat/conv-a/stream');
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      const seen = await readUntil(reader, ': hb');
+      expect(seen).toContain('event: open');
+      expect(seen).toContain(': hb');
+      await reader.cancel();
+    });
+
+    it('attach を持たない器では 503（黙って空を返さない）', async () => {
+      const bare = createApp({
+        clone: { ...fake.clone, attach: undefined },
+        stores,
+        token: 'test-token',
+        shutdown: () => (shutdowns += 1),
+        scheduler: schedule.scheduler,
+        journalEvents: journalBus,
+      });
+      const response = await bare.request('/chat/conv-a/stream');
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: 'この器は進行中のターンの途中経過を持たない',
+      });
+    });
+
+    it('OpenAPI に載っている', async () => {
+      const spec = (await (await app.request('/openapi.json')).json()) as {
+        paths: Record<string, Record<string, unknown>>;
+      };
+      expect(spec.paths['/chat/{conversationId}/stream']?.['get']).toBeDefined();
+    });
   });
 
   it('/chat は空文字を拒む', async () => {
