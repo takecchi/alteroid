@@ -13727,7 +13727,10 @@ export function createCloneTools(context: ToolContext) {
                     reclaim.pidsAtScan === undefined
                       ? ''
                       : `、走査時 pids ${reclaim.pidsAtScan.current}/${reclaim.pidsAtScan.max}`;
-                  const mode = reclaim.mode === 'observe' ? '観測のみ。撃たない' : '回収';
+                  const mode =
+                    reclaim.mode === 'observe'
+                      ? '既定: 終端した委譲の木だけ畳む'
+                      : '回収: 素性の分からない孤児も撃つ';
                   lines.push(
                     `    孤児（${mode}）: 候補 ${reclaim.candidates} 本 / ` +
                       `${reclaim.candidateThreads} threads${age}${atScan}` +
@@ -13806,7 +13809,9 @@ export function createCloneTools(context: ToolContext) {
                       );
                     }
                     if (observeOnly !== undefined) {
-                      lines.push(`    observe なので撃たなかった: ${observeOnly}`);
+                      lines.push(
+                        `    素性の分からない孤児（委譲が0本のとき sid を問わず撃つ形）で、reclaim でないので撃たなかった: ${observeOnly}`,
+                      );
                     }
                   }
                 }

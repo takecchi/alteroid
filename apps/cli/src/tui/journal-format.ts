@@ -11,6 +11,7 @@ import { formatDateTime, summarizeJournalEntry as summarizeLogic } from '@altero
 import { codePointBoundary, type JournalEntry } from '@alteroid/core';
 
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
+import { redactBody } from '../redact.js';
 
 export type JournalType = JournalEntry['type'];
 
@@ -23,7 +24,7 @@ export type JournalType = JournalEntry['type'];
 export function summarizeJournalEntry(entry: JournalEntry): string {
   try {
     const text: string | undefined = summarizeLogic(entry);
-    if (typeof text === 'string') return text;
+    if (typeof text === 'string') return redactBody(text);
   } catch {
     return '（要旨を作れなかった。全文は Enter で読める）';
   }
@@ -83,7 +84,7 @@ export function journalDetailText(entry: JournalEntry): string {
       lines.push(json.includes('\n') ? `${key}:\n${indent(json)}` : `${key}: ${json}`);
     }
   }
-  const text = lines.join('\n');
+  const text = redactBody(lines.join('\n'));
   return text.length > JOURNAL_DETAIL_CHARS
     ? `${text.slice(0, codePointBoundary(text, JOURNAL_DETAIL_CHARS))}\n…（全 ${String(text.length)} 字のうち先頭 ${String(JOURNAL_DETAIL_CHARS)} 字だけ）`
     : text;

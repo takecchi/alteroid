@@ -8,6 +8,7 @@ import { maskUrl } from '@alteroid/core/mask-url';
 
 import { createClient } from './client.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid mcp` — 人間の MCP 連携の登録（`.mcp.json` の `mcpServers` と同じ形）を
@@ -270,8 +271,8 @@ export function renderMcpUpdate(result: McpServersUpdateView, beforeNames: strin
     if (!runner.ok) {
       lines.push(
         runner.unsupported === true
-          ? `  ${runner.runnerId}: 受け取る口がありません（古い runner） — ${runner.error ?? '理由不明'}`
-          : `  ${runner.runnerId}: 届けられませんでした — ${runner.error ?? '理由不明'}`,
+          ? `  ${runner.runnerId}: 受け取る口がありません（古い runner） — ${runner.error === undefined ? '理由不明' : redactError(runner.error)}`
+          : `  ${runner.runnerId}: 届けられませんでした — ${runner.error === undefined ? '理由不明' : redactError(runner.error)}`,
       );
       continue;
     }
@@ -334,7 +335,9 @@ async function fail(
   if (typeof body.error === 'string') {
     // 400 は「保存していない」。前の登録が残っていることまで言う（直してやり直せばよい）。
     throw new Error(
-      response.status === 400 ? `${body.error}\n（前の登録がそのまま残っています）` : body.error,
+      response.status === 400
+        ? `${redactError(body.error)}\n（前の登録がそのまま残っています）`
+        : redactError(body.error),
     );
   }
   throw new Error(`/mcp-servers が失敗しました (${String(response.status)})`);

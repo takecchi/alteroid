@@ -9,7 +9,7 @@ import { runnerExecutionResourcesSchema } from '@alteroid/core';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
-import { TaskBreakdownReader } from './tasks.js';
+import { TaskBreakdownReader, type ReclaimSessionView } from './tasks.js';
 
 /**
  * **本番経路が実物の `fs` を触っていることを測るために、`stat` だけ包む。**
@@ -1344,7 +1344,7 @@ describe('孤児プロセス木の回収（#1334 段1。reclaim.reap を渡し�
  * fire/hold の結果（撃った pid）は observe が「fire と判定した本数」と同じで、
  * (3) 理由別の内訳が両者で一致する、ことを固定する。
  */
-describe('撃たれなかった木の内訳（#2352。判定は変えない）', () => {
+describe('撃たれなかった木の内訳（#2352。#2626 で observe も終端した委譲の木は撃つ）', () => {
   const OWN_UID = process.getuid?.() ?? 0;
 
   function fakeKillFn(): {
@@ -1403,7 +1403,7 @@ describe('撃たれなかった木の内訳（#2352。判定は変えない）',
     expect(parsed.notFired).toEqual(result?.reclaim?.notFired);
   });
 
-  it('observe + sessions: 理由別に数え、kill は1度も呼ばない', async () => {
+  it('observe + sessions: 理由別に数える。撃つのは終端した委譲の木（303）だけで、素性の分からない孤児は撃たない', async () => {
     placeLayout();
     const { fn: killFn, calls } = fakeKillFn();
     const reader = new TaskBreakdownReader({
@@ -1415,12 +1415,13 @@ describe('撃たれなかった木の内訳（#2352。判定は変えない）',
 
     expect(result?.reclaim?.mode).toBe('observe');
     expect(result?.reclaim?.candidates).toBe(5);
-    expect(result?.reclaim?.signalled).toBe(0);
-    expect(calls).toEqual([]);
+    expect(result?.reclaim?.signalled).toBe(1);
+    expect(calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
     expect(result?.reclaim?.notFired).toEqual({
       outsideRoots: expectedOutside,
       held: expectedHeld,
-      observeOnly: 1, // 303 は fire と判定されたが observe なので撃たない
+      // 303 は終端した委譲の木なので observe でも撃った。分岐1の形（委譲が0本）は無いので 0。
+      observeOnly: 0,
     });
   });
 
@@ -1472,7 +1473,7 @@ describe('撃たれなかった木の内訳（#2352。判定は変えない）',
     expect(withSessions.calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
   });
 
-  it('委譲が0本(anyTracked=false)なら全部 fire 判定: observe は held が全部0で observeOnly が候補数', async () => {
+  it('委譲が0本(anyTracked=false)なら全部 fire 判定: observe は held が全部0。終端した委譲の木（303）は撃ち、残り4本は observeOnly', async () => {
     placeLayout();
     const { fn: killFn, calls } = fakeKillFn();
     const result = await new TaskBreakdownReader({
@@ -1480,14 +1481,14 @@ describe('撃たれなかった木の内訳（#2352。判定は変えない）',
       killFn,
       reclaim: { childUid: OWN_UID, sessions: { ...view, anyTrackedDelegationsOf: () => false } },
     }).read();
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ pid: 303, signal: 'SIGTERM' }]);
     expect(result?.reclaim?.notFired?.held).toEqual({
       sidUnknown: 0,
       sidLive: 0,
       sidLeaderPresent: 0,
       sidUnrecognised: 0,
     });
-    expect(result?.reclaim?.notFired?.observeOnly).toBe(5);
+    expect(result?.reclaim?.notFired?.observeOnly).toBe(4);
     expect(result?.reclaim?.notFired?.outsideRoots.bySid?.wouldFire).toBe(3);
   });
 
@@ -1518,5 +1519,284 @@ describe('撃たれなかった木の内訳（#2352。判定は変えない）',
       reclaim: { childUid: OWN_UID + 1 },
     }).read();
     expect(other?.reclaim?.notFired?.outsideRoots.total).toBe(0);
+  });
+});
+
+/**
+ * **#2626: 既定の構え（`observe`。`ALTEROID_RUNNER_RECLAIM` が置かれていない）でも、runner 自身が
+ * 起こした委譲の CLI のプロセス木は、その委譲が終わった後に畳む。** 素性の分からない孤児
+ * （分岐1）は、従来どおり `reap`（`reclaim`）のときだけ撃つ。
+ *
+ * 撃つ構えを作るのは `sessions`（判定材料）だけ——`reap` は渡さない。
+ */
+describe('既定の構え（observe）が終端した委譲の木を畳む（#2626）', () => {
+  const OWN_UID = process.getuid?.() ?? 0;
+
+  function fakeKillFn(): {
+    fn: (pid: number, signal: NodeJS.Signals) => void;
+    calls: Array<{ pid: number; signal: NodeJS.Signals }>;
+  } {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    return { fn: (pid, signal) => calls.push({ pid, signal }), calls };
+  }
+
+  /** 生きた委譲（sid=555）が別に居る ⟹ 分岐1（委譲が0本）の近道には乗らない。 */
+  function sessionsOf(
+    overrides: Partial<{
+      live: number[];
+      terminated: number[];
+      any: boolean;
+      graceMs: number;
+    }> = {},
+  ): ReclaimSessionView {
+    return {
+      liveSessionPidsOf: () => new Set(overrides.live ?? [555]),
+      knownTerminatedSessionPidsOf: () => new Set(overrides.terminated ?? [777]),
+      anyTrackedDelegationsOf: () => overrides.any ?? true,
+      ...(overrides.graceMs === undefined ? {} : { graceMs: overrides.graceMs }),
+    };
+  }
+
+  it('終端した委譲の sid の木は、observe（reap 無し）でも撃つ。mode は observe のまま', async () => {
+    placeProcess(root, 240, 'a', 'S', 1, 0, 1, 777);
+    placeProcess(root, 241, 'a', 'S', 1, 0, 240, 777);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+    }).read();
+
+    expect(result?.reclaim?.mode).toBe('observe');
+    expect(result?.reclaim?.signalled).toBe(2);
+    expect(calls).toEqual([
+      { pid: 240, signal: 'SIGTERM' },
+      { pid: 241, signal: 'SIGTERM' },
+    ]);
+    expect(result?.reclaim?.notFired?.observeOnly).toBe(0);
+  });
+
+  it('分岐1の形（委譲が0本・sid はどこにも属さない）は observe では撃たない。reclaim（reap）なら撃つ', async () => {
+    placeProcess(root, 200, 'a', 'S', 1, 0, 1, 999);
+    placeUptime(root, 1000);
+    const view = sessionsOf({ any: false, live: [], terminated: [] });
+
+    const observe = fakeKillFn();
+    const observed = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: observe.fn,
+      reclaim: { childUid: OWN_UID, sessions: view },
+    }).read();
+    expect(observe.calls).toEqual([]);
+    expect(observed?.reclaim?.signalled).toBe(0);
+    expect(observed?.reclaim?.notFired?.observeOnly).toBe(1);
+
+    const reclaim = fakeKillFn();
+    const reclaimed = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn: reclaim.fn,
+      reclaim: { childUid: OWN_UID, reap: view },
+    }).read();
+    expect(reclaim.calls).toEqual([{ pid: 200, signal: 'SIGTERM' }]);
+    expect(reclaimed?.reclaim?.mode).toBe('reclaim');
+  });
+
+  it('生きた委譲の sid の木は撃たない（親が終端した委譲の木でも、子が生きた委譲の sid なら撃たない）', async () => {
+    placeProcess(root, 260, 'a', 'S', 1, 0, 1, 555); // 生きた委譲の孤児ルート
+    placeProcess(root, 261, 'a', 'S', 1, 0, 1, 777);
+    placeProcess(root, 262, 'a', 'S', 1, 0, 261, 555); // 終端した木の下だが sid は生きた委譲
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+    }).read();
+
+    expect(calls).toEqual([{ pid: 261, signal: 'SIGTERM' }]);
+    expect(result?.reclaim?.notFired?.held?.sidLive).toBe(2);
+  });
+
+  it('setsid で抜けた子孫（sid が認識できない）は、終端した委譲の木の下に居れば継いで撃つ。生きた委譲の sid は継がない', async () => {
+    // 250 = 終端した委譲の sid の木。251 = Chromium 相当（自分の sid=888 を持つ）。252 = その子。
+    // 253 は同じ木の下だが生きた委譲(555)の sid ⟹ 継がない。
+    placeProcess(root, 250, 'a', 'S', 1, 0, 1, 777);
+    placeProcess(root, 251, 'a', 'S', 1, 0, 250, 888);
+    placeProcess(root, 252, 'a', 'S', 1, 0, 251, 888);
+    placeProcess(root, 253, 'a', 'S', 1, 0, 250, 555);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+    }).read();
+
+    expect(calls.map((call) => call.pid).sort()).toEqual([250, 251, 252]);
+    expect(result?.reclaim?.notFired?.held?.sidLive).toBe(1);
+  });
+
+  it('継ぐのは「終端した委譲」の帰属だけ。認識できない sid の木の下の子孫は撃たない（素性不明のまま）', async () => {
+    placeProcess(root, 270, 'a', 'S', 1, 0, 1, 4242);
+    placeProcess(root, 271, 'a', 'S', 1, 0, 270, 4243);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+    }).read();
+    expect(calls).toEqual([]);
+  });
+
+  it('継ぐ先の sid の長が走査に実在するなら撃たない（pid 使い回しの守りは継ぐ形にも掛かる）', async () => {
+    placeProcess(root, 280, 'a', 'S', 1, 0, 1, 777);
+    placeProcess(root, 281, 'a', 'S', 1, 0, 280, 888);
+    placeProcess(root, 777, 'a', 'S', 1, 0, 999, 777); // 長(777)が実在する
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID, sessions: sessionsOf() },
+    }).read();
+    expect(calls).toEqual([]);
+  });
+
+  describe('帳（親が先に死んで、setsid の子孫が孤児ルートになった形）', () => {
+    // CLI(100, sid=100) → node(101) → Chromium(102, setsid で sid=102)
+    function placeLiveTree(): void {
+      placeProcess(root, 100, 'a', 'S', 1, 5, 50, 100);
+      placeProcess(root, 101, 'a', 'S', 1, 6, 100, 100);
+      placeProcess(root, 102, 'a', 'S', 1, 7, 101, 102);
+      placeUptime(root, 1000);
+    }
+    function killParents(): void {
+      rmSync(join(root, '100'), { recursive: true });
+      rmSync(join(root, '101'), { recursive: true });
+      // Chromium は孤児になって tini の子になる
+      placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
+    }
+
+    it('生きた委譲の木だった間に覚えた帰属先が終端したら、孤児になった子孫を撃つ', async () => {
+      placeLiveTree();
+      const { fn: killFn, calls } = fakeKillFn();
+      let live = [100];
+      let terminated: number[] = [];
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        ttlMs: 0,
+        reclaim: {
+          childUid: OWN_UID,
+          sessions: {
+            liveSessionPidsOf: () => new Set(live),
+            knownTerminatedSessionPidsOf: () => new Set(terminated),
+            anyTrackedDelegationsOf: () => true,
+          },
+        },
+      });
+
+      // 1回目: 委譲は生きている。孤児ルートは無く、何も撃たない。
+      expect((await reader.read())?.reclaim?.signalled).toBe(0);
+      expect(calls).toEqual([]);
+
+      // 委譲が終端し、親(100/101)が死に、Chromium(102) だけが孤児ルートとして残る。
+      live = [];
+      terminated = [100];
+      killParents();
+      const second = await reader.read();
+      expect(calls).toEqual([{ pid: 102, signal: 'SIGTERM' }]);
+      expect(second?.reclaim?.signalled).toBe(1);
+    });
+
+    it('帳が無ければ（走査を跨いで覚えていなければ）撃たない——帳が効いている対照', async () => {
+      placeLiveTree();
+      killParents();
+      const { fn: killFn, calls } = fakeKillFn();
+      const result = await new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        reclaim: { childUid: OWN_UID, sessions: sessionsOf({ live: [], terminated: [100] }) },
+      }).read();
+      expect(calls).toEqual([]);
+      expect(result?.reclaim?.notFired?.held?.sidUnrecognised).toBe(1);
+    });
+
+    it('帰属先がまだ生きた委譲なら撃たない。pid が使い回されて starttime が違えば帳を引かない', async () => {
+      placeLiveTree();
+      const { fn: killFn, calls } = fakeKillFn();
+      let live = [100];
+      let terminated: number[] = [];
+      const reader = new TaskBreakdownReader({
+        procRoot: root,
+        killFn,
+        ttlMs: 0,
+        reclaim: {
+          childUid: OWN_UID,
+          sessions: {
+            liveSessionPidsOf: () => new Set(live),
+            knownTerminatedSessionPidsOf: () => new Set(terminated),
+            anyTrackedDelegationsOf: () => true,
+          },
+        },
+      });
+      await reader.read();
+
+      // (a) 親だけ死んだが委譲は生きている（100 は live のまま）⟹ 撃たない。
+      rmSync(join(root, '101'), { recursive: true });
+      placeProcess(root, 102, 'a', 'S', 1, 7, 1, 102);
+      await reader.read();
+      expect(calls).toEqual([]);
+
+      // (b) 委譲は終端したが、102 は別のプロセスに使い回された（starttime が違う）⟹ 撃たない。
+      live = [];
+      terminated = [100];
+      rmSync(join(root, '100'), { recursive: true });
+      placeProcess(root, 102, 'a', 'S', 1, 99, 1, 102);
+      await reader.read();
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it('猶予（graceMs）を過ぎてもまだ居れば SIGKILL へ昇格する（observe でも同じ手順）', async () => {
+    placeProcess(root, 290, 'a', 'S', 1, 0, 1, 777);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    let nowMs = 1_000_000;
+    const reader = new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      ttlMs: 0,
+      now: () => nowMs,
+      reclaim: { childUid: OWN_UID, sessions: sessionsOf({ graceMs: 5_000 }) },
+    });
+    await reader.read();
+    nowMs += 4_999;
+    await reader.read();
+    expect(calls).toEqual([{ pid: 290, signal: 'SIGTERM' }]);
+    nowMs += 1;
+    const result = await reader.read();
+    expect(calls).toEqual([
+      { pid: 290, signal: 'SIGTERM' },
+      { pid: 290, signal: 'SIGKILL' },
+    ]);
+    expect(result?.reclaim?.killed).toBe(1);
+  });
+
+  it('観測そのものを切った構え（reclaim 欄なし）と、sessions の無い構えは撃たない', async () => {
+    placeProcess(root, 295, 'a', 'S', 1, 0, 1, 777);
+    placeUptime(root, 1000);
+    const { fn: killFn, calls } = fakeKillFn();
+    const result = await new TaskBreakdownReader({
+      procRoot: root,
+      killFn,
+      reclaim: { childUid: OWN_UID },
+    }).read();
+    expect(calls).toEqual([]);
+    expect(result?.reclaim?.signalled).toBe(0);
+    await new TaskBreakdownReader({ procRoot: root, killFn }).read();
+    expect(calls).toEqual([]);
   });
 });

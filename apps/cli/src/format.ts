@@ -18,6 +18,7 @@
  * クローンの道具と共有するため。字面・分岐・doc は逐語のまま移した。
  */
 export { formatElapsedAgo } from '@alteroid/core';
+import { redactError } from './redact.js';
 
 /**
  * 失敗した応答の本文から、デーモンが書いた理由（`{ error: string }`）を取り出す。
@@ -34,7 +35,7 @@ export async function errorReason(response: {
     const body: unknown = await response.json();
     if (typeof body === 'object' && body !== null && 'error' in body) {
       const { error } = body as { error?: unknown };
-      if (typeof error === 'string' && error.length > 0) return error;
+      if (typeof error === 'string' && error.length > 0) return redactError(error);
     }
   } catch {
     // 本文が JSON でない（プロキシの HTML 等）、または読めない。理由なしへ倒す。

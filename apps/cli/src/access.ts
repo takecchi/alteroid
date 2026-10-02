@@ -2,6 +2,7 @@ import { stdout } from 'node:process';
 
 import { describeUnreadableRowsList, formatElapsedAgo, withErrorReason } from './format.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
+import { redactError } from './redact.js';
 
 /**
  * `alteroid access` — 誰が alteroid を使えるかを決める。
@@ -272,7 +273,9 @@ async function request(
       // 言わない文言に落ちる。本文はサーバが書いたものをそのまま見せる。
       const body = (await response.json().catch(() => ({}))) as { error?: unknown };
       throw new Error(
-        typeof body.error === 'string' ? body.error : '既に別のアカウントが許可されています',
+        typeof body.error === 'string'
+          ? redactError(body.error)
+          : '既に別のアカウントが許可されています',
       );
     }
     throw new Error(await withErrorReason(`${path} が失敗しました (${response.status})`, response));

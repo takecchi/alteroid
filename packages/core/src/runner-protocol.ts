@@ -471,19 +471,21 @@ export const runnerExecutionResourcesSchema = z.object({
         .optional(),
       oldestZombieSeconds: z.number().int().nonnegative().optional(),
       /**
-       * 孤児プロセス木の回収（#315 段0）。**いまの段は数えるだけで1本も撃たない。**
+       * 孤児プロセス木の回収（#315 段0）。**数えるのが本体。撃つのは、runner 自身が起こした
+       * 委譲の CLI のプロセス木のうち、その委譲が終わったもの（既定の `observe` でも撃つ。#2626）と、
+       * `mode: 'reclaim'` のときの素性の分からない孤児だけである。**
        *
        * **生存プロセスの素性はここにも入らない。** 出るのは数と時刻だけで、判定に
        * 使う材料も `stat` と `/proc/<pid>` ディレクトリの所有 UID までである
        * （`cmdline` / `cwd` / `environ` は読んでいない —— `apps/runner/src/tasks.ts`
        * の `ReclaimObservation` の doc）。**直上の「素性は含まない」はそのまま効いている。**
        *
-       * **`mode` は段0 でも `'reclaim'` を受け付ける。** 出す側（runner）は
-       * `'observe'` しか出さないが、**受け取る側を先に広げておかないと、段1 を載せた
+       * **`mode` は `'observe'`（既定。素性の分からない孤児は撃たない）と `'reclaim'`
+       * （素性の分からない孤児も撃つ）の両方を受け付ける。** 受け取る側を先に広げておかないと、段1 を載せた
        * runner と古いデーモンが同時に居る窓でこの欄が丸ごと落ちる**（別デプロイなので
        * 版はずれる）。
        *
-       * `signalled` / `killed` / `freedThreads` は段0 では常に 0 だが、**欄は省かない**
+       * `signalled` / `killed` / `freedThreads` は撃っていない回は 0 だが、**欄は省かない**
        * —— 段1 で欄が生えたように見せると、段0 の観測と段1 の観測が別物に見える。
        *
        * **⚠️ 「0本だった」と「数えられなかった」は別である。** 走査が
