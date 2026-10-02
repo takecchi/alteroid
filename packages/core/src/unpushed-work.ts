@@ -2,6 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 
+import { reasonOf } from './dropped-record.js';
 import type { UnpushedWorkResult, UnpushedWorkTree } from './runner-protocol.js';
 
 /**
@@ -315,11 +316,11 @@ export async function findGitDirs(
       // 起点の失敗は既に別の欄（`rootUnreadable`）で名乗っているので、ここには
       // 二重に含めない）。
       if (dir === root) {
-        rootUnreadable = error instanceof Error ? error.message : String(error);
+        rootUnreadable = reasonOf(error);
       } else {
         unreadableDirCount += 1;
         if (unreadableDirSample === undefined) {
-          unreadableDirSample = `${dir}: ${error instanceof Error ? error.message : String(error)}`;
+          unreadableDirSample = `${dir}: ${reasonOf(error)}`;
         }
       }
       return;
@@ -416,12 +417,15 @@ export interface FindManagerScratchRootsResult {
 export async function findManagerScratchRoots(
   tmpRootDir: string,
   managerId: string,
+  options: { readdirFn?: ReaddirFn } = {},
 ): Promise<FindManagerScratchRootsResult> {
+  const readdirFn = options.readdirFn ?? defaultReaddirFn;
   let entries;
   try {
-    entries = await readdir(tmpRootDir, { withFileTypes: true });
+    entries = await readdirFn(tmpRootDir);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    // 例外の素の文は reasonOf（1行目だけ・伏せ字・長さ切り）を通す（#2607）。
+    const detail = reasonOf(error);
     return {
       paths: [],
       unknownReason: `確かめられなかった（${tmpRootDir} を読めなかった: ${detail}）`,

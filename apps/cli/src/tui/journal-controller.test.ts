@@ -342,3 +342,18 @@ describe('詳細', () => {
     expect(state()).toMatchObject({ view: 'list', detail: null });
   });
 });
+
+describe('enter（#2599）', () => {
+  it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.journalEntries = run(1);
+      a.journalListFails = '繋がらない';
+    });
+    controller.enter();
+    await waitFor(() => state().status === 'error');
+    api.journalListFails = null;
+    controller.enter();
+    await waitFor(() => state().status === 'ready');
+    expect(state().entries).toHaveLength(1);
+  });
+});

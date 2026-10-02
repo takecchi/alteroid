@@ -150,3 +150,18 @@ describe('一覧の文言', () => {
     ).toContain('要旨を書いた時刻が記録されていない: ');
   });
 });
+
+describe('enter（#2599）', () => {
+  it('初回の読み込みが失敗した後、タブへ戻ると読み直す', async () => {
+    const { api, controller, state } = setup((a) => {
+      a.memoryListFails = '繋がらない';
+    });
+    controller.enter();
+    await waitFor(() => state().status === 'error');
+    api.memoryListFails = null;
+    api.memoryRows = [memoryRow('a')];
+    controller.enter();
+    await waitFor(() => state().status === 'ready');
+    expect(state().rows).toHaveLength(1);
+  });
+});

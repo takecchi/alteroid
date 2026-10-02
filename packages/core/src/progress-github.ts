@@ -11,8 +11,10 @@
  *   数を失敗の回へ写さない（取れなかった回に数を作らない）。
  * - **古さは判定しない。** `observedAt`（デーモンが記録を受けた時刻）をそのまま返す。
  * - 記録が1件も無ければ `not_observed`（0 件ではない）。
- * - 日誌の読みは新しい順に `scanLimit` 件まで。**上限に当たったら `scan.reachedLimit` が真**で、
+ * - 日誌の読みは新しい順に `scanLimit` 件まで。**上限より先に記録が在れば `scan.reachedLimit` が真**で、
  *   それより古い記録にしか現れない repo や、その repo の古い側の記録は載っていない。
+ *   **判定は「読めた行の数 >= 上限」ではなく「上限+1 件目が在る」こと**（#2603）。store は SQL の
+ *   `LIMIT` の後で形の合わない行を捨てうる（pg）ので、500 件を要求しても 499 件で返りうる。
  */
 import type { JournalEntry } from './schema.js';
 
@@ -89,6 +91,9 @@ export const PROGRESS_GITHUB_NOT_OBSERVED = {
  * 日誌の `github_observation` を repo ごとに畳む。**`entries` は新しい順**（`JournalStore.list`
  * の既定）で渡すこと——先に見つかった成功・失敗をその repo の最新として採る。
  * 他の種別が混ざっていても読み飛ばす。
+ *
+ * **呼ぶ側は `scanLimit + 1` 件まで読んで渡すこと**（`progress-read.ts`）。畳むのは先頭の
+ * `scanLimit` 件だけで、`scanLimit + 1` 件目は「先が在る」ことを知るためだけに使う。
  */
 export function summarizeGithubObservations(
   entries: readonly JournalEntry[],
@@ -96,9 +101,15 @@ export function summarizeGithubObservations(
 ): ProgressGithub {
   const byRepo = new Map<string, GithubRepoObservation>();
   let seen = 0;
+  let more = false;
   for (const entry of entries) {
     if (entry.type !== 'github_observation') continue;
     seen += 1;
+    // 上限の次の 1 件は、先が在ることの印にだけ使う（畳まない）。
+    if (seen > scanLimit) {
+      more = true;
+      break;
+    }
     let row = byRepo.get(entry.repo);
     if (row === undefined) {
       row = { repo: entry.repo, latestOk: null, latestFailed: null };
@@ -129,7 +140,7 @@ export function summarizeGithubObservations(
   return {
     state: 'observed',
     repos: [...byRepo.values()].sort((a, b) => (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0)),
-    scan: { limit: scanLimit, reachedLimit: seen >= scanLimit },
+    scan: { limit: scanLimit, reachedLimit: more },
   };
 }
 
