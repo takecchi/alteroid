@@ -46,11 +46,28 @@ export class HeaderFeed {
   private refetchTimer: ReturnType<typeof setTimeout> | undefined;
   private attempt = 0;
   private stopped = true;
+  private readonly listeners = new Set<(type: string) => void>();
 
   constructor(
     private readonly api: TuiApi,
     private readonly options: HeaderFeedOptions = {},
   ) {}
+
+  /**
+   * 画面が日誌の出来事を合図に自分のデータを取り直すための口（委譲の一覧など）。
+   * 届くのは `open`（繋がった・張り直した）と、件数に響く種別（`affectsHeader`）。
+   * 戻り値で解除する。
+   */
+  onEvent(listener: (type: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private emit(type: string): void {
+    for (const listener of this.listeners) listener(type);
+  }
 
   start(): void {
     if (!this.stopped) return;
@@ -107,8 +124,10 @@ export class HeaderFeed {
           this.attempt = 0;
           this.setLive('live');
           void this.refetch();
+          this.emit(type);
         } else if (affectsHeader(type)) {
           this.scheduleRefetch();
+          this.emit(type);
         }
       }
     } catch {

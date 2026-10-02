@@ -48,6 +48,53 @@ export interface HeaderCounts {
   runningManagers: number;
 }
 
+/** 委譲の状態（`jobStatusSchema` の 6 値）。 */
+export type ManagerStatus = 'running' | 'waiting_human' | 'done' | 'failed' | 'lost' | 'stopped';
+
+/**
+ * 一覧・詳細が見るマネージャー 1 本の欄（`GET /managers` と `GET /managers/{id}` は同じ
+ * `managerSummarySchema`）。TUI が使う欄だけに絞る — 使わない欄を型に持ち込まない。
+ */
+export interface ManagerRow {
+  managerId: string;
+  status: ManagerStatus;
+  /** デーモンが今その runner と繋がっているか。 */
+  live: boolean;
+  awaitingBackground?: { tasks: number; since?: string };
+  request: string;
+  cwd: string;
+  startedAt: string;
+  updatedAt: string;
+  lastReport?: string;
+  lastReportAt?: string;
+  lastFailure?: { code: string; via: string; at: string };
+  waiting: { requestId: string; summary: string; kind?: string }[];
+  runnerLostSince?: string;
+  runnerVanished?: boolean;
+  sessionMissingSince?: string;
+  appraisal?: string;
+}
+
+/** 読めない委譲の行（壊れた行。「居ない」でも「畳まれた」でもない）。 */
+export interface UnreadableManager {
+  id?: string;
+  reason: string;
+}
+
+export interface ManagerListQuery {
+  /** カンマ区切りにして渡す。空なら絞らない。 */
+  status?: readonly ManagerStatus[];
+  limit?: number;
+  /** 錨（`startedAt` 降順の「より古い側」を返す）。組で渡す。 */
+  after?: { managerId: string; startedAt: string };
+}
+
+/** 委譲の操作（追加指示・停止）の結果。デーモンの `outcome` / `detail` をそのまま持つ。 */
+export interface ManagerActionResult {
+  outcome: string;
+  detail: string;
+}
+
 export interface TuiApi {
   /** 接続先（ヘッダに出す）。 */
   readonly baseUrl: string;
@@ -68,6 +115,17 @@ export interface TuiApi {
   /** 結果を人間の言葉にしたもの（`alteroid interrupt` と同じ文言）。 */
   interrupt(): Promise<string>;
   headerCounts(): Promise<HeaderCounts>;
+  listManagers(query: ManagerListQuery): Promise<{
+    managers: ManagerRow[];
+    unreadable: UnreadableManager[];
+  }>;
+  /** `null` は 404（居ない）。読めない行（409）は `ApiError`。 */
+  readManager(id: string): Promise<ManagerRow | null>;
+  /** 生ログ（JSONL の生テキスト）。`null` は 404（まだ無い）。 */
+  readManagerTranscript(id: string): Promise<string | null>;
+  /** 追加指示（`requestId` / `decision` は付けない — 回答として消費させない）。 */
+  sendManagerMessage(id: string, text: string): Promise<ManagerActionResult>;
+  stopManager(id: string): Promise<ManagerActionResult>;
   /** `GET /journal/stream`。接続できたとき `open`、以後は届いたエントリの種別（`exchange` など）を流す。 */
   journalStream(signal: AbortSignal): AsyncGenerator<string>;
 }
@@ -188,6 +246,62 @@ export function createTuiApi(target: Target): TuiApi {
         runningManagers: (await managers.json()).managers.filter((m) => m.status === 'running')
           .length,
       };
+    },
+
+    async listManagers(query) {
+      const status = (query.status ?? []).join(',');
+      const response = await client.managers.$get({
+        query: {
+          ...(status === '' ? {} : { status }),
+          ...(query.limit === undefined ? {} : { limit: String(query.limit) }),
+          ...(query.after === undefined
+            ? {}
+            : { afterId: query.after.managerId, afterStartedAt: query.after.startedAt }),
+        },
+      });
+      if (!response.ok) throw await failure('委譲の一覧を読めませんでした', response);
+      const body = await response.json();
+      return {
+        managers: body.managers as ManagerRow[],
+        unreadable: (body.unreadable ?? []) as UnreadableManager[],
+      };
+    },
+
+    async readManager(id) {
+      const response = await client.managers[':id'].$get({ param: { id } });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await failure('委譲を読めませんでした', response);
+      return (await response.json()).manager as ManagerRow;
+    },
+
+    async readManagerTranscript(id) {
+      const response = await client.managers[':id'].transcript.$get({ param: { id } });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await failure('委譲の生ログを読めませんでした', response);
+      return await response.text();
+    },
+
+    async sendManagerMessage(id, text) {
+      const response = await client.managers[':id'].messages.$post({
+        param: { id },
+        json: { text },
+      });
+      if (response.status === 404) {
+        throw new ApiError(`そのマネージャーは見つかりませんでした: ${id}`);
+      }
+      if (!response.ok) throw await failure('送れませんでした', response);
+      const { outcome, detail } = await response.json();
+      return { outcome, detail };
+    },
+
+    async stopManager(id) {
+      const response = await client.managers[':id'].$delete({ param: { id }, json: {} });
+      if (response.status === 404) {
+        throw new ApiError(`そのマネージャーは見つかりませんでした: ${id}`);
+      }
+      if (!response.ok) throw await failure('止められませんでした', response);
+      const { outcome, detail } = await response.json();
+      return { outcome, detail };
     },
 
     async *journalStream(signal) {

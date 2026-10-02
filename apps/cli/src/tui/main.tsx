@@ -10,6 +10,7 @@ import { App } from './app.js';
 import { ChatController } from './chat-controller.js';
 import { HeaderFeed } from './header-feed.js';
 import { isFullscreenViewport } from './layout.js';
+import { ManagersController } from './managers-controller.js';
 import { enterAltScreen, installCrashRestore, resetTerminalModes } from './terminal.js';
 
 export interface TuiIo {
@@ -50,10 +51,18 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
   const uninstall = installCrashRestore(restore, io.stderr);
   const controller = new ChatController(api);
   const feed = new HeaderFeed(api);
+  const managers = new ManagersController(api);
+  managers.attach(feed);
   feed.start();
   try {
     const instance = render(
-      <App api={api} controller={controller} feed={feed} fullscreen={fullscreen} />,
+      <App
+        api={api}
+        controller={controller}
+        feed={feed}
+        managers={managers}
+        fullscreen={fullscreen}
+      />,
       {
         stdin: io.stdin,
         stdout: io.stdout,
@@ -67,6 +76,7 @@ export async function runApp(api: TuiApi, io: TuiIo): Promise<void> {
     );
     await instance.waitUntilExit();
   } finally {
+    managers.dispose();
     feed.stop();
     restore();
     uninstall();

@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { App } from './app.js';
 import { ChatController } from './chat-controller.js';
-import { fakeApi, gate, type FakeApi } from './fake-api.js';
+import { fakeApi, gate, managerRow, type FakeApi } from './fake-api.js';
 import { HeaderFeed } from './header-feed.js';
+import { ManagersController } from './managers-controller.js';
 import { renderFullscreen, type FakeStdin, type } from './test-helpers.js';
 import { waitFor } from './test-helpers.js';
 
@@ -21,6 +22,7 @@ interface Harness {
   api: FakeApi;
   controller: ChatController;
   feed: HeaderFeed;
+  managers: ManagersController;
   stdin: FakeStdin;
   frame: () => string;
   unmount: () => void;
@@ -30,6 +32,7 @@ interface Harness {
 const mounted: Harness[] = [];
 afterEach(() => {
   for (const h of mounted.splice(0)) {
+    h.managers.dispose();
     h.feed.stop();
     h.unmount();
   }
@@ -43,9 +46,11 @@ function start(
   setup(api);
   const controller = new ChatController(api);
   const feed = new HeaderFeed(api, { retryBaseMs: 1_000_000 });
+  const managers = new ManagersController(api, { debounceMs: 10 });
+  managers.attach(feed);
   feed.start();
   const { app, stdin, lastFrame } = renderFullscreen(
-    createElement(App, { api, controller, feed, fullscreen: size.fullscreen ?? true }),
+    createElement(App, { api, controller, feed, managers, fullscreen: size.fullscreen ?? true }),
     size.rows ?? 24,
     size.columns ?? 80,
   );
@@ -57,6 +62,7 @@ function start(
     api,
     controller,
     feed,
+    managers,
     stdin,
     frame: lastFrame,
     unmount: () => app.unmount(),
@@ -88,7 +94,7 @@ describe('画面の骨組み', () => {
     expect(h.frame().split('\n').length).toBeLessThanOrEqual(20);
   });
 
-  it('2〜5 のタブは「次の段階で実装」。Esc で入力欄を抜けて数字で移り、1 で会話へ戻る', async () => {
+  it('承認待ち・日誌・記憶のタブは「次の段階で実装」。Esc で入力欄を抜けて数字で移り、1 で会話へ戻る', async () => {
     const h = start();
     await waitFor(() => h.frame().includes('メッセージ'));
     h.stdin.write(ESC);
@@ -106,8 +112,8 @@ describe('画面の骨組み', () => {
     const h = start();
     h.stdin.write(ESC);
     await waitFor(() => h.frame().includes('1-5 画面'));
-    h.stdin.write('3');
-    await waitFor(() => h.frame().includes('委譲: 次の段階で実装'));
+    h.stdin.write('4');
+    await waitFor(() => h.frame().includes('日誌: 次の段階で実装'));
     h.stdin.write('/');
     await waitFor(() => h.frame().includes('❯ /'));
     await type(h.stdin, 'approvals');
@@ -369,5 +375,210 @@ describe('中断・履歴・終了', () => {
     await waitFor(() => h.frame().includes('❯ abc'));
     expect(h.exited()).toBe(false);
     expect(h.frame()).toContain('❯ abc');
+  });
+});
+
+describe('委譲（マネージャーの一覧と詳細）', () => {
+  const jsonl = (...lines: object[]): string => lines.map((l) => JSON.stringify(l)).join('\n');
+  const assistant = (text: string) => ({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  });
+
+  function managersFixture(api: FakeApi): void {
+    api.managerRows = [
+      managerRow('mgr-new', {
+        request: '新しい方の依頼',
+        startedAt: '2026-10-02T02:00:00.000Z',
+        updatedAt: new Date().toISOString(),
+        waiting: [{ requestId: 'r1', summary: 'デプロイしてよいか', kind: 'question' }],
+      }),
+      managerRow('mgr-old', {
+        status: 'done',
+        request: '古い方の依頼',
+        startedAt: '2026-10-02T01:00:00.000Z',
+        updatedAt: new Date().toISOString(),
+      }),
+    ];
+    api.transcripts['mgr-old'] = jsonl(
+      { type: 'user', message: { role: 'user', content: '古い依頼を頼む' } },
+      assistant('古い方の作業を終えた'),
+    );
+  }
+
+  async function openList(h: Harness): Promise<void> {
+    await type(h.stdin, '/managers');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('委譲（絞り: すべて'));
+  }
+
+  it('一覧（1 件 1 行）→ 選んで詳細（生ログ）→ 追加指示を送る → Esc で一覧へ戻る', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    const list = h.frame();
+    expect(list).toContain('[running] mgr-new');
+    expect(list).toContain('⏸確認待ち1');
+    expect(list).toContain('新しい方の依頼');
+    expect(list).toContain('[done] mgr-old');
+    expect(list).toContain('これより古い委譲は無い（全 2 件）');
+    expect(list).not.toContain('古い依頼を頼む'); // 一覧に中身は載せない
+
+    h.stdin.write('\x1b[B'); // ↓
+    await waitFor(() =>
+      h
+        .frame()
+        .split('\n')
+        .some((l) => l.includes('❯') && l.includes('mgr-old')),
+    );
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('古い方の作業を終えた'));
+    const detail = h.frame();
+    expect(detail).toContain('[done] mgr-old');
+    expect(detail).toContain('依頼: 古い方の依頼');
+    expect(detail).toContain('❯ 古い依頼を頼む');
+
+    h.stdin.write('i');
+    await type(h.stdin, '続きをお願い');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('delivered: 追加指示として届けた。'));
+    expect(h.api.managerMessages).toEqual([{ id: 'mgr-old', text: '続きをお願い' }]);
+    expect(h.api.chatCalls).toEqual([]); // クローンへは送らない
+
+    h.stdin.write(ESC); // 入力欄を抜ける
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write(ESC); // 一覧へ
+    await waitFor(() => h.frame().includes('委譲（絞り: すべて'));
+    expect(h.frame()).toContain('新しい方の依頼');
+  });
+
+  it('詳細の入力欄でもスラッシュコマンドが効く。// で始めれば / 付きの追加指示を送れる', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, '/exti');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('不明なコマンド: /exti'));
+    expect(h.api.managerMessages).toEqual([]);
+    await type(h.stdin, '//stop ではなく文');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.api.managerMessages.length === 1);
+    expect(h.api.managerMessages[0]?.text).toBe('/stop ではなく文');
+    await type(h.stdin, '/chat');
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('メッセージ'));
+  });
+
+  it('止めるには確認を挟む。y 以外では止めない', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('s');
+    await waitFor(() => h.frame().includes('このマネージャーを止める?'));
+    h.stdin.write('n');
+    await waitFor(() => !h.frame().includes('このマネージャーを止める?'));
+    expect(h.api.stoppedManagers).toEqual([]);
+
+    h.stdin.write('s');
+    await waitFor(() => h.frame().includes('y で止める'));
+    h.stdin.write('y');
+    await waitFor(() => h.frame().includes('stopped: 止まったと確かめた。'));
+    expect(h.api.stoppedManagers).toEqual(['mgr-new']);
+  });
+
+  it('止める結果は読み替えない（not_stopped を「止めた」と言わない）', async () => {
+    const h = start((api) => {
+      managersFixture(api);
+      api.stopResult = { outcome: 'not_stopped', detail: 'セッションがまだ在る。' };
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('s');
+    h.stdin.write('y');
+    await waitFor(() => h.frame().includes('not_stopped: セッションがまだ在る。'));
+    expect(h.frame()).toContain('not_stopped: セッションがまだ在る。');
+    expect(h.frame()).not.toContain('stopped: 止まった');
+  });
+
+  it('f で状態を絞り、絞った 0 件は「居ない」ではなく絞りの案内になる', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write('f'); // 実行中
+    await waitFor(() => h.frame().includes('絞り: 実行中'));
+    expect(h.api.managerListCalls.at(-1)).toEqual({ status: ['running'], limit: 50 });
+    expect(h.frame()).toContain('mgr-new');
+    expect(h.frame()).not.toContain('mgr-old');
+    h.stdin.write('f'); // 人間待ち（0 件）
+    await waitFor(() => h.frame().includes('絞り: 人間待ち'));
+    await waitFor(() => h.frame().includes('この状態のマネージャーは無い'));
+    expect(h.frame()).toContain('この状態のマネージャーは無い');
+    expect(h.frame()).not.toContain('まだ1体も起きていない');
+  });
+
+  it('50 件の頁を超える一覧は m で古い側を読み足す。読めない行は「居ない」と分けて言う', async () => {
+    const h = start((api) => {
+      api.managerRows = Array.from({ length: 60 }, (_, i) =>
+        managerRow(`mgr-${String(100 - i)}`, { request: `依頼${String(i)}` }),
+      );
+      api.unreadableManagers = [{ id: 'mgr-broken', reason: 'status' }];
+    });
+    await openList(h);
+    expect(h.frame()).toContain('50 件読み込み済み');
+    expect(h.frame()).toContain('m で古い側をもっと見る（いま 50 件）');
+    expect(h.frame()).toContain('読めない委譲が 1 件ある');
+    h.stdin.write('m');
+    await waitFor(() => h.frame().includes('60 件読み込み済み'));
+    expect(h.api.managerListCalls.at(-1)?.after).toEqual({
+      managerId: 'mgr-51',
+      startedAt: '2026-10-02T00:00:00.000Z',
+    });
+    h.stdin.write('\x1b[B'.repeat(59));
+    await waitFor(() => h.frame().includes('これより古い委譲は無い（全 60 件）'));
+    expect(h.frame()).toContain('これより古い委譲は無い（全 60 件）');
+  });
+
+  it('長い生ログは可視窓だけを描き、PgUp で遡り、PgDn で末尾追従に戻る', async () => {
+    const h = start((api) => {
+      api.managerRows = [managerRow('mgr-long')];
+      api.transcripts['mgr-long'] = jsonl(
+        ...Array.from({ length: 200 }, (_, i) => assistant(`発言${String(i).padStart(3, '0')}`)),
+      );
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('発言199'));
+    expect(h.frame()).not.toContain('発言000');
+    h.stdin.write('\x1b[5~');
+    await waitFor(() => h.frame().includes('あと'));
+    expect(h.frame()).not.toContain('発言199');
+    for (let i = 0; i < 40; i += 1) h.stdin.write('\x1b[6~');
+    await waitFor(() => h.frame().includes('発言199'));
+    expect(h.frame()).not.toContain('↓ あと');
+  });
+
+  it('生ログがまだ無い委譲は、空とは言わず「まだ無い」と出す', async () => {
+    const h = start((api) => {
+      api.managerRows = [managerRow('mgr-fresh')];
+    });
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('生ログはまだ無い'));
+    expect(h.frame()).toContain('生ログはまだ無い');
+  });
+
+  it('詳細の入力欄に書きかけがあるときの Ctrl+D では終了しない', async () => {
+    const h = start(managersFixture);
+    await openList(h);
+    h.stdin.write(ENTER);
+    await waitFor(() => h.frame().includes('Esc 一覧へ'));
+    h.stdin.write('i');
+    await type(h.stdin, 'ab');
+    h.stdin.write(CTRL_D);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(h.exited()).toBe(false);
+    expect(h.frame()).toContain('❯ ab');
   });
 });
