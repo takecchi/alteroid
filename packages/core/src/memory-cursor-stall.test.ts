@@ -145,7 +145,16 @@ describe('memory_list の頁送り: 親子が入り乱れても、必ず進み�
 
   it('cursor 無しの1頁目は、錨を渡さない描き方と同じ（1頁目の表示は変わらない）', () => {
     const documents = [doc('a', 'z', '子'), doc('m', undefined, '根'), doc('z', undefined, '親')];
-    const entries = documents.map((d) => ({ ...d }));
+    const entries = documents.map((d) => ({
+      slug: d.slug,
+      title: d.title,
+      kind: d.kind,
+      description: d.description,
+      descriptionFreshness: d.descriptionFreshness,
+      parent: d.parent,
+      updatedAt: d.updatedAt,
+      createdAt: d.createdAt,
+    }));
     expect(page(documents, undefined)).toBe(
       renderMemoryListing(entries, { total: documents.length }),
     );
