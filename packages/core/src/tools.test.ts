@@ -5253,6 +5253,12 @@ describe('クローンの道具', () => {
      * 無いことを見る——`request_permission` に限らず、**この自作ツール群
      * 全体**が対象である（新しい道具が `stores.permissionGrants.put(...)`
      * を書き足したら、道具名を問わずここが赤くなる）。
+     *
+     * **例外は読むだけの `permission_grant_list` 1つ**（#2546）。本体は
+     * `permission-grant-list.ts` に置いてあり、`tools.ts` はそれを呼ぶだけである。
+     * そのファイルが届くのは `list` / `listUnreadable` だけで、書き手の口に触れない
+     * ことは `permission-grant-list.test.ts` の歯が固定している。**書き手を足すなら、
+     * どのファイルであっても #863 C 節に反する。**
      */
     it('⭐⭐ tools.ts のどのハンドラも stores.permissionGrants に触れない（issue #863 C節、歯で固定）', async () => {
       const { readFileSync } = await import('node:fs');
