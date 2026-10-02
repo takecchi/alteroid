@@ -15,75 +15,16 @@ import {
   cn,
 } from '@alteroid/ui';
 import { useJournalWindow, summarizeJournalEntry } from '@alteroid/swr';
-import { formatDateTime, formatRelative, shiftForPrepend } from '@alteroid/logic';
+import {
+  formatDateTime,
+  formatRelative,
+  JOURNAL_TONE,
+  JOURNAL_TYPES,
+  SEARCH_SCOPE_NOTE,
+  shiftForPrepend,
+} from '@alteroid/logic';
 import { JournalEntryLinks } from '~/lib/journal-links';
 import type { JournalEntryType } from '@alteroid/logic';
-
-/**
- * 種別ごとの見た目の強さ。**`Record<JournalEntryType, ...>` で縛ってあるので、
- * 種別を足してここを足し忘れると型で落ちる**（`schema.ts` の
- * `journalEntryTypeNames` が `satisfies Record<JournalEntryType, true>` で
- * 縛っているのと同じ作法）。
- *
- * 下の `TYPES`（絞り込みチップの表示順）はここから導出する — **正本は1つ
- * だけ**にして、`TONE` にだけ足して `TYPES` を足し忘れる形（＝チップに
- * 出ない種別ができる）を構造的に無くす。
- */
-const TONE: Record<JournalEntryType, 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'> = {
-  exchange: 'neutral',
-  decision: 'accent',
-  escalation: 'warn',
-  tool_use: 'neutral',
-  memory_update: 'ok',
-  daily_report: 'accent',
-  external_event: 'warn',
-  worker_wait: 'neutral',
-  turn_usage: 'neutral',
-  // `turn_usage` と同じ理由——失敗したターンの観測も含むが、それ自体は
-  // 「その場で壊れて動いていない」ことを表す種別ではない（Issue #976）。
-  context_usage: 'neutral',
-  // **`warn` にしてある。** この種別が出るのは枠に当たったときで、`rotated` でも
-  // 「撒いた（走行中には届いていない）」までしか意味しない。`neutral` にすると
-  // `exhausted`（全層が止まる）が普通の行と同じ色で並ぶ。**色は種別ごとに1つしか
-  // 選べないので、いちばん重い側に合わせる。**
-  token_rotation: 'warn',
-  // **`warn` にしてある。** この種別は `outcome` に `woken`（起こし直した＝その場
-  // で回復した）と `limit_reached`（上限に達して起こし直さなかった＝自動では
-  // 再開しない。`runner.ts` の `#onSubagentStop` の doc）の2値を持つが、**色は
-  // 種別ごとに1つしかない**ので、`token_rotation` と同じ理由でいちばん重い側
-  // （`limit_reached`）に合わせる。`neutral` にすると、要対応の状態が「作業者が
-  // 空回りしただけ」の行と同じ色で並んでしまう。**`danger` にはしていない** —
-  // `danger` はこの画面の他所（`manager-detail.tsx` の「セッション切断」等）で
-  // 「その場で壊れて動いていない」ことに使っており、`token_rotation` の
-  // `exhausted`（全層が止まる、こちらのほうが重い）ですら `warn` に留めている
-  // 釣り合いに合わせた。
-  subagent_stall: 'warn',
-  // **`neutral` にしてある。** この種別は器の記帳（受信箱の流量の計測。
-  // Issue #783 段0）で、それ自体は「壊れている」ことを表さない —— 値が
-  // 何を意味するかは読んだ人が窓どうしを並べて決めることで、行の色では
-  // 言えない（`turn_usage` / `context_usage` と同じ理由）。
-  inbox_flow: 'neutral',
-  // **`neutral`。** 観測した側の申告の記録で、それ自体は壊れていることを表さない。
-  github_observation: 'neutral',
-};
-
-/**
- * 絞り込みチップに出す種別の一覧。**`TONE` から `Object.keys` で起こす** —
- * `schema.ts` が `journalEntryTypeNames`（`satisfies Record<JournalEntryType,
- * true>`）から `JOURNAL_ENTRY_TYPES` を同じ形で起こしているのに倣っただけで、
- * ここだけの新しい発明ではない。
- *
- * **画面側で絞り込みを持たない理由は変わっていない** — ここを固定リストで
- * 持つのは表示順のためだけで、**絞り込みはサーバに投げる**（`GET
- * /journal?type=`）。画面側で捨てると「出していないだけ」の層ができる。
- *
- * **表示順は `TONE` の宣言順が正本になった。** `Object.keys` は文字列キーの
- * 宣言順を保つ（ECMA-262 の仕様）ので、`TONE` の宣言順を変えるとチップの
- * 表示順もそのまま変わる（並び順を変える意図があるときは `TONE` の宣言順を
- * 変えること）。導出前の固定リストと `TONE` はここに来るまで宣言順が
- * 一致していたので、この変更で表示順は1文字も変わっていない。
- */
-const TYPES = Object.keys(TONE) as [JournalEntryType, ...JournalEntryType[]];
 
 /**
  * 端に近づいたと判定するしきい値（アイテム数）。virtua 公式の
@@ -151,7 +92,7 @@ const TYPES_SEARCH_PARAM = 'types';
  * `TYPES_SEARCH_PARAM` の生の値から、既知の種別だけを順序を保って取り出す。
  *
  * **知らない値は無視する（#2010 の線）。** URL 経由の値は人間が手で書き換え
- * うるので、`JournalEntryType` として型で縛れない。ここで `TYPES`（＝
+ * うるので、`JournalEntryType` として型で縛れない。ここで `JOURNAL_TYPES`（＝
  * `JOURNAL_ENTRY_TYPES` から導出した既知の集合）に無い値を弾いておけば、
  * 後段（チップの選択状態・`useJournalWindow` への `selected`・`GET
  * /journal?type=`）はいままでどおり `JournalEntryType` だけを扱える。
@@ -171,7 +112,7 @@ function parseSelectedTypes(raw: string | null): readonly JournalEntryType[] {
   const result: JournalEntryType[] = [];
   for (const part of raw.split(',')) {
     if (part === '') continue;
-    if (!(TYPES as readonly string[]).includes(part)) continue;
+    if (!(JOURNAL_TYPES as readonly string[]).includes(part)) continue;
     const type = part as JournalEntryType;
     if (!result.includes(type)) result.push(type);
   }
@@ -288,7 +229,7 @@ export default function Journal() {
       <div ref={headerRef}>
         {/*
           **絞り込みはサーバに投げる**（下の型チップと同じ判断。この文言は
-          `TYPES` の doc に逐語で在る）。画面側で本文を突き合わせて捨てると、
+          `JOURNAL_TYPES` の doc（logic の `journal-display.ts`） に逐語で在る）。画面側で本文を突き合わせて捨てると、
           「窓に読み込んだぶんの中でしか探せない」＝ **CLI やクローンでは
           できることが Web でだけできない**、という層ができる。
         */}
@@ -316,16 +257,12 @@ export default function Journal() {
           ときの目印にならない（`memory_read` の注記と同じ倒し方）。
         */}
         {committed !== '' && (
-          <p className="mb-3 text-[11px] text-muted-foreground">
-            tool_use の
-            input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation
-            は探す対象に入っていない（そこにだけ書かれている語は当たらない）。
-          </p>
+          <p className="mb-3 text-[11px] text-muted-foreground">{SEARCH_SCOPE_NOTE}</p>
         )}
         <FilterChips
           className="mb-4"
           label="種別で絞り込む"
-          options={TYPES.map((type) => ({ value: type }))}
+          options={JOURNAL_TYPES.map((type) => ({ value: type }))}
           selected={selected}
           onToggle={toggle}
           onClear={clearSelected}
@@ -475,7 +412,7 @@ function JournalBody({
                 // 開閉の `<button>` の中に Tab の停止点も増やさない。
                 time={formatRelative(entry.at)}
                 type={entry.type}
-                tone={TONE[entry.type]}
+                tone={JOURNAL_TONE[entry.type]}
                 summary={summarizeJournalEntry(entry)}
                 links={<JournalEntryLinks entry={entry} />}
                 raw={entry}

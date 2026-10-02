@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { journalEntry, minute, said } from './fake-api.js';
+import { JOURNAL_TYPES, SEARCH_SCOPE_NOTE } from '@alteroid/logic';
 import {
-  JOURNAL_TYPES,
-  SEARCH_SCOPE_NOTE,
   filterText,
   journalDetailText,
   journalEmptyMessage,
@@ -211,8 +210,8 @@ describe('詳細の本文', () => {
 
 describe('語で探すときの断り', () => {
   it('探す対象に入っていない欄を、CLI・Web・道具・GET /journal と同じ6つの並びで言う（#2573）', () => {
-    expect(SEARCH_SCOPE_NOTE).toContain(
-      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない',
+    expect(SEARCH_SCOPE_NOTE).toBe(
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。',
     );
   });
 });

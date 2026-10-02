@@ -4,7 +4,7 @@
  * 要旨（`summarizeJournalEntry`）と時刻（`formatDateTime`）の規則は Web と共有の
  * `@alteroid/logic` のものをそのまま使う（#2558。以前は写しだった）。ここに残すのは TUI だけの事情:
  * 欄の形が合わない行・知らない種別で画面を落とさない包み（下の `summarizeJournalEntry`）、
- * 絞り込みの並びと色（Web の `TONE` は route ファイルにしか無く logic に無いため写しのまま）、
+ * 絞り込みの並び・色・検索の断り・頁の大きさも `@alteroid/logic` の定数をそのまま読む（呼ぶ側が直接 import する）、
  * 一覧の 1 行・詳細の本文の組み立て。
  */
 import { formatDateTime, summarizeJournalEntry as summarizeLogic } from '@alteroid/logic';
@@ -13,37 +13,6 @@ import type { JournalEntry } from '@alteroid/core';
 import { JOURNAL_DETAIL_CHARS } from './journal-window.js';
 
 export type JournalType = JournalEntry['type'];
-
-/**
- * 種別ごとの見た目の強さ（Web の `TONE`）。`Record` で縛るので、種別が増えたら型で落ちる。
- * **写しのまま残してある**: Web の `TONE` は `apps/web/app/routes/journal.tsx` の私物で、logic には無い（#2558）。
- * Web 側を変えたらここも直すこと（`JOURNAL_TYPES` の並びはこの宣言順）。
- */
-export type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent';
-
-const TONE: Record<JournalType, Tone> = {
-  exchange: 'neutral',
-  decision: 'accent',
-  escalation: 'warn',
-  tool_use: 'neutral',
-  memory_update: 'ok',
-  daily_report: 'accent',
-  external_event: 'warn',
-  worker_wait: 'neutral',
-  turn_usage: 'neutral',
-  context_usage: 'neutral',
-  token_rotation: 'warn',
-  subagent_stall: 'warn',
-  inbox_flow: 'neutral',
-  github_observation: 'neutral',
-};
-
-/** 絞り込みに出す種別（Web のチップと同じ並び = `TONE` の宣言順）。 */
-export const JOURNAL_TYPES = Object.keys(TONE) as [JournalType, ...JournalType[]];
-
-export function toneOf(type: JournalType): Tone {
-  return TONE[type];
-}
 
 /**
  * 日誌エントリを人間が読む 1 行に潰す。文言は logic の `summarizeJournalEntry`（Web と同じ）。
@@ -95,15 +64,6 @@ export function journalEmptyMessage(types: readonly JournalType[], q: string): s
   if (q === '') return `${typeLabel} に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
   return `${typeLabel} に絞った上で、「${q}」に当たる記録は無い（絞り込みを外せば見えるかもしれない）。`;
 }
-
-/**
- * 語で探しているとき、探す対象に入っていない欄が在ることの断り。
- * Web の `apps/web/app/routes/journal.tsx`（JSX の中の文）と同じ並び（#2573 で `context_usage`・`inbox_flow` を足して
- * CLI・Web・道具・`GET /journal` が揃った）。Web のそれは route ファイルの私物で logic に無いので、ここは写しのまま残してある。
- * 変えるときは Web・core の `journal_read`・CLI の `/journal` と並べて直すこと。
- */
-export const SEARCH_SCOPE_NOTE =
-  'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
 
 /**
  * 詳細の本文（全文）。上位の欄ごとに `名前: 値` で並べ、文字列は改行を保ったまま字下げして出す

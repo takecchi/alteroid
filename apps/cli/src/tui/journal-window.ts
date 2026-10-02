@@ -10,8 +10,6 @@
  */
 import type { JournalEntry } from '@alteroid/core';
 
-/** 初期表示・1 回の「もっと遡る」で読む件数（`@alteroid/swr` の `JOURNAL_PAGE` と同じ 100）。 */
-export const JOURNAL_PAGE = 100;
 /**
  * 持っておく日誌の文字数の予算（件数ではなく、エントリを JSON にした長さの合計）。
  * 件数で締めると、`tool_use` の入力のような大きい行が並んだときに何件で壊れるかが運任せになる

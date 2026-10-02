@@ -19,6 +19,7 @@ export * from './appraisal-labels.js';
 export * from './auth.js';
 export * from './config.js';
 export * from './format.js';
+export * from './journal-display.js';
 export * from './journal-summary.js';
 export * from './journal-window.js';
 export * from './managers-links.js';

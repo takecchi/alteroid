@@ -225,10 +225,10 @@ describe('日誌の1行は、日報が書けなかった日を日報と呼ばな
 /**
  * **絞り込みチップが日誌の全種別を尽くしていること。**
  *
- * `journal.tsx` の `TYPES`（チップの表示順）は `TONE` から `Object.keys` で
- * 導出している。ここでは黒箱（画面に実際に出るボタン）として、種別の正本
+ * `@alteroid/logic` の `JOURNAL_TYPES`（チップの表示順）は `JOURNAL_TONE` から `Object.keys` で
+ * 導出している（`journal.tsx` が読む）。ここでは黒箱（画面に実際に出るボタン）として、種別の正本
  * である `@alteroid/core` の `JOURNAL_ENTRY_TYPES` と同じ集合であることを
- * 固定する — `TYPES` はモジュール内部の定数で `journal.tsx` から export
+ * 固定する — チップは画面の出力であって、`journal.tsx` から配列を export
  * していないので、内部の配列を直接読むのではなく画面の出力で確かめる。
  *
  * **これは実行時に測れる保証である。** `invalidate()` 側の `never` 縛りは
@@ -852,7 +852,28 @@ describe('日誌画面の検索欄（issue #250）', () => {
   /**
    * **探す対象に入っていない欄が在ることを、探している人にだけ見せる。**
    * 常に出すと本当に効いているときの目印にならない。
+   * 文は `@alteroid/logic` の `SEARCH_SCOPE_NOTE`（TUI と共有）。期待値は #2573 で揃えた6種別の文を逐語で書く。
    */
+  it('探す対象に入っていない欄の断りは、語で探しているときだけ出る', async () => {
+    stubFetch((url) => {
+      if (!url.includes('/journal')) return undefined;
+      return json({ entries: [], scanned: 0 });
+    });
+
+    const NOTE =
+      'tool_use の input・worker_wait・turn_usage・context_usage・inbox_flow・github_observation は探す対象に入っていない（そこにだけ書かれている語は当たらない）。';
+    const { unmount } = renderJournal({ status: 'live', recent: [] }, [
+      `/?q=${encodeURIComponent('当たらない語')}`,
+    ]);
+    await waitForLoaded();
+    expect(screen.getByText(NOTE)).toBeTruthy();
+    unmount();
+
+    renderJournal({ status: 'live', recent: [] });
+    await waitForLoaded();
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
   /**
    * **絞ったまま遡れること**（`q` と `until` が同じ要求に載る）。
    *

@@ -5,7 +5,7 @@
  * 出所: takecchi/codiva（MIT）`src/app.tsx` / `.claude/rules/ink-components.md` の作法
  * （単一の useInput・ゾーン・Esc で戻る・ref で逐次適用）。
  */
-import { JOURNAL_MAX_LIMIT } from '@alteroid/logic';
+import { JOURNAL_MAX_LIMIT, JOURNAL_TYPES } from '@alteroid/logic';
 import { Box, useApp, useInput, useWindowSize } from 'ink';
 import { useMemo, useRef, useState, type FC } from 'react';
 
@@ -53,7 +53,7 @@ import {
 import { useCoalescedStore, useSyncedState } from './hooks.js';
 import { editText, isSpaceKey, normalizeChord, resolveEnter } from './input.js';
 import type { JournalController } from './journal-controller.js';
-import { JOURNAL_TYPES, type JournalType } from './journal-format.js';
+import type { JournalType } from './journal-format.js';
 import {
   JOURNAL_DETAIL_HEAD_ROWS,
   JournalDetailHead,

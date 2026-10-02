@@ -597,7 +597,7 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
 
 /**
  * 絞り込みチップに出す状態の一覧。**`STATUS` から `Object.keys` で起こす**
- * ——`journal.tsx` の `TYPES` が `TONE` から起こしているのと同じ形で、
+ * ——`journal-display.ts`（logic）の `JOURNAL_TYPES` が `JOURNAL_TONE` から起こしているのと同じ形で、
  * **正本を1つにして**「札を足したのにチップに出ない状態」を構造的に無くす。
  *
  * **表示順は `STATUS` の宣言順が正本になる**（`Object.keys` は文字列キーの
@@ -606,7 +606,7 @@ export function describeSessionMissingKindNote(kind: ManagerSummary['sessionMiss
  * **絞り込みはサーバに投げる**（`GET /managers?status=`）。画面側で
  * `filter` して捨てると「窓に読み込んだぶんの中でしか絞れない」層ができ、
  * **CLI やクローンではできることが Web でだけできない**形になる
- * （`journal.tsx` の `TYPES` の doc に同じ逐語が在る）。
+ * （`packages/logic/src/journal-display.ts` の `JOURNAL_TYPES` の doc に同じ趣旨が在る）。
  */
 const STATUSES = Object.keys(STATUS) as [ManagerStatus, ...ManagerStatus[]];
 

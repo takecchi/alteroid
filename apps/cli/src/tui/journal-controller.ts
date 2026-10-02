@@ -19,6 +19,8 @@
 import { matchesJournalSearch, type JournalEntry } from '@alteroid/core';
 import {
   JOURNAL_MAX_LIMIT,
+  JOURNAL_PAGE,
+  JOURNAL_TYPES,
   applyInitialPage,
   applyNewerPage,
   applyOlderPage,
@@ -31,8 +33,8 @@ import {
 
 import type { TuiApi } from './api.js';
 import type { HeaderFeed } from './header-feed.js';
-import { JOURNAL_TYPES, type JournalType } from './journal-format.js';
-import { JOURNAL_PAGE, JOURNAL_RETAIN_CHARS, trimToBudget } from './journal-window.js';
+import type { JournalType } from './journal-format.js';
+import { JOURNAL_RETAIN_CHARS, trimToBudget } from './journal-window.js';
 import { Store } from './store.js';
 
 export type OlderStatus = PageOutcome | 'budget';
