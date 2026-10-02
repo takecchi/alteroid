@@ -173,7 +173,7 @@ catalog:
   '@fontsource/ibm-plex-mono': ^5.3.0
   # グラフ（shadcn の chart）の実体。`shadcn add chart` が連れてくる。**版は shadcn が
   # 固定した値のまま**（chart.tsx は recharts 3 の型に合わせて書かれている）。
-  recharts: 3.8.0
+  recharts: 3.10.1
   # トースト（shadcn の sonner）の実体と、sonner.tsx が明暗を読むための next-themes。
   # next-themes の Provider は置いていない——画面は `<html class="dark">` で明暗を
   # 決めるので、`Toaster`（`components/common.tsx`）が `theme` を明示して渡す。
