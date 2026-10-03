@@ -40,19 +40,25 @@ function untouchedQuery(): { fn: typeof sdkQuery; calls: () => number } {
 }
 
 /** `codex app-server` の最小の偽物（ChatGPT ログイン済み・thread/start に答えるだけ）。 */
-function fakeAppServer(): AgentChildProcess & { received: string[] } {
+function fakeAppServer(): AgentChildProcess & { received: string[]; threadStarts: unknown[] } {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const received: string[] = [];
+  const threadStarts: unknown[] = [];
   let buffer = '';
   stdin.setEncoding('utf8');
   stdin.on('data', (chunk: string) => {
     buffer += chunk;
     for (let i = buffer.indexOf('\n'); i !== -1; i = buffer.indexOf('\n')) {
-      const message = JSON.parse(buffer.slice(0, i)) as { id?: number; method?: string };
+      const message = JSON.parse(buffer.slice(0, i)) as {
+        id?: number;
+        method?: string;
+        params?: unknown;
+      };
       buffer = buffer.slice(i + 1);
       if (message.method !== undefined) received.push(message.method);
+      if (message.method === 'thread/start') threadStarts.push(message.params);
       if (message.id === undefined) continue;
       const result: Record<string, unknown> =
         message.method === 'account/read'
@@ -74,11 +80,12 @@ function fakeAppServer(): AgentChildProcess & { received: string[] } {
     stdin,
     stdout,
     received,
+    threadStarts,
     killed: false,
     exitCode: null,
     pid: 5151,
     kill: () => true,
-  }) as unknown as AgentChildProcess & { received: string[] };
+  }) as unknown as AgentChildProcess & { received: string[]; threadStarts: unknown[] };
 }
 
 async function until(condition: () => boolean, what: string): Promise<void> {
@@ -249,5 +256,48 @@ describe('runner: マネージャー層の provider の選択', () => {
     expect(
       runnerResumeCommandSchema.safeParse({ ...base, sessionId: 's', provider: 'gemini' }).success,
     ).toBe(false);
+  });
+});
+
+describe('runner: 置かれたモデルは host の既定 provider のセッションにだけ効く（#486 S7）', () => {
+  async function codexThreadStartParams(
+    env: NodeJS.ProcessEnv,
+    managerProvider: 'claude' | 'codex',
+  ): Promise<Record<string, unknown>> {
+    const events: RunnerEvent[] = [];
+    const children: ReturnType<typeof fakeAppServer>[] = [];
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: (event) => events.push(event),
+      queryFn: untouchedQuery().fn,
+      managerProvider,
+      env,
+      childUser: { uid: 1000, gid: 1000 },
+      spawnAgentProcessFn: () => {
+        const child = fakeAppServer();
+        children.push(child);
+        return child;
+      },
+    });
+    await host.start({
+      managerId: 'mgr-1',
+      request: 'やって',
+      cwd: '/work',
+      provider: 'codex',
+    });
+    await until(() => children[0]?.threadStarts.length === 1, 'thread/start');
+    await host.shutdown();
+    return children[0]?.threadStarts[0] as Record<string, unknown>;
+  }
+
+  it('claude 既定の host で ALTEROID_MANAGER_MODEL が置かれていても、指名された codex には model を渡さない', async () => {
+    const params = await codexThreadStartParams({ ALTEROID_MANAGER_MODEL: 'sonnet' }, 'claude');
+    expect(params).not.toHaveProperty('model');
+  });
+
+  it('対照: codex 既定の host で置かれたモデルは、従来どおり codex へ渡る', async () => {
+    const params = await codexThreadStartParams({ ALTEROID_MANAGER_MODEL: 'sonnet' }, 'codex');
+    expect(params).toHaveProperty('model', 'sonnet');
   });
 });
