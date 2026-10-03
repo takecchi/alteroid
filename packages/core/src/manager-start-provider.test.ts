@@ -24,20 +24,23 @@ interface Fake {
 }
 
 /** 実セッションを起こさず、命令だけを記録する runner。`hello` の中身を選べる。 */
-function fakeRunner(hello: { managerProviders?: string[]; managerProvider?: string }): Fake {
-  const base = createLocalRunner({ runnerId: 'runner-x', workspacePath: '/work/project', env: {} });
+function fakeRunner(
+  hello: { managerProviders?: string[]; managerProvider?: string },
+  runnerId = 'runner-x',
+): Fake {
+  const base = createLocalRunner({ runnerId, workspacePath: '/work/project', env: {} });
   const starts: RunnerStartCommand[] = [];
   const resumes: RunnerResumeCommand[] = [];
   let emitter: ((event: RunnerEvent) => void) | null = null;
   const runner: RunnerClient = Object.create(base) as RunnerClient;
   Object.assign(runner, {
-    runnerId: 'runner-x',
+    runnerId,
     runnerIdKnown: true,
     workspacePathKnown: true,
     workspacePath: '/work/project',
     async connect(onEvent: (event: RunnerEvent) => void) {
       emitter = onEvent;
-      onEvent({ type: 'hello', runnerId: 'runner-x', ...hello });
+      onEvent({ type: 'hello', runnerId, ...hello });
     },
     async start(command: RunnerStartCommand) {
       starts.push(command);
@@ -140,5 +143,51 @@ describe('ManagerPool.start の provider（#486 S7）', () => {
     expect(byId.get(plain.managerId)).toBeDefined();
     expect(byId.get(plain.managerId)).not.toHaveProperty('provider');
     await stop();
+  });
+});
+
+describe('provider だけ指名したときの自動配置（#486 S7）', () => {
+  function twoRunners(a: Fake, b: Fake) {
+    return a.runner.runnerId === b.runner.runnerId;
+  }
+
+  it('選ばれた器が受けられなければ、受けられる別の器へ置く。指名の runnerId は覆さない', async () => {
+    const a = fakeRunner({ managerProviders: ['claude'] }, 'runner-a');
+    const b = fakeRunner({ managerProviders: ['claude', 'codex'] }, 'runner-b');
+    expect(twoRunners(a, b)).toBe(false);
+    const registry = createRunnerRegistry([a.runner, b.runner]);
+    const pool = createManagerPool({
+      stores: createMemoryStores(),
+      post: () => undefined,
+      runners: registry,
+    });
+    const summary = await pool.start({ request: 'x', provider: 'codex' });
+    expect(summary.runnerId).toBe('runner-b');
+    expect(b.starts[0]?.provider).toBe('codex');
+    expect(a.starts).toEqual([]);
+    // runnerId を名指しすれば、受けられない器でも覆さず断る
+    await expect(
+      pool.start({ request: 'y', provider: 'codex', runnerId: 'runner-a' }),
+    ).rejects.toThrow(/指名起動を受けられない/);
+    await pool.stop();
+    await registry.stop();
+  });
+
+  it('どの器も受けられなければ、明確に断る', async () => {
+    const a = fakeRunner({ managerProviders: ['claude'] }, 'runner-a');
+    const b = fakeRunner({}, 'runner-b');
+    const registry = createRunnerRegistry([a.runner, b.runner]);
+    const pool = createManagerPool({
+      stores: createMemoryStores(),
+      post: () => undefined,
+      runners: registry,
+    });
+    await expect(pool.start({ request: 'x', provider: 'codex' })).rejects.toThrow(
+      /指名起動を受けられない/,
+    );
+    expect(a.starts).toEqual([]);
+    expect(b.starts).toEqual([]);
+    await pool.stop();
+    await registry.stop();
   });
 });

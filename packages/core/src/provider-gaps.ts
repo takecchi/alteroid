@@ -78,6 +78,8 @@ export interface RunnerProviderEntry {
   runnerLabel: string;
   providerId: string;
   subject: ProviderGapSubject | undefined;
+  /** クローンが指名した委譲の provider（runner の既定ではない）。行の主語にそう書く。 */
+  perJob?: boolean;
 }
 
 /**
@@ -87,7 +89,10 @@ export interface RunnerProviderEntry {
 export function describeRunnerProviderGaps(entries: readonly RunnerProviderEntry[]): string[] {
   const lines: string[] = [];
   for (const entry of entries) {
-    const owner = `runner「${entry.runnerLabel}」の`;
+    const owner =
+      entry.perJob === true
+        ? `runner「${entry.runnerLabel}」で provider を指名して動いている委譲の`
+        : `runner「${entry.runnerLabel}」の`;
     if (entry.subject === undefined) {
       lines.push(
         `${owner}マネージャー層・作業者層は未知の provider（${entry.providerId}）を名乗る — 持たない能力を確かめられない`,
@@ -110,6 +115,11 @@ export interface RunnerProviderSource {
     runners: readonly { label: string; state: string; runnerId?: string }[];
   }>;
   runnerManagerProvider?(runnerId: string): string;
+  /**
+   * 走行中の委譲（#486 S7）。クローンが provider を指名した委譲は、runner の既定と違う provider で
+   * 動くので、その欠落も数える。持たないプール（テストの偽物）は既定の分だけ。
+   */
+  list?(): Promise<readonly { status: string; runnerId?: string; managerProvider?: string }[]>;
 }
 
 /**
@@ -132,6 +142,32 @@ export async function collectRunnerProviderGaps(
       if (runner.state !== 'connected' && runner.state !== 'vacating') continue;
       const providerId = pool.runnerManagerProvider(runner.runnerId);
       entries.push({ runnerLabel: runner.label, providerId, subject: providerOf(providerId) });
+    }
+    // **実際に動いている provider を落とさない**（#486 S7）。既定と違う provider の走行中の委譲が
+    // あれば、その runner の欠落として足す（足さないと、codex の欠落が「無い」ように読める）。
+    if (pool.list !== undefined) {
+      const labelOf = new Map(
+        fleet.runners.flatMap((runner) =>
+          runner.runnerId === undefined ? [] : [[runner.runnerId, runner.label] as const],
+        ),
+      );
+      const seen = new Set<string>();
+      for (const manager of await pool.list()) {
+        if (manager.status !== 'running') continue;
+        if (manager.runnerId === undefined || manager.managerProvider === undefined) continue;
+        const label = labelOf.get(manager.runnerId);
+        if (label === undefined) continue;
+        if (manager.managerProvider === pool.runnerManagerProvider(manager.runnerId)) continue;
+        const key = `${manager.runnerId}\0${manager.managerProvider}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        entries.push({
+          runnerLabel: label,
+          providerId: manager.managerProvider,
+          subject: providerOf(manager.managerProvider),
+          perJob: true,
+        });
+      }
     }
     return describeRunnerProviderGaps(entries);
   } catch {

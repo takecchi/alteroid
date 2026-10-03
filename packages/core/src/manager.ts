@@ -5528,10 +5528,15 @@ class Pool implements ManagerPool {
     if (this.#stopped) throw new Error('デーモンが停止中のためマネージャーを起こせない');
     await this.#ensureConnected();
 
-    const runner = await this.#runners.select({
+    let runner = await this.#runners.select({
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
     });
+    // **provider を指名して置き先を指名しなかったとき**だけ、自動配置の選び先がその provider を
+    // 受けられなければ、受けられる別の器を探す（#486 S7）。runnerId の指名は覆さない。
+    if (input.provider !== undefined && input.runnerId === undefined) {
+      runner = await this.#preferRunnerFor(runner, input.provider);
+    }
     // **選んだ相手に繋がっていることを確かめてから起こす。** ここを best-effort に
     // すると、受け口の開いていない runner でマネージャーが走り出し、報告も許可確認も
     // 誰にも届かない（黙って止まっているように見える）。
@@ -6971,6 +6976,49 @@ class Pool implements ManagerPool {
    * - まだ `hello` を受けていない → 少し待つ（`connect` は `hello` を待たずに返る）。
    *   来なければ「分からない」として断る（既定へ倒さない）
    */
+  /** `hello` を受けるまで少し待つ。受けていれば true。 */
+  async #awaitHello(runnerId: string): Promise<boolean> {
+    for (
+      let waited = 0;
+      !this.#runnerCapabilities.has(runnerId) && waited < PROVIDER_HELLO_WAIT_MS;
+      waited += PROVIDER_HELLO_POLL_MS
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, PROVIDER_HELLO_POLL_MS));
+    }
+    return this.#runnerCapabilities.has(runnerId);
+  }
+
+  /** その runner が `provider` で起こせる（名乗っている、または既定が同じ）か。名乗り済みの前提。 */
+  #canRun(runnerId: string, provider: string): boolean {
+    return (
+      this.#runnerStartableProviders.get(runnerId)?.has(provider) === true ||
+      (this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID) === provider
+    );
+  }
+
+  /**
+   * 自動配置が選んだ `chosen` が `provider` を受けられなければ、開いている他の器から受けられる
+   * ものを探す。無ければ `chosen` のまま返す（その先の `#providerForCommand` が明確に断る）。
+   */
+  async #preferRunnerFor(chosen: RunnerClient, provider: string): Promise<RunnerClient> {
+    await this.#connectTo(chosen);
+    if ((await this.#awaitHello(chosen.runnerId)) && this.#canRun(chosen.runnerId, provider)) {
+      return chosen;
+    }
+    for (const other of await this.#runners.list()) {
+      if (other.runnerId === chosen.runnerId) continue;
+      try {
+        await this.#connectTo(other);
+      } catch {
+        continue;
+      }
+      if ((await this.#awaitHello(other.runnerId)) && this.#canRun(other.runnerId, provider)) {
+        return other;
+      }
+    }
+    return chosen;
+  }
+
   async #providerForCommand(
     runner: RunnerClient,
     requested: string,
@@ -6982,14 +7030,7 @@ class Pool implements ManagerPool {
       );
     }
     const runnerId = runner.runnerId;
-    for (
-      let waited = 0;
-      !this.#runnerCapabilities.has(runnerId) && waited < PROVIDER_HELLO_WAIT_MS;
-      waited += PROVIDER_HELLO_POLL_MS
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, PROVIDER_HELLO_POLL_MS));
-    }
-    if (!this.#runnerCapabilities.has(runnerId)) {
+    if (!(await this.#awaitHello(runnerId))) {
       throw new Error(
         `runner（runnerId=${runnerId}）からまだ名乗り（hello）を受けていないので、provider=${known} ` +
           'を受けられるか分からない。少し置いてからやり直すこと（既定の provider へは倒さない）。',
