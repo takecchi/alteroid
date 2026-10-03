@@ -3550,6 +3550,31 @@ describe('HTTP API', () => {
     expect(silent.manager).not.toHaveProperty('managerProvider');
   });
 
+  it('指名された provider は、runner の既定ではなく委譲ごとの値が一覧と詳細へ載る（#486 S7）', async () => {
+    fake.managerList.push({
+      managerId: 'mgr-named',
+      status: 'running',
+      live: true,
+      cwd: '/work/project',
+      request: '仕事',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      waiting: [],
+      runnerId: 'r-claude',
+      managerProvider: 'codex',
+    });
+    fake.runnerManagerProviders.set('r-claude', 'claude');
+
+    const list = (await (await app.request('/managers')).json()) as {
+      managers: { managerId: string; managerProvider?: string }[];
+    };
+    expect(list.managers.find((m) => m.managerId === 'mgr-named')?.managerProvider).toBe('codex');
+    const detail = (await (await app.request('/managers/mgr-named')).json()) as {
+      manager: { managerProvider?: string };
+    };
+    expect(detail.manager.managerProvider).toBe('codex');
+  });
+
   it('拒否件数が、状態を置き換えずに一覧と詳細へ載る', async () => {
     fake.managerList.push({
       managerId: 'mgr-denied',

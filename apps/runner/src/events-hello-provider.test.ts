@@ -54,4 +54,8 @@ describe('runner の hello の managerProvider', () => {
   it('渡さなければ欄を載せない（旧い runner と同じ形）', async () => {
     expect(await helloFrame()).not.toHaveProperty('managerProvider');
   });
+
+  it('命令で名指しされて起こせる provider を managerProviders で名乗る（#486 S7。既定の provider とは別の軸）', async () => {
+    expect((await helloFrame()).managerProviders).toEqual(['claude', 'codex']);
+  });
 });

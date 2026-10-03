@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentChildProcess } from './agent-session.js';
 import { createRunnerHost } from './runner.js';
-import type { RunnerEvent } from './runner-protocol.js';
+import {
+  runnerResumeCommandSchema,
+  runnerStartCommandSchema,
+  type RunnerEvent,
+} from './runner-protocol.js';
 
 /**
  * マネージャー層の provider が runner の駆動役の選択まで届くこと（#486 S6）。
@@ -139,5 +143,111 @@ describe('runner: マネージャー層の provider の選択', () => {
       expect.arrayContaining(['initialize', 'initialized', 'account/read', 'thread/start']),
     );
     await host.shutdown();
+  });
+
+  /**
+   * #486 S7: 命令（start / resume）が provider を名指しすれば、host の既定ではなくそれで動く。
+   */
+  it('start の provider: codex は、既定が claude の host でも Codex の駆動役で起こす', async () => {
+    const sdk = untouchedQuery();
+    const events: RunnerEvent[] = [];
+    const spawned: string[] = [];
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: (event) => events.push(event),
+      queryFn: sdk.fn,
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnClaudeCodeProcessFn: (options) => {
+        spawned.push(options.command);
+        return fakeAppServer();
+      },
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work', provider: 'codex' });
+    await until(
+      () => events.some((e) => e.type === 'session' && e.sessionId === 'thr-codex'),
+      'session イベント',
+    );
+    expect(sdk.calls()).toBe(0);
+    expect(spawned).toEqual(['codex']);
+    await host.shutdown();
+  });
+
+  it('start の provider: claude は、既定が codex の host でも Claude の駆動役で起こす', async () => {
+    const sdk = untouchedQuery();
+    const spawned: string[] = [];
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: sdk.fn,
+      managerProvider: 'codex',
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnClaudeCodeProcessFn: (options) => {
+        spawned.push(options.command);
+        return fakeAppServer();
+      },
+    });
+    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work', provider: 'claude' });
+    expect(sdk.calls()).toBe(1);
+    expect(spawned).toEqual([]);
+    await host.shutdown();
+  });
+
+  it('resume の provider: codex も、既定が claude の host で Codex として開き直す。省略なら既定', async () => {
+    const sdk = untouchedQuery();
+    const spawned: string[] = [];
+    const host = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: sdk.fn,
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+      spawnClaudeCodeProcessFn: (options) => {
+        spawned.push(options.command);
+        return fakeAppServer();
+      },
+    });
+    await host.resume({
+      managerId: 'mgr-1',
+      sessionId: 'thr-codex',
+      request: 'つづき',
+      cwd: '/work',
+      provider: 'codex',
+    });
+    await until(() => spawned.length === 1, 'codex の起動');
+    expect(sdk.calls()).toBe(0);
+    await host.shutdown();
+
+    const sdk2 = untouchedQuery();
+    const host2 = createRunnerHost({
+      runnerId: 'runner-test',
+      workspacePath: '/work',
+      emit: () => undefined,
+      queryFn: sdk2.fn,
+      env: {},
+      childUser: { uid: 1000, gid: 1000 },
+    });
+    await host2.resume({
+      managerId: 'mgr-2',
+      sessionId: 'sess-claude',
+      request: 'つづき',
+      cwd: '/work',
+    });
+    await until(() => sdk2.calls() === 1, 'claude の起動');
+    await host2.shutdown();
+  });
+
+  it('命令の provider は知らない値を断り（400 の元）、省略は従来どおり通る', () => {
+    const base = { managerId: 'm', request: 'r', cwd: '/w' };
+    expect(runnerStartCommandSchema.safeParse(base).success).toBe(true);
+    expect(runnerStartCommandSchema.safeParse({ ...base, provider: 'codex' }).success).toBe(true);
+    expect(runnerStartCommandSchema.safeParse({ ...base, provider: 'gemini' }).success).toBe(false);
+    expect(
+      runnerResumeCommandSchema.safeParse({ ...base, sessionId: 's', provider: 'gemini' }).success,
+    ).toBe(false);
   });
 });
