@@ -16378,9 +16378,6 @@
                           "name": {
                             "type": "string"
                           },
-                          "script": {
-                            "type": "string"
-                          },
                           "scope": {
                             "type": "string",
                             "enum": ["all", "app", "runner"]
@@ -16395,7 +16392,7 @@
                             "type": "number"
                           }
                         },
-                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                        "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
                       }
                     },
                     "composed": {
@@ -16580,9 +16577,6 @@
                           "name": {
                             "type": "string"
                           },
-                          "script": {
-                            "type": "string"
-                          },
                           "scope": {
                             "type": "string",
                             "enum": ["all", "app", "runner"]
@@ -16597,7 +16591,7 @@
                             "type": "number"
                           }
                         },
-                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                        "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
                       }
                     },
                     "composed": {
@@ -16794,9 +16788,6 @@
                           "name": {
                             "type": "string"
                           },
-                          "script": {
-                            "type": "string"
-                          },
                           "scope": {
                             "type": "string",
                             "enum": ["all", "app", "runner"]
@@ -16811,7 +16802,7 @@
                             "type": "number"
                           }
                         },
-                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                        "required": ["name", "scope", "updatedAt", "sha256", "bytes"]
                       }
                     },
                     "composed": {
