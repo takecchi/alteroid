@@ -198,7 +198,7 @@ describe('対象の決め方', () => {
     for (const p of [
       'docker/runner-extra',
       'Dockerfiles.md',
-      'docs/dockerfile-notes.md',
+      'notes/dockerfile-notes.md',
       'a.json',
     ]) {
       expect(isDockerfileName(p)).toBe(false);
