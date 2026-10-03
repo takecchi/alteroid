@@ -78,12 +78,26 @@ interface Point {
   y: number;
 }
 
-/** 左の箱の右端から、右の箱の左端へ。横に寝かせた S 字の三次ベジェ。 */
+/**
+ * 左の箱の右端から、右の箱の左端へ。横 → 縦 → 横の折れ線で、角だけ小さく丸める。
+ * 折れる位置は2つの箱の中間なので、同じ親から出る線は縦の幹を共有して木の形になる。
+ */
 function link(from: Point, to: Point): string {
   const x1 = from.x + NODE_W;
   const x2 = to.x;
-  const dx = Math.max(32, (x2 - x1) / 2);
-  return `M ${x1} ${from.y} C ${x1 + dx} ${from.y}, ${x2 - dx} ${to.y}, ${x2} ${to.y}`;
+  const mid = (x1 + x2) / 2;
+  const dy = to.y - from.y;
+  if (Math.abs(dy) < 1) return `M ${x1} ${from.y} H ${x2}`;
+  const r = Math.min(8, Math.abs(dy) / 2, (x2 - x1) / 2);
+  const s = Math.sign(dy);
+  return [
+    `M ${x1} ${from.y}`,
+    `H ${mid - r}`,
+    `Q ${mid} ${from.y} ${mid} ${from.y + s * r}`,
+    `V ${to.y - s * r}`,
+    `Q ${mid} ${to.y} ${mid + r} ${to.y}`,
+    `H ${x2}`,
+  ].join(' ');
 }
 
 /**
