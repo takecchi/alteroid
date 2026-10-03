@@ -338,7 +338,7 @@ async function request(target: Target, path: string, init: RequestInit = {}): Pr
 const TEMPLATE = `# alteroid 実行環境プロファイル（人間の ~/.zprofile に当たるもの）
 #
 # ここに書いたものは、既定ではクローン・マネージャー・作業者のすべてに効きます
-# （`alteroid profile edit --scope runner` のように撒く先を絞れます。
+# （alteroid profile edit --scope runner のように撒く先を絞れます。
 #  all=両方 / app=クローンだけ / runner=マネージャー・作業者だけ）。
 # 器（コンテナ）を作り直す必要はありません。
 #

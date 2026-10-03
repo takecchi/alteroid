@@ -16270,6 +16270,10 @@
                     "script": {
                       "type": "string"
                     },
+                    "scope": {
+                      "type": "string",
+                      "enum": ["all", "app", "runner"]
+                    },
                     "updatedAt": {
                       "type": "string"
                     },
@@ -16280,7 +16284,7 @@
                       "type": "number"
                     }
                   },
-                  "required": ["script"]
+                  "required": ["script", "scope"]
                 }
               }
             }
@@ -16318,6 +16322,10 @@
                   "properties": {
                     "updatedAt": {
                       "type": "string"
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": ["all", "app", "runner"]
                     },
                     "sha256": {
                       "type": "string"
@@ -16389,7 +16397,7 @@
                       }
                     }
                   },
-                  "required": ["updatedAt", "clone", "runners"]
+                  "required": ["updatedAt", "scope", "clone", "runners"]
                 }
               }
             }
@@ -16439,6 +16447,10 @@
                 "properties": {
                   "script": {
                     "type": "string"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": ["all", "app", "runner"]
                   }
                 },
                 "required": ["script"]
