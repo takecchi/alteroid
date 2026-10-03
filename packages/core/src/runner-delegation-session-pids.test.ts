@@ -11,7 +11,7 @@ import { createRunnerHost, type RunnerHost } from './runner.js';
  * **孤児の回収（`apps/runner/src/tasks.ts`）が「どのセッションが生きているか」を
  * 判定する唯一の材料は、ここで固定する配線が作る `host.delegationSessionPids()`
  * である。** 本物の `spawnAsUser` は別 UID への実プロセス生成（特権が要る）なので、
- * ここでは `RunnerHostOptions.spawnClaudeCodeProcessFn`（主にテスト用の差し替え口）
+ * ここでは `RunnerHostOptions.spawnAgentProcessFn`（主にテスト用の差し替え口）
  * で実体を置き換え、**配線（pid を控える／終わったら忘れる）だけ**を実プロセス
  * 無しで固定する。
  */
@@ -174,7 +174,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: () => fake.handle,
+      spawnAgentProcessFn: () => fake.handle,
     });
 
     expect(host.delegationSessionPids()).toEqual({ live: new Set(), knownTerminated: new Set() });
@@ -220,7 +220,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: () => fake.handle,
+      spawnAgentProcessFn: () => fake.handle,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
@@ -255,7 +255,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: () => fake.handle,
+      spawnAgentProcessFn: () => fake.handle,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
@@ -301,7 +301,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: spawnFn,
+      spawnAgentProcessFn: spawnFn,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
@@ -360,7 +360,7 @@ describe('委譲のセッション pid 追跡（#1334 段1。host.delegationSess
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: () => fake.handle,
+      spawnAgentProcessFn: () => fake.handle,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
@@ -404,7 +404,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: () => fake.handle,
+      spawnAgentProcessFn: () => fake.handle,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
@@ -438,7 +438,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: () => fake.handle,
+      spawnAgentProcessFn: () => fake.handle,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });
@@ -476,7 +476,7 @@ describe('孤児回収が「委譲の終端」で判定すること（#1334 段1
       queryFn: fakeSdk(sessions),
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: spawnFn,
+      spawnAgentProcessFn: spawnFn,
     });
 
     await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work/project' });

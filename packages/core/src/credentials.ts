@@ -203,7 +203,7 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
  * | `ALTEROID_CLONE_MODEL` | デーモン自身のプロセス | `applyAppScopedEnvVars` が `process.env` を書き換えた後に `resolveCloneModel()` が読むので、**効いてしまう** |
  * | `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` | **runner 自身のプロセス**（`runner.ts` の `resolveManagerModel(this.#env)`） | runner は袋を自分の `process.env` へ重ねないので、**黙って効かない** |
  * | `ALTEROID_CLONE_PROVIDER` | デーモン自身のプロセス（`apps/daemon/src/index.ts` の `resolveCloneProviderId(process.env)`。読むのは `applyAppScopedEnvVars(stores)` の**後**） | `applyAppScopedEnvVars` が `process.env` を書き換えた後に読むので、**効いてしまう** |
- * | `ALTEROID_MANAGER_PROVIDER` | **runner 自身のプロセス**（`apps/runner/src/index.ts` の `resolveManagerProviderId(process.env)`） | runner は袋を自分の `process.env` へ重ねないので、**黙って効かない**（デーモンは `hello` の名乗りで runner の値を知るだけなので、袋の値との間で認識が割れる） |
+ * | `ALTEROID_MANAGER_PROVIDER` | **runner 自身のプロセス**（`apps/runner/src/index.ts` の `resolveManagerProviderId(process.env)`） | runner は袋を自分の `process.env` へ重ねないので、**黙って効かない**（デーモンは `hello` の名乗りで runner の値を知るだけなので、袋の値との間で認識が割れる）。ただし同一プロセスの runner（`createLocalRunner`）では、デーモン自身が器の生の `process.env` から読んで渡す（`runnerSeeds`）。袋は拒まれるので、どちらも読むのは生の環境変数だけである） |
  *
  * ⟹ `ALTEROID_MANAGER_MODEL` を袋へ置くと、**デーモン側の自己認識の宣言だけが
  * 変わって、runner は既定の帯のまま走る**。これは `railway/README.md` が

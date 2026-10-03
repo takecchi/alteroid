@@ -5,16 +5,30 @@ import type { Query, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentChildProcess } from './agent-session.js';
-import { createRunnerHost } from './runner.js';
+import { createLocalRunner } from './runner-local.js';
 import type { RunnerEvent } from './runner-protocol.js';
 
 /**
- * マネージャー層の provider が runner の駆動役の選択まで届くこと（#486 S6）。
- *
- * 既定（省略・`claude`）は従来どおり `queryFn`（SDK の `query()`）を使い、`codex` のときは
- * `CodexManagerDriver` が `codex app-server` を起こす（`spawnAgentProcessFn` の差し替え口
- * 経由。実プロセスは起こさない）。
+ * 同一プロセスの runner（`createLocalRunner`）にもマネージャー層の provider が届くこと
+ * （#486 S6）。`childUser` が無い構成なので Codex は素の `spawn` で起きる——ここでは
+ * `node:child_process` の `spawn` だけ偽物にして、実プロセスも実 Codex も起こさない。
  */
+
+const spawned: { command: string; args: readonly string[] }[] = [];
+const fakeChildren: (AgentChildProcess & { received: string[] })[] = [];
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...original,
+    spawn: (command: string, args: readonly string[]) => {
+      spawned.push({ command, args });
+      const child = fakeAppServer();
+      fakeChildren.push(child);
+      return child;
+    },
+  };
+});
 
 function untouchedQuery(): { fn: typeof sdkQuery; calls: () => number } {
   const fn = vi.fn(() => {
@@ -86,58 +100,65 @@ async function until(condition: () => boolean, what: string): Promise<void> {
   throw new Error(`待ちが終わらない: ${what}`);
 }
 
-describe('runner: マネージャー層の provider の選択', () => {
-  it('省略（既定）は Claude の駆動役。queryFn が呼ばれ、codex は起こさない', async () => {
-    const sdk = untouchedQuery();
-    const spawned: string[] = [];
-    const host = createRunnerHost({
-      runnerId: 'runner-test',
-      workspacePath: '/work',
-      emit: () => undefined,
-      queryFn: sdk.fn,
-      env: {},
-      childUser: { uid: 1000, gid: 1000 },
-      spawnAgentProcessFn: (options) => {
-        spawned.push(options.command);
-        return fakeAppServer();
-      },
-    });
-    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
-    expect(sdk.calls()).toBe(1);
-    expect(spawned).toEqual([]);
-    await host.shutdown();
-  });
-
-  it('managerProvider: codex は CodexManagerDriver。queryFn は呼ばれず、codex app-server を起こす', async () => {
+describe('local runner: マネージャー層の provider', () => {
+  it('省略（既定）は Claude の駆動役。hello に名乗りを載せず、codex は起こさない', async () => {
+    spawned.length = 0;
     const sdk = untouchedQuery();
     const events: RunnerEvent[] = [];
-    const children: ReturnType<typeof fakeAppServer>[] = [];
-    const spawned: { command: string; args: string[] }[] = [];
-    const host = createRunnerHost({
-      runnerId: 'runner-test',
+    const runner = createLocalRunner({
       workspacePath: '/work',
-      emit: (event) => events.push(event),
+      queryFn: sdk.fn,
+      env: {},
+    });
+    await runner.connect((event) => events.push(event));
+    const hello = events.find((e) => e.type === 'hello');
+    expect(hello).toBeDefined();
+    expect(hello && 'managerProvider' in hello).toBe(false);
+    await runner.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(sdk.calls()).toBe(1);
+    expect(spawned).toEqual([]);
+    await runner.close();
+  });
+
+  it('managerProvider: claude も Claude の駆動役で、hello にその名乗りを載せる', async () => {
+    const sdk = untouchedQuery();
+    const events: RunnerEvent[] = [];
+    const runner = createLocalRunner({
+      workspacePath: '/work',
+      queryFn: sdk.fn,
+      managerProvider: 'claude',
+      env: {},
+    });
+    await runner.connect((event) => events.push(event));
+    expect(events.find((e) => e.type === 'hello')).toMatchObject({ managerProvider: 'claude' });
+    await runner.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    expect(sdk.calls()).toBe(1);
+    await runner.close();
+  });
+
+  it('managerProvider: codex は CodexManagerDriver。hello に codex と名乗り、queryFn は呼ばれない', async () => {
+    spawned.length = 0;
+    fakeChildren.length = 0;
+    const sdk = untouchedQuery();
+    const events: RunnerEvent[] = [];
+    const runner = createLocalRunner({
+      workspacePath: '/work',
       queryFn: sdk.fn,
       managerProvider: 'codex',
       env: {},
-      childUser: { uid: 1000, gid: 1000 },
-      spawnAgentProcessFn: (options) => {
-        spawned.push({ command: options.command, args: options.args });
-        const child = fakeAppServer();
-        children.push(child);
-        return child;
-      },
     });
-    await host.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
+    await runner.connect((event) => events.push(event));
+    expect(events.find((e) => e.type === 'hello')).toMatchObject({ managerProvider: 'codex' });
+    await runner.start({ managerId: 'mgr-1', request: 'やって', cwd: '/work' });
     await until(
       () => events.some((e) => e.type === 'session' && e.sessionId === 'thr-codex'),
       'session イベント',
     );
     expect(sdk.calls()).toBe(0);
     expect(spawned).toEqual([{ command: 'codex', args: ['app-server', '--listen', 'stdio://'] }]);
-    expect(children[0]!.received).toEqual(
+    expect(fakeChildren[0]!.received).toEqual(
       expect.arrayContaining(['initialize', 'initialized', 'account/read', 'thread/start']),
     );
-    await host.shutdown();
+    await runner.close();
   });
 });

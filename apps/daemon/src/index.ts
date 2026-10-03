@@ -40,10 +40,12 @@ import {
   placedClonePermissionMode,
   placedManagerModels,
   CLONE_PROVIDER_ENV_KEY,
+  MANAGER_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
   agentProviderOf,
   placedAgentProvider,
   resolveCloneProviderId,
+  resolveManagerProviderId,
   reasonOf,
   redactErrorText,
   resolveCloneModel,
@@ -292,6 +294,18 @@ function runnerSeeds(options: {
       open: () => openHttpRunner(url, token, options.onRunnerUnknown, options.onRunnerDropped),
     }));
   }
+  // マネージャー層の provider（#486 S6）。**同一プロセスの runner を使うときだけ読む**
+  // （HTTP の runner は自分の `process.env` で解く。デーモンは `hello` の名乗りを読むだけ）。
+  // 知らない値ならここで起動を止める（`resolveManagerProviderId` の doc）。袋からは置けない名前
+  // （`ENV_FILE_OWNED_CREDENTIAL_NAMES`）なので、読むのは器の生の環境変数だけである。
+  const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
+  if (placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY) !== null) {
+    process.stdout.write(
+      `alteroidd: ${MANAGER_PROVIDER_ENV_KEY} が置かれています` +
+        `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${managerProvider.id}）。` +
+        `以後この同一プロセスの runner が起こすマネージャーと作業者はこの provider で走ります\n`,
+    );
+  }
   return [
     {
       label: '同一プロセス',
@@ -299,6 +313,7 @@ function runnerSeeds(options: {
         createLocalRunner({
           runnerId: 'runner-local',
           workspacePath: options.workspace,
+          managerProvider: managerProvider.id,
           withheldEnvKeys: options.withheldEnvKeys,
           // **ローカルでもプロファイルを効かせる。** コンテナ構成でだけ `.zprofile`
           // が効く形にすると、器が違うだけでできることが変わる（M4 受け入れ基準1）。

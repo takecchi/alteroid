@@ -386,11 +386,11 @@ export interface RunnerHostOptions {
    */
   enforceLease?: boolean;
   /**
-   * `spawnClaudeCodeProcess` の実体をテストから差し替える（#1334 段1）。
+   * 子プロセス起動（Claude Code の `spawnClaudeCodeProcess`・Codex の `codex app-server`）の実体をテストから差し替える（#1334 段1）。
    * **主にテスト用**（`queryFn` と同じ理由）。既定は本物（`spawnAsUser`）。
-   * `RunnerSessionOptions.spawnClaudeCodeProcessFn` の doc を見よ。
+   * `RunnerSessionOptions.spawnAgentProcessFn` の doc を見よ。
    */
-  spawnClaudeCodeProcessFn?: (options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle;
+  spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   /**
    * `pids.events` / `memory.events` を読む実体をテストから差し替える
    * （Issue #1517「最小の形」1）。**主にテスト用**（`queryFn` と同じ理由）。
@@ -645,8 +645,8 @@ class Host implements RunnerHost {
    */
   readonly #liveDelegationPids = new Set<number>();
   readonly #pidOwnerManagerId = new Map<number, string>();
-  readonly #spawnClaudeCodeProcessFn:
-    ((options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle) | undefined;
+  readonly #spawnAgentProcessFn:
+    ((options: SpawnAgentProcessOptions) => DelegationProcessHandle) | undefined;
   readonly #readCgroupEventCountersFn: (() => Promise<CgroupEventCounters>) | undefined;
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
@@ -664,7 +664,7 @@ class Host implements RunnerHost {
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
-    this.#spawnClaudeCodeProcessFn = options.spawnClaudeCodeProcessFn;
+    this.#spawnAgentProcessFn = options.spawnAgentProcessFn;
     this.#readCgroupEventCountersFn = options.readCgroupEventCountersFn;
     this.#finishUnpushedWorkFn = options.finishUnpushedWorkFn;
     this.#cwdExistsFn = options.cwdExistsFn ?? directoryExists;
@@ -946,9 +946,9 @@ class Host implements RunnerHost {
       onClosed: () => this.#sessions.delete(managerId),
       onDelegationProcessSpawned: (pid) => this.#noteDelegationProcessSpawned(pid, managerId),
       onDelegationProcessExited: (pid) => this.#noteDelegationProcessExited(pid),
-      ...(this.#spawnClaudeCodeProcessFn === undefined
+      ...(this.#spawnAgentProcessFn === undefined
         ? {}
-        : { spawnClaudeCodeProcessFn: this.#spawnClaudeCodeProcessFn }),
+        : { spawnAgentProcessFn: this.#spawnAgentProcessFn }),
       ...(this.#readCgroupEventCountersFn === undefined
         ? {}
         : { readCgroupEventCountersFn: this.#readCgroupEventCountersFn }),
@@ -1437,7 +1437,7 @@ interface PendingRequest {
 }
 
 /** `spawnClaudeCodeProcess`（SDK の型 `SpawnOptions`）と同じ形。ここだけで書き写す理由は `spawnAsUser` の doc を見よ。 */
-type SpawnClaudeCodeProcessOptions = AgentSpawnOptions;
+type SpawnAgentProcessOptions = AgentSpawnOptions;
 
 /**
  * `spawnClaudeCodeProcess` が返す実体（#1334 段1）。
@@ -1497,7 +1497,7 @@ interface RunnerSessionOptions {
   onDelegationProcessSpawned?: (pid: number) => void;
   onDelegationProcessExited?: (pid: number) => void;
   /**
-   * `spawnClaudeCodeProcess` の実体をテストから差し替える（#1334 段1）。
+   * 子プロセス起動（Claude Code の `spawnClaudeCodeProcess`・Codex の `codex app-server`）の実体をテストから差し替える（#1334 段1）。
    *
    * **主にテスト用。** 既定は本物の `spawnAsUser`（`detached: true`＝新しい
    * セッションの長として起こす）。本物は特権（UID を降ろす）を要る実プロセス
@@ -1505,11 +1505,11 @@ interface RunnerSessionOptions {
    * 「起きた／終わった」をこの層の外へ知らせる配線（pid 追跡）だけを、実
    * プロセス無しで固定できるようにしてある。
    */
-  spawnClaudeCodeProcessFn?: (options: SpawnClaudeCodeProcessOptions) => DelegationProcessHandle;
+  spawnAgentProcessFn?: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   /**
    * `pids.events` / `memory.events` を読む実体をテストから差し替える
    * （Issue #1517「最小の形」1）。**主にテスト用**（`queryFn` /
-   * `spawnClaudeCodeProcessFn` と同じ理由）。既定は本物
+   * `spawnAgentProcessFn` と同じ理由）。既定は本物
    * （`runner-resources.ts` の `readCgroupEventCounters`、既定の
    * `/sys/fs/cgroup` を読む）。
    */
@@ -1597,9 +1597,7 @@ class RunnerSession {
   readonly #onClosed: () => void;
   readonly #onDelegationProcessSpawned: (pid: number) => void;
   readonly #onDelegationProcessExited: (pid: number) => void;
-  readonly #spawnClaudeCodeProcessFn: (
-    options: SpawnClaudeCodeProcessOptions,
-  ) => DelegationProcessHandle;
+  readonly #spawnAgentProcessFn: (options: SpawnAgentProcessOptions) => DelegationProcessHandle;
   readonly #readCgroupEventCountersFn: () => Promise<CgroupEventCounters>;
   /**
    * `#finish()` が `closed` を emit する直前に取る未 push の観測の実体
@@ -1863,8 +1861,8 @@ class RunnerSession {
     this.#onClosed = options.onClosed;
     this.#onDelegationProcessSpawned = options.onDelegationProcessSpawned ?? (() => undefined);
     this.#onDelegationProcessExited = options.onDelegationProcessExited ?? (() => undefined);
-    this.#spawnClaudeCodeProcessFn =
-      options.spawnClaudeCodeProcessFn ??
+    this.#spawnAgentProcessFn =
+      options.spawnAgentProcessFn ??
       ((spawnOptions) =>
         spawnAsUser(this.#childUser as RunnerChildUser, { ...spawnOptions, detached: true }));
     this.#readCgroupEventCountersFn =
@@ -2492,8 +2490,8 @@ class RunnerSession {
    * 同じセッション ID を持つ（#1334 の 2026-09-25T14:27Z のコメント）。
    * 「並列の作業者がそれぞれ独立したセッション ID を持つ」とは読まないこと。
    */
-  #spawnDelegationProcess(options: SpawnClaudeCodeProcessOptions): DelegationProcessHandle {
-    const child = this.#spawnClaudeCodeProcessFn(options);
+  #spawnDelegationProcess(options: SpawnAgentProcessOptions): DelegationProcessHandle {
+    const child = this.#spawnAgentProcessFn(options);
     const pid = child.pid;
     if (pid !== undefined) {
       this.#onDelegationProcessSpawned(pid);
