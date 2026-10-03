@@ -1647,7 +1647,7 @@ describe('クローンの道具', () => {
     });
 
     expect(result).toContain('更新した');
-    expect((await h.stores.profile.read())?.script).toContain('SOME_API_TOKEN');
+    expect((await h.stores.profile.list())[0]?.script).toContain('SOME_API_TOKEN');
     // **置くだけで終わらせない。** 配られていなければマネージャーには効かない。
     expect(h.distributed).toHaveLength(1);
     expect(h.distributed[0]).toContain('SOME_API_TOKEN');
@@ -1703,40 +1703,86 @@ describe('クローンの道具', () => {
     expect(failed).toMatch(/省略/);
   });
 
-  it('profile_read で今の本文を取れる（足すだけの更新ができる）', async () => {
+  // 2026-10-03: プロファイルは名前付きの行になった。`profile_read` は名前を省くと一覧
+  // （本文なし）、名前を渡すとその行の本文。（以前は引数なしで本文を返していた。）
+  it('profile_read name=<名前> で今の本文を取れる（足すだけの更新ができる）', async () => {
     const h = harness();
     await h.call('profile_write', { script: 'export A=1', summary: 'A' });
 
-    const body = await h.call('profile_read', {});
+    const body = await h.call('profile_read', { name: 'default' });
 
     expect(body).toContain('export A=1');
   });
 
+  it('profile_read は名前を省くと行の一覧を返す（名前・撒く先・バイト数・更新。本文は載らない）', async () => {
+    const h = harness();
+    await h.call('profile_write', {
+      name: 'rust',
+      script: 'export SECRET_RUST=1',
+      summary: 'r',
+      scope: 'runner',
+    });
+    await h.call('profile_write', { name: 'alpha', script: 'export SECRET_ALPHA=1', summary: 'a' });
+
+    const listing = await h.call('profile_read', {});
+
+    expect(listing).toContain('- alpha / 撒く先 all /');
+    expect(listing).toContain('- rust / 撒く先 runner /');
+    // 名前のコード単位順。
+    expect(listing.indexOf('- alpha')).toBeLessThan(listing.indexOf('- rust'));
+    // **本文は一覧に載せない**（鍵が入っている）。
+    expect(listing).not.toContain('SECRET_');
+    expect(listing).toContain('profile_read name=<名前>');
+  });
+
+  it('profile_read name=<無い名前> は無いと言い、一覧の取り方を案内する', async () => {
+    const h = harness();
+    await h.call('profile_write', { script: 'export A=1', summary: 'A' });
+
+    expect(await h.call('profile_read', { name: 'nope' })).toContain('行 nope は無い');
+  });
+
+  it('profile_read の一覧は件数が多くても予算で切り、省略の合図と続きの取り方を出す', async () => {
+    const h = harness();
+    for (let i = 0; i < 120; i += 1) {
+      await h.stores.profile.set(
+        `row-${String(i).padStart(3, '0')}-${'x'.repeat(50)}`,
+        'export A=1\n',
+        'all',
+      );
+    }
+
+    const listing = await h.call('profile_read', {});
+
+    expect(listing.length).toBeLessThan(8_000);
+    expect(listing).toMatch(/ほか \d+ 件は省略/);
+  });
+
   /**
-   * 撒く先（scope。2026-10-03）。`profile_write` は人間の口（`PUT /profile`）と同じ
-   * `ProfileService.apply` を通るので、scope も同じ意味で通ること。
+   * 行ごとの撒く先（scope）と名前。`profile_write` は人間の口（`PUT /profile/:name`）と同じ
+   * `ProfileService.set` を通るので、同じ意味で通ること。
    */
-  it('profile_write の scope=runner: 正本は本文を持ち、profile_read に撒く先が出る', async () => {
+  it('profile_write の scope=runner: 正本は行を持ち、runner には合成が降り、profile_read に撒く先が出る', async () => {
     const h = harness();
 
     const written = await h.call('profile_write', {
+      name: 'rust',
       script: 'export ONLY_RUNNER=1',
       summary: 'runner だけに要る',
       scope: 'runner',
     });
 
     expect(written).toContain('撒く先 runner');
-    expect(await h.stores.profile.read()).toMatchObject({ scope: 'runner' });
-    // 配られた本文は runner 宛て（クローンが読む正本とは別に、runner へ降りた）。
+    expect(await h.stores.profile.list()).toMatchObject([{ name: 'rust', scope: 'runner' }]);
     expect(h.distributed).toHaveLength(1);
     expect(h.distributed[0]).toContain('ONLY_RUNNER');
     // クローンは読む口を失わない（scope が runner でも本文は読める）。
-    const body = await h.call('profile_read', {});
+    const body = await h.call('profile_read', { name: 'rust' });
     expect(body).toContain('撒く先 runner');
     expect(body).toContain('export ONLY_RUNNER=1');
   });
 
-  it('profile_write の scope=app: runner へは本文が降りない（空が降りる）', async () => {
+  it('profile_write の scope=app: runner へは空が降りる', async () => {
     const h = harness();
 
     await h.call('profile_write', {
@@ -1748,15 +1794,44 @@ describe('クローンの道具', () => {
     expect(h.distributed).toEqual(['']);
   });
 
-  it('profile_write は scope を省くと今の撒く先を保つ（無ければ all）', async () => {
+  it('profile_write は scope を省くと既存の行の撒く先を保つ（新しい行なら all）', async () => {
     const h = harness();
     await h.call('profile_write', { script: 'export A=1', summary: 'A' });
-    expect((await h.stores.profile.read())?.scope).toBe('all');
+    expect((await h.stores.profile.list())[0]?.scope).toBe('all');
 
     await h.call('profile_write', { script: 'export A=1', summary: 'A', scope: 'runner' });
     await h.call('profile_write', { script: 'export A=2', summary: 'A2' });
 
-    expect((await h.stores.profile.read())?.scope).toBe('runner');
+    expect((await h.stores.profile.list())[0]?.scope).toBe('runner');
+  });
+
+  it('profile_write は名前の形が不正・本文が空なら何も変えない（日誌も書かない）', async () => {
+    const h = harness();
+
+    expect(
+      await h.call('profile_write', { name: '../x', script: 'export A=1', summary: 's' }),
+    ).toContain('名前の形が不正');
+    expect(await h.call('profile_write', { script: '  \n', summary: 's' })).toContain(
+      '本文が空では行を置けない',
+    );
+
+    expect(await h.stores.profile.list()).toEqual([]);
+    expect(await h.stores.journal.list({ types: ['decision'] })).toEqual([]);
+  });
+
+  it('profile_remove は1行だけを外し、他の行はそのまま。無い名前は何も変えない', async () => {
+    const h = harness();
+    await h.call('profile_write', { name: 'a', script: 'export A=1', summary: 'a' });
+    await h.call('profile_write', { name: 'b', script: 'export B=1', summary: 'b' });
+
+    const removed = await h.call('profile_remove', { name: 'a', summary: 'a を外す' });
+    expect(removed).toContain('行 a を外した');
+    expect((await h.stores.profile.list()).map((row) => row.name)).toEqual(['b']);
+
+    expect(await h.call('profile_remove', { name: 'zzz', summary: 'x' })).toContain(
+      '行 zzz は無い',
+    );
+    expect((await h.stores.profile.list()).map((row) => row.name)).toEqual(['b']);
   });
 
   /**
@@ -1850,7 +1925,7 @@ describe('クローンの道具', () => {
       const body = await call('export OK_2429=1\n');
 
       expect(body).toContain('更新した');
-      expect((await stores.profile.read())?.script).toContain('OK_2429');
+      expect((await stores.profile.list())[0]?.script).toContain('OK_2429');
     });
   });
 
@@ -1915,7 +1990,7 @@ describe('クローンの道具', () => {
 
     expect(body).toContain('置けなかった');
     expect(body).toContain('構文が壊れている');
-    expect(await h.stores.profile.read()).toBeNull();
+    expect(await h.stores.profile.list()).toEqual([]);
 
     // `list` の既定は新しい順（`desc`）なので `order: 'asc'` で古い順に取る。
     const decisions = (await h.stores.journal.list({ types: ['decision'], order: 'asc' })).flatMap(
@@ -10130,7 +10205,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       });
 
       expect(isError).toBe(true);
-      expect(await stores.profile.read()).toBeNull();
+      expect(await stores.profile.list()).toEqual([]);
       expect(setProfileCalls.count).toBe(0);
     });
 
@@ -10140,7 +10215,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
         ...stores,
         profile: {
           ...stores.profile,
-          write: () => {
+          set: () => {
             throw new Error('profile store unavailable (test)');
           },
         },
@@ -10159,7 +10234,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
       });
 
       expect(isError).toBe(true);
-      expect(await stores.profile.read()).toBeNull();
+      expect(await stores.profile.list()).toEqual([]);
       const decisions = await decisionsOf(stores);
       expect(decisions).toHaveLength(2);
       expect(decisions[0]).toBe('実行環境プロファイルを差し替えようとしている: (b) の検証');
@@ -10177,7 +10252,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
         ...stores,
         profile: {
           ...stores.profile,
-          write: () => {
+          set: () => {
             throw new TypeError(
               'Failed query: insert into "profile" ("script") values ($1)\nparams: FAKE_SECRET_VALUE_2483',
             );
@@ -10225,7 +10300,7 @@ describe('issue #2145: 能力を広げる3つの道具は日誌を先に書く',
         ...stores,
         profile: {
           ...stores.profile,
-          revert: () => {
+          replaceAll: () => {
             throw new Error('記憶ストアも落ちている（test）');
           },
         },
@@ -18219,7 +18294,8 @@ describe('一覧を抜粋にしたものには、全文の行き先がある', (
     const h = harness();
     await h.call('profile_write', { script: `export A=1\n${'# 埋め草\n'.repeat(1_500)}` });
 
-    const reply = await h.call('profile_read', {});
+    // 名前を渡して本文を取る（名前を省くと一覧になる。2026-10-03）。
+    const reply = await h.call('profile_read', { name: 'default' });
 
     expect(reply).toContain('ここで切れている');
     expect(reply).toContain('offset');
@@ -21499,7 +21575,7 @@ describe('journal.append が失敗したとき（跡が消えない・isError �
     expect(result.isError).toBe(true);
     expect(result.text.split('\n')[0]).toBe('⚠⚠ 未記録・行為は起きていない・やり直してよい');
     // 保存も配布もされていないこと（反転で新たに固定した保証）。
-    expect(await stores.profile.read()).toBeNull();
+    expect(await stores.profile.list()).toEqual([]);
     // ⭐ profile_write は decision 型（journalEntryShape に住所が無い）なので、
     // 道具名がいちばん住所の足りない箇所。ここに出ることを確かめたうえで、
     // 秘密（CANARY）は出ないことも合わせて測る。
@@ -23100,6 +23176,30 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
           script: 'export A=1',
           summary: 'プロファイル更新',
         });
+      },
+    },
+    {
+      // profile_remove（2026-10-03）は profile_write と同じく能力を広げる側の道具
+      // なので、日誌を先に書く。常に落ちる偽ストアではその1行目で止まり、行は外れない。
+      tool: 'profile_remove',
+      firstLine: ACT_NOT_PERFORMED,
+      async run() {
+        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-profile-remove');
+        await stores.profile.set('a', 'export A=1\n', 'all');
+        const tools = createCloneTools({
+          stores,
+          emit: () => {},
+          profile: createProfileService({ stores }),
+          memoryCause: () => 'clone',
+          conversationId: () => undefined,
+        });
+        const outcome = await callExpectingError(tools, 'profile_remove', {
+          name: 'a',
+          summary: 'プロファイル行を外す',
+        });
+        // 行は外れていない（先書きで止まった）。
+        expect((await stores.profile.list()).map((row) => row.name)).toEqual(['a']);
+        return outcome;
       },
     },
     {

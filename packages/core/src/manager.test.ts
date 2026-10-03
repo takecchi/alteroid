@@ -3458,7 +3458,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     // 自分で取りに行けない。降ろし直さないと、器を作り直した瞬間に「昨日まで
     // 通っていた鍵が消える」が起きる — しかも誰も気づけない。
     const stores = createMemoryStores();
-    await stores.profile.write('export SOME_API_TOKEN=abc123');
+    await stores.profile.set('default', 'export SOME_API_TOKEN=abc123', 'all');
     const fake = swappableRunner();
     const s = setup(undefined, { stores, runner: fake.runner });
 
@@ -3514,7 +3514,7 @@ describe('runner だけが入れ替わったとき（デプロイ）', () => {
     // **プロファイルを置いておくのは、同期のためである。** 鍵の降ろしは
     // プロファイルの直後に呼ばれるので、プロファイルが降りたのを見てから
     // 鍵の側を見れば「まだ降りていないだけ」を「降ろさなかった」と読まない。
-    await stores.profile.write('export MARKER=1');
+    await stores.profile.set('default', 'export MARKER=1', 'all');
     const fake = swappableRunner();
     fake.state.held.set('GH_TOKEN', 'ghp_from_env');
     const s = setup(undefined, { stores, runner: fake.runner });
@@ -12823,7 +12823,7 @@ describe('穴C: #pushProfile が journal.append の失敗で跡を残す', () =>
     // **ストアへ直接仕込む。** `profile_write`（クローンの道具）経由だと、
     // その道具自身の `journal.append` も同じ壊れた stores を通るので、
     // ここで確かめたい「#pushProfile 側の跡」に別の跡が混ざってしまう。
-    await stores.profile.write('export A=1');
+    await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
     // **`syncRunner` の中身（`runner.setProfile`）だけを失敗させる。** 何も
     // 置いていないと `syncRunner` は「同期の必要なし」で `null` を返し、
@@ -13204,7 +13204,7 @@ describe('runner ごとの押し込み結果（pushHealth）', () => {
     // **何か置いておく。** 何も置いていないと `syncRunner` は「同期の必要
     // なし」で `null` を返し、`runner.setProfile` 自体が呼ばれない（穴C の
     // it と同じ理由）。
-    await stores.profile.write('export A=1');
+    await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
     s.runner.setProfile = async () => ({ ok: false, error: 'profile sync failed (test)' });
 
@@ -13286,7 +13286,7 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
 
   it('繋がったままの runner で、一時的な失敗が次の hello を待たずに自然に直る', async () => {
     const stores = createMemoryStores();
-    await stores.profile.write('export A=1');
+    await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
     let broken = true;
     s.runner.setProfile = async () =>
@@ -13306,7 +13306,7 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
 
   it('直り続けなくても諦めない（何度でも挑み直す）', async () => {
     const stores = createMemoryStores();
-    await stores.profile.write('export A=1');
+    await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
     let attempts = 0;
     s.runner.setProfile = async () => {
@@ -13330,7 +13330,7 @@ describe('押し込みに失敗した runner へ、諦めずに挑み直す', ()
 
   it('pool.stop() の後は、予約していた挑み直しを起こさない', async () => {
     const stores = createMemoryStores();
-    await stores.profile.write('export A=1');
+    await stores.profile.set('default', 'export A=1', 'all');
     const s = setup(undefined, { stores });
     let attempts = 0;
     s.runner.setProfile = async () => {

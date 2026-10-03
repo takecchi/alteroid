@@ -232,6 +232,7 @@ const EXEMPT: readonly Exemption[] = [
   },
   { tool: 'profile_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'profile_write', why: '実装側に、説明文が数え直すような一覧が無い' },
+  { tool: 'profile_remove', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'practice_list', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'practice_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   {

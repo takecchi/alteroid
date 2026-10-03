@@ -570,7 +570,7 @@ describe('引き取りの関門（貸し出し期限）', () => {
    */
   it('併存していない通常の取り直しでは、pushProfile と list を今までどおり呼ぶ（対照）', async () => {
     const h = await harnessOf();
-    await h.stores.profile.write('export SOME_TOKEN=abc');
+    await h.stores.profile.set('default', 'export SOME_TOKEN=abc', 'all');
     await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
 
     await h.pool.list();
@@ -799,7 +799,7 @@ describe('引き取りの関門（貸し出し期限）', () => {
     it('併存下では #pushProfile も runner.list() も、名寄せで解決したどちらの相手へも走らない', async () => {
       const h = await harnessOf();
       const duplicate = await withDuplicate(h);
-      await h.stores.profile.write('export SOME_TOKEN=abc');
+      await h.stores.profile.set('default', 'export SOME_TOKEN=abc', 'all');
       await h.stores.jobs.putJob(runningJob(leaseHeldBy('boot-1')));
 
       await h.pool.list();

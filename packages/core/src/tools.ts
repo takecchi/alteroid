@@ -164,6 +164,7 @@ import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
 import {
+  ProfileInputError,
   ProfileRollbackFailedError,
   type ApplyProfileResult,
   type ProfileService,
@@ -4784,6 +4785,14 @@ export function createCloneTools(context: ToolContext) {
   const getConversationId = context.conversationId;
 
   /**
+   * 日誌の文言に行の名前を足す。**`default` のときは足さない**（1本の時代と同じ文言のまま。
+   * 日誌を読む側と歯が、その文言で見ている）。
+   */
+  function profileRowLabel(name: string): string {
+    return name === 'default' ? '' : `（行 ${name}）`;
+  }
+
+  /**
    * `profile_write` / `profile_remove` が、状態の変更で落ちたときの後始末。
    *
    * 日誌には「差し替えようとしている」が残っているので打ち消す（best-effort。落ちても
@@ -4796,15 +4805,27 @@ export function createCloneTools(context: ToolContext) {
     name: string,
     summary: string,
     error: unknown,
-  ): Promise<never> {
+  ) {
     await appendJournalOrDrop(tool, stores.journal, {
       type: 'decision',
       decision:
-        error instanceof ProfileRollbackFailedError
-          ? `実行環境プロファイルの行 ${name} の変更が途中で止まった（正本は新しい版のまま・クローンは前の版）: ${summary}`
-          : `実行環境プロファイルの行 ${name} を変更できなかった: ${summary}`,
-      grounds: `変更しようとしたが、状態の変更が失敗した: ${errorKindOf(error)}`,
+        tool === 'profile_remove'
+          ? error instanceof ProfileRollbackFailedError
+            ? `実行環境プロファイルの行 ${name} の削除が途中で止まった（正本は新しい版のまま・クローンは前の版）: ${summary}`
+            : `実行環境プロファイルの行 ${name} を外せなかった: ${summary}`
+          : error instanceof ProfileRollbackFailedError
+            ? `実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）${profileRowLabel(name)}: ${summary}`
+            : `実行環境プロファイルを差し替えられなかった${profileRowLabel(name)}: ${summary}`,
+      grounds:
+        tool === 'profile_remove'
+          ? `外そうとしたが、状態の変更が失敗した: ${errorKindOf(error)}`
+          : `差し替えようとしたが、状態の変更が失敗した: ${errorKindOf(error)}`,
     });
+    // **置けない入力は利用者の誤りであって、システムの失敗ではない。** 何も変えていない
+    // ので、道具のエラーにせず理由をそのまま返す（名前の形・大文字小文字の衝突など）。
+    if (error instanceof ProfileInputError) {
+      return text(`プロファイルの行を置けなかった（何も変えていない）: ${error.message}`);
+    }
     throw error;
   }
 
@@ -4814,7 +4835,7 @@ export function createCloneTools(context: ToolContext) {
     name: string,
     summary: string,
     result: ApplyProfileResult,
-    done: string,
+    done: { decision: string; text: string },
   ) {
     // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
     // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。
@@ -4827,7 +4848,7 @@ export function createCloneTools(context: ToolContext) {
        */
       await appendJournalOrDrop(tool, stores.journal, {
         type: 'decision',
-        decision: `実行環境プロファイルの行 ${name} を差し替えられなかった（読めなかった）: ${summary}`,
+        decision: `実行環境プロファイルを差し替えられなかった（読めなかった）${profileRowLabel(name)}: ${summary}`,
         grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
       });
       // シェルの stderr は入力の行を引用し、`set -x` は値ごと吐く（issue #2429）。
@@ -4843,7 +4864,7 @@ export function createCloneTools(context: ToolContext) {
     // 道具の結果は変えない——`appendJournalOrDrop` の doc）。
     await appendJournalOrDrop(tool, stores.journal, {
       type: 'decision',
-      decision: `実行環境プロファイルの${done}: ${summary}`,
+      decision: `${done.decision}: ${summary}`,
       grounds: '人間から実行環境そのものを渡された（値は記録しない）',
     });
 
@@ -4853,7 +4874,7 @@ export function createCloneTools(context: ToolContext) {
     const composed = result.composed;
     return text(
       [
-        `実行環境プロファイルの${done}${row === undefined ? '' : `（撒く先 ${row.scope}）`}。`,
+        `実行環境プロファイルを更新した（${done.text}${row === undefined ? '' : `。撒く先 ${row.scope}`}）。`,
         composed === undefined
           ? null
           : `合成後の指紋: クローン用 ${composed.clone.sha256 ?? '（掛かる行なし）'} / runner 用 ${composed.runner.sha256 ?? '（掛かる行なし）'}`,
@@ -9906,8 +9927,9 @@ export function createCloneTools(context: ToolContext) {
       {
         name: z
           .string()
+          .optional()
           .describe(
-            `行の名前（${PROFILE_ENTRY_NAME.source}。英数字で始まり、英数字と . _ - が使える。64字まで）`,
+            `行の名前（${PROFILE_ENTRY_NAME.source}。英数字で始まり、英数字と . _ - が使える。64字まで。省略すると default）`,
           ),
         scope: z
           .enum(['all', 'app', 'runner'])
@@ -9926,7 +9948,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .describe('何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）'),
       },
-      async ({ name, script, summary, scope }) => {
+      async ({ name = 'default', script, summary, scope }) => {
         if (context.profile === undefined) {
           return text(
             'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
@@ -9954,7 +9976,7 @@ export function createCloneTools(context: ToolContext) {
           stores.journal,
           {
             type: 'decision',
-            decision: `実行環境プロファイルの行 ${name} を差し替えようとしている: ${summary}`,
+            decision: `実行環境プロファイルを差し替えようとしている${profileRowLabel(name)}: ${summary}`,
             grounds: '人間から実行環境そのものを渡された（値は記録しない）',
           },
           'act-not-performed',
@@ -9969,13 +9991,10 @@ export function createCloneTools(context: ToolContext) {
         } catch (error) {
           return await profileToolFailed('profile_write', name, summary, error);
         }
-        return await profileToolReport(
-          'profile_write',
-          name,
-          summary,
-          result,
-          `行 ${name} を置いた`,
-        );
+        return await profileToolReport('profile_write', name, summary, result, {
+          decision: `実行環境プロファイルを更新した${profileRowLabel(name)}`,
+          text: `行 ${name} を置いた`,
+        });
       },
     ),
 
@@ -10026,13 +10045,10 @@ export function createCloneTools(context: ToolContext) {
           });
           return text(`プロファイルに行 ${name} は無い。何も変えていない。`);
         }
-        return await profileToolReport(
-          'profile_remove',
-          name,
-          summary,
-          result,
-          `行 ${name} を外した`,
-        );
+        return await profileToolReport('profile_remove', name, summary, result, {
+          decision: `実行環境プロファイルの行 ${name} を外した`,
+          text: `行 ${name} を外した`,
+        });
       },
     ),
 

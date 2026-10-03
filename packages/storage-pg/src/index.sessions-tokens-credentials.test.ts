@@ -1,4 +1,8 @@
-import { captureStderr, verifyMcpServerStoreContract } from '@alteroid/core';
+import {
+  captureStderr,
+  verifyMcpServerStoreContract,
+  verifyProfileStoreContract,
+} from '@alteroid/core';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -78,88 +82,128 @@ describe('PgMcpServerStore', () => {
 });
 
 describe('PgProfileStore', () => {
-  it('置いて読める。空文字で外れる', async () => {
-    expect(await stores.profile.read()).toBeNull();
-
-    await stores.profile.write('export A=1\n');
-    expect((await stores.profile.read())?.script).toBe('export A=1\n');
-
-    await stores.profile.write('');
-    expect(await stores.profile.read()).toBeNull();
+  it('器の契約（並び順・撒く先・巻き戻し。3実装で同じことを測る）', async () => {
+    await verifyProfileStoreContract(stores.profile);
   });
 
-  it('revert は本文だけでなく更新日時も戻す', async () => {
-    await stores.profile.write('export WHICH=old\n');
-    const before = await stores.profile.read();
+  it('replaceAll は1つのトランザクションで入れ替える（途中で落ちても集合が半端に残らない）', async () => {
+    await stores.profile.set('keep', 'export KEEP=1\n', 'runner');
+    const before = await stores.profile.list();
 
-    // 時刻が確実に進むまで待ってから、失敗する更新を模す。
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await stores.profile.write('export WHICH=new\n');
-    expect((await stores.profile.read())?.updatedAt).not.toBe(before?.updatedAt);
+    // 同じ名前を2行含む＝主キー違反で insert が落ちる。delete も巻き戻ること。
+    await expect(
+      stores.profile.replaceAll([
+        {
+          name: 'dup',
+          script: 'export A=1\n',
+          scope: 'all',
+          updatedAt: '2026-10-03T00:00:00.000Z',
+        },
+        {
+          name: 'dup',
+          script: 'export B=1\n',
+          scope: 'all',
+          updatedAt: '2026-10-03T00:00:00.000Z',
+        },
+      ]),
+    ).rejects.toThrow();
 
-    await stores.profile.revert(before);
-
-    // **まるごと一致すること。** 本文だけ戻して時刻が進むと監査情報が嘘になる。
-    expect(await stores.profile.read()).toEqual(before);
+    expect(await stores.profile.list()).toEqual(before);
   });
 
-  it('置かれていなかった状態へも戻せる', async () => {
-    await stores.profile.write('export WHICH=new\n');
-    await stores.profile.revert(null);
-    expect(await stores.profile.read()).toBeNull();
+  it('列の撒く先が3語のどれでもない（SQL で直接書かれた）行は all として読む', async () => {
+    await db.execute(
+      sql`insert into env_profile_entries (name, script, scope) values ('hand', 'export H=1', 'runer')`,
+    );
+
+    expect(await stores.profile.list()).toMatchObject([{ name: 'hand', scope: 'all' }]);
   });
 
-  // 撒く先（scope。2026-10-03）。fs 版（`FsProfileStore`）と同じ振る舞いになること。
-  it('撒く先を往復できる。既定は all', async () => {
-    await stores.profile.write('export A=1\n');
-    expect((await stores.profile.read())?.scope).toBe('all');
+  /**
+   * **旧 `env_profile`（1本の時代）からの移行**（`migrate.ts`）。旧表は消さない（巻き戻した
+   * 旧デーモンが読むため）。写すのは**1度だけ**で、印は `daemon_state` に置く。
+   */
+  describe('旧 env_profile からの移行', () => {
+    const legacyInsert = (script: string) =>
+      db.execute(
+        sql`insert into env_profile (id, script, updated_at) values ('default', ${script}, '2026-09-01T00:00:00.000Z')`,
+      );
+    /** 新しい形へ移る前の DB（印も新しい表の中身も無い）を作る。 */
+    const resetToBeforeMigration = async () => {
+      await db.execute(sql`delete from env_profile_entries`);
+      await db.execute(sql`delete from daemon_state where key = 'env_profile_entries_migrated'`);
+    };
 
-    for (const scope of ['app', 'runner', 'all'] as const) {
-      await stores.profile.write('export A=1\n', scope);
-      expect((await stores.profile.read())?.scope).toBe(scope);
-    }
-  });
+    it('旧表の1行を、名前 default・撒く先 all・同じ updated_at で写す。旧表は残る', async () => {
+      await resetToBeforeMigration();
+      await legacyInsert('export OLD=1\n');
 
-  it('revert は撒く先も組で戻す', async () => {
-    await stores.profile.write('export WHICH=old\n', 'runner');
-    const before = await stores.profile.read();
+      await migrate(db);
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await stores.profile.write('export WHICH=new\n', 'app');
+      expect(await stores.profile.list()).toEqual([
+        {
+          name: 'default',
+          script: 'export OLD=1\n',
+          scope: 'all',
+          updatedAt: '2026-09-01T00:00:00.000Z',
+        },
+      ]);
+      const legacy = await client.query("select script from env_profile where id = 'default'");
+      expect(legacy.rows).toHaveLength(1);
+    });
 
-    await stores.profile.revert(before);
+    it('2周目で、移行のあとに書き換えた default を旧表の値へ戻さない（冪等）', async () => {
+      await resetToBeforeMigration();
+      await legacyInsert('export OLD=1\n');
+      await migrate(db);
+      // 1周目と2周目のあいだに「2周目でだけ壊れる状態」を挟む: default を書き換える。
+      await stores.profile.set('default', 'export NEW=1\n', 'runner');
 
-    expect(await stores.profile.read()).toEqual(before);
-    expect((await stores.profile.read())?.scope).toBe('runner');
-  });
+      await migrate(db);
+      await migrate(db);
 
-  it('scope 列が無かった頃の行（旧スキーマ）は、migrate の後 all として読める。migrate は2回通しても壊れない', async () => {
-    // **旧スキーマを実際に作る**（列を落として行を入れる）。新スキーマに直接
-    // insert するだけでは `alter table ... add column` が効いたかを測れない。
-    await db.execute(sql`alter table env_profile drop column scope`);
-    await db.execute(sql`insert into env_profile (id, script) values ('default', 'export OLD=1')`);
+      expect(await stores.profile.list()).toMatchObject([
+        { name: 'default', script: 'export NEW=1\n', scope: 'runner' },
+      ]);
+    });
 
-    await migrate(db);
-    expect(await stores.profile.read()).toMatchObject({ script: 'export OLD=1', scope: 'all' });
+    it('2周目で、移行のあとに外した default を旧表から蘇らせない', async () => {
+      await resetToBeforeMigration();
+      await legacyInsert('export OLD_SECRET=1\n');
+      await migrate(db);
+      // 人間が default を外した（鍵を含みうる旧本文が、次の起動で蘇ってはいけない）。
+      await stores.profile.remove('default');
 
-    // 2周目: 1周目が足した列と、置かれた撒く先が残る。
-    await stores.profile.write('export OLD=1', 'runner');
-    await migrate(db);
-    expect((await stores.profile.read())?.scope).toBe('runner');
-  });
+      await migrate(db);
 
-  it('外す（空の write / clear / revert(null)）と撒く先も消え、次の既定は all', async () => {
-    for (const remove of [
-      () => stores.profile.write(''),
-      () => stores.profile.clear(),
-      () => stores.profile.revert(null),
-    ]) {
-      await stores.profile.write('export A=1\n', 'runner');
-      await remove();
-      expect(await stores.profile.read()).toBeNull();
-      await stores.profile.write('export B=1\n');
-      expect((await stores.profile.read())?.scope).toBe('all');
-    }
+      expect(await stores.profile.list()).toEqual([]);
+    });
+
+    it('旧表が空白だけなら何も写さない（印だけ立つ）', async () => {
+      await resetToBeforeMigration();
+      await legacyInsert('  \n');
+
+      await migrate(db);
+
+      expect(await stores.profile.list()).toEqual([]);
+      const marker = await client.query(
+        "select value from daemon_state where key = 'env_profile_entries_migrated'",
+      );
+      expect(marker.rows).toHaveLength(1);
+    });
+
+    it('clear は旧表も空にする（全部外したものが、旧形式から蘇らない）', async () => {
+      await resetToBeforeMigration();
+      await legacyInsert('export OLD=1\n');
+      await migrate(db);
+
+      await stores.profile.clear();
+      // 印が無い状態（ワークスペースのリセットで daemon_state が消えた等）でもう一度通す。
+      await db.execute(sql`delete from daemon_state where key = 'env_profile_entries_migrated'`);
+      await migrate(db);
+
+      expect(await stores.profile.list()).toEqual([]);
+    });
   });
 });
 

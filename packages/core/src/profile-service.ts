@@ -48,8 +48,10 @@ export type ProfileComposeTarget = 'clone' | 'runner' | 'all';
  *
  * - 対象（`clone` / `runner`）に撒く先が掛かる行だけを、**名前のコード単位順**
  *   （`/etc/profile.d` と同じ方式。ロケールに依存しない）で並べる
- * - 各行の前に見出し（`# --- alteroid profile: <name> (<scope>) ---`）を入れる。
- *   **決定的である**（同じ行の集合は常に同じ文字列になる ＝ 指紋が揺れない）
+ * - 行と行のあいだに空行を1つ入れる。**見出しは入れない**: 1行だけのとき（1本の時代の
+ *   プロファイルは `default` 1行に移る）合成が元の本文とバイトまで一致し、アップグレードで
+ *   指紋も器の中身も変わらない（再配布も起きない）。**決定的である**（同じ行の集合は常に
+ *   同じ文字列になる ＝ 指紋が揺れない）
  * - 掛かる行が0なら `''`（＝**外す**。「何もしない」ではなく空を降ろす。撒く先を
  *   狭めた側から確実に外れる）
  * - 最後に `normalizeProfileScript` を**合成後の1本**に掛ける（保存・配布・指紋が同じ
@@ -65,10 +67,7 @@ export function composeProfileScript(
     .filter((entry) => target === 'all' || profileScopeAppliesTo(entry.scope, target))
     .filter((entry) => entry.script.trim().length > 0)
     .sort((a, b) => compareProfileEntryNames(a.name, b.name))
-    .map((entry) => {
-      const body = entry.script.endsWith('\n') ? entry.script : `${entry.script}\n`;
-      return `# --- alteroid profile: ${entry.name} (${entry.scope}) ---\n${body}`;
-    });
+    .map((entry) => (entry.script.endsWith('\n') ? entry.script : `${entry.script}\n`));
   return normalizeProfileScript(parts.join('\n'));
 }
 
@@ -194,6 +193,18 @@ export interface ProfileService {
  * 行を状態どおり（正本は新しい版のまま・クローンは前の版）に書き換える。
  * `message` / `cause` は、この型を導入する前の `Error` と1文字も変えていない。
  */
+/**
+ * 行として置けない入力（名前の形・空の本文・大文字小文字だけが違う既存の名前）。
+ * **何も変えていない**（保存も配布もしていない）。呼び出し側は文言ではなくこの型で
+ * 見分け、利用者の誤りとして返す（500 にしない）。
+ */
+export class ProfileInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProfileInputError';
+  }
+}
+
 export class ProfileRollbackFailedError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -388,7 +399,9 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
 
   function entryName(name: string): string {
     if (!PROFILE_ENTRY_NAME.test(name)) {
-      throw new Error(`プロファイルの行の名前の形が不正である（${PROFILE_ENTRY_NAME.source}）`);
+      throw new ProfileInputError(
+        `プロファイルの行の名前の形が不正である（${PROFILE_ENTRY_NAME.source}）`,
+      );
     }
     return name;
   }
@@ -409,10 +422,21 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         // 指紋と読んだ指紋が食い違い、届いているかを見る道具が嘘をつく。
         const normalized = normalizeProfileScript(script);
         if (normalized.length === 0) {
-          throw new Error('空の本文は行として置けない（外すなら remove / clearAll）');
+          throw new ProfileInputError('空の本文は行として置けない（外すなら remove / clearAll）');
         }
         return transact((previous) => {
           const existing = previous.find((entry) => entry.name === name);
+          // **大文字小文字だけが違う名前は別の行として置かない。** 大文字小文字を区別しない
+          // ファイルシステム（macOS）で fs 版の `<name>.sh` が同じファイルになり、片方が
+          // 黙ってもう片方を上書きする。器によって挙動が変わらないよう、入口（ここ）で弾く。
+          const clash = previous.find(
+            (entry) => entry.name !== name && entry.name.toLowerCase() === name.toLowerCase(),
+          );
+          if (clash !== undefined) {
+            throw new ProfileInputError(
+              `大文字小文字だけが違う行 ${clash.name} が既にある（別の行としては置けない）`,
+            );
+          }
           // **省略は「既存を保つ」。**
           const resolved: EnvProfileScope = scope ?? existing?.scope ?? 'all';
           const row: EnvProfileEntry = {

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -10,6 +10,7 @@ import {
   verifyCommitmentAppraisalContract,
   verifyCommitmentFoldContract,
   verifyMcpServerStoreContract,
+  verifyProfileStoreContract,
   verifyPermissionGrantStoreContract,
   verifyPracticeStoreContract,
   verifyStoreIsolationContract,
@@ -3275,110 +3276,113 @@ describe('FsTranscriptArchive', () => {
 });
 
 /**
- * 実行環境プロファイル。
+ * 実行環境プロファイル（2026-10-03: 名前付きの行の形）。
  *
- * **`revert` は本文と更新日時を組で戻す。** ここは人間が `profile status` で見る
- * 「最後に本文を変えた時刻」であり、取り消された更新でそこが動くと、成功して
- * いない更新が最後の変更として表示される（デーモンを起こすたびに動いていたのと
- * 同じ意味の壊れ方）。**器が違っても同じ振る舞いになること**を fs / pg の両方で問う。
+ * **契約（並び順・撒く先・巻き戻し）は3実装で同じ関数を通す**（`profile-store-contract.ts`）。
+ * **`replaceAll` は本文・撒く先・更新日時を組で戻す。** ここは人間が `profile status` で見る
+ * 「最後に本文を変えた時刻」であり、取り消された更新でそこが動くと、成功していない更新が
+ * 最後の変更として表示される（デーモンを起こすたびに動いていたのと同じ意味の壊れ方）。
+ * fs だけが持つ形 —— 素の `.sh` ファイル・撒く先の隣のファイル・旧 `profile.sh` の移行 —— は
+ * ここで足す。
  */
 describe('FsProfileStore', () => {
-  it('置いて読める。空文字で外れる', async () => {
-    expect(await stores.profile.read()).toBeNull();
+  const dirOf = () => join(root, 'profile.d');
+  const legacyPath = () => join(root, 'profile.sh');
 
-    await stores.profile.write('export A=1\n');
-    expect((await stores.profile.read())?.script).toBe('export A=1\n');
-
-    await stores.profile.write('');
-    expect(await stores.profile.read()).toBeNull();
+  it('器の契約（並び順・撒く先・巻き戻し。3実装で同じことを測る）', async () => {
+    await verifyProfileStoreContract(stores.profile);
   });
 
-  it('revert は本文だけでなく更新日時も戻す', async () => {
-    await stores.profile.write('export WHICH=old\n');
-    const before = await stores.profile.read();
+  it('1行 = profile.d/<name>.sh（0600、本文そのまま）。撒く先は隣の <name>.scope', async () => {
+    await stores.profile.set('rust', 'export A=1\n', 'runner');
+    await stores.profile.set('base', 'export B=1\n', 'all');
 
-    // 時刻が確実に進むまで待ってから、失敗する更新を模す。
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await stores.profile.write('export WHICH=new\n');
-    expect((await stores.profile.read())?.updatedAt).not.toBe(before?.updatedAt);
-
-    await stores.profile.revert(before);
-
-    // **まるごと一致すること。** 本文だけ戻して時刻が進むと監査情報が嘘になる。
-    expect(await stores.profile.read()).toEqual(before);
+    // 素のスクリプトのまま（先頭に印や JSON を足していない。vi で直せる）。
+    expect(await readFile(join(dirOf(), 'rust.sh'), 'utf8')).toBe('export A=1\n');
+    expect(((await stat(join(dirOf(), 'rust.sh'))).mode & 0o777).toString(8)).toBe('600');
+    expect((await readFile(join(dirOf(), 'rust.scope'), 'utf8')).trim()).toBe('runner');
+    // all は「無い」と同じ（ファイルを置かない）。
+    await expect(stat(join(dirOf(), 'base.scope'))).rejects.toThrow();
   });
 
-  it('置かれていなかった状態へも戻せる', async () => {
-    await stores.profile.write('export WHICH=new\n');
-    await stores.profile.revert(null);
-    expect(await stores.profile.read()).toBeNull();
-  });
-});
+  it('人間が vi で直した本文を読む。scope ファイルが壊れていても all として読み、次の set が直す', async () => {
+    await stores.profile.set('a', 'export A=1\n', 'runner');
+    await writeFile(join(dirOf(), 'a.sh'), 'export A=hand-edited\n');
+    await writeFile(join(dirOf(), 'a.scope'), 'runer\n');
 
-/**
- * 実行環境プロファイルの撒く先（scope。2026-10-03）。fs は `profile.sh` を素のシェル
- * スクリプトのまま保ち（`vi` で直せる約束）、撒く先は隣の `profile.sh.scope` に置く。
- */
-describe('FsProfileStore の撒く先（scope）', () => {
-  const profilePath = () => join(root, 'profile.sh');
-  const scopePath = () => join(root, 'profile.sh.scope');
+    const [row] = await stores.profile.list();
+    expect(row).toMatchObject({ name: 'a', script: 'export A=hand-edited\n', scope: 'all' });
 
-  it('撒く先を往復できる。既定は all。profile.sh は本文そのままである', async () => {
-    await stores.profile.write('export A=1\n');
-    expect((await stores.profile.read())?.scope).toBe('all');
-
-    for (const scope of ['app', 'runner', 'all'] as const) {
-      await stores.profile.write('export A=1\n', scope);
-      expect((await stores.profile.read())?.scope).toBe(scope);
-      // 素のスクリプトのまま（先頭に印や JSON を足していない）。
-      expect(await readFile(profilePath(), 'utf8')).toBe('export A=1\n');
-    }
+    await stores.profile.set('a', 'export A=2\n', 'runner');
+    expect((await stores.profile.list())[0]?.scope).toBe('runner');
   });
 
-  it('scope ファイルが無い（この欄が無かった頃に置かれた）プロファイルは all', async () => {
-    await writeFile(profilePath(), 'export OLD=1\n');
-    expect((await stores.profile.read())?.scope).toBe('all');
+  it('名前の形が不正なファイル・空のファイル・.sh でないファイルは行として読まない', async () => {
+    await stores.profile.set('ok', 'export OK=1\n', 'all');
+    await writeFile(join(dirOf(), 'bad name.sh'), 'export BAD=1\n');
+    await writeFile(join(dirOf(), '.hidden.sh'), 'export HIDDEN=1\n');
+    await writeFile(join(dirOf(), 'empty.sh'), '  \n');
+    await writeFile(join(dirOf(), 'note.txt'), 'export TXT=1\n');
+
+    expect((await stores.profile.list()).map((row) => row.name)).toEqual(['ok']);
   });
 
-  it('scope ファイルが壊れていても read は落ちず all として読み、次の write が直す', async () => {
-    await stores.profile.write('export A=1\n', 'runner');
-    await writeFile(scopePath(), 'runer\n');
-    expect((await stores.profile.read())?.scope).toBe('all');
+  it('行を外すと隣の scope ファイルも消え、同じ名前で置き直した行へ古い撒く先が残らない', async () => {
+    await stores.profile.set('a', 'export A=1\n', 'runner');
+    await stores.profile.remove('a');
+    await expect(stat(join(dirOf(), 'a.scope'))).rejects.toThrow();
 
-    await stores.profile.write('export A=1\n', 'runner');
-    expect((await stores.profile.read())?.scope).toBe('runner');
+    await stores.profile.set('a', 'export A=2\n', 'all');
+    expect((await stores.profile.list())[0]?.scope).toBe('all');
   });
 
-  it('revert は撒く先も組で戻す', async () => {
-    await stores.profile.write('export WHICH=old\n', 'runner');
-    const before = await stores.profile.read();
+  describe('旧 profile.sh（1本の時代）の扱い', () => {
+    it('あれば default 行へ移す（本文・更新日時そのまま、撒く先 all）。旧ファイルは消える', async () => {
+      await writeFile(legacyPath(), 'export OLD=1\n');
+      const at = new Date('2026-09-01T00:00:00.000Z');
+      await utimes(legacyPath(), at, at);
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await stores.profile.write('export WHICH=new\n', 'app');
-    expect((await stores.profile.read())?.scope).toBe('app');
+      expect(await stores.profile.list()).toEqual([
+        {
+          name: 'default',
+          script: 'export OLD=1\n',
+          scope: 'all',
+          updatedAt: '2026-09-01T00:00:00.000Z',
+        },
+      ]);
+      await expect(stat(legacyPath())).rejects.toThrow();
+      expect(await readFile(join(dirOf(), 'default.sh'), 'utf8')).toBe('export OLD=1\n');
+    });
 
-    await stores.profile.revert(before);
+    it('2回読んでも、移したあとに人間が直した default を旧ファイルで巻き戻さない', async () => {
+      await writeFile(legacyPath(), 'export OLD=1\n');
+      await stores.profile.list();
+      // 移行のあとに default を書き換える（2周目でだけ壊れる状態）。
+      await stores.profile.set('default', 'export NEW=1\n', 'runner');
+      // 旧ファイルが（巻き戻した旧版などで）また現れても、新しい側が勝つ。
+      await writeFile(legacyPath(), 'export OLD=again\n');
 
-    expect(await stores.profile.read()).toEqual(before);
-    expect((await stores.profile.read())?.scope).toBe('runner');
-  });
+      expect(await stores.profile.list()).toMatchObject([
+        { name: 'default', script: 'export NEW=1\n', scope: 'runner' },
+      ]);
+      await expect(stat(legacyPath())).rejects.toThrow();
+    });
 
-  it('外す（空の write / clear / revert(null)）と撒く先のファイルも消え、次の既定は all', async () => {
-    for (const remove of [
-      () => stores.profile.write(''),
-      () => stores.profile.clear(),
-      () => stores.profile.revert(null),
-    ]) {
-      await stores.profile.write('export A=1\n', 'runner');
-      expect((await stat(scopePath())).isFile()).toBe(true);
+    it('旧ファイルが空白だけなら行を作らず、旧ファイルだけ消す', async () => {
+      await writeFile(legacyPath(), '  \n');
 
-      await remove();
+      expect(await stores.profile.list()).toEqual([]);
+      await expect(stat(legacyPath())).rejects.toThrow();
+    });
 
-      expect(await stores.profile.read()).toBeNull();
-      await expect(stat(scopePath())).rejects.toThrow();
-      await stores.profile.write('export B=1\n');
-      expect((await stores.profile.read())?.scope).toBe('all');
-    }
+    it('clear は旧ファイルも消す（全部外したものが旧形式から蘇らない）', async () => {
+      await writeFile(legacyPath(), 'export OLD=1\n');
+
+      await stores.profile.clear();
+
+      await expect(stat(legacyPath())).rejects.toThrow();
+      expect(await stores.profile.list()).toEqual([]);
+    });
   });
 });
 

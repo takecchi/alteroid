@@ -45,6 +45,7 @@ import {
   DEFAULT_TOKEN_ROTATION_SETTINGS,
   CredentialEntryRejectedError,
   JournalAnchorNotFoundError,
+  ProfileInputError,
   ProfileRollbackFailedError,
   redactProfileFailure,
   TokenPoolInputError,
@@ -1657,7 +1658,7 @@ async function mutateProfile(
   | {
       ok: false;
       body: {
-        error: 'プロファイルが読めなかったので保存していない' | 'プロファイルの器が無い';
+        error: string;
         detail: string;
       };
     }
@@ -1693,6 +1694,14 @@ async function mutateProfile(
       '実行環境プロファイルの打ち消しの日誌',
       spec.route,
     );
+    // **置けない入力（名前の形・大文字小文字の衝突など）は 400。** 何も変えていない。
+    // `detail` に載せるのは**こちらが組んだ文**だけで、送られてきた本文は載せない。
+    if (error instanceof ProfileInputError) {
+      return {
+        ok: false,
+        body: { error: 'プロファイルの入力が不正（保存していない）', detail: error.message },
+      };
+    }
     throw error;
   }
 

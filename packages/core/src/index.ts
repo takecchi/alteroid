@@ -569,6 +569,7 @@ export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archi
 export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
+export { verifyProfileStoreContract } from './profile-store-contract.js';
 /**
  * `PermissionGrantStore` の契約（Issue #863。doc は `store.ts`）。3実装
  * （インメモリ / `storage-fs` / `storage-pg`）それぞれの歯がこれを呼んで
@@ -942,6 +943,7 @@ export {
   composedFingerprints,
   createProfileService,
   profileScopeAppliesTo,
+  ProfileInputError,
   ProfileRollbackFailedError,
   type ApplyProfileResult,
   type ComposedFingerprint,

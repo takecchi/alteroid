@@ -63,7 +63,7 @@ describe('resetWorkspaceState', () => {
     });
     await stores.archive.archive('session-1', '{"line":1}\n');
     await stores.sessions.setCloneSessionId('session-xyz');
-    await stores.profile.write('export FOO=bar');
+    await stores.profile.set('default', 'export FOO=bar', 'all');
     await stores.usage.record({
       layer: 'manager',
       site: 'session',
@@ -124,7 +124,7 @@ describe('resetWorkspaceState', () => {
     expect((await stores.practices.list()).entries).toEqual([]);
     expect(await stores.archive.list()).toEqual([]);
     expect(await stores.sessions.getCloneSessionId()).toBeNull();
-    expect(await stores.profile.read()).toBeNull();
+    expect(await stores.profile.list()).toEqual([]);
     expect((await stores.usage.aggregate({})).rows).toEqual([]);
 
     // --- 残す側は1件も変わっていない ---

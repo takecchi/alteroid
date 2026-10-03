@@ -124,7 +124,7 @@ describe('#pushProfile の失敗経路は、プロファイルの出力を日誌
     // **何か置いておく。** 置いていないと `syncRunner` が「同期の必要なし」で
     // `null` を返し、`runner.setProfile` 自体が呼ばれない
     // （`manager.test.ts` の「押し込みに失敗した runner」と同じ前提）。
-    await stores.profile.write('export A=1');
+    await stores.profile.set('default', 'export A=1', 'all');
     const { pool, runner } = setup(stores);
 
     // **本物の鍵は使わない。** ダミー値だけの fixture ——実際の壊れ方
