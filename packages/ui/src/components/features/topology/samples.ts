@@ -12,7 +12,15 @@ export const idleScene: SystemTopologyProps = {
 
 export const busyScene: SystemTopologyProps = {
   human: { flow: 'down' },
-  clone: { status: 'running', task: '#486 の段取りを3本へ割っている' },
+  clone: {
+    status: 'running',
+    task: '#486 の段取りを3本へ割っている',
+    details: [
+      { label: 'モデル', value: 'claude-opus-5-5', mono: true },
+      { label: '起点', value: '人間の依頼（Web UI）' },
+      { label: '受信箱', value: '未読 2 件' },
+    ],
+  },
   db: { status: 'running', flow: 'both' },
   runner: { status: 'running' },
   managers: [
@@ -22,6 +30,12 @@ export const busyScene: SystemTopologyProps = {
       task: 'codex の駆動役を配線する',
       status: 'running',
       flow: 'down',
+      details: [
+        { label: 'manager_id', value: 'mgr-7f3a2c91', mono: true },
+        { label: '開始', value: '2026-10-04 07:41 JST' },
+        { label: '枝', value: 'feat/codex-driver', mono: true },
+        { label: 'runner', value: 'runner-primary', mono: true },
+      ],
       workers: [
         {
           id: 'w1',
@@ -44,6 +58,10 @@ export const busyScene: SystemTopologyProps = {
       label: 'mgr-c019',
       task: 'PR #2695 のレビュー',
       status: 'waiting',
+      details: [
+        { label: '確認', value: 'main へ squash マージしてよいか' },
+        { label: '待ち始め', value: '2026-10-04 07:52 JST' },
+      ],
       flow: 'up',
       workers: [
         { id: 'w3', label: 'worker-3', task: '差分を読み終えた', status: 'idle', flow: 'idle' },
@@ -114,3 +132,22 @@ export const liveFrames: readonly SystemTopologyProps[] = [
     clone: { status: 'running', task: '人間へ報告している' },
   },
 ];
+
+/** マネージャー5本・作業者がまちまち。線の出口と幹が分かれていることを見る。 */
+export const crowdedScene: SystemTopologyProps = {
+  ...busyScene,
+  managers: Array.from({ length: 5 }, (_, i) => ({
+    id: `c${i}`,
+    label: `mgr-${(0xa0 + i * 17).toString(16)}`,
+    task: `並行の仕事 ${i + 1}`,
+    status: i === 3 ? ('waiting' as const) : ('running' as const),
+    flow: (['down', 'up', 'both', 'up', 'down'] as const)[i],
+    workers: Array.from({ length: [3, 0, 2, 1, 4][i] ?? 0 }, (_, j) => ({
+      id: `c${i}-${j}`,
+      label: `worker-${i + 1}.${j + 1}`,
+      task: 'pnpm test',
+      status: 'running' as const,
+      flow: (['down', 'up', 'both'] as const)[j % 3],
+    })),
+  })),
+};

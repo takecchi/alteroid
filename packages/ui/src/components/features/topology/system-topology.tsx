@@ -1,57 +1,41 @@
-import { useId } from 'react';
+import { useId, useState } from 'react';
 
 import { Bot, Brain, Database, Hammer, User, type LucideIcon } from 'lucide-react';
 
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { useIsMobile } from '@/hooks/use-is-mobile';
 import { cn } from '@/lib/utils';
 
+import { KeyValueList } from '../key-value-list';
 import { StatusDot } from '../status-dot';
 
-/**
- * 層の状態。文言と点の色の両方で言う（`StatusDot` と同じく、色だけで言わない）。
- * `offline` は「器ごと見えない」—— runner へ繋がっていない・DB へ届かない。
- */
-export type TopologyStatus = 'idle' | 'running' | 'waiting' | 'error' | 'offline';
+import {
+  layoutNarrow,
+  layoutWide,
+  roundedPath,
+  type LaidContainer,
+  type LaidEdge,
+  type LaidNode,
+  type NodeKind,
+  type TopologyScene,
+} from './layout';
 
-/**
- * 線の上を流れているもの。向きは**指示を出す側から見て**言う:
- * - `down` —— 指示が下りている（人間 → クローン → マネージャー → 作業者。DB へは書き込み）
- * - `up` —— 報告・確認が上っている（逆向き。DB からは思い出し）
- * - `both` —— 両方
- * - `idle` —— 何も流れていない
- */
-export type TopologyFlow = 'idle' | 'down' | 'up' | 'both';
+export type {
+  TopologyDetail,
+  TopologyFlow,
+  TopologyManager,
+  TopologyScene,
+  TopologyStatus,
+  TopologyWorker,
+} from './layout';
 
-export interface TopologyWorker {
-  id: string;
-  label: string;
-  /** いま手を動かしていること（1行。溢れたら省略する） */
-  task?: string;
-  status: TopologyStatus;
-  /** マネージャー ↔ この作業者の線 */
-  flow?: TopologyFlow;
-}
-
-export interface TopologyManager {
-  id: string;
-  label: string;
-  task?: string;
-  status: TopologyStatus;
-  /** クローン ↔ このマネージャーの線 */
-  flow?: TopologyFlow;
-  workers?: readonly TopologyWorker[];
-}
-
-export interface SystemTopologyProps {
-  /** 人間（Web UI / CLI）。省けば描かない */
-  human?: { label?: string; flow?: TopologyFlow };
-  clone: { label?: string; task?: string; status: TopologyStatus };
-  /** 記憶ストア。`flow` はクローン ↔ DB の線 */
-  db: { label?: string; status: TopologyStatus; flow?: TopologyFlow };
-  /** デーモンの器（クローンと記憶ストアの接続情報を持つ側） */
-  daemon?: { label?: string };
-  /** manager-runner の器。`offline` ならクローンからの線を切れた形で描く */
-  runner: { label?: string; status: TopologyStatus };
-  managers: readonly TopologyManager[];
+export interface SystemTopologyProps extends TopologyScene {
+  /**
+   * 配置。`auto` は狭い画面（`useIsMobile`）で `narrow`（上から下への木）、それ以外で
+   * `wide`（左から右）。見本帳で両方を並べるために外から固定できる。
+   */
+  layout?: 'auto' | 'wide' | 'narrow';
   className?: string;
 }
 
@@ -63,42 +47,13 @@ const STATUS = {
   offline: { tone: 'danger', label: '未接続' },
 } as const;
 
-// ---- 配置（viewBox の座標。SVG ごと縮むので画面幅には viewBox で追従する） ----
-const NODE_W = 208;
-const NODE_H = 60;
-const ROW_H = 80;
-const PAD = 16;
-const HEAD = 28;
-const COL = { left: 24, clone: 328, manager: 632, worker: 904 } as const;
-const WIDTH = COL.worker + NODE_W + 24 + PAD;
-const TOP = 64;
-
-interface Point {
-  x: number;
-  y: number;
-}
-
-/**
- * 左の箱の右端から、右の箱の左端へ。横 → 縦 → 横の折れ線で、角だけ小さく丸める。
- * 折れる位置は2つの箱の中間なので、同じ親から出る線は縦の幹を共有して木の形になる。
- */
-function link(from: Point, to: Point): string {
-  const x1 = from.x + NODE_W;
-  const x2 = to.x;
-  const mid = (x1 + x2) / 2;
-  const dy = to.y - from.y;
-  if (Math.abs(dy) < 1) return `M ${x1} ${from.y} H ${x2}`;
-  const r = Math.min(8, Math.abs(dy) / 2, (x2 - x1) / 2);
-  const s = Math.sign(dy);
-  return [
-    `M ${x1} ${from.y}`,
-    `H ${mid - r}`,
-    `Q ${mid} ${from.y} ${mid} ${from.y + s * r}`,
-    `V ${to.y - s * r}`,
-    `Q ${mid} ${to.y} ${mid + r} ${to.y}`,
-    `H ${x2}`,
-  ].join(' ');
-}
+const KIND: Record<NodeKind, { icon: LucideIcon; role: string }> = {
+  human: { icon: User, role: '人間' },
+  db: { icon: Database, role: '記憶ストア' },
+  clone: { icon: Brain, role: 'クローン' },
+  manager: { icon: Bot, role: 'マネージャー' },
+  worker: { icon: Hammer, role: '作業者' },
+};
 
 /**
  * 稼働の地図。**いま誰が何をしていて、どの線を指示と報告が行き来しているか**を1枚で見せる。
@@ -111,54 +66,27 @@ function link(from: Point, to: Point): string {
  *   札には状態の文言が在る。`prefers-reduced-motion` のときは光だけを消す
  * - 器が `offline` のとき、そこへ向かう線は破線の `destructive` にして光を流さない
  *   （届いていない経路に「流れている」絵を出さない）
- * - 読み上げには、図の代わりに層ごとの状態の一覧を渡す
+ * - **札に触れるとその札の線だけを強調し、押すと詳細を出す。** 広い画面は札の横の
+ *   Popover（地図を覆わない — 光が流れ続けたまま、別の札へ乗り換えられる）、狭い画面は
+ *   下から出るシート（Popover を置く横の余白が無い）
+ * - 読み上げには、図の代わりに層ごとの状態の一覧を渡す。札はボタンとして焦点が当たる
  */
-export function SystemTopology({
-  human,
-  clone,
-  db,
-  daemon,
-  runner,
-  managers,
-  className,
-}: SystemTopologyProps) {
+export function SystemTopology({ layout = 'auto', className, ...scene }: SystemTopologyProps) {
   const summaryId = useId();
-  // マネージャーは作業者の数だけ行を取る（作業者が居なくても1行）。
-  const rows = managers.map((m) => Math.max(1, m.workers?.length ?? 0));
-  const totalRows = Math.max(
-    3,
-    rows.reduce((a, b) => a + b, 0),
-  );
-  const contentH = totalRows * ROW_H;
-  const height = TOP + contentH + PAD + 8;
+  const isMobile = useIsMobile();
+  const narrow = layout === 'narrow' || (layout === 'auto' && isMobile);
+  const laid = narrow ? layoutNarrow(scene) : layoutWide(scene);
 
-  const center = (row: number) => TOP + row * ROW_H + ROW_H / 2;
-  const clonePt: Point = { x: COL.clone, y: TOP + contentH / 2 };
-  const humanPt: Point = { x: COL.left, y: center(0) };
-  const dbPt: Point = { x: COL.left, y: TOP + contentH - ROW_H / 2 };
-
-  let cursor = 0;
-  const placed = managers.map((m, i) => {
-    const start = cursor;
-    const span = rows[i] ?? 1;
-    cursor += span;
-    return {
-      manager: m,
-      pt: { x: COL.manager, y: TOP + (start + span / 2) * ROW_H } as Point,
-      workers: (m.workers ?? []).map((w, j) => ({
-        worker: w,
-        pt: { x: COL.worker, y: center(start + j) } as Point,
-      })),
-    };
-  });
-
-  const runnerDown = runner.status === 'offline';
-  const dbDown = db.status === 'offline';
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const focus = hovered ?? selected;
+  const focusEdges = new Set(laid.nodes.find((n) => n.key === focus)?.edges ?? []);
+  const selectedNode = laid.nodes.find((n) => n.key === selected);
 
   return (
-    <figure className={cn('w-full', className)}>
+    <figure className={cn('w-full', narrow && 'mx-auto max-w-[480px]', className)}>
       <svg
-        viewBox={`0 0 ${WIDTH} ${height}`}
+        viewBox={`0 0 ${laid.width} ${laid.height}`}
         className="h-auto w-full"
         role="img"
         aria-labelledby={summaryId}
@@ -169,108 +97,33 @@ export function SystemTopology({
           </filter>
         </defs>
 
-        {/* ---- 器 ---- */}
-        <Container
-          x={COL.left - PAD}
-          y={dbPt.y - NODE_H / 2 - HEAD - 4}
-          w={NODE_W + PAD * 2}
-          h={NODE_H + HEAD + PAD + 4}
-          label="db"
-          down={dbDown}
-        />
-        <Container
-          x={COL.clone - PAD}
-          y={clonePt.y - NODE_H / 2 - HEAD - 4}
-          w={NODE_W + PAD * 2}
-          h={NODE_H + HEAD + PAD + 4}
-          label={daemon?.label ?? 'alteroidd'}
-        />
-        <Container
-          x={COL.manager - PAD}
-          y={TOP - HEAD - 4}
-          w={COL.worker + NODE_W + PAD - (COL.manager - PAD)}
-          h={contentH + HEAD + 4}
-          label={runner.label ?? 'manager-runner'}
-          down={runnerDown}
-        />
-
-        {/* ---- 線（札より先に描いて、札の下へ潜らせる） ---- */}
-        {human ? <Edge id="human" d={link(humanPt, clonePt)} flow={human.flow} /> : null}
-        <Edge id="db" d={link(dbPt, clonePt)} flow={db.flow} broken={dbDown} reverse />
-        {placed.map(({ manager, pt, workers }) => (
-          <g key={manager.id}>
-            <Edge
-              id={`m-${manager.id}`}
-              d={link(clonePt, pt)}
-              flow={manager.flow}
-              broken={runnerDown}
-            />
-            {workers.map(({ worker, pt: wpt }) => (
-              <Edge
-                key={worker.id}
-                id={`w-${worker.id}`}
-                d={link(pt, wpt)}
-                flow={worker.flow}
-                broken={runnerDown}
-              />
-            ))}
-          </g>
+        {laid.containers.map((c) => (
+          <Container key={c.key} container={c} />
         ))}
 
-        {/* ---- 札 ---- */}
-        {human ? (
+        {/* 線は札より先に描いて、札の下へ潜らせる */}
+        {laid.edges.map((e) => (
+          <Edge key={e.key} edge={e} dim={focus !== null && !focusEdges.has(e.key)} />
+        ))}
+
+        {laid.nodes.map((n) => (
           <Node
-            pt={humanPt}
-            icon={User}
-            role="人間"
-            label={human.label ?? 'あなた'}
-            task="Web UI / CLI"
+            key={n.key}
+            node={n}
+            selected={selected === n.key}
+            popover={!narrow}
+            onHover={(on) => setHovered(on ? n.key : null)}
+            onSelect={() => setSelected((cur) => (cur === n.key ? null : n.key))}
+            onClose={() => setSelected(null)}
           />
-        ) : null}
-        <Node
-          pt={dbPt}
-          icon={Database}
-          role="記憶ストア"
-          label={db.label ?? 'PostgreSQL'}
-          status={db.status}
-        />
-        <Node
-          pt={clonePt}
-          icon={Brain}
-          role="クローン"
-          label={clone.label ?? 'clone'}
-          task={clone.task}
-          status={clone.status}
-        />
-        {placed.map(({ manager, pt, workers }) => (
-          <g key={manager.id}>
-            <Node
-              pt={pt}
-              icon={Bot}
-              role="マネージャー"
-              label={manager.label}
-              task={manager.task}
-              status={manager.status}
-            />
-            {workers.map(({ worker, pt: wpt }) => (
-              <Node
-                key={worker.id}
-                pt={wpt}
-                icon={Hammer}
-                role="作業者"
-                label={worker.label}
-                task={worker.task}
-                status={worker.status}
-              />
-            ))}
-          </g>
         ))}
-        {managers.length === 0 ? (
+
+        {laid.empty ? (
           <foreignObject
-            x={COL.manager}
-            y={center(1) - NODE_H / 2}
-            width={COL.worker + NODE_W - COL.manager}
-            height={NODE_H}
+            x={laid.empty.x}
+            y={laid.empty.y}
+            width={laid.empty.w}
+            height={laid.empty.h}
           >
             <div className="flex h-full items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
               走っているマネージャーはいません
@@ -279,18 +132,39 @@ export function SystemTopology({
         ) : null}
       </svg>
       <figcaption id={summaryId} className="sr-only">
-        {summarize({ clone, db, runner, managers })}
+        {summarize(scene)}
       </figcaption>
+
+      {narrow ? (
+        <Sheet
+          open={selectedNode !== undefined}
+          onOpenChange={(open) => !open && setSelected(null)}
+        >
+          <SheetContent
+            side="bottom"
+            className="max-h-[80dvh] gap-0 overflow-y-auto pb-[var(--safe-bottom)]"
+          >
+            {selectedNode ? (
+              <>
+                <SheetHeader className="pb-2">
+                  <SheetTitle className="flex items-center gap-2">
+                    <NodeIcon node={selectedNode} />
+                    {selectedNode.label}
+                  </SheetTitle>
+                </SheetHeader>
+                <div className="px-4 pb-6">
+                  <NodeDetail node={selectedNode} />
+                </div>
+              </>
+            ) : null}
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </figure>
   );
 }
 
-function summarize({
-  clone,
-  db,
-  runner,
-  managers,
-}: Pick<SystemTopologyProps, 'clone' | 'db' | 'runner' | 'managers'>): string {
+function summarize({ clone, db, runner, managers }: TopologyScene): string {
   const parts = [
     `クローン: ${STATUS[clone.status].label}${clone.task ? `（${clone.task}）` : ''}`,
     `記憶ストア: ${STATUS[db.status].label}`,
@@ -303,35 +177,22 @@ function summarize({
   return parts.join('。');
 }
 
-function Container({
-  x,
-  y,
-  w,
-  h,
-  label,
-  down,
-}: {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  label: string;
-  down?: boolean;
-}) {
+function Container({ container: { box, label, down, labelAlign } }: { container: LaidContainer }) {
   return (
     <g>
       <rect
-        x={x}
-        y={y}
-        width={w}
-        height={h}
+        x={box.x}
+        y={box.y}
+        width={box.w}
+        height={box.h}
         rx={12}
         className={cn('fill-muted/30 stroke-border', down && 'stroke-destructive/70')}
         strokeDasharray={down ? '6 4' : undefined}
       />
       <text
-        x={x + 12}
-        y={y + 18}
+        x={labelAlign === 'end' ? box.x + box.w - 12 : box.x + 12}
+        textAnchor={labelAlign}
+        y={box.y + 18}
         className="fill-muted-foreground font-mono text-[11px] tracking-wide"
       >
         {label}
@@ -341,25 +202,14 @@ function Container({
   );
 }
 
-function Edge({
-  id,
-  d,
-  flow = 'idle',
-  broken,
-  reverse,
-}: {
-  id: string;
-  d: string;
-  flow?: TopologyFlow;
-  broken?: boolean;
-  /** 線を描いた向きと「下り」が逆のとき（DB は左にあるが、下りはクローン → DB） */
-  reverse?: boolean;
-}) {
+function Edge({ edge, dim }: { edge: LaidEdge; dim: boolean }) {
+  const { flow, broken, reverse } = edge;
+  const d = roundedPath(edge.points);
   const active = !broken && flow !== 'idle';
   const down = flow === 'down' || flow === 'both';
   const up = flow === 'up' || flow === 'both';
   return (
-    <g data-edge={id}>
+    <g data-edge={edge.key} className={cn('transition-opacity duration-300', dim && 'opacity-20')}>
       <path
         d={d}
         fill="none"
@@ -373,7 +223,7 @@ function Edge({
       />
       {active ? (
         <g className="motion-reduce:hidden">
-          {down ? <Pulse d={d} backward={!!reverse} tone="down" /> : null}
+          {down ? <Pulse d={d} backward={reverse} tone="down" /> : null}
           {up ? (
             <Pulse d={d} backward={!reverse} tone="up" delay={flow === 'both' ? 0.8 : 0} />
           ) : null}
@@ -426,56 +276,105 @@ function Pulse({
   );
 }
 
+function NodeIcon({ node, className }: { node: LaidNode; className?: string }) {
+  const Icon = KIND[node.kind].icon;
+  return <Icon className={cn('size-3.5 shrink-0 text-muted-foreground', className)} aria-hidden />;
+}
+
+/** 札を押したときの中身。Popover とシートで共通。 */
+function NodeDetail({ node }: { node: LaidNode }) {
+  const s = node.status ? STATUS[node.status] : undefined;
+  return (
+    <KeyValueList
+      labelWidth="6rem"
+      items={[
+        { label: '層', value: KIND[node.kind].role },
+        ...(s ? [{ label: '状態', value: <StatusDot tone={s.tone}>{s.label}</StatusDot> }] : []),
+        ...(node.task ? [{ label: 'いま', value: node.task }] : []),
+        ...(node.details ?? []).map((d) => ({ label: d.label, value: d.value, mono: d.mono })),
+      ]}
+    />
+  );
+}
+
 function Node({
-  pt,
-  icon: Icon,
-  role,
-  label,
-  task,
-  status,
+  node,
+  selected,
+  popover,
+  onHover,
+  onSelect,
+  onClose,
 }: {
-  pt: Point;
-  icon: LucideIcon;
-  role: string;
-  label: string;
-  task?: string;
-  status?: TopologyStatus;
+  node: LaidNode;
+  selected: boolean;
+  /** 広い画面では札の横に Popover を出す。狭い画面ではシートを親が出すので出さない */
+  popover: boolean;
+  onHover: (on: boolean) => void;
+  onSelect: () => void;
+  onClose: () => void;
 }) {
+  const { box, status } = node;
   const s = status ? STATUS[status] : undefined;
   const busy = status === 'running';
-  return (
-    <foreignObject
-      x={pt.x}
-      y={pt.y - NODE_H / 2}
-      width={NODE_W}
-      height={NODE_H}
-      className="overflow-visible"
+  const card = (
+    <button
+      type="button"
+      onClick={onSelect}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+      onFocus={() => onHover(true)}
+      onBlur={() => onHover(false)}
+      aria-expanded={selected}
+      aria-label={`${KIND[node.kind].role} ${node.label}${s ? ` ${s.label}` : ''}`}
+      className={cn(
+        'flex size-full cursor-pointer flex-col justify-center gap-1 rounded-md border bg-card px-3 text-left text-card-foreground outline-none transition-[box-shadow,border-color] duration-300',
+        'hover:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring',
+        busy && 'border-primary/60 shadow-[0_0_18px_-4px_var(--primary)]',
+        status === 'waiting' && 'border-warn/60',
+        (status === 'error' || status === 'offline') && 'border-destructive/60',
+        selected && 'ring-2 ring-primary',
+      )}
     >
-      <div
-        className={cn(
-          'flex h-full flex-col justify-center gap-1 rounded-md border bg-card px-3 text-card-foreground transition-shadow duration-500',
-          busy && 'border-primary/60 shadow-[0_0_18px_-4px_var(--primary)]',
-          status === 'waiting' && 'border-warn/60',
-          (status === 'error' || status === 'offline') && 'border-destructive/60',
-        )}
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon
-            className={cn('size-3.5 shrink-0 text-muted-foreground', busy && 'text-primary')}
-            aria-hidden
-          />
-          <span className="min-w-0 truncate text-[13px] font-medium">{label}</span>
-          {s ? (
-            <StatusDot tone={s.tone} className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-              {s.label}
-            </StatusDot>
-          ) : null}
-        </div>
-        <div className="flex min-w-0 items-baseline gap-2 text-[11px] text-muted-foreground">
-          <span className="shrink-0">{role}</span>
-          {task ? <span className="min-w-0 truncate">{task}</span> : null}
-        </div>
-      </div>
+      <span className="flex min-w-0 items-center gap-2">
+        <NodeIcon node={node} className={cn(busy && 'text-primary')} />
+        <span className="min-w-0 truncate text-[13px] font-medium">{node.label}</span>
+        {s ? (
+          <StatusDot tone={s.tone} className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+            {s.label}
+          </StatusDot>
+        ) : null}
+      </span>
+      <span className="flex min-w-0 items-baseline gap-2 text-[11px] text-muted-foreground">
+        <span className="shrink-0">{KIND[node.kind].role}</span>
+        {node.task ? <span className="min-w-0 truncate">{node.task}</span> : null}
+      </span>
+    </button>
+  );
+
+  return (
+    <foreignObject x={box.x} y={box.y} width={box.w} height={box.h} className="overflow-visible">
+      {popover ? (
+        <Popover open={selected} onOpenChange={(open) => !open && onClose()}>
+          <PopoverAnchor asChild>{card}</PopoverAnchor>
+          <PopoverContent
+            side="right"
+            align="start"
+            className="w-80"
+            // 別の札を押したときは、閉じる → 開くではなく乗り換えにする（親の onSelect が先に走る）
+            onInteractOutside={(e) => {
+              if ((e.target as Element | null)?.closest?.('[aria-expanded]')) e.preventDefault();
+            }}
+          >
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+              <NodeIcon node={node} />
+              {node.label}
+            </div>
+            <NodeDetail node={node} />
+          </PopoverContent>
+        </Popover>
+      ) : (
+        card
+      )}
     </foreignObject>
   );
 }
