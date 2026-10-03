@@ -125,6 +125,11 @@ export interface SelfFacts {
    */
   cloneProvider?: string;
   /**
+   * 人間が `ALTEROID_CLONE_PEERS` で開けた、もう一方の provider（#486 S7）。空・省略なら何も言わない。
+   * `manager_start` の `provider` 引数が見える範囲と同じ値。
+   */
+  cloneProviderPeers?: readonly string[];
+  /**
    * 層を動かす provider が持たない能力（`describeProviderGaps` の出力）。
    * 空・未指定なら何も足さない。
    */
@@ -179,6 +184,8 @@ export interface CloneRuntimeFacts {
    * 渡っていなければ `describeCloneRuntime` は「不明」と言う。`claude` とは読まない。
    */
   cloneProvider?: string;
+  /** 人間が開けたもう一方の provider（`SelfFacts.cloneProviderPeers` と同じ値）。 */
+  cloneProviderPeers?: readonly string[];
   /** 宣言されたモデル帯（`ALTEROID_CLONE_MODEL` があればその値、無ければ既定）。 */
   declaredModel: string;
   /**
@@ -464,6 +471,11 @@ export function describeCloneRuntime(facts: CloneRuntimeFacts): string {
     // 嘘になる（承認が置かれている事実が消える）。
     `- ${CLONE_RUNTIME_ITEMS.cloneProvider}: ${
       facts.cloneProvider ?? unknownBecause('デーモンが provider を渡していない')
+    }${
+      facts.cloneProviderPeers === undefined || facts.cloneProviderPeers.length === 0
+        ? ''
+        : `（人間が開けたもう一方の provider: ${facts.cloneProviderPeers.join(', ')}。` +
+          'manager_start の provider 引数で、マネージャーをそちらで動かせる。使うかどうかは自分の判断）'
     }`,
     `- ${CLONE_RUNTIME_ITEMS.declaredModel}: ${facts.declaredModel}（` +
       (facts.modelOverridden

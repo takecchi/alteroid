@@ -473,6 +473,7 @@ describe('managerSummarySchema と ManagerSummary のキーの一致（再発防
   it('ManagerSummary の全キーが managerSummarySchema に宣言されている', () => {
     const coverage: Record<keyof ManagerSummary, true> = {
       managerId: true,
+      managerProvider: true,
       status: true,
       live: true,
       runnerLostSince: true,

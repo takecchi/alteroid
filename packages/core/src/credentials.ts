@@ -190,6 +190,9 @@ export const POOL_OWNED_CREDENTIAL_NAMES: readonly string[] = [
  * - `ALTEROID_WORKER_MODEL` — 作業者の帯（既定 `sonnet`）
  * - `ALTEROID_CLONE_PROVIDER` — クローンの provider（既定 `claude`。#486 段 S1）
  * - `ALTEROID_MANAGER_PROVIDER` — マネージャー（と作業者）の provider（既定 `claude`）
+ * - `ALTEROID_CLONE_PEERS` — クローンが `manager_start` で呼んでよいもう一方の provider
+ *   （空＝閉じている。#486 段 S7）。**人間が開ける承認そのもの**で、デーモン自身のプロセスが読む
+ *   （`ALTEROID_CLONE_PROVIDER` と同じ行）
  *
  * **こちらは設定ではなく、人間の承認の置き場である**（AGENTS.md 地雷5「安いモデル
  * に寄せる / 階層を潰して速くする」——層とモデル帯の対応は固定で、変更には人間の
@@ -234,6 +237,7 @@ export const ENV_FILE_OWNED_CREDENTIAL_NAMES: readonly string[] = [
   'ALTEROID_WORKER_MODEL',
   'ALTEROID_CLONE_PROVIDER',
   'ALTEROID_MANAGER_PROVIDER',
+  'ALTEROID_CLONE_PEERS',
 ];
 
 /**

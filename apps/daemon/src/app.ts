@@ -1303,6 +1303,8 @@ function managerView(managers: ManagerPool, summary: ManagerSummary) {
  * 経路判断用の `runnerManagerProvider()`（既定 `claude`）は使わない。
  */
 function managerProviderOf(managers: ManagerPool, summary: ManagerSummary): string | undefined {
+  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider**（#486 S7）。
+  if (summary.managerProvider !== undefined) return summary.managerProvider;
   if (summary.runnerId === undefined) return undefined;
   return managers.runnerReportedManagerProvider?.(summary.runnerId);
 }

@@ -39,6 +39,7 @@ import {
   missingDailyReportDates,
   placedClonePermissionMode,
   placedManagerModels,
+  CLONE_PEERS_ENV_KEY,
   CLONE_PROVIDER_ENV_KEY,
   MANAGER_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
@@ -46,6 +47,7 @@ import {
   placedAgentProvider,
   resolveCloneProviderId,
   resolveManagerProviderId,
+  resolvePeers,
   reasonOf,
   redactErrorText,
   resolveCloneModel,
@@ -1428,6 +1430,27 @@ export async function main(): Promise<void> {
   }
 
   /**
+   * クローンが `manager_start` で呼んでよいもう一方の provider（#486 段 S7）。人間が
+   * `ALTEROID_CLONE_PEERS` で開けたものだけ。**不正な値なら、ここで起動を止める**
+   * （`resolvePeers` が投げる）。置かれていなければ何も言わず、道具にも引数を出さない。
+   * 自分の層の provider が書かれていたら、除いたことを黙らない。
+   */
+  const clonePeers = resolvePeers('clone', process.env, cloneProvider.id);
+  const clonePeerIds = [...clonePeers.peers];
+  if (placedAgentProvider(process.env, CLONE_PEERS_ENV_KEY) !== null) {
+    process.stdout.write(
+      `alteroidd: ${CLONE_PEERS_ENV_KEY} が置かれています` +
+        `（クローンが manager_start の provider 引数で呼べる provider: ${
+          clonePeerIds.length === 0 ? 'なし' : clonePeerIds.join(', ')
+        }）。` +
+        (clonePeers.selfListed
+          ? `値にクローン自身の provider（${cloneProvider.id}）が書かれていたが、「もう一方」を呼ぶ口なので無視した。`
+          : '') +
+        '呼ぶかどうかはクローン自身の判断です\n',
+    );
+  }
+
+  /**
    * 実行環境プロファイル（`.zprofile` 相当）をクローンへ効かせる器。
    *
    * **クローンにも効かせる**のは、人間の `.zshenv` が「Claude Code に頼むとき」
@@ -1597,6 +1620,7 @@ export async function main(): Promise<void> {
     providerGaps: describeProviderGaps({ clone: cloneProvider }),
     // クローン層の provider の id。`self_status` と `GET /runners` が同じ値を読む。
     cloneProvider: cloneProvider.id,
+    ...(clonePeerIds.length === 0 ? {} : { cloneProviderPeers: clonePeerIds }),
   };
 
   /**

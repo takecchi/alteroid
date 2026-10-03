@@ -585,6 +585,12 @@ export interface ToolContext {
    */
   providerGaps?: () => Promise<readonly string[]>;
   /**
+   * 人間が `ALTEROID_CLONE_PEERS` で開けた、もう一方の provider（#486 S7）。**空・省略なら
+   * `manager_start` に `provider` 引数を出さない**（スキーマも説明文も従来と同一）。
+   * 自分の層の provider は含まれない（`resolvePeers` が除く）。
+   */
+  cloneProviderPeers?: readonly string[];
+  /**
    * この道具を通した記憶の書き換えが、日誌の `memory_update.cause` でどう名乗るか。
    *
    * クローンの道具は人間の口ではないので、ここから `'human'` は出ない
@@ -4734,6 +4740,21 @@ export function describePermissionEvidence(
 
 export function createCloneTools(context: ToolContext) {
   const { stores } = context;
+  // 開いた provider があるときだけ `manager_start` へ `provider` を足す（空なら何も変わらない）。
+  const peerProviders = [...new Set(context.cloneProviderPeers ?? [])];
+  const providerShape: Record<string, z.ZodType> =
+    peerProviders.length === 0
+      ? {}
+      : {
+          provider: z
+            .enum(peerProviders as [string, ...string[]])
+            .optional()
+            .describe(
+              'もう一方の provider（人間が開けたもの。選べるのは列挙された値だけ）でマネージャーを動かす。' +
+                '省略すれば runner の既定の provider で動く。呼ぶかどうかはあなたの判断。' +
+                '指名した provider を受けられない runner は、断って返す（別の provider では起こさない）。',
+            ),
+        };
   // **ここで1回だけ解決しない。** `memoryCause` はターンごとに変わりうる値
   // なので、この関数の実行時（＝ MCP サーバを組む時）に確定させると、
   // セッション中ずっと最初のターンの種類に固定されてしまう
@@ -10526,8 +10547,20 @@ export function createCloneTools(context: ToolContext) {
               '指名した器が名簿に無い・使えない・名前が重複のときは失敗し、他の器へは' +
               '自動で落とさない（返ってきた文言をそのまま読むこと）。',
           ),
+        ...providerShape,
       },
-      async ({ request, cwd, runnerId }) => {
+      async (rawArgs) => {
+        const { request, cwd, runnerId, provider } = rawArgs as unknown as {
+          request: string;
+          cwd?: string | undefined;
+          runnerId?: string | undefined;
+          provider?: string | undefined;
+        };
+        // 開けていない provider は schema が弾くが、型の抜け道でも通さない。
+        if (provider !== undefined && !peerProviders.includes(provider)) {
+          throw new Error(`provider=${provider} は人間が開けていない（ALTEROID_CLONE_PEERS）`);
+        }
+        const providerNote = provider === undefined ? '' : `（provider=${provider}）`;
         if (!context.managers) return NO_POOL;
         // **クローンには渡させない。呼び出し文脈から自動で読む**（issue #1003
         // 段2・#781）。この道具の引数に conversationId は無い——手で維持する
@@ -10550,7 +10583,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `マネージャーを起こそうとしている${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-            }: ${request}`,
+            }${providerNote}: ${request}`,
             grounds: '委譲の判断',
           },
           'act-not-performed',
@@ -10562,6 +10595,7 @@ export function createCloneTools(context: ToolContext) {
             request,
             ...(cwd === undefined ? {} : { cwd }),
             ...(runnerId === undefined ? {} : { runnerId }),
+            ...(provider === undefined ? {} : { provider }),
             ...(conversationId === undefined ? {} : { conversationId }),
           });
         } catch (error) {
@@ -10571,7 +10605,7 @@ export function createCloneTools(context: ToolContext) {
             type: 'decision',
             decision: `マネージャーを起こせなかった${
               runnerId === undefined ? '' : `（指名: runnerId=${runnerId}）`
-            }: ${request}`,
+            }${providerNote}: ${request}`,
             grounds: `委譲しようとしたが、状態の変更が失敗した: ${reasonOf(error)}`,
           });
           throw error;
@@ -10583,7 +10617,9 @@ export function createCloneTools(context: ToolContext) {
           type: 'decision',
           decision:
             `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}` +
-            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}）: ${request}`,
+            `${runnerId === undefined ? '' : `, 指名: runnerId=${runnerId}`}${
+              provider === undefined ? '' : `, provider=${provider}`
+            }）: ${request}`,
           grounds: '委譲の判断',
         });
         // **置き先が pids 飽和と判定されていれば言う（#2626 期待2）。** 明示指名でも
@@ -10594,7 +10630,9 @@ export function createCloneTools(context: ToolContext) {
             : context.managers.runnerPidsSaturation?.(started.runnerId);
         return text(
           `マネージャー ${started.managerId} を起こした（${describeStartedCwd(started)}、` +
-            `runner: ${started.runnerId ?? '未記録'}）。` +
+            `runner: ${started.runnerId ?? '未記録'}${
+              provider === undefined ? '' : `、provider: ${provider}`
+            }）。` +
             '報告・質問は後から受信箱に届く。' +
             (saturation === undefined
               ? ''
@@ -15591,8 +15629,10 @@ export function createCloneMcpServer(context: ToolContext) {
  */
 function managerProviderOf(
   managers: ManagerPool | undefined,
-  summary: { runnerId?: string | undefined },
+  summary: { runnerId?: string | undefined; managerProvider?: string | undefined },
 ): string | undefined {
+  // クローンが指名した委譲は、runner の既定ではなく**実際に動いている provider** を言う（#486 S7）。
+  if (summary.managerProvider !== undefined) return summary.managerProvider;
   if (summary.runnerId === undefined) return undefined;
   return managers?.runnerReportedManagerProvider?.(summary.runnerId);
 }

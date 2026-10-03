@@ -9919,6 +9919,9 @@ class Clone implements CloneHost {
       ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
       runtime: () => this.#runtimeFacts(),
       providerGaps: () => this.#providerGapLines(),
+      ...(this.#self?.cloneProviderPeers === undefined
+        ? {}
+        : { cloneProviderPeers: this.#self.cloneProviderPeers }),
       memoryCause: () => (this.#sdkSession.turn?.kind === 'distill' ? 'distill' : 'clone'),
       // **消した合図の配達を止める口**（issue #1049）。これを渡さないと
       // `inbox_remove_many` は1件も消さずに断る（`ToolContext` のその doc）。
@@ -9990,6 +9993,9 @@ class Clone implements CloneHost {
       ...(this.#self?.providerGaps !== undefined ? { providerGaps: this.#self.providerGaps } : {}),
       ...(this.#self?.cloneProvider !== undefined
         ? { cloneProvider: this.#self.cloneProvider }
+        : {}),
+      ...(this.#self?.cloneProviderPeers !== undefined
+        ? { cloneProviderPeers: this.#self.cloneProviderPeers }
         : {}),
     };
   }
