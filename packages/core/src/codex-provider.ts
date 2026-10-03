@@ -18,7 +18,7 @@ import type { AgentProvider } from './agent-ports.js';
  * | resume | true | `thread/resume`。ただし rollout は Codex 側の `CODEX_HOME` にあり、器ごと失われれば開き直せない（`sessionLog` が false の裏面） |
  * | sessionLog | false | 生ログ（rollout）を器の外（デーモン）へ預ける口が無い。`spec.sessionLog` は使わない |
  * | subagents | false | Codex の app-server に `Options.agents` 相当（作業者を別モデルで走らせる口）を繋いでいない。作業者層は無い |
- * | mcpServers | false | 人間の MCP 連携（`spec.mcpServers`）を app-server の設定へ写していない |
+ * | mcpServers | false | `spec.mcpServers` を `thread/start` の `config.mcp_servers` へ写して渡すが（`codex-mcp-config.ts`）、実機の app-server で繋がることは未確認なので false のまま |
  * | childUser | true | `spec.spawnProcess`（別 UID の子）で `codex app-server` を起こす |
  * | usage | true | `thread/tokenUsage/updated` の `last` を足し、単価表（`codex-pricing.ts`）で USD を出す（トークンのみ・web 検索回数は読めない。表に無いモデルは費用を「読めなかった」とする） |
  * | partialMessages | true | `item/agentMessage/delta` を `text_delta` に畳む |

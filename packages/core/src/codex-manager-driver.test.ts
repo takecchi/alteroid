@@ -18,6 +18,7 @@ import {
   CodexManagerDriver,
   codexApprovalPolicyFor,
 } from './codex-manager-driver.js';
+import { toCodexMcpServersConfig } from './codex-mcp-config.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import { PERMISSION_MODES } from './permission-mode.js';
 
@@ -231,6 +232,7 @@ function setup(
     decision?: AgentPermissionDecision;
     script?: FakeAppServer['script'];
     closeGraceMs?: number;
+    mcpServers?: Record<string, unknown>;
   } = {},
 ): Harness {
   const server = new FakeAppServer();
@@ -252,6 +254,7 @@ function setup(
     workerModel: 'sonnet',
     cwd: '/work',
     env: options.env ?? {},
+    ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
     managerAutoMemoryEnabled: false,
     sessionLog: { append: async () => undefined, load: async () => null },
     spawnProcess: (spawnOptions: AgentSpawnOptions) => {
@@ -428,6 +431,98 @@ describe('CodexManagerDriver: 起動・認証・thread', () => {
     await until(() => h.events.length > 0, 'session_started');
     h.server.crash();
     await expect(done).rejects.toThrow(/終了した/);
+  });
+});
+
+describe('CodexManagerDriver: MCP サーバ', () => {
+  const SECRET = 'sk-secret-value-123';
+  const servers = {
+    local: { command: 'node', args: ['srv.js'], env: { API_KEY: SECRET } },
+    remote: {
+      type: 'http',
+      url: 'https://mcp.example/x',
+      headers: { Authorization: SECRET },
+      timeout: 5,
+    },
+    legacy: { type: 'sse', url: 'https://mcp.example/sse', headers: { Authorization: SECRET } },
+    inproc: { type: 'sdk', name: 'inproc' },
+  };
+
+  it('thread/start の config に mcp_servers を渡し、写せない種別は名前と理由だけの note を残す', async () => {
+    const h = setup({ env: { CODEX_API_KEY: 'k' }, mcpServers: servers });
+    const done = h.run();
+    await until(() => h.events.length > 0, 'session_started');
+    const start = h.server.paramsOf('thread/start')[0]!;
+    expect(start['config']).toEqual({
+      mcp_servers: {
+        local: { command: 'node', args: ['srv.js'], env: { API_KEY: SECRET } },
+        remote: { url: 'https://mcp.example/x', http_headers: { Authorization: SECRET } },
+      },
+    });
+    expect(h.events[0]).toMatchObject({
+      type: 'session_started',
+      runtime: {
+        mcpServers: [
+          { name: 'local', status: 'configured' },
+          { name: 'remote', status: 'configured' },
+        ],
+      },
+    });
+    expect(h.notes.some((n) => n.includes('legacy') && n.includes('sse'))).toBe(true);
+    expect(h.notes.some((n) => n.includes('inproc') && n.includes('インプロセス'))).toBe(true);
+    expect(h.notes.some((n) => n.includes('remote') && n.includes('timeout'))).toBe(true);
+    expect(JSON.stringify(h.notes)).not.toContain(SECRET);
+    // 起動引数（argv）にも値は載らない
+    expect(JSON.stringify(h.spawned.map((s) => s.args))).not.toContain(SECRET);
+    h.feed.end();
+    await done;
+  });
+
+  it('thread/resume にも同じ config を渡す', async () => {
+    const h = setup({ env: { CODEX_API_KEY: 'k' }, resume: 'thr-9', mcpServers: servers });
+    const done = h.run();
+    await until(() => h.events.length > 0, 'session_started');
+    const resume = h.server.paramsOf('thread/resume')[0]!;
+    expect(resume['threadId']).toBe('thr-9');
+    expect(Object.keys((resume['config'] as { mcp_servers: object }).mcp_servers)).toEqual([
+      'local',
+      'remote',
+    ]);
+    h.feed.end();
+    await done;
+  });
+
+  it('mcpServers が無い・空・全部写せないときは config を付けず、params は従来と同一', async () => {
+    for (const mcpServers of [undefined, {}, { inproc: { type: 'sdk' } }]) {
+      const h = setup({
+        env: { CODEX_API_KEY: 'k' },
+        ...(mcpServers === undefined ? {} : { mcpServers }),
+      });
+      const done = h.run();
+      await until(() => h.events.length > 0, 'session_started');
+      expect(JSON.stringify(h.server.paramsOf('thread/start')[0])).toBe(
+        JSON.stringify({
+          cwd: '/work',
+          approvalPolicy: 'on-request',
+          sandbox: 'danger-full-access',
+          developerInstructions: 'あなたはマネージャー',
+        }),
+      );
+      expect(h.events[0]).toMatchObject({ runtime: { mcpServers: null } });
+      h.feed.end();
+      await done;
+    }
+  });
+});
+
+describe('toCodexMcpServersConfig', () => {
+  it('入力が無ければ config は null', () => {
+    expect(toCodexMcpServersConfig(undefined)).toEqual({
+      config: null,
+      passed: [],
+      skipped: [],
+      droppedFields: [],
+    });
   });
 });
 

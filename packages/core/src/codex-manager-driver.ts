@@ -79,6 +79,7 @@ import {
   type CodexPermissionsApprovalResponse,
 } from './codex-protocol.js';
 import type { CodexUsageForPricing } from './codex-pricing.js';
+import { toCodexMcpServersConfig } from './codex-mcp-config.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { redactErrorText } from './redact.js';
@@ -390,12 +391,22 @@ class CodexManagerSession implements AgentManagerSession {
 
   async #openThread(client: CodexAppServerClient, userAgent: string): Promise<void> {
     const spec = this.#spec;
+    const mcp = toCodexMcpServersConfig(spec.mcpServers);
+    for (const { name, reason } of mcp.skipped) {
+      this.#note(`MCP サーバ「${name}」は Codex へ渡していない: ${reason}`);
+    }
+    for (const { name, fields } of mcp.droppedFields) {
+      this.#note(
+        `MCP サーバ「${name}」の欄 ${fields.join(', ')} は Codex へ渡していない（対応する設定欄が未確認）`,
+      );
+    }
     const common = {
       cwd: spec.cwd,
       approvalPolicy: codexApprovalPolicyFor(spec.permissionMode),
       sandbox: CODEX_SANDBOX,
       developerInstructions: spec.systemPromptAppend,
       ...(spec.modelPlaced === true ? { model: spec.model } : {}),
+      ...(mcp.config === null ? {} : { config: mcp.config }),
     };
     const response =
       spec.resume === undefined
@@ -413,7 +424,11 @@ class CodexManagerSession implements AgentManagerSession {
         // 資格の出どころ（名前だけ。値は載せない）。
         apiKeySource: this.#apiKey === undefined ? 'chatgpt' : CODEX_API_KEY_ENV_NAME,
         permissionMode: response.approvalPolicy,
-        mcpServers: null,
+        // 渡した名前だけ。繋がったかは読んでいないので status は 'configured'（接続済みとは言わない）。
+        mcpServers:
+          mcp.passed.length === 0
+            ? null
+            : mcp.passed.map((name) => ({ name, status: 'configured' })),
       },
     });
   }
