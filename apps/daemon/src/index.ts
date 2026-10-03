@@ -299,7 +299,8 @@ function runnerSeeds(options: {
   // 知らない値ならここで起動を止める（`resolveManagerProviderId` の doc）。袋からは置けない名前
   // （`ENV_FILE_OWNED_CREDENTIAL_NAMES`）なので、読むのは器の生の環境変数だけである。
   const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
-  if (placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY) !== null) {
+  const placedProvider = placedAgentProvider(process.env, MANAGER_PROVIDER_ENV_KEY);
+  if (placedProvider !== null) {
     process.stdout.write(
       `alteroidd: ${MANAGER_PROVIDER_ENV_KEY} が置かれています` +
         `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${managerProvider.id}）。` +
@@ -313,7 +314,8 @@ function runnerSeeds(options: {
         createLocalRunner({
           runnerId: 'runner-local',
           workspacePath: options.workspace,
-          managerProvider: managerProvider.id,
+          // 置かれたときだけ渡す（未設定の既定では `hello` も従来どおり名乗りを載せない）。
+          ...(placedProvider === null ? {} : { managerProvider: managerProvider.id }),
           withheldEnvKeys: options.withheldEnvKeys,
           // **ローカルでもプロファイルを効かせる。** コンテナ構成でだけ `.zprofile`
           // が効く形にすると、器が違うだけでできることが変わる（M4 受け入れ基準1）。
