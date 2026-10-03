@@ -159,7 +159,7 @@ describe('runner: マネージャー層の provider の選択', () => {
       queryFn: sdk.fn,
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: (options) => {
+      spawnAgentProcessFn: (options) => {
         spawned.push(options.command);
         return fakeAppServer();
       },
@@ -185,7 +185,7 @@ describe('runner: マネージャー層の provider の選択', () => {
       managerProvider: 'codex',
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: (options) => {
+      spawnAgentProcessFn: (options) => {
         spawned.push(options.command);
         return fakeAppServer();
       },
@@ -206,7 +206,7 @@ describe('runner: マネージャー層の provider の選択', () => {
       queryFn: sdk.fn,
       env: {},
       childUser: { uid: 1000, gid: 1000 },
-      spawnClaudeCodeProcessFn: (options) => {
+      spawnAgentProcessFn: (options) => {
         spawned.push(options.command);
         return fakeAppServer();
       },
