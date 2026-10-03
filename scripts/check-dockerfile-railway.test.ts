@@ -274,6 +274,7 @@ describe('実際の repo', () => {
 
   it('CLI を実際に走らせて 0 で終わり、1行出す', () => {
     const out = execFileSync('node', [join(ROOT, 'scripts/check-dockerfile-railway.mjs')], {
+      env: gitChildEnv(),
       encoding: 'utf8',
     });
     expect(out).toContain('check-dockerfile-railway: OK');
