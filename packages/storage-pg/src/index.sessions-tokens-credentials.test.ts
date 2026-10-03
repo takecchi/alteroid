@@ -108,6 +108,59 @@ describe('PgProfileStore', () => {
     await stores.profile.revert(null);
     expect(await stores.profile.read()).toBeNull();
   });
+
+  // 撒く先（scope。2026-10-03）。fs 版（`FsProfileStore`）と同じ振る舞いになること。
+  it('撒く先を往復できる。既定は all', async () => {
+    await stores.profile.write('export A=1\n');
+    expect((await stores.profile.read())?.scope).toBe('all');
+
+    for (const scope of ['app', 'runner', 'all'] as const) {
+      await stores.profile.write('export A=1\n', scope);
+      expect((await stores.profile.read())?.scope).toBe(scope);
+    }
+  });
+
+  it('revert は撒く先も組で戻す', async () => {
+    await stores.profile.write('export WHICH=old\n', 'runner');
+    const before = await stores.profile.read();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await stores.profile.write('export WHICH=new\n', 'app');
+
+    await stores.profile.revert(before);
+
+    expect(await stores.profile.read()).toEqual(before);
+    expect((await stores.profile.read())?.scope).toBe('runner');
+  });
+
+  it('scope 列が無かった頃の行（旧スキーマ）は、migrate の後 all として読める。migrate は2回通しても壊れない', async () => {
+    // **旧スキーマを実際に作る**（列を落として行を入れる）。新スキーマに直接
+    // insert するだけでは `alter table ... add column` が効いたかを測れない。
+    await db.execute(sql`alter table env_profile drop column scope`);
+    await db.execute(sql`insert into env_profile (id, script) values ('default', 'export OLD=1')`);
+
+    await migrate(db);
+    expect(await stores.profile.read()).toMatchObject({ script: 'export OLD=1', scope: 'all' });
+
+    // 2周目: 1周目が足した列と、置かれた撒く先が残る。
+    await stores.profile.write('export OLD=1', 'runner');
+    await migrate(db);
+    expect((await stores.profile.read())?.scope).toBe('runner');
+  });
+
+  it('外す（空の write / clear / revert(null)）と撒く先も消え、次の既定は all', async () => {
+    for (const remove of [
+      () => stores.profile.write(''),
+      () => stores.profile.clear(),
+      () => stores.profile.revert(null),
+    ]) {
+      await stores.profile.write('export A=1\n', 'runner');
+      await remove();
+      expect(await stores.profile.read()).toBeNull();
+      await stores.profile.write('export B=1\n');
+      expect((await stores.profile.read())?.scope).toBe('all');
+    }
+  });
 });
 
 /**

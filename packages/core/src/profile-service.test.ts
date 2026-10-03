@@ -11,7 +11,11 @@ import {
   fingerprintOf,
   type ProfileApplier,
 } from './profile.js';
-import { createProfileService, ProfileRollbackFailedError } from './profile-service.js';
+import {
+  createProfileService,
+  ProfileRollbackFailedError,
+  profileScopeAppliesTo,
+} from './profile-service.js';
 import type { RunnerClient, RunnerProfileFingerprint } from './runner-protocol.js';
 import type { Stores } from './store.js';
 import { createMemoryStores } from './testing.js';
@@ -85,7 +89,7 @@ function tripwire(stores: Stores, runner: RunnerClient & { received: string[] })
       if (busy) violations.push('更新中に別の操作がストアを読んだ');
       return store.read();
     },
-    write: (script: string) => store.write(script),
+    write: (script: string, scope) => store.write(script, scope),
     revert: (previous) => store.revert(previous),
     clear: () => store.clear(),
   };
@@ -500,5 +504,219 @@ describe('降ろし直し', () => {
     runner.received.length = 0;
     await service.syncRunner(runner);
     expect(runner.received).toEqual(['']);
+  });
+});
+
+/**
+ * 撒く先（scope。2026-10-03。オーナー指示「env-profileを環境変数と同じように指定
+ * できるようにして欲しい」「デフォルトは両方です」）。
+ *
+ * **測るのは「届かない側へ本文が降りないこと」だけではない。** all → runner のように
+ * 撒く先を**狭めた**とき、本文が同じでも、外れた側から**確実に外れる**こと。
+ * 「届かない側は触らない」実装だと、前の本文（鍵を含みうる）がクローンに残り続け、
+ * 本文だけを見るテストは全部緑になる。
+ */
+describe('撒く先（scope）', () => {
+  /** クローンの器へ効かせた本文を順に覚える applier。 */
+  function recordingApplier() {
+    const cloneReceived: string[] = [];
+    const applier = fakeApplier((script) => {
+      cloneReceived.push(script);
+    });
+    return { applier, cloneReceived };
+  }
+
+  it('scope=runner: クローンは空を受け取り、runner は本文を受け取る', async () => {
+    const stores = createMemoryStores();
+    const { applier, cloneReceived } = recordingApplier();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    const result = await service.apply('export ONLY_RUNNER=1', 'runner');
+
+    expect(cloneReceived).toEqual(['']);
+    expect(runner.received).toEqual(['export ONLY_RUNNER=1\n']);
+    // 正本は本文をそのまま持つ（クローンが profile_read で読める）。
+    expect(await stores.profile.read()).toMatchObject({
+      script: 'export ONLY_RUNNER=1\n',
+      scope: 'runner',
+    });
+    expect(result.scope).toBe('runner');
+    // 指紋は正本の本文から取る（届かない側があっても消えない）。
+    expect(result.sha256).toBe(fingerprintOf('export ONLY_RUNNER=1\n'));
+  });
+
+  it('scope=app: クローンは本文を受け取り、runner は空を受け取る', async () => {
+    const stores = createMemoryStores();
+    const { applier, cloneReceived } = recordingApplier();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    await service.apply('export ONLY_APP=1', 'app');
+
+    expect(cloneReceived).toEqual(['export ONLY_APP=1\n']);
+    expect(runner.received).toEqual(['']);
+  });
+
+  it('既定は all（両方が本文を受け取る）', async () => {
+    const stores = createMemoryStores();
+    const { applier, cloneReceived } = recordingApplier();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    const result = await service.apply('export BOTH=1');
+
+    expect(cloneReceived).toEqual(['export BOTH=1\n']);
+    expect(runner.received).toEqual(['export BOTH=1\n']);
+    expect(result.scope).toBe('all');
+  });
+
+  it('scope を省くと既存の撒く先を保つ（本文だけ直して all へ戻らない）', async () => {
+    const stores = createMemoryStores();
+    const { applier, cloneReceived } = recordingApplier();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    await service.apply('export A=1', 'runner');
+    cloneReceived.length = 0;
+    runner.received.length = 0;
+    const result = await service.apply('export A=2');
+
+    expect(result.scope).toBe('runner');
+    expect((await stores.profile.read())?.scope).toBe('runner');
+    expect(cloneReceived).toEqual(['']);
+    expect(runner.received).toEqual(['export A=2\n']);
+  });
+
+  it('all → runner へ変えると、本文が同じでもクローンから外れる', async () => {
+    const stores = createMemoryStores();
+    const { applier, cloneReceived } = recordingApplier();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    await service.apply('export SAME=1', 'all');
+    expect(cloneReceived.at(-1)).toBe('export SAME=1\n');
+
+    await service.apply('export SAME=1', 'runner');
+
+    // クローンには空が効いた（外れた）。runner は本文のまま。
+    expect(cloneReceived.at(-1)).toBe('');
+    expect(runner.received.at(-1)).toBe('export SAME=1\n');
+  });
+
+  it('all → app へ変えると、本文が同じでも runner から外れる', async () => {
+    const stores = createMemoryStores();
+    const { applier, cloneReceived } = recordingApplier();
+    const runner = fakeRunner();
+    const service = createProfileService({ stores, applier, runners: registryOf([runner]) });
+
+    await service.apply('export SAME=1', 'all');
+    expect(await runner.profile()).toBeDefined();
+
+    await service.apply('export SAME=1', 'app');
+
+    expect(await runner.profile()).toBeUndefined();
+    expect(cloneReceived.at(-1)).toBe('export SAME=1\n');
+  });
+
+  it('外す（空）と撒く先も消える（次に置くものへ古い撒く先が効かない）', async () => {
+    const stores = createMemoryStores();
+    const service = createProfileService({ stores, runners: registryOf([fakeRunner()]) });
+
+    await service.apply('export A=1', 'runner');
+    await service.apply('');
+    expect(await stores.profile.read()).toBeNull();
+
+    const next = await service.apply('export B=1');
+    expect(next.scope).toBe('all');
+  });
+
+  it('クローンへ反映できなかったら、正本は本文も撒く先も元へ戻す', async () => {
+    const stores = createMemoryStores();
+    const service0 = createProfileService({ stores });
+    await service0.apply('export OLD=1', 'app');
+    const before = await stores.profile.read();
+
+    const failing: ProfileApplier = {
+      ...fakeApplier(),
+      async prepare() {
+        return {
+          ok: true,
+          commit: async () => {
+            throw new Error('commit failed (test)');
+          },
+          discard: async () => undefined,
+        };
+      },
+    };
+    const service = createProfileService({ stores, applier: failing });
+
+    await expect(service.apply('export NEW=1', 'runner')).rejects.toThrow();
+    expect(await stores.profile.read()).toEqual(before);
+  });
+
+  describe('restore / syncRunner', () => {
+    it('restore: scope=runner なら、起動時もクローンへは空を効かせる', async () => {
+      const stores = createMemoryStores();
+      await stores.profile.write('export R=1\n', 'runner');
+      const { applier, cloneReceived } = recordingApplier();
+      const service = createProfileService({ stores, applier });
+
+      await service.restore();
+
+      expect(cloneReceived).toEqual(['']);
+    });
+
+    it('restore: scope=app / all ならクローンへ本文を効かせる', async () => {
+      for (const scope of ['app', 'all'] as const) {
+        const stores = createMemoryStores();
+        await stores.profile.write('export R=1\n', scope);
+        const { applier, cloneReceived } = recordingApplier();
+        await createProfileService({ stores, applier }).restore();
+        expect(cloneReceived).toEqual(['export R=1\n']);
+      }
+    });
+
+    it('syncRunner: scope=app で runner に載っていれば、空を降ろす', async () => {
+      const stores = createMemoryStores();
+      const runner = fakeRunner();
+      const service = createProfileService({ stores, runners: registryOf([runner]) });
+      await stores.profile.write('export A=1\n', 'app');
+      await runner.setProfile('export A=1\n');
+      runner.received.length = 0;
+
+      await service.syncRunner(runner);
+
+      expect(runner.received).toEqual(['']);
+      expect(await runner.profile()).toBeUndefined();
+    });
+
+    it('syncRunner: scope=app で runner が既に空なら何もしない', async () => {
+      const stores = createMemoryStores();
+      const runner = fakeRunner();
+      const service = createProfileService({ stores, runners: registryOf([runner]) });
+      await stores.profile.write('export A=1\n', 'app');
+
+      expect(await service.syncRunner(runner)).toBeNull();
+      expect(runner.received).toEqual([]);
+    });
+
+    it('syncRunner: scope=runner なら本文を降ろす', async () => {
+      const stores = createMemoryStores();
+      const runner = fakeRunner();
+      const service = createProfileService({ stores, runners: registryOf([runner]) });
+      await stores.profile.write('export A=1\n', 'runner');
+
+      await service.syncRunner(runner);
+
+      expect(runner.received).toEqual(['export A=1\n']);
+    });
+  });
+
+  it('profileScopeAppliesTo: 未設定は all と同じ', () => {
+    expect(profileScopeAppliesTo(undefined, 'clone')).toBe(true);
+    expect(profileScopeAppliesTo(undefined, 'runner')).toBe(true);
+    expect(profileScopeAppliesTo('app', 'runner')).toBe(false);
+    expect(profileScopeAppliesTo('runner', 'clone')).toBe(false);
   });
 });

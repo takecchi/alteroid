@@ -3316,6 +3316,73 @@ describe('FsProfileStore', () => {
 });
 
 /**
+ * 実行環境プロファイルの撒く先（scope。2026-10-03）。fs は `profile.sh` を素のシェル
+ * スクリプトのまま保ち（`vi` で直せる約束）、撒く先は隣の `profile.sh.scope` に置く。
+ */
+describe('FsProfileStore の撒く先（scope）', () => {
+  const profilePath = () => join(root, 'profile.sh');
+  const scopePath = () => join(root, 'profile.sh.scope');
+
+  it('撒く先を往復できる。既定は all。profile.sh は本文そのままである', async () => {
+    await stores.profile.write('export A=1\n');
+    expect((await stores.profile.read())?.scope).toBe('all');
+
+    for (const scope of ['app', 'runner', 'all'] as const) {
+      await stores.profile.write('export A=1\n', scope);
+      expect((await stores.profile.read())?.scope).toBe(scope);
+      // 素のスクリプトのまま（先頭に印や JSON を足していない）。
+      expect(await readFile(profilePath(), 'utf8')).toBe('export A=1\n');
+    }
+  });
+
+  it('scope ファイルが無い（この欄が無かった頃に置かれた）プロファイルは all', async () => {
+    await writeFile(profilePath(), 'export OLD=1\n');
+    expect((await stores.profile.read())?.scope).toBe('all');
+  });
+
+  it('scope ファイルが壊れていても read は落ちず all として読み、次の write が直す', async () => {
+    await stores.profile.write('export A=1\n', 'runner');
+    await writeFile(scopePath(), 'runer\n');
+    expect((await stores.profile.read())?.scope).toBe('all');
+
+    await stores.profile.write('export A=1\n', 'runner');
+    expect((await stores.profile.read())?.scope).toBe('runner');
+  });
+
+  it('revert は撒く先も組で戻す', async () => {
+    await stores.profile.write('export WHICH=old\n', 'runner');
+    const before = await stores.profile.read();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await stores.profile.write('export WHICH=new\n', 'app');
+    expect((await stores.profile.read())?.scope).toBe('app');
+
+    await stores.profile.revert(before);
+
+    expect(await stores.profile.read()).toEqual(before);
+    expect((await stores.profile.read())?.scope).toBe('runner');
+  });
+
+  it('外す（空の write / clear / revert(null)）と撒く先のファイルも消え、次の既定は all', async () => {
+    for (const remove of [
+      () => stores.profile.write(''),
+      () => stores.profile.clear(),
+      () => stores.profile.revert(null),
+    ]) {
+      await stores.profile.write('export A=1\n', 'runner');
+      expect((await stat(scopePath())).isFile()).toBe(true);
+
+      await remove();
+
+      expect(await stores.profile.read()).toBeNull();
+      await expect(stat(scopePath())).rejects.toThrow();
+      await stores.profile.write('export B=1\n');
+      expect((await stores.profile.read())?.scope).toBe('all');
+    }
+  });
+});
+
+/**
  * 人間の MCP 連携の登録（#325 段1）。契約は3実装で同じ関数を通す
  * （`mcp-server-contract.ts`）。ここで足すのは fs だけが持つ形 —— 0600 と、
  * 手で書き換えられたファイルの読み方。

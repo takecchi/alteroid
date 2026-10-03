@@ -43,12 +43,14 @@ const STORED = {
   updatedAt: '2026-09-20T00:00:00.000Z',
   sha256: 'a'.repeat(12),
   bytes: 41,
+  scope: 'all',
 };
 
 const UPDATED = {
   updatedAt: '2026-09-24T00:00:00.000Z',
   sha256: 'b'.repeat(12),
   bytes: 20,
+  scope: 'all',
   clone: { ok: true, names: ['PATH'] },
   runners: [{ runnerId: 'runner-1', ok: false, error: 'runner に届かなかった' }],
 };
@@ -65,6 +67,7 @@ type PutReply = { status: number; body: unknown };
 function stubProfile(options: { get?: PutReply; put?: PutReply } = {}) {
   let stored: unknown = STORED;
   const puts: string[] = [];
+  const putScopes: (string | undefined)[] = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : null;
@@ -77,14 +80,21 @@ function stubProfile(options: { get?: PutReply; put?: PutReply } = {}) {
     if (method === 'PUT') {
       const body = (request !== null ? await request.json() : JSON.parse(String(init?.body))) as {
         script: string;
+        scope?: string;
       };
       puts.push(body.script);
+      putScopes.push(body.scope);
       const reply = options.put ?? { status: 200, body: UPDATED };
       if (reply.status === 200) {
         stored =
           body.script.length === 0
-            ? { script: '' }
-            : { script: body.script, updatedAt: UPDATED.updatedAt, sha256: UPDATED.sha256 };
+            ? { script: '', scope: 'all' }
+            : {
+                script: body.script,
+                scope: body.scope ?? 'all',
+                updatedAt: UPDATED.updatedAt,
+                sha256: UPDATED.sha256,
+              };
       }
       return json(reply.body, reply.status);
     }
@@ -92,7 +102,7 @@ function stubProfile(options: { get?: PutReply; put?: PutReply } = {}) {
     return json(reply.body, reply.status);
   }) as typeof fetch;
 
-  return { puts };
+  return { puts, putScopes };
 }
 
 function renderScreen() {
@@ -120,7 +130,7 @@ describe('/profile 画面 — 読む', () => {
   });
 
   it('置かれていなければ「置かれていない」と出し、表示・外すボタンを出さない', async () => {
-    stubProfile({ get: { status: 200, body: { script: '' } } });
+    stubProfile({ get: { status: 200, body: { script: '', scope: 'all' } } });
     renderScreen();
 
     expect(await screen.findByText('置かれていない')).toBeTruthy();
@@ -255,5 +265,76 @@ describe('/profile 画面 — 差し替える', () => {
 
     expect(await screen.findByText('プロファイルを外した。')).toBeTruthy();
     expect(puts).toEqual(['']);
+  });
+});
+
+/**
+ * 撒く先（scope。2026-10-03）。環境変数の画面（`env-vars.tsx`）と同じ3値・同じ言い方で、
+ * 既定は all（共通）。
+ */
+describe('/profile 画面 — 撒く先', () => {
+  it('いま置かれているものの撒く先を出す', async () => {
+    stubProfile({ get: { status: 200, body: { ...STORED, scope: 'runner' } } });
+    renderScreen();
+
+    expect(await screen.findByText('撒く先')).toBeTruthy();
+    expect(screen.getByText('manager')).toBeTruthy();
+  });
+
+  it('知らない撒く先でも落ちず、そのまま出す（サーバのほうが新しい窓が在る）', async () => {
+    stubProfile({ get: { status: 200, body: { ...STORED, scope: 'future-scope' } } });
+    renderScreen();
+
+    expect(await screen.findByText('未知の撒く先（future-scope）')).toBeTruthy();
+  });
+
+  it('編集欄の撒く先は、いまのものから始まる（既定 all）', async () => {
+    stubProfile();
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+
+    expect(screen.getByLabelText<HTMLSelectElement>('プロファイルの撒く先').value).toBe('all');
+  });
+
+  it('撒く先を選んで保存すると、その scope が PUT に載る（確認の文言も撒く先に従う）', async () => {
+    const { puts, putScopes } = stubProfile();
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    fireEvent.change(screen.getByLabelText('プロファイルの撒く先'), {
+      target: { value: 'runner' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    expect(screen.getByText(/マネージャー・作業者だけへ配る/)).toBeTruthy();
+    expect(puts).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: '本当に保存する' }));
+
+    expect(await screen.findByText(/プロファイルを更新した/)).toBeTruthy();
+    expect(putScopes).toEqual(['runner']);
+  });
+
+  it('本文を変えなくても、撒く先を変えれば保存できる（外れる側が出るので更新である）', async () => {
+    stubProfile();
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: '編集する' }));
+    expect(screen.getByRole('button', { name: '保存する' }).hasAttribute('disabled')).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('プロファイルの撒く先'), { target: { value: 'app' } });
+
+    expect(screen.getByRole('button', { name: '保存する' }).hasAttribute('disabled')).toBe(false);
+  });
+
+  it('「外す」は scope を送らない（空文字の PUT のまま）', async () => {
+    const { putScopes } = stubProfile();
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'プロファイルを外す' }));
+    fireEvent.click(screen.getByRole('button', { name: '本当に外す' }));
+
+    expect(await screen.findByText('プロファイルを外した。')).toBeTruthy();
+    expect(putScopes).toEqual([undefined]);
   });
 });

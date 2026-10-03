@@ -9360,7 +9360,8 @@ describe('実行環境プロファイル', () => {
   it('置いていなければ空を返す', async () => {
     const response = await app.request('/profile');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ script: '' });
+    // 撒く先（2026-10-03）が応答に足された。置かれていなければ既定の all。
+    expect(await response.json()).toEqual({ script: '', scope: 'all' });
   });
 
   it('置いたものを読み直せる（人間が自分で直せる）', async () => {
@@ -9431,6 +9432,89 @@ describe('実行環境プロファイル', () => {
     const body = (await response.json()) as { runners: { runnerId: string; ok: boolean }[] };
     expect(body.runners).toEqual([{ runnerId: 'runner-primary', ok: true }]);
     expect(runner.received).toEqual(['export OK=1\n']);
+  });
+
+  describe('撒く先（scope。2026-10-03）', () => {
+    function appWithRunner() {
+      const runner = fakeRunner('runner-primary');
+      const app = createApp({
+        clone: fake.clone,
+        stores,
+        token: 'test-token',
+        shutdown: () => undefined,
+        runners: registryOf([runner]),
+        profile: profileService(stores, { runners: [runner] }),
+      });
+      const put = (body: unknown) =>
+        app.request('/profile', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      return { app, runner, put };
+    }
+
+    it('PUT は scope を保存して応答に返し、GET も返す。省略は all', async () => {
+      const { app, put } = appWithRunner();
+
+      const defaulted = (await (await put({ script: 'export A=1' })).json()) as { scope: string };
+      expect(defaulted.scope).toBe('all');
+
+      const runnerOnly = await put({ script: 'export A=1', scope: 'runner' });
+      expect(runnerOnly.status).toBe(200);
+      expect(((await runnerOnly.json()) as { scope: string }).scope).toBe('runner');
+
+      const get = (await (await app.request('/profile')).json()) as { scope: string };
+      expect(get.scope).toBe('runner');
+    });
+
+    it('scope を省いた PUT は今の撒く先を保つ', async () => {
+      const { app, put } = appWithRunner();
+      await put({ script: 'export A=1', scope: 'app' });
+
+      const kept = (await (await put({ script: 'export A=2' })).json()) as { scope: string };
+
+      expect(kept.scope).toBe('app');
+      expect(((await (await app.request('/profile')).json()) as { scope: string }).scope).toBe(
+        'app',
+      );
+    });
+
+    it('scope=app では runner へ空が降りる。scope=runner では本文が降りる', async () => {
+      const { runner, put } = appWithRunner();
+
+      await put({ script: 'export A=1', scope: 'app' });
+      expect(runner.received).toEqual(['']);
+
+      runner.received.length = 0;
+      await put({ script: 'export A=1', scope: 'runner' });
+      expect(runner.received).toEqual(['export A=1\n']);
+    });
+
+    it('不正な scope は 400 で、何も保存しない（前のものが残る）', async () => {
+      const { app, runner, put } = appWithRunner();
+      await put({ script: 'export KEEP=1', scope: 'runner' });
+      runner.received.length = 0;
+
+      const bad = await put({ script: 'export NEW=1', scope: 'everyone' });
+
+      expect(bad.status).toBe(400);
+      expect(runner.received).toEqual([]);
+      const get = (await (await app.request('/profile')).json()) as {
+        script: string;
+        scope: string;
+      };
+      expect(get).toMatchObject({ script: 'export KEEP=1\n', scope: 'runner' });
+    });
+
+    it('外すと scope も all へ戻る', async () => {
+      const { app, put } = appWithRunner();
+      await put({ script: 'export A=1', scope: 'runner' });
+
+      await put({ script: '' });
+
+      expect(await (await app.request('/profile')).json()).toEqual({ script: '', scope: 'all' });
+    });
   });
 
   it('読めないものは保存も配布もしない（前のものが残る）', async () => {

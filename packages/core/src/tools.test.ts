@@ -1713,6 +1713,53 @@ describe('クローンの道具', () => {
   });
 
   /**
+   * 撒く先（scope。2026-10-03）。`profile_write` は人間の口（`PUT /profile`）と同じ
+   * `ProfileService.apply` を通るので、scope も同じ意味で通ること。
+   */
+  it('profile_write の scope=runner: 正本は本文を持ち、profile_read に撒く先が出る', async () => {
+    const h = harness();
+
+    const written = await h.call('profile_write', {
+      script: 'export ONLY_RUNNER=1',
+      summary: 'runner だけに要る',
+      scope: 'runner',
+    });
+
+    expect(written).toContain('撒く先 runner');
+    expect(await h.stores.profile.read()).toMatchObject({ scope: 'runner' });
+    // 配られた本文は runner 宛て（クローンが読む正本とは別に、runner へ降りた）。
+    expect(h.distributed).toHaveLength(1);
+    expect(h.distributed[0]).toContain('ONLY_RUNNER');
+    // クローンは読む口を失わない（scope が runner でも本文は読める）。
+    const body = await h.call('profile_read', {});
+    expect(body).toContain('撒く先 runner');
+    expect(body).toContain('export ONLY_RUNNER=1');
+  });
+
+  it('profile_write の scope=app: runner へは本文が降りない（空が降りる）', async () => {
+    const h = harness();
+
+    await h.call('profile_write', {
+      script: 'export ONLY_APP=1',
+      summary: 'クローンだけ',
+      scope: 'app',
+    });
+
+    expect(h.distributed).toEqual(['']);
+  });
+
+  it('profile_write は scope を省くと今の撒く先を保つ（無ければ all）', async () => {
+    const h = harness();
+    await h.call('profile_write', { script: 'export A=1', summary: 'A' });
+    expect((await h.stores.profile.read())?.scope).toBe('all');
+
+    await h.call('profile_write', { script: 'export A=1', summary: 'A', scope: 'runner' });
+    await h.call('profile_write', { script: 'export A=2', summary: 'A2' });
+
+    expect((await h.stores.profile.read())?.scope).toBe('runner');
+  });
+
+  /**
    * issue #2429。`profile_write` の戻りはクローンの文脈に入る。評価の失敗の文は
    * シェルの stderr（構文エラーは入力の行を引用し、`set -x` は値ごと吐く）を含むので、
    * 伏せずに戻すと鍵の値がクローンの文脈へ入る。偽の値だけを使い、実物の /bin/sh に吐かせる。

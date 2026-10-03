@@ -375,7 +375,7 @@ railway variable list --service runner --json | python3 -c "import json,sys; [pr
 
 - **どちらも置かなければ何もしない。** ファイル系は基底と同じである（CI の `image` が確かめている）。ただし層が1枚あるので image の digest は基底と違う
 - **root で走るのはビルド時だけ。** 実行時にマネージャーと作業者が走る uid 1001（worker）の境界は変わらない。入れた道具は uid 1001 から読める・実行できる場所（`/usr`、`/opt` など。必要なら `chmod -R a+rX`）に置くこと
-- **`PATH` などの環境は、ここではなく実行環境プロファイル（`alteroid profile edit`）に書く。** 道具はこの層、環境はプロファイル、という分担である
+- **`PATH` などの環境は、ここではなく実行環境プロファイル（`alteroid profile set --scope runner`）に書く。** 道具はこの層、環境はプロファイル、という分担である。`--scope runner` にするのは、runner に入れた道具の環境をクローン（app）へ届かせないため（既定は `all` で両方へ届く）
 - **秘密を置かないこと。** build arg の値は `docker history` に残る
 - **置くのは runner の Service だけ。** app（デーモン）には要らない
 
@@ -388,12 +388,16 @@ ALTEROID_EXTRA_APT_PACKAGES=build-essential pkg-config libwebkit2gtk-4.1-dev
 ALTEROID_EXTRA_SETUP=export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo; curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.95.0; chmod -R a+rX /opt/rust
 ```
 
-プロファイルには次を足す（`CARGO_HOME` は既定の `~/.cargo` のままにする。uid 1001 が書ける場所に置くため）:
+プロファイルには次を足す（`CARGO_HOME` は既定の `~/.cargo` のままにする。uid 1001 が書ける場所に置くため）。**撒く先は `runner` にする** — Rust は runner の image にしか入っていないので、クローン（app）には要らない。**`alteroid profile edit` は使わない**（本番の image には vi が無く `$EDITOR` も無いので 127 で落ちる。2026-10-03 の実測）。標準入力から `set` で置く:
 
 ```sh
+alteroid profile set --scope runner <<'EOF'
 export RUSTUP_HOME=/opt/rust/rustup
 export PATH=/opt/rust/cargo/bin:$PATH
+EOF
 ```
+
+**`set` は全文置換である。** すでにプロファイルを置いているなら、先に `alteroid profile show` で今の本文を取り、その続きに足した全文を渡すこと。`--scope` を省くと今の撒く先を保つ（置かれていなければ `all`）。撒く先は `alteroid profile status` で確かめる。
 
 ### 4. デプロイ
 
