@@ -9360,8 +9360,8 @@ describe('実行環境プロファイル', () => {
   it('置いていなければ空を返す', async () => {
     const response = await app.request('/profile');
     expect(response.status).toBe(200);
-    // 撒く先（2026-10-03）が応答に足された。置かれていなければ既定の all。
-    expect(await response.json()).toEqual({ script: '', scope: 'all' });
+    // 2026-10-03: 名前付きの行になった。行・合成後の指紋が足され、旧来の `script` は空文字のまま残る。
+    expect(await response.json()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
   });
 
   it('置いたものを読み直せる（人間が自分で直せる）', async () => {
@@ -9434,7 +9434,12 @@ describe('実行環境プロファイル', () => {
     expect(runner.received).toEqual(['export OK=1\n']);
   });
 
-  describe('撒く先（scope。2026-10-03）', () => {
+  /**
+   * 名前付きの行と撒く先（2026-10-03。オーナーの決定: DB の行ごとに設定できる・行ごとに
+   * 撒く先〈all/app/runner、既定 all〉・つなげる順番は名前の辞書順）。`PUT /profile`
+   * （全部差し替え）は互換のために残してある。
+   */
+  describe('行ごとの口（PUT・DELETE /profile/:name）', () => {
     function appWithRunner() {
       const runner = fakeRunner('runner-primary');
       const app = createApp({
@@ -9445,75 +9450,151 @@ describe('実行環境プロファイル', () => {
         runners: registryOf([runner]),
         profile: profileService(stores, { runners: [runner] }),
       });
-      const put = (body: unknown) =>
-        app.request('/profile', {
+      const put = (name: string, body: unknown) =>
+        app.request(`/profile/${name}`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
         });
-      return { app, runner, put };
+      const remove = (name: string) => app.request(`/profile/${name}`, { method: 'DELETE' });
+      const get = async () =>
+        (await (await app.request('/profile')).json()) as {
+          entries: { name: string; script: string; scope: string }[];
+          clone: { sha256?: string };
+          runner: { sha256?: string };
+          script: string;
+          sha256?: string;
+        };
+      return { app, runner, put, remove, get };
     }
 
-    it('PUT は scope を保存して応答に返し、GET も返す。省略は all', async () => {
-      const { app, put } = appWithRunner();
+    it('行を置いて GET で読み直せる。撒く先を保存し、省略は all。応答に本文は載らない', async () => {
+      const { put, get } = appWithRunner();
 
-      const defaulted = (await (await put({ script: 'export A=1' })).json()) as { scope: string };
-      expect(defaulted.scope).toBe('all');
+      const defaulted = await put('base', { script: 'export BASE_SECRET_2690=1' });
+      expect(defaulted.status).toBe(200);
+      const body = await defaulted.json();
+      // 更新の応答は本文を往復させない（値は送った本人が持っている）。
+      expect(JSON.stringify(body)).not.toContain('BASE_SECRET_2690');
+      expect(body.entries).toMatchObject([{ name: 'base', scope: 'all' }]);
 
-      const runnerOnly = await put({ script: 'export A=1', scope: 'runner' });
-      expect(runnerOnly.status).toBe(200);
-      expect(((await runnerOnly.json()) as { scope: string }).scope).toBe('runner');
+      await put('rust', { script: 'export RUST=1', scope: 'runner' });
 
-      const get = (await (await app.request('/profile')).json()) as { scope: string };
-      expect(get.scope).toBe('runner');
+      const read = await get();
+      expect(read.entries.map((e) => [e.name, e.scope])).toEqual([
+        ['base', 'all'],
+        ['rust', 'runner'],
+      ]);
+      // 互換の旧欄: 全行を名前の順につないだもの。
+      expect(read.script).toBe('export BASE_SECRET_2690=1\n\nexport RUST=1\n');
     });
 
-    it('scope を省いた PUT は今の撒く先を保つ', async () => {
-      const { app, put } = appWithRunner();
-      await put({ script: 'export A=1', scope: 'app' });
+    it('scope を省いた PUT は既存の行の撒く先を保つ', async () => {
+      const { put, get } = appWithRunner();
+      await put('a', { script: 'export A=1', scope: 'app' });
 
-      const kept = (await (await put({ script: 'export A=2' })).json()) as { scope: string };
+      await put('a', { script: 'export A=2' });
 
-      expect(kept.scope).toBe('app');
-      expect(((await (await app.request('/profile')).json()) as { scope: string }).scope).toBe(
-        'app',
-      );
+      expect((await get()).entries).toMatchObject([
+        { name: 'a', scope: 'app', script: 'export A=2\n' },
+      ]);
     });
 
-    it('scope=app では runner へ空が降りる。scope=runner では本文が降りる', async () => {
-      const { runner, put } = appWithRunner();
+    it('runner へは、runner に掛かる行を名前の順につないだものが降りる。掛かる行が0なら空', async () => {
+      const { runner, put, remove } = appWithRunner();
 
-      await put({ script: 'export A=1', scope: 'app' });
-      expect(runner.received).toEqual(['']);
+      await put('b', { script: 'export B=1', scope: 'all' });
+      await put('a', { script: 'export A=1', scope: 'runner' });
+      await put('c', { script: 'export C=1', scope: 'app' });
+      expect(runner.received.at(-1)).toBe('export A=1\n\nexport B=1\n');
 
+      await remove('a');
+      await remove('b');
+      // 残るのは app 専用の c だけ → runner へは空（外す）。
+      expect(runner.received.at(-1)).toBe('');
+    });
+
+    it('GET は clone 用・runner 用の合成後の指紋を返す（掛かる行が無い側は欠ける）', async () => {
+      const { put, get } = appWithRunner();
+
+      await put('only-runner', { script: 'export R=1', scope: 'runner' });
+
+      const read = await get();
+      expect(read.clone.sha256).toBeUndefined();
+      expect(read.runner.sha256).toBeDefined();
+    });
+
+    it('不正な scope・名前・本文は 400 で、何も保存しない（前のものが残る）', async () => {
+      const { runner, put, get } = appWithRunner();
+      await put('keep', { script: 'export KEEP=1', scope: 'runner' });
       runner.received.length = 0;
-      await put({ script: 'export A=1', scope: 'runner' });
-      expect(runner.received).toEqual(['export A=1\n']);
-    });
 
-    it('不正な scope は 400 で、何も保存しない（前のものが残る）', async () => {
-      const { app, runner, put } = appWithRunner();
-      await put({ script: 'export KEEP=1', scope: 'runner' });
-      runner.received.length = 0;
+      expect((await put('keep', { script: 'export NEW=1', scope: 'everyone' })).status).toBe(400);
+      expect((await put('-dash', { script: 'export A=1' })).status).toBe(400);
+      expect((await put('.hidden', { script: 'export A=1' })).status).toBe(400);
+      expect((await put('blank', { script: '  \n' })).status).toBe(400);
+      expect((await put('x'.repeat(65), { script: 'export A=1' })).status).toBe(400);
 
-      const bad = await put({ script: 'export NEW=1', scope: 'everyone' });
-
-      expect(bad.status).toBe(400);
       expect(runner.received).toEqual([]);
-      const get = (await (await app.request('/profile')).json()) as {
-        script: string;
-        scope: string;
-      };
-      expect(get).toMatchObject({ script: 'export KEEP=1\n', scope: 'runner' });
+      expect((await get()).entries).toMatchObject([{ name: 'keep', script: 'export KEEP=1\n' }]);
     });
 
-    it('外すと scope も all へ戻る', async () => {
-      const { app, put } = appWithRunner();
-      await put({ script: 'export A=1', scope: 'runner' });
+    it('大文字小文字だけが違う名前の行は 400 で置けない（大文字小文字を区別しない FS での衝突を防ぐ）', async () => {
+      const { put, get } = appWithRunner();
+      await put('Rust', { script: 'export A=1' });
 
-      await put({ script: '' });
+      const clash = await put('rust', { script: 'export B=1' });
 
-      expect(await (await app.request('/profile')).json()).toEqual({ script: '', scope: 'all' });
+      expect(clash.status).toBe(400);
+      expect((await clash.json()) as { detail: string }).toMatchObject({
+        detail: expect.stringContaining('大文字小文字'),
+      });
+      expect((await get()).entries.map((e) => e.name)).toEqual(['Rust']);
+    });
+
+    it('DELETE は1行だけを外す。無い名前は 404（何も変えない）', async () => {
+      const { put, remove, get } = appWithRunner();
+      await put('a', { script: 'export A=1' });
+      await put('b', { script: 'export B=1' });
+
+      expect((await remove('a')).status).toBe(200);
+      expect((await remove('zzz')).status).toBe(404);
+
+      expect((await get()).entries.map((e) => e.name)).toEqual(['b']);
+    });
+
+    it('旧来の PUT /profile {script} は全行を default 1行（all）に置き換える。空なら全部外す', async () => {
+      const { app, put, get } = appWithRunner();
+      await put('a', { script: 'export A=1', scope: 'runner' });
+      await put('b', { script: 'export B=1', scope: 'app' });
+
+      const whole = await app.request('/profile', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script: 'export WHOLE=1' }),
+      });
+      expect(whole.status).toBe(200);
+      expect((await get()).entries).toMatchObject([
+        { name: 'default', script: 'export WHOLE=1\n', scope: 'all' },
+      ]);
+
+      await app.request('/profile', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ script: '' }),
+      });
+      expect(await get()).toEqual({ entries: [], clone: {}, runner: {}, script: '' });
+    });
+
+    it('日誌には行の名前・撒く先の影響・配布の成否が残り、本文は1文字も書かない', async () => {
+      const { put } = appWithRunner();
+
+      await put('rust', { script: 'export JOURNAL_SECRET_2690=1', scope: 'runner' });
+
+      const all = JSON.stringify(await stores.journal.list({ types: ['decision'] }));
+      expect(all).toContain('行 rust');
+      expect(all).toContain('runner-primary=ok');
+      expect(all).not.toContain('JOURNAL_SECRET_2690');
     });
   });
 
@@ -9527,7 +9608,7 @@ describe('実行環境プロファイル', () => {
       runners: registryOf([runner]),
       profile: profileService(stores, { rejects: '壊れている', runners: [runner] }),
     });
-    await stores.profile.write('export GOOD=1');
+    await stores.profile.set('default', 'export GOOD=1', 'all');
 
     const response = await withProfile.request('/profile', {
       method: 'PUT',
@@ -9537,7 +9618,7 @@ describe('実行環境プロファイル', () => {
 
     expect(response.status).toBe(400);
     // 保存されていない ＝ 器を作り直しても、前の効くプロファイルが戻る
-    expect((await stores.profile.read())?.script).toBe('export GOOD=1');
+    expect((await stores.profile.list())[0]?.script).toBe('export GOOD=1');
     // 降ろしてもいない
     expect(runner.received).toEqual([]);
   });
@@ -9663,7 +9744,7 @@ describe('実行環境プロファイル', () => {
     });
     expect(response.status).toBe(400);
     // 保存していない——前のもの（無い）が残る。
-    expect(await stores.profile.read()).toBeNull();
+    expect(await stores.profile.list()).toEqual([]);
 
     const decisions = (await stores.journal.list({ types: ['decision'] }))
       .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
@@ -9685,7 +9766,7 @@ describe('実行環境プロファイル', () => {
       ...stores,
       profile: {
         ...stores.profile,
-        write: () => {
+        set: () => {
           throw new Error('profile store unavailable (test)');
         },
       },
@@ -9704,7 +9785,7 @@ describe('実行環境プロファイル', () => {
       body: JSON.stringify({ script: 'export OK=1' }),
     });
     expect(response.status).toBe(500);
-    expect(await stores.profile.read()).toBeNull();
+    expect(await stores.profile.list()).toEqual([]);
 
     const decisions = (await stores.journal.list({ types: ['decision'] }))
       .flatMap((entry) => (entry.type === 'decision' ? [entry.decision] : []))
@@ -9729,7 +9810,7 @@ describe('実行環境プロファイル', () => {
       ...stores,
       profile: {
         ...stores.profile,
-        revert: () => {
+        replaceAll: () => {
           throw new Error('記憶ストアも落ちている（test）');
         },
       },
@@ -9818,7 +9899,7 @@ describe('実行環境プロファイル', () => {
 
     // 日誌が先に落ちたので、`deps.profile.apply` そのものが呼ばれていない
     // ——正本には書かれておらず、runner へも配られていない。
-    expect(await stores.profile.read()).toBeNull();
+    expect(await stores.profile.list()).toEqual([]);
     expect(runner.received).toEqual([]);
     // **`appendJournalOrDrop` は通らない**（打ち消しの行を書く前段——先書き
     // ——で落ちたので、そこにも進んでいない）。

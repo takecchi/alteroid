@@ -1691,6 +1691,12 @@ export const profileEntrySchema = z.object({
 });
 
 /**
+ * 更新の応答に載せる1行（**本文は載せない**）。値は送った本人が持っている。応答に載せる
+ * 理由が無い口で、鍵を往復させない（`GET /profile` だけが本文を返す）。
+ */
+export const profileEntrySummarySchema = profileEntrySchema.omit({ script: true });
+
+/**
  * 人間が置いたプロファイル（**名前付きの行の集まり**。2026-10-03）。
  *
  * **本文を返す。** ここは実行環境の持ち主だけが通る口である。**⚠️ `/access` とは
@@ -1761,8 +1767,8 @@ export const profileUpdateRequestSchema = z.object({
  */
 export const profileUpdateResponseSchema = z.object({
   updatedAt: z.string(),
-  /** 操作の後の全行（本文つき。名前のコード単位順）。 */
-  entries: z.array(profileEntrySchema),
+  /** 操作の後の全行（**本文は載せない**。名前のコード単位順）。 */
+  entries: z.array(profileEntrySummarySchema),
   /** 操作の後の、クローン用・runner 用の合成後の指紋。 */
   composed: z.object({
     clone: profileComposedFingerprintSchema,

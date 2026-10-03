@@ -51,6 +51,8 @@ const {
   profileSetCommand,
   profileClearCommand,
   profileEditCommand,
+  profileListCommand,
+  profileRemoveCommand,
 } = await import('./profile.js');
 
 interface Reply {
@@ -95,9 +97,39 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** `GET /profile` の応答の1行（本文つき）。 */
+function entryOf(
+  name: string,
+  script: string,
+  scope: 'all' | 'app' | 'runner' = 'all',
+  extra: { bytes?: number; sha256?: string; updatedAt?: string } = {},
+) {
+  return {
+    name,
+    script,
+    scope,
+    updatedAt: extra.updatedAt ?? '2026-08-01T00:00:00Z',
+    sha256: extra.sha256 ?? 'abc123',
+    bytes: extra.bytes ?? Buffer.byteLength(script),
+  };
+}
+
+/** `GET /profile` の応答（行と、合成後の指紋）。 */
+function profileBody(
+  entries: ReturnType<typeof entryOf>[],
+  composed: { clone?: string; runner?: string } = {},
+) {
+  return {
+    entries,
+    clone: composed.clone === undefined ? {} : { sha256: composed.clone, bytes: 10 },
+    runner: composed.runner === undefined ? {} : { sha256: composed.runner, bytes: 10 },
+    script: entries.map((e) => e.script).join('\n'),
+  };
+}
+
 describe('alteroid profile show', () => {
   it('置かれていなければ、無いことと置き方を言う', async () => {
-    setReply('GET', '/profile', { status: 200, body: { script: '' } });
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
     const read = captureStdout();
 
     await profileShowCommand();
@@ -107,107 +139,342 @@ describe('alteroid profile show', () => {
     expect(text).toContain('置くには: alteroid profile edit');
   });
 
-  it('置かれていれば、本文をそのまま出す（末尾に改行が無ければ1つ足す）', async () => {
-    setReply('GET', '/profile', { status: 200, body: { script: 'export FOO=bar' } });
+  it('名前を省くと default の本文を、そのまま出す（末尾に改行が無ければ1つ足す）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar'), entryOf('rust', 'export R=1')]),
+    });
     const read = captureStdout();
 
     await profileShowCommand();
 
     expect(read()).toBe('export FOO=bar\n');
   });
+
+  it('名前を渡すとその行の本文だけを出す（標準出力は本文だけ。パイプで set へ戻せる）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar'), entryOf('rust', 'export R=1\n')]),
+    });
+    const read = captureStdout();
+
+    await profileShowCommand('rust');
+
+    expect(read()).toBe('export R=1\n');
+  });
+
+  it('無い名前は、一覧の取り方を案内して落ちる', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar')]),
+    });
+    captureStdout();
+
+    await expect(profileShowCommand('nope')).rejects.toThrow('行 nope は無い');
+  });
+
+  it('不正な名前は、通信の前に落ちる', async () => {
+    captureStdout();
+
+    await expect(profileShowCommand('../etc')).rejects.toThrow('行の名前の形が不正');
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('alteroid profile list', () => {
+  it('名前・撒く先・バイト数・更新時刻を並べる。本文は出さない', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([
+        entryOf('base', 'export SECRET_BASE=1', 'all', { bytes: 20 }),
+        entryOf('rust', 'export SECRET_RUST=1', 'runner', { bytes: 21 }),
+      ]),
+    });
+    const read = captureStdout();
+
+    await profileListCommand();
+
+    const text = read();
+    expect(text).toContain('base  all（共通）  20 バイト  更新 2026-08-01T00:00:00Z');
+    expect(text).toContain('rust  runner（manager だけ）  21 バイト  更新 2026-08-01T00:00:00Z');
+    expect(text).not.toContain('SECRET_');
+  });
+
+  it('置かれていなければ、無いことを言う', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    const read = captureStdout();
+
+    await profileListCommand();
+
+    expect(read()).toContain('プロファイルは置かれていません。');
+  });
 });
 
 describe('alteroid profile status', () => {
-  it('バイト数・sha256・更新日時と、各 runner の届き具合を並べる', async () => {
+  const runnersBody = (profile: unknown) => ({
+    status: 200,
+    body: {
+      runners: [
+        {
+          label: 'https://runner-a.internal',
+          state: 'connected',
+          runnerId: 'runner-a',
+          profile,
+        },
+        {
+          label: 'https://runner-b.internal',
+          state: 'connecting',
+          // runnerId 無し＝繋がるまで分からない状態。宛先（label）で言う。
+          profile: undefined,
+        },
+      ],
+    },
+  });
+
+  it('行の一覧・撒く先・合成後の指紋と、各 runner の届き具合（runner 用の合成と一致するか）を並べる', async () => {
     setReply('GET', '/profile', {
       status: 200,
-      body: {
-        script: 'export FOO=bar',
-        bytes: 12,
-        sha256: 'abc123',
-        updatedAt: '2026-08-01T00:00:00Z',
-      },
-    });
-    setReply('GET', '/runners', {
-      status: 200,
-      body: {
-        runners: [
-          {
-            label: 'https://runner-a.internal',
-            state: 'connected',
-            runnerId: 'runner-a',
-            profile: { sha256: 'abc123', updatedAt: '2026-08-01T00:00:00Z' },
-          },
-          {
-            label: 'https://runner-b.internal',
-            state: 'connecting',
-            // runnerId 無し＝繋がるまで分からない状態。宛先（label）で言う。
-            profile: undefined,
-          },
+      body: profileBody(
+        [
+          entryOf('base', 'export FOO=bar', 'all', { bytes: 12, sha256: 'row111' }),
+          entryOf('rust', 'export R=1', 'runner', { bytes: 10, sha256: 'row222' }),
         ],
-      },
+        { clone: 'cloneSha', runner: 'abc123' },
+      ),
     });
+    setReply(
+      'GET',
+      '/runners',
+      runnersBody({ sha256: 'abc123', updatedAt: '2026-08-01T00:00:00Z' }),
+    );
     const read = captureStdout();
 
     await profileStatusCommand();
 
     const text = read();
-    expect(text).toContain('プロファイル: 12 バイト (sha256 abc123 / 更新 2026-08-01T00:00:00Z)');
-    expect(text).toContain('  runner-a: sha256 abc123 (2026-08-01T00:00:00Z)');
+    expect(text).toContain('プロファイル: 2 行');
+    expect(text).toContain(
+      'base  all（共通）  12 バイト  更新 2026-08-01T00:00:00Z (sha256 row111)',
+    );
+    expect(text).toContain('rust  runner（manager だけ）  10 バイト');
+    expect(text).toContain('クローン用（合成後）: 10 バイト (sha256 cloneSha)');
+    expect(text).toContain('runner 用（合成後）: 10 バイト (sha256 abc123)');
+    expect(text).toContain(
+      '  runner-a: sha256 abc123 (2026-08-01T00:00:00Z)（runner 用の合成と一致）',
+    );
     expect(text).toContain('  https://runner-b.internal: プロファイル無し（connecting）');
+  });
+
+  it('runner に載っている指紋が runner 用の合成と違えば、食い違うと言う', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('base', 'export FOO=bar')], { clone: 'c', runner: 'expected1' }),
+    });
+    setReply('GET', '/runners', runnersBody({ sha256: 'stale999', updatedAt: 'T' }));
+    const read = captureStdout();
+
+    await profileStatusCommand();
+
+    expect(read()).toContain('runner 用の合成 expected1 と食い違う');
+  });
+
+  it('runner に掛かる行が0（app だけ）で何も載っていないのは、食い違いではなく正しい状態として出す', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('a', 'export A=1', 'app')], { clone: 'c' }),
+    });
+    setReply('GET', '/runners', runnersBody(undefined));
+    const read = captureStdout();
+
+    await profileStatusCommand();
+
+    const text = read();
+    expect(text).toContain('app（clone だけ）');
+    expect(text).toContain('runner 用（合成後）: 掛かる行なし');
+    expect(text).toContain(
+      '  runner-a: プロファイル無し（runner に掛かる行が無いので、載っていないのが正しい。connected）',
+    );
+  });
+
+  it('runner に掛かる行が0なのに runner に載っているなら、外しの降ろしが済んでいないと言う', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('a', 'export A=1', 'app')], { clone: 'c' }),
+    });
+    setReply('GET', '/runners', runnersBody({ sha256: 'old', updatedAt: 'T' }));
+    const read = captureStdout();
+
+    await profileStatusCommand();
+
+    expect(read()).toContain('外しの降ろしが済んでいない');
+  });
+
+  it('runner に掛かる行が在るのに載っていなければ、今までどおり「プロファイル無し」だけ', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('a', 'export A=1', 'runner')], { runner: 'r' }),
+    });
+    setReply('GET', '/runners', runnersBody(undefined));
+    const read = captureStdout();
+
+    await profileStatusCommand();
+
+    const text = read();
+    expect(text).toContain('  runner-a: プロファイル無し（connected）\n');
+    expect(text).not.toContain('正しい');
+  });
+
+  it('置かれていなければ、そう言う', async () => {
+    setReply('GET', '/profile', { status: 200, body: profileBody([]) });
+    setReply('GET', '/runners', { status: 200, body: { runners: [] } });
+    const read = captureStdout();
+
+    await profileStatusCommand();
+
+    expect(read()).toContain('プロファイル: 置かれていません');
   });
 });
 
+/** `PUT` / `DELETE /profile/:name` の成功応答。 */
+function updateBody(
+  entries: { name: string; scope: 'all' | 'app' | 'runner'; sha256?: string }[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    updatedAt: '2026-10-03T00:00:00Z',
+    entries: entries.map((e) => ({
+      name: e.name,
+      scope: e.scope,
+      updatedAt: '2026-10-03T00:00:00Z',
+      sha256: e.sha256 ?? 'def456',
+      bytes: 15,
+    })),
+    composed: { clone: { sha256: 'cc11' }, runner: { sha256: 'rr22' } },
+    clone: { ok: true, names: ['GH_TOKEN'] },
+    runners: [{ runnerId: 'runner-a', ok: false, error: 'timeout', output: 'line1\nline2' }],
+    ...overrides,
+  };
+}
+
 describe('alteroid profile set', () => {
-  it('ファイルの内容を PUT し、成功・失敗それぞれの反映結果と gh/git の案内を出す', async () => {
-    setReply('PUT', '/profile', {
+  it('ファイルの内容で1行を PUT し、成功・失敗それぞれの反映結果と gh/git の案内を出す', async () => {
+    setReply('PUT', '/profile/default', {
       status: 200,
-      body: {
-        updatedAt: '2026-08-24T00:00:00Z',
-        sha256: 'def456',
-        bytes: 15,
-        clone: { ok: true, names: ['GH_TOKEN'] },
-        runners: [{ runnerId: 'runner-a', ok: false, error: 'timeout', output: 'line1\nline2' }],
-      },
+      body: updateBody([{ name: 'default', scope: 'all' }]),
     });
     const dir = await makeTempDir('alteroid-profile-set-');
     const path = join(dir, 'profile.sh');
     await writeFile(path, 'export FOO=bar\n', 'utf8');
     const read = captureStdout();
 
-    await profileSetCommand({ file: path });
+    await profileSetCommand(undefined, { file: path });
 
     const text = read();
-    expect(text).toContain('プロファイルを更新しました (sha256 def456)');
+    expect(text).toContain('プロファイルの行 default を更新しました (sha256 def456)');
+    expect(text).toContain('  撒く先: all（共通）');
+    expect(text).toContain('  合成後の指紋: クローン用 cc11 / runner 用 rr22');
     expect(text).toContain('  クローン: 反映しました（GH_TOKEN）');
     expect(text).toContain('  runner-a: 反映できませんでした — timeout');
     expect(text).toContain('    | line1');
     expect(text).toContain('    | line2');
-    // 中身が空でないので、走行中の仕事にどこまで届くかの案内も出る。
     expect(text).toContain('これから起こす仕事には即座に効きます');
+  });
+
+  it('名前と --scope を PUT /profile/:name へ送る。--scope を省くと scope を送らない', async () => {
+    setReply('PUT', '/profile/rust', {
+      status: 200,
+      body: updateBody([{ name: 'rust', scope: 'runner' }]),
+    });
+    const dir = await makeTempDir('alteroid-profile-set-');
+    const path = join(dir, 'p.sh');
+    await writeFile(path, 'export RUST=1\n', 'utf8');
+    const read = captureStdout();
+
+    await profileSetCommand('rust', { file: path, scope: 'runner' });
+    await profileSetCommand('rust', { file: path });
+
+    const puts = sent.filter((entry) => entry.method === 'PUT');
+    expect(puts.map((entry) => new URL(entry.url).pathname)).toEqual([
+      '/profile/rust',
+      '/profile/rust',
+    ]);
+    expect(JSON.parse(String(puts[0]?.body))).toEqual({
+      script: 'export RUST=1\n',
+      scope: 'runner',
+    });
+    expect(JSON.parse(String(puts[1]?.body))).toEqual({ script: 'export RUST=1\n' });
+    expect(read()).toContain('撒く先: runner（manager だけ）');
+  });
+
+  it('不正な --scope・名前・空の本文は PUT する前に落ちる', async () => {
+    captureStdout();
+    const dir = await makeTempDir('alteroid-profile-set-');
+    const path = join(dir, 'p.sh');
+    await writeFile(path, 'export A=1\n', 'utf8');
+    const empty = join(dir, 'empty.sh');
+    await writeFile(empty, '  \n', 'utf8');
+
+    await expect(profileSetCommand('a', { file: path, scope: 'everyone' })).rejects.toThrow(
+      '--scope は all / app / runner のいずれかである（渡されたのは everyone）',
+    );
+    await expect(profileSetCommand('bad name', { file: path })).rejects.toThrow(
+      '行の名前の形が不正',
+    );
+    await expect(profileSetCommand('a', { file: empty })).rejects.toThrow(
+      '本文が空では行を置けない',
+    );
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('alteroid profile rm', () => {
+  it('1行を DELETE する。外した事実と反映結果を言う', async () => {
+    setReply('DELETE', '/profile/rust', { status: 200, body: updateBody([]) });
+    const read = captureStdout();
+
+    await profileRemoveCommand('rust');
+
+    const text = read();
+    expect(text).toContain('プロファイルの行 rust を外しました。');
+    expect(text).toContain('  クローン: 反映しました（GH_TOKEN）');
+    expect(sent.map((entry) => `${entry.method} ${new URL(entry.url).pathname}`)).toEqual([
+      'DELETE /profile/rust',
+    ]);
+  });
+
+  it('不正な名前は通信の前に落ちる', async () => {
+    captureStdout();
+    await expect(profileRemoveCommand('../x')).rejects.toThrow('行の名前の形が不正');
+    expect(sent).toEqual([]);
   });
 });
 
 describe('alteroid profile clear', () => {
-  it('外した事実だけを言い、gh/git の案内は出さない（中身が空だから）', async () => {
+  it('全行を外す（旧来の全文置換の口へ空を1回）。gh/git の案内は出さない', async () => {
     setReply('PUT', '/profile', {
       status: 200,
-      body: { updatedAt: '2026-08-24T00:00:00Z', clone: { ok: true }, runners: [] },
+      body: updateBody([], { clone: { ok: true }, runners: [] }),
     });
     const read = captureStdout();
 
     await profileClearCommand();
 
     const text = read();
-    expect(text).toContain('プロファイルを外しました。');
+    expect(text).toContain('プロファイルを全部外しました。');
     expect(text).toContain('  クローン: 反映しました\n');
     expect(text).not.toContain('これから起こす仕事には即座に効きます');
+    const put = sent.find((entry) => entry.method === 'PUT');
+    expect(new URL(put?.url ?? 'http://x/').pathname).toBe('/profile');
+    expect(JSON.parse(String(put?.body))).toEqual({ script: '' });
   });
 });
 
 describe('alteroid profile edit', () => {
-  it('$EDITOR で開いても中身を変えなければ「変更はありません」と言って PUT しない', async () => {
-    setReply('GET', '/profile', { status: 200, body: { script: 'export FOO=bar\n' } });
+  it('$EDITOR で開いても中身も撒く先も変えなければ「変更はありません」と言って PUT しない', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('default', 'export FOO=bar\n')]),
+    });
     const read = captureStdout();
 
     await profileEditCommand();
@@ -215,6 +482,45 @@ describe('alteroid profile edit', () => {
     expect(read()).toBe('変更はありません。\n');
     // PUT を1件も打っていない（変更が無ければ反映もしない）。
     expect(sent.some((s) => s.method === 'PUT')).toBe(false);
+  });
+
+  it('撒く先だけを変えるなら、本文が同じでも PUT する（外れる側が出るので更新である）', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('rust', 'export FOO=bar\n', 'all')]),
+    });
+    setReply('PUT', '/profile/rust', {
+      status: 200,
+      body: updateBody([{ name: 'rust', scope: 'runner' }]),
+    });
+    captureStdout();
+
+    await profileEditCommand('rust', { scope: 'runner' });
+
+    const put = sent.find((entry) => entry.method === 'PUT');
+    expect(new URL(put?.url ?? 'http://x/').pathname).toBe('/profile/rust');
+    expect(JSON.parse(String(put?.body))).toEqual({ script: 'export FOO=bar\n', scope: 'runner' });
+  });
+
+  it('撒く先が今と同じで本文も同じなら PUT しない', async () => {
+    setReply('GET', '/profile', {
+      status: 200,
+      body: profileBody([entryOf('rust', 'export FOO=bar\n', 'runner')]),
+    });
+    const read = captureStdout();
+
+    await profileEditCommand('rust', { scope: 'runner' });
+
+    expect(read()).toBe('変更はありません。\n');
+    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
+  });
+
+  it('不正な --scope・名前は通信の前に落ちる', async () => {
+    captureStdout();
+
+    await expect(profileEditCommand('rust', { scope: 'everyone' })).rejects.toThrow('--scope は');
+    await expect(profileEditCommand('../x')).rejects.toThrow('行の名前の形が不正');
+    expect(sent).toEqual([]);
   });
 });
 
@@ -344,170 +650,5 @@ describe('失敗の応答（error / detail）を画面に出す前に伏せる',
       '形が不正\n形が不正な項目: script',
     );
     expect(await failWith({ error: 'だけ' })).toBe('だけ');
-  });
-});
-
-/**
- * 撒く先（scope。2026-10-03）。環境変数（`alteroid credential set --scope`）と同じ3値。
- */
-describe('撒く先（--scope）', () => {
-  const putBody = () =>
-    JSON.parse(String(sent.find((entry) => entry.method === 'PUT')?.body ?? '{}')) as Record<
-      string,
-      unknown
-    >;
-  const okReply = {
-    status: 200,
-    body: {
-      updatedAt: '2026-10-03T00:00:00Z',
-      sha256: 'def456',
-      scope: 'runner',
-      clone: { ok: true },
-      runners: [],
-    },
-  };
-
-  async function scriptFile(): Promise<string> {
-    const dir = await makeTempDir('alteroid-profile-scope-');
-    const path = join(dir, 'profile.sh');
-    await writeFile(path, 'export FOO=bar\n', 'utf8');
-    return path;
-  }
-
-  it('set --scope runner は scope を PUT し、撒く先を表示する', async () => {
-    setReply('PUT', '/profile', okReply);
-    const read = captureStdout();
-
-    await profileSetCommand({ file: await scriptFile(), scope: 'runner' });
-
-    expect(putBody()).toEqual({ script: 'export FOO=bar\n', scope: 'runner' });
-    expect(read()).toContain('撒く先: runner（manager だけ）');
-  });
-
-  it('set で --scope を省くと scope を送らない（デーモンが今の撒く先を保つ）', async () => {
-    setReply('PUT', '/profile', okReply);
-    captureStdout();
-
-    await profileSetCommand({ file: await scriptFile() });
-
-    expect(putBody()).toEqual({ script: 'export FOO=bar\n' });
-  });
-
-  it('不正な --scope は PUT する前に落ちる', async () => {
-    captureStdout();
-
-    await expect(
-      profileSetCommand({ file: await scriptFile(), scope: 'everyone' }),
-    ).rejects.toThrow('--scope は all / app / runner のいずれかである（渡されたのは everyone）');
-    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
-  });
-
-  it('edit --scope は、本文を変えなくても撒く先が変わるなら PUT する', async () => {
-    setReply('GET', '/profile', {
-      status: 200,
-      body: { script: 'export FOO=bar\n', scope: 'all' },
-    });
-    setReply('PUT', '/profile', okReply);
-    captureStdout();
-
-    await profileEditCommand({ scope: 'runner' });
-
-    expect(putBody()).toEqual({ script: 'export FOO=bar\n', scope: 'runner' });
-  });
-
-  it('edit --scope が今と同じで本文も同じなら PUT しない', async () => {
-    setReply('GET', '/profile', {
-      status: 200,
-      body: { script: 'export FOO=bar\n', scope: 'runner' },
-    });
-    const read = captureStdout();
-
-    await profileEditCommand({ scope: 'runner' });
-
-    expect(read()).toBe('変更はありません。\n');
-    expect(sent.some((entry) => entry.method === 'PUT')).toBe(false);
-  });
-
-  it('show の標準出力は本文だけのまま（パイプで set へ戻す使い方を壊さない）', async () => {
-    setReply('GET', '/profile', {
-      status: 200,
-      body: { script: 'export FOO=bar\n', scope: 'runner' },
-    });
-    const read = captureStdout();
-
-    await profileShowCommand();
-
-    expect(read()).toBe('export FOO=bar\n');
-  });
-
-  describe('status', () => {
-    const runnersBody = (profile: unknown) => ({
-      status: 200,
-      body: {
-        runners: [
-          { label: 'https://runner-a.internal', state: 'connected', runnerId: 'runner-a', profile },
-        ],
-      },
-    });
-
-    it('撒く先を出す', async () => {
-      setReply('GET', '/profile', {
-        status: 200,
-        body: { script: 'export A=1', bytes: 10, sha256: 'abc', updatedAt: 'T', scope: 'runner' },
-      });
-      setReply('GET', '/runners', runnersBody({ sha256: 'abc', updatedAt: 'T' }));
-      const read = captureStdout();
-
-      await profileStatusCommand();
-
-      expect(read()).toContain('撒く先: runner（manager だけ）');
-    });
-
-    it('scope=app で runner に何も載っていないのは、食い違いではなく正しい状態として出す', async () => {
-      setReply('GET', '/profile', {
-        status: 200,
-        body: { script: 'export A=1', bytes: 10, sha256: 'abc', updatedAt: 'T', scope: 'app' },
-      });
-      setReply('GET', '/runners', runnersBody(undefined));
-      const read = captureStdout();
-
-      await profileStatusCommand();
-
-      const text = read();
-      expect(text).toContain('撒く先: app（clone だけ）');
-      expect(text).toContain(
-        '  runner-a: プロファイル無し（撒く先が app なので、載っていないのが正しい。connected）',
-      );
-    });
-
-    it('scope=app なのに runner に載っているなら、外しの降ろしが済んでいないと言う', async () => {
-      setReply('GET', '/profile', {
-        status: 200,
-        body: { script: 'export A=1', bytes: 10, sha256: 'abc', updatedAt: 'T', scope: 'app' },
-      });
-      setReply('GET', '/runners', runnersBody({ sha256: 'abc', updatedAt: 'T' }));
-      const read = captureStdout();
-
-      await profileStatusCommand();
-
-      expect(read()).toContain('外しの降ろしが済んでいない');
-    });
-
-    it('scope=runner / all で runner に載っていなければ、今までどおり「プロファイル無し」だけ', async () => {
-      for (const scope of ['runner', 'all']) {
-        setReply('GET', '/profile', {
-          status: 200,
-          body: { script: 'export A=1', bytes: 10, sha256: 'abc', updatedAt: 'T', scope },
-        });
-        setReply('GET', '/runners', runnersBody(undefined));
-        const read = captureStdout();
-
-        await profileStatusCommand();
-
-        const text = read();
-        expect(text).toContain('  runner-a: プロファイル無し（connected）\n');
-        expect(text).not.toContain('正しい');
-      }
-    });
   });
 });

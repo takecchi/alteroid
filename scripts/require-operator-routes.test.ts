@@ -245,12 +245,14 @@ const EXPECTED_OPERATOR_ROUTES = [
  * と同じ `requireOwner` に揃えた（#325 の段の計画のコメントが名指ししている）。
  */
 const EXPECTED_OWNER_ROUTES = [
+  'DELETE /profile/:name',
   'GET /mcp-servers',
   'GET /profile',
   'POST /reset',
   'PUT /credentials',
   'PUT /mcp-servers',
   'PUT /profile',
+  'PUT /profile/:name',
 ];
 
 /** 比較を配線順（AST の訪問順）に依存させないための整列。 */

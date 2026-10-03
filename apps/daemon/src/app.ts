@@ -1650,7 +1650,8 @@ async function mutateProfile(
   spec: {
     actor: string;
     route: string;
-    subject: string;
+    /** 行の名前など。**省略（旧来の全部差し替え）は1本の時代と同じ文言**で日誌に書く。 */
+    subject?: string;
     run: (profile: ProfileService) => Promise<ApplyProfileResult>;
   },
 ): Promise<
@@ -1666,9 +1667,10 @@ async function mutateProfile(
   if (deps.profile === undefined) {
     return { ok: false, body: { error: 'プロファイルの器が無い', detail: '' } };
   }
+  const label = spec.subject === undefined ? '' : `（${spec.subject}）`;
   await deps.stores.journal.append({
     type: 'decision',
-    decision: `実行環境プロファイル（${spec.subject}）を差し替えようとしている`,
+    decision: `実行環境プロファイルを差し替えようとしている${label}`,
     grounds: `${spec.actor}（${spec.route}）。値は書かない（鍵が入りうる）。`,
   });
 
@@ -1687,8 +1689,8 @@ async function mutateProfile(
         // 版）。**文言では見分けない**——`ProfileRollbackFailedError` で見る。
         decision:
           error instanceof ProfileRollbackFailedError
-            ? `実行環境プロファイル（${spec.subject}）の差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）`
-            : `実行環境プロファイル（${spec.subject}）を差し替えられなかった`,
+            ? `実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）${label}`
+            : `実行環境プロファイルを差し替えられなかった${label}`,
         grounds: `${spec.actor}（${spec.route}、状態の変更が失敗）: ${kindOfError(error)}`,
       },
       '実行環境プロファイルの打ち消しの日誌',
@@ -1716,7 +1718,7 @@ async function mutateProfile(
       deps.stores,
       {
         type: 'decision',
-        decision: `実行環境プロファイル（${spec.subject}）を差し替えられなかった（読めなかった）`,
+        decision: `実行環境プロファイルを差し替えられなかった（読めなかった）${label}`,
         grounds: `${spec.actor}（${spec.route}、評価で断られた）`,
       },
       '実行環境プロファイルの打ち消しの日誌',
@@ -1740,12 +1742,23 @@ async function mutateProfile(
    */
   const entries = result.entries ?? [];
   const composed = result.composed ?? composedFingerprints(entries);
+  const allScript = composeProfileScript(entries, 'all');
+  const allFingerprint =
+    allScript.length === 0
+      ? {}
+      : { sha256: fingerprintOf(allScript), bytes: Buffer.byteLength(allScript) };
   const delivered = result.runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
   await appendJournalOrDrop(
     deps.stores,
     {
       type: 'decision',
-      decision: `実行環境プロファイル（${spec.subject}）を更新した（クローン用 sha256 ${composed.clone.sha256 ?? 'なし'}・runner 用 sha256 ${composed.runner.sha256 ?? 'なし'}）`,
+      decision:
+        spec.subject === undefined
+          ? // 旧来の全部差し替え: 1本の時代と同じ文言（日誌を読む側と歯がこの文言で見ている）。
+            allFingerprint.sha256 === undefined
+            ? '実行環境プロファイルを外した'
+            : `実行環境プロファイルを更新した（sha256 ${allFingerprint.sha256}・${String(allFingerprint.bytes)} bytes）`
+          : `実行環境プロファイル（${spec.subject}）を更新した（クローン用 sha256 ${composed.clone.sha256 ?? 'なし'}・runner 用 sha256 ${composed.runner.sha256 ?? 'なし'}）`,
       grounds:
         `${spec.actor}（${spec.route}）。` +
         '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
@@ -1761,7 +1774,7 @@ async function mutateProfile(
     ok: true,
     body: profileUpdateResponseSchema.parse({
       updatedAt: result.updatedAt ?? new Date().toISOString(),
-      entries: described.entries,
+      entries: described.entries.map(({ script: _script, ...summary }) => summary),
       composed,
       ...(described.sha256 === undefined
         ? {}
@@ -6204,7 +6217,6 @@ export function createApp(deps: AppDeps) {
         const outcome = await mutateProfile(deps, {
           actor: describeActor(c.get('principal')),
           route: 'PUT /profile',
-          subject: 'プロファイル全体',
           run: (profile) => profile.apply(script),
         });
         return outcome.ok ? c.json(outcome.body, 200) : c.json(outcome.body, 400);
