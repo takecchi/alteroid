@@ -158,6 +158,15 @@ jobs:
       # 別便にする——いまはこの ci.yml の1行だけが門である。
       - run: pnpm check:agents-md-size
 
+      # **Dockerfile に Railway で通らない書き方（いまは `RUN --mount`）が無いか
+      # （Issue #2685）。** #2678 の `RUN --mount=type=bind` は下の `image`（buildx）では
+      # 通ったが、Railway の3環境のビルドが約13秒で落ちた。**image を焼いても検出できない
+      # 種類の失敗**なので、焼かずに字面（命令の単位）で止める。静的検査なので `pnpm build`
+      # より前に置く。**ここに置いた理由:** docker のビルドを要さず、Node と
+      # `pnpm check:*` の配線の歯（`scripts/check-scripts-wired.test.ts`）がこの job の形
+      # （`run: pnpm check:…`）を前提にしている。以前は `image` の grep 1行だった（#2683）。
+      - run: pnpm check:dockerfile-railway
+
       - run: pnpm build
 
       # **`apps/web` の生成物に Node 専用の痕跡が無いことを見る（結果側の歯）。**
@@ -502,15 +511,6 @@ jobs:
       # **Issue #2534 段1。ビルド時の追加層（`final` ステージ）の歯。** 追加の2回の
       # ビルドは上と同じ buildx のキャッシュ（層）を使うので、足す時間は小さい。
       # `alteroid:ci` は空の引数で焼いた `final` のまま残す（後続の歯がこれを使う）。
-      # **`RUN --mount` を Dockerfile に戻さない。** #2678 の `--mount=type=bind` は
-      # ここ（buildx）では通ったが、Railway の3環境のビルドが約13秒で落ちた
-      # （2026-10-03T01:00Z）。CI が緑でも Railway で通る保証にならないので、字面で止める。
-      - name: Dockerfile に RUN --mount が無いか
-        run: |
-          if grep -nE -- "--mount" Dockerfile docker/*.Dockerfile | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"; then
-            echo "RUN --mount は Railway のビルドで落ちた（#2534）。COPY で入れて同じ RUN で消すこと" >&2
-            exit 1
-          fi
       - name: 追加層を空で焼いた final は runtime と同じ像か（ファイル系・設定）
         uses: docker/build-push-action@v7
         with:

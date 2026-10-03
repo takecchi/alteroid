@@ -11,6 +11,7 @@
     "branch:deletable": "node ./scripts/branch-deletable.mjs",
     "build": "pnpm -r build",
     "check:agents-md-size": "node ./scripts/check-agents-md-size.mjs",
+    "check:dockerfile-railway": "node ./scripts/check-dockerfile-railway.mjs",
     "check:keyword-closed-issues": "node ./scripts/check-keyword-closed-issues.mjs",
     "check:no-attribution-trailers": "node ./scripts/check-no-attribution-trailers.mjs",
     "check:no-env-passthrough": "node ./scripts/check-no-env-passthrough.mjs",

@@ -507,6 +507,12 @@ const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
       "（逐語は `grep -Fn -- 'あちらは #1191 で別の担当が改修中で' .github/workflows/ci.yml`）。",
   },
   'check:no-attribution-trailers': { routes: ['pr'], why: ONLY_ON_PR_BECAUSE_NEEDS_PR },
+  'check:dockerfile-railway': {
+    routes: ['pr'],
+    why:
+      '手元の `pnpm test` は `scripts/check-dockerfile-railway.test.ts` の「実際の repo」の歯が同じ判定を実物の Dockerfile に当てるので、' +
+      '`STEPS` へは足さない（二重に走らせない）。PR の CI では ci.yml の ci job が1行で呼ぶ（#2685）。',
+  },
 };
 
 /** 実物の経路（毎回取り直す）。 */
