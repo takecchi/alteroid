@@ -502,6 +502,15 @@ jobs:
       # **Issue #2534 段1。ビルド時の追加層（`final` ステージ）の歯。** 追加の2回の
       # ビルドは上と同じ buildx のキャッシュ（層）を使うので、足す時間は小さい。
       # `alteroid:ci` は空の引数で焼いた `final` のまま残す（後続の歯がこれを使う）。
+      # **`RUN --mount` を Dockerfile に戻さない。** #2678 の `--mount=type=bind` は
+      # ここ（buildx）では通ったが、Railway の3環境のビルドが約13秒で落ちた
+      # （2026-10-03T01:00Z）。CI が緑でも Railway で通る保証にならないので、字面で止める。
+      - name: Dockerfile に RUN --mount が無いか
+        run: |
+          if grep -nE -- "--mount" Dockerfile docker/*.Dockerfile | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"; then
+            echo "RUN --mount は Railway のビルドで落ちた（#2534）。COPY で入れて同じ RUN で消すこと" >&2
+            exit 1
+          fi
       - name: 追加層を空で焼いた final は runtime と同じ像か（ファイル系・設定）
         uses: docker/build-push-action@v7
         with:

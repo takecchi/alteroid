@@ -312,13 +312,17 @@ CMD ["alteroidd"]
 # 変わらない**（CI の `image` が両者の差が無いことを見る）。ただし `RUN` の層は1枚増える
 # ので image の digest は変わる。実行時の主体（uid 1001 の worker）の境界は変えない。
 #
-# **スクリプトは bind mount で渡し、image に残さない**（`COPY` だと中身が層に残る）。
-# BuildKit 前提（Railway の Dockerfile ビルドも compose v2 も既定で BuildKit）。
+# **スクリプトは `COPY` で入れ、走らせたら同じ `RUN` の中で消す。** 最終のファイル系には
+# 残らない（中身は `COPY` の層に残るが、リポジトリに在る公開の sh なので害は無い）。
+# **`RUN --mount=type=bind` は使わないこと。** #2678 でそう書いたところ、Railway の3環境の
+# ビルドが開始から約13秒で落ちた（2026-10-03T01:00Z、11d46a40。ビルドログは見ていない
+# ので原因の特定ではないが、Dockerfile の変更はこの段だけだった）。CI の buildx では通る
+# ので、CI が緑でも Railway で通る保証にはならない。
 FROM runtime AS final
 ARG ALTEROID_EXTRA_APT_PACKAGES=""
 ARG ALTEROID_EXTRA_SETUP=""
 USER root
-RUN --mount=type=bind,source=docker/runner-extra,target=/tmp/runner-extra \
-  sh /tmp/runner-extra
+COPY docker/runner-extra /usr/local/sbin/runner-extra
+RUN sh /usr/local/sbin/runner-extra && rm -f /usr/local/sbin/runner-extra
 USER node
 # `CMD` は `runtime` から継ぐ（`alteroidd`。runner は command で選ぶ）。
