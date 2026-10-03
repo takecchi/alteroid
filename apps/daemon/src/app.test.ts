@@ -9473,7 +9473,7 @@ describe('実行環境プロファイル', () => {
 
       const defaulted = await put('base', { script: 'export BASE_SECRET_2690=1' });
       expect(defaulted.status).toBe(200);
-      const body = await defaulted.json();
+      const body = (await defaulted.json()) as { entries: unknown[] };
       // 更新の応答は本文を往復させない（値は送った本人が持っている）。
       expect(JSON.stringify(body)).not.toContain('BASE_SECRET_2690');
       expect(body.entries).toMatchObject([{ name: 'base', scope: 'all' }]);

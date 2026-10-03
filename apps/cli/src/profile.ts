@@ -91,11 +91,6 @@ function parseName(raw: string | undefined): string {
   return name;
 }
 
-/** runner へ本文が降りるべきか（`profileScopeAppliesTo(scope, 'runner')` と同じ判定）。 */
-function appliesToRunner(scope: string): boolean {
-  return scope !== 'app';
-}
-
 function describeEntry(entry: ProfileEntryView): string {
   return (
     `${entry.name}  ${describeScope(entry.scope)}  ${String(entry.bytes)} バイト` +
