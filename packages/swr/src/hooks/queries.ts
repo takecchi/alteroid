@@ -8,6 +8,7 @@
 import useSWR from 'swr';
 
 import { unwrap, useApi } from '../api';
+import { normalizeProfile } from '@alteroid/logic';
 import type { JournalEntryType, ManagerStatus, UsageLayer, UsageSite } from '@alteroid/logic';
 
 export interface UsageQuery {
@@ -562,7 +563,10 @@ export function useCredentials() {
  */
 export function useProfile() {
   const api = useApi();
-  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap), {
+  // **古いデーモン（`entries` 無しの応答）も `default` 1行として読める形にする**
+  // （`normalizeProfile`）。Web は Vercel でマージ直後に入るが、デーモンは1日1回夜に入るので、
+  // 「新しい画面 × 古いデーモン」の窓が必ず生じる。型は新しい形を約束するので、実行時の倒れ先である。
+  return useSWR(KEY.profile, () => api.api.GET('/profile').then(unwrap).then(normalizeProfile), {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
   });

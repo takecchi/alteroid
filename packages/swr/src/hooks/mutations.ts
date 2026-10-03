@@ -736,6 +736,25 @@ export function useSetProfileEntry() {
   );
 }
 
+/**
+ * **古いデーモン向けの倒れ先**: 従来の全文置換 `PUT /profile {script}`（古いデーモンでも通る。
+ * 新しいデーモンでは全行を `default` 1行へ置き換える意味になる）。呼ぶのは `legacy` の画面だけ。
+ */
+export function useSetProfileLegacy() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (script: string): Promise<ProfileUpdateResult> => {
+      const result = await api.api.PUT('/profile', { body: { script } });
+      throwIfProfileRejected(result);
+      const updated = unwrap(result);
+      await mutate(KEY.profile);
+      return updated;
+    },
+    [api, mutate],
+  );
+}
+
 /** プロファイルの1行を外す（`DELETE /profile/:name`。他の行は変えない）。 */
 export function useRemoveProfileEntry() {
   const api = useApi();

@@ -24,6 +24,7 @@ export * from './journal-summary.js';
 export * from './journal-window.js';
 export * from './clone-provider.js';
 export * from './manager-provider.js';
+export * from './profile-compat.js';
 export * from './managers-links.js';
 export * from './redact.js';
 export * from './tokens-links.js';

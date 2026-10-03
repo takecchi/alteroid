@@ -20,12 +20,13 @@ import {
   useProfile,
   useRemoveProfileEntry,
   useSetProfileEntry,
+  useSetProfileLegacy,
 } from '@alteroid/swr';
-import { formatDateTime } from '@alteroid/logic';
+import { formatDateTime, LEGACY_PROFILE_NOTICE } from '@alteroid/logic';
 import type {
+  NormalizedProfile,
   ProfileEntryView,
   ProfileScope,
-  ProfileState,
   ProfileUpdateResult,
 } from '@alteroid/logic';
 
@@ -111,6 +112,9 @@ export default function Profile() {
             </p>
             <ErrorNote error={error} />
             <NotOwnerHint failure={error} subject="実行環境プロファイル" />
+            {data?.legacy === true && (
+              <p className="text-[11px] break-words text-warn">{LEGACY_PROFILE_NOTICE}</p>
+            )}
             {isLoading ? (
               <Spinner />
             ) : (
@@ -135,6 +139,8 @@ export default function Profile() {
         </Card>
         {data !== undefined && (
           <ProfileEditor
+            legacy={data.legacy}
+            hasDefault={data.entries.some((entry) => entry.name === 'default')}
             editor={editor}
             setEditor={setEditor}
             onSaved={(label, update) => setResult({ label, update })}
@@ -158,7 +164,7 @@ function ProfileList({
   onEdit,
   onRemoved,
 }: {
-  profile: ProfileState;
+  profile: NormalizedProfile;
   onEdit: (entry: ProfileEntryView) => void;
   onRemoved: (label: string, update: ProfileUpdateResult) => void;
 }) {
@@ -172,26 +178,29 @@ function ProfileList({
   }
   return (
     <div className="flex flex-col gap-3 text-sm">
-      <KeyValueList
-        labelWidth="8rem"
-        items={[
-          {
-            label: 'クローン用の合成',
-            value: profile.clone.sha256 ?? '（掛かる行なし）',
-            mono: true,
-          },
-          {
-            label: 'runner 用の合成',
-            value: profile.runner.sha256 ?? '（掛かる行なし）',
-            mono: true,
-          },
-        ]}
-      />
+      {!profile.legacy && (
+        <KeyValueList
+          labelWidth="8rem"
+          items={[
+            {
+              label: 'クローン用の合成',
+              value: profile.clone.sha256 ?? '（掛かる行なし）',
+              mono: true,
+            },
+            {
+              label: 'runner 用の合成',
+              value: profile.runner.sha256 ?? '（掛かる行なし）',
+              mono: true,
+            },
+          ]}
+        />
+      )}
       <ul className="-mx-4">
         {profile.entries.map((entry) => (
           <EntryRow
             key={entry.name}
             entry={entry}
+            legacy={profile.legacy}
             onEdit={() => onEdit(entry)}
             onRemoved={onRemoved}
           />
@@ -206,10 +215,13 @@ function ProfileList({
 
 function EntryRow({
   entry,
+  legacy,
   onEdit,
   onRemoved,
 }: {
   entry: ProfileEntryView;
+  /** 古いデーモン: 行ごとの削除は通らないので出さない。 */
+  legacy: boolean;
   onEdit: () => void;
   onRemoved: (label: string, update: ProfileUpdateResult) => void;
 }) {
@@ -259,7 +271,7 @@ function EntryRow({
         <Button size="sm" onClick={onEdit}>
           編集する
         </Button>
-        {!confirming && (
+        {!confirming && !legacy && (
           <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
             この行を外す
           </Button>
@@ -315,15 +327,24 @@ interface EditorState {
  * 「この行を外す」。CLI も同じ）。
  */
 function ProfileEditor({
+  legacy,
+  hasDefault,
   editor,
   setEditor,
   onSaved,
 }: {
+  /**
+   * 古いデーモン: 行の追加（default 以外）・撒く先の変更はできない。本文の編集だけを、従来の
+   * `PUT /profile {script}`（古いデーモンでも通る）へ倒す。名前は default 固定・撒く先は all 固定。
+   */
+  legacy: boolean;
+  hasDefault: boolean;
   editor: EditorState | null;
   setEditor: (next: EditorState | null) => void;
   onSaved: (label: string, update: ProfileUpdateResult) => void;
 }) {
   const setEntry = useSetProfileEntry();
+  const setLegacy = useSetProfileLegacy();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -339,7 +360,9 @@ function ProfileEditor({
     setBusy(true);
     setFailure(undefined);
     try {
-      const update = await setEntry(state.name, state.script, state.scope);
+      const update = legacy
+        ? await setLegacy(state.script)
+        : await setEntry(state.name, state.script, state.scope);
       onSaved(`行 ${state.name} を更新した`, update);
       setConfirming(false);
       setEditor(null);
@@ -375,12 +398,25 @@ function ProfileEditor({
 
         {editor === null ? (
           <div>
-            <Button
-              size="sm"
-              onClick={() => open({ name: '', existing: false, script: '', scope: 'all' })}
-            >
-              行を追加する
-            </Button>
+            {legacy && hasDefault ? (
+              <span className="text-[11px] text-muted-foreground">
+                古いデーモンでは、一覧の「編集する」から本文だけ直せる。
+              </span>
+            ) : (
+              <Button
+                size="sm"
+                onClick={() =>
+                  open({
+                    name: legacy ? 'default' : '',
+                    existing: legacy,
+                    script: '',
+                    scope: 'all',
+                  })
+                }
+              >
+                行を追加する
+              </Button>
+            )}
           </div>
         ) : (
           <>
@@ -406,6 +442,7 @@ function ProfileEditor({
               <Select
                 aria-label="プロファイルの撒く先"
                 value={editor.scope}
+                disabled={legacy}
                 onChange={(event) => {
                   setEditor({ ...editor, scope: event.target.value as ProfileScope });
                   setConfirming(false);
@@ -517,6 +554,8 @@ function ProfileEditor({
  * 以後ずっと古い環境で走り続ける）。
  */
 function UpdateReport({ label, update }: { label: string; update: ProfileUpdateResult }) {
+  // 古いデーモンの応答には無い（`composed` は新しい形で足された）。実行時の倒れ先。
+  const composed = (update as Partial<ProfileUpdateResult>).composed;
   const rows = [
     { label: 'クローン', outcome: update.clone },
     ...update.runners.map((runner) => ({ label: runner.runnerId, outcome: runner })),
@@ -526,8 +565,9 @@ function UpdateReport({ label, update }: { label: string; update: ProfileUpdateR
     <div className="flex flex-col gap-2 text-xs">
       <p className="font-medium text-ok">{`プロファイルの${label}。`}</p>
       <p className="font-mono text-[11px] break-all text-muted-foreground">
-        合成後の指紋: クローン用 {update.composed.clone.sha256 ?? '掛かる行なし'} / runner 用{' '}
-        {update.composed.runner.sha256 ?? '掛かる行なし'}
+        {composed === undefined
+          ? null
+          : `合成後の指紋: クローン用 ${composed.clone.sha256 ?? '掛かる行なし'} / runner 用 ${composed.runner.sha256 ?? '掛かる行なし'}`}
       </p>
       <ul className="flex flex-col gap-1">
         {rows.map(({ label: rowLabel, outcome }) => (

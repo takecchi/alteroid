@@ -5,6 +5,12 @@ import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 import { redactedExcerpt } from '@alteroid/core/redact';
+import {
+  LEGACY_PROFILE_NOTICE,
+  normalizeProfile,
+  type NormalizedProfile,
+  type ProfileState,
+} from '@alteroid/logic';
 
 import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
@@ -37,6 +43,9 @@ const DETAIL_LIMIT = 2000;
  */
 const PROFILE_ENTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+const EMPTY_BODY_MESSAGE =
+  '本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。';
+
 /** 名前を省略したときの行（旧来の「1本のプロファイル」がここへ載る）。 */
 const DEFAULT_ENTRY = 'default';
 
@@ -51,12 +60,7 @@ interface ProfileEntryView {
   bytes: number;
 }
 
-interface ProfileView {
-  entries: ProfileEntryView[];
-  /** クローン用・runner 用の合成後の指紋（掛かる行が無ければ両方欠ける）。 */
-  clone: { sha256?: string; bytes?: number };
-  runner: { sha256?: string; bytes?: number };
-}
+type ProfileView = NormalizedProfile;
 
 interface ApplyResult {
   ok: boolean;
@@ -67,8 +71,9 @@ interface ApplyResult {
 
 interface UpdateView {
   updatedAt: string;
-  entries: ProfileEntryView[];
-  composed: { clone: ProfileView['clone']; runner: ProfileView['runner'] };
+  /** 古いデーモン（旧 `PUT /profile`）の応答には無い。 */
+  entries?: ProfileEntryView[];
+  composed?: { clone: ProfileView['clone']; runner: ProfileView['runner'] };
   clone: ApplyResult;
   runners: (ApplyResult & { runnerId: string })[];
 }
@@ -91,6 +96,31 @@ function parseName(raw: string | undefined): string {
   return name;
 }
 
+/**
+ * `GET /profile` を読み、**古いデーモンの形（`entries` 無し）も `default` 1行として**
+ * 読める形にする（`@alteroid/logic` の `normalizeProfile`）。新しい CLI から古い
+ * デーモンを叩く窓（デーモンは1日1回夜に入る）で落ちないための実行時の倒れ先である。
+ */
+async function fetchProfile(target: Target): Promise<ProfileView> {
+  return normalizeProfile((await request(target, '/profile')) as ProfileState);
+}
+
+/** 旧形式のとき、行ごとの操作ができない旨を出す。 */
+function noteLegacy(profile: ProfileView): void {
+  if (profile.legacy) stdout.write(`（${LEGACY_PROFILE_NOTICE}）\n`);
+}
+
+/**
+ * 古いデーモンで行ごとの操作（名前が default でない・撒く先を指定する）をしようとしたとき、
+ * 生の 404 / 400 にせず「デーモンが古い」と分かる文言で落とす。
+ */
+function assertLegacySupports(profile: ProfileView, name: string, scope?: ProfileScope): void {
+  if (!profile.legacy) return;
+  if (name !== 'default' || (scope !== undefined && scope !== 'all')) {
+    throw new Error(`デーモンが古いので、この操作はできない。${LEGACY_PROFILE_NOTICE}`);
+  }
+}
+
 function describeEntry(entry: ProfileEntryView): string {
   return (
     `${entry.name}  ${describeScope(entry.scope)}  ${String(entry.bytes)} バイト` +
@@ -101,7 +131,7 @@ function describeEntry(entry: ProfileEntryView): string {
 /** 置かれている行の一覧（**本文は出さない**）。 */
 export async function profileListCommand(): Promise<void> {
   const target = await resolveTarget();
-  const profile = (await request(target, '/profile')) as ProfileView;
+  const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
     stdout.write('プロファイルは置かれていません。\n');
@@ -109,6 +139,7 @@ export async function profileListCommand(): Promise<void> {
     return;
   }
   for (const entry of profile.entries) stdout.write(`${describeEntry(entry)}\n`);
+  noteLegacy(profile);
   stdout.write('（名前のコード単位順につなげて効きます。本文は alteroid profile show <名前>）\n');
 }
 
@@ -119,7 +150,7 @@ export async function profileListCommand(): Promise<void> {
 export async function profileShowCommand(name?: string): Promise<void> {
   const wanted = parseName(name);
   const target = await resolveTarget();
-  const profile = (await request(target, '/profile')) as ProfileView;
+  const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
     stdout.write('プロファイルは置かれていません。\n');
@@ -137,7 +168,7 @@ export async function profileShowCommand(name?: string): Promise<void> {
 
 export async function profileStatusCommand(): Promise<void> {
   const target = await resolveTarget();
-  const profile = (await request(target, '/profile')) as ProfileView;
+  const profile = await fetchProfile(target);
 
   if (profile.entries.length === 0) {
     stdout.write('プロファイル: 置かれていません\n');
@@ -147,13 +178,17 @@ export async function profileStatusCommand(): Promise<void> {
       stdout.write(`  ${describeEntry(entry)} (sha256 ${entry.sha256})\n`);
     }
     // **つないだあとの指紋を、掛かる側ごとに出す。** 届いた先の指紋はこれと見比べる。
-    stdout.write(
-      `クローン用（合成後）: ${profile.clone.sha256 === undefined ? '掛かる行なし' : `${String(profile.clone.bytes ?? 0)} バイト (sha256 ${profile.clone.sha256})`}\n`,
-    );
-    stdout.write(
-      `runner 用（合成後）: ${profile.runner.sha256 === undefined ? '掛かる行なし' : `${String(profile.runner.bytes ?? 0)} バイト (sha256 ${profile.runner.sha256})`}\n`,
-    );
+    if (!profile.legacy)
+      stdout.write(
+        `クローン用（合成後）: ${profile.clone.sha256 === undefined ? '掛かる行なし' : `${String(profile.clone.bytes ?? 0)} バイト (sha256 ${profile.clone.sha256})`}\n`,
+      );
+    if (!profile.legacy)
+      stdout.write(
+        `runner 用（合成後）: ${profile.runner.sha256 === undefined ? '掛かる行なし' : `${String(profile.runner.bytes ?? 0)} バイト (sha256 ${profile.runner.sha256})`}\n`,
+      );
   }
+
+  noteLegacy(profile);
 
   // **どの runner に何が届いているかを見せる。** 見えないと「置いた」「効いて
   // いない」のすれ違いが起きて、鍵の権限の問題なのか配布の問題なのかを誰も
@@ -166,7 +201,8 @@ export async function profileStatusCommand(): Promise<void> {
       profile?: { sha256: string; updatedAt: string };
     }[];
   };
-  const expected = profile.runner.sha256;
+  // 旧形式では合成後の指紋が無い。古いデーモンは全文を runner へ降ろすので、本文の指紋と見る。
+  const expected = profile.legacy ? profile.sha256 : profile.runner.sha256;
   for (const runner of runners) {
     // 繋がるまで runner_id は分からない。宛先（label）なら登録した時点で言える。
     const name = runner.runnerId ?? runner.label;
@@ -205,7 +241,12 @@ export async function profileSetCommand(
     options.file === undefined || options.file === '-'
       ? await readAll()
       : await readFile(options.file, 'utf8');
-  await put(name, script, undefined, scope);
+  // 空の本文は通信の前に断る（`put` も同じ検査を持つ）。
+  if (script.trim().length === 0) throw new Error(EMPTY_BODY_MESSAGE);
+  const target = await resolveTarget();
+  const profile = await fetchProfile(target);
+  assertLegacySupports(profile, name, scope);
+  await put(name, script, target, scope, profile.legacy);
 }
 
 /** いま置いてある行を `$EDITOR` で開いて、閉じたら反映する。 */
@@ -216,7 +257,8 @@ export async function profileEditCommand(
   const name = parseName(nameArg);
   const scope = parseScope(options.scope);
   const target = await resolveTarget();
-  const profile = (await request(target, '/profile')) as ProfileView;
+  const profile = await fetchProfile(target);
+  assertLegacySupports(profile, name, scope);
   const current = profile.entries.find((row) => row.name === name);
 
   const dir = await mkdtemp(join(tmpdir(), 'alteroid-profile-'));
@@ -236,7 +278,7 @@ export async function profileEditCommand(
       stdout.write('変更はありません。\n');
       return;
     }
-    await put(name, edited, target, scope);
+    await put(name, edited, target, scope, profile.legacy);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -246,9 +288,12 @@ export async function profileEditCommand(
 export async function profileRemoveCommand(nameArg: string): Promise<void> {
   const name = parseName(nameArg);
   const target = await resolveTarget();
-  const result = (await request(target, `/profile/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
-  })) as UpdateView;
+  const profile = await fetchProfile(target);
+  assertLegacySupports(profile, name);
+  // 古いデーモンには DELETE /profile/:name が無い。default の行は全部外す口（空の PUT）へ倒す。
+  const result = (await (profile.legacy
+    ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script: '' }) })
+    : request(target, `/profile/${encodeURIComponent(name)}`, { method: 'DELETE' }))) as UpdateView;
   stdout.write(`プロファイルの行 ${name} を外しました。\n`);
   describeComposed(result);
   report('クローン', result.clone);
@@ -271,6 +316,8 @@ export async function profileClearCommand(): Promise<void> {
 }
 
 function describeComposed(result: UpdateView): void {
+  // 古いデーモンの応答には無い。
+  if (result.composed === undefined) return;
   const { clone, runner } = result.composed;
   stdout.write(
     `  合成後の指紋: クローン用 ${clone.sha256 ?? '掛かる行なし'} / runner 用 ${runner.sha256 ?? '掛かる行なし'}\n`,
@@ -282,22 +329,27 @@ async function put(
   script: string,
   known?: Target,
   scope?: ProfileScope,
+  legacy = false,
 ): Promise<void> {
   if (script.trim().length === 0) {
-    throw new Error(
-      '本文が空では行を置けない。外すなら alteroid profile rm <名前>（全部外すなら clear）。',
-    );
+    throw new Error(EMPTY_BODY_MESSAGE);
   }
   const target = known ?? (await resolveTarget());
-  const result = (await request(target, `/profile/${encodeURIComponent(name)}`, {
-    method: 'PUT',
-    // 省略は「既存の行の撒く先を保つ」（デーモン側の約束）。
-    body: JSON.stringify({ script, ...(scope === undefined ? {} : { scope }) }),
-  })) as UpdateView;
+  // 古いデーモン（行ごとの口が無い）へは、従来の全文置換 PUT /profile {script} へ倒す。
+  const result = (await (legacy
+    ? request(target, '/profile', { method: 'PUT', body: JSON.stringify({ script }) })
+    : request(target, `/profile/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        // 省略は「既存の行の撒く先を保つ」（デーモン側の約束）。
+        body: JSON.stringify({ script, ...(scope === undefined ? {} : { scope }) }),
+      }))) as UpdateView;
 
-  const row = result.entries.find((entry) => entry.name === name);
-  stdout.write(`プロファイルの行 ${name} を更新しました (sha256 ${row?.sha256 ?? '?'})\n`);
+  const row = result.entries?.find((entry) => entry.name === name);
+  stdout.write(
+    `プロファイルの行 ${name} を更新しました (sha256 ${row?.sha256 ?? (result as { sha256?: string }).sha256 ?? '?'})\n`,
+  );
   stdout.write(`  撒く先: ${describeScope(row?.scope ?? 'all')}\n`);
+  if (legacy) stdout.write(`（${LEGACY_PROFILE_NOTICE}）\n`);
   describeComposed(result);
 
   report('クローン', result.clone);
