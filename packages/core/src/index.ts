@@ -938,10 +938,14 @@ export {
   type McpServersRunnerResult,
 } from './mcp-server-service.js';
 export {
+  composeProfileScript,
+  composedFingerprints,
   createProfileService,
   profileScopeAppliesTo,
   ProfileRollbackFailedError,
   type ApplyProfileResult,
+  type ComposedFingerprint,
+  type ProfileComposeTarget,
   type ProfileService,
   type ProfileServiceOptions,
 } from './profile-service.js';

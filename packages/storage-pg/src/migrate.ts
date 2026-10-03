@@ -133,9 +133,11 @@ export const STATEMENTS = [
      value text
    )`,
 
-  // 実行環境プロファイル（\`.zprofile\` 相当）。**高々1行**である。
-  // 用途ごとに行を増やす形にしないのは、増やせる形にした瞬間に「どの行が
-  // どの層に効くか」の対応表が生まれ、それが権限の一覧に化けるからである。
+  // 実行環境プロファイル（\`.zprofile\` 相当）の**旧形式**。高々1行だった。
+  // **新しい表 \`env_profile_entries\`（下）へ移した（2026-10-03）が、この表は消さない。**
+  // 巻き戻した旧デーモンがここを読むので、消すと旧版が「プロファイルが無い」と読み、
+  // 次の起動で環境が黙って痩せる。**ただし新版はここへ書かない**（`clear()` だけは
+  // ここも空にする — 人間が全部外したものが旧表に残って、巻き戻した旧版で蘇らないように）。
   `create table if not exists env_profile (
      id text primary key,
      script text not null,
@@ -534,12 +536,29 @@ export const STATEMENTS = [
   `alter table manager_credentials add column if not exists scope text not null default 'all'`,
   `alter table manager_credentials add column if not exists secret boolean not null default true`,
 
-  // --- 実行環境プロファイルの撒く先（2026-10-03）--------------------------
-  // **「今までの1行がそうだった」ことをそのまま表す既定値である**——この列が
-  // 無かった頃、`env_profile` の本文は実際にクローンと runner の両方へ撒かれて
-  // いた（scope 相当が常に `all`）。だから `default 'all'` は過去を捏造しない
-  // （上の `manager_credentials.scope` と同じ判断）。
-  `alter table env_profile add column if not exists scope text not null default 'all'`,
+  // --- 実行環境プロファイルを名前付きの行にする（2026-10-03）-------------------
+  // 1行 ＝ 名前・本文・撒く先（all / app / runner）・更新日時。つなげる順番は名前の
+  // コード単位順（`/etc/profile.d` と同じ）。**`default 'all'` は過去を捏造しない** —
+  // 旧 `env_profile` の本文は実際にクローンと runner の両方へ撒かれていた。
+  `create table if not exists env_profile_entries (
+     name text primary key,
+     script text not null,
+     scope text not null default 'all',
+     updated_at timestamptz not null default now()
+   )`,
+
+  // **旧 `env_profile` の1行を、名前 `default`・撒く先 `all`・同じ updated_at で1度だけ写す。**
+  // 「1度だけ」の印は `daemon_state` に置く。`on conflict do nothing` だけでは足りない —
+  // 人間が `default` を外したあとの起動で、旧表の本文（外したはずの鍵を含みうる）が
+  // 毎回蘇る。印は写した直後に立て、外されても立ったままである。
+  // 旧表が空なら何も写さないが、印は立てる（のちに旧版が書いたものを拾い直さない）。
+  `insert into env_profile_entries (name, script, scope, updated_at)
+   select 'default', script, 'all', updated_at from env_profile
+    where id = 'default' and btrim(script) <> ''
+      and not exists (select 1 from daemon_state where key = 'env_profile_entries_migrated')
+   on conflict (name) do nothing`,
+  `insert into daemon_state (key, value) values ('env_profile_entries_migrated', '1')
+   on conflict (key) do nothing`,
 
   // --- 承認待ちの取り下げ（#963）------------------------------------------
   // **既存行にとって null は「取り下げられていない」を表す** —— この列が

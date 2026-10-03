@@ -60,7 +60,7 @@ export function createFsStores(root?: string): Stores & { paths: AlteroidPaths }
     sessions: new FsSessionRegistry(paths.state),
     auth: new FsAuthStore(paths.auth),
     permissionGrants: new FsPermissionGrantStore(paths.jobs),
-    profile: new FsProfileStore(paths.profile),
+    profile: new FsProfileStore(paths.profile, paths.profileDir),
     credentials: new FsCredentialVaultStore(paths.credentials),
     mcpServers: new FsMcpServerStore(paths.mcpServers),
     tokens: new FsTokenPoolStore(paths.tokens),

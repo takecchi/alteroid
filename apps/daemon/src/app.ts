@@ -4,6 +4,8 @@ import type {
   AccountUsageState,
   ApplyCredentialsResult,
   ApplyMcpServersResult,
+  ApplyProfileResult,
+  EnvProfileEntry,
   ArchiveEntry,
   ChatStreamEvent,
   CloneHost,
@@ -30,7 +32,10 @@ import {
   ARCHIVE_REMOVED_BYTES_UNIT_NOTE,
   JOURNAL_SEARCH_UNCOVERED_LIST_MD,
   MCP_SERVER_NAME,
+  composedFingerprints,
+  composeProfileScript,
   mcpServerNames,
+  PROFILE_ENTRY_NAME,
   mcpServersFingerprintOf,
   RESERVED_SCHEDULE_KINDS,
   ARCHIVE_REMOVE_MANY_JOURNAL_ID_CHARS,
@@ -202,6 +207,7 @@ import {
   mcpServersResponseSchema,
   mcpServersUpdateRequestSchema,
   mcpServersUpdateResponseSchema,
+  profileEntryUpdateRequestSchema,
   profileErrorResponseSchema,
   profileResponseSchema,
   profileUpdateRequestSchema,
@@ -1598,6 +1604,170 @@ function callbackPage(title: string, detail: string, autoClose = false): string 
 <body><main><h1>${escape(title)}</h1><p>${escape(detail)}</p></main></body>${
     autoClose ? '<script>window.close()</script>' : ''
   }</html>`;
+}
+
+/**
+ * `GET /profile` の応答の組み立て。**行（本文つき）・クローン用と runner 用の合成後の
+ * 指紋**と、互換の旧欄（deprecated。古い CLI と Web が読む）。
+ */
+function describeProfileEntries(entries: readonly EnvProfileEntry[]) {
+  const all = composeProfileScript(entries, 'all');
+  const newest = entries.reduce<string | undefined>(
+    (latest, entry) =>
+      latest === undefined || entry.updatedAt > latest ? entry.updatedAt : latest,
+    undefined,
+  );
+  return {
+    entries: entries.map((entry) => ({
+      ...entry,
+      sha256: fingerprintOf(entry.script),
+      bytes: Buffer.byteLength(entry.script),
+    })),
+    ...composedFingerprints(entries),
+    script: all,
+    ...(newest === undefined ? {} : { updatedAt: newest }),
+    ...(all.length === 0 ? {} : { sha256: fingerprintOf(all), bytes: Buffer.byteLength(all) }),
+  };
+}
+
+/**
+ * **プロファイルを書き換える口（`PUT /profile` / `PUT /profile/:name` /
+ * `DELETE /profile/:name`）が通る1本道。** 経路が3本あること自体が穴になる
+ * （片方だけに検査や日誌が入って、人間が置くと弾かれるのにクローンが置くと通る、が
+ * 生まれる）ので、日誌・失敗の打ち消し・伏せ・応答の形はここ1か所に置く。
+ *
+ * - **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
+ *   配布結果は差し替えた後でないと分からないので、先に書く行はそれを含まない。
+ *   後で分かる分は2行目として `appendJournalOrDrop`（best-effort）で足す
+ * - 評価で断られた（`!result.stored`）・投げた、どちらも打ち消しの行を足してから
+ *   今と同じエラー応答にする。**シェルの stderr は構文エラーで入力の行を引用し、
+ *   `set -x` は値ごと吐く（issue #2429）ので、伏せてから返す**（`redactProfileFailure`）
+ * - 値は日誌に1文字も書かない（鍵が入りうる）
+ */
+async function mutateProfile(
+  deps: AppDeps,
+  spec: {
+    actor: string;
+    route: string;
+    subject: string;
+    run: (profile: ProfileService) => Promise<ApplyProfileResult>;
+  },
+): Promise<
+  | { ok: true; body: ReturnType<typeof profileUpdateResponseSchema.parse> }
+  | {
+      ok: false;
+      body: {
+        error: 'プロファイルが読めなかったので保存していない' | 'プロファイルの器が無い';
+        detail: string;
+      };
+    }
+> {
+  if (deps.profile === undefined) {
+    return { ok: false, body: { error: 'プロファイルの器が無い', detail: '' } };
+  }
+  await deps.stores.journal.append({
+    type: 'decision',
+    decision: `実行環境プロファイル（${spec.subject}）を差し替えようとしている`,
+    grounds: `${spec.actor}（${spec.route}）。値は書かない（鍵が入りうる）。`,
+  });
+
+  let result: ApplyProfileResult;
+  try {
+    result = await spec.run(deps.profile);
+  } catch (error) {
+    // 日誌には「差し替えようとしている」が残っているので、打ち消す
+    // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
+    await appendJournalOrDrop(
+      deps.stores,
+      {
+        type: 'decision',
+        // issue #2163: 反映も書き戻しも落ちたときは「差し替えられなかった」
+        // ではなく状態どおりの行にする（正本は新版のまま・クローンは前の
+        // 版）。**文言では見分けない**——`ProfileRollbackFailedError` で見る。
+        decision:
+          error instanceof ProfileRollbackFailedError
+            ? `実行環境プロファイル（${spec.subject}）の差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）`
+            : `実行環境プロファイル（${spec.subject}）を差し替えられなかった`,
+        grounds: `${spec.actor}（${spec.route}、状態の変更が失敗）: ${kindOfError(error)}`,
+      },
+      '実行環境プロファイルの打ち消しの日誌',
+      spec.route,
+    );
+    throw error;
+  }
+
+  if (!result.stored) {
+    /**
+     * **読めなかったのはシステムの結果であって判断ではない。** 保存も配布もしていない
+     * ——構造的に `ProfileService` が評価で断ったときはここへ来て、正本には一度も
+     * 進んでいない。**それでも打ち消しの行を足す**（記録が多すぎる側の穴で、記録の
+     * 無い差し替えより安全側と判断した。teto の判断）。
+     */
+    await appendJournalOrDrop(
+      deps.stores,
+      {
+        type: 'decision',
+        decision: `実行環境プロファイル（${spec.subject}）を差し替えられなかった（読めなかった）`,
+        grounds: `${spec.actor}（${spec.route}、評価で断られた）`,
+      },
+      '実行環境プロファイルの打ち消しの日誌',
+      spec.route,
+    );
+    const failure = redactProfileFailure(result.clone, process.env);
+    return {
+      ok: false,
+      body: {
+        error: 'プロファイルが読めなかったので保存していない',
+        detail: [failure.error, failure.output].join('\n').trim(),
+      },
+    };
+  }
+
+  /**
+   * **差し替えた事実と配布の成否を日誌へ残す（値は1文字も書かない。Issue #1733）。**
+   * `PUT /mcp-servers` と同じ形（名前と成否だけの配布結果）で残す。「誰が・どの口から」を
+   * `describeActor` で補う。差し替え自体はもう効いている——後で分かった結果を2行目として
+   * 足す（落ちても 500 にしない。`appendJournalOrDrop` の doc）。
+   */
+  const entries = result.entries ?? [];
+  const composed = result.composed ?? composedFingerprints(entries);
+  const delivered = result.runners.map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`).join(', ');
+  await appendJournalOrDrop(
+    deps.stores,
+    {
+      type: 'decision',
+      decision: `実行環境プロファイル（${spec.subject}）を更新した（クローン用 sha256 ${composed.clone.sha256 ?? 'なし'}・runner 用 sha256 ${composed.runner.sha256 ?? 'なし'}）`,
+      grounds:
+        `${spec.actor}（${spec.route}）。` +
+        '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
+        `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
+        '（マネージャー・作業者には次に開くセッションから効く）。',
+    },
+    '実行環境プロファイルの日誌',
+    spec.route,
+  );
+
+  const described = describeProfileEntries(entries);
+  return {
+    ok: true,
+    body: profileUpdateResponseSchema.parse({
+      updatedAt: result.updatedAt ?? new Date().toISOString(),
+      entries: described.entries,
+      composed,
+      ...(described.sha256 === undefined
+        ? {}
+        : { sha256: described.sha256, bytes: described.bytes as number }),
+      // 成功でも `set -x` の出力（値入り）は `output` に載る（issue #2429）。
+      clone:
+        result.clone.output === undefined
+          ? result.clone
+          : {
+              ...result.clone,
+              output: redactProfileFailure({ output: result.clone.output }, process.env).output,
+            },
+      runners: result.runners,
+    }),
+  };
 }
 
 /**
@@ -5933,13 +6103,15 @@ export function createApp(deps: AppDeps) {
       '/profile',
       describeRoute({
         tags: ['profile'],
-        summary: '実行環境プロファイル（.zprofile 相当）を読む',
+        summary: '実行環境プロファイル（.zprofile 相当。名前付きの行の集まり）を読む',
         description:
-          '器の環境変数を増やす代わりに、シェルスクリプト1本を記憶ストアへ置く。' +
-          'クローン・マネージャー・作業者のすべてに効く。',
+          '器の環境変数を増やす代わりに、名前付きのシェルスクリプトの行を記憶ストアへ置く。' +
+          '行ごとに撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=runner だけ）を持ち、' +
+          '名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。' +
+          '`script` / `updatedAt` / `sha256` / `bytes` は1本の時代の欄で、互換のために残している（deprecated）。',
         responses: {
           200: {
-            description: 'プロファイルの本文。置かれていなければ空文字。',
+            description: 'プロファイルの行（本文つき）と、合成後の指紋。置かれていなければ行は空。',
             content: { 'application/json': { schema: resolver(profileResponseSchema) } },
           },
           403: {
@@ -5950,23 +6122,19 @@ export function createApp(deps: AppDeps) {
       }),
       requireOwner,
       async (c) => {
-        const stored = await deps.stores.profile.read();
-        if (stored === null)
-          return c.json(profileResponseSchema.parse({ script: '', scope: 'all' }));
-        return c.json(
-          profileResponseSchema.parse({
-            script: stored.script,
-            scope: stored.scope,
-            updatedAt: stored.updatedAt,
-            sha256: fingerprintOf(stored.script),
-            bytes: Buffer.byteLength(stored.script),
-          }),
-        );
+        const entries = await deps.stores.profile.list();
+        return c.json(profileResponseSchema.parse(describeProfileEntries(entries)));
       },
     )
 
     /**
-     * プロファイルを差し替える。**器を作り直さない。**
+     * プロファイルを**全部**差し替える（**deprecated**。1本の時代の全文置換）。
+     *
+     * 古い CLI と Web（Web は Vercel で別に配られる）が叩き続けるので、意味を保って
+     * 残す: 全行を `default` 1行（撒く先 `all`）に置き換える。空白だけなら全部外す。
+     * 新しい読み手は `PUT /profile/:name` / `DELETE /profile/:name` を使うこと。
+     *
+     * **器を作り直さない。**（以下は1本の時代の doc。経路は `mutateProfile` に寄せた）
      *
      * これが無いと、道具の鍵や `PATH` を1つ足すたびに `compose.yaml` を直して
      * 器を焼き直すことになる＝「環境を直す」と「走行中の仕事を失う」が同じ操作に
@@ -5974,50 +6142,18 @@ export function createApp(deps: AppDeps) {
      *
      * **⚠️ 2026-09-24 のオーナー決定（#1122）で `requireOperator` から `requireOwner`
      * （持ち主として宣言されたアカウント）へ移した。** ブラウザは `requireOperator` を
-     * 構造的に通れないので、Web UI にプロファイルの画面を置いても誰も開けなかった
-     * （入口の等価性の穴）。`PUT /credentials` / `POST /reset` が #1198 で同じ門へ
-     * 移ったのと同じ強さである —— 宣言は operator トークンだけが立てられる旗なので、
-     * 通れるのは常にホストへ到達できる者が名指ししたアカウントに限られる。
-     * 「alteroid を使ってよい」（許可されただけ）のアカウントは今も通らない。
-     * 以下の段落はその決定より前の理由として残す。
-     *
-     * **実行環境の持ち主だけ**（`requireOperator`）。ここは「alteroid を使ってよい」
-     * より一段強い口である — 受け取った本文はデーモンの `process.env` を土台に
-     * その場で評価されるので、**記憶ストアの鍵を持つプロセスでの任意コマンド実行**
-     * そのものであり、評価中の出力は応答にも返る。`access grant` を通っただけの
-     * アカウントに、実行環境そのものを差し替える資格まで渡さない
-     * （許可が持っているのは「使ってよい」の2値だけである）。
-     *
-     * **⚠️ 2026-09-06 のオーナー決定（`/tokens` `/access/*` を `authenticate` だけへ
-     * 開き、alteroid を使う許可があれば実行環境の持ち主と同格にする）の対象外。**
-     * 理由: ①は端末・画面・外部アプリへ配られる bearer token で、②はサーバ上の
-     * ファイルである。ここは②側の鍵（`GH_TOKEN` のような値）をまるごと運ぶ口なので、
-     * 同格にすることは「鍵に届く資格」を*外へ配られる側*へ持たせることになり、
-     * ①のトークンが1つ漏れれば鍵そのものが読み書きできてしまう。
-     *
-     * **壊れているものは保存もしない。** プロファイルは人間が書いたシェル
-     * スクリプトなので、構文を間違えれば読めない。それを保存すると、以後の
-     * 再接続のたびに配布が失敗し、器を作り直した瞬間に環境が黙って痩せる。
-     * 先に評価して、通らなければ 400 で理由を返す（前のものが残る）。
-     *
-     * **能力を広げる口（issue #2123。teto の判断）。** 実行環境のスクリプトを
-     * 変える口なので、`/access/:accountId/grant` と同じ扱い——**日誌を先に
-     * 書き、書けなければ差し替えずに 500**。以前は差し替え（`deps.profile.apply`。
-     * 評価・正本への保存・クローンと runner への配布を含む）の**後**に日誌へ
-     * 書いていて、追記だけが落ちても 500 を返す一方で差し替えは効いたまま残って
-     * いた（閉じる側に倒れていなかった）。`apply` が読めなかった（評価で断った。
-     * `!result.stored`）・投げた、どちらも打ち消しの行を `appendJournalOrDrop`
-     * で足してから今と同じエラー応答にする。sha256・配布結果は差し替えた後で
-     * ないと分からないので、先に書く行はそれを含まない形にし、後で分かる分は
-     * 2行目として `appendJournalOrDrop`（best-effort）で足す。
+     * 構造的に通れないので、Web UI にプロファイルの画面を置いても誰も開けなかった。
      */
     .put(
       '/profile',
       describeRoute({
         tags: ['profile'],
-        summary: '実行環境プロファイルを差し替える',
+        deprecated: true,
+        summary: '実行環境プロファイルを全部差し替える（deprecated）',
         description:
-          '置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。',
+          '全行を `default` 1行（撒く先 all）に置き換える。空白だけなら全部外す。' +
+          '置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。' +
+          '新しい読み手は `PUT /profile/{name}` / `DELETE /profile/{name}` を使うこと。',
         responses: {
           200: {
             description: 'クローンと各 runner への反映結果。',
@@ -6055,132 +6191,134 @@ export function createApp(deps: AppDeps) {
         detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
       })),
       async (c) => {
-        // **クローンの道具（`profile_write`）とまったく同じ経路を通る。** 別々に
-        // 書くと、片方だけに検査が入って「人間が置くと弾かれるのにクローンが置くと
-        // 通る」が生まれる。ここは境界を確かめる場所なので、経路が2本あること自体が
-        // 穴になる。
-        if (deps.profile === undefined) {
-          return c.json({ error: 'プロファイルの器が無い' as const, detail: '' }, 400);
-        }
-        const { script, scope } = c.req.valid('json');
-
-        // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
-        // sha256・bytes は差し替えた後でないと分からないので、ここでは書かない
-        // （後で分かる分は2行目として下で足す）。
-        await deps.stores.journal.append({
-          type: 'decision',
-          decision: '実行環境プロファイルを差し替えようとしている',
-          grounds: `${describeActor(c.get('principal'))}（PUT /profile）。値は書かない（鍵が入りうる）。`,
+        const { script } = c.req.valid('json');
+        const outcome = await mutateProfile(deps, {
+          actor: describeActor(c.get('principal')),
+          route: 'PUT /profile',
+          subject: 'プロファイル全体',
+          run: (profile) => profile.apply(script),
         });
+        return outcome.ok ? c.json(outcome.body, 200) : c.json(outcome.body, 400);
+      },
+    )
 
-        let result: Awaited<ReturnType<ProfileService['apply']>>;
-        try {
-          result = await deps.profile.apply(script, scope);
-        } catch (error) {
-          // 日誌には「差し替えようとしている」が残っているので、打ち消す
-          // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
-          await appendJournalOrDrop(
-            deps.stores,
-            {
-              type: 'decision',
-              // issue #2163: 反映も書き戻しも落ちたときは「差し替えられなかった」
-              // ではなく状態どおりの行にする（正本は新版のまま・クローンは前の
-              // 版）。**文言では見分けない**——`ProfileRollbackFailedError` で見る。
-              decision:
-                error instanceof ProfileRollbackFailedError
-                  ? '実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）'
-                  : '実行環境プロファイルを差し替えられなかった',
-              grounds: `${describeActor(c.get('principal'))}（PUT /profile、状態の変更が失敗）: ${kindOfError(error)}`,
-            },
-            '実行環境プロファイルの打ち消しの日誌',
-            'PUT /profile',
-          );
-          throw error;
-        }
-
-        if (!result.stored) {
-          /**
-           * **読めなかったのはシステムの結果であって判断ではない**（`profile_write`
-           * の同じ doc と同じ理由）。保存も配布もしていない——構造的に
-           * `deps.profile.apply` が評価で断ったときはここへ来て、`stores.profile.write`
-           * には一度も進んでいない。**それでも打ち消しの行を足す**（記録が多すぎる
-           * 側の穴で、記録の無い差し替えより安全側と判断した。teto の判断）。
-           */
-          await appendJournalOrDrop(
-            deps.stores,
-            {
-              type: 'decision',
-              decision: '実行環境プロファイルを差し替えられなかった（読めなかった）',
-              grounds: `${describeActor(c.get('principal'))}（PUT /profile、評価で断られた）`,
-            },
-            '実行環境プロファイルの打ち消しの日誌',
-            'PUT /profile',
-          );
-          // **シェルの stderr は構文エラーで入力の行を引用し、`set -x` は値ごと
-          // 吐く（issue #2429）。** 伏せてから切る（`redactProfileFailure`。
-          // クローンの道具 `profile_write` の戻りと同じ関数）。
-          const failure = redactProfileFailure(result.clone, process.env);
+    /**
+     * プロファイルの**1行**（名前付き）を置く。
+     *
+     * `PUT /profile`（全部差し替え）と**同じ1本道**（`mutateProfile` → `ProfileService`）
+     * を通る。行ごとに撒く先を持ち、`scope` を省くと既存の行の撒く先を保つ（新しい行
+     * なら `all`）。**名前の形が不正なら 400**（名前は fs 版の器の中でファイル名になる）。
+     */
+    .put(
+      '/profile/:name',
+      describeRoute({
+        tags: ['profile'],
+        summary: '実行環境プロファイルの1行を置く',
+        description:
+          '名前付きの行を置く（無ければ作る）。行は名前のコード単位順につなげて効かせる。' +
+          '置く前に評価する（撒く先が runner だけの行は、デーモンでは評価できないので runner が評価する）。' +
+          '読めなければ保存も配布もせず、理由を返す（前のものが残る）。',
+        responses: {
+          200: {
+            description: '行を置いた後の全行と、クローンと各 runner への反映結果。',
+            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
+          },
+          400: {
+            description:
+              'プロファイルが読めなかった（保存していない）、または名前・本文・撒く先の形が不正。' +
+              '送られてきた本文は返さない。',
+            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      jsonBody(profileEntryUpdateRequestSchema, (where) => ({
+        error: 'プロファイルの入力の形が不正（保存していない）',
+        detail: where === '' ? '本文の形が不正である' : `形が不正な項目: ${where}`,
+      })),
+      async (c) => {
+        const name = c.req.param('name');
+        if (!PROFILE_ENTRY_NAME.test(name)) {
           return c.json(
             {
-              error: 'プロファイルが読めなかったので保存していない' as const,
-              detail: [failure.error, failure.output].join('\n').trim(),
+              error: 'プロファイルの行の名前の形が不正（保存していない）',
+              detail: `名前は ${PROFILE_ENTRY_NAME.source} の形にすること`,
             },
             400,
           );
         }
+        const { script, scope } = c.req.valid('json');
+        const outcome = await mutateProfile(deps, {
+          actor: describeActor(c.get('principal')),
+          route: 'PUT /profile/:name',
+          subject: `行 ${name}`,
+          run: (profile) => profile.set(name, script, scope),
+        });
+        return outcome.ok ? c.json(outcome.body, 200) : c.json(outcome.body, 400);
+      },
+    )
 
-        /**
-         * **差し替えた事実と配布の成否を日誌へ残す（値は1文字も書かない。Issue
-         * #1733）。** `profile_write`（`tools.ts`）と同じ深さ（sha256・bytes）
-         * まで、`PUT /mcp-servers` と同じ形（名前と成否だけの配布結果）で残す。
-         * ここは人間がこの口から直に叩く経路なので、`profile_write` の
-         * `summary`（クローンが書く一行要約）に代わるものが無い——その代わりに
-         * 「誰が・どの口から」を `describeActor` で補う。
-         *
-         * **差し替え自体はもう効いている**（正本への保存・クローンと runner への
-         * 反映とも済んでいる）。後で分かった sha256・配布結果を2行目として足す
-         * （落ちても 500 にしない。`appendJournalOrDrop` の doc）。
-         */
-        const delivered = result.runners
-          .map((r) => `${r.runnerId}=${r.ok ? 'ok' : '失敗'}`)
-          .join(', ');
-        await appendJournalOrDrop(
-          deps.stores,
-          {
-            type: 'decision',
-            decision:
-              result.sha256 === undefined
-                ? '実行環境プロファイルを外した'
-                : `実行環境プロファイルを更新した（sha256 ${result.sha256}・${String(result.bytes)} bytes・撒く先 ${result.scope ?? 'all'}）`,
-            grounds:
-              `${describeActor(c.get('principal'))}（PUT /profile）。` +
-              '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
-              `runner への配布: ${delivered.length === 0 ? '配る先なし' : delivered}` +
-              '（マネージャー・作業者には次に開くセッションから効く）。',
+    /**
+     * プロファイルの**1行**を外す。他の行は変えない。無い名前は 404（何も変えない）。
+     * 外した行がクローンか runner の最後の1行だったなら、その側へは空が降りる。
+     */
+    .delete(
+      '/profile/:name',
+      describeRoute({
+        tags: ['profile'],
+        summary: '実行環境プロファイルの1行を外す',
+        description:
+          '名前付きの行を外す。他の行は変えない。無い名前は 404（何も変えない）。' +
+          '外した行が、クローンか runner のどちらかに掛かる最後の1行だったなら、その側から環境が外れる。',
+        responses: {
+          200: {
+            description: '行を外した後の全行と、クローンと各 runner への反映結果。',
+            content: { 'application/json': { schema: resolver(profileUpdateResponseSchema) } },
           },
-          '実行環境プロファイルの日誌',
-          'PUT /profile',
-        );
-
-        return c.json(
-          profileUpdateResponseSchema.parse({
-            updatedAt: result.updatedAt as string,
-            scope: result.scope ?? 'all',
-            ...(result.sha256 === undefined
-              ? {}
-              : { sha256: result.sha256, bytes: result.bytes as number }),
-            // 成功でも `set -x` の出力（値入り）は `output` に載る（issue #2429）。
-            clone:
-              result.clone.output === undefined
-                ? result.clone
-                : {
-                    ...result.clone,
-                    output: redactProfileFailure({ output: result.clone.output }, process.env)
-                      .output,
-                  },
-            runners: result.runners,
-          }),
-        );
+          400: {
+            description: '名前の形が不正、または反映に失敗した。',
+            content: { 'application/json': { schema: resolver(profileErrorResponseSchema) } },
+          },
+          403: {
+            description: '実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+          404: {
+            description: 'その名前の行は無い。',
+            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+          },
+        },
+      }),
+      requireOwner,
+      async (c) => {
+        const name = c.req.param('name');
+        if (!PROFILE_ENTRY_NAME.test(name)) {
+          return c.json(
+            {
+              error: 'プロファイルの行の名前の形が不正（何も変えていない）',
+              detail: `名前は ${PROFILE_ENTRY_NAME.source} の形にすること`,
+            },
+            400,
+          );
+        }
+        if (deps.profile === undefined) {
+          return c.json({ error: 'プロファイルの器が無い', detail: '' }, 400);
+        }
+        // 無い名前は日誌も書かず 404（「外そうとしている」を残さない）。
+        if (!(await deps.profile.read()).some((entry) => entry.name === name)) {
+          return c.json({ error: `プロファイルに行 ${name} は無い` }, 404);
+        }
+        const outcome = await mutateProfile(deps, {
+          actor: describeActor(c.get('principal')),
+          route: 'DELETE /profile/:name',
+          subject: `行 ${name}（外す）`,
+          run: (profile) => profile.remove(name),
+        });
+        return outcome.ok ? c.json(outcome.body, 200) : c.json(outcome.body, 400);
       },
     )
 

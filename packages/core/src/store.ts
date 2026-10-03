@@ -2095,7 +2095,7 @@ export interface TranscriptArchive {
 }
 
 /**
- * 実行環境プロファイル（人間の `.zprofile` / `.zshenv` に当たるもの）。
+ * 実行環境プロファイル（人間の `.zprofile` / `.zshenv` / `/etc/profile.d/*.sh` に当たるもの）の1行。
  *
  * **記憶ではない。** 人格は記憶（Markdown）に宿るのであって、鍵や `PATH` の話は
  * そこに混ぜない。器を作り直しても残るという性質だけが同じなので、同じストアの
@@ -2104,68 +2104,81 @@ export interface TranscriptArchive {
  * 持つのはデーモンだけである。runner は自分で読みに行かず、**降ってきたものを
  * 器に置くだけ**にしてある（読みに行けるということは、runner から記憶ストアへの
  * 経路があるということで、それは M4 の受け入れ基準3 が無いと言っているものである）。
+ *
+ * ## 名前付きの行を複数持つ（2026-10-03）
+ *
+ * プロファイルはかつて「高々1本のスクリプト・層による効かせ分けを持たない」形だった
+ * （AGENTS.md 地雷3「確認が要る行為の一覧を作る」と同じ形になることを避けるため）。
+ * **この形は人間の明示的な決定で作り替えた**（2026-10-03。オーナーの逐語:
+ * 「env-profileを環境変数と同じように指定できるようにして欲しい」「デフォルトは両方です」、
+ * 続く決定: DB の行ごとに設定できる・1行には何行でもシェルスクリプトを入れられ行ごとに
+ * 撒く先を持つ・つなげる順番は名前の辞書順〈`/etc/profile.d` と同じ方式〉）。
+ * きっかけは、runner にだけ要る Rust の `PATH` / `RUSTUP_HOME` を書くとクローン（app）
+ * にも届いてしまうことだった。
+ *
+ * **環境変数の `StoredCredential.scope`（2026-09-14）と同じ理由・同じ形である。**
+ * 地雷3 が禁じるのは「行為の確認要否を配線で固定する」ことで、ここで持たせる
+ * `scope` は確認・許可の話ではなく、**「どのプロセスにとってこの環境が意味を持つか」
+ * というプロセストポロジーの表現**である。クローンは `scope` が `runner` の行も
+ * `profile_read` で読める（読む口は `scope` で変わらない）。
  */
-export interface EnvProfile {
-  /** 人間が書いたシェルスクリプトそのもの。器は中身を解釈しない。 */
+export interface EnvProfileEntry {
+  /** 行の名前（`PROFILE_ENTRY_NAME` の形。つなげる順番はこの名前のコード単位順）。 */
+  name: string;
+  /** 人間が書いたシェルスクリプトそのもの（何行でもよい）。器は中身を解釈しない。 */
   script: string;
-  updatedAt: string;
   /**
    * 撒く先。`'all'`（クローンと runner の両方）/ `'app'`（クローン＝デーモンだけ）/
-   * `'runner'`（runner＝マネージャー・作業者だけ）。**既定は常に `'all'`**。この欄が
-   * 無かった頃に置かれたプロファイルは実際に両方へ撒かれていたので、読めない・無い
-   * ものは `'all'` である。
-   *
-   * ## なぜ持つのか（`EnvProfile` / `env_profile` が元々避けていた形）
-   *
-   * このプロファイルは「層による効かせ分けを持たない」形だった（AGENTS.md 地雷3
-   * 「確認が要る行為の一覧を作る」と同じ形になることを避けるため）。
-   *
-   * **今回はその判断を人間の明示的な指示で上書きしている**（2026-10-03。オーナーの
-   * 逐語:「env-profileを環境変数と同じように指定できるようにして欲しい」「デフォルトは
-   * 両方です」）。きっかけは、runner にだけ要る Rust の `PATH` / `RUSTUP_HOME` を
-   * プロファイルに書くと、クローン（app）にも届いてしまうことだった。**環境変数の
-   * `StoredCredential.scope`（2026-09-14）と同じ理由・同じ形である**: 地雷3 が禁じるのは
-   * 「行為の確認要否を配線で固定する」ことで、ここで持たせる `scope` は確認・許可の
-   * 話ではなく、**「どのプロセスにとってこの環境が意味を持つか」というプロセス
-   * トポロジーの表現**である。`scope` が `runner` でも、クローンは `profile_read` で
-   * 本文を読める（読む口は scope で変わらない）。
+   * `'runner'`（runner＝マネージャー・作業者だけ）。**既定は常に `'all'`**。
    */
   scope: EnvProfileScope;
+  updatedAt: string;
 }
 
-/** {@link EnvProfile.scope}。環境変数（{@link StoredCredential.scope}）と同じ3値。 */
+/** {@link EnvProfileEntry.scope}。環境変数（{@link StoredCredential.scope}）と同じ3値。 */
 export type EnvProfileScope = 'all' | 'app' | 'runner';
 
+/**
+ * 行の名前の形。**器の中のファイル名になる**（fs 版は `profile.d/<name>.sh`）ので、
+ * パスとして解釈されうる形（`/`・先頭の `.`・`..`）を最初から認めない。
+ * 置き場を読む側（fs 版の一覧）でも同じ検査をする（`credentials.ts` の
+ * `CREDENTIAL_NAME` と同じ理由 — 人間が手で書き換えられる）。
+ */
+export const PROFILE_ENTRY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** 名前のコード単位順（`<` 比較。**ロケールに依存させない**。`/etc/profile.d` の辞書順と同じ）。 */
+export function compareProfileEntryNames(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export interface ProfileStore {
-  /** 置かれていなければ null。 */
-  read(): Promise<EnvProfile | null>;
+  /** 置かれている全行。**名前のコード単位順**（つなげる順番そのもの）。 */
+  list(): Promise<EnvProfileEntry[]>;
   /**
-   * 全文置換。空文字は「プロファイルを外す」（このとき `scope` も消える）。
-   * `scope` の既定は `'all'`。
+   * 1行を置く（無ければ作り、在れば本文・撒く先・更新日時を入れ替える）。
+   * 呼び出し側が名前（`PROFILE_ENTRY_NAME`）と本文が空でないことを検査して渡す。
    */
-  write(script: string, scope?: EnvProfileScope): Promise<EnvProfile>;
+  set(name: string, script: string, scope: EnvProfileScope): Promise<EnvProfileEntry>;
+  /** 1行を外す。在れば `true`、無ければ `false`。 */
+  remove(name: string): Promise<boolean>;
   /**
-   * **取り消した更新をなかったことにする**（本文と更新日時を組で戻す）。
+   * **取り消した更新をなかったことにする**（行の集合を、本文・撒く先・更新日時ごと
+   * 組で戻す）。入力に無い行は消える。
    *
-   * `write` で戻すと本文は元に戻っても `updatedAt` が失敗した時刻へ進む。
+   * 通常の書き込みで戻すと、本文は元に戻っても `updatedAt` が失敗した時刻へ進む。
    * そこは「人間かクローンが最後に**本文を変えた**時刻」であって、`profile status`
    * と `GET /profile` が見せる監査情報である。成功していない更新でそこが動くと、
-   * 起動のたびに動いていたときと同じ意味の壊れ方をする。
-   *
-   * **撒く先（`scope`）も組で戻す。** 本文だけ戻すと、巻き戻したのに撒く先だけ
-   * 新しい、という分裂になる。
-   *
-   * `null` は「置かれていなかった状態へ戻す」。**通常の書き込みに使わないこと** —
-   * 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用である。
+   * 起動のたびに動いていたときと同じ意味の壊れ方をする。**通常の書き込みに使わない
+   * こと** — 更新日時を呼び出し側が決められる口なので、失敗の巻き戻し専用である。
    */
-  revert(previous: EnvProfile | null): Promise<void>;
+  replaceAll(previous: readonly EnvProfileEntry[]): Promise<void>;
 
   /**
-   * 置かれていたプロファイルを外す（ワークスペースのリセット専用。
-   * #workspace-reset）。`write('')` と同じ結果になるが、専用の口として持つ
-   * ことで「リセットが呼んだ」ことを実装の側で区別できるようにしてある。
+   * 置かれていた行を全部外す（ワークスペースのリセット専用。#workspace-reset）。
+   * 専用の口として持つことで「リセットが呼んだ」ことを実装の側で区別できるように
+   * してある。
    *
-   * 何か置かれていたら `1`、置かれていなければ `0` を返す。
+   * 消した行数を返す（0 なら何も置かれていなかった）。
    */
   clear(): Promise<number>;
 }

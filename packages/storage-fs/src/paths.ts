@@ -35,6 +35,12 @@ export interface AlteroidPaths {
    */
   profile: string;
   /**
+   * 実行環境プロファイルの行の置き場: `profile.d/<name>.sh`（0600）と、撒く先の
+   * `<name>.scope`（2026-10-03。`/etc/profile.d` と同じ形。`FsProfileStore` の doc）。
+   * 上の `profile`（1本の時代のファイル）は、あれば `default` 行へ移す旧形式の所在である。
+   */
+  profileDir: string;
+  /**
    * 利用状況の台帳: JSON（`usage.ts`）。
    *
    * `auth/` と同じ理由で `memory/` には置かない — 人間が手で書き換える前提の場所
@@ -85,6 +91,7 @@ export function resolvePaths(root: string = defaultRoot()): AlteroidPaths {
     state: join(root, 'state'),
     auth: join(root, 'auth'),
     profile: join(root, 'profile.sh'),
+    profileDir: join(root, 'profile.d'),
     usage: join(root, 'usage'),
     tokens: join(root, 'tokens.json'),
     credentials: join(root, 'credentials.json'),

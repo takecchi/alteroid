@@ -1670,8 +1670,28 @@ export const runnersVacateResponseSchema = z.object({
  */
 const profileScopeSchema = z.enum(['all', 'app', 'runner']);
 
+/** 合成後の本文の指紋（掛かる行が無ければ両方欠ける）。 */
+const profileComposedFingerprintSchema = z.object({
+  sha256: z.string().optional(),
+  bytes: z.number().optional(),
+});
+
 /**
- * 人間が置いたプロファイル。
+ * プロファイルの1行（**本文を返す**）。
+ *
+ * 名前（`PROFILE_ENTRY_NAME`）・本文・撒く先・更新日時に、本文の指紋を足したもの。
+ */
+export const profileEntrySchema = z.object({
+  name: z.string(),
+  script: z.string(),
+  scope: profileScopeSchema,
+  updatedAt: z.string(),
+  sha256: z.string(),
+  bytes: z.number(),
+});
+
+/**
+ * 人間が置いたプロファイル（**名前付きの行の集まり**。2026-10-03）。
  *
  * **本文を返す。** ここは実行環境の持ち主だけが通る口である。**⚠️ `/access` とは
  * もう同じ資格ではない**（2026-09-06 のオーナー決定で `/access` `/tokens` は
@@ -1679,16 +1699,28 @@ const profileScopeSchema = z.enum(['all', 'app', 'runner']);
  * 運ぶ口だからである）。人間が自分で書いたものを読み直せないと、typo ひとつ
  * 直せない。指紋しか返さないのは runner の制御面のほうで、あちらは「マネージャーが
  * 読めてはいけない」からそうしている。守っている相手が違う。
+ *
+ * ## 互換（`script` / `updatedAt` / `sha256` / `bytes`）
+ *
+ * これらは1本の時代の応答の欄で、**別々に配られる古い CLI と Web（Web は Vercel）が
+ * まだ読む**ので残してある（deprecated）。`script` は**全行を撒く先を問わず名前の順に
+ * つなげたもの**、`updatedAt` は行の最新の更新日時、`sha256` / `bytes` はその
+ * `script` のもの。新しい読み手は `entries` / `clone` / `runner` を使うこと。
  */
 export const profileResponseSchema = z.object({
+  /** 名前のコード単位順（つなげる順番そのもの）。 */
+  entries: z.array(profileEntrySchema),
+  /** クローン（デーモン自身）に効かせる合成後の本文の指紋。 */
+  clone: profileComposedFingerprintSchema,
+  /** runner へ降ろす合成後の本文の指紋（各 runner の指紋と突き合わせる相手）。 */
+  runner: profileComposedFingerprintSchema,
+  /** **deprecated**: 全行を名前の順につなげた本文。置かれていなければ空文字。 */
   script: z.string(),
-  /**
-   * 撒く先。置かれていなければ `'all'`（既定。`credentialScopeSchema` と同じ3値・同じ既定。
-   * `packages/core/src/store.ts` の `EnvProfile.scope`）。
-   */
-  scope: profileScopeSchema,
+  /** **deprecated**: 行の最新の更新日時。置かれていなければ欠ける。 */
   updatedAt: z.string().optional(),
+  /** **deprecated**: `script` の指紋。 */
   sha256: z.string().optional(),
+  /** **deprecated**: `script` のバイト数。 */
   bytes: z.number().optional(),
 });
 
@@ -1703,21 +1735,42 @@ export const profileErrorResponseSchema = z.object({
   detail: z.string(),
 });
 
-export const profileUpdateRequestSchema = z.object({
-  /** シェルスクリプトそのもの。空文字は「プロファイルを外す」。 */
-  script: z.string(),
+/** `PUT /profile/:name`。 */
+export const profileEntryUpdateRequestSchema = z.object({
+  /** この行のシェルスクリプト（何行でもよい）。**空白だけは置けない**（外すのは DELETE）。 */
+  script: z.string().refine((value) => value.trim().length > 0),
   /**
-   * 撒く先。**省略は「今の撒く先を保つ」**（置かれていなければ `'all'`）。
+   * 撒く先。**省略は「既存の行の撒く先を保つ」**（新しい行なら `'all'`）。
    * 不正な値は 400。
    */
   scope: profileScopeSchema.optional(),
 });
 
+/**
+ * `PUT /profile`（**deprecated**。1本の時代の全文置換）。
+ * 全行を `default` 1行（撒く先 `all`）に置き換える。空白だけなら全部外す。
+ */
+export const profileUpdateRequestSchema = z.object({
+  /** シェルスクリプトそのもの。空文字は「プロファイルを全部外す」。 */
+  script: z.string(),
+});
+
+/**
+ * 更新（`PUT /profile` / `PUT /profile/:name` / `DELETE /profile/:name`）の結果。
+ * 旧来の欄（`sha256` / `bytes`）は残してある（deprecated。古い CLI が読む）。
+ */
 export const profileUpdateResponseSchema = z.object({
   updatedAt: z.string(),
-  /** 保存した撒く先（外したときは `'all'`）。 */
-  scope: profileScopeSchema,
+  /** 操作の後の全行（本文つき。名前のコード単位順）。 */
+  entries: z.array(profileEntrySchema),
+  /** 操作の後の、クローン用・runner 用の合成後の指紋。 */
+  composed: z.object({
+    clone: profileComposedFingerprintSchema,
+    runner: profileComposedFingerprintSchema,
+  }),
+  /** **deprecated**: 全行を名前の順につなげた本文の指紋（置かれていなければ欠ける）。 */
   sha256: z.string().optional(),
+  /** **deprecated**: 同上のバイト数。 */
   bytes: z.number().optional(),
   /**
    * クローン（デーモン自身）へ効かせた結果。**壊れていれば置いていない。**

@@ -60,7 +60,7 @@ import {
 } from './auth.js';
 import type {
   CredentialVaultStore,
-  EnvProfile,
+  EnvProfileEntry,
   InboxPeek,
   InboxStore,
   JobStore,
@@ -87,6 +87,7 @@ import type {
   UsageStore,
 } from './store.js';
 import {
+  compareProfileEntryNames,
   ensureTrailingNewline,
   findOpenManagerDuplicate,
   JournalAnchorNotFoundError,
@@ -296,7 +297,7 @@ export function createMemoryStores(): Stores {
   let transcriptGrave: TranscriptGrave | null = null;
   let lostSessionGrave: LostSessionGrave | null = null;
   let projectKey: string | null = null;
-  let envProfile: EnvProfile | null = null;
+  let envProfile = new Map<string, EnvProfileEntry>();
   let storedMcpServers: StoredMcpServers | null = null;
   let counter = 0;
   const nextId = () => `id-${++counter}`;
@@ -1406,21 +1407,26 @@ export function createMemoryStores(): Stores {
   };
 
   const profile: ProfileStore = {
-    async read() {
-      return envProfile;
+    async list() {
+      return [...envProfile.values()]
+        .sort((x, y) => compareProfileEntryNames(x.name, y.name))
+        .map((row) => ({ ...row }));
     },
-    async write(script, scope = 'all') {
-      envProfile =
-        script.trim().length === 0 ? null : { script, updatedAt: new Date().toISOString(), scope };
-      return envProfile ?? { script: '', updatedAt: new Date().toISOString(), scope: 'all' };
+    async set(name, script, scope) {
+      const row: EnvProfileEntry = { name, script, scope, updatedAt: new Date().toISOString() };
+      envProfile.set(name, row);
+      return { ...row };
     },
-    async revert(previous) {
-      envProfile = previous;
+    async remove(name) {
+      return envProfile.delete(name);
+    },
+    async replaceAll(previous) {
+      envProfile = new Map(previous.map((row) => [row.name, { ...row }]));
     },
     async clear() {
-      const existed = envProfile !== null;
-      envProfile = null;
-      return existed ? 1 : 0;
+      const count = envProfile.size;
+      envProfile.clear();
+      return count;
     },
   };
 

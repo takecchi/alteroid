@@ -163,7 +163,11 @@ import type { MemoryPart, MemorySection, MemorySectionLookup } from './memory.js
 import { redactProfileFailure } from './profile.js';
 import { renderAccountList } from './account-list.js';
 import { renderPermissionGrantList } from './permission-grant-list.js';
-import { ProfileRollbackFailedError, type ProfileService } from './profile-service.js';
+import {
+  ProfileRollbackFailedError,
+  type ApplyProfileResult,
+  type ProfileService,
+} from './profile-service.js';
 import {
   RESERVED_SCHEDULE_KINDS,
   describeReservedScheduleKindEnvKeys,
@@ -243,6 +247,7 @@ import {
   describeUnreadableSchedules,
   describeUnreadableTokens,
 } from './store.js';
+import { PROFILE_ENTRY_NAME } from './store.js';
 import type { ArchiveEntry, InboxPeek, JournalStore, Stores } from './store.js';
 import {
   RESTART_BEFORE_CHECK_ADVICE,
@@ -749,6 +754,7 @@ export const CLONE_TOOL_NAMES = [
   'inbox_remove_many',
   'profile_read',
   'profile_write',
+  'profile_remove',
   'practice_list',
   'practice_read',
   'practice_history',
@@ -816,6 +822,7 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_appraise',
   'inbox_remove_many',
   'profile_write',
+  'profile_remove',
   'practice_write',
   'practice_remove',
   'manager_start',
@@ -982,6 +989,7 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   commitment_appraise: false,
   inbox_remove_many: false,
   profile_write: true,
+  profile_remove: false,
   practice_write: false,
   practice_remove: false,
   manager_start: false,
@@ -2160,8 +2168,16 @@ const MEMORY_PAGE = 8_000;
  * 無いあいだ、この道具は1回で48KBを文脈へ流し込んでいた。
  */
 const CANON_PAGE = 8_000;
-/** プロファイル本文を取りに来たときの1回分。続きは `offset` で取れる。 */
+/** プロファイル1行の本文を取りに来たときの1回分。続きは `offset` で取れる。 */
 const PROFILE_PAGE = 8_000;
+/**
+ * プロファイルの行の一覧（`profile_read` の名前省略）の予算（文字数）。
+ *
+ * **他の一覧と値は揃えるが、定数は共有しない**（`excerpt.ts` の作法どおり用途ごとに
+ * 別に置く）。1行は名前（最大64字）・撒く先・バイト数・更新時刻で約100字。**本文は
+ * 一覧に載せない**（鍵が入っているので、本文は名前を指して取りに来たときだけ出す）。
+ */
+const PROFILE_LIST_BUDGET = 6_000;
 
 /**
  * `self_dropped` の一覧予算（文字数）。
@@ -4766,6 +4782,96 @@ export function createCloneTools(context: ToolContext) {
     );
   }
   const getConversationId = context.conversationId;
+
+  /**
+   * `profile_write` / `profile_remove` が、状態の変更で落ちたときの後始末。
+   *
+   * 日誌には「差し替えようとしている」が残っているので打ち消す（best-effort。落ちても
+   * noteDroppedRecord で跡を残すだけ）。**文言では見分けない**——
+   * `ProfileRollbackFailedError` で見る（issue #2163: 反映も書き戻しも落ちたときは
+   * 「差し替えられなかった」ではなく状態どおりの行にする）。
+   */
+  async function profileToolFailed(
+    tool: 'profile_write' | 'profile_remove',
+    name: string,
+    summary: string,
+    error: unknown,
+  ): Promise<never> {
+    await appendJournalOrDrop(tool, stores.journal, {
+      type: 'decision',
+      decision:
+        error instanceof ProfileRollbackFailedError
+          ? `実行環境プロファイルの行 ${name} の変更が途中で止まった（正本は新しい版のまま・クローンは前の版）: ${summary}`
+          : `実行環境プロファイルの行 ${name} を変更できなかった: ${summary}`,
+      grounds: `変更しようとしたが、状態の変更が失敗した: ${errorKindOf(error)}`,
+    });
+    throw error;
+  }
+
+  /** `profile_write` / `profile_remove` の結果を、日誌（2行目）と道具の戻りへ。 */
+  async function profileToolReport(
+    tool: 'profile_write' | 'profile_remove',
+    name: string,
+    summary: string,
+    result: ApplyProfileResult,
+    done: string,
+  ) {
+    // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
+    // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。
+    if (!result.stored) {
+      /**
+       * **読めなかったのはシステムの結果であって判断ではない。** 保存も配布もして
+       * いない——それでも打ち消しの行を足す（issue #2145。`PUT /profile/:name` の同じ
+       * 経路〈#2134〉と揃える。記録が多すぎる側の穴で、記録の無い差し替えより安全側と
+       * 判断した）。
+       */
+      await appendJournalOrDrop(tool, stores.journal, {
+        type: 'decision',
+        decision: `実行環境プロファイルの行 ${name} を差し替えられなかった（読めなかった）: ${summary}`,
+        grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
+      });
+      // シェルの stderr は入力の行を引用し、`set -x` は値ごと吐く（issue #2429）。
+      // クローンの文脈に鍵の値を入れない——`PUT /profile` の 400 と同じ関数で伏せる。
+      const failure = redactProfileFailure(result.clone, process.env);
+      return text(
+        `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${failure.error}` +
+          `${failure.output.length === 0 ? '' : `\n${failure.output}`}`,
+      );
+    }
+
+    // 差し替え自体はもう効いている。後で分かった結果を2行目として足す（落ちても
+    // 道具の結果は変えない——`appendJournalOrDrop` の doc）。
+    await appendJournalOrDrop(tool, stores.journal, {
+      type: 'decision',
+      decision: `実行環境プロファイルの${done}: ${summary}`,
+      grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+    });
+
+    const failed = result.runners.filter((runner) => !runner.ok);
+    const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
+    const row = result.entries?.find((entry) => entry.name === name);
+    const composed = result.composed;
+    return text(
+      [
+        `実行環境プロファイルの${done}${row === undefined ? '' : `（撒く先 ${row.scope}）`}。`,
+        composed === undefined
+          ? null
+          : `合成後の指紋: クローン用 ${composed.clone.sha256 ?? '（掛かる行なし）'} / runner 用 ${composed.runner.sha256 ?? '（掛かる行なし）'}`,
+        delivered.length === 0
+          ? null
+          : `配った先: ${excerptLine(delivered.join(', '), PROFILE_DISTRIBUTION_EXCERPT)}`,
+        failed.length === 0
+          ? null
+          : `配れなかった先: ${excerptLine(
+              failed.map((r) => `${r.runnerId}（${r.error ?? '理由不明'}）`).join(', '),
+              PROFILE_DISTRIBUTION_EXCERPT,
+            )}`,
+        'これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。',
+      ]
+        .filter((line) => line !== null)
+        .join('\n'),
+    );
+  }
 
   return [
     // --- 記憶 -----------------------------------------------------------
@@ -9435,39 +9541,73 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'profile_read',
       [
-        '実行環境プロファイル（人間の ~/.zprofile に当たるもの）の本文を読む。',
-        'ここに書いた export は、あなた自身にも、あなたが起こすマネージャーと作業者にも効く。',
+        '実行環境プロファイル（人間の ~/.zprofile / /etc/profile.d に当たるもの）を読む。',
+        'プロファイルは**名前付きの行**の集まりで、行ごとに本文（何行でもよい）と撒く先（all / app / runner）を持つ。',
+        'name を省略すると行の一覧（名前・撒く先・バイト数・更新時刻。**本文は載らない**）、',
+        'name を渡すとその行の本文を返す。',
+        '行は名前のコード単位順（辞書順）につなげられて、撒く先が掛かる側（あなた自身／マネージャーと作業者）へ効く。',
         '**本文には鍵が入っている。読んだ中身を記憶や日誌へ書き写さないこと**',
         '（記憶はあなたのシステムプロンプトに載るし、人間がいつでも開く場所である）。',
       ].join(' '),
       {
+        name: z
+          .string()
+          .optional()
+          .describe('読む行の名前。省略すると行の一覧を返す（本文は載らない）'),
         // **issue #1720。** `.int().min(0)` は入力スキーマ側ではなくハンドラの
         // 先頭で見る。
         offset: z
           .number()
           .optional()
-          .describe(`何文字目から読むか（${formatIntRangeJa({ min: 0 })}。既定 0）`),
+          .describe(
+            `何文字目から読むか（name を渡したときだけ。${formatIntRangeJa({ min: 0 })}。既定 0）`,
+          ),
       },
-      async ({ offset = 0 }) => {
+      async ({ name, offset = 0 }) => {
         // **issue #1720（#1651/#1689 の揃え漏れ）。**
         const offsetError = describeIntRangeViolation('offset', offset, { min: 0 });
         if (offsetError !== null) return text(offsetError);
-        const current = await stores.profile.read();
-        if (current === null) {
+        const rows = await stores.profile.list();
+        if (rows.length === 0) {
           return text('実行環境プロファイルは置かれていない。');
         }
-        const part = page(current.script, offset, PROFILE_PAGE);
-        // **ここで切れたものを profile_write へ渡すと、プロファイルが縮む。**
-        // `profile_write` は全文置換であり、切れた本文でも shell として妥当に
+        if (name === undefined) {
+          return text(
+            [
+              renderListing(
+                rows.map(
+                  (row) =>
+                    `- ${row.name} / 撒く先 ${row.scope} / ${String(Buffer.byteLength(row.script))} バイト / 更新 ${row.updatedAt}`,
+                ),
+                {
+                  budget: PROFILE_LIST_BUDGET,
+                  omitted: ({ rest, shown, total }) =>
+                    `…ほか ${rest} 件は省略（全 ${total} 件のうち ${shown} 件だけ出した。名前が分かっていれば profile_read name=<名前> で取れる）。`,
+                },
+              ),
+              '（本文は載せていない。取るには profile_read name=<名前>。つなげる順番は名前のコード単位順。',
+              '更新時刻は「最後に本文か撒く先を変えた時刻」で、作成時刻は持っていない）',
+            ].join('\n'),
+          );
+        }
+        const row = rows.find((entry) => entry.name === name);
+        if (row === undefined) {
+          return text(
+            `プロファイルに行 ${name} は無い。行の一覧は profile_read（name を省略）で取れる。`,
+          );
+        }
+        const part = page(row.script, offset, PROFILE_PAGE);
+        // **ここで切れたものを profile_write へ渡すと、その行が縮む。**
+        // `profile_write` は行の全文置換であり、切れた本文でも shell として妥当に
         // 見えるので、検証を通ってしまう＝黙って行が消える。だから
         // 「切れている」だけでは足りず、**書き戻す前に何をすべきか**まで言う。
         const tail = part.more
-          ? `\n…（ここで切れている。続きは profile_read offset=${part.to}。` +
-            '**profile_write は全文置換なので、書き戻すつもりなら先に offset を進めて' +
+          ? `\n…（ここで切れている。続きは profile_read name=${row.name} offset=${part.to}。` +
+            '**profile_write は行の全文置換なので、書き戻すつもりなら先に offset を進めて' +
             '最後まで取ること** — ここまでの分だけを渡すと残りが消える）'
           : '';
         return text(
-          `（最終更新 ${current.updatedAt} / 撒く先 ${current.scope} / ${describePage(part)}）\n${part.body}${tail}`,
+          `（行 ${row.name} / 撒く先 ${row.scope} / 最終更新 ${row.updatedAt} / ${describePage(part)}）\n${part.body}${tail}`,
         );
       },
     ),
@@ -9749,135 +9889,149 @@ export function createCloneTools(context: ToolContext) {
     tool(
       'profile_write',
       [
-        '実行環境プロファイルを全文置換する（空文字で外す）。',
+        '実行環境プロファイルの**1行**（名前付き）を全文置換する（無ければ作る）。',
+        'プロファイルは名前付きの行の集まりで、行ごとに本文（シェルスクリプト。何行でもよい）と撒く先を持つ。',
+        '行は名前のコード単位順（辞書順）につなげられる（/etc/profile.d と同じ）。',
         '人間から「このトークンを使って」「PATH にこれを足して」のように**実行環境そのもの**を',
         '渡されたら、会話の中に置いたままにせずここへ移すこと — 会話は要約に潰れ、器は作り直される。',
         '記憶（判断の根拠）とは別の器である。鍵や PATH を記憶に書かないこと。',
-        '置く前に実際に読めるかを確かめるので、読めなければ保存も配布もされず理由が返る。',
-        '**全文置換なので、足すだけのつもりなら先に profile_read で今の本文を取ること。**',
+        '置く前に実際に読めるかを確かめるので、読めなければ保存も配布もされず理由が返る',
+        '（scope=runner の行だけは、あなたの側では評価できないので runner が評価し、読めなければ配布結果に出る）。',
+        '**行の全文置換なので、足すだけのつもりなら先に profile_read name=<名前> で今の本文を取ること。**',
         '撒く先は scope で選ぶ（all=あなたと runner の両方 / app=あなた（デーモン）だけ / runner=マネージャー・作業者だけ。',
-        '省略すると今の撒く先を保つ。置かれていなければ all）。',
+        '省略すると既存の行の撒く先を保つ。新しい行なら all）。',
         'runner だけに要る環境（runner に入れた道具の PATH など）を all で置くと、あなた自身にも届いてしまう。',
+        '行を外すのは profile_remove。',
       ].join(' '),
       {
+        name: z
+          .string()
+          .describe(
+            `行の名前（${PROFILE_ENTRY_NAME.source}。英数字で始まり、英数字と . _ - が使える。64字まで）`,
+          ),
         scope: z
           .enum(['all', 'app', 'runner'])
           .optional()
           .describe(
             '撒く先。all=クローン（あなた）と runner の両方 / app=クローンだけ / runner=runner（マネージャー・作業者）だけ。' +
-              '省略は「今の撒く先を保つ」（置かれていなければ all）',
+              '省略は「既存の行の撒く先を保つ」（新しい行なら all）',
           ),
         script: z
           .string()
           .describe(
-            'シェルスクリプト全文（`export FOO=bar` / `export PATH="$HOME/bin:$PATH"` / `eval "$(tool env)"` など）。' +
-              '空文字はプロファイルを外す意味になる',
+            'この行のシェルスクリプト全文（`export FOO=bar` / `export PATH="$HOME/bin:$PATH"` / `eval "$(tool env)"` など。何行でもよい）。' +
+              '空にはできない（外すなら profile_remove）',
           ),
         summary: z
           .string()
           .describe('何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）'),
       },
-      async ({ script, summary, scope }) => {
+      async ({ name, script, summary, scope }) => {
         if (context.profile === undefined) {
           return text(
             'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
               '次の会話で置くこと。',
           );
         }
+        // **日誌を書く前に形を検査する。** 置けない入力で「差し替えようとしている」を残さない。
+        if (!PROFILE_ENTRY_NAME.test(name)) {
+          return text(`行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`);
+        }
+        if (script.trim().length === 0) {
+          return text(
+            '本文が空では行を置けない。外すなら profile_remove を使う。何も変えていない。',
+          );
+        }
 
         /**
          * **能力を広げる道具（issue #2145。teto の判断、#2123/#2134 と同じ
          * 設計）。** 日誌を先に書く。書けなければ差し替えずに道具のエラーで
-         * 返す。sha256・配布結果は差し替えた後でないと分からないので、ここ
-         * では書かない（後で分かる分は2行目として下で足す）。
+         * 返す。配布結果は差し替えた後でないと分からないので、ここでは書かない
+         * （後で分かる分は2行目として下で足す）。
          */
         await appendJournalOrThrow(
           'profile_write',
           stores.journal,
           {
             type: 'decision',
-            decision: `実行環境プロファイルを差し替えようとしている: ${summary}`,
+            decision: `実行環境プロファイルの行 ${name} を差し替えようとしている: ${summary}`,
             grounds: '人間から実行環境そのものを渡された（値は記録しない）',
           },
           'act-not-performed',
         );
 
-        // **人間の口（`PUT /profile`）とまったく同じ1本道を通る。** 評価・保存・
+        // **人間の口（`PUT /profile/:name`）とまったく同じ1本道を通る。** 評価・保存・
         // 配布が1つの区間として直列に行われるので、人間の更新と重なっても層ごとに
         // 違う本文が残らない。
-        let result: Awaited<ReturnType<ProfileService['apply']>>;
+        let result: Awaited<ReturnType<ProfileService['set']>>;
         try {
-          result = await context.profile.apply(script, scope);
+          result = await context.profile.set(name, script, scope);
         } catch (error) {
-          // 日誌には「差し替えようとしている」が残っているので、打ち消す
-          // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
-          await appendJournalOrDrop('profile_write', stores.journal, {
-            type: 'decision',
-            // issue #2163: 反映も書き戻しも落ちたときは「差し替えられなかった」
-            // ではなく状態どおりの行にする（正本は新版のまま・クローンは前の
-            // 版）。**文言では見分けない**——`ProfileRollbackFailedError` で見る。
-            decision:
-              error instanceof ProfileRollbackFailedError
-                ? `実行環境プロファイルの差し替えが途中で止まった（正本は新しい版のまま・クローンは前の版）: ${summary}`
-                : `実行環境プロファイルを差し替えられなかった: ${summary}`,
-            grounds: `差し替えようとしたが、状態の変更が失敗した: ${errorKindOf(error)}`,
-          });
-          throw error;
+          return await profileToolFailed('profile_write', name, summary, error);
         }
+        return await profileToolReport(
+          'profile_write',
+          name,
+          summary,
+          result,
+          `行 ${name} を置いた`,
+        );
+      },
+    ),
 
-        // **失敗を判断として記録しない。** 置けなかったのはシステムの結果であって
-        // クローンの判断ではない。理由はそのまま返して、直すのはこの場でやらせる。
-        if (!result.stored) {
-          /**
-           * **読めなかったのはシステムの結果であって判断ではない**（直前の
-           * コメントと同じ理由）。保存も配布もしていない——それでも打ち消しの
-           * 行を足す（issue #2145。`PUT /profile` の同じ経路〈#2134〉と揃える。
-           * 記録が多すぎる側の穴で、記録の無い差し替えより安全側と判断した）。
-           */
-          await appendJournalOrDrop('profile_write', stores.journal, {
-            type: 'decision',
-            decision: `実行環境プロファイルを差し替えられなかった（読めなかった）: ${summary}`,
-            grounds: '人間から実行環境そのものを渡されたが、評価で断られた（値は記録しない）',
-          });
-          // シェルの stderr は入力の行を引用し、`set -x` は値ごと吐く（issue #2429）。
-          // クローンの文脈に鍵の値を入れない——`PUT /profile` の 400 と同じ関数で伏せる。
-          const failure = redactProfileFailure(result.clone, process.env);
+    tool(
+      'profile_remove',
+      [
+        '実行環境プロファイルの1行を外す。他の行は変えない（全部外すときは行を1つずつ外す）。',
+        '外した行がクローンと runner のどちらかの最後の1行だったなら、その側からは環境が外れる（空が降りる）。',
+        '無い名前を渡しても何も変わらない。行の名前は profile_read（name を省略）で取れる。',
+      ].join(' '),
+      {
+        name: z.string().describe('外す行の名前'),
+        summary: z
+          .string()
+          .describe('何を外したかの一行要約（日誌に残る。**値そのものは書かない**）'),
+      },
+      async ({ name, summary }) => {
+        if (context.profile === undefined) {
           return text(
-            `実行環境プロファイルを置けなかった（保存も配布もしていない）: ${failure.error}` +
-              `${failure.output.length === 0 ? '' : `\n${failure.output}`}`,
+            'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
+              '次の会話で外すこと。',
           );
         }
-
-        // 差し替え自体はもう効いている。後で分かった sha256・配布結果を2行目
-        // として足す（落ちても道具の結果は変えない——`appendJournalOrDrop` の doc）。
-        await appendJournalOrDrop('profile_write', stores.journal, {
-          type: 'decision',
-          decision: `実行環境プロファイルを更新した: ${summary}`,
-          grounds: '人間から実行環境そのものを渡された（値は記録しない）',
-        });
-
-        const scopeNote =
-          result.sha256 === undefined || result.scope === undefined
-            ? ''
-            : ` / 撒く先 ${result.scope}`;
-        const failed = result.runners.filter((runner) => !runner.ok);
-        const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
-        return text(
-          [
-            `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}${scopeNote}）。`,
-            delivered.length === 0
-              ? null
-              : `配った先: ${excerptLine(delivered.join(', '), PROFILE_DISTRIBUTION_EXCERPT)}`,
-            failed.length === 0
-              ? null
-              : `配れなかった先: ${excerptLine(
-                  failed.map((r) => `${r.runnerId}（${r.error ?? '理由不明'}）`).join(', '),
-                  PROFILE_DISTRIBUTION_EXCERPT,
-                )}`,
-            'これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う。',
-          ]
-            .filter((line) => line !== null)
-            .join('\n'),
+        if (!PROFILE_ENTRY_NAME.test(name)) {
+          return text(`行の名前の形が不正（${PROFILE_ENTRY_NAME.source}）。何も変えていない。`);
+        }
+        await appendJournalOrThrow(
+          'profile_remove',
+          stores.journal,
+          {
+            type: 'decision',
+            decision: `実行環境プロファイルの行 ${name} を外そうとしている: ${summary}`,
+            grounds: '人間から実行環境そのものを渡された（値は記録しない）',
+          },
+          'act-not-performed',
+        );
+        let result: Awaited<ReturnType<ProfileService['remove']>>;
+        try {
+          result = await context.profile.remove(name);
+        } catch (error) {
+          return await profileToolFailed('profile_remove', name, summary, error);
+        }
+        if (!result.removed) {
+          await appendJournalOrDrop('profile_remove', stores.journal, {
+            type: 'decision',
+            decision: `実行環境プロファイルの行 ${name} は無かったので何も変えなかった: ${summary}`,
+            grounds: '外そうとしたが、その名前の行は置かれていなかった',
+          });
+          return text(`プロファイルに行 ${name} は無い。何も変えていない。`);
+        }
+        return await profileToolReport(
+          'profile_remove',
+          name,
+          summary,
+          result,
+          `行 ${name} を外した`,
         );
       },
     ),
