@@ -977,12 +977,7 @@ class Host implements RunnerHost {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
-    const session = this.#create(
-      command.managerId,
-      command.request,
-      command.cwd,
-      command.provider,
-    );
+    const session = this.#create(command.managerId, command.request, command.cwd, command.provider);
     try {
       // **新しいセッションなので拒む判定は起きない。** `checkFence` は
       // 「まだ世代を覚えていない」ときは無条件に覚えるだけである
@@ -1067,12 +1062,7 @@ class Host implements RunnerHost {
         this.#sessions.delete(command.managerId);
       }
     }
-    const session = this.#create(
-      command.managerId,
-      command.request,
-      command.cwd,
-      command.provider,
-    );
+    const session = this.#create(command.managerId, command.request, command.cwd, command.provider);
     // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
     // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
     // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる

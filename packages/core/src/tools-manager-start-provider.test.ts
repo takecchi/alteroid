@@ -98,9 +98,9 @@ describe('manager_start の provider 引数', () => {
 
   it('開けていない provider は、型の抜け道で渡されても断る', async () => {
     const { tool, started } = build(['codex']);
-    await expect(
-      tool.handler({ request: 'x', provider: 'claude' } as never, {}),
-    ).rejects.toThrow(/ALTEROID_CLONE_PEERS/);
+    await expect(tool.handler({ request: 'x', provider: 'claude' } as never, {})).rejects.toThrow(
+      /ALTEROID_CLONE_PEERS/,
+    );
     expect(started).toEqual([]);
   });
 });
