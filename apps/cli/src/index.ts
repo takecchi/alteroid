@@ -717,7 +717,8 @@ profileCommand
   .description('$EDITOR で開いて書き換える（閉じたら反映）')
   .option(
     '--scope <all|app|runner>',
-    '撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=マネージャー・作業者だけ。省略は今のものを保つ。置かれていなければ all）',
+    '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ。' +
+      '省略すると今の撒く先を引き継ぐ（置かれていなければ all）',
   )
   .action(async (options: { scope?: string }) => {
     await profileEditCommand(options);
@@ -729,7 +730,8 @@ profileCommand
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option(
     '--scope <all|app|runner>',
-    '撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=マネージャー・作業者だけ。省略は今のものを保つ。置かれていなければ all）',
+    '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ。' +
+      '省略すると今の撒く先を引き継ぐ（置かれていなければ all）',
   )
   .action(async (options: { file?: string; scope?: string }) => {
     await profileSetCommand(options);

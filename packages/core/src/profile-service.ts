@@ -312,9 +312,10 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
           stored: true,
           updatedAt: stored.updatedAt,
           scope: stored.scope,
-          // **指紋は本文から直に取る。**（撒く先が片方だけでも、正本の指紋である。
-          // 届いた先の指紋と見比べるときは、`scope` で「届かないのが正しい側」を除く） 器の有無で出たり出なかったりすると、
+          // **指紋は本文から直に取る。** 器の有無で出たり出なかったりすると、
           // 「届いているか」を突き合わせる手段が構成によって消える。
+          // （撒く先が片方だけでも、これは正本の指紋である。届いた先の指紋と見比べる
+          // ときは、`scope` で「届かないのが正しい側」を除くこと）
           ...(normalized.length === 0
             ? {}
             : { sha256: fingerprintOf(normalized), bytes: Buffer.byteLength(normalized) }),

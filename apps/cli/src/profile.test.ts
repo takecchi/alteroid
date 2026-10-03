@@ -381,7 +381,7 @@ describe('撒く先（--scope）', () => {
     await profileSetCommand({ file: await scriptFile(), scope: 'runner' });
 
     expect(putBody()).toEqual({ script: 'export FOO=bar\n', scope: 'runner' });
-    expect(read()).toContain('撒く先: runner（マネージャー・作業者だけ）');
+    expect(read()).toContain('撒く先: runner（manager だけ）');
   });
 
   it('set で --scope を省くと scope を送らない（デーモンが今の撒く先を保つ）', async () => {
@@ -460,7 +460,7 @@ describe('撒く先（--scope）', () => {
 
       await profileStatusCommand();
 
-      expect(read()).toContain('撒く先: runner（マネージャー・作業者だけ）');
+      expect(read()).toContain('撒く先: runner（manager だけ）');
     });
 
     it('scope=app で runner に何も載っていないのは、食い違いではなく正しい状態として出す', async () => {
@@ -473,7 +473,9 @@ describe('撒く先（--scope）', () => {
 
       await profileStatusCommand();
 
-      expect(read()).toContain(
+      const text = read();
+      expect(text).toContain('撒く先: app（clone だけ）');
+      expect(text).toContain(
         '  runner-a: プロファイル無し（撒く先が app なので、載っていないのが正しい。connected）',
       );
     });

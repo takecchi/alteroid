@@ -6,6 +6,7 @@ import { stdin, stdout } from 'node:process';
 
 import { redactedExcerpt } from '@alteroid/core/redact';
 
+import { describeScope } from './credential.js';
 import { describeAuthFailure, forbiddenKindOf, resolveTarget, type Target } from './target.js';
 
 /**
@@ -52,21 +53,6 @@ interface UpdateView {
   bytes?: number;
   clone: ApplyResult;
   runners: (ApplyResult & { runnerId: string })[];
-}
-
-function describeScope(scope: string): string {
-  switch (scope) {
-    case 'all':
-      return 'all（クローンと runner の両方）';
-    case 'app':
-      return 'app（クローンだけ）';
-    case 'runner':
-      return 'runner（マネージャー・作業者だけ）';
-    default:
-      // 送られてくる値である。古い CLI が新しいデーモンの値を知らないことがある
-      // ——投げずに「未知」とそのまま出す（`credential.ts` の同名の関数と同じ判断）。
-      return `未知の撒く先（${scope}）`;
-  }
 }
 
 /** `--scope` を検査する。省略は undefined（＝今の撒く先を保つ）。 */

@@ -59,7 +59,8 @@ interface CredentialsUpdateView {
   runners: { runnerId: string; ok: boolean; error?: string }[];
 }
 
-function describeScope(scope: 'all' | 'app' | 'runner'): string {
+/** 撒く先の言い方。`profile.ts` も同じものを使う（環境変数と1文字違わず揃えるため）。 */
+export function describeScope(scope: 'all' | 'app' | 'runner'): string {
   switch (scope) {
     case 'all':
       return 'all（共通）';
