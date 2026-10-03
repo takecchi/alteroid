@@ -928,14 +928,20 @@ class Host implements RunnerHost {
     return cwd;
   }
 
-  #create(managerId: string, request: string, cwd: string): RunnerSession {
+  #create(
+    managerId: string,
+    request: string,
+    cwd: string,
+    provider?: AgentProviderId,
+  ): RunnerSession {
     const session = new RunnerSession({
       managerId,
       request,
       cwd: this.#resolveCwd(cwd),
       emit: this.#emit,
       ...(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
-      managerProvider: this.#managerProvider,
+      // 命令が名指ししていればそれ（#486 S7）。無ければ host の既定＝従来どおり。
+      managerProvider: provider ?? this.#managerProvider,
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
@@ -971,7 +977,12 @@ class Host implements RunnerHost {
     if (this.#sessions.has(command.managerId)) {
       throw new Error(`${command.managerId} は既に走っている`);
     }
-    const session = this.#create(command.managerId, command.request, command.cwd);
+    const session = this.#create(
+      command.managerId,
+      command.request,
+      command.cwd,
+      command.provider,
+    );
     try {
       // **新しいセッションなので拒む判定は起きない。** `checkFence` は
       // 「まだ世代を覚えていない」ときは無条件に覚えるだけである
@@ -1056,7 +1067,12 @@ class Host implements RunnerHost {
         this.#sessions.delete(command.managerId);
       }
     }
-    const session = this.#create(command.managerId, command.request, command.cwd);
+    const session = this.#create(
+      command.managerId,
+      command.request,
+      command.cwd,
+      command.provider,
+    );
     // **この Host インスタンスにとっては初めて見るセッション**（器の入れ替え・
     // デーモンの再起動後の resume、または上の待ちを経て名簿から消えた直後）
     // なので、比べる前の世代が無い。拒む判定は起きず、覚えるだけになる

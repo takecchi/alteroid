@@ -21,7 +21,7 @@ import type {
   RunnerStartCommand,
   UnpushedWorkResult,
 } from './runner-protocol.js';
-import { RUNNER_CAPABILITIES } from './runner-protocol.js';
+import { RUNNER_CAPABILITIES, RUNNER_MANAGER_PROVIDERS } from './runner-protocol.js';
 import { readExecutionResources } from './runner-resources.js';
 import { createRunnerHost, type RunnerHost } from './runner.js';
 
@@ -131,6 +131,7 @@ class LocalRunner implements RunnerClient {
       runnerId: this.runnerId,
       capabilities: [...RUNNER_CAPABILITIES],
       ...(this.#managerProvider === undefined ? {} : { managerProvider: this.#managerProvider }),
+      managerProviders: [...RUNNER_MANAGER_PROVIDERS],
     });
     while (this.#queue.length > 0) {
       const event = this.#queue.shift();

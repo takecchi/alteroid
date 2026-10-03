@@ -1,6 +1,7 @@
 import { redactErrorText } from './denial-input-head.js';
 import { z } from 'zod';
 
+import { AGENT_PROVIDER_IDS, type AgentProviderId } from './agent-ports.js';
 import { cgroupEventsDeltaSchema } from './cgroup-events.js';
 import { CREDENTIAL_NAME_MAX_LENGTH } from './credentials.js';
 import { excerptLine } from './excerpt.js';
@@ -179,6 +180,28 @@ export const runnerLeaseSchema = z.object({
 
 export type RunnerLease = z.infer<typeof runnerLeaseSchema>;
 
+/**
+ * 命令が名指しする provider（#486 S7。クローンの `manager_start` の `provider` 引数）。
+ *
+ * **知らない値は 400 で断る**（`AGENT_PROVIDER_IDS` に無い値を黙って既定へ倒さない）。
+ * 欄ごと省略されれば runner の既定（`ALTEROID_MANAGER_PROVIDER`）で動く＝従来どおり。
+ * **旧い runner はこの欄を持たず、zod が黙って捨てる**——だからデーモンは、runner が
+ * `hello.managerProviders` で名乗っていないときは送らずに断る（`ManagerPool#start`）。
+ */
+export const runnerProviderSchema = z.custom<AgentProviderId>(
+  (value) =>
+    typeof value === 'string' && AGENT_PROVIDER_IDS.some((candidate) => candidate === value),
+  { message: '知らない provider' },
+);
+
+/**
+ * runner が `hello.managerProviders` で名乗る、**命令で名指しされて起こせる** provider
+ * （#486 S7）。この版の runner は `start` / `resume` の `provider` を解して、駆動役を
+ * セッションごとに選べる——**その印**である。コードが知っている provider 全部
+ * （実際に動くかは、鍵・`codex` の有無など器の事情でまた別）。
+ */
+export const RUNNER_MANAGER_PROVIDERS: readonly string[] = AGENT_PROVIDER_IDS;
+
 export const runnerStartCommandSchema = z.object({
   managerId: z.string().min(1),
   request: z.string().min(1),
@@ -186,6 +209,8 @@ export const runnerStartCommandSchema = z.object({
   cwd: z.string().min(1),
   /** **新しいセッションなので、runner は世代を覚えるだけ**（拒む判定はしない）。 */
   lease: runnerLeaseSchema.optional(),
+  /** このセッションを動かす provider。省略は runner の既定（`runnerProviderSchema` の doc）。 */
+  provider: runnerProviderSchema.optional(),
 });
 
 export type RunnerStartCommand = z.infer<typeof runnerStartCommandSchema>;
@@ -211,6 +236,11 @@ export const runnerResumeCommandSchema = z.object({
    * 比べる。古ければ `RunnerFenceError` を投げて**このセッションには一切触れない**。
    */
   lease: runnerLeaseSchema.optional(),
+  /**
+   * このセッションを動かす provider。デーモンの台帳（`Job.managerProvider`）が持つ値で、
+   * 指名されていた委譲にだけ付く。省略は runner の既定。
+   */
+  provider: runnerProviderSchema.optional(),
 });
 
 export type RunnerResumeCommand = z.infer<typeof runnerResumeCommandSchema>;
@@ -895,6 +925,13 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     runnerId: z.string(),
     capabilities: z.array(z.string()).optional(),
     managerProvider: z.string().optional(),
+    /**
+     * この runner が**命令で名指しされて**起こせる provider（#486 S7）。`.optional()`——
+     * 旧い runner は送らず、**無ければ「名指しの起動を受けられない」と読む**
+     * （旧い runner は `provider` 欄を黙って捨てるので、送ると別の provider で動く）。
+     * `managerProvider`（既定の provider）とは別の軸。値域を縛らないのは `managerProvider` と同じ。
+     */
+    managerProviders: z.array(z.string()).optional(),
   }),
   z.object({ type: z.literal('session'), managerId: z.string(), sessionId: z.string() }),
   /** SDK が生ログを預けるときの scope。生ログを後から引き当てる鍵になる。 */

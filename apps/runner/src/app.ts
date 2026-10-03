@@ -7,6 +7,7 @@ import {
   reasonOf,
   resolveBuildRevision,
   RUNNER_CAPABILITIES,
+  RUNNER_MANAGER_PROVIDERS,
   startSseHeartbeat,
   RunnerFenceError,
   runnerAnswerCommandSchema,
@@ -1091,6 +1092,8 @@ export function createRunnerApp(deps: RunnerAppDeps) {
                   type: 'hello',
                   runnerId: host.runnerId,
                   capabilities: RUNNER_CAPABILITIES,
+                  // 名指しの provider で起こせる印（#486 S7）。無い旧い runner には送っても無視される。
+                  managerProviders: RUNNER_MANAGER_PROVIDERS,
                   ...(deps.managerProvider === undefined
                     ? {}
                     : { managerProvider: deps.managerProvider }),

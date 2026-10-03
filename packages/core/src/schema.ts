@@ -4160,6 +4160,16 @@ export const jobSchema = z.object({
    */
   sessionInstanceId: z.string().optional(),
   /**
+   * このマネージャーが実際に動いている provider（#486 S7。クローンが `manager_start` の
+   * `provider` 引数で指名した値）。
+   *
+   * **指名したときだけ書く。** 無いことは「runner の既定で動いている」であって、`claude` ではない
+   * （表示は runner が `hello` で名乗った値へ落ちる）。resume はこの値を runner へ送り直す——
+   * 器が入れ替わっても、Codex のセッションを Claude で開き直さないため。保存は Job 丸ごとの
+   * JSON なので移行は要らず、古い行に欄は無い。
+   */
+  managerProvider: z.string().optional(),
+  /**
    * 退避済みトランスクリプト以外の生ログへの入口は**ここに持たない**。
    *
    * 走行中の生ログは manager-runner のディスクの上にあり、デーモンはその中を

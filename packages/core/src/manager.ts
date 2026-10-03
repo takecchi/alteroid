@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import { DEFAULT_AGENT_PROVIDER_ID } from './agent-ports.js';
+import {
+  AGENT_PROVIDER_IDS,
+  DEFAULT_AGENT_PROVIDER_ID,
+  type AgentProviderId,
+} from './agent-ports.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import { redactSecretsInText } from './denial-input-head.js';
 import { denialInputAbsence, denialInputShape } from './denial-shape.js';
@@ -146,6 +150,16 @@ export interface ManagerStartInput {
    */
   runnerId?: string;
   /**
+   * このマネージャーを動かす provider の指名（#486 S7。クローンの `manager_start` の
+   * `provider` 引数）。**省略すれば runner の既定で動く＝従来どおり**で、台帳にも書かない。
+   *
+   * 指名は、宛先の runner が `hello.managerProviders` で名乗っているときだけ runner へ送る。
+   * 名乗っていない旧い runner へは**送らずに断る**（送っても `provider` 欄は黙って捨てられ、
+   * 別の provider で動いてしまう）。ただし指名が runner の既定と同じなら、送らずに起こす
+   * （どちらでも同じ provider で動く）。
+   */
+  provider?: string;
+  /**
    * 呼び出し元のいまのターンの会話 id（issue #1003 段2・#781）。
    *
    * **クローンはこの欄を書かない。** `tools.ts` の `manager_start` ツール
@@ -250,6 +264,11 @@ export type TokenGenerationUnknownReason =
 export interface ManagerSummary {
   managerId: string;
   status: JobStatus;
+  /**
+   * このマネージャーが実際に動いている provider（#486 S7）。**クローンが `provider` を指名した
+   * 委譲にだけある**。無いときの表示は宛先の runner が名乗った既定（`runnerReportedManagerProvider`）。
+   */
+  managerProvider?: string;
   /**
    * このデーモンから話しかけられるか。
    *
@@ -3995,6 +4014,10 @@ const DENIAL_REPLY_ROUTE =
  */
 const MAX_MANAGER_ID_ATTEMPTS = 5;
 
+/** `hello` を待つ上限と間隔（#486 S7。指名の provider があるときだけ使う）。 */
+const PROVIDER_HELLO_WAIT_MS = 5_000;
+const PROVIDER_HELLO_POLL_MS = 50;
+
 /**
  * 上限の文言を、種類ごとに何通り覚えておくか。
  *
@@ -4981,6 +5004,12 @@ class Pool implements ManagerPool {
    */
   readonly #runnerManagerProviders = new Map<string, string>();
   /**
+   * runner ごとに、直近の `hello` で名乗られた「命令で名指しされて起こせる provider」
+   * （#486 S7。`hello.managerProviders`）。欄を送らない旧い runner の hello では鍵を消す。
+   * 「名乗りを受けたか」は `#runnerCapabilities` の鍵で見る（`hello` ごとに必ず書かれる）。
+   */
+  readonly #runnerStartableProviders = new Map<string, ReadonlySet<string>>();
+  /**
    * **枠で止まった委譲**の managerId（`case 'usage_notice'` の `reached` で立ち、
    * {@link Pool.resumeStoppedByUsage} が下ろす）。
    *
@@ -5535,6 +5564,11 @@ class Pool implements ManagerPool {
           'cwd を明示して起こすか、runner が /health で workspacePath を名乗ってから起こすこと（#402）。',
       );
     }
+    // **指名があるときだけ、この門を通る**（省略なら何も変わらない）。
+    const providerToSend =
+      input.provider === undefined
+        ? undefined
+        : await this.#providerForCommand(runner, input.provider);
     const managerId = this.#claimManagerId();
     const cwd = input.cwd ?? runner.workspacePath;
     const now = this.#now();
@@ -5576,6 +5610,7 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         runnerId: runner.runnerId,
+        ...(input.provider === undefined ? {} : { managerProvider: input.provider }),
         // **確かめずに `runner-volume` と書かない。** デーモンからは、この器の
         // `/workspace` がボリュームなのか毎デプロイで消えるのかを知る手段が無い
         // （名乗りはパスしか運ばない）。断定すると台帳が**存在しない永続性**を
@@ -5602,6 +5637,7 @@ class Pool implements ManagerPool {
         request: input.request,
         cwd,
         lease: { fence: lease.fence, ttlMs: lease.ttlMs },
+        ...(providerToSend === undefined ? {} : { provider: providerToSend }),
       });
     } catch (error) {
       // 起こせなかったものを一覧に残さない。残すと「走っている」と見えるのに、
@@ -6924,6 +6960,49 @@ class Pool implements ManagerPool {
    */
   runnerManagerProvider(runnerId: string): string {
     return this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
+  }
+
+  /**
+   * 命令（`start` / `resume`）へ載せる provider を決める（#486 S7）。**送れないなら投げる。**
+   *
+   * - runner が `hello.managerProviders` で名乗っている → その provider なら載せる
+   * - 名乗っていない（旧い版）→ **載せない。** `provider` 欄は黙って捨てられ、別の provider で
+   *   動いてしまうため。指名が runner の既定と**同じ**ときだけ、載せずに通す（どちらでも同じ）
+   * - まだ `hello` を受けていない → 少し待つ（`connect` は `hello` を待たずに返る）。
+   *   来なければ「分からない」として断る（既定へ倒さない）
+   */
+  async #providerForCommand(
+    runner: RunnerClient,
+    requested: string,
+  ): Promise<AgentProviderId | undefined> {
+    const known = AGENT_PROVIDER_IDS.find((candidate) => candidate === requested);
+    if (known === undefined) {
+      throw new Error(
+        `provider=${requested} は知らない provider（使えるのは ${AGENT_PROVIDER_IDS.join(' / ')}）`,
+      );
+    }
+    const runnerId = runner.runnerId;
+    for (
+      let waited = 0;
+      !this.#runnerCapabilities.has(runnerId) && waited < PROVIDER_HELLO_WAIT_MS;
+      waited += PROVIDER_HELLO_POLL_MS
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, PROVIDER_HELLO_POLL_MS));
+    }
+    if (!this.#runnerCapabilities.has(runnerId)) {
+      throw new Error(
+        `runner（runnerId=${runnerId}）からまだ名乗り（hello）を受けていないので、provider=${known} ` +
+          'を受けられるか分からない。少し置いてからやり直すこと（既定の provider へは倒さない）。',
+      );
+    }
+    if (this.#runnerStartableProviders.get(runnerId)?.has(known) === true) return known;
+    const fallback = this.#runnerManagerProviders.get(runnerId) ?? DEFAULT_AGENT_PROVIDER_ID;
+    if (known === fallback) return undefined;
+    throw new Error(
+      `runner（runnerId=${runnerId}）は provider=${known} の指名起動を受けられない` +
+        `（この版の runner は名指しの provider を解さない。既定の provider は ${fallback}）。` +
+        'provider を省くか、runner を更新してからやり直すこと。',
+    );
   }
 
   /**
@@ -10426,6 +10505,13 @@ class Pool implements ManagerPool {
     const { sessionId, cwd, request, projectKey } = record.job;
     if (sessionId === undefined) return 'no-session';
 
+    // **指名されていた委譲だけ、同じ provider で開き直す**（#486 S7）。送れない器なら、
+    // 貸し出しにも runner にも触れずに断る。指名の無い委譲は何も変わらない。
+    const providerToSend =
+      record.job.managerProvider === undefined
+        ? undefined
+        : await this.#providerForCommand(runner, record.job.managerProvider);
+
     /*
      * **`cwd` を記録しておらず、runner からも `workspacePath` を一度も聞けて
      * いないなら、ここで断る（#402）。** `#claimForResume` / `#loadSession`
@@ -10476,6 +10562,7 @@ class Pool implements ManagerPool {
       request: request ?? record.job.summary,
       ...(message === undefined ? {} : { message }),
       ...(material.kind === 'loaded' ? { entries: material.entries } : {}),
+      ...(providerToSend === undefined ? {} : { provider: providerToSend }),
       // **世代と猶予を渡す。** これで runner は古い世代の命令を拒み、連絡が
       // 取れなくなったら自分でこのセッションを畳める（`lease.ts` の doc）。
       ...(record.job.lease === undefined
@@ -10654,6 +10741,11 @@ class Pool implements ManagerPool {
       // 能力の名乗り（#1394 段(C)）。欄を送らない旧い runner は空集合 ——
       // 前の名乗りを持ち越さない（同じ runnerId の器が入れ替わって版が下がりうる）。
       this.#runnerCapabilities.set(event.runnerId, new Set(event.capabilities ?? []));
+      if (event.managerProviders === undefined) {
+        this.#runnerStartableProviders.delete(event.runnerId);
+      } else {
+        this.#runnerStartableProviders.set(event.runnerId, new Set(event.managerProviders));
+      }
       if (event.managerProvider === undefined) {
         this.#runnerManagerProviders.delete(event.runnerId);
       } else {
@@ -15007,6 +15099,7 @@ function summaryOf(
     // 通した値だけをここへ渡している。
     ...(usageStoppedAt === undefined ? {} : { usageStoppedAt }),
     ...(job.runnerId === undefined ? {} : { runnerId: job.runnerId }),
+    ...(job.managerProvider === undefined ? {} : { managerProvider: job.managerProvider }),
     /*
      * **`unknown` を黙って落とさない。** 台帳が「永続性を確かめられなかった」と
      * 言っているとき、欄ごと消すと外からは**何も書かれていない**のと同じに見え、

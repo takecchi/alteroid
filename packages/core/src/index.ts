@@ -1056,6 +1056,8 @@ export {
   runnerCredentialSchema,
   runnerEventSchema,
   RUNNER_CAPABILITIES,
+  RUNNER_MANAGER_PROVIDERS,
+  runnerProviderSchema,
   RUNNER_CAPABILITY_AWAITING_BACKGROUND_SIGNAL,
   runnerExecutionResourcesSchema,
   runnerLeaseSchema,
