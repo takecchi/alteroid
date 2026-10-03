@@ -464,6 +464,8 @@ describe('ENV_FILE_OWNED_CREDENTIAL_NAMES（正本を器の生の環境変数が
       'ALTEROID_AUTH',
       // 群2: 層とモデル帯の対応＝人間の承認の置き場（2026-09-15）
       'ALTEROID_CLONE_MODEL',
+      // クローンが呼んでよいもう一方の provider（#486 段 S7）。人間が開ける承認そのもの
+      'ALTEROID_CLONE_PEERS',
       'ALTEROID_CLONE_PROVIDER',
       'ALTEROID_GOOGLE_CLIENT_ID',
       'ALTEROID_GOOGLE_CLIENT_SECRET',

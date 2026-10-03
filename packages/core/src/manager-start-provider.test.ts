@@ -135,7 +135,9 @@ describe('ManagerPool.start の provider（#486 S7）', () => {
     for (const id of [named.managerId, plain.managerId]) {
       fake.emit({ type: 'session', managerId: id, sessionId: `sess-${id}` });
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect
+      .poll(async () => (await pool.list()).filter((m) => m.sessionId !== undefined).length)
+      .toBe(2);
     await pool.send(named.managerId, 'つづき');
     await pool.send(plain.managerId, 'つづき');
     const byId = new Map(fake.resumes.map((r) => [r.managerId, r]));
