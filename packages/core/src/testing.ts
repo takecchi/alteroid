@@ -1409,10 +1409,12 @@ export function createMemoryStores(): Stores {
     async read() {
       return envProfile;
     },
-    async write(script) {
+    async write(script, scope = 'all') {
       envProfile =
-        script.trim().length === 0 ? null : { script, updatedAt: new Date().toISOString() };
-      return envProfile ?? { script: '', updatedAt: new Date().toISOString() };
+        script.trim().length === 0
+          ? null
+          : { script, updatedAt: new Date().toISOString(), scope };
+      return envProfile ?? { script: '', updatedAt: new Date().toISOString(), scope: 'all' };
     },
     async revert(previous) {
       envProfile = previous;

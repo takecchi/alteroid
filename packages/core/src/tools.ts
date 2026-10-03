@@ -9467,7 +9467,7 @@ export function createCloneTools(context: ToolContext) {
             '最後まで取ること** — ここまでの分だけを渡すと残りが消える）'
           : '';
         return text(
-          `（最終更新 ${current.updatedAt} / ${describePage(part)}）\n${part.body}${tail}`,
+          `（最終更新 ${current.updatedAt} / 撒く先 ${current.scope} / ${describePage(part)}）\n${part.body}${tail}`,
         );
       },
     ),
@@ -9755,8 +9755,18 @@ export function createCloneTools(context: ToolContext) {
         '記憶（判断の根拠）とは別の器である。鍵や PATH を記憶に書かないこと。',
         '置く前に実際に読めるかを確かめるので、読めなければ保存も配布もされず理由が返る。',
         '**全文置換なので、足すだけのつもりなら先に profile_read で今の本文を取ること。**',
+        '撒く先は scope で選ぶ（all=あなたと runner の両方 / app=あなた（デーモン）だけ / runner=マネージャー・作業者だけ。',
+        '省略すると今の撒く先を保つ。置かれていなければ all）。',
+        'runner だけに要る環境（runner に入れた道具の PATH など）を all で置くと、あなた自身にも届いてしまう。',
       ].join(' '),
       {
+        scope: z
+          .enum(['all', 'app', 'runner'])
+          .optional()
+          .describe(
+            '撒く先。all=クローン（あなた）と runner の両方 / app=クローンだけ / runner=runner（マネージャー・作業者）だけ。' +
+              '省略は「今の撒く先を保つ」（置かれていなければ all）',
+          ),
         script: z
           .string()
           .describe(
@@ -9767,7 +9777,7 @@ export function createCloneTools(context: ToolContext) {
           .string()
           .describe('何を変えたかの一行要約（日誌に残る。**値そのものは書かない**）'),
       },
-      async ({ script, summary }) => {
+      async ({ script, summary, scope }) => {
         if (context.profile === undefined) {
           return text(
             'いまは実行環境プロファイルを差し替えられない場面である（記憶へ移すための内部ターン）。' +
@@ -9797,7 +9807,7 @@ export function createCloneTools(context: ToolContext) {
         // 違う本文が残らない。
         let result: Awaited<ReturnType<ProfileService['apply']>>;
         try {
-          result = await context.profile.apply(script);
+          result = await context.profile.apply(script, scope);
         } catch (error) {
           // 日誌には「差し替えようとしている」が残っているので、打ち消す
           // （best-effort。落ちても noteDroppedRecord で跡を残すだけ）。
@@ -9846,11 +9856,13 @@ export function createCloneTools(context: ToolContext) {
           grounds: '人間から実行環境そのものを渡された（値は記録しない）',
         });
 
+        const scopeNote =
+          result.sha256 === undefined || result.scope === undefined ? '' : ` / 撒く先 ${result.scope}`;
         const failed = result.runners.filter((runner) => !runner.ok);
         const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
         return text(
           [
-            `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}）。`,
+            `実行環境プロファイルを更新した（sha256 ${result.sha256 ?? '外した'}${scopeNote}）。`,
             delivered.length === 0
               ? null
               : `配った先: ${excerptLine(delivered.join(', '), PROFILE_DISTRIBUTION_EXCERPT)}`,

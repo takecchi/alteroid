@@ -24,6 +24,7 @@ import type {
   InboxRemoveManyResult,
   McpServers,
   McpServersUpdateResult,
+  ProfileScope,
   ProfileUpdateResult,
   TokenRotationSettings,
 } from '@alteroid/logic';
@@ -723,8 +724,11 @@ export function useSetProfile() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (script: string): Promise<ProfileUpdateResult> => {
-      const result = await api.api.PUT('/profile', { body: { script } });
+    async (script: string, scope?: ProfileScope): Promise<ProfileUpdateResult> => {
+      // `scope` の省略は「今の撒く先を保つ」（デーモン側の約束。CLI の `--scope` 省略と同じ）。
+      const result = await api.api.PUT('/profile', {
+        body: { script, ...(scope === undefined ? {} : { scope }) },
+      });
       if (result.response.status === 400) {
         const body = result.error as { error?: unknown; detail?: unknown } | undefined;
         if (typeof body?.error === 'string') {

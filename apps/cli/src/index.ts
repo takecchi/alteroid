@@ -715,15 +715,23 @@ profileCommand
 profileCommand
   .command('edit')
   .description('$EDITOR で開いて書き換える（閉じたら反映）')
-  .action(async () => {
-    await profileEditCommand();
+  .option(
+    '--scope <all|app|runner>',
+    '撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=マネージャー・作業者だけ。省略は今のものを保つ。置かれていなければ all）',
+  )
+  .action(async (options: { scope?: string }) => {
+    await profileEditCommand(options);
   });
 
 profileCommand
   .command('set')
   .description('ファイル（または標準入力）の内容で丸ごと置き換える')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
-  .action(async (options: { file?: string }) => {
+  .option(
+    '--scope <all|app|runner>',
+    '撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=マネージャー・作業者だけ。省略は今のものを保つ。置かれていなければ all）',
+  )
+  .action(async (options: { file?: string; scope?: string }) => {
     await profileSetCommand(options);
   });
 

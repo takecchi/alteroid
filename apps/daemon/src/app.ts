@@ -5951,10 +5951,11 @@ export function createApp(deps: AppDeps) {
       requireOwner,
       async (c) => {
         const stored = await deps.stores.profile.read();
-        if (stored === null) return c.json(profileResponseSchema.parse({ script: '' }));
+        if (stored === null) return c.json(profileResponseSchema.parse({ script: '', scope: 'all' }));
         return c.json(
           profileResponseSchema.parse({
             script: stored.script,
+            scope: stored.scope,
             updatedAt: stored.updatedAt,
             sha256: fingerprintOf(stored.script),
             bytes: Buffer.byteLength(stored.script),
@@ -6060,7 +6061,7 @@ export function createApp(deps: AppDeps) {
         if (deps.profile === undefined) {
           return c.json({ error: 'プロファイルの器が無い' as const, detail: '' }, 400);
         }
-        const script = c.req.valid('json').script;
+        const { script, scope } = c.req.valid('json');
 
         // **日誌を先に書く（issue #2123）。書けなければ差し替えずに 500。**
         // sha256・bytes は差し替えた後でないと分からないので、ここでは書かない
@@ -6073,7 +6074,7 @@ export function createApp(deps: AppDeps) {
 
         let result: Awaited<ReturnType<ProfileService['apply']>>;
         try {
-          result = await deps.profile.apply(script);
+          result = await deps.profile.apply(script, scope);
         } catch (error) {
           // 日誌には「差し替えようとしている」が残っているので、打ち消す
           // （grant の「アクセス許可付与の打ち消しの日誌」と同じ形）。
@@ -6149,7 +6150,7 @@ export function createApp(deps: AppDeps) {
             decision:
               result.sha256 === undefined
                 ? '実行環境プロファイルを外した'
-                : `実行環境プロファイルを更新した（sha256 ${result.sha256}・${String(result.bytes)} bytes）`,
+                : `実行環境プロファイルを更新した（sha256 ${result.sha256}・${String(result.bytes)} bytes・撒く先 ${result.scope ?? 'all'}）`,
             grounds:
               `${describeActor(c.get('principal'))}（PUT /profile）。` +
               '値は書かない（鍵が入りうる）。クローンの次のセッションから効く。' +
@@ -6163,6 +6164,7 @@ export function createApp(deps: AppDeps) {
         return c.json(
           profileUpdateResponseSchema.parse({
             updatedAt: result.updatedAt as string,
+            scope: result.scope ?? 'all',
             ...(result.sha256 === undefined
               ? {}
               : { sha256: result.sha256, bytes: result.bytes as number }),

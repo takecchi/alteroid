@@ -9,12 +9,40 @@ import {
   CardHeader,
   ErrorNote,
   KeyValueList,
+  Select,
   Spinner,
   Textarea,
 } from '@alteroid/ui';
 import { ProfileRejectedError, useSetProfile, useProfile } from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
-import type { ProfileState, ProfileUpdateResult } from '@alteroid/logic';
+import type { ProfileScope, ProfileState, ProfileUpdateResult } from '@alteroid/logic';
+
+/**
+ * 撒く先。**環境変数画面（`env-vars.tsx`）の `describeScope` / `SCOPE_OPTIONS` と同じ
+ * 3値・同じ言い方**（2026-10-03。オーナーの指示「env-profileを環境変数と同じように
+ * 指定できるようにして欲しい」「デフォルトは両方です」）。
+ */
+function describeScope(scope: ProfileScope): { label: string; tone: 'neutral' | 'accent' } {
+  switch (scope) {
+    case 'all':
+      return { label: '共通', tone: 'accent' };
+    case 'app':
+      return { label: 'clone', tone: 'neutral' };
+    case 'runner':
+      return { label: 'manager', tone: 'neutral' };
+    default:
+      // **送られてくる値である**（`apps/web` は Vercel、デーモンは Railway で別に配られ
+      // るので、サーバのほうが新しい窓が必ず在る）。投げずに「未知」とそのまま出す
+      // （`env-vars.tsx` と同じ判断）。
+      return { label: `未知の撒く先（${String(scope)}）`, tone: 'neutral' };
+  }
+}
+
+const SCOPE_OPTIONS: { value: ProfileScope; label: string }[] = [
+  { value: 'all', label: '共通（clone・manager 両方。既定）' },
+  { value: 'app', label: 'clone だけ' },
+  { value: 'runner', label: 'manager だけ' },
+];
 
 /**
  * `/profile` — 実行環境プロファイル（`.zprofile` 相当）を読む・差し替える画面
@@ -50,7 +78,7 @@ export default function Profile() {
   return (
     <Page
       title="実行環境プロファイル"
-      description="クローン・マネージャー・作業者のすべてに効くシェルスクリプト（~/.zprofile 相当）。alteroid profile と同じもの"
+      description="クローン・マネージャー・作業者に効くシェルスクリプト（~/.zprofile 相当。撒く先は選べる）。alteroid profile と同じもの"
     >
       <div className="flex flex-col gap-4">
         <Card>
@@ -90,6 +118,14 @@ function ProfileView({ profile }: { profile: ProfileState }) {
           ...(!empty
             ? [
                 { label: '指紋', value: `sha256=${profile.sha256 ?? '?'}`, mono: true },
+                {
+                  label: '撒く先',
+                  value: (
+                    <Badge tone={describeScope(profile.scope).tone}>
+                      {describeScope(profile.scope).label}
+                    </Badge>
+                  ),
+                },
                 {
                   label: '更新',
                   value: profile.updatedAt === undefined ? '?' : formatDateTime(profile.updatedAt),
@@ -141,6 +177,7 @@ function ProfileView({ profile }: { profile: ProfileState }) {
 function ProfileEditor({ current }: { current: ProfileState }) {
   const setProfile = useSetProfile();
   const [draft, setDraft] = useState<string | null>(null);
+  const [draftScope, setDraftScope] = useState<ProfileScope>(current.scope);
   const [confirming, setConfirming] = useState<'save' | 'clear' | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
@@ -151,13 +188,14 @@ function ProfileEditor({ current }: { current: ProfileState }) {
   const editing = draft !== null;
   const empty = current.script.length === 0;
   const draftClears = editing && draft.trim().length === 0;
-  const unchanged = editing && draft === current.script;
+  // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
+  const unchanged = editing && draft === current.script && draftScope === current.scope;
 
-  async function submit(script: string) {
+  async function submit(script: string, scope?: ProfileScope) {
     setBusy(true);
     setFailure(undefined);
     try {
-      const update = await setProfile(script);
+      const update = await setProfile(script, scope);
       setResult({ cleared: script.trim().length === 0, update });
       setConfirming(null);
       setDraft(null);
@@ -173,6 +211,7 @@ function ProfileEditor({ current }: { current: ProfileState }) {
 
   function startEditing() {
     setDraft(current.script);
+    setDraftScope(current.scope);
     setConfirming(null);
     setFailure(undefined);
     setResult(null);
@@ -220,6 +259,23 @@ function ProfileEditor({ current }: { current: ProfileState }) {
                 placeholder={'export PATH="$HOME/.local/bin:$PATH"'}
               />
             </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">撒く先</span>
+              <Select
+                aria-label="プロファイルの撒く先"
+                value={draftScope}
+                onChange={(event) => {
+                  setDraftScope(event.target.value as ProfileScope);
+                  setConfirming(null);
+                }}
+              >
+                {SCOPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </label>
             {confirming !== 'save' && (
               <div className="flex flex-wrap items-center gap-2">
                 <Button
@@ -246,10 +302,16 @@ function ProfileEditor({ current }: { current: ProfileState }) {
             <p className="text-[11px] break-words text-warn">
               {draftClears
                 ? 'プロファイルを外す。これから起こす仕事から、ここに書いてあった環境は無くなる。'
-                : 'この本文をデーモンのプロセスで評価し、通ればクローン・マネージャー・作業者のすべてへ配る。これから起こす仕事には即座に効く。'}
+                : `この本文をデーモンのプロセスで評価し、通れば${
+                    draftScope === 'all'
+                      ? 'クローン・マネージャー・作業者のすべて'
+                      : draftScope === 'app'
+                        ? 'クローン（デーモン）だけ'
+                        : 'マネージャー・作業者だけ'
+                  }へ配る。撒く先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="danger" size="sm" loading={busy} onClick={() => void submit(draft)}>
+              <Button variant="danger" size="sm" loading={busy} onClick={() => void submit(draft, draftScope)}>
                 {draftClears ? '本当に外す' : '本当に保存する'}
               </Button>
               <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(null)}>

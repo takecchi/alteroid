@@ -1665,6 +1665,12 @@ export const runnersVacateResponseSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
+ * プロファイルの撒く先（2026-10-03）。`credentialScopeSchema`（環境変数）と同じ3値。
+ * 宣言の順の都合で、あちらとは別に持つ（あちらはこの下で定義される）。
+ */
+const profileScopeSchema = z.enum(['all', 'app', 'runner']);
+
+/**
  * 人間が置いたプロファイル。
  *
  * **本文を返す。** ここは実行環境の持ち主だけが通る口である。**⚠️ `/access` とは
@@ -1676,6 +1682,11 @@ export const runnersVacateResponseSchema = z.object({
  */
 export const profileResponseSchema = z.object({
   script: z.string(),
+  /**
+   * 撒く先。置かれていなければ `'all'`（既定。`credentialScopeSchema` と同じ3値・同じ既定。
+   * `packages/core/src/store.ts` の `EnvProfile.scope`）。
+   */
+  scope: profileScopeSchema,
   updatedAt: z.string().optional(),
   sha256: z.string().optional(),
   bytes: z.number().optional(),
@@ -1695,10 +1706,17 @@ export const profileErrorResponseSchema = z.object({
 export const profileUpdateRequestSchema = z.object({
   /** シェルスクリプトそのもの。空文字は「プロファイルを外す」。 */
   script: z.string(),
+  /**
+   * 撒く先。**省略は「今の撒く先を保つ」**（置かれていなければ `'all'`）。
+   * 不正な値は 400。
+   */
+  scope: profileScopeSchema.optional(),
 });
 
 export const profileUpdateResponseSchema = z.object({
   updatedAt: z.string(),
+  /** 保存した撒く先（外したときは `'all'`）。 */
+  scope: profileScopeSchema,
   sha256: z.string().optional(),
   bytes: z.number().optional(),
   /**

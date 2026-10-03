@@ -13,7 +13,40 @@ import type {
   RunnerProfileResult,
   RunnerRegistry,
 } from './runner-protocol.js';
-import type { EnvProfile, Stores } from './store.js';
+import type { EnvProfile, EnvProfileScope, Stores } from './store.js';
+
+/**
+ * その撒く先が `target`（`'clone'` = デーモン自身＝クローンの SDK 子プロセス /
+ * `'runner'` = runner＝マネージャー・作業者）に届くべきか。
+ *
+ * **ここ1か所で決める。** `apply`・`restore`・`syncRunner`・`pushAll` が別々に判定すると、
+ * 必ず1つだけ食い違い、「外したはずの側に本文が残る」が生まれる（環境変数の
+ * `credential-service.ts` の `scopeAppliesTo` と同じ形・同じ理由）。
+ * `scope` 未設定は `'all'` と同じ（この欄が無かった頃の本文は両方へ撒かれていた）。
+ */
+export function profileScopeAppliesTo(
+  scope: EnvProfileScope | undefined,
+  target: 'clone' | 'runner',
+): boolean {
+  const normalized = scope ?? 'all';
+  if (normalized === 'all') return true;
+  return normalized === 'app' ? target === 'clone' : target === 'runner';
+}
+
+/**
+ * `target` へ効かせる本文。届かない撒く先なら `''`（＝**外す**）。
+ *
+ * **「何もしない」ではなく「空を降ろす」にしてあるのが要点である。** all → runner へ
+ * 変えたとき、クローンの側は本文が同じでも**外れなければならない**。「届かない側は
+ * 触らない」にすると、前の本文がクローンに残り続ける（鍵を含みうる）。
+ */
+function scriptFor(
+  script: string,
+  scope: EnvProfileScope | undefined,
+  target: 'clone' | 'runner',
+): string {
+  return profileScopeAppliesTo(scope, target) ? script : '';
+}
 
 /**
  * 実行環境プロファイルを**置いて配る**までの1本道。
@@ -50,9 +83,14 @@ export interface ProfileService {
   read(): Promise<EnvProfile | null>;
   /**
    * 差し替える。**評価 → 保存 → 配布までを1つの区間として直列に行う。**
-   * 空文字は「プロファイルを外す」。
+   * 空文字は「プロファイルを外す」（撒く先も消える）。
+   *
+   * `scope`（撒く先。2026-10-03）を省略すると**既存の撒く先を保つ**（無ければ `'all'`。
+   * 環境変数の `resolveEntryForWrite` と同じ）。本文だけ直したつもりで撒く先が `all` へ
+   * 戻る、を作らない。**撒く先が届かない側へは、本文ではなく空が降りる**
+   * （{@link profileScopeAppliesTo}）。
    */
-  apply(script: string): Promise<ApplyProfileResult>;
+  apply(script: string, scope?: EnvProfileScope): Promise<ApplyProfileResult>;
   /**
    * 保存済みの本文を、クローンの器へ**効かせ直す**（デーモンの起動時）。
    *
@@ -116,6 +154,8 @@ export interface ApplyProfileResult {
   /** 保存できたか。**読めなかったときは保存もしていない。** */
   stored: boolean;
   updatedAt?: string;
+  /** 保存した撒く先（外したときは `'all'`）。**保存していないときは欠ける。** */
+  scope?: EnvProfileScope;
   sha256?: string;
   bytes?: number;
   /** クローン（デーモン自身）への反映結果。 */
@@ -149,7 +189,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
   return {
     read: () => stores.profile.read(),
 
-    apply: (script: string) =>
+    apply: (script: string, scope?: EnvProfileScope) =>
       serial(async () => {
         // **入口で形を決める。** 保存・配布・指紋が同じ文字列を見ないと、置いた
         // 指紋と読んだ指紋が食い違い、届いているかを見る道具が嘘をつく。
@@ -157,6 +197,9 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         // 途中で落ちたときに戻す先。**この列の中でしか更新は起きない**ので、
         // ここで読んだものが「直前の版」であることが保証されている。
         const previous = await stores.profile.read();
+        // **省略は「既存を保つ」。** 外す（空）ときは撒く先に意味が無いので `'all'` に戻る
+        // （ストアも空の write で撒く先を消す）。
+        const resolvedScope: EnvProfileScope = scope ?? previous?.scope ?? 'all';
 
         /**
          * **評価 → 正本へ保存 → 反映、の順に分ける。**
@@ -180,7 +223,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         const prepared: PreparedProfile | null =
           applier === undefined
             ? null
-            : await applier.prepare(normalized).catch((error: unknown): PreparedProfile => ({
+            : await applier.prepare(scriptFor(normalized, resolvedScope, 'clone')).catch((error: unknown): PreparedProfile => ({
                 ok: false,
                 error: redactErrorText(String(error), process.env),
                 commit: async () => undefined,
@@ -207,7 +250,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
 
         let stored;
         try {
-          stored = await stores.profile.write(normalized);
+          stored = await stores.profile.write(normalized, resolvedScope);
         } catch (error) {
           // **正本へ書けなかったものは、クローンにも効かせない。** ここで捨てないと、
           // 呼び出し側が失敗を受け取ったのにクローンだけが新しい本文で走る。
@@ -253,7 +296,7 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
           );
         }
 
-        const results = await pushAll(normalized);
+        const results = await pushAll(scriptFor(normalized, resolvedScope, 'runner'));
         // 購読者（`ManagerPool`）の例外で、人間・クローンへの応答を落とさない。
         for (const listener of pushListeners) {
           try {
@@ -266,7 +309,9 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         return {
           stored: true,
           updatedAt: stored.updatedAt,
-          // **指紋は本文から直に取る。** 器の有無で出たり出なかったりすると、
+          scope: stored.scope,
+          // **指紋は本文から直に取る。**（撒く先が片方だけでも、正本の指紋である。
+          // 届いた先の指紋と見比べるときは、`scope` で「届かないのが正しい側」を除く） 器の有無で出たり出なかったりすると、
           // 「届いているか」を突き合わせる手段が構成によって消える。
           ...(normalized.length === 0
             ? {}
@@ -281,7 +326,9 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         const stored = await stores.profile.read();
         if (stored === null || applier === undefined) return null;
         // 記憶ストアには書かない（`updatedAt` は本文を変えた人のものである）。
-        return applier.apply(normalizeProfileScript(stored.script));
+        return applier.apply(
+          scriptFor(normalizeProfileScript(stored.script), stored.scope, 'clone'),
+        );
       }),
 
     onPushed: (listener) => {
@@ -292,7 +339,8 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
     syncRunner: (runner: RunnerClient) =>
       serial(async () => {
         const stored = await stores.profile.read();
-        const script = stored?.script ?? '';
+        // **届かない撒く先（`app`）なら、降ろすのは空である**（外す向き。上の判定を通す）。
+        const script = scriptFor(stored?.script ?? '', stored?.scope, 'runner');
 
         // 既に同じものが載っていれば触らない。指紋が**読めなかった**ときは「差がある」に
         // 倒す（降ろす）。

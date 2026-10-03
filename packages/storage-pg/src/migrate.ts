@@ -534,6 +534,13 @@ export const STATEMENTS = [
   `alter table manager_credentials add column if not exists scope text not null default 'all'`,
   `alter table manager_credentials add column if not exists secret boolean not null default true`,
 
+  // --- 実行環境プロファイルの撒く先（2026-10-03）--------------------------
+  // **「今までの1行がそうだった」ことをそのまま表す既定値である**——この列が
+  // 無かった頃、`env_profile` の本文は実際にクローンと runner の両方へ撒かれて
+  // いた（scope 相当が常に `all`）。だから `default 'all'` は過去を捏造しない
+  // （上の `manager_credentials.scope` と同じ判断）。
+  `alter table env_profile add column if not exists scope text not null default 'all'`,
+
   // --- 承認待ちの取り下げ（#963）------------------------------------------
   // **既存行にとって null は「取り下げられていない」を表す** —— この列が
   // 無かった頃、取り下げという状態そのものが存在しなかったので、過去の値を

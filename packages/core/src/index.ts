@@ -939,6 +939,7 @@ export {
 } from './mcp-server-service.js';
 export {
   createProfileService,
+  profileScopeAppliesTo,
   ProfileRollbackFailedError,
   type ApplyProfileResult,
   type ProfileService,

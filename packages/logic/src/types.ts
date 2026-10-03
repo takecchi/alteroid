@@ -278,6 +278,8 @@ export type EnvVarScope = EnvVarView['scope'];
  * 畳まれていない）。置かれていなければ `script: ''` で、他の欄は載らない。
  */
 export type ProfileState = Ok<paths['/profile']['get']>;
+/** プロファイルの撒く先（`all` / `app` / `runner`。環境変数の `EnvVarScope` と同じ3値）。 */
+export type ProfileScope = ProfileState['scope'];
 /** `PUT /profile` が 200 で返す、クローンと各 runner への反映結果。 */
 export type ProfileUpdateResult = Ok<paths['/profile']['put']>;
 

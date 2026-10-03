@@ -338,12 +338,27 @@ export const daemonState = pgTable('daemon_state', {
  *
  * 用途ごとに行を増やせる形にしない。増やせるようにした瞬間、「どの行がどの層に
  * 効くか」の対応表が要るようになり、それは行為ごとの許可一覧と同じ形をしている
- * （AGENTS.md 地雷3）。効かせ分けが要るなら、本文の中でシェルとして分岐すればよい。
+ * （AGENTS.md 地雷3）。
+ *
+ * **撒く先（`scope`）の列は、その例外として人間の明示指示で足した**（2026-10-03。
+ * オーナーの逐語:「env-profileを環境変数と同じように指定できるようにして欲しい」
+ * 「デフォルトは両方です」）。かつてここには「効かせ分けが要るなら、本文の中で
+ * シェルとして分岐すればよい」と書いてあったが、器（app と runner）の違いは本文
+ * からは見えない（同じ本文が両方へ降りる）ので、その逃げ道は塞がっていた。
+ * 行を増やしてはいない（高々1行のまま）。**`manager_credentials.scope`（2026-09-14）と
+ * 同じ理由・同じ形**で、scope は確認・許可の話ではなく**プロセストポロジーの表現**
+ * である（`packages/core/src/store.ts` の `EnvProfile.scope` の doc）。
  */
 export const envProfile = pgTable('env_profile', {
   id: text('id').primaryKey(),
   script: text('script').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /**
+   * 撒く先（`'all' | 'app' | 'runner'`）。2026-10-03 に追加。**既定は `'all'`**——
+   * この列が無かった頃の1行は実際に両方へ撒かれていたので、過去を捏造しない
+   * （`migrate.ts` の該当 `alter table` のコメントを見よ）。
+   */
+  scope: text('scope').notNull().default('all'),
 });
 
 /**
