@@ -459,6 +459,38 @@ describe('層と場所の軸（誰が・どこで使ったか）', () => {
     ]);
   });
 
+  it('同じ manager 層でも、site=peer は session と別の行になり、site で絞れる（#486 S7）', async () => {
+    // peer（もう一方の provider）の消費は層が manager のまま。session と1行に潰れると
+    // マネージャー自身の分に混ざる。
+    await record({
+      layer: 'manager',
+      managerId: 'mgr-1',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:00.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 3 }) }),
+    });
+    await record({
+      layer: 'manager',
+      site: 'peer',
+      accumulation: 'oneshot',
+      managerId: 'mgr-1',
+      date: '2026-08-19',
+      at: '2026-08-19T10:00:01.000Z',
+      snapshot: snapshot({ opus: totals({ costUsd: 0.5 }) }),
+    });
+
+    const all = await store.aggregate({});
+    expect(all.rows.map((r) => [r.layer, r.site, r.totals.costUsd]).sort()).toEqual([
+      ['manager', 'peer', 0.5],
+      ['manager', 'session', 3],
+    ]);
+    // 既定（site 省略）で積んだ行は session のまま。
+    const peer = await store.aggregate({ site: 'peer' });
+    expect(peer.rows.map((r) => r.totals.costUsd)).toEqual([0.5]);
+    const session = await store.aggregate({ site: 'session' });
+    expect(session.rows.map((r) => r.totals.costUsd)).toEqual([3]);
+  });
+
   it('層をまたいだ累積の基準が混ざらない（同じ actor id でも別の主体）', async () => {
     // 基準の鍵が actor の id だけだと、2つの累積が1つの基準を共有して差分が嘘に
     // なる。ここでは manager 側の累積が clone 側の差分に効かないことを問う。

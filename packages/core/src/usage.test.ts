@@ -19,6 +19,7 @@ import {
   usageDate,
   type UsageFold,
   type UsageRow,
+  usageSiteSchema,
   type UsageTotals,
   type UsageTurnRow,
   ZERO_USAGE,
@@ -932,5 +933,15 @@ describe('クローンの手かどうか（actor の判定）', () => {
   it('名前が clone で始まるだけの別物を拾わない', () => {
     expect(isCloneActor('clones-r-us')).toBe(false);
     expect(isCloneActor('cloneish')).toBe(false);
+  });
+});
+
+describe('場所の語彙（Issue #486 M7 S7: peer）', () => {
+  it('schema は peer を受け入れ、既存の session / distill も変えず、知らない値は弾く', () => {
+    expect(usageSiteSchema.options).toEqual(['session', 'distill', 'peer']);
+    for (const site of ['session', 'distill', 'peer']) {
+      expect(usageSiteSchema.safeParse(site).success).toBe(true);
+    }
+    expect(usageSiteSchema.safeParse('other').success).toBe(false);
   });
 });

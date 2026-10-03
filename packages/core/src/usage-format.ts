@@ -60,7 +60,7 @@ export function isDelegationActorId(managerId: string): boolean {
  * ここへ足せば schema も画面も同時に追いつく。**
  */
 export const USAGE_LAYERS = ['clone', 'manager'] as const;
-export const USAGE_SITES = ['session', 'distill'] as const;
+export const USAGE_SITES = ['session', 'distill', 'peer'] as const;
 
 /**
  * {@link UsageTotals} の欄のうち「読めなかった区切りの数」を持ちうるもの

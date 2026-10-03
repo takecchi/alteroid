@@ -300,7 +300,7 @@ program
   // **誰が・どこで の絞り込みは4つの口すべてに置く。** 片方にだけ足すと、そこに
   // しかできない分析が生まれる（PRD「インターフェース」）。
   .option('--layer <layer>', '誰が（clone / manager）')
-  .option('--site <site>', 'どこで（session / distill）')
+  .option('--site <site>', 'どこで（session / distill / peer）')
   .option('--token <id>', 'どの認証トークンで（alteroid token list の id）')
   .action(
     async (options: {

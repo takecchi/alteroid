@@ -274,6 +274,29 @@ describe('/usage 画面', () => {
     expect(within(models).getByText('$3.00')).toBeTruthy();
   });
 
+  it('peer の行は場所別で session と別に出る。知らない site（版ずれ）の行も捨てずに出す', async () => {
+    stubUsage({
+      rows: [
+        row(1, { managerId: 'm1', model: 'opus', layer: 'manager', site: 'session' }),
+        row(2, { managerId: 'm1', model: 'opus', layer: 'manager', site: 'peer' }),
+        row(4, { managerId: 'm1', model: 'opus', layer: 'manager', site: 'future-site' }),
+      ],
+      since: '2026-08-01T00:00:00.000Z',
+      beforeLedger: false,
+    });
+
+    renderUsage();
+
+    await screen.findByRole('heading', { name: '場所別（どこで）' });
+    const sites = axisCard('場所別（どこで）');
+    expect(within(sites).getByText('session')).toBeTruthy();
+    expect(within(sites).getByText('peer')).toBeTruthy();
+    expect(within(sites).getByText('future-site')).toBeTruthy();
+    expect(within(sites).getByText('$4.00')).toBeTruthy();
+    expect(within(sites).getByText('$2.00')).toBeTruthy();
+    expect(within(sites).getByText('$1.00')).toBeTruthy();
+  });
+
   it('beforeLayers が真なら、その範囲の層と場所は観測ではないと書く', async () => {
     stubUsage({
       rows: [row(1)],

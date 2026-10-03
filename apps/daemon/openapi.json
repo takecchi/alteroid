@@ -1412,7 +1412,7 @@
                         },
                         "site": {
                           "type": "string",
-                          "enum": ["session", "distill"]
+                          "enum": ["session", "distill", "peer"]
                         },
                         "managerId": {
                           "type": "string"
@@ -1685,7 +1685,7 @@
                         },
                         "site": {
                           "type": "string",
-                          "enum": ["session", "distill"]
+                          "enum": ["session", "distill", "peer"]
                         },
                         "managerId": {
                           "type": "string"
@@ -4321,7 +4321,7 @@
                               },
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "managerId": {
                                 "type": "string"
@@ -4594,7 +4594,7 @@
                               },
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "managerId": {
                                 "type": "string"
@@ -5199,7 +5199,7 @@
                           },
                           "site": {
                             "type": "string",
-                            "enum": ["session", "distill"]
+                            "enum": ["session", "distill", "peer"]
                           },
                           "tokenId": {
                             "type": "string",
@@ -5362,7 +5362,7 @@
                           },
                           "site": {
                             "type": "string",
-                            "enum": ["session", "distill"]
+                            "enum": ["session", "distill", "peer"]
                           },
                           "tokenId": {
                             "type": "string",
@@ -5438,7 +5438,7 @@
                           },
                           "site": {
                             "type": "string",
-                            "enum": ["session", "distill"]
+                            "enum": ["session", "distill", "peer"]
                           },
                           "provider": {
                             "type": "string",
@@ -5939,7 +5939,7 @@
                             "properties": {
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "totals": {
                                 "type": "object",
@@ -6442,7 +6442,7 @@
             "name": "site",
             "schema": {
               "type": "string",
-              "enum": ["session", "distill"]
+              "enum": ["session", "distill", "peer"]
             }
           },
           {
@@ -7711,7 +7711,7 @@
                                 },
                                 "site": {
                                   "type": "string",
-                                  "enum": ["session", "distill"]
+                                  "enum": ["session", "distill", "peer"]
                                 },
                                 "managerId": {
                                   "type": "string"
@@ -7992,7 +7992,7 @@
                                 },
                                 "site": {
                                   "type": "string",
-                                  "enum": ["session", "distill"]
+                                  "enum": ["session", "distill", "peer"]
                                 },
                                 "managerId": {
                                   "type": "string"
@@ -9019,7 +9019,7 @@
                                 },
                                 "site": {
                                   "type": "string",
-                                  "enum": ["session", "distill"]
+                                  "enum": ["session", "distill", "peer"]
                                 },
                                 "managerId": {
                                   "type": "string"
@@ -9300,7 +9300,7 @@
                                 },
                                 "site": {
                                   "type": "string",
-                                  "enum": ["session", "distill"]
+                                  "enum": ["session", "distill", "peer"]
                                 },
                                 "managerId": {
                                   "type": "string"
@@ -10327,7 +10327,7 @@
                               },
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "managerId": {
                                 "type": "string"
@@ -10600,7 +10600,7 @@
                               },
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "managerId": {
                                 "type": "string"
@@ -11623,7 +11623,7 @@
                               },
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "managerId": {
                                 "type": "string"
@@ -11896,7 +11896,7 @@
                               },
                               "site": {
                                 "type": "string",
-                                "enum": ["session", "distill"]
+                                "enum": ["session", "distill", "peer"]
                               },
                               "managerId": {
                                 "type": "string"

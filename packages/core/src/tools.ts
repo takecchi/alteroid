@@ -7204,7 +7204,7 @@ export function createCloneTools(context: ToolContext) {
           .optional()
           .describe('この actor の分だけ（マネージャーの id か "clone"）'),
         layer: usageLayerSchema.optional().describe('誰が使った分だけ（clone / manager）'),
-        site: usageSiteSchema.optional().describe('どこで使った分だけ（session / distill）'),
+        site: usageSiteSchema.optional().describe('どこで使った分だけ（session / distill / peer）'),
         // **issue #1752。** `.min(1)` は入力スキーマ側ではなくハンドラの先頭
         // （下の `describeStringLengthViolation` 呼び出し）で見る。ここは型
         // （文字列）だけを固定する。
@@ -14743,7 +14743,7 @@ const USAGE_AXIS_NOTES: Record<UsageAxis, string> = {
   manager: '誰の分か',
   model: 'どのモデルで',
   layer: '誰が: clone / manager',
-  site: 'どこで: session / distill',
+  site: 'どこで: session / distill / peer',
   token: 'どの認証トークンで',
 };
 

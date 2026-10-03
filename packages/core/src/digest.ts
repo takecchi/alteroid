@@ -1016,7 +1016,7 @@ function summarizeExternalSources(
  * **到達可能性は軸で違うが、それを理由にここを通す/通さないを分けない。**
  * `model`（`ALTEROID_*_MODEL` は値を検証しない `z.string()`）と `manager`
  * （委譲ごとに `randomUUID()`）は `MAX_ITEMS` を超えうる。`layer` / `site`
- * （`usage-format.ts` の `USAGE_LAYERS` / `USAGE_SITES`）はいまは2値の閉じた
+ * （`usage-format.ts` の `USAGE_LAYERS` / `USAGE_SITES`）は小さな閉じた
  * enum なので超ええない。**それでも4軸ともここを通すのは、値が増えた日に
  * ここだけ書き忘れないためである。**
  *

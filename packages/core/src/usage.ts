@@ -206,6 +206,11 @@ export type UsageLayer = z.infer<typeof usageLayerSchema>;
  *   費用もここに混ざっている**（分離できない。下記）
  * - `distill` — 要約に潰される直前に走る蒸留（`clone.ts` の
  *   `#distillFromTranscript`）。**別の `query()` 呼び出し**なので分離できる
+ * - `peer` — マネージャーが MCP `peer`（`peer_run` / `peer_reply`）で呼ぶ「もう一方の
+ *   provider」が使った分（Issue #486 M7 S7）。**層は `manager` のまま**で、`session`
+ *   （マネージャー自身のセッション）と混ぜないために場所で分ける。**語彙と保存先だけが
+ *   先にあり、書く側（peer ブローカー）は後続の変更で入る**——それまで `peer` の行は
+ *   1行も出ない
  *
  * ## `compaction`（要約そのもの）という値が無い理由
  *
