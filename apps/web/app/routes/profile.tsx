@@ -7,15 +7,27 @@ import {
   Button,
   Card,
   CardHeader,
+  Empty,
   ErrorNote,
+  Input,
   KeyValueList,
   Select,
   Spinner,
   Textarea,
 } from '@alteroid/ui';
-import { ProfileRejectedError, useSetProfile, useProfile } from '@alteroid/swr';
+import {
+  ProfileRejectedError,
+  useProfile,
+  useRemoveProfileEntry,
+  useSetProfileEntry,
+} from '@alteroid/swr';
 import { formatDateTime } from '@alteroid/logic';
-import type { ProfileScope, ProfileState, ProfileUpdateResult } from '@alteroid/logic';
+import type {
+  ProfileEntryView,
+  ProfileScope,
+  ProfileState,
+  ProfileUpdateResult,
+} from '@alteroid/logic';
 
 /**
  * 撒く先。**環境変数画面（`env-vars.tsx`）の `describeScope` / `SCOPE_OPTIONS` と同じ
@@ -44,14 +56,17 @@ const SCOPE_OPTIONS: { value: ProfileScope; label: string }[] = [
   { value: 'runner', label: 'manager だけ' },
 ];
 
+/** 行の名前の形（`packages/core/src/store.ts` の `PROFILE_ENTRY_NAME` と揃える。ずれてもデーモンが 400 で弾く）。 */
+const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 /**
- * `/profile` — 実行環境プロファイル（`.zprofile` 相当）を読む・差し替える画面
- * （issue #1122）。
+ * `/profile` — 実行環境プロファイル（`.zprofile` / `/etc/profile.d` 相当）を読む・差し替える画面
+ * （issue #1122）。**プロファイルは名前付きの行の集まり**で、行ごとに本文（何行でもよい）と
+ * 撒く先を持つ（2026-10-03）。
  *
- * **`alteroid profile show|status|edit|set|clear` / `GET`・`PUT /profile` と同じもの
- * を読み書きする。** 経路は新しく足していない——既に在る2本を、この画面からも
- * 呼べるようにしただけである（AGENTS.md「画面の都合で API に経路を足さないこと」）。
- * `clear` も新しい口ではなく、CLI と同じく空文字の `PUT /profile` である。
+ * **`alteroid profile list|show|status|edit|set|rm|clear` / `GET /profile`・
+ * `PUT|DELETE /profile/:name` と同じものを読み書きする。** 経路は新しく足していない
+ * （AGENTS.md「画面の都合で API に経路を足さないこと」）。
  *
  * **資格は `requireOwner`**（`env-vars.tsx` の `PUT /credentials` と同じ）。宣言済み owner で
  * なければ読み書きとも 403 になる。**⚠️ この画面を足したとき（#1122）、門は
@@ -74,88 +89,114 @@ const SCOPE_OPTIONS: { value: ProfileScope; label: string }[] = [
  */
 export default function Profile() {
   const { data, error, isLoading } = useProfile();
+  // 編集欄（新規 or 既存の行）。一度に1つだけ開く。
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [result, setResult] = useState<{ label: string; update: ProfileUpdateResult } | null>(null);
 
   return (
     <Page
       title="実行環境プロファイル"
-      description="クローン・マネージャー・作業者に効くシェルスクリプト（~/.zprofile 相当。撒く先は選べる）。alteroid profile と同じもの"
+      description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに撒く先を選べる）。alteroid profile と同じもの"
     >
       <div className="flex flex-col gap-4">
         <Card>
           <CardHeader
             title="いま置かれているもの"
-            subtitle="alteroid profile show / status / GET /profile と同じもの"
+            subtitle="alteroid profile list / status / GET /profile と同じもの"
+            action={data === undefined ? undefined : <Badge>{data.entries.length}</Badge>}
           />
           <div className="flex flex-col gap-3 px-4 py-3">
+            <p className="text-[11px] break-words text-muted-foreground">
+              行は名前の辞書順（コード単位順。/etc/profile.d と同じ）につなげて効く。
+            </p>
             <ErrorNote error={error} />
             <NotOwnerHint failure={error} subject="実行環境プロファイル" />
-            {isLoading ? <Spinner /> : data !== undefined && <ProfileView profile={data} />}
+            {isLoading ? (
+              <Spinner />
+            ) : (
+              data !== undefined && (
+                <ProfileList
+                  profile={data}
+                  onEdit={(entry) => {
+                    setResult(null);
+                    setEditor({
+                      name: entry.name,
+                      existing: true,
+                      script: entry.script,
+                      scope: entry.scope,
+                      original: entry,
+                    });
+                  }}
+                  onRemoved={(label, update) => setResult({ label, update })}
+                />
+              )
+            )}
           </div>
         </Card>
-        {data !== undefined && <ProfileEditor current={data} />}
+        {data !== undefined && (
+          <ProfileEditor
+            editor={editor}
+            setEditor={setEditor}
+            onSaved={(label, update) => setResult({ label, update })}
+          />
+        )}
+        {result !== null && (
+          <Card>
+            <CardHeader title="反映結果" />
+            <div className="px-4 py-3">
+              <UpdateReport label={result.label} update={result.update} />
+            </div>
+          </Card>
+        )}
       </div>
     </Page>
   );
 }
 
-function ProfileView({ profile }: { profile: ProfileState }) {
-  const [shown, setShown] = useState(false);
-  const empty = profile.script.length === 0;
-
+function ProfileList({
+  profile,
+  onEdit,
+  onRemoved,
+}: {
+  profile: ProfileState;
+  onEdit: (entry: ProfileEntryView) => void;
+  onRemoved: (label: string, update: ProfileUpdateResult) => void;
+}) {
+  if (profile.entries.length === 0) {
+    return (
+      <div className="flex flex-col gap-3 text-sm">
+        <Badge>置かれていない</Badge>
+        <Empty>プロファイルの行がまだ1つも無い。</Empty>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-3 text-sm">
       <KeyValueList
-        labelWidth="6rem"
+        labelWidth="8rem"
         items={[
           {
-            label: '状態',
-            value: empty ? (
-              <Badge>置かれていない</Badge>
-            ) : (
-              <Badge tone="accent">{`${String(profile.bytes ?? 0)} バイト`}</Badge>
-            ),
+            label: 'クローン用の合成',
+            value: profile.clone.sha256 ?? '（掛かる行なし）',
+            mono: true,
           },
-          ...(!empty
-            ? [
-                { label: '指紋', value: `sha256=${profile.sha256 ?? '?'}`, mono: true },
-                {
-                  label: '撒く先',
-                  value: (
-                    <Badge tone={describeScope(profile.scope).tone}>
-                      {describeScope(profile.scope).label}
-                    </Badge>
-                  ),
-                },
-                {
-                  label: '更新',
-                  value: profile.updatedAt === undefined ? '?' : formatDateTime(profile.updatedAt),
-                },
-              ]
-            : []),
+          {
+            label: 'runner 用の合成',
+            value: profile.runner.sha256 ?? '（掛かる行なし）',
+            mono: true,
+          },
         ]}
       />
-
-      {!empty && (
-        <div className="flex flex-col gap-2">
-          <p className="text-[11px] break-words text-warn">
-            ⚠ 本文には鍵が丸ごと入っていることがある。表示するのは、周りに見られない場所で。
-          </p>
-          <div>
-            <Button size="sm" onClick={() => setShown((value) => !value)}>
-              {shown ? '本文を隠す' : '本文を表示する'}
-            </Button>
-          </div>
-          {shown && (
-            <pre
-              aria-label="プロファイルの本文"
-              className="max-h-96 overflow-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap"
-            >
-              {profile.script}
-            </pre>
-          )}
-        </div>
-      )}
-
+      <ul className="-mx-4">
+        {profile.entries.map((entry) => (
+          <EntryRow
+            key={entry.name}
+            entry={entry}
+            onEdit={() => onEdit(entry)}
+            onRemoved={onRemoved}
+          />
+        ))}
+      </ul>
       <p className="text-[11px] break-words text-muted-foreground">
         各 runner へ届いているか（alteroid profile status の後半）は「設定」の runner 欄に出る。
       </p>
@@ -163,110 +204,211 @@ function ProfileView({ profile }: { profile: ProfileState }) {
   );
 }
 
-/**
- * 差し替え・外す。
- *
- * **編集欄は「編集する」を押すまで出さない**（本文を既定で隠すのと同じ理由。
- * 押すと、いま置かれている本文を流し込む＝ `alteroid profile edit` が
- * `$EDITOR` に現在の本文を開くのと同じ）。
- *
- * **確認の文言は本文が空かどうかで変える。** 空の保存は「外す」であって
- * 「評価して置く」ではない（CLI の `put` も空なら「プロファイルを外しました」と
- * 出し分けている）。
- */
-function ProfileEditor({ current }: { current: ProfileState }) {
-  const setProfile = useSetProfile();
-  const [draft, setDraft] = useState<string | null>(null);
-  const [draftScope, setDraftScope] = useState<ProfileScope>(current.scope);
-  const [confirming, setConfirming] = useState<'save' | 'clear' | null>(null);
+function EntryRow({
+  entry,
+  onEdit,
+  onRemoved,
+}: {
+  entry: ProfileEntryView;
+  onEdit: () => void;
+  onRemoved: (label: string, update: ProfileUpdateResult) => void;
+}) {
+  const removeEntry = useRemoveProfileEntry();
+  const [shown, setShown] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>(undefined);
-  const [result, setResult] = useState<{ cleared: boolean; update: ProfileUpdateResult } | null>(
-    null,
-  );
+  const scope = describeScope(entry.scope);
 
-  const editing = draft !== null;
-  const empty = current.script.length === 0;
-  const draftClears = editing && draft.trim().length === 0;
-  // 撒く先だけを変えるのも更新である（本文が同じでも、外れる側が出る）。
-  const unchanged = editing && draft === current.script && draftScope === current.scope;
-
-  async function submit(script: string, scope?: ProfileScope) {
+  async function remove() {
     setBusy(true);
     setFailure(undefined);
     try {
-      const update = await setProfile(script, scope);
-      setResult({ cleared: script.trim().length === 0, update });
-      setConfirming(null);
-      setDraft(null);
+      const update = await removeEntry(entry.name);
+      onRemoved(`行 ${entry.name} を外した`, update);
     } catch (caught) {
       setFailure(caught);
-      // **確認は畳む。** 400（読めなかった）なら本文を直してからもう一度押す
-      // ことになるので、確認済みのまま残すと「直したつもりで1回で送る」形になる。
-      setConfirming(null);
+      setConfirming(false);
     } finally {
       setBusy(false);
     }
   }
 
-  function startEditing() {
-    setDraft(current.script);
-    setDraftScope(current.scope);
-    setConfirming(null);
+  return (
+    <li className="border-b border-border px-4 py-3 last:border-b-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-sm break-all">{entry.name}</span>
+        <Badge tone={scope.tone}>{scope.label}</Badge>
+        <Badge tone="accent">{`${String(entry.bytes)} バイト`}</Badge>
+      </div>
+      <KeyValueList
+        className="mt-2"
+        labelWidth="6rem"
+        items={[
+          { label: '指紋', value: `sha256=${entry.sha256}`, mono: true },
+          { label: '更新', value: formatDateTime(entry.updatedAt) },
+        ]}
+      />
+      <p className="mt-2 text-[11px] break-words text-warn">
+        ⚠ 本文には鍵が丸ごと入っていることがある。表示するのは、周りに見られない場所で。
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={() => setShown((value) => !value)}>
+          {shown ? '本文を隠す' : '本文を表示する'}
+        </Button>
+        <Button size="sm" onClick={onEdit}>
+          編集する
+        </Button>
+        {!confirming && (
+          <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+            この行を外す
+          </Button>
+        )}
+      </div>
+      {shown && (
+        <pre
+          aria-label={`プロファイルの行 ${entry.name} の本文`}
+          className="mt-2 max-h-96 overflow-auto rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all whitespace-pre-wrap"
+        >
+          {entry.script}
+        </pre>
+      )}
+      {confirming && (
+        <div className="mt-2 flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
+          <p className="text-[11px] break-words text-warn">
+            行 {entry.name} を外す（alteroid profile rm
+            と同じ）。他の行は変えない。これから起こす仕事から、
+            この行に書いてあった環境は無くなる。
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="danger" size="sm" loading={busy} onClick={() => void remove()}>
+              本当に外す
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
+              外すのをやめる
+            </Button>
+          </div>
+        </div>
+      )}
+      <ErrorNote error={failure} className="mt-2" />
+      <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
+    </li>
+  );
+}
+
+interface EditorState {
+  name: string;
+  /** 既存の行を直しているなら true（名前は変えられない）。 */
+  existing: boolean;
+  script: string;
+  scope: ProfileScope;
+  /** 編集を始めたときの行（変更が無いかの判定用）。新規なら無い。 */
+  original?: ProfileEntryView;
+}
+
+/**
+ * 1行を置く（新規・編集）。
+ *
+ * **編集欄は「編集する」「行を追加する」を押すまで出さない**（本文を既定で隠すのと
+ * 同じ理由。押すと、いま置かれている本文を流し込む＝ `alteroid profile edit` が
+ * `$EDITOR` に現在の本文を開くのと同じ）。**空の本文は置けない**（外すのは行の
+ * 「この行を外す」。CLI も同じ）。
+ */
+function ProfileEditor({
+  editor,
+  setEditor,
+  onSaved,
+}: {
+  editor: EditorState | null;
+  setEditor: (next: EditorState | null) => void;
+  onSaved: (label: string, update: ProfileUpdateResult) => void;
+}) {
+  const setEntry = useSetProfileEntry();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<unknown>(undefined);
+
+  const unchanged =
+    editor?.original !== undefined &&
+    editor.script === editor.original.script &&
+    editor.scope === editor.original.scope;
+  const nameValid = editor !== null && NAME_PATTERN.test(editor.name);
+  const scriptEmpty = editor !== null && editor.script.trim().length === 0;
+
+  async function submit(state: EditorState) {
+    setBusy(true);
     setFailure(undefined);
-    setResult(null);
+    try {
+      const update = await setEntry(state.name, state.script, state.scope);
+      onSaved(`行 ${state.name} を更新した`, update);
+      setConfirming(false);
+      setEditor(null);
+    } catch (caught) {
+      setFailure(caught);
+      // **確認は畳む。** 400（読めなかった）なら本文を直してからもう一度押す
+      // ことになるので、確認済みのまま残すと「直したつもりで1回で送る」形になる。
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function open(next: EditorState) {
+    setEditor(next);
+    setConfirming(false);
+    setFailure(undefined);
   }
 
   return (
     <Card>
       <CardHeader
-        title="差し替える"
-        subtitle="alteroid profile edit / set / clear / PUT /profile と同じもの。丸ごと置き換える"
+        title="行を置く"
+        subtitle="alteroid profile edit / set / PUT /profile/:name と同じもの。1行を丸ごと置き換える"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">
         <p className="text-xs leading-relaxed break-words text-muted-foreground">
           保存すると、本文は置く前にデーモンのプロセスでその場で評価される（記憶ストアの鍵を持つ
-          プロセスでの任意コマンド実行と同じ強さ）。読めなければ保存も配布もせず、理由を返す
-          （前のものが残る）。秘密は「環境変数」の画面へ置くこと——ここに書いた名前は、そちらの
-          同じ名前を上書きする。
+          プロセスでの任意コマンド実行と同じ強さ。撒く先が manager だけの行は、デーモンでは評価 せず
+          runner が評価する）。読めなければ保存も配布もせず、理由を返す（前のものが残る）。
+          秘密は「環境変数」の画面へ置くこと——ここに書いた名前は、そちらの同じ名前を上書きする。
         </p>
 
-        {!editing ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={startEditing}>
-              編集する
+        {editor === null ? (
+          <div>
+            <Button
+              size="sm"
+              onClick={() => open({ name: '', existing: false, script: '', scope: 'all' })}
+            >
+              行を追加する
             </Button>
-            {!empty && confirming !== 'clear' && (
-              <Button variant="danger" size="sm" onClick={() => setConfirming('clear')}>
-                プロファイルを外す
-              </Button>
-            )}
           </div>
         ) : (
           <>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">本文（シェルスクリプト）</span>
-              <Textarea
-                aria-label="プロファイルの新しい本文"
-                className="min-h-64 font-mono text-xs"
+              <span className="text-xs text-muted-foreground">
+                名前（英数字で始まり、英数字と . _ - が使える。64字まで）
+              </span>
+              <Input
+                aria-label="プロファイルの行の名前"
+                value={editor.name}
+                disabled={editor.existing}
                 spellCheck={false}
                 autoComplete="off"
-                value={draft}
                 onChange={(event) => {
-                  setDraft(event.target.value);
-                  setConfirming(null);
+                  setEditor({ ...editor, name: event.target.value });
+                  setConfirming(false);
                 }}
-                placeholder={'export PATH="$HOME/.local/bin:$PATH"'}
+                placeholder="例: rust"
               />
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">撒く先</span>
               <Select
                 aria-label="プロファイルの撒く先"
-                value={draftScope}
+                value={editor.scope}
                 onChange={(event) => {
-                  setDraftScope(event.target.value as ProfileScope);
-                  setConfirming(null);
+                  setEditor({ ...editor, scope: event.target.value as ProfileScope });
+                  setConfirming(false);
                 }}
               >
                 {SCOPE_OPTIONS.map((option) => (
@@ -276,71 +418,78 @@ function ProfileEditor({ current }: { current: ProfileState }) {
                 ))}
               </Select>
             </label>
-            {confirming !== 'save' && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">本文（シェルスクリプト）</span>
+              <Textarea
+                aria-label="プロファイルの新しい本文"
+                className="min-h-64 font-mono text-xs"
+                spellCheck={false}
+                autoComplete="off"
+                value={editor.script}
+                onChange={(event) => {
+                  setEditor({ ...editor, script: event.target.value });
+                  setConfirming(false);
+                }}
+                placeholder={'export PATH="$HOME/.local/bin:$PATH"'}
+              />
+            </label>
+            {confirming ? (
+              <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
+                <p className="text-[11px] break-words text-warn">
+                  {`行 ${editor.name} を置く。本文をデーモンのプロセスで評価し、通れば${
+                    editor.scope === 'all'
+                      ? 'クローン・マネージャー・作業者のすべて'
+                      : editor.scope === 'app'
+                        ? 'クローン（デーモン）だけ'
+                        : 'マネージャー・作業者だけ'
+                  }へ配る。撒く先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    loading={busy}
+                    onClick={() => void submit(editor)}
+                  >
+                    本当に保存する
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setConfirming(false)}
+                  >
+                    保存をやめる
+                  </Button>
+                </div>
+              </div>
+            ) : (
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={unchanged}
-                  onClick={() => setConfirming('save')}
+                  disabled={unchanged || !nameValid || scriptEmpty}
+                  onClick={() => setConfirming(true)}
                 >
-                  {draftClears ? '空で保存する（外す）' : '保存する'}
+                  保存する
                 </Button>
-                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setDraft(null)}>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditor(null)}>
                   編集を閉じる
                 </Button>
                 {unchanged && (
                   <span className="text-[11px] text-muted-foreground">変更はまだ無い。</span>
                 )}
+                {!editor.existing && editor.name.length > 0 && !nameValid && (
+                  <span className="text-[11px] text-destructive">名前の形が不正。</span>
+                )}
+                {scriptEmpty && (
+                  <span className="text-[11px] text-muted-foreground">
+                    本文が空の行は置けない（外すのは一覧の「この行を外す」）。
+                  </span>
+                )}
               </div>
             )}
           </>
-        )}
-
-        {confirming === 'save' && editing && (
-          <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
-            <p className="text-[11px] break-words text-warn">
-              {draftClears
-                ? 'プロファイルを外す。これから起こす仕事から、ここに書いてあった環境は無くなる。'
-                : `この本文をデーモンのプロセスで評価し、通れば${
-                    draftScope === 'all'
-                      ? 'クローン・マネージャー・作業者のすべて'
-                      : draftScope === 'app'
-                        ? 'クローン（デーモン）だけ'
-                        : 'マネージャー・作業者だけ'
-                  }へ配る。撒く先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="danger"
-                size="sm"
-                loading={busy}
-                onClick={() => void submit(draft, draftScope)}
-              >
-                {draftClears ? '本当に外す' : '本当に保存する'}
-              </Button>
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(null)}>
-                保存をやめる
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {confirming === 'clear' && !editing && (
-          <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2">
-            <p className="text-[11px] break-words text-warn">
-              プロファイルを外す（alteroid profile clear と同じ）。これから起こす仕事から、
-              ここに書いてあった環境は無くなる。
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="danger" size="sm" loading={busy} onClick={() => void submit('')}>
-                本当に外す
-              </Button>
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(null)}>
-                外すのをやめる
-              </Button>
-            </div>
-          </div>
         )}
 
         <ErrorNote error={failure} />
@@ -358,8 +507,6 @@ function ProfileEditor({ current }: { current: ProfileState }) {
           </p>
         )}
         <NotOwnerHint failure={failure} subject="実行環境プロファイル" />
-
-        {result !== null && <UpdateReport cleared={result.cleared} update={result.update} />}
       </div>
     </Card>
   );
@@ -369,7 +516,7 @@ function ProfileEditor({ current }: { current: ProfileState }) {
  * 反映結果。**失敗を小さく出さない**（CLI の `report` と同じ理由——見落とすと、
  * 以後ずっと古い環境で走り続ける）。
  */
-function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUpdateResult }) {
+function UpdateReport({ label, update }: { label: string; update: ProfileUpdateResult }) {
   const rows = [
     { label: 'クローン', outcome: update.clone },
     ...update.runners.map((runner) => ({ label: runner.runnerId, outcome: runner })),
@@ -377,15 +524,15 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
 
   return (
     <div className="flex flex-col gap-2 text-xs">
-      <p className="font-medium text-ok">
-        {cleared
-          ? 'プロファイルを外した。'
-          : `プロファイルを更新した（sha256 ${update.sha256 ?? '?'}）。`}
+      <p className="font-medium text-ok">{`プロファイルの${label}。`}</p>
+      <p className="font-mono text-[11px] break-all text-muted-foreground">
+        合成後の指紋: クローン用 {update.composed.clone.sha256 ?? '掛かる行なし'} / runner 用{' '}
+        {update.composed.runner.sha256 ?? '掛かる行なし'}
       </p>
       <ul className="flex flex-col gap-1">
-        {rows.map(({ label, outcome }) => (
-          <li key={label} className="break-words">
-            <span className="font-mono">{label}</span>:{' '}
+        {rows.map(({ label: rowLabel, outcome }) => (
+          <li key={rowLabel} className="break-words">
+            <span className="font-mono">{rowLabel}</span>:{' '}
             {outcome.ok ? (
               <span className="text-ok">
                 反映した
@@ -404,12 +551,10 @@ function UpdateReport({ cleared, update }: { cleared: boolean; update: ProfileUp
           </li>
         ))}
       </ul>
-      {!cleared && (
-        <p className="text-[11px] text-muted-foreground">
-          これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う
-          ——それ以外は次の仕事から。
-        </p>
-      )}
+      <p className="text-[11px] text-muted-foreground">
+        これから起こす仕事には即座に効く。走行中の仕事は gh / git だけが次の呼び出しから拾う
+        ——それ以外は次の仕事から。
+      </p>
     </div>
   );
 }

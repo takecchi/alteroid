@@ -687,7 +687,7 @@ export function useSetEnvVar() {
 }
 
 /**
- * `PUT /profile` が 400 で返した「読めなかったので保存していない」。
+ * `PUT` / `DELETE /profile/:name` が 400 で返した「読めなかったので保存していない」。
  *
  * **`detail` を落とさないために別の型にしてある。** 共有の `unwrap` は本文の
  * `error` だけを文言にする（`lib/api.tsx` の `describeError`）が、プロファイルの
@@ -708,42 +708,57 @@ export class ProfileRejectedError extends ApiError {
 }
 
 /**
- * 実行環境プロファイルを丸ごと差し替える（`PUT /profile`。issue #1122）。
- * **空文字は「外す」**（`alteroid profile clear` と同じ。`profileUpdateRequestSchema`
- * の doc）。
+ * 実行環境プロファイルの**1行**（名前付き）を置く（`PUT /profile/:name`。issue #1122、
+ * 行ごとの形は 2026-10-03）。`scope` の省略は「既存の行の撒く先を保つ」（新しい行なら all）。
  *
  * **確認は呼び出し側（`routes/profile.tsx`）の仕事。** 送った本文はデーモンの
  * `process.env` を土台にその場で評価される＝記憶ストアの鍵を持つプロセスでの
  * 任意コマンド実行である（`.claude/skills/env-profile/SKILL.md`）。サーバ側に
  * 確認の印は無いので、呼ぶ前の確認だけが網になる（`useShutdownDaemon` と同じ事情）。
  *
- * **`requireOperator`。** ブラウザは構造的に operator になれない（`useDeclareOwner`
- * の doc と同じ）ので、認証を有効にした構成では常に 403 になる。ボタンは隠さない。
+ * **`requireOwner`。** 宣言済み owner でなければ 403 になる。ボタンは隠さない。
  */
-export function useSetProfile() {
+export function useSetProfileEntry() {
   const api = useApi();
   const { mutate } = useSWRConfig();
   return useCallback(
-    async (script: string, scope?: ProfileScope): Promise<ProfileUpdateResult> => {
-      // `scope` の省略は「今の撒く先を保つ」（デーモン側の約束。CLI の `--scope` 省略と同じ）。
-      const result = await api.api.PUT('/profile', {
+    async (name: string, script: string, scope?: ProfileScope): Promise<ProfileUpdateResult> => {
+      const result = await api.api.PUT('/profile/{name}', {
+        params: { path: { name } },
         body: { script, ...(scope === undefined ? {} : { scope }) },
       });
-      if (result.response.status === 400) {
-        const body = result.error as { error?: unknown; detail?: unknown } | undefined;
-        if (typeof body?.error === 'string') {
-          throw new ProfileRejectedError(
-            body.error,
-            typeof body.detail === 'string' ? body.detail : '',
-          );
-        }
-      }
+      throwIfProfileRejected(result);
       const updated = unwrap(result);
       await mutate(KEY.profile);
       return updated;
     },
     [api, mutate],
   );
+}
+
+/** プロファイルの1行を外す（`DELETE /profile/:name`。他の行は変えない）。 */
+export function useRemoveProfileEntry() {
+  const api = useApi();
+  const { mutate } = useSWRConfig();
+  return useCallback(
+    async (name: string): Promise<ProfileUpdateResult> => {
+      const result = await api.api.DELETE('/profile/{name}', { params: { path: { name } } });
+      throwIfProfileRejected(result);
+      const updated = unwrap(result);
+      await mutate(KEY.profile);
+      return updated;
+    },
+    [api, mutate],
+  );
+}
+
+/** 400（読めなかった・形が不正）は `detail` を落とさずに `ProfileRejectedError` で投げる。 */
+function throwIfProfileRejected(result: { response: Response; error?: unknown }): void {
+  if (result.response.status !== 400) return;
+  const body = result.error as { error?: unknown; detail?: unknown } | undefined;
+  if (typeof body?.error === 'string') {
+    throw new ProfileRejectedError(body.error, typeof body.detail === 'string' ? body.detail : '');
+  }
 }
 
 /** 環境変数を1つ外す（空値の `PUT /credentials` = 「外す」）。 */

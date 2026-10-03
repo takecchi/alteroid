@@ -40,6 +40,8 @@ import {
 import {
   profileClearCommand,
   profileEditCommand,
+  profileListCommand,
+  profileRemoveCommand,
   profileSetCommand,
   profileShowCommand,
   profileStatusCommand,
@@ -699,10 +701,17 @@ const profileCommand = program
   .description('実行環境プロファイル（~/.zprofile に当たるもの）を見る・書き換える');
 
 profileCommand
-  .command('show')
-  .description('いま置かれているプロファイルの本文を出す')
+  .command('list')
+  .description('置かれている行の名前・撒く先・バイト数・更新時刻を並べる（本文は出さない）')
   .action(async () => {
-    await profileShowCommand();
+    await profileListCommand();
+  });
+
+profileCommand
+  .command('show [名前]')
+  .description('1行の本文を出す（名前を省くと default。標準出力は本文だけ）')
+  .action(async (name: string | undefined) => {
+    await profileShowCommand(name);
   });
 
 profileCommand
@@ -713,33 +722,40 @@ profileCommand
   });
 
 profileCommand
-  .command('edit')
-  .description('$EDITOR で開いて書き換える（閉じたら反映）')
+  .command('edit [名前]')
+  .description('1行を $EDITOR で開いて書き換える（閉じたら反映。名前を省くと default）')
   .option(
     '--scope <all|app|runner>',
     '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ。' +
       '省略すると今の撒く先を引き継ぐ（置かれていなければ all）',
   )
-  .action(async (options: { scope?: string }) => {
-    await profileEditCommand(options);
+  .action(async (name: string | undefined, options: { scope?: string }) => {
+    await profileEditCommand(name, options);
   });
 
 profileCommand
-  .command('set')
-  .description('ファイル（または標準入力）の内容で丸ごと置き換える')
+  .command('set [名前]')
+  .description('ファイル（または標準入力）の内容で1行を丸ごと置き換える（名前を省くと default）')
   .option('-f, --file <path>', '読み込むファイル（省略か - で標準入力）')
   .option(
     '--scope <all|app|runner>',
     '撒く先。all=共通(既定) / app=clone だけ / runner=manager だけ。' +
       '省略すると今の撒く先を引き継ぐ（置かれていなければ all）',
   )
-  .action(async (options: { file?: string; scope?: string }) => {
-    await profileSetCommand(options);
+  .action(async (name: string | undefined, options: { file?: string; scope?: string }) => {
+    await profileSetCommand(name, options);
+  });
+
+profileCommand
+  .command('rm <名前>')
+  .description('1行を外す（他の行は変えない）')
+  .action(async (name: string) => {
+    await profileRemoveCommand(name);
   });
 
 profileCommand
   .command('clear')
-  .description('プロファイルを外す')
+  .description('全行を外す')
   .action(async () => {
     await profileClearCommand();
   });

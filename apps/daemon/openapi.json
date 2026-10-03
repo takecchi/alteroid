@@ -16257,22 +16257,68 @@
       "get": {
         "operationId": "getProfile",
         "tags": ["profile"],
-        "summary": "実行環境プロファイル（.zprofile 相当）を読む",
-        "description": "器の環境変数を増やす代わりに、シェルスクリプト1本を記憶ストアへ置く。クローン・マネージャー・作業者のすべてに効く。",
+        "summary": "実行環境プロファイル（.zprofile 相当。名前付きの行の集まり）を読む",
+        "description": "器の環境変数を増やす代わりに、名前付きのシェルスクリプトの行を記憶ストアへ置く。行ごとに撒く先（all=クローンと runner の両方 / app=クローンだけ / runner=runner だけ）を持ち、名前のコード単位順（/etc/profile.d と同じ）につなげて効かせる。`script` / `updatedAt` / `sha256` / `bytes` は1本の時代の欄で、互換のために残している（deprecated）。",
         "responses": {
           "200": {
-            "description": "プロファイルの本文。置かれていなければ空文字。",
+            "description": "プロファイルの行（本文つき）と、合成後の指紋。置かれていなければ行は空。",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "script": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "bytes": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                      }
+                    },
+                    "clone": {
+                      "type": "object",
+                      "properties": {
+                        "sha256": {
+                          "type": "string"
+                        },
+                        "bytes": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "runner": {
+                      "type": "object",
+                      "properties": {
+                        "sha256": {
+                          "type": "string"
+                        },
+                        "bytes": {
+                          "type": "number"
+                        }
+                      }
+                    },
                     "script": {
                       "type": "string"
-                    },
-                    "scope": {
-                      "type": "string",
-                      "enum": ["all", "app", "runner"]
                     },
                     "updatedAt": {
                       "type": "string"
@@ -16284,7 +16330,7 @@
                       "type": "number"
                     }
                   },
-                  "required": ["script", "scope"]
+                  "required": ["entries", "clone", "runner", "script"]
                 }
               }
             }
@@ -16310,8 +16356,9 @@
       "put": {
         "operationId": "putProfile",
         "tags": ["profile"],
-        "summary": "実行環境プロファイルを差し替える",
-        "description": "置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。",
+        "deprecated": true,
+        "summary": "実行環境プロファイルを全部差し替える（deprecated）",
+        "description": "全行を `default` 1行（撒く先 all）に置き換える。空白だけなら全部外す。置く前に評価する。読めなければ保存も配布もせず、理由を返す（前のものが残る）。新しい読み手は `PUT /profile/{name}` / `DELETE /profile/{name}` を使うこと。",
         "responses": {
           "200": {
             "description": "クローンと各 runner への反映結果。",
@@ -16323,9 +16370,61 @@
                     "updatedAt": {
                       "type": "string"
                     },
-                    "scope": {
-                      "type": "string",
-                      "enum": ["all", "app", "runner"]
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "script": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "bytes": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                      }
+                    },
+                    "composed": {
+                      "type": "object",
+                      "properties": {
+                        "clone": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "runner": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      },
+                      "required": ["clone", "runner"]
                     },
                     "sha256": {
                       "type": "string"
@@ -16397,13 +16496,215 @@
                       }
                     }
                   },
-                  "required": ["updatedAt", "scope", "clone", "runners"]
+                  "required": ["updatedAt", "entries", "composed", "clone", "runners"]
                 }
               }
             }
           },
           "400": {
             "description": "プロファイルが読めなかった（保存していない）。**本文の形がそもそも不正だった場合も同じ 400 に乗る**（`script` を欠いた本文など）——どちらの場合も送られてきた本文は返さない（下の `hook` の doc）。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error", "detail"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": ["script"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profile/{name}": {
+      "put": {
+        "operationId": "putProfileByName",
+        "tags": ["profile"],
+        "summary": "実行環境プロファイルの1行を置く",
+        "description": "名前付きの行を置く（無ければ作る）。行は名前のコード単位順につなげて効かせる。置く前に評価する（撒く先が runner だけの行は、デーモンでは評価できないので runner が評価する）。読めなければ保存も配布もせず、理由を返す（前のものが残る）。",
+        "responses": {
+          "200": {
+            "description": "行を置いた後の全行と、クローンと各 runner への反映結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "script": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "bytes": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                      }
+                    },
+                    "composed": {
+                      "type": "object",
+                      "properties": {
+                        "clone": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "runner": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      },
+                      "required": ["clone", "runner"]
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "number"
+                    },
+                    "clone": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "error": {
+                          "type": "string"
+                        },
+                        "output": {
+                          "type": "string"
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["ok"]
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          },
+                          "output": {
+                            "type": "string"
+                          },
+                          "names": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "profile": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "bytes": {
+                                "type": "number"
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "bytes", "updatedAt"]
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["updatedAt", "entries", "composed", "clone", "runners"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "プロファイルが読めなかった（保存していない）、または名前・本文・撒く先の形が不正。送られてきた本文は返さない。",
             "content": {
               "application/json": {
                 "schema": {
@@ -16457,7 +16758,227 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteProfileByName",
+        "tags": ["profile"],
+        "summary": "実行環境プロファイルの1行を外す",
+        "description": "名前付きの行を外す。他の行は変えない。無い名前は 404（何も変えない）。外した行が、クローンか runner のどちらかに掛かる最後の1行だったなら、その側から環境が外れる。",
+        "responses": {
+          "200": {
+            "description": "行を外した後の全行と、クローンと各 runner への反映結果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "script": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": ["all", "app", "runner"]
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "bytes": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["name", "script", "scope", "updatedAt", "sha256", "bytes"]
+                      }
+                    },
+                    "composed": {
+                      "type": "object",
+                      "properties": {
+                        "clone": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "runner": {
+                          "type": "object",
+                          "properties": {
+                            "sha256": {
+                              "type": "string"
+                            },
+                            "bytes": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      },
+                      "required": ["clone", "runner"]
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "number"
+                    },
+                    "clone": {
+                      "type": "object",
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "error": {
+                          "type": "string"
+                        },
+                        "output": {
+                          "type": "string"
+                        },
+                        "names": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["ok"]
+                    },
+                    "runners": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "runnerId": {
+                            "type": "string"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          },
+                          "output": {
+                            "type": "string"
+                          },
+                          "names": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "profile": {
+                            "type": "object",
+                            "properties": {
+                              "sha256": {
+                                "type": "string"
+                              },
+                              "bytes": {
+                                "type": "number"
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["sha256", "bytes", "updatedAt"]
+                          }
+                        },
+                        "required": ["runnerId", "ok"]
+                      }
+                    }
+                  },
+                  "required": ["updatedAt", "entries", "composed", "clone", "runners"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "名前の形が不正、または反映に失敗した。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error", "detail"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "実行環境の持ち主でも、持ち主として宣言されたアカウントでもない。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "その名前の行は無い。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          }
+        ]
       }
     },
     "/mcp-servers": {

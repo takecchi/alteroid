@@ -272,16 +272,20 @@ export type EnvVarView = CredentialsState['credentials'][number];
 export type EnvVarScope = EnvVarView['scope'];
 
 /**
- * 実行環境プロファイル（`GET /profile`。issue #1122）。
+ * 実行環境プロファイル（`GET /profile`。issue #1122）。**名前付きの行の集まり**
+ * （`entries`。名前のコード単位順につなげて効く。2026-10-03）。
  *
- * **`script` は本文そのもの**で、鍵が丸ごと入りうる（`credentials` と違って指紋に
- * 畳まれていない）。置かれていなければ `script: ''` で、他の欄は載らない。
+ * **`entries[].script` は本文そのもの**で、鍵が丸ごと入りうる（`credentials` と違って
+ * 指紋に畳まれていない）。置かれていなければ `entries: []`。`script` / `updatedAt` /
+ * `sha256` / `bytes`（deprecated）は1本の時代の互換の欄で、画面は `entries` を読む。
  */
 export type ProfileState = Ok<paths['/profile']['get']>;
+/** プロファイルの1行（名前・本文・撒く先・更新日時・指紋）。 */
+export type ProfileEntryView = ProfileState['entries'][number];
 /** プロファイルの撒く先（`all` / `app` / `runner`。環境変数の `EnvVarScope` と同じ3値）。 */
-export type ProfileScope = ProfileState['scope'];
-/** `PUT /profile` が 200 で返す、クローンと各 runner への反映結果。 */
-export type ProfileUpdateResult = Ok<paths['/profile']['put']>;
+export type ProfileScope = ProfileEntryView['scope'];
+/** `PUT` / `DELETE /profile/:name` が 200 で返す、クローンと各 runner への反映結果。 */
+export type ProfileUpdateResult = Ok<paths['/profile/{name}']['put']>;
 
 /**
  * 人間の MCP 連携の登録（`GET /mcp-servers`。#325 段4）。
