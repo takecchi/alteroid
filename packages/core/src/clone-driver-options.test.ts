@@ -21,6 +21,8 @@ import { humanMessage } from './testing.js';
  */
 function describeValue(value: unknown): unknown {
   if (typeof value === 'function') return '[Function]';
+  // システムプロンプトには正典の焼き込み時のリビジョン（コミットごとに変わる）が載る。
+  if (typeof value === 'string') return value.replace(/[0-9a-f]{40}/gu, '<revision>');
   if (Array.isArray(value)) return value.map(describeValue);
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
