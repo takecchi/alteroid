@@ -355,6 +355,37 @@ railway variable list --service runner --json | python3 -c "import json,sys; [pr
 
 `' RAILWAY_RUN_UID'` のように引用符の内側に空白が見えたら消して置き直す（`railway variable delete " RAILWAY_RUN_UID" --service runner`）。
 
+### 使う人ごとの道具を足す（任意。runner の Service 変数）
+
+**基底の image（`Dockerfile`）は全利用者で共通である。** 自分の仕事にだけ要る道具（コンパイラ・`-dev` パッケージ・言語の処理系）は、`Dockerfile` を書き換えずに **runner の Service 変数**で足す（#2534）。Railway は Service 変数を同名の `ARG` へ build arg として渡し、最終ステージ `final` が `docker/runner-extra` を root で走らせる。
+
+| 変数                          | 値                                         | 効き方                                                                                         |
+| ----------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `ALTEROID_EXTRA_APT_PACKAGES` | apt のパッケージ名（空白・改行区切り）     | 名前は1つずつ `^[a-z0-9][a-z0-9+.-]*$` で検証し、1つでも外れたらビルドを落とす（何も入れない） |
+| `ALTEROID_EXTRA_SETUP`        | ビルド時に root で走る sh スクリプトの本文 | `sh -eu -c` で走る。失敗はビルドの失敗                                                         |
+
+- **どちらも置かなければ何もしない。** ファイル系は基底と同じである（CI の `image` が確かめている）。ただし層が1枚あるので image の digest は基底と違う
+- **root で走るのはビルド時だけ。** 実行時にマネージャーと作業者が走る uid 1001（worker）の境界は変わらない。入れた道具は uid 1001 から読める・実行できる場所（`/usr`、`/opt` など。必要なら `chmod -R a+rX`）に置くこと
+- **`PATH` などの環境は、ここではなく実行環境プロファイル（`alteroid profile edit`）に書く。** 道具はこの層、環境はプロファイル、という分担である
+- **秘密を置かないこと。** build arg の値は `docker history` に残る
+- **置くのは runner の Service だけ。** app（デーモン）には要らない
+
+**⚠️ 変数を変えても、デプロイするまで器は変わらない。そしてデプロイは走行中の仕事を畳む**（上の「デプロイは走行中の仕事を畳む操作である」）。変数を置いたら、畳んでよい時刻を人間が選んで runner を手で Deploy する。runner が複数台なら全台に同じ値を置き、揃えて上げること — 台によって道具が違うと、どの台に当たったかで仕事の成否が変わる。
+
+例（Tauri の Rust 部分をコンパイルしたい場合）:
+
+```
+ALTEROID_EXTRA_APT_PACKAGES=build-essential pkg-config libwebkit2gtk-4.1-dev
+ALTEROID_EXTRA_SETUP=export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo; curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.95.0; chmod -R a+rX /opt/rust
+```
+
+プロファイルには次を足す（`CARGO_HOME` は既定の `~/.cargo` のままにする。uid 1001 が書ける場所に置くため）:
+
+```sh
+export RUSTUP_HOME=/opt/rust/rustup
+export PATH=/opt/rust/cargo/bin:$PATH
+```
+
 ### 4. デプロイ
 
 **`runner` を先に上げる。** daemon は起動時に runner の `/health` へ名乗りを聞きに行く（鍵無しで繋ぐくらいなら起動しない設計）。繋がらなければ最大2分は待ち直すので順番を外しても収束するが、順番どおりなら待たずに上がる。

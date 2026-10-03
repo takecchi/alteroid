@@ -9,6 +9,7 @@ description: 実行環境プロファイル（alteroid profile / profile.sh、.z
 
 **環境変数を器に増やす代わりの口である。** 道具の鍵や `PATH` を `compose.yaml` へ足していくと、1つ増えるたびに器を焼き直すことになる ＝「環境を直す」と「走行中の仕事を失う」が同じ操作になる。人間が `~/.zshenv` に1行足せば済ませていることが実装作業になっている時点でデグレードである（north_star 禁止1）。設計の全体像は [docs/architecture.md](./docs/architecture.md)「実行環境プロファイル」。
 
+- **道具（パッケージ）を足す口ではない。** apt のパッケージや rustup のような「器に入っている道具」は、ビルド時の追加層（runner の Service 変数 `ALTEROID_EXTRA_APT_PACKAGES` / `ALTEROID_EXTRA_SETUP`。#2534。置き方は `railway/README.md`「使う人ごとの道具を足す」）で入れる。追加層は root でビルド時にだけ走り、実行時の uid 1001 の境界は変えない。**分担は「道具は追加層、`PATH` や `RUSTUP_HOME` のような環境はプロファイル」である** — 追加層で `/opt` に入れた道具を uid 1001 から呼べるようにするのは、こちらの1行（`export PATH=…:$PATH`）の仕事。逆に、プロファイルの中で `apt-get` や `curl | sh` を走らせて道具を入れようとしないこと（uid 1001 には root が無く、評価は仕事を起こすたびに走る）
 - 実体は**シェルスクリプト1本**。器は中身を解釈しない（`export` でも `eval $(...)` でも `PATH` 追加でもよい）。**環境変数の一覧を持たないこと**が要点で、名前の表を足したくなったらそれは `credentials` の口の仕事である
   - **その `credentials` の口には正本が在る**（`alteroid credential set <名前>` / `PUT /credentials`。記憶ストアの `credentials.json` / `manager_credentials`）。名前は任意で、`hello` のたびに降り直す。**秘密はそちらへ置くこと** —— こちらは `GET /profile` が本文ごと返すのに対し、あちらは指紋しか返さない。そして**走行中の `gh` / `git` に届くのもあちらだけ**である
   - **⚠️ プロファイルに `GH_TOKEN` のような名前を書くと、`credentials` の口を影にする**（`#childEnv()` はプロファイルを鍵より後に重ねるので勝つ）。撒いた側は「撒いた」と報告し、子プロセスは古い値を受け取る。検出はある（`credentialNamesShadowedByProfile`）が、止めはしない
