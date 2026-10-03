@@ -1774,7 +1774,13 @@ async function mutateProfile(
     ok: true,
     body: profileUpdateResponseSchema.parse({
       updatedAt: result.updatedAt ?? new Date().toISOString(),
-      entries: described.entries.map(({ script: _script, ...summary }) => summary),
+      entries: described.entries.map((entry) => ({
+        name: entry.name,
+        scope: entry.scope,
+        updatedAt: entry.updatedAt,
+        sha256: entry.sha256,
+        bytes: entry.bytes,
+      })),
       composed,
       ...(described.sha256 === undefined
         ? {}

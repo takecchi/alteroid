@@ -375,7 +375,7 @@ railway variable list --service runner --json | python3 -c "import json,sys; [pr
 
 - **どちらも置かなければ何もしない。** ファイル系は基底と同じである（CI の `image` が確かめている）。ただし層が1枚あるので image の digest は基底と違う
 - **root で走るのはビルド時だけ。** 実行時にマネージャーと作業者が走る uid 1001（worker）の境界は変わらない。入れた道具は uid 1001 から読める・実行できる場所（`/usr`、`/opt` など。必要なら `chmod -R a+rX`）に置くこと
-- **`PATH` などの環境は、ここではなく実行環境プロファイル（`alteroid profile set --scope runner`）に書く。** 道具はこの層、環境はプロファイル、という分担である。`--scope runner` にするのは、runner に入れた道具の環境をクローン（app）へ届かせないため（既定は `all` で両方へ届く）
+- **`PATH` などの環境は、ここではなく実行環境プロファイル（`alteroid profile set <名前> --scope runner`）に書く。** 道具はこの層、環境はプロファイル、という分担である。`--scope runner` にするのは、runner に入れた道具の環境をクローン（app）へ届かせないため（既定は `all` で両方へ届く）。プロファイルは名前付きの行の集まりで、名前の辞書順につなげて効く
 - **秘密を置かないこと。** build arg の値は `docker history` に残る
 - **置くのは runner の Service だけ。** app（デーモン）には要らない
 
@@ -388,16 +388,14 @@ ALTEROID_EXTRA_APT_PACKAGES=build-essential pkg-config libwebkit2gtk-4.1-dev
 ALTEROID_EXTRA_SETUP=export RUSTUP_HOME=/opt/rust/rustup CARGO_HOME=/opt/rust/cargo; curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.95.0; chmod -R a+rX /opt/rust
 ```
 
-プロファイルには次を足す（`CARGO_HOME` は既定の `~/.cargo` のままにする。uid 1001 が書ける場所に置くため）。**撒く先は `runner` にする** — Rust は runner の image にしか入っていないので、クローン（app）には要らない。**`alteroid profile edit` は使わない**（本番の image には vi が無く `$EDITOR` も無いので 127 で落ちる。2026-10-03 の実測）。標準入力から `set` で置く:
+プロファイルには次を足す（`CARGO_HOME` は既定の `~/.cargo` のままにする。uid 1001 が書ける場所に置くため）。**`rust` という名前の行で、撒く先は `runner` にする** — Rust は runner の image にしか入っていないので、クローン（app）には要らない。**`alteroid profile edit` は使わない**（本番の image には vi が無く `$EDITOR` も無いので 127 で落ちる。2026-10-03 の実測）。標準入力から `set` で置く。**他の行（名前の違うプロファイル）には触れない**ので、既にプロファイルを置いていても、この1行だけが増える:
 
 ```sh
-alteroid profile set --scope runner <<'EOF'
-export RUSTUP_HOME=/opt/rust/rustup
-export PATH=/opt/rust/cargo/bin:$PATH
-EOF
+printf '%s\n' 'export RUSTUP_HOME=/opt/rust/rustup' 'export PATH=/opt/rust/cargo/bin:$PATH' \
+  | alteroid profile set rust --scope runner
 ```
 
-**`set` は全文置換である。** すでにプロファイルを置いているなら、先に `alteroid profile show` で今の本文を取り、その続きに足した全文を渡すこと。`--scope` を省くと今の撒く先を保つ（置かれていなければ `all`）。撒く先は `alteroid profile status` で確かめる。
+`set` は**その行の**全文置換である（他の行は変えない）。`--scope` を省くと既存の行の撒く先を保つ（新しい行なら `all`）。置いた行と撒く先は `alteroid profile list`、runner へ届いたかは `alteroid profile status` で確かめる。
 
 ### 4. デプロイ
 
@@ -718,7 +716,7 @@ for s in runner runner-2 runner-3; do railway down -s "$s" -y; done
 # 2. 誰も繋いでいないことを見てから落とす（認証を残す側）
 railway ssh --service Postgres 'psql \
   -c "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid();" \
-  -c "truncate table approvals, archive, commitments, daemon_state, env_profile, inbox_events, jobs, journal, memory, schedule_phases, schedules, session_entries, sessions, usage_baseline, usage_daily, usage_ledger restart identity cascade;"'
+  -c "truncate table approvals, archive, commitments, daemon_state, env_profile, env_profile_entries, inbox_events, jobs, journal, memory, schedule_phases, schedules, session_entries, sessions, usage_baseline, usage_daily, usage_ledger restart identity cascade;"'
 
 # 3. 戻す（runner が先）
 for s in runner runner-2 runner-3; do railway redeploy -s "$s" --from-source -y; done
@@ -735,7 +733,7 @@ railway ssh --service Postgres 'psql -c "select tablename from pg_tables where s
 
 - **`daemon_state.clone_session_id`** — クローンが続けているセッションの id。消すとクローンは**新しいセッションから始まる**（会話の続きが切れる。記憶を残しても切れる）
 - **`commitments`** — 引き受けたまま終わっていない仕事。消すと**やり残しを誰も思い出さない**
-- **`env_profile`** — 実行環境プロファイル（`.zprofile` 相当。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile show` を控える
+- **`env_profile_entries`**（と旧形式の `env_profile`）— 実行環境プロファイル（`.zprofile` 相当。名前付きの行。`.claude/skills/env-profile/`）。**人間が手で書いたもの**なので、消す前に `alteroid profile list` で行を数え、`alteroid profile show <名前>` で本文を控える。**`truncate` で `daemon_state` も消えるので、旧 `env_profile` に行が残っていると、次の起動で `default` 行として蘇る**（旧表も一緒に消すこと）
 
 そして器を止める操作そのものの代償も残る — **走行中のマネージャーは畳まれ、`/workspace` の未 push の変更は消える**（「先に読む」3）。
 

@@ -186,9 +186,9 @@ export interface ProfileService {
 
 /**
  * `apply()` の反映（`prepared.commit()`）が落ち、正本への書き戻し
- * （`stores.profile.revert(previous)`）まで落ちたときに投げる（issue #2163）。
+ * （`stores.profile.replaceAll(previous)`）まで落ちたときに投げる（issue #2163）。
  *
- * **文言では見分けないこと。** 呼び出し側（`PUT /profile` の `app.ts`・
+ * **文言では見分けないこと。** 呼び出し側（`PUT /profile` / `PUT /profile/:name` の `app.ts`・
  * `profile_write` の `tools.ts`）はこれを `instanceof` で捕まえ、日誌の決定の
  * 行を状態どおり（正本は新しい版のまま・クローンは前の版）に書き換える。
  * `message` / `cause` は、この型を導入する前の `Error` と1文字も変えていない。
