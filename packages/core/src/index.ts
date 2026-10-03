@@ -1246,6 +1246,7 @@ export {
   peersEnvKeyOf,
   resolvePeers,
   type PeersLayer,
+  type PeersResolution,
 } from './agent-provider-peers.js';
 /**
  * `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。`inferAppraisedByFromGrounds`

@@ -179,6 +179,12 @@ export interface AgentManagerSessionSpec {
   /** ユーザー入力のストリーム。provider が引いたぶんだけ消費される。 */
   input: AsyncIterable<AgentUserInput>;
   model: string;
+  /**
+   * `model` を人間が置いたか（`ALTEROID_MANAGER_MODEL`）。`model` は置かなくても既定の帯
+   * （Claude のエイリアス）が入るので、**Claude 以外の駆動役は、これが真のときだけ`model` を
+   * provider へ渡す**（Claude のモデル id を他の provider へ渡さない）。省略は偽。
+   */
+  modelPlaced?: boolean;
   permissionMode: PermissionModeName;
   systemPromptAppend: string;
   workerAgentName: string;
@@ -192,6 +198,12 @@ export interface AgentManagerSessionSpec {
   /** 無ければ子プロセスを降ろさない（既定の起こし方）。 */
   spawnProcess?: AgentSpawnProcess;
   onPermission: AgentPermissionHandler;
+  /**
+   * 駆動役が「止まらずに答えた」「取れなかった」等を、拒否として数えさせずに残す口（日誌の note）。
+   * **拒否ではない**: クローンが判断していないものを `permission_denied` として数えると、拒否の
+   * 累積・クローンへの通知に嘘が混ざる。省略時は捨てる。本文に秘密を載せないこと。
+   */
+  onNote?: (text: string) => void;
   onPreToolUse: AgentPreToolHook;
   onPermissionDenied: AgentPermissionDeniedHook;
   onPostToolUse: AgentContextHook<AgentToolAuditRecord>;

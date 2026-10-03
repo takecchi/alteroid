@@ -225,22 +225,44 @@ describe('列挙値', () => {
 });
 
 describe('番人: codex の語彙は codex-*.ts の中に閉じる', () => {
-  it('codex-*.ts 以外が codex-protocol / codex-app-server-client を import していない', () => {
+  /**
+   * codex-*.ts の外から codex-*.ts を import してよい組を、ファイル単位で名指しする（広いパターンで緩めない）。
+   * - runner.ts → 駆動役（入口）
+   * - agent-provider-selection.ts → provider の申告（claude-provider.js と対称）
+   */
+  const ALLOWED: Readonly<Record<string, readonly string[]>> = {
+    'runner.ts': ['./codex-manager-driver.js'],
+    'agent-provider-selection.ts': ['./codex-provider.js'],
+    'agent-provider-selection.test.ts': ['./codex-provider.js'],
+  };
+
+  it('codex-*.ts 以外が codex-protocol / codex-app-server-client を import していない（名指しの例外のみ）', () => {
     const offenders: string[] = [];
     for (const file of readdirSync(here)) {
       if (!file.endsWith('.ts') || /^codex-/.test(file)) continue;
       const source = readFileSync(path.join(here, file), 'utf8');
-      if (/from\s+['"]\.\/codex-/.test(source) || /from\s+['"]@openai\/codex/.test(source)) {
-        offenders.push(file);
-      }
+      const imports = [...source.matchAll(/from\s+['"](\.\/codex-[^'"]*)['"]/g)].map((m) => m[1]!);
+      const allowed = ALLOWED[file] ?? [];
+      for (const spec of imports) if (!allowed.includes(spec)) offenders.push(`${file} → ${spec}`);
+      if (/from\s+['"]@openai\/codex/.test(source)) offenders.push(file);
     }
     expect(offenders).toEqual([]);
   });
 
-  it('中立の語彙（agent-*.ts）に codex の綴りの import が無い', () => {
-    for (const file of readdirSync(here).filter((f) => /^agent-.*\.ts$/.test(f))) {
+  it('中立の語彙（agent-*.ts）に codex の綴りの import が無い（登録簿 agent-provider-selection.ts だけ名指しで除く）', () => {
+    for (const file of readdirSync(here).filter(
+      (f) =>
+        /^agent-.*\.ts$/.test(f) &&
+        f !== 'agent-provider-selection.ts' &&
+        f !== 'agent-provider-selection.test.ts',
+    )) {
       const source = readFileSync(path.join(here, file), 'utf8');
       expect(source, file).not.toMatch(/from\s+['"][^'"]*codex/i);
     }
+  });
+
+  it('codex-provider.ts（申告だけ）は codex-protocol / codex-app-server-client を import しない', () => {
+    const source = readFileSync(path.join(here, 'codex-provider.ts'), 'utf8');
+    expect(source).not.toMatch(/from\s+['"]\.\/codex-/);
   });
 });

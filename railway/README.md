@@ -324,12 +324,21 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
-層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は `claude` だけ**で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
+層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は、クローン（`ALTEROID_CLONE_PROVIDER`）が `claude` だけ、マネージャー（`ALTEROID_MANAGER_PROVIDER`）が `claude` / `codex`** で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
 
 | 変数                        | 値       |
 | --------------------------- | -------- |
 | `ALTEROID_CLONE_PROVIDER`   | `claude` |
 | `ALTEROID_MANAGER_PROVIDER` | `claude` |
+
+**マネージャーを Codex で動かすとき（`ALTEROID_MANAGER_PROVIDER=codex`、#486 S6）**
+
+- `runner` が `codex app-server` を子（別 UID）として起こす。作業者層（サブエージェント）・MCP 連携・ツール監査の全件記録・圧縮前の記憶蒸留は持たない。何が欠けるかは日報・`self_status` に出る。
+- **鍵**: `alteroid credential set CODEX_API_KEY`（API キー）。置くと app-server を `cli_auth_credentials_store="ephemeral"` で起こし、鍵は `CODEX_HOME/auth.json` に書かれない（子の環境変数にも置かない）。置かなければ、器の `CODEX_HOME` に ChatGPT ログインがあればそれで動く（このときは ephemeral にしない）。どちらも無ければセッションは開かず失敗する。
+- **サンドボックス**: Codex 側のサンドボックスは使わず `danger-full-access` で動かす（器の中で動かないため。境界はコンテナと別 UID で、Claude Code と同じ）。確認は権限モードから写す: `bypassPermissions` なら聞かず（`never`）、それ以外は `on-request`。承認はクローンへ回る。
+- **モデル**: `ALTEROID_MANAGER_MODEL` を置いたときだけ Codex へ渡す。置かなければ Codex の既定。
+- **費用**: トークン数と、単価表にあるモデルの USD。web 検索の回数は読めない。
+- クローン層は `codex` をまだ受け付けない（`ALTEROID_CLONE_PROVIDER=codex` は起動を止める）。
 
 **モデル帯の3つは Shared Variables で正しい。** `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` を実際に SDK へ渡すのは `runner` で、そこが正本である。`app` も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけで、両方へ同じ値が降りているから食い違わない（片方にだけ置くと、クローンが「Opus に委譲している」と宣言しながら別の帯が走る）。空・空白のみは「未設定」として既定へ落ちるので、空で残っていても壊れない。
 

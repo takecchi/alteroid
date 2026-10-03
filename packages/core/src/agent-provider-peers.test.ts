@@ -9,10 +9,9 @@ import {
   resolvePeers,
 } from './agent-provider-peers.js';
 
-// 受け付ける id はいまは claude だけなので、複数のときの振る舞いは known を差して固定する。
-const KNOWN = ['claude', 'codex'] as unknown as readonly AgentProviderId[];
-const CLAUDE = 'claude' as AgentProviderId;
-const CODEX = 'codex' as AgentProviderId;
+const KNOWN: readonly AgentProviderId[] = ['claude', 'codex'];
+const CLAUDE: AgentProviderId = 'claude';
+const CODEX: AgentProviderId = 'codex';
 
 describe('ALTEROID_<層>_PEERS の解釈', () => {
   it('環境変数名は固定である', () => {
@@ -24,26 +23,28 @@ describe('ALTEROID_<層>_PEERS の解釈', () => {
     describe(layer, () => {
       it('未設定・空・空白だけは閉じている（空集合）', () => {
         for (const raw of [undefined, '', '   ', '\t\n']) {
-          expect([...parsePeers(layer, raw, CLAUDE, KNOWN)]).toEqual([]);
+          const resolved = parsePeers(layer, raw, CLAUDE, KNOWN);
+          expect([...resolved.peers]).toEqual([]);
+          expect(resolved.selfListed).toBe(false);
         }
       });
 
       it('開けた provider だけが許され、開けていないものは false', () => {
-        const peers = parsePeers(layer, 'codex', CLAUDE, KNOWN);
+        const { peers } = parsePeers(layer, 'codex', CLAUDE, KNOWN);
         expect(isPeerAllowed(CLAUDE, peers, CODEX)).toBe(true);
-        const closed = parsePeers(layer, '', CLAUDE, KNOWN);
+        const { peers: closed } = parsePeers(layer, '', CLAUDE, KNOWN);
         expect(isPeerAllowed(CLAUDE, closed, CODEX)).toBe(false);
       });
 
       it('カンマ区切り・前後の空白は落とす・重複は1つ', () => {
-        const peers = parsePeers(
+        const { peers } = parsePeers(
           layer,
           ' claude , codex,codex ',
           'other' as AgentProviderId,
           KNOWN,
         );
         expect([...peers]).toEqual(['claude', 'codex']);
-        const both = parsePeers(layer, ' codex ', CLAUDE, KNOWN);
+        const { peers: both } = parsePeers(layer, ' codex ', CLAUDE, KNOWN);
         expect([...both]).toEqual(['codex']);
       });
 
@@ -63,26 +64,39 @@ describe('ALTEROID_<層>_PEERS の解釈', () => {
         expect(() => parsePeers(layer, ',', CLAUDE, KNOWN)).toThrow();
       });
 
-      it('自分の層の provider を書くと例外（黙って落とさない）', () => {
-        expect(() => parsePeers(layer, 'claude', CLAUDE, KNOWN)).toThrow(/自分の層/);
-        expect(() => parsePeers(layer, 'codex,claude', CLAUDE, KNOWN)).toThrow(/自分の層/);
+      it('自分の層の provider は例外にせず集合から除く。ただし書かれていたことは返す（黙らせない）', () => {
+        const only = parsePeers(layer, 'claude', CLAUDE, KNOWN);
+        expect([...only.peers]).toEqual([]);
+        expect(only.selfListed).toBe(true);
+        const mixed = parsePeers(layer, 'codex,claude', CLAUDE, KNOWN);
+        expect([...mixed.peers]).toEqual(['codex']);
+        expect(mixed.selfListed).toBe(true);
+        // 両方の層に同じ値を書く運用: codex 層から見ると codex が自分で、claude だけが残る
+        const fromCodex = parsePeers(layer, 'codex,claude', CODEX, KNOWN);
+        expect([...fromCodex.peers]).toEqual(['claude']);
+        expect(fromCodex.selfListed).toBe(true);
       });
 
-      it('既定の known（いまは claude だけ）では、claude は自分、codex は未知で、どちらも例外', () => {
-        expect(() => parsePeers(layer, 'claude', CLAUDE)).toThrow();
-        expect(() => parsePeers(layer, 'codex', CLAUDE)).toThrow();
-        expect([...parsePeers(layer, undefined, CLAUDE)]).toEqual([]);
+      it('自分の層を書かなければ selfListed は false', () => {
+        expect(parsePeers(layer, 'codex', CLAUDE, KNOWN).selfListed).toBe(false);
+      });
+
+      it('既定の known（AGENT_PROVIDER_IDS）では claude も codex も受け付ける。未知の値は例外', () => {
+        expect([...parsePeers(layer, 'codex', CLAUDE).peers]).toEqual(['codex']);
+        expect(parsePeers(layer, 'claude', CLAUDE).selfListed).toBe(true);
+        expect(() => parsePeers(layer, 'gemini', CLAUDE)).toThrow();
+        expect([...parsePeers(layer, undefined, CLAUDE).peers]).toEqual([]);
       });
     });
   }
 
   it('層を取り違えない（clone の PEERS が manager に効かない）', () => {
     const env = { [CLONE_PEERS_ENV_KEY]: 'codex' };
-    expect([...resolvePeers('clone', env, CLAUDE, KNOWN)]).toEqual(['codex']);
-    expect([...resolvePeers('manager', env, CLAUDE, KNOWN)]).toEqual([]);
+    expect([...resolvePeers('clone', env, CLAUDE, KNOWN).peers]).toEqual(['codex']);
+    expect([...resolvePeers('manager', env, CLAUDE, KNOWN).peers]).toEqual([]);
     const env2 = { [MANAGER_PEERS_ENV_KEY]: 'codex' };
-    expect([...resolvePeers('clone', env2, CLAUDE, KNOWN)]).toEqual([]);
-    expect([...resolvePeers('manager', env2, CLAUDE, KNOWN)]).toEqual(['codex']);
+    expect([...resolvePeers('clone', env2, CLAUDE, KNOWN).peers]).toEqual([]);
+    expect([...resolvePeers('manager', env2, CLAUDE, KNOWN).peers]).toEqual(['codex']);
   });
 
   it('isPeerAllowed は自分自身を許さない（集合に紛れても false）', () => {

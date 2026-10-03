@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_PROVIDER_IDS } from './agent-ports.js';
+import { AGENT_PROVIDER_IDS, type AgentProviderId } from './agent-ports.js';
 import {
   CLONE_PROVIDER_ENV_KEY,
+  CLONE_PROVIDER_IDS,
   DEFAULT_AGENT_PROVIDER_ID,
   MANAGER_PROVIDER_ENV_KEY,
+  MANAGER_PROVIDER_IDS,
   agentProviderOf,
   placedAgentProvider,
   resolveCloneProviderId,
   resolveManagerProviderId,
 } from './agent-provider-selection.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
+import { CODEX_PROVIDER } from './codex-provider.js';
 
 describe('層ごとの provider の選択', () => {
   it('環境変数名は固定である', () => {
@@ -22,9 +25,9 @@ describe('層ごとの provider の選択', () => {
     expect(DEFAULT_AGENT_PROVIDER_ID).toBe('claude');
   });
 
-  for (const [label, resolve, key] of [
-    ['クローン', resolveCloneProviderId, CLONE_PROVIDER_ENV_KEY],
-    ['マネージャー', resolveManagerProviderId, MANAGER_PROVIDER_ENV_KEY],
+  for (const [label, resolve, key, accepted] of [
+    ['クローン', resolveCloneProviderId, CLONE_PROVIDER_ENV_KEY, CLONE_PROVIDER_IDS],
+    ['マネージャー', resolveManagerProviderId, MANAGER_PROVIDER_ENV_KEY, MANAGER_PROVIDER_IDS],
   ] as const) {
     describe(label, () => {
       it('未設定・空・空白は claude', () => {
@@ -39,23 +42,38 @@ describe('層ごとの provider の選択', () => {
       });
 
       it('未知の値は黙って既定へ倒さず、変数名を名指しして例外にする', () => {
-        expect(() => resolve({ [key]: 'codex' })).toThrow(new RegExp(key));
+        expect(() => resolve({ [key]: 'cladue' })).toThrow(new RegExp(key));
         expect(() => resolve({ [key]: 'Claude' })).toThrow(); // 大文字小文字も緩めない
       });
 
-      it('受け付ける値は AGENT_PROVIDER_IDS が出所（全部通る）', () => {
-        for (const id of AGENT_PROVIDER_IDS) expect(resolve({ [key]: id })).toBe(id);
+      it('受け付ける値は、その層に駆動役が在る provider（AGENT_PROVIDER_IDS の部分集合）', () => {
+        for (const id of accepted) expect(resolve({ [key]: id })).toBe(id);
+        for (const id of accepted) expect(AGENT_PROVIDER_IDS).toContain(id);
       });
     });
   }
 
-  it('2層は独立に読まれる（片方の変数がもう片方に効かない）', () => {
-    expect(resolveCloneProviderId({ [MANAGER_PROVIDER_ENV_KEY]: 'codex' })).toBe('claude');
-    expect(resolveManagerProviderId({ [CLONE_PROVIDER_ENV_KEY]: 'codex' })).toBe('claude');
+  it('マネージャー層は codex を受け付ける（駆動役: CodexManagerDriver）', () => {
+    expect(resolveManagerProviderId({ [MANAGER_PROVIDER_ENV_KEY]: 'codex' })).toBe('codex');
+    expect(MANAGER_PROVIDER_IDS).toEqual(['claude', 'codex']);
   });
 
-  it('agentProviderOf は id から AgentProvider を引く（いまは CLAUDE_PROVIDER）', () => {
+  it('クローン層は codex をまだ受け付けない（駆動役が無い。黙って claude で走りながら codex を名乗らせない）', () => {
+    const codex: AgentProviderId = 'codex';
+    expect(CLONE_PROVIDER_IDS).toEqual(['claude']);
+    expect(() => resolveCloneProviderId({ [CLONE_PROVIDER_ENV_KEY]: codex })).toThrow(
+      new RegExp(CLONE_PROVIDER_ENV_KEY),
+    );
+  });
+
+  it('2層は独立に読まれる（片方の変数がもう片方に効かない）', () => {
+    expect(resolveCloneProviderId({ [MANAGER_PROVIDER_ENV_KEY]: 'codex' })).toBe('claude');
+    expect(resolveManagerProviderId({ [CLONE_PROVIDER_ENV_KEY]: 'claude' })).toBe('claude');
+  });
+
+  it('agentProviderOf は id から AgentProvider を引く', () => {
     expect(agentProviderOf('claude')).toBe(CLAUDE_PROVIDER);
+    expect(agentProviderOf('codex')).toBe(CODEX_PROVIDER);
     for (const id of AGENT_PROVIDER_IDS) expect(agentProviderOf(id).id).toBe(id);
   });
 });

@@ -5,6 +5,7 @@ import {
   type AgentProviderId,
 } from './agent-ports.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
+import { CODEX_PROVIDER } from './codex-provider.js';
 import { placedModelTier } from './model-tier.js';
 
 /**
@@ -18,8 +19,9 @@ import { placedModelTier } from './model-tier.js';
  *
  * ## 受け付ける値は {@link AGENT_PROVIDER_IDS} だけ
  *
- * 受け付けの出所はそこ1つで、provider を足すときはそこへ1行足す。この段では
- * `claude` だけなので、**どの値を置いても（置かなくても）挙動は1つも変わらない。**
+ * 受け付けの出所はそこ1つで、provider を足すときはそこへ1行足す。**ただし層ごとに、実際に
+ * 動かせる駆動役が在るものへ絞る**（{@link CLONE_PROVIDER_IDS} / {@link MANAGER_PROVIDER_IDS}）。
+ * 既定（置かない・`claude`）の挙動は変わらない。
  *
  * ## 黙って既定へ倒さない
  *
@@ -42,25 +44,42 @@ export function placedAgentProvider(env: NodeJS.ProcessEnv, key: string): string
   return placedModelTier(env, key);
 }
 
-function resolveAgentProviderId(env: NodeJS.ProcessEnv, key: string): AgentProviderId {
+/**
+ * クローン層が実際に動かせる provider。**{@link AGENT_PROVIDER_IDS} の部分集合。**
+ *
+ * `codex` はマネージャー層の駆動役（`codex-manager-driver.ts`）だけが在り、クローン層の駆動役
+ * は無い（#486 S8）。`ALTEROID_CLONE_PROVIDER=codex` を受け付けると、クローンは黙って
+ * Claude で走るのに provider だけが codex を名乗る — 効いていないことに気づけない。
+ * 実装が入る段でここへ足す。
+ */
+export const CLONE_PROVIDER_IDS: readonly AgentProviderId[] = ['claude'];
+
+/** マネージャー層（と、その子の作業者）が実際に動かせる provider。 */
+export const MANAGER_PROVIDER_IDS: readonly AgentProviderId[] = ['claude', 'codex'];
+
+function resolveAgentProviderId(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  accepted: readonly AgentProviderId[],
+): AgentProviderId {
   const given = placedAgentProvider(env, key);
   if (given === null) return DEFAULT_AGENT_PROVIDER_ID;
-  const known = AGENT_PROVIDER_IDS.find((id) => id === given);
+  const known = accepted.find((id) => id === given);
   if (known !== undefined) return known;
   throw new Error(
     `${key} の値が不正: ${given}` +
-      `（使えるのは ${AGENT_PROVIDER_IDS.join(' / ')}。既定は ${DEFAULT_AGENT_PROVIDER_ID}）`,
+      `（使えるのは ${accepted.join(' / ')}。既定は ${DEFAULT_AGENT_PROVIDER_ID}）`,
   );
 }
 
-/** クローン層の provider id。未知の値は例外。 */
+/** クローン層の provider id。未知の値・この層にまだ実装が無い値は例外。 */
 export function resolveCloneProviderId(env: NodeJS.ProcessEnv = process.env): AgentProviderId {
-  return resolveAgentProviderId(env, CLONE_PROVIDER_ENV_KEY);
+  return resolveAgentProviderId(env, CLONE_PROVIDER_ENV_KEY, CLONE_PROVIDER_IDS);
 }
 
 /** マネージャー層（と、その子の作業者）の provider id。未知の値は例外。 */
 export function resolveManagerProviderId(env: NodeJS.ProcessEnv = process.env): AgentProviderId {
-  return resolveAgentProviderId(env, MANAGER_PROVIDER_ENV_KEY);
+  return resolveAgentProviderId(env, MANAGER_PROVIDER_ENV_KEY, MANAGER_PROVIDER_IDS);
 }
 
 /**
@@ -69,6 +88,7 @@ export function resolveManagerProviderId(env: NodeJS.ProcessEnv = process.env): 
  */
 const AGENT_PROVIDERS: Record<AgentProviderId, AgentProvider> = {
   claude: CLAUDE_PROVIDER,
+  codex: CODEX_PROVIDER,
 };
 
 export function agentProviderOf(id: AgentProviderId): AgentProvider {

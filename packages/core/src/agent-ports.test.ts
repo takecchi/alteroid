@@ -62,8 +62,8 @@ describe('missingRequirementCapabilities', () => {
     expect(missingRequirementCapabilities(capabilities)).toEqual([]);
   });
 
-  it('AGENT_PROVIDER_IDS はいまのところ claude だけを持つ', () => {
-    expect(AGENT_PROVIDER_IDS).toEqual(['claude']);
+  it('AGENT_PROVIDER_IDS は claude と codex を持つ（出所はここ1つ）', () => {
+    expect(AGENT_PROVIDER_IDS).toEqual(['claude', 'codex']);
   });
 });
 

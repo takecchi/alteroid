@@ -389,6 +389,7 @@ export async function main(): Promise<void> {
     runnerId,
     workspacePath,
     emit: (event) => outbox.push(event),
+    managerProvider: managerProvider.id,
     credentials,
     profile,
     ...(childUser === undefined ? {} : { childUser }),

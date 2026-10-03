@@ -26,9 +26,14 @@ import type { ProviderGapLayer } from './provider-gaps.js';
  * - 未知の値（綴り違い）: 黙って捨てると「開けたつもりで閉じている」、黙って通すと
  *   「許していない provider が開く」。どちらも人間が気づけないので例外にする。
  * - 空の要素（`codex,,claude` や末尾のカンマ）: 書き損じの徴候なので例外にする。
- * - 自分の層の provider（例: manager=claude で `claude`）: 「もう一方」を呼ぶ口なので
- *   自分と同じ provider は意味がない。黙って落とすと「開けたはずが効いていない」を
- *   人間が見分けられないので、これも例外にする。
+ *
+ * ## 自分の層の provider は、例外にせず集合から除く（ただし黙らせない）
+ *
+ * 例: manager=claude で `claude`。「もう一方」を呼ぶ口なので自分と同じ provider は意味がなく、
+ * 集合には入れない。**例外にはしない** — 両方の層に同じ値（例: `codex,claude`）を書く運用や、
+ * provider を入れ替えたときに、無害な値で起動が止まるのは害のほうが大きい。
+ * **ただし黙って捨てない**: 書かれていたことを {@link PeersResolution.selfListed} で返す。
+ * 起動時に表示するのは呼び出し側（配線は S7）。
  */
 export const CLONE_PEERS_ENV_KEY = 'ALTEROID_CLONE_PEERS';
 export const MANAGER_PEERS_ENV_KEY = 'ALTEROID_MANAGER_PEERS';
@@ -45,6 +50,14 @@ export function peersEnvKeyOf(layer: PeersLayer): string {
   return PEERS_ENV_KEY[layer];
 }
 
+/** {@link parsePeers} の結果。 */
+export interface PeersResolution {
+  /** 呼んでよい provider（自分の層の provider は含まない）。 */
+  readonly peers: ReadonlySet<AgentProviderId>;
+  /** 値に自分の層の provider が書かれていた（集合からは除いた）。表示するのは呼び出し側。 */
+  readonly selfListed: boolean;
+}
+
 /**
  * 層の PEERS の値から、呼んでよい provider の集合を返す。
  *
@@ -57,11 +70,12 @@ export function parsePeers(
   raw: string | undefined,
   selfProvider: AgentProviderId,
   known: readonly AgentProviderId[] = AGENT_PROVIDER_IDS,
-): ReadonlySet<AgentProviderId> {
+): PeersResolution {
   const key = PEERS_ENV_KEY[layer];
   const given = placedAgentProvider({ [key]: raw }, key);
   const peers = new Set<AgentProviderId>();
-  if (given === null) return peers;
+  let selfListed = false;
+  if (given === null) return { peers, selfListed };
   for (const part of given.split(',')) {
     const name = part.trim();
     if (name.length === 0) {
@@ -74,13 +88,12 @@ export function parsePeers(
       throw new Error(`${key} の値が不正: ${name}（使えるのは ${known.join(' / ')}）`);
     }
     if (id === selfProvider) {
-      throw new Error(
-        `${key} に自分の層の provider ${id} は書けない（「もう一方」を呼ぶ口なので意味がない）`,
-      );
+      selfListed = true;
+      continue;
     }
     peers.add(id);
   }
-  return peers;
+  return { peers, selfListed };
 }
 
 /** 層の PEERS を環境変数の束から読む。 */
@@ -89,7 +102,7 @@ export function resolvePeers(
   env: NodeJS.ProcessEnv,
   selfProvider: AgentProviderId,
   known: readonly AgentProviderId[] = AGENT_PROVIDER_IDS,
-): ReadonlySet<AgentProviderId> {
+): PeersResolution {
   return parsePeers(layer, env[PEERS_ENV_KEY[layer]], selfProvider, known);
 }
 

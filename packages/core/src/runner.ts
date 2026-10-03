@@ -25,10 +25,12 @@ import type {
   AgentToolAuditRecord,
   AgentUserPromptSubmitRecord,
 } from './agent-hooks.js';
+import { DEFAULT_AGENT_PROVIDER_ID, type AgentProviderId } from './agent-ports.js';
 import { describeBashToolTimeoutRaise, planBashToolTimeoutRaise } from './bash-tool-timeout.js';
 import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
+import { CodexManagerDriver } from './codex-manager-driver.js';
 import type {
   AgentChildProcess,
   AgentManagerDriver,
@@ -333,6 +335,12 @@ export interface RunnerHostOptions {
   queryFn?: ClaudeQueryFn;
   /** 主にテスト用。既定は `process.env`。 */
   env?: NodeJS.ProcessEnv;
+  /**
+   * このマネージャー層（と作業者層）を動かす provider（#486 S6）。**省略は `claude`**
+   * （既定の挙動は変わらない）。runner の起動（`apps/runner/src/index.ts`）が
+   * `ALTEROID_MANAGER_PROVIDER` から解いた値を渡し、`hello.managerProvider` と同じ値になる。
+   */
+  managerProvider?: AgentProviderId;
   /** `WITHHELD_ENV_KEYS` に足して伏せる鍵。 */
   withheldEnvKeys?: readonly string[];
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
@@ -589,6 +597,7 @@ class Host implements RunnerHost {
   readonly workspacePath: string;
   readonly #emit: (event: RunnerEvent) => void;
   readonly #queryFn: ClaudeQueryFn | undefined;
+  readonly #managerProvider: AgentProviderId;
   readonly #env: NodeJS.ProcessEnv;
   readonly #withheldEnvKeys: readonly string[];
   readonly #childUser: RunnerChildUser | undefined;
@@ -648,6 +657,7 @@ class Host implements RunnerHost {
     this.workspacePath = options.workspacePath;
     this.#emit = options.emit;
     this.#queryFn = options.queryFn;
+    this.#managerProvider = options.managerProvider ?? DEFAULT_AGENT_PROVIDER_ID;
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
@@ -925,6 +935,7 @@ class Host implements RunnerHost {
       cwd: this.#resolveCwd(cwd),
       emit: this.#emit,
       ...(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
+      managerProvider: this.#managerProvider,
       env: this.#env,
       withheldEnvKeys: this.#withheldEnvKeys,
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
@@ -1449,10 +1460,12 @@ interface RunnerSessionOptions {
   queryFn?: ClaudeQueryFn;
   /**
    * セッションの駆動役（provider ごとの実装。`agent-session.ts`）。省略すると Claude
-   * （`ClaudeManagerDriver`）。この段では provider の選択は Claude 固定で、これは
-   * 次の段（Codex の駆動役）の差し込み口である。
+   * （`ClaudeManagerDriver`）。`managerProvider` が `codex` なら `CodexManagerDriver`。
+   * これはテストからの差し替え口で、あれば provider の選択より優先される。
    */
   driver?: AgentManagerDriver;
+  /** このセッションを動かす provider。省略は `claude`。 */
+  managerProvider?: AgentProviderId;
   env: NodeJS.ProcessEnv;
   withheldEnvKeys: readonly string[];
   childUser?: RunnerChildUser;
@@ -1835,7 +1848,11 @@ class RunnerSession {
     this.#emit = options.emit;
     this.#driver =
       options.driver ??
-      new ClaudeManagerDriver(options.queryFn === undefined ? {} : { queryFn: options.queryFn });
+      (options.managerProvider === 'codex'
+        ? new CodexManagerDriver()
+        : new ClaudeManagerDriver(
+            options.queryFn === undefined ? {} : { queryFn: options.queryFn },
+          ));
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
@@ -2352,6 +2369,8 @@ class RunnerSession {
       // デーモン側の自己認識に出るのは同じ env から解いた宣言であって、
       // 実際にセッションへ渡っているのはこの値である。
       model: resolveManagerModel(this.#env),
+      // 人間が置いたか。Claude 以外の駆動役は、置かれたときだけモデルを provider へ渡す。
+      modelPlaced: placedModelTier(this.#env, MANAGER_MODEL_ENV_KEY) !== null,
       // 人間が開く Claude Code と同じ既定（Auto）。`canUseTool` は下に残してあり、
       // `default` へ戻せば1件ずつクローンへ確認が回る。
       permissionMode: this.#permissionMode,
@@ -2386,6 +2405,8 @@ class RunnerSession {
         ? {}
         : { spawnProcess: (options) => this.#spawnDelegationProcess(options) }),
       onPermission: (request) => this.#onPermission(request),
+      // 駆動役の観測（拒否ではないもの）は日誌の note にだけ残す。escalate はしない。
+      onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
       // **上の5本と違い、これだけが実際にブロックする**（#894 段1・案(A)）。
       // 理由は `#onPreToolUse` の doc を見よ。
       onPreToolUse: (record) => this.#onPreToolUse(record),

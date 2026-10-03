@@ -16,10 +16,10 @@
  * **{@link AGENT_PROVIDER_IDS} が唯一の出所である。** provider を1つ足すときは
  * ここへ1行足すことから始まる。
  */
-export type AgentProviderId = 'claude';
+export type AgentProviderId = 'claude' | 'codex';
 
 /** {@link AgentProviderId} の全体。**この配列が唯一の出所**。 */
-export const AGENT_PROVIDER_IDS: readonly AgentProviderId[] = ['claude'];
+export const AGENT_PROVIDER_IDS: readonly AgentProviderId[] = ['claude', 'codex'];
 
 /**
  * 既定の provider。環境変数が無い・空のとき、および `hello` が provider を名乗らない
