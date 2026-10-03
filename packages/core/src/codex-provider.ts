@@ -13,8 +13,8 @@ import type { AgentProvider } from './agent-ports.js';
  * | 能力 | 値 | 根拠 |
  * | --- | --- | --- |
  * | permissions | true | `item/commandExecution/requestApproval` / `item/fileChange/requestApproval` を `spec.onPermission` へ回し、`mapCodexApproval` で答える。MCP elicitation・`requestUserInput`・`item/permissions/requestApproval` は alteroid の判断の型で表せないので、クローンへ回さず答えて観測だけ残す（嘘の確認を出さない） |
- * | toolAudit | false | `PostToolUse` 相当の全件記録の口を、この駆動役は `spec.onPostToolUse` へ繋いでいない（item の通知は中立イベントに畳むだけ） |
- * | compactionHook | false | Codex に「圧縮の前に割り込む」口が無い（`thread/compacted` は事後の通知）。記憶への蒸留の割り込みは効かない |
+ * | toolAudit | true | `item/completed` の道具の実行（`CODEX_TOOL_ITEM_TYPES`＝固定版スキーマの `ThreadItem` のうち道具の10種。`codex-protocol.test.ts` が全 type の分類漏れを見る）を `spec.onPostToolUse` / `onPostToolUseFailure` へ中立の記録で渡す（`codex-tool-audit.ts`。出力本体・差分は載せず、文字列は伏せる）。実機の app-server では未確認 |
+ * | compactionHook | false | Codex に「圧縮の前に割り込む」口が無い。`thread/compacted` / `contextCompaction` は事後の通知で、`compaction` イベントへ畳んで観測するだけ（記憶への蒸留の割り込みは効かない） |
  * | resume | true | `thread/resume`。ただし rollout は Codex 側の `CODEX_HOME` にあり、器ごと失われれば開き直せない（`sessionLog` が false の裏面） |
  * | sessionLog | false | 生ログ（rollout）を器の外（デーモン）へ預ける口が無い。`spec.sessionLog` は使わない |
  * | subagents | false | Codex の app-server に `Options.agents` 相当（作業者を別モデルで走らせる口）を繋いでいない。作業者層は無い |
@@ -28,7 +28,7 @@ export const CODEX_PROVIDER: AgentProvider = {
   displayName: 'Codex',
   capabilities: {
     permissions: true,
-    toolAudit: false,
+    toolAudit: true,
     compactionHook: false,
     resume: true,
     sessionLog: false,

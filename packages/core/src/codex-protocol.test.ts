@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CODEX_CLIENT_REQUESTS,
   CODEX_ITEM_TYPES,
+  CODEX_NON_TOOL_ITEM_TYPES,
+  CODEX_TOOL_ITEM_TYPES,
   CODEX_PROTOCOL_VERSION,
   CODEX_SCHEMA_ENUMS,
   CODEX_SCHEMA_USES,
@@ -221,6 +223,20 @@ describe('列挙値', () => {
     for (const type of CODEX_ITEM_TYPES) {
       expect(findVariant(item, 'type', type), type).toBeDefined();
     }
+  });
+});
+
+describe('番人: ThreadItem の全 type は「道具」か「道具ではない」に分類済み', () => {
+  it('スキーマの全 type がどちらかに入り、両方に入るものは無い（新しい種類を素通りさせない）', () => {
+    const item = def('v2/ThreadItem') as SchemaNode;
+    const all = branches(item).flatMap((b) => (b.properties?.['type']?.enum ?? []) as string[]);
+    const tool = new Set<string>(CODEX_TOOL_ITEM_TYPES);
+    const nonTool = new Set<string>(CODEX_NON_TOOL_ITEM_TYPES);
+    expect(all.length).toBeGreaterThan(10);
+    expect(all.filter((t) => !tool.has(t) && !nonTool.has(t))).toEqual([]);
+    expect(all.filter((t) => tool.has(t) && nonTool.has(t))).toEqual([]);
+    // 表の側にも、スキーマに無い名前が無い
+    expect([...tool, ...nonTool].filter((t) => !all.includes(t))).toEqual([]);
   });
 });
 

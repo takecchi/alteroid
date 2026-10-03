@@ -19,6 +19,7 @@ import {
   codexApprovalPolicyFor,
 } from './codex-manager-driver.js';
 import { toCodexMcpServersConfig } from './codex-mcp-config.js';
+import { CODEX_PROVIDER } from './codex-provider.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import { PERMISSION_MODES } from './permission-mode.js';
 
@@ -973,5 +974,310 @@ describe('CodexManagerDriver: 鍵が出力に漏れない', () => {
     rpc.feed.end();
     await rpc.run();
     expect(dump(rpc.events)).not.toContain(FAKE_KEY);
+  });
+});
+
+/** 1ターンぶんの通知を流して終わらせる。 */
+async function runOneTurn(h: Harness, script: (turnId: string) => void): Promise<void> {
+  h.server.script.onTurn = (_n, _t, turnId) => {
+    script(turnId);
+    h.server.completeTurn(turnId);
+  };
+  h.feed.push('x');
+  h.feed.end();
+  await h.run();
+}
+
+function completed(h: Harness, turnId: string, item: Json): void {
+  h.server.notify('item/completed', { threadId: 'thr-1', turnId, item });
+}
+
+describe('CodexManagerDriver: ツール監査', () => {
+  const hooks = (h: Harness) => ({
+    ok: h.spec.onPostToolUse as unknown as ReturnType<typeof vi.fn>,
+    ng: h.spec.onPostToolUseFailure as unknown as ReturnType<typeof vi.fn>,
+  });
+
+  it('道具の item の種類ごとに onPostToolUse を呼ぶ。turn_ended はフックが全部済んでから', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    const order: string[] = [];
+    const { ok } = hooks(h);
+    ok.mockImplementation(async (record: { toolName?: string }) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      order.push(`hook:${record.toolName}`);
+      return { kind: 'continue' };
+    });
+    await runOneTurn(h, (id) => {
+      completed(h, id, {
+        type: 'commandExecution',
+        id: 'i1',
+        command: 'ls -la',
+        cwd: '/work',
+        commandActions: [],
+        status: 'completed',
+        exitCode: 0,
+        aggregatedOutput: 'SECRET-OUTPUT',
+      });
+      completed(h, id, {
+        type: 'fileChange',
+        id: 'i2',
+        status: 'completed',
+        changes: [{ path: '/work/a.ts', kind: { type: 'add' }, diff: 'SECRET-DIFF' }],
+      });
+      completed(h, id, {
+        type: 'mcpToolCall',
+        id: 'i3',
+        server: 'srv',
+        tool: 'lookup',
+        arguments: { q: 1 },
+        status: 'completed',
+        result: { content: [] },
+      });
+      completed(h, id, {
+        type: 'dynamicToolCall',
+        id: 'i4',
+        tool: 'dyn',
+        namespace: 'ns',
+        arguments: {},
+        status: 'completed',
+        success: true,
+      });
+      completed(h, id, { type: 'webSearch', id: 'i5', query: 'alteroid' });
+      completed(h, id, { type: 'imageView', id: 'i6', path: '/work/x.png' });
+      completed(h, id, { type: 'sleep', id: 'i7', durationMs: 10 });
+      completed(h, id, {
+        type: 'collabAgentToolCall',
+        id: 'i8',
+        tool: 'spawnAgent',
+        prompt: 'p',
+        status: 'completed',
+        agentsStates: {},
+        receiverThreadIds: [],
+        senderThreadId: 't',
+      });
+      completed(h, id, { type: 'imageGeneration', id: 'i9', status: 'completed', result: 'r' });
+      completed(h, id, { type: 'functionCallOutput', id: 'i10', name: 'fn', output: 'o' });
+      // 道具ではない item は呼ばない
+      completed(h, id, { type: 'reasoning', id: 'r1' });
+      completed(h, id, { type: 'plan', id: 'p1', text: 't' });
+    });
+    const calls = ok.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(calls.map((c) => c['toolName'])).toEqual([
+      'commandExecution',
+      'fileChange',
+      'mcp__srv__lookup',
+      'ns.dyn',
+      'webSearch',
+      'imageView',
+      'sleep',
+      'collabAgentToolCall',
+      'imageGeneration',
+      'fn',
+    ]);
+    expect(calls[0]).toMatchObject({
+      toolInput: { command: 'ls -la', cwd: '/work' },
+      toolResponse: { exitCode: 0 },
+      toolUseId: 'i1',
+    });
+    expect(calls[1]).toMatchObject({ toolInput: { changes: [{ path: '/work/a.ts' }] } });
+    expect(calls[2]).toMatchObject({ toolInput: { q: 1 } });
+    // 出力本体・差分は載せない
+    expect(JSON.stringify(calls)).not.toMatch(/SECRET-/);
+    expect(hooks(h).ng).not.toHaveBeenCalled();
+    // 全部のフックが済んでから turn_ended
+    expect(order).toHaveLength(10);
+    expect(types(h.events).filter((t) => t === 'tool_result')).toHaveLength(10);
+    const last = h.events.findLastIndex((e) => e.type === 'tool_result');
+    expect(last).toBeLessThan(h.events.findIndex((e) => e.type === 'turn_ended'));
+  });
+
+  it('失敗: status failed・終了コード非0・MCP error・success false は onPostToolUseFailure。declined は呼ばない', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    const { ok, ng } = hooks(h);
+    await runOneTurn(h, (id) => {
+      completed(h, id, {
+        type: 'commandExecution',
+        id: 'f1',
+        command: 'false',
+        cwd: '/w',
+        commandActions: [],
+        status: 'failed',
+        exitCode: 1,
+      });
+      completed(h, id, {
+        type: 'commandExecution',
+        id: 'f2',
+        command: 'exit 3',
+        cwd: '/w',
+        commandActions: [],
+        status: 'completed',
+        exitCode: 3,
+      });
+      completed(h, id, {
+        type: 'mcpToolCall',
+        id: 'f3',
+        server: 's',
+        tool: 't',
+        arguments: {},
+        status: 'failed',
+        error: { message: `boom ${FAKE_KEY}` },
+      });
+      completed(h, id, {
+        type: 'dynamicToolCall',
+        id: 'f4',
+        tool: 'd',
+        arguments: {},
+        status: 'completed',
+        success: false,
+      });
+      completed(h, id, { type: 'fileChange', id: 'f5', status: 'failed', changes: [] });
+      completed(h, id, { type: 'fileChange', id: 'f6', status: 'declined', changes: [] });
+      completed(h, id, {
+        type: 'commandExecution',
+        id: 'f7',
+        command: 'rm -rf /',
+        cwd: '/w',
+        commandActions: [],
+        status: 'declined',
+      });
+    });
+    expect(ok).not.toHaveBeenCalled();
+    const failures = ng.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(failures.map((f) => f['toolUseId'])).toEqual(['f1', 'f2', 'f3', 'f4', 'f5']);
+    expect(failures[0]).toMatchObject({
+      toolName: 'commandExecution',
+      toolInput: { command: 'false' },
+    });
+    expect(String(failures[1]!['error'])).toContain('3');
+    // エラー文の鍵は伏せる
+    expect(String(failures[2]!['error'])).toContain('boom');
+    expect(JSON.stringify(failures)).not.toContain(FAKE_KEY);
+  });
+
+  it('入力の中の鍵の値も伏せる。フックが投げても止まらず note に残る（鍵は載らない）', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    const { ok } = hooks(h);
+    ok.mockRejectedValue(new Error(`hook failed ${FAKE_KEY}`));
+    await runOneTurn(h, (id) => {
+      completed(h, id, {
+        type: 'commandExecution',
+        id: 'k1',
+        command: `curl -H "Authorization: ${FAKE_KEY}" x`,
+        cwd: '/w',
+        commandActions: [],
+        status: 'completed',
+        exitCode: 0,
+      });
+    });
+    expect(JSON.stringify(ok.mock.calls)).not.toContain(FAKE_KEY);
+    expect(h.events.map((e) => e.type)).toContain('turn_ended');
+    expect(h.notes.join('\n')).toContain('フックが失敗');
+    expect(h.notes.join('\n')).not.toContain(FAKE_KEY);
+  });
+
+  it('toolAudit を名乗る（スキーマの全道具の種類を覆う番人は codex-protocol.test.ts）', () => {
+    expect(CODEX_PROVIDER.capabilities.toolAudit).toBe(true);
+    expect(CODEX_PROVIDER.capabilities.compactionHook).toBe(false);
+  });
+});
+
+describe('CodexManagerDriver: 圧縮', () => {
+  const usage = (input: number): Json => ({
+    inputTokens: input,
+    cachedInputTokens: 0,
+    outputTokens: 1,
+    reasoningOutputTokens: 0,
+    totalTokens: input + 1,
+  });
+
+  it('thread/compacted → compaction（trigger auto・preTokens は直近の入力トークン）。contextCompaction item と二重に数えない', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    await runOneTurn(h, (id) => {
+      h.server.notify('thread/tokenUsage/updated', {
+        threadId: 'thr-1',
+        turnId: id,
+        tokenUsage: { total: usage(9), last: usage(1234) },
+      });
+      h.server.notify('thread/compacted', { threadId: 'thr-1', turnId: id });
+      completed(h, id, { type: 'contextCompaction', id: 'c1' });
+      // 同じターンの2回目（item が先に来る順）
+      completed(h, id, { type: 'contextCompaction', id: 'c2' });
+      h.server.notify('thread/compacted', { threadId: 'thr-1', turnId: id });
+    });
+    const compactions = h.events.filter((e) => e.type === 'compaction');
+    expect(compactions).toEqual([
+      { type: 'compaction', trigger: 'auto', preTokens: 1234 },
+      { type: 'compaction', trigger: 'auto', preTokens: 1234 },
+    ]);
+    // 道具の監査は呼ばない
+    expect(h.spec.onPostToolUse).not.toHaveBeenCalled();
+  });
+
+  it('直前の使用量が読めていなければ作り物を出さず note だけ', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    await runOneTurn(h, (id) =>
+      h.server.notify('thread/compacted', { threadId: 'thr-1', turnId: id }),
+    );
+    expect(h.events.some((e) => e.type === 'compaction')).toBe(false);
+    expect(h.notes.join('\n')).toContain('圧縮');
+  });
+});
+
+describe('CodexManagerDriver: 枠', () => {
+  it('account/rateLimits/updated → 窓ごとの rate_limit。到達していなければ usage_notice は出ない', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    await runOneTurn(h, () =>
+      h.server.notify('account/rateLimits/updated', {
+        rateLimits: {
+          limitId: 'codex',
+          primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+          secondary: { usedPercent: 10 },
+          rateLimitReachedType: null,
+        },
+      }),
+    );
+    const limits = h.events.filter((e) => e.type === 'rate_limit');
+    expect(limits).toEqual([
+      {
+        type: 'rate_limit',
+        facts: {
+          kind: 'codex.primary',
+          status: 'allowed',
+          utilization: 40,
+          resetsAt: 1_900_000_000_000,
+        },
+      },
+      {
+        type: 'rate_limit',
+        facts: { kind: 'codex.secondary', status: 'allowed', utilization: 10 },
+      },
+    ]);
+    expect(h.events.some((e) => e.type === 'usage_notice')).toBe(false);
+  });
+
+  it('rateLimitReachedType が付けば usage_notice(reached)。同じ到達は繰り返さず、provider を切り替えない', async () => {
+    const h = setup({ env: { CODEX_API_KEY: FAKE_KEY } });
+    const reached = (percent: number): Json => ({
+      rateLimits: {
+        limitId: 'codex',
+        primary: { usedPercent: percent, resetsAt: 1_900_000_000 },
+        rateLimitReachedType: 'rate_limit_reached',
+      },
+    });
+    await runOneTurn(h, () => {
+      h.server.notify('account/rateLimits/updated', reached(100));
+      h.server.notify('account/rateLimits/updated', reached(100));
+    });
+    const notices = h.events.filter((e) => e.type === 'usage_notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      notice: { kind: 'reached', resetsAt: 1_900_000_000_000 },
+    });
+    expect(JSON.stringify(notices)).toContain('rate_limit_reached');
+    expect(h.events.filter((e) => e.type === 'rate_limit')[0]).toMatchObject({
+      facts: { status: 'rejected', utilization: 100 },
+    });
+    // 子は1回しか起こしていない（自動で切り替えない）
+    expect(h.spawned).toHaveLength(1);
   });
 });

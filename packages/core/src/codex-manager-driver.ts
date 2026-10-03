@@ -80,6 +80,8 @@ import {
 } from './codex-protocol.js';
 import type { CodexUsageForPricing } from './codex-pricing.js';
 import { toCodexMcpServersConfig } from './codex-mcp-config.js';
+import { foldCodexRateLimits } from './codex-rate-limits.js';
+import { isCodexToolItem, toCodexToolAudit } from './codex-tool-audit.js';
 import { codexUsageToLedgerTotals } from './codex-usage-ledger.js';
 import type { PermissionModeName } from './permission-mode.js';
 import { redactErrorText } from './redact.js';
@@ -120,13 +122,6 @@ const TOOL_NAME_COMMAND = 'commandExecution';
 const TOOL_NAME_FILE_CHANGE = 'fileChange';
 
 /** item のうち、道具の実行に当たるもの（`tool_use` / `tool_result` に畳む）。 */
-const TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
-  'commandExecution',
-  'fileChange',
-  'mcpToolCall',
-  'dynamicToolCall',
-  'webSearch',
-]);
 
 const DEFAULT_CLOSE_GRACE_MS = 1500;
 
@@ -219,6 +214,17 @@ class CodexManagerSession implements AgentManagerSession {
 
   /** 実際のモデル名（`thread/start` の応答、`model/rerouted` で更新）。 */
   #model: string | undefined;
+  /** 道具の監査フックを通知の順に流す鎖（`turn_ended` の前に流し切る）。 */
+  #audit: Promise<void> = Promise.resolve();
+  /** 直近のリクエストの入力トークン数（圧縮の直前の文脈の大きさの近似。`compaction.preTokens` の材料）。 */
+  #lastInputTokens: number | undefined;
+  /** ターンごとの圧縮の通知数（`thread/compacted` と `contextCompaction` item の二重計上を避ける）。 */
+  readonly #compactionSignals = new Map<
+    string,
+    { notification: number; item: number; emitted: number }
+  >();
+  /** いま立っている枠の到達の印（同じ到達を繰り返し知らせない）。 */
+  #rateLimitReached: string | undefined;
   /** モデルごとの `last` の列（リクエスト単位）。 */
   readonly #requests = new Map<string, CodexUsageForPricing[]>();
   #inputIterator: AsyncIterator<{ text: string }> | undefined;
@@ -469,6 +475,8 @@ class CodexManagerSession implements AgentManagerSession {
       turn.id ??= started.turn.id;
       const finished = await this.#guard(turn.done.promise);
       this.#turn = undefined;
+      // 道具の監査（フック）が済む前にターンの終わりを流さない。
+      await this.#audit;
       // `turn_ended` を消費側が処理し終えるまで、次の入力を引かない（SDK の順序に合わせる）。
       await this.#emit(this.#turnEndedEvent(finished, turn.lastText));
     }
@@ -480,7 +488,7 @@ class CodexManagerSession implements AgentManagerSession {
 
   #registerHandlers(client: CodexAppServerClient): void {
     client.onNotificationOf('item/started', ({ item }) => {
-      if (TOOL_ITEM_TYPES.has(item.type)) {
+      if (isCodexToolItem(item)) {
         void this.#emit({
           type: 'assistant_message',
           parentToolUseId: null,
@@ -489,12 +497,23 @@ class CodexManagerSession implements AgentManagerSession {
         });
       }
     });
-    client.onNotificationOf('item/completed', ({ item }) => this.#onItemCompleted(item));
+    client.onNotificationOf('item/completed', ({ item, turnId }) =>
+      this.#onItemCompleted(item, turnId),
+    );
     client.onNotificationOf('item/agentMessage/delta', ({ delta }) => {
       if (delta.length > 0) void this.#emit({ type: 'text_delta', text: delta });
     });
     client.onNotificationOf('thread/tokenUsage/updated', ({ tokenUsage }) => {
       this.#recordLast(tokenUsage.last);
+    });
+    client.onNotificationOf('thread/compacted', ({ turnId }) =>
+      this.#onCompactionSignal(turnId, 'notification'),
+    );
+    client.onNotificationOf('account/rateLimits/updated', ({ rateLimits }) => {
+      // 報告だけ。provider を切り替える判断はここにない（枠に当たったらクローンへ知らせる）。
+      const folded = foldCodexRateLimits(rateLimits, this.#rateLimitReached);
+      this.#rateLimitReached = folded.reached;
+      for (const event of folded.events) void this.#emit(event);
     });
     client.onNotificationOf('model/rerouted', ({ toModel }) => {
       // 以後のリクエストは、実際に応じたモデルの単価で数える。
@@ -584,7 +603,7 @@ class CodexManagerSession implements AgentManagerSession {
     });
   }
 
-  #onItemCompleted(item: CodexThreadItem): void {
+  #onItemCompleted(item: CodexThreadItem, turnId: string): void {
     if (item.type === 'agentMessage') {
       const text =
         typeof (item as { text?: unknown }).text === 'string'
@@ -596,10 +615,55 @@ class CodexManagerSession implements AgentManagerSession {
       void this.#emit({ type: 'assistant_message', parentToolUseId: null, blocks, id: item.id });
       return;
     }
-    if (TOOL_ITEM_TYPES.has(item.type)) void this.#emit({ type: 'tool_result' });
+    if (item.type === 'contextCompaction') {
+      this.#onCompactionSignal(turnId, 'item');
+      return;
+    }
+    if (isCodexToolItem(item)) {
+      // 中立イベントの順序は従来のまま（ここで即 tool_result）。フックは別の鎖で順に流す。
+      void this.#emit({ type: 'tool_result' });
+      this.#audit = this.#audit.then(() => this.#auditToolItem(item));
+    }
+  }
+
+  /** 道具の実行 1 件を中立のフックへ渡す。 */
+  async #auditToolItem(item: CodexThreadItem): Promise<void> {
+    try {
+      const audit = toCodexToolAudit(item, (text) => this.#sanitizeText(text));
+      if (audit?.outcome === 'success') await this.#spec.onPostToolUse(audit.record);
+      else if (audit?.outcome === 'failure') await this.#spec.onPostToolUseFailure(audit.record);
+    } catch (error) {
+      // 観測の失敗でセッションを止めない。理由は note に残す（伏せ字を通す）。
+      this.#note(
+        `Codex: 道具の実行の記録（${item.type}）でフックが失敗した: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * 圧縮が起きた（事後の観測だけ。圧縮の前に割り込む口は無い＝`compactionHook` は名乗らない）。
+   * `thread/compacted`（非推奨）と `contextCompaction` item のどちらが来ても1回と数える。
+   * Codex は圧縮前後のトークン数も契機も運ばないので、`preTokens` は直近のリクエストの入力トークン数
+   * （読めていなければ作り物を出さず note だけ）、契機は `auto`（alteroid は手動の圧縮を起こさない）。
+   */
+  #onCompactionSignal(turnId: string, source: 'notification' | 'item'): void {
+    const key = turnId;
+    const entry = this.#compactionSignals.get(key) ?? { notification: 0, item: 0, emitted: 0 };
+    entry[source] += 1;
+    this.#compactionSignals.set(key, entry);
+    if (entry[source] <= entry.emitted) return;
+    entry.emitted = entry[source];
+    if (this.#lastInputTokens === undefined) {
+      this.#note(
+        'Codex: 文脈の圧縮が起きたが、直前の使用量を読めておらず compaction イベントにできなかった',
+      );
+      return;
+    }
+    void this.#emit({ type: 'compaction', trigger: 'auto', preTokens: this.#lastInputTokens });
   }
 
   #recordLast(last: CodexTokenUsageBreakdown): void {
+    this.#lastInputTokens = last.inputTokens;
     const model = this.#model;
     // モデル名が分からない回は、名前の無い箱へ。価格は「読めなかった」になる（推測しない）。
     const key = model ?? '';

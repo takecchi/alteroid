@@ -141,6 +141,38 @@ export const CODEX_ITEM_TYPES = [
 ] as const;
 export type CodexItemType = (typeof CODEX_ITEM_TYPES)[number];
 
+/**
+ * 固定版のスキーマ（`v2/ThreadItem`）の全 type を「道具の実行」と「そうでないもの」に分けた表。
+ * **新しい種類が増えたとき、どちらでもないまま素通りさせない**ための番人（`codex-protocol.test.ts` が
+ * スキーマの全 type がどちらかに入っていることを見る）。`toolAudit` を名乗る根拠もこの表である。
+ */
+export const CODEX_TOOL_ITEM_TYPES = [
+  'commandExecution',
+  'fileChange',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageView',
+  'imageGeneration',
+  'sleep',
+  'functionCallOutput',
+] as const;
+export type CodexToolItemType = (typeof CODEX_TOOL_ITEM_TYPES)[number];
+
+/** 道具の実行ではない item（発言・推論・計画・入力・状態の遷移）。 */
+export const CODEX_NON_TOOL_ITEM_TYPES = [
+  'userMessage',
+  'hookPrompt',
+  'agentMessage',
+  'plan',
+  'reasoning',
+  'subAgentActivity',
+  'enteredReviewMode',
+  'exitedReviewMode',
+  'contextCompaction',
+] as const;
+
 export const CODEX_COMMAND_EXECUTION_STATUSES = [
   'inProgress',
   'completed',
@@ -401,6 +433,37 @@ export interface CodexModelReroutedNotification {
   reason: string;
 }
 
+/** `RateLimitWindow`。 */
+export interface CodexRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins?: number | null;
+  /** Unix 秒。 */
+  resetsAt?: number | null;
+}
+
+export const CODEX_RATE_LIMIT_REACHED_TYPES = [
+  'rate_limit_reached',
+  'workspace_owner_credits_depleted',
+  'workspace_member_credits_depleted',
+  'workspace_owner_usage_limit_reached',
+  'workspace_member_usage_limit_reached',
+] as const;
+export type CodexRateLimitReachedType = (typeof CODEX_RATE_LIMIT_REACHED_TYPES)[number];
+
+/** `RateLimitSnapshot`（読む欄だけ。ほかの欄は読まずに捨てる）。 */
+export interface CodexRateLimitSnapshot {
+  limitId?: string | null;
+  limitName?: string | null;
+  primary?: CodexRateLimitWindow | null;
+  secondary?: CodexRateLimitWindow | null;
+  rateLimitReachedType?: CodexRateLimitReachedType | null;
+  spendControlReached?: boolean | null;
+}
+
+export interface CodexAccountRateLimitsUpdatedNotification {
+  rateLimits: CodexRateLimitSnapshot;
+}
+
 export interface CodexAccountUpdatedNotification {
   authMode?: string | null;
   planType?: string | null;
@@ -612,6 +675,7 @@ export interface CodexServerNotificationMap {
   'serverRequest/resolved': CodexServerRequestResolvedNotification;
   'model/rerouted': CodexModelReroutedNotification;
   'account/updated': CodexAccountUpdatedNotification;
+  'account/rateLimits/updated': CodexAccountRateLimitsUpdatedNotification;
 }
 export type CodexServerNotificationMethod = keyof CodexServerNotificationMap;
 
@@ -679,6 +743,7 @@ export const CODEX_SERVER_NOTIFICATIONS = {
   'serverRequest/resolved': 'v2/ServerRequestResolvedNotification',
   'model/rerouted': 'v2/ModelReroutedNotification',
   'account/updated': 'v2/AccountUpdatedNotification',
+  'account/rateLimits/updated': 'v2/AccountRateLimitsUpdatedNotification',
 } as const satisfies Record<CodexServerNotificationMethod, string>;
 
 export const CODEX_SERVER_REQUESTS = {
@@ -918,6 +983,24 @@ export const CODEX_SCHEMA_USES: readonly CodexSchemaUse[] = [
     authMode: 'optional',
     planType: 'optional',
   }),
+  use<CodexAccountRateLimitsUpdatedNotification>(
+    'v2/AccountRateLimitsUpdatedNotification',
+    'receive',
+    { rateLimits: 'required' },
+  ),
+  use<CodexRateLimitSnapshot>('v2/RateLimitSnapshot', 'receive', {
+    limitId: 'optional',
+    limitName: 'optional',
+    primary: 'optional',
+    secondary: 'optional',
+    rateLimitReachedType: 'optional',
+    spendControlReached: 'optional',
+  }),
+  use<CodexRateLimitWindow>('v2/RateLimitWindow', 'receive', {
+    usedPercent: 'required',
+    windowDurationMins: 'optional',
+    resetsAt: 'optional',
+  }),
   use<CodexCommandExecutionApprovalParams>('CommandExecutionRequestApprovalParams', 'receive', {
     threadId: 'required',
     turnId: 'required',
@@ -1069,6 +1152,7 @@ export const CODEX_SCHEMA_ENUMS: readonly CodexSchemaEnum[] = [
   { def: 'McpServerElicitationAction', values: CODEX_ELICITATION_ACTIONS },
   { def: 'v2/CommandExecutionStatus', values: CODEX_COMMAND_EXECUTION_STATUSES },
   { def: 'v2/PatchApplyStatus', values: CODEX_COMMAND_EXECUTION_STATUSES },
+  { def: 'v2/RateLimitReachedType', values: CODEX_RATE_LIMIT_REACHED_TYPES },
 ];
 
 // ---------------------------------------------------------------------------

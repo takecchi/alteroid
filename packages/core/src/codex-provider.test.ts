@@ -15,7 +15,7 @@ describe('CODEX_PROVIDER（正直な申告）', () => {
   it('満たしているものだけ true。満たせないものは false と申告する', () => {
     expect(CODEX_PROVIDER.capabilities).toEqual({
       permissions: true,
-      toolAudit: false,
+      toolAudit: true,
       compactionHook: false,
       resume: true,
       sessionLog: false,
@@ -29,14 +29,13 @@ describe('CODEX_PROVIDER（正直な申告）', () => {
 
   it('欠けた要件は provider-gaps が日報・自己認識へ出す（持たないふりをしない）', () => {
     expect(missingRequirementCapabilities(CODEX_PROVIDER.capabilities)).toEqual([
-      'toolAudit',
       'compactionHook',
       'sessionLog',
       'subagents',
       'mcpServers',
     ]);
     const lines = describeProviderGaps({ manager: CODEX_PROVIDER });
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(4);
     expect(lines.every((line) => line.startsWith('マネージャー層（Codex）は '))).toBe(true);
   });
 
