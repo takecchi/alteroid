@@ -614,7 +614,7 @@ export interface CloneSessionOptionsRequest {
   onSubagentStop: AgentObservationHook<AgentSubagentStopRecord>;
 }
 
-/** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions` から移した。 */
+/** クローン本セッションへ渡す `Options`。組み立ての知識は `clone.ts` の旧 `#buildOptions`（いまは `#buildSessionSpec`）から移した。 */
 export function buildCloneSessionOptions(request: CloneSessionOptionsRequest): Options {
   const {
     model,

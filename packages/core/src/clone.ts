@@ -2,15 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  McpServerConfig,
-  Options,
-  Query,
-  SDKUserMessage,
-  SessionKey,
-  SessionStore,
-} from '@anthropic-ai/claude-agent-sdk';
+import type { query, SessionKey, SessionStore } from '@anthropic-ai/claude-agent-sdk';
 
 import type {
   AgentContentBlock,
@@ -28,13 +20,16 @@ import type {
   AgentToolAuditFailureRecord,
   AgentToolAuditRecord,
 } from './agent-hooks.js';
+import type {
+  AgentCloneDriver,
+  AgentCloneSession,
+  AgentCloneSessionSpec,
+  AgentCloneTools,
+} from './agent-clone-session.js';
 import type { AgentProvider } from './agent-ports.js';
-import {
-  CLAUDE_PROVIDER,
-  buildCloneDistillOptions,
-  buildCloneSessionOptions,
-  foldClaudeMessage,
-} from './claude-provider.js';
+import type { AgentUserInput } from './agent-session.js';
+import { ClaudeCloneDriver } from './claude-clone-driver.js';
+import { CLAUDE_PROVIDER } from './claude-provider.js';
 import { describeArchiveContinuityForJournal } from './archive-continuity.js';
 import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
@@ -142,6 +137,7 @@ import {
 import type { ProfileApplier } from './profile.js';
 import { resolveCredentialRows, type CredentialService } from './credential-service.js';
 import type { McpServerService } from './mcp-server-service.js';
+import type { McpServers } from './mcp-servers.js';
 import type { ProfileService } from './profile-service.js';
 import { createRecentMap } from './recent.js';
 import { describeSituation, describeSituationUnavailable, readAtLabel } from './situation.js';
@@ -209,7 +205,6 @@ import {
   CLONE_ACTOR_ID,
   CLONE_DISTILL_ACTOR_ID,
   CLONE_SUB_ACTOR_PREFIX,
-  readSessionUsage,
   usageDate,
   type UsageSite,
   type UsageSnapshot,
@@ -1124,8 +1119,17 @@ export interface CloneOptions {
    * `capabilities.usage === false` だけである。
    */
   provider?: Pick<AgentProvider, 'id' | 'capabilities'>;
-  /** 主にテスト用。既定は SDK の `query`。 */
+  /**
+   * 主にテスト用。既定は SDK の `query`。**既定の駆動役（`ClaudeCloneDriver`）へ渡る**
+   * ——`driver` を渡したときは使われない。
+   */
   queryFn?: typeof query;
+  /**
+   * クローンの harness セッションを動かす駆動役（Issue #486 M7 の前段。`agent-clone-session.ts`）。
+   * **省略は `ClaudeCloneDriver`**（`queryFn` を渡して組む）。いまは Claude の駆動役しか
+   * 無い——クローンが `query()` を直接呼ばなくなっただけで、挙動は変わっていない。
+   */
+  driver?: AgentCloneDriver;
   /**
    * クローンのセッションを置くディレクトリ。SDK はここを基準に
    * トランスクリプトを保存するので、**呼び出し元のカレントディレクトリに
@@ -1293,7 +1297,7 @@ export interface CloneOptions {
    * **デーモンが作った同じインスタンスを渡すこと**（`profileService` と同じ理由）。
    * ここに渡すのは、runner が名乗るたびの降ろし直しがマネージャーのプールを通る
    * ためである。**クローン自身はこれを読まない** —— クローンは記憶ストアの登録を
-   * セッションを組むたびに直に読む（段2。`#buildOptions`）。
+   * セッションを組むたびに直に読む（段2。`#buildSessionSpec`）。
    */
   mcpServerService?: McpServerService;
   /**
@@ -1626,7 +1630,7 @@ function buildHumanAnswerEvent(
 
 class Clone implements CloneHost {
   readonly #stores: Stores;
-  readonly #queryFn: typeof query;
+  readonly #driver: AgentCloneDriver;
   readonly #cwd: string | undefined;
   readonly #sessionStore: SessionStore | undefined;
   /**
@@ -1675,7 +1679,7 @@ class Clone implements CloneHost {
   readonly #cloneToolRelaySocketDir: string;
   /**
    * クローンの道具の中継のホスト（`clone-tool-relay-host.ts`）。**デーモンの
-   * 寿命で高々1つ**——`#mcpServerConfigFor` の doc に理由を書いた。`stdio` の
+   * 寿命で高々1つ**——`#cloneToolsFor` の doc に理由を書いた。`stdio` の
    * セッションが1度も組まれなければ、この Promise 自体が生まれない
    * （ホストは lazy に起こす。`sdk` のままなら listen すら起きない）。
    */
@@ -2202,11 +2206,11 @@ class Clone implements CloneHost {
    * `#resumedFrom` / `#sawInit`・`#sdkSessionId`・`#sessionTokenIdentity` を
    * 持つ。**SDK セッションをいつ開く／畳むか・ターンをどう回すか・畳みの
    * 順序の判断はこれまでどおりここ（`Clone`）が持ち、この器は状態と、
-   * 局所的な遷移だけを持つ。** 注入された依存（`#queryFn` / `#mcpServerFactory` /
+   * 局所的な遷移だけを持つ。** 注入された依存（`#driver` / `#mcpServerFactory` /
    * `#cloneTools*`）は器に入れていない——何を入れ、何を残したかの理由は
    * `CloneSdkSession` 自身の doc を見よ。
    */
-  readonly #sdkSession = new CloneSdkSession();
+  readonly #sdkSession = new CloneSdkSession<AgentCloneSession, AgentUserInput>();
   readonly #env: NodeJS.ProcessEnv;
   /**
    * SDK 子プロセスへ重ねる鍵の**現在値を返す関数**（Issue #393 PR3）。
@@ -2298,6 +2302,7 @@ class Clone implements CloneHost {
       stores,
       provider,
       queryFn,
+      driver,
       cwd,
       runners,
       sessionStore,
@@ -2326,7 +2331,8 @@ class Clone implements CloneHost {
     } = options;
     this.#stores = stores;
     this.#provider = provider ?? CLAUDE_PROVIDER;
-    this.#queryFn = queryFn ?? query;
+    this.#driver =
+      driver ?? new ClaudeCloneDriver({ ...(queryFn === undefined ? {} : { queryFn }) });
     this.#cwd = cwd;
     // **預け先を包んで `projectKey` を拾う**（#564 E1b。`withProjectKeyProbe`）。
     // runner が `key.projectKey` を拾って上げているのと同じ形である。
@@ -9342,7 +9348,7 @@ class Clone implements CloneHost {
    *
    * **⚠️ そして `head` は、システムプロンプトの記憶が何であるかも言い直した。**
    * 以前は「システムプロンプトに載っているものが現在の内容である」と書いて
-   * いたが、これは**嘘である**——システムプロンプトは `#buildOptions` が
+   * いたが、これは**嘘である**——システムプロンプトは `#buildSessionSpec` が
    * セッションを組むときに1回だけ焼くので、載っているのは**セッション構築時点**
    * の内容である。全文を毎回載せ直していた間はその嘘が実害にならなかった
    * （現在の全文がすぐ下に在った）が、差分にした以上は正しく言う必要がある。
@@ -9466,15 +9472,11 @@ class Clone implements CloneHost {
     // 別の場所（`turn_ended` の成功枝）で 0 へ戻すので、健全なセッションでは
     // ここは大きくならない。**
     this.#usageBlockedAccumulatedChars += text.length;
-    this.#sdkSession.enqueueInput({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-    });
+    this.#sdkSession.enqueueInput({ text });
     this.#sdkSession.wakeInput();
   }
 
-  async *#inputStream(): AsyncGenerator<SDKUserMessage> {
+  async *#inputStream(): AsyncGenerator<AgentUserInput> {
     for (;;) {
       const next = this.#sdkSession.dequeueInput();
       if (next !== undefined) {
@@ -9665,10 +9667,7 @@ class Clone implements CloneHost {
     // 観測していないものを確信することになる（`CloneRuntimeFacts` の約束）。
     this.#forgetObservedFacts();
 
-    const q = this.#queryFn({
-      prompt: this.#inputStream(),
-      options: await this.#buildOptions(resume),
-    });
+    const q = this.#driver.open(await this.#buildSessionSpec(resume));
     this.#sdkSession.open(q, this.#read(q));
   }
 
@@ -9684,7 +9683,7 @@ class Clone implements CloneHost {
    * 値を載せない（`parseMcpServers` と `FsMcpServerStore#read` が名前と欄の
    * 位置しか出さない）。
    */
-  async #externalMcpServers(): Promise<Record<string, McpServerConfig>> {
+  async #externalMcpServers(): Promise<McpServers> {
     try {
       return (await this.#stores.mcpServers.read())?.mcpServers ?? {};
     } catch (error) {
@@ -9701,7 +9700,7 @@ class Clone implements CloneHost {
     }
   }
 
-  async #buildOptions(resume: string | null): Promise<Options> {
+  async #buildSessionSpec(resume: string | null): Promise<AgentCloneSessionSpec> {
     const documents = await this.#stores.persona.documents();
     const memory = renderMemoryDocuments(documents);
 
@@ -9716,7 +9715,7 @@ class Clone implements CloneHost {
     this.#distillMemory.setResumedHistoryHasMemory(resume !== null);
     // **セッションを組んだ回は、焼き込みが最新である。** 前のセッションで
     // 立った印を持ち越すと、載せる必要が無い索引をもう一度会話へ積む
-    // （`#memoryIndexRefreshPending` の doc「下ろすのは …と `#buildOptions`」）。
+    // （`#memoryIndexRefreshPending` の doc「下ろすのは …と `#buildSessionSpec`」）。
     // **戻り値は使わない**——ここは「無条件に下ろす」だけの意味で呼んでいる。
     this.#distillMemory.takeMemoryIndexRefreshPending();
 
@@ -9726,16 +9725,18 @@ class Clone implements CloneHost {
     });
     this.#distillMemory.recordBuiltSizes(systemPrompt.length, memory.length);
 
-    return buildCloneSessionOptions({
+    return {
       model: this.#model,
       permissionMode: this.#permissionMode,
-      mcpServer: await this.#mcpServerConfigFor(this.#toolContext()),
+      input: this.#inputStream(),
+      tools: await this.#cloneToolsFor(this.#toolContext()),
       externalMcpServers: await this.#externalMcpServers(),
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
       resume,
-      ...(this.#sessionStore === undefined ? {} : { sessionStore: this.#sessionStore }),
+      // 預け先は SDK の `SessionStore` を包み直さずそのまま渡す（駆動役が戻す）。
+      ...(this.#sessionStore === undefined ? {} : { sessionLog: this.#sessionStore }),
       // 人間が承認した Bash 許可（Issue #863）を消費する唯一の口。中身は
       // `#onPreToolUse` の doc、配線の理由は `claude-provider.ts` の
       // `CloneSessionOptionsRequest.onPreToolUse` の doc。
@@ -9769,7 +9770,7 @@ class Clone implements CloneHost {
       // `#onSubagentStop` の doc、配線の理由は `claude-provider.ts` の
       // `CloneSessionOptionsRequest.onSubagentStop` の doc。
       onSubagentStop: (record) => this.#onSubagentStop(record),
-    });
+    };
   }
 
   /**
@@ -9795,7 +9796,7 @@ class Clone implements CloneHost {
    *    ホストを使い回すことの安全性は元から作り込まれている。
    *
    * **`stdio` のセッションが1度も組まれなければ、この関数自体が呼ばれない**——
-   * `#mcpServerConfigFor` の `'sdk'` 分岐がここへ来ないので、`sdk`（既定）の
+   * `#cloneToolsFor` の `'sdk'` 分岐がここへ来ないので、`sdk`（既定）の
    * ままなら listen すら発生しない。
    */
   async #ensureCloneToolRelayHost(): Promise<CloneToolRelayHost> {
@@ -9809,7 +9810,7 @@ class Clone implements CloneHost {
    * `this.#mcpServerFactory(context)` の結果を、いまの
    * `ALTEROID_CLONE_TOOLS_TRANSPORT`（`#cloneToolsTransport`）に応じてそのまま
    * 返すか、`clone-tool-relay-*` 越しの stdio 設定へ組み替える（Issue #486
-   * 48(a) PR2）。**本セッション（`#buildOptions`）と蒸留のサイドクエリ
+   * 48(a) PR2）。**本セッション（`#buildSessionSpec`）と蒸留のサイドクエリ
    * （`#distillFromTranscript`）の両方がこれを通す**——`claude-provider.ts` の
    * `cloneMcpServers` の doc「本セッションと蒸留で同じ関数を通す」と同じ理由で、
    * 経路（transport）も両者で必ず揃える。片方だけ中継越しだと、蒸留のセッション
@@ -9834,15 +9835,15 @@ class Clone implements CloneHost {
    * 切り替えただけで読み込みのタイミングが変わる**——`clone-tools-transport.test.ts`
    * が両分岐で `alwaysLoad` が無いことを固定する。
    */
-  async #mcpServerConfigFor(context: ToolContext): Promise<McpServerConfig> {
+  async #cloneToolsFor(context: ToolContext): Promise<AgentCloneTools> {
     if (this.#cloneToolsTransport === 'sdk') {
-      return this.#mcpServerFactory(context);
+      return { kind: 'inproc', server: this.#mcpServerFactory(context) };
     }
     const host = await this.#ensureCloneToolRelayHost();
     this.#cloneToolRelayChildEntry ??= resolveCloneToolRelayChildEntry(import.meta.url);
     const token = host.register(() => this.#mcpServerFactory(context).instance);
     return {
-      type: 'stdio',
+      kind: 'stdio',
       command: process.execPath,
       args: [this.#cloneToolRelayChildEntry],
       env: {
@@ -10065,7 +10066,7 @@ class Clone implements CloneHost {
    *   許可だけを扱う（地雷表「確認が要る行為の一覧を作る」と同じ理由で
    *   対象を1本に絞る——`runner.ts` の `#onPreToolUse`
    *   （`bash-wait-guard.ts`、deny 側）と同じ絞り方）。
-   * - **このフックはクローン本セッション（`#buildOptions` →
+   * - **このフックはクローン本セッション（`#buildSessionSpec` →
    *   `buildCloneSessionOptions`）にしか配線しない。** 蒸留
    *   （`buildCloneDistillOptions`）・マネージャー／作業者
    *   （`runner.ts` が別プロセスで組む `buildManagerSessionOptions`）は
@@ -10158,7 +10159,7 @@ class Clone implements CloneHost {
 
   /**
    * `PostToolUse` フックから effort の実効値と、**自分の手を使った跡**を拾う
-   * （`#buildOptions` の hooks コメント参照）。
+   * （`#buildSessionSpec` の hooks コメント参照）。
    *
    * ## なぜ日誌に残すのか
    *
@@ -10394,7 +10395,7 @@ class Clone implements CloneHost {
   /**
    * 失敗・中断した道具呼び出しの合図（`PostToolUseFailure`）を拾う（Issue #924）。
    *
-   * **`#onPostToolUse` と排他である**（`#buildOptions` の `onPostToolUseFailure`
+   * **`#onPostToolUse` と排他である**（`#buildSessionSpec` の `onPostToolUseFailure`
    * の doc — 出荷済みの SDK 実行体を実測して確認した排他分岐）。⟹ 1回の道具
    * 呼び出しにつき、このハンドラと `#onPostToolUse` のどちらか一方だけが呼ばれる。
    *
@@ -10979,6 +10980,14 @@ class Clone implements CloneHost {
    * 道具（記憶・日誌）は同じインプロセス MCP を渡すので、書き込み先は同じ。
    */
   async #distillFromTranscript(transcriptTail: string): Promise<void> {
+    // **蒸留のサイドクエリは駆動役の任意の能力である**（`AgentCloneDriver.distill`）。持たない
+    // 駆動役では**投げる**——呼び出し側はどれも失敗として日誌へ残し、「蒸留できた」印を
+    // 下ろさない（黙って返すと、蒸留していないのに成功として扱われる）。
+    const driver = this.#driver;
+    const distill = driver.distill?.bind(driver);
+    if (distill === undefined) {
+      throw new Error(`この駆動役（${driver.providerId}）は蒸留のサイドクエリを持たない`);
+    }
     // ここは**別の短命セッション**なので、載せ直しの控え（`#memoryOnRecord`）は
     // 触らない。触ると本セッションの差分が消える。
     const memory = renderMemoryDocuments(await this.#stores.persona.documents());
@@ -11000,74 +11009,71 @@ class Clone implements CloneHost {
     // **蒸留のたびに読み直す**（`#externalMcpServers` の doc）。本セッションと同じ
     // 人間の連携を渡す——片方だけに見えると、人格の書き手だけが別の手を持つ。
     const externalMcpServers = await this.#externalMcpServers();
-    const side = this.#queryFn({
+    const side = distill({
       prompt,
-      options: buildCloneDistillOptions({
-        model: this.#model,
-        permissionMode: this.#permissionMode,
-        // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
-        // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
-        //
-        // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
-        // 蒸留のターンだけ自分のことが分からないクローンになる
-        // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
-        // **`#mcpServerConfigFor` を本セッションと同じく通す**（Issue #486
-        // 48(a) PR2）。中身は変えず、経路（`sdk`/`stdio`）を決める1点だけを
-        // 本セッションと揃える——`#mcpServerConfigFor` の doc「片方だけ中継越し
-        // だと…非対称が transport の軸にも生まれる」を参照。
-        mcpServer: await this.#mcpServerConfigFor({
-          stores: this.#stores,
-          emit: () => undefined,
-          ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
-          ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
-          ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
-          runtime: () => this.#runtimeFacts(),
-          // このサイドクエリ自体が常に蒸留のターンなので、`#turn` を読む必要は
-          // 無い（`#toolContext()` の doc）。**ここを削ると `memoryCause` は
-          // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
-          // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
-          memoryCause: () => 'distill',
-          // **蒸留のサイドクエリにも渡す**（issue #1049）。この層で
-          // `inbox_remove_many` を打つ場面は想定していないが、**渡さない側を
-          // 選ぶと「蒸留のターンだけ消せない」という層ごとの能力差になる**
-          // （north_star 禁止2）。渡す実体は本セッションと同一である。
-          dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
-          // **同じ理由で渡す**（issue #1133）。`#toolContext()` と同じ
-          // `#queuedInMemoryCount()` を経由する。
-          queuedInMemory: () => this.#queuedInMemoryCount(),
-          // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
-          // いまは `ToolContext.conversationId` が必須（省略すると
-          // `createCloneTools` が throw する）。値そのものの判断は変えていない
-          // —— `emit` を `() => undefined` にしているのと同じ判断で、
-          // サイドクエリは常に内部ターンで人間の会話には紐づいていないので、
-          // 関数は渡すが常に `undefined` を返す。
-          conversationId: () => undefined,
-          // **同じ実体を渡す**（issue #1802。上の `dropQueuedInboxEvents` と同じ理由）。
-          recentDenials: () => this.#recentDenials.list(),
-        }),
-        externalMcpServers,
-        systemPrompt: buildCloneSystemPrompt({
-          memory,
-          ...(this.#self === undefined ? {} : { self: this.#self }),
-        }),
-        env: this.#childEnv(),
-        ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
-        onPostToolUse: (input) => this.#onDistillToolUse(input),
-        // **本セッションと同じ理由で足す**（`#buildOptions` の
-        // `onPostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路
-        // なので、そこの失敗を記録しないと「記憶が書かれなかった」が
-        // 静かに落ちる。
-        onPostToolUseFailure: (input) => this.#onDistillToolUseFailure(input),
+      model: this.#model,
+      permissionMode: this.#permissionMode,
+      // **蒸留のターンでも同じ道具を渡す。** ここだけ欠けていると、
+      // 会話の最後に「鍵を実行環境へ移す」をやろうとして失敗する。
+      //
+      // **本セッションで観測した値をそのまま渡す。** ここだけ欠けていると、
+      // 蒸留のターンだけ自分のことが分からないクローンになる
+      // （`CloneRuntimeFacts.sessionId` のコメントの理由）。
+      // **`#cloneToolsFor` を本セッションと同じく通す**（Issue #486
+      // 48(a) PR2）。中身は変えず、経路（`sdk`/`stdio`）を決める1点だけを
+      // 本セッションと揃える——`#cloneToolsFor` の doc「片方だけ中継越し
+      // だと…非対称が transport の軸にも生まれる」を参照。
+      tools: await this.#cloneToolsFor({
+        stores: this.#stores,
+        emit: () => undefined,
+        ...(this.#profileService === undefined ? {} : { profile: this.#profileService }),
+        ...(this.#accountUsage === undefined ? {} : { accountUsage: this.#accountUsage }),
+        ...(this.#scheduler === undefined ? {} : { scheduler: this.#scheduler }),
+        runtime: () => this.#runtimeFacts(),
+        // このサイドクエリ自体が常に蒸留のターンなので、`#turn` を読む必要は
+        // 無い（`#toolContext()` の doc）。**ここを削ると `memoryCause` は
+        // 既定の `'clone'` に落ち、蒸留が書いた記憶なのに `cause: 'clone'`
+        // と名乗る**（`ToolContext.memoryCause` の doc の「渡し忘れ」）。
+        memoryCause: () => 'distill',
+        // **蒸留のサイドクエリにも渡す**（issue #1049）。この層で
+        // `inbox_remove_many` を打つ場面は想定していないが、**渡さない側を
+        // 選ぶと「蒸留のターンだけ消せない」という層ごとの能力差になる**
+        // （north_star 禁止2）。渡す実体は本セッションと同一である。
+        dropQueuedInboxEvents: (ids) => this.dropQueuedInboxEvents(ids),
+        // **同じ理由で渡す**（issue #1133）。`#toolContext()` と同じ
+        // `#queuedInMemoryCount()` を経由する。
+        queuedInMemory: () => this.#queuedInMemoryCount(),
+        // **`conversationId` は明示する（#768・#781）。** かつては省略していたが、
+        // いまは `ToolContext.conversationId` が必須（省略すると
+        // `createCloneTools` が throw する）。値そのものの判断は変えていない
+        // —— `emit` を `() => undefined` にしているのと同じ判断で、
+        // サイドクエリは常に内部ターンで人間の会話には紐づいていないので、
+        // 関数は渡すが常に `undefined` を返す。
+        conversationId: () => undefined,
+        // **同じ実体を渡す**（issue #1802。上の `dropQueuedInboxEvents` と同じ理由）。
+        recentDenials: () => this.#recentDenials.list(),
       }),
+      externalMcpServers,
+      systemPrompt: buildCloneSystemPrompt({
+        memory,
+        ...(this.#self === undefined ? {} : { self: this.#self }),
+      }),
+      env: this.#childEnv(),
+      ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
+      onPostToolUse: (input) => this.#onDistillToolUse(input),
+      // **本セッションと同じ理由で足す**（`#buildSessionSpec` の
+      // `onPostToolUseFailure` の doc）。蒸留は `memory_write` を叩く経路
+      // なので、そこの失敗を記録しないと「記憶が書かれなかった」が
+      // 静かに落ちる。
+      onPostToolUseFailure: (input) => this.#onDistillToolUseFailure(input),
     });
 
-    for await (const message of side) {
-      // **本セッションと同じ写しを通す**（`claude-provider.ts` の
-      // `foldClaudeMessage`）。読むのはターンの終わりだけなので `#apply` は
+    for await (const ended of side) {
+      // **本セッションと同じ写しを通す**（駆動役が `foldClaudeMessage` 等で中立イベントへ
+      // 畳んで返す）。読むのはターンの終わりだけなので `#apply` は
       // 通さない —— こちらは `site`（`distill`）も累積の数え方（`oneshot`）も
       // 本セッションと違い、**同じ反応をさせてはいけない側**である。
-      const ended = foldClaudeMessage(message).find((event) => event.type === 'turn_ended');
-      if (ended === undefined) continue;
+      if (ended.type !== 'turn_ended') continue;
       // **このサイドクエリの `result` を読み捨てないこと。** ここが「要約のたびに
       // 払っている蒸留の費用」の唯一の観測点である。別の `query()` 呼び出しなので
       // 累積は1回で閉じており（SDK: 「during this query() call」）[sdk-verbatim SDKResultSuccess.modelUsage]、値はこの1回の
@@ -11115,7 +11121,7 @@ class Clone implements CloneHost {
     if (q === null) return undefined;
     const startedAt = Date.now();
     try {
-      const usage = await q.getContextUsage();
+      const usage = await q.contextUsage();
       // **内訳は既に払ってあるものを写すだけである。** `getContextUsage()` を
       // 引数なしで呼ぶと SDK の既定は `detail: 'full'`（＝カテゴリごとに
       // token-count API を呼ぶ）なので、**内訳を取り出さなくても費用は同じ**
@@ -11210,7 +11216,8 @@ class Clone implements CloneHost {
    *   サイドクエリについて言っているのと同じ理由である）
    */
   async #flushSessionUsage(): Promise<void> {
-    const models = await readSessionUsage(this.#sdkSession.query);
+    const session = this.#sdkSession.query;
+    const models = await (session === null ? undefined : session.sessionModelUsage());
     if (models === undefined) return;
     await this.#recordUsage({ models }, 'session', 'cumulative');
   }
@@ -11403,16 +11410,14 @@ class Clone implements CloneHost {
     }
   }
 
-  async #read(q: Query): Promise<void> {
+  async #read(q: AgentCloneSession): Promise<void> {
     let failure: { readonly error: unknown } | null = null;
 
     try {
-      for await (const message of q) {
-        // **provider の綴りを読むのはここまでである**（`claude-provider.ts` の
-        // `foldClaudeMessage`）。ここから下へ流れるのは中立イベントだけで、
-        // 次の provider を足しても `#apply` は1本のままになる（#486）。
-        for (const event of foldClaudeMessage(message)) await this.#apply(event);
-      }
+      // **provider の綴りを読むのはここまでである**（駆動役の `readEvents` が
+      // `foldClaudeMessage` 等で畳む）。ここから下へ流れるのは中立イベントだけで、
+      // 次の provider を足しても `#apply` は1本のままになる（#486）。
+      await q.readEvents((event) => this.#apply(event));
     } catch (error) {
       failure = { error };
 
@@ -11458,7 +11463,7 @@ class Clone implements CloneHost {
         // 手前に置いているのと対である。
         await this.#flushSessionUsage();
         this.#sdkSession.clearQuery();
-        // 次のセッションは `#buildOptions` が控え直す。ここで空にしておかないと、
+        // 次のセッションは `#buildSessionSpec` が控え直す。ここで空にしておかないと、
         // 前のセッションで見せた分を「もう見せた」と数えたまま新しいシステム
         // プロンプトを組むことになる（実際には焼き込み直すので嘘にはならないが、
         // 控えの出所が2か所になる）。

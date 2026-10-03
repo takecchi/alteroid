@@ -10,7 +10,7 @@ import type { Turn } from './clone.js';
  *
  * **前例と同じ形にそろえてある。** 新しいクラスは完全に private な状態の器
  * だけを持ち、`#journal` / `#stores`（実際に日誌へ書く口・記憶ストアの実体）・
- * `#queryFn` / `#mcpServerFactory`（注入された依存そのもの）には一切触れない。
+ * `#driver` / `#mcpServerFactory`（注入された依存そのもの）には一切触れない。
  * **SDK セッションをいつ開く／畳むか・ターンをどう回すか・日誌へ何を書くかの
  * 判断はこれまでどおり `Clone` が持ち、この器は状態と、局所的な遷移だけを
  * 持つ。**
@@ -43,7 +43,7 @@ import type { Turn } from './clone.js';
  *
  * ## ⛔ 器に入れていないもの（19本の割り当てのうち6本。issuecomment-5843050193）
  *
- * - **`#queryFn` / `#mcpServerFactory`**——注入された依存そのもの
+ * - **`#driver` / `#mcpServerFactory`**——注入された依存そのもの
  *   （`typeof query` / `typeof createCloneMcpServer`）。ただ持っていて直接
  *   呼ぶだけで、生存に関わる遷移がこれらを使わない——依頼の判断基準
  *   「注入された依存は、その遷移が使うかどうかで決める」に従い、背骨として
@@ -110,13 +110,22 @@ import type { Turn } from './clone.js';
  * 得られるのは「この状態の組み合わせは、この器の中だけで読めばよい」という
  * レビューのしやすさだけである（前例と同じ言い方）。
  */
-export class CloneSdkSession {
+export class CloneSdkSession<
+  /**
+   * 開いているセッションの型。既定は SDK の `Query`（この器の単体テストがそのまま使う）。
+   * `Clone` は駆動役の中立の口 `AgentCloneSession` を渡す（#486 M7 の前段）。
+   * **この器が呼ぶのは `close()` だけ**なので、要るのはそれだけである。
+   */
+  Q extends { close(): void } = Query,
+  /** 入力の待ち行列の要素の型。既定は SDK の `SDKUserMessage`。`Clone` は `AgentUserInput`。 */
+  I = SDKUserMessage,
+> {
   // ---------------------------------------------------------------------
   // SDK セッション本体（`#query` / `#reader`）と受信箱のループ（`#pumpLoop`）
   // ---------------------------------------------------------------------
 
   /** いま開いている SDK クエリ（器＝CLI プロセス）。無ければ `null`。 */
-  #query: Query | null = null;
+  #query: Q | null = null;
   /** `#query` を読み続けている `#read` ループの Promise。無ければ `null`。 */
   #reader: Promise<void> | null = null;
   /**
@@ -132,7 +141,7 @@ export class CloneSdkSession {
    */
   #pumpLoop: Promise<void> | null = null;
 
-  get query(): Query | null {
+  get query(): Q | null {
     return this.#query;
   }
 
@@ -151,7 +160,7 @@ export class CloneSdkSession {
    * まとめている。** `#read`（`reader` の中身）は同期の前置きの中で
    * `this.#query` を読まないので、まとめても観測できる違いは無い。
    */
-  open(query: Query, reader: Promise<void>): void {
+  open(query: Q, reader: Promise<void>): void {
     this.#query = query;
     this.#reader = reader;
   }
@@ -242,7 +251,7 @@ export class CloneSdkSession {
   // ---------------------------------------------------------------------
 
   /** SDK へ流す入力の待ち行列。 */
-  readonly #input: SDKUserMessage[] = [];
+  readonly #input: I[] = [];
   /**
    * 次の入力を待っている `#inputStream` を起こすための待ち手。**高々1本**
    * ——`Clone` の `#inputStream` はループが1本しか無いので、`RunnerSdkSession`
@@ -251,12 +260,12 @@ export class CloneSdkSession {
   #inputWaiter: (() => void) | null = null;
 
   /** `Clone#pushInput` が呼ぶ。待ち行列の末尾へ積む。 */
-  enqueueInput(message: SDKUserMessage): void {
+  enqueueInput(message: I): void {
     this.#input.push(message);
   }
 
   /** `#inputStream` が呼ぶ。先頭から1件取り出す（無ければ `undefined`）。 */
-  dequeueInput(): SDKUserMessage | undefined {
+  dequeueInput(): I | undefined {
     return this.#input.shift();
   }
 

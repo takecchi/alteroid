@@ -62,7 +62,7 @@ import type { MemoryDocument } from './schema.js';
  *    4定義すべてで帰無Bに対する lift が有意（+5.68〜+27.27pt、p ≤ .019）——
  *    前例 #1581（`RunnerSession` の待つ窓）が 3/4 で切っている基準を、この束は
  *    4/4 で超えている。**構造の側は逆のことを言っている**——12フィールドを
- *    触るメンバーは `Clone` 側に多数散っており（`#buildOptions` /
+ *    触るメンバーは `Clone` 側に多数散っており（`#buildSessionSpec` /
  *    `#ensureQuery` / `#withFreshMemory` / `#memoryFloorDigestLine` /
  *    `#handle` / `#runTurn` / `#distillGapNotice` / `#contextWindowFoldNotice` /
  *    `#runtimeFacts` / `#noteContextWindowFold` / `#noteUnproductiveUsageBlockFold` /
@@ -94,7 +94,7 @@ import type { MemoryDocument } from './schema.js';
  *      {@link CloneDistillMemoryState.commitMemory}（退避してから差し替える）
  *      へ分けたことで、**早期 return の経路では `commitMemory` を1度も呼ばない
  *      ——つまり `#memoryOnRecord` に触れない**という元の性質をそのまま保てる。
- *    - **`#buildOptions` の `#memoryOnRecord` 操作**（差分を見ずに丸ごと差し
+ *    - **`#buildSessionSpec` の `#memoryOnRecord` 操作**（差分を見ずに丸ごと差し
  *      替える）も {@link CloneDistillMemoryState.commitMemory} を呼ぶ——戻り値
  *      （退避した旧い控え）は使わない。呼び出し側が使わないだけで、クラスの
  *      中身は`#withFreshMemory`と同じ「退避してから差し替える」という同じ
@@ -108,7 +108,7 @@ export class CloneDistillMemoryState {
   // セッション構築時に焼き込んだ文字数
   // ---------------------------------------------------------------------
 
-  /** `#buildOptions` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
+  /** `#buildSessionSpec` で組み立てたシステムプロンプトの文字数。セッションの間は固定。 */
   #systemPromptChars = 0;
   /**
    * システムプロンプトへ焼き込んだ記憶の文字数。**セッションの間は固定。**
@@ -129,7 +129,7 @@ export class CloneDistillMemoryState {
   }
 
   /**
-   * `#buildOptions` がセッションを組んだ直後に呼ぶ。**2本まとめて立てる**——
+   * `#buildSessionSpec` がセッションを組んだ直後に呼ぶ。**2本まとめて立てる**——
    * 元の2行（`this.#systemPromptChars = …; this.#promptMemoryChars = …;`）を
    * 1回の呼び出しへ畳んだだけで、代入する値・順序は変えていない。
    */
@@ -246,7 +246,7 @@ export class CloneDistillMemoryState {
   /**
    * 要約に潰されたので、次のターンで記憶の索引を丸ごと載せ直すための印
    * （Issue #696）。立てるのは `#onPreCompact`、下ろすのは
-   * `#withFreshMemory`（載せた回）と `#buildOptions`（セッションを組み直した
+   * `#withFreshMemory`（載せた回）と `#buildSessionSpec`（セッションを組み直した
    * 回）。
    */
   #memoryIndexRefreshPending = false;
@@ -345,7 +345,7 @@ export class CloneDistillMemoryState {
    * **順序（退避 → クリア → 詰め直し）は変えていない。** 逆にすると、退避
    * したつもりの控えが新しい内容で埋まり、差分が常に空になる。
    *
-   * `Clone#buildOptions`（セッションを新しく組む・組み直す回）もこれを呼ぶ
+   * `Clone#buildSessionSpec`（セッションを新しく組む・組み直す回）もこれを呼ぶ
    * ——戻り値（退避した旧い控え）は使わない。あちらは差分を見ずに焼き込みを
    * 丸ごと差し替えるだけなので、同じ「退避してから差し替える」という1つの
    * 遷移で足りる。
@@ -359,7 +359,7 @@ export class CloneDistillMemoryState {
 
   /**
    * 控えだけを空にする（差し替えない）。`#read` の `finally`（セッションが
-   * 閉じる経路）が呼ぶ——次のセッションは `#buildOptions` が
+   * 閉じる経路）が呼ぶ——次のセッションは `#buildSessionSpec` が
    * {@link commitMemory} で控え直す。ここで空にしておかないと、前のセッション
    * で見せた分を「もう見せた」と数えたまま新しいシステムプロンプトを組む
    * ことになる（実害は無いが、控えの出所が2か所になる）。
@@ -380,7 +380,7 @@ export class CloneDistillMemoryState {
    */
   #resumedHistoryHasMemory = false;
 
-  /** `#buildOptions` が、セッションを組んだ直後に呼ぶ（`resume !== null`）。 */
+  /** `#buildSessionSpec` が、セッションを組んだ直後に呼ぶ（`resume !== null`）。 */
   setResumedHistoryHasMemory(resumed: boolean): void {
     this.#resumedHistoryHasMemory = resumed;
   }
