@@ -43,7 +43,11 @@ export class PgProfileStore implements ProfileStore {
       .limit(1);
     const row = rows[0];
     if (row === undefined || row.script.trim().length === 0) return null;
-    return { script: row.script, updatedAt: row.updatedAt.toISOString(), scope: scopeOf(row.scope) };
+    return {
+      script: row.script,
+      updatedAt: row.updatedAt.toISOString(),
+      scope: scopeOf(row.scope),
+    };
   }
 
   async write(script: string, scope: EnvProfileScope = 'all'): Promise<EnvProfile> {

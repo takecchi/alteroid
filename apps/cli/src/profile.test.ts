@@ -403,7 +403,10 @@ describe('撒く先（--scope）', () => {
   });
 
   it('edit --scope は、本文を変えなくても撒く先が変わるなら PUT する', async () => {
-    setReply('GET', '/profile', { status: 200, body: { script: 'export FOO=bar\n', scope: 'all' } });
+    setReply('GET', '/profile', {
+      status: 200,
+      body: { script: 'export FOO=bar\n', scope: 'all' },
+    });
     setReply('PUT', '/profile', okReply);
     captureStdout();
 

@@ -223,12 +223,14 @@ export function createProfileService(options: ProfileServiceOptions): ProfileSer
         const prepared: PreparedProfile | null =
           applier === undefined
             ? null
-            : await applier.prepare(scriptFor(normalized, resolvedScope, 'clone')).catch((error: unknown): PreparedProfile => ({
-                ok: false,
-                error: redactErrorText(String(error), process.env),
-                commit: async () => undefined,
-                discard: async () => undefined,
-              }));
+            : await applier
+                .prepare(scriptFor(normalized, resolvedScope, 'clone'))
+                .catch((error: unknown): PreparedProfile => ({
+                  ok: false,
+                  error: redactErrorText(String(error), process.env),
+                  commit: async () => undefined,
+                  discard: async () => undefined,
+                }));
 
         // 呼び出し側へ返すのは「結果」だけ（`commit` / `discard` は器の都合）。
         const clone: ProfileApplyResult =

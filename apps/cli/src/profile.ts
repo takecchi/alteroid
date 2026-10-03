@@ -145,10 +145,7 @@ export async function profileStatusCommand(): Promise<void> {
 }
 
 /** ファイルか標準入力から丸ごと置き換える。 */
-export async function profileSetCommand(options: {
-  file?: string;
-  scope?: string;
-}): Promise<void> {
+export async function profileSetCommand(options: { file?: string; scope?: string }): Promise<void> {
   // 先に検査する（標準入力を読み終えてから「綴りが違う」で落とさない）。
   const scope = parseScope(options.scope);
   const script =

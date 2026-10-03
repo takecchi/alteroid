@@ -311,7 +311,12 @@ function ProfileEditor({ current }: { current: ProfileState }) {
                   }へ配る。撒く先から外れた側からは外れる。これから起こす仕事には即座に効く。`}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="danger" size="sm" loading={busy} onClick={() => void submit(draft, draftScope)}>
+              <Button
+                variant="danger"
+                size="sm"
+                loading={busy}
+                onClick={() => void submit(draft, draftScope)}
+              >
                 {draftClears ? '本当に外す' : '本当に保存する'}
               </Button>
               <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(null)}>

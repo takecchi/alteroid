@@ -5951,7 +5951,8 @@ export function createApp(deps: AppDeps) {
       requireOwner,
       async (c) => {
         const stored = await deps.stores.profile.read();
-        if (stored === null) return c.json(profileResponseSchema.parse({ script: '', scope: 'all' }));
+        if (stored === null)
+          return c.json(profileResponseSchema.parse({ script: '', scope: 'all' }));
         return c.json(
           profileResponseSchema.parse({
             script: stored.script,

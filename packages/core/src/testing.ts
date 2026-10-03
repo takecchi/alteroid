@@ -1411,9 +1411,7 @@ export function createMemoryStores(): Stores {
     },
     async write(script, scope = 'all') {
       envProfile =
-        script.trim().length === 0
-          ? null
-          : { script, updatedAt: new Date().toISOString(), scope };
+        script.trim().length === 0 ? null : { script, updatedAt: new Date().toISOString(), scope };
       return envProfile ?? { script: '', updatedAt: new Date().toISOString(), scope: 'all' };
     },
     async revert(previous) {

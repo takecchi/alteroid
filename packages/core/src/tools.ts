@@ -9857,7 +9857,9 @@ export function createCloneTools(context: ToolContext) {
         });
 
         const scopeNote =
-          result.sha256 === undefined || result.scope === undefined ? '' : ` / 撒く先 ${result.scope}`;
+          result.sha256 === undefined || result.scope === undefined
+            ? ''
+            : ` / 撒く先 ${result.scope}`;
         const failed = result.runners.filter((runner) => !runner.ok);
         const delivered = result.runners.filter((runner) => runner.ok).map((r) => r.runnerId);
         return text(
