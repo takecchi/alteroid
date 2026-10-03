@@ -734,8 +734,14 @@ describe('行の更新（set / remove / clearAll / apply）', () => {
     const stores = createMemoryStores();
     await stores.profile.set('a', 'export A=1\n', 'runner');
     await stores.profile.set('b', 'export B=1\n', 'all');
+    // 更新日時を古い固定値にしておく（実時間で待たずに、巻き戻しが日時ごとであることを測る）。
+    await stores.profile.replaceAll(
+      (await stores.profile.list()).map((row) => ({
+        ...row,
+        updatedAt: '2000-01-01T00:00:00.000Z',
+      })),
+    );
     const before = await stores.profile.list();
-    await new Promise((resolve) => setTimeout(resolve, 5));
 
     const failing: ProfileApplier = {
       ...fakeApplier(),

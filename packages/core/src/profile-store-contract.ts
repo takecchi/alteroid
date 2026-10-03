@@ -13,6 +13,9 @@ import type { ProfileStore } from './store.js';
  *
  * ⚠️ **この関数は器の中身を書き換える。** 最後に全部外した状態で終わる。
  */
+/** 更新日時の「十分に古い値」。実時間で待たずに、時刻が進む/戻ることを測るための固定値。 */
+const LONG_AGO = '2000-01-01T00:00:00.000Z';
+
 export async function verifyProfileStoreContract(store: ProfileStore): Promise<void> {
   function fail(message: string): never {
     throw new Error(`実行環境プロファイルの器の契約違反: ${message}`);
@@ -41,10 +44,12 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
   }
 
   // --- 4. 同じ名前の set は置き換え（行は増えない。撒く先も新しいものになる） ---
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // **実時間で待たない**（器が混むと待ちが足りず、時刻が進んだかを測れない）。更新日時を
+  // 十分に古い値へ戻してから置き換え、「いま」へ進むことを見る。
+  await store.replaceAll(rows.map((row) => ({ ...row, updatedAt: LONG_AGO })));
   const replaced = await store.set('a', 'export A=2\n', 'all');
   if ((await store.list()).length !== 3) fail('同じ名前の set で行が増えた');
-  if (replaced.updatedAt === a.updatedAt) fail('置き換えても updatedAt が進まない');
+  if (replaced.updatedAt === LONG_AGO) fail('置き換えても updatedAt が進まない');
   const afterReplace = (await store.list()).find((row) => row.name === 'a');
   if (afterReplace?.script !== 'export A=2\n' || afterReplace.scope !== 'all') {
     fail('置き換えた本文・撒く先が読み戻せない');
@@ -56,8 +61,9 @@ export async function verifyProfileStoreContract(store: ProfileStore): Promise<v
   if ((await names()).join(',') !== 'Z,b') fail('remove が他の行を巻き込んだ');
 
   // --- 6. replaceAll は行の集合を、本文・撒く先・更新日時ごと戻す（入力に無い行は消える） ---
+  // 更新日時が「いま」で上書きされる実装を、時計の粒度に頼らず落とすため、古い値で撮る。
+  await store.replaceAll((await store.list()).map((row) => ({ ...row, updatedAt: LONG_AGO })));
   const snapshot = await store.list();
-  await new Promise((resolve) => setTimeout(resolve, 20));
   await store.set('b', 'export B=changed\n', 'runner');
   await store.set('extra', 'export X=1\n', 'all');
   await store.remove('Z');

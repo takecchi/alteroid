@@ -4824,7 +4824,7 @@ export function createCloneTools(context: ToolContext) {
     // **置けない入力は利用者の誤りであって、システムの失敗ではない。** 何も変えていない
     // ので、道具のエラーにせず理由をそのまま返す（名前の形・大文字小文字の衝突など）。
     if (error instanceof ProfileInputError) {
-      return text(`プロファイルの行を置けなかった（何も変えていない）: ${error.message}`);
+      return text(`プロファイルの行を置けなかった（何も変えていない）: ${reasonOf(error)}`);
     }
     throw error;
   }
