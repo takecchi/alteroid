@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createManagerPool, type WorkerToolEvent } from './manager.js';
-import type {
-  RunnerClient,
-  RunnerEntry,
-  RunnerEvent,
-  RunnerRegistry,
-} from './runner-protocol.js';
+import type { RunnerClient, RunnerEntry, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
 import type { Job } from './schema.js';
 import { createMemoryStores } from './testing.js';
 
@@ -65,7 +60,9 @@ describe('ManagerPool#onEvent: tool_running / tool_end', () => {
       stores,
       post: () => {},
       runners: registry,
-      ...(withCallback ? { onWorkerToolEvent: (event: WorkerToolEvent) => received.push(event) } : {}),
+      ...(withCallback
+        ? { onWorkerToolEvent: (event: WorkerToolEvent) => received.push(event) }
+        : {}),
     });
     await pool.abort('mgr-does-not-exist'); // 接続を開く
     return { stores, emit: () => emit, received };

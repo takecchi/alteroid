@@ -144,7 +144,12 @@ describe('作業者の実行中の道具（#2725）', () => {
             manager({
               status: 'done',
               live: false,
-              awaitingBackground: { tasks: 1, withheldReports: 0, breakdown: '', since: iso(-1000) },
+              awaitingBackground: {
+                tasks: 1,
+                withheldReports: 0,
+                breakdown: '',
+                since: iso(-1000),
+              },
             } as Partial<ManagerSummary>),
           ),
         ),

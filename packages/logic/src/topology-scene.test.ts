@@ -243,9 +243,13 @@ describe('作業者の実行中の道具（runningTool。#2725）', () => {
   const stale = ago(WORKER_RUNNING_WINDOW_MS + 60_000);
 
   it('runningTool が在れば、窓の外でも実行中。task は道具名、details は「N 分実行中」', () => {
-    const result = worker({ tool: 'Bash', startedAt: ago(3 * 60_000 + 5000) }, {}, {
-      lastActivityAt: stale,
-    });
+    const result = worker(
+      { tool: 'Bash', startedAt: ago(3 * 60_000 + 5000) },
+      {},
+      {
+        lastActivityAt: stale,
+      },
+    );
     expect(result.status).toBe('running');
     expect(result.task).toBe('Bash');
     expect(result.details?.find((d) => d.label === '実行中の道具')?.value).toBe(

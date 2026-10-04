@@ -11,7 +11,10 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
 import { createRunnerHost, type RunnerHost } from './runner.js';
 import { runnerEventSchema, type RunnerEvent } from './runner-protocol.js';
-import { WORKER_TOOL_RUNNING_AFTER_MS, type WorkerToolWatchClock } from './runner-worker-tool-watch.js';
+import {
+  WORKER_TOOL_RUNNING_AFTER_MS,
+  type WorkerToolWatchClock,
+} from './runner-worker-tool-watch.js';
 
 /**
  * 作業者の長い道具の実行中の観測（Issue #2725）を確かめる。
@@ -197,7 +200,11 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
     await fire(session.options, 'PostToolUse', post('tu-1'));
     await fire(session.options, 'PostToolUse', post('tu-1'));
     expect(watchEvents(events).map((e) => e.type)).toEqual(['tool_running', 'tool_end']);
-    expect(watchEvents(events)[1]).toEqual({ type: 'tool_end', managerId: 'mgr-1', toolUseId: 'tu-1' });
+    expect(watchEvents(events)[1]).toEqual({
+      type: 'tool_end',
+      managerId: 'mgr-1',
+      toolUseId: 'tu-1',
+    });
   });
 
   it('失敗で決着しても tool_end を送る', async () => {
@@ -234,7 +241,11 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
   it('SubagentStop で、その作業者の分だけ全部片付く', async () => {
     const { session, events, clock } = await startSession();
     await fire(session.options, 'PreToolUse', pre('tu-1'));
-    await fire(session.options, 'PreToolUse', pre('tu-2', { agent_id: 'agent-2', agent_type: 'worker' }));
+    await fire(
+      session.options,
+      'PreToolUse',
+      pre('tu-2', { agent_id: 'agent-2', agent_type: 'worker' }),
+    );
     clock.advance(WORKER_TOOL_RUNNING_AFTER_MS);
     await fire(session.options, 'SubagentStop', {
       hook_event_name: 'SubagentStop',
@@ -253,12 +264,13 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
     await fire(session.options, 'PreToolUse', pre('tu-2'));
     clock.advance(WORKER_TOOL_RUNNING_AFTER_MS);
     await fire(session.options, 'PreToolUse', pre('tu-3'));
-    await host.stop('mgr-1', 'テスト');
+    await host.stop('mgr-1');
     expect(clock.pending()).toBe(0);
-    expect(watchEvents(events).filter((e) => e.type === 'tool_end').map((e) => e.toolUseId)).toEqual([
-      'tu-1',
-      'tu-2',
-    ]);
+    expect(
+      watchEvents(events)
+        .filter((e) => e.type === 'tool_end')
+        .map((e) => e.toolUseId),
+    ).toEqual(['tu-1', 'tu-2']);
   });
 
   it('マネージャー自身の道具（agent_id 無し）と tool_use_id 無しは何も置かない', async () => {
@@ -284,7 +296,8 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
           'until grep -q "^run: まとめ$" /tmp/mutation-run-865.log 2>/dev/null; do sleep 5; done',
       },
     });
-    const output = (out as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput;
+    const output = (out as { hookSpecificOutput?: { permissionDecision?: string } })
+      .hookSpecificOutput;
     expect(output?.permissionDecision).toBe('deny');
     // 弾いた呼び出しには Post も拒否の合図も来ないので、タイマーを置かない。
     expect(clock.pending()).toBe(0);
