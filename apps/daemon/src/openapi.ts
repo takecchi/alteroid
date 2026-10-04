@@ -1660,6 +1660,20 @@ const topologyManagerSchema = z.object({
   /** 返事待ち。1件ずつ抜粋で、多いときは先頭から切り `waitingOmitted` で件数を言う。 */
   waiting: z.array(topologyWaitingSchema),
   waitingOmitted: z.number().int().nonnegative().optional(),
+  /**
+   * 背景処理の完了を待って畳んだこと（`GET /managers` の `awaitingBackground` と同じ形・意味。
+   * `ManagerSummary.awaitingBackground`）。**`status` は `done` のままなので、これが無いと
+   * 地図は「仕事なし」と「完了待ち」を言い分けられない**（#2726）。握り潰しが在るときだけ載る
+   * （無いことは「待っていない」ではなく「そう名乗られていない」。古い runner は名乗らない）。
+   */
+  awaitingBackground: z
+    .object({
+      tasks: z.number(),
+      withheldReports: z.number(),
+      breakdown: z.string(),
+      since: z.string(),
+    })
+    .optional(),
   workers: z.array(topologyWorkerSchema),
 });
 
@@ -1683,7 +1697,7 @@ export const topologyResponseSchema = z.object({
       since: isoDateTimeSchema,
     }),
   ),
-  /** 走行中・返事待ち・直近10分以内に終わった委譲。**詳細は `GET /managers/:id`。** */
+  /** 走行中・返事待ち・背景処理待ち・直近10分以内に終わった委譲。**詳細は `GET /managers/:id`。** */
   managers: z.array(topologyManagerSchema),
   /** 文字数の予算で切った分の件数（切っていなければ無い）。 */
   managersOmitted: z.number().int().nonnegative().optional(),

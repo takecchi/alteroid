@@ -137,6 +137,33 @@ describe('renderTopology', () => {
     expect(renderTopology(view({ unreadable: [] }) as never, NOW)).toBe(base);
   });
 
+  it('背景処理待ちで畳んだマネージャーには「完了待ち」の印を出し、欄が無ければ出さない（#2726）', () => {
+    const waiting = view({
+      managers: [
+        {
+          managerId: 'mgr-bg',
+          status: 'done',
+          live: true,
+          request: '背景で CI を回している',
+          startedAt: ago(600),
+          updatedAt: ago(120),
+          waiting: [],
+          awaitingBackground: {
+            tasks: 2,
+            withheldReports: 1,
+            breakdown: 'local_agent×2',
+            since: ago(90),
+          },
+          workers: [],
+        },
+      ],
+    });
+    expect(renderTopology(waiting as never, NOW)).toContain(
+      '完了待ち: 背景処理 2 件（local_agent×2）（1m agoから）',
+    );
+    expect(renderTopology(view() as never, NOW)).not.toContain('完了待ち');
+  });
+
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {
     const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
     const base = view();

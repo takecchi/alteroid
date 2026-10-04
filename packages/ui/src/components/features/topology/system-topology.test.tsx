@@ -7,7 +7,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { busyScene, idleScene } from './samples';
+import { awaitingScene, busyScene, idleScene } from './samples';
 import { SystemTopology, WIDE_MIN_WIDTH } from './system-topology';
 
 afterEach(() => {
@@ -63,6 +63,21 @@ describe('SystemTopology の大きさ', () => {
     stubFrameWidth(2400);
     const { container } = render(<SystemTopology {...busyScene} layout="narrow" />);
     expect(viewBoxWidth(container)).toBe(360);
+  });
+});
+
+describe('札の文言（#2726）', () => {
+  it('idle は「仕事なし」、awaiting は「完了待ち」と言い、「待機」とは言わない', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...awaitingScene} />);
+    const names = Array.from(container.querySelectorAll('button')).map((b) =>
+      b.getAttribute('aria-label'),
+    );
+    expect(names.some((n) => /^クローン .*完了待ち$/.test(n ?? ''))).toBe(true);
+    expect(names).toContain('マネージャー mgr-7f3a 完了待ち');
+    expect(names).toContain('マネージャー mgr-c019 仕事なし');
+    expect(names).toContain('作業者 implementer 不明');
+    expect(container.textContent).not.toContain('待機');
   });
 });
 

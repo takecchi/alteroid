@@ -74,12 +74,16 @@ function useMeasuredWidth(): [React.RefCallback<HTMLElement>, number] {
 }
 
 const STATUS = {
-  idle: { tone: 'neutral', label: '待機' },
+  // 本当に仕事が無い。**「完了待ち」とは別の札にする**（待っているのは動いている途中）。
+  idle: { tone: 'neutral', label: '仕事なし' },
   // 走る・走らないの無い対象（記憶ストア・runner の器）が繋がっている。
   ok: { tone: 'ok', label: '正常' },
   // 確かめられない。**待機・正常とは別の札にする**（確かめたように読ませない）。
   unknown: { tone: 'neutral', label: '不明' },
   running: { tone: 'accent', label: '実行中' },
+  // 仕事の途中で、背景処理・委譲の完了を待っている。「実行中」と同じ系統（accent）で、
+  // 何を待っているかは札の task と詳細に出す。
+  awaiting: { tone: 'accent', label: '完了待ち' },
   // 人間の返事待ち・利用枠の上限など、**自分では進めない**止まり方の総称。理由は札の task と
   // 詳細に出す（「承認待ち」と固定すると、利用枠で止まったクローンまで承認待ちに読める）。
   waiting: { tone: 'warn', label: '止まっている' },
@@ -406,7 +410,7 @@ function Node({
 }) {
   const { box, status } = node;
   const s = status ? STATUS[status] : undefined;
-  const busy = status === 'running';
+  const busy = status === 'running' || status === 'awaiting';
   const card = (
     <button
       type="button"

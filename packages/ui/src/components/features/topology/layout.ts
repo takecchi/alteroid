@@ -11,13 +11,14 @@
  */
 
 /**
- * 札の状態。**`ok`（正常）と `unknown`（不明）を `idle`（待機）と分けてある。**
- * 「何も走っていない」と「確かめられない」は別のことで、後者を待機・正常と描くと
- * 確かめたように読める。`ok` は走る・走らないの無い対象（記憶ストア・runner の器）の
+ * 札の状態。**`ok`（正常）と `unknown`（不明）を `idle`（仕事なし）と分けてある。**
+ * 「何も走っていない」と「確かめられない」は別のことで、後者を仕事なし・正常と描くと
+ * 確かめたように読める。`awaiting`（完了待ち）は仕事の途中で完了を待っている状態で、
+ * `idle` とは別（`running` と同じ系統で描く）。`ok` は走る・走らないの無い対象（記憶ストア・runner の器）の
  * 「繋がっている」に使う。
  */
 export type TopologyStatus =
-  'idle' | 'running' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
+  'idle' | 'running' | 'awaiting' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
 export type TopologyFlow = 'idle' | 'down' | 'up' | 'both';
 
 /** 札を押したときに出す詳細の1行（名前と値） */

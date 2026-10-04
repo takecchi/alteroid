@@ -107,10 +107,17 @@ describe('線の流れは時刻の窓だけで決まる', () => {
 });
 
 describe('作業者の状態は lastActivityAt から、光は作らない', () => {
-  const withWorkerLink = (extra: Record<string, string>) =>
+  // 親は既定で `done`（途中ではない）。#2726 で、親が途中のときの窓の外は「不明」になった
+  // （下の「作業者の窓の外」）。ここの `idle`（仕事なし）の期待は親が途中でない形で残してある。
+  const withWorkerLink = (
+    extra: Record<string, string>,
+    parent: Partial<TopologySnapshotManager> = { status: 'done' },
+  ) =>
     topologySceneFromSnapshot(
       snapshot({
-        managers: [{ ...MANAGER, workers: [{ agentType: 'reviewer', lastTool: 'Read' }] }],
+        managers: [
+          { ...MANAGER, ...parent, workers: [{ agentType: 'reviewer', lastTool: 'Read' }] },
+        ],
         links: [{ key: `manager:${MANAGER.managerId}~worker:reviewer`, ...extra }],
       }),
       NOW,
@@ -134,6 +141,75 @@ describe('作業者の状態は lastActivityAt から、光は作らない', () 
   });
 });
 
+describe('作業者の窓の外は、前景が返ったか・親が途中かで分ける（#2726 / #2725）', () => {
+  const stale = ago(WORKER_RUNNING_WINDOW_MS + 60_000);
+  const worker = (
+    extra: Record<string, string>,
+    parent: Partial<TopologySnapshotManager>,
+    lastToolAt?: string,
+  ) =>
+    topologySceneFromSnapshot(
+      snapshot({
+        managers: [
+          {
+            ...MANAGER,
+            ...parent,
+            workers: [
+              { agentType: 'reviewer', lastTool: 'Bash', ...(lastToolAt ? { lastToolAt } : {}) },
+            ],
+          },
+        ],
+        links: [{ key: `manager:${MANAGER.managerId}~worker:reviewer`, ...extra }],
+      }),
+      NOW,
+    ).managers[0]!.workers[0]!;
+  const awaitingParent = {
+    status: 'done',
+    awaitingBackground: {
+      tasks: 1,
+      withheldReports: 1,
+      breakdown: 'local_agent×1',
+      since: ago(60_000),
+    },
+  } as const;
+
+  it('窓の中なら、親が何であっても実行中', () => {
+    expect(worker({ lastActivityAt: ago(1000) }, { status: 'done' }).status).toBe('running');
+    expect(worker({ lastActivityAt: ago(1000) }, awaitingParent).status).toBe('running');
+  });
+
+  it('(i) 前景の呼び出しが返った（lastUpAt が最後の活動以後）なら、親が途中でも仕事なし', () => {
+    expect(worker({ lastActivityAt: stale, lastUpAt: ago(10_000) }, {}).status).toBe('idle');
+    // 活動が一度も無く、結果だけ戻っている形も「返った」。
+    expect(worker({ lastUpAt: ago(10_000) }, {}).status).toBe('idle');
+  });
+
+  it('(i) の裏: 最後の活動のほうが新しい（返った後にまた道具を使った）なら返ったとは言わず、親が途中なら不明', () => {
+    expect(
+      worker({ lastUpAt: ago(WORKER_RUNNING_WINDOW_MS + 120_000), lastActivityAt: stale }, {})
+        .status,
+    ).toBe('unknown');
+  });
+
+  it('(ii) 親が途中（running+live / 背景処理待ち）なら、待機ではなく不明。最後の道具は何分前かを言う', () => {
+    const running = worker({ lastActivityAt: stale }, {}, stale);
+    expect(running.status).toBe('unknown');
+    expect(running.details?.find((d) => d.label === '最後の道具')?.value).toContain('2分前');
+    expect(running.details?.some((d) => d.value.includes('観測できない'))).toBe(true);
+    expect(worker({ lastActivityAt: stale }, awaitingParent).status).toBe('unknown');
+    // 線が無い（一度も観測していない）作業者も、親が途中なら不明。
+    expect(worker({}, {}).status).toBe('unknown');
+  });
+
+  it('(iii) 親が途中でないなら仕事なし（done・欄なし / stopped / running だが live でない）', () => {
+    expect(worker({ lastActivityAt: stale }, { status: 'done' }).status).toBe('idle');
+    expect(worker({ lastActivityAt: stale }, { status: 'stopped' }).status).toBe('idle');
+    expect(worker({ lastActivityAt: stale }, { status: 'running', live: false }).status).toBe(
+      'idle',
+    );
+  });
+});
+
 describe('状態は嘘をつかない', () => {
   it.each([
     [{ state: 'idle' }, 'idle'],
@@ -142,6 +218,59 @@ describe('状態は嘘をつかない', () => {
     [{ state: 'unknown' }, 'unknown'],
   ] as const)('クローン %j は %s', (clone, expected) => {
     expect(topologySceneFromSnapshot(snapshot({ clone }), NOW).clone.status).toBe(expected);
+  });
+
+  describe('クローンのターンの外は、途中の委譲が在れば完了待ち（#2726）', () => {
+    const cloneOf = (managers: TopologySnapshotManager[]) =>
+      topologySceneFromSnapshot(snapshot({ clone: { state: 'idle' }, managers }), NOW).clone;
+    const awaitingBackground = {
+      tasks: 2,
+      withheldReports: 1,
+      breakdown: 'local_agent×2',
+      since: ago(60_000),
+    };
+
+    it.each([
+      ['走行中（live）', { status: 'running', live: true }],
+      ['背景処理待ち', { status: 'done', awaitingBackground }],
+      ['人間の返事待ち', { status: 'waiting_human' }],
+    ] as const)('途中の委譲（%s）が1本以上 → awaiting。「委譲 N 本の完了待ち」', (_name, patch) => {
+      const clone = cloneOf([
+        { ...MANAGER, ...patch },
+        { ...MANAGER, managerId: 'z', status: 'done' },
+      ]);
+      expect(clone.status).toBe('awaiting');
+      expect(clone.task).toBe('委譲 1 本の完了待ち');
+    });
+
+    it('途中の委譲が0本（終端だけ・走行中でも live でない・居ない）→ 仕事なし', () => {
+      expect(cloneOf([]).status).toBe('idle');
+      expect(
+        cloneOf([
+          { ...MANAGER, status: 'done' },
+          { ...MANAGER, managerId: 'y', status: 'stopped' },
+        ]).status,
+      ).toBe('idle');
+      expect(cloneOf([{ ...MANAGER, status: 'running', live: false }]).status).toBe('idle');
+    });
+
+    it('ターン中は実行中のまま、unknown は不明のまま（委譲の有無で上書きしない）', () => {
+      const m = [{ ...MANAGER }];
+      expect(
+        topologySceneFromSnapshot(
+          snapshot({ clone: { state: 'busy', turn: { kind: 'normal' } }, managers: m }),
+          NOW,
+        ).clone.status,
+      ).toBe('running');
+      expect(
+        topologySceneFromSnapshot(snapshot({ clone: { state: 'unknown' }, managers: m }), NOW).clone
+          .status,
+      ).toBe('unknown');
+      expect(
+        topologySceneFromSnapshot(snapshot({ clone: { state: 'usage_blocked' }, managers: m }), NOW)
+          .clone.status,
+      ).toBe('waiting');
+    });
   });
 
   it('利用枠で止まっているクローンは、止まっている理由を task で言う', () => {
@@ -204,6 +333,35 @@ describe('マネージャー', () => {
     ['stopped', true, 'idle'],
   ] as const)('%s（live=%s）は %s', (status, live, expected) => {
     expect(sceneOf({ status, live }).status).toBe(expected);
+  });
+
+  it('done + awaitingBackground は awaiting（完了待ち）。task は「完了:」と言わず待っている件数を言う', () => {
+    const scene = sceneOf({
+      status: 'done',
+      awaitingBackground: {
+        tasks: 3,
+        withheldReports: 2,
+        breakdown: 'local_agent×3',
+        since: '2026-10-04T02:50:00.000Z',
+      },
+    });
+    expect(scene.status).toBe('awaiting');
+    expect(scene.task).toBe('背景処理 3 件の完了待ち: codex の駆動役を配線する');
+    expect(scene.task).not.toContain('完了:');
+    expect(scene.details).toContainEqual({
+      label: '完了待ち',
+      value: '背景処理 3 件（local_agent×3）',
+    });
+  });
+
+  it('欄の無い done は idle（仕事なし）のまま。stopped は awaitingBackground が在っても idle', () => {
+    expect(sceneOf({ status: 'done' }).status).toBe('idle');
+    expect(
+      sceneOf({
+        status: 'stopped',
+        awaitingBackground: { tasks: 1, withheldReports: 0, breakdown: '', since: ago(1) },
+      }).status,
+    ).toBe('idle');
   });
 
   it('知らない状態（版のずれ）は、待機・正常ではなく unknown', () => {

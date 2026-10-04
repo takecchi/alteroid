@@ -23,14 +23,20 @@
  * 両方を繋ぐところで TypeScript が検査する。
  */
 import type { TopologySnapshot, TopologySnapshotManager } from './types.js';
-import { formatDateTime } from './format.js';
+import { formatDateTime, formatRelative } from './format.js';
 
 /** 線の「いま流れている」と読む窓。この間に `lastDownAt` / `lastUpAt` が在れば流れていると言う。 */
 export const FLOW_WINDOW_MS = 5_000;
 /** 作業者を「実行中」と読む窓。この間に `lastActivityAt`（道具の実行）が在れば実行中。 */
 export const WORKER_RUNNING_WINDOW_MS = 30_000;
 
-export type SceneStatus = 'idle' | 'running' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
+/**
+ * 札の状態。**`idle`（仕事なし）と `awaiting`（完了待ち）を分けてある**（#2726）。
+ * `idle` は「本当に仕事が無い」、`awaiting` は「仕事の途中で、背景処理・委譲の完了を待っている」。
+ * 確かめられないものは `unknown`（不明）で、`idle` に倒さない。
+ */
+export type SceneStatus =
+  'idle' | 'running' | 'awaiting' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
 export type SceneFlow = 'idle' | 'down' | 'up' | 'both';
 
 export interface SceneDetail {
@@ -98,7 +104,23 @@ export function flowOfLink(link: Link | undefined, nowMs: number): SceneFlow {
   return 'idle';
 }
 
+/** 背景処理（`run_in_background` の子・作業者への委譲）の完了を待って畳んだマネージャーか。 */
+function isAwaitingBackground(manager: TopologySnapshotManager): boolean {
+  return manager.status === 'done' && manager.awaitingBackground !== undefined;
+}
+
+/**
+ * 仕事の途中か（地図の上の委譲として）。走行中（プロセスが居る）・背景処理待ち・人間の返事待ち。
+ * クローンの「完了待ち」と作業者の「確かめられない」の判定が使う。
+ */
+function isInProgress(manager: TopologySnapshotManager): boolean {
+  if (manager.status === 'running') return manager.live;
+  if (manager.status === 'waiting_human') return true;
+  return manager.awaitingBackground !== undefined;
+}
+
 function managerStatus(manager: TopologySnapshotManager): SceneStatus {
+  if (isAwaitingBackground(manager)) return 'awaiting';
   switch (manager.status) {
     case 'running':
       // 台帳は走っていると言うが、プロセスが居ない。走っていると描かない。
@@ -123,6 +145,13 @@ function managerStatus(manager: TopologySnapshotManager): SceneStatus {
 }
 
 function managerTask(manager: TopologySnapshotManager): string {
+  const awaiting = manager.awaitingBackground;
+  if (isAwaitingBackground(manager) && awaiting !== undefined) {
+    // 「完了:」とは言わない（まだ終わっていない）。何を待っているかを頭に言う。
+    const what =
+      awaiting.tasks > 0 ? `背景処理 ${awaiting.tasks} 件の完了待ち` : '背景処理の完了待ち';
+    return `${what}: ${manager.request}`;
+  }
   switch (manager.status) {
     case 'done':
       return `完了: ${manager.request}`;
@@ -144,6 +173,17 @@ function managerDetails(manager: TopologySnapshotManager, nowMs: number): SceneD
   if (manager.lastReportAt !== undefined) {
     rows.push({ label: '最後の報告', value: formatDateTime(manager.lastReportAt, nowMs) });
   }
+  const awaiting = manager.awaitingBackground;
+  if (isAwaitingBackground(manager) && awaiting !== undefined) {
+    rows.push({
+      label: '完了待ち',
+      value:
+        awaiting.breakdown === ''
+          ? `背景処理 ${awaiting.tasks} 件`
+          : `背景処理 ${awaiting.tasks} 件（${awaiting.breakdown}）`,
+    });
+    rows.push({ label: '待ち始め', value: formatDateTime(awaiting.since, nowMs) });
+  }
   const first = manager.waiting[0];
   if (first !== undefined) {
     const more = manager.waiting.length - 1 + (manager.waitingOmitted ?? 0);
@@ -155,15 +195,56 @@ function managerDetails(manager: TopologySnapshotManager, nowMs: number): SceneD
   return rows;
 }
 
+/**
+ * 作業者の状態。観測できるのは「道具が終わった時刻」（`lastActivityAt`）だけで、道具の
+ * **開始**は daemon に届かない（#2725）。だから窓の外は2つに割れる。
+ *
+ * - 窓の中 → 実行中
+ * - 窓の外で、前景の呼び出しが返った（`lastUpAt` が最後の活動以後）→ 仕事なし
+ * - 窓の外で、親が途中 → **不明**（長い道具の実行中か、終わったかを区別できない）
+ * - 窓の外で、親が途中でない → 仕事なし
+ */
+function workerStatus(
+  link: Link | undefined,
+  manager: TopologySnapshotManager,
+  nowMs: number,
+): SceneStatus {
+  if (within(link?.lastActivityAt, nowMs, WORKER_RUNNING_WINDOW_MS)) return 'running';
+  const up = link?.lastUpAt === undefined ? Number.NaN : Date.parse(link.lastUpAt);
+  if (!Number.isNaN(up)) {
+    const activity =
+      link?.lastActivityAt === undefined ? Number.NaN : Date.parse(link.lastActivityAt);
+    if (Number.isNaN(activity) || up >= activity) return 'idle';
+  }
+  return isInProgress(manager) ? 'unknown' : 'idle';
+}
+
 function managerLabel(managerId: string): string {
   return managerId.length > 8 ? managerId.slice(0, 8) : managerId;
 }
 
-function cloneScene(clone: TopologySnapshot['clone'], observedAt: string, nowMs: number) {
+function cloneScene(
+  clone: TopologySnapshot['clone'],
+  managers: readonly TopologySnapshotManager[],
+  observedAt: string,
+  nowMs: number,
+) {
   const observed: SceneDetail = { label: '観測', value: formatDateTime(observedAt, nowMs) };
   switch (clone.state) {
-    case 'idle':
+    case 'idle': {
+      // ターンの外。**途中の委譲が地図に在れば、仕事が無いのではなく委譲の完了を待っている。**
+      // 地図に載らなかった委譲（`managersOmitted`）は、デーモンの並び（途中のものが先）により
+      // 載せたものより後ろの終端なので、数え漏らしは「仕事なし」を誤らせない。
+      const open = managers.filter(isInProgress).length;
+      if (open > 0) {
+        return {
+          status: 'awaiting' as const,
+          task: `委譲 ${open} 本の完了待ち`,
+          details: [observed],
+        };
+      }
       return { status: 'idle' as const, details: [observed] };
+    }
     case 'busy':
       return {
         status: 'running' as const,
@@ -249,7 +330,7 @@ export function topologySceneFromSnapshot(
   nowMs: number,
 ): TopologySceneData {
   const links = new Map(snapshot.links.map((link) => [link.key, link]));
-  const clone = cloneScene(snapshot.clone, snapshot.observedAt, nowMs);
+  const clone = cloneScene(snapshot.clone, snapshot.managers, snapshot.observedAt, nowMs);
   const storage = storageScene(snapshot.storage, nowMs);
 
   return {
@@ -273,19 +354,29 @@ export function topologySceneFromSnapshot(
       details: managerDetails(manager, nowMs),
       workers: manager.workers.map((worker) => {
         const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
+        const status = workerStatus(link, manager, nowMs);
         return {
           id: `${manager.managerId}:${worker.agentType}`,
           label: worker.agentType,
           ...(worker.lastTool === undefined ? {} : { task: worker.lastTool }),
-          status: within(link?.lastActivityAt, nowMs, WORKER_RUNNING_WINDOW_MS)
-            ? ('running' as const)
-            : ('idle' as const),
+          status,
           flow: flowOfLink(link, nowMs),
           details: [
             { label: '種類', value: worker.agentType, mono: true },
+            ...(status === 'unknown'
+              ? [{ label: '状態の根拠', value: '長い道具の実行中か、終わったかは観測できない' }]
+              : []),
             ...(worker.lastToolAt === undefined
               ? []
-              : [{ label: '最後の道具', value: formatDateTime(worker.lastToolAt, nowMs) }]),
+              : [
+                  {
+                    label: '最後の道具',
+                    value:
+                      status === 'unknown'
+                        ? `${formatRelative(worker.lastToolAt, nowMs)}（${formatDateTime(worker.lastToolAt, nowMs)}）`
+                        : formatDateTime(worker.lastToolAt, nowMs),
+                  },
+                ]),
           ],
         };
       }),

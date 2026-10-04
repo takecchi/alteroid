@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
 import {
+  awaitingScene,
   busyScene,
   crowdedScene,
   idleScene,
@@ -45,7 +46,10 @@ export const RunnerUnknown: Story = { args: runnerUnknownScene };
 /** 読めない委譲の行が在る。地図が空でも「居ない」と言い切らず、件数を言う。 */
 export const UnreadableRows: Story = { args: unreadableEmptyScene };
 
-/** 確かめられない軸は「不明」（破線の札）。待機・正常とは描かない。 */
+/** 「完了待ち」（実行中と同じ系統）と「仕事なし」を分ける。確かめられない作業者は「不明」。 */
+export const Awaiting: Story = { args: awaitingScene };
+
+/** 確かめられない軸は「不明」（破線の札）。仕事なし・正常とは描かない。 */
 export const Unknown: Story = { args: unknownScene };
 
 /** 記憶ストアへ繋がらない。理由を札に出し、線は破線にして光を流さない。 */

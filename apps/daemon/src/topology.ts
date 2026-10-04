@@ -51,9 +51,14 @@ function isActiveStatus(status: ManagerSummary['status']): boolean {
   return status === 'running' || status === 'waiting_human';
 }
 
-/** 地図に載せる委譲か（走行中・返事待ち、または直近に終わったもの）。 */
+/**
+ * 地図に載せる委譲か（走行中・返事待ち・背景処理待ち、または直近に終わったもの）。
+ * **背景処理待ち（`awaitingBackground`）は終端の窓（10分）に関係なく載せる**——待っている間は
+ * 台帳の `status` が `done` でも仕事の途中で、窓で落とすと下の作業者ごと地図から消える（#2724）。
+ */
 export function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
   if (isActiveStatus(manager.status)) return true;
+  if (manager.awaitingBackground !== undefined) return true;
   const updated = Date.parse(manager.updatedAt);
   // 読めない時刻は「直近」と決めない（古いものを居座らせない）。
   if (Number.isNaN(updated)) return false;
@@ -90,14 +95,28 @@ function topologyManagerOf(
     ...(manager.lastReportAt === undefined ? {} : { lastReportAt: manager.lastReportAt }),
     waiting,
     ...(waitingOmitted > 0 ? { waitingOmitted } : {}),
+    ...(manager.awaitingBackground === undefined
+      ? {}
+      : {
+          awaitingBackground: {
+            tasks: manager.awaitingBackground.tasks,
+            withheldReports: manager.awaitingBackground.withheldReports,
+            breakdown: manager.awaitingBackground.breakdown,
+            since: manager.awaitingBackground.since,
+          },
+        }),
     workers,
   };
 }
 
-/** 載せる順。返事待ち → 走行中 → 終端（新しい順）。 */
-function rank(status: ManagerSummary['status']): number {
-  if (status === 'waiting_human') return 0;
-  if (status === 'running') return 1;
+/**
+ * 載せる順。返事待ち → 走行中・背景処理待ち → 終端（新しい順）。**背景処理待ちは走行中と
+ * 同じ段**（予算で切られるのは終端が先。クローンの「完了待ち」判定が、載らなかった委譲に
+ * 途中のものが混じらない前提を置く）。
+ */
+function rank(manager: ManagerSummary): number {
+  if (manager.status === 'waiting_human') return 0;
+  if (manager.status === 'running' || manager.awaitingBackground !== undefined) return 1;
   return 2;
 }
 
@@ -135,7 +154,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
     .filter((manager) => isOnTopology(manager, input.nowMs))
     .sort(
       (a, b) =>
-        rank(a.status) - rank(b.status) ||
+        rank(a) - rank(b) ||
         b.startedAt.localeCompare(a.startedAt) ||
         a.managerId.localeCompare(b.managerId),
     );

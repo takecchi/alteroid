@@ -35,6 +35,13 @@ export interface TopologyView {
     lastReportAt?: string;
     waiting: { requestId: string; kind?: string; summary: string; askedAt?: string }[];
     waitingOmitted?: number;
+    /** 背景処理の完了を待って畳んだ印（`GET /managers` と同じ形。無いときは鍵が無い）。 */
+    awaitingBackground?: {
+      tasks: number;
+      withheldReports: number;
+      breakdown: string;
+      since: string;
+    };
     workers: { agentType: string; lastTool?: string; lastToolAt?: string }[];
   }[];
   managersOmitted?: number;
@@ -133,6 +140,12 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
           now,
         )}`,
       );
+      if (manager.awaitingBackground !== undefined) {
+        const { tasks, breakdown, since } = manager.awaitingBackground;
+        lines.push(
+          `        完了待ち: 背景処理 ${String(tasks)} 件${breakdown === '' ? '' : `（${breakdown}）`}（${formatAge(since, now)}から）`,
+        );
+      }
       if (manager.lastReportAt !== undefined) {
         lines.push(`        最後の報告 ${formatAge(manager.lastReportAt, now)}`);
       }

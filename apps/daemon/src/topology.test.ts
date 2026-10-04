@@ -111,6 +111,54 @@ describe('buildTopologySnapshot', () => {
       expect(snapshot.managers.map((m) => m.managerId)).toEqual(['wait', 'run', 'fresh-done']);
     });
 
+    describe('背景処理待ち（awaitingBackground。#2726 / #2724）', () => {
+      const awaitingBackground = {
+        tasks: 2,
+        withheldReports: 1,
+        breakdown: 'local_agent×2',
+        since: iso(-20 * 60_000),
+      };
+
+      it('awaitingBackground が在れば、そのまま写る（スキーマも通る）', () => {
+        const snapshot = buildTopologySnapshot(
+          inputs({ managers: [manager('m', { status: 'done', awaitingBackground })] }),
+        );
+        expect(snapshot.managers[0]?.awaitingBackground).toEqual(awaitingBackground);
+        expect(topologyResponseSchema.parse(snapshot)).toEqual(snapshot);
+      });
+
+      it('無いときは鍵ごと無い（「待っていない」と「名乗られていない」を作り分けない）', () => {
+        const snapshot = buildTopologySnapshot(inputs({ managers: [manager('m')] }));
+        expect(snapshot.managers[0]).not.toHaveProperty('awaitingBackground');
+      });
+
+      it('10分を超えた done でも、awaitingBackground が在れば載せ、欄なしは落とす', () => {
+        const old = iso(-TOPOLOGY_ENDED_WINDOW_MS - 60_000);
+        const snapshot = buildTopologySnapshot(
+          inputs({
+            managers: [
+              manager('waiting-old', { status: 'done', updatedAt: old, awaitingBackground }),
+              manager('plain-old', { status: 'done', updatedAt: old }),
+            ],
+          }),
+        );
+        expect(snapshot.managers.map((m) => m.managerId)).toEqual(['waiting-old']);
+      });
+
+      it('背景処理待ちは走行中と同じ段に並ぶ（終端より先）', () => {
+        const snapshot = buildTopologySnapshot(
+          inputs({
+            managers: [
+              manager('ended', { status: 'done', startedAt: iso(-1000) }),
+              manager('bg', { status: 'done', startedAt: iso(-5000), awaitingBackground }),
+              manager('wait', { status: 'waiting_human' }),
+            ],
+          }),
+        );
+        expect(snapshot.managers.map((m) => m.managerId)).toEqual(['wait', 'bg', 'ended']);
+      });
+    });
+
     it('request と返事待ちの summary は抜粋で、件数は上限で切って残りを言う', () => {
       const long = 'あ'.repeat(TOPOLOGY_REQUEST_LIMIT * 3);
       const waiting = Array.from({ length: TOPOLOGY_WAITING_PER_MANAGER + 3 }, (_, i) => ({

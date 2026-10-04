@@ -170,6 +170,49 @@ export const unknownScene: SystemTopologyProps = {
   managers: [],
 };
 
+/**
+ * 「仕事なし」と「完了待ち」の場面（#2726）。クローンはターンの外で、委譲の完了を待っている
+ * （完了待ち）。1本目は背景処理待ちで畳んだマネージャー、2本目は終えて何も待っていない
+ * マネージャー（仕事なし）。作業者は、長い道具の実行中か終わったかを確かめられない（不明）。
+ */
+export const awaitingScene: SystemTopologyProps = {
+  human: { flow: 'idle' },
+  clone: { status: 'awaiting', task: '委譲 1 本の完了待ち' },
+  db: { label: 'PostgreSQL', status: 'ok', flow: 'idle' },
+  runner: { status: 'ok' },
+  managers: [
+    {
+      id: 'm1',
+      label: 'mgr-7f3a',
+      task: '背景処理 2 件の完了待ち: codex の駆動役を配線する',
+      status: 'awaiting',
+      flow: 'idle',
+      details: [{ label: '完了待ち', value: '背景処理 2 件（local_agent×2）' }],
+      workers: [
+        {
+          id: 'w1',
+          label: 'implementer',
+          task: 'Bash',
+          status: 'unknown',
+          flow: 'idle',
+          details: [
+            { label: '状態の根拠', value: '長い道具の実行中か、終わったかは観測できない' },
+            { label: '最後の道具', value: '3分前' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'm2',
+      label: 'mgr-c019',
+      task: '完了: PR #2695 のレビュー',
+      status: 'idle',
+      flow: 'idle',
+      workers: [],
+    },
+  ],
+};
+
 /** 記憶ストアへ繋がらない場面。理由（エラーの種別）を札に出し、線は破線にする。 */
 export const storageDownScene: SystemTopologyProps = {
   ...busyScene,

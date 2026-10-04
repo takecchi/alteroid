@@ -88,9 +88,45 @@ describe('スナップショットが札になる', () => {
     ).toBeTruthy();
     expect(node(/記憶ストア PostgreSQL 正常/)).toBeTruthy();
     expect(node(/マネージャー abcdef12 実行中/)).toBeTruthy();
-    // 作業者は lastActivityAt が無い（線が無い）ので、実行中とは言わず待機。
-    expect(node(/作業者 implementer 待機/)).toBeTruthy();
+    // 作業者は lastActivityAt が無い（線が無い）。親は走行中なので、長い道具の実行中か終わったかを
+    // 確かめられない。待機とは言わず「不明」（#2726 で反転。以前は「待機」と言っていた＝
+    // 確かめられないものを待機に寄せていた欠陥を固定していた。保証は「実行中とは言わない」まで残る）。
+    expect(node(/作業者 implementer 不明/)).toBeTruthy();
+    expect(
+      within(mapCard()).queryByRole('button', { name: /作業者 implementer 実行中/ }),
+    ).toBeNull();
     expect(within(mapCard()).getByText('codex の駆動役を配線する')).toBeTruthy();
+  });
+
+  it('「仕事なし」と「完了待ち」を分ける（背景処理待ちで畳んだマネージャーは完了待ち）', async () => {
+    renderHome({
+      topology: {
+        frames: [
+          snapshotOf({
+            clone: { state: 'idle' },
+            managers: [
+              manager({
+                status: 'done',
+                awaitingBackground: {
+                  tasks: 2,
+                  withheldReports: 1,
+                  breakdown: 'local_agent×2',
+                  since: '2026-08-14T08:20:00.000Z',
+                },
+              }),
+              manager({ managerId: 'ffffffff00000000', status: 'done' }),
+            ],
+          }),
+        ],
+      },
+    });
+
+    expect(
+      await within(mapCard()).findByRole('button', { name: /クローン .*完了待ち/ }),
+    ).toBeTruthy();
+    expect(node(/マネージャー abcdef12 完了待ち/)).toBeTruthy();
+    expect(node(/マネージャー ffffffff 仕事なし/)).toBeTruthy();
+    expect(within(mapCard()).queryByRole('button', { name: /待機/ })).toBeNull();
   });
 
   it('分からないものは「不明」と言い、待機・正常とは言わない', async () => {
