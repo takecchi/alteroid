@@ -81,6 +81,7 @@ export interface TopologySceneData {
 }
 
 type Link = TopologySnapshot['links'][number];
+type TopologyWorker = TopologySnapshotManager['workers'][number];
 
 /** 時刻が `nowMs` の前の `windowMs` 以内か。読めない時刻・未来の時刻は「いま」と読まない。 */
 function within(iso: string | undefined, nowMs: number, windowMs: number): boolean {
@@ -196,7 +197,8 @@ function managerDetails(manager: TopologySnapshotManager, nowMs: number): SceneD
 }
 
 /**
- * 作業者の状態。観測できるのは「道具が終わった時刻」（`lastActivityAt`）だけで、道具の
+ * 作業者の状態。**daemon が `runningTool`（runner が20秒を超える未決の道具を知らせた）を
+ * 載せていれば、窓に関係なく実行中**（道具の名前と経過時間を札に出す）。無ければ、観測できるのは「道具が終わった時刻」（`lastActivityAt`）だけで、道具の
  * **開始**は daemon に届かない（#2725）。だから窓の外は2つに割れる。
  *
  * - 窓の中 → 実行中
@@ -212,9 +214,23 @@ function workerStatus(
   link: Link | undefined,
   manager: TopologySnapshotManager,
   nowMs: number,
+  runningTool?: TopologyWorker['runningTool'],
 ): SceneStatus {
+  // daemon が「道具を実行中」と言っている（runner が20秒超の未決を知らせた。#2725）。
+  // 欄が無いことは実行中でないことではないので、無ければ下の今までの判定のまま。
+  if (runningTool !== undefined) return 'running';
   if (within(link?.lastActivityAt, nowMs, WORKER_RUNNING_WINDOW_MS)) return 'running';
   return isInProgress(manager) ? 'unknown' : 'idle';
+}
+
+/** 道具の実行が何分続いているか（「N 分実行中」）。1分未満は秒を言わず「1 分未満」。 */
+function formatRunningFor(startedAt: string, nowMs: number): string {
+  const started = Date.parse(startedAt);
+  if (Number.isNaN(started)) return '実行中';
+  const minutes = Math.floor(Math.max(0, nowMs - started) / 60_000);
+  if (minutes < 1) return '1 分未満実行中';
+  if (minutes < 60) return `${minutes} 分実行中`;
+  return `${Math.floor(minutes / 60)} 時間 ${minutes % 60} 分実行中`;
 }
 
 function managerLabel(managerId: string): string {
@@ -352,15 +368,24 @@ export function topologySceneFromSnapshot(
       details: managerDetails(manager, nowMs),
       workers: manager.workers.map((worker) => {
         const link = links.get(`manager:${manager.managerId}~worker:${worker.agentType}`);
-        const status = workerStatus(link, manager, nowMs);
+        const status = workerStatus(link, manager, nowMs, worker.runningTool);
+        const task = worker.runningTool?.tool ?? worker.lastTool;
         return {
           id: `${manager.managerId}:${worker.agentType}`,
           label: worker.agentType,
-          ...(worker.lastTool === undefined ? {} : { task: worker.lastTool }),
+          ...(task === undefined ? {} : { task }),
           status,
           flow: flowOfLink(link, nowMs),
           details: [
             { label: '種類', value: worker.agentType, mono: true },
+            ...(worker.runningTool === undefined
+              ? []
+              : [
+                  {
+                    label: '実行中の道具',
+                    value: `${worker.runningTool.tool}（${formatRunningFor(worker.runningTool.startedAt, nowMs)}）`,
+                  },
+                ]),
             ...(status === 'unknown'
               ? [{ label: '状態の根拠', value: '長い道具の実行中か、終わったかは観測できない' }]
               : []),

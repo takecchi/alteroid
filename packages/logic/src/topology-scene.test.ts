@@ -215,6 +215,61 @@ describe('作業者の窓の外は、前景が返ったか・親が途中かで�
   });
 });
 
+describe('作業者の実行中の道具（runningTool。#2725）', () => {
+  const worker = (
+    runningTool: { tool: string; startedAt: string } | undefined,
+    parent: Partial<TopologySnapshotManager> = {},
+    extra: Record<string, string> = {},
+  ) =>
+    topologySceneFromSnapshot(
+      snapshot({
+        managers: [
+          {
+            ...MANAGER,
+            ...parent,
+            workers: [
+              {
+                agentType: 'reviewer',
+                lastTool: 'Read',
+                ...(runningTool === undefined ? {} : { runningTool }),
+              },
+            ],
+          },
+        ],
+        links: [{ key: `manager:${MANAGER.managerId}~worker:reviewer`, ...extra }],
+      }),
+      NOW,
+    ).managers[0]!.workers[0]!;
+  const stale = ago(WORKER_RUNNING_WINDOW_MS + 60_000);
+
+  it('runningTool が在れば、窓の外でも実行中。task は道具名、details は「N 分実行中」', () => {
+    const result = worker({ tool: 'Bash', startedAt: ago(3 * 60_000 + 5000) }, {}, {
+      lastActivityAt: stale,
+    });
+    expect(result.status).toBe('running');
+    expect(result.task).toBe('Bash');
+    expect(result.details?.find((d) => d.label === '実行中の道具')?.value).toBe(
+      'Bash（3 分実行中）',
+    );
+    // 「観測できない」の根拠は出さない。
+    expect(result.details?.some((d) => d.value.includes('観測できない'))).toBe(false);
+  });
+
+  it('1分未満・1時間以上の言い方', () => {
+    const value = (ms: number) =>
+      worker({ tool: 'Bash', startedAt: ago(ms) }).details?.find((d) => d.label === '実行中の道具')
+        ?.value;
+    expect(value(30_000)).toBe('Bash（1 分未満実行中）');
+    expect(value(65 * 60_000)).toBe('Bash（1 時間 5 分実行中）');
+  });
+
+  it('runningTool が無ければ今までの表のまま（窓の外で親が途中なら不明、途中でなければ待機）', () => {
+    expect(worker(undefined, {}, { lastActivityAt: stale }).status).toBe('unknown');
+    expect(worker(undefined, { status: 'done' }, { lastActivityAt: stale }).status).toBe('idle');
+    expect(worker(undefined, {}, { lastActivityAt: stale }).task).toBe('Read');
+  });
+});
+
 describe('状態は嘘をつかない', () => {
   it.each([
     [{ state: 'idle' }, 'idle'],
