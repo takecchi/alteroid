@@ -7,7 +7,7 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { busyScene } from './samples';
+import { busyScene, idleScene } from './samples';
 import { SystemTopology, WIDE_MIN_WIDTH } from './system-topology';
 
 afterEach(() => {
@@ -85,5 +85,20 @@ describe('器の枠の状態（#2706）', () => {
     stubFrameWidth(1000);
     const { container } = render(<SystemTopology {...busyScene} runner={{ status: 'offline' }} />);
     expect(containerOf(container, 'runner').textContent).toContain('— 未接続');
+  });
+});
+
+describe('読めない委譲の行（#2705）', () => {
+  it('地図が空で unreadableCount が在れば、居ないと言い切らず件数を言う', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...idleScene} unreadableCount={3} />);
+    expect(container.textContent).toContain('読めない行が 3 件ある。居ないとは限らない');
+    expect(container.textContent).not.toContain('走っているマネージャーはいません');
+  });
+
+  it('対照: 欄が無ければ従来の文言', () => {
+    stubFrameWidth(1000);
+    const { container } = render(<SystemTopology {...idleScene} />);
+    expect(container.textContent).toContain('走っているマネージャーはいません');
   });
 });

@@ -237,18 +237,44 @@ describe('載せきれなかった委譲・読めない委譲', () => {
    */
   it('読めない委譲があれば、地図が空でも、居ないのでも畳まれたのでもないと断る', async () => {
     renderHome({
-      managers: { managers: [], unreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }] },
-      topology: { frames: [snapshotOf({})] },
+      topology: {
+        frames: [snapshotOf({ unreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }] })],
+      },
     });
 
+    // 空の地図は「居ない」と言い切らない。
+    expect(await screen.findByText(/読めない行が 1 件ある。居ないとは限らない/)).toBeTruthy();
+    expect(screen.queryByText('走っているマネージャーはいません')).toBeNull();
     const note = await screen.findByText(/読めない委譲が 1 件ある/);
     expect(note.textContent).toContain('id: mgr-bad');
     expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
   });
 
-  it('対照: 鍵が無ければ（0件）、断りは出ない', async () => {
+  it('マネージャーが居て読めない行もあるとき、地図の下で件数を言う（居る分だけ見せて黙らない）', async () => {
     renderHome({
-      managers: { managers: [] },
+      topology: {
+        frames: [
+          snapshotOf({
+            managers: [manager()],
+            unreadable: [{ reason: 'r' }, { id: 'b', reason: 'r' }],
+          }),
+        ],
+      },
+    });
+
+    await within(mapCard()).findByRole('button', { name: /マネージャー/ });
+    expect(await screen.findByText(/読めない委譲が 2 件ある/)).toBeTruthy();
+  });
+
+  it('一覧（/managers）は読まない。読めない行は /topology の snapshot から（#2705）', async () => {
+    const stub = renderHome({ topology: { frames: [snapshotOf({})] } });
+
+    await screen.findByText('走っているマネージャーはいません');
+    expect(stub.calls.filter((url) => url.includes('/managers'))).toEqual([]);
+  });
+
+  it('対照: 鍵が無ければ（0件・古いデーモンも同じ）、断りは出ない', async () => {
+    renderHome({
       topology: { frames: [snapshotOf({})] },
     });
 

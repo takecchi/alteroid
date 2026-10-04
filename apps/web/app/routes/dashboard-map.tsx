@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link } from 'react-router';
 
 import { HOME_LINK_CLASS, LiveMapCard } from '@alteroid/ui';
-import { useManagers, useTopology } from '@alteroid/swr';
+import { useTopology } from '@alteroid/swr';
 import { formatDateTime, topologySceneFromSnapshot } from '@alteroid/logic';
 
 import { useNowMs } from '~/lib/use-now';
@@ -29,14 +29,17 @@ const TICK_MS = 1000;
  * 接続の状態・組めない理由・古いことは `LiveMapCard` が言う。地図に載せきれなかった委譲の
  * 件数（`managersOmitted`）はここで地図の下に言う。
  *
- * **読めない委譲の行（#2345）は、地図からは見えない**（デーモンの地図は読めた行だけで組む）。
- * 地図が「走っているマネージャーはいません」と言うとき、壊れた行が居ないことにならないよう、
- * 一覧の読み取り（`useManagers`）の `unreadable` を地図の下で断る。旧ダッシュボードの
- * 「稼働中のマネージャー」カードが持っていた約束を、そのカードを外したあとも落とさない。
+ * **読めない委譲の行（#2345）は、地図には載らない**が、デーモンが `snapshot.unreadable`（#2705。
+ * `GET /managers` の `unreadable` と同じ形）で件数と id を渡す。
+ * - 空の地図は「読めない行が N 件ある（居ないとは限らない）」と言う（`SystemTopology`）
+ * - マネージャーが居る場合も、地図の下の断り（`UnreadableJobNote`）で件数と id を言う。居る分だけ
+ *   見せて残りが黙って消えるのを避ける（件数が分かっているのに隠す理由が無い）
+ *
+ * **版ずれ**: 古いデーモンは `unreadable` を送らない。形の上では 0 件と区別できないので、欄が
+ * 無ければ従来どおり（断りを出さない）。一覧の読み取り（`useManagers`）での補いは外した。
  */
 export function LiveMap() {
   const topology = useTopology();
-  const managers = useManagers();
   const { snapshot, receivedAt } = topology;
   const nowTick = useNowMs(TICK_MS, snapshot !== undefined);
 
@@ -48,7 +51,8 @@ export function LiveMap() {
   }, [snapshot, receivedAt, nowTick]);
 
   const omitted = snapshot?.managersOmitted ?? 0;
-  const unreadable = Array.isArray(managers.data?.managers) ? (managers.data.unreadable ?? []) : [];
+  // 読めない委譲の行は `snapshot.unreadable`（#2705）。1件以上のときだけ載る。
+  const unreadable = snapshot?.unreadable ?? [];
 
   return (
     <div className="flex min-w-0 flex-col gap-3">

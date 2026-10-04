@@ -70,6 +70,8 @@ export interface TopologySceneData {
   };
   runner: { status: SceneStatus };
   managers: readonly SceneManager[];
+  /** 読めず地図に載せられなかった委譲の件数。1件以上のときだけ（`snapshot.unreadable` の長さ）。 */
+  unreadableCount?: number;
 }
 
 type Link = TopologySnapshot['links'][number];
@@ -259,6 +261,9 @@ export function topologySceneFromSnapshot(
       flow: flowOfLink(links.get('clone~storage'), nowMs),
     },
     runner: { status: runnerStatus(snapshot.runners) },
+    ...((snapshot.unreadable?.length ?? 0) > 0
+      ? { unreadableCount: snapshot.unreadable!.length }
+      : {}),
     managers: snapshot.managers.map((manager) => ({
       id: manager.managerId,
       label: managerLabel(manager.managerId),

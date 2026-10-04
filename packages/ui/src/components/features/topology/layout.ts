@@ -73,6 +73,12 @@ export interface TopologyScene {
   /** manager-runner の器。`offline` ならクローンからの線を切れた形で描く */
   runner: { label?: string; status: TopologyStatus };
   managers: readonly TopologyManager[];
+  /**
+   * 台帳の行が読めず、地図に載せられなかった委譲の件数（`snapshot.unreadable` の長さ。#2705）。
+   * **1件以上のときだけ渡す**（API は 0 件なら鍵ごと載せない。古いデーモンも同じく来ない——
+   * 形の上では「0 件」と「欄が無い」は区別できない）。在れば、地図が空でも「居ない」と言い切らない。
+   */
+  unreadableCount?: number;
 }
 
 export interface Point {

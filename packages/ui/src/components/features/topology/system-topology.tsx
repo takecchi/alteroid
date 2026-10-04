@@ -177,8 +177,10 @@ export function SystemTopology({ layout = 'auto', className, ...rawScene }: Syst
               width={laid.empty.w}
               height={laid.empty.h}
             >
-              <div className="flex h-full items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
-                走っているマネージャーはいません
+              <div className="flex h-full items-center justify-center rounded-md border border-dashed px-2 text-center text-xs text-muted-foreground">
+                {(rawScene.unreadableCount ?? 0) > 0
+                  ? `読めたマネージャーはいません（読めない行が ${rawScene.unreadableCount} 件ある。居ないとは限らない）`
+                  : '走っているマネージャーはいません'}
               </div>
             </foreignObject>
           ) : null}

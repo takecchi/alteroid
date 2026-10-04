@@ -177,3 +177,9 @@ export const storageDownScene: SystemTopologyProps = {
   db: { label: 'PostgreSQL', status: 'offline', task: 'ECONNREFUSED', flow: 'idle' },
   runner: { status: 'ok' },
 };
+
+/** 台帳の行が読めない委譲が在り、読めたマネージャーは1本も無い。空と言い切らない。 */
+export const unreadableEmptyScene: SystemTopologyProps = {
+  ...idleScene,
+  unreadableCount: 2,
+};

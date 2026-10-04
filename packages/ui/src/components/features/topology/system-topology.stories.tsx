@@ -11,6 +11,7 @@ import {
   runnerUnknownScene,
   storageDownScene,
   unknownScene,
+  unreadableEmptyScene,
 } from './samples';
 import { SystemTopology } from './system-topology';
 
@@ -40,6 +41,9 @@ export const RunnerOffline: Story = { args: runnerDownScene };
 
 /** runner が登録されていない。器の枠も破線にして「— 不明」と言う（正常に見せない）。 */
 export const RunnerUnknown: Story = { args: runnerUnknownScene };
+
+/** 読めない委譲の行が在る。地図が空でも「居ない」と言い切らず、件数を言う。 */
+export const UnreadableRows: Story = { args: unreadableEmptyScene };
 
 /** 確かめられない軸は「不明」（破線の札）。待機・正常とは描かない。 */
 export const Unknown: Story = { args: unknownScene };
