@@ -17,6 +17,7 @@
  * `globalThis.fetch` を自分で差し替え、状態（`removedAt` が付くかどうか）を持つ。
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -116,7 +117,9 @@ function stubArchiveScreen(
 async function renderArchive(): Promise<void> {
   render(
     <Providers>
-      <Archive />
+      <MemoryRouter>
+        <Archive />
+      </MemoryRouter>
     </Providers>,
   );
   await screen.findByText('一覧');

@@ -17,6 +17,7 @@
  * 6. **撒く先は環境変数の画面と同じ3値・同じ言い方。** 既定は共通（all）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -142,7 +143,9 @@ function stubProfile(options: { rows?: Row[]; get?: Reply; put?: Reply; del?: Re
 function renderScreen() {
   render(
     <Providers>
-      <Profile />
+      <MemoryRouter>
+        <Profile />
+      </MemoryRouter>
     </Providers>,
   );
 }

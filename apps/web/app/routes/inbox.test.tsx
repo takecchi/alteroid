@@ -12,6 +12,7 @@
  *   「実行する」を押せる形を作らない）
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { InboxBacklog, InboxEventType } from '@alteroid/logic';
@@ -97,7 +98,9 @@ function stubInboxRemove(
 function renderInbox(): void {
   render(
     <Providers>
-      <Inbox />
+      <MemoryRouter>
+        <Inbox />
+      </MemoryRouter>
     </Providers>,
   );
 }

@@ -33,7 +33,7 @@ export interface HomeOptions {
   approvals?: unknown[] | 'fail' | { raw: unknown };
   managers?: { managers: unknown; unreadable?: unknown[] } | 'fail';
   schedule?: { entries: unknown[]; unreadable?: unknown[] } | 'fail';
-  /** `GET /progress` の応答。`'fail'` は 500。既定は未了0・実行中0。 */
+  /** `GET /progress` の応答。`'fail'` は 500。既定の応答は未了 5 件、実行中 3 件。 */
   progress?: unknown | 'fail';
   /**
    * 稼働の地図の SSE。`frames` は流す枠。`undefined` は経路を置かない（繋がらない扱い）。

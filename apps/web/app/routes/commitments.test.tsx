@@ -12,7 +12,7 @@
  *    ことを作らない
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CommitmentOrigin } from '@alteroid/core';
@@ -90,7 +90,9 @@ afterEach(() => {
 function renderPage() {
   render(
     <Providers>
-      <Commitments />
+      <MemoryRouter>
+        <Commitments />
+      </MemoryRouter>
     </Providers>,
   );
 }

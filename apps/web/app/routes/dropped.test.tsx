@@ -19,6 +19,7 @@ import {
   type DroppedTraceOrigin,
 } from '@alteroid/core';
 import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -55,7 +56,9 @@ function stubDropped(options: { status?: number; body?: unknown }) {
 async function renderDropped(): Promise<void> {
   render(
     <Providers>
-      <Dropped />
+      <MemoryRouter>
+        <Dropped />
+      </MemoryRouter>
     </Providers>,
   );
   await screen.findByText('帳面');

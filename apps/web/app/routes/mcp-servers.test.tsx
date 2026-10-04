@@ -14,6 +14,7 @@
  * 6. **保存したら runner ごとの配布結果を出す**（配り損ねを小さく出さない）
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -104,7 +105,9 @@ function stubMcp(options: { get?: Reply; put?: Reply } = {}) {
 function renderScreen() {
   render(
     <Providers>
-      <McpServersPage />
+      <MemoryRouter>
+        <McpServersPage />
+      </MemoryRouter>
     </Providers>,
   );
 }

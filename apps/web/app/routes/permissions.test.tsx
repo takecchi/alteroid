@@ -12,6 +12,7 @@
  * - 取り消し済みの行には取り消しボタンが無い
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -57,7 +58,9 @@ function stubGrants(options: { status?: number; body?: unknown }) {
 async function renderPermissions(): Promise<void> {
   render(
     <Providers>
-      <Permissions />
+      <MemoryRouter>
+        <Permissions />
+      </MemoryRouter>
     </Providers>,
   );
   await screen.findByText('許可', { selector: 'h2' });

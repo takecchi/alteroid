@@ -18,6 +18,7 @@
  * - 取得に失敗したとき（404 = 古いデーモン／それ以外の失敗）、区別できる
  */
 import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -80,7 +81,9 @@ function stubAppraisalStats(options: { status?: number; body?: unknown }) {
 async function renderPage(): Promise<void> {
   render(
     <Providers>
-      <AppraisalStatsPage />
+      <MemoryRouter>
+        <AppraisalStatsPage />
+      </MemoryRouter>
     </Providers>,
   );
   await screen.findByText('件数（軸ごと）');

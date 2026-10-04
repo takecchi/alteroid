@@ -11,6 +11,7 @@
  * 位相の消失がまさにその形で出る）。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, storeTestBaseUrl } from '~/test-support';
@@ -108,7 +109,9 @@ function stubSchedule(entries: unknown[], unreadable?: unknown[]): void {
 function renderSchedule(): void {
   render(
     <Providers>
-      <Schedule />
+      <MemoryRouter>
+        <Schedule />
+      </MemoryRouter>
     </Providers>,
   );
 }

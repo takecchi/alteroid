@@ -243,7 +243,7 @@ describe('絞り込みチップが日誌の全種別を尽くす', () => {
     });
 
     renderJournal({ status: 'live', recent: [] });
-    await screen.findByText('日誌');
+    await screen.findByRole('heading', { name: '日誌' });
 
     for (const type of JOURNAL_ENTRY_TYPES) {
       expect(screen.getByRole('button', { name: type })).toBeTruthy();
@@ -994,7 +994,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     });
 
     const { router } = renderJournal({ status: 'live', recent: [] });
-    await screen.findByText('日誌');
+    await screen.findByRole('heading', { name: '日誌' });
 
     fireEvent.click(screen.getByRole('button', { name: 'exchange' }));
 
@@ -1024,7 +1024,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     });
 
     renderJournal({ status: 'live', recent: [] }, ['/?types=exchange,decision']);
-    await screen.findByText('日誌');
+    await screen.findByRole('heading', { name: '日誌' });
 
     // チップの押下状態は className（`border-primary`）で表現されている
     // （journal.tsx のチップは `aria-pressed` を持たない）。
@@ -1057,7 +1057,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     renderJournal({ status: 'live', recent: [] }, ['/?types=exchange,no-such-type']);
 
     // 画面ごと落ちない。既知のチップは変わらず出る。
-    expect(await screen.findByText('日誌')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '日誌' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'exchange' })).toBeTruthy();
     // 知らない種別のボタンは無い（チップは既知の種別ぶんしか無い）。
     expect(screen.queryByRole('button', { name: 'no-such-type' })).toBeNull();
@@ -1070,7 +1070,7 @@ describe('種別チップの選択が URL に載る（issue #2029）', () => {
     });
 
     const { router } = renderJournal({ status: 'live', recent: [] });
-    await screen.findByText('日誌');
+    await screen.findByRole('heading', { name: '日誌' });
     const initialIndex = router.state.location.key;
 
     fireEvent.click(screen.getByRole('button', { name: 'exchange' }));

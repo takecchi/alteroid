@@ -15,6 +15,7 @@
  *   アカウント id 入りの端末コマンドを案内する
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
@@ -69,7 +70,9 @@ function stubAccess(options: { status?: number; body?: unknown }) {
 async function renderAccess(): Promise<void> {
   render(
     <Providers>
-      <Access />
+      <MemoryRouter>
+        <Access />
+      </MemoryRouter>
     </Providers>,
   );
   await screen.findByText('アカウント');
