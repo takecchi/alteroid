@@ -47,7 +47,9 @@ const STATUS = {
   // 確かめられない。**待機・正常とは別の札にする**（確かめたように読ませない）。
   unknown: { tone: 'neutral', label: '不明' },
   running: { tone: 'accent', label: '実行中' },
-  waiting: { tone: 'warn', label: '承認待ち' },
+  // 人間の返事待ち・利用枠の上限など、**自分では進めない**止まり方の総称。理由は札の task と
+  // 詳細に出す（「承認待ち」と固定すると、利用枠で止まったクローンまで承認待ちに読める）。
+  waiting: { tone: 'warn', label: '止まっている' },
   error: { tone: 'danger', label: '失敗' },
   offline: { tone: 'danger', label: '未接続' },
 } as const;

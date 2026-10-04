@@ -18,7 +18,7 @@
  * `/journal/stream` へ SSE を張る。3つとも `stubFetch` に置く（置かないと
  * 「繋がらない」→再接続を繰り返すことになり、試験が不安定になる）。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -108,7 +108,7 @@ describe('狭い画面（375px）', () => {
     expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
     // ドロワーは閉じているあいだ中身を描かない（`Drawer` の作り）ので、
     // 行き先のリンクはまだ現れていないはず。
-    expect(screen.queryByText('ダッシュボード')).toBeNull();
+    expect(screen.queryByText('ホーム')).toBeNull();
     expect(screen.queryByText('会話')).toBeNull();
     expect(screen.getByRole('button', { name: 'メニューを開く' })).toBeTruthy();
   });
@@ -123,14 +123,49 @@ describe('狭い画面（375px）', () => {
     fireEvent.click(screen.getByRole('button', { name: 'メニューを開く' }));
 
     // ドロワーが開き、行き先の一覧が出る。
-    const dashboardLink = await screen.findByRole('link', { name: /ダッシュボード/ });
+    const dashboardLink = await screen.findByRole('link', { name: /ホーム/ });
     expect(screen.getByRole('dialog', { name: 'メニュー' })).toBeTruthy();
 
     fireEvent.click(dashboardLink);
 
     // 覆いが残っていないこと（ドロワーは閉じているあいだ中身ごと描かない）。
     expect(screen.queryByRole('dialog', { name: 'メニュー' })).toBeNull();
-    expect(screen.queryByRole('link', { name: /ダッシュボード/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /ホーム/ })).toBeNull();
+  });
+});
+
+describe('狭い画面のドロワー', () => {
+  it('広い画面と同じまとまり（見出し）と行き先が、ドロワーの中にも出る。現在地も同じ規則で示す', async () => {
+    setViewportWidth(NARROW_WIDTH);
+    stubAuthedShell();
+
+    renderShell();
+    await screen.findByText('ダッシュボードの中身');
+    fireEvent.click(screen.getByRole('button', { name: 'メニューを開く' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'メニュー' });
+    expect(within(dialog).getAllByText('記録')).toHaveLength(1);
+    expect(within(dialog).getAllByText('クローンの中身')).toHaveLength(1);
+    expect(
+      within(dialog)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual([
+      'ホーム',
+      '会話',
+      '承認待ち',
+      '仕事',
+      'マネージャー',
+      '日報',
+      '日誌',
+      '記憶とやり方',
+      '予定と受信箱',
+      '設定',
+    ]);
+    // 現在地（`/`）の印はドロワーの中でも付く。
+    expect(within(dialog).getByRole('link', { name: 'ホーム' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
   });
 });
 
@@ -142,7 +177,7 @@ describe('広い画面（1280px）', () => {
     renderShell();
 
     expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /ダッシュボード/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /ホーム/ })).toBeTruthy();
     expect(screen.getByRole('link', { name: '会話' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'メニューを開く' })).toBeNull();
   });

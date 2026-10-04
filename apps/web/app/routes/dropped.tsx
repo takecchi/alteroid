@@ -1,3 +1,4 @@
+import { JournalTabs } from '~/components/group-tabs';
 import { Page, Badge, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
 import { useDropped, ApiError } from '@alteroid/swr';
 import type { DroppedState } from '@alteroid/logic';
@@ -28,6 +29,7 @@ export default function Dropped() {
 
   return (
     <Page
+      tabs={<JournalTabs />}
       title="握り潰しの跡"
       description="記録・読み出しの失敗の跡。本文は1文字も含まない。読み取り専用"
     >

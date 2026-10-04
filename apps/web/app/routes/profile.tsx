@@ -1,3 +1,4 @@
+import { SettingsTabs } from '~/components/group-tabs';
 import { useState } from 'react';
 
 import { NotOwnerHint } from '~/components/not-owner-hint';
@@ -96,6 +97,7 @@ export default function Profile() {
 
   return (
     <Page
+      tabs={<SettingsTabs />}
       title="実行環境プロファイル"
       description="クローン・マネージャー・作業者に効くシェルスクリプトの行（~/.zprofile 相当。行ごとに撒く先を選べる）。alteroid profile と同じもの"
     >

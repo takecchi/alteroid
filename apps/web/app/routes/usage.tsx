@@ -1,3 +1,4 @@
+import { SettingsTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
 import {
   ACCOUNT_USAGE_TITLE,
@@ -65,7 +66,7 @@ import type {
 const AXIS_LIMIT = 20;
 
 /**
- * 集計で読めずに外した行が在ることを、合計の上で断る（Issue #2427。ダッシュボードの
+ * 集計で読めずに外した行が在ることを、合計の上で断る（Issue #2427。ホームの
  * 「今日の利用」カードも使う）。**0件・欄なし（古いデーモン）なら描かない**——
  * 「読めない行は 0 行」を作らない。
  *
@@ -133,8 +134,8 @@ export function UnmeteredUsageNote({
  * 無いので、API のクエリ名と揃えたほうが読み手には素直である。
  *
  * **`from` / `to` / `managerId` は `packages/logic/src/usage-links.ts` の正本を使う（issue
- * #2077 / #2078）。** 委譲の詳細（`manager-detail.tsx`）とダッシュボード
- * （`dashboard.tsx`）が `/usage` へのリンクを組み立てるとき、同じ欄名を
+ * #2077 / #2078）。** 委譲の詳細（`manager-detail.tsx`）とホーム
+ * （`dashboard-tiles.tsx`）が `/usage` へのリンクを組み立てるとき、同じ欄名を
  * 書き写さずに済ませるため——書き写すと、片方だけ変わる経路が生まれる。
  * `layer` / `site` / `tokenId` はまだ書き写す先が無いので、ここに残す。
  */
@@ -313,6 +314,7 @@ export default function Usage() {
 
   return (
     <Page
+      tabs={<SettingsTabs />}
       title="利用状況"
       description="alteroid が使った分（トークンと費用）。SDK の推定値であり、Anthropic の請求明細ではない"
     >

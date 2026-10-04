@@ -1,3 +1,4 @@
+import { SettingsTabs } from '~/components/group-tabs';
 import { useState } from 'react';
 
 import {
@@ -94,6 +95,7 @@ export default function Access() {
 
   return (
     <Page
+      tabs={<SettingsTabs />}
       title="アクセス許可"
       description="alteroid を使う許可の一覧。許可の付与・取り消しもここから行える（alteroid access grant/revoke と同じ）。実行環境の持ち主としての宣言はここから起こせる（実際に通るのは端末だけ）"
     >

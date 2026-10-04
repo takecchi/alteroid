@@ -1,3 +1,4 @@
+import { MemoryTabs } from '~/components/group-tabs';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
@@ -31,6 +32,7 @@ export default function Memory() {
 
   return (
     <Page
+      tabs={<MemoryTabs />}
       title="記憶"
       description="クローンの価値観そのもの。人間がいつでも読んで直せることが信頼の要件（提供価値1）"
     >

@@ -1,3 +1,4 @@
+import { SettingsTabs } from '~/components/group-tabs';
 import { describePermissionRuleBreadth } from '@alteroid/core/permission-rule';
 import {
   assessPermissionGrantStaleness,
@@ -77,6 +78,7 @@ export default function Permissions() {
 
   return (
     <Page
+      tabs={<SettingsTabs />}
       title="許可（Bash）"
       description="人間が「許可します」と答えた Bash 許可の一覧。alteroid permission list / GET /permission-grants と同じもの。取り消しもここから行える（alteroid permission revoke と同じ）"
       action={

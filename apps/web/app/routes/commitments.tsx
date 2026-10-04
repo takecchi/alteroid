@@ -1,3 +1,4 @@
+import { WorkTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
 import { Fragment, useState } from 'react';
 import { Tabs } from 'radix-ui';
@@ -72,6 +73,7 @@ export default function Commitments() {
 
   return (
     <Page
+      tabs={<WorkTabs />}
       title="引き受けたまま終わっていない仕事"
       description="受信箱でも日誌でもここには残らない。忘れさせないための器であって、やることの一覧ではない"
       action={

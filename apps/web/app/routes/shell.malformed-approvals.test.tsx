@@ -92,7 +92,7 @@ describe('/approvals の応答が配列を持たない形のとき', () => {
       // (1) 外枠が落ちていない
       expect(await screen.findByText('ダッシュボードの中身')).toBeTruthy();
       expect(screen.queryByText(/Unexpected Application Error/)).toBeNull();
-      expect(screen.getByRole('link', { name: /ダッシュボード/ })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /ホーム/ })).toBeTruthy();
       // (2)(3) 0件（札無し）ではなく「読めていない」
       expect(await screen.findByLabelText('承認待ちを読めていない')).toBeTruthy();
       expect(screen.getByTitle('承認待ちを読めていない')).toBeTruthy();

@@ -8,7 +8,7 @@ export default function NotFound() {
       <Card>
         <Empty>
           <Link to="/" className="text-primary hover:underline">
-            ダッシュボードへ戻る
+            ホームへ戻る
           </Link>
         </Empty>
       </Card>

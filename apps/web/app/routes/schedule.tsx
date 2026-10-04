@@ -1,3 +1,4 @@
+import { ScheduleTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Tabs } from 'radix-ui';
@@ -31,7 +32,7 @@ import type { ScheduleEntry, ScheduleSpec, UnreadableSchedule } from '@alteroid/
 
 /**
  * 読めない継続中の依頼が在ることを、一覧の上で断る（issue #2343。承認待ち画面の
- * `UnreadableApprovalNote` と同じ形。ダッシュボードのカードも使う）。**0件なら描かない**
+ * `UnreadableApprovalNote` と同じ形。ホームの「次の自動実行」カードも使う）。**0件なら描かない**
  * （0 の行を作らない）。
  *
  * kind が取れない行は件数だけに数える。kind の列挙には上限を置き、切ったら言う。
@@ -101,7 +102,11 @@ export default function Schedule() {
   const listUnavailable = data === undefined && error !== undefined;
 
   return (
-    <Page title="スケジュールと外部イベント" description="時間起点と外部イベント起点を手で起こす">
+    <Page
+      tabs={<ScheduleTabs />}
+      title="スケジュールと外部イベント"
+      description="時間起点と外部イベント起点を手で起こす"
+    >
       <ErrorNote error={error ?? failure} className="mb-4" />
 
       {/* 一覧の上に置く。読める行の中身を見る前に、まず断りが目に入るように。 */}

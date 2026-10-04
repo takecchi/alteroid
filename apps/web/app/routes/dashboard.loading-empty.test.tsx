@@ -1,21 +1,21 @@
 // @vitest-environment jsdom
 /**
- * ダッシュボードの「承認待ち」「稼働中のマネージャー」が、読み込み中に空の文言を出さないこと
+ * ホームの「あなたを待っている」と「いま動いているもの」が、読み込み中に空の文言を出さないこと
  * （issue #2325）。
  *
- * まだ一度も取れていない（`data` も `error` も無い）間に「なし。」「いま走っているものはない。」を
- * 描くと、取れた結果が0件だったように読める。失敗（`error`）は従来どおり `ErrorNote` が先に拾う。
+ * まだ一度も取れていない（`data` も `error` も無い）間に「あなたを待っているものはない」
+ * 「走っているマネージャーはいません」を描くと、取れた結果が0件だったように読める。失敗
+ * （`error`）は従来どおり `ErrorNote` が先に拾う。
+ *
+ * 旧ダッシュボードの「稼働中のマネージャー」カードの同じ保証は、地図（`LiveMapCard`）の
+ * 「接続中は読み込み、まだ何も届いていなければ空の地図を描かない」へ移した。
  */
-import { USAGE_ESTIMATE_NOTICE } from '@alteroid/core/usage';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { JournalFeedProvider } from '@alteroid/swr';
-import type { JournalLive } from '@alteroid/swr';
-import { json, Providers, stubFetch, storeTestBaseUrl } from '~/test-support';
+import { storeTestBaseUrl } from '~/test-support';
 
-import Dashboard from './dashboard';
+import { renderHome, topologySnapshot } from './dashboard-test-helpers';
 
 // TZ の固定は `dashboard.test.tsx` の冒頭と同じ形（`vi.hoisted` でなければ静かに効かない）。
 const tzBeforeThisFile = vi.hoisted(() => {
@@ -28,8 +28,6 @@ afterAll(() => {
   if (tzBeforeThisFile === undefined) delete process.env.TZ;
   else process.env.TZ = tzBeforeThisFile;
 });
-
-const EMPTY_FEED: JournalLive = { status: 'live', recent: [], receivedCount: 0 };
 
 let originalFetch: typeof fetch;
 
@@ -44,52 +42,8 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/**
- * `held` に挙げた経路は解決しない Promise で保留する（読み込み中のまま止める）。
- * それ以外は0件で成功させる。
- */
-function renderDashboard(held: { approvals?: boolean; managers?: boolean }) {
-  stubFetch((url) => {
-    if (url.includes('/reports')) return json({ reports: [] });
-    if (url.includes('/approvals')) return json({ approvals: [] });
-    if (url.includes('/managers')) return json({ managers: [] });
-    if (url.includes('/schedule')) return json({ entries: [] });
-    if (url.includes('/usage')) {
-      return json({
-        rows: [],
-        since: null,
-        beforeLedger: false,
-        today: '2026-08-14',
-        notice: USAGE_ESTIMATE_NOTICE,
-        turnRows: [],
-        breakdown: null,
-      });
-    }
-    return undefined;
-  });
-  const stubbed = globalThis.fetch;
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    if (
-      (held.approvals === true && url.includes('/approvals')) ||
-      (held.managers === true && url.includes('/managers'))
-    ) {
-      return new Promise<Response>(() => {});
-    }
-    return stubbed(input, init);
-  }) as typeof fetch;
-
-  const router = createMemoryRouter([{ path: '/', Component: Dashboard }], {
-    initialEntries: ['/'],
-  });
-  render(
-    <Providers>
-      <JournalFeedProvider value={EMPTY_FEED}>
-        <RouterProvider router={router} />
-      </JournalFeedProvider>
-    </Providers>,
-  );
-}
+const CALM = 'あなたを待っているものはない';
+const NO_MANAGERS = '走っているマネージャーはいません';
 
 function cardOf(title: string): HTMLElement {
   const card = screen.getByText(title).closest<HTMLElement>('[data-slot="card"]');
@@ -97,33 +51,50 @@ function cardOf(title: string): HTMLElement {
   return card;
 }
 
-describe('ダッシュボードの読み込み中', () => {
-  it('承認待ちの応答が保留のあいだは「なし。」を出さない', async () => {
-    renderDashboard({ approvals: true });
+describe('ホームの読み込み中', () => {
+  it('承認待ちの応答が保留のあいだは「待っているものはない」を出さない', async () => {
+    renderHome({ hold: ['approvals'] });
 
     // 他のカードが取れ終わるまで待つ（保留の側だけが読み込み中のまま残る）。
-    expect(await screen.findByText('まだ何も届いていない。')).toBeTruthy();
-    await waitFor(() => expect(screen.queryByText('いま走っているものはない。')).not.toBeNull());
+    await screen.findByText('まだ記録が無い。');
 
-    const card = cardOf('承認待ち');
-    expect(within(card).queryByText('なし。')).toBeNull();
-    expect(within(card).getByText('読み込み中')).toBeTruthy();
+    expect(screen.queryByText(CALM)).toBeNull();
+    expect(within(cardOf('あなたを待っている')).getByText('読み込み中')).toBeTruthy();
   });
 
-  it('走っているカードの応答が保留のあいだは「いま走っているものはない。」を出さない', async () => {
-    renderDashboard({ managers: true });
+  it('地図の最初のメッセージが届くまでは、空の地図（走っているマネージャーはいません）を描かない', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    renderHome({
+      topology: { frames: [{ event: 'snapshot', data: topologySnapshot(), after: gate }] },
+    });
 
-    expect(await screen.findByText('なし。')).toBeTruthy();
+    // 他のカードが取れ終わるまで待つ（地図の側だけが読み込み中のまま残る）。
+    await screen.findByText('まだ記録が無い。');
+    const card = cardOf('いま動いているもの');
+    expect(within(card).getByText('稼働の地図を読み込み中')).toBeTruthy();
+    expect(within(card).queryByText(NO_MANAGERS)).toBeNull();
 
-    const card = cardOf('稼働中のマネージャー');
-    expect(within(card).queryByText('いま走っているものはない。')).toBeNull();
-    expect(within(card).getByText('読み込み中')).toBeTruthy();
+    release();
+    expect(await within(card).findByText(NO_MANAGERS)).toBeTruthy();
+    expect(within(card).queryByText('稼働の地図を読み込み中')).toBeNull();
   });
 
   it('対照: 0件で成功したら、どちらの文言も出る', async () => {
-    renderDashboard({});
+    renderHome({ topology: { frames: [{ event: 'snapshot', data: topologySnapshot() }] } });
 
-    expect(await screen.findByText('なし。')).toBeTruthy();
-    expect(await screen.findByText('いま走っているものはない。')).toBeTruthy();
+    expect(await screen.findByText(CALM)).toBeTruthy();
+    expect(await screen.findByText(NO_MANAGERS)).toBeTruthy();
+  });
+
+  it('地図に繋がらなければ、読み込み中のまま止めず失敗として言う（空の地図にもしない）', async () => {
+    // 経路を置かない = 繋がらない（`stubFetch` の既定）。
+    renderHome();
+
+    const card = cardOf('いま動いているもの');
+    await waitFor(() => expect(within(card).getByText(/稼働の地図に繋がらない/)).toBeTruthy());
+    expect(within(card).queryByText(NO_MANAGERS)).toBeNull();
   });
 });

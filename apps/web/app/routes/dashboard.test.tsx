@@ -1,31 +1,27 @@
 // @vitest-environment jsdom
 /**
- * ダッシュボードについて3つ。
+ * ホーム（`dashboard.tsx`）の小さなカードと、「あなたを待っている」の段。
  *
- * 1. 「今日の利用」カードが、`/usage` 画面・CLI と同じ嘘をつかない規約を守っていること
- *    （`apps/cli/src/usage.ts` の docstring と同じ規約）
- * 2. 日誌を `AuthedShell` の購読から context 越しに受け取り、**自分では SSE を張らない**こと
- * 3. 「今日の利用」カードの「詳しく見る」が、カードの数字と同じ今日で `/usage` へ飛ぶこと
- *    （issue #2078）
+ * 旧ダッシュボードのテストから引き継いだ保証（どこへ移ったか）:
+ * - 「今日の利用」の嘘をつかない規約・「詳しく見る」の行き先・デーモンの暦の今日・読めずに外した行
+ *   → 「今日の利用」カードの describe 群（中身は同じ）
+ * - 「最新の日報」: 印の付いた行を日報として描かない → 同じ。**本文は Markdown ではなく平文の抜粋に
+ *   なった**ので、「Markdown の描画経路を通る」の1本は「記法の記号を落とした抜粋を出す・全文へ
+ *   リンクする」に置き換えた
+ * - 承認待ちの打ち切り・「答える」を読めていないときに出さない → 「あなたを待っている」の describe
+ * - 「次の自動実行」の出口・読めないとき・読めない継続中の依頼 → 同じ
+ * - 「稼働中のマネージャー」カードと「いま届いている出来事」は**ホームから外した**。前者の
+ *   「読めない委譲を隠さない」は地図の下の断りへ、「知らない status を静かに落とさない」は
+ *   `packages/logic/src/topology-scene.test.ts`（unknown へ倒す）へ、後者の「自分では SSE を張らない」
+ *   は本ファイルの「日誌の購読を張らない」へ移した
  */
 import { USAGE_ESTIMATE_NOTICE, usageDate, ZERO_USAGE } from '@alteroid/core/usage';
-import { cleanup, render, screen } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { cleanup, screen, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { JournalFeedProvider, summarizeJournalEntry } from '@alteroid/swr';
-import type { JournalLive } from '@alteroid/swr';
-import type { JournalEntry } from '@alteroid/logic';
-import {
-  json,
-  Providers,
-  renderedMoneyTexts,
-  stubFetch,
-  storeTestBaseUrl,
-  type FetchStub,
-} from '~/test-support';
+import { renderedMoneyTexts, storeTestBaseUrl } from '~/test-support';
 
-import Dashboard from './dashboard';
+import { homeRoute, PROGRESS_BODY, renderHome } from './dashboard-test-helpers';
 
 /*
   **`usageDate(new Date())` はローカル時刻を読むので、「今日」を固定するには
@@ -45,16 +41,6 @@ afterAll(() => {
   else process.env.TZ = tzBeforeThisFile;
 });
 
-const RECENT: JournalEntry = {
-  type: 'decision',
-  id: 'recent-decision',
-  at: '2026-08-14T09:00:00.000Z',
-  decision: 'たった今届いた判断',
-  grounds: '記憶',
-};
-
-const EMPTY_FEED: JournalLive = { status: 'live', recent: [], receivedCount: 0 };
-
 let originalFetch: typeof fetch;
 
 beforeEach(() => {
@@ -68,97 +54,41 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function renderDashboard(
-  usageBody: {
-    rows: unknown[];
-    since: string | null;
-    beforeLedger: boolean;
-    notice?: string;
-    turnRows?: unknown[];
-    // デーモンの暦の今日（`GET /usage` の `today`）。既定は行の日付と同じ 2026-08-14。
-    // `null` は「応答に `today` が無い」（古いデーモン）。
-    today?: string | null;
-    // 集計で読めずに外した行（#2427）。渡さなければ鍵ごと無い（0件・古いデーモンと同じ）。
-    unreadableRows?: unknown[];
-  },
-  live: JournalLive = EMPTY_FEED,
-  // 既定は空のまま（既存のテストは全部これで、最新の日報カードを一度も
-  // 描画経路に乗せていない）。「最新の日報」のテストだけがここへ渡す。
-  // `unavailable` は「日報が書けなかった印」（`schema.ts`）。既定では付けないので、
-  // 既存のテストは1つも振る舞いが変わらない。
-  reports: Array<{
-    type: 'daily_report';
-    id: string;
-    at: string;
-    date: string;
-    body: string;
-    unavailable?: string;
-  }> = [],
-  // 概要カードが打ち切る側の分岐へ入れるための材料。既定は空なので、
-  // 既存のテストは1つも振る舞いが変わらない。
-  // `managersUnreadable` は `GET /managers` の `unreadable`（#2345）。渡さなければ鍵ごと無い。
-  lists: { approvals?: unknown[]; managers?: unknown[]; managersUnreadable?: unknown[] } = {},
-  // 「次の自動実行」カードの材料。既定は空なので既存のテストは変わらない。
-  scheduleEntries: Array<{ kind: string; description: string; nextAt: string }> = [],
-  // **`/approvals` / `/schedule` を読めなかったことにする（issue #2138）。**
-  // 既定はどちらも真っ当に取れるので、既存のテストは1つも振る舞いが変わらない。
-  failures: { approvals?: boolean; schedule?: boolean } = {},
-  // **`/schedule` の `unreadable`（#2343）。** 渡さなければ鍵ごと無い（0件と同じ）なので、
-  // 既存のテストは1つも振る舞いが変わらない。
-  scheduleUnreadable: unknown[] | undefined = undefined,
-): FetchStub {
-  // **`/journal/stream` の経路を置いていない。** 置くと購読が増えたことに気づけない
-  // （知らない URL は `stubFetch` が「繋がらない」にするので、張りに行けば必ず出る）。
-  const stub = stubFetch((url) => {
-    if (url.includes('/reports')) return json({ reports });
-    if (url.includes('/approvals')) {
-      return failures.approvals === true
-        ? json({ error: 'internal' }, 500)
-        : json({ approvals: lists.approvals ?? [] });
-    }
-    if (url.includes('/managers')) {
-      return json({
-        managers: lists.managers ?? [],
-        ...(lists.managersUnreadable === undefined ? {} : { unreadable: lists.managersUnreadable }),
-      });
-    }
-    if (url.includes('/schedule')) {
-      return failures.schedule === true
-        ? json({ error: 'internal' }, 500)
-        : json({
-            entries: scheduleEntries,
-            ...(scheduleUnreadable === undefined ? {} : { unreadable: scheduleUnreadable }),
-          });
-    }
-    if (url.includes('/usage')) {
-      const { today, ...rest } = usageBody;
-      return json({
-        ...rest,
-        ...(today === null ? {} : { today: today ?? '2026-08-14' }),
-        notice: usageBody.notice ?? USAGE_ESTIMATE_NOTICE,
-        turnRows: usageBody.turnRows ?? [],
-        breakdown: null,
-      });
-    }
-    return undefined;
-  });
+const USAGE = { rows: [], since: null, beforeLedger: false };
 
-  const router = createMemoryRouter([{ path: '/', Component: Dashboard }], {
-    initialEntries: ['/'],
-  });
-  render(
-    <Providers>
-      <JournalFeedProvider value={live}>
-        <RouterProvider router={router} />
-      </JournalFeedProvider>
-    </Providers>,
-  );
-  return stub;
+/** 「詳しく見る」は複数のカードが持つ。href で行き先を選ぶ。 */
+function linkTo(prefix: string): HTMLElement | undefined {
+  return screen
+    .getAllByRole('link', { name: '詳しく見る' })
+    .find((link) => (link.getAttribute('href') ?? '').startsWith(prefix));
 }
 
-describe('ダッシュボードの「今日の利用」', () => {
+describe('ホームの構成', () => {
+  it('見出しはホームで、旧ダッシュボードの2枚（稼働中のマネージャー・いま届いている出来事）は無い', async () => {
+    renderHome();
+
+    expect(await screen.findByRole('heading', { name: 'ホーム' })).toBeTruthy();
+    expect(screen.getByText('いま動いているもの')).toBeTruthy();
+    for (const title of ['最新の日報', '作業の進捗', '次の自動実行', '今日の利用']) {
+      expect(screen.getByText(title)).toBeTruthy();
+    }
+    expect(screen.queryByText('稼働中のマネージャー')).toBeNull();
+    expect(screen.queryByText('いま届いている出来事')).toBeNull();
+  });
+
+  it('日誌の購読（/journal/stream）を張らない。購読は AuthedShell の1本だけ', async () => {
+    // **`/journal/stream` の経路を置いていない。** 張りに行けば `stubFetch` が「繋がらない」にし、
+    // `calls` に残る。
+    const stub = renderHome();
+    await screen.findByText('まだ記録が無い。');
+
+    expect(stub.calls.filter((url) => url.includes('/journal'))).toEqual([]);
+  });
+});
+
+describe('「今日の利用」', () => {
   it('台帳がまだ空（since が null）なら金額を1つも出さない', async () => {
-    renderDashboard({ rows: [], since: null, beforeLedger: false });
+    renderHome({ usage: { rows: [], since: null, beforeLedger: false } });
 
     expect(await screen.findByText('まだ記録が無い。')).toBeTruthy();
     // ⛔ ここは `queryByText('$0.00')` だった。**`formatUsd` は `$0.00` を
@@ -168,25 +98,27 @@ describe('ダッシュボードの「今日の利用」', () => {
   });
 
   it('beforeLedger が真なら、0 ではなく記録が無いと言い、金額を1つも出さない', async () => {
-    renderDashboard({ rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: true });
+    renderHome({ usage: { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: true } });
 
     expect(await screen.findByText(/今日の分はまだ記録が無い/)).toBeTruthy();
     expect(renderedMoneyTexts()).toEqual(new Set());
   });
 
   it('金額が出ているときは但し書きも一緒に出す', async () => {
-    renderDashboard({
-      rows: [
-        {
-          date: '2026-08-14',
-          managerId: 'm1',
-          model: 'claude-opus-4',
-          updatedAt: '2026-08-14T10:00:00.000Z',
-          totals: { ...ZERO_USAGE, costUsd: 0.02 },
-        },
-      ],
-      since: '2026-08-01T00:00:00.000Z',
-      beforeLedger: false,
+    renderHome({
+      usage: {
+        rows: [
+          {
+            date: '2026-08-14',
+            managerId: 'm1',
+            model: 'claude-opus-4',
+            updatedAt: '2026-08-14T10:00:00.000Z',
+            totals: { ...ZERO_USAGE, costUsd: 0.02 },
+          },
+        ],
+        since: '2026-08-01T00:00:00.000Z',
+        beforeLedger: false,
+      },
     });
 
     expect(await screen.findByText('$0.0200')).toBeTruthy();
@@ -203,35 +135,27 @@ describe('ダッシュボードの「今日の利用」', () => {
  *
  * 直す前は素の `/usage` へ飛んでいた——`/usage` は期間が無ければ絞らないので、
  * 今日の合計を見て押すと今日ではない期間が開く（issue 本文）。ここで固定するのは
- * 「今日」そのもの（`vi.setSystemTime`）と TZ（ファイル冒頭の `vi.hoisted`）——
- * どちらもカードが `usageDate(new Date())` で「今日」を作るときに読む値である。
+ * 「今日」そのもの（`vi.setSystemTime`）と TZ（ファイル冒頭の `vi.hoisted`）。
  */
 describe('「今日の利用」カードの「詳しく見る」は今日の期間へ飛ぶ（issue #2078）', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-
   it('カードの today と同じ from/to を持つ /usage を開く', async () => {
     // 2026-08-14T05:00:00.000Z は TZ=Asia/Tokyo で 08/14 14:00（日を跨がない）。
     const fixedNow = new Date('2026-08-14T05:00:00.000Z');
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(fixedNow);
     try {
-      renderDashboard(USAGE);
+      renderHome({ usage: USAGE });
 
-      // **「詳しく見る」は「次の自動実行」カードとも文言が同じ**（#347 のテスト
-      // が同じ理由でやっているのと同じ手当て）。href で `/usage` 宛てのものを選ぶ。
       // 応答の `today` が来てからリンクが出る（それまでは出さない。issue #2268）。
       await screen.findByText('まだ記録が無い。');
-      const links = screen.getAllByRole('link', { name: '詳しく見る' });
-      const usageLink = links.find((link) =>
-        (link.getAttribute('href') ?? '').startsWith('/usage'),
-      );
+      const usageLink = linkTo('/usage');
       expect(usageLink).toBeTruthy();
 
       // 「今日」は応答の `today`（デーモンの暦）。ここではブラウザの今日と同じ日にしてある。
       const today = usageDate(fixedNow);
       expect(usageLink!.getAttribute('href')).toBe(`/usage?from=${today}&to=${today}`);
-      // 具体の日付でも固定して落ちることを確かめておく（TZ・system time の
-      // 固定が本当に効いているかの対照）。
+      // 具体の日付でも固定して落ちることを確かめておく（TZ・system time の固定が本当に
+      // 効いているかの対照）。
       expect(today).toBe('2026-08-14');
     } finally {
       vi.useRealTimers();
@@ -259,30 +183,24 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
     totals: { ...ZERO_USAGE, costUsd },
   });
 
-  function usageLinkOf(): HTMLElement {
-    const link = screen
-      .getAllByRole('link', { name: '詳しく見る' })
-      .find((l) => (l.getAttribute('href') ?? '').startsWith('/usage'));
-    expect(link).toBeTruthy();
-    return link!;
-  }
-
   it('ブラウザの今日の前後2日で1回だけ引き、応答の today の行とリンクを使う', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(browserNow);
     try {
-      const stub = renderDashboard({
-        // 応答の today（09-30）の行と、ブラウザの今日（10-01）の行が別の金額で並ぶ。
-        rows: [row('2026-09-29', 0.01), row(DAEMON_TODAY, 0.02), row('2026-10-01', 0.04)],
-        since: '2026-08-01T00:00:00.000Z',
-        beforeLedger: false,
-        today: DAEMON_TODAY,
+      const stub = renderHome({
+        usage: {
+          // 応答の today（09-30）の行と、ブラウザの今日（10-01）の行が別の金額で並ぶ。
+          rows: [row('2026-09-29', 0.01), row(DAEMON_TODAY, 0.02), row('2026-10-01', 0.04)],
+          since: '2026-08-01T00:00:00.000Z',
+          beforeLedger: false,
+          today: DAEMON_TODAY,
+        },
       });
 
       // 応答の today の行だけが「今日の利用」になる（ブラウザの今日の行 $0.0400 ではない）。
       expect(await screen.findByText('$0.0200')).toBeTruthy();
       expect(renderedMoneyTexts()).toEqual(new Set(['$0.0200']));
-      expect(usageLinkOf().getAttribute('href')).toBe(
+      expect(linkTo('/usage')!.getAttribute('href')).toBe(
         `/usage?from=${DAEMON_TODAY}&to=${DAEMON_TODAY}`,
       );
 
@@ -301,20 +219,19 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(browserNow);
     try {
-      renderDashboard({
-        rows: [row('2026-10-01', 0.04)],
-        since: '2026-08-01T00:00:00.000Z',
-        beforeLedger: false,
-        today: null,
+      renderHome({
+        usage: {
+          rows: [row('2026-10-01', 0.04)],
+          since: '2026-08-01T00:00:00.000Z',
+          beforeLedger: false,
+          today: null,
+        },
       });
 
       expect(await screen.findByText(/デーモンの今日が分からない/)).toBeTruthy();
       // ブラウザの今日の行の金額を出さず、ブラウザの今日へのリンクも作らない。
       expect(renderedMoneyTexts()).toEqual(new Set());
-      const usageLinks = screen
-        .getAllByRole('link', { name: '詳しく見る' })
-        .filter((l) => (l.getAttribute('href') ?? '').startsWith('/usage'));
-      expect(usageLinks).toHaveLength(0);
+      expect(linkTo('/usage')).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
@@ -322,32 +239,78 @@ describe('「今日の利用」の今日はデーモンの応答の today で決
 });
 
 /**
- * 「最新の日報」カードが本文を実際に描く経路を1度は通す。
- *
- * これまでの `renderDashboard` は `/reports` を常に空で固定していたので、
- * このカードは `Empty` の分岐しか通ったことが無かった。**Markdown 化した
- * こと自体を保証するテストではない**（それは `markdown.test.tsx` の仕事）
- * — ここが保証するのは「日報の本文がこのカードの描画経路へ実際に渡る」
- * ことだけ。見出し記法（`## 見出し`）を混ぜているのは、素通しの
- * `whitespace-pre-wrap` の文字列表示のままでは無いこと（＝描画経路を
- * 通したのが `report.body` の生文字列比較ではないこと）を区別するため。
+ * **「今日の利用」カードの、読めずに集計から外した行（#2427）。** 窓（今日の前後2日）から、
+ * 今日の行か、日が取れない行だけに絞って断る。
  */
+describe('「今日の利用」カードの読めずに外した行（#2427）', () => {
+  const unreadable = (date?: string) => ({
+    ...(date === undefined ? {} : { date }),
+    reason: '不正な欄: totals',
+  });
+  const base = { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false };
+
+  it('今日の行が読めずに外れていれば、合計に入っていないと言う', async () => {
+    renderHome({ usage: { ...base, unreadableRows: [unreadable('2026-08-14')] } });
+
+    expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
+  });
+
+  it('今日ではない日の行は、このカードでは言わない', async () => {
+    renderHome({ usage: { ...base, unreadableRows: [unreadable('2026-08-13')] } });
+
+    await screen.findByText('推定');
+    expect(screen.queryByText(/合計に入っていない/)).toBeNull();
+  });
+
+  it('日が取れない行は、今日ではないと言い切れないので言う', async () => {
+    renderHome({ usage: { ...base, unreadableRows: [unreadable()] } });
+
+    expect(await screen.findByText(/合計に入っていない/)).toBeTruthy();
+  });
+
+  it('対照: 欄が無い・空配列なら、何も出さない', async () => {
+    renderHome({ usage: { ...base, unreadableRows: [] } });
+
+    await screen.findByText('推定');
+    expect(screen.queryByText(/合計に入っていない/)).toBeNull();
+  });
+});
+
 describe('「最新の日報」', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
+  const report = (extra: Record<string, unknown>) => ({
+    type: 'daily_report',
+    id: 'r1',
+    at: '2026-08-14T22:00:00.000Z',
+    date: '2026-08-14',
+    body: '本文',
+    ...extra,
+  });
 
-  it('日報の本文が Markdown の描画経路を通って出る', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [
-      {
-        type: 'daily_report',
-        id: 'r1',
-        at: '2026-08-14T22:00:00.000Z',
-        date: '2026-08-14',
-        body: '## 今日やったこと\n\n進捗があった。',
-      },
-    ]);
+  it('本文は記法の記号を落とした平文の抜粋で出て、全文（その日報）へリンクする', async () => {
+    renderHome({ reports: [report({ body: '## 今日やったこと\n\n- **進捗**があった。' })] });
 
-    expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
-    expect(screen.getByText('進捗があった。')).toBeTruthy();
+    // 見出し記法・強調の記号は出ない（Markdown の見出し要素にもしない）。
+    expect(await screen.findByText('今日やったこと 進捗があった。')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: '今日やったこと' })).toBeNull();
+    const link = screen.getByRole('link', { name: '全文を読む' });
+    expect(link.getAttribute('href')).toBe('/reports/2026-08-14/r1');
+  });
+
+  it('長い本文は … で切ったと分かる形で切る（全文は日報のページ）', async () => {
+    renderHome({ reports: [report({ body: 'あ'.repeat(400) })] });
+
+    const excerpt = await screen.findByText(/^あ+…$/);
+    expect(excerpt.textContent!.length).toBeLessThan(200);
+  });
+
+  it('本文の秘密は描画の直前に伏せる（偽のトークン。40桁の sha は残す）', async () => {
+    const token = `ghp_${'A1b2C3d4E5'.repeat(4)}`;
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    renderHome({ reports: [report({ body: `x ${token} y ${sha}` })] });
+
+    const excerpt = await screen.findByText(/y 0123456789abcdef/);
+    expect(excerpt.textContent).not.toContain(token);
+    expect(excerpt.textContent).toContain(sha);
   });
 
   /**
@@ -360,65 +323,41 @@ describe('「最新の日報」', () => {
    */
   it('日報が作れなかった日は、印として出す（本文を日報として描かない）', async () => {
     const reason = "You've hit your org's monthly spend limit · ask your admin to raise it";
-    renderDashboard(USAGE, EMPTY_FEED, [
-      {
-        type: 'daily_report',
-        id: 'r1',
-        at: '2026-08-20T22:00:00.000Z',
-        date: '2026-08-20',
-        // 見出し記法を混ぜてある。Markdown の経路へ流れたら見出しになるので、
-        // 日報として描いていないことを区別できる。
-        body: `## ${reason}`,
-        unavailable: reason,
-      },
-    ]);
+    renderHome({
+      reports: [report({ date: '2026-08-20', body: `## ${reason}`, unavailable: reason })],
+    });
 
     expect(await screen.findByText('この日の日報は作れなかった')).toBeTruthy();
     expect(screen.getByText(reason)).toBeTruthy();
+    // 抜粋としても出ない（日報の抜粋の `<p>` が無い）。
+    expect(screen.queryByText(`## ${reason}`)).toBeNull();
     expect(screen.queryByRole('heading', { name: reason })).toBeNull();
+  });
+
+  it('日報が無いとき、読み込み中は空の文言を出さず、取れたら出す', async () => {
+    renderHome({ reports: [] });
+
+    expect(await screen.findByText(/まだ日報がない/)).toBeTruthy();
   });
 });
 
 /**
- * 概要カードは全件を出さない（それは要件である）。**要件でないのは、切ったことが
- * 出力から消えることである。**
- *
- * 保証しているのは2方向で、片方だけでは足りない。
+ * 承認待ちの行は全件を出さない（それは要件である）。**要件でないのは、切ったことが出力から
+ * 消えることである。**
  *
  * - 上限を越えたら残数が出る — 出ないと「全部でこれだけ」と読める
- * - **ちょうど上限のときは出ない** — 常に出る但し書きは、出ていることが情報に
- *   ならない（「残り 0 件」を作ると、取れない軸に 0 の行を作るのと同じになる）
+ * - **ちょうど上限のときは出ない** — 常に出る但し書きは、出ていることが情報にならない
+ *   （「残り 0 件」を作ると、取れない軸に 0 の行を作るのと同じになる）
  */
-describe('概要カードが打ち切ったことを言う', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-
+describe('「あなたを待っている」が打ち切ったことを言う', () => {
   const approval = (n: number) => ({
     id: `approval-${n}`,
     createdAt: '2026-08-14T09:00:00.000Z',
     question: `質問 ${n}`,
   });
 
-  const manager = (n: number) => ({
-    managerId: `mgr-${n}`,
-    status: 'running',
-    live: true,
-    cwd: '/workspace',
-    request: `依頼 ${n}`,
-    startedAt: '2026-08-14T09:00:00.000Z',
-    updatedAt: '2026-08-14T09:00:00.000Z',
-  });
-
-  const decision = (n: number): JournalEntry => ({
-    type: 'decision',
-    id: `decision-${n}`,
-    at: '2026-08-14T09:00:00.000Z',
-    decision: `判断 ${n}`,
-    grounds: '記憶',
-  });
-
   it('承認待ちが上限を越えたら、出していない件数を言う', async () => {
-    const approvals = Array.from({ length: 8 }, (_, i) => approval(i));
-    renderDashboard(USAGE, EMPTY_FEED, [], { approvals });
+    renderHome({ approvals: Array.from({ length: 8 }, (_, i) => approval(i)) });
 
     // 上限は5なので、出るのは残り3件。
     expect(await screen.findByText(/残り 3 件は出していない/)).toBeTruthy();
@@ -427,247 +366,187 @@ describe('概要カードが打ち切ったことを言う', () => {
   });
 
   it('承認待ちがちょうど上限なら、但し書きを出さない', async () => {
-    const approvals = Array.from({ length: 5 }, (_, i) => approval(i));
-    renderDashboard(USAGE, EMPTY_FEED, [], { approvals });
+    renderHome({ approvals: Array.from({ length: 5 }, (_, i) => approval(i)) });
 
     expect(await screen.findByText('質問 4')).toBeTruthy();
     expect(screen.queryByText(/件は出していない/)).toBeNull();
   });
-
-  it('稼働中のマネージャーが上限を越えたら、出していない件数を言う', async () => {
-    const managers = Array.from({ length: 7 }, (_, i) => manager(i));
-    renderDashboard(USAGE, EMPTY_FEED, [], { managers });
-
-    expect(await screen.findByText(/残り 2 件は出していない/)).toBeTruthy();
-    expect(screen.getByText('依頼 0')).toBeTruthy();
-    expect(screen.queryByText('依頼 5')).toBeNull();
-  });
-
-  it('届いている出来事が上限を越えたら、出していない件数を言う', async () => {
-    const recent = Array.from({ length: 32 }, (_, i) => decision(i));
-    renderDashboard(USAGE, { status: 'live', recent }, [], {});
-
-    // 上限は30なので、出るのは残り2件。
-    expect(await screen.findByText(/残り 2 件は出していない/)).toBeTruthy();
-    expect(screen.getByText(summarizeJournalEntry(decision(0)))).toBeTruthy();
-    expect(screen.queryByText(summarizeJournalEntry(decision(31)))).toBeNull();
-  });
 });
 
-/**
- * 「稼働中のマネージャー」カードの件数が `m.status === 'running'` を直書き
- * していると、将来「実行中」を意味する新しい値が `jobStatusSchema`
- * （`packages/core/src/schema.ts`）へ足されても、この画面は**型検査にも
- * 落ちず、画面も落ちず**、件数からその分だけ静かに漏れる（9回目の横断
- * レビュー指摘。Issue は無い）。
- *
- * **まだ存在しない値を模して確かめる。** `jobStatusSchema` の現行6値は
- * すでに正しく扱えているので（直上の `describe`）、ここで踏みたいのは
- * *まだ無い将来の値*である——本物の値を1つ増やす改修は要件を動かすので、
- * 型を迂回したフィクスチャで代用する（`lists.managers` は `unknown[]`
- * なので、ここでのキャストは画面の型を1文字も緩めない）。
- *
- * `@alteroid/core/job-status-running` の `isRunningJobStatus` が安全側
- * （知らない値は実行中として数える）を選んでいるので、直した後はここが緑に
- * なる。直す前（`m.status === 'running'` の直書き）は、このマネージャーが
- * 一覧にも件数にも出ない。
- */
-describe('「稼働中のマネージャー」は知らない status を静かに落とさない', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-
-  it('jobStatusSchema にまだ無い「実行中」相当の値も、一覧と件数に含める', async () => {
-    const managers = [
-      {
-        managerId: 'mgr-future-running',
-        // **まだ `jobStatusSchema` に無い値。** 将来「実行中」を意味する
-        // 値が足された、という状況を模す（上のファイル doc）。
-        status: 'executing-in-background',
-        live: true,
-        cwd: '/workspace',
-        request: '将来のrunning相当ステータス',
-        startedAt: '2026-08-14T09:00:00.000Z',
-        updatedAt: '2026-08-14T09:00:00.000Z',
-      },
-    ];
-    renderDashboard(USAGE, EMPTY_FEED, [], { managers });
-
-    // **先に非同期側（`findByText`）を待つ。** データが届く前に同期の
-    // `queryByText` を読むと、読み込み中の空表示と区別が付かないまま
-    // 「無かった」と誤判定する（このテストが実際にその形で一度落ちた）。
-    // 直す前（`m.status === 'running'` の直書き）は、このマネージャーが
-    // 一覧からも件数からも漏れて、`findByText` がタイムアウトして落ちる。
-    expect(await screen.findByText('将来のrunning相当ステータス')).toBeTruthy();
-    // ここまで来ればデータは届いている——「いま走っているものはない」
-    // （0件の空表示）が同時に出ていないことを確かめられる。
-    expect(screen.queryByText('いま走っているものはない。')).toBeNull();
-  });
-});
-
-/**
- * **「稼働中のマネージャー」カードが、読めない委譲を「走っているものはない」の顔で隠さない
- * （#2345）。** 読めない行は状態も取れないので、走っていないとは言えない。0件（鍵が無い）の
- * ときは何も出さない。
- */
-describe('「稼働中のマネージャー」カードの読めない委譲（#2345）', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-  const UNREADABLE = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
-
-  it('走っている委譲が0件でも、読めない行が在れば「走っているものはない」と言わない', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], { managers: [], managersUnreadable: UNREADABLE });
-
-    const note = await screen.findByText(/読めない委譲が 1 件ある/);
-    expect(note.textContent).toContain('id: mgr-bad');
-    expect(note.textContent).toContain('居ないのでも、畳まれたのでもない');
-    expect(screen.queryByText('いま走っているものはない。')).toBeNull();
-    expect(screen.getByText(/読めた範囲では、走っているものはない/)).toBeTruthy();
+describe('「あなたを待っている」', () => {
+  const approval = (n: number) => ({
+    id: `approval-${n}`,
+    createdAt: '2026-08-14T09:00:00.000Z',
+    question: `質問 ${n}`,
   });
 
-  it('走っている委譲が在るときは、一覧と一緒に断りを出す', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], {
-      managers: [
-        {
-          managerId: 'mgr-1',
-          status: 'running',
-          live: true,
-          cwd: '/workspace',
-          request: '読める依頼',
-          startedAt: '2026-08-14T09:00:00.000Z',
-          updatedAt: '2026-08-14T09:00:00.000Z',
+  it('承認待ちが0件なら、1行に畳む（見出しも「答える」も出さない）', async () => {
+    renderHome({ approvals: [] });
+
+    expect(await screen.findByText('あなたを待っているものはない')).toBeTruthy();
+    expect(screen.queryByText('あなたを待っている')).toBeNull();
+    expect(screen.queryByRole('link', { name: '答える' })).toBeNull();
+  });
+
+  it('承認待ちがあれば、質問・「答える」・未了の仕事の件数を出す。件数は全体で、人間の番とは言わない', async () => {
+    renderHome({ approvals: [approval(0)] });
+
+    expect(await screen.findByText('質問 0')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '答える' }).getAttribute('href')).toBe('/approvals');
+    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    expect(within(row).getByText('5')).toBeTruthy();
+    expect(within(row).getByRole('link', { name: '仕事へ' }).getAttribute('href')).toBe(
+      '/commitments',
+    );
+    expect(screen.queryByText(/人間の番/)).toBeNull();
+  });
+
+  it('未了の数が欠けうる（読めない行がある）ときは、下限だと言う。欠けていなければ言わない', async () => {
+    renderHome({
+      approvals: [approval(0)],
+      progress: {
+        ...PROGRESS_BODY,
+        backlog: {
+          ...PROGRESS_BODY.backlog,
+          completeness: { unreadable: 1, trimmedClosed: 0, unreadableJobs: 0 },
         },
-      ],
-      managersUnreadable: UNREADABLE,
+      },
     });
 
-    expect(await screen.findByText('読める依頼')).toBeTruthy();
-    expect(await screen.findByText(/読めない委譲が 1 件ある/)).toBeTruthy();
+    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    expect(row.textContent).toContain('下限');
   });
 
-  it('対照: 鍵が無ければ（0件）、断りは出ず、従来の文言のまま', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], { managers: [] });
+  it('対照: 欠けていない既定の応答では、下限と言わない', async () => {
+    renderHome({ approvals: [approval(0)] });
 
-    expect(await screen.findByText('いま走っているものはない。')).toBeTruthy();
-    expect(screen.queryByText(/読めない委譲/)).toBeNull();
+    const row = (await screen.findByRole('link', { name: '仕事へ' })).closest('li')!;
+    expect(row.textContent).not.toContain('下限');
   });
-});
 
-/**
- * 「一覧」は、カード自身の絞り込み（`isRunningJobStatus` が真にする状態）と
- * 同じ母集合で `/managers` へ飛ぶ（issue #2090）。**素の `/managers` へ戻すと、
- * 終わった・止まった委譲まで混ざった一覧が開く**——直す前の症状そのものを
- * 歯にする。値の組み立ては `packages/logic/src/managers-links.ts` の `managersHref`（そちらの
- * 単体テストが href の形そのものを見る）に任せ、ここでは「呼ばれているか・
- * `status` が空でないか」だけを見る。
- */
-describe('「稼働中のマネージャー」の「一覧」は稼働中で絞り込む（issue #2090）', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
+  it('進捗を読めないときは、未了の行を出さない（0 件と描かない）。承認待ちはそのまま出る', async () => {
+    renderHome({ approvals: [approval(0)], progress: 'fail' });
 
-  it('「一覧」の href が status=running を持つ', async () => {
-    const managers = [
-      {
-        managerId: 'mgr-1',
-        status: 'running',
-        live: true,
-        cwd: '/workspace',
-        request: '依頼 1',
-        startedAt: '2026-08-14T09:00:00.000Z',
-        updatedAt: '2026-08-14T09:00:00.000Z',
-      },
-    ];
-    renderDashboard(USAGE, EMPTY_FEED, [], { managers });
-
-    const list = await screen.findByRole('link', { name: '一覧' });
-    expect(list.getAttribute('href')).toBe('/managers?status=running');
+    expect(await screen.findByText('質問 0')).toBeTruthy();
+    // 進捗のカード側の「未了の仕事 N 件」も出ない（読めていない）ので、行き先ごと無い。
+    expect(screen.queryByRole('link', { name: '仕事へ' })).toBeNull();
   });
 });
 
 /**
- * 「次の自動実行」カードは、この画面の他5枚（最新の日報／承認待ち／稼働中の
- * マネージャー／今日の利用／いま届いている出来事）と違って `action` を持たず、
- * かつ `entry.description` を `truncate` で切っている唯一のカードだった
- * （本5「省略の出口」）。
+ * **「答える」リンクが、読めていないときに出ないこと（issue #2138 の2）。**
  *
- * **ここで言えること / 言えないこと**: `action` の `<Link>` と `title` 属性は
- * DOM に出るので `getByRole('link', { name })` の `href` と `getByTitle` で
- * 引ける — 「リンクが在り行き先が `/schedule` であること」「`title` に
- * `entry.description` と同じ値が入っていること」はここで踏める。
- * jsdom はレイアウトを持たないので、「実際に狭い画面で文字が切れて hover で
- * 続きが読めること」はここでは確かめられない（クラス名が書かれたことまで）。
+ * 直す前は `pending.length > 0` だけを見ていたので、一度取れた後に取り直しが失敗しても
+ * （SWR は直前の `data` を残す）「答える」だけが古い件数のまま出続け、本文の `ErrorNote`
+ * （「読めていない」）と同じカードに同時に出ていた。**単発の失敗スタブでは `data` が一度も
+ * 定まらず `pending` が常に0件になるので、この分岐の欠落を見分けられない** —— だから、
+ * いったん成功させて `pending` を非0にしたあと `/approvals` だけを失敗に切り替え、`window` の
+ * `focus` イベント（SWR 既定の `revalidateOnFocus` が拾う）で再取得を起こし、`data` が古いまま
+ * 残る状態を作る。
  */
-describe('「次の自動実行」カードの出口', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
+describe('「あなたを待っている」が読めないとき、「答える」を出さない（issue #2138 の2）', () => {
+  it('一度取れた後に /approvals が失敗すると、古い件数のまま「答える」を出し続けない', async () => {
+    const stub = renderHome({
+      approvals: [{ id: 'approval-0', createdAt: '2026-08-14T09:00:00.000Z', question: '質問 0' }],
+    });
+
+    // まず正常系——「答える」が出ていることを確かめてから話を壊す。
+    await screen.findByRole('link', { name: '答える' });
+
+    // `/approvals` だけを失敗に切り替える（他の経路は元のまま存続させる）。
+    stub.setRoute(homeRoute({ approvals: 'fail' }));
+    // SWR 既定の `revalidateOnFocus` を使って再取得を起こす（`dedupingInterval: 0` なので即座に
+    // 飛ぶ——`test-support.tsx` の `Providers` の設定）。
+    window.dispatchEvent(new Event('focus'));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    // 古い `pending`（質問0）が残っていても「答える」は出ず、警告色の枠でもない。
+    expect(screen.queryByRole('link', { name: '答える' })).toBeNull();
+    expect(screen.queryByText('質問 0')).toBeNull();
+  });
+});
+
+/**
+ * 「次の自動実行」カード: 他のカードと同じ形で `action` にスケジュール画面へのリンクを持ち、
+ * `entry.description` を `truncate` で切るので `title` で全文を引けるようにしてある。
+ *
+ * **ここで言えること / 言えないこと**: `action` の `<Link>` と `title` 属性は DOM に出るので
+ * `href` と `getByTitle` で引ける。jsdom はレイアウトを持たないので、「実際に狭い画面で文字が
+ * 切れて hover で続きが読めること」はここでは確かめられない（クラス名が書かれたことまで）。
+ */
+describe('「次の自動実行」カード', () => {
   const LONG_DESCRIPTION =
     '毎朝5時に日報を締めて要約する定期ジョブ（設定を長くすると狭い画面では確実に切れる長さの説明文）';
-
-  it('他5枚と同じ形で action にスケジュール画面へのリンクを持つ', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], {}, [
-      { kind: 'daily_report', description: LONG_DESCRIPTION, nextAt: '2026-08-15T05:00:00.000Z' },
-    ]);
-
-    // 「今日の利用」カードの action も同じ文言（「詳しく見る」）を使っているので
-    // `getByRole` 単体では一意にならない。href で `/schedule` へのものを選ぶ。
-    await screen.findByText(LONG_DESCRIPTION, { exact: false });
-    const links = screen.getAllByRole('link', { name: '詳しく見る' });
-    const hrefs = links.map((link) => link.getAttribute('href'));
-    expect(hrefs).toContain('/schedule');
+  const entry = (description: string, nextAt: string) => ({
+    kind: description,
+    description,
+    nextAt,
   });
 
-  it('entry.description が truncate で切られていても title で全文が引ける', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], {}, [
-      { kind: 'daily_report', description: LONG_DESCRIPTION, nextAt: '2026-08-15T05:00:00.000Z' },
-    ]);
+  it('スケジュール画面へのリンクを持つ', async () => {
+    renderHome({
+      schedule: { entries: [entry(LONG_DESCRIPTION, '2026-08-15T05:00:00.000Z')] },
+    });
+
+    await screen.findByText(LONG_DESCRIPTION, { exact: false });
+    expect(screen.getByRole('link', { name: '予定へ' }).getAttribute('href')).toBe('/schedule');
+  });
+
+  it('description が truncate で切られていても title で全文が引ける', async () => {
+    renderHome({
+      schedule: { entries: [entry(LONG_DESCRIPTION, '2026-08-15T05:00:00.000Z')] },
+    });
 
     expect(await screen.findByTitle(LONG_DESCRIPTION)).toBeTruthy();
   });
-});
 
-/**
- * **「次の自動実行」カードが `/schedule` を読めないとき（issue #2138 の1）。**
- *
- * 直す前は `schedule.data` しか見ていなかったので、取れなかったときも
- * `data === undefined` の空表示（`—`）のままで、「予定が無い」と「読めて
- * いない」が見分けられなかった。ここで測るのは、失敗したら `ErrorNote`
- * （`role="alert"`）が出て、その代わりの空表示（`—`）にも予定の一覧にも
- * ならないこと——`error !== undefined` の分岐を外す変異（元のバグと同じ
- * 形）を当てると、`—` の空表示に戻って `alert` が見つからず赤くなる。
- */
-describe('「次の自動実行」カードが読めないとき（issue #2138 の1）', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
+  it('いちばん近い1件を出し、残りは件数で言う（並びの先頭ではなく時刻で選ぶ）', async () => {
+    renderHome({
+      schedule: {
+        entries: [
+          entry('遠い予定', '2026-08-20T05:00:00.000Z'),
+          entry('近い予定', '2026-08-15T05:00:00.000Z'),
+          entry('中くらい', '2026-08-17T05:00:00.000Z'),
+        ],
+      },
+    });
 
-  it('取り直しに失敗すると ErrorNote を出す（空表示 `—` のままにしない）', async () => {
-    renderDashboard(
-      USAGE,
-      EMPTY_FEED,
-      [],
-      {},
-      [{ kind: 'daily_report', description: '古い予定', nextAt: '2026-08-15T05:00:00.000Z' }],
-      { schedule: true },
-    );
-
-    expect(await screen.findByRole('alert')).toBeTruthy();
-    // 一覧（古い予定）にはならない。既存の空表示（`—`）にも戻らない。
-    expect(screen.queryByText('古い予定')).toBeNull();
-    expect(screen.queryByText('—')).toBeNull();
+    expect(await screen.findByText('近い予定')).toBeTruthy();
+    expect(screen.queryByText('遠い予定')).toBeNull();
+    expect(screen.getByText('ほか 2 件')).toBeTruthy();
   });
-});
 
-/**
- * **「次の自動実行」カードが、読めない継続中の依頼を「予定が無い」の顔で隠さない（#2343）。**
- *
- * 直す前は `entries` だけを描いていたので、読めない行が在っても、空の一覧と区別が
- * 付かなかった。0件（鍵が無い）のときは何も出さない。
- */
-describe('「次の自動実行」カードの読めない継続中の依頼（#2343）', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-  const ENTRY = {
-    kind: 'daily_report',
-    description: '毎日 22:00 に日報',
-    nextAt: '2026-08-15T05:00:00.000Z',
-  };
+  it('予定が0件のとき、読み込み中ではなく「予定はない」と言う', async () => {
+    renderHome({ schedule: { entries: [] } });
 
+    expect(await screen.findByText('予定はない。')).toBeTruthy();
+  });
+
+  /**
+   * **読めないとき（issue #2138 の1）。** 直す前は `schedule.data` しか見ていなかったので、
+   * 取れなかったときも空表示のままで、「予定が無い」と「読めていない」が見分けられなかった。
+   */
+  it('取り直しに失敗すると ErrorNote を出す（予定が無いことにしない）', async () => {
+    renderHome({ schedule: 'fail' });
+
+    const card = (await screen.findByText('次の自動実行')).closest<HTMLElement>(
+      '[data-slot="card"]',
+    )!;
+    expect(await within(card).findByRole('alert')).toBeTruthy();
+    expect(within(card).queryByText('予定はない。')).toBeNull();
+  });
+
+  /**
+   * **読めない継続中の依頼を「予定が無い」の顔で隠さない（#2343）。** 0件（鍵が無い）のとき
+   * は何も出さない。
+   */
   it('読めない行が在るとき、件数と kind を断る。読めた予定はそのまま出る', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], {}, [ENTRY], {}, [
-      { kind: 'broken-1', reason: '不正な欄: spec' },
-    ]);
+    renderHome({
+      schedule: {
+        entries: [entry('毎日 22:00 に日報', '2026-08-15T05:00:00.000Z')],
+        unreadable: [{ kind: 'broken-1', reason: '不正な欄: spec' }],
+      },
+    });
 
     expect(await screen.findByText('毎日 22:00 に日報')).toBeTruthy();
     const note = await screen.findByText(/読めない継続中の依頼が 1 件ある/);
@@ -675,194 +554,45 @@ describe('「次の自動実行」カードの読めない継続中の依頼（#
     expect(note.textContent).toContain('消された依頼ではない');
   });
 
-  it('0件（鍵が無い）のときは何も出さない', async () => {
-    renderDashboard(USAGE, EMPTY_FEED, [], {}, [ENTRY]);
+  it('対照: 鍵が無ければ（0件）、断りは出ない', async () => {
+    renderHome({ schedule: { entries: [entry('毎日 22:00 に日報', '2026-08-15T05:00:00.000Z')] } });
 
     expect(await screen.findByText('毎日 22:00 に日報')).toBeTruthy();
     expect(screen.queryByText(/読めない継続中の依頼/)).toBeNull();
   });
 });
 
-/**
- * **「承認待ち」カード見出しの「答える」リンクが、読めていないときに出ない
- * こと（issue #2138 の2）。**
- *
- * 直す前は `pending.length > 0` だけを見ていたので、一度取れた後に取り直しが
- * 失敗しても（SWR は直前の `data` を残す）「答える」だけが古い件数のまま
- * 出続け、本文の `ErrorNote`（「読めていない」）と同じカードに同時に出て
- * いた。**単発の失敗スタブでは `data` が一度も定まらず `pending` が常に0件
- * になるので、`pending.length > 0` だけを見ていた旧コードでもリンクは出ず、
- * この分岐の欠落を見分けられない** —— だから、いったん成功させて
- * `pending` を非0にしたあと `/approvals` だけを失敗に切り替え、`window`
- * の `focus` イベント（SWR 既定の `revalidateOnFocus` が拾う）で再取得を
- * 起こし、`data` が古いまま残る状態を作る。
- */
-describe('「承認待ち」カードが読めないとき、「答える」を出さない（issue #2138 の2）', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-  const approval = (n: number) => ({
-    id: `approval-${n}`,
-    createdAt: '2026-08-14T09:00:00.000Z',
-    question: `質問 ${n}`,
+describe('「作業の進捗」カード', () => {
+  it('実行中の委譲・未了・閉じた件数を出し、割合は出さない。詳しくは /progress', async () => {
+    renderHome();
+
+    expect(await screen.findByText('実行中の委譲')).toBeTruthy();
+    expect(screen.getByText(/未了の仕事 5 件・直近 168 時間で 12 件閉じた/)).toBeTruthy();
+    expect(screen.queryByText('%')).toBeNull();
+    expect(linkTo('/progress')).toBeTruthy();
   });
 
-  it('一度取れた後に /approvals が失敗すると、古い件数のまま「答える」を出し続けない', async () => {
-    const stub = renderDashboard(USAGE, EMPTY_FEED, [], { approvals: [approval(0)] });
-
-    // まず正常系——「答える」が出ていることを確かめてから話を壊す。
-    await screen.findByRole('link', { name: '答える' });
-
-    // `/approvals` だけを失敗に切り替える（他の経路は元のまま存続させる）。
-    stub.setRoute((url) => {
-      if (url.includes('/approvals')) return json({ error: 'internal' }, 500);
-      if (url.includes('/reports')) return json({ reports: [] });
-      if (url.includes('/managers')) return json({ managers: [] });
-      if (url.includes('/schedule')) return json({ entries: [] });
-      if (url.includes('/usage')) {
-        return json({
-          ...USAGE,
-          today: '2026-08-14',
-          notice: USAGE_ESTIMATE_NOTICE,
-          turnRows: [],
-          breakdown: null,
-        });
-      }
-      return undefined;
-    });
-    // SWR 既定の `revalidateOnFocus` を使って再取得を起こす（`dedupingInterval: 0`
-    // なので即座に飛ぶ——`test-support.tsx` の `Providers` の設定）。
-    window.dispatchEvent(new Event('focus'));
-
-    expect(await screen.findByRole('alert')).toBeTruthy();
-    // 古い `pending`（質問0）が残っていても「答える」は出ない。
-    expect(screen.queryByRole('link', { name: '答える' })).toBeNull();
-  });
-});
-
-describe('日誌は AuthedShell の購読から受け取る', () => {
-  const USAGE = { rows: [], since: null, beforeLedger: false };
-
-  it('context の recent をそのまま出す', async () => {
-    renderDashboard(USAGE, { status: 'live', recent: [RECENT], receivedCount: 1 });
-
-    expect(await screen.findByText(summarizeJournalEntry(RECENT))).toBeTruthy();
-  });
-
-  /**
-   * **行が指している実体の詳細へつなぐ（issue #2071）。** マネージャー発の
-   * `escalation` は委譲へ、`memory_update` は記憶へ。つなぐ先の無い `decision`
-   * （`RECENT`）の行にはリンクを出さない。どれをつなぐかの規則そのものは
-   * `lib/journal-links.test.tsx` が持つ。
-   */
-  it('recent の行から委譲の詳細・記憶へ飛べる（つなぐ先の無い行には出さない）', async () => {
-    const escalation: JournalEntry = {
-      type: 'escalation',
-      id: 'recent-escalation',
-      at: '2026-08-14T09:01:00.000Z',
-      question: '進めてよいか',
-      approvalId: 'a-1',
-      managerId: 'mgr-42',
-    };
-    const memory: JournalEntry = {
-      type: 'memory_update',
-      id: 'recent-memory',
-      at: '2026-08-14T09:02:00.000Z',
-      slug: 'values',
-      summary: '価値観を足した',
-      cause: 'human',
-    };
-    renderDashboard(USAGE, {
-      status: 'live',
-      recent: [memory, escalation, RECENT],
-      receivedCount: 3,
+  it('読めなかった行が在るときは、数が下限だと言う', async () => {
+    renderHome({
+      progress: {
+        ...PROGRESS_BODY,
+        backlog: {
+          ...PROGRESS_BODY.backlog,
+          completeness: { unreadable: 2, trimmedClosed: 0, unreadableJobs: 0 },
+        },
+      },
     });
 
-    const decisionRow = (await screen.findByText(summarizeJournalEntry(RECENT))).closest('li');
-    expect(decisionRow).not.toBeNull();
-    expect(decisionRow!.querySelector('a')).toBeNull();
-
-    const toManager = screen.getByRole('link', { name: '委譲 mgr-42 の詳細' });
-    expect(toManager.getAttribute('href')).toBe('/managers/mgr-42');
-    expect(toManager.textContent).toBe('委譲 →');
-    const toMemory = screen.getByRole('link', { name: '記憶 values（いまの版）' });
-    expect(toMemory.getAttribute('href')).toBe('/memory/values');
-    expect(toMemory.textContent).toBe('記憶 →');
+    expect(await screen.findByText(/読めなかった行があり、数は下限/)).toBeTruthy();
   });
 
-  it('自分では SSE を張らない（購読は AuthedShell の1本だけ）', async () => {
-    const stub = renderDashboard(USAGE, {
-      status: 'live',
-      recent: [RECENT],
-      receivedCount: 1,
-    });
+  it('読めないときは ErrorNote（0 件と描かない）', async () => {
+    renderHome({ progress: 'fail' });
 
-    // 画面が出揃うまで待ってから見る（描画前に数えると、張っていても空になる）。
-    await screen.findByText(summarizeJournalEntry(RECENT));
-    expect(stub.calls.filter((url) => url.includes('/journal/stream'))).toEqual([]);
-  });
-
-  /**
-   * **切ったことを言う（Issue #426 の G3）。** `recent` は購読側
-   * （`use-journal-live.ts`）の `RECENT_LIMIT`（200件）で頭打ちにしてある
-   * ので、`recent.length` を但し書きの `total` に使うと 200件を超えて届いた
-   * 分が消える。`receivedCount`（上限を掛けずに1件ごと積んだ値）を使う
-   * ことで、`recent.length` が小さいままでも本当の総数が出せることを
-   * 固定する — この歯は `total={live.recent.length}` へ戻す変異で赤くなる
-   * （`recent` は1件だけなので、その変異では但し書きが出なくなる）。
-   */
-  it('但し書きの total は recent.length ではなく receivedCount を使う', async () => {
-    renderDashboard(USAGE, { status: 'live', recent: [RECENT], receivedCount: 999 });
-
-    await screen.findByText(summarizeJournalEntry(RECENT));
-    expect(await screen.findByText(/残り 969 件は出していない/)).toBeTruthy();
-  });
-});
-
-/**
- * **「今日の利用」カードが、集計で読めずに外した行を「合計に入っていない」と言う（#2427）。**
- * カードの数字は今日1日なので、窓（前後2日）の中から、今日の行と日の取れない行だけを言う。
- * 0件・欄なし（古いデーモン）のときは何も出さない。
- */
-describe('「今日の利用」カードの読めずに外した行（#2427）', () => {
-  const USAGE = { rows: [], since: '2026-08-01T00:00:00.000Z', beforeLedger: false };
-  const TODAY = '2026-08-14';
-
-  it('今日の行が読めずに外れていれば、合計に入っていないと言う', async () => {
-    renderDashboard({
-      ...USAGE,
-      unreadableRows: [{ table: 'usage_daily', date: TODAY, fields: ['layer'] }],
-    });
-
-    const note = await screen.findByText(/読めない使用量の行が 1 行あり、合計に入っていない/);
-    expect(note.textContent).toContain(`日付: ${TODAY}`);
-  });
-
-  it('今日ではない日の行は、このカードでは言わない', async () => {
-    renderDashboard({
-      ...USAGE,
-      unreadableRows: [{ table: 'usage_daily', date: '2026-08-13', fields: ['layer'] }],
-    });
-
-    await screen.findByText('$0.0000');
-    expect(screen.queryByText(/読めない使用量/)).toBeNull();
-  });
-
-  it('日が取れない行は、今日ではないと言い切れないので言う', async () => {
-    renderDashboard({
-      ...USAGE,
-      unreadableRows: [{ table: 'usage_turns', fields: ['layer'] }],
-    });
-
-    expect(await screen.findByText(/読めない使用量の行が 1 行あり/)).toBeTruthy();
-  });
-
-  it('対照: 欄が無い・空配列なら、何も出さない', async () => {
-    renderDashboard(USAGE);
-    await screen.findByText('$0.0000');
-    expect(screen.queryByText(/読めない使用量/)).toBeNull();
-    cleanup();
-
-    renderDashboard({ ...USAGE, unreadableRows: [] });
-    await screen.findByText('$0.0000');
-    expect(screen.queryByText(/読めない使用量/)).toBeNull();
+    const card = (await screen.findByText('作業の進捗')).closest<HTMLElement>(
+      '[data-slot="card"]',
+    )!;
+    expect(await within(card).findByRole('alert')).toBeTruthy();
+    expect(within(card).queryByText('実行中の委譲')).toBeNull();
   });
 });

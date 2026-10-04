@@ -1,3 +1,4 @@
+import { MemoryTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -77,6 +78,7 @@ export default function Practices() {
 
   return (
     <Page
+      tabs={<MemoryTabs />}
       title="やり方"
       description="仕事のやり方（#1055 段3）。読んで従うかどうかは毎回クローンが決める——器はこれを実行しない"
     >

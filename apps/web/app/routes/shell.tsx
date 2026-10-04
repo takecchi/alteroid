@@ -1,32 +1,21 @@
 import {
   Activity,
-  Archive as ArchiveIcon,
   BellRing,
   BookText,
   Brain,
   CalendarClock,
-  DollarSign,
-  Footprints,
-  Gauge,
-  Hourglass,
-  Inbox as InboxIcon,
-  KeyRound,
   LayoutDashboard,
   ListChecks,
-  Lock,
   MessageSquare,
-  Plug,
-  Route as RouteIcon,
   Settings,
-  ShieldCheck,
-  SlidersHorizontal,
-  SquareTerminal,
   Users,
+  type LucideIcon,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import { Navigate, NavLink, Outlet } from 'react-router';
+import { Link, Navigate, NavLink, Outlet, useLocation } from 'react-router';
 
 import { ConnectionCard } from '~/components/connection';
+import { isNavItemActive, NAV_ITEMS, type NavItemDef } from '~/lib/nav';
 import {
   AppSidebar,
   Badge,
@@ -48,56 +37,53 @@ import {
 } from '@alteroid/swr';
 
 /**
- * `end` は `AppSidebarItem` に無い（`@alteroid/ui` はルーターを知らない）ので、`NAV`
- * が自前で持ち、`renderLink` の中で `NavLink` へ渡す。元の `NAV` が持つ値を落とさないため
- * である（将来 `end` が要る行き先が足されたときに、黙って効かなくならない）。
- * なお react-router の `NavLink` は `to="/"` を特別に扱うので、いまの `/` は `end` が
- * 無くても `/chat` などで選択中にならない（`shell.nav-current.test.tsx` の冒頭に実測）。
+ * 行き先の記号。並びと名前・まとまり・「いま居る画面」の経路は `~/lib/nav`（各ページ先頭の
+ * タブの帯と同じ配列）が持つ。**記号だけがここに在る**のは、`lib/nav.ts` を描画の部品
+ * （lucide）から切り離しておくため。
  */
-const NAV = [
-  { to: '/', label: 'ダッシュボード', icon: LayoutDashboard, end: true },
-  { to: '/chat', label: '会話', icon: MessageSquare, end: false },
-  { to: '/approvals', label: '承認待ち', icon: BellRing, end: false },
-  // 承認待ちの隣に置く。**両方とも「人間が片付けるまで残るもの」**だが、承認待ちは
-  // 「クローンが止まっている」で、こちらは「まだ片付いていない」である（止まって
-  // いなくても片付いていない仕事はある）。
-  { to: '/commitments', label: '未了の仕事', icon: ListChecks, end: false },
-  // 未了の仕事の隣。あちらは行を1件ずつ見る一覧で、こちらは同じ台帳と委譲を**数え直した集計**
-  // （積み上がり・実施中・片付いた速度・見込み。Issue #2241）。行の本文は持たない。
-  { to: '/progress', label: '作業の進捗', icon: Hourglass, end: false },
-  { to: '/managers', label: 'マネージャー', icon: Users, end: false },
-  // マネージャーの隣。評定（good/bad/unclear）は台帳（未了の仕事）と委譲
-  // （マネージャー）の両方の軸を跨いで集計するので、どちらか一方の詳細画面では
-  // なくここに置く（issue #1278 / #1620。PRD「入口の等価性」）。
-  { to: '/appraisal-stats', label: '評定の内訳', icon: Gauge, end: false },
-  { to: '/journal', label: '日誌', icon: Activity, end: false },
-  { to: '/reports', label: '日報', icon: BookText, end: false },
-  { to: '/usage', label: '利用状況', icon: DollarSign, end: false },
-  { to: '/tokens', label: '認証トークン', icon: KeyRound, end: false },
-  { to: '/access', label: 'アクセス許可', icon: ShieldCheck, end: false },
-  // アクセス許可の隣。あちらは「誰が alteroid を使えるか」、こちらは
-  // 「その人が Bash で何を通せるか」（issue #863）——別の許可の軸である。
-  { to: '/permissions', label: '許可（Bash）', icon: Lock, end: false },
-  { to: '/env-vars', label: '環境変数', icon: SlidersHorizontal, end: false },
-  // 環境変数の隣。どちらも「器を焼き直さずに実行環境を直す」口で、こちらは
-  // シェルスクリプト1本を丸ごと置く太い口である（issue #1122）。
-  { to: '/profile', label: '実行環境プロファイル', icon: SquareTerminal, end: false },
-  // プロファイルの隣。同じく「器を焼き直さずに実行環境を直す」口で、こちらは
-  // `.mcp.json` に当たる連携の登録である（#325 段4）。
-  { to: '/mcp-servers', label: 'MCP 連携', icon: Plug, end: false },
-  { to: '/dropped', label: '握り潰しの跡', icon: Footprints, end: false },
-  // 可観測性の最下段——`/dropped` の隣（#776）。
-  { to: '/archive', label: 'アーカイブ', icon: ArchiveIcon, end: false },
-  // アーカイブの隣。**どちらも人間の入口から一括削除する掃除の道具**
-  // （issue #972 / #1042）。CLI の `alteroid inbox remove` と同じ口。
-  { to: '/inbox', label: '受信箱', icon: InboxIcon, end: false },
-  { to: '/memory', label: '記憶', icon: Brain, end: false },
-  // 記憶の隣。どちらも「クローンの判断の材料」で、こちらは仕事の型ごとの
-  // やり方（#1055 段3③）——器はこれを実行しない（読む素材でしかない）。
-  { to: '/practices', label: 'やり方', icon: RouteIcon, end: false },
-  { to: '/schedule', label: 'スケジュール', icon: CalendarClock, end: false },
-  { to: '/settings', label: '設定', icon: Settings, end: false },
-] as const;
+const ICONS: Record<string, LucideIcon> = {
+  '/': LayoutDashboard,
+  '/chat': MessageSquare,
+  '/approvals': BellRing,
+  '/commitments': ListChecks,
+  '/managers': Users,
+  '/reports': BookText,
+  '/journal': Activity,
+  '/memory': Brain,
+  '/schedule': CalendarClock,
+  '/settings': Settings,
+};
+
+/**
+ * サイドバーの1行。**「いま居る画面」は `NavLink` の前方一致では決めない**——1行がまとまり
+ * （仕事なら未了の仕事・作業の進捗・評定の内訳）を代表するので、まとまりのどのページに居ても
+ * 選択中でなければならない。判定は `~/lib/nav` の `isNavItemActive`（詳細の経路も含む）。
+ * `aria-current` は自分で付ける（`NavLink` の自動の判定を使わないため）。
+ */
+function NavItemLink({
+  def,
+  className,
+  onClick,
+  children,
+}: {
+  def: NavItemDef;
+  className: (isActive: boolean) => string;
+  onClick: (() => void) | undefined;
+  children: ReactNode;
+}) {
+  const { pathname } = useLocation();
+  const active = isNavItemActive(def, pathname);
+  return (
+    <Link
+      to={def.to}
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={className(active)}
+    >
+      {children}
+    </Link>
+  );
+}
 
 /**
  * 通ってから中身を出す。
@@ -200,14 +186,15 @@ function AuthedShell() {
     pending > 0 && <Badge tone="warn">{pending}</Badge>
   );
 
-  // `NAV`（`end` を持つ自前の型）から `AppSidebarItem` へ写す。札は承認待ちにだけ付く。
-  const items: AppSidebarItem[] = NAV.map(({ to, label, icon }) => ({
-    to,
-    label,
-    icon,
-    ...(to === '/approvals' ? { badge: approvalsBadge } : {}),
+  // `NAV_ITEMS`（`~/lib/nav`）から `AppSidebarItem` へ写す。札は承認待ちにだけ付く。
+  const items: AppSidebarItem[] = NAV_ITEMS.map((def) => ({
+    to: def.to,
+    label: def.label,
+    icon: ICONS[def.to] ?? Activity,
+    ...(def.section === undefined ? {} : { section: def.section }),
+    ...(def.to === '/approvals' ? { badge: approvalsBadge } : {}),
   }));
-  const endByTo = new Map<string, boolean>(NAV.map((n) => [n.to, n.end]));
+  const defByTo = new Map(NAV_ITEMS.map((def) => [def.to, def]));
 
   /**
    * 行き先の一覧。**広い画面では脇に、狭い画面ではドロワーの中に、同じものを置く。**
@@ -222,16 +209,20 @@ function AuthedShell() {
       items={items}
       inDrawer={inDrawer}
       footer={<HealthFooter />}
-      renderLink={(item, slot) => (
-        <NavLink
-          to={item.to}
-          end={endByTo.get(item.to) ?? false}
-          onClick={inDrawer ? closeNav : undefined}
-          className={({ isActive }) => slot.className(isActive)}
-        >
-          {slot.children}
-        </NavLink>
-      )}
+      renderLink={(item, slot) => {
+        const def = defByTo.get(item.to);
+        // `items` は `NAV_ITEMS` から作っているので必ず在る（型のための確認）。
+        if (def === undefined) return null;
+        return (
+          <NavItemLink
+            def={def}
+            className={slot.className}
+            onClick={inDrawer ? closeNav : undefined}
+          >
+            {slot.children}
+          </NavItemLink>
+        );
+      }}
     />
   );
 

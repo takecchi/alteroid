@@ -18,7 +18,7 @@ const UNREADABLE_JOB_IDS_SHOWN = 20;
 
 /**
  * 読めない委譲が在ることを、一覧の上で断る（issue #2345。継続中の依頼の
- * `UnreadableScheduleNote` と同じ形。ダッシュボードのカードも使う）。**0件なら描かない**
+ * `UnreadableScheduleNote` と同じ形。ホームの地図の下も使う）。**0件なら描かない**
  * （0 の行を作らない）。
  *
  * id が取れない行は件数だけに数える。id の列挙には上限を置き、切ったら言う。

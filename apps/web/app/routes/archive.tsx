@@ -1,3 +1,4 @@
+import { JournalTabs } from '~/components/group-tabs';
 import { useState } from 'react';
 
 import {
@@ -45,7 +46,11 @@ import type { ArchiveEntry, ArchiveSessionSummary } from '@alteroid/logic';
  */
 export default function Archive() {
   return (
-    <Page title="アーカイブ" description="セッション生ログの退避。本文だけを消せる（行は残る）">
+    <Page
+      tabs={<JournalTabs />}
+      title="アーカイブ"
+      description="セッション生ログの退避。本文だけを消せる（行は残る）"
+    >
       <div className="flex flex-col gap-4">
         <SessionsSummary />
         <EntryList />

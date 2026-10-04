@@ -3,6 +3,7 @@
 // 版を知らない）と `unheard`（名乗りをまだ聞けていない）の区別が画面で消えると、
 // 人間は疑う先を取り違える。**ブラウザが読めるのは subpath の側だけである**
 // （`revision.ts` は焼き込んだ正典と zod を読むので初期チャンクへ入れられない）。
+import { SettingsTabs } from '~/components/group-tabs';
 import { describeRevisionStatus } from '@alteroid/core/revision';
 import { Fragment, useRef, useState } from 'react';
 
@@ -33,7 +34,7 @@ import type { RunnerPushOutcome, RunnerSummary } from '@alteroid/logic';
 
 export default function Settings() {
   return (
-    <Page title="設定" description="この画面がどのデーモンを見ているか">
+    <Page tabs={<SettingsTabs />} title="設定" description="この画面がどのデーモンを見ているか">
       <div className="flex flex-col gap-4">
         <ConnectionCard />
         <Account />

@@ -1,3 +1,4 @@
+import { WorkTabs } from '~/components/group-tabs';
 import { useMemo, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 
@@ -71,6 +72,7 @@ export default function ProgressPage() {
 
   return (
     <Page
+      tabs={<WorkTabs />}
       title="作業の進捗"
       description="積み上がっている仕事・実施中の委譲・窓の中で片付いた速度・見込み。読み取り専用。割合（分母が定まらない）は出さず、件数と時間だけを並べる"
     >

@@ -1,3 +1,4 @@
+import { JournalTabs } from '~/components/group-tabs';
 import { AlertTriangle, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -214,6 +215,7 @@ export default function Journal() {
 
   return (
     <Page
+      tabs={<JournalTabs />}
       title="日誌"
       description="聞かずに実行した判断・エスカレーション・ツール実行。追記専用で、あとから否定できる"
       scrollRef={scrollAreaRef}

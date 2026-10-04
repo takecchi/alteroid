@@ -1,3 +1,4 @@
+import { ScheduleTabs } from '~/components/group-tabs';
 import { AlertTriangle } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -81,6 +82,7 @@ import type {
 export default function Inbox() {
   return (
     <Page
+      tabs={<ScheduleTabs />}
       title="受信箱"
       description="まだ処理し終えていない合図（inbox_events）の未読を、絞り込んでまとめて消す。既定は試算——1件も消さない"
     >

@@ -1,3 +1,4 @@
+import { SettingsTabs } from '~/components/group-tabs';
 import { useState } from 'react';
 
 import {
@@ -42,6 +43,7 @@ import type { EnvVarScope, EnvVarView } from '@alteroid/logic';
 export default function EnvVars() {
   return (
     <Page
+      tabs={<SettingsTabs />}
       title="環境変数"
       description="alteroid 自身の運用設定・マネージャーへ降ろす環境変数。撒く先は共通/clone/manager から選べる"
     >

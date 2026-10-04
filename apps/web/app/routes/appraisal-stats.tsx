@@ -1,3 +1,4 @@
+import { WorkTabs } from '~/components/group-tabs';
 import { Page, Card, CardHeader, Empty, ErrorNote, Spinner } from '@alteroid/ui';
 import { useAppraisalStats, ApiError } from '@alteroid/swr';
 import { APPRAISAL_LABELS } from '@alteroid/logic';
@@ -45,6 +46,7 @@ export default function AppraisalStatsPage() {
 
   return (
     <Page
+      tabs={<WorkTabs />}
       title="評定の内訳"
       description="うまくいった／うまくいかなかった／判定できない／未評定の内訳。読み取り専用。台帳（未了の仕事）と委譲（マネージャー）を跨いで集計する"
     >
