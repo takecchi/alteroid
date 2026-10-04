@@ -324,7 +324,7 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
-層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は、クローン（`ALTEROID_CLONE_PROVIDER`）が `claude` だけ、マネージャー（`ALTEROID_MANAGER_PROVIDER`）が `claude` / `codex`** で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
+層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は、クローン（`ALTEROID_CLONE_PROVIDER`）が `claude` だけ、マネージャー（`ALTEROID_MANAGER_PROVIDER`）が `claude` / `codex`** で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。**クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る）。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
 
 | 変数                        | 値       |
 | --------------------------- | -------- |
