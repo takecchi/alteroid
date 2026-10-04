@@ -619,3 +619,43 @@ describe('CODEX_API_KEY の伏せ字（Issue #486 M7 段 S5。名前の規則は
     expect(redactErrorText(`using ${home}`, { CODEX_HOME: home })).toBe(`using ${home}`);
   });
 });
+
+// 値はすべて偽である。
+describe('redactSecretsInText / redactErrorText / 語の AUTHOR を AUTH として伏せない（issue #2633）', () => {
+  const text = 'clone fakeowner/alteroid by fakeowner@example.invalid';
+
+  it('GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL の値は伏せない', () => {
+    const env = {
+      GIT_AUTHOR_NAME: 'fakeowner',
+      GIT_AUTHOR_EMAIL: 'fakeowner@example.invalid',
+      GIT_AUTHOR_DATE: 'FAKEDATE-2633',
+    };
+    expect(redactErrorText(text, env)).toBe(text);
+    expect(redactSecretsInText(text, env)).toBe(text);
+  });
+
+  // 陰性対照: 今まで伏せていた名前は伏せたまま。
+  it.each([
+    'TOKEN',
+    'API_KEY',
+    'GITHUB_TOKEN',
+    'GH_TOKEN',
+    'AWS_SECRET_ACCESS_KEY',
+    'DB_PASSWORD',
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'AUTH',
+    'BASIC_AUTH',
+    'AUTHORIZATION',
+    'HTTP_AUTHORIZATION',
+    'X_AUTHORTOKEN',
+    'ALTEROID_AUTH',
+    'GIT_AUTHOR_TOKEN',
+    'ACCESSKEY',
+    'github_token',
+  ])('%s の値は引き続き伏せる', (name) => {
+    const value = 'FAKEVALUE2633xyz';
+    const env = { [name]: value };
+    expect(redactErrorText(`got ${value} here`, env)).toBe('got [REDACTED] here');
+    expect(redactSecretsInText(`got ${value} here`, env)).toBe('got [REDACTED] here');
+  });
+});

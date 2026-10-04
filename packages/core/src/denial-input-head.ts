@@ -87,6 +87,32 @@ const REDACTED = '[REDACTED]';
 const SECRET_ENV_NAME_PATTERN = /TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
 
 /**
+ * 環境変数の名前が、値を伏せる対象かどうか（#2633）。
+ *
+ * {@link SECRET_ENV_NAME_PATTERN} は部分文字列で当てるので、`AUTH` が
+ * `GIT_AUTHOR_NAME`（値はオーナー名）にも当たり、本文の `owner/repo` の
+ * `owner` まで `[REDACTED]` に化けた（伏せすぎ）。そこで、英数字以外
+ * （`_` `-` `.` など）で区切った**語として丸ごと** `AUTHOR` / `AUTHORS` の
+ * 部分だけを名前から取り除いてから、同じパターンを当てる。
+ * `GIT_AUTHOR_TOKEN` は `TOKEN` が残るので伏せたままである。
+ *
+ * **除くのは語の `AUTHOR(S)` だけである。** `AUTHORIZATION` / `BASIC_AUTH` /
+ * `X_AUTHORTOKEN` などは語が `AUTHOR` そのものではないので、今までどおり伏せる。
+ * パターン側を語単位の一致へ切り替えたり語を減らしたりしないのは、
+ * `ACCESSKEY` のような区切りの無い名前が外れて伏せ漏れになるから（#1834）。
+ * 伏せ漏れを作るより伏せすぎのほうが安全なので、除外は最小に留めている。
+ * 本文中の `NAME=value` の字面の規則（`SECRET_ASSIGNMENT_NAME`）には
+ * 同じ除外を掛けていない（範囲外。伏せる側に倒れたまま）。
+ */
+function isSecretEnvName(name: string): boolean {
+  const withoutAuthorWords = name
+    .split(/[^A-Za-z0-9]+/)
+    .filter((word) => !/^authors?$/i.test(word))
+    .join('_');
+  return SECRET_ENV_NAME_PATTERN.test(withoutAuthorWords);
+}
+
+/**
  * これ未満の長さの値は置換の対象にしない。
  *
  * {@link redactEnvSecrets}（`redact-env-secrets.ts`）自体は値の長さに下限を持たない
@@ -109,7 +135,7 @@ function redactSecretEnvValues(text: string, env: NodeJS.ProcessEnv | undefined)
   if (env === undefined) return text;
   const candidates: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
-    if (!SECRET_ENV_NAME_PATTERN.test(name)) continue;
+    if (!isSecretEnvName(name)) continue;
     if (typeof value !== 'string' || value.length < SECRET_ENV_VALUE_MIN_LENGTH) continue;
     candidates[name] = value;
   }
