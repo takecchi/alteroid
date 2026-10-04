@@ -256,3 +256,14 @@ describe('マネージャー', () => {
     expect(scene.managers.map((m) => m.id)).toEqual(['zzzzzzzz1', 'aaaaaaaa1']);
   });
 });
+
+describe('unreadable（#2705）', () => {
+  it('1件以上のときだけ unreadableCount を載せ、無ければ鍵ごと無い', () => {
+    const counted = topologySceneFromSnapshot(
+      snapshot({ unreadable: [{ reason: 'a' }, { id: 'b', reason: 'c' }] }),
+      NOW,
+    );
+    expect(counted.unreadableCount).toBe(2);
+    expect('unreadableCount' in topologySceneFromSnapshot(snapshot({}), NOW)).toBe(false);
+  });
+});
