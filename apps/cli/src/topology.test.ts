@@ -117,6 +117,26 @@ describe('renderTopology', () => {
     expect(out).toContain('ほか 4 本は文字数の予算で省略');
   });
 
+  it('読めなかった委譲の行が在るときは件数と id を言い、マネージャーが0本でも「居ない」で終わらせない（#2705）', () => {
+    const out = renderTopology(
+      view({
+        managers: [],
+        unreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }, { reason: '不正な欄: id' }],
+      }) as never,
+      NOW,
+    );
+    expect(out).toContain('台帳から読めなかった委譲の行が 2 件ある');
+    expect(out).toContain('mgr-bad: 不正な欄: status');
+    expect(out).toContain('（id 不明）: 不正な欄: id');
+  });
+
+  it('読めない行が0件（欄が無い）なら、出力は変わらない（#2705）', () => {
+    const base = renderTopology(view() as never, NOW);
+    expect(base).not.toContain('読めなかった');
+    // 空配列が来ても（来ない契約だが）警告は出さない
+    expect(renderTopology(view({ unreadable: [] }) as never, NOW)).toBe(base);
+  });
+
   it('自由文（依頼・返事待ち）に混じったトークンは伏せる', () => {
     const token = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
     const base = view();
@@ -193,6 +213,18 @@ describe('topologyCommand', () => {
     const read = captureStdout();
     await topologyCommand({ json: true });
     expect(JSON.parse(read())).toEqual(view());
+  });
+
+  it('--json は unreadable も載せたまま出し、tree 出力にも警告が出る（#2705）', async () => {
+    const withBad = view({ unreadable: [{ id: 'mgr-bad', reason: '不正な欄: status' }] });
+    reply = { status: 200, body: withBad };
+    const json = captureStdout();
+    await topologyCommand({ json: true });
+    expect(JSON.parse(json())).toEqual(withBad);
+    vi.restoreAllMocks();
+    const tree = captureStdout();
+    await topologyCommand();
+    expect(tree()).toContain('台帳から読めなかった委譲の行が 1 件ある');
   });
 
   it('失敗は握り潰さず、理由つきの例外で上へ通す（認証は案内）', async () => {

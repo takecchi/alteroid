@@ -1687,6 +1687,18 @@ export const topologyResponseSchema = z.object({
   managers: z.array(topologyManagerSchema),
   /** 文字数の予算で切った分の件数（切っていなければ無い）。 */
   managersOmitted: z.number().int().nonnegative().optional(),
+  /**
+   * 台帳から読めなかった委譲の行（issue #2705）。**`managers` が空でも「走っているマネージャーは
+   * 居ない」とは限らない**——壊れた行は `managers` に数えられない（`ManagerPool.list()` は
+   * 読めない行を飛ばす）ので、それを別に言う第3の状態。
+   *
+   * 形・意味・載せ方は `GET /managers` の `unreadable`（`managersListResponseSchema`）と
+   * 同じ（`JobStore.listUnreadableJobs()` をそのまま外へ出す。id と不正な欄名だけで、本文は
+   * 載せない）。**1件でも在るときだけ載る**（0件なら鍵が無い。空配列は「読めない行は無い」と
+   * 読めてしまう）。件数は `unreadable.length`。地図の文字数の予算では切らない
+   * （`managersOmitted` の対象は読めた行だけ）。`GET /topology/stream` の `snapshot` にも載る。
+   */
+  unreadable: z.array(unreadableJobSchema).optional(),
   links: z.array(topologyLinkSchema),
 });
 

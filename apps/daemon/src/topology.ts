@@ -3,6 +3,7 @@ import {
   type CloneHost,
   type ManagerSummary,
   type RunnerRegistry,
+  type UnreadableJob,
 } from '@alteroid/core';
 import type { z } from 'zod';
 
@@ -111,6 +112,11 @@ export interface TopologyInputs {
   storage: StorageHealth;
   runners: readonly { label: string; runnerId?: string; state: string; since: string }[];
   managers: readonly ManagerSummary[];
+  /**
+   * 台帳から読めなかった委譲の行（`JobStore.listUnreadableJobs()`。`GET /managers` の
+   * `unreadable` と同じ材料。issue #2705）。省略 = 読んでいない（0件と同じく鍵を載せない）。
+   */
+  unreadable?: readonly UnreadableJob[];
   activity: TopologyActivityTracker;
 }
 
@@ -168,6 +174,10 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
     })),
     managers,
     ...(managersOmitted > 0 ? { managersOmitted } : {}),
+    // 1件でも在るときだけ載せる（0件で空配列を作ると「読めない行は無い」と読める）。
+    ...(input.unreadable !== undefined && input.unreadable.length > 0
+      ? { unreadable: [...input.unreadable] }
+      : {}),
     links,
   };
 }
@@ -280,6 +290,12 @@ export interface TopologyServiceDeps {
     managers: { list(): Promise<ManagerSummary[]> };
   };
   runners?: Pick<RunnerRegistry, 'entries'>;
+  /**
+   * 読めなかった委譲の行を読む口（`stores.jobs.listUnreadableJobs`）。`ManagerPool.list()` は
+   * 読めない行を飛ばすので、`managers` とは別に台帳から引く（`GET /managers` と同じ）。
+   * 未配線なら載せない。
+   */
+  unreadableJobs?: () => Promise<UnreadableJob[]>;
   activity: TopologyActivityTracker;
   storage: StorageHealthTracker;
   now?: () => number;
@@ -305,6 +321,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
   async function build(): Promise<TopologySnapshot> {
     const nowMs = now();
     const managers = await deps.clone.managers.list();
+    const unreadable = deps.unreadableJobs === undefined ? [] : await deps.unreadableJobs();
     const value = buildTopologySnapshot({
       nowMs,
       // 実装していない器は `undefined`（= 分からない）。`null`（走っていない）と区別する。
@@ -313,6 +330,7 @@ export function createTopologyService(deps: TopologyServiceDeps): TopologyServic
       storage: deps.storage.current(),
       runners: deps.runners === undefined ? [] : deps.runners.entries(),
       managers,
+      unreadable,
       activity: deps.activity,
     });
     cached = { at: nowMs, value };

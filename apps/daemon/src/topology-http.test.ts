@@ -29,9 +29,19 @@ function runningManager(id: string): ManagerSummary {
 }
 
 function setup(
-  options: { journal?: boolean; managers?: ManagerSummary[]; clone?: Partial<CloneHost> } = {},
+  options: {
+    journal?: boolean;
+    managers?: ManagerSummary[];
+    clone?: Partial<CloneHost>;
+    /** 台帳から読めなかった委譲の行（`JobStore.listUnreadableJobs()` の返り値）。 */
+    unreadable?: { id?: string; reason: string }[];
+  } = {},
 ) {
   const stores = createMemoryStores();
+  if (options.unreadable !== undefined) {
+    const rows = options.unreadable;
+    stores.jobs = { ...stores.jobs, listUnreadableJobs: async () => rows };
+  }
   const bus = createJournalBus(stores.journal);
   const app = createApp({
     clone: fakeCloneFor(options.managers ?? [], options.clone),
@@ -145,6 +155,18 @@ describe('GET /topology', () => {
     expect(body.links.find((l) => l.key === 'clone~manager:m1')?.lastUpAt).toBeUndefined();
   });
 
+  it('台帳に読めない委譲の行が在れば、managers が空でも unreadable が載る。無ければ鍵ごと無い（#2705）', async () => {
+    const rows = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
+    const broken = setup({ managers: [], unreadable: rows });
+    const body = topologyResponseSchema.parse(await (await broken.app.request('/topology')).json());
+    expect(body.managers).toEqual([]);
+    expect(body.unreadable).toEqual(rows);
+
+    const healthy = setup({ managers: [] });
+    const raw = (await (await healthy.app.request('/topology')).json()) as Record<string, unknown>;
+    expect('unreadable' in raw).toBe(false);
+  });
+
   it('日誌の流れが配線されていなくても応える（線は空）', async () => {
     const { app } = setup({ journal: false, managers: [runningManager('m1')] });
     const body = topologyResponseSchema.parse(await (await app.request('/topology')).json());
@@ -199,6 +221,16 @@ describe('GET /topology/stream', () => {
     expect(topologyResponseSchema.parse(stream.snapshots[1]).links.map((l) => l.key)).toEqual([
       'human~clone',
     ]);
+    await stream.close();
+  });
+
+  it('スナップショットにも unreadable が載る（#2705）', async () => {
+    const rows = [{ id: 'mgr-bad', reason: '不正な欄: status' }];
+    const { app } = setup({ unreadable: rows });
+    const stream = openStream(await app.request('/topology/stream'));
+    await stream.advance(1);
+    expect(stream.snapshots).toHaveLength(1);
+    expect(topologyResponseSchema.parse(stream.snapshots[0]).unreadable).toEqual(rows);
     await stream.close();
   });
 

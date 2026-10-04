@@ -249,6 +249,41 @@ describe('createStorageHealthTracker', () => {
   });
 });
 
+describe('読めなかった委譲の行（#2705）', () => {
+  const bad = [{ id: 'mgr-bad', reason: '不正な欄: status' }, { reason: '不正な欄: id' }];
+
+  it('壊れた行が在れば、managers が空でも件数ぶん載る（スキーマも通る）', () => {
+    const snapshot = buildTopologySnapshot(inputs({ managers: [], unreadable: bad }));
+    expect(snapshot.managers).toEqual([]);
+    expect(snapshot.unreadable).toEqual(bad);
+    expect(topologyResponseSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it('無い・0件・未配線なら鍵ごと載らない（0件を空配列で作らない）', () => {
+    expect('unreadable' in buildTopologySnapshot(inputs())).toBe(false);
+    expect('unreadable' in buildTopologySnapshot(inputs({ unreadable: [] }))).toBe(false);
+  });
+
+  it('内容の指紋に入る（件数が変われば stream が再送する）', () => {
+    expect(topologySignature(buildTopologySnapshot(inputs({ unreadable: bad })))).not.toBe(
+      topologySignature(buildTopologySnapshot(inputs())),
+    );
+  });
+
+  it('サービスは unreadableJobs の口から読んで載せる。0件なら載せない', async () => {
+    const make = (rows: typeof bad) =>
+      createTopologyService({
+        clone: { usageBlocked: false, managers: { list: async () => [] } },
+        unreadableJobs: async () => rows,
+        activity: createTopologyActivityTracker(),
+        storage: { current: () => ({ state: 'unknown' }) },
+        now: () => NOW,
+      });
+    expect((await make(bad).snapshot()).unreadable).toEqual(bad);
+    expect('unreadable' in (await make([]).snapshot())).toBe(false);
+  });
+});
+
 describe('createTopologyService', () => {
   function service(list: () => Promise<ManagerSummary[]>, now: () => number) {
     return createTopologyService({

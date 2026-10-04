@@ -1841,6 +1841,7 @@ export function createApp(deps: AppDeps) {
   const topology = createTopologyService({
     clone,
     ...(deps.runners === undefined ? {} : { runners: deps.runners }),
+    unreadableJobs: () => stores.jobs.listUnreadableJobs(),
     activity: topologyActivity,
     storage: topologyStorage,
   });
@@ -2895,7 +2896,10 @@ export function createApp(deps: AppDeps) {
           '走行中・返事待ち・直近10分以内に終わった委譲を、抜粋と文字数の予算で締めて返す' +
           '（全文は `GET /managers/{id}`）。`unknown` は「分からない」であって `ok`/`idle` ではない。' +
           '線は `lastDownAt`（指示・書き込み）/ `lastUpAt`（報告・確認・読み出し）/ ' +
-          '`lastActivityAt`（作業者の道具実行）の時刻だけ。作業者は `managerId` × `agentType` で束ねる。',
+          '`lastActivityAt`（作業者の道具実行）の時刻だけ。作業者は `managerId` × `agentType` で束ねる。' +
+          '台帳の行が読めない（版ずれ・手編集）委譲が在るときだけ、`unreadable`（`GET /managers` の ' +
+          '`unreadable` と同じ形。issue #2705）を載せる——`managers` が空でも「居ない」とは限らない。' +
+          '0件なら鍵ごと無い。',
         responses: {
           200: {
             description: '稼働の地図。',

@@ -2137,7 +2137,7 @@
         "operationId": "getTopology",
         "tags": ["topology"],
         "summary": "稼働の地図（クローン・記憶・runner・マネージャー・作業者と、線の最後の活動）",
-        "description": "走行中・返事待ち・直近10分以内に終わった委譲を、抜粋と文字数の予算で締めて返す（全文は `GET /managers/{id}`）。`unknown` は「分からない」であって `ok`/`idle` ではない。線は `lastDownAt`（指示・書き込み）/ `lastUpAt`（報告・確認・読み出し）/ `lastActivityAt`（作業者の道具実行）の時刻だけ。作業者は `managerId` × `agentType` で束ねる。",
+        "description": "走行中・返事待ち・直近10分以内に終わった委譲を、抜粋と文字数の予算で締めて返す（全文は `GET /managers/{id}`）。`unknown` は「分からない」であって `ok`/`idle` ではない。線は `lastDownAt`（指示・書き込み）/ `lastUpAt`（報告・確認・読み出し）/ `lastActivityAt`（作業者の道具実行）の時刻だけ。作業者は `managerId` × `agentType` で束ねる。台帳の行が読めない（版ずれ・手編集）委譲が在るときだけ、`unreadable`（`GET /managers` の `unreadable` と同じ形。issue #2705）を載せる——`managers` が空でも「居ない」とは限らない。0件なら鍵ごと無い。",
         "responses": {
           "200": {
             "description": "稼働の地図。",
@@ -2335,6 +2335,21 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
+                      }
                     },
                     "links": {
                       "type": "array",
@@ -2575,6 +2590,21 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "unreadable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["reason"]
+                      }
                     },
                     "links": {
                       "type": "array",

@@ -38,6 +38,8 @@ export interface TopologyView {
     workers: { agentType: string; lastTool?: string; lastToolAt?: string }[];
   }[];
   managersOmitted?: number;
+  /** 台帳から読めなかった委譲の行（1件以上のときだけ載る。`GET /managers` の `unreadable` と同じ形）。 */
+  unreadable?: { id?: string; reason: string }[];
   links: { key: string; lastDownAt?: string; lastUpAt?: string; lastActivityAt?: string }[];
 }
 
@@ -166,6 +168,18 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
         `      …ほか ${String(view.managersOmitted)} 本は文字数の予算で省略（全件は GET /managers）`,
       );
     }
+  }
+
+  // 読めなかった行が在るときだけ言う（0件なら出力を変えない）。「居ない」と読ませない。
+  if (view.unreadable !== undefined && view.unreadable.length > 0) {
+    lines.push(
+      '',
+      `⚠️ 台帳から読めなかった委譲の行が ${String(view.unreadable.length)} 件ある。上の一覧には数えていない（「居ない」とは限らない）。`,
+    );
+    for (const row of view.unreadable) {
+      lines.push(`    ${row.id ?? '（id 不明）'}: ${redactError(row.reason)}`);
+    }
+    lines.push('    詳細は GET /managers の unreadable');
   }
 
   lines.push(
