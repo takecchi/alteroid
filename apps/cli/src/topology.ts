@@ -42,7 +42,13 @@ export interface TopologyView {
       breakdown: string;
       since: string;
     };
-    workers: { agentType: string; lastTool?: string; lastToolAt?: string }[];
+    workers: {
+      agentType: string;
+      lastTool?: string;
+      lastToolAt?: string;
+      /** いま実行中の道具（未決のうち最も古いもの。無いときは鍵が無い。#2725）。 */
+      runningTool?: { tool: string; startedAt: string };
+    }[];
   }[];
   managersOmitted?: number;
   /** 台帳から読めなかった委譲の行（1件以上のときだけ載る。`GET /managers` の `unreadable` と同じ形）。 */
@@ -167,6 +173,12 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
             ? '道具の実行はまだ観測していない'
             : `最後の道具 ${worker.lastTool}（${formatAge(worker.lastToolAt, now)}）`;
         lines.push(`        作業者 ${worker.agentType}（種類ごとに束ねた1行）: ${tool}`);
+        // 欄が無いときは行ごと出さない（出力は今までのまま）。
+        if (worker.runningTool !== undefined) {
+          lines.push(
+            `          実行中の道具 ${worker.runningTool.tool}（開始 ${formatAge(worker.runningTool.startedAt, now)}）`,
+          );
+        }
         lines.push(
           `          ${renderLink(
             linkOf(`manager:${manager.managerId}~worker:${worker.agentType}`),

@@ -79,6 +79,34 @@ describe('renderTopology', () => {
     expect(out).toContain('runner r1 [connected]');
   });
 
+  it('実行中の道具が在る作業者は、その道具と開始からの経過を出す。欄が無ければ出力は変わらない（#2725）', () => {
+    const base = view();
+    const without = renderTopology(base as never, NOW);
+    expect(without).not.toContain('実行中の道具');
+
+    const manager = base.managers[0]!;
+    const withRunning = view({
+      managers: [
+        {
+          ...manager,
+          workers: [
+            {
+              agentType: 'worker',
+              lastTool: 'Edit',
+              lastToolAt: ago(4),
+              runningTool: { tool: 'Bash', startedAt: ago(180) },
+            },
+          ],
+        },
+      ],
+    });
+    const out = renderTopology(withRunning as never, NOW);
+    expect(out).toContain('実行中の道具 Bash（開始 3m ago）');
+    // 既存の行はそのまま。
+    expect(out).toContain('作業者 worker（種類ごとに束ねた1行）: 最後の道具 Edit（4s ago）');
+    expect(out.replace(/ *実行中の道具 Bash（開始 3m ago）\n/, '')).toBe(without);
+  });
+
   it('分からない軸は unknown のまま出し、idle / ok に化けさせない', () => {
     const out = renderTopology(
       view({
