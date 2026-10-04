@@ -4,12 +4,13 @@ import { useMinWidth } from '~/lib/use-min-width';
 
 import { AwaitingYou } from './dashboard-awaiting';
 import { LiveMap } from './dashboard-map';
+import { LatestReport } from './dashboard-report';
 import { HomeTiles } from './dashboard-tiles';
 
 /**
  * 横に並べ始める幅（Tailwind の `xl`）。**サイドバーが出る `md`（768px）や `lg`（1024px）では
  * 並べない**: サイドバーを引いた本体は 1024px の画面で 770px ほどしか無く、地図と一覧を
- * 並べると両方が窮屈になる。`HomeTiles` が4列になる幅（`xl:grid-cols-4`）と同じ境目にして
+ * 並べると両方が窮屈になる。`HomeTiles` が3列になる幅（`xl:grid-cols-3`）と同じ境目にして
  * あり、「ホームが広い配置になる幅」は1つに揃う。
  */
 const SIDE_BY_SIDE_MIN_WIDTH = 1280;
@@ -21,7 +22,10 @@ const SIDE_BY_SIDE_MIN_WIDTH = 1280;
  *    - 広い画面（`xl` 以上）: **地図が左・一覧が右の横並び**。地図は横幅を使う部品なので広く
  *      （3:2）、一覧は承認の質問を2行で畳む行なので 2 で足りる
  *    - それより狭い画面: 縦積みで **承認待ち一覧が上**（人間が手を動かすものを先に）
- * 2. **小さなカード** —— 最新の日報・作業の進捗・次の自動実行・今日の利用。各ページへの入口
+ * 2. **最新の日報**（`dashboard-report.tsx`）—— 全幅の枠で、本文を Markdown で読ませる。
+ *    主役のひとつだが、地図・承認待ちの下に置く（それらは「いま」の状態、日報は読み物。上の段の
+ *    横並び・縦積みの方針を崩さず、どの幅でも全幅の1段として足せる）
+ * 3. **小さなカード** —— 作業の進捗・次の自動実行・今日の利用。各ページへの入口
  *    （`dashboard-tiles.tsx`）
  *
  * **並びの入れ替えは DOM の順ごと JS で替える**（`useMinWidth`）。CSS の `order-*` だけで
@@ -63,6 +67,7 @@ export default function Dashboard() {
             <LiveMap />
           </div>
         )}
+        <LatestReport />
         <HomeTiles />
       </div>
     </Page>

@@ -5,9 +5,8 @@
  * 旧ダッシュボードのテストから引き継いだ保証（どこへ移ったか）:
  * - 「今日の利用」の嘘をつかない規約・「詳しく見る」の行き先・デーモンの暦の今日・読めずに外した行
  *   → 「今日の利用」カードの describe 群（中身は同じ）
- * - 「最新の日報」: 印の付いた行を日報として描かない → 同じ。**本文は Markdown ではなく平文の抜粋に
- *   なった**ので、「Markdown の描画経路を通る」の1本は「記法の記号を落とした抜粋を出す・全文へ
- *   リンクする」に置き換えた
+ * - 「最新の日報」: 印の付いた行を日報として描かない → 同じ。**全幅の枠で本文を Markdown として描く**
+ *   ようになった（`dashboard-report.tsx`）
  * - 承認待ちの打ち切り・「答える」を読めていないときに出さない → 「あなたを待っている」の describe
  * - 「次の自動実行」の出口・読めないとき・読めない継続中の依頼 → 同じ
  * - 「稼働中のマネージャー」カードと「いま届いている出来事」は**ホームから外した**。前者の
@@ -286,21 +285,26 @@ describe('「最新の日報」', () => {
     ...extra,
   });
 
-  it('本文は記法の記号を落とした平文の抜粋で出て、全文（その日報）へリンクする', async () => {
+  it('本文は Markdown として描かれ（見出し・強調）、全文（その日報）へリンクする', async () => {
     renderHome({ reports: [report({ body: '## 今日やったこと\n\n- **進捗**があった。' })] });
 
-    // 見出し記法・強調の記号は出ない（Markdown の見出し要素にもしない）。
-    expect(await screen.findByText('今日やったこと 進捗があった。')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: '今日やったこと' })).toBeNull();
-    const link = screen.getByRole('link', { name: '全文を読む' });
+    expect(await screen.findByRole('heading', { name: '今日やったこと' })).toBeTruthy();
+    expect(screen.getByText('進捗').tagName).toBe('STRONG');
+    const link = screen.getByRole('link', { name: '続きを読む（全文）' });
     expect(link.getAttribute('href')).toBe('/reports/2026-08-14/r1');
+    expect(screen.getByRole('link', { name: '日報一覧' }).getAttribute('href')).toBe('/reports');
   });
 
-  it('長い本文は … で切ったと分かる形で切る（全文は日報のページ）', async () => {
-    renderHome({ reports: [report({ body: 'あ'.repeat(400) })] });
+  it('長い本文でも、本文の枠は高さで切られ（overflow-hidden・max-h）、全文へのリンクが残る', async () => {
+    const body = Array.from({ length: 80 }, (_, i) => `段落 ${i}`).join('\n\n');
+    renderHome({ reports: [report({ body })] });
 
-    const excerpt = await screen.findByText(/^あ+…$/);
-    expect(excerpt.textContent!.length).toBeLessThan(200);
+    await screen.findByText('段落 0');
+    const frame = document.querySelector('[data-slot="home-report-body"]')!;
+    expect(frame.className).toContain('overflow-hidden');
+    expect(frame.className).toContain('max-h-96');
+    expect(frame.className).toContain('min-w-0');
+    expect(screen.getByRole('link', { name: '続きを読む（全文）' })).toBeTruthy();
   });
 
   it('本文の秘密は描画の直前に伏せる（偽のトークン。40桁の sha は残す）', async () => {
@@ -329,7 +333,8 @@ describe('「最新の日報」', () => {
 
     expect(await screen.findByText('この日の日報は作れなかった')).toBeTruthy();
     expect(screen.getByText(reason)).toBeTruthy();
-    // 抜粋としても出ない（日報の抜粋の `<p>` が無い）。
+    // 本文としても出ない（Markdown の描画を通らない）。
+    expect(screen.queryByRole('link', { name: '続きを読む（全文）' })).toBeNull();
     expect(screen.queryByText(`## ${reason}`)).toBeNull();
     expect(screen.queryByRole('heading', { name: reason })).toBeNull();
   });

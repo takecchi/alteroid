@@ -1,5 +1,5 @@
 import { formatUsd, summarizeUsage, usageDate } from '@alteroid/core/usage';
-import { BookText, CalendarClock, Coins, Hourglass } from 'lucide-react';
+import { CalendarClock, Coins, Hourglass } from 'lucide-react';
 import { Link } from 'react-router';
 
 import {
@@ -11,24 +11,11 @@ import {
   Spinner,
   Stat,
 } from '@alteroid/ui';
-import { useProgress, useReports, useSchedule, useUsage } from '@alteroid/swr';
-import {
-  formatRelative,
-  redactBody,
-  reportExcerpt,
-  usageHref,
-  type Progress,
-} from '@alteroid/logic';
+import { useProgress, useSchedule, useUsage } from '@alteroid/swr';
+import { formatRelative, usageHref, type Progress } from '@alteroid/logic';
 
 import { UnreadableScheduleNote } from './schedule';
 import { UnreadableUsageRowsNote } from './usage';
-// **表示の正本は `reports.tsx` の側に置く。** 日報の面が2つ（ここと `/reports`）
-// あるので、判定と文言を書き写すと片方だけが古びる（本文がエラー文のまま出る側が
-// 静かに残る）。
-import { isUnavailable, UnavailableNote } from './reports';
-
-/** 日報の抜粋の長さ。全文は `/reports` が持つ（切ったら `…` が付く）。 */
-const REPORT_EXCERPT_LIMIT = 160;
 
 /**
  * 「今日の利用」を引く窓の片側の日数（issue #2268）。
@@ -45,65 +32,14 @@ function shiftedDate(base: Date, days: number): string {
   return usageDate(new Date(base.getFullYear(), base.getMonth(), base.getDate() + days));
 }
 
-/** 小さなカードの4枚。各ページへの入口で、数字は1〜2個だけ置く。 */
+/** 小さなカードの3枚（最新の日報は `dashboard-report.tsx` の全幅の枠）。各ページへの入口で、数字は1〜2個だけ置く。 */
 export function HomeTiles() {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <LatestReportTile />
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <ProgressTile />
       <NextRunTile />
       <UsageTile />
     </div>
-  );
-}
-
-/**
- * 最新の日報。**本文は平文の抜粋**（一覧の1行は Markdown 化の対象外。`reportExcerpt`）。
- * 全文は `/reports`。
- *
- * **印の付いた行（日報が書けなかった日）を日報として描かない**（`reports.tsx` の
- * `isUnavailable` / `UnavailableNote` の doc が経緯）。ここは人間が最初に開く面なので、
- * エラー文が「最新の日報」として出ると、塞いだ穴のうち人間に見える側だけが残る。
- */
-function LatestReportTile() {
-  const reports = useReports(1);
-  const latest = reports.data?.reports[0];
-  return (
-    <HomeTile
-      icon={BookText}
-      title="最新の日報"
-      action={
-        <Link
-          to={
-            latest === undefined
-              ? '/reports'
-              : `/reports/${latest.date}/${encodeURIComponent(latest.id)}`
-          }
-          className={HOME_LINK_CLASS}
-        >
-          全文を読む
-        </Link>
-      }
-    >
-      {reports.error !== undefined ? (
-        <ErrorNote error={reports.error} />
-      ) : reports.isLoading ? (
-        <Spinner />
-      ) : latest === undefined ? (
-        <p className="text-sm text-muted-foreground">
-          まだ日報がない。締め時刻を待つか、スケジュールから今すぐ回せる。
-        </p>
-      ) : isUnavailable(latest) ? (
-        <UnavailableNote reason={latest.unavailable} />
-      ) : (
-        <>
-          <p className="text-xs text-muted-foreground">{latest.date}</p>
-          <p className="mt-1 line-clamp-4 text-sm break-words">
-            {redactBody(reportExcerpt(latest.body, REPORT_EXCERPT_LIMIT))}
-          </p>
-        </>
-      )}
-    </HomeTile>
   );
 }
 

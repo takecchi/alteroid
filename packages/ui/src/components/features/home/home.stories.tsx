@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import { BookText, CalendarClock, Coins, Hourglass } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+import { Markdown } from '../../markdown';
 import { Page } from '../../page';
 import { Stat } from '../stat';
 import { busyScene, idleScene, unknownScene } from '../topology/samples';
@@ -14,6 +15,7 @@ import {
   HOME_LINK_CLASS,
   type HomeRenderLink,
 } from './awaiting-you';
+import { HomeReportCard } from './home-report-card';
 import { HomeTile, HomeTileNote } from './home-tile';
 import { LiveMapCard, type LiveMapConnection } from './live-map-card';
 
@@ -31,6 +33,23 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
+
+const REPORT_BODY = `## 今日やったこと
+
+- 稼働の地図の API を足した。**持ち越し**は SSE の再接続の試験。
+- ホームの配置を、広い画面では地図と承認待ちの横並びにした。
+
+## 明日やること
+
+1. 再接続の試験を書く
+2. 日報の表示を大きくした件の見た目を確かめる
+
+> 承認待ちは 2 件。どちらも朝のうちに答えが要る。`;
+
+const LONG_REPORT_BODY = Array.from(
+  { length: 12 },
+  (_, i) => `## 項目 ${i + 1}\n\n${'長い日報の本文。'.repeat(14)}`,
+).join('\n\n');
 
 const renderLink: HomeRenderLink = ({ className, children }) => (
   <a href="#" onClick={(e) => e.preventDefault()} className={className}>
@@ -66,19 +85,28 @@ function Awaiting() {
   );
 }
 
+/** 最新の日報。全幅の枠で、長い本文は高さで切って「続きを読む」へ送る。 */
+function ReportCard({ long }: { long?: boolean }) {
+  return (
+    <HomeReportCard
+      icon={BookText}
+      title="最新の日報"
+      meta="2026-10-03"
+      action={link('日報一覧')}
+      footer={link('続きを読む（全文）')}
+    >
+      <Markdown>{long ? LONG_REPORT_BODY : REPORT_BODY}</Markdown>
+    </HomeReportCard>
+  );
+}
+
 function Tiles({ narrow }: { narrow?: boolean }) {
   return (
     <div
       className={
-        narrow ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4'
+        narrow ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3'
       }
     >
-      <HomeTile icon={BookText} title="最新の日報" action={link('開く')}>
-        <p className="text-xs text-muted-foreground">10/03</p>
-        <p className="mt-1 line-clamp-4 text-sm">
-          今日やったこと 稼働の地図の API を足した。持ち越しは SSE の再接続の試験。
-        </p>
-      </HomeTile>
       <HomeTile icon={Hourglass} title="作業の進捗" action={link('詳しく')}>
         <Stat label="実行中の委譲" value="3" unit="件" hint="未了の仕事 5 件・7日で 12 件閉じた" />
       </HomeTile>
@@ -99,6 +127,8 @@ function Home({
   connection = 'live',
   unavailable,
   narrow = false,
+  wide = false,
+  longReport = false,
   footer,
 }: {
   calm: boolean;
@@ -106,26 +136,40 @@ function Home({
   connection?: LiveMapConnection;
   unavailable?: string;
   narrow?: boolean;
+  /** 広い画面の配置（地図が左・承認待ちが右）。 */
+  wide?: boolean;
+  longReport?: boolean;
   footer?: ReactNode;
 }) {
+  const mapCard = (
+    <LiveMapCard
+      scene={map}
+      connection={connection}
+      unavailable={unavailable}
+      staleAt={connection === 'offline' || unavailable !== undefined ? '10/04 07:52' : undefined}
+      action={link('マネージャー一覧')}
+      layout={narrow ? 'narrow' : 'auto'}
+      omittedNote={footer}
+    />
+  );
   return (
     <Page
       title="ホーム"
       description="いま動いているか、何をしているか、あなたを待っているものは何か"
     >
       <div className="flex flex-col gap-4">
-        {calm ? <AwaitingYouCalm /> : <Awaiting />}
-        <LiveMapCard
-          scene={map}
-          connection={connection}
-          unavailable={unavailable}
-          staleAt={
-            connection === 'offline' || unavailable !== undefined ? '10/04 07:52' : undefined
+        <div
+          className={
+            wide
+              ? 'grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start gap-4'
+              : 'flex min-w-0 flex-col gap-4'
           }
-          action={link('マネージャー一覧')}
-          layout={narrow ? 'narrow' : 'auto'}
-          omittedNote={footer}
-        />
+        >
+          {wide ? mapCard : null}
+          {calm ? <AwaitingYouCalm /> : <Awaiting />}
+          {wide ? null : mapCard}
+        </div>
+        <ReportCard long={longReport} />
         <Tiles narrow={narrow} />
       </div>
     </Page>
@@ -138,8 +182,26 @@ const frame = (children: ReactNode, height = 960) => (
   </div>
 );
 
-/** 承認待ちがあり、マネージャーが走っている。 */
-export const Desktop: Story = { render: () => frame(<Home calm={false} map={busyScene} />) };
+/** 広い画面（xl 以上）。地図が左・承認待ちが右の横並び。承認待ちがあり、マネージャーが走っている。 */
+export const Desktop: Story = {
+  render: () => frame(<Home calm={false} map={busyScene} wide />),
+};
+
+/** タブレット幅。縦積みで承認待ちが上。 */
+export const Tablet: Story = {
+  render: () => (
+    <div className="mx-auto flex h-[1500px] w-[900px] bg-background">
+      <main className="flex min-w-0 flex-1 flex-col">
+        <Home calm={false} map={busyScene} />
+      </main>
+    </div>
+  ),
+};
+
+/** 本文が長い日報。枠の高さで切れ、下端が薄れ、「続きを読む」が残る。 */
+export const LongReport: Story = {
+  render: () => frame(<Home calm map={idleScene} wide longReport />, 1100),
+};
 
 /** 何も待っていない・何も走っていない。「待っている」の段は1行に畳まれる。 */
 export const Calm: Story = { render: () => frame(<Home calm map={idleScene} />, 860) };
