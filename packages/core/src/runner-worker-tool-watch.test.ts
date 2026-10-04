@@ -5,7 +5,7 @@ import type {
   SDKMessage,
   query as sdkQuery,
 } from '@anthropic-ai/claude-agent-sdk';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 
@@ -234,8 +234,10 @@ describe('作業者の道具の実行中の観測（#2725）', () => {
       session_id: 'sess-1',
       uuid: 'uuid-denied',
     } as unknown as SDKMessage);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(watchEvents(events).map((e) => e.type)).toEqual(['tool_running', 'tool_end']);
+    // 実時間では待たない（#2146）。拒否の合図で畳まれたことを条件で待つ。
+    await vi.waitFor(() =>
+      expect(watchEvents(events).map((e) => e.type)).toEqual(['tool_running', 'tool_end']),
+    );
   });
 
   it('SubagentStop で、その作業者の分だけ全部片付く', async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createManagerPool, type WorkerToolEvent } from './manager.js';
 import type { RunnerClient, RunnerEntry, RunnerEvent, RunnerRegistry } from './runner-protocol.js';
@@ -83,9 +83,10 @@ describe('ManagerPool#onEvent: tool_running / tool_end', () => {
     const before = (await stores.journal.list()).length;
     emit()?.(running);
     emit()?.(end);
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(received).toEqual([running, end]);
+    // 実時間では待たない（#2146）。届いたことを条件で待つ。
+    await vi.waitFor(() => expect(received).toEqual([running, end]));
+    // 日誌へ書く経路が在れば、ここまでのイベントループの一巡で積まれている。
+    await new Promise((resolve) => setImmediate(resolve));
     expect((await stores.journal.list()).length).toBe(before);
   });
 
@@ -94,7 +95,8 @@ describe('ManagerPool#onEvent: tool_running / tool_end', () => {
     expect(emit()).toBeDefined();
     const before = (await stores.journal.list()).length;
     emit()?.(running);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // 実時間では待たない（#2146）。日誌へ書く経路が在れば、イベントループの一巡で積まれている。
+    await new Promise((resolve) => setImmediate(resolve));
     expect((await stores.journal.list()).length).toBe(before);
   });
 });
