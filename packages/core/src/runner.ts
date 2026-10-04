@@ -4658,16 +4658,6 @@ class RunnerSession {
     this.#tryObservation('PreToolUse の入力の頭の控え', () => {
       this.#capturePreToolInputHead(record);
     });
-    // **作業者の道具だけ、長く実行中かの見張りを置く**（Issue #2725）。Pre では何も送らない。
-    this.#tryObservation('作業者の道具の見張り', () => {
-      if (record.agentId === undefined || record.toolUseId === undefined) return;
-      this.#workerTools.begin({
-        agentId: record.agentId,
-        actor: `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
-        tool: record.toolName ?? '(不明)',
-        toolUseId: record.toolUseId,
-      });
-    });
 
     if (record.toolName === 'Bash') {
       const toolInput = record.toolInput as
@@ -4710,6 +4700,17 @@ class RunnerSession {
         }
       }
     }
+
+    // **ガードの deny より後に置く（弾いた呼び出しは Post も拒否の合図も来ないので、置くと片付かない）。作業者の道具だけ、長く実行中かの見張りを置く**（Issue #2725）。Pre では何も送らない。
+    this.#tryObservation('作業者の道具の見張り', () => {
+      if (record.agentId === undefined || record.toolUseId === undefined) return;
+      this.#workerTools.begin({
+        agentId: record.agentId,
+        actor: `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+        tool: record.toolName ?? '(不明)',
+        toolUseId: record.toolUseId,
+      });
+    });
 
     // `#consumeOneShotAllow` は `deny` を返さない（戻り値の型で塞いである）。だから書き換えを
     // `deny` に付けることは型の上で起きない（#2119。以前は `|| decision.kind === 'deny'` の
