@@ -39,12 +39,15 @@ const figureMaxWidth = (container: HTMLElement) =>
   container.querySelector('figure')!.style.maxWidth;
 
 describe('SystemTopology の大きさ', () => {
-  it.each([1000, 1616, 2400])('広い枠（%ipx）では横の配置で、描画幅は 1040px を超えない', (w) => {
-    stubFrameWidth(w);
-    const { container } = render(<SystemTopology {...busyScene} />);
-    expect(viewBoxWidth(container)).toBeGreaterThan(1000);
-    expect(figureMaxWidth(container)).toBe('1040px');
-  });
+  it.each([1000, 1104, 2400])(
+    '広い枠（%ipx）では横の配置で、描画幅は 1152px（倍率 1.0） を超えない',
+    (w) => {
+      stubFrameWidth(w);
+      const { container } = render(<SystemTopology {...busyScene} />);
+      expect(viewBoxWidth(container)).toBeGreaterThan(1000);
+      expect(figureMaxWidth(container)).toBe('1152px');
+    },
+  );
 
   it.each([WIDE_MIN_WIDTH - 1, 600, 360])(
     '狭い枠（%ipx）では木（縦の配置）へ倒れ、描画幅は 360px（等倍）を超えない',

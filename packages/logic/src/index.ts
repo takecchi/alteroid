@@ -26,7 +26,6 @@ export * from './manager-provider.js';
 export * from './profile-compat.js';
 export * from './managers-links.js';
 export * from './redact.js';
-export * from './report-excerpt.js';
 export * from './tokens-links.js';
 export * from './topology-scene.js';
 export * from './types.js';

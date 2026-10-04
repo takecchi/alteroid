@@ -41,11 +41,17 @@ async function mainOrder(): Promise<string[]> {
 }
 
 describe('ホームの配置', () => {
-  it('広い画面（1440px）では地図が左・承認待ち一覧が右の横並び', async () => {
-    setViewportWidth(1440);
+  it('広い画面（1920px）では地図が左・承認待ち一覧が右の横並び', async () => {
+    setViewportWidth(1920);
     renderHome();
     expect((await screen.findByTestId('home-main')).dataset.layout).toBe('side-by-side');
     expect(await mainOrder()).toEqual([MAP_TITLE, AWAITING_TITLE]);
+  });
+
+  it('ラップトップ幅（1366px）は縦積みのまま（地図の見た目を変えない）', async () => {
+    setViewportWidth(1366);
+    renderHome();
+    expect((await screen.findByTestId('home-main')).dataset.layout).toBe('stacked');
   });
 
   it('タブレット幅（900px）では縦積みで承認待ち一覧が上', async () => {
@@ -55,11 +61,11 @@ describe('ホームの配置', () => {
     expect(await mainOrder()).toEqual([AWAITING_TITLE, MAP_TITLE]);
   });
 
-  it('境目（1280px）から横並びになり、幅を変えると組み替わる', async () => {
-    setViewportWidth(1279);
+  it('境目（1800px）から横並びになり、幅を変えると組み替わる', async () => {
+    setViewportWidth(1799);
     renderHome();
     expect((await screen.findByTestId('home-main')).dataset.layout).toBe('stacked');
-    act(() => setViewportWidth(1280));
+    act(() => setViewportWidth(1800));
     expect((await screen.findByTestId('home-main')).dataset.layout).toBe('side-by-side');
   });
 });

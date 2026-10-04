@@ -179,7 +179,7 @@ const frame = (children: ReactNode, height = 960) => (
   </div>
 );
 
-/** 広い画面（xl 以上）。地図が左・承認待ちが右の横並び。承認待ちがあり、マネージャーが走っている。 */
+/** 広い画面（1800px 以上）。地図が左・承認待ちが右の横並び。承認待ちがあり、マネージャーが走っている。 */
 export const Desktop: Story = {
   render: () => frame(<Home calm={false} map={busyScene} wide />),
 };

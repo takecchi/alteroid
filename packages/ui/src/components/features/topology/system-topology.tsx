@@ -44,11 +44,12 @@ export interface SystemTopologyProps extends TopologyScene {
 /**
  * 図の描画幅の上限（CSS px）。**図は viewBox を枠いっぱいに伸ばして描くので、上限が無いと広い画面で
  * 図も文字も枠に比例して大きくなる**（1920px では札の 13px が 18px になっていた）。
- * 上限は「ラップトップ幅（1366px、サイドバーあり）で描かれる大きさ」を基準にした:
- * `wide` は viewBox 幅 1152 に対し 1040px（倍率 約0.9）、`narrow` は viewBox 幅 360 の等倍。
+ * 上限は自然寸（倍率 1.0）にした。ラップトップ幅（1366px、サイドバーあり）では倍率 0.93 で、
+ * 以前と同じ大きさのまま、それより広い画面でだけ止まる:
+ * `wide` は viewBox 幅 1152 に対し 1152px（倍率 1.0）、`narrow` は viewBox 幅 360 の等倍。
  * 上限を超えた枠の余りは**中央に置く**（左に寄せると、広い画面で片側だけ空く）。
  */
-const WIDE_MAX_WIDTH = 1040;
+const WIDE_MAX_WIDTH = 1152;
 const NARROW_MAX_WIDTH = 360;
 /**
  * `auto` で `wide` にする枠の最小幅。`wide`（viewBox 幅 1152）をこれ未満に縮めると倍率が
