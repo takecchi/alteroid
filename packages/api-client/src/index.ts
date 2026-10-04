@@ -56,6 +56,20 @@ export type ChatStreamMessage =
 export type JournalMessage =
   { event: 'open'; data: { ok: boolean } } | { event: JournalEntry['type']; data: JournalEntry };
 
+/** 生成 spec から起こした「稼働の地図」（`GET /topology` と、SSE の `snapshot` の本文）。 */
+export type TopologySnapshot =
+  paths['/topology']['get']['responses'][200]['content']['application/json'];
+
+/**
+ * 稼働の地図の SSE メッセージ（`GET /topology/stream`）。
+ *
+ * `unavailable` は「組めなかった」の合図で、本文は種別だけ（`{ error }`）。**直前の
+ * `snapshot` は古いまま**なので、読み手は「いまの状態」として出し続けない。heartbeat
+ * （`:` で始まるコメント行）は `readSse` が捨てるので、ここへは届かない。
+ */
+export type TopologyMessage =
+  { event: 'snapshot'; data: TopologySnapshot } | { event: 'unavailable'; data: { error: string } };
+
 /**
  * SSE の口が ok でない応答を受けたとき、Error の message に入れる本文の長さの上限
  * （issue #2418）。本文は中継（プロキシ）や古いデーモンが返す任意の文字列で、鍵や
@@ -122,6 +136,8 @@ export interface AlteroidClient {
   chatStream(conversationId: string, options?: StreamOptions): AsyncGenerator<ChatStreamMessage>;
   /** 日誌への追記を SSE で受け取る（承認待ちが出たことに気づける口）。 */
   journalStream(options?: JournalStreamOptions): AsyncGenerator<JournalMessage>;
+  /** 稼働の地図を SSE で受け取る（開いたとき1回、以後は内容が変わったときだけ）。 */
+  topologyStream(options?: StreamOptions): AsyncGenerator<TopologyMessage>;
 }
 
 /**
@@ -224,6 +240,14 @@ export function createAlteroidClient(options: AlteroidClientOptions): AlteroidCl
         ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
       };
       yield* stream(`/journal/stream${query}`, init) as AsyncGenerator<JournalMessage>;
+    },
+
+    async *topologyStream(streamOptions) {
+      const init: RequestInit = {
+        method: 'GET',
+        ...(streamOptions?.signal === undefined ? {} : { signal: streamOptions.signal }),
+      };
+      yield* stream('/topology/stream', init) as AsyncGenerator<TopologyMessage>;
     },
   };
 }

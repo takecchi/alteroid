@@ -28,5 +28,6 @@ export * from './profile-compat.js';
 export * from './managers-links.js';
 export * from './redact.js';
 export * from './tokens-links.js';
+export * from './topology-scene.js';
 export * from './types.js';
 export * from './usage-links.js';
