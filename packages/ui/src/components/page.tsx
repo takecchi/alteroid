@@ -17,6 +17,7 @@ export function Page({
   action,
   className,
   scrollRef,
+  tabs,
   children,
 }: {
   title: ReactNode;
@@ -37,6 +38,11 @@ export function Page({
    * バーが増えない。
    */
   scrollRef?: Ref<HTMLDivElement>;
+  /**
+   * 見出しの下に置く、同じまとまりの他のページへ行くタブの帯（`SectionTabs`）。
+   * **スクロールしない側**に置く（本文を流しても、行き先は見えたまま）。
+   */
+  tabs?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -46,7 +52,13 @@ export function Page({
      * 画面からはみ出す（帯は shell が持っていて、この部品からは見えない）。
      */
     <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
+      <header
+        className={cn(
+          // タブの帯があるときは、区切り線を帯の下の1本にする（線が2本続かないように）。
+          tabs === undefined && 'border-b border-border',
+          'flex shrink-0 items-start justify-between gap-4 py-4 pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
+        )}
+      >
         <div className="min-w-0">
           <h1 className="text-base font-semibold">{title}</h1>
           {/*
@@ -63,6 +75,11 @@ export function Page({
         </div>
         {action !== undefined && <div className="shrink-0">{action}</div>}
       </header>
+      {tabs !== undefined && (
+        <div className="shrink-0 border-b border-border pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]">
+          {tabs}
+        </div>
+      )}
       {/*
         狭い画面では左右の余白を削る。**24px×2 は幅 375px の 13% を食う**ので、
         表や生ログが読めなくなる側の効き方をする。下端は切り欠きのぶんだけ足す。

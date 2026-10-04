@@ -151,3 +151,23 @@ export const crowdedScene: SystemTopologyProps = {
     })),
   })),
 };
+
+/**
+ * 確かめられない軸がある場面。クローンのターンの有無を答えられず、記憶ストアは確かめる手段が
+ * 無く、runner は1つも見えない。**待機・正常と描かず「不明」と言う**（破線の札）。
+ */
+export const unknownScene: SystemTopologyProps = {
+  human: { flow: 'idle' },
+  clone: { status: 'unknown', task: 'ターンの有無を確認できない' },
+  db: { label: '記憶ストア', status: 'unknown', task: '確かめる手段が無い', flow: 'idle' },
+  runner: { status: 'unknown' },
+  managers: [],
+};
+
+/** 記憶ストアへ繋がらない場面。理由（エラーの種別）を札に出し、線は破線にする。 */
+export const storageDownScene: SystemTopologyProps = {
+  ...busyScene,
+  clone: { status: 'waiting', task: '利用枠の上限で止まっている' },
+  db: { label: 'PostgreSQL', status: 'offline', task: 'ECONNREFUSED', flow: 'idle' },
+  runner: { status: 'ok' },
+};

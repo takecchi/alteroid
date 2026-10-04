@@ -10,7 +10,14 @@
  * —— この順なら線どうしが交わらない（`layout.test.ts` が総当たりで測る）。
  */
 
-export type TopologyStatus = 'idle' | 'running' | 'waiting' | 'error' | 'offline';
+/**
+ * 札の状態。**`ok`（正常）と `unknown`（不明）を `idle`（待機）と分けてある。**
+ * 「何も走っていない」と「確かめられない」は別のことで、後者を待機・正常と描くと
+ * 確かめたように読める。`ok` は走る・走らないの無い対象（記憶ストア・runner の器）の
+ * 「繋がっている」に使う。
+ */
+export type TopologyStatus =
+  'idle' | 'running' | 'waiting' | 'error' | 'offline' | 'ok' | 'unknown';
 export type TopologyFlow = 'idle' | 'down' | 'up' | 'both';
 
 /** 札を押したときに出す詳細の1行（名前と値） */
@@ -55,6 +62,8 @@ export interface TopologyScene {
   /** 記憶ストア。`flow` はクローン ↔ DB の線 */
   db: {
     label?: string;
+    /** 状態の補足（繋がらないときの理由など。1行） */
+    task?: string;
     status: TopologyStatus;
     flow?: TopologyFlow;
     details?: readonly TopologyDetail[];
@@ -205,6 +214,7 @@ function baseNodes(scene: TopologyScene) {
       kind: 'db',
       box,
       label: scene.db.label ?? 'PostgreSQL',
+      task: scene.db.task,
       status: scene.db.status,
       details: scene.db.details,
       edges: ['db'],

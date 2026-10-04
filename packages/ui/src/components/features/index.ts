@@ -8,6 +8,7 @@ export * from './confirm-dialog';
 export * from './data-table';
 export * from './empty-state';
 export * from './filter-chips';
+export * from './home';
 export * from './journal';
 export * from './key-value-list';
 export * from './markdown-editor';

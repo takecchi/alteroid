@@ -5,7 +5,7 @@ import {
   BellRing,
   BookText,
   Brain,
-  DollarSign,
+  CalendarClock,
   LayoutDashboard,
   ListChecks,
   MessageSquare,
@@ -17,17 +17,22 @@ import { Badge } from '../common';
 
 import { AppSidebar, type AppSidebarItem } from './app-sidebar';
 
+/**
+ * 画面（`apps/web/app/routes/shell.tsx`）と同じ整理: よく使う3つ＋まとまり（仕事・記録・
+ * クローンの中身）＋設定。**行き先は1つも消していない** —— 畳んだ先（仕事の中の未了・進捗、
+ * 設定の中の利用状況など）は各ページ先頭のタブ（`SectionTabs`）から行く。
+ */
 const SAMPLE_NAV_ITEMS: AppSidebarItem[] = [
-  { to: '/', label: 'ダッシュボード', icon: LayoutDashboard },
+  { to: '/', label: 'ホーム', icon: LayoutDashboard },
   { to: '/chat', label: '会話', icon: MessageSquare },
   { to: '/approvals', label: '承認待ち', icon: BellRing, badge: <Badge tone="warn">3</Badge> },
-  { to: '/commitments', label: '未了の仕事', icon: ListChecks },
-  { to: '/managers', label: 'マネージャー', icon: Users },
-  { to: '/journal', label: '日誌', icon: Activity },
-  { to: '/reports', label: '日報', icon: BookText },
-  { to: '/usage', label: '利用状況', icon: DollarSign },
-  { to: '/memory', label: '記憶', icon: Brain },
-  { to: '/settings', label: '設定', icon: Settings },
+  { to: '/commitments', label: '仕事', icon: ListChecks, section: '仕事' },
+  { to: '/managers', label: 'マネージャー', icon: Users, section: '仕事' },
+  { to: '/reports', label: '日報', icon: BookText, section: '記録' },
+  { to: '/journal', label: '日誌', icon: Activity, section: '記録' },
+  { to: '/memory', label: '記憶とやり方', icon: Brain, section: 'クローンの中身' },
+  { to: '/schedule', label: '予定と受信箱', icon: CalendarClock, section: 'クローンの中身' },
+  { to: '/settings', label: '設定', icon: Settings, section: '' },
 ];
 
 /**

@@ -2,7 +2,15 @@ import { useEffect, useState } from 'react';
 
 import type { Meta, StoryObj } from '@storybook/react-vite';
 
-import { busyScene, crowdedScene, idleScene, liveFrames, runnerDownScene } from './samples';
+import {
+  busyScene,
+  crowdedScene,
+  idleScene,
+  liveFrames,
+  runnerDownScene,
+  storageDownScene,
+  unknownScene,
+} from './samples';
 import { SystemTopology } from './system-topology';
 
 /**
@@ -28,6 +36,12 @@ export const Idle: Story = { args: idleScene };
 
 /** runner へ届かない。そこへ向かう線は破線にして、光を流さない。 */
 export const RunnerOffline: Story = { args: runnerDownScene };
+
+/** 確かめられない軸は「不明」（破線の札）。待機・正常とは描かない。 */
+export const Unknown: Story = { args: unknownScene };
+
+/** 記憶ストアへ繋がらない。理由を札に出し、線は破線にして光を流さない。 */
+export const StorageDown: Story = { args: storageDownScene };
 
 /** マネージャーと作業者が多いとき。出口と幹を線ごとに分けているので、線が重ならない。 */
 export const Crowded: Story = { args: crowdedScene };
