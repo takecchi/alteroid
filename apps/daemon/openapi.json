@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "alteroid daemon API",
+    "title": "alteroid daemon API (negative control)",
     "description": "alteroidd（常駐デーモン）の HTTP API。クローンとの対話・記憶・日誌・日報・承認待ち・委譲先マネージャーの操作までを持つ。**runner の制御面（SDK の start/send/stop など）は含まない** — そこはマネージャーが自分宛の許可確認に 自分で答えられてしまう境界であり、外へ出す面ではない（docs/architecture.md 「制御面の保護」）。",
     "version": "0.1.0"
   },
