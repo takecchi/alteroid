@@ -11,7 +11,9 @@ import {
   placedAgentProvider,
   resolveCloneProviderId,
   CLONE_PROVIDER_RECOMMENDATION,
+  CODEX_DEFAULT_MODEL_LABEL,
   cloneLayerProviderOf,
+  layerModelLabel,
   resolveManagerProviderId,
 } from './agent-provider-selection.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
@@ -86,6 +88,14 @@ describe('層ごとの provider の選択', () => {
   it('2層は独立に読まれる（片方の変数がもう片方に効かない）', () => {
     expect(resolveCloneProviderId({ [MANAGER_PROVIDER_ENV_KEY]: 'codex' })).toBe('claude');
     expect(resolveManagerProviderId({ [CLONE_PROVIDER_ENV_KEY]: 'claude' })).toBe('claude');
+  });
+
+  it('自己認識のモデル表記: claude は帯のまま、codex は置かれたモデルか「Codex の既定」（Claude の帯を名乗らない）', () => {
+    expect(layerModelLabel('claude', 'opus', null)).toBe('opus');
+    expect(layerModelLabel('claude', 'opus', 'sonnet')).toBe('opus');
+    expect(layerModelLabel('codex', 'opus', null)).toBe(CODEX_DEFAULT_MODEL_LABEL);
+    expect(layerModelLabel('codex', 'opus', 'gpt-5')).toBe('gpt-5');
+    expect(CODEX_DEFAULT_MODEL_LABEL).toContain('Codex の既定');
   });
 
   it('agentProviderOf は id から AgentProvider を引く', () => {

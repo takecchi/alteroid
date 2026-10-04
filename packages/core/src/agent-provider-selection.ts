@@ -116,6 +116,28 @@ export function cloneLayerProviderOf(id: AgentProviderId): AgentProvider {
   return id === 'codex' ? CODEX_CLONE_PROVIDER : agentProviderOf(id);
 }
 
+/** Codex の層で、人間がモデルを置いていないときの自己認識上の表記。alteroid はモデルを選ばない。 */
+export const CODEX_DEFAULT_MODEL_LABEL = 'Codex の既定のモデル';
+
+/** Codex に作業者層は無い（`subagents` が false。作業者は親の provider に従う）。 */
+export const CODEX_NO_WORKER_LABEL = 'なし（Codex に作業者層は無い）';
+
+/**
+ * 層の自己認識（`self.models`）に載せるモデルの表記。**層の provider が実際に走らせるものを出す。**
+ *
+ * - `claude`: モデル帯（Fable / Opus / Sonnet のエイリアス。差し替えられていればその値）。
+ * - `codex`: 人間が置いたモデル。置かれていなければ **{@link CODEX_DEFAULT_MODEL_LABEL}**
+ *   （Claude の帯を名乗らない。`modelPlaced` のときだけ Codex へ渡すのと対応する）。
+ */
+export function layerModelLabel(
+  provider: AgentProviderId,
+  claudeBand: string,
+  placed: string | null,
+): string {
+  if (provider !== 'codex') return claudeBand;
+  return placed ?? CODEX_DEFAULT_MODEL_LABEL;
+}
+
 /** runner が名乗った provider id（文字列）から実体を引く。受け付ける id 以外は `undefined`。 */
 export function knownProviderOf(id: string): AgentProvider | undefined {
   const known = AGENT_PROVIDER_IDS.find((candidate) => candidate === id);

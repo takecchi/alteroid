@@ -116,7 +116,10 @@ export interface SelfFacts {
   entrypoint: string;
   /** 入口の認証の状態（`planAuth` の一行説明）。 */
   auth: string;
-  /** 実際に走っているモデル帯。既定から差し替えられていればその値。 */
+  /**
+   * 実際に走っているモデル。既定から差し替えられていればその値。**層の provider が Codex なら Claude の帯
+   * ではなく、置かれたモデル（無ければ「Codex の既定のモデル」）** — `layerModelLabel`（#486）。
+   */
   models: { clone: string; manager: string; worker: string };
   /**
    * クローン層の provider の id（`claude` …。#486 S9）。デーモンが起動時に解決した値

@@ -44,7 +44,12 @@ import {
   MANAGER_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
   CLONE_PROVIDER_RECOMMENDATION,
+  CODEX_NO_WORKER_LABEL,
+  MANAGER_MODEL_ENV_KEY,
   agentProviderOf,
+  layerModelLabel,
+  placedCloneModel,
+  placedModelTier,
   cloneDriverFor,
   cloneLayerProviderOf,
   placedAgentProvider,
@@ -1621,7 +1626,21 @@ export async function main(): Promise<void> {
     auth: authPlan.description,
     // 差し替えが置かれていればそれを載せる。**固定値を載せると自己認識が嘘になる**
     // （人間が帯を動かしたのに、クローンは既定を自分の帯だと思ったまま判断する）。
-    models: { clone: cloneModel, manager: resolveManagerModel(), worker: resolveWorkerModel() },
+    // **層の provider が Codex なら Claude の帯を名乗らない**（`layerModelLabel`）。マネージャーの provider は
+    // runner が読む値で、デーモンが知るのは同じ環境変数（器の Shared Variables）だけである。別の器の runner が
+    // 違う値を置いていれば食い違いうる（実際の名乗りは `GET /runners` / `self_status` が読む）。
+    models: {
+      clone: layerModelLabel(cloneProvider.id, cloneModel, placedCloneModel()),
+      manager: layerModelLabel(
+        resolveManagerProviderId(process.env),
+        resolveManagerModel(),
+        placedModelTier(process.env, MANAGER_MODEL_ENV_KEY),
+      ),
+      worker:
+        resolveManagerProviderId(process.env) === 'codex'
+          ? CODEX_NO_WORKER_LABEL
+          : resolveWorkerModel(),
+    },
     // クローン層の provider が持たない能力だけ。上で解いた `cloneProvider`（S1）を再利用する。
     // **マネージャー層は載せない** — runner ごとに `hello` で名乗りが変わるので、起動時に
     // 焼くと古くなる。あちらは `self_status` と日報・発意 tick の digest が実行時に引く。
