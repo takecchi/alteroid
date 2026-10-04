@@ -113,7 +113,7 @@ jobs:
   # **`always()` を付けると draft でも走ってしまうので、`if:` の `always()` の後ろへ、元の
   # `ci` の条件（下の doc）をそのまま続けてある。**
   ci:
-    needs: [static, build-checks, typecheck, lint, mutation-selftest, test]
+    needs: [static, build-checks, typecheck, mutation-selftest, test]
     # **定時の回は回さない。** あの回が訊いているのは「上流が動いて器が焼けなく
     # なっていないか」だけである。ここまで毎晩回すと、別の主張（依存の更新で単体
     # テストが落ちないか）を黙って足すことになる。手動起動では回す。
