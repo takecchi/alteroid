@@ -403,7 +403,7 @@ function wiredInPullRequestWorkflows(name: string): boolean {
  * **「`STEPS` だけ」に配線された門を赤にする**（Issue #1297）。
  *
  * 上の「どれかに載っている」は OR なので、`STEPS` にだけ載せても緑になる。
- * だが `ci.yml` の `ci` job は `pnpm verify` を呼ばず、門を1本ずつ `run:` で
+ * だが `ci.yml` の各検査 job（`ci` が needs で束ねる）は `pnpm verify` を呼ばず、門を1本ずつ `run:` で
  * 並べる形であり、オーナーは「ローカルで `pnpm verify` を通しで回す必要はない。
  * CI に任せる」と指示している。⟹ **`STEPS` にしか無い門は、誰にも当たらない。**
  * 実例: PR #1286 の `check:stale-token-restart-advice` は `STEPS` にだけ配線されて
@@ -439,7 +439,7 @@ describe('STEPS にだけ配線された check:* を作らない（PR の CI で
       stepsOnly,
       `【赤の意味】次の check:* は scripts/verify-core.mjs の STEPS にしか無く、PR の CI で一度も走らない: ` +
         `${stepsOnly.join(' / ')}\n` +
-        'ci.yml の ci job（または pull_request の更新で起動する別の workflow）へ `- run: pnpm <name>` を足すこと。' +
+        'ci.yml の検査 job（static など。または pull_request の更新で起動する別の workflow）へ `- run: pnpm <name>` を足すこと。' +
         'STEPS から外して黙らせないこと —— 手元の一式からも消えるだけで、PR で走らないことは変わらない。',
     ).toEqual([]);
   });
@@ -511,7 +511,7 @@ const DECLARED_ROUTES: Record<string, DeclaredRoutes> = {
     routes: ['pr'],
     why:
       '手元の `pnpm test` は `scripts/check-dockerfile-railway.test.ts` の「実際の repo」の歯が同じ判定を実物の Dockerfile に当てるので、' +
-      '`STEPS` へは足さない（二重に走らせない）。PR の CI では ci.yml の ci job が1行で呼ぶ（#2685）。',
+      '`STEPS` へは足さない（二重に走らせない）。PR の CI では ci.yml の static job が1行で呼ぶ（#2685）。',
   },
 };
 

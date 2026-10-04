@@ -166,6 +166,15 @@ function tokenize(expr: string): Token[] {
       i += 2;
       continue;
     }
+    // 状態関数 `always()`（`ci` 門 job の `if:` が使う。#2707）。この評価器は needs の
+    // 結果を持たないので、`always()` は「上流の結果に関わらず評価を進める」＝真として
+    // 扱う。`always()` 単独は draft でも真になる（だから `ci` の `if:` は、その後ろに
+    // draft・schedule の条件を続けてある。下の固定その1・その2が測っている）。
+    if (expr.startsWith('always()', i)) {
+      tokens.push({ t: 'BOOL', v: true });
+      i += 'always()'.length;
+      continue;
+    }
     if (c === '!') {
       tokens.push({ t: 'NOT' });
       i++;
@@ -424,6 +433,16 @@ describe('評価器の自己テスト', () => {
     expect(evaluateGithubExpression("'a' != 'b'", PUSH_CONTEXT)).toBe(true);
   });
 
+  it('always() は真として扱う。単独なら draft の文脈でも真（だから後ろに条件を続ける必要がある）', () => {
+    expect(evaluateGithubExpression('always()', PR_DRAFT_CONTEXT)).toBe(true);
+    expect(
+      evaluateGithubExpression(
+        "always() && github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)",
+        PR_DRAFT_CONTEXT,
+      ),
+    ).toBe(false);
+  });
+
   it('未対応の識別子には推測せず例外を投げる（fail-closed）', () => {
     expect(() => evaluateGithubExpression('github.event.something_new', PUSH_CONTEXT)).toThrow();
   });
@@ -557,7 +576,27 @@ const REQUIRED_CONTEXTS: string[] = (
   }
 ).contexts;
 
+/**
+ * `ci.yml` の `image` 以外の全 job（`ci` 門と、それが needs で束ねる検査 job）。
+ * **以前は `ci` 1本が全 step を回していたので、`if:` の意図（schedule では回さない・
+ * draft の pull_request では回さない）は `ci` 1本に掛かっていた。** 分けたあとも同じ意図が
+ * 全 job に掛かっていることを、導出した一覧（ベタ書きしない）の全部に当てて固定する
+ * （検査 job を足したのに `if:` を引き継ぎ忘れる、を見逃さない。#2707）。
+ */
+const CI_FAMILY_JOBS: string[] = jobNames.filter((name) => name !== 'image');
+
 describe('前提: ci.yml から抽出できていること', () => {
+  it('ci 系の job は ci 門を含めて2本以上ある（分割後も ci が在り、検査 job を取りこぼさない）', () => {
+    expect(CI_FAMILY_JOBS).toContain('ci');
+    expect(CI_FAMILY_JOBS.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('ci 系の全 job がジョブレベルの if: を持つ', () => {
+    for (const name of CI_FAMILY_JOBS) {
+      expect(JOB_IF_EXPRESSIONS.get(name), `${name} の if: を抽出できていない`).not.toBeNull();
+    }
+  });
+
   it('ci ジョブと image ジョブの両方を検出している', () => {
     expect(jobNames).toContain('ci');
     expect(jobNames).toContain('image');
@@ -693,14 +732,18 @@ describe('固定その1: push / workflow_dispatch / schedule での挙動（罠1
     ['workflow_dispatch（手動起動）', DISPATCH_CONTEXT, true, true],
     ['schedule（定時実行）', SCHEDULE_CONTEXT, false, true],
   ] as const)('%s', (_label, ctx, expectCi, expectImage) => {
-    expect(jobRuns('ci', ctx)).toBe(expectCi);
+    for (const name of CI_FAMILY_JOBS) {
+      expect(jobRuns(name, ctx), `${name} の ${_label}`).toBe(expectCi);
+    }
     expect(jobRuns('image', ctx)).toBe(expectImage);
   });
 });
 
 describe('固定その2: draft の pull_request では ci も image も走らない（節約が効いている）', () => {
-  it('draft の pull_request: ci=false / image=false', () => {
-    expect(jobRuns('ci', PR_DRAFT_CONTEXT)).toBe(false);
+  it('draft の pull_request: ci 系の全 job=false / image=false', () => {
+    for (const name of CI_FAMILY_JOBS) {
+      expect(jobRuns(name, PR_DRAFT_CONTEXT), name).toBe(false);
+    }
     expect(jobRuns('image', PR_DRAFT_CONTEXT)).toBe(false);
   });
 });

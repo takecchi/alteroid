@@ -6,7 +6,7 @@ import * as prettier from 'prettier';
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { extractJobsSection, listWorkflowFiles } from './workflow-scan-core.mjs';
+import { extractJobNames, extractJobsSection, listWorkflowFiles } from './workflow-scan-core.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const WORKFLOWS_DIR = path.join(ROOT, '.github', 'workflows');
@@ -38,14 +38,16 @@ const WORKFLOWS_DIR = path.join(ROOT, '.github', 'workflows');
  * 2. 解決した設定が `requirePragma` / `checkIgnorePragma` を有効にしていないこと
  *    （どちらも、ファイルの中身次第で parse せずに素通りさせる設定である）。
  * 3. `package.json` の `format:check` が `.` を対象にした `prettier --check` で
- *    あり、`ci.yml` の `ci` ジョブがそれを `run: pnpm format:check` で呼ぶこと。
+ *    あり、`ci.yml` のどれかの job（`ci` ジョブの `needs` に載っているもの）が
+ *    それを `run: pnpm format:check` で呼ぶこと。`ci` 自身は検査の job を束ねる門で、
+ *    step を持たない（以前は `ci` 1本が全 step を回していた。#2707）。
  *
  * **無関係な ignore は禁じない。**`.prettierignore` に何を足しても、workflow
  * ファイルを外さない限りこの歯は緑のままである。
  *
  * ## この歯が測っていないこと
  *
- * - **`ci` ジョブのその step が実際に実行されることまでは見ない。**step に
+ * - **その job のその step が実際に実行されることまでは見ない。**step に
  *   `if:` が付いたり、ジョブの `if:` が変わったりしても、「書いてある」を見て
  *   緑を返す（`check-scripts-wired.test.ts` の同種の断りと同じ形）。
  * - **`ci.yml` 自身が GitHub に読めないほど壊れた場合**、`ci` は起動しないので
@@ -89,11 +91,29 @@ describe('`ci` ジョブが `pnpm format:check` を走らせる', () => {
     expect(tokens.slice(2)).toContain('.');
   });
 
-  it('`ci.yml` の `ci` ジョブに `run: pnpm format:check` の step が在る', () => {
+  it('`ci.yml` の、`ci` が needs に載せている job に `run: pnpm format:check` の step が在る', () => {
     const text = readFileSync(path.join(WORKFLOWS_DIR, 'ci.yml'), 'utf8');
     const jobs = `\n${extractJobsSection(text) as string}`;
-    const m = /\n {2}ci:\n([\s\S]*?)(?=\n {2}[A-Za-z0-9_-]+:|$)/.exec(jobs);
-    expect(m, '`ci.yml` に `ci` ジョブが見つからない').not.toBeNull();
-    expect(m?.[1] ?? '').toMatch(/^ +- run: pnpm format:check[ \t]*$/m);
+    const block = (name: string): string =>
+      new RegExp(`\\n {2}${name}:\\n([\\s\\S]*?)(?=\\n {2}[A-Za-z0-9_-]+:|$)`).exec(jobs)?.[1] ??
+      '';
+
+    const ciBlock = block('ci');
+    expect(ciBlock, '`ci.yml` に `ci` ジョブが見つからない').not.toBe('');
+    const needsMatch = /^ {4}needs:\s*\[([^\]\n]*)\]/m.exec(ciBlock);
+    expect(needsMatch, '`ci` ジョブの `needs: [...]` が読めない').not.toBeNull();
+    const needs = (needsMatch?.[1] ?? '')
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => n.length > 0);
+
+    const withFormatCheck = (extractJobNames(jobs.slice(1)) as string[]).filter((name) =>
+      /^ +- run: pnpm format:check[ \t]*$/m.test(block(name)),
+    );
+    expect(withFormatCheck.length, '`run: pnpm format:check` の step がどの job にも無い').toBe(1);
+    expect(
+      needs,
+      `format:check を走らせる job（${withFormatCheck.join(', ')}）が \`ci\` の needs に載っていない`,
+    ).toContain(withFormatCheck[0]);
   });
 });

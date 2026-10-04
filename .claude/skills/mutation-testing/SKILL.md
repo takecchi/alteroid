@@ -377,7 +377,7 @@ repo の `test` スクリプトが `vitest run && pnpm -r --if-present run test 
 1. **シナリオが実ソースの文言を指すのをやめる（`weak-tooth`）。** 変異の対象になるフィクスチャ本体も、それを測る歯2本も、`scenarioWeakTooth` が書いて走らせて消す。**変異が探す文言（`WEAK_TOOTH_ANCHOR`）は、フィクスチャ本体の組み立てにも同じ定数として使う** ⟹ 「spec が探す文言」と「対象の中身」が同じ1つの定数から出るので、**片方だけがずれることが構造的に起こらない。**
    - **1度目の腐り（2026-09-09）はフィクスチャ側を現物へ合わせて直した。それは同じ入口を残す直し方で、2度目（#1096）が同じ入口から入ってきた。** ⟹ 入口そのものを塞ぐ
 2. **シナリオの主張を機械で突き合わせる（`assertWeakToothOutcomes`）。** `cmdSelftest` は各シナリオの戻り値を `JSON.stringify` して log するだけで、**中身を1つも検査しない** ⟹ 判定が両方 `生存` に化けても exit 0 のままだった。CI から呼ぶだけでは「腐ったら赤くなる」にならない
-3. **CI から回す**（`.github/workflows/ci.yml` の `ci` ジョブの最後のステップ）。`pnpm test` の後に `selftest --scenario all` を打つ
+3. **CI から回す**（`.github/workflows/ci.yml` の `mutation-selftest` ジョブ。#2707 で `ci` 1本から分けた。それ以前は `ci` ジョブの最後のステップだった）。`pnpm build` の後に `selftest --scenario all` を打つ
 
 ### 重さの実測（2026-09-16、全11シナリオを1本ずつ）
 

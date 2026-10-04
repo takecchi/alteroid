@@ -1,0 +1,21 @@
+name: setup
+description: >-
+  ci.yml の各 job が共通に要る準備（mise で Node と pnpm、pnpm store のキャッシュ、
+  pnpm install）。checkout は呼び出し側で先に済ませること（この action は
+  リポジトリの中に在るので、checkout より前には読めない）。
+
+runs:
+  using: composite
+  steps:
+    # Node と pnpm の版は mise.toml が持つ（ローカルと同じものを使う）
+    - uses: jdx/mise-action@v5
+    - id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v6
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: ${{ runner.os }}-pnpm-
+    - run: pnpm install --frozen-lockfile
+      shell: bash

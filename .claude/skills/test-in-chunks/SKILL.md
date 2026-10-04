@@ -442,4 +442,4 @@ timeout）で回し、残り36ファイルを別に（例: 2分割程度で）�
 - `node .claude/skills/mutation-testing/mutate.mjs selftest --scenario all`
 
 生の要約行はこの skill には書き写さない（腐る）。正本は PR の報告・
-`ci.yml` の `ci` job である。
+`ci.yml` の各 job（test は `test`、selftest は `mutation-selftest`）である。

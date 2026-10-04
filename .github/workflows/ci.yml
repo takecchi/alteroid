@@ -100,7 +100,20 @@ env:
 # 紐付かない経路（直 push・手動起動・定時）を見る」役目は、**既存の2ジョブが
 # そのまま持っているので、別に無条件ジョブを立てる理由が無い。**
 jobs:
+  # **`ci` は、下の検査 job（static / build-checks / typecheck / lint / mutation-selftest / test）を
+  # 束ねる門である。** required のチェック名は `ci`（`.github/required-status-checks.json`）の
+  # まま変えていない。以前は `ci` 1本の job が全 step を直列に回していた（PR で約17分）。
+  # 検査は1つも減らしていない: 元の `ci` の step は、すべて下のどれかの job で走っている。
+  #
+  # **この job は `needs` の全 job が `success` のときだけ success になる。** `if: always()` を
+  # 付けているのは、needs の job が失敗・cancelled のとき、既定の挙動（needs が失敗した
+  # job は skip される）だと `ci` が **skipped** になり、required チェックとして
+  # 「失敗」ではなく「走らなかった」と読まれうるからである（skipped は green と数えない。
+  # `.claude/skills/pr-green/SKILL.md`）。失敗は failure として明示的に落とす。
+  # **`always()` を付けると draft でも走ってしまうので、`if:` の `always()` の後ろへ、元の
+  # `ci` の条件（下の doc）をそのまま続けてある。**
   ci:
+    needs: [static, build-checks, typecheck, lint, mutation-selftest, test]
     # **定時の回は回さない。** あの回が訊いているのは「上流が動いて器が焼けなく
     # なっていないか」だけである。ここまで毎晩回すと、別の主張（依存の更新で単体
     # テストが落ちないか）を黙って足すことになる。手動起動では回す。
@@ -133,20 +146,35 @@ jobs:
     # 正しいかは、そのジョブが*どのイベントを兼ねているか*で決まる。** `!=` で
     # 「pull_request 以外は素通りさせる」形を維持しているのは、先例を知らなかった
     # からではなく、**知ったうえで意図的に違えている。**
+    if: always() && github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      # needs の全 job の result を見る。success 以外（failure / cancelled / skipped）は
+      # すべて失敗として扱う。needs が空・読めないときも失敗にする（0 件で緑にしない）。
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -eu
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          total=$(echo "$NEEDS" | jq 'length')
+          test "$total" -ge 1 || { echo "needs が空: 何も確かめずに緑にしない" >&2; exit 1; }
+          bad=$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"')
+          if [ -n "$bad" ]; then
+            echo "success でない job がある:" >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+
+  # **build 不要の静的な検査と format。**
+  static:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
     if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Node と pnpm の版は mise.toml が持つ（ローカルと同じものを使う）
-      - uses: jdx/mise-action@v5
-      - id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       # **AGENTS.md のバイト数にラチェットを置く歯（Issue #1192）。** 静的検査
       # （ビルド済み成果物を読まない）なので、`pnpm build` より前に置く——
@@ -167,6 +195,63 @@ jobs:
       # （`run: pnpm check:…`）を前提にしている。以前は `image` の grep 1行だった（#2683）。
       - run: pnpm check:dockerfile-railway
 
+      # **同梱 SDK から逐語で引いたコメントが、いまの版でも逐語であることを当てる。**
+      # 引き写した先はこの repo のソースなので、SDK の版を上げても差分には出ない —— #639
+      # （0.3.259 → 0.3.261）は lock と catalog の2ファイルだけで、それでも
+      # `agent-events.ts` の逐語は同じ更新で嘘になった（#646）。**引用は外の版に依存して
+      # おり、依存はコンパイラにもレビューにも見えない。**
+      #
+      # **この検査は #646 で入ったが、どの門からも呼ばれていなかった**（`package.json` に
+      # script は在り、`scripts/verify-core.mjs` の STEPS にも ci.yml にも無かった）。
+      # 在るのに効いていない道具は、静かに失敗する（`AGENTS.md`「静かに失敗する道具」）。
+      - run: pnpm check:sdk-quotes
+
+      # **世代ずれの起こし直しの助言の生成元を1つに保つ歯（Issue #1175）。**
+      # `scripts/verify-core.mjs` の STEPS にも在るが、**STEPS だけでは PR の CI で
+      # 一度も走らない** —— この job は `pnpm verify` を呼ばず、門を1本ずつ並べる形
+      # だからである。`scripts/check-scripts-wired.test.ts` は「STEPS か workflow の
+      # どちらかに在る」ことしか見ないので、STEPS にだけ足すと**配線済みとして緑を
+      # 返しながら、main へ7箇所目が入るのを止められない**。直上の `check:sdk-quotes`
+      # がまさに同じ穴で（#646。実装から配線まで期間が空いた）、そのときの断りが
+      # このすぐ上に逐語で残っている。
+      #
+      # ⚠ `scripts/check-stale-token-restart-advice.test.ts` は純関数を合成入力で
+      # 測るだけで、`check-sdk-quotes.test.ts` のような「実物の検査」describe を
+      # 持たない。⟹ `pnpm test` 経由でも実物の repo には当たらない。**実物へ当たる
+      # 経路はこの1行だけである。**
+      - run: pnpm check:stale-token-restart-advice
+
+      # **逆向きの助言（「確かめる前に manager_start で起こし直すな」）の生成元を
+      # 1つに保つ歯（Issue #1287）。** 直上の `check:stale-token-restart-advice`
+      # （#1175）とまったく同じ理由・同じ配線の形——`scripts/verify-core.mjs` の
+      # STEPS だけでは PR の CI で一度も走らない（この job は `pnpm verify` を
+      # 呼ばず、門を1本ずつ並べる形だからである）。**実物へ当たる経路はこの1行
+      # だけである**（`scripts/check-restart-before-check-advice.test.ts` は純
+      # 関数を合成入力で測るだけで、実物の repo には当たらない）。
+      - run: pnpm check:restart-before-check-advice
+
+      # **#1854 系の直し（子プロセスへ親の env を丸ごと渡さない）が、直す前の形へ
+      # 戻っていないことを見る歯（Issue #1935）。** 直しそのものは PR #1903 /
+      # #1905 / #1916 / #1918 / #1925 で正しく入ったが、`mutate-selftest.mjs` の
+      # `poisonedEnv` や `scripts/verify-core.test.ts` の `env: gitChildEnv()` を
+      # 直す前の形（`{ ...process.env, … }` / `env: process.env`）へ変異で戻しても、
+      # 既存のどの歯も鳴らなかった（#1935 本文の実測1・実測2）。この検査はその形が
+      # テストのコードと変異試験ハーネス自身へ書き戻されたことを静的に見る
+      # （上の2本と同じ理由・同じ配線の形——`scripts/verify-core.mjs` の STEPS
+      # だけでは PR の CI で一度も走らない）。
+      - run: pnpm check:no-env-passthrough
+      - run: pnpm format:check
+
+  # **build の生成物を読む検査（`apps/web` の生成物・OpenAPI spec）。**
+  build-checks:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
       - run: pnpm build
 
       # **`apps/web` の生成物に Node 専用の痕跡が無いことを見る（結果側の歯）。**
@@ -257,56 +342,67 @@ jobs:
             exit 1
           }
 
-      # **同梱 SDK から逐語で引いたコメントが、いまの版でも逐語であることを当てる。**
-      # 引き写した先はこの repo のソースなので、SDK の版を上げても差分には出ない —— #639
-      # （0.3.259 → 0.3.261）は lock と catalog の2ファイルだけで、それでも
-      # `agent-events.ts` の逐語は同じ更新で嘘になった（#646）。**引用は外の版に依存して
-      # おり、依存はコンパイラにもレビューにも見えない。**
-      #
-      # **この検査は #646 で入ったが、どの門からも呼ばれていなかった**（`package.json` に
-      # script は在り、`scripts/verify-core.mjs` の STEPS にも ci.yml にも無かった）。
-      # 在るのに効いていない道具は、静かに失敗する（`AGENTS.md`「静かに失敗する道具」）。
-      - run: pnpm check:sdk-quotes
+  typecheck:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
 
-      # **世代ずれの起こし直しの助言の生成元を1つに保つ歯（Issue #1175）。**
-      # `scripts/verify-core.mjs` の STEPS にも在るが、**STEPS だけでは PR の CI で
-      # 一度も走らない** —— この job は `pnpm verify` を呼ばず、門を1本ずつ並べる形
-      # だからである。`scripts/check-scripts-wired.test.ts` は「STEPS か workflow の
-      # どちらかに在る」ことしか見ないので、STEPS にだけ足すと**配線済みとして緑を
-      # 返しながら、main へ7箇所目が入るのを止められない**。直上の `check:sdk-quotes`
-      # がまさに同じ穴で（#646。実装から配線まで期間が空いた）、そのときの断りが
-      # このすぐ上に逐語で残っている。
-      #
-      # ⚠ `scripts/check-stale-token-restart-advice.test.ts` は純関数を合成入力で
-      # 測るだけで、`check-sdk-quotes.test.ts` のような「実物の検査」describe を
-      # 持たない。⟹ `pnpm test` 経由でも実物の repo には当たらない。**実物へ当たる
-      # 経路はこの1行だけである。**
-      - run: pnpm check:stale-token-restart-advice
-
-      # **逆向きの助言（「確かめる前に manager_start で起こし直すな」）の生成元を
-      # 1つに保つ歯（Issue #1287）。** 直上の `check:stale-token-restart-advice`
-      # （#1175）とまったく同じ理由・同じ配線の形——`scripts/verify-core.mjs` の
-      # STEPS だけでは PR の CI で一度も走らない（この job は `pnpm verify` を
-      # 呼ばず、門を1本ずつ並べる形だからである）。**実物へ当たる経路はこの1行
-      # だけである**（`scripts/check-restart-before-check-advice.test.ts` は純
-      # 関数を合成入力で測るだけで、実物の repo には当たらない）。
-      - run: pnpm check:restart-before-check-advice
-
-      # **#1854 系の直し（子プロセスへ親の env を丸ごと渡さない）が、直す前の形へ
-      # 戻っていないことを見る歯（Issue #1935）。** 直しそのものは PR #1903 /
-      # #1905 / #1916 / #1918 / #1925 で正しく入ったが、`mutate-selftest.mjs` の
-      # `poisonedEnv` や `scripts/verify-core.test.ts` の `env: gitChildEnv()` を
-      # 直す前の形（`{ ...process.env, … }` / `env: process.env`）へ変異で戻しても、
-      # 既存のどの歯も鳴らなかった（#1935 本文の実測1・実測2）。この検査はその形が
-      # テストのコードと変異試験ハーネス自身へ書き戻されたことを静的に見る
-      # （上の2本と同じ理由・同じ配線の形——`scripts/verify-core.mjs` の STEPS
-      # だけでは PR の CI で一度も走らない）。
-      - run: pnpm check:no-env-passthrough
+      - run: pnpm build
       - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm format:check
-      - run: pnpm test
 
+  lint:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - run: pnpm build
+      - run: pnpm lint
+
+  # **`pnpm test` は vitest の `--shard` で 4 つに分ける。**
+  # 分母は `strategy.job-total`（matrix の本数）から取るので、matrix の本数を変えても
+  # 「全シャードを合わせると全テスト」が崩れない。vitest の `--shard=i/n` は i=1..n の
+  # 全部で全ファイルを漏れも重なりも無く割り当てる。`fail-fast: false` は、1つ落ちても
+  # 他のシャードの結果を最後まで見るため（どのテストが落ちたかを1回で全部出す）。
+  # `scripts/test.mjs` の歯（skip・観測用テストの期限など）は各シャードで走る。
+  test:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    name: test (${{ matrix.shard }}/${{ strategy.job-total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - run: pnpm build
+      - run: pnpm test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+  mutation-selftest:
+    # `if:` の意図（schedule では回さない・draft の pull_request では回さない・`!=` で
+    # 書く理由）は、上の `ci` job の直上の doc がそのまま当てはまる。この job は
+    # 元は `ci` の step だったので、条件を1文字も変えずに引き継いでいる。
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - run: pnpm build
       # **変異試験ハーネスの自己検査（#1096）。** 本体の変異試験ではなく、
       # `mutate-selftest.mjs` のシナリオ（ハーネス自身の受け入れ条件と、
       # レビューで見つかった欠陥の回帰確認）だけを回す。
