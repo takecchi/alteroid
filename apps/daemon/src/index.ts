@@ -43,7 +43,10 @@ import {
   CLONE_PROVIDER_ENV_KEY,
   MANAGER_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
+  CLONE_PROVIDER_RECOMMENDATION,
   agentProviderOf,
+  cloneDriverFor,
+  cloneLayerProviderOf,
   placedAgentProvider,
   resolveCloneProviderId,
   resolveManagerProviderId,
@@ -1424,12 +1427,13 @@ export async function main(): Promise<void> {
    * （`resolveCloneProviderId` の doc）。置かれていたら帯と同じ流儀で黙って通さない。
    * マネージャーの provider は runner が読む（デーモンが読むのは `hello` の名乗りだけ）。
    */
-  const cloneProvider = agentProviderOf(resolveCloneProviderId(process.env));
+  // **クローン層の申告**（`cloneLayerProviderOf`）。Codex は承認と蒸留を持たないと申告する。
+  const cloneProvider = cloneLayerProviderOf(resolveCloneProviderId(process.env));
   if (placedAgentProvider(process.env, CLONE_PROVIDER_ENV_KEY) !== null) {
     process.stdout.write(
       `alteroidd: ${CLONE_PROVIDER_ENV_KEY} が置かれています` +
         `（既定 ${DEFAULT_AGENT_PROVIDER_ID} → ${cloneProvider.id}）。` +
-        `以後このデーモンのクローンはこの provider で走ります\n`,
+        `以後このデーモンのクローンはこの provider で走ります。${CLONE_PROVIDER_RECOMMENDATION}\n`,
     );
   }
 
@@ -1811,7 +1815,11 @@ export async function main(): Promise<void> {
     }
   }
 
+  const cloneDriver = cloneDriverFor(cloneProvider.id);
   const clone = createClone({
+    // クローン層の provider（S8）。`claude` は従来どおり（駆動役を渡さず、既定の Claude の駆動役）。
+    // `codex` は Codex の駆動役と、承認・蒸留を持たないという申告（台帳の「取れなかった」等が読む）。
+    ...(cloneDriver === undefined ? {} : { driver: cloneDriver, provider: cloneProvider }),
     stores,
     accountUsage: () => usagePoller.state(),
     // **`scheduler` はこの直後（下）に作る。** ここは同じ形の前方参照が既に

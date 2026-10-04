@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AGENT_PROVIDER_IDS, type AgentProviderId } from './agent-ports.js';
+import { AGENT_PROVIDER_IDS } from './agent-ports.js';
 import {
   CLONE_PROVIDER_ENV_KEY,
   CLONE_PROVIDER_IDS,
@@ -10,10 +10,12 @@ import {
   agentProviderOf,
   placedAgentProvider,
   resolveCloneProviderId,
+  CLONE_PROVIDER_RECOMMENDATION,
+  cloneLayerProviderOf,
   resolveManagerProviderId,
 } from './agent-provider-selection.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
-import { CODEX_PROVIDER } from './codex-provider.js';
+import { CODEX_CLONE_PROVIDER, CODEX_PROVIDER } from './codex-provider.js';
 
 describe('層ごとの provider の選択', () => {
   it('環境変数名は固定である', () => {
@@ -58,12 +60,27 @@ describe('層ごとの provider の選択', () => {
     expect(MANAGER_PROVIDER_IDS).toEqual(['claude', 'codex']);
   });
 
-  it('クローン層は codex をまだ受け付けない（駆動役が無い。黙って claude で走りながら codex を名乗らせない）', () => {
-    const codex: AgentProviderId = 'codex';
-    expect(CLONE_PROVIDER_IDS).toEqual(['claude']);
-    expect(() => resolveCloneProviderId({ [CLONE_PROVIDER_ENV_KEY]: codex })).toThrow(
-      new RegExp(CLONE_PROVIDER_ENV_KEY),
+  it('クローン層も codex を受け付ける（駆動役: CodexCloneDriver）', () => {
+    expect(CLONE_PROVIDER_IDS).toEqual(['claude', 'codex']);
+    expect(resolveCloneProviderId({ [CLONE_PROVIDER_ENV_KEY]: 'codex' })).toBe('codex');
+    // 既定は動かさない。
+    expect(resolveCloneProviderId({})).toBe('claude');
+  });
+
+  it('クローン層の不正な値のエラー文に、Claude を推奨すると添える', () => {
+    expect(() => resolveCloneProviderId({ [CLONE_PROVIDER_ENV_KEY]: 'cladue' })).toThrow(
+      /Claude を推奨/,
     );
+    expect(() => resolveManagerProviderId({ [MANAGER_PROVIDER_ENV_KEY]: 'cladue' })).not.toThrow(
+      /推奨/,
+    );
+    expect(CLONE_PROVIDER_RECOMMENDATION).toContain('Claude を推奨');
+  });
+
+  it('クローン層の Codex は承認と蒸留（圧縮の割り込み）を持たないと申告する。claude は変わらない', () => {
+    expect(cloneLayerProviderOf('codex')).toBe(CODEX_CLONE_PROVIDER);
+    expect(cloneLayerProviderOf('claude')).toBe(CLAUDE_PROVIDER);
+    expect(agentProviderOf('codex').capabilities.permissions).toBe(true);
   });
 
   it('2層は独立に読まれる（片方の変数がもう片方に効かない）', () => {

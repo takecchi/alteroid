@@ -324,7 +324,7 @@ railway add --database postgres
 | `ALTEROID_MANAGER_MODEL`    | `opus`   |
 | `ALTEROID_WORKER_MODEL`     | `sonnet` |
 
-層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は、クローン（`ALTEROID_CLONE_PROVIDER`）が `claude` だけ、マネージャー（`ALTEROID_MANAGER_PROVIDER`）が `claude` / `codex`** で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。**クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る）。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
+層ごとの provider（#486 M7 段 S1）も同じ Shared Variables へ置ける。**受け付ける値は、クローン（`ALTEROID_CLONE_PROVIDER`）もマネージャー（`ALTEROID_MANAGER_PROVIDER`）も `claude` / `codex`** で、空・未設定は既定（`claude`）。クローンはデーモン（`app`）が `ALTEROID_CLONE_PROVIDER`、マネージャーは `runner` が `ALTEROID_MANAGER_PROVIDER` を読む（作業者はマネージャーの子で親に従うので、変数は無い）。**未知の値は起動を止める**。**クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る）。`GET` で見える値ではなく起動ログ（`が置かれています` の行）で確かめる。
 
 | 変数                        | 値       |
 | --------------------------- | -------- |
@@ -340,7 +340,13 @@ railway add --database postgres
 - **サンドボックス**: Codex 側のサンドボックスは使わず `danger-full-access` で動かす（器の中で動かないため。境界はコンテナと別 UID で、Claude Code と同じ）。確認は権限モードから写す: `bypassPermissions` なら聞かず（`never`）、それ以外は `on-request`。承認はクローンへ回る。
 - **モデル**: `ALTEROID_MANAGER_MODEL` を置いたときだけ Codex へ渡す。置かなければ Codex の既定。
 - **費用**: トークン数と、単価表にあるモデルの USD。web 検索の回数は読めない。
-- クローン層は `codex` をまだ受け付けない（`ALTEROID_CLONE_PROVIDER=codex` は起動を止める）。
+
+**クローンを Codex で動かすとき（`ALTEROID_CLONE_PROVIDER=codex`、#486 S8）— ⚠️ クローン層は Claude を推奨する**
+
+- オーナーの決定（2026-10-04）: **承認と蒸留の2つは欠けたままでよい**。`approvalPolicy=never`・`sandbox=danger-full-access` で走り（権限モードは読まない）、**承認の能力は無い**と申告する。Codex からの承認要求は常に拒否する（許可の代用は作らない）。圧縮直前の記憶への移し替え（蒸留）は走らない（圧縮は事後の観測だけ）。欠けは日誌・日報・`self_status` に出る。
+- クローンの道具は stdio の中継（`ALTEROID_CLONE_TOOLS_TRANSPORT` の値によらず stdio）で Codex へ渡る。人間の MCP 連携も `config.mcp_servers` で渡す（実機で繋がることは未確認）。
+- 鍵・認証・モデルはマネージャーと同じ扱い（API キーのときだけ ephemeral、`CODEX_API_KEY` は子の環境変数に置かない。モデルは `ALTEROID_CLONE_MODEL` を置いたときだけ Codex へ渡す）。
+- 生ログの預け先・文脈の使用状況（`contextUsage`）・作業者層は持たない。実機の app-server では確かめていない。
 
 **モデル帯の3つは Shared Variables で正しい。** `ALTEROID_MANAGER_MODEL` / `ALTEROID_WORKER_MODEL` を実際に SDK へ渡すのは `runner` で、そこが正本である。`app` も同じ値を読むが、使うのは自己認識に載せる**宣言**のためだけで、両方へ同じ値が降りているから食い違わない（片方にだけ置くと、クローンが「Opus に委譲している」と宣言しながら別の帯が走る）。空・空白のみは「未設定」として既定へ落ちるので、空で残っていても壊れない。
 

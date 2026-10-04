@@ -62,6 +62,19 @@ export function resolveCloneToolsTransport(
 }
 
 /**
+ * 駆動役が経路を要求していればそれ、無ければ env（{@link resolveCloneToolsTransport}）。
+ *
+ * Codex の駆動役は別プロセスなので、インプロセスの MCP サーバ（`sdk`）を持てず `stdio` だけを
+ * 要求する（`AgentCloneDriver.requiredToolsTransport`）。Claude の駆動役は要求しない（env のまま）。
+ */
+export function resolveCloneToolsTransportFor(
+  required: CloneToolsTransport | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): CloneToolsTransport {
+  return required ?? resolveCloneToolsTransport(env);
+}
+
+/**
  * クローンの道具の中継（`clone-tool-relay-host.ts`）が listen するソケットを
  * 収める専用ディレクトリ。**同一 UID 以外は traverse できないよう 0700 にする**
  * ——実際に 0700 へ絞るのは `createCloneToolRelayHost` 自身（`socketPath` の

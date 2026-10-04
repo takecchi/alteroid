@@ -40,7 +40,7 @@ import {
   CLONE_TOOL_RELAY_SOCKET_FILENAME,
   DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR,
   resolveCloneToolRelayChildEntry,
-  resolveCloneToolsTransport,
+  resolveCloneToolsTransportFor,
   type CloneToolsTransport,
 } from './clone-tools-transport.js';
 import { CONTEXT_USAGE_CATEGORY_LIMIT } from './context-usage.js';
@@ -2364,8 +2364,10 @@ class Clone implements CloneHost {
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
     // **駆動役が経路を決めるなら、それが勝つ**（Codex は別プロセスで、インプロセスの MCP を持てない。
     // `AgentCloneDriver.requiredToolsTransport`）。Claude の駆動役は定義しないので env に従う（変えない）。
-    this.#cloneToolsTransport =
-      this.#driver.requiredToolsTransport ?? resolveCloneToolsTransport(envSource);
+    this.#cloneToolsTransport = resolveCloneToolsTransportFor(
+      this.#driver.requiredToolsTransport,
+      envSource,
+    );
     this.#cloneToolRelaySocketDir = cloneToolRelaySocketDir ?? DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR;
     this.#redeliveryGate = redeliveryGate;
     this.#managers =

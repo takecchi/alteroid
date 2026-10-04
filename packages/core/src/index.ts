@@ -1198,11 +1198,14 @@ export {
   CLONE_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
   MANAGER_PROVIDER_ENV_KEY,
+  CLONE_PROVIDER_RECOMMENDATION,
   agentProviderOf,
+  cloneLayerProviderOf,
   placedAgentProvider,
   resolveCloneProviderId,
   resolveManagerProviderId,
 } from './agent-provider-selection.js';
+export { cloneDriverFor } from './clone-driver-for.js';
 export {
   CLONE_PEERS_ENV_KEY,
   MANAGER_PEERS_ENV_KEY,

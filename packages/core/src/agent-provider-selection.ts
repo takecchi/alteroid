@@ -5,7 +5,7 @@ import {
   type AgentProviderId,
 } from './agent-ports.js';
 import { CLAUDE_PROVIDER } from './claude-provider.js';
-import { CODEX_PROVIDER } from './codex-provider.js';
+import { CODEX_CLONE_PROVIDER, CODEX_PROVIDER } from './codex-provider.js';
 import { placedModelTier } from './model-tier.js';
 
 /**
@@ -47,12 +47,17 @@ export function placedAgentProvider(env: NodeJS.ProcessEnv, key: string): string
 /**
  * クローン層が実際に動かせる provider。**{@link AGENT_PROVIDER_IDS} の部分集合。**
  *
- * `codex` はマネージャー層の駆動役（`codex-manager-driver.ts`）だけが在り、クローン層の駆動役
- * は無い（#486 S8）。`ALTEROID_CLONE_PROVIDER=codex` を受け付けると、クローンは黙って
- * Claude で走るのに provider だけが codex を名乗る — 効いていないことに気づけない。
- * 実装が入る段でここへ足す。
+ * `codex` は `CodexCloneDriver`（`codex-clone-driver.ts`。#486 S8）で動かす。**ただしクローン層の
+ * provider は Claude を推奨する**（2026-10-04 のオーナー決定）: Codex では承認（Claude の auto に
+ * 当たるものが無く、`approvalPolicy=never`・`sandbox=danger-full-access` で走り、承認の能力は無い）と
+ * 記憶への蒸留（圧縮直前の移し替え）の2つが欠ける。欠けは日誌・日報・`self_status` に出る
+ * （{@link cloneLayerProviderOf}）。既定（置かない・`claude`）は変えない。
  */
-export const CLONE_PROVIDER_IDS: readonly AgentProviderId[] = ['claude'];
+export const CLONE_PROVIDER_IDS: readonly AgentProviderId[] = ['claude', 'codex'];
+
+/** エラー文に添える、クローン層の provider の推奨（受け付ける説明の箇所に必ず添える）。 */
+export const CLONE_PROVIDER_RECOMMENDATION =
+  'クローン層の provider は Claude を推奨する（Codex では承認と蒸留の2つが欠ける）';
 
 /** マネージャー層（と、その子の作業者）が実際に動かせる provider。 */
 export const MANAGER_PROVIDER_IDS: readonly AgentProviderId[] = ['claude', 'codex'];
@@ -61,6 +66,7 @@ function resolveAgentProviderId(
   env: NodeJS.ProcessEnv,
   key: string,
   accepted: readonly AgentProviderId[],
+  note?: string,
 ): AgentProviderId {
   const given = placedAgentProvider(env, key);
   if (given === null) return DEFAULT_AGENT_PROVIDER_ID;
@@ -68,13 +74,19 @@ function resolveAgentProviderId(
   if (known !== undefined) return known;
   throw new Error(
     `${key} の値が不正: ${given}` +
-      `（使えるのは ${accepted.join(' / ')}。既定は ${DEFAULT_AGENT_PROVIDER_ID}）`,
+      `（使えるのは ${accepted.join(' / ')}。既定は ${DEFAULT_AGENT_PROVIDER_ID}）` +
+      (note === undefined ? '' : `。${note}`),
   );
 }
 
-/** クローン層の provider id。未知の値・この層にまだ実装が無い値は例外。 */
+/** クローン層の provider id。未知の値・この層に実装が無い値は例外。 */
 export function resolveCloneProviderId(env: NodeJS.ProcessEnv = process.env): AgentProviderId {
-  return resolveAgentProviderId(env, CLONE_PROVIDER_ENV_KEY, CLONE_PROVIDER_IDS);
+  return resolveAgentProviderId(
+    env,
+    CLONE_PROVIDER_ENV_KEY,
+    CLONE_PROVIDER_IDS,
+    CLONE_PROVIDER_RECOMMENDATION,
+  );
 }
 
 /** マネージャー層（と、その子の作業者）の provider id。未知の値は例外。 */
@@ -93,6 +105,15 @@ const AGENT_PROVIDERS: Record<AgentProviderId, AgentProvider> = {
 
 export function agentProviderOf(id: AgentProviderId): AgentProvider {
   return AGENT_PROVIDERS[id];
+}
+
+/**
+ * **クローン層**で名乗る provider の実体。Codex は {@link agentProviderOf}（マネージャー層の申告）と
+ * 違い、承認と蒸留（圧縮の割り込み）を持たないと申告する（{@link CODEX_CLONE_PROVIDER}）。
+ * 欠落の行・台帳の「取れなかった」はこれを使って出す。
+ */
+export function cloneLayerProviderOf(id: AgentProviderId): AgentProvider {
+  return id === 'codex' ? CODEX_CLONE_PROVIDER : agentProviderOf(id);
 }
 
 /** runner が名乗った provider id（文字列）から実体を引く。受け付ける id 以外は `undefined`。 */

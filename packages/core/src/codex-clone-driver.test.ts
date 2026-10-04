@@ -14,6 +14,7 @@ import {
   toCodexSessionSpec,
 } from './codex-clone-driver.js';
 import { CODEX_CLONE_PROVIDER, CODEX_PROVIDER } from './codex-provider.js';
+import { resolveCloneToolsTransportFor } from './clone-tools-transport.js';
 import { describeProviderGaps } from './provider-gaps.js';
 
 const FAKE_KEY = 'sk-fake-0000-test-key-not-real';
@@ -267,5 +268,19 @@ describe('CodexCloneDriver.open', () => {
     const session = driver.open(cloneSpec());
     await expect(session.contextUsage()).rejects.toThrow(/context usage/);
     session.close();
+  });
+});
+
+describe('クローンの道具の経路', () => {
+  it('Codex の駆動役は stdio を要求し、env が sdk でも覆る。Claude（要求なし）は env のまま', () => {
+    const required = new CodexCloneDriver().requiredToolsTransport;
+    expect(resolveCloneToolsTransportFor(required, { ALTEROID_CLONE_TOOLS_TRANSPORT: 'sdk' })).toBe(
+      'stdio',
+    );
+    expect(resolveCloneToolsTransportFor(required, {})).toBe('stdio');
+    expect(resolveCloneToolsTransportFor(undefined, {})).toBe('sdk');
+    expect(
+      resolveCloneToolsTransportFor(undefined, { ALTEROID_CLONE_TOOLS_TRANSPORT: 'stdio' }),
+    ).toBe('stdio');
   });
 });
