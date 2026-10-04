@@ -13,7 +13,7 @@ import { UnreadableJobNote } from './managers';
 const TICK_MS = 1000;
 
 /**
- * 「いま動いているもの」—— 稼働の地図。`GET /topology/stream` の購読（`useTopology`。ホームだけが
+ * 「稼働状況」—— 稼働状況の図。`GET /topology/stream` の購読（`useTopology`。ホームだけが
  * 開く）から場面を作って `SystemTopology` へ渡す。
  *
  * ## 時間の進め方

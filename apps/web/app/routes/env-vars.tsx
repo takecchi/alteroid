@@ -228,7 +228,7 @@ function AddEnvVarForm() {
   return (
     <Card>
       <CardHeader
-        title="置く"
+        title="登録する"
         subtitle="alteroid credential set / PUT /credentials と同じもの。シークレット可否は作成時に決まり、後から変更できない"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">

@@ -16,9 +16,9 @@ import { HomeTiles } from './dashboard-tiles';
 const SIDE_BY_SIDE_MIN_WIDTH = 1280;
 
 /**
- * ホーム（`/`）。役割は「**いま動いているか・何をしているか・自分を待っているものは何か**」。
+ * ホーム（`/`）。役割は「**いま動いているか・何をしているか・承認待ちは何か**」。
  *
- * 1. **稼働の地図**（`dashboard-map.tsx`）と **承認待ち一覧**（`dashboard-awaiting.tsx`）
+ * 1. **稼働状況の図**（`dashboard-map.tsx`）と **承認待ち一覧**（`dashboard-awaiting.tsx`）
  *    - 広い画面（`xl` 以上）: **地図が左・一覧が右の横並び**。**一覧を 24rem の固定幅**（承認の
  *      質問を2行で畳む行なので足りる）にして、残りを全部地図へ渡す（地図は横幅を使う部品）。
  *      地図は枠の幅で配置を替える（`SystemTopology`: 920px 以上で横、未満で縦の木。上限あり）。
@@ -45,10 +45,7 @@ const SIDE_BY_SIDE_MIN_WIDTH = 1280;
 export default function Dashboard() {
   const sideBySide = useMinWidth(SIDE_BY_SIDE_MIN_WIDTH);
   return (
-    <Page
-      title="ホーム"
-      description="いま動いているか、何をしているか、あなたを待っているものは何か"
-    >
+    <Page title="ホーム" description="稼働状況・承認待ち・最新の日報・各機能の概況">
       <div className="flex min-w-0 flex-col gap-4">
         {sideBySide ? (
           <div

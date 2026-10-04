@@ -89,7 +89,7 @@ export const Cards: Story = {
       <Card>
         <CardHeader
           title="マネージャー"
-          subtitle="いま動いているもの"
+          subtitle="稼働状況"
           action={
             <Button size="sm" variant="ghost">
               更新

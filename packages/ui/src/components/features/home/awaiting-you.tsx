@@ -14,7 +14,7 @@ export type HomeRenderLink = (slot: { className: string; children: ReactNode }) 
 export const HOME_LINK_CLASS = 'text-xs text-primary hover:underline';
 
 /**
- * 「あなたを待っている」の段。**人間が手を動かすものだけ**（承認待ち・未了の仕事）を置く。
+ * 「承認待ち一覧」の段。**人間が手を動かすものだけ**（承認待ち・未了の仕事）を置く。
  *
  * - `attention`（既定）—— 待っているものがあるとき。縁を `warn` にして目を引く
  * - `plain` —— 読み込み中・読めない・形が違うとき。**待っているものがあるように見せない**
@@ -34,7 +34,7 @@ export function AwaitingYouCard({
   return (
     <Card className={cn('min-w-0', tone === 'attention' && 'border-warn/50')}>
       <CardHeader
-        title="あなたを待っている"
+        title="承認待ち一覧"
         subtitle="答えるまで、その仕事だけが止まる"
         action={action}
       />
@@ -49,7 +49,7 @@ export function AwaitingYouCalm({ children }: { children?: ReactNode }) {
     <Card className="min-w-0">
       <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
         <span className="size-1.5 shrink-0 rounded-full bg-ok" aria-hidden />
-        {children ?? 'あなたを待っているものはない'}
+        {children ?? '承認待ちはない'}
       </div>
     </Card>
   );

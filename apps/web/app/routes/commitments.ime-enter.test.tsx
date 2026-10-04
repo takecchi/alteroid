@@ -155,7 +155,7 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     const requests = recordRequests();
     renderPage();
 
-    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    await screen.findByText('未了の仕事はない。');
     const input = screen.getByPlaceholderText(/何を引き受けたか/);
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 
@@ -171,7 +171,7 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     const requests = recordRequests();
     renderPage();
 
-    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    await screen.findByText('未了の仕事はない。');
     const input = screen.getByPlaceholderText(/何を引き受けたか/);
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 
@@ -187,7 +187,7 @@ describe('積む（PushForm）の本文欄 — IME 変換中の Enter', () => {
     const requests = recordRequests();
     renderPage();
 
-    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    await screen.findByText('未了の仕事はない。');
     const input = screen.getByPlaceholderText(/何を引き受けたか/);
     fireEvent.change(input, { target: { value: '週明けに設計を見直す' } });
 

@@ -593,7 +593,7 @@ function ScheduleForm() {
   return (
     <Card className="mb-4">
       <CardHeader
-        title="継続する依頼を仕込む"
+        title="継続する依頼を登録する"
         subtitle="時刻が来れば必ず届く（記憶に書くだけでは、思い出せるかどうかの賭けになる）"
       />
       <div className="flex flex-col gap-2 px-4 py-3">
@@ -658,7 +658,7 @@ function EventForm() {
   return (
     <Card>
       <CardHeader
-        title="外部イベントを流す"
+        title="外部イベントを送る"
         subtitle="MCP 経由の通知・CI の失敗・レビュー依頼を、人間の手で再現する"
       />
       <div className="flex flex-col gap-2 px-4 py-3">

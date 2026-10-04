@@ -104,7 +104,7 @@ export default function Profile() {
       <div className="flex flex-col gap-4">
         <Card>
           <CardHeader
-            title="いま置かれているもの"
+            title="現在の登録内容"
             subtitle="alteroid profile list / status / GET /profile と同じもの"
             action={data === undefined ? undefined : <Badge>{data.entries.length}</Badge>}
           />
@@ -387,7 +387,7 @@ function ProfileEditor({
   return (
     <Card>
       <CardHeader
-        title="行を置く"
+        title="行を登録する"
         subtitle="alteroid profile edit / set / PUT /profile/:name と同じもの。1行を丸ごと置き換える"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">

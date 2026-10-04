@@ -20,9 +20,9 @@ import { HomeTile, HomeTileNote } from './home-tile';
 import { LiveMapCard, type LiveMapConnection } from './live-map-card';
 
 /**
- * ホーム。役割は「**いま動いているか・何をしているか・自分を待っているものは何か**」。
- * 上から: あなたを待っている（承認待ち・未了の仕事。無ければ1行に畳む）→ いま動いているもの
- * （稼働の地図。接続の状態を正直に言う）→ 小さなカード4枚（各ページへの入口）。
+ * ホーム。役割は「**いま動いているか・何をしているか・承認待ちは何か**」。
+ * 上から: 承認待ち一覧（承認待ち・未了の仕事。無ければ1行に畳む）→ 稼働状況
+ * （稼働状況の図。接続の状態を正直に言う）→ 小さなカード4枚（各ページへの入口）。
  *
  * 画面（`apps/web/app/routes/dashboard.tsx`）は同じ部品に実データを渡す。ここは見た目だけ。
  */
@@ -36,7 +36,7 @@ type Story = StoryObj<typeof meta>;
 
 const REPORT_BODY = `## 今日やったこと
 
-- 稼働の地図の API を足した。**持ち越し**は SSE の再接続の試験。
+- 稼働状況の図の API を足した。**持ち越し**は SSE の再接続の試験。
 - ホームの配置を、広い画面では地図と承認待ちの横並びにした。
 
 ## 明日やること
@@ -153,10 +153,7 @@ function Home({
     />
   );
   return (
-    <Page
-      title="ホーム"
-      description="いま動いているか、何をしているか、あなたを待っているものは何か"
-    >
+    <Page title="ホーム" description="稼働状況・承認待ち・最新の日報・各機能の概況">
       <div className="flex flex-col gap-4">
         <div
           className={

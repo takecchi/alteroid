@@ -27,8 +27,8 @@ afterEach(() => {
   setViewportWidth(DEFAULT_VIEWPORT_WIDTH);
 });
 
-const MAP_TITLE = 'いま動いているもの';
-const AWAITING_TITLE = 'あなたを待っている';
+const MAP_TITLE = '稼働状況';
+const AWAITING_TITLE = '承認待ち一覧';
 
 /** 主役の段の中で、地図と承認待ちの見出しを DOM の順に返す。 */
 async function mainOrder(): Promise<string[]> {

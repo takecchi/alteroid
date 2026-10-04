@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 引き受けた仕事の一覧の取得に失敗したとき、「終わっていない仕事はない」「片付いた記録はまだない」を
+ * 引き受けた仕事の一覧の取得に失敗したとき、「終わっていない仕事はない」「完了した仕事の記録はまだない」を
  * 並べない（issue #2320）。
  *
  * 失敗したのに0件の文言が並ぶと、読めていないのに引き受けた仕事が無いように読める。忘れさせない
@@ -46,8 +46,8 @@ function renderPage() {
   );
 }
 
-const OPEN_EMPTY = /引き受けたまま終わっていない仕事はない。/;
-const CLOSED_EMPTY = /片付いた記録はまだない。/;
+const OPEN_EMPTY = /未了の仕事はない。/;
+const CLOSED_EMPTY = /完了した仕事の記録はまだない。/;
 
 describe('引き受けた仕事の一覧の取得に失敗したとき（issue #2320）', () => {
   it('サーバの失敗（500）: エラーは出し、「終わっていない仕事はない」は出さない', async () => {
@@ -58,7 +58,7 @@ describe('引き受けた仕事の一覧の取得に失敗したとき（issue #
     expect(screen.queryByText(OPEN_EMPTY)).toBeNull();
   });
 
-  it('片付けたものも見る状態でも、「片付いた記録はまだない」は出さない', async () => {
+  it('片付けたものも見る状態でも、「完了した仕事の記録はまだない」は出さない', async () => {
     stubCommitments(() => json({ error: 'internal' }, 500));
     renderPage();
     expect(await screen.findByRole('alert')).toBeTruthy();

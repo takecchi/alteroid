@@ -140,16 +140,16 @@ describe('/progress 画面 — 4枚', () => {
     stubProgress();
     renderPage();
 
-    await card('積み上がり');
+    await card('未了の仕事');
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['積み上がり', '実施中', '片付いた速度', '見込み']);
+    expect(headings).toEqual(['未了の仕事', '実行中の委譲', '完了の速度', '見込み']);
   });
 
   it('積み上がり: 未了の件数と、起点別・齢・齢の帯・状態別を並べる', async () => {
     stubProgress();
     renderPage();
 
-    const backlog = within(await card('積み上がり'));
+    const backlog = within(await card('未了の仕事'));
     expect(backlog.getByText('未了')).toBeTruthy();
     expect(backlog.getByText('12')).toBeTruthy();
     expect(backlog.getByText(/人間 5 \/ マネージャー 3 \/ 外部 2 \/ 自発 2/)).toBeTruthy();
@@ -169,7 +169,7 @@ describe('/progress 画面 — 4枚', () => {
     stubProgress();
     renderPage();
 
-    const inProgress = within(await card('実施中'));
+    const inProgress = within(await card('実行中の委譲'));
     expect(inProgress.getByText('実行中').nextElementSibling?.textContent).toContain('3');
     expect(inProgress.getByText('人間待ち').nextElementSibling?.textContent).toContain('1');
     expect(inProgress.getByText('行方不明').nextElementSibling?.textContent).toContain('2');
@@ -182,7 +182,7 @@ describe('/progress 画面 — 4枚', () => {
     stubProgress();
     renderPage();
 
-    const throughput = within(await card('片付いた速度'));
+    const throughput = within(await card('完了の速度'));
     expect(throughput.getByText('受けた').nextElementSibling?.textContent).toContain('4');
     expect(throughput.getByText('閉じた').nextElementSibling?.textContent).toContain('9');
     expect(throughput.getByText('委譲の終了').nextElementSibling?.textContent).toContain('7');
@@ -320,7 +320,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     });
     renderPage();
 
-    const backlog = within(await card('積み上がり'));
+    const backlog = within(await card('未了の仕事'));
     expect(backlog.getByText('最古').nextElementSibling?.textContent).toMatch(/^—/);
     expect(backlog.getByText('齢の中央値').nextElementSibling?.textContent).toMatch(/^—/);
     expect(backlog.getByText('最古').nextElementSibling?.textContent).not.toMatch(/^0/);
@@ -340,7 +340,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     });
     renderPage();
 
-    const inProgress = within(await card('実施中'));
+    const inProgress = within(await card('実行中の委譲'));
     expect(inProgress.getByText('最終報告（最古）').nextElementSibling?.textContent).toMatch(/^—/);
     expect(inProgress.getByText('最終報告（最新）').nextElementSibling?.textContent).toMatch(/^—/);
     expect(inProgress.getByText('報告の無い走行').nextElementSibling?.textContent).toBe('2 件');
@@ -357,7 +357,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     });
     renderPage();
 
-    const backlog = within(await card('積み上がり'));
+    const backlog = within(await card('未了の仕事'));
     expect(
       backlog.getByText(/数が欠けうる（読めなかった行 2 件 \/ 刈り取られた片付き行 5 件）/),
     ).toBeTruthy();
@@ -374,18 +374,18 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     });
     renderPage();
 
-    const inProgress = within(await card('実施中'));
+    const inProgress = within(await card('実行中の委譲'));
     expect(inProgress.getByText(/読めない委譲の行が 2 件ある/)).toBeTruthy();
     expect(inProgress.getByText(/居ないのではない/)).toBeTruthy();
     // 台帳の欠けの但し書きは、委譲の欠けだけでは出ない。
-    const backlog = within(await card('積み上がり'));
+    const backlog = within(await card('未了の仕事'));
     expect(backlog.queryByText(/数が欠けうる/)).toBeNull();
   });
 
   it('対照: unreadableJobs が 0 なら、委譲の欠けの但し書きは出ない（#2345）', async () => {
     stubProgress();
     renderPage();
-    expect(within(await card('実施中')).queryByText(/読めない委譲/)).toBeNull();
+    expect(within(await card('実行中の委譲')).queryByText(/読めない委譲/)).toBeNull();
   });
 
   it('対照: 欄が無い（古いデーモン）でも、委譲の欠けの但し書きは出ず、落ちない（#2345）', async () => {
@@ -398,14 +398,14 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       }),
     });
     renderPage();
-    expect(within(await card('実施中')).queryByText(/読めない委譲/)).toBeNull();
+    expect(within(await card('実行中の委譲')).queryByText(/読めない委譲/)).toBeNull();
   });
 
   it('GitHub は「観測していない（0 件ではない）」と reason をそのまま出し、0 を作らない', async () => {
     stubProgress();
     renderPage();
 
-    const backlog = within(await card('積み上がり'));
+    const backlog = within(await card('未了の仕事'));
     const label = backlog.getByText('open の Issue / PR');
     const stat = label.parentElement;
     expect(stat?.textContent).toContain('観測していない（0 件ではない）');
@@ -437,7 +437,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       });
       renderPage();
 
-      const backlog = within(await card('積み上がり'));
+      const backlog = within(await card('未了の仕事'));
       expect(backlog.getByText(/観測した側の申告/)).toBeTruthy();
       expect(
         backlog.getByText('takecchi/alteroid open Issue').parentElement?.textContent,
@@ -465,7 +465,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
           }),
         });
         renderPage();
-        return within(await card('積み上がり'));
+        return within(await card('未了の仕事'));
       };
       const view = await render({
         ci: { pulls: 3, success: 2, failure: 1, pending: 0, checks: '必須チェックだけ' },
@@ -496,7 +496,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
           }),
         });
         renderPage();
-        const view = within(await card('積み上がり'));
+        const view = within(await card('未了の仕事'));
         const original = describeGithubCi(extra as Parameters<typeof describeGithubCi>[0]);
         expect(original.startsWith('CI: ')).toBe(true);
         expect(view.getByText(original.slice('CI: '.length))).toBeTruthy();
@@ -520,7 +520,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
         }),
       });
       renderPage();
-      const view = within(await card('積み上がり'));
+      const view = within(await card('未了の仕事'));
       expect(view.getByText(/取れなかった — HTTP 403/)).toBeTruthy();
       expect(view.queryByText(/success/)).toBeNull();
     });
@@ -532,7 +532,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
         }),
       });
       renderPage();
-      const view = within(await card('積み上がり'));
+      const view = within(await card('未了の仕事'));
       expect(view.getByText(/観測していない（0 件ではない）/)).toBeTruthy();
       expect(view.queryByText(/success/)).toBeNull();
     });
@@ -560,7 +560,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
       });
       renderPage();
 
-      const backlog = within(await card('積み上がり'));
+      const backlog = within(await card('未了の仕事'));
       const stat = backlog.getByText('takecchi/other の open の Issue / PR').parentElement;
       expect(stat?.textContent).toContain('—');
       expect(stat?.textContent).toContain('0 件ではない');
@@ -575,7 +575,7 @@ describe('/progress 画面 — 取れない値と但し書き', () => {
     it('知らない github.state が来ても落ちず、数を作らない', async () => {
       stubProgress({ body: baseBody({ github: { state: 'future', reason: 'x' } }) });
       renderPage();
-      const backlog = within(await card('積み上がり'));
+      const backlog = within(await card('未了の仕事'));
       expect(backlog.getByText(/この版の画面は知らない状態（future）/)).toBeTruthy();
     });
   });
@@ -586,7 +586,7 @@ describe('/progress 画面 — 窓の切替', () => {
     const stub = stubProgress();
     renderPage();
 
-    await card('積み上がり');
+    await card('未了の仕事');
     expect(stub.calls.some((url) => url.includes('windowHours=168'))).toBe(true);
     expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe(
@@ -598,7 +598,7 @@ describe('/progress 画面 — 窓の切替', () => {
     const stub = stubProgress();
     renderPage('/progress?windowHours=720');
 
-    await card('積み上がり');
+    await card('未了の仕事');
     expect(stub.calls.some((url) => url.includes('windowHours=720'))).toBe(true);
     expect(screen.getByRole('radio', { name: '30日' }).getAttribute('aria-checked')).toBe('true');
   });
@@ -607,7 +607,7 @@ describe('/progress 画面 — 窓の切替', () => {
     const stub = stubProgress();
     renderPage('/progress?windowHours=5');
 
-    await card('積み上がり');
+    await card('未了の仕事');
     expect(stub.calls.every((url) => !url.includes('windowHours=5&') && !url.endsWith('=5'))).toBe(
       true,
     );
@@ -617,11 +617,11 @@ describe('/progress 画面 — 窓の切替', () => {
   it('チップで切り替えると、URL と要求の windowHours が変わる', async () => {
     const stub = stubProgress();
     const router = renderPage();
-    await card('積み上がり');
+    await card('未了の仕事');
 
     fireEvent.click(screen.getByRole('radio', { name: '24時間' }));
 
-    await screen.findByRole('heading', { name: '積み上がり' });
+    await screen.findByRole('heading', { name: '未了の仕事' });
     expect(router.state.location.search).toBe('?windowHours=24');
     expect(stub.calls.some((url) => url.includes('windowHours=24'))).toBe(true);
     expect(screen.getByRole('radio', { name: '24時間' }).getAttribute('aria-checked')).toBe('true');
@@ -635,7 +635,7 @@ describe('/progress 画面 — 窓の切替', () => {
   it('選択中をもう一度押しても、URL も選択も変わらない', async () => {
     stubProgress();
     const router = renderPage('/progress?windowHours=24');
-    await card('積み上がり');
+    await card('未了の仕事');
 
     fireEvent.click(screen.getByRole('radio', { name: '24時間' }));
 
@@ -646,7 +646,7 @@ describe('/progress 画面 — 窓の切替', () => {
   it('窓は radiogroup で、名前は「窓の長さ」。矢印キーで窓が変わる', async () => {
     const stub = stubProgress();
     const router = renderPage();
-    await card('積み上がり');
+    await card('未了の仕事');
 
     const group = screen.getByRole('radiogroup', { name: '窓の長さ' });
     expect(
@@ -667,7 +667,7 @@ describe('/progress 画面 — 窓の切替', () => {
     expect(router.state.location.search).toBe('?windowHours=720');
     expect(screen.getByRole('radio', { name: '30日' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('radio', { name: '7日' }).getAttribute('aria-checked')).toBe('false');
-    await screen.findByRole('heading', { name: '積み上がり' });
+    await screen.findByRole('heading', { name: '未了の仕事' });
     expect(stub.calls.some((url) => url.includes('windowHours=720'))).toBe(true);
   });
 });
@@ -678,7 +678,7 @@ describe('/progress 画面 — 取得の失敗', () => {
     renderPage();
 
     expect(await screen.findByText(/この版のデーモンにはこの口/)).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: '積み上がり' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: '未了の仕事' })).toBeNull();
   });
 
   it('404 以外（500）は一般のエラーとして出る', async () => {

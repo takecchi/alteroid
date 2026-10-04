@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
- * ホームの「あなたを待っている」と「いま動いているもの」が、読み込み中に空の文言を出さないこと
+ * ホームの「承認待ち一覧」と「稼働状況」が、読み込み中に空の文言を出さないこと
  * （issue #2325）。
  *
- * まだ一度も取れていない（`data` も `error` も無い）間に「あなたを待っているものはない」
+ * まだ一度も取れていない（`data` も `error` も無い）間に「承認待ちはない」
  * 「走っているマネージャーはいません」を描くと、取れた結果が0件だったように読める。失敗
  * （`error`）は従来どおり `ErrorNote` が先に拾う。
  *
@@ -42,7 +42,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-const CALM = 'あなたを待っているものはない';
+const CALM = '承認待ちはない';
 const NO_MANAGERS = '走っているマネージャーはいません';
 
 function cardOf(title: string): HTMLElement {
@@ -59,7 +59,7 @@ describe('ホームの読み込み中', () => {
     await screen.findByText('まだ記録が無い。');
 
     expect(screen.queryByText(CALM)).toBeNull();
-    expect(within(cardOf('あなたを待っている')).getByText('読み込み中')).toBeTruthy();
+    expect(within(cardOf('承認待ち一覧')).getByText('読み込み中')).toBeTruthy();
   });
 
   it('地図の最初のメッセージが届くまでは、空の地図（走っているマネージャーはいません）を描かない', async () => {
@@ -73,13 +73,13 @@ describe('ホームの読み込み中', () => {
 
     // 他のカードが取れ終わるまで待つ（地図の側だけが読み込み中のまま残る）。
     await screen.findByText('まだ記録が無い。');
-    const card = cardOf('いま動いているもの');
-    expect(within(card).getByText('稼働の地図を読み込み中')).toBeTruthy();
+    const card = cardOf('稼働状況');
+    expect(within(card).getByText('稼働状況の図を読み込み中')).toBeTruthy();
     expect(within(card).queryByText(NO_MANAGERS)).toBeNull();
 
     release();
     expect(await within(card).findByText(NO_MANAGERS)).toBeTruthy();
-    expect(within(card).queryByText('稼働の地図を読み込み中')).toBeNull();
+    expect(within(card).queryByText('稼働状況の図を読み込み中')).toBeNull();
   });
 
   it('対照: 0件で成功したら、どちらの文言も出る', async () => {
@@ -93,8 +93,8 @@ describe('ホームの読み込み中', () => {
     // 経路を置かない = 繋がらない（`stubFetch` の既定）。
     renderHome();
 
-    const card = cardOf('いま動いているもの');
-    await waitFor(() => expect(within(card).getByText(/稼働の地図に繋がらない/)).toBeTruthy());
+    const card = cardOf('稼働状況');
+    await waitFor(() => expect(within(card).getByText(/稼働状況の図に繋がらない/)).toBeTruthy());
     expect(within(card).queryByText(NO_MANAGERS)).toBeNull();
   });
 });

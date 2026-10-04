@@ -4,7 +4,7 @@ import { useDropped, ApiError } from '@alteroid/swr';
 import type { DroppedState } from '@alteroid/logic';
 
 /**
- * `/dropped` — 握り潰しの跡（記録・読み出しの失敗の跡。本文は1文字も含まない）を
+ * `/dropped` — 記録の失敗（記録・読み出しの失敗の跡。本文は1文字も含まない）を
  * 読む。
  *
  * 経路は `GET /dropped` の1本だけで、CLI（`alteroid dropped`）とクローンの MCP
@@ -30,12 +30,12 @@ export default function Dropped() {
   return (
     <Page
       tabs={<JournalTabs />}
-      title="握り潰しの跡"
+      title="記録の失敗"
       description="記録・読み出しの失敗の跡。本文は1文字も含まない。読み取り専用"
     >
       <Card>
         <CardHeader
-          title="帳面"
+          title="失敗の一覧"
           subtitle="alteroid dropped / GET /dropped と同じもの"
           action={data === undefined ? undefined : <Badge>{data.total}</Badge>}
         />

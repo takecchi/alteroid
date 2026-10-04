@@ -6,7 +6,7 @@ import { SystemTopology, type SystemTopologyProps } from '../topology/system-top
 export type LiveMapConnection = 'connecting' | 'live' | 'offline';
 
 /**
- * 「いま動いているもの」—— 稼働の地図のカード。**接続の状態を正直に言う。**
+ * 「稼働状況」—— 稼働状況の図のカード。**接続の状態を正直に言う。**
  *
  * - まだ何も届いていない: 接続中は読み込み、切れていれば失敗として言う（空の地図を出さない）
  * - 地図が在るが**切れている / デーモンが組めていない**: 最後の地図は出すが、
@@ -41,23 +41,23 @@ export function LiveMapCard({
   return (
     <Card className="min-w-0">
       <CardHeader
-        title="いま動いているもの"
+        title="稼働状況"
         subtitle="光は直近の指示（紫）と報告（青）。札を押すと詳細"
         action={action}
       />
       {scene === undefined ? (
         unavailable !== undefined ? (
           <ErrorNote
-            error={new Error(`デーモンが稼働の地図を組めていない（${unavailable}）`)}
+            error={new Error(`デーモンが稼働状況の図を組めていない（${unavailable}）`)}
             className="m-4"
           />
         ) : connection === 'offline' ? (
           <ErrorNote
-            error={new Error('稼働の地図に繋がらない（繋ぎ直している）')}
+            error={new Error('稼働状況の図に繋がらない（繋ぎ直している）')}
             className="m-4"
           />
         ) : (
-          <Spinner label="稼働の地図を読み込み中" />
+          <Spinner label="稼働状況の図を読み込み中" />
         )
       ) : (
         <div className="px-3 py-3">
@@ -67,8 +67,8 @@ export function LiveMapCard({
               className="mb-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
             >
               {unavailable !== undefined
-                ? `デーモンが稼働の地図を組めていない（${unavailable}）。`
-                : '稼働の地図への接続が切れている（繋ぎ直している）。'}
+                ? `デーモンが稼働状況の図を組めていない（${unavailable}）。`
+                : '稼働状況の図への接続が切れている（繋ぎ直している）。'}
               {staleAt === undefined
                 ? '出しているのは最後に受け取った状態で、いまの状態ではない。'
                 : `出しているのは ${staleAt} に受け取った状態で、いまの状態ではない。`}

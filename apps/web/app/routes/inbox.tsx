@@ -291,7 +291,7 @@ function InboxBacklogView({ backlog }: { backlog: InboxBacklog }) {
       />
 
       <BreakdownSection
-        title={`齢（観測 ${backlog.observedAt} 時点。齢は相対値なので、この行を写すときは基準点も一緒に写すこと）`}
+        title={`滞留時間（観測 ${backlog.observedAt} 時点。滞留時間は相対値なので、この行を写すときは基準点も一緒に写すこと）`}
         rows={backlog.ageBuckets.map((entry) => ({ label: entry.label, count: entry.count }))}
       />
     </div>

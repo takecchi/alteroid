@@ -61,7 +61,7 @@ async function renderDropped(): Promise<void> {
       </MemoryRouter>
     </Providers>,
   );
-  await screen.findByText('帳面');
+  await screen.findByText('失敗の一覧');
 }
 
 describe('/dropped 画面 — 0件・件数あり・runner の非表示を混ぜない', () => {

@@ -68,7 +68,7 @@ export default function Commitments() {
   return (
     <Page
       tabs={<WorkTabs />}
-      title="引き受けたまま終わっていない仕事"
+      title="未了の仕事"
       description="受信箱でも日誌でもここには残らない。忘れさせないための器であって、やることの一覧ではない"
       action={
         <Button size="sm" onClick={() => setShowClosed((v) => !v)}>
@@ -95,7 +95,7 @@ export default function Commitments() {
               subtitle="古い順。齢がそのまま「どれだけ放置されているか」である"
             />
             {open.length === 0 ? (
-              <Empty>引き受けたまま終わっていない仕事はない。</Empty>
+              <Empty>未了の仕事はない。</Empty>
             ) : (
               <ul>
                 {open.map((commitment) => (
@@ -114,11 +114,11 @@ export default function Commitments() {
           {showClosed && (
             <Card>
               <CardHeader
-                title="片付いたもの"
+                title="完了した仕事"
                 subtitle="新しい順。何をもって終わりとしたかを残す"
               />
               {closed.length === 0 ? (
-                <Empty>片付いた記録はまだない。</Empty>
+                <Empty>完了した仕事の記録はまだない。</Empty>
               ) : (
                 <ul>
                   {closed.map((commitment) => (
@@ -1169,7 +1169,7 @@ function PushForm() {
 
   return (
     <Card className="mb-4">
-      <CardHeader title="台帳へ積む" subtitle="引き受けたことを、片付くまで残す" />
+      <CardHeader title="仕事を登録する" subtitle="引き受けたことを、片付くまで残す" />
       <div className="flex flex-col gap-2 px-4 py-3">
         <Input
           value={body}

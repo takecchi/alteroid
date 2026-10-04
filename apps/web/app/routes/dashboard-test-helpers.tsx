@@ -2,7 +2,7 @@
  * ホーム（`dashboard.tsx`）のテストが共有する足場。**テストではない**（`*.test.tsx` ではない）。
  *
  * ホームは次の経路を読む: `/reports` `/approvals` `/progress` `/managers` `/schedule` `/usage` と、
- * 稼働の地図の SSE `/topology/stream`。**日誌の SSE（`/journal/stream`）の経路は置いていない。**
+ * 稼働状況の図の SSE `/topology/stream`。**日誌の SSE（`/journal/stream`）の経路は置いていない。**
  * 置くと購読が増えたことに気づけない（知らない URL は `stubFetch` が「繋がらない」にするので、
  * 張りに行けば `stub.calls` に必ず出る）。
  *
@@ -36,7 +36,7 @@ export interface HomeOptions {
   /** `GET /progress` の応答。`'fail'` は 500。既定の応答は未了 5 件、実行中 3 件。 */
   progress?: unknown | 'fail';
   /**
-   * 稼働の地図の SSE。`frames` は流す枠。`undefined` は経路を置かない（繋がらない扱い）。
+   * 稼働状況の図の SSE。`frames` は流す枠。`undefined` は経路を置かない（繋がらない扱い）。
    * `keepOpen` は既定で真（閉じると再接続を繰り返すため）。
    */
   topology?: { frames: { event: string; data: unknown; after?: PromiseLike<unknown> }[] };

@@ -62,7 +62,7 @@ export default function McpServersPage() {
       <div className="flex flex-col gap-4">
         <Card>
           <CardHeader
-            title="いま置かれているもの"
+            title="現在の登録内容"
             subtitle="alteroid mcp list / show / GET /mcp-servers と同じもの"
           />
           <div className="flex flex-col gap-3 px-4 py-3">
@@ -237,7 +237,7 @@ function McpServersEditor({ current }: { current: McpServersState }) {
   return (
     <Card>
       <CardHeader
-        title="差し替える"
+        title="登録内容を置き換える"
         subtitle="alteroid mcp edit / set / clear / PUT /mcp-servers と同じもの。丸ごと置き換える"
       />
       <div className="flex flex-col gap-3 px-4 py-3 text-sm">

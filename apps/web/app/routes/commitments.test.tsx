@@ -368,7 +368,7 @@ describe('/commitments 画面', () => {
     const requests = recordRequests();
     renderPage();
 
-    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    await screen.findByText('未了の仕事はない。');
     fireEvent.change(screen.getByPlaceholderText(/何を引き受けたか/), {
       target: { value: '週明けに設計を見直す' },
     });
@@ -388,7 +388,7 @@ describe('/commitments 画面', () => {
     stubCommitments([]);
     renderPage();
 
-    await screen.findByText('引き受けたまま終わっていない仕事はない。');
+    await screen.findByText('未了の仕事はない。');
     expect((screen.getByRole('button', { name: '積む' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -279,7 +279,7 @@ function BacklogCard({ progress }: { progress: Progress }) {
 
   return (
     <Card>
-      <CardHeader title="積み上がり" subtitle="台帳（引き受けた仕事）の未了" />
+      <CardHeader title="未了の仕事" subtitle="台帳（引き受けた仕事）の未了" />
       <Section>
         <StatRow>
           <Stat label="未了" value={count(backlog.total)} unit="件" />
@@ -326,7 +326,7 @@ function InProgressCard({ progress }: { progress: Progress }) {
   ];
   return (
     <Card>
-      <CardHeader title="実施中" subtitle="委譲（マネージャー）の走行" />
+      <CardHeader title="実行中の委譲" subtitle="委譲（マネージャー）の走行" />
       <Section>
         <StatRow>
           <Stat label="実行中" value={count(inProgress.running)} unit="件" />
@@ -354,7 +354,7 @@ function ThroughputCard({ progress }: { progress: Progress }) {
   return (
     <Card>
       <CardHeader
-        title="片付いた速度"
+        title="完了の速度"
         subtitle={`直近 ${count(window.hours)} 時間（${formatDateTime(window.from)} 〜 ${formatDateTime(window.to)}）`}
       />
       <Section>

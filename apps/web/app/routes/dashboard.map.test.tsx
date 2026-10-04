@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * ホームの「いま動いているもの」（稼働の地図）。実データ（`GET /topology/stream` の SSE）から
+ * ホームの「稼働状況」（稼働状況の図）。実データ（`GET /topology/stream` の SSE）から
  * 場面を作って `SystemTopology` へ渡すところまでを通す。
  *
  * 保証すること:
@@ -61,8 +61,7 @@ const snapshotOf = (patch: Record<string, unknown>) => ({
   data: topologySnapshot(patch),
 });
 
-const mapCard = () =>
-  screen.getByText('いま動いているもの').closest<HTMLElement>('[data-slot="card"]')!;
+const mapCard = () => screen.getByText('稼働状況').closest<HTMLElement>('[data-slot="card"]')!;
 
 /** 札（ボタン）。名前は「層 ラベル 状態」。 */
 const node = (name: RegExp) => within(mapCard()).getByRole('button', { name });
@@ -197,7 +196,7 @@ describe('切れた・組めないとき、古いと断る', () => {
     });
 
     const note = await within(mapCard()).findByText(
-      /デーモンが稼働の地図を組めていない（ECONNREFUSED）/,
+      /デーモンが稼働状況の図を組めていない（ECONNREFUSED）/,
     );
     expect(note.textContent).toContain('いまの状態ではない');
     expect(node(/マネージャー abcdef12/)).toBeTruthy();
@@ -209,7 +208,7 @@ describe('切れた・組めないとき、古いと断る', () => {
     });
 
     expect(
-      await within(mapCard()).findByText(/デーモンが稼働の地図を組めていない（ECONNREFUSED）/),
+      await within(mapCard()).findByText(/デーモンが稼働状況の図を組めていない（ECONNREFUSED）/),
     ).toBeTruthy();
     expect(within(mapCard()).queryByText('走っているマネージャーはいません')).toBeNull();
   });

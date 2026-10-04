@@ -19,10 +19,10 @@ export const WORK_TABS: readonly NavTab[] = [
   { to: '/progress', label: '作業の進捗' },
 ];
 
-/** 日誌: 日誌本体・握り潰しの跡・セッション生ログの退避。 */
+/** 日誌: 日誌本体・記録の失敗・セッション生ログの退避。 */
 export const JOURNAL_TABS: readonly NavTab[] = [
   { to: '/journal', label: '日誌' },
-  { to: '/dropped', label: '握り潰しの跡' },
+  { to: '/dropped', label: '記録の失敗' },
   { to: '/archive', label: 'アーカイブ' },
 ];
 
