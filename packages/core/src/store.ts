@@ -7,8 +7,6 @@ import type { McpServers, StoredMcpServers } from './mcp-servers.js';
 import type { ActiveAgentToken, AgentToken, TokenRotationSettings } from './token-pool.js';
 import type {
   Commitment,
-  AppraisalValue,
-  AppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   InboxEvent,
@@ -734,7 +732,7 @@ export interface JobStore {
    * 消える——`ScheduleStore.editRequest`（#1654）が `put()` の read-modify-write
    * を塞いだのと同じ形の穴であり、`CommitmentStore.open`（#1041）が
    * 「読んでから書く」をアプリ層から追い出したのとも同じ理由である。**実際に
-   * `ManagerPool.appraise()` の孤児ジョブ分岐（`#records` に像を持たない委譲）が
+   * `ManagerPool` の孤児ジョブ分岐（`#records` に像を持たない委譲）が
    * この形で割り込まれた書き込みを踏み消していた**（Issue #1674 の実測）。
    *
    * **`mutate` は同期の関数である。** 区間の中で `await` を挟むと、区間が
@@ -751,7 +749,7 @@ export interface JobStore {
    * なく `UnreadableJobError`（本ファイル）を投げる。`mutate` は呼ばれず、行にも
    * 触れない**（issue #2051 で「投げる」→「`null`」に倒し、この直しで「無い」と
    * 「読めない」を分けた）。`null` に畳むと、呼び出し元が「台帳に居ない」と
-   * 言い切ってしまう（`ManagerPool.appraise` がそうだった）。版ずれの行を古い版が
+   * 言い切ってしまう（`ManagerPool` の孤児ジョブ分岐がそうだった）。版ずれの行を古い版が
    * 誤って上書きしないためでもある——`current` を作れない以上、`mutate` に渡す
    * 値そのものが無い。**メモリ実装（`testing.ts`）は投げない**——`putJob` が
    * `jobSchema.parse` を通すので、壊れた行を持てない。
@@ -789,7 +787,7 @@ export interface JobStore {
    * 「まだ回答済みではない」と読み、同じ承認に紐づく仕事が2回再開しうる
    * （回答どうしの競合）。クローンの取り下げと人間の回答が重なると、
    * 取り下げたはずの承認に回答が立ち、配達と再開まで進みうる（取り下げと
-   * 回答の競合）。`updateJob` が `ManagerPool.appraise()` の孤児ジョブ分岐で
+   * 回答の競合）。`updateJob` が `ManagerPool` の孤児ジョブ分岐で
    * 実際に踏み消された書き込みを塞いだのと同じ形の穴が、承認待ちの側にも
    * 対になって存在していた。
    *
@@ -1218,11 +1216,10 @@ export class UnreadableCommitmentError extends Error {
  * `UnreadableCommitmentError` を、呼び出し側が人間・クローンへ返す1文へ
  * 変換する共通の文面（issue #2148）。
  *
- * **なぜ1箇所に置くか。** 台帳を読んでから操作する5口
- * （`PATCH /commitments/:id`・`POST /commitments/:id/appraise`・道具
- * `commitment_edit` / `commitment_appraise`。`commitment_close` は別の扱い
+ * **なぜ1箇所に置くか。** 台帳を読んでから操作する口
+ * （`PATCH /commitments/:id`・道具 `commitment_edit`。`commitment_close` は別の扱い
  * ——下の「なぜ `commitment_close` を含めないか」を見よ）が、先に呼ぶ
- * `get(id)` から同じ `UnreadableCommitmentError` を受け取る。HTTP の5口は
+ * `get(id)` から同じ `UnreadableCommitmentError` を受け取る。HTTP の口は
  * `apps/daemon/src/app.ts`、道具は `packages/core/src/tools.ts` と別ファイル
  * に分かれているので、同じ状況の説明文をそれぞれ手で書くと、`commitmentPosition`
  * （このファイル冒頭の doc）と同じ理由で片方だけ直して食い違う。
@@ -1239,7 +1236,7 @@ export class UnreadableCommitmentError extends Error {
  * られる（issue #2148 の決定 (1)）——だからここで説明する口がどれであっても、
  * 「別の口（close）からなら閉じられる」という事実は変わらない。
  *
- * **本文の書き直し・評定は、この関数を呼ぶどの口からもできない**（issue #2148
+ * **本文の書き直しは、この関数を呼ぶどの口からもできない**（issue #2148
  * の決定 (2)。本文が本当に読める形へ戻るという保証が無い書き直しは、この
  * issue の範囲では入れない判断——`docs/` 相当の決定は Issue 本文とマネージャー
  * のコメントを見よ）。
@@ -1248,8 +1245,7 @@ export function describeUnreadableCommitment(error: UnreadableCommitmentError): 
   return (
     `${error.message}。close で閉じることはできる` +
     '（POST /commitments/:id/close・commitment_close）。' +
-    '本文の書き直し（PATCH /commitments/:id・commitment_edit）や' +
-    '評定（POST /commitments/:id/appraise・commitment_appraise）はできない。'
+    '本文の書き直し（PATCH /commitments/:id・commitment_edit）はできない。'
   );
 }
 
@@ -1467,40 +1463,6 @@ export interface CommitmentStore {
    * 決めていない呼び出しはコンパイルエラーで立ち止まる（issue #286）。
    */
   close(id: string, at: string, reason: string, by: CommitmentClosedBy): Promise<boolean>;
-
-  /**
-   * **その仕事がどうだったか**を記録する（#1054。自己改善の段1）。行が在れば
-   * `true`、無い id は `false`。
-   *
-   * **上書きしてよい。** 人間がクローンの評定を覆せることが要件そのものである
-   * （`docs/PRD.md`「要件: 自己改善」）。覆される前の値は**日誌**に残るので、
-   * 行の側は常に「いまの値」だけを持つ（`appraisalSchema` の doc）。
-   *
-   * **未了の行にも付けられる。** 「片付いてから」を器の側で強制しない — 人間が
-   * 走っている最中に「これは駄目そうだ」と印を付ける経路を塞ぐ理由が無い
-   * （`close` が「既に閉じている」を `false` で断るのとは性質が違う。あちらは
-   * 二重に閉じると `closedAt` が後の時刻へずれるが、評定は上書きが正しい）。
-   *
-   * **`by` は `close` と同じ理由で必須である**（issue #286）。呼び出し元は
-   * 常に誰が付けたかを知っている。
-   *
-   * **`reason` は任意。** 書けない評定（画面のボタン1つ）を塞がないため。
-   * ただし**書かせる側（道具・画面）は書くよう促すこと** — 軸を足すかどうかの
-   * 判断材料はここにしか無い（`commitmentSchema.appraisalReason` の doc）。
-   *
-   * **`workKind`（仕事の種類。issue #1308）は `reason` と逆の扱いである。**
-   * `reason` は渡さなければ消える（覆した評定に前の理由が残ると嘘になる）が、
-   * `workKind` は渡さなければ**前の値を残す** —— 評定を覆しても、その仕事が何の
-   * 種類だったかは変わらないからである（`workKindSchema` の doc）。
-   */
-  appraise(
-    id: string,
-    at: string,
-    value: AppraisalValue,
-    by: AppraisedBy,
-    reason?: string,
-    workKind?: string,
-  ): Promise<boolean>;
 
   /**
    * 複数件を1回でまとめて片付いたことを記録する（issue #844）。

@@ -177,9 +177,6 @@ describe('クローン — 自律（人間以外の起点）', () => {
       abort: () => {
         throw new Error('not implemented');
       },
-      appraise: () => {
-        throw new Error('not implemented');
-      },
       list: () => Promise.resolve([summaryOf('mgr-alive', true), summaryOf('mgr-dead', false)]),
       denials: () => [],
       pushHealthOf: () => undefined,

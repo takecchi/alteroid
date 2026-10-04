@@ -138,8 +138,7 @@ ${buildSelfKnowledge(self)}
 - \`daily_report_write\`: 日報を残す（人間が普段読む唯一の層）
 - \`usage_read\`: 利用状況。**アカウント全体の残り枠と支出上限**（claude.ai 側の値）と、**alteroid が使った分**（日・マネージャー・モデル別の台帳）。重い委譲を続けてよいかの材料はここにある。**推定値であって請求明細ではない。** 「取れなかった」と「0」は分けて出るので、読み替えないこと
 - \`schedule_list\` / \`schedule_create\` / \`schedule_remove\`: 継続中の依頼（時間起点の仕込み）
-- \`commitment_list\` / \`commitment_open\` / \`commitment_close\` / \`commitment_close_many\` / \`commitment_edit\` / \`commitment_appraise\`: 引き受けたまま終わっていない仕事の台帳。**順序は持たない**（何を先にやるかはあなたが決める）。\`commitment_edit\` で直せるのは**あなた自身が \`commitment_open\` で載せた行（\`origin: self\`）だけ**である（人間が積んだ行は人間が Web UI から直す）。編集の前後の本文は日誌へ逐語で残るので、直しても元の本文は読み戻せる。溜まった未了を絞り込みでまとめて閉じるのが \`commitment_close_many\` で、**既定は試算（何も閉じない）**・\`origin\` は必須・4つ全部を並べた呼びは断られる（閉じた行を開き直す道具は無い）。**片付けるときは、うまくいったかの評定も付けること**（\`commitment_close\` の \`appraisal\`、または後から \`commitment_appraise\`）。**評定には \`workKind\`（この仕事は何の種類だったか: 実装 / 調査 / レビュー…）も必ず添える** —— 評定を仕事の種類ごとに束ねる鍵になる。同じ種類には同じ言葉を使い続けること。評定が無い行は「まだ評定していない」として残り、**それは「普通だった」ではない**。人間はこれを覆すことがあり、覆された事実は評定そのものを較正する材料になる
-- \`appraisal_stats\`: 評定（\`good\`/\`bad\`/\`unclear\`/未評定）の内訳を要るときに数える。「引き受けた仕事」（台帳）と「委譲」（マネージャーに出した仕事）は別の軸で、日誌の decision 行を先頭一致で数えた**全期間の総数**（\`journal_read\` の \`limit\`=200 には縛られない）。あわせて終端した委譲（\`done\`/\`failed\`/\`lost\`/\`stopped\`）を状態ごとに割って、評定が1度も付いていない件数も出す。評定行は仕事の種類（\`workKind\`）ごとにも割って出る（未分類はどれかの種類へ寄せない）。
+- \`commitment_list\` / \`commitment_open\` / \`commitment_close\` / \`commitment_close_many\` / \`commitment_edit\`: 引き受けたまま終わっていない仕事の台帳。**順序は持たない**（何を先にやるかはあなたが決める）。\`commitment_edit\` で直せるのは**あなた自身が \`commitment_open\` で載せた行（\`origin: self\`）だけ**である（人間が積んだ行は人間が Web UI から直す）。編集の前後の本文は日誌へ逐語で残るので、直しても元の本文は読み戻せる。溜まった未了を絞り込みでまとめて閉じるのが \`commitment_close_many\` で、**既定は試算（何も閉じない）**・\`origin\` は必須・4つ全部を並べた呼びは断られる（閉じた行を開き直す道具は無い）。
 - \`progress_read\`: 作業の進捗（積み上がり・実施中・窓の中の消化・見込み）を、台帳と委譲の行から数え直して読む。**率（%）は出さない**。取れないものは 0 ではなく状態か理由で出る。**GitHub（Issue / PR / CI）はデーモンが見に行かない**——観測した側が記録した数（観測者・観測時刻付きの申告）が無ければ「観測していない」と出る（0 件ではない）。観測した数は \`github_observation_record\` で記録できる（取れなかった回は数を作らず \`failed\` と理由で。\`query\` には母集合を切る引数を含める。観測者は器が埋める）。人間が \`alteroid progress\` で見るものと同じ数・同じ文
 - \`inbox_remove_many\`: まだ処理し終えていない受信箱の合図を、種類（\`distill\` / \`timer\` / \`external\` / \`self_initiative\` / \`manager_message\`）・送信元（\`manager_list\` の内訳に出る表記の完全一致）・齢（\`before\`）で絞り込んでまとめて消す。**人間起点の合図（\`human_message\` / \`human_answer\`）はそもそも選べない**——あなたは自分の側の都合で溜まった合図だけを畳める。同じ失敗の写しが数千件積もると1件ずつでは排出そのものが文脈窓を食い潰すための口（#972）。**既定は試算（何も消さない）**・\`types\` は必須・選べる5種類全部を並べた呼びは断られる（消した合図を戻す道具は無い）。台帳と違い行は残らず**物理的に消える**
 - \`profile_read\` / \`profile_write\` / \`profile_remove\`: 実行環境プロファイル（\`.zprofile\` 相当。鍵・\`PATH\` など。名前付きの行ごとに撒く先を持つ）
@@ -150,7 +149,7 @@ ${buildSelfKnowledge(self)}
 - \`self_read\`: 自分自身（alteroid）の正典を読む
 - \`self_status\`: **いま自分が何で走っているか**（宣言されたモデル帯・SDK が実際に報告したモデル id・effort・版・認証の出所・許可モード・MCP サーバ・セッション id・記憶の大きさ・台帳との突き合わせ、ほか。**出る項目の全部は道具の説明文が名乗る**——ここに数え上げを持たない）。人間が Claude Code で見ているものと同じ材料である。**取れていない値は「まだ分からない」と出る** ので、既定値として読み替えないこと
 - \`self_dropped\`: 自分が記録・読み出しをしそこねた跡（stderr へ残る「握り潰しの跡」）を、このプロセスの中から読み戻す。器の外の stderr（Railway 等）の代わりではなく、それでは遡れなかった側を埋める口。直近の分だけを持ち、再起動・デプロイの入れ替えで消える
-- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_appraise\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）。**それでも足りない**——報告に書かれていない中身（実際に何をどう呼んだか等）を確かめたいときは \`manager_transcript\` でセッションの生ログまで降りる。\`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）が一本道になっている。\`manager_transcript\` の「無い」は「そのマネージャー自体が居ない」と「居るが生ログが一度も残らなかった」を区別できないことがあるので、応答の文言をそのまま読むこと。\`manager_list\` は各マネージャーがどの runner で走っているか（\`runnerId\`。未記録なら明示される）も出す。**報告を読んだら \`manager_appraise\` で評定を付けること**（\`good\` / \`bad\` / \`unclear\`。迷ったら \`unclear\`。\`workKind\` に仕事の種類も添える）——\`status\` の \`done\` は「セッションが終わった」であって「良かった」ではない。評定が無い委譲は「まだ評定していない」として残り、**それは「普通だった」ではない**
+- \`manager_start\` / \`manager_send\` / \`manager_stop\` / \`manager_list\` / \`manager_report\` / \`manager_transcript\`: マネージャーへの委譲。\`manager_list\` の依頼文と報告は**抜粋**で、省いた分量が本文に出る。欠けているなら \`manager_report\` で全文を読むこと（長ければ \`offset\` で続きが取れる）。**それでも足りない**——報告に書かれていない中身（実際に何をどう呼んだか等）を確かめたいときは \`manager_transcript\` でセッションの生ログまで降りる。\`manager_list\`（抜粋）→ \`manager_report\`（報告の全文）→ \`manager_transcript\`（生ログ）が一本道になっている。\`manager_transcript\` の「無い」は「そのマネージャー自体が居ない」と「居るが生ログが一度も残らなかった」を区別できないことがあるので、応答の文言をそのまま読むこと。\`manager_list\` は各マネージャーがどの runner で走っているか（\`runnerId\`。未記録なら明示される）も出す。
 - \`archive_remove\`: 退避済みセッション生ログの本文を1件消す（tombstone。行そのものは残る）。\`manager_transcript\` の応答に載る archive id を渡す。走行中のマネージャーの退避は消せない
 - \`archive_remove_many\`: 退避済みセッション生ログの本文を、セッション・齢（\`before\`）・大きさ（\`minStoredBytes\`）で絞り込んでまとめて tombstone する（行そのものは残る）。**既定は試算（何も消さない）**・3つのどれも渡さない呼びは断られる。セッションの最新行・含有が証明できない行・まだ記憶へ蒸留していない区間の墓標は既定で守る。**走行中のマネージャーが使っている退避は一括では消せず、override も無い**——それでも消すなら、その id を \`archive_remove\`（単発）へ渡し \`overrideReason\` で1件ずつ名指しすること
 - \`runner_list\`: 委譲先の器（runner のコンテナ）がいくつあり、どこで何本走っているかを見る。\`manager_start\` の \`runnerId\` に渡す名前もここで分かる
@@ -203,33 +202,6 @@ export interface DistillPromptOptions {
    * （`RenderedMemory` の branded type と同じ線）。
    */
   tidyTargets?: string;
-  /**
-   * **段2: 横断の蒸留** —— いま評定が付いている台帳・委譲を束ねて名指しする
-   * （`appraisal.ts` の `describeAppraisalTargets` の出力そのまま）。
-   *
-   * **`tidyTargets` に倣う。** 定期の棚卸し（`reason: 'scheduled'`）だけが渡す
-   * ——会話終了・PreCompact は「その会話を記憶へ移す」ことが本題なので、
-   * ここへ評定の束を足すと本題が薄まる。
-   *
-   * **文字列で受け取る。** 束ね方の持ち主は `appraisal.ts` の1つに閉じている
-   * （`tidyTargets` と同じ理由）。
-   */
-  appraisalTargets?: string;
-  /**
-   * **段4: やり方の候補の材料**（#1055）—— 評定が「うまくいかなかった／判定できない」
-   * へ傾いた仕事の種類ごとに、証拠・いまのやり方・(b)/(c) の食い違いを並べたもの
-   * （`practice-candidates.ts` の `describePracticeCandidates` の出力そのまま）。
-   *
-   * **`appraisalTargets` に倣う。** 定期の棚卸し（`reason: scheduled`）だけが渡し、
-   * 渡さない呼び手の出力は1文字も変わらない。文字列で受け取るのも同じ理由である
-   * （組み方の持ち主は `practice-candidates.ts` の1つに閉じる）。
-   *
-   * ⛔ **これは材料であって、採否の指示ではない**（2026-09-23T00:22Z の設計決定）。
-   * 枠の文面も「書け」とは言わない —— 書くかどうかはクローンが決め、やり方は
-   * 実行される定義ではない。構造的な制約も**禁止ではなく候補の書き方の材料**として
-   * 置く（#1055 本文「候補を生成するときに構造的な制約を与える」の置き換え）。
-   */
-  practiceCandidates?: string;
 }
 
 export function buildDistillPrompt(
@@ -255,46 +227,6 @@ ${options.tidyTargets}
 
 **上に名前が出ている文書から手を付けよ。** 出ていなければ、下の「統合」を通常どおり行えばよい。
 `;
-  // **段2: 横断の蒸留。`tidySection` と完全に同じパターン。** 渡されたときだけ
-  // 足し、渡さない呼び手（会話終了・PreCompact）の出力は1文字も変わらない
-  // （`DistillPromptOptions.appraisalTargets` の doc）。
-  const appraisalSection =
-    options.appraisalTargets === undefined
-      ? ''
-      : `
-## 評定の束（個別の反省を、共通の形に畳めるか確かめる）
-
-${options.appraisalTargets}
-
-**1件ずつの反省で終えないこと。** 2件以上に共通する形が見えたときだけ、それを一般の学びとして記憶へ畳め。共通する形が見えなければ、無理に畳まずそのまま置いてよい。
-`;
-
-  // **段4: やり方の候補の材料。`appraisalSection` と完全に同じパターン。** 渡された
-  // ときだけ足し、渡さない呼び手の出力は1文字も変わらない
-  // （`DistillPromptOptions.practiceCandidates` の doc）。
-  //
-  // ⛔ 文面に「書け」「採れ」を入れないこと。入れた瞬間、評定 → やり方の更新が
-  // 指示文の側で機械的に流れる形になり、段4 の設計（材料を差し出すだけ）が壊れる。
-  const practiceSection =
-    options.practiceCandidates === undefined
-      ? ''
-      : `
-## やり方の候補の材料（評定の傾き・いまのやり方・較正の材料。採るかどうかはあなたが決める）
-
-${options.practiceCandidates}
-
-**上は材料であって、指示ではない。** やり方（practice）は読む素材であって、実行される定義ではない —— 書いてあっても従うかどうかは仕事のたびにあなたが決める。この材料を見て、いまのやり方を書き直す・別の slug で並べて候補を足す・何もしない、のどれも普通の結果である。書くと決めたときだけ \`practice_write\` を使えばよい（前の本文は版として残り、\`practice_history\` で読める）。
-
-- **評定の数は、そのまま良し悪しの基準ではない。** 群の件数の多くはあなた自身の評定 (c) で、同じモデルが書いて同じモデルが評価した数である。人間の付け直し (b) との食い違いを見てから、どこまで信じるかを決めること。
-- **候補を1本に絞らなくてよい。** 得意な場面が違う候補を並べて持てる。平均の良さだけで1つを選ぶ必要はない。**古い版から枝を伸ばしてもよい**（\`practice_history\` → \`practice_read\` の \`version\`）。
-
-### 候補を書くなら使える、構造の材料（禁止ではない）
-
-- 手順の形そのものに制約を持たせる書き方がある（例: 「呼び出しは2回以内」「正規化は機械でやる」「検証は依頼文に全部書き出す」のように、回数・順序・どこを機械に任せるかを本文に書く）。
-- 並べて試すなら、既存の委譲（\`manager_start\` を複数）で表せる。新しい並行の仕組みは無く、要らない。
-- 層とモデル帯の対応（クローン・マネージャー・作業者）は固定で、変えるには人間の承認が要る。候補の中身はこの前提の上で書くことになる。
-`;
-
   return `[system] ${why}
 
 忘れる前に、記憶へ移すべきものがあるか確認せよ。
@@ -310,7 +242,7 @@ ${options.practiceCandidates}
 
 **⭐ ただし \`memory_section_move\`（節を別の文書へ移す）は、人間が書いた文書に対しても通る**（2026-09-08 に緩めた。移動は先に足して後で切るので、どの瞬間にも本文がどこかに在る＝失われない）。⟹ **このターンでできる整理の本体はこれである。** 断られるのを待たずに、いま移せる。
 
-${tidySection}${appraisalSection}${practiceSection}
+${tidySection}
 ## 統合（このターンでできることがあれば、あわせてやること）
 
 - **新しく書く前に、既存の記憶を \`memory_list\` / \`memory_read\` で探せ。** 重複する文書を作らない。近い内容の文書があれば、新規作成ではなく \`memory_write\` / \`memory_append\` で更新する。

@@ -113,14 +113,6 @@ import {
 import type { AnswerApprovalVia, CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
 import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
-import { describeAppraisalTargets } from './appraisal.js';
-import { computeAppraisalReconciliation } from './appraisal-stats.js';
-import {
-  describePracticeCandidates,
-  practiceCandidateKindKeys,
-  type PracticeCandidateMaterial,
-  type PracticeCandidateReconciliation,
-} from './practice-candidates.js';
 import {
   describeMemorySessionDelta,
   describeMemoryTidyTargets,
@@ -158,15 +150,12 @@ import {
 import { DAILY_REPORT_KIND, localDate, localDayRange } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
-  COMMITMENT_APPRAISAL_DECISION_PREFIX,
   commitmentClosedBySchema,
   describeAnsweredVia,
   isDailyReport,
   isWrittenDailyReport,
-  JOB_APPRAISAL_DECISION_PREFIX,
   PERMISSION_GRANT_CONSENT_PHRASE,
 } from './schema.js';
-import { workKindGroupKey } from './work-kind.js';
 import type {
   ApprovalSelection,
   ChatStreamEvent,
@@ -8258,97 +8247,10 @@ class Clone implements CloneHost {
             tidyTargets = `棚卸しの的: 測れなかった（理由: ${reasonOf(error)}）。memory_list から自分で探すこと。`;
           }
         }
-        // **段2: 横断の蒸留（#1055）。同じ定期の棚卸しに相乗りする**
-        // （`prompt.ts` の `DistillPromptOptions.appraisalTargets`）。上の
-        // `tidyTargets` と同じ倒し方（測れなかったら添えない・ターンは止めない）
-        // を守るため、**try/catch は別々に掛ける** —— まとめて1つの try に
-        // 入れると、片方が投げたときにもう片方まで巻き込んで落ちる。
-        let appraisalTargets: string | undefined;
-        if (event.reason === 'scheduled') {
-          try {
-            const commitments = await this.#stores.commitments.list({ includeClosed: true });
-            appraisalTargets = describeAppraisalTargets({
-              commitments,
-              jobs: await this.#stores.jobs.listJobs(),
-            });
-          } catch (error) {
-            appraisalTargets = `評定の的: 測れなかった（理由: ${reasonOf(error)}）。commitment_list / manager_list から自分で探すこと。`;
-          }
-        }
-        // **段4: やり方の候補の材料（#1055）。同じ定期の棚卸しに相乗りする**
-        // （`prompt.ts` の `DistillPromptOptions.practiceCandidates`）。
-        //
-        // ⛔ **ここは材料を読んで文字列にするだけで、`practice_write` を呼ばない。**
-        // 書くかどうかはこの後のターンでクローンが決める（`practice-candidates.ts`
-        // 冒頭の ⛔）。
-        //
-        // try/catch は段2 と別に掛ける（片方が投げてももう片方を巻き込まない）。
-        // 台帳・委譲は段2 と同じ読みをもう1度するが、共有すると段2 の失敗が
-        // こちらへ伝播する形になるので、独立に読む。**食い違いの数え上げはさらに
-        // 内側で別に受ける** —— 日誌の全期間を `asc` で読む重い走査
-        // （`computeAppraisalReconciliation` の doc。ページ送りで有界）なので、
-        // それだけが落ちたときに候補の群まで消さない。
-        let practiceCandidates: string | undefined;
-        if (event.reason === 'scheduled') {
-          try {
-            const commitments = await this.#stores.commitments.list({ includeClosed: true });
-            const jobs = await this.#stores.jobs.listJobs();
-            // **本文と版を読むのは、候補の的になった種類のやり方だけである**
-            // （`practiceCandidateKindKeys` の doc）。
-            const kindKeys = practiceCandidateKindKeys({ commitments, jobs });
-            const practices: PracticeCandidateMaterial[] = [];
-            if (kindKeys.size > 0) {
-              // **読めない行（`unreadable`）はここでは使わない**——材料にできる本文が
-              // 読めないので候補には載せられない。見せる先は `practice_list` /
-              // `GET /practices`（issue #2346）で、ここは「無い」と言う場所ではない。
-              for (const meta of (await this.#stores.practices.list()).entries) {
-                if (!kindKeys.has(workKindGroupKey(meta.kind) ?? '')) continue;
-                const found = await this.#stores.practices.read(meta.slug);
-                if (found === null) continue; // 一覧と読みの間に消えた
-                let versions: number | undefined;
-                try {
-                  versions = (await this.#stores.practices.listVersions(meta.slug)).length;
-                } catch {
-                  versions = undefined; // 0 にしない（「版が無い」と「数えられない」は別）
-                }
-                practices.push({
-                  slug: found.slug,
-                  kind: found.kind,
-                  title: found.title,
-                  updatedAt: found.updatedAt,
-                  content: found.content,
-                  ...(versions === undefined ? {} : { versions }),
-                });
-              }
-            }
-            let reconciliation: PracticeCandidateReconciliation;
-            try {
-              reconciliation = {
-                measured: true,
-                stats: await computeAppraisalReconciliation(this.#stores.journal, {
-                  commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-                  jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
-                }),
-              };
-            } catch (error) {
-              reconciliation = { measured: false, reason: reasonOf(error) };
-            }
-            practiceCandidates = describePracticeCandidates({
-              commitments,
-              jobs,
-              practices,
-              reconciliation,
-            });
-          } catch (error) {
-            practiceCandidates = `やり方の候補の材料: 測れなかった（理由: ${reasonOf(error)}）。commitment_list / manager_list / practice_list から自分で見ること。`;
-          }
-        }
         const distillPrompt = buildDistillPrompt(
           event.reason === 'shutdown' ? 'conversation_end' : event.reason,
           {
             ...(tidyTargets === undefined ? {} : { tidyTargets }),
-            ...(appraisalTargets === undefined ? {} : { appraisalTargets }),
-            ...(practiceCandidates === undefined ? {} : { practiceCandidates }),
           },
         );
         // **このターンへ何が入ったかを残す**（#243）。本文は定型文なので長さだけ

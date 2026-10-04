@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { isTerminalJobStatus } from './appraisal-stats.js';
 import { CLONE_REMOVABLE_INBOX_EVENT_TYPES } from './inbox-backlog.js';
 import { runnerLivenessSchema } from './runner-protocol.js';
-import { appraisalSchema, commitmentOriginSchema, jobStatusSchema } from './schema.js';
+import { commitmentOriginSchema } from './schema.js';
 import { RESERVED_SCHEDULE_KINDS, RESERVED_SCHEDULE_KIND_ENV_KEYS } from './schedule.js';
 import { CLONE_RUNTIME_ITEM_LABELS } from './self.js';
 import { createMemoryStores } from './testing.js';
@@ -97,46 +96,6 @@ const SUBJECTS: readonly EnumerationSubject[] = [
     source: () => commitmentOriginSchema.options,
   },
   {
-    // **評定の3値を数え直している説明文は2本ある**（片付けと同時に付ける口と、
-    // 後から付ける口）。値が1つ増えたら両方が嘘になるので、両方をここへ載せる。
-    tool: 'commitment_appraise',
-    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
-    source: () => appraisalSchema.options,
-  },
-  {
-    tool: 'commitment_close',
-    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
-    source: () => appraisalSchema.options,
-  },
-  {
-    tool: 'manager_appraise',
-    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
-    source: () => appraisalSchema.options,
-  },
-  {
-    // **この道具の説明文は3値＋終端の仕方（done/failed/lost/stopped）と
-    // 非終端（running/waiting_human）を字面で並べる。** どちらも
-    // `jobStatusSchema` から `isTerminalJobStatus`（`appraisal-stats.ts`）で
-    // 導いた値を `.join('/')` しているだけで、ベタ書きしていない
-    // （`tools.ts` の `appraisal_stats` の実装を参照）——それでも `jobStatusSchema`
-    // に値が増えれば、この歯がここで捕まえる。
-    tool: 'appraisal_stats',
-    label: 'appraisalSchema の値（packages/core/src/schema.ts）',
-    source: () => appraisalSchema.options,
-  },
-  {
-    tool: 'appraisal_stats',
-    label:
-      '終端した JobStatus（jobStatusSchema.options を isTerminalJobStatus で絞ったもの。packages/core/src/appraisal-stats.ts）',
-    source: () => jobStatusSchema.options.filter(isTerminalJobStatus),
-  },
-  {
-    tool: 'appraisal_stats',
-    label:
-      '非終端の JobStatus（jobStatusSchema.options を isTerminalJobStatus で除いたもの。packages/core/src/appraisal-stats.ts）',
-    source: () => jobStatusSchema.options.filter((status) => !isTerminalJobStatus(status)),
-  },
-  {
     tool: 'self_status',
     label: 'CLONE_RUNTIME_ITEM_LABELS（packages/core/src/self.ts）',
     source: () => CLONE_RUNTIME_ITEM_LABELS,
@@ -174,6 +133,10 @@ const EXEMPT: readonly Exemption[] = [
   {
     tool: 'github_observation_record',
     why: '説明文が名乗る一覧（enum・配列）が無い。入力は githubObservationInputSchema（日誌の枝から導く）が名乗る。ふるまいの歯は github-observation-record.test.ts が持つ',
+  },
+  {
+    tool: 'commitment_close',
+    why: '説明文が名乗る一覧（enum・配列）が無い（かつて数え直していた評定の値は、評定の仕組みごと #2699 で消えた）',
   },
   { tool: 'memory_read', why: '実装側に、説明文が数え直すような一覧が無い' },
   { tool: 'memory_write', why: '実装側に、説明文が数え直すような一覧が無い' },

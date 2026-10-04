@@ -9,7 +9,7 @@ import { createFsStores } from './index.js';
 /**
  * Issue #1674（バグ探し `wbug-jobs` で見つかった lost update）。
  *
- * `ManagerPool.appraise()` は、`#records` に像を持たない委譲（孤児ジョブ）を
+ * `ManagerPool` の孤児ジョブ分岐は、`#records` に像を持たない委譲（孤児ジョブ）を
  * `listJobs()` で読んでから `putJob()` で書き戻していた。読んでから書くまでの
  * 間に別の書き込みが挟まると、その書き込みは古いスナップショットへ丸ごと
  * 上書きされて消えていた（`ScheduleStore.editRequest`（#1654）と同じ形）。
@@ -49,9 +49,7 @@ describe('JobStore.updateJob()（fs 実装）', () => {
 
     const updated = await stores.jobs.updateJob(job.id, (current) => ({
       ...current,
-      appraisal: 'good',
-      appraisedAt: '2026-09-01T00:10:00.000Z',
-      appraisedBy: 'human',
+      lastReport: '外から先に割り込んだ報告',
     }));
 
     // 割り込みで進んだ status / sessionId を、`updateJob` が読み直した現在値
@@ -59,8 +57,7 @@ describe('JobStore.updateJob()（fs 実装）', () => {
     expect(updated).toMatchObject({
       status: 'running',
       sessionId: 'sess-new',
-      appraisal: 'good',
-      appraisedBy: 'human',
+      lastReport: '外から先に割り込んだ報告',
     });
 
     const stored = await stores.jobs.listJobs().then((all) => all.find((j) => j.id === job.id));
@@ -83,8 +80,7 @@ describe('JobStore.updateJob()（fs 実装）', () => {
     const [a, b] = await Promise.all([
       stores.jobs.updateJob(job.id, (current) => ({
         ...current,
-        appraisal: 'good',
-        appraisedBy: 'clone',
+        summary: '1本目の書き込み',
       })),
       stores.jobs.updateJob(job.id, (current) => ({
         ...current,
@@ -99,8 +95,7 @@ describe('JobStore.updateJob()（fs 実装）', () => {
     // **どちらの回が先でも後でも構わないが、両方の変更が残っていること。**
     // 直列化されていれば、後の回は前の回が書いた現在値から読み直すので、
     // 両方の変更が同じ行に乗る。
-    expect(stored?.appraisal).toBe('good');
-    expect(stored?.appraisedBy).toBe('clone');
+    expect(stored?.summary).toBe('1本目の書き込み');
     expect(stored?.lastReport).toBe('2本目の書き込み');
   });
 });

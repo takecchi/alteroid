@@ -82,16 +82,7 @@ import type {
   UnpushedWorkResult,
 } from './runner-protocol.js';
 import { brief, ONE_SHOT_ALLOW_TTL_MS } from './runner.js';
-import {
-  describeAppraisal,
-  formatAppraisalDecision,
-  JOB_APPRAISAL_CLONE_GROUNDS,
-  JOB_APPRAISAL_DECISION_PREFIX,
-  JOB_APPRAISAL_HUMAN_GROUNDS,
-} from './schema.js';
 import type {
-  AppraisalValue,
-  AppraisedBy,
   InboxEvent,
   Job,
   JobStatus,
@@ -101,7 +92,7 @@ import type {
   UnpushedWorkObservationSource,
   WorkspaceLocator,
 } from './schema.js';
-import { UnreadableJobError, describeUnreadableManagerRow, type Stores } from './store.js';
+import { describeUnreadableManagerRow, type Stores } from './store.js';
 import { withCgroupEventsNote } from './cgroup-events.js';
 import { withSystemErrorNote } from './system-error.js';
 import { describeUnpushedWorkObservationIncompleteness } from './unpushed-work-observation-format.js';
@@ -575,23 +566,6 @@ export interface ManagerSummary {
   startedAt: string;
   updatedAt: string;
   sessionId?: string;
-  /**
-   * **その委譲がどうだったか**（#1054）。台帳（`Job`）をそのまま写すだけで、
-   * 書き込みは `ManagerPool.appraise` の1箇所に閉じている。
-   *
-   * **`status` とは別の軸である**（`Job.appraisal` の doc）。とくに
-   * `digest.ts` の `judgement`（`isManagerAwaitingJudgement` ＝ `lost` 1値、
-   * 意味は「終わったかどうかを観測していない」）と取り違えないこと。
-   *
-   * **無いことは「まだ評定していない」であって「普通」ではない。** 数えるときに
-   * `good` 側にも `bad` 側にも寄せない。
-   */
-  appraisal?: string;
-  appraisedAt?: string;
-  appraisedBy?: string;
-  appraisalReason?: string;
-  /** 評定が述べた仕事の種類（#1308。`jobSchema.workKind`）。無ければ未分類。 */
-  workKind?: string;
   lastReport?: string;
   /**
    * `lastReport` を**デーモンが受け取った時刻**（#358。`jobSchema.lastReportAt`
@@ -1832,7 +1806,7 @@ export type ManagerStopActor = 'human' | 'clone' | 'auto-fold';
  * | `'unreadable'` | **台帳に行は在るが読めない形で入っている**（issue #2359）。止めていない。行は書き換えていない | 何も書かない | 409 |
  *
  * **`'unreadable'` を `'absent'` に畳まない。** 「居ない」と言うと、直せば読める行を
- * 消えたものとして扱わせる（`ManagerAppraiseResult` の `'unreadable'` と同じ線）。
+ * 消えたものとして扱わせる。
  * **これは「一覧が読めなかった」（`manager_stop` の #2342）とは別の話である**——あちらは
  * 道具が一覧を読めなかった側、こちらは行そのものが読めない側。
  *
@@ -1863,30 +1837,6 @@ export interface ManagerAbortResult {
    * `'absent'`）。
    */
   sessionGone?: boolean;
-}
-
-/**
- * `ManagerPool.appraise` の結果。
- *
- * - `'appraised'` — 書けた（上書きを含む）。`previous` は**覆す前の字面**
- *   （`describeAppraisal` の出力。初めて付けたなら `null`）
- * - `'absent'` — その委譲が台帳に居ない。**`abort` の `'absent'` と同じ意味**で、
- *   HTTP では 404 になる
- * - `'unreadable'` — 台帳に**在るが読めない**（版ずれ・手編集で `jobSchema` に
- *   合わない行）。**評定は書いていない**（行は1バイトも変えない）。`'absent'`
- *   （消えた）とは別——「居ない」と言うと、直せば読める行を消えたものとして
- *   扱わせてしまう。HTTP では 409（読めない行の他の口と同じ）
- *
- * **「書けなかった」を `'appraised'` に畳まない。** 畳むと、台帳から消えた委譲へ
- * 付けた評定が「付いた」として返り、読み手には確かめる術が無くなる。
- * **「読めなかった」を `'absent'` にも畳まない**（同じ理由。判定できないを
- * 「無い」へ倒さない）。
- */
-export interface ManagerAppraiseResult {
-  outcome: 'appraised' | 'absent' | 'unreadable';
-  detail: string;
-  /** 覆す前の評定の字面。初めて付けたなら `null`。 */
-  previous: string | null;
 }
 
 /**
@@ -1938,45 +1888,6 @@ export interface ManagerPool {
    * 食い違う。
    */
   abort(managerId: string, reason?: string, by?: ManagerStopActor): Promise<ManagerAbortResult>;
-  /**
-   * **その委譲がどうだったか**を記録する（#1054。自己改善の段1の後半）。
-   *
-   * ## ⭐ なぜ `JobStore` へ直に書かず、ここを通すのか
-   *
-   * **走行中の委譲の `Job` は、このプールがプロセス内の像（`#records`）として
-   * 握っている。`#persist` は `record.job` を丸ごと書く。** ⟹ ストアの側から
-   * 評定だけ足すと、**次の `#persist` が黙って踏み消す** —— 書けたように見えて
-   * 消える、という「静かに失敗する道具」そのものである（AGENTS.md）。
-   *
-   * だから所有者を通す。像が在るなら像を書き換えてから永続化し、無いなら
-   * （`#retire()` 済み ＝ 終端した委譲）台帳へ直に書く。
-   *
-   * ## ⚠️ `abort()` と違い `#load()` を使わない
-   *
-   * `#load()` は**読んだ像を `#records` に登録する**（`this.#records.set(...)`）。
-   * `abort()` はこれから触る相手なのでそれでよいが、**評定は何日も前に終わった
-   * 委譲にも付く** —— そのたびに終端済みの像を живой な地図へ戻すと、`#records`
-   * が単調に太り、`list()` など「いま抱えているもの」を見る側の意味も変わる。
-   * ⟹ ここは台帳を読むだけにして、`#records` を汚さない。
-   *
-   * ## 走行中を断らない
-   *
-   * 「片付いてから」を器が強制しない（台帳の `CommitmentStore.appraise` と同じ
-   * 線）。走っている委譲に人間が印を付ける経路を塞ぐ理由が無い。
-   *
-   * **覆した事実は日誌に残す。** 行が持つのは「いまの値」だけなので、前の値が
-   * ここで落ちないと**評価する側を較正する材料が消える**（PRD「要件: 自己改善」）。
-   *
-   * **`workKind`（仕事の種類。#1308）は渡さなければ前の値を残す**（`reason` と逆。
-   * 理由は `CommitmentStore.appraise` の doc と同じ）。
-   */
-  appraise(
-    managerId: string,
-    appraisal: AppraisalValue,
-    by: AppraisedBy,
-    reason?: string,
-    workKind?: string,
-  ): Promise<ManagerAppraiseResult>;
   list(): Promise<ManagerSummary[]>;
   /**
    * このマネージャーで拒否された道具と件数を、**古い順**で返す。
@@ -8801,138 +8712,6 @@ class Pool implements ManagerPool {
     return { outcome, stopError, sessionGone };
   }
 
-  /** `ManagerPool.appraise` の doc に、なぜここを通すのかが在る。 */
-  async appraise(
-    managerId: string,
-    appraisal: AppraisalValue,
-    by: AppraisedBy,
-    reason?: string,
-    workKind?: string,
-  ): Promise<ManagerAppraiseResult> {
-    const at = new Date(this.#now()).toISOString();
-    // **像が在るなら像を書く（所有者が書く）。** `#load()` は使わない —— あれは
-    // 読んだ像を `#records` へ登録するので、終端済みの委譲を評定するたびに
-    // 地図が太る（この関数の doc）。
-    const record = this.#records.get(managerId);
-
-    let job: Job;
-    let previous: string | null;
-    let previousValue: string | undefined;
-    let previousBy: string | undefined;
-
-    if (record !== undefined) {
-      job = record.job;
-      previous = describeAppraisal(job);
-      // **構造欄（#1310）の `previous` / `previousBy` は、上書きする前の raw な
-      // 値から取る。** `previous`（上）は人間向けの整形済み文で、構造欄は
-      // 数え上げ（`computeAppraisalReconciliation`）が読む側なので別に持つ。
-      previousValue = job.appraisal;
-      previousBy = job.appraisedBy;
-
-      job.appraisal = appraisal;
-      job.appraisedAt = at;
-      job.appraisedBy = by;
-      // **理由を渡さなかったら前の理由を消す。** 残すと、理由無しで覆したときに
-      // **前の書き手の理由が新しい値の理由として残る**（台帳側と同じ穴。
-      // `CommitmentStore.appraise` の doc）。
-      delete job.appraisalReason;
-      if (reason !== undefined) job.appraisalReason = reason;
-      // 種類は理由と逆で、渡されなければ前の値を残す（interface の doc。#1308）。
-      if (workKind !== undefined) job.workKind = workKind;
-      job.updatedAt = at;
-      await this.#stores.jobs.putJob(job);
-    } else {
-      // **孤児（`#records` に像を持たない委譲）は `updateJob` を通す
-      // （Issue #1674）。** `listJobs()` で読んでから `putJob()` で書くまでの
-      // 間に別の書き込みが挟まると、その書き込みが古いスナップショットに
-      // 丸ごと上書きされて消えていた——`updateJob` は読み直しと書き込みを
-      // 1つの排他区間に閉じるので、その隙間が無い（`JobStore.updateJob` の
-      // doc）。
-      //
-      // **`previous` 等は `mutate` の中で捕まえる。** `mutate` は排他区間の
-      // 中で「読み直した現在値」を受け取る唯一の場所なので、上書きする前の
-      // 値を読むにはここしかない——`updateJob` が返すのは書いた**後**の値
-      // だけである。
-      let capturedPrevious: string | null | undefined;
-      let capturedPreviousValue: string | undefined;
-      let capturedPreviousBy: string | undefined;
-      let updated: Job | null;
-      try {
-        updated = await this.#stores.jobs.updateJob(managerId, (current) => {
-          capturedPrevious = describeAppraisal(current);
-          capturedPreviousValue = current.appraisal;
-          capturedPreviousBy = current.appraisedBy;
-          const next: Job = {
-            ...current,
-            appraisal,
-            appraisedAt: at,
-            appraisedBy: by,
-            updatedAt: at,
-          };
-          delete next.appraisalReason;
-          if (reason !== undefined) next.appraisalReason = reason;
-          if (workKind !== undefined) next.workKind = workKind;
-          return next;
-        });
-      } catch (error) {
-        // **在るが読めない行は「居ない」と言わない。** `null`（無い）と
-        // `UnreadableJobError`（在ったが読めない）は `JobStore.updateJob` の
-        // 契約で分かれている。行には触れていないので、評定は付いていない。
-        if (!(error instanceof UnreadableJobError)) throw error;
-        return {
-          outcome: 'unreadable',
-          detail:
-            `${managerId} は台帳に読めない形で入っている（消されたのではない）。` +
-            '評定は付けていない。行は書き換えていない。' +
-            '版ずれ・手編集で job の形が合わなくなっている（stderr に id と不正な欄の跡が出る）。',
-          previous: null,
-        };
-      }
-      if (updated === null) {
-        return {
-          outcome: 'absent',
-          detail: `${managerId} というマネージャーは台帳に居ない。`,
-          previous: null,
-        };
-      }
-      job = updated;
-      previous = capturedPrevious ?? null;
-      previousValue = capturedPreviousValue;
-      previousBy = capturedPreviousBy;
-    }
-
-    await this.#journal({
-      type: 'decision',
-      decision: formatAppraisalDecision({
-        prefix: JOB_APPRAISAL_DECISION_PREFIX,
-        id: managerId,
-        value: appraisal,
-        reason,
-        previous,
-      }),
-      grounds: by === 'clone' ? JOB_APPRAISAL_CLONE_GROUNDS : JOB_APPRAISAL_HUMAN_GROUNDS,
-      appraisal: {
-        target: 'job',
-        id: managerId,
-        value: appraisal,
-        by,
-        previous: previousValue,
-        previousBy,
-        // 書いた結果の値（渡されなかった回は残った前の値）。日誌の構造欄の doc。
-        ...(job.workKind === undefined ? {} : { workKind: job.workKind }),
-      },
-    });
-
-    return {
-      outcome: 'appraised',
-      detail:
-        job.workKind === undefined
-          ? `${managerId} の評定を ${appraisal} にした。`
-          : `${managerId} の評定を ${appraisal}（種類: ${job.workKind}）にした。`,
-      previous,
-    };
-  }
-
   async abort(
     managerId: string,
     reason?: string,
@@ -15101,12 +14880,6 @@ function summaryOf(
     updatedAt: job.updatedAt,
     waiting: [...record.waiting],
     ...(job.sessionId === undefined ? {} : { sessionId: job.sessionId }),
-    // **評定は台帳をそのまま写すだけ**（#1054）。書き込みは `appraise()` の1箇所。
-    ...(job.appraisal === undefined ? {} : { appraisal: job.appraisal }),
-    ...(job.appraisedAt === undefined ? {} : { appraisedAt: job.appraisedAt }),
-    ...(job.appraisedBy === undefined ? {} : { appraisedBy: job.appraisedBy }),
-    ...(job.appraisalReason === undefined ? {} : { appraisalReason: job.appraisalReason }),
-    ...(job.workKind === undefined ? {} : { workKind: job.workKind }),
     ...(job.lastReport === undefined ? {} : { lastReport: job.lastReport }),
     // **`lastReport` と対で運ぶ**（#358）。台帳をそのまま写すだけ——書き込みは
     // `#onEvent` の `case 'report'` の1箇所に閉じている。

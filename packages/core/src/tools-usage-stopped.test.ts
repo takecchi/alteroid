@@ -41,7 +41,6 @@ function minimalManagerPool(): { pool: ManagerPool; managers: ManagerSummary[] }
     },
     send: notUsedHere('send') as ManagerPool['send'],
     abort: notUsedHere('abort') as ManagerPool['abort'],
-    appraise: notUsedHere('appraise') as ManagerPool['appraise'],
     async list() {
       // 本物の `list()` と同じく、呼び手が控えた前の状態が後から書き換わら
       // ないよう写しを返す（`tools.test.ts` の harness と同じ作法）。

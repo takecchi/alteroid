@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { workKindSchema } from './schema.js';
+import { practiceKindSchema } from './schema.js';
 import { createMemoryStores } from './testing.js';
-import { createCloneTools, formatWorkKindRangeJa } from './tools.js';
+import { createCloneTools, formatPracticeKindRangeJa } from './tools.js';
 
 /**
  * issue #2450。`practice_write` の `kind` は道具の側で検査されておらず、
@@ -41,7 +41,7 @@ function harness() {
   };
 }
 
-const max = workKindSchema.maxLength ?? 128;
+const max = practiceKindSchema.maxLength ?? 128;
 
 describe('practice_write の kind — 範囲外は読める文で断り、書かない（issue #2450）', () => {
   it.each([
@@ -54,7 +54,7 @@ describe('practice_write の kind — 範囲外は読める文で断り、書か
 
     const body = await h.call({ slug: 'ok', kind, title: 't', content: 'c' });
 
-    expect(body).toBe(`kind は使えない（${formatWorkKindRangeJa()}のみ）。`);
+    expect(body).toBe(`kind は使えない（${formatPracticeKindRangeJa()}のみ）。`);
     expect(write).not.toHaveBeenCalled();
     expect(await h.stores.practices.read('ok')).toBeNull();
     expect((await h.stores.journal.list()).length).toBe(journalBefore);

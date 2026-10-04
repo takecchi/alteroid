@@ -51,9 +51,6 @@ function poolWith(provider: string, failRunners = false): ManagerPool {
     abort: () => {
       throw new Error('not implemented');
     },
-    appraise: () => {
-      throw new Error('not implemented');
-    },
     list: () => Promise.resolve([]),
     denials: () => [],
     pushHealthOf: () => undefined,

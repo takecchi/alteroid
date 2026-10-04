@@ -328,9 +328,6 @@ describe('クローン — マネージャーの確認がいまも待たれて�
       abort: () => {
         throw new Error('not implemented');
       },
-      appraise: () => {
-        throw new Error('not implemented');
-      },
       list: () => {
         throw new Error('list() が壊れている（実測を模す）');
       },

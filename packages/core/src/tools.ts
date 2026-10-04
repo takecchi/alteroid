@@ -100,13 +100,6 @@ import { commandHeadWord, type RecentDenial } from './denial-shape.js';
 import { classifyManagerActivity, describeReportDrift } from './manager-activity.js';
 import type { ManagerActivityInput } from './manager-activity.js';
 import {
-  computeAppraisalJournalStats,
-  computeAppraisalReconciliation,
-  computeJobAppraisalCoverage,
-  describeAppraisalStats,
-  isTerminalJobStatus,
-} from './appraisal-stats.js';
-import {
   DEFAULT_PROGRESS_WINDOW_HOURS,
   InvalidProgressWindowError,
   readProgress,
@@ -179,22 +172,16 @@ import {
 } from './schedule.js';
 import type { ScheduleStatus } from './schedule.js';
 import {
-  COMMITMENT_APPRAISAL_CLONE_GROUNDS,
-  COMMITMENT_APPRAISAL_DECISION_PREFIX,
-  JOB_APPRAISAL_DECISION_PREFIX,
   JOURNAL_ENTRY_TYPES,
   PERMISSION_GRANT_CONSENT_PHRASE,
   approvalQuestionSchema,
   approvalUpdatedAt,
-  appraisalSchema,
-  workKindSchema,
   commitmentOriginSchema,
   commitmentUpdatedAt,
-  describeAppraisal,
-  formatAppraisalDecision,
   githubObservationInputSchema,
   jobStatusSchema,
   memorySlugSchema,
+  practiceKindSchema,
   practiceSlugSchema,
   scheduleKindSchema,
   scheduleSpecSchema,
@@ -202,7 +189,6 @@ import {
 import type {
   ChatStreamEvent,
   Commitment,
-  AppraisalValue,
   CommitmentOrigin,
   JobStatus,
   JournalEntry,
@@ -754,8 +740,6 @@ export const CLONE_TOOL_NAMES = [
   'commitment_close',
   'commitment_close_many',
   'commitment_edit',
-  'commitment_appraise',
-  'appraisal_stats',
   'progress_read',
   'github_observation_record',
   'inbox_remove_many',
@@ -775,7 +759,6 @@ export const CLONE_TOOL_NAMES = [
   'self_dropped',
   'manager_start',
   'manager_send',
-  'manager_appraise',
   'manager_stop',
   'manager_list',
   'manager_report',
@@ -826,7 +809,6 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'commitment_close',
   'commitment_close_many',
   'commitment_edit',
-  'commitment_appraise',
   'inbox_remove_many',
   'profile_write',
   'profile_remove',
@@ -834,7 +816,6 @@ export const SELF_JOURNALING_CLONE_TOOLS = [
   'practice_remove',
   'manager_start',
   'manager_send',
-  'manager_appraise',
   'manager_stop',
   'archive_remove',
   'archive_remove_many',
@@ -861,7 +842,6 @@ export const TRACELESS_CLONE_TOOLS = [
   'usage_read',
   'schedule_list',
   'commitment_list',
-  'appraisal_stats',
   'progress_read',
   'profile_read',
   'practice_list',
@@ -968,9 +948,9 @@ export function cloneToolJournalsItself(tool: string): boolean {
  * `request_permission` /
  * `approval_withdraw` / `daily_report_write` / `schedule_create` /
  * `schedule_remove` / `commitment_open` / `commitment_close` /
- * `commitment_close_many` / `commitment_edit` / `commitment_appraise` /
+ * `commitment_close_many` / `commitment_edit` /
  * `inbox_remove_many` / `practice_write` / `practice_remove` /
- * `manager_start` / `manager_send` / `manager_appraise` / `manager_stop` /
+ * `manager_start` / `manager_send` / `manager_stop` /
  * `archive_remove` / `archive_remove_many`）の schema を確認したが、値
  * そのものが実行環境の鍵になる契約の欄は無い（識別子・自由文・列挙値・真偽値
  * ・数値のみ）。増えたら、上の型強制がその場で1行を要求する。
@@ -993,7 +973,6 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   commitment_close: false,
   commitment_close_many: false,
   commitment_edit: false,
-  commitment_appraise: false,
   inbox_remove_many: false,
   profile_write: true,
   profile_remove: false,
@@ -1001,7 +980,6 @@ const SELF_JOURNALING_TOOL_CARRIES_SECRETS: Record<SelfJournalingCloneTool, bool
   practice_remove: false,
   manager_start: false,
   manager_send: false,
-  manager_appraise: false,
   manager_stop: false,
   archive_remove: false,
   archive_remove_many: false,
@@ -2222,24 +2200,6 @@ const CONVERSATION_LIST_BUDGET = 8_000;
 const CONVERSATION_PAGE = 8_000;
 
 /**
- * `appraisal_stats` 道具（MCP）が種類（`workKind`）ごとの内訳に掛ける予算（#2223）。
- *
- * `workKind` は評定のたびに書く自由文字列（`workKindSchema` は
- * `z.string().min(1).max(128)`）なので、種類の数は運用が続く限り増えうる——
- * `appraisal-stats.ts` の `describeAppraisalStats` の doc が言う「固定個数」の
- * 前提が、この節（`renderWorkKindTallies`）だけ崩れる。**掛けるのはこの道具
- * （MCP）の側だけ。** CLI（`apps/cli/src/appraisal-stats.ts`）・HTTP
- * （`GET /appraisal-stats`）は `describeAppraisalStats` を budget 無しで呼ぶので
- * 今まで通り締まらない（repo の「エージェントへ返す口と、人間向けの CLI/HTTP は
- * 別に数える」という約束——`.claude/skills/listing-and-detail/SKILL.md`）。
- *
- * 「引き受けた仕事」「委譲」は別の軸なので、この1つの値をそれぞれへ独立に渡す
- * （合算した予算ではない——`LIST_BUDGET` 等、他の一覧の予算と同じ桁を使い回さない
- * のも同じ理由で、値が同じでも定数は分けてある）。
- */
-const APPRAISAL_STATS_WORK_KIND_BUDGET = 8_000;
-
-/**
  * 自作ツールは確認なしで通す（能力の削除ではなく、道具が道具として使えること）。
  *
  * **これは「使える道具の一覧」ではない。** `allowedTools` は確認を省く側の一覧で
@@ -2356,52 +2316,37 @@ function describeStringLengthViolation(
 }
 
 /**
- * `workKindSchema`（`schema.ts`。`.min(1).max(128)`）専用の断り文。
+ * `practiceKindSchema`（`schema.ts`。`.min(1).max(128)`）専用の断り文。
  *
  * **道具の入力スキーマ側には型（文字列）だけを渡し、長さの検査はここで
- * `workKindSchema.safeParse` そのものへ委ねる**——`workKindSchema` は
+ * `practiceKindSchema.safeParse` そのものへ委ねる**——`practiceKindSchema` は
  * `apps/daemon/src/app.ts`（HTTP 側）でも使われている共有のスキーマなので、
  * その定義自体（`schema.ts`）は1文字も変えていない。ここで検査に使うのは
  * 変えていない実物であり、下限・上限の数値をここへ書き写してもいない
- * （`workKindSchema.minLength` / `.maxLength` から読む）——2箇所に同じ数値を
+ * （`practiceKindSchema.minLength` / `.maxLength` から読む）——2箇所に同じ数値を
  * 手で書くと片方だけ直して食い違う（#923 と同じ形）ため、値そのものではなく
- * `workKindSchema` を両方（検査・説明文）から参照する。
+ * `practiceKindSchema` を両方（検査・説明文）から参照する。
  */
-export function formatWorkKindRangeJa(): string {
+export function formatPracticeKindRangeJa(): string {
   return formatStringLengthJa({
-    min: workKindSchema.minLength ?? undefined,
-    max: workKindSchema.maxLength ?? undefined,
+    min: practiceKindSchema.minLength ?? undefined,
+    max: practiceKindSchema.maxLength ?? undefined,
   });
 }
 
 /**
- * `field` は断り文に出す欄名。commitment 系（`commitment_close` /
- * `commitment_appraise` / `manager_appraise`）の欄は `workKind` なので既定値を
- * それにしてある。`practice_write` の欄は `kind`（`practiceKindSchema` は
- * `workKindSchema` の別名）なので `'kind'` を渡す——呼んだ側が渡していない
- * 欄名で断ると、どの引数を直せばよいかが読めない。issue #2450。
+ * `field` は断り文に出す欄名。`practice_write` の欄は `kind` なので既定値を
+ * それにしてある——呼んだ側が渡していない欄名で断ると、どの引数を直せばよいかが
+ * 読めない。issue #2450。
  */
-function describeWorkKindViolation(
+function describePracticeKindViolation(
   value: string | undefined,
-  field: string = 'workKind',
+  field: string = 'kind',
 ): string | null {
   if (value === undefined) return null;
-  if (workKindSchema.safeParse(value).success) return null;
-  return `${field} は使えない（${formatWorkKindRangeJa()}のみ）。`;
+  if (practiceKindSchema.safeParse(value).success) return null;
+  return `${field} は使えない（${formatPracticeKindRangeJa()}のみ）。`;
 }
-
-/**
- * `workKind`（`commitment_close` / `commitment_appraise` / `manager_appraise`）
- * の**道具の入力スキーマ側**に見せる形。issue #1752。
- *
- * `workKindSchema` をそのまま入力スキーマへ渡すと、その `.min(1).max(128)`
- * を SDK の `tool()` がハンドラより前に検証してしまう（この issue が直す穴
- * そのもの）。**ここは型（文字列）だけを固定し、長さの検査は
- * `describeWorkKindViolation`（`workKindSchema.safeParse` を直接呼ぶ）へ渡す**
- * ——`workKindSchema` 自体（`schema.ts`）は HTTP 側（`apps/daemon/src/app.ts`）
- * でも使う共有のスキーマなので1文字も変えていない。
- */
-const workKindToolInputSchema = z.string();
 
 /**
  * `inbox_remove_many` の `types` の**道具の入力スキーマ側**に見せる形。
@@ -2748,74 +2693,11 @@ async function describeMissingCommitment(stores: Stores, id: string): Promise<st
 }
 
 /**
- * 評定を書いて、日誌へ1行残す（#1054）。**書き込みと記録の生成元はここ1箇所で
- * ある** —— `commitment_close`（片付けと同時に付ける）と `commitment_appraise`
- * （後から付ける・付け直す）の2つが呼ぶ。2箇所に書き下ろすと、片方だけ直した
- * ときに黙ってずれる（`digest.ts` が字面の生成元を1つにしているのと同じ判断）。
- *
- * **返すのは人間（クローン）へ返す1文である。** 呼び出し側はこれを連結する。
- *
- * **前の評定を日誌へ添える。** 行の側は「いまの値」しか持たないので
- * （`appraisalSchema` の doc）、前の値がどこにも残らないと「誰がどう
- * 言っていたか」を突き合わせる材料が消える —— それは PRD「要件: 自己改善」の
- * 「評価する側も誤りうる前提で作る」が要求している較正そのものを不可能にする。
- * **前が無かった回も残す**（初回か付け直しかは、数え上げるときに要る区別である）。
- */
-async function writeAppraisal(
-  stores: Stores,
-  id: string,
-  value: AppraisalValue,
-  reason: string | undefined,
-  workKind: string,
-): Promise<string> {
-  const before = await stores.commitments.get(id);
-  const previous = before === null ? null : describeAppraisal(before);
-  if (
-    !(await stores.commitments.appraise(
-      id,
-      new Date().toISOString(),
-      value,
-      'clone',
-      reason,
-      workKind,
-    ))
-  ) {
-    return `（評定は付けられなかった —— ${id} が台帳に無い）`;
-  }
-  await appendJournalOrThrow(
-    'commitment_appraise',
-    stores.journal,
-    {
-      type: 'decision',
-      decision: formatAppraisalDecision({
-        prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-        id,
-        value,
-        reason,
-        previous,
-      }),
-      grounds: COMMITMENT_APPRAISAL_CLONE_GROUNDS,
-      appraisal: {
-        target: 'commitment',
-        id,
-        value,
-        by: 'clone',
-        previous: before?.appraisal,
-        previousBy: before?.appraisedBy,
-        workKind,
-      },
-    },
-    'act-completed',
-  );
-  return `評定を ${value}（種類: ${workKind}）にした。`;
-}
-
-/**
  * `commitment_close` が「台帳に無い」と答えるときの文面を組み立てる
  * （Issue #1060 段3）。
  *
  * **なぜ `commitment_close` だけを直すのか。** 同じ「引き受けた仕事 ${id} は
- * 台帳に無い。」という文言は `commitment_appraise` / `commitment_edit` にも
+ * 台帳に無い。」という文言は `commitment_edit` にも
  * ある（`existing === null` の枝）が、**この Issue が扱っているのは
  * 「片付けようとして初めて『無い』に気づく」という #856 の症状そのもの**
  * ——それが起きる場所は `commitment_close` だけである。他の道具の同じ枝は
@@ -7993,14 +7875,10 @@ export function createCloneTools(context: ToolContext) {
           // 後ろに置くと `page()` の2ページ目へ落ちて、**いちばん要る1行が
           // 最初の呼びで出てこない。** 読み順としては逆だが、切れる側に
           // 落ちてよい欄ではない。
-          // **評定は在るときだけ出す**（`describeAppraisal` は無ければ
-          // `null`）。印が無い＝まだ評定していない、が読み手の側の規則である。
-          const appraisal = describeAppraisal(entry);
           const body = [
             ...(entry.closedAt === undefined
               ? []
               : [`片付けたとした理由: ${entry.closedReason ?? '（理由の記録なし）'}`]),
-            ...(appraisal === null ? [] : [appraisal]),
             `依頼（全文）: ${entry.body}`,
           ].join('\n\n');
           const part = page(body, offset, COMMITMENT_PAGE);
@@ -8171,12 +8049,6 @@ export function createCloneTools(context: ToolContext) {
               entry.closedAt === undefined
                 ? '  状態: 未了'
                 : `  状態: ${entry.closedAt} に片付けた（${excerptLine(entry.closedReason ?? '', 120)}）`,
-              // **評定が在る行だけ1行増える。** 一覧は文字数の予算に張り付いて
-              // いるので（`describeManagerFailure` の doc と同じ理由）、未評定の
-              // 行に「未評定」と刷らない —— 印が無いことがその状態である。
-              ...(describeAppraisal(entry) === null
-                ? []
-                : [`  ${excerptLine(describeAppraisal(entry) ?? '', 120)}`]),
             ],
           }),
         );
@@ -8432,7 +8304,6 @@ export function createCloneTools(context: ToolContext) {
         '引き受けた仕事が片付いたことを記録する。**返事をしただけでは閉じない。**',
         '委譲したなら、マネージャーが報告を返して始末がつくまでは開いたままにしておくこと。',
         'やらないと決めたのなら、それも片付いたうちである（理由にそう書いて閉じる）。',
-        '**片付けると同時に、うまくいったかの評定（`good` / `bad` / `unclear`）も付けられる。** 書かなければ「まだ評定していない」として残る。',
       ].join(' '),
       {
         id: z.string().describe('commitment_list に出ている id'),
@@ -8445,46 +8316,11 @@ export function createCloneTools(context: ToolContext) {
             `何をもって片付いたとするか（やったこと、あるいはやらないと決めた理由。${formatStringLengthJa({ min: 1 })}）。` +
               '人間はこれを読んで後から否定する',
           ),
-        appraisal: appraisalSchema
-          .optional()
-          .describe(
-            '**うまくいったか**（reason とは別の軸である。あちらは「どう片付いたか」）。' +
-              'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
-              '**迷ったら unclear。** good と bad へ無理に寄せると、測れていないものが測れたことになる。' +
-              '書かなければ「まだ評定していない」として残り、後から commitment_appraise で付けられる',
-          ),
-        appraisalReason: z
-          .string()
-          .optional()
-          .describe('なぜその評定なのか（1行）。appraisal を書いたなら、これも書くこと'),
-        // **issue #1752。** `workKindSchema` の `.min(1).max(128)` は入力スキーマ
-        // 側ではなくハンドラの先頭（下の `describeWorkKindViolation` 呼び出し）
-        // で見る（`workKindToolInputSchema` の doc）。ここは型（文字列）だけを
-        // 固定する。
-        workKind: workKindToolInputSchema
-          .optional()
-          .describe(
-            `**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認。${formatWorkKindRangeJa()}）。` +
-              '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
-              '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）' +
-              '。**appraisal を書いたなら必須**（書かなければ閉じずに断る）',
-          ),
       },
-      async ({ id, reason, appraisal, appraisalReason, workKind }) => {
+      async ({ id, reason }) => {
         // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
         const reasonError = describeStringLengthViolation('reason', reason, { min: 1 });
         if (reasonError !== null) return text(reasonError);
-        const workKindError = describeWorkKindViolation(workKind);
-        if (workKindError !== null) return text(workKindError);
-        // **評定を付けるなら種類も要る**（#1308。`workKindSchema` の doc）。閉じる前に
-        // 断る —— 閉じてから断ると「片付いたが評定は付かなかった」という、呼んだ側が
-        // 意図していない半端な状態が残る。
-        if (appraisal !== undefined && workKind === undefined) {
-          return text(
-            `${id} はまだ閉じていない。appraisal を付けるなら workKind（この仕事の種類）も渡すこと。` +
-              '評定を仕事の種類ごとに束ねる鍵になる（#1308）。',
-          );
-        }
         // **読めない行でも閉じられるようにする（issue #2148 の決定 (1)）。**
         // `get` が `UnreadableCommitmentError` を投げても、ここでは投げ直さず
         // 「読めない」と分かったことにして先へ進む——`entries` の判定
@@ -8554,154 +8390,10 @@ export function createCloneTools(context: ToolContext) {
           },
           'act-completed',
         );
-        // **読めない行には評定を付けない（issue #2148 の決定 (2)）。** 中身
-        // （`body` 等）が読めないままである以上、評定を書き込む先の意味が
-        // 保証できない——`appraisal` / `workKind` が渡されていても、ここでは
-        // 無視して「付けられなかった」とだけ名乗る（**読めない欄をそれらしい
-        // 値で埋めない**）。
-        if (unreadable) {
-          return text(
-            `${id}（読めない形で入っていた仕事）を片付けた。` +
-              '**中身が読めないため、評定は付けられなかった**' +
-              '（appraisal を渡していても記録していない）。本文の書き直しもできない。',
-          );
-        }
-        if (appraisal === undefined || workKind === undefined) {
-          return text(
-            `${id} を片付けた。**評定はまだ付いていない** —— どうだったかは commitment_appraise で付けられる。`,
-          );
-        }
-        // **評定の書き込みと日誌は `commitment_appraise` と同じ経路を通す。**
-        // 2箇所に書き下ろすと、片方だけ直したときに黙ってずれる（`digest.ts` の
-        // `describeUnobservedOutcome` が字面の生成元を1つにしているのと同じ判断）。
         return text(
-          `${id} を片付けた。` +
-            (await writeAppraisal(stores, id, appraisal, appraisalReason, workKind)),
-        );
-      },
-    ),
-
-    tool(
-      'commitment_appraise',
-      [
-        '台帳の行に**うまくいったかどうか**の評定を付ける（後から付け直してもよい）。',
-        '**`commitment_close` の `appraisal` を書き忘れたとき・報告が後から届いて見立てが変わったときに使う。**',
-        '片付いた行にも未了の行にも付けられる。',
-        '評定は `good`（うまくいった）/ `bad`（うまくいかなかった）/ `unclear`（見たが判定できない）の3つで、**迷ったら `unclear`**。',
-        '**人間がこれを覆すことがある。** 覆された事実は日誌に残り、評定そのものを較正する材料になる（`docs/PRD.md`「要件: 自己改善」）。',
-      ].join(' '),
-      {
-        id: z.string().describe('commitment_list に出ている id'),
-        appraisal: appraisalSchema.describe(
-          'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
-            '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
-            '測れていないものが測れたことになる',
-        ),
-        reason: z
-          .string()
-          .optional()
-          .describe(
-            'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
-              '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
-          ),
-        // **issue #1752。** `workKindSchema` の `.min(1).max(128)` は入力スキーマ
-        // 側ではなくハンドラの先頭（下の `describeWorkKindViolation` 呼び出し）
-        // で見る（`workKindToolInputSchema` の doc）。ここは型（文字列）だけを
-        // 固定する。
-        workKind: workKindToolInputSchema.describe(
-          `**この仕事は何の種類だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認。${formatWorkKindRangeJa()}）。` +
-            '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
-            '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）',
-        ),
-      },
-      async ({ id, appraisal, reason, workKind }) => {
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const workKindError = describeWorkKindViolation(workKind);
-        if (workKindError !== null) return text(workKindError);
-        // **読めない行は「名乗る」だけにとどめる（issue #2148 の決定 (2)(3)）。**
-        // 本文の書き直しと違い評定は本来「未了の行にも付けられる」緩い口だが、
-        // この issue では読めない行への評定書き込みまでは通さない——中身が
-        // 読めない以上、評定を付けた対象の実体が保証できない。`instanceof` で
-        // `UnreadableCommitmentError` だけを捕まえ、それ以外（器そのものの
-        // 障害）は投げ直す。
-        let existing;
-        try {
-          existing = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          throw new Error(describeUnreadableCommitment(error), { cause: error });
-        }
-        if (existing === null) return text(`引き受けた仕事 ${id} は台帳に無い。`);
-        // 書き込みと日誌は `writeAppraisal` が持つ（`commitment_close` と同じ経路）。
-        return text(`${id} の${await writeAppraisal(stores, id, appraisal, reason, workKind)}`);
-      },
-    ),
-
-    /**
-     * 評定の内訳を要るときに数える口（#1278）。
-     *
-     * **`appraisal.ts`（#1055 段2）の `describeAppraisalTargets` とは別物である。**
-     * あちらは定期の棚卸しの蒸留に相乗りする形で「いま台帳・委譲に載っている行」
-     * だけを名指しし、`storage-fs` の保持上限を超えた古い片付き行は分母から
-     * 消えている。この道具は日誌（追記専用・削除経路が無い）の `decision` 行を
-     * 先頭一致で数えるので、全期間の総数が取れる（#1278 本文の実測: `journal_read`
-     * は `limit` の上限 200 に当たって総数 263 の側が切れたため、本番 DB へ
-     * 直接 SQL を投げるしかなかった）。
-     *
-     * **総数であることを支えているのは「`limit` を渡さないこと」ではない**
-     * （#1342）。`computeAppraisalJournalStats` はストアをページ送りで読み、
-     * **1ページごとには必ず有限の `limit` を渡す**——それでも総数なのは、最後の
-     * ページまで読み切って件数をカウンタで足し込んでいるからである。
-     *
-     * **2つの印を混ぜない。** 「引き受けた仕事」（台帳の行の始末）と「委譲」
-     * （マネージャーに出した仕事の出来）は別の軸——出力も節を分けてある。
-     *
-     * **未評定を4つ目の状態として保つ。** 委譲側は `good`/`bad`/`unclear` の
-     * 内訳とは別に「評定なし」の件数を出す——0でも良い評定でもない。
-     */
-    tool(
-      'appraisal_stats',
-      [
-        `評定（${appraisalSchema.options.join('/')}/未評定）の内訳を数える。`,
-        '**日誌の decision 行を先頭一致で数えた全期間の総数**（journal_read の limit=200 には当たらない——',
-        'ストアをページ送りで最後まで読み切って数えるので、下限ではなく総数である）。',
-        '「引き受けた仕事」（台帳）と「委譲」（マネージャーに出した仕事）は別の軸で、混ぜずに別々の節で返す。',
-        `さらに、終端した委譲（${jobStatusSchema.options.filter(isTerminalJobStatus).join('/')}）を状態ごとに割って、` +
-          '評定が1度も付いていない件数を出す' +
-          `（${jobStatusSchema.options.filter((s) => !isTerminalJobStatus(s)).join('/')} はまだ続きうるので対象外` +
-          '——件数だけ参考として添える）。',
-        '加えて、クローンが付けた評定を人間が後から付け直した対を数え（#1055 段4の較正の材料）、' +
-          '値の遷移ごとの件数・一致/食い違い・復元できなかった件数を出す。',
-        '評定行は仕事の種類（評定のときに述べた workKind）ごとにも割って出す（#1308）。' +
-          '種類を述べていない評定行は未分類で、どれかの種類へ寄せない。',
-      ].join(' '),
-      {},
-      async () => {
-        const [journalStats, jobs, unreadableJobs, reconciliation] = await Promise.all([
-          computeAppraisalJournalStats(stores.journal, {
-            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
-          }),
-          stores.jobs.listJobs(),
-          // 読めない委譲の行は `listJobs()` に載らない。件数を別に取って言う（issue #2359）。
-          stores.jobs.listUnreadableJobs().then((rows) => rows.length),
-          computeAppraisalReconciliation(stores.journal, {
-            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
-          }),
-        ]);
-        return text(
-          describeAppraisalStats(
-            {
-              journal: journalStats,
-              jobCoverage: computeJobAppraisalCoverage(jobs, unreadableJobs),
-              reconciliation,
-            },
-            // **予算はこの道具（MCP）の側だけに掛ける**（#2223。
-            // `APPRAISAL_STATS_WORK_KIND_BUDGET` の doc）。CLI/HTTP は
-            // budget を渡さないので、この呼びだけが種類ごとの内訳を切る。
-            { workKind: APPRAISAL_STATS_WORK_KIND_BUDGET },
-          ),
+          unreadable
+            ? `${id}（読めない形で入っていた仕事）を片付けた。中身が読めないため、本文の書き直しはできない。`
+            : `${id} を片付けた。`,
         );
       },
     ),
@@ -10312,14 +10004,14 @@ export function createCloneTools(context: ToolContext) {
         if (!practiceSlugSchema.safeParse(slug).success) {
           return text(`やり方のスラッグが不正: ${slug}（英小文字・数字・. _ - のみ）。`);
         }
-        // **issue #2450。** `kind`（`practiceKindSchema` = `workKindSchema` の
+        // **issue #2450。** `kind`（`practiceKindSchema` の
         // `.min(1).max(128)`）も書く前に見る。見ないと保存層の `parse` が
         // 生の ZodError を投げ、それがそのままクローンへ返る（`PUT
         // /practices/:slug` は `practiceBody` の検査で 400 を返す）。入力
         // スキーマ側に `.min/.max` を足さないのは #1752 と同じ理由
-        // （`workKindToolInputSchema` の doc。SDK がハンドラより前に英語の
+        // （SDK がハンドラより前に英語の
         // zod の文で断ってしまう）。
-        const kindError = describeWorkKindViolation(kind, 'kind');
+        const kindError = describePracticeKindViolation(kind);
         if (kindError !== null) return text(kindError);
         // **issue #2011。** `before` は「作ったか書き直したか」の分岐と、
         // 差分表示（`describeTokenDiff`）にしか使わない（`write()` 自体は
@@ -10961,57 +10653,6 @@ export function createCloneTools(context: ToolContext) {
      * クローン側にしか配線が無い）。マネージャーが自分や隣の仕事を止められる
      * ようになると、M4 の制御面分離が意味を失う。
      */
-    tool(
-      'manager_appraise',
-      [
-        '**委譲がうまくいったかどうか**の評定を付ける（後から付け直してもよい）。',
-        '**`manager_report` で報告を読んだら、そのまま付けること。**',
-        '評定は `good`（うまくいった）/ `bad`（うまくいかなかった）/ `unclear`（見たが判定できない）の3つで、**迷ったら `unclear`**。',
-        '⚠️ **`status` とは別の軸である** —— `done` は「セッションが終わった」であって「良かった」ではない。',
-        '走行中の委譲にも付けられる。**人間がこれを覆すことがあり、覆された事実は評定そのものを較正する材料になる。**',
-      ].join(' '),
-      {
-        managerId: z.string().describe('manager_list に出ている id'),
-        appraisal: appraisalSchema.describe(
-          'good=うまくいった / bad=うまくいかなかった / unclear=見たが判定できない。' +
-            '**迷ったら unclear を選ぶこと。** good と bad へ無理に寄せると、' +
-            '測れていないものが測れたことになる',
-        ),
-        reason: z
-          .string()
-          .optional()
-          .describe(
-            'なぜその評定なのか（1行）。**書くこと。** ここに同じ軸が繰り返し' +
-              '現れるかどうかが、評定に軸を足すかどうかの唯一の判断材料である',
-          ),
-        // **issue #1752。** `workKindSchema` の `.min(1).max(128)` は入力スキーマ
-        // 側ではなくハンドラの先頭（下の `describeWorkKindViolation` 呼び出し）
-        // で見る（`workKindToolInputSchema` の doc）。ここは型（文字列）だけを
-        // 固定する。
-        workKind: workKindToolInputSchema.describe(
-          `**この委譲は何の種類の仕事だったか**（例: 実装 / 調査 / レビュー / 相談 / 確認。${formatWorkKindRangeJa()}）。` +
-            '評定を仕事の種類ごとに束ねる鍵になる（#1308）。自由文だが、' +
-            '**同じ種類には同じ言葉を使い続けること**（practice_list の kind と揃えるとよい）',
-        ),
-      },
-      async ({ managerId, appraisal, reason, workKind }) => {
-        if (!context.managers) return NO_POOL;
-        // **issue #1752（#1651/#1689/#1720 の揃え漏れ。非数値の欄）。**
-        const workKindError = describeWorkKindViolation(workKind);
-        if (workKindError !== null) return text(workKindError);
-        // **日誌も「前の値」も `ManagerPool.appraise` が持つ。** ここで書き下ろすと、
-        // 人間の口（HTTP）と2箇所になり、片方だけ直したときに黙ってずれる。
-        const result = await context.managers.appraise(
-          managerId,
-          appraisal,
-          'clone',
-          reason,
-          workKind,
-        );
-        return text(result.detail);
-      },
-    ),
-
     tool(
       'manager_stop',
       [
@@ -11914,14 +11555,6 @@ export function createCloneTools(context: ToolContext) {
               // いる一覧で行を1本増やすと出せる件数が減るため（他の条件付き
               // 行と同じ理由）。
               describeUnpushedWorkObservation(manager),
-              // **Issue #2182: 評定が在る行だけ1行増える。** `commitment_list`
-              // と同じ作法（字面の生成元は `describeAppraisal` 1箇所で、
-              // `commitment_list` と割れない）。未評定の行に「未評定」と
-              // 刷らない——印が無いことがその状態である（`describeAppraisal`
-              // の doc）。
-              ...(describeAppraisal(manager) === null
-                ? []
-                : [`  ${excerptLine(describeAppraisal(manager) ?? '', 120)}`]),
               // **Issue #2183: ここには足さないと決めた。** `manager_report`
               // には `describeWithheldReports` を足した（すぐ下の説明文が
               // 案内する先）が、この一覧の行には足していない——理由は2つ。
@@ -12167,11 +11800,6 @@ export function createCloneTools(context: ToolContext) {
           // `manager_report` はインデントの無い地の文なので、`unpushedWorkReportNote`
           // でその飾りだけを落とす（判定・文言そのものは1文字も変えない）。
           const unpushedWork = unpushedWorkReportNote(found);
-          // **Issue #2182: 評定は報告の有無とは別の軸なので、ここでも出す**
-          // （直上の各行と同じ理由——片方が空だからもう片方も出さない、には
-          // しない）。字面の生成元は `describeAppraisal` 1箇所で、
-          // `commitment_list` / `manager_list` と割れない。
-          const appraisal = describeAppraisal(found);
           // **Issue #2183: 配っていない報告の本数も同じ理由でここに出す。**
           // 字面の生成元は `describeWithheldReports` 1箇所で、`manager_list`
           // の「背景処理待ち×N」（`tasks`）とは割れない。
@@ -12187,7 +11815,6 @@ export function createCloneTools(context: ToolContext) {
               denied,
               unobserved,
               unpushedWork,
-              appraisal,
               withheldReportsNote,
             ]
               .filter((s) => s !== null)
@@ -12312,11 +11939,6 @@ export function createCloneTools(context: ToolContext) {
         // では出さない（`failure` / `systemError` / `denied` / `unobserved` と
         // 同じ線）。
         const unpushedWork = part === 'request' ? null : unpushedWorkReportNote(found);
-        // **Issue #2182: 評定を、報告が在る回でも同じ場所で掘れるようにする。**
-        // `manager_list` / `commitment_list` と同じ材料（`describeAppraisal`
-        // 1箇所）——`failure` 等と同じ軸ではないので、両方が同時に出うる。
-        // `part === 'request'` では出さない（直上の各行と同じ線）。
-        const appraisal = part === 'request' ? null : describeAppraisal(found);
         // **Issue #2183: 配っていない報告の本数を、報告が在る回でも同じ場所で
         // 掘れるようにする。** 字面の生成元は `describeWithheldReports` 1箇所
         // ——`tasks`（`manager_list` の「背景処理待ち×N」）とは別の軸なので
@@ -12419,9 +12041,6 @@ export function createCloneTools(context: ToolContext) {
         // に置いているのと同じ相対位置——ここでも他の注記より後、本文より前。
         // **対象外の委譲では1文字も増えない。**
         const unpushedWorkNote = unpushedWork === null ? '' : `${unpushedWork}\n\n`;
-        // **同じ順・同じ理由で本文の上に置く（Issue #2182）。** `commitment_list`
-        // と同じ材料（`describeAppraisal`）——**評定が無い回は1文字も増えない。**
-        const appraisalNote = appraisal === null ? '' : `${appraisal}\n\n`;
         // **同じ順・同じ理由で本文の上に置く（Issue #2183）。**
         // `awaitingBackground` が無い回は1文字も増えない。
         const withheldReportsFooterNote =
@@ -12437,7 +12056,7 @@ export function createCloneTools(context: ToolContext) {
         const footer =
           '\n\n（さらに掘るなら manager_transcript managerId=' + managerId + ' で生ログへ）';
         return text(
-          `${head}\n\n${providerLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${appraisalNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
+          `${head}\n\n${providerLine}\n\n${driftNote}${failureNote}${usageStoppedNote}${runnerVanishedNote}${systemErrorNote}${cgroupEventsNote}${denialNote}${unobservedNote}${unpushedWorkNote}${withheldReportsFooterNote}${part1.body}${tail}${footer}`,
         );
       },
     ),
