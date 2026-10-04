@@ -50,7 +50,8 @@ export function HomeReportCard({
         </div>
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-2 h-12 bg-gradient-to-t from-card to-transparent"
+          className="pointer-events-none absolute inset-x-0 bottom-2 h-12"
+          style={{ backgroundImage: 'linear-gradient(to top, var(--card), transparent)' }}
         />
       </div>
       {footer !== undefined && <div className="px-4 pb-3 text-xs">{footer}</div>}
