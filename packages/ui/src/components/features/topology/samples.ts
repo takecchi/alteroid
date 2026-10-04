@@ -16,7 +16,7 @@ export const busyScene: SystemTopologyProps = {
     status: 'running',
     task: '#486 の段取りを3本へ割っている',
     details: [
-      { label: 'モデル', value: 'claude-opus-5-5', mono: true },
+      { label: 'モデル', value: 'opus', mono: true },
       { label: '起点', value: '人間の依頼（Web UI）' },
       { label: '受信箱', value: '未読 2 件' },
     ],
