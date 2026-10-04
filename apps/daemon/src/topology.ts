@@ -31,6 +31,11 @@ export const TOPOLOGY_REQUEST_LIMIT = 200;
 export const TOPOLOGY_WAITING_SUMMARY_LIMIT = 160;
 /** 委譲1本あたりに載せる返事待ちの件数の上限（残りは `waitingOmitted`）。 */
 export const TOPOLOGY_WAITING_PER_MANAGER = 5;
+/**
+ * 実行中の道具を載せる最大の経過時間。runner が落ちる・繋がりが切れる・Pre が発火して
+ * Post が来ない経路（Issue #2725）で、実行中のまま残り続けないための保険。
+ */
+export const TOPOLOGY_RUNNING_TOOL_MAX_MS = 2 * 60 * 60 * 1000;
 /** 委譲1本あたりに載せる作業者の種類の上限。 */
 export const TOPOLOGY_WORKERS_PER_MANAGER = 20;
 /**
@@ -65,10 +70,25 @@ export function isOnTopology(manager: ManagerSummary, nowMs: number): boolean {
   return nowMs - updated <= TOPOLOGY_ENDED_WINDOW_MS;
 }
 
+/**
+ * 実行中の道具を地図に載せてよい委譲か。packages/logic の `isInProgress` と同じ意味
+ * （走行中で live・返事待ち・背景処理待ち）に、終端（failed / lost / stopped）の除外を足す。
+ */
+function mayShowRunningTool(manager: ManagerSummary): boolean {
+  if (manager.status === 'failed' || manager.status === 'lost' || manager.status === 'stopped') {
+    return false;
+  }
+  if (manager.status === 'running') return manager.live;
+  if (manager.status === 'waiting_human') return true;
+  return manager.awaitingBackground !== undefined;
+}
+
 function topologyManagerOf(
   manager: ManagerSummary,
   activity: TopologyActivityTracker,
+  nowMs: number,
 ): TopologyManager {
+  const showRunningTool = mayShowRunningTool(manager);
   const waiting = manager.waiting.slice(0, TOPOLOGY_WAITING_PER_MANAGER).map((item) => ({
     requestId: item.requestId,
     ...(item.kind === undefined ? {} : { kind: item.kind }),
@@ -83,6 +103,11 @@ function topologyManagerOf(
       agentType: worker.agentType,
       ...(worker.lastTool === undefined ? {} : { lastTool: worker.lastTool }),
       ...(worker.lastToolAt === undefined ? {} : { lastToolAt: worker.lastToolAt }),
+      ...(showRunningTool &&
+      worker.runningTool !== undefined &&
+      nowMs - Date.parse(worker.runningTool.startedAt) <= TOPOLOGY_RUNNING_TOOL_MAX_MS
+        ? { runningTool: worker.runningTool }
+        : {}),
     }));
   return {
     managerId: manager.managerId,
@@ -162,7 +187,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
   const managers: TopologyManager[] = [];
   let used = 0;
   for (const manager of onMap) {
-    const row = topologyManagerOf(manager, input.activity);
+    const row = topologyManagerOf(manager, input.activity, input.nowMs);
     const size = JSON.stringify(row).length;
     // 1本目は必ず載せる（1本も載らない一覧は「居ない」と読める）。
     if (managers.length > 0 && used + size > TOPOLOGY_MANAGERS_CHAR_BUDGET) break;

@@ -1636,6 +1636,13 @@ const topologyWorkerSchema = z.object({
   agentType: z.string(),
   lastTool: z.string().optional(),
   lastToolAt: isoDateTimeSchema.optional(),
+  /**
+   * いま実行中の道具（未決のうち最も古いもの。Issue #2725）。runner が道具の開始から
+   * 20秒を超えて未決のときだけ知らせる（日誌には書かない）。**欄が無いことは「観測して
+   * いない」であって「実行中でない」ではない**（古い runner・短い道具・委譲が途中でない・
+   * 開始から2時間超）。
+   */
+  runningTool: z.object({ tool: z.string(), startedAt: isoDateTimeSchema }).optional(),
 });
 
 const topologyWaitingSchema = z.object({

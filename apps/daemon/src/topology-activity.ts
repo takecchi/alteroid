@@ -1,4 +1,9 @@
-import { qualifiedToolName, WORKER_AGENT_NAME, type JournalEntry } from '@alteroid/core';
+import {
+  qualifiedToolName,
+  WORKER_AGENT_NAME,
+  type JournalEntry,
+  type WorkerToolEvent,
+} from '@alteroid/core';
 
 /**
  * 稼働の地図（`GET /topology`）の**線の活動**を、日誌の追記から数える層。
@@ -47,6 +52,13 @@ export interface WorkerActivity {
   agentType: string;
   lastTool?: string;
   lastToolAt?: string;
+  /**
+   * いま実行中の道具のうち**最も古いもの**（Issue #2725）。runner の `tool_running` が
+   * 届いて `tool_end` がまだの分。**日誌に載らない**メモリだけの観測で、欄が無いことは
+   * 「実行中でない」ではなく「観測していない」。読み出し側（`topology.ts`）が
+   * 委譲の状態・経過時間で更に絞る。
+   */
+  runningTool?: { tool: string; startedAt: string };
 }
 
 export const HUMAN_CLONE_LINK = 'human~clone';
@@ -272,6 +284,9 @@ function later(current: string | undefined, next: string): string {
   return b > a ? next : current;
 }
 
+/** `tool_end` が先に届いた道具の印（tombstone）の上限。超えたら古い順に忘れる。 */
+export const TOPOLOGY_TOOL_TOMBSTONE_CAP = 1000;
+
 /** 追跡する線・作業者の上限。超えたら最後の活動が古いものから落とす（無限に伸ばさない）。 */
 export const TOPOLOGY_ACTIVITY_CAP = 2000;
 
@@ -284,6 +299,47 @@ export interface TopologyActivityTracker {
   workersOf(managerId: string): WorkerActivity[];
   /** 日誌の購読口（`JournalBus.subscribe`）へ繋ぐ。戻り値は解除。 */
   attach(subscribe: (listener: (entry: JournalEntry) => void) => () => void): () => void;
+  /**
+   * 作業者の道具の実行中の合図（`tool_running` / `tool_end`。Issue #2725）を取り込む。
+   * **日誌は通らない。** `tool_end` が先に届いた道具は、後から来る `tool_running` を
+   * 無視する（入れ替わり対策）。
+   */
+  recordWorkerTool(event: WorkerToolEvent): void;
+  /** 作業者の実行中の道具が変わったときに呼ぶ。戻り値は解除。 */
+  onChange(listener: () => void): () => void;
+  /** 作業者の道具の合図の購読口（`WorkerToolBus.subscribe`）へ繋ぐ。戻り値は解除。 */
+  attachWorkerTools(
+    subscribe: (listener: (event: WorkerToolEvent) => void) => () => void,
+  ): () => void;
+}
+
+/**
+ * runner→daemon の作業者の道具の合図を、プールと地図の tracker のあいだで中継する口。
+ * **プール（`createClone` の中で作られる）が地図（`createApp`）より先に作られる**ので、
+ * 遅延で差し込む（`journal-bus.ts` の `createJournalBus` と同じ形）。
+ */
+export interface WorkerToolBus {
+  emit(event: WorkerToolEvent): void;
+  subscribe(listener: (event: WorkerToolEvent) => void): () => void;
+}
+
+export function createWorkerToolBus(): WorkerToolBus {
+  const listeners = new Set<(event: WorkerToolEvent) => void>();
+  return {
+    emit(event) {
+      for (const listener of listeners) {
+        try {
+          listener(event);
+        } catch {
+          // 1人の受け口が壊れても、他の受け口を巻き込まない
+        }
+      }
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
 }
 
 export function createTopologyActivityTracker(
@@ -291,6 +347,25 @@ export function createTopologyActivityTracker(
 ): TopologyActivityTracker {
   const links = new Map<string, LinkActivity>();
   const workers = new Map<string, WorkerActivity>();
+  /** 実行中の道具（`toolUseId` → ）。作業者の行とは別に持つ（行が間引かれても数えを壊さない）。 */
+  const running = new Map<
+    string,
+    { workerKey: string; managerId: string; agentType: string; tool: string; startedAt: string }
+  >();
+  /** `tool_end` が先に届いた `toolUseId`（挿入順＝古い順に忘れる）。 */
+  const tombstones = new Set<string>();
+  const changeListeners = new Set<() => void>();
+  const notifyChange = (): void => {
+    for (const listener of changeListeners) {
+      try {
+        listener();
+      } catch {
+        // 受け口の失敗で取り込みを止めない
+      }
+    }
+  };
+  const workerKeyOf = (managerId: string, agentType: string): string =>
+    `${managerId}\u0000${agentType}`;
 
   const newest = (a: LinkActivity): number => {
     const times = [a.lastDownAt, a.lastUpAt, a.lastActivityAt]
@@ -299,6 +374,14 @@ export function createTopologyActivityTracker(
       .filter((v) => !Number.isNaN(v));
     return times.length === 0 ? 0 : Math.max(...times);
   };
+
+  function pruneRunning(): void {
+    if (running.size <= cap) return;
+    const ordered = [...running.entries()].sort(
+      (a, b) => Date.parse(a[1].startedAt) - Date.parse(b[1].startedAt),
+    );
+    for (const [id] of ordered.slice(0, running.size - cap)) running.delete(id);
+  }
 
   function prune(): void {
     if (links.size > cap) {
@@ -326,7 +409,7 @@ export function createTopologyActivityTracker(
         links.set(touch.key, row);
       }
       for (const touch of mapped.workers) {
-        const key = `${touch.managerId}\u0000${touch.agentType}`;
+        const key = workerKeyOf(touch.managerId, touch.agentType);
         const row = workers.get(key) ?? { managerId: touch.managerId, agentType: touch.agentType };
         if (touch.tool !== undefined) {
           const updated = later(row.lastToolAt, touch.at);
@@ -343,13 +426,60 @@ export function createTopologyActivityTracker(
         .sort((a, b) => newest(b) - newest(a) || a.key.localeCompare(b.key));
     },
     workersOf(managerId) {
-      return [...workers.values()]
-        .filter((row) => row.managerId === managerId)
-        .map((row) => ({ ...row }))
-        .sort((a, b) => a.agentType.localeCompare(b.agentType));
+      // 実行中の道具だけが先に届いた作業者（日誌に1行も無い）も、行として載せる。
+      const rows = new Map<string, WorkerActivity>();
+      for (const [key, row] of workers) {
+        if (row.managerId === managerId) rows.set(key, { ...row });
+      }
+      for (const tool of running.values()) {
+        if (tool.managerId !== managerId) continue;
+        const row = rows.get(tool.workerKey) ?? { managerId, agentType: tool.agentType };
+        const current = row.runningTool;
+        if (current === undefined || Date.parse(tool.startedAt) < Date.parse(current.startedAt)) {
+          row.runningTool = { tool: tool.tool, startedAt: tool.startedAt };
+        }
+        rows.set(tool.workerKey, row);
+      }
+      return [...rows.values()].sort((a, b) => a.agentType.localeCompare(b.agentType));
     },
     attach(subscribe) {
       return subscribe((entry) => tracker.record(entry));
+    },
+    recordWorkerTool(event) {
+      if (event.type === 'tool_end') {
+        if (running.delete(event.toolUseId)) {
+          notifyChange();
+          return;
+        }
+        // 先に届いた。後から来る tool_running を無視するための印。
+        tombstones.add(event.toolUseId);
+        while (tombstones.size > TOPOLOGY_TOOL_TOMBSTONE_CAP) {
+          const oldest = tombstones.values().next().value;
+          if (oldest === undefined) break;
+          tombstones.delete(oldest);
+        }
+        return;
+      }
+      if (tombstones.delete(event.toolUseId)) return;
+      const worker = parseWorkerActor(event.actor);
+      if (worker === undefined) return;
+      if (Number.isNaN(Date.parse(event.startedAt))) return;
+      running.set(event.toolUseId, {
+        workerKey: workerKeyOf(worker.managerId, worker.agentType),
+        managerId: worker.managerId,
+        agentType: worker.agentType,
+        tool: event.tool,
+        startedAt: event.startedAt,
+      });
+      pruneRunning();
+      notifyChange();
+    },
+    onChange(listener) {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
+    },
+    attachWorkerTools(subscribe) {
+      return subscribe((event) => tracker.recordWorkerTool(event));
     },
   };
   return tracker;

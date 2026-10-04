@@ -80,6 +80,7 @@ import { startManagerPolling } from './manager-poller.js';
 import { readArchiveFoldConfig, startArchiveFolding } from './archive-folder.js';
 import { AUTH_WITHHELD_ENV_KEYS, planAuth } from './auth.js';
 import { createJournalBus } from './journal-bus.js';
+import { createWorkerToolBus } from './topology-activity.js';
 import {
   createHttpRunner,
   describeRunnerDropped,
@@ -1055,6 +1056,9 @@ export async function main(): Promise<void> {
   // どこから追記されても `GET /journal/stream` に流れる（人間が聞きに行かなくても
   // 承認待ちが出たことに気づける）。ここを通さない書き手を作らないこと。
   const journalBus = createJournalBus(storage.stores.journal);
+  // 作業者の道具の実行中の合図（#2725）。プール（`createClone` の中）が地図（`createApp`）より
+  // 先に作られるので、口だけ先に作り、地図が後から購読する。**日誌は通らない。**
+  const workerToolBus = createWorkerToolBus();
   const stores: Stores = { ...storage.stores, journal: journalBus.journal };
 
   /**
@@ -1848,6 +1852,7 @@ export async function main(): Promise<void> {
       pendingTokenWake = undefined;
       wake?.();
     },
+    onWorkerToolEvent: (event) => workerToolBus.emit(event),
     onUsageObservation: async (observation) => {
       // **成功の観測は `observe` へは1文字も渡さない**（#681 (1)。
       // `TokenRotatorObservation.succeeded` の doc）。あちらは枠の観測しか
@@ -2443,6 +2448,7 @@ export async function main(): Promise<void> {
     runners,
     cloneProvider: cloneProvider.id,
     journalEvents: journalBus,
+    workerToolEvents: workerToolBus,
     storageProbe: storage.probe,
     accountUsage: () => usagePoller.state(),
     allowedOrigins,

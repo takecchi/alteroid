@@ -222,7 +222,7 @@ import {
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
-import { createTopologyActivityTracker } from './topology-activity.js';
+import { createTopologyActivityTracker, type WorkerToolBus } from './topology-activity.js';
 import {
   createStorageHealthTracker,
   createTopologyService,
@@ -301,6 +301,12 @@ export interface AppDeps {
    * いないことを黙って隠さない**ため（テストの HTTP 層検証では省略できる）。
    */
   journalEvents?: Pick<JournalBus, 'subscribe'>;
+  /**
+   * 作業者の道具の実行中の合図（`tool_running` / `tool_end`。Issue #2725）の購読口。
+   * 稼働の地図の tracker へつなぐ。**日誌は通らない**（プールが `WorkerToolBus` へ流す）。
+   * 無ければ地図に実行中の道具は載らない（今までどおり）。
+   */
+  workerToolEvents?: Pick<WorkerToolBus, 'subscribe'>;
   /**
    * アカウント全体の利用状況（claude.ai 側の値）を読む口。
    *
@@ -1825,6 +1831,9 @@ export function createApp(deps: AppDeps) {
   // 続くので解除しない。
   const topologyActivity = createTopologyActivityTracker();
   if (deps.journalEvents !== undefined) topologyActivity.attach(deps.journalEvents.subscribe);
+  if (deps.workerToolEvents !== undefined) {
+    topologyActivity.attachWorkerTools(deps.workerToolEvents.subscribe);
+  }
   const topologyStorage = createStorageHealthTracker({
     // 接続先・パスは載せない。器の種類だけ。
     label:
@@ -2940,11 +2949,20 @@ export function createApp(deps: AppDeps) {
           let closed = false;
           let dirty = false;
 
-          const unsubscribe =
+          const unsubscribeJournal =
             deps.journalEvents?.subscribe(() => {
               dirty = true;
               wake?.();
             }) ?? (() => undefined);
+          // 作業者の実行中の道具が変わったときも、日誌の追記と同じ口で再計算を起こす（#2725）。
+          const unsubscribeWorkerTools = topologyActivity.onChange(() => {
+            dirty = true;
+            wake?.();
+          });
+          const unsubscribe = (): void => {
+            unsubscribeJournal();
+            unsubscribeWorkerTools();
+          };
 
           try {
             stream.onAbort(() => {
