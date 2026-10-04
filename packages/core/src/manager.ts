@@ -5690,6 +5690,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
+      managerId,
       text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${input.request}`,
     });
     const silent = this.#silentRunners();
@@ -6051,6 +6052,7 @@ class Pool implements ManagerPool {
       type: 'exchange',
       with: 'manager',
       role: 'outbound',
+      managerId,
       text: `${EXCHANGE_KIND_REPLY_PREFIX}[${managerId}] ${message}`,
     });
     return {

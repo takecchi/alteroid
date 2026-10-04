@@ -227,11 +227,18 @@ import {
   tokensUnreadableRemoveRequestSchema,
   tokensUnreadableRemoveResponseSchema,
   tokensUpdateRequestSchema,
+  topologyResponseSchema,
   unreadableRowsRemoveRequestSchema,
   unreadableRowsRemoveResponseSchema,
   usageResponseSchema,
 } from './openapi.js';
 import { InvalidCursorError, decodeCursor, encodeCursor } from './cursor.js';
+import { createTopologyActivityTracker } from './topology-activity.js';
+import {
+  createStorageHealthTracker,
+  createTopologyService,
+  topologySignature,
+} from './topology.js';
 import {
   compareDailyReportsNewestFirst,
   listDailyReports,
@@ -379,6 +386,22 @@ export interface AppDeps {
    * 差し替える理由が無い設定なので、実行環境プロファイルの対象にもしない。
    */
   sseHeartbeatMs?: number;
+  /**
+   * 記憶の器が応えるかを確かめる口（稼働の地図 `GET /topology` の `storage.state`）。
+   * 拒否・失敗で reject する。**応答は結果の保持（`createStorageHealthTracker`）が
+   * 約15秒に1回・3秒の打ち切りで呼ぶだけで、毎リクエストでは叩かない。**
+   *
+   * **無ければ `storage.state` は `unknown`**（確かめる手段が無いことを、`ok` に
+   * 化けさせない）。接続情報は応答へ載せない（失敗の理由も種別だけ）。
+   */
+  storageProbe?: () => Promise<void>;
+  /**
+   * `GET /topology/stream` の周期の再計算の間隔（ms。既定 2000）。**環境変数は増やさない**
+   * （`sseHeartbeatMs` と同じ。テストで短くする以外に差し替える理由が無い）。
+   */
+  topologyTickMs?: number;
+  /** 日誌の追記を受けてからの再計算の待ち（ms。既定 200。続けて来た追記をまとめる）。 */
+  topologyDebounceMs?: number;
   /**
    * SDK のセッション生ログを消す口（`apps/daemon/src/storage.ts` の
    * `Storage.clearSessionLog` の doc）。**pg 構成でだけ付く。**
@@ -1837,6 +1860,31 @@ export function createApp(deps: AppDeps) {
   const { clone, stores } = deps;
   const sseHeartbeatMs = deps.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
 
+  // --- 稼働の地図 ---------------------------------------------------------
+  // 線の活動は日誌の追記から数える。**日誌の流れが配線されていなければ線は空のまま**
+  // （流れていないのではなく、観測していない）。購読はデーモンが起きている間ずっと
+  // 続くので解除しない。
+  const topologyActivity = createTopologyActivityTracker();
+  if (deps.journalEvents !== undefined) topologyActivity.attach(deps.journalEvents.subscribe);
+  const topology = createTopologyService({
+    clone,
+    ...(deps.runners === undefined ? {} : { runners: deps.runners }),
+    activity: topologyActivity,
+    storage: createStorageHealthTracker({
+      // 接続先・パスは載せない。器の種類だけ。
+      label:
+        deps.storage === undefined
+          ? undefined
+          : deps.storage.startsWith('PostgreSQL')
+            ? 'postgres'
+            : 'fs',
+      probe: deps.storageProbe,
+      now: Date.now,
+    }),
+  });
+  const topologyTickMs = deps.topologyTickMs ?? 2000;
+  const topologyDebounceMs = deps.topologyDebounceMs ?? 200;
+
   const authPlan: AuthPlan = deps.auth?.plan ?? {
     enabled: false,
     providers: [],
@@ -2866,6 +2914,130 @@ export function createApp(deps: AppDeps) {
           }
         });
       },
+    )
+
+    // --- 稼働の地図 -----------------------------------------------------------
+    /**
+     * 稼働の地図（人間 ↔ クローン ↔ 記憶、クローン ↔ マネージャー ↔ 作業者）。
+     *
+     * **デーモンが既に持っているものだけで組む。** 取れないものは `unknown` と言い、取れた
+     * ふりをしない。線は最後の活動の時刻だけを返す（「いま流れている」の閾値は読み手が決める）。
+     * 経路は1本で、Web UI の地図も `alteroid topology` も同じものを見る。
+     */
+    .get(
+      '/topology',
+      describeRoute({
+        tags: ['topology'],
+        summary: '稼働の地図（クローン・記憶・runner・マネージャー・作業者と、線の最後の活動）',
+        description:
+          '走行中・返事待ち・直近10分以内に終わった委譲を、抜粋と文字数の予算で締めて返す' +
+          '（全文は `GET /managers/{id}`）。`unknown` は「分からない」であって `ok`/`idle` ではない。' +
+          '線は `lastDownAt`（指示・書き込み）/ `lastUpAt`（報告・確認・読み出し）/ ' +
+          '`lastActivityAt`（作業者の道具実行）の時刻だけ。作業者は `managerId` × `agentType` で束ねる。',
+        responses: {
+          200: {
+            description: '稼働の地図。',
+            content: { 'application/json': { schema: resolver(topologyResponseSchema) } },
+          },
+        },
+      }),
+      async (c) => c.json(topologyResponseSchema.parse(await topology.snapshot())),
+    )
+
+    /**
+     * 稼働の地図の流れ（SSE）。`event: snapshot` に `GET /topology` と同じ形。
+     *
+     * 開いたとき1回、以後は日誌の追記（短い待ちでまとめる）と周期（約2秒）で組み直し、
+     * **内容（`observedAt` を除く）が変わったときだけ**送る。日誌の流れが配線されていなくても
+     * 周期で動く（線が空なだけ）。
+     */
+    .get(
+      '/topology/stream',
+      describeRoute({
+        tags: ['topology'],
+        summary: '稼働の地図の流れ（SSE）',
+        description:
+          '`event: snapshot` に `GET /topology` と同じ形。開いたとき1回、以後は内容が変わった' +
+          'ときだけ送る。**コメント行（`:` で始まる行）の heartbeat が周期的に流れる。**',
+        responses: {
+          200: {
+            description: 'SSE ストリーム。',
+            content: { 'text/event-stream': { schema: resolver(topologyResponseSchema) } },
+          },
+        },
+      }),
+      (c) =>
+        streamSSE(c, async (stream) => {
+          let wake: (() => void) | null = null;
+          let closed = false;
+          let dirty = false;
+
+          const unsubscribe =
+            deps.journalEvents?.subscribe(() => {
+              dirty = true;
+              wake?.();
+            }) ?? (() => undefined);
+
+          try {
+            stream.onAbort(() => {
+              closed = true;
+              wake?.();
+            });
+            const credential = watchSseCredential(
+              c.get('principal'),
+              c.req.header('authorization'),
+            );
+            const stopHeartbeat = startSseHeartbeat(
+              stream,
+              sseHeartbeatMs,
+              () => wake?.(),
+              () => credential.tick(() => wake?.()),
+            );
+
+            try {
+              let last: string | null = null;
+              for (;;) {
+                if (closed || credential.lost() || stream.aborted || stream.closed) break;
+                const fromEvent = dirty;
+                dirty = false;
+                try {
+                  // 追記を受けた再計算は新しく組む。周期の再計算は直近の結果を使い回して
+                  // よい（購読者が増えても台帳を読む回数を増やさない）。
+                  const snapshot = topologyResponseSchema.parse(
+                    await topology.snapshot(fromEvent ? {} : { maxAgeMs: 1000 }),
+                  );
+                  const signature = topologySignature(snapshot);
+                  if (signature !== last) {
+                    last = signature;
+                    await stream.writeSSE({ event: 'snapshot', data: JSON.stringify(snapshot) });
+                  }
+                } catch {
+                  // 組めなかった回は送らず、次の周期でやり直す（ストリームごと落とさない）。
+                  // 前回の内容のまま黙るので、読み手は `observedAt` の古さで気づける。
+                }
+                // 組んでいる間に追記が来ていたら（`dirty`）待たずに回る。
+                if (!dirty) {
+                  await new Promise<void>((resolve) => {
+                    const timer = setTimeout(resolve, topologyTickMs);
+                    wake = () => {
+                      clearTimeout(timer);
+                      resolve();
+                    };
+                  });
+                  wake = null;
+                }
+                // 追記で起きたなら、続けて来る分をまとめてから組み直す。
+                if (dirty && !closed) {
+                  await new Promise<void>((resolve) => setTimeout(resolve, topologyDebounceMs));
+                }
+              }
+            } finally {
+              stopHeartbeat();
+            }
+          } finally {
+            unsubscribe();
+          }
+        }),
     )
 
     // --- 記憶（人間が読んで直せること自体が要件） ---------------------------

@@ -1,4 +1,6 @@
-import { mkdir } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
+
+import { sql } from 'drizzle-orm';
 
 import type { SessionStore } from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -68,6 +70,11 @@ export interface Storage {
    * `resetWorkspaceState(stores, { clearSessionLog })` の形でここへ橋渡しする。
    */
   clearSessionLog?: () => Promise<number>;
+  /**
+   * 記憶の器が応えるかを確かめる（稼働の地図の `storage.state`）。応えなければ reject。
+   * pg は既存の接続で `SELECT 1`、fs は置き場のディレクトリへ触れるか。**値は返さない。**
+   */
+  probe: () => Promise<void>;
 }
 
 /** 空文字の環境変数は「未指定」として扱う。 */
@@ -233,6 +240,7 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
       kind: 'fs',
       description: paths.root,
       close: async () => undefined,
+      probe: () => access(paths.root),
     };
   }
 
@@ -264,6 +272,10 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
     description: plan.description,
     close: () => pg.close(),
     clearSessionLog: () => pg.sessionStore.clearAll(),
+    // 既存の接続（プール）に1往復だけ。接続を新しく作らない。
+    probe: async () => {
+      await pg.db.execute(sql`select 1`);
+    },
   };
 }
 

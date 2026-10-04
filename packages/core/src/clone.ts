@@ -2477,6 +2477,20 @@ class Clone implements CloneHost {
   }
 
   /**
+   * `CloneHost.activeTurn` の実装。doc は `host.ts` 側に在る——ここは
+   * `#sdkSession.turn` を読むだけの薄い窓で、判定を持たない
+   * （{@link Clone.usageBlocked} と同じ形）。**中身（本文・承認 id）は出さない。**
+   */
+  activeTurn(): { conversationId?: string; kind: 'normal' | 'distill' } | null {
+    const turn = this.#sdkSession.turn;
+    if (turn === null) return null;
+    return {
+      ...(turn.conversationId === null ? {} : { conversationId: turn.conversationId }),
+      kind: turn.kind,
+    };
+  }
+
+  /**
    * 枠（利用上限）の解除を試す印（`#releaseRequested`）が、**まだ使われずに
    * 立っているか**（Issue #1051）。
    *
@@ -4768,6 +4782,7 @@ class Clone implements CloneHost {
         type: 'exchange',
         with: 'manager',
         role: 'inbound',
+        managerId: event.managerId,
         text: `${EXCHANGE_KIND_REPLY_PREFIX}[${event.managerId}/${event.kind}] ${event.text}`,
       });
       return;

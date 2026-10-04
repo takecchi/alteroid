@@ -95,6 +95,17 @@ export interface CloneHost {
    */
   interruptTurn?(): Promise<'interrupted' | 'idle'>;
 
+  /**
+   * **いまクローンが走らせているターン**（稼働の地図 `GET /topology` の `clone.state`）。
+   * 走っていなければ `null`。
+   *
+   * **省略可能にしてある** —— この面を実装する偽物（テスト）が多い。**実装していない
+   * 器は「分からない」であって「止まっている」ではない**（呼び手は欄の不在を `unknown`
+   * と読み、`idle` を作らない）。`conversationId` は人間に見せない内部ターン
+   * （蒸留など）では無い。
+   */
+  activeTurn?(): { conversationId?: string; kind: 'normal' | 'distill' } | null;
+
   /** 会話の終了。蒸留の契機（寿命モデル: 蒸留は生存条件）。 */
   endConversation(conversationId: string): Promise<void>;
 

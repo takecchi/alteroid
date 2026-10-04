@@ -1618,6 +1618,98 @@ export const runnersListResponseSchema = z.object({
   cloneProvider: z.string().optional(),
 });
 
+/**
+ * 稼働の地図（`GET /topology` と `GET /topology/stream` の `snapshot`）。
+ *
+ * **「分からない」を表す値を持つ**（`unknown`）。配線されていない・聞きに行けない軸に
+ * `ok` / `idle` を作らない——作ると「確かめた」と読める（取れない軸に 0 の行を作らない）。
+ *
+ * **線は時刻だけを返す。** 「いま流れている」と読む閾値は読み手が決める
+ * （`apps/daemon/src/topology-activity.ts` の冒頭）。向きは指揮する側から見る
+ * （`down` = 指示・書き込み、`up` = 報告・確認・読み出し）。
+ *
+ * **段1では作業者を個体で見分けない**（`managerId` × `agentType` で束ねる）。
+ */
+export const topologyCloneSchema = z.object({
+  /**
+   * `busy` = ターンが走っている、`idle` = 走っていない、`usage_blocked` = 枠で止まっている、
+   * `unknown` = 分からない（ターンの有無をこの器が答えられない）。
+   */
+  state: z.enum(['idle', 'busy', 'usage_blocked', 'unknown']),
+  /** `busy` のときだけ。内部ターン（蒸留など）は `conversationId` を持たない。 */
+  turn: z
+    .object({ conversationId: z.string().optional(), kind: z.enum(['normal', 'distill']) })
+    .optional(),
+});
+
+export const topologyStorageSchema = z.object({
+  /** 器の種類（`postgres` / `fs`）。**接続情報は載せない。** 配線されていなければ無い。 */
+  label: z.string().optional(),
+  /** `unknown` = 確かめる手段が配線されていない・まだ確かめていない。 */
+  state: z.enum(['ok', 'unreachable', 'unknown']),
+  checkedAt: isoDateTimeSchema.optional(),
+  /** `unreachable` のときの短い理由（エラーの種別だけ。接続先・認証情報は載せない）。 */
+  error: z.string().optional(),
+});
+
+const topologyWorkerSchema = z.object({
+  agentType: z.string(),
+  lastTool: z.string().optional(),
+  lastToolAt: isoDateTimeSchema.optional(),
+});
+
+const topologyWaitingSchema = z.object({
+  requestId: z.string(),
+  kind: waitingKindSchema.optional(),
+  /** 抜粋。全文は `GET /managers/:id`。 */
+  summary: z.string(),
+  askedAt: isoDateTimeSchema.optional(),
+});
+
+const topologyManagerSchema = z.object({
+  managerId: z.string(),
+  status: jobStatusSchema,
+  live: z.boolean(),
+  runnerId: z.string().optional(),
+  /** 抜粋。全文は `GET /managers/:id`。 */
+  request: z.string(),
+  startedAt: isoDateTimeSchema,
+  /** 終端した委譲が「いつ畳まれたか」の目安（最後に台帳が動いた時刻）。 */
+  updatedAt: isoDateTimeSchema,
+  lastReportAt: isoDateTimeSchema.optional(),
+  /** 返事待ち。1件ずつ抜粋で、多いときは先頭から切り `waitingOmitted` で件数を言う。 */
+  waiting: z.array(topologyWaitingSchema),
+  waitingOmitted: z.number().int().nonnegative().optional(),
+  workers: z.array(topologyWorkerSchema),
+});
+
+const topologyLinkSchema = z.object({
+  /** `human~clone` / `clone~storage` / `clone~manager:<id>` / `manager:<id>~worker:<type>` */
+  key: z.string(),
+  lastDownAt: isoDateTimeSchema.optional(),
+  lastUpAt: isoDateTimeSchema.optional(),
+  lastActivityAt: isoDateTimeSchema.optional(),
+});
+
+export const topologyResponseSchema = z.object({
+  observedAt: isoDateTimeSchema,
+  clone: topologyCloneSchema,
+  storage: topologyStorageSchema,
+  runners: z.array(
+    z.object({
+      label: z.string(),
+      runnerId: z.string().optional(),
+      state: runnerLivenessSchema,
+      since: isoDateTimeSchema,
+    }),
+  ),
+  /** 走行中・返事待ち・直近10分以内に終わった委譲。**詳細は `GET /managers/:id`。** */
+  managers: z.array(topologyManagerSchema),
+  /** 文字数の予算で切った分の件数（切っていなければ無い）。 */
+  managersOmitted: z.number().int().nonnegative().optional(),
+  links: z.array(topologyLinkSchema),
+});
+
 export const runnersCredentialsResponseSchema = z.object({
   results: z.array(
     z.object({
@@ -2815,6 +2907,7 @@ export const openApiDocumentation: GenerateSpecOptions['documentation'] = {
     },
     { name: 'managers', description: '委譲先マネージャーの一覧・状態・生ログ・直接の指示/停止' },
     { name: 'runners', description: '委譲先 runner の名簿と、そこへ配る鍵の指紋' },
+    { name: 'topology', description: '稼働の地図（各層の状態と、線の最後の活動。SSE あり）' },
     { name: 'archive', description: 'セッション生ログ（可観測性の最下段）' },
     {
       name: 'mcp-servers',

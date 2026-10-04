@@ -2443,6 +2443,7 @@ export async function main(): Promise<void> {
     runners,
     cloneProvider: cloneProvider.id,
     journalEvents: journalBus,
+    storageProbe: storage.probe,
     accountUsage: () => usagePoller.state(),
     allowedOrigins,
     auth: { plan: authPlan },
