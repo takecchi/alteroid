@@ -143,7 +143,7 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
       }
       if (manager.waitingOmitted !== undefined) {
         lines.push(
-          `        …ほか返事待ち ${String(manager.waitingOmitted)} 件は省略（alteroid managers で全件）`,
+          `        …ほか返事待ち ${String(manager.waitingOmitted)} 件は省略（全件は GET /managers）`,
         );
       }
       for (const worker of manager.workers) {
@@ -163,7 +163,7 @@ export function renderTopology(view: TopologyView, now: number = Date.now()): st
     }
     if (view.managersOmitted !== undefined) {
       lines.push(
-        `      …ほか ${String(view.managersOmitted)} 本は文字数の予算で省略（alteroid managers で全件）`,
+        `      …ほか ${String(view.managersOmitted)} 本は文字数の予算で省略（全件は GET /managers）`,
       );
     }
   }
