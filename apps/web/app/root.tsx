@@ -21,6 +21,11 @@ export function meta() {
     { name: 'description', content: 'クローンの様子を見て、指示を出し、記憶を直す画面' },
     // 単一ユーザーの道具であって公開物ではない。検索に載せない。
     { name: 'robots', content: 'noindex, nofollow' },
+    // ホーム画面へ追加したときの名前。無いと `<title>` か頭文字になる。
+    { name: 'apple-mobile-web-app-title', content: 'alteroid' },
+    // 旧い iOS（manifest の display を読まない版）向けに standalone を明示する。
+    { name: 'apple-mobile-web-app-capable', content: 'yes' },
+    { name: 'theme-color', content: '#0b0e18' },
   ];
 }
 
@@ -28,6 +33,10 @@ export function links() {
   return [
     // サイドバー左上の印（`BrandMark`）と同じ形。中身と色の決め方は `public/favicon.svg` の注釈に在る。
     { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+    // iOS のホーム画面は SVG の favicon を使わない。PNG（不透明・角丸なしの正方形。iOS が角を丸める）。
+    // 生成は `scripts/generate-pwa-icons.mjs`。
+    { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
+    { rel: 'manifest', href: '/manifest.webmanifest' },
   ];
 }
 
