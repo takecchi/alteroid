@@ -155,6 +155,8 @@ export class CodexCloneDriver implements AgentCloneDriver {
   readonly providerId = 'codex';
   /** クローンの道具は stdio の中継越しにしか渡せない（上の doc）。`clone.ts` が経路を決めるのに読む。 */
   readonly requiredToolsTransport = 'stdio';
+  /** Codex は文脈の使用状況を出さない（`contextUsage()` は常に reject）。 */
+  readonly providesContextUsage = false;
   readonly #options: CodexManagerDriverOptions;
 
   constructor(options: CodexManagerDriverOptions = {}) {

@@ -1630,6 +1630,8 @@ function buildHumanAnswerEvent(
 class Clone implements CloneHost {
   readonly #stores: Stores;
   readonly #driver: AgentCloneDriver;
+  /** 文脈の使用状況を出せない駆動役で、「取れない」を既に1回残したか（`#observeContextUsage`）。 */
+  #contextUsageUnavailableNoted = false;
   readonly #cwd: string | undefined;
   readonly #sessionStore: SessionStore | undefined;
   /**
@@ -11064,6 +11066,13 @@ class Clone implements CloneHost {
   async #observeContextUsage(): Promise<ContextUsageObservation | undefined> {
     const q = this.#sdkSession.query;
     if (q === null) return undefined;
+    // **文脈の使用状況を出せない駆動役（Codex）は、最初の1回だけ「取れない」と残し、以後は聞かない**
+    // （毎ターン同じ error 付きの `context_usage` 行を積まない）。2回目以降は「観測していない」
+    // （`undefined`）で、行は書かれない。`providesContextUsage` を持たない Claude は従来どおり。
+    if (this.#driver.providesContextUsage === false) {
+      if (this.#contextUsageUnavailableNoted) return undefined;
+      this.#contextUsageUnavailableNoted = true;
+    }
     const startedAt = Date.now();
     try {
       const usage = await q.contextUsage();

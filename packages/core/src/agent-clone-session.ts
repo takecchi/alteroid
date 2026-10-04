@@ -132,6 +132,13 @@ export interface AgentCloneDriver {
    * `stdio` の中継越しだけ）。**無ければ `ALTEROID_CLONE_TOOLS_TRANSPORT` に従う**（Claude）。
    */
   readonly requiredToolsTransport?: 'stdio';
+  /**
+   * `false` なら、この駆動役は文脈の使用状況（`contextUsage()`）を**原理的に出せない**
+   * （Codex）。`clone.ts` は毎ターン聞いて毎ターン error 付きの `context_usage` 行を書く代わりに、
+   * **最初の1回だけ「取れない」と残し**、以後は聞かない（観測していない扱い）。無ければ従来どおり
+   * 毎ターン聞く（Claude）。
+   */
+  readonly providesContextUsage?: false;
   open(spec: AgentCloneSessionSpec): AgentCloneSession;
   /**
    * 蒸留のサイドクエリを起こし、中立イベントの流れを返す（呼んだ時点で起こす）。
