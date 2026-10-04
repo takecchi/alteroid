@@ -66,6 +66,12 @@ export interface AgentCloneSessionSpec {
   /** ユーザー入力のストリーム。provider が引いたぶんだけ消費される。 */
   input: AsyncIterable<AgentUserInput>;
   model: string;
+  /**
+   * `model` を人間が置いたか（`ALTEROID_CLONE_MODEL`）。`model` は置かなくても既定の帯
+   * （Claude のエイリアス）が入るので、**Claude 以外の駆動役は、これが真のときだけ `model` を
+   * provider へ渡す**（マネージャー側の `AgentManagerSessionSpec.modelPlaced` と同じ）。省略は偽。
+   */
+  modelPlaced?: boolean;
   permissionMode: PermissionModeName;
   tools: AgentCloneTools;
   /** 人間の MCP 連携の登録（クローンの道具とは別）。 */
@@ -73,6 +79,11 @@ export interface AgentCloneSessionSpec {
   systemPrompt: string;
   env: NodeJS.ProcessEnv;
   cwd?: string;
+  /**
+   * 駆動役が「取れなかった」「渡していない」等を、失敗として数えさせずに残す口（日誌）。
+   * 省略時は捨てる。**本文に秘密を載せないこと**（駆動役が伏せてから渡す）。
+   */
+  onNote?: (text: string) => void;
   /** 生ログの預け先。無ければローカルに置く。 */
   sessionLog?: AgentSessionLog;
   onPreToolUse: AgentPreToolHook;
@@ -113,9 +124,14 @@ export interface AgentCloneDistillSpec {
   onPostToolUseFailure: AgentObservationHook<AgentToolAuditFailureRecord>;
 }
 
-/** provider ごとの実装。いまは Claude だけ（`claude-clone-driver.ts`）。 */
+/** provider ごとの実装。`claude-clone-driver.ts` と `codex-clone-driver.ts`。 */
 export interface AgentCloneDriver {
   readonly providerId: AgentProviderId;
+  /**
+   * クローンの道具をこの経路でしか受け取れない、と言う駆動役が定義する（Codex は別プロセスなので
+   * `stdio` の中継越しだけ）。**無ければ `ALTEROID_CLONE_TOOLS_TRANSPORT` に従う**（Claude）。
+   */
+  readonly requiredToolsTransport?: 'stdio';
   open(spec: AgentCloneSessionSpec): AgentCloneSession;
   /**
    * 蒸留のサイドクエリを起こし、中立イベントの流れを返す（呼んだ時点で起こす）。

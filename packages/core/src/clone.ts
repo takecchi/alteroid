@@ -2362,7 +2362,10 @@ class Clone implements CloneHost {
     this.#self = self;
     this.#providerOf = providerOf ?? knownProviderOf;
     this.#mcpServerFactory = mcpServerFactory ?? createCloneMcpServer;
-    this.#cloneToolsTransport = resolveCloneToolsTransport(envSource);
+    // **駆動役が経路を決めるなら、それが勝つ**（Codex は別プロセスで、インプロセスの MCP を持てない。
+    // `AgentCloneDriver.requiredToolsTransport`）。Claude の駆動役は定義しないので env に従う（変えない）。
+    this.#cloneToolsTransport =
+      this.#driver.requiredToolsTransport ?? resolveCloneToolsTransport(envSource);
     this.#cloneToolRelaySocketDir = cloneToolRelaySocketDir ?? DEFAULT_CLONE_TOOL_RELAY_SOCKET_DIR;
     this.#redeliveryGate = redeliveryGate;
     this.#managers =
@@ -9656,6 +9659,8 @@ class Clone implements CloneHost {
 
     return {
       model: this.#model,
+      // Claude 以外の駆動役が、人間が置いたときだけモデルを渡すための印（Claude は読まない）。
+      modelPlaced: this.#modelOverridden,
       permissionMode: this.#permissionMode,
       input: this.#inputStream(),
       tools: await this.#cloneToolsFor(this.#toolContext()),
@@ -9663,6 +9668,15 @@ class Clone implements CloneHost {
       systemPrompt,
       env: this.#childEnv(),
       ...(this.#cwd === undefined ? {} : { cwd: this.#cwd }),
+      // 駆動役の観測（失敗ではないもの。渡していない MCP など）は日誌へ残す。Claude は呼ばない。
+      onNote: (text) => {
+        void this.#journal({
+          type: 'exchange',
+          with: 'self',
+          role: 'outbound',
+          text: `${EXCHANGE_KIND_DECISION_PREFIX}${text}`,
+        });
+      },
       resume,
       // 預け先は SDK の `SessionStore` を包み直さずそのまま渡す（駆動役が戻す）。
       ...(this.#sessionStore === undefined ? {} : { sessionLog: this.#sessionStore }),

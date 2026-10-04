@@ -39,3 +39,24 @@ export const CODEX_PROVIDER: AgentProvider = {
     partialMessages: true,
   },
 };
+
+/**
+ * クローン層で Codex が名乗る事実（#486 M7 段 S8）。**{@link CODEX_PROVIDER}（マネージャー層）との差は2つだけ。**
+ *
+ * オーナーの決定（「承認の仕組みと蒸留の2点は欠けたままでよい。クローンは基本的に Claude が推奨」）:
+ *
+ * | 能力 | 値 | 根拠 |
+ * | --- | --- | --- |
+ * | permissions | false | クローンの Codex は `approvalPolicy=never`・`sandbox=danger-full-access` で走らせる（Claude の `auto` に当たるものが無い）。承認要求は届かず、届いても常に拒否する。確認の代用は出さない |
+ * | compactionHook | false | マネージャー層と同じ理由に加え、クローンでは「圧縮の直前に記憶へ移す」蒸留が走らない（`codex-clone-driver.ts` は `distill` を持たない）。欠けは日誌・日報・`self_status` に出る |
+ *
+ * 残りはマネージャー層と同じ（toolAudit・usage・childUser は同じ実体を使う）。
+ */
+export const CODEX_CLONE_PROVIDER: AgentProvider = {
+  ...CODEX_PROVIDER,
+  capabilities: {
+    ...CODEX_PROVIDER.capabilities,
+    permissions: false,
+    compactionHook: false,
+  },
+};

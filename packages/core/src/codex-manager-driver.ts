@@ -187,13 +187,31 @@ export class CodexManagerDriver implements AgentManagerDriver {
   }
 }
 
+/**
+ * app-server のセッション1本の実体。**クローンの駆動役（`codex-clone-driver.ts`）が同じ実体を
+ * 使う**（子の起こし方・認証・通知の畳み・伏せ字・止め方を二重に持たない）。マネージャー側の
+ * 口（{@link AgentManagerSession}）に、走っているターンだけを止める `interrupt()` を足した形。
+ */
+export interface CodexSession extends AgentManagerSession {
+  /** 走っているターンを止める（セッションは残る）。ターンが無ければ何もしない。 */
+  interrupt(): Promise<void>;
+}
+
+/** {@link CodexSession} を開く（`CodexManagerDriver.open` と同じ実体。`interrupt` が使える型で返す）。 */
+export function openCodexSession(
+  spec: AgentManagerSessionSpec,
+  options: CodexManagerDriverOptions = {},
+): CodexSession {
+  return new CodexManagerSession(spec, options);
+}
+
 /** 送り出すイベント1件と、「消費側が処理し終えた」合図。 */
 interface QueuedEvent {
   readonly event: AgentEvent;
   readonly done: Deferred<void>;
 }
 
-class CodexManagerSession implements AgentManagerSession {
+class CodexManagerSession implements CodexSession {
   readonly #spec: AgentManagerSessionSpec;
   readonly #options: CodexManagerDriverOptions;
   readonly #abort = new AbortController();
@@ -302,6 +320,16 @@ class CodexManagerSession implements AgentManagerSession {
     }
     this.#shutdown(interrupted ? (this.#options.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS) : 0);
     this.#releaseQueue();
+  }
+
+  async interrupt(): Promise<void> {
+    const client = this.#client;
+    const threadId = this.#threadId;
+    const turnId = this.#turn?.id;
+    if (client === undefined || client.isClosed || threadId === undefined || turnId === undefined) {
+      return;
+    }
+    await this.#guard(client.request('turn/interrupt', { threadId, turnId }));
   }
 
   async contextUsage(): Promise<AgentContextUsage> {
