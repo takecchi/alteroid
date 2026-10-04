@@ -7,7 +7,6 @@ import {
   CalendarClock,
   DollarSign,
   Footprints,
-  Gauge,
   Hourglass,
   Inbox as InboxIcon,
   KeyRound,
@@ -66,10 +65,6 @@ const NAV = [
   // （積み上がり・実施中・片付いた速度・見込み。Issue #2241）。行の本文は持たない。
   { to: '/progress', label: '作業の進捗', icon: Hourglass, end: false },
   { to: '/managers', label: 'マネージャー', icon: Users, end: false },
-  // マネージャーの隣。評定（good/bad/unclear）は台帳（未了の仕事）と委譲
-  // （マネージャー）の両方の軸を跨いで集計するので、どちらか一方の詳細画面では
-  // なくここに置く（issue #1278 / #1620。PRD「入口の等価性」）。
-  { to: '/appraisal-stats', label: '評定の内訳', icon: Gauge, end: false },
   { to: '/journal', label: '日誌', icon: Activity, end: false },
   { to: '/reports', label: '日報', icon: BookText, end: false },
   { to: '/usage', label: '利用状況', icon: DollarSign, end: false },

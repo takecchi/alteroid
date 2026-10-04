@@ -2,7 +2,7 @@
  * 書き込みを1つ回し、**成否に関わらず**一覧を取り直す（issue #2455）。
  *
  * 台帳の書き込み hooks（`mutations.ts` の `usePushCommitment` /
- * `useCloseCommitment` / `useAppraiseCommitment` / `useEditCommitment`）が使う。
+ * `useCloseCommitment` / `useEditCommitment`）が使う。
  * パッケージの入口（`index.ts`）からは出していない——画面から直接呼ぶものではない。
  *
  * `useAnswerApproval`（#1619）と同じ形である。台帳の行は裏で先に片付くことがある

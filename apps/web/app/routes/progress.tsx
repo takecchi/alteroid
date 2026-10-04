@@ -106,7 +106,7 @@ export default function ProgressPage() {
   );
 }
 
-/** 404 は「この口を持たない古いデーモン」専用の文言にする（`appraisal-stats.tsx` と同じ判断）。 */
+/** 404 は「この口を持たない古いデーモン」専用の文言にする。 */
 function ProgressErrorNote({ error }: { error: unknown }) {
   if (error instanceof ApiError && error.status === 404) {
     return (
