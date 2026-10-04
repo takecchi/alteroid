@@ -1193,6 +1193,7 @@ export {
   InvalidApprovalSelectionsError,
 } from './clone.js';
 export { placedModelTier, resolveModelTier } from './model-tier.js';
+export type { AgentProviderId } from './agent-ports.js';
 export {
   CLONE_PROVIDER_ENV_KEY,
   DEFAULT_AGENT_PROVIDER_ID,
@@ -1345,3 +1346,11 @@ export {
   type SyntheticJournalStore,
   type SyntheticJournalStoreOptions,
 } from './journal-scan.test-support.js';
+// マネージャー層の peer 専用ソケット（#486 S7）。runner が PEERS の開いたときだけ作る。
+export {
+  createPeerSocketHost,
+  DEFAULT_PEER_SOCKET_DIR,
+  PEER_SOCKET_FILENAME,
+  PEER_TOKEN_TIMEOUT_MS,
+  type PeerSocketHost,
+} from './peer-socket-host.js';

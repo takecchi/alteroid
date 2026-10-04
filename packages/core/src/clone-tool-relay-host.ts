@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, chownSync, mkdirSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 
@@ -102,15 +102,20 @@ interface PendingRegistration {
  */
 export async function createCloneToolRelayHost(options: {
   socketPath: string;
+  /** 収めるディレクトリの mode。既定 0700（今日と同じ）。peer 用の口だけが 0711 を渡す。 */
+  dirMode?: number;
+  /** ソケットの持ち主。省略は今日と同じ。指定すると listen の後に chown する（特権が要る）。 */
+  socketOwner?: { uid: number; gid: number };
 }): Promise<CloneToolRelayHost> {
   const { socketPath } = options;
+  const dirMode = options.dirMode ?? 0o700;
   const pending = new Map<string, PendingRegistration>();
 
   const dir = dirname(socketPath);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirSync(dir, { recursive: true, mode: dirMode });
   // 既存のディレクトリだった場合に備える——`mkdirSync` の `mode` は新規作成の
   // ときにしか適用されない（既存なら黙って何もしない）。
-  chmodSync(dir, 0o700);
+  chmodSync(dir, dirMode);
 
   // 古いソケットが残っていると listen できない（器の作り直しで残る。
   // `apps/runner/src/index.ts` と同じ手当て）。
@@ -124,6 +129,9 @@ export async function createCloneToolRelayHost(options: {
   });
 
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  if (options.socketOwner !== undefined) {
+    chownSync(socketPath, options.socketOwner.uid, options.socketOwner.gid);
+  }
   chmodSync(socketPath, 0o600);
 
   async function handleConnection(socket: Socket): Promise<void> {

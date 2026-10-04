@@ -20,6 +20,14 @@ ARG CODEX_VERSION=0.160.0
 
 FROM node:22-trixie-slim AS build
 
+# マネージャー層の peer 専用ソケット（Issue #486 S7）の置き場。
+#
+# **`ALTEROID_MANAGER_PEERS` が空なら、この中にソケットは作られない**（器だけがある）。
+# 0711 は、別 UID（降ろした子）が名前を知っていれば traverse できるようにするため（一覧は不可）。
+# ソケット自身は、runner（root）が子の UID だけを持ち主にした 0600 で作る。
+# **同じ子の UID の別プロセスからもソケット自体には届く。守りはセッションごとの使い捨ての token。**
+RUN install -d -m 0711 /run/alteroid/peer
+
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 ENV CI=true

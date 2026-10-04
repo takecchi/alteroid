@@ -26,6 +26,7 @@ import {
 import { createAdaptorServer } from '@hono/node-server';
 
 import { createRunnerApp, formatOutboxShutdownReport, Outbox } from './app.js';
+import { openPeerSocket } from './peer-socket.js';
 import {
   TaskBreakdownReader,
   type ReclaimReapOptions,
@@ -384,6 +385,8 @@ export async function main(): Promise<void> {
   // **知らない値なら、ここで落とす**（`resolveManagerProviderId` の doc）。
   const managerProvider = agentProviderOf(resolveManagerProviderId(process.env));
 
+  // PEERS が空ならここは何もしない（ソケットも作らない）。
+  const peerOpening = await openPeerSocket(process.env, managerProvider.id, childUser);
   const outbox = new Outbox();
   const host = createRunnerHost({
     runnerId,
@@ -486,6 +489,7 @@ export async function main(): Promise<void> {
     stopping = true;
     server.close();
     if (socketPath !== undefined) rmSync(socketPath, { force: true });
+    peerOpening.host?.close();
     // 走行中のマネージャーは畳む。生ログはこの中でデーモンへ渡される
     // （渡さずに消えると、manager_id から生ログへ降りる経路が切れる）。
     const forced = setTimeout(() => process.exit(0), FORCED_EXIT_MS);
@@ -526,6 +530,8 @@ export async function main(): Promise<void> {
         `以後この runner が起こすマネージャーと作業者はこの provider で走ります\n`,
     );
   }
+
+  for (const notice of peerOpening.notices) process.stdout.write(`${notice}\n`);
 
   process.stdout.write(
     `alteroid-runner: ${listeningOn} （runner_id: ${runnerId} / 作業: ${workspacePath}` +
