@@ -11,7 +11,12 @@ import { gitChildEnv } from './git-child-env.js';
 
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import { findNulByteHits, listScannableFiles, NUL_CHAR } from './check-tracked-nul-bytes-core.mjs';
+import {
+  findNulByteHits,
+  isPngImage,
+  listScannableFiles,
+  NUL_CHAR,
+} from './check-tracked-nul-bytes-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -95,6 +100,27 @@ describe('check-tracked-nul-bytes: 一時ファイル経由の検出', () => {
   });
 });
 
+describe('isPngImage: 外すのは「.png かつ PNG のシグネチャ」だけ（#2722）', () => {
+  const sig = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]);
+  const text = new TextEncoder().encode('const x = "' + NUL_CHAR + '";\n');
+
+  it('拡張子が .png でシグネチャで始まるものは外す', () => {
+    expect(isPngImage('apps/web/public/icon.png', sig)).toBe(true);
+  });
+
+  it('.png を名乗っても、シグネチャで始まらない（NUL の混じったテキスト）なら外さない', () => {
+    expect(isPngImage('apps/web/public/icon.png', text)).toBe(false);
+  });
+
+  it('シグネチャで始まっても、拡張子が .png でなければ外さない', () => {
+    expect(isPngImage('apps/web/app/root.tsx', sig)).toBe(false);
+  });
+
+  it('シグネチャより短いものは外さない', () => {
+    expect(isPngImage('a.png', sig.slice(0, 4))).toBe(false);
+  });
+});
+
 describe('実リポジトリの検査（listScannableFiles が返す対象全ファイル）', () => {
   it('対象ファイルに NUL バイトが1つも無い', () => {
     const paths = listScannableFiles(ROOT) as string[];
@@ -103,7 +129,10 @@ describe('実リポジトリの検査（listScannableFiles が返す対象全フ
     const files = [];
     for (const path of paths) {
       try {
-        files.push({ path, content: readFileSync(join(ROOT, path), 'utf8') });
+        const bytes = readFileSync(join(ROOT, path));
+        // PNG の画像だけは外す（`isPngImage`。`check-tracked-nul-bytes.mjs` と同じ扱い）
+        if (isPngImage(path, bytes)) continue;
+        files.push({ path, content: bytes.toString('utf8') });
       } catch {
         // 読めないもの（壊れたシンボリックリンク等）は判定できないので飛ばす
         // （`check-tracked-nul-bytes.mjs` と同じ扱い）。

@@ -36,7 +36,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-import { findNulByteHits, listScannableFiles } from './check-tracked-nul-bytes-core.mjs';
+import {
+  findNulByteHits,
+  isPngImage,
+  listScannableFiles,
+} from './check-tracked-nul-bytes-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -65,10 +69,16 @@ function main() {
   }
 
   const files = [];
+  const skippedImages = [];
   for (const path of paths) {
     let content;
     try {
-      content = readFileSync(join(ROOT, path), 'utf8');
+      const bytes = readFileSync(join(ROOT, path));
+      if (isPngImage(path, bytes)) {
+        skippedImages.push(path);
+        continue;
+      }
+      content = bytes.toString('utf8');
     } catch (error) {
       // シンボリックリンクの壊れた参照先など、稀に読めないものがある。
       // 読めないものは「NUL の有無」を判定できないので、検査対象から外し
@@ -92,7 +102,10 @@ function main() {
   }
 
   // **必ず1行出す**（AGENTS.md「静かに失敗する道具」— 出ていなければ走っていないと読める）。
-  log(`check-tracked-nul-bytes: OK — ${files.length}ファイルとも0件`);
+  log(
+    `check-tracked-nul-bytes: OK — ${files.length}ファイルとも0件` +
+      `（PNG の画像 ${skippedImages.length}件は検査から外した）`,
+  );
 }
 
 main();

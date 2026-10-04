@@ -55,6 +55,14 @@
  * 読める形（JS のエスケープ表記）へ書き換えて解消した**（文字列としての値は
  * 変えていない）。
  *
+ * **2026-10-04 追記（#2722）**: PWA のアイコン（`apps/web/public/*.png`）を追跡する
+ * ことになり、画像が初めて tracked された。PNG は形式そのものが NUL を含む（シグネチャの
+ * 直後の IHDR の長さ欄が `00 00 00 0d`）ので、書き換えて解消する道が無い。**除外は
+ * 「拡張子が `.png` で、かつ先頭8バイトが PNG のシグネチャ」の両方を満たすものだけに
+ * 絞った**（`isPngImage`）。拡張子だけ・シグネチャだけでは外さない —— テキストの
+ * ファイルが `.png` を名乗っても、PNG のシグネチャで始まることは無いので、NUL に化けた
+ * テキストを隠す穴にはならない。パスの一覧で書く除外リストは今も持たない。
+ *
  * **2026-08-27 時点**（同じ全416件＋この検査自身が足した3件＝419件）: NUL
  * バイトを含むものは **0件**。除外リストは1件も無い状態のまま0件を達成している。
  *
@@ -72,6 +80,19 @@ import { listGitScannableFiles } from './git-scannable-files-core.mjs';
 /** NUL（コードポイント0）を指す1文字。エスケープ表記ではなく `String.fromCharCode`
  * で作る——理由はこのファイル冒頭の「この検査を書く最中に…」節。 */
 export const NUL_CHAR = String.fromCharCode(0);
+
+/** PNG のシグネチャ（先頭8バイト）。 */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/**
+ * 検査から外す画像かどうか（2026-10-04 追記の節）。拡張子が `.png` で、**かつ**
+ * `bytes`（`readFileSync` の Buffer / Uint8Array）が PNG のシグネチャで始まるときだけ真。
+ */
+export function isPngImage(path, bytes) {
+  if (!/\.png$/i.test(path)) return false;
+  if (bytes.length < PNG_SIGNATURE.length) return false;
+  return PNG_SIGNATURE.every((b, i) => bytes[i] === b);
+}
 
 /**
  * `files`（`{ path, content }` の配列）を走査し、NUL バイトを含むものを返す。
