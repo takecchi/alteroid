@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent } from './agent-events.js';
-import type { AgentCloneSessionSpec } from './agent-clone-session.js';
+import type { AgentCloneDriver, AgentCloneSessionSpec } from './agent-clone-session.js';
 import type { AgentChildProcess, AgentSpawnOptions } from './agent-session.js';
 import { missingRequirementCapabilities } from './agent-ports.js';
 import {
@@ -163,7 +163,7 @@ describe('Codex のクローンの申告（オーナーの決定）', () => {
 
   it('蒸留のサイドクエリを持たず、道具は stdio を要求する', () => {
     const driver = new CodexCloneDriver();
-    expect(driver.distill).toBeUndefined();
+    expect((driver as AgentCloneDriver).distill).toBeUndefined();
     expect(driver.requiredToolsTransport).toBe('stdio');
     expect(driver.providerId).toBe('codex');
   });

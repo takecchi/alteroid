@@ -259,7 +259,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // + 2（#2488。`interruptTurn` が、止めようとしたターンが既に終わっていたとき
   // `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で、`q.interrupt()` が投げたとき
   // `[失敗]` = `EXCHANGE_KIND_FAILURE_PREFIX` で、先に書いた「止めた」の打ち消しを書く）。
-  'clone.ts': 57,
+  // + 1（#486 S8。`#buildSessionSpec` の `onNote`。Claude 以外の駆動役の観測（渡していない MCP 等）を
+  // `[判断]` = `EXCHANGE_KIND_DECISION_PREFIX` で書く。Claude の駆動役は呼ばない）。
+  'clone.ts': 58,
   // 40（issue #1332 起票時点） + 1（issue #1425 が `case 'rate_limit'` に
   // 足した、跨いで畳んだ本数の flush。同じく `EXCHANGE_KIND_GAUGE_PREFIX`）
   // + 1（issue #1388 が `#flushSynthesizedNoticeFor` に足した、合流窓へ
