@@ -2777,6 +2777,12 @@ export function resolveWorkspacePolicy(env: NodeJS.ProcessEnv = process.env): Wo
   };
 }
 
+/**
+ * 作業者の道具の実行中の合図（Issue #2725）。`RunnerEvent` の `tool_running` / `tool_end`。
+ * 日誌には書かれず、稼働の地図のメモリへだけ渡る。
+ */
+export type WorkerToolEvent = Extract<RunnerEvent, { type: 'tool_running' | 'tool_end' }>;
+
 export interface ManagerPoolOptions {
   /**
    * いま撒かれている認証トークンの身元（Issue #393 PR3）。**マネージャーの
@@ -2806,6 +2812,13 @@ export interface ManagerPoolOptions {
    * や欠落はマネージャーの側からは見えない。**
    */
   syncRunnerToken?: (runner: RunnerClient) => Promise<void>;
+  /**
+   * 作業者の道具が長く実行中である／決着した、という runner の合図（Issue #2725）を
+   * 受ける口。**日誌には書かない**（`case 'tool_running'` / `case 'tool_end'`）。
+   * 未指定なら何もしない。daemon が稼働の地図の tracker へつなぐ。
+   * 例外は握りつぶす（観測のための口で、イベント処理を止めない）。
+   */
+  onWorkerToolEvent?: (event: WorkerToolEvent) => void;
   stores: Stores;
   /** マネージャーからの出来事をクローンの受信箱へ流す。 */
   post: (event: InboxEvent) => void;
@@ -4824,6 +4837,7 @@ class Pool implements ManagerPool {
    */
   readonly #tokenIdentity: (() => { tokenId: string; generation: number } | undefined) | undefined;
   readonly #syncRunnerToken: ((runner: RunnerClient) => Promise<void>) | undefined;
+  readonly #onWorkerToolEvent: ((event: WorkerToolEvent) => void) | undefined;
   readonly #onUsageObservation:
     ((observation: TokenRotatorObservation) => Promise<void>) | undefined;
   readonly #rateLimits = new Map<string, RateLimitFacts>();
@@ -5360,8 +5374,10 @@ class Pool implements ManagerPool {
     tokenIdentity,
     onUsageObservation,
     syncRunnerToken,
+    onWorkerToolEvent,
     workspace,
   }: ManagerPoolOptions) {
+    this.#onWorkerToolEvent = onWorkerToolEvent;
     this.#stores = stores;
     this.#post = post;
     this.#runners = runners;
@@ -12655,6 +12671,19 @@ class Pool implements ManagerPool {
          * `case 'closed'` が持つ他の判断は一切持ち込まない。
          */
         await this.#recordUnpushedWorkObservation(record, event.unpushedWork, 'shutdown');
+        return;
+      }
+
+      case 'tool_running':
+      case 'tool_end': {
+        // **日誌に書かない（Issue #2725）。`#journal` を呼ばない。** 稼働の地図の
+        // メモリへ渡すだけ（`ask` / `settled` と同じく、日誌には残らない流れ）。
+        // コールバックの失敗でイベント処理を止めない。
+        try {
+          this.#onWorkerToolEvent?.(event);
+        } catch {
+          // 観測のための口。握りつぶす。
+        }
         return;
       }
 

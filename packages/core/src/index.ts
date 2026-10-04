@@ -758,8 +758,10 @@ export {
   type RunnerPushHealth,
   type RunnerPushOutcome,
   resolveWorkspacePolicy,
+  type WorkerToolEvent,
   type WorkspacePolicy,
 } from './manager.js';
+export { WORKER_TOOL_RUNNING_AFTER_MS } from './runner-worker-tool-watch.js';
 /**
  * 貸し出し期限（lease）— 引き取ってよいかを片側だけで言えるようにする材料
  * （roadmap M5 PR4）。**「落ちた」は停止の証明ではない**という一点のための層である。

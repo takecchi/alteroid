@@ -90,6 +90,7 @@ import {
 import { RunnerResumeState } from './runner-resume-state.js';
 import { RunnerTurnTally } from './runner-turn-tally.js';
 import { RunnerWorkerWaitWindow } from './runner-worker-wait-window.js';
+import { WorkerToolWatch, type WorkerToolWatchClock } from './runner-worker-tool-watch.js';
 import type {
   RunnerAnswerCommand,
   RunnerAnswerOutcome,
@@ -411,6 +412,11 @@ export interface RunnerHostOptions {
    * 歯はここを差し替える）。`Host#resolveCwd` の doc を見よ。
    */
   cwdExistsFn?: (cwd: string) => boolean;
+  /**
+   * 作業者の道具の実行中の見張り（Issue #2725）の時刻・タイマーをテストから差し替える。
+   * **主にテスト用**（既定は本物。タイマーは `unref` する）。
+   */
+  workerToolWatchClock?: WorkerToolWatchClock;
 }
 
 export interface RunnerHost {
@@ -651,8 +657,10 @@ class Host implements RunnerHost {
   readonly #finishUnpushedWorkFn:
     ((options?: { signal?: AbortSignal }) => Promise<UnpushedWorkResult>) | undefined;
   readonly #cwdExistsFn: (cwd: string) => boolean;
+  readonly #workerToolWatchClock: WorkerToolWatchClock | undefined;
 
   constructor(options: RunnerHostOptions) {
+    this.#workerToolWatchClock = options.workerToolWatchClock;
     this.runnerId = options.runnerId;
     this.workspacePath = options.workspacePath;
     this.#emit = options.emit;
@@ -963,6 +971,9 @@ class Host implements RunnerHost {
       ...(this.#finishUnpushedWorkFn === undefined
         ? {}
         : { finishUnpushedWorkFn: this.#finishUnpushedWorkFn }),
+      ...(this.#workerToolWatchClock === undefined
+        ? {}
+        : { workerToolWatchClock: this.#workerToolWatchClock }),
     });
     this.#sessions.set(managerId, session);
     return session;
@@ -1460,6 +1471,8 @@ type SpawnAgentProcessOptions = AgentSpawnOptions;
 type DelegationProcessHandle = AgentChildProcess;
 
 interface RunnerSessionOptions {
+  /** `RunnerHostOptions.workerToolWatchClock` と同じ。 */
+  workerToolWatchClock?: WorkerToolWatchClock;
   managerId: string;
   request: string;
   cwd: string;
@@ -1601,6 +1614,12 @@ class RunnerSession {
   readonly #request: string;
   readonly #cwd: string;
   readonly #emit: (event: RunnerEvent) => void;
+  /**
+   * 作業者の道具の実行中の見張り（Issue #2725）。`#onPreToolUse` が置き、
+   * `#onPostToolUse` / `#onPostToolUseFailure` / `#noteDenial` / `#onSubagentStop` /
+   * セッションの終わり（`#stopBody` / `#finishBody`）が畳む。
+   */
+  readonly #workerTools: WorkerToolWatch;
   readonly #driver: AgentManagerDriver;
   /** 置かれたモデル（`ALTEROID_MANAGER_MODEL` など）がこのセッションに効くか（`hostManagerProvider` の doc）。 */
   readonly #placedModelApplies: boolean;
@@ -1864,6 +1883,11 @@ class RunnerSession {
     this.#request = options.request;
     this.#cwd = options.cwd;
     this.#emit = options.emit;
+    this.#workerTools = new WorkerToolWatch(
+      options.managerId,
+      options.emit,
+      options.workerToolWatchClock,
+    );
     this.#driver =
       options.driver ??
       (options.managerProvider === 'codex'
@@ -2240,6 +2264,7 @@ class RunnerSession {
     // からではなく、下の `#shipArchive` / `#flushUnreported` を後ろへ動かした
     // からである（Issue #1533 の測定コメントが指摘した (b) の食い違い）。
     this.#settleAll(reason);
+    this.#workerTools.settleAll();
     this.#sdkSession.wakeInput();
     this.#sdkSession.closeQuery();
     // **Issue #1533。生ログの送り出しと報告を、CLI の読み手（`#reader`）が
@@ -3655,6 +3680,7 @@ class RunnerSession {
   #noteDenial(denial: AgentPermissionDenial, via: 'live' | 'result'): void {
     const tool = denial.tool ?? '(不明な道具)';
     const input = denial.input;
+    if (typeof denial.toolUseId === 'string') this.#settleWorkerTool(denial.toolUseId);
 
     // **1回だけの許可で allow を返した呼び出しを、SDK がそれでも拒否したかの
     // 検出**（issue #1105 P1、`clone.ts` の `#allowedByGrantToolUses`/
@@ -4061,6 +4087,7 @@ class RunnerSession {
     // `settled: true` になる（`turns` が最後の1回を含まないだけである）。
     this.#closeWorkerWaitWindow();
     this.#settleAll(reason);
+    this.#workerTools.settleAll();
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
     this.#sdkSession.wakeInput();
@@ -4631,6 +4658,16 @@ class RunnerSession {
     this.#tryObservation('PreToolUse の入力の頭の控え', () => {
       this.#capturePreToolInputHead(record);
     });
+    // **作業者の道具だけ、長く実行中かの見張りを置く**（Issue #2725）。Pre では何も送らない。
+    this.#tryObservation('作業者の道具の見張り', () => {
+      if (record.agentId === undefined || record.toolUseId === undefined) return;
+      this.#workerTools.begin({
+        agentId: record.agentId,
+        actor: `worker:${this.#id}:${record.agentType ?? WORKER_AGENT_NAME}`,
+        tool: record.toolName ?? '(不明)',
+        toolUseId: record.toolUseId,
+      });
+    });
 
     if (record.toolName === 'Bash') {
       const toolInput = record.toolInput as
@@ -4733,6 +4770,12 @@ class RunnerSession {
    * 失敗は stderr へ1行だけ残す——ここで投げ直すと `#onPreToolUse` が例外で終わり、
    * ガードの deny が CLI へ届かなくなる。
    */
+  #settleWorkerTool(toolUseId: string): void {
+    this.#tryObservation('作業者の道具の見張りの片付け', () => {
+      this.#workerTools.settle(toolUseId);
+    });
+  }
+
   #tryObservation(label: string, fn: () => void): void {
     try {
       fn();
@@ -4911,6 +4954,7 @@ class RunnerSession {
     if (typeof record.toolUseId === 'string') {
       this.#preToolInputHeads.delete(record.toolUseId);
       this.#oneShotAllowedToolUses.delete(record.toolUseId);
+      this.#settleWorkerTool(record.toolUseId);
     }
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
@@ -5209,6 +5253,7 @@ class RunnerSession {
     if (typeof record.toolUseId === 'string') {
       this.#preToolInputHeads.delete(record.toolUseId);
       this.#oneShotAllowedToolUses.delete(record.toolUseId);
+      this.#settleWorkerTool(record.toolUseId);
     }
     if (typeof record.transcriptPath === 'string')
       this.#sdkSession.setTranscriptPath(record.transcriptPath);
@@ -5463,6 +5508,12 @@ class RunnerSession {
    * （挙動を変えるのは継続の合図だけで、それ以外の観測は変えない）。
    */
   async #onSubagentStop(record: AgentSubagentStopRecord): Promise<AgentContextOutcome> {
+    if (typeof record.agentId === 'string') {
+      const agentId = record.agentId;
+      this.#tryObservation('作業者の道具の見張りの片付け', () => {
+        this.#workerTools.settleAgent(agentId);
+      });
+    }
     try {
       // 配列でない・真偽値でない欄は `toAgentSubagentStopRecord`（`claude-provider.ts`）
       // が省いて渡す。ここでの読み方は、中立化する前に生入力から読んでいた形と同じ。

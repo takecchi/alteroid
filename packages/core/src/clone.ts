@@ -112,7 +112,12 @@ import {
 } from './dropped-record.js';
 import type { AnswerApprovalVia, CloneHost } from './host.js';
 import { createRunnerRegistry, type RunnerClient } from './runner-protocol.js';
-import { createManagerPool, type ManagerPool, type ManagerSummary } from './manager.js';
+import {
+  createManagerPool,
+  type ManagerPool,
+  type ManagerSummary,
+  type WorkerToolEvent,
+} from './manager.js';
 import {
   describeMemorySessionDelta,
   describeMemoryTidyTargets,
@@ -1177,6 +1182,11 @@ export interface CloneOptions {
    * 枠に当たったこととは別の失敗であり、後者の報告を前者で置き換えない。
    */
   onUsageObservation?: (observation: TokenRotatorObservation) => Promise<void>;
+  /**
+   * 作業者の道具の実行中の合図（Issue #2725）を、マネージャーのプールから受ける口。
+   * `ManagerPoolOptions.onWorkerToolEvent` へそのまま渡す。未指定なら何もしない。
+   */
+  onWorkerToolEvent?: (event: WorkerToolEvent) => void;
   /**
    * **認証トークンのために畳んだセッションが、実際に畳まれた瞬間**に呼ばれる
    * （人間の決定 2026-09-07）。
@@ -2300,6 +2310,7 @@ class Clone implements CloneHost {
       credentials,
       tokenIdentity,
       onUsageObservation,
+      onWorkerToolEvent,
       onTokenSessionRecycled,
       syncRunnerToken,
       permissionMode,
@@ -2369,6 +2380,7 @@ class Clone implements CloneHost {
         // 集めるからこそ、世代の照合が「同じ当たりで1回だけ」を保証できる。
         ...(tokenIdentity === undefined ? {} : { tokenIdentity }),
         ...(onUsageObservation === undefined ? {} : { onUsageObservation }),
+        ...(onWorkerToolEvent === undefined ? {} : { onWorkerToolEvent }),
         ...(syncRunnerToken === undefined ? {} : { syncRunnerToken }),
       });
     // **落ち方は変えない。「どこで」だけを足す（#438 案D）。**

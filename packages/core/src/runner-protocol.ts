@@ -2065,6 +2065,33 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     managerId: z.string(),
     unpushedWork: runnerUnpushedWorkOutcomeSchema,
   }),
+  /**
+   * 作業者の道具が長く実行中である（Issue #2725）。**日誌には書かない**
+   * （`manager.ts` の `case 'tool_running'` は `#journal` を呼ばず、稼働の地図の
+   * メモリへ渡すだけ。`ask` / `settled` と同じ先例）。
+   *
+   * runner は道具の開始（`PreToolUse`）にタイマーを置き、20秒を超えて未決のときだけ
+   * 1回送る。20秒以内に終わる道具は何も送らない。`input` は載せない（量と伏せ字の
+   * ため）。`actor` は `tool_use` と同じ式（`worker:<managerId>:<agent>`）。
+   *
+   * **旧 daemon との組み合わせ**: 未知の type は daemon の `safeParse` で落ち、
+   * `RunnerDroppedEventReport` に残るだけで接続は切れない。**旧 runner との組み合わせ**:
+   * 来ないだけで、地図は今までどおり（欄が無いことを「実行中でない」と読まない）。
+   */
+  z.object({
+    type: z.literal('tool_running'),
+    managerId: z.string(),
+    actor: z.string(),
+    tool: z.string(),
+    toolUseId: z.string(),
+    startedAt: isoDateTime,
+  }),
+  /** `tool_running` を送った道具が決着した（成功・失敗・拒否・作業者の終了・セッションの終了）。日誌には書かない。 */
+  z.object({
+    type: z.literal('tool_end'),
+    managerId: z.string(),
+    toolUseId: z.string(),
+  }),
 ]);
 
 export type RunnerEvent = z.infer<typeof runnerEventSchema>;
