@@ -52,9 +52,6 @@ function stubManagerPool(): ManagerPool {
     async send() {
       return { outcome: 'unknown' as const, detail: 'このスタブでは呼ばれない前提' };
     },
-    async appraise() {
-      return { outcome: 'absent' as const, detail: 'このスタブでは呼ばれない前提', previous: null };
-    },
     async abort() {
       return { outcome: 'absent' as const, detail: 'このスタブでは呼ばれない前提' };
     },

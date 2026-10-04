@@ -31,7 +31,7 @@ export function GroupTabs({ label, tabs }: { label: string; tabs: readonly NavTa
   );
 }
 
-/** 仕事（未了の仕事・作業の進捗・評定の内訳）。 */
+/** 仕事（未了の仕事・作業の進捗）。 */
 export const WorkTabs = () => <GroupTabs label="仕事のページ" tabs={WORK_TABS} />;
 /** 日誌（日誌・握り潰しの跡・アーカイブ）。 */
 export const JournalTabs = () => <GroupTabs label="日誌のページ" tabs={JOURNAL_TABS} />;

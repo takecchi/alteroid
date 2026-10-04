@@ -37,7 +37,7 @@ describe('FsPracticeStore — practices.json の不正な1行を読み飛ばす�
   };
 
   // kind が欠けている——版ずれ・手編集を模す（practiceKindSchema は自由文字列
-  // だが必須欄である。`workKindSchema` の要件を満たさない形を作る）。
+  // だが必須欄である。`practiceKindSchema` の要件を満たさない形を作る）。
   const BAD_PRACTICE_RAW = {
     slug: 'bad-practice',
     // kind が無い（必須欄の欠落）。

@@ -114,7 +114,7 @@ async function seedPg(): Promise<Seeded> {
   return {
     stores,
     async addBadPracticeRow() {
-      // kind が空文字列（`workKindSchema.min(1)` 違反）。アプリの `write()` は通さないので
+      // kind が空文字列（`practiceKindSchema.min(1)` 違反）。アプリの `write()` は通さないので
       // 直接 insert する。
       await db.insert(tables.practices).values({
         slug: 'bad-practice',

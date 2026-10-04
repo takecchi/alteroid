@@ -30,7 +30,7 @@ import { createMemoryStores } from './testing.js';
  * `Job` のコピー**を掴んだまま自分の分岐を進め、それぞれが独立に `#persist()`
  * （＝ `putJob()`、ジョブ丸ごとの上書き）を呼んでいた。後から `putJob()` した
  * 側が、先に書かれた変更ごと丸ごと上書きする——`JobStore` に CAS が無い状態で
- * 「読んでから書く」が2箇所から独立に走る、#1674（`ManagerPool.appraise()`）
+ * 「読んでから書く」が2箇所から独立に走る、#1674（`ManagerPool` の孤児ジョブ分岐）
  * と同じ形の穴だった。
  *
  * 実際に起きていたこと: `send()` の `#claimForResume()` が putJob（1）→

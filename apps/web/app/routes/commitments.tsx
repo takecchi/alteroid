@@ -19,19 +19,13 @@ import {
   cn,
 } from '@alteroid/ui';
 import {
-  useAppraiseCommitment,
   useCloseCommitment,
   useEditCommitment,
   usePushCommitment,
   useCommitments,
 } from '@alteroid/swr';
-import { APPRAISAL_LABELS, formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
-import type {
-  AppraisalValue,
-  CommitmentClosedBy,
-  CommitmentOrigin,
-  TextMarkup,
-} from '@alteroid/core';
+import { formatDateTime, formatRelative, redactBody } from '@alteroid/logic';
+import type { CommitmentClosedBy, CommitmentOrigin, TextMarkup } from '@alteroid/core';
 import type { Commitment, UnreadableCommitment, UnreadableJob } from '@alteroid/logic';
 
 /**
@@ -1056,157 +1050,8 @@ function OpenRow({ commitment }: { commitment: Commitment }) {
         </Button>
       </div>
 
-      <AppraisalControl commitment={commitment} />
-
       <ErrorNote error={failure} className="mt-2" />
     </li>
-  );
-}
-
-/**
- * 評定の3値と、画面に出すラベル（#1054）。
- *
- * **`@alteroid/core` から実行時の値を import しない。** この画面の他のラベル
- * （`ORIGIN_LABEL` / `originLabel`）と同じ作法で、**網羅性は `never` で強制する**
- * （下の `assertAppraisalHandled`）。器の `appraisalSchema` に値が
- * 1つ足されると、`appraisalLabel` の `switch` がその値を決めるまで `tsc` が
- * 通らない。
- *
- * ⚠️ **`APPRAISAL_CHOICES` の並びは画面のボタンの並びである。** `good` → `bad`
- * → `unclear` の順は「良い・悪い・分からない」で、**`unclear` を端に置くこと
- * 自体に意味がある** —— 真ん中に置くと「中間の評価」に見えるが、これは
- * 中間ではなく**測れなかった**という別の軸の値である
- * （`appraisalSchema` の doc）。
- */
-const APPRAISAL_CHOICES: readonly AppraisalValue[] = ['good', 'bad', 'unclear'];
-
-/**
- * **網羅性チェック専用（ビルド時）。** `assertOriginHandled` / `assertClosedByHandled`
- * と同型。`appraisalSchema` に値が足されたのに `APPRAISAL_CHOICES` が
- * 追いついていないと、ここが型エラーになる。
- *
- * **呼ぶこと自体が保証であって、戻り値は使わない**（`never` 型の変数をそのまま
- * 描かないこと。issue #285 で実際に踏まれた形）。
- */
-function assertAppraisalHandled(value: never): void {
-  console.warn(`commitments.tsx: APPRAISAL_CHOICES が決めていない評定: ${String(value)}`);
-}
-
-/**
- * `APPRAISAL_CHOICES` が3値を全部持っていることを、**型で**言う。
- *
- * `appraisalSchema` に値を足すと `AppraisalValue` が広がり、
- * この関数の `switch` がその値を返さないので `assertAppraisalHandled` の
- * 引数が `never` にならず、**`pnpm typecheck` がここで落ちる。**
- *
- * 字面そのものの出所は `packages/logic/src/appraisal-labels.ts`（issue #2164。core の
- * `APPRAISAL_LABELS` と一致させる場所を1か所に集約した）。
- */
-function appraisalLabel(value: AppraisalValue): string {
-  switch (value) {
-    case 'good':
-    case 'bad':
-    case 'unclear':
-      return APPRAISAL_LABELS[value];
-    default:
-      assertAppraisalHandled(value);
-      return String(value);
-  }
-}
-
-/**
- * 評定の入口（#1054）。**未了の行にも片付いた行にも出す。**
- *
- * **⭐ ここの本題は「覆せること」である。** クローンが付けた評定を人間が押し
- * 直せる。覆した事実は日誌に残り、評定そのものを較正する材料になる
- * （`docs/PRD.md`「要件: 自己改善」）。
- *
- * **⚠️ 「未評定」を「普通」として描かないこと。** 何も選ばれていない状態は
- * **まだ測っていない**という観測そのものである（`appraisalSchema` の
- * doc）。だから既定で選ばれているボタンを作らず、選ばれていないことがそのまま
- * 見えるようにしてある。
- *
- * **理由は任意。** 器がそう作ってある（画面のボタン1つで付けられる経路を塞がない）。
- * 入っていれば送る。
- *
- * **仕事の種類（#1308）も任意の自由文である。** 列挙のプルダウンにしない（知らない
- * 種類を画面が拒まない。`workKindSchema` の doc）。空なら送らず、前の種類が残る。
- */
-function AppraisalControl({ commitment }: { commitment: Commitment }) {
-  const appraise = useAppraiseCommitment();
-  const [reason, setReason] = useState('');
-  const [workKind, setWorkKind] = useState('');
-  const [busy, setBusy] = useState<AppraisalValue | null>(null);
-  const [failure, setFailure] = useState<unknown>(undefined);
-
-  async function submit(value: AppraisalValue) {
-    setBusy(value);
-    setFailure(undefined);
-    try {
-      await appraise(
-        commitment.id,
-        value,
-        reason.trim() === '' ? undefined : reason.trim(),
-        workKind.trim() === '' ? undefined : workKind.trim(),
-      );
-      setReason('');
-      setWorkKind('');
-    } catch (caught) {
-      setFailure(caught);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  // **未知の値も落とさずに出す。** 保存層は緩く持っているので（`commitmentSchema`
-  // の `appraisal`）、将来の書き手が増えた値が来うる。落とすと未評定と区別が付かない。
-  const current = commitment.appraisal;
-  return (
-    <div className="mt-2">
-      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-        <span className="text-muted-foreground">評定:</span>
-        {APPRAISAL_CHOICES.map((value) => (
-          <button
-            key={value}
-            type="button"
-            disabled={busy !== null}
-            className={cn(
-              'rounded border px-1.5 py-0.5',
-              current === value
-                ? 'border-foreground text-foreground'
-                : 'border-border text-muted-foreground hover:text-foreground',
-            )}
-            onClick={() => void submit(value)}
-          >
-            {appraisalLabel(value)}
-          </button>
-        ))}
-        {current === undefined ? (
-          <span className="text-muted-foreground">（まだ評定していない）</span>
-        ) : (
-          <span className="text-muted-foreground">
-            {commitment.appraisedBy === undefined ? '' : `${commitment.appraisedBy} が付けた`}
-            {commitment.workKind === undefined ? '' : `［種類: ${commitment.workKind}］`}
-            {commitment.appraisalReason === undefined ? '' : `: ${commitment.appraisalReason}`}
-          </span>
-        )}
-      </div>
-      <div className="mt-1.5 flex items-center gap-2">
-        <Input
-          value={reason}
-          placeholder="なぜその評定か（任意。ここに同じ軸が繰り返し出るなら、軸を足す合図）"
-          onChange={(event) => setReason(event.target.value)}
-        />
-      </div>
-      <div className="mt-1.5 flex items-center gap-2">
-        <Input
-          value={workKind}
-          placeholder="仕事の種類（任意。例: 実装 / 調査 / レビュー。空なら前の種類が残る）"
-          onChange={(event) => setWorkKind(event.target.value)}
-        />
-      </div>
-      <ErrorNote error={failure} className="mt-2" />
-    </div>
   );
 }
 
@@ -1223,7 +1068,6 @@ function ClosedRow({ commitment }: { commitment: Commitment }) {
       </div>
       <CommitmentBody commitment={commitment} />
       <ClosedReasonBody commitment={commitment} />
-      <AppraisalControl commitment={commitment} />
     </li>
   );
 }

@@ -234,53 +234,7 @@ export {
 } from './auth-service.js';
 export type { AnswerApprovalVia, CloneHost } from './host.js';
 export { Inbox } from './inbox.js';
-/**
- * 段2: 横断の蒸留 — 評定を束ねて名指しする（#1055。`memory.ts` の
- * `describeMemoryTidyTargets` と同じ形）。
- */
-export {
-  describeAppraisalTargets,
-  APPRAISAL_TARGETS_BUDGET,
-  APPRAISAL_TARGETS_LINE_LIMIT,
-  APPRAISAL_TARGETS_REASON_LIMIT,
-} from './appraisal.js';
-/**
- * 段4: やり方の候補を材料として差し出す（#1055）。**採否の機構ではない** ——
- * `practice_write` を呼ぶ経路は持たない（`practice-candidates.ts` 冒頭の ⛔）。
- */
-export {
-  describePracticeCandidates,
-  practiceCandidateKindKeys,
-  PRACTICE_CANDIDATES_BUDGET,
-  PRACTICE_CANDIDATE_EVIDENCE_BUDGET,
-} from './practice-candidates.js';
-export type {
-  PracticeCandidateMaterial,
-  PracticeCandidateReconciliation,
-} from './practice-candidates.js';
-/**
- * 評定の内訳を要るときに数える口（#1278）。`appraisal.ts`（段2）とは別の軸——
- * あちらは「いま台帳・委譲に載っている行」、こちらは「日誌に残る全期間の総数」
- * と「終端した委譲の評定の有無」を数える。
- */
-export {
-  computeAppraisalJournalStats,
-  computeAppraisalReconciliation,
-  computeJobAppraisalCoverage,
-  describeAppraisalStats,
-  isTerminalJobStatus,
-  tallyAppraisalDecisions,
-} from './appraisal-stats.js';
-export type {
-  AppraisalDecisionTally,
-  AppraisalJournalStats,
-  AppraisalWorkKindTally,
-  AppraisalReconciliation,
-  AppraisalReconciliationStats,
-  AppraisalReconciliationTransition,
-  JobAppraisalCoverage,
-  JobAppraisalCoverageRow,
-} from './appraisal-stats.js';
+export { isTerminalJobStatus } from './progress.js';
 /** 作業の進捗の集計（Issue #2241 の 1）。台帳と委譲の行を数え直す純関数。 */
 export {
   MIN_CLOSED_IN_WINDOW,
@@ -566,7 +520,6 @@ export {
 export { verifyTranscriptArchiveContract } from './archive-contract.js';
 /** アーカイブの sessionId の入口の検査（issue #2233。3実装とも同じ例外で断る）。 */
 export { InvalidArchiveSessionIdError, assertArchivableSessionId } from './archive-session-id.js';
-export { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 export { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 export { verifyMcpServerStoreContract } from './mcp-server-contract.js';
 export { verifyProfileStoreContract } from './profile-store-contract.js';
@@ -1257,11 +1210,7 @@ export {
   type PeersLayer,
   type PeersResolution,
 } from './agent-provider-peers.js';
-/**
- * `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。`inferAppraisedByFromGrounds`
- * （PR #1362、`main` 未マージ）と同じ「本文の先頭に固定の印を置き、前方一致で
- * 復元する」形を独立に採ったもの——依存はしない（`exchange-kind.ts` の doc）。
- */
+/** `type: 'exchange'` の本文が持つ種類の接頭辞（issue #1332）。本文の先頭に固定の印を置き、前方一致で復元する（`exchange-kind.ts` の doc）。 */
 export {
   EXCHANGE_KIND_DECISION_PREFIX,
   EXCHANGE_KIND_FAILURE_PREFIX,

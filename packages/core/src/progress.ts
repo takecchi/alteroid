@@ -44,7 +44,6 @@
  * ときに「件数が少ない」と言うと、原因（材料が欠けている）を隠すため。
  */
 
-import { isTerminalJobStatus } from './appraisal-stats.js';
 import { isRunningJobStatus } from './job-status-running.js';
 import {
   commitmentOriginSchema,
@@ -54,6 +53,29 @@ import {
   type JobStatus,
 } from './schema.js';
 import type { CommitmentList } from './store.js';
+
+/**
+ * 委譲（`Job`）のうち、いま「手が離れている」状態を「終端」と呼ぶ。
+ *
+ * **`running` / `waiting_human` は含めない**——どちらもまだ続く可能性がある
+ * 状態である（`jobStatusSchema` の doc）。
+ *
+ * **`switch` を通して網羅性を型で強制する。** `jobStatusSchema` に値が増えた
+ * とき、ここを直し忘れると `tsc` が落ちる——黙って「非終端」側へ落ちて
+ * 数え上げから消える形を避ける。
+ */
+export function isTerminalJobStatus(status: JobStatus): boolean {
+  switch (status) {
+    case 'running':
+    case 'waiting_human':
+      return false;
+    case 'done':
+    case 'failed':
+    case 'lost':
+    case 'stopped':
+      return true;
+  }
+}
 
 /** 窓の中で閉じた件数がこれ未満なら、速度を名乗らない（`closed_too_few`）。 */
 export const MIN_CLOSED_IN_WINDOW = 3;

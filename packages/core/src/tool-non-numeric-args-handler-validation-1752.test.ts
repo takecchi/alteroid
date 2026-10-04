@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ManagerPool } from './manager.js';
 import { createMemoryStores } from './testing.js';
 import {
   createCloneMcpServer,
   formatArrayLengthJa,
   formatStringLengthJa,
-  formatWorkKindRangeJa,
   MCP_INPUT_VALIDATION_ERROR_MARKER,
 } from './tools.js';
 
@@ -22,15 +20,9 @@ import {
  * 返る同じ穴が、非数値の欄にも残っていた。
  *
  * ここではその欄を（PR #1729 の報告に加えて、独自に読み直して見つかった
- * `inbox_remove_many.types` を含めて）25件、(1) 範囲外の値では日本語の
+ * `inbox_remove_many.types` を含めて）22件、(1) 範囲外の値では日本語の
  * 平文が返りマーカーが付かないこと (2) 範囲内の値は今までどおり通ること
  * を測る。
- *
- * `workKind`（`commitment_close` / `commitment_appraise` / `manager_appraise`
- * の3道具が使う共有スキーマ `workKindSchema`）は3件とも含む——道具ごとに
- * 検査の呼び出し口が違う（`describeWorkKindViolation` を呼ぶ場所がそれぞれ
- * 違う）ため、1件だけ測って残り2件を構造的な根拠に委ねると、揃え忘れが
- * 個別に起きたときに気づけない。
  *
  * ## なぜ `tools.test.ts` の `harness.call()` では足りないか
  *
@@ -44,16 +36,12 @@ interface Rpc {
   call(method: string, params: unknown): Promise<Record<string, unknown>>;
 }
 
-async function connect(
-  stores: ReturnType<typeof createMemoryStores>,
-  managers?: ManagerPool,
-): Promise<Rpc> {
+async function connect(stores: ReturnType<typeof createMemoryStores>): Promise<Rpc> {
   const server = createCloneMcpServer({
     stores,
     emit: () => undefined,
     memoryCause: () => 'clone',
     conversationId: () => undefined,
-    ...(managers === undefined ? {} : { managers }),
   });
   const pending = new Map<number, (message: Record<string, unknown>) => void>();
   let deliver: ((message: unknown) => void) | undefined;
@@ -117,25 +105,12 @@ async function callTool(
   };
 }
 
-/** `manager_appraise` は `context.managers` が無いと `NO_POOL` を即返すので、
- * `appraise()` だけを実装した最小のダブルを渡す（`tools.test.ts` の
- * `as unknown as ManagerPool` と同じ手）。
- */
-function minimalManagerPool(): ManagerPool {
-  return {
-    async appraise() {
-      return { outcome: 'appraised' as const, detail: 'ok', previous: null };
-    },
-  } as unknown as ManagerPool;
-}
-
 /**
  * 1行が1欄を測る。`base` はその道具を呼ぶのに要る他の引数（`field` を混ぜた
  * ときにだけ検査が働くよう、常に有効な値にしてある）。`invalid` は制約に
  * 反する値（空文字・空配列）、`valid` は制約を満たす境界値そのもの。
  * `hint` は `.describe()` 側にも同じ文言で載っているはずの共有の言い方
- * （`formatStringLengthJa` / `formatArrayLengthJa` / `formatWorkKindRangeJa`
- * の戻り値そのもの）。
+ * （`formatStringLengthJa` / `formatArrayLengthJa` の戻り値そのもの）。
  */
 interface Case {
   label: string;
@@ -145,7 +120,6 @@ interface Case {
   invalid: unknown;
   valid: unknown;
   hint: string;
-  managers?: () => ManagerPool;
 }
 
 const cases: Case[] = [
@@ -211,34 +185,6 @@ const cases: Case[] = [
     invalid: '',
     valid: 'done',
     hint: formatStringLengthJa({ min: 1 }),
-  },
-  {
-    label: 'commitment_close.workKind（共有スキーマ workKindSchema の .min(1).max(128)）',
-    tool: 'commitment_close',
-    base: { id: 'c-1', reason: 'done' },
-    field: 'workKind',
-    invalid: '',
-    valid: '実装',
-    hint: formatWorkKindRangeJa(),
-  },
-  {
-    label: 'commitment_appraise.workKind（共有スキーマ workKindSchema）',
-    tool: 'commitment_appraise',
-    base: { id: 'c-1', appraisal: 'good' },
-    field: 'workKind',
-    invalid: '',
-    valid: '実装',
-    hint: formatWorkKindRangeJa(),
-  },
-  {
-    label: 'manager_appraise.workKind（共有スキーマ workKindSchema）',
-    tool: 'manager_appraise',
-    base: { managerId: 'mgr-1', appraisal: 'good' },
-    field: 'workKind',
-    invalid: '',
-    valid: '実装',
-    hint: formatWorkKindRangeJa(),
-    managers: minimalManagerPool,
   },
   {
     label: 'commitment_edit.body（文字列 .min(1)）',
@@ -379,12 +325,12 @@ const cases: Case[] = [
   },
 ];
 
-describe('道具の非数値引数（25件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1752）', () => {
-  it.each(cases)('$label', async ({ tool, base, field, invalid, valid, managers }) => {
+describe('道具の非数値引数（22件）— 範囲外は日本語の平文、範囲内は今までどおり通る（issue #1752）', () => {
+  it.each(cases)('$label', async ({ tool, base, field, invalid, valid }) => {
     const stores = createMemoryStores();
 
     // --- 範囲外 ---
-    const badRpc = await connect(stores, managers?.());
+    const badRpc = await connect(stores);
     const bad = await callTool(badRpc, tool, { ...base, [field]: invalid });
     expect(bad.isError, `${tool}.${field}=${JSON.stringify(invalid)}: ${bad.text}`).toBe(false);
     expect(bad.text).not.toContain(MCP_INPUT_VALIDATION_ERROR_MARKER);
@@ -394,13 +340,13 @@ describe('道具の非数値引数（25件）— 範囲外は日本語の平文�
     // 検査を丸ごと外しても、`funnel` の行が無条件に `origin=[...]` を含む
     // ため `toContain('origin')` だけでは生存を見逃した（変異試験で発見。
     // PR 本文に実測を書く）。`describeStringLengthViolation` /
-    // `describeArrayLengthViolation` / `describeWorkKindViolation` の断り文は
+    // `describeArrayLengthViolation` の断り文は
     // すべて「${field} は使えない（…）。」の形で揃えてあるので、ここまで
     // 見れば偶然の一致では緑にならない。
     expect(bad.text).toContain(`${field} は使えない`);
 
     // --- 範囲内（境界値そのもの） ---
-    const goodRpc = await connect(stores, managers?.());
+    const goodRpc = await connect(stores);
     const good = await callTool(goodRpc, tool, { ...base, [field]: valid });
     // **範囲内の値が「範囲外」に化けていないこと。**
     expect(good.isError, `${tool}.${field}=${JSON.stringify(valid)}: ${good.text}`).toBe(false);
@@ -474,16 +420,15 @@ describe('配列の要素が空文字であってはならない制約（issue #
  * `maxLength`/`minItems` が消える。
  *
  * ここでは、上の `cases` が持つ `hint`（ハンドラの先頭の検査に渡している
- * のと同じ文字列——`formatStringLengthJa` / `formatArrayLengthJa` /
- * `formatWorkKindRangeJa` の戻り値そのもの）が、`.describe()` の説明文に
+ * のと同じ文字列——`formatStringLengthJa` / `formatArrayLengthJa` の戻り値そのもの）が、`.describe()` の説明文に
  * そのまま含まれていることを測る。値を2箇所に手で書き写すのではなく関数を
  * 共有しているので、どちらか一方だけ直して食い違う（#923 と同じ形の腐り）
  * ことは構造的に起きない——この歯が測っているのは「その共有をやめて
  * いないか」である。
  */
 describe('道具の JSON Schema の説明文に、検査と同じ文言が入っている（issue #1752 レビュー指摘と同型）', () => {
-  it('25件の欄それぞれで、.describe() の文言に共有の hint がそのまま含まれる', async () => {
-    const rpc = await connect(createMemoryStores(), minimalManagerPool());
+  it('22件の欄それぞれで、.describe() の文言に共有の hint がそのまま含まれる', async () => {
+    const rpc = await connect(createMemoryStores());
     const response = await rpc.call('tools/list', {});
     const tools = (response['result'] as { tools: { name: string; inputSchema: unknown }[] }).tools;
 
@@ -500,6 +445,6 @@ describe('道具の JSON Schema の説明文に、検査と同じ文言が入っ
       expect(description, `${key}: 説明文「${description}」に制約の文言が無い`).toContain(hint);
     }
     // **表そのものが空にすり替わっていないこと。**
-    expect(seen.size).toBe(25);
+    expect(seen.size).toBe(22);
   });
 });

@@ -116,13 +116,7 @@ export interface ManagerFoldCandidateInput {
    *
    * 一方 `updatedAt`（`Job.updatedAt`）は `#persist()` が委譲に何か起きる
    * たび（`case 'report'` を含む）に必ず「いま」へ更新する——`done` へ
-   * 遷移した瞬間の時刻を確実に持つ。**⚠ ただし `manager_appraise` は
-   * `#persist()` を経由せず `job.updatedAt` を直接いまの時刻へ進める**
-   * （`manager.ts` の `appraise()`）——評定を付け直しただけの委譲は、この
-   * 欄だけを見ると「最近まで動いていた」ように見える。これは経過時間の
-   * 起点が「最後にこの委譲へ何らかの書き込みがあった時刻」であることの
-   * 帰結であり、この純関数の外側（`tools.ts` の呼び出し元・将来の読み手）
-   * が知っておくべき前提として、ここに書いておく。
+   * 遷移した瞬間の時刻を確実に持つ。
    */
   readonly lastTurnEndedAt?: string;
 }

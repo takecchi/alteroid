@@ -25,7 +25,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * この4つの口に収束する）が塞がる退行だった（fs は issue #1975 の時点から、
  * pg は issue #2011 のこの PR 自身の直しの時点から）。
  *
- * ここでは fs / pg の両方で、`kind` が空文字列（`workKindSchema.min(1)`
+ * ここでは fs / pg の両方で、`kind` が空文字列（`practiceKindSchema.min(1)`
  * 違反）の壊れた行を直接書き（版ずれ・手編集を模す）、次を確かめる:
  *
  * - `PUT`/`DELETE /practices/:slug`（HTTP。CLI と Web UI が実際に叩く口——
@@ -68,7 +68,7 @@ const BAD_CONTENT = '壊れた本文（跡に出てはいけない）';
  * `kind` を空文字列にした壊れた行を fs の practices.json へ直接書く。
  *
  * **`kind = 'bogus'` ではなく空文字列にする理由**は `practiceKindSchema`
- * （`workKindSchema` = `z.string().min(1).max(128)`）が意図して enum に
+ * （`practiceKindSchema` = `z.string().min(1).max(128)`）が意図して enum に
  * していない自由文字列だから——「決められた一覧に無い値」はそもそも検査を
  * 通る。空文字列は `min(1)` に違反する、実際に検査へ落ちる形
  * （`packages/storage-pg/src/practices-malformed-row-repro.test.ts` と

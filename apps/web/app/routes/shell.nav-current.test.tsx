@@ -2,7 +2,7 @@
 /**
  * 行き先の「いま居る画面」の印（`aria-current`）。
  *
- * サイドバーの1行はまとまり（仕事なら未了の仕事・作業の進捗・評定の内訳）を代表する。
+ * サイドバーの1行はまとまり（仕事なら未了の仕事・作業の進捗）を代表する。
  * 「いま居る画面」は `NavLink` の前方一致ではなく `~/lib/nav` の `isNavItemActive` で決め、
  * `shell.tsx` の `NavItemLink` が `aria-current` を付ける。**まとまりのどのページに居ても、
  * 詳細の経路（`/managers/:id` など）に居ても、代表の1行がちょうど1つ選ばれる**ことを、
@@ -120,7 +120,6 @@ const CASES: [string, string][] = [
   ['/approvals', '承認待ち'],
   ['/commitments', '仕事'],
   ['/progress', '仕事'],
-  ['/appraisal-stats', '仕事'],
   ['/managers', 'マネージャー'],
   ['/managers/mgr-1', 'マネージャー'],
   ['/reports', '日報'],

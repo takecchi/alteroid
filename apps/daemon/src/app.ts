@@ -59,17 +59,8 @@ import {
   commitmentActiveDelegationIds,
   commitmentPosition,
   commitmentRespondedAt,
-  COMMITMENT_APPRAISAL_DECISION_PREFIX,
-  COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
-  JOB_APPRAISAL_DECISION_PREFIX,
-  appraisalSchema,
   commitmentUpdatedAt,
-  computeAppraisalJournalStats,
-  computeAppraisalReconciliation,
-  computeJobAppraisalCoverage,
-  describeAppraisal,
   describeUnreadableCommitment,
-  formatAppraisalDecision,
   compareApprovalPagingKey,
   compareCommitmentPosition,
   computeSupersededIds,
@@ -95,7 +86,6 @@ import {
   summarizeInboxBacklog,
   memorySlugSchema,
   practiceKindSchema,
-  workKindSchema,
   practiceSlugSchema,
   fingerprintOf,
   noteDroppedRecord,
@@ -159,7 +149,6 @@ import {
   cloneInterruptResponseSchema,
   accessAccountResponseSchema,
   accessListResponseSchema,
-  appraisalStatsResponseSchema,
   approvalsAnswerResponseSchema,
   approvalsResponseSchema,
   approvalTraceResponseSchema,
@@ -848,37 +837,6 @@ const commitmentBody = z.object({
 const commitmentCloseBody = z.object({ reason: z.string().min(1) });
 
 /**
- * 評定（#1054）。**`reason` は任意である** —— 画面のボタン1つで付けられる経路を
- * 塞がないため（`CommitmentStore.appraise` の doc）。
- *
- * **`appraisal` は `appraisalSchema` をそのまま使う。** ここで
- * `z.enum(['good', ...])` を書き直すと、値が増えたときに黙ってずれる口が1つ
- * 増える（この repo が「実装が持つ一覧を説明文が数え直す」形で繰り返し踏んだ
- * のと同じ穴。`packages/core/src/tool-description-enumeration.test.ts` の doc）。
- */
-const commitmentAppraiseBody = z.object({
-  appraisal: appraisalSchema,
-  reason: z.string().min(1).optional(),
-  /**
-   * 仕事の種類（#1308。`workKindSchema` の doc）。**人間の口では任意**で、渡さずに
-   * 付け直したときは前の種類が残る（クローンの道具では必須）。
-   */
-  workKind: workKindSchema.optional(),
-});
-
-/**
- * 委譲の評定（#1054）。**`commitmentAppraiseBody` と同じ形だが、別の口である** ——
- * 台帳の行と委譲は別の軸で数えるので（`JOB_APPRAISAL_DECISION_PREFIX` の doc）、
- * 本文の型まで共有すると片方だけ広げたときに黙って両方が動く。
- */
-const managerAppraiseBody = z.object({
-  appraisal: appraisalSchema,
-  reason: z.string().min(1).optional(),
-  /** 仕事の種類（#1308）。`commitmentAppraiseBody.workKind` と同じ扱い。 */
-  workKind: workKindSchema.optional(),
-});
-
-/**
  * 編集後の本文。**空を許さない**（`commitmentBody.body` と同じ制約——空文字を
  * 許すと「本文の無い依頼」を人間が自分で作れてしまう）。
  */
@@ -1398,7 +1356,7 @@ function describeActor(principal: Principal): string {
  * `DELETE /archive/:id` ・ `POST /archive/remove` の一括 tombstone（最初の3経路。
  * Issue #2037 本体）に加え、`/memory/:slug`（PUT・DELETE）・`/practices/:slug`
  * （PUT・DELETE の両分岐）・`/schedule/:kind`（DELETE）・
- * `/commitments`（POST）・`/commitments/:id/close`・`/commitments/:id/appraise`・
+ * `/commitments`（POST）・`/commitments/:id/close`・
  * `/commitments/:id`（PATCH）・`/inbox/remove`（POST、
  * 塊ごと）・`/reset`（POST）・`/access/:accountId/revoke`・
  * `/access/:accountId/owner/revoke`（issue #2043。狭める側はここまでと同じ
@@ -5162,7 +5120,7 @@ export function createApp(deps: AppDeps) {
           '物理削除するので、この契約を完全には守れていない（issue #416）。** 削除された' +
           '累計件数は `GET /commitments` の `trimmedClosed` で見える。**台帳の行が読めない' +
           '形で入っていても閉じられる**（issue #2148。中身は読めないままなので、閉じた後も' +
-          '本文の書き直し・評定はできない）。',
+          '本文の書き直しはできない）。',
         responses: {
           200: {
             description: '閉じた。以後は `includeClosed=true` でだけ見える。',
@@ -5227,116 +5185,6 @@ export function createApp(deps: AppDeps) {
             grounds: '人間が直接 API から閉じた',
           },
           '引き受けた仕事を片付けた日誌',
-          `id=${id}`,
-        );
-        return c.json(okResponseSchema.parse({ ok: true }));
-      },
-    )
-
-    /**
-     * 人間が1件に評定を付ける（#1054。自己改善の段1）。
-     *
-     * **`close` と違い、片付いた行にも未了の行にも付く。** 断るのは無い id だけ
-     * である（`CommitmentStore.appraise` の doc）。
-     *
-     * **⭐ この口の本題は「覆せること」である。** クローンが付けた評定を人間が
-     * 上書きでき、**覆した事実が日誌に残る** —— 行の側は「いまの値」しか
-     * 持たないので、前の値がここで日誌へ落ちないと、**評価する側を較正する
-     * 材料が消える**（`docs/PRD.md`「要件: 自己改善」の「評価する側も誤りうる
-     * 前提で作る」）。
-     *
-     * **⚠️ 読めない行には評定を付けない（issue #2148 の決定 (2)(3)）。** 先に
-     * 読む `get()` が `UnreadableCommitmentError` を投げたら、素の 500
-     * ではなく 409 で「読めない・close なら閉じられる」と名乗って止める
-     * （`describeUnreadableCommitment` の doc）。
-     */
-    .post(
-      '/commitments/:id/appraise',
-      describeRoute({
-        tags: ['commitments'],
-        summary: '引き受けた仕事に評定（うまくいったか）を付ける',
-        description:
-          'クローンの `commitment_appraise` と同じものを人間の手から。**片付いた行にも' +
-          '未了の行にも付けられ、何度でも上書きできる。** クローンが付けた評定を人間が' +
-          '覆したときは、覆す前の値が日誌に残る（評定そのものを較正する材料になる）。' +
-          '**`reason` は任意** — 画面のボタン1つで付けられる経路を塞がないため。',
-        responses: {
-          200: {
-            description: '付けた（上書きを含む）。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`appraisal` が既知の値でない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'その id は台帳に無い。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              '台帳に在るが読めない形で入っている（消されたのではない）。close で閉じることは' +
-              'できるが、評定は付けられない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(commitmentAppraiseBody, (where) => ({
-        error: 'appraisal の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const id = c.req.param('id');
-        const { appraisal, reason, workKind } = c.req.valid('json');
-        // **前の評定は書き換える前に読む。** 後から読むと自分が書いた値しか
-        // 取れず、覆した事実が日誌から消える。
-        let before;
-        try {
-          before = await stores.commitments.get(id);
-        } catch (error) {
-          if (!(error instanceof UnreadableCommitmentError)) throw error;
-          return c.json({ error: describeUnreadableCommitment(error) }, 409);
-        }
-        if (before === null) return c.json({ error: 'not found' as const }, 404);
-        const previous = describeAppraisal(before);
-        if (
-          !(await stores.commitments.appraise(
-            id,
-            new Date().toISOString(),
-            appraisal,
-            'human',
-            reason,
-            workKind,
-          ))
-        ) {
-          return c.json({ error: 'not found' as const }, 404);
-        }
-        // 日誌には書いた結果の種類を載せる（渡されなければ前の種類が残る。#1308）。
-        const effectiveWorkKind = workKind ?? before.workKind;
-        // **評定を付けること自体はもう効いている**（Issue #2037）。日誌への
-        // 追記だけが落ちても 500 を返さない——`appendJournalOrDrop` の doc。
-        await appendJournalOrDrop(
-          stores,
-          {
-            type: 'decision',
-            decision: formatAppraisalDecision({
-              prefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-              id,
-              value: appraisal,
-              reason,
-              previous,
-            }),
-            grounds: COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
-            appraisal: {
-              target: 'commitment',
-              id,
-              value: appraisal,
-              by: 'human',
-              previous: before.appraisal,
-              previousBy: before.appraisedBy,
-              ...(effectiveWorkKind === undefined ? {} : { workKind: effectiveWorkKind }),
-            },
-          },
-          '引き受けた仕事の評定の日誌',
           `id=${id}`,
         );
         return c.json(okResponseSchema.parse({ ok: true }));
@@ -5843,61 +5691,6 @@ export function createApp(deps: AppDeps) {
         // しない。送っていない。
         if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
         return c.json({ outcome: result.outcome, detail: result.detail });
-      },
-    )
-
-    /**
-     * 人間が委譲1本に評定を付ける（#1054。自己改善の段1の後半）。
-     *
-     * **`ManagerPool.appraise` を通す。** 走行中の委譲の `Job` はプールが握って
-     * いて、ストアへ直に書くと次の `#persist` が黙って踏み消す（あちらの doc）。
-     * ⟹ **クローンの `manager_appraise` とまったく同じ経路である** —— 人間に
-     * 出来てクローンに出来ないことも、その逆も作らない。
-     */
-    .post(
-      '/managers/:id/appraise',
-      describeRoute({
-        tags: ['managers'],
-        summary: '委譲に評定（うまくいったか）を付ける',
-        description:
-          'クローンの `manager_appraise` と同じものを人間の手から。**走行中の委譲にも' +
-          '終端した委譲にも付けられ、何度でも上書きできる。** クローンが付けた評定を人間が' +
-          '覆したときは、覆す前の値が日誌に残る（評定そのものを較正する材料になる）。' +
-          '**⚠️ `status` とは別の軸である** —— `done` は「セッションが終わった」であって' +
-          '「良かった」ではない。',
-        responses: {
-          200: {
-            description: '付けた（上書きを含む）。',
-            content: { 'application/json': { schema: resolver(okResponseSchema) } },
-          },
-          400: {
-            description: '本文が JSON として不正（`appraisal` が既知の値でない）。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          404: {
-            description: 'そのマネージャーは台帳に居ない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-          409: {
-            description:
-              'そのマネージャーは台帳に在るが読めない形で入っている（版ずれ・手編集）。' +
-              '消されたのではない。評定は付けておらず、行も書き換えていない。',
-            content: { 'application/json': { schema: resolver(errorResponseSchema) } },
-          },
-        },
-      }),
-      jsonBody(managerAppraiseBody, (where) => ({
-        error: 'appraisal の形が不正' + (where === '' ? '' : `: ${where}`),
-      })),
-      async (c) => {
-        const id = c.req.param('id');
-        const { appraisal, reason, workKind } = c.req.valid('json');
-        const result = await clone.managers.appraise(id, appraisal, 'human', reason, workKind);
-        if (result.outcome === 'absent') return c.json({ error: 'not found' as const }, 404);
-        // **`'unreadable'` を成功に落とさない**（落とすと評定が付いていないのに
-        // `{ ok: true }` を返す）。
-        if (result.outcome === 'unreadable') return c.json({ error: result.detail }, 409);
-        return c.json(okResponseSchema.parse({ ok: true }));
       },
     )
 
@@ -8301,84 +8094,6 @@ export function createApp(deps: AppDeps) {
       },
     )
 
-    // --- 評定の内訳（/appraisal-stats） --------------------------------------
-    // #1278 の HTTP 面。PRD「入口の等価性」——クローンの `appraisal_stats`
-    // （`tools.ts`）と同じものを人間の手からも。
-
-    /**
-     * 評定（`good`/`bad`/`unclear`/未評定）の内訳を要るときに数える
-     * （#1278「評定の内訳を要るときに数える口が無い」）。
-     *
-     * **資格は `authenticate` だけ（`requireOperator` は付けない）。** `/journal`
-     * `/commitments` `/managers` と同じ強さ——ここが返すのは集計値だけで、
-     * 鍵やクレデンシャルの類は1つも含まない。
-     *
-     * **`journal.commitments` / `journal.jobs` は全期間の総数である。**
-     * `journal_read`（MCP）の `limit` 上限（200）はここには効かない——
-     * `@alteroid/core` の `computeAppraisalJournalStats` がストアを
-     * **ページ送りで最後まで読み切る**ためである（`appraisal-stats.ts` の doc）。
-     * ⚠️ **以前ここは「`limit` 無指定で読むためである」と書いていた**が、#1342 で
-     * 有界化した時点でその理由は偽になった（総数であること自体は変わらない）。
-     *
-     * **クエリ引数は無い。** 出力は母集団の件数に関わらず固定個数の集計値
-     * なので、`/dropped` と違って「上限を持たない」を明示する必要も無い
-     * （そもそも上限という概念が無い）。
-     *
-     * **`reconciliation`（#1310）は (b) 人間 と (c) クローンの食い違いの
-     * 数え上げである** —— クローンが付けた評定を人間が後から付け直した対を
-     * `id` の時系列で復元し、(クローンの値 → 人間の値) の組ごとに数える。
-     * `computeAppraisalReconciliation` は日誌を `asc`（時系列）で読み直す
-     * ため、`journal` / `jobCoverage` とは独立したもう1回の走査になる。
-     */
-    .get(
-      '/appraisal-stats',
-      describeRoute({
-        tags: ['appraisal'],
-        summary: '評定の内訳を数える',
-        description:
-          'クローンの `appraisal_stats` と同じものを人間の手から。' +
-          '`journal.commitments`（台帳の行）と `journal.jobs`（委譲）は日誌の ' +
-          'decision 行を先頭一致で数えた全期間の総数——2つは別の軸なので混ぜて ' +
-          '読まないこと。`jobCoverage` は終端した委譲（done/failed/lost/stopped）を ' +
-          '状態ごとに割った評定の有無の内訳で、running/waiting_human は対象外 ' +
-          '（`nonTerminalTotal` に件数だけ出す）。`jobCoverage.unreadableJobs` は行が読めない' +
-          '（版ずれ・手編集）委譲の件数（0 も載せる）で、内訳には入っていない——読めない行は' +
-          '終端したかも評定の有無も分からないので、評定なしにも評定ありにも入れていない。' +
-          '0 でなければ内訳は読めた委譲だけの数である（issue #2359）。`reconciliation` はクローンが' +
-          '付けた評定を人間が付け直した対を数えた較正の材料（#1055 段4）で、' +
-          '`commitments` / `jobs` の軸ごとに `transitions`（値の遷移の内訳）・' +
-          '`matched` / `mismatched`・復元できなかった件数（`undetermined`）を持つ。',
-        responses: {
-          200: {
-            description: '評定の内訳。',
-            content: { 'application/json': { schema: resolver(appraisalStatsResponseSchema) } },
-          },
-        },
-      }),
-      async (c) => {
-        const [journalStats, jobs, unreadableJobs, reconciliation] = await Promise.all([
-          computeAppraisalJournalStats(stores.journal, {
-            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
-          }),
-          stores.jobs.listJobs(),
-          // 読めない委譲の行は `listJobs()` に載らない。件数を別に取って言う（issue #2359）。
-          stores.jobs.listUnreadableJobs().then((rows) => rows.length),
-          computeAppraisalReconciliation(stores.journal, {
-            commitmentPrefix: COMMITMENT_APPRAISAL_DECISION_PREFIX,
-            jobPrefix: JOB_APPRAISAL_DECISION_PREFIX,
-          }),
-        ]);
-        return c.json(
-          appraisalStatsResponseSchema.parse({
-            journal: journalStats,
-            jobCoverage: computeJobAppraisalCoverage(jobs, unreadableJobs),
-            reconciliation,
-          }),
-        );
-      },
-    )
-
     // --- 作業の進捗（/progress） ---------------------------------------------
     // #2241 の 2。台帳と委譲の行を数え直した集計（core の `summarizeProgress`）を
     // 人間の手から読む口。**読むだけで日誌は書かない。**
@@ -8386,7 +8101,7 @@ export function createApp(deps: AppDeps) {
     /**
      * 積み上がり・実施中・片付いた速度・見込みを、台帳と委譲の行から数え直して返す。
      *
-     * **資格は `authenticate` だけ。** `/appraisal-stats` と同じ強さ——返すのは
+     * **資格は `authenticate` だけ。** 返すのは
      * 集計値だけで、行の本文も鍵も含まない。
      *
      * **入力は `GET /commitments` と揃える。** 台帳は `list({ includeClosed: true })`

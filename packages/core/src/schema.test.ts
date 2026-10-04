@@ -3,15 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   answeredViaSchema,
   approvalUpdatedAt,
-  COMMITMENT_APPRAISAL_CLONE_GROUNDS,
-  COMMITMENT_APPRAISAL_HUMAN_GROUNDS,
   commitmentActiveDelegationIds,
+  commitmentSchema,
   commitmentRespondedAt,
   commitmentUpdatedAt,
   describeAnsweredVia,
   inboxEventSchema,
-  JOB_APPRAISAL_CLONE_GROUNDS,
-  JOB_APPRAISAL_HUMAN_GROUNDS,
+  jobSchema,
   journalEntrySchema,
   pendingApprovalSchema,
 } from './schema.js';
@@ -461,85 +459,62 @@ describe('answeredViaSchema / pendingApprovalSchema.answeredVia（Issue #1479）
 });
 
 /**
- * 台帳・委譲の `grounds` 定数（#1310）。**文言は main へ入っていた元のリテラルと
- * 1文字も変わっていないことを固定する**——`inferAppraisedByFromGrounds` が
- * 構造欄の無い過去の行を読むのはこの文言との `===` 一致に依存しているので、
- * 誰かがこの定数の中身を「整形のつもりで」書き換えると、過去の行が静かに
- * 「判定できない」側へ落ちる（AGENTS.md「取れない軸に0の行を作る」と同じ形の
- * 逆——ここは「0」ではなく「undetermined が増える」側で起きる）。
+ * 自己評定の仕組み（#2699）を消した後も、評定を書いていた時代の行が読める。
+ *
+ * **DB 移行はしない**——pg では `commitment` / `job` の jsonb の中に、日誌には
+ * `decision.appraisal` として、過去の評定のキーが残っている。スキーマ側は
+ * `z.object`（未知のキーを黙って落とす）なので、欄を消しても parse が落ちない
+ * ことを固定する。落ちるようになると、台帳・委譲・日誌の一覧が丸ごと読めなくなる。
  */
-describe('評定の grounds 共有定数（#1310）— 文言を固定する', () => {
-  it('台帳・クローンの文言', () => {
-    expect(COMMITMENT_APPRAISAL_CLONE_GROUNDS).toBe(
-      'クローン自身が付けた評定（人間はこれを読んで後から覆す）',
-    );
-  });
-
-  it('台帳・人間の文言', () => {
-    expect(COMMITMENT_APPRAISAL_HUMAN_GROUNDS).toBe(
-      '人間が直接 API から付けた（クローンの評定を覆したならその前の値も上に在る）',
-    );
-  });
-
-  it('委譲・クローンの文言（旧 `who` テンプレートの生成結果と同一）', () => {
-    expect(JOB_APPRAISAL_CLONE_GROUNDS).toBe('クローンが付けた（人間はこれを読んで後から覆す）');
-  });
-
-  it('委譲・人間の文言（旧 `who` テンプレートの生成結果と同一）', () => {
-    expect(JOB_APPRAISAL_HUMAN_GROUNDS).toBe('人間が付けた（人間はこれを読んで後から覆す）');
-  });
-});
-
-describe('journalEntrySchema — decision.appraisal（#1310）', () => {
-  const base = {
-    type: 'decision' as const,
-    id: 'd1',
-    at: '2026-01-01T00:00:00.000Z',
-    decision: '引き受けた仕事に評定を付けた（c1）: good',
-    grounds: COMMITMENT_APPRAISAL_CLONE_GROUNDS,
-  };
-
-  it('構造欄が無い過去の行も引き続き safeParse を通る（既存の行を壊さない）', () => {
-    const parsed = journalEntrySchema.safeParse(base);
-    expect(parsed.success).toBe(true);
-  });
-
-  it('構造欄ありの行を safeParse できる（previous / previousBy 無し＝初回）', () => {
+describe('過去の評定のキーを持つ行が読める（#2699）', () => {
+  it('journalEntrySchema: decision.appraisal を持つ過去の行は safeParse を通る', () => {
     const parsed = journalEntrySchema.safeParse({
-      ...base,
-      appraisal: { target: 'commitment', id: 'c1', value: 'good', by: 'clone' },
+      type: 'decision',
+      id: 'd1',
+      at: '2026-01-01T00:00:00.000Z',
+      decision: '引き受けた仕事に評定を付けた（c1）: good',
+      grounds: 'クローン自身が付けた評定（人間はこれを読んで後から覆す）',
+      appraisal: { target: 'job', id: 'm1', value: 'bad', by: 'human', previous: 'good' },
     });
     expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.type === 'decision') {
+      expect(parsed.data.decision).toBe('引き受けた仕事に評定を付けた（c1）: good');
+    }
   });
 
-  it('構造欄ありの行を safeParse できる（previous / previousBy 有り＝付け直し）', () => {
-    const parsed = journalEntrySchema.safeParse({
-      ...base,
-      appraisal: {
-        target: 'job',
-        id: 'm1',
-        value: 'bad',
-        by: 'human',
-        previous: 'good',
-        previousBy: 'clone',
-      },
+  it('commitmentSchema: appraisal 系のキーを持つ過去の行は safeParse を通る', () => {
+    const parsed = commitmentSchema.safeParse({
+      id: 'c1',
+      at: '2026-01-01T00:00:00.000Z',
+      body: '依頼',
+      origin: 'human',
+      closedAt: '2026-01-02T00:00:00.000Z',
+      closedReason: '済んだ',
+      closedBy: 'clone',
+      appraisal: 'good',
+      appraisedAt: '2026-01-02T00:01:00.000Z',
+      appraisedBy: 'human',
+      appraisalReason: '理由',
+      workKind: '実装',
     });
     expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.body).toBe('依頼');
   });
 
-  it('appraisal.target が既知の2値以外だと safeParse は落ちる', () => {
-    const parsed = journalEntrySchema.safeParse({
-      ...base,
-      appraisal: { target: 'workflow', id: 'w1', value: 'good', by: 'clone' },
+  it('jobSchema: appraisal 系のキーを持つ過去の行は safeParse を通る', () => {
+    const parsed = jobSchema.safeParse({
+      id: 'm1',
+      status: 'done',
+      summary: '委譲',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      appraisal: 'bad',
+      appraisedAt: '2026-01-02T00:01:00.000Z',
+      appraisedBy: 'clone',
+      appraisalReason: '理由',
+      workKind: '調査',
     });
-    expect(parsed.success).toBe(false);
-  });
-
-  it('appraisal.value が既知の3値以外だと safeParse は落ちる（書き込み側は appraisalSchema に縛る）', () => {
-    const parsed = journalEntrySchema.safeParse({
-      ...base,
-      appraisal: { target: 'commitment', id: 'c1', value: 'brilliant', by: 'clone' },
-    });
-    expect(parsed.success).toBe(false);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.status).toBe('done');
   });
 });

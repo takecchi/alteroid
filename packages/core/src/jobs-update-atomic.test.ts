@@ -32,16 +32,13 @@ describe('JobStore.updateJob()（インメモリ実装）', () => {
 
     const updated = await stores.jobs.updateJob(job.id, (current) => ({
       ...current,
-      appraisal: 'good',
-      appraisedAt: '2026-09-01T00:10:00.000Z',
-      appraisedBy: 'human',
+      lastReport: '外から先に割り込んだ報告',
     }));
 
     expect(updated).toMatchObject({
       status: 'running',
       sessionId: 'sess-new',
-      appraisal: 'good',
-      appraisedBy: 'human',
+      lastReport: '外から先に割り込んだ報告',
     });
 
     const stored = await stores.jobs.listJobs().then((all) => all.find((j) => j.id === job.id));
@@ -66,8 +63,7 @@ describe('JobStore.updateJob()（インメモリ実装）', () => {
     const [a, b] = await Promise.all([
       stores.jobs.updateJob(job.id, (current) => ({
         ...current,
-        appraisal: 'good',
-        appraisedBy: 'clone',
+        summary: '1本目の書き込み',
       })),
       stores.jobs.updateJob(job.id, (current) => ({
         ...current,
@@ -79,8 +75,7 @@ describe('JobStore.updateJob()（インメモリ実装）', () => {
     expect(b).not.toBeNull();
 
     const stored = await stores.jobs.listJobs().then((all) => all.find((j) => j.id === job.id));
-    expect(stored?.appraisal).toBe('good');
-    expect(stored?.appraisedBy).toBe('clone');
+    expect(stored?.summary).toBe('1本目の書き込み');
     expect(stored?.lastReport).toBe('2本目の書き込み');
   });
 

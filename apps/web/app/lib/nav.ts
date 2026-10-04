@@ -13,12 +13,10 @@ export interface NavTab {
   label: string;
 }
 
-/** 仕事: 未了の仕事の台帳・その集計・評定の集計。 */
+/** 仕事: 未了の仕事の台帳・その集計。 */
 export const WORK_TABS: readonly NavTab[] = [
   { to: '/commitments', label: '未了の仕事' },
   { to: '/progress', label: '作業の進捗' },
-  // 評定の機能を消す変更（PR #2702）が入るときは、この1行を消す（ほかに評定の記述は無い）。
-  { to: '/appraisal-stats', label: '評定の内訳' },
 ];
 
 /** 日誌: 日誌本体・握り潰しの跡・セッション生ログの退避。 */

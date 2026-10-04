@@ -12,7 +12,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * `PgPracticeStore` は `practices` / `practiceVersions` の列をそのまま詰め替えて
  * 返し、`practiceMetaSchema` / `practiceSchema` / `practiceVersionMetaSchema` /
  * `practiceVersionSchema` のどれも通していなかった。そのため **型に合わない行
- * （版ずれ・手編集で `kind` 欄が `practiceKindSchema`（= `workKindSchema` =
+ * （版ずれ・手編集で `kind` 欄が `practiceKindSchema`（=
  * `z.string().min(1).max(128)`）の下限を割った行など）が、検査されずにそのまま
  * 読み手へ渡る**。
  *
@@ -21,7 +21,7 @@ import { createMigratedPglite } from './pglite-template.test-support.js';
  * 意図して `z.enum` にしていない自由文字列（#1055 段3の決定。「仕事の型を
  * 実装専用に狭めない」——`docs/north_star.md`）なので、`'bogus'` のような
  * 「決められた一覧に無い」値はそもそも `practiceKindSchema` を**通る**。ここでは
- * 代わりに、`kind` を空文字列にする（`workKindSchema.min(1)` に違反する、実際に
+ * 代わりに、`kind` を空文字列にする（`practiceKindSchema.min(1)` に違反する、実際に
  * 検査へ落ちる形）——`practices` テーブルの `kind` 列は `NOT NULL` だが空文字列
  * `''` は DB 上は許される（アプリの `write()` は `practiceSchema.parse` を通す
  * ので空文字列を書けないが、直接 `INSERT` すれば書ける。版ずれ・手編集を模す）。
@@ -50,7 +50,7 @@ describe('PgPracticeStore — practices の不正な1行を読み飛ばす（iss
   };
 
   const BAD_SLUG = 'bad-practice';
-  // kind が空文字列——`workKindSchema.min(1)` に違反する、実際に赤になる形
+  // kind が空文字列——`practiceKindSchema.min(1)` に違反する、実際に赤になる形
   // （直上の doc コメント参照。issue #2011 の例示 `kind = 'bogus'` は自由文字列
   // なので赤にならない）。
   const BAD_TITLE = '壊れたやり方（この文字列も跡に出てはいけない）';

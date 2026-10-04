@@ -13,8 +13,6 @@ import { matchesJournalSearch } from './journal-search.js';
 import { compareIsoInstant, earliestIsoInstant } from './iso-instant.js';
 import type {
   Commitment,
-  AppraisalValue,
-  AppraisedBy,
   CommitmentClosedBy,
   CommitmentEditedBy,
   InboxEvent,
@@ -607,7 +605,7 @@ export function createMemoryStores(): Stores {
    * 起きない。**本番でだけ壊れる。**
    *
    * ⭐ **実際に歯を殺した（#1054 の作業中に変異試験で発見）。**
-   * `ManagerPool.appraise` の踏み消しを測る歯へ、わざと壊す変異を当てても
+   * `ManagerPool` の孤児ジョブ分岐の踏み消しを測る歯へ、わざと壊す変異を当てても
    * **6件とも緑のまま**だった。契約は `store-isolation-contract.ts` が持つ。
    *
    * **`structuredClone` を使う。** ここに入るのは zod を通った素のデータだけで
@@ -639,7 +637,7 @@ export function createMemoryStores(): Stores {
       const found = jobs.get(id);
       if (found === undefined) return null;
       // `mutate` へは独立したコピーを渡す（`isolate`）——`mutate` が引数を
-      // その場で書き換えて返す形（`ManagerPool.appraise` の像を書く分岐と
+      // その場で書き換えて返す形（`ManagerPool` の孤児ジョブ分岐と
       // 同じ書き方）でも、`jobSchema.parse` が投げて書き込みに至らなかった
       // ときに `Map` の中身を汚さないため。
       // 本物（fs / pg）と同じく `jobSchema` を通す（issue #1652 と同じ理由）。
@@ -847,21 +845,6 @@ export function createMemoryStores(): Stores {
         closedIds.push(id);
       }
       return closedIds;
-    },
-    // **片付いた行にも未了の行にも付く**（`CommitmentStore.appraise` の doc）。
-    // 断るのは無い id だけ。**`reason` を渡さなければ前の理由を消す**——残すと
-    // 覆したあとに前の書き手の理由が新しい値の理由として残る（本物2つと同じ）。
-    async appraise(id, at, value: AppraisalValue, by: AppraisedBy, reason, workKind) {
-      const existing = commitments.get(id);
-      if (!existing) return false;
-      // `delete` で落とす理由は fs 版と同じ（捨て変数を eslint が許さない）。
-      const next: Commitment = { ...existing, appraisal: value, appraisedAt: at, appraisedBy: by };
-      delete next.appraisalReason;
-      if (reason !== undefined) next.appraisalReason = reason;
-      // 種類は渡されなければ前の値を残す（本物2つと同じ。#1308）。
-      if (workKind !== undefined) next.workKind = workKind;
-      commitments.set(id, next);
-      return true;
     },
     // **`origin` の判定はしない**（`CommitmentStore.editBody` の doc）。呼び出し側
     // （`apps/daemon/src/app.ts` の `PATCH /commitments/:id`）が確かめてから呼ぶ。

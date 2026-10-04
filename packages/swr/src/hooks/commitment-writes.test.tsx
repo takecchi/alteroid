@@ -2,7 +2,7 @@
 /**
  * 台帳の書き込みが断られても、台帳を取り直す（issue #2455）。
  *
- * close / 編集 / 評定 / 積む は、裏で先に片付いた行（クローンの
+ * close / 編集 / 積む は、裏で先に片付いた行（クローンの
  * `commitment_close`・別のタブや CLI）に対して 409 で断られる。`expectOk` の
  * 例外でそのまま抜けると取り直しに届かず、片付いた行が未了の見た目で残る。
  * `useAnswerApproval`（#1619）と同じく、失敗しても取り直すことをここで固定する。
@@ -16,12 +16,7 @@ import { useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ApiError } from '../api';
-import {
-  useAppraiseCommitment,
-  useCloseCommitment,
-  useEditCommitment,
-  usePushCommitment,
-} from './mutations';
+import { useCloseCommitment, useEditCommitment, usePushCommitment } from './mutations';
 import { useCommitments } from './queries';
 import { writeThenRefresh } from './write-then-refresh';
 import { json, Providers, stubFetch, storeTestBaseUrl } from '../test-support';
@@ -29,7 +24,6 @@ import { json, Providers, stubFetch, storeTestBaseUrl } from '../test-support';
 type Writes = {
   push: ReturnType<typeof usePushCommitment>;
   close: ReturnType<typeof useCloseCommitment>;
-  appraise: ReturnType<typeof useAppraiseCommitment>;
   edit: ReturnType<typeof useEditCommitment>;
 };
 
@@ -41,11 +35,10 @@ function Probe({ onWrites }: { onWrites: (next: Writes) => void }) {
   useCommitments(true);
   const push = usePushCommitment();
   const close = useCloseCommitment();
-  const appraise = useAppraiseCommitment();
   const edit = useEditCommitment();
   useEffect(() => {
-    onWrites({ push, close, appraise, edit });
-  }, [onWrites, push, close, appraise, edit]);
+    onWrites({ push, close, edit });
+  }, [onWrites, push, close, edit]);
   return null;
 }
 
@@ -100,7 +93,6 @@ afterEach(() => {
 const CASES: { name: string; run: (w: Writes) => Promise<void> }[] = [
   { name: 'close', run: (w) => w.close('c-1', 'もう済んだ') },
   { name: '編集', run: (w) => w.edit('c-1', '直した本文') },
-  { name: '評定', run: (w) => w.appraise('c-1', 'good') },
   { name: '積む', run: (w) => w.push('新しい約束') },
 ];
 

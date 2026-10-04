@@ -40,7 +40,6 @@ function minimalManagerPool(): { pool: ManagerPool; managers: ManagerSummary[] }
     },
     send: notUsedHere('send') as ManagerPool['send'],
     abort: notUsedHere('abort') as ManagerPool['abort'],
-    appraise: notUsedHere('appraise') as ManagerPool['appraise'],
     async list() {
       return managers.map((manager) => ({ ...manager }));
     },

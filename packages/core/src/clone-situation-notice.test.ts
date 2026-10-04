@@ -111,7 +111,6 @@ function stubPool(input: {
     start: notImplemented,
     send: notImplemented,
     abort: notImplemented,
-    appraise: notImplemented,
     list: () =>
       typeof input.managers === 'function'
         ? Promise.reject(new Error('list() が壊れている（実測を模す）'))

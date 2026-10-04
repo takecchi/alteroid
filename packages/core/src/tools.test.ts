@@ -35,12 +35,8 @@ import { createProfileApplier, createProfileVessel } from './profile.js';
 import type { ProfileApplier } from './profile.js';
 import { heuristicChars, type HeuristicChars } from './quantity.js';
 import {
-  COMMITMENT_APPRAISAL_DECISION_PREFIX,
-  describeAppraisal,
   journalEntrySchema,
   PERMISSION_GRANT_CONSENT_PHRASE,
-  type AppraisalValue,
-  type AppraisedBy,
   type ChatStreamEvent,
   type InboxEvent,
   type JobStatus,
@@ -272,14 +268,6 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
   // 次の `call()` から `manager_list` の受信箱の行がその値を読む。
   let queuedInMemory: number | undefined;
 
-  /** `appraise()` に渡された引数（古い順）。道具の歯が数え上げる。 */
-  const appraised: {
-    managerId: string;
-    appraisal: AppraisalValue;
-    by: AppraisedBy;
-    reason?: string;
-  }[] = [];
-
   const managers: ManagerPool = {
     async start(input) {
       started.push(input);
@@ -354,38 +342,6 @@ function harness(runtime?: () => CloneRuntimeFacts, scheduler?: () => ScheduleSt
     async vacate() {
       return {};
     },
-    /**
-     * 評定（#1054）。**本物と同じところまで動かす** —— 「無い id は `'absent'`」と
-     * 「前の値を返す」と「理由を渡さなければ前の理由を消す」の3つは、道具の側の
-     * 振る舞い（何を返すか・何を日誌に書くか）がそれに依存している。
-     */
-    async appraise(managerId: string, appraisal: AppraisalValue, by: AppraisedBy, reason?: string) {
-      const found = running.find((manager) => manager.managerId === managerId);
-      if (!found) {
-        return {
-          outcome: 'absent' as const,
-          detail: `${managerId} というマネージャーは台帳に居ない。`,
-          previous: null,
-        };
-      }
-      const previous = describeAppraisal(found);
-      appraised.push({
-        managerId,
-        appraisal,
-        by,
-        ...(reason === undefined ? {} : { reason }),
-      });
-      found.appraisal = appraisal;
-      found.appraisedBy = by;
-      delete found.appraisalReason;
-      if (reason !== undefined) found.appraisalReason = reason;
-      return {
-        outcome: 'appraised' as const,
-        detail: `${managerId} の評定を ${appraisal} にした。`,
-        previous,
-      };
-    },
-
     async abort(managerId: string, reason?: string) {
       aborted.push({ managerId, ...(reason === undefined ? {} : { reason }) });
       const found = running.find((manager) => manager.managerId === managerId);
@@ -18781,188 +18737,7 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
     expect(reply).not.toContain('機械が名乗った記録も日誌に無い');
   });
 
-  it('commitment_appraise（クローンの評定）は決定行に構造欄（#1310）を書く', async () => {
-    const stores = createMemoryStores();
-    await stores.commitments.open({
-      id: 'c-structured',
-      at: '2026-01-01T00:00:00.000Z',
-      origin: 'self',
-      body: '評定される件',
-    });
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const appraise = tools.find((entry) => entry.name === 'commitment_appraise');
-    await appraise?.handler(
-      { id: 'c-structured', appraisal: 'good', workKind: '実装' } as never,
-      {},
-    );
-    // 人間が覆す（前の値・前に誰が付けたかが構造欄に残ることも同時に確かめる）。
-    await appraise?.handler(
-      { id: 'c-structured', appraisal: 'bad', reason: '差し戻し', workKind: '調査' } as never,
-      {},
-    );
-
-    const decisions = (await stores.journal.list({ types: ['decision'] })).filter((entry) =>
-      entry.type === 'decision'
-        ? entry.decision.startsWith(COMMITMENT_APPRAISAL_DECISION_PREFIX)
-        : false,
-    );
-    expect(decisions).toHaveLength(2);
-    // `.decision` の部分一致では「前: 評定: うまくいった（good・clone）」の
-    // 中に "good" が紛れ込むので、構造欄自身の `value` で狙いの行を選ぶ
-    // （日誌の list が新しい順か古い順かにも依存しない）。
-    const firstEntry = decisions.find(
-      (entry) => entry.type === 'decision' && entry.appraisal?.value === 'good',
-    );
-    const secondEntry = decisions.find(
-      (entry) => entry.type === 'decision' && entry.appraisal?.value === 'bad',
-    );
-    expect(firstEntry?.type === 'decision' ? firstEntry.appraisal : undefined).toEqual({
-      target: 'commitment',
-      id: 'c-structured',
-      value: 'good',
-      by: 'clone',
-      previous: undefined,
-      previousBy: undefined,
-      workKind: '実装',
-    });
-    expect(secondEntry?.type === 'decision' ? secondEntry.appraisal : undefined).toEqual({
-      target: 'commitment',
-      id: 'c-structured',
-      value: 'bad',
-      by: 'clone',
-      previous: 'good',
-      previousBy: 'clone',
-      workKind: '調査',
-    });
-  });
-
-  describe('評定が述べる仕事の種類（#1308）', () => {
-    const toolsWith = (stores = createMemoryStores(), managers?: ManagerPool) =>
-      createCloneTools({
-        stores,
-        emit: () => undefined,
-        memoryCause: () => 'clone',
-        conversationId: () => undefined,
-        ...(managers === undefined ? {} : { managers }),
-      });
-    const shapeOf = (name: string) =>
-      toolsWith().find((entry) => entry.name === name)?.inputSchema as
-        Record<string, z.ZodTypeAny> | undefined;
-    const textOf = (result: { content?: { type: string; text?: string }[] }) =>
-      (result.content ?? []).map((block) => block.text ?? '').join('');
-
-    it('クローンの評定の道具は workKind を必須にしている（任意にすると未分類が最大の群になる）', () => {
-      for (const [name, base] of [
-        ['commitment_appraise', { id: 'c-1', appraisal: 'good' }],
-        ['manager_appraise', { managerId: 'mgr-1', appraisal: 'good' }],
-      ] as const) {
-        const shape = shapeOf(name);
-        expect(shape, name).toBeDefined();
-        expect(z.object(shape!).safeParse(base).success, name).toBe(false);
-        expect(z.object(shape!).safeParse({ ...base, workKind: '実装' }).success, name).toBe(true);
-        // 列挙にしていない（知らない種類を器が拒まない。`practiceKindSchema` と同じ線）。
-        expect(
-          z.object(shape!).safeParse({ ...base, workKind: 'まだ誰も名付けていない種類' }).success,
-          name,
-        ).toBe(true);
-        // **追記（issue #1752。テストを弱めずに直す）。**
-        // 事実: 以前はここが `.toBe(false)` だった——`workKind` の
-        // `.min(1).max(128)`（`workKindSchema`）が道具の入力スキーマ側に
-        // 直接乗っていたので、空文字は `z.object(shape!).safeParse` の時点で
-        // 落ちた。
-        // なぜ変えたか: issue #1752 で、入力スキーマ側に型以外の制約
-        // （`.min()`/`.max()`）を持たせると SDK の `tool()` がハンドラより
-        // **前**に検証してしまい、英語の zod の JSON がそのまま返る穴を
-        // 数値の欄に続いて非数値の欄でも直した。`workKind` の長さの検査は
-        // ハンドラの先頭（`describeWorkKindViolation`。`workKindSchema.
-        // safeParse` を直接呼ぶ）へ移り、道具の入力スキーマ側は型
-        // （文字列）だけを固定する `workKindToolInputSchema` になった——
-        // だから「入力スキーマの shape だけを見る」ここの safeParse は、
-        // いまは空文字も通す（`true`）のが正しい。
-        // 保証が弱くなっていないこと: 「workKind に空文字を渡すと断られる」
-        // という保証そのものは消えていない——測る場所が変わっただけである。
-        // 実際に断られることは
-        // `tool-non-numeric-args-handler-validation-1752.test.ts`
-        // （本物の MCP 往復・`commitment_appraise` / `manager_appraise` /
-        // `commitment_close` の3道具を table-driven で測る）が、マーカー
-        // 無しの日本語の平文で断られることまで含めて検査する。
-        expect(z.object(shape!).safeParse({ ...base, workKind: '' }).success, name).toBe(true);
-      }
-    });
-
-    it('commitment_close は評定を付けるのに種類が無ければ、閉じずに断る', async () => {
-      const stores = createMemoryStores();
-      await stores.commitments.open({
-        id: 'c-close-kind',
-        at: '2026-01-01T00:00:00.000Z',
-        origin: 'self',
-        body: '閉じる件',
-      });
-      const close = toolsWith(stores).find((entry) => entry.name === 'commitment_close');
-      const refused = textOf(
-        (await close?.handler(
-          { id: 'c-close-kind', reason: '終わった', appraisal: 'good' } as never,
-          {},
-        )) as never,
-      );
-      expect(refused).toContain('workKind');
-      // **閉じていない**（閉じてから断ると、評定の無い半端な片付きが残る）。
-      const after = await stores.commitments.get('c-close-kind');
-      expect(after?.closedAt).toBeUndefined();
-      expect(after?.appraisal).toBeUndefined();
-
-      const ok = textOf(
-        (await close?.handler(
-          { id: 'c-close-kind', reason: '終わった', appraisal: 'good', workKind: '実装' } as never,
-          {},
-        )) as never,
-      );
-      expect(ok).toContain('種類: 実装');
-      const closed = await stores.commitments.get('c-close-kind');
-      expect(closed?.closedAt).toBeDefined();
-      expect(closed).toMatchObject({ appraisal: 'good', workKind: '実装' });
-    });
-
-    it('commitment_close は評定を付けないなら、種類が無くても閉じる', async () => {
-      const stores = createMemoryStores();
-      await stores.commitments.open({
-        id: 'c-close-plain',
-        at: '2026-01-01T00:00:00.000Z',
-        origin: 'self',
-        body: '閉じる件',
-      });
-      const close = toolsWith(stores).find((entry) => entry.name === 'commitment_close');
-      await close?.handler({ id: 'c-close-plain', reason: '終わった' } as never, {});
-      const closed = await stores.commitments.get('c-close-plain');
-      expect(closed?.closedAt).toBeDefined();
-      expect(closed?.workKind).toBeUndefined();
-    });
-
-    it('manager_appraise は種類を ManagerPool.appraise へそのまま渡す', async () => {
-      const calls: unknown[][] = [];
-      const managers = {
-        async appraise(...args: unknown[]) {
-          calls.push(args);
-          return { outcome: 'appraised' as const, detail: 'ok', previous: null };
-        },
-      } as unknown as ManagerPool;
-      const appraise = toolsWith(createMemoryStores(), managers).find(
-        (entry) => entry.name === 'manager_appraise',
-      );
-      await appraise?.handler(
-        { managerId: 'mgr-1', appraisal: 'bad', reason: '手戻り', workKind: 'レビュー' } as never,
-        {},
-      );
-      expect(calls).toEqual([['mgr-1', 'bad', 'clone', '手戻り', 'レビュー']]);
-    });
-  });
-
-  it('⚠️ 対象は commitment_close だけである（commitment_appraise / commitment_edit の同じ枝は変えない）', async () => {
+  it('⚠️ 対象は commitment_close だけである（commitment_edit の同じ枝は変えない）', async () => {
     const stores = createMemoryStores();
     const tools = createCloneTools({
       stores,
@@ -18970,169 +18745,12 @@ describe('commitment_close が「台帳に無い」と答えるとき、機械�
       memoryCause: () => 'clone',
       conversationId: () => undefined,
     });
-    const appraise = tools.find((entry) => entry.name === 'commitment_appraise');
-    const appraiseResult = await appraise?.handler(
-      { id: 'c-none', appraisal: 'good' } as never,
-      {},
-    );
-    const appraiseReply = (appraiseResult?.content ?? [])
-      .map((b) => (b.type === 'text' ? b.text : ''))
-      .join('');
-    expect(appraiseReply).toBe('引き受けた仕事 c-none は台帳に無い。');
-
     const edit = tools.find((entry) => entry.name === 'commitment_edit');
     const editResult = await edit?.handler({ id: 'c-none', body: '書き換え' } as never, {});
     const editReply = (editResult?.content ?? [])
       .map((b) => (b.type === 'text' ? b.text : ''))
       .join('');
     expect(editReply).toBe('引き受けた仕事 c-none は台帳に無い。');
-  });
-});
-
-/**
- * `appraisal_stats`（#1278「評定の内訳を要るときに数える口が無い」）。
- *
- * `appraisal-stats.test.ts` が純関数（`tallyAppraisalDecisions` /
- * `computeJobAppraisalCoverage` / `computeAppraisalJournalStats`）を測っている
- * ので、ここで固定するのは**道具として正しく配線されていること**——ストアから
- * 読んだ値が文面に出ること、2つの印を混ぜないこと、`limit` に縛られず全期間の
- * 総数が出ることの3点である。
- */
-describe('appraisal_stats — 評定の内訳を数える道具（#1278）', () => {
-  it('日誌の decision 行（2つの印）と、終端した委譲の評定の有無を、混ぜずに返す', async () => {
-    const stores = createMemoryStores();
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c1）: good',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '引き受けた仕事に評定を付けた（c2）: bad — うまくいかなかった',
-      grounds: '',
-    });
-    await stores.journal.append({
-      type: 'decision',
-      decision: '委譲に評定を付けた（m1）: unclear',
-      grounds: '',
-    });
-    await stores.jobs.putJob({
-      id: 'm1',
-      createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-01T00:00:00.000Z',
-      status: 'done',
-      summary: '委譲1',
-      appraisal: 'unclear',
-    });
-    await stores.jobs.putJob({
-      id: 'm2',
-      createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-08-01T00:00:00.000Z',
-      status: 'stopped',
-      summary: '委譲2（manager_stop で畳まれ、評定は付いていない）',
-    });
-
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const stats = tools.find((entry) => entry.name === 'appraisal_stats');
-    expect(stats).toBeDefined();
-    const result = await stats?.handler({} as never, {});
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    // 台帳側の内訳（good 1 / bad 1）。
-    expect(reply).toContain('評定行 2 件');
-    expect(reply).toContain('うまくいった 1');
-    expect(reply).toContain('うまくいかなかった 1');
-    // 委譲側の内訳（unclear 1）は別の節に出る——2つが同じ数字の並びに
-    // 混ざっていないことを、節の見出しの間で確かめる。
-    const commitmentsSection = reply.slice(
-      reply.indexOf('引き受けた仕事'),
-      reply.indexOf('委譲（JOB_APPRAISAL_DECISION_PREFIX）'),
-    );
-    const jobsSection = reply.slice(reply.indexOf('委譲（JOB_APPRAISAL_DECISION_PREFIX）'));
-    expect(commitmentsSection).toContain('評定行 2 件');
-    expect(jobsSection).toContain('評定行 1 件');
-    expect(jobsSection).toContain('判定できない 1');
-
-    // 終端した委譲の評定の有無——stopped の m2 は評定なしとして数えられる。
-    expect(reply).toContain('done: 終端 1 件（評定あり 1 / 評定なし 0）');
-    expect(reply).toContain('stopped: 終端 1 件（評定あり 0 / 評定なし 1）');
-    expect(reply).toContain('評定なしが 1 件');
-  });
-
-  it('journal_read の limit=200 には縛られない——201件を超える decision 行でも総数が出る', async () => {
-    const stores = createMemoryStores();
-    for (let i = 0; i < 201; i += 1) {
-      await stores.journal.append({
-        type: 'decision',
-        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
-        grounds: '',
-      });
-    }
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const stats = tools.find((entry) => entry.name === 'appraisal_stats');
-    const result = await stats?.handler({} as never, {});
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-    expect(reply).toContain('評定行 201 件');
-  });
-
-  /**
-   * #2223 — 仕事の種類（`workKind`）ごとの内訳は自由文字列の種類数だけ行が増える
-   * ので、`describeAppraisalStats` の「固定個数だから予算は要らない」という
-   * 前提が崩れていた。この道具（MCP）の側だけに予算（`APPRAISAL_STATS_WORK_KIND_BUDGET`）
-   * を掛けたので、種類を大量に積んでも応答が溢れず、切ったら省略の断りが出る
-   * ことをここで固定する。
-   */
-  it('種類が大量にあっても応答は溢れず、切ったら省略の断りが出る（#2223）', async () => {
-    const stores = createMemoryStores();
-    const kindCount = 300;
-    // 予算を確実に超えるよう、種類名を長く・全部ユニークにする（最初の1件だけで
-    // 予算を超える形にはしない——`fillListingBudget` の「1件だけで予算を超える
-    // ときは切って出す」側を混ぜて測らないため）。
-    for (let i = 0; i < kindCount; i += 1) {
-      await stores.journal.append({
-        type: 'decision',
-        decision: `引き受けた仕事に評定を付けた（c${i}）: good`,
-        grounds: '',
-        appraisal: {
-          target: 'commitment',
-          id: `c${i}`,
-          value: 'good',
-          by: 'clone',
-          workKind: `種類${String(i).padStart(4, '0')}${'あ'.repeat(90)}`,
-        },
-      });
-    }
-    const tools = createCloneTools({
-      stores,
-      emit: () => undefined,
-      memoryCause: () => 'clone',
-      conversationId: () => undefined,
-    });
-    const stats = tools.find((entry) => entry.name === 'appraisal_stats');
-    const result = await stats?.handler({} as never, {});
-    const reply = (result?.content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-    // 母集団自体は全件数えている（総数は切れていない——切れるのは内訳の行のほう）。
-    expect(reply).toContain(`評定行 ${String(kindCount)} 件`);
-    // 応答全体は溢れず、予算（8,000）+ 他の節の分でおさまる。
-    expect(reply.length).toBeLessThan(12_000);
-    // 切ったので省略の断りと、続きを取る口が無いという事実が出る。
-    expect(reply).toContain('は省略');
-    expect(reply).toContain('続きを取る口はまだ無い');
-    // 先頭側（件数の多い順。全部同数なのでここでは先着順）は出ているが、
-    // 末尾は積みきれず落ちている。
-    expect(reply).toContain('種類0000');
-    expect(reply).not.toContain(`種類${String(kindCount - 1).padStart(4, '0')}`);
   });
 });
 
@@ -22175,75 +21793,6 @@ describe('説明文が実装のふるまいを数え直している箇所（#701
   });
 
   /**
-   * **Issue #2182: `manager_list` / `manager_report` に評定が出ていなかった。**
-   * `commitment_list` は `describeAppraisal(entry)` を1行足しているのに、
-   * 同じファイルの `manager_list` / `manager_report` には0件だった
-   * （grep で確かめた。`describeAppraisal` の doc「未評定なら `null`——
-   * 1文字も増やさない」という規則を、評定が在る回にも無い回にも確かめる）。
-   */
-  describe('manager_list / manager_report の評定（Issue #2182）', () => {
-    it('manager_list は評定が在る行に describeAppraisal の1行を足す', async () => {
-      const h = harness();
-      await h.call('manager_start', { request: 'A' });
-      const target = h.running[0]!;
-      target.appraisal = 'good';
-      target.appraisedBy = 'clone';
-
-      const reply = await h.call('manager_list', {});
-
-      expect(reply).toContain('評定: うまくいった（good・clone）');
-    });
-
-    it('manager_list は未評定の行に評定の行を足さない（1文字も増えない）', async () => {
-      const h = harness();
-      await h.call('manager_start', { request: 'A' });
-      // target.appraisal はセットしない（未評定のまま）。
-
-      const reply = await h.call('manager_list', {});
-
-      expect(reply, '未評定の行に「未評定」等の刷り込みも足さない').not.toContain('評定');
-    });
-
-    it('manager_report は評定が在る回に同じ1行を足す', async () => {
-      const h = harness();
-      await h.call('manager_start', { request: 'A' });
-      const target = h.running[0]!;
-      target.lastReport = '報告本文';
-      target.appraisal = 'bad';
-      target.appraisedBy = 'human';
-      target.appraisalReason = '手戻りが多かった';
-
-      const reply = await h.call('manager_report', { managerId: target.managerId });
-
-      expect(reply).toContain('評定: うまくいかなかった（bad・human）: 手戻りが多かった');
-    });
-
-    it('manager_report は未評定の回に評定の行を足さない', async () => {
-      const h = harness();
-      await h.call('manager_start', { request: 'A' });
-      const target = h.running[0]!;
-      target.lastReport = '報告本文';
-      // target.appraisal はセットしない。
-
-      const reply = await h.call('manager_report', { managerId: target.managerId });
-
-      expect(reply).not.toContain('評定');
-    });
-
-    it('manager_report は報告がまだ無い回でも、評定が在れば出す', async () => {
-      const h = harness();
-      await h.call('manager_start', { request: 'A' });
-      const target = h.running[0]!;
-      // target.lastReport はセットしない（「報告はまだ無い」の枝へ落ちる）。
-      target.appraisal = 'unclear';
-
-      const reply = await h.call('manager_report', { managerId: target.managerId });
-
-      expect(reply).toContain('評定: 判定できない（unclear）');
-    });
-  });
-
-  /**
    * **Issue #2183: `manager_report` に「配っていない報告の本数」が無いのに、
    * `manager_list` は manager_report を見るよう案内していた。**
    * `awaitingBackground` のとき、Web は `withheldReports` を出すが、
@@ -23037,32 +22586,6 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
       },
     },
     {
-      // **評定も日誌が書けなければ握り潰さずに throw する。** 行の側は「いまの値」
-      // しか持たないので、日誌が落ちると**前の評定がどこにも残らない** ——
-      // 較正の材料がそのまま消える（`writeAppraisal` の doc）。
-      tool: 'commitment_appraise',
-      firstLine: ACT_COMPLETED,
-      async run() {
-        const stores = failingJournalAppend(createMemoryStores(), 'boom-case-appraise');
-        await stores.commitments.open({
-          id: 'c-appraise-test',
-          at: '2026-01-01T00:00:00.000Z',
-          origin: 'self',
-          body: '評定する件',
-        });
-        const tools = createCloneTools({
-          stores,
-          emit: () => {},
-          memoryCause: () => 'clone',
-          conversationId: () => undefined,
-        });
-        return callExpectingError(tools, 'commitment_appraise', {
-          id: 'c-appraise-test',
-          appraisal: 'good',
-        });
-      },
-    },
-    {
       // **一括の口も、日誌が書けなければ握り潰さずに throw する。** 単票の
       // `commitment_close` と同じ性質だが、こちらは塊ごとに書くので
       // **「最初の塊で落ちる」が最初の append で起きる**（`failingJournalAppend`
@@ -23384,7 +22907,7 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
    * `SELF_JOURNALING_CLONE_TOOLS`（`archive_remove` / `archive_remove_many` は
    * どちらも #698 で加わった）から導いた期待値と突き合わせる。
    *
-   * `manager_send` / `manager_stop` / `manager_appraise` を除く理由: この3本は `ManagerPool` の
+   * `manager_send` / `manager_stop` を除く理由: この2本は `ManagerPool` の
    * ガード付き `#journal`（`clone.ts`）を通るので `appendJournalOrThrow` を
    * 呼ばない——`SELF_JOURNALING_CLONE_TOOLS` に載っているのは「自前で日誌へ
    * 書く」という性質の名簿であって、その書き方が `appendJournalOrThrow`
@@ -23394,9 +22917,9 @@ describe('journal.append 失敗時の応答本文: 呼び出し箇所すべて�
    * `SELF_JOURNALING_CLONE_TOOLS` に足されたとき、`CASES` にケースを
    * 足し忘れるとこの歯が「ケースが足りない」と言って赤くなる。
    */
-  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop / manager_appraise を除いたものと一致する', () => {
+  it('CASES の道具名の集合は、SELF_JOURNALING_CLONE_TOOLS から manager_send / manager_stop を除いたものと一致する', () => {
     const EXPECTED_TOOLS = SELF_JOURNALING_CLONE_TOOLS.filter(
-      (name) => name !== 'manager_send' && name !== 'manager_stop' && name !== 'manager_appraise',
+      (name) => name !== 'manager_send' && name !== 'manager_stop',
     );
     const actualTools = [...new Set(CASES.map((c) => c.tool))];
     expect(actualTools.sort()).toEqual([...EXPECTED_TOOLS].sort());

@@ -6,7 +6,6 @@ import { SectionTabs, type SectionTab } from './section-tabs';
 const WORK_TABS: SectionTab[] = [
   { to: '/commitments', label: '未了の仕事' },
   { to: '/progress', label: '作業の進捗' },
-  { to: '/appraisal-stats', label: '評定の内訳' },
 ];
 
 const SETTINGS_TABS: SectionTab[] = [

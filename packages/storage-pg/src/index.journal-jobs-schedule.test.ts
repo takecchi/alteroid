@@ -3,7 +3,6 @@ import {
   createManagerPool,
   createRunnerRegistry,
   scanJournalPages,
-  verifyCommitmentAppraisalContract,
   verifyCommitmentFoldContract,
   verifyJournalStoreHorizonContract,
   verifyJournalStoreOrderContract,
@@ -475,10 +474,6 @@ describe('PgJournalStore', () => {
   describe('order/after 契約（issue #432 の2本目）', () => {
     it('order 未指定=desc／asc は正確な逆順／after は絞り・limit より前に効く／同着を飛ばさない', async () => {
       await verifyJournalStoreOrderContract(stores.journal);
-    });
-
-    it('評定の契約（#1054。3実装で同じことを測る）', async () => {
-      await verifyCommitmentAppraisalContract(stores.commitments);
     });
 
     it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {

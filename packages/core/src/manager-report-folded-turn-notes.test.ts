@@ -79,13 +79,6 @@ function harness(): Harness {
     async vacate() {
       return {};
     },
-    async appraise(managerId: string) {
-      return {
-        outcome: 'absent' as const,
-        detail: `${managerId} というマネージャーは台帳に居ない。`,
-        previous: null,
-      };
-    },
     async abort(managerId: string) {
       const found = running.find((manager) => manager.managerId === managerId);
       if (!found) return { outcome: 'absent' as const, detail: '居ない' };

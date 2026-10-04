@@ -4,7 +4,7 @@ import type { CommitmentStore } from './store.js';
  * `CommitmentStore.open` の**畳み込み**の契約を、実装1つに対して測る（issue #1041）。
  *
  * **なぜ vitest に依存しない素の非同期関数にしてあるか。**
- * `commitment-appraisal-contract.ts` の doc と同じ理由 —— `packages/storage-fs` と
+ * `store-isolation-contract.ts` など他の契約と同じ理由 —— `packages/storage-fs` と
  * `packages/storage-pg` は `@alteroid/core` を実行時の依存として読むので、ここを
  * `expect` で書くとその依存を2パッケージへ持ち込むことになる。食い違ったら `throw`
  * する素の関数にして、呼ぶ側が好きな assertion 道具でラップする。

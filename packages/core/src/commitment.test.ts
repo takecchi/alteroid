@@ -12,7 +12,6 @@ import {
   hasOpenManagerDuplicate,
   isDaemonSelfNotice,
 } from './clone.js';
-import { verifyCommitmentAppraisalContract } from './commitment-appraisal-contract.js';
 import { verifyCommitmentFoldContract } from './commitment-fold-contract.js';
 import { verifyStoreIsolationContract } from './store-isolation-contract.js';
 import { buildActivityDigest } from './digest.js';
@@ -21,7 +20,6 @@ import { renderMemoryDocuments } from './memory.js';
 import { buildCloneSystemPrompt } from './prompt.js';
 import { createLocalRunner } from './runner-local.js';
 import { createRunnerRegistry } from './runner-protocol.js';
-import { describeAppraisal } from './schema.js';
 import type { ChatStreamEvent, Commitment, InboxEvent } from './schema.js';
 import type { Stores } from './store.js';
 import { captureStderr, createMemoryStores, humanMessage } from './testing.js';
@@ -2473,17 +2471,8 @@ describe('closedRedeliveryNotice の closedBy 4状態（人間が閉じた commi
   });
 });
 
-/**
- * 評定（#1054。自己改善の段1）。**契約そのものは `commitment-appraisal-contract.ts`
- * が持ち、3実装（インメモリ / fs / pg）が同じものを呼ぶ。** ここはインメモリ版
- * （`packages/core/src/testing.ts`）の呼び出し口である。
- */
-describe('台帳の評定', () => {
-  it('評定の契約（#1054。3実装で同じことを測る）', async () => {
-    const stores = createMemoryStores();
-    await verifyCommitmentAppraisalContract(stores.commitments);
-  });
-
+/** 台帳の契約（3実装が同じものを呼ぶ）。ここはインメモリ版（`packages/core/src/testing.ts`）の呼び出し口である。 */
+describe('台帳の契約（インメモリ）', () => {
   it('畳み込みの契約（#1041。3実装で同じことを測る。⚠ 名乗れるのはプロセス内で原子であることまで）', async () => {
     const stores = createMemoryStores();
     await verifyCommitmentFoldContract(stores.commitments);
@@ -2491,14 +2480,5 @@ describe('台帳の評定', () => {
 
   it('ストアが返す値は書いた側の握りと別物である（#1072。3実装で同じことを測る）', async () => {
     await verifyStoreIsolationContract(createMemoryStores());
-  });
-
-  it('未評定の行は字面を持たない（印が無いことが「まだ評定していない」である）', () => {
-    expect(describeAppraisal({})).toBeNull();
-  });
-
-  it('未知の値も落とさずにそのまま出す（未評定と区別が付かなくならないため）', () => {
-    // 保存層は `z.string()` で緩く持っているので、将来の書き手が増えた値が来うる。
-    expect(describeAppraisal({ appraisal: 'brilliant' })).toContain('brilliant');
   });
 });
