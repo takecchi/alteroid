@@ -57,6 +57,14 @@ import { makeTempDirSync } from '../../../vitest.tmpdir.js';
 export async function buildCloneToolRelayChildDistForTesting(
   tempDirPrefix: string,
 ): Promise<string> {
+  return join(await buildCoreDistForTesting(tempDirPrefix), 'clone-tool-relay-child.js');
+}
+
+/**
+ * 上と同じ build で、**全 entry の成果物**を一時ディレクトリへ出し、そのディレクトリを返す
+ * （`index.js` も入る。#2732: 束ねた後のモジュール評価順でしか起きない起動不能を測るため）。
+ */
+export async function buildCoreDistForTesting(tempDirPrefix: string): Promise<string> {
   const coreDir = fileURLToPath(new URL('..', import.meta.url));
   const configModule = (await import(new URL('../tsup.config.ts', import.meta.url).href)) as {
     default: TsupOptions & { entry: readonly string[] };
@@ -75,5 +83,5 @@ export async function buildCloneToolRelayChildDistForTesting(
     silent: true,
   });
 
-  return join(outDir, 'clone-tool-relay-child.js');
+  return outDir;
 }

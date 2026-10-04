@@ -396,7 +396,13 @@ export async function main(): Promise<void> {
     credentials,
     ...(peerOpening.host === undefined
       ? {}
-      : { peer: { host: peerOpening.host, peers: peerOpening.peers } }),
+      : {
+          peer: {
+            host: peerOpening.host,
+            peers: peerOpening.peers,
+            reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
+          },
+        }),
     profile,
     ...(childUser === undefined ? {} : { childUser }),
     /**

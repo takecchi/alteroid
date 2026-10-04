@@ -275,7 +275,9 @@ const EXPECTED_SITE_COUNT: Record<string, number> = {
   // ガードと同じ接頭辞を使う）。
   // + 1（issue #1105 C。`renotifyStalledDenials()` が知らせ直しを2回とも
   // 出し切ったときに1本、`EXCHANGE_KIND_THINNING_PREFIX` で書く）。
-  'manager.ts': 47,
+  // + 1（#486 S7。`case 'peer_usage'` が peer の消費を台帳へ積めなかったことを
+  // `EXCHANGE_KIND_FAILURE_PREFIX` で書く）。
+  'manager.ts': 48,
 };
 
 describe('type: exchange の書き込み全箇所が kind 接頭辞を持つ（issue #1332）', () => {

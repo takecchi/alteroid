@@ -68,21 +68,26 @@ describe('runner: MCP peer の登録', () => {
 
   it('peers が空なら何も足さず、token も発行しない', async () => {
     const host = fakePeerHost();
-    const options = await startWith({ host, peers: [] });
+    const options = await startWith({ host, peers: [], reportsUsage: () => true });
     expect(options.mcpServers).toBeUndefined();
     expect(host.tokens).toEqual([]);
   });
 
   it('自分の provider だけが peers にあるなら、足さない', async () => {
     const host = fakePeerHost();
-    const options = await startWith({ host, peers: ['claude'] });
+    const options = await startWith({ host, peers: ['claude'], reportsUsage: () => true });
     expect(options.mcpServers).toBeUndefined();
     expect(host.tokens).toEqual([]);
   });
 
   it('peers に codex があれば、使い捨て token つきの stdio MCP として足す', async () => {
     const host = fakePeerHost();
-    const options = await startWith({ host, peers: ['codex'], childEntry: '/app/relay.js' });
+    const options = await startWith({
+      host,
+      peers: ['codex'],
+      reportsUsage: () => true,
+      childEntry: '/app/relay.js',
+    });
     const servers = options.mcpServers as Record<string, Record<string, unknown>>;
     expect(Object.keys(servers)).toEqual([PEER_MCP_SERVER_NAME]);
     const entry = servers[PEER_MCP_SERVER_NAME]!;

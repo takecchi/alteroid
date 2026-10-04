@@ -31,7 +31,6 @@ import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
 import { CodexManagerDriver } from './codex-manager-driver.js';
-import { agentProviderOf } from './agent-provider-selection.js';
 import {
   CLONE_TOOL_RELAY_SOCKET_ENV,
   CLONE_TOOL_RELAY_TOKEN_ENV,
@@ -343,6 +342,12 @@ export interface RunnerPeerOptions {
   readonly host: PeerSocketHost;
   /** 呼んでよい provider（自分の層の provider は呼び出し側が除く必要は無い。セッションごとに除く）。 */
   readonly peers: readonly AgentProviderId[];
+  /**
+   * provider が消費を報告するか（`capabilities.usage`）。**呼び出し側（`apps/runner/src/index.ts`）が渡す**——
+   * ここで `agent-provider-selection.js` を import すると、バンドルのモジュール評価順が変わって
+   * 起動時に provider の表が未初期化になる（起動不能になった実例。#2732）。
+   */
+  readonly reportsUsage: (provider: AgentProviderId) => boolean;
   /** 中継の子（`clone-tool-relay-child`）の絶対パス。省略はビルド成果物から探す（テスト用の差し替え口）。 */
   readonly childEntry?: string;
 }
@@ -2490,7 +2495,7 @@ class RunnerSession {
         provider === 'codex'
           ? new CodexManagerDriver()
           : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
-      reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
+      reportsUsage: (provider) => this.#peer?.reportsUsage(provider) ?? true,
       onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
       onUsage: (report) =>
         this.#emit({
