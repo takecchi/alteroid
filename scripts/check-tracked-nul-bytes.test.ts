@@ -11,12 +11,7 @@ import { gitChildEnv } from './git-child-env.js';
 
 // prettier-ignore
 // @ts-expect-error -- 素の .mjs（型宣言を持たない build 用スクリプト）を読む
-import {
-  findNulByteHits,
-  isPngImage,
-  listScannableFiles,
-  NUL_CHAR,
-} from './check-tracked-nul-bytes-core.mjs';
+import { findNulByteHits, isPngImage, listScannableFiles, NUL_CHAR } from './check-tracked-nul-bytes-core.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 
