@@ -16,8 +16,10 @@
  * アプリの顔だから。背景は `styles.css` の `.dark` の `--background`（`oklch(0.165 0.022 272)`）で
  * **不透明**にする（iOS は透過を黒で塗る。maskable も端まで地で埋める必要がある）。
  */
+import { Buffer } from 'node:buffer';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
 
@@ -178,5 +180,5 @@ const TARGETS = [
 assertSvgMatches();
 for (const [name, size, fit] of TARGETS) {
   writeFileSync(path.join(PUBLIC, name), png(size, render(size, fit)));
-  console.log(`${name} ${size}x${size} fit=${fit}`);
+  process.stdout.write(`${name} ${size}x${size} fit=${fit}\n`);
 }
