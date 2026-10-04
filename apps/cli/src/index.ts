@@ -63,6 +63,7 @@ import { resetCommand } from './reset.js';
 import { launchTui, opensTuiByDefault } from './tui/launch.js';
 import { interruptCommand } from './interrupt.js';
 import { runnersCommand, runnersVacateCommand } from './runners.js';
+import { topologyCommand } from './topology.js';
 import {
   credentialListCommand,
   credentialRemoveCommand,
@@ -341,6 +342,21 @@ runnersProgram
   .argument('<runnerId>', '空ける runner の id（alteroid runners で見える）')
   .action(async (runnerId: string) => {
     await runnersVacateCommand(runnerId);
+  });
+
+/**
+ * 稼働の地図（クローン・記憶・runner・マネージャー・作業者と、線の最後の活動）。
+ *
+ * 経路は `GET /topology`（`--watch` は `GET /topology/stream`）の1本だけで、Web UI の
+ * 地図も同じものを見る（`apps/cli/src/topology.ts`）。
+ */
+program
+  .command('topology')
+  .description('稼働の地図（各層の状態と、指示・報告が最後にいつ流れたか）を見る')
+  .option('--json', '整形せず、デーモンが返した JSON をそのまま出す')
+  .option('--watch', '変化を追って描き直す（Ctrl-C で終わる。--json なら1行1スナップショット）')
+  .action(async (options: { json?: boolean; watch?: boolean }) => {
+    await topologyCommand(options);
   });
 
 /**

@@ -1,0 +1,286 @@
+import type { JournalEntry, ManagerSummary } from '@alteroid/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { topologyResponseSchema } from './openapi.js';
+import { createTopologyActivityTracker } from './topology-activity.js';
+import {
+  TOPOLOGY_ENDED_WINDOW_MS,
+  TOPOLOGY_MANAGERS_CHAR_BUDGET,
+  TOPOLOGY_REQUEST_LIMIT,
+  TOPOLOGY_WAITING_PER_MANAGER,
+  buildTopologySnapshot,
+  createStorageHealthTracker,
+  createTopologyService,
+  describeProbeError,
+  topologySignature,
+  type TopologyInputs,
+} from './topology.js';
+
+const NOW = Date.parse('2026-10-04T10:00:00.000Z');
+const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
+
+function manager(id: string, overrides: Partial<ManagerSummary> = {}): ManagerSummary {
+  return {
+    managerId: id,
+    status: 'running',
+    live: true,
+    cwd: '/work',
+    request: `依頼 ${id}`,
+    startedAt: iso(-60_000),
+    updatedAt: iso(-1_000),
+    waiting: [],
+    ...overrides,
+  } as ManagerSummary;
+}
+
+function inputs(overrides: Partial<TopologyInputs> = {}): TopologyInputs {
+  return {
+    nowMs: NOW,
+    turn: null,
+    usageBlocked: false,
+    storage: { state: 'unknown' },
+    runners: [],
+    managers: [],
+    activity: createTopologyActivityTracker(),
+    ...overrides,
+  };
+}
+
+describe('buildTopologySnapshot', () => {
+  it('組んだ結果は応答のスキーマを通る', () => {
+    const activity = createTopologyActivityTracker();
+    const snapshot = buildTopologySnapshot(
+      inputs({
+        activity,
+        turn: { conversationId: 'c1', kind: 'normal' },
+        storage: { label: 'fs', state: 'ok', checkedAt: iso(0) },
+        runners: [{ label: 'http://r', runnerId: 'r1', state: 'connected', since: iso(-5000) }],
+        managers: [
+          manager('m1', {
+            waiting: [
+              { requestId: 'q1', summary: 'どうしますか', kind: 'question', askedAt: iso(-100) },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(topologyResponseSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot.observedAt).toBe(iso(0));
+  });
+
+  describe('clone.state（取れないものを idle にしない）', () => {
+    it('ターンを答えられない器（activeTurn 未実装）は unknown', () => {
+      expect(buildTopologySnapshot(inputs({ turn: undefined })).clone).toEqual({
+        state: 'unknown',
+      });
+    });
+    it('答えられて走っていなければ idle、走っていれば busy とターン', () => {
+      expect(buildTopologySnapshot(inputs({ turn: null })).clone).toEqual({ state: 'idle' });
+      expect(buildTopologySnapshot(inputs({ turn: { kind: 'distill' } })).clone).toEqual({
+        state: 'busy',
+        turn: { kind: 'distill' },
+      });
+    });
+    it('枠で止まっていれば usage_blocked（答えられない器でも）', () => {
+      expect(buildTopologySnapshot(inputs({ turn: undefined, usageBlocked: true })).clone).toEqual({
+        state: 'usage_blocked',
+      });
+    });
+  });
+
+  describe('managers', () => {
+    it('走行中・返事待ちと、直近10分以内に終わったものだけを載せる', () => {
+      const snapshot = buildTopologySnapshot(
+        inputs({
+          managers: [
+            manager('run', { status: 'running' }),
+            manager('wait', { status: 'waiting_human' }),
+            manager('fresh-done', {
+              status: 'done',
+              updatedAt: iso(-TOPOLOGY_ENDED_WINDOW_MS + 1000),
+            }),
+            manager('old-done', {
+              status: 'done',
+              updatedAt: iso(-TOPOLOGY_ENDED_WINDOW_MS - 1000),
+            }),
+            manager('bad-time', { status: 'failed', updatedAt: 'not-a-date' }),
+          ],
+        }),
+      );
+      // 返事待ち → 走行中 → 終端 の順
+      expect(snapshot.managers.map((m) => m.managerId)).toEqual(['wait', 'run', 'fresh-done']);
+    });
+
+    it('request と返事待ちの summary は抜粋で、件数は上限で切って残りを言う', () => {
+      const long = 'あ'.repeat(TOPOLOGY_REQUEST_LIMIT * 3);
+      const waiting = Array.from({ length: TOPOLOGY_WAITING_PER_MANAGER + 3 }, (_, i) => ({
+        requestId: `q${String(i)}`,
+        summary: `質問\n${long}`,
+      }));
+      const [row] = buildTopologySnapshot(
+        inputs({ managers: [manager('m1', { request: long, status: 'waiting_human', waiting })] }),
+      ).managers;
+      expect(row?.request.length).toBeLessThanOrEqual(TOPOLOGY_REQUEST_LIMIT + 1);
+      expect(row?.request.endsWith('…')).toBe(true);
+      expect(row?.waiting).toHaveLength(TOPOLOGY_WAITING_PER_MANAGER);
+      expect(row?.waitingOmitted).toBe(3);
+      expect(row?.waiting[0]?.summary).not.toContain('\n');
+    });
+
+    it('文字数の予算を超えたら切って、切った件数を言う（1本目は必ず載せる）', () => {
+      const many = Array.from({ length: 400 }, (_, i) =>
+        manager(`m${String(i).padStart(3, '0')}`, {
+          request: 'x'.repeat(TOPOLOGY_REQUEST_LIMIT),
+          startedAt: iso(-i * 1000),
+        }),
+      );
+      const snapshot = buildTopologySnapshot(inputs({ managers: many }));
+      expect(snapshot.managers.length).toBeGreaterThan(0);
+      expect(snapshot.managers.length).toBeLessThan(400);
+      expect(snapshot.managersOmitted).toBe(400 - snapshot.managers.length);
+      expect(JSON.stringify(snapshot.managers).length).toBeLessThanOrEqual(
+        TOPOLOGY_MANAGERS_CHAR_BUDGET + 1000,
+      );
+      // 切っていないときは欄ごと無い
+      expect(
+        buildTopologySnapshot(inputs({ managers: many.slice(0, 2) })).managersOmitted,
+      ).toBeUndefined();
+    });
+  });
+
+  it('作業者は活動から束ね、載せていない委譲の線は返さない', () => {
+    const activity = createTopologyActivityTracker();
+    const at = iso(-2000);
+    const push = (e: unknown) => activity.record({ id: 'x', at, ...(e as object) } as JournalEntry);
+    push({
+      type: 'tool_use',
+      actor: 'manager:m1',
+      tool: 'Agent',
+      input: { subagent_type: 'worker' },
+    });
+    push({ type: 'tool_use', actor: 'worker:m1:worker', tool: 'Edit', input: {} });
+    push({ type: 'exchange', with: 'manager', role: 'outbound', text: 't', managerId: 'gone' });
+    push({ type: 'exchange', with: 'human', role: 'inbound', text: 'h' });
+    const snapshot = buildTopologySnapshot(inputs({ activity, managers: [manager('m1')] }));
+    expect(snapshot.managers[0]?.workers).toEqual([
+      { agentType: 'worker', lastTool: 'Edit', lastToolAt: at },
+    ]);
+    expect(snapshot.links.map((l) => l.key).sort()).toEqual([
+      'human~clone',
+      'manager:m1~worker:worker',
+    ]);
+  });
+
+  it('topologySignature は observedAt を除いて比べる', () => {
+    const a = buildTopologySnapshot(inputs({ nowMs: NOW }));
+    const b = buildTopologySnapshot(inputs({ nowMs: NOW + 5000 }));
+    expect(a.observedAt).not.toBe(b.observedAt);
+    expect(topologySignature(a)).toBe(topologySignature(b));
+    expect(topologySignature(buildTopologySnapshot(inputs({ turn: undefined })))).not.toBe(
+      topologySignature(a),
+    );
+  });
+});
+
+describe('createStorageHealthTracker', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('確かめる手段が無ければ常に unknown（ok を作らない）', async () => {
+    const tracker = createStorageHealthTracker({ label: 'fs', probe: undefined, now: Date.now });
+    expect(tracker.current()).toEqual({ label: 'fs', state: 'unknown' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(tracker.current()).toEqual({ label: 'fs', state: 'unknown' });
+  });
+
+  it('最初は unknown、確かめ終わると ok。間隔の内では聞き直さない', async () => {
+    const probe = vi.fn(async () => undefined);
+    const tracker = createStorageHealthTracker({
+      label: 'postgres',
+      probe,
+      now: Date.now,
+      intervalMs: 15_000,
+    });
+    expect(tracker.current().state).toBe('unknown'); // 背景で聞き始める
+    await vi.advanceTimersByTimeAsync(1);
+    expect(tracker.current().state).toBe('ok');
+    expect(tracker.current().checkedAt).toBeDefined();
+    await vi.advanceTimersByTimeAsync(10_000);
+    tracker.current();
+    expect(probe).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(6_000);
+    tracker.current();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it('失敗は unreachable。理由は種別だけで、接続先を載せない', async () => {
+    const probe = vi.fn(async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED 10.1.2.3:5432 user=secret'), {
+        code: 'ECONNREFUSED',
+      });
+    });
+    const tracker = createStorageHealthTracker({ label: 'postgres', probe, now: Date.now });
+    tracker.current();
+    await vi.advanceTimersByTimeAsync(1);
+    const state = tracker.current();
+    expect(state).toMatchObject({ state: 'unreachable', error: 'ECONNREFUSED' });
+    expect(JSON.stringify(state)).not.toContain('10.1.2.3');
+    expect(JSON.stringify(state)).not.toContain('secret');
+  });
+
+  it('打ち切り時間を超えたら unreachable（TIMEOUT）。呼び手は待たされない', async () => {
+    const tracker = createStorageHealthTracker({
+      label: undefined,
+      probe: () => new Promise<void>(() => undefined),
+      now: Date.now,
+      timeoutMs: 3000,
+    });
+    expect(tracker.current().state).toBe('unknown');
+    await vi.advanceTimersByTimeAsync(3001);
+    expect(tracker.current()).toMatchObject({ state: 'unreachable', error: 'TIMEOUT' });
+  });
+
+  it('describeProbeError は code → name → error の順で、危険な文字を含む値は採らない', () => {
+    expect(describeProbeError({ code: '57P01' })).toBe('57P01');
+    expect(describeProbeError(new TypeError('x'))).toBe('TypeError');
+    expect(describeProbeError({ code: 'a b://c' })).toBe('error');
+    expect(describeProbeError('boom')).toBe('error');
+  });
+});
+
+describe('createTopologyService', () => {
+  function service(list: () => Promise<ManagerSummary[]>, now: () => number) {
+    return createTopologyService({
+      clone: { usageBlocked: false, managers: { list } },
+      activity: createTopologyActivityTracker(),
+      storage: { current: () => ({ state: 'unknown' }) },
+      now,
+    });
+  }
+
+  it('既定は毎回組む。maxAgeMs を渡した周期の再計算だけが直近の結果を使い回す', async () => {
+    let clock = NOW;
+    const list = vi.fn(async () => []);
+    const svc = service(list, () => clock);
+    await svc.snapshot();
+    await svc.snapshot();
+    expect(list).toHaveBeenCalledTimes(2);
+
+    await svc.snapshot({ maxAgeMs: 1000 });
+    expect(list).toHaveBeenCalledTimes(2); // 直近（同時刻）の結果を使った
+    clock += 1500;
+    await svc.snapshot({ maxAgeMs: 1000 });
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it('activeTurn を実装していない clone は unknown、runners 未配線は空', async () => {
+    const snapshot = await service(
+      async () => [],
+      () => NOW,
+    ).snapshot();
+    expect(snapshot.clone.state).toBe('unknown');
+    expect(snapshot.runners).toEqual([]);
+    expect(snapshot.storage).toEqual({ state: 'unknown' });
+  });
+});
