@@ -178,13 +178,18 @@ describe('作業者の窓の外は、前景が返ったか・親が途中かで�
     expect(worker({ lastActivityAt: ago(1000) }, awaitingParent).status).toBe('running');
   });
 
-  it('(i) 前景の呼び出しが返った（lastUpAt が最後の活動以後）なら、親が途中でも仕事なし', () => {
-    expect(worker({ lastActivityAt: stale, lastUpAt: ago(10_000) }, {}).status).toBe('idle');
-    // 活動が一度も無く、結果だけ戻っている形も「返った」。
-    expect(worker({ lastUpAt: ago(10_000) }, {}).status).toBe('idle');
+  // 前景の呼び出しの開始は日誌に載らない。同じ種類をもう一度前景で呼んだ最初の道具の間は
+  // 「返った後」と同じ形に見えるので、返ったことを「仕事なし」の根拠にしない。
+  it('前景の呼び出しが返った（lastUpAt が最後の活動以後）後でも、親が途中なら仕事なしと言わず不明', () => {
+    expect(worker({ lastActivityAt: stale, lastUpAt: ago(10_000) }, {}).status).toBe('unknown');
+    expect(worker({ lastUpAt: ago(10_000) }, {}).status).toBe('unknown');
+    // 親が途中でなければ仕事なし。
+    expect(
+      worker({ lastActivityAt: stale, lastUpAt: ago(10_000) }, { status: 'done' }).status,
+    ).toBe('idle');
   });
 
-  it('(i) の裏: 最後の活動のほうが新しい（返った後にまた道具を使った）なら返ったとは言わず、親が途中なら不明', () => {
+  it('最後の活動のほうが新しい（返った後にまた道具を使った）ときも、親が途中なら不明', () => {
     expect(
       worker({ lastUpAt: ago(WORKER_RUNNING_WINDOW_MS + 120_000), lastActivityAt: stale }, {})
         .status,

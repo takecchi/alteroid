@@ -200,9 +200,13 @@ function managerDetails(manager: TopologySnapshotManager, nowMs: number): SceneD
  * **開始**は daemon に届かない（#2725）。だから窓の外は2つに割れる。
  *
  * - 窓の中 → 実行中
- * - 窓の外で、前景の呼び出しが返った（`lastUpAt` が最後の活動以後）→ 仕事なし
  * - 窓の外で、親が途中 → **不明**（長い道具の実行中か、終わったかを区別できない）
  * - 窓の外で、親が途中でない → 仕事なし
+ *
+ * **前景の呼び出しが返った（`lastUpAt` が最後の活動以後）ことを「仕事なし」の根拠にしない。**
+ * 前景の呼び出しの開始は日誌に載らない（`apps/daemon/src/topology-activity.ts` の doc）ので、
+ * 同じ種類の作業者をもう一度前景で呼んだとき、最初の道具が終わるまでは「返った後」と
+ * 同じ形に見える。親が途中なら、返った後でも不明と言う。
  */
 function workerStatus(
   link: Link | undefined,
@@ -210,12 +214,6 @@ function workerStatus(
   nowMs: number,
 ): SceneStatus {
   if (within(link?.lastActivityAt, nowMs, WORKER_RUNNING_WINDOW_MS)) return 'running';
-  const up = link?.lastUpAt === undefined ? Number.NaN : Date.parse(link.lastUpAt);
-  if (!Number.isNaN(up)) {
-    const activity =
-      link?.lastActivityAt === undefined ? Number.NaN : Date.parse(link.lastActivityAt);
-    if (Number.isNaN(activity) || up >= activity) return 'idle';
-  }
   return isInProgress(manager) ? 'unknown' : 'idle';
 }
 
