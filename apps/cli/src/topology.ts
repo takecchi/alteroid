@@ -251,7 +251,9 @@ async function watchTopology(
       });
     } catch (error) {
       if (controller.signal.aborted) return;
-      throw new Error(`稼働の地図の購読: デーモンに繋がりません（${redactError(String(error))}）`);
+      throw new Error(`稼働の地図の購読: デーモンに繋がりません（${redactError(String(error))}）`, {
+        cause: error,
+      });
     }
     if (!response.ok || response.body === null) {
       const described = describeAuthFailure(response.status, target);
@@ -274,7 +276,9 @@ async function watchTopology(
       }
     } catch (error) {
       if (controller.signal.aborted) return;
-      throw new Error(`稼働の地図の購読: 接続が切れました（${redactError(String(error))}）`);
+      throw new Error(`稼働の地図の購読: 接続が切れました（${redactError(String(error))}）`, {
+        cause: error,
+      });
     }
     if (!controller.signal.aborted) {
       throw new Error('稼働の地図の購読: デーモンが接続を閉じました');

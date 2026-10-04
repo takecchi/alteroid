@@ -177,8 +177,7 @@ export function buildTopologySnapshot(input: TopologyInputs): TopologySnapshot {
  * 再送しない**ための比較に使う。
  */
 export function topologySignature(snapshot: TopologySnapshot): string {
-  const { observedAt: _observedAt, ...rest } = snapshot;
-  return JSON.stringify(rest);
+  return JSON.stringify({ ...snapshot, observedAt: undefined });
 }
 
 // ---------------------------------------------------------------------------
