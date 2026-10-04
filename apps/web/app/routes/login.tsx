@@ -61,7 +61,7 @@ export default function Login() {
  */
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-dvh items-center justify-center p-6">
+    <div className="flex min-h-dvh items-center justify-center p-6 pt-[calc(1.5rem+var(--safe-top))] pb-[calc(1.5rem+var(--safe-bottom))]">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <p className="font-mono text-lg font-semibold tracking-tight">alteroid</p>
