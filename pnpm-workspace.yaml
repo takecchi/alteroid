@@ -15,7 +15,7 @@ catalog:
   prettier: ^3.9.6
   # CI の実行系（Node 22）に合わせる
   '@types/node': ^22.20.1
-  '@anthropic-ai/claude-agent-sdk': ^0.3.288
+  '@anthropic-ai/claude-agent-sdk': ^0.3.289
   # codex app-server（#486 M7 S6）。**exact 版で固定**する（`^` を付けない）。生成スキーマ
   # （packages/core/codex-schema/<版>/）と手書き型 packages/core/src/codex-protocol.ts は
   # この版のものと突き合わせてあり、版が動くとプロトコルも動く。上げるときは
