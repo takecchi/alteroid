@@ -87,7 +87,11 @@ export function Page({
       <div
         ref={scrollRef}
         className={cn(
-          'min-h-0 flex-1 overflow-y-auto p-4 pb-[calc(1rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:p-6 md:pb-[calc(1.5rem+var(--safe-bottom))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
+          // **`relative` は外せない**（body が余計にスクロールする不具合の原因を塞ぐ）。
+          // 本文の中の `sr-only`（`position: absolute`）は、祖先に位置の基準が無いと初期の
+          // 包含ブロック（文書）へ付き、本文を流した位置のぶんだけ文書の下に1px 要素が残って
+          // body がスクロールする。この枠を基準にすれば、枠の `overflow` の中へ閉じる。
+          'relative min-h-0 flex-1 overflow-y-auto p-4 pb-[calc(1rem+var(--safe-bottom))] pl-[calc(1rem+var(--safe-left))] pr-[calc(1rem+var(--safe-right))] md:p-6 md:pb-[calc(1.5rem+var(--safe-bottom))] md:pl-[calc(1.5rem+var(--safe-left))] md:pr-[calc(1.5rem+var(--safe-right))]',
           className,
         )}
       >

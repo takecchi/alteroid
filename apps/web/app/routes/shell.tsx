@@ -235,8 +235,12 @@ function AuthedShell() {
         会話の画面）は自分の中で縦に分けて内側だけを流す作りなので、外側の高さが
         決まっていないと「画面の高さ」を持てない。合わせて `main` を潰れる側
         （`min-h-0`）にしておく。
+        **`overflow-hidden` も外さない。** この枠がちょうど viewport の高さなので、はみ出した
+        ものは body をスクロールさせるだけで、見えるものは何も無い（サイドバーの下に空白が
+        出る。`page.tsx` の本文の `relative` が一次の原因）。はみ出しの再発の保険として、
+        body がスクロールしない形を枠そのものに持たせる。
       */}
-      <div className={cn('flex h-dvh', isMobile ? 'flex-col' : 'flex-row')}>
+      <div className={cn('flex h-dvh overflow-hidden', isMobile ? 'flex-col' : 'flex-row')}>
         {isMobile ? (
           <>
             <MobileTopBar

@@ -59,3 +59,15 @@ describe('Page の横向き safe-area inset（本4）', () => {
     expect(classes).toContain('pb-[calc(1rem+var(--safe-bottom))]');
   });
 });
+
+describe('Page の本文は位置の基準になる（body がスクロールしない）', () => {
+  it('本文のスクロール領域が relative と overflow-y-auto を持つ（クラス名の存在のみ。jsdom は配置を測れない）', () => {
+    render(
+      <Page title="見出し">
+        <p data-testid="inner">本文</p>
+      </Page>,
+    );
+    const scroller = screen.getByTestId('inner').parentElement!;
+    expect(classesOf(scroller)).toEqual(expect.arrayContaining(['relative', 'overflow-y-auto']));
+  });
+});

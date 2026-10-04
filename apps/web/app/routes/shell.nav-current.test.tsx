@@ -204,3 +204,22 @@ describe('サイドバーのまとまり', () => {
     ]);
   });
 });
+
+describe('外枠が viewport ちょうどに収まる（body がスクロールしない）', () => {
+  it.each([
+    ['デスクトップ幅', DEFAULT_VIEWPORT_WIDTH],
+    ['モバイル幅', 500],
+  ])(
+    '%s: 外枠は h-dvh と overflow-hidden を持ち、min-h では伸びない（クラス名の存在のみ）',
+    async (_n, width) => {
+      setViewportWidth(width);
+      renderShellAt('/');
+
+      const content = await screen.findByText('ダッシュボードの中身');
+      const frame = content.closest('main')!.parentElement!;
+      const classes = frame.className.split(/\s+/);
+      expect(classes).toEqual(expect.arrayContaining(['h-dvh', 'overflow-hidden']));
+      expect(classes.some((c) => c.startsWith('min-h-'))).toBe(false);
+    },
+  );
+});
