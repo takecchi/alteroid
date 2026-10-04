@@ -161,7 +161,7 @@ function Home({
         <div
           className={
             wide
-              ? 'grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start gap-4'
+              ? 'grid grid-cols-[minmax(0,1fr)_24rem] items-start gap-4'
               : 'flex min-w-0 flex-col gap-4'
           }
         >

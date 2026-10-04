@@ -19,8 +19,10 @@ const SIDE_BY_SIDE_MIN_WIDTH = 1280;
  * ホーム（`/`）。役割は「**いま動いているか・何をしているか・自分を待っているものは何か**」。
  *
  * 1. **稼働の地図**（`dashboard-map.tsx`）と **承認待ち一覧**（`dashboard-awaiting.tsx`）
- *    - 広い画面（`xl` 以上）: **地図が左・一覧が右の横並び**。地図は横幅を使う部品なので広く
- *      （3:2）、一覧は承認の質問を2行で畳む行なので 2 で足りる
+ *    - 広い画面（`xl` 以上）: **地図が左・一覧が右の横並び**。**一覧を 24rem の固定幅**（承認の
+ *      質問を2行で畳む行なので足りる）にして、残りを全部地図へ渡す（地図は横幅を使う部品）。
+ *      地図は枠の幅で配置を替える（`SystemTopology`: 920px 以上で横、未満で縦の木。上限あり）。
+ *      比率（3:2 など）にしないのは、広い画面で一覧だけが間延びするため
  *    - それより狭い画面: 縦積みで **承認待ち一覧が上**（人間が手を動かすものを先に）
  * 2. **最新の日報**（`dashboard-report.tsx`）—— 全幅の枠で、本文を Markdown で読ませる。
  *    主役のひとつだが、地図・承認待ちの下に置く（それらは「いま」の状態、日報は読み物。上の段の
@@ -52,7 +54,7 @@ export default function Dashboard() {
           <div
             data-testid="home-main"
             data-layout="side-by-side"
-            className="grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start gap-4"
+            className="grid grid-cols-[minmax(0,1fr)_24rem] items-start gap-4"
           >
             <LiveMap />
             <AwaitingYou />
