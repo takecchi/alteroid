@@ -59,6 +59,9 @@
   - 「要件を担う能力」の機械可読な一覧は `agent-ports.ts` の `REQUIREMENT_BEARING_CAPABILITIES` が持つ。**要件の出所は PRD であって、こちらは写しである**（増減は PRD 側で決まる）
   - **クローン層の provider は Claude を推奨する**（Codex では承認と蒸留の2つが欠ける。欠けは日誌・日報・`self_status` に出る。既定の claude は変えない。要件は PRD「provider」）
   - **相互呼び出しの口**（要件は PRD「provider」）: マネージャー層は alteroid の MCP `peer`（`peer_run` / `peer_reply`）で、クローン層は `manager_start` の `provider` 引数で、もう一方の provider を呼ぶ。見えるのは人間が `ALTEROID_<層>_PEERS` で開けた provider だけで、空なら道具ごと出さない。**Codex の層のモデルは人間の設定で決まり、指定が無ければ Codex の既定のモデルである**（alteroid は選ばない）
+  - **マネージャー層の `peer` の経路**（S7）: 道具は runner が持つ（`peer-broker.ts`）。マネージャーの子プロセス（別 UID）は、MCP の stdio 子（`clone-tool-relay-child`。バイトを流すだけ）経由で、**runner が `ALTEROID_MANAGER_PEERS` が開いているときだけ作る peer 専用ソケット**（`/run/alteroid/peer/peer.sock`。持ち主は子の UID・0600、置き場所は 0711）へ繋ぐ。**守りの本体はセッションごとの使い捨て token**（32 バイトの乱数・接続1回で失効・30 秒で期限切れ。不一致は即切断）で、**同じ子 UID の別プロセス（作業者）からもソケット自体には届く**。このソケットの向こうにあるのは `peer_run` / `peer_reply` だけで、**制御面のソケットと合鍵には、これまでどおり子の UID から届かない**。PEERS が空ならソケットも道具も出さない
+  - **peer のセッションの承認は、上げずに全部拒否する**（Claude は deny、Codex は decline。素通しにしない）。peer のセッションは「確認なしで勝手に動かない」構えで起こす（Claude は `default` モード、Codex は `untrusted`）ので、実質は読み取り・調査・レビュー・相談の相手になる。拒否した件数と道具名は `peer_run` / `peer_reply` の結果と日誌の note に出る。**承認を出所の印つきでクローンへ上げる形は、後の段で足す**（出所の欄が要る）
+  - **peer の消費は台帳の `site: 'peer'`（層は `manager`）に積む。** runner が peer セッションごとの基準で1ターンの増分にして降ろし（`peer_usage`）、デーモンが基準を持たずに積む。消費を報告しない provider は 0 を積まず「取れなかった」として数える
   - **境界は2つ要る。** マネージャーと作業者は1ターンぶんのストリームで足りるが、**クローンは自作の道具をインプロセス MCP（SDK の機能）で持っている**ので、道具を stdio MCP サーバへ外へ出すまで中立の口を作れない。無理に中立の顔を被せると SDK の型が `agent-ports.ts` へ漏れ、`queryFn` を別名で作り直すだけになる
 
 ## プロセス境界 — なぜ manager-runner を分けるか

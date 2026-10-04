@@ -234,6 +234,7 @@ function setup(
     script?: FakeAppServer['script'];
     closeGraceMs?: number;
     mcpServers?: Record<string, unknown>;
+    strictApprovals?: boolean;
   } = {},
 ): Harness {
   const server = new FakeAppServer();
@@ -249,6 +250,7 @@ function setup(
     model: 'opus',
     ...(options.modelPlaced === undefined ? {} : { modelPlaced: options.modelPlaced }),
     permissionMode: options.permissionMode ?? 'auto',
+    ...(options.strictApprovals === undefined ? {} : { strictApprovals: options.strictApprovals }),
     systemPromptAppend: 'あなたはマネージャー',
     workerAgentName: 'worker',
     workerPrompt: 'w',
@@ -369,6 +371,17 @@ describe('CodexManagerDriver: 起動・認証・thread', () => {
     });
     // 入力が尽きたら子を止める
     expect(h.server.kills).toEqual(['SIGTERM']);
+  });
+
+  it('strictApprovals（peer のセッション）は、bypassPermissions でも untrusted にする', async () => {
+    const h = setup({
+      env: { CODEX_API_KEY: FAKE_KEY },
+      permissionMode: 'bypassPermissions',
+      strictApprovals: true,
+    });
+    h.feed.end();
+    await h.run();
+    expect(h.server.paramsOf('thread/start')[0]!['approvalPolicy']).toBe('untrusted');
   });
 
   it('モデルは人間が置いたときだけ渡す。bypassPermissions は never', async () => {

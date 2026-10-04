@@ -186,6 +186,12 @@ export interface AgentManagerSessionSpec {
    */
   modelPlaced?: boolean;
   permissionMode: PermissionModeName;
+  /**
+   * 確認なしで勝手に動かない構えで起こす（peer のセッション。#486 S7）。
+   * **駆動役が `permissionMode` より優先して守る**: Claude は `default`、Codex は `untrusted`
+   * （信頼済みの読み取り以外は確認へ上げる。確認は `onPermission` が答える）。省略は偽（今日と同じ）。
+   */
+  strictApprovals?: boolean;
   systemPromptAppend: string;
   workerAgentName: string;
   workerPrompt: string;

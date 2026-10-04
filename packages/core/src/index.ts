@@ -794,6 +794,7 @@ export {
   type RunnerChildUser,
   type RunnerHost,
   type RunnerHostOptions,
+  type RunnerPeerOptions,
 } from './runner.js';
 export { createLocalRunner, type LocalRunnerOptions } from './runner-local.js';
 /**
@@ -1354,3 +1355,13 @@ export {
   PEER_TOKEN_TIMEOUT_MS,
   type PeerSocketHost,
 } from './peer-socket-host.js';
+export {
+  createPeerBroker,
+  PEER_MCP_SERVER_NAME,
+  PEER_SYSTEM_PROMPT_APPEND,
+  PEER_TOOL_NAMES,
+  type PeerBroker,
+  type PeerBrokerDeps,
+  type PeerTurnResult,
+  type PeerUsageReport,
+} from './peer-broker.js';

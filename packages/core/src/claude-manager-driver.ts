@@ -86,7 +86,7 @@ export class ClaudeManagerDriver implements AgentManagerDriver {
     const spawnProcess = spec.spawnProcess;
     const options = buildManagerSessionOptions({
       model: spec.model,
-      permissionMode: spec.permissionMode,
+      permissionMode: spec.strictApprovals === true ? 'default' : spec.permissionMode,
       systemPromptAppend: spec.systemPromptAppend,
       workerAgentName: spec.workerAgentName,
       workerPrompt: spec.workerPrompt,

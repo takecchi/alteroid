@@ -132,6 +132,17 @@ function usageRunner() {
 
   return {
     runner,
+    peerUsage(models: Record<string, UsageTotals>, extra: { unmetered?: boolean } = {}): void {
+      if (emit === null) throw new Error('connect されていない');
+      emit({
+        type: 'peer_usage',
+        managerId: 'mgr-tok',
+        provider: 'codex',
+        sessionId: 'thr-1',
+        models,
+        ...extra,
+      } as unknown as RunnerEvent);
+    },
     /** 累積スナップショットを1つ降ろす（本物の runner が SSE で流すのと同じ形）。 */
     usage(models: Record<string, UsageTotals>): void {
       if (emit === null) throw new Error('connect されていない（名乗る前に流している）');
@@ -246,6 +257,33 @@ describe('マネージャーの消費に認証トークンの帰属が付く（#
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tokenId).toBe('tok-a');
 
+    await s.pool.stop();
+  });
+});
+
+describe('peer の消費（#486 S7）', () => {
+  it('site=peer・層 manager で、増分のまま積む。マネージャー本体（session）の行とは別になる', async () => {
+    const stores = createMemoryStores();
+    const s = await setup({ stores });
+    s.fake.peerUsage({ 'gpt-5': totals({ inputTokens: 100, outputTokens: 10 }) });
+    s.fake.peerUsage({ 'gpt-5': totals({ inputTokens: 50 }) });
+    await expect
+      .poll(async () => (await rowsOf(stores))[0]?.totals.inputTokens, { timeout: 2000 })
+      .toBe(150);
+    const rows = await rowsOf(stores);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ layer: 'manager', site: 'peer', managerId: 'mgr-tok' });
+    await s.pool.stop();
+  });
+
+  it('消費を報告しない provider は 0 を積まず、取れなかったターンとして数える', async () => {
+    const stores = createMemoryStores();
+    const s = await setup({ stores });
+    s.fake.peerUsage({}, { unmetered: true });
+    await expect
+      .poll(async () => (await stores.usage.aggregate({})).unmeteredRows?.length, { timeout: 2000 })
+      .toBe(1);
+    expect(await rowsOf(stores)).toHaveLength(0);
     await s.pool.stop();
   });
 });

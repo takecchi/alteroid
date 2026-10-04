@@ -31,6 +31,19 @@ import { inspectBashCommand } from './bash-wait-guard.js';
 import { cgroupEventsDeltaOf } from './cgroup-events.js';
 import { ClaudeManagerDriver, type ClaudeQueryFn } from './claude-manager-driver.js';
 import { CodexManagerDriver } from './codex-manager-driver.js';
+import { agentProviderOf } from './agent-provider-selection.js';
+import {
+  CLONE_TOOL_RELAY_SOCKET_ENV,
+  CLONE_TOOL_RELAY_TOKEN_ENV,
+} from './clone-tool-relay-protocol.js';
+import { resolveCloneToolRelayChildEntry } from './clone-tools-transport.js';
+import {
+  createPeerBroker,
+  PEER_MCP_SERVER_NAME,
+  PEER_SYSTEM_PROMPT_APPEND,
+  type PeerBroker,
+} from './peer-broker.js';
+import type { PeerSocketHost } from './peer-socket-host.js';
 import type {
   AgentChildProcess,
   AgentManagerDriver,
@@ -325,6 +338,15 @@ export function resolveManagerAutoMemoryEnabled(env: NodeJS.ProcessEnv): boolean
  */
 const LEASE_WATCH_INTERVAL_MS = 10_000;
 
+/** マネージャーの MCP `peer`（#486 S7）を出すための材料。 */
+export interface RunnerPeerOptions {
+  readonly host: PeerSocketHost;
+  /** 呼んでよい provider（自分の層の provider は呼び出し側が除く必要は無い。セッションごとに除く）。 */
+  readonly peers: readonly AgentProviderId[];
+  /** 中継の子（`clone-tool-relay-child`）の絶対パス。省略はビルド成果物から探す（テスト用の差し替え口）。 */
+  readonly childEntry?: string;
+}
+
 export interface RunnerHostOptions {
   /** 安定した識別子。デーモンが `manager_id → runner_id` を台帳に残す。 */
   runnerId: string;
@@ -342,6 +364,12 @@ export interface RunnerHostOptions {
    * `ALTEROID_MANAGER_PROVIDER` から解いた値を渡し、`hello.managerProvider` と同じ値になる。
    */
   managerProvider?: AgentProviderId;
+  /**
+   * マネージャーが MCP `peer` で呼べるもう一方の provider（#486 S7。`ALTEROID_MANAGER_PEERS`）。
+   * **省略（または peers が空）なら、道具もソケットも一切出さない**（今日と1文字も変わらない）。
+   * `host` は runner が開いた peer 専用ソケット（`peer-socket-host.ts`）。
+   */
+  peer?: RunnerPeerOptions;
   /** `WITHHELD_ENV_KEYS` に足して伏せる鍵。 */
   withheldEnvKeys?: readonly string[];
   /** SDK 子プロセスを別 UID で走らせる（コンテナ構成の既定）。 */
@@ -609,6 +637,7 @@ class Host implements RunnerHost {
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
+  readonly #peer: RunnerPeerOptions | undefined;
   /**
    * 実行環境プロファイル。
    *
@@ -669,6 +698,7 @@ class Host implements RunnerHost {
     this.#env = options.env ?? process.env;
     this.#withheldEnvKeys = [...WITHHELD_ENV_KEYS, ...(options.withheldEnvKeys ?? [])];
     this.#childUser = options.childUser;
+    this.#peer = options.peer;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode ?? resolvePermissionMode(this.#env);
     this.#enforceLease = options.enforceLease ?? false;
@@ -957,6 +987,7 @@ class Host implements RunnerHost {
       ...(this.#childUser === undefined ? {} : { childUser: this.#childUser }),
       ...(this.#credentials === undefined ? {} : { credentials: this.#credentials }),
       permissionMode: this.#permissionMode,
+      ...(this.#peer === undefined ? {} : { peer: this.#peer }),
       profileEnv: () => this.#profile?.env() ?? {},
       mcpServers: () => this.#mcpServers?.servers,
       onClosed: () => this.#sessions.delete(managerId),
@@ -1513,6 +1544,8 @@ interface RunnerSessionOptions {
    * 降りた登録が、そのセッションの resume・開き直しにも届かない。
    */
   mcpServers: () => McpServers | undefined;
+  /** `RunnerHostOptions.peer` と同じ。 */
+  peer?: RunnerPeerOptions;
   onClosed: () => void;
   /**
    * 委譲の Claude Code プロセス（`spawnClaudeCodeProcess`）が起きた／終わった
@@ -1628,6 +1661,11 @@ class RunnerSession {
   readonly #childUser: RunnerChildUser | undefined;
   readonly #credentials: CredentialStore | undefined;
   readonly #permissionMode: ManagerPermissionMode;
+  readonly #peer: RunnerPeerOptions | undefined;
+  /** MCP `peer` の仲買（最初に要ったときに1度だけ作る）。 */
+  readonly #provider: AgentProviderId;
+  readonly #queryFn: ClaudeQueryFn | undefined;
+  #peerBroker: PeerBroker | undefined;
   readonly #profileEnv: () => Record<string, string>;
   readonly #mcpServers: () => McpServers | undefined;
   readonly #onClosed: () => void;
@@ -1898,6 +1936,9 @@ class RunnerSession {
     this.#env = options.env;
     this.#withheldEnvKeys = options.withheldEnvKeys;
     this.#childUser = options.childUser;
+    this.#peer = options.peer;
+    this.#provider = options.managerProvider ?? DEFAULT_AGENT_PROVIDER_ID;
+    this.#queryFn = options.queryFn;
     this.#credentials = options.credentials;
     this.#permissionMode = options.permissionMode;
     this.#profileEnv = options.profileEnv;
@@ -2266,6 +2307,7 @@ class RunnerSession {
     this.#settleAll(reason);
     this.#workerTools.settleAll();
     this.#sdkSession.wakeInput();
+    this.#peerBroker?.closeAll();
     this.#sdkSession.closeQuery();
     // **Issue #1533。生ログの送り出しと報告を、CLI の読み手（`#reader`）が
     // 終わるまで待ってから出す。** 以前はここが `query.close()` の前にあり、
@@ -2404,7 +2446,91 @@ class RunnerSession {
     this.#sdkSession.open(session, this.#read(session, generation));
   }
 
-  #buildSpec(resume?: string): AgentManagerSessionSpec {
+  /**
+   * MCP `peer` の登録（stdio。中継の子 `clone-tool-relay-child` を起こして peer 専用ソケットへ繋ぐ）。
+   * **使い捨ての token をここで発行する**（開くたびに1本。接続1回で失効）。無ければ `undefined`。
+   *
+   * 呼べる provider は、PEERS から**このセッション自身の provider を除いたもの**である
+   * （`isPeerAllowed` と同じ線）。空なら何も出さない。
+   * 中継の子の成果物が見つからないときは、マネージャーの起動を止めずに note で言う（静かに消さない）。
+   */
+  #peerMcpEntry(): McpServers[string] | undefined {
+    const peer = this.#peer;
+    if (peer === undefined) return undefined;
+    const allowed = peer.peers.filter((provider) => provider !== this.#provider);
+    if (allowed.length === 0) return undefined;
+    let childEntry: string;
+    try {
+      childEntry = peer.childEntry ?? resolveCloneToolRelayChildEntry(import.meta.url);
+    } catch (error) {
+      this.#emit({
+        type: 'note',
+        managerId: this.#id,
+        text: `MCP peer を出せなかった（中継の子が見つからない）: ${reasonOf(error)}`,
+      });
+      return undefined;
+    }
+    const broker = (this.#peerBroker ??= this.#createPeerBroker(allowed));
+    const token = peer.host.register(() => broker.mcpServer().instance);
+    return {
+      type: 'stdio',
+      command: process.execPath,
+      args: [childEntry],
+      env: {
+        [CLONE_TOOL_RELAY_SOCKET_ENV]: peer.host.socketPath,
+        [CLONE_TOOL_RELAY_TOKEN_ENV]: token,
+      },
+    };
+  }
+
+  #createPeerBroker(allowed: readonly AgentProviderId[]): PeerBroker {
+    return createPeerBroker({
+      allowed,
+      driverOf: (provider) =>
+        provider === 'codex'
+          ? new CodexManagerDriver()
+          : new ClaudeManagerDriver(this.#queryFn === undefined ? {} : { queryFn: this.#queryFn }),
+      reportsUsage: (provider) => agentProviderOf(provider).capabilities.usage,
+      onNote: (text) => this.#emit({ type: 'note', managerId: this.#id, text }),
+      onUsage: (report) =>
+        this.#emit({
+          type: 'peer_usage',
+          managerId: this.#id,
+          provider: report.provider,
+          ...(report.sessionId === undefined ? {} : { sessionId: report.sessionId }),
+          models: report.models,
+          ...(report.unmetered ? { unmetered: true } : {}),
+        }),
+      makeSpec: (_provider, parts) => ({
+        // cwd・env・子プロセスの起こし方・人間の MCP 連携（peer 自身は除く）はマネージャーと同じ。
+        ...this.#buildSpec(undefined, true),
+        input: parts.input,
+        // **alteroid はモデルを選ばない**: Claude は既定の帯、Codex は Codex の既定（置かれたモデルは
+        // ホストの provider のものなので、peer には効かせない）。
+        model: resolveManagerModel({}),
+        modelPlaced: false,
+        workerModel: resolveWorkerModel({}),
+        // **承認は全部拒否する**（`peer-broker.ts` の doc）。素通しにしない。
+        permissionMode: 'default',
+        strictApprovals: true,
+        systemPromptAppend: PEER_SYSTEM_PROMPT_APPEND,
+        // peer の生ログは預けない（マネージャーの生ログと混ぜない）。
+        sessionLog: { append: async () => undefined, load: async () => null },
+        onPermission: parts.onPermission,
+        onNote: parts.onNote,
+        onPreToolUse: () => ({ kind: 'continue' }),
+        onPermissionDenied: async () => ({ kind: 'no-retry' }),
+        onPostToolUse: () => ({ kind: 'continue' }),
+        onPostToolUseFailure: () => undefined,
+        onPreCompact: () => undefined,
+        onUserPromptSubmit: () => undefined,
+        onSubagentStop: () => ({ kind: 'continue' }),
+        onStop: () => undefined,
+      }),
+    });
+  }
+
+  #buildSpec(resume?: string, forPeer = false): AgentManagerSessionSpec {
     return {
       input: this.#inputStream(),
       // 既定は `opus`。人間が `ALTEROID_MANAGER_MODEL` に置いていればそれを使う
@@ -2437,8 +2563,12 @@ class RunnerSession {
       // 人間の MCP 連携の登録（#325 段3）。**開くたびに読む** —— 走行中に降りた登録は
       // このセッションには届かないが、次の resume・開き直しからは効く。
       ...(() => {
-        const mcpServers = this.#mcpServers();
-        return mcpServers === undefined ? {} : { mcpServers };
+        const human = this.#mcpServers();
+        // MCP `peer`（#486 S7）。PEERS が空・peer の口が無い・peer セッション自身の spec なら
+        // 何も足さない（`human` をそのまま渡す＝今日と同じ）。
+        const peerEntry = forPeer ? undefined : this.#peerMcpEntry();
+        if (peerEntry === undefined) return human === undefined ? {} : { mcpServers: human };
+        return { mcpServers: { ...human, [PEER_MCP_SERVER_NAME]: peerEntry } };
       })(),
       // 生ログはデーモンへ預ける。runner は永続化の器を持たない（記憶ストアの
       // 鍵を runner に置かないため）。
@@ -4091,6 +4221,7 @@ class RunnerSession {
     // 読み取りが終わっても入力側を起こして本体を閉じる。怠ると閉じられない
     // Query と起きない `#inputStream` が残る。
     this.#sdkSession.wakeInput();
+    this.#peerBroker?.closeAll();
     this.#sdkSession.closeQuery();
     this.#sdkSession.setStatus(status);
     await this.#shipArchive();

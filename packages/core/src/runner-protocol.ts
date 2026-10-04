@@ -1782,6 +1782,29 @@ export const runnerEventSchema = z.discriminatedUnion('type', [
     answered: z.boolean().optional(),
   }),
   /**
+   * マネージャーが MCP `peer` で呼んだ「もう一方の provider」のセッションの、1ターンぶんの消費
+   * （Issue #486 S7）。台帳へは `layer: 'manager'`・`site: 'peer'` で積む。
+   *
+   * **`usage` とは別のイベントである。** あちらは累積を降ろして基準との差をデーモンが取るが、
+   * peer のセッションは基準が別（マネージャー本体の累積と混ぜると差分が嘘になる）。**runner が
+   * peer セッションごとの基準で差分にしてから降ろし、デーモンは「1回で閉じる」ものとして
+   * そのまま積む**（`accumulation: 'oneshot'`）。旧いデーモンはこの種類を知らないので、
+   * 読めないイベントとして落とす（マネージャー本体の `session` の行は汚れない）。
+   *
+   * - `models`: そのターンの増分（空なら、積めるものが無かった）
+   * - `unmetered`: provider が消費を報告しない（`capabilities.usage === false`）。値の行は作らず
+   *   「取れなかった」ターンとして数える
+   */
+  z.object({
+    type: z.literal('peer_usage'),
+    managerId: z.string(),
+    /** 呼んだ provider（`claude` / `codex`）。 */
+    provider: z.string(),
+    sessionId: z.string().optional(),
+    models: z.record(z.string(), usageTotalsSchema),
+    unmetered: z.boolean().optional(),
+  }),
+  /**
    * ターンの境界で聞いた文脈窓の占有を、**消費（`usage`）とは独立に**必ず
    * emit する（Issue #976）。
    *

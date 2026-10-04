@@ -436,7 +436,8 @@ class CodexManagerSession implements CodexSession {
     }
     const common = {
       cwd: spec.cwd,
-      approvalPolicy: codexApprovalPolicyFor(spec.permissionMode),
+      approvalPolicy:
+        spec.strictApprovals === true ? 'untrusted' : codexApprovalPolicyFor(spec.permissionMode),
       sandbox: CODEX_SANDBOX,
       developerInstructions: spec.systemPromptAppend,
       ...(spec.modelPlaced === true ? { model: spec.model } : {}),

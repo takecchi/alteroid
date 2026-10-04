@@ -11635,6 +11635,59 @@ class Pool implements ManagerPool {
         return;
       }
 
+      case 'peer_usage': {
+        // マネージャーが MCP `peer` で呼んだ、もう一方の provider の消費（#486 S7）。
+        // **`site: 'peer'`・層は `manager`**。runner が peer セッションごとの基準で増分にして
+        // 降ろしているので、ここは基準を持たずそのまま積む（`oneshot`）。
+        // **トークンの身元（`#tokenIdentities`）は付けない** —— あれはマネージャー本体のセッションの
+        // 鍵で、peer が使った鍵とは限らない（取れない軸は埋めない）。
+        const at = new Date();
+        try {
+          if (event.unmetered === true) {
+            // 消費を報告しない provider。0 を積まず「取れなかった」として数える。
+            await this.#stores.usage.recordUnmetered({
+              layer: 'manager',
+              site: 'peer',
+              managerId: event.managerId,
+              date: usageDate(at),
+              at: at.toISOString(),
+              provider: event.provider,
+            });
+            return;
+          }
+          const fold = await this.#stores.usage.record({
+            layer: 'manager',
+            site: 'peer',
+            managerId: event.managerId,
+            date: usageDate(at),
+            at: at.toISOString(),
+            snapshot: {
+              ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+              models: event.models,
+            },
+            accumulation: 'oneshot',
+          });
+          if (Object.keys(fold.delta).length > 0) {
+            await this.#journal({
+              type: 'turn_usage',
+              layer: 'manager',
+              site: 'peer',
+              managerId: event.managerId,
+              ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+              models: fold.delta,
+            });
+          }
+        } catch {
+          await this.#journal({
+            type: 'exchange',
+            with: 'manager',
+            role: 'inbound',
+            text: `${EXCHANGE_KIND_FAILURE_PREFIX}[${event.managerId}] peer（${event.provider}）の消費を台帳へ記録できなかった（この分は集計に出ない）`,
+          });
+        }
+        return;
+      }
+
       case 'context_usage': {
         // **消費の行（`turn_usage`）とは独立に、観測できたら必ず書く**
         // （Issue #976）。`turn_usage` は増分が無い回・ターンが失敗した回に

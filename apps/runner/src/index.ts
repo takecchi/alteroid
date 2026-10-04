@@ -394,6 +394,9 @@ export async function main(): Promise<void> {
     emit: (event) => outbox.push(event),
     managerProvider: managerProvider.id,
     credentials,
+    ...(peerOpening.host === undefined
+      ? {}
+      : { peer: { host: peerOpening.host, peers: peerOpening.peers } }),
     profile,
     ...(childUser === undefined ? {} : { childUser }),
     /**
